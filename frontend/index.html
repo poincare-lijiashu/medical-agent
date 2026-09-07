@@ -206,6 +206,7 @@
   </div>
   <div class="spacer"></div>
   <button class="btn ghost sm" id="cpBtn" style="display:none" onclick="openChangePwd()">修改密码</button>
+  <span id="kbDot" style="display:none;width:9px;height:9px;border-radius:50%;cursor:default" onclick="loadConfig()" title="知识库连接状态"></span>
   <div class="userchip"><span id="who"></span><span class="role" id="role"></span>
     <button class="btn ghost sm" id="lo" onclick="logout()">退出</button></div>
 </header>
@@ -379,7 +380,9 @@ let ROLE='doctor';
 const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','qc','review'],
   pharmacist:['overview','literature','drug','qc','review'],
   admin:['overview','kb','qc','review','data','arch']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任） */
-async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;AGENTS.imaging.desc='上传影像 → 结构化所见（'+CFG.vl+'）';}}catch(e){}}
+async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;
+const dot=document.getElementById('kbDot');
+if(dot){const ok=!!(c.milvus&&c.milvus.connected);dot.style.display='inline-block';dot.style.background=ok?'var(--ok)':'var(--danger)';dot.title=ok?'知识库已连接':'知识库未连接（自动重试中，问答走降级路径）';}}}catch(e){}}
 
 const token=()=>sessionStorage.getItem('med_token')||'';
 const auth=()=>({'Content-Type':'application/json','Authorization':'Bearer '+token()});
@@ -431,7 +434,7 @@ async function doLogin(e){e.preventDefault();const err=document.getElementById('
   const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;
   try{const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
     const d=await r.json(); if(!r.ok){err.textContent=d.detail||'登录失败';return false;}
-    sessionStorage.setItem('med_token',d.access_token);boot(d.username,d.role);return false;
+    sessionStorage.setItem('med_token',d.access_token);await loadConfig();boot(d.username,d.role);return false;
   }catch(ex){err.textContent='网络错误：'+ex.message;return false;}}
 function logout(){window.removeEventListener('beforeunload',beforeUnloadGuard);window.onbeforeunload=null;  /* FIND-09：主动登出不受 beforeunload 拦截 */
   sessionStorage.removeItem('med_token');localStorage.removeItem('med_token');

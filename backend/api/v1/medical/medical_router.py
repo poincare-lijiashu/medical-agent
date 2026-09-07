@@ -77,9 +77,12 @@ async def get_config(user: dict = Depends(require_user)):
     优先（展示与实跑一致），无配置回落 .env 内置值。仅返回模型名，不回显密钥。"""
     chat = await asyncio.to_thread(llm_config.active_provider, "chat")
     vision = await asyncio.to_thread(llm_config.active_provider, "vision")
+    from backend.core.medical_kb import milvus_status
+    milvus = await asyncio.to_thread(milvus_status)
     return {"chat_model": (chat or {}).get("model_id") or settings.qwen_model_chat,
             "vl_model": (vision or {}).get("model_id") or settings.qwen_model_vl,
-            "reasoning_model": settings.qwen_model_reasoning}
+            "reasoning_model": settings.qwen_model_reasoning,
+            "milvus": milvus}
 
 
 @router.get("/overview")
@@ -252,6 +255,12 @@ _DRUG_SEV_CONF = {
 async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
+    pre = prefilter_reply(q)
+    if pre:
+        await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="prefilter",
+                                actor=actor, payload={"q": q[:200]})
+        return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
+                       sources=["intent:prefilter"], review_id=None)
     r = drug_check(q)
     ans = r["answer"]
     sev = r.get("max_severity", "无")
@@ -272,6 +281,12 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
 async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
+    pre = prefilter_reply(q)
+    if pre:
+        await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="prefilter",
+                                actor=actor, payload={"q": q[:200]})
+        return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
+                       sources=["intent:prefilter"], review_id=None)
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
         try:
@@ -300,6 +315,12 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
 async def case_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
+    pre = prefilter_reply(q)
+    if pre:
+        await asyncio.to_thread(get_audit_logger().write, event_type="case", action="prefilter",
+                                actor=actor, payload={"q": q[:200]})
+        return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
+                       sources=["intent:prefilter"], review_id=None)
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
         try:

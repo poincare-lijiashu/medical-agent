@@ -20,6 +20,12 @@ logger = get_logger(__name__)
 _cache: dict = {}
 
 
+def milvus_status() -> dict:
+    """知识库连接状态（前端徽标用）。TCP 预检 <0.5s，失败时调用方应显示"重试中"而非假死。"""
+    ok = _milvus_reachable()
+    return {"connected": ok, "uri": settings.milvus_uri}
+
+
 def _milvus_reachable() -> bool:
     """Milvus TCP 快速预检（<0.5s）。Milvus 离线时毫秒级 fail-fast：
     pymilvus 连接失败不写缓存，此前每次面板请求都要白等 10s 超时。"""
