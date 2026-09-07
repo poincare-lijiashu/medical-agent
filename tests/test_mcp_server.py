@@ -228,6 +228,26 @@ def test_dispatch_protocol_surface():
     assert r["error"]["code"] == -32600
 
 
+# ---------- 7b. FIND-11：通知（无 id）在 handler 异常时也不得回错误响应 ----------
+
+def test_dispatch_notification_never_returns_error_response(monkeypatch):
+    def _rpc_err(params):
+        raise mcp.JsonRpcError(mcp.INVALID_PARAMS, "bad params")
+
+    def _boom(params):
+        raise RuntimeError("boom")
+
+    # 通知：JsonRpcError 分支 → 不得回错误响应
+    monkeypatch.setattr(mcp, "_METHODS", {"tools/call": _rpc_err})
+    assert mcp.dispatch({"jsonrpc": "2.0", "method": "tools/call"}) is None
+    # 通知：兜底 Exception 分支 → 同样不得回错误响应
+    monkeypatch.setattr(mcp, "_METHODS", {"tools/call": _boom})
+    assert mcp.dispatch({"jsonrpc": "2.0", "method": "tools/call"}) is None
+    # 同样的失败在「请求」上仍应回 JSON-RPC error（回归保障）
+    r = mcp.dispatch({"jsonrpc": "2.0", "id": 9, "method": "tools/call"})
+    assert r["error"]["code"] == mcp.INTERNAL_ERROR
+
+
 # ---------- 8. stdio 循环：坏 JSON → -32700，合法消息 → 响应，EOF 退出 ----------
 
 def test_stdio_loop_parse_error_and_eof():
@@ -240,3 +260,17 @@ def test_stdio_loop_parse_error_and_eof():
     assert len(lines) == 2
     assert lines[0]["error"]["code"] == -32700
     assert lines[1]["result"]["protocolVersion"] == mcp.PROTOCOL_VERSION
+
+
+# ---------- 9. FIND-12：stdio 超长行 → 单条 -32700，且不污染后续消息 ----------
+
+def test_stdio_loop_overlong_line_rejected(monkeypatch):
+    monkeypatch.setattr(mcp, "MAX_LINE_BYTES", 2000)  # 调小上限便于测试
+    inp = io.StringIO('x' * 3000 + '\n'  # 3000 字符超长行（>2000）
+                      '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n')  # 低于上限的合法消息
+    out = io.StringIO()
+    mcp.serve(inp, out)
+    lines = [json.loads(x) for x in out.getvalue().splitlines()]
+    assert len(lines) == 2, "超长行只应产生一条错误响应（残余被整行消费，不级联报错）"
+    assert lines[0]["error"]["code"] == -32700
+    assert lines[1]["result"]["tools"], "后续合法消息应正常处理"

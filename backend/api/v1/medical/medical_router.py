@@ -73,8 +73,12 @@ def _get_mdt_graph():
 
 @router.get("/config")
 async def get_config(user: dict = Depends(require_user)):
-    """前端据此动态显示真实模型名（不再硬编码）。"""
-    return {"chat_model": settings.qwen_model_chat, "vl_model": settings.qwen_model_vl,
+    """前端据此动态显示真实模型名（不再硬编码）。FIND-15：管理端激活 provider 的 model_id
+    优先（展示与实跑一致），无配置回落 .env 内置值。仅返回模型名，不回显密钥。"""
+    chat = await asyncio.to_thread(llm_config.active_provider, "chat")
+    vision = await asyncio.to_thread(llm_config.active_provider, "vision")
+    return {"chat_model": (chat or {}).get("model_id") or settings.qwen_model_chat,
+            "vl_model": (vision or {}).get("model_id") or settings.qwen_model_vl,
             "reasoning_model": settings.qwen_model_reasoning}
 
 

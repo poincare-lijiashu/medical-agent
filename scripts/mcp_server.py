@@ -28,6 +28,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8001"
 HTTP_TIMEOUT = 120  # LLM 问答（文献/MDT）较慢
 MAX_IMAGES = 6  # 与后端 medical_router.MAX_IMAGES 一致
 MAX_TEXT_LEN = 20000  # 与后端 AskReq.question / MdtReq.case 上限一致
+MAX_LINE_BYTES = 10_485_760  # FIND-12：stdio 单行（单条 JSON-RPC 消息）上限 10MB，防超大包耗内存
 SERVER_INFO = {"name": "medassist-mcp", "version": "1.0.0"}
 DECISIONS = ("approved", "rejected")
 
@@ -384,8 +385,12 @@ def dispatch(msg: object):
     try:
         result = handler(msg.get("params"))
     except JsonRpcError as e:
+        if is_notification:  # FIND-11：通知不得回错误响应（无 id 可回）
+            return None
         return _error_response(msg_id, e.code, e.message)
     except Exception as e:  # noqa: BLE001 —— 兜底，保证循环不因单条消息崩溃
+        if is_notification:  # FIND-11：通知不得回错误响应（无 id 可回）
+            return None
         return _error_response(msg_id, INTERNAL_ERROR, f"服务器内部错误：{e}")
     if is_notification:
         return None
@@ -397,14 +402,47 @@ def _send(out, obj: dict) -> None:
     out.flush()
 
 
+_OVERLONG = object()  # 哨兵：_read_line_capped 检出超长行
+
+
+def _read_line_capped(inp):
+    """读一行（FIND-12）。超过 MAX_LINE_BYTES 的行返回 _OVERLONG（该行已整行消费，
+    残余不落入后续消息）；EOF 无数据返回 None；其余返回完整行文本。"""
+    chunks: list[str] = []
+    total = 0
+    while True:
+        chunk = inp.readline(MAX_LINE_BYTES)
+        if not chunk:  # EOF
+            break
+        total += len(chunk)
+        chunks.append(chunk)
+        if chunk.endswith("\n"):
+            break
+        if total > MAX_LINE_BYTES:
+            while True:  # 已确认超长：丢弃该行残余，防级联解析错误
+                rest = inp.readline(MAX_LINE_BYTES)
+                if not rest or rest.endswith("\n"):
+                    break
+            return _OVERLONG
+    if not chunks:
+        return None  # EOF：客户端关闭
+    if total > MAX_LINE_BYTES:  # 行已完整收尾但总量超限
+        return _OVERLONG
+    return "".join(chunks)
+
+
 def serve(stdin=None, stdout=None) -> None:
     """stdio 主循环：逐行读 JSON-RPC 消息并写回响应，EOF 退出。"""
     inp = sys.stdin if stdin is None else stdin
     out = sys.stdout if stdout is None else stdout
     while True:
-        line = inp.readline()
-        if not line:  # EOF：客户端关闭
+        line = _read_line_capped(inp)
+        if line is None:  # EOF：客户端关闭
             break
+        if line is _OVERLONG:  # FIND-12：超长行回 -32700
+            _send(out, _error_response(None, PARSE_ERROR,
+                                       f"消息过长（>{MAX_LINE_BYTES} 字节），已拒绝"))
+            continue
         line = line.strip()
         if not line:
             continue

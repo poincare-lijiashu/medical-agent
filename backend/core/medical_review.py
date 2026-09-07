@@ -11,6 +11,7 @@ import io
 import json
 import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -21,12 +22,16 @@ QUEUE_FILE = os.path.join(BASE_DIR, "data", "review", "queue.json")
 _lock = threading.Lock()
 
 _IMG_MAX_SIDE = 1280  # F3：入队影像压缩上限（长边），控制队列文件与详情页体积
+_IMG_MAX_PIXELS = 40_000_000  # FIND-02：解码前像素上限（防 decompression bomb 与超大图卡顿）
+_IMG_TOTAL_CHARS = 4_000_000  # FIND-03：单条入队 images 总 base64 字符上限（控制队列文件体积）
 
 
 def _compress_one(src: str) -> str:
-    """单张 data URL → 长边 ≤1280 的 JPEG(q80) data URL；解码失败抛异常由调用方兜底。"""
+    """单张 data URL → 长边 ≤1280 的 JPEG(q80) data URL；非法/像素超限抛异常由调用方丢弃（FIND-02）。"""
     _, _, b64 = src.partition(",")
-    img = Image.open(io.BytesIO(base64.b64decode(b64)))
+    img = Image.open(io.BytesIO(base64.b64decode(b64)))  # 仅读头部，未解码像素
+    if img.width * img.height > _IMG_MAX_PIXELS:
+        raise ValueError(f"图像像素超限（{img.width * img.height} > {_IMG_MAX_PIXELS}）")
     if max(img.size) > _IMG_MAX_SIDE:
         ratio = _IMG_MAX_SIDE / max(img.size)
         img = img.resize((max(1, round(img.width * ratio)), max(1, round(img.height * ratio))))
@@ -38,15 +43,32 @@ def _compress_one(src: str) -> str:
 
 
 def _compress_images(images: list[str] | None) -> list[str] | None:
-    """F3：核对可见影像压缩（PIL）。None/空 → None；单张压缩失败该图原样保留。"""
+    """F3：核对可见影像压缩（PIL）。None/空 → None；压缩失败的该图丢弃，不入库（FIND-02）。"""
     if not images:
         return None
     out: list[str] = []
     for src in images:
         try:
             out.append(_compress_one(src))
-        except Exception:  # noqa: BLE001 —— 非法图不阻断入队，原样保留
-            out.append(src)
+        except Exception:  # noqa: BLE001 —— 非法/超限图不入库，不阻断其余图
+            continue
+    return out
+
+
+def _cap_total_chars(images: list[str]) -> list[str]:
+    """FIND-03：单条 images 总 base64 字符数上限 4M，超限从尾部丢弃超额图；
+    首图本身超限则丢弃该图（合规首图必须保留）。"""
+    out: list[str] = []
+    total = 0
+    for s in images:
+        n = len(s or "")
+        if out:
+            if total + n > _IMG_TOTAL_CHARS:
+                break  # 从尾部截断：后续图全部丢弃
+        elif n > _IMG_TOTAL_CHARS:
+            continue  # 首图本身超限 → 丢弃，尝试下一张
+        out.append(s)
+        total += n
     return out
 
 
@@ -55,10 +77,19 @@ def _now() -> str:
 
 
 def _load() -> list[dict]:
+    """读队列文件。Windows 下与他人并发写（_save 的 os.replace 前）可能瞬时 PermissionError，
+    有限重试后仍失败才抛原异常（FIND-04；读路径不加锁，仅重试）。"""
     if not os.path.isfile(QUEUE_FILE):
         return []
-    with open(QUEUE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    for attempt in range(4):  # 首次 + 3 次重试 × 50ms
+        try:
+            with open(QUEUE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except PermissionError:
+            if attempt == 3:
+                raise
+            time.sleep(0.05)
+    return []  # pragma: no cover —— 不可达（重试耗尽时已 raise）
 
 
 def _save(items: list[dict]) -> None:
@@ -72,8 +103,11 @@ def _save(items: list[dict]) -> None:
 def submit(*, agent: str, question: str, answer: str, confidence: float,
            risk_reason: str, submitted_by: str,
            images: list[str] | None = None) -> str:
-    """入队一条待核对项，返回 review_id。images：待医生核对的影像（data URL，入队前压缩）。"""
+    """入队一条待核对项，返回 review_id。images：待医生核对的影像（data URL）。
+    压缩/截断为纯函数，在锁外完成（FIND-01）；锁内仅 _load/append/_save。"""
     rid = "rev-" + uuid.uuid4().hex[:10]
+    compressed = _compress_images(images)  # FIND-01：纯函数不持锁，缩短临界区
+    stored_images = None if compressed is None else _cap_total_chars(compressed)
     with _lock:
         items = _load()
         items.append({
@@ -81,7 +115,7 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             "answer": answer, "confidence": confidence, "risk_reason": risk_reason,
             "status": "pending", "submitted_by": submitted_by,
             "reviewed_by": None, "review_note": None, "resolved_at": None,
-            "images": _compress_images(images),
+            "images": stored_images,
         })
         _save(items)
     return rid
@@ -99,7 +133,10 @@ def get(rid: str) -> dict | None:
 
 
 def list_all(limit: int = 100) -> list[dict]:
-    return _load()[::-1][:limit]
+    """历史列表（admin_data / review_history 数据源）：返回前剥离 images（FIND-03 体积控制，
+    历史不再全量带图；详情仍可用 get()）。"""
+    return [{k: v for k, v in i.items() if k != "images"}
+            for i in _load()[::-1][:limit]]
 
 
 def purge_pending() -> int:
@@ -135,6 +172,7 @@ def resolve(rid: str, decision: str, reviewer: str, note: str = "") -> dict:
                 i["reviewed_by"] = reviewer
                 i["review_note"] = note
                 i["resolved_at"] = _now()
+                i["images"] = None  # FIND-03a：已处理历史瘦身，影像不再留存
                 _save(items)
                 return i
         raise ReviewError("未找到该审核条目")

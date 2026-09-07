@@ -27,7 +27,14 @@ def _to_data_url(image: str) -> str:
 
 
 def vl_model_name() -> str:
-    return settings.qwen_model_vl
+    """FIND-15：优先返回管理端激活 vision provider 的 model_id（与实跑一致），
+    无配置/读配置失败回落 .env 值。"""
+    from backend.core.llm_config import active_provider
+    try:
+        p = active_provider("vision")
+    except Exception:  # noqa: BLE001 —— 配置文件损坏等不阻断回答，回落 .env
+        p = None
+    return (p or {}).get("model_id") or settings.qwen_model_vl
 
 
 async def describe_images(images: list[str], question: str = "",

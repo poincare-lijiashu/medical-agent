@@ -16,6 +16,7 @@ data/llm_providers.json
 # 临时产物（安装/种子过程错误日志与一次性验证输出）
 data/*.err
 data/*.log
+data/*.tmp
 data/verify_out.txt
 
 # 模型权重（4.3GB，本地化部署不入库）

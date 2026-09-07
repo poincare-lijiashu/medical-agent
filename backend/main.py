@@ -136,7 +136,13 @@ async def _body_limit(request: Request, call_next):
     except ValueError:
         n = 0
     if n > settings.max_body_mb * 1024 * 1024:
-        return PlainTextResponse("请求体过大：超过大小上限", status_code=413)
+        # FIND-13：本中间件注册在 _security_headers 之后（先于其执行），413 短路返回不经过
+        # 后续中间件，必须内联补齐全套安全响应头（含简版 X-Request-Id）
+        resp = PlainTextResponse("请求体过大：超过大小上限", status_code=413)
+        for k, v in _SECURITY_HEADERS.items():
+            resp.headers[k] = v
+        resp.headers["X-Request-Id"] = uuid.uuid4().hex[:12]
+        return resp
     return await call_next(request)
 
 

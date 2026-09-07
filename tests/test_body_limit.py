@@ -20,6 +20,19 @@ def test_body_over_limit_returns_413(monkeypatch):
     assert r.status_code == 413, r.text
 
 
+def test_413_response_carries_security_headers(monkeypatch):
+    """FIND-13：413 短路响应不经过 _security_headers 中间件，必须内联携带全套安全头。"""
+    from backend.main import _SECURITY_HEADERS
+
+    c = _client()
+    monkeypatch.setattr(settings, "max_body_mb", 1)
+    r = c.post("/api/v1/auth/login", json={"username": "u" * (2 * 1024 * 1024), "password": "p"})
+    assert r.status_code == 413
+    for k, v in _SECURITY_HEADERS.items():
+        assert r.headers.get(k) == v, f"413 响应缺少安全头 {k}"
+    assert r.headers.get("X-Request-Id"), "413 响应应带简版 X-Request-Id"
+
+
 def test_normal_body_reaches_route_with_default_limit():
     c = _client()  # 默认 max_body_mb=40，小请求不应被拦截
     r = c.post("/api/v1/auth/login", json={"username": "nobody", "password": "wrong"})

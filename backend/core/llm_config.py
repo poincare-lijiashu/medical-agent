@@ -151,24 +151,42 @@ def test_provider(api_format: str, base_url: str, model_id: str, api_key: str) -
     t0 = time.perf_counter()
     url = (base_url or "").rstrip("/")
     headers: dict[str, str]
+    payload: dict
     try:
         if api_format == "openai":
             url += "/chat/completions"
             headers = {"Authorization": "Bearer " + (api_key or ""),
                        "Content-Type": "application/json"}
+            # FIND-05：与 llm_factory 真实请求对齐（extra_body.enable_thinking=False 落到 body 顶层），
+            # 否则 Qwen3 等默认思考的网关会出现"测试通过、实跑 400"
+            payload = {"model": model_id, "max_tokens": 8,
+                       "messages": [{"role": "user", "content": "ping"}],
+                       "enable_thinking": False}
         elif api_format == "anthropic":
             url += "/messages"
             headers = {"x-api-key": (api_key or ""), "anthropic-version": _ANTHROPIC_VERSION,
                        "Content-Type": "application/json"}
+            payload = {"model": model_id, "max_tokens": 8,
+                       "messages": [{"role": "user", "content": "ping"}]}
         else:
             return {"ok": False, "latency_ms": 0, "detail": "api_format 需为 openai 或 anthropic"}
-        r = httpx.post(url, headers=headers, timeout=_TEST_TIMEOUT,
-                       json={"model": model_id, "max_tokens": 8,
-                             "messages": [{"role": "user", "content": "ping"}]})
+        # FIND-06：与 llm_factory 纪律一致，走 Client(trust_env=False) 绕过系统代理
+        with httpx.Client(trust_env=False, timeout=_TEST_TIMEOUT) as client:
+            r = client.post(url, headers=headers, json=payload)
         latency_ms = int((time.perf_counter() - t0) * 1000)
         if r.status_code >= 400:
             return {"ok": False, "latency_ms": latency_ms,
                     "detail": f"HTTP {r.status_code}: {r.text[:120]}"}
+        try:
+            body = r.json()
+        except ValueError:
+            return {"ok": False, "latency_ms": latency_ms,
+                    "detail": "响应非 JSON（网关/代理？）"}
+        has_shape = (isinstance(body, dict)
+                     and (("choices" in body) if api_format == "openai" else ("content" in body)))
+        if not has_shape:  # 200 但结构不对：多半是网关/代理页或错误包装
+            return {"ok": False, "latency_ms": latency_ms,
+                    "detail": "响应结构异常：缺少预期回复字段（choices/content）"}
         return {"ok": True, "latency_ms": latency_ms, "detail": "连通正常"}
     except httpx.TimeoutException:
         return {"ok": False, "latency_ms": int((time.perf_counter() - t0) * 1000),

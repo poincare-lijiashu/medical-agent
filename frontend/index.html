@@ -433,7 +433,8 @@ async function doLogin(e){e.preventDefault();const err=document.getElementById('
     const d=await r.json(); if(!r.ok){err.textContent=d.detail||'登录失败';return false;}
     sessionStorage.setItem('med_token',d.access_token);boot(d.username,d.role);return false;
   }catch(ex){err.textContent='网络错误：'+ex.message;return false;}}
-function logout(){sessionStorage.removeItem('med_token');localStorage.removeItem('med_token');
+function logout(){window.removeEventListener('beforeunload',beforeUnloadGuard);window.onbeforeunload=null;  /* FIND-09：主动登出不受 beforeunload 拦截 */
+  sessionStorage.removeItem('med_token');localStorage.removeItem('med_token');
   history.replaceState(null,'',location.pathname+location.search);  /* 退出清视图深链：下一个登录者回默认概览 */
   location.reload();} /* 双清：兼容旧版 localStorage 登录态 */
 
@@ -728,9 +729,14 @@ document.addEventListener('keydown',e=>{
   const m=document.getElementById('modal');
   if(e.key==='Escape'&&m.classList.contains('on')){closeModal();return;}
   if(e.key==='Tab'&&m.classList.contains('on')){  /* 焦点圈禁：Tab 循环限制在模态内可聚焦元素 */
-    const f=[...m.querySelectorAll('button,input,textarea,select,[tabindex]:not([tabindex="-1"])')]
+    const f=[...m.querySelectorAll('button,input,textarea,select,summary,a[href],[contenteditable=true],[tabindex]:not([tabindex="-1"])')]
       .filter(el=>!el.disabled&&el.offsetParent!==null);
-    if(!f.length)return;
+    if(!f.length){  /* FIND-10：模态内无可聚焦元素（如纯图片查看）→ 圈禁在卡片容器，防焦点逃逸到背景 */
+      e.preventDefault();
+      const card=document.querySelector('#modal .mcard');
+      card?.setAttribute('tabindex','-1');card?.focus();
+      return;
+    }
     if(!m.contains(document.activeElement)){e.preventDefault();f[0].focus();return;}
     const first=f[0],last=f[f.length-1];
     if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
@@ -1060,10 +1066,11 @@ async function loadOverview(){
 function boot(u,r){ROLE=r||'doctor';setWho(u,r);showLogin(false);
   const hk=hashView();go(hk||'overview');
   if(hk!=='review')loadReview();}  /* hash 恢复 review 时 go('review') 已加载，避免双请求 */
-window.addEventListener('beforeunload',e=>{  /* 防误关丢失未发送内容：聊天输入或质控字段任一有内容时拦截；发送/拆分清空后自然放行 */
+function beforeUnloadGuard(e){  /* 防误关丢失未发送内容：聊天输入或质控字段任一有内容时拦截；发送/拆分清空后自然放行（具名函数供 logout 移除，FIND-09） */
   const qcDirty=[...document.querySelectorAll('[id^="qcf_"]')].some(el=>el.value.trim());
   if(document.getElementById('input').value.trim()||qcDirty){e.preventDefault();e.returnValue='';}
-});
+}
+window.addEventListener('beforeunload',beforeUnloadGuard);
 document.getElementById('send').onclick=send;
 document.getElementById('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const btn=document.getElementById('send');if(btn.disabled)return;send();}});
 document.getElementById('input').addEventListener('input',e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,160)+'px';});

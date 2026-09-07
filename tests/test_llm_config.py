@@ -1,7 +1,8 @@
 """F6 模型配置管理：add/activate/remove 往返、连通性测试双分支、GET 脱敏。
 
 配置文件 monkeypatch 到 tmp_path；审计 monkeypatch 为内存假实现；test_provider 用
-monkeypatch httpx.post 假 200/超时，绝不触网。
+monkeypatch httpx.Client（FIND-06：实现走 Client(trust_env=False)，不再用模块级 httpx.post）
+假 200/超时/非 JSON，绝不触网。
 """
 import json
 
@@ -91,67 +92,110 @@ def test_add_provider_validation(monkeypatch, tmp_path):
         lc.activate("chat", "p-nonexistent")
 
 
-# ---- test_provider：假 200 / 超时 两分支（monkeypatch httpx.post，不触网）----
+# ---- test_provider：假 200 / 超时 等分支（monkeypatch httpx.Client，不触网）----
 
 class _Resp:
-    def __init__(self, status_code=200, text=""):
+    def __init__(self, status_code=200, text="", json_data=None):
         self.status_code = status_code
         self.text = text
+        # FIND-06：200 后会 r.json() 校验结构；默认给 openai/anthropic 双兼容的最小合法结构
+        self._json = json_data if json_data is not None else {
+            "choices": [{"message": {"content": "pong"}}],
+            "content": [{"type": "text", "text": "pong"}],
+        }
+
+    def json(self):
+        return self._json
 
     def raise_for_status(self):
         if self.status_code >= 400:
             raise httpx.HTTPStatusError("err", request=None, response=None)
 
 
+class _NoJsonResp:
+    """FIND-06：网关/代理返回 200 但 body 非 JSON。"""
+
+    status_code = 200
+    text = "<html>502 gateway</html>"
+
+    def json(self):
+        raise ValueError("no json")
+
+
+def _fake_client(monkeypatch, handler):
+    """把 lc.httpx.Client 替换为记录构造 kwargs 与 post 调用的假客户端。"""
+    holder = {"ctor": None, "calls": []}
+
+    class _FakeClient:
+        def __init__(self, **kw):
+            holder["ctor"] = kw
+
+        def post(self, url, **kw):
+            holder["calls"].append((url, kw))
+            return handler(url, **kw)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(lc.httpx, "Client", _FakeClient)
+    return holder
+
+
 def test_test_provider_openai_ok(monkeypatch):
-    seen = {}
-
-    def fake_post(url, **kw):
-        seen.update(url=url, kw=kw)
-        return _Resp(200)
-
-    monkeypatch.setattr(lc.httpx, "post", fake_post)
+    holder = _fake_client(monkeypatch, lambda url, **kw: _Resp(200))
     r = lc.test_provider("openai", _URL, "m1", _KEY)
     assert r["ok"] is True and isinstance(r["latency_ms"], int) and r["latency_ms"] >= 0
     assert r["detail"] and _KEY not in json.dumps(r), "结果不得回显 key"
-    assert seen["url"] == _URL + "/chat/completions"
-    assert seen["kw"]["headers"]["Authorization"] == "Bearer " + _KEY
-    assert seen["kw"]["json"]["max_tokens"] == 8
-    assert seen["kw"]["json"]["messages"][0]["content"] == "ping"
+    url, kw = holder["calls"][0]
+    assert url == _URL + "/chat/completions"
+    assert kw["headers"]["Authorization"] == "Bearer " + _KEY
+    assert kw["json"]["max_tokens"] == 8
+    assert kw["json"]["messages"][0]["content"] == "ping"
+    assert kw["json"]["enable_thinking"] is False  # FIND-05：与 llm_factory 真实请求对齐
+    assert holder["ctor"]["trust_env"] is False  # FIND-06：与工厂纪律一致（绕过系统代理）
 
 
 def test_test_provider_anthropic_headers(monkeypatch):
-    seen = {}
-
-    def fake_post(url, **kw):
-        seen.update(url=url, kw=kw)
-        return _Resp(200)
-
-    monkeypatch.setattr(lc.httpx, "post", fake_post)
+    holder = _fake_client(monkeypatch, lambda url, **kw: _Resp(200))
     r = lc.test_provider("anthropic", "https://api.anthropic.com/v1", "claude-x", "ak-1")
     assert r["ok"] is True
-    assert seen["url"].endswith("/messages")
-    assert seen["kw"]["headers"]["x-api-key"] == "ak-1"
-    assert seen["kw"]["headers"]["anthropic-version"] == "2023-06-01"
+    url, kw = holder["calls"][0]
+    assert url.endswith("/messages")
+    assert kw["headers"]["x-api-key"] == "ak-1"
+    assert kw["headers"]["anthropic-version"] == "2023-06-01"
 
 
 def test_test_provider_timeout_branch(monkeypatch):
     def fake_post(url, **kw):
         raise httpx.TimeoutException("timed out")
 
-    monkeypatch.setattr(lc.httpx, "post", fake_post)
+    _fake_client(monkeypatch, fake_post)
     r = lc.test_provider("openai", _URL, "m1", _KEY)
     assert r["ok"] is False and "超时" in r["detail"]
     assert r["latency_ms"] >= 0 and _KEY not in json.dumps(r)
 
 
 def test_test_provider_http_error(monkeypatch):
-    def fake_post(url, **kw):
-        return _Resp(401, '{"error":"invalid api key"}')
-
-    monkeypatch.setattr(lc.httpx, "post", fake_post)
+    _fake_client(monkeypatch, lambda url, **kw: _Resp(401, '{"error":"invalid api key"}'))
     r = lc.test_provider("openai", _URL, "m1", _KEY)
     assert r["ok"] is False and "401" in r["detail"]
+
+
+def test_test_provider_non_json_200(monkeypatch):
+    """FIND-06：200 但非 JSON（网关/代理页）→ 不算连通。"""
+    _fake_client(monkeypatch, lambda url, **kw: _NoJsonResp())
+    r = lc.test_provider("openai", _URL, "m1", _KEY)
+    assert r["ok"] is False and "非 JSON" in r["detail"]
+
+
+def test_test_provider_200_without_expected_shape(monkeypatch):
+    """FIND-06：200 JSON 但缺 choices/content 结构 → 不算连通。"""
+    _fake_client(monkeypatch, lambda url, **kw: _Resp(200, json_data={"error": "gateway-ish"}))
+    r = lc.test_provider("anthropic", "https://api.anthropic.com/v1", "claude-x", "ak-1")
+    assert r["ok"] is False and "结构" in r["detail"]
 
 
 def test_mask_key():
@@ -208,7 +252,7 @@ def test_test_route_uses_faked_post(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     c = TestClient(app)
     adm = _login(c, "admin01", "Med@2026")
-    monkeypatch.setattr(lc.httpx, "post", lambda url, **kw: _Resp(200))
+    _fake_client(monkeypatch, lambda url, **kw: _Resp(200))
     r = c.post("/api/v1/medical/admin/llm/test", headers=_h(adm),
                json={"kind": "chat", "api_format": "openai", "base_url": _URL,
                      "model_id": "m", "display_name": "", "api_key": "k"})

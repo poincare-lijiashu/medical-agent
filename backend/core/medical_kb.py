@@ -6,6 +6,9 @@ search_hybrid = 稠密(embed_text) + 稀疏(embed_sparse, BGE-M3 learned) 经 RR
 """
 from __future__ import annotations
 
+import socket
+from urllib.parse import urlsplit
+
 from pymilvus import DataType, MilvusClient
 
 from backend.config import settings
@@ -17,8 +20,21 @@ logger = get_logger(__name__)
 _cache: dict = {}
 
 
+def _milvus_reachable() -> bool:
+    """Milvus TCP 快速预检（<0.5s）。Milvus 离线时毫秒级 fail-fast：
+    pymilvus 连接失败不写缓存，此前每次面板请求都要白等 10s 超时。"""
+    u = urlsplit(settings.milvus_uri)
+    try:
+        with socket.create_connection((u.hostname or "127.0.0.1", u.port or 19530), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def _collection():
     if "col" not in _cache:
+        if not _milvus_reachable():
+            raise RuntimeError(f"Milvus 不可达：{settings.milvus_uri}")
         # timeout=10：所有请求默认 10s 超时。Milvus 容器冷启动恢复期若无超时会无限挂起，
         # 曾把 async 事件循环整卡死（overview 白屏）；有界超时让异常走兜底路径。
         c = MilvusClient(uri=settings.milvus_uri, token=get_milvus_token() or None, timeout=10)
