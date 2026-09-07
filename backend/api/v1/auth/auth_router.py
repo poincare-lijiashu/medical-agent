@@ -1,6 +1,8 @@
 """认证路由：登录换令牌、当前用户信息、修改/重置密码。"""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -48,8 +50,9 @@ class ResetPwdReq(BaseModel):
 
 
 @router.post("/auth/login", response_model=LoginResp)
-def login(body: LoginReq):
-    user = authenticate(body.username, body.password)
+async def login(body: LoginReq):
+    # PBKDF2 600k 迭代 ~0.2s CPU + users.json 读盘，必须移出事件循环（QUALITY-001）
+    user = await asyncio.to_thread(authenticate, body.username, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = create_access_token(user["username"], user["role"])
@@ -84,17 +87,17 @@ def me(user: dict = Depends(require_user)):
 async def change_password(body: ChangePwdReq, user: dict = Depends(require_user)):
     """登录用户修改本人密码：校验原密码，新密码 ≥8 位。"""
     username = user.get("username", "")
-    u = get_user(username)
-    if not u or not verify_password(body.old_password, u["password_hash"]):
+    u = await asyncio.to_thread(get_user, username)
+    if not u or not await asyncio.to_thread(verify_password, body.old_password, u["password_hash"]):
         raise HTTPException(400, "原密码不正确")
     if len(body.new_password or "") < 8:
         raise HTTPException(400, "新密码至少 8 位")
-    set_password(username, body.new_password)
+    await asyncio.to_thread(set_password, username, body.new_password)
     revoke_user(username)  # 改密后撤销该用户全部旧令牌（含访问令牌），须重新登录
     # 本人改密：actor 即操作对象、action 已含语义，无额外上下文可记（F5 评估后保留空 payload）
-    get_audit_logger().write(event_type="auth", action="password_changed",
-                             actor=username, payload={})
-    rec = get_user(username)
+    await asyncio.to_thread(get_audit_logger().write, event_type="auth", action="password_changed",
+                            actor=username, payload={})
+    rec = await asyncio.to_thread(get_user, username)
     if rec:
         await pg_store.mirror_user(username, rec.get("role", ""), rec.get("password_hash", ""))
     return {"ok": True}
@@ -105,13 +108,13 @@ async def reset_password(body: ResetPwdReq, user: dict = Depends(require_role("a
     """管理员重置任意用户密码（忘记密码的线下通道）。"""
     if len(body.new_password or "") < 8:
         raise HTTPException(400, "新密码至少 8 位")
-    if not get_user(body.username):
+    if not await asyncio.to_thread(get_user, body.username):
         raise HTTPException(404, "用户不存在")
-    set_password(body.username, body.new_password)
+    await asyncio.to_thread(set_password, body.username, body.new_password)
     revoke_user(body.username)  # 该用户已签发的令牌立即失效，须重新登录
-    get_audit_logger().write(event_type="auth", action="password_reset",
-                             actor=user.get("username", "admin"), payload={"user": body.username})
-    rec = get_user(body.username)
+    await asyncio.to_thread(get_audit_logger().write, event_type="auth", action="password_reset",
+                            actor=user.get("username", "admin"), payload={"user": body.username})
+    rec = await asyncio.to_thread(get_user, body.username)
     if rec:
         await pg_store.mirror_user(body.username, rec.get("role", ""), rec.get("password_hash", ""))
     return {"ok": True}

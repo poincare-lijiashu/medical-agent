@@ -83,7 +83,7 @@ async def overview(user: dict = Depends(require_user)):
     """概览面板：真实运行与合规指标（不编造）。"""
     from backend.core.embedder import device
     from backend.core.medical_kb import doc_count
-    items = review.list_all()
+    items = await asyncio.to_thread(review.list_all)  # 队列文件读盘移出事件循环（QUALITY-001）
     pending = sum(1 for i in items if i.get("status") == "pending")
     resolved = sum(1 for i in items if i.get("status") in ("approved", "rejected"))
     al = get_audit_logger()
@@ -140,11 +140,11 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
     await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
     if not review_flag:
         return None
-    rid = review.submit(agent=agent, question=q, answer=answer, confidence=conf,
-                        risk_reason=risk_reason, submitted_by=actor, images=images)
-    get_audit_logger().write(event_type=agent, action="review_enqueued", actor=actor,
-                             payload={"rid": rid, "reason": risk_reason})
-    await pg_store.mirror_review(review.get(rid))
+    rid = await asyncio.to_thread(review.submit, agent=agent, question=q, answer=answer, confidence=conf,
+                                  risk_reason=risk_reason, submitted_by=actor, images=images)
+    await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="review_enqueued",
+                            actor=actor, payload={"rid": rid, "reason": risk_reason})
+    await pg_store.mirror_review(await asyncio.to_thread(review.get, rid))
     return rid
 
 
@@ -159,18 +159,19 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
     actor = user.get("username", "system")
     pre = prefilter_reply(q)
     if pre:
-        get_audit_logger().write(event_type="literature", action="prefilter", actor=actor,
-                                 payload={"q": q[:60]})
+        await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="prefilter",
+                                actor=actor, payload={"q": q[:60]})
         return AskResp(answer=pre, confidence=0.95, needs_human_review=False, sources=["intent:prefilter"])
-    get_audit_logger().write(event_type="literature", action="query", actor=actor, payload={"q": q[:200]})
+    await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="query",
+                            actor=actor, payload={"q": q[:200]})
     try:
         g = _get_lit_graph()
         sid = "lit-" + uuid.uuid4().hex[:12]
         out = await g.ainvoke({"session_id": sid, "question": q, "query": q, "attempts": 0},
                               config={"configurable": {"thread_id": sid}})
     except Exception as e:  # noqa: BLE001 —— 三层兑底：provider/检索异常→体面降级不裸500
-        get_audit_logger().write(event_type="literature", action="degraded", actor=actor,
-                                 payload={"err": str(e)[:120]})
+        await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="degraded",
+                                actor=actor, payload={"err": str(e)[:120]})
         return AskResp(answer="模型/知识库服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试。",
                        confidence=0.3, needs_human_review=True, sources=["degraded:llm"])
     a = out["answer"]
@@ -191,8 +192,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
     """SSE 流式：逐节点推进度(retrieve/grade/generate/verify) + 末尾 result。失败发 error 事件。"""
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
-    get_audit_logger().write(event_type="literature", action="stream", actor=actor,
-                             payload={"q": q[:200]})
+    await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="stream",
+                            actor=actor, payload={"q": q[:200]})
 
     async def gen():
         pre = prefilter_reply(q)
@@ -216,8 +217,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
                     elif node == "verify" and isinstance(out, dict) and out.get("answer"):
                         final = out["answer"]
         except Exception as e:  # noqa: BLE001
-            get_audit_logger().write(event_type="literature", action="stream_error", actor=actor,
-                                     payload={"err": str(e)[:160]})
+            await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="stream_error",
+                                    actor=actor, payload={"err": str(e)[:160]})
             yield _sse("error", {"detail": "生成过程出现异常，已记录审计并标记复核；请稍后重试"})
             return
         if not final:
@@ -257,8 +258,8 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
     else:  # 识别不足 2 药（旧 else 分支取值）
         conf, risk, review_flag = 0.50, "信息不足", False
     rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag, risk, actor)
-    get_audit_logger().write(event_type="drug", action="answered", actor=actor,
-                             payload={"conf": conf, "review": review_flag})
+    await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="answered",
+                            actor=actor, payload={"conf": conf, "review": review_flag})
     return AskResp(answer=ans, confidence=conf, needs_human_review=review_flag,
                    sources=r["sources"], review_id=rid)
 
@@ -273,19 +274,19 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
             from backend.core.medical_imaging import describe_images, vl_model_name
             desc = await describe_images(imgs, q)
         except Exception as e:  # noqa: BLE001
-            get_audit_logger().write(event_type="imaging", action="describe_failed", actor=actor,
-                                     payload={"err": str(e)[:120]})
+            await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="describe_failed",
+                                    actor=actor, payload={"err": str(e)[:120]})
             raise HTTPException(500, "影像描述服务暂时不可用，请稍后重试")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.72
         rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor, images=imgs)
         suffix = "（已标记为需放射科医师双人核对）" if risky else "\n\n以上为 AI 初步所见，供医师参考。"
-        get_audit_logger().write(event_type="imaging", action="vl_described", actor=actor,
-                                 payload={"len": len(desc), "risky": risky})
+        await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_described",
+                                actor=actor, payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + suffix, confidence=conf, needs_human_review=risky,
                        sources=["VL:" + vl_model_name()], review_id=rid)
-    get_audit_logger().write(event_type="imaging", action="need_image", actor=actor,
-                             payload={"q": q[:200]})
+    await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="need_image",
+                            actor=actor, payload={"q": q[:200]})
     return AskResp(answer="影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
                    confidence=0.0, needs_human_review=False, sources=["imaging:needs_image"],
                    status="need_image")
@@ -303,18 +304,19 @@ async def case_ask(req: AskReq, user: dict = Depends(require_user)):
             desc = await describe_images(imgs, "结合病例信息描述关键发现：" + q,
                                          system_prompt=CASE_PROMPT)
         except Exception as e:  # noqa: BLE001
-            get_audit_logger().write(event_type="case", action="vl_failed", actor=actor,
-                                     payload={"err": str(e)[:120]})
+            await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_failed",
+                                    actor=actor, payload={"err": str(e)[:120]})
             raise HTTPException(500, "多模态解析服务暂时不可用，请稍后重试")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.70
         rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor, images=imgs)
-        get_audit_logger().write(event_type="case", action="vl_described", actor=actor,
-                                 payload={"len": len(desc), "risky": risky})
+        await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_described",
+                                actor=actor, payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + ("\n\n（已标记双人核对）" if risky else "\n\n供医师参考的初步摘要。"),
                        confidence=conf, needs_human_review=risky,
                        sources=["VL:" + vl_model_name()], review_id=rid)
-    get_audit_logger().write(event_type="case", action="scaffold", actor=actor, payload={"q": q[:200]})
+    await asyncio.to_thread(get_audit_logger().write, event_type="case", action="scaffold",
+                            actor=actor, payload={"q": q[:200]})
     return AskResp(answer="多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
                    confidence=0.0, needs_human_review=False, sources=["case:needs_input"],
                    status="need_input")
@@ -328,16 +330,16 @@ class MdtReq(BaseModel):
 async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
     case = _redactor.redact(req.case)
     actor = user.get("username", "system")
-    get_audit_logger().write(event_type="mdt", action="query", actor=actor,
-                             payload={"len": len(case)})
+    await asyncio.to_thread(get_audit_logger().write, event_type="mdt", action="query",
+                            actor=actor, payload={"len": len(case)})
     try:
         g = _get_mdt_graph()
         sid = "mdt-" + uuid.uuid4().hex[:12]
         out = await g.ainvoke({"session_id": sid, "case": case, "opinions": []},
                               config={"configurable": {"thread_id": sid}})
     except Exception as e:  # noqa: BLE001
-        get_audit_logger().write(event_type="mdt", action="degraded", actor=actor,
-                                 payload={"err": str(e)[:120]})
+        await asyncio.to_thread(get_audit_logger().write, event_type="mdt", action="degraded",
+                                actor=actor, payload={"err": str(e)[:120]})
         raise HTTPException(500, "会诊服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试")
     rep = out["report"]
     rid = await _enqueue_if_risk("mdt", case, rep["text"], rep["confidence"],
@@ -352,17 +354,17 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
 # ---------- 审核中心（高危双人核对）----------
 @router.get("/review/pending")
 async def review_pending(user: dict = Depends(require_user)):
-    items = review.pending()
-    get_audit_logger().write(event_type="review", action="list_pending",
-                             actor=user.get("username", "system"), payload={"n": len(items)})
+    items = await asyncio.to_thread(review.pending)
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action="list_pending",
+                            actor=user.get("username", "system"), payload={"n": len(items)})
     return {"pending": items, "me": user.get("username")}
 
 
 @router.get("/review/history")
 async def review_history(user: dict = Depends(require_user)):
-    items = review.list_all(limit=50)
-    get_audit_logger().write(event_type="review", action="history",
-                             actor=user.get("username", "system"), payload={"n": len(items)})
+    items = await asyncio.to_thread(review.list_all, limit=50)
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action="history",
+                            actor=user.get("username", "system"), payload={"n": len(items)})
     return {"items": items}
 
 
@@ -370,11 +372,11 @@ async def review_history(user: dict = Depends(require_user)):
 async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(require_user)):
     reviewer = user.get("username", "system")
     try:
-        item = review.resolve(rid, body.decision, reviewer, body.note)
+        item = await asyncio.to_thread(review.resolve, rid, body.decision, reviewer, body.note)
     except review.ReviewError as e:
         raise HTTPException(400, str(e))
-    get_audit_logger().write(event_type="review", action=f"resolved_{body.decision}",
-                             actor=reviewer, payload={"rid": rid})
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action=f"resolved_{body.decision}",
+                            actor=reviewer, payload={"rid": rid})
     await pg_store.mirror_review(item)
     await pg_store.mirror_audit(f"review.{body.decision}", reviewer, {"rid": rid})
     return item
@@ -451,8 +453,8 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     for f in out["critical"].get("flags", []):
         lines.append(f"- [危急值] {f['item']}={f['value']} {f['issue']}")
     text = "\n".join(lines)
-    get_audit_logger().write(event_type="qc", action="query", actor=actor,
-                             payload={"fields": len(req.record), "labs": len(req.labs or {})})
+    await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="query", actor=actor,
+                            payload={"fields": len(req.record), "labs": len(req.labs or {})})
     rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor)
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
                    sources=["track:完整性", "track:内涵质量", "track:ICD", "track:危急值"], review_id=rid)
@@ -490,8 +492,8 @@ async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
     """病历文本 → 七字段 JSON（{fields: {...}}）。缺字段留空字符串，解析失败 502。"""
     from backend.core.llm_factory import get_llm
     actor = user.get("username", "system")
-    get_audit_logger().write(event_type="qc", action="parse", actor=actor,
-                             payload={"len": len(req.text)})
+    await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="parse", actor=actor,
+                            payload={"len": len(req.text)})
     try:
         llm = get_llm("medical_literature")
         r = await llm.ainvoke([SystemMessage(content=_QC_PARSE_PROMPT),
@@ -516,14 +518,14 @@ class KbUploadReq(BaseModel):
 
 @router.post("/admin/kb/upload")
 async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin"))):
-    get_audit_logger().write(event_type="kb", action="upload",
-                             actor=user.get("username", "admin"), payload={"name": req.name[:120]})
+    await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload",
+                            actor=user.get("username", "admin"), payload={"name": req.name[:120]})
     try:
         return await asyncio.to_thread(kb_ingest.ingest_b64, req.name[:250], req.data_b64)
     except Exception as e:  # noqa: BLE001
-        get_audit_logger().write(event_type="kb", action="upload_failed",
-                                 actor=user.get("username", "admin"),
-                                 payload={"name": req.name[:120], "err": str(e)[:160]})
+        await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload_failed",
+                                actor=user.get("username", "admin"),
+                                payload={"name": req.name[:120], "err": str(e)[:160]})
         raise HTTPException(400, "文件摄取失败：请确认格式为 .md/.txt/.pdf 且内容可解析")
 
 
@@ -539,8 +541,8 @@ async def kb_preview(tag: str, user: dict = Depends(require_role("admin"))):
 
 @router.delete("/admin/kb/{tag}")
 async def kb_delete(tag: str, user: dict = Depends(require_role("admin"))):
-    get_audit_logger().write(event_type="kb", action="delete",
-                             actor=user.get("username", "admin"), payload={"tag": tag})
+    await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="delete",
+                            actor=user.get("username", "admin"), payload={"tag": tag})
     return {"deleted": await asyncio.to_thread(kb_ingest.delete_doc, tag)}
 
 
@@ -565,11 +567,11 @@ async def admin_create_user(body: UserCreateReq, user: dict = Depends(require_ro
         raise HTTPException(400, str(e))
     if not ok:
         raise HTTPException(400, "用户名已存在")
-    get_audit_logger().write(event_type="admin", action="user_created",
-                             actor=user.get("username", "admin"),
-                             payload={"user": uname, "role": body.role})
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="user_created",
+                            actor=user.get("username", "admin"),
+                            payload={"user": uname, "role": body.role})
     await pg_store.mirror_audit("admin.user_created", user.get("username", "admin"), {"user": uname})
-    rec = get_user(uname)
+    rec = await asyncio.to_thread(get_user, uname)
     if rec:
         await pg_store.mirror_user(uname, rec.get("role", ""), rec.get("password_hash", ""))
     return {"ok": True}
@@ -584,8 +586,8 @@ async def admin_delete_user(username: str, user: dict = Depends(require_role("ad
     if not ok:
         raise HTTPException(404, "用户不存在")
     revoke_user(username)  # 使其已签发的令牌立即失效
-    get_audit_logger().write(event_type="admin", action="user_deleted",
-                             actor=user.get("username", "admin"), payload={"user": username})
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="user_deleted",
+                            actor=user.get("username", "admin"), payload={"user": username})
     await pg_store.mirror_audit("admin.user_deleted", user.get("username", "admin"), {"user": username})
     return {"ok": True}
 
@@ -598,8 +600,8 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
     from backend.core.medical_kb import doc_count
     from backend.core.embedder import device
     users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", "")}
-             for u, rec in all_users().items()]
-    items = review.list_all()
+             for u, rec in (await asyncio.to_thread(all_users)).items()]
+    items = await asyncio.to_thread(review.list_all)
     stats = {"pending": sum(1 for i in items if i.get("status") == "pending"),
              "approved": sum(1 for i in items if i.get("status") == "approved"),
              "rejected": sum(1 for i in items if i.get("status") == "rejected")}
@@ -614,7 +616,7 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
     except Exception:  # noqa: BLE001
         pg_counts = {}
     return {"users": users, "audit_recent": audit_recent, "review": stats,
-            "pg_counts": pg_counts, "kb_docs": doc_count(),
+            "pg_counts": pg_counts, "kb_docs": await asyncio.to_thread(doc_count),
             "events_total": len(al.entries), "device": device(), "uptime_s": int(time.time() - _START)}
 
 
@@ -628,8 +630,8 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
     if (body.confirm_text or "").strip() != "清空":
         raise HTTPException(400, "确认词不符：请输入「清空」以确认执行")
     n = await asyncio.to_thread(review.purge_pending)
-    get_audit_logger().write(event_type="review", action="purge_pending",
-                             actor=user.get("username", "admin"), payload={"count": n})
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action="purge_pending",
+                            actor=user.get("username", "admin"), payload={"count": n})
     await pg_store.mirror_audit("review.purge_pending", user.get("username", "admin"), {"count": n})
     await pg_store.purge_pending_reviews()
     return {"purged": n}
@@ -679,8 +681,8 @@ async def llm_add_provider(req: LlmProviderReq, user: dict = Depends(require_rol
     except ValueError as e:
         raise HTTPException(400, str(e))
     _reset_llm_cache()
-    get_audit_logger().write(event_type="admin", action="llm_add",
-                             actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": pid})
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_add",
+                            actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": pid})
     return {"id": pid}
 
 
@@ -693,8 +695,8 @@ async def llm_delete_provider(kind: str, pid: str, user: dict = Depends(require_
     if not ok:
         raise HTTPException(404, "未找到该 provider")
     _reset_llm_cache()
-    get_audit_logger().write(event_type="admin", action="llm_remove",
-                             actor=user.get("username", "admin"), payload={"kind": kind, "pid": pid})
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_remove",
+                            actor=user.get("username", "admin"), payload={"kind": kind, "pid": pid})
     return {"ok": True}
 
 
@@ -705,8 +707,8 @@ async def llm_activate(req: LlmActivateReq, user: dict = Depends(require_role("a
     except ValueError as e:
         raise HTTPException(400, str(e))
     _reset_llm_cache()  # 切换后旧模型实例立即失效，下次 get_llm/get_vl_llm 按新配置重建
-    get_audit_logger().write(event_type="admin", action="llm_activate",
-                             actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": req.pid})
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_activate",
+                            actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": req.pid})
     return {"ok": True, "active": req.pid}
 
 
@@ -715,9 +717,9 @@ async def llm_test(req: LlmProviderReq, user: dict = Depends(require_role("admin
     """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}，detail 不含 api_key。"""
     r = await asyncio.to_thread(llm_config.test_provider, req.api_format, req.base_url,
                                 req.model_id, req.api_key)
-    get_audit_logger().write(event_type="admin", action="llm_test",
-                             actor=user.get("username", "admin"),
-                             payload={"kind": req.kind if req.kind in ("chat", "vision") else None,
-                                      "api_format": req.api_format, "model_id": req.model_id[:80],
-                                      "ok": r["ok"]})
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_test",
+                            actor=user.get("username", "admin"),
+                            payload={"kind": req.kind if req.kind in ("chat", "vision") else None,
+                                     "api_format": req.api_format, "model_id": req.model_id[:80],
+                                     "ok": r["ok"]})
     return r

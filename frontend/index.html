@@ -74,9 +74,9 @@
   .src a{color:var(--accent-h);text-decoration:none;border-bottom:1px dotted var(--accent)}
   .thumb{max-width:180px;height:auto;border-radius:8px;border:1px solid var(--line)}
   /* skeleton */
-  .sk{height:14px;border-radius:6px;background:linear-gradient(90deg,var(--panel) 25%,var(--line) 37%,var(--panel) 63%);
-    background-size:400% 100%;animation:sh 1.3s ease infinite}
-  @keyframes sh{0%{background-position:100% 0}100%{background-position:0 0}}
+  /* skeleton：改 opacity 呼吸闪烁（合成器友好），替代 background-position 非合成器动画 */
+  .sk{height:14px;border-radius:6px;background:var(--line);animation:sh 1.3s ease infinite}
+  @keyframes sh{0%,100%{opacity:.4}50%{opacity:1}}
   /* composer */
   .composer{border-top:1px solid var(--line);padding:14px 26px;background:var(--panel)}
   .crow{display:flex;gap:10px;align-items:flex-end;max-width:820px}
@@ -433,31 +433,43 @@ async function doLogin(e){e.preventDefault();const err=document.getElementById('
     const d=await r.json(); if(!r.ok){err.textContent=d.detail||'登录失败';return false;}
     sessionStorage.setItem('med_token',d.access_token);boot(d.username,d.role);return false;
   }catch(ex){err.textContent='网络错误：'+ex.message;return false;}}
-function logout(){sessionStorage.removeItem('med_token');localStorage.removeItem('med_token');location.reload();} /* 双清：兼容旧版 localStorage 登录态 */
+function logout(){sessionStorage.removeItem('med_token');localStorage.removeItem('med_token');
+  history.replaceState(null,'',location.pathname+location.search);  /* 退出清视图深链：下一个登录者回默认概览 */
+  location.reload();} /* 双清：兼容旧版 localStorage 登录态 */
 
 /* ---- nav ---- */
 let reviewCount=0, reviewItems=[], reviewPage=0, reviewMe='';
+/* 导航项单一权威源（hash 深链白名单的键集由此派生） */
+const NAV_ITEMS=[
+  {g:'总览'},{k:'overview',t:'概览'},
+  {g:'临床助手'},{k:'literature',t:'医学文献'},{k:'drug',t:'药物信息'},{k:'imaging',t:'影像辅助'},{k:'case',t:'病例总结'},
+  {g:'协作'},{k:'mdt',t:'多智能体会诊'},
+  {g:'质控'},{k:'qc',t:'病历质控（病案科）'},{k:'review',t:'审核中心'},
+  {g:'系统'},{k:'kb',t:'知识库管理'},{k:'data',t:'数据面板'},{k:'arch',t:'架构 · 合规'},
+];
+const NAV_KEYS=NAV_ITEMS.filter(i=>i.k).map(i=>i.k);
 function renderRail(){
   const allow=ROLE_NAV[ROLE]||ROLE_NAV.doctor;
-  const items=[
-    {g:'总览'},{k:'overview',t:'概览'},
-    {g:'临床助手'},{k:'literature',t:'医学文献'},{k:'drug',t:'药物信息'},{k:'imaging',t:'影像辅助'},{k:'case',t:'病例总结'},
-    {g:'协作'},{k:'mdt',t:'多智能体会诊'},
-    {g:'质控'},{k:'qc',t:'病历质控（病案科）'},{k:'review',t:'审核中心',badge:reviewCount},
-    {g:'系统'},{k:'kb',t:'知识库管理'},{k:'data',t:'数据面板'},{k:'arch',t:'架构 · 合规'},
-  ];
+  const items=NAV_ITEMS;
   let html='',pendingGroup=null;
   for(const it of items){
     if(it.g){pendingGroup=it.g;continue;}
     if(!allow.includes(it.k))continue;
     if(pendingGroup!==null){html+=`<div class="grp">${pendingGroup}</div>`;pendingGroup=null;}
-    const act=(cur===it.k)?'active':'';const badge=it.badge?`<span class="tag num">${it.badge}</span>`:'';
+    const act=(cur===it.k)?'active':'';const n=(it.k==='review')?reviewCount:0;
+    const badge=n?`<span class="tag num">${n}</span>`:'';
     html+=`<button class="nav ${act}" data-k="${it.k}" onclick="go('${it.k}')">${ICON[it.k]}<span>${it.t}</span>${badge}</button>`;
   }
   document.getElementById('rail').innerHTML=html;
 }
+function hashView(){  /* 深链恢复：hash 仅在 NAV 键集且当前角色白名单内才生效 */
+  let k='';try{k=decodeURIComponent((location.hash||'').replace(/^#/,'')).trim();}catch(e){return null;}
+  const allow=ROLE_NAV[ROLE]||ROLE_NAV.doctor;
+  return (k&&NAV_KEYS.includes(k)&&allow.includes(k))?k:null;
+}
 function go(k){
   cur=k;
+  history.replaceState(null,'','#'+k);  /* 深链：视图切换同步地址栏（review 内 tab/分页不写入） */
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
   if(k==='overview'){document.getElementById('scr-home').classList.add('on');loadOverview();}
   else if(k==='kb'){document.getElementById('scr-kb').classList.add('on');loadKb();}
@@ -712,7 +724,19 @@ function showImg(src){if(!src||!src.startsWith('data:image/'))return;
 let _modalReturn=null;
 function openModal(){_modalReturn=document.activeElement;document.getElementById('modal').classList.add('on');}
 function closeModal(){document.getElementById('modal').classList.remove('on');if(_modalReturn&&_modalReturn.focus){_modalReturn.focus();}_modalReturn=null;}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.getElementById('modal').classList.contains('on'))closeModal();});
+document.addEventListener('keydown',e=>{
+  const m=document.getElementById('modal');
+  if(e.key==='Escape'&&m.classList.contains('on')){closeModal();return;}
+  if(e.key==='Tab'&&m.classList.contains('on')){  /* 焦点圈禁：Tab 循环限制在模态内可聚焦元素 */
+    const f=[...m.querySelectorAll('button,input,textarea,select,[tabindex]:not([tabindex="-1"])')]
+      .filter(el=>!el.disabled&&el.offsetParent!==null);
+    if(!f.length)return;
+    if(!m.contains(document.activeElement)){e.preventDefault();f[0].focus();return;}
+    const first=f[0],last=f[f.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  }
+});
 
 /* ---- 病历质控 ---- */
 function esc(s){return String(s).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -753,17 +777,29 @@ if(!window.__kbDelegate){window.__kbDelegate=true;document.addEventListener('cli
   const b=e.target.closest('button[data-act^="kb-"]');if(!b)return;
   if(b.dataset.act==='kb-preview')previewKb(b.dataset.tag);
   else if(b.dataset.act==='kb-delete')deleteKb(b.dataset.tag,b.dataset.name);});}
-async function loadKb(){const el=document.getElementById('kbList');if(!el)return;el.innerHTML='<div class="sk" style="height:16px"></div>';
-  try{const d=await apiGet('/admin/kb');
-    el.innerHTML=`<div class="lead" style="margin-bottom:10px">向量总数 <b class="num">${d.total}</b> · 在线上传 <b class="num">${d.uploaded}</b> 篇 · 内置库 <b class="num">${d.docs.length-d.uploaded}</b> 个<br>
+let kbPage=0,kbData=null;const KB_PER=50;  /* KB 客户端分页：数据一次拉取，仅 tbody 分页渲染 */
+function kbGo(d){kbPage+=d;renderKbList();const el=document.getElementById('kbList');if(el)el.scrollTop=0;}
+function renderKbList(){
+  const el=document.getElementById('kbList');if(!el||!kbData)return;const d=kbData;
+  const pages=Math.max(1,Math.ceil(d.docs.length/KB_PER));
+  if(kbPage>=pages)kbPage=pages-1; if(kbPage<0)kbPage=0;
+  const slice=d.docs.slice(kbPage*KB_PER,kbPage*KB_PER+KB_PER);
+  el.innerHTML=`<div class="lead" style="margin-bottom:10px">向量总数 <b class="num">${d.total}</b> · 在线上传 <b class="num">${d.uploaded}</b> 篇 · 内置库 <b class="num">${d.docs.length-d.uploaded}</b> 个<br>
       <span class="src">增=上传；查=预览切片；删=下方删除；改=同名文件重新上传即覆盖更新（内置库更新请重跑种子脚本）。</span></div>`+
-      (d.docs.length?`<table><thead><tr><th>名称</th><th>类型</th><th>切片</th><th>时间</th><th></th></tr></thead><tbody>`+d.docs.map(x=>{
+    (d.docs.length?`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>名称</th><th>类型</th><th>切片</th><th>时间</th><th></th></tr></thead><tbody>`+slice.map(x=>{
         const badge=x.kind==='builtin'?'<span class="chip mid"><span class="dot"></span>内置</span>':'<span class="chip"><span class="dot"></span>上传</span>';
         return `<tr><td>${esc(x.name)}</td><td>${badge}</td><td class="num">${x.chunks}</td><td class="num">${fmtTs(x.ts)}</td>
           <td style="white-space:nowrap"><button class="btn sm secondary" data-act="kb-preview" data-tag="${esc(x.doc_tag)}">预览</button>
-          <button class="btn sm secondary" data-act="kb-delete" data-tag="${esc(x.doc_tag)}" data-name="${esc(x.name)}">删除</button></td></tr>`;}).join('')+`</tbody></table>`
-        :'<div class="src">暂无文档。</div>');
-  }catch(e){el.innerHTML='<div class="src">⚠ 加载失败（需管理员权限）</div>';}}
+          <button class="btn sm secondary" data-act="kb-delete" data-tag="${esc(x.doc_tag)}" data-name="${esc(x.name)}">删除</button></td></tr>`;}).join('')+`</tbody></table>
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
+      <button class="btn sm secondary" ${kbPage===0?'disabled':''} onclick="kbGo(-1)">‹ 上一页</button>
+      <span class="src num">第 ${kbPage+1} / ${pages} 页 · 共 ${d.docs.length} 篇</span>
+      <button class="btn sm secondary" ${kbPage>=pages-1?'disabled':''} onclick="kbGo(1)">下一页 ›</button></div></div>`
+      :'<div class="src">暂无文档。</div>');
+}
+async function loadKb(){const el=document.getElementById('kbList');if(!el)return;el.innerHTML='<div class="sk" style="height:16px"></div>';
+  try{kbData=await apiGet('/admin/kb');renderKbList();}
+  catch(e){el.innerHTML='<div class="src">⚠ 加载失败（需管理员权限）</div>';}}
 async function uploadKb(){const fs=document.getElementById('kbFile').files;if(!fs.length){toast('请选择文件');return;}const msg=document.getElementById('kbMsg');const btn=document.getElementById('kbUp');btn.disabled=true;
   for(const f of fs){msg.textContent='处理中：'+f.name+' …';
     if(!/\.(md|txt|pdf)$/i.test(f.name)){msg.textContent=f.name+' 不支持（仅 .md/.txt/.pdf）';continue;}
@@ -1021,7 +1057,13 @@ async function loadOverview(){
 }
 
 /* ---- boot ---- */
-function boot(u,r){ROLE=r||'doctor';setWho(u,r);showLogin(false);go('overview');loadReview();}
+function boot(u,r){ROLE=r||'doctor';setWho(u,r);showLogin(false);
+  const hk=hashView();go(hk||'overview');
+  if(hk!=='review')loadReview();}  /* hash 恢复 review 时 go('review') 已加载，避免双请求 */
+window.addEventListener('beforeunload',e=>{  /* 防误关丢失未发送内容：聊天输入或质控字段任一有内容时拦截；发送/拆分清空后自然放行 */
+  const qcDirty=[...document.querySelectorAll('[id^="qcf_"]')].some(el=>el.value.trim());
+  if(document.getElementById('input').value.trim()||qcDirty){e.preventDefault();e.returnValue='';}
+});
 document.getElementById('send').onclick=send;
 document.getElementById('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const btn=document.getElementById('send');if(btn.disabled)return;send();}});
 document.getElementById('input').addEventListener('input',e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,160)+'px';});
