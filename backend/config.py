@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # 影像/病例高危征象词表：留空用内置默认；逗号分隔覆盖，供院方对齐放射科危急值清单
     imaging_risk_words: str = ""
 
+    # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN 均可被同名环境变量覆盖）
+    qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审
+    qc_auto_sign: bool = True   # True：药物中危规则库提示自动签发（AI·阈值自动留痕）；高危/禁忌仍人工双控
+
     @property
     def async_database_url(self) -> str:
         if self.pg_async_dsn:

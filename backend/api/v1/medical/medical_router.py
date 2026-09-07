@@ -270,7 +270,20 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
         conf, risk, review_flag = 0.55, "未知相互作用", False
     else:  # 识别不足 2 药（旧 else 分支取值）
         conf, risk, review_flag = 0.50, "信息不足", False
-    rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag, risk, actor)
+    auto_sign = (settings.qc_auto_sign and sev == "中危" and bool(r.get("sources"))
+                 and str(r["sources"][0]).startswith("drug_rules:"))
+    rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag or auto_sign, risk, actor)
+    if auto_sign and rid:
+        # QC_AUTO_SIGN：中危规则库提示自动签发（AI 预审替代人工，全程留痕）；
+        # 高危/禁忌（sev 高危/禁忌）不入此分支，仍走人工双控。医生侧 AskResp 不受影响。
+        try:
+            item = await asyncio.to_thread(review.resolve, rid, "approved",
+                                           "AI·阈值自动(规则库v2)", "QC_AUTO_SIGN：中危规则库提示自动签发")
+            await pg_store.mirror_review(item)
+        except review.ReviewError:  # pragma: no cover —— 刚入队必 pending，reviewer 亦非提交人
+            pass
+        await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="auto_sign",
+                                actor=actor, payload={"rid": rid, "sev": sev})
     await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="answered",
                             actor=actor, payload={"conf": conf, "review": review_flag})
     return AskResp(answer=ans, confidence=conf, needs_human_review=review_flag,
@@ -456,11 +469,16 @@ class QcReq(BaseModel):
 @router.post("/qc/record", response_model=AskResp)
 async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     actor = user.get("username", "system")
+    dept = user.get("dept", "")
+    if not dept:  # 科室由服务端绑定（签名/科室同源权威），未设置科室拒绝出报告
+        raise HTTPException(400, "请先联系管理员设置科室")
     # PHI 脱敏：病历内容入 LLM/队列前逐字段处理（与其它 agent 同纪律）。
     # lab 键名是已知的医学项目名（如 血钾=6.8），不应被当手机号脱敏；仅对值脱敏并限制键名白名单外的处置。
     known_lab_keys = {"血钾", "钾", "血钠", "钠", "血钙", "血糖", "血氯", "血肌酐", "肌酐",
                       "尿素氮", "BUN", "血白蛋白", "白蛋白", "ALT", "AST", "WBC", "Hb", "PLT"}
     redacted = {k: _redactor.redact(str(v)) for k, v in (req.record or {}).items()}
+    redacted["医师签名"] = actor  # 医师签名绑定当前账号：后端权威覆盖，不采信前端任何值
+    redacted["科室"] = dept       # 科室同样服务端绑定（与账号 dept 一致）
     labs = {}
     for k, v in (req.labs or {}).items():
         if k in known_lab_keys:
@@ -470,6 +488,7 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     icd_table = _load_optional_table("icd_table.json")        # 需院方提供，否则 ICD 轨未启用
     thresholds = _load_optional_table("critical_values.json")  # 需院方提供，不臆造安全阈值
     out = await asyncio.to_thread(qc.review_quality, redacted, icd_table, thresholds, labs)
+    sources = ["track:完整性", "track:内涵质量", "track:ICD", "track:危急值"]
     lines = [f"【病案质控·AI建议】完整性缺 {len(out['completeness'])} 项、内涵缺陷 {len(out['connotation'])} 项；"
              f"ICD {out['icd']['note'] if not out['icd']['enabled'] else '已核对'}；"
              f"危急值 {out['critical']['note'] if not out['critical']['enabled'] else ('标记'+str(len(out['critical']['flags']))+'项')}。"]
@@ -480,9 +499,25 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     text = "\n".join(lines)
     await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="query", actor=actor,
                             payload={"fields": len(req.record), "labs": len(req.labs or {})})
+    if settings.qc_auto_pass:
+        # 三档分流：①确定性硬伤 → 自动驳回不入队；②硬伤全过且置信 ≥0.85 → 自动归档不入队；
+        # ③其余（内涵轨缺陷/危急值）→ 走现行为入队人工终审。默认关闭，行为完全不变。
+        hard = out.get("hard_defects") or []
+        if hard:
+            await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="auto_reject",
+                                    actor=actor, payload={"hard": hard[:8]})
+            return AskResp(answer="⛔ 自动驳回（AI 预筛）：存在确定性硬伤：" + "；".join(hard),
+                           confidence=out["confidence"], needs_human_review=False,
+                           sources=sources, review_id=None, status="auto_rejected")
+        if out["confidence"] >= 0.85:
+            await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="auto_pass",
+                                    actor=actor, payload={"conf": out["confidence"]})
+            return AskResp(answer=text + f"\n\n✅ AI 预审通过（置信 {out['confidence']:.2f}），已归档",
+                           confidence=out["confidence"], needs_human_review=False,
+                           sources=sources, review_id=None)
     rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor)
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
-                   sources=["track:完整性", "track:内涵质量", "track:ICD", "track:危急值"], review_id=rid)
+                   sources=sources, review_id=rid)
 
 
 # ---------- 「粘贴整段病历」LLM 拆分（F2：质控表单快捷填充，仅辅助填表不参与质控判定）----------
@@ -576,6 +611,7 @@ class UserCreateReq(BaseModel):
     username: str
     password: str
     role: str
+    dept: str = Field(default="", max_length=40)  # 所属科室（质控签名/科室绑定用）
 
 
 @router.post("/admin/users")
@@ -587,14 +623,16 @@ async def admin_create_user(body: UserCreateReq, user: dict = Depends(require_ro
     if len(body.password or "") < 8:
         raise HTTPException(400, "密码至少 8 位")
     try:
-        ok = await asyncio.to_thread(create_user, uname, body.password, body.role)
+        ok = await asyncio.to_thread(create_user, uname, body.password, body.role, False,
+                                     (body.dept or "").strip())
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not ok:
         raise HTTPException(400, "用户名已存在")
     await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="user_created",
                             actor=user.get("username", "admin"),
-                            payload={"user": uname, "role": body.role})
+                            payload={"user": uname, "role": body.role,
+                                     "dept": (body.dept or "").strip()})
     await pg_store.mirror_audit("admin.user_created", user.get("username", "admin"), {"user": uname})
     rec = await asyncio.to_thread(get_user, uname)
     if rec:
@@ -617,6 +655,43 @@ async def admin_delete_user(username: str, user: dict = Depends(require_role("ad
     return {"ok": True}
 
 
+# ---------- admin 科室管理（质控签名/科室绑定的取值来源）----------
+class DeptReq(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+@router.get("/admin/departments")
+async def admin_list_departments(user: dict = Depends(require_role("admin"))):
+    from backend.core import departments
+    return {"list": await asyncio.to_thread(departments.list_departments)}
+
+
+@router.post("/admin/departments")
+async def admin_add_department(req: DeptReq, user: dict = Depends(require_role("admin"))):
+    from backend.core import departments
+    try:
+        ok = await asyncio.to_thread(departments.add_department, req.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(400, "科室已存在")
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="department_added",
+                            actor=user.get("username", "admin"), payload={"name": req.name.strip()})
+    return {"ok": True}
+
+
+@router.delete("/admin/departments/{name}")
+async def admin_delete_department(name: str, user: dict = Depends(require_role("admin"))):
+    """name 走 path（前端 encodeURIComponent），FastAPI 自动百分号解码，中文名安全。"""
+    from backend.core import departments
+    ok = await asyncio.to_thread(departments.remove_department, name)
+    if not ok:
+        raise HTTPException(404, "科室不存在")
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="department_removed",
+                            actor=user.get("username", "admin"), payload={"name": name})
+    return {"ok": True}
+
+
 # ---------- admin 运维：数据面板 / 队列清理（只读优先，不做裸 SQL） ----------
 @router.get("/admin/data")
 async def admin_data(user: dict = Depends(require_role("admin"))):
@@ -624,7 +699,8 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
     from backend.core.auth import all_users
     from backend.core.medical_kb import doc_count
     from backend.core.embedder import device
-    users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", "")}
+    users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", ""),
+              "dept": rec.get("dept", "")}
              for u, rec in (await asyncio.to_thread(all_users)).items()]
     items = await asyncio.to_thread(review.list_all)
     stats = {"pending": sum(1 for i in items if i.get("status") == "pending"),
@@ -634,7 +710,8 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
     # F5：保留完整 ISO 串（含 +00:00 偏移）。此前 [:19] 切掉时区后，前端 new Date 按
     # 本地时区解析 UTC 壁钟，审计流时间比本地慢 8 小时；fmtTs 依赖时区信息做本地化。
     audit_recent = [{"ts": e["ts"], "event": e["event_type"],
-                     "action": e["payload"].get("action", ""), "actor": e["actor"]}
+                     "action": e["payload"].get("action", ""), "actor": e["actor"],
+                     "payload": e.get("payload", {})}  # 完整 payload 下传，供前端人话化详情
                     for e in al.recent(50)]
     try:
         pg_counts = await pg_store.counts()
@@ -735,6 +812,23 @@ async def llm_activate(req: LlmActivateReq, user: dict = Depends(require_role("a
     await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_activate",
                             actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": req.pid})
     return {"ok": True, "active": req.pid}
+
+
+class LlmDeactivateReq(BaseModel):
+    kind: str
+
+
+@router.post("/admin/llm/deactivate")
+async def llm_deactivate(req: LlmDeactivateReq, user: dict = Depends(require_role("admin"))):
+    """停用激活 provider（active 置 None），回落 .env 内置配置。"""
+    try:
+        await asyncio.to_thread(llm_config.deactivate, req.kind)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _reset_llm_cache()  # 停用后旧模型实例立即失效
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_deactivate",
+                            actor=user.get("username", "admin"), payload={"kind": req.kind})
+    return {"ok": True}
 
 
 @router.post("/admin/llm/test")

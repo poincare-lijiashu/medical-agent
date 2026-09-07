@@ -124,6 +124,16 @@ def activate(kind: str, pid: str) -> dict:
         raise ValueError("未找到该 provider")
 
 
+def deactivate(kind: str) -> None:
+    """停用激活 provider（active 置 None，回落 .env 内置配置）。kind 非法抛 ValueError。"""
+    with _lock:
+        cfg = _load_raw()
+        if kind not in _KINDS:
+            raise ValueError("kind 需为 chat 或 vision")
+        cfg[kind]["active"] = None
+        _save_raw(cfg)
+
+
 def active_provider(kind: str) -> dict | None:
     """当前激活的 provider（含 api_key 原文，仅服务端内部使用）；无则 None。"""
     cfg = load_config()

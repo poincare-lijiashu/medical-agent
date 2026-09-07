@@ -71,6 +71,24 @@ def test_admin_delete_user_blocks_login_and_self(monkeypatch, tmp_path):
     assert get_user("tmp01") is None
 
 
+def test_admin_users_carry_dept(monkeypatch, tmp_path):
+    """seed 演示账号带科室；创建用户透传 dept；/admin/data 的 users 列表带 dept。"""
+    c = _client(monkeypatch, tmp_path)
+    adm = _login(c, "admin01", "Med@2026")
+    H = {"Authorization": "Bearer " + adm}
+    assert get_user("doctor01")["dept"] == "口腔科"
+    assert get_user("pharm01")["dept"] == "药剂科"
+    assert get_user("admin01")["dept"] == "医务处"
+    assert c.post("/api/v1/medical/admin/users", headers=H,
+                  json={"username": "doc9", "password": "Str0ngPass!", "role": "doctor",
+                        "dept": "外科"}).status_code == 200, get_user("doc9")
+    assert get_user("doc9")["dept"] == "外科"
+    data = c.get("/api/v1/medical/admin/data", headers=H).json()
+    by_name = {u["username"]: u for u in data["users"]}
+    assert by_name["doc9"]["dept"] == "外科"
+    assert by_name["admin01"]["dept"] == "医务处"
+
+
 def test_deleted_user_token_revoked_immediately(monkeypatch, tmp_path):
     """删除用户后，其已签发的访问令牌必须立即失效（此前最长 12h 内仍可调用 API）。"""
     c = _client(monkeypatch, tmp_path)

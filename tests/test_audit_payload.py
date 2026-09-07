@@ -90,6 +90,21 @@ def test_qc_record_audit_labs_defaults_zero(monkeypatch, tmp_path):
     assert entries[-1]["payload"]["labs"] == 0
 
 
+def test_admin_data_audit_recent_carries_payload(monkeypatch, tmp_path):
+    """/admin/data 的 audit_recent 必须携带完整 payload（前端 humanizeAudit 需要 n/rid 等）。"""
+    c, log = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+    r = c.post("/api/v1/medical/drug/ask", headers=_h(tok),
+               json={"question": "西地那非和硝酸甘油能一起用吗"})  # 禁忌 → review_enqueued
+    assert r.status_code == 200
+    adm = _login(c, "admin01", "Med@2026")
+    d = c.get("/api/v1/medical/admin/data", headers=_h(adm)).json()
+    assert d["audit_recent"], "应有审计条目"
+    assert all("payload" in e for e in d["audit_recent"]), "每条审计必须带 payload 字段"
+    e = next(e for e in d["audit_recent"] if e["action"] == "review_enqueued")
+    assert e["payload"].get("rid"), "review_enqueued 的 payload 应含 rid"
+
+
 def test_admin_data_audit_ts_is_timezone_aware(monkeypatch, tmp_path):
     """audit_recent 的 ts 必须可解析出时区（带 +00:00 偏移），前端 fmtTs 才能本地化。"""
     c, log = _client(monkeypatch, tmp_path)

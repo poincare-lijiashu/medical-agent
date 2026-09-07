@@ -79,12 +79,12 @@ def search_dense(query: str, top_k: int = 3) -> list:
 
 
 def doc_count() -> int:
-    """知识库向量总数（概览面板用）；异常返回 0。"""
+    """知识库向量总数（概览面板用）；查询失败返回 -1（区分「真 0」：前端对负值显示 … 并自动重试）。"""
     try:
         r = _collection().query("medical_kb", filter="", output_fields=["count(*)"])
         return int(r[0]["count(*)"]) if r else 0
     except Exception:  # noqa: BLE001
-        return 0
+        return -1
 
 
 def _has_sparse(col) -> bool:

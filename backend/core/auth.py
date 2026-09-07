@@ -139,14 +139,17 @@ def authenticate(username: str, password: str) -> Optional[dict]:
     return {"username": username, "role": u["role"]}
 
 
-def create_user(username: str, password: str, role: str, overwrite: bool = False) -> bool:
+def create_user(username: str, password: str, role: str, overwrite: bool = False,
+                dept: str = "") -> bool:
+    """创建用户；dept 为所属科室（质控签名/科室绑定用，缺省空 = 未设置）。"""
     if role not in ROLES:
         raise ValueError(f"非法角色: {role}")
     with _users_lock:
         users = _load_users()
         if username in users and not overwrite:
             return False
-        users[username] = {"role": role, "password_hash": hash_password(password)}
+        users[username] = {"role": role, "dept": (dept or "").strip(),
+                           "password_hash": hash_password(password)}
         _save_users(users)
     return True
 
@@ -189,10 +192,10 @@ def seed_default_users() -> None:
         return
     pw = _demo_password()
     defaults = [
-        ("doctor01", pw, "doctor"),
-        ("pharm01", pw, "pharmacist"),
-        ("admin01", pw, "admin"),
+        ("doctor01", pw, "doctor", "口腔科"),
+        ("pharm01", pw, "pharmacist", "药剂科"),
+        ("admin01", pw, "admin", "医务处"),
     ]
-    for u, p, r in defaults:
-        users[u] = {"role": r, "password_hash": hash_password(p)}
+    for u, p, r, d in defaults:
+        users[u] = {"role": r, "dept": d, "password_hash": hash_password(p)}
     _save_users(users)

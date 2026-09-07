@@ -40,7 +40,7 @@ def require_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> dict:
     if not settings.auth_enabled:
-        return {"username": "anonymous", "role": "admin"}
+        return {"username": "anonymous", "role": "admin", "dept": ""}
     if not creds or not creds.credentials:
         raise HTTPException(status_code=401, detail="未认证：请先登录 /api/v1/auth/login 获取令牌")
     payload = decode_token(creds.credentials)
@@ -52,9 +52,10 @@ def require_user(
     except (TypeError, ValueError):
         iat = 0.0
     ensure_not_revoked(sub, iat)
-    if not get_user(sub):  # 撤销表为进程内存态，重启后丢失：回查用户表兜底（fail-closed）
+    u = get_user(sub)
+    if not u:  # 撤销表为进程内存态，重启后丢失：回查用户表兜底（fail-closed）
         raise HTTPException(status_code=401, detail="账号不存在或已停用")
-    return {"username": sub, "role": payload.get("role")}
+    return {"username": sub, "role": payload.get("role"), "dept": u.get("dept", "")}
 
 
 def require_role(*roles: str):

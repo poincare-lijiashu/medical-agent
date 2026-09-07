@@ -101,8 +101,11 @@ def review_quality(record: dict, icd_table=None, thresholds=None, labs=None) -> 
     has_critical = bool(crit.get("flags"))
     high = [d for d in defects if d.get("level") in ("高", "危急")]
     conf = 0.85 if not defects and not has_critical else (0.6 if not high else 0.45)
+    # 确定性硬伤 = 完整性规则引擎失败项（100% 可解释，QC_AUTO_PASS 开启时用于自动驳回）
+    hard_defects = [f"{d['field']}：{d['issue']}" for d in comp]
     return {
         "defects": defects, "completeness": comp, "connotation": con,
         "icd": icd, "critical": crit, "has_critical": has_critical,
+        "hard_defects": hard_defects, "hard_pass": not hard_defects,
         "confidence": conf, "needs_human_review": True,  # 病历质控终审恒定人工签字
     }

@@ -55,7 +55,9 @@ def test_high_risk_dual_check_flow():
     assert r4.json()["reviewed_by"] == "pharm01"
 
 
-def test_low_risk_not_enqueued():
+def test_low_risk_not_enqueued(monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "qc_auto_sign", False)  # 自动签发关闭时维持旧语义：中危不入队
     c = _client()
     doc = _login(c, "doctor01", "Med@2026")
     # 中危（非禁忌/高危）不强制双人核对

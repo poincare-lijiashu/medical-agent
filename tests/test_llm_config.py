@@ -248,6 +248,39 @@ def test_provider_routes_add_activate_delete(monkeypatch, tmp_path):
     assert lc.active_provider("chat") is None
 
 
+# ---- 批次三：deactivate（回落 .env 内置配置）----
+
+def test_deactivate_core(monkeypatch, tmp_path):
+    monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
+    pid = lc.add_provider("chat", "openai", _URL, "gpt-test", "测试模型", _KEY)
+    lc.activate("chat", pid)
+    assert lc.active_provider("chat")["id"] == pid
+    lc.deactivate("chat")
+    assert lc.active_provider("chat") is None
+    assert json.load(open(tmp_path / "llm_providers.json", encoding="utf-8"))["chat"]["active"] is None
+    with pytest.raises(ValueError):
+        lc.deactivate("bad")  # kind 存在校验
+
+
+def test_deactivate_route_resets_cache_and_audits(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    pid = lc.add_provider("chat", "openai", _URL, "gpt-test", "测试模型", _KEY)
+    lc.activate("chat", pid)
+    from backend.core.llm_factory import LLMFactory
+    LLMFactory._instances["sentinel"] = object()
+    c = TestClient(app)
+    doc = _login(c, "doctor01", "Med@2026")
+    assert c.post("/api/v1/medical/admin/llm/deactivate", headers=_h(doc),
+                  json={"kind": "chat"}).status_code == 403
+    adm = _login(c, "admin01", "Med@2026")
+    r = c.post("/api/v1/medical/admin/llm/deactivate", headers=_h(adm), json={"kind": "chat"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert lc.active_provider("chat") is None
+    assert "sentinel" not in LLMFactory._instances, "停用后必须重建模型缓存"
+    assert c.post("/api/v1/medical/admin/llm/deactivate", headers=_h(adm),
+                  json={"kind": "bad"}).status_code == 400
+
+
 def test_test_route_uses_faked_post(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     c = TestClient(app)
