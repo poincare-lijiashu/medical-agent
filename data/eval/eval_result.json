@@ -1,0 +1,178 @@
+{
+  "hit_rate": 1.0,
+  "passed": 9,
+  "total": 9,
+  "results": [
+    {
+      "agent": "literature",
+      "question": "二甲双胍是一线治疗吗？",
+      "expect_any": [
+        "二甲双胍"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "根据提供的指南摘要，二甲双胍是2型糖尿病的一线治疗药物。推荐剂量通常为500mg每日2-3次，随餐或餐后即刻服用。对于合并动脉粥样硬化性心血管病、慢性肾脏病或心力衰竭的患者，建议联合使用SGLT2抑制剂或GLP-1受体激动剂。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:diabetes2",
+          "sample_guideline.pdf",
+          "示例_糖尿病与血脂管理要点"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "2型糖尿病血糖控制目标是多少？",
+      "expect_any": [
+        "hba1c",
+        "7"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "多数成人2型糖尿病患者的糖化血红蛋白（HbA1c）控制目标为<7%。对于病程短、预期寿命长且无心血管疾病的患者，可采取更严格的目标（<6.5%）。而对于老年、有严重低血糖史或合并症较多的患者，目标可放宽至7.5%–8.0%。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "示例_糖尿病与血脂管理要点",
+          "sample_guideline.pdf",
+          "guideline_demo:diabetes2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "他汀类药物降低LDL-C的目标值是多少？",
+      "expect_any": [
+        "ldl",
+        "他汀"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "根据提供的证据，他汀类药物降低LDL-C的目标值取决于心血管病危险分层：极高危者目标为<1.4 mmol/L且较基线降幅≥50%（来源1）；另一示例指出超高危者<1.4 mmol/L、极高危者<1.8 mmol/L，均需较基线降幅≥50%（来源2、4）。此外，针对接受他汀治疗的终末期肾病（ESKD）患者，有研究探讨将LDL-C降至55 mg/dL以下的获益（来源3）。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:dyslipidemia",
+          "示例_糖尿病与血脂管理要点",
+          "PMID:42685616"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "高血压的诊断标准是多少？",
+      "expect_any": [
+        "mmhg",
+        "血压",
+        "140"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "在未使用降压药物的情况下，非同日三次诊室血压收缩压≥140 mmHg 和/或舒张压≥90 mmHg，可诊断为高血压。家庭自测血压的诊断阈值为≥135/85 mmHg。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "示例_高血压基层防治要点",
+          "guideline_demo:hypertension"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "急性冠脉综合征为什么要用阿司匹林？",
+      "expect_any": [
+        "阿司匹林",
+        "aspirin",
+        "抗血小板"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "提供的文献主要关注急性冠脉综合征经皮冠状动脉介入治疗后阿司匹林的早期停用策略，未直接阐述使用阿司匹林的具体病理生理机制。但根据示例指南，确诊动脉粥样硬化性心血管病者需进行抗血小板治疗，这暗示了阿司匹林在ACS中的基础地位。由于缺乏关于“为什么使用”的直接机制证据，置信度较低。\n\n（校验提示：以下论断未被检索证据充分支持：提供的文献主要关注急性冠脉综合征经皮冠状动脉介入治疗后阿司匹林的早期停用策略；未直接阐述使用阿司匹林的具体病理生理机制；确诊动脉粥样硬化性心血管病者需进行抗血小板治疗）",
+        "confidence": 0.77,
+        "needs_human_review": false,
+        "sources": [
+          "PMID:42607744",
+          "PMID:42507310",
+          "示例_糖尿病与血脂管理要点"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "华法林和布洛芬能一起吃吗？",
+      "expect_any": [
+        "出血",
+        "高危"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "发现以下相互作用（循证规则库）：\n- 【华法林 + 布洛芬｜高危】NSAID 抑制血小板并置换蛋白结合，显著增加消化道出血风险；避免联用，必要时加用 PPI 并密切监测 INR。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "confidence": 0.86,
+        "needs_human_review": true,
+        "sources": [
+          "drug_rules:curated_v1"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "西地那非能和硝酸甘油一起用吗",
+      "expect_any": [
+        "禁忌",
+        "低血压"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "发现以下相互作用（循证规则库）：\n- 【西地那非 + 硝酸甘油｜禁忌】PDE5 抑制剂与硝酸酯类协同致严重低血压，绝对禁忌，24–48 小时内不得同用。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "confidence": 0.9,
+        "needs_human_review": true,
+        "sources": [
+          "drug_rules:curated_v1"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "imaging",
+      "question": "帮我看这张头颅CT",
+      "expect_any": [
+        "上传"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
+        "confidence": 0.0,
+        "needs_human_review": false,
+        "sources": [
+          "imaging:needs_image"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "case",
+      "question": "65岁男性多饮多尿消瘦",
+      "expect_any": [
+        "图片",
+        "粘贴"
+      ],
+      "hit": true,
+      "resp": {
+        "answer": "多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
+        "confidence": 0.0,
+        "needs_human_review": false,
+        "sources": [
+          "case:needs_input"
+        ],
+        "error": null
+      }
+    }
+  ]
+}

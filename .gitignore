@@ -1,0 +1,32 @@
+# ===== 医疗项目红线：密钥 / 隐私 / 大文件，严禁入库 =====
+
+# 密钥与本地配置（含 QWEN_API_KEY、AUTH_JWT_SECRET）
+.env.local
+*.key
+*.pem
+
+# 用户隐私数据（密码哈希 / 审计日志含 PHI / 审核队列含病历）
+data/auth/
+data/audit/
+data/review/
+
+# 临时产物（安装/种子过程错误日志与一次性验证输出）
+data/*.err
+data/*.log
+data/verify_out.txt
+
+# 模型权重（4.3GB，本地化部署不入库）
+backend/models/
+
+# ===== 常规排除 =====
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+node_modules/
+dist/
+*.log
+.DS_Store

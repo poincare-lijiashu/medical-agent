@@ -1,0 +1,17 @@
+{
+  "local_corpus": {
+    "name": "本地指南要点（内置·含常见病）",
+    "chunks": 21,
+    "ts": "2026-09-06T05:58:15.987725+00:00"
+  },
+  "pubmed_seed": {
+    "name": "PubMed 真实文献库（内置·85 主题）",
+    "chunks": 1359,
+    "ts": "2026-09-06T05:58:16.006261+00:00"
+  },
+  "sample_guideline": {
+    "name": "sample_guideline.pdf",
+    "chunks": 1,
+    "ts": "2026-09-06T05:59:11.174740+00:00"
+  }
+}

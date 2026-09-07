@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MedAssist · 临床决策支持</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%232563c9'/%3E%3Cpath d='M12 6v12M6 12h12' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:oklch(0.99 0.004 250); --panel:oklch(0.975 0.006 250); --rail:oklch(0.965 0.008 250);
+    --ink:oklch(0.23 0.02 255); --ink-2:oklch(0.45 0.02 255); --ink-3:oklch(0.56 0.015 255);
+    --line:oklch(0.9 0.008 250); --line-strong:oklch(0.84 0.01 250);
+    --accent:oklch(0.53 0.13 250); --accent-h:oklch(0.47 0.13 250); --accent-soft:oklch(0.95 0.02 250);
+    --ok:oklch(0.55 0.13 155); --ok-soft:oklch(0.96 0.03 155);
+    --warn:oklch(0.62 0.13 75); --warn-soft:oklch(0.96 0.04 80);
+    --danger:oklch(0.55 0.17 25); --danger-soft:oklch(0.96 0.03 25);
+    --r:8px; --shadow:0 1px 2px oklch(0.2 0.02 255 / .06); --shadow-lg:0 8px 30px oklch(0.2 0.02 255 / .12);
+    --z-sticky:100; --z-backdrop:500; --z-modal:600; --z-toast:700;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.55;font-size:14px;-webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums}
+  h1,h2,h3{margin:0;text-wrap:balance;font-weight:600;letter-spacing:-0.01em}
+  a{color:var(--accent)}
+  /* header */
+  header{position:sticky;top:0;z-index:var(--z-sticky);height:56px;display:flex;align-items:center;
+    gap:16px;padding:0 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .mark{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px}
+  .mark .g{width:26px;height:26px;color:var(--accent)}
+  .mark small{display:block;font-weight:400;color:var(--ink-3);font-size:11px;letter-spacing:.02em}
+  header .spacer{flex:1}
+  .userchip{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
+  .role{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent-h);border:1px solid var(--line)}
+  /* layout */
+  .app{display:grid;grid-template-columns:236px 1fr;grid-template-rows:minmax(0,1fr);height:calc(100% - 56px)}
+  @media(max-width:860px){.app{grid-template-columns:1fr}.rail{display:none}}
+  .rail{background:var(--rail);border-right:1px solid var(--line);padding:14px 10px;overflow-y:auto}
+  .grp{font-size:11px;color:var(--ink-3);text-transform:none;letter-spacing:.02em;padding:10px 10px 6px}
+  .nav{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 10px;border:none;
+    background:transparent;color:var(--ink-2);border-radius:var(--r);cursor:pointer;font:inherit;font-size:13.5px;transition:background .15s,color .15s}
+  .nav svg{width:18px;height:18px;flex:none}
+  .nav:hover{background:var(--panel);color:var(--ink)}
+  .nav:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .nav.active{background:var(--panel);color:var(--ink);font-weight:500;box-shadow:inset 0 0 0 1px var(--line-strong)}
+  .nav .tag{margin-left:auto;font-size:11px;min-width:18px;text-align:center;padding:0 6px;border-radius:999px;background:var(--warn-soft);color:var(--warn);font-weight:600}
+  /* main */
+  main{overflow:hidden;display:flex;flex-direction:column;min-width:0;min-height:0}
+  .screen{flex:1;display:none;flex-direction:column;min-height:0}
+  .screen.on{display:flex}
+  .shead{padding:18px 26px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  .shead h1{font-size:22px;letter-spacing:-0.015em}
+  .shead p{margin:2px 0 0;color:var(--ink-3);font-size:12.5px}
+  .body{flex:1;overflow-y:auto;padding:26px;display:flex;flex-direction:column;gap:16px;min-height:0}
+  .body>*{flex-shrink:0}  /* 防止 flex 压缩子卡片：内容超高必须触发滚动而非被裁剪 */
+  /* chat */
+  .row{display:flex;gap:12px;max-width:820px}
+  .row.me{margin-left:auto;flex-direction:column;align-items:flex-end}
+  .avatar{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;flex:none;background:var(--accent-soft);color:var(--accent-h)}
+  .avatar svg{width:16px;height:16px}
+  .bubble{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 15px;box-shadow:var(--shadow)}
+  .row.me .bubble{background:var(--accent-soft);border-color:transparent}
+  .txt{white-space:pre-wrap;word-break:break-word}
+  .foot{margin-top:11px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--ink-2)}
+  .chip .dot{width:7px;height:7px;border-radius:50%}
+  .chip.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)} .chip.ok .dot{background:var(--ok)}
+  .chip.mid{color:var(--accent-h);border-color:var(--accent);background:var(--accent-soft)} .chip.mid .dot{background:var(--accent)}
+  .chip.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)} .chip.warn .dot{background:var(--warn)}
+  .src{font-size:11.5px;color:var(--ink-3)}
+  .src a{color:var(--accent-h);text-decoration:none;border-bottom:1px dotted var(--accent)}
+  .thumb{max-width:180px;border-radius:8px;border:1px solid var(--line)}
+  /* skeleton */
+  .sk{height:14px;border-radius:6px;background:linear-gradient(90deg,var(--panel) 25%,var(--line) 37%,var(--panel) 63%);
+    background-size:400% 100%;animation:sh 1.3s ease infinite}
+  @keyframes sh{0%{background-position:100% 0}100%{background-position:0 0}}
+  /* composer */
+  .composer{border-top:1px solid var(--line);padding:14px 26px;background:var(--panel)}
+  .crow{display:flex;gap:10px;align-items:flex-end;max-width:820px}
+  .field{flex:1;min-width:0}
+  textarea.inp{width:100%;resize:none;border:1px solid var(--line-strong);border-radius:var(--r);padding:11px 13px;
+    font:inherit;font-size:14px;line-height:1.5;max-height:160px;background:var(--bg);color:var(--ink)}
+  textarea.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .imgbar{display:none;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:var(--ink-3)}
+  .imgbar img{width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+  /* buttons */
+  .btn{appearance:none;border:1px solid transparent;border-radius:var(--r);padding:9px 15px;font:inherit;font-size:13.5px;
+    font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:background .15s,border-color .15s,box-shadow .15s}
+  .btn svg{width:16px;height:16px}
+  .btn:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-soft)}
+  .btn.primary{background:var(--accent);color:#fff}.btn.primary:hover{background:var(--accent-h)}
+  .btn.secondary{background:var(--bg);color:var(--ink);border-color:var(--line-strong)}.btn.secondary:hover{background:var(--panel)}
+  .btn.ghost{background:transparent;color:var(--ink-2)}.btn.ghost:hover{background:var(--panel);color:var(--ink)}
+  .btn.danger{background:var(--danger);color:#fff}.btn.danger:hover{filter:brightness(.94)}
+  .btn.sm{padding:6px 11px;font-size:12.5px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .icon-btn{width:40px;height:40px;padding:0;justify-content:center;border:1px solid var(--line-strong);border-radius:var(--r);background:var(--bg);color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center}
+  .icon-btn:hover{border-color:var(--accent);color:var(--accent-h)}
+  /* panels/cards for mdt/review */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;box-shadow:var(--shadow)}
+  .card h3{font-size:14px;margin-bottom:4px}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink-3);font-weight:500;font-size:12px}
+  .qtext{color:var(--ink);max-width:420px}
+  .empty{text-align:center;color:var(--ink-3);padding:50px 20px}
+  .empty svg{width:40px;height:40px;opacity:.5;margin-bottom:10px}
+  .lead{max-width:640px;color:var(--ink-2)}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+  .flow span{background:var(--panel);border:1px solid var(--line-strong);border-radius:8px;padding:6px 11px;font-size:12.5px;color:var(--ink)}
+  .rules{margin:8px 0 0;padding-left:20px;color:var(--ink-2);font-size:13.5px;line-height:1.7}
+  .rules b{color:var(--ink);font-weight:600}
+  /* login */
+  .login{position:fixed;inset:0;z-index:var(--z-backdrop);background:var(--bg);display:none;place-items:center}
+  .login.on{display:grid}
+  .lcard{width:340px;max-width:92vw;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:32px 30px;box-shadow:var(--shadow-lg);text-align:center}
+  .lcard .g{width:40px;height:40px;color:var(--accent)}
+  .lcard h2{font-size:22px;letter-spacing:-0.015em;margin:8px 0 2px}
+  .lcard .sub{color:var(--ink-3);font-size:12.5px;margin-bottom:20px}
+  .lcard input{width:100%;border:1px solid var(--line-strong);border-radius:var(--r);padding:11px 13px;font:inherit;font-size:14px;margin-bottom:12px;background:var(--bg)}
+  .lcard input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .lerr{color:var(--danger);font-size:12.5px;min-height:16px;margin:-4px 0 8px;text-align:left}
+  .lbtn{width:100%;justify-content:center}
+  .lhint{margin-top:16px;font-size:11.5px;color:var(--ink-3);line-height:1.7;text-align:left;border-top:1px solid var(--line);padding-top:12px}
+  code{background:var(--rail);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12px}
+  /* toast */
+  .toast{position:fixed;right:18px;bottom:18px;z-index:var(--z-toast);background:var(--ink);color:#fff;
+    padding:11px 16px;border-radius:8px;font-size:13px;box-shadow:var(--shadow-lg);opacity:0;transform:translateY(8px);transition:.2s}
+  .toast.on{opacity:1;transform:none}
+  /* overview dashboard */
+  .hero{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:22px 24px;box-shadow:var(--shadow)}
+  .hero h2{font-size:19px;letter-spacing:-.015em;margin:0 0 6px}
+  .hero p{margin:0;color:var(--ink-2);font-size:13.5px;max-width:68ch;line-height:1.6}
+  .stats{display:flex;flex-wrap:wrap;flex:none;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;box-shadow:var(--shadow)}
+  .stat{flex:1 1 0;min-width:118px;padding:13px 16px;border-right:1px solid var(--line)}
+  .stat:last-child{border-right:none}
+  .stat .k{display:block;font-size:11.5px;color:var(--ink-3)}
+  .stat .v{display:block;font-size:20px;font-weight:600;margin-top:3px;letter-spacing:-.01em}
+  .stat .v small{font-size:11.5px;font-weight:500;color:var(--ink-3)}
+  .dash{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start;flex:none}
+  @media(max-width:1024px){.dash{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
+  .panel>h3{font-size:11.5px;color:var(--ink-3);letter-spacing:.02em;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;margin:0}
+  .feed{list-style:none;margin:0;padding:2px 0}
+  .feed li{display:flex;align-items:baseline;gap:10px;padding:8px 16px;font-size:13px;border-bottom:1px solid var(--line)}
+  .feed li:last-child{border-bottom:none}
+  .feed .t{color:var(--ink-3);font-size:11.5px;font-variant-numeric:tabular-nums;flex:none}
+  .feed .e{color:var(--ink);font-weight:500}
+  .feed .a{color:var(--ink-3);margin-left:auto;font-size:12px}
+  .qlist{list-style:none;margin:0;padding:6px}
+  .qlist button{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:9px 12px;border:none;background:transparent;border-radius:8px;cursor:pointer;font:inherit;color:var(--ink);transition:background .15s}
+  .qlist button:hover{background:var(--bg)}
+  .qlist button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .qlist svg{width:18px;height:18px;color:var(--accent);flex:none}
+  .qlist .qn{font-size:13.5px;font-weight:500}
+  .qlist .qd{font-size:11.5px;color:var(--ink-3)}
+  .qlist .ar{margin-left:auto;color:var(--ink-3);font-size:18px}
+  .chk{list-style:none;margin:0;padding:8px 16px}
+  .chk li{display:flex;align-items:center;gap:9px;padding:6px 0;font-size:13px;color:var(--ink-2)}
+  .chk .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--ink-2)}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  /* qc form */
+  .qgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .qgrid label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--ink-2);font-weight:500}
+  .qgrid textarea{grid-column:1/-1}
+  @media(max-width:720px){.qgrid{grid-template-columns:1fr}}
+  input.inp{width:100%;border:1px solid var(--line-strong);border-radius:var(--r);padding:10px 12px;font:inherit;font-size:13.5px;background:var(--bg);color:var(--ink)}
+  input.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  /* modal */
+  .modal{position:fixed;inset:0;z-index:var(--z-modal);background:oklch(0.2 0.02 255 / .45);display:none;place-items:center;padding:24px}
+  .modal.on{display:grid}
+  .mcard{background:var(--bg);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-lg);max-width:680px;width:100%;max-height:82vh;display:flex;flex-direction:column}
+  .mhead{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .mhead h3{margin:0;font-size:16px;flex:1}
+  .mbody{padding:18px 20px;overflow-y:auto}
+  .mbody h4{margin:0 0 4px;font-size:12px;color:var(--ink-3);font-weight:600}
+  .txt.md b{font-weight:600}
+  .screen.on{animation:fade .22s ease-out}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="login" id="login">
+  <form class="lcard" onsubmit="return doLogin(event)">
+    <svg class="g" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v18M3 12h18" stroke-linecap="round"/></svg>
+    <h2>MedAssist 登录</h2>
+    <div class="sub">临床决策支持 · 仅限专业人员</div>
+    <input id="lu" placeholder="用户名" autocomplete="username" required>
+    <input id="lp" type="password" placeholder="密码" autocomplete="current-password" required>
+    <div class="lerr" id="lerr"></div>
+    <button class="btn primary lbtn" type="submit">登录</button>
+    <div class="lhint">演示账号 <code>doctor01</code> / <code>pharm01</code> / <code>admin01</code>，密码 <code>Med@2026</code><br>忘记密码？请联系管理员重置。<br>本工具为辅助决策，非医疗器械；结论须由执业医师复核。</div>
+  </form>
+</div>
+
+<header>
+  <div class="mark">
+    <svg class="g" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4v16M4 12h16" stroke-linecap="round"/></svg>
+    <div>MedAssist<small>临床决策支持</small></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn ghost sm" id="cpBtn" style="display:none" onclick="openChangePwd()">修改密码</button>
+  <div class="userchip"><span id="who"></span><span class="role" id="role"></span>
+    <button class="btn ghost sm" id="lo" onclick="logout()">退出</button></div>
+</header>
+
+<div class="app">
+  <nav class="rail" id="rail"></nav>
+  <main>
+    <section class="screen" id="scr-home">
+      <div class="shead"><div><h1>概览</h1><p>临床决策支持系统运行状态 · 知识库 · 质控队列 · 合规基线</p></div>
+        <div class="spacer"></div><button class="btn secondary sm" onclick="loadOverview()">刷新</button></div>
+      <div class="body" id="homeBody"></div>
+    </section>
+
+    <section class="screen" id="scr-chat">
+      <div class="shead"><div><h1 id="cTitle"></h1><p id="cDesc"></p></div>
+        <div class="spacer"></div><button class="btn secondary sm" onclick="newChat()">新建对话</button></div>
+      <div class="body" id="msgs"></div>
+      <div class="composer">
+        <div class="crow">
+          <button class="icon-btn" id="attach" type="button" title="上传影像" style="display:none" onclick="document.getElementById('img').click()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5L5 20"/></svg>
+          </button>
+          <input type="file" id="img" accept="image/*" multiple style="display:none">
+          <div class="field">
+            <textarea class="inp" id="input" rows="1" placeholder="输入临床问题…（Enter 发送 · Shift+Enter 换行）"></textarea>
+            <div class="imgbar" id="imgbar"><span id="imgthumbs" style="display:flex;gap:6px"></span><span id="imgname"></span>
+              <button class="btn ghost sm" type="button" onclick="clearImg()">移除</button></div>
+          </div>
+          <button class="btn primary" id="send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>发送</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-mdt">
+      <div class="shead"><div><h1>多智能体协作会诊</h1><p>三个 AI 专科分别给意见并标明分歧；结论须医师复核（非真人会诊）</p></div></div>
+      <div class="body" id="mdtBody">
+        <div class="card">
+          <label class="lead" for="mdtCase" style="display:block;margin-bottom:8px">描述病例或会诊问题（含症状、既往史、用药、检查结果等）</label>
+          <textarea class="inp" id="mdtCase" rows="4" placeholder="例：62 岁男性，2 型糖尿病合并冠心病，近期 eGFR 45，正在服二甲双胍与辛伐他汀，拟加用克拉霉素治疗感染，请评估用药与方案。"></textarea>
+          <div style="margin-top:12px"><button class="btn primary" id="mdtRun" onclick="runMdt()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 20a5 5 0 0 0-10 0M12 3a5 5 0 0 1 5 5c0 3-2 4-2 6h-6c0-2-2-3-2-6a5 5 0 0 1 5-5Z"/></svg>发起会诊</button></div>
+        </div>
+        <div id="mdtOut"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-qc">
+      <div class="shead"><div><h1>病历质控 · 病案科工作台</h1><p>AI 预筛病历缺陷，质控员终审签字（三列留痕）</p></div>
+        <div class="spacer"></div><button class="btn secondary sm" onclick="qcSample()">填入示例</button></div>
+      <div class="body" style="max-width:900px">
+        <div class="card" style="border-left:3px solid var(--accent)">
+          <b>谁用 / 何时用</b>
+          <div class="src" style="margin-top:4px;line-height:1.7">面向病案科与质控医师：病历出科/归档前，按完整性、内涵质量、危急值三轨做 AI 预筛；所有结论仅为建议，最终以质控员签字为准。该功能对医生日常诊疗不做干预。</div>
+        </div>
+        <div class="card"><h3>病历内容</h3>
+          <div class="qgrid">
+            <label>主诉<input class="inp" id="qcf_0" placeholder="例：右下后牙自发痛 3 天"></label>
+            <label>现病史<textarea class="inp" id="qcf_1" rows="2" placeholder="诱因、部位/性质、加重缓解、伴随症状…"></textarea></label>
+            <label>既往史<textarea class="inp" id="qcf_2" rows="2" placeholder="慢性病/手术/用药/过敏…"></textarea></label>
+            <label>体格检查<textarea class="inp" id="qcf_3" rows="2" placeholder="专科查体…"></textarea></label>
+            <label>辅助检查<textarea class="inp" id="qcf_4" rows="2" placeholder="检验/影像…"></textarea></label>
+            <label>初步诊断<input class="inp" id="qcf_5" placeholder="例：急性牙髓炎"></label>
+            <label>医师签名<input class="inp" id="qcf_6" placeholder="签名（必填，缺失将报缺陷）"></label>
+          </div>
+          <label style="margin-top:12px">检验值（可选，每行「项目=值」，用于危急值）<textarea class="inp" id="qcLabs" rows="2" placeholder="血钾=6.8"></textarea></label>
+          <div style="margin-top:14px"><button class="btn primary" id="qcRun" onclick="runQc()">运行质控</button></div>
+        </div>
+        <div id="qcOut"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-kb">
+      <div class="shead"><div><h1>知识库管理</h1><p>上传指南/文献入库，供 AI 检索引用</p></div></div>
+      <div class="body" style="max-width:900px">
+        <div class="card"><h3>上传文档</h3>
+          <input type="file" id="kbFile" accept=".md,.txt,.pdf" multiple style="margin:10px 0;font-size:13px">
+          <div><button class="btn primary" id="kbUp" onclick="uploadKb()">上传并向量化</button></div>
+          <div id="kbMsg" class="src" style="margin-top:10px"></div>
+        </div>
+        <div class="card"><h3>已上传文档</h3><div id="kbList"></div></div>
+      </div>
+    </section>
+
+    <section class="screen" id="scr-review">
+      <div class="shead"><div><h1>审核中心 · 高风险双人核对</h1><p>高风险结论需第二名医师/药师签发</p></div>
+        <div class="spacer"></div>
+        <button class="btn danger sm" id="purgeBtn" style="display:none" onclick="purgePending()">清空待核对</button>
+        <button class="btn secondary sm" onclick="loadReview()">刷新</button></div>
+      <div class="shead" style="padding:10px 26px;border-bottom:1px solid var(--line);gap:8px">
+        <button class="btn sm primary" id="tabPending" onclick="switchReviewTab('pending')">待处理</button>
+        <button class="btn sm ghost" id="tabHistory" onclick="switchReviewTab('history')">历史记录</button>
+      </div>
+      <div class="body" id="reviewBody"></div>
+    </section>
+
+    <section class="screen" id="scr-data">
+      <div class="shead"><div><h1>数据面板（只读）</h1><p>用户 · 审计流 · 队列统计 · 存储健康；面向管理员，不做裸数据库操作</p></div>
+        <div class="spacer"></div><button class="btn secondary sm" onclick="loadData()">刷新</button></div>
+      <div class="body" id="dataBody"></div>
+    </section>
+
+    <section class="screen" id="scr-arch">
+      <div class="shead"><div><h1>架构 · 合规</h1><p>临床决策支持系统的设计蓝图与不可越界红线</p></div></div>
+      <div class="body" style="max-width:900px">
+        <div class="card"><h3>六层架构（数据向下，结果向上）</h3>
+          <div class="flow">
+            <span>API层·鉴权/校验/流式</span>→<span>编排层·意图路由/调度</span>→<span>Agent层·四大临床助手</span>→<span>公共层·LLM工厂/重试/记忆/日志</span>→<span>工具层·检索/ICD/MCP</span>→<span>数据层·Postgres+Milvus+本地模型</span>
+          </div>
+        </div>
+        <div class="card"><h3>医疗循证 RAG · 反幻觉四闸</h3>
+          <ol class="rules">
+            <li><b>检索约束生成</b>：稠密+稀疏混合召回 + 交叉编码器精排；只用检索到的权威要点作答。</li>
+            <li><b>逐条引用溯源</b>：每条结论必须能在证据集核验，无据引用自动剔除并降置信。</li>
+            <li><b>保守置信阈值</b>：医学答错代价极高，低置信不强行作答。</li>
+            <li><b>人机协同兜底</b>：高风险（禁忌/影像可疑/低置信）转人工，宁可不答不乱答。</li>
+          </ol>
+        </div>
+        <div class="card"><h3>人机协同 · 高危双人核对</h3>
+          <ol class="rules">
+            <li>医生在线采纳/改写常规答案；仅高风险入「双人核对」队列。</li>
+            <li>签发人≠提交人（双控）；<b>三列留痕</b>：AI建议 · 人工裁定 · 最终结果，全程可审计。</li>
+            <li>确定性问题用硬规则（如药物禁忌），安全关键不依赖模型。</li>
+          </ol>
+        </div>
+        <div class="card"><h3>合规红线</h3>
+          <ol class="rules">
+            <li>仅辅助决策，<b>不构成诊断、不开处方</b>；签字权在执业医师/药师。</li>
+            <li><b>数据不出院</b>：本地权重 + 自有基础设施，知识库离线摄取（data/kb_docs）。</li>
+            <li>PHI 入站脱敏（身份证/手机/邮箱/病案号）+ 访问鉴权 + 全链路可追溯审计。</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="mcard"><div class="mhead"><h3 id="mTitle"></h3><button class="btn ghost sm" onclick="closeModal()">关闭</button></div>
+    <div class="mbody" id="mBody"></div></div>
+</div>
+
+<script>
+const ICON={
+  literature:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2Z"/><path d="M8 3v18"/></svg>',
+  drug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="8" width="18" height="8" rx="4" transform="rotate(45 12 12)"/><path d="M8.5 8.5l7 7"/></svg>',
+  imaging:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>',
+  case:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>',
+  mdt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="7" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 20a5 5 0 0 1 7-3"/></svg>',
+  review:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>',
+  arch:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="M2 13l10 5 10-5"/><path d="M2 18l10 5 10-5" stroke-dasharray="3 3"/></svg>',
+  qc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
+  kb:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/><path d="M4 11.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>',
+  data:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 8h.01M7 17h.01"/></svg>',
+  overview:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
+};
+const AGENTS={
+  literature:{name:'医学文献助手',desc:'查证：答案附文献出处，可点击查原文',endpoint:'/literature/ask',imageOk:false,hint:'例：二甲双胍是一线治疗吗？'},
+  drug:{name:'药物信息助手',desc:'两药同用风险即时核查',endpoint:'/drug/ask',imageOk:false,hint:'例：华法林和布洛芬能一起吃吗？'},
+  imaging:{name:'影像辅助阅片',desc:'上传影像，AI 给出初步所见',endpoint:'/imaging/ask',imageOk:true,hint:'上传 CT/DR/病理图片后提问'},
+  case:{name:'多模态病例总结',desc:'粘贴病例，生成摘要与鉴别清单',endpoint:'/case/ask',imageOk:true,hint:'粘贴病例要点，可附图片'},
+};
+let cur='literature', curImages=[];
+let CFG={chat:'模型',vl:'多模态模型'};
+let ROLE='doctor';
+const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','review'],
+  pharmacist:['overview','literature','drug','review'],
+  admin:['overview','kb','qc','review','data','arch']};
+async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;AGENTS.imaging.desc='上传影像 → 结构化所见（'+CFG.vl+'）';}}catch(e){}}
+
+const token=()=>localStorage.getItem('med_token')||'';
+const auth=()=>({'Content-Type':'application/json','Authorization':'Bearer '+token()});
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2600);}
+function confChip(c,review){
+  let cls=c>=0.75?'ok':(c>=0.6?'mid':'warn');
+  let lab=c>=0.75?'高置信':(c>=0.6?'中等':'偏低');
+  let s=`<span class="chip ${cls} num"><span class="dot"></span>${lab} ${c.toFixed(2)}</span>`;
+  if(review) s+=`<span class="chip warn"><span class="dot"></span>已提交双人核对</span>`;
+  return s;
+}
+function srcLine(sources){ if(!sources||!sources.length)return '';
+  return `<div class="src">来源：`+sources.slice(0,6).map(s=>{const m=String(s).match(/PMID:?(\d+)/); return m?`<a href="https://pubmed.ncbi.nlm.nih.gov/${m[1]}/" target="_blank">${esc(s)}</a>`:esc(s);}).join(' · ')+`</div>`; }
+/* 危险操作统一确认模态（替代原生 confirm：不被浏览器策略自动处置，默认焦点在取消；可要求输入确认词） */
+function confirmDanger(title,bodyHtml,confirmLabel,onYes,expectInput){
+  document.getElementById('mTitle').textContent=title;
+  document.getElementById('mBody').innerHTML=`<div class="txt">${bodyHtml}</div>
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+    <button class="btn secondary sm" id="dgCancel">取消</button><button class="btn danger sm" id="dgGo" ${expectInput?'disabled':''}>${esc(confirmLabel)}</button></div>`;
+  document.getElementById('modal').classList.add('on');
+  const c=document.getElementById('dgCancel');c.focus();c.onclick=()=>closeModal();
+  const g=document.getElementById('dgGo');
+  if(expectInput){
+    const inp=document.getElementById('dgInput');
+    inp.addEventListener('input',()=>{g.disabled=inp.value.trim()!==expectInput;});
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault();});
+  }
+  g.onclick=async()=>{g.disabled=true;try{await onYes();}finally{g.disabled=false;}};
+}
+/* 安全 Markdown：先转义 HTML，再渲染粗体/标题/列表/换行 + 轻量 LaTeX 清理 */
+function md(t){let s=esc(String(t==null?'':t));
+  s=s.replace(/\\times/g,'×').replace(/\\approx/g,'≈').replace(/\\text\{([^}]*)\}/g,'$1').replace(/\\[a-zA-Z]+/g,'').replace(/\$/g,'');
+  s=s.replace(/^#{1,4}\s*(.+)$/gm,'<b>$1</b>');
+  s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  s=s.replace(/(^|[^*\n])\*([^*\n]+)\*/g,'$1<i>$2</i>');
+  s=s.replace(/^[ \t]*[•*\-–]\s+(.+)$/gm,'• $1');
+  s=s.replace(/^[ \t]*(\d+)[.、]\s+(.+)$/gm,'$1. $2');
+  s=s.replace(/\n/g,'<br>');
+  return s;}
+const chatHist={};
+function pushHist(k,e){(chatHist[k]=chatHist[k]||[]).push(e);}
+
+/* ---- auth ---- */
+function showLogin(on){document.getElementById('login').classList.toggle('on',on);}
+function setWho(u,r){document.getElementById('who').textContent=u||'';document.getElementById('role').textContent=r||'';
+  document.getElementById('who').style.display=u?'':'none';document.getElementById('role').style.display=u?'':'none';document.getElementById('lo').style.display=u?'':'none';
+  document.getElementById('cpBtn').style.display=u?'':'none';}
+async function doLogin(e){e.preventDefault();const err=document.getElementById('lerr');err.textContent='';
+  const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;
+  try{const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json(); if(!r.ok){err.textContent=d.detail||'登录失败';return false;}
+    localStorage.setItem('med_token',d.access_token);boot(d.username,d.role);return false;
+  }catch(ex){err.textContent='网络错误：'+ex.message;return false;}}
+function logout(){localStorage.removeItem('med_token');location.reload();}
+
+/* ---- nav ---- */
+let reviewCount=0, reviewItems=[], reviewPage=0, reviewMe='';
+function renderRail(){
+  const allow=ROLE_NAV[ROLE]||ROLE_NAV.doctor;
+  const items=[
+    {g:'总览'},{k:'overview',t:'概览'},
+    {g:'临床助手'},{k:'literature',t:'医学文献'},{k:'drug',t:'药物信息'},{k:'imaging',t:'影像辅助'},{k:'case',t:'病例总结'},
+    {g:'协作'},{k:'mdt',t:'多智能体会诊'},
+    {g:'质控'},{k:'qc',t:'病历质控（病案科）'},{k:'review',t:'审核中心',badge:reviewCount},
+    {g:'系统'},{k:'kb',t:'知识库管理'},{k:'data',t:'数据面板'},{k:'arch',t:'架构 · 合规'},
+  ];
+  let html='',pendingGroup=null;
+  for(const it of items){
+    if(it.g){pendingGroup=it.g;continue;}
+    if(!allow.includes(it.k))continue;
+    if(pendingGroup!==null){html+=`<div class="grp">${pendingGroup}</div>`;pendingGroup=null;}
+    const act=(cur===it.k)?'active':'';const badge=it.badge?`<span class="tag num">${it.badge}</span>`:'';
+    html+=`<button class="nav ${act}" data-k="${it.k}" onclick="go('${it.k}')">${ICON[it.k]}<span>${it.t}</span>${badge}</button>`;
+  }
+  document.getElementById('rail').innerHTML=html;
+}
+function go(k){
+  cur=k;
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+  if(k==='overview'){document.getElementById('scr-home').classList.add('on');loadOverview();}
+  else if(k==='kb'){document.getElementById('scr-kb').classList.add('on');loadKb();}
+  else if(k==='mdt')document.getElementById('scr-mdt').classList.add('on');
+  else if(k==='qc')document.getElementById('scr-qc').classList.add('on');
+  else if(k==='data'){document.getElementById('scr-data').classList.add('on');loadData();}
+  else if(k==='arch')document.getElementById('scr-arch').classList.add('on');
+  else if(k==='review'){document.getElementById('scr-review').classList.add('on');loadReview();}
+  else{document.getElementById('scr-chat').classList.add('on');setupChat(k);}
+  renderRail();
+}
+function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textContent=a.name;
+  document.getElementById('cDesc').textContent=a.desc;document.getElementById('input').placeholder=a.hint;
+  document.getElementById('attach').style.display=a.imageOk?'inline-flex':'none';clearImg();
+  const m=document.getElementById('msgs');m.innerHTML='';
+  const h=chatHist[k]||[];
+  if(h.length){h.forEach(e=>e.role==='me'?renderUser(e.text,e.images||(e.image?[e.image]:[])):renderBot(e.text,e.meta));}
+  else renderBot('你好，我是'+a.name+'。'+a.desc+'。', null, true);
+  scroll();}
+function newChat(){chatHist[cur]=[];setupChat(cur);}
+
+/* ---- chat ---- */
+function renderUser(t,images){const r=document.createElement('div');r.className='row me';
+  r.innerHTML=`<div class="bubble txt"></div>`;r.querySelector('.bubble').textContent=t;
+  (images||[]).forEach(s=>{const im=document.createElement('img');im.className='thumb';im.src=s;r.appendChild(im);});
+  document.getElementById('msgs').appendChild(r);scroll();}
+function addUser(t){pushHist(cur,{role:'me',text:t,images:curImages.slice()});renderUser(t,curImages);}
+function renderBot(t,meta,intro){const m=document.getElementById('msgs');
+  const r=document.createElement('div');r.className='row';
+  r.innerHTML=`<div class="avatar">${ICON[cur]}</div><div class="bubble"><div class="txt md"></div>
+    <div class="foot" data-foot></div></div>`;
+  r.querySelector('.txt').innerHTML=md(t);
+  const foot=r.querySelector('[data-foot]');
+  if(meta){foot.innerHTML=confChip(meta.confidence||0,!!meta.needs_human_review)+srcLine(meta.sources);}
+  else foot.remove();
+  m.appendChild(r);scroll();return r;}
+function addBot(t,meta,intro){pushHist(cur,{role:'bot',text:t,meta:meta||null});return renderBot(t,meta,intro);}
+function scroll(){const m=document.getElementById('msgs');m.scrollTop=m.scrollHeight;}
+function skel(){const r=document.createElement('div');r.className='row';
+  r.innerHTML=`<div class="avatar">${ICON[cur]}</div><div class="bubble" style="width:60%"><div class="sk" style="margin-bottom:8px"></div><div class="sk" style="width:85%;margin-bottom:8px"></div><div class="sk" style="width:55%"></div></div>`;
+  document.getElementById('msgs').appendChild(r);scroll();return r;}
+function thinkBubble(){const r=document.createElement('div');r.className='row';
+  r.innerHTML=`<div class="avatar">${ICON[cur]}</div><div class="bubble"><div class="txt">思考中…</div></div>`;
+  document.getElementById('msgs').appendChild(r);scroll();return r;}
+function setThink(r,t){const el=r.querySelector('.txt');if(el)el.textContent=t;}
+async function streamLit(q,think,agent){
+  const res=await fetch('/api/v1/medical/literature/stream',{method:'POST',headers:auth(),body:JSON.stringify({question:q})});
+  if(res.status===401){think.remove();logout();return true;}
+  if(!res.ok||!res.body) return false;
+  const rd=res.body.getReader();const dec=new TextDecoder();let buf='',ev=null;
+  const label={retrieve:'正在检索并精排证据…',grade:'评估证据充分性…',generate:'生成循证回答…',fallback:'检索未命中，生成常识参考…'};
+  while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    const parts=buf.split('\n');buf=parts.pop();
+    for(const ln of parts){const s=ln.trim();
+      if(s.startsWith('event:'))ev=s.slice(6).trim();
+      else if(s.startsWith('data:')){let d;try{d=JSON.parse(s.slice(5).trim());}catch(e){continue;}
+        if(ev==='progress')setThink(think,label[d.step]||'处理中…');
+        else if(ev==='result'){think.remove();const a=agent||cur;pushHist(a,{role:'bot',text:d.answer,meta:d});renderBot(d.answer,d);return true;}
+        else if(ev==='error')return false;}}}
+  return false;
+}
+async function send(){const inp=document.getElementById('input');const q=inp.value.trim();if(!q)return;
+  addUser(q);inp.value='';inp.style.height='auto';const btn=document.getElementById('send');if(btn.disabled)return;btn.disabled=true;
+  const agent=cur;  // 锁定当前助手，避免请求途中切换 cur 致答案写到错误会话
+  const think=thinkBubble();
+  try{if(agent==='literature'){ let streamed=false; try{ streamed=await streamLit(q,think,agent);}catch(_){streamed=false;} if(streamed){btn.disabled=false;inp.focus();return;} }
+    try{const r=await fetch('/api/v1/medical'+AGENTS[agent].endpoint,{method:'POST',headers:auth(),
+        body:JSON.stringify({question:q,images:curImages.length?curImages:undefined})});
+      const d=await r.json();think.remove();
+      if(r.status===401){logout();return;}
+      if(!r.ok){pushHist(agent,{role:'bot',text:'⚠ 服务异常：'+(d.detail||r.status)});return;}
+      // 若中途切换助手，答案仍归属发起时的会话，但 UI 提示
+      if(agent!==cur){think.remove();const b=document.createElement('div');b.className='src';b.style.padding='8px 12px';
+        b.textContent=`（提示：请求发出后切换到了「${AGENTS[cur].name||cur}」，以下答案归属「${AGENTS[agent].name||agent}」）`;document.getElementById('msgs').appendChild(b);}
+      // 必须按发起时的 agent 写入历史（避免 chatHist 错位）
+      if(chatHist[agent]&&chatHist[agent].length&&chatHist[agent][chatHist[agent].length-1].role==='me'){
+        chatHist[agent].pop();pushHist(agent,{role:'me',text:q,images:curImages.slice()});}  // 把 addUser 已误写入 cur 的 me 记录搬过来
+      addBot(d.answer,d);
+      curImages=[];renderImgbar();  // 成功后清空已选图片，避免下次静默重发
+    }catch(e){think.remove();pushHist(agent,{role:'bot',text:'⚠ 请求失败：'+e.message});}
+  }finally{btn.disabled=false;inp.focus();}}
+function _commitUserToAgent(agent,q){}
+
+/* ---- image ---- */
+const MAX_IMG=6;
+function clearImg(){curImages=[];const i=document.getElementById('img');i.value='';document.getElementById('imgbar').style.display='none';}
+function renderImgbar(){
+  const el=document.getElementById('imgthumbs');
+  el.innerHTML=curImages.map(s=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--line)" src="${s}" alt="已选影像">`).join('');
+  document.getElementById('imgname').textContent=curImages.length>1?`已选 ${curImages.length} 张（可分多次添加，最多 ${MAX_IMG} 张）`:`已选 1 张（可继续添加，最多 ${MAX_IMG} 张）`;
+  document.getElementById('imgbar').style.display=curImages.length?'flex':'none';}
+document.getElementById('img').addEventListener('change',async e=>{const fs=[...e.target.files];if(!fs.length)return;
+  // 累加模式：分次选择追加到已选图片（上限 6 张），不再覆盖
+  let add=fs.slice(0,MAX_IMG-curImages.length);
+  if(add.length<fs.length)toast(`最多 ${MAX_IMG} 张，已忽略超出部分`);
+  if(!add.length){e.target.value='';return;}
+  const imgs=await Promise.all(add.map(f=>new Promise(res=>{const rd=new FileReader();rd.onload=()=>res(rd.result);rd.readAsDataURL(f);})));
+  curImages=curImages.concat(imgs).slice(0,MAX_IMG);
+  e.target.value='';  // 允许下次选择同一文件
+  renderImgbar();});
+
+/* ---- MDT ---- */
+async function runMdt(){const c=document.getElementById('mdtCase').value.trim();if(!c){toast('请先填写病例');return;}
+  const btn=document.getElementById('mdtRun');btn.disabled=true;const out=document.getElementById('mdtOut');
+  out.innerHTML=`<div class="card"><div class="sk" style="width:40%;height:16px;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk" style="width:90%"></div></div>`;
+  try{const r=await fetch('/api/v1/medical/mdt/consult',{method:'POST',headers:auth(),body:JSON.stringify({case:c})});
+    if(r.status===401){logout();return;} const d=await r.json();
+    if(!r.ok){out.innerHTML='<div class="card">⚠ '+esc(String(d.detail||r.status))+'</div>';return;}
+    out.innerHTML=renderMdt(d);
+  }catch(e){out.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}
+  finally{btn.disabled=false;}}
+function urgencyPill(u){
+  const map={'高':['danger','紧急·高危排查'],'中':['warn','注意·限期评估'],'低':['ok','常规']};
+  const [cls,lab]=map[u]||map['中'];
+  return `<span class="chip ${cls}"><span class="dot"></span>${lab}</span>`;
+}
+function renderMdt(d){
+  const ops=(d.opinions||[]).map(o=>`<details class="card" style="padding:0">
+      <summary style="display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;list-style:none">
+        <b>${esc(o.specialty)}</b>${confChip(o.confidence||0,false)}
+        <span class="ar" style="margin-left:auto;color:var(--ink-3)">▾</span></summary>
+      <div style="padding:0 16px 14px"><div class="txt md">${md(o.opinion||'')}</div>${srcLine(o.sources)}</div>
+    </details>`).join('');
+  const acts=(d.key_actions||[]).length
+    ? `<div class="card"><h3>建议先做</h3><ol class="rules" style="margin-top:6px">${d.key_actions.map(a=>`<li>${esc(a)}</li>`).join('')}</ol></div>`
+    : '';
+  return `<div class="card" style="border-left:3px solid ${d.urgency==='高'?'var(--danger)':(d.urgency==='低'?'var(--ok)':'var(--warn)')}">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <h3 style="margin:0">会诊结论</h3>${urgencyPill(d.urgency)}${confChip(d.confidence||0,!!d.needs_human_review)}</div>
+      <div style="font-size:16px;font-weight:600;margin-top:8px">${esc(d.headline||'')}</div>
+      <div class="src" style="margin-top:6px">详细小结与共识/分歧见下方；非真人会诊，结论须医师复核。</div>
+    </div>
+    ${acts}
+    <details class="card" style="padding:0"><summary style="padding:12px 16px;cursor:pointer;font-weight:600">会诊小结 · 共识与分歧 ▾</summary>
+      <div class="txt md" style="padding:0 16px 14px">${md(d.report||'')}</div></details>
+    <div class="grid2" style="margin-top:14px">${ops}</div>`;
+}
+
+/* ---- review center ---- */
+let reviewTab='pending', historyItems=[];
+function switchReviewTab(t){reviewTab=t;
+  document.getElementById('tabPending').className='btn sm '+(t==='pending'?'primary':'ghost');
+  document.getElementById('tabHistory').className='btn sm '+(t==='history'?'primary':'ghost');
+  renderReview();}
+async function loadReview(){
+  const b=document.getElementById('reviewBody');b.innerHTML=`<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk"></div></div>`;
+  try{const r=await fetch('/api/v1/medical/review/pending',{headers:auth()});
+    if(r.status===401){logout();return;} const d=await r.json();
+    reviewItems=d.pending; reviewMe=d.me; reviewCount=d.pending.length; renderRail();
+    document.getElementById('purgeBtn').style.display=(ROLE==='admin')?'inline-flex':'none';
+    try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
+      if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending');}catch(e){}
+    const pages=Math.max(1,Math.ceil(reviewItems.length/REVIEW_PER));
+    if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
+    switchReviewTab(reviewTab);
+  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+const REVIEW_PER=12, HIST_PER=12;
+let histPage=0;
+function histGo(d){histPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
+function fmtTs(s){if(!s)return '';const d=new Date(s);if(isNaN(d))return esc(s);const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+function reviewRow(p,resolved){
+  const mine=p.submitted_by===reviewMe;
+  const statusChip=resolved?`<span class="chip ${p.status==='approved'?'ok':'warn'}"><span class="dot"></span>${p.status==='approved'?'已签发':'已驳回'}</span>`:'';
+  return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">${esc(p.agent)}：${esc((p.question||'').slice(0,60))} <span class="src">▾ 展开全文</span></summary>
+      <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.question||'')}</div>
+      <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details></td>
+      <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
+      <td>${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
+      <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`):
+        (mine?'<span class="src">双控：你不能核对本人提交</span>':
+        `<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
+        <button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button></div>`)}
+        <button class="btn sm ghost" onclick="openReviewDetail('${p.id}')">详情</button></td></tr>`;}
+function renderReview(){
+  const b=document.getElementById('reviewBody');
+  if(reviewTab==='history'){
+    if(!historyItems.length){b.innerHTML='<div class="empty">'+ICON.review+'<div>暂无已处理的历史记录。</div><div class="lead" style="margin:8px auto 0">签发/驳回过的项会出现在这里。</div></div>';return;}
+    const pages=Math.max(1,Math.ceil(historyItems.length/HIST_PER));
+    if(histPage>=pages)histPage=pages-1; if(histPage<0)histPage=0;
+    const rows=historyItems.slice(histPage*HIST_PER,histPage*HIST_PER+HIST_PER).map(p=>reviewRow(p,true)).join('');
+    const hpager=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
+      <button class="btn sm secondary" ${histPage===0?'disabled':''} onclick="histGo(-1)">‹ 上一页</button>
+      <span class="src num">第 ${histPage+1} / ${pages} 页 · 共 ${historyItems.length} 条已处理</span>
+      <button class="btn sm secondary" ${histPage>=pages-1?'disabled':''} onclick="histGo(1)">下一页 ›</button></div>`;
+    b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>处理结果</th></tr></thead><tbody>${rows}</tbody></table>${hpager}</div>`;
+    return;}
+  if(!reviewItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待第二名医师/药师签发。</div></div>`;return;}
+  const start=reviewPage*REVIEW_PER, slice=reviewItems.slice(start,start+REVIEW_PER);
+  const rows=slice.map(p=>reviewRow(p,false)).join('');
+  const total=Math.ceil(reviewItems.length/REVIEW_PER);
+  const pager=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
+    <button class="btn sm secondary" ${reviewPage===0?'disabled':''} onclick="reviewGo(-1)">‹ 上一页</button>
+    <span class="src num">第 ${reviewPage+1} / ${total} 页 · 共 ${reviewItems.length} 项</span>
+    <button class="btn sm secondary" ${reviewPage>=total-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
+  b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${pager}</div>`;
+}
+function reviewGo(d){reviewPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
+let rejectTarget=null;
+function resolve(id,dec){
+  if(dec==='rejected'){ /* 模态框填写驳回原因，替代原生 prompt() */
+    rejectTarget=id;
+    document.getElementById('mTitle').textContent='驳回 · 填写原因';
+    document.getElementById('mBody').innerHTML=`<textarea class="inp" id="rejectNote" rows="3" placeholder="驳回原因（可选，将记入审计留痕）"></textarea>
+      <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn ghost sm" onclick="closeModal()">取消</button>
+        <button class="btn danger sm" onclick="confirmReject()">确认驳回</button></div>`;
+    document.getElementById('modal').classList.add('on');
+    document.getElementById('rejectNote').focus();
+    return;}
+  doResolve(id,dec,'');
+}
+async function doResolve(id,dec,note){
+  const r=await fetch('/api/v1/medical/review/'+id+'/resolve',{method:'POST',headers:auth(),body:JSON.stringify({decision:dec,note})});
+  if(r.status===401){logout();return;} if(r.ok){toast(dec==='approved'?'已签发通过':'已驳回');closeModal();loadReview();}
+  else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}}
+function confirmReject(){const n=document.getElementById('rejectNote');doResolve(rejectTarget,'rejected',n?n.value.trim():'');}
+function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[]).find(x=>x.id===id);if(!p){toast('未找到');return;}
+  const mine=p.submitted_by===(document.getElementById('who').textContent);
+  document.getElementById('mTitle').textContent='核对详情 · '+p.agent;
+  document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></div>
+    <h4>问题</h4><div class="txt md">${md(p.question||'')}</div>
+    <h4 style="margin-top:14px">AI 回答</h4><div class="txt md">${md(p.answer||'')}</div>
+    <h4 style="margin-top:14px">提交人</h4><div>${esc(p.submitted_by||'')}</div>
+    <div style="margin-top:16px;display:flex;gap:8px">${mine?'<span class="src">双控：你不能核对本人提交</span>':
+      `<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`}</div>`;
+  document.getElementById('modal').classList.add('on');}
+function closeModal(){document.getElementById('modal').classList.remove('on');}
+
+/* ---- 病历质控 ---- */
+function esc(s){return String(s).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));}
+async function apiPost(path,body){const r=await fetch('/api/v1/medical'+path,{method:'POST',headers:auth(),body:JSON.stringify(body)});if(r.status===401){logout();throw new Error('401');}return r.json();}
+async function runQc(){const rec={};QC_LABELS.forEach((l,i)=>{const v=document.getElementById('qcf_'+i).value.trim();if(v)rec[l]=v;});
+  if(!Object.keys(rec).length){toast('请至少填写病历内容');return;}
+  const btn=document.getElementById('qcRun');btn.disabled=true;
+  const labs={};document.getElementById('qcLabs').value.split(/\r?\n/).forEach(ln=>{const m=ln.split('=');if(m.length===2&&m[0].trim())labs[m[0].trim()]=m[1].trim();});
+  const out=document.getElementById('qcOut'); out.innerHTML='<div class="card"><div class="sk" style="height:16px;width:40%"></div></div>';
+  try{ const d=await apiPost('/qc/record',{record:rec,labs:labs});
+    out.innerHTML=`<div class="card"><div class="foot" style="margin:0 0 8px">${confChip(d.confidence,d.needs_human_review)}${d.review_id?`<span class="chip">已送质控终审</span>`:''}</div><div class="txt md">${md(d.answer)}</div></div>`;
+  }catch(e){out.innerHTML='<div class="card">⚠ 质控请求失败</div>';}
+  finally{btn.disabled=false;}}
+const QC_LABELS=['主诉','现病史','既往史','体格检查','辅助检查','初步诊断','医师签名'];
+function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>document.getElementById('qcf_'+i).value=s[i]);document.getElementById('qcLabs').value='';toast('已填入示例');}
+
+/* ---- 知识库管理（admin）---- */
+function apiGet(p){return fetch('/api/v1/medical'+p,{headers:auth()}).then(r=>{if(r.status===401){logout();throw new Error('401');}return r.json();});}
+function readB64(f){return new Promise(res=>{const rd=new FileReader();rd.onload=()=>res(String(rd.result).split(',')[1]);rd.readAsDataURL(f);});}
+/* KB 行按钮事件委托：文档名可含引号，禁用内联 onclick 字符串拼接（防存储型 XSS） */
+if(!window.__kbDelegate){window.__kbDelegate=true;document.addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act^="kb-"]');if(!b)return;
+  if(b.dataset.act==='kb-preview')previewKb(b.dataset.tag);
+  else if(b.dataset.act==='kb-delete')deleteKb(b.dataset.tag,b.dataset.name);});}
+async function loadKb(){const el=document.getElementById('kbList');if(!el)return;el.innerHTML='<div class="sk" style="height:16px"></div>';
+  try{const d=await apiGet('/admin/kb');
+    el.innerHTML=`<div class="lead" style="margin-bottom:10px">向量总数 <b class="num">${d.total}</b> · 在线上传 <b class="num">${d.uploaded}</b> 篇 · 内置库 <b class="num">${d.docs.length-d.uploaded}</b> 个<br>
+      <span class="src">增=上传；查=预览切片；删=下方删除；改=同名文件重新上传即覆盖更新（内置库更新请重跑种子脚本）。</span></div>`+
+      (d.docs.length?`<table><thead><tr><th>名称</th><th>类型</th><th>切片</th><th>时间</th><th></th></tr></thead><tbody>`+d.docs.map(x=>{
+        const badge=x.kind==='builtin'?'<span class="chip mid"><span class="dot"></span>内置</span>':'<span class="chip"><span class="dot"></span>上传</span>';
+        return `<tr><td>${esc(x.name)}</td><td>${badge}</td><td class="num">${x.chunks}</td><td class="num">${esc((x.ts||'').slice(0,16).replace('T',' '))}</td>
+          <td style="white-space:nowrap"><button class="btn sm secondary" data-act="kb-preview" data-tag="${esc(x.doc_tag)}">预览</button>
+          <button class="btn sm secondary" data-act="kb-delete" data-tag="${esc(x.doc_tag)}" data-name="${esc(x.name)}">删除</button></td></tr>`;}).join('')+`</tbody></table>`
+        :'<div class="src">暂无文档。</div>');
+  }catch(e){el.innerHTML='<div class="src">⚠ 加载失败（需管理员权限）</div>';}}
+async function uploadKb(){const fs=document.getElementById('kbFile').files;if(!fs.length){toast('请选择文件');return;}const msg=document.getElementById('kbMsg');const btn=document.getElementById('kbUp');btn.disabled=true;
+  for(const f of fs){msg.textContent='处理中：'+f.name+' …';
+    if(!/\.(md|txt|pdf)$/i.test(f.name)){msg.textContent=f.name+' 不支持（仅 .md/.txt/.pdf）';continue;}
+    try{const b=await readB64(f);const r=await fetch('/api/v1/medical/admin/kb/upload',{method:'POST',headers:auth(),body:JSON.stringify({name:f.name,data_b64:b})});const d=await r.json();
+      if(!r.ok){msg.textContent=f.name+' 失败：'+(d.detail||r.status);continue;}msg.textContent=`${f.name} → 入库 ${d.inserted} 片`;}
+    catch(e){msg.textContent='失败：'+f.name;}}
+  document.getElementById('kbFile').value='';btn.disabled=false;loadKb();}
+async function previewKb(tag){
+  document.getElementById('mTitle').textContent='切片预览 · '+tag;
+  document.getElementById('mBody').innerHTML='<div class="sk" style="height:16px"></div>';
+  document.getElementById('modal').classList.add('on');
+  try{const d=await apiGet('/admin/kb/'+encodeURIComponent(tag)+'/preview');
+    document.getElementById('mBody').innerHTML=(d.chunks||[]).length
+      ? d.chunks.map((c,i)=>`<h4 style="margin-top:${i?12:0}px">切片 ${i+1} · ${esc(c.source)}</h4><div class="txt" style="white-space:pre-wrap">${esc(c.content)}…</div>`).join('')
+      : '<div class="src">该文档暂无可预览的切片（或已被删除）。</div>';
+  }catch(e){document.getElementById('mBody').innerHTML='<div class="src">⚠ 预览失败</div>';}}
+async function deleteKb(tag,name){
+  confirmDanger('删除知识库文档',
+    `将删除「${esc(name||tag)}」的全部向量，检索中不再出现；此操作记入审计。`,'确认删除',async()=>{
+    try{const r=await fetch('/api/v1/medical/admin/kb/'+encodeURIComponent(tag),{method:'DELETE',headers:auth()});
+      if(r.status===401){logout();return;}
+      if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
+      toast('已删除');closeModal();loadKb();
+    }catch(e){toast('删除失败：'+e.message);}});
+}
+
+/* ---- admin：队列清理 / 数据面板 ---- */
+function openChangePwd(){
+  document.getElementById('mTitle').textContent='修改密码';
+  document.getElementById('mBody').innerHTML=`
+    <label class="src">原密码</label><input class="inp" id="cpOld" type="password" style="margin:4px 0 10px">
+    <label class="src">新密码（≥8 位）</label><input class="inp" id="cpNew" type="password" style="margin:4px 0 10px">
+    <label class="src">确认新密码</label><input class="inp" id="cpNew2" type="password" style="margin:4px 0 10px">
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost sm" onclick="closeModal()">取消</button>
+    <button class="btn primary sm" id="cpGo">确认修改</button></div>`;
+  document.getElementById('modal').classList.add('on');
+  document.getElementById('cpGo').onclick=async()=>{
+    const o=document.getElementById('cpOld').value,n=document.getElementById('cpNew').value,n2=document.getElementById('cpNew2').value;
+    if(n!==n2){toast('两次输入的新密码不一致');return;}
+    try{const r=await fetch('/api/v1/auth/change-password',{method:'POST',headers:auth(),body:JSON.stringify({old_password:o,new_password:n})});
+      if(r.status===401){logout();return;}
+      if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
+      toast('密码已修改，请重新登录');closeModal();setTimeout(logout,600);
+    }catch(e){toast('操作失败：'+e.message);}};
+}
+let resetTarget=null;
+function openResetPwd(name){
+  resetTarget=name;
+  document.getElementById('mTitle').textContent='重置密码 · '+name;
+  document.getElementById('mBody').innerHTML=`
+    <label class="src">新密码（≥8 位）</label><input class="inp" id="rpNew" type="password" style="margin:4px 0 10px">
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost sm" onclick="closeModal()">取消</button>
+    <button class="btn primary sm" id="rpGo">确认重置</button></div>`;
+  document.getElementById('modal').classList.add('on');
+  document.getElementById('rpGo').onclick=async()=>{
+    const n=document.getElementById('rpNew').value;
+    try{const r=await fetch('/api/v1/auth/reset-password',{method:'POST',headers:auth(),body:JSON.stringify({username:resetTarget,new_password:n})});
+      if(r.status===401){logout();return;}
+      if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
+      toast('已重置 '+resetTarget+' 的密码');closeModal();
+    }catch(e){toast('操作失败：'+e.message);}};
+}
+async function purgePending(){
+  let n=0;try{const r=await fetch('/api/v1/medical/review/pending',{headers:auth()});
+    if(r.status===401){logout();return;} n=((await r.json()).pending||[]).length;}catch(e){toast('加载失败：'+e.message);return;}
+  document.getElementById('mTitle').textContent='清空待核对 · 高危操作';
+  document.getElementById('mBody').innerHTML=`
+    <div class="txt">将删除全部 <b class="num">${n}</b> 条「待核对」项；已签发/驳回的历史保留。<br>
+      <span class="src">此操作记入审计。为防误触，请输入「清空」二字后确认。</span></div>
+    <input class="inp" id="purgeConfirm" style="margin-top:10px" placeholder="输入：清空" autocomplete="off">
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn secondary sm" id="purgeCancel">取消</button>
+      <button class="btn danger sm" id="purgeGo" disabled>确认清空</button></div>`;
+  document.getElementById('modal').classList.add('on');
+  const inp=document.getElementById('purgeConfirm'),go=document.getElementById('purgeGo'),cancel=document.getElementById('purgeCancel');
+  cancel.onclick=()=>closeModal();  // 修复：此前取消按钮未绑事件（死按钮）
+  cancel.focus();  // 默认焦点在取消，回车不会执行
+  inp.addEventListener('input',()=>{go.disabled=inp.value.trim()!=='清空';});
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')e.preventDefault();});  // 回车不触发确认
+  go.onclick=async()=>{try{
+      const r=await fetch('/api/v1/medical/admin/review/purge-pending',{method:'POST',headers:auth(),body:JSON.stringify({confirm_text:'清空'})});
+      if(r.status===401){logout();return;}
+      if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
+      const d=await r.json();toast(`已清空 ${d.purged} 条待核对`);closeModal();loadReview();
+    }catch(e){toast('操作失败：'+e.message);}};
+}
+async function loadData(){
+  const b=document.getElementById('dataBody');
+  b.innerHTML='<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk"></div></div>';
+  let d;try{const r=await fetch('/api/v1/medical/admin/data',{headers:auth()});
+    if(r.status===401){logout();return;} if(!r.ok){b.innerHTML='<div class="card">⚠ 加载失败</div>';return;} d=await r.json();}
+  catch(e){b.innerHTML='<div class="card">⚠ '+e.message+'</div>';return;}
+  const stats=[['待核对',d.review.pending,'项'],['已签发',d.review.approved,'项'],['已驳回',d.review.rejected,'项'],
+      ['知识库向量',d.kb_docs,'条'],['审计事件',d.events_total,'条'],['运行',fmtUp(d.uptime_s||0),(d.device==='cuda'?'GPU':'CPU')]]
+    .map(([k,v,u])=>`<div class="stat"><span class="k">${k}</span><span class="v num">${v}${u?` <small>${u}</small>`:''}</span></div>`).join('');
+  const users=d.users.map(u=>{
+      const del=(u.username===document.getElementById('who').textContent)?'':
+        `<button class="btn sm danger" onclick="deleteUser('${esc(u.username)}')">删除</button>`;
+      const rp=`<button class="btn sm secondary" onclick="openResetPwd('${esc(u.username)}')">重置密码</button>`;
+      return `<tr><td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td><td style="white-space:nowrap">${rp}${del}</td></tr>`;}).join('');
+  const auditItems=d.audit_recent||[];
+  const auditList=auditItems.map((e,i)=>{
+    const cat=(e.event||'').split('.')[0]||'';
+    const cls={auth:'chip ok',admin:'chip mid',review:'chip warn',kb:'chip',pharm:'chip mid',qc:'chip',lit:'chip',drug:'chip',case:'chip',imaging:'chip',mdt:'chip',precheck:'chip'}[cat]||'chip';
+    const payloadJson=esc(JSON.stringify(e.payload||{},null,2));
+    return `<li class="audit-row" data-cat="${esc(cat)}" data-q="${esc((e.event||'')+' '+(e.action||'')+' '+(e.actor||''))}">
+      <details><summary>
+        <span class="${cls}">${esc(e.event||'')}</span>
+        <span class="src">${esc(e.action||'')}</span>
+        <span class="t">${esc((e.ts||'').slice(0,19).replace('T',' '))}</span>
+        <span class="a">${esc(e.actor||'')}</span>
+        <span class="src">▾ 点开查看详情</span>
+      </summary>
+      <pre style="background:var(--rail);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:11.5px;margin:6px 0 0;overflow-x:auto;white-space:pre-wrap">${payloadJson}</pre>
+    </details></li>`;}).join('');
+  const audit=auditList||'<li><span class="a">暂无记录</span></li>';
+  b.innerHTML=`<div class="stats">${stats}</div>
+    <div class="dash">
+      <div class="panel"><h3>审计流（最近 ${auditItems.length} 条 · 点击展开 JSON）</h3>
+        <div style="padding:8px 16px 4px"><input class="inp" id="auditSearch" placeholder="搜索 事件/操作/用户（如 drug / purge_pending / doctor01）" oninput="filterAudit(this.value)"></div>
+        <ul class="feed" id="auditList">${audit}</ul></div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="panel"><h3>新增用户</h3>
+          <div class="qgrid" style="padding:12px 16px">
+            <label>用户名（3-32 位字母/数字/_/-）<input class="inp" id="nuName" autocomplete="off"></label>
+            <label>角色<select class="inp" id="nuRole"><option value="doctor">doctor</option><option value="pharmacist">pharmacist</option><option value="admin">admin</option></select></label>
+            <label style="grid-column:1/-1">密码（≥8 位）<input class="inp" id="nuPass" type="password" autocomplete="new-password"></label>
+          </div>
+          <div style="padding:0 16px 12px"><button class="btn primary sm" onclick="createUser()">创建用户</button></div>
+        </div>
+        <div class="panel"><h3>用户（JSON 权威源，PG 双写镜像）</h3><table><thead><tr><th>用户名</th><th>角色</th><th></th></tr></thead><tbody>${users}</tbody></table>
+          <div class="src" style="padding:10px 16px">PG 镜像行数：audit=${esc(String((d.pg_counts||{}).audit_log??'—'))} · users=${esc(String((d.pg_counts||{}).users??'—'))} · review=${esc(String((d.pg_counts||{}).review_queue??'—'))}</div></div>
+      </div>
+    </div>`;
+}
+async function createUser(){
+  const name=document.getElementById('nuName').value.trim(),pass=document.getElementById('nuPass').value,role=document.getElementById('nuRole').value;
+  if(!name||!pass){toast('请填写用户名与密码');return;}
+  try{const r=await fetch('/api/v1/medical/admin/users',{method:'POST',headers:auth(),body:JSON.stringify({username:name,password:pass,role})});
+    if(r.status===401){logout();return;}
+    if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
+    toast('用户 '+name+' 已创建');loadData();
+  }catch(e){toast('创建失败：'+e.message);}}
+function filterAudit(q){
+  q=(q||'').trim().toLowerCase();
+  const rows=document.querySelectorAll('#auditList .audit-row');
+  rows.forEach(r=>{
+    const data=(r.dataset.q||'').toLowerCase();
+    r.style.display=!q||data.includes(q)?'':'none';
+  });
+}
+async function deleteUser(name){
+  confirmDanger('删除用户 · '+name,
+    `将删除用户 <b class="num">${esc(name)}</b>；其登录凭证立即失效，审计记录保留。<br><span class="src">为防误删，请输入该用户名以确认。</span>
+     <input class="inp" id="dgInput" style="margin-top:8px" placeholder="输入：${esc(name)}" autocomplete="off">`,'确认删除',async()=>{
+    try{const r=await fetch('/api/v1/medical/admin/users/'+encodeURIComponent(name),{method:'DELETE',headers:auth()});
+      if(r.status===401){logout();return;}
+      if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
+      toast('已删除 '+name);closeModal();loadData();
+    }catch(e){toast('删除失败：'+e.message);}},name);
+}
+
+/* ---- 概览 ---- */
+function fmtUp(s){ if(s<60)return s+'s'; const m=Math.floor(s/60); if(m<60)return m+'m'; return Math.floor(m/60)+'h'+(m%60)+'m'; }
+async function loadOverview(){
+  const b=document.getElementById('homeBody');
+  b.innerHTML='<div class="stats">'+'<div class="stat"><span class="k">&nbsp;</span><span class="v"><span class="sk" style="display:inline-block;width:44px;height:20px"></span></span></div>'.repeat(5)+'</div>';
+  let d; try{ const r=await fetch('/api/v1/medical/overview',{headers:auth()}); if(r.status===401){logout();return;} d=await r.json(); }
+  catch(e){ b.innerHTML='<div class="panel" style="padding:16px">⚠ 概览加载失败</div>'; return; }
+  const stats=[['待双人核对',d.pending,'项'],['已处理核对',d.resolved,'项'],['知识库文档',d.kb_docs,'条'],['近期事件',d.events_total,'条'],['系统版本',d.version,'']].map(([k,v,u])=>`<div class="stat"><span class="k">${k}</span><span class="v num">${v}${u?` <small>${u}</small>`:''}</span></div>`).join('');
+  const acts=(d.recent&&d.recent.length)? d.recent.map(e=>`<li><span class="t num">${esc(e.ts)}</span><span class="e">${esc(e.event)}</span><span class="a">${esc(e.actor)}</span></li>`).join('') : '<li><span class="a" style="margin:0">暂无活动记录</span></li>';
+  const allow=ROLE_NAV[ROLE]||[];
+  const quick=[['literature','医学文献','答案附文献出处'],['drug','药物信息','两药同用风险核查'],['imaging','影像辅助','AI 初步所见'],['case','病例总结','摘要与鉴别清单'],['mdt','多智能体会诊','三专科意见与分歧'],['qc','病历质控','病案科工作台']].filter(([k])=>allow.includes(k)).map(([k,n,dd])=>`<li><button onclick="go('${k}')">${ICON[k]}<span><span class="qn">${n}</span><br><span class="qd">${dd}</span></span><span class="ar">›</span></button></li>`).join('');
+  const who=document.getElementById('who').textContent||'医师';
+  b.innerHTML=`<div class="hero"><h2>欢迎回来，${esc(who)}</h2><p>答案均附出处、高风险结论双人核对；本工具不构成诊断、不开处方。</p></div>
+    <div class="stats">${stats}</div>
+    <div class="dash">
+      <div class="panel"><h3>最近活动</h3><ul class="feed">${acts}</ul></div>
+      <div class="panel"><h3>快速进入</h3><ul class="qlist">${quick}</ul></div>
+    </div>`;
+}
+
+/* ---- boot ---- */
+function boot(u,r){ROLE=r||'doctor';setWho(u,r);showLogin(false);go('overview');loadReview();}
+document.getElementById('send').onclick=send;
+document.getElementById('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const btn=document.getElementById('send');if(btn.disabled)return;send();}});
+document.getElementById('input').addEventListener('input',e=>{e.target.style.height='auto';e.target.style.height=Math.min(e.target.scrollHeight,160)+'px';});
+(async function init(){
+  if(!token()){showLogin(true);return;}
+  try{const r=await fetch('/api/v1/auth/me',{headers:{'Authorization':'Bearer '+token()}});
+    if(r.ok){const m=await r.json();await loadConfig();boot(m.username,m.role);}else{showLogin(true);}}
+  catch(e){showLogin(true);}
+})();
+</script>
+</body>
+</html>

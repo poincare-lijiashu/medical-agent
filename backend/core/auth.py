@@ -1,0 +1,186 @@
+"""鉴权核心：pbkdf2 密码哈希 + PyJWT 令牌 + 基于 JSON 的用户表 + 角色。
+
+设计取舍：
+- 密码用 stdlib hashlib.pbkdf2_hmac（避开 passlib/bcrypt 后端读取坑）。
+- 令牌用 PyJWT HS256，含 sub(username)/role/exp。
+- 用户存 data/users.json（追加式写盘，原子替换）；生产可换数据库，接口不变。
+- 角色：doctor / pharmacist / admin。medical 端点要求有效令牌；写审计含操作者。
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import threading
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import jwt
+
+from backend.config import settings
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+USERS_FILE = os.path.join(_BASE_DIR, "data", "auth", "users.json")
+_users_lock = threading.Lock()  # users.json 读-改-写临界区保护（防并发丢更新）
+
+_ITERATIONS = 600_000  # OWASP 建议 PBKDF2-HMAC-SHA256 ≥600k；旧哈希按其存储的迭代数兼容校验，登录成功后透明升级
+_ALGO = "sha256"
+
+# 允许访问的角色（全部为医疗专业角色；无匿名访问）
+ROLES = {"doctor", "pharmacist", "admin"}
+
+
+# ---------- 密码 ----------
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac(_ALGO, password.encode("utf-8"), bytes.fromhex(salt), _ITERATIONS)
+    return f"pbkdf2${_ALGO}${_ITERATIONS}${salt}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        scheme, algo, iters, salt, hashhex = stored.split("$")
+        if scheme != "pbkdf2":
+            return False
+        dk = hashlib.pbkdf2_hmac(algo, password.encode("utf-8"), bytes.fromhex(salt), int(iters))
+        return hmac.compare_digest(dk.hex(), hashhex)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---------- 令牌 ----------
+def create_access_token(username: str, role: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": username,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=settings.auth_token_expire_minutes)).timestamp()),
+    }
+    return jwt.encode(payload, settings.auth_jwt_secret, algorithm="HS256")
+
+
+def decode_token(token: str) -> Optional[dict]:
+    try:
+        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+        if payload.get("typ") == "refresh":
+            return None  # 刷新令牌不能当访问令牌用
+        return payload
+    except jwt.PyJWTError:
+        return None
+
+
+def create_refresh_token(username: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {"sub": username, "typ": "refresh",
+               "iat": int(now.timestamp()),
+               "exp": int((now + timedelta(minutes=settings.auth_refresh_expire_minutes)).timestamp())}
+    return jwt.encode(payload, settings.auth_jwt_secret, algorithm="HS256")
+
+
+def decode_refresh_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+        return payload["sub"] if payload.get("typ") == "refresh" else None
+    except jwt.PyJWTError:
+        return None
+
+
+def decode_refresh_payload(token: str) -> Optional[dict]:
+    """刷新令牌解码为完整载荷（refresh 端点需 iat 做撤销比对）。"""
+    try:
+        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+        return payload if payload.get("typ") == "refresh" else None
+    except jwt.PyJWTError:
+        return None
+
+
+# ---------- 用户表 ----------
+def _load_users() -> dict:
+    if not os.path.isfile(USERS_FILE):
+        return {}
+    with open(USERS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_users(users: dict) -> None:
+    os.makedirs(os.path.dirname(USERS_FILE), exist_ok=True)
+    tmp = USERS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, USERS_FILE)
+
+
+def get_user(username: str) -> Optional[dict]:
+    return _load_users().get(username)
+
+
+def all_users() -> dict:
+    return _load_users()
+
+
+def _needs_rehash(stored: str) -> bool:
+    """存储哈希的迭代数低于当前标准时返回 True（登录成功后透明升级）。"""
+    try:
+        return int(stored.split("$")[2]) < _ITERATIONS
+    except (IndexError, ValueError):
+        return False
+
+
+def authenticate(username: str, password: str) -> Optional[dict]:
+    u = get_user(username)
+    if not u or not verify_password(password, u["password_hash"]):
+        return None
+    if _needs_rehash(u["password_hash"]):
+        set_password(username, password)  # 平滑升级到当前迭代数（不撤销令牌）
+    return {"username": username, "role": u["role"]}
+
+
+def create_user(username: str, password: str, role: str, overwrite: bool = False) -> bool:
+    if role not in ROLES:
+        raise ValueError(f"非法角色: {role}")
+    with _users_lock:
+        users = _load_users()
+        if username in users and not overwrite:
+            return False
+        users[username] = {"role": role, "password_hash": hash_password(password)}
+        _save_users(users)
+    return True
+
+
+def delete_user(username: str) -> bool:
+    with _users_lock:
+        users = _load_users()
+        if username not in users:
+            return False
+        del users[username]
+        _save_users(users)
+    return True
+
+
+def set_password(username: str, new_password: str) -> bool:
+    with _users_lock:
+        users = _load_users()
+        if username not in users:
+            return False
+        users[username]["password_hash"] = hash_password(new_password)
+        _save_users(users)
+    return True
+
+
+def seed_default_users() -> None:
+    """首次运行注入演示账号（生产务必改密/删除）。"""
+    users = _load_users()
+    if users:
+        return
+    defaults = [
+        ("doctor01", "Med@2026", "doctor"),
+        ("pharm01", "Med@2026", "pharmacist"),
+        ("admin01", "Med@2026", "admin"),
+    ]
+    for u, p, r in defaults:
+        users[u] = {"role": r, "password_hash": hash_password(p)}
+    _save_users(users)

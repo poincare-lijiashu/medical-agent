@@ -1,0 +1,101 @@
+name: medagent
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: medagent_etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - medagent_etcd:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: minio/minio:latest  # 本地已有；镜像站 m.daocloud.io 拒绝拉取
+    container_name: medagent_minio
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - medagent_minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.4.0  # 与既有数据卷 medagent_milvus-db 同版本
+    container_name: medagent_milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "19530:19530"
+      - "19531:19530"
+      - "9091:9091"
+    volumes:
+      - medagent_milvus-db:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio
+
+  postgres:
+    image: postgres:15-alpine  # 本地已有
+    container_name: medagent_pg
+    environment:
+      POSTGRES_USER: medagent
+      POSTGRES_PASSWORD: medagent123
+      POSTGRES_DB: medagent
+    ports:
+      - "5433:5432"
+    volumes:
+      - medagent_pg:/var/lib/postgresql/data
+
+  attu:
+    image: zilliz/attu:v2.4.12  # 本地已有
+    container_name: medagent_attu
+    environment:
+      MILVUS_URL: milvus:19530
+    ports:
+      - "3001:3000"
+    depends_on:
+      - milvus
+
+  app:
+    build: .
+    profiles: ["full"]  # 默认不启动：后端通常在宿主机直接跑 uvicorn，容器化需 docker compose --profile full up
+    container_name: medagent_app
+    env_file: .env.local
+    environment:
+      - MILVUS_URI=http://milvus:19530
+      - PG_HOST=postgres
+      - PG_PORT=5432
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/models:/app/backend/models
+      - medagent_data:/app/data
+    depends_on:
+      - milvus
+      - postgres
+
+volumes:
+  medagent_etcd:
+  medagent_minio:
+  medagent_milvus-db:
+  medagent_pg:
+  medagent_data:

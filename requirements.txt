@@ -1,0 +1,23 @@
+# Medical Agent — inherits EduAgent pinned stack, adds medical deps
+fastapi==0.117.1
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pymilvus==2.4.9
+httpx==0.28.1
+python-dotenv==1.0.1
+pydantic==2.11.4
+pydantic-settings==2.11.0
+langchain==1.2.10
+langchain-core==1.2.16
+langgraph==1.0.9
+langgraph-prebuilt==1.0.8
+FlagEmbedding==1.2.10
+sentence-transformers==3.3.1
+pymupdf==1.24.14
+biopython==1.84
+mcp>=1.8,<2
+setuptools<81
+# LLM client (Qwen MaaS via DashScope openai-compat)
+openai==1.66.3
