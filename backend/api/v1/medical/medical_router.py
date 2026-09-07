@@ -15,11 +15,12 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.deps import require_role, require_user, rate_limit, revoke_user
 from backend.config import settings
-from backend.core import kb_ingest
+from backend.core import kb_ingest, llm_config
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
 from backend.core.intent import prefilter_reply
@@ -134,12 +135,13 @@ class ResolveReq(BaseModel):
 
 
 async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_flag: bool,
-                           risk_reason: str, actor: str) -> str | None:
+                           risk_reason: str, actor: str,
+                           images: list[str] | None = None) -> str | None:
     await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
     if not review_flag:
         return None
     rid = review.submit(agent=agent, question=q, answer=answer, confidence=conf,
-                        risk_reason=risk_reason, submitted_by=actor)
+                        risk_reason=risk_reason, submitted_by=actor, images=images)
     get_audit_logger().write(event_type=agent, action="review_enqueued", actor=actor,
                              payload={"rid": rid, "reason": risk_reason})
     await pg_store.mirror_review(review.get(rid))
@@ -276,7 +278,7 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
             raise HTTPException(500, "影像描述服务暂时不可用，请稍后重试")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.72
-        rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor)
+        rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor, images=imgs)
         suffix = "（已标记为需放射科医师双人核对）" if risky else "\n\n以上为 AI 初步所见，供医师参考。"
         get_audit_logger().write(event_type="imaging", action="vl_described", actor=actor,
                                  payload={"len": len(desc), "risky": risky})
@@ -296,15 +298,17 @@ async def case_ask(req: AskReq, user: dict = Depends(require_user)):
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
         try:
-            from backend.core.medical_imaging import describe_images, vl_model_name
-            desc = await describe_images(imgs, "结合病例信息描述关键发现：" + q)
+            from backend.core.medical_imaging import CASE_PROMPT, describe_images, vl_model_name
+            # F1：病例总结用病例专用 prompt，不再带放射科阅片人设
+            desc = await describe_images(imgs, "结合病例信息描述关键发现：" + q,
+                                         system_prompt=CASE_PROMPT)
         except Exception as e:  # noqa: BLE001
             get_audit_logger().write(event_type="case", action="vl_failed", actor=actor,
                                      payload={"err": str(e)[:120]})
             raise HTTPException(500, "多模态解析服务暂时不可用，请稍后重试")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.70
-        rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor)
+        rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor, images=imgs)
         get_audit_logger().write(event_type="case", action="vl_described", actor=actor,
                                  payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + ("\n\n（已标记双人核对）" if risky else "\n\n供医师参考的初步摘要。"),
@@ -348,14 +352,18 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
 # ---------- 审核中心（高危双人核对）----------
 @router.get("/review/pending")
 async def review_pending(user: dict = Depends(require_user)):
+    items = review.pending()
     get_audit_logger().write(event_type="review", action="list_pending",
-                             actor=user.get("username", "system"), payload={})
-    return {"pending": review.pending(), "me": user.get("username")}
+                             actor=user.get("username", "system"), payload={"n": len(items)})
+    return {"pending": items, "me": user.get("username")}
 
 
 @router.get("/review/history")
 async def review_history(user: dict = Depends(require_user)):
-    return {"items": review.list_all(limit=50)}
+    items = review.list_all(limit=50)
+    get_audit_logger().write(event_type="review", action="history",
+                             actor=user.get("username", "system"), payload={"n": len(items)})
+    return {"items": items}
 
 
 @router.post("/review/{rid}/resolve")
@@ -444,10 +452,60 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
         lines.append(f"- [危急值] {f['item']}={f['value']} {f['issue']}")
     text = "\n".join(lines)
     get_audit_logger().write(event_type="qc", action="query", actor=actor,
-                             payload={"fields": len(req.record)})
+                             payload={"fields": len(req.record), "labs": len(req.labs or {})})
     rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor)
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
                    sources=["track:完整性", "track:内涵质量", "track:ICD", "track:危急值"], review_id=rid)
+
+
+# ---------- 「粘贴整段病历」LLM 拆分（F2：质控表单快捷填充，仅辅助填表不参与质控判定）----------
+QC_FIELDS = ("主诉", "现病史", "既往史", "体格检查", "辅助检查", "初步诊断", "医师签名")
+
+_QC_PARSE_PROMPT = (
+    "你是病历结构化助手。从用户提供的病历文本中提取以下七个字段："
+    "主诉、现病史、既往史、体格检查、辅助检查、初步诊断、医师签名。\n"
+    "规则：1) 只输出一个 JSON 对象，键为上述七个中文字段名，值为病历中对应的内容；"
+    "2) 文本中缺失或无法确定的字段，值用空字符串；"
+    "3) 不得编造、不得输出解释文字或代码块标记，严格 JSON 输出。"
+)
+
+
+class QcParseReq(BaseModel):
+    text: str = Field(max_length=20000)
+
+
+def _extract_json_obj(raw) -> dict:
+    """从 LLM 输出提取首个 JSON 对象（容忍 ```json 代码块与前后缀文字）。"""
+    if isinstance(raw, dict):
+        return raw
+    s = str(raw or "")
+    start, end = s.find("{"), s.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("输出中未找到 JSON 对象")
+    return json.loads(s[start:end + 1])
+
+
+@router.post("/qc/parse")
+async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
+    """病历文本 → 七字段 JSON（{fields: {...}}）。缺字段留空字符串，解析失败 502。"""
+    from backend.core.llm_factory import get_llm
+    actor = user.get("username", "system")
+    get_audit_logger().write(event_type="qc", action="parse", actor=actor,
+                             payload={"len": len(req.text)})
+    try:
+        llm = get_llm("medical_literature")
+        r = await llm.ainvoke([SystemMessage(content=_QC_PARSE_PROMPT),
+                               HumanMessage(content=req.text)])
+        out = r.content if hasattr(r, "content") else str(r)
+        if isinstance(out, list):  # 某些 provider 返回分段
+            out = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in out)
+        data = _extract_json_obj(out)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 —— LLM/解析异常统一体面降级，前端提示手动填写
+        raise HTTPException(502, f"病历拆分失败：{str(e)[:80]}；请手动填写")
+    fields = {k: str(data.get(k, "") or "").strip() for k in QC_FIELDS}
+    return {"fields": fields}
 
 
 # ---------- 知识库管理（仅 admin）----------
@@ -546,7 +604,9 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
              "approved": sum(1 for i in items if i.get("status") == "approved"),
              "rejected": sum(1 for i in items if i.get("status") == "rejected")}
     al = get_audit_logger()
-    audit_recent = [{"ts": e["ts"][:19], "event": e["event_type"],
+    # F5：保留完整 ISO 串（含 +00:00 偏移）。此前 [:19] 切掉时区后，前端 new Date 按
+    # 本地时区解析 UTC 壁钟，审计流时间比本地慢 8 小时；fmtTs 依赖时区信息做本地化。
+    audit_recent = [{"ts": e["ts"], "event": e["event_type"],
                      "action": e["payload"].get("action", ""), "actor": e["actor"]}
                     for e in al.recent(50)]
     try:
@@ -573,3 +633,91 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
     await pg_store.mirror_audit("review.purge_pending", user.get("username", "admin"), {"count": n})
     await pg_store.purge_pending_reviews()
     return {"purged": n}
+
+
+# ---------- admin 模型配置管理（F6：对话/视觉双通道，openai/anthropic 双格式）----------
+class LlmProviderReq(BaseModel):
+    kind: str                       # chat | vision
+    api_format: str                 # openai | anthropic
+    base_url: str = Field(max_length=2000)
+    model_id: str = Field(max_length=200)
+    display_name: str = Field(default="", max_length=200)
+    api_key: str = Field(default="", max_length=2000)
+
+
+class LlmActivateReq(BaseModel):
+    kind: str
+    pid: str = Field(max_length=64)
+
+
+def _reset_llm_cache() -> None:
+    """F6：provider 增删/激活后必须重建模型缓存，否则 LLMFactory 仍复用旧实例。"""
+    from backend.core.llm_factory import LLMFactory
+    LLMFactory._instances.clear()
+
+
+def _masked_providers() -> dict:
+    """读配置并把 api_key 脱敏（前6后4中***，空则空串），供 GET 响应。"""
+    cfg = llm_config.load_config()
+    return {kind: {"active": (cfg.get(kind) or {}).get("active"),
+                   "providers": [{**p, "api_key": llm_config.mask_key(p.get("api_key", ""))}
+                                 for p in (cfg.get(kind) or {}).get("providers", [])]}
+            for kind in ("chat", "vision")}
+
+
+@router.get("/admin/llm/providers")
+async def llm_providers(user: dict = Depends(require_role("admin"))):
+    return _masked_providers()
+
+
+@router.post("/admin/llm/providers")
+async def llm_add_provider(req: LlmProviderReq, user: dict = Depends(require_role("admin"))):
+    try:
+        pid = await asyncio.to_thread(
+            llm_config.add_provider, req.kind, req.api_format, req.base_url,
+            req.model_id, req.display_name, req.api_key)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _reset_llm_cache()
+    get_audit_logger().write(event_type="admin", action="llm_add",
+                             actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": pid})
+    return {"id": pid}
+
+
+@router.delete("/admin/llm/providers/{kind}/{pid}")
+async def llm_delete_provider(kind: str, pid: str, user: dict = Depends(require_role("admin"))):
+    try:
+        ok = await asyncio.to_thread(llm_config.remove_provider, kind, pid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(404, "未找到该 provider")
+    _reset_llm_cache()
+    get_audit_logger().write(event_type="admin", action="llm_remove",
+                             actor=user.get("username", "admin"), payload={"kind": kind, "pid": pid})
+    return {"ok": True}
+
+
+@router.post("/admin/llm/activate")
+async def llm_activate(req: LlmActivateReq, user: dict = Depends(require_role("admin"))):
+    try:
+        await asyncio.to_thread(llm_config.activate, req.kind, req.pid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _reset_llm_cache()  # 切换后旧模型实例立即失效，下次 get_llm/get_vl_llm 按新配置重建
+    get_audit_logger().write(event_type="admin", action="llm_activate",
+                             actor=user.get("username", "admin"), payload={"kind": req.kind, "pid": req.pid})
+    return {"ok": True, "active": req.pid}
+
+
+@router.post("/admin/llm/test")
+async def llm_test(req: LlmProviderReq, user: dict = Depends(require_role("admin"))):
+    """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}，detail 不含 api_key。"""
+    r = await asyncio.to_thread(llm_config.test_provider, req.api_format, req.base_url,
+                                req.model_id, req.api_key)
+    get_audit_logger().write(event_type="admin", action="llm_test",
+                             actor=user.get("username", "admin"),
+                             payload={"kind": req.kind if req.kind in ("chat", "vision") else None,
+                                      "api_format": req.api_format, "model_id": req.model_id[:80],
+                                      "ok": r["ok"]})
+    return r

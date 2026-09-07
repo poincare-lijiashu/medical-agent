@@ -262,6 +262,11 @@
           <div class="src" style="margin-top:4px;line-height:1.7">面向病案科与质控医师：病历出科/归档前，按完整性、内涵质量、危急值三轨做 AI 预筛；所有结论仅为建议，最终以质控员签字为准。该功能对医生日常诊疗不做干预。</div>
         </div>
         <div class="card"><h3>病历内容</h3>
+          <div style="margin-bottom:14px">
+            <label class="src" for="qcPaste" style="display:block;margin-bottom:6px">粘贴整段病历（门诊/住院原文），AI 自动拆分到下方各栏；仅辅助填表，可手动修改</label>
+            <textarea class="inp" id="qcPaste" rows="3" placeholder="例：患者男，35 岁。主诉：右下后牙自发痛 3 天。现病史：… 既往史：… 体格检查：… 辅助检查：… 初步诊断：… 医师签名：张医生"></textarea>
+            <div style="margin-top:8px"><button class="btn secondary sm" id="qcParse" onclick="qcParsePaste()">自动拆分填充</button></div>
+          </div>
           <div class="qgrid">
             <label>主诉<input class="inp" id="qcf_0" placeholder="例：右下后牙自发痛 3 天"></label>
             <label>现病史<textarea class="inp" id="qcf_1" rows="2" placeholder="诱因、部位/性质、加重缓解、伴随症状…"></textarea></label>
@@ -371,9 +376,9 @@ const AGENTS={
 let cur='literature', curImages=[];
 let CFG={chat:'模型',vl:'多模态模型'};
 let ROLE='doctor';
-const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','review'],
-  pharmacist:['overview','literature','drug','review'],
-  admin:['overview','kb','qc','review','data','arch']};
+const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','qc','review'],
+  pharmacist:['overview','literature','drug','qc','review'],
+  admin:['overview','kb','qc','review','data','arch']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任） */
 async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;AGENTS.imaging.desc='上传影像 → 结构化所见（'+CFG.vl+'）';}}catch(e){}}
 
 const token=()=>sessionStorage.getItem('med_token')||'';
@@ -651,9 +656,24 @@ function renderReview(){
   b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${pager}</div>`;
 }
 function reviewGo(d){reviewPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
-let rejectTarget=null;
+let rejectTarget=null, signTarget=null; /* signTarget：待确认的签发操作 {id,dec,note}（F4） */
+/* F4：轻量签发确认（复用 #modal 容器，不要求输入确认词）。确认后才执行 doResolve；
+   Escape / 取消 / 关闭 / 点击遮罩均只 closeModal，不产生任何 API 调用。 */
+function askSignConfirm(id,dec,note){
+  signTarget={id,dec,note:note||''};
+  const label=dec==='approved'?'通过签发':'驳回';
+  document.getElementById('mTitle').textContent='签发确认';
+  document.getElementById('mBody').innerHTML=`<div class="txt">确认【${label}】该核对项？此操作记入审计留痕。</div>
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn secondary sm" id="scCancel">取消</button>
+      <button class="btn ${dec==='approved'?'primary':'danger'} sm" id="scGo">确认</button></div>`;
+  openModal();
+  const c=document.getElementById('scCancel');c.focus();
+  c.onclick=()=>{signTarget=null;closeModal();};
+  document.getElementById('scGo').onclick=()=>{const t=signTarget;signTarget=null;closeModal();doResolve(t.id,t.dec,t.note);};
+}
 function resolve(id,dec){
-  if(dec==='rejected'){ /* 模态框填写驳回原因，替代原生 prompt() */
+  if(dec==='rejected'){ /* 模态框填写驳回原因，替代原生 prompt()；签发确认框在备注之后（F4） */
     rejectTarget=id;
     document.getElementById('mTitle').textContent='驳回 · 填写原因';
     document.getElementById('mBody').innerHTML=`<textarea class="inp" id="rejectNote" rows="3" aria-label="驳回原因" placeholder="驳回原因（可选，将记入审计留痕）"></textarea>
@@ -663,23 +683,32 @@ function resolve(id,dec){
     openModal();
     document.getElementById('rejectNote').focus();
     return;}
-  doResolve(id,dec,'');
+  askSignConfirm(id,dec,'');
 }
 async function doResolve(id,dec,note){
   const r=await fetch('/api/v1/medical/review/'+id+'/resolve',{method:'POST',headers:auth(),body:JSON.stringify({decision:dec,note})});
   if(r.status===401){logout();return;} if(r.ok){toast(dec==='approved'?'已签发通过':'已驳回');closeModal();loadReview();}
   else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}}
-function confirmReject(){const n=document.getElementById('rejectNote');doResolve(rejectTarget,'rejected',n?n.value.trim():'');}
+function confirmReject(){const n=document.getElementById('rejectNote');askSignConfirm(rejectTarget,'rejected',n?n.value.trim():'');} /* F4：备注之后先确认再执行 */
 function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[]).find(x=>x.id===id);if(!p){toast('未找到');return;}
   const mine=p.submitted_by===(document.getElementById('who').textContent);
+  /* F3 核对可见图片：仅渲染 data:image/ 前缀的影像（防属性逃逸再叠加 esc），点击放大复用模态 */
+  const imgs=(p.images||[]).filter(u=>String(u).startsWith('data:image/'));
+  const imgsHtml=imgs.length?`<h4 style="margin-top:14px">影像（点击放大）</h4><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${imgs.map(u=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;cursor:zoom-in" src="${esc(u)}" alt="待核对影像" onclick="showImg(this.src)">`).join('')}</div>`:'';
   document.getElementById('mTitle').textContent='核对详情 · '+p.agent;
   document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></div>
     <h4>问题</h4><div class="txt md">${md(p.question||'')}</div>
     <h4 style="margin-top:14px">AI 回答</h4><div class="txt md">${md(p.answer||'')}</div>
+    ${imgsHtml}
     <h4 style="margin-top:14px">提交人</h4><div>${esc(p.submitted_by||'')}</div>
     <div style="margin-top:16px;display:flex;gap:8px">${mine?'<span class="src">双控：你不能核对本人提交</span>':
       `<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`}</div>`;
   openModal();document.getElementById('mBody').querySelector('input,button,textarea,[tabindex]')?.focus();}
+/* F3：影像放大查看（复用 #modal）。data URL 前缀校验：非 data:image/ 一律拒绝渲染 */
+function showImg(src){if(!src||!src.startsWith('data:image/'))return;
+  document.getElementById('mTitle').textContent='影像查看';
+  document.getElementById('mBody').innerHTML=`<img style="max-width:100%" src="${esc(src)}" alt="待核对影像">`;
+  openModal();}
 let _modalReturn=null;
 function openModal(){_modalReturn=document.activeElement;document.getElementById('modal').classList.add('on');}
 function closeModal(){document.getElementById('modal').classList.remove('on');if(_modalReturn&&_modalReturn.focus){_modalReturn.focus();}_modalReturn=null;}
@@ -699,6 +728,22 @@ async function runQc(){const rec={};QC_LABELS.forEach((l,i)=>{const v=document.g
   finally{btn.disabled=false;}}
 const QC_LABELS=['主诉','现病史','既往史','体格检查','辅助检查','初步诊断','医师签名'];
 function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>document.getElementById('qcf_'+i).value=s[i]);document.getElementById('qcLabs').value='';toast('已填入示例');}
+/* F2：粘贴整段病历 → /qc/parse LLM 拆分 → 填充 qcf_0-6（仅覆盖拆分出的非空字段，保留已填内容） */
+async function qcParsePaste(){
+  const t=document.getElementById('qcPaste').value.trim();
+  if(!t){toast('请先粘贴病历文本');return;}
+  const btn=document.getElementById('qcParse');btn.disabled=true;
+  try{const r=await fetch('/api/v1/medical/qc/parse',{method:'POST',headers:auth(),body:JSON.stringify({text:t.slice(0,20000)})});
+    if(r.status===401){logout();return;}
+    const d=await r.json();
+    if(!r.ok){toast('拆分失败：'+(d.detail||r.status));return;}
+    const f=d.fields||{};let n=0;
+    QC_LABELS.forEach((l,i)=>{const v=String(f[l]||'').trim();if(v){document.getElementById('qcf_'+i).value=v;n++;}});
+    document.getElementById('qcPaste').value='';
+    toast(n?`已拆分填充 ${n} 个字段，请核对后运行质控`:'未拆分出内容，请手动填写');
+  }catch(e){toast('拆分失败：'+e.message);}
+  finally{btn.disabled=false;}
+}
 
 /* ---- 知识库管理（admin）---- */
 function apiGet(p){return fetch('/api/v1/medical'+p,{headers:auth()}).then(r=>{if(r.status===401){logout();throw new Error('401');}return r.json();});}
@@ -852,8 +897,82 @@ async function loadData(){
         <div class="panel"><h3>用户（JSON 权威源，PG 双写镜像）</h3><table><thead><tr><th>用户名</th><th>角色</th><th></th></tr></thead><tbody>${users}</tbody></table>
           <div class="src" style="padding:10px 16px">PG 镜像行数：audit=${esc(String((d.pg_counts||{}).audit_log??'—'))} · users=${esc(String((d.pg_counts||{}).users??'—'))} · review=${esc(String((d.pg_counts||{}).review_queue??'—'))}</div></div>
       </div>
-    </div>`;
+    </div>
+    <div class="panel" style="margin-top:16px"><h3>模型配置（对话 / 视觉 · 双格式）</h3><div id="llmPanel"><div class="src" style="padding:10px 16px">加载中…</div></div></div>`;
+  apiGet('/admin/llm/providers').then(renderLlm).catch(()=>{const el=document.getElementById('llmPanel');
+    if(el)el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 模型配置加载失败</div>';});
 }
+
+/* ---- F6 模型配置管理（admin 数据面板）---- */
+let _llmData=null;
+function renderLlm(d){
+  const el=document.getElementById('llmPanel');if(!el)return;
+  _llmData=d||{};
+  const trunc=s=>{s=String(s||'');return s.length>42?s.slice(0,42)+'…':s;};
+  let html='';
+  for(const [kind,label] of [['chat','对话模型'],['vision','视觉模型']]){
+    const g=_llmData[kind]||{active:null,providers:[]};
+    const rows=(g.providers||[]).map(p=>{
+      const act=g.active===p.id;
+      return `<tr><td>${esc(p.display_name||p.model_id)}${act?' <span class="chip ok"><span class="dot"></span>激活中</span>':''}</td>
+        <td><span class="src">${esc(p.api_format)}</span></td>
+        <td class="num">${esc(p.model_id)}<div class="src">${esc(trunc(p.base_url))}</div></td>
+        <td style="white-space:nowrap">${act?'':`<button class="btn sm secondary" onclick="llmActivate('${kind}','${esc(p.id)}')">激活</button>`}<button class="btn sm danger" onclick="llmDel('${kind}','${esc(p.id)}')">删除</button></td></tr>`;}).join('');
+    html+=`<h4 style="margin:12px 16px 0">${label}${g.active?'':' <span class="src">（当前使用 .env 内置配置）</span>'}</h4>`+
+      ((g.providers||[]).length?`<table><thead><tr><th>名称</th><th>格式</th><th>模型 / URL</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+        :'<div class="src" style="padding:6px 16px">未配置第三方模型，回落 .env 内置配置。</div>');
+  }
+  html+=`<h4 style="margin:16px 16px 0">新增模型</h4>
+    <div class="qgrid" style="padding:10px 16px">
+      <label>类别<select class="inp" id="llmKind"><option value="chat">对话模型</option><option value="vision">视觉模型</option></select></label>
+      <label>API 格式<select class="inp" id="llmFormat"><option value="openai">openai</option><option value="anthropic">anthropic</option></select></label>
+      <label style="grid-column:1/-1">完整 URL（openai 例：https://api.openai.com/v1；anthropic 例：https://api.anthropic.com/v1）<input class="inp" id="llmUrl" spellcheck="false" placeholder="https://…"></label>
+      <label>模型 ID<input class="inp" id="llmModel" spellcheck="false"></label>
+      <label>展示名称<input class="inp" id="llmName"></label>
+      <label style="grid-column:1/-1">API 密钥<input class="inp" id="llmKey" type="password" autocomplete="new-password"></label>
+    </div>
+    <div style="padding:0 16px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn secondary sm" onclick="llmTest()">连通性测试</button>
+      <button class="btn primary sm" onclick="llmSave()">保存</button>
+      <span class="src" id="llmTestOut"></span></div>`;
+  el.innerHTML=html;
+}
+async function llmRefresh(){try{renderLlm(await apiGet('/admin/llm/providers'));}
+  catch(e){const el=document.getElementById('llmPanel');if(el)el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 模型配置加载失败</div>';}}
+function llmForm(){
+  const f={kind:document.getElementById('llmKind').value,api_format:document.getElementById('llmFormat').value,
+    base_url:document.getElementById('llmUrl').value.trim(),model_id:document.getElementById('llmModel').value.trim(),
+    display_name:document.getElementById('llmName').value.trim(),api_key:document.getElementById('llmKey').value};
+  if(!f.base_url||!f.model_id){toast('请填写完整 URL 与模型 ID');return null;}
+  return f;}
+async function llmTest(){
+  const f=llmForm();if(!f)return;
+  const out=document.getElementById('llmTestOut');out.textContent='测试中…';
+  try{const d=await apiPost('/admin/llm/test',f);
+    out.textContent=d.ok?`✓ 连通正常 · ${d.latency_ms} ms`:'✗ '+(d.detail||'失败');
+  }catch(e){out.textContent='✗ '+e.message;}}
+async function llmSave(){
+  const f=llmForm();if(!f)return;
+  try{const d=await apiPost('/admin/llm/providers',f);
+    if(d&&d.id){toast('模型配置已保存');llmRefresh();}
+    else toast('保存失败：'+(d.detail||'未知错误'));
+  }catch(e){toast('保存失败：'+e.message);}}
+async function llmActivate(kind,pid){
+  try{const d=await apiPost('/admin/llm/activate',{kind,pid});
+    if(d&&d.ok){toast('已激活：问答/视觉将改用该模型');llmRefresh();}
+    else toast('激活失败：'+(d.detail||'未知错误'));
+  }catch(e){toast('激活失败：'+e.message);}}
+function llmDel(kind,pid){
+  const g=(_llmData||{})[kind]||{providers:[]};
+  const p=(g.providers||[]).find(x=>x.id===pid)||{};
+  confirmDanger('删除模型配置',
+    `将删除「${esc(p.display_name||p.model_id||pid)}」（${esc(kind)}）；若为当前激活项，将回落 .env 内置配置。`,'确认删除',async()=>{
+    try{const r=await fetch('/api/v1/medical/admin/llm/providers/'+kind+'/'+encodeURIComponent(pid),{method:'DELETE',headers:auth()});
+      if(r.status===401){logout();return;}
+      const d=await r.json();
+      if(!r.ok){toast('失败：'+(d.detail||r.status));return;}
+      toast('已删除');closeModal();llmRefresh();
+    }catch(e){toast('删除失败：'+e.message);}});}
 async function createUser(){
   const name=document.getElementById('nuName').value.trim(),pass=document.getElementById('nuPass').value,role=document.getElementById('nuRole').value;
   if(!name||!pass){toast('请填写用户名与密码');return;}

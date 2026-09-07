@@ -10,6 +10,7 @@ from langchain_core.language_models import BaseChatModel  # 聊天模型的基�
 from langchain_core.runnables import Runnable         # 「可运行对象」基类，结构化模型属于它
 
 from backend.config import get_settings               # 读配置（API Key、base_url 等）
+from backend.core.llm_config import active_provider   # F6：管理端动态模型配置（chat/vision）
 from backend.core.logger import get_logger            # 结构化日志
 
 logger = get_logger(__name__)                         # 本模块的日志器，name 用当前模块名
@@ -70,8 +71,46 @@ class LLMFactory:
 
 
     @classmethod
+    def _anthropic_sdk_base_url(cls, url: str) -> str:
+        """管理端 anthropic base_url 约定含 /v1（连通性测试 POST {base_url}/messages）；
+        anthropic SDK 的 base_url 是主机根（自行追加 /v1/messages），传给 SDK 前裁掉尾部 /v1。"""
+        u = (url or "").rstrip("/")
+        return u[:-3] if u.endswith("/v1") else u
+
+    @classmethod
+    def _provider_kwargs(cls, provider: dict) -> dict[str, Any]:
+        """F6：管理端激活 provider → init_chat_model kwargs（openai/anthropic 双格式）。"""
+        if provider.get("api_format") == "anthropic":
+            return {
+                "model": provider["model_id"],
+                "model_provider": "anthropic",
+                "temperature": 0,
+                "anthropic_api_key": provider["api_key"],
+                "base_url": cls._anthropic_sdk_base_url(provider["base_url"]),
+                "max_tokens": 1024,
+                "max_retries": 3,
+            }
+        # openai 兼容格式：openai SDK 会自动在 base_url 后追加 /chat/completions，
+        # 故传原始 base_url（与 .env 的 QWEN_BASE_URL 用法一致，最终请求 = {base_url}/chat/completions）
+        return {
+            "model": provider["model_id"],
+            "model_provider": "openai",
+            "temperature": 0,
+            "openai_api_key": provider["api_key"],
+            "base_url": provider["base_url"],
+            "max_retries": 3,
+            "http_async_client": _HTTP_ASYNC_CLIENT,
+            "http_client": _HTTP_SYNC_CLIENT,
+        }
+
+    @classmethod
     def _build_model_kwargs(cls, model_key: str) -> dict[str, Any]:
-        """内部方法：组装 init_chat_model 需要的所有参数（DeepSeek 走 OpenAI 兼容接口）。"""
+        """内部方法：组装 init_chat_model 需要的所有参数。
+        F6：优先使用管理端激活的 chat provider（openai/anthropic 双格式）；
+        无激活配置时回落 .env 内置 Qwen 配置（行为与旧版完全一致）。"""
+        provider = active_provider("chat")
+        if provider:
+            return cls._provider_kwargs(provider)
         settings = cls._get_settings()             # 取配置
         model_id = settings.qwen_model_chat        # 同步到通义千问：模型名来自 .env 的 QWEN_MODEL_CHAT（原 _MODEL_ID_MAP 的 deepseek 名不再用于骨干）
 
@@ -111,7 +150,9 @@ class LLMFactory:
             kwargs["temperature"] = temperature           # 覆盖温度
             kwargs["streaming"] = streaming               # 设置是否流式
             # Qwen3 默认思考模式不允许 function-calling 的 tool_choice=required（会 400），关掉思考以兼容结构化输出
-            kwargs["extra_body"] = {"enable_thinking": False}
+            # （F6：仅 openai 兼容格式需要；anthropic 无该参数）
+            if kwargs.get("model_provider") == "openai":
+                kwargs["extra_body"] = {"enable_thinking": False}
             # print(f'kwargs: {kwargs}')
             llm = init_chat_model(**kwargs)               # 真正创建模型（** 表示把字典展开成关键字参数）
             cls._instances[cache_key] = llm               # 存进缓存
@@ -143,9 +184,18 @@ class LLMFactory:
 
     @classmethod
     def get_vl_llm(cls, temperature: float = 0) -> BaseChatModel:
-        """多模态视觉模型（Qwen-VL），用于影像/病例图片描述。单独缓存。"""
+        """多模态视觉模型：优先使用管理端激活的 vision provider（F6，openai/anthropic 双格式；
+        anthropic 视觉调用失败由上层异常兜底），无激活配置回落 Qwen-VL。单独缓存。"""
         cache_key = f"__vl__{temperature}"
         if cache_key not in cls._instances:
+            provider = active_provider("vision")
+            if provider:
+                kwargs = cls._provider_kwargs(provider)
+                kwargs["temperature"] = temperature
+                cls._instances[cache_key] = init_chat_model(**kwargs)
+                logger.info("llm_factory.vl_initialized", model=provider["model_id"],
+                            api_format=provider["api_format"])
+                return cls._instances[cache_key]
             settings = cls._get_settings()
             kwargs = {
                 "model": settings.qwen_model_vl,

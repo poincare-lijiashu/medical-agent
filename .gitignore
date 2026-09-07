@@ -10,6 +10,9 @@ data/auth/
 data/audit/
 data/review/
 
+# 模型配置（含第三方 API Key，严禁入库）
+data/llm_providers.json
+
 # 临时产物（安装/种子过程错误日志与一次性验证输出）
 data/*.err
 data/*.log

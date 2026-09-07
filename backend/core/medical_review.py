@@ -6,15 +6,48 @@
 """
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import threading
 import uuid
 from datetime import datetime, timezone
 
+from PIL import Image
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QUEUE_FILE = os.path.join(BASE_DIR, "data", "review", "queue.json")
 _lock = threading.Lock()
+
+_IMG_MAX_SIDE = 1280  # F3：入队影像压缩上限（长边），控制队列文件与详情页体积
+
+
+def _compress_one(src: str) -> str:
+    """单张 data URL → 长边 ≤1280 的 JPEG(q80) data URL；解码失败抛异常由调用方兜底。"""
+    _, _, b64 = src.partition(",")
+    img = Image.open(io.BytesIO(base64.b64decode(b64)))
+    if max(img.size) > _IMG_MAX_SIDE:
+        ratio = _IMG_MAX_SIDE / max(img.size)
+        img = img.resize((max(1, round(img.width * ratio)), max(1, round(img.height * ratio))))
+    if img.mode not in ("RGB", "L"):  # JPEG 不支持 RGBA/P 等带透明/调色板模式
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _compress_images(images: list[str] | None) -> list[str] | None:
+    """F3：核对可见影像压缩（PIL）。None/空 → None；单张压缩失败该图原样保留。"""
+    if not images:
+        return None
+    out: list[str] = []
+    for src in images:
+        try:
+            out.append(_compress_one(src))
+        except Exception:  # noqa: BLE001 —— 非法图不阻断入队，原样保留
+            out.append(src)
+    return out
 
 
 def _now() -> str:
@@ -37,8 +70,9 @@ def _save(items: list[dict]) -> None:
 
 
 def submit(*, agent: str, question: str, answer: str, confidence: float,
-           risk_reason: str, submitted_by: str) -> str:
-    """入队一条待核对项，返回 review_id。"""
+           risk_reason: str, submitted_by: str,
+           images: list[str] | None = None) -> str:
+    """入队一条待核对项，返回 review_id。images：待医生核对的影像（data URL，入队前压缩）。"""
     rid = "rev-" + uuid.uuid4().hex[:10]
     with _lock:
         items = _load()
@@ -47,6 +81,7 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             "answer": answer, "confidence": confidence, "risk_reason": risk_reason,
             "status": "pending", "submitted_by": submitted_by,
             "reviewed_by": None, "review_note": None, "resolved_at": None,
+            "images": _compress_images(images),
         })
         _save(items)
     return rid

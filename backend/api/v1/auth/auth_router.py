@@ -91,6 +91,7 @@ async def change_password(body: ChangePwdReq, user: dict = Depends(require_user)
         raise HTTPException(400, "新密码至少 8 位")
     set_password(username, body.new_password)
     revoke_user(username)  # 改密后撤销该用户全部旧令牌（含访问令牌），须重新登录
+    # 本人改密：actor 即操作对象、action 已含语义，无额外上下文可记（F5 评估后保留空 payload）
     get_audit_logger().write(event_type="auth", action="password_changed",
                              actor=username, payload={})
     rec = get_user(username)
