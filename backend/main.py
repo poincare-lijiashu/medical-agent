@@ -126,6 +126,20 @@ async def _security_headers(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def _body_limit(request: Request, call_next):
+    """请求体上限：Content-Length 超过 max_body_mb 时直接 413（不读 body，防大包耗资源）。
+    已知边界：chunked 传输（无 Content-Length）不拦截——Starlette 中间件拿不到流式长度，
+    由各请求模型字段上限（如 KbUploadReq.data_b64 max_length）兜底。"""
+    try:
+        n = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        n = 0
+    if n > settings.max_body_mb * 1024 * 1024:
+        return PlainTextResponse("请求体过大：超过大小上限", status_code=413)
+    return await call_next(request)
+
+
 @app.get("/healthz", include_in_schema=False)
 async def healthz():
     return {"ok": True}

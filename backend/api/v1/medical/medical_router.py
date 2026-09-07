@@ -140,7 +140,8 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
         return None
     rid = review.submit(agent=agent, question=q, answer=answer, confidence=conf,
                         risk_reason=risk_reason, submitted_by=actor)
-    get_audit_logger().write(agent, "review_enqueued", actor, {"rid": rid, "reason": risk_reason})
+    get_audit_logger().write(event_type=agent, action="review_enqueued", actor=actor,
+                             payload={"rid": rid, "reason": risk_reason})
     await pg_store.mirror_review(review.get(rid))
     return rid
 
@@ -156,16 +157,18 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
     actor = user.get("username", "system")
     pre = prefilter_reply(q)
     if pre:
-        get_audit_logger().write("literature", "prefilter", actor, {"q": q[:60]})
+        get_audit_logger().write(event_type="literature", action="prefilter", actor=actor,
+                                 payload={"q": q[:60]})
         return AskResp(answer=pre, confidence=0.95, needs_human_review=False, sources=["intent:prefilter"])
-    get_audit_logger().write("literature", "query", actor, {"q": q[:200]})
+    get_audit_logger().write(event_type="literature", action="query", actor=actor, payload={"q": q[:200]})
     try:
         g = _get_lit_graph()
         sid = "lit-" + uuid.uuid4().hex[:12]
         out = await g.ainvoke({"session_id": sid, "question": q, "query": q, "attempts": 0},
                               config={"configurable": {"thread_id": sid}})
     except Exception as e:  # noqa: BLE001 —— 三层兑底：provider/检索异常→体面降级不裸500
-        get_audit_logger().write("literature", "degraded", actor, {"err": str(e)[:120]})
+        get_audit_logger().write(event_type="literature", action="degraded", actor=actor,
+                                 payload={"err": str(e)[:120]})
         return AskResp(answer="模型/知识库服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试。",
                        confidence=0.3, needs_human_review=True, sources=["degraded:llm"])
     a = out["answer"]
@@ -186,7 +189,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
     """SSE 流式：逐节点推进度(retrieve/grade/generate/verify) + 末尾 result。失败发 error 事件。"""
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
-    get_audit_logger().write("literature", "stream", actor, {"q": q[:200]})
+    get_audit_logger().write(event_type="literature", action="stream", actor=actor,
+                             payload={"q": q[:200]})
 
     async def gen():
         pre = prefilter_reply(q)
@@ -210,7 +214,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
                     elif node == "verify" and isinstance(out, dict) and out.get("answer"):
                         final = out["answer"]
         except Exception as e:  # noqa: BLE001
-            get_audit_logger().write("literature", "stream_error", actor, {"err": str(e)[:160]})
+            get_audit_logger().write(event_type="literature", action="stream_error", actor=actor,
+                                     payload={"err": str(e)[:160]})
             yield _sse("error", {"detail": "生成过程出现异常，已记录审计并标记复核；请稍后重试"})
             return
         if not final:
@@ -227,24 +232,31 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+# 药物置信度显式映射：max_severity → (conf, risk, review_flag)。
+# 取值与旧子串判定（"禁忌"/"高危"/"发现以下相互作用"）完全一致，消除对 answer 文本的子串耦合。
+_DRUG_SEV_CONF = {
+    "禁忌": (0.90, "药物禁忌", True),
+    "高危": (0.86, "高危相互作用", True),
+    "中危": (0.80, "中危相互作用", False),
+}
+
+
 @router.post("/drug/ask", response_model=AskResp)
 async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
     r = drug_check(q)
     ans = r["answer"]
-    if "禁忌" in ans:
-        conf, risk, review_flag = 0.90, "药物禁忌", True
-    elif "高危" in ans:
-        conf, risk, review_flag = 0.86, "高危相互作用", True
-    elif "发现以下相互作用" in ans:  # 仅中危
-        conf, risk, review_flag = 0.80, "中危相互作用", False
-    elif "未收录" in ans:
+    sev = r.get("max_severity", "无")
+    if sev in _DRUG_SEV_CONF:
+        conf, risk, review_flag = _DRUG_SEV_CONF[sev]
+    elif len(r.get("drugs") or []) >= 2:  # max_severity="无" 且识别 ≥2 药 → 规则库未收录（旧 "未收录" 分支取值）
         conf, risk, review_flag = 0.55, "未知相互作用", False
-    else:
+    else:  # 识别不足 2 药（旧 else 分支取值）
         conf, risk, review_flag = 0.50, "信息不足", False
     rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag, risk, actor)
-    get_audit_logger().write("drug", "answered", actor, {"conf": conf, "review": review_flag})
+    get_audit_logger().write(event_type="drug", action="answered", actor=actor,
+                             payload={"conf": conf, "review": review_flag})
     return AskResp(answer=ans, confidence=conf, needs_human_review=review_flag,
                    sources=r["sources"], review_id=rid)
 
@@ -259,16 +271,19 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
             from backend.core.medical_imaging import describe_images, vl_model_name
             desc = await describe_images(imgs, q)
         except Exception as e:  # noqa: BLE001
-            get_audit_logger().write("imaging", "describe_failed", actor, {"err": str(e)[:120]})
+            get_audit_logger().write(event_type="imaging", action="describe_failed", actor=actor,
+                                     payload={"err": str(e)[:120]})
             raise HTTPException(500, "影像描述服务暂时不可用，请稍后重试")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.72
         rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor)
         suffix = "（已标记为需放射科医师双人核对）" if risky else "\n\n以上为 AI 初步所见，供医师参考。"
-        get_audit_logger().write("imaging", "vl_described", actor, {"len": len(desc), "risky": risky})
+        get_audit_logger().write(event_type="imaging", action="vl_described", actor=actor,
+                                 payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + suffix, confidence=conf, needs_human_review=risky,
                        sources=["VL:" + vl_model_name()], review_id=rid)
-    get_audit_logger().write("imaging", "need_image", actor, {"q": q[:200]})
+    get_audit_logger().write(event_type="imaging", action="need_image", actor=actor,
+                             payload={"q": q[:200]})
     return AskResp(answer="影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
                    confidence=0.0, needs_human_review=False, sources=["imaging:needs_image"],
                    status="need_image")
@@ -284,16 +299,18 @@ async def case_ask(req: AskReq, user: dict = Depends(require_user)):
             from backend.core.medical_imaging import describe_images, vl_model_name
             desc = await describe_images(imgs, "结合病例信息描述关键发现：" + q)
         except Exception as e:  # noqa: BLE001
-            get_audit_logger().write("case", "vl_failed", actor, {"err": str(e)[:120]})
+            get_audit_logger().write(event_type="case", action="vl_failed", actor=actor,
+                                     payload={"err": str(e)[:120]})
             raise HTTPException(500, "多模态解析服务暂时不可用，请稍后重试")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.70
         rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor)
-        get_audit_logger().write("case", "vl_described", actor, {"len": len(desc), "risky": risky})
+        get_audit_logger().write(event_type="case", action="vl_described", actor=actor,
+                                 payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + ("\n\n（已标记双人核对）" if risky else "\n\n供医师参考的初步摘要。"),
                        confidence=conf, needs_human_review=risky,
                        sources=["VL:" + vl_model_name()], review_id=rid)
-    get_audit_logger().write("case", "scaffold", actor, {"q": q[:200]})
+    get_audit_logger().write(event_type="case", action="scaffold", actor=actor, payload={"q": q[:200]})
     return AskResp(answer="多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
                    confidence=0.0, needs_human_review=False, sources=["case:needs_input"],
                    status="need_input")
@@ -307,14 +324,16 @@ class MdtReq(BaseModel):
 async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
     case = _redactor.redact(req.case)
     actor = user.get("username", "system")
-    get_audit_logger().write("mdt", "query", actor, {"len": len(case)})
+    get_audit_logger().write(event_type="mdt", action="query", actor=actor,
+                             payload={"len": len(case)})
     try:
         g = _get_mdt_graph()
         sid = "mdt-" + uuid.uuid4().hex[:12]
         out = await g.ainvoke({"session_id": sid, "case": case, "opinions": []},
                               config={"configurable": {"thread_id": sid}})
     except Exception as e:  # noqa: BLE001
-        get_audit_logger().write("mdt", "degraded", actor, {"err": str(e)[:120]})
+        get_audit_logger().write(event_type="mdt", action="degraded", actor=actor,
+                                 payload={"err": str(e)[:120]})
         raise HTTPException(500, "会诊服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试")
     rep = out["report"]
     rid = await _enqueue_if_risk("mdt", case, rep["text"], rep["confidence"],
@@ -329,7 +348,8 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
 # ---------- 审核中心（高危双人核对）----------
 @router.get("/review/pending")
 async def review_pending(user: dict = Depends(require_user)):
-    get_audit_logger().write("review", "list_pending", user.get("username", "system"), {})
+    get_audit_logger().write(event_type="review", action="list_pending",
+                             actor=user.get("username", "system"), payload={})
     return {"pending": review.pending(), "me": user.get("username")}
 
 
@@ -345,7 +365,8 @@ async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(requir
         item = review.resolve(rid, body.decision, reviewer, body.note)
     except review.ReviewError as e:
         raise HTTPException(400, str(e))
-    get_audit_logger().write("review", f"resolved_{body.decision}", reviewer, {"rid": rid})
+    get_audit_logger().write(event_type="review", action=f"resolved_{body.decision}",
+                             actor=reviewer, payload={"rid": rid})
     await pg_store.mirror_review(item)
     await pg_store.mirror_audit(f"review.{body.decision}", reviewer, {"rid": rid})
     return item
@@ -367,6 +388,34 @@ def _load_optional_table(name: str):
 class QcReq(BaseModel):
     record: dict
     labs: dict | None = None
+
+    @field_validator("record")
+    @classmethod
+    def _cap_record(cls, v: dict) -> dict:
+        """白名单上限：≤20 项、键≤40 字符、值≤2000 字符（超限 422，防大 payload 撑爆链路）。"""
+        if len(v) > 20:
+            raise ValueError("record 最多 20 项")
+        for k, val in v.items():
+            if len(str(k)) > 40:
+                raise ValueError("record 键名过长（>40 字符）")
+            if len(str(val)) > 2000:
+                raise ValueError("record 值过长（>2000 字符）")
+        return v
+
+    @field_validator("labs")
+    @classmethod
+    def _cap_labs(cls, v: dict | None) -> dict | None:
+        """白名单上限：≤30 项、键≤40 字符、值≤2000 字符（与 record 同约束、项数放宽到 30）。"""
+        if v is None:
+            return v
+        if len(v) > 30:
+            raise ValueError("labs 最多 30 项")
+        for k, val in v.items():
+            if len(str(k)) > 40:
+                raise ValueError("labs 键名过长（>40 字符）")
+            if len(str(val)) > 2000:
+                raise ValueError("labs 值过长（>2000 字符）")
+        return v
 
 
 @router.post("/qc/record", response_model=AskResp)
@@ -394,7 +443,8 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     for f in out["critical"].get("flags", []):
         lines.append(f"- [危急值] {f['item']}={f['value']} {f['issue']}")
     text = "\n".join(lines)
-    get_audit_logger().write("qc", "query", actor, {"fields": len(req.record)})
+    get_audit_logger().write(event_type="qc", action="query", actor=actor,
+                             payload={"fields": len(req.record)})
     rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor)
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
                    sources=["track:完整性", "track:内涵质量", "track:ICD", "track:危急值"], review_id=rid)
@@ -408,12 +458,14 @@ class KbUploadReq(BaseModel):
 
 @router.post("/admin/kb/upload")
 async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin"))):
-    get_audit_logger().write("kb", "upload", user.get("username", "admin"), {"name": req.name[:120]})
+    get_audit_logger().write(event_type="kb", action="upload",
+                             actor=user.get("username", "admin"), payload={"name": req.name[:120]})
     try:
         return await asyncio.to_thread(kb_ingest.ingest_b64, req.name[:250], req.data_b64)
     except Exception as e:  # noqa: BLE001
-        get_audit_logger().write("kb", "upload_failed", user.get("username", "admin"),
-                                 {"name": req.name[:120], "err": str(e)[:160]})
+        get_audit_logger().write(event_type="kb", action="upload_failed",
+                                 actor=user.get("username", "admin"),
+                                 payload={"name": req.name[:120], "err": str(e)[:160]})
         raise HTTPException(400, "文件摄取失败：请确认格式为 .md/.txt/.pdf 且内容可解析")
 
 
@@ -429,7 +481,8 @@ async def kb_preview(tag: str, user: dict = Depends(require_role("admin"))):
 
 @router.delete("/admin/kb/{tag}")
 async def kb_delete(tag: str, user: dict = Depends(require_role("admin"))):
-    get_audit_logger().write("kb", "delete", user.get("username", "admin"), {"tag": tag})
+    get_audit_logger().write(event_type="kb", action="delete",
+                             actor=user.get("username", "admin"), payload={"tag": tag})
     return {"deleted": await asyncio.to_thread(kb_ingest.delete_doc, tag)}
 
 
@@ -454,8 +507,9 @@ async def admin_create_user(body: UserCreateReq, user: dict = Depends(require_ro
         raise HTTPException(400, str(e))
     if not ok:
         raise HTTPException(400, "用户名已存在")
-    get_audit_logger().write("admin", "user_created", user.get("username", "admin"),
-                             {"user": uname, "role": body.role})
+    get_audit_logger().write(event_type="admin", action="user_created",
+                             actor=user.get("username", "admin"),
+                             payload={"user": uname, "role": body.role})
     await pg_store.mirror_audit("admin.user_created", user.get("username", "admin"), {"user": uname})
     rec = get_user(uname)
     if rec:
@@ -472,7 +526,8 @@ async def admin_delete_user(username: str, user: dict = Depends(require_role("ad
     if not ok:
         raise HTTPException(404, "用户不存在")
     revoke_user(username)  # 使其已签发的令牌立即失效
-    get_audit_logger().write("admin", "user_deleted", user.get("username", "admin"), {"user": username})
+    get_audit_logger().write(event_type="admin", action="user_deleted",
+                             actor=user.get("username", "admin"), payload={"user": username})
     await pg_store.mirror_audit("admin.user_deleted", user.get("username", "admin"), {"user": username})
     return {"ok": True}
 
@@ -513,7 +568,8 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
     if (body.confirm_text or "").strip() != "清空":
         raise HTTPException(400, "确认词不符：请输入「清空」以确认执行")
     n = await asyncio.to_thread(review.purge_pending)
-    get_audit_logger().write("review", "purge_pending", user.get("username", "admin"), {"count": n})
+    get_audit_logger().write(event_type="review", action="purge_pending",
+                             actor=user.get("username", "admin"), payload={"count": n})
     await pg_store.mirror_audit("review.purge_pending", user.get("username", "admin"), {"count": n})
     await pg_store.purge_pending_reviews()
     return {"purged": n}

@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     rate_limit_per_min: int = 60
     auth_enabled: bool = True
     auth_seed_demo: bool = False  # 首次运行是否注入演示账号（doctor01 等）；默认关闭，仅演示环境显式开启
+    auth_demo_password: str = ""  # 演示账号统一口令；留空则 seed 时随机生成（仅 dev 演示，生产不 seed）
+
+    # 请求体上限（MB）：Content-Length 超限直接 413；KbUploadReq base64 需 ~30MB，默认 40 留余量
+    max_body_mb: int = 40
 
     # 影像/病例高危征象词表：留空用内置默认；逗号分隔覆盖，供院方对齐放射科危急值清单
     imaging_risk_words: str = ""

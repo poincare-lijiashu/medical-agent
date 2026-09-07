@@ -58,9 +58,9 @@ async def literature_op(state: MdtState) -> dict:
 
 async def drug_op(state: MdtState) -> dict:
     r = drug_check(state["case"])
-    has = "发现以下相互作用" in r["answer"]
-    sev = "禁忌" if "禁忌" in r["answer"] else ("高危" if "高危" in r["answer"] else ("中危" if has else "无"))
-    conf = 0.9 if has else 0.5
+    # 结构化严重度（check() 返回 max_severity ∈ {"禁忌","高危","中危","无"}），与旧子串判定产出一致
+    sev = r.get("max_severity", "无")
+    conf = 0.9 if r.get("findings") else 0.5
     op = {"specialty": "药学", "opinion": r["answer"], "sources": r["sources"],
           "confidence": conf, "severity": sev}
     return {"opinions": [op]}

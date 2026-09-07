@@ -13,6 +13,8 @@ import re
 from collections import deque
 from datetime import datetime, timezone
 
+from backend.core.logger import get_logger
+
 _PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _IDCARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")  # 用数字环视，避开中文字符导致 \b 失效
@@ -34,6 +36,9 @@ _ADDR = re.compile(
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AUDIT_DIR = os.path.join(BASE_DIR, "data", "audit")
 AUDIT_FILE = os.path.join(AUDIT_DIR, "audit.jsonl")
+
+# 旧 2-str 调用的用户名启发式：本系统用户名（doctor01/admin01 等）为「字母开头 + 含数字」；动作词（query 等）不含数字
+_USERNAMEISH = re.compile(r"[A-Za-z][A-Za-z0-9_\-.]*\d")
 
 
 class PHIRedactor:
@@ -91,24 +96,40 @@ class AuditLog:
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    def write(self, *args, **kwargs) -> None:
-        """宽容签名，区分 2/3 个位置 str：
-        - 2 str: (event_type, actor)
-        - 3 str: (event_type, action, actor) —— 与路由层 (模块, 动作, 用户名) 一致，actor 取第 3 个。
-        首个 dict 作 payload；kwargs 并入 payload。"""
-        strs = [a for a in args if isinstance(a, str)]
-        dicts = [a for a in args if isinstance(a, dict)]
-        payload = dict(dicts[0]) if dicts else {}
-        if len(strs) >= 3:
-            event_type, action, actor = strs[0], strs[1], strs[2]
+    def write(self, event_type: str = "event", action: str = "", actor: str = "system",
+              payload: dict | None = None, **kw) -> None:
+        """审计写入（显式签名）：write(event_type=..., action=..., actor=..., payload=...)。
+
+        旧宽容调用兜底归一化（新代码一律 kwargs；兜底防外部遗漏调用点再次错位/炸掉）：
+        - write("mod", "act", "user")          → 旧 3-str (event_type, action, actor)，直映射
+        - write("literature", "query", {...})  → 旧 (event_type, action, payload)：dict 落到 actor 位，
+          归一回 payload、actor=system（历史审计里 actor="query"/"answered"/"scaffold" 即此形态所致）
+        - write("literature", "doctor01")      → 旧 2-str (event_type, actor)：第二参像用户名（含数字）
+          时归一为 actor
+        - write({...})                         → 首参 dict 视为 payload
+        """
+        # 防御：疑似 (actor, action 文案) 反向旧调用（历史错位记录 actor="query"/"scaffold" 的来源形态）。
+        # 启发式：首参像用户名（字母开头含数字）而次参像动作文案（含空格或非用户名形态）→ 记 warning，不阻断。
+        if (isinstance(event_type, str) and isinstance(action, str) and action
+                and _USERNAMEISH.fullmatch(event_type)
+                and (" " in action or not _USERNAMEISH.fullmatch(action))):
+            get_logger(__name__).warning("audit.write.suspicious_args",
+                                         event_type=event_type, action=action[:60])
+        if isinstance(event_type, dict):  # 首参 dict → payload
+            if payload is None:
+                payload = event_type
+            event_type = "event"
+        if isinstance(actor, dict):  # 旧 (event_type, action, payload) 形态
+            if payload is None:
+                payload = actor
+            actor = "system"
+        if (action and actor == "system" and payload is None and not kw
+                and _USERNAMEISH.fullmatch(action)):
+            event_type, actor, action = event_type, action, ""  # 旧 2-str (event_type, actor)
+        payload = dict(payload) if payload else {}
+        if action:
             payload.setdefault("action", action)
-        elif len(strs) == 2:
-            event_type, actor = strs[0], strs[1]
-        elif len(strs) == 1:
-            event_type, actor = strs[0], "system"
-        else:
-            event_type, actor = "event", "system"
-        for k, v in kwargs.items():
+        for k, v in kw.items():
             if k in ("event_type", "actor", "payload"):
                 continue
             payload[k] = v

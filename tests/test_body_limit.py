@@ -1,0 +1,26 @@
+"""A1 请求体上限：Content-Length 超过 settings.max_body_mb 时返回 413。
+
+说明：max_body_mb=1 → 上限 1MB；故用 2MB 触发（任务描述中“2KB body”与 1MB 上限语义矛盾，
+按实现语义以 2MB body 验证中间件拦截）。chunked 无 Content-Length 不拦截为已知边界，不做测试。
+"""
+from fastapi.testclient import TestClient
+
+from backend.config import settings
+from backend.main import app
+
+
+def _client():
+    return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
+
+
+def test_body_over_limit_returns_413(monkeypatch):
+    c = _client()
+    monkeypatch.setattr(settings, "max_body_mb", 1)  # settings 为 pydantic 单例，可直接改属性
+    r = c.post("/api/v1/auth/login", json={"username": "u" * (2 * 1024 * 1024), "password": "p"})
+    assert r.status_code == 413, r.text
+
+
+def test_normal_body_reaches_route_with_default_limit():
+    c = _client()  # 默认 max_body_mb=40，小请求不应被拦截
+    r = c.post("/api/v1/auth/login", json={"username": "nobody", "password": "wrong"})
+    assert r.status_code != 413  # 到达路由层（401 等），未被中间件拦截

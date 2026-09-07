@@ -81,23 +81,35 @@ def detect_drugs(text: str) -> list[str]:
     return found
 
 
+_SEV_RANK = {"中危": 1, "高危": 2, "禁忌": 3}  # 严重度排序：禁忌 > 高危 > 中危
+
+
 def check(question: str) -> dict:
-    """返回 {answer, sources, drugs}。严重度越高越需复核。"""
+    """返回 {answer, sources, drugs, findings, max_severity}。严重度越高越需复核。
+
+    findings 为结构化命中列表（供调用方按 max_severity 做显式置信映射，替代对 answer 文本的子串猜测）：
+      [{"pair": "华法林+布洛芬", "severity": "高危", "note": "..."}]
+    max_severity ∈ {"禁忌","高危","中危","无"}（无命中为 "无"）。answer 文本格式保持不变。"""
     drugs = detect_drugs(question)
     src = ["drug_rules:curated_v2"]
     if len(drugs) < 2:
         ans = (f"未在问题中识别到 ≥2 种可核查药物（识别到：{drugs or '无'}）。"
                "请同时给出两种药物名称以检查相互作用。本结果为规则库初筛，需药师/医师复核。")
-        return {"answer": ans, "sources": src, "drugs": drugs}
+        return {"answer": ans, "sources": src, "drugs": drugs, "findings": [], "max_severity": "无"}
     hits = []
+    findings = []
     for i in range(len(drugs)):
         for j in range(i + 1, len(drugs)):
             key = frozenset([drugs[i], drugs[j]])
             if key in INTERACTIONS:
                 sev, note = INTERACTIONS[key]
                 hits.append(f"【{drugs[i]} + {drugs[j]}｜{sev}】{note}")
+                findings.append({"pair": [drugs[i], drugs[j]], "severity": sev, "note": note})
     if not hits:
         ans = f"规则库中未收录「{'、'.join(drugs)}」之间的已知相互作用；不排除未知风险，仍需药师/医师复核。"
     else:
         ans = "发现以下相互作用（循证规则库）：\n- " + "\n- ".join(hits) + "\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。"
-    return {"answer": ans, "sources": src, "drugs": drugs}
+    max_sev = max((f["severity"] for f in findings),
+                  key=lambda s: _SEV_RANK.get(s, 0), default="无")
+    return {"answer": ans, "sources": src, "drugs": drugs,
+            "findings": findings, "max_severity": max_sev}

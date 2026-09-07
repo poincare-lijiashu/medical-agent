@@ -91,7 +91,8 @@ async def change_password(body: ChangePwdReq, user: dict = Depends(require_user)
         raise HTTPException(400, "新密码至少 8 位")
     set_password(username, body.new_password)
     revoke_user(username)  # 改密后撤销该用户全部旧令牌（含访问令牌），须重新登录
-    get_audit_logger().write("auth", "password_changed", username, {})
+    get_audit_logger().write(event_type="auth", action="password_changed",
+                             actor=username, payload={})
     rec = get_user(username)
     if rec:
         await pg_store.mirror_user(username, rec.get("role", ""), rec.get("password_hash", ""))
@@ -107,7 +108,8 @@ async def reset_password(body: ResetPwdReq, user: dict = Depends(require_role("a
         raise HTTPException(404, "用户不存在")
     set_password(body.username, body.new_password)
     revoke_user(body.username)  # 该用户已签发的令牌立即失效，须重新登录
-    get_audit_logger().write("auth", "password_reset", user.get("username", "admin"), {"user": body.username})
+    get_audit_logger().write(event_type="auth", action="password_reset",
+                             actor=user.get("username", "admin"), payload={"user": body.username})
     rec = get_user(body.username)
     if rec:
         await pg_store.mirror_user(body.username, rec.get("role", ""), rec.get("password_hash", ""))

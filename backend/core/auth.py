@@ -171,15 +171,27 @@ def set_password(username: str, new_password: str) -> bool:
     return True
 
 
+def _demo_password() -> str:
+    """演示账号口令选择（纯函数便于测试）：显式配置 AUTH_DEMO_PASSWORD 优先；
+    未配置则随机生成（仅 dev 演示用，warning 输出一次口令供本机查看，生产不 seed）。"""
+    if settings.auth_demo_password:
+        return settings.auth_demo_password
+    pw = secrets.token_urlsafe(12)
+    from backend.core.logger import get_logger
+    get_logger(__name__).warning("auth.seed.demo_password", password=pw)  # 仅 dev 演示用
+    return pw
+
+
 def seed_default_users() -> None:
     """首次运行注入演示账号（生产务必改密/删除）。"""
     users = _load_users()
     if users:
         return
+    pw = _demo_password()
     defaults = [
-        ("doctor01", "Med@2026", "doctor"),
-        ("pharm01", "Med@2026", "pharmacist"),
-        ("admin01", "Med@2026", "admin"),
+        ("doctor01", pw, "doctor"),
+        ("pharm01", pw, "pharmacist"),
+        ("admin01", pw, "admin"),
     ]
     for u, p, r in defaults:
         users[u] = {"role": r, "password_hash": hash_password(p)}
