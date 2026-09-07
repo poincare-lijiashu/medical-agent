@@ -72,6 +72,94 @@ def test_refresh_rejects_unknown_user():
     assert r.status_code == 401
 
 
+def test_deleted_user_token_rejected_without_revocation_record(monkeypatch, tmp_path):
+    """AUTH-REVOKE-001：撤销表为进程内存态，服务重启后丢失；require_user 必须回查用户
+    存在性（fail-closed），已删除/停用账号的令牌不得继续调用受保护端点。"""
+    from backend.api import deps
+    from backend.core import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
+    assert auth_mod.create_user("ghostx", "Str0ngPass!", "doctor")
+    tok = create_access_token("ghostx", "doctor")
+    assert auth_mod.delete_user("ghostx")
+    deps._revoked_before.clear()  # 模拟服务重启：进程内撤销记录丢失
+    c = TestClient(_app())
+    r = c.get("/api/v1/medical/config", headers={"Authorization": "Bearer " + tok})
+    assert r.status_code == 401
+
+
+def test_docs_kwargs_disabled_in_production_only():
+    """FASTAPI-DOCS-001：生产环境关闭交互式文档三件套，开发环境保留 FastAPI 默认。"""
+    from backend.main import _docs_kwargs
+
+    none_trio = {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    assert _docs_kwargs("production") == none_trio
+    assert _docs_kwargs("PRODUCTION") == none_trio  # 大小写不敏感
+    assert _docs_kwargs("development") == {}
+    assert _docs_kwargs("") == {}
+
+
+def test_cors_origins_default_not_wildcard():
+    """FASTAPI-CORS-001：CORS 默认不允许通配符，收敛为本机前端来源。"""
+    from backend.config import Settings
+
+    default = Settings.model_fields["cors_origins"].default
+    assert "*" not in default
+    assert "http://localhost:8001" in default
+    assert "http://127.0.0.1:8001" in default
+
+
+def test_metrics_requires_admin():
+    """FASTAPI-METRICS-001：/metrics 属运维数据，匿名必须 401，admin 令牌才可读取。"""
+    seed_default_users()
+    c = TestClient(_app())
+    assert c.get("/metrics").status_code == 401  # 匿名拒绝
+    tok = c.post("/api/v1/auth/login",
+                 json={"username": "admin01", "password": "Med@2026"}).json()["access_token"]
+    r = c.get("/metrics", headers={"Authorization": "Bearer " + tok})
+    assert r.status_code == 200
+    assert "medassist_" in r.text
+
+
+def test_security_headers_on_all_responses():
+    """JS-CSP-001：所有响应必须携带基础安全头（nosniff/DENY/Referrer-Policy/CSP）。"""
+    c = TestClient(_app())
+    r = c.get("/healthz")
+    assert r.status_code == 200
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["X-Frame-Options"] == "DENY"
+    assert r.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    csp = r.headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in csp
+    assert "default-src 'self'" in csp
+
+
+def test_load_optional_table_uses_with_open(monkeypatch):
+    """QUALITY-005：可选表读取必须 with-open（上下文管理器）确保句柄及时关闭，
+    防 Windows 下句柄占用锁文件。"""
+    import builtins
+    import io
+
+    from backend.api.v1.medical import medical_router as mr
+
+    entered, exited = [], []
+
+    class _Tracked(io.StringIO):
+        def __enter__(self):
+            entered.append(True)
+            return self
+
+        def __exit__(self, *exc):
+            exited.append(True)
+            return super().__exit__(*exc)
+
+    monkeypatch.setattr(mr.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(builtins, "open", lambda *a, **k: _Tracked('{"A00": "霍乱"}'))
+    out = mr._load_optional_table("icd_table.json")
+    assert out == {"A00": "霍乱"}
+    assert entered and exited  # 旧实现 json.load(open(...)) 不会进入上下文管理器
+
+
 def test_risk_words_negation_not_flagged():
     """影像高危词判定：否定短语（无/未见…）不触发复核，肯定表述触发。"""
     from backend.api.v1.medical.medical_router import _has_risk, RISK_WORDS

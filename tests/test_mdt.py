@@ -69,6 +69,56 @@ def test_mdt_graph_parallel_fanout(monkeypatch):
     assert rep["key_actions"] == ["监测生命体征", "完善腹部查体"]
 
 
+def test_mdt_graph_no_checkpointer_by_default():
+    """QUALITY-002：MDT 图默认不挂 MemorySaver（与 literature 同纪律）——
+    thread_id 每请求唯一，MemorySaver 会无界累积会话快照（长期运行 OOM）。"""
+    g = mdt_mod.build_mdt_graph()
+    assert getattr(g, "checkpointer", None) is None
+
+
+def test_graph_getters_build_once_under_concurrency(monkeypatch):
+    """QUALITY-002：图懒加载必须双检锁保护——并发首次访问只构建一次（防重复构建竞态）。"""
+    import threading
+    import time
+
+    import backend.agents.medical.literature.graph as lit_graph_mod
+    from backend.api.v1.medical import medical_router as mr
+
+    calls = []
+
+    def _slow_builder(tag):
+        def _build():
+            calls.append(tag)
+            time.sleep(0.05)  # 放大竞态窗口：无锁时并发首访会重复构建
+            return object()
+        return _build
+
+    monkeypatch.setattr(lit_graph_mod, "build_literature_graph", _slow_builder("lit"))
+    monkeypatch.setattr(mdt_mod, "build_mdt_graph", _slow_builder("mdt"))
+
+    orig = (mr._lit_graph, mr._mdt_graph)
+    mr._lit_graph = None
+    mr._mdt_graph = None
+    try:
+        n = 8
+        barrier = threading.Barrier(n)
+
+        def worker():
+            barrier.wait()
+            mr._get_lit_graph()
+            mr._get_mdt_graph()
+
+        threads = [threading.Thread(target=worker) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert calls.count("lit") == 1
+        assert calls.count("mdt") == 1
+    finally:
+        mr._lit_graph, mr._mdt_graph = orig
+
+
 def test_get_mdt_graph_is_singleton():
     """MDT 图应像文献图一样进程内单例复用，而非每次请求重建。"""
     from backend.api.v1.medical.medical_router import _get_mdt_graph

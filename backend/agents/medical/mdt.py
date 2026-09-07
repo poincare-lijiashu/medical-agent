@@ -109,6 +109,8 @@ async def synthesize_node(state: MdtState) -> dict:
 
 
 def build_mdt_graph(checkpointer=None):
+    """默认不挂 checkpointer（与 literature 同纪律）：thread_id 每请求唯一、无断点续跑需求，
+    MemorySaver 会按唯一 thread_id 无界累积会话快照（长期运行 OOM）。"""
     g = StateGraph(MdtState)
     g.add_node("literature", literature_op)
     g.add_node("drug", drug_op)
@@ -122,4 +124,4 @@ def build_mdt_graph(checkpointer=None):
     g.add_edge("drug", "synthesize")
     g.add_edge("case", "synthesize")
     g.add_edge("synthesize", END)
-    return g.compile(checkpointer=checkpointer or MemorySaver())
+    return g.compile(checkpointer=checkpointer)

@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
 import uuid
 
@@ -29,6 +30,7 @@ router = APIRouter(dependencies=[Depends(rate_limit)])
 _redactor = PHIRedactor()
 _lit_graph = None
 _mdt_graph = None
+_graph_lock = threading.Lock()  # 懒加载双检锁：并发首访只构建一次，防重复构建竞态
 _START = time.time()
 
 MAX_IMAGES = 6  # 与 medical_imaging.describe_images 上限一致
@@ -51,16 +53,20 @@ def _has_risk(desc: str) -> bool:
 def _get_lit_graph():
     global _lit_graph
     if _lit_graph is None:
-        from backend.agents.medical.literature.graph import build_literature_graph
-        _lit_graph = build_literature_graph()
+        with _graph_lock:
+            if _lit_graph is None:  # 双检：拿到锁后再确认，避免重复构建
+                from backend.agents.medical.literature.graph import build_literature_graph
+                _lit_graph = build_literature_graph()
     return _lit_graph
 
 
 def _get_mdt_graph():
     global _mdt_graph
     if _mdt_graph is None:
-        from backend.agents.medical.mdt import build_mdt_graph
-        _mdt_graph = build_mdt_graph()
+        with _graph_lock:
+            if _mdt_graph is None:  # 双检：拿到锁后再确认，避免重复构建
+                from backend.agents.medical.mdt import build_mdt_graph
+                _mdt_graph = build_mdt_graph()
     return _mdt_graph
 
 
@@ -350,7 +356,10 @@ def _load_optional_table(name: str):
     p = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))), "data", name)
     try:
-        return json.load(open(p, encoding="utf-8")) if os.path.isfile(p) else None
+        if not os.path.isfile(p):
+            return None
+        with open(p, encoding="utf-8") as f:  # with-open 确保句柄及时关闭（防 Windows 句柄占用锁文件）
+            return json.load(f)
     except Exception:  # noqa: BLE001
         return None
 

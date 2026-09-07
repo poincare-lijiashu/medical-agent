@@ -6,11 +6,12 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from backend.config import settings
+from backend.api.deps import require_role
 from backend.core import observability
 from backend.core.logger import get_logger
 from backend.api.v1.medical.medical_router import router as medical_router
@@ -19,6 +20,13 @@ from backend.api.v1.auth.auth_router import router as auth_router
 logger = get_logger(__name__)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+
+
+def _docs_kwargs(env: str) -> dict:
+    """生产环境关闭交互式文档（/docs /redoc /openapi.json 不对外暴露），开发环境保留默认。"""
+    if (env or "").lower() == "production":
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {}
 
 
 def validate_startup_security():
@@ -69,7 +77,8 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(title="MedAssist · 医疗智能辅助平台 API", version=settings.app_version, lifespan=lifespan)
+app = FastAPI(title="MedAssist · 医疗智能辅助平台 API", version=settings.app_version,
+              lifespan=lifespan, **_docs_kwargs(settings.app_env))
 
 app.add_middleware(
     CORSMiddleware,
@@ -95,6 +104,28 @@ async def _observability(request: Request, call_next):
     return response
 
 
+# 基础安全响应头：所有响应统一携带。'unsafe-inline' 为有意保留——前端是自包含单文件 SPA
+# （内联 <script> 与 onclick 处理器），去掉会导致整站不可用；其余指令已收敛加载面。
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'"
+    ),
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)  # setdefault：不覆盖端点已显式设置的同名头
+    return response
+
+
 @app.get("/healthz", include_in_schema=False)
 async def healthz():
     return {"ok": True}
@@ -106,7 +137,8 @@ async def readyz():
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics():
+async def metrics(user: dict = Depends(require_role("admin"))):
+    """运维指标仅限管理员读取（暴露内部路由/时延分布，防信息收集）。"""
     return PlainTextResponse(observability.exposition(), media_type="text/plain; version=0.0.4")
 
 

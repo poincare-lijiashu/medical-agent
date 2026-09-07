@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.config import settings
-from backend.core.auth import decode_token
+from backend.core.auth import decode_token, get_user
 from backend.core.security_rate import allow
 
 _bearer = HTTPBearer(auto_error=False)
@@ -52,6 +52,8 @@ def require_user(
     except (TypeError, ValueError):
         iat = 0.0
     ensure_not_revoked(sub, iat)
+    if not get_user(sub):  # 撤销表为进程内存态，重启后丢失：回查用户表兜底（fail-closed）
+        raise HTTPException(status_code=401, detail="账号不存在或已停用")
     return {"username": sub, "role": payload.get("role")}
 
 

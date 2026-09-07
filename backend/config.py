@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     server_host: str = "127.0.0.1"
     server_port: int = 8001
-    cors_origins: list[str] = ["*"]
+    cors_origins: list[str] = ["http://localhost:8001", "http://127.0.0.1:8001"]
 
     # LLM — Qwen（阿里云百炼，OpenAI 兼容）
     qwen_api_key: str = ""
