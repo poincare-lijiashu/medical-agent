@@ -51,6 +51,11 @@ def _has_risk(desc: str) -> bool:
     return any(w in d for w in RISK_WORDS)
 
 
+def _is_fallback_answer(a: dict | None) -> bool:
+    """任务1：fallback 兜底答案判定（fallback_node 契约：sources 含 fallback: 前缀）。"""
+    return any(str(s).startswith("fallback:") for s in ((a or {}).get("sources") or []))
+
+
 def _get_lit_graph():
     global _lit_graph
     if _lit_graph is None:
@@ -218,8 +223,16 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
         return AskResp(answer="模型/知识库服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试。",
                        confidence=0.3, needs_human_review=True, sources=["degraded:llm"])
     a = out["answer"]
-    rid = await _enqueue_if_risk("literature", q, a["text"], a["confidence"],
-                           a.get("needs_human_review", False), "低置信或未支持论断", actor)
+    # 任务1：fallback 兜底答案（sources 含 fallback: 前缀）不写审核队列——常识兜底已强制
+    # 降置信 + 「请人工复核」文案，仅提示性内容、无 second-reviewer 可实质核对；审计留痕。
+    if _is_fallback_answer(a):
+        await asyncio.to_thread(get_audit_logger().write, event_type="literature",
+                                action="fallback_no_enqueue", actor=actor,
+                                payload={"conf": a["confidence"]})
+        rid = None
+    else:
+        rid = await _enqueue_if_risk("literature", q, a["text"], a["confidence"],
+                               a.get("needs_human_review", False), "低置信或未支持论断", actor)
     return AskResp(answer=a["text"], confidence=a["confidence"],
                    needs_human_review=a.get("needs_human_review", False),
                    sources=a.get("sources", []), review_id=rid,
@@ -288,8 +301,15 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
         if not final:
             yield _sse("error", {"detail": "未生成结果"})
             return
-        rid = await _enqueue_if_risk("literature", q, final["text"], final["confidence"],
-                               final.get("needs_human_review", False), "低置信或未支持论断", actor)
+        # 任务1：fallback 兜底答案不写审核队列（与非流式 ask 同一纪律），审计记 fallback_no_enqueue。
+        if _is_fallback_answer(final):
+            await asyncio.to_thread(get_audit_logger().write, event_type="literature",
+                                    action="fallback_no_enqueue", actor=actor,
+                                    payload={"conf": final["confidence"]})
+            rid = None
+        else:
+            rid = await _enqueue_if_risk("literature", q, final["text"], final["confidence"],
+                                   final.get("needs_human_review", False), "低置信或未支持论断", actor)
         yield _sse("result", {"answer": final["text"], "confidence": final["confidence"],
                               "needs_human_review": final.get("needs_human_review", False),
                               "sources": final.get("sources", []), "review_id": rid,
@@ -451,6 +471,123 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
             "sources": rep["sources"], "review_id": rid,
             "headline": rep.get("headline", ""), "urgency": rep.get("urgency", "中"),
             "key_actions": rep.get("key_actions", [])}
+
+
+# ---------- 跨科室会诊协助（真实会诊流转：Agent 动态组队 → 分发 → 各科意见 → 结束汇总） ----------
+# 与 /mdt/consult（AI 多智能体模拟会诊）的区别：真实流转到目标科室的在职医生
+# （users.dept 匹配），各科医生在审核中心「其它科室会诊协助」填意见（仅建议权，每人一票）。
+
+class ConsultOpinionReq(BaseModel):
+    content: str = Field(min_length=1, max_length=5000)
+
+
+@router.post("/consults")
+async def consult_create(req: AskReq, user: dict = Depends(require_user)):
+    """发起跨科室会诊：Agent 决策点（LLM 读病例+实时科室清单自主选专科）→ 按科室生成
+    定向初步意见 → 分发给目标科室全部在职医生。images 复用 AskReq 既有图片白名单
+    （≤6 张、单张 ≤6MB）。审计：consult_created + consult_dispatch（Agent 组队留痕）。"""
+    from backend.agents.medical.mdt import dept_briefs, pick_departments
+    from backend.core import consults
+    q = _redactor.redact(req.question)
+    actor = user.get("username", "system")
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="query",
+                            actor=actor, payload={"len": len(q), "role": user.get("role", "")})
+    try:
+        team = await pick_departments(q)  # Agent 动态组队（实时科室清单，绝不缓存）
+        briefs = await dept_briefs(q, team["departments"])  # 按科室定向初步意见
+    except Exception as e:  # noqa: BLE001 —— 组队链路异常体面降级，不裸 500
+        await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="degraded",
+                                actor=actor, payload={"err": str(e)[:120]})
+        raise HTTPException(502, "会诊组队服务暂时不可用（多为瞬时），已记录审计；请稍后重试")
+    ai_analysis = "\n\n".join(f"【{dep}】{txt}" for dep, txt in briefs.items())
+    cid = await asyncio.to_thread(
+        consults.create, initiator=actor, question=q, ai_analysis=ai_analysis,
+        target_depts=team["departments"], team=team, images=req.images,
+        initiator_dept=user.get("dept", ""))
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="consult_created",
+                            actor=actor, payload={"cid": cid, "role": user.get("role", ""),
+                                                  "depts": team["departments"]})
+    # Agent 决策点审计：组队结果（选中科室+理由）留痕，可回溯「为什么召集这些科室」
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="consult_dispatch",
+                            actor=actor, payload={"cid": cid, "role": user.get("role", ""),
+                                                  "departments": team["departments"],
+                                                  "reasoning": team.get("reasoning", "")})
+    await pg_store.mirror_audit("consult.created", actor, {"cid": cid})
+    return await asyncio.to_thread(consults.get, cid)
+
+
+@router.get("/consults/inbox")
+async def consult_inbox(user: dict = Depends(require_user)):
+    """「其它科室会诊协助」收件箱：当前医生 dept 匹配的 open 会诊单
+    （服务端按 dept 实时过滤隔离；账号未设置科室则恒为空）。"""
+    from backend.core import consults
+    me = user.get("username", "system")
+    dept = user.get("dept", "")
+    items = await asyncio.to_thread(consults.inbox_for, dept) if dept else []
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="list_inbox",
+                            actor=me, payload={"n": len(items), "dept": dept,
+                                               "role": user.get("role", "")})
+    return {"items": items, "me": me, "dept": dept}
+
+
+@router.get("/consults/mine")
+async def consult_mine(user: dict = Depends(require_user)):
+    """发起者视角：我发起的全部会诊（含已结束）+ 我参与过的（作为受邀科室填过意见）。
+    数据隔离由服务端过滤保证。"""
+    from backend.core import consults
+    me = user.get("username", "system")
+    initiated = await asyncio.to_thread(consults.by_initiator, me)
+    participated = await asyncio.to_thread(consults.participated, me)
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="list_mine",
+                            actor=me, payload={"initiated": len(initiated),
+                                               "participated": len(participated),
+                                               "role": user.get("role", "")})
+    return {"initiated": initiated, "participated": participated, "me": me}
+
+
+@router.post("/consults/{cid}/opinion")
+async def consult_opinion(cid: str, body: ConsultOpinionReq, user: dict = Depends(require_user)):
+    """被分发科室医生填写本科室意见（仅建议权无驳回权，每人一票）。
+    非受邀科室/未设置科室 → 403；重复填写/会诊已结束/内容为空 → 400；未找到 → 404。
+    发起者若在自己科室受邀名单内同样可填（正常参与）。审计：consult_opinion（带 role）。"""
+    from backend.core import consults
+    me = user.get("username", "system")
+    try:
+        item = await asyncio.to_thread(consults.add_opinion, cid, me,
+                                       user.get("dept", ""), body.content)
+    except consults.ConsultNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except consults.ConsultPermissionError as e:
+        raise HTTPException(403, str(e))
+    except consults.ConsultError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="consult_opinion",
+                            actor=me, payload={"cid": cid, "dept": user.get("dept", ""),
+                                               "role": user.get("role", "")})
+    await pg_store.mirror_audit("consult.opinion", me, {"cid": cid})
+    return item
+
+
+@router.post("/consults/{cid}/close")
+async def consult_close(cid: str, user: dict = Depends(require_user)):
+    """仅发起者可结束会诊并汇总：AI 意见 + 各科医生意见并排署名，汇总同步回发起者的
+    会诊记录（summary 字段）。非发起者 → 403；已结束 → 400；未找到 → 404。
+    审计：consult_closed（带 role）。"""
+    from backend.core import consults
+    me = user.get("username", "system")
+    try:
+        item = await asyncio.to_thread(consults.close, cid, me)
+    except consults.ConsultNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except consults.ConsultPermissionError as e:
+        raise HTTPException(403, str(e))
+    except consults.ConsultError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="consult_closed",
+                            actor=me, payload={"cid": cid, "role": user.get("role", ""),
+                                               "opinions": len(item.get("opinions") or [])})
+    await pg_store.mirror_audit("consult.closed", me, {"cid": cid})
+    return item
 
 
 # ---------- 审核中心（高危双人核对）----------

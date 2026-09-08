@@ -12,8 +12,10 @@ import json
 import operator
 from typing import Annotated, Optional, TypedDict
 
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, Field
 
 from backend.agents.medical.literature.nodes import (
     _ask,
@@ -21,9 +23,12 @@ from backend.agents.medical.literature.nodes import (
     _ground_citations,
     _parse_json,
 )
-from backend.core.llm_factory import get_llm
+from backend.core.llm_factory import get_llm, get_structured_llm
+from backend.core.logger import get_logger
 from backend.core.medical_drug import check as drug_check
 from backend.core.medical_kb import search_hybrid
+
+logger = get_logger(__name__)
 
 
 class MdtState(TypedDict, total=False):
@@ -125,3 +130,83 @@ def build_mdt_graph(checkpointer=None):
     g.add_edge("case", "synthesize")
     g.add_edge("synthesize", END)
     return g.compile(checkpointer=checkpointer)
+
+
+# ==================== 跨科室会诊 · Agent 动态组队（真实会诊流转） ====================
+# 继文献 refine 循环后第二个 LLM 自主决策点：读病例 + 实时科室清单，自主选择召集哪些专科
+# （如「牙痛+糖尿病」→ 口腔科+内分泌科），再按科室生成定向初步意见随单分发。
+
+class ConsultTeam(BaseModel):
+    """跨科室会诊动态组队决策（function calling 结构化输出，经 pydantic 校验）。"""
+    departments: list[str] = Field(default_factory=list,
+                                   description="从可选科室清单中选出的专科名（必须与清单完全一致）")
+    reasoning: str = Field(default="", description="组队理由（结合病例，简述）")
+
+
+_TEAM_MAX = 6  # 单次会诊召集科室上限（代码强制截断，防 LLM 全选导致分发面过大）
+
+_CONSULT_TEAM_PROMPT = (
+    "你是跨科室会诊发起助手。阅读下面的病例/会诊问题，从【可选科室清单】中自主选出"
+    "最需要参与会诊的专科（1-{maxn} 个，按病例实际需要，宁缺毋滥）。\n"
+    "硬性规则：只能从清单中选择，科室名必须与清单完全一致，不得编造清单外的科室。\n"
+    "可选科室清单：{depts}\n病例：{case}\n"
+)
+
+_DEPT_BRIEF_PROMPT = (
+    "你是跨科室会诊发起助手。请为下列每个受邀专科，结合病例给出该专科视角的定向初步意见"
+    "（每条 2-3 句：该科最需要关注的问题、建议补充的检查或处置方向），不下确诊结论。\n"
+    "受邀专科：{depts}\n病例：{case}\n"
+    '返回 JSON：{{"opinions":[{{"dept":"科室名","opinion":"..."}}]}}'
+)
+
+
+async def pick_departments(question: str) -> dict:
+    """Agent 决策点：LLM 读病例 + 实时科室清单，自主选择召集哪些专科。
+
+    科室同步（关键基建）：科室清单每次实时调 departments.list_departments()（绝不缓存）——
+    管理端新增科室后，下一次会诊的组队 prompt 立即包含新科室、分发即可达新科室医生。
+    护栏（代码强制，不信任 LLM 自律）：非清单内科室名过滤；去重保序；超限截断；
+    选空/LLM 异常 → 默认召集全部科室兜底（决策异常绝不阻塞发起链路，与 refine 同纪律）。
+    """
+    from backend.core import departments  # 延迟导入避免环；每次实时读（科室同步纪律）
+    depts = await asyncio.to_thread(departments.list_departments)
+    if not depts:
+        return {"departments": [], "reasoning": "科室清单为空，无法组队"}
+    prompt = _CONSULT_TEAM_PROMPT.format(maxn=_TEAM_MAX,
+                                         depts=json.dumps(depts, ensure_ascii=False),
+                                         case=(question or "")[:4000])
+    raw: list[str] = []
+    reasoning = ""
+    try:
+        llm = get_structured_llm("medical_literature", ConsultTeam)
+        d = await llm.ainvoke([HumanMessage(content=_SYS + "\n" + prompt)])
+        raw = [str(x).strip() for x in (getattr(d, "departments", None) or []) if str(x).strip()]
+        reasoning = (getattr(d, "reasoning", "") or "")[:200]
+    except Exception as exc:  # noqa: BLE001 —— 决策异常 fail-safe：全部科室兜底
+        logger.warning("mdt.pick_departments_llm_failed", error=str(exc)[:120])
+    # 非法科室名过滤（以实时清单为准）+ 去重保序 + 限数
+    valid = list(dict.fromkeys(x for x in raw if x in depts))[:_TEAM_MAX]
+    if not valid:
+        return {"departments": list(depts),
+                "reasoning": "LLM 未选出有效科室，默认召集全部科室（fail-safe）"}
+    return {"departments": valid, "reasoning": reasoning or "（未给出理由）"}
+
+
+async def dept_briefs(question: str, depts: list[str]) -> dict:
+    """按科室生成定向初步意见（一次 LLM 调用产出全部目标科室；单科缺失/解析失败逐科
+    兜底文案，绝不阻塞会诊发起）。返回 {dept: 意见文本}。"""
+    depts = [d for d in (depts or []) if d]
+    out: dict[str, str] = {}
+    if depts:
+        prompt = _DEPT_BRIEF_PROMPT.format(depts=json.dumps(depts, ensure_ascii=False),
+                                           case=(question or "")[:4000])
+        try:
+            d = _parse_json(await _ask("medical_literature", _SYS + "\n" + prompt), {})
+            for item in (d.get("opinions") or []):
+                if isinstance(item, dict) and item.get("dept") in depts:
+                    out[str(item["dept"])] = str(item.get("opinion", "")).strip()[:800]
+        except Exception as exc:  # noqa: BLE001 —— 意见生成失败逐科兜底，不阻塞发起
+            logger.warning("mdt.dept_briefs_llm_failed", error=str(exc)[:120])
+    for dep in depts:
+        out.setdefault(dep, "（AI 定向初步意见生成失败，请受邀医师结合病例自行判断）")
+    return out

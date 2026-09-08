@@ -248,11 +248,21 @@
         <div class="card">
           <label class="lead" for="mdtCase" style="display:block;margin-bottom:8px">描述病例或会诊问题（含症状、既往史、用药、检查结果等）</label>
           <textarea class="inp" id="mdtCase" rows="4" placeholder="例：62 岁男性，2 型糖尿病合并冠心病，近期 eGFR 45，正在服二甲双胍与辛伐他汀，拟加用克拉霉素治疗感染，请评估用药与方案。"></textarea>
-          <div style="margin-top:12px"><button class="btn primary" id="mdtRun" onclick="runMdt()">
-            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 20a5 5 0 0 0-10 0M12 3a5 5 0 0 1 5 5c0 3-2 4-2 6h-6c0-2-2-3-2-6a5 5 0 0 1 5-5Z"/></svg>发起会诊</button></div>
+          <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn primary" id="mdtRun" onclick="runMdt()">
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 20a5 5 0 0 0-10 0M12 3a5 5 0 0 1 5 5c0 3-2 4-2 6h-6c0-2-2-3-2-6a5 5 0 0 1 5-5Z"/></svg>发起会诊</button>
+            <button class="btn secondary" id="mdtReal" onclick="startRealConsult()"
+              title="AI 读病例+实时科室清单自主选专科，定向初步意见分发给目标科室全部在职医生（真实会诊流转）">发起真实跨科室会诊</button>
+          </div>
         </div>
         <div id="mdtOut"></div>
       </div>
+    </section>
+
+    <section class="screen" id="scr-myconsults">
+      <div class="shead"><div><h2>我的会诊</h2><p>我发起的跨科室会诊：AI 意见与各科医生意见并排署名；结束会诊后汇总同步回本页</p></div>
+        <div class="spacer"></div><button class="btn secondary sm" onclick="loadMyConsults()">刷新</button></div>
+      <div class="body" id="myConsultsBody"></div>
     </section>
 
     <section class="screen" id="scr-qc">
@@ -310,6 +320,8 @@
       <div class="shead" style="padding:10px 26px;border-bottom:1px solid var(--line);gap:8px">
         <button class="btn sm primary" id="tabPending" onclick="switchReviewTab('pending')">待处理</button>
         <button class="btn sm ghost" id="tabHistory" onclick="switchReviewTab('history')">历史记录</button>
+        <!-- 跨科室会诊：doctor/pharmacist 的「其它科室会诊协助」收件箱（qc/admin 全局档案视图隐藏） -->
+        <button class="btn sm ghost" id="tabConsults" style="display:none" onclick="switchReviewTab('consults')">其它科室会诊协助</button>
         <!-- 任务3：qc/admin 全局档案筛选（doctor 视图隐藏） -->
         <input class="inp" id="reviewFilter" aria-label="档案筛选" placeholder="筛选：助手/问题/提交人" spellcheck="false"
                style="max-width:220px;margin-left:auto;display:none" oninput="onReviewFilter(this.value)">
@@ -458,7 +470,7 @@ function md(t){let s=esc(String(t==null?'':t));
   s=s.replace(/^[ \t]*(\d+)[.、]\s+(.+)$/gm,'$1. $2');
   s=s.replace(/\n/g,'<br>');
   return s;}
-const chatHist={};
+const chatHist={}, chatInput={};  /* chatInput：任务2 每个 agent 视图独立的输入框草稿（切视图保存/恢复，不再串视图） */
 function pushHist(k,e){(chatHist[k]=chatHist[k]||[]).push(e);}
 
 /* ---- auth ---- */
@@ -485,7 +497,7 @@ let reviewCount=0, reviewItems=[], reviewPage=0, reviewMe='';
 const NAV_ITEMS=[
   {g:'总览'},{k:'overview',t:'概览'},
   {g:'临床助手'},{k:'literature',t:'医学文献'},{k:'drug',t:'药物信息'},{k:'imaging',t:'影像辅助'},{k:'case',t:'病例总结'},
-  {g:'协作'},{k:'mdt',t:'多智能体会诊'},
+  {g:'协作'},{k:'mdt',t:'多智能体会诊'},{k:'myconsults',t:'我的会诊'},
   {g:'质控'},{k:'qc',t:'病历质控（病案科）'},{k:'review',t:'审核中心'},
   {g:'系统'},{k:'kb',t:'知识库管理'},{k:'data',t:'数据面板'},{k:'arch',t:'架构 · 合规'},
 ];
@@ -510,6 +522,8 @@ function hashView(){  /* 深链恢复：hash 仅在 NAV 键集且当前角色白
   return (k&&NAV_KEYS.includes(k)&&allow.includes(k))?k:null;
 }
 function go(k){
+  /* 任务2：离开聊天视图前把该视图草稿存入 chatInput（切到任何视图都先保存，不丢） */
+  if(cur&&AGENTS[cur])chatInput[cur]=document.getElementById('input').value;
   cur=k;
   history.replaceState(null,'','#'+k);  /* 深链：视图切换同步地址栏（review 内 tab/分页不写入） */
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
@@ -526,19 +540,20 @@ function go(k){
 function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textContent=a.name;
   document.getElementById('cDesc').textContent=a.desc;document.getElementById('input').placeholder=a.hint;
   document.getElementById('attach').style.display=a.imageOk?'inline-flex':'none';clearImg();
+  const inp=document.getElementById('input');  /* 任务2：恢复本视图独立草稿（切视图不串字） */
+  inp.value=chatInput[k]||'';inp.style.height='auto';
   const m=document.getElementById('msgs');m.innerHTML='';
   const h=chatHist[k]||[];
   if(h.length){h.forEach(e=>e.role==='me'?renderUser(e.text,e.images||(e.image?[e.image]:[])):renderBot(e.text,e.meta));}
   else renderBot('你好，我是'+a.name+'。'+a.desc+'。', null, true);
   scroll();}
-function newChat(){chatHist[cur]=[];setupChat(cur);}
+function newChat(){chatHist[cur]=[];chatInput[cur]='';setupChat(cur);}
 
 /* ---- chat ---- */
 function renderUser(t,images){const r=document.createElement('div');r.className='row me';
   r.innerHTML=`<div class="bubble txt"></div>`;r.querySelector('.bubble').textContent=t;
   (images||[]).forEach(s=>{const im=document.createElement('img');im.className='thumb';im.alt='用户上传影像';im.width=96;im.height=96;im.src=s;r.appendChild(im);});
   document.getElementById('msgs').appendChild(r);scroll();}
-function addUser(t){pushHist(cur,{role:'me',text:t,images:curImages.slice()});renderUser(t,curImages);}
 function renderBot(t,meta,intro){const m=document.getElementById('msgs');
   const r=document.createElement('div');r.className='row';
   r.innerHTML=`<div class="avatar">${ICON[cur]}</div><div class="bubble"><div class="txt md"></div>
@@ -548,7 +563,6 @@ function renderBot(t,meta,intro){const m=document.getElementById('msgs');
   if(meta){foot.innerHTML=confChip(meta.confidence||0,!!meta.needs_human_review)+srcLine(meta.sources)+traceLine(meta.refine_trace);}
   else foot.remove();
   m.appendChild(r);scroll();return r;}
-function addBot(t,meta,intro){pushHist(cur,{role:'bot',text:t,meta:meta||null});return renderBot(t,meta,intro);}
 function scroll(){const m=document.getElementById('msgs');m.scrollTop=m.scrollHeight;}
 function skel(){const r=document.createElement('div');r.className='row';
   r.innerHTML=`<div class="avatar">${ICON[cur]}</div><div class="bubble" style="width:60%"><div class="sk" style="margin-bottom:8px"></div><div class="sk" style="width:85%;margin-bottom:8px"></div><div class="sk" style="width:55%"></div></div>`;
@@ -575,24 +589,31 @@ async function streamLit(q,think,agent){
   return false;
 }
 async function send(){const inp=document.getElementById('input');const q=inp.value.trim();if(!q)return;
-  addUser(q);inp.value='';inp.style.height='auto';const btn=document.getElementById('send');if(btn.disabled)return;btn.disabled=true;
+  const btn=document.getElementById('send');if(btn.disabled)return;  /* 任务2：先查在途再动输入框（原顺序在途点击会吞掉用户输入） */
+  btn.disabled=true;
   const agent=cur;  // 锁定当前助手，避免请求途中切换 cur 致答案写到错误会话
+  /* 任务2：me 记录直接归属发起助手 agent——原 addUser 先写 cur、成功后再搬移，中途切视图历史错位 */
+  pushHist(agent,{role:'me',text:q,images:curImages.slice()});
+  if(agent===cur)renderUser(q,curImages);
+  inp.value='';inp.style.height='auto';
   const think=thinkBubble();
   try{if(agent==='literature'){ let streamed=false; try{ streamed=await streamLit(q,think,agent);}catch(_){streamed=false;} if(streamed){btn.disabled=false;inp.focus();return;} }
     try{const r=await fetch('/api/v1/medical'+AGENTS[agent].endpoint,{method:'POST',headers:auth(),
         body:JSON.stringify({question:q,images:curImages.length?curImages:undefined})});
       const d=await r.json();think.remove();
       if(r.status===401){logout();return;}
-      if(!r.ok){pushHist(agent,{role:'bot',text:'⚠ 服务异常：'+(d.detail||r.status)});return;}
+      /* 任务2：失败分支必须渲染（原只写历史不渲染 → 界面"无反应"，用户误判未发出而反复重发） */
+      if(!r.ok){const msg='⚠ 服务异常：'+(d.detail||r.status);
+        pushHist(agent,{role:'bot',text:msg});if(agent===cur)renderBot(msg);return;}
       // 若中途切换助手，答案仍归属发起时的会话，但 UI 提示
-      if(agent!==cur){think.remove();const b=document.createElement('div');b.className='src';b.style.padding='8px 12px';
+      if(agent!==cur){const b=document.createElement('div');b.className='src';b.style.padding='8px 12px';
         b.textContent=`（提示：请求发出后切换到了「${AGENTS[cur].name||cur}」，以下答案归属「${AGENTS[agent].name||agent}」）`;document.getElementById('msgs').appendChild(b);}
-      // 必须按发起时的 agent 写入历史（避免 chatHist 错位）
-      if(chatHist[agent]&&chatHist[agent].length&&chatHist[agent][chatHist[agent].length-1].role==='me'){
-        chatHist[agent].pop();pushHist(agent,{role:'me',text:q,images:curImages.slice()});}  // 把 addUser 已误写入 cur 的 me 记录搬过来
-      addBot(d.answer,d);
-      curImages=[];renderImgbar();  // 成功后清空已选图片，避免下次静默重发
-    }catch(e){think.remove();pushHist(agent,{role:'bot',text:'⚠ 请求失败：'+e.message});}
+      // bot 记录按发起时的 agent 写入历史；渲染到当前 msgs（含提示条）
+      pushHist(agent,{role:'bot',text:d.answer,meta:d});
+      renderBot(d.answer,d);
+      curImages=[];renderImgbar();  // 成功后清空已选图片，避免下次静默重发（失败保留，便于原样重试）
+    }catch(e){think.remove();const msg='⚠ 请求失败：'+e.message;
+      pushHist(agent,{role:'bot',text:msg});if(agent===cur)renderBot(msg);}
   }finally{btn.disabled=false;inp.focus();}}
 function _commitUserToAgent(agent,q){}
 
@@ -615,15 +636,34 @@ document.getElementById('img').addEventListener('change',async e=>{const fs=[...
   renderImgbar();});
 
 /* ---- MDT ---- */
+let lastMdtReport='';  /* 最近一次 AI 多智能体会诊小结（发起真实跨科室会诊时作底稿附在问题后） */
 async function runMdt(){const c=document.getElementById('mdtCase').value.trim();if(!c){toast('请先填写病例');return;}
   const btn=document.getElementById('mdtRun');btn.disabled=true;const out=document.getElementById('mdtOut');
   out.innerHTML=`<div class="card"><div class="sk" style="width:40%;height:16px;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk" style="width:90%"></div></div>`;
   try{const r=await fetch('/api/v1/medical/mdt/consult',{method:'POST',headers:auth(),body:JSON.stringify({case:c})});
     if(r.status===401){logout();return;} const d=await r.json();
     if(!r.ok){out.innerHTML='<div class="card">⚠ '+esc(String(d.detail||r.status))+'</div>';return;}
+    lastMdtReport=String(d.report||'');  /* 复用 AI 分析做真实会诊底稿 */
     out.innerHTML=renderMdt(d);
   }catch(e){out.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}
   finally{btn.disabled=false;}}
+/* 发起真实跨科室会诊：Agent 决策点（LLM 读病例+实时科室清单选专科）→ 定向初步意见
+   分发给目标科室全部在职医生；问题 = 病例原文（+ AI 底稿，若有） */
+async function startRealConsult(){
+  const c=document.getElementById('mdtCase').value.trim();
+  if(!c){toast('请先填写病例/会诊问题');return;}
+  const q=lastMdtReport?(c+'\n\n【AI 多智能体会诊底稿】\n'+lastMdtReport):c;
+  confirmDanger('发起真实跨科室会诊',
+    'AI 将阅读病例与<b>实时科室清单</b>自主选择召集专科，并把按科室的定向初步意见分发给目标科室的全部在职医生；各科医生在审核中心「其它科室会诊协助」填写意见（仅建议权，每人一票），由您手动结束会诊并汇总。确认发起？','确认发起',async()=>{
+    const btn=document.getElementById('mdtReal');btn.disabled=true;
+    try{const r=await fetch('/api/v1/medical/consults',{method:'POST',headers:auth(),body:JSON.stringify({question:q})});
+      if(r.status===401){logout();return;}
+      const d=await r.json();
+      if(!r.ok){toast('发起失败：'+(d.detail||r.status));return;}
+      toast('会诊已发起并分发：'+((d.target_depts||[]).join('、')||'（无受邀科室）'));
+      lastMdtReport='';  // 底稿已随单发出，避免下次误带旧稿
+    }catch(e){toast('发起失败：'+e.message);}
+    finally{btn.disabled=false;}});}
 function urgencyPill(u){
   const map={'高':['danger','紧急·高危排查'],'中':['warn','注意·限期评估'],'低':['ok','常规']};
   const [cls,lab]=map[u]||map['中'];
@@ -651,6 +691,101 @@ function renderMdt(d){
     <div class="grid2" style="margin-top:14px">${ops}</div>`;
 }
 
+/* ---- 跨科室会诊：收件箱（审核中心第三栏目）+ 我的会诊（发起者视角） ----
+   全部动态内容（含各科医生意见文本）一律 esc() 转义后入 HTML。 */
+let consultInbox=[], consultMe='';
+async function loadConsultInbox(){
+  const b=document.getElementById('reviewBody');
+  b.innerHTML='<div class="card"><div class="sk" style="height:16px;width:30%"></div></div>';
+  try{const r=await fetch('/api/v1/medical/consults/inbox',{headers:auth()});
+    if(r.status===401){logout();return;}
+    const d=await r.json();consultInbox=d.items||[];consultMe=d.me||'';
+    renderConsultInbox();
+  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+function renderConsultInbox(){
+  const b=document.getElementById('reviewBody');
+  const items=consultInbox||[];
+  if(!items.length){b.innerHTML='<div class="empty">'+ICON.review+'<div>暂无其它科室的会诊协助请求。</div>'
+    +'<div class="lead" style="margin:8px auto 0">当其它科室发起跨科室会诊并邀请您所在科室（'+esc(ME_DEPT||'未设置')+'）时，会出现在这里；意见仅有建议权，每人一票。</div></div>';return;}
+  b.innerHTML=items.map(c=>{
+    const mine=(c.opinions||[]).some(o=>o.doctor===consultMe);  /* 已给意见标记 */
+    const depts=(c.target_depts||[]).map(x=>'<span class="chip mid"><span class="dot"></span>'+esc(x)+'</span>').join(' ');
+    const imgs=(c.images||[]).filter(u=>String(u).startsWith('data:image/'));
+    const imgsHtml=imgs.length?'<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
+      +imgs.map(u=>'<img class="thumb" style="width:38px;height:38px;cursor:zoom-in" src="'+esc(u)+'" alt="会诊影像" onclick="showImg(this.src)">').join('')+'</div>':'';
+    const opForm=mine?'<div style="margin-top:8px"><span class="chip ok"><span class="dot"></span>已提交本科室意见（每人一票）</span></div>'
+      :'<div style="margin-top:8px"><textarea class="inp" id="cop_'+esc(c.id)+'" rows="2" placeholder="填写您所在科室的会诊意见（仅建议权，无驳回权）"></textarea>'
+      +'<div style="margin-top:6px"><button class="btn sm primary" onclick="submitOpinion(\''+esc(c.id)+'\')">提交科室意见</button></div></div>';
+    return '<div class="card" style="border-left:3px solid var(--accent)">'
+      +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">跨科室会诊协助</h3>'
+      +'<span class="chip warn"><span class="dot"></span>进行中</span>'
+      +'<span class="src num" style="margin-left:auto">发起人 '+esc(c.initiator||'—')+'（'+esc(c.initiator_dept||'—')+'） · '+fmtTs(c.created_at)+'</span></div>'
+      +'<div class="txt" style="margin-top:6px;white-space:pre-wrap">'+esc(c.question||'')+'</div>'
+      +'<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="src">受邀科室：</span>'+depts+'</div>'
+      +imgsHtml
+      +'<details style="margin-top:8px"><summary class="src" style="cursor:pointer">AI 定向初步意见 ▾</summary>'
+      +'<div class="txt md" style="margin-top:6px">'+md(c.ai_analysis||'（无）')+'</div></details>'
+      +opForm+'</div>';}).join('');}
+async function submitOpinion(id){
+  const el=document.getElementById('cop_'+id);const content=el?el.value.trim():'';
+  if(!content){toast('请先填写意见内容');return;}
+  const btn=el.parentElement.querySelector('button');if(btn)btn.disabled=true;
+  try{const r=await fetch('/api/v1/medical/consults/'+encodeURIComponent(id)+'/opinion',
+      {method:'POST',headers:auth(),body:JSON.stringify({content})});
+    if(r.status===401){logout();return;}
+    if(r.ok){toast('已提交科室意见');loadConsultInbox();}
+    else{const d=await r.json();toast('提交失败：'+(d.detail||r.status));if(btn)btn.disabled=false;}
+  }catch(e){toast('提交失败：'+e.message);if(btn)btn.disabled=false;}}
+/* 发起者「我的会诊」页：单详情（AI 意见/医生意见并排署名）+ 结束会诊按钮 */
+let myConsultData=null;
+async function loadMyConsults(){
+  const b=document.getElementById('myConsultsBody');
+  b.innerHTML='<div class="card"><div class="sk" style="height:16px;width:30%"></div></div>';
+  try{const r=await fetch('/api/v1/medical/consults/mine',{headers:auth()});
+    if(r.status===401){logout();return;}
+    myConsultData=await r.json();renderMyConsults();
+  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+function renderMyConsults(){
+  const b=document.getElementById('myConsultsBody');
+  const ini=(myConsultData&&myConsultData.initiated)||[];
+  const part=(myConsultData&&myConsultData.participated)||[];
+  if(!ini.length&&!part.length){b.innerHTML='<div class="empty">'+ICON.mdt+'<div>暂无会诊记录。</div>'
+    +'<div class="lead" style="margin:8px auto 0">在「多智能体会诊」页填写病例后，可一键「发起真实跨科室会诊」分发给目标科室医生。</div></div>';return;}
+  const cards=ini.map(c=>{
+    const open=c.status==='open';
+    const ops=(c.opinions||[]).map(o=>'<div style="padding:8px 0;border-top:1px solid var(--line)">'
+      +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      +'<span class="chip mid"><span class="dot"></span>'+esc(o.dept||'—')+'</span>'
+      +'<b>'+esc(o.doctor||'')+'</b><span class="src num">'+fmtTs(o.ts)+'</span></div>'
+      +'<div class="txt" style="margin-top:4px;white-space:pre-wrap">'+esc(o.content||'')+'</div></div>').join('')
+      ||'<div class="src" style="padding:6px 0">尚未收到科室医生意见。</div>';
+    const closeBtn=open?'<div style="margin-top:10px"><button class="btn sm primary" onclick="closeConsult(\''+esc(c.id)+'\')">结束会诊并汇总</button></div>':'';
+    const sum=c.summary?'<details style="margin-top:8px" open><summary class="src" style="cursor:pointer">会诊汇总（AI 意见 + 各科意见并排署名）▾</summary>'
+      +'<div class="txt md" style="margin-top:6px">'+md(c.summary)+'</div></details>':'';
+    return '<div class="card">'
+      +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">会诊 '+esc(c.id)+'</h3>'
+      +(open?'<span class="chip warn"><span class="dot"></span>进行中</span>':'<span class="chip ok"><span class="dot"></span>已结束</span>')
+      +'<span class="src num" style="margin-left:auto">发起于 '+fmtTs(c.created_at)+'</span></div>'
+      +'<div class="txt" style="margin-top:6px;white-space:pre-wrap">'+esc(c.question||'')+'</div>'
+      +'<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="src">受邀科室：</span>'
+      +(c.target_depts||[]).map(d=>'<span class="chip mid"><span class="dot"></span>'+esc(d)+'</span>').join('')+'</div>'
+      +'<details style="margin-top:8px"'+(open?'':' open')+'><summary class="src" style="cursor:pointer">AI 初步意见（按科室定向）▾</summary>'
+      +'<div class="txt md" style="margin-top:6px">'+md(c.ai_analysis||'（无）')+'</div></details>'
+      +'<h4 style="margin:10px 0 2px">各科室医生意见（并排署名 · 仅建议权）</h4>'+ops+closeBtn+sum
+      +'</div>';}).join('');
+  const partHtml=part.length?'<div class="panel" style="margin-top:4px"><h3>我参与过的会诊（作为受邀科室填写过意见）</h3><ul class="feed">'
+    +part.map(c=>'<li><span class="t num">'+fmtTs(c.created_at)+'</span><span class="e">'+esc(String(c.question||'').slice(0,60))+'</span>'
+      +'<span class="a">发起人 '+esc(c.initiator||'—')+'</span></li>').join('')+'</ul></div>':'';
+  b.innerHTML='<h3 style="margin:0">我发起的（'+ini.length+'）</h3>'+cards+partHtml;}
+async function closeConsult(id){
+  confirmDanger('结束会诊并汇总',
+    '将结束该会诊（各科医生不再能填意见），并把 AI 意见与各科医生意见汇总（并排署名）同步到会诊记录。确认结束？','确认结束',async()=>{
+    try{const r=await fetch('/api/v1/medical/consults/'+encodeURIComponent(id)+'/close',{method:'POST',headers:auth()});
+      if(r.status===401){logout();return;}
+      if(r.ok){toast('会诊已结束并汇总');loadMyConsults();}
+      else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}
+    }catch(e){toast('操作失败：'+e.message);}});}
+
 /* ---- review center ---- */
 let reviewTab='pending', historyItems=[];
 let myConfirmItems=[];  /* 任务3：doctor/pharmacist 的「我的待确认」项（my-pending-confirm 数据源） */
@@ -663,6 +798,8 @@ function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案�
   const tp=document.getElementById('tabPending'),th=document.getElementById('tabHistory');
   if(tp)tp.textContent=mine?'我的待确认':'待处理';
   if(th)th.textContent=mine?'我的历史':'历史记录';
+  const tc=document.getElementById('tabConsults');  /* 跨科室会诊收件箱：doctor/pharmacist 专属第三栏目 */
+  if(tc)tc.style.display=mine?'':'none';
   const fi=document.getElementById('reviewFilter');  /* 档案筛选仅 qc/admin 可见 */
   if(fi)fi.style.display=mine?'none':'';}
 let reviewFilterQ='';
@@ -751,7 +888,7 @@ function renderReview(){
   /* 任务3：doctor/pharmacist「我的待确认」分支（数据源 my-pending-confirm，仅本人） */
   if(mine){
     const mineItems=(myConfirmItems||[]).filter(_rvMatch);
-    if(!mineItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有您的待确认项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。'}</div></div>`;return;}
+    if(!mineItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有您的待确认项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控')}</div></div>`;return;}
     const pagesM=Math.max(1,Math.ceil(mineItems.length/REVIEW_PER));
     if(reviewPage>=pagesM)reviewPage=pagesM-1; if(reviewPage<0)reviewPage=0;
     const startM=reviewPage*REVIEW_PER, sliceM=mineItems.slice(startM,startM+REVIEW_PER);

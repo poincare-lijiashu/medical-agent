@@ -3,6 +3,10 @@
 判定必须保守：命中明确技术/编程词表 且 不含任何医学信号词 才拒答；
 混合词（如「癌症的python教程」有医学信号）一律正常走检索流程。
 审计记 offtopic_reject 事件。
+
+任务1 追加两块「不入队」纪律锁：
+- 代码特征词守门：纯代码片段（不含语言名字面词）同样拒答；
+- fallback 兜底答案（sources 含 fallback: 前缀）不写审核队列，审计记 fallback_no_enqueue。
 """
 from fastapi.testclient import TestClient
 
@@ -153,3 +157,125 @@ def test_mixed_medical_tech_walks_retrieval(monkeypatch, tmp_path):
     assert r.json()["answer"] == "建议就医评估"
     assert g.calls == 1
     assert not any(e["action"] == "offtopic_reject" for e in log.entries)
+
+
+# ---------- 任务1：代码特征词守门（无语言名字面也能识别代码片段，大小写不敏感、保守） ----------
+
+JAVA_SNIPPET = ('public class HelloWorld {\n'
+                '    public static void main(String[] args) {\n'
+                '        System.out.println("Hello, World!");\n'
+                '    }\n'
+                '}')
+
+
+def test_offtopic_guard_code_features():
+    """纯代码片段（不含 python/java 等语言名字面词）→ 拒答；医学信号仍最高优先。"""
+    # 纯 Java 代码段（全文不含 "java" 字面）→ 拒答
+    assert offtopic_tech_reply(JAVA_SNIPPET) == OFFTOPIC_REPLY
+    # 常见代码特征（含大小写变体）
+    assert offtopic_tech_reply("System.out.println(1)") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply('println("x")') == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("print('hello')") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("Console.Log('x')") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("<html><body>hi</body></html>") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("#!/bin/bash\necho hi") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("#!/usr/bin/env python3\nprint(1)") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("pip install requests 超时") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("npm run build 失败") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("import numpy as np 报 ModuleNotFound") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("def main():\n    pass") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("class Foo { int x; }") == OFFTOPIC_REPLY
+    # 无代码特征、无技术词 → 不拦（既有保守语义不回归）
+    assert offtopic_tech_reply("胃疼怎么办") is None
+    # 医学信号仍最高优先：代码特征命中但含医学词 → 放行
+    assert offtopic_tech_reply("把患者的检验单 print(出来)") is None
+    assert offtopic_tech_reply("心电图数据用 def 处理的脚本") is None
+
+
+def test_java_snippet_rejected_endpoint(monkeypatch, tmp_path):
+    """端点锁：纯 Java 代码段走 literature/ask → 固定拒答文案 + 不入审核队列。"""
+    c, log = _client(monkeypatch, tmp_path)
+    h = _tok(c)
+    r = c.post("/api/v1/medical/literature/ask", headers=h, json={"question": JAVA_SNIPPET})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["answer"] == OFFTOPIC_REPLY
+    assert d["sources"] == ["intent:offtopic"]
+    assert d["review_id"] is None
+    pend = c.get("/api/v1/medical/review/pending", headers=h).json()["pending"]
+    assert pend == []
+    assert any(e["action"] == "offtopic_reject" for e in log.entries)
+
+
+# ---------- 任务1：fallback 兜底答案不入审核队列 ----------
+
+def _fallback_answer():
+    """fallback_node 产出契约形态（nodes.py：sources 恒以 fallback: 前缀 + 需人工复核）。"""
+    return {"text": "⚠ 未检索到权威循证证据，以下为模型常识，仅供参考，请务必人工复核。",
+            "confidence": 0.4, "sources": ["fallback:model-prior"],
+            "needs_human_review": True, "verified": False, "evidence": []}
+
+
+class _FbAskGraph:
+    """替身文献图：ainvoke 直接返回 fallback 形态最终 state（不触真实 LLM/检索）。"""
+
+    async def ainvoke(self, state, config=None):
+        return {"answer": _fallback_answer(), "refine_trace": []}
+
+
+class _FbStreamGraph:
+    """替身文献图：astream 以 updates 形态 yield fallback 节点更新。"""
+
+    def astream(self, state, config=None, stream_mode=None):
+        async def _gen():
+            yield {"fallback": {"answer": _fallback_answer()}}
+        return _gen()
+
+
+def test_literature_fallback_not_enqueued(monkeypatch, tmp_path):
+    """任务1 测试锁：fallback 响应后 review_queue 不新增；审计记 fallback_no_enqueue。"""
+    monkeypatch.setattr(mr, "_lit_graph", _FbAskGraph())
+    c, log = _client(monkeypatch, tmp_path)
+    h = _tok(c)
+    r = c.post("/api/v1/medical/literature/ask", headers=h, json={"question": "罕见病治疗进展"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["review_id"] is None
+    assert d["needs_human_review"] is True           # 需人工复核的语义不变（仅不写队列）
+    assert d["sources"] == ["fallback:model-prior"]
+    assert review.pending() == []                    # 测试锁：队列不新增
+    hits = [e for e in log.entries if e["action"] == "fallback_no_enqueue"]
+    assert hits and hits[0]["event_type"] == "literature"
+
+
+def test_stream_fallback_not_enqueued(monkeypatch, tmp_path):
+    """SSE 流式路径同样纪律：fallback 结果不入队（result 事件 review_id 为 null）。"""
+    monkeypatch.setattr(mr, "_lit_graph", _FbStreamGraph())
+    c, log = _client(monkeypatch, tmp_path)
+    h = _tok(c)
+    r = c.post("/api/v1/medical/literature/stream", headers=h,
+               json={"question": "罕见病治疗进展"})
+    assert r.status_code == 200, r.text
+    assert "event: result" in r.text
+    assert '"review_id": null' in r.text
+    assert review.pending() == []
+    assert any(e["action"] == "fallback_no_enqueue" for e in log.entries)
+
+
+def test_non_fallback_low_confidence_still_enqueued(monkeypatch, tmp_path):
+    """对照锁：非 fallback（KB 来源）的低置信答案仍照常入队（防一刀切全部豁免）。"""
+    class _LowGraph:
+        async def ainvoke(self, state, config=None):
+            return {"answer": {"text": "不确定的回答", "confidence": 0.35,
+                               "sources": ["KB:x"], "needs_human_review": True,
+                               "verified": False, "evidence": []},
+                    "refine_trace": []}
+
+    monkeypatch.setattr(mr, "_lit_graph", _LowGraph())
+    c, log = _client(monkeypatch, tmp_path)
+    h = _tok(c)
+    r = c.post("/api/v1/medical/literature/ask", headers=h, json={"question": "罕见病治疗进展"})
+    d = r.json()
+    assert d["review_id"]
+    assert len(review.pending()) == 1
+    assert not any(e["action"] == "fallback_no_enqueue" for e in log.entries)

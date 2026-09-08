@@ -92,6 +92,15 @@ _TECH_HINT = re.compile(
     r"代码|编程|程序|脚本|函数|算法|数据库|正则|编译|调试|bug|服务器|部署|运维)",
     re.IGNORECASE,
 )
+# 任务1：代码特征词表（片段级识别——用户直接贴代码提问、不含语言名字面也能拦住）。
+# 同一保守纪律：命中才进入候选；只认结构特征（关键字+括号/大括号/shebang 等），
+# 拒绝裸单词误伤；IGNORECASE 大小写不敏感；医学信号 (_MEDICAL_SIGNAL) 优先级不变。
+_CODE_PATTERN = re.compile(
+    r"(public\s+static\s+void|system\s*\.\s*out\s*\.\s*println|println\s*\("
+    r"|import\s+\w|def\s+\w+\s*\(|class\s+\w+\s*\{|print\s*\("
+    r"|console\s*\.\s*log|<html[\s>]|#!\s*/(usr/)?bin|\bnpm\b|pip\s+install)",
+    re.IGNORECASE,
+)
 # 医学信号词（任一命中→绝不拒答，正常走流程；单字词「医/病/药/癌/炎/疼/痛/血/疗/诊/护」
 # 覆盖派生词最广，mg 等拉丁词经 lower() 匹配；roc/生存分析/样本量/基因/测序/受试者覆盖
 # 医学科研统计场景——增量排查发现的误杀面）。方向保守：宁可漏拒，不可误拒。
@@ -106,11 +115,11 @@ OFFTOPIC_REPLY = ("我是医学文献助手，只处理医学/药学/临床问�
 
 
 def offtopic_tech_reply(text: str) -> str | None:
-    """技术领域守门（极保守）：命中明确技术词 且 不含任何医学信号 → 返回固定拒答文案；
+    """技术领域守门（极保守）：命中明确技术词或代码特征 且 不含任何医学信号 → 返回固定拒答文案；
     否则 None（拿不准就正常走检索流程）。调用方负责：不检索、不入审核队列、不调 LLM，
     并把拒答记为 offtopic_reject 审计事件。"""
     t = (text or "").lower()
-    if not _TECH_HINT.search(t):
+    if not (_TECH_HINT.search(t) or _CODE_PATTERN.search(t)):
         return None
     if _MEDICAL_SIGNAL.search(t):
         return None  # 任何医学信号 → 不拦截（如「癌症的python教程」）

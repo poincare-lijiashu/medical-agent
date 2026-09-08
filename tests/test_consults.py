@@ -1,0 +1,369 @@
+"""跨科室会诊协助专项：动态组队 mock、科室同步锁、分发按 dept 多医生、意见权限矩阵、
+close 仅发起者、汇总内容完整、my/inbox 隔离、审计 consult_dispatch。
+
+用 TestClient + 隔离 users/consults/departments 文件（不污染真实数据）；
+Agent 决策点 monkeypatch mdt.pick_departments / mdt.dept_briefs（不触网）；
+pg 池不可用走 JSON 真源（与现状等价；PG 真源路径见 test_pg_repo.py）。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.agents.medical import mdt as mdt_mod
+from backend.core import auth as auth_mod
+from backend.core import consults as consults_mod
+from backend.core import departments as dept_mod
+from backend.core.auth import create_user, seed_default_users
+from backend.core.medical_audit import get_audit_logger
+from backend.main import app
+
+
+def _isolate(monkeypatch, tmp_path):
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(tmp_path / "departments.json"))
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
+    seed_default_users()
+    return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
+
+
+def _login(c, u, p="Med@2026"):
+    r = c.post("/api/v1/auth/login", json={"username": u, "password": p})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+def _h(t):
+    return {"Authorization": "Bearer " + t}
+
+
+def _mock_team(monkeypatch, departments_sel, reasoning="按病例需要选择", briefs=None):
+    """mock Agent 决策点（组队 + 定向意见），不触网。"""
+    async def fake_pick(question):
+        return {"departments": list(departments_sel), "reasoning": reasoning}
+    async def fake_briefs(question, depts):
+        if briefs is not None:
+            return dict(briefs)
+        return {d: f"{d}定向意见" for d in depts}
+    monkeypatch.setattr(mdt_mod, "pick_departments", fake_pick)
+    monkeypatch.setattr(mdt_mod, "dept_briefs", fake_briefs)
+
+
+# ==================== Agent 动态组队（LLM 结构化输出 + 护栏） ====================
+
+class _FakeStructured:
+    """假结构化 LLM：记录收到的 prompt，按 preset 返回 ConsultTeam 形态对象。"""
+    preset = ([], "")
+
+    def __init__(self, seen):
+        self._seen = seen
+
+    async def ainvoke(self, messages):
+        self._seen.append(messages[-1].content)
+
+        class _D:
+            departments = list(_FakeStructured.preset[0])
+            reasoning = _FakeStructured.preset[1]
+        return _D()
+
+
+def _patch_structured(monkeypatch, seen, departments_sel, reasoning="r"):
+    _FakeStructured.preset = (list(departments_sel), reasoning)
+    monkeypatch.setattr(mdt_mod, "get_structured_llm",
+                        lambda *a, **k: _FakeStructured(seen))
+
+
+def test_pick_departments_selects_subset_and_filters_invalid(monkeypatch):
+    """LLM 选 4 科室（含清单外非法名）：非法科室被过滤、合法保序去重。"""
+    seen = []
+    _patch_structured(monkeypatch, seen,
+                      ["口腔科", "内分泌科", "不存在的科室", "内科", "口腔科"])
+    monkeypatch.setattr(dept_mod, "list_departments",
+                        lambda: ["内科", "外科", "口腔科", "内分泌科"])
+    out = asyncio.run(mdt_mod.pick_departments("牙痛合并糖尿病"))
+    assert out["departments"] == ["口腔科", "内分泌科", "内科"]  # 非法过滤 + 去重保序
+    assert out["reasoning"] == "r"
+    # 组队 prompt 注入实时科室清单（LLM 决策的输入）
+    assert "口腔科" in seen[0] and "内分泌科" in seen[0]
+
+
+def test_pick_departments_empty_selection_falls_back_to_all(monkeypatch):
+    """LLM 选空 → 默认全部科室兜底（fail-safe，不产生无人可派的单）。"""
+    seen = []
+    _patch_structured(monkeypatch, seen, [])
+    lst = ["内科", "外科", "口腔科", "内分泌科"]
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: list(lst))
+    out = asyncio.run(mdt_mod.pick_departments("q"))
+    assert out["departments"] == lst
+    assert "全部科室" in out["reasoning"]
+
+
+def test_pick_departments_llm_failure_falls_back(monkeypatch):
+    """LLM 异常 → 全部科室兜底，决策异常绝不阻塞发起链路（与 refine 同纪律）。"""
+    class _Boom:
+        async def ainvoke(self, messages):
+            raise RuntimeError("llm down")
+    monkeypatch.setattr(mdt_mod, "get_structured_llm", lambda *a, **k: _Boom())
+    lst = ["内科", "口腔科"]
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: list(lst))
+    out = asyncio.run(mdt_mod.pick_departments("q"))
+    assert out["departments"] == lst
+
+
+def test_pick_departments_reads_department_list_live(monkeypatch):
+    """科室同步锁：组队 prompt 的科室清单每次实时读 list_departments()——
+    管理端新增科室后，下一次会诊的 prompt 立即包含新科室（绝不缓存）。"""
+    seen = []
+    _patch_structured(monkeypatch, seen, ["口腔科"])
+    holder = {"list": ["内科", "外科", "口腔科"]}
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: list(holder["list"]))
+    asyncio.run(mdt_mod.pick_departments("q"))
+    assert "康复科" not in seen[0]
+    holder["list"] = ["内科", "外科", "口腔科", "康复科"]  # 模拟 admin 新增科室
+    out = asyncio.run(mdt_mod.pick_departments("q"))
+    assert "康复科" in seen[1], "新增科室必须实时出现在组队 prompt 中"
+    assert out["departments"] == ["口腔科"]
+
+
+def test_dept_briefs_covers_all_and_falls_back(monkeypatch):
+    """按科室定向初步意见：LLM 正常时逐科产出；解析失败逐科兜底文案。"""
+    async def fake_ask(route, text):
+        return json.dumps({"opinions": [{"dept": "口腔科", "opinion": "关注牙源性感染"}]},
+                          ensure_ascii=False)
+    monkeypatch.setattr(mdt_mod, "_ask", fake_ask)
+    out = asyncio.run(mdt_mod.dept_briefs("q", ["口腔科", "内分泌科"]))
+    assert out["口腔科"] == "关注牙源性感染"
+    assert "自行判断" in out["内分泌科"]  # 缺失科室兜底
+
+    async def boom(route, text):
+        raise RuntimeError("x")
+    monkeypatch.setattr(mdt_mod, "_ask", boom)
+    out2 = asyncio.run(mdt_mod.dept_briefs("q", ["口腔科"]))
+    assert "自行判断" in out2["口腔科"]
+
+
+# ==================== core：模型/队列语义（JSON 真源） ====================
+
+def test_consult_create_and_get_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    cid = consults_mod.create(initiator="doctor01", question="牙痛合并糖尿病如何处置",
+                              ai_analysis="【口腔科】…", target_depts=["口腔科", "内分泌科"],
+                              team={"departments": ["口腔科", "内分泌科"], "reasoning": "多学科"},
+                              images=["not-a-data-url"], initiator_dept="口腔科")
+    item = consults_mod.get(cid)
+    assert item["status"] == "open"
+    assert item["initiator"] == "doctor01"
+    assert item["target_depts"] == ["口腔科", "内分泌科"]
+    assert item["opinions"] == [] and item["summary"] is None
+    assert item["team"]["reasoning"] == "多学科"
+    assert item["images"] == []  # 非法图片丢弃不入库（与 review 同纪律）
+    on_disk = json.loads((tmp_path / "consults.json").read_text(encoding="utf-8"))
+    assert [i["id"] for i in on_disk] == [cid]
+
+
+def test_consult_inbox_dept_isolation_and_closed_excluded(monkeypatch, tmp_path):
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",
+                              target_depts=["口腔科", "内分泌科"])
+    assert len(consults_mod.inbox_for("口腔科")) == 1
+    assert len(consults_mod.inbox_for("内分泌科")) == 1
+    assert consults_mod.inbox_for("内科") == []
+    assert consults_mod.inbox_for("") == []  # 未设置科室恒为空
+    consults_mod.close(cid, "doctor01")
+    assert consults_mod.inbox_for("口腔科") == []  # 已结束不再进入收件箱
+
+
+def test_consult_opinion_permission_matrix(monkeypatch, tmp_path):
+    """意见权限矩阵：受邀科室可填（含发起者本人在自己科室名单内）、每人一票、
+    非受邀 403、会诊结束 400、未找到 404。"""
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",
+                              target_depts=["口腔科", "内分泌科"])
+    # 受邀科室医生正常填写
+    item = consults_mod.add_opinion(cid, "dent2", "口腔科", "建议根管治疗")
+    assert item["opinions"][0]["doctor"] == "dent2"
+    assert item["opinions"][0]["dept"] == "口腔科" and item["opinions"][0]["ts"]
+    # 重复填写 → 400（每人一票）
+    with pytest.raises(consults_mod.ConsultError):
+        consults_mod.add_opinion(cid, "dent2", "口腔科", "再填一次")
+    # 非受邀科室 → 403
+    with pytest.raises(consults_mod.ConsultPermissionError):
+        consults_mod.add_opinion(cid, "doc3", "内科", "我不该被邀请")
+    # 未设置科室 → 403
+    with pytest.raises(consults_mod.ConsultPermissionError):
+        consults_mod.add_opinion(cid, "doc4", "", "没有科室")
+    # 空内容 → 400
+    with pytest.raises(consults_mod.ConsultError):
+        consults_mod.add_opinion(cid, "endo1", "内分泌科", "  ")
+    # 未找到 → 404
+    with pytest.raises(consults_mod.ConsultNotFoundError):
+        consults_mod.add_opinion("con-nope", "endo1", "内分泌科", "x")
+    # 发起者在自己科室受邀名单内可填（正常）
+    consults_mod.add_opinion(cid, "doctor01", "口腔科", "补充病史")
+    assert len(consults_mod.get(cid)["opinions"]) == 2
+    # 会诊结束后 → 400
+    consults_mod.close(cid, "doctor01")
+    with pytest.raises(consults_mod.ConsultError):
+        consults_mod.add_opinion(cid, "endo1", "内分泌科", "迟到的意见")
+
+
+def test_consult_close_only_initiator_and_summary_complete(monkeypatch, tmp_path):
+    """close 仅发起者；汇总 = AI 意见 + 各科医生意见并排署名；不可重复结束。"""
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="AI定向意见正文",
+                              target_depts=["口腔科", "内分泌科"])
+    consults_mod.add_opinion(cid, "dent2", "口腔科", "口腔科意见内容")
+    consults_mod.add_opinion(cid, "endo1", "内分泌科", "内分泌科意见内容")
+    # 非发起者 → 403
+    with pytest.raises(consults_mod.ConsultPermissionError):
+        consults_mod.close(cid, "dent2")
+    with pytest.raises(consults_mod.ConsultPermissionError):
+        consults_mod.close(cid, "")
+    # 未找到 → 404
+    with pytest.raises(consults_mod.ConsultNotFoundError):
+        consults_mod.close("con-nope", "doctor01")
+    item = consults_mod.close(cid, "doctor01")
+    assert item["status"] == "closed" and item["closed_at"]
+    s = item["summary"]
+    assert "AI定向意见正文" in s          # AI 意见
+    assert "口腔科 · dent2" in s and "口腔科意见内容" in s   # 各科意见并排署名
+    assert "内分泌科 · endo1" in s and "内分泌科意见内容" in s
+    # 重复结束 → 400
+    with pytest.raises(consults_mod.ConsultError):
+        consults_mod.close(cid, "doctor01")
+
+
+def test_consult_by_initiator_and_participated_isolation(monkeypatch, tmp_path):
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    c1 = consults_mod.create(initiator="doctor01", question="q1", ai_analysis="a",
+                             target_depts=["口腔科"])
+    c2 = consults_mod.create(initiator="dent2", question="q2", ai_analysis="a",
+                             target_depts=["内分泌科"])
+    consults_mod.add_opinion(c2, "doctor01", "内分泌科", "我是跨科受邀")
+    assert [i["id"] for i in consults_mod.by_initiator("doctor01")] == [c1]
+    assert [i["id"] for i in consults_mod.by_initiator("dent2")] == [c2]
+    assert [i["id"] for i in consults_mod.participated("doctor01")] == [c2]  # 参与过 c2
+    assert consults_mod.participated("dent2") == []
+
+
+# ==================== 路由端到端（TestClient） ====================
+
+def test_consult_flow_end_to_end(monkeypatch, tmp_path):
+    """发起 → inbox 按 dept 分发（多医生可见）→ 意见 403/400/200 → close 仅发起者
+    → 汇总完整 → mine 隔离；审计 consult_dispatch 留痕。"""
+    c = _isolate(monkeypatch, tmp_path)
+    create_user("dent2", "Med@2026", "doctor", dept="口腔科")
+    create_user("endo1", "Med@2026", "doctor", dept="内分泌科")
+    create_user("endo2", "Med@2026", "doctor", dept="内分泌科")  # 同科室第二名在职医生
+    create_user("doc3", "Med@2026", "doctor", dept="内科")
+    doc1 = _login(c, "doctor01")   # 口腔科（发起者）
+    dent2 = _login(c, "dent2")     # 口腔科
+    endo1 = _login(c, "endo1")     # 内分泌科
+    endo2 = _login(c, "endo2")     # 内分泌科
+    doc3 = _login(c, "doc3")       # 内科（非受邀）
+    _mock_team(monkeypatch, ["口腔科", "内分泌科"], reasoning="牙痛+血糖管理")
+
+    # 发起（doctor01）
+    r = c.post("/api/v1/medical/consults", headers=_h(doc1),
+               json={"question": "右下后牙自发痛 3 天，既往 2 型糖尿病"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    cid = d["id"]
+    assert d["target_depts"] == ["口腔科", "内分泌科"]
+    assert "【口腔科】口腔科定向意见" in d["ai_analysis"]
+    assert d["team"]["reasoning"] == "牙痛+血糖管理"
+    assert d["status"] == "open" and d["initiator"] == "doctor01"
+    # 审计：Agent 决策点 consult_dispatch 留痕（选中科室+理由可回溯）
+    ev = [e for e in get_audit_logger().entries
+          if e["event_type"] == "consult"
+          and e["payload"].get("action") == "consult_dispatch"
+          and e["payload"].get("cid") == cid]
+    assert ev and ev[-1]["payload"]["departments"] == ["口腔科", "内分泌科"]
+    assert ev[-1]["payload"]["role"] == "doctor"
+
+    # 分发按 dept：同科室两名在职医生都可达，其它科室/无单科室不可达
+    for tok in (dent2, endo1, endo2):
+        inbox = c.get("/api/v1/medical/consults/inbox", headers=_h(tok)).json()["items"]
+        assert [i["id"] for i in inbox] == [cid]
+    assert c.get("/api/v1/medical/consults/inbox", headers=_h(doc3)).json()["items"] == []
+
+    # 意见权限矩阵
+    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(doc3),
+                  json={"content": "非受邀"}).status_code == 403
+    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo1),
+                  json={"content": "血糖控制后再拔牙"}).status_code == 200
+    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo1),
+                  json={"content": "重复一票"}).status_code == 400
+    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo2),
+                  json={"content": "同科另一位医生也可独立投一票"}).status_code == 200
+    # 发起者在自己科室受邀名单内可填（正常参与）
+    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(doc1),
+                  json={"content": "开髓引流"}).status_code == 200
+
+    # close 仅发起者
+    assert c.post(f"/api/v1/medical/consults/{cid}/close", headers=_h(doc3)).status_code == 403
+    assert c.post(f"/api/v1/medical/consults/{cid}/close", headers=_h(dent2)).status_code == 403
+    r_close = c.post(f"/api/v1/medical/consults/{cid}/close", headers=_h(doc1))
+    assert r_close.status_code == 200, r_close.text
+    closed = r_close.json()
+    assert closed["status"] == "closed" and closed["closed_at"]
+    assert "开髓引流" in closed["summary"] and "doctor01" in closed["summary"]
+    assert "endo1" in closed["summary"] and "endo2" in closed["summary"]
+    assert c.post(f"/api/v1/medical/consults/{cid}/close", headers=_h(doc1)).status_code == 400
+    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(dent2),
+                  json={"content": "迟到"}).status_code == 400
+
+    # 结束后收件箱清空；mine 隔离（发起者全部+参与过的）
+    assert c.get("/api/v1/medical/consults/inbox", headers=_h(endo1)).json()["items"] == []
+    mine1 = c.get("/api/v1/medical/consults/mine", headers=_h(doc1)).json()
+    assert [i["id"] for i in mine1["initiated"]] == [cid]
+    assert [i["id"] for i in mine1["participated"]] == [cid]  # 自己也投过一票
+    mine2 = c.get("/api/v1/medical/consults/mine", headers=_h(endo1)).json()
+    assert mine2["initiated"] == []
+    assert [i["id"] for i in mine2["participated"]] == [cid]
+    mine3 = c.get("/api/v1/medical/consults/mine", headers=_h(doc3)).json()
+    assert mine3["initiated"] == [] and mine3["participated"] == []
+    # 未找到 → 404
+    assert c.post("/api/v1/medical/consults/con-nope/opinion", headers=_h(doc1),
+                  json={"content": "x"}).status_code == 404
+    assert c.post("/api/v1/medical/consults/con-nope/close", headers=_h(doc1)).status_code == 404
+
+
+def test_consult_dispatch_reaches_new_department_doctors(monkeypatch, tmp_path):
+    """科室同步端到端：管理端新增「康复科」并为其建号后，组队选中该科室的会诊
+    分发可达新科室医生（分发面由实时 target_depts × users.dept 决定）。"""
+    c = _isolate(monkeypatch, tmp_path)
+    assert dept_mod.add_department("康复科") is True  # admin 新增科室（实时字典）
+    create_user("rehab1", "Med@2026", "doctor", dept="康复科")
+    doc1 = _login(c, "doctor01")
+    rehab1 = _login(c, "rehab1")
+    _mock_team(monkeypatch, ["康复科"])
+    r = c.post("/api/v1/medical/consults", headers=_h(doc1),
+               json={"question": "术后康复评估"})
+    assert r.status_code == 200, r.text
+    assert r.json()["target_depts"] == ["康复科"]
+    inbox = c.get("/api/v1/medical/consults/inbox", headers=_h(rehab1)).json()
+    assert [i["id"] for i in inbox["items"]] == [r.json()["id"]]
+    assert inbox["dept"] == "康复科"
+
+
+def test_consult_routes_require_auth(monkeypatch, tmp_path):
+    c = _isolate(monkeypatch, tmp_path)
+    assert c.post("/api/v1/medical/consults", json={"question": "q"}).status_code in (401, 403)
+    assert c.get("/api/v1/medical/consults/inbox").status_code in (401, 403)
+    assert c.get("/api/v1/medical/consults/mine").status_code in (401, 403)
+    assert c.post("/api/v1/medical/consults/con-x/opinion", json={"content": "x"}).status_code in (401, 403)
+    assert c.post("/api/v1/medical/consults/con-x/close").status_code in (401, 403)
+
+
+def test_consult_images_whitelist_rejects_oversize(monkeypatch, tmp_path):
+    """images 走现有图片白名单逻辑：超过 6 张 → 422（Pydantic 校验拒绝）。"""
+    c = _isolate(monkeypatch, tmp_path)
+    doc1 = _login(c, "doctor01")
+    _mock_team(monkeypatch, ["口腔科"])
+    r = c.post("/api/v1/medical/consults", headers=_h(doc1),
+               json={"question": "q", "images": ["data:image/jpeg;base64,AAAA"] * 7})
+    assert r.status_code == 422, r.text

@@ -118,6 +118,10 @@ async def _init_impl() -> bool:
             await c.execute("CREATE TABLE IF NOT EXISTS departments(id integer primary key, name text)")
             await c.execute("""CREATE TABLE IF NOT EXISTS llm_providers(
                 kind text, pid text, data jsonb, active bool)""")
+            # 跨科室会诊（id data jsonb 全量留痕 + initiator/status 冗余列便于运维排查）
+            await c.execute("""CREATE TABLE IF NOT EXISTS consults(
+                id text primary key, data jsonb, initiator text, status text,
+                updated_at timestamptz default now())""")
             await c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_providers_kind_pid "
                             "ON llm_providers(kind,pid)")
     except Exception:
@@ -522,6 +526,53 @@ def load_llm_providers(path: str, json_loader=None) -> dict:
 
 def save_llm_providers(cfg: dict, path: str) -> None:
     _json_then_pg(_pg_save_llm_providers, path, cfg)
+
+
+# ---- consults（跨科室会诊；data jsonb 全量留痕，created_at 内嵌 data 中，读时按其排序还原追加顺序） ----
+
+_CONSULT_UPSERT = """INSERT INTO consults(id,data,initiator,status) VALUES($1,$2::jsonb,$3,$4)
+   ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data, initiator=EXCLUDED.initiator,
+   status=EXCLUDED.status, updated_at=now()"""
+
+
+async def _pg_load_consults() -> list | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT data FROM consults ORDER BY data->>'created_at', id")
+    if not rows:
+        return None
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+        except Exception:  # noqa: BLE001 —— 单行损坏跳过，不拖垮整个列表
+            continue
+        if isinstance(d, dict):
+            out.append(d)
+    return out
+
+
+async def _pg_save_consults(items: list) -> None:
+    rows = [(i.get("id"), json.dumps(i, ensure_ascii=False), i.get("initiator", ""),
+             i.get("status", "open"))
+            for i in (items or []) if isinstance(i, dict) and i.get("id")]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                await c.execute("DELETE FROM consults WHERE NOT (id = ANY($1))",
+                                [r[0] for r in rows])
+            else:
+                await c.execute("DELETE FROM consults")
+            if rows:
+                await c.executemany(_CONSULT_UPSERT, rows)
+
+
+def load_consults(path: str, json_loader=None) -> list:
+    """会诊单读：PG 可用→PG 真源；不可用/异常/空表→JSON（调用方 json_loader 自有重试语义）。"""
+    return _pg_or_json(_pg_load_consults, json_loader, path, [])
+
+
+def save_consults(items: list, path: str) -> None:
+    _json_then_pg(_pg_save_consults, path, items)
 
 
 # ---------- B1 迁移：JSON → PG（表空才导，幂等 ON CONFLICT DO NOTHING） ----------

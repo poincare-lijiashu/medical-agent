@@ -66,6 +66,9 @@ class FakeConn:
                     for row in (self.db["review_queue"][k] for k in
                                 sorted(self.db["review_queue"],
                                        key=lambda k: (self.db["review_queue"][k]["ts"], k)))]
+        if s.startswith("SELECT data FROM consults"):
+            return [{"data": json.dumps(self.db["consults"][k], ensure_ascii=False)}
+                    for k in sorted(self.db["consults"])]
         if s.startswith("SELECT kind"):
             return [{"kind": k_, "pid": p_, "data": d_, "active": act_}
                     for k_, p_, d_, act_ in self.db["llm_providers"]]
@@ -92,6 +95,13 @@ class FakeConn:
             keep = set(a[0])
             self.db["review_queue"] = {k: v for k, v in self.db["review_queue"].items()
                                        if k in keep}
+            return "DELETE"
+        if s.startswith("DELETE FROM consults WHERE NOT"):
+            keep = set(a[0])
+            self.db["consults"] = {k: v for k, v in self.db["consults"].items() if k in keep}
+            return "DELETE"
+        if s == "DELETE FROM consults":
+            self.db["consults"] = {}
             return "DELETE"
         for t in ("users", "departments", "review_queue", "llm_providers"):
             if s == f"DELETE FROM {t}":
@@ -123,6 +133,10 @@ class FakeConn:
                 item["images"] = json.loads(r[12]) if r[12] else None
                 self.db["review_queue"][item["id"]] = item
             return
+        if s.startswith("INSERT INTO consults"):
+            for cid, data, _initiator, _status in rows:
+                self.db["consults"][cid] = json.loads(data)
+            return
         if s.startswith("INSERT INTO llm_providers"):
             for row in rows:
                 self.db["llm_providers"].append(tuple(row))
@@ -147,7 +161,7 @@ class FakePool:
 
 def _db() -> dict:
     return {"users": {}, "departments": [], "review_queue": {}, "llm_providers": [],
-            "fail": None}
+            "consults": {}, "fail": None}
 
 
 @pytest.fixture()
@@ -402,3 +416,28 @@ def test_migrate_noop_without_pool(monkeypatch):
 def test_migrate_error_does_not_raise(fake_pg, monkeypatch):
     fake_pg["fail"] = RuntimeError("boom")
     assert asyncio.run(pg_store.migrate_json_to_pg()) == {}
+
+
+# ---------- consults（跨科室会诊）：PG 真源往返 + 空表回落 JSON ----------
+
+def test_consults_pg_roundtrip_truth_source(fake_pg, tmp_path, monkeypatch):
+    from backend.core import consults as consults_mod
+    c_file = str(tmp_path / "consults.json")
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", c_file)
+    cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",
+                              target_depts=["口腔科", "内分泌科"], initiator_dept="口腔科")
+    assert set(fake_pg["consults"]) == {cid}  # 写 = JSON 兜底 + PG 全量同步
+    # PG 真源：删掉 JSON 后读仍完整（created_at 排序还原追加顺序）
+    (tmp_path / "consults.json").unlink()
+    items = consults_mod._load()
+    assert [i["id"] for i in items] == [cid]
+    assert items[0]["target_depts"] == ["口腔科", "内分泌科"]
+    # 空表 → 回落 JSON（保守可用性优先）
+    fake_pg["consults"].clear()
+    (tmp_path / "consults.json").write_text(
+        json.dumps([{"id": "con-json", "initiator": "x", "status": "open"}]),
+        encoding="utf-8")
+    assert [i["id"] for i in consults_mod._load()] == ["con-json"]
+    # PG 异常 → JSON 兜底（含重试语义的 json_loader），异常绝不冒泡
+    fake_pg["fail"] = RuntimeError("pg down")
+    assert [i["id"] for i in consults_mod._load()] == ["con-json"]
