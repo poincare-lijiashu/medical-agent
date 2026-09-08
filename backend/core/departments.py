@@ -1,15 +1,19 @@
-"""科室字典管理：data/departments.json（_lock + 原子写）。
+"""科室字典管理（B1 数据真源化：PG 真源 + JSON 兜底）。
 
 质控的「科室」字段由服务端绑定账号 dept，本科室字典是 dept 的权威取值来源：
 - 文件不存在时首次访问自动写入默认科室；
 - add 重名返回 False（路由转 400）；remove 校验存在（否则 False → 路由 404），
   且仍有账号绑定该科室时抛 ValueError（路由转 400）——防止在用科室被删成悬空值。
+- 存取走 pg_store repo 层：PG 池可用 → PG 真源（departments 表 id=顺序号保序）；
+  PG 不可用/异常/空表 → data/departments.json（现状行为完全等价）。
 """
 from __future__ import annotations
 
 import json
 import os
 import threading
+
+from backend.core import pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEPARTMENTS_FILE = os.path.join(BASE_DIR, "data", "departments.json")
@@ -18,7 +22,8 @@ _lock = threading.Lock()
 DEFAULT_DEPARTMENTS = ["内科", "外科", "口腔科", "妇产科", "儿科", "急诊科"]
 
 
-def _load() -> dict:
+def _load_json() -> dict:
+    """departments.json 现状读逻辑（损坏回落默认；JSON 兜底真源）。"""
     if not os.path.isfile(DEPARTMENTS_FILE):
         return {"list": list(DEFAULT_DEPARTMENTS)}
     try:
@@ -31,12 +36,14 @@ def _load() -> dict:
     return d
 
 
+def _load() -> dict:
+    # B1 数据真源化：PG 池可用 → PG 真源；不可用/异常/空表 → JSON（现状行为完全等价）
+    return pg_store.load_departments(DEPARTMENTS_FILE, _load_json)
+
+
 def _save(d: dict) -> None:
-    os.makedirs(os.path.dirname(DEPARTMENTS_FILE), exist_ok=True)
-    tmp = DEPARTMENTS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, DEPARTMENTS_FILE)
+    # B1：JSON 原子写兜底 + PG 全量同步（best-effort）；路径取本模块常量（测试 monkeypatch 生效）
+    pg_store.save_departments(d, DEPARTMENTS_FILE)
 
 
 def list_departments() -> list[str]:

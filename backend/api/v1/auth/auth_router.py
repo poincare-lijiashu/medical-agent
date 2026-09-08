@@ -94,9 +94,9 @@ async def change_password(body: ChangePwdReq, user: dict = Depends(require_user)
         raise HTTPException(400, "新密码至少 8 位")
     await asyncio.to_thread(set_password, username, body.new_password)
     revoke_user(username)  # 改密后撤销该用户全部旧令牌（含访问令牌），须重新登录
-    # 本人改密：actor 即操作对象、action 已含语义，无额外上下文可记（F5 评估后保留空 payload）
+    # 本人改密：actor 即操作对象、action 已含语义（E：payload 附带操作者角色）
     await asyncio.to_thread(get_audit_logger().write, event_type="auth", action="password_changed",
-                            actor=username, payload={})
+                            actor=username, payload={"role": user.get("role", "")})
     rec = await asyncio.to_thread(get_user, username)
     if rec:
         await pg_store.mirror_user(username, rec.get("role", ""), rec.get("password_hash", ""))
@@ -113,7 +113,8 @@ async def reset_password(body: ResetPwdReq, user: dict = Depends(require_role("a
     await asyncio.to_thread(set_password, body.username, body.new_password)
     revoke_user(body.username)  # 该用户已签发的令牌立即失效，须重新登录
     await asyncio.to_thread(get_audit_logger().write, event_type="auth", action="password_reset",
-                            actor=user.get("username", "admin"), payload={"user": body.username})
+                            actor=user.get("username", "admin"),
+                            payload={"user": body.username, "role": user.get("role", "")})
     rec = await asyncio.to_thread(get_user, body.username)
     if rec:
         await pg_store.mirror_user(body.username, rec.get("role", ""), rec.get("password_hash", ""))

@@ -27,8 +27,9 @@ class _FakeAudit:
         self.entries.append({"ts": "2026-01-01T00:00:00", "event_type": str(a[0] if a else "t"),
                              "actor": str(a[-1] if a else "x"), "payload": dict(k)})
 
-    def recent(self, n=8):
-        return self.entries[-n:]
+    def recent(self, n=8, offset=0):
+        end = max(0, len(self.entries) - offset)  # 与真实 AuditLog.recent 翻页语义一致
+        return list(self.entries[max(0, end - n):end])[::-1]
 
 
 def _isolate(monkeypatch, tmp_path):

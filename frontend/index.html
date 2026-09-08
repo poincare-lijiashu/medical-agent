@@ -381,7 +381,8 @@ let CFG={chat:'模型',vl:'多模态模型'};
 let ROLE='doctor';
 const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','qc','review'],
   pharmacist:['overview','literature','drug','qc','review'],
-  admin:['overview','kb','qc','review','data','arch']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任） */
+  admin:['overview','kb','qc','review','data','arch'],
+  qc:['overview','literature','drug','qc','review']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任）；E 角色细分：qc（质控员）可见质控工作台+审核中心，admin 既有入口不变，doctor 行为不变 */
 async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;
 const dot=document.getElementById('kbDot');
 if(dot){const ok=!!(c.milvus&&c.milvus.connected);dot.style.display='inline-block';dot.style.background=ok?'var(--ok)':'var(--danger)';dot.title=ok?'知识库已连接':'知识库未连接（自动重试中，问答走降级路径）';}}}catch(e){}}
@@ -942,10 +943,77 @@ async function purgePending(){
       const d=await r.json();toast(`已清空 ${d.purged} 条待核对`);closeModal();loadReview();
     }catch(e){toast('操作失败：'+e.message);}};
 }
+/* ---- 任务A：审计流人话化 / 翻页 / CSV 导出 ----
+   auditOffset：当前页偏移（每页 50，数据源 /admin/data?audit_offset=，负数后端按 0 处理）；
+   auditItemsCache：最近一次加载的本页条目（含原始 event/action/actor/payload），供 CSV 导出与翻过头回退。 */
+const AUDIT_PAGE_SIZE = 50;
+let auditOffset = 0;
+let auditItemsCache = [];
+/* event_type+action → 中文描述模板：payload 有什么展示什么，缺省只显示动作；
+   未映射的兜底显示 event_type+payload 摘要（原始 JSON 仍在折叠区，排障用）。
+   返回纯文本，调用处必须经 esc() 转义后再入 HTML。 */
+function humanizeAudit(e){
+  const p=e.payload||{}, act=String(e.action||''), ev=String(e.event||'');
+  const rid=p.rid?('#'+p.rid):'';
+  // 变更类目标：payload 里有什么就展示什么（用户/科室/标签/文件/模型 kind 等）
+  const target=p.user||p.name||p.tag||p.file||p.filename||p.path
+    ||(p.kind?(p.kind+(p.pid?('/'+p.pid):'')):'')||'';
+  // —— 查询类（模板内插 payload 数值）——
+  if(act==='list_pending')return p.n!==undefined?`查看了待核对列表（${p.n} 项待处理）`:'查看了待核对列表';
+  if(act==='history')return p.n!==undefined?`查看了签发历史（${p.n} 条）`:'查看了签发历史';
+  if(act==='list')return p.n!==undefined?`查看了列表（${p.n} 条）`:'查看了列表';
+  if(act==='query'){
+    if(p.fields!==undefined)return `执行了质控查询（字段 ${p.fields} 项 · 检验 ${p.labs??0} 项）`;
+    return '执行了查询';}
+  // —— 变更类（关键词匹配动作族，命中顺序：签发/驳回/转人工 优先于 增删改）——
+  const has=s=>act.includes(s);
+  if(has('approved'))return rid?`对 ${rid} 执行了签发`:'执行了签发';
+  if(has('rejected'))return rid?`对 ${rid} 执行了驳回`:'执行了驳回';
+  if(has('reopen'))return rid?`对 ${rid} 执行了转人工`:'执行了转人工';
+  if(act==='purge_pending')return p.n!==undefined?`清空了待核对列表（${p.n} 条）`:'清空了待核对列表';
+  if(act==='review_enqueued')return `答案进入待核对队列${rid?'（'+rid+'）':''}`;
+  if(has('upload')&&target)return `上传了知识库 ${target}`;
+  if((has('create')||has('_created')||has('add')||has('activate'))&&target)return `创建了 ${target}`;
+  if((has('delete')||has('remov')||has('deactivate'))&&target)return `删除了 ${target}`;
+  if(has('update')&&target)return `修改了 ${target}`;
+  // —— 兜底：event_type + action + payload 摘要 ——
+  const sum=Object.entries(p).filter(([k])=>k!=='action').slice(0,4)
+    .map(([k,v])=>`${k}=${typeof v==='string'?v.slice(0,40):JSON.stringify(v)}`).join('；');
+  const base=((ev||'')+(act?' · '+act:'')).trim();
+  return sum?`${base||'系统事件'}（${sum}）`:(base||'系统事件');
+}
+/* 审计流翻页：上一页/下一页（每页 50）。翻过头（新事件插入导致空页）自动回退上一页。 */
+async function auditPage(delta){
+  const prev=auditOffset;
+  auditOffset=Math.max(0,auditOffset+delta*AUDIT_PAGE_SIZE);
+  await loadData();
+  if(delta>0&&!auditItemsCache.length){auditOffset=prev;await loadData();}
+}
+/* 导出审计 CSV：前端生成（导出本页、应用搜索框过滤后）条目，后端不新增导出端点。
+   BOM 头保证 Excel 中文不乱码；CSV 引号转义防逗号/换行注入。 */
+function exportAuditCsv(){
+  const q=(document.getElementById('auditSearch')?.value||'').trim().toLowerCase();
+  const rows=auditItemsCache.filter(e=>{
+    if(!q)return true;
+    const hay=((e.event||'')+' '+(e.action||'')+' '+(e.actor||'')+' '+humanizeAudit(e)).toLowerCase();
+    return hay.includes(q);});
+  if(!rows.length){toast('当前无可导出的审计条目');return;}
+  const cell=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const head=['时间','事件','动作','描述','操作者','payload'];
+  const lines=[head.map(cell).join(',')].concat(rows.map(e=>[
+    e.ts||'',e.event||'',e.action||'',humanizeAudit(e),e.actor||'',JSON.stringify(e.payload||{})]
+    .map(cell).join(',')));
+  const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='audit_'+new Date().toISOString().slice(0,10)+'.csv';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  toast('已导出 '+rows.length+' 条审计');
+}
 async function loadData(){
   const b=document.getElementById('dataBody');
   b.innerHTML='<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk"></div></div>';
-  let d;try{const r=await fetch('/api/v1/medical/admin/data',{headers:auth()});
+  let d;try{const r=await fetch('/api/v1/medical/admin/data?audit_offset='+auditOffset,{headers:auth()});
     if(r.status===401){logout();return;} if(!r.ok){b.innerHTML='<div class="card">⚠ 加载失败</div>';return;} d=await r.json();}
   catch(e){b.innerHTML='<div class="card">⚠ '+e.message+'</div>';return;}
   const stats=[['待核对',d.review.pending,'项'],['已签发',d.review.approved,'项'],['已驳回',d.review.rejected,'项'],
@@ -957,17 +1025,19 @@ async function loadData(){
       const rp=`<button class="btn sm secondary" onclick="openResetPwd('${esc(u.username)}')">重置密码</button>`;
       return `<tr><td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td><td>${esc(u.dept||'—')}</td><td style="white-space:nowrap">${rp}${del}</td></tr>`;}).join('');
   const auditItems=d.audit_recent||[];
+  auditItemsCache=auditItems;  // 任务A：缓存本页条目供 CSV 导出与翻页回退判定
   const auditList=auditItems.map((e,i)=>{
     const cat=(e.event||'').split('.')[0]||'';
     const cls={auth:'chip ok',admin:'chip mid',review:'chip warn',kb:'chip',pharm:'chip mid',qc:'chip',lit:'chip',drug:'chip',case:'chip',imaging:'chip',mdt:'chip',precheck:'chip'}[cat]||'chip';
     const payloadJson=esc(JSON.stringify(e.payload||{},null,2));
-    return `<li class="audit-row" data-cat="${esc(cat)}" data-q="${esc((e.event||'')+' '+(e.action||'')+' '+(e.actor||''))}">
+    const desc=humanizeAudit(e);  // 任务A：人话化描述（纯文本，esc 后入 HTML）
+    return `<li class="audit-row" data-cat="${esc(cat)}" data-q="${esc((e.event||'')+' '+(e.action||'')+' '+(e.actor||'')+' '+desc)}">
       <details><summary>
         <span class="${cls}">${esc(e.event||'')}</span>
-        <span class="src">${esc(e.action||'')}</span>
+        <span class="e">${esc(desc)}</span>
         <span class="t">${fmtTs(e.ts)}</span>
         <span class="a">${esc(e.actor||'')}</span>
-        <span class="src">▾ 点开查看详情</span>
+        <span class="src">▾ 点开查看原始 JSON</span>
       </summary>
       <pre style="background:var(--rail);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:11.5px;margin:6px 0 0;overflow-x:auto;white-space:pre-wrap">${payloadJson}</pre>
     </details></li>`;}).join('');
@@ -988,8 +1058,13 @@ async function loadData(){
     </div>`).join('');
   b.innerHTML=`<div class="stats">${stats}</div>
     <div class="dash">
-      <div class="panel"><h3>审计流（最近 ${auditItems.length} 条 · 点击展开 JSON）</h3>
-        <div style="padding:8px 16px 4px"><input class="inp" id="auditSearch" aria-label="搜索审计事件" placeholder="搜索 事件/操作/用户（如 drug / purge_pending / doctor01）" oninput="filterAudit(this.value)"></div>
+      <div class="panel"><h3>审计流（共 ${esc(String(d.events_total??auditItems.length))} 条 · 第 ${Math.floor(auditOffset/AUDIT_PAGE_SIZE)+1} 页 · 每页 ${AUDIT_PAGE_SIZE} 条 · 点开看原始 JSON）</h3>
+        <div style="padding:8px 16px 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input class="inp" id="auditSearch" aria-label="搜索审计事件" placeholder="搜索 事件/操作/用户（如 drug / purge_pending / doctor01，本页内过滤）" style="flex:1;min-width:180px" oninput="filterAudit(this.value)">
+          <button class="btn sm secondary" ${auditOffset>0?'':'disabled'} onclick="auditPage(-1)">上一页</button>
+          <button class="btn sm secondary" ${auditItems.length>=AUDIT_PAGE_SIZE?'':'disabled'} onclick="auditPage(1)">下一页</button>
+          <button class="btn sm secondary" onclick="exportAuditCsv()">导出审计 CSV</button>
+        </div>
         <ul class="feed" id="auditList">${audit}</ul></div>
       <div style="display:flex;flex-direction:column;gap:16px">
         <div class="panel"><h3>新增用户</h3>

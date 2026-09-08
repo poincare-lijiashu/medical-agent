@@ -3,8 +3,9 @@
 设计取舍：
 - 密码用 stdlib hashlib.pbkdf2_hmac（避开 passlib/bcrypt 后端读取坑）。
 - 令牌用 PyJWT HS256，含 sub(username)/role/exp。
-- 用户存 data/users.json（追加式写盘，原子替换）；生产可换数据库，接口不变。
-- 角色：doctor / pharmacist / admin。medical 端点要求有效令牌；写审计含操作者。
+- 用户存取走 pg_store repo 层（B1 数据真源化）：PG 池可用 → PG 真源（users 表含 dept 列）；
+  PG 不可用/异常/空表 → data/users.json（现状行为完全等价）。写入始终 JSON 兜底 + PG 同步。
+- 角色：doctor / pharmacist / admin / qc（质控员）。medical 端点要求有效令牌；写审计含操作者。
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from typing import Optional
 import jwt
 
 from backend.config import settings
+from backend.core import pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,8 +31,9 @@ _users_lock = threading.Lock()  # users.json 读-改-写临界区保护（防并
 _ITERATIONS = 600_000  # OWASP 建议 PBKDF2-HMAC-SHA256 ≥600k；旧哈希按其存储的迭代数兼容校验，登录成功后透明升级
 _ALGO = "sha256"
 
-# 允许访问的角色（全部为医疗专业角色；无匿名访问）
-ROLES = {"doctor", "pharmacist", "admin"}
+# 允许访问的角色（全部为医疗专业角色；无匿名访问）。qc=质控员（E 角色细分：质控工作台入口，
+# 医生端行为完全不变；后端 review 端点白名单见 medical_router require_role）
+ROLES = {"doctor", "pharmacist", "admin", "qc"}
 
 
 # ---------- 密码 ----------
@@ -99,19 +102,23 @@ def decode_refresh_payload(token: str) -> Optional[dict]:
 
 
 # ---------- 用户表 ----------
-def _load_users() -> dict:
+def _load_users_json() -> dict:
+    """users.json 现状读逻辑（JSON 兜底真源；PG 不可用/异常/空表时的唯一数据源）。"""
     if not os.path.isfile(USERS_FILE):
         return {}
     with open(USERS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
+def _load_users() -> dict:
+    # B1 数据真源化：PG 池可用 → PG 真源；不可用/异常/空表 → JSON（现状行为完全等价）
+    return pg_store.load_users(USERS_FILE, _load_users_json)
+
+
 def _save_users(users: dict) -> None:
-    os.makedirs(os.path.dirname(USERS_FILE), exist_ok=True)
-    tmp = USERS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, USERS_FILE)
+    # B1：JSON 原子写兜底（降级安全）+ PG 全量同步（best-effort）；
+    # 路径取本模块 USERS_FILE（测试 monkeypatch 该常量仍然生效）
+    pg_store.save_users(users, USERS_FILE)
 
 
 def get_user(username: str) -> Optional[dict]:
@@ -186,7 +193,7 @@ def _demo_password() -> str:
 
 
 def seed_default_users() -> None:
-    """首次运行注入演示账号（生产务必改密/删除）。"""
+    """首次运行注入演示账号（生产务必改密/删除）。qc01 为质控员演示账号（E 角色细分）。"""
     users = _load_users()
     if users:
         return
@@ -195,6 +202,7 @@ def seed_default_users() -> None:
         ("doctor01", pw, "doctor", "口腔科"),
         ("pharm01", pw, "pharmacist", "药剂科"),
         ("admin01", pw, "admin", "医务处"),
+        ("qc01", pw, "qc", "医务处"),  # E：质控员（质控工作台/审核中心入口；口令同演示约定）
     ]
     for u, p, r, d in defaults:
         users[u] = {"role": r, "dept": d, "password_hash": hash_password(p)}

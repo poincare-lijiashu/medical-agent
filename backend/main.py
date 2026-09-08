@@ -56,6 +56,9 @@ async def lifespan(app: FastAPI):
         from backend.core import pg_store
         from backend.core.auth import all_users
         if await pg_store.init():
+            migrated = await pg_store.migrate_json_to_pg()  # B1：PG 空表自动导入 JSON 存量（幂等）
+            if migrated:
+                logger.info("medical_agent.startup.pg_migrated", **migrated)
             for u, rec in all_users().items():
                 await pg_store.mirror_user(u, rec.get("role", ""), rec.get("password_hash", ""))
             logger.info("medical_agent.startup.pg_ready")

@@ -1,6 +1,8 @@
 """F6 模型配置管理：对话（chat）与视觉（vision）双通道，OpenAI/Anthropic 双格式。
 
-存储：data/llm_providers.json（.gitignore 覆盖，含密钥严禁入库）。结构：
+存储走 pg_store repo 层（B1 数据真源化）：PG 池可用 → PG 真源（llm_providers 表，
+data 内嵌 _seq 还原 providers 顺序）；PG 不可用/异常/空表 → data/llm_providers.json
+（现状行为完全等价，密钥严禁入库的 .gitignore 纪律不变）。结构：
 {"chat": {"active": null, "providers": []}, "vision": {"active": null, "providers": []}}
 provider：{"id","api_format","base_url","model_id","display_name","api_key"}
 base_url 存原始值（不以 / 结尾）；openai 的 /chat/completions 语义由调用方处理
@@ -17,6 +19,8 @@ import uuid
 
 import httpx
 
+from backend.core import pg_store
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LLM_CONFIG_FILE = os.path.join(BASE_DIR, "data", "llm_providers.json")
 _lock = threading.Lock()
@@ -32,7 +36,8 @@ def _default_config() -> dict:
             "vision": {"active": None, "providers": []}}
 
 
-def _load_raw() -> dict:
+def _load_raw_json() -> dict:
+    """llm_providers.json 现状读逻辑（损坏回落默认 + 通道补齐；JSON 兜底真源）。"""
     if not os.path.isfile(LLM_CONFIG_FILE):
         return _default_config()
     try:
@@ -47,12 +52,14 @@ def _load_raw() -> dict:
     return cfg
 
 
+def _load_raw() -> dict:
+    # B1 数据真源化：PG 池可用 → PG 真源；不可用/异常/空表 → JSON（现状行为完全等价）
+    return pg_store.load_llm_providers(LLM_CONFIG_FILE, _load_raw_json)
+
+
 def _save_raw(cfg: dict) -> None:
-    os.makedirs(os.path.dirname(LLM_CONFIG_FILE), exist_ok=True)
-    tmp = LLM_CONFIG_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, LLM_CONFIG_FILE)
+    # B1：JSON 原子写兜底 + PG 全量同步（best-effort）；路径取本模块常量（测试 monkeypatch 生效）
+    pg_store.save_llm_providers(cfg, LLM_CONFIG_FILE)
 
 
 def load_config() -> dict:

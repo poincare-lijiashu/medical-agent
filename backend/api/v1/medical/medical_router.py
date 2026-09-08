@@ -23,7 +23,7 @@ from backend.config import settings
 from backend.core import kb_ingest, llm_config
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
-from backend.core.intent import prefilter_reply
+from backend.core.intent import offtopic_tech_reply, prefilter_reply
 from backend.core.medical_audit import PHIRedactor, get_audit_logger
 from backend.core.medical_drug import check as drug_check
 
@@ -172,6 +172,13 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
         await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="prefilter",
                                 actor=actor, payload={"q": q[:60]})
         return AskResp(answer=pre, confidence=0.95, needs_human_review=False, sources=["intent:prefilter"])
+    # 任务C：技术领域守门（极保守：命中技术词且零医学信号才拒答）。
+    # 拒答路径：固定文案、不检索、不入审核队列、不调 LLM；审计记 offtopic_reject。
+    off = offtopic_tech_reply(q)
+    if off:
+        await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="offtopic_reject",
+                                actor=actor, payload={"q": q[:60]})
+        return AskResp(answer=off, confidence=0.9, needs_human_review=False, sources=["intent:offtopic"])
     await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="query",
                             actor=actor, payload={"q": q[:200]})
     try:
@@ -214,6 +221,14 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
         if pre:
             yield _sse("result", {"answer": pre, "confidence": 0.95,
                                   "needs_human_review": False, "sources": ["intent:prefilter"], "review_id": None})
+            return
+        # 任务C：技术领域守门（与非流式 ask 同判定同文案）：不检索、不入队、不调 LLM。
+        off = offtopic_tech_reply(q)
+        if off:
+            await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="offtopic_reject",
+                                    actor=actor, payload={"q": q[:60]})
+            yield _sse("result", {"answer": off, "confidence": 0.9,
+                                  "needs_human_review": False, "sources": ["intent:offtopic"], "review_id": None})
             return
         final = None
         # agentic 改写轨迹就地累积：stream_mode="updates" 只给逐节点增量、拿不到最终 state，
@@ -410,38 +425,45 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
 
 
 # ---------- 审核中心（高危双人核对）----------
+# E 角色细分：质控工作台白名单 = qc+admin+doctor+pharmacist（require_role 多角色能力；
+# 与原 require_user 行为等价——doctor/pharmacist 原本可访问，保守不回退；qc 为新增入口）
+_REVIEW_ROLES = ("qc", "admin", "doctor", "pharmacist")
+
+
 @router.get("/review/pending")
-async def review_pending(user: dict = Depends(require_user)):
+async def review_pending(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     items = await asyncio.to_thread(review.pending)
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="list_pending",
-                            actor=user.get("username", "system"), payload={"n": len(items)})
+                            actor=user.get("username", "system"),
+                            payload={"n": len(items), "role": user.get("role", "")})
     return {"pending": items, "me": user.get("username")}
 
 
 @router.get("/review/history")
-async def review_history(user: dict = Depends(require_user)):
+async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     items = await asyncio.to_thread(review.list_all, limit=50)
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="history",
-                            actor=user.get("username", "system"), payload={"n": len(items)})
+                            actor=user.get("username", "system"),
+                            payload={"n": len(items), "role": user.get("role", "")})
     return {"items": items}
 
 
 @router.post("/review/{rid}/resolve")
-async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(require_user)):
+async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(require_role(*_REVIEW_ROLES))):
     reviewer = user.get("username", "system")
     try:
         item = await asyncio.to_thread(review.resolve, rid, body.decision, reviewer, body.note)
     except review.ReviewError as e:
         raise HTTPException(400, str(e))
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action=f"resolved_{body.decision}",
-                            actor=reviewer, payload={"rid": rid})
+                            actor=reviewer, payload={"rid": rid, "role": user.get("role", "")})
     await pg_store.mirror_review(item)
     await pg_store.mirror_audit(f"review.{body.decision}", reviewer, {"rid": rid})
     return item
 
 
 @router.post("/review/{rid}/reopen")
-async def review_reopen(rid: str, user: dict = Depends(require_user)):
+async def review_reopen(rid: str, user: dict = Depends(require_role(*_REVIEW_ROLES))):
     """翻案（转人工复核）：已处理（含 AI·阈值自动签发）条目回到待核对，清除签署信息。
     双控对称：操作人不能是提交人本人（管理员/其他审核人可翻案）。翻案本身记审计留痕。"""
     operator = user.get("username", "system")
@@ -450,7 +472,7 @@ async def review_reopen(rid: str, user: dict = Depends(require_user)):
     except review.ReviewError as e:
         raise HTTPException(400, str(e))
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="reopened",
-                            actor=operator, payload={"rid": rid})
+                            actor=operator, payload={"rid": rid, "role": user.get("role", "")})
     await pg_store.mirror_review(item)
     await pg_store.mirror_audit("review.reopened", operator, {"rid": rid})
     return item
@@ -534,7 +556,8 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
         lines.append(f"- [危急值] {f['item']}={f['value']} {f['issue']}")
     text = "\n".join(lines)
     await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="query", actor=actor,
-                            payload={"fields": len(req.record), "labs": len(req.labs or {})})
+                            payload={"fields": len(req.record), "labs": len(req.labs or {}),
+                                     "role": user.get("role", "")})
     if settings.qc_auto_pass:
         # 三档分流：①确定性硬伤 → 自动驳回不入队；②硬伤全过且置信 ≥0.85 → 自动归档不入队；
         # ③其余（内涵轨缺陷/危急值）→ 走现行为入队人工终审。默认关闭，行为完全不变。
@@ -589,7 +612,7 @@ async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
     from backend.core.llm_factory import get_llm
     actor = user.get("username", "system")
     await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="parse", actor=actor,
-                            payload={"len": len(req.text)})
+                            payload={"len": len(req.text), "role": user.get("role", "")})
     try:
         llm = get_llm("medical_literature")
         r = await llm.ainvoke([SystemMessage(content=_QC_PARSE_PROMPT),
@@ -733,8 +756,12 @@ async def admin_delete_department(name: str, user: dict = Depends(require_role("
 
 # ---------- admin 运维：数据面板 / 队列清理（只读优先，不做裸 SQL） ----------
 @router.get("/admin/data")
-async def admin_data(user: dict = Depends(require_role("admin"))):
-    """管理员只读数据面板：用户、审计流、队列统计、PG 镜像与知识库规模、基础设施状态。"""
+async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: int = 0):
+    """管理员只读数据面板：用户、审计流、队列统计、PG 镜像与知识库规模、基础设施状态。
+
+    audit_offset（任务A）：审计流翻页偏移（每页 50，与前端「上一页/下一页」配合）；
+    负数按 0 处理，绝不因越界参数 500。
+    """
     from backend.core.auth import all_users
     from backend.core.medical_kb import doc_count, milvus_status
     from backend.core.embedder import device
@@ -748,10 +775,11 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
     al = get_audit_logger()
     # F5：保留完整 ISO 串（含 +00:00 偏移）。此前 [:19] 切掉时区后，前端 new Date 按
     # 本地时区解析 UTC 壁钟，审计流时间比本地慢 8 小时；fmtTs 依赖时区信息做本地化。
+    # 任务A：audit_offset 翻页（每页 50），配合 AuditLog.recent(n, offset)。
     audit_recent = [{"ts": e["ts"], "event": e["event_type"],
                      "action": e["payload"].get("action", ""), "actor": e["actor"],
                      "payload": e.get("payload", {})}  # 完整 payload 下传，供前端人话化详情
-                    for e in al.recent(50)]
+                    for e in al.recent(50, offset=max(0, audit_offset))]
     try:
         pg_counts = await pg_store.counts()
     except Exception:  # noqa: BLE001
@@ -783,7 +811,8 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
         raise HTTPException(400, "确认词不符：请输入「清空」以确认执行")
     n = await asyncio.to_thread(review.purge_pending)
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="purge_pending",
-                            actor=user.get("username", "admin"), payload={"count": n})
+                            actor=user.get("username", "admin"),
+                            payload={"count": n, "role": user.get("role", "")})
     await pg_store.mirror_audit("review.purge_pending", user.get("username", "admin"), {"count": n})
     await pg_store.purge_pending_reviews()
     return {"purged": n}

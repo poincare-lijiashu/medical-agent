@@ -2,7 +2,9 @@
 
 常规答案医生在线直接采纳（不入队）；仅当回答被判定为高风险/低置信时入队，
 由「第二名」医生/药师签发。强制双控：reviewer 不能是提交者本人。
-存储：data/review/queue.json（原子写）。审计另记。
+存储走 pg_store repo 层（B1 数据真源化）：PG 池可用 → PG 真源（review_queue 含 images）；
+PG 不可用/异常/空表 → data/review/queue.json（现状行为完全等价，PermissionError 重试
+与 _lock 锁语义保留在 JSON 路径）。审计另记。
 """
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ import uuid
 from datetime import datetime, timezone
 
 from PIL import Image
+
+from backend.core import pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 QUEUE_FILE = os.path.join(BASE_DIR, "data", "review", "queue.json")
@@ -76,9 +80,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _load() -> list[dict]:
-    """读队列文件。Windows 下与他人并发写（_save 的 os.replace 前）可能瞬时 PermissionError，
-    有限重试后仍失败才抛原异常（FIND-04；读路径不加锁，仅重试）。"""
+def _load_json() -> list[dict]:
+    """queue.json 现状读逻辑（JSON 兜底真源）。Windows 下与他人并发写（_save 的 os.replace
+    前）可能瞬时 PermissionError，有限重试后仍失败才抛原异常（FIND-04；读路径不加锁，仅重试）。"""
     if not os.path.isfile(QUEUE_FILE):
         return []
     for attempt in range(4):  # 首次 + 3 次重试 × 50ms
@@ -92,12 +96,14 @@ def _load() -> list[dict]:
     return []  # pragma: no cover —— 不可达（重试耗尽时已 raise）
 
 
+def _load() -> list[dict]:
+    # B1 数据真源化：PG 池可用 → PG 真源；不可用/异常/空表 → JSON（重试语义保留在 _load_json）
+    return pg_store.load_queue(QUEUE_FILE, _load_json)
+
+
 def _save(items: list[dict]) -> None:
-    os.makedirs(os.path.dirname(QUEUE_FILE), exist_ok=True)
-    tmp = QUEUE_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, QUEUE_FILE)
+    # B1：JSON 原子写兜底 + PG 全量同步（best-effort）；仍运行在调用方 _lock 临界区内
+    pg_store.save_queue(items, QUEUE_FILE)
 
 
 def submit(*, agent: str, question: str, answer: str, confidence: float,

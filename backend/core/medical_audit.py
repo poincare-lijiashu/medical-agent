@@ -4,12 +4,19 @@
 - PHIRedactor：正则替换身份证/手机/邮箱为占位符（确定性、无状态）。
 - AuditLog：追加式 JSONL 落盘，无 delete/update 方法（满足审计不可篡改）。
   write/append/record 三种调用形状均兼容（内部归一化），杜绝跨模块签名漂移。
+- B2 轮转归档：主文件超 5MB 或跨天 → 重命名 audit-YYYYMMDD-HHMMSS.jsonl 并重建主文件；
+  超 30 天的历史轮转文件移入 data/audit/archive/ 并 gzip 压缩（启动/轮转时清理）。
+  轮转与追加在同一把锁内完成，任何轮转/归档异常仅告警，绝不阻断审计写入。
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
+import shutil
+import threading
+import time
 from collections import deque
 from datetime import datetime, timezone
 
@@ -36,6 +43,11 @@ _ADDR = re.compile(
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AUDIT_DIR = os.path.join(BASE_DIR, "data", "audit")
 AUDIT_FILE = os.path.join(AUDIT_DIR, "audit.jsonl")
+ARCHIVE_DIR = os.path.join(AUDIT_DIR, "archive")  # B2：gzip 归档目录
+
+# B2 轮转/归档参数（模块级常量，测试可 monkeypatch）：主文件 5MB 或跨天轮转；历史保留 30 天
+_ROTATE_BYTES = 5 * 1024 * 1024
+_ARCHIVE_DAYS = 30
 
 # 旧 2-str 调用的用户名启发式：本系统用户名（doctor01/admin01 等）为「字母开头 + 含数字」；动作词（query 等）不含数字
 _USERNAMEISH = re.compile(r"[A-Za-z][A-Za-z0-9_\-.]*\d")
@@ -59,10 +71,16 @@ class AuditLog:
     def __init__(self, path: str = AUDIT_FILE):
         self.path = path
         self.entries = deque(maxlen=500)  # 有界缓存；权威记录落 JSONL
+        self._lock = threading.Lock()  # B2：追加+轮转临界区（轮转必须在锁内做，防并发重命名竞态）
         self._bootstrap()
 
     def _bootstrap(self) -> None:
-        """启动时从 JSONL 尾部回填有界缓存（只读文件末尾 256KB，避免大文件全量载入 OOM）。"""
+        """启动时从 JSONL 尾部回填有界缓存（只读文件末尾 256KB，避免大文件全量载入 OOM）；
+        并清理超保留期的历史轮转文件（B2：移入 archive/ 并 gzip）。"""
+        try:
+            self._archive_expired()
+        except Exception:  # noqa: BLE001 —— 启动清理尽力而为
+            pass
         try:
             if not os.path.isfile(self.path):
                 return
@@ -84,6 +102,59 @@ class AuditLog:
         except Exception:  # noqa: BLE001
             pass
 
+    # ---- B2：轮转归档 ----
+
+    def _rotate_if_needed(self) -> None:
+        """主文件超 _ROTATE_BYTES 或跨天（主文件 mtime 日期 != 今天）→ 重命名为
+        audit-YYYYMMDD-HHMMSS.jsonl 并顺带清理过期历史；随后追加写自动重建主文件。
+        仅在 _emit 的锁内调用；任何异常仅告警（轮转失败时主文件继续追加，不丢审计）。"""
+        try:
+            if not os.path.isfile(self.path):
+                return
+            need = os.path.getsize(self.path) >= _ROTATE_BYTES
+            if not need:  # 跨天判定：主文件最后写入日期早于今天（本地日期）
+                last_day = datetime.fromtimestamp(os.path.getmtime(self.path)).date()
+                need = last_day != datetime.now().date()
+            if not need:
+                return
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            rotated = os.path.join(os.path.dirname(self.path), f"audit-{stamp}.jsonl")
+            n = 1
+            while os.path.exists(rotated):  # 同秒多次轮转防覆盖（文件名递增后缀，仍命中 audit-* 归档模式）
+                rotated = os.path.join(os.path.dirname(self.path), f"audit-{stamp}-{n}.jsonl")
+                n += 1
+            os.replace(self.path, rotated)
+            get_logger(__name__).info("audit.rotated", file=os.path.basename(rotated))
+            self._archive_expired()  # 写入路径内顺带清理（>30 天历史 → archive/ + gzip）
+        except Exception as e:  # noqa: BLE001
+            get_logger(__name__).warning("audit.rotate_failed", error=str(e)[:120])
+
+    def _archive_expired(self) -> None:
+        """B2：审计目录中超 _ARCHIVE_DAYS 的历史轮转文件（audit-*.jsonl，不含主文件
+        audit.jsonl）移入 <审计目录>/archive/ 并 gzip 压缩。幂等（原文件删除后不再命中）；
+        逐文件容错，单个失败不影响其余归档。归档目录由 self.path 派生（测试隔离友好）。"""
+        d = os.path.dirname(self.path)
+        if not os.path.isdir(d):
+            return
+        archive_dir = os.path.join(d, "archive")
+        cutoff = time.time() - _ARCHIVE_DAYS * 86400
+        for name in os.listdir(d):
+            if not (name.startswith("audit-") and name.endswith(".jsonl")):
+                continue
+            src = os.path.join(d, name)
+            try:
+                if not os.path.isfile(src) or os.path.getmtime(src) > cutoff:
+                    continue
+                os.makedirs(archive_dir, exist_ok=True)
+                dst = os.path.join(archive_dir, name + ".gz")
+                with open(src, "rb") as fin, gzip.open(dst, "wb") as fout:
+                    shutil.copyfileobj(fin, fout)  # 压缩成功后再删原文件（防中途失败丢数据）
+                os.remove(src)
+                get_logger(__name__).info("audit.archived", file=name)
+            except Exception as e:  # noqa: BLE001 —— 单文件归档失败不阻断其余文件
+                get_logger(__name__).warning("audit.archive_failed",
+                                             file=name, error=str(e)[:120])
+
     def _emit(self, event_type: str, actor: str, payload: dict) -> None:
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -92,9 +163,11 @@ class AuditLog:
             "payload": payload,
         }
         self.entries.append(entry)
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        with self._lock:  # B2：轮转与追加在同一临界区内，防并发写轮转竞态
+            self._rotate_if_needed()
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def write(self, event_type: str = "event", action: str = "", actor: str = "system",
               payload: dict | None = None, **kw) -> None:
@@ -142,9 +215,16 @@ class AuditLog:
     def record(self, actor: str = "system", action: str = "event", payload: dict | None = None) -> None:
         self._emit(action, actor, payload or {})
 
-    def recent(self, n: int = 8) -> list:
-        """最近 n 条（新→旧），供概览活动流。"""
-        return list(self.entries)[-n:][::-1]
+    def recent(self, n: int = 8, offset: int = 0) -> list:
+        """最近 n 条（新→旧），供概览活动流/审计流。
+
+        offset 翻页（任务A）：0=最新一页，50=跳过最近 50 条取上一页；越界返回空列表。
+        """
+        items = list(self.entries)
+        if offset < 0:
+            offset = 0
+        end = max(0, len(items) - offset)
+        return items[max(0, end - n):end][::-1]
 
 
 _log = AuditLog()
