@@ -283,6 +283,10 @@
           <div style="margin-top:14px"><button class="btn primary" id="qcRun" onclick="runQc()">运行质控</button></div>
         </div>
         <div id="qcOut"></div>
+        <!-- 任务2：医生视图「我的质控驳回」卡片（只读+驳回原因；qc/admin 隐藏，其走全局档案） -->
+        <div class="card" id="qcRejCard" style="display:none"><h3>我的质控驳回</h3>
+          <div class="src">仅显示您本人提交、被质控驳回的记录（含驳回原因与时间，只读）。</div>
+          <div id="qcRej" style="margin-top:8px"></div></div>
       </div>
     </section>
 
@@ -306,6 +310,9 @@
       <div class="shead" style="padding:10px 26px;border-bottom:1px solid var(--line);gap:8px">
         <button class="btn sm primary" id="tabPending" onclick="switchReviewTab('pending')">待处理</button>
         <button class="btn sm ghost" id="tabHistory" onclick="switchReviewTab('history')">历史记录</button>
+        <!-- 任务3：qc/admin 全局档案筛选（doctor 视图隐藏） -->
+        <input class="inp" id="reviewFilter" aria-label="档案筛选" placeholder="筛选：助手/问题/提交人" spellcheck="false"
+               style="max-width:220px;margin-left:auto;display:none" oninput="onReviewFilter(this.value)">
       </div>
       <div class="body" id="reviewBody"></div>
     </section>
@@ -384,6 +391,7 @@ const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','q
   admin:['overview','kb','qc','review','data','arch'],
   qc:['overview','literature','drug','qc','review']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任）；E 角色细分：qc（质控员）可见质控工作台+审核中心，admin 既有入口不变，doctor 行为不变 */
 async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;
+CFG.full=!!c.qc_auto_sign_full;  /* 任务3：留痕模式开关——qc/admin 审核中心转只读档案 */
 const dot=document.getElementById('kbDot');
 if(dot){const ok=!!(c.milvus&&c.milvus.connected);dot.style.display='inline-block';dot.style.background=ok?'var(--ok)':'var(--danger)';dot.title=ok?'知识库已连接':'知识库未连接（自动重试中，问答走降级路径）';}}}catch(e){}}
 
@@ -508,7 +516,7 @@ function go(k){
   if(k==='overview'){document.getElementById('scr-home').classList.add('on');loadOverview();}
   else if(k==='kb'){document.getElementById('scr-kb').classList.add('on');loadKb();}
   else if(k==='mdt')document.getElementById('scr-mdt').classList.add('on');
-  else if(k==='qc')document.getElementById('scr-qc').classList.add('on');
+  else if(k==='qc'){document.getElementById('scr-qc').classList.add('on');loadQcRejections();}  /* 任务2：医生视图「我的质控驳回」卡片 */
   else if(k==='data'){document.getElementById('scr-data').classList.add('on');loadData();}
   else if(k==='arch')document.getElementById('scr-arch').classList.add('on');
   else if(k==='review'){document.getElementById('scr-review').classList.add('on');loadReview();}
@@ -645,12 +653,32 @@ function renderMdt(d){
 
 /* ---- review center ---- */
 let reviewTab='pending', historyItems=[];
+let myConfirmItems=[];  /* 任务3：doctor/pharmacist 的「我的待确认」项（my-pending-confirm 数据源） */
+function canSign(){return (ROLE==='qc'||ROLE==='admin')&&!CFG.full;}  /* 任务2/3：签发/驳回/翻案仅 qc/admin；留痕模式下全局只读档案 */
+function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案与 tab 标签 */
+  const mine=!(ROLE==='qc'||ROLE==='admin');
+  const h=document.querySelector('#scr-review .shead h2'),p=document.querySelector('#scr-review .shead p');
+  if(h)h.textContent=mine?'审核中心 · 我的记录':'审核中心 · 高风险双人核对';
+  if(p)p.textContent=mine?'仅显示您提交的待确认项与历史记录；签发/驳回由质控员（qc）/管理员执行':'高风险结论需第二名医师/药师签发';
+  const tp=document.getElementById('tabPending'),th=document.getElementById('tabHistory');
+  if(tp)tp.textContent=mine?'我的待确认':'待处理';
+  if(th)th.textContent=mine?'我的历史':'历史记录';
+  const fi=document.getElementById('reviewFilter');  /* 档案筛选仅 qc/admin 可见 */
+  if(fi)fi.style.display=mine?'none':'';}
+let reviewFilterQ='';
+function onReviewFilter(v){reviewFilterQ=(v||'').trim().toLowerCase();renderReview();}
+function _rvMatch(p){  /* 任务3：全局档案关键字筛选（agent/问题/提交人/风险） */
+  if(!reviewFilterQ)return true;
+  const s=((p.agent||'')+' '+(p.question||'')+' '+(p.submitted_by||'')+' '+(p.risk_reason||'')).toLowerCase();
+  return s.includes(reviewFilterQ);}
 function switchReviewTab(t){reviewTab=t;
   document.getElementById('tabPending').className='btn sm '+(t==='pending'?'primary':'ghost');
   document.getElementById('tabHistory').className='btn sm '+(t==='history'?'primary':'ghost');
   renderReview();}
 async function loadReview(){
-  const b=document.getElementById('reviewBody');b.innerHTML=`<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk"></div></div>`;
+  const b=document.getElementById('reviewBody');renderReviewHeader();
+  b.innerHTML=`<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk"></div></div>`;
+  if(!(ROLE==='qc'||ROLE==='admin'))return loadReviewMine(b);  /* 任务3：doctor/pharmacist = 我的待确认+我的历史 */
   try{const r=await fetch('/api/v1/medical/review/pending',{headers:auth()});
     if(r.status===401){logout();return;} const d=await r.json();
     reviewItems=d.pending; reviewMe=d.me; reviewCount=d.pending.length; renderRail();
@@ -661,6 +689,16 @@ async function loadReview(){
     if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
     switchReviewTab(reviewTab);
   }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+/* 任务3：doctor/pharmacist 视图——我的待确认（self-confirm）+ 我的历史（不再是全员工作台） */
+async function loadReviewMine(b){
+  try{const r=await fetch('/api/v1/medical/review/my-pending-confirm',{headers:auth()});
+    if(r.status===401){logout();return;} const d=await r.json();
+    myConfirmItems=d.items||[]; reviewMe=d.me||''; reviewCount=myConfirmItems.length; renderRail();
+    document.getElementById('purgeBtn').style.display='none';
+    try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
+      if(h.ok)historyItems=(((await h.json()).items)||[]).filter(i=>i.submitted_by===reviewMe&&i.status!=='pending');}catch(e){}
+    reviewItems=[];switchReviewTab(reviewTab);
+  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
 const REVIEW_PER=12, HIST_PER=12;
 let histPage=0;
 function histGo(d){histPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
@@ -668,8 +706,9 @@ const _tsFmt=new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour
 function fmtTs(s){if(!s)return '';const d=new Date(s);return isNaN(d)?esc(s):_tsFmt.format(d);}
 function reviewRow(p,resolved){
   const mine=p.submitted_by===reviewMe;
-  /* 双控自动签发：reviewed_by 含「AI·阈值自动」→ 徽标展示，并提供翻案（转人工复核）入口 */
-  const auto=resolved&&p.status==='approved'&&String(p.reviewed_by||'').includes('AI·阈值自动');
+  /* 双控自动签发：reviewed_by 含「AI·阈值自动」或「AI·留痕模式(自动)」→ 徽标展示；
+     qc/admin 且非留痕模式可翻案（转人工复核）——任务3：留痕模式下全局只读，无翻案入口 */
+  const auto=resolved&&p.status==='approved'&&/AI·(阈值自动|留痕模式)/.test(String(p.reviewed_by||''));
   const statusChip=resolved?`<span class="chip ${p.status==='approved'?(auto?'mid':'ok'):'warn'}"><span class="dot"></span>${p.status==='approved'?(auto?'自动签发':'已签发'):'已驳回'}</span>`:'';
   return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">${esc(p.agent)}：${esc((p.question||'').slice(0,60))} <span class="src">▾ 展开全文</span></summary>
       <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.question||'')}</div>
@@ -677,28 +716,59 @@ function reviewRow(p,resolved){
       <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
       <td class="num">${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
       <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`+
-        (auto&&p.submitted_by!==reviewMe?`<div style="margin-top:6px"><button class="btn sm secondary" onclick="reopenReview('${p.id}')">转人工复核</button></div>`:'')):
+        (auto&&canSign()&&p.submitted_by!==reviewMe?`<div style="margin-top:6px"><button class="btn sm secondary" onclick="reopenReview('${p.id}')">转人工复核</button></div>`:'')):
         (mine?'<span class="src">双控：你不能核对本人提交</span>':
-        `<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
-        <button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button></div>`)}
+        (canSign()?`<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
+        <button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button></div>`
+        :'<span class="src">'+(CFG.full?'留痕模式：AI 已自动签发（只读档案）':'签发/驳回需质控员或管理员')+'</span>'))}
+        <button class="btn sm ghost" onclick="openReviewDetail('${p.id}')">详情</button></td></tr>`;}
+/* 任务3：doctor「我的待确认」行——AI 自动签发的高危项等待本人知情确认（仅确认，无签发权） */
+function myConfirmRow(p){
+  const autoSigned=p.status==='approved'&&/AI·/.test(String(p.reviewed_by||''));
+  return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">${esc(p.agent)}：${esc((p.question||'').slice(0,60))} <span class="src">▾ 展开全文</span></summary>
+      <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.question||'')}</div>
+      <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details></td>
+      <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
+      <td class="num">${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
+      <td>${autoSigned?'<span class="chip mid"><span class="dot"></span>AI 自动签发 · 待您知情确认</span>':''}
+        <button class="btn sm primary" onclick="selfConfirm('${p.id}')">知情确认</button>
         <button class="btn sm ghost" onclick="openReviewDetail('${p.id}')">详情</button></td></tr>`;}
 function renderReview(){
   const b=document.getElementById('reviewBody');
+  const mine=!(ROLE==='qc'||ROLE==='admin');
   if(reviewTab==='history'){
-    if(!historyItems.length){b.innerHTML='<div class="empty">'+ICON.review+'<div>暂无已处理的历史记录。</div><div class="lead" style="margin:8px auto 0">签发/驳回过的项会出现在这里。</div></div>';return;}
-    const pages=Math.max(1,Math.ceil(historyItems.length/HIST_PER));
+    const hist=(historyItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
+    if(!hist.length){b.innerHTML='<div class="empty">'+ICON.review+`<div>${mine?'暂无您的历史记录。':'暂无已处理的历史记录。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'签发/驳回过的项会出现在这里。'}</div></div>`;return;}
+    const pages=Math.max(1,Math.ceil(hist.length/HIST_PER));
     if(histPage>=pages)histPage=pages-1; if(histPage<0)histPage=0;
-    const rows=historyItems.slice(histPage*HIST_PER,histPage*HIST_PER+HIST_PER).map(p=>reviewRow(p,true)).join('');
+    const rows=hist.slice(histPage*HIST_PER,histPage*HIST_PER+HIST_PER).map(p=>reviewRow(p,true)).join('');
     const hpager=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
       <button class="btn sm secondary" ${histPage===0?'disabled':''} onclick="histGo(-1)">‹ 上一页</button>
-      <span class="src num">第 ${histPage+1} / ${pages} 页 · 共 ${historyItems.length} 条已处理</span>
+      <span class="src num">第 ${histPage+1} / ${pages} 页 · 共 ${hist.length} 条已处理</span>
       <button class="btn sm secondary" ${histPage>=pages-1?'disabled':''} onclick="histGo(1)">下一页 ›</button></div>`;
     b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>处理结果</th></tr></thead><tbody>${rows}</tbody></table>${hpager}</div>`;
     return;}
-  if(!reviewItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待第二名医师/药师签发。</div></div>`;return;}
-  const start=reviewPage*REVIEW_PER, slice=reviewItems.slice(start,start+REVIEW_PER);
+  /* 任务3：doctor/pharmacist「我的待确认」分支（数据源 my-pending-confirm，仅本人） */
+  if(mine){
+    const mineItems=(myConfirmItems||[]).filter(_rvMatch);
+    if(!mineItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有您的待确认项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。'}</div></div>`;return;}
+    const pagesM=Math.max(1,Math.ceil(mineItems.length/REVIEW_PER));
+    if(reviewPage>=pagesM)reviewPage=pagesM-1; if(reviewPage<0)reviewPage=0;
+    const startM=reviewPage*REVIEW_PER, sliceM=mineItems.slice(startM,startM+REVIEW_PER);
+    const rowsM=sliceM.map(myConfirmRow).join('');
+    const pagerM=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
+      <button class="btn sm secondary" ${reviewPage===0?'disabled':''} onclick="reviewGo(-1)">‹ 上一页</button>
+      <span class="src num">第 ${reviewPage+1} / ${pagesM} 页 · 共 ${mineItems.length} 项</span>
+      <button class="btn sm secondary" ${reviewPage>=pagesM-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
+    b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rowsM}</tbody></table>${pagerM}</div>`;
+    return;}
+  const pend=(reviewItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
+  if(!pend.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待质控员/管理员签发。'}</div></div>`;return;}
+  const pages=Math.max(1,Math.ceil(pend.length/REVIEW_PER));
+  if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
+  const start=reviewPage*REVIEW_PER, slice=pend.slice(start,start+REVIEW_PER);
   const rows=slice.map(p=>reviewRow(p,false)).join('');
-  const total=Math.ceil(reviewItems.length/REVIEW_PER);
+  const total=Math.ceil(pend.length/REVIEW_PER);
   const pager=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
     <button class="btn sm secondary" ${reviewPage===0?'disabled':''} onclick="reviewGo(-1)">‹ 上一页</button>
     <span class="src num">第 ${reviewPage+1} / ${total} 页 · 共 ${reviewItems.length} 项</span>
@@ -747,21 +817,32 @@ async function reopenReview(id){
     if(r.ok){toast('已转人工复核，请在「待处理」中核对');loadReview();}
     else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}
   }catch(e){toast('操作失败：'+e.message);}}
-function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[]).find(x=>x.id===id);if(!p){toast('未找到');return;}
+/* 任务3：医生对 AI 留痕自动签发项知情确认（仅本人；后端校验+审计 self_confirmed） */
+async function selfConfirm(id){
+  try{const r=await fetch('/api/v1/medical/review/'+id+'/self-confirm',{method:'POST',headers:auth()});
+    if(r.status===401){logout();return;}
+    if(r.ok){toast('已确认知悉，感谢配合');loadReview();}
+    else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}
+  }catch(e){toast('操作失败：'+e.message);}}
+function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[],myConfirmItems||[]).find(x=>x.id===id);if(!p){toast('未找到');return;}
   const mine=p.submitted_by===(document.getElementById('who').textContent);
-  const auto=p.status==='approved'&&String(p.reviewed_by||'').includes('AI·阈值自动');  /* 双控自动签发 */
+  const auto=p.status==='approved'&&/AI·(阈值自动|留痕模式)/.test(String(p.reviewed_by||''));  /* 双控自动签发 */
   /* F3 核对可见图片：仅渲染 data:image/ 前缀的影像（防属性逃逸再叠加 esc），点击放大复用模态 */
   const imgs=(p.images||[]).filter(u=>String(u).startsWith('data:image/'));
   const imgsHtml=imgs.length?`<h4 style="margin-top:14px">影像（点击放大）</h4><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${imgs.map(u=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;cursor:zoom-in" src="${esc(u)}" alt="待核对影像" onclick="showImg(this.src)">`).join('')}</div>`:'';
+  /* 任务3：操作区按角色/模式渲染——qc/admin 且非留痕模式可签发/驳回/翻案；
+     医生本人且待确认项 → 知情确认；其余只读 */
+  const actions=`<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">${
+    (mine&&p.self_confirm_required&&!p.confirmed_by_self)?`<button class="btn sm primary" onclick="selfConfirm('${p.id}')">知情确认</button>`:''}${(canSign()&&!mine)?`<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`:''}
+      ${(canSign()&&!mine&&auto)?`<button class="btn sm ghost" onclick="reopenReview('${p.id}')">转人工复核</button>`:''}
+      ${(!canSign()&&!mine)?'<span class="src">签发/驳回由质控员（qc）/管理员执行</span>':''}</div>`;
   document.getElementById('mTitle').textContent='核对详情 · '+p.agent;
-  document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span>${auto?'<span class="chip mid"><span class="dot"></span>自动签发</span>':''}</div>
+  document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span>${auto?'<span class="chip mid"><span class="dot"></span>自动签发</span>':''}${p.confirmed_by_self?'<span class="chip ok"><span class="dot"></span>本人已确认</span>':''}</div>
     <h4>问题</h4><div class="txt md">${md(p.question||'')}</div>
     <h4 style="margin-top:14px">AI 回答</h4><div class="txt md">${md(p.answer||'')}</div>
     ${imgsHtml}
     <h4 style="margin-top:14px">提交人</h4><div>${esc(p.submitted_by||'')}</div>
-    <div style="margin-top:16px;display:flex;gap:8px">${mine?'<span class="src">双控：你不能核对本人提交</span>':
-      `<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`}
-      ${(!mine&&auto)?`<button class="btn sm ghost" onclick="reopenReview('${p.id}')">转人工复核</button>`:''}</div>`;
+    ${actions}`;
   openModal();document.getElementById('mBody').querySelector('input,button,textarea,[tabindex]')?.focus();}
 /* F3：影像放大查看（复用 #modal）。data URL 前缀校验：非 data:image/ 一律拒绝渲染 */
 function showImg(src){if(!src||!src.startsWith('data:image/'))return;
@@ -804,9 +885,49 @@ async function runQc(){const rec={};QC_LABELS.forEach((l,i)=>{const v=document.g
     const triage=d.status==='auto_rejected'?'<span class="chip bad"><span class="dot"></span>AI自动驳回</span>'
       :(!d.needs_human_review&&!d.review_id)?'<span class="chip ok"><span class="dot"></span>AI预审通过</span>'
       :'<span class="chip mid"><span class="dot"></span>人工复核</span>';
-    out.innerHTML=`<div class="card"><div class="foot" style="margin:0 0 8px">${confChip(d.confidence,d.needs_human_review)}${triage}</div><div class="txt md">${md(d.answer)}</div></div>`;
+    /* 任务1：按维度分组渲染（QC_CATEGORIES 六枚举，与后端一致）+ 快速过滤 chip；
+       无结构化 qc_defects（异常/降级）时回落到原文渲染，保证任何情况都有结果可见。 */
+    qcLastDefects=(d.qc_defects||[]).filter(x=>x&&x.category);qcCatFilter='全部';
+    const grouped=qcLastDefects.length?`<div id="qcChips" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 2px">${qcChipRow()}</div>
+      <div id="qcGroups"></div>
+      <details style="margin-top:10px"><summary class="src" style="cursor:pointer">AI 建议原文 ▾</summary>
+        <div class="txt md" style="margin-top:6px">${md(d.answer)}</div></details>`
+      :`<div class="txt md">${md(d.answer)}</div>`;
+    out.innerHTML=`<div class="card"><div class="foot" style="margin:0 0 8px">${confChip(d.confidence,d.needs_human_review)}${triage}</div>${grouped}</div>`;
+    if(qcLastDefects.length)renderQcGroups();
   }catch(e){out.innerHTML='<div class="card">⚠ 质控请求失败</div>';}
   finally{btn.disabled=false;}}
+/* ---- 任务1：质控结果按维度分组 + 快速过滤 ---- */
+const QC_CATEGORIES=['完整性','一致性','诊断依据','鉴别诊断','书写规范','其他'];
+let qcLastDefects=[],qcCatFilter='全部';
+function qcChipRow(){const counts={};qcLastDefects.forEach(d=>{counts[d.category]=(counts[d.category]||0)+1;});
+  const cats=['全部'].concat(QC_CATEGORIES.filter(c=>counts[c]));
+  return cats.map(c=>{const n=c==='全部'?qcLastDefects.length:(counts[c]||0);
+    return `<button class="btn sm ${qcCatFilter===c?'primary':'ghost'}" onclick="qcFilter('${c}')">${esc(c)} <span class="num">${n}</span></button>`;}).join('');}
+function qcFilter(c){qcCatFilter=c;const chips=document.getElementById('qcChips');if(chips)chips.innerHTML=qcChipRow();renderQcGroups();}
+function renderQcGroups(){const el=document.getElementById('qcGroups');if(!el)return;
+  const list=qcLastDefects.filter(d=>qcCatFilter==='全部'||d.category===qcCatFilter);
+  const by={};list.forEach(d=>{(by[d.category]=by[d.category]||[]).push(d);});
+  const html=QC_CATEGORIES.filter(c=>by[c]).map(c=>`<div style="margin-top:10px"><b>${esc(c)}</b>
+      <ul class="rules" style="margin-top:4px">${by[c].map(d=>`<li>[${esc(d.level||'中')}] ${esc(d.issue||'')}${(d.field&&d.field!=='内涵质量')?`（${esc(d.field)}）`:''}</li>`).join('')}</ul></div>`).join('');
+  el.innerHTML=html||'<div class="src" style="margin-top:8px">当前维度暂无缺陷条目。</div>';}
+/* ---- 任务2：医生视图「我的质控驳回」卡片（只读；数据隔离由后端 /qc/my-rejections 服务端过滤保证） ---- */
+async function loadQcRejections(){
+  const card=document.getElementById('qcRejCard'),el=document.getElementById('qcRej');
+  if(!card||!el)return;
+  if(ROLE==='qc'||ROLE==='admin'){card.style.display='none';return;}  /* qc/admin 走审核中心全局档案 */
+  card.style.display='';
+  el.innerHTML='<div class="src">加载中…</div>';
+  try{const r=await fetch('/api/v1/medical/qc/my-rejections',{headers:auth()});
+    if(r.status===401){logout();return;}
+    const d=await r.json();const items=d.items||[];
+    el.innerHTML=items.length?items.map(i=>`<div style="padding:8px 0;border-top:1px solid var(--line)">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip warn"><span class="dot"></span>${esc(i.agent||'qc')}</span>
+      <b class="num">${fmtTs(i.resolved_at||i.ts)}</b><span class="src">审核人：${esc(i.reviewed_by||'—')}</span></div>
+      <div class="txt" style="margin-top:4px;white-space:pre-wrap">${esc(String(i.question||'').slice(0,120))}</div>
+      <div class="txt" style="margin-top:2px">驳回原因：${esc(i.review_note||'未填写')}</div>
+    </div>`).join(''):'<div class="src">暂无驳回记录。</div>';
+  }catch(e){el.innerHTML='<div class="src">⚠ 加载失败</div>';}}
 const QC_LABELS=['主诉','现病史','既往史','体格检查','辅助检查','初步诊断','医师签名'];
 function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>{if(i===6)return;document.getElementById('qcf_'+i).value=s[i];});document.getElementById('qcLabs').value='';toast('已填入示例（医师签名已锁定为当前账号）');}
 /* F2：粘贴整段病历 → /qc/parse LLM 拆分 → 填充 qcf_0-6（仅覆盖拆分出的非空字段，保留已填内容） */

@@ -1,9 +1,10 @@
 """E 角色细分测试：qc（质控员）角色登录、质控工作台端点可见性、doctor 行为不变、
 admin 门禁不变、审计 payload 带 role、seed qc01 演示账号。
 
-保守默认（与任务约束一致）：质控工作台（review 端点）后端白名单为
-qc+admin+doctor+pharmacist（require_role 多角色），doctor 原本可访问故保持原行为，
-仅新增 qc 入口，无行为回退。
+保守默认（与任务约束一致）：质控工作台 GET 列表（review/pending、review/history）
+白名单为 qc+admin+doctor+pharmacist（require_role 多角色），doctor/pharmacist 的
+列表可见权保持不变；任务2 已将签发/驳回/翻案（resolve/reopen）收窄为 qc/admin，
+新语义见 test_review_flow.py 与 test_review_permission.py。
 """
 import pytest
 from fastapi.testclient import TestClient

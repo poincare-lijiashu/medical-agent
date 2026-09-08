@@ -1,7 +1,10 @@
-"""高危双人核对端到端：药物禁忌→自动入队→提交人自核被拒→第二名药师签发。
+"""高危双人核对端到端：药物禁忌→自动入队→提交人自核被拒→质控员签发。
 
 用 TestClient，直接 seed 用户，不走 lifespan（避免测试期加载 bge-m3/连 Milvus）。
 drug 走纯规则库，无需网络。
+
+任务2 收权（行为变更，本文件锁定新语义）：签发/驳回/翻案由 qc/admin 行使
+（原 doctor/pharmacist 可调复核端点，现 403）；双控（审核人≠提交人）仍由服务端强制。
 """
 from fastapi.testclient import TestClient
 
@@ -24,6 +27,7 @@ def test_high_risk_dual_check_flow():
     c = _client()
     doc = _login(c, "doctor01", "Med@2026")
     ph = _login(c, "pharm01", "Med@2026")
+    qc = _login(c, "qc01", "Med@2026")
     H = lambda t: {"Authorization": "Bearer " + t}
 
     # 药物禁忌 → 高风险 → 入队 + 高置信
@@ -36,23 +40,28 @@ def test_high_risk_dual_check_flow():
     rid = d["review_id"]
     assert rid
 
-    # 医生自己不能核对本人提交（双控）
+    # 任务2 收权：doctor 调复核端点 403（角色门先于双控判定）
     r2 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(doc),
                 json={"decision": "approved", "note": "x"})
-    assert r2.status_code == 400  # ReviewError → 400
+    assert r2.status_code == 403
 
-    # 队列里能看到（作为药师）
+    # 队列里能看到（作为药师，列表可见权保留）
     r3 = c.get("/api/v1/medical/review/pending", headers=H(ph))
     assert r3.status_code == 200
     ids = [i["id"] for i in r3.json()["pending"]]
     assert rid in ids
 
-    # 第二名药师签发通过
+    # 任务2 收权：药师签发 → 403（签字权收窄为 qc/admin）
     r4 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(ph),
                 json={"decision": "approved", "note": "核对无误"})
-    assert r4.status_code == 200, r4.text
-    assert r4.json()["status"] == "approved"
-    assert r4.json()["reviewed_by"] == "pharm01"
+    assert r4.status_code == 403
+
+    # 质控员签发通过（双控：qc01 ≠ 提交人 doctor01）
+    r5 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(qc),
+                json={"decision": "approved", "note": "核对无误"})
+    assert r5.status_code == 200, r5.text
+    assert r5.json()["status"] == "approved"
+    assert r5.json()["reviewed_by"] == "qc01"
 
 
 def test_low_risk_not_enqueued(monkeypatch):
@@ -77,26 +86,31 @@ def test_reopen_auto_signed_item(monkeypatch, tmp_path):
     c = _client()
     doc = _login(c, "doctor01", "Med@2026")
     ph = _login(c, "pharm01", "Med@2026")
+    qc = _login(c, "qc01", "Med@2026")
+    adm = _login(c, "admin01", "Med@2026")
     H = lambda t: {"Authorization": "Bearer " + t}
-    # 模拟 QC_AUTO_SIGN 的落库形态：提交 + AI·阈值自动 签发
+    # 模拟 QC_AUTO_SIGN 的落库形态：提交 + AI·阈值自动 签发（提交人=qc01，供双控对称校验）
     rid = review.submit(agent="drug", question="中危联合用药提示", answer="提示内容", confidence=0.80,
-                        risk_reason="中危相互作用", submitted_by="doctor01")
+                        risk_reason="中危相互作用", submitted_by="qc01")
     review.resolve(rid, "approved", "AI·阈值自动(规则库v2)", "QC_AUTO_SIGN：中危规则库提示自动签发")
-    # pending 条目重开 → 400
+    # pending 条目重开 → 400（管理员有复核权，错误为业务态）
     rid2 = review.submit(agent="drug", question="另一条", answer="内容", confidence=0.9,
                          risk_reason="药物禁忌", submitted_by="pharm01")
-    assert c.post(f"/api/v1/medical/review/{rid2}/reopen", headers=H(ph)).status_code == 400
-    # 提交人本人翻案 → 400（双控对称）
-    assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(doc)).status_code == 400
-    # 其他人员翻案成功：回到待核对，签署信息清除
-    r = c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(ph))
+    assert c.post(f"/api/v1/medical/review/{rid2}/reopen", headers=H(adm)).status_code == 400
+    # 任务2 收权：doctor/pharmacist 调翻案 → 403
+    assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(doc)).status_code == 403
+    assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(ph)).status_code == 403
+    # 提交人本人翻案 → 400（双控对称：qc01 是该条目提交人）
+    assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(qc)).status_code == 400
+    # 其他复核人（admin）翻案成功：回到待核对，签署信息清除
+    r = c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(adm))
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["status"] == "pending"
     assert d["reviewed_by"] is None and d["review_note"] is None and d["resolved_at"] is None
-    ids = [i["id"] for i in c.get("/api/v1/medical/review/pending", headers=H(ph)).json()["pending"]]
+    ids = [i["id"] for i in c.get("/api/v1/medical/review/pending", headers=H(adm)).json()["pending"]]
     assert rid in ids
     # 不存在的条目 → 400
-    assert c.post("/api/v1/medical/review/rev-nope/reopen", headers=H(ph)).status_code == 400
+    assert c.post("/api/v1/medical/review/rev-nope/reopen", headers=H(adm)).status_code == 400
     # 未认证 → 401
     assert c.post(f"/api/v1/medical/review/{rid}/reopen").status_code in (401, 403)

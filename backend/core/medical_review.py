@@ -108,9 +108,11 @@ def _save(items: list[dict]) -> None:
 
 def submit(*, agent: str, question: str, answer: str, confidence: float,
            risk_reason: str, submitted_by: str,
-           images: list[str] | None = None) -> str:
+           images: list[str] | None = None,
+           self_confirm_required: bool = False) -> str:
     """入队一条待核对项，返回 review_id。images：待医生核对的影像（data URL）。
-    压缩/截断为纯函数，在锁外完成（FIND-01）；锁内仅 _load/append/_save。"""
+    压缩/截断为纯函数，在锁外完成（FIND-01）；锁内仅 _load/append/_save。
+    任务3：self_confirm_required=True（留痕模式自动签发的高危项）→ 提交医生需知情确认。"""
     rid = "rev-" + uuid.uuid4().hex[:10]
     compressed = _compress_images(images)  # FIND-01：纯函数不持锁，缩短临界区
     stored_images = None if compressed is None else _cap_total_chars(compressed)
@@ -122,9 +124,53 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             "status": "pending", "submitted_by": submitted_by,
             "reviewed_by": None, "review_note": None, "resolved_at": None,
             "images": stored_images,
+            # 任务3：知情确认三字段（留痕模式使用；常规路径恒为 False/None）
+            "self_confirm_required": bool(self_confirm_required),
+            "confirmed_by_self": None, "self_confirmed_at": None,
         })
         _save(items)
     return rid
+
+
+def my_pending_confirm(username: str) -> list[dict]:
+    """任务3：本人待知情确认项（submitted_by=本人 且 self_confirm_required 且未确认），
+    新→旧，剥离 images（体积控制与 list_all 同纪律）。"""
+    return [{k: v for k, v in i.items() if k != "images"}
+            for i in _load()[::-1]
+            if i.get("submitted_by") == username and i.get("self_confirm_required")
+            and not i.get("confirmed_by_self")]
+
+
+def self_confirm(rid: str, username: str) -> dict:
+    """任务3：提交医生本人对「AI·留痕模式(自动)」签发的高危项做知情确认（仅本人）。
+
+    校验：仅提交人本人；条目须标记 self_confirm_required；不可重复确认。
+    """
+    if not username:
+        raise ReviewError("确认人不能为空")
+    with _lock:
+        items = _load()
+        for i in items:
+            if i["id"] == rid:
+                if i.get("submitted_by") != username:
+                    raise ReviewError("仅提交人本人可确认")
+                if not i.get("self_confirm_required"):
+                    raise ReviewError("该条目无需知情确认")
+                if i.get("confirmed_by_self"):
+                    raise ReviewError("该条目已确认过")
+                i["confirmed_by_self"] = True
+                i["self_confirmed_at"] = _now()
+                _save(items)
+                return i
+        raise ReviewError("未找到该审核条目")
+
+
+def my_rejections(username: str) -> list[dict]:
+    """任务2：本人被驳回（status=rejected）的记录，新→旧，剥离 images。
+    携带 review_note（驳回原因）/reviewed_by（审核人）/resolved_at（时间），供医生端只读卡片。"""
+    return [{k: v for k, v in i.items() if k != "images"}
+            for i in _load()[::-1]
+            if i.get("submitted_by") == username and i.get("status") == "rejected"]
 
 
 def pending() -> list[dict]:

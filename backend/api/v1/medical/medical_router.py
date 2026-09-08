@@ -82,7 +82,9 @@ async def get_config(user: dict = Depends(require_user)):
     return {"chat_model": (chat or {}).get("model_id") or settings.qwen_model_chat,
             "vl_model": (vision or {}).get("model_id") or settings.qwen_model_vl,
             "reasoning_model": settings.qwen_model_reasoning,
-            "milvus": milvus}
+            "milvus": milvus,
+            # 任务3：前端据此切换审核中心形态（True=留痕模式：qc/admin 全局只读档案）
+            "qc_auto_sign_full": settings.qc_auto_sign_full}
 
 
 @router.get("/overview")
@@ -137,6 +139,9 @@ class AskResp(BaseModel):
     # agentic 检索改写轨迹 [{attempt,action,old_query,new_query,reason}]：
     # 仅文献 agent 非空（refine 节点逐轮累积），其余 agent 恒为 []（前端据此选择性渲染）
     refine_trace: list = []
+    # 任务1：质控结构化缺陷 [{category,level,issue,field,track}]（category 已归一六枚举），
+    # 仅 /qc/record 填充，供前端按维度分组渲染与快速过滤；其它 agent 恒为 []
+    qc_defects: list = []
 
 
 class ResolveReq(BaseModel):
@@ -146,15 +151,33 @@ class ResolveReq(BaseModel):
 
 async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_flag: bool,
                            risk_reason: str, actor: str,
-                           images: list[str] | None = None) -> str | None:
+                           images: list[str] | None = None,
+                           self_confirm: bool | None = None) -> str | None:
+    """高危入队；QC_AUTO_SIGN_FULL=True（任务3 留痕模式）时入队后立即自动签发：
+    reviewed_by=「AI·留痕模式(自动)」，含 LLM 自由文本高危——全部自动，医生侧不阻塞；
+    高危项（self_confirm 判定）同时标记 self_confirm_required，由提交医生本人知情确认。
+    self_confirm：显式指定是否高危（drug 中危自动留痕传 review_flag 原值以示区分）；缺省按 review_flag。"""
     await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
     if not review_flag:
         return None
+    full = settings.qc_auto_sign_full
+    need_self = full and (review_flag if self_confirm is None else bool(self_confirm))
     rid = await asyncio.to_thread(review.submit, agent=agent, question=q, answer=answer, confidence=conf,
-                                  risk_reason=risk_reason, submitted_by=actor, images=images)
+                                  risk_reason=risk_reason, submitted_by=actor, images=images,
+                                  self_confirm_required=need_self)
     await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="review_enqueued",
                             actor=actor, payload={"rid": rid, "reason": risk_reason})
     await pg_store.mirror_review(await asyncio.to_thread(review.get, rid))
+    if full:
+        # 任务3：留痕模式——入队即自动签发（不等人工），全程 AI 留痕；医生侧 AskResp 不变
+        try:
+            item = await asyncio.to_thread(review.resolve, rid, "approved", "AI·留痕模式(自动)",
+                                           "QC_AUTO_SIGN_FULL：留痕模式自动签发（含高危，全程 AI 留痕）")
+            await pg_store.mirror_review(item)
+        except review.ReviewError:  # pragma: no cover —— 刚入队必 pending，reviewer 亦非提交人
+            pass
+        await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="auto_sign_full",
+                                actor=actor, payload={"rid": rid, "reason": risk_reason})
     return rid
 
 
@@ -305,9 +328,15 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
         conf, risk, review_flag = 0.55, "未知相互作用", False
     else:  # 识别不足 2 药（旧 else 分支取值）
         conf, risk, review_flag = 0.50, "信息不足", False
-    auto_sign = (settings.qc_auto_sign and sev == "中危" and bool(r.get("sources"))
-                 and str(r["sources"][0]).startswith("drug_rules:"))
-    rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag or auto_sign, risk, actor)
+    # 中危规则库命中决定「入队留痕」（两种模式下都入队）；「AI·阈值自动」签发仅在
+    # 非留痕模式生效——任务3 留痕模式下统一由 _enqueue_if_risk 以「AI·留痕模式(自动)」签发（含高危）。
+    mid_risk_rule = (settings.qc_auto_sign and sev == "中危" and bool(r.get("sources"))
+                     and str(r["sources"][0]).startswith("drug_rules:"))
+    auto_sign = (not settings.qc_auto_sign_full) and mid_risk_rule
+    # self_confirm=review_flag：仅真正高危（禁忌/高危相互作用）在留痕模式下要求医生知情确认，
+    # 中危自动留痕（review_flag=False）不打扰医生（AskResp 本就不阻塞）
+    rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag or mid_risk_rule, risk, actor,
+                                 self_confirm=review_flag)
     if auto_sign and rid:
         # QC_AUTO_SIGN：中危规则库提示自动签发（AI 预审替代人工，全程留痕）；
         # 高危/禁忌（sev 高危/禁忌）不入此分支，仍走人工双控。医生侧 AskResp 不受影响。
@@ -425,9 +454,11 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
 
 
 # ---------- 审核中心（高危双人核对）----------
-# E 角色细分：质控工作台白名单 = qc+admin+doctor+pharmacist（require_role 多角色能力；
-# 与原 require_user 行为等价——doctor/pharmacist 原本可访问，保守不回退；qc 为新增入口）
+# 任务2+3 审核中心转型：GET 列表（pending/history）保持多角色可见（qc/admin 全局档案 +
+# doctor/pharmacist 前端按「我的记录」过滤展示）；签发/驳回/翻案等**复核操作**收窄为
+# qc/admin（行为变更：原 doctor/pharmacist 可签发，现由质控员/管理员统一行使签字权）。
 _REVIEW_ROLES = ("qc", "admin", "doctor", "pharmacist")
+_RESOLVE_ROLES = ("qc", "admin")
 
 
 @router.get("/review/pending")
@@ -448,8 +479,39 @@ async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     return {"items": items}
 
 
+@router.get("/review/my-pending-confirm")
+async def review_my_pending_confirm(user: dict = Depends(require_user)):
+    """任务3：当前医生的「待知情确认」项（submitted_by=本人 且 self_confirm_required 且未确认）。
+
+    留痕模式（QC_AUTO_SIGN_FULL）下高危项入队即被 AI 自动签发，医生侧不阻塞；
+    此端点让提交医生补一个知情确认（数据隔离：只返回自己的）。
+    """
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(review.my_pending_confirm, me)
+    return {"items": items, "me": me}
+
+
+@router.post("/review/{rid}/self-confirm")
+async def review_self_confirm(rid: str, user: dict = Depends(require_user)):
+    """任务3：提交医生本人对「AI·留痕模式(自动)」签发的高危项做知情确认（仅本人）。
+
+    标记 confirmed_by_self/self_confirmed_at；审计记 self_confirmed；非本人/无标记/重复确认 → 400。
+    """
+    me = user.get("username", "system")
+    try:
+        item = await asyncio.to_thread(review.self_confirm, rid, me)
+    except review.ReviewError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action="self_confirmed",
+                            actor=me, payload={"rid": rid})
+    await pg_store.mirror_review(item)
+    await pg_store.mirror_audit("review.self_confirmed", me, {"rid": rid})
+    return item
+
+
 @router.post("/review/{rid}/resolve")
-async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(require_role(*_REVIEW_ROLES))):
+async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(require_role(*_RESOLVE_ROLES))):
+    """任务2 收权：签发/驳回仅 qc/admin（原 doctor/pharmacist 可调，属显式行为变更）。"""
     reviewer = user.get("username", "system")
     try:
         item = await asyncio.to_thread(review.resolve, rid, body.decision, reviewer, body.note)
@@ -463,9 +525,9 @@ async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(requir
 
 
 @router.post("/review/{rid}/reopen")
-async def review_reopen(rid: str, user: dict = Depends(require_role(*_REVIEW_ROLES))):
-    """翻案（转人工复核）：已处理（含 AI·阈值自动签发）条目回到待核对，清除签署信息。
-    双控对称：操作人不能是提交人本人（管理员/其他审核人可翻案）。翻案本身记审计留痕。"""
+async def review_reopen(rid: str, user: dict = Depends(require_role(*_RESOLVE_ROLES))):
+    """翻案（转人工复核）：已处理（含 AI 自动签发）条目回到待核对，清除签署信息。
+    双控对称：操作人不能是提交人本人；任务2 收权：仅 qc/admin 可翻案。翻案本身记审计留痕。"""
     operator = user.get("username", "system")
     try:
         item = await asyncio.to_thread(review.reopen, rid, operator)
@@ -567,16 +629,31 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
                                     actor=actor, payload={"hard": hard[:8]})
             return AskResp(answer="⛔ 自动驳回（AI 预筛）：存在确定性硬伤：" + "；".join(hard),
                            confidence=out["confidence"], needs_human_review=False,
-                           sources=sources, review_id=None, status="auto_rejected")
+                           sources=sources, review_id=None, status="auto_rejected",
+                           qc_defects=out["defects"])
         if out["confidence"] >= 0.85:
             await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="auto_pass",
                                     actor=actor, payload={"conf": out["confidence"]})
             return AskResp(answer=text + f"\n\n✅ AI 预审通过（置信 {out['confidence']:.2f}），已归档",
                            confidence=out["confidence"], needs_human_review=False,
-                           sources=sources, review_id=None)
+                           sources=sources, review_id=None, qc_defects=out["defects"])
     rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor)
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
-                   sources=sources, review_id=rid)
+                   sources=sources, review_id=rid, qc_defects=out["defects"])
+
+
+@router.get("/qc/my-rejections")
+async def qc_my_rejections(user: dict = Depends(require_user)):
+    """任务2：当前医生的「我的质控驳回」轻量视图数据（require_user，只返回自己的）。
+
+    返回本人提交且被驳回（status=rejected）的记录：含驳回原因（review_note）、
+    审核人（reviewed_by）、驳回时间（resolved_at）。数据隔离由服务端过滤保证。
+    """
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(review.my_rejections, me)
+    await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="my_rejections",
+                            actor=me, payload={"n": len(items)})
+    return {"items": items, "me": me}
 
 
 # ---------- 「粘贴整段病历」LLM 拆分（F2：质控表单快捷填充，仅辅助填表不参与质控判定）----------

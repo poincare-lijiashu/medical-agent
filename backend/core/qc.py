@@ -14,28 +14,58 @@ REQUIRED_FIELDS = ["主诉", "现病史", "既往史", "体格检查", "辅助�
 # 内涵质量的最小长度启发（仅提示，不作硬诊断）
 MIN_LEN = {"现病史": 10, "既往史": 2, "初步诊断": 2}
 
+# 任务1 质控维度枚举：LLM 输出 category 必须落在此枚举内（与前端分组/过滤一致）；
+# 非枚举值在解析层一律归「其他」，杜绝自由文本维度污染统计与前端分组。
+QC_CATEGORIES = ("完整性", "一致性", "诊断依据", "鉴别诊断", "书写规范", "其他")
+QC_CATEGORY_DESC = {
+    "完整性": "必备要素缺失",
+    "一致性": "主诉/现病史/查体/诊断之间矛盾",
+    "诊断依据": "诊断与检查支撑关系",
+    "鉴别诊断": "需鉴别而未记录",
+    "书写规范": "格式/签名/科室归属",
+    "其他": "以上维度之外未归类的缺陷",
+}
+
+
+def normalize_category(value) -> str:
+    """维度归一（解析层强制收敛）：合法枚举原样返回，非枚举/空值一律「其他」。
+
+    LLM 输出不可信：无论它编出什么维度名，下游只认 QC_CATEGORIES 六个值。
+    """
+    v = str(value or "").strip()
+    return v if v in QC_CATEGORIES else "其他"
+
 
 def completeness_check(record: dict) -> list[dict]:
-    """确定性：必填项缺失或过短。返回缺陷列表（不调 LLM）。"""
+    """确定性：必填项缺失或过短。返回缺陷列表（不调 LLM）。category 恒为「完整性」。"""
     defects = []
     for f in REQUIRED_FIELDS:
         v = record.get(f)
         if v is None or not str(v).strip():
-            defects.append({"field": f, "issue": "缺失", "level": "高", "track": "完整性"})
+            defects.append({"field": f, "issue": "缺失", "level": "高", "track": "完整性",
+                            "category": "完整性"})
         elif f in MIN_LEN and len(str(v).strip()) < MIN_LEN[f]:
-            defects.append({"field": f, "issue": "内容过简", "level": "中", "track": "完整性"})
+            defects.append({"field": f, "issue": "内容过简", "level": "中", "track": "完整性",
+                            "category": "完整性"})
     return defects
 
 
 def connotation_check(record: dict) -> list[dict]:
-    """内涵质量：主诉/现病史/诊断的一致性与逻辑。LLM Think 两步；失败降级返回空。"""
+    """内涵质量：主诉/现病史/诊断的一致性与逻辑。LLM Think 两步；失败降级返回空。
+
+    任务1：category 强制枚举（QC_CATEGORIES），prompt 内给出六维定义；
+    解析时经 normalize_category 收敛，非枚举值一律归「其他」。
+    """
     try:
         from langchain_core.messages import HumanMessage
         from backend.core.llm_factory import get_llm
+        enum_desc = "；".join(f"{k}={v}" for k, v in QC_CATEGORY_DESC.items())
         prompt = (
             "你是病案质控专家。第一步逐条推理该病历的内涵质量缺陷（如主诉与现病史时间/部位不一致、"
-            "诊断缺乏病史支持、缺关键鉴别记录）；第二步对缺陷分级（高/中/低）。"
-            '仅返回 JSON：{"defects":[{"issue":"...","level":"高|中|低"}]}；无缺陷则 defects 为空数组。\n'
+            "诊断缺乏病史支持、缺关键鉴别记录）；第二步对缺陷分级（高/中/低），"
+            "并为每条缺陷归类维度 category，category 必须且只能是以下枚举之一：" + enum_desc + "。"
+            '仅返回 JSON：{"defects":[{"issue":"...","level":"高|中|低",'
+            '"category":"完整性|一致性|诊断依据|鉴别诊断|书写规范|其他"}]}；无缺陷则 defects 为空数组。\n'
             "病历：" + json.dumps(record, ensure_ascii=False)[:1500]
         )
         r = get_llm("medical_case", temperature=0).invoke([HumanMessage(content=prompt)])
@@ -48,7 +78,8 @@ def connotation_check(record: dict) -> list[dict]:
         out = []
         for dd in data.get("defects", []) or []:
             out.append({"field": dd.get("field", "内涵质量"), "issue": dd.get("issue", ""),
-                        "level": dd.get("level", "中"), "track": "内涵质量"})
+                        "level": dd.get("level", "中"), "track": "内涵质量",
+                        "category": normalize_category(dd.get("category"))})
         return out
     except Exception:  # noqa: BLE001
         return []  # 降级：LLM 不可用则该轨未执行，不影响其它轨

@@ -64,9 +64,17 @@ class Settings(BaseSettings):
     # 影像/病例高危征象词表：留空用内置默认；逗号分隔覆盖，供院方对齐放射科危急值清单
     imaging_risk_words: str = ""
 
-    # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN 均可被同名环境变量覆盖）
+    # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN / QC_AUTO_SIGN_FULL 均可被同名环境变量覆盖）
     qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审
     qc_auto_sign: bool = True   # True：药物中危规则库提示自动签发（AI·阈值自动留痕）；高危/禁忌仍人工双控
+    # 任务3 留痕模式：True 时审核队列入队后立即自动签发（reviewed_by=「AI·留痕模式(自动)」，
+    # 含 LLM 自由文本高危——全部自动，医生侧不阻塞；高危项由提交医生知情确认）。默认 False 维持现状。
+    qc_auto_sign_full: bool = False
+
+    # 任务4 应用日志落文件 + 轮转（5MB × 5 备份，RotatingFileHandler）
+    # LOG_TO_FILE：on/true/1 强制开；off/false/0 强制关；空（默认）按环境——production on、其余 off（保持控制台）
+    log_to_file: str = ""
+    log_dir: str = "logs"
 
     # L1 agentic 检索循环（环境变量 LITERATURE_AGENTIC 覆盖）：开启后 grade 零命中
     # 进入 refine 决策节点（LLM 改写重检/放弃），关闭则保持旧的重检索路径
