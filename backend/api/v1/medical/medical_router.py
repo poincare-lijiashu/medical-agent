@@ -420,6 +420,22 @@ async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(requir
     return item
 
 
+@router.post("/review/{rid}/reopen")
+async def review_reopen(rid: str, user: dict = Depends(require_user)):
+    """翻案（转人工复核）：已处理（含 AI·阈值自动签发）条目回到待核对，清除签署信息。
+    双控对称：操作人不能是提交人本人（管理员/其他审核人可翻案）。翻案本身记审计留痕。"""
+    operator = user.get("username", "system")
+    try:
+        item = await asyncio.to_thread(review.reopen, rid, operator)
+    except review.ReviewError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action="reopened",
+                            actor=operator, payload={"rid": rid})
+    await pg_store.mirror_review(item)
+    await pg_store.mirror_audit("review.reopened", operator, {"rid": rid})
+    return item
+
+
 # ---------- 病历质控（三轨）----------
 def _load_optional_table(name: str):
     p = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -684,7 +700,10 @@ async def admin_add_department(req: DeptReq, user: dict = Depends(require_role("
 async def admin_delete_department(name: str, user: dict = Depends(require_role("admin"))):
     """name 走 path（前端 encodeURIComponent），FastAPI 自动百分号解码，中文名安全。"""
     from backend.core import departments
-    ok = await asyncio.to_thread(departments.remove_department, name)
+    try:
+        ok = await asyncio.to_thread(departments.remove_department, name)
+    except ValueError as e:  # 仍有账号绑定该科室 → 400，前端提示先调整账号
+        raise HTTPException(400, str(e))
     if not ok:
         raise HTTPException(404, "科室不存在")
     await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="department_removed",

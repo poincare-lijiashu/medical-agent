@@ -176,3 +176,26 @@ def resolve(rid: str, decision: str, reviewer: str, note: str = "") -> dict:
                 _save(items)
                 return i
         raise ReviewError("未找到该审核条目")
+
+
+def reopen(rid: str, operator: str) -> dict:
+    """翻案（转人工复核）：已处理（approved/rejected，含「AI·阈值自动」签发）条目回到
+    pending 并清除签署信息，由另一名医师/药师重新核对；翻案动作本身由路由层记审计留痕。
+    双控对称：operator 不能是提交人本人（防止单人闭环操纵条目生命周期）。"""
+    if not operator:
+        raise ReviewError("翻案操作人不能为空")
+    with _lock:
+        items = _load()
+        for i in items:
+            if i["id"] == rid:
+                if i["status"] == "pending":
+                    raise ReviewError("该条目仍在待核对，无需重开")
+                if operator == i["submitted_by"]:
+                    raise ReviewError("双控失败：翻案人不能是提交人本人")
+                i["status"] = "pending"
+                i["reviewed_by"] = None
+                i["review_note"] = None
+                i["resolved_at"] = None
+                _save(items)
+                return i
+        raise ReviewError("未找到该审核条目")

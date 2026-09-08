@@ -67,3 +67,36 @@ def test_low_risk_not_enqueued(monkeypatch):
     assert d["needs_human_review"] is False
     assert d["review_id"] is None
     assert d["confidence"] >= 0.75  # 规则命中，真实校准为中高，不再"一律低置信"
+
+
+# ---- 双控自动签发翻案（reopen）：reviewed_by=「AI·阈值自动」的已签发项可回待核对 ----
+
+def test_reopen_auto_signed_item(monkeypatch, tmp_path):
+    from backend.core import medical_review as review
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))  # 队列隔离，不污染真实数据
+    c = _client()
+    doc = _login(c, "doctor01", "Med@2026")
+    ph = _login(c, "pharm01", "Med@2026")
+    H = lambda t: {"Authorization": "Bearer " + t}
+    # 模拟 QC_AUTO_SIGN 的落库形态：提交 + AI·阈值自动 签发
+    rid = review.submit(agent="drug", question="中危联合用药提示", answer="提示内容", confidence=0.80,
+                        risk_reason="中危相互作用", submitted_by="doctor01")
+    review.resolve(rid, "approved", "AI·阈值自动(规则库v2)", "QC_AUTO_SIGN：中危规则库提示自动签发")
+    # pending 条目重开 → 400
+    rid2 = review.submit(agent="drug", question="另一条", answer="内容", confidence=0.9,
+                         risk_reason="药物禁忌", submitted_by="pharm01")
+    assert c.post(f"/api/v1/medical/review/{rid2}/reopen", headers=H(ph)).status_code == 400
+    # 提交人本人翻案 → 400（双控对称）
+    assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(doc)).status_code == 400
+    # 其他人员翻案成功：回到待核对，签署信息清除
+    r = c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(ph))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "pending"
+    assert d["reviewed_by"] is None and d["review_note"] is None and d["resolved_at"] is None
+    ids = [i["id"] for i in c.get("/api/v1/medical/review/pending", headers=H(ph)).json()["pending"]]
+    assert rid in ids
+    # 不存在的条目 → 400
+    assert c.post("/api/v1/medical/review/rev-nope/reopen", headers=H(ph)).status_code == 400
+    # 未认证 → 401
+    assert c.post(f"/api/v1/medical/review/{rid}/reopen").status_code in (401, 403)

@@ -70,6 +70,7 @@
   .chip.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)} .chip.ok .dot{background:var(--ok)}
   .chip.mid{color:var(--accent-h);border-color:var(--accent);background:var(--accent-soft)} .chip.mid .dot{background:var(--accent)}
   .chip.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)} .chip.warn .dot{background:var(--warn)}
+  .chip.bad{color:var(--danger);border-color:var(--danger);background:var(--danger-soft)} .chip.bad .dot{background:var(--danger)}
   .src{font-size:11.5px;color:var(--ink-3)}
   .src a{color:var(--accent-h);text-decoration:none;border-bottom:1px dotted var(--accent)}
   .thumb{max-width:180px;height:auto;border-radius:8px;border:1px solid var(--line)}
@@ -268,6 +269,7 @@
             <textarea class="inp" id="qcPaste" rows="3" placeholder="例：患者男，35 岁。主诉：右下后牙自发痛 3 天。现病史：… 既往史：… 体格检查：… 辅助检查：… 初步诊断：… 医师签名：张医生"></textarea>
             <div style="margin-top:8px"><button class="btn secondary sm" id="qcParse" onclick="qcParsePaste()">自动拆分填充</button></div>
           </div>
+          <div class="src" id="qcDept" style="margin-bottom:10px">当前科室：…</div>
           <div class="qgrid">
             <label>主诉<input class="inp" id="qcf_0" placeholder="例：右下后牙自发痛 3 天"></label>
             <label>现病史<textarea class="inp" id="qcf_1" rows="2" placeholder="诱因、部位/性质、加重缓解、伴随症状…"></textarea></label>
@@ -275,7 +277,7 @@
             <label>体格检查<textarea class="inp" id="qcf_3" rows="2" placeholder="专科查体…"></textarea></label>
             <label>辅助检查<textarea class="inp" id="qcf_4" rows="2" placeholder="检验/影像…"></textarea></label>
             <label>初步诊断<input class="inp" id="qcf_5" placeholder="例：急性牙髓炎"></label>
-            <label>医师签名<input class="inp" id="qcf_6" placeholder="签名（必填，缺失将报缺陷）"></label>
+            <label>医师签名（绑定当前账号）<input class="inp" id="qcf_6" readonly placeholder="登录后自动填入当前账号"></label>
           </div>
           <label style="margin-top:12px">检验值（可选，每行「项目=值」，用于危急值）<textarea class="inp" id="qcLabs" rows="2" placeholder="血钾=6.8"></textarea></label>
           <div style="margin-top:14px"><button class="btn primary" id="qcRun" onclick="runQc()">运行质控</button></div>
@@ -394,8 +396,15 @@ function confChip(c,review){
   if(review) s+=`<span class="chip warn"><span class="dot"></span>已提交双人核对</span>`;
   return s;
 }
+/* 来源标签中文映射（纯函数，供 srcLine 复用）：intent:*=系统快捷应答、drug_rules:curated_*=内置药物规则库；
+   PMID/指南等其它来源保持原样——溯源是合规卖点，只做映射不隐藏。 */
+function srcLabel(s){s=String(s||'');
+  if(s==='intent:prefilter')return '系统快捷应答（未使用检索）';
+  if(s.startsWith('intent:'))return '系统快捷应答';
+  if(s==='drug_rules:curated_v2'||s==='drug_rules:curated_v1')return '内置药物规则库';
+  return s;}
 function srcLine(sources){ if(!sources||!sources.length)return '';
-  return `<div class="src">来源：`+sources.slice(0,6).map(s=>{const m=String(s).match(/PMID:?(\d+)/); return m?`<a href="https://pubmed.ncbi.nlm.nih.gov/${m[1]}/" target="_blank" rel="noopener noreferrer">${esc(s)}</a>`:esc(s);}).join(' · ')+`</div>`; }
+  return `<div class="src">来源：`+sources.slice(0,6).map(s=>{const m=String(s).match(/PMID:?(\d+)/); return m?`<a href="https://pubmed.ncbi.nlm.nih.gov/${m[1]}/" target="_blank" rel="noopener noreferrer">${esc(s)}</a>`:esc(srcLabel(s));}).join(' · ')+`</div>`; }
 /* 危险操作统一确认模态（替代原生 confirm：不被浏览器策略自动处置，默认焦点在取消；可要求输入确认词） */
 function confirmDanger(title,bodyHtml,confirmLabel,onYes,expectInput){
   document.getElementById('mTitle').textContent=title;
@@ -434,7 +443,9 @@ async function doLogin(e){e.preventDefault();const err=document.getElementById('
   const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;
   try{const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
     const d=await r.json(); if(!r.ok){err.textContent=d.detail||'登录失败';return false;}
-    sessionStorage.setItem('med_token',d.access_token);await loadConfig();boot(d.username,d.role);return false;
+    sessionStorage.setItem('med_token',d.access_token);await loadConfig();
+    let dept='';try{const mr=await fetch('/api/v1/auth/me',{headers:{'Authorization':'Bearer '+token()}});if(mr.ok)dept=(await mr.json()).dept||'';}catch(e){}
+    boot(d.username,d.role,dept);return false;
   }catch(ex){err.textContent='网络错误：'+ex.message;return false;}}
 function logout(){window.removeEventListener('beforeunload',beforeUnloadGuard);window.onbeforeunload=null;  /* FIND-09：主动登出不受 beforeunload 拦截 */
   sessionStorage.removeItem('med_token');localStorage.removeItem('med_token');
@@ -637,13 +648,16 @@ const _tsFmt=new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour
 function fmtTs(s){if(!s)return '';const d=new Date(s);return isNaN(d)?esc(s):_tsFmt.format(d);}
 function reviewRow(p,resolved){
   const mine=p.submitted_by===reviewMe;
-  const statusChip=resolved?`<span class="chip ${p.status==='approved'?'ok':'warn'}"><span class="dot"></span>${p.status==='approved'?'已签发':'已驳回'}</span>`:'';
+  /* 双控自动签发：reviewed_by 含「AI·阈值自动」→ 徽标展示，并提供翻案（转人工复核）入口 */
+  const auto=resolved&&p.status==='approved'&&String(p.reviewed_by||'').includes('AI·阈值自动');
+  const statusChip=resolved?`<span class="chip ${p.status==='approved'?(auto?'mid':'ok'):'warn'}"><span class="dot"></span>${p.status==='approved'?(auto?'自动签发':'已签发'):'已驳回'}</span>`:'';
   return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">${esc(p.agent)}：${esc((p.question||'').slice(0,60))} <span class="src">▾ 展开全文</span></summary>
       <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.question||'')}</div>
       <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details></td>
       <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
       <td class="num">${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
-      <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`):
+      <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`+
+        (auto&&p.submitted_by!==reviewMe?`<div style="margin-top:6px"><button class="btn sm secondary" onclick="reopenReview('${p.id}')">转人工复核</button></div>`:'')):
         (mine?'<span class="src">双控：你不能核对本人提交</span>':
         `<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
         <button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button></div>`)}
@@ -706,19 +720,28 @@ async function doResolve(id,dec,note){
   if(r.status===401){logout();return;} if(r.ok){toast(dec==='approved'?'已签发通过':'已驳回');closeModal();loadReview();}
   else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}}
 function confirmReject(){const n=document.getElementById('rejectNote');askSignConfirm(rejectTarget,'rejected',n?n.value.trim():'');} /* F4：备注之后先确认再执行 */
+/* 双控自动签发翻案：POST /review/{id}/reopen，回到待核对由另一名人员人工复核（双控对称：提交人不可翻案） */
+async function reopenReview(id){
+  try{const r=await fetch('/api/v1/medical/review/'+id+'/reopen',{method:'POST',headers:auth()});
+    if(r.status===401){logout();return;}
+    if(r.ok){toast('已转人工复核，请在「待处理」中核对');loadReview();}
+    else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}
+  }catch(e){toast('操作失败：'+e.message);}}
 function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[]).find(x=>x.id===id);if(!p){toast('未找到');return;}
   const mine=p.submitted_by===(document.getElementById('who').textContent);
+  const auto=p.status==='approved'&&String(p.reviewed_by||'').includes('AI·阈值自动');  /* 双控自动签发 */
   /* F3 核对可见图片：仅渲染 data:image/ 前缀的影像（防属性逃逸再叠加 esc），点击放大复用模态 */
   const imgs=(p.images||[]).filter(u=>String(u).startsWith('data:image/'));
   const imgsHtml=imgs.length?`<h4 style="margin-top:14px">影像（点击放大）</h4><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${imgs.map(u=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;cursor:zoom-in" src="${esc(u)}" alt="待核对影像" onclick="showImg(this.src)">`).join('')}</div>`:'';
   document.getElementById('mTitle').textContent='核对详情 · '+p.agent;
-  document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></div>
+  document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span>${auto?'<span class="chip mid"><span class="dot"></span>自动签发</span>':''}</div>
     <h4>问题</h4><div class="txt md">${md(p.question||'')}</div>
     <h4 style="margin-top:14px">AI 回答</h4><div class="txt md">${md(p.answer||'')}</div>
     ${imgsHtml}
     <h4 style="margin-top:14px">提交人</h4><div>${esc(p.submitted_by||'')}</div>
     <div style="margin-top:16px;display:flex;gap:8px">${mine?'<span class="src">双控：你不能核对本人提交</span>':
-      `<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`}</div>`;
+      `<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`}
+      ${(!mine&&auto)?`<button class="btn sm ghost" onclick="reopenReview('${p.id}')">转人工复核</button>`:''}</div>`;
   openModal();document.getElementById('mBody').querySelector('input,button,textarea,[tabindex]')?.focus();}
 /* F3：影像放大查看（复用 #modal）。data URL 前缀校验：非 data:image/ 一律拒绝渲染 */
 function showImg(src){if(!src||!src.startsWith('data:image/'))return;
@@ -756,11 +779,16 @@ async function runQc(){const rec={};QC_LABELS.forEach((l,i)=>{const v=document.g
   const labs={};document.getElementById('qcLabs').value.split(/\r?\n/).forEach(ln=>{const m=ln.split('=');if(m.length===2&&m[0].trim())labs[m[0].trim()]=m[1].trim();});
   const out=document.getElementById('qcOut'); out.innerHTML='<div class="card"><div class="sk" style="height:16px;width:40%"></div></div>';
   try{ const d=await apiPost('/qc/record',{record:rec,labs:labs});
-    out.innerHTML=`<div class="card"><div class="foot" style="margin:0 0 8px">${confChip(d.confidence,d.needs_human_review)}${d.review_id?`<span class="chip">已送质控终审</span>`:''}</div><div class="txt md">${md(d.answer)}</div></div>`;
+    if(d.detail&&!d.answer){out.innerHTML='<div class="card">⚠ '+esc(d.detail)+'</div>';return;}  /* 如：账号未设置科室 */
+    /* QC 三档分流徽标：按后端实际字段渲染（status='auto_rejected' / needs_human_review+review_id） */
+    const triage=d.status==='auto_rejected'?'<span class="chip bad"><span class="dot"></span>AI自动驳回</span>'
+      :(!d.needs_human_review&&!d.review_id)?'<span class="chip ok"><span class="dot"></span>AI预审通过</span>'
+      :'<span class="chip mid"><span class="dot"></span>人工复核</span>';
+    out.innerHTML=`<div class="card"><div class="foot" style="margin:0 0 8px">${confChip(d.confidence,d.needs_human_review)}${triage}</div><div class="txt md">${md(d.answer)}</div></div>`;
   }catch(e){out.innerHTML='<div class="card">⚠ 质控请求失败</div>';}
   finally{btn.disabled=false;}}
 const QC_LABELS=['主诉','现病史','既往史','体格检查','辅助检查','初步诊断','医师签名'];
-function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>document.getElementById('qcf_'+i).value=s[i]);document.getElementById('qcLabs').value='';toast('已填入示例');}
+function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>{if(i===6)return;document.getElementById('qcf_'+i).value=s[i];});document.getElementById('qcLabs').value='';toast('已填入示例（医师签名已锁定为当前账号）');}
 /* F2：粘贴整段病历 → /qc/parse LLM 拆分 → 填充 qcf_0-6（仅覆盖拆分出的非空字段，保留已填内容） */
 async function qcParsePaste(){
   const t=document.getElementById('qcPaste').value.trim();
@@ -771,7 +799,7 @@ async function qcParsePaste(){
     const d=await r.json();
     if(!r.ok){toast('拆分失败：'+(d.detail||r.status));return;}
     const f=d.fields||{};let n=0;
-    QC_LABELS.forEach((l,i)=>{const v=String(f[l]||'').trim();if(v){document.getElementById('qcf_'+i).value=v;n++;}});
+    QC_LABELS.forEach((l,i)=>{if(i===6)return;const v=String(f[l]||'').trim();if(v){document.getElementById('qcf_'+i).value=v;n++;}});  /* i=6 签名锁定为当前账号，不被拆分覆盖 */
     document.getElementById('qcPaste').value='';
     toast(n?`已拆分填充 ${n} 个字段，请核对后运行质控`:'未拆分出内容，请手动填写');
   }catch(e){toast('拆分失败：'+e.message);}
@@ -902,13 +930,13 @@ async function loadData(){
     if(r.status===401){logout();return;} if(!r.ok){b.innerHTML='<div class="card">⚠ 加载失败</div>';return;} d=await r.json();}
   catch(e){b.innerHTML='<div class="card">⚠ '+e.message+'</div>';return;}
   const stats=[['待核对',d.review.pending,'项'],['已签发',d.review.approved,'项'],['已驳回',d.review.rejected,'项'],
-      ['知识库向量',d.kb_docs,'条'],['审计事件',d.events_total,'条'],['运行',fmtUp(d.uptime_s||0),(d.device==='cuda'?'GPU':'CPU')]]
+      ['知识库向量',fmtCnt(d.kb_docs),'条'],['审计事件',d.events_total,'条'],['运行',fmtUp(d.uptime_s||0),(d.device==='cuda'?'GPU':'CPU')]]
     .map(([k,v,u])=>`<div class="stat"><span class="k">${k}</span><span class="v num">${v}${u?` <small>${u}</small>`:''}</span></div>`).join('');
   const users=d.users.map(u=>{
       const del=(u.username===document.getElementById('who').textContent)?'':
         `<button class="btn sm danger" onclick="deleteUser('${esc(u.username)}')">删除</button>`;
       const rp=`<button class="btn sm secondary" onclick="openResetPwd('${esc(u.username)}')">重置密码</button>`;
-      return `<tr><td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td><td style="white-space:nowrap">${rp}${del}</td></tr>`;}).join('');
+      return `<tr><td>${esc(u.username)}</td><td><span class="role">${esc(u.role)}</span></td><td>${esc(u.dept||'—')}</td><td style="white-space:nowrap">${rp}${del}</td></tr>`;}).join('');
   const auditItems=d.audit_recent||[];
   const auditList=auditItems.map((e,i)=>{
     const cat=(e.event||'').split('.')[0]||'';
@@ -935,18 +963,74 @@ async function loadData(){
           <div class="qgrid" style="padding:12px 16px">
             <label>用户名（3-32 位字母/数字/_/-）<input class="inp" id="nuName" autocomplete="off" spellcheck="false"></label>
             <label>角色<select class="inp" id="nuRole"><option value="doctor">doctor</option><option value="pharmacist">pharmacist</option><option value="admin">admin</option></select></label>
+            <label style="grid-column:1/-1">科室（必选，质控签名/科室绑定）<select class="inp" id="nuDept"><option value="">加载中…</option></select></label>
             <label style="grid-column:1/-1">密码（≥8 位）<input class="inp" id="nuPass" type="password" autocomplete="new-password"></label>
           </div>
           <div style="padding:0 16px 12px"><button class="btn primary sm" onclick="createUser()">创建用户</button></div>
         </div>
-        <div class="panel"><h3>用户（JSON 权威源，PG 双写镜像）</h3><table><thead><tr><th>用户名</th><th>角色</th><th></th></tr></thead><tbody>${users}</tbody></table>
+        <div class="panel"><h3>用户（JSON 权威源，PG 双写镜像）</h3><table><thead><tr><th>用户名</th><th>角色</th><th>科室</th><th></th></tr></thead><tbody>${users}</tbody></table>
           <div class="src" style="padding:10px 16px">PG 镜像行数：audit=${esc(String((d.pg_counts||{}).audit_log??'—'))} · users=${esc(String((d.pg_counts||{}).users??'—'))} · review=${esc(String((d.pg_counts||{}).review_queue??'—'))}</div></div>
+        <div class="panel"><h3>科室管理（质控科室字典 · 在用科室不可删除）</h3>
+          <ul class="feed" id="deptList"><li><span class="a">加载中…</span></li></ul>
+          <div style="display:flex;gap:8px;padding:10px 16px 14px">
+            <input class="inp" id="deptNew" placeholder="新科室名称（如：康复科）" aria-label="新科室名称" style="flex:1" autocomplete="off"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();addDept();}">
+            <button class="btn primary sm" id="deptAddBtn">新增科室</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="panel" style="margin-top:16px"><h3>模型配置（对话 / 视觉 · 双格式）</h3><div id="llmPanel"><div class="src" style="padding:10px 16px">加载中…</div></div></div>`;
+  /* 科室管理卡片 + 新增用户科室下拉（数据源 GET /admin/departments） */
+  document.getElementById('deptAddBtn').onclick=addDept;
+  loadDeptPanel();
   apiGet('/admin/llm/providers').then(renderLlm).catch(()=>{const el=document.getElementById('llmPanel');
     if(el)el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 模型配置加载失败</div>';});
 }
+
+/* ---- admin 科室管理：列表 + 新增 + 删除（字典为账号 dept/质控科室权威取值；在用科室后端拒绝删除→400）---- */
+async function loadDeptPanel(){
+  const el=document.getElementById('deptList');if(!el)return;
+  try{const d=await apiGet('/admin/departments');
+    el.innerHTML=(d.list||[]).length
+      ?(d.list||[]).map(n=>`<li><span class="e">${esc(n)}</span>
+          <span class="a"><button class="btn sm secondary" data-act="dept-del" data-name="${esc(n)}">删除</button></span></li>`).join('')
+      :'<li><span class="a">暂无科室</span></li>';
+    refreshDeptOptions(d.list||[]);
+  }catch(e){el.innerHTML='<li><span class="a">⚠ 科室加载失败（需管理员权限）</span></li>';}
+}
+async function refreshDeptOptions(list){
+  const sel=document.getElementById('nuDept');if(!sel)return;
+  const prev=sel.value;  // 重渲染后尽量保留已选科室
+  try{list=list||((await apiGet('/admin/departments')).list||[]);
+    sel.innerHTML='<option value="">请选择科室</option>'+list.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    if(prev&&list.includes(prev))sel.value=prev;
+  }catch(e){sel.innerHTML='<option value="">科室加载失败</option>';}
+}
+async function addDept(){
+  const inp=document.getElementById('deptNew');const name=(inp.value||'').trim();
+  if(!name){toast('请输入科室名称');return;}
+  const btn=document.getElementById('deptAddBtn');btn.disabled=true;
+  try{const d=await apiPost('/admin/departments',{name});
+    if(d&&d.ok){toast('已新增科室 '+name);inp.value='';loadDeptPanel();}
+    else toast('失败：'+(d.detail||'未知错误'));  /* 400=科室已存在 */
+  }catch(e){toast('新增失败：'+e.message);}
+  finally{btn.disabled=false;}
+}
+async function deleteDept(name){
+  confirmDanger('删除科室 · '+name,
+    `将删除科室「${esc(name)}」；仍有账号绑定该科室时后端会拒绝（400）。此操作记入审计。`,'确认删除',async()=>{
+    try{const r=await fetch('/api/v1/medical/admin/departments/'+encodeURIComponent(name),{method:'DELETE',headers:auth()});
+      if(r.status===401){logout();return;}
+      const d=await r.json();
+      if(!r.ok){toast('失败：'+(d.detail||r.status));return;}  /* 在用保护：后端 400 提示先调整账号 */
+      toast('已删除科室 '+name);closeModal();loadDeptPanel();
+    }catch(e){toast('删除失败：'+e.message);}});
+}
+/* 科室删除事件委托：科室名来自字典/用户输入（可含引号等字符），禁用内联 onclick 拼接（与 KB 同纪律） */
+if(!window.__deptDelegate){window.__deptDelegate=true;document.addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act="dept-del"]');if(!b)return;
+  deleteDept(b.dataset.name);});}
 
 /* ---- F6 模型配置管理（admin 数据面板）---- */
 let _llmData=null;
@@ -963,7 +1047,9 @@ function renderLlm(d){
         <td><span class="src">${esc(p.api_format)}</span></td>
         <td class="num">${esc(p.model_id)}<div class="src">${esc(trunc(p.base_url))}</div></td>
         <td style="white-space:nowrap">${act?'':`<button class="btn sm secondary" onclick="llmActivate('${kind}','${esc(p.id)}')">激活</button>`}<button class="btn sm danger" onclick="llmDel('${kind}','${esc(p.id)}')">删除</button></td></tr>`;}).join('');
-    html+=`<h4 style="margin:12px 16px 0">${label}${g.active?'':' <span class="src">（当前使用 .env 内置配置）</span>'}</h4>`+
+    html+=`<h4 style="margin:12px 16px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${label}
+      <span class="src">${g.active?'':'（当前使用内置配置 Qwen）'}</span>
+      ${g.active?`<button class="btn ghost sm" onclick="llmDeactivate('${kind}')">使用内置配置</button>`:''}</h4>`+
       ((g.providers||[]).length?`<table><thead><tr><th>名称</th><th>格式</th><th>模型 / URL</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
         :'<div class="src" style="padding:6px 16px">未配置第三方模型，回落 .env 内置配置。</div>');
   }
@@ -1007,6 +1093,12 @@ async function llmActivate(kind,pid){
     if(d&&d.ok){toast('已激活：问答/视觉将改用该模型');llmRefresh();}
     else toast('激活失败：'+(d.detail||'未知错误'));
   }catch(e){toast('激活失败：'+e.message);}}
+/* 回退内置配置：清空激活（active 置空，用户配置保留可切回），实跑回落 .env 内置 Qwen */
+async function llmDeactivate(kind){
+  try{const d=await apiPost('/admin/llm/deactivate',{kind});
+    if(d&&d.ok){toast('已使用内置配置（Qwen），原配置保留可随时切回');llmRefresh();}
+    else toast('操作失败：'+(d.detail||'未知错误'));
+  }catch(e){toast('操作失败：'+e.message);}}
 function llmDel(kind,pid){
   const g=(_llmData||{})[kind]||{providers:[]};
   const p=(g.providers||[]).find(x=>x.id===pid)||{};
@@ -1020,8 +1112,10 @@ function llmDel(kind,pid){
     }catch(e){toast('删除失败：'+e.message);}});}
 async function createUser(){
   const name=document.getElementById('nuName').value.trim(),pass=document.getElementById('nuPass').value,role=document.getElementById('nuRole').value;
+  const dept=document.getElementById('nuDept').value;  /* 科室必选：质控签名/科室服务端绑定 */
   if(!name||!pass){toast('请填写用户名与密码');return;}
-  try{const r=await fetch('/api/v1/medical/admin/users',{method:'POST',headers:auth(),body:JSON.stringify({username:name,password:pass,role})});
+  if(!dept){toast('请选择科室（创建账号必选）');return;}
+  try{const r=await fetch('/api/v1/medical/admin/users',{method:'POST',headers:auth(),body:JSON.stringify({username:name,password:pass,role,dept})});
     if(r.status===401){logout();return;}
     if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
     toast('用户 '+name+' 已创建');loadData();
@@ -1047,12 +1141,14 @@ async function deleteUser(name){
 
 /* ---- 概览 ---- */
 function fmtUp(s){ if(s<60)return s+'s'; const m=Math.floor(s/60); if(m<60)return m+'m'; return Math.floor(m/60)+'h'+(m%60)+'m'; }
+/* doc_count sentinel：后端查询失败返回 -1（区分「真 0」），显示 … 表示未知并提示可刷新重试 */
+function fmtCnt(v){ return v<0 ? '<span title="知识库查询失败/未知，可点击刷新重试">…</span>' : esc(String(v)); }
 async function loadOverview(){
   const b=document.getElementById('homeBody');
   b.innerHTML='<div class="stats">'+'<div class="stat"><span class="k">&nbsp;</span><span class="v"><span class="sk" style="display:inline-block;width:44px;height:20px"></span></span></div>'.repeat(5)+'</div>';
   let d; try{ const r=await fetch('/api/v1/medical/overview',{headers:auth()}); if(r.status===401){logout();return;} d=await r.json(); }
   catch(e){ b.innerHTML='<div class="panel" style="padding:16px">⚠ 概览加载失败</div>'; return; }
-  const stats=[['待双人核对',d.pending,'项'],['已处理核对',d.resolved,'项'],['知识库文档',d.kb_docs,'条'],['近期事件',d.events_total,'条'],['系统版本',d.version,'']].map(([k,v,u])=>`<div class="stat"><span class="k">${k}</span><span class="v num">${v}${u?` <small>${u}</small>`:''}</span></div>`).join('');
+  const stats=[['待双人核对',d.pending,'项'],['已处理核对',d.resolved,'项'],['知识库文档',fmtCnt(d.kb_docs),'条'],['近期事件',d.events_total,'条'],['系统版本',d.version,'']].map(([k,v,u])=>`<div class="stat"><span class="k">${k}</span><span class="v num">${v}${u?` <small>${u}</small>`:''}</span></div>`).join('');
   const acts=(d.recent&&d.recent.length)? d.recent.map(e=>`<li><span class="t num">${esc(e.ts)}</span><span class="e">${esc(e.event)}</span><span class="a">${esc(e.actor)}</span></li>`).join('') : '<li><span class="a" style="margin:0">暂无活动记录</span></li>';
   const allow=ROLE_NAV[ROLE]||[];
   const quick=[['literature','医学文献','答案附文献出处'],['drug','药物信息','两药同用风险核查'],['imaging','影像辅助','AI 初步所见'],['case','病例总结','摘要与鉴别清单'],['mdt','多智能体会诊','三专科意见与分歧'],['qc','病历质控','病案科工作台']].filter(([k])=>allow.includes(k)).map(([k,n,dd])=>`<li><button onclick="go('${k}')">${ICON[k]}<span><span class="qn">${n}</span><br><span class="qd">${dd}</span></span><span class="ar">›</span></button></li>`).join('');
@@ -1066,7 +1162,13 @@ async function loadOverview(){
 }
 
 /* ---- boot ---- */
-function boot(u,r){ROLE=r||'doctor';setWho(u,r);showLogin(false);
+let ME_DEPT='';  /* 当前账号科室（/auth/me 下发；质控页只读展示，无则显示 —） */
+function boot(u,r,dept){ROLE=r||'doctor';ME_DEPT=dept||'';setWho(u,r);showLogin(false);
+  /* 医师签名绑定当前账号：默认填入并锁定（后端仍权威覆盖，前端只读防误改） */
+  const sig=document.getElementById('qcf_6');
+  if(sig){sig.value=u||'';sig.readOnly=true;sig.title='医师签名绑定当前登录账号，不可修改（后端强制覆盖）';}
+  const dp=document.getElementById('qcDept');
+  if(dp)dp.textContent='当前科室：'+(ME_DEPT||'—')+'（服务端绑定账号科室'+(ME_DEPT?'':'，请联系管理员设置')+'）';
   const hk=hashView();go(hk||'overview');
   if(hk!=='review')loadReview();}  /* hash 恢复 review 时 go('review') 已加载，避免双请求 */
 function beforeUnloadGuard(e){  /* 防误关丢失未发送内容：聊天输入或质控字段任一有内容时拦截；发送/拆分清空后自然放行（具名函数供 logout 移除，FIND-09） */
@@ -1080,7 +1182,7 @@ document.getElementById('input').addEventListener('input',e=>{e.target.style.hei
 (async function init(){
   if(!token()){showLogin(true);return;}
   try{const r=await fetch('/api/v1/auth/me',{headers:{'Authorization':'Bearer '+token()}});
-    if(r.ok){const m=await r.json();await loadConfig();boot(m.username,m.role);}else{showLogin(true);}}
+    if(r.ok){const m=await r.json();await loadConfig();boot(m.username,m.role,m.dept);}else{showLogin(true);}}
   catch(e){showLogin(true);}
 })();
 </script>

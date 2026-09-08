@@ -281,6 +281,32 @@ def test_deactivate_route_resets_cache_and_audits(monkeypatch, tmp_path):
                   json={"kind": "bad"}).status_code == 400
 
 
+def test_deactivate_falls_back_to_builtin_qwen_kwargs(monkeypatch, tmp_path):
+    """前端「使用内置配置」按钮语义：清空激活后 active_provider=None，
+    _build_model_kwargs 回落 .env 内置 Qwen 参数（用户配置保留在 providers 中可切回）。"""
+    from backend.config import settings
+    from backend.core.llm_factory import LLMFactory
+    monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
+    pid = lc.add_provider("chat", "openai", _URL, "gpt-test", "测试模型", _KEY)
+    lc.activate("chat", pid)
+    # 激活时走 provider 参数
+    kw_active = LLMFactory._build_model_kwargs("medical_literature")
+    assert kw_active["model"] == "gpt-test" and kw_active["base_url"] == _URL
+    # 清空激活（=回退内置配置）→ active None 且回落 Qwen
+    lc.deactivate("chat")
+    assert lc.active_provider("chat") is None
+    assert lc.active_provider("vision") is None
+    kw = LLMFactory._build_model_kwargs("medical_literature")
+    assert kw["model"] == settings.qwen_model_chat
+    assert kw["base_url"] == settings.qwen_base_url
+    assert kw["api_key"] == settings.qwen_api_key
+    assert kw["model_provider"] == "openai"
+    # 用户配置未被清空，可随时切回
+    assert lc.load_config()["chat"]["providers"][0]["id"] == pid
+    lc.activate("chat", pid)
+    assert lc.active_provider("chat")["id"] == pid
+
+
 def test_test_route_uses_faked_post(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     c = TestClient(app)

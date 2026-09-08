@@ -61,9 +61,24 @@ def test_add_department_empty_name_raises(monkeypatch, tmp_path):
 
 def test_remove_department_requires_existing(monkeypatch, tmp_path):
     monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(tmp_path / "departments.json"))
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))  # 隔离在用校验依赖的用户表
+    seed_default_users()
     assert dept_mod.remove_department("内科") is True
     assert dept_mod.remove_department("内科") is False  # 已不存在
     assert "内科" not in dept_mod.list_departments()
+
+
+def test_remove_department_in_use_by_account(monkeypatch, tmp_path):
+    """有账号绑定的科室删除被拒（ValueError→路由400）；账号删除后可删除。"""
+    import pytest
+    monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(tmp_path / "departments.json"))
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
+    seed_default_users()
+    with pytest.raises(ValueError):
+        dept_mod.remove_department("口腔科")  # doctor01 使用中
+    assert "口腔科" in dept_mod.list_departments()
+    assert auth_mod.delete_user("doctor01") is True  # 使用方消失后即可删除
+    assert dept_mod.remove_department("口腔科") is True
 
 
 # ---- admin 路由：门禁 + 重名 400 + 中文 URL 编码 ----
@@ -81,12 +96,16 @@ def test_admin_departments_routes_roundtrip(monkeypatch, tmp_path):
     # 重名 400
     assert c.post("/api/v1/medical/admin/departments", headers=H,
                   json={"name": "康复科"}).status_code == 400
-    # 中文名 URL 编码删除（前端 encodeURIComponent 场景）
+    # 删除被账号使用的科室 → 400（在用保护：doctor01 的 dept=口腔科）
     r = c.delete("/api/v1/medical/admin/departments/" + quote("口腔科"), headers=H)
+    assert r.status_code == 400, r.text
+    assert "仍有账号使用" in r.json()["detail"]
+    # 中文名 URL 编码删除未被使用的科室（前端 encodeURIComponent 场景）
+    r = c.delete("/api/v1/medical/admin/departments/" + quote("康复科"), headers=H)
     assert r.status_code == 200, r.text
-    assert "口腔科" not in c.get("/api/v1/medical/admin/departments", headers=H).json()["list"]
+    assert "康复科" not in c.get("/api/v1/medical/admin/departments", headers=H).json()["list"]
     # 删除不存在 → 404
-    assert c.delete("/api/v1/medical/admin/departments/" + quote("口腔科"),
+    assert c.delete("/api/v1/medical/admin/departments/" + quote("康复科"),
                     headers=H).status_code == 404
 
 

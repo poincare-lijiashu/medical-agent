@@ -2,7 +2,8 @@
 
 质控的「科室」字段由服务端绑定账号 dept，本科室字典是 dept 的权威取值来源：
 - 文件不存在时首次访问自动写入默认科室；
-- add 重名返回 False（路由转 400）；remove 校验存在（否则 False → 路由 404）。
+- add 重名返回 False（路由转 400）；remove 校验存在（否则 False → 路由 404），
+  且仍有账号绑定该科室时抛 ValueError（路由转 400）——防止在用科室被删成悬空值。
 """
 from __future__ import annotations
 
@@ -62,10 +63,19 @@ def add_department(name: str) -> bool:
 
 
 def remove_department(name: str) -> bool:
-    """删除科室；不存在返回 False（路由转 404）。"""
+    """删除科室；不存在返回 False（路由转 404）。
+    仍有账号绑定该科室时抛 ValueError（路由转 400）：科室字典是账号 dept / 质控科室的
+    权威取值来源，直接删除会让在用账号的科室变成悬空值。"""
     name = (name or "").strip()
     with _lock:
         d = _load()
+        if name not in d["list"]:
+            return False
+    from backend.core.auth import all_users  # 延迟导入，避免模块加载环
+    if any((rec or {}).get("dept", "") == name for rec in all_users().values()):
+        raise ValueError(f"科室「{name}」仍有账号使用，请先调整相关账号的科室后再删除")
+    with _lock:
+        d = _load()  # 双检：在用校验期间列表可能被并发增删
         if name not in d["list"]:
             return False
         d["list"].remove(name)
