@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审
     qc_auto_sign: bool = True   # True：药物中危规则库提示自动签发（AI·阈值自动留痕）；高危/禁忌仍人工双控
 
+    # L1 agentic 检索循环（环境变量 LITERATURE_AGENTIC 覆盖）：开启后 grade 零命中
+    # 进入 refine 决策节点（LLM 改写重检/放弃），关闭则保持旧的重检索路径
+    literature_agentic: bool = True
+
     @property
     def async_database_url(self) -> str:
         if self.pg_async_dsn:

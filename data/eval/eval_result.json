@@ -1,176 +1,238 @@
 {
+  "mode": "agentic",
+  "cases_file": "D:\\workspace_AI\\workspace_traecode\\xiangmu_traecode\\medical_agent\\eval\\hard_cases.json",
   "hit_rate": 1.0,
-  "passed": 9,
-  "total": 9,
+  "passed": 12,
+  "total": 12,
   "results": [
     {
       "agent": "literature",
-      "question": "二甲双胍是一线治疗吗？",
-      "expect_any": [
-        "二甲双胍"
-      ],
+      "question": "胃疼怎么办",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.7,
+      "elapsed_s": 58.89,
+      "note": "历史 fallback：宽泛症状词，KB 术语为 gastralgia/消化不良等",
       "resp": {
-        "answer": "根据提供的指南摘要，二甲双胍是2型糖尿病的一线治疗药物。推荐剂量通常为500mg每日2-3次，随餐或餐后即刻服用。对于合并动脉粥样硬化性心血管病、慢性肾脏病或心力衰竭的患者，建议联合使用SGLT2抑制剂或GLP-1受体激动剂。",
-        "confidence": 0.91,
-        "needs_human_review": false,
+        "answer": "现有证据未直接涵盖“胃疼”的完整处理，只有急性胃肠炎相关要点。若胃疼伴有腹泻、呕吐，可参考口服补液盐防脱水；若出现高热、血便或症状严重，应避免自行用止泻药并及时就医。由于病因多样，建议由医师评估，证据不足以给出普适方案。\n\n（校验提示：以下论断未被检索证据充分支持：若胃疼伴有腹泻、呕吐，可参考口服补液盐防脱水；若出现高热、血便或症状严重，应避免自行用止泻药并及时就医）",
+        "confidence": 0.7,
+        "needs_human_review": true,
         "sources": [
-          "guideline_demo:diabetes2",
-          "sample_guideline.pdf",
-          "示例_糖尿病与血脂管理要点"
+          "guideline_demo:gastroenteritis"
         ],
         "error": null
       }
     },
     {
       "agent": "literature",
-      "question": "2型糖尿病血糖控制目标是多少？",
-      "expect_any": [
-        "hba1c",
-        "7"
-      ],
+      "question": "头疼怎么办",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.88,
+      "elapsed_s": 12.91,
+      "note": "历史 fallback：需改写为头痛/cephalalgia 等",
       "resp": {
-        "answer": "多数成人2型糖尿病患者的糖化血红蛋白（HbA1c）控制目标为<7%。对于病程短、预期寿命长且无心血管疾病的患者，可采取更严格的目标（<6.5%）。而对于老年、有严重低血糖史或合并症较多的患者，目标可放宽至7.5%–8.0%。",
+        "answer": "头疼的处理需先判断可能类型：紧张型头痛常为双侧压迫/紧箍样、轻中度，发作期可选用对乙酰氨基酚或NSAID对症，频繁发作者可考虑预防性阿米替林或行为放松治疗；若伴随发热、感冒症状，普通感冒多为病毒性自限，可选用对乙酰氨基酚或布洛芬退热镇痛并注意休息补液。若出现雷击样剧痛、神经体征、发热、高血压急症、高热不退或意识改变等红旗征象，应及时就医排除继发性头痛。证据不足时请以正式指南和医师判断为准。",
+        "confidence": 0.88,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:tensionheadache",
+          "guideline_demo:commoncold"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "感冒怎么办",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.89,
+      "elapsed_s": 12.64,
+      "note": "历史 fallback：口语病名，KB 为上呼吸道感染",
+      "resp": {
+        "answer": "普通感冒多为病毒性、自限性，通常7-10天可自行好转，治疗以对症支持为主；退热镇痛可选用对乙酰氨基酚或布洛芬，并注意补液和休息。抗生素对感冒无效，不推荐常规使用。若出现高热不退、呼吸困难、意识改变等警示征象，应及时就医评估。",
+        "confidence": 0.89,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:commoncold"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "感冒吃什么药",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 8.52,
+      "note": "历史 fallback：同上+用药意图",
+      "resp": {
+        "answer": "普通感冒多为病毒性自限性疾病，治疗以对症为主，可选用对乙酰氨基酚或布洛芬退热镇痛，并注意补液休息；抗生素对感冒无效，不推荐常规使用。若为流行性感冒且属于重症高危人群，可在发病48小时内启动奥司他韦等神经氨酸酶抑制剂治疗。",
         "confidence": 0.9,
         "needs_human_review": false,
         "sources": [
-          "示例_糖尿病与血脂管理要点",
-          "sample_guideline.pdf",
-          "guideline_demo:diabetes2"
+          "guideline_demo:commoncold",
+          "guideline_demo:influenza"
         ],
         "error": null
       }
     },
     {
       "agent": "literature",
-      "question": "他汀类药物降低LDL-C的目标值是多少？",
-      "expect_any": [
-        "ldl",
-        "他汀"
-      ],
+      "question": "上腹痛是什么原因",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.74,
+      "elapsed_s": 16.94,
+      "note": "历史 fallback：症状学，需定位到相关疾病文档",
       "resp": {
-        "answer": "根据提供的证据，他汀类药物降低LDL-C的目标值取决于心血管病危险分层：极高危者目标为<1.4 mmol/L且较基线降幅≥50%（来源1）；另一示例指出超高危者<1.4 mmol/L、极高危者<1.8 mmol/L，均需较基线降幅≥50%（来源2、4）。此外，针对接受他汀治疗的终末期肾病（ESKD）患者，有研究探讨将LDL-C降至55 mg/dL以下的获益（来源3）。",
-        "confidence": 0.91,
+        "answer": "现有证据未直接说明上腹痛的病因。急性胃肠炎和普通感冒的证据仅涉及腹泻、呕吐或呼吸道症状，未涵盖上腹痛鉴别诊断。因此基于给定资料无法可靠判断，需要结合临床进一步评估。\n\n（校验提示：以下论断未被检索证据充分支持：急性胃肠炎和普通感冒的证据仅涉及腹泻、呕吐或呼吸道症状：其中'呕吐'未被给定证据明确支持，且'仅涉及'与原始内容不完全一致）",
+        "confidence": 0.74,
         "needs_human_review": false,
         "sources": [
-          "guideline_demo:dyslipidemia",
-          "示例_糖尿病与血脂管理要点",
-          "PMID:42685616"
+          "guideline_demo:gastroenteritis",
+          "guideline_demo:commoncold",
+          "PMID:42257103"
         ],
         "error": null
       }
     },
     {
       "agent": "literature",
-      "question": "高血压的诊断标准是多少？",
-      "expect_any": [
-        "mmhg",
-        "血压",
-        "140"
-      ],
+      "question": "急性胃肠炎怎么办",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 6.7,
+      "note": "历史 fallback",
       "resp": {
-        "answer": "在未使用降压药物的情况下，非同日三次诊室血压收缩压≥140 mmHg 和/或舒张压≥90 mmHg，可诊断为高血压。家庭自测血压的诊断阈值为≥135/85 mmHg。",
+        "answer": "急性胃肠炎多为病毒性、自限性，治疗关键是口服补液盐防治脱水，应少量多次补液；抗生素仅用于特定细菌或寄生虫病因（如高热血便、旅行者腹泻重症），止泻药需慎用于发热伴血便者，并警惕脱水及电解质紊乱。",
         "confidence": 0.9,
         "needs_human_review": false,
         "sources": [
-          "示例_高血压基层防治要点",
-          "guideline_demo:hypertension"
+          "guideline_demo:gastroenteritis"
         ],
         "error": null
       }
     },
     {
       "agent": "literature",
-      "question": "急性冠脉综合征为什么要用阿司匹林？",
-      "expect_any": [
-        "阿司匹林",
-        "aspirin",
-        "抗血小板"
-      ],
+      "question": "失眠是怎么回事",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.83,
+      "elapsed_s": 7.72,
+      "note": "历史 fallback：口语，KB 为睡眠障碍/insomnia",
       "resp": {
-        "answer": "提供的文献主要关注急性冠脉综合征经皮冠状动脉介入治疗后阿司匹林的早期停用策略，未直接阐述使用阿司匹林的具体病理生理机制。但根据示例指南，确诊动脉粥样硬化性心血管病者需进行抗血小板治疗，这暗示了阿司匹林在ACS中的基础地位。由于缺乏关于“为什么使用”的直接机制证据，置信度较低。\n\n（校验提示：以下论断未被检索证据充分支持：提供的文献主要关注急性冠脉综合征经皮冠状动脉介入治疗后阿司匹林的早期停用策略；未直接阐述使用阿司匹林的具体病理生理机制；确诊动脉粥样硬化性心血管病者需进行抗血小板治疗）",
-        "confidence": 0.77,
+        "answer": "现有证据未直接定义失眠，仅涉及失眠相关干预（如认知行为疗法）或共病影响，因此无法据此准确解释“失眠是怎么回事”。证据不足，建议参考权威睡眠障碍诊断标准（如ICSD或DSM）。",
+        "confidence": 0.83,
         "needs_human_review": false,
         "sources": [
-          "PMID:42607744",
-          "PMID:42507310",
-          "示例_糖尿病与血脂管理要点"
+          "PMID:42696962",
+          "PMID:42679519"
         ],
         "error": null
       }
     },
     {
-      "agent": "drug",
-      "question": "华法林和布洛芬能一起吃吗？",
-      "expect_any": [
-        "出血",
-        "高危"
-      ],
+      "agent": "literature",
+      "question": "65岁男性多饮多尿消瘦要查什么",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.4,
+      "elapsed_s": 12.47,
+      "note": "历史问题：症状组合，需关联糖尿病文档",
       "resp": {
-        "answer": "发现以下相互作用（循证规则库）：\n- 【华法林 + 布洛芬｜高危】NSAID 抑制血小板并置换蛋白结合，显著增加消化道出血风险；避免联用，必要时加用 PPI 并密切监测 INR。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "answer": "根据提供的证据，多饮多尿消瘦需首先排查糖尿病，建议检测空腹血糖、糖化血红蛋白等以明确诊断；证据未涵盖其他病因的排查，因此超出范围时应进一步结合临床评估。\n\n（校验提示：以下论断未被检索证据充分支持：多饮多尿消瘦需首先排查糖尿病）\n（已剔除无法溯源的引用：来源编号：示例_糖尿病与血脂管理要点）",
+        "confidence": 0.4,
+        "needs_human_review": true,
+        "sources": [],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "膝盖疼上下楼梯加重是什么问题",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.75,
+      "elapsed_s": 37.25,
+      "note": "补充同型：体征定位类",
+      "resp": {
+        "answer": "根据提供的证据，无法确定“膝盖疼上下楼梯加重”的具体诊断；该表现可能是膝关节骨关节炎等相关疾病的症状，但当前文献未提供症状-诊断对应关系。证据不足，建议由医师结合查体与影像学评估，勿依据现有资料下结论。\n\n（校验提示：以下论断未被检索证据充分支持：该表现可能是膝关节骨关节炎等相关疾病的症状，但证据未提供上下楼梯加重与膝骨关节炎的对应关系）",
+        "confidence": 0.75,
+        "needs_human_review": false,
+        "sources": [
+          "PMID:42686182",
+          "PMID:42692567"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "孩子发烧39度要马上退烧吗",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.86,
+      "elapsed_s": 7.66,
+      "note": "补充同型：口语+急诊意图",
+      "resp": {
+        "answer": "发烧39度是否立即退烧，关键不是只看体温数值，而是评估孩子年龄、精神状态与有无警示征象；若为<3个月婴儿或出现嗜睡、拒食、呼吸急促、抽搐等应立即就医评估。退热药（对乙酰氨基酚或布洛芬）按体重规范给药主要用于改善舒适度，而非单纯追求体温降至正常。\n\n（校验提示：以下论断未被检索证据充分支持：发烧39度是否立即退烧，关键不是只看体温数值，而是评估孩子年龄、精神状态与有无警示征象）",
         "confidence": 0.86,
-        "needs_human_review": true,
-        "sources": [
-          "drug_rules:curated_v1"
-        ],
-        "error": null
-      }
-    },
-    {
-      "agent": "drug",
-      "question": "西地那非能和硝酸甘油一起用吗",
-      "expect_any": [
-        "禁忌",
-        "低血压"
-      ],
-      "hit": true,
-      "resp": {
-        "answer": "发现以下相互作用（循证规则库）：\n- 【西地那非 + 硝酸甘油｜禁忌】PDE5 抑制剂与硝酸酯类协同致严重低血压，绝对禁忌，24–48 小时内不得同用。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
-        "confidence": 0.9,
-        "needs_human_review": true,
-        "sources": [
-          "drug_rules:curated_v1"
-        ],
-        "error": null
-      }
-    },
-    {
-      "agent": "imaging",
-      "question": "帮我看这张头颅CT",
-      "expect_any": [
-        "上传"
-      ],
-      "hit": true,
-      "resp": {
-        "answer": "影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
-        "confidence": 0.0,
         "needs_human_review": false,
         "sources": [
-          "imaging:needs_image"
+          "guideline_demo:pedsfever",
+          "guideline_demo:commoncold"
         ],
         "error": null
       }
     },
     {
-      "agent": "case",
-      "question": "65岁男性多饮多尿消瘦",
-      "expect_any": [
-        "图片",
-        "粘贴"
-      ],
+      "agent": "literature",
+      "question": "长期熬夜对心脏有影响吗",
+      "expect": "expect_hit=True",
       "hit": true,
+      "fallback": false,
+      "confidence": 0.83,
+      "elapsed_s": 10.53,
+      "note": "补充同型：生活化问法",
       "resp": {
-        "answer": "多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
-        "confidence": 0.0,
+        "answer": "现有提供的证据并未直接研究“长期熬夜”与心脏的关系，因此无法从这些来源得出确切结论。PMID:42679519 显示针对失眠的认知行为治疗可能影响心血管与免疫结局，间接提示睡眠问题与心脏健康相关，但这不能直接等同于熬夜的影响。其他证据分别涉及帕金森病睡眠干预和胆固醇致心脏毒性，均未讨论熬夜。因此，基于现有证据，证据不足，需降低置信度并谨慎解释。",
+        "confidence": 0.83,
         "needs_human_review": false,
         "sources": [
-          "case:needs_input"
+          "PMID:42679519"
         ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "便秘吃什么能缓解",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.83,
+      "elapsed_s": 7.74,
+      "note": "补充同型：口语+干预意图",
+      "resp": {
+        "answer": "现有证据未涉及便秘的饮食缓解方法，无法给出可溯源结论；建议咨询正式临床指南或医师。",
+        "confidence": 0.83,
+        "needs_human_review": false,
+        "sources": [],
         "error": null
       }
     }

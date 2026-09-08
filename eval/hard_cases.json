@@ -1,0 +1,17 @@
+{
+  "_comment": "难题评测集：历史 fallback 场景（来源：data/audit/audit.jsonl 宽泛症状类）+ 同型补充。用于 L1 agentic 检索循环的 A/B 对比。expect_hit=true 表示改写重检后应能命中证据。",
+  "cases": [
+    {"q": "胃疼怎么办", "expect_hit": true, "note": "历史 fallback：宽泛症状词，KB 术语为 gastralgia/消化不良等"},
+    {"q": "头疼怎么办", "expect_hit": true, "note": "历史 fallback：需改写为头痛/cephalalgia 等"},
+    {"q": "感冒怎么办", "expect_hit": true, "note": "历史 fallback：口语病名，KB 为上呼吸道感染"},
+    {"q": "感冒吃什么药", "expect_hit": true, "note": "历史 fallback：同上+用药意图"},
+    {"q": "上腹痛是什么原因", "expect_hit": true, "note": "历史 fallback：症状学，需定位到相关疾病文档"},
+    {"q": "急性胃肠炎怎么办", "expect_hit": true, "note": "历史 fallback"},
+    {"q": "失眠是怎么回事", "expect_hit": true, "note": "历史 fallback：口语，KB 为睡眠障碍/insomnia"},
+    {"q": "65岁男性多饮多尿消瘦要查什么", "expect_hit": true, "note": "历史问题：症状组合，需关联糖尿病文档"},
+    {"q": "膝盖疼上下楼梯加重是什么问题", "expect_hit": true, "note": "补充同型：体征定位类"},
+    {"q": "孩子发烧39度要马上退烧吗", "expect_hit": true, "note": "补充同型：口语+急诊意图"},
+    {"q": "长期熬夜对心脏有影响吗", "expect_hit": true, "note": "补充同型：生活化问法"},
+    {"q": "便秘吃什么能缓解", "expect_hit": true, "note": "补充同型：口语+干预意图"}
+  ]
+}

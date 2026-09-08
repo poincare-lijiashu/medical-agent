@@ -91,3 +91,22 @@ def test_admin_data_panel_shape(monkeypatch, tmp_path):
     assert isinstance(d["audit_recent"], list)
     assert "pg_counts" in d and "review" in d and "pending" in d["review"]
     assert "kb_docs" in d
+
+
+def test_admin_data_infra_readonly_status(monkeypatch, tmp_path):
+    """基础设施卡片数据源：/admin/data 增 infra 只读状态（milvus TCP 预检 + pg SELECT 1 探针）。
+    安全红线：只报状态供展示/复制命令文本，绝不提供任何执行端点或执行字段。"""
+    import asyncio
+
+    from backend.core import pg_store
+
+    _isolated_queue(monkeypatch, tmp_path)
+    c = _client(monkeypatch)
+    adm = _login(c, "admin01", "Med@2026")
+    d = c.get("/api/v1/medical/admin/data", headers={"Authorization": "Bearer " + adm}).json()
+    infra = d["infra"]
+    assert infra["milvus"]["connected"] in (True, False)
+    assert isinstance(infra["milvus"].get("uri"), str)
+    assert infra["pg"]["ok"] in (True, False)
+    # pg_store.ping 只读探针：未建池（lifespan 未跑）时快速返回 False，绝不抛异常
+    assert asyncio.run(pg_store.ping()) is False

@@ -134,6 +134,9 @@ class AskResp(BaseModel):
     review_id: str | None = None
     status: str = "ok"
     evidence: list = []
+    # agentic 检索改写轨迹 [{attempt,action,old_query,new_query,reason}]：
+    # 仅文献 agent 非空（refine 节点逐轮累积），其余 agent 恒为 []（前端据此选择性渲染）
+    refine_trace: list = []
 
 
 class ResolveReq(BaseModel):
@@ -187,7 +190,8 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
     return AskResp(answer=a["text"], confidence=a["confidence"],
                    needs_human_review=a.get("needs_human_review", False),
                    sources=a.get("sources", []), review_id=rid,
-                   evidence=a.get("evidence", []))
+                   evidence=a.get("evidence", []),
+                   refine_trace=out.get("refine_trace", []))
 
 
 def _sse(event: str, data: dict) -> str:
@@ -209,14 +213,26 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
                                   "needs_human_review": False, "sources": ["intent:prefilter"], "review_id": None})
             return
         final = None
+        # agentic 改写轨迹就地累积：stream_mode="updates" 只给逐节点增量、拿不到最终 state，
+        # 因此在流式过程中捕获 refine 节点输出——①每轮实时推送 event: refine（前端思考气泡
+        # 即时显示「改写查询X→Y再检索」）；②收尾随 result 事件的 refine_trace 整体下发。
+        # 该方案不侵入图内部（无需节点回调/自定义事件），是 SSE 协议下最稳的实现。
+        trace = []
         try:
             g = _get_lit_graph()
             sid = "lit-" + uuid.uuid4().hex[:12]
-            async for upd in g.astream({"session_id": sid, "question": q, "query": q, "attempts": 0},
+            async for upd in g.astream({"session_id": sid, "question": q, "query": q,
+                                        "original_query": q, "attempts": 0},
                                        config={"configurable": {"thread_id": sid}}, stream_mode="updates"):
                 for node, out in upd.items():
                     if node in ("retrieve", "grade", "generate"):
                         yield _sse("progress", {"step": node})
+                    elif node == "refine" and isinstance(out, dict):
+                        # refine 决策产出为累积轨迹（末位即本轮），实时推送本轮 + 留存全量
+                        tr = out.get("refine_trace") or []
+                        if tr:
+                            trace = tr
+                            yield _sse("refine", tr[-1])
                     elif node == "fallback":
                         yield _sse("progress", {"step": "fallback"})
                         if isinstance(out, dict) and out.get("answer"):
@@ -236,7 +252,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
         yield _sse("result", {"answer": final["text"], "confidence": final["confidence"],
                               "needs_human_review": final.get("needs_human_review", False),
                               "sources": final.get("sources", []), "review_id": rid,
-                              "evidence": final.get("evidence", [])})
+                              "evidence": final.get("evidence", []),
+                              "refine_trace": trace})
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -714,9 +731,9 @@ async def admin_delete_department(name: str, user: dict = Depends(require_role("
 # ---------- admin 运维：数据面板 / 队列清理（只读优先，不做裸 SQL） ----------
 @router.get("/admin/data")
 async def admin_data(user: dict = Depends(require_role("admin"))):
-    """管理员只读数据面板：用户、审计流、队列统计、PG 镜像与知识库规模。"""
+    """管理员只读数据面板：用户、审计流、队列统计、PG 镜像与知识库规模、基础设施状态。"""
     from backend.core.auth import all_users
-    from backend.core.medical_kb import doc_count
+    from backend.core.medical_kb import doc_count, milvus_status
     from backend.core.embedder import device
     users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", ""),
               "dept": rec.get("dept", "")}
@@ -736,9 +753,20 @@ async def admin_data(user: dict = Depends(require_role("admin"))):
         pg_counts = await pg_store.counts()
     except Exception:  # noqa: BLE001
         pg_counts = {}
+    # 基础设施只读状态（前端运维卡片）：milvus TCP 预检（<0.5s fail-fast）+ pg SELECT 1 探针。
+    # 安全红线：只报状态/命令文本供展示与复制，本端点绝不提供任何执行/重启能力。
+    try:
+        milvus = await asyncio.to_thread(milvus_status)
+    except Exception:  # noqa: BLE001 —— 状态探针绝不影响面板主数据
+        milvus = {"connected": False, "uri": ""}
+    try:
+        pg_ok = await pg_store.ping()
+    except Exception:  # noqa: BLE001
+        pg_ok = False
     return {"users": users, "audit_recent": audit_recent, "review": stats,
             "pg_counts": pg_counts, "kb_docs": await asyncio.to_thread(doc_count),
-            "events_total": len(al.entries), "device": device(), "uptime_s": int(time.time() - _START)}
+            "events_total": len(al.entries), "device": device(), "uptime_s": int(time.time() - _START),
+            "infra": {"milvus": milvus, "pg": {"ok": pg_ok}}}
 
 
 class PurgeReq(BaseModel):

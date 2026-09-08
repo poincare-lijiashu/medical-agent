@@ -1,8 +1,11 @@
 import asyncio
 
+import pytest
+
 from backend.agents.medical.literature.graph import build_literature_graph
 from backend.agents.medical.literature.nodes import route_after_grade, verify_node
 from backend.agents.medical.literature.state import LiteratureState
+from backend.config import settings
 
 
 def test_graph_compiles():
@@ -12,7 +15,13 @@ def test_graph_compiles():
         assert n in nodes
 
 
-def test_route_retries_when_insufficient():
+@pytest.fixture
+def agentic_off(monkeypatch):
+    """旧路由断言建立在旧图语义上（agentic 开关默认开启），关闭后验证旧重试路径。"""
+    monkeypatch.setattr(settings, "literature_agentic", False)
+
+
+def test_route_retries_when_insufficient(agentic_off):
     assert route_after_grade(LiteratureState(sufficient=False, attempts=1)) == "retrieve"
     assert route_after_grade(LiteratureState(sufficient=True, attempts=1)) == "generate"
     assert route_after_grade(LiteratureState(sufficient=False, attempts=2)) == "fallback"

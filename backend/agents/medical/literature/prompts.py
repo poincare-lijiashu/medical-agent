@@ -17,6 +17,9 @@ LITERATURE_ANSWER = (
 # 充分性打分器：判断证据是否足以回答，不足则给改写查询
 LITERATURE_GRADE = (
     "判断下列证据是否足以严谨回答该临床问题。若关键信息缺失，给出更精准的检索查询。\n"
+    "注意：证据主题与问题表面相关（如都提到同一疾病）不等于充分——证据必须能回答问题的"
+    "核心意图（问机制就答机制、问标准就答标准、问跨领域因果关系就必须有该因果的临床证据，"
+    "答非所问一律判不充分）。\n"
     "问题：{question}\n"
     "证据摘要：{evidence}\n\n"
     "严格返回 JSON：\n"
@@ -31,4 +34,17 @@ LITERATURE_VERIFY = (
     "严格返回 JSON：\n"
     '{{"supported_ratio":0.0-1.0, "unsupported_claims":["<未被证据支持的论断>"], '
     '"high_risk": true/false}}'
+)
+
+# agentic 改写决策器：grade 零命中后决策「改写重检」或「放弃」（语料缺失时及时止损）
+LITERATURE_REFINE = (
+    "知识库检索未命中任何可用证据，请你作为检索查询优化器做决策。\n"
+    "原问题：{question}\n"
+    "已尝试过的查询（你的新查询不要与之重复）：{tried}\n"
+    "检索分数分布（rerank 归一化，越低越不相关）：{scores}\n"
+    "{corpus_hint}"
+    "请决策 action：rewrite（给出一个新的、更可能命中的检索查询，"
+    "可换用规范医学术语/同义词/疾病学名）或 giveup（知识库很可能缺少相关语料，放弃重检）。\n"
+    '严格返回 JSON：{{"action":"rewrite或giveup", '
+    '"new_query":"<rewrite时的新查询，giveup留空>", "reason":"<简短理由>"}}'
 )

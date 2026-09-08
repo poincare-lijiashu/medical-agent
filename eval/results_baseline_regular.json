@@ -1,0 +1,187 @@
+{
+  "mode": "baseline",
+  "cases_file": "builtin",
+  "hit_rate": 1.0,
+  "passed": 9,
+  "total": 9,
+  "results": [
+    {
+      "agent": "literature",
+      "question": "二甲双胍是一线治疗吗？",
+      "expect": "kw:二甲双胍",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.91,
+      "elapsed_s": 20.83,
+      "note": "",
+      "resp": {
+        "answer": "是的，二甲双胍被明确列为2型糖尿病的一线治疗药物。多个教学示例指南均指出，多数成人2型糖尿病患者首选二甲双胍，常用剂量为500mg每日2-3次随餐服用。合并动脉粥样硬化性心血管病、慢性肾脏病或心力衰竭者，可在二甲双胍基础上联合SGLT2抑制剂或GLP-1受体激动剂。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:diabetes2",
+          "sample_guideline.pdf",
+          "示例_糖尿病与血脂管理要点"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "2型糖尿病血糖控制目标是多少？",
+      "expect": "kw:hba1c/7",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 20.2,
+      "note": "",
+      "resp": {
+        "answer": "根据证据，2型糖尿病血糖控制目标以糖化血红蛋白（HbA1c）衡量：多数成人一般目标为<7%；病程短、预期寿命长且无心血管病者可更严格至<6.5%；老年、有严重低血糖史或合并症多者可放宽至7.5%–8.0%。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "示例_糖尿病与血脂管理要点",
+          "sample_guideline.pdf",
+          "guideline_demo:diabetes2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "他汀类药物降低LDL-C的目标值是多少？",
+      "expect": "kw:ldl/他汀",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.91,
+      "elapsed_s": 18.09,
+      "note": "",
+      "resp": {
+        "answer": "他汀类药物降低LDL-C的目标值取决于ASCVD危险分层。根据《中国血脂管理指南（2023）》教学示例，极高危者LDL-C目标为<1.4 mmol/L且较基线降幅≥50%；另一示例文档进一步区分超高危（LDL-C<1.4 mmol/L且降幅≥50%）与极高危（LDL-C<1.8 mmol/L且降幅≥50%）。因此不同危险分层的目标值不同，可核验的范围为1.4–1.8 mmol/L，且要求降幅≥50%。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:dyslipidemia",
+          "示例_糖尿病与血脂管理要点"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "高血压的诊断标准是多少？",
+      "expect": "kw:mmhg/血压/140",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 7.17,
+      "note": "",
+      "resp": {
+        "answer": "根据提供的证据，在未使用降压药物的情况下，非同日三次诊室血压收缩压≥140 mmHg和/或舒张压≥90 mmHg可诊断高血压；家庭自测血压诊断阈值为≥135/85 mmHg。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "KB:示例_高血压基层防治要点",
+          "KB:guideline_demo:hypertension"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "急性冠脉综合征为什么要用阿司匹林？",
+      "expect": "kw:阿司匹林/aspirin/抗血小板",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.77,
+      "elapsed_s": 76.8,
+      "note": "",
+      "resp": {
+        "answer": "现有证据显示，急性冠脉综合征（ACS）患者经皮冠状动脉介入（PCI）后，通常采用阿司匹林联合P2Y12抑制剂的12个月双联抗血小板治疗（DAPT），早期停用阿司匹林常作为干预策略与12个月DAPT进行随机对照比较。这提示阿司匹林在ACS后的抗血小板治疗中具有重要作用，但所提供的文献未直接解释阿司匹林发挥作用的机制，因此关于“为何必须使用阿司匹林”的机制性结论证据不足，需谨慎评价。\n\n（校验提示：以下论断未被检索证据充分支持：现有证据显示，急性冠脉综合征（ACS）患者经皮冠状动脉介入（PCI）后，通常采用阿司匹林联合P2Y12抑制剂的12个月双联抗血小板治疗（DAPT）；这提示阿司匹林在ACS后的抗血小板治疗中具有重要作用）",
+        "confidence": 0.77,
+        "needs_human_review": false,
+        "sources": [
+          "PMID:42607744",
+          "PMID:42507310"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "华法林和布洛芬能一起吃吗？",
+      "expect": "kw:出血/高危",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.86,
+      "elapsed_s": 0.09,
+      "note": "",
+      "resp": {
+        "answer": "发现以下相互作用（循证规则库）：\n- 【华法林 + 布洛芬｜高危】NSAID 抑制血小板并置换蛋白结合，显著增加消化道出血风险；避免联用，必要时加用 PPI 并密切监测 INR。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "confidence": 0.86,
+        "needs_human_review": true,
+        "sources": [
+          "drug_rules:curated_v2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "西地那非能和硝酸甘油一起用吗",
+      "expect": "kw:禁忌/低血压",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 0.06,
+      "note": "",
+      "resp": {
+        "answer": "发现以下相互作用（循证规则库）：\n- 【西地那非 + 硝酸甘油｜禁忌】PDE5 抑制剂与硝酸酯类协同致严重低血压，绝对禁忌，24–48 小时内不得同用。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "confidence": 0.9,
+        "needs_human_review": true,
+        "sources": [
+          "drug_rules:curated_v2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "imaging",
+      "question": "帮我看这张头颅CT",
+      "expect": "kw:上传",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.0,
+      "elapsed_s": 0.03,
+      "note": "",
+      "resp": {
+        "answer": "影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
+        "confidence": 0.0,
+        "needs_human_review": false,
+        "sources": [
+          "imaging:needs_image"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "case",
+      "question": "65岁男性多饮多尿消瘦",
+      "expect": "kw:图片/粘贴",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.0,
+      "elapsed_s": 0.03,
+      "note": "",
+      "resp": {
+        "answer": "多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
+        "confidence": 0.0,
+        "needs_human_review": false,
+        "sources": [
+          "case:needs_input"
+        ],
+        "error": null
+      }
+    }
+  ]
+}

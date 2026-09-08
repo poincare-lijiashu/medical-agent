@@ -92,6 +92,14 @@ class LLMFactory:
             }
         # openai 兼容格式：openai SDK 会自动在 base_url 后追加 /chat/completions，
         # 故传原始 base_url（与 .env 的 QWEN_BASE_URL 用法一致，最终请求 = {base_url}/chat/completions）
+        # 思考模式与 function-calling 的 tool_choice 强制互斥（Qwen3/DeepSeek V4 均 400），
+        # 结构化输出依赖 function calling，必须按厂商关闭思考：
+        # - DeepSeek V4（默认思考开启）：thinking={"type":"disabled"}（官方参数）
+        # - 其余（Qwen3 兼容端点）：enable_thinking=False（不识别该参数的端点会忽略，无副作用）
+        if "deepseek" in (provider.get("base_url") or "").lower():
+            extra_body = {"thinking": {"type": "disabled"}}
+        else:
+            extra_body = {"enable_thinking": False}
         return {
             "model": provider["model_id"],
             "model_provider": "openai",
@@ -101,6 +109,7 @@ class LLMFactory:
             "max_retries": 3,
             "http_async_client": _HTTP_ASYNC_CLIENT,
             "http_client": _HTTP_SYNC_CLIENT,
+            "extra_body": extra_body,
         }
 
     @classmethod

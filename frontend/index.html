@@ -405,6 +405,24 @@ function srcLabel(s){s=String(s||'');
   return s;}
 function srcLine(sources){ if(!sources||!sources.length)return '';
   return `<div class="src">来源：`+sources.slice(0,6).map(s=>{const m=String(s).match(/PMID:?(\d+)/); return m?`<a href="https://pubmed.ncbi.nlm.nih.gov/${m[1]}/" target="_blank" rel="noopener noreferrer">${esc(s)}</a>`:esc(srcLabel(s));}).join(' · ')+`</div>`; }
+/* agentic 检索改写轨迹（refine_trace，SSE event:refine / result.refine_trace 数据源）：
+   单条决策 → 人话文案；traceLine 渲染到答案元信息区（esc 转义防注入），refineThink 供思考气泡。 */
+function refineSentence(r){const n=(r&&r.attempt)||'?';
+  return (r&&r.action==='rewrite')
+    ?`第${n}轮：改写查询「${r.old_query||''}」→「${r.new_query||''}」再检索`
+    :`第${n}轮：判定知识库缺少相关语料，停止改写`;}
+function refineThink(r){return refineSentence(r)+'…'+((r&&r.reason)?`（${r.reason}）`:'');}
+function traceLine(tr){ if(!tr||!tr.length)return '';
+  return `<div class="src" style="margin-top:4px">检索改写轨迹：`+tr.map(r=>esc(refineSentence(r)+((r&&r.reason)?`（${r.reason}）`:''))).join('；')+`</div>`; }
+/* 剪贴板复制（admin 运维卡片「复制命令」用）：优先 navigator.clipboard，
+   非安全上下文（如内网 http）回退 execCommand——只复制文本，绝不触发任何执行。 */
+function copyText(t){const ok=()=>toast('已复制：'+t);
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(ok).catch(()=>_fallbackCopy(t,ok));}
+  else _fallbackCopy(t,ok);}
+function _fallbackCopy(t,ok){const ta=document.createElement('textarea');ta.value=t;
+  ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+  try{document.execCommand('copy');ok();}catch(e){toast('复制失败，请手动复制：'+t);}
+  ta.remove();}
 /* 危险操作统一确认模态（替代原生 confirm：不被浏览器策略自动处置，默认焦点在取消；可要求输入确认词） */
 function confirmDanger(title,bodyHtml,confirmLabel,onYes,expectInput){
   document.getElementById('mTitle').textContent=title;
@@ -518,7 +536,7 @@ function renderBot(t,meta,intro){const m=document.getElementById('msgs');
     <div class="foot" data-foot></div></div>`;
   r.querySelector('.txt').innerHTML=md(t);
   const foot=r.querySelector('[data-foot]');
-  if(meta){foot.innerHTML=confChip(meta.confidence||0,!!meta.needs_human_review)+srcLine(meta.sources);}
+  if(meta){foot.innerHTML=confChip(meta.confidence||0,!!meta.needs_human_review)+srcLine(meta.sources)+traceLine(meta.refine_trace);}
   else foot.remove();
   m.appendChild(r);scroll();return r;}
 function addBot(t,meta,intro){pushHist(cur,{role:'bot',text:t,meta:meta||null});return renderBot(t,meta,intro);}
@@ -542,6 +560,7 @@ async function streamLit(q,think,agent){
       if(s.startsWith('event:'))ev=s.slice(6).trim();
       else if(s.startsWith('data:')){let d;try{d=JSON.parse(s.slice(5).trim());}catch(e){continue;}
         if(ev==='progress')setThink(think,label[d.step]||'处理中…');
+        else if(ev==='refine')setThink(think,refineThink(d));  /* agentic 改写决策：实时更新思考气泡（textContent 渲染天然免注入） */
         else if(ev==='result'){think.remove();const a=agent||cur;pushHist(a,{role:'bot',text:d.answer,meta:d});renderBot(d.answer,d);return true;}
         else if(ev==='error')return false;}}}
   return false;
@@ -953,6 +972,20 @@ async function loadData(){
       <pre style="background:var(--rail);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:11.5px;margin:6px 0 0;overflow-x:auto;white-space:pre-wrap">${payloadJson}</pre>
     </details></li>`;}).join('');
   const audit=auditList||'<li><span class="a">暂无记录</span></li>';
+  /* 基础设施运维卡片（数据源 /admin/data 的 infra 只读状态）：milvus/pg 状态 chip +
+     对应重启命令文本 +「复制命令」按钮。安全红线：只展示/复制，系统绝不代为执行。 */
+  const infra=d.infra||{};
+  const mv=infra.milvus||{}, pg=infra.pg||{};
+  const infraRows=[
+    {name:'Milvus 知识库', ok:mv.connected===true, detail:mv.uri||'', cmd:'docker compose restart milvus'},
+    {name:'PostgreSQL 镜像', ok:pg.ok===true, detail:'审计/用户/复核队列双写镜像', cmd:'docker compose restart postgres'},
+  ].map(x=>`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:4px 0">
+      <span class="chip ${x.ok?'ok':'bad'}"><span class="dot"></span>${x.ok?'正常':'不可达'}</span>
+      <b style="font-size:13px">${esc(x.name)}</b>
+      <span class="src">${esc(x.detail)}</span>
+      <span class="src num" style="margin-left:auto">${esc(x.cmd)}</span>
+      <button class="btn sm secondary" data-act="infra-copy" data-cmd="${esc(x.cmd)}">复制命令</button>
+    </div>`).join('');
   b.innerHTML=`<div class="stats">${stats}</div>
     <div class="dash">
       <div class="panel"><h3>审计流（最近 ${auditItems.length} 条 · 点击展开 JSON）</h3>
@@ -980,7 +1013,11 @@ async function loadData(){
         </div>
       </div>
     </div>
+    <div class="panel" style="margin-top:16px"><h3>基础设施（只读状态 · 重启命令仅供复制，系统不代执行）</h3><div id="infraRows" style="padding:8px 16px 12px">${infraRows}</div></div>
     <div class="panel" style="margin-top:16px"><h3>模型配置（对话 / 视觉 · 双格式）</h3><div id="llmPanel"><div class="src" style="padding:10px 16px">加载中…</div></div></div>`;
+  /* 基础设施卡片「复制命令」绑定：仅复制命令文本（copyText），绝不提供/触发任何执行 */
+  document.querySelectorAll('#infraRows [data-act="infra-copy"]').forEach(btn=>{
+    btn.onclick=()=>copyText(btn.dataset.cmd);});
   /* 科室管理卡片 + 新增用户科室下拉（数据源 GET /admin/departments） */
   document.getElementById('deptAddBtn').onclick=addDept;
   loadDeptPanel();

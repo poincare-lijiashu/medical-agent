@@ -59,6 +59,18 @@ def available() -> bool:
     return _pool is not None
 
 
+async def ping() -> bool:
+    """只读连通性探针（admin 运维卡片用）：SELECT 1，任何异常/未建池一律 False。
+    绝不写库、绝不重试（面板展示需快速失败），与 mirror_* 的 best-effort 写路径互不影响。"""
+    if not _pool:
+        return False
+    try:
+        async with _pool.acquire() as c:
+            return bool(await c.fetchval("SELECT 1"))
+    except Exception:  # noqa: BLE001 —— 探针只报状态，绝不冒泡
+        return False
+
+
 async def mirror_audit(event_type: str, actor: str, payload: dict) -> None:
     if not _pool:
         return
