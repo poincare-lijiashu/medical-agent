@@ -159,9 +159,12 @@ class LLMFactory:
             kwargs["temperature"] = temperature           # 覆盖温度
             kwargs["streaming"] = streaming               # 设置是否流式
             # Qwen3 默认思考模式不允许 function-calling 的 tool_choice=required（会 400），关掉思考以兼容结构化输出
-            # （F6：仅 openai 兼容格式需要；anthropic 无该参数）
+            # （F6：仅 openai 兼容格式需要；anthropic 无该参数）。
+            # 注意：_provider_kwargs 可能已按厂商写入 DeepSeek 的 thinking disabled——合并而非覆盖
             if kwargs.get("model_provider") == "openai":
-                kwargs["extra_body"] = {"enable_thinking": False}
+                eb = dict(kwargs.get("extra_body") or {})
+                eb.setdefault("enable_thinking", False)
+                kwargs["extra_body"] = eb
             # print(f'kwargs: {kwargs}')
             llm = init_chat_model(**kwargs)               # 真正创建模型（** 表示把字典展开成关键字参数）
             cls._instances[cache_key] = llm               # 存进缓存
