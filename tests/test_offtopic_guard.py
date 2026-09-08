@@ -77,6 +77,20 @@ def test_offtopic_guard_conservative():
     assert offtopic_tech_reply("帮我检查这段python代码") is None  # “检查”按医学信号保守放行
 
 
+def test_offtopic_guard_medical_research_stats_not_rejected():
+    """误杀面回归（生产化后增量排查）：医学统计/科研分析场景曾因零医学信号被误拒。
+    技术词命中但含医学统计信号 → 保守放行；纯技术题拒答面不得因词表扩充而放宽。"""
+    assert offtopic_tech_reply("用python分析心电图数据") is None      # 原有心电图信号
+    assert offtopic_tech_reply("用python绘制ROC曲线评估模型") is None
+    assert offtopic_tech_reply("用python做生存分析") is None
+    assert offtopic_tech_reply("用python计算样本量") is None
+    assert offtopic_tech_reply("用python分析基因测序数据") is None
+    assert offtopic_tech_reply("用python统计受试者入组情况") is None
+    # 纯技术题仍拒答（词表扩充只放宽医学面）
+    assert offtopic_tech_reply("用python写一个快速排序算法") == OFFTOPIC_REPLY
+    assert offtopic_tech_reply("python 连接 mysql 数据库报错怎么排查") == OFFTOPIC_REPLY
+
+
 # ---------- 端点层：拒答不入队 ----------
 
 def test_tech_question_rejected_not_enqueued(monkeypatch, tmp_path):

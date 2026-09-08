@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import threading
+from concurrent.futures import TimeoutError as _FutTimeout
 from datetime import datetime, timezone
 
 import asyncpg
@@ -72,9 +73,15 @@ def _stop_db_loop() -> None:
 
 def _run_pg(coro):
     """同步桥接：协程提交到专用 DB 循环并阻塞取结果（任意线程可调，含事件循环线程——
-    DB 循环在独立线程，绝不与调用方互锁）。超时/异常向上抛，由 repo 层捕获回落 JSON。"""
+    DB 循环在独立线程，绝不与调用方互锁）。超时/异常向上抛，由 repo 层捕获回落 JSON。
+    超时后尽力取消挂起协程：否则 PG 半开/挂起场景协程滞留池中（max_size=5）逐渐
+    耗尽连接，后续请求全部超时降级（取消经 future 链传播为协程 CancelledError）。"""
     fut = asyncio.run_coroutine_threadsafe(coro, _get_db_loop())
-    return fut.result(timeout=_BRIDGE_TIMEOUT)
+    try:
+        return fut.result(timeout=_BRIDGE_TIMEOUT)
+    except _FutTimeout:
+        fut.cancel()
+        raise
 
 
 async def _arun(coro):
@@ -300,9 +307,14 @@ def _write_json_atomic(path: str, data) -> None:
     os.replace(tmp, path)
 
 
+_repo_pg_stale = False  # repo 层最近一次 PG 全量同步失败标志：置位后读回落 JSON（最新数据），
+                        # 直到下一次成功写清除——防「JSON 已写新、PG 仍旧」窗口内读回滚旧真源
+
+
 def _pg_or_json(load_fn, json_loader, path: str, default):
-    """repo 读编排：PG 池可用 → 读 PG（非空即真源）；None/异常/超时/空表 → JSON（现状行为）。"""
-    if _pool:
+    """repo 读编排：PG 池可用且非 stale → 读 PG（非空即真源）；None/stale/异常/超时/空表
+    → JSON（现状行为；stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。"""
+    if _pool and not _repo_pg_stale:
         try:
             data = _run_pg(load_fn())
             if data is not None:
@@ -310,6 +322,8 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
         except Exception as e:  # noqa: BLE001 —— PG 任何异常都降级 JSON，绝不影响调用方
             logger.warning("pg.repo.load_fallback_json", error=str(e)[:120],
                            file=os.path.basename(path))
+    else:
+        logger.debug("pg.repo.read_stale_fallback_json", file=os.path.basename(path))
     if json_loader is not None:
         return json_loader()
     return _read_json(path, default)
@@ -317,12 +331,16 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
 
 def _json_then_pg(save_fn, path: str, data) -> None:
     """repo 写编排：JSON 原子写先行（兜底安全，现状行为），PG 可用再全量同步（best-effort：
-    异常仅告警不冒泡——写失败时读路径回落 JSON 仍一致，下次成功写自动补齐）。"""
+    异常仅告警不冒泡，但置 stale 标志——此后读回落 JSON 最新数据，直到下次成功写恢复
+    PG 真源；避免读改写循环用 PG 旧数据覆盖 JSON 中未同步的改动）。"""
     _write_json_atomic(path, data)
+    global _repo_pg_stale
     if _pool:
         try:
             _run_pg(save_fn(data))
+            _repo_pg_stale = False
         except Exception as e:  # noqa: BLE001
+            _repo_pg_stale = True
             logger.warning("pg.repo.save_pg_failed", error=str(e)[:120],
                            file=os.path.basename(path))
 
@@ -351,13 +369,15 @@ async def _pg_save_users(users: dict) -> None:
             for u, rec in (users or {}).items() if isinstance(rec, dict)]
     async with _pool.acquire() as c:
         async with c.transaction():
-            if rows:
-                await c.execute("DELETE FROM users WHERE NOT (username = ANY($1))",
-                                [r[0] for r in rows])
-            else:
-                await c.execute("DELETE FROM users")
-            if rows:
-                await c.executemany(_USER_UPSERT, rows)
+            if not rows:
+                # 空集不清库：空用户集几乎必为异常状态（如 PG 抖动读回落空 JSON 后触发
+                # 全量同步），DELETE 全表会把 PG 真实用户清光且不可恢复；跳过仅告警，
+                # JSON 已如实落盘，下次任一非空全量同步自然补齐一致性。
+                logger.warning("pg.save_users.skip_empty_wipe")
+                return
+            await c.execute("DELETE FROM users WHERE NOT (username = ANY($1))",
+                            [r[0] for r in rows])
+            await c.executemany(_USER_UPSERT, rows)
 
 
 def load_users(path: str, json_loader=None) -> dict:

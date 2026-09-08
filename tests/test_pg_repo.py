@@ -156,7 +156,63 @@ def fake_pg(monkeypatch):
     db = _db()
     pool = FakePool(db)
     monkeypatch.setattr(pg_store, "_pool", pool)
-    return db
+    monkeypatch.setattr(pg_store, "_repo_pg_stale", False)  # stale 标志显式复位
+    yield db
+    pg_store._repo_pg_stale = False  # 防 monkeypatch teardown 恢复到上一测试的脏值
+
+
+# ---------- 增量排查（生产化后）修复回归 ----------
+
+def test_run_pg_timeout_cancels_coroutine(monkeypatch):
+    """桥接超时后挂起协程必须被取消：否则 PG 半开/挂起场景下协程滞留池中
+    （max_size=5）逐渐耗尽连接，后续请求全部 3s 超时降级。"""
+    import threading
+    import concurrent.futures as cf
+    monkeypatch.setattr(pg_store, "_BRIDGE_TIMEOUT", 0.05)
+    started, cancelled = threading.Event(), threading.Event()
+
+    async def slow():
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    with pytest.raises(cf.TimeoutError):
+        pg_store._run_pg(slow())
+    assert started.wait(2)
+    assert cancelled.wait(2), "超时后挂起协程应被取消，防占用池连接"
+
+
+def test_pg_save_failure_reads_fall_back_to_json_until_pg_recovers(fake_pg, tmp_path, monkeypatch):
+    """真源一致性窗口：PG 同步写失败（JSON 已落盘新数据）后，读必须回落 JSON
+    而非回滚到 PG 旧数据；直到下一次成功写恢复 PG 真源。否则读改写循环会把
+    JSON 中未同步的改动用旧数据覆盖（永久丢失）。"""
+    fake_pg["users"] = {"pgdoc": {"role": "doctor", "dept": "外科", "password_hash": "old"}}
+    users_file = tmp_path / "users.json"
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(users_file))
+    new_users = {"doc": {"role": "doctor", "dept": "内科", "password_hash": "new"}}
+    fake_pg["fail"] = RuntimeError("pg down")
+    auth_mod._save_users(new_users)  # JSON 落盘成功，PG 同步失败
+    fake_pg["fail"] = None
+    assert auth_mod._load_users() == new_users, "写失败窗口内读应回落 JSON，而非 PG 旧数据"
+    auth_mod._save_users(new_users)  # 下一次成功写恢复 PG 真源
+    assert auth_mod._load_users() == new_users
+    assert set(fake_pg["users"]) == {"doc"}
+
+
+def test_pg_save_users_empty_set_never_wipes_pg_table(fake_pg, tmp_path, monkeypatch):
+    """空用户集全量同步不得清空 PG 真实用户（如 PG 抖动读回落空 JSON 后 seed
+    触发保存 → DELETE 全表删库）；后续非空全量同步仍保留删除语义。"""
+    fake_pg["users"] = {"real1": {"role": "admin", "dept": "医务处", "password_hash": "p1"},
+                        "real2": {"role": "doctor", "dept": "内科", "password_hash": "p2"}}
+    users_file = tmp_path / "users.json"
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(users_file))
+    auth_mod._save_users({})
+    assert set(fake_pg["users"]) == {"real1", "real2"}, "空集合不得清空 PG 用户表"
+    auth_mod._save_users({"real1": {"role": "admin", "dept": "医务处", "password_hash": "p1"}})
+    assert set(fake_pg["users"]) == {"real1"}
 
 
 # ---------- 池为 None：JSON 路径必须与现状完全等价 ----------
