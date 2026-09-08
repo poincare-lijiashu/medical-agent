@@ -1,6 +1,20 @@
-# 下一会话待办（2026-09-08 续）
+# 下一会话待办（2026-09-09 续）
 
-> 上次会话结束时状态：`7929739` wip(qc) · **189 passed** · 服务运行于 127.0.0.1:8001 · Docker/Milvus 离线（用户后来启动过，以实际为准）
+> 状态：git `428e4dc` · **311 passed** · 服务运行于 127.0.0.1:8001（LITERATURE_AGENTIC=on，PG/Milvus 在线，consults 表已建）
+
+## 明日待办（按序）
+
+1. **任务5：admin 日志 tail 卡片 + 审计视图切 PG**（admin 面板加日志查看卡片 tail 200 行只读；admin_data 审计流数据源切 PG 查询——PG 已有全量镜像，多实例就绪）
+2. **任务6：质控驳回重提**（我的驳回列表加「重新提交」按钮预填上次病历；新提交置顶+“第 N 次提交”标记；同一病历 2 次不合格自动升级病案科复核，联动 QC_AUTO_PASS 三档）
+3. 会诊功能浏览器级实测（发起→inbox→意见→close→汇总全流程 Playwright 走一遍）
+4. E2E 全量（e2e_final.js 11 项）+ 报告页更新
+
+## 注意事项
+- 会诊专项已实现：backend/core/consults.py + 5 端点 + 动态组队（LLM 实时读 departments，无缓存，admin 改科室即时生效，测试锁定）+ 前端三处 UI；意见=建议权无驳回权（用户设计）
+- 用户的运维规则：**用户/科室/配置变更必须走服务 API**（PG 真源），脚本改 JSON 不同步到运行中服务
+- 开关矩阵：QC_AUTO_PASS(off)/QC_AUTO_SIGN(on)/QC_AUTO_SIGN_FULL(off，院方合规后开)/LOG_TO_FILE(production 自动)
+- 审计人话化/fallback 不入队/offtopic 代码特征词/输入框隔离 均已落地（81f09fd..428e4dc）
+- 简历叙事关键词：多智能体协作（动态组队+跨科室医生 HITL 闭环）、分级自主性、PG 真源+降级兜底、评测闭环
 
 ## 已批准待执行的方案（用户已确认，直接做）
 
