@@ -177,7 +177,10 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
     try:
         g = _get_lit_graph()
         sid = "lit-" + uuid.uuid4().hex[:12]
-        out = await g.ainvoke({"session_id": sid, "question": q, "query": q, "attempts": 0},
+        # original_query 与 stream 入口同初值纪律：refine 决策的 question 取 original_query，
+        # 两条路径 state 必须一致（此前 ask 漏传，仅靠 refine_node 兜底 question）。
+        out = await g.ainvoke({"session_id": sid, "question": q, "query": q,
+                               "original_query": q, "attempts": 0},
                               config={"configurable": {"thread_id": sid}})
     except Exception as e:  # noqa: BLE001 —— 三层兑底：provider/检索异常→体面降级不裸500
         await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="degraded",

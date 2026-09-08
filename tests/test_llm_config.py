@@ -318,3 +318,61 @@ def test_test_route_uses_faked_post(monkeypatch, tmp_path):
     assert r.status_code == 200 and r.json()["ok"] is True
     # 不落盘：配置文件不应被创建
     assert not (tmp_path / "llm_providers.json").exists()
+
+
+# ---- F6/7008c07 回归锁定：extra_body 合并语义（openai/anthropic 双格式副作用排查） ----
+
+def _deepseek_provider():
+    return {"kind": "chat", "api_format": "openai", "id": "p-ds", "display_name": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1", "model_id": "deepseek-chat", "api_key": _KEY}
+
+
+def test_get_llm_merges_extra_body_without_dropping_thinking(monkeypatch):
+    """commit 7008c07 回归锁定：get_llm 的 enable_thinking 注入必须「合并而非覆盖」——
+    DeepSeek provider 的 thinking disabled 若被覆盖丢失，思考模式与 function-calling 的
+    tool_choice 强制互斥 → refine 结构化输出 400。"""
+    from backend.core import llm_factory as lf
+    from backend.core.llm_factory import LLMFactory
+
+    LLMFactory.clear_cache()
+    monkeypatch.setattr(lf, "active_provider", lambda kind: _deepseek_provider())
+    try:
+        llm = LLMFactory.get_llm("medical_literature")
+        eb = getattr(llm, "extra_body", None)
+        assert eb is not None, "openai 格式 provider 必须带 extra_body"
+        assert eb.get("thinking") == {"type": "disabled"}, "DeepSeek 思考关闭参数不得丢失"
+        assert eb.get("enable_thinking") is False, "tool_choice 兼容注入必须存在"
+    finally:
+        LLMFactory.clear_cache()
+
+
+def test_get_llm_non_deepseek_openai_gets_enable_thinking(monkeypatch):
+    """非 DeepSeek 的 openai 兼容端点（Qwen3 等）：extra_body 至少含 enable_thinking=False。"""
+    from backend.core import llm_factory as lf
+    from backend.core.llm_factory import LLMFactory
+
+    LLMFactory.clear_cache()
+    monkeypatch.setattr(lf, "active_provider", lambda kind: {
+        "kind": "chat", "api_format": "openai", "id": "p-q", "display_name": "Qwen",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model_id": "qwen-plus", "api_key": _KEY})
+    try:
+        llm = LLMFactory.get_llm("medical_literature")
+        eb = getattr(llm, "extra_body", None)
+        assert eb is not None and eb.get("enable_thinking") is False
+    finally:
+        LLMFactory.clear_cache()
+
+
+def test_provider_kwargs_anthropic_has_no_openai_extra_body():
+    """anthropic 格式不得携带 openai 私有的 extra_body/enable_thinking（对 anthropic SDK
+    是未知参数，存在被端点拒绝的副作用风险）；base_url 需裁掉管理端约定的尾部 /v1。"""
+    from backend.core.llm_factory import LLMFactory
+
+    kw = LLMFactory._provider_kwargs({"kind": "chat", "api_format": "anthropic", "id": "p-a",
+                                      "display_name": "Claude", "base_url": "https://x.example.com/v1",
+                                      "model_id": "claude-x", "api_key": "ak-1"})
+    assert "extra_body" not in kw
+    assert "enable_thinking" not in kw
+    assert kw["base_url"] == "https://x.example.com"   # SDK 自行追加 /v1/messages
+    assert kw["max_tokens"] == 1024

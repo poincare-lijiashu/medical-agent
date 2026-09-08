@@ -20,10 +20,27 @@ logger = get_logger(__name__)
 _cache: dict = {}
 
 
+def _masked_uri(u: str) -> str:
+    """URI 凭据脱敏：user:pass@host → user:***@host（密码绝不外传，host:port 保留展示价值）。
+    milvus_uri 是标准 URL，院方部署可能把凭据写进 URI；该值经 GET /config（全部登录用户）
+    与 GET /admin/data（运维卡片）下发，必须在状态源头脱敏，杜绝密码泄露面。"""
+    try:
+        p = urlsplit(u or "")
+    except ValueError:
+        return "***"
+    if not p.username:
+        return u or ""
+    host = p.hostname or ""
+    if p.port:
+        host = f"{host}:{p.port}"
+    return f"{p.scheme}://{p.username}:***@{host}" if p.scheme else f"{p.username}:***@{host}"
+
+
 def milvus_status() -> dict:
-    """知识库连接状态（前端徽标用）。TCP 预检 <0.5s，失败时调用方应显示"重试中"而非假死。"""
+    """知识库连接状态（前端徽标用）。TCP 预检 <0.5s，失败时调用方应显示"重试中"而非假死。
+    uri 经脱敏后才对外下发（防止把 URI 中内嵌的密码回显给前端）。"""
     ok = _milvus_reachable()
-    return {"connected": ok, "uri": settings.milvus_uri}
+    return {"connected": ok, "uri": _masked_uri(settings.milvus_uri)}
 
 
 def _milvus_reachable() -> bool:

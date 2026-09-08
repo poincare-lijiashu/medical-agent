@@ -221,10 +221,13 @@ async def refine_node(state: LiteratureState) -> dict:
         logger.warning("literature.refine_audit_failed")
 
     # ---- 改写轨迹（refine_trace）：逐轮累积进 state，供 ask/stream 端点原样返回前端展示 ----
-    # old_query=本轮改写前的查询（前端渲染「改写查询X→Y再检索」）；条目均限长，防撑大响应
+    # old_query=上一轮「实际检索」的查询（queries_tried 末位，retrieve_node 登记的真实检索值；
+    # 不取 state.query——它可能被 grade_node 的 rewrite_query 覆盖而从未真正检索过），
+    # 前端渲染「改写查询X→Y再检索」的 X 必须真实；条目均限长，防撑大响应
     trace = list(state.get("refine_trace") or [])
+    last_searched = tried[-1] if tried else (state.get("query") or state.get("question", ""))
     trace.append({"attempt": attempts, "action": action,
-                  "old_query": (state.get("query") or state.get("question", ""))[:REFINE_QUERY_MAX_LEN],
+                  "old_query": last_searched[:REFINE_QUERY_MAX_LEN],
                   "new_query": new_query[:REFINE_QUERY_MAX_LEN],
                   "reason": reason[:160]})
 

@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,11 +39,26 @@ _TOKEN = ""
 
 
 def login() -> None:
+    """登录获取 Bearer 令牌。服务不可达/认证失败输出人话指引后退出码 2——
+    评测前最常见故障就是后端未启动或账号口令不对，裸 traceback 不具备可操作性。"""
     global _TOKEN
     data = json.dumps({"username": EVAL_USER, "password": EVAL_PASS}).encode("utf-8")
     req = urllib.request.Request(f"{SERVER}/api/v1/auth/login", data=data,
                                  headers={"Content-Type": "application/json"})
-    _TOKEN = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))["access_token"]
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as e:
+        hint = (f"[eval] 认证失败（HTTP {e.code}）：请检查评测账号口令——"
+                f"来自环境变量 MEDICAL_EVAL_USER / MEDICAL_EVAL_PASS（默认 doctor01）。")
+        print(hint, file=sys.stderr)
+        raise SystemExit(2) from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        reason = getattr(e, "reason", None) or e
+        print(f"[eval] 无法连接 MedAssist 服务（{SERVER}）：{reason}\n"
+              f"      请先启动后端（python -m backend.main，默认 127.0.0.1:8001），"
+              f"或用 MEDICAL_SERVER 指定正确地址。", file=sys.stderr)
+        raise SystemExit(2) from e
+    _TOKEN = json.loads(resp.read().decode("utf-8"))["access_token"]
 
 
 # (agent, question, 期望命中的关键词任一小写子串) —— 内置常规集

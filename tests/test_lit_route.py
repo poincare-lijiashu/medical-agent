@@ -119,6 +119,29 @@ def test_ask_response_contains_refine_trace(monkeypatch):
     assert r.json()["refine_trace"] == _TRACE
 
 
+def test_ask_passes_original_query_like_stream(monkeypatch):
+    """state 一致性：SSE 流式入口传 original_query=q，非流式 ask 入口必须同样传递——
+    refine 决策的 question 取 original_query，两条路径的 state 初值应完全一致。"""
+    from backend.api.v1.medical import medical_router as mr
+
+    captured = {}
+
+    class _CapGraph:
+        async def ainvoke(self, state, config=None):
+            captured.update(state)
+            return {"answer": {"text": "答案", "confidence": 0.9, "sources": ["KB:y"],
+                               "needs_human_review": False, "verified": True, "evidence": []},
+                    "refine_trace": []}
+
+    monkeypatch.setattr(mr, "_lit_graph", _CapGraph())
+    c = _med_client(monkeypatch)
+    r = c.post("/api/v1/medical/literature/ask", json={"question": "胃疼怎么办"},
+               headers=_doctor_headers(c))
+    assert r.status_code == 200, r.text
+    assert captured.get("original_query") == "胃疼怎么办"
+    assert captured.get("query") == "胃疼怎么办"      # 与流式入口同一初值纪律
+
+
 def test_stream_emits_refine_event_and_result_trace(monkeypatch):
     """/literature/stream：refine 决策发生时实时推送 event: refine（attempt/action/new_query/
     reason/old_query），收尾 result 事件携带完整 refine_trace（SSE 轨迹协议）。"""

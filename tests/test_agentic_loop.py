@@ -256,6 +256,41 @@ def test_new_query_blank_counts_as_giveup(agentic_on, monkeypatch):
     assert out["attempts"] == 1
 
 
+# ---------- 轨迹 old_query 语义：必须是上一轮「实际检索」的查询 ----------
+
+def test_refine_old_query_is_last_actually_searched_query(agentic_on, monkeypatch):
+    """refine_trace.old_query 必须取 queries_tried 末位（上一轮真实检索过的查询），
+    而非可能被 grade_node 的 rewrite_query 覆盖后的 state.query——grade 在 agentic 路径
+    返回的 query 只是写作侧草稿改写、并未真正检索过；前端文案「改写查询X→Y再检索」
+    的 X 必须真实，否则轨迹误导排障。"""
+    struct = FakeStructuredLLM([AgenticDecision(action="rewrite", new_query="gastralgia 治疗", reason="改术语")])
+    monkeypatch.setattr(lit_nodes, "get_structured_llm", lambda *a, **k: struct)
+
+    out = asyncio.run(refine_node(LiteratureState(
+        question="胃疼怎么办", original_query="胃疼怎么办",
+        query="grade草稿改写并未检索",          # 模拟 grade_node 返回 rewrite_query 覆盖后的 state
+        queries_tried=["胃疼怎么办"], evidence=[])))
+
+    tr = out["refine_trace"][0]
+    assert tr["old_query"] == "胃疼怎么办"                  # 实际检索过的查询，而非 grade 草稿
+    assert tr["new_query"] == "gastralgia 治疗"
+
+
+def test_refine_old_query_second_round_uses_last_rewrite(agentic_on, monkeypatch):
+    """第二轮 refine：old_query = 第一轮改写后真实检索过的查询（queries_tried 末位）。"""
+    struct = FakeStructuredLLM([AgenticDecision(action="rewrite", new_query="改写二", reason="r2")])
+    monkeypatch.setattr(lit_nodes, "get_structured_llm", lambda *a, **k: struct)
+
+    out = asyncio.run(refine_node(LiteratureState(
+        question="原问题", original_query="原问题", query="grade又覆盖", attempts=1,
+        queries_tried=["原问题", "改写一"], evidence=[])))
+
+    tr = out["refine_trace"][0]
+    assert tr["attempt"] == 2
+    assert tr["old_query"] == "改写一"                      # 上一轮真实检索查询
+    assert tr["new_query"] == "改写二"
+
+
 # ---------- 路径 6：LLM 结构化输出异常 → fail-safe giveup ----------
 
 def test_llm_failure_failsafe_giveup(agentic_on, monkeypatch):
