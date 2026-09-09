@@ -1,13 +1,19 @@
-# 下一会话待办（2026-09-09 续）
+# 下一会话待办（2026-09-10 续）
 
-> 状态：git `428e4dc` · **311 passed** · 服务运行于 127.0.0.1:8001（LITERATURE_AGENTIC=on，PG/Milvus 在线，consults 表已建）
+> 状态：git `9c36140` · **370 passed** · 服务运行于 127.0.0.1:8001（LITERATURE_AGENTIC=on，PG/Milvus 在线，Docker healthy）
 
-## 明日待办（按序）
+## 明日待办（按序，用户已批准方向）
 
-1. **任务5：admin 日志 tail 卡片 + 审计视图切 PG**（admin 面板加日志查看卡片 tail 200 行只读；admin_data 审计流数据源切 PG 查询——PG 已有全量镜像，多实例就绪）
-2. **任务6：质控驳回重提**（我的驳回列表加「重新提交」按钮预填上次病历；新提交置顶+“第 N 次提交”标记；同一病历 2 次不合格自动升级病案科复核，联动 QC_AUTO_PASS 三档）
-3. 会诊功能浏览器级实测（发起→inbox→意见→close→汇总全流程 Playwright 走一遍）
-4. E2E 全量（e2e_final.js 11 项）+ 报告页更新
+1. **审核中心图片渲染**：imaging 留痕记录 images 只显示文字"images"——前端渲染 data:image 缩略图（点击放大，仅 data:image/ 前缀白名单，esc 纪律）
+2. **病理学 PDF 真实可用验证**：上传已 done（1155 chunks），验证链路尾端——Milvus doc_count 应 ≈1390+1155；用教材相关问题（如"心肌肥厚的病理特征"）检索确认来源含该文档；若检索质量差考虑 chunk 策略（见下）
+3. **切片策略升级（用户提出，先给设计再实施）**：现状=统一 chunk_text(600/100) 按句子边界；升级方向：①PDF 按章节标题层级切分（指南类）②chunk 大小按文档类型适配（指南 800-1200/文献摘要整段）③**扫描版/图片 OCR**（PaddleOCR 中文）或 VL 模型生成描述入库 ④表格转 markdown。实施前先给用户设计确认
+4. 优化建议 backlog：检索质量评测集扩充（用病理学教材出题）、上传并发压测、多模态入库
+
+## 注意事项（仍有效）
+- VL=deepseek-v4-flash-vision-exp 实验模型偶发 400/空（已加重试+审计 vl_raw_len/stop_reason）；根治=管理端换稳定 vision 模型（如 Qwen-VL）
+- 运维规则：用户/科室/配置变更必须走服务 API（PG 真源）
+- 开关：QC_AUTO_SIGN_FULL 默认 on（runtime_flags 可 admin 面板切换）/ QC_AUTO_PASS off / LOG_TO_FILE 全环境 on（logs/app.log，admin 面板日志健康卡）
+- 简历关键词：多智能体协作（动态组队+HITL 会诊闭环）、分级自主性、PG 真源+降级兜底、全交互留痕、评测闭环
 
 ## 注意事项
 - 会诊专项已实现：backend/core/consults.py + 5 端点 + 动态组队（LLM 实时读 departments，无缓存，admin 改科室即时生效，测试锁定）+ 前端三处 UI；意见=建议权无驳回权（用户设计）
