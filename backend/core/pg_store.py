@@ -111,9 +111,17 @@ async def _init_impl() -> bool:
                 id text primary key, ts text, agent text, question text, answer text,
                 confidence double precision, risk_reason text, status text,
                 submitted_by text, reviewed_by text, review_note text, resolved_at text,
+                resubmit_of text, attempt integer, meta jsonb,
                 updated_at timestamptz default now())""")
             # B1：review_queue 补全字段（F3 入队影像）
             await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS images jsonb")
+            # 任务6：质控重提链——resubmit_of=原驳回记录 id、attempt=第 N 次提交、
+            # meta=原始（已脱敏）病历留档，供「我的质控驳回」重新提交预填（旧库平滑升级）
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS resubmit_of text")
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS attempt integer")
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS meta jsonb")
+            # 任务5：admin 审计流按 ts 倒序分页查询（audit_recent_pg）的排序索引
+            await c.execute("CREATE INDEX IF NOT EXISTS ix_audit_log_ts ON audit_log(ts DESC)")
             # B1：科室字典（id=顺序号，保序）；llm_providers（data 内嵌 _seq 保序）
             await c.execute("CREATE TABLE IF NOT EXISTS departments(id integer primary key, name text)")
             await c.execute("""CREATE TABLE IF NOT EXISTS llm_providers(
@@ -219,24 +227,33 @@ async def mirror_user(username: str, role: str, pw_hash: str) -> None:
 
 
 _REVIEW_COLS = ("id", "ts", "agent", "question", "answer", "confidence", "risk_reason",
-                "status", "submitted_by", "reviewed_by", "review_note", "resolved_at")
+                "status", "submitted_by", "reviewed_by", "review_note", "resolved_at",
+                "resubmit_of", "attempt", "meta")
 
 _REVIEW_UPSERT = """INSERT INTO review_queue(id,ts,agent,question,answer,confidence,risk_reason,
-   status,submitted_by,reviewed_by,review_note,resolved_at,images)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+   status,submitted_by,reviewed_by,review_note,resolved_at,images,resubmit_of,attempt,meta)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16::jsonb)
    ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reviewed_by=EXCLUDED.reviewed_by,
    review_note=EXCLUDED.review_note, resolved_at=EXCLUDED.resolved_at,
    images=EXCLUDED.images, updated_at=now()"""
 
 
 def _review_row(item: dict) -> tuple:
-    """队列条目 → INSERT 参数元组（images 序列化为 jsonb 文本；空/缺失一律 NULL）。"""
+    """队列条目 → INSERT 参数元组（images/meta 序列化为 jsonb 文本；空/缺失一律 NULL；
+    resubmit_of/attempt 为任务6重提链字段，普通提交为 NULL/NULL）。"""
     images = item.get("images")
+    meta = item.get("meta")
+    try:
+        attempt = int(item["attempt"]) if item.get("attempt") is not None else None
+    except (TypeError, ValueError):
+        attempt = None
     return (item.get("id"), item.get("ts"), item.get("agent"), item.get("question"),
             item.get("answer"), item.get("confidence"), item.get("risk_reason"),
             item.get("status", "pending"), item.get("submitted_by"),
             item.get("reviewed_by"), item.get("review_note"), item.get("resolved_at"),
-            json.dumps(images, ensure_ascii=False) if images else None)
+            json.dumps(images, ensure_ascii=False) if images else None,
+            item.get("resubmit_of"), attempt,
+            json.dumps(meta, ensure_ascii=False) if meta else None)
 
 
 async def _mirror_review_impl(item: dict) -> None:
@@ -272,6 +289,42 @@ async def counts() -> dict:
         return await _arun(_counts_impl())
     except Exception:  # noqa: BLE001
         return {}
+
+
+# ---------- 任务5：admin 审计流 PG 真源查询（audit_log 按 ts 倒序分页） ----------
+
+async def _audit_recent_pg_impl(limit: int, offset: int) -> list:
+    async with _pool.acquire() as c:
+        rows = await c.fetch(
+            "SELECT ts, event_type, actor, payload FROM audit_log "
+            "ORDER BY ts DESC, id DESC LIMIT $1 OFFSET $2", limit, offset)
+    out = []
+    for r in rows:
+        p = r["payload"]
+        if isinstance(p, (str, bytes)):  # asyncpg 默认 jsonb 返回 str；兼容驱动直返 dict
+            try:
+                p = json.loads(p)
+            except Exception:  # noqa: BLE001 —— 单行 payload 损坏降级空对象，不拖垮整页
+                p = {}
+        ts = r["ts"]
+        out.append({"ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                    "event_type": r["event_type"], "actor": r["actor"], "payload": p})
+    return out
+
+
+async def audit_recent_pg(limit: int = 50, offset: int = 0) -> list | None:
+    """任务5：admin 审计流数据源——PG audit_log 表按 ts 倒序分页。
+
+    返回与 AuditLog.recent(JSONL) 相同结构 [{ts,event_type,actor,payload}]（payload
+    内含 action/role 等字段）；未建池/异常/超时一律返回 None（调用方回落 JSONL 现状），
+    绝不冒泡影响 admin 面板。"""
+    if not _pool:
+        return None
+    try:
+        return await _arun(_audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset))))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.audit_recent_failed", error=str(e)[:120])
+        return None
 
 
 async def _purge_pending_impl() -> str:
@@ -435,6 +488,8 @@ async def _pg_load_queue() -> list | None:
         d = {k: r[k] for k in _REVIEW_COLS}
         img = r["images"]
         d["images"] = json.loads(img) if img else None
+        meta = r["meta"]
+        d["meta"] = json.loads(meta) if isinstance(meta, str) and meta else meta
         out.append(d)
     return out
 

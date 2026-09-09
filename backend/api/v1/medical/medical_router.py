@@ -157,11 +157,15 @@ class ResolveReq(BaseModel):
 async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_flag: bool,
                            risk_reason: str, actor: str,
                            images: list[str] | None = None,
-                           self_confirm: bool | None = None) -> str | None:
+                           self_confirm: bool | None = None,
+                           resubmit_of: str | None = None,
+                           attempt: int = 1,
+                           meta: dict | None = None) -> str | None:
     """高危入队；QC_AUTO_SIGN_FULL=True（任务3 留痕模式）时入队后立即自动签发：
     reviewed_by=「AI·留痕模式(自动)」，含 LLM 自由文本高危——全部自动，医生侧不阻塞；
     高危项（self_confirm 判定）同时标记 self_confirm_required，由提交医生本人知情确认。
-    self_confirm：显式指定是否高危（drug 中危自动留痕传 review_flag 原值以示区分）；缺省按 review_flag。"""
+    self_confirm：显式指定是否高危（drug 中危自动留痕传 review_flag 原值以示区分）；缺省按 review_flag。
+    任务6：resubmit_of/attempt/meta 透传给 review.submit（质控重提链与原病历留档）。"""
     await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
     if not review_flag:
         return None
@@ -169,7 +173,8 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
     need_self = full and (review_flag if self_confirm is None else bool(self_confirm))
     rid = await asyncio.to_thread(review.submit, agent=agent, question=q, answer=answer, confidence=conf,
                                   risk_reason=risk_reason, submitted_by=actor, images=images,
-                                  self_confirm_required=need_self)
+                                  self_confirm_required=need_self,
+                                  resubmit_of=resubmit_of, attempt=attempt, meta=meta)
     await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="review_enqueued",
                             actor=actor, payload={"rid": rid, "reason": risk_reason})
     await pg_store.mirror_review(await asyncio.to_thread(review.get, rid))
@@ -693,6 +698,9 @@ def _load_optional_table(name: str):
 class QcReq(BaseModel):
     record: dict
     labs: dict | None = None
+    # 任务6：质控重提——指向本人被驳回的原记录 id；服务端校验存在/归属/驳回态，
+    # attempt 沿原记录链递增，第 ≥2 次不合格自动升级病案科复核（rejected_escalated）
+    resubmit_of: str | None = Field(default=None, max_length=64)
 
     @field_validator("record")
     @classmethod
@@ -723,12 +731,46 @@ class QcReq(BaseModel):
         return v
 
 
+def _chain_attempt(origin_id: str) -> int:
+    """任务6：沿 resubmit_of 链向上读取既有最大 attempt（链上限 50 防环/脏数据自旋）。
+    每次重提条目都落盘自己的 attempt=父链 attempt+1，正常链只需读直接父级；
+    向上遍历兜底链中 attempt 缺失的历史数据。"""
+    attempt, seen, cur = 1, set(), origin_id
+    while cur and cur not in seen and len(seen) < 50:
+        seen.add(cur)
+        item = review.get(cur)
+        if not item:
+            break
+        try:
+            attempt = max(attempt, int(item.get("attempt") or 1))
+        except (TypeError, ValueError):
+            pass
+        cur = item.get("resubmit_of")
+    return attempt
+
+
 @router.post("/qc/record", response_model=AskResp)
 async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     actor = user.get("username", "system")
     dept = user.get("dept", "")
     if not dept:  # 科室由服务端绑定（签名/科室同源权威），未设置科室拒绝出报告
         raise HTTPException(400, "请先联系管理员设置科室")
+    # 任务6：重提链校验——resubmit_of 必须指向「存在 + 本人提交 + 已被驳回」的原记录；
+    # attempt 沿原记录链 +1（首提为 1，首次重提为 2…）。
+    resubmit_of = (req.resubmit_of or "").strip() or None
+    attempt = 1
+    if resubmit_of:
+        orig = await asyncio.to_thread(review.get, resubmit_of)
+        if orig is None:
+            raise HTTPException(400, "重提失败：原记录不存在")
+        if orig.get("submitted_by") != actor:
+            raise HTTPException(403, "重提失败：仅原提交人本人可重新提交该记录")
+        if orig.get("status") != "rejected":
+            raise HTTPException(400, f"重提失败：原记录当前状态为 {orig.get('status')}，仅被驳回记录可重提")
+        attempt = await asyncio.to_thread(_chain_attempt, resubmit_of) + 1
+        await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="resubmit",
+                                actor=actor, payload={"resubmit_of": resubmit_of, "attempt": attempt,
+                                                      "role": user.get("role", "")})
     # PHI 脱敏：病历内容入 LLM/队列前逐字段处理（与其它 agent 同纪律）。
     # lab 键名是已知的医学项目名（如 血钾=6.8），不应被当手机号脱敏；仅对值脱敏并限制键名白名单外的处置。
     known_lab_keys = {"血钾", "钾", "血钠", "钠", "血钙", "血糖", "血氯", "血肌酐", "肌酐",
@@ -753,6 +795,17 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
         lines.append(f"- [{d['track']}/{d['level']}] {d.get('field','')}：{d.get('issue','')}")
     for f in out["critical"].get("flags", []):
         lines.append(f"- [危急值] {f['item']}={f['value']} {f['issue']}")
+    # 任务6：重提自动升级——第 ≥2 次提交且 AI 判定不合格（存在缺陷/危急值）→ 结果标
+    # rejected_escalated（升级病案科复核=qc 角色终审）并审计 qc_escalated。
+    # escalated 优先级高于 QC_AUTO_PASS 三档：不合格的升级件永不自动归档（下方
+    # auto_pass 分支显式短路）；确定性硬伤预筛仍在升级判定之前（立即驳回给医生确定性
+    # 反馈，不入队故无升级对象）。
+    escalated = bool(resubmit_of) and attempt >= 2 and bool(out["defects"] or out["has_critical"])
+    if escalated:
+        await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="qc_escalated",
+                                actor=actor, payload={"attempt": attempt, "resubmit_of": resubmit_of})
+        await pg_store.mirror_audit("qc.qc_escalated", actor,
+                                    {"attempt": attempt, "resubmit_of": resubmit_of})
     text = "\n".join(lines)
     await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="query", actor=actor,
                             payload={"fields": len(req.record), "labs": len(req.labs or {}),
@@ -768,15 +821,21 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
                            confidence=out["confidence"], needs_human_review=False,
                            sources=sources, review_id=None, status="auto_rejected",
                            qc_defects=out["defects"])
-        if out["confidence"] >= 0.85:
+        if out["confidence"] >= 0.85 and not escalated:  # 任务6：escalated 永远进人工，优先于 auto_pass
             await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="auto_pass",
                                     actor=actor, payload={"conf": out["confidence"]})
             return AskResp(answer=text + f"\n\n✅ AI 预审通过（置信 {out['confidence']:.2f}），已归档",
                            confidence=out["confidence"], needs_human_review=False,
                            sources=sources, review_id=None, qc_defects=out["defects"])
-    rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor)
+    if escalated:
+        text += f"\n\n⚠ 第 {attempt} 次提交仍不合格，已自动升级病案科复核（质控员终审）。"
+    # 任务6：meta 携带已脱敏原病历+检验值入队留档，供「我的质控驳回→重新提交」预填。
+    rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor,
+                                 resubmit_of=resubmit_of, attempt=attempt,
+                                 meta={"record": redacted, "labs": labs})
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
-                   sources=sources, review_id=rid, qc_defects=out["defects"])
+                   sources=sources, review_id=rid, qc_defects=out["defects"],
+                   status="rejected_escalated" if escalated else "ok")
 
 
 @router.get("/qc/my-rejections")
@@ -987,13 +1046,22 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
              "approved": sum(1 for i in items if i.get("status") == "approved"),
              "rejected": sum(1 for i in items if i.get("status") == "rejected")}
     al = get_audit_logger()
-    # F5：保留完整 ISO 串（含 +00:00 偏移）。此前 [:19] 切掉时区后，前端 new Date 按
-    # 本地时区解析 UTC 壁钟，审计流时间比本地慢 8 小时；fmtTs 依赖时区信息做本地化。
-    # 任务A：audit_offset 翻页（每页 50），配合 AuditLog.recent(n, offset)。
+    # 任务5：审计流数据源切换为 PG audit_log 真源（audit_recent_pg 按 ts 倒序分页，返回
+    # 与 JSONL recent 相同结构 [{ts,event_type,actor,payload}]）；PG 未建池/异常/超时
+    # → 回落 JSONL 现状（AuditLog 有界缓存），前端审计流/翻页/导出对数据源透明。
+    # F5：保留完整 ISO 串（含 +00:00 偏移），fmtTs 依赖时区信息做本地化。
+    # 任务A：audit_offset 翻页（每页 50）。
+    off = max(0, audit_offset)
+    try:
+        audit_src = await pg_store.audit_recent_pg(50, offset=off)
+    except Exception:  # noqa: BLE001 —— 数据源切换绝不影响面板主数据
+        audit_src = None
+    if audit_src is None:
+        audit_src = al.recent(50, offset=off)
     audit_recent = [{"ts": e["ts"], "event": e["event_type"],
-                     "action": e["payload"].get("action", ""), "actor": e["actor"],
+                     "action": (e.get("payload") or {}).get("action", ""), "actor": e["actor"],
                      "payload": e.get("payload", {})}  # 完整 payload 下传，供前端人话化详情
-                    for e in al.recent(50, offset=max(0, audit_offset))]
+                    for e in audit_src]
     try:
         pg_counts = await pg_store.counts()
     except Exception:  # noqa: BLE001
@@ -1030,6 +1098,43 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
     await pg_store.mirror_audit("review.purge_pending", user.get("username", "admin"), {"count": n})
     await pg_store.purge_pending_reviews()
     return {"purged": n}
+
+
+# ---------- admin 运维：应用日志 tail（任务5，只读） ----------
+def _read_log_tail(n: int) -> tuple[str, list[str], str]:
+    """同步读 logs/app.log 尾部 n 行（RotatingFileHandler 主文件，与 logger.py 同源路径）。
+    只读末尾 512KB 窗口防大文件全量载入；窗口截断的首个残行丢弃。
+    返回 (文件路径, 行列表[旧→新], 提示语)；文件不存在 → 提示「应用日志未启用（LOG_TO_FILE）」。"""
+    from backend.core.logger import _FILE_NAME
+    log_dir = (settings.log_dir or "logs").strip() or "logs"
+    path = os.path.join(log_dir, _FILE_NAME)
+    if not os.path.isfile(path):
+        return path, [], "应用日志未启用（LOG_TO_FILE）"
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        window = min(size, 512 * 1024)
+        f.seek(size - window)
+        raw = f.read(window)
+    all_lines = raw.decode("utf-8", errors="replace").splitlines()
+    if window < size and all_lines:
+        all_lines = all_lines[1:]  # 丢弃窗口起点处可能被截断的残行
+    return path, all_lines[-n:], f"共 {min(len(all_lines), n)} 行（最新在底部）"
+
+
+@router.get("/admin/logs")
+async def admin_logs(lines: int = 200, user: dict = Depends(require_role("admin"))):
+    """任务5：应用日志尾部只读视图（仅 admin）。lines=N 可调（1~500 上限截断，默认 200）。
+
+    安全边界：只读主日志文件（app.log），不提供任何下载/删除/执行能力；日志内容可能
+    含用户输入，前端必须逐行 esc() 后渲染（防注入）。文件不存在/未启用返回提示不报错。
+    """
+    n = max(1, min(int(lines or 200), 500))
+    try:
+        path, tail, note = await asyncio.to_thread(_read_log_tail, n)
+    except OSError as e:  # 读取失败（权限/占用等）显式 500 带原因，不静默吞掉
+        raise HTTPException(500, f"日志文件读取失败：{e}")
+    return {"file": path, "lines": tail, "note": note}
 
 
 # ---------- admin 模型配置管理（F6：对话/视觉双通道，openai/anthropic 双格式）----------

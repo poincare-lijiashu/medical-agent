@@ -109,13 +109,22 @@ def _save(items: list[dict]) -> None:
 def submit(*, agent: str, question: str, answer: str, confidence: float,
            risk_reason: str, submitted_by: str,
            images: list[str] | None = None,
-           self_confirm_required: bool = False) -> str:
+           self_confirm_required: bool = False,
+           resubmit_of: str | None = None,
+           attempt: int = 1,
+           meta: dict | None = None) -> str:
     """入队一条待核对项，返回 review_id。images：待医生核对的影像（data URL）。
     压缩/截断为纯函数，在锁外完成（FIND-01）；锁内仅 _load/append/_save。
-    任务3：self_confirm_required=True（留痕模式自动签发的高危项）→ 提交医生需知情确认。"""
+    任务3：self_confirm_required=True（留痕模式自动签发的高危项）→ 提交医生需知情确认。
+    任务6：resubmit_of=原驳回记录 id、attempt=第 N 次提交（链上递增，路由层计算）、
+    meta=随件留档（质控为已脱敏原病历，供「重新提交」预填），普通提交不传。"""
     rid = "rev-" + uuid.uuid4().hex[:10]
     compressed = _compress_images(images)  # FIND-01：纯函数不持锁，缩短临界区
     stored_images = None if compressed is None else _cap_total_chars(compressed)
+    try:
+        attempt_n = int(attempt) if attempt is not None else 1
+    except (TypeError, ValueError):
+        attempt_n = 1
     with _lock:
         items = _load()
         items.append({
@@ -127,6 +136,10 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             # 任务3：知情确认三字段（留痕模式使用；常规路径恒为 False/None）
             "self_confirm_required": bool(self_confirm_required),
             "confirmed_by_self": None, "self_confirmed_at": None,
+            # 任务6：重提链三字段（普通提交恒为 None/1/None）
+            "resubmit_of": resubmit_of or None,
+            "attempt": max(1, attempt_n),
+            "meta": meta,
         })
         _save(items)
     return rid
@@ -167,10 +180,14 @@ def self_confirm(rid: str, username: str) -> dict:
 
 def my_rejections(username: str) -> list[dict]:
     """任务2：本人被驳回（status=rejected）的记录，新→旧，剥离 images。
-    携带 review_note（驳回原因）/reviewed_by（审核人）/resolved_at（时间），供医生端只读卡片。"""
+    任务6：同时返回本人的重提链记录（resubmit_of 非空，任意状态）——重提提交后新条目
+    立即置顶显示在「我的质控驳回」卡片第一条（含「第 N 次提交」进度）。
+    携带 review_note（驳回原因）/reviewed_by（审核人）/resolved_at（时间）/
+    attempt/resubmit_of/meta（原病历留档，供前端「重新提交」预填），供医生端只读卡片。"""
     return [{k: v for k, v in i.items() if k != "images"}
             for i in _load()[::-1]
-            if i.get("submitted_by") == username and i.get("status") == "rejected"]
+            if i.get("submitted_by") == username
+            and (i.get("status") == "rejected" or i.get("resubmit_of"))]
 
 
 def pending() -> list[dict]:

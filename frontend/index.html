@@ -273,6 +273,8 @@
           <b>谁用 / 何时用</b>
           <div class="src" style="margin-top:4px;line-height:1.7">面向病案科与质控医师：病历出科/归档前，按完整性、内涵质量、危急值三轨做 AI 预筛；所有结论仅为建议，最终以质控员签字为准。该功能对医生日常诊疗不做干预。</div>
         </div>
+        <!-- 任务6：质控重提横幅（点击「我的质控驳回→重新提交」时显示，预填原病历并携带 resubmit_of） -->
+        <div class="card" id="qcResubmitBanner" style="display:none;border-left:3px solid var(--warn)"></div>
         <div class="card"><h3>病历内容</h3>
           <div style="margin-bottom:14px">
             <label class="src" for="qcPaste" style="display:block;margin-bottom:6px">粘贴整段病历（门诊/住院原文），AI 自动拆分到下方各栏；仅辅助填表，可手动修改</label>
@@ -1016,10 +1018,12 @@ async function runQc(){const rec={};QC_LABELS.forEach((l,i)=>{const v=document.g
   const btn=document.getElementById('qcRun');btn.disabled=true;
   const labs={};document.getElementById('qcLabs').value.split(/\r?\n/).forEach(ln=>{const m=ln.split('=');if(m.length===2&&m[0].trim())labs[m[0].trim()]=m[1].trim();});
   const out=document.getElementById('qcOut'); out.innerHTML='<div class="card"><div class="sk" style="height:16px;width:40%"></div></div>';
-  try{ const d=await apiPost('/qc/record',{record:rec,labs:labs});
+  try{ const d=await apiPost('/qc/record',{record:rec,labs:labs,...(qcResubmitOf?{resubmit_of:qcResubmitOf}:{})});
     if(d.detail&&!d.answer){out.innerHTML='<div class="card">⚠ '+esc(d.detail)+'</div>';return;}  /* 如：账号未设置科室 */
-    /* QC 三档分流徽标：按后端实际字段渲染（status='auto_rejected' / needs_human_review+review_id） */
+    /* QC 三档分流徽标：按后端实际字段渲染（status='auto_rejected'/'rejected_escalated' / needs_human_review+review_id）
+       任务6：rejected_escalated=重提自动升级病案科复核 */
     const triage=d.status==='auto_rejected'?'<span class="chip bad"><span class="dot"></span>AI自动驳回</span>'
+      :d.status==='rejected_escalated'?'<span class="chip bad"><span class="dot"></span>已升级病案科复核</span>'
       :(!d.needs_human_review&&!d.review_id)?'<span class="chip ok"><span class="dot"></span>AI预审通过</span>'
       :'<span class="chip mid"><span class="dot"></span>人工复核</span>';
     /* 任务1：按维度分组渲染（QC_CATEGORIES 六枚举，与后端一致）+ 快速过滤 chip；
@@ -1032,6 +1036,7 @@ async function runQc(){const rec={};QC_LABELS.forEach((l,i)=>{const v=document.g
       :`<div class="txt md">${md(d.answer)}</div>`;
     out.innerHTML=`<div class="card"><div class="foot" style="margin:0 0 8px">${confChip(d.confidence,d.needs_human_review)}${triage}</div>${grouped}</div>`;
     if(qcLastDefects.length)renderQcGroups();
+    if(qcResubmitOf){qcCancelResubmit();loadQcRejections();}  /* 任务6：重提成功→清上下文并刷新驳回卡片（新结果置顶+第 N 次提交徽标） */
   }catch(e){out.innerHTML='<div class="card">⚠ 质控请求失败</div>';}
   finally{btn.disabled=false;}}
 /* ---- 任务1：质控结果按维度分组 + 快速过滤 ---- */
@@ -1048,7 +1053,11 @@ function renderQcGroups(){const el=document.getElementById('qcGroups');if(!el)re
   const html=QC_CATEGORIES.filter(c=>by[c]).map(c=>`<div style="margin-top:10px"><b>${esc(c)}</b>
       <ul class="rules" style="margin-top:4px">${by[c].map(d=>`<li>[${esc(d.level||'中')}] ${esc(d.issue||'')}${(d.field&&d.field!=='内涵质量')?`（${esc(d.field)}）`:''}</li>`).join('')}</ul></div>`).join('');
   el.innerHTML=html||'<div class="src" style="margin-top:8px">当前维度暂无缺陷条目。</div>';}
-/* ---- 任务2：医生视图「我的质控驳回」卡片（只读；数据隔离由后端 /qc/my-rejections 服务端过滤保证） ---- */
+/* ---- 任务2：医生视图「我的质控驳回」卡片（只读；数据隔离由后端 /qc/my-rejections 服务端过滤保证）
+   任务6：重提链可视化——重提后新条目置顶（后端把 resubmit_of 非空条目一并返回）；
+   每条带「重新提交」按钮（预填原病历到质控表单并附 resubmit_of）；
+   attempt>1 显示「第 N 次提交」徽标；attempt>=2 且被驳回显示「已升级病案科复核」徽标。 ---- */
+let qcRejItems=[];
 async function loadQcRejections(){
   const card=document.getElementById('qcRejCard'),el=document.getElementById('qcRej');
   if(!card||!el)return;
@@ -1057,14 +1066,47 @@ async function loadQcRejections(){
   el.innerHTML='<div class="src">加载中…</div>';
   try{const r=await fetch('/api/v1/medical/qc/my-rejections',{headers:auth()});
     if(r.status===401){logout();return;}
-    const d=await r.json();const items=d.items||[];
-    el.innerHTML=items.length?items.map(i=>`<div style="padding:8px 0;border-top:1px solid var(--line)">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip warn"><span class="dot"></span>${esc(i.agent||'qc')}</span>
-      <b class="num">${fmtTs(i.resolved_at||i.ts)}</b><span class="src">审核人：${esc(i.reviewed_by||'—')}</span></div>
+    const d=await r.json();const items=d.items||[];qcRejItems=items;
+    el.innerHTML=items.length?items.map(i=>{
+      const att=Number(i.attempt||1);
+      const st={pending:'<span class="chip"><span class="dot"></span>待复核</span>',
+        approved:'<span class="chip ok"><span class="dot"></span>已通过</span>',
+        rejected:'<span class="chip warn"><span class="dot"></span>已驳回</span>'}[i.status]
+        ||`<span class="chip">${esc(String(i.status||'—'))}</span>`;
+      const badge=(att>1?`<span class="chip mid"><span class="dot"></span>第 ${att} 次提交</span>`:'')
+        +((att>=2&&i.status==='rejected')?'<span class="chip bad"><span class="dot"></span>已升级病案科复核</span>':'');
+      return `<div style="padding:8px 0;border-top:1px solid var(--line)">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip mid"><span class="dot"></span>${esc(i.agent||'qc')}</span>
+      ${st}<b class="num">${fmtTs(i.resolved_at||i.ts)}</b><span class="src">审核人：${esc(i.reviewed_by||'—')}</span>${badge}
+      <button class="btn sm secondary" style="margin-left:auto" data-act="qc-resubmit" data-rid="${esc(i.id)}">重新提交</button></div>
       <div class="txt" style="margin-top:4px;white-space:pre-wrap">${esc(String(i.question||'').slice(0,120))}</div>
       <div class="txt" style="margin-top:2px">驳回原因：${esc(i.review_note||'未填写')}</div>
-    </div>`).join(''):'<div class="src">暂无驳回记录。</div>';
+    </div>`;}).join(''):'<div class="src">暂无驳回记录。</div>';
   }catch(e){el.innerHTML='<div class="src">⚠ 加载失败</div>';}}
+/* 任务6：重新提交按钮事件委托（与 KB/科室同纪律，禁内联 onclick 拼接） */
+if(!window.__qcRejDelegate){window.__qcRejDelegate=true;document.addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act="qc-resubmit"]');if(!b)return;
+  qcResubmit(b.dataset.rid);});}
+/* 任务6：预填原病历到质控表单并标记重提上下文（resubmit_of 随下次运行质控一并提交） */
+let qcResubmitOf=null;
+function qcResubmit(rid){
+  const it=(qcRejItems||[]).find(x=>x.id===rid);
+  if(!it){toast('未找到原记录，请刷新后重试');return;}
+  qcResubmitOf=rid;
+  const meta=it.meta||{},rec=meta.record||{};
+  QC_LABELS.forEach((l,i)=>{if(i===6)return;document.getElementById('qcf_'+i).value=String(rec[l]||'');});  /* 签名锁定当前账号，不回填 */
+  const labs=meta.labs||{};
+  document.getElementById('qcLabs').value=Object.entries(labs).map(([k,v])=>k+'='+v).join('\n');
+  const bn=document.getElementById('qcResubmitBanner');
+  if(bn){bn.style.display='';
+    bn.innerHTML=`<b>重新提交（第 ${Number(it.attempt||1)+1} 次）</b>
+      <div class="src" style="margin-top:4px;line-height:1.7">原病历内容已预填（原记录 <b class="num">${esc(rid)}</b>），可修改后运行质控；医师签名绑定当前账号。第 2 次起仍不合格将自动升级病案科复核。</div>
+      <div style="margin-top:8px"><button class="btn sm ghost" onclick="qcCancelResubmit()">取消重提</button></div>`;}
+  document.getElementById('qcRun').scrollIntoView({behavior:'smooth',block:'center'});
+  toast('已预填原病历内容，请核对后运行质控');
+}
+function qcCancelResubmit(){qcResubmitOf=null;const bn=document.getElementById('qcResubmitBanner');
+  if(bn){bn.style.display='none';bn.innerHTML='';}}
 const QC_LABELS=['主诉','现病史','既往史','体格检查','辅助检查','初步诊断','医师签名'];
 function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>{if(i===6)return;document.getElementById('qcf_'+i).value=s[i];});document.getElementById('qcLabs').value='';toast('已填入示例（医师签名已锁定为当前账号）');}
 /* F2：粘贴整段病历 → /qc/parse LLM 拆分 → 填充 qcf_0-6（仅覆盖拆分出的非空字段，保留已填内容） */
@@ -1268,6 +1310,24 @@ function exportAuditCsv(){
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   toast('已导出 '+rows.length+' 条审计');
 }
+/* ---- 任务5：admin 应用日志 tail 卡片（GET /admin/logs，只读）----
+   日志行可能含用户输入（问题文本/用户名等），逐行 esc() 后再入 <pre> 防注入；
+   等宽字体 + 自动滚底（最新在底部）；行数输入 1~500 服务端亦有上限。 */
+async function loadAppLogs(){
+  const el=document.getElementById('appLogView');if(!el)return;
+  const inp=document.getElementById('appLogN');
+  let n=parseInt((inp&&inp.value)||'200',10);if(!Number.isFinite(n))n=200;n=Math.max(1,Math.min(n,500));
+  if(inp)inp.value=String(n);
+  el.textContent='加载中…';
+  try{const r=await fetch('/api/v1/medical/admin/logs?lines='+n,{headers:auth()});
+    if(r.status===401){logout();return;}
+    const d=await r.json();
+    if(!r.ok){el.textContent='⚠ 加载失败：'+(d.detail||r.status);return;}
+    el.innerHTML=(d.lines||[]).map(l=>esc(l)).join('\n')||'（日志为空）';
+    el.scrollTop=el.scrollHeight;  /* tail 视图自动滚底 */
+    const note=document.getElementById('appLogNote');if(note)note.textContent=d.note||'';
+  }catch(e){el.textContent='⚠ 加载失败：'+e.message;}
+}
 async function loadData(){
   const b=document.getElementById('dataBody');
   b.innerHTML='<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk"></div></div>';
@@ -1347,10 +1407,21 @@ async function loadData(){
       </div>
     </div>
     <div class="panel" style="margin-top:16px"><h3>基础设施（只读状态 · 重启命令仅供复制，系统不代执行）</h3><div id="infraRows" style="padding:8px 16px 12px">${infraRows}</div></div>
+    <!-- 任务5：应用日志 tail 卡片（GET /admin/logs 只读；行可能含用户输入，逐行 esc 防注入） -->
+    <div class="panel" style="margin-top:16px"><h3>应用日志（logs/app.log 尾部 · 只读 · 单次最多 500 行）</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 16px 4px">
+        <label class="src" for="appLogN">行数</label>
+        <input class="inp num" id="appLogN" type="number" min="1" max="500" value="200" style="max-width:110px" aria-label="应用日志行数"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();loadAppLogs();}">
+        <button class="btn sm secondary" onclick="loadAppLogs()">刷新</button>
+        <span class="src" id="appLogNote"></span>
+      </div>
+      <pre id="appLogView" style="margin:8px 16px 14px;padding:10px;background:var(--rail);border:1px solid var(--line);border-radius:6px;font-size:12px;line-height:1.55;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace">加载中…</pre></div>
     <div class="panel" style="margin-top:16px"><h3>模型配置（对话 / 视觉 · 双格式）</h3><div id="llmPanel"><div class="src" style="padding:10px 16px">加载中…</div></div></div>`;
   /* 基础设施卡片「复制命令」绑定：仅复制命令文本（copyText），绝不提供/触发任何执行 */
   document.querySelectorAll('#infraRows [data-act="infra-copy"]').forEach(btn=>{
     btn.onclick=()=>copyText(btn.dataset.cmd);});
+  loadAppLogs();  /* 任务5：应用日志 tail 卡片随面板加载 */
   /* 科室管理卡片 + 新增用户科室下拉（数据源 GET /admin/departments） */
   document.getElementById('deptAddBtn').onclick=addDept;
   loadDeptPanel();

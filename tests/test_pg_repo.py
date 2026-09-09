@@ -131,6 +131,10 @@ class FakeConn:
                                  "risk_reason", "status", "submitted_by", "reviewed_by",
                                  "review_note", "resolved_at"), r[:12]))
                 item["images"] = json.loads(r[12]) if r[12] else None
+                # 任务6：重提链三列（resubmit_of/attempt/meta jsonb）随 UPSERT 往返
+                item["resubmit_of"] = r[13]
+                item["attempt"] = r[14]
+                item["meta"] = json.loads(r[15]) if r[15] else None
                 self.db["review_queue"][item["id"]] = item
             return
         if s.startswith("INSERT INTO consults"):
