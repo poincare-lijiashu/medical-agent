@@ -6,6 +6,7 @@ FULL 默认 on、imaging/case 空响应兜底（不入队）、sources 随条目
 """
 import base64
 import io
+import json
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -212,6 +213,93 @@ def test_vl_prompt_forbids_empty_output(monkeypatch):
     """任务3 prompt 空响应防线：放射科/病例 prompt 均要求结构化输出、禁止空内容。"""
     assert "禁止返回空字符串" in mi._PROMPT
     assert "禁止返回空字符串" in mi.CASE_PROMPT
+
+
+# ---------- 诊断1：VL 空响应自动重试 + 审计诊断字段 ----------
+
+def test_vl_empty_response_retries_once_then_succeeds(monkeypatch, tmp_path):
+    """诊断1：VL 首次空响应 → 内部换 slightly 更高温度（0→0.2）自动重试 1 次并成功，
+    路由正常返回所见（不触发 vl_empty 兜底）。"""
+    temps, seq = [], iter(["   ", "影像示右肺纹理增粗，未见明确占位。"])
+
+    def _factory(temperature=0):
+        temps.append(temperature)
+        content = next(seq)
+
+        class _VL:
+            async def ainvoke(self, messages):
+                class _R:
+                    def __init__(self, c):
+                        self.content = c
+                return _R(content)
+        return _VL()
+
+    monkeypatch.setattr(mi, "get_vl_llm", _factory)
+    c, audit = _client(monkeypatch, tmp_path)
+    doc = _login(c, "doctor01")
+    img = _png_data_url()
+    d = c.post("/api/v1/medical/imaging/ask", headers=_h(doc),
+               json={"question": "看看", "images": [img]}).json()
+    assert d["answer"].startswith("影像示右肺纹理增粗"), d
+    assert d["review_id"]  # 重试成功 → 正常入队留痕
+    assert temps == [0, 0.2]  # 首试 0，空响应后换 0.2 重试 1 次
+    assert not any(e["payload"].get("action") == "vl_empty" for e in audit.entries)
+
+
+def test_vl_empty_twice_audits_raw_len_and_stop_reason(monkeypatch, tmp_path):
+    """诊断1：两次均空 → vl_empty 兜底（不入队），审计携带 vl_raw_len/stop_reason
+    诊断线索（为换稳定 vision 模型留证据）。"""
+    class _EmptyVL:
+        async def ainvoke(self, messages):
+            class _R:
+                content = ""
+                response_metadata = {"finish_reason": "length"}
+            return _R()
+
+    monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _EmptyVL())
+    c, audit = _client(monkeypatch, tmp_path)
+    doc = _login(c, "doctor01")
+    img = "data:image/png;base64," + "B" * 64
+    d = c.post("/api/v1/medical/imaging/ask", headers=_h(doc),
+               json={"question": "看看", "images": [img]}).json()
+    assert d["status"] == "vl_empty" and d["review_id"] is None
+    assert review.list_all() == []  # 不入队
+    ev = [e for e in audit.entries if e["payload"].get("action") == "vl_empty"]
+    assert ev and ev[-1]["payload"]["vl_raw_len"] == 0
+    assert ev[-1]["payload"]["stop_reason"] == "length"
+
+
+# ---------- 诊断2：stream 入队补传 sources ----------
+
+class _StreamGraph:
+    """替身文献图（流式）：单个 verify 节点更新即终态。"""
+
+    def __init__(self, answer):
+        self.answer = answer
+
+    def astream(self, state, config=None, stream_mode=None):
+        async def _gen():
+            yield {"verify": {"answer": self.answer}}
+        return _gen()
+
+
+def test_stream_enqueue_carries_sources(monkeypatch, tmp_path):
+    """诊断2：SSE 流式路径 _enqueue_if_risk 与非流式 ask 同纪律补传 sources——
+    留痕条目 sources 随条目存档（此前漏传，队内溯源为空）。"""
+    monkeypatch.setattr("backend.api.v1.medical.medical_router._lit_graph", _StreamGraph({
+        "text": "常规循证回答", "confidence": 0.83, "sources": ["KB:guideline-stream"],
+        "needs_human_review": False, "verified": True, "evidence": []}))
+    c, _ = _client(monkeypatch, tmp_path)
+    doc = _login(c, "doctor01")
+    r = c.post("/api/v1/medical/literature/stream", headers=_h(doc),
+               json={"question": "高血压一线用药原则"})
+    assert r.status_code == 200, r.text
+    data = [ln[5:].strip() for ln in r.text.splitlines() if ln.startswith("data:")][-1]
+    payload = json.loads(data)
+    assert payload["review_id"]
+    it = review.get(payload["review_id"])
+    assert it["agent"] == "literature"
+    assert it["sources"] == ["KB:guideline-stream"]  # 诊断2：stream 入队 sources 存档
 
 
 # ---------- 留痕模式关闭 → 回落旧语义（仅高危入队） ----------

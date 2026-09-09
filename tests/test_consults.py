@@ -90,27 +90,33 @@ def test_pick_departments_selects_subset_and_filters_invalid(monkeypatch):
     assert "口腔科" in seen[0] and "内分泌科" in seen[0]
 
 
-def test_pick_departments_empty_selection_falls_back_to_all(monkeypatch):
-    """LLM 选空 → 默认全部科室兜底（fail-safe，不产生无人可派的单）。"""
+def test_pick_departments_empty_selection_retries_then_raises(monkeypatch):
+    """诊断4：LLM 选空 → 原样重试 1 次；两轮仍空 → 抛 ConsultError（不再全量召集兜底）。"""
+    from backend.core.consults import ConsultError
     seen = []
     _patch_structured(monkeypatch, seen, [])
-    lst = ["内科", "外科", "口腔科", "内分泌科"]
-    monkeypatch.setattr(dept_mod, "list_departments", lambda: list(lst))
-    out = asyncio.run(mdt_mod.pick_departments("q"))
-    assert out["departments"] == lst
-    assert "全部科室" in out["reasoning"]
+    monkeypatch.setattr(dept_mod, "list_departments",
+                        lambda: ["内科", "外科", "口腔科", "内分泌科"])
+    with pytest.raises(ConsultError, match="未能确定召集科室"):
+        asyncio.run(mdt_mod.pick_departments("牙痛合并糖尿病需多科会诊"))
+    assert len(seen) == 2  # 恰好重试 1 次（共 2 轮决策）
 
 
-def test_pick_departments_llm_failure_falls_back(monkeypatch):
-    """LLM 异常 → 全部科室兜底，决策异常绝不阻塞发起链路（与 refine 同纪律）。"""
+def test_pick_departments_llm_failure_retries_then_raises(monkeypatch):
+    """诊断4：LLM 异常 → 原样重试 1 次；仍异常 → 抛 ConsultError（不再全部科室兜底）。"""
+    from backend.core.consults import ConsultError
+    calls = {"n": 0}
+
     class _Boom:
         async def ainvoke(self, messages):
+            calls["n"] += 1
             raise RuntimeError("llm down")
+
     monkeypatch.setattr(mdt_mod, "get_structured_llm", lambda *a, **k: _Boom())
-    lst = ["内科", "口腔科"]
-    monkeypatch.setattr(dept_mod, "list_departments", lambda: list(lst))
-    out = asyncio.run(mdt_mod.pick_departments("q"))
-    assert out["departments"] == lst
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: ["内科", "口腔科"])
+    with pytest.raises(ConsultError):
+        asyncio.run(mdt_mod.pick_departments("q"))
+    assert calls["n"] == 2  # 恰好重试 1 次
 
 
 def test_pick_departments_reads_department_list_live(monkeypatch):
@@ -145,15 +151,37 @@ def test_pick_departments_emergency_dept_requires_critical_signs(monkeypatch):
     assert out2["departments"] == ["急诊科", "口腔科"]
 
 
-def test_pick_departments_emergency_filtered_in_failsafe(monkeypatch):
-    """任务4：fail-safe 全部科室兜底同样套用急诊科收口（普通病例不召集急诊）。"""
-    seen = []
-    _patch_structured(monkeypatch, seen, [])  # LLM 选空 → fail-safe
+def test_pick_departments_retry_recovers_and_keeps_emergency_filter(monkeypatch):
+    """诊断4：首轮选空、重试后选出有效科室 → 成功组队，且急诊科收口仍生效（普通病例剔急诊）。"""
+    calls = {"n": 0}
+
+    class _Retry:
+        async def ainvoke(self, messages):
+            calls["n"] += 1
+
+            class _D:
+                departments = [] if calls["n"] == 1 else ["急诊科", "口腔科"]
+                reasoning = "第二轮选出"
+            return _D()
+
+    monkeypatch.setattr(mdt_mod, "get_structured_llm", lambda *a, **k: _Retry())
     monkeypatch.setattr(dept_mod, "list_departments",
                         lambda: ["内科", "口腔科", "急诊科"])
     out = asyncio.run(mdt_mod.pick_departments("常规体检咨询"))
-    assert "急诊科" not in out["departments"]
-    assert "内科" in out["departments"] and "口腔科" in out["departments"]
+    assert calls["n"] == 2  # 首轮空 → 重试 1 次后成功
+    assert out["departments"] == ["口腔科"]  # 急诊科收口仍生效
+    assert out["reasoning"] == "第二轮选出"
+
+
+def test_pick_departments_truncates_to_team_max(monkeypatch):
+    """诊断4：LLM 选出超过上限的科室 → 代码强制截断到 _TEAM_MAX（防分发面过大）。"""
+    seen = []
+    lst = ["内科", "外科", "口腔科", "内分泌科", "急诊科", "骨科", "眼科", "皮肤科"]
+    _patch_structured(monkeypatch, seen, lst)  # 8 个合法科室 > 上限 6
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: list(lst))
+    out = asyncio.run(mdt_mod.pick_departments("车祸伤，血压 80/50，休克，怀疑腹腔大出血"))
+    assert len(out["departments"]) == mdt_mod._TEAM_MAX
+    assert out["departments"] == lst[:mdt_mod._TEAM_MAX]
 
 
 def test_dept_briefs_covers_all_and_falls_back(monkeypatch):
@@ -371,6 +399,23 @@ def test_consult_flow_end_to_end(monkeypatch, tmp_path):
     assert c.post("/api/v1/medical/consults/con-nope/close", headers=_h(doc1)).status_code == 404
 
 
+def test_consult_create_prefilter_rejects_short_or_offtopic(monkeypatch, tmp_path):
+    """诊断4 发起预检：「你好」（<8 字）或纯技术问题 → 400 引导补充病例，不建单不分发。"""
+    c = _isolate(monkeypatch, tmp_path)
+    doc1 = _login(c, "doctor01")
+    _mock_team(monkeypatch, ["口腔科"])  # 组队被 mock：若 prefilter 失效放行，会立刻建单暴露
+    r1 = c.post("/api/v1/medical/consults", headers=_h(doc1),
+                json={"question": "你好"})
+    assert r1.status_code == 400, r1.text
+    assert "请补充患者病史/症状等病例信息" in r1.json()["detail"]
+    r2 = c.post("/api/v1/medical/consults", headers=_h(doc1),
+                json={"question": "帮我写一个python爬虫脚本抓取网页"})
+    assert r2.status_code == 400, r2.text
+    assert "请补充患者病史/症状等病例信息" in r2.json()["detail"]
+    # 不建单：会诊存储文件从未落盘
+    assert not (tmp_path / "consults.json").exists()
+
+
 def test_consult_dispatch_reaches_new_department_doctors(monkeypatch, tmp_path):
     """科室同步端到端：管理端新增「康复科」并为其建号后，组队选中该科室的会诊
     分发可达新科室医生（分发面由实时 target_depts × users.dept 决定）。"""
@@ -381,7 +426,7 @@ def test_consult_dispatch_reaches_new_department_doctors(monkeypatch, tmp_path):
     rehab1 = _login(c, "rehab1")
     _mock_team(monkeypatch, ["康复科"])
     r = c.post("/api/v1/medical/consults", headers=_h(doc1),
-               json={"question": "术后康复评估"})
+               json={"question": "膝关节置换术后康复评估"})
     assert r.status_code == 200, r.text
     assert r.json()["target_depts"] == ["康复科"]
     inbox = c.get("/api/v1/medical/consults/inbox", headers=_h(rehab1)).json()

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from backend.config import settings
 from backend.api.deps import require_role
@@ -140,8 +140,11 @@ async def _body_limit(request: Request, call_next):
         n = 0
     if n > settings.max_body_mb * 1024 * 1024:
         # FIND-13：本中间件注册在 _security_headers 之后（先于其执行），413 短路返回不经过
-        # 后续中间件，必须内联补齐全套安全响应头（含简版 X-Request-Id）
-        resp = PlainTextResponse("请求体过大：超过大小上限", status_code=413)
+        # 后续中间件，必须内联补齐全套安全响应头（含简版 X-Request-Id）。
+        # 诊断3：413 由纯文本改为 JSON 体（与 HTTPException 同构），前端可读 detail
+        # 提示「拆分文件」，不再吞掉失败原因。
+        resp = JSONResponse({"detail": f"请求体过大（>{settings.max_body_mb}MB），请拆分文件"},
+                            status_code=413)
         for k, v in _SECURITY_HEADERS.items():
             resp.headers[k] = v
         resp.headers["X-Request-Id"] = uuid.uuid4().hex[:12]

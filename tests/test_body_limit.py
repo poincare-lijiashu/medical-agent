@@ -37,3 +37,22 @@ def test_normal_body_reaches_route_with_default_limit():
     c = _client()  # 默认 max_body_mb=40，小请求不应被拦截
     r = c.post("/api/v1/auth/login", json={"username": "nobody", "password": "wrong"})
     assert r.status_code != 413  # 到达路由层（401 等），未被中间件拦截
+
+
+def test_413_response_is_json_detail(monkeypatch):
+    """诊断3：413 响应改为 JSON 体 {"detail": "请求体过大（>NMB），请拆分文件"}
+    （与 HTTPException 同构，前端可读 detail；N 随 settings.max_body_mb 动态生成）。"""
+    c = _client()
+    monkeypatch.setattr(settings, "max_body_mb", 64)
+    r = c.post("/api/v1/auth/login", content=b"u" * (65 * 1024 * 1024))
+    assert r.status_code == 413, r.text
+    assert r.json() == {"detail": "请求体过大（>64MB），请拆分文件"}
+
+
+def test_413_json_detail_tracks_configured_limit(monkeypatch):
+    """诊断3：detail 里的上限随配置动态变化（不硬编码 64）。"""
+    c = _client()
+    monkeypatch.setattr(settings, "max_body_mb", 1)
+    r = c.post("/api/v1/auth/login", json={"username": "u" * (2 * 1024 * 1024), "password": "p"})
+    assert r.status_code == 413, r.text
+    assert r.json() == {"detail": "请求体过大（>1MB），请拆分文件"}

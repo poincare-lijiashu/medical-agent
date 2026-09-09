@@ -42,16 +42,35 @@ def vl_model_name() -> str:
     return (p or {}).get("model_id") or settings.qwen_model_vl
 
 
-async def describe_images(images: list[str], question: str = "",
-                          system_prompt: str | None = None) -> str:
-    """支持多图（≤N6）：逐张描述并综合。单图时与旧行为一致。
+def _extract_reply(r) -> tuple[str, str | None]:
+    """从 VL 响应提取（文本, stop_reason）。stop_reason 取 response_metadata/
+    additional_kwargs 里的 finish_reason（OpenAI 兼容端点）等字段，供空响应审计诊断。"""
+    out = r.content if hasattr(r, "content") else str(r)
+    if isinstance(out, list):  # 某些 provider 返回分段
+        out = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in out)
+    stop = None
+    meta = getattr(r, "response_metadata", None)
+    if isinstance(meta, dict):
+        stop = meta.get("finish_reason") or meta.get("stop_reason")
+    if not stop:
+        ak = getattr(r, "additional_kwargs", None)
+        if isinstance(ak, dict):
+            stop = ak.get("finish_reason") or ak.get("stop_reason")
+    return (out or ""), (str(stop) if stop else None)
 
-    system_prompt=None 时用默认放射科 _PROMPT；case/ask 传 CASE_PROMPT（F1 人设分离）。
+
+async def describe_images_detailed(images: list[str], question: str = "",
+                                   system_prompt: str | None = None) -> dict:
+    """支持多图（≤N6）：逐张描述并综合，返回 {"text","vl_raw_len","stop_reason"}。
+
+    诊断1 稳定性：VL 偶发返回空内容（分段 list/超时截断/网关吞响应等）——首空自动换
+    slightly 更高温度（0→0.2）重试一次（prompt 原样）；仍空则把末次原始响应长度与
+    stop_reason 一并返回，供路由层写入 vl_empty 审计（为将来换稳定 vision 模型保留
+    诊断线索）。system_prompt=None 时用默认放射科 _PROMPT；case/ask 传 CASE_PROMPT（F1）。
     """
     imgs = [x for x in (images or []) if x][:6]
     if not imgs:
-        return ""
-    llm = get_vl_llm(temperature=0)
+        return {"text": "", "vl_raw_len": 0, "stop_reason": None}
     base = _PROMPT if system_prompt is None else system_prompt
     prompt = base if len(imgs) == 1 else base.replace(
         "这张医学图像", f"这 {len(imgs)} 张医学图像（逐张描述后综合）")
@@ -59,11 +78,20 @@ async def describe_images(images: list[str], question: str = "",
         prompt += f"\n用户关注点：{question}"
     content = [{"type": "image_url", "image_url": {"url": _to_data_url(x)}} for x in imgs]
     content.append({"type": "text", "text": prompt})
-    r = await llm.ainvoke([HumanMessage(content=content)])
-    out = r.content if hasattr(r, "content") else str(r)
-    if isinstance(out, list):  # 某些 provider 返回分段
-        out = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in out)
-    return (out or "").strip()
+    text, raw_len, stop = "", 0, None
+    for temp in (0, 0.2):  # 首试 temperature=0；空响应换 slightly 更高温度原样重试 1 次
+        r = await get_vl_llm(temperature=temp).ainvoke([HumanMessage(content=content)])
+        raw, stop = _extract_reply(r)
+        text, raw_len = raw.strip(), len(raw)
+        if text:
+            break
+    return {"text": text, "vl_raw_len": raw_len, "stop_reason": stop}
+
+
+async def describe_images(images: list[str], question: str = "",
+                          system_prompt: str | None = None) -> str:
+    """describe_images_detailed 的字符串便捷封装（既有调用方/测试契约不变）。"""
+    return (await describe_images_detailed(images, question, system_prompt))["text"]
 
 
 async def describe_image(image_b64: str, question: str = "") -> str:

@@ -184,34 +184,35 @@ async def pick_departments(question: str) -> dict:
 
     科室同步（关键基建）：科室清单每次实时调 departments.list_departments()（绝不缓存）——
     管理端新增科室后，下一次会诊的组队 prompt 立即包含新科室、分发即可达新科室医生。
-    护栏（代码强制，不信任 LLM 自律）：非清单内科室名过滤；去重保序；超限截断；
-    任务4 急诊科收口：病例无急危重征象词时代码强制剔除急诊科（prompt 约束 + 后过滤双保险）；
-    选空/LLM 异常 → 默认召集全部科室兜底（决策异常绝不阻塞发起链路，与 refine 同纪律）。
+    护栏（代码强制，不信任 LLM 自律）：非清单内科室名过滤；去重保序；[:_TEAM_MAX] 截断；
+    任务4 急诊科收口：病例无急危重征象词时代码强制剔除急诊科（prompt 约束 + 后过滤双保险）。
+    诊断4 兜底语义变更：选空/LLM 异常先原样重试 1 次，仍失败 → 抛 ConsultError
+    （不再全量召集兜底——全量分发既打扰无关科室也放大误召集面，宁失败不乱召集）。
     """
     from backend.core import departments  # 延迟导入避免环；每次实时读（科室同步纪律）
+    from backend.core.consults import ConsultError  # 延迟导入避免环（诊断4 兜底语义）
     depts = await asyncio.to_thread(departments.list_departments)
     if not depts:
         return {"departments": [], "reasoning": "科室清单为空，无法组队"}
     prompt = _CONSULT_TEAM_PROMPT.format(maxn=_TEAM_MAX,
                                          depts=json.dumps(depts, ensure_ascii=False),
                                          case=(question or "")[:4000])
-    raw: list[str] = []
     reasoning = ""
-    try:
-        llm = get_structured_llm("medical_literature", ConsultTeam)
-        d = await llm.ainvoke([HumanMessage(content=_SYS + "\n" + prompt)])
-        raw = [str(x).strip() for x in (getattr(d, "departments", None) or []) if str(x).strip()]
-        reasoning = (getattr(d, "reasoning", "") or "")[:200]
-    except Exception as exc:  # noqa: BLE001 —— 决策异常 fail-safe：全部科室兜底
-        logger.warning("mdt.pick_departments_llm_failed", error=str(exc)[:120])
-    # 非法科室名过滤（以实时清单为准）+ 去重保序 + 限数
-    valid = list(dict.fromkeys(x for x in raw if x in depts))[:_TEAM_MAX]
-    if not valid:
-        # fail-safe 全部科室兜底同样套用急诊科收口（无急危重词不召集急诊，语义一致）
-        return {"departments": _filter_emergency(question, list(depts)),
-                "reasoning": "LLM 未选出有效科室，默认召集全部科室（fail-safe）"}
-    return {"departments": _filter_emergency(question, valid),
-            "reasoning": reasoning or "（未给出理由）"}
+    for attempt in (1, 2):  # LLM 选空/异常 → 原样重试 1 次（诊断4）
+        raw: list[str] = []
+        try:
+            llm = get_structured_llm("medical_literature", ConsultTeam)
+            d = await llm.ainvoke([HumanMessage(content=_SYS + "\n" + prompt)])
+            raw = [str(x).strip() for x in (getattr(d, "departments", None) or []) if str(x).strip()]
+            reasoning = (getattr(d, "reasoning", "") or "")[:200]
+        except Exception as exc:  # noqa: BLE001 —— 单次决策异常不终局，重试一次再定
+            logger.warning("mdt.pick_departments_llm_failed", attempt=attempt, error=str(exc)[:120])
+        # 非法科室名过滤（以实时清单为准）+ 去重保序 + [:_TEAM_MAX] 截断
+        valid = list(dict.fromkeys(x for x in raw if x in depts))[:_TEAM_MAX]
+        if valid:
+            return {"departments": _filter_emergency(question, valid),
+                    "reasoning": reasoning or "（未给出理由）"}
+    raise ConsultError("未能确定召集科室，请补充病例信息后重试")  # 诊断4：不再全量召集兜底
 
 
 async def dept_briefs(question: str, depts: list[str]) -> dict:

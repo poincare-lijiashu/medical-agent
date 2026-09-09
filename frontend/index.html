@@ -237,6 +237,9 @@
             <textarea class="inp" id="input" rows="1" aria-label="临床问题输入" placeholder="输入临床问题…（Enter 发送 · Shift+Enter 换行）"></textarea>
             <div class="imgbar" id="imgbar"><span id="imgthumbs" style="display:flex;gap:6px"></span><span id="imgname"></span>
               <button class="btn ghost sm" type="button" onclick="clearImg()">移除</button></div>
+            <!-- 诊断1：区分「待发送图」（imgbar）与「历史已发送图」（消息流缩略图）——
+                 待发送图随发送成功清空后，在输入区提示可重新上传 -->
+            <div class="src" id="sentImgHint" style="display:none;margin-top:6px">图片已发送，如需继续问诊请重新上传</div>
           </div>
           <button class="btn primary" id="send">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>发送</button>
@@ -608,6 +611,7 @@ async function send(){const inp=document.getElementById('input');const q=inp.val
   const btn=document.getElementById('send');if(btn.disabled)return;  /* 任务2：先查在途再动输入框（原顺序在途点击会吞掉用户输入） */
   btn.disabled=true;
   const agent=cur;  // 锁定当前助手，避免请求途中切换 cur 致答案写到错误会话
+  const curImagesHad=curImages.length>0;  /* 诊断1：发送前快照是否有待发送图（imaging 提示用） */
   /* 任务2：me 记录直接归属发起助手 agent——原 addUser 先写 cur、成功后再搬移，中途切视图历史错位 */
   pushHist(agent,{role:'me',text:q,images:curImages.slice()});
   if(agent===cur)renderUser(q,curImages);
@@ -628,6 +632,8 @@ async function send(){const inp=document.getElementById('input');const q=inp.val
       pushHist(agent,{role:'bot',text:d.answer,meta:d});
       renderBot(d.answer,d);
       curImages=[];renderImgbar();  // 成功后清空已选图片，避免下次静默重发（失败保留，便于原样重试）
+      /* 诊断1：imaging 视图待发送图清空 → 输入区提示「已发送，可重新上传」（历史图留在消息流里） */
+      if(agent==='imaging'&&curImagesHad)showSentHint(true);
     }catch(e){think.remove();const msg='⚠ 请求失败：'+e.message;
       pushHist(agent,{role:'bot',text:msg});if(agent===cur)renderBot(msg);}
   }finally{btn.disabled=false;inp.focus();}}
@@ -635,7 +641,9 @@ function _commitUserToAgent(agent,q){}
 
 /* ---- image ---- */
 const MAX_IMG=6;
-function clearImg(){curImages=[];const i=document.getElementById('img');i.value='';document.getElementById('imgbar').style.display='none';}
+/* 诊断1：「图片已发送」提示开关（imaging 视图待发送图清空后显示，重新选图/切视图即隐藏） */
+function showSentHint(on){const h=document.getElementById('sentImgHint');if(h)h.style.display=on?'block':'none';}
+function clearImg(){curImages=[];const i=document.getElementById('img');i.value='';document.getElementById('imgbar').style.display='none';showSentHint(false);}
 function renderImgbar(){
   const el=document.getElementById('imgthumbs');
   el.innerHTML=curImages.map(s=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--line)" src="${s}" alt="已选影像">`).join('');
@@ -649,7 +657,7 @@ document.getElementById('img').addEventListener('change',async e=>{const fs=[...
   const imgs=await Promise.all(add.map(f=>new Promise(res=>{const rd=new FileReader();rd.onload=()=>res(rd.result);rd.readAsDataURL(f);})));
   curImages=curImages.concat(imgs).slice(0,MAX_IMG);
   e.target.value='';  // 允许下次选择同一文件
-  renderImgbar();});
+  renderImgbar();showSentHint(false);  /* 诊断1：重新选图即视为新的待发送图，隐藏「已发送」提示 */});
 
 /* ---- MDT ---- */
 let lastMdtReport='';  /* 最近一次 AI 多智能体会诊小结（发起真实跨科室会诊时作底稿附在问题后） */
@@ -1241,12 +1249,16 @@ async function uploadKb(){const fs=document.getElementById('kbFile').files;if(!f
   let okAny=false;
   for(const f of fs){const label=f.name;msg.textContent='处理中：'+f.name+' …';
     if(!/\.(md|txt|pdf)$/i.test(f.name)){msg.textContent=f.name+' 不支持（仅 .md/.txt/.pdf）';continue;}
-    try{const b=await readB64(f);const r=await fetch('/api/v1/medical/admin/kb/upload',{method:'POST',headers:auth(),body:JSON.stringify({name:f.name,data_b64:b})});const d=await r.json();
-      if(!r.ok){msg.textContent=f.name+' 失败：'+(d.detail||r.status);continue;}
+    let r=null,d=null,txt='';
+    try{const b=await readB64(f);r=await fetch('/api/v1/medical/admin/kb/upload',{method:'POST',headers:auth(),body:JSON.stringify({name:f.name,data_b64:b})});
+      /* 诊断3：先取响应文本再尝试解析 JSON——413 等非 JSON 体也能带上状态码+原因，
+         失败提示统一为「失败：文件名（状态码 原因）」，不再吞原因 */
+      try{txt=await r.text();d=JSON.parse(txt);}catch(_){/* 非 JSON 响应：保留 txt 供提示 */}
+      if(!r.ok){msg.textContent='失败：'+f.name+'（'+r.status+' '+((d&&d.detail)||String(txt||'').trim().slice(0,80))+'）';continue;}
       /* 任务2：大文件返回 task_id → 轮询状态直至完成；小文件同步返回结果（现状不变） */
       if(d.mode==='async'&&d.task_id){if(await pollKbTask(d.task_id,f.name+'（大文件，后台向量化）',msg))okAny=true;}
       else{msg.textContent=`${f.name} → 入库 ${d.inserted} 片`;okAny=true;}}
-    catch(e){msg.textContent='失败：'+f.name;}}
+    catch(e){msg.textContent='失败：'+f.name+(r?('（'+r.status+'）'):'（网络异常：'+e.message+'）');}}
   document.getElementById('kbFile').value='';btn.disabled=false;if(okAny)loadKb();}
 async function previewKb(tag){
   document.getElementById('mTitle').textContent='切片预览 · '+tag;
@@ -1431,7 +1443,7 @@ async function toggleFullFlag(){
        :'开启后全部 AI 问答/阅片/会诊响应无条件入审核队列并自动签发留痕（AI·留痕模式(自动)）；低置信/高危项由提交医生知情确认。确认开启？',
     '确认切换',async()=>{
     try{const d=await apiPost('/admin/config-toggle',{key:'qc_auto_sign_full',value:!cur});
-      if(d&&d.ok){toast('留痕模式已'+(d.value?'开启':'关闭')+'（即时生效）');loadData();loadConfig();}
+      if(d&&d.ok){toast('留痕模式已'+(d.value?'开启':'关闭')+'（runtime_flags 已更新，即时生效）');loadData();loadConfig();}
       else toast('操作失败：'+(d.detail||'未知错误'));
     }catch(e){toast('操作失败：'+e.message);}});
 }
@@ -1522,6 +1534,7 @@ async function loadData(){
     <div class="panel" style="margin-top:16px"><h3>留痕模式（全交互留痕 · 运行时开关）</h3>
       <div style="display:flex;gap:10px;align-items:center;padding:8px 16px 14px;flex-wrap:wrap">
         <span class="chip ${fullOn?'ok':'mid'}"><span class="dot"></span>${fullOn?'已开启（全部响应自动留痕签发）':'已关闭（仅高危入队人工双控）'}</span>
+        <span class="src num" style="white-space:nowrap">状态来源：runtime_flags（qc_auto_sign_full=${fullOn}）</span>
         <span class="src" style="flex:1;min-width:260px">开启后全部 AI 问答/阅片/会诊响应无条件写入审核队列并自动签发（AI·留痕模式(自动)），低置信/高危项由提交医生知情确认；关闭恢复旧语义。写入 data/runtime_flags.json，切换即时生效、无需重启。</span>
         <button class="btn sm ${fullOn?'danger':'primary'}" id="flagFullBtn">${fullOn?'关闭留痕模式':'开启留痕模式'}</button>
       </div></div>

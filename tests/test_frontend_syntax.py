@@ -81,3 +81,20 @@ def test_task1234_frontend_markers_present():
         "updateConsultBadge", "refreshConsultBadge",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
+
+
+def test_diag_fixes_frontend_markers_present():
+    """诊断1/2/3 前端关键标记存在（锁定防回退）：
+    - 诊断1：imaging 视图「图片已发送」提示（区分待发送图与历史已发送图）；
+    - 诊断2：admin 留痕模式开关卡显示 runtime_flags 当前值来源 + 变更 toast；
+    - 诊断3：uploadKb 失败提示带 HTTP 状态码+响应原因（不再吞原因）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 诊断1：输入区「已发送」提示 + imaging 专属触发
+        "sentImgHint", "showSentHint", "图片已发送，如需继续问诊请重新上传",
+        # 诊断2：留痕模式开关卡状态来源（runtime_flags 值）+ 变更 toast 文案
+        "状态来源：runtime_flags（qc_auto_sign_full=", "（runtime_flags 已更新，即时生效）",
+        # 诊断3：uploadKb 失败统一「失败：文件名（状态码 原因）」格式（原因读响应 detail/文本）
+        "'（'+r.status+' '+", "String(txt||'').trim().slice(0,80)",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"

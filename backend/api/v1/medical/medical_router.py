@@ -360,7 +360,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
             rid = None
         else:
             rid = await _enqueue_if_risk("literature", q, final["text"], final["confidence"],
-                                   final.get("needs_human_review", False), "低置信或未支持论断", actor)
+                                   final.get("needs_human_review", False), "低置信或未支持论断", actor,
+                                   sources=final.get("sources", []))  # 诊断2：与非流式 ask 同纪律补传 sources
         yield _sse("result", {"answer": final["text"], "confidence": final["confidence"],
                               "needs_human_review": final.get("needs_human_review", False),
                               "sources": final.get("sources", []), "review_id": rid,
@@ -439,18 +440,23 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
         try:
-            from backend.core.medical_imaging import describe_images, vl_model_name
-            desc = await describe_images(imgs, q)
+            from backend.core.medical_imaging import describe_images_detailed, vl_model_name
+            # 诊断1：空响应自动重试 1 次（内部换温度），并带回 vl_raw_len/stop_reason 诊断线索
+            d = await describe_images_detailed(imgs, q)
+            desc = d["text"]
         except Exception as e:  # noqa: BLE001
             await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="describe_failed",
                                     actor=actor, payload={"err": str(e)[:120]})
             raise HTTPException(500, "影像描述服务暂时不可用，请稍后重试")
         desc = (desc or "").strip()
-        # 任务3 空响应兜底：VL 偶发返回空内容（分段 list/超时截断等）→ 明确提示重试，
-        # 不入队不留档（与 fallback/offtopic 拒答同纪律），审计记 vl_empty。
+        # 任务3 空响应兜底：VL 空内容（重试后仍空）→ 明确提示重试，不入队不留档
+        # （与 fallback/offtopic 拒答同纪律），审计记 vl_empty + 诊断1 新增
+        # vl_raw_len/stop_reason（原始响应长度/停止原因，为换稳定 vision 模型留线索）。
         if not desc:
             await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_empty",
-                                    actor=actor, payload={"imgs": len(imgs)})
+                                    actor=actor, payload={"imgs": len(imgs),
+                                                          "vl_raw_len": d["vl_raw_len"],
+                                                          "stop_reason": d["stop_reason"]})
             return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
                            confidence=0.0, needs_human_review=False,
                            sources=["imaging:vl_empty"], review_id=None, status="vl_empty")
@@ -484,19 +490,23 @@ async def case_ask(req: AskReq, user: dict = Depends(require_user)):
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
         try:
-            from backend.core.medical_imaging import CASE_PROMPT, describe_images, vl_model_name
-            # F1：病例总结用病例专用 prompt，不再带放射科阅片人设
-            desc = await describe_images(imgs, "结合病例信息描述关键发现：" + q,
-                                         system_prompt=CASE_PROMPT)
+            from backend.core.medical_imaging import CASE_PROMPT, describe_images_detailed, vl_model_name
+            # F1：病例总结用病例专用 prompt，不再带放射科阅片人设；诊断1：空响应自动重试 1 次
+            d = await describe_images_detailed(imgs, "结合病例信息描述关键发现：" + q,
+                                               system_prompt=CASE_PROMPT)
+            desc = d["text"]
         except Exception as e:  # noqa: BLE001
             await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_failed",
                                     actor=actor, payload={"err": str(e)[:120]})
             raise HTTPException(500, "多模态解析服务暂时不可用，请稍后重试")
         desc = (desc or "").strip()
-        # 任务3 空响应兜底（与 imaging 同纪律）：VL 空内容 → 明确提示，不入队。
+        # 任务3 空响应兜底（与 imaging 同纪律）：VL 空内容（重试后仍空）→ 明确提示、不入队；
+        # 诊断1：审计补 vl_raw_len/stop_reason 诊断线索。
         if not desc:
             await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_empty",
-                                    actor=actor, payload={"imgs": len(imgs)})
+                                    actor=actor, payload={"imgs": len(imgs),
+                                                          "vl_raw_len": d["vl_raw_len"],
+                                                          "stop_reason": d["stop_reason"]})
             return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
                            confidence=0.0, needs_human_review=False,
                            sources=["case:vl_empty"], review_id=None, status="vl_empty")
@@ -565,11 +575,22 @@ async def consult_create(req: AskReq, user: dict = Depends(require_user)):
     from backend.core import consults
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
+    # 诊断4 发起预检：问题过短（<8 字）或命中技术领域守门（无医学信号）→ 不建单不分发，
+    # 400 引导补充病例——防「你好」类闲聊/占位输入空跑组队 LLM 并误分发给真实医生。
+    if len(q.strip()) < 8 or offtopic_tech_reply(q):
+        await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="prefilter_reject",
+                                actor=actor, payload={"len": len(q), "role": user.get("role", "")})
+        raise HTTPException(400, "请补充患者病史/症状等病例信息后再发起会诊")
     await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="query",
                             actor=actor, payload={"len": len(q), "role": user.get("role", "")})
     try:
         team = await pick_departments(q)  # Agent 动态组队（实时科室清单，绝不缓存）
         briefs = await dept_briefs(q, team["departments"])  # 按科室定向初步意见
+    except consults.ConsultError as e:
+        # 诊断4：组队兜底不再全量召集（宁可失败也不乱分发）→ 400 明确引导补充病例
+        await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="team_failed",
+                                actor=actor, payload={"err": str(e)[:120]})
+        raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001 —— 组队链路异常体面降级，不裸 500
         await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="degraded",
                                 actor=actor, payload={"err": str(e)[:120]})
