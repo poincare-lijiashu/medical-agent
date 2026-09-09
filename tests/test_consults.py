@@ -128,6 +128,34 @@ def test_pick_departments_reads_department_list_live(monkeypatch):
     assert out["departments"] == ["口腔科"]
 
 
+def test_pick_departments_emergency_dept_requires_critical_signs(monkeypatch):
+    """任务4 急诊科收口（代码强制后过滤）：普通病例（无急危重征象词）即使 LLM 选了
+    急诊科也被剔除；含急危重征象词则保留。prompt同时含新约束（双保险）。"""
+    seen = []
+    _patch_structured(monkeypatch, seen, ["急诊科", "口腔科"])
+    monkeypatch.setattr(dept_mod, "list_departments",
+                        lambda: ["内科", "口腔科", "急诊科"])
+    # 普通牙痛病例：LLM 输出含急诊科 → 后过滤剔除（代码强制）
+    out = asyncio.run(mdt_mod.pick_departments("右下后牙自发痛 3 天"))
+    assert out["departments"] == ["口腔科"]
+    # 组队 prompt 含急诊科收口约束（提示层）
+    assert "急诊科仅在存在急危重征象" in seen[0]
+    # 含急危重征象词的病例：急诊科保留
+    out2 = asyncio.run(mdt_mod.pick_departments("车祸伤，血压 80/50，休克，怀疑腹腔大出血"))
+    assert out2["departments"] == ["急诊科", "口腔科"]
+
+
+def test_pick_departments_emergency_filtered_in_failsafe(monkeypatch):
+    """任务4：fail-safe 全部科室兜底同样套用急诊科收口（普通病例不召集急诊）。"""
+    seen = []
+    _patch_structured(monkeypatch, seen, [])  # LLM 选空 → fail-safe
+    monkeypatch.setattr(dept_mod, "list_departments",
+                        lambda: ["内科", "口腔科", "急诊科"])
+    out = asyncio.run(mdt_mod.pick_departments("常规体检咨询"))
+    assert "急诊科" not in out["departments"]
+    assert "内科" in out["departments"] and "口腔科" in out["departments"]
+
+
 def test_dept_briefs_covers_all_and_falls_back(monkeypatch):
     """按科室定向初步意见：LLM 正常时逐科产出；解析失败逐科兜底文案。"""
     async def fake_ask(route, text):
@@ -178,6 +206,7 @@ def test_consult_inbox_dept_isolation_and_closed_excluded(monkeypatch, tmp_path)
 
 def test_consult_opinion_permission_matrix(monkeypatch, tmp_path):
     """意见权限矩阵：受邀科室可填（含发起者本人在自己科室名单内）、每人一票、
+    任务4 科室一票（同科室第二名医生不可再填 → 400「该科室已完成意见」）、
     非受邀 403、会诊结束 400、未找到 404。"""
     monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
     cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",
@@ -189,6 +218,9 @@ def test_consult_opinion_permission_matrix(monkeypatch, tmp_path):
     # 重复填写 → 400（每人一票）
     with pytest.raises(consults_mod.ConsultError):
         consults_mod.add_opinion(cid, "dent2", "口腔科", "再填一次")
+    # 任务4 科室一票：同科室第二名医生再填 → 400「该科室已完成意见」
+    with pytest.raises(consults_mod.ConsultError, match="该科室已完成意见"):
+        consults_mod.add_opinion(cid, "dent3", "口腔科", "同科室另一票")
     # 非受邀科室 → 403
     with pytest.raises(consults_mod.ConsultPermissionError):
         consults_mod.add_opinion(cid, "doc3", "内科", "我不该被邀请")
@@ -201,13 +233,16 @@ def test_consult_opinion_permission_matrix(monkeypatch, tmp_path):
     # 未找到 → 404
     with pytest.raises(consults_mod.ConsultNotFoundError):
         consults_mod.add_opinion("con-nope", "endo1", "内分泌科", "x")
-    # 发起者在自己科室受邀名单内可填（正常）
-    consults_mod.add_opinion(cid, "doctor01", "口腔科", "补充病史")
+    # 发起者在自己科室受邀名单内可填——但口腔科已完成意见（dent2 已投）→ 400
+    with pytest.raises(consults_mod.ConsultError, match="该科室已完成意见"):
+        consults_mod.add_opinion(cid, "doctor01", "口腔科", "补充病史")
+    # 其它受邀科室仍可正常填写
+    consults_mod.add_opinion(cid, "endo1", "内分泌科", "血糖控制后再拔牙")
     assert len(consults_mod.get(cid)["opinions"]) == 2
     # 会诊结束后 → 400
     consults_mod.close(cid, "doctor01")
     with pytest.raises(consults_mod.ConsultError):
-        consults_mod.add_opinion(cid, "endo1", "内分泌科", "迟到的意见")
+        consults_mod.add_opinion(cid, "endo2", "内分泌科", "迟到的意见")
 
 
 def test_consult_close_only_initiator_and_summary_complete(monkeypatch, tmp_path):
@@ -290,16 +325,18 @@ def test_consult_flow_end_to_end(monkeypatch, tmp_path):
         assert [i["id"] for i in inbox] == [cid]
     assert c.get("/api/v1/medical/consults/inbox", headers=_h(doc3)).json()["items"] == []
 
-    # 意见权限矩阵
+    # 意见权限矩阵（任务4 科室一票：同科室第二名医生不可再填）
     assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(doc3),
                   json={"content": "非受邀"}).status_code == 403
     assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo1),
                   json={"content": "血糖控制后再拔牙"}).status_code == 200
     assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo1),
                   json={"content": "重复一票"}).status_code == 400
-    assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo2),
-                  json={"content": "同科另一位医生也可独立投一票"}).status_code == 200
-    # 发起者在自己科室受邀名单内可填（正常参与）
+    # 任务4 科室一票：同科室第二名医生（endo2）在 endo1 已投后 → 400「该科室已完成意见」
+    r_dup = c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(endo2),
+                   json={"content": "同科另一位医生不可重复投票"})
+    assert r_dup.status_code == 400 and "该科室已完成意见" in r_dup.json()["detail"]
+    # 发起者在自己科室受邀名单内可填（口腔科此时无人投过）
     assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(doc1),
                   json={"content": "开髓引流"}).status_code == 200
 
@@ -311,7 +348,7 @@ def test_consult_flow_end_to_end(monkeypatch, tmp_path):
     closed = r_close.json()
     assert closed["status"] == "closed" and closed["closed_at"]
     assert "开髓引流" in closed["summary"] and "doctor01" in closed["summary"]
-    assert "endo1" in closed["summary"] and "endo2" in closed["summary"]
+    assert "endo1" in closed["summary"]
     assert c.post(f"/api/v1/medical/consults/{cid}/close", headers=_h(doc1)).status_code == 400
     assert c.post(f"/api/v1/medical/consults/{cid}/opinion", headers=_h(dent2),
                   json={"content": "迟到"}).status_code == 400
@@ -324,8 +361,10 @@ def test_consult_flow_end_to_end(monkeypatch, tmp_path):
     mine2 = c.get("/api/v1/medical/consults/mine", headers=_h(endo1)).json()
     assert mine2["initiated"] == []
     assert [i["id"] for i in mine2["participated"]] == [cid]
-    mine3 = c.get("/api/v1/medical/consults/mine", headers=_h(doc3)).json()
-    assert mine3["initiated"] == [] and mine3["participated"] == []
+    mine3 = c.get("/api/v1/medical/consults/mine", headers=_h(endo2)).json()
+    assert mine3["initiated"] == [] and mine3["participated"] == []  # 任务4：未投成票不进参与列表
+    mine4 = c.get("/api/v1/medical/consults/mine", headers=_h(doc3)).json()
+    assert mine4["initiated"] == [] and mine4["participated"] == []
     # 未找到 → 404
     assert c.post("/api/v1/medical/consults/con-nope/opinion", headers=_h(doc1),
                   json={"content": "x"}).status_code == 404

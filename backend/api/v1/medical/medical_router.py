@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.api.deps import require_role, require_user, rate_limit, revoke_user
 from backend.config import settings
-from backend.core import kb_ingest, llm_config
+from backend.core import kb_ingest, llm_config, runtime_flags
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
 from backend.core.intent import offtopic_tech_reply, prefilter_reply
@@ -88,8 +88,35 @@ async def get_config(user: dict = Depends(require_user)):
             "vl_model": (vision or {}).get("model_id") or settings.qwen_model_vl,
             "reasoning_model": settings.qwen_model_reasoning,
             "milvus": milvus,
-            # 任务3：前端据此切换审核中心形态（True=留痕模式：qc/admin 全局只读档案）
-            "qc_auto_sign_full": settings.qc_auto_sign_full}
+            # 任务3：前端据此切换审核中心形态（True=留痕模式：qc/admin 全局只读档案）。
+            # runtime_flags 优先（admin 运行时切换即时生效），无键回落 settings 启动值。
+            "qc_auto_sign_full": runtime_flags.full_mode()}
+
+
+class ConfigToggleReq(BaseModel):
+    key: str = Field(max_length=64)
+    value: bool | None = None  # 缺省=在当前值上取反（toggle）
+
+
+@router.post("/admin/config-toggle")
+async def admin_config_toggle(req: ConfigToggleReq, user: dict = Depends(require_role("admin"))):
+    """任务3：admin 运行时切换行为开关（如「留痕模式」qc_auto_sign_full）。
+
+    写 data/runtime_flags.json（backend/core/runtime_flags.py 白名单键）——决策点
+    （_enqueue_if_risk / drug_ask / GET /config）经 runtime_flags.full_mode() 读值，
+    flags 文件优先于启动时 settings，切换即时生效、无需重启。admin 权限；审计留痕。
+    """
+    if req.key not in runtime_flags.ALLOWED_FLAGS:
+        raise HTTPException(400, f"不支持的运行时开关：{req.key}")
+    cur = runtime_flags.full_mode() if req.key == "qc_auto_sign_full" else False
+    new_val = (not cur) if req.value is None else bool(req.value)
+    val = await asyncio.to_thread(runtime_flags.set_flag, req.key, new_val)
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="config_toggle",
+                            actor=user.get("username", "admin"),
+                            payload={"key": req.key, "from": cur, "to": val})
+    await pg_store.mirror_audit("admin.config_toggle", user.get("username", "admin"),
+                                {"key": req.key, "value": val})
+    return {"ok": True, "key": req.key, "value": val}
 
 
 @router.get("/overview")
@@ -101,8 +128,10 @@ async def overview(user: dict = Depends(require_user)):
     pending = sum(1 for i in items if i.get("status") == "pending")
     resolved = sum(1 for i in items if i.get("status") in ("approved", "rejected"))
     al = get_audit_logger()
+    # 任务1：recent 携带完整 payload，前端 humanizeAudit 生成人话描述（仅 event 名不可读）
     recent = [{"ts": e["ts"][11:19], "event": e["event_type"],
-               "action": e["payload"].get("action", ""), "actor": e["actor"]}
+               "action": e["payload"].get("action", ""), "actor": e["actor"],
+               "payload": e.get("payload", {})}
               for e in al.recent(8)]
     kb_docs = await asyncio.to_thread(doc_count)  # Milvus 冷启动可能慢，移出事件循环防阻塞全服务
     return {
@@ -160,29 +189,44 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
                            self_confirm: bool | None = None,
                            resubmit_of: str | None = None,
                            attempt: int = 1,
-                           meta: dict | None = None) -> str | None:
-    """高危入队；QC_AUTO_SIGN_FULL=True（任务3 留痕模式）时入队后立即自动签发：
-    reviewed_by=「AI·留痕模式(自动)」，含 LLM 自由文本高危——全部自动，医生侧不阻塞；
-    高危项（self_confirm 判定）同时标记 self_confirm_required，由提交医生本人知情确认。
-    self_confirm：显式指定是否高危（drug 中危自动留痕传 review_flag 原值以示区分）；缺省按 review_flag。
-    任务6：resubmit_of/attempt/meta 透传给 review.submit（质控重提链与原病历留档）。"""
+                           meta: dict | None = None,
+                           sources: list | None = None) -> str | None:
+    """任务3 全交互留痕：runtime_flags.full_mode()=True（默认开）时**全部 ask 类响应无条件
+    入队**并立即自动签发（reviewed_by=「AI·留痕模式(自动)」，影像存档保留 keep_images），
+    医生侧不阻塞；full=False 时回落旧语义（仅高危 review_flag 入队 + 人工双控）。
+    待确认规则（任务3）：conf<0.6 或高危（review_flag）→ self_confirm_required=True
+    （提交医生本人在「我的待确认」补知情确认）；否则纯留痕。显式传 self_confirm=True
+    时强制待确认（drug 高危语义）。
+    fallback/offtopic 拒答不入队（调用方维持既有分支，不进本函数）。
+    sources：响应溯源来源随条目存档。resubmit_of/attempt/meta 透传（任务6）。"""
     await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
-    if not review_flag:
-        return None
-    full = settings.qc_auto_sign_full
-    need_self = full and (review_flag if self_confirm is None else bool(self_confirm))
-    rid = await asyncio.to_thread(review.submit, agent=agent, question=q, answer=answer, confidence=conf,
-                                  risk_reason=risk_reason, submitted_by=actor, images=images,
+    full = runtime_flags.full_mode()  # runtime_flags.json 优先（admin 运行时切换即时生效）
+    if not review_flag and not full:
+        return None  # 非留痕模式维持旧语义：仅高危入队
+    if self_confirm is True:
+        need_self = full  # 显式高危标记：留痕模式下强制待确认
+    elif self_confirm is False:
+        # drug 显式传 False（中危规则库留痕/信息不足非高危）：待确认仅按 conf<0.6 判，
+        # 不吃入队用的 review_flag（旧语义里 review_flag or mid_risk_rule 只决定"入队"）
+        need_self = full and conf < 0.6
+    else:
+        need_self = full and (bool(review_flag) or conf < 0.6)  # 任务3 待确认规则
+    rid = await asyncio.to_thread(review.submit, agent=agent, question=q, answer=answer,
+                                  confidence=conf, risk_reason=risk_reason, submitted_by=actor,
+                                  images=images, sources=sources,
                                   self_confirm_required=need_self,
                                   resubmit_of=resubmit_of, attempt=attempt, meta=meta)
     await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="review_enqueued",
-                            actor=actor, payload={"rid": rid, "reason": risk_reason})
+                            actor=actor, payload={"rid": rid, "reason": risk_reason,
+                                                  "trace_mode": full})
     await pg_store.mirror_review(await asyncio.to_thread(review.get, rid))
     if full:
-        # 任务3：留痕模式——入队即自动签发（不等人工），全程 AI 留痕；医生侧 AskResp 不变
+        # 任务3：留痕模式——入队即自动签发（不等人工），全程 AI 留痕；医生侧 AskResp 不变。
+        # keep_images=True：签发后保留影像存档（留痕可回溯；人工签发路径仍清空）。
         try:
             item = await asyncio.to_thread(review.resolve, rid, "approved", "AI·留痕模式(自动)",
-                                           "QC_AUTO_SIGN_FULL：留痕模式自动签发（含高危，全程 AI 留痕）")
+                                           "QC_AUTO_SIGN_FULL：留痕模式自动签发（全交互留痕）",
+                                           True)
             await pg_store.mirror_review(item)
         except review.ReviewError:  # pragma: no cover —— 刚入队必 pending，reviewer 亦非提交人
             pass
@@ -237,7 +281,8 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
         rid = None
     else:
         rid = await _enqueue_if_risk("literature", q, a["text"], a["confidence"],
-                               a.get("needs_human_review", False), "低置信或未支持论断", actor)
+                               a.get("needs_human_review", False), "低置信或未支持论断", actor,
+                               sources=a.get("sources", []))
     return AskResp(answer=a["text"], confidence=a["confidence"],
                    needs_human_review=a.get("needs_human_review", False),
                    sources=a.get("sources", []), review_id=rid,
@@ -355,13 +400,14 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
         conf, risk, review_flag = 0.50, "信息不足", False
     # 中危规则库命中决定「入队留痕」（两种模式下都入队）；「AI·阈值自动」签发仅在
     # 非留痕模式生效——任务3 留痕模式下统一由 _enqueue_if_risk 以「AI·留痕模式(自动)」签发（含高危）。
+    full = runtime_flags.full_mode()  # runtime_flags 优先（admin 运行时切换即时生效）
     mid_risk_rule = (settings.qc_auto_sign and sev == "中危" and bool(r.get("sources"))
                      and str(r["sources"][0]).startswith("drug_rules:"))
-    auto_sign = (not settings.qc_auto_sign_full) and mid_risk_rule
+    auto_sign = (not full) and mid_risk_rule
     # self_confirm=review_flag：仅真正高危（禁忌/高危相互作用）在留痕模式下要求医生知情确认，
     # 中危自动留痕（review_flag=False）不打扰医生（AskResp 本就不阻塞）
     rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag or mid_risk_rule, risk, actor,
-                                 self_confirm=review_flag)
+                                 self_confirm=review_flag, sources=r["sources"])
     if auto_sign and rid:
         # QC_AUTO_SIGN：中危规则库提示自动签发（AI 预审替代人工，全程留痕）；
         # 高危/禁忌（sev 高危/禁忌）不入此分支，仍走人工双控。医生侧 AskResp 不受影响。
@@ -398,14 +444,25 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
             await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="describe_failed",
                                     actor=actor, payload={"err": str(e)[:120]})
             raise HTTPException(500, "影像描述服务暂时不可用，请稍后重试")
+        desc = (desc or "").strip()
+        # 任务3 空响应兜底：VL 偶发返回空内容（分段 list/超时截断等）→ 明确提示重试，
+        # 不入队不留档（与 fallback/offtopic 拒答同纪律），审计记 vl_empty。
+        if not desc:
+            await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_empty",
+                                    actor=actor, payload={"imgs": len(imgs)})
+            return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
+                           confidence=0.0, needs_human_review=False,
+                           sources=["imaging:vl_empty"], review_id=None, status="vl_empty")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.72
-        rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor, images=imgs)
+        src = ["VL:" + vl_model_name()]
+        rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor,
+                                     images=imgs, sources=src)
         suffix = "（已标记为需放射科医师双人核对）" if risky else "\n\n以上为 AI 初步所见，供医师参考。"
         await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_described",
                                 actor=actor, payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + suffix, confidence=conf, needs_human_review=risky,
-                       sources=["VL:" + vl_model_name()], review_id=rid)
+                       sources=src, review_id=rid)
     await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="need_image",
                             actor=actor, payload={"q": q[:200]})
     return AskResp(answer="影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
@@ -434,14 +491,24 @@ async def case_ask(req: AskReq, user: dict = Depends(require_user)):
             await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_failed",
                                     actor=actor, payload={"err": str(e)[:120]})
             raise HTTPException(500, "多模态解析服务暂时不可用，请稍后重试")
+        desc = (desc or "").strip()
+        # 任务3 空响应兜底（与 imaging 同纪律）：VL 空内容 → 明确提示，不入队。
+        if not desc:
+            await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_empty",
+                                    actor=actor, payload={"imgs": len(imgs)})
+            return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
+                           confidence=0.0, needs_human_review=False,
+                           sources=["case:vl_empty"], review_id=None, status="vl_empty")
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.70
-        rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor, images=imgs)
+        src = ["VL:" + vl_model_name()]
+        rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor,
+                                     images=imgs, sources=src)
         await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_described",
                                 actor=actor, payload={"len": len(desc), "risky": risky})
         return AskResp(answer=desc + ("\n\n（已标记双人核对）" if risky else "\n\n供医师参考的初步摘要。"),
                        confidence=conf, needs_human_review=risky,
-                       sources=["VL:" + vl_model_name()], review_id=rid)
+                       sources=src, review_id=rid)
     await asyncio.to_thread(get_audit_logger().write, event_type="case", action="scaffold",
                             actor=actor, payload={"q": q[:200]})
     return AskResp(answer="多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
@@ -469,8 +536,10 @@ async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
                                 actor=actor, payload={"err": str(e)[:120]})
         raise HTTPException(500, "会诊服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试")
     rep = out["report"]
+    # 任务3：MDT 全交互留痕首次接入——报告全文/置信/来源无条件入队（留痕模式自动签发）
     rid = await _enqueue_if_risk("mdt", case, rep["text"], rep["confidence"],
-                           rep.get("needs_human_review", False), "MDT存在分歧或高危", actor)
+                           rep.get("needs_human_review", False), "MDT存在分歧或高危", actor,
+                           sources=rep.get("sources", []))
     return {"report": rep["text"], "confidence": rep["confidence"], "opinions": rep["opinions"],
             "disagreements": rep["disagreements"], "needs_human_review": rep["needs_human_review"],
             "sources": rep["sources"], "review_id": rid,
@@ -905,7 +974,9 @@ async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
 # ---------- 知识库管理（仅 admin）----------
 class KbUploadReq(BaseModel):
     name: str = Field(max_length=250)
-    data_b64: str = Field(max_length=30_000_000)  # 解码后约 22MB 上限
+    # 任务5：大教材 PDF（实测 38.5MB）base64 后约 54MB，上限提到 90M 字符（解码约 67MB）；
+    # 请求体整体仍受 max_body_mb=64 中间件约束，双保险。
+    data_b64: str = Field(max_length=90_000_000)
 
 
 @router.post("/admin/kb/upload")
@@ -914,6 +985,12 @@ async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin")
                             actor=user.get("username", "admin"), payload={"name": req.name[:120]})
     try:
         return await asyncio.to_thread(kb_ingest.ingest_b64, req.name[:250], req.data_b64)
+    except ValueError as e:
+        # 任务5：确定性业务错误（不支持类型/扫描版 PDF/文档过大等）→ 透传具体原因，不再笼统"失败"
+        await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload_rejected",
+                                actor=user.get("username", "admin"),
+                                payload={"name": req.name[:120], "reason": str(e)[:160]})
+        raise HTTPException(400, str(e))
     except Exception as e:  # noqa: BLE001
         await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload_failed",
                                 actor=user.get("username", "admin"),
@@ -1079,7 +1156,9 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     return {"users": users, "audit_recent": audit_recent, "review": stats,
             "pg_counts": pg_counts, "kb_docs": await asyncio.to_thread(doc_count),
             "events_total": len(al.entries), "device": device(), "uptime_s": int(time.time() - _START),
-            "infra": {"milvus": milvus, "pg": {"ok": pg_ok}}}
+            "infra": {"milvus": milvus, "pg": {"ok": pg_ok}},
+            # 任务3：admin「留痕模式」开关卡数据源（runtime_flags 优先，运行时切换即时反映）
+            "flags": {"qc_auto_sign_full": runtime_flags.full_mode()}}
 
 
 class PurgeReq(BaseModel):

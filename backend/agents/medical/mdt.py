@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import operator
+import re
 from typing import Annotated, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage
@@ -149,8 +150,26 @@ _CONSULT_TEAM_PROMPT = (
     "你是跨科室会诊发起助手。阅读下面的病例/会诊问题，从【可选科室清单】中自主选出"
     "最需要参与会诊的专科（1-{maxn} 个，按病例实际需要，宁缺毋滥）。\n"
     "硬性规则：只能从清单中选择，科室名必须与清单完全一致，不得编造清单外的科室。\n"
+    "任务4 急诊科收口：急诊科仅在存在急危重征象（生命体征不稳/气道受压风险/"
+    "怀疑急性冠脉综合征等）时才召集；普通专科症状优先相应专科而非急诊。\n"
     "可选科室清单：{depts}\n病例：{case}\n"
 )
+
+# 任务4 急诊科收口（代码强制后过滤，不信任 LLM 自律）：病例不含急危重征象词时
+# 从组队结果剔除急诊科——普通专科症状优先专科，防止 LLM 习惯性把急诊科拉进队。
+EMERGENCY_DEPT = "急诊科"
+_EMERGENCY_SIGNS = re.compile(
+    r"(生命体征不稳|生命体征不平稳|气道受压|气道梗阻|急性冠脉|心肌梗死|心梗|"
+    r"休克|昏迷|意识丧失|意识障碍|呼吸衰竭|呼吸骤停|心跳骤停|心脏骤停|猝死|"
+    r"大出血|活动性出血|张力性气胸|脑疝|急危重|危重|濒死|抽搐不止|癫痫持续|"
+    r"严重过敏|过敏性休克|窒息)")
+
+
+def _filter_emergency(question: str, departments: list[str]) -> list[str]:
+    """急诊科后过滤：病例无急危重征象词 → 剔除急诊科（有征象词则保留，不动其余科室）。"""
+    if _EMERGENCY_SIGNS.search(question or ""):
+        return departments
+    return [d for d in departments if d != EMERGENCY_DEPT]
 
 _DEPT_BRIEF_PROMPT = (
     "你是跨科室会诊发起助手。请为下列每个受邀专科，结合病例给出该专科视角的定向初步意见"
@@ -166,6 +185,7 @@ async def pick_departments(question: str) -> dict:
     科室同步（关键基建）：科室清单每次实时调 departments.list_departments()（绝不缓存）——
     管理端新增科室后，下一次会诊的组队 prompt 立即包含新科室、分发即可达新科室医生。
     护栏（代码强制，不信任 LLM 自律）：非清单内科室名过滤；去重保序；超限截断；
+    任务4 急诊科收口：病例无急危重征象词时代码强制剔除急诊科（prompt 约束 + 后过滤双保险）；
     选空/LLM 异常 → 默认召集全部科室兜底（决策异常绝不阻塞发起链路，与 refine 同纪律）。
     """
     from backend.core import departments  # 延迟导入避免环；每次实时读（科室同步纪律）
@@ -187,9 +207,11 @@ async def pick_departments(question: str) -> dict:
     # 非法科室名过滤（以实时清单为准）+ 去重保序 + 限数
     valid = list(dict.fromkeys(x for x in raw if x in depts))[:_TEAM_MAX]
     if not valid:
-        return {"departments": list(depts),
+        # fail-safe 全部科室兜底同样套用急诊科收口（无急危重词不召集急诊，语义一致）
+        return {"departments": _filter_emergency(question, list(depts)),
                 "reasoning": "LLM 未选出有效科室，默认召集全部科室（fail-safe）"}
-    return {"departments": valid, "reasoning": reasoning or "（未给出理由）"}
+    return {"departments": _filter_emergency(question, valid),
+            "reasoning": reasoning or "（未给出理由）"}
 
 
 async def dept_briefs(question: str, depts: list[str]) -> dict:

@@ -228,21 +228,22 @@ async def mirror_user(username: str, role: str, pw_hash: str) -> None:
 
 _REVIEW_COLS = ("id", "ts", "agent", "question", "answer", "confidence", "risk_reason",
                 "status", "submitted_by", "reviewed_by", "review_note", "resolved_at",
-                "resubmit_of", "attempt", "meta")
+                "resubmit_of", "attempt", "meta", "sources")
 
 _REVIEW_UPSERT = """INSERT INTO review_queue(id,ts,agent,question,answer,confidence,risk_reason,
-   status,submitted_by,reviewed_by,review_note,resolved_at,images,resubmit_of,attempt,meta)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16::jsonb)
+   status,submitted_by,reviewed_by,review_note,resolved_at,images,resubmit_of,attempt,meta,sources)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb)
    ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reviewed_by=EXCLUDED.reviewed_by,
    review_note=EXCLUDED.review_note, resolved_at=EXCLUDED.resolved_at,
-   images=EXCLUDED.images, updated_at=now()"""
+   images=EXCLUDED.images, sources=EXCLUDED.sources, updated_at=now()"""
 
 
 def _review_row(item: dict) -> tuple:
-    """队列条目 → INSERT 参数元组（images/meta 序列化为 jsonb 文本；空/缺失一律 NULL；
-    resubmit_of/attempt 为任务6重提链字段，普通提交为 NULL/NULL）。"""
+    """队列条目 → INSERT 参数元组（images/meta/sources 序列化为 jsonb 文本；空/缺失一律 NULL；
+    resubmit_of/attempt 为任务6重提链字段，普通提交为 NULL/NULL；sources 为任务3留痕溯源）。"""
     images = item.get("images")
     meta = item.get("meta")
+    sources = item.get("sources")
     try:
         attempt = int(item["attempt"]) if item.get("attempt") is not None else None
     except (TypeError, ValueError):
@@ -253,7 +254,8 @@ def _review_row(item: dict) -> tuple:
             item.get("reviewed_by"), item.get("review_note"), item.get("resolved_at"),
             json.dumps(images, ensure_ascii=False) if images else None,
             item.get("resubmit_of"), attempt,
-            json.dumps(meta, ensure_ascii=False) if meta else None)
+            json.dumps(meta, ensure_ascii=False) if meta else None,
+            json.dumps(sources, ensure_ascii=False) if sources else None)
 
 
 async def _mirror_review_impl(item: dict) -> None:
@@ -490,6 +492,8 @@ async def _pg_load_queue() -> list | None:
         d["images"] = json.loads(img) if img else None
         meta = r["meta"]
         d["meta"] = json.loads(meta) if isinstance(meta, str) and meta else meta
+        src = d.get("sources")  # 任务3：sources jsonb → list（兼容驱动直返 dict）
+        d["sources"] = json.loads(src) if isinstance(src, str) and src else src
         out.append(d)
     return out
 

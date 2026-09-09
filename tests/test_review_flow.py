@@ -23,7 +23,12 @@ def _login(c, u, p):
     return r.json()["access_token"]
 
 
-def test_high_risk_dual_check_flow():
+def test_high_risk_dual_check_flow(monkeypatch):
+    """人工双控端到端（本测试锁定人工双控语义：qc/admin 签发、doctor 调复核 403）。
+    任务3 行为变更注记：qc_auto_sign_full 默认已改为 True（留痕模式），本测试显式
+    monkeypatch 关闭以维持其锁定的人工双控路径；留痕模式语义由 test_review_permission 锁定。"""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     c = _client()
     doc = _login(c, "doctor01", "Med@2026")
     ph = _login(c, "pharm01", "Med@2026")
@@ -64,18 +69,24 @@ def test_high_risk_dual_check_flow():
     assert r5.json()["reviewed_by"] == "qc01"
 
 
-def test_low_risk_not_enqueued(monkeypatch):
-    from backend.config import settings
-    monkeypatch.setattr(settings, "qc_auto_sign", False)  # 自动签发关闭时维持旧语义：中危不入队
+def test_low_risk_mid_risk_traced_and_auto_signed(monkeypatch):
+    """任务3 新语义（行为变更，本测试按新语义更新）：留痕模式（默认开）下中危也
+    无条件入队并立即自动签发（AI·留痕模式(自动)）——原断言「中危不入队」随全交互
+    留痕语义更新；conf/needs_human_review 校准断言保持不变。"""
+    from backend.core import medical_review as review
     c = _client()
     doc = _login(c, "doctor01", "Med@2026")
-    # 中危（非禁忌/高危）不强制双人核对
+    # 中危（非禁忌/高危）→ 留痕入队 + 自动签发，医生侧不阻塞
     r = c.post("/api/v1/medical/drug/ask", headers={"Authorization": "Bearer " + doc},
                json={"question": "氯吡格雷和奥美拉唑能一起吃吗"})
     d = r.json()
     assert d["needs_human_review"] is False
-    assert d["review_id"] is None
     assert d["confidence"] >= 0.75  # 规则命中，真实校准为中高，不再"一律低置信"
+    assert d["review_id"], "留痕模式：中危也应入队留痕"
+    item = review.get(d["review_id"])
+    assert item["status"] == "approved"
+    assert item["reviewed_by"] == "AI·留痕模式(自动)"
+    assert item["self_confirm_required"] is False  # 非低置信非高危 → 纯留痕
 
 
 # ---- 双控自动签发翻案（reopen）：reviewed_by=「AI·阈值自动」的已签发项可回待核对 ----

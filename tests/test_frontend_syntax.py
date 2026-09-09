@@ -62,3 +62,22 @@ def test_task5_task6_frontend_markers_present():
         "rejected_escalated", "已升级病案科复核", "第 ${att} 次提交",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
+
+
+def test_task1234_frontend_markers_present():
+    """任务1/3/4 前端关键标记存在：
+    - 任务1：ICON.myconsults 图标（「undefined我的会诊」根因）+ 概览 humanizeAudit 全覆盖；
+    - 任务3：空响应兜底文案 + admin 留痕模式开关卡（config-toggle）；
+    - 任务4：审核中心 tab 未读徽标。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 任务1：myconsults 导航图标（缺失时 renderRail 渲染出 "undefined我的会诊"）
+        "myconsults:'<svg",
+        "esc(humanizeAudit(e))",  # 概览最近活动同样人话化
+        # 任务3：空响应兜底 + 留痕模式开关卡
+        "AI 未生成所见，请重新上传或补充描述",
+        "admin/config-toggle", "flagFullBtn", "toggleFullFlag", "留痕模式（全交互留痕 · 运行时开关）",
+        # 任务4：会诊 tab 未读徽标
+        "updateConsultBadge", "refreshConsultBadge",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"

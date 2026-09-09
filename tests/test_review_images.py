@@ -207,6 +207,10 @@ def _h(t):
 
 
 def test_imaging_route_enqueues_review_with_images(monkeypatch, tmp_path):
+    """任务3 注记：本测试锁定「高危入队且条目含压缩 images（pending 可见）」语义，
+    显式关闭留痕模式（默认 True 时入队即自动签发、条目不再处于 pending）。"""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
     monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _FakeVL())

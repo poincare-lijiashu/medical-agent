@@ -104,8 +104,10 @@ def test_qc_auto_pass_high_confidence_archived(monkeypatch, tmp_path):
 
 
 def test_qc_auto_pass_connotation_flaw_falls_back_to_manual(monkeypatch, tmp_path):
-    """硬伤全过但内涵轨有缺陷（置信 <0.85）→ 仍走现行为入队人工。"""
+    """硬伤全过但内涵轨有缺陷（置信 <0.85）→ 仍走现行为入队人工。
+    任务3 注记：本测试锁定人工队列语义，显式关闭留痕模式（默认已改 True）。"""
     c, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     monkeypatch.setattr(settings, "qc_auto_pass", True)
     monkeypatch.setattr(qc_mod, "connotation_check",
                         lambda record: [{"field": "内涵质量", "issue": "诊断缺乏病史支持",
@@ -119,8 +121,9 @@ def test_qc_auto_pass_connotation_flaw_falls_back_to_manual(monkeypatch, tmp_pat
     assert len(review.pending()) == 1
 
 
-def test_qc_auto_pass_off_keeps_legacy_enqueue(monkeypatch, tmp_path):
+def test_qc_auto_pass_off_keeps_legacy(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)  # 任务3：人工队列语义测试，关闭留痕模式
     monkeypatch.setattr(settings, "qc_auto_pass", False)
     tok = _login(c, "doctor01", "Med@2026")
     r = c.post("/api/v1/medical/qc/record", headers=_h(tok), json={"record": dict(FULL_RECORD)})
@@ -145,8 +148,13 @@ def test_review_quality_exposes_hard_defects():
 # ---- 批次二-7：QC_AUTO_SIGN 中危规则库自动签发 ----
 
 def test_qc_auto_sign_mid_risk_auto_approved(monkeypatch, tmp_path):
+    """QC_AUTO_SIGN 旧语义（留痕模式关闭时）：中危规则库提示由「AI·阈值自动」签发。
+    任务3 注记：留痕模式默认开启时中危统一由「AI·留痕模式(自动)」签发（见
+    test_review_permission.test_full_mode_mid_risk_auto_sign_without_self_confirm）；
+    本测试显式关闭留痕模式以继续锁定 QC_AUTO_SIGN 既有语义。"""
     c, audit = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign", True)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)  # 锁定旧语义
     tok = _login(c, "doctor01", "Med@2026")
     r = c.post("/api/v1/medical/drug/ask", headers=_h(tok), json={"question": MID_RISK_Q})
     assert r.status_code == 200, r.text
@@ -165,9 +173,11 @@ def test_qc_auto_sign_mid_risk_auto_approved(monkeypatch, tmp_path):
 
 
 def test_qc_auto_sign_off_keeps_legacy(monkeypatch, tmp_path):
-    """QC_AUTO_SIGN=False → 完全现行为：中危不入队（review_id=None），无自动签发。"""
+    """QC_AUTO_SIGN=False → 完全现行为：中危不入队（review_id=None），无自动签发。
+    任务3 注记：同时关闭留痕模式（默认 True 时中危也会留痕入队）。"""
     c, audit = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign", False)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)  # 锁定旧语义
     tok = _login(c, "doctor01", "Med@2026")
     d = c.post("/api/v1/medical/drug/ask", headers=_h(tok),
                json={"question": MID_RISK_Q}).json()
@@ -177,8 +187,12 @@ def test_qc_auto_sign_off_keeps_legacy(monkeypatch, tmp_path):
 
 
 def test_qc_auto_sign_high_risk_still_manual(monkeypatch, tmp_path):
+    """高危（禁忌）在 QC_AUTO_SIGN 旧语义下仍人工双控。
+    任务3 注记：显式关闭留痕模式（默认 True 时高危入队即自动签发+待确认，见
+    test_review_permission.test_full_mode_high_risk_auto_sign_on_enqueue）。"""
     c, _ = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign", True)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)  # 锁定旧语义
     tok = _login(c, "doctor01", "Med@2026")
     d = c.post("/api/v1/medical/drug/ask", headers=_h(tok),
                json={"question": HIGH_RISK_Q}).json()

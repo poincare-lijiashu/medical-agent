@@ -139,10 +139,12 @@ def participated(user: str) -> list[dict]:
 
 
 def add_opinion(cid: str, doctor: str, dept: str, content: str) -> dict:
-    """受邀科室医生填写本科室意见（仅建议权无驳回权，每人一票）。
+    """受邀科室医生填写本科室意见（仅建议权无驳回权，任务4：意见按科室一票）。
 
     校验：会诊须 open；填报人 dept 必须在 target_depts（非受邀 → 权限错 403）；
-    同一医生不可重复填写（→ 业务错 400）；dept 为空说明账号未设置科室（→ 403）。
+    同一医生不可重复填写（→ 业务错 400）；该科室已有医生提交过意见 → 400
+    「该科室已完成意见」（科室作为整体一票，同科室第二名医生不再重复填写）；
+    dept 为空说明账号未设置科室（→ 403）。
     """
     if not doctor:
         raise ConsultError("意见人不能为空")
@@ -161,6 +163,9 @@ def add_opinion(cid: str, doctor: str, dept: str, content: str) -> dict:
                     raise ConsultPermissionError("您所在科室未被邀请参与该会诊")
                 if any(o.get("doctor") == doctor for o in (i.get("opinions") or [])):
                     raise ConsultError("您已提交过本科室意见（每人仅一票）")
+                # 任务4：科室一票——该科室已有人提交（含同科室其他医生）→ 拒绝
+                if any(o.get("dept") == dept for o in (i.get("opinions") or [])):
+                    raise ConsultError("该科室已完成意见")
                 i.setdefault("opinions", []).append(
                     {"doctor": doctor, "dept": dept, "content": content, "ts": _now()})
                 _save(items)

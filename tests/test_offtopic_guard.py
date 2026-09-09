@@ -263,7 +263,12 @@ def test_stream_fallback_not_enqueued(monkeypatch, tmp_path):
 
 
 def test_non_fallback_low_confidence_still_enqueued(monkeypatch, tmp_path):
-    """对照锁：非 fallback（KB 来源）的低置信答案仍照常入队（防一刀切全部豁免）。"""
+    """对照锁：非 fallback（KB 来源）的低置信答案仍照常入队（防一刀切全部豁免）。
+    任务3 注记：显式关闭留痕模式以断言 pending 语义（默认 True 时入队即自动签发，
+    条目不再 pending；留痕入队语义由 test_full_trace_mode.py 锁定）。"""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
+
     class _LowGraph:
         async def ainvoke(self, state, config=None):
             return {"answer": {"text": "不确定的回答", "confidence": 0.35,

@@ -16,3 +16,13 @@ def _clean_auth_state():
     security_rate.reset()
     yield
     deps._revoked_before.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_flags(tmp_path, monkeypatch):
+    """任务3：每个测试独立的 runtime_flags 文件——测试进程绝不读写真实
+    data/runtime_flags.json（服务端 admin 运行时切换值不泄漏进测试，
+    测试中的 set_flag 也不污染真实运行配置）。文件默认不存在 → 全部回落 settings。"""
+    from backend.core import runtime_flags
+    monkeypatch.setattr(runtime_flags, "FLAGS_FILE", str(tmp_path / "runtime_flags.json"))
+    yield

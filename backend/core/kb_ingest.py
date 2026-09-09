@@ -64,11 +64,33 @@ def _save_manifest(m: dict) -> None:
     os.replace(tmp, MANIFEST)
 
 
+def _safe_tag(tag: str) -> str:
+    """统一的 tag 清洗：字母数字下划线 + 中文（与 delete/preview 共用，避免预览可查却无法删除）"""
+    return re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff]", "", str(tag))[:64]
+
+
+ALLOWED_EXTS = {".md", ".txt", ".pdf"}  # 图片等二进制类型硬解会污染知识库（曾致 1197 个乱码切片入库）
+
+# 任务5 大文档上限（超限明确报错而非笼统失败）：实测 38.5MB 医学教材为 418 页/56 万字符
+# （可正常摄取），上限留 5 倍余量；embedding 按此规模分钟级可完成，更大数据应拆分上传。
+PDF_MAX_PAGES = 2000
+TEXT_MAX_CHARS = 8_000_000
+
+
 def extract_text(filename: str, raw: bytes) -> str:
+    text = _extract_text_raw(filename, raw)
+    if len(text) > TEXT_MAX_CHARS:
+        raise ValueError(f"文档过大：提取文本 {len(text):,} 字符（上限 {TEXT_MAX_CHARS:,}），请拆分后上传")
+    return text
+
+
+def _extract_text_raw(filename: str, raw: bytes) -> str:
     if filename.lower().endswith(".pdf"):
         import fitz  # PyMuPDF
         out = []
         with fitz.open(stream=raw, filetype="pdf") as doc:
+            if len(doc) > PDF_MAX_PAGES:
+                raise ValueError(f"PDF 页数过多：{len(doc)} 页（上限 {PDF_MAX_PAGES} 页），请拆分后上传")
             for page in doc:
                 out.append(page.get_text())
         return "\n".join(out)
@@ -79,20 +101,16 @@ def extract_text(filename: str, raw: bytes) -> str:
         return raw.decode("gbk", errors="replace")
 
 
-def _safe_tag(tag: str) -> str:
-    """统一的 tag 清洗：字母数字下划线 + 中文（与 delete/preview 共用，避免预览可查却无法删除）"""
-    return re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff]", "", str(tag))[:64]
-
-
-ALLOWED_EXTS = {".md", ".txt", ".pdf"}  # 图片等二进制类型硬解会污染知识库（曾致 1197 个乱码切片入库）
-
-
 def ingest_document(name: str, raw: bytes, doc_tag: str | None = None) -> dict:
     """返回 {doc_tag, chunks, inserted}。幂等：同 doc_tag 先删后插。"""
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXTS:
         raise ValueError(f"不支持的文件类型：{ext or '(无扩展名)'}（仅允许 md/txt/pdf）")
     text = extract_text(name, raw)
+    # 任务5：扫描版 PDF（无文本层）明确报错，不再落入笼统的"无有效内容"提示
+    if ext == ".pdf" and not text.strip():
+        raise ValueError("扫描版PDF需OCR，暂不支持：该 PDF 未提取到任何文本层，"
+                         "请使用带文字层的 PDF 或先做 OCR 处理")
     chunks = chunk_text(text)
     # 之前：零 chunk 静默 200；现在：告知用户文档无有效内容（防御静默失败）
     if not chunks:

@@ -112,12 +112,15 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
            self_confirm_required: bool = False,
            resubmit_of: str | None = None,
            attempt: int = 1,
-           meta: dict | None = None) -> str:
+           meta: dict | None = None,
+           sources: list | None = None) -> str:
     """入队一条待核对项，返回 review_id。images：待医生核对的影像（data URL）。
     压缩/截断为纯函数，在锁外完成（FIND-01）；锁内仅 _load/append/_save。
     任务3：self_confirm_required=True（留痕模式自动签发的高危项）→ 提交医生需知情确认。
     任务6：resubmit_of=原驳回记录 id、attempt=第 N 次提交（链上递增，路由层计算）、
-    meta=随件留档（质控为已脱敏原病历，供「重新提交」预填），普通提交不传。"""
+    meta=随件留档（质控为已脱敏原病历，供「重新提交」预填），普通提交不传。
+    任务3 全交互留痕：sources=响应溯源来源（如 KB:PMID/drug_rules/VL:模型名）随条目
+    存档（详情可回溯证据链），不传为 None。"""
     rid = "rev-" + uuid.uuid4().hex[:10]
     compressed = _compress_images(images)  # FIND-01：纯函数不持锁，缩短临界区
     stored_images = None if compressed is None else _cap_total_chars(compressed)
@@ -140,6 +143,8 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             "resubmit_of": resubmit_of or None,
             "attempt": max(1, attempt_n),
             "meta": meta,
+            # 任务3 全交互留痕：溯源来源存档（JSON 兜底真源；PG 镜像同列）
+            "sources": list(sources) if sources else None,
         })
         _save(items)
     return rid
@@ -223,8 +228,11 @@ class ReviewError(Exception):
     pass
 
 
-def resolve(rid: str, decision: str, reviewer: str, note: str = "") -> dict:
-    """decision: approved | rejected。双控：reviewer != submitted_by。"""
+def resolve(rid: str, decision: str, reviewer: str, note: str = "",
+            keep_images: bool = False) -> dict:
+    """decision: approved | rejected。双控：reviewer != submitted_by。
+    keep_images（任务3 留痕模式自动签发=True）：签发后保留 images 存档（留痕的可回溯
+    价值所在）；默认 False 维持 FIND-03a 现状（人工签发路径清空影像控制体积）。"""
     if decision not in {"approved", "rejected"}:
         raise ReviewError("decision 需为 approved 或 rejected")
     if not reviewer:
@@ -241,7 +249,8 @@ def resolve(rid: str, decision: str, reviewer: str, note: str = "") -> dict:
                 i["reviewed_by"] = reviewer
                 i["review_note"] = note
                 i["resolved_at"] = _now()
-                i["images"] = None  # FIND-03a：已处理历史瘦身，影像不再留存
+                if not keep_images:
+                    i["images"] = None  # FIND-03a：人工签发历史瘦身，影像不再留存
                 _save(items)
                 return i
         raise ReviewError("未找到该审核条目")

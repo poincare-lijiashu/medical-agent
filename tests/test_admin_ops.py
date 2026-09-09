@@ -59,7 +59,11 @@ def test_admin_purge_requires_confirm_text(monkeypatch, tmp_path):
 
 
 def test_admin_purge_pending_keeps_history(monkeypatch, tmp_path):
+    """清空 pending 保留历史（人工双控语义）。
+    任务3 注记：显式关闭留痕模式（默认 True 时高危入队即自动签发，无 pending 可清）。"""
+    from backend.config import settings
     _isolated_queue(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     c = _client(monkeypatch)
     doc = _login(c, "doctor01", "Med@2026")
     adm = _login(c, "admin01", "Med@2026")

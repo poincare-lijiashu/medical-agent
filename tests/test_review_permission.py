@@ -232,11 +232,12 @@ def test_self_confirm_rejects_item_without_flag(monkeypatch, tmp_path):
 
 
 def test_config_exposes_full_mode_flag(monkeypatch, tmp_path):
-    """/config 下发 qc_auto_sign_full（前端据此切换审核中心形态）。"""
+    """/config 下发 qc_auto_sign_full（前端据此切换审核中心形态）。
+    任务3：默认值已改 True（留痕模式默认开启）。"""
     c, _ = _client(monkeypatch, tmp_path)
     doc = _login(c, "doctor01", "Med@2026")
     d = c.get("/api/v1/medical/config", headers=_h(doc)).json()
-    assert d["qc_auto_sign_full"] is False
-    monkeypatch.setattr(settings, "qc_auto_sign_full", True)
-    d = c.get("/api/v1/medical/config", headers=_h(doc)).json()
     assert d["qc_auto_sign_full"] is True
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
+    d = c.get("/api/v1/medical/config", headers=_h(doc)).json()
+    assert d["qc_auto_sign_full"] is False

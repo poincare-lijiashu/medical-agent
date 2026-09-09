@@ -36,6 +36,11 @@ def _client(monkeypatch, tmp_path):
 
 
 def test_review_pending_audit_payload_has_n(monkeypatch, tmp_path):
+    """review/pending 审计 payload 带 n（= 当前 pending 条数）。
+    任务3 注记：显式关闭留痕模式以维持「禁忌 → pending」造数语义（默认 True 时
+    高危入队即自动签发、无 pending；留痕审计 auto_sign_full 由 test_full_trace_mode 锁定）。"""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     c, log = _client(monkeypatch, tmp_path)
     tok = _login(c, "doctor01", "Med@2026")
     # 造一条 pending（药物禁忌走纯规则库，无网络）

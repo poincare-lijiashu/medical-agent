@@ -22,6 +22,9 @@ _DEFECT = [{"field": "内涵质量", "issue": "诊断缺乏病史支持", "level
 def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    # 任务3 注记：重提链依赖人工队列状态机（rejected → resubmit），显式关闭留痕模式
+    # （默认已改 True；留痕模式下条目入队即自动签发，无法人工驳回构造重提链）
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     seed_default_users()
     monkeypatch.setattr(qc_mod, "connotation_check", lambda record: list(_DEFECT))
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
