@@ -400,7 +400,7 @@ const AGENTS={
 let cur='literature', curImages=[];
 let CFG={chat:'模型',vl:'多模态模型'};
 let ROLE='doctor';
-const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','qc','review'],
+const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','myconsults','qc','review'],
   pharmacist:['overview','literature','drug','qc','review'],
   admin:['overview','kb','qc','review','data','arch'],
   qc:['overview','literature','drug','qc','review']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任）；E 角色细分：qc（质控员）可见质控工作台+审核中心，admin 既有入口不变，doctor 行为不变 */
@@ -532,6 +532,7 @@ function go(k){
   if(k==='overview'){document.getElementById('scr-home').classList.add('on');loadOverview();}
   else if(k==='kb'){document.getElementById('scr-kb').classList.add('on');loadKb();}
   else if(k==='mdt')document.getElementById('scr-mdt').classList.add('on');
+  else if(k==='myconsults'){document.getElementById('scr-myconsults').classList.add('on');loadMyConsults();}
   else if(k==='qc'){document.getElementById('scr-qc').classList.add('on');loadQcRejections();}  /* 任务2：医生视图「我的质控驳回」卡片 */
   else if(k==='data'){document.getElementById('scr-data').classList.add('on');loadData();}
   else if(k==='arch')document.getElementById('scr-arch').classList.add('on');
@@ -813,6 +814,9 @@ function _rvMatch(p){  /* 任务3：全局档案关键字筛选（agent/问题/�
 function switchReviewTab(t){reviewTab=t;
   document.getElementById('tabPending').className='btn sm '+(t==='pending'?'primary':'ghost');
   document.getElementById('tabHistory').className='btn sm '+(t==='history'?'primary':'ghost');
+  const tc=document.getElementById('tabConsults');  /* 第三栏目高亮与 doctor/pharmacist 同步切换 */
+  if(tc)tc.className='btn sm '+(t==='consults'?'primary':'ghost');
+  if(t==='consults')return loadConsultInbox();  /* 会诊收件箱独立数据源（/consults/inbox），不走 renderReview */
   renderReview();}
 async function loadReview(){
   const b=document.getElementById('reviewBody');renderReviewHeader();
