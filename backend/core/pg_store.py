@@ -12,7 +12,8 @@
   * PG 池为 None/异常/超时 → 直接走 JSON（现状行为完全等价；测试环境无真实 PG 零回归）。
 - mirror_* 合规镜像：PG 不可用→静默 no-op；异常→仅告警，绝不冒泡影响请求。lifespan 建表。
 - migrate_json_to_pg：PG 表空而 JSON 有数据 → 幂等导入（ON CONFLICT DO NOTHING）；
-  lifespan 启动时自动触发，scripts/migrate_json_to_pg.py 可手动触发。
+  PG 非空时对 review_queue 按 id 差集补齐 JSON 独有记录（任务1 数据修复：PG 同步失败
+  窗口内 JSON 积累的记录，重启后自动找回）；lifespan 启动时自动触发，scripts/migrate_json_to_pg.py 可手动触发。
 """
 from __future__ import annotations
 
@@ -115,6 +116,12 @@ async def _init_impl() -> bool:
                 updated_at timestamptz default now())""")
             # B1：review_queue 补全字段（F3 入队影像）
             await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS images jsonb")
+            # 任务1 根修：任务3 全交互留痕的 sources 列旧库平滑升级——旧库缺列会让
+            # review UPSERT（$17::jsonb sources）每次全量同步确定性失败
+            # （UndefinedColumnError: column "sources" does not exist），stale 窗口内
+            # 读回落 JSON，一旦被其它域成功写"洗白"stale，JSON 独有记录即从 PG 真源读
+            # 中"消失"（运行环境实测 imaging 留痕丢失根因，重启后本行自动补列）。
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS sources jsonb")
             # 任务6：质控重提链——resubmit_of=原驳回记录 id、attempt=第 N 次提交、
             # meta=原始（已脱敏）病历留档，供「我的质控驳回」重新提交预填（旧库平滑升级）
             await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS resubmit_of text")
@@ -366,14 +373,18 @@ def _write_json_atomic(path: str, data) -> None:
     os.replace(tmp, path)
 
 
-_repo_pg_stale = False  # repo 层最近一次 PG 全量同步失败标志：置位后读回落 JSON（最新数据），
-                        # 直到下一次成功写清除——防「JSON 已写新、PG 仍旧」窗口内读回滚旧真源
+_repo_pg_stale: set[str] = set()  # 任务1：repo 层 PG 全量同步失败「域」集合（键=文件名）。
+# 置位域的读回落 JSON（最新已落盘数据），直到该域下一次成功写清除——防「JSON 已写新、
+# PG 仍旧」窗口内读回滚旧真源。此前是全局布尔：任何域（users/consults 等）写成功都会
+# 洗白全部域的 stale，导致队列域 PG 同步失败后读切回 PG 旧真源，JSON 独有新提交
+# （imaging ask 留痕）从审核中心"消失"——已改为按域隔离，互不影响。
 
 
 def _pg_or_json(load_fn, json_loader, path: str, default):
-    """repo 读编排：PG 池可用且非 stale → 读 PG（非空即真源）；None/stale/异常/超时/空表
-    → JSON（现状行为；stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。"""
-    if _pool and not _repo_pg_stale:
+    """repo 读编排：PG 池可用且本域非 stale → 读 PG（非空即真源）；None/stale/异常/超时/
+    空表 → JSON（现状行为；stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。"""
+    domain = os.path.basename(path)
+    if _pool and domain not in _repo_pg_stale:
         try:
             data = _run_pg(load_fn())
             if data is not None:
@@ -382,7 +393,9 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
             logger.warning("pg.repo.load_fallback_json", error=str(e)[:120],
                            file=os.path.basename(path))
     else:
-        logger.debug("pg.repo.read_stale_fallback_json", file=os.path.basename(path))
+        # 任务1：stale 读回落从 debug 升级为 warning——这是"数据暂存 JSON 未同步 PG"
+        # 的异常窗口，运维必须可在日志中看到（写失败时已有 save_pg_failed 告警配对）。
+        logger.warning("pg.repo.read_stale_fallback_json", file=domain)
     if json_loader is not None:
         return json_loader()
     return _read_json(path, default)
@@ -390,16 +403,16 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
 
 def _json_then_pg(save_fn, path: str, data) -> None:
     """repo 写编排：JSON 原子写先行（兜底安全，现状行为），PG 可用再全量同步（best-effort：
-    异常仅告警不冒泡，但置 stale 标志——此后读回落 JSON 最新数据，直到下次成功写恢复
-    PG 真源；避免读改写循环用 PG 旧数据覆盖 JSON 中未同步的改动）。"""
+    异常仅告警不冒泡，但置**本域** stale 标志——此后该域读回落 JSON 最新数据，直到该域
+    下次成功写恢复 PG 真源；其它域的 stale 状态不受影响（任务1 域级隔离））。"""
     _write_json_atomic(path, data)
-    global _repo_pg_stale
+    domain = os.path.basename(path)
     if _pool:
         try:
             _run_pg(save_fn(data))
-            _repo_pg_stale = False
+            _repo_pg_stale.discard(domain)
         except Exception as e:  # noqa: BLE001
-            _repo_pg_stale = True
+            _repo_pg_stale.add(domain)
             logger.warning("pg.repo.save_pg_failed", error=str(e)[:120],
                            file=os.path.basename(path))
 
@@ -660,11 +673,25 @@ async def _migrate_impl() -> dict:
         # review_queue
         from backend.core.medical_review import QUEUE_FILE
         items = _read_json(QUEUE_FILE, [])
-        if isinstance(items, list) and items and not await c.fetchval("SELECT count(*) FROM review_queue"):
-            rows = [_review_row(i) for i in items if isinstance(i, dict)]
-            if rows:
-                await c.executemany(_REVIEW_UPSERT, rows)
-                out["review_queue"] = len(rows)
+        if isinstance(items, list) and items:
+            if not await c.fetchval("SELECT count(*) FROM review_queue"):
+                rows = [_review_row(i) for i in items if isinstance(i, dict)]
+                if rows:
+                    await c.executemany(_REVIEW_UPSERT, rows)
+                    out["review_queue"] = len(rows)
+            else:
+                # 任务1 数据修复：repo 写编排 JSON 先行、PG 同步 best-effort，PG 同步失败
+                # 窗口（如旧库缺 sources 列致 UPSERT 确定性失败）内 JSON 会积累 PG 缺失的
+                # 记录。此前仅「表空才导」：重启后内存 stale 集合清空、读切回 PG 旧真源，
+                # 下一次全量同步写（读 PG 子集后追加回写）会把 JSON 独有记录从两个真源
+                # 同时抹掉（运行环境实测 31 条，含 imaging 留痕 rev-8820df1757）。
+                # JSON ⊇ PG 恒成立（JSON 先写且不回滚），按 id 差集只增不覆盖，幂等可重复跑。
+                existing = {r["id"] for r in await c.fetch("SELECT id FROM review_queue")}
+                rows = [_review_row(i) for i in items
+                        if isinstance(i, dict) and i.get("id") and i["id"] not in existing]
+                if rows:
+                    await c.executemany(_REVIEW_UPSERT, rows)
+                    out["review_queue_reconciled"] = len(rows)
         # llm_providers
         from backend.core.llm_config import LLM_CONFIG_FILE
         cfg = _read_json(LLM_CONFIG_FILE, {})

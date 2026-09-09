@@ -119,3 +119,161 @@ def test_normal_pdf_ingests_successfully(monkeypatch, tmp_path):
     assert out["doc_tag"].startswith("up_")
     m = kb_ingest._load_manifest()
     assert out["doc_tag"] in m and m[out["doc_tag"]]["name"] == "病理学要点.pdf"
+
+
+# ---- 任务2：KB 上传异步化（阈值判定 / 后台任务状态流转 / 状态文件 / 路由分流）----
+
+def _mock_embed_and_col(monkeypatch):
+    """mock 向量化与 Milvus 集合：瞬时返回、不触网（后台任务测试共用）。"""
+    monkeypatch.setattr(kb_ingest, "embed_dense_sparse",
+                        lambda chunks, batch_size=32, max_length=256:
+                        ([[0.1, 0.2]] * len(chunks), [None] * len(chunks)))
+    col = type("C", (), {"delete": lambda *a, **k: None,
+                         "insert": lambda *a, **k: None,
+                         "load_collection": lambda *a, **k: None})()
+    monkeypatch.setattr(kb_ingest, "_collection", lambda: col)
+
+
+def _isolate_kb_dirs(monkeypatch, tmp_path):
+    """隔离 manifest/uploads/tasks 目录（绝不触碰真实 data/kb*）。"""
+    monkeypatch.setattr(kb_ingest, "MANIFEST", str(tmp_path / "kb_manifest.json"))
+    monkeypatch.setattr(kb_ingest, "KB_UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(kb_ingest, "KB_TASKS_DIR", str(tmp_path / "tasks"))
+
+
+def _wait_task_done(task_id: str, timeout: float = 5.0) -> dict:
+    """轮询任务状态直至 done/error（后台线程异步完成）。"""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = kb_ingest.read_task(task_id)
+        if st and st.get("status") in ("done", "error"):
+            return st
+        time.sleep(0.02)
+    raise AssertionError("后台任务未在超时内完成")
+
+
+def test_should_ingest_async_threshold(monkeypatch, tmp_path):
+    """阈值判定（可测）：PDF 按页数（>20 页 → 异步）、文本按字符数（>20 万 → 异步）。"""
+    small_md = "医学知识点。" * 100  # ~600 字符
+    assert kb_ingest.should_ingest_async("指南.md", small_md.encode("utf-8")) is False
+    big_md = "医学知识点内容。" * 30_000  # > 20 万字符
+    assert kb_ingest.should_ingest_async("大教材.md", big_md.encode("utf-8")) is True
+    small_pdf = _make_pdf(3, text="正常文字层内容，用于页数阈值判定测试。")
+    assert kb_ingest.should_ingest_async("小册子.pdf", small_pdf) is False
+    monkeypatch.setattr(kb_ingest, "SYNC_MAX_PAGES", 20)
+    big_pdf = _make_pdf(21, text="第x页文字层。")
+    assert kb_ingest.should_ingest_async("大教材.pdf", big_pdf) is True
+
+
+def test_read_task_rejects_invalid_or_missing_id(monkeypatch, tmp_path):
+    """状态读取：非法 task_id（路径穿越/乱格式）与不存在 id → None（端点转 404）。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    assert kb_ingest.read_task("../../secrets") is None
+    assert kb_ingest.read_task("kbt-zzzz") is None
+    assert kb_ingest.read_task("kbt-0123456789ab") is None  # 格式合法但文件不存在
+    assert kb_ingest.read_task("") is None
+
+
+def test_async_task_full_lifecycle_state_flow(monkeypatch, tmp_path):
+    """大文件异步任务状态流转：processing(0/total) → 分批进度 → done + manifest 登记；
+    embed 分批回调推进度（mock 快速返回，真实链路同构）。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    _mock_embed_and_col(monkeypatch)
+    monkeypatch.setattr(kb_ingest, "SYNC_MAX_CHARS", 10)  # 强制走异步阈值
+    raw = ("病理学是研究疾病的病因、发病机制与转归的基础医学学科。" * 50).encode("utf-8")
+    task_id = kb_ingest.start_ingest_task("病理学要点.md", raw)
+    assert task_id.startswith("kbt-")
+    st0 = kb_ingest.read_task(task_id)
+    assert st0 is not None and st0["status"] in ("processing", "done")  # 起点状态文件已落盘
+    st = _wait_task_done(task_id)
+    assert st["status"] == "done"
+    assert st["result"]["inserted"] == st["result"]["chunks"] >= 1
+    assert st["progress"] == st["total"] >= 1
+    m = kb_ingest._load_manifest()
+    assert st["result"]["doc_tag"] in m and m[st["result"]["doc_tag"]]["name"] == "病理学要点.md"
+
+
+def test_async_task_error_state_carries_reason(monkeypatch, tmp_path):
+    """后台任务失败 → status=error 且 error 携带原因（前端轮询可见，绝不静默）。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(kb_ingest, "embed_dense_sparse",
+                        lambda chunks, batch_size=32, max_length=256:
+                        (_ for _ in ()).throw(RuntimeError("模型显存不足")))
+    raw = "这是一段足够长会被切分的医学文本内容，用于触发向量化失败路径的测试。" * 20
+    task_id = kb_ingest.start_ingest_task("失败用例.md", raw.encode("utf-8"))
+    st = _wait_task_done(task_id)
+    assert st["status"] == "error"
+    assert "显存不足" in (st["error"] or "")
+
+
+def test_async_scan_pdf_error_state(monkeypatch, tmp_path):
+    """扫描版 PDF 走异步任务：error 原因与同步路径同文案（明确提示需 OCR）。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    _mock_embed_and_col(monkeypatch)
+    raw = _make_pdf(25, text="")  # >20 页且无文本层
+    task_id = kb_ingest.start_ingest_task("扫描大书.pdf", raw)
+    st = _wait_task_done(task_id)
+    assert st["status"] == "error"
+    assert "扫描版PDF需OCR" in (st["error"] or "")
+
+
+def test_kb_upload_route_async_and_status_endpoint(monkeypatch, tmp_path):
+    """路由分流：大文件 POST 立即返回 task_id（mode=async，不等待向量化）；状态端点
+    可查询直至 done；非法 task_id → 404；doctor 无权限（admin 门禁）。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    _mock_embed_and_col(monkeypatch)
+    monkeypatch.setattr(kb_ingest, "SYNC_MAX_CHARS", 10)  # 任意文本都走异步
+    seed_default_users()
+    c = TestClient(app)
+    dtok = c.post("/api/v1/auth/login", json={"username": "doctor01", "password": "Med@2026"}).json()["access_token"]
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}).json()["access_token"]
+    big = ("医学内容。" * 5000).encode("utf-8")
+    import base64 as b64
+    r = c.post("/api/v1/medical/admin/kb/upload",
+               json={"name": "大教材.md", "data_b64": b64.b64encode(big).decode()},
+               headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["mode"] == "async" and d["task_id"].startswith("kbt-")
+    st = _wait_task_done(d["task_id"])
+    assert st["status"] == "done"
+    r2 = c.get(f"/api/v1/medical/admin/kb/upload/status/{d['task_id']}",
+               headers={"Authorization": "Bearer " + atok})
+    assert r2.status_code == 200 and r2.json()["status"] == "done"
+    assert c.get("/api/v1/medical/admin/kb/upload/status/kbt-bad-id",
+                 headers={"Authorization": "Bearer " + atok}).status_code == 404
+    assert c.get(f"/api/v1/medical/admin/kb/upload/status/{d['task_id']}",
+                 headers={"Authorization": "Bearer " + dtok}).status_code == 403
+
+
+def test_kb_upload_route_small_file_stays_sync(monkeypatch, tmp_path):
+    """小文件同步模式保留：POST 直接返回摄取结果（mode=sync），不产生任务文件。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    _mock_embed_and_col(monkeypatch)
+    seed_default_users()
+    c = TestClient(app)
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}).json()["access_token"]
+    import base64 as b64
+    small = ("青霉素类抗生素主要用于敏感菌所致的感染，用药前需详细询问过敏史。"
+             "青霉素皮试阳性者禁用该类药物。").encode("utf-8")
+    r = c.post("/api/v1/medical/admin/kb/upload",
+               json={"name": "用药要点.md", "data_b64": b64.b64encode(small).decode()},
+               headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["mode"] == "sync" and d["inserted"] >= 1 and "task_id" not in d
+
+
+def test_kb_upload_route_rejects_unsupported_type(monkeypatch, tmp_path):
+    """类型校验前置：非法扩展名（如 .jpg）在同步/异步分流之前 400 拒绝。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    seed_default_users()
+    c = TestClient(app)
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}).json()["access_token"]
+    import base64 as b64
+    r = c.post("/api/v1/medical/admin/kb/upload",
+               json={"name": "例图.jpg", "data_b64": b64.b64encode(b"\xff\xd8fake").decode()},
+               headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 400
+    assert "不支持的文件类型" in r.json()["detail"]

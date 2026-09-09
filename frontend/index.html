@@ -47,6 +47,8 @@
   .nav:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .nav.active{background:var(--panel);color:var(--ink);font-weight:500;box-shadow:inset 0 0 0 1px var(--line-strong)}
   .nav .tag{margin-left:auto;font-size:11px;min-width:18px;text-align:center;padding:0 6px;border-radius:999px;background:var(--warn-soft);color:var(--warn);font-weight:600}
+  .nav .tag+.tag{margin-left:6px}  /* 任务6：双徽标（黄+红）并排时间距 */
+  .nav .tag.red{background:var(--danger-soft);color:var(--danger)}  /* 任务6：红=待我意见的会诊数 */
   /* main */
   main{overflow:hidden;display:flex;flex-direction:column;min-width:0;min-height:0}
   .screen{flex:1;display:none;flex-direction:column;min-height:0}
@@ -513,8 +515,16 @@ function renderRail(){
     if(it.g){pendingGroup=it.g;continue;}
     if(!allow.includes(it.k))continue;
     if(pendingGroup!==null){html+=`<div class="grp">${pendingGroup}</div>`;pendingGroup=null;}
-    const act=(cur===it.k)?'active':'';const n=(it.k==='review')?reviewCount:0;
-    const badge=n?`<span class="tag num">${n}</span>`:'';
+    const act=(cur===it.k)?'active':'';
+    let badge='';
+    if(it.k==='review'){
+      /* 任务6：侧边栏审核中心彩色数字徽标——黄=我的待确认数（doctor/pharmacist；
+         qc/admin=待核对数），红=待我意见的会诊数。进入审核中心/提交意见/知情确认后
+         由 renderRail 刷新（updateConsultBadge 亦触发）。 */
+      if(ROLE==='qc'||ROLE==='admin'){if(reviewCount)badge='<span class="tag num" title="待核对">'+reviewCount+'</span>';}
+      else{const cf=(myConfirmItems||[]).length;
+        if(cf)badge+='<span class="tag num" title="我的待确认">'+cf+'</span>';
+        if(consultPendingOps)badge+='<span class="tag red num" title="待我意见的会诊">'+consultPendingOps+'</span>';}}
     html+=`<button class="nav ${act}" data-k="${it.k}" onclick="go('${it.k}')">${ICON[it.k]}<span>${it.t}</span>${badge}</button>`;
   }
   document.getElementById('rail').innerHTML=html;
@@ -700,14 +710,17 @@ function renderMdt(d){
 
 /* ---- 跨科室会诊：收件箱（审核中心第三栏目）+ 我的会诊（发起者视角） ----
    全部动态内容（含各科医生意见文本）一律 esc() 转义后入 HTML。 */
-let consultInbox=[], consultMe='';
-/* 任务4：审核中心「其它科室会诊协助」tab 未读徽标 = 待我意见的 consult 数 + 我的待确认数。
-   进入审核中心（loadReviewMine）/ 收件箱刷新（loadConsultInbox）/ 新会诊发起与提交意见后刷新。 */
+let consultInbox=[], consultMe='', consultPendingOps=0;
+/* 任务6 徽标口径修正：「其它科室会诊协助」tab 徽标 = 待我（本科室）意见的 consult 数——
+   不再叠加「我的待确认」数（此前两者相加被误读为全部会诊数；待确认数归侧边栏黄色徽标）。
+   科室一票口径：本科室任一医生已提交意见即不计入（add_opinion 会以「该科室已完成意见」拒绝）。
+   进入审核中心（loadReviewMine）/ 收件箱刷新（loadConsultInbox）/ 新会诊发起与提交意见后刷新，
+   并同步刷新侧边栏彩色徽标（renderRail）。 */
 function updateConsultBadge(){
   const tc=document.getElementById('tabConsults');if(!tc)return;
-  const pendingOps=(consultInbox||[]).filter(c=>!(c.opinions||[]).some(o=>o.doctor===consultMe)).length;
-  const n=pendingOps+((myConfirmItems||[]).length);
-  tc.innerHTML='其它科室会诊协助'+(n?' <span class="tag num">'+n+'</span>':'');
+  consultPendingOps=(consultInbox||[]).filter(c=>!(c.opinions||[]).some(o=>o.dept===ME_DEPT)).length;
+  tc.innerHTML='其它科室会诊协助'+(consultPendingOps?' <span class="tag num">'+consultPendingOps+'</span>':'');
+  renderRail();
 }
 async function refreshConsultBadge(){
   if(ROLE==='qc'||ROLE==='admin')return;  /* qc/admin 无该 tab（全局档案视图） */
@@ -740,11 +753,10 @@ function renderConsultInbox(){
       +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">跨科室会诊协助</h3>'
       +'<span class="chip warn"><span class="dot"></span>进行中</span>'
       +'<span class="src num" style="margin-left:auto">发起人 '+esc(c.initiator||'—')+'（'+esc(c.initiator_dept||'—')+'） · '+fmtTs(c.created_at)+'</span></div>'
-      +'<div class="txt" style="margin-top:6px;white-space:pre-wrap">'+esc(c.question||'')+'</div>'
       +'<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="src">受邀科室：</span>'+depts+'</div>'
+      /* 任务5：三段式详情复用（不出医生意见段——意见由下方表单呈现；question 内嵌的 AI 底稿不再重复展示） */
+      +consultDetailBlocks(c,{ops:false})
       +imgsHtml
-      +'<details style="margin-top:8px"><summary class="src" style="cursor:pointer">AI 定向初步意见 ▾</summary>'
-      +'<div class="txt md" style="margin-top:6px">'+md(c.ai_analysis||'（无）')+'</div></details>'
       +opForm+'</div>';}).join('');}
 async function submitOpinion(id){
   const el=document.getElementById('cop_'+id);const content=el?el.value.trim():'';
@@ -765,6 +777,45 @@ async function loadMyConsults(){
     if(r.status===401){logout();return;}
     myConsultData=await r.json();renderMyConsults();
   }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+/* 任务5：会诊详情信息架构重组（渐进折叠，同一内容只展示一遍）——
+   此前「我的会诊」卡片同一 AI 内容出现 3 遍（question 内嵌的【AI 多智能体会诊底稿】/
+   AI 初步意见/结束后的会诊汇总），现重组为三段：
+   📌 摘要（病例原文 + AI 会诊小结/共识/分歧/建议，默认展开）→
+   🔬 各专科 AI 意见（ai_analysis 按【科室】拆分，整段默认折叠、单科独立展开）→
+   👨‍⚕️ 各科室医生意见（并排署名）。会诊汇总与其组成内容重复，常规路径不再重复渲染。 */
+function splitConsultQuestion(q){  /* 拆出病例原文与 AI 底稿（startRealConsult 的拼接格式） */
+  const s=String(q||'');const mk='【AI 多智能体会诊底稿】';const i=s.indexOf(mk);
+  return i>=0?{case:s.slice(0,i).trim(),draft:s.slice(i+mk.length).trim()}:{case:s.trim(),draft:''};}
+function splitAiByDept(s){  /* ai_analysis（「【科室】意见」以空行连接）按科室拆分；无【科室】前缀 → 单块兜底 */
+  const t=String(s||'');const out=[];const re=/【([^】]{1,30})】/g;let m,dept=null,li=0;
+  while((m=re.exec(t))){if(dept!==null)out.push({dept,text:t.slice(li,m.index).trim()});dept=m[1];li=m.index+m[0].length;}
+  if(dept!==null)out.push({dept,text:t.slice(li).trim()});
+  return out.length?out:(t.trim()?[{dept:'',text:t.trim()}]:[]);}
+/* opts.ops=false 时不出「医生意见」段（收件箱视图：意见以表单呈现，避免与表单语义混淆） */
+function consultDetailBlocks(c,opts){
+  const withOps=!(opts&&opts.ops===false);
+  const sq=splitConsultQuestion(c.question);
+  /* 📌 摘要（默认展开）：病例原文 + AI 底稿单遍展示；
+     兜底：无底稿、已结束且无 ai_analysis 时展示会诊汇总（防信息丢失） */
+  let sumHtml='';
+  if(sq.draft)sumHtml='<h4 style="margin:10px 0 4px">📌 AI 会诊小结（共识 · 分歧 · 建议）</h4>'
+    +'<div class="txt md">'+md(sq.draft)+'</div>';
+  else if(c.status==='closed'&&!String(c.ai_analysis||'').trim()&&c.summary)
+    sumHtml='<h4 style="margin:10px 0 4px">📌 会诊汇总</h4><div class="txt md">'+md(c.summary)+'</div>';
+  const abstract='<h4 style="margin:0 0 4px">📌 摘要（病例/会诊问题）</h4>'
+    +'<div class="txt" style="white-space:pre-wrap">'+esc(sq.case||'（无）')+'</div>'+sumHtml;
+  /* 🔬 各专科 AI 意见：整段默认折叠，单科独立展开（summary 含科室名便于扫读） */
+  const ais=splitAiByDept(c.ai_analysis);
+  const aiSec=ais.length?'<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">🔬 各专科 AI 意见（'+ais.length+' 科）<span class="src"> 默认折叠 · 点击展开</span></summary>'
+    +'<div style="margin-top:8px">'+ais.map(a=>'<details class="card" style="padding:0;margin-bottom:8px"><summary style="display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;list-style:none"><b>'+esc(a.dept||'AI 意见')+'</b><span class="ar" style="margin-left:auto;color:var(--ink-3)">▾</span></summary><div class="txt md" style="padding:0 14px 12px">'+md(a.text)+'</div></details>').join('')+'</div></details>':'';
+  /* 👨‍⚕️ 各科室医生意见：并排署名（grid2 卡片：科室 chip + 医生 + 时间 + 内容） */
+  const ops=(c.opinions||[]);
+  const opsSec=withOps?'<h4 style="margin:12px 0 6px">👨‍⚕️ 各科室医生意见（并排署名 · 仅建议权）</h4>'
+    +(ops.length?'<div class="grid2">'+ops.map(o=>'<div class="card" style="box-shadow:none">'
+      +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip mid"><span class="dot"></span>'+esc(o.dept||'—')+'</span><b>'+esc(o.doctor||'')+'</b><span class="src num" style="margin-left:auto">'+fmtTs(o.ts)+'</span></div>'
+      +'<div class="txt" style="margin-top:6px;white-space:pre-wrap">'+esc(o.content||'')+'</div></div>').join('')+'</div>'
+      :'<div class="src">尚未收到科室医生意见。</div>'):'';
+  return '<div style="margin-top:8px">'+abstract+'</div>'+aiSec+opsSec;}
 function renderMyConsults(){
   const b=document.getElementById('myConsultsBody');
   const ini=(myConsultData&&myConsultData.initiated)||[];
@@ -773,25 +824,16 @@ function renderMyConsults(){
     +'<div class="lead" style="margin:8px auto 0">在「多智能体会诊」页填写病例后，可一键「发起真实跨科室会诊」分发给目标科室医生。</div></div>';return;}
   const cards=ini.map(c=>{
     const open=c.status==='open';
-    const ops=(c.opinions||[]).map(o=>'<div style="padding:8px 0;border-top:1px solid var(--line)">'
-      +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-      +'<span class="chip mid"><span class="dot"></span>'+esc(o.dept||'—')+'</span>'
-      +'<b>'+esc(o.doctor||'')+'</b><span class="src num">'+fmtTs(o.ts)+'</span></div>'
-      +'<div class="txt" style="margin-top:4px;white-space:pre-wrap">'+esc(o.content||'')+'</div></div>').join('')
-      ||'<div class="src" style="padding:6px 0">尚未收到科室医生意见。</div>';
     const closeBtn=open?'<div style="margin-top:10px"><button class="btn sm primary" onclick="closeConsult(\''+esc(c.id)+'\')">结束会诊并汇总</button></div>':'';
-    const sum=c.summary?'<details style="margin-top:8px" open><summary class="src" style="cursor:pointer">会诊汇总（AI 意见 + 各科意见并排署名）▾</summary>'
-      +'<div class="txt md" style="margin-top:6px">'+md(c.summary)+'</div></details>':'';
+    /* 任务5：三段式详情（📌摘要默认展开 → 🔬各专科 AI 意见默认折叠 → 👨‍⚕️医生意见并排署名）；
+       question 内嵌 AI 底稿/AI 初步意见/会诊汇总不再重复展示（会诊汇总内容已由三段覆盖） */
     return '<div class="card">'
       +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">会诊 '+esc(c.id)+'</h3>'
       +(open?'<span class="chip warn"><span class="dot"></span>进行中</span>':'<span class="chip ok"><span class="dot"></span>已结束</span>')
       +'<span class="src num" style="margin-left:auto">发起于 '+fmtTs(c.created_at)+'</span></div>'
-      +'<div class="txt" style="margin-top:6px;white-space:pre-wrap">'+esc(c.question||'')+'</div>'
       +'<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="src">受邀科室：</span>'
       +(c.target_depts||[]).map(d=>'<span class="chip mid"><span class="dot"></span>'+esc(d)+'</span>').join('')+'</div>'
-      +'<details style="margin-top:8px"'+(open?'':' open')+'><summary class="src" style="cursor:pointer">AI 初步意见（按科室定向）▾</summary>'
-      +'<div class="txt md" style="margin-top:6px">'+md(c.ai_analysis||'（无）')+'</div></details>'
-      +'<h4 style="margin:10px 0 2px">各科室医生意见（并排署名 · 仅建议权）</h4>'+ops+closeBtn+sum
+      +consultDetailBlocks(c)+closeBtn
       +'</div>';}).join('');
   const partHtml=part.length?'<div class="panel" style="margin-top:4px"><h3>我参与过的会诊（作为受邀科室填写过意见）</h3><ul class="feed">'
     +part.map(c=>'<li><span class="t num">'+fmtTs(c.created_at)+'</span><span class="e">'+esc(String(c.question||'').slice(0,60))+'</span>'
@@ -1179,13 +1221,33 @@ function renderKbList(){
 async function loadKb(){const el=document.getElementById('kbList');if(!el)return;el.innerHTML='<div class="sk" style="height:16px"></div>';
   try{kbData=await apiGet('/admin/kb');renderKbList();}
   catch(e){el.innerHTML='<div class="src">⚠ 加载失败（需管理员权限）</div>';}}
+/* 任务2：大文件后台上传任务轮询（2s 间隔）：progress 条/完成/失败原因。
+   返回 true=成功（继续后续文件/刷新列表）。状态查询偶发失败不终止轮询（下轮重试）。 */
+async function pollKbTask(taskId,label,msg){
+  const bar=p=>`<div style="margin:4px 0 2px;height:6px;border-radius:4px;background:var(--rail);overflow:hidden;max-width:320px"><div style="height:100%;width:${p}%;background:var(--accent);transition:width .4s"></div></div>`;
+  for(let i=0;i<600;i++){  // 上限 20 分钟：真实兜底，正常由 done/error 出循环
+    await new Promise(r=>setTimeout(r,2000));
+    let st;try{st=await apiGet('/admin/kb/upload/status/'+encodeURIComponent(taskId));}
+    catch(e){msg.textContent=label+' 状态查询失败，重试中…';continue;}
+    if(!st){msg.textContent=label+' 任务不存在';return false;}
+    if(st.status==='done'){msg.innerHTML=esc(label)+' → 入库 <b class="num">'+((st.result&&st.result.inserted)||st.total||0)+'</b> 片';return true;}
+    if(st.status==='error'){msg.textContent=label+' 失败：'+(st.error||'未知原因');return false;}
+    const total=st.total||0,prog=st.progress||0;
+    const p=total?Math.min(100,Math.round(prog/total*100)):0;
+    msg.innerHTML=esc(label)+' 向量化中 <span class="num">'+prog+' / '+(total||'…')+'</span> 片'+(total?bar(p):' …');
+  }
+  msg.textContent=label+' 超时（20 分钟未完成），请稍后在文档列表确认';return false;}
 async function uploadKb(){const fs=document.getElementById('kbFile').files;if(!fs.length){toast('请选择文件');return;}const msg=document.getElementById('kbMsg');const btn=document.getElementById('kbUp');btn.disabled=true;
-  for(const f of fs){msg.textContent='处理中：'+f.name+' …';
+  let okAny=false;
+  for(const f of fs){const label=f.name;msg.textContent='处理中：'+f.name+' …';
     if(!/\.(md|txt|pdf)$/i.test(f.name)){msg.textContent=f.name+' 不支持（仅 .md/.txt/.pdf）';continue;}
     try{const b=await readB64(f);const r=await fetch('/api/v1/medical/admin/kb/upload',{method:'POST',headers:auth(),body:JSON.stringify({name:f.name,data_b64:b})});const d=await r.json();
-      if(!r.ok){msg.textContent=f.name+' 失败：'+(d.detail||r.status);continue;}msg.textContent=`${f.name} → 入库 ${d.inserted} 片`;}
+      if(!r.ok){msg.textContent=f.name+' 失败：'+(d.detail||r.status);continue;}
+      /* 任务2：大文件返回 task_id → 轮询状态直至完成；小文件同步返回结果（现状不变） */
+      if(d.mode==='async'&&d.task_id){if(await pollKbTask(d.task_id,f.name+'（大文件，后台向量化）',msg))okAny=true;}
+      else{msg.textContent=`${f.name} → 入库 ${d.inserted} 片`;okAny=true;}}
     catch(e){msg.textContent='失败：'+f.name;}}
-  document.getElementById('kbFile').value='';btn.disabled=false;loadKb();}
+  document.getElementById('kbFile').value='';btn.disabled=false;if(okAny)loadKb();}
 async function previewKb(tag){
   document.getElementById('mTitle').textContent='切片预览 · '+tag;
   document.getElementById('mBody').innerHTML='<div class="sk" style="height:16px"></div>';
@@ -1271,6 +1333,16 @@ async function purgePending(){
 const AUDIT_PAGE_SIZE = 50;
 let auditOffset = 0;
 let auditItemsCache = [];
+/* 任务4：审计流区块默认收起（标题「审计流（N 条）▸」点击展开）——右侧「新增用户」等
+   操作卡片无需滚动即可见；展开后列表限高滚动（max-height+overflow）。
+   auditPanelOpen 为模块级状态：翻页/搜索触发 loadData 重渲染后保持已展开状态不回缩。 */
+let auditPanelOpen = false;
+function toggleAuditPanel(){
+  auditPanelOpen=!auditPanelOpen;
+  const b=document.getElementById('auditPanelBody');if(b)b.style.display=auditPanelOpen?'':'none';
+  const a=document.getElementById('auditArrow');if(a)a.textContent=auditPanelOpen?'▾':'▸';
+  const h=document.getElementById('auditHead');if(h)h.setAttribute('aria-expanded',auditPanelOpen?'true':'false');
+}
 /* event_type+action → 中文描述模板：payload 有什么展示什么，缺省只显示动作；
    未映射的兜底显示 event_type+payload 摘要（原始 JSON 仍在折叠区，排障用）。
    返回纯文本，调用处必须经 esc() 转义后再入 HTML。 */
@@ -1414,14 +1486,17 @@ async function loadData(){
     </div>`).join('');
   b.innerHTML=`<div class="stats">${stats}</div>
     <div class="dash">
-      <div class="panel"><h3>审计流（共 ${esc(String(d.events_total??auditItems.length))} 条 · 第 ${Math.floor(auditOffset/AUDIT_PAGE_SIZE)+1} 页 · 每页 ${AUDIT_PAGE_SIZE} 条 · 点开看原始 JSON）</h3>
+      <div class="panel"><h3 id="auditHead" role="button" tabindex="0" aria-expanded="${auditPanelOpen?'true':'false'}" style="cursor:pointer;user-select:none" onclick="toggleAuditPanel()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleAuditPanel();}" title="点击展开/收起审计流">审计流（共 ${esc(String(d.events_total??auditItems.length))} 条）<span id="auditArrow">${auditPanelOpen?'▾':'▸'}</span> <span style="font-weight:400">第 ${Math.floor(auditOffset/AUDIT_PAGE_SIZE)+1} 页 · 每页 ${AUDIT_PAGE_SIZE} 条 · 点开看原始 JSON</span></h3>
+        <div id="auditPanelBody" style="display:${auditPanelOpen?'':'none'}">
         <div style="padding:8px 16px 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input class="inp" id="auditSearch" aria-label="搜索审计事件" placeholder="搜索 事件/操作/用户（如 drug / purge_pending / doctor01，本页内过滤）" style="flex:1;min-width:180px" oninput="filterAudit(this.value)">
           <button class="btn sm secondary" ${auditOffset>0?'':'disabled'} onclick="auditPage(-1)">上一页</button>
           <button class="btn sm secondary" ${auditItems.length>=AUDIT_PAGE_SIZE?'':'disabled'} onclick="auditPage(1)">下一页</button>
           <button class="btn sm secondary" onclick="exportAuditCsv()">导出审计 CSV</button>
         </div>
-        <ul class="feed" id="auditList">${audit}</ul></div>
+        <!-- 任务4：展开后限高滚动（max-height+overflow），不再把整页撑长 -->
+        <ul class="feed" id="auditList" style="max-height:420px;overflow:auto">${audit}</ul>
+        </div></div>
       <div style="display:flex;flex-direction:column;gap:16px">
         <div class="panel"><h3>新增用户</h3>
           <div class="qgrid" style="padding:12px 16px">

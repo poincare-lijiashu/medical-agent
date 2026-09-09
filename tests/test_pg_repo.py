@@ -66,6 +66,9 @@ class FakeConn:
                     for row in (self.db["review_queue"][k] for k in
                                 sorted(self.db["review_queue"],
                                        key=lambda k: (self.db["review_queue"][k]["ts"], k)))]
+        if s.startswith("SELECT id FROM review_queue"):
+            # 任务1：迁移差集补齐用（只取 id 集合）
+            return [{"id": k} for k in self.db["review_queue"]]
         if s.startswith("SELECT data FROM consults"):
             return [{"data": json.dumps(self.db["consults"][k], ensure_ascii=False)}
                     for k in sorted(self.db["consults"])]
@@ -135,6 +138,8 @@ class FakeConn:
                 item["resubmit_of"] = r[13]
                 item["attempt"] = r[14]
                 item["meta"] = json.loads(r[15]) if r[15] else None
+                # 任务3/任务1：sources 列（任务3 全交互留痕溯源）随 UPSERT 往返
+                item["sources"] = json.loads(r[16]) if r[16] else None
                 self.db["review_queue"][item["id"]] = item
             return
         if s.startswith("INSERT INTO consults"):
@@ -170,13 +175,14 @@ def _db() -> dict:
 
 @pytest.fixture()
 def fake_pg(monkeypatch):
-    """注入假池；测试结束由 monkeypatch 还原 _pool=None（JSON 模式）。"""
+    """注入假池；测试结束由 monkeypatch 还原 _pool=None（JSON 模式）。
+    任务1：stale 标志升级为「域集合」（键=文件名），复位即清空集合。"""
     db = _db()
     pool = FakePool(db)
     monkeypatch.setattr(pg_store, "_pool", pool)
-    monkeypatch.setattr(pg_store, "_repo_pg_stale", False)  # stale 标志显式复位
+    monkeypatch.setattr(pg_store, "_repo_pg_stale", set())  # 域级 stale 集合显式复位
     yield db
-    pg_store._repo_pg_stale = False  # 防 monkeypatch teardown 恢复到上一测试的脏值
+    pg_store._repo_pg_stale.clear()  # 防 monkeypatch teardown 恢复到上一测试的脏值
 
 
 # ---------- 增量排查（生产化后）修复回归 ----------
@@ -326,6 +332,78 @@ def test_queue_pg_roundtrip_with_images(fake_pg, tmp_path):
     assert [i["id"] for i in loaded] == ["rev-1", "rev-2"]  # ts+id 排序还原追加顺序
     assert loaded[0]["images"] == ["data:image/jpeg;base64,AAAA"]
     assert loaded[1]["images"] is None
+
+
+# ---------- 任务1：影像留痕"消失"根因回归（域级 stale 隔离 + sources 列往返） ----------
+
+def test_queue_pg_save_failure_isolated_from_other_domains(fake_pg, tmp_path, monkeypatch):
+    """任务1 回归：review 队列 PG 同步失败（JSON 已落盘）→ 队列读必须回落 JSON（数据不丢）；
+    **其它域（users）写成功不得洗白队列域的 stale 标志**——旧实现全局共享一个布尔标志，
+    任何其它域写成功都会让队列读切回 PG 旧真源，JSON 独有的新提交（如 imaging ask 留痕）
+    在审核中心"消失"（运行环境 2026-09-09 实测：queue.json 142 条 vs PG 117 条，
+    imaging rev-8820df1757 即此机制丢失）。队列 PG 恢复后下一次写全量同步成功、读恢复 PG 真源。"""
+    q_file = tmp_path / "queue.json"
+    monkeypatch.setattr(review, "QUEUE_FILE", str(q_file))
+    fake_pg["fail"] = RuntimeError("pg down")
+    rid = review.submit(agent="imaging", question="q", answer="a", confidence=0.6,
+                        risk_reason="影像可疑高危征象", submitted_by="doctor01",
+                        sources=["VL:test-model"])
+    fake_pg["fail"] = None
+    # ① 队列域 PG 写失败窗口内：读回落 JSON，新记录不丢
+    assert [i["id"] for i in review._load()] == [rid]
+    # ② 其它域（users）写成功：不得影响队列域 stale（旧全局标志下此处读会切回 PG 旧真源）
+    u_file = tmp_path / "users.json"
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(u_file))
+    auth_mod._save_users({"doc": {"role": "doctor", "dept": "内科", "password_hash": "p"}})
+    assert set(fake_pg["users"]) == {"doc"}  # users 域自身同步成功
+    assert [i["id"] for i in review._load()] == [rid], \
+        "其它域写成功不得让队列读切回 PG 旧真源（记录消失根因）"
+    # ③ 队列 PG 恢复：下一次写全量同步成功 → PG 真源含该记录，读恢复 PG
+    review.submit(agent="imaging", question="q2", answer="a2", confidence=0.6,
+                  risk_reason="r", submitted_by="doctor01")
+    assert rid in fake_pg["review_queue"]
+    assert len(review._load()) == 2
+
+
+def test_queue_pg_roundtrip_sources_column(fake_pg, tmp_path):
+    """任务1/任务3：sources（全交互留痕溯源）随 PG UPSERT 往返不丢。
+    运行环境旧库缺 sources 列曾致每次全量同步确定性失败（UndefinedColumnError），
+    本测试锁定 sources 的 PG 往返语义（列升级见 pg_store._init_impl）。"""
+    items = [{"id": "rev-s1", "ts": "2026-01-01T00:00:00+00:00", "agent": "imaging",
+              "question": "q", "answer": "a", "confidence": 0.6, "risk_reason": "r",
+              "status": "pending", "submitted_by": "doctor01", "reviewed_by": None,
+              "review_note": None, "resolved_at": None, "images": None,
+              "sources": ["VL:qwen-vl-max", "KB:PMID123"]}]
+    pg_store.save_queue(items, str(tmp_path / "queue.json"))
+    loaded = pg_store.load_queue(str(tmp_path / "queue.json"))
+    assert loaded[0]["sources"] == ["VL:qwen-vl-max", "KB:PMID123"]
+
+
+def test_migrate_reconciles_json_only_review_rows_into_nonempty_pg(fake_pg, tmp_path, monkeypatch):
+    """任务1 数据修复：PG 非空但 JSON 积累了 PG 缺失的记录（PG 同步失败窗口产物，
+    运行环境实测 31 条、含 imaging 留痕 rev-8820df1757）→ 启动迁移按 id 差集补齐。
+    此前仅在「PG 表空」才导入：重启后读切回 PG 旧真源（内存 stale 集合已清），
+    下一次全量同步写（读 PG 子集后追加回写）会把 JSON 独有记录从两个真源同时抹掉。
+    JSON ⊇ PG 恒成立（JSON 先写且不回滚），补齐只增不覆盖，幂等可重复跑。"""
+    q_file = tmp_path / "queue.json"
+    keep = {"id": "rev-pg-already", "ts": "2026-01-01T00:00:00+00:00", "agent": "drug",
+            "question": "q", "answer": "a", "confidence": 0.9, "risk_reason": "r",
+            "status": "approved", "submitted_by": "doctor01", "reviewed_by": "admin01",
+            "review_note": None, "resolved_at": "2026-01-01T01:00:00+00:00", "images": None}
+    lost = {"id": "rev-8820df1757", "ts": "2026-09-09T07:38:51.612112+00:00", "agent": "imaging",
+            "question": "看看", "answer": "所见如上", "confidence": 0.4,
+            "risk_reason": "影像可疑高危征象", "status": "pending", "submitted_by": "doctor01",
+            "reviewed_by": None, "review_note": None, "resolved_at": None, "images": None,
+            "sources": ["VL:qwen-vl-max"]}
+    q_file.write_text(json.dumps([keep, lost]), encoding="utf-8")
+    monkeypatch.setattr(review, "QUEUE_FILE", str(q_file))
+    fake_pg["review_queue"] = {keep["id"]: {**keep}}  # PG 旧真源子集（非空表）
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("review_queue_reconciled") == 1
+    assert fake_pg["review_queue"]["rev-8820df1757"]["sources"] == ["VL:qwen-vl-max"]
+    # 幂等：再次迁移不重复补齐（表空全量导入路径计数键不同，互不干扰）
+    assert not asyncio.run(pg_store.migrate_json_to_pg()).get("review_queue_reconciled")
+    assert set(fake_pg["review_queue"]) == {keep["id"], lost["id"]}
 
 
 def test_llm_pg_roundtrip_order_and_active(fake_pg, tmp_path):
