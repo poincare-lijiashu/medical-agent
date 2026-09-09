@@ -277,3 +277,40 @@ def test_kb_upload_route_rejects_unsupported_type(monkeypatch, tmp_path):
                headers={"Authorization": "Bearer " + atok})
     assert r.status_code == 400
     assert "不支持的文件类型" in r.json()["detail"]
+
+
+# ---------- 本批次任务5：上传后列表/向量总数刷新链路回归锁 ----------
+
+def test_uploaded_doc_appears_in_kb_list_after_ingest(monkeypatch, tmp_path):
+    """任务5 回归锁：在线上传（同步路径）成功后，GET /admin/kb 立即可见该文档
+    （manifest 来源，kind=uploaded），uploaded 计数与向量总数（doc_count）同步反映——
+    前端 uploadKb 成功/轮询 done 后 loadKb() 重拉该端点即刷新列表与「向量总数」。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    _mock_embed_and_col(monkeypatch)
+    seed_default_users()
+    c = TestClient(app)
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}).json()["access_token"]
+    import base64 as b64
+    small = ("糖尿病饮食管理的核心是控制总热量与碳水分配，"
+             "建议定时定量进餐并配合血糖监测。").encode("utf-8")
+    r = c.post("/api/v1/medical/admin/kb/upload",
+               json={"name": "糖尿病管理要点.md", "data_b64": b64.b64encode(small).decode()},
+               headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 200 and r.json()["mode"] == "sync"
+    # 上传后立即拉列表（前端 loadKb 的同一数据源）：文档出现 + 计数正确
+    lst = c.get("/api/v1/medical/admin/kb", headers={"Authorization": "Bearer " + atok}).json()
+    assert lst["uploaded"] == 1
+    assert lst["docs"] and lst["docs"][0]["name"] == "糖尿病管理要点.md"
+    assert lst["docs"][0]["kind"] == "uploaded"
+    # 大文件异步路径同链路：轮询 done 后 manifest 已登记（列表同源可见）
+    monkeypatch.setattr(kb_ingest, "SYNC_MAX_CHARS", 10)
+    big = ("高血压生活方式干预包括限盐、减重、限酒与规律运动，"
+           "贯穿全部危险分层管理。").encode("utf-8")
+    r2 = c.post("/api/v1/medical/admin/kb/upload",
+                json={"name": "高血压干预.md", "data_b64": b64.b64encode(big).decode()},
+                headers={"Authorization": "Bearer " + atok})
+    assert r2.json()["mode"] == "async"
+    assert _wait_task_done(r2.json()["task_id"])["status"] == "done"
+    lst2 = c.get("/api/v1/medical/admin/kb", headers={"Authorization": "Bearer " + atok}).json()
+    assert lst2["uploaded"] == 2
+    assert any(x["name"] == "高血压干预.md" for x in lst2["docs"])

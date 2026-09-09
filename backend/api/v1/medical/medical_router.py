@@ -1237,41 +1237,51 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
     return {"purged": n}
 
 
-# ---------- admin 运维：应用日志 tail（任务5，只读） ----------
-def _read_log_tail(n: int) -> tuple[str, list[str], str]:
+# ---------- admin 运维：应用日志 tail（任务5，只读） + 日志健康卡元数据（本批次） ----------
+def _read_log_tail(n: int) -> tuple[str, list[str], str, dict]:
     """同步读 logs/app.log 尾部 n 行（RotatingFileHandler 主文件，与 logger.py 同源路径）。
-    只读末尾 512KB 窗口防大文件全量载入；窗口截断的首个残行丢弃。
-    返回 (文件路径, 行列表[旧→新], 提示语)；文件不存在 → 提示「应用日志未启用（LOG_TO_FILE）」。"""
+    只读末尾 512KB 窗口防大文件全量载入；窗口截断的首个残行丢弃；总行数按 1MB 分块
+    全文件扫描计数（轮转上限 5MB，admin 低频调用可接受）。
+    返回 (文件绝对路径, 行列表[旧→新], 提示语, 元数据)；元数据 {path, size_bytes,
+    exists, total_lines} 供前端「日志健康卡」展示；文件不存在 → 提示
+    「应用日志未启用（LOG_TO_FILE）」且元数据归零。"""
     from backend.core.logger import _FILE_NAME
     log_dir = (settings.log_dir or "logs").strip() or "logs"
-    path = os.path.join(log_dir, _FILE_NAME)
+    path = os.path.abspath(os.path.join(log_dir, _FILE_NAME))  # 绝对路径（健康卡展示）
+    meta = {"path": path, "size_bytes": 0, "exists": False, "total_lines": 0}
     if not os.path.isfile(path):
-        return path, [], "应用日志未启用（LOG_TO_FILE）"
+        return path, [], "应用日志未启用（LOG_TO_FILE）", meta
+    size = os.path.getsize(path)
+    meta.update(exists=True, size_bytes=size)
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
-        size = f.tell()
         window = min(size, 512 * 1024)
         f.seek(size - window)
         raw = f.read(window)
+        f.seek(0)
+        meta["total_lines"] = sum(chunk.count(b"\n")
+                                  for chunk in iter(lambda: f.read(1024 * 1024), b""))
     all_lines = raw.decode("utf-8", errors="replace").splitlines()
     if window < size and all_lines:
         all_lines = all_lines[1:]  # 丢弃窗口起点处可能被截断的残行
-    return path, all_lines[-n:], f"共 {min(len(all_lines), n)} 行（最新在底部）"
+    return path, all_lines[-n:], f"共 {min(len(all_lines), n)} 行（最新在底部）", meta
 
 
 @router.get("/admin/logs")
 async def admin_logs(lines: int = 200, user: dict = Depends(require_role("admin"))):
     """任务5：应用日志尾部只读视图（仅 admin）。lines=N 可调（1~500 上限截断，默认 200）。
 
-    安全边界：只读主日志文件（app.log），不提供任何下载/删除/执行能力；日志内容可能
-    含用户输入，前端必须逐行 esc() 后渲染（防注入）。文件不存在/未启用返回提示不报错。
+    本批次新增日志健康卡元数据：path（绝对路径）/ size_bytes / exists / total_lines，
+    与既有 file/lines/note 并存（向后兼容）。安全边界：只读主日志文件（app.log），
+    不提供任何下载/删除/执行能力；日志内容可能含用户输入，前端必须逐行 esc() 后
+    渲染（防注入）。文件不存在/未启用返回提示不报错。
     """
     n = max(1, min(int(lines or 200), 500))
     try:
-        path, tail, note = await asyncio.to_thread(_read_log_tail, n)
+        path, tail, note, meta = await asyncio.to_thread(_read_log_tail, n)
     except OSError as e:  # 读取失败（权限/占用等）显式 500 带原因，不静默吞掉
         raise HTTPException(500, f"日志文件读取失败：{e}")
-    return {"file": path, "lines": tail, "note": note}
+    return {"file": path, "lines": tail, "note": note, **meta}
 
 
 # ---------- admin 模型配置管理（F6：对话/视觉双通道，openai/anthropic 双格式）----------

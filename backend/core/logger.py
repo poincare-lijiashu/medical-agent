@@ -1,11 +1,12 @@
-"""应用日志：控制台 + 可选落文件（任务4）。
+"""应用日志：控制台 + 落文件（任务4，本批次默认改全环境 on）。
 
 - 控制台：沿用了原有行为——每个 logger 首次创建时挂一个 stdout StreamHandler。
-- 文件（任务4）：LOG_TO_FILE=on|off 显式开关；空（默认）按环境自动——production on、
-  其余 off（开发保持纯控制台，不产生文件）。启用后所有 logger 共享同一个
-  RotatingFileHandler 单例（5MB × 5 备份，UTF-8，delay=True 首写才建文件）：
-  轮转只由这一个 handler 实例执行，避免多 logger 各持 handler 对同一文件轮转的
-  Windows 竞态。目录不可写等初始化失败只降级为纯控制台，绝不阻断业务。
+- 文件（任务4）：LOG_TO_FILE=on|off 显式开关；空（默认，本批次变更）→ **全环境 on**
+  （开发也落文件，便于 admin 日志健康卡排障），显式 LOG_TO_FILE=off 才关闭。
+  启用后所有 logger 共享同一个 RotatingFileHandler 单例（5MB × 5 备份，UTF-8，
+  delay=True 首写才建文件）：轮转只由这一个 handler 实例执行，避免多 logger 各持
+  handler 对同一文件轮转的 Windows 竞态。目录不可写等初始化失败只降级为纯控制台，
+  绝不阻断业务。
 """
 import logging
 import logging.handlers
@@ -29,14 +30,16 @@ def should_log_to_file(raw: str, app_env: str) -> bool:
     """任务4：LOG_TO_FILE 三态解析（纯函数，便于测试）。
 
     - on/true/1/yes → 强制开；off/false/0/no → 强制关（大小写不敏感）；
-    - 空（默认）→ 按 APP_ENV：production 开，其余关（开发保持控制台）。
+    - 空（默认）→ 全环境 on（本批次变更：删除「development 默认控制台」分支，
+      开发也落文件，便于 admin 日志健康卡排障）；app_env 参数保留兼容既有
+      调用/测试签名，不再参与判定。
     """
     v = str(raw or "").strip().lower()
     if v in ("on", "true", "1", "yes"):
         return True
     if v in ("off", "false", "0", "no"):
         return False
-    return str(app_env or "").strip().lower() == "production"
+    return True  # 默认全环境落文件；显式 LOG_TO_FILE=off 才关闭
 
 
 def reset_file_logging() -> None:
@@ -108,7 +111,7 @@ def get_logger(name: str) -> _KwLogger:
         h = logging.StreamHandler(sys.stdout)
         h.setFormatter(_FMT)
         lg.addHandler(h)
-        # 任务4：按配置附加共享文件 handler（默认 production on / development off）
+        # 任务4：按配置附加共享文件 handler（本批次默认全环境 on，显式 off 才关）
         try:
             from backend.config import settings
             if should_log_to_file(settings.log_to_file, settings.app_env):

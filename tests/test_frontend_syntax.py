@@ -2,6 +2,8 @@
 
 node 不可用时跳过（仅环境兜底；本机/CI 均有 node）。
 """
+import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -98,3 +100,103 @@ def test_diag_fixes_frontend_markers_present():
         "'（'+r.status+' '+", "String(txt||'').trim().slice(0,80)",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
+
+
+# ---------- 本批次 5 项修复的回归锁（追加，不改动既有断言） ----------
+
+def _extract_fn(src: str, name: str) -> str:
+    """从内联脚本源码截取完整 JS 函数定义（按「function name(」起点 + 列 0 收口「}」）。
+    humanizeAudit 内字符串中的花括号均来自成对的 ${...} 模板插值，列 0 的「}」必为函数收口。"""
+    start = src.index("function " + name + "(")
+    end = src.index("\n}", start)
+    return src[start:end + 2]
+
+
+def test_humanize_audit_consult_events_node():
+    """任务3：humanizeAudit 对 consult 各事件的输出断言（纯函数 → node 直接单测）。"""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node 不可用，跳过 humanizeAudit 单测")
+    html = FRONTEND.read_text(encoding="utf-8")
+    fn = _extract_fn(html, "humanizeAudit")
+    cases = [
+        # [输入事件, 期望人话化输出]
+        [{"event": "consult", "action": "consult_created",
+          "payload": {"cid": "c1", "depts": ["心内科", "内分泌科"], "role": "doctor"}},
+         "发起了跨科室会诊（召集：心内科、内分泌科）"],
+        [{"event": "consult", "action": "consult_created", "payload": {"cid": "c1"}},
+         "发起了跨科室会诊"],  # payload 缺 depts → 兜底不带括号
+        [{"event": "consult", "action": "consult_dispatch",
+          "payload": {"cid": "c1", "departments": ["a", "b", "c"]}},
+         "会诊分发给 3 个科室"],
+        [{"event": "consult", "action": "consult_opinion",
+          "payload": {"cid": "c1", "dept": "心内科"}},
+         "提交了会诊意见（心内科）"],
+        [{"event": "consult", "action": "consult_closed", "payload": {"cid": "c9"}},
+         "结束了会诊 c9"],
+        [{"event": "consult", "action": "list_mine",
+          "payload": {"initiated": 5, "participated": 0, "role": "doctor"}},
+         "查看了我的会诊（发起 5 · 参与 0）"],
+        [{"event": "consult", "action": "list_inbox", "payload": {"n": 2, "dept": "心内科"}},
+         "查看了会诊收件箱（2 条待意见）"],
+        # 裸 payload 兜底：缺省值不产生 undefined/null 字样
+        [{"event": "consult", "action": "list_mine", "payload": {}},
+         "查看了我的会诊（发起 0 · 参与 0）"],
+        [{"event": "consult", "action": "list_inbox", "payload": {}},
+         "查看了会诊收件箱（0 条待意见）"],
+    ]
+    runner = (fn + "\nconst CASES=" + json.dumps(cases, ensure_ascii=False) + ";\n"
+              "for(const [e,want] of CASES){const got=humanizeAudit(e);"
+              "if(got!==want){console.error('FAIL action='+e.action+' got=['+got+'] want=['+want+']');"
+              "process.exit(1);}}"
+              "console.log('HUMANIZE_OK '+CASES.length);")
+    fd = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
+    fd.write(runner)
+    fd.close()
+    try:
+        r = subprocess.run([node, fd.name], capture_output=True, text=True, timeout=60)
+    finally:
+        Path(fd.name).unlink(missing_ok=True)
+    assert r.returncode == 0, f"humanizeAudit consult 断言失败：{r.stderr[:600]}"
+    assert "HUMANIZE_OK" in r.stdout
+
+
+def test_front_5fixes_markers_present():
+    """本批次 5 项修复的前端标记锁（追加）：
+    - 任务1：发起会诊确认成功回调里自动关闭 modal；
+    - 任务2：会诊详情 emoji → ICON 表新增 doc/analysis/staff 三枚 SVG；
+    - 任务3：humanizeAudit consult_* 事件人话化映射；
+    - 任务4：日志健康卡（路径/大小/总行数元数据 + ERROR/WARNING 行高亮）；
+    - 任务5：KB 上传成功（含轮询 done）后刷新列表与向量总数。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 任务1：POST /consults 200 回调里关闭确认弹窗（复用共享 closeModal）
+        "closeModal();  /* 任务1：发起成功自动关闭确认弹窗",
+        # 任务2：ICON 表新增三枚图标 + consultDetailBlocks 三段式标题全部换用
+        "doc:'<svg", "analysis:'<svg", "staff:'<svg",
+        "ICON.doc+' 摘要", "ICON.doc+' AI 会诊小结", "ICON.doc+' 会诊汇总",
+        "ICON.analysis+' 各专科 AI 意见", "ICON.staff+' 各科室医生意见",
+        # 任务3：consult 事件人话化文案
+        "发起了跨科室会诊（召集：", "会诊分发给 ", "提交了会诊意见（",
+        "结束了会诊 ", "查看了我的会诊（发起 ", "查看了会诊收件箱（",
+        # 任务4：日志健康卡（元数据行 + 大小人话化 + 等级高亮 + CSS）
+        "appLogMeta", "fmtLogSize", "hlLogLevels", "总行数：", "log-err", "log-warn",
+        ".log-err{", ".log-warn{",
+        # 任务5：上传成功（任一）→ 重新拉取列表/总数
+        "if(okAny)loadKb()",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+
+
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF"
+    "\u2B00-\u2BFF\uFE0F\u200D\u2049\u203C\u2122]")
+_EMOJI_ALLOW = {"⚠", "✓", "✗"}  # 文本符号（错误提示/连通性文字），非图标不在清理范围
+
+
+def test_no_emoji_icons_remain():
+    """任务2 回归锁：前端不得残留 emoji 图标（如 📌/🔬/👨‍⚕️，含 ZWJ/FE0F 组合件）；
+    ⚠/✓/✗ 为文本提示符号（错误文案），显式豁免。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    bad = sorted({c for c in _EMOJI_RE.findall(html) if c not in _EMOJI_ALLOW})
+    assert not bad, f"残留 emoji 图标：{bad}"

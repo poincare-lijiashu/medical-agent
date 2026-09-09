@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     qc_auto_sign_full: bool = True
 
     # 任务4 应用日志落文件 + 轮转（5MB × 5 备份，RotatingFileHandler）
-    # LOG_TO_FILE：on/true/1 强制开；off/false/0 强制关；空（默认）按环境——production on、其余 off（保持控制台）
+    # LOG_TO_FILE：on/true/1 强制开；off/false/0 强制关；空（默认）全环境开启（开发也落文件，显式 off 才关）
     log_to_file: str = ""
     log_dir: str = "logs"
 

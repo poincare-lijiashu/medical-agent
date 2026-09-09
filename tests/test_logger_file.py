@@ -1,6 +1,7 @@
 """任务4：应用日志落文件 + 轮转——LOG_TO_FILE 三态开关 + LOG_DIR + RotatingFileHandler（5MB×5）。
 
-- 开关矩阵：production 默认 on、development 默认 off；LOG_TO_FILE=on/off 显式覆盖；
+- 开关矩阵（本批次变更）：默认（空）**全环境 on**（开发也落文件）；LOG_TO_FILE=off
+  显式关闭（保留关通道）；LOG_TO_FILE=on 显式开启（幂等）；
 - get_logger 在开关开启时给 logger 附加共享 RotatingFileHandler，关闭时不附加；
 - 轮转：写入超限产生 app.log.N 备份。
 
@@ -24,29 +25,48 @@ def _reset_file_logging():
 
 def test_should_log_to_file_env_matrix():
     f = logger_mod.should_log_to_file
-    # 默认（空）：按环境自动
+    # 默认（空）：全环境 on（本批次变更——开发也落文件，显式 off 才关）
     assert f("", "production") is True
-    assert f("", "development") is False
-    assert f("", "") is False
-    # 显式覆盖优先于环境
-    assert f("on", "development") is True
+    assert f("", "development") is True
+    assert f("", "") is True
+    # 显式覆盖优先于默认：off 一票关闭（保留关通道）
+    assert f("off", "development") is False
     assert f("off", "production") is False
+    # 显式 on 幂等
+    assert f("on", "development") is True
     # 大小写/别名宽容
     assert f("ON", "") is True
     assert f("True", "") is True
     assert f("1", "development") is True
     assert f("OFF", "") is False
     assert f("0", "production") is False
+    assert f("no", "production") is False
 
 
 def test_get_logger_console_only_when_disabled(monkeypatch, tmp_path):
-    """开发环境默认 off：不落文件，保持纯控制台。"""
-    monkeypatch.setattr(settings, "log_to_file", "")
+    """显式 LOG_TO_FILE=off：不落文件，保持纯控制台（默认 on 的显式关闭通道保留）。"""
+    monkeypatch.setattr(settings, "log_to_file", "off")
     monkeypatch.setattr(settings, "app_env", "development")
     name = "t-log-console-only"
     logger_mod.get_logger(name)
     handlers = logging.getLogger(name).handlers
     assert not any(isinstance(h, logging.handlers.RotatingFileHandler) for h in handlers)
+
+
+def test_get_logger_dev_default_writes_file(monkeypatch, tmp_path):
+    """本批次变更：开发环境默认（LOG_TO_FILE 空）也落文件（全环境 on，显式 off 才关）。"""
+    monkeypatch.setattr(settings, "log_to_file", "")
+    monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
+    name = "t-log-dev-default"
+    lg = logger_mod.get_logger(name)
+    lg.info("开发环境默认落盘", k=1)
+    rots = [h for h in logging.getLogger(name).handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)]
+    assert len(rots) == 1, "dev 默认也应附加恰好一个 RotatingFileHandler"
+    rots[0].flush()
+    assert (tmp_path / "logs" / "app.log").exists()
+    assert "开发环境默认落盘" in (tmp_path / "logs" / "app.log").read_text(encoding="utf-8")
 
 
 def test_get_logger_attaches_rotating_file_handler(monkeypatch, tmp_path):

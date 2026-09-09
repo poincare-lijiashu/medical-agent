@@ -54,6 +54,39 @@ def test_admin_logs_file_missing_hint(monkeypatch, tmp_path):
     assert "应用日志未启用（LOG_TO_FILE）" in d["note"]
 
 
+# ---------- /admin/logs：日志健康卡元数据（本批次新增：path/size_bytes/exists/total_lines） ----------
+
+def test_admin_logs_metadata_fields(monkeypatch, tmp_path):
+    """logs 端点响应追加元数据 {path,size_bytes,exists,total_lines}（保持向后兼容）：
+    - path 为 settings 派生的**绝对路径**，且与旧字段 file 一致；
+    - 文件存在：size_bytes=字节数、total_lines=全文件行数、exists=True；
+    - 文件缺失：exists=False、size_bytes=0、total_lines=0，提示语不变。"""
+    import os
+    logdir = tmp_path / "logs"
+    logdir.mkdir(parents=True)
+    # write_bytes 精确 9 字节/3 行（规避 Windows 文本模式 CRLF 翻译导致的字节数漂移）
+    (logdir / "app.log").write_bytes(b"a\nbb\nccc\n")
+    c = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "admin01")}
+    d = c.get("/api/v1/medical/admin/logs", headers=h).json()
+    assert d["exists"] is True
+    assert d["size_bytes"] == 9
+    assert d["total_lines"] == 3
+    assert os.path.isabs(d["path"]), "元数据 path 必须是绝对路径（健康卡展示用）"
+    assert d["path"].endswith("app.log")
+    assert d["file"] == d["path"], "旧字段 file 与新字段 path 一致（绝对路径升级）"
+    # 向后兼容：旧行为字段不缺失
+    assert d["lines"] == ["a", "bb", "ccc"]
+    assert "3 行" in d["note"]
+    # 文件缺失：元数据归零 + 提示语保留
+    (logdir / "app.log").unlink()
+    d2 = c.get("/api/v1/medical/admin/logs", headers=h).json()
+    assert d2["exists"] is False
+    assert d2["size_bytes"] == 0 and d2["total_lines"] == 0
+    assert os.path.isabs(d2["path"])
+    assert "应用日志未启用（LOG_TO_FILE）" in d2["note"]
+
+
 # ---------- /admin/logs：尾部行序 + N 上限 ----------
 
 def test_admin_logs_tail_lines_and_cap(monkeypatch, tmp_path):
