@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import gzip
 import json
 import os
@@ -51,6 +52,48 @@ _ARCHIVE_DAYS = 30
 
 # 旧 2-str 调用的用户名启发式：本系统用户名（doctor01/admin01 等）为「字母开头 + 含数字」；动作词（query 等）不含数字
 _USERNAMEISH = re.compile(r"[A-Za-z][A-Za-z0-9_\-.]*\d")
+
+# ---- 入口渠道标记（MCP 接入）----
+# 请求级 contextvar：main.py 的 AuditChannelMiddleware 读请求头 X-MedAssist-Channel
+# （如 "mcp"）后 set；本请求内产生的审计事件 payload 自动带 channel 字段，区分入口。
+# asyncio.to_thread 会复制 context，线程池内的审计写入同样能取到渠道值。
+_channel: contextvars.ContextVar = contextvars.ContextVar("audit_channel", default="")
+
+
+def set_channel(value: str):
+    """标记当前请求的入口渠道（如 "mcp"）；返回 token 供 reset_channel 恢复（中间件 finally 用）。"""
+    return _channel.set((value or "").strip().lower()[:32])
+
+
+def reset_channel(token) -> None:
+    """恢复渠道 contextvar（请求结束时调用，防上下文泄漏到连接复用场景）。"""
+    _channel.reset(token)
+
+
+def current_channel() -> str:
+    """当前请求的入口渠道；未标记（普通 HTTP 前端请求）返回空串。"""
+    return _channel.get()
+
+
+# ---- 调用工具名标记（MCP 接入，批2 任务1）----
+# MCP server 每个工具调用经 X-MedAssist-Tool 头携带工具名（如 "literature_query"），
+# 中间件 set 后本请求审计事件 payload 自动带 tool 字段——审计可回溯「哪条外部 AI 工具触发」。
+_tool: contextvars.ContextVar = contextvars.ContextVar("audit_tool", default="")
+
+
+def set_tool(value: str):
+    """标记当前请求的调用工具名；返回 token 供 reset_tool 恢复（中间件 finally 用）。"""
+    return _tool.set((value or "").strip().lower()[:64])
+
+
+def reset_tool(token) -> None:
+    """恢复工具 contextvar（请求结束时调用，防上下文泄漏到连接复用场景）。"""
+    _tool.reset(token)
+
+
+def current_tool() -> str:
+    """当前请求的调用工具名；未标记（普通 HTTP 前端请求）返回空串。"""
+    return _tool.get()
 
 
 class PHIRedactor:
@@ -156,6 +199,13 @@ class AuditLog:
                                              file=name, error=str(e)[:120])
 
     def _emit(self, event_type: str, actor: str, payload: dict) -> None:
+        ch, tool = current_channel(), current_tool()
+        if ch or tool:  # MCP 等外部入口标记：payload 带 channel/tool（不覆盖调用方显式传入值）
+            payload = dict(payload or {})
+            if ch:
+                payload.setdefault("channel", ch)
+            if tool:
+                payload.setdefault("tool", tool)
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "event_type": event_type,

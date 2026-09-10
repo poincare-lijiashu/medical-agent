@@ -52,3 +52,50 @@ Browser(SPA) ──Bearer──▶ FastAPI
 | 永远人工 | 高危结论签发 / 病历驳回 / 自动通过 | 人 | 双控双签、`QC_AUTO_*` 默认保守、AI 动作全留痕可翻案 |
 
 关键工程教训（实测驱动）：检索融合分（0.03 量级）经 sigmoid 全部落 0.5 死区，**分数不可作分流信号**——以 grade 的 LLM 充分性判断为闸门，其宽松倾向由 prompt 意图一致性要求纠偏，refine 循环为误杀提供第二次机会；厂商思考模式参数（Qwen `enable_thinking` / DeepSeek `thinking`）与 function-calling 互斥，多处配置必须合并而非覆盖。
+
+## 依赖方向规则（批2 任务3，静态锁）
+
+```
+Browser/MCP 客户端
+      │
+      ▼
+api/  ──▶ core/  ──▶ db/、config
+  │  ▲      ▲
+  │  │      └──（agents → core：复用检索/LLM/审计等核心服务）
+  ├──▶ agents/         （api 编排 agent 入口函数：graph builder / pick_departments）
+  └──▶ integration/    （对外边界：HIS 适配器，见 docs/INTEGRATION.md）
+```
+
+允许（正向）：`api → core|agents|integration`；`agents → core`；`core → config/db/core 内部`；`integration → config`。
+禁止（反向 = 腐化信号）：
+
+- `core / agents / integration → api`（下层不得感知 web 层）
+- `core → agents`（核心不得反向依赖编排层）
+- `integration → core|agents`（对接边界层只依赖 config，保持独立可替换）
+- `core / agents → integration`（integration 是 api 层专用的对外出口）
+
+机械锁：`tests/test_architecture.py` 读源码文本断言上述禁止方向不存在——新增依赖若违反规则，CI/本地 pytest 即刻红。
+
+**批2 架构审计结论**（grep 全量扫描 backend/ 依赖方向）：
+
+| 检查项 | 结论 | 级别 |
+|---|---|---|
+| core → api / core → agents 反向依赖 | 无（15 处 core 互引全部单向，无循环：logger←embedder←medical_kb←kb_ingest 等） | ✅ 通过 |
+| api 是否绕过入口函数直连 agents 内部节点 | 否——api 仅 import `build_literature_graph` / `build_mdt_graph` / `pick_departments` / `dept_briefs` 等入口函数 | ✅ 通过 |
+| core 引用 api 层 | 无 | ✅ 通过 |
+| core 互相 import 环 | 无（`consults → medical_review` 引用其 `_cap_total_chars/_compress_images` 私有函数——单向无害，属低级别代码异味） | ⚠️ 低（backlog：可将其提升为 medical_review 公共函数或移入共享模块） |
+| agents 内聚 | `mdt → literature.nodes`（复用节点构造），同包内合法 | ✅ 通过 |
+| scripts/ 引用 backend | 评估/种子脚本属开发期工具，不在运行时依赖图内 | ✅ 通过 |
+
+结论：无分层越界需要修复；唯一低级别异味（core 内私有符号跨模块引用）列为 backlog，不影响依赖方向。
+
+## 扩展性地图（「加一个 X」要动哪几处——高聚合低耦合的直接证明）
+
+| 扩展场景 | 要动的地方 | 不用动的 |
+|---|---|---|
+| **新增 agent**（如「出院小结总结」） | ① `backend/agents/medical/<name>/`（graph+nodes+prompts）；② `medical_router.py` 加 `/<name>/ask` 端点（复用 AskReq/AskResp + `_enqueue_if_risk`）；③ 审计 event_type；④ 前端入口；（可选）eval 用例 | core 层零改动（检索/LLM/审核队列/审计/存储全部现成复用） |
+| **新增 LLM provider** | 管理端「模型配置」运行时添加（OpenAI 兼容 / Anthropic 两格式已覆盖）——**零代码**，配置即扩展；仅当新格式才动 `llm_factory/llm_config` | 所有 agent/路由 |
+| **更换/新增存储** | `core/pg_store.py` repo 层集中收口（load/save/mirror + JSON 原子写兜底）；`pg_async_dsn` 换 DSN 即换实例 | 业务 core（consults/review/auth 只调 repo 函数）、api、agents |
+| **新增 HIS 厂商** | ① `backend/integration/<vendor>.py` 实现 `HisAdapter` 三方法；② `registry.py` 注册一行；③ `HIS_ADAPTER=<vendor>` 配置。详见 docs/INTEGRATION.md 第五节 | 核心业务零改动（qc 接入点 `_his_push_qc_result` 已就位，NullAdapter 兜底） |
+| **新增 MCP tool** | `scripts/mcp_server.py`：handler 函数 + `TOOLS` 条目 + `TOOL_HANDLERS` 注册；`tests/test_mcp_server.py` 一测。审计标记（channel/tool）与「不入复核队列」语义自动继承 | 后端零改动（复用既有 HTTP 端点）；新增端点才动 api 层 |
+| **新增审计事件类型/字段** | `core/medical_audit.py`（channel/tool 等请求级标记在 `_emit` 统一注入） | 各调用点 |

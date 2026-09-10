@@ -1,6 +1,8 @@
 # MedAssist 部署指南
 
 > 运行时零外部依赖：不依赖任何开发期技能/插件/MCP。只需：代码 + 模型权重 + 配置 + Docker（或本地 conda 环境）。
+>
+> HIS/EMR 对接（适配器架构、`HIS_ADAPTER` 配置、新增厂商步骤）见 **[docs/INTEGRATION.md](INTEGRATION.md)**。
 
 ## 方式一：Docker（推荐交付）
 
@@ -71,6 +73,7 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 | `EMBED_DEVICE` | `auto` | **GPU 可选 CPU 回退**：`auto`=有 CUDA 用 GPU 否则 CPU；`cpu`=强制 CPU；`cuda`=优先 GPU、不可用自动回落 CPU（启动日志 `embedder.device_cuda_fallback`） |
 | `PG_OFFLINE` | 未设 | `on`=显式离线模式（eval/脚本/测试进程用）：PG 纯静默 JSON 真源、不置 stale 不告警；服务进程**不要**设置 |
 | `LITERATURE_AGENTIC` | `true` | L1 agentic 检索循环开关（eval 用 `EVAL_AGENTIC=on/off` 切 A/B） |
+| `HIS_ADAPTER` | `none` | HIS 对接适配器：`none`=未对接（NullAdapter 空转）；`demo`=内存假数据；真实对接填厂商标识（见 docs/INTEGRATION.md） |
 | `AUTH_JWT_SECRET` / `APP_ENV` / `AUTH_SEED_DEMO` | — | 生产必设，见「生产前必查」 |
 
 ### 4. 容器与基础设施

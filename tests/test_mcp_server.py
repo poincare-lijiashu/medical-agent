@@ -41,13 +41,14 @@ def _call_tool(monkeypatch, name, arguments, response=None):
     return fake, res
 
 
-# ---------- 1. tools/list：7 个工具 + JSON Schema 关键约束 ----------
+# ---------- 1. tools/list：12 个工具 + JSON Schema 关键约束 ----------
 
 def test_tools_list_schema():
     result = mcp.handle_tools_list({})
     tools = {t["name"]: t for t in result["tools"]}
-    expected = {"literature_ask", "drug_check", "imaging_describe", "case_summarize",
-                "mdt_consult", "review_pending", "review_resolve"}
+    expected = {"literature_ask", "literature_query", "drug_check", "imaging_describe",
+                "case_summarize", "qc_parse", "kb_search", "consult_create",
+                "mdt_consult", "review_pending", "review_resolve", "review_status"}
     assert set(tools) == expected
     assert set(mcp.TOOL_HANDLERS) == expected  # 注册表与处理器一一对应
     for t in tools.values():
@@ -57,8 +58,20 @@ def test_tools_list_schema():
     rr = tools["review_resolve"]["inputSchema"]
     assert rr["properties"]["decision"]["enum"] == ["approved", "rejected"]
     assert rr["required"] == ["rid", "decision"]
+    assert tools["imaging_describe"]["inputSchema"]["properties"]["images_b64"]["maxItems"] == 6
     assert tools["imaging_describe"]["inputSchema"]["properties"]["images"]["maxItems"] == 6
     assert tools["literature_ask"]["inputSchema"]["required"] == ["question"]
+    # 批2 新工具 schema 关键约束
+    lq = tools["literature_query"]["inputSchema"]
+    assert lq["required"] == ["question"]
+    assert lq["properties"]["session_id"]["maxLength"] == 64
+    assert tools["qc_parse"]["inputSchema"]["required"] == ["record"]
+    assert tools["qc_parse"]["inputSchema"]["properties"]["record"]["maxProperties"] == 20
+    ks = tools["kb_search"]["inputSchema"]["properties"]["top_k"]
+    assert ks["minimum"] == 1 and ks["maximum"] == 10 and ks["default"] == 3
+    assert tools["kb_search"]["inputSchema"]["properties"]["query"]["maxLength"] == 2000
+    assert tools["consult_create"]["inputSchema"]["properties"]["images_b64"]["maxItems"] == 6
+    assert tools["review_status"]["annotations"]["readOnlyHint"] is True
 
 
 # ---------- 2. ask 类工具：路径/方法/payload 映射 + 输出摘要 ----------
@@ -216,7 +229,7 @@ def test_dispatch_protocol_surface():
     assert mcp.dispatch({"jsonrpc": "2.0", "method": "notifications/cancelled"}) is None
 
     r = mcp.dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-    assert len(r["result"]["tools"]) == 7
+    assert len(r["result"]["tools"]) == 12
 
     r = mcp.dispatch({"jsonrpc": "2.0", "id": 3, "method": "resources/list"})
     assert r["error"]["code"] == -32601  # Method not found
@@ -274,3 +287,233 @@ def test_stdio_loop_overlong_line_rejected(monkeypatch):
     assert len(lines) == 2, "超长行只应产生一条错误响应（残余被整行消费，不级联报错）"
     assert lines[0]["error"]["code"] == -32700
     assert lines[1]["result"]["tools"], "后续合法消息应正常处理"
+
+
+# ---------- 10. 批2 新工具：literature_query / qc_parse / kb_search / consult_create / review_status ----------
+
+def test_literature_query_session_id_passthrough(monkeypatch):
+    """成功：session_id 透传；缺省时 payload 不含该键（会话记忆可选，与 HTTP AskReq 一致）。"""
+    ask_resp = {"answer": "循证答案正文", "confidence": 0.88, "needs_human_review": False,
+                "sources": ["KB:g1"], "review_id": None}
+    fake, res = _call_tool(monkeypatch, "literature_query",
+                           {"question": "高血压诊断标准", "session_id": "s-123"}, ask_resp)
+    assert fake.calls == [("POST", "/api/v1/medical/literature/ask",
+                           {"question": "高血压诊断标准", "session_id": "s-123"})]
+    assert res["isError"] is False
+    assert "循证答案正文" in res["content"][0]["text"] and "置信度: 0.88" in res["content"][0]["text"]
+    fake2, res2 = _call_tool(monkeypatch, "literature_query", {"question": "q"}, ask_resp)
+    assert fake2.calls == [("POST", "/api/v1/medical/literature/ask", {"question": "q"})]
+    assert res2["isError"] is False
+
+
+def test_literature_query_validation(monkeypatch):
+    """校验失败：question 空/超长、session_id 超 64 字符——不发上游请求。"""
+    for bad in ({"session_id": "s"}, {"question": ""},
+                {"question": "长" * 20001},
+                {"question": "q", "session_id": "x" * 65}):
+        fake, res = _call_tool(monkeypatch, "literature_query", bad)
+        assert res["isError"] is True, bad
+        assert fake.calls == [], bad
+
+
+def test_qc_parse_mapping_and_summary(monkeypatch):
+    """成功：record/labs 原样映射 POST /qc/record；响应摘要含结构化缺陷计数。"""
+    resp = {"answer": "【病案质控·AI建议】完整性缺 1 项…", "confidence": 0.7,
+            "needs_human_review": True, "sources": ["track:完整性"],
+            "review_id": "rev-77", "qc_defects": [{"category": "完整性", "field": "现病史"}]}
+    fake, res = _call_tool(monkeypatch, "qc_parse",
+                           {"record": {"主诉": "头痛 3 天"}, "labs": {"血钾": "6.8"}}, resp)
+    assert fake.calls == [("POST", "/api/v1/medical/qc/record",
+                           {"record": {"主诉": "头痛 3 天"}, "labs": {"血钾": "6.8"}})]
+    text = res["content"][0]["text"]
+    assert res["isError"] is False
+    assert "病案质控" in text and "结构化缺陷 1 项" in text and "rev-77" in text
+    # labs 缺省 → payload 不含 labs 键
+    fake2, _ = _call_tool(monkeypatch, "qc_parse", {"record": {"主诉": "头痛"}}, resp)
+    assert fake2.calls == [("POST", "/api/v1/medical/qc/record", {"record": {"主诉": "头痛"}})]
+
+
+def test_qc_parse_validation(monkeypatch):
+    """校验失败（与 HTTP QcReq 同强度）：非对象/空对象/超 20 项/键超长/值超长/labs 超 30 项。"""
+    bad_cases = [
+        {"record": "不是对象"},
+        {"record": {}},
+        {"record": {f"k{i}": "v" for i in range(21)}},
+        {"record": {"x" * 41: "v"}},
+        {"record": {"主诉": "长" * 2001}},
+        {"record": {"主诉": "v"}, "labs": {f"项{i}": "1" for i in range(31)}},
+        {"record": {"主诉": "v"}, "labs": "不是对象"},
+    ]
+    for args in bad_cases:
+        fake, res = _call_tool(monkeypatch, "qc_parse", args)
+        assert res["isError"] is True, args
+        assert fake.calls == [], args
+
+
+def test_kb_search_mapping_and_json_output(monkeypatch):
+    """成功：query/top_k 映射 POST /kb/search；输出为 JSON 文本（外部系统可直接解析）。"""
+    resp = {"query": "高血压", "top_k": 2,
+            "chunks": [{"content": "收缩压≥140mmHg", "source": "指南A", "score": 0.42}],
+            "total": 1}
+    fake, res = _call_tool(monkeypatch, "kb_search", {"query": "高血压", "top_k": 2}, resp)
+    assert fake.calls == [("POST", "/api/v1/medical/kb/search", {"query": "高血压", "top_k": 2})]
+    assert res["isError"] is False
+    out = json.loads(res["content"][0]["text"])
+    assert out["chunks"][0]["source"] == "指南A" and out["total"] == 1
+    # 缺省 top_k → payload 不含 top_k（HTTP 端点默认 3）
+    fake2, _ = _call_tool(monkeypatch, "kb_search", {"query": "q"}, resp)
+    assert fake2.calls == [("POST", "/api/v1/medical/kb/search", {"query": "q"})]
+
+
+def test_kb_search_validation(monkeypatch):
+    """校验失败：query 空/超长、top_k 非整数或越界（0/11/字符串/布尔）。"""
+    for bad in ({"query": ""}, {"query": "   "}, {"query": "长" * 2001},
+                {"query": "q", "top_k": 0}, {"query": "q", "top_k": 11},
+                {"query": "q", "top_k": "3"}, {"query": "q", "top_k": True},
+                {"query": "q", "top_k": 2.5}):
+        fake, res = _call_tool(monkeypatch, "kb_search", bad)
+        assert res["isError"] is True, bad
+        assert fake.calls == [], bad
+
+
+def test_consult_create_mapping_and_summary(monkeypatch):
+    """成功：question/images_b64 映射 POST /consults；摘要含会诊单号/组队/理由，不回显图片。"""
+    resp = {"id": "con-abc123", "status": "open", "initiator": "svc_mcp",
+            "target_depts": ["心内科", "内分泌科"],
+            "team": {"departments": ["心内科", "内分泌科"], "reasoning": "涉及血压与血糖调控"},
+            "ai_analysis": "【心内科】建议…\n\n【内分泌科】建议…",
+            "images": ["aHVnZQ=="], "opinions": []}
+    fake, res = _call_tool(monkeypatch, "consult_create",
+                           {"question": "62 岁糖尿病合并高血压，血压控制方案如何制定？",
+                            "images_b64": ["aGVsbG8="]}, resp)
+    assert fake.calls == [("POST", "/api/v1/medical/consults",
+                           {"question": "62 岁糖尿病合并高血压，血压控制方案如何制定？",
+                            "images": ["aGVsbG8="]})]
+    text = res["content"][0]["text"]
+    assert res["isError"] is False
+    assert "con-abc123" in text and "心内科、内分泌科" in text and "涉及血压与血糖调控" in text
+    assert "【心内科】建议" in text
+    assert "aHVnZQ==" not in text  # 图片不回显
+
+
+def test_consult_create_validation(monkeypatch):
+    """校验失败：question 空/超长、images_b64 超 6 张或类型非法。"""
+    for bad in ({}, {"question": ""}, {"question": "长" * 20001},
+                {"question": "q", "images_b64": [f"i{n}" for n in range(7)]},
+                {"question": "q", "images_b64": "img.png"},
+                {"question": "q", "images_b64": []}):
+        fake, res = _call_tool(monkeypatch, "consult_create", bad)
+        assert res["isError"] is True, bad
+        assert fake.calls == [], bad
+
+
+def test_review_status_with_and_without_id(monkeypatch):
+    """成功：带 review_id → GET 带 URL 编码查询串；不带 → 计数视图文本。"""
+    one = {"id": "rev-1", "status": "approved", "agent": "drug", "confidence": 0.9,
+           "submitted_by": "doctor01", "reviewed_by": "qc01", "review_note": "核对无误",
+           "risk_reason": "药物禁忌"}
+    fake, res = _call_tool(monkeypatch, "review_status", {"review_id": "rev 1/对?"}, one)
+    assert fake.calls == [("GET",
+                           "/api/v1/medical/review/status?review_id=rev%201%2F%E5%AF%B9%3F", None)]
+    text = res["content"][0]["text"]
+    assert res["isError"] is False
+    assert "approved" in text and "qc01" in text and "药物禁忌" in text
+    counts = {"total": 12, "pending": 3, "approved": 8, "rejected": 1}
+    fake2, res2 = _call_tool(monkeypatch, "review_status", {}, counts)
+    assert fake2.calls == [("GET", "/api/v1/medical/review/status", None)]
+    text2 = res2["content"][0]["text"]
+    assert res2["isError"] is False
+    assert "待核对 3" in text2 and "已签发 8" in text2 and "已驳回 1" in text2
+
+
+def test_review_status_validation(monkeypatch):
+    """校验失败：review_id 超 64 字符——不发上游请求。"""
+    fake, res = _call_tool(monkeypatch, "review_status", {"review_id": "x" * 65})
+    assert res["isError"] is True and fake.calls == []
+
+
+# ---------- 11. 入口渠道标记（channel=mcp）+ MCP_TOKEN 认证 ----------
+
+class _FakeResp:
+    """替身 urllib 响应：with 上下文 + read()。"""
+
+    def __init__(self, obj):
+        self._body = json.dumps(obj).encode("utf-8")
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_channel_header_and_token_resolution(monkeypatch):
+    """每个上游请求恒带 X-MedAssist-Channel: mcp（审计 channel=mcp 的载体）；
+    令牌解析：MCP_TOKEN 优先 → 回落 MEDASSIST_TOKEN → 都空则不携带（本地用）。"""
+    seen = {}
+    monkeypatch.setenv("MEDASSIST_URL", "http://upstream.test:9999/")
+    monkeypatch.delenv("MCP_TOKEN", raising=False)
+    monkeypatch.delenv("MEDASSIST_TOKEN", raising=False)
+
+    def fake_open(req, timeout=None):
+        # urllib 内部按 capitalize() 归一化头名（"X-medassist-channel"），线上发送仍为合法 HTTP 头
+        seen["channel"] = req.get_header("X-medassist-channel")
+        seen["auth"] = req.get_header("Authorization")
+        return _FakeResp({"answer": "ok"})
+
+    monkeypatch.setattr(mcp, "_http_open", fake_open)
+    r = mcp.request_upstream("POST", "/api/v1/medical/drug/ask", {"question": "q"})
+    assert r == {"answer": "ok"}
+    assert seen["channel"] == "mcp"
+    assert seen["auth"] is None  # 默认无 token，本地使用
+
+    monkeypatch.setenv("MCP_TOKEN", "tok-mcp")
+    monkeypatch.setenv("MEDASSIST_TOKEN", "tok-legacy")
+    mcp.request_upstream("POST", "/api/v1/medical/drug/ask", {"question": "q"})
+    assert seen["auth"] == "Bearer tok-mcp"  # MCP 场景专用令牌优先
+
+    monkeypatch.delenv("MCP_TOKEN", raising=False)
+    mcp.request_upstream("POST", "/api/v1/medical/drug/ask", {"question": "q"})
+    assert seen["auth"] == "Bearer tok-legacy"  # 向后兼容回落 MEDASSIST_TOKEN
+
+
+# ---------- 12. 批2 任务1 补充：工具名标记头 + 单张图片大小校验 ----------
+
+def test_tool_name_header_propagated(monkeypatch):
+    """工具调用期间上游请求携带 X-MedAssist-Tool（后端审计 payload.tool 的载体）；
+    无工具上下文（直连 request_upstream）不带该头；调用结束复位。"""
+    monkeypatch.setenv("MEDASSIST_URL", "http://upstream.test:9999/")
+    seen = {}
+
+    def fake_open(req, timeout=None):
+        seen["tool"] = req.get_header("X-medassist-tool")
+        return _FakeResp({"answer": "ok", "confidence": 0.9, "needs_human_review": False})
+
+    monkeypatch.setattr(mcp, "_http_open", fake_open)
+    # 无工具上下文：不带工具头
+    mcp.request_upstream("POST", "/api/v1/medical/drug/ask", {"question": "q"})
+    assert seen["tool"] is None
+    # 工具调用上下文：带工具名（handle_tool_call 设置，finally 复位）
+    res = mcp.handle_tool_call({"name": "drug_check", "arguments": {"question": "q"}})
+    assert res["isError"] is False
+    assert seen["tool"] == "drug_check"
+    assert mcp._CURRENT_TOOL is None  # 调用结束复位，防上下文泄漏
+
+
+def test_single_image_size_cap(monkeypatch):
+    """单张图片 >8M 字符（≈6MB base64）本地拒绝、不发上游请求（与 HTTP AskReq 同阈值）；
+    阈值内放行。"""
+    fake, res = _call_tool(monkeypatch, "imaging_describe",
+                           {"question": "看", "images": ["x" * 8_000_001]})
+    assert res["isError"] is True
+    assert "过大" in res["content"][0]["text"]
+    assert fake.calls == []
+    # 边界内（8M 字符整）放行：payload 照常映射上游
+    fake2, res2 = _call_tool(monkeypatch, "imaging_describe",
+                             {"question": "看", "images": ["x" * 8_000_000]}, {})
+    assert res2["isError"] is False
+    assert fake2.calls == [("POST", "/api/v1/medical/imaging/ask",
+                            {"question": "看", "images": ["x" * 8_000_000]})]

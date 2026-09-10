@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     # （仅高危入队 + 人工双控）。默认值由 False 改 True 属任务3 显式行为变更。
     qc_auto_sign_full: bool = True
 
+    # HIS 对接适配器（批2 任务2，backend/integration）：none=未对接（默认，NullAdapter 空转）；
+    # demo=内存假数据（演示/联调）；对接真实医院时填厂商标识（registry.register_adapter
+    # 注册名，如 his_vendor_x）。核心业务零感知，架构见 docs/INTEGRATION.md
+    his_adapter: str = "none"
+
     # 任务4 应用日志落文件 + 轮转（5MB × 5 备份，RotatingFileHandler）
     # LOG_TO_FILE：on/true/1 强制开；off/false/0 强制关；空（默认）全环境开启（开发也落文件，显式 off 才关）
     log_to_file: str = ""

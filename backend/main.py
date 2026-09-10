@@ -14,6 +14,10 @@ from backend.config import settings
 from backend.api.deps import require_role
 from backend.core import observability
 from backend.core.logger import get_logger
+from backend.core.medical_audit import set_channel as _audit_set_channel
+from backend.core.medical_audit import reset_channel as _audit_reset_channel
+from backend.core.medical_audit import set_tool as _audit_set_tool
+from backend.core.medical_audit import reset_tool as _audit_reset_tool
 from backend.api.v1.medical.medical_router import router as medical_router
 from backend.api.v1.auth.auth_router import router as auth_router
 
@@ -90,6 +94,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class AuditChannelMiddleware:
+    """入口渠道标记（MCP 接入）：请求头 X-MedAssist-Channel（MCP server 恒发 "mcp"）
+    → 写入请求级 contextvar，本请求产生的审计事件 payload 自动带 channel 字段，
+    用于区分入口（HTTP 前端 / MCP 外部 AI 客户端）；X-MedAssist-Tool（MCP server
+    工具调用时携带工具名）同理落 payload.tool，审计可回溯触发工具。
+    纯 ASGI 中间件：同一任务链内传播 contextvar（可靠进入 asyncio.to_thread 工作线程，
+    审计写入在 to_thread 中也能取到渠道值）；普通 HTTP 请求无此头，行为零变化。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        ch = ""
+        tool = ""
+        for k, v in scope.get("headers") or []:
+            if k == b"x-medassist-channel":  # ASGI 头名恒为小写
+                ch = v.decode("latin-1", "replace").strip().lower()[:32]
+            elif k == b"x-medassist-tool":
+                tool = v.decode("latin-1", "replace").strip().lower()[:64]
+        if not ch and not tool:
+            await self.app(scope, receive, send)
+            return
+        token = _audit_set_channel(ch)
+        tool_token = _audit_set_tool(tool)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _audit_reset_channel(token)
+            _audit_reset_tool(tool_token)
+
+
+app.add_middleware(AuditChannelMiddleware)
 
 app.include_router(medical_router, prefix="/api/v1/medical")
 app.include_router(auth_router, prefix="/api/v1")

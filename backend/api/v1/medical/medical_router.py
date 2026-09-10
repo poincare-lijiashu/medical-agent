@@ -25,8 +25,10 @@ from backend.core import chat_memory, kb_ingest, llm_config, runtime_flags
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
 from backend.core.intent import offtopic_tech_reply, prefilter_reply
-from backend.core.medical_audit import PHIRedactor, get_audit_logger
+from backend.core.medical_audit import PHIRedactor, current_channel, get_audit_logger
 from backend.core.medical_drug import check as drug_check
+from backend.integration import registry as his_registry
+from backend.integration.base import NullAdapter
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 _redactor = PHIRedactor()
@@ -204,6 +206,12 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
     fallback/offtopic 拒答不入队（调用方维持既有分支，不进本函数）。
     sources：响应溯源来源随条目存档。resubmit_of/attempt/meta 透传（任务6）。"""
     await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
+    if current_channel() == "mcp":
+        # 批2 任务1 安全边界（docs/MCP.md）：MCP 外部 AI 客户端的调用【不写审核队列】——
+        # 结果由外部客户端消费自担（免责声明见 MCP 工具 docstring），避免外部批量调用
+        # 污染审核流；审计留痕照常（各端点 query/answered 事件 + channel/tool 标记）。
+        # 与 web 流量唯一语义差异：不入队、无 review_id；答案正文/置信度/来源照常返回。
+        return None
     full = runtime_flags.full_mode()  # runtime_flags.json 优先（admin 运行时切换即时生效）
     if not review_flag and not full:
         return None  # 非留痕模式维持旧语义：仅高危入队
@@ -751,6 +759,36 @@ async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     return {"items": items}
 
 
+@router.get("/review/status")
+async def review_status(review_id: str | None = None, user: dict = Depends(require_user)):
+    """复核队列状态只读查询（MCP review_status 工具的承载端点）。
+
+    不带 review_id → 最近 100 条记录的三态计数（pending/approved/rejected + total）；
+    带 review_id → 单条状态元数据（状态/提交人/审核人/风险原因等）。
+    安全边界：单条视图刻意剥离 question/answer/images/meta 等临床内容（只给状态元数据，
+    需要内容走 /review/pending 或 /review/history）；未找到 → 404。
+    """
+    rid = (review_id or "").strip()[:64]
+    actor = user.get("username", "system")
+    await asyncio.to_thread(get_audit_logger().write, event_type="review", action="status",
+                            actor=actor, payload={"rid": rid or None})
+    if rid:
+        item = await asyncio.to_thread(review.get, rid)
+        if item is None:
+            raise HTTPException(404, "复核单不存在")
+        keys = ("id", "agent", "status", "confidence", "risk_reason", "submitted_by",
+                "reviewed_by", "review_note", "ts", "resolved_at",
+                "self_confirm_required", "resubmit_of", "attempt")
+        return {k: item.get(k) for k in keys if k in item}
+    items = await asyncio.to_thread(review.list_all, with_images=False)
+    counts = {"pending": 0, "approved": 0, "rejected": 0}
+    for it in items:
+        st = it.get("status")
+        if st in counts:
+            counts[st] += 1
+    return {"total": len(items), **counts}
+
+
 @router.get("/review/my-pending-confirm")
 async def review_my_pending_confirm(user: dict = Depends(require_user)):
     """任务3：当前医生的「待知情确认」项（submitted_by=本人 且 self_confirm_required 且未确认）。
@@ -879,6 +917,45 @@ def _chain_attempt(origin_id: str) -> int:
     return attempt
 
 
+# ---------- HIS 外推（integration 层端口-适配器接入点，唯一示例，见 docs/INTEGRATION.md） ----------
+
+async def _his_push_qc_result(record_id: str, result: dict, actor: str) -> None:
+    """质控结论外推医院 HIS（backend/integration 端口-适配器边界；批2 任务2 接入示例）。
+
+    核心纪律——质控主流程零感知、HIS 故障零影响：
+    - settings.his_adapter="none"（默认未对接）→ NullAdapter：静默跳过，零审计噪音；
+    - 适配器成功 → 审计 his.pushed；适配器显式拒收（返回 falsy）→ 审计 his.push_skipped；
+    - 任何异常（含配置未知厂商标识）→ 审计 his.push_failed，绝不向上抛——失败仅留痕，
+      医生拿质控报告不受 HIS 可用性影响。
+    """
+    try:
+        adapter = his_registry.get_adapter()
+    except Exception as e:  # noqa: BLE001 —— 配置错误（未知标识）也要暴露为失败审计
+        await asyncio.to_thread(get_audit_logger().write, event_type="his", action="push_failed",
+                                actor=actor,
+                                payload={"stage": "resolve_adapter", "error": str(e)[:200]})
+        return
+    if isinstance(adapter, NullAdapter):
+        return  # 未对接 HIS：优雅跳过（默认形态零开销零噪音）
+    try:
+        ok = await asyncio.to_thread(adapter.push_qc_result, record_id, result)
+    except Exception as e:  # noqa: BLE001 —— HIS 侧任何故障全兜底
+        await asyncio.to_thread(get_audit_logger().write, event_type="his", action="push_failed",
+                                actor=actor, payload={"record_id": record_id,
+                                                      "error": str(e)[:200],
+                                                      "adapter": type(adapter).__name__})
+        return
+    if ok:
+        await asyncio.to_thread(get_audit_logger().write, event_type="his", action="pushed",
+                                actor=actor, payload={"record_id": record_id,
+                                                      "adapter": type(adapter).__name__,
+                                                      "status": str((result or {}).get("status", ""))})
+    else:
+        await asyncio.to_thread(get_audit_logger().write, event_type="his", action="push_skipped",
+                                actor=actor, payload={"record_id": record_id,
+                                                      "adapter": type(adapter).__name__})
+
+
 @router.post("/qc/record", response_model=AskResp)
 async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     actor = user.get("username", "system")
@@ -947,6 +1024,9 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
         if hard:
             await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="auto_reject",
                                     actor=actor, payload={"hard": hard[:8]})
+            await _his_push_qc_result("", {"status": "auto_rejected",
+                                           "confidence": out["confidence"],
+                                           "defects": out["defects"]}, actor)
             return AskResp(answer="⛔ 自动驳回（AI 预筛）：存在确定性硬伤：" + "；".join(hard),
                            confidence=out["confidence"], needs_human_review=False,
                            sources=sources, review_id=None, status="auto_rejected",
@@ -954,6 +1034,9 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
         if out["confidence"] >= 0.85 and not escalated:  # 任务6：escalated 永远进人工，优先于 auto_pass
             await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="auto_pass",
                                     actor=actor, payload={"conf": out["confidence"]})
+            await _his_push_qc_result("", {"status": "auto_archived",
+                                           "confidence": out["confidence"],
+                                           "defects": out["defects"]}, actor)
             return AskResp(answer=text + f"\n\n✅ AI 预审通过（置信 {out['confidence']:.2f}），已归档",
                            confidence=out["confidence"], needs_human_review=False,
                            sources=sources, review_id=None, qc_defects=out["defects"])
@@ -963,6 +1046,11 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     rid = await _enqueue_if_risk("qc", "病历质控", text, out["confidence"], True, "病案质控终审", actor,
                                  resubmit_of=resubmit_of, attempt=attempt,
                                  meta={"record": redacted, "labs": labs})
+    # HIS 外推（批2 任务2 接入点）：质控结论生成后按 settings.his_adapter 推送；
+    # 未对接静默跳过，异常仅审计，绝不影响上方的入队与下方响应。
+    await _his_push_qc_result(rid or "", {"status": "rejected_escalated" if escalated else "enqueued",
+                                          "confidence": out["confidence"],
+                                          "defects": out["defects"], "escalated": escalated}, actor)
     return AskResp(answer=text, confidence=out["confidence"], needs_human_review=True,
                    sources=sources, review_id=rid, qc_defects=out["defects"],
                    status="rejected_escalated" if escalated else "ok")
@@ -1030,6 +1118,32 @@ async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
         raise HTTPException(502, f"病历拆分失败：{str(e)[:80]}；请手动填写")
     fields = {k: str(data.get(k, "") or "").strip() for k in QC_FIELDS}
     return {"fields": fields}
+
+
+# ---------- 知识库纯检索（外部系统/MCP 复用检索层，不带 LLM 生成）----------
+class KbSearchReq(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+@router.post("/kb/search")
+async def kb_search(req: KbSearchReq, user: dict = Depends(require_user)):
+    """知识库纯检索：稠密+稀疏混合召回 → BGE 精排，返回 chunks（content/source/score）。
+
+    与 /literature/ask 的区别：本端点只检索不生成（无 LLM 产出）、不写审核队列——
+    供外部系统（如经 MCP 的 AI 客户端）直接复用检索层做自有 RAG。检索失败体面降级 503。
+    """
+    from backend.core import medical_kb
+    actor = user.get("username", "system")
+    await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="search",
+                            actor=actor, payload={"q": req.query[:120], "top_k": req.top_k})
+    try:
+        chunks = await asyncio.to_thread(medical_kb.search_hybrid, req.query, req.top_k)
+    except Exception as e:  # noqa: BLE001 —— Milvus/嵌入模型未就绪时体面降级，不裸 500
+        await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="search_failed",
+                                actor=actor, payload={"err": str(e)[:120]})
+        raise HTTPException(503, "知识库检索暂时不可用（Milvus/嵌入模型未就绪），请稍后重试")
+    return {"query": req.query, "top_k": req.top_k, "chunks": chunks, "total": len(chunks)}
 
 
 # ---------- 知识库管理（仅 admin）----------
