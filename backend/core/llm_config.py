@@ -104,15 +104,17 @@ def suggest_extra_params(base_url: str, model_id: str) -> str:
     """按 base_url+model_id 匹配已知厂商，返回建议的 extra_params（JSON 字符串或空串）。
 
     仅作建议（前端预填可改），不强制落库。已知预设：
-    - 智谱（open.bigmodel.cn 或 model 前缀 glm-）：GLM 5.x 为强制思考模型，实测带
-      关闭思考参数请求报 400「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」
-      ——按报错信息给出的取值域修正预设为 {"thinking":{"type":"high"}}。
+    - 智谱（open.bigmodel.cn 或 model 前缀 glm-）：GLM-5.3 强制深度思考（thinking.type
+      仅接受 enabled/disabled，关闭即 400「该模型始终思考」）；报错文案里的 low/high/max
+      指的是 reasoning_effort（思考程度）参数——依据官方迁移文档（docs.bigmodel.cn
+      migrate-to-glm-new），正确组合为 thinking.type=enabled + reasoning_effort=high。
     - deepseek / moonshot / minimax / anthropic（非 thinking 配置）：无预设（空串）。
     """
     u = (base_url or "").lower()
     m = (model_id or "").strip().lower()
     if "open.bigmodel.cn" in u or m.startswith("glm-") or m.startswith("glm_") or m == "glm":
-        return json.dumps({"thinking": {"type": "high"}}, ensure_ascii=False)
+        return json.dumps({"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
+                          ensure_ascii=False)
     return ""
 
 

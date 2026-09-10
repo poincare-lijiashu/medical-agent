@@ -57,18 +57,19 @@ def _h(t):
 # ---- suggest_extra_params：厂商预设纯函数 ----
 
 def test_suggest_glm_base_url_returns_thinking_preset():
-    """智谱 base_url → thinking 预设（GLM 5.x 强制思考模型，400 文案要求取值
-    low/high/max 之一，修正预设值为 high）。"""
-    s = lc.suggest_extra_params("https://open.bigmodel.cn/api/paas/v4", "glm-5")
-    assert json.loads(s) == {"thinking": {"type": "high"}}
+    """智谱 base_url → GLM-5.3 预设：thinking.type=enabled（强制思考，仅
+    enabled/disabled 合法）+ reasoning_effort=high（报错文案的 low/high/max
+    指 reasoning_effort，官方迁移文档实锤）。"""
+    s = lc.suggest_extra_params("https://open.bigmodel.cn/api/paas/v4", "glm-5.3-flash")
+    assert json.loads(s) == {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
 
 
 def test_suggest_glm_model_prefix_matches_without_bigmodel_url():
-    """非智谱网关但 model 前缀 glm-（大小写不敏感）→ 同样给 thinking 预设。"""
+    """非智谱网关但 model 前缀 glm-（大小写不敏感）→ 同样给 GLM 预设。"""
     assert json.loads(lc.suggest_extra_params("https://gw.example.com/v1", "glm-4.7")) == {
-        "thinking": {"type": "high"}}
+        "thinking": {"type": "enabled"}, "reasoning_effort": "high"}
     assert json.loads(lc.suggest_extra_params("https://gw.example.com/v1", "GLM-5")) == {
-        "thinking": {"type": "high"}}
+        "thinking": {"type": "enabled"}, "reasoning_effort": "high"}
 
 
 def test_suggest_known_vendors_without_preset():
@@ -288,7 +289,8 @@ def test_route_suggest_extra_params(monkeypatch, tmp_path):
               params={"base_url": "https://open.bigmodel.cn/api/paas/v4", "model_id": "glm-5"},
               headers=_h(adm))
     assert r.status_code == 200
-    assert json.loads(r.json()["suggested"]) == {"thinking": {"type": "high"}}
+    assert json.loads(r.json()["suggested"]) == {
+        "thinking": {"type": "enabled"}, "reasoning_effort": "high"}
     r2 = c.get("/api/v1/medical/admin/llm/suggest-extra",
                params={"base_url": "https://api.deepseek.com/v1", "model_id": "deepseek-chat"},
                headers=_h(adm))
