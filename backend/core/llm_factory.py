@@ -198,7 +198,7 @@ class LLMFactory:
     def get_vl_llm(cls, temperature: float = 0) -> BaseChatModel:
         """多模态视觉模型：优先使用管理端激活的 vision provider（F6，openai/anthropic 双格式；
         anthropic 视觉调用失败由上层异常兜底），无激活配置回落 Qwen-VL。单独缓存。
-        任务4 截断修复：统一设置 max_tokens=settings.vl_max_tokens（默认 2000）——
+        任务4 截断修复：统一设置 max_tokens=settings.vl_max_tokens（默认 4096）——
         openai 兼容端点此前不传 max_tokens 被网关默认值截断（影像描述"心脏及"），
         anthropic 分支原固定 1024 同样偏小，两分支统一走配置。"""
         cache_key = f"__vl__{temperature}"

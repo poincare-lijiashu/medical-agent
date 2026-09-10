@@ -55,7 +55,9 @@ class Settings(BaseSettings):
     # 任务4 VL 输出截断修复：视觉模型最大输出 token 数（原 openai 兼容端点未传 max_tokens，
     # 网关按各自默认值截断——影像描述在数百 token 处被剪成"心脏及"）。2000 覆盖放射科
     # 结构化描述（分点所见+建议）富余量；anthropic 分支原固定 1024 一并统一到本配置。
-    vl_max_tokens: int = 2000
+    # vision 模型上限：deepseek vision-exp 的 thinking 块实测消耗 1265-1684 token，
+    # 2000 时 text 被随机挤压截断/清空（时好时坏根因）；4096 留足余量
+    vl_max_tokens: int = 4096
 
     # 模型权重（相对路径按 backend/ 解析，绝对路径直用）
     bge_m3_path: str = ""
