@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.api.deps import ensure_not_revoked, rate_limit, require_role, require_user, revoke_user
 from backend.core import pg_store
@@ -22,9 +22,11 @@ from backend.core.medical_audit import get_audit_logger
 router = APIRouter(dependencies=[Depends(rate_limit)])
 
 
+# 审查修正：鉴权请求体统一 max_length（与全库请求模型纪律一致）——
+# 超长口令会线性烧 PBKDF2 CPU（0.2s/次放大为 DoS 面），超长用户名徒增查表负担。
 class LoginReq(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=128)
 
 
 class LoginResp(BaseModel):
@@ -40,13 +42,13 @@ class RefreshReq(BaseModel):
 
 
 class ChangePwdReq(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: str = Field(max_length=128)
+    new_password: str = Field(max_length=128)
 
 
 class ResetPwdReq(BaseModel):
-    username: str
-    new_password: str
+    username: str = Field(max_length=64)
+    new_password: str = Field(max_length=128)
 
 
 @router.post("/auth/login", response_model=LoginResp)

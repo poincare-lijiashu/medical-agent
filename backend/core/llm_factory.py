@@ -295,32 +295,6 @@ def get_vl_llm(temperature: float = 0) -> BaseChatModel:
     """LLMFactory.get_vl_llm 的便捷入口（视觉多模态）。"""
     return LLMFactory.get_vl_llm(temperature=temperature)
 
-if __name__ == '__main__':
-
-    import asyncio
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from pydantic import Field
-
-    async def main():
-        # llm = LLMFactory.get_llm("qa")  # 通过工厂拿模型
-        # resp = await llm.ainvoke([HumanMessage(content="用一句话介绍 Python")])
-        # print("DeepSeek 回复:", resp.text)  # .text 取文本（回顾 2.3）
-        class PersonInfo(BaseModel):
-            name: str = Field(description="姓名")
-            age: int = Field(description="年龄（整数）")
-
-        llm_struct = get_structured_llm("qa", PersonInfo)
-        messages = [SystemMessage(content="你负责从文本中抽取任务信息"),
-                    HumanMessage(content="我叫小明，今年25岁")]
-
-        result = await llm_struct.ainvoke(messages)
-        print(f"{result}")
-        print(f"{result.name}")
-        print(f"{result.model_dump()}")
-
-
-    asyncio.run(main())
-
 
 
 

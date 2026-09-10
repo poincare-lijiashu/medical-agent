@@ -89,7 +89,7 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 curl http://127.0.0.1:8001/healthz
 # 2) 嵌入设备核对（auto 机器无 N 卡应显示 CPU；启动日志 medical_agent.embedder.loading device=...）
 # 3) 全量测试基线
-python -m pytest -q            # 396+ 全绿
+python -m pytest -q            # 491+ 全绿
 # 4) 评测脚本（自动 PG_OFFLINE=on，不污染服务日志）
 python scripts/run_eval.py --dry-run
 # 5) KB 端到端：admin 登录 → 数据面板确认「知识库向量」与 KB 卡「向量总数」一致（同源 Milvus doc_count）

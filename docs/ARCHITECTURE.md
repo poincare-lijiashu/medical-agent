@@ -46,7 +46,7 @@ Browser(SPA) ──Bearer──▶ FastAPI
 
 | 级别 | 场景 | 控制权 | 护栏 |
 |---|---|---|---|
-| L0 固定管线（默认） | 有充分证据的回答路径 | 代码（LangGraph 条件边） | 全节点可复现、可测（212 pytest） |
+| L0 固定管线（默认） | 有充分证据的回答路径 | 代码（LangGraph 条件边） | 全节点可复现、可测（全量 pytest 基线 491+） |
 | L1 受限 agentic 循环 | grade 判证据不足/答非所问 | **LLM 自主决定**改写查询重检或放弃（`AgenticDecision`，上限 2 轮） | 轮数硬上限；查询限长/去重/空白拒绝（代码强制）；每轮决策审计 `agentic_refine`；LLM 异常 fail-safe 转放弃；SSE 实时轨迹 + `refine_trace` 响应字段 |
 | L2 实验开关 | 统一入口工具循环 | LLM（未启用） | `LITERATURE_AGENTIC` 运行时开关，线上可一键回退固定管线 |
 | 永远人工 | 高危结论签发 / 病历驳回 / 自动通过 | 人 | 双控双签、`QC_AUTO_*` 默认保守、AI 动作全留痕可翻案 |
