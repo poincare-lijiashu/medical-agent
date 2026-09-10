@@ -244,8 +244,14 @@ def test_provider(api_format: str, base_url: str, model_id: str, api_key: str,
             r = client.post(url, headers=headers, json=payload)
         latency_ms = int((time.perf_counter() - t0) * 1000)
         if r.status_code >= 400:
+            detail = f"HTTP {r.status_code}: {r.text[:120]}"
+            # 4xx 且用户未填 extra_params 时附厂商建议（如 GLM 强制思考模型的 thinking 参数）
+            if 400 <= r.status_code < 500 and not user_extra:
+                sug = suggest_extra_params(base_url, model_id)
+                if sug:
+                    detail += f"；建议额外参数：{sug}（在「额外参数」框填入后重试）"
             return {"ok": False, "latency_ms": latency_ms,
-                    "detail": f"HTTP {r.status_code}: {r.text[:120]}"}
+                    "detail": detail}
         try:
             body = r.json()
         except ValueError:
