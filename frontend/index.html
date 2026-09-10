@@ -76,6 +76,9 @@
   .src{font-size:11.5px;color:var(--ink-3)}
   .src a{color:var(--accent-h);text-decoration:none;border-bottom:1px dotted var(--accent)}
   .thumb{max-width:180px;height:auto;border-radius:8px;border:1px solid var(--line)}
+  /* 任务1 审核中心列表行缩略图条：grid 多图布局，每图最高 120px（点击走 showImg 放大） */
+  .review-thumbs{margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;max-width:520px}
+  .review-thumbs img{width:100%;max-height:120px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
   /* skeleton */
   /* skeleton：改 opacity 呼吸闪烁（合成器友好），替代 background-position 非合成器动画 */
   .sk{height:14px;border-radius:6px;background:var(--line);animation:sh 1.3s ease infinite}
@@ -928,6 +931,34 @@ let histPage=0;
 function histGo(d){histPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
 const _tsFmt=new Intl.DateTimeFormat('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
 function fmtTs(s){if(!s)return '';const d=new Date(s);return isNaN(d)?esc(s):_tsFmt.format(d);}
+/* 任务1：审核中心列表行缩略图条——imaging/case 留痕记录的影像此前在列表行不显示，
+   现以缩略图条直接可见。安全纪律与 renderUser/openReviewDetail 一致：
+   createElement('img') + 属性赋值 .src（不用 HTML 字符串拼接图片 src），
+   data:image/ 前缀白名单过滤，点击复用 showImg 放大。 */
+function reviewThumbStrip(p){
+  if(!p)return null;
+  const imgs=(p.images||[]).filter(u=>String(u).startsWith('data:image/'));
+  if(!imgs.length)return null;  /* 无合规影像 → 不渲染（接口剥离 images 时自然无条） */
+  const box=document.createElement('div');
+  box.className='review-thumbs';  /* 多图 grid 布局（样式见 .review-thumbs） */
+  imgs.forEach(u=>{
+    const im=document.createElement('img');
+    im.className='thumb';im.alt='留痕影像缩略图';im.loading='lazy';
+    im.style.cursor='zoom-in';
+    im.src=u;  /* 属性赋值，非 HTML 字符串拼接 */
+    im.addEventListener('click',()=>showImg(u));
+    box.appendChild(im);});
+  return box;
+}
+function mountReviewThumbs(items){
+  /* 任务1：renderReview() 设置 innerHTML 后调用——把行内占位容器 [data-rthumbs]
+     替换为真实缩略图条 DOM（无合规影像的占位直接移除，不留空 div） */
+  const b=document.getElementById('reviewBody');
+  const map=new Map((items||[]).map(x=>[x.id,x]));
+  b.querySelectorAll('[data-rthumbs]').forEach(ph=>{
+    const strip=reviewThumbStrip(map.get(ph.getAttribute('data-rthumbs')));
+    if(strip)ph.replaceWith(strip);else ph.remove();});
+}
 function reviewRow(p,resolved){
   const mine=p.submitted_by===reviewMe;
   /* 双控自动签发：reviewed_by 含「AI·阈值自动」或「AI·留痕模式(自动)」→ 徽标展示；
@@ -936,7 +967,8 @@ function reviewRow(p,resolved){
   const statusChip=resolved?`<span class="chip ${p.status==='approved'?(auto?'mid':'ok'):'warn'}"><span class="dot"></span>${p.status==='approved'?(auto?'自动签发':'已签发'):'已驳回'}</span>`:'';
   return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">${esc(p.agent)}：${esc((p.question||'').slice(0,60))} <span class="src">▾ 展开全文</span></summary>
       <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.question||'')}</div>
-      <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details></td>
+      <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details>
+      <div data-rthumbs="${esc(p.id)}"></div></td>
       <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
       <td class="num">${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
       <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`+
@@ -951,7 +983,8 @@ function myConfirmRow(p){
   const autoSigned=p.status==='approved'&&/AI·/.test(String(p.reviewed_by||''));
   return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">${esc(p.agent)}：${esc((p.question||'').slice(0,60))} <span class="src">▾ 展开全文</span></summary>
       <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.question||'')}</div>
-      <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details></td>
+      <div class="txt md" style="margin-top:6px">${md(p.answer||'')}</div></details>
+      <div data-rthumbs="${esc(p.id)}"></div></td>
       <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
       <td class="num">${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
       <td>${autoSigned?'<span class="chip mid"><span class="dot"></span>AI 自动签发 · 待您知情确认</span>':''}
@@ -965,12 +998,14 @@ function renderReview(){
     if(!hist.length){b.innerHTML='<div class="empty">'+ICON.review+`<div>${mine?'暂无您的历史记录。':'暂无已处理的历史记录。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'签发/驳回过的项会出现在这里。'}</div></div>`;return;}
     const pages=Math.max(1,Math.ceil(hist.length/HIST_PER));
     if(histPage>=pages)histPage=pages-1; if(histPage<0)histPage=0;
-    const rows=hist.slice(histPage*HIST_PER,histPage*HIST_PER+HIST_PER).map(p=>reviewRow(p,true)).join('');
+    const hslice=hist.slice(histPage*HIST_PER,histPage*HIST_PER+HIST_PER);  /* 任务1：切片留存供缩略图挂载 */
+    const rows=hslice.map(p=>reviewRow(p,true)).join('');
     const hpager=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
       <button class="btn sm secondary" ${histPage===0?'disabled':''} onclick="histGo(-1)">‹ 上一页</button>
       <span class="src num">第 ${histPage+1} / ${pages} 页 · 共 ${hist.length} 条已处理</span>
       <button class="btn sm secondary" ${histPage>=pages-1?'disabled':''} onclick="histGo(1)">下一页 ›</button></div>`;
     b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>处理结果</th></tr></thead><tbody>${rows}</tbody></table>${hpager}</div>`;
+    mountReviewThumbs(hslice);  /* 任务1：历史行缩略图条挂载 */
     return;}
   /* 任务3：doctor/pharmacist「我的待确认」分支（数据源 my-pending-confirm，仅本人） */
   if(mine){
@@ -985,6 +1020,7 @@ function renderReview(){
       <span class="src num">第 ${reviewPage+1} / ${pagesM} 页 · 共 ${mineItems.length} 项</span>
       <button class="btn sm secondary" ${reviewPage>=pagesM-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
     b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rowsM}</tbody></table>${pagerM}</div>`;
+    mountReviewThumbs(sliceM);  /* 任务1：待确认行缩略图条挂载 */
     return;}
   const pend=(reviewItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
   if(!pend.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待质控员/管理员签发。'}</div></div>`;return;}
@@ -998,6 +1034,7 @@ function renderReview(){
     <span class="src num">第 ${reviewPage+1} / ${total} 页 · 共 ${reviewItems.length} 项</span>
     <button class="btn sm secondary" ${reviewPage>=total-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
   b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${pager}</div>`;
+  mountReviewThumbs(slice);  /* 任务1：待处理行缩略图条挂载 */
 }
 function reviewGo(d){reviewPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
 let rejectTarget=null, signTarget=null; /* signTarget：待确认的签发操作 {id,dec,note}（F4） */

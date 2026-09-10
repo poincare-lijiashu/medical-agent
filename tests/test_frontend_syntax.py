@@ -200,3 +200,29 @@ def test_no_emoji_icons_remain():
     html = FRONTEND.read_text(encoding="utf-8")
     bad = sorted({c for c in _EMOJI_RE.findall(html) if c not in _EMOJI_ALLOW})
     assert not bad, f"残留 emoji 图标：{bad}"
+
+
+# ---------- 任务：审核中心列表行缩略图条（追加标记锁，不改动既有断言） ----------
+
+def test_review_thumbs_frontend_markers_present():
+    """审核中心列表行缩略图条标记锁（防回退）：
+    - reviewThumbStrip 缩略图渲染函数 + mountReviewThumbs 占位挂载（列表行 innerHTML 后挂 DOM）；
+    - data:image/ 前缀白名单过滤必须存在于缩略图函数体内；
+    - 安全纪律：createElement('img') + 属性赋值 .src，禁止 innerHTML 拼图片 src；
+    - grid 多图布局样式（.review-thumbs，每图 max-height 120px）+ 点击复用 showImg 放大。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        "function reviewThumbStrip(", "function mountReviewThumbs(",
+        "data-rthumbs",            # 行内占位容器（reviewRow / myConfirmRow 各一处 + 挂载查询）
+        ".review-thumbs{",          # grid 多图布局
+        ".review-thumbs img{", "max-height:120px",  # 每图最高 120px
+        "mountReviewThumbs(hslice)", "mountReviewThumbs(sliceM)", "mountReviewThumbs(slice)",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = _extract_fn(html, "reviewThumbStrip")
+    # 白名单过滤 + createElement 属性赋值必须存在于缩略图函数体内（而非仅其它函数）
+    assert "startsWith('data:image/')" in fn, "缩略图渲染缺少 data:image/ 前缀白名单过滤"
+    assert "createElement('img')" in fn, "缩略图必须 createElement('img') 创建"
+    assert ".src=u" in fn, "图片 src 必须属性赋值"
+    assert "innerHTML" not in fn, "缩略图渲染禁止 innerHTML 拼图片 src"
+    assert "showImg" in fn, "缩略图点击应复用 showImg 放大"
