@@ -125,7 +125,7 @@ async def overview(user: dict = Depends(require_user)):
     """概览面板：真实运行与合规指标（不编造）。"""
     from backend.core.embedder import device
     from backend.core.medical_kb import doc_count
-    items = await asyncio.to_thread(review.list_all)  # 队列文件读盘移出事件循环（QUALITY-001）
+    items = await asyncio.to_thread(review.list_all, with_images=False)  # 队列文件读盘移出事件循环（QUALITY-001）；概览只计数，剥离 images 控响应体积（任务5）
     pending = sum(1 for i in items if i.get("status") == "pending")
     resolved = sum(1 for i in items if i.get("status") in ("approved", "rejected"))
     al = get_audit_logger()
@@ -463,6 +463,12 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
         risky = _has_risk(desc)
         conf = 0.60 if risky else 0.72
         src = ["VL:" + vl_model_name()]
+        # 任务4：finish_reason=length（max_tokens 上限截断）→ 审计记 vl_truncated
+        # （文案提示由 medical_imaging 统一追加"（输出因长度截断，已按最大长度返回）"）。
+        if (d.get("stop_reason") or "").strip().lower() in ("length", "max_tokens", "max_output_tokens"):
+            await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_truncated",
+                                    actor=actor, payload={"vl_raw_len": d["vl_raw_len"],
+                                                          "stop_reason": d["stop_reason"]})
         rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor,
                                      images=imgs, sources=src)
         suffix = "（已标记为需放射科医师双人核对）" if risky else "\n\n以上为 AI 初步所见，供医师参考。"
@@ -705,7 +711,18 @@ async def review_pending(user: dict = Depends(require_role(*_REVIEW_ROLES))):
 
 @router.get("/review/history")
 async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    """历史列表（任务5 语义更新）：list_all 现按签发方式剥离——仅人工签发记录剥离 images
+    （FIND-03a 人工复核后不留原图）；AI·留痕模式(自动) 签发的记录保留 images（用户自己的
+    交互留痕，前端历史区缩略图可见）。
+    可见性边界（服务端强制，此前仅前端按人过滤）：保留的 images 仅**发起人本人 / admin**
+    可见——其它查看者（qc/其他医生/药师）返回的条目一律剥离 images（原始影像属患者数据，
+    不因留痕可见性放宽而扩大暴露面）。"""
     items = await asyncio.to_thread(review.list_all, limit=50)
+    me = user.get("username", "system")
+    is_admin = user.get("role") == "admin"
+    if not is_admin:
+        items = [i if i.get("submitted_by") == me
+                 else {k: v for k, v in i.items() if k != "images"} for i in items]
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="history",
                             actor=user.get("username", "system"),
                             payload={"n": len(items), "role": user.get("role", "")})
@@ -1182,7 +1199,7 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", ""),
               "dept": rec.get("dept", "")}
              for u, rec in (await asyncio.to_thread(all_users)).items()]
-    items = await asyncio.to_thread(review.list_all)
+    items = await asyncio.to_thread(review.list_all, with_images=False)  # 数据面板统计只计数，剥离 images 控响应体积（任务5）
     stats = {"pending": sum(1 for i in items if i.get("status") == "pending"),
              "approved": sum(1 for i in items if i.get("status") == "approved"),
              "rejected": sum(1 for i in items if i.get("status") == "rejected")}

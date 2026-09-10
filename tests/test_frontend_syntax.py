@@ -226,3 +226,21 @@ def test_review_thumbs_frontend_markers_present():
     assert ".src=u" in fn, "图片 src 必须属性赋值"
     assert "innerHTML" not in fn, "缩略图渲染禁止 innerHTML 拼图片 src"
     assert "showImg" in fn, "缩略图点击应复用 showImg 放大"
+
+
+# ---------- 任务3 admin 面板排版（追加标记锁，不改动既有断言） ----------
+
+def test_admin_panel_layout_markers_present():
+    """任务3 排版标记锁：admin 数据面板 .dash 改 masonry 式（CSS columns:2 自动均衡），
+    留痕模式卡紧邻审计流（DOM 顺序即列内顺序）；卡片 break-inside:avoid 不跨列截断；
+    高度动态变化（审计流展开/用户表增删）时浏览器自动重排，任何卡片下方不留大块空白。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    assert ".dash{columns:2;column-gap:16px}" in html, "缺少 masonry 双列样式"
+    assert ".dash>.panel{break-inside:avoid;margin:0 0 16px}" in html, "缺少卡片不跨列截断样式"
+    assert "@media(max-width:1024px){.dash{columns:1}}" in html, "缺少窄屏单列回落"
+    assert "任务3 排版：masonry 式" in html, "缺少 masonry 重排注释标记"
+    assert "留痕模式卡紧邻审计流" in html, "留痕模式卡必须紧邻审计流"
+    # 留痕模式卡必须仅渲染一处，且旧的整宽 margin-top 版本已移除
+    assert html.count("留痕模式（全交互留痕 · 运行时开关）") == 1, "留痕模式卡必须仅渲染一处"
+    assert '<div class="panel" style="margin-top:16px"><h3>留痕模式' not in html, \
+        "旧的整宽留痕模式卡（margin-top 版）必须已移除"

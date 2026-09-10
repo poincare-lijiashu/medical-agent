@@ -94,6 +94,18 @@ def _dsn() -> str:
     return settings.async_database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
+# ---------- 任务2：显式离线模式（PG_OFFLINE=on） ----------
+# 场景：eval/脚本/单测等非服务进程没有 PG 池（从不调 init），此前每次读都会打
+# read_stale_fallback_json 告警（logs/app.log 7269 行几乎全是它刷屏）。显式离线模式下
+# pg_store 纯静默 JSON：init 直接跳过、JSON 是唯一真源、不置 stale、不告警。
+_TRUTHY = ("on", "1", "true", "yes")
+
+
+def offline_mode() -> bool:
+    """PG_OFFLINE 环境变量解析（on/1/true/yes 均可，大小写不敏感）。"""
+    return (os.environ.get("PG_OFFLINE") or "").strip().lower() in _TRUTHY
+
+
 async def _init_impl() -> bool:
     """建池 + 建表（含旧表平滑升级：users.dept / review_queue.images）。"""
     global _pool
@@ -151,7 +163,14 @@ async def _init_impl() -> bool:
 
 
 async def init() -> bool:
-    """建池+建表（池归属专用 DB 循环）。成功 True；任何异常降级 JSON 模式（_pool=None）。"""
+    """建池+建表（池归属专用 DB 循环）。成功 True；任何异常降级 JSON 模式（_pool=None）。
+    任务2：PG_OFFLINE=on（显式离线模式）→ 直接跳过建池（纯静默 JSON 模式，
+    eval/脚本/测试进程用），返回 False 且不产生告警。"""
+    global _pool
+    if offline_mode():
+        logger.info("pg_store.offline_mode", detail="PG_OFFLINE=on：跳过 PG 初始化，JSON 为唯一真源")
+        _pool = None
+        return False
     try:
         return bool(await _arun(_init_impl()))
     except Exception as e:  # noqa: BLE001
@@ -379,11 +398,34 @@ _repo_pg_stale: set[str] = set()  # 任务1：repo 层 PG 全量同步失败「�
 # 洗白全部域的 stale，导致队列域 PG 同步失败后读切回 PG 旧真源，JSON 独有新提交
 # （imaging ask 留痕）从审核中心"消失"——已改为按域隔离，互不影响。
 
+_stale_warned: set[str] = set()  # 任务2：read_stale_fallback_json 进程内去重集合（键=文件名）。
+# 非服务进程（eval/脚本/单测无 PG 池）此前每次读都 WARN——logs/app.log 7269 行刷屏根因。
+# 现同一 file 仅首次 WARN（后续 DEBUG 静默）；该域 stale 被成功写清除后重置去重位，
+# 再次进入 stale/无池状态时重新 WARN 一次（告警语义保留、刷屏消除）。
+
+
+def _warn_stale_fallback_once(domain: str) -> None:
+    """任务2：读回落 JSON 的去重告警——每 file 进程内首次 WARN，之后 DEBUG；
+    stale 清除（成功写）时由 _json_then_pg 重置，重新具备告警能力。"""
+    if domain in _stale_warned:
+        logger.debug("pg.repo.read_stale_fallback_json", file=domain,
+                     detail="同 file 已告警过，静默（dedup）")
+        return
+    _stale_warned.add(domain)
+    logger.warning("pg.repo.read_stale_fallback_json", file=domain)
+
 
 def _pg_or_json(load_fn, json_loader, path: str, default):
     """repo 读编排：PG 池可用且本域非 stale → 读 PG（非空即真源）；None/stale/异常/超时/
-    空表 → JSON（现状行为；stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。"""
+    空表 → JSON（现状行为；stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。
+    任务2：PG_OFFLINE=on → 直接 JSON 纯静默（不告警）；无池/stale 读回落首次 WARN
+    后同 file 去重静默（DEBUG）。"""
     domain = os.path.basename(path)
+    if offline_mode():
+        # 显式离线模式：JSON 是唯一真源，读它不是异常窗口，绝不告警
+        if json_loader is not None:
+            return json_loader()
+        return _read_json(path, default)
     if _pool and domain not in _repo_pg_stale:
         try:
             data = _run_pg(load_fn())
@@ -395,7 +437,8 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
     else:
         # 任务1：stale 读回落从 debug 升级为 warning——这是"数据暂存 JSON 未同步 PG"
         # 的异常窗口，运维必须可在日志中看到（写失败时已有 save_pg_failed 告警配对）。
-        logger.warning("pg.repo.read_stale_fallback_json", file=domain)
+        # 任务2：同 file 首次 WARN 后去重静默（DEBUG），stale 清除后重置。
+        _warn_stale_fallback_once(domain)
     if json_loader is not None:
         return json_loader()
     return _read_json(path, default)
@@ -404,13 +447,18 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
 def _json_then_pg(save_fn, path: str, data) -> None:
     """repo 写编排：JSON 原子写先行（兜底安全，现状行为），PG 可用再全量同步（best-effort：
     异常仅告警不冒泡，但置**本域** stale 标志——此后该域读回落 JSON 最新数据，直到该域
-    下次成功写恢复 PG 真源；其它域的 stale 状态不受影响（任务1 域级隔离））。"""
+    下次成功写恢复 PG 真源；其它域的 stale 状态不受影响（任务1 域级隔离））。
+    任务2：PG_OFFLINE=on → 仅 JSON 落盘（不置 stale 不告警）；成功写清除本域 stale 的
+    同时重置该 file 的告警去重位（再次 stale 时重新 WARN 一次）。"""
     _write_json_atomic(path, data)
     domain = os.path.basename(path)
+    if offline_mode():
+        return
     if _pool:
         try:
             _run_pg(save_fn(data))
             _repo_pg_stale.discard(domain)
+            _stale_warned.discard(domain)  # 任务2：stale 已清除，下次再 stale 重新 WARN
         except Exception as e:  # noqa: BLE001
             _repo_pg_stale.add(domain)
             logger.warning("pg.repo.save_pg_failed", error=str(e)[:120],

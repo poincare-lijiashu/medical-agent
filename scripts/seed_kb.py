@@ -32,15 +32,36 @@ GUIDE_TEXT = (
 )
 
 
+def _cjk_font() -> tuple[str, str]:
+    """任务6 可移植性小修：跨平台中文字体选择（此前硬编码 C:/Windows/Fonts/msyh.ttc，
+    Linux/macOS 上种子脚本直接失败）。优先系统常见 CJK 字体（Windows/Linux/macOS 各候选），
+    全部缺失时回退 PyMuPDF 内置 CJK（china-s，无外部文件依赖）。"""
+    import os
+    windir = os.environ.get("WINDIR") or r"C:\Windows"
+    candidates = [
+        os.path.join(windir, "Fonts", "msyh.ttc"),          # Windows 微软雅黑
+        os.path.join(windir, "Fonts", "simhei.ttf"),        # Windows 黑体
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",   # Linux 文泉驿
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Linux Noto
+        "/System/Library/Fonts/PingFang.ttc",               # macOS 苹方
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return "cjk", p
+    return "china-s", ""  # PyMuPDF 内置 CJK 字体名（fontfile 留空）
+
+
 def ensure_pdf():
     GUIDE.parent.mkdir(parents=True, exist_ok=True)
     if GUIDE.exists():
         return
     d = fitz.open()
     p = d.new_page(width=595, height=842)
-    p.insert_font(fontname="cjk", fontfile="C:/Windows/Fonts/msyh.ttc")
+    fname, ffile = _cjk_font()
+    if ffile:
+        p.insert_font(fontname=fname, fontfile=ffile)
     p.insert_textbox(fitz.Rect(50, 50, 545, 792), GUIDE_TEXT,
-                     fontname="cjk", fontsize=12, lineheight=1.5)
+                     fontname=fname, fontsize=12, lineheight=1.5)
     d.save(str(GUIDE))
     d.close()
     print("WROTE", GUIDE)

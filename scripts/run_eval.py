@@ -133,6 +133,12 @@ def run_case(case: dict) -> dict:
 
 
 def main() -> int:
+    # 任务2：eval runner 属非服务进程（不跑 lifespan/无 PG 池），启动时显式置离线模式——
+    # 同进程内任何 backend 模块导入（pg_store repo 层）走纯静默 JSON：不置 stale、
+    # 不打 read_stale_fallback_json 告警（此前 logs/app.log 刷屏根因之一）。放在 main()
+    # 而非模块顶层：作为脚本执行才生效，被 import（如测试加载）时不污染进程环境。
+    # 服务端经 HTTP 调用不受本变量影响（服务进程有自己的 PG 池）。
+    os.environ.setdefault("PG_OFFLINE", "on")
     ap = argparse.ArgumentParser(
         description="MedAssist 评测：常规集/难题集，EVAL_AGENTIC=on/off 切 A/B，结果落盘 eval/results_*.json")
     ap.add_argument("--cases", default=None,

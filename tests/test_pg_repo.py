@@ -523,3 +523,105 @@ def test_consults_pg_roundtrip_truth_source(fake_pg, tmp_path, monkeypatch):
     # PG 异常 → JSON 兜底（含重试语义的 json_loader），异常绝不冒泡
     fake_pg["fail"] = RuntimeError("pg down")
     assert [i["id"] for i in consults_mod._load()] == ["con-json"]
+
+
+# ---------- 任务2：stale 告警去重 + PG_OFFLINE 显式离线模式 ----------
+
+def _stale_warns(caplog) -> list:
+    """收集 pg_store 的 read_stale_fallback_json WARNING 记录。"""
+    import logging
+    return [r for r in caplog.records
+            if r.name == "backend.core.pg_store"
+            and r.levelno == logging.WARNING
+            and "read_stale_fallback_json" in r.getMessage()]
+
+
+def test_stale_fallback_warn_deduped_per_file(tmp_path, monkeypatch, caplog):
+    """任务2：非服务进程（无 PG 池，如 eval/脚本）每次读都 WARN → logs/app.log 刷屏根因
+    （7269 行）。同 file 首次 WARN 后静默（DEBUG），进程内 dedup 集合去重。"""
+    import logging
+    monkeypatch.setattr(pg_store, "_pool", None)
+    monkeypatch.setattr(pg_store, "_stale_warned", set())
+    monkeypatch.setattr(pg_store, "_repo_pg_stale", set())
+    f = str(tmp_path / "queue.json")
+    with caplog.at_level(logging.DEBUG, logger="backend.core.pg_store"):
+        pg_store.load_queue(f)
+        pg_store.load_queue(f)
+        pg_store.load_queue(f)
+    assert len(_stale_warns(caplog)) == 1, "同 file 仅首次 WARN，后续读不得再打 WARNING"
+
+
+def test_stale_warn_rewarn_after_stale_cleared(fake_pg, tmp_path, monkeypatch, caplog):
+    """任务2：去重位随 stale 清除重置——域恢复（成功写）后再次进入 stale/无池状态，
+    首次读重新 WARN 一次（告警语义保留、刷屏消除）。"""
+    import logging
+    monkeypatch.setattr(pg_store, "_stale_warned", set())
+    q = str(tmp_path / "queue.json")
+    item = [{"id": "rev-x", "ts": "2026-01-01T00:00:00+00:00", "agent": "drug",
+             "question": "q", "answer": "a", "confidence": 0.9, "risk_reason": "r",
+             "status": "pending", "submitted_by": "doctor01", "reviewed_by": None,
+             "review_note": None, "resolved_at": None, "images": None}]
+    with caplog.at_level(logging.DEBUG, logger="backend.core.pg_store"):
+        fake_pg["fail"] = RuntimeError("pg down")
+        pg_store.save_queue(item, q)   # 写失败 → 队列域置 stale
+        pg_store.load_queue(q)         # 首次 WARN
+        pg_store.load_queue(q)         # 去重静默
+        fake_pg["fail"] = None
+        pg_store.save_queue(item, q)   # 成功写 → stale 清除 + 去重位重置
+        fake_pg["fail"] = RuntimeError("pg down")
+        pg_store.save_queue(item, q)   # 再次失败 → 重新 stale
+        pg_store.load_queue(q)         # 重新 WARN
+        pg_store.load_queue(q)         # 再去重
+    assert len(_stale_warns(caplog)) == 2, "两个 stale 周期各 WARN 一次（1+1），不随读次数刷屏"
+
+
+def test_pg_offline_mode_pure_silent_json(fake_pg, tmp_path, monkeypatch, caplog):
+    """任务2：PG_OFFLINE=on 显式离线模式——池即使被注入也绝不读/写 PG（JSON 唯一真源），
+    读写全程无 read_stale_fallback_json 告警（纯静默，测试/脚本进程用）。"""
+    import logging
+    monkeypatch.setenv("PG_OFFLINE", "on")
+    fake_pg["users"] = {"pgdoc": {"role": "doctor", "dept": "外科", "password_hash": "pg"}}
+    u = str(tmp_path / "users.json")
+    (tmp_path / "users.json").write_text(json.dumps(
+        {"jsondoc": {"role": "admin", "dept": "医务处", "password_hash": "j"}}), encoding="utf-8")
+    with caplog.at_level(logging.DEBUG, logger="backend.core.pg_store"):
+        assert pg_store.load_users(u) == {
+            "jsondoc": {"role": "admin", "dept": "医务处", "password_hash": "j"}}, \
+            "离线模式 JSON 是唯一真源（PG 池被注入也不读）"
+        pg_store.save_users({"new": {"role": "qc", "dept": "", "password_hash": "x"}}, u)
+    assert json.loads((tmp_path / "users.json").read_text(encoding="utf-8"))["new"]["role"] == "qc"
+    assert set(fake_pg["users"]) == {"pgdoc"}, "离线模式写不得触达 PG"
+    assert not _stale_warns(caplog), "离线模式纯静默：无 stale 读告警"
+    assert not pg_store._repo_pg_stale, "离线模式不置 stale"
+
+
+def test_pg_offline_env_parsing(monkeypatch):
+    """PG_OFFLINE 三态解析：on/1/true/yes（大小写不敏感）→ True；其余/未设 → False。"""
+    for v in ("on", "ON", "1", "true", "Yes"):
+        monkeypatch.setenv("PG_OFFLINE", v)
+        assert pg_store.offline_mode() is True
+    for v in ("off", "0", "false", ""):
+        monkeypatch.setenv("PG_OFFLINE", v)
+        assert pg_store.offline_mode() is False
+    monkeypatch.delenv("PG_OFFLINE", raising=False)
+    assert pg_store.offline_mode() is False
+
+
+def test_pg_offline_init_skips_pool(monkeypatch):
+    """PG_OFFLINE=on → init 直接跳过建池（绝不尝试连接 PG），返回 False、池为 None。"""
+    monkeypatch.setenv("PG_OFFLINE", "on")
+
+    async def _boom(*a, **k):
+        raise AssertionError("离线模式不得尝试创建 PG 池")
+
+    monkeypatch.setattr(pg_store.asyncpg, "create_pool", _boom)
+    assert asyncio.run(pg_store.init()) is False
+    assert pg_store.available() is False
+
+
+def test_eval_runner_sets_pg_offline_env():
+    """任务2：eval runner 启动时自动设 PG_OFFLINE=on（非服务进程纯静默 JSON）。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "run_eval.py").read_text(
+        encoding="utf-8")
+    assert 'os.environ.setdefault("PG_OFFLINE", "on")' in src

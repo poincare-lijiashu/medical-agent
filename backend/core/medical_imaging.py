@@ -59,6 +59,16 @@ def _extract_reply(r) -> tuple[str, str | None]:
     return (out or ""), (str(stop) if stop else None)
 
 
+# 任务4 截断提示文案：finish_reason=length（输出因 max_tokens 上限被截断）时追加到
+# 所见末尾——用户此前看到"心脏及"式的半句还以为是 AI 结论残缺，明确告知是长度上限。
+_VL_TRUNC_SUFFIX = "（输出因长度截断，已按最大长度返回）"
+
+
+def _is_truncated(stop: str | None) -> bool:
+    """stop_reason 是否为长度截断（openai finish_reason=length / anthropic stop_reason=max_tokens 等价形态）。"""
+    return bool(stop) and str(stop).strip().lower() in ("length", "max_tokens", "max_output_tokens")
+
+
 async def describe_images_detailed(images: list[str], question: str = "",
                                    system_prompt: str | None = None) -> dict:
     """支持多图（≤N6）：逐张描述并综合，返回 {"text","vl_raw_len","stop_reason"}。
@@ -67,6 +77,8 @@ async def describe_images_detailed(images: list[str], question: str = "",
     slightly 更高温度（0→0.2）重试一次（prompt 原样）；仍空则把末次原始响应长度与
     stop_reason 一并返回，供路由层写入 vl_empty 审计（为将来换稳定 vision 模型保留
     诊断线索）。system_prompt=None 时用默认放射科 _PROMPT；case/ask 传 CASE_PROMPT（F1）。
+    任务4 截断修复：stop_reason=length（max_tokens 上限）→ 文本末尾补截断提示文案，
+    路由层同时记 vl_truncated 审计（配合 llm_factory max_tokens=2000 根治截断）。
     """
     imgs = [x for x in (images or []) if x][:6]
     if not imgs:
@@ -85,6 +97,8 @@ async def describe_images_detailed(images: list[str], question: str = "",
         text, raw_len = raw.strip(), len(raw)
         if text:
             break
+    if text and _is_truncated(stop) and not text.endswith(_VL_TRUNC_SUFFIX):
+        text += _VL_TRUNC_SUFFIX  # 任务4：截断文案补在所见末尾（末次重试结果仍截断才补）
     return {"text": text, "vl_raw_len": raw_len, "stop_reason": stop}
 
 

@@ -17,7 +17,12 @@ FlagEmbedding==1.2.10
 sentence-transformers==3.3.1
 pymupdf==1.24.14
 biopython==1.84
+pillow==12.3.0
+# 任务C 扫描版 PDF/图片 OCR（kb_ingest/ocr.py 运行时依赖，此前漏固化）
+rapidocr-onnxruntime==1.4.4
 mcp>=1.8,<2
 setuptools<81
+# 测试（TDD 基线 396+ 全绿所需）
+pytest==8.3.4
 # LLM client (Qwen MaaS via DashScope openai-compat)
 openai==1.66.3

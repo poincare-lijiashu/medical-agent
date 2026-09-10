@@ -104,13 +104,60 @@ def test_resolve_clears_images_for_history(monkeypatch, tmp_path):
     assert item["images"] is None, "已处理历史不应再留存影像"
 
 
-def test_list_all_strips_images(monkeypatch, tmp_path):
-    """FIND-03b：list_all（admin_data/history 数据源）返回前剥离 images。"""
+def test_list_all_strips_images_only_for_human_signed(monkeypatch, tmp_path):
+    """FIND-03b 语义更新（任务5 留痕记录 images 保留）：list_all 剥离规则由「全量剥离」
+    调整为「仅人工签发的记录剥离 images」（合规初衷不变：人工复核后不留原图）；
+    AI·留痕模式(自动) 签发的记录保留 images（用户自己的交互留痕，历史区可回溯）。
+    既有测试 test_list_all_strips_images 按新语义重写并改名（非删除断言）。"""
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
-    review.submit(agent="imaging", question="q", answer="a", confidence=0.6,
-                  risk_reason="r", submitted_by="doctor01", images=[_png_data_url(800, 600)])
+    # AI 自动签发（留痕模式语义：resolve reviewer=AI·留痕模式(自动) + keep_images=True）
+    rid_auto = review.submit(agent="imaging", question="q", answer="a", confidence=0.6,
+                             risk_reason="r", submitted_by="doctor01",
+                             images=[_png_data_url(800, 600)])
+    review.resolve(rid_auto, "approved", "AI·留痕模式(自动)", "留痕模式自动签发", True)
+    # 人工签发（默认 keep_images=False，resolve 已把存储层 images 置 None）
+    rid_manual = review.submit(agent="imaging", question="q2", answer="a2", confidence=0.6,
+                               risk_reason="r2", submitted_by="doctor01",
+                               images=[_png_data_url(800, 600)])
+    review.resolve(rid_manual, "approved", "admin01", "人工核对通过")
     items = review.list_all()
-    assert items and all("images" not in i for i in items), "历史列表不应携带影像数据"
+    by_id = {i["id"]: i for i in items}
+    assert by_id[rid_auto]["images"], "AI·留痕模式(自动) 签发的记录应保留 images"
+    assert "images" not in by_id[rid_manual], "人工签发的记录在历史列表仍剥离 images"
+    # with_images=False（/overview、/admin/data 统计调用方）：全量剥离控体积
+    assert all("images" not in i for i in review.list_all(with_images=False))
+
+
+def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
+    """任务5 可见性边界（服务端强制）：AI 留痕签发记录保留的 images 仅发起人本人/admin
+    可见——其他医生（doctor02）经 /review/history 读取时 images 必须被剥离
+    （此前仅靠前端按人过滤，接口层对多角色可见）。"""
+    from backend.core import auth as auth_mod
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    seed_default_users()
+    assert auth_mod.create_user("doctor02", "Med@2026x", "doctor", False, "内科")
+    c = TestClient(app)
+    tok_doc1 = _login(c, "doctor01", "Med@2026")
+    img = _png_data_url(800, 600)
+    r = c.post("/api/v1/medical/imaging/ask", headers=_h(tok_doc1),
+               json={"question": "这张胸片", "images": [img]})
+    assert r.status_code == 200, r.text
+    rid = r.json()["review_id"]  # 留痕模式默认 on：入队即 AI·留痕模式(自动) 签发，images 存档
+    # 发起人本人：images 可见
+    items_self = c.get("/api/v1/medical/review/history", headers=_h(tok_doc1)).json()["items"]
+    entry_self = next(i for i in items_self if i["id"] == rid)
+    assert entry_self.get("images"), "发起人本人应能看到自己留痕记录的影像"
+    # 其他医生：images 必须剥离
+    tok_doc2 = _login(c, "doctor02", "Med@2026x")
+    items_other = c.get("/api/v1/medical/review/history", headers=_h(tok_doc2)).json()["items"]
+    entry_other = next(i for i in items_other if i["id"] == rid)
+    assert "images" not in entry_other, "非发起人读取他人留痕记录不得携带 images"
+    # admin：全可见（合规审计需要）
+    tok_admin = _login(c, "admin01", "Med@2026")
+    items_admin = c.get("/api/v1/medical/review/history", headers=_h(tok_admin)).json()["items"]
+    entry_admin = next(i for i in items_admin if i["id"] == rid)
+    assert entry_admin.get("images"), "admin 对留痕记录的影像全可见"
 
 
 def test_submit_caps_total_image_chars_4m(monkeypatch, tmp_path):

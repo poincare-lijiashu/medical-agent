@@ -206,10 +206,23 @@ def get(rid: str) -> dict | None:
     return None
 
 
-def list_all(limit: int = 100) -> list[dict]:
-    """历史列表（admin_data / review_history 数据源）：返回前剥离 images（FIND-03 体积控制，
-    历史不再全量带图；详情仍可用 get()）。"""
-    return [{k: v for k, v in i.items() if k != "images"}
+def _is_auto_signed(item: dict) -> bool:
+    """任务5：是否 AI 自动签发（reviewed_by=「AI·留痕模式(自动)」/「AI·阈值自动(规则库v2)」）。
+    人工签发的 reviewed_by 为真实 qc/admin 用户名。"""
+    return str(item.get("reviewed_by") or "").startswith("AI·")
+
+
+def list_all(limit: int = 100, with_images: bool = True) -> list[dict]:
+    """历史列表（admin_data 统计 / review_history 数据源）。
+
+    任务5 剥离规则调整（更新 FIND-03b 语义，合规初衷不变）：**仅人工签发的记录剥离
+    images**（人工复核后不留原图）；AI 自动签发（留痕模式/阈值自动，签发时
+    keep_images=True 已存档）的记录保留 images——用户自己的交互留痕在历史区可回溯。
+    with_images=False：全量剥离（/overview、/admin/data 等只做计数的调用方用，
+    控响应体积，不携带 base64）。可见性边界（images 仅发起人本人/admin 可见）由
+    /review/history 路由按查看者收窄，本函数不做人级过滤。"""
+    return [(dict(i) if (with_images and _is_auto_signed(i))
+             else {k: v for k, v in i.items() if k != "images"})
             for i in _load()[::-1][:limit]]
 
 

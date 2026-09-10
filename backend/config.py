@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     # 注意 batch 32×1024 token 显存约翻倍，若 OOM 将 kb_ingest._EMBED_BATCH 降为 16。
     embed_max_length: int = 1024
 
+    # 任务6 可移植性：嵌入设备选择。auto=有 CUDA 用 GPU 否则 CPU（部署机无 N 卡零配置可跑）；
+    # 显式 cuda/cpu 强制指定（cuda 不可用时自动回落 CPU 并告警，绝不拒绝启动）。
+    embed_device: str = "auto"
+
+    # 任务4 VL 输出截断修复：视觉模型最大输出 token 数（原 openai 兼容端点未传 max_tokens，
+    # 网关按各自默认值截断——影像描述在数百 token 处被剪成"心脏及"）。2000 覆盖放射科
+    # 结构化描述（分点所见+建议）富余量；anthropic 分支原固定 1024 一并统一到本配置。
+    vl_max_tokens: int = 2000
+
     # 模型权重（相对路径按 backend/ 解析，绝对路径直用）
     bge_m3_path: str = ""
     reranker_path: str = ""

@@ -22,13 +22,30 @@ def _resolve_local_path(path: str, base_dir: str) -> str:
 
 
 def device() -> str:
+    """嵌入设备解析（任务6 可移植性，配置化 settings.embed_device）：
+    - auto（默认）：有 CUDA 用 GPU，否则 CPU（无 N 卡部署机零配置可跑）；
+    - 显式 "cpu"：强制 CPU；显式 "cuda"：优先 GPU，CUDA 不可用/驱动异常时回落 CPU
+      并告警（绝不拒绝启动——GPU 是加速项不是硬依赖）。
+    结果进程内缓存（_dev），torch 导入失败一律 CPU。"""
     global _dev
     if _dev is None:
+        cfg = (getattr(settings, "embed_device", "auto") or "auto").strip().lower()
         try:
             import torch
-            _dev = "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:  # noqa: BLE001
+            cuda_ok = bool(torch.cuda.is_available())
+        except Exception:  # noqa: BLE001 —— 无 torch/CUDA 运行时异常：按 CPU 处理
+            cuda_ok = False
+        if cfg == "cpu":
             _dev = "cpu"
+        elif cfg == "cuda":
+            if cuda_ok:
+                _dev = "cuda"
+            else:
+                _dev = "cpu"
+                logger.warning("embedder.device_cuda_fallback",
+                               detail="EMBED_DEVICE=cuda 但 CUDA 不可用，已回落 CPU")
+        else:  # auto / 其它值按 auto 处理
+            _dev = "cuda" if cuda_ok else "cpu"
     return _dev
 
 

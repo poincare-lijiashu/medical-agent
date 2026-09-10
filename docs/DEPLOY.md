@@ -46,6 +46,62 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 4. 演示语料（PubMed seed）替换为院方授权指南库
 5. 自动质控通过/驳回策略开关，需院方合规确认后开启
 
+## 环境可移植性（部署清单）
+
+> 目标：同一套代码在 Windows / Linux / 容器内均可运行；GPU 是**可选加速项**，无 N 卡零配置可跑。
+
+### 1. Python 与依赖
+
+| 项 | 要求 | 说明 |
+| --- | --- | --- |
+| Python | 3.11（3.10+ 兼容） | `conda create -n medagent python=3.11` |
+| 依赖安装 | `pip install -r requirements.txt` | 全部 **版本固化**（含 `pillow`、`rapidocr-onnxruntime==1.4.4`（扫描版 PDF/图片 OCR）、`pytest`） |
+| torch | requirements 不固化 torch 版本 | FlagEmbedding/sentence-transformers 会按平台拉取匹配的 torch；GPU 机自行安装 `torch` + 对应 CUDA 版本 wheel |
+
+### 2. 模型文件（全部相对路径，随 `backend/` 目录整体拷贝）
+
+- `backend/models/`：BGE-M3 + reranker 权重（约 4.3GB，**不进镜像**，卷挂载/单独拷贝）
+- 路径配置 `BGE_M3_PATH` / `RERANKER_PATH` 等：**相对路径按 `backend/` 解析，绝对路径直用**；留空用内置默认相对位置
+- OCR（rapidocr-onnxruntime）模型随 pip 包内置，无需单独拷贝
+
+### 3. 环境变量（`.env.local`，参考 `.env.example`）
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `EMBED_DEVICE` | `auto` | **GPU 可选 CPU 回退**：`auto`=有 CUDA 用 GPU 否则 CPU；`cpu`=强制 CPU；`cuda`=优先 GPU、不可用自动回落 CPU（启动日志 `embedder.device_cuda_fallback`） |
+| `PG_OFFLINE` | 未设 | `on`=显式离线模式（eval/脚本/测试进程用）：PG 纯静默 JSON 真源、不置 stale 不告警；服务进程**不要**设置 |
+| `LITERATURE_AGENTIC` | `true` | L1 agentic 检索循环开关（eval 用 `EVAL_AGENTIC=on/off` 切 A/B） |
+| `AUTH_JWT_SECRET` / `APP_ENV` / `AUTH_SEED_DEMO` | — | 生产必设，见「生产前必查」 |
+
+### 4. 容器与基础设施
+
+- `docker compose --profile full up -d --build`：app + Milvus + PG + Attu；基础设施端口绑定 127.0.0.1
+- 容器内路径全部相对（`/app/backend/...`），Windows 开发 ↔ Linux 容器无需改代码
+- 数据目录：`data/`（JSON 兜底真源 + 审计 JSONL + KB manifest/uploads/tasks），随卷持久化
+
+### 5. 部署后验证步骤
+
+```bash
+# 1) 健康与版本
+curl http://127.0.0.1:8001/healthz
+# 2) 嵌入设备核对（auto 机器无 N 卡应显示 CPU；启动日志 medical_agent.embedder.loading device=...）
+# 3) 全量测试基线
+python -m pytest -q            # 396+ 全绿
+# 4) 评测脚本（自动 PG_OFFLINE=on，不污染服务日志）
+python scripts/run_eval.py --dry-run
+# 5) KB 端到端：admin 登录 → 数据面板确认「知识库向量」与 KB 卡「向量总数」一致（同源 Milvus doc_count）
+```
+
+### 6. 可移植性审计发现（本批次处理情况）
+
+| 级别 | 位置 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 中 | `scripts/seed_kb.py` | 硬编码 `C:/Windows/Fonts/msyh.ttc`，Linux/macOS 种子失败 | ✅ 已修：跨平台字体候选 + PyMuPDF 内置 CJK 回退 |
+| 中 | `requirements.txt` | 缺 `pillow` / `rapidocr-onnxruntime` / `pytest`（运行时/测试依赖漏固化） | ✅ 已补齐并锁版本 |
+| 低 | `backend/core/embedder.py` | device 原为隐式 auto（代码内写死判断），缺配置化与 cuda 回退告警 | ✅ 已修：`EMBED_DEVICE` 配置化（auto/cpu/cuda + 回退告警） |
+| 低 | `scripts/*.py`、`docs/MCP.md` | 文档/用法示例内含 `D:\software_work\...` 本机绝对路径 | 仅注释示例，不影响运行；新部署按相对路径使用 |
+| 通过 | `backend/`、`frontend/` 全量扫描 | 无 `D:\`/`C:\` 硬编码路径；文件读写显式 `encoding="utf-8"`；路径拼接统一 `os.path.join`/`pathlib` | 无需改动 |
+
 ## 高并发部署
 
 ### uvicorn workers（经验公式）

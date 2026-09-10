@@ -152,8 +152,12 @@
   .stat .k{display:block;font-size:11.5px;color:var(--ink-3)}
   .stat .v{display:block;font-size:20px;font-weight:600;margin-top:3px;letter-spacing:-.01em}
   .stat .v small{font-size:11.5px;font-weight:500;color:var(--ink-3)}
-  .dash{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start;flex:none}
-  @media(max-width:1024px){.dash{grid-template-columns:1fr}}
+  /* 任务3 排版：masonry 式（CSS 多列自动均衡）——审计流展开/收起、用户表增删等高度
+     变化时浏览器自动把卡片在两列间重新分配，任何卡片下方都不会留下大块空白；
+     卡片 break-inside:avoid 不跨列截断。窄屏（≤1024px）回落单列。 */
+  .dash{columns:2;column-gap:16px}
+  .dash>.panel{break-inside:avoid;margin:0 0 16px}
+  @media(max-width:1024px){.dash{columns:1}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
   .panel>h3{font-size:11.5px;color:var(--ink-3);letter-spacing:.02em;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;margin:0}
   .feed{list-style:none;margin:0;padding:2px 0}
@@ -1573,6 +1577,9 @@ async function loadData(){
     </div>`).join('');
   b.innerHTML=`<div class="stats">${stats}</div>
     <div class="dash">
+      <!-- 任务3 排版：masonry 式（.dash columns:2 自动均衡）——审计流展开后与留痕模式卡
+           紧邻（DOM 顺序即列内顺序），两列高度由浏览器均衡，不再出现被另一列撑出的
+           大片空白；窄屏回落单列。 -->
       <div class="panel"><h3 id="auditHead" role="button" tabindex="0" aria-expanded="${auditPanelOpen?'true':'false'}" style="cursor:pointer;user-select:none" onclick="toggleAuditPanel()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleAuditPanel();}" title="点击展开/收起审计流">审计流（共 ${esc(String(d.events_total??auditItems.length))} 条）<span id="auditArrow">${auditPanelOpen?'▾':'▸'}</span> <span style="font-weight:400">第 ${Math.floor(auditOffset/AUDIT_PAGE_SIZE)+1} 页 · 每页 ${AUDIT_PAGE_SIZE} 条 · 点开看原始 JSON</span></h3>
         <div id="auditPanelBody" style="display:${auditPanelOpen?'':'none'}">
         <div style="padding:8px 16px 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1584,8 +1591,15 @@ async function loadData(){
         <!-- 任务4：展开后限高滚动（max-height+overflow），不再把整页撑长 -->
         <ul class="feed" id="auditList" style="max-height:420px;overflow:auto">${audit}</ul>
         </div></div>
-      <div style="display:flex;flex-direction:column;gap:16px">
-        <div class="panel"><h3>新增用户</h3>
+      <!-- 任务3：留痕模式卡紧邻审计流（masonry 列内顺序 = DOM 顺序） -->
+      <div class="panel"><h3>留痕模式（全交互留痕 · 运行时开关）</h3>
+      <div style="display:flex;gap:10px;align-items:center;padding:8px 16px 14px;flex-wrap:wrap">
+        <span class="chip ${fullOn?'ok':'mid'}"><span class="dot"></span>${fullOn?'已开启（全部响应自动留痕签发）':'已关闭（仅高危入队人工双控）'}</span>
+        <span class="src num" style="white-space:nowrap">状态来源：runtime_flags（qc_auto_sign_full=${fullOn}）</span>
+        <span class="src" style="flex:1;min-width:260px">开启后全部 AI 问答/阅片/会诊响应无条件写入审核队列并自动签发（AI·留痕模式(自动)），低置信/高危项由提交医生知情确认；关闭恢复旧语义。写入 data/runtime_flags.json，切换即时生效、无需重启。</span>
+        <button class="btn sm ${fullOn?'danger':'primary'}" id="flagFullBtn">${fullOn?'关闭留痕模式':'开启留痕模式'}</button>
+      </div></div>
+      <div class="panel"><h3>新增用户</h3>
           <div class="qgrid" style="padding:12px 16px">
             <label>用户名（3-32 位字母/数字/_/-）<input class="inp" id="nuName" autocomplete="off" spellcheck="false"></label>
             <label>角色<select class="inp" id="nuRole"><option value="doctor">doctor</option><option value="pharmacist">pharmacist</option><option value="admin">admin</option><option value="qc">qc（质控员）</option></select></label>
@@ -1604,15 +1618,7 @@ async function loadData(){
             <button class="btn primary sm" id="deptAddBtn">新增科室</button>
           </div>
         </div>
-      </div>
     </div>
-    <div class="panel" style="margin-top:16px"><h3>留痕模式（全交互留痕 · 运行时开关）</h3>
-      <div style="display:flex;gap:10px;align-items:center;padding:8px 16px 14px;flex-wrap:wrap">
-        <span class="chip ${fullOn?'ok':'mid'}"><span class="dot"></span>${fullOn?'已开启（全部响应自动留痕签发）':'已关闭（仅高危入队人工双控）'}</span>
-        <span class="src num" style="white-space:nowrap">状态来源：runtime_flags（qc_auto_sign_full=${fullOn}）</span>
-        <span class="src" style="flex:1;min-width:260px">开启后全部 AI 问答/阅片/会诊响应无条件写入审核队列并自动签发（AI·留痕模式(自动)），低置信/高危项由提交医生知情确认；关闭恢复旧语义。写入 data/runtime_flags.json，切换即时生效、无需重启。</span>
-        <button class="btn sm ${fullOn?'danger':'primary'}" id="flagFullBtn">${fullOn?'关闭留痕模式':'开启留痕模式'}</button>
-      </div></div>
     <div class="panel" style="margin-top:16px"><h3>基础设施（只读状态 · 重启命令仅供复制，系统不代执行）</h3><div id="infraRows" style="padding:8px 16px 12px">${infraRows}</div></div>
     <!-- 任务5 + 本批次：应用日志「健康卡」（GET /admin/logs 只读；行可能含用户输入，逐行 esc 防注入） -->
     <div class="panel" style="margin-top:16px"><h3>应用日志健康卡（logs/app.log · 只读 · 尾部最多 500 行）</h3>

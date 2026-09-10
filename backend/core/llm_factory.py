@@ -197,16 +197,20 @@ class LLMFactory:
     @classmethod
     def get_vl_llm(cls, temperature: float = 0) -> BaseChatModel:
         """多模态视觉模型：优先使用管理端激活的 vision provider（F6，openai/anthropic 双格式；
-        anthropic 视觉调用失败由上层异常兜底），无激活配置回落 Qwen-VL。单独缓存。"""
+        anthropic 视觉调用失败由上层异常兜底），无激活配置回落 Qwen-VL。单独缓存。
+        任务4 截断修复：统一设置 max_tokens=settings.vl_max_tokens（默认 2000）——
+        openai 兼容端点此前不传 max_tokens 被网关默认值截断（影像描述"心脏及"），
+        anthropic 分支原固定 1024 同样偏小，两分支统一走配置。"""
         cache_key = f"__vl__{temperature}"
         if cache_key not in cls._instances:
             provider = active_provider("vision")
             if provider:
                 kwargs = cls._provider_kwargs(provider)
                 kwargs["temperature"] = temperature
+                kwargs["max_tokens"] = cls._get_settings().vl_max_tokens  # 任务4：覆盖 anthropic 默认 1024 / 补 openai 缺省
                 cls._instances[cache_key] = init_chat_model(**kwargs)
                 logger.info("llm_factory.vl_initialized", model=provider["model_id"],
-                            api_format=provider["api_format"])
+                            api_format=provider["api_format"], max_tokens=kwargs["max_tokens"])
                 return cls._instances[cache_key]
             settings = cls._get_settings()
             kwargs = {
@@ -215,13 +219,15 @@ class LLMFactory:
                 "temperature": temperature,
                 "api_key": settings.qwen_api_key,
                 "base_url": settings.qwen_base_url,
+                "max_tokens": settings.vl_max_tokens,  # 任务4：不再依赖网关默认值（截断根因）
                 "max_retries": 3,
                 "http_async_client": _HTTP_ASYNC_CLIENT,
                 "http_client": _HTTP_SYNC_CLIENT,
                 "extra_body": {"enable_thinking": False},
             }
             cls._instances[cache_key] = init_chat_model(**kwargs)
-            logger.info("llm_factory.vl_initialized", model=settings.qwen_model_vl)
+            logger.info("llm_factory.vl_initialized", model=settings.qwen_model_vl,
+                        max_tokens=settings.vl_max_tokens)
         return cls._instances[cache_key]
 
 # ── 模块级便捷函数（Agent 代码里的推荐写法）────────────────────────

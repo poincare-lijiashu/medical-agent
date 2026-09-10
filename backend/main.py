@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
         from backend.core.auth import seed_default_users
         if settings.app_env.lower() == "production" or not settings.auth_seed_demo:
             logger.warning("medical_agent.startup.seed_skipped",
-                           msg="未注入演示账号（生产环境或 AUTH_SEED_DEMO=false）；请预先创建 data/auth/users.json")
+                           detail="未注入演示账号（生产环境或 AUTH_SEED_DEMO=false）；请预先创建 data/auth/users.json")
         else:
             seed_default_users()
             logger.info("medical_agent.startup.auth_seeded")
