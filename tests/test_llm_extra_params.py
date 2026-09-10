@@ -137,8 +137,10 @@ def test_provider_kwargs_openai_merges_thinking_into_model_kwargs():
         "kind": "chat", "api_format": "openai", "id": "p-g", "display_name": "GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4", "model_id": "glm-5",
         "api_key": _KEY, "extra_params": '{"thinking":{"type":"high"}}'})
-    assert kw["model_kwargs"]["thinking"] == {"type": "high"}
-    assert "extra_body" not in kw, "用户已显式给出 thinking 时不得再注入默认关闭参数"
+    assert kw["extra_body"]["thinking"] == {"type": "high"}
+    assert kw.get("model_kwargs", {}).get("thinking") is None, "openai 自定义参数必须走 extra_body"
+    assert "extra_body" in kw and kw.get("model_kwargs") in (None, {}), \
+        "用户已显式给出 thinking 时不得再注入默认关闭参数"
 
 
 def test_provider_kwargs_openai_without_extra_keeps_defaults():
@@ -174,7 +176,7 @@ def test_provider_kwargs_invalid_extra_params_defensively_ignored():
 
 
 def test_get_llm_glm_extra_params_no_default_thinking_injection(monkeypatch):
-    """get_llm 全链路：GLM provider + thinking 预设 → 构造参数含 model_kwargs.thinking
+    """get_llm 全链路：GLM provider + thinking 预设 → extra_body.thinking 透传
     且无 enable_thinking=False（默认注入与用户显式配置互斥）。"""
     LLMFactory.clear_cache()
     monkeypatch.setattr("backend.core.llm_factory.active_provider", lambda kind: {
@@ -187,8 +189,8 @@ def test_get_llm_glm_extra_params_no_default_thinking_injection(monkeypatch):
     finally:
         LLMFactory.clear_cache()
     kw = captured[0]
-    assert kw["model_kwargs"]["thinking"] == {"type": "high"}
-    assert kw["extra_body"] == {} or "enable_thinking" not in (kw.get("extra_body") or {})
+    assert kw["extra_body"]["thinking"] == {"type": "high"}
+    assert "enable_thinking" not in (kw.get("extra_body") or {})
 
 
 def test_get_llm_deepseek_without_extra_keeps_thinking_disabled(monkeypatch):

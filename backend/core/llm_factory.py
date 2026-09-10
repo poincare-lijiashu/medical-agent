@@ -89,16 +89,21 @@ class LLMFactory:
     def _apply_extra_params(cls, kwargs: dict[str, Any], provider: dict) -> None:
         """把 provider.extra_params（用户在管理端填的 JSON 字符串）合并进构造 kwargs。
 
-        显式配置优先：temperature/max_tokens 等已知构造字段覆盖工厂默认值；其余键进
-        model_kwargs（请求体顶层透传）。读取侧经 parse_extra_params 防御——非法 JSON
-        静默忽略（保存层已校验，此处兜底手改文件场景）。"""
+        显式配置优先：temperature/max_tokens 等已知构造字段覆盖工厂默认值；其余键为
+        请求体自定义参数——**openai 格式经 extra_body**（GLM thinking 等 body 顶层
+        自定义参数，openai SDK 对未知顶层 kwarg 报 unexpected keyword，必须走
+        extra_body；与 Qwen enable_thinking 同机制）；**anthropic 格式经 model_kwargs**
+        （anthropic SDK 的 create 接受顶层自定义 kwarg，如 thinking）。读取侧经
+        parse_extra_params 防御——非法 JSON 静默忽略（保存层已校验，此处兜底手改文件
+        场景）。"""
         from backend.core.llm_config import parse_extra_params
         extra = parse_extra_params(provider.get("extra_params"))
+        body_key = "model_kwargs" if provider.get("api_format") == "anthropic" else "extra_body"
         for k, v in extra.items():
             if k in cls._KNOWN_CONSTRUCT_KEYS:
                 kwargs[k] = v  # 显式配置覆盖默认
             else:
-                kwargs.setdefault("model_kwargs", {})[k] = v  # body 顶层透传
+                kwargs.setdefault(body_key, {})[k] = v  # 请求体透传
 
     @classmethod
     def _provider_kwargs(cls, provider: dict) -> dict[str, Any]:
@@ -198,13 +203,14 @@ class LLMFactory:
             # （F6：仅 openai 兼容格式需要；anthropic 无该参数）。
             # 注意：_provider_kwargs 可能已按厂商写入 DeepSeek 的 thinking disabled——合并而非覆盖。
             # 任务2：默认注入已在 _provider_kwargs 内补齐（此处 setdefault 幂等）；仅当用户经
-            # extra_params 显式给出思考键（thinking/enable_thinking 落在 model_kwargs）时跳过
-            # 默认注入——GLM 5.x 等强制思考模型对关闭参数报 400（「该模型始终思考，不支持
-            # 关闭思考」），用户显式配置优先。
+            # extra_params 显式给出思考键（openai 格式落 extra_body、anthropic 落 model_kwargs）
+            # 时跳过默认注入——GLM 5.x 等强制思考模型对关闭参数报 400（「该模型始终思考，
+            # 不支持关闭思考」），用户显式配置优先。
             if kwargs.get("model_provider") == "openai":
                 eb = dict(kwargs.get("extra_body") or {})
                 mk = dict(kwargs.get("model_kwargs") or {})
-                if not any(k in mk for k in ("thinking", "enable_thinking")):
+                if not any(k in eb for k in ("thinking", "enable_thinking")) and \
+                        not any(k in mk for k in ("thinking", "enable_thinking")):
                     eb.setdefault("enable_thinking", False)
                 kwargs["extra_body"] = eb
             # print(f'kwargs: {kwargs}')
