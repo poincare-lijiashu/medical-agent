@@ -83,10 +83,51 @@ def _validate(kind: str, api_format: str, base_url: str, model_id: str) -> None:
         raise ValueError("model_id 不能为空")
 
 
+# ---------- 任务2 额外参数逃生舱：解析 / 厂商自动预设 ----------
+
+def parse_extra_params(raw: str | None) -> dict:
+    """extra_params JSON 字符串 → dict（空/None/非法/非 object 一律返回 {}）。
+
+    非法 JSON 在保存层（路由 422 / add_provider ValueError）已拦截；本函数是
+    读取侧防御：历史数据或手改文件不至于让模型构造路径炸掉。"""
+    s = (raw or "").strip()
+    if not s:
+        return {}
+    try:
+        parsed = json.loads(s)
+    except ValueError:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def suggest_extra_params(base_url: str, model_id: str) -> str:
+    """按 base_url+model_id 匹配已知厂商，返回建议的 extra_params（JSON 字符串或空串）。
+
+    仅作建议（前端预填可改），不强制落库。已知预设：
+    - 智谱（open.bigmodel.cn 或 model 前缀 glm-）：GLM 5.x 为强制思考模型，实测带
+      关闭思考参数请求报 400「该模型始终思考，不支持关闭思考；请使用 low、high 或 max」
+      ——按报错信息给出的取值域修正预设为 {"thinking":{"type":"high"}}。
+    - deepseek / moonshot / minimax / anthropic（非 thinking 配置）：无预设（空串）。
+    """
+    u = (base_url or "").lower()
+    m = (model_id or "").strip().lower()
+    if "open.bigmodel.cn" in u or m.startswith("glm-") or m.startswith("glm_") or m == "glm":
+        return json.dumps({"thinking": {"type": "high"}}, ensure_ascii=False)
+    return ""
+
+
 def add_provider(kind: str, api_format: str, base_url: str, model_id: str,
-                 display_name: str, api_key: str) -> str:
-    """新增 provider，返回 id（p-xxxx）。校验失败抛 ValueError。"""
+                 display_name: str, api_key: str, extra_params: str = "") -> str:
+    """新增 provider，返回 id（p-xxxx）。校验失败抛 ValueError。
+
+    extra_params：可选 JSON 字符串（厂商特殊参数逃生舱，如 thinking 配置），
+    保存前校验——空串合法（=无额外参数），非空必须是 JSON object，否则 ValueError
+    （路由层经 pydantic 校验先行拦截为 422）。"""
     _validate(kind, api_format, base_url, model_id)
+    if (extra_params or "").strip():
+        parsed = parse_extra_params(extra_params)
+        if not parsed:  # 空 dict = 非法 JSON 或解析结果非 object
+            raise ValueError("extra_params 需为合法的 JSON 对象字符串，如 {\"thinking\":{\"type\":\"high\"}}")
     pid = "p-" + uuid.uuid4().hex[:8]
     with _lock:
         cfg = _load_raw()
@@ -96,6 +137,7 @@ def add_provider(kind: str, api_format: str, base_url: str, model_id: str,
             "model_id": model_id.strip(),
             "display_name": (display_name or "").strip() or model_id.strip(),
             "api_key": api_key or "",
+            "extra_params": (extra_params or "").strip(),
         })
         _save_raw(cfg)
     return pid
@@ -163,10 +205,16 @@ def mask_key(key: str) -> str:
     return k[:6] + "***" + k[-4:]
 
 
-def test_provider(api_format: str, base_url: str, model_id: str, api_key: str) -> dict:
-    """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}；detail 不回显 key。"""
+def test_provider(api_format: str, base_url: str, model_id: str, api_key: str,
+                  extra_params: str = "") -> dict:
+    """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}；detail 不回显 key。
+
+    extra_params（任务2）：用户填写的厂商特殊参数合并进请求 payload —— 真实验证
+    用户参数可用性（而非仅验证基础连通）；显式思考参数（thinking/enable_thinking）
+    存在时默认的 enable_thinking=False 让位（GLM 5.x「始终思考」模型对关闭参数 400）。"""
     t0 = time.perf_counter()
     url = (base_url or "").rstrip("/")
+    user_extra = parse_extra_params(extra_params)
     headers: dict[str, str]
     payload: dict
     try:
@@ -187,6 +235,10 @@ def test_provider(api_format: str, base_url: str, model_id: str, api_key: str) -
                        "messages": [{"role": "user", "content": "ping"}]}
         else:
             return {"ok": False, "latency_ms": 0, "detail": "api_format 需为 openai 或 anthropic"}
+        if user_extra:
+            if "thinking" in user_extra or "enable_thinking" in user_extra:
+                payload.pop("enable_thinking", None)  # 用户显式管理思考模式 → 默认关闭参数让位
+            payload.update(user_extra)  # 用户参数覆盖默认（max_tokens 等显式配置优先）
         # FIND-06：与 llm_factory 纪律一致，走 Client(trust_env=False) 绕过系统代理
         with httpx.Client(trust_env=False, timeout=_TEST_TIMEOUT) as client:
             r = client.post(url, headers=headers, json=payload)

@@ -582,7 +582,12 @@ function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textCo
   if(h.length){h.forEach(e=>e.role==='me'?renderUser(e.text,e.images||(e.image?[e.image]:[])):renderBot(e.text,e.meta));}
   else renderBot('你好，我是'+a.name+'。'+a.desc+'。', null, true);
   scroll();}
-function newChat(){chatHist[cur]=[];chatInput[cur]='';setupChat(cur);}
+function newChat(){chatHist[cur]=[];chatInput[cur]='';if(cur==='literature'){litSessionId=genSid();}setupChat(cur);}
+/* 任务3 会话记忆：每个 literature 会话固定一个 session_id（「新建对话」时更换），
+   后端据此注入最近 N 轮问答（仅理解指代，不影响独立检索）。crypto.randomUUID 不可用
+   （旧浏览器/file://）时退化为时间戳+随机串。 */
+function genSid(){try{return crypto.randomUUID();}catch(_){return 'lit-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);}}
+let litSessionId=genSid();
 
 /* ---- chat ---- */
 function renderUser(t,images){const r=document.createElement('div');r.className='row me';
@@ -609,7 +614,7 @@ function thinkBubble(){const r=document.createElement('div');r.className='row';
   document.getElementById('msgs').appendChild(r);scroll();return r;}
 function setThink(r,t){const el=r.querySelector('.txt');if(el)el.textContent=t;}
 async function streamLit(q,think,agent){
-  const res=await fetch('/api/v1/medical/literature/stream',{method:'POST',headers:auth(),body:JSON.stringify({question:q})});
+  const res=await fetch('/api/v1/medical/literature/stream',{method:'POST',headers:auth(),body:JSON.stringify({question:q,session_id:litSessionId})});
   if(res.status===401){think.remove();logout();return true;}
   if(!res.ok||!res.body) return false;
   const rd=res.body.getReader();const dec=new TextDecoder();let buf='',ev=null;
@@ -637,7 +642,8 @@ async function send(){const inp=document.getElementById('input');const q=inp.val
   const think=thinkBubble();
   try{if(agent==='literature'){ let streamed=false; try{ streamed=await streamLit(q,think,agent);}catch(_){streamed=false;} if(streamed){btn.disabled=false;inp.focus();return;} }
     try{const r=await fetch('/api/v1/medical'+AGENTS[agent].endpoint,{method:'POST',headers:auth(),
-        body:JSON.stringify({question:q,images:curImages.length?curImages:undefined})});
+        body:JSON.stringify({question:q,images:curImages.length?curImages:undefined,
+          session_id:agent==='literature'?litSessionId:undefined})});  /* 任务3：literature 携带会话 id（SSE 失败回落的非流式路径同会话） */
       const d=await r.json();think.remove();
       if(r.status===401){logout();return;}
       /* 任务2：失败分支必须渲染（原只写历史不渲染 → 界面"无反应"，用户误判未发出而反复重发） */
@@ -1703,7 +1709,7 @@ function renderLlm(d){
       const act=g.active===p.id;
       return `<tr><td>${esc(p.display_name||p.model_id)}${act?' <span class="chip ok"><span class="dot"></span>激活中</span>':''}</td>
         <td><span class="src">${esc(p.api_format)}</span></td>
-        <td class="num">${esc(p.model_id)}<div class="src">${esc(trunc(p.base_url))}</div></td>
+        <td class="num">${esc(p.model_id)}<div class="src">${esc(trunc(p.base_url))}</div>${p.extra_params?`<div class="src">extra: ${esc(trunc(p.extra_params))}</div>`:''}</td>
         <td style="white-space:nowrap">${act?'':`<button class="btn sm secondary" onclick="llmActivate('${kind}','${esc(p.id)}')">激活</button>`}<button class="btn sm danger" onclick="llmDel('${kind}','${esc(p.id)}')">删除</button></td></tr>`;}).join('');
     html+=`<h4 style="margin:12px 16px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${label}
       <span class="src">${g.active?'':'（当前使用内置配置 Qwen）'}</span>
@@ -1719,32 +1725,56 @@ function renderLlm(d){
       <label>模型 ID<input class="inp" id="llmModel" spellcheck="false"></label>
       <label>展示名称<input class="inp" id="llmName"></label>
       <label style="grid-column:1/-1">API 密钥<input class="inp" id="llmKey" type="password" autocomplete="new-password"></label>
+      <label style="grid-column:1/-1">额外参数（JSON，可选）<input class="inp" id="llmExtra" spellcheck="false" placeholder='{"thinking":{"type":"high"}}（可选，厂商特殊参数）'></label>
     </div>
     <div style="padding:0 16px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn secondary sm" onclick="llmTest()">连通性测试</button>
       <button class="btn primary sm" onclick="llmSave()">保存</button>
       <span class="src" id="llmTestOut"></span></div>`;
   el.innerHTML=html;
+  /* 任务2 厂商自动预设：URL/模型 ID 变化时按后端 suggest 预填「额外参数」（仅建议可改；
+     用户已填时不覆盖）。300ms 防抖避免逐键请求。 */
+  const urlInp=document.getElementById('llmUrl'),modelInp=document.getElementById('llmModel'),extraInp=document.getElementById('llmExtra');
+  let _sgTimer=null;
+  const suggestPrefill=()=>{
+    clearTimeout(_sgTimer);
+    _sgTimer=setTimeout(async()=>{
+      const u=urlInp.value.trim(),m=modelInp.value.trim();
+      if(!u||!m)return;
+      try{const d=await apiGet('/admin/llm/suggest-extra?base_url='+encodeURIComponent(u)+'&model_id='+encodeURIComponent(m));
+        if(d&&d.suggested&&!extraInp.value.trim()){
+          extraInp.value=d.suggested;
+          extraInp.placeholder='已按厂商预设填充（可修改）';}
+      }catch(_){/* 预设失败静默：不阻塞表单 */}} ,300);};
+  urlInp.addEventListener('input',suggestPrefill);
+  modelInp.addEventListener('input',suggestPrefill);
 }
 async function llmRefresh(){try{renderLlm(await apiGet('/admin/llm/providers'));}
   catch(e){const el=document.getElementById('llmPanel');if(el)el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 模型配置加载失败</div>';}}
 function llmForm(){
   const f={kind:document.getElementById('llmKind').value,api_format:document.getElementById('llmFormat').value,
     base_url:document.getElementById('llmUrl').value.trim(),model_id:document.getElementById('llmModel').value.trim(),
-    display_name:document.getElementById('llmName').value.trim(),api_key:document.getElementById('llmKey').value};
+    display_name:document.getElementById('llmName').value.trim(),api_key:document.getElementById('llmKey').value,
+    extra_params:document.getElementById('llmExtra').value.trim()};  /* 任务2：额外参数 JSON（可选，逃生舱） */
   if(!f.base_url||!f.model_id){toast('请填写完整 URL 与模型 ID');return null;}
   return f;}
+/* 任务2：pydantic 422 校验错误（detail 为数组）→ 取首条 msg 人性化展示 */
+function _llmErrText(d){const det=d&&d.detail;
+  if(Array.isArray(det))return det.map(x=>x.msg||x).join('；');
+  return (det||'失败')+'';
+}
 async function llmTest(){
   const f=llmForm();if(!f)return;
   const out=document.getElementById('llmTestOut');out.textContent='测试中…';
   try{const d=await apiPost('/admin/llm/test',f);
+    if(!d||d.detail===undefined||d.ok===undefined){out.textContent='✗ '+_llmErrText(d);return;}  /* 422/异常响应 */
     out.textContent=d.ok?`✓ 连通正常 · ${d.latency_ms} ms`:'✗ '+(d.detail||'失败');
   }catch(e){out.textContent='✗ '+e.message;}}
 async function llmSave(){
   const f=llmForm();if(!f)return;
   try{const d=await apiPost('/admin/llm/providers',f);
     if(d&&d.id){toast('模型配置已保存');llmRefresh();}
-    else toast('保存失败：'+(d.detail||'未知错误'));
+    else toast('保存失败：'+_llmErrText(d));
   }catch(e){toast('保存失败：'+e.message);}}
 async function llmActivate(kind,pid){
   try{const d=await apiPost('/admin/llm/activate',{kind,pid});

@@ -53,11 +53,14 @@ class Settings(BaseSettings):
     embed_device: str = "auto"
 
     # 任务4 VL 输出截断修复：视觉模型最大输出 token 数（原 openai 兼容端点未传 max_tokens，
-    # 网关按各自默认值截断——影像描述在数百 token 处被剪成"心脏及"）。2000 覆盖放射科
-    # 结构化描述（分点所见+建议）富余量；anthropic 分支原固定 1024 一并统一到本配置。
-    # vision 模型上限：deepseek vision-exp 的 thinking 块实测消耗 1265-1684 token，
-    # 2000 时 text 被随机挤压截断/清空（时好时坏根因）；4096 留足余量
-    vl_max_tokens: int = 4096
+    # 网关按各自默认值截断——影像描述在数百 token 处被剪成"心脏及"）。anthropic 分支原固定
+    # 1024 一并统一到本配置。vision 模型上限：deepseek vision-exp 的 thinking 块实测消耗
+    # 1265-1684 token，2000 时 text 被随机挤压截断/清空（时好时坏根因）；4096 留足余量。
+    # 任务1 再扩容 4096→8192：长病例结构化描述（分点所见+印象+建议）仍可能触顶截断
+    # （审计 vl_truncated）。合法性核实：deepseek anthropic 兼容端点 max output 128K
+    # （官方 Copilot CLI 文档 max_output_tokens=128000；旧版 Beta 端点上限亦为 8192），
+    # qwen3-vl-plus 最大输出 32768——8192 在两类端点均合法。
+    vl_max_tokens: int = 8192
 
     # 模型权重（相对路径按 backend/ 解析，绝对路径直用）
     bge_m3_path: str = ""
@@ -98,6 +101,12 @@ class Settings(BaseSettings):
     # L1 agentic 检索循环（环境变量 LITERATURE_AGENTIC 覆盖）：开启后 grade 零命中
     # 进入 refine 决策节点（LLM 改写重检/放弃），关闭则保持旧的重检索路径
     literature_agentic: bool = True
+
+    # 任务3 轻量会话记忆：literature 会话保留的最近问答轮数（0=关闭）。
+    # 进程内存态（dict[session_id]→deque），重启丢失可接受——医疗查证每问独立检索，
+    # 记忆仅用于理解指代（「它/该药」），不改变检索与引用语义。每轮只存问题原文+
+    # 回答前 500 字符，不含 sources/images。
+    chat_memory_turns: int = 8
 
     @property
     def async_database_url(self) -> str:

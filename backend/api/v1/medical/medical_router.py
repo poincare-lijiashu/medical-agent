@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.api.deps import require_role, require_user, rate_limit, revoke_user
 from backend.config import settings
-from backend.core import kb_ingest, llm_config, runtime_flags
+from backend.core import chat_memory, kb_ingest, llm_config, runtime_flags
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
 from backend.core.intent import offtopic_tech_reply, prefilter_reply
@@ -150,6 +150,9 @@ class AskReq(BaseModel):
     question: str = Field(max_length=20000)
     image: str | None = Field(default=None, max_length=8_000_000)
     images: list[str] | None = Field(default=None, max_length=MAX_IMAGES)  # 多图（优先于 image），单张 ≤6MB
+    # 任务3 会话记忆：前端每个对话会话固定一个 uuid（「新建对话」时更换）；
+    # 可选——评估脚本（run_eval）与旧客户端不携带 → 无记忆、行为与旧版一致。
+    session_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("images")
     @classmethod
@@ -245,6 +248,12 @@ async def health():
 async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
+    # 任务3 会话记忆：session_id 可选（前端每会话固定 uuid；评估路径不带 → 天然跳过）。
+    # 构建最近 N 轮「前文对话」块（turns=0/无历史 → 空串），仅注入 generate 的 prompt 头部。
+    chat_sid = (req.session_id or "").strip()[:64]
+    memory_ctx, mem_used = ("", 0)
+    if chat_sid:
+        memory_ctx, mem_used = await asyncio.to_thread(chat_memory.build_context, chat_sid)
     pre = prefilter_reply(q)
     if pre:
         await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="prefilter",
@@ -258,14 +267,15 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
                                 actor=actor, payload={"q": q[:60]})
         return AskResp(answer=off, confidence=0.9, needs_human_review=False, sources=["intent:offtopic"])
     await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="query",
-                            actor=actor, payload={"q": q[:200]})
+                            actor=actor, payload={"q": q[:200], "memory_used": mem_used})
     try:
         g = _get_lit_graph()
         sid = "lit-" + uuid.uuid4().hex[:12]
         # original_query 与 stream 入口同初值纪律：refine 决策的 question 取 original_query，
         # 两条路径 state 必须一致（此前 ask 漏传，仅靠 refine_node 兜底 question）。
         out = await g.ainvoke({"session_id": sid, "question": q, "query": q,
-                               "original_query": q, "attempts": 0},
+                               "original_query": q, "attempts": 0,
+                               "memory_context": memory_ctx},
                               config={"configurable": {"thread_id": sid}})
     except Exception as e:  # noqa: BLE001 —— 三层兑底：provider/检索异常→体面降级不裸500
         await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="degraded",
@@ -273,6 +283,9 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
         return AskResp(answer="模型/知识库服务暂时不可用（多为瞬时），已记录并标记需人工复核；请稍后重试。",
                        confidence=0.3, needs_human_review=True, sources=["degraded:llm"])
     a = out["answer"]
+    # 任务3：响应完成后写入会话记忆（只存本轮问答精简文本，deque 自动截断旧轮次）。
+    if chat_sid:
+        await asyncio.to_thread(chat_memory.remember, chat_sid, q, a["text"])
     # 任务1：fallback 兜底答案（sources 含 fallback: 前缀）不写审核队列——常识兜底已强制
     # 降置信 + 「请人工复核」文案，仅提示性内容、无 second-reviewer 可实质核对；审计留痕。
     if _is_fallback_answer(a):
@@ -297,11 +310,16 @@ def _sse(event: str, data: dict) -> str:
 
 @router.post("/literature/stream")
 async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
-    """SSE 流式：逐节点推进度(retrieve/grade/generate/verify) + 末尾 result。失败发 error 事件。"""
+    """SSE 流式：逐节点推进度(retrieve/grade/generate/verify) + 末尾 result。失败发 error 事件。
+    任务3：与非流式 ask 同一会话记忆语义（session_id 可选 → 注入/写入/审计一致）。"""
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
+    chat_sid = (req.session_id or "").strip()[:64]
+    memory_ctx, mem_used = ("", 0)
+    if chat_sid:
+        memory_ctx, mem_used = await asyncio.to_thread(chat_memory.build_context, chat_sid)
     await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="stream",
-                            actor=actor, payload={"q": q[:200]})
+                            actor=actor, payload={"q": q[:200], "memory_used": mem_used})
 
     async def gen():
         pre = prefilter_reply(q)
@@ -327,7 +345,8 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
             g = _get_lit_graph()
             sid = "lit-" + uuid.uuid4().hex[:12]
             async for upd in g.astream({"session_id": sid, "question": q, "query": q,
-                                        "original_query": q, "attempts": 0},
+                                        "original_query": q, "attempts": 0,
+                                        "memory_context": memory_ctx},
                                        config={"configurable": {"thread_id": sid}}, stream_mode="updates"):
                 for node, out in upd.items():
                     if node in ("retrieve", "grade", "generate"):
@@ -352,6 +371,9 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
         if not final:
             yield _sse("error", {"detail": "未生成结果"})
             return
+        # 任务3：响应完成后写入会话记忆（与非流式 ask 同纪律；error/无结果不写）。
+        if chat_sid:
+            await asyncio.to_thread(chat_memory.remember, chat_sid, q, final["text"])
         # 任务1：fallback 兜底答案不写审核队列（与非流式 ask 同一纪律），审计记 fallback_no_enqueue。
         if _is_fallback_answer(final):
             await asyncio.to_thread(get_audit_logger().write, event_type="literature",
@@ -1315,6 +1337,17 @@ class LlmProviderReq(BaseModel):
     model_id: str = Field(max_length=200)
     display_name: str = Field(default="", max_length=200)
     api_key: str = Field(default="", max_length=2000)
+    # 任务2 额外参数逃生舱：厂商特殊参数（JSON 字符串，如 {"thinking":{"type":"high"}}）。
+    # 空串合法（=无额外参数）；非空必须是 JSON object，否则 422（pydantic 校验层拦截）。
+    extra_params: str = Field(default="", max_length=4000)
+
+    @field_validator("extra_params")
+    @classmethod
+    def _validate_extra_json(cls, v: str) -> str:
+        from backend.core.llm_config import parse_extra_params
+        if (v or "").strip() and not parse_extra_params(v):
+            raise ValueError("extra_params 需为合法的 JSON 对象字符串，如 {\"thinking\":{\"type\":\"high\"}}")
+        return (v or "").strip()
 
 
 class LlmActivateReq(BaseModel):
@@ -1347,7 +1380,7 @@ async def llm_add_provider(req: LlmProviderReq, user: dict = Depends(require_rol
     try:
         pid = await asyncio.to_thread(
             llm_config.add_provider, req.kind, req.api_format, req.base_url,
-            req.model_id, req.display_name, req.api_key)
+            req.model_id, req.display_name, req.api_key, req.extra_params)
     except ValueError as e:
         raise HTTPException(400, str(e))
     _reset_llm_cache()
@@ -1399,11 +1432,21 @@ async def llm_deactivate(req: LlmDeactivateReq, user: dict = Depends(require_rol
     return {"ok": True}
 
 
+@router.get("/admin/llm/suggest-extra")
+async def llm_suggest_extra(base_url: str = "", model_id: str = "",
+                            user: dict = Depends(require_role("admin"))):
+    """任务2 厂商自动预设（仅建议不落库）：按 base_url+model_id 返回建议的
+    extra_params JSON 字符串（无匹配返回空串），前端据此预填「额外参数」输入框。"""
+    suggested = await asyncio.to_thread(llm_config.suggest_extra_params, base_url, model_id)
+    return {"suggested": suggested}
+
+
 @router.post("/admin/llm/test")
 async def llm_test(req: LlmProviderReq, user: dict = Depends(require_role("admin"))):
-    """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}，detail 不含 api_key。"""
+    """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}，detail 不含 api_key。
+    任务2：透传 extra_params 同合并逻辑（真实验证用户填的参数可用性）。"""
     r = await asyncio.to_thread(llm_config.test_provider, req.api_format, req.base_url,
-                                req.model_id, req.api_key)
+                                req.model_id, req.api_key, req.extra_params)
     await asyncio.to_thread(get_audit_logger().write, event_type="admin", action="llm_test",
                             actor=user.get("username", "admin"),
                             payload={"kind": req.kind if req.kind in ("chat", "vision") else None,

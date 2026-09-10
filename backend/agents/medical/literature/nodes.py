@@ -261,7 +261,11 @@ async def generate_node(state: LiteratureState) -> dict:
         pubmed=state.get("pubmed_ids", [])[:3],
         question=state["question"],
     )
-    raw = await _ask("medical_literature", LITERATURE_SYSTEM + "\n" + prompt)
+    # 任务3 会话记忆：最近 N 轮【前文对话】块拼入 prompt 头部（仅用于理解指代，
+    # 检索 query 不受历史影响——retrieve 仍用本轮 question/query 独立检索）。
+    memory = state.get("memory_context") or ""
+    raw = await _ask("medical_literature",
+                     (memory + "\n" if memory else "") + LITERATURE_SYSTEM + "\n" + prompt)
     d = _parse_json(raw, {"answer": _strip_md(raw), "citations": []})
     return {"draft": {"answer": d.get("answer", ""), "citations": d.get("citations", []) or []}}
 

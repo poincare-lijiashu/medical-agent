@@ -77,11 +77,34 @@ class LLMFactory:
         u = (url or "").rstrip("/")
         return u[:-3] if u.endswith("/v1") else u
 
+    # 任务2 额外参数逃生舱：extra_params 中这些键是 ChatOpenAI/ChatAnthropic 的已知
+    # 构造字段（可顶层传入直接生效）；其余键视为请求体参数 → model_kwargs 透传
+    # （langchain 两类模型均支持 model_kwargs 把键值放进请求 body 顶层）。
+    _KNOWN_CONSTRUCT_KEYS = frozenset({
+        "temperature", "max_tokens", "max_retries", "streaming", "top_p", "n",
+        "stop", "timeout", "presence_penalty", "frequency_penalty", "seed",
+    })
+
+    @classmethod
+    def _apply_extra_params(cls, kwargs: dict[str, Any], provider: dict) -> None:
+        """把 provider.extra_params（用户在管理端填的 JSON 字符串）合并进构造 kwargs。
+
+        显式配置优先：temperature/max_tokens 等已知构造字段覆盖工厂默认值；其余键进
+        model_kwargs（请求体顶层透传）。读取侧经 parse_extra_params 防御——非法 JSON
+        静默忽略（保存层已校验，此处兜底手改文件场景）。"""
+        from backend.core.llm_config import parse_extra_params
+        extra = parse_extra_params(provider.get("extra_params"))
+        for k, v in extra.items():
+            if k in cls._KNOWN_CONSTRUCT_KEYS:
+                kwargs[k] = v  # 显式配置覆盖默认
+            else:
+                kwargs.setdefault("model_kwargs", {})[k] = v  # body 顶层透传
+
     @classmethod
     def _provider_kwargs(cls, provider: dict) -> dict[str, Any]:
         """F6：管理端激活 provider → init_chat_model kwargs（openai/anthropic 双格式）。"""
         if provider.get("api_format") == "anthropic":
-            return {
+            kwargs = {
                 "model": provider["model_id"],
                 "model_provider": "anthropic",
                 "temperature": 0,
@@ -90,17 +113,21 @@ class LLMFactory:
                 "max_tokens": 1024,
                 "max_retries": 3,
             }
+            cls._apply_extra_params(kwargs, provider)
+            return kwargs
         # openai 兼容格式：openai SDK 会自动在 base_url 后追加 /chat/completions，
         # 故传原始 base_url（与 .env 的 QWEN_BASE_URL 用法一致，最终请求 = {base_url}/chat/completions）
         # 思考模式与 function-calling 的 tool_choice 强制互斥（Qwen3/DeepSeek V4 均 400），
         # 结构化输出依赖 function calling，必须按厂商关闭思考：
         # - DeepSeek V4（默认思考开启）：thinking={"type":"disabled"}（官方参数）
         # - 其余（Qwen3 兼容端点）：enable_thinking=False（不识别该参数的端点会忽略，无副作用）
-        if "deepseek" in (provider.get("base_url") or "").lower():
-            extra_body = {"thinking": {"type": "disabled"}}
-        else:
-            extra_body = {"enable_thinking": False}
-        return {
+        # 任务2：用户经 extra_params 显式给出思考参数（thinking/enable_thinking）时，
+        # 默认关闭参数不注入——GLM 5.x 等强制思考模型对关闭参数报 400
+        # （实测文案「该模型始终思考，不支持关闭思考」），用户显式配置优先。
+        from backend.core.llm_config import parse_extra_params
+        user_extra = parse_extra_params(provider.get("extra_params"))
+        manages_thinking = ("thinking" in user_extra) or ("enable_thinking" in user_extra)
+        kwargs = {
             "model": provider["model_id"],
             "model_provider": "openai",
             "temperature": 0,
@@ -109,8 +136,17 @@ class LLMFactory:
             "max_retries": 3,
             "http_async_client": _HTTP_ASYNC_CLIENT,
             "http_client": _HTTP_SYNC_CLIENT,
-            "extra_body": extra_body,
         }
+        if not manages_thinking:
+            if "deepseek" in (provider.get("base_url") or "").lower():
+                kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+            else:
+                kwargs["extra_body"] = {"enable_thinking": False}
+            # tool_choice 互斥兜底（DeepSeek 分支补齐 enable_thinking=False，
+            # get_llm 的 setdefault 注入因此成为幂等 no-op）
+            kwargs["extra_body"].setdefault("enable_thinking", False)
+        cls._apply_extra_params(kwargs, provider)
+        return kwargs
 
     @classmethod
     def _build_model_kwargs(cls, model_key: str) -> dict[str, Any]:
@@ -160,10 +196,16 @@ class LLMFactory:
             kwargs["streaming"] = streaming               # 设置是否流式
             # Qwen3 默认思考模式不允许 function-calling 的 tool_choice=required（会 400），关掉思考以兼容结构化输出
             # （F6：仅 openai 兼容格式需要；anthropic 无该参数）。
-            # 注意：_provider_kwargs 可能已按厂商写入 DeepSeek 的 thinking disabled——合并而非覆盖
+            # 注意：_provider_kwargs 可能已按厂商写入 DeepSeek 的 thinking disabled——合并而非覆盖。
+            # 任务2：默认注入已在 _provider_kwargs 内补齐（此处 setdefault 幂等）；仅当用户经
+            # extra_params 显式给出思考键（thinking/enable_thinking 落在 model_kwargs）时跳过
+            # 默认注入——GLM 5.x 等强制思考模型对关闭参数报 400（「该模型始终思考，不支持
+            # 关闭思考」），用户显式配置优先。
             if kwargs.get("model_provider") == "openai":
                 eb = dict(kwargs.get("extra_body") or {})
-                eb.setdefault("enable_thinking", False)
+                mk = dict(kwargs.get("model_kwargs") or {})
+                if not any(k in mk for k in ("thinking", "enable_thinking")):
+                    eb.setdefault("enable_thinking", False)
                 kwargs["extra_body"] = eb
             # print(f'kwargs: {kwargs}')
             llm = init_chat_model(**kwargs)               # 真正创建模型（** 表示把字典展开成关键字参数）
