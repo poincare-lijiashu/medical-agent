@@ -122,6 +122,42 @@ def test_answer_truncated_to_500_chars():
     assert chat_memory.recall("s1")[0][0] == "q"  # 问题原文不截断
 
 
+def test_max_sessions_default_is_200():
+    """外部审查 M2：会话数上限默认 200（无上限的进程内存 dict 会被长会话/刷会话撑爆）。"""
+    assert chat_memory.MAX_SESSIONS == 200
+
+
+def test_max_sessions_evicts_oldest(monkeypatch):
+    """超限淘汰：超过 MAX_SESSIONS 后按最久未写入淘汰最旧会话，新会话保留。"""
+    monkeypatch.setattr(chat_memory, "MAX_SESSIONS", 3)
+    for i in range(4):
+        chat_memory.remember(f"s{i}", f"q{i}", f"a{i}")
+    assert chat_memory.recall("s0") == []  # 最旧会话被淘汰
+    assert chat_memory.recall("s1") == [("q1", "a1")]
+    assert chat_memory.recall("s3") == [("q3", "a3")]
+
+
+def test_max_sessions_201_default_evicts_oldest():
+    """外部审查 M2（默认上限实量验证）：不 patch 上限，创建 201 个会话 →
+    最旧（s000）被淘汰、进程内总会话数 ≤200、最新会话完整保留。"""
+    for i in range(201):
+        chat_memory.remember(f"s{i:03d}", "q", "a")
+    assert len(chat_memory._store) <= 200, "总会话数不得超过 MAX_SESSIONS"
+    assert chat_memory.recall("s000") == [], "最旧会话应被淘汰"
+    assert chat_memory.recall("s200") == [("q", "a")], "最新会话应完整保留"
+
+
+def test_max_sessions_keeps_active_session(monkeypatch):
+    """活跃会话不受影响：最旧会话持续写入（每次 move_to_end）时不会被淘汰。"""
+    monkeypatch.setattr(chat_memory, "MAX_SESSIONS", 3)
+    chat_memory.remember("old", "q0", "a0")
+    for i in range(1, 4):
+        chat_memory.remember(f"s{i}", f"q{i}", f"a{i}")
+        chat_memory.remember("old", f"qa{i}", f"ab{i}")  # old 一直活跃 → 永不淘汰
+    assert chat_memory.recall("old")[-1] == ("qa3", "ab3")
+    assert chat_memory.recall("s1") == []  # 被淘汰的是不再活跃的 s1
+
+
 def test_build_context_format_marks_scope():
     """前文块格式：标注仅用于理解指代、回答仍需独立检索与引用。"""
     chat_memory.remember("s1", "胃疼怎么办", "建议就医评估")

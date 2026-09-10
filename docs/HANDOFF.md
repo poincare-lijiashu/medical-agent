@@ -65,7 +65,7 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - 短信验证码找回密码（现为基础版：联系管理员+admin 重置）
 - HIS/EMR 对接、院方授权知识库替换教学语料、临床验证
 - 多实例部署时：限流/令牌撤销表/审计日志从内存迁 Redis
-- 死代码清理：medical_hitl.py（unused）/ llm_factory._AGENT_MODEL_ROUTING（未真正生效）
+- 死代码清理：llm_factory._AGENT_MODEL_ROUTING（未真正生效）；medical_eval.py / medical_hitl.py 已删除（零运行时调用方，2026-09-10）
 - llm_factory httpx 客户端未在 lifespan shutdown 关闭
 - preview/delete 的 tag 清洗仍可在用户改名上传时存在残留（已统一白名单但旧 tag 可能已损坏）
 - PubMed 熔断是全局共享，单点失败会全员降级（应改失败计数）

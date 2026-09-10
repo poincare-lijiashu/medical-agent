@@ -125,6 +125,34 @@ def test_admin_data_audit_ts_is_timezone_aware(monkeypatch, tmp_path):
         assert dt.tzinfo is not None, f"ts 缺时区信息：{e['ts']}"
 
 
+def test_audit_q_snippet_constant_locked():
+    """外部审查 L2：审计 q 截断长度常量锁定（200）——防止回归各端点硬编码 60/200 不一致。"""
+    from backend.api.v1.medical import medical_router as mr
+    assert mr.AUDIT_Q_SNIPPET == 200
+
+
+def test_literature_stream_audit_q_truncated_to_snippet(monkeypatch, tmp_path):
+    """外部审查 L2：stream 路径两条审计的 q 截断统一走 AUDIT_Q_SNIPPET。
+    此前 stream 主审计硬编码 [:200]、offtopic_reject 残留硬编码 [:60]——超 60 字符的
+    技术题拒答在 offtopic_reject 里只留 60 字符，审计不完整。"""
+    from backend.api.v1.medical import medical_router as mr
+    c, log = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+    # 纯技术题（命中技术词、零医学信号）×重复拼接至 >200 字符
+    long_q = "用python写一个快速排序算法并给出完整代码和注释，" * 8
+    assert len(long_q) > mr.AUDIT_Q_SNIPPET
+    r = c.post("/api/v1/medical/literature/stream", headers=_h(tok),
+               json={"question": long_q})
+    assert r.status_code == 200, r.text
+    assert "intent:offtopic" in r.text, "技术题应被守门拒答"
+    stream_ev = [e for e in log.entries if e["payload"].get("action") == "stream"]
+    off_ev = [e for e in log.entries if e["payload"].get("action") == "offtopic_reject"]
+    assert stream_ev and off_ev, "stream 与 offtopic_reject 都应写审计"
+    assert len(stream_ev[-1]["payload"]["q"]) == mr.AUDIT_Q_SNIPPET
+    assert len(off_ev[-1]["payload"]["q"]) == mr.AUDIT_Q_SNIPPET, \
+        "offtopic_reject 的 q 不再截 60，统一为 AUDIT_Q_SNIPPET"
+
+
 def test_audit_ts_utc_offset_converts_to_local(tmp_path):
     """完整 ISO（带 +00:00）→ 本地壁钟比 UTC 壁钟快 8 小时（Asia/Shanghai）。
 

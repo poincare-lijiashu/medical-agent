@@ -25,7 +25,7 @@ Qwen 驱动的循证医疗辅助系统，**商用级形态的可运行成品**�
 - **追加式审计**：`data/audit/audit.jsonl`，无删除接口。
 - **HITL 门**：literature/MDT 置信度 <0.6 或 claim 溯源失败/高危强制复核（待确认规则同阈值）；影像按高危征象词、药物按相互作用严重度强制复核。
 
-演示账号（需 `AUTH_SEED_DEMO=true` 首次启动自动注入，生产不注入）：`doctor01 / pharm01 / admin01 / qc01`，密码取 `AUTH_DEMO_PASSWORD`（如 `Med@2026`；未设置则随机生成，见启动日志 `auth.seed.demo_password`）。上线务必改密/删除。
+演示账号（需 `AUTH_SEED_DEMO=true` 首次启动自动注入，生产不注入）：`doctor01 / pharm01 / admin01 / qc01`，密码取 `AUTH_DEMO_PASSWORD`（如 `Med@2026`；未设置则随机生成——日志只记 `auth.seed.demo_password` 事件**不带口令值**，口令明文仅在开发环境启动时打印一次到**控制台**，不落文件日志）。上线务必改密/删除。
 
 ## 快速开始（自包含，不依赖 EduAgent）
 
@@ -53,7 +53,7 @@ python scripts\run_eval.py   # 需后端在运行，期望 hit_rate 9/9
 ## 架构
 
 - **入口/前端** `backend/main.py` + `frontend/index.html`：FastAPI 根路径提供自包含单页应用；`/docs` 为 OpenAPI。
-- **M1 核心** `backend/core/`：`auth`(JWT/pbkdf2/用户表) · `medical_audit`(PHI+追加审计) · `medical_eval`(置信阈值/HITL 共享核心) · `medical_drug`(相互作用规则库) · `medical_imaging`(Qwen-VL 图像→所见) · `medical_kb`(稠密+稀疏 RRF 混合检索→BGE 精排，复用 `embedder`→本地权重) · `embedder`(bge-m3 单例) · `llm_factory`(多厂商工厂：OpenAI 兼容/Anthropic 双格式 + VL 通道) · `logger`(结构化)。
+- **M1 核心** `backend/core/`：`auth`(JWT/pbkdf2/用户表) · `medical_audit`(PHI+追加审计) · `medical_drug`(相互作用规则库) · `medical_imaging`(Qwen-VL 图像→所见) · `medical_kb`(稠密+稀疏 RRF 混合检索→BGE 精排，复用 `embedder`→本地权重) · `embedder`(bge-m3 单例) · `llm_factory`(多厂商工厂：OpenAI 兼容/Anthropic 双格式 + VL 通道) · `logger`(结构化)。
 - **M2 文献 agent** `backend/agents/medical/literature/`：LangGraph 单节点，PubMed + 本地 KB 融合，JSON 答案 + 引用(PMID/KB)。
 - **鉴权 API** `backend/api/v1/auth/` · **医疗 API** `backend/api/v1/medical/medical_router.py`（4 agent 问答 + SSE 流式 + MDT 会诊 + 会诊收件箱 + 审核中心 + 病历质控 + KB 管理 + admin 运维端点，均受 Bearer 保护）。
 - **配置** `.env.local`：Qwen MaaS、本地权重路径(`models/embedding/bge-m3`)、`MILVUS_URI`、鉴权密钥与过期。

@@ -31,7 +31,7 @@ Browser(SPA) ──Bearer──▶ FastAPI
   - `medical_kb` 稠密过召回 + 精排（`search_hybrid`）→ Milvus `medical_kb`；**真混合**：BGE-M3 稀疏字段 + RRFRanker(dense+sparse) → 精排，异常回退 dense。
   - `qc` 病历质控三轨（完整性规则/内涵LLM/ICD/危急值引擎，不臆造安全阈值）；`intent` 零Token意图前置。
   - `medical_drug` 循证相互作用规则库（15 对，别名归一）；`medical_imaging` Qwen-VL 图像→结构化所见。
-  - `auth`（JWT/pbkdf2/用户表）、`medical_audit`（PHI 脱敏 + 追加式 JSONL，无删除）、`medical_review`（高危双人核对队列，双控）、`medical_eval`（置信阈值/HITL）、`llm_factory`（Qwen + enable_thinking=False + max_retries + VL）、`logger`、`observability`、`pg_store`（Postgres 合规镜像双写：users/audit/review，best-effort）。
+  - `auth`（JWT/pbkdf2/用户表）、`medical_audit`（PHI 脱敏 + 追加式 JSONL，无删除）、`medical_review`（高危双人核对队列，双控）、`llm_factory`（Qwen + enable_thinking=False + max_retries + VL）、`logger`、`observability`、`pg_store`（Postgres 合规镜像双写：users/audit/review，best-effort）。
 - **配置** `config.py` 读 `.env.local`（settings 全局单例）。
 
 ## 数据与外部依赖

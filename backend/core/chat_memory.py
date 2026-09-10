@@ -1,30 +1,42 @@
 """任务3 轻量会话记忆：literature 多轮指代理解的进程内存态存储与 prompt 上下文构建。
 
 设计边界（刻意保持轻量）：
-- 存储：dict[session_id] → deque(maxlen=turns*2)，线程锁保护；**只存每轮问答的精简文本**
-  （question 原文 + answer 前 500 字符），不存 sources/images——不扩大 PHI 暴露面。
+- 存储：OrderedDict[session_id] → deque(maxlen=turns*2)，线程锁保护；**只存每轮问答的
+  精简文本**（question 原文 + answer 前 500 字符），不存 sources/images——不扩大 PHI 暴露面。
 - 生命周期：进程内存态，重启丢失可接受。医疗查证每问独立检索（记忆仅用于理解
   「它/该药」类指代），历史丢失不改变回答的检索与引用语义。
 - 容量：settings.chat_memory_turns（默认 8，0=完全关闭）；deque 截断只保留最近 N 轮。
+- 会话数上限（外部审查 M2）：MAX_SESSIONS（默认 200）——进程内存态 dict 若无上限，
+  长会话/恶意刷 session_id 会持续增长；超限按 LRU 淘汰最久未写入的会话
+  （活跃会话每次写入 move_to_end，不会被误淘汰）。
 - 线程模型：写入/读取都是 O(1) 级 dict+deque 操作，锁粒度到方法级；ask 路径在
   响应完成后写入（asyncio.to_thread 中调用，多 worker 线程安全）。
 """
 from __future__ import annotations
 
 import threading
-from collections import deque
+from collections import OrderedDict, deque
 
 from backend.config import settings
 
 _ANSWER_SUMMARY_LEN = 500  # 每轮回答入存的截断长度（问题原文完整保留，见 redact 上游约束）
 
-_store: dict[str, deque] = {}
+# 会话数上限（外部审查 M2）：_store 里最多保留多少个会话；超出淘汰最久未写入的
+# 会话（LRU）。模块级常量便于测试 monkeypatch。
+MAX_SESSIONS = 200
+
+_store: OrderedDict[str, deque] = OrderedDict()
 _lock = threading.Lock()
 
 
 def _max_items() -> int:
     """deque 容量 = 轮数（每个 item 是一轮 (question, answer) 元组，按轮截断）。"""
     return max(0, int(settings.chat_memory_turns))
+
+
+def _max_sessions() -> int:
+    """会话数上限读取点（模块常量，测试可 monkeypatch）；下限 1 防误配置清空。"""
+    return max(1, int(MAX_SESSIONS))
 
 
 def remember(session_id: str, question: str, answer: str) -> None:
@@ -40,6 +52,9 @@ def remember(session_id: str, question: str, answer: str) -> None:
         elif d.maxlen != _max_items():  # turns 运行时被调整 → 换新 deque 保留既有最近内容
             d = _store[sid] = deque(d, maxlen=_max_items())
         d.append(item)
+        _store.move_to_end(sid)  # 活跃会话置最新（LRU）：淘汰只发生在最旧端，不误伤活跃会话
+        while len(_store) > _max_sessions():  # 外部审查 M2：超限淘汰最久未写入的会话
+            _store.popitem(last=False)
 
 
 def recall(session_id: str) -> list[tuple[str, str]]:

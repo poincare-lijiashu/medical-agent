@@ -39,6 +39,11 @@ _START = time.time()
 
 MAX_IMAGES = 6  # 与 medical_imaging.describe_images 上限一致
 
+# 审计 payload 中问题文本的截断长度（外部审查 L2 常量化）：各端点 prefilter/offtopic/
+# query/stream 等 q 字段统一取前 AUDIT_Q_SNIPPET 字符——此前 literature prefilter/
+# stream 主审计/offtopic_reject 分别为 60/200/60 的硬编码混用，现全部统一走本常量。
+AUDIT_Q_SNIPPET = 200
+
 # 影像/病例高危征象词表：默认覆盖常见危急值类征象；院方可经 IMAGING_RISK_WORDS（逗号分隔）覆盖
 _DEFAULT_RISK_WORDS = ("恶性", "肿瘤", "癌", "转移", "占位", "出血", "梗死", "栓塞", "血栓",
                        "穿孔", "坏死", "气胸", "骨折", "梗阻", "破裂", "脓肿", "卒中", "中风",
@@ -265,17 +270,17 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
     pre = prefilter_reply(q)
     if pre:
         await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="prefilter",
-                                actor=actor, payload={"q": q[:60]})
+                                actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
         return AskResp(answer=pre, confidence=0.95, needs_human_review=False, sources=["intent:prefilter"])
     # 任务C：技术领域守门（极保守：命中技术词且零医学信号才拒答）。
     # 拒答路径：固定文案、不检索、不入审核队列、不调 LLM；审计记 offtopic_reject。
     off = offtopic_tech_reply(q)
     if off:
         await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="offtopic_reject",
-                                actor=actor, payload={"q": q[:60]})
+                                actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
         return AskResp(answer=off, confidence=0.9, needs_human_review=False, sources=["intent:offtopic"])
     await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="query",
-                            actor=actor, payload={"q": q[:200], "memory_used": mem_used})
+                            actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET], "memory_used": mem_used})
     try:
         g = _get_lit_graph()
         sid = "lit-" + uuid.uuid4().hex[:12]
@@ -327,7 +332,7 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
     if chat_sid:
         memory_ctx, mem_used = await asyncio.to_thread(chat_memory.build_context, chat_sid)
     await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="stream",
-                            actor=actor, payload={"q": q[:200], "memory_used": mem_used})
+                            actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET], "memory_used": mem_used})
 
     async def gen():
         pre = prefilter_reply(q)
@@ -339,7 +344,7 @@ async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
         off = offtopic_tech_reply(q)
         if off:
             await asyncio.to_thread(get_audit_logger().write, event_type="literature", action="offtopic_reject",
-                                    actor=actor, payload={"q": q[:60]})
+                                    actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
             yield _sse("result", {"answer": off, "confidence": 0.9,
                                   "needs_human_review": False, "sources": ["intent:offtopic"], "review_id": None})
             return
@@ -418,7 +423,7 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
     pre = prefilter_reply(q)
     if pre:
         await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="prefilter",
-                                actor=actor, payload={"q": q[:200]})
+                                actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
         return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
                        sources=["intent:prefilter"], review_id=None)
     r = drug_check(q)
@@ -457,57 +462,90 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
                    sources=r["sources"], review_id=rid)
 
 
+async def _ask_prefilter(agent: str, q: str, actor: str) -> AskResp | None:
+    """imaging/case 共用预检（任务C 意图前置）：命中闲聊/身份 → 审计 prefilter 并返回
+    免 LLM 固定兜底响应；未命中返回 None（继续走端点主流程）。"""
+    pre = prefilter_reply(q)
+    if pre:
+        await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="prefilter",
+                                actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
+        return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
+                       sources=["intent:prefilter"], review_id=None)
+    return None
+
+
+async def _vl_describe_flow(agent: str, imgs: list[str], q: str, actor: str,
+                            question: str, system_prompt: str | None = None,
+                            fail_action: str = "describe_failed",
+                            fail_msg: str = "影像描述服务暂时不可用，请稍后重试",
+                            conf_ok: float = 0.72,
+                            risk_reason: str = "影像可疑高危征象",
+                            suffix_risky: str = "（已标记为需放射科医师双人核对）",
+                            suffix_ok: str = "\n\n以上为 AI 初步所见，供医师参考。",
+                            audit_truncation: bool = True) -> AskResp:
+    """imaging/case 共用 VL 描述流程（外部审查重构：两端点此前为近乎复制的
+    「describe→空响应兜底→截断审计→入队→vl_described 留痕」流程）。
+
+    两端点各自语义经参数化保留（行为完全等价）：
+    - question/system_prompt：imaging 传原问题 + 默认放射科 prompt；case 传病例前缀 +
+      CASE_PROMPT（F1 人设分离）；
+    - fail_action/fail_msg：describe_failed vs vl_failed 及各自 500 文案；
+    - conf_ok（非高危置信 0.72 vs 0.70）、risk_reason、响应 suffix；
+    - audit_truncation：vl_truncated 审计此前仅 imaging 记录（case 保持现状不记），
+      显式参数区分，不静默改变任一端点行为。
+    """
+    try:
+        from backend.core.medical_imaging import describe_images_detailed, vl_model_name
+        # 诊断1：空响应自动重试 1 次（内部换温度），并带回 vl_raw_len/stop_reason 诊断线索
+        d = await describe_images_detailed(imgs, question, system_prompt=system_prompt)
+        desc = d["text"]
+    except Exception as e:  # noqa: BLE001
+        await asyncio.to_thread(get_audit_logger().write, event_type=agent, action=fail_action,
+                                actor=actor, payload={"err": str(e)[:120]})
+        raise HTTPException(500, fail_msg)
+    desc = (desc or "").strip()
+    # 任务3 空响应兜底：VL 空内容（重试后仍空）→ 明确提示重试，不入队不留档
+    # （与 fallback/offtopic 拒答同纪律），审计记 vl_empty + 诊断1
+    # vl_raw_len/stop_reason（原始响应长度/停止原因，为换稳定 vision 模型留线索）。
+    if not desc:
+        await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="vl_empty",
+                                actor=actor, payload={"imgs": len(imgs),
+                                                      "vl_raw_len": d["vl_raw_len"],
+                                                      "stop_reason": d["stop_reason"]})
+        return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
+                       confidence=0.0, needs_human_review=False,
+                       sources=[f"{agent}:vl_empty"], review_id=None, status="vl_empty")
+    risky = _has_risk(desc)
+    conf = 0.60 if risky else conf_ok
+    src = ["VL:" + vl_model_name()]
+    # 任务4：finish_reason=length（max_tokens 上限截断）→ 审计记 vl_truncated
+    # （文案提示由 medical_imaging 统一追加"（输出因长度截断，已按最大长度返回）"）。
+    if audit_truncation and (d.get("stop_reason") or "").strip().lower() in (
+            "length", "max_tokens", "max_output_tokens"):
+        await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="vl_truncated",
+                                actor=actor, payload={"vl_raw_len": d["vl_raw_len"],
+                                                      "stop_reason": d["stop_reason"]})
+    rid = await _enqueue_if_risk(agent, q, desc, conf, risky, risk_reason, actor,
+                                 images=imgs, sources=src)
+    suffix = suffix_risky if risky else suffix_ok
+    await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="vl_described",
+                            actor=actor, payload={"len": len(desc), "risky": risky})
+    return AskResp(answer=desc + suffix, confidence=conf, needs_human_review=risky,
+                   sources=src, review_id=rid)
+
+
 @router.post("/imaging/ask", response_model=AskResp)
 async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
-    pre = prefilter_reply(q)
+    pre = await _ask_prefilter("imaging", q, actor)
     if pre:
-        await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="prefilter",
-                                actor=actor, payload={"q": q[:200]})
-        return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
-                       sources=["intent:prefilter"], review_id=None)
+        return pre
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
-        try:
-            from backend.core.medical_imaging import describe_images_detailed, vl_model_name
-            # 诊断1：空响应自动重试 1 次（内部换温度），并带回 vl_raw_len/stop_reason 诊断线索
-            d = await describe_images_detailed(imgs, q)
-            desc = d["text"]
-        except Exception as e:  # noqa: BLE001
-            await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="describe_failed",
-                                    actor=actor, payload={"err": str(e)[:120]})
-            raise HTTPException(500, "影像描述服务暂时不可用，请稍后重试")
-        desc = (desc or "").strip()
-        # 任务3 空响应兜底：VL 空内容（重试后仍空）→ 明确提示重试，不入队不留档
-        # （与 fallback/offtopic 拒答同纪律），审计记 vl_empty + 诊断1 新增
-        # vl_raw_len/stop_reason（原始响应长度/停止原因，为换稳定 vision 模型留线索）。
-        if not desc:
-            await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_empty",
-                                    actor=actor, payload={"imgs": len(imgs),
-                                                          "vl_raw_len": d["vl_raw_len"],
-                                                          "stop_reason": d["stop_reason"]})
-            return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
-                           confidence=0.0, needs_human_review=False,
-                           sources=["imaging:vl_empty"], review_id=None, status="vl_empty")
-        risky = _has_risk(desc)
-        conf = 0.60 if risky else 0.72
-        src = ["VL:" + vl_model_name()]
-        # 任务4：finish_reason=length（max_tokens 上限截断）→ 审计记 vl_truncated
-        # （文案提示由 medical_imaging 统一追加"（输出因长度截断，已按最大长度返回）"）。
-        if (d.get("stop_reason") or "").strip().lower() in ("length", "max_tokens", "max_output_tokens"):
-            await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_truncated",
-                                    actor=actor, payload={"vl_raw_len": d["vl_raw_len"],
-                                                          "stop_reason": d["stop_reason"]})
-        rid = await _enqueue_if_risk("imaging", q, desc, conf, risky, "影像可疑高危征象", actor,
-                                     images=imgs, sources=src)
-        suffix = "（已标记为需放射科医师双人核对）" if risky else "\n\n以上为 AI 初步所见，供医师参考。"
-        await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="vl_described",
-                                actor=actor, payload={"len": len(desc), "risky": risky})
-        return AskResp(answer=desc + suffix, confidence=conf, needs_human_review=risky,
-                       sources=src, review_id=rid)
+        return await _vl_describe_flow("imaging", imgs, q, actor, question=q)
     await asyncio.to_thread(get_audit_logger().write, event_type="imaging", action="need_image",
-                            actor=actor, payload={"q": q[:200]})
+                            actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
     return AskResp(answer="影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
                    confidence=0.0, needs_human_review=False, sources=["imaging:needs_image"],
                    status="need_image")
@@ -517,47 +555,22 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
 async def case_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
-    pre = prefilter_reply(q)
+    pre = await _ask_prefilter("case", q, actor)
     if pre:
-        await asyncio.to_thread(get_audit_logger().write, event_type="case", action="prefilter",
-                                actor=actor, payload={"q": q[:200]})
-        return AskResp(answer=pre, confidence=0.95, needs_human_review=False,
-                       sources=["intent:prefilter"], review_id=None)
+        return pre
     imgs = req.images or ([req.image] if req.image else [])
     if imgs:
-        try:
-            from backend.core.medical_imaging import CASE_PROMPT, describe_images_detailed, vl_model_name
-            # F1：病例总结用病例专用 prompt，不再带放射科阅片人设；诊断1：空响应自动重试 1 次
-            d = await describe_images_detailed(imgs, "结合病例信息描述关键发现：" + q,
-                                               system_prompt=CASE_PROMPT)
-            desc = d["text"]
-        except Exception as e:  # noqa: BLE001
-            await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_failed",
-                                    actor=actor, payload={"err": str(e)[:120]})
-            raise HTTPException(500, "多模态解析服务暂时不可用，请稍后重试")
-        desc = (desc or "").strip()
-        # 任务3 空响应兜底（与 imaging 同纪律）：VL 空内容（重试后仍空）→ 明确提示、不入队；
-        # 诊断1：审计补 vl_raw_len/stop_reason 诊断线索。
-        if not desc:
-            await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_empty",
-                                    actor=actor, payload={"imgs": len(imgs),
-                                                          "vl_raw_len": d["vl_raw_len"],
-                                                          "stop_reason": d["stop_reason"]})
-            return AskResp(answer="AI 未生成所见，请重新上传或补充描述。",
-                           confidence=0.0, needs_human_review=False,
-                           sources=["case:vl_empty"], review_id=None, status="vl_empty")
-        risky = _has_risk(desc)
-        conf = 0.60 if risky else 0.70
-        src = ["VL:" + vl_model_name()]
-        rid = await _enqueue_if_risk("case", q, desc, conf, risky, "病例含高危征象", actor,
-                                     images=imgs, sources=src)
-        await asyncio.to_thread(get_audit_logger().write, event_type="case", action="vl_described",
-                                actor=actor, payload={"len": len(desc), "risky": risky})
-        return AskResp(answer=desc + ("\n\n（已标记双人核对）" if risky else "\n\n供医师参考的初步摘要。"),
-                       confidence=conf, needs_human_review=risky,
-                       sources=src, review_id=rid)
+        from backend.core.medical_imaging import CASE_PROMPT
+        # F1：病例总结用病例专用 prompt，不再带放射科阅片人设（差异点经参数化传入共用流程）
+        return await _vl_describe_flow(
+            "case", imgs, q, actor,
+            question="结合病例信息描述关键发现：" + q, system_prompt=CASE_PROMPT,
+            fail_action="vl_failed", fail_msg="多模态解析服务暂时不可用，请稍后重试",
+            conf_ok=0.70, risk_reason="病例含高危征象",
+            suffix_risky="\n\n（已标记双人核对）", suffix_ok="\n\n供医师参考的初步摘要。",
+            audit_truncation=False)
     await asyncio.to_thread(get_audit_logger().write, event_type="case", action="scaffold",
-                            actor=actor, payload={"q": q[:200]})
+                            actor=actor, payload={"q": q[:AUDIT_Q_SNIPPET]})
     return AskResp(answer="多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
                    confidence=0.0, needs_human_review=False, sources=["case:needs_input"],
                    status="need_input")
