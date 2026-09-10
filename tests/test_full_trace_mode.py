@@ -83,8 +83,10 @@ def test_full_mode_default_on():
 # ---------- 全 agent 入队（4 类各一 + MDT） ----------
 
 def test_all_agents_enqueue_unconditionally(monkeypatch, tmp_path):
-    """留痕模式（默认开）：literature/drug/imaging/case/mdt 的常规（非高危）响应
-    也无条件入队并自动签发（AI·留痕模式(自动)），question/answer/confidence/sources 全存档。"""
+    """留痕模式（默认开）：literature/imaging/case/mdt 的常规（非高危）响应
+    也无条件入队并自动签发（AI·留痕模式(自动)），question/answer/confidence/sources 全存档。
+    本批次任务2 语义变更注记：drug 类豁免留痕模式（FULL 短路不适用）——drug「信息不足」
+    （非高危）回落旧语义不入队，drug 高危恒人工由 test_drug_pharm_review 锁定。"""
     class _LitGraph:
         async def ainvoke(self, state, config=None):
             return {"answer": {"text": "常规循证回答", "confidence": 0.83,
@@ -109,11 +111,10 @@ def test_all_agents_enqueue_unconditionally(monkeypatch, tmp_path):
     assert it1["status"] == "approved" and it1["reviewed_by"] == "AI·留痕模式(自动)"
     assert it1["self_confirm_required"] is False  # conf≥0.6 且非高危 → 纯留痕
 
-    # drug：信息不足（0.55）→ conf<0.6 待确认
+    # drug：本批次任务2 语义变更——drug 豁免留痕模式，「信息不足」（非高危）不入队
     d2 = c.post("/api/v1/medical/drug/ask", headers=_h(doc),
                 json={"question": "布洛芬怎么用"}).json()
-    it2 = review.get(d2["review_id"])
-    assert it2["agent"] == "drug" and it2["self_confirm_required"] is True
+    assert d2["review_id"] is None, "drug 类豁免留痕模式：非高危不入队（三档旧语义）"
 
     # imaging：无高危词描述 → 纯留痕 + images 存档（合法 PNG，压缩管线可处理）
     img = _png_data_url()

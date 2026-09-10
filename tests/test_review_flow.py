@@ -5,6 +5,8 @@ drug 走纯规则库，无需网络。
 
 任务2 收权（行为变更，本文件锁定新语义）：签发/驳回/翻案由 qc/admin 行使
 （原 doctor/pharmacist 可调复核端点，现 403）；双控（审核人≠提交人）仍由服务端强制。
+本批次任务2 药剂科一票更新：drug 类 resolve 放宽到 pharmacist（pharmacist 可签发/驳回
+drug 核对项），reopen 仍仅 qc/admin——相关断言已按新语义更新并注明。
 """
 from fastapi.testclient import TestClient
 
@@ -56,12 +58,15 @@ def test_high_risk_dual_check_flow(monkeypatch):
     ids = [i["id"] for i in r3.json()["pending"]]
     assert rid in ids
 
-    # 任务2 收权：药师签发 → 403（签字权收窄为 qc/admin）
+    # 本批次任务2 药剂科一票（语义变更，原断言「药师签发 → 403」更新）：drug 类
+    # 签发权放宽到 pharmacist——pharm01 ≠ 提交人 doctor01，双控仍成立
     r4 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(ph),
-                json={"decision": "approved", "note": "核对无误"})
-    assert r4.status_code == 403
+                json={"decision": "approved", "note": "药剂科核对无误"})
+    assert r4.status_code == 200, r4.text
+    assert r4.json()["reviewed_by"] == "pharm01"
 
-    # 质控员签发通过（双控：qc01 ≠ 提交人 doctor01）
+    # 质控员签字权不变：翻案回待核对后 qc 仍可签发（双控：qc01 ≠ 提交人 doctor01）
+    assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(qc)).status_code == 200
     r5 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(qc),
                 json={"decision": "approved", "note": "核对无误"})
     assert r5.status_code == 200, r5.text
@@ -70,23 +75,23 @@ def test_high_risk_dual_check_flow(monkeypatch):
 
 
 def test_low_risk_mid_risk_traced_and_auto_signed(monkeypatch):
-    """任务3 新语义（行为变更，本测试按新语义更新）：留痕模式（默认开）下中危也
-    无条件入队并立即自动签发（AI·留痕模式(自动)）——原断言「中危不入队」随全交互
-    留痕语义更新；conf/needs_human_review 校准断言保持不变。"""
+    """本批次任务2 语义变更（按新语义更新）：drug 类豁免留痕模式——中危规则库命中
+    走 QC_AUTO_SIGN 三档，签发人为「AI·阈值自动(规则库v2)」（原断言「AI·留痕模式(自动)」
+    随 drug 豁免语义更新）；conf/needs_human_review 校准断言保持不变。"""
     from backend.core import medical_review as review
     c = _client()
     doc = _login(c, "doctor01", "Med@2026")
-    # 中危（非禁忌/高危）→ 留痕入队 + 自动签发，医生侧不阻塞
+    # 中危（非禁忌/高危）→ 规则库命中入队 + AI·阈值自动签发，医生侧不阻塞
     r = c.post("/api/v1/medical/drug/ask", headers={"Authorization": "Bearer " + doc},
                json={"question": "氯吡格雷和奥美拉唑能一起吃吗"})
     d = r.json()
     assert d["needs_human_review"] is False
     assert d["confidence"] >= 0.75  # 规则命中，真实校准为中高，不再"一律低置信"
-    assert d["review_id"], "留痕模式：中危也应入队留痕"
+    assert d["review_id"], "中危规则库命中应入队留痕"
     item = review.get(d["review_id"])
     assert item["status"] == "approved"
-    assert item["reviewed_by"] == "AI·留痕模式(自动)"
-    assert item["self_confirm_required"] is False  # 非低置信非高危 → 纯留痕
+    assert item["reviewed_by"] == "AI·阈值自动(规则库v2)"
+    assert item["self_confirm_required"] is False  # 非低置信非高危 → 无待确认
 
 
 # ---- 双控自动签发翻案（reopen）：reviewed_by=「AI·阈值自动」的已签发项可回待核对 ----

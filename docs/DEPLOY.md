@@ -48,6 +48,11 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 4. 演示语料（PubMed seed）替换为院方授权指南库
 5. 自动质控通过/驳回策略开关，需院方合规确认后开启
 
+## 日志与留存
+
+- 容器部署时应用 stdout 由 `docker logs <容器名>` 收集（本地直跑则输出到控制台）；**合规留存以 PG `audit_log` 双写为准**（JSONL 为本地兜底真源）。
+- 如需集中检索，可外接 Loki/ELK：stdout 已结构化（JSON 行），采集器可直接解析入库。
+
 ## 环境可移植性（部署清单）
 
 > 目标：同一套代码在 Windows / Linux / 容器内均可运行；GPU 是**可选加速项**，无 N 卡零配置可跑。

@@ -2,9 +2,12 @@
 
 - 收权（显式行为变更，锁定新语义）：/review/{rid}/resolve 与 /review/{rid}/reopen
   仅 qc/admin 可调（doctor/pharmacist → 403）；GET 列表（pending/history）多角色可见权保留。
+  本批次任务2 药剂科一票更新：drug 类 resolve 放宽到 pharmacist（见 test_drug_pharm_review），
+  本文件锁定非 drug 类收权语义与 drug 留痕模式豁免语义。
 - GET /qc/my-rejections：只返回当前用户自己的被驳回记录（数据隔离）。
 - GET /review/my-pending-confirm + POST /review/{rid}/self-confirm：留痕模式下
-  高危项入队即自动签发（AI·留痕模式(自动)），提交医生本人知情确认（仅本人）。
+  非 drug 类高危项入队即自动签发（AI·留痕模式(自动)），提交医生本人知情确认（仅本人）；
+  drug 类豁免留痕模式（高危恒人工，无自动签发/待确认）。
 """
 from fastapi.testclient import TestClient
 
@@ -120,9 +123,11 @@ def test_my_rejections_require_auth(monkeypatch, tmp_path):
 
 # ---- 任务3：QC_AUTO_SIGN_FULL 留痕模式----
 
-def test_full_mode_high_risk_auto_sign_on_enqueue(monkeypatch, tmp_path):
-    """full 模式：高危（禁忌）入队即自动签发（AI·留痕模式(自动)），队列不积压；
-    self_confirm_required=True 推本人；医生侧响应不阻塞；审计记 auto_sign_full。"""
+def test_full_mode_drug_high_risk_stays_pending(monkeypatch, tmp_path):
+    """本批次任务2 语义变更（原断言「drug 高危入队即自动签发」按新语义更新）：
+    drug 类豁免留痕模式——FULL=on 时高危（禁忌）仍走人工三档：保持 pending 等药剂科
+    签发/驳回（药剂科一票），无 AI 自动签发、无知情确认推本人；审计记 review_enqueued。
+    非 drug 类（literature 等）的 FULL 自动签发由 test_full_trace_mode 锁定。"""
     c, audit = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     doc = _login(c, "doctor01", "Med@2026")
@@ -133,25 +138,25 @@ def test_full_mode_high_risk_auto_sign_on_enqueue(monkeypatch, tmp_path):
     rid = d["review_id"]
     assert rid
     item = review.get(rid)
-    assert item["status"] == "approved"
-    assert item["reviewed_by"] == "AI·留痕模式(自动)"
-    assert item["self_confirm_required"] is True
-    assert review.pending() == []
-    lst = c.get("/api/v1/medical/review/my-pending-confirm", headers=_h(doc)).json()["items"]
-    assert [i["id"] for i in lst] == [rid]
-    assert any(e["payload"].get("action") == "auto_sign_full" and e["payload"].get("rid") == rid
-               for e in audit.entries)
+    assert item["status"] == "pending"
+    assert item["reviewed_by"] is None  # drug 高危绝不自动签发（药剂科一票）
+    assert item["self_confirm_required"] is False
+    assert [i["id"] for i in review.pending()] == [rid]
+    assert not any(e["payload"].get("action") == "auto_sign_full" and e["payload"].get("rid") == rid
+                   for e in audit.entries)
 
 
-def test_full_mode_mid_risk_auto_sign_without_self_confirm(monkeypatch, tmp_path):
-    """full 模式下中危：入队即统一自动签发（留痕模式标签），非高危不要求知情确认。"""
+def test_full_mode_drug_mid_risk_auto_sign_via_threshold(monkeypatch, tmp_path):
+    """本批次任务2 语义变更（原断言「中危按留痕模式标签自动签发」更新）：
+    FULL=on 时 drug 中危规则库提示仍走 QC_AUTO_SIGN 三档 → AI·阈值自动(规则库v2)
+    签发（非「AI·留痕模式(自动)」），非高危不要求知情确认。"""
     c, _ = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     doc = _login(c, "doctor01", "Med@2026")
     d = c.post("/api/v1/medical/drug/ask", headers=_h(doc), json={"question": MID_RISK_Q}).json()
     assert d["review_id"]
     item = review.get(d["review_id"])
-    assert item["status"] == "approved" and item["reviewed_by"] == "AI·留痕模式(自动)"
+    assert item["status"] == "approved" and item["reviewed_by"] == "AI·阈值自动(规则库v2)"
     assert item["self_confirm_required"] is False
     assert c.get("/api/v1/medical/review/my-pending-confirm", headers=_h(doc)).json()["items"] == []
 
@@ -186,27 +191,34 @@ def test_full_mode_qc_record_auto_signed(monkeypatch, tmp_path):
 # ---- 任务3：知情确认（仅本人）与数据隔离 ----
 
 def test_my_pending_confirm_isolation(monkeypatch, tmp_path):
-    """doctor 视图数据隔离：my-pending-confirm 只返回 submitted_by=本人 的项。"""
+    """doctor/pharmacist 视图数据隔离：my-pending-confirm 只返回 submitted_by=本人 的项。
+    本批次任务2 注记：drug 类豁免留痕模式（高危不再自动签发+待确认），故改用
+    review.submit 直造 self_confirm_required 条目验证隔离语义（与 agent 无关）。"""
     c, _ = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     doc = _login(c, "doctor01", "Med@2026")
     ph = _login(c, "pharm01", "Med@2026")
-    d1 = c.post("/api/v1/medical/drug/ask", headers=_h(doc), json={"question": HIGH_RISK_Q}).json()
-    d2 = c.post("/api/v1/medical/drug/ask", headers=_h(ph), json={"question": HIGH_RISK_Q}).json()
+    r1 = review.submit(agent="literature", question="文献高危项", answer="内容", confidence=0.5,
+                       risk_reason="低置信", submitted_by="doctor01", self_confirm_required=True)
+    r2 = review.submit(agent="literature", question="文献高危项乙", answer="内容", confidence=0.5,
+                       risk_reason="低置信", submitted_by="pharm01", self_confirm_required=True)
     mine_doc = c.get("/api/v1/medical/review/my-pending-confirm", headers=_h(doc)).json()["items"]
-    assert {i["id"] for i in mine_doc} == {d1["review_id"]}
+    assert {i["id"] for i in mine_doc} == {r1}
     assert all(i["submitted_by"] == "doctor01" for i in mine_doc)
     mine_ph = c.get("/api/v1/medical/review/my-pending-confirm", headers=_h(ph)).json()["items"]
-    assert {i["id"] for i in mine_ph} == {d2["review_id"]}
+    assert {i["id"] for i in mine_ph} == {r2}
 
 
 def test_self_confirm_only_self_and_once(monkeypatch, tmp_path):
+    """知情确认仅本人且一次性。
+    本批次任务2 注记：drug 类豁免留痕模式后不再产生「自动签发+待确认」条目，
+    改用 review.submit 直造 self_confirm_required 条目验证确认流（与 agent 无关）。"""
     c, audit = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     doc = _login(c, "doctor01", "Med@2026")
     qc = _login(c, "qc01", "Med@2026")
-    rid = c.post("/api/v1/medical/drug/ask", headers=_h(doc),
-                 json={"question": HIGH_RISK_Q}).json()["review_id"]
+    rid = review.submit(agent="literature", question="文献高危项", answer="内容", confidence=0.5,
+                        risk_reason="低置信", submitted_by="doctor01", self_confirm_required=True)
     # 非本人（qc）→ 400
     assert c.post(f"/api/v1/medical/review/{rid}/self-confirm", headers=_h(qc)).status_code == 400
     # 本人 → 200：标记 confirmed_by_self/self_confirmed_at，审计记 self_confirmed

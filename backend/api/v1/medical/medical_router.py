@@ -111,7 +111,8 @@ async def admin_config_toggle(req: ConfigToggleReq, user: dict = Depends(require
     """任务3：admin 运行时切换行为开关（如「留痕模式」qc_auto_sign_full）。
 
     写 data/runtime_flags.json（backend/core/runtime_flags.py 白名单键）——决策点
-    （_enqueue_if_risk / drug_ask / GET /config）经 runtime_flags.full_mode() 读值，
+    （决策点 _enqueue_if_risk（drug 类豁免，本批次任务2）/ GET /config）经
+    runtime_flags.full_mode() 读值，
     flags 文件优先于启动时 settings，切换即时生效、无需重启。admin 权限；审计留痕。
     """
     if req.key not in runtime_flags.ALLOWED_FLAGS:
@@ -218,6 +219,14 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
         # 与 web 流量唯一语义差异：不入队、无 review_id；答案正文/置信度/来源照常返回。
         return None
     full = runtime_flags.full_mode()  # runtime_flags.json 优先（admin 运行时切换即时生效）
+    # 本批次任务2（drug 类豁免留痕模式）：FULL 短路（入队即自动签发）只适用于非 drug
+    # agent——drug 类无论 QC_AUTO_SIGN_FULL 如何都走既有三档（QC_AUTO_SIGN=on 时中危
+    # 规则库提示自动签发、高危恒人工、两开关均 off 时全部人工），保证药剂科始终有
+    # drug 高危待核对项（配合 resolve 端点的药剂科一票）。实现上仅令 drug 视角
+    # full=False：入队条件回落旧语义（review_flag 才入队）、无「AI·留痕模式(自动)」
+    # 短路、无待确认强制（人工路径由药剂科复核，不吃知情确认流程）。
+    if agent == "drug":
+        full = False
     if not review_flag and not full:
         return None  # 非留痕模式维持旧语义：仅高危入队
     if self_confirm is True:
@@ -435,14 +444,16 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
         conf, risk, review_flag = 0.55, "未知相互作用", False
     else:  # 识别不足 2 药（旧 else 分支取值）
         conf, risk, review_flag = 0.50, "信息不足", False
-    # 中危规则库命中决定「入队留痕」（两种模式下都入队）；「AI·阈值自动」签发仅在
-    # 非留痕模式生效——任务3 留痕模式下统一由 _enqueue_if_risk 以「AI·留痕模式(自动)」签发（含高危）。
-    full = runtime_flags.full_mode()  # runtime_flags 优先（admin 运行时切换即时生效）
+    # 中危规则库命中决定「入队留痕」（任何模式下都入队）；「AI·阈值自动」签发不受
+    # 留痕模式影响——本批次任务2：drug 类豁免留痕模式（FULL 短路不适用，_enqueue_if_risk
+    # 内已令 drug 视角 full=False），高危/禁忌恒人工（药剂科一票），中危规则库提示
+    # 自动签发保持既有三档语义。
     mid_risk_rule = (settings.qc_auto_sign and sev == "中危" and bool(r.get("sources"))
                      and str(r["sources"][0]).startswith("drug_rules:"))
-    auto_sign = (not full) and mid_risk_rule
-    # self_confirm=review_flag：仅真正高危（禁忌/高危相互作用）在留痕模式下要求医生知情确认，
-    # 中危自动留痕（review_flag=False）不打扰医生（AskResp 本就不阻塞）
+    auto_sign = mid_risk_rule
+    # self_confirm=review_flag：本批次任务2 后 drug 豁免留痕模式（_enqueue_if_risk 内
+    # drug 视角 full 恒为 False），该标记不再产生知情确认强制（高危走人工三档，由药剂科
+    # 复核，不吃「我的待确认」流程）；传参保留以维持函数契约（非留痕语义下无害）。
     rid = await _enqueue_if_risk("drug", q, ans, conf, review_flag or mid_risk_rule, risk, actor,
                                  self_confirm=review_flag, sources=r["sources"])
     if auto_sign and rid:
@@ -739,8 +750,11 @@ async def consult_close(cid: str, user: dict = Depends(require_user)):
 # 任务2+3 审核中心转型：GET 列表（pending/history）保持多角色可见（qc/admin 全局档案 +
 # doctor/pharmacist 前端按「我的记录」过滤展示）；签发/驳回/翻案等**复核操作**收窄为
 # qc/admin（行为变更：原 doctor/pharmacist 可签发，现由质控员/管理员统一行使签字权）。
+# 本批次任务2 药剂科一票：drug 类签发/驳回放宽到 pharmacist（药物高危结论需药剂科复核，
+# 且 drug 豁免留痕模式——高危恒在 pending，药剂科任何一人可签发/驳回）；翻案仍仅 qc/admin。
 _REVIEW_ROLES = ("qc", "admin", "doctor", "pharmacist")
-_RESOLVE_ROLES = ("qc", "admin")
+_RESOLVE_ROLES = ("qc", "admin")                       # 非 drug 类签字权（含翻案）
+_DRUG_RESOLVE_ROLES = ("qc", "admin", "pharmacist")    # drug 类签字权（药剂科一票）
 
 
 @router.get("/review/pending")
@@ -833,9 +847,21 @@ async def review_self_confirm(rid: str, user: dict = Depends(require_user)):
 
 
 @router.post("/review/{rid}/resolve")
-async def review_resolve(rid: str, body: ResolveReq, user: dict = Depends(require_role(*_RESOLVE_ROLES))):
-    """任务2 收权：签发/驳回仅 qc/admin（原 doctor/pharmacist 可调，属显式行为变更）。"""
+async def review_resolve(rid: str, body: ResolveReq,
+                         user: dict = Depends(require_role("qc", "admin", "pharmacist"))):
+    """签发/驳回（按 agent 分流的签字权矩阵）：
+    - 非 drug 类：仅 qc/admin（任务2 收权，原 doctor/pharmacist 可调，属显式行为变更）；
+    - drug 类：qc/admin/pharmacist 均可（本批次任务2 药剂科一票——药物高危结论需药剂科
+      复核；drug 亦豁免留痕模式、高危恒在 pending，药剂科任何一人可签发/驳回）。
+    双控不变：审核人≠提交人由 review.resolve 强制；翻案（reopen）仍仅 qc/admin。"""
     reviewer = user.get("username", "system")
+    item = await asyncio.to_thread(review.get, rid)
+    if item is not None:  # 条目不存在时保持旧行为：落入 review.resolve 抛 ReviewError → 400
+        allowed = _DRUG_RESOLVE_ROLES if item.get("agent") == "drug" else _RESOLVE_ROLES
+        if user.get("role", "") not in allowed:
+            if item.get("agent") == "drug":
+                raise HTTPException(403, "药物核对项：仅质控员（qc）/管理员/药师（pharmacist）可签发/驳回")
+            raise HTTPException(403, "签发/驳回仅质控员（qc）/管理员可执行")
     try:
         item = await asyncio.to_thread(review.resolve, rid, body.decision, reviewer, body.note)
     except review.ReviewError as e:

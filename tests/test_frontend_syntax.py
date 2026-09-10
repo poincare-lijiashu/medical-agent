@@ -216,7 +216,10 @@ def test_review_thumbs_frontend_markers_present():
         "data-rthumbs",            # 行内占位容器（reviewRow / myConfirmRow 各一处 + 挂载查询）
         ".review-thumbs{",          # grid 多图布局
         ".review-thumbs img{", "max-height:120px",  # 每图最高 120px
-        "mountReviewThumbs(hslice)", "mountReviewThumbs(sliceM)", "mountReviewThumbs(slice)",
+        "mountReviewThumbs(hslice)",
+            # 本批次任务2 注记：pharmacist 视图新增 drug 待核对表，缩略图挂载合并传参
+            # （drugItems.concat(sliceM)）——原字面量 mountReviewThumbs(sliceM) 相应更新
+            "mountReviewThumbs(drugItems.concat(sliceM))", "mountReviewThumbs(slice)",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     fn = _extract_fn(html, "reviewThumbStrip")
@@ -244,3 +247,51 @@ def test_admin_panel_layout_markers_present():
     assert html.count("留痕模式（全交互留痕 · 运行时开关）") == 1, "留痕模式卡必须仅渲染一处"
     assert '<div class="panel" style="margin-top:16px"><h3>留痕模式' not in html, \
         "旧的整宽留痕模式卡（margin-top 版）必须已移除"
+
+
+# ---------- 本批次任务1/2 前端标记锁（追加，不改动既有断言） ----------
+
+def test_resubmit_jump_markers_present():
+    """任务1（本批次）标记锁：我的质控驳回「重新提交」→ 切质控工作台视图（go('qc')）
+    + 滚动定位到病历表单（scrollIntoView）+ 表单短暂高亮（.qc-flash CSS 边框闪烁，2s 移除）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        'id="qcFormCard"',                       # 病历表单卡定位锚点
+        "@keyframes qcFlash", ".qc-flash{",      # 边框闪烁动画样式
+        "if(cur!=='qc')go('qc');",               # 复用 go 切质控视图（已在 qc 不重复切换）
+        "formCard.scrollIntoView",               # 滚动到病历表单
+        "formCard.classList.add('qc-flash')",    # 加高亮 class
+        "formCard.classList.remove('qc-flash'),2000",  # 2s 后移除
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+
+
+def test_pharm_sign_markers_present():
+    """任务2（本批次）标记锁：药剂科一票——按 agent 分流的签字权（canSignItem）、
+    pharmacist drug 待核对表与「药物高危结论需药剂科复核」文案。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        "function canSignItem(",                       # 签字权按 agent 分流
+        "if(p.agent==='drug')return ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist';",
+        "canSignItem(p)?",                             # 列表行按条目出签发/驳回按钮
+        "canSignItem(p)&&!mine",                       # 详情模态操作区同矩阵
+        "药物高危结论需药剂科复核",                       # 核心文案（头部说明 + 空态提示）
+        "药物高危待核对（需药剂科复核）",                  # pharmacist drug 待核对表头
+        "pharmacist（药剂科一票）额外拉取待核对清单",       # 药剂科 pending 拉取标记
+        "审核中心 · 药剂科药物核对",                       # pharmacist 审核中心标题
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+
+
+def test_humanize_full_map_markers_present():
+    """任务3（本批次）标记锁：humanizeAudit 显式映射表（MAP）+ 覆盖回归锁配套注释。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        "const MAP={",
+        "tests/test_audit_humanize_coverage.py",  # 映射表头注释指向覆盖回归锁
+        "药物问答（置信 ${cf}",                    # drug.answered / drug.answer 人话
+        "查看了我的质控驳回（${p.n} 条）",
+        "提交了质控结论（置信 ${cf}",              # qc.answer 点分镜像
+        "留痕模式自动签发（${rid}）",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"

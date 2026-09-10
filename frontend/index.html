@@ -184,6 +184,9 @@
   .qgrid label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--ink-2);font-weight:500}
   .qgrid textarea{grid-column:1/-1}
   @media(max-width:720px){.qgrid{grid-template-columns:1fr}}
+  /* 任务1：驳回重提定位高亮——表单卡边框短暂闪烁（qcResubmit 加 qc-flash，2s 后移除） */
+  @keyframes qcFlash{0%,100%{box-shadow:0 0 0 0 transparent}35%{box-shadow:0 0 0 3px var(--accent)}70%{box-shadow:0 0 0 1px var(--accent-soft)}}
+  .qc-flash{animation:qcFlash 1s ease-in-out 2;border-color:var(--accent)}
   input.inp,select.inp{width:100%;border:1px solid var(--line-strong);border-radius:var(--r);padding:10px 12px;font:inherit;font-size:13.5px;background:var(--bg);color:var(--ink)}
   input.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent),0 0 0 5px var(--accent-soft)}
   /* modal */
@@ -292,7 +295,7 @@
         </div>
         <!-- 任务6：质控重提横幅（点击「我的质控驳回→重新提交」时显示，预填原病历并携带 resubmit_of） -->
         <div class="card" id="qcResubmitBanner" style="display:none;border-left:3px solid var(--warn)"></div>
-        <div class="card"><h3>病历内容</h3>
+        <div class="card" id="qcFormCard"><h3>病历内容</h3>
           <div style="margin-bottom:14px">
             <label class="src" for="qcPaste" style="display:block;margin-bottom:6px">粘贴整段病历（门诊/住院原文），AI 自动拆分到下方各栏；仅辅助填表，可手动修改</label>
             <textarea class="inp" id="qcPaste" rows="3" placeholder="例：患者男，35 岁。主诉：右下后牙自发痛 3 天。现病史：… 既往史：… 体格检查：… 辅助检查：… 初步诊断：… 医师签名：张医生"></textarea>
@@ -885,14 +888,22 @@ async function closeConsult(id){
 /* ---- review center ---- */
 let reviewTab='pending', historyItems=[];
 let myConfirmItems=[];  /* 任务3：doctor/pharmacist 的「我的待确认」项（my-pending-confirm 数据源） */
-function canSign(){return (ROLE==='qc'||ROLE==='admin')&&!CFG.full;}  /* 任务2/3：签发/驳回/翻案仅 qc/admin；留痕模式下全局只读档案 */
-function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案与 tab 标签 */
+function canSign(){return (ROLE==='qc'||ROLE==='admin')&&!CFG.full;}  /* 任务2/3：非 drug 类签发/驳回/翻案仅 qc/admin；留痕模式下全局只读档案 */
+/* 本批次任务2：按 agent 分流的签字权（与后端 review_resolve 矩阵一致）——drug 类豁免
+   留痕模式（高危恒在 pending），qc/admin/pharmacist 均可签发/驳回（药剂科一票，
+   不受 CFG.full 影响）；其它 agent 维持 qc/admin 且留痕模式只读。双控（mine）另行判定。 */
+function canSignItem(p){
+  if(!p)return false;
+  if(p.agent==='drug')return ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist';
+  return canSign();}
+function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案与 tab 标签；本批次任务2：pharmacist 文案（药剂科药物核对） */
   const mine=!(ROLE==='qc'||ROLE==='admin');
+  const ph=ROLE==='pharmacist';
   const h=document.querySelector('#scr-review .shead h2'),p=document.querySelector('#scr-review .shead p');
-  if(h)h.textContent=mine?'审核中心 · 我的记录':'审核中心 · 高风险双人核对';
-  if(p)p.textContent=mine?'仅显示您提交的待确认项与历史记录；签发/驳回由质控员（qc）/管理员执行':'高风险结论需第二名医师/药师签发';
+  if(h)h.textContent=mine?(ph?'审核中心 · 药剂科药物核对':'审核中心 · 我的记录'):'审核中心 · 高风险双人核对';
+  if(p)p.textContent=mine?(ph?'药物高危结论需药剂科复核：您可签发/驳回药物（drug）待核对项；其它助手高危项由质控员/管理员执行':'仅显示您提交的待确认项与历史记录；签发/驳回由质控员（qc）/管理员执行'):'高风险结论需第二名医师/药师签发';
   const tp=document.getElementById('tabPending'),th=document.getElementById('tabHistory');
-  if(tp)tp.textContent=mine?'我的待确认':'待处理';
+  if(tp)tp.textContent=mine?(ph?'药物待核对':'我的待确认'):'待处理';
   if(th)th.textContent=mine?'我的历史':'历史记录';
   const tc=document.getElementById('tabConsults');  /* 跨科室会诊收件箱：doctor/pharmacist 专属第三栏目 */
   if(tc)tc.style.display=mine?'':'none';
@@ -933,7 +944,14 @@ async function loadReviewMine(b){
     document.getElementById('purgeBtn').style.display='none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
       if(h.ok)historyItems=(((await h.json()).items)||[]).filter(i=>i.submitted_by===reviewMe&&i.status!=='pending');}catch(e){}
-    reviewItems=[];switchReviewTab(reviewTab);
+    reviewItems=[];
+    /* 本批次任务2：pharmacist（药剂科一票）额外拉取待核对清单并只保留 drug 项——
+       药物高危结论需药剂科复核（后端 _REVIEW_ROLES 已放行 pharmacist 读 pending）；
+       doctor 维持旧形态（reviewItems 恒空）。 */
+    if(ROLE==='pharmacist'){
+      try{const pr=await fetch('/api/v1/medical/review/pending',{headers:auth()});
+        if(pr.ok)reviewItems=(((await pr.json()).pending)||[]).filter(i=>i.agent==='drug');}catch(e){}}
+    switchReviewTab(reviewTab);
     refreshConsultBadge();  /* 任务4：进入审核中心即刷新「待我意见 + 我的待确认」徽标 */
   }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
 const REVIEW_PER=12, HIST_PER=12;
@@ -984,9 +1002,9 @@ function reviewRow(p,resolved){
       <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`+
         (auto&&canSign()&&p.submitted_by!==reviewMe?`<div style="margin-top:6px"><button class="btn sm secondary" onclick="reopenReview('${p.id}')">转人工复核</button></div>`:'')):
         (mine?'<span class="src">双控：你不能核对本人提交</span>':
-        (canSign()?`<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
+        (canSignItem(p)?`<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
         <button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button></div>`
-        :'<span class="src">'+(CFG.full?'留痕模式：AI 已自动签发（只读档案）':'签发/驳回需质控员或管理员')+'</span>'))}
+        :'<span class="src">'+(p.agent==='drug'&&ROLE==='pharmacist'?'药物核对项：药师仅可处理本人之外提交的条目（双控）':(CFG.full?'留痕模式：AI 已自动签发（只读档案）':'签发/驳回需质控员或管理员'))+'</span>'))}
         <button class="btn sm ghost" onclick="openReviewDetail('${p.id}')">详情</button></td></tr>`;}
 /* 任务3：doctor「我的待确认」行——AI 自动签发的高危项等待本人知情确认（仅确认，无签发权） */
 function myConfirmRow(p){
@@ -1017,10 +1035,16 @@ function renderReview(){
     b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>处理结果</th></tr></thead><tbody>${rows}</tbody></table>${hpager}</div>`;
     mountReviewThumbs(hslice);  /* 任务1：历史行缩略图条挂载 */
     return;}
-  /* 任务3：doctor/pharmacist「我的待确认」分支（数据源 my-pending-confirm，仅本人） */
+  /* 任务3：doctor/pharmacist「我的待确认」分支（数据源 my-pending-confirm，仅本人）。
+     本批次任务2：pharmacist（药剂科一票）待处理 tab 额外渲染 drug 待核对项表（含
+     签发/驳回按钮，见 canSignItem），文案「药物高危结论需药剂科复核」。 */
   if(mine){
+    const ph=ROLE==='pharmacist';
+    const drugItems=ph?(reviewItems||[]).filter(_rvMatch):[];  /* 药剂科：drug 待核对项 */
     const mineItems=(myConfirmItems||[]).filter(_rvMatch);
-    if(!mineItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有您的待确认项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控')}</div></div>`;return;}
+    if(!mineItems.length&&!drugItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>${ph?'暂无待核对的药物项。':'没有您的待确认项。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(ph?'药物高危结论需药剂科复核：出现药物禁忌/高危相互作用时会出现在这里，由您签发/驳回。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控'))}</div></div>`;return;}
+    /* 药剂科 drug 待核对表（置顶；行渲染复用 reviewRow——按 canSignItem 出按钮） */
+    const drugSec=(!ph||!drugItems.length)?'':`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px"><table><thead><tr><th>药物高危待核对（需药剂科复核）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${drugItems.map(p=>reviewRow(p,false)).join('')}</tbody></table></div>`;
     const pagesM=Math.max(1,Math.ceil(mineItems.length/REVIEW_PER));
     if(reviewPage>=pagesM)reviewPage=pagesM-1; if(reviewPage<0)reviewPage=0;
     const startM=reviewPage*REVIEW_PER, sliceM=mineItems.slice(startM,startM+REVIEW_PER);
@@ -1029,8 +1053,10 @@ function renderReview(){
       <button class="btn sm secondary" ${reviewPage===0?'disabled':''} onclick="reviewGo(-1)">‹ 上一页</button>
       <span class="src num">第 ${reviewPage+1} / ${pagesM} 页 · 共 ${mineItems.length} 项</span>
       <button class="btn sm secondary" ${reviewPage>=pagesM-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
-    b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rowsM}</tbody></table>${pagerM}</div>`;
-    mountReviewThumbs(sliceM);  /* 任务1：待确认行缩略图条挂载 */
+    /* 我的待确认为空时只渲染药物待核对表（不出空表壳） */
+    const mineTable=mineItems.length?`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rowsM}</tbody></table>${pagerM}</div>`:'';
+    b.innerHTML=drugSec+mineTable;
+    mountReviewThumbs(drugItems.concat(sliceM));  /* 任务1：待核对/待确认行缩略图条挂载 */
     return;}
   const pend=(reviewItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
   if(!pend.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待质控员/管理员签发。'}</div></div>`;return;}
@@ -1101,12 +1127,13 @@ function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[],
   /* F3 核对可见图片：仅渲染 data:image/ 前缀的影像（防属性逃逸再叠加 esc），点击放大复用模态 */
   const imgs=(p.images||[]).filter(u=>String(u).startsWith('data:image/'));
   const imgsHtml=imgs.length?`<h4 style="margin-top:14px">影像（点击放大）</h4><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${imgs.map(u=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;cursor:zoom-in" src="${esc(u)}" alt="待核对影像" onclick="showImg(this.src)">`).join('')}</div>`:'';
-  /* 任务3：操作区按角色/模式渲染——qc/admin 且非留痕模式可签发/驳回/翻案；
-     医生本人且待确认项 → 知情确认；其余只读 */
+  /* 任务3：操作区按角色/模式渲染——本批次任务2 改按 canSignItem（agent 分流）：
+     qc/admin/pharmacist 对 drug 项可签发/驳回（含留痕模式）；其它 agent 维持 qc/admin
+     且非留痕模式。医生本人且待确认项 → 知情确认；翻案仍按 canSign（qc/admin）。其余只读 */
   const actions=`<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">${
-    (mine&&p.self_confirm_required&&!p.confirmed_by_self)?`<button class="btn sm primary" onclick="selfConfirm('${p.id}')">知情确认</button>`:''}${(canSign()&&!mine)?`<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`:''}
+    (mine&&p.self_confirm_required&&!p.confirmed_by_self)?`<button class="btn sm primary" onclick="selfConfirm('${p.id}')">知情确认</button>`:''}${(canSignItem(p)&&!mine)?`<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`:''}
       ${(canSign()&&!mine&&auto)?`<button class="btn sm ghost" onclick="reopenReview('${p.id}')">转人工复核</button>`:''}
-      ${(!canSign()&&!mine)?'<span class="src">签发/驳回由质控员（qc）/管理员执行</span>':''}</div>`;
+      ${(!canSignItem(p)&&!mine)?'<span class="src">签发/驳回由质控员（qc）/管理员执行'+(p.agent==='drug'?'；药物核对项药师（pharmacist）亦可':'')+'</span>':''}</div>`;
   document.getElementById('mTitle').textContent='核对详情 · '+p.agent;
   document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span>${auto?'<span class="chip mid"><span class="dot"></span>自动签发</span>':''}${p.confirmed_by_self?'<span class="chip ok"><span class="dot"></span>本人已确认</span>':''}</div>
     <h4>问题</h4><div class="txt md">${md(p.question||'')}</div>
@@ -1234,7 +1261,14 @@ function qcResubmit(rid){
     bn.innerHTML=`<b>重新提交（第 ${Number(it.attempt||1)+1} 次）</b>
       <div class="src" style="margin-top:4px;line-height:1.7">原病历内容已预填（原记录 <b class="num">${esc(rid)}</b>），可修改后运行质控；医师签名绑定当前账号。第 2 次起仍不合格将自动升级病案科复核。</div>
       <div style="margin-top:8px"><button class="btn sm ghost" onclick="qcCancelResubmit()">取消重提</button></div>`;}
-  document.getElementById('qcRun').scrollIntoView({behavior:'smooth',block:'center'});
+  /* 任务1：驳回重提跳转——确保处于质控工作台视图（复用 go('qc')；已在 qc 视图则不重复
+     切换/重拉数据），滚动定位到病历表单并短暂高亮（CSS 边框闪烁 2s 后移除 class），
+     引导医生视线落到预填内容上。 */
+  if(cur!=='qc')go('qc');
+  const formCard=document.getElementById('qcFormCard');
+  if(formCard){formCard.scrollIntoView({behavior:'smooth',block:'start'});
+    formCard.classList.add('qc-flash');
+    setTimeout(()=>formCard.classList.remove('qc-flash'),2000);}
   toast('已预填原病历内容，请核对后运行质控');
 }
 function qcCancelResubmit(){qcResubmitOf=null;const bn=document.getElementById('qcResubmitBanner');
@@ -1419,36 +1453,123 @@ function toggleAuditPanel(){
    未映射的兜底显示 event_type+payload 摘要（原始 JSON 仍在折叠区，排障用）。
    返回纯文本，调用处必须经 esc() 转义后再入 HTML。 */
 function humanizeAudit(e){
-  const p=e.payload||{}, act=String(e.action||''), ev=String(e.event||'');
+  /* 本批次任务3：审计事件人话化映射表（覆盖回归锁：tests/test_audit_humanize_coverage.py
+     提取 backend 全部审计 action 字面量（含 f-string 动态展开与 PG 镜像点分事件后缀）与
+     下表键集比对——新增审计事件必须同步在此补人话，否则测试红）。
+     键=action（payload.action；PG 点分镜像事件如 review.approved 取「.」后缀）；
+     值=零参模板（闭包取 p/rid/ev/cf/T）。返回纯文本，调用处必须 esc() 后再入 HTML。 */
+  const p=e.payload||{}, ev=String(e.event||'');
+  let act=String(e.action||'');
   const rid=p.rid?('#'+p.rid):'';
-  // 变更类目标：payload 里有什么就展示什么（用户/科室/标签/文件/模型 kind 等）
-  const target=p.user||p.name||p.tag||p.file||p.filename||p.path
+  if(!act&&ev.indexOf('.')>=0)act=ev.slice(ev.indexOf('.')+1);  /* PG 镜像点分事件（admin/data 数据源） */
+  const cf=(p.conf!==undefined&&p.conf!==null&&Number.isFinite(Number(p.conf)))?Number(p.conf).toFixed(2):'—';
+  const T=p.user||p.name||p.tag||p.file||p.filename||p.path
     ||(p.kind?(p.kind+(p.pid?('/'+p.pid):'')):'')||'';
-  // —— 查询类（模板内插 payload 数值）——
-  if(act==='list_pending')return p.n!==undefined?`查看了待核对列表（${p.n} 项待处理）`:'查看了待核对列表';
-  if(act==='history')return p.n!==undefined?`查看了签发历史（${p.n} 条）`:'查看了签发历史';
-  if(act==='list')return p.n!==undefined?`查看了列表（${p.n} 条）`:'查看了列表';
-  if(act==='query'){
-    if(p.fields!==undefined)return `执行了质控查询（字段 ${p.fields} 项 · 检验 ${p.labs??0} 项）`;
-    return '执行了查询';}
-  // —— 会诊事件族（任务3：consult_* 与会诊查询 人话化；event_type=consult）——
-  if(act==='consult_created')return (p.depts&&p.depts.length)?`发起了跨科室会诊（召集：${p.depts.join('、')}）`:'发起了跨科室会诊';
-  if(act==='consult_dispatch')return `会诊分发给 ${(p.departments||[]).length} 个科室`;
-  if(act==='consult_opinion')return `提交了会诊意见（${p.dept||'科室未设置'}）`;
-  if(act==='consult_closed')return `结束了会诊 ${p.cid||rid||''}`.trim();
-  if(act==='list_mine')return `查看了我的会诊（发起 ${p.initiated??0} · 参与 ${p.participated??0}）`;
-  if(act==='list_inbox')return `查看了会诊收件箱（${p.n??0} 条待意见）`;
-  // —— 变更类（关键词匹配动作族，命中顺序：签发/驳回/转人工 优先于 增删改）——
+  const MAP={
+    /* —— 审核中心 / 复核流 —— */
+    list_pending:()=>p.n!==undefined?`查看了待核对列表（${p.n} 项待处理）`:'查看了待核对列表',
+    history:()=>p.n!==undefined?`查看了签发历史（${p.n} 条）`:'查看了签发历史',
+    list:()=>p.n!==undefined?`查看了列表（${p.n} 条）`:'查看了列表',
+    status:()=>p.rid?`查看了复核单状态（${p.rid}）`:'查看了复核队列状态',
+    purge_pending:()=>p.n!==undefined?`清空了待核对列表（${p.n} 条）`:'清空了待核对列表',
+    review_enqueued:()=>`答案进入待核对队列${rid?'（'+rid+'）':''}`,
+    auto_sign_full:()=>`留痕模式自动签发（${rid}）`.trim(),
+    auto_sign:()=>`中危规则库提示自动签发（${rid}）`.trim(),
+    self_confirmed:()=>`完成了知情确认（${rid}）`.trim(),
+    resolved_approved:()=>rid?`对 ${rid} 执行了签发`:'执行了签发',
+    resolved_rejected:()=>rid?`对 ${rid} 执行了驳回`:'执行了驳回',
+    approved:()=>rid?`对 ${rid} 执行了签发`:'执行了签发',
+    rejected:()=>rid?`对 ${rid} 执行了驳回`:'执行了驳回',
+    reopen:()=>rid?`对 ${rid} 执行了转人工`:'执行了转人工',
+    reopened:()=>rid?`对 ${rid} 执行了转人工`:'执行了转人工',
+    /* —— 查询/问答类（event_type 细分：qc 质控 / literature 文献 / mdt 会诊 / consult 发起）—— */
+    query:()=>{
+      if(ev==='qc')return p.fields!==undefined?`提交了病历质控（字段 ${p.fields} 项 · 检验 ${p.labs??0} 项）`:'提交了病历质控';
+      if(ev==='literature')return '查询了医学文献';
+      if(ev==='mdt')return '发起了 AI 多智能体会诊';
+      if(ev==='consult')return '准备发起跨科室会诊';
+      return '执行了查询';},
+    prefilter:()=>'命中系统快捷应答（未使用检索）',
+    offtopic_reject:()=>'拒答了技术领域外问题',
+    degraded:()=>{
+      if(ev==='literature')return '文献问答服务降级（已标记复核）';
+      if(ev==='mdt')return '会诊服务降级（已标记复核）';
+      if(ev==='consult')return '会诊组队服务降级（已留痕）';
+      return '服务降级（已留痕）';},
+    fallback_no_enqueue:()=>'常识兜底回答（不入审核队列）',
+    stream:()=>'发起了流式问答',
+    stream_error:()=>'流式生成异常（已记录审计）',
+    agentic_refine:()=>`检索改写（第 ${p.attempt??'?'} 轮）`,
+    answered:()=>`药物问答（置信 ${cf}${p.review?'；需药剂科复核':''}）`,
+    answer:()=>{  /* PG 镜像 qc.answer/literature.answer/drug.answer…（event 为点分名） */
+      if(ev.indexOf('qc')===0)return `提交了质控结论（置信 ${cf}${p.review?' · 需复核':''}）`;
+      if(ev.indexOf('drug')===0)return `药物问答（置信 ${cf}${p.review?'；需药剂科复核':''}）`;
+      return `AI 问答留痕（置信 ${cf}${p.review?' · 需复核':''}）`;},
+    /* —— 影像/病例（VL 链路）—— */
+    describe_failed:()=>'影像描述失败（已留痕）',
+    vl_failed:()=>'多模态解析失败（已留痕）',
+    vl_empty:()=>'AI 未生成影像所见（已提示重试）',
+    vl_truncated:()=>'影像输出因长度截断（按最大长度返回）',
+    vl_described:()=>`生成了影像所见（${p.len??'?'} 字${p.risky?' · 含高危征象':''}）`,
+    need_image:()=>'提示需上传影像',
+    scaffold:()=>'提示粘贴病例要点',
+    /* —— 跨科室会诊 —— */
+    prefilter_reject:()=>'会诊发起被预检拦截（请补充病例信息）',
+    team_failed:()=>'会诊组队失败（请补充病例信息）',
+    consult_created:()=>(p.depts&&p.depts.length)?`发起了跨科室会诊（召集：${p.depts.join('、')}）`:'发起了跨科室会诊',
+    consult_dispatch:()=>`会诊分发给 ${(p.departments||[]).length} 个科室`,
+    consult_opinion:()=>`提交了会诊意见（${p.dept||'科室未设置'}）`,
+    consult_closed:()=>`结束了会诊 ${p.cid||rid||''}`.trim(),
+    list_mine:()=>`查看了我的会诊（发起 ${p.initiated??0} · 参与 ${p.participated??0}）`,
+    list_inbox:()=>`查看了会诊收件箱（${p.n??0} 条待意见）`,
+    created:()=>`创建了会诊单 ${p.cid||rid||''}`.trim(),
+    opinion:()=>`提交了会诊意见（${p.dept||'科室未设置'}）`,
+    closed:()=>`结束了会诊 ${p.cid||rid||''}`.trim(),
+    /* —— 病历质控 —— */
+    resubmit:()=>`重新提交了质控病历（第 ${p.attempt??'?'} 次）`,
+    qc_escalated:()=>`质控重提自动升级病案科复核（第 ${p.attempt??'?'} 次）`,
+    auto_reject:()=>`AI 自动驳回质控病历（硬伤 ${(p.hard||[]).length} 项）`,
+    auto_pass:()=>`AI 预审通过并归档（置信 ${cf}）`,
+    my_rejections:()=>p.n!==undefined?`查看了我的质控驳回（${p.n} 条）`:'查看了我的质控驳回',
+    parse:()=>`粘贴病历让 AI 拆分（${p.len??'?'} 字）`,
+    /* —— 知识库 —— */
+    search:()=>`检索了知识库（top ${p.top_k??'—'}）`,
+    search_failed:()=>'知识库检索失败（已降级提示）',
+    upload:()=>T?`上传了知识库 ${T}`:'上传了知识库文件',
+    upload_rejected:()=>`知识库上传被拒绝（${T||'文件'}：${String(p.reason||'类型不支持').slice(0,60)}）`,
+    upload_async:()=>`上传了大文件，后台向量化中（${T||'文件'}）`,
+    upload_failed:()=>`知识库文件摄取失败（${T||'文件'}）`,
+    delete:()=>T?`删除了 ${T}`:'执行了删除',
+    /* —— 管理端 —— */
+    config_toggle:()=>`切换了运行时开关 ${p.key||'—'}（${p.from?'开':'关'} → ${p.to?'开':'关'}）`,
+    user_created:()=>`创建了用户 ${p.user||'—'}（${p.role||'—'}）`,
+    user_deleted:()=>`删除了用户 ${p.user||'—'}`,
+    department_added:()=>`新增了科室 ${p.name||'—'}`,
+    department_removed:()=>`删除了科室 ${p.name||'—'}`,
+    llm_add:()=>`新增了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
+    llm_remove:()=>`删除了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
+    llm_activate:()=>`激活了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
+    llm_deactivate:()=>`停用了${p.kind==='vision'?'视觉':'对话'}模型配置（回落内置）`,
+    llm_test:()=>`测试了模型连通性（${p.model_id||'—'}：${p.ok?'成功':'失败'}）`,
+    /* —— 认证 —— */
+    password_changed:()=>'修改了自己的登录密码',
+    password_reset:()=>`重置了用户密码（${p.user||p.username||'—'}）`,
+    /* —— HIS 外推 —— */
+    push_failed:()=>'质控结论推送 HIS 失败（已留痕）',
+    pushed:()=>`质控结论已推送 HIS（${p.status||'—'}）`,
+    push_skipped:()=>'HIS 适配器跳过推送',
+  };
+  const tpl=MAP[act];
+  if(tpl)return tpl();
+  /* —— 关键词兜底（动态/未知动作族的安全网，命中顺序：签发/驳回/转人工 优先于 增删改）—— */
   const has=s=>act.includes(s);
   if(has('approved'))return rid?`对 ${rid} 执行了签发`:'执行了签发';
   if(has('rejected'))return rid?`对 ${rid} 执行了驳回`:'执行了驳回';
   if(has('reopen'))return rid?`对 ${rid} 执行了转人工`:'执行了转人工';
-  if(act==='purge_pending')return p.n!==undefined?`清空了待核对列表（${p.n} 条）`:'清空了待核对列表';
-  if(act==='review_enqueued')return `答案进入待核对队列${rid?'（'+rid+'）':''}`;
-  if(has('upload')&&target)return `上传了知识库 ${target}`;
-  if((has('create')||has('_created')||has('add')||has('activate'))&&target)return `创建了 ${target}`;
-  if((has('delete')||has('remov')||has('deactivate'))&&target)return `删除了 ${target}`;
-  if(has('update')&&target)return `修改了 ${target}`;
+  if(has('upload')&&T)return `上传了知识库 ${T}`;
+  if((has('create')||has('_created')||has('add')||has('activate'))&&T)return `创建了 ${T}`;
+  if((has('delete')||has('remov')||has('deactivate'))&&T)return `删除了 ${T}`;
+  if(has('update')&&T)return `修改了 ${T}`;
   // —— 兜底：event_type + action + payload 摘要 ——
   const sum=Object.entries(p).filter(([k])=>k!=='action').slice(0,4)
     .map(([k,v])=>`${k}=${typeof v==='string'?v.slice(0,40):JSON.stringify(v)}`).join('；');
