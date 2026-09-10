@@ -55,7 +55,7 @@ def main() -> int:
             if c.strip():
                 rows.append({"content": c, "source": src})
     print(f"CHUNKS={len(rows)} EMBEDDING...", flush=True)
-    dense, sparse = embed_dense_sparse([r["content"] for r in rows], batch_size=32, max_length=256)
+    dense, sparse = embed_dense_sparse([r["content"] for r in rows], batch_size=32)  # 窗口走配置默认 1024（任务A）
     col = _collection()
     try:
         col.delete("medical_kb", filter=f'document_id == "{DOC_TAG}"')

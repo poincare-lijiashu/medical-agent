@@ -999,6 +999,9 @@ class KbUploadReq(BaseModel):
     # 任务5：大教材 PDF（实测 38.5MB）base64 后约 54MB，上限提到 90M 字符（解码约 67MB）；
     # 请求体整体仍受 max_body_mb=64 中间件约束，双保险。
     data_b64: str = Field(max_length=90_000_000)
+    # 任务B：结构感知切分文档类型（如 "pdf"/"text"）；缺省按扩展名判定（PDF 默认
+    # 结构感知）。前端暂不加 UI，后端参数就绪（透传给 ingest/异步任务）。
+    doc_kind: str | None = Field(default=None, max_length=20)
 
 
 @router.post("/admin/kb/upload")
@@ -1007,7 +1010,8 @@ async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin")
     直接返回摄取结果；大文件先落盘并立即返回 {task_id, mode:"async"}，后台线程执行
     extract→chunk→embed→入库（进度写 data/kb/tasks/{task_id}.json），前端轮询
     GET /admin/kb/upload/status/{task_id}——同步 HTTP 不再被分钟级向量化阻塞。
-    类型校验前置：同步/异步都先拒绝非法扩展名（明确 400 而非落到异步任务里失败）。"""
+    类型校验前置：同步/异步都先拒绝非法扩展名（明确 400 而非落到异步任务里失败）。
+    任务C：扫描版 PDF 自动逐页 OCR（未装 rapidocr 时明确 400）；png/jpg 单图 OCR 入库。"""
     actor = user.get("username", "admin")
     await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload",
                             actor=actor, payload={"name": req.name[:120]})
@@ -1016,7 +1020,7 @@ async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin")
         await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload_rejected",
                                 actor=actor,
                                 payload={"name": req.name[:120], "reason": f"不支持的文件类型：{ext}"})
-        raise HTTPException(400, f"不支持的文件类型：{ext or '(无扩展名)'}（仅允许 md/txt/pdf）")
+        raise HTTPException(400, f"不支持的文件类型：{ext or '(无扩展名)'}（仅允许 md/txt/pdf/png/jpg）")
     try:
         raw = base64.b64decode(req.data_b64)
     except Exception:  # noqa: BLE001 —— base64 损坏
@@ -1025,13 +1029,15 @@ async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin")
         raise HTTPException(400, "文件内容为空")
     # 大文件 → 后台任务：立即返回 task_id（不再等待 BGE-M3 分钟级向量化）
     if await asyncio.to_thread(kb_ingest.should_ingest_async, req.name, raw):
-        task_id = await asyncio.to_thread(kb_ingest.start_ingest_task, req.name[:250], raw)
+        task_id = await asyncio.to_thread(kb_ingest.start_ingest_task,
+                                          req.name[:250], raw, None, req.doc_kind)
         await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload_async",
                                 actor=actor, payload={"name": req.name[:120], "task_id": task_id})
         return {"task_id": task_id, "mode": "async", "name": req.name[:250]}
     # 小文件 → 同步路径（现状行为完全保留）
     try:
-        out = await asyncio.to_thread(kb_ingest.ingest_b64, req.name[:250], req.data_b64)
+        out = await asyncio.to_thread(kb_ingest.ingest_b64, req.name[:250], req.data_b64,
+                                      None, req.doc_kind)
     except ValueError as e:
         # 任务5：确定性业务错误（扫描版 PDF/文档过大等）→ 透传具体原因，不再笼统"失败"
         await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="upload_rejected",

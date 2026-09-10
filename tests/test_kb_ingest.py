@@ -30,12 +30,13 @@ def test_admin_kb_endpoint_requires_admin():
 
 
 def test_ingest_document_rejects_unsupported_type():
-    """图片等非文本类型必须明确拒绝（曾发生 jpg 被硬解为 1197 个乱码切片入库）。"""
+    """非文本/非图片类型必须明确拒绝（曾发生 jpg 被硬解为 1197 个乱码切片入库；
+    任务C 后 png/jpg 已走 OCR 白名单，反例改用仍不支持的 gif/docx）。"""
     import pytest
     with pytest.raises(ValueError, match="不支持的文件类型"):
-        kb_ingest.ingest_document("病例例图.jpg", b"\xff\xd8\xff\xe0fake-jpeg-bytes")
+        kb_ingest.ingest_document("病例例图.gif", b"GIF89a-fake-gif-bytes")
     with pytest.raises(ValueError, match="不支持的文件类型"):
-        kb_ingest.ingest_b64("x.png", "aGk=")
+        kb_ingest.ingest_b64("x.docx", "aGk=")
 
 
 def test_register_doc_and_list_kind(monkeypatch, tmp_path):
@@ -208,9 +209,12 @@ def test_async_task_error_state_carries_reason(monkeypatch, tmp_path):
 
 
 def test_async_scan_pdf_error_state(monkeypatch, tmp_path):
-    """扫描版 PDF 走异步任务：error 原因与同步路径同文案（明确提示需 OCR）。"""
+    """扫描版 PDF 走异步任务：error 原因与同步路径同文案（明确提示需 OCR）。
+    任务C 后：OCR 已安装 → mock OCR 返回空文本（空白件），验证「OCR 后仍无文字」
+    明确报错路径（不依赖真实 OCR 对 25 页的耗时，语义与同步路径一致）。"""
     _isolate_kb_dirs(monkeypatch, tmp_path)
     _mock_embed_and_col(monkeypatch)
+    monkeypatch.setattr(kb_ingest.kb_ocr, "ocr_image_bytes", lambda png: "")  # OCR 空结果（空白页）
     raw = _make_pdf(25, text="")  # >20 页且无文本层
     task_id = kb_ingest.start_ingest_task("扫描大书.pdf", raw)
     st = _wait_task_done(task_id)
@@ -266,14 +270,15 @@ def test_kb_upload_route_small_file_stays_sync(monkeypatch, tmp_path):
 
 
 def test_kb_upload_route_rejects_unsupported_type(monkeypatch, tmp_path):
-    """类型校验前置：非法扩展名（如 .jpg）在同步/异步分流之前 400 拒绝。"""
+    """类型校验前置：非法扩展名（如 .gif）在同步/异步分流之前 400 拒绝
+    （任务C 后 png/jpg 走 OCR 白名单，反例改用仍不支持的 gif）。"""
     _isolate_kb_dirs(monkeypatch, tmp_path)
     seed_default_users()
     c = TestClient(app)
     atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}).json()["access_token"]
     import base64 as b64
     r = c.post("/api/v1/medical/admin/kb/upload",
-               json={"name": "例图.jpg", "data_b64": b64.b64encode(b"\xff\xd8fake").decode()},
+               json={"name": "例图.gif", "data_b64": b64.b64encode(b"GIF89afake").decode()},
                headers={"Authorization": "Bearer " + atok})
     assert r.status_code == 400
     assert "不支持的文件类型" in r.json()["detail"]

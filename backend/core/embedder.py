@@ -51,29 +51,38 @@ def get_bge_m3():
         return _model
 
 
-def embed_texts(texts: list[str], batch_size: int = 32, max_length: int = 256) -> list[list[float]]:
-    """批量编码多条 → list[1024]。批量前向 + 截断长度，比逐条快数倍（CPU/GPU 皆受益）。"""
+# 任务A：embed 截断窗口配置化（settings.embed_max_length，默认 1024；BGE-M3 支持 8192）。
+# 入库（kb_ingest/种子脚本）与查询（medical_kb）两侧共用同一函数与窗口，向量空间自然一致。
+EMBED_MAX_LENGTH = int(getattr(settings, "embed_max_length", 1024) or 1024)
+
+
+def embed_texts(texts: list[str], batch_size: int = 32, max_length: int | None = None) -> list[list[float]]:
+    """批量编码多条 → list[1024]。批量前向 + 截断长度，比逐条快数倍（CPU/GPU 皆受益）。
+    max_length 缺省取配置窗口（EMBED_MAX_LENGTH，任务A 起 256→1024）。"""
     model = get_bge_m3()
     out = model.encode(
         list(texts), return_dense=True, return_sparse=False,
-        return_colbert_vecs=False, batch_size=batch_size, max_length=max_length,
+        return_colbert_vecs=False, batch_size=batch_size,
+        max_length=max_length or EMBED_MAX_LENGTH,
     )
     return [v.tolist() for v in out["dense_vecs"]]
 
 
-def embed_dense_sparse(texts: list[str], batch_size: int = 32, max_length: int = 256):
-    """BGE-M3 同时返回稠密向量 + 学习式稀疏权重（供 Milvus 混合检索）。稀疏为 {token_id: weight}。"""
+def embed_dense_sparse(texts: list[str], batch_size: int = 32, max_length: int | None = None):
+    """BGE-M3 同时返回稠密向量 + 学习式稀疏权重（供 Milvus 混合检索）。稀疏为 {token_id: weight}。
+    max_length 缺省取配置窗口（EMBED_MAX_LENGTH），入库/查询两侧不传即自动一致。"""
     model = get_bge_m3()
     out = model.encode(
         list(texts), return_dense=True, return_sparse=True,
-        return_colbert_vecs=False, batch_size=batch_size, max_length=max_length,
+        return_colbert_vecs=False, batch_size=batch_size,
+        max_length=max_length or EMBED_MAX_LENGTH,
     )
     dense = [v.tolist() for v in out["dense_vecs"]]
     sparse = [{int(k): float(v) for k, v in lw.items() if float(v) > 0} for lw in out["lexical_weights"]]
     return dense, sparse
 
 
-def embed_sparse(text: str, max_length: int = 256) -> dict:
+def embed_sparse(text: str, max_length: int | None = None) -> dict:
     """查询串的稀疏向量（学式）。"""
     _, s = embed_dense_sparse([text], batch_size=1, max_length=max_length)
     return s[0]

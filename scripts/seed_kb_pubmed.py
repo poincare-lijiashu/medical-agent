@@ -129,7 +129,7 @@ def main() -> int:
     for j in range(0, len(rows), B):
         chunk = rows[j:j + B]
         try:
-            dense, sparse = embed_dense_sparse([r["content"] for r in chunk], batch_size=32, max_length=256)
+            dense, sparse = embed_dense_sparse([r["content"] for r in chunk], batch_size=32)  # 窗口走配置默认 1024（任务A）
         except Exception as e:  # noqa: BLE001
             print("embed chunk fail", j, str(e)[:60], flush=True); continue
         for r, v, sp in zip(chunk, dense, sparse):

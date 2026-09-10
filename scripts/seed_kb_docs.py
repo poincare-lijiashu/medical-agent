@@ -98,7 +98,7 @@ def main() -> int:
     vecs = []
     sps = []
     for j in range(0, len(rows), 32):
-        d, s = embed_dense_sparse([r["content"] for r in rows[j:j + 32]], batch_size=32, max_length=256)
+        d, s = embed_dense_sparse([r["content"] for r in rows[j:j + 32]], batch_size=32)  # 窗口走配置默认 1024（任务A）
         vecs += d; sps += s
     print(f"embedded {len(vecs)} device={device()}", flush=True)
     data = [{"embedding": v, "sparse": sp, "content": r["content"], "source_name": r["source"],

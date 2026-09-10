@@ -8,6 +8,13 @@
 进度）→入库；进度状态写 data/kb/tasks/{task_id}.json（{status: processing/done/error,
 progress, total, error, result}），路由层立即返回 task_id，前端轮询状态端点，同步
 HTTP 不再被数分钟级 BGE-M3 向量化阻塞。小文件保留同步模式（现状行为不变）。
+
+任务A/B/C KB 切片与 embed 升级：
+- A：embed 截断窗口 256→1024（settings.embed_max_length 配置化，入库/查询两侧同函数同窗口）；
+- B：结构感知切分 chunk_text_for_document（章节标题前缀拼入 chunk，节内 1000/15% overlap），
+  PDF 默认启用，上传端点 doc_kind 参数透传（前端暂不加 UI，后端参数就绪）；
+- C：扫描版 PDF（页文本为空比例 >60%）逐页 150dpi 渲染 → rapidocr OCR；单图 png/jpg
+  上传直接 OCR 入库；OCR 未安装/失败 → 明确报错（"扫描版PDF需OCR（未安装 rapidocr）"）。
 """
 from __future__ import annotations
 
@@ -21,6 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from backend.core import ocr as kb_ocr
 from backend.core.embedder import embed_dense_sparse
 from backend.core.logger import get_logger
 from backend.core.medical_kb import _collection, doc_count
@@ -66,6 +74,124 @@ def chunk_text(text: str, size: int = 600, overlap: int = 100) -> list[str]:
     return [c for c in final if len(c) >= 20]
 
 
+# ---------- 任务B 结构感知切分（中文教材/指南：章节标题感知，标题前缀拼入 chunk） ----------
+#
+# 背景：600/100 的通用切分会把教材按字数硬拆，"脂肪变"chunk 常混入下一小节"乳头肌"等内容
+# 且丢失所属标题。结构感知切分按章节标题分节后，节内用更大窗口（1000/15% overlap）切分，
+# 并把节标题以「【节标题】」前缀拼入每个 chunk（不改 Milvus schema，标题参与 embedding
+# 提升检索命中与溯源可读性）。
+
+SHORT_DOC_MAX_CHARS = 1200    # 全文 ≤1200 字符 → 整篇单 chunk（无需切分）
+SECTION_TARGET_CHARS = 1000   # 节内切分目标长度（800-1200 区间中枢）
+SECTION_OVERLAP_CHARS = 150   # 节内 overlap（≈15% of 1000）
+
+# 显式标题模式（命中其一即视为标题行）
+_NUM_HEADING = re.compile(r"^\d+(\.\d+)*[\s、.]\s*\S")       # 「1 总论」「1.2 细胞损伤」
+_HEADING_EXPLICIT = (
+    re.compile(r"^第[一二三四五六七八九十百\d]+[章节篇部]"),  # 第X章/节/篇/部
+    _NUM_HEADING,
+    re.compile(r"^[一二三四五六七八九十]+、"),                # 「一、二、」
+)
+# 仅序号的章标题行（教材排版常见「第一章」与章名拆两行）
+_CHAPTER_ONLY = re.compile(r"^(第[一二三四五六七八九十百\d]+[章节篇部])$")
+
+
+def _is_heading_line(line: str, next_line: str = "", prev_line: str = "") -> bool:
+    """标题行判定：显式模式优先；否则启发式。
+    启发式（针对无编号中文小标题）：短行（≤30 字）、不含阿拉伯数字（排除页码/日期行）、
+    不以句末/顿号标点收尾，且处于段落边界（上一非空行为空行或以句号收尾——排除正文
+    断行短行），后接长段（下一非空行 ≥40 字）。"""
+    s = (line or "").strip()
+    if not s or len(s) > 40:
+        return False
+    for pat in _HEADING_EXPLICIT:
+        if pat.match(s):
+            # 数字编号标题要求行内无句末标点（排除「3. 守正创新。传承…」类编号段落）
+            if pat is _NUM_HEADING and re.search(r"[。！？]", s):
+                continue
+            return True
+    if (len(s) <= 30 and not re.search(r"[。！？；，,．.]$", s)
+            and not re.search(r"\d", s)
+            and (not prev_line.strip() or re.search(r"[。！？]$", prev_line.strip()))
+            and len(next_line.strip()) >= 40):
+        return True
+    return False
+
+
+def _has_explicit_heading(text: str) -> bool:
+    """全文是否含至少一个显式标题行。仅启发式短行命中不算"有标题结构"（防普通
+    文本被误切，保持无结构文档回退 chunk_text 的兼容语义）。"""
+    for line in text.splitlines():
+        s = line.strip()
+        if s and any(p.match(s) for p in _HEADING_EXPLICIT):
+            return True
+    return False
+
+
+def _split_document_sections(text: str) -> list[tuple[str, str]]:
+    """按标题行分节：返回 [(节标题, 节正文)]；首个标题前的前言为 ("", 前言)。
+    「第一章」与章名拆两行的排版 → 合并为单个标题（第一章 总论）。"""
+    lines = text.splitlines()
+    sections: list[tuple[str, str]] = []
+    cur_title = ""
+    cur_body: list[str] = []
+    prev_nonempty = ""
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        nxt = ""
+        for j in range(i + 1, n):
+            if lines[j].strip():
+                nxt = lines[j]
+                break
+        if _is_heading_line(line, nxt, prev_nonempty):
+            title = line.strip()
+            if _CHAPTER_ONLY.match(title) and nxt and len(nxt.strip()) <= 30 \
+                    and not re.search(r"[。！？；，]", nxt):
+                title = f"{title} {nxt.strip()}"  # 「第一章」+「总论」合并
+                i += 1
+                nxt = ""
+                for j in range(i + 1, n):
+                    if lines[j].strip():
+                        nxt = lines[j]
+                        break
+            if any(x.strip() for x in cur_body):  # 空节（连续标题）不入列
+                sections.append((cur_title, "\n".join(cur_body).strip()))
+            cur_title, cur_body = title, []
+        else:
+            if line.strip():
+                prev_nonempty = line
+            cur_body.append(line)
+        i += 1
+    if any(x.strip() for x in cur_body):
+        sections.append((cur_title, "\n".join(cur_body).strip()))
+    return sections
+
+
+def chunk_text_for_document(text: str, doc_kind: str | None = None) -> list[str]:
+    """结构感知切分入口（任务B）：
+    ① doc_kind="pdf"（教材/指南 PDF）且含显式标题结构 → 按节切分，节标题以
+       「【节标题】」前缀拼入该节每个 chunk；节内 chunk_text(size=1000, overlap=150)
+       句子边界切分（800-1200 字符 / 15% overlap）。
+    ② 全文 ≤1200 字符 → 整篇单 chunk。
+    ③ 无标题结构的普通文本 / 非 PDF 文档 → 回退既有 chunk_text（600/100，保持兼容）。"""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if doc_kind != "pdf":  # md/txt 等保持既有行为
+        return chunk_text(text)
+    if len(text) <= SHORT_DOC_MAX_CHARS:
+        return [text]
+    if not _has_explicit_heading(text):
+        return chunk_text(text)
+    chunks: list[str] = []
+    for title, body in _split_document_sections(text):
+        prefix = f"【{title}】" if title else ""
+        for piece in chunk_text(body, size=SECTION_TARGET_CHARS, overlap=SECTION_OVERLAP_CHARS):
+            chunks.append(prefix + piece)
+    return [c for c in chunks if len(c.strip()) >= 20]
+
+
 def _load_manifest() -> dict:
     try:
         return json.load(open(MANIFEST, encoding="utf-8")) if os.path.isfile(MANIFEST) else {}
@@ -86,7 +212,11 @@ def _safe_tag(tag: str) -> str:
     return re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff]", "", str(tag))[:64]
 
 
-ALLOWED_EXTS = {".md", ".txt", ".pdf"}  # 图片等二进制类型硬解会污染知识库（曾致 1197 个乱码切片入库）
+ALLOWED_EXTS = {".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg"}  # 任务C：图片走 OCR 入库（此前硬解乱码问题由 OCR 正规解决）
+# 任务C 扫描版判定：页文本为空比例 >60% → 扫描版（逐页 OCR）
+SCANNED_EMPTY_RATIO = 0.6
+OCR_RENDER_DPI = 150  # 逐页渲染分辨率（150dpi 兼顾 OCR 识别率与内存/耗时）
 
 # 任务5 大文档上限（超限明确报错而非笼统失败）：实测 38.5MB 医学教材为 418 页/56 万字符
 # （可正常摄取），上限留 5 倍余量；embedding 按此规模分钟级可完成，更大数据应拆分上传。
@@ -94,23 +224,79 @@ PDF_MAX_PAGES = 2000
 TEXT_MAX_CHARS = 8_000_000
 
 
-def extract_text(filename: str, raw: bytes) -> str:
-    text = _extract_text_raw(filename, raw)
+def extract_text(filename: str, raw: bytes, on_ocr_page=None) -> str:
+    """提取文本。on_ocr_page(done, total)：任务C 扫描版 PDF 逐页 OCR 进度回调
+    （异步任务写状态文件 scan_pages/ocr_pages 用；同步路径不传）。"""
+    text = _extract_text_raw(filename, raw, on_ocr_page=on_ocr_page)
     if len(text) > TEXT_MAX_CHARS:
         raise ValueError(f"文档过大：提取文本 {len(text):,} 字符（上限 {TEXT_MAX_CHARS:,}），请拆分后上传")
     return text
 
 
-def _extract_text_raw(filename: str, raw: bytes) -> str:
-    if filename.lower().endswith(".pdf"):
-        import fitz  # PyMuPDF
-        out = []
+def _pdf_page_texts(raw: bytes) -> list[str]:
+    """PDF 逐页文本（保留页结构供扫描版判定）；页数超上限明确报错。"""
+    import fitz  # PyMuPDF
+    with fitz.open(stream=raw, filetype="pdf") as doc:
+        if len(doc) > PDF_MAX_PAGES:
+            raise ValueError(f"PDF 页数过多：{len(doc)} 页（上限 {PDF_MAX_PAGES} 页），请拆分后上传")
+        return [page.get_text() for page in doc]
+
+
+def _looks_scanned(page_texts: list[str]) -> bool:
+    """扫描版判定（纯函数可测）：页文本为空比例 >60%（任务C 阈值）。"""
+    if not page_texts:
+        return False
+    empty = sum(1 for t in page_texts if not (t or "").strip())
+    return empty / len(page_texts) > SCANNED_EMPTY_RATIO
+
+
+def _ocr_pdf(raw: bytes, on_page=None) -> str:
+    """扫描版 PDF → 逐页渲染 pixmap（150dpi）→ OCR → 页间 \\n 拼接。
+    on_page(done, total) 供异步任务进度；未安装/推理失败 → ValueError 明确报错
+    （同步路径 400 透传、异步任务 error 态可见），绝不静默返回空文本。"""
+    import fitz  # PyMuPDF
+    out: list[str] = []
+    try:
         with fitz.open(stream=raw, filetype="pdf") as doc:
-            if len(doc) > PDF_MAX_PAGES:
-                raise ValueError(f"PDF 页数过多：{len(doc)} 页（上限 {PDF_MAX_PAGES} 页），请拆分后上传")
-            for page in doc:
-                out.append(page.get_text())
-        return "\n".join(out)
+            total = len(doc)
+            for i, page in enumerate(doc):
+                png = page.get_pixmap(dpi=OCR_RENDER_DPI).tobytes("png")
+                out.append(kb_ocr.ocr_image_bytes(png))
+                if on_page:
+                    on_page(i + 1, total)
+    except RuntimeError as e:  # OCR 组件未安装（ocr.py 明确文案）
+        raise ValueError(str(e)[:200]) from e
+    except ValueError:
+        raise
+    except Exception as e:  # noqa: BLE001 —— 渲染/推理失败等：明确报错而非空文本入库
+        raise ValueError(f"扫描版PDF需OCR：OCR 识别失败（{str(e)[:120]}）") from e
+    return "\n".join(out)
+
+
+def _ocr_single_image(raw: bytes) -> str:
+    """单图（png/jpg）OCR：未安装 → ValueError（明确文案）；推理失败 → ValueError。"""
+    try:
+        return kb_ocr.ocr_image_bytes(raw)
+    except RuntimeError as e:
+        raise ValueError(str(e)[:200]) from e
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"图片OCR失败：{str(e)[:120]}") from e
+
+
+def _extract_text_raw(filename: str, raw: bytes, on_ocr_page=None) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".pdf":
+        pages = _pdf_page_texts(raw)
+        if _looks_scanned(pages):
+            # 任务C：扫描版（页文本空比例 >60%）→ 逐页 OCR；OCR 后仍无文本按空白件明确报错
+            text = _ocr_pdf(raw, on_page=on_ocr_page)
+            if not text.strip():
+                raise ValueError("扫描版PDF需OCR：已完成 OCR 但未识别到任何文字"
+                                 "（空白页/纯图片无文字？），请检查文件")
+            return text
+        return "\n".join(pages)
+    if ext in IMAGE_EXTS:  # 任务C：单图上传直接 OCR
+        return _ocr_single_image(raw)
     # md/txt：尝试 UTF-8，失败回落 GBK（Windows 中文常见）
     try:
         return raw.decode("utf-8")
@@ -118,22 +304,25 @@ def _extract_text_raw(filename: str, raw: bytes) -> str:
         return raw.decode("gbk", errors="replace")
 
 
-def ingest_document(name: str, raw: bytes, doc_tag: str | None = None) -> dict:
-    """返回 {doc_tag, chunks, inserted}。幂等：同 doc_tag 先删后插。"""
+def ingest_document(name: str, raw: bytes, doc_tag: str | None = None,
+                    doc_kind: str | None = None) -> dict:
+    """返回 {doc_tag, chunks, inserted}。幂等：同 doc_tag 先删后插。
+    doc_kind：结构感知切分文档类型（任务B）；缺省按扩展名判定（PDF → "pdf"）。"""
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXTS:
-        raise ValueError(f"不支持的文件类型：{ext or '(无扩展名)'}（仅允许 md/txt/pdf）")
+        raise ValueError(f"不支持的文件类型：{ext or '(无扩展名)'}（仅允许 md/txt/pdf/png/jpg）")
     text = extract_text(name, raw)
-    # 任务5：扫描版 PDF（无文本层）明确报错，不再落入笼统的"无有效内容"提示
-    if ext == ".pdf" and not text.strip():
+    # 兜底：极端混合型 PDF（非扫描判定但整体无文本）仍给明确报错
+    if not text.strip():
         raise ValueError("扫描版PDF需OCR，暂不支持：该 PDF 未提取到任何文本层，"
                          "请使用带文字层的 PDF 或先做 OCR 处理")
-    chunks = chunk_text(text)
+    kind = doc_kind or ("pdf" if ext == ".pdf" else "text")
+    chunks = chunk_text_for_document(text, doc_kind=kind)
     # 之前：零 chunk 静默 200；现在：告知用户文档无有效内容（防御静默失败）
     if not chunks:
         raise ValueError("文档未提取到任何有效文本内容（短句/全空白？），请检查文件")
     tag = doc_tag or ("up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10])
-    dense, sparse = embed_dense_sparse(chunks, batch_size=32, max_length=256)
+    dense, sparse = embed_dense_sparse(chunks, batch_size=32)  # 任务A：窗口走配置默认 1024
     col = _collection()
     try:
         col.delete("medical_kb", filter=f'document_id == "{tag}"')
@@ -151,8 +340,9 @@ def ingest_document(name: str, raw: bytes, doc_tag: str | None = None) -> dict:
     return {"doc_tag": tag, "chunks": len(chunks), "inserted": len(data)}
 
 
-def ingest_b64(name: str, data_b64: str, doc_tag: str | None = None) -> dict:
-    return ingest_document(name, base64.b64decode(data_b64), doc_tag)
+def ingest_b64(name: str, data_b64: str, doc_tag: str | None = None,
+               doc_kind: str | None = None) -> dict:
+    return ingest_document(name, base64.b64decode(data_b64), doc_tag, doc_kind=doc_kind)
 
 
 BUILTIN_TAGS = {"local_corpus", "pubmed_seed", "sample_guideline"}  # 种子内置库
@@ -281,11 +471,14 @@ def pdf_page_count(raw: bytes) -> int:
 
 
 def should_ingest_async(name: str, raw: bytes) -> bool:
-    """同步/异步阈值判定（纯函数可测）：PDF 按页数、md/txt 按字符数；非 PDF 解码失败
-    按字节长度兜底。仅对已通过 ALLOWED_EXTS 校验的文件调用（路由层先行类型校验）。"""
+    """同步/异步阈值判定（纯函数可测）：PDF 按页数、md/txt 按字符数、图片统一同步
+    （单图 OCR 秒级完成）；非 PDF 解码失败按字节长度兜底。仅对已通过 ALLOWED_EXTS
+    校验的文件调用（路由层先行类型校验）。"""
     ext = os.path.splitext(name)[1].lower()
     if ext == ".pdf":
         return pdf_page_count(raw) > SYNC_MAX_PAGES
+    if ext in IMAGE_EXTS:
+        return False
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -295,13 +488,13 @@ def should_ingest_async(name: str, raw: bytes) -> bool:
 
 def _embed_with_progress(chunks: list[str], on_progress) -> tuple[list, list]:
     """分批向量化（batch=_EMBED_BATCH）：每批完成回调 on_progress(已完成批内条数)，
-    进度粒度 = 批；回调异常不影响摄取（进度文件写失败仅丢进度，不丢任务）。"""
+    进度粒度 = 批；回调异常不影响摄取（进度文件写失败仅丢进度，不丢任务）。
+    任务A：截断窗口走 embedder 配置默认（1024），与查询侧一致。"""
     dense: list = []
     sparse: list = []
     done = 0
     for i in range(0, len(chunks), _EMBED_BATCH):
-        d, s = embed_dense_sparse(chunks[i:i + _EMBED_BATCH],
-                                  batch_size=_EMBED_BATCH, max_length=256)
+        d, s = embed_dense_sparse(chunks[i:i + _EMBED_BATCH], batch_size=_EMBED_BATCH)
         dense.extend(d)
         sparse.extend(s)
         done += len(chunks[i:i + _EMBED_BATCH])
@@ -312,7 +505,8 @@ def _embed_with_progress(chunks: list[str], on_progress) -> tuple[list, list]:
     return dense, sparse
 
 
-def start_ingest_task(name: str, raw: bytes, doc_tag: str | None = None) -> str:
+def start_ingest_task(name: str, raw: bytes, doc_tag: str | None = None,
+                      doc_kind: str | None = None) -> str:
     """创建后台摄取任务：文件落盘 uploads/，状态文件置 processing，启动 daemon 线程，
     立即返回 task_id（路由层不再等待向量化的分钟级耗时）。"""
     task_id = "kbt-" + uuid.uuid4().hex[:12]
@@ -324,15 +518,16 @@ def start_ingest_task(name: str, raw: bytes, doc_tag: str | None = None) -> str:
     _write_task({"task_id": task_id, "name": name, "status": "processing",
                  "progress": 0, "total": 0, "error": None, "result": None,
                  "created_at": datetime.now(timezone.utc).isoformat()})
-    threading.Thread(target=run_ingest_task, args=(task_id, name, stored, doc_tag),
+    threading.Thread(target=run_ingest_task, args=(task_id, name, stored, doc_tag, doc_kind),
                      daemon=True, name=f"kb-ingest-{task_id}").start()
     logger.info("kb_ingest.task_started", task_id=task_id, name=name[:120], bytes=len(raw))
     return task_id
 
 
 def run_ingest_task(task_id: str, name: str, stored_path: str,
-                    doc_tag: str | None = None) -> None:
-    """后台线程主体：extract → chunk → 分批 embed（进度落盘）→ 入 Milvus → manifest。
+                    doc_tag: str | None = None, doc_kind: str | None = None) -> None:
+    """后台线程主体：extract（扫描版逐页 OCR，进度 scan_pages/ocr_pages 落盘）→
+    结构感知 chunk → 分批 embed（进度落盘）→ 入 Milvus → manifest。
     任何异常 → status=error + error 原因（前端轮询可见），绝不冒泡杀线程栈。"""
     def _state(**kw) -> dict:
         st = {"task_id": task_id, "name": name, "status": "processing",
@@ -344,12 +539,19 @@ def run_ingest_task(task_id: str, name: str, stored_path: str,
     try:
         with open(stored_path, "rb") as f:
             raw = f.read()
-        text = extract_text(name, raw)
-        ext = os.path.splitext(name)[1].lower()
-        if ext == ".pdf" and not text.strip():
+
+        def _on_ocr_page(done: int, total: int) -> None:
+            # 任务C：OCR 阶段进度（scan_pages=总页数 / ocr_pages=已完成页）随状态文件可见
+            _write_task(_state(scan_pages=total, ocr_pages=done))
+
+        text = extract_text(name, raw, on_ocr_page=_on_ocr_page)
+        # 兜底：极端混合型 PDF（非扫描判定但整体无文本）仍给明确报错
+        if not text.strip():
             raise ValueError("扫描版PDF需OCR，暂不支持：该 PDF 未提取到任何文本层，"
                              "请使用带文字层的 PDF 或先做 OCR 处理")
-        chunks = chunk_text(text)
+        ext = os.path.splitext(name)[1].lower()
+        kind = doc_kind or ("pdf" if ext == ".pdf" else "text")
+        chunks = chunk_text_for_document(text, doc_kind=kind)
         if not chunks:
             raise ValueError("文档未提取到任何有效文本内容（短句/全空白？），请检查文件")
         total = len(chunks)
