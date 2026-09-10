@@ -1725,7 +1725,7 @@ function renderLlm(d){
       <label>模型 ID<input class="inp" id="llmModel" spellcheck="false"></label>
       <label>展示名称<input class="inp" id="llmName"></label>
       <label style="grid-column:1/-1">API 密钥<input class="inp" id="llmKey" type="password" autocomplete="new-password"></label>
-      <label style="grid-column:1/-1">额外参数（JSON，可选）<input class="inp" id="llmExtra" spellcheck="false" placeholder='{"thinking":{"type":"high"}}（可选，厂商特殊参数）'></label>
+      <label style="grid-column:1/-1">额外参数（JSON，可选）<input class="inp" id="llmExtra" spellcheck="false" placeholder='按厂商自动预填（如 GLM：{"thinking":{"type":"enabled"},"reasoning_effort":"high"}），可修改；无特殊参数留空'></label>
     </div>
     <div style="padding:0 16px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn secondary sm" onclick="llmTest()">连通性测试</button>
