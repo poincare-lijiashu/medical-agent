@@ -741,7 +741,36 @@ async function send(){const inp=document.getElementById('input');const q=inp.val
 function _commitUserToAgent(agent,q){}
 
 /* ---- image ---- */
-const MAX_IMG=6;
+const MAX_IMG=10;  /* 轮 A2：上限 6→10；上传前前端压缩（compressImage） */
+/* 轮 A2：前端图片压缩（与后端 img_utils.normalize_data_url 同策略：Canvas 长边 ≤2000
+   + JPEG 质量递减至 ≤6MB）。非图/解码失败原样返回 data URL，交后端兜底丢弃。 */
+const IMG_MAX_EDGE=2000,IMG_MAX_BYTES=6*1024*1024,IMG_Q_STEPS=[0.9,0.8,0.7,0.6,0.5,0.4];
+function compressImage(file){return new Promise(res=>{
+  const rd=new FileReader();
+  rd.onload=()=>{const src=String(rd.result);
+    const img=new Image();
+    img.onload=()=>{
+      try{
+        /* 已合规（长边 ≤2000 且文件 ≤6MB）→ 原样返回，避免无谓重编码损伤画质 */
+        if(Math.max(img.width,img.height)<=IMG_MAX_EDGE&&file.size<=IMG_MAX_BYTES){res(src);return;}
+        const scale=Math.min(1,IMG_MAX_EDGE/Math.max(img.width,img.height));
+        const cv=document.createElement('canvas');
+        cv.width=Math.max(1,Math.round(img.width*scale));
+        cv.height=Math.max(1,Math.round(img.height*scale));
+        cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+        let out=cv.toDataURL('image/jpeg',0.9);
+        for(const q of IMG_Q_STEPS){
+          out=cv.toDataURL('image/jpeg',q);
+          const bytes=(out.length-out.indexOf(',')-1)*0.75;  /* base64 长度换算回字节 */
+          if(bytes<=IMG_MAX_BYTES)break;
+        }
+        res(out);
+      }catch(_){res(src);}  /* 压缩链路任何异常：原样返回（后端兜底） */
+    };
+    img.onerror=()=>res(src);
+    img.src=src;};
+  rd.onerror=()=>res('');
+  rd.readAsDataURL(file);});}
 /* 诊断1：「图片已发送」提示开关（imaging 视图待发送图清空后显示，重新选图/切视图即隐藏） */
 function showSentHint(on){const h=document.getElementById('sentImgHint');if(h)h.style.display=on?'block':'none';}
 function clearImg(){curImages=[];const i=document.getElementById('img');i.value='';document.getElementById('imgbar').style.display='none';showSentHint(false);}
@@ -751,11 +780,11 @@ function renderImgbar(){
   document.getElementById('imgname').textContent=curImages.length>1?`已选 ${curImages.length} 张（可分多次添加，最多 ${MAX_IMG} 张）`:`已选 1 张（可继续添加，最多 ${MAX_IMG} 张）`;
   document.getElementById('imgbar').style.display=curImages.length?'flex':'none';}
 document.getElementById('img').addEventListener('change',async e=>{const fs=[...e.target.files];if(!fs.length)return;
-  // 累加模式：分次选择追加到已选图片（上限 6 张），不再覆盖
+  // 累加模式：分次选择追加到已选图片（上限 10 张），先压缩再入列（长边>2000 缩放/JPEG 递减至 ≤6MB）
   let add=fs.slice(0,MAX_IMG-curImages.length);
   if(add.length<fs.length)toast(`最多 ${MAX_IMG} 张，已忽略超出部分`);
   if(!add.length){e.target.value='';return;}
-  const imgs=await Promise.all(add.map(f=>new Promise(res=>{const rd=new FileReader();rd.onload=()=>res(rd.result);rd.readAsDataURL(f);})));
+  const imgs=(await Promise.all(add.map(f=>compressImage(f)))).filter(Boolean);
   curImages=curImages.concat(imgs).slice(0,MAX_IMG);
   e.target.value='';  // 允许下次选择同一文件
   renderImgbar();showSentHint(false);  /* 诊断1：重新选图即视为新的待发送图，隐藏「已发送」提示 */});
@@ -1846,7 +1875,7 @@ function readB64(f){return new Promise(res=>{const rd=new FileReader();rd.onload
 if(!window.__kbDelegate){window.__kbDelegate=true;document.addEventListener('click',e=>{
   const b=e.target.closest('button[data-act^="kb-"]');if(!b)return;
   if(b.dataset.act==='kb-preview')previewKb(b.dataset.tag);
-  else if(b.dataset.act==='kb-delete')deleteKb(b.dataset.tag,b.dataset.name);});}
+  else if(b.dataset.act==='kb-delete')deleteKb(b.dataset.tag,b.dataset.name,b.dataset.kind);});}
 let kbPage=0,kbData=null;const KB_PER=50;  /* KB 客户端分页：数据一次拉取，仅 tbody 分页渲染 */
 function kbGo(d){kbPage+=d;renderKbList();const el=document.getElementById('kbList');if(el)el.scrollTop=0;}
 function renderKbList(){
@@ -1860,7 +1889,7 @@ function renderKbList(){
         const badge=x.kind==='builtin'?'<span class="chip mid"><span class="dot"></span>内置</span>':'<span class="chip"><span class="dot"></span>上传</span>';
         return `<tr><td>${esc(x.name)}</td><td>${badge}</td><td class="num">${x.chunks}</td><td class="num">${fmtTs(x.ts)}</td>
           <td style="white-space:nowrap"><button class="btn sm secondary" data-act="kb-preview" data-tag="${esc(x.doc_tag)}">预览</button>
-          <button class="btn sm secondary" data-act="kb-delete" data-tag="${esc(x.doc_tag)}" data-name="${esc(x.name)}">删除</button></td></tr>`;}).join('')+`</tbody></table>
+          <button class="btn sm secondary" data-act="kb-delete" data-tag="${esc(x.doc_tag)}" data-name="${esc(x.name)}" data-kind="${esc(x.kind)}">删除</button></td></tr>`;}).join('')+`</tbody></table>
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
       <button class="btn sm secondary" ${kbPage===0?'disabled':''} onclick="kbGo(-1)">‹ 上一页</button>
       <span class="src num">第 ${kbPage+1} / ${pages} 页 · 共 ${d.docs.length} 篇</span>
@@ -1910,9 +1939,12 @@ async function previewKb(tag){
       ? d.chunks.map((c,i)=>`<h4 style="margin-top:${i?12:0}px">切片 ${i+1} · ${esc(c.source)}</h4><div class="txt" style="white-space:pre-wrap">${esc(c.content)}…</div>`).join('')
       : '<div class="src">该文档暂无可预览的切片（或已被删除）。</div>';
   }catch(e){document.getElementById('mBody').innerHTML='<div class="src">⚠ 预览失败</div>';}}
-async function deleteKb(tag,name){
+async function deleteKb(tag,name,kind){
+  /* 轮 A1：内置库可删除（后端已放开），确认文案区分——误删可重跑种子脚本恢复 */
+  const isBuiltin=kind==='builtin';
   confirmDanger('删除知识库文档',
-    `将删除「${esc(name||tag)}」的全部向量，检索中不再出现；此操作记入审计。`,'确认删除',async()=>{
+    isBuiltin?`将删除内置库「${esc(name||tag)}」的全部向量；内置库可删除，重跑种子脚本可恢复。此操作记入审计。`
+             :`将删除「${esc(name||tag)}」的全部向量，检索中不再出现；此操作记入审计。`,'确认删除',async()=>{
     try{const r=await fetch('/api/v1/medical/admin/kb/'+encodeURIComponent(tag),{method:'DELETE',headers:auth()});
       if(r.status===401){logout();return;}
       if(!r.ok){const d=await r.json();toast('失败：'+(d.detail||r.status));return;}
@@ -2107,6 +2139,9 @@ function humanizeAudit(e){
     upload_async:()=>`上传了大文件，后台向量化中（${T||'文件'}）`,
     upload_failed:()=>`知识库文件摄取失败（${T||'文件'}）`,
     delete:()=>T?`删除了 ${T}`:'执行了删除',
+    /* 轮 A1：内置库删除 / 删除失败兜底（kb.builtin_removed / kb.delete_failed） */
+    builtin_removed:()=>T?`删除了内置知识库 ${T}（重跑种子脚本可恢复）`:'删除了内置知识库',
+    delete_failed:()=>`知识库删除失败（${T||'文档'}，已原样返回错误）`,
     /* —— 管理端 —— */
     config_toggle:()=>`切换了运行时开关 ${p.key||'—'}（${p.from?'开':'关'} → ${p.to?'开':'关'}）`,
     user_created:()=>`创建了用户 ${p.user||'—'}（${p.role||'—'}）`,

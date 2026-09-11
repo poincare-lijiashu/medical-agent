@@ -108,6 +108,12 @@ class FakeConn:
         if s.startswith("SELECT kind"):
             return [{"kind": k_, "pid": p_, "data": d_, "active": act_}
                     for k_, p_, d_, act_ in self.db["llm_providers"]]
+        if s.startswith("SELECT key, value FROM runtime_flags"):
+            # 轮 A3：运行时开关真源读（value jsonb → 模拟驱动返回 str）
+            return [{"key": k, "value": json.dumps(v)} for k, v in self.db["runtime_flags"].items()]
+        if s.startswith("SELECT key FROM runtime_flags"):
+            # 轮 A3：runtime_flags 迁移差集补齐用（只取 key 集合）
+            return [{"key": k} for k in self.db["runtime_flags"]]
         raise AssertionError(f"假池未实现的 fetch: {s[:80]}")
 
     async def fetchval(self, sql, *a):
@@ -116,7 +122,8 @@ class FakeConn:
         if s == "SELECT 1":
             return 1
         for t in ("users", "departments", "review_queue", "llm_providers",
-                  "drug_dict", "drug_rules", "prescriptions", "case_archive"):
+                  "drug_dict", "drug_rules", "prescriptions", "case_archive",
+                  "runtime_flags"):
             if s == f"SELECT count(*) FROM {t}":
                 return len(self.db[t])
         raise AssertionError(f"假池未实现的 fetchval: {s[:80]}")
@@ -174,6 +181,15 @@ class FakeConn:
             return "DELETE"
         if s == "DELETE FROM drug_rules":
             self.db["drug_rules"] = {}
+            return "DELETE"
+        if s.startswith("DELETE FROM runtime_flags WHERE NOT"):
+            # 轮 A3：runtime_flags 全量同步删除语义（按 key 保留）
+            keep = set(a[0])
+            self.db["runtime_flags"] = {k: v for k, v in self.db["runtime_flags"].items()
+                                        if k in keep}
+            return "DELETE"
+        if s == "DELETE FROM runtime_flags":
+            self.db["runtime_flags"] = {}
             return "DELETE"
         for t in ("users", "departments", "review_queue", "llm_providers"):
             if s == f"DELETE FROM {t}":
@@ -244,6 +260,11 @@ class FakeConn:
                     "severity": severity, "mechanism": mechanism,
                     "management": management, "source": source}
             return
+        if s.startswith("INSERT INTO runtime_flags"):
+            # 轮 A3：runtime_flags UPSERT（value jsonb str → 往返）
+            for k, value in rows:
+                self.db["runtime_flags"][k] = json.loads(value)
+            return
         raise AssertionError(f"假池未实现的 executemany: {s[:80]}")
 
     def transaction(self):
@@ -265,7 +286,7 @@ class FakePool:
 def _db() -> dict:
     return {"users": {}, "departments": [], "review_queue": {}, "llm_providers": [],
             "consults": {}, "drug_dict": {}, "drug_rules": {}, "prescriptions": {},
-            "case_archive": {}, "fail": None}
+            "case_archive": {}, "runtime_flags": {}, "fail": None}
 
 
 @pytest.fixture()
@@ -946,6 +967,61 @@ def test_migrate_case_archive_imports_and_reconciles(fake_pg, tmp_path, monkeypa
     # 幂等：再次迁移无补齐
     assert not asyncio.run(pg_store.migrate_json_to_pg()).get("case_archive_reconciled")
     assert set(fake_pg["case_archive"]) == {"arch-pg-already", "arch-json-only"}
+
+
+# ---------- 轮 A3：运行时开关 runtime_flags 入 PG（照 prescriptions 模式） ----------
+
+def test_runtime_flags_pg_roundtrip_truth_source(fake_pg, tmp_path):
+    """runtime_flags：PG 可用 → 读 PG 真源；写 = JSON 原子写兜底 + PG 全量同步（jsonb 往返）。"""
+    f = tmp_path / "runtime_flags.json"
+    pg_store.save_runtime_flags({"qc_auto_sign_full": False}, str(f))
+    assert json.loads(f.read_text(encoding="utf-8")) == {"qc_auto_sign_full": False}  # JSON 已落盘
+    assert fake_pg["runtime_flags"] == {"qc_auto_sign_full": False}                   # PG 已同步
+    f.unlink()  # 删 JSON：读必须仍完整（PG 真源优先）
+    assert pg_store.load_runtime_flags(json_loader=lambda: {}, path=str(f)) \
+        == {"qc_auto_sign_full": False}
+    # 空表 → 回落 JSON 兜底（json_loader 语义）
+    fake_pg["runtime_flags"].clear()
+    assert pg_store.load_runtime_flags(json_loader=lambda: {"json_only": True}, path=str(f)) \
+        == {"json_only": True}
+
+
+def test_runtime_flags_module_dual_write_pg_first(fake_pg, tmp_path, monkeypatch):
+    """runtime_flags 模块接口双写：set_flag → JSON 落盘 + PG 同步；get_flag 读 PG 真源
+    （删 JSON 后仍可读）；接口行为不变（白名单拒绝语义保持）。"""
+    from backend.core import runtime_flags as rf
+    f = tmp_path / "runtime_flags.json"
+    monkeypatch.setattr(rf, "FLAGS_FILE", str(f))
+    assert rf.set_flag("qc_auto_sign_full", False) is False
+    assert fake_pg["runtime_flags"] == {"qc_auto_sign_full": False}          # PG 已同步
+    assert json.loads(f.read_text(encoding="utf-8"))["qc_auto_sign_full"] is False  # JSON 兜底已落
+    f.unlink()
+    assert rf.get_flag("qc_auto_sign_full", True) is False, "删 JSON 后读应走 PG 真源"
+    # 全量同步删除语义（显式键集写）：键集之外的 PG 残留键被清除
+    fake_pg["runtime_flags"]["stale_key"] = True
+    pg_store.save_runtime_flags({"qc_auto_sign_full": True}, str(f))
+    assert fake_pg["runtime_flags"] == {"qc_auto_sign_full": True}
+
+
+def test_migrate_runtime_flags_imports_and_reconciles(fake_pg, tmp_path, monkeypatch):
+    """轮 A3 迁移：runtime_flags——PG 表空 → JSON 全量导入；PG 非空 → 按 key 差集
+    只增不覆盖补齐（runtime_flags_reconciled=N，幂等可重复跑，与 drug_dict 同纪律）。"""
+    from backend.core import runtime_flags as rf
+    f = tmp_path / "runtime_flags.json"
+    f.write_text(json.dumps({"qc_auto_sign_full": False, "extra_flag": True}), encoding="utf-8")
+    monkeypatch.setattr(rf, "FLAGS_FILE", str(f))
+    # 表空 → 全量导入
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("runtime_flags") == 2
+    assert fake_pg["runtime_flags"] == {"qc_auto_sign_full": False, "extra_flag": True}
+    # PG 非空 + JSON 独有键 → 差集补齐（reconciled），已有键不覆盖
+    f.write_text(json.dumps({"qc_auto_sign_full": True, "new_flag": False}), encoding="utf-8")
+    out2 = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out2.get("runtime_flags_reconciled") == 1
+    assert fake_pg["runtime_flags"]["qc_auto_sign_full"] is False, "已有键只增不覆盖"
+    assert fake_pg["runtime_flags"]["new_flag"] is False
+    # 幂等：再次迁移无补齐
+    assert not asyncio.run(pg_store.migrate_json_to_pg()).get("runtime_flags_reconciled")
 
 
 # ---------- 问题1：JSON 真源原子写回归锁（审核中心数据时有时无 · 写侧诊断结论锁定） ----------

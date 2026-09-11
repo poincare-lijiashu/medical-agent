@@ -85,6 +85,32 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - 容器部署时应用 stdout 由 `docker logs <容器名>` 收集（本地直跑则输出到控制台）；**合规留存以 PG `audit_log` 双写为准**（JSONL 为本地兜底真源）。
 - 如需集中检索，可外接 Loki/ELK：stdout 已结构化（JSON 行），采集器可直接解析入库。
 
+## 数据归属表（轮 A3）
+
+> 真源 = 日常读写的权威存储；镜像 = 兜底/合规副本（best-effort 双写，真源不可用时自动回落）。
+> 备份方式统一见下方 `scripts/backup.py`。
+
+| 数据域 | 真源 | 镜像/兜底 | 备份方式 | 恢复步骤 |
+| --- | --- | --- | --- | --- |
+| 用户（账号/口令） | PG `users` | `data/users.json`（原子写兜底） | backup.py tar 包 | 解包覆盖 data/ + `psql` 导回 pg_dump.sql |
+| 审核队列（留痕/质控） | PG `review_queue` | `data/review_queue.json` | 同上 | 同上（重启后差集自动补齐 JSON 独有记录） |
+| 跨科室会诊 | PG `consults` | `data/consults.json` | 同上 | 同上 |
+| 处方 | PG `prescriptions` | `data/prescriptions.json` | 同上 | 同上 |
+| 病例库（合规归档） | PG `case_archive` | `data/case_archive.json` | 同上 | 同上 |
+| 药品字典 / 相互作用规则 | PG `drug_dict` / `drug_rules` | `data/drug_dict.json` / `data/drug_rules.json` | 同上 | 同上（或重跑种子脚本） |
+| 科室 | PG `departments` | `data/departments.json` | 同上 | 同上 |
+| 审计日志 | PG `audit_log` | `logs/audit.jsonl`（追加式本地兜底） | 同上 | 同上 |
+| 运行时开关（留痕模式等） | PG `runtime_flags`（轮 A3） | `data/runtime_flags.json`（原子写兜底） | 同上 | 同上（重启自动迁移：表空导入/差集补齐） |
+| 知识库向量 | Milvus `medical_kb` | ——（无镜像；manifest 在 `data/kb_manifest.json`） | backup.py tar 包（仅 manifest/文档原件） | 重跑种子脚本重建向量（`seed_kb_*` 系列脚本）；在线上传文档重新上传 |
+| 上传原件（KB 文档/任务） | `data/kb_docs`、`data/kb/tasks/`（文件） | —— | backup.py tar 包 | 解包覆盖 data/ |
+| 应用日志 | `logs/app.log`（RotatingFileHandler 5MB×5） | —— | 不入备份（可丢弃） | —— |
+
+备份用法（一行）：
+
+```bash
+python scripts/backup.py --keep 7          # pg_dump（容器内）+ tar data/ → data/backups/，--dry-run 预演
+```
+
 ## 药品数据免责声明
 
 药品字典与相互作用规则由 AI 辅助生成（种子库 curated_v2 + AI 初稿），仅作临床决策辅助参考，不构成医疗建议；临床使用前必须经执业药师核对。药物助手视图与数据面板「药品字典」卡明示同一免责声明（前端文案与后端 `backend/core/drug_dict.py` 的 `DISCLAIMER` 逐字同源，由测试锁定一致）；字典/规则的管理变更（`POST /admin/drug/dict`、`/admin/drug/rules`，admin/pharmacist）均写审计 `admin.drug_dict_changed` 并写透存储。

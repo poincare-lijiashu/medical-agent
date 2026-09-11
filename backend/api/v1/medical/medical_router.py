@@ -16,7 +16,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
@@ -43,7 +43,7 @@ _mdt_graph = None
 _graph_lock = threading.Lock()  # 懒加载双检锁：并发首访只构建一次，防重复构建竞态
 _START = time.time()
 
-MAX_IMAGES = 6  # 与 medical_imaging.describe_images 上限一致
+MAX_IMAGES = 10  # 轮 A2：图片上限 6→10（与 medical_imaging.describe_images 上限一致）
 
 # 审计 payload 中问题文本的截断长度（外部审查 L2 常量化）：各端点 prefilter/offtopic/
 # query/stream 等 q 字段统一取前 AUDIT_Q_SNIPPET 字符——此前 literature prefilter/
@@ -163,7 +163,9 @@ async def overview(user: dict = Depends(require_user)):
 class AskReq(BaseModel):
     question: str = Field(max_length=20000)
     image: str | None = Field(default=None, max_length=8_000_000)
-    images: list[str] | None = Field(default=None, max_length=MAX_IMAGES)  # 多图（优先于 image），单张 ≤6MB
+    # 轮 A2：张数上限收口到 _cap_images 校验器（Field max_length 会先于校验器拦截，
+    # 中文 422 文案拿不到）；校验器先查张数再逐张压缩，超大列表无压缩开销
+    images: list[str] | None = Field(default=None)  # 多图（优先于 image），单张 ≤6MB（超限自动压缩）
     # 任务3 会话记忆：前端每个对话会话固定一个 uuid（「新建对话」时更换）；
     # 可选——评估脚本（run_eval）与旧客户端不携带 → 无记忆、行为与旧版一致。
     session_id: str | None = Field(default=None, max_length=64)
@@ -171,12 +173,19 @@ class AskReq(BaseModel):
     @field_validator("images")
     @classmethod
     def _cap_images(cls, v: list[str] | None) -> list[str] | None:
+        # 轮 A2「压缩替代拒绝」：入口统一 normalize（长边>2000 缩放 + JPEG 质量递减
+        # 重编码至 ≤6MB），压缩后仍 >6MB 才 422；非图/损坏原样返回，交由下游既有丢弃逻辑。
         if v is not None:
             if len(v) > MAX_IMAGES:
                 raise ValueError(f"影像图片最多 {MAX_IMAGES} 张，当前 {len(v)} 张")
+            from backend.core.img_utils import normalize_data_url
+            out = []
             for s in v:
-                if len(s) > 8_000_000:
-                    raise ValueError("单张影像过大（>6MB），请压缩后上传")
+                s2 = normalize_data_url(s)
+                if len(s2) > 8_000_000:
+                    raise ValueError("单张影像压缩后仍超过 6MB，请压缩后上传")
+                out.append(s2)
+            return out
         return v
 
 
@@ -1819,9 +1828,23 @@ async def kb_preview(tag: str, user: dict = Depends(require_role("admin"))):
 
 @router.delete("/admin/kb/{tag}")
 async def kb_delete(tag: str, user: dict = Depends(require_role("admin"))):
-    await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="delete",
-                            actor=user.get("username", "admin"), payload={"tag": tag})
-    return {"deleted": await asyncio.to_thread(kb_ingest.delete_doc, tag)}
+    """删除知识库文档（轮 A1 修复）：
+    - 内置库允许 admin 删除（误删可重跑种子脚本恢复）；审计区分——内置记 kb.builtin_removed
+      （tag+name），普通库记 kb.delete；
+    - 兜底：任何异常返回 JSONResponse({"detail"})，永不裸文本 500（此前内置删除 ValueError
+      未捕获 → FastAPI 纯文本 500 → 前端 JSON 解析报 "Unexpected token 'I'"）。"""
+    actor = user.get("username", "admin")
+    try:
+        is_builtin = tag in kb_ingest.BUILTIN_TAGS
+        name = str((await asyncio.to_thread(kb_ingest.doc_meta, tag)).get("name") or tag)
+        await asyncio.to_thread(get_audit_logger().write, event_type="kb",
+                                action="builtin_removed" if is_builtin else "delete",
+                                actor=actor, payload={"tag": tag, "name": name[:120]})
+        return {"deleted": await asyncio.to_thread(kb_ingest.delete_doc, tag)}
+    except Exception as e:  # noqa: BLE001 —— 兜底：任何异常一律 JSON，绝不裸文本
+        await asyncio.to_thread(get_audit_logger().write, event_type="kb", action="delete_failed",
+                                actor=actor, payload={"tag": tag, "err": str(e)[:160]})
+        return JSONResponse({"detail": str(e)[:200]}, status_code=500)
 
 
 # ---------- admin 用户管理 ----------

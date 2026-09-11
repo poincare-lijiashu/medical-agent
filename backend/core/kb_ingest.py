@@ -384,12 +384,17 @@ def preview_doc(tag: str, limit: int = 3) -> dict:
     return {"tag": safe, "chunks": out}
 
 
+def doc_meta(tag: str) -> dict:
+    """删除审计用（轮 A1）：按 tag 取 manifest 元数据（name/chunks/ts）；不存在返回空 dict。"""
+    return _load_manifest().get(tag, {})
+
+
 def delete_doc(tag: str) -> int:
     safe = _safe_tag(tag)
     if not safe:
         return 0
-    if safe in BUILTIN_TAGS:  # 内置库需通过重跑种子脚本更新，不支持界面删除
-        raise ValueError(f"内置库「{safe}」不允许删除，请重跑种子脚本 seed_kb_local/seed_kb_pubmed 更新")
+    # 轮 A1：内置库允许 admin 界面删除（kb_delete 端点本就 require_role("admin") 门禁；
+    # 此前对 BUILTIN_TAGS 直接 raise ValueError 且端点未捕获 → 裸 500。误删可重跑种子脚本恢复）
     col = _collection()
     deleted = 0
     try:

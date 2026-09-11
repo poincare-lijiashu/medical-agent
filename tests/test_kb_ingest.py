@@ -319,3 +319,86 @@ def test_uploaded_doc_appears_in_kb_list_after_ingest(monkeypatch, tmp_path):
     lst2 = c.get("/api/v1/medical/admin/kb", headers={"Authorization": "Bearer " + atok}).json()
     assert lst2["uploaded"] == 2
     assert any(x["name"] == "高血压干预.md" for x in lst2["docs"])
+
+
+# ---------- 轮 A1：内置库允许 admin 删除（此前 raise ValueError 致端点裸 500） ----------
+
+def _fake_col(delete_count: int = 5):
+    """delete_doc 单测替身：delete 返回 delete_count、flush 静默。"""
+    return type("C", (), {"delete": lambda *a, **k: {"delete_count": delete_count},
+                          "flush": lambda *a, **k: None})()
+
+
+def test_delete_doc_allows_builtin_tag(monkeypatch, tmp_path):
+    """轮 A1：delete_doc 对 BUILTIN_TAGS 不再 raise——admin 可删（审计区分在端点层）。"""
+    monkeypatch.setattr(kb_ingest, "MANIFEST", str(tmp_path / "kb_manifest.json"))
+    kb_ingest.register_doc("pubmed_seed_v2", "PubMed 文献库（内置）", 1359)
+    monkeypatch.setattr(kb_ingest, "_collection", lambda: _fake_col(7))
+    assert kb_ingest.delete_doc("pubmed_seed_v2") == 7
+    assert "pubmed_seed_v2" not in kb_ingest._load_manifest(), "删除成功应同步移出 manifest"
+
+
+def test_doc_meta_reads_manifest(monkeypatch, tmp_path):
+    """轮 A1：doc_meta 审计辅助——取 manifest 元数据；不存在返回空 dict（绝不抛错）。"""
+    monkeypatch.setattr(kb_ingest, "MANIFEST", str(tmp_path / "kb_manifest.json"))
+    kb_ingest.register_doc("up_x1", "我传的.md", 3)
+    assert kb_ingest.doc_meta("up_x1")["name"] == "我传的.md"
+    assert kb_ingest.doc_meta("nope") == {}
+
+
+def test_kb_delete_builtin_200_and_audited(monkeypatch, tmp_path):
+    """轮 A1：admin 删内置库 → 200 + 审计 kb.builtin_removed（tag+name），与普通 kb.delete 区分。"""
+    from backend.core.medical_audit import AuditLog
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    kb_ingest.register_doc("pubmed_seed_v2", "PubMed 文献库（内置）", 1359)
+    monkeypatch.setattr(kb_ingest, "_collection", lambda: _fake_col(5))
+    seed_default_users()
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    c = TestClient(app)
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}
+                  ).json()["access_token"]
+    r = c.delete("/api/v1/medical/admin/kb/pubmed_seed_v2",
+                 headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"deleted": 5}
+    hits = [e for e in audit.entries if e["payload"].get("action") == "builtin_removed"]
+    assert hits and hits[-1]["payload"]["tag"] == "pubmed_seed_v2"
+    assert hits[-1]["payload"]["name"] == "PubMed 文献库（内置）"
+
+
+def test_kb_delete_uploaded_audits_plain_delete(monkeypatch, tmp_path):
+    """轮 A1：普通上传库删除仍记 kb.delete（与内置 builtin_removed 区分）。"""
+    from backend.core.medical_audit import AuditLog
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    kb_ingest.register_doc("up_x1", "我传的.md", 3)
+    monkeypatch.setattr(kb_ingest, "_collection", lambda: _fake_col(2))
+    seed_default_users()
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    c = TestClient(app)
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}
+                  ).json()["access_token"]
+    r = c.delete("/api/v1/medical/admin/kb/up_x1", headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 200 and r.json() == {"deleted": 2}
+    hits = [e for e in audit.entries if e["payload"].get("action") == "delete"]
+    assert hits and hits[-1]["payload"]["tag"] == "up_x1"
+
+
+def test_kb_delete_error_returns_json_not_bare_text(monkeypatch, tmp_path):
+    """轮 A1：端点兜底——delete_doc 抛异常也必须返回 JSON（含 detail），永不裸文本 500
+    （此前 ValueError 未捕获 → FastAPI 纯文本 500 → 前端 JSON 解析报 "Unexpected token 'I'"）。"""
+    from backend.core.medical_audit import AuditLog
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    seed_default_users()
+    monkeypatch.setattr(kb_ingest, "delete_doc",
+                        lambda tag: (_ for _ in ()).throw(RuntimeError("Milvus 连接失败")))
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    c = TestClient(app)
+    atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}
+                  ).json()["access_token"]
+    r = c.delete("/api/v1/medical/admin/kb/up_x1", headers={"Authorization": "Bearer " + atok})
+    assert r.status_code == 500
+    assert r.json()["detail"] == "Milvus 连接失败", "响应必须是可解析 JSON 且含 detail"
+    assert [e for e in audit.entries if e["payload"].get("action") == "delete_failed"]

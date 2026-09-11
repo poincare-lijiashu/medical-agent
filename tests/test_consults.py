@@ -443,11 +443,16 @@ def test_consult_routes_require_auth(monkeypatch, tmp_path):
     assert c.post("/api/v1/medical/consults/con-x/close").status_code in (401, 403)
 
 
-def test_consult_images_whitelist_rejects_oversize(monkeypatch, tmp_path):
-    """images 走现有图片白名单逻辑：超过 6 张 → 422（Pydantic 校验拒绝）。"""
+def test_consult_images_whitelist_cap_ten(monkeypatch, tmp_path):
+    """images 走现有图片白名单逻辑。轮 A2 语义变更注明：上限 6→10 且入口改为
+    「压缩替代拒绝」——原「7 张 → 422」断言按新语义更新：7 张已过图片校验
+    （请求进入后续流程，此处因 question 过短被 400 拒绝），11 张仍 422。"""
     c = _isolate(monkeypatch, tmp_path)
     doc1 = _login(c, "doctor01")
     _mock_team(monkeypatch, ["口腔科"])
     r = c.post("/api/v1/medical/consults", headers=_h(doc1),
                json={"question": "q", "images": ["data:image/jpeg;base64,AAAA"] * 7})
-    assert r.status_code == 422, r.text
+    assert r.status_code == 400, r.text  # 图片校验已过（7 ≤ 10），卡在问题过短
+    r2 = c.post("/api/v1/medical/consults", headers=_h(doc1),
+                json={"question": "q", "images": ["data:image/jpeg;base64,AAAA"] * 11})
+    assert r2.status_code == 422, r2.text  # 张数超上限仍 422

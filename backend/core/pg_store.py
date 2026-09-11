@@ -177,6 +177,10 @@ async def _init_impl() -> bool:
                             "ON drug_rules(drug_a, drug_b)")
             await c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_providers_kind_pid "
                             "ON llm_providers(kind,pid)")
+            # 轮 A3：运行时开关（key text pk / value jsonb / updated_at）——runtime_flags
+            # 双写 PG 真源（JSON 兜底保留，见 load_runtime_flags/save_runtime_flags）
+            await c.execute("""CREATE TABLE IF NOT EXISTS runtime_flags(
+                key text primary key, value jsonb, updated_at timestamptz default now())""")
     except Exception:
         try:
             await pool.close()
@@ -965,6 +969,44 @@ def save_drug_rules(items: list, path: str) -> None:
     _json_then_pg(_pg_save_drug_rules, path, items)
 
 
+# ---- 轮 A3：运行时开关 runtime_flags（PG 真源 + JSON 兜底；接口在 runtime_flags.py） ----
+
+_FLAGS_UPSERT = """INSERT INTO runtime_flags(key,value) VALUES($1,$2::jsonb)
+   ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()"""
+
+
+async def _pg_load_runtime_flags() -> dict | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT key, value FROM runtime_flags")
+    if not rows:
+        return None  # 空表 → 回落 JSON（迁移未跑/新库），保守可用性优先
+    return {r["key"]: (json.loads(r["value"]) if isinstance(r["value"], str) else r["value"])
+            for r in rows}
+
+
+async def _pg_save_runtime_flags(d: dict) -> None:
+    rows = [(str(k), json.dumps(bool(v))) for k, v in (d or {}).items()
+            if str(k).strip()]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                await c.execute("DELETE FROM runtime_flags WHERE NOT (key = ANY($1))",
+                                [r[0] for r in rows])
+            else:
+                await c.execute("DELETE FROM runtime_flags")
+            await c.executemany(_FLAGS_UPSERT, rows)
+
+
+def load_runtime_flags(json_loader=None, path: str = "runtime_flags.json") -> dict:
+    """运行时开关读：PG 可用→PG 真源；不可用/异常/空表→JSON 兜底（runtime_flags._load）。"""
+    return _pg_or_json(_pg_load_runtime_flags, json_loader, path, {})
+
+
+def save_runtime_flags(d: dict, path: str) -> None:
+    """运行时开关写：JSON 原子写兜底 + PG 全量同步（不在键集的一并清除）。"""
+    _json_then_pg(_pg_save_runtime_flags, path, d)
+
+
 async def _seed_drug_tables_impl(dict_items: list, rule_items: list) -> dict:
     out = {"drug_dict": 0, "drug_rules": 0}
     async with _pool.acquire() as c:
@@ -1132,6 +1174,24 @@ async def _migrate_impl() -> dict:
                 if rows:
                     await c.executemany(_CASE_UPSERT, rows)
                     out["case_archive_reconciled"] = len(rows)
+        # 轮 A3：runtime_flags——repo JSON 兜底文件 ⊇ PG（JSON 先写不回滚）：
+        # 表空 → 全量导入；PG 非空 → 按 key 差集只增不覆盖补齐（幂等可重复跑，
+        # 与 drug_dict 同纪律）。
+        from backend.core.runtime_flags import FLAGS_FILE
+        flags = _read_json(FLAGS_FILE, {})
+        if isinstance(flags, dict) and flags:
+            if not await c.fetchval("SELECT count(*) FROM runtime_flags"):
+                rows = [(str(k), json.dumps(bool(v))) for k, v in flags.items()]
+                if rows:
+                    await c.executemany(_FLAGS_UPSERT, rows)
+                    out["runtime_flags"] = len(rows)
+            else:
+                existing = {r["key"] for r in await c.fetch("SELECT key FROM runtime_flags")}
+                rows = [(str(k), json.dumps(bool(v))) for k, v in flags.items()
+                        if str(k) not in existing]
+                if rows:
+                    await c.executemany(_FLAGS_UPSERT, rows)
+                    out["runtime_flags_reconciled"] = len(rows)
     return out
 
 

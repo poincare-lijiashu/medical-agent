@@ -71,7 +71,7 @@ def _is_truncated(stop: str | None) -> bool:
 
 async def describe_images_detailed(images: list[str], question: str = "",
                                    system_prompt: str | None = None) -> dict:
-    """支持多图（≤N6）：逐张描述并综合，返回 {"text","vl_raw_len","stop_reason"}。
+    """支持多图（轮 A2 上限 10）：逐张描述并综合，返回 {"text","vl_raw_len","stop_reason"}。
 
     诊断1 稳定性：VL 偶发返回空内容（分段 list/超时截断/网关吞响应等）——首空自动换
     slightly 更高温度（0→0.2）重试一次（prompt 原样）；仍空则把末次原始响应长度与
@@ -80,7 +80,7 @@ async def describe_images_detailed(images: list[str], question: str = "",
     任务4 截断修复：stop_reason=length（max_tokens 上限）→ 文本末尾补截断提示文案，
     路由层同时记 vl_truncated 审计（配合 llm_factory max_tokens=2000 根治截断）。
     """
-    imgs = [x for x in (images or []) if x][:6]
+    imgs = [x for x in (images or []) if x][:10]  # 轮 A2：与 medical_router.MAX_IMAGES 一致（6→10）
     if not imgs:
         return {"text": "", "vl_raw_len": 0, "stop_reason": None}
     base = _PROMPT if system_prompt is None else system_prompt

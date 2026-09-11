@@ -38,17 +38,19 @@ def test_multimodal_images_model_and_empty_guard():
     assert asyncio.run(describe_images([])) == ""  # 空图不触模型
 
 
-def test_askreq_rejects_more_than_six_images():
-    """images 超过 6 张应校验失败（422），而非静默截断丢弃。"""
+def test_askreq_rejects_more_than_ten_images():
+    """images 超过上限应校验失败（422），而非静默截断丢弃。
+    轮 A2 语义变更注明：上限 6→10（AskReq._cap_images 收口张数校验），原「7 张拒/6 张过」
+    断言相应更新为「11 张拒/10 张过」。"""
     import pytest
     from pydantic import ValidationError
 
     from backend.api.v1.medical.medical_router import AskReq
 
     with pytest.raises(ValidationError):
-        AskReq(question="q", images=["data:image/png;base64,AAA"] * 7)
-    req = AskReq(question="q", images=["data:image/png;base64,AAA"] * 6)
-    assert len(req.images) == 6
+        AskReq(question="q", images=["data:image/png;base64,AAA"] * 11)
+    req = AskReq(question="q", images=["data:image/png;base64,AAA"] * 10)
+    assert len(req.images) == 10
 
 
 # ---------- 端点层：refine 改写轨迹下发（ask 响应字段 + stream SSE 事件，图全程替身） ----------

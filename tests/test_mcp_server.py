@@ -58,8 +58,9 @@ def test_tools_list_schema():
     rr = tools["review_resolve"]["inputSchema"]
     assert rr["properties"]["decision"]["enum"] == ["approved", "rejected"]
     assert rr["required"] == ["rid", "decision"]
-    assert tools["imaging_describe"]["inputSchema"]["properties"]["images_b64"]["maxItems"] == 6
-    assert tools["imaging_describe"]["inputSchema"]["properties"]["images"]["maxItems"] == 6
+    # 轮 A2 语义变更：图片上限 6→10（与后端 medical_router.MAX_IMAGES 同步）
+    assert tools["imaging_describe"]["inputSchema"]["properties"]["images_b64"]["maxItems"] == 10
+    assert tools["imaging_describe"]["inputSchema"]["properties"]["images"]["maxItems"] == 10
     assert tools["literature_ask"]["inputSchema"]["required"] == ["question"]
     # 批2 新工具 schema 关键约束
     lq = tools["literature_query"]["inputSchema"]
@@ -70,7 +71,7 @@ def test_tools_list_schema():
     ks = tools["kb_search"]["inputSchema"]["properties"]["top_k"]
     assert ks["minimum"] == 1 and ks["maximum"] == 10 and ks["default"] == 3
     assert tools["kb_search"]["inputSchema"]["properties"]["query"]["maxLength"] == 2000
-    assert tools["consult_create"]["inputSchema"]["properties"]["images_b64"]["maxItems"] == 6
+    assert tools["consult_create"]["inputSchema"]["properties"]["images_b64"]["maxItems"] == 10  # 轮 A2：6→10
     assert tools["review_status"]["annotations"]["readOnlyHint"] is True
 
 
@@ -153,11 +154,13 @@ def test_review_resolve_decision_enum_validation(monkeypatch):
 # ---------- 5. images 数量/类型上限校验（不发请求） ----------
 
 def test_images_cap_enforced(monkeypatch):
-    seven = [f"img{i}" for i in range(7)]
+    """图片数组上限校验（不发请求）。轮 A2 语义变更：上限 6→10（与后端 AskReq 同步），
+    原断言「7 张被拒」相应更新为「11 张被拒」。"""
+    eleven = [f"img{i}" for i in range(11)]
     for name in ("imaging_describe", "case_summarize"):
-        fake, res = _call_tool(monkeypatch, name, {"question": "q", "images": seven})
+        fake, res = _call_tool(monkeypatch, name, {"question": "q", "images": eleven})
         assert res["isError"] is True, name
-        assert "6 张" in res["content"][0]["text"], name
+        assert "10 张" in res["content"][0]["text"], name
         assert fake.calls == [], name
 
     fake, res = _call_tool(monkeypatch, "imaging_describe", {"question": "q", "images": "img.png"})
@@ -397,9 +400,10 @@ def test_consult_create_mapping_and_summary(monkeypatch):
 
 
 def test_consult_create_validation(monkeypatch):
-    """校验失败：question 空/超长、images_b64 超 6 张或类型非法。"""
+    """校验失败：question 空/超长、images_b64 超上限或类型非法。
+    轮 A2 语义变更：上限 6→10，原「超 6 张（range(7)）」反例更新为「超 10 张（range(11)）」。"""
     for bad in ({}, {"question": ""}, {"question": "长" * 20001},
-                {"question": "q", "images_b64": [f"i{n}" for n in range(7)]},
+                {"question": "q", "images_b64": [f"i{n}" for n in range(11)]},
                 {"question": "q", "images_b64": "img.png"},
                 {"question": "q", "images_b64": []}):
         fake, res = _call_tool(monkeypatch, "consult_create", bad)

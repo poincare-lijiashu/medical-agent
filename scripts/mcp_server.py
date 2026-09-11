@@ -35,7 +35,7 @@ import urllib.request
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
 HTTP_TIMEOUT = 120  # LLM 问答（文献/MDT）较慢
-MAX_IMAGES = 6  # 与后端 medical_router.MAX_IMAGES 一致
+MAX_IMAGES = 10  # 轮 A2：与后端 medical_router.MAX_IMAGES 一致（6→10）
 MAX_TEXT_LEN = 20000  # 与后端 AskReq.question / MdtReq.case 上限一致
 MAX_LINE_BYTES = 10_485_760  # FIND-12：stdio 单行（单条 JSON-RPC 消息）上限 10MB，防超大包耗内存
 SERVER_INFO = {"name": "medassist-mcp", "version": "1.0.0"}
