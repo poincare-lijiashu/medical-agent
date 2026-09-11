@@ -131,7 +131,10 @@ def test_list_all_strips_images_only_for_human_signed(monkeypatch, tmp_path):
 def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
     """任务5 可见性边界（服务端强制）：AI 留痕签发记录保留的 images 仅发起人本人/admin
     可见——其他医生（doctor02）经 /review/history 读取时 images 必须被剥离
-    （此前仅靠前端按人过滤，接口层对多角色可见）。"""
+    （此前仅靠前端按人过滤，接口层对多角色可见）。
+    问题3① 语义更新注明：doctor 的 history 数据源改为服务端按人检索（list_involved，
+    仅本人参与记录）——doctor02 对他人记录连条目都不可见（强于剥 images 的隔离，
+    原断言「他人条目存在但无 images」按新语义更新为「他人条目不可见」）。"""
     from backend.core import auth as auth_mod
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
@@ -148,11 +151,11 @@ def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
     items_self = c.get("/api/v1/medical/review/history", headers=_h(tok_doc1)).json()["items"]
     entry_self = next(i for i in items_self if i["id"] == rid)
     assert entry_self.get("images"), "发起人本人应能看到自己留痕记录的影像"
-    # 其他医生：images 必须剥离
+    # 其他医生：他人记录整条不可见（问题3① 收紧：服务端按人检索，隔离边界强于剥 images）
     tok_doc2 = _login(c, "doctor02", "Med@2026x")
     items_other = c.get("/api/v1/medical/review/history", headers=_h(tok_doc2)).json()["items"]
-    entry_other = next(i for i in items_other if i["id"] == rid)
-    assert "images" not in entry_other, "非发起人读取他人留痕记录不得携带 images"
+    assert all(i["id"] != rid for i in items_other), \
+        "非发起人不得读取他人留痕记录（含 images 在内的任何字段）"
     # admin：全可见（合规审计需要）
     tok_admin = _login(c, "admin01", "Med@2026")
     items_admin = c.get("/api/v1/medical/review/history", headers=_h(tok_admin)).json()["items"]

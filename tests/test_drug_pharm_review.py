@@ -4,8 +4,9 @@
   drug 类无论 FULL 开关如何都走既有三档：QC_AUTO_SIGN=on 时中危规则库提示自动签发
   （AI·阈值自动）、高危（禁忌/高危相互作用）恒人工；两开关均 off 时全部人工。
   目的：药剂科（pharm01）始终有 drug 高危待核对项可处理。
-- 药剂科一票：/review/{rid}/resolve 按 agent 分流——drug → (qc, admin, pharmacist)；
-  其它 agent → (qc, admin)。双控仍强制（审核人≠提交人）；翻案（reopen）维持 qc/admin。
+- 药剂科一票：/review/{rid}/resolve 按 agent 分流——drug → (pharmacist, admin)
+  （问题4 收窄注明：原 (qc, admin, pharmacist)——质控科只管病例，drug 签字权收窄为
+  药剂科+管理员）；其它 agent → (qc, admin)。双控仍强制（审核人≠提交人）；翻案维持 qc/admin。
 - pending 可见性：pharmacist 在 _REVIEW_ROLES 白名单内（既有），drug 待核对项可见。
 """
 from fastapi.testclient import TestClient
@@ -137,7 +138,8 @@ def test_pharmacist_reject_drug(monkeypatch, tmp_path):
 
 
 def test_doctor_cannot_resolve_drug(monkeypatch, tmp_path):
-    """drug 类签字权矩阵不含 doctor：doctor → 403（qc/admin/pharmacist 之外无签字权）。"""
+    """drug 类签字权矩阵不含 doctor（问题4 注明：矩阵已收窄为 pharmacist/admin）：
+    doctor → 403。"""
     c, _ = _client(monkeypatch, tmp_path)
     rid = review.submit(agent="drug", question="两药合用", answer="提示", confidence=0.9,
                         risk_reason="药物禁忌", submitted_by="qc01")
@@ -145,6 +147,19 @@ def test_doctor_cannot_resolve_drug(monkeypatch, tmp_path):
     r = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=_h(doc),
                json={"decision": "approved", "note": ""})
     assert r.status_code == 403
+
+
+def test_qc_cannot_resolve_drug(monkeypatch, tmp_path):
+    """问题4 收窄（用户拍板，锁定新语义）：drug 类签字权矩阵移除 qc——质控科只管病例，
+    qc 签发/驳回 drug 项 → 403（pharmacist/admin 不受影响，见上方用例）。"""
+    c, _ = _client(monkeypatch, tmp_path)
+    rid = review.submit(agent="drug", question="两药合用", answer="提示", confidence=0.9,
+                        risk_reason="药物禁忌", submitted_by="doctor01")
+    qc = _login(c, "qc01")
+    r = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=_h(qc),
+               json={"decision": "approved", "note": ""})
+    assert r.status_code == 403, "问题4：qc 不再签发/驳回 drug 项"
+    assert "药物核对项" in r.json()["detail"]
 
 
 def test_pharmacist_cannot_resolve_non_drug(monkeypatch, tmp_path):

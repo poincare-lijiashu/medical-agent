@@ -226,6 +226,25 @@ def _is_auto_signed(item: dict) -> bool:
     return str(item.get("reviewed_by") or "").startswith("AI·")
 
 
+def list_involved(username: str, limit: int = 200) -> list[dict]:
+    """问题3修复：本人参与的已处理记录（submitted_by=me OR reviewed_by=me），新→旧。
+
+    背景（实测结论）：data/review/queue.json 中 pharmacist 处理过的 drug 项
+    reviewed_by 为真实用户名（如 'pharm01'，非「AI·」显示名）——存储正确；
+    但 /review/history 数据源 list_all(limit=50) 按插入序全局截断，真实队列中
+    pharmacist 处理的 drug 项会被其后大量「AI·阈值自动」签发条目挤出最新 50 条
+    窗口（实测 636 条中最新 50 条含 pharm01 参与记录 0 条），前端按
+    reviewed_by=me 过滤恒空。故「我的历史」数据源改为服务端按人检索（不受全局
+    截断影响）。images 可见性与 /review/history 既有边界一致：仅 AI 自动签发且
+    查看者=提交人时保留（他人提交的记录一律剥离，可见性边界不放宽）。"""
+    def _view(i: dict) -> dict:
+        if _is_auto_signed(i) and i.get("submitted_by") == username:
+            return dict(i)
+        return {k: v for k, v in i.items() if k != "images"}
+    return [_view(i) for i in _load()[::-1]
+            if (i.get("submitted_by") == username or i.get("reviewed_by") == username)][:limit]
+
+
 def list_all(limit: int = 100, with_images: bool = True) -> list[dict]:
     """历史列表（admin_data 统计 / review_history 数据源）。
 

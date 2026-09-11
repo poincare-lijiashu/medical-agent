@@ -569,6 +569,7 @@ function logout(){window.removeEventListener('beforeunload',beforeUnloadGuard);w
 
 /* ---- nav ---- */
 let reviewCount=0, reviewItems=[], reviewPage=0, reviewMe='';
+let reviewTodoCount=0;  /* 本批问题2：审核中心数字角标（导航待办数）——pharmacist=drug 待核对+待审处方；admin=全部待核对+待审处方；qc=其它助手高危项（问题4 收权后 qc 不审 drug/开药）。登录 refreshReviewBadge / 进审核中心 loadReview 按服务端真值刷新 */
 /* 导航项单一权威源（hash 深链白名单的键集由此派生） */
 const NAV_ITEMS=[
   {g:'总览'},{k:'overview',t:'概览'},
@@ -594,9 +595,14 @@ function renderRail(){
     else if(it.k==='review'){
       /* 任务6：侧边栏审核中心彩色数字徽标——黄=我的待确认数（doctor/pharmacist；
          qc/admin=待核对数），红=待我意见的会诊数。进入审核中心/提交意见/知情确认后
-         由 renderRail 刷新（updateConsultBadge 亦触发）。 */
-      if(ROLE==='qc'||ROLE==='admin'){if(reviewCount)badge='<span class="tag num" title="待核对">'+reviewCount+'</span>';}
+         由 renderRail 刷新（updateConsultBadge 亦触发）。
+         本批问题2+4：qc/admin/pharmacist 均改用/增用 reviewTodoCount 待办角标——
+         qc 只算其它助手高危项（drug/处方审核权已收归药剂科+管理员）；
+         pharmacist=drug 待核对+待审处方；admin=全部待核对+待审处方。 */
+      if(ROLE==='qc'){if(reviewTodoCount)badge='<span class="tag num" title="待核对（其它助手高危项）">'+reviewTodoCount+'</span>';}
+      else if(ROLE==='admin'){if(reviewTodoCount)badge='<span class="tag num" title="待核对">'+reviewTodoCount+'</span>';}
       else{const cf=(myConfirmItems||[]).length;
+        if(ROLE==='pharmacist'&&reviewTodoCount)badge+='<span class="tag red num" title="待办：药物核对/待审处方">'+reviewTodoCount+'</span>';
         if(cf)badge+='<span class="tag num" title="我的待确认">'+cf+'</span>';
         if(consultPendingOps)badge+='<span class="tag red num" title="待我意见的会诊">'+consultPendingOps+'</span>';}}
     html+=`<button class="nav ${act}" data-k="${it.k}" onclick="go('${it.k}')">${ICON[it.k]}<span>${it.t}</span>${badge}</button>`;
@@ -942,14 +948,17 @@ async function closeConsult(id){
 /* ---- review center ---- */
 let reviewTab='pending', historyItems=[];
 let myConfirmItems=[];  /* 任务3：doctor/pharmacist 的「我的待确认」项（my-pending-confirm 数据源） */
-let rxPendingItems=[];  /* 阶段3.2：开药待审队列（GET /prescriptions/pending；pharmacist/qc/admin，doctor 403 不拉取） */
+let rxPendingItems=[];  /* 阶段3.2：开药待审队列（GET /prescriptions/pending；问题4 收权后仅 pharmacist/admin，doctor/qc 403 不拉取） */
+let rxHistoryItems=[];  /* 问题3②：pharmacist 本人审核过的处方（GET /prescriptions/reviewed-by-me），「我的历史」tab 合并渲染 */
 function canSign(){return (ROLE==='qc'||ROLE==='admin')&&!CFG.full;}  /* 任务2/3：非 drug 类签发/驳回/翻案仅 qc/admin；留痕模式下全局只读档案 */
 /* 本批次任务2：按 agent 分流的签字权（与后端 review_resolve 矩阵一致）——drug 类豁免
-   留痕模式（高危恒在 pending），qc/admin/pharmacist 均可签发/驳回（药剂科一票，
-   不受 CFG.full 影响）；其它 agent 维持 qc/admin 且留痕模式只读。双控（mine）另行判定。 */
+   留痕模式（高危恒在 pending），可签发/驳回（药剂科一票，不受 CFG.full 影响）；
+   其它 agent 维持 qc/admin 且留痕模式只读。双控（mine）另行判定。
+   问题4 收窄（语义变更）：drug 类签字权=pharmacist/admin（原含 qc——质控科只管病例，
+   药物核对与处方审核权收归药剂科+管理员）。 */
 function canSignItem(p){
   if(!p)return false;
-  if(p.agent==='drug')return ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist';
+  if(p.agent==='drug')return ROLE==='admin'||ROLE==='pharmacist';
   return canSign();}
 function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案与 tab 标签；本批次任务2：pharmacist 文案（药剂科药物核对） */
   const mine=!(ROLE==='qc'||ROLE==='admin');
@@ -987,8 +996,15 @@ async function loadReview(){
     document.getElementById('purgeBtn').style.display=(ROLE==='admin')?'inline-flex':'none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
       if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending');}catch(e){}
-    try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 阶段3.2：qc/admin 同看开药待审区 */
-      if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}
+    rxPendingItems=[];  /* 问题4：qc 无开药审核权（/prescriptions/pending 403），开药待审区不渲染（不拉取不留旧值） */
+    if(ROLE==='admin'){
+      try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 问题4 收权后仅 admin 拉取开药待审区（qc 403） */
+        if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}}
+    /* 本批问题2：审核中心数字角标随数据刷新——qc=其它助手高危项（drug 除外，问题4 收权）；
+       admin=全部待核对+开药待审 */
+    reviewTodoCount=(ROLE==='qc')?(reviewItems||[]).filter(i=>i.agent!=='drug').length
+      :(reviewItems||[]).length+(rxPendingItems||[]).length;
+    renderRail();
     const pages=Math.max(1,Math.ceil(reviewItems.length/REVIEW_PER));
     if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
     switchReviewTab(reviewTab);
@@ -1012,7 +1028,13 @@ async function loadReviewMine(b){
       try{const pr=await fetch('/api/v1/medical/review/pending',{headers:auth()});
         if(pr.ok)reviewItems=(((await pr.json()).pending)||[]).filter(i=>i.agent==='drug');}catch(e){}
       try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 阶段3.2：药剂科开药待审队列 */
-        if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}}
+        if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}
+      try{const rh=await fetch('/api/v1/medical/prescriptions/reviewed-by-me',{headers:auth()});  /* 问题3②：本人审核过的处方（「我的历史」合并渲染数据源） */
+        if(rh.ok)rxHistoryItems=(await rh.json()).items||[];}catch(e){/* 处方历史加载失败静默 */}
+      /* 本批问题2：pharmacist 待办角标=drug 待核对数+待审处方数（进入审核中心即按服务端真值刷新） */
+      reviewTodoCount=(reviewItems||[]).length+(rxPendingItems||[]).length;
+      renderRail();}
+    else rxHistoryItems=[];  /* 非 pharmacist 无处方审核历史（doctor/其他角色清空防串号） */
     switchReviewTab(reviewTab);
     refreshConsultBadge();  /* 任务4：进入审核中心即刷新「待我意见 + 我的待确认」徽标 */
   }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
@@ -1066,8 +1088,23 @@ function reviewRow(p,resolved){
         (mine?'<span class="src">双控：你不能核对本人提交</span>':
         (canSignItem(p)?`<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
         <button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button></div>`
-        :'<span class="src">'+(p.agent==='drug'&&ROLE==='pharmacist'?'药物核对项：药师仅可处理本人之外提交的条目（双控）':(CFG.full?'留痕模式：AI 已自动签发（只读档案）':'签发/驳回需质控员或管理员'))+'</span>'))}
+        :'<span class="src">'+(p.agent==='drug'
+          /* 问题4 收权后的 drug 例外说明：药物核对权=药师/管理员（qc 不再可签发/驳回） */
+          ?(ROLE==='pharmacist'?'药物核对项：药师仅可处理本人之外提交的条目（双控）':'药物核对项：签发/驳回由药师（pharmacist）/管理员执行')
+          :(CFG.full?'留痕模式：AI 已自动签发（只读档案）':'签发/驳回需质控员或管理员'))+'</span>'))}
         <button class="btn sm ghost" onclick="openReviewDetail('${p.id}')">详情</button></td></tr>`;}
+/* 问题3②：处方审核历史行（rid/状态/意见/时间）——pharmacist「我的历史」tab 合并渲染。
+   处方审核不在 review 队列体系（双轨），rid/药单/意见/时间直接取自处方记录字段。 */
+function rxHistRow(p){
+  const ok=p.status==='approved';
+  return `<tr><td><details><summary class="qtext" style="cursor:pointer;list-style:none">处方审核：${esc(p.id)}（医生 ${esc(p.doctor||'—')}）<span class="src">▾ 展开详情</span></summary>
+      <div class="txt" style="margin-top:8px;white-space:pre-wrap">${esc(p.case_text||'')}</div>
+      <ul class="feed" style="margin-top:6px">${(p.drugs||[]).map(d=>`<li><span class="e">${esc(d.name)}</span><span class="src">${esc(d.dose||'剂量待定')} · ${esc(d.freq||'频次待定')}</span></li>`).join('')}</ul></details></td>
+      <td class="num">—</td>
+      <td><span class="chip ${p.forced_high_risk?'bad':'mid'}"><span class="dot"></span>${p.forced_high_risk?'高危强制开立':'处方审核'}</span></td>
+      <td class="num">${esc(p.doctor||'—')}<div class="src">${fmtTs(p.created_at)}</div></td>
+      <td>${ok?'<span class="chip ok"><span class="dot"></span>已签发通过</span>':'<span class="chip warn"><span class="dot"></span>已驳回</span>'}
+        <div class="src">${esc(p.pharm_reviewer||'')}${p.pharm_reviewed_at?' · '+fmtTs(p.pharm_reviewed_at):''} ${esc(p.pharm_opinion||'')}</div></td></tr>`;}
 /* 任务3：doctor「我的待确认」行——AI 自动签发的高危项等待本人知情确认（仅确认，无签发权） */
 function myConfirmRow(p){
   const autoSigned=p.status==='approved'&&/AI·/.test(String(p.reviewed_by||''));
@@ -1084,12 +1121,19 @@ function renderReview(){
   const b=document.getElementById('reviewBody');
   const mine=!(ROLE==='qc'||ROLE==='admin');
   if(reviewTab==='history'){
-    const hist=(historyItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
+    /* 问题3②：「我的历史」合并渲染——review 队列记录 + 本人审核的处方记录（pharmacist，
+       GET /prescriptions/reviewed-by-me）。处方记录补 agent/submitted_by/risk_reason
+       供 _rvMatch 筛选与行渲染分流（_rx 标记），统一分页。 */
+    const rxh=(ROLE==='pharmacist'?(rxHistoryItems||[]):[])
+      .map(p=>({...p,_rx:true,agent:'处方审核',submitted_by:p.doctor||'—',
+        risk_reason:p.forced_high_risk?'高危强制开立':'处方审核'}))
+      .filter(_rvMatch);
+    const hist=rxh.concat((historyItems||[]).filter(_rvMatch));  /* 任务3：筛选后分页（问题3② 起含处方审核记录） */
     if(!hist.length){b.innerHTML='<div class="empty">'+ICON.review+`<div>${mine?'暂无您的历史记录。':'暂无已处理的历史记录。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'签发/驳回过的项会出现在这里。'}</div></div>`;return;}
     const pages=Math.max(1,Math.ceil(hist.length/HIST_PER));
     if(histPage>=pages)histPage=pages-1; if(histPage<0)histPage=0;
     const hslice=hist.slice(histPage*HIST_PER,histPage*HIST_PER+HIST_PER);  /* 任务1：切片留存供缩略图挂载 */
-    const rows=hslice.map(p=>reviewRow(p,true)).join('');
+    const rows=hslice.map(p=>p._rx?rxHistRow(p):reviewRow(p,true)).join('');  /* 问题3②：处方审核记录专用行渲染 */
     const hpager=`<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)">
       <button class="btn sm secondary" ${histPage===0?'disabled':''} onclick="histGo(-1)">‹ 上一页</button>
       <span class="src num">第 ${histPage+1} / ${pages} 页 · 共 ${hist.length} 条已处理</span>
@@ -1137,8 +1181,8 @@ function renderReview(){
   mountReviewThumbs(slice);  /* 任务1：待处理行缩略图条挂载 */
 }
 /* ---- 阶段3.2：药剂科开药审核队列（prescriptions/pending → 处方卡 → 通过/驳回） ---- */
-function rxPendingSection(){  /* 开药待审区：pharmacist/qc/admin 渲染；doctor 无权限（403）恒返回空串 */
-  if(ROLE==='doctor')return '';
+function rxPendingSection(){  /* 开药待审区：问题4 收权后仅 pharmacist/admin 渲染（qc 无处方审核权、doctor 403，均恒返回空串） */
+  if(ROLE!=='pharmacist'&&ROLE!=='admin')return '';
   const items=rxPendingItems||[];
   const head=`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)"><h3 style="margin:0">开药待审（处方队列）</h3>
     <div class="src" style="margin-top:4px">开药工作台直送的处方：核对药单与相互作用；驳回必须填写意见（双控：不能审核本人提交的处方）。</div></div>`;
@@ -1246,7 +1290,9 @@ function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[],
   const actions=`<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">${
     (mine&&p.self_confirm_required&&!p.confirmed_by_self)?`<button class="btn sm primary" onclick="selfConfirm('${p.id}')">知情确认</button>`:''}${(canSignItem(p)&&!mine)?`<button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button><button class="btn sm secondary" onclick="resolve('${p.id}','rejected')">驳回</button>`:''}
       ${(canSign()&&!mine&&auto)?`<button class="btn sm ghost" onclick="reopenReview('${p.id}')">转人工复核</button>`:''}
-      ${(!canSignItem(p)&&!mine)?'<span class="src">签发/驳回由质控员（qc）/管理员执行'+(p.agent==='drug'?'；药物核对项药师（pharmacist）亦可':'')+'</span>':''}</div>`;
+      ${(!canSignItem(p)&&!mine)?'<span class="src">'+(p.agent==='drug'
+        /* 问题4 收权后的 drug 例外说明：药物核对权=药师/管理员 */
+        ?'签发/驳回由药师（pharmacist）/管理员执行':'签发/驳回由质控员（qc）/管理员执行')+'</span>':''}</div>`;
   document.getElementById('mTitle').textContent='核对详情 · '+p.agent;
   document.getElementById('mBody').innerHTML=`<div class="foot" style="margin-bottom:12px">${confChip(p.confidence||0,true)}<span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span>${auto?'<span class="chip mid"><span class="dot"></span>自动签发</span>':''}${p.confirmed_by_self?'<span class="chip ok"><span class="dot"></span>本人已确认</span>':''}</div>
     <h4>问题</h4><div class="txt md">${md(p.question||'')}</div>
@@ -1340,6 +1386,13 @@ async function rxSuggest(){  /* ① 生成开药建议：POST /prescriptions/sug
 }
 function renderRxSuggest(){  /* ② 推荐结果卡片（勾选加入药单）+ 中危组合警示条（黄色） */
   const el=document.getElementById('rxSuggestOut');let html='';
+  /* 本批问题1修复：渲染时对 checked=true 的建议项同步调用加入药单函数（rxPick）——
+     勾选框默认选中此前只是 UI 状态、不程序化触发加入逻辑，已选药单为空（用户取消
+     勾选再勾选才加入）。去重：药名+剂量都相同的项不重复加（重复渲染幂等）。 */
+  rxSuggests.forEach((s,i)=>{
+    if(!s.pick)return;
+    if(rxSelected.some(d=>d.name===s.name&&(d.dose||'')===(s.dose||'')))return;
+    rxPick(i,true);});
   if(rxWarnings.length){
     html+=`<div class="card" style="border-left:3px solid var(--warn)"><b>⚠ 中危联用警示</b>
       <ul class="feed" style="margin-top:6px">${rxWarnings.map(w=>`<li><span class="e">${esc((w.pair||[]).join(' × '))}</span><span class="src">${esc(w.note||'')}</span></li>`).join('')}</ul></div>`;}
@@ -1855,10 +1908,11 @@ function humanizeAudit(e){
     /* 阶段2.3 处方流转：提交/改写重提/高危强制开立（approved/rejected 复用上方既有键）；
        阶段3 查漏结论：prescription 全部审计动作（suggested/submitted/list/list_pending/
        approved/rejected/rewritten/forced_with_reason）均已映射，无缺口（list/list_pending
-       复用通用文案，event=prescription 语境下语义成立） */
+       复用通用文案，event=prescription 语境下语义成立）；问题3② 补 list_reviewed_by_me */
     submitted:()=>`提交了处方送药师审核（${p.n??'?'} 种药${p.forced_high_risk?' · 高危强制开立':''}）`,
     rewritten:()=>`改写了被驳回处方并重新送审（${p.n??'?'} 种药）`,
     forced_with_reason:()=>`高危联用强制开立并附理由（${rid}）`.trim(),
+    list_reviewed_by_me:()=>p.n!==undefined?`查看了本人审核过的处方（${p.n} 条）`:'查看了本人审核过的处方',
     /* —— 影像/病例（VL 链路）—— */
     describe_failed:()=>'影像描述失败（已留痕）',
     vl_failed:()=>'多模态解析失败（已留痕）',
@@ -2383,7 +2437,25 @@ function boot(u,r,dept){ROLE=r||'doctor';ME_DEPT=dept||'';setWho(u,r);showLogin(
   if(dp)dp.textContent='当前科室：'+(ME_DEPT||'—')+'（服务端绑定账号科室'+(ME_DEPT?'':'，请联系管理员设置')+'）';
   const hk=hashView();go(hk||'overview');
   if(hk!=='review')loadReview();  /* hash 恢复 review 时 go('review') 已加载，避免双请求 */
-  refreshRxBadge();}  /* 开药审核 UX 问题2：登录即刷新被驳回处方角标（无需先进 rx 视图） */
+  refreshRxBadge();  /* 开药审核 UX 问题2：登录即刷新被驳回处方角标（无需先进 rx 视图） */
+  refreshReviewBadge();}  /* 本批问题2：登录即刷新审核中心待办角标（pharmacist/qc/admin，无需先进审核中心） */
+/* 本批问题2：审核中心数字角标数据刷新（复用 refreshRxBadge 模式：登录/切视图按服务端真值刷新）。
+   pharmacist=drug 待核对数+待审处方数；admin=全部待核对+待审处方；qc=其它助手高危项
+   （问题4 收权后 qc 不审 drug/开药，角标不计这两类）。进审核中心时由 loadReview/loadReviewMine
+   按已拉取数据更新并 renderRail，本函数只负责登录后的首刷（当前不在审核中心才重绘导航）。 */
+async function refreshReviewBadge(){
+  if(ROLE!=='pharmacist'&&ROLE!=='admin'&&ROLE!=='qc')return;
+  let n=0;
+  try{const d=await apiGet('/review/pending');
+    const pend=d.pending||[];
+    n+=(ROLE==='pharmacist')?pend.filter(i=>i.agent==='drug').length
+      :(ROLE==='qc')?pend.filter(i=>i.agent!=='drug').length
+      :pend.length;
+  }catch(e){/* 角标刷新失败静默（不干扰登录主流程） */}
+  if(ROLE==='pharmacist'||ROLE==='admin'){  /* 开药待审处方数（qc 无处方审核权不拉取，避免 403 噪音） */
+    try{const r=await apiGet('/prescriptions/pending');n+=(r.items||[]).length;}catch(e){/* 静默 */}}
+  reviewTodoCount=n;
+  if(cur!=='review')renderRail();}
 function beforeUnloadGuard(e){  /* 防误关丢失未发送内容：聊天输入或质控字段任一有内容时拦截；发送/拆分清空后自然放行（具名函数供 logout 移除，FIND-09） */
   const qcDirty=[...document.querySelectorAll('[id^="qcf_"]')].some(el=>el.value.trim());
   if(document.getElementById('input').value.trim()||qcDirty){e.preventDefault();e.returnValue='';}

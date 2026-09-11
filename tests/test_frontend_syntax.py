@@ -268,17 +268,22 @@ def test_resubmit_jump_markers_present():
 
 def test_pharm_sign_markers_present():
     """任务2（本批次）标记锁：药剂科一票——按 agent 分流的签字权（canSignItem）、
-    pharmacist drug 待核对表与「药物高危结论需药剂科复核」文案。"""
+    pharmacist drug 待核对表与「药物高危结论需药剂科复核」文案。
+    问题4 语义变更注明：drug 类签字权由 qc/admin/pharmacist 收窄为 pharmacist/admin
+    （质控科只管病例，药物核对权=药剂科+管理员），原 canSignItem 断言随之更新。"""
     html = FRONTEND.read_text(encoding="utf-8")
     for marker in (
         "function canSignItem(",                       # 签字权按 agent 分流
-        "if(p.agent==='drug')return ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist';",
+        # 问题4 收窄后的 drug 签字权矩阵（原 ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist' 已移除 qc）
+        "if(p.agent==='drug')return ROLE==='admin'||ROLE==='pharmacist';",
         "canSignItem(p)?",                             # 列表行按条目出签发/驳回按钮
         "canSignItem(p)&&!mine",                       # 详情模态操作区同矩阵
         "药物高危结论需药剂科复核",                       # 核心文案（头部说明 + 空态提示）
         "药物高危待核对（需药剂科复核）",                  # pharmacist drug 待核对表头
         "pharmacist（药剂科一票）额外拉取待核对清单",       # 药剂科 pending 拉取标记
         "审核中心 · 药剂科药物核对",                       # pharmacist 审核中心标题
+        # 问题4：qc 看 drug 项的只读说明文案（drug 例外：药师/管理员，不再是质控员）
+        "药物核对项：签发/驳回由药师（pharmacist）/管理员执行",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
 
@@ -404,3 +409,72 @@ def test_rx_review_ux_fixes_frontend_markers_present():
         "角标数据源必须为 /prescriptions/mine 的 rejected 统计（无需新端点）"
     assert "ROLE!=='doctor'" in badge, "角标仅 doctor 刷新（mine 为 doctor 专属，避免 403 噪音）"
     assert html.count("refreshRxBadge()") >= 3, "切换 rx 视图/提交处方/登录后均须刷新角标"
+
+
+# ---------- 本批 4 项修复标记锁（追加，不改动既有断言；语义变更另行注明） ----------
+
+def test_rx_round2_suggest_sync_markers_present():
+    """问题1 标记锁：renderRxSuggest 渲染时对 checked=true 的建议项同步调用加入药单
+    函数（rxPick）——勾选框默认选中必须程序化触发加入逻辑（去重：药名+剂量相同不重复加），
+    已选药单不再为空（用户取消勾选再勾选才加入的回退被锁定）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    fn = _extract_fn(html, "renderRxSuggest")
+    assert "rxPick(i,true)" in fn, "renderRxSuggest 必须对勾选项同步调用加入药单函数 rxPick"
+    assert "!s.pick" in fn, "仅同步 checked=true 的建议项"
+    # 去重：药名+剂量都相同不重复加（重复渲染幂等）
+    assert "d.name===s.name&&(d.dose||'')===(s.dose||'')" in fn, \
+        "同步加入必须按药名+剂量去重（防重复渲染重复加）"
+
+
+def test_rx_round2_review_badge_markers_present():
+    """问题2 标记锁：审核中心数字角标（导航入口）——refreshReviewBadge 复用
+    refreshRxBadge 模式（登录/切视图刷新）；pharmacist=drug 待核对+待审处方，
+    qc=其它助手高危项（问题4 收权后不审 drug/开药），admin=全部待核对+待审处方。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        "function refreshReviewBadge(",                    # 角标数据刷新函数
+        "reviewTodoCount",                                 # 角标数状态
+        'title="待办：药物核对/待审处方"',                     # pharmacist 待办角标语义
+        'title="待核对（其它助手高危项）"',                    # qc 角标语义（问题4 收权）
+        "refreshReviewBadge();",                           # 登录即刷新（boot）
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = _extract_fn(html, "refreshReviewBadge")
+    assert "review/pending" in fn, "角标数据源必须含 /review/pending（drug 待核对/其它高危项）"
+    assert "prescriptions/pending" in fn, "角标数据源必须含 /prescriptions/pending（待审处方数）"
+    assert "i.agent==='drug'" in fn and "i.agent!=='drug'" in fn, \
+        "pharmacist 只算 drug 项、qc 只算其它助手高危项（问题4 分流）"
+    # 刷新时机：登录 boot + 进入审核中心（loadReview/loadReviewMine 更新角标并重绘导航）
+    assert html.count("refreshReviewBadge()") >= 2, "登录与进入审核中心均须刷新角标"
+    assert "reviewTodoCount=(reviewItems||[]).length+(rxPendingItems||[]).length" in html, \
+        "pharmacist 角标=drug 待核对数+待审处方数（进入审核中心即刷新）"
+
+
+def test_rx_round2_reviewed_history_markers_present():
+    """问题3 标记锁：①「我的历史」前端过滤含本人作为审核人的记录（既有锁保持）；
+    ②pharmacist 拉取 GET /prescriptions/reviewed-by-me 并在「我的历史」tab 合并渲染
+    处方审核记录（rxHistRow 专用行：rid/状态/意见/时间）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        "prescriptions/reviewed-by-me",                    # 问题3② 新端点调用
+        "rxHistoryItems",                                  # 处方审核历史缓存
+        "function rxHistRow(",                             # 处方审核历史行渲染
+        "处方审核：",                                        # 行首标识（rid 可见）
+        "p._rx?rxHistRow(p):reviewRow(p,true)",            # 「我的历史」合并渲染分流
+        "i.submitted_by===reviewMe||i.reviewed_by===reviewMe",  # 问题3① 前端过滤（保持）
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = _extract_fn(html, "rxHistRow")
+    for field in ("p.id", "p.status", "p.pharm_opinion", "p.pharm_reviewed_at"):
+        assert field in fn, f"处方审核历史行必须展示 {field}（rid/状态/意见/时间）"
+
+
+def test_rx_round2_qc_scope_markers_present():
+    """问题4 标记锁：qc 不审核药剂——①开药待审区仅 pharmacist/admin 渲染
+    （qc 登录不渲染开药待审区）；②qc/admin 路径不拉取开药待审队列（403 不留旧值）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    fn = _extract_fn(html, "rxPendingSection")
+    assert "ROLE!=='pharmacist'&&ROLE!=='admin'" in fn, \
+        "开药待审区必须仅 pharmacist/admin 渲染（qc/doctor 恒空串）"
+    assert "if(ROLE==='admin'){" in html, \
+        "qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）"

@@ -239,6 +239,18 @@ def list_pending() -> list[dict]:
     return [i for i in _load()[::-1] if i.get("status") == "pending_pharm"]
 
 
+def list_reviewed_by(pharmacist: str) -> list[dict]:
+    """问题3②：药剂科本人审核过的处方（pharm_reviewer=me，新→旧，含 approved/rejected）。
+
+    背景：处方审核与 review 队列是双轨体系——pharmacist 驳回/签发的处方此前完全不在
+    /review/history 体系内，审核中心「我的历史」看不到。本函数为
+    GET /prescriptions/reviewed-by-me 的数据源（供前端「我的历史」tab 合并渲染：
+    rid/状态/意见/时间）。"""
+    return [i for i in _load()[::-1]
+            if i.get("pharm_reviewer") == pharmacist
+            and i.get("status") in ("approved", "rejected")]
+
+
 def stats() -> dict:
     """状态分布统计：{total, draft, pending_pharm, approved, rejected}（管理/运维用）。"""
     items = _load()

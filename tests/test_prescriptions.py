@@ -507,7 +507,9 @@ def test_rewrite_not_owner_403(suggest_env):
 
 
 def test_list_permissions(suggest_env):
-    """mine 只回本人处方；pending 队列 pharmacist/qc/admin 三角色可见，doctor 403（role guard）。"""
+    """mine 只回本人处方；pending 队列 pharmacist/admin 可见，doctor/qc 403（role guard）。
+    问题4 收窄（语义变更，原断言「qc01 pending 200」更新）：处方审核权=pharmacist/admin，
+    质控科（qc）只管病例，pending 队列对 qc 关闭（403）。"""
     c, _audit, _tmp = suggest_env
     _seed_doctor2()
     doc = _login(c, "doctor01")
@@ -516,13 +518,66 @@ def test_list_permissions(suggest_env):
     id2 = _submit(c, d2, [{"name": "华法林"}]).json()["id"]
     mine1 = c.get(f"{SUB}/mine", headers=_h(doc)).json()
     assert [i["id"] for i in mine1["items"]] == [id1]
-    mine2 = c.get(f"{SUB}/mine", headers=_h(d2)).json()
-    assert [i["id"] for i in mine2["items"]] == [id2]
-    for u in ("pharm01", "qc01", "admin01"):
+    mine2 = c.get(f"{SUB}/mine", headers=_h(d2)).json()["items"]
+    assert [i["id"] for i in mine2] == [id2]
+    for u in ("pharm01", "admin01"):
         tok = _login(c, u)
         pend = c.get(f"{SUB}/pending", headers=_h(tok))
         assert pend.status_code == 200, u
         assert {i["id"] for i in pend.json()["items"]} == {id1, id2}, u
     assert c.get(f"{SUB}/pending", headers=_h(doc)).status_code == 403, "doctor 无待审队列权限"
+    # 问题4 收权：qc 无开药待审队列权限（原 200 断言按新语义更新为 403）
+    assert c.get(f"{SUB}/pending", headers=_h(_login(c, "qc01"))).status_code == 403, \
+        "问题4：qc 不再读取开药待审队列（处方审核权=pharmacist/admin）"
     assert c.get(f"{SUB}/mine", headers=_h(_login(c, "pharm01"))).status_code == 403, \
         "mine 为 doctor 专属"
+
+
+# ---- 问题3②：药剂科本人审核过的处方（GET /prescriptions/reviewed-by-me） ----
+
+def test_reviewed_by_me_lists_own_rx_reviews(suggest_env):
+    """问题3②：pharmacist 驳回/签发的处方出现在 /prescriptions/reviewed-by-me
+    （此前处方审核不在 review/history 体系，「我的历史」看不到）——返回
+    rid/状态/药剂意见/审核时间，按新→旧排序；只回本人的（他人审核的不混入）。"""
+    c, audit, _tmp = suggest_env
+    _seed_doctor2()
+    doc = _login(c, "doctor01")
+    rid1 = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    rid2 = _submit(c, doc, [{"name": "布洛芬"}]).json()["id"]
+    ph = _login(c, "pharm01")
+    assert c.post(f"{SUB}/{rid1}/review", headers=_h(ph),
+                  json={"action": "reject", "opinion": "依据不足，请补充疗程"}).status_code == 200
+    assert c.post(f"{SUB}/{rid2}/review", headers=_h(ph),
+                  json={"action": "approve", "opinion": "核对无误"}).status_code == 200
+    r = c.get(f"{SUB}/reviewed-by-me", headers=_h(ph))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["me"] == "pharm01"
+    items = d["items"]
+    assert [i["id"] for i in items] == [rid2, rid1], "新→旧排序"
+    rej = next(i for i in items if i["id"] == rid1)
+    assert rej["status"] == "rejected" and rej["pharm_reviewer"] == "pharm01"
+    assert rej["pharm_opinion"] == "依据不足，请补充疗程" and rej["pharm_reviewed_at"]
+    ok = next(i for i in items if i["id"] == rid2)
+    assert ok["status"] == "approved" and ok["pharm_reviewed_at"]
+    # 数据隔离：他人（第二名药师）无本人审核记录 → 空
+    auth_mod.create_user("pharm02", "Med@2026p", "pharmacist", dept="药剂科")
+    tok2 = _login(c, "pharm02", "Med@2026p")
+    assert c.get(f"{SUB}/reviewed-by-me", headers=_h(tok2)).json()["items"] == []
+    # 审计留痕（pharm02 的隔离查询在后，取 pharm01 自身的事件断言）
+    hit = [e for e in audit.entries if e["payload"].get("action") == "list_reviewed_by_me"
+           and e["actor"] == "pharm01"]
+    assert hit and hit[-1]["payload"]["n"] == 2
+
+
+def test_reviewed_by_me_role_guard(suggest_env):
+    """问题3②：reviewed-by-me 仅 pharmacist——doctor/qc 403（admin 不在白名单：走全局档案）。"""
+    c, _audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    ph = _login(c, "pharm01")
+    c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+           json={"action": "approve", "opinion": "ok"})
+    assert c.get(f"{SUB}/reviewed-by-me", headers=_h(doc)).status_code == 403
+    assert c.get(f"{SUB}/reviewed-by-me", headers=_h(_login(c, "qc01"))).status_code == 403, \
+        "问题4：qc 无处方审核权，不提供 reviewed-by-me 视图"

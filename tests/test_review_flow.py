@@ -7,6 +7,8 @@ drug 走纯规则库，无需网络。
 （原 doctor/pharmacist 可调复核端点，现 403）；双控（审核人≠提交人）仍由服务端强制。
 本批次任务2 药剂科一票更新：drug 类 resolve 放宽到 pharmacist（pharmacist 可签发/驳回
 drug 核对项），reopen 仍仅 qc/admin——相关断言已按新语义更新并注明。
+问题4 收窄（语义变更，相关断言已更新并注明）：drug 类签字权=pharmacist/admin
+（qc 移除——质控科只管病例，不再签发/驳回 drug 项）。
 """
 from fastapi.testclient import TestClient
 
@@ -65,13 +67,19 @@ def test_high_risk_dual_check_flow(monkeypatch):
     assert r4.status_code == 200, r4.text
     assert r4.json()["reviewed_by"] == "pharm01"
 
-    # 质控员签字权不变：翻案回待核对后 qc 仍可签发（双控：qc01 ≠ 提交人 doctor01）
+    # 翻案权维持 qc/admin：qc 可把 drug 项翻案回待核对（问题4 只收签字权，不收翻案权）
     assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=H(qc)).status_code == 200
+    # 问题4 收窄（语义变更，原断言「翻案回待核对后 qc 签发 drug → 200」更新）：
+    # drug 类签字权=pharmacist/admin，qc → 403；改由 admin01 签发（admin 保留 drug 签字权）
     r5 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(qc),
                 json={"decision": "approved", "note": "核对无误"})
-    assert r5.status_code == 200, r5.text
-    assert r5.json()["status"] == "approved"
-    assert r5.json()["reviewed_by"] == "qc01"
+    assert r5.status_code == 403, "问题4：qc 不再签发/驳回 drug 项（质控科只管病例）"
+    adm = _login(c, "admin01", "Med@2026")
+    r6 = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=H(adm),
+                json={"decision": "approved", "note": "管理员复核无误"})
+    assert r6.status_code == 200, r6.text
+    assert r6.json()["status"] == "approved"
+    assert r6.json()["reviewed_by"] == "admin01"
 
 
 def test_low_risk_mid_risk_traced_and_auto_signed(monkeypatch):
@@ -161,3 +169,48 @@ def test_history_includes_reviewed_by_records(monkeypatch, tmp_path):
     # 提交医生视角：同一记录按 submitted_by=me 可见（既有语义不回退）
     items_d = c.get("/api/v1/medical/review/history", headers=H(doc)).json()["items"]
     assert any(i["id"] == rid and i["reviewed_by"] == "pharm01" for i in items_d)
+
+
+# ---- 问题3①：「我的历史」不被全局 limit=50 截断（服务端按人检索） ----
+
+def test_history_pharmacist_reviewed_survives_global_truncation(monkeypatch, tmp_path):
+    """问题3① 回归（实测根因）：drug 项 resolve 后 reviewed_by 存储正确（真实用户名
+    'pharm01'，非「AI·」显示名），但原 /review/history 数据源 list_all(limit=50) 按插入序
+    全局截断——真实队列（636 条）中 pharmacist 处理的 drug 项被其后大量「AI·阈值自动」
+    签发条目挤出最新 50 条窗口，前端按 reviewed_by=me 过滤恒空（「我的历史」空白）。
+    修复：pharmacist/doctor 的历史数据源改为服务端 list_involved(me)（本人参与的记录，
+    不受全局截断影响）——本测试在 drug 项之后插入 60 条更新的记录把其挤出 50 条窗口，
+    断言 pharmacist 仍能从 /review/history 拿到本人处理过的那条（doctor 视角同验）。
+    队列文件隔离 + 纯 JSON 模式（PG 在线也不触真库）。"""
+    from backend.core import medical_review as review
+    from backend.core import pg_store
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    monkeypatch.setattr(pg_store, "_pool", None)
+    c = _client()
+    doc = _login(c, "doctor01", "Med@2026")
+    ph = _login(c, "pharm01", "Med@2026")
+    H = lambda t: {"Authorization": "Bearer " + t}
+    rid = review.submit(agent="drug", question="西地那非和硝酸甘油能一起用吗",
+                        answer="禁忌联用，禁止合用", confidence=0.9,
+                        risk_reason="药物禁忌", submitted_by="doctor01")
+    review.resolve(rid, "rejected", "pharm01", "联用禁忌，请更换方案")
+    # 模拟真实队列：其后插入 60 条更新的记录（历史项被挤出 list_all(limit=50) 窗口）
+    for n in range(60):
+        review.submit(agent="literature", question=f"后续条目{n}", answer="内容",
+                      confidence=0.5, risk_reason="低置信", submitted_by="doctor01")
+    assert len(review.list_all(limit=50)) == 50
+    assert all(i["id"] != rid for i in review.list_all(limit=50)), "前置：该条目已被全局截断挤出"
+    # pharmacist 视角：本人处理过的记录仍可见（问题3① 修复点）
+    items = c.get("/api/v1/medical/review/history", headers=H(ph)).json()["items"]
+    hit = next(i for i in items if i["id"] == rid)
+    assert hit["reviewed_by"] == "pharm01" and hit["status"] == "rejected"
+    assert hit["review_note"] == "联用禁忌，请更换方案" and hit["resolved_at"]
+    # doctor 视角：本人提交的记录同样不被截断（既有语义在新数据源下保持）
+    items_d = c.get("/api/v1/medical/review/history", headers=H(doc)).json()["items"]
+    assert any(i["id"] == rid for i in items_d)
+    # 数据隔离：他人提交且他人处理的记录不因新数据源泄漏给第三者
+    other = review.submit(agent="literature", question="他人条目", answer="内容",
+                          confidence=0.5, risk_reason="低置信", submitted_by="pharm01")
+    review.resolve(other, "approved", "admin01", "ok")
+    ids_ph = [i["id"] for i in c.get("/api/v1/medical/review/history", headers=H(doc)).json()["items"]]
+    assert other not in ids_ph, "doctor 的历史不含他人提交/他人处理的记录"

@@ -827,9 +827,26 @@ async def prescription_mine(user: dict = Depends(require_role("doctor"))):
     return {"items": items, "me": me}
 
 
+@router.get("/prescriptions/reviewed-by-me")
+async def prescription_reviewed_by_me(user: dict = Depends(require_role("pharmacist"))):
+    """问题3②：本人（药剂科）审核过的处方清单（pharm_reviewer=me，approved/rejected，新→旧）。
+
+    背景：pharmacist 驳回/签发的处方此前不在 /review/history 体系（处方与 review 队列
+    双轨），审核中心「我的历史」看不到——本端点供前端「我的历史」tab 合并渲染处方
+    审核记录（rid/状态/意见/时间）。仅 pharmacist（admin 走全局档案，doctor/qc 403）。"""
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(rx.list_reviewed_by, me)
+    await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                            action="list_reviewed_by_me", actor=me,
+                            payload=_rx_audit(user, n=len(items)))
+    return {"items": items, "me": me}
+
+
 @router.get("/prescriptions/pending")
-async def prescription_pending(user: dict = Depends(require_role("pharmacist", "qc", "admin"))):
-    """药剂科待审队列（pending_pharm，新→旧；pharmacist/qc/admin 可见，doctor 403）。"""
+async def prescription_pending(user: dict = Depends(require_role("pharmacist", "admin"))):
+    """药剂科待审队列（pending_pharm，新→旧；pharmacist/admin 可见，doctor/qc 403）。
+    问题4 收窄（语义变更）：原 pharmacist/qc/admin——处方审核权=药剂科+管理员，
+    质控科（qc）只管病例质控，不再读取开药待审队列。"""
     me = user.get("username", "system")
     items = await asyncio.to_thread(rx.list_pending)
     await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
@@ -839,10 +856,12 @@ async def prescription_pending(user: dict = Depends(require_role("pharmacist", "
 
 @router.post("/prescriptions/{rid}/review")
 async def prescription_review(rid: str, body: PrescriptionReviewReq,
-                              user: dict = Depends(require_role("pharmacist", "qc", "admin"))):
+                              user: dict = Depends(require_role("pharmacist", "admin"))):
     """药剂科签发/驳回（approve|reject）。双控：审核人≠提交医生（本人提交 → 403）；
     驳回意见必填（缺失 422）；非 pending_pharm 流转由域层状态机拒绝（400）。
-    审计 prescription.approved / prescription.rejected（actor + opinion + 药数）。"""
+    审计 prescription.approved / prescription.rejected（actor + opinion + 药数）。
+    问题4 收窄（语义变更）：原 pharmacist/qc/admin——处方审核权=药剂科（pharmacist）
+    +管理员，质控科（qc）只管病例质控。"""
     me = user.get("username", "system")
     cur = await asyncio.to_thread(rx.get, rid)
     if cur is None:
@@ -1187,9 +1206,12 @@ async def consult_close(cid: str, user: dict = Depends(require_user)):
 # qc/admin（行为变更：原 doctor/pharmacist 可签发，现由质控员/管理员统一行使签字权）。
 # 本批次任务2 药剂科一票：drug 类签发/驳回放宽到 pharmacist（药物高危结论需药剂科复核，
 # 且 drug 豁免留痕模式——高危恒在 pending，药剂科任何一人可签发/驳回）；翻案仍仅 qc/admin。
+# 问题4 收窄（用户拍板）：drug 待核对签字权与处方审核权 = **pharmacist+admin**——质控科
+# （qc）只管病例质控，不再参与药物核对与处方审核（_DRUG_RESOLVE_ROLES 移除 qc、
+# /prescriptions/* 审核端点移除 qc）；qc 仍可读 review/pending 处理其它助手高危项。
 _REVIEW_ROLES = ("qc", "admin", "doctor", "pharmacist")
 _RESOLVE_ROLES = ("qc", "admin")                       # 非 drug 类签字权（含翻案）
-_DRUG_RESOLVE_ROLES = ("qc", "admin", "pharmacist")    # drug 类签字权（药剂科一票）
+_DRUG_RESOLVE_ROLES = ("admin", "pharmacist")    # drug 类签字权（问题4 收窄：药剂科一票+管理员，qc 移除）
 
 
 @router.get("/review/pending")
@@ -1211,8 +1233,15 @@ async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     不因留痕可见性放宽而扩大暴露面）。"""
     items = await asyncio.to_thread(review.list_all, limit=50)
     me = user.get("username", "system")
-    is_admin = user.get("role") == "admin"
-    if not is_admin:
+    role = user.get("role", "")
+    is_admin = role == "admin"
+    # 问题3修复（实测结论）：doctor/pharmacist 的「我的历史」数据源改为服务端按人检索
+    # （submitted_by=me OR reviewed_by=me，images 可见性边界不变）——原 list_all(limit=50)
+    # 按插入序全局截断，真实队列中 pharmacist 处理的 drug 项被其后大量自动签发条目挤出
+    # 最新 50 条窗口，前端按 reviewed_by=me 过滤恒空。qc/admin 全局档案语义不变。
+    if role in ("doctor", "pharmacist"):
+        items = await asyncio.to_thread(review.list_involved, me)
+    elif not is_admin:
         items = [i if i.get("submitted_by") == me
                  else {k: v for k, v in i.items() if k != "images"} for i in items]
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="history",
@@ -1286,8 +1315,9 @@ async def review_resolve(rid: str, body: ResolveReq,
                          user: dict = Depends(require_role("qc", "admin", "pharmacist"))):
     """签发/驳回（按 agent 分流的签字权矩阵）：
     - 非 drug 类：仅 qc/admin（任务2 收权，原 doctor/pharmacist 可调，属显式行为变更）；
-    - drug 类：qc/admin/pharmacist 均可（本批次任务2 药剂科一票——药物高危结论需药剂科
-      复核；drug 亦豁免留痕模式、高危恒在 pending，药剂科任何一人可签发/驳回）。
+    - drug 类：pharmacist/admin（问题4 收窄，语义变更：原 qc/admin/pharmacist——用户拍板
+      质控科只管病例，药物核对权=药剂科一票+管理员；drug 亦豁免留痕模式、高危恒在
+      pending，药剂科任何一人可签发/驳回）。
     双控不变：审核人≠提交人由 review.resolve 强制；翻案（reopen）仍仅 qc/admin。"""
     reviewer = user.get("username", "system")
     item = await asyncio.to_thread(review.get, rid)
@@ -1295,7 +1325,7 @@ async def review_resolve(rid: str, body: ResolveReq,
         allowed = _DRUG_RESOLVE_ROLES if item.get("agent") == "drug" else _RESOLVE_ROLES
         if user.get("role", "") not in allowed:
             if item.get("agent") == "drug":
-                raise HTTPException(403, "药物核对项：仅质控员（qc）/管理员/药师（pharmacist）可签发/驳回")
+                raise HTTPException(403, "药物核对项：仅药师（pharmacist）/管理员可签发/驳回")
             raise HTTPException(403, "签发/驳回仅质控员（qc）/管理员可执行")
     try:
         item = await asyncio.to_thread(review.resolve, rid, body.decision, reviewer, body.note)
