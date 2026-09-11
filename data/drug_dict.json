@@ -1,24 +1,959 @@
 [
-  {"name": "华法林", "aliases": ["法华林", "warfarin"], "brand_names": [], "category": "抗凝抗栓", "level": "处方药"},
-  {"name": "阿司匹林", "aliases": ["aspirin", "阿斯匹林"], "brand_names": [], "category": "抗凝抗栓", "level": "处方药"},
-  {"name": "布洛芬", "aliases": ["ibuprofen"], "brand_names": [], "category": "解热镇痛", "level": "OTC"},
-  {"name": "地高辛", "aliases": ["digoxin"], "brand_names": [], "category": "强心苷", "level": "处方药"},
-  {"name": "胺碘酮", "aliases": ["amiodarone"], "brand_names": [], "category": "抗心律失常", "level": "处方药"},
-  {"name": "辛伐他汀", "aliases": ["simvastatin"], "brand_names": [], "category": "调脂", "level": "处方药"},
-  {"name": "阿托伐他汀", "aliases": ["atorvastatin", "立普妥"], "brand_names": [], "category": "调脂", "level": "处方药"},
-  {"name": "克拉霉素", "aliases": ["clarithromycin"], "brand_names": [], "category": "抗菌", "level": "处方药"},
-  {"name": "红霉素", "aliases": ["erythromycin"], "brand_names": [], "category": "抗菌", "level": "处方药"},
-  {"name": "西地那非", "aliases": ["sildenafil", "伟哥"], "brand_names": [], "category": "男科用药", "level": "处方药"},
-  {"name": "硝酸甘油", "aliases": ["消心痛", "单硝酸异山梨酯"], "brand_names": [], "category": "心血管", "level": "处方药"},
-  {"name": "二甲双胍", "aliases": ["metformin"], "brand_names": [], "category": "降糖", "level": "处方药"},
-  {"name": "格列本脲", "aliases": ["优降糖", "glibenclamide"], "brand_names": [], "category": "降糖", "level": "处方药"},
-  {"name": "碳酸锂", "aliases": ["锂盐", "lithium"], "brand_names": [], "category": "精神科", "level": "处方药"},
-  {"name": "卡马西平", "aliases": ["carbamazepine"], "brand_names": [], "category": "抗癫痫", "level": "处方药"},
-  {"name": "别嘌醇", "aliases": ["allopurinol"], "brand_names": [], "category": "抗痛风", "level": "处方药"},
-  {"name": "呋塞米", "aliases": ["速尿", "furosemide"], "brand_names": [], "category": "利尿", "level": "处方药"},
-  {"name": "碘对比剂", "aliases": ["造影剂"], "brand_names": [], "category": "造影剂", "level": "处方药"},
-  {"name": "氯吡格雷", "aliases": ["clopidogrel", "波立维"], "brand_names": [], "category": "抗凝抗栓", "level": "处方药"},
-  {"name": "奥美拉唑", "aliases": ["omeprazole"], "brand_names": [], "category": "消化/PPI", "level": "处方药"},
-  {"name": "吉非罗齐", "aliases": ["gemfibrozil"], "brand_names": [], "category": "调脂", "level": "处方药"},
-  {"name": "对乙酰氨基酚", "aliases": ["扑热息痛", "泰诺", "paracetamol"], "brand_names": [], "category": "解热镇痛", "level": "OTC"}
+ {
+  "name": "华法林",
+  "aliases": [
+   "法华林",
+   "warfarin"
+  ],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "阿司匹林",
+  "aliases": [
+   "aspirin",
+   "阿斯匹林"
+  ],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "布洛芬",
+  "aliases": [
+   "ibuprofen"
+  ],
+  "brand_names": [],
+  "category": "解热镇痛",
+  "level": "OTC"
+ },
+ {
+  "name": "地高辛",
+  "aliases": [
+   "digoxin"
+  ],
+  "brand_names": [],
+  "category": "强心苷",
+  "level": "处方药"
+ },
+ {
+  "name": "胺碘酮",
+  "aliases": [
+   "amiodarone"
+  ],
+  "brand_names": [],
+  "category": "抗心律失常",
+  "level": "处方药"
+ },
+ {
+  "name": "辛伐他汀",
+  "aliases": [
+   "simvastatin"
+  ],
+  "brand_names": [],
+  "category": "调脂",
+  "level": "处方药"
+ },
+ {
+  "name": "阿托伐他汀",
+  "aliases": [
+   "atorvastatin",
+   "立普妥"
+  ],
+  "brand_names": [],
+  "category": "调脂",
+  "level": "处方药"
+ },
+ {
+  "name": "克拉霉素",
+  "aliases": [
+   "clarithromycin"
+  ],
+  "brand_names": [],
+  "category": "抗菌",
+  "level": "处方药"
+ },
+ {
+  "name": "红霉素",
+  "aliases": [
+   "erythromycin"
+  ],
+  "brand_names": [],
+  "category": "抗菌",
+  "level": "处方药"
+ },
+ {
+  "name": "西地那非",
+  "aliases": [
+   "sildenafil",
+   "伟哥"
+  ],
+  "brand_names": [],
+  "category": "男科用药",
+  "level": "处方药"
+ },
+ {
+  "name": "硝酸甘油",
+  "aliases": [
+   "消心痛",
+   "单硝酸异山梨酯"
+  ],
+  "brand_names": [],
+  "category": "心血管",
+  "level": "处方药"
+ },
+ {
+  "name": "二甲双胍",
+  "aliases": [
+   "metformin"
+  ],
+  "brand_names": [],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "格列本脲",
+  "aliases": [
+   "优降糖",
+   "glibenclamide"
+  ],
+  "brand_names": [],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "碳酸锂",
+  "aliases": [
+   "锂盐",
+   "lithium"
+  ],
+  "brand_names": [],
+  "category": "精神科",
+  "level": "处方药"
+ },
+ {
+  "name": "卡马西平",
+  "aliases": [
+   "carbamazepine"
+  ],
+  "brand_names": [],
+  "category": "抗癫痫",
+  "level": "处方药"
+ },
+ {
+  "name": "别嘌醇",
+  "aliases": [
+   "allopurinol"
+  ],
+  "brand_names": [],
+  "category": "抗痛风",
+  "level": "处方药"
+ },
+ {
+  "name": "呋塞米",
+  "aliases": [
+   "速尿",
+   "furosemide"
+  ],
+  "brand_names": [],
+  "category": "利尿",
+  "level": "处方药"
+ },
+ {
+  "name": "碘对比剂",
+  "aliases": [
+   "造影剂"
+  ],
+  "brand_names": [],
+  "category": "造影剂",
+  "level": "处方药"
+ },
+ {
+  "name": "氯吡格雷",
+  "aliases": [
+   "clopidogrel",
+   "波立维"
+  ],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "奥美拉唑",
+  "aliases": [
+   "omeprazole"
+  ],
+  "brand_names": [],
+  "category": "消化/PPI",
+  "level": "处方药"
+ },
+ {
+  "name": "吉非罗齐",
+  "aliases": [
+   "gemfibrozil"
+  ],
+  "brand_names": [],
+  "category": "调脂",
+  "level": "处方药"
+ },
+ {
+  "name": "对乙酰氨基酚",
+  "aliases": [
+   "扑热息痛",
+   "泰诺",
+   "paracetamol"
+  ],
+  "brand_names": [],
+  "category": "解热镇痛",
+  "level": "OTC"
+ },
+ {
+  "name": "利伐沙班",
+  "aliases": [
+   "rivaroxaban"
+  ],
+  "brand_names": [
+   "拜瑞妥"
+  ],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "达比加群酯",
+  "aliases": [
+   "dabigatran"
+  ],
+  "brand_names": [
+   "泰毕全"
+  ],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "阿哌沙班",
+  "aliases": [
+   "apixaban"
+  ],
+  "brand_names": [
+   "艾乐妥"
+  ],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "低分子肝素",
+  "aliases": [
+   "低分子量肝素",
+   "enoxaparin"
+  ],
+  "brand_names": [
+   "克赛"
+  ],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "肝素",
+  "aliases": [
+   "普通肝素",
+   "heparin"
+  ],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "替格瑞洛",
+  "aliases": [
+   "ticagrelor"
+  ],
+  "brand_names": [
+   "倍林达"
+  ],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "双嘧达莫",
+  "aliases": [
+   "dipyridamole"
+  ],
+  "brand_names": [
+   "潘生丁"
+  ],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "华法林钠",
+  "aliases": [],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "尿激酶",
+  "aliases": [
+   "urokinase"
+  ],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "阿替普酶",
+  "aliases": [
+   "alteplase"
+  ],
+  "brand_names": [],
+  "category": "抗凝抗栓",
+  "level": "处方药"
+ },
+ {
+  "name": "氨氯地平",
+  "aliases": [
+   "amlodipine"
+  ],
+  "brand_names": [
+   "络活喜",
+   "压氏达"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "硝苯地平",
+  "aliases": [
+   "nifedipine"
+  ],
+  "brand_names": [
+   "拜新同",
+   "心痛定"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "非洛地平",
+  "aliases": [
+   "felodipine"
+  ],
+  "brand_names": [
+   "波依定"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "贝尼地平",
+  "aliases": [
+   "benidipine"
+  ],
+  "brand_names": [
+   "可力洛"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "缬沙坦",
+  "aliases": [
+   "valsartan"
+  ],
+  "brand_names": [
+   "代文",
+   "平欣"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "厄贝沙坦",
+  "aliases": [
+   "irbesartan"
+  ],
+  "brand_names": [
+   "安博维"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "氯沙坦",
+  "aliases": [
+   "losartan"
+  ],
+  "brand_names": [
+   "科素亚"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "替米沙坦",
+  "aliases": [
+   "telmisartan"
+  ],
+  "brand_names": [
+   "美卡素"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "坎地沙坦",
+  "aliases": [
+   "candesartan"
+  ],
+  "brand_names": [
+   "必洛斯"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "贝那普利",
+  "aliases": [
+   "benazepril"
+  ],
+  "brand_names": [
+   "洛汀新"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "培哚普利",
+  "aliases": [
+   "perindopril"
+  ],
+  "brand_names": [
+   "雅施达"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "福辛普利",
+  "aliases": [
+   "fosinopril"
+  ],
+  "brand_names": [
+   "蒙诺"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "美托洛尔",
+  "aliases": [
+   "metoprolol"
+  ],
+  "brand_names": [
+   "倍他乐克"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "比索洛尔",
+  "aliases": [
+   "bisoprolol"
+  ],
+  "brand_names": [
+   "康忻",
+   "博苏"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "阿替洛尔",
+  "aliases": [
+   "atenolol"
+  ],
+  "brand_names": [
+   "氨酰心安"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "卡维地洛",
+  "aliases": [
+   "carvedilol"
+  ],
+  "brand_names": [
+   "金络"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "氢氯噻嗪",
+  "aliases": [
+   "hydrochlorothiazide"
+  ],
+  "brand_names": [
+   "双氢克尿噻"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "吲达帕胺",
+  "aliases": [
+   "indapamide"
+  ],
+  "brand_names": [
+   "寿比山"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "螺内酯",
+  "aliases": [
+   "spironolactone"
+  ],
+  "brand_names": [
+   "安体舒通"
+  ],
+  "category": "降压",
+  "level": "处方药"
+ },
+ {
+  "name": "阿莫西林",
+  "aliases": [
+   "amoxicillin",
+   "阿莫仙"
+  ],
+  "brand_names": [
+   "再林"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "阿莫西林克拉维酸钾",
+  "aliases": [
+   "amoxicillin-clavulanate",
+   "安灭菌"
+  ],
+  "brand_names": [
+   "力百汀"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "头孢呋辛",
+  "aliases": [
+   "cefuroxime"
+  ],
+  "brand_names": [
+   "西力欣"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "头孢曲松",
+  "aliases": [
+   "ceftriaxone"
+  ],
+  "brand_names": [
+   "罗氏芬"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "头孢克肟",
+  "aliases": [
+   "cefixime"
+  ],
+  "brand_names": [
+   "世福素"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "头孢他啶",
+  "aliases": [
+   "ceftazidime"
+  ],
+  "brand_names": [
+   "复达欣"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "头孢唑林",
+  "aliases": [
+   "cefazolin"
+  ],
+  "brand_names": [
+   "先锋V"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "阿奇霉素",
+  "aliases": [
+   "azithromycin"
+  ],
+  "brand_names": [
+   "希舒美",
+   "舒美特"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "左氧氟沙星",
+  "aliases": [
+   "levofloxacin"
+  ],
+  "brand_names": [
+   "可乐必妥",
+   "利复星"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "环丙沙星",
+  "aliases": [
+   "ciprofloxacin"
+  ],
+  "brand_names": [
+   "悉复欢"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "莫西沙星",
+  "aliases": [
+   "moxifloxacin"
+  ],
+  "brand_names": [
+   "拜复乐"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "甲硝唑",
+  "aliases": [
+   "metronidazole",
+   "灭滴灵"
+  ],
+  "brand_names": [
+   "夫纳捷"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "替硝唑",
+  "aliases": [
+   "tinidazole"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "多西环素",
+  "aliases": [
+   "doxycycline"
+  ],
+  "brand_names": [
+   "强力霉素"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "米诺环素",
+  "aliases": [
+   "minocycline"
+  ],
+  "brand_names": [
+   "美满霉素"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "万古霉素",
+  "aliases": [
+   "vancomycin"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "利奈唑胺",
+  "aliases": [
+   "linezolid"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "美罗培南",
+  "aliases": [
+   "meropenem"
+  ],
+  "brand_names": [
+   "美平"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "亚胺培南西司他丁",
+  "aliases": [
+   "imipenem-cilastatin"
+  ],
+  "brand_names": [
+   "泰能"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "阿昔洛韦",
+  "aliases": [
+   "acyclovir",
+   "无环鸟苷"
+  ],
+  "brand_names": [
+   "丽珠克毒星"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "伐昔洛韦",
+  "aliases": [
+   "valaciclovir"
+  ],
+  "brand_names": [
+   "明竹欣"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "奥司他韦",
+  "aliases": [
+   "oseltamivir"
+  ],
+  "brand_names": [
+   "达菲",
+   "可威"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "金刚烷胺",
+  "aliases": [
+   "amantadine"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "利巴韦林",
+  "aliases": [
+   "ribavirin",
+   "病毒唑"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "伊曲康唑",
+  "aliases": [
+   "itraconazole"
+  ],
+  "brand_names": [
+   "斯皮仁诺"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "氟康唑",
+  "aliases": [
+   "fluconazole"
+  ],
+  "brand_names": [
+   "大扶康"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "两性霉素B",
+  "aliases": [
+   "amphotericin B"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "磺胺甲噁唑",
+  "aliases": [
+   "sulfamethoxazole"
+  ],
+  "brand_names": [
+   "新诺明"
+  ],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "甲氧苄啶",
+  "aliases": [
+   "trimethoprim"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "复方新诺明",
+  "aliases": [
+   "co-trimoxazole",
+   "SMZ-TMP"
+  ],
+  "brand_names": [],
+  "category": "抗菌抗病毒",
+  "level": "处方药"
+ },
+ {
+  "name": "格列齐特",
+  "aliases": [
+   "gliclazide"
+  ],
+  "brand_names": [
+   "达美康"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "格列美脲",
+  "aliases": [
+   "glimepiride"
+  ],
+  "brand_names": [
+   "亚莫利"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "瑞格列奈",
+  "aliases": [
+   "repaglinide"
+  ],
+  "brand_names": [
+   "诺和龙"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "那格列奈",
+  "aliases": [
+   "nateglinide"
+  ],
+  "brand_names": [
+   "唐力"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "阿卡波糖",
+  "aliases": [
+   "acarbose"
+  ],
+  "brand_names": [
+   "拜唐苹"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "伏格列波糖",
+  "aliases": [
+   "voglibose"
+  ],
+  "brand_names": [
+   "倍欣"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "吡格列酮",
+  "aliases": [
+   "pioglitazone"
+  ],
+  "brand_names": [
+   "艾可拓"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "西格列汀",
+  "aliases": [
+   "sitagliptin"
+  ],
+  "brand_names": [
+   "捷诺维"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "达格列净",
+  "aliases": [
+   "dapagliflozin"
+  ],
+  "brand_names": [
+   "安达唐"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ },
+ {
+  "name": "恩格列净",
+  "aliases": [
+   "empagliflozin"
+  ],
+  "brand_names": [
+   "欧唐静"
+  ],
+  "category": "降糖",
+  "level": "处方药"
+ }
 ]
