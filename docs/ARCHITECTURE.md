@@ -96,6 +96,7 @@ api/  ──▶ core/  ──▶ db/、config
 | **新增 agent**（如「出院小结总结」） | ① `backend/agents/medical/<name>/`（graph+nodes+prompts）；② `medical_router.py` 加 `/<name>/ask` 端点（复用 AskReq/AskResp + `_enqueue_if_risk`）；③ 审计 event_type；④ 前端入口；（可选）eval 用例 | core 层零改动（检索/LLM/审核队列/审计/存储全部现成复用） |
 | **新增 LLM provider** | 管理端「模型配置」运行时添加（OpenAI 兼容 / Anthropic 两格式已覆盖）——**零代码**，配置即扩展；仅当新格式才动 `llm_factory/llm_config` | 所有 agent/路由 |
 | **更换/新增存储** | `core/pg_store.py` repo 层集中收口（load/save/mirror + JSON 原子写兜底）；`pg_async_dsn` 换 DSN 即换实例 | 业务 core（consults/review/auth 只调 repo 函数）、api、agents |
+| **多实例/Redis 共享存储** | `core/stores.py`（KVStore 最小面协议 + Memory/Redis 双实现 + `get_store` 工厂）；`REDIS_URL` 配置即切换，限流/会话记忆/令牌撤销三组件已接入 | 三组件调用方与全部业务路由（对外接口行为不变；Redis 不可用自动回落内存镜像） |
 | **新增 HIS 厂商** | ① `backend/integration/<vendor>.py` 实现 `HisAdapter` 三方法；② `registry.py` 注册一行；③ `HIS_ADAPTER=<vendor>` 配置。详见 docs/INTEGRATION.md 第五节 | 核心业务零改动（qc 接入点 `_his_push_qc_result` 已就位，NullAdapter 兜底） |
 | **新增 MCP tool** | `scripts/mcp_server.py`：handler 函数 + `TOOLS` 条目 + `TOOL_HANDLERS` 注册；`tests/test_mcp_server.py` 一测。审计标记（channel/tool）与「不入复核队列」语义自动继承 | 后端零改动（复用既有 HTTP 端点）；新增端点才动 api 层 |
 | **新增审计事件类型/字段** | `core/medical_audit.py`（channel/tool 等请求级标记在 `_emit` 统一注入） | 各调用点 |

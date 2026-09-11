@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     pg_database: str = "eduagent_medical"
     pg_async_dsn: str = ""
 
+    # 轮 B2 可选双后端：REDIS_URL 非空时限流/会话记忆/令牌撤销走 Redis（多实例共享）；
+    # 空（默认）= 单机内存后端，零配置零外部依赖。Redis 不可用自动回落内存镜像，
+    # 服务不中断（见 backend/core/stores.py 与 docs/DEPLOY.md「三级部署指南」）。
+    redis_url: str = ""
+
     # KB embed 截断窗口（任务A）：BGE-M3 最长支持 8192；256→1024 对齐结构感知切分窗口。
     # 入库与查询两侧共用 embedder 同一默认窗口，向量空间自然一致。
     # 注意 batch 32×1024 token 显存约翻倍，若 OOM 将 kb_ingest._EMBED_BATCH 降为 16。

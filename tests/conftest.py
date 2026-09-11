@@ -7,13 +7,14 @@ os.environ.setdefault("AUTH_DEMO_PASSWORD", "Med@2026")
 import pytest
 
 from backend.api import deps
-from backend.core import security_rate
+from backend.core import security_rate, stores
 
 
 @pytest.fixture(autouse=True)
 def _clean_auth_state():
     deps._revoked_before.clear()
     security_rate.reset()
+    stores.reset_store()  # 轮 B2：重建共享 store 单例（撤销/会话键不跨测试残留）
     yield
     deps._revoked_before.clear()
 

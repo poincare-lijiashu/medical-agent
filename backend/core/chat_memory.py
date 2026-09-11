@@ -18,12 +18,19 @@ import threading
 from collections import OrderedDict, deque
 
 from backend.config import settings
+from backend.core.stores import get_store
 
 _ANSWER_SUMMARY_LEN = 500  # 每轮回答入存的截断长度（问题原文完整保留，见 redact 上游约束）
 
 # 会话数上限（外部审查 M2）：_store 里最多保留多少个会话；超出淘汰最久未写入的
 # 会话（LRU）。模块级常量便于测试 monkeypatch。
 MAX_SESSIONS = 200
+
+# 轮 B2 共享存储（REDIS_URL 配置后多实例互通会话）：JSON 列表形态存每会话问答轮；
+# TTL 与令牌最大寿命对齐（内存模式下 TTL 同样生效，无额外成本）。last-write-wins
+# （轻量记忆，仅用于指代理解，可接受）；本地 OrderedDict 为主真源、共享存储为互通层。
+_CHAT_PREFIX = "chat:"
+_CHAT_TTL = 8 * 86400
 
 _store: OrderedDict[str, deque] = OrderedDict()
 _lock = threading.Lock()
@@ -45,6 +52,7 @@ def remember(session_id: str, question: str, answer: str) -> None:
     if not sid or max(0, int(settings.chat_memory_turns)) <= 0:
         return
     item = (question, (answer or "")[:_ANSWER_SUMMARY_LEN])
+    evicted: list[str] = []
     with _lock:
         d = _store.get(sid)
         if d is None:
@@ -54,17 +62,30 @@ def remember(session_id: str, question: str, answer: str) -> None:
         d.append(item)
         _store.move_to_end(sid)  # 活跃会话置最新（LRU）：淘汰只发生在最旧端，不误伤活跃会话
         while len(_store) > _max_sessions():  # 外部审查 M2：超限淘汰最久未写入的会话
-            _store.popitem(last=False)
+            evicted.append(_store.popitem(last=False)[0])
+        snapshot = list(d)  # 锁内快照，锁外写共享存储（避免持锁做 IO）
+    # 共享存储同步（轮 B2）：淘汰会话同步删共享键——保证「淘汰后 recall 返回 []」语义不变
+    store = get_store()
+    for old in evicted:
+        store.delete(_CHAT_PREFIX + old)
+    store.set(_CHAT_PREFIX + sid, snapshot, ttl=_CHAT_TTL)
 
 
 def recall(session_id: str) -> list[tuple[str, str]]:
-    """返回该会话最近历史（旧→新）。无记录/关闭返回 []。"""
+    """返回该会话最近历史（旧→新）。无记录/关闭返回 []。
+
+    本地命中优先（主真源）；本地未命中（多实例下其它实例写入的会话）查共享存储。"""
     sid = (session_id or "").strip()
     if not sid:
         return []
     with _lock:
         d = _store.get(sid)
-        return list(d) if d else []
+        if d:
+            return list(d)
+    shared = get_store().get(_CHAT_PREFIX + sid)
+    if isinstance(shared, list):
+        return [(q, a) for q, a in shared]
+    return []
 
 
 def build_context(session_id: str) -> tuple[str, int]:

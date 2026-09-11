@@ -65,6 +65,24 @@ services:
     volumes:
       - medagent_pg:/var/lib/postgresql/data
 
+  # 轮 B2 可选 Redis（三级部署之二：院区级多实例才需要）——默认不启用：
+  # 单机内存后端（REDIS_URL 留空）零依赖即可运行。启用条件：多实例部署需限流
+  # 聚合/会话记忆互通/令牌撤销全局生效时，取消本注释块并在 .env.local 设
+  # REDIS_URL=redis://redis:6379/0（步骤与验证清单见 docs/DEPLOY.md「三级部署指南」）。
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: medagent_redis
+  #   ports:
+  #     - "127.0.0.1:6379:6379"
+  #   volumes:
+  #     - medagent_redis:/data
+  #   command: ["redis-server", "--appendonly", "yes"]
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 3
+
   attu:
     image: zilliz/attu:v2.4.12  # 本地已有
     container_name: medagent_attu
@@ -99,3 +117,4 @@ volumes:
   medagent_milvus-db:
   medagent_pg:
   medagent_data:
+  # medagent_redis:  # 启用 redis 服务时取消注释

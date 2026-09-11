@@ -172,6 +172,47 @@ python scripts/run_eval.py --dry-run
 | 低 | `scripts/*.py`、`docs/MCP.md` | 文档/用法示例内含 `D:\software_work\...` 本机绝对路径 | 仅注释示例，不影响运行；新部署按相对路径使用 |
 | 通过 | `backend/`、`frontend/` 全量扫描 | 无 `D:\`/`C:\` 硬编码路径；文件读写显式 `encoding="utf-8"`；路径拼接统一 `os.path.join`/`pathlib` | 无需改动 |
 
+## 三级部署指南（轮 B2）
+
+> 三档规模对应三档配置：同一套代码，环境变量决定形态。限流/会话记忆/令牌撤销三处状态由
+> `REDIS_URL` 自动选择后端——留空=进程内存（单机），非空=Redis（多实例共享）；Redis 不可用
+> 自动回落本实例内存镜像（日志一条 `redis.degraded`），服务不中断，恢复后自动重连。
+
+### 一级：科室级单机（默认，零配置）
+
+- 现状默认形态：单实例 uvicorn + `REDIS_URL` 留空，三处状态走进程内存，除既有 Milvus/PG 外零外部依赖
+- 启动即用：`python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001`（或容器 `--profile full`）
+- 适用：科室试点 / 单科门诊 / 日活百级以内
+
+### 二级：院区级多实例
+
+**激活条件**：SSE 生成并发超单实例承载（数百条以上）、需滚动升级不中断、或多科室隔离部署多实例。
+
+1. **起 Redis**：docker-compose 取消 `redis` 服务注释块（`redis:7-alpine`），或院方自备实例；
+   `.env.local` 设 `REDIS_URL=redis://redis:6379/0`
+2. **多实例**（两种形态等价，按运维习惯选择）：
+   - 同机多进程：`uvicorn backend.main:app --workers 4`（workers 经验公式见下文「高并发部署」）
+   - 多容器：`docker compose --profile full up -d --scale app=N` + 前置 Nginx（upstream/TLS/SSE 配置见下文）
+3. **三处状态自动转共享**（组件零改动，对外接口行为不变）：
+   - 限流：`RATE_LIMIT_PER_MIN` 变为全实例聚合窗口（Redis 固定窗口计数）
+   - 会话记忆（literature 指代理解）：跨实例互通（本地命中优先，未命中查 Redis）
+   - 令牌撤销：任一实例改密/删号，全部实例立即 401（撤销记录 TTL=令牌最大寿命，自动过期）
+4. **启用后必须**：全实例使用**同一 `AUTH_JWT_SECRET`**（统一 `.env.local` 注入），否则令牌跨实例失效
+5. **验证清单**（两实例 A/B，前置 Nginx 轮询或直连各自端口）：
+   - [ ] token 互通：实例 A 登录取令牌 → 携令牌请求实例 B 返回 200
+   - [ ] 限流共享：对实例 A 连打满 `RATE_LIMIT_PER_MIN` 次 → 同一身份请求实例 B 返回 429
+   - [ ] 撤销互通：实例 A 执行改密/删用户 → 持旧令牌请求实例 B 返回 401
+   - [ ] 降级演练：`docker stop redis` → 服务不中断（每实例日志一条 `redis.degraded`，限流/撤销降级为单实例语义）；`docker start redis` → 自动重连恢复共享
+
+### 三级：集团级路线图（规划性内容，激活条件标注）
+
+| 方向 | 已就位的模板 / 切换点 | 激活条件 |
+| --- | --- | --- |
+| LLM 调用 MQ 削峰 | `kb_ingest` 异步任务化即模板（任务队列 + 进度回查）；ask 类走 SSE 需同步响应不入队，仅批处理类（批量质控/知识库重建/离线评测）入 MQ | 单日 LLM 调用触顶厂商 RPM/TPM 配额，或批量任务与在线问答争抢配额 |
+| 自建 vLLM 推理池 | `llm_provider` 抽象即切换点——模型配置已支持 OpenAI 兼容端点，管理端把端点指向 vLLM 服务即切换（零代码）；扩容加 GPU 节点即可 | token 成本/数据不出院合规要求本地化（单卡 24GB 起步，见下文「本地模型两步走」） |
+| Milvus 集群 | standalone → cluster（etcd/MinIO 依赖已就位，扩 QueryNode/DataNode + 分片） | KB 向量达千万级，或多院区共享统一知识库 |
+| PG 主从 | `pg_async_dsn` 指向主从拓扑（读写分离由 PG 侧代理层实现，应用零改动）；备份恢复见上文数据归属表 | 审计/留痕写入量使单实例 PG 成瓶颈，或要求异地容灾 |
+
 ## 高并发部署
 
 ### uvicorn workers（经验公式）
