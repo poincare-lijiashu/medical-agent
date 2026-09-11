@@ -10,6 +10,9 @@ data/auth/
 data/audit/
 data/review/
 
+# 备份产物（backup.py/restore.py 的 tar.gz 含全量业务数据，严禁入库）
+data/backups/
+
 # 模型配置（含第三方 API Key，严禁入库）
 data/llm_providers.json
 

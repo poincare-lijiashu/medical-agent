@@ -109,7 +109,20 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 
 ```bash
 python scripts/backup.py --keep 7          # pg_dump（容器内）+ tar data/ → data/backups/，--dry-run 预演
+python scripts/restore.py --backup data/backups/backup_XXX.tar.gz   # dry-run 打印恢复计划
+python scripts/restore.py --backup data/backups/backup_XXX.tar.gz --yes   # 实际恢复（先停服务）
 ```
+
+恢复要点：`restore.py` 默认 dry-run；`--yes` 时先打 safety tar（`data/backups/pre_restore_*.tar.gz`，恢复前状态可回退）→ 解包覆盖 `data/`（镜像删除备份内不存在的文件）→ PG 用 psql 导回纯 SQL dump（先 `DROP TABLE IF EXISTS <dump 内表> CASCADE` 前奏，**绝不 drop database**）→ 打印 JSON 行数对比与 PG 关键表 count。
+
+### 恢复演练记录
+
+- **日期**：2026-09-12（Asia/Shanghai，评测行动项 6）；**环境**：PG 容器 `edu_agent_postgres`（用户/库 medagent，env `BACKUP_PG_CONTAINER` 覆盖），8001 服务停止后执行。
+- **步骤**：①停 8001 → ②`backup.py` 生成备份 B1（`backup_20260912_002648.tar.gz`，74 文件 + pg_dump 2,227,875 字节）→ ③植入双探针：`data/_restore_probe.json` + PG `runtime_flags` 插入 `key='_restore_probe'` 行 → ④`restore.py --backup B1 --yes` → ⑤验证 → ⑥重启服务确认 startup。
+- **执行摘要**：safety tar `pre_restore_20260912_002802.tar.gz`（74 文件）先行；覆盖 73 文件；镜像删除 2 个（探针文件 + 可重建缓存 `kb/pubmed_v2_cache.json`，后者不入包属预期）；psql stdin 喂入 2,228,408 字节 SQL（11 表 DROP 前奏 + dump），exit=0。
+- **探针结果（双清除达成）**：文件探针 `data/_restore_probe.json` 已删除（备份内无此文件，镜像删除生效）；PG 探针 `SELECT count(*) FROM runtime_flags WHERE key='_restore_probe'` = **0**（DROP+CREATE 重建后仅 dump 内 1 行 `qc_auto_sign_full`）。
+- **验证输出摘要**：18 个 JSON 行数对比全部 `OK`（如 consults 12/12、drug_dict 342/342、drug_rules 318/318、prescriptions 4/4、review/queue 656/656、runtime_flags 1/1、auth/users 10/10）；PG 关键表 count 与演练前基线一致（users=10、review_queue=641、consults=12、prescriptions=4、drug_dict=342、runtime_flags=1、audit_log=542、llm_providers=4、departments=10）。`drug_rules` PG=307 vs JSON=318 为演练前既有的镜像差集（恢复保真，非本次引入）；重启后差集按既有机制自动补齐。
+- **结论**：备份可恢复、探针双清除、数据计数一致——**演练通过**。
 
 ## 药品数据免责声明
 
