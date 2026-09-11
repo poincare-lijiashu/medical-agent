@@ -181,8 +181,12 @@ async def _request(method: str, url: str, token: str | None, json_body: dict | N
 
 async def _login(base_url: str, username: str, password: str, timeout: float) -> str:
     """独立登录拿 access_token（每虚拟用户各登录一次，独立会话）。"""
-    status, data = await _request("POST", base_url + LOGIN_PATH, None,
-                                  {"username": username, "password": password}, timeout)
+    for attempt in range(20):  # 429 退避：前轮压测可能耗尽该账号限流窗口
+        status, data = await _request("POST", base_url + LOGIN_PATH, None,
+                                      {"username": username, "password": password}, timeout)
+        if status != 429:
+            break
+        await asyncio.sleep(5.0)
     if status != 200:
         raise SystemExit(f"登录失败 HTTP {status}: {str(data)[:120]}（检查 --username/--password）")
     return data["access_token"]
@@ -194,11 +198,18 @@ async def _provision_users(base_url: str, admin_token: str, names: list[str],
     已存在（上次 --keep-users 残留）则容忍复用。"""
     url = base_url + _MEDICAL_PREFIX + "/admin/users"
     for u in names:
-        status, data = await _request("POST", url, admin_token,
-                                      {"username": u, "password": password,
-                                       "role": "doctor", "dept": "压测"}, timeout)
+        # 429 退避重试：限流窗口 60/分，批量建号必撞——指数不敏感，固定 6s 退避即可
+        for attempt in range(30):
+            status, data = await _request("POST", url, admin_token,
+                                          {"username": u, "password": password,
+                                           "role": "doctor", "dept": "压测"}, timeout)
+            if status != 429:
+                break
+            await asyncio.sleep(6.0)
         if status != 200 and "已存在" not in str(data):
             raise SystemExit(f"创建压测账号 {u} 失败 HTTP {status}: {str(data)[:120]}")
+        if status == 200:
+            await asyncio.sleep(0.35)  # admin 建号同样受 60/分限流——节奏化避开 429
 
 
 async def _cleanup_users(base_url: str, admin_token: str, names: list[str],
