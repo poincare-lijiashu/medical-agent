@@ -1,5 +1,8 @@
-"""任务5/6 前端回归：index.html 内联脚本语法校验（node --check）+ 新增功能标记存在性。
+"""任务5/6 前端回归：前端 JS 语法校验（node --check）+ 新增功能标记存在性。
 
+B1 拆分更新：前端 JS 已从 index.html 内联拆分为 frontend/js/*.js 多文件（共享全局
+作用域多 script 加载，非 ESM）；标记锁统一改为在 index.html + 全部 JS 拼接源上断言
+（标记集合与拆分前完全一致，一个不丢）；node --check 改为逐文件校验。
 node 不可用时跳过（仅环境兜底；本机/CI 均有 node）。
 """
 import json
@@ -12,49 +15,54 @@ from pathlib import Path
 import pytest
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
+FRONTEND_JS = Path(__file__).resolve().parent.parent / "frontend" / "js"
 
 
-def _inline_scripts() -> list[str]:
-    """提取 index.html 全部内联 <script> 源码（外链 src= 跳过）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
-    out, pos = [], 0
-    while True:
-        s = html.find("<script", pos)
-        if s == -1:
-            break
-        tag_end = html.find(">", s)
-        if "src=" in html[s:tag_end + 1]:  # 外链脚本不校验
-            pos = html.find("</script>", tag_end) + len("</script>")
-            continue
-        e = html.find("</script>", tag_end)
-        assert e != -1, "存在未闭合的 <script> 标签"
-        out.append(html[tag_end + 1:e])
-        pos = e + len("</script>")
-    return out
+def _all_frontend_js() -> str:
+    """拼接 frontend/js/ 全部 JS 源文件（拆分后前端脚本的权威全文；文件名排序保证确定性）。"""
+    files = sorted(FRONTEND_JS.glob("*.js"))
+    assert files, "frontend/js/ 应存在拆分后的 JS 文件"
+    return "\n".join(f.read_text(encoding="utf-8") for f in files)
 
 
-def test_index_html_inline_script_syntax():
-    """node --check 校验全部内联脚本语法（任务5/6 前端改动回归防线）。"""
+def _frontend_source() -> str:
+    """index.html（HTML/CSS）+ 全部拆分 JS 的拼接源——标记锁统一在此全文断言，
+    标记集合与拆分前单文件时期完全一致（一个不丢）。"""
+    return FRONTEND.read_text(encoding="utf-8") + "\n" + _all_frontend_js()
+
+
+def test_frontend_js_files_node_check():
+    """node --check 逐文件校验 frontend/js/*.js 语法（B1 拆分后的前端改动回归防线）。"""
     node = shutil.which("node")
     if not node:
         pytest.skip("node 不可用，跳过前端语法校验")
-    scripts = _inline_scripts()
-    assert scripts, "index.html 应包含内联脚本"
-    for i, src in enumerate(scripts):
-        fd = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
-        fd.write(src)
-        fd.close()
-        try:
-            r = subprocess.run([node, "--check", fd.name], capture_output=True,
-                               text=True, timeout=60)
-        finally:
-            Path(fd.name).unlink(missing_ok=True)
-        assert r.returncode == 0, f"内联脚本 #{i} 语法错误：{r.stderr[:600]}"
+    files = sorted(FRONTEND_JS.glob("*.js"))
+    assert files, "frontend/js/ 应存在拆分后的 JS 文件"
+    for f in files:
+        r = subprocess.run([node, "--check", str(f)], capture_output=True,
+                           text=True, timeout=60)
+        assert r.returncode == 0, f"{f.name} 语法错误：{r.stderr[:600]}"
+
+
+def test_index_html_scripts_are_external_only():
+    """B1 拆分验收锁：index.html 不得再含内联 <script> 代码（仅允许 src 外链引用）；
+    引用的 JS 文件与 frontend/js/ 实际文件一一对应，加载顺序 util 最先 / app 最后。"""
+    html = _frontend_source()
+    tags = re.findall(r"<script\b([^>]*)>", html)
+    assert tags, "index.html 应存在 <script> 引用"
+    for attrs in tags:
+        assert "src=" in attrs, f"存在内联 <script>（应全部外链）：{attrs}"
+    srcs = re.findall(r'<script src="/js/([^"]+)"></script>', html)
+    assert srcs, "index.html 应按 /js/*.js 外链引用拆分脚本"
+    assert srcs[0] == "util.js" and srcs[-1] == "app.js", \
+        "加载顺序必须 util 最先（工具/转义）/ app 最后（boot/事件绑定）"
+    on_disk = {f.name for f in FRONTEND_JS.glob("*.js")}
+    assert set(srcs) == on_disk, f"引用与实际文件不一致：{srcs} vs {on_disk}"
 
 
 def test_task5_task6_frontend_markers_present():
     """新增功能关键标记存在：应用日志卡片（任务5）/ 重提链 UI（任务6）/ esc 转义纪律。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 任务5：应用日志 tail 卡片
         "appLogView", "appLogN", "loadAppLogs", "admin/logs?lines=",
@@ -71,7 +79,7 @@ def test_task1234_frontend_markers_present():
     - 任务1：ICON.myconsults 图标（「undefined我的会诊」根因）+ 概览 humanizeAudit 全覆盖；
     - 任务3：空响应兜底文案 + admin 留痕模式开关卡（config-toggle）；
     - 任务4：审核中心 tab 未读徽标。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 任务1：myconsults 导航图标（缺失时 renderRail 渲染出 "undefined我的会诊"）
         "myconsults:'<svg",
@@ -90,7 +98,7 @@ def test_diag_fixes_frontend_markers_present():
     - 诊断1：imaging 视图「图片已发送」提示（区分待发送图与历史已发送图）；
     - 诊断2：admin 留痕模式开关卡显示 runtime_flags 当前值来源 + 变更 toast；
     - 诊断3：uploadKb 失败提示带 HTTP 状态码+响应原因（不再吞原因）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 诊断1：输入区「已发送」提示 + imaging 专属触发
         "sentImgHint", "showSentHint", "图片已发送，如需继续问诊请重新上传",
@@ -117,7 +125,7 @@ def test_humanize_audit_consult_events_node():
     node = shutil.which("node")
     if not node:
         pytest.skip("node 不可用，跳过 humanizeAudit 单测")
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     fn = _extract_fn(html, "humanizeAudit")
     cases = [
         # [输入事件, 期望人话化输出]
@@ -168,7 +176,7 @@ def test_front_5fixes_markers_present():
     - 任务3：humanizeAudit consult_* 事件人话化映射；
     - 任务4：日志健康卡（路径/大小/总行数元数据 + ERROR/WARNING 行高亮）；
     - 任务5：KB 上传成功（含轮询 done）后刷新列表与向量总数。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 任务1：POST /consults 200 回调里关闭确认弹窗（复用共享 closeModal）
         "closeModal();  /* 任务1：发起成功自动关闭确认弹窗",
@@ -197,7 +205,7 @@ _EMOJI_ALLOW = {"⚠", "✓", "✗"}  # 文本符号（错误提示/连通性文
 def test_no_emoji_icons_remain():
     """任务2 回归锁：前端不得残留 emoji 图标（如 📌/🔬/👨‍⚕️，含 ZWJ/FE0F 组合件）；
     ⚠/✓/✗ 为文本提示符号（错误文案），显式豁免。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     bad = sorted({c for c in _EMOJI_RE.findall(html) if c not in _EMOJI_ALLOW})
     assert not bad, f"残留 emoji 图标：{bad}"
 
@@ -212,7 +220,7 @@ def test_review_thumbs_frontend_markers_present():
     - grid 多图布局样式（.review-thumbs，每图 max-height 120px）+ 点击复用 showImg 放大。
     问题2 语义变更注明：pharmacist「药物待核对」表已随两药快查下线移除，原
     mountReviewThumbs(drugItems.concat(sliceM)) 相应回归 mountReviewThumbs(sliceM)。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         "function reviewThumbStrip(", "function mountReviewThumbs(",
         "data-rthumbs",            # 行内占位容器（reviewRow / myConfirmRow 各一处 + 挂载查询）
@@ -238,7 +246,7 @@ def test_admin_panel_layout_markers_present():
     """任务3 排版标记锁：admin 数据面板 .dash 改 masonry 式（CSS columns:2 自动均衡），
     留痕模式卡紧邻审计流（DOM 顺序即列内顺序）；卡片 break-inside:avoid 不跨列截断；
     高度动态变化（审计流展开/用户表增删）时浏览器自动重排，任何卡片下方不留大块空白。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     assert ".dash{columns:2;column-gap:16px}" in html, "缺少 masonry 双列样式"
     assert ".dash>.panel{break-inside:avoid;margin:0 0 16px}" in html, "缺少卡片不跨列截断样式"
     assert "@media(max-width:1024px){.dash{columns:1}}" in html, "缺少窄屏单列回落"
@@ -255,7 +263,7 @@ def test_admin_panel_layout_markers_present():
 def test_resubmit_jump_markers_present():
     """任务1（本批次）标记锁：我的质控驳回「重新提交」→ 切质控工作台视图（go('qc')）
     + 滚动定位到病历表单（scrollIntoView）+ 表单短暂高亮（.qc-flash CSS 边框闪烁，2s 移除）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         'id="qcFormCard"',                       # 病历表单卡定位锚点
         "@keyframes qcFlash", ".qc-flash{",      # 边框闪烁动画样式
@@ -273,7 +281,7 @@ def test_pharm_sign_markers_present():
     （审核中心=开药待审+我的历史+药品字典/规则管理 tab），原「药物高危待核对（需药剂科复核）」
     「审核中心 · 药剂科药物核对」等断言随之更新为问题2 后的界面形态；
     canSignItem 的 drug 签字权矩阵保留（后端权限矩阵未变，作防御性兜底）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         "function canSignItem(",                       # 签字权按 agent 分流
         # 问题4 收窄后的 drug 签字权矩阵（原 ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist' 已移除 qc）
@@ -294,7 +302,7 @@ def test_pharm_sign_markers_present():
 
 def test_humanize_full_map_markers_present():
     """任务3（本批次）标记锁：humanizeAudit 显式映射表（MAP）+ 覆盖回归锁配套注释。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         "const MAP={",
         "tests/test_audit_humanize_coverage.py",  # 映射表头注释指向覆盖回归锁
@@ -317,7 +325,7 @@ def test_phase0_frontend_markers_present():
       chat 免责条），0.2 的 drug 视图标记随新结构移除；drug 类历史驳回仍可在
       审核中心历史与审计流中回溯，相关断言并入 test_phase3_rx_frontend_markers_present
       的「独立入口已删」反向锁。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 0.1：结构化逐栏直填 + 预填内容计数（签名栏 i=6 锁定当前账号不回填）
         "let filled=0;",
@@ -342,7 +350,7 @@ def test_phase3_rx_frontend_markers_present():
     - 3.2 药剂科开药审核队列：开药待审区 + 通过/驳回（驳回必填意见）+ forced 红标；
     - 3.3 我的处方：状态徽章（pending_pharm 黄/approved 绿/rejected 红/draft 灰）+
       驳回意见 + 重写回填（提交走 rewrite 自动重提）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 3.1 开药工作台：导航与视图骨架
         "{k:'rx',t:'开药工作台'}", 'id="scr-rx"', "function loadRx(",
@@ -393,7 +401,7 @@ def test_rx_review_ux_fixes_frontend_markers_present():
       切换 rx 视图/提交处方/登录后刷新；点进「我的处方」本地清零）；
     - 问题3：处方卡与核对详情显示审核人+操作时间（pharm_reviewed_at / resolved_at），
       审核 history 行同理带操作时间。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 问题1：「我的历史」过滤含本人作为审核人的记录
         "i.submitted_by===reviewMe||i.reviewed_by===reviewMe",
@@ -421,7 +429,7 @@ def test_rx_round2_suggest_sync_markers_present():
     """问题1 标记锁：renderRxSuggest 渲染时对 checked=true 的建议项同步调用加入药单
     函数（rxPick）——勾选框默认选中必须程序化触发加入逻辑（去重：药名+剂量相同不重复加），
     已选药单不再为空（用户取消勾选再勾选才加入的回退被锁定）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     fn = _extract_fn(html, "renderRxSuggest")
     assert "rxPick(i,true)" in fn, "renderRxSuggest 必须对勾选项同步调用加入药单函数 rxPick"
     assert "!s.pick" in fn, "仅同步 checked=true 的建议项"
@@ -437,7 +445,7 @@ def test_rx_round2_review_badge_markers_present():
     下线移除，不再拉取 /review/pending）；原 pharmacist=drug 待核对+待审处方、
     title="待办：药物核对/待审处方" 断言随之更新；qc=其它助手高危项（问题4 收权后
     不审 drug/开药），admin=全部待核对+待审处方不变。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         "function refreshReviewBadge(",                    # 角标数据刷新函数
         "reviewTodoCount",                                 # 角标数状态
@@ -462,7 +470,7 @@ def test_rx_round2_reviewed_history_markers_present():
     """问题3 标记锁：①「我的历史」前端过滤含本人作为审核人的记录（既有锁保持）；
     ②pharmacist 拉取 GET /prescriptions/reviewed-by-me 并在「我的历史」tab 合并渲染
     处方审核记录（rxHistRow 专用行：rid/状态/意见/时间）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         "prescriptions/reviewed-by-me",                    # 问题3② 新端点调用
         "rxHistoryItems",                                  # 处方审核历史缓存
@@ -484,7 +492,7 @@ def test_rx_round2_qc_scope_markers_present():
     问题2 语义变更注明（本轮）：drug 过滤从「仅 qc」（!(ROLE==='qc'&&agent==='drug')）
     收紧为**所有角色**统一过滤 i.agent!=='drug'（含 pharmacist/admin——两药快查下线，
     遗留 drug 队列已清理且不再入队，界面彻底不见 drug 项）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     fn = _extract_fn(html, "rxPendingSection")
     assert "ROLE!=='pharmacist'&&ROLE!=='admin'" in fn, \
         "开药待审区必须仅 pharmacist/admin 渲染（qc/doctor 恒空串）"
@@ -502,7 +510,7 @@ def test_review_race_guard_frontend_markers_present():
     - reviewLoadSeq 模块级序号；loadReview 入口 const seq=++reviewLoadSeq 取号；
     - loadReviewMine(b,seq) 承接同一序号（qc/admin 与 mine 两路径同守卫）；
     - 每个 await 后 if(seq!==reviewLoadSeq)return 丢弃过期响应（含 catch 分支）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         "let reviewLoadSeq=0",
         "const seq=++reviewLoadSeq",
@@ -520,7 +528,7 @@ def test_drug_purge_frontend_markers_present():
     ③后端 drug 入队分支注入「不再入队」注记注释（行为不变）；
     ④清理脚本就位（scripts/purge_drug_review_items.py）；
     ⑤pg_store 新增 purge_drug_reviews（PG 镜像清理配套）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     # 反向锁针对 UI 字面量（注释中的「语义变更注明」不计）：tab 标签与 drug 待核对表头已移除
     assert "ph?'药物待核对'" not in html, "pharmacist 待处理 tab 标签「药物待核对」应已移除"
     assert "药物高危待核对（需药剂科复核）" not in html, "drug 待核对表头应已移除"
@@ -547,7 +555,7 @@ def test_drug_dict_manage_frontend_markers_present():
     函数保留供 pharmacist tab 使用；admin 编辑权限后端不变（兜底）。原正向锁
     「renderDrugDictEditor(document.getElementById('drugDictPanel'))」随挂载点删除，
     改为反向锁（卡片/容器/挂载函数不得残留）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         'id="tabDrugDict"', 'id="tabDrugRules"',
         "switchReviewTab('drugdict')", "switchReviewTab('drugrules')",
@@ -580,7 +588,7 @@ def test_admin_dict_card_removed_frontend_markers():
     """阶段4 任务1 反向锁（防回退）：admin 数据面板药品字典卡已移除——
     卡片标题/容器 id=drugDictPanel/挂载函数 loadDrugDictPanel 均不得残留；
     删除注记必须存在（标明 admin 卡删除与渲染调用移除的原因/兜底语义）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for gone in (
         'id="drugDictPanel"',                # admin 卡容器
         "药品字典（可编辑",                    # admin 卡标题
@@ -607,7 +615,7 @@ def test_phase4_case_archive_frontend_markers_present():
       record 展开详情（esc 后 <pre>）+ 移除按钮（data-act="ca-remove"）；
     - remove 必填原因：空值 toast 阻断 + /case-archive/{id}/remove 端点；
     - doctor 病历质控视图「我的归档」小节（loadQcArch + /case-archive/mine，只读）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     for marker in (
         # 病例库 tab（qc/admin）
         'id="tabCaseArchive"', "switchReviewTab('casearchive')", "if(t==='casearchive')return loadCaseArchive();",
@@ -650,7 +658,7 @@ def test_phase6_dedemo_frontend_markers_removed():
       病历录入走「粘贴整段病历 → qcParsePaste 拆分」或手动填写）；
     - 登录页无「演示账号」用户可见字样（账号由管理员统一开通；
       演示账号的前提条件与说明仅存在于 README / docs/DEPLOY.md）。"""
-    html = FRONTEND.read_text(encoding="utf-8")
+    html = _frontend_source()
     assert "qcSample" not in html, "qcSample() 假病历一键填充必须保持移除（商用不得一键注入虚构病历）"
     assert "填入示例" not in html, "「填入示例」按钮必须保持移除（阶段6 去demo）"
     assert "演示账号" not in html, "用户可见界面不应出现「演示账号」字样（改中性文案，演示账号说明放文档）"

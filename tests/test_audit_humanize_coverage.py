@@ -48,9 +48,10 @@ def _backend_actions() -> set:
 
 
 def _humanize_map_keys() -> set:
-    """前端 humanizeAudit 内 MAP 映射表键集（复用 test_frontend_syntax 的函数提取器）。"""
-    from tests.test_frontend_syntax import _extract_fn
-    fn = _extract_fn(FRONTEND.read_text(encoding="utf-8"), "humanizeAudit")
+    """前端 humanizeAudit 内 MAP 映射表键集（复用 test_frontend_syntax 的函数提取器；
+    B1 拆分后 humanizeAudit 位于 frontend/js/util.js，从拼接 JS 全文提取）。"""
+    from tests.test_frontend_syntax import _all_frontend_js, _extract_fn
+    fn = _extract_fn(_all_frontend_js(), "humanizeAudit")
     start = fn.index("const MAP={")
     block = fn[start:fn.index("\n  };", start)]
     keys = set(re.findall(r"(?m)^\s{4}([a-z_][a-z_0-9]*):", block))
@@ -85,8 +86,8 @@ def test_representative_mappings_node():
     node = shutil.which("node")
     if not node:
         pytest.skip("node 不可用，跳过 humanizeAudit 单测")
-    from tests.test_frontend_syntax import _extract_fn
-    fn = _extract_fn(FRONTEND.read_text(encoding="utf-8"), "humanizeAudit")
+    from tests.test_frontend_syntax import _all_frontend_js, _extract_fn
+    fn = _extract_fn(_all_frontend_js(), "humanizeAudit")
     cases = [
         # [输入事件, 期望人话化输出]
         [{"event": "drug", "action": "answered", "payload": {"conf": 0.86, "review": True}},

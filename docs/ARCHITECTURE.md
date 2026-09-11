@@ -19,7 +19,29 @@ Browser(SPA) ──Bearer──▶ FastAPI
 
 ## 分层
 
-- **入口/前端** `backend/main.py` + `frontend/index.html`：自包含 SPA（Linear/DESIGN.md 风格：冷灰+钴蓝、SVG 图标、无渐变、状态语义、骨架/空态）。FastAPI 挂静态根路由 + CORS + 观测中间件（请求计数/时延/X-Request-Id）。
+- **入口/前端** `backend/main.py` + `frontend/index.html` + `frontend/js/*.js`（Linear/DESIGN.md 风格：冷灰+钴蓝、SVG 图标、无渐变、状态语义、骨架/空态）。FastAPI 挂静态根路由 + `/js` StaticFiles + CORS + 观测中间件（请求计数/时延/X-Request-Id）。
+
+### 前端拆分工程决策（B1 重构，2026-09-12）
+
+`index.html`（原 2906 行单文件，内联脚本约 2430 行）拆为 HTML/CSS + 7 个 JS 文件，
+按既有代码分区边界连续块搬运，**不改任何函数体**，标记锁测试断言集合不变：
+
+| 文件 | 内容 | 加载序 |
+|---|---|---|
+| `js/util.js` | esc/humanize/toast/confirmDanger/md/compressImage 等纯工具 | 1（最先） |
+| `js/state.js` | ICON/AGENTS/ROLE_NAV/CFG/会话历史等常量与全局状态 | 2 |
+| `js/api.js` | token/auth/apiGet/apiPost/loadConfig（fetch 封装） | 3 |
+| `js/views_core.js` | 登录/导航/概览 | 4 |
+| `js/views_assist.js` | 文献问答/影像/MDT 会诊/跨科室会诊/开药工作台 | 5 |
+| `js/views_admin.js` | 审核中心/质控/知识库/数据面板/字典与规则管理 | 6 |
+| `js/app.js` | boot/全局事件绑定/init | 7（最后） |
+
+**刻意不转 ESM**：2800 行单作用域改 ESM 需全量 import/export 机械改写，运行时错误
+`node --check` 查不出，风险不可控；本轮先拿「文件组织」的收益——多 script 文件共享
+全局作用域（顶层 `function` 声明即全局函数，`let/const` 全局词法绑定跨 script 可见），
+`index.html` 按依赖顺序 `<script src="/js/…">` 引用（util 最先 / app 最后），
+CSP `script-src 'self'` 已覆盖外链脚本。**ESM 转换作为后续增量轮**（届时按文件补
+import/export 并以 Playwright 全链路兜底）。
 - **API 层** `backend/api/v1/`：
   - `auth/` 登录/刷新/`/me`；`deps.py` Bearer 校验 + 角色 + 滑动窗口限流。
   - `medical/medical_router.py` 4 agent + MDT + 审核中心；AskResp 携 `confidence / needs_human_review / sources / review_id / evidence`。

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.config import settings
 from backend.api.deps import require_role
@@ -135,6 +136,11 @@ app.add_middleware(AuditChannelMiddleware)
 app.include_router(medical_router, prefix="/api/v1/medical")
 app.include_router(auth_router, prefix="/api/v1")
 
+# 拆分后前端 JS 静态服务（B1 重构）：index.html 仅保留 HTML/CSS + <script src> 引用，
+# /js/* 由 StaticFiles 托管（同源自源，CSP script-src 'self' 已覆盖外链脚本）；
+# 挂载在 API 路由之后，不与 /api/*、/healthz 等冲突。
+app.mount("/js", StaticFiles(directory=os.path.join(FRONTEND_DIR, "js")), name="frontend_js")
+
 
 @app.middleware("http")
 async def _observability(request: Request, call_next):
@@ -148,8 +154,9 @@ async def _observability(request: Request, call_next):
     return response
 
 
-# 基础安全响应头：所有响应统一携带。'unsafe-inline' 为有意保留——前端是自包含单文件 SPA
-# （内联 <script> 与 onclick 处理器），去掉会导致整站不可用；其余指令已收敛加载面。
+# 基础安全响应头：所有响应统一携带。'unsafe-inline' 为有意保留——前端 HTML 仍有内联
+# onclick/onsubmit 处理器（JS 本体已拆分为 /js/*.js 外链文件），去掉会导致整站不可用；
+# 其余指令已收敛加载面。
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",

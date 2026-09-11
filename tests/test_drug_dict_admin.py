@@ -216,8 +216,9 @@ def test_drug_dict_manage_audit(env):
 # ---- 阶段1.4：前端免责声明文案与后端同源锁定 + admin 卡/部署文档就位 ----
 
 def test_frontend_disclaimer_matches_backend_and_docs():
+    from tests.test_frontend_syntax import _frontend_source
     from backend.core.drug_dict import DISCLAIMER
-    html = (BASE / "frontend" / "index.html").read_text(encoding="utf-8")
+    html = _frontend_source()  # B1 拆分后：DRUG_DISCLAIMER 位于 frontend/js/state.js，全文拼接断言
     m = re.search(r"DRUG_DISCLAIMER='([^']+)'", html)
     assert m, "前端应定义 DRUG_DISCLAIMER 常量"
     assert m.group(1) == DISCLAIMER, "前端文案须与后端 drug_dict.DISCLAIMER 逐字一致"

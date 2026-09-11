@@ -304,9 +304,10 @@ def test_consult_images_cap_eleven_rejected(monkeypatch, tmp_path):
 def test_mdt_images_frontend_markers_present():
     """轮 B1 前端标记锁：会诊发起框图片上传（复用 compressImage + ≤10 计数）、
     发起请求随单带图并在成功后清空、收件箱/「我的会诊」详情缩略图渲染
-    （data:image 白名单 + esc 转义 + 点击 showImg 放大）。"""
-    html = (Path(__file__).resolve().parent.parent / "frontend" / "index.html").read_text(
-        encoding="utf-8")
+    （data:image 白名单 + esc 转义 + 点击 showImg 放大）。
+    B1 拆分后：标记统一在 index.html + frontend/js/*.js 拼接源上断言（集合不变）。"""
+    from tests.test_frontend_syntax import _frontend_source
+    html = _frontend_source()
     for marker in (
         # 发起框上传组件（独立于聊天输入区 curImages）
         'id="consultImg"', "let consultImages=[]",

@@ -261,8 +261,10 @@ def test_json_fallback_minimal_diff(env):
 # ---- 前端标记锁：徽章/筛选/批量按钮/覆盖率/humanizeAudit reviewed 映射 ----
 
 def test_frontend_review_markers_present():
-    """前端标记锁（防回退）：相互作用规则 tab 审校工具链四件套 + 人话映射配套。"""
-    html = (BASE / "frontend" / "index.html").read_text(encoding="utf-8")
+    """前端标记锁（防回退）：相互作用规则 tab 审校工具链四件套 + 人话映射配套。
+    B1 拆分后：标记统一在 index.html + frontend/js/*.js 拼接源上断言（集合不变）。"""
+    from tests.test_frontend_syntax import _frontend_source
+    html = _frontend_source()
     for marker in (
         # 统计头覆盖率文案（如「审校 42/318 · 高危 12/135」）
         "审校 ${esc(String(", "· 高危 ${esc(String(",

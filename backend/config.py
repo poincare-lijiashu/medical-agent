@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # 基础设施
     milvus_uri: str = "http://127.0.0.1:19531"
     milvus_token: str = ""
+    # DR 发现②加固：Milvus 检索线程级看门狗超时（秒）。停机后已缓存客户端的 RPC 可能
+    # 挂起 ~7.5min（客户端 timeout=10 不生效），asyncio.to_thread 的 await 侧无法提前
+    # 中断——检索调用统一套本超时（超时抛 MilvusTimeout → 重建客户端重试一次 →
+    # 仍失败走既有降级语义）。测试可注入小值（如 0.5s）避免真等 20s。
+    milvus_retrieve_timeout_s: float = 20.0
     pg_host: str = "127.0.0.1"
     pg_port: int = 5433
     pg_user: str = "eduagent"

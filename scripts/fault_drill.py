@@ -242,11 +242,15 @@ def scenario_milvus(client: httpx.Client, t_doc: str) -> None:
 
         r = client.get("/healthz", timeout=30)
         row("停机·healthz", "200", str(r.status_code), r.status_code == 200)
-        # 排空首请求（DR 实测：stale gRPC 通道首个 RPC 挂起 ~7.5min，timeout=10 不生效；
-        # 首请求错误冒泡后通道转入快速失败，后续 ask 秒级降级）——不作为断言行
-        drain = probe_lit_ask(client, t_doc, timeout=900)
+        # 排空首请求并计时（DR 实测：加固前 stale gRPC 通道首个 RPC 挂起 ~7.5min；
+        # 看门狗加固后：20s 超时 + 重建客户端失败即降级 → 停机响应必须 <30s）
+        t0 = time.monotonic()
+        drain = probe_lit_ask(client, t_doc, timeout=60)
+        drain_s = time.monotonic() - t0
         print(f"  [排空] 首个停机 ask 返回：{drain['status']} degraded={drain['degraded']} "
-              f"{drain['detail'][:60]}")
+              f"{drain['detail'][:60]} 耗时 {drain_s:.1f}s")
+        row("停机·首个 ask 响应时间(看门狗加固)", "<30s（不再 7.5min 挂起）",
+            f"{drain_s:.1f}s", drain_s < 30)
         d = probe_lit_ask(client, t_doc)
         row("停机·literature/ask 降级语义", "200 + 降级(fallback/空来源) 不 500",
             f"{d['status']} degraded={d['degraded']} {d['detail'][:60]}",
