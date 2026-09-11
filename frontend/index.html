@@ -241,6 +241,9 @@
     <section class="screen" id="scr-chat">
       <div class="shead"><div><h2 id="cTitle"></h2><p id="cDesc"></p></div>
         <div class="spacer"></div><button class="btn secondary sm" onclick="newChat()">新建对话</button></div>
+      <!-- 阶段1.4：药物助手免责声明条（仅 drug 视图显示；文案与后端 drug_dict.DISCLAIMER
+           逐字同源，由 tests/test_drug_dict_admin.py 锁定一致，动态下发留待阶段3） -->
+      <div class="src" id="drugDisclaimer" style="display:none;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--rail)"></div>
       <div class="body" id="msgs"></div>
       <div class="composer">
         <div class="crow">
@@ -575,8 +578,13 @@ function go(k){
   else{document.getElementById('scr-chat').classList.add('on');setupChat(k);}
   renderRail();
 }
+/* 阶段1.4：药物助手免责声明（与后端 backend/core/drug_dict.py 的 DISCLAIMER 逐字同源，
+   由 tests/test_drug_dict_admin.py 锁定一致性；改为后端下发留待阶段3 开药工作台） */
+const DRUG_DISCLAIMER='药品数据由 AI 辅助生成，临床使用前必须经执业药师核对；本系统仅供辅助决策，不构成医疗建议。';
 function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textContent=a.name;
   document.getElementById('cDesc').textContent=a.desc;document.getElementById('input').placeholder=a.hint;
+  /* 阶段1.4：免责声明条仅 drug 视图显示 */
+  const dd=document.getElementById('drugDisclaimer');dd.textContent='⚠ '+DRUG_DISCLAIMER;dd.style.display=(k==='drug')?'':'none';
   document.getElementById('attach').style.display=a.imageOk?'inline-flex':'none';clearImg();
   const inp=document.getElementById('input');  /* 任务2：恢复本视图独立草稿（切视图不串字） */
   inp.value=chatInput[k]||'';inp.style.height='auto';
@@ -1569,6 +1577,10 @@ function humanizeAudit(e){
     user_deleted:()=>`删除了用户 ${p.user||'—'}`,
     department_added:()=>`新增了科室 ${p.name||'—'}`,
     department_removed:()=>`删除了科室 ${p.name||'—'}`,
+    /* 阶段1.5：药品字典/规则管理变更（payload 带 target=dict|rules；dict 带 name，rules 带药对） */
+    drug_dict_changed:()=>p.target==='rules'
+      ?`${p.action==='add'?'新增了':p.action==='update'?'更新了':'删除了'}相互作用规则（${p.drug_a||'—'} × ${p.drug_b||'—'}）`
+      :`${p.action==='add'?'新增了':p.action==='update'?'更新了':'删除了'}药品字典条目 ${p.name||'—'}`,
     llm_add:()=>`新增了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
     llm_remove:()=>`删除了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
     llm_activate:()=>`激活了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
@@ -1768,6 +1780,11 @@ async function loadData(){
             <button class="btn primary sm" id="deptAddBtn">新增科室</button>
           </div>
         </div>
+        <!-- 阶段1.5：药品字典卡（只读基础版：stats+搜索+免责声明；增删改走 POST /admin/drug/*，
+             UI 打磨与开药工作台一并留阶段3） -->
+        <div class="panel"><h3>药品字典（只读 · AI 辅助生成，临床使用前须经执业药师核对）</h3>
+          <div id="drugDictPanel"><div class="src" style="padding:10px 16px">加载中…</div></div>
+        </div>
     </div>
     <div class="panel" style="margin-top:16px"><h3>基础设施（只读状态 · 重启命令仅供复制，系统不代执行）</h3><div id="infraRows" style="padding:8px 16px 12px">${infraRows}</div></div>
     <!-- 任务5 + 本批次：应用日志「健康卡」（GET /admin/logs 只读；行可能含用户输入，逐行 esc 防注入） -->
@@ -1792,6 +1809,7 @@ async function loadData(){
   /* 科室管理卡片 + 新增用户科室下拉（数据源 GET /admin/departments） */
   document.getElementById('deptAddBtn').onclick=addDept;
   loadDeptPanel();
+  loadDrugDictPanel();  /* 阶段1.5：药品字典卡随面板加载 */
   apiGet('/admin/llm/providers').then(renderLlm).catch(()=>{const el=document.getElementById('llmPanel');
     if(el)el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 模型配置加载失败</div>';});
 }
@@ -1839,6 +1857,44 @@ async function deleteDept(name){
 if(!window.__deptDelegate){window.__deptDelegate=true;document.addEventListener('click',e=>{
   const b=e.target.closest('button[data-act="dept-del"]');if(!b)return;
   deleteDept(b.dataset.name);});}
+
+/* ---- 阶段1.5：admin「药品字典」卡（GET /drug/dict 只读：stats+前端过滤搜索+免责声明）----
+   管理端点（POST /admin/drug/dict|rules，admin/pharmacist）本轮仅后端落地 + 审计，
+   增删改按钮随阶段3 开药工作台一起打磨。 */
+let drugDictCache={drugs:[],stats:null};
+async function loadDrugDictPanel(){
+  const el=document.getElementById('drugDictPanel');if(!el)return;
+  try{
+    const d=await apiGet('/drug/dict');
+    drugDictCache={drugs:d.drugs||[],stats:d.stats||{}};
+    const st=d.stats||{};
+    const cats=Object.entries(st.categories||{}).sort((a,b)=>b[1]-a[1])
+      .map(([k,v])=>`<span class="chip mid">${esc(k)} ${esc(String(v))}</span>`).join(' ');
+    el.innerHTML=`<div class="src" style="padding:8px 16px 0">⚠ ${esc(d.disclaimer||DRUG_DISCLAIMER)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 16px 4px">
+        <span class="chip ok"><span class="dot"></span>药品 ${esc(String(st.drugs??'—'))} 种</span>
+        <span class="chip warn"><span class="dot"></span>规则 ${esc(String(st.rules??'—'))} 条（高危 ${esc(String(st.high??'—'))} / 中危 ${esc(String(st.mid??'—'))}）</span>
+        ${cats?`<span class="src">分类分布：</span>${cats}`:''}
+      </div>
+      <div style="display:flex;gap:8px;padding:4px 16px 10px;align-items:center">
+        <input class="inp" id="drugDictSearch" placeholder="搜索药品名/别名/商品名/分类（前端过滤）" aria-label="搜索药品字典" style="flex:1;min-width:180px" autocomplete="off"
+          oninput="filterDrugDict(this.value)">
+      </div>
+      <ul class="feed" id="drugDictList" style="max-height:260px;overflow:auto"></ul>`;
+    filterDrugDict('');
+  }catch(e){el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 药品字典加载失败（需登录）</div>';}
+}
+function filterDrugDict(q){
+  const ul=document.getElementById('drugDictList');if(!ul)return;
+  const s=String(q||'').trim().toLowerCase();
+  const hits=(drugDictCache.drugs||[]).filter(d=>{
+    if(!s)return true;
+    const hay=[d.name,d.category,...(d.aliases||[]),...(d.brand_names||[])].join(' ').toLowerCase();
+    return hay.includes(s);});
+  ul.innerHTML=hits.length?hits.map(d=>`<li><span class="e">${esc(d.name)}</span>
+      <span class="src">${esc(d.category||'其他')}${d.level?' · '+esc(d.level):''}${(d.aliases||[]).length?' · 别名：'+esc((d.aliases||[]).join('、')):''}</span></li>`).join('')
+    :'<li><span class="a">无匹配药品</span></li>';
+}
 
 /* ---- F6 模型配置管理（admin 数据面板）---- */
 let _llmData=null;

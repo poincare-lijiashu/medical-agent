@@ -53,6 +53,10 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - 容器部署时应用 stdout 由 `docker logs <容器名>` 收集（本地直跑则输出到控制台）；**合规留存以 PG `audit_log` 双写为准**（JSONL 为本地兜底真源）。
 - 如需集中检索，可外接 Loki/ELK：stdout 已结构化（JSON 行），采集器可直接解析入库。
 
+## 药品数据免责声明
+
+药品字典与相互作用规则由 AI 辅助生成（种子库 curated_v2 + AI 初稿），仅作临床决策辅助参考，不构成医疗建议；临床使用前必须经执业药师核对。药物助手视图与数据面板「药品字典」卡明示同一免责声明（前端文案与后端 `backend/core/drug_dict.py` 的 `DISCLAIMER` 逐字同源，由测试锁定一致）；字典/规则的管理变更（`POST /admin/drug/dict`、`/admin/drug/rules`，admin/pharmacist）均写审计 `admin.drug_dict_changed` 并写透存储。
+
 ## 环境可移植性（部署清单）
 
 > 目标：同一套代码在 Windows / Linux / 容器内均可运行；GPU 是**可选加速项**，无 N 卡零配置可跑。

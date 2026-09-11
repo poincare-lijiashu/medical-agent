@@ -436,6 +436,114 @@ async def drug_dict_list(user: dict = Depends(require_user)):
             "stats": await asyncio.to_thread(dd.stats)}
 
 
+# ---------- admin 药品字典/规则管理（阶段1.5）：add/update/delete 三 action，写透 + 审计 ----------
+_DRUG_DICT_ACTIONS = ("add", "update", "delete")
+_DRUG_RULE_SEVERITIES = ("高危", "中危")  # 新写入口径：legacy「禁忌」仅存量保留，不再接受
+
+
+class DrugDictManageReq(BaseModel):
+    """字典/规则管理请求体：{action, item}；item 形态随端点不同（药品条目/规则条目）。"""
+    action: str
+    item: dict
+
+
+@router.post("/admin/drug/dict")
+async def admin_drug_dict_manage(req: DrugDictManageReq,
+                                 user: dict = Depends(require_role("admin"))):
+    """药品字典管理（admin）：action=add/update/delete，item 按 name 定位、整体替换。
+    变更经 save_dict 写透（JSON 原子写兜底 + PG 全量同步）并刷新进程内缓存
+    （save 内部失效别名图，查询热路径无需重启即生效）；审计 admin.drug_dict_changed。
+    非法项 422：name 必填；add 重名 / update、delete 目标不存在 / 未知 action 均拒绝。"""
+    from backend.core import drug_dict as dd
+    action = (req.action or "").strip().lower()
+    if action not in _DRUG_DICT_ACTIONS:
+        raise HTTPException(422, "action 需为 add/update/delete")
+    name = str((req.item or {}).get("name") or "").strip()
+    if not name:
+        raise HTTPException(422, "name 必填")
+    drugs = await asyncio.to_thread(dd.load_dict)
+    idx = next((i for i, d in enumerate(drugs)
+                if str(d.get("name") or "").strip() == name), -1)
+    if action == "add" and idx >= 0:
+        raise HTTPException(422, f"药品已存在：{name}")
+    if action in ("update", "delete") and idx < 0:
+        raise HTTPException(422, f"药品不存在：{name}")
+    if action == "delete":
+        drugs.pop(idx)
+    else:
+        item = dict(req.item)  # 拷贝后再写，避免污染请求对象
+        # 别名/商品名仅接受字符串列表，非法形态归一为空数组（防下游 alias_map 迭代异常）
+        for k in ("aliases", "brand_names"):
+            if not (isinstance(item.get(k), list)
+                    and all(isinstance(a, str) for a in item[k])):
+                item[k] = []
+        item["name"] = name
+        if idx >= 0:
+            drugs[idx] = item
+        else:
+            drugs.append(item)
+    await asyncio.to_thread(dd.save_dict, drugs)
+    actor = user.get("username", "admin")
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin",
+                            action="drug_dict_changed", actor=actor,
+                            payload={"target": "dict", "action": action, "name": name})
+    await pg_store.mirror_audit("admin.drug_dict_changed", actor,
+                                {"target": "dict", "action": action, "name": name})
+    return {"ok": True}
+
+
+@router.post("/admin/drug/rules")
+async def admin_drug_rules_manage(req: DrugDictManageReq,
+                                  user: dict = Depends(require_role("pharmacist", "admin"))):
+    """相互作用规则管理（pharmacist/admin 双角色）：语义同 /admin/drug/dict，item 按
+    规范药对（_norm_pair，与输入顺序无关）定位、整体替换。非法项 422：drug_a/drug_b
+    必填且不得相同、severity 限枚举 高危|中危。审计 admin.drug_dict_changed（带药对）。"""
+    from backend.core import drug_dict as dd
+    action = (req.action or "").strip().lower()
+    if action not in _DRUG_DICT_ACTIONS:
+        raise HTTPException(422, "action 需为 add/update/delete")
+    item = req.item or {}
+    a = str(item.get("drug_a") or "").strip()
+    b = str(item.get("drug_b") or "").strip()
+    if not a or not b:
+        raise HTTPException(422, "drug_a/drug_b 必填")
+    if a == b:
+        raise HTTPException(422, "drug_a 与 drug_b 不能为同一药品")
+    sev = str(item.get("severity") or "").strip()
+    if action != "delete" and sev not in _DRUG_RULE_SEVERITIES:
+        raise HTTPException(422, "severity 需为 高危|中危")  # delete 按药对定位，无需 severity
+    rules = await asyncio.to_thread(dd.load_rules)
+    pair = pg_store._norm_pair(a, b)
+    idx = next((i for i, r in enumerate(rules)
+                if pg_store._norm_pair(r.get("drug_a"), r.get("drug_b")) == pair), -1)
+    if action == "add" and idx >= 0:
+        raise HTTPException(422, f"规则已存在：{pair[0]} × {pair[1]}")
+    if action in ("update", "delete") and idx < 0:
+        raise HTTPException(422, f"规则不存在：{pair[0]} × {pair[1]}")
+    if action == "delete":
+        rules.pop(idx)
+    else:
+        # 药对按规范序落盘（与 pg_store UPSERT 键一致）；机制/处置缺省空串，与 _rule_row 语义对齐
+        stored = {"drug_a": pair[0], "drug_b": pair[1], "severity": sev,
+                  "mechanism": str(item.get("mechanism") or ""),
+                  "management": str(item.get("management") or ""),
+                  "source": str(item.get("source") or "admin·人工维护").strip()}
+        if idx >= 0:
+            rules[idx] = stored
+        else:
+            rules.append(stored)
+    await asyncio.to_thread(dd.save_rules, rules)
+    actor = user.get("username", "admin")
+    await asyncio.to_thread(get_audit_logger().write, event_type="admin",
+                            action="drug_dict_changed", actor=actor,
+                            payload={"target": "rules", "action": action,
+                                     "drug_a": pair[0], "drug_b": pair[1]})
+    await pg_store.mirror_audit("admin.drug_dict_changed", actor,
+                                {"target": "rules", "action": action,
+                                 "drug_a": pair[0], "drug_b": pair[1]})
+    return {"ok": True}
+
+
 @router.post("/drug/ask", response_model=AskResp)
 async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)
