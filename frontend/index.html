@@ -392,6 +392,10 @@
         <button class="btn sm ghost" id="tabHistory" onclick="switchReviewTab('history')">历史记录</button>
         <!-- 跨科室会诊：doctor/pharmacist 的「其它科室会诊协助」收件箱（qc/admin 全局档案视图隐藏） -->
         <button class="btn sm ghost" id="tabConsults" style="display:none" onclick="switchReviewTab('consults')">其它科室会诊协助</button>
+        <!-- 问题3：pharmacist 药品字典/相互作用规则管理 tab（renderReviewHeader 控制仅药剂科可见；
+             与 admin 数据面板字典卡复用同一渲染函数，写走 POST /admin/drug/* pharmacist+admin 双角色） -->
+        <button class="btn sm ghost" id="tabDrugDict" style="display:none" onclick="switchReviewTab('drugdict')">药品字典</button>
+        <button class="btn sm ghost" id="tabDrugRules" style="display:none" onclick="switchReviewTab('drugrules')">相互作用规则</button>
         <!-- 任务3：qc/admin 全局档案筛选（doctor 视图隐藏） -->
         <input class="inp" id="reviewFilter" aria-label="档案筛选" placeholder="筛选：助手/问题/提交人" spellcheck="false"
                style="max-width:220px;margin-left:auto;display:none" oninput="onReviewFilter(this.value)">
@@ -569,7 +573,7 @@ function logout(){window.removeEventListener('beforeunload',beforeUnloadGuard);w
 
 /* ---- nav ---- */
 let reviewCount=0, reviewItems=[], reviewPage=0, reviewMe='';
-let reviewTodoCount=0;  /* 本批问题2：审核中心数字角标（导航待办数）——pharmacist=drug 待核对+待审处方；admin=全部待核对+待审处方；qc=其它助手高危项（问题4 收权后 qc 不审 drug/开药）。登录 refreshReviewBadge / 进审核中心 loadReview 按服务端真值刷新 */
+let reviewTodoCount=0;  /* 本批问题2：审核中心数字角标（导航待办数）——问题2 语义变更：pharmacist=待审处方数（药物待核对区已移除）；admin=全部待核对+待审处方；qc=其它助手高危项（问题4 收权后 qc 不审 drug/开药）。登录 refreshReviewBadge / 进审核中心 loadReview 按服务端真值刷新 */
 /* 导航项单一权威源（hash 深链白名单的键集由此派生） */
 const NAV_ITEMS=[
   {g:'总览'},{k:'overview',t:'概览'},
@@ -598,11 +602,11 @@ function renderRail(){
          由 renderRail 刷新（updateConsultBadge 亦触发）。
          本批问题2+4：qc/admin/pharmacist 均改用/增用 reviewTodoCount 待办角标——
          qc 只算其它助手高危项（drug/处方审核权已收归药剂科+管理员）；
-         pharmacist=drug 待核对+待审处方；admin=全部待核对+待审处方。 */
+         问题2 语义变更：pharmacist=待审处方数（药物待核对区已移除）；admin=全部待核对+待审处方。 */
       if(ROLE==='qc'){if(reviewTodoCount)badge='<span class="tag num" title="待核对（其它助手高危项）">'+reviewTodoCount+'</span>';}
       else if(ROLE==='admin'){if(reviewTodoCount)badge='<span class="tag num" title="待核对">'+reviewTodoCount+'</span>';}
       else{const cf=(myConfirmItems||[]).length;
-        if(ROLE==='pharmacist'&&reviewTodoCount)badge+='<span class="tag red num" title="待办：药物核对/待审处方">'+reviewTodoCount+'</span>';
+        if(ROLE==='pharmacist'&&reviewTodoCount)badge+='<span class="tag red num" title="待办：待审处方">'+reviewTodoCount+'</span>';
         if(cf)badge+='<span class="tag num" title="我的待确认">'+cf+'</span>';
         if(consultPendingOps)badge+='<span class="tag red num" title="待我意见的会诊">'+consultPendingOps+'</span>';}}
     html+=`<button class="nav ${act}" data-k="${it.k}" onclick="go('${it.k}')">${ICON[it.k]}<span>${it.t}</span>${badge}</button>`;
@@ -960,15 +964,18 @@ function canSignItem(p){
   if(!p)return false;
   if(p.agent==='drug')return ROLE==='admin'||ROLE==='pharmacist';
   return canSign();}
-function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案与 tab 标签；本批次任务2：pharmacist 文案（药剂科药物核对） */
+function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案与 tab 标签；本批问题2：pharmacist 药物待核对区移除（审核中心=开药待审+我的历史+字典管理 tab） */
   const mine=!(ROLE==='qc'||ROLE==='admin');
   const ph=ROLE==='pharmacist';
   const h=document.querySelector('#scr-review .shead h2'),p=document.querySelector('#scr-review .shead p');
-  if(h)h.textContent=mine?(ph?'审核中心 · 药剂科药物核对':'审核中心 · 我的记录'):'审核中心 · 高风险双人核对';
-  if(p)p.textContent=mine?(ph?'药物高危结论需药剂科复核：您可签发/驳回药物（drug）待核对项；其它助手高危项由质控员/管理员执行':'仅显示您提交的待确认项与历史记录；签发/驳回由质控员（qc）/管理员执行'):'高风险结论需第二名医师/药师签发';
+  if(h)h.textContent=mine?(ph?'审核中心 · 药剂科':'审核中心 · 我的记录'):'审核中心 · 高风险双人核对';
+  if(p)p.textContent=mine?(ph?'开药处方由您签发/驳回；药品字典与相互作用规则在下方标签页维护（药学专业数据药剂科维护）':'仅显示您提交的待确认项与历史记录；签发/驳回由质控员（qc）/管理员执行'):'高风险结论需第二名医师/药师签发';
   const tp=document.getElementById('tabPending'),th=document.getElementById('tabHistory');
-  if(tp)tp.textContent=mine?(ph?'药物待核对':'我的待确认'):'待处理';
+  if(tp)tp.textContent=mine?(ph?'待处理':'我的待确认'):'待处理';  /* 问题2：pharmacist「药物待核对」→「待处理」（开药待审+我的待确认） */
   if(th)th.textContent=mine?'我的历史':'历史记录';
+  const tdd=document.getElementById('tabDrugDict'),tdr=document.getElementById('tabDrugRules');  /* 问题3：药品字典/相互作用规则管理 tab 仅药剂科可见 */
+  if(tdd)tdd.style.display=ph?'':'none';
+  if(tdr)tdr.style.display=ph?'':'none';
   const tc=document.getElementById('tabConsults');  /* 跨科室会诊收件箱：doctor/pharmacist 专属第三栏目 */
   if(tc)tc.style.display=mine?'':'none';
   const fi=document.getElementById('reviewFilter');  /* 档案筛选仅 qc/admin 可见 */
@@ -984,23 +991,34 @@ function switchReviewTab(t){reviewTab=t;
   document.getElementById('tabHistory').className='btn sm '+(t==='history'?'primary':'ghost');
   const tc=document.getElementById('tabConsults');  /* 第三栏目高亮与 doctor/pharmacist 同步切换 */
   if(tc)tc.className='btn sm '+(t==='consults'?'primary':'ghost');
+  const tdd=document.getElementById('tabDrugDict'),tdr=document.getElementById('tabDrugRules');  /* 问题3：字典/规则 tab 高亮同步 */
+  if(tdd)tdd.className='btn sm '+(t==='drugdict'?'primary':'ghost');
+  if(tdr)tdr.className='btn sm '+(t==='drugrules'?'primary':'ghost');
   if(t==='consults')return loadConsultInbox();  /* 会诊收件箱独立数据源（/consults/inbox），不走 renderReview */
+  if(t==='drugdict')return renderDrugDictEditor(document.getElementById('reviewBody'));  /* 问题3：药品字典管理（共享编辑器渲染进审核中心） */
+  if(t==='drugrules')return renderDrugRulesEditor(document.getElementById('reviewBody'));  /* 问题3：相互作用规则管理 */
   renderReview();}
+let reviewLoadSeq=0;  /* 问题1：审核中心加载请求序号守卫——点刷新/点审核触发的并发加载只应用
+  最新一次响应，过期响应在每个 await 后被丢弃（防旧响应后到覆盖新数据/中途置空 → 列表「时有时无」） */
 async function loadReview(){
+  const seq=++reviewLoadSeq;  /* 问题1：本批请求取号；之后每次状态写入前校验，过期即放弃 */
   const b=document.getElementById('reviewBody');renderReviewHeader();
   b.innerHTML=`<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk"></div></div>`;
-  if(!(ROLE==='qc'||ROLE==='admin'))return loadReviewMine(b);  /* 任务3：doctor/pharmacist = 我的待确认+我的历史 */
+  if(!(ROLE==='qc'||ROLE==='admin'))return loadReviewMine(b,seq);  /* 任务3：doctor/pharmacist = 我的待确认+我的历史 */
   try{const r=await fetch('/api/v1/medical/review/pending',{headers:auth()});
     if(r.status===401){logout();return;} const d=await r.json();
+    if(seq!==reviewLoadSeq)return;  /* 问题1：期间又触发了新加载 → 丢弃本批过期响应 */
     reviewItems=d.pending; reviewMe=d.me; reviewCount=d.pending.length; renderRail();
     document.getElementById('purgeBtn').style.display=(ROLE==='admin')?'inline-flex':'none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
-      /* 问题4 彻底收窄：qc 历史过滤 drug（旧遗留记录不显示，界面彻底不见 drug 项；
-         pharmacist 历史保留 drug——药剂科工作记录；admin 全量保留）。 */
-      if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending'&&!(ROLE==='qc'&&i.agent==='drug'));}catch(e){}
+      if(seq!==reviewLoadSeq)return;
+      /* 问题2 语义变更：drug 类记录**所有角色**都过滤（含 pharmacist/admin——两药快查已下线，
+         遗留 drug 队列已由 scripts/purge_drug_review_items.py 清理且不再入队，界面彻底不见 drug 项）。 */
+      if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending'&&i.agent!=='drug');}catch(e){}
     rxPendingItems=[];  /* 问题4：qc 无开药审核权（/prescriptions/pending 403），开药待审区不渲染（不拉取不留旧值） */
     if(ROLE==='admin'){
       try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 问题4 收权后仅 admin 拉取开药待审区（qc 403） */
+        if(seq!==reviewLoadSeq)return;
         if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}}
     /* 本批问题2：审核中心数字角标随数据刷新——qc=其它助手高危项（drug 除外，问题4 收权）；
        admin=全部待核对+开药待审 */
@@ -1010,36 +1028,39 @@ async function loadReview(){
     const pages=Math.max(1,Math.ceil(reviewItems.length/REVIEW_PER));
     if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
     switchReviewTab(reviewTab);
-  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+  }catch(e){if(seq!==reviewLoadSeq)return;b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
 /* 任务3：doctor/pharmacist 视图——我的待确认（self-confirm）+ 我的历史（不再是全员工作台） */
-async function loadReviewMine(b){
+async function loadReviewMine(b,seq){
   try{const r=await fetch('/api/v1/medical/review/my-pending-confirm',{headers:auth()});
     if(r.status===401){logout();return;} const d=await r.json();
+    if(seq!==reviewLoadSeq)return;  /* 问题1：过期响应丢弃 */
     myConfirmItems=d.items||[]; reviewMe=d.me||''; reviewCount=myConfirmItems.length; renderRail();
     document.getElementById('purgeBtn').style.display='none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
+      if(seq!==reviewLoadSeq)return;
       /* 开药审核 UX 问题1：「我的历史」= 本人参与的记录（submitted_by=me OR reviewed_by=me）——
-         pharmacist 签发/驳回他人提交的 drug 项后历史不再为空；他人记录仍不显示（隔离边界不放宽，
-         服务端本就只对 admin 返回全量档案、其余角色 images 收窄）。 */
-      if(h.ok)historyItems=(((await h.json()).items)||[]).filter(i=>(i.submitted_by===reviewMe||i.reviewed_by===reviewMe)&&i.status!=='pending');}catch(e){}
+         pharmacist 签发/驳回他人提交的记录后历史不再为空；他人记录仍不显示（隔离边界不放宽，
+         服务端本就只对 admin 返回全量档案、其余角色 images 收窄）。
+         问题2 语义变更：追加 drug 类过滤（所有角色一致，含 pharmacist）。 */
+      if(h.ok)historyItems=(((await h.json()).items)||[]).filter(i=>(i.submitted_by===reviewMe||i.reviewed_by===reviewMe)&&i.status!=='pending'&&i.agent!=='drug');}catch(e){}
     reviewItems=[];
-    /* 本批次任务2：pharmacist（药剂科一票）额外拉取待核对清单并只保留 drug 项——
-       药物高危结论需药剂科复核（后端 _REVIEW_ROLES 已放行 pharmacist 读 pending）；
-       doctor 维持旧形态（reviewItems 恒空）。 */
+    /* 问题2：「药物待核对」区已移除——两药快查下线后 drug 项不再入队（遗留已由
+       scripts/purge_drug_review_items.py 清理），审核中心=开药待审+我的历史
+       （+药品字典/相互作用规则管理 tab，本批问题3）。 */
     if(ROLE==='pharmacist'){
-      try{const pr=await fetch('/api/v1/medical/review/pending',{headers:auth()});
-        if(pr.ok)reviewItems=(((await pr.json()).pending)||[]).filter(i=>i.agent==='drug');}catch(e){}
       try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 阶段3.2：药剂科开药待审队列 */
+        if(seq!==reviewLoadSeq)return;
         if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}
       try{const rh=await fetch('/api/v1/medical/prescriptions/reviewed-by-me',{headers:auth()});  /* 问题3②：本人审核过的处方（「我的历史」合并渲染数据源） */
+        if(seq!==reviewLoadSeq)return;
         if(rh.ok)rxHistoryItems=(await rh.json()).items||[];}catch(e){/* 处方历史加载失败静默 */}
-      /* 本批问题2：pharmacist 待办角标=drug 待核对数+待审处方数（进入审核中心即按服务端真值刷新） */
-      reviewTodoCount=(reviewItems||[]).length+(rxPendingItems||[]).length;
+      /* 问题2 语义变更：pharmacist 待办角标只算待审处方数（drug 待核对区已移除） */
+      reviewTodoCount=(rxPendingItems||[]).length;
       renderRail();}
     else rxHistoryItems=[];  /* 非 pharmacist 无处方审核历史（doctor/其他角色清空防串号） */
     switchReviewTab(reviewTab);
     refreshConsultBadge();  /* 任务4：进入审核中心即刷新「待我意见 + 我的待确认」徽标 */
-  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+  }catch(e){if(seq!==reviewLoadSeq)return;b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
 const REVIEW_PER=12, HIST_PER=12;
 let histPage=0;
 function histGo(d){histPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
@@ -1144,17 +1165,14 @@ function renderReview(){
     mountReviewThumbs(hslice);  /* 任务1：历史行缩略图条挂载 */
     return;}
   /* 任务3：doctor/pharmacist「我的待确认」分支（数据源 my-pending-confirm，仅本人）。
-     本批次任务2：pharmacist（药剂科一票）待处理 tab 额外渲染 drug 待核对项表（含
-     签发/驳回按钮，见 canSignItem），文案「药物高危结论需药剂科复核」。 */
+     问题2 更新注明：pharmacist「药物高危待核对」表已随两药快查下线移除——
+     待处理 tab=开药待审区+我的待确认；drug 项不再入队、历史全角色过滤。 */
   if(mine){
     const ph=ROLE==='pharmacist';
-    const drugItems=ph?(reviewItems||[]).filter(_rvMatch):[];  /* 药剂科：drug 待核对项 */
     const mineItems=(myConfirmItems||[]).filter(_rvMatch);
-    if(!mineItems.length&&!drugItems.length&&!rxPendingItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>${ph?'暂无待核对项（药物核对/开药待审）。':'没有您的待确认项。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(ph?'药物高危结论需药剂科复核；开药工作台直送的处方也会出现在这里，由您签发/驳回。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控'))}</div></div>`;return;}
+    if(!mineItems.length&&!rxPendingItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>${ph?'暂无待办（开药待审）。':'没有您的待确认项。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(ph?'开药工作台直送的处方会出现在这里，由您签发/驳回；药品字典与相互作用规则在上方标签页维护。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控'))}</div></div>`;return;}
     /* 阶段3.2：开药待审区（pharmacist 专属数据源；doctor 恒返回空串不渲染） */
     const rxSec=rxPendingSection();
-    /* 药剂科 drug 待核对表（置顶；行渲染复用 reviewRow——按 canSignItem 出按钮） */
-    const drugSec=(!ph||!drugItems.length)?'':`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px"><table><thead><tr><th>药物高危待核对（需药剂科复核）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${drugItems.map(p=>reviewRow(p,false)).join('')}</tbody></table></div>`;
     const pagesM=Math.max(1,Math.ceil(mineItems.length/REVIEW_PER));
     if(reviewPage>=pagesM)reviewPage=pagesM-1; if(reviewPage<0)reviewPage=0;
     const startM=reviewPage*REVIEW_PER, sliceM=mineItems.slice(startM,startM+REVIEW_PER);
@@ -1163,10 +1181,10 @@ function renderReview(){
       <button class="btn sm secondary" ${reviewPage===0?'disabled':''} onclick="reviewGo(-1)">‹ 上一页</button>
       <span class="src num">第 ${reviewPage+1} / ${pagesM} 页 · 共 ${mineItems.length} 项</span>
       <button class="btn sm secondary" ${reviewPage>=pagesM-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
-    /* 我的待确认为空时只渲染药物待核对表（不出空表壳） */
+    /* 我的待确认为空时只渲染开药待审区（不出空表壳） */
     const mineTable=mineItems.length?`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rowsM}</tbody></table>${pagerM}</div>`:'';
-    b.innerHTML=rxSec+drugSec+mineTable;
-    mountReviewThumbs(drugItems.concat(sliceM));  /* 任务1：待核对/待确认行缩略图条挂载 */
+    b.innerHTML=rxSec+mineTable;
+    mountReviewThumbs(sliceM);  /* 任务1：待确认行缩略图条挂载（问题2：drugItems 并入渲染已随药物待核对区移除） */
     return;}
   const pend=(reviewItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
   if(!pend.length){b.innerHTML=rxPendingSection()+`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待质控员/管理员签发。'}</div></div>`;return;}
@@ -2159,9 +2177,9 @@ async function loadData(){
             <button class="btn primary sm" id="deptAddBtn">新增科室</button>
           </div>
         </div>
-        <!-- 阶段1.5：药品字典卡（只读基础版：stats+搜索+免责声明；增删改走 POST /admin/drug/*，
-             UI 打磨与开药工作台一并留阶段3） -->
-        <div class="panel"><h3>药品字典（只读 · AI 辅助生成，临床使用前须经执业药师核对）</h3>
+        <!-- 问题3：药品字典卡升级为可编辑（与 pharmacist 审核中心「药品字典」tab 复用同一
+             渲染函数 renderDrugDictEditor；POST /admin/drug/dict 权限后端同源 pharmacist+admin） -->
+        <div class="panel"><h3>药品字典（可编辑 · AI 辅助生成，临床使用前须经执业药师核对）</h3>
           <div id="drugDictPanel"><div class="src" style="padding:10px 16px">加载中…</div></div>
         </div>
     </div>
@@ -2237,42 +2255,200 @@ if(!window.__deptDelegate){window.__deptDelegate=true;document.addEventListener(
   const b=e.target.closest('button[data-act="dept-del"]');if(!b)return;
   deleteDept(b.dataset.name);});}
 
-/* ---- 阶段1.5：admin「药品字典」卡（GET /drug/dict 只读：stats+前端过滤搜索+免责声明）----
-   管理端点（POST /admin/drug/dict|rules，admin/pharmacist）本轮仅后端落地 + 审计，
-   增删改按钮随阶段3 开药工作台一起打磨。 */
-let drugDictCache={drugs:[],stats:null};
-async function loadDrugDictPanel(){
-  const el=document.getElementById('drugDictPanel');if(!el)return;
-  try{
-    const d=await apiGet('/drug/dict');
-    drugDictCache={drugs:d.drugs||[],stats:d.stats||{}};
-    const st=d.stats||{};
-    const cats=Object.entries(st.categories||{}).sort((a,b)=>b[1]-a[1])
-      .map(([k,v])=>`<span class="chip mid">${esc(k)} ${esc(String(v))}</span>`).join(' ');
-    el.innerHTML=`<div class="src" style="padding:8px 16px 0">⚠ ${esc(d.disclaimer||DRUG_DISCLAIMER)}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 16px 4px">
-        <span class="chip ok"><span class="dot"></span>药品 ${esc(String(st.drugs??'—'))} 种</span>
-        <span class="chip warn"><span class="dot"></span>规则 ${esc(String(st.rules??'—'))} 条（高危 ${esc(String(st.high??'—'))} / 中危 ${esc(String(st.mid??'—'))}）</span>
-        ${cats?`<span class="src">分类分布：</span>${cats}`:''}
-      </div>
-      <div style="display:flex;gap:8px;padding:4px 16px 10px;align-items:center">
-        <input class="inp" id="drugDictSearch" placeholder="搜索药品名/别名/商品名/分类（前端过滤）" aria-label="搜索药品字典" style="flex:1;min-width:180px" autocomplete="off"
-          oninput="filterDrugDict(this.value)">
-      </div>
-      <ul class="feed" id="drugDictList" style="max-height:260px;overflow:auto"></ul>`;
-    filterDrugDict('');
-  }catch(e){el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 药品字典加载失败（需登录）</div>';}
+/* ---- 本批问题3：药品字典/相互作用规则编辑器（共享渲染函数，两处复用）----
+   pharmacist 审核中心「药品字典」/「相互作用规则」tab 与 admin 数据面板字典卡调用同一
+   渲染函数（renderDrugDictEditor/renderDrugRulesEditor），权限后端同源：
+   POST /admin/drug/dict|rules 均为 pharmacist+admin（问题3 dict 由 admin 专属放宽，
+   药学专业数据由药剂科维护）。数据源 GET /drug/dict（全量字典+规则+stats+免责声明）。
+   安全纪律：全部用户输入 esc() 转义；编辑/删除按 data 属性 + 事件委托定位
+   （禁内联 onclick 拼接药名，与科室删除同纪律）；编辑态锁定定位键（规范名/药对）——
+   重命名/调药对不支持（需删除后新增），规避后端按 name/规范药对定位的 update 语义歧义。 */
+let drugDictCache={drugs:[],rules:[],stats:null};
+let drugDictEditName=null;   /* 药品编辑中：null=新增模式；否则被编辑条目规范名（定位键锁定） */
+let drugRuleEditPair=null;   /* 规则编辑中：null=新增模式；否则 '药a\u0001药b' 规范药对键 */
+let drugDictEditorRoot=null; /* 当前编辑器挂载容器（pharmacist=reviewBody / admin=drugDictPanel），保存/删除后原地重渲染 */
+
+function _csv(v){return String(v||'').split(/[,，、]/).map(s=>s.trim()).filter(Boolean);}
+
+async function renderDrugDictEditor(el){
+  if(!el)return;
+  drugDictEditorRoot=el;
+  el.innerHTML='<div class="src" style="padding:10px 16px">加载中…</div>';
+  let d;try{d=await apiGet('/drug/dict');}catch(e){el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 药品字典加载失败：'+esc(e.message||'')+'</div>';return;}
+  drugDictCache={drugs:d.drugs||[],rules:d.rules||[],stats:d.stats||{}};
+  drugDictEditName=null;
+  const st=d.stats||{};
+  const cats=Object.entries(st.categories||{}).sort((a,b)=>b[1]-a[1]);
+  el.innerHTML=`<div class="src" style="padding:8px 16px 0">⚠ ${esc(d.disclaimer||DRUG_DISCLAIMER)}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 16px 4px">
+      <span class="chip ok"><span class="dot"></span>药品 ${esc(String(st.drugs??'—'))} 种</span>
+      <span class="chip warn"><span class="dot"></span>规则 ${esc(String(st.rules??'—'))} 条（高危 ${esc(String(st.high??'—'))} / 中危 ${esc(String(st.mid??'—'))}）</span>
+      ${cats.length?'<span class="src">分类分布：</span>'+cats.map(([k,v])=>`<span class="chip mid">${esc(k)} ${esc(String(v))}</span>`).join(' '):''}
+    </div>
+    <div class="qgrid" style="padding:4px 16px" id="ddForm">
+      <label>规范名（唯一键，编辑态锁定）<input class="inp" id="ddF_name" autocomplete="off" spellcheck="false" placeholder="如：华法林"></label>
+      <label>药理类别<input class="inp" id="ddF_cat" autocomplete="off" spellcheck="false" placeholder="如：抗凝抗栓"></label>
+      <label>处方等级<input class="inp" id="ddF_level" autocomplete="off" spellcheck="false" placeholder="处方药 / OTC"></label>
+      <label>别名（逗号分隔）<input class="inp" id="ddF_alias" autocomplete="off" spellcheck="false" placeholder="法华林, warfarin"></label>
+      <label style="grid-column:1/-1">商品名（逗号分隔）<input class="inp" id="ddF_brand" autocomplete="off" spellcheck="false" placeholder="可密达"></label>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;padding:0 16px 8px;flex-wrap:wrap">
+      <button class="btn primary sm" id="ddSaveBtn" onclick="saveDrugDictItem()">新增药品</button>
+      <button class="btn ghost sm" id="ddResetBtn" onclick="resetDrugDictForm()">重置</button>
+      <span class="src" id="ddFormHint"></span>
+    </div>
+    <div style="display:flex;gap:8px;padding:4px 16px 10px;align-items:center;flex-wrap:wrap">
+      <input class="inp" id="ddSearch" placeholder="搜索药品名/别名/商品名" aria-label="搜索药品字典" style="flex:1;min-width:160px" autocomplete="off" oninput="renderDrugDictList()">
+      <select class="inp" id="ddCat" aria-label="分类过滤" style="max-width:160px" onchange="renderDrugDictList()">
+        <option value="">全部分类</option>${cats.map(([k])=>`<option value="${esc(k)}">${esc(k)}</option>`).join('')}</select>
+    </div>
+    <ul class="feed" id="ddList" style="max-height:320px;overflow:auto"></ul>`;
+  renderDrugDictList();
 }
-function filterDrugDict(q){
-  const ul=document.getElementById('drugDictList');if(!ul)return;
-  const s=String(q||'').trim().toLowerCase();
+function renderDrugDictList(){  /* 问题3：药品列表（搜索+分类过滤，前端过滤不出网） */
+  const ul=document.getElementById('ddList');if(!ul)return;
+  const s=String((document.getElementById('ddSearch')||{}).value||'').trim().toLowerCase();
+  const cat=String((document.getElementById('ddCat')||{}).value||'');
   const hits=(drugDictCache.drugs||[]).filter(d=>{
+    if(cat&&(d.category||'其他')!==cat)return false;
     if(!s)return true;
     const hay=[d.name,d.category,...(d.aliases||[]),...(d.brand_names||[])].join(' ').toLowerCase();
     return hay.includes(s);});
   ul.innerHTML=hits.length?hits.map(d=>`<li><span class="e">${esc(d.name)}</span>
-      <span class="src">${esc(d.category||'其他')}${d.level?' · '+esc(d.level):''}${(d.aliases||[]).length?' · 别名：'+esc((d.aliases||[]).join('、')):''}</span></li>`).join('')
+      <span class="src">${esc(d.category||'其他')}${d.level?' · '+esc(d.level):''}${(d.aliases||[]).length?' · 别名：'+esc((d.aliases||[]).join('、')):''}${(d.brand_names||[]).length?' · 商品名：'+esc((d.brand_names||[]).join('、')):''}</span>
+      <span class="a" style="display:inline-flex;gap:6px">
+        <button class="btn sm secondary" data-act="dd-edit" data-name="${esc(d.name)}">编辑</button>
+        <button class="btn sm danger" data-act="dd-del" data-name="${esc(d.name)}">删除</button></span></li>`).join('')
     :'<li><span class="a">无匹配药品</span></li>';
+}
+function resetDrugDictForm(){
+  drugDictEditName=null;
+  ['ddF_name','ddF_cat','ddF_level','ddF_alias','ddF_brand'].forEach(id=>{
+    const el=document.getElementById(id);if(el){el.value='';el.readOnly=false;}});
+  const b=document.getElementById('ddSaveBtn');if(b)b.textContent='新增药品';
+  const h=document.getElementById('ddFormHint');if(h)h.textContent='';}
+function startDrugDictEdit(name){  /* 问题3：编辑=回填表单并锁定规范名（定位键） */
+  const d=(drugDictCache.drugs||[]).find(x=>x.name===name);if(!d)return;
+  drugDictEditName=name;
+  document.getElementById('ddF_name').value=d.name;document.getElementById('ddF_name').readOnly=true;
+  document.getElementById('ddF_cat').value=d.category||'';
+  document.getElementById('ddF_level').value=d.level||'';
+  document.getElementById('ddF_alias').value=(d.aliases||[]).join(', ');
+  document.getElementById('ddF_brand').value=(d.brand_names||[]).join(', ');
+  const b=document.getElementById('ddSaveBtn');if(b)b.textContent='保存修改';
+  const h=document.getElementById('ddFormHint');if(h)h.textContent='编辑中：'+esc(name)+'（规范名锁定；重命名请删除后新增）';}
+async function saveDrugDictItem(){  /* 问题3：新增/更新 → POST /admin/drug/dict（pharmacist+admin） */
+  const g=id=>document.getElementById(id)||{value:''};
+  const name=String(g('ddF_name').value||'').trim();
+  if(!name){toast('药品规范名必填');return;}
+  const item={name,category:String(g('ddF_cat').value||'').trim()||'其他',
+    level:String(g('ddF_level').value||'').trim()||'处方药',
+    aliases:_csv(g('ddF_alias').value),brand_names:_csv(g('ddF_brand').value)};
+  const action=drugDictEditName?'update':'add';
+  const btn=document.getElementById('ddSaveBtn');if(btn)btn.disabled=true;
+  try{const r=await apiPost('/admin/drug/dict',{action,item});
+    if(r&&r.ok){toast((action==='update'?'已更新药品 ':'已新增药品 ')+name);resetDrugDictForm();
+      renderDrugDictEditor(drugDictEditorRoot);}
+    else toast('失败：'+((r&&r.detail)||'未知错误'));  /* 422=重名/不存在等业务校验 */
+  }catch(e){toast('保存失败：'+e.message);}
+  finally{if(btn)btn.disabled=false;}}
+async function deleteDrugDictItem(name){  /* 问题3：删除（确认弹条；记入审计） */
+  confirmDanger('删除药品 · '+name,
+    `将把「${esc(name)}」从药品字典移除：开药建议/服务端硬校验随即不再识别该药（已开处方不受影响）。此操作记入审计。`,
+    '确认删除',async()=>{
+      try{const r=await apiPost('/admin/drug/dict',{action:'delete',item:{name}});
+        if(r&&r.ok){toast('已删除药品 '+name);renderDrugDictEditor(drugDictEditorRoot);}
+        else toast('失败：'+((r&&r.detail)||'未知错误'));
+      }catch(e){toast('删除失败：'+e.message);}});}
+
+async function renderDrugRulesEditor(el){  /* 问题3：相互作用规则管理（共享编辑器； pharmacist tab 与未来复用同源） */
+  if(!el)return;
+  drugDictEditorRoot=el;
+  el.innerHTML='<div class="src" style="padding:10px 16px">加载中…</div>';
+  let d;try{d=await apiGet('/drug/dict');}catch(e){el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 规则加载失败：'+esc(e.message||'')+'</div>';return;}
+  drugDictCache={drugs:d.drugs||[],rules:d.rules||[],stats:d.stats||{}};
+  drugRuleEditPair=null;
+  const st=d.stats||{},rules=d.rules||[];
+  el.innerHTML=`<div class="src" style="padding:8px 16px 0">⚠ ${esc(d.disclaimer||DRUG_DISCLAIMER)}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 16px 4px">
+      <span class="chip warn"><span class="dot"></span>规则 ${esc(String(st.rules??rules.length))} 条（高危 ${esc(String(st.high??'—'))} / 中危 ${esc(String(st.mid??'—'))}）</span>
+      <span class="src">高危=开药组合强制阻断（须填联用理由方可开立）；中危=开药时提示警示。</span>
+    </div>
+    <div class="qgrid" style="padding:4px 16px" id="drForm">
+      <label>药品 A（编辑态锁定）<input class="inp" id="drF_a" autocomplete="off" spellcheck="false" placeholder="如：华法林"></label>
+      <label>药品 B（编辑态锁定）<input class="inp" id="drF_b" autocomplete="off" spellcheck="false" placeholder="如：布洛芬"></label>
+      <label>严重度<select class="inp" id="drF_sev"><option value="高危">高危</option><option value="中危">中危</option></select></label>
+      <label>机制（可空）<input class="inp" id="drF_mech" autocomplete="off" spellcheck="false" placeholder="如：NSAID 抑制血小板并置换蛋白结合"></label>
+      <label style="grid-column:1/-1">处置建议（可空）<input class="inp" id="drF_mgmt" autocomplete="off" spellcheck="false" placeholder="如：避免联用并监测 INR"></label>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;padding:0 16px 8px;flex-wrap:wrap">
+      <button class="btn primary sm" id="drSaveBtn" onclick="saveDrugRule()">新增规则</button>
+      <button class="btn ghost sm" onclick="resetDrugRuleForm()">重置</button>
+      <span class="src" id="drFormHint"></span>
+    </div>
+    <ul class="feed" id="drList" style="max-height:320px;overflow:auto">${rules.length?rules.map((r,i)=>`<li><span class="e">${esc(r.drug_a)} × ${esc(r.drug_b)}</span>
+      <span class="chip ${r.severity==='高危'?'bad':'mid'}"><span class="dot"></span>${esc(r.severity||'中危')}</span>
+      <span class="src">${esc(r.mechanism||'')}${r.management?' · 处置：'+esc(r.management):''}</span>
+      <span class="a" style="display:inline-flex;gap:6px">
+        <button class="btn sm secondary" data-act="dr-edit" data-idx="${i}">编辑</button>
+        <button class="btn sm danger" data-act="dr-del" data-idx="${i}">删除</button></span></li>`).join('')
+      :'<li><span class="a">暂无相互作用规则</span></li>'}</ul>`;
+}
+function resetDrugRuleForm(){
+  drugRuleEditPair=null;
+  ['drF_a','drF_b','drF_mech','drF_mgmt'].forEach(id=>{
+    const el=document.getElementById(id);if(el){el.value='';el.readOnly=false;}});
+  const s=document.getElementById('drF_sev');if(s)s.value='高危';
+  const b=document.getElementById('drSaveBtn');if(b)b.textContent='新增规则';
+  const h=document.getElementById('drFormHint');if(h)h.textContent='';}
+function startDrugRuleEdit(idx){  /* 问题3：编辑=回填表单并锁定药对（定位键） */
+  const r=(drugDictCache.rules||[])[idx];if(!r)return;
+  drugRuleEditPair=r.drug_a+'\u0001'+r.drug_b;
+  document.getElementById('drF_a').value=r.drug_a;document.getElementById('drF_a').readOnly=true;
+  document.getElementById('drF_b').value=r.drug_b;document.getElementById('drF_b').readOnly=true;
+  document.getElementById('drF_sev').value=(r.severity==='中危')?'中危':'高危';
+  document.getElementById('drF_mech').value=r.mechanism||'';
+  document.getElementById('drF_mgmt').value=r.management||'';
+  const b=document.getElementById('drSaveBtn');if(b)b.textContent='保存修改';
+  const h=document.getElementById('drFormHint');if(h)h.textContent='编辑中：'+esc(r.drug_a+' × '+r.drug_b)+'（药对锁定；调整药对请删除后新增）';}
+async function saveDrugRule(){  /* 问题3：新增/更新 → POST /admin/drug/rules（severity 限 高危|中危，后端 422 双保险） */
+  const g=id=>document.getElementById(id)||{value:''};
+  const a=String(g('drF_a').value||'').trim(),b=String(g('drF_b').value||'').trim();
+  if(!a||!b){toast('药对两药必填');return;}
+  if(a===b){toast('药对两药不能为同一药品');return;}
+  const item={drug_a:a,drug_b:b,severity:String(g('drF_sev').value||'中危'),
+    mechanism:String(g('drF_mech').value||'').trim(),management:String(g('drF_mgmt').value||'').trim()};
+  const action=drugRuleEditPair?'update':'add';
+  const btn=document.getElementById('drSaveBtn');if(btn)btn.disabled=true;
+  try{const r=await apiPost('/admin/drug/rules',{action,item});
+    if(r&&r.ok){toast((action==='update'?'已更新规则 ':'已新增规则 ')+a+' × '+b);resetDrugRuleForm();
+      renderDrugRulesEditor(drugDictEditorRoot);}
+    else toast('失败：'+((r&&r.detail)||'未知错误'));
+  }catch(e){toast('保存失败：'+e.message);}
+  finally{if(btn)btn.disabled=false;}}
+async function deleteDrugRule(idx){  /* 问题3：删除规则（确认弹条；记入审计） */
+  const r=(drugDictCache.rules||[])[idx];if(!r)return;
+  const pair=r.drug_a+' × '+r.drug_b;
+  confirmDanger('删除规则 · '+pair,
+    `将删除相互作用规则「${esc(pair)}」，开药硬校验/警示随即不再命中该药对。此操作记入审计。`,
+    '确认删除',async()=>{
+      try{const resp=await apiPost('/admin/drug/rules',{action:'delete',item:{drug_a:r.drug_a,drug_b:r.drug_b}});
+        if(resp&&resp.ok){toast('已删除规则 '+pair);renderDrugRulesEditor(drugDictEditorRoot);}
+        else toast('失败：'+((resp&&resp.detail)||'未知错误'));
+      }catch(e){toast('删除失败：'+e.message);}});}
+/* 字典/规则编辑器事件委托（一次性挂载）：药名/药对来自字典数据（可含引号等字符），
+   禁用内联 onclick 拼接（与科室删除同纪律） */
+if(!window.__drugDictDelegate){window.__drugDictDelegate=true;document.addEventListener('click',e=>{
+  const eb=e.target.closest('button[data-act="dd-edit"]');if(eb){startDrugDictEdit(eb.dataset.name);return;}
+  const db=e.target.closest('button[data-act="dd-del"]');if(db){deleteDrugDictItem(db.dataset.name);return;}
+  const er=e.target.closest('button[data-act="dr-edit"]');if(er){startDrugRuleEdit(parseInt(er.dataset.idx,10));return;}
+  const dr=e.target.closest('button[data-act="dr-del"]');if(dr){deleteDrugRule(parseInt(dr.dataset.idx,10));return;}});}
+
+/* ---- 问题3：admin 数据面板「药品字典」卡升级为可编辑（复用 pharmacist 审核中心同一
+   渲染函数 renderDrugDictEditor；POST /admin/drug/dict 后端权限已同源 pharmacist+admin。
+   旧只读版 loadDrugDictPanel/filterDrugDict 移除，容器 id=drugDictPanel 保留）。 ---- */
+async function loadDrugDictPanel(){
+  await renderDrugDictEditor(document.getElementById('drugDictPanel'));
 }
 
 /* ---- F6 模型配置管理（admin 数据面板）---- */
@@ -2442,18 +2618,19 @@ function boot(u,r,dept){ROLE=r||'doctor';ME_DEPT=dept||'';setWho(u,r);showLogin(
   refreshRxBadge();  /* 开药审核 UX 问题2：登录即刷新被驳回处方角标（无需先进 rx 视图） */
   refreshReviewBadge();}  /* 本批问题2：登录即刷新审核中心待办角标（pharmacist/qc/admin，无需先进审核中心） */
 /* 本批问题2：审核中心数字角标数据刷新（复用 refreshRxBadge 模式：登录/切视图按服务端真值刷新）。
-   pharmacist=drug 待核对数+待审处方数；admin=全部待核对+待审处方；qc=其它助手高危项
+   问题2 语义变更：pharmacist 角标只算待审处方数（「药物待核对」区已随两药快查下线移除，
+   不再拉取 /review/pending）；admin=全部待核对+待审处方；qc=其它助手高危项
    （问题4 收权后 qc 不审 drug/开药，角标不计这两类）。进审核中心时由 loadReview/loadReviewMine
    按已拉取数据更新并 renderRail，本函数只负责登录后的首刷（当前不在审核中心才重绘导航）。 */
 async function refreshReviewBadge(){
   if(ROLE!=='pharmacist'&&ROLE!=='admin'&&ROLE!=='qc')return;
   let n=0;
-  try{const d=await apiGet('/review/pending');
-    const pend=d.pending||[];
-    n+=(ROLE==='pharmacist')?pend.filter(i=>i.agent==='drug').length
-      :(ROLE==='qc')?pend.filter(i=>i.agent!=='drug').length
-      :pend.length;
-  }catch(e){/* 角标刷新失败静默（不干扰登录主流程） */}
+  if(ROLE!=='pharmacist'){  /* 问题2：pharmacist 不计 drug 待核对（区已移除），跳过 /review/pending */
+    try{const d=await apiGet('/review/pending');
+      const pend=d.pending||[];
+      n+=(ROLE==='qc')?pend.filter(i=>i.agent!=='drug').length
+        :pend.length;
+    }catch(e){/* 角标刷新失败静默（不干扰登录主流程） */}}
   if(ROLE==='pharmacist'||ROLE==='admin'){  /* 开药待审处方数（qc 无处方审核权不拉取，避免 403 噪音） */
     try{const r=await apiGet('/prescriptions/pending');n+=(r.items||[]).length;}catch(e){/* 静默 */}}
   reviewTodoCount=n;

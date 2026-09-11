@@ -209,7 +209,9 @@ def test_review_thumbs_frontend_markers_present():
     - reviewThumbStrip 缩略图渲染函数 + mountReviewThumbs 占位挂载（列表行 innerHTML 后挂 DOM）；
     - data:image/ 前缀白名单过滤必须存在于缩略图函数体内；
     - 安全纪律：createElement('img') + 属性赋值 .src，禁止 innerHTML 拼图片 src；
-    - grid 多图布局样式（.review-thumbs，每图 max-height 120px）+ 点击复用 showImg 放大。"""
+    - grid 多图布局样式（.review-thumbs，每图 max-height 120px）+ 点击复用 showImg 放大。
+    问题2 语义变更注明：pharmacist「药物待核对」表已随两药快查下线移除，原
+    mountReviewThumbs(drugItems.concat(sliceM)) 相应回归 mountReviewThumbs(sliceM)。"""
     html = FRONTEND.read_text(encoding="utf-8")
     for marker in (
         "function reviewThumbStrip(", "function mountReviewThumbs(",
@@ -217,9 +219,8 @@ def test_review_thumbs_frontend_markers_present():
         ".review-thumbs{",          # grid 多图布局
         ".review-thumbs img{", "max-height:120px",  # 每图最高 120px
         "mountReviewThumbs(hslice)",
-            # 本批次任务2 注记：pharmacist 视图新增 drug 待核对表，缩略图挂载合并传参
-            # （drugItems.concat(sliceM)）——原字面量 mountReviewThumbs(sliceM) 相应更新
-            "mountReviewThumbs(drugItems.concat(sliceM))", "mountReviewThumbs(slice)",
+        "mountReviewThumbs(sliceM)",  # 问题2 更新：药物待核对表移除后仅剩待确认行挂载
+        "mountReviewThumbs(slice)",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     fn = _extract_fn(html, "reviewThumbStrip")
@@ -267,10 +268,11 @@ def test_resubmit_jump_markers_present():
 
 
 def test_pharm_sign_markers_present():
-    """任务2（本批次）标记锁：药剂科一票——按 agent 分流的签字权（canSignItem）、
-    pharmacist drug 待核对表与「药物高危结论需药剂科复核」文案。
-    问题4 语义变更注明：drug 类签字权由 qc/admin/pharmacist 收窄为 pharmacist/admin
-    （质控科只管病例，药物核对权=药剂科+管理员），原 canSignItem 断言随之更新。"""
+    """任务2（历史批次）标记锁：药剂科一票——按 agent 分流的签字权（canSignItem）。
+    问题2 语义变更注明：pharmacist「药物待核对」表与相关文案已随两药快查下线移除
+    （审核中心=开药待审+我的历史+药品字典/规则管理 tab），原「药物高危待核对（需药剂科复核）」
+    「审核中心 · 药剂科药物核对」等断言随之更新为问题2 后的界面形态；
+    canSignItem 的 drug 签字权矩阵保留（后端权限矩阵未变，作防御性兜底）。"""
     html = FRONTEND.read_text(encoding="utf-8")
     for marker in (
         "function canSignItem(",                       # 签字权按 agent 分流
@@ -278,10 +280,12 @@ def test_pharm_sign_markers_present():
         "if(p.agent==='drug')return ROLE==='admin'||ROLE==='pharmacist';",
         "canSignItem(p)?",                             # 列表行按条目出签发/驳回按钮
         "canSignItem(p)&&!mine",                       # 详情模态操作区同矩阵
-        "药物高危结论需药剂科复核",                       # 核心文案（头部说明 + 空态提示）
-        "药物高危待核对（需药剂科复核）",                  # pharmacist drug 待核对表头
-        "pharmacist（药剂科一票）额外拉取待核对清单",       # 药剂科 pending 拉取标记
-        "审核中心 · 药剂科药物核对",                       # pharmacist 审核中心标题
+        # 问题2 更新：pharmacist 审核中心标题与待处理空态文案（药物待核对区已移除）
+        "审核中心 · 药剂科",
+        "暂无待办（开药待审）",
+        "开药工作台直送的处方会出现在这里，由您签发/驳回",
+        # 问题3：药品字典/规则管理入口（审核中心 tab，替代原「药物待核对」工作面）
+        "tabDrugDict", "tabDrugRules",
         # 问题4：qc 看 drug 项的只读说明文案（drug 例外：药师/管理员，不再是质控员）
         "药物核对项：签发/驳回由药师（pharmacist）/管理员执行",
     ):
@@ -428,26 +432,30 @@ def test_rx_round2_suggest_sync_markers_present():
 
 def test_rx_round2_review_badge_markers_present():
     """问题2 标记锁：审核中心数字角标（导航入口）——refreshReviewBadge 复用
-    refreshRxBadge 模式（登录/切视图刷新）；pharmacist=drug 待核对+待审处方，
-    qc=其它助手高危项（问题4 收权后不审 drug/开药），admin=全部待核对+待审处方。"""
+    refreshRxBadge 模式（登录/切视图刷新）。
+    问题2 语义变更注明（本轮）：pharmacist 角标只算待审处方数（「药物待核对」区随两药快查
+    下线移除，不再拉取 /review/pending）；原 pharmacist=drug 待核对+待审处方、
+    title="待办：药物核对/待审处方" 断言随之更新；qc=其它助手高危项（问题4 收权后
+    不审 drug/开药），admin=全部待核对+待审处方不变。"""
     html = FRONTEND.read_text(encoding="utf-8")
     for marker in (
         "function refreshReviewBadge(",                    # 角标数据刷新函数
         "reviewTodoCount",                                 # 角标数状态
-        'title="待办：药物核对/待审处方"',                     # pharmacist 待办角标语义
+        'title="待办：待审处方"',                            # pharmacist 待办角标语义（问题2 更新）
         'title="待核对（其它助手高危项）"',                    # qc 角标语义（问题4 收权）
         "refreshReviewBadge();",                           # 登录即刷新（boot）
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     fn = _extract_fn(html, "refreshReviewBadge")
-    assert "review/pending" in fn, "角标数据源必须含 /review/pending（drug 待核对/其它高危项）"
+    assert "review/pending" in fn, "角标数据源必须含 /review/pending（qc/admin 待核对）"
     assert "prescriptions/pending" in fn, "角标数据源必须含 /prescriptions/pending（待审处方数）"
-    assert "i.agent==='drug'" in fn and "i.agent!=='drug'" in fn, \
-        "pharmacist 只算 drug 项、qc 只算其它助手高危项（问题4 分流）"
+    assert "ROLE!=='pharmacist'" in fn, "问题2：pharmacist 不再拉取 /review/pending（跳过 drug 待核对）"
+    assert "i.agent!=='drug'" in fn, "qc 只算其它助手高危项（问题4 分流）"
     # 刷新时机：登录 boot + 进入审核中心（loadReview/loadReviewMine 更新角标并重绘导航）
     assert html.count("refreshReviewBadge()") >= 2, "登录与进入审核中心均须刷新角标"
-    assert "reviewTodoCount=(reviewItems||[]).length+(rxPendingItems||[]).length" in html, \
-        "pharmacist 角标=drug 待核对数+待审处方数（进入审核中心即刷新）"
+    # 问题2 更新：pharmacist 角标=待审处方数（进入审核中心即刷新）
+    assert "reviewTodoCount=(rxPendingItems||[]).length" in html, \
+        "pharmacist 角标=待审处方数（drug 待核对区已移除）"
 
 
 def test_rx_round2_reviewed_history_markers_present():
@@ -472,13 +480,94 @@ def test_rx_round2_reviewed_history_markers_present():
 def test_rx_round2_qc_scope_markers_present():
     """问题4 标记锁：qc 不审核药剂——①开药待审区仅 pharmacist/admin 渲染
     （qc 登录不渲染开药待审区）；②qc/admin 路径不拉取开药待审队列（403 不留旧值）；
-    ③qc 历史过滤 agent=drug（问题4 彻底收窄：qc 界面彻底不见 drug 项，旧遗留不显示；
-    pharmacist 历史保留药剂科工作记录、admin 全量，均不受影响）。"""
+    ③历史过滤 drug 旧遗留记录。
+    问题2 语义变更注明（本轮）：drug 过滤从「仅 qc」（!(ROLE==='qc'&&agent==='drug')）
+    收紧为**所有角色**统一过滤 i.agent!=='drug'（含 pharmacist/admin——两药快查下线，
+    遗留 drug 队列已清理且不再入队，界面彻底不见 drug 项）。"""
     html = FRONTEND.read_text(encoding="utf-8")
     fn = _extract_fn(html, "rxPendingSection")
     assert "ROLE!=='pharmacist'&&ROLE!=='admin'" in fn, \
         "开药待审区必须仅 pharmacist/admin 渲染（qc/doctor 恒空串）"
     assert "if(ROLE==='admin'){" in html, \
         "qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）"
-    assert "!(ROLE==='qc'&&i.agent==='drug')" in html, \
-        "qc 历史列表须过滤 drug 旧遗留记录（pharmacist/admin 历史不受影响）"
+    # 问题2 收紧：两处历史装载（qc/admin loadReview + doctor/pharmacist loadReviewMine）均过滤 drug
+    assert html.count("i.agent!=='drug'") >= 2, \
+        "历史列表须所有角色过滤 drug 旧遗留记录（两处装载点）"
+
+
+# ---------- 问题1/2/3 本轮修复标记锁（追加，不改动既有断言） ----------
+
+def test_review_race_guard_frontend_markers_present():
+    """问题1 标记锁：审核中心加载请求序号守卫（防轮询/连点并发 race 导致列表时有时无）：
+    - reviewLoadSeq 模块级序号；loadReview 入口 const seq=++reviewLoadSeq 取号；
+    - loadReviewMine(b,seq) 承接同一序号（qc/admin 与 mine 两路径同守卫）；
+    - 每个 await 后 if(seq!==reviewLoadSeq)return 丢弃过期响应（含 catch 分支）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        "let reviewLoadSeq=0",
+        "const seq=++reviewLoadSeq",
+        "loadReviewMine(b,seq)",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    assert html.count("if(seq!==reviewLoadSeq)return;") >= 7, \
+        "过期响应守卫必须覆盖两路径全部 await 之后的状态写入点（含 catch）"
+
+
+def test_drug_purge_frontend_markers_present():
+    """问题2 标记锁：遗留 drug 审核记录全清（前端侧）——
+    ①反向锁：「药物待核对」字样不得残留（药物待核对区已随两药快查下线移除）；
+    ②pharmacist 不再从 /review/pending 拉取 drug 项（loadReviewMine 无该请求）；
+    ③后端 drug 入队分支注入「不再入队」注记注释（行为不变）；
+    ④清理脚本就位（scripts/purge_drug_review_items.py）；
+    ⑤pg_store 新增 purge_drug_reviews（PG 镜像清理配套）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    # 反向锁针对 UI 字面量（注释中的「语义变更注明」不计）：tab 标签与 drug 待核对表头已移除
+    assert "ph?'药物待核对'" not in html, "pharmacist 待处理 tab 标签「药物待核对」应已移除"
+    assert "药物高危待核对（需药剂科复核）" not in html, "drug 待核对表头应已移除"
+    assert "reviewTodoCount=(rxPendingItems||[]).length" in html, \
+        "pharmacist 角标只算待审处方数"
+    router = (FRONTEND.parent.parent / "backend" / "api" / "v1" / "medical" / "medical_router.py").read_text(encoding="utf-8")
+    assert "两药快查已下线，drug 项不再入队（开药走 prescriptions）" in router, \
+        "_enqueue_if_risk 的 drug 分支应注入下线注记（仅注释不改行为）"
+    assert (FRONTEND.parent.parent / "scripts" / "purge_drug_review_items.py").is_file(), "清理脚本应就位"
+    pg = (FRONTEND.parent.parent / "backend" / "core" / "pg_store.py").read_text(encoding="utf-8")
+    assert "async def purge_drug_reviews()" in pg, "pg_store 应提供 purge_drug_reviews 镜像清理"
+
+
+def test_drug_dict_manage_frontend_markers_present():
+    """问题3 标记锁：药品字典/相互作用规则管理 UI（pharmacist 审核中心 tab + admin 卡复用）：
+    - tabDrugDict/tabDrugRules 双 tab（renderReviewHeader 仅药剂科可见）；
+    - 共享渲染函数 renderDrugDictEditor/renderDrugRulesEditor（admin 数据面板字典卡同款复用）；
+    - 药品表单五字段（name/category/level/aliases/brand_names）+ 搜索/分类过滤 + 编辑/删除；
+    - 规则表单（drug_a/drug_b/severity 高危|中危/mechanism/management）+ 编辑/删除；
+    - 写端点 POST /admin/drug/dict|rules（权限后端同源 pharmacist+admin）；
+    - 安全纪律：esc() 转义 + data 属性事件委托（禁内联拼接药名）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        'id="tabDrugDict"', 'id="tabDrugRules"',
+        "switchReviewTab('drugdict')", "switchReviewTab('drugrules')",
+        "function renderDrugDictEditor(", "function renderDrugRulesEditor(",
+        "function renderDrugDictList(", "function saveDrugDictItem(", "function saveDrugRule(",
+        "function startDrugDictEdit(", "function startDrugRuleEdit(",
+        "function deleteDrugDictItem(", "function deleteDrugRule(",
+        "function resetDrugDictForm(", "function resetDrugRuleForm(",
+        'id="ddF_name"', 'id="ddF_cat"', 'id="ddF_level"', 'id="ddF_alias"', 'id="ddF_brand"',
+        'id="drF_a"', 'id="drF_b"', 'id="drF_sev"', 'id="drF_mech"', 'id="drF_mgmt"',
+        '<option value="高危">高危</option><option value="中危">中危</option>',
+        "全部分类",                                    # 分类过滤下拉
+        "apiPost('/admin/drug/dict'", "apiPost('/admin/drug/rules'",
+        "新增药品", "新增规则",                          # 表单主按钮
+        "编辑态锁定",                                   # 定位键锁定纪律
+        "data-act=\"dd-edit\"", "data-act=\"dd-del\"",
+        "data-act=\"dr-edit\"", "data-act=\"dr-del\"",
+        "__drugDictDelegate",                          # 事件委托一次性挂载
+        # admin 数据面板字典卡复用同一渲染函数（容器 id 保留）
+        "renderDrugDictEditor(document.getElementById('drugDictPanel'))",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = _extract_fn(html, "renderDrugDictEditor")
+    assert "apiGet('/drug/dict')" in fn, "编辑器数据源必须为 GET /drug/dict"
+    assert "DRUG_DISCLAIMER" in fn, "编辑器必须携带免责声明"
+    hdr = _extract_fn(html, "renderReviewHeader")
+    assert "tabDrugDict" in hdr and "tabDrugRules" in hdr, \
+        "字典/规则 tab 可见性必须由 renderReviewHeader 控制（仅药剂科可见）"

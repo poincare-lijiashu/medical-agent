@@ -231,6 +231,9 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
     # full=False：入队条件回落旧语义（review_flag 才入队）、无「AI·留痕模式(自动)」
     # 短路、无待确认强制（人工路径由药剂科复核，不吃知情确认流程）。
     if agent == "drug":
+        # 问题2 注记：两药快查已下线，drug 项不再入队（开药走 prescriptions）。
+        # 端点仅为 API 兼容保留；此分支仅存档语义（full=False 豁免留痕模式），行为不变——
+        # 正常流量不会到达（前端无 drug 视图入口），遗留历史由 scripts/purge_drug_review_items.py 清理。
         full = False
     if not review_flag and not full:
         return None  # 非留痕模式维持旧语义：仅高危入队
@@ -454,8 +457,10 @@ class DrugDictManageReq(BaseModel):
 
 @router.post("/admin/drug/dict")
 async def admin_drug_dict_manage(req: DrugDictManageReq,
-                                 user: dict = Depends(require_role("admin"))):
-    """药品字典管理（admin）：action=add/update/delete，item 按 name 定位、整体替换。
+                                 user: dict = Depends(require_role("pharmacist", "admin"))):
+    """药品字典管理（问题3 权限放宽·语义变更：admin → pharmacist+admin）：药学专业数据
+    由药剂科维护（与 /admin/drug/rules 同源双角色），admin 保留兜底。
+    action=add/update/delete，item 按 name 定位、整体替换。
     变更经 save_dict 写透（JSON 原子写兜底 + PG 全量同步）并刷新进程内缓存
     （save 内部失效别名图，查询热路径无需重启即生效）；审计 admin.drug_dict_changed。
     非法项 422：name 必填；add 重名 / update、delete 目标不存在 / 未知 action 均拒绝。"""

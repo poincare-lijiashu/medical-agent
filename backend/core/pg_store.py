@@ -391,6 +391,23 @@ async def purge_pending_reviews() -> str:
         return ""
 
 
+async def _purge_drug_impl() -> str:
+    async with _pool.acquire() as c:
+        return await c.execute("DELETE FROM review_queue WHERE agent='drug'")
+
+
+async def purge_drug_reviews() -> str:
+    """问题2：清理 review_queue 中遗留 drug 行（两药快查已下线；与 scripts/
+    purge_drug_review_items.py 的 JSON 清理配套，PG 镜像同纪律）。best-effort：
+    未建池返回空串，异常不冒泡。审计 jsonl 不在本函数职责内（合规留痕永不清）。"""
+    if not _pool:
+        return ""
+    try:
+        return await _arun(_purge_drug_impl())
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ---------- B1 repo 层：四个模块文件读写的统一出入口（PG 真源 + JSON 兜底） ----------
 
 def _read_json(path: str, default):

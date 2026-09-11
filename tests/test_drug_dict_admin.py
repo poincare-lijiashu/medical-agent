@@ -1,6 +1,7 @@
 """阶段1.5：药品字典/规则管理端点（POST /admin/drug/dict、/admin/drug/rules）——TDD 先行测试。
 
-覆盖：权限矩阵（未登录 401 / doctor 403 / pharmacist 仅规则可写 / admin 全可）、
+覆盖：权限矩阵（未登录 401 / doctor 403 / pharmacist、admin 双端点可写——问题3 起 dict
+由 admin 专属放宽为 pharmacist+admin，药学专业数据药剂科维护）、
 add/update/delete 往返（HTTP 可见 + JSON 落盘写透 + save 后进程内缓存即时生效）、
 422 校验（name/drug_a/drug_b 必填、severity 枚举 高危|中危、未知 action、目标不存在）、
 审计 admin.drug_dict_changed（dict 带 name、rules 带规范药对）、
@@ -74,7 +75,7 @@ def _login(c, u, p="Med@2026"):
     return {"Authorization": "Bearer " + r.json()["access_token"]}
 
 
-# ---- 权限矩阵：dict 仅 admin；rules pharmacist/admin 双角色 ----
+# ---- 权限矩阵：问题3 起 dict=pharmacist+admin（药学专业数据药剂科维护）；rules pharmacist/admin 双角色 ----
 
 def test_drug_dict_manage_permission_matrix(env):
     c = env.client
@@ -87,13 +88,19 @@ def test_drug_dict_manage_permission_matrix(env):
     assert c.post(D, headers=doc, json={"action": "add", "item": {"name": "x"}}).status_code == 403
     assert c.post(R, headers=doc,
                   json={"action": "add", "item": {"drug_a": "a", "drug_b": "b"}}).status_code == 403
-    # pharmacist → 字典 403（仅 admin），规则可写（药剂科一票语义）
+    # 问题3 权限放宽（语义变更注明）：药学专业数据由药剂科维护——dict 由 admin 专属放宽为
+    # pharmacist+admin（与 rules 同源双角色，admin 保留兜底），原 pharmacist dict 403 断言更新为 200
     ph = _login(c, "pharm01")
-    assert c.post(D, headers=ph, json={"action": "add", "item": {"name": "x"}}).status_code == 403
+    assert c.post(D, headers=ph, json={"action": "add", "item": {"name": "x"}}).status_code == 200
     r = c.post(R, headers=ph, json={"action": "add", "item": {
         "drug_a": "地高辛", "drug_b": "呋塞米", "severity": "中危",
         "mechanism": "利尿致低钾，增强洋地黄毒性。"}})
     assert r.status_code == 200, r.text
+    # admin 双端点保留兜底（放宽不收窄）
+    admin = _login(c, "admin01")
+    assert c.post(D, headers=admin, json={"action": "add", "item": {"name": "y"}}).status_code == 200
+    assert c.post(R, headers=admin, json={"action": "add", "item": {
+        "drug_a": "a", "drug_b": "b", "severity": "中危"}}).status_code == 200
 
 
 # ---- 字典 add/update/delete 往返（admin）----

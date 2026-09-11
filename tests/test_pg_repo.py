@@ -877,3 +877,63 @@ def test_migrate_prescriptions_imports_and_reconciles(fake_pg, tmp_path, monkeyp
     # 幂等：再次迁移无补齐
     assert not asyncio.run(pg_store.migrate_json_to_pg()).get("prescriptions_reconciled")
     assert set(fake_pg["prescriptions"]) == {"rx-pg-already", "rx-json-only"}
+
+
+# ---------- 问题1：JSON 真源原子写回归锁（审核中心数据时有时无 · 写侧诊断结论锁定） ----------
+
+def test_write_json_atomic_tmp_then_replace(tmp_path, monkeypatch):
+    """问题1 写侧回归锁：_write_json_atomic 必须先完整写 tmp 文件、再 os.replace 原子替换——
+    并发读（前端轮询）恰逢写入窗口也不会读到截断/空文件。诊断结论：8 个 JSON 真源写路径
+    已统一原子化，本测试锁定该形态防回退。fake replace 只记录不替换：
+    断言（1）replace 以 path+'.tmp' 为源、path 为目标；（2）调用时 tmp 内容已完整落盘；
+    （3）replace 之前目标文件未被截断。"""
+    target = str(tmp_path / "atomic.json")
+    with open(target, "w", encoding="utf-8") as f:
+        json.dump({"old": 1}, f)
+    calls = []
+
+    def fake_replace(src, dst):
+        calls.append((src, dst))  # 只记录不执行：验证 replace 调用时 tmp 已完整写好
+
+    monkeypatch.setattr(pg_store.os, "replace", fake_replace)
+    pg_store._write_json_atomic(target, {"new": 2, "items": [1, 2, 3]})
+    assert calls == [(target + ".tmp", target)], "必须以 path+'.tmp' 为源、path 为目标替换"
+    with open(str(tmp_path / "atomic.json.tmp"), encoding="utf-8") as f:
+        assert json.load(f) == {"new": 2, "items": [1, 2, 3]}  # replace 前内容已完整写入 tmp
+    with open(target, encoding="utf-8") as f:
+        assert json.load(f) == {"old": 1}  # replace 之前目标文件未被截断/置空
+
+
+def test_all_truth_sources_route_through_atomic_write(tmp_path, monkeypatch):
+    """问题1 写侧统一检查：queue/users/consults/prescriptions/drug_dict/drug_rules/
+    llm_providers/departments 全部 8 个 JSON 真源写路径（repo 层 save_*）必须经
+    _write_json_atomic（tmp+os.replace），不允许任何直写真源文件的旁路。
+    spy 记录各域调用；PG_OFFLINE=on 走纯 JSON 路径（不触发 PG 同步）。"""
+    calls = []
+    real = pg_store._write_json_atomic
+
+    def spy(path, data):
+        calls.append(path)
+        real(path, data)
+
+    monkeypatch.setattr(pg_store, "_write_json_atomic", spy)
+    monkeypatch.setenv("PG_OFFLINE", "on")
+    q = str(tmp_path / "queue.json")
+    pg_store.save_queue([{"id": "r1", "ts": "t"}], q)
+    u = str(tmp_path / "users.json")
+    pg_store.save_users({"doc01": {"role": "doctor", "dept": "心内科", "password_hash": "h"}}, u)
+    c = str(tmp_path / "consults.json")
+    pg_store.save_consults([{"id": "c1", "created_at": "t"}], c)
+    r = str(tmp_path / "prescriptions.json")
+    pg_store.save_prescriptions([{"id": "p1", "created_at": "t"}], r)
+    d = str(tmp_path / "drug_dict.json")
+    pg_store.save_drug_dict([{"name": "华法林"}], d)
+    rl = str(tmp_path / "drug_rules.json")
+    pg_store.save_drug_rules([{"drug_a": "布洛芬", "drug_b": "华法林", "severity": "高危"}], rl)
+    l = str(tmp_path / "llm_config.json")
+    pg_store.save_llm_providers({"chat": {"active": None, "providers": []},
+                                 "vision": {"active": None, "providers": []}}, l)
+    dp = str(tmp_path / "departments.json")
+    pg_store.save_departments({"list": ["心内科"]}, dp)
+    assert sorted(calls) == sorted([q, u, c, r, d, rl, l, dp]), \
+        "8 个真源写路径必须全部经 _write_json_atomic（问题1 统一检查）"
