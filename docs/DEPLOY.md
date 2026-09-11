@@ -355,3 +355,56 @@ python scripts/loadtest.py --users 16 --seconds 25 --ramp
 2. **标注数据**：数千条病历质控标注（或直接授权使用审核中心三列留痕历史数据）——到位后启动第二步微调。
 
 **64 用户档实测（2026-09-12）**：1024 请求零错误，p50 212-396ms / p95 496-804ms / p99 <920ms——Web 层在 64 并发下仍健康（延迟上升主要来自账号级限流节奏与全量 JSON 快照读取，非服务器瓶颈）。压测 RPS 天花板由每账号 60 次/分限流决定（64 账号聚合 ~51 RPS），真实用户各持独立账号，聚合上限随用户数线性增长。
+
+## 故障注入演练记录
+
+> 脚本：`python scripts/fault_drill.py --check`（只验健康基线）／`--scenario pg|milvus|llm --yes`（真实破坏 → 探活 → 恢复 → 复验，结束自动回原状）。
+> 演练日期：2026-09-12（对抗测试轮 A2）；环境：本地直跑 uvicorn:8001 + docker（edu_agent_postgres / edu_agent_milvus / edu_agent_etcd / edu_agent_minio）。
+
+### ① pg（docker stop edu_agent_postgres）——PASS
+
+| 阶段 | 探针 | 结果 |
+| --- | --- | --- |
+| 停机 | /healthz | 200 `{"ok":true}` |
+| 停机 | /drug/dict（JSON 兜底） | 200，342 种药品完整 |
+| 停机 | /prescriptions/mine | 200 |
+| 停机 | /prescriptions 提交（JSON 兜底写） | 200，`rx-d73860c8` |
+| 停机 | 写后计数（doctor01 mine） | 4→5 符合预期 |
+| 恢复 | docker start → 容器 healthy | healthy |
+| 恢复 | /healthz、/drug/dict | 均 200 |
+| 恢复 | 停机前数据完整性 | 0 条丢失；停机期写入仍在（无丢失） |
+| 恢复 | PG 真源 `SELECT count(*)` | 6=停机前（探针只落 JSON，未污染 PG） |
+| 清理 | 探针摘除后计数复原 | 4 条、探针残留=无 |
+
+结论：PG 停机时 repo 层 JSON 兜底读写全程可用（提交/查询不 500），恢复后存量与增量数据零丢失，演练探针已摘除、数据恢复原状。
+
+### ② milvus（docker stop edu_agent_milvus）——恢复链 PASS，2 项 DR 发现
+
+| 阶段 | 探针 | 结果 |
+| --- | --- | --- |
+| 停机 | /healthz | 200 |
+| 停机 | literature/ask | **无 5xx**；降级响应延迟 >15min（见发现②），恢复窗首探针直接证实降级语义：200 + `fallback:model-prior` + conf=0.4 + needs_human_review=true |
+| 恢复 | docker start → 容器 healthy | healthy |
+| 恢复 | literature/ask | 首轮检索未自动复通（503 channel not subscribed，load 卡死 0%，见发现①）→ 执行脚本内置 DR 处置 |
+| 恢复 | DR 处置后 literature/ask | 200，conf=0.89，来源=《中国高血压防治指南（2024 年修订版）》 |
+| 恢复 | Milvus 直连 search（embedding anns_field） | OK |
+
+DR 发现（已固化进 `scripts/fault_drill.py` 恢复路径）：
+1. **Milvus v2.4.0 standalone 重启后 collection load 任务卡死 0%**（检索报 503 `channel not subscribed`；反复重启单容器无效）。处置：**etcd/minio/milvus 全栈干净重启**（etcd 稳定后再拉 milvus）清除卡死任务 → 重新触发 load（服务端补齐，客户端超时不代表失败）→ 直连 search 探针就绪（约 6-10 分钟）。
+2. **停机窗口 ask 链路"慢而不死"**：进程内缓存的 Milvus 客户端对已停机实例的首个 RPC 挂起 ~7.5 分钟（`MilvusClient(timeout=10)` 不生效），agentic 降级链路（2×retrieve + 2×refine LLM）全程 >15 分钟才返回降级 200。期间 healthz/prescriptions 等非检索端点完全正常。建议后续修复：search_hybrid 对 RPC 失败重建客户端/缩短 gRPC keepalive，或给 retrieve 节点加独立短超时。
+
+### ③ llm key（admin API 激活无效 key 的 chat provider）——PASS
+
+| 阶段 | 探针 | 结果 |
+| --- | --- | --- |
+| 停机 | /admin/llm/providers 添加无效 key provider + 激活 | 200（`p-915bcbac`） |
+| 停机 | literature/ask | 200 + `degraded:llm` 降级 JSON（conf=0.3，needs_human_review=true），不 500、不裸文本 |
+| 恢复 | 激活回原 provider + 删除演练 provider | active=`p-eca795bb` 复原，演练 provider 已删 |
+| 恢复 | literature/ask | 200 非降级（conf=0.89，PMID 来源） |
+
+结论：LLM key 失效时端点体面降级（结构化 JSON 降级语义 + 人工复核标记），admin API 置换全程可回滚，`data/llm_providers.json` 演练前后逐字节一致。
+
+### 演练后核验
+
+- 全容器运行正常（postgres/milvus/etcd/minio healthy，attu/redis 未受影响）；Milvus load_state=Loaded；PG 处方数据与停机前一致；药品字典/会诊/科室/llm_providers 配置逐项复原。
+- 演练前后各跑一次全量 pytest：**693 passed**（基线 685 + 对抗轮新增 8），零残留影响。

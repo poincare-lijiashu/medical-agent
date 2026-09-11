@@ -8,6 +8,7 @@
 """
 import json
 import os
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -581,3 +582,68 @@ def test_reviewed_by_me_role_guard(suggest_env):
     assert c.get(f"{SUB}/reviewed-by-me", headers=_h(doc)).status_code == 403
     assert c.get(f"{SUB}/reviewed-by-me", headers=_h(_login(c, "qc01"))).status_code == 403, \
         "问题4：qc 无处方审核权，不提供 reviewed-by-me 视图"
+
+
+# ---- 对抗轮 A4：线程级竞态补测（域层 _lock 锁死「同 id 并发流转恰好一个赢家」语义） ----
+
+def _race_two(fn_a, fn_b):
+    """Barrier 同步双线程同时起跑，返回 [(tag, ("ok", 结果) | ("err", 异常))]。"""
+    barrier = threading.Barrier(2)
+    out = []
+
+    def _run(tag, fn):
+        barrier.wait()  # 两线程对齐后才调域层，最大化真实竞态窗口
+        try:
+            out.append((tag, ("ok", fn())))
+        except ValueError as e:  # 域层约定：非法流转一律 ValueError
+            out.append((tag, ("err", e)))
+
+    threads = [threading.Thread(target=_run, args=("a", fn_a)),
+               threading.Thread(target=_run, args=("b", fn_b))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert len(out) == 2, "双线程均须完结（不悬挂）"
+    return out
+
+
+def test_concurrent_approve_same_id_exactly_one_winner(rx_env):
+    """同 id 双线程并发 approve：恰好一个成功、另一个 ValueError（非法流转，pending_pharm
+    已被赢家消费）；终态 approved、reviewer 单一且与赢家一致、文件终态无重复/无中间态残留。"""
+    r = rx.create(doctor="doctor01", case_text=CASE, drugs=[{"name": "华法林"}])
+    out = _race_two(lambda: rx.approve(r["id"], "pharm01", "并发签发A"),
+                    lambda: rx.approve(r["id"], "pharm02", "并发签发B"))
+    statuses = sorted(k for _, (k, _v) in out)
+    assert statuses == ["err", "ok"], "恰好一个赢家、一个非法流转拒绝"
+    ok = next(v for _t, (k, v) in out if k == "ok")
+    assert ok["status"] == "approved" and ok["id"] == r["id"]
+    final = rx.get(r["id"])
+    assert final["status"] == "approved", "终态唯一：approved"
+    winner = {v["pharm_reviewer"] for _t, (k, v) in out if k == "ok"}
+    assert len(winner) == 1 and final["pharm_reviewer"] in winner, \
+        "reviewer 单一且与赢家一致（输家不留任何痕迹）"
+    items = json.loads((rx_env / "prescriptions.json").read_text(encoding="utf-8"))
+    assert len([i for i in items if i["id"] == r["id"]]) == 1, "无重复记录"
+    assert items[-1]["status"] == "approved", "落盘终态 approved（无中间态残留）"
+
+
+def test_concurrent_reject_approve_hedge_terminal_unique(rx_env):
+    """双线程对冲（一 reject 一 approve）：终态唯一确定（approved/rejected 二者其一），
+    赢家动作与终态/reviewer/opinion 完全一致，输家 ValueError；落盘与读回一致。"""
+    r = rx.create(doctor="doctor01", case_text=CASE, drugs=[{"name": "华法林"}])
+    out = _race_two(lambda: rx.reject(r["id"], "pharm01", "对冲驳回"),
+                    lambda: rx.approve(r["id"], "pharm02", "对冲签发"))
+    statuses = sorted(k for _, (k, _v) in out)
+    assert statuses == ["err", "ok"], "对冲恰好一个动作生效"
+    ok = next(v for _t, (k, v) in out if k == "ok")
+    final = rx.get(r["id"])
+    assert final["status"] in ("approved", "rejected"), "终态唯一确定"
+    assert final["status"] == ok["status"], "读回与赢家返回一致（终态不被对冲翻转）"
+    if final["status"] == "approved":
+        assert final["pharm_reviewer"] == "pharm02" and final["pharm_opinion"] == "对冲签发"
+    else:
+        assert final["pharm_reviewer"] == "pharm01" and final["pharm_opinion"] == "对冲驳回"
+    assert final["pharm_reviewed_at"], "终态留审核时间"
+    items = json.loads((rx_env / "prescriptions.json").read_text(encoding="utf-8"))
+    assert len(items) == 1 and items[0]["status"] == final["status"], "落盘终态一致"
