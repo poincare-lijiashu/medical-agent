@@ -1,18 +1,8 @@
 {
-  "local_corpus": {
-    "name": "本地指南要点（内置·含常见病）（已废弃，由 clinical_guidelines_v2 替换）",
-    "chunks": 21,
-    "ts": "2026-09-10T03:04:10.312223+00:00"
-  },
   "pubmed_seed": {
     "name": "PubMed 真实文献库（内置·85 主题）",
     "chunks": 1500,
     "ts": "2026-09-10T03:42:15.941424+00:00"
-  },
-  "sample_guideline": {
-    "name": "sample_guideline.pdf（已废弃，由 clinical_guidelines_v2 替换）",
-    "chunks": 1,
-    "ts": "2026-09-10T03:03:55.082836+00:00"
   },
   "up_9d5d28debc": {
     "name": "14.+病理学（第10版）.pdf",

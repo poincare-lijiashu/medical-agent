@@ -1234,11 +1234,31 @@ _RESOLVE_ROLES = ("qc", "admin")                       # 非 drug 类签字权�
 _DRUG_RESOLVE_ROLES = ("admin", "pharmacist")    # drug 类签字权（问题4 收窄：药剂科一票+管理员，qc 移除）
 
 
+def _review_image_view(item: dict, role: str, username: str) -> dict:
+    """审核中心图片可见性统一收窄（/review/pending 与 /review/history 两条路径共用）。
+
+    规则：图片返回给 = **提交人本人 + admin + 该项审核所需角色**——
+    agent 非 drug 项（imaging/qc 等）→ qc+admin（qc 核对影像是审核依据，需要看图）；
+    agent=drug → pharmacist+admin；doctor 仅本人提交的（患者数据隐私边界保留，
+    他人条目一律剥 images，不因角色放宽暴露面）。"""
+    if item.get("submitted_by") == username or role == "admin":
+        return dict(item)
+    drug = item.get("agent") == "drug"
+    if (role == "qc" and not drug) or (role == "pharmacist" and drug):
+        return dict(item)  # 该项审核所需角色：看图核对
+    return {k: v for k, v in item.items() if k != "images"}
+
+
 @router.get("/review/pending")
 async def review_pending(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     items = await asyncio.to_thread(review.pending)
-    if user.get("role", "") == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
+    role = user.get("role", "")
+    me = user.get("username", "system")
+    if role == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
         items = [i for i in items if i.get("agent") != "drug"]  # drug 审核权=pharmacist/admin
+    # 图片可见性统一规则（与 /review/history 一致）：qc 审非 drug 项可见 images（修复
+    # 「qc 看不到待审 imaging 图片」）；doctor 他人待审项剥 images（原全量返回，同步收紧）
+    items = [_review_image_view(i, role, me) for i in items]
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="list_pending",
                             actor=user.get("username", "system"),
                             payload={"n": len(items), "role": user.get("role", "")})
@@ -1250,22 +1270,23 @@ async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     """历史列表（任务5 语义更新）：list_all 现按签发方式剥离——仅人工签发记录剥离 images
     （FIND-03a 人工复核后不留原图）；AI·留痕模式(自动) 签发的记录保留 images（用户自己的
     交互留痕，前端历史区缩略图可见）。
-    可见性边界（服务端强制，此前仅前端按人过滤）：保留的 images 仅**发起人本人 / admin**
-    可见——其它查看者（qc/其他医生/药师）返回的条目一律剥离 images（原始影像属患者数据，
-    不因留痕可见性放宽而扩大暴露面）。"""
+    可见性边界（服务端强制，本批修复统一规则）：图片返回给 = 提交人本人 + admin +
+    该项审核所需角色（agent 非 drug 项 → qc+admin：qc 审核需要看图；agent=drug →
+    pharmacist+admin）——原「非本人一律剥 images」导致 qc 历史区看不到 imaging 影像，
+    已修复；doctor 仅本人参与记录可见（隐私边界保留，不扩大暴露面）。"""
     items = await asyncio.to_thread(review.list_all, limit=50)
     me = user.get("username", "system")
     role = user.get("role", "")
-    is_admin = role == "admin"
     # 问题3修复（实测结论）：doctor/pharmacist 的「我的历史」数据源改为服务端按人检索
-    # （submitted_by=me OR reviewed_by=me，images 可见性边界不变）——原 list_all(limit=50)
+    # （submitted_by=me OR reviewed_by=me）——原 list_all(limit=50)
     # 按插入序全局截断，真实队列中 pharmacist 处理的 drug 项被其后大量自动签发条目挤出
     # 最新 50 条窗口，前端按 reviewed_by=me 过滤恒空。qc/admin 全局档案语义不变。
     if role in ("doctor", "pharmacist"):
         items = await asyncio.to_thread(review.list_involved, me)
-    elif not is_admin:
-        items = [i if i.get("submitted_by") == me
-                 else {k: v for k, v in i.items() if k != "images"} for i in items]
+    # 图片可见性统一规则（与 /review/pending 一致）：qc 审非 drug 项可见 images（修复
+    # qc 历史区看不到 imaging 影像）；pharmacist 的 drug 项可见；doctor 他人项剥 images；
+    # admin/提交人本人全可见
+    items = [_review_image_view(i, role, me) for i in items]
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="history",
                             actor=user.get("username", "system"),
                             payload={"n": len(items), "role": user.get("role", "")})

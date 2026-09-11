@@ -129,12 +129,12 @@ def test_list_all_strips_images_only_for_human_signed(monkeypatch, tmp_path):
 
 
 def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
-    """任务5 可见性边界（服务端强制）：AI 留痕签发记录保留的 images 仅发起人本人/admin
-    可见——其他医生（doctor02）经 /review/history 读取时 images 必须被剥离
-    （此前仅靠前端按人过滤，接口层对多角色可见）。
-    问题3① 语义更新注明：doctor 的 history 数据源改为服务端按人检索（list_involved，
-    仅本人参与记录）——doctor02 对他人记录连条目都不可见（强于剥 images 的隔离，
-    原断言「他人条目存在但无 images」按新语义更新为「他人条目不可见」）。"""
+    """可见性边界（服务端强制）。本批修复语义更新注明：图片返回给 = 提交人本人 +
+    admin + **该项审核所需角色**（agent=imaging/qc 等非 drug 项 → qc+admin）——
+    qc 审核 imaging 项需要看图（审核依据），历史区 imaging 留痕记录对 qc 不再剥离
+    images（原「非本人一律剥 images」是 qc 看不到图的根本原因）。
+    隐私边界保留：doctor 仅本人参与记录（doctor02 对他人记录连条目都不可见，
+    服务端按人检索 list_involved，隔离强于剥 images）；admin 全可见（合规审计）。"""
     from backend.core import auth as auth_mod
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
@@ -151,7 +151,13 @@ def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
     items_self = c.get("/api/v1/medical/review/history", headers=_h(tok_doc1)).json()["items"]
     entry_self = next(i for i in items_self if i["id"] == rid)
     assert entry_self.get("images"), "发起人本人应能看到自己留痕记录的影像"
-    # 其他医生：他人记录整条不可见（问题3① 收紧：服务端按人检索，隔离边界强于剥 images）
+    # qc：该项审核所需角色（imaging 非 drug）→ images 可见（本批修复：原被剥离）
+    tok_qc = _login(c, "qc01", "Med@2026")
+    items_qc = c.get("/api/v1/medical/review/history", headers=_h(tok_qc)).json()["items"]
+    entry_qc = next(i for i in items_qc if i["id"] == rid)
+    assert entry_qc.get("images"), "qc 审核需要看图：imaging 留痕记录 images 应对 qc 可见"
+    # 其他医生：他人记录整条不可见（隐私边界保留：doctor 仅本人参与记录，
+    # 隔离边界强于剥 images）
     tok_doc2 = _login(c, "doctor02", "Med@2026x")
     items_other = c.get("/api/v1/medical/review/history", headers=_h(tok_doc2)).json()["items"]
     assert all(i["id"] != rid for i in items_other), \
@@ -161,6 +167,42 @@ def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
     items_admin = c.get("/api/v1/medical/review/history", headers=_h(tok_admin)).json()["items"]
     entry_admin = next(i for i in items_admin if i["id"] == rid)
     assert entry_admin.get("images"), "admin 对留痕记录的影像全可见"
+
+
+def test_pending_images_visibility_by_reviewer_role(monkeypatch, tmp_path):
+    """本批修复新增：/review/pending 与 /review/history 统一图片可见性规则——
+    提交人本人 + admin + 该项审核所需角色（imaging 非 drug → qc；doctor 仅本人提交的）。
+    qc 打开待审 imaging 项应见缩略图数据（前端渲染无条件遮挡，数据到达即显示）；
+    doctor 他人待审项 images 剥离（pending 路径同步收紧，原全量返回他人影像）。"""
+    from backend.core import auth as auth_mod
+    from backend.config import settings
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)  # 显式关闭留痕模式 → 高危项留在 pending
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    seed_default_users()
+    assert auth_mod.create_user("doctor02", "Med@2026x", "doctor", False, "内科")
+    monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _FakeVL())
+    c = TestClient(app)
+    tok_doc1 = _login(c, "doctor01", "Med@2026")
+    r = c.post("/api/v1/medical/imaging/ask", headers=_h(tok_doc1),
+               json={"question": "这张胸片有什么异常", "images": [_png_data_url(900, 600)]})
+    assert r.status_code == 200, r.text
+    rid = r.json()["review_id"]
+    # qc：审核所需角色 → 待审 imaging 项 images 非空
+    tok_qc = _login(c, "qc01", "Med@2026")
+    pending_qc = c.get("/api/v1/medical/review/pending", headers=_h(tok_qc)).json()["pending"]
+    entry_qc = next(i for i in pending_qc if i["id"] == rid)
+    assert isinstance(entry_qc.get("images"), list) and entry_qc["images"], \
+        "qc 打开待审 imaging 项应能看到影像（审核依据，本批修复锁定）"
+    # 提交人本人（doctor01）：images 可见
+    pending_self = c.get("/api/v1/medical/review/pending", headers=_h(tok_doc1)).json()["pending"]
+    entry_self = next(i for i in pending_self if i["id"] == rid)
+    assert entry_self.get("images"), "提交人本人对待审项影像可见"
+    # doctor（他人提交的待审项）：images 剥离（统一规则：doctor 仅本人提交的）
+    tok_doc2 = _login(c, "doctor02", "Med@2026x")
+    pending_d2 = c.get("/api/v1/medical/review/pending", headers=_h(tok_doc2)).json()["pending"]
+    entry_d2 = next(i for i in pending_d2 if i["id"] == rid)
+    assert not entry_d2.get("images"), "doctor 他人待审项 images 应剥离（隐私边界不变）"
 
 
 def test_submit_caps_total_image_chars_4m(monkeypatch, tmp_path):
