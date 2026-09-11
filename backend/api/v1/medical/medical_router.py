@@ -25,6 +25,8 @@ from backend.core import chat_memory, kb_ingest, llm_config, runtime_flags
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
 from backend.core.intent import offtopic_tech_reply, prefilter_reply
+from backend.core.llm_factory import get_llm  # suggest 端点走模块级符号（测试 monkeypatch 兼容）
+from backend.core.logger import get_logger
 from backend.core.medical_audit import PHIRedactor, current_channel, get_audit_logger
 from backend.core.medical_drug import check as drug_check
 from backend.integration import registry as his_registry
@@ -32,6 +34,7 @@ from backend.integration.base import NullAdapter
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 _redactor = PHIRedactor()
+logger = get_logger(__name__)  # suggest 硬校验丢弃幻觉药名等留痕
 _lit_graph = None
 _mdt_graph = None
 _graph_lock = threading.Lock()  # 懒加载双检锁：并发首访只构建一次，防重复构建竞态
@@ -604,6 +607,110 @@ async def drug_my_rejections(user: dict = Depends(require_user)):
     await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="my_rejections",
                             actor=me, payload={"n": len(items)})
     return {"items": items, "me": me}
+
+
+# ---------- 阶段2.2：智能开药 suggest（字典约束 LLM 推荐 + 相互作用硬校验） ----------
+
+class PrescribeSuggestReq(BaseModel):
+    """开药建议请求：病例摘要 20-5000 字（pydantic 校验，越界 422）。"""
+    case_text: str = Field(min_length=20, max_length=5000)
+
+
+def _extract_llm_json_list(raw) -> list:
+    """LLM 响应 → list（剥 markdown 代码围栏后取首个 [...] 子串；解析失败返回 []，
+    绝不让格式抖动拖垮端点）。"""
+    text = raw.strip() if isinstance(raw, str) else str(raw or "")
+    if text.startswith("```"):  # 剥 ```json ... ``` 围栏
+        text = text.strip("`").strip()
+        if "\n" in text:
+            text = text.split("\n", 1)[1]
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end <= start:
+        return []
+    try:
+        parsed = json.loads(text[start:end + 1])
+    except Exception:  # noqa: BLE001 —— JSON 损坏降级空清单
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+@router.post("/prescriptions/suggest")
+async def prescription_suggest(req: PrescribeSuggestReq,
+                               user: dict = Depends(require_role("doctor"))):
+    """智能开药建议（阶段2.2）：病例摘要 → 字典约束 LLM 推荐 + 相互作用硬校验。
+
+    流程：药品字典候选池（规范名+类别）注入 prompt 强制 LLM 只能从清单选药 →
+    get_llm("medical_literature") 输出 JSON [{name,dose,freq,reason}] 3-6 种 →
+    硬校验：药名经别名图规范化后不在字典即丢弃并告警（幻觉=0，绝不透出）→
+    推荐组合两两查 drug_rules：高危 → blocked=true + conflicts（不落库，需医生自行规避）；
+    中危 → warnings 附响应提示。全程审计 prescription.suggested；响应携带 DISCLAIMER。
+    """
+    from backend.core import drug_dict as dd
+    actor = user.get("username", "system")
+    case_text = req.case_text.strip()
+    # 候选池：规范名+类别（LLM 只能从清单选药；空字典兜底空清单 → 全部丢弃）
+    drugs = await asyncio.to_thread(dd.load_dict)
+    pool = "\n".join(f"- {d.get('name')}（{d.get('category') or '其他'}）"
+                     for d in drugs if d.get("name"))
+    system = ("你是临床药物推荐助手。你只能从下方候选药品清单中选择药物，"
+              "严禁使用清单之外的任何药品名称（不得编造、不得使用别名变体）。\n"
+              "只输出一个 JSON 数组，不要任何解释或 markdown 代码块。数组每项形如 "
+              '{"name":"清单内规范名","dose":"剂量","freq":"频次","reason":"推荐理由"}，'
+              "推荐 3-6 种。\n\n候选药品清单：\n" + (pool or "（空）"))
+    llm = get_llm("medical_literature")
+    try:
+        resp = await asyncio.to_thread(
+            llm.invoke, [SystemMessage(content=system), HumanMessage(content=case_text)])
+    except Exception as e:  # noqa: BLE001 —— LLM 故障降级空推荐，绝不冒泡 500
+        logger.warning("prescription.suggest_llm_failed", error=str(e)[:150])
+        resp = None
+    content = getattr(resp, "content", "") or ""
+    if isinstance(content, list):  # 兼容分块 content（取文本块拼接）
+        content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    # 硬校验：别名图归一后不在字典 → 丢弃 + 告警（幻觉=0）
+    amap = await asyncio.to_thread(dd.alias_map)
+    suggestions: list[dict] = []
+    dropped: list[str] = []
+    for s in _extract_llm_json_list(content):
+        if not isinstance(s, dict):
+            continue
+        name = str(s.get("name") or "").strip()
+        norm = amap.get(name)
+        if not norm:
+            if name:
+                dropped.append(name)
+                logger.warning("prescription.suggest_hallucination_dropped", name=name)
+            continue
+        suggestions.append({"name": norm, "dose": str(s.get("dose") or "").strip(),
+                            "freq": str(s.get("freq") or "").strip(),
+                            "reason": str(s.get("reason") or "").strip()})
+    # 组合两两查相互作用规则：高危阻断（不落库）、中危提示
+    rulemap = await asyncio.to_thread(dd.rule_map)
+    conflicts: list[dict] = []
+    warnings: list[dict] = []
+    names = [s["name"] for s in suggestions]
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            rule = rulemap.get(frozenset((names[i], names[j])))
+            if not rule:
+                continue
+            sev, mech, mgmt = rule
+            entry = {"pair": [names[i], names[j]], "severity": sev,
+                     "note": mech + (f"；{mgmt}" if mgmt else "")}
+            if sev in ("高危", "禁忌"):
+                conflicts.append(entry)
+            else:
+                warnings.append(entry)
+    blocked = bool(conflicts)
+    await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                            action="suggested", actor=actor,
+                            payload={"q": case_text[:AUDIT_Q_SNIPPET], "n": len(suggestions),
+                                     "blocked": blocked, "dropped": dropped})
+    await pg_store.mirror_audit("prescription.suggested", actor,
+                                {"q": case_text[:AUDIT_Q_SNIPPET], "n": len(suggestions),
+                                 "blocked": blocked, "dropped": dropped})
+    return {"suggestions": suggestions, "blocked": blocked, "conflicts": conflicts,
+            "warnings": warnings, "disclaimer": dd.DISCLAIMER}
 
 
 async def _ask_prefilter(agent: str, q: str, actor: str) -> AskResp | None:

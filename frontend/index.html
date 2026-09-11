@@ -1536,6 +1536,8 @@ function humanizeAudit(e){
       if(ev.indexOf('qc')===0)return `提交了质控结论（置信 ${cf}${p.review?' · 需复核':''}）`;
       if(ev.indexOf('drug')===0)return `药物问答（置信 ${cf}${p.review?'；需药剂科复核':''}）`;
       return `AI 问答留痕（置信 ${cf}${p.review?' · 需复核':''}）`;},
+    /* —— 智能开药 —— */
+    suggested:()=>`AI 开药建议（推荐 ${p.n??0} 种${p.blocked?' · 高危联用已阻断':''}${(p.dropped||[]).length?` · 拦截幻影药 ${p.dropped.length} 个`:''}）`,
     /* —— 影像/病例（VL 链路）—— */
     describe_failed:()=>'影像描述失败（已留痕）',
     vl_failed:()=>'多模态解析失败（已留痕）',

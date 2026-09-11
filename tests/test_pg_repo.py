@@ -19,6 +19,7 @@ from backend.core import llm_config as lc
 from backend.core import medical_drug as md_mod
 from backend.core import medical_review as review
 from backend.core import pg_store
+from backend.core import prescriptions as rx_mod
 
 
 # ---------- 假 asyncpg 池/连接 ----------
@@ -90,6 +91,13 @@ class FakeConn:
         if s.startswith("SELECT data FROM consults"):
             return [{"data": json.dumps(self.db["consults"][k], ensure_ascii=False)}
                     for k in sorted(self.db["consults"])]
+        if s.startswith("SELECT data FROM prescriptions"):
+            # 阶段2.1：处方真源读（data jsonb → 模拟驱动返回 str；created_at 排序）
+            return [{"data": json.dumps(self.db["prescriptions"][k], ensure_ascii=False)}
+                    for k in sorted(self.db["prescriptions"])]
+        if s.startswith("SELECT id FROM prescriptions"):
+            # 阶段2.1：处方迁移差集补齐用（只取 id 集合）
+            return [{"id": k} for k in self.db["prescriptions"]]
         if s.startswith("SELECT kind"):
             return [{"kind": k_, "pid": p_, "data": d_, "active": act_}
                     for k_, p_, d_, act_ in self.db["llm_providers"]]
@@ -101,7 +109,7 @@ class FakeConn:
         if s == "SELECT 1":
             return 1
         for t in ("users", "departments", "review_queue", "llm_providers",
-                  "drug_dict", "drug_rules"):
+                  "drug_dict", "drug_rules", "prescriptions"):
             if s == f"SELECT count(*) FROM {t}":
                 return len(self.db[t])
         raise AssertionError(f"假池未实现的 fetchval: {s[:80]}")
@@ -121,6 +129,15 @@ class FakeConn:
         if s.startswith("DELETE FROM consults WHERE NOT"):
             keep = set(a[0])
             self.db["consults"] = {k: v for k, v in self.db["consults"].items() if k in keep}
+            return "DELETE"
+        if s.startswith("DELETE FROM prescriptions WHERE NOT"):
+            # 阶段2.1：处方全量同步删除语义（按 id 保留）
+            keep = set(a[0])
+            self.db["prescriptions"] = {k: v for k, v in self.db["prescriptions"].items()
+                                        if k in keep}
+            return "DELETE"
+        if s == "DELETE FROM prescriptions":
+            self.db["prescriptions"] = {}
             return "DELETE"
         if s.startswith("DELETE FROM drug_dict WHERE NOT"):
             # 阶段1.1：drug_dict 全量同步删除语义（按规范名保留）
@@ -182,6 +199,11 @@ class FakeConn:
             for cid, data, _initiator, _status in rows:
                 self.db["consults"][cid] = json.loads(data)
             return
+        if s.startswith("INSERT INTO prescriptions"):
+            # 阶段2.1：处方 UPSERT（data jsonb str → dict 往返）
+            for rxid, data, _doctor, _status in rows:
+                self.db["prescriptions"][rxid] = json.loads(data)
+            return
         if s.startswith("INSERT INTO llm_providers"):
             for row in rows:
                 self.db["llm_providers"].append(tuple(row))
@@ -221,7 +243,8 @@ class FakePool:
 
 def _db() -> dict:
     return {"users": {}, "departments": [], "review_queue": {}, "llm_providers": [],
-            "consults": {}, "drug_dict": {}, "drug_rules": {}, "fail": None}
+            "consults": {}, "drug_dict": {}, "drug_rules": {}, "prescriptions": {},
+            "fail": None}
 
 
 @pytest.fixture()
@@ -521,6 +544,8 @@ def _seed_json_files(tmp_path, monkeypatch):
     # 阶段1.1：药品字典/规则 JSON 兜底文件一并隔离（防读入真实 data/drug_*.json 影响精确断言）
     monkeypatch.setattr(md_mod, "DRUG_DICT_FILE", str(tmp_path / "no_drug_dict.json"))
     monkeypatch.setattr(md_mod, "DRUG_RULES_FILE", str(tmp_path / "no_drug_rules.json"))
+    # 阶段2.1：处方 JSON 兜底文件一并隔离（防真实 data/prescriptions.json 影响精确断言）
+    monkeypatch.setattr(rx_mod, "PRESCRIPTIONS_FILE", str(tmp_path / "no_prescriptions.json"))
 
 
 def test_migrate_imports_when_tables_empty(fake_pg, tmp_path, monkeypatch):
@@ -807,3 +832,48 @@ def test_migrate_drug_tables_import_when_empty(fake_pg, tmp_path, monkeypatch):
     assert out.get("drug_dict") == 1 and out.get("drug_rules") == 1
     assert set(fake_pg["drug_dict"]) == {"华法林"}
     assert set(fake_pg["drug_rules"]) == {("华法林", "布洛芬")}
+
+
+# ---------- 阶段2.1：智能开药处方 repo 往返 + 迁移 ----------
+
+_RX = {"id": "rx-json-only", "doctor": "doctor01", "dept": "内科",
+       "case_text": "患者高血压合并房颤，需抗凝管理，评估出血风险后调整方案。",
+       "drugs": [{"name": "华法林", "dose": "2.5mg", "freq": "qd", "note": "监测 INR"}],
+       "contraindication_reason": "", "status": "pending_pharm",
+       "pharm_reviewer": None, "pharm_opinion": None,
+       "created_at": "2026-01-01T00:00:00+00:00",
+       "updated_at": "2026-01-01T00:00:00+00:00", "forced_high_risk": False}
+
+
+def test_prescriptions_pg_roundtrip_truth_source(fake_pg, tmp_path, monkeypatch):
+    """prescriptions：PG 可用 → 读 PG 真源；写 = JSON 兜底 + PG 全量同步（data jsonb 往返）。"""
+    f = tmp_path / "prescriptions.json"
+    monkeypatch.setattr(rx_mod, "PRESCRIPTIONS_FILE", str(f))
+    with rx_mod._lock:  # 直接经域模块写（JSON 兜底 + PG 全量同步）
+        items = [dict(_RX)]
+        rx_mod._save(items)
+    assert json.loads(f.read_text(encoding="utf-8"))[0]["id"] == _RX["id"]  # JSON 已落盘
+    assert set(fake_pg["prescriptions"]) == {_RX["id"]}                     # PG 已同步
+    f.unlink()  # 删 JSON：读必须仍完整（PG 真源）
+    loaded = rx_mod._load()
+    assert [i["id"] for i in loaded] == [_RX["id"]]
+    assert loaded[0]["drugs"][0]["name"] == "华法林"
+    assert loaded[0]["status"] == "pending_pharm" and loaded[0]["forced_high_risk"] is False
+
+
+def test_migrate_prescriptions_imports_and_reconciles(fake_pg, tmp_path, monkeypatch):
+    """阶段2.1 迁移：prescriptions——PG 表空 → JSON 全量导入；PG 非空 → 按 id 差集
+    只增不覆盖补齐（JSON ⊇ PG，幂等可重复跑，与 review_queue 同纪律）。"""
+    rx_file = tmp_path / "prescriptions.json"
+    keep = dict(_RX, id="rx-pg-already")
+    lost = dict(_RX, id="rx-json-only", case_text="JSON 独有记录，PG 同步失败窗口内积累。",
+                created_at="2026-02-01T00:00:00+00:00")
+    rx_file.write_text(json.dumps([keep, lost], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(rx_mod, "PRESCRIPTIONS_FILE", str(rx_file))
+    fake_pg["prescriptions"] = {keep["id"]: {**keep}}  # PG 旧真源子集（非空表）
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("prescriptions_reconciled") == 1    # rx-json-only 补齐（rx-pg-already 跳过）
+    assert fake_pg["prescriptions"]["rx-json-only"]["doctor"] == "doctor01"
+    # 幂等：再次迁移无补齐
+    assert not asyncio.run(pg_store.migrate_json_to_pg()).get("prescriptions_reconciled")
+    assert set(fake_pg["prescriptions"]) == {"rx-pg-already", "rx-json-only"}
