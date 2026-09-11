@@ -316,6 +316,20 @@
         <div class="card">
           <label class="lead" for="mdtCase" style="display:block;margin-bottom:8px">描述病例或会诊问题（含症状、既往史、用药、检查结果等）</label>
           <textarea class="inp" id="mdtCase" rows="4" placeholder="例：62 岁男性，2 型糖尿病合并冠心病，近期 eGFR 45，正在服二甲双胍与辛伐他汀，拟加用克拉霉素治疗感染，请评估用药与方案。"></textarea>
+          <!-- 轮 B1：会诊发起框影像上传（复用 imaging 的 compressImage 压缩与 ≤10 张上限；
+               有图时后端各专科意见切 VL 视觉模型并引用影像所见，受邀医生可见原图） -->
+          <div style="margin-top:10px">
+            <input type="file" id="consultImg" accept="image/*" multiple style="display:none"
+              onchange="addConsultImgs(this.files)">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button type="button" class="btn sm ghost" onclick="document.getElementById('consultImg').click()"
+                title="随会诊附影像图片（AI 结合影像给出专科意见，受邀医生可见），最多 10 张">附影像图片</button>
+              <span class="src" id="consultImgName"></span>
+              <button type="button" class="btn sm ghost" id="consultImgClear" style="display:none"
+                onclick="clearConsultImgs()">移除全部</button>
+            </div>
+            <div id="consultImgThumbs" style="display:none;margin-top:6px;flex-wrap:wrap;gap:6px"></div>
+          </div>
           <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
             <button class="btn primary" id="mdtRun" onclick="runMdt()">
               <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 20a5 5 0 0 0-10 0M12 3a5 5 0 0 1 5 5c0 3-2 4-2 6h-6c0-2-2-3-2-6a5 5 0 0 1 5-5Z"/></svg>发起会诊</button>
@@ -791,6 +805,26 @@ document.getElementById('img').addEventListener('change',async e=>{const fs=[...
 
 /* ---- MDT ---- */
 let lastMdtReport='';  /* 最近一次 AI 多智能体会诊小结（发起真实跨科室会诊时作底稿附在问题后） */
+/* 轮 B1：会诊发起框待附影像（独立于聊天输入区 curImages，互不干扰）；
+   复用 compressImage（与 imaging 同压缩策略）+ MAX_IMG 上限；成功发起后清空 */
+let consultImages=[];
+async function addConsultImgs(fs){
+  const arr=[...fs];if(!arr.length)return;
+  const add=arr.slice(0,MAX_IMG-consultImages.length);
+  if(add.length<arr.length)toast(`最多 ${MAX_IMG} 张，已忽略超出部分`);
+  if(!add.length)return;
+  const imgs=(await Promise.all(add.map(f=>compressImage(f)))).filter(Boolean);
+  consultImages=consultImages.concat(imgs).slice(0,MAX_IMG);
+  document.getElementById('consultImg').value='';  // 允许下次选择同一文件
+  renderConsultImgs();}
+function clearConsultImgs(){consultImages=[];const i=document.getElementById('consultImg');if(i)i.value='';renderConsultImgs();}
+function renderConsultImgs(){
+  const bar=document.getElementById('consultImgThumbs');
+  bar.innerHTML=consultImages.map(s=>`<img class="thumb" style="width:38px;height:38px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:zoom-in" src="${esc(s)}" alt="会诊影像" onclick="showImg(this.src)">`).join('');
+  bar.style.display=consultImages.length?'flex':'none';
+  const clr=document.getElementById('consultImgClear');if(clr)clr.style.display=consultImages.length?'':'none';
+  document.getElementById('consultImgName').textContent=consultImages.length
+    ?`已附 ${consultImages.length} 张（最多 ${MAX_IMG} 张，AI 会结合影像给出专科意见）`:'';}
 async function runMdt(){const c=document.getElementById('mdtCase').value.trim();if(!c){toast('请先填写病例');return;}
   const btn=document.getElementById('mdtRun');btn.disabled=true;const out=document.getElementById('mdtOut');
   out.innerHTML=`<div class="card"><div class="sk" style="width:40%;height:16px;margin-bottom:14px"></div><div class="sk" style="margin-bottom:8px"></div><div class="sk" style="width:90%"></div></div>`;
@@ -810,13 +844,15 @@ async function startRealConsult(){
   confirmDanger('发起真实跨科室会诊',
     'AI 将阅读病例与<b>实时科室清单</b>自主选择召集专科，并把按科室的定向初步意见分发给目标科室的全部在职医生；各科医生在审核中心「其它科室会诊协助」填写意见（仅建议权，每人一票），由您手动结束会诊并汇总。确认发起？','确认发起',async()=>{
     const btn=document.getElementById('mdtReal');btn.disabled=true;
-    try{const r=await fetch('/api/v1/medical/consults',{method:'POST',headers:auth(),body:JSON.stringify({question:q})});
+    try{const r=await fetch('/api/v1/medical/consults',{method:'POST',headers:auth(),
+      body:JSON.stringify({question:q,images:consultImages.length?consultImages:undefined})});  /* 轮 B1：随单附影像 */
       if(r.status===401){logout();return;}
       const d=await r.json();
       if(!r.ok){toast('发起失败：'+(d.detail||r.status));return;}
       closeModal();  /* 任务1：发起成功自动关闭确认弹窗（复用共享 closeModal，不再手点取消/关闭） */
       toast('会诊已发起并分发：'+((d.target_depts||[]).join('、')||'（无受邀科室）'));
       lastMdtReport='';  // 底稿已随单发出，避免下次误带旧稿
+      consultImages=[];renderConsultImgs();  /* 轮 B1：图已随单发出，清空待附影像 */
       refreshConsultBadge();  /* 任务4：新会诊发起后刷新徽标（发起者可能也在受邀科室） */
     }catch(e){toast('发起失败：'+e.message);}
     finally{btn.disabled=false;}});}
@@ -874,6 +910,12 @@ async function loadConsultInbox(){
     const d=await r.json();consultInbox=d.items||[];consultMe=d.me||'';
     renderConsultInbox();updateConsultBadge();  /* 任务4：收件箱刷新后同步 tab 徽标 */
   }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+/* 轮 B1：会诊单缩略图条（收件箱列表项与「我的会诊」详情共用）——
+   data:image/ 前缀白名单过滤 + esc() 转义 src，点击复用 showImg 大图查看 */
+function consultThumbs(c){
+  const imgs=(c.images||[]).filter(u=>String(u).startsWith('data:image/'));
+  return imgs.length?'<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
+    +imgs.map(u=>'<img class="thumb" style="width:38px;height:38px;cursor:zoom-in" src="'+esc(u)+'" alt="会诊影像" onclick="showImg(this.src)">').join('')+'</div>':'';}
 function renderConsultInbox(){
   const b=document.getElementById('reviewBody');
   const items=consultInbox||[];
@@ -882,9 +924,6 @@ function renderConsultInbox(){
   b.innerHTML=items.map(c=>{
     const mine=(c.opinions||[]).some(o=>o.doctor===consultMe);  /* 已给意见标记 */
     const depts=(c.target_depts||[]).map(x=>'<span class="chip mid"><span class="dot"></span>'+esc(x)+'</span>').join(' ');
-    const imgs=(c.images||[]).filter(u=>String(u).startsWith('data:image/'));
-    const imgsHtml=imgs.length?'<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">'
-      +imgs.map(u=>'<img class="thumb" style="width:38px;height:38px;cursor:zoom-in" src="'+esc(u)+'" alt="会诊影像" onclick="showImg(this.src)">').join('')+'</div>':'';
     const opForm=mine?'<div style="margin-top:8px"><span class="chip ok"><span class="dot"></span>已提交本科室意见（每人一票）</span></div>'
       :'<div style="margin-top:8px"><textarea class="inp" id="cop_'+esc(c.id)+'" rows="2" placeholder="填写您所在科室的会诊意见（仅建议权，无驳回权）"></textarea>'
       +'<div style="margin-top:6px"><button class="btn sm primary" onclick="submitOpinion(\''+esc(c.id)+'\')">提交科室意见</button></div></div>';
@@ -893,9 +932,10 @@ function renderConsultInbox(){
       +'<span class="chip warn"><span class="dot"></span>进行中</span>'
       +'<span class="src num" style="margin-left:auto">发起人 '+esc(c.initiator||'—')+'（'+esc(c.initiator_dept||'—')+'） · '+fmtTs(c.created_at)+'</span></div>'
       +'<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="src">受邀科室：</span>'+depts+'</div>'
-      /* 任务5：三段式详情复用（不出医生意见段——意见由下方表单呈现；question 内嵌的 AI 底稿不再重复展示） */
+      /* 任务5：三段式详情复用（不出医生意见段——意见由下方表单呈现；question 内嵌的 AI 底稿不再重复展示）；
+         轮 B1：缩略图条复用 consultThumbs（与「我的会诊」详情同源渲染） */
       +consultDetailBlocks(c,{ops:false})
-      +imgsHtml
+      +consultThumbs(c)
       +opForm+'</div>';}).join('');}
 async function submitOpinion(id){
   const el=document.getElementById('cop_'+id);const content=el?el.value.trim():'';
@@ -966,14 +1006,15 @@ function renderMyConsults(){
     const open=c.status==='open';
     const closeBtn=open?'<div style="margin-top:10px"><button class="btn sm primary" onclick="closeConsult(\''+esc(c.id)+'\')">结束会诊并汇总</button></div>':'';
     /* 任务5：三段式详情（[doc]摘要默认展开 → [analysis]各专科 AI 意见默认折叠 → [staff]医生意见并排署名）；
-       question 内嵌 AI 底稿/AI 初步意见/会诊汇总不再重复展示（会诊汇总内容已由三段覆盖） */
+       question 内嵌 AI 底稿/AI 初步意见/会诊汇总不再重复展示（会诊汇总内容已由三段覆盖）；
+       轮 B1：详情渲染随单影像缩略图（consultThumbs，点击 showImg 放大） */
     return '<div class="card">'
       +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">会诊 '+esc(c.id)+'</h3>'
       +(open?'<span class="chip warn"><span class="dot"></span>进行中</span>':'<span class="chip ok"><span class="dot"></span>已结束</span>')
       +'<span class="src num" style="margin-left:auto">发起于 '+fmtTs(c.created_at)+'</span></div>'
       +'<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="src">受邀科室：</span>'
       +(c.target_depts||[]).map(d=>'<span class="chip mid"><span class="dot"></span>'+esc(d)+'</span>').join('')+'</div>'
-      +consultDetailBlocks(c)+closeBtn
+      +consultDetailBlocks(c)+consultThumbs(c)+closeBtn
       +'</div>';}).join('');
   const partHtml=part.length?'<div class="panel" style="margin-top:4px"><h3>我参与过的会诊（作为受邀科室填写过意见）</h3><ul class="feed">'
     +part.map(c=>'<li><span class="t num">'+fmtTs(c.created_at)+'</span><span class="e">'+esc(String(c.question||'').slice(0,60))+'</span>'

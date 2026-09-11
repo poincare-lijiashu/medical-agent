@@ -24,7 +24,7 @@ from backend.agents.medical.literature.nodes import (
     _ground_citations,
     _parse_json,
 )
-from backend.core.llm_factory import get_llm, get_structured_llm
+from backend.core.llm_factory import get_llm, get_structured_llm, get_vl_llm
 from backend.core.logger import get_logger
 from backend.core.medical_drug import check as drug_check
 from backend.core.medical_kb import search_hybrid
@@ -178,8 +178,31 @@ _DEPT_BRIEF_PROMPT = (
     '返回 JSON：{{"opinions":[{{"dept":"科室名","opinion":"..."}}]}}'
 )
 
+# 轮 B1（MDT 传图）：有图时附加提示——要求意见引用影像所见（意见里能看到关键影像发现，
+# 受邀科室医生才读得懂 AI 为什么这样定向）。
+_VL_BRIEF_NOTE = (
+    "\n附病例影像图片：请结合影像所见给出意见，意见中引用关键影像发现（如部位/形态/密度等）。"
+)
+_VL_TEAM_NOTE = "\n附病例影像图片：请结合影像所见判断最需要召集的专科。"
 
-async def pick_departments(question: str) -> dict:
+_MDT_IMG_CAP = 10  # 与 medical_router.MAX_IMAGES 一致（轮 A2 上限 6→10）；防御性再截断
+
+
+def _vl_content(images: list[str], prompt: str) -> list[dict]:
+    """多模态消息 content：图片在前、文字在后（与 medical_imaging.describe_images 同构）。"""
+    return ([{"type": "image_url", "image_url": {"url": u}} for u in images]
+            + [{"type": "text", "text": prompt}])
+
+
+def _extract_text(r) -> str:
+    """从 LLM 响应提取纯文本（content 可能为分段 list，与 medical_imaging._extract_reply 同语义）。"""
+    out = r.content if hasattr(r, "content") else str(r)
+    if isinstance(out, list):  # 某些 provider 返回分段
+        out = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in out)
+    return out or ""
+
+
+async def pick_departments(question: str, images: list[str] | None = None) -> dict:
     """Agent 决策点：LLM 读病例 + 实时科室清单，自主选择召集哪些专科。
 
     科室同步（关键基建）：科室清单每次实时调 departments.list_departments()（绝不缓存）——
@@ -188,6 +211,8 @@ async def pick_departments(question: str) -> dict:
     任务4 急诊科收口：病例无急危重征象词时代码强制剔除急诊科（prompt 约束 + 后过滤双保险）。
     诊断4 兜底语义变更：选空/LLM 异常先原样重试 1 次，仍失败 → 抛 ConsultError
     （不再全量召集兜底——全量分发既打扰无关科室也放大误召集面，宁失败不乱召集）。
+    轮 B1（MDT 传图）：带图时切 VL 视觉模型（get_vl_llm + 结构化输出同 schema），
+    让组队决策参考影像所见；无图维持 get_structured_llm 文本路径零改变。
     """
     from backend.core import departments  # 延迟导入避免环；每次实时读（科室同步纪律）
     from backend.core.consults import ConsultError  # 延迟导入避免环（诊断4 兜底语义）
@@ -197,12 +222,19 @@ async def pick_departments(question: str) -> dict:
     prompt = _CONSULT_TEAM_PROMPT.format(maxn=_TEAM_MAX,
                                          depts=json.dumps(depts, ensure_ascii=False),
                                          case=(question or "")[:4000])
+    imgs = [x for x in (images or []) if x][:_MDT_IMG_CAP]
     reasoning = ""
     for attempt in (1, 2):  # LLM 选空/异常 → 原样重试 1 次（诊断4）
         raw: list[str] = []
         try:
-            llm = get_structured_llm("medical_literature", ConsultTeam)
-            d = await llm.ainvoke([HumanMessage(content=_SYS + "\n" + prompt)])
+            if imgs:
+                # 有图：VL 视觉模型读影像 + 组队 prompt（结构化输出 schema 与文本路径一致）
+                llm = get_vl_llm().with_structured_output(ConsultTeam, method="function_calling")
+                d = await llm.ainvoke([HumanMessage(content=_vl_content(
+                    imgs, _SYS + "\n" + prompt + _VL_TEAM_NOTE))])
+            else:
+                llm = get_structured_llm("medical_literature", ConsultTeam)
+                d = await llm.ainvoke([HumanMessage(content=_SYS + "\n" + prompt)])
             raw = [str(x).strip() for x in (getattr(d, "departments", None) or []) if str(x).strip()]
             reasoning = (getattr(d, "reasoning", "") or "")[:200]
         except Exception as exc:  # noqa: BLE001 —— 单次决策异常不终局，重试一次再定
@@ -215,16 +247,26 @@ async def pick_departments(question: str) -> dict:
     raise ConsultError("未能确定召集科室，请补充病例信息后重试")  # 诊断4：不再全量召集兜底
 
 
-async def dept_briefs(question: str, depts: list[str]) -> dict:
+async def dept_briefs(question: str, depts: list[str],
+                      images: list[str] | None = None) -> dict:
     """按科室生成定向初步意见（一次 LLM 调用产出全部目标科室；单科缺失/解析失败逐科
-    兜底文案，绝不阻塞会诊发起）。返回 {dept: 意见文本}。"""
+    兜底文案，绝不阻塞会诊发起）。返回 {dept: 意见文本}。
+    轮 B1（MDT 传图）：带图时切 VL 视觉模型（get_vl_llm 多模态消息）并要求意见引用
+    影像所见；无图维持 _ask 文本路径零改变。"""
     depts = [d for d in (depts or []) if d]
     out: dict[str, str] = {}
     if depts:
         prompt = _DEPT_BRIEF_PROMPT.format(depts=json.dumps(depts, ensure_ascii=False),
                                            case=(question or "")[:4000])
+        imgs = [x for x in (images or []) if x][:_MDT_IMG_CAP]
         try:
-            d = _parse_json(await _ask("medical_literature", _SYS + "\n" + prompt), {})
+            if imgs:
+                # 有图：VL 视觉模型读影像 + 专科简报 prompt（图在前文在后）
+                r = await get_vl_llm().ainvoke([HumanMessage(content=_vl_content(
+                    imgs, _SYS + "\n" + prompt + _VL_BRIEF_NOTE))])
+                d = _parse_json(_extract_text(r), {})
+            else:
+                d = _parse_json(await _ask("medical_literature", _SYS + "\n" + prompt), {})
             for item in (d.get("opinions") or []):
                 if isinstance(item, dict) and item.get("dept") in depts:
                     out[str(item["dept"])] = str(item.get("opinion", "")).strip()[:800]

@@ -1113,8 +1113,9 @@ async def consult_create(req: AskReq, user: dict = Depends(require_user)):
     await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="query",
                             actor=actor, payload={"len": len(q), "role": user.get("role", "")})
     try:
-        team = await pick_departments(q)  # Agent 动态组队（实时科室清单，绝不缓存）
-        briefs = await dept_briefs(q, team["departments"])  # 按科室定向初步意见
+        # 轮 B1（MDT 传图）：带图时组队/定向意见节点自动切 VL 模型（读影像判断专科/引用所见）
+        team = await pick_departments(q, req.images)  # Agent 动态组队（实时科室清单，绝不缓存）
+        briefs = await dept_briefs(q, team["departments"], req.images)  # 按科室定向初步意见
     except consults.ConsultError as e:
         # 诊断4：组队兜底不再全量召集（宁可失败也不乱分发）→ 400 明确引导补充病例
         await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="team_failed",
@@ -1129,16 +1130,19 @@ async def consult_create(req: AskReq, user: dict = Depends(require_user)):
         consults.create, initiator=actor, question=q, ai_analysis=ai_analysis,
         target_depts=team["departments"], team=team, images=req.images,
         initiator_dept=user.get("dept", ""))
+    item = await asyncio.to_thread(consults.get, cid)
     await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="consult_created",
                             actor=actor, payload={"cid": cid, "role": user.get("role", ""),
-                                                  "depts": team["departments"]})
+                                                  "depts": team["departments"],
+                                                  # 轮 B1：随单入库影像张数（images_count 审计留痕）
+                                                  "images_count": len(item.get("images") or [])})
     # Agent 决策点审计：组队结果（选中科室+理由）留痕，可回溯「为什么召集这些科室」
     await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="consult_dispatch",
                             actor=actor, payload={"cid": cid, "role": user.get("role", ""),
                                                   "departments": team["departments"],
                                                   "reasoning": team.get("reasoning", "")})
     await pg_store.mirror_audit("consult.created", actor, {"cid": cid})
-    return await asyncio.to_thread(consults.get, cid)
+    return item
 
 
 @router.get("/consults/inbox")

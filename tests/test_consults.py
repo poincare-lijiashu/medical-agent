@@ -41,10 +41,11 @@ def _h(t):
 
 
 def _mock_team(monkeypatch, departments_sel, reasoning="按病例需要选择", briefs=None):
-    """mock Agent 决策点（组队 + 定向意见），不触网。"""
-    async def fake_pick(question):
+    """mock Agent 决策点（组队 + 定向意见），不触网。
+    轮 B1：路由带 images 调用（签名扩参，无图/有图均兼容；既有断言不变）。"""
+    async def fake_pick(question, images=None):
         return {"departments": list(departments_sel), "reasoning": reasoning}
-    async def fake_briefs(question, depts):
+    async def fake_briefs(question, depts, images=None):
         if briefs is not None:
             return dict(briefs)
         return {d: f"{d}定向意见" for d in depts}
