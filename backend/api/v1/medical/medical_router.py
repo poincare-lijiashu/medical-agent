@@ -473,6 +473,20 @@ async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
                    sources=r["sources"], review_id=rid)
 
 
+@router.get("/drug/my-rejections")
+async def drug_my_rejections(user: dict = Depends(require_user)):
+    """阶段0.2：当前用户的「药物助手曾被药剂科驳回」轻量数据（require_user，只返回自己的）。
+
+    过渡实现：drug 类驳回从「我的质控驳回」卡片分流后，改在药物助手视图置顶提示
+    「曾被药剂科驳回：{问题}」（含驳回原因），帮助医生回顾未通过的联用查询。
+    """
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(review.my_drug_rejections, me)
+    await asyncio.to_thread(get_audit_logger().write, event_type="drug", action="my_rejections",
+                            actor=me, payload={"n": len(items)})
+    return {"items": items, "me": me}
+
+
 async def _ask_prefilter(agent: str, q: str, actor: str) -> AskResp | None:
     """imaging/case 共用预检（任务C 意图前置）：命中闲聊/身份 → 审计 prefilter 并返回
     免 LLM 固定兜底响应；未命中返回 None（继续走端点主流程）。"""

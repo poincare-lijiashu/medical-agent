@@ -187,12 +187,26 @@ def my_rejections(username: str) -> list[dict]:
     """任务2：本人被驳回（status=rejected）的记录，新→旧，剥离 images。
     任务6：同时返回本人的重提链记录（resubmit_of 非空，任意状态）——重提提交后新条目
     立即置顶显示在「我的质控驳回」卡片第一条（含「第 N 次提交」进度）。
+    阶段0.2：只返回 agent=="qc" 的条目——drug 类驳回由药剂科复核产生、且不带质控表单
+    可预填的 meta，混入本卡片会导致「重新提交」假预填（横幅声称已预填但各栏无值）；
+    drug 驳回改由 my_drug_rejections 提供药物助手上下文提示。
     携带 review_note（驳回原因）/reviewed_by（审核人）/resolved_at（时间）/
-    attempt/resubmit_of/meta（原病历留档，供前端「重新提交」预填），供医生端只读卡片。"""
+    attempt/resubmit_of/meta（原病历结构化留档 record+labs，供前端「重新提交」逐栏直填），
+    供医生端只读卡片。"""
     return [{k: v for k, v in i.items() if k != "images"}
             for i in _load()[::-1]
-            if i.get("submitted_by") == username
+            if i.get("submitted_by") == username and i.get("agent") == "qc"
             and (i.get("status") == "rejected" or i.get("resubmit_of"))]
+
+
+def my_drug_rejections(username: str) -> list[dict]:
+    """阶段0.2：本人被药剂科驳回（agent=drug 且 status=rejected）的记录，新→旧，
+    剥离 images。供药物助手视图显示「曾被药剂科驳回：{问题}」提示（过渡实现）：
+    与 qc 驳回分流入各自的上下文，避免质控卡片出现不可重提的药物条目。"""
+    return [{k: v for k, v in i.items() if k != "images"}
+            for i in _load()[::-1]
+            if i.get("submitted_by") == username and i.get("agent") == "drug"
+            and i.get("status") == "rejected"]
 
 
 def pending() -> list[dict]:

@@ -45,7 +45,9 @@ def _h(t):
 
 
 def _mkitem(submitted_by: str) -> str:
-    return review.submit(agent="drug", question="测试核对项", answer="回答", confidence=0.9,
+    # 阶段0.2 语义：my_rejections 只返回 agent=="qc" 的驳回（drug 驳回走 my_drug_rejections），
+    # 本夹具改为 qc 类，保留「数据隔离」断言意图不变。
+    return review.submit(agent="qc", question="测试核对项", answer="回答", confidence=0.9,
                          risk_reason="药物禁忌", submitted_by=submitted_by)
 
 

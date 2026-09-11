@@ -149,6 +149,22 @@ async def _init_impl() -> bool:
             await c.execute("""CREATE TABLE IF NOT EXISTS consults(
                 id text primary key, data jsonb, initiator text, status text,
                 updated_at timestamptz default now())""")
+            # 阶段1.1：药品字典（name=规范名唯一键；aliases/brand_names=别名/商品名数组；
+            # category=药理类别；level=处方等级/OTC）。1.3 起 medical_drug 读本表做规则匹配。
+            await c.execute("""CREATE TABLE IF NOT EXISTS drug_dict(
+                id serial primary key, name text unique, aliases jsonb,
+                brand_names jsonb, category text, level text)""")
+            # 阶段1.1：药物相互作用规则（severity 限定 高危/中危；mechanism=机制；
+            # source 记录数据来源，默认 AI 辅助生成待药师核对）。药对唯一索引保证
+            # upsert 幂等与查重（存储层统一规范化 a<b）。
+            await c.execute("""CREATE TABLE IF NOT EXISTS drug_rules(
+                id serial primary key, drug_a text, drug_b text,
+                severity text CHECK (severity IN ('高危','中危')), mechanism text,
+                source text default 'AI辅助生成·待药师核对')""")
+            # 阶段1.2：management（处置建议）列——旧库平滑升级（机制/处置分列，管理页分字段展示）
+            await c.execute("ALTER TABLE drug_rules ADD COLUMN IF NOT EXISTS management text")
+            await c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_drug_rules_pair "
+                            "ON drug_rules(drug_a, drug_b)")
             await c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_llm_providers_kind_pid "
                             "ON llm_providers(kind,pid)")
     except Exception:
@@ -695,6 +711,169 @@ def save_consults(items: list, path: str) -> None:
     _json_then_pg(_pg_save_consults, path, items)
 
 
+# ---- 阶段1.1：药品字典 drug_dict / 相互作用规则 drug_rules（PG 真源 + JSON 兜底） ----
+# 语义与 users/review_queue 完全一致：读 = PG 池可用且域非 stale → PG 真源（空表回落
+# JSON）；写 = JSON 原子写先行 + PG 全量同步（best-effort，域级 stale）。
+# JSON 兜底文件路径常量在 medical_drug（DRUG_DICT_FILE / DRUG_RULES_FILE）——调用方传入。
+
+_DICT_UPSERT = """INSERT INTO drug_dict(name,aliases,brand_names,category,level)
+   VALUES($1,$2::jsonb,$3::jsonb,$4,$5)
+   ON CONFLICT(name) DO UPDATE SET aliases=EXCLUDED.aliases,
+   brand_names=EXCLUDED.brand_names, category=EXCLUDED.category, level=EXCLUDED.level"""
+
+_RULE_UPSERT = """INSERT INTO drug_rules(drug_a,drug_b,severity,mechanism,management,source)
+   VALUES($1,$2,$3,$4,$5,$6)
+   ON CONFLICT(drug_a,drug_b) DO UPDATE SET severity=EXCLUDED.severity,
+   mechanism=EXCLUDED.mechanism, management=EXCLUDED.management, source=EXCLUDED.source"""
+
+_RULE_DEFAULT_SOURCE = "AI辅助生成·待药师核对"
+
+
+def _norm_pair(a, b) -> tuple[str, str]:
+    """药对规范化：两药按字典序固定 a<b，保证 (drug_a,drug_b) 唯一键稳定
+    （查重/幂等 upsert/差集补齐都以规范对为准，与输入顺序无关）。"""
+    a, b = str(a).strip(), str(b).strip()
+    return (a, b) if a <= b else (b, a)
+
+
+def _norm_severity(sev) -> str:
+    """严重度归一到表 CHECK 枚举（高危/中危）：legacy「禁忌」语义上属于必须阻断的
+    最高档，归为高危（1.3 迁移 curated_v2 时沿用）；其余未知值保守归中危。"""
+    s = str(sev or "").strip()
+    if s == "高危" or s == "禁忌":
+        return "高危"
+    return "中危"
+
+
+def _dict_row(i: dict) -> tuple:
+    """字典条目 → UPSERT 参数（aliases/brand_names 序列化为 jsonb 文本，缺失置空数组）。"""
+    aliases = i.get("aliases") or []
+    brand = i.get("brand_names") or []
+    return (str(i["name"]).strip(),
+            json.dumps([str(a) for a in aliases if str(a).strip()], ensure_ascii=False),
+            json.dumps([str(b) for b in brand if str(b).strip()], ensure_ascii=False),
+            str(i.get("category") or "其他").strip(),
+            str(i.get("level") or "处方药").strip())
+
+
+def _rule_row(i: dict) -> tuple:
+    """规则条目 → UPSERT 参数（药对规范化 + severity 归一枚举 + 处置建议缺省空串）。"""
+    a, b = _norm_pair(i["drug_a"], i["drug_b"])
+    return (a, b, _norm_severity(i.get("severity")),
+            str(i.get("mechanism") or "").strip(),
+            str(i.get("management") or "").strip(),
+            str(i.get("source") or _RULE_DEFAULT_SOURCE).strip())
+
+
+async def _pg_load_drug_dict() -> list | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT name, aliases, brand_names, category, level "
+                             "FROM drug_dict ORDER BY id")
+    if not rows:
+        return None  # 空表 → 回落 JSON（迁移未跑/新库），保守可用性优先
+    out = []
+    for r in rows:
+        al, br = r["aliases"], r["brand_names"]
+        out.append({"name": r["name"],
+                    "aliases": json.loads(al) if isinstance(al, str) and al else (al or []),
+                    "brand_names": json.loads(br) if isinstance(br, str) and br else (br or []),
+                    "category": r["category"] or "其他",
+                    "level": r["level"] or "处方药"})
+    return out
+
+
+async def _pg_save_drug_dict(items: list) -> None:
+    rows = [_dict_row(i) for i in (items or [])
+            if isinstance(i, dict) and str(i.get("name") or "").strip()]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                await c.execute("DELETE FROM drug_dict WHERE NOT (name = ANY($1))",
+                                [r[0] for r in rows])
+            else:
+                await c.execute("DELETE FROM drug_dict")
+            await c.executemany(_DICT_UPSERT, rows)
+
+
+def load_drug_dict(path: str, json_loader=None) -> list:
+    """药品字典读：PG 可用→PG 真源；不可用/异常/空表→JSON 兜底文件（path）。"""
+    return _pg_or_json(_pg_load_drug_dict, json_loader, path, [])
+
+
+def save_drug_dict(items: list, path: str) -> None:
+    """药品字典写：JSON 原子写兜底 + PG 全量同步（不在清单中的规范名一并清除）。"""
+    _json_then_pg(_pg_save_drug_dict, path, items)
+
+
+async def _pg_load_drug_rules() -> list | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT drug_a, drug_b, severity, mechanism, management, source "
+                             "FROM drug_rules ORDER BY id")
+    if not rows:
+        return None
+    return [{"drug_a": r["drug_a"], "drug_b": r["drug_b"], "severity": r["severity"],
+             "mechanism": r["mechanism"] or "",
+             "management": r["management"] or "",
+             "source": r["source"] or _RULE_DEFAULT_SOURCE} for r in rows]
+
+
+async def _pg_save_drug_rules(items: list) -> None:
+    rows = [_rule_row(i) for i in (items or [])
+            if isinstance(i, dict) and str(i.get("drug_a") or "").strip()
+            and str(i.get("drug_b") or "").strip()]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                # 全量同步删除语义：按规范药对保留（unnest 双数组逐对匹配）
+                await c.execute("""DELETE FROM drug_rules WHERE NOT EXISTS (
+                    SELECT 1 FROM unnest($1::text[], $2::text[]) AS p(drug_a, drug_b)
+                    WHERE p.drug_a = drug_rules.drug_a AND p.drug_b = drug_rules.drug_b)""",
+                                [r[0] for r in rows], [r[1] for r in rows])
+            else:
+                await c.execute("DELETE FROM drug_rules")
+            await c.executemany(_RULE_UPSERT, rows)
+
+
+def load_drug_rules(path: str, json_loader=None) -> list:
+    """相互作用规则读：PG 可用→PG 真源；不可用/异常/空表→JSON 兜底文件（path）。"""
+    return _pg_or_json(_pg_load_drug_rules, json_loader, path, [])
+
+
+def save_drug_rules(items: list, path: str) -> None:
+    """相互作用规则写：JSON 原子写兜底 + PG 全量同步（不在清单中的药对一并清除）。"""
+    _json_then_pg(_pg_save_drug_rules, path, items)
+
+
+async def _seed_drug_tables_impl(dict_items: list, rule_items: list) -> dict:
+    out = {"drug_dict": 0, "drug_rules": 0}
+    async with _pool.acquire() as c:
+        d_rows = [_dict_row(i) for i in (dict_items or [])
+                  if isinstance(i, dict) and str(i.get("name") or "").strip()]
+        if d_rows:
+            await c.executemany(_DICT_UPSERT, d_rows)
+            out["drug_dict"] = len(d_rows)
+        r_rows = [_rule_row(i) for i in (rule_items or [])
+                  if isinstance(i, dict) and str(i.get("drug_a") or "").strip()
+                  and str(i.get("drug_b") or "").strip()]
+        if r_rows:
+            await c.executemany(_RULE_UPSERT, r_rows)
+            out["drug_rules"] = len(r_rows)
+    return out
+
+
+async def seed_drug_tables(dict_items: list, rule_items: list) -> dict:
+    """阶段1.2：seed 种子 → drug_dict/drug_rules 幂等 upsert（ON CONFLICT DO UPDATE，
+    只增量补齐/更新，不删除表内已有行）。返回 {drug_dict: n, drug_rules: n}；
+    PG 不可用/异常返回 {}（绝不冒泡）。scripts/seed_drug_dict.py 调用。"""
+    if not _pool:
+        return {}
+    try:
+        return await _arun(_seed_drug_tables_impl(dict_items, rule_items))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.seed_drug_tables_failed", error=str(e)[:150])
+        return {}
+
+
 # ---------- B1 迁移：JSON → PG（表空才导，幂等 ON CONFLICT DO NOTHING） ----------
 
 async def _migrate_impl() -> dict:
@@ -747,6 +926,49 @@ async def _migrate_impl() -> dict:
         if rows and not await c.fetchval("SELECT count(*) FROM llm_providers"):
             await c.executemany(_LLM_IMPORT, rows)
             out["llm_providers"] = len(rows)
+        # 阶段1.1：药品字典/规则——repo JSON 兜底文件 ⊇ PG（JSON 先写不回滚）：
+        # 表空 → 全量导入；PG 非空 → 按 name/规范药对差集只增不覆盖补齐（幂等可重复跑，
+        # 与 review_queue 同纪律，防"PG 同步失败窗口内 JSON 独有数据被全量同步抹掉"）。
+        from backend.core.medical_drug import DRUG_DICT_FILE, DRUG_RULES_FILE
+        d_items = _read_json(DRUG_DICT_FILE, [])
+        if isinstance(d_items, list) and d_items:
+            if not await c.fetchval("SELECT count(*) FROM drug_dict"):
+                rows = [_dict_row(i) for i in d_items
+                        if isinstance(i, dict) and str(i.get("name") or "").strip()]
+                if rows:
+                    await c.executemany(_DICT_UPSERT, rows)
+                    out["drug_dict"] = len(rows)
+            else:
+                existing = {r["name"] for r in await c.fetch("SELECT name FROM drug_dict")}
+                rows = [_dict_row(i) for i in d_items
+                        if isinstance(i, dict) and str(i.get("name") or "").strip()
+                        and str(i["name"]).strip() not in existing]
+                if rows:
+                    await c.executemany(_DICT_UPSERT, rows)
+                    out["drug_dict_reconciled"] = len(rows)
+        r_items = _read_json(DRUG_RULES_FILE, [])
+        if isinstance(r_items, list) and r_items:
+            if not await c.fetchval("SELECT count(*) FROM drug_rules"):
+                rows = [_rule_row(i) for i in r_items
+                        if isinstance(i, dict) and str(i.get("drug_a") or "").strip()
+                        and str(i.get("drug_b") or "").strip()]
+                if rows:
+                    await c.executemany(_RULE_UPSERT, rows)
+                    out["drug_rules"] = len(rows)
+            else:
+                existing = {(r["drug_a"], r["drug_b"]) for r in
+                            await c.fetch("SELECT drug_a, drug_b FROM drug_rules")}
+                rows = []
+                for i in r_items:
+                    if isinstance(i, dict) and str(i.get("drug_a") or "").strip() \
+                            and str(i.get("drug_b") or "").strip():
+                        key = _norm_pair(i["drug_a"], i["drug_b"])
+                        if key not in existing:  # 只增不覆盖，幂等
+                            rows.append(_rule_row(i))
+                            existing.add(key)
+                if rows:
+                    await c.executemany(_RULE_UPSERT, rows)
+                    out["drug_rules_reconciled"] = len(rows)
     return out
 
 

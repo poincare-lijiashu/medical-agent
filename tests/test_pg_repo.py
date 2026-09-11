@@ -16,6 +16,7 @@ import pytest
 from backend.core import auth as auth_mod
 from backend.core import departments as dept_mod
 from backend.core import llm_config as lc
+from backend.core import medical_drug as md_mod
 from backend.core import medical_review as review
 from backend.core import pg_store
 
@@ -60,6 +61,23 @@ class FakeConn:
                     for k, v in self.db["users"].items()]
         if s.startswith("SELECT name FROM departments"):
             return [{"name": name} for _, name in sorted(self.db["departments"])]
+        if s.startswith("SELECT name FROM drug_dict"):
+            # 阶段1.1：drug_dict 迁移差集补齐用（只取 name 集合）
+            return [{"name": k} for k in self.db["drug_dict"]]
+        if s.startswith("SELECT name, aliases"):
+            # 阶段1.1：drug_dict 真源读（aliases/brand_names jsonb → 模拟驱动返回 str）
+            return [{"name": k, "aliases": json.dumps(v["aliases"], ensure_ascii=False),
+                     "brand_names": json.dumps(v["brand_names"], ensure_ascii=False),
+                     "category": v["category"], "level": v["level"]}
+                    for k, v in self.db["drug_dict"].items()]
+        if s.startswith("SELECT drug_a, drug_b, severity"):
+            return [{"drug_a": k[0], "drug_b": k[1],
+                     "severity": v["severity"], "mechanism": v["mechanism"],
+                     "management": v.get("management", ""), "source": v["source"]}
+                    for k, v in self.db["drug_rules"].items()]
+        if s.startswith("SELECT drug_a, drug_b FROM drug_rules"):
+            # 阶段1.1：drug_rules 迁移差集补齐用（只取药对集合）
+            return [{"drug_a": k[0], "drug_b": k[1]} for k in self.db["drug_rules"]]
         if s.startswith("SELECT id,ts"):
             return [dict(row, images=json.dumps(row["images"], ensure_ascii=False)
                          if row["images"] else None)
@@ -82,7 +100,8 @@ class FakeConn:
         s = " ".join(sql.split())
         if s == "SELECT 1":
             return 1
-        for t in ("users", "departments", "review_queue", "llm_providers"):
+        for t in ("users", "departments", "review_queue", "llm_providers",
+                  "drug_dict", "drug_rules"):
             if s == f"SELECT count(*) FROM {t}":
                 return len(self.db[t])
         raise AssertionError(f"假池未实现的 fetchval: {s[:80]}")
@@ -103,8 +122,25 @@ class FakeConn:
             keep = set(a[0])
             self.db["consults"] = {k: v for k, v in self.db["consults"].items() if k in keep}
             return "DELETE"
+        if s.startswith("DELETE FROM drug_dict WHERE NOT"):
+            # 阶段1.1：drug_dict 全量同步删除语义（按规范名保留）
+            keep = set(a[0])
+            self.db["drug_dict"] = {k: v for k, v in self.db["drug_dict"].items() if k in keep}
+            return "DELETE"
+        if s.startswith("DELETE FROM drug_rules WHERE NOT EXISTS"):
+            # 阶段1.1：drug_rules 全量同步删除语义（按药对保留；unnest 双数组参数）
+            keep = set(zip(a[0], a[1]))
+            self.db["drug_rules"] = {k: v for k, v in self.db["drug_rules"].items()
+                                     if k in keep}
+            return "DELETE"
         if s == "DELETE FROM consults":
             self.db["consults"] = {}
+            return "DELETE"
+        if s == "DELETE FROM drug_dict":
+            self.db["drug_dict"] = {}
+            return "DELETE"
+        if s == "DELETE FROM drug_rules":
+            self.db["drug_rules"] = {}
             return "DELETE"
         for t in ("users", "departments", "review_queue", "llm_providers"):
             if s == f"DELETE FROM {t}":
@@ -150,6 +186,21 @@ class FakeConn:
             for row in rows:
                 self.db["llm_providers"].append(tuple(row))
             return
+        if s.startswith("INSERT INTO drug_dict"):
+            # 阶段1.1：UPSERT ON CONFLICT(name) DO UPDATE（aliases/brand_names jsonb str）
+            for name, aliases, brand_names, category, level in rows:
+                self.db["drug_dict"][name] = {
+                    "aliases": json.loads(aliases) if aliases else [],
+                    "brand_names": json.loads(brand_names) if brand_names else [],
+                    "category": category, "level": level}
+            return
+        if s.startswith("INSERT INTO drug_rules"):
+            # 阶段1.1：UPSERT ON CONFLICT(drug_a,drug_b) DO UPDATE（阶段1.2 增 management 列）
+            for drug_a, drug_b, severity, mechanism, management, source in rows:
+                self.db["drug_rules"][(drug_a, drug_b)] = {
+                    "severity": severity, "mechanism": mechanism,
+                    "management": management, "source": source}
+            return
         raise AssertionError(f"假池未实现的 executemany: {s[:80]}")
 
     def transaction(self):
@@ -170,7 +221,7 @@ class FakePool:
 
 def _db() -> dict:
     return {"users": {}, "departments": [], "review_queue": {}, "llm_providers": [],
-            "consults": {}, "fail": None}
+            "consults": {}, "drug_dict": {}, "drug_rules": {}, "fail": None}
 
 
 @pytest.fixture()
@@ -467,6 +518,9 @@ def _seed_json_files(tmp_path, monkeypatch):
     monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(dep_file))
     monkeypatch.setattr(review, "QUEUE_FILE", str(q_file))
     monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(llm_file))
+    # 阶段1.1：药品字典/规则 JSON 兜底文件一并隔离（防读入真实 data/drug_*.json 影响精确断言）
+    monkeypatch.setattr(md_mod, "DRUG_DICT_FILE", str(tmp_path / "no_drug_dict.json"))
+    monkeypatch.setattr(md_mod, "DRUG_RULES_FILE", str(tmp_path / "no_drug_rules.json"))
 
 
 def test_migrate_imports_when_tables_empty(fake_pg, tmp_path, monkeypatch):
@@ -625,3 +679,131 @@ def test_eval_runner_sets_pg_offline_env():
     src = (Path(__file__).resolve().parent.parent / "scripts" / "run_eval.py").read_text(
         encoding="utf-8")
     assert 'os.environ.setdefault("PG_OFFLINE", "on")' in src
+
+
+# ---------- 阶段1.1：药品字典 drug_dict / 相互作用规则 drug_rules repo ----------
+
+_DICT_ROW = {"name": "华法林", "aliases": ["法华林", "warfarin", "香豆素"],
+             "brand_names": ["可密达", "华法林钠片"], "category": "抗凝抗栓", "level": "处方药"}
+_RULE_ROW = {"drug_a": "布洛芬", "drug_b": "华法林", "severity": "高危",
+             "mechanism": "NSAID 抑制血小板并置换蛋白结合，出血风险升高；避免联用并监测 INR。"}
+
+
+def test_drug_dict_pg_roundtrip_is_truth_source(fake_pg, tmp_path):
+    """drug_dict：PG 可用 → 读 PG 真源；写 = JSON 兜底 + PG 全量同步（含别名/商品名 jsonb 往返）。"""
+    f = tmp_path / "drug_dict.json"
+    pg_store.save_drug_dict([_DICT_ROW], str(f))
+    assert json.loads(f.read_text(encoding="utf-8"))[0]["name"] == "华法林"  # JSON 兜底已落盘
+    fake_pg["drug_dict"]["阿司匹林"] = {"aliases": ["aspirin"], "brand_names": ["拜阿司匹灵"],
+                                     "category": "抗凝抗栓", "level": "处方药"}
+    f.unlink()  # 删 JSON：读必须仍完整（PG 真源）
+    loaded = pg_store.load_drug_dict(str(f))
+    assert {i["name"] for i in loaded} == {"华法林", "阿司匹林"}
+    wf = next(i for i in loaded if i["name"] == "华法林")
+    assert wf["aliases"] == ["法华林", "warfarin", "香豆素"]
+    assert wf["brand_names"] == ["可密达", "华法林钠片"]
+    assert wf["category"] == "抗凝抗栓" and wf["level"] == "处方药"
+    # 全量同步删除语义：从清单移除 → PG 中也消失
+    pg_store.save_drug_dict([_DICT_ROW], str(f))
+    assert set(fake_pg["drug_dict"]) == {"华法林"}
+
+
+def test_drug_dict_empty_table_falls_back_to_json(fake_pg, tmp_path):
+    f = tmp_path / "drug_dict.json"
+    f.write_text(json.dumps([_DICT_ROW], ensure_ascii=False), encoding="utf-8")
+    assert pg_store.load_drug_dict(str(f)) == [_DICT_ROW]  # 空表 → JSON（保守可用性优先）
+
+
+def test_drug_rules_pg_roundtrip_normalizes_pair(fake_pg, tmp_path):
+    """drug_rules：药对规范化（字典序 a<b）存储，PG 真源往返；severity 枚举归一
+    （legacy「禁忌」→ 高危，其余非枚举 → 中危），PG CHECK 不会拒行。"""
+    f = tmp_path / "drug_rules.json"
+    rules = [dict(_RULE_ROW),
+             {"drug_a": "克拉霉素", "drug_b": "辛伐他汀", "severity": "禁忌",
+              "mechanism": "强抑制 CYP3A4 致横纹肌溶解；联用禁忌。"},
+             {"drug_a": "地高辛", "drug_b": "胺碘酮", "severity": "高危",
+              "mechanism": "地高辛浓度升高致中毒；减量并监测。"}]
+    pg_store.save_drug_rules(rules, str(f))
+    f.unlink()
+    loaded = pg_store.load_drug_rules(str(f))
+    assert len(loaded) == 3
+    for i in loaded:
+        assert (i["drug_a"], i["drug_b"]) == tuple(sorted((i["drug_a"], i["drug_b"]))), \
+            "存储药对必须规范化（a<b），保证唯一键稳定"
+    tab = {(i["drug_a"], i["drug_b"]): i for i in loaded}
+    assert tab[("华法林", "布洛芬")]["severity"] == "高危"     # 乱序输入 → 规范对
+    assert tab[("克拉霉素", "辛伐他汀")]["severity"] == "高危"  # legacy 禁忌 → 高危
+    assert tab[("地高辛", "胺碘酮")]["severity"] == "高危"
+    # PG 全量同步删除语义：只留一条 → PG 药对集合同步收敛
+    pg_store.save_drug_rules([rules[0]], str(f))
+    assert set(fake_pg["drug_rules"]) == {("华法林", "布洛芬")}
+
+
+def test_drug_repo_pool_none_pure_json(tmp_path, monkeypatch):
+    """无池（PG_OFFLINE/单测）→ 纯 JSON 读写，行为与既有 repo 完全等价。"""
+    monkeypatch.setattr(pg_store, "_pool", None)
+    df = str(tmp_path / "nope_dict.json")
+    rf = str(tmp_path / "nope_rules.json")
+    assert pg_store.load_drug_dict(df) == []
+    assert pg_store.load_drug_rules(rf) == []
+    pg_store.save_drug_dict([_DICT_ROW], df)
+    pg_store.save_drug_rules([_RULE_ROW], rf)
+    assert json.loads((tmp_path / "nope_dict.json").read_text(encoding="utf-8"))[0]["name"] == "华法林"
+    assert json.loads((tmp_path / "nope_rules.json").read_text(encoding="utf-8"))[0]["severity"] == "高危"
+
+
+def test_seed_drug_tables_upsert_idempotent(fake_pg):
+    """seed_drug_tables：幂等 upsert（重复跑行数不变；同药对后写覆盖前写的 severity/mechanism）；
+    PG 不可用返回 {}。"""
+    out = asyncio.run(pg_store.seed_drug_tables([_DICT_ROW], [_RULE_ROW]))
+    assert out == {"drug_dict": 1, "drug_rules": 1}
+    # 幂等：再次 upsert 行数不增
+    out2 = asyncio.run(pg_store.seed_drug_tables([_DICT_ROW], [_RULE_ROW]))
+    assert out2 == {"drug_dict": 1, "drug_rules": 1}
+    assert len(fake_pg["drug_dict"]) == 1 and len(fake_pg["drug_rules"]) == 1
+    # 同药对更新：severity 变化后写覆盖（ON CONFLICT DO UPDATE）
+    updated = {"drug_a": "华法林", "drug_b": "布洛芬", "severity": "中危",
+               "mechanism": "改为中危：仅提示监测 INR。"}
+    asyncio.run(pg_store.seed_drug_tables([], [updated]))
+    assert fake_pg["drug_rules"][("华法林", "布洛芬")]["severity"] == "中危"
+
+
+def test_migrate_drug_tables_imports_and_reconciles(fake_pg, tmp_path, monkeypatch):
+    """阶段1.1 迁移：drug_dict/drug_rules——PG 表空 → JSON 全量导入；PG 非空 → 按
+    name/药对差集只增补齐（JSON ⊇ PG，幂等可重复跑，与 review_queue 同纪律）。"""
+    d_file = tmp_path / "drug_dict.json"
+    r_file = tmp_path / "drug_rules.json"
+    d_file.write_text(json.dumps([_DICT_ROW, {"name": "阿司匹林", "aliases": ["aspirin"],
+                                              "brand_names": ["拜阿司匹灵"],
+                                              "category": "抗凝抗栓", "level": "处方药"}],
+                                 ensure_ascii=False), encoding="utf-8")
+    r_file.write_text(json.dumps([_RULE_ROW], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(md_mod, "DRUG_DICT_FILE", str(d_file))
+    monkeypatch.setattr(md_mod, "DRUG_RULES_FILE", str(r_file))
+    fake_pg["drug_dict"]["阿司匹林"] = {"aliases": [], "brand_names": [],
+                                    "category": "抗凝抗栓", "level": "处方药"}  # PG 已有
+    fake_pg["drug_rules"] = {("阿司匹林", "华法林"): {"severity": "中危",
+                                                 "mechanism": "已有规则", "source": "s"}}
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("drug_dict_reconciled") == 1          # 华法林 补齐（阿司匹林已存在跳过）
+    assert out.get("drug_rules_reconciled") == 1         # 华法林+布洛芬 补齐（已有规则不动）
+    assert set(fake_pg["drug_dict"]) == {"华法林", "阿司匹林"}
+    assert ("华法林", "布洛芬") in fake_pg["drug_rules"]
+    assert fake_pg["drug_rules"][("阿司匹林", "华法林")]["mechanism"] == "已有规则"  # 不覆盖
+    # 幂等：再次迁移无补齐
+    again = asyncio.run(pg_store.migrate_json_to_pg())
+    assert not again.get("drug_dict_reconciled") and not again.get("drug_rules_reconciled")
+
+
+def test_migrate_drug_tables_import_when_empty(fake_pg, tmp_path, monkeypatch):
+    """阶段1.1 迁移：PG 表空 → drug_dict/drug_rules 全量导入（表空才导语义）。"""
+    d_file = tmp_path / "drug_dict.json"
+    r_file = tmp_path / "drug_rules.json"
+    d_file.write_text(json.dumps([_DICT_ROW], ensure_ascii=False), encoding="utf-8")
+    r_file.write_text(json.dumps([_RULE_ROW], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(md_mod, "DRUG_DICT_FILE", str(d_file))
+    monkeypatch.setattr(md_mod, "DRUG_RULES_FILE", str(r_file))
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("drug_dict") == 1 and out.get("drug_rules") == 1
+    assert set(fake_pg["drug_dict"]) == {"华法林"}
+    assert set(fake_pg["drug_rules"]) == {("华法林", "布洛芬")}

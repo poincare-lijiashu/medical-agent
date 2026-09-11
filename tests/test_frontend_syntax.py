@@ -295,3 +295,30 @@ def test_humanize_full_map_markers_present():
         "留痕模式自动签发（${rid}）",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
+
+
+# ---------- 阶段0.1/0.2：重提预填真实修复 + drug 驳回分流（追加标记锁） ----------
+
+def test_phase0_frontend_markers_present():
+    """阶段0 前端标记锁（防回退）：
+    - 0.1：qcResubmit 从 meta.record 逐栏直填并统计 filled；仅确有预填内容才声明
+      「已预填」，旧版无留档条目如实提示手动填写（不再谎报）；
+    - 0.2：药物助手视图置顶「曾被药剂科驳回」提示（loadDrugRejections，独立端点）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 0.1：结构化逐栏直填 + 预填内容计数（签名栏 i=6 锁定当前账号不回填）
+        "let filled=0;",
+        "QC_LABELS.forEach((l,i)=>{if(i===6)return;const v=String(rec[l]||'');"
+        "document.getElementById('qcf_'+i).value=v;if(v.trim())filled++;});",
+        "${filled?'原病历内容已预填'",                 # 横幅诚实化：有值才声明已预填
+        "该记录未留存结构化原病历（旧版条目），请手动填写病历内容",
+        # 0.2：药物助手驳回提示（分流到药物上下文）
+        "if(k==='drug')loadDrugRejections();",
+        "async function loadDrugRejections(",
+        "/api/v1/medical/drug/my-rejections",
+        "曾被药剂科驳回：",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = _extract_fn(html, "qcResubmit")
+    assert "filled++" in fn, "qcResubmit 必须统计非空预填栏数（横幅诚实化依据）"
+    assert "qcLabs" in fn, "qcResubmit 必须回填检验值（meta.labs → qcLabs）"

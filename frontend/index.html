@@ -584,7 +584,24 @@ function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textCo
   const h=chatHist[k]||[];
   if(h.length){h.forEach(e=>e.role==='me'?renderUser(e.text,e.images||(e.image?[e.image]:[])):renderBot(e.text,e.meta));}
   else renderBot('你好，我是'+a.name+'。'+a.desc+'。', null, true);
+  if(k==='drug')loadDrugRejections();  /* 阶段0.2：药物助手视图置顶显示本人曾被药剂科驳回的查询 */
   scroll();}
+/* 阶段0.2：药物助手曾被药剂科驳回提示（过渡实现）——drug 类驳回从「我的质控驳回」
+   卡片分流后移到药物助手上下文：本人在 /drug/ask 提交过、被药剂科（pharmacist 一票）
+   驳回的联用查询，置顶提示「曾被药剂科驳回：{问题}（驳回原因）」，最多 5 条，帮助医生
+   回顾未通过的用药查询。加载失败静默，不影响药物助手主流程。 */
+async function loadDrugRejections(){
+  const m=document.getElementById('msgs');if(!m||cur!=='drug')return;
+  try{const r=await fetch('/api/v1/medical/drug/my-rejections',{headers:auth()});
+    if(r.status===401){logout();return;}
+    if(!r.ok)return;
+    const d=await r.json();const items=(d.items||[]).slice(0,5);
+    items.forEach(i=>{const b=document.createElement('div');b.className='row';
+      b.innerHTML=`<div class="avatar">${ICON.drug}</div><div class="bubble" style="border-left:3px solid var(--warn)"><div class="txt md"></div></div>`;
+      b.querySelector('.txt').innerHTML=md('曾被药剂科驳回：'+esc(String(i.question||''))
+        +(i.review_note?('（驳回原因：'+esc(i.review_note)+'）'):''));
+      m.insertBefore(b,m.firstChild);});
+  }catch(e){/* 提示加载失败静默：不影响药物助手主流程 */}}
 function newChat(){chatHist[cur]=[];chatInput[cur]='';if(cur==='literature'){litSessionId=genSid();}setupChat(cur);}
 /* 任务3 会话记忆：每个 literature 会话固定一个 session_id（「新建对话」时更换），
    后端据此注入最近 N 轮问答（仅理解指代，不影响独立检索）。crypto.randomUUID 不可用
@@ -1246,20 +1263,25 @@ async function loadQcRejections(){
 if(!window.__qcRejDelegate){window.__qcRejDelegate=true;document.addEventListener('click',e=>{
   const b=e.target.closest('button[data-act="qc-resubmit"]');if(!b)return;
   qcResubmit(b.dataset.rid);});}
-/* 任务6：预填原病历到质控表单并标记重提上下文（resubmit_of 随下次运行质控一并提交） */
+/* 任务6：预填原病历到质控表单并标记重提上下文（resubmit_of 随下次运行质控一并提交）
+   阶段0.1 重提预填真实修复：meta.record 是后端 /qc/record 留档的结构化原病历（中文
+   字段键与 QC_LABELS 一致）、meta.labs 是检验值键值对——逐栏 .value 直填（签名栏
+   i=6 锁定当前账号不回填）；仅当确有非空预填内容才显示「已预填」横幅，旧版条目未
+   留档（meta 为空）时如实提示手动填写，不再谎报预填导致"横幅已预填但各栏没值"。 */
 let qcResubmitOf=null;
 function qcResubmit(rid){
   const it=(qcRejItems||[]).find(x=>x.id===rid);
   if(!it){toast('未找到原记录，请刷新后重试');return;}
   qcResubmitOf=rid;
   const meta=it.meta||{},rec=meta.record||{};
-  QC_LABELS.forEach((l,i)=>{if(i===6)return;document.getElementById('qcf_'+i).value=String(rec[l]||'');});  /* 签名锁定当前账号，不回填 */
+  let filled=0;
+  QC_LABELS.forEach((l,i)=>{if(i===6)return;const v=String(rec[l]||'');document.getElementById('qcf_'+i).value=v;if(v.trim())filled++;});
   const labs=meta.labs||{};
   document.getElementById('qcLabs').value=Object.entries(labs).map(([k,v])=>k+'='+v).join('\n');
   const bn=document.getElementById('qcResubmitBanner');
   if(bn){bn.style.display='';
     bn.innerHTML=`<b>重新提交（第 ${Number(it.attempt||1)+1} 次）</b>
-      <div class="src" style="margin-top:4px;line-height:1.7">原病历内容已预填（原记录 <b class="num">${esc(rid)}</b>），可修改后运行质控；医师签名绑定当前账号。第 2 次起仍不合格将自动升级病案科复核。</div>
+      <div class="src" style="margin-top:4px;line-height:1.7">${filled?'原病历内容已预填':'该记录未留存结构化原病历（旧版条目），请手动填写病历内容'}（原记录 <b class="num">${esc(rid)}</b>），可修改后运行质控；医师签名绑定当前账号。第 2 次起仍不合格将自动升级病案科复核。</div>
       <div style="margin-top:8px"><button class="btn sm ghost" onclick="qcCancelResubmit()">取消重提</button></div>`;}
   /* 任务1：驳回重提跳转——确保处于质控工作台视图（复用 go('qc')；已在 qc 视图则不重复
      切换/重拉数据），滚动定位到病历表单并短暂高亮（CSS 边框闪烁 2s 后移除 class），
@@ -1269,7 +1291,8 @@ function qcResubmit(rid){
   if(formCard){formCard.scrollIntoView({behavior:'smooth',block:'start'});
     formCard.classList.add('qc-flash');
     setTimeout(()=>formCard.classList.remove('qc-flash'),2000);}
-  toast('已预填原病历内容，请核对后运行质控');
+  /* 阶段0.1：toast 同步横幅语义——仅确有预填内容才提示"已预填" */
+  toast(filled?'已按原记录预填病历内容，请核对后运行质控':'原记录未留档病历内容，请手动填写后运行质控');
 }
 function qcCancelResubmit(){qcResubmitOf=null;const bn=document.getElementById('qcResubmitBanner');
   if(bn){bn.style.display='none';bn.innerHTML='';}}
