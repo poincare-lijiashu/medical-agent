@@ -40,13 +40,45 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - 未配置任何供应商时回落 `.env.local` 内置 Qwen 配置（开箱即用）
 - 密钥存 `data/llm_providers.json`（不入 git；生产建议改用环境变量/secret 管理，见 OPERATIONS.md）
 
-## 生产前必查（清单）
+## 生产部署检查表
 
-1. `APP_ENV=production` + 高熵 `AUTH_JWT_SECRET`（默认值拒启）+ `AUTH_ENABLED=true`
-2. `AUTH_SEED_DEMO=false`（不注入演示账号），用 `scripts` 或接口预建真实账号
-3. TLS 由反向代理终结；审计/审核数据落 PG（`pg_store` 已双写）
-4. 演示语料（PubMed seed）替换为院方授权指南库
-5. 自动质控通过/驳回策略开关，需院方合规确认后开启
+### 1. 环境变量清单（`.env.local`）
+
+| 变量 | 生产值 | 说明 |
+| --- | --- | --- |
+| `APP_ENV` | `production` | 关闭 `/docs`；默认 JWT 密钥/关闭鉴权直接拒启 |
+| `AUTH_JWT_SECRET` | 强随机（如 `openssl rand -hex 32`） | 禁止默认值（`dev-secret-change-in-production` 拒启） |
+| `AUTH_ENABLED` | `true` | 生产拒绝关闭鉴权 |
+| `AUTH_SEED_DEMO` | `false` | 不注入演示账号；config 默认即 false，全新部署零演示足迹（启动日志见 `seed_skipped` 属预期） |
+| `PG_HOST/PG_PORT/PG_USER/PG_PASSWORD/PG_DATABASE` | 真实实例 | 审计/用户/审核双写 PG；启动日志 `pg_ready` 确认 |
+| `MILVUS_URI` | 真实实例 | 知识库向量库（`KB:total` 与 Milvus doc_count 同源核对） |
+| `HIS_ADAPTER` | `none` | 未对接 HIS 保持 none（默认）；对接时填真实厂商标识，**严禁用 demo**（内存假数据，仅供集成开发参考） |
+| `VL_MAX_TOKENS` | 默认 `8192` | 影像/病例结构化描述截断防线，勿调低 |
+| `LOG_TO_FILE` | 留空（默认开） | 应用日志落 `logs/` 5MB×5 轮转；集中采集接 stdout |
+| `QC_AUTO_PASS` / `QC_AUTO_SIGN` / `QC_AUTO_SIGN_FULL` | 默认值 | 自动质控通过/留痕策略需院方合规确认后再调整 |
+| 模型 API Key（`QWEN_API_KEY` 等） | 环境变量注入 | **API key 不入库**：`.env.local` 与 `data/llm_providers.json` 均已 gitignore（核对过），严禁提交仓库 |
+
+### 2. 首次部署步骤（无演示账号）
+
+1. 按上表配好 env → 启动服务；`AUTH_SEED_DEMO=false` 下启动日志出现 `medical_agent.startup.seed_skipped`（提示预先创建 `data/auth/users.json`），属预期；
+2. **admin 手动建号**：首个管理员经 `backend.core.auth.create_user`（脚本/REPL）创建，或临时以 `AUTH_SEED_DEMO=true` 拉起一次后立即关闭并改密（二选一，推荐前者）；
+3. admin 登录后**立即修改默认密码**（顶栏「修改密码」），再按角色创建 doctor / pharmacist / qc 账号并分发；
+4. 核对 `data/auth/users.json` 无 `doctor01/pharm01/admin01/qc01` 演示账号存量（历史环境若有：改密或删除后再上线）。
+
+### 3. 真实数据源接入指引
+
+- **药品字典 / 相互作用规则**：pharmacist/admin 在审核中心「药品字典」管理页逐条录入、校对院方字典（替代 curated_v2 种子）；变更写审计 `admin.drug_dict_changed`；
+- **知识库**：院方授权的完整指南（.pdf/.md/.txt）放 `data/kb_docs/` 后跑 `scripts/seed_kb_docs.py`；内置 `sample_guideline` / `guideline_demo:*` 语料为 demo 来源（**待阶段 5 替换**，见 `scripts/seed_kb*.py` 头注），替换前检索仍可用；
+- **PubMed 在线检索**：阶段 5 提供（NCBI API key），作为知识库的实时补充。
+
+### 4. 上线前验证清单
+
+- [ ] `python -m pytest -q` 全绿（基线 602+）；
+- [ ] `curl http://127.0.0.1:8001/healthz` 返回正常（容器 HEALTHCHECK 同源）；
+- [ ] 一次真实操作后确认审计落 PG：`audit_log` 表有记录（JSONL 仅为本地兜底真源）；
+- [ ] 备份策略就位：`data/*.json`（auth/users、review 队列等 JSON 真源）+ PG `pg_dump` 定期备份；
+- [ ] 生产必须改默认密码（含任何存量默认口令账号）；
+- [ ] 反向代理 TLS 终结 + SSE 三项配置（见下文 nginx 小节）。
 
 ## 日志与留存
 
@@ -98,7 +130,7 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 curl http://127.0.0.1:8001/healthz
 # 2) 嵌入设备核对（auto 机器无 N 卡应显示 CPU；启动日志 medical_agent.embedder.loading device=...）
 # 3) 全量测试基线
-python -m pytest -q            # 491+ 全绿
+python -m pytest -q            # 602+ 全绿
 # 4) 评测脚本（自动 PG_OFFLINE=on，不污染服务日志）
 python scripts/run_eval.py --dry-run
 # 5) KB 端到端：admin 登录 → 数据面板确认「知识库向量」与 KB 卡「向量总数」一致（同源 Milvus doc_count）

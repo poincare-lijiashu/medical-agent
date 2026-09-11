@@ -639,3 +639,18 @@ def test_phase4_case_archive_frontend_markers_present():
     # humanizeAudit 补 case_archive.* 映射（覆盖率锁配套）
     hum = _extract_fn(html, "humanizeAudit")
     assert "case_archive" in hum, "humanizeAudit 必须包含 case_archive.* 事件映射"
+
+
+# ---------- 阶段6：商用化去 demo 前端标记锁（追加，不改动既有断言） ----------
+
+def test_phase6_dedemo_frontend_markers_removed():
+    """阶段6（去 demo 商用化）前端标记锁（防回退，docs/plans/pharmacy_roadmap.md 6.1）：
+    - 质控工作台「填入示例」按钮与 qcSample() 假病历一键填充保持移除
+      （商用环境不得存在一键注入虚构病历的入口，防误用与数据混淆；
+      病历录入走「粘贴整段病历 → qcParsePaste 拆分」或手动填写）；
+    - 登录页无「演示账号」用户可见字样（账号由管理员统一开通；
+      演示账号的前提条件与说明仅存在于 README / docs/DEPLOY.md）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    assert "qcSample" not in html, "qcSample() 假病历一键填充必须保持移除（商用不得一键注入虚构病历）"
+    assert "填入示例" not in html, "「填入示例」按钮必须保持移除（阶段6 去demo）"
+    assert "演示账号" not in html, "用户可见界面不应出现「演示账号」字样（改中性文案，演示账号说明放文档）"

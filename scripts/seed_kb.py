@@ -4,6 +4,9 @@
 Milvus 走 settings.milvus_uri + db_base.get_milvus_token。不依赖 EduAgent。
 重跑会按 document_id="sample_guideline" 幂等刷新样例，不动 pubmed_seed 行。
 
+⚠️ demo 来源：sample_guideline 为内置样例指南（教学/联调用），待阶段 5 替换为
+院方授权的真实指南语料（scripts/seed_kb_docs.py 重摄覆盖）；替换前检索仍可用。
+
 用法：
     D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/seed_kb.py
 """

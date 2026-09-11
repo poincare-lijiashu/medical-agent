@@ -213,7 +213,7 @@
     <input id="lp" type="password" placeholder="密码" autocomplete="current-password" required>
     <div class="lerr" id="lerr" role="alert"></div>
     <button class="btn primary lbtn" type="submit">登录</button>
-    <div class="lhint">演示账号请联系管理员获取。<br>忘记密码？请联系管理员重置。<br>本工具为辅助决策，非医疗器械；结论须由执业医师复核。</div>
+    <div class="lhint">账号由系统管理员统一开通。<br>忘记密码？请联系管理员重置。<br>本工具为辅助决策，非医疗器械；结论须由执业医师复核。</div>
   </form>
 </div>
 
@@ -335,7 +335,7 @@
 
     <section class="screen" id="scr-qc">
       <div class="shead"><div><h2>病历质控 · 病案科工作台</h2><p>AI 预筛病历缺陷，质控员终审签字（三列留痕）</p></div>
-        <div class="spacer"></div><button class="btn secondary sm" onclick="qcSample()">填入示例</button></div>
+        <div class="spacer"></div></div>
       <div class="body" style="max-width:900px">
         <div class="card" style="border-left:3px solid var(--accent)">
           <b>谁用 / 何时用</b>
@@ -1822,7 +1822,6 @@ function qcResubmit(rid){
 function qcCancelResubmit(){qcResubmitOf=null;const bn=document.getElementById('qcResubmitBanner');
   if(bn){bn.style.display='none';bn.innerHTML='';}}
 const QC_LABELS=['主诉','现病史','既往史','体格检查','辅助检查','初步诊断','医师签名'];
-function qcSample(){const s=['右下后牙自发痛 3 天','3 天前起右下后牙冷热刺激痛，夜间加重，阵发性剧痛','否认高血压、糖尿病；无药物过敏','右下6深龋，探痛(+)，叩痛(+)，冷测激发痛','根尖片示右下6根尖低密度影','急性牙髓炎','张医生'];QC_LABELS.forEach((l,i)=>{if(i===6)return;document.getElementById('qcf_'+i).value=s[i];});document.getElementById('qcLabs').value='';toast('已填入示例（医师签名已锁定为当前账号）');}
 /* F2：粘贴整段病历 → /qc/parse LLM 拆分 → 填充 qcf_0-6（仅覆盖拆分出的非空字段，保留已填内容） */
 async function qcParsePaste(){
   const t=document.getElementById('qcPaste').value.trim();

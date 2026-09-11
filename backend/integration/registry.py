@@ -2,7 +2,8 @@
 
 注册表模式（对扩展开放、对修改关闭）：
 - 内置 "none"（别名 ""/"noop"）→ NullAdapter：默认，未对接，全空转；
-- 内置 "demo" → DemoHisAdapter：内存假数据，演示/联调/测试用；
+- 内置 "demo" → DemoHisAdapter：内存假数据，仅供集成开发参考（演示/联调/测试）；
+  生产一律用真实厂商适配器（或保持 none 未对接）；
 - 厂商实现：新建 backend/integration/<vendor>.py 实现 HisAdapter，在本模块底部（或
   部署时入口处）register_adapter("<vendor>", VendorAdapter) 一行注册，.env.local 配
   HIS_ADAPTER=<vendor> 即激活——核心业务零改动。
@@ -41,5 +42,5 @@ def get_adapter() -> HisAdapter:
     return _REGISTRY[key]()
 
 
-# 内置 demo 适配器经同一注册机制注册——厂商接入照此一行即可
+# 内置 demo 适配器经同一注册机制注册——仅供集成开发参考（非生产实现），厂商接入照此一行注册真实适配器
 register_adapter("demo", DemoHisAdapter)

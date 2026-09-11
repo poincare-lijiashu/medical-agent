@@ -1,6 +1,8 @@
 """本地真实指南要点语料注入（不依赖网络，秒级）：多专科教学示例，每条标真实指南名。
 
 定位：demo/教学语料，覆盖常见专科要点，用于让循证检索在离线/网络受限时可用作答与溯源。
+demo 来源：全部条目标识 guideline_demo:*，属内置教学示例——待阶段 5（真实指南语料落地）替换，
+届时以院方授权指南经 scripts/seed_kb_docs.py 重摄覆盖；替换前本语料保持检索可用。
 生产应替换为院方授权的完整指南库（可配合 scripts/seed_kb_pubmed.py + NCBI API key 在线扩充）。
 幂等：document_id="local_corpus"，重跑先按该 id 删除再插入；编码走 embedder（自动 GPU/CPU）批量。
 """

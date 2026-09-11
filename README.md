@@ -25,7 +25,7 @@ Qwen 驱动的循证医疗辅助系统，**商用级形态的可运行成品**�
 - **追加式审计**：`data/audit/audit.jsonl`，无删除接口。
 - **HITL 门**：literature/MDT 置信度 <0.6 或 claim 溯源失败/高危强制复核（待确认规则同阈值）；影像按高危征象词、药物按相互作用严重度强制复核。
 
-演示账号（需 `AUTH_SEED_DEMO=true` 首次启动自动注入，生产不注入）：`doctor01 / pharm01 / admin01 / qc01`，密码取 `AUTH_DEMO_PASSWORD`（如 `Med@2026`；未设置则随机生成——日志只记 `auth.seed.demo_password` 事件**不带口令值**，口令明文仅在开发环境启动时打印一次到**控制台**，不落文件日志）。上线务必改密/删除。
+演示账号（**仅 `AUTH_SEED_DEMO=true`** 时首次启动自动注入；config 默认 false，生产必关——生产部署检查表见 `docs/DEPLOY.md`）：`doctor01 / pharm01 / admin01 / qc01`，密码取 `AUTH_DEMO_PASSWORD`（如 `Med@2026`；未设置则随机生成——日志只记 `auth.seed.demo_password` 事件**不带口令值**，口令明文仅在开发环境启动时打印一次到**控制台**，不落文件日志）。上线务必改密/删除。
 
 ## 快速开始（自包含，不依赖 EduAgent）
 
