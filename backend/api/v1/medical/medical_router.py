@@ -24,6 +24,7 @@ from backend.api.deps import require_role, require_user, rate_limit, revoke_user
 from backend.config import settings
 from backend.core import chat_memory, kb_ingest, llm_config, runtime_flags
 from backend.core import medical_review as review
+from backend.core import case_archive  # 阶段4：病例库合规归档（qc approve 自动归档挂点）
 from backend.core import pg_store, qc
 from backend.core import prescriptions as rx  # 阶段2.3 处方流转域层（状态机/repo）
 from backend.core.intent import offtopic_tech_reply, prefilter_reply
@@ -1343,6 +1344,23 @@ async def review_resolve(rid: str, body: ResolveReq,
                             actor=reviewer, payload={"rid": rid, "role": user.get("role", "")})
     await pg_store.mirror_review(item)
     await pg_store.mirror_audit(f"review.{body.decision}", reviewer, {"rid": rid})
+    if item.get("agent") == "qc" and body.decision == "approved":
+        # 阶段4.2 归档挂点：质控（qc）approve 成功 → 自动归档病例库。全兜底：失败仅审计
+        # case_archive.failed，绝不影响质控主流程（质控结论已签发生效）。
+        try:
+            entry = await asyncio.to_thread(case_archive.archive_from_review, item)
+            await asyncio.to_thread(get_audit_logger().write, event_type="case_archive",
+                                    action="created", actor=reviewer,
+                                    payload={"rid": rid, "arch_id": entry["id"],
+                                             "dept": entry.get("dept", ""),
+                                             "role": user.get("role", "")})
+            await pg_store.mirror_audit("case_archive.created", reviewer,
+                                        {"rid": rid, "arch_id": entry["id"]})
+        except Exception as e:  # noqa: BLE001 —— 归档失败绝不冒泡
+            await asyncio.to_thread(get_audit_logger().write, event_type="case_archive",
+                                    action="failed", actor=reviewer,
+                                    payload={"rid": rid, "err": str(e)[:150]})
+            await pg_store.mirror_audit("case_archive.failed", reviewer, {"rid": rid})
     return item
 
 
@@ -1580,6 +1598,68 @@ async def qc_my_rejections(user: dict = Depends(require_user)):
     await asyncio.to_thread(get_audit_logger().write, event_type="qc", action="my_rejections",
                             actor=me, payload={"n": len(items)})
     return {"items": items, "me": me}
+
+
+# ---------- 阶段4：病例库（质控通过自动归档的合规检索/移除） ----------
+class CaseArchiveRemoveReq(BaseModel):
+    """移出病例库请求：原因必填（软删除留痕 removed_reason，缺失 422）。"""
+    reason: str = Field(min_length=1, max_length=200)
+
+
+@router.get("/case-archive")
+async def case_archive_list(dept: str | None = None, status: str | None = None,
+                            date_from: str | None = None, date_to: str | None = None,
+                            user: dict = Depends(require_role("qc", "admin"))):
+    """病例库全量清单（qc/admin）：按科室/状态/归档日期区间筛选 + 库内统计头。
+
+    doctor 走 /case-archive/mine（仅本人 active）；removed 条目仍在本视图可见
+    （软删除留痕审计）。审计 case_archive.list。
+    """
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(case_archive.list_cases, dept=(dept or "").strip() or None,
+                                    status=(status or "").strip() or None,
+                                    date_from=(date_from or "").strip() or None,
+                                    date_to=(date_to or "").strip() or None)
+    st = await asyncio.to_thread(case_archive.stats)
+    await asyncio.to_thread(get_audit_logger().write, event_type="case_archive", action="list",
+                            actor=me, payload={"n": len(items), "role": user.get("role", "")})
+    return {"items": items, "stats": st, "me": me}
+
+
+@router.get("/case-archive/mine")
+async def case_archive_mine(user: dict = Depends(require_role("doctor"))):
+    """doctor「我的归档」：本人提交且质控通过、当前 status=active 的记录（只读）。
+
+    数据隔离由服务端过滤保证（submitted_by=me）；removed 条目不下发（doctor 无移除权，
+    移除留痕仅 qc/admin 病例库视图可见）。审计 case_archive.list（scope=mine）。
+    """
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(case_archive.list_mine, me)
+    await asyncio.to_thread(get_audit_logger().write, event_type="case_archive", action="list",
+                            actor=me, payload={"n": len(items), "scope": "mine",
+                                               "role": user.get("role", "")})
+    return {"items": items, "me": me}
+
+
+@router.post("/case-archive/{arch_id}/remove")
+async def case_archive_remove(arch_id: str, body: CaseArchiveRemoveReq,
+                              user: dict = Depends(require_role("qc", "admin"))):
+    """移出病例库（qc/admin，软删除）：status=removed + removed_by/removed_reason 留痕。
+    原因必填（缺失/纯空白 422）；重复移除/条目不存在 → 400。审计 case_archive.removed。"""
+    me = user.get("username", "system")
+    if not body.reason.strip():
+        raise HTTPException(422, "移除原因必填")
+    try:
+        entry = await asyncio.to_thread(case_archive.remove, arch_id, me, body.reason.strip())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(get_audit_logger().write, event_type="case_archive",
+                            action="removed", actor=me,
+                            payload={"arch_id": arch_id, "reason": body.reason.strip()[:120],
+                                     "role": user.get("role", "")})
+    await pg_store.mirror_audit("case_archive.removed", me,
+                                {"arch_id": arch_id, "reason": body.reason.strip()[:120]})
+    return entry
 
 
 # ---------- 「粘贴整段病历」LLM 拆分（F2：质控表单快捷填充，仅辅助填表不参与质控判定）----------

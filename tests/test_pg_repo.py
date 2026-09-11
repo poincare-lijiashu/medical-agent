@@ -98,6 +98,13 @@ class FakeConn:
         if s.startswith("SELECT id FROM prescriptions"):
             # 阶段2.1：处方迁移差集补齐用（只取 id 集合）
             return [{"id": k} for k in self.db["prescriptions"]]
+        if s.startswith("SELECT data FROM case_archive"):
+            # 阶段4：病例库真源读（data jsonb → 模拟驱动返回 str；archived_at 排序）
+            return [{"data": json.dumps(self.db["case_archive"][k], ensure_ascii=False)}
+                    for k in sorted(self.db["case_archive"])]
+        if s.startswith("SELECT id FROM case_archive"):
+            # 阶段4：病例库迁移差集补齐用（只取 id 集合）
+            return [{"id": k} for k in self.db["case_archive"]]
         if s.startswith("SELECT kind"):
             return [{"kind": k_, "pid": p_, "data": d_, "active": act_}
                     for k_, p_, d_, act_ in self.db["llm_providers"]]
@@ -109,7 +116,7 @@ class FakeConn:
         if s == "SELECT 1":
             return 1
         for t in ("users", "departments", "review_queue", "llm_providers",
-                  "drug_dict", "drug_rules", "prescriptions"):
+                  "drug_dict", "drug_rules", "prescriptions", "case_archive"):
             if s == f"SELECT count(*) FROM {t}":
                 return len(self.db[t])
         raise AssertionError(f"假池未实现的 fetchval: {s[:80]}")
@@ -138,6 +145,15 @@ class FakeConn:
             return "DELETE"
         if s == "DELETE FROM prescriptions":
             self.db["prescriptions"] = {}
+            return "DELETE"
+        if s.startswith("DELETE FROM case_archive WHERE NOT"):
+            # 阶段4：病例库全量同步删除语义（按 id 保留）
+            keep = set(a[0])
+            self.db["case_archive"] = {k: v for k, v in self.db["case_archive"].items()
+                                       if k in keep}
+            return "DELETE"
+        if s == "DELETE FROM case_archive":
+            self.db["case_archive"] = {}
             return "DELETE"
         if s.startswith("DELETE FROM drug_dict WHERE NOT"):
             # 阶段1.1：drug_dict 全量同步删除语义（按规范名保留）
@@ -204,6 +220,11 @@ class FakeConn:
             for rxid, data, _doctor, _status in rows:
                 self.db["prescriptions"][rxid] = json.loads(data)
             return
+        if s.startswith("INSERT INTO case_archive"):
+            # 阶段4：病例库 UPSERT（data jsonb str → dict 往返）
+            for aid, data, _dept, _status in rows:
+                self.db["case_archive"][aid] = json.loads(data)
+            return
         if s.startswith("INSERT INTO llm_providers"):
             for row in rows:
                 self.db["llm_providers"].append(tuple(row))
@@ -244,7 +265,7 @@ class FakePool:
 def _db() -> dict:
     return {"users": {}, "departments": [], "review_queue": {}, "llm_providers": [],
             "consults": {}, "drug_dict": {}, "drug_rules": {}, "prescriptions": {},
-            "fail": None}
+            "case_archive": {}, "fail": None}
 
 
 @pytest.fixture()
@@ -879,6 +900,54 @@ def test_migrate_prescriptions_imports_and_reconciles(fake_pg, tmp_path, monkeyp
     assert set(fake_pg["prescriptions"]) == {"rx-pg-already", "rx-json-only"}
 
 
+# ---------- 阶段4：病例库合规归档 repo 往返 + 迁移（照 prescriptions 模式） ----------
+
+_ARCH = {"id": "arch-json-only", "patient_ref": "右下后牙自发痛 3 天",
+         "dept": "口腔科",
+         "record": {"主诉": "右下后牙自发痛 3 天", "医师签名": "doctor01", "科室": "口腔科"},
+         "labs": {"血钾": "6.8"},
+         "qc_conclusion": "完整性缺 0 项、内涵缺陷 1 项；…",
+         "qc_confidence": 0.6, "reviewed_by": "qc01", "submitted_by": "doctor01",
+         "archived_at": "2026-01-01T00:00:00+00:00", "status": "active",
+         "removed_by": None, "removed_reason": None}
+
+
+def test_case_archive_pg_roundtrip_truth_source(fake_pg, tmp_path, monkeypatch):
+    """case_archive：PG 可用 → 读 PG 真源；写 = JSON 兜底 + PG 全量同步（data jsonb 往返）。"""
+    from backend.core import case_archive as ca_mod
+    f = tmp_path / "case_archive.json"
+    monkeypatch.setattr(ca_mod, "CASE_ARCHIVE_FILE", str(f))
+    with ca_mod._lock:  # 直接经域模块写（JSON 兜底 + PG 全量同步）
+        ca_mod._save([dict(_ARCH)])
+    assert json.loads(f.read_text(encoding="utf-8"))[0]["id"] == _ARCH["id"]  # JSON 已落盘
+    assert set(fake_pg["case_archive"]) == {_ARCH["id"]}                      # PG 已同步
+    f.unlink()  # 删 JSON：读必须仍完整（PG 真源）
+    loaded = ca_mod._load()
+    assert [i["id"] for i in loaded] == [_ARCH["id"]]
+    assert loaded[0]["patient_ref"] == "右下后牙自发痛 3 天"
+    assert loaded[0]["record"]["医师签名"] == "doctor01" and loaded[0]["labs"]["血钾"] == "6.8"
+    assert loaded[0]["status"] == "active" and loaded[0]["removed_by"] is None
+
+
+def test_migrate_case_archive_imports_and_reconciles(fake_pg, tmp_path, monkeypatch):
+    """阶段4 迁移：case_archive——PG 表空 → JSON 全量导入；PG 非空 → 按 id 差集
+    只增不覆盖补齐（JSON ⊇ PG，幂等可重复跑，与 prescriptions 同纪律）。"""
+    from backend.core import case_archive as ca_mod
+    ca_file = tmp_path / "case_archive.json"
+    keep = dict(_ARCH, id="arch-pg-already")
+    lost = dict(_ARCH, id="arch-json-only", patient_ref="JSON 独有归档记录",
+                archived_at="2026-02-01T00:00:00+00:00")
+    ca_file.write_text(json.dumps([keep, lost], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(ca_mod, "CASE_ARCHIVE_FILE", str(ca_file))
+    fake_pg["case_archive"] = {keep["id"]: {**keep}}  # PG 旧真源子集（非空表）
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("case_archive_reconciled") == 1     # arch-json-only 补齐（arch-pg-already 跳过）
+    assert fake_pg["case_archive"]["arch-json-only"]["dept"] == "口腔科"
+    # 幂等：再次迁移无补齐
+    assert not asyncio.run(pg_store.migrate_json_to_pg()).get("case_archive_reconciled")
+    assert set(fake_pg["case_archive"]) == {"arch-pg-already", "arch-json-only"}
+
+
 # ---------- 问题1：JSON 真源原子写回归锁（审核中心数据时有时无 · 写侧诊断结论锁定） ----------
 
 def test_write_json_atomic_tmp_then_replace(tmp_path, monkeypatch):
@@ -906,7 +975,7 @@ def test_write_json_atomic_tmp_then_replace(tmp_path, monkeypatch):
 
 def test_all_truth_sources_route_through_atomic_write(tmp_path, monkeypatch):
     """问题1 写侧统一检查：queue/users/consults/prescriptions/drug_dict/drug_rules/
-    llm_providers/departments 全部 8 个 JSON 真源写路径（repo 层 save_*）必须经
+    llm_providers/departments/case_archive 全部 9 个 JSON 真源写路径（repo 层 save_*）必须经
     _write_json_atomic（tmp+os.replace），不允许任何直写真源文件的旁路。
     spy 记录各域调用；PG_OFFLINE=on 走纯 JSON 路径（不触发 PG 同步）。"""
     calls = []
@@ -935,5 +1004,7 @@ def test_all_truth_sources_route_through_atomic_write(tmp_path, monkeypatch):
                                  "vision": {"active": None, "providers": []}}, l)
     dp = str(tmp_path / "departments.json")
     pg_store.save_departments({"list": ["心内科"]}, dp)
-    assert sorted(calls) == sorted([q, u, c, r, d, rl, l, dp]), \
-        "8 个真源写路径必须全部经 _write_json_atomic（问题1 统一检查）"
+    ca = str(tmp_path / "case_archive.json")
+    pg_store.save_case_archive([{"id": "arch-1", "archived_at": "t"}], ca)
+    assert sorted(calls) == sorted([q, u, c, r, d, rl, l, dp, ca]), \
+        "9 个真源写路径必须全部经 _write_json_atomic（问题1 统一检查；阶段4 增病例库）"

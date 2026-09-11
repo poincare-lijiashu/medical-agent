@@ -535,13 +535,18 @@ def test_drug_purge_frontend_markers_present():
 
 
 def test_drug_dict_manage_frontend_markers_present():
-    """问题3 标记锁：药品字典/相互作用规则管理 UI（pharmacist 审核中心 tab + admin 卡复用）：
+    """问题3 标记锁：药品字典/相互作用规则管理 UI（pharmacist 审核中心 tab）：
     - tabDrugDict/tabDrugRules 双 tab（renderReviewHeader 仅药剂科可见）；
-    - 共享渲染函数 renderDrugDictEditor/renderDrugRulesEditor（admin 数据面板字典卡同款复用）；
+    - 共享渲染函数 renderDrugDictEditor/renderDrugRulesEditor；
     - 药品表单五字段（name/category/level/aliases/brand_names）+ 搜索/分类过滤 + 编辑/删除；
     - 规则表单（drug_a/drug_b/severity 高危|中危/mechanism/management）+ 编辑/删除；
     - 写端点 POST /admin/drug/dict|rules（权限后端同源 pharmacist+admin）；
-    - 安全纪律：esc() 转义 + data 属性事件委托（禁内联拼接药名）。"""
+    - 安全纪律：esc() 转义 + data 属性事件委托（禁内联拼接药名）。
+    阶段4 任务1 语义变更（注明）：admin 数据面板字典卡已删除——药品字典管理 UI 只在
+    药剂科审核中心 tab 显示（用户拍板，避免管理面板卡片冗余）；renderDrugDictEditor
+    函数保留供 pharmacist tab 使用；admin 编辑权限后端不变（兜底）。原正向锁
+    「renderDrugDictEditor(document.getElementById('drugDictPanel'))」随挂载点删除，
+    改为反向锁（卡片/容器/挂载函数不得残留）。"""
     html = FRONTEND.read_text(encoding="utf-8")
     for marker in (
         'id="tabDrugDict"', 'id="tabDrugRules"',
@@ -561,8 +566,6 @@ def test_drug_dict_manage_frontend_markers_present():
         "data-act=\"dd-edit\"", "data-act=\"dd-del\"",
         "data-act=\"dr-edit\"", "data-act=\"dr-del\"",
         "__drugDictDelegate",                          # 事件委托一次性挂载
-        # admin 数据面板字典卡复用同一渲染函数（容器 id 保留）
-        "renderDrugDictEditor(document.getElementById('drugDictPanel'))",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     fn = _extract_fn(html, "renderDrugDictEditor")
@@ -571,3 +574,68 @@ def test_drug_dict_manage_frontend_markers_present():
     hdr = _extract_fn(html, "renderReviewHeader")
     assert "tabDrugDict" in hdr and "tabDrugRules" in hdr, \
         "字典/规则 tab 可见性必须由 renderReviewHeader 控制（仅药剂科可见）"
+
+
+def test_admin_dict_card_removed_frontend_markers():
+    """阶段4 任务1 反向锁（防回退）：admin 数据面板药品字典卡已移除——
+    卡片标题/容器 id=drugDictPanel/挂载函数 loadDrugDictPanel 均不得残留；
+    删除注记必须存在（标明 admin 卡删除与渲染调用移除的原因/兜底语义）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for gone in (
+        'id="drugDictPanel"',                # admin 卡容器
+        "药品字典（可编辑",                    # admin 卡标题
+        "async function loadDrugDictPanel(",  # admin 卡挂载函数
+        "loadDrugDictPanel();",              # 面板加载时的渲染调用
+    ):
+        assert gone not in html, f"admin 字典卡应已移除，仍残留：{gone}"
+    for marker in (
+        "阶段4 任务1 语义变更",                 # 删除注记（admin 卡标记删除/渲染调用移除，注明）
+        "renderDrugDictEditor 函数保留",        # 函数保留供 pharmacist 用的注明
+        "admin 编辑权限后端不变",               # 后端权限兜底注明
+    ):
+        assert marker in html, f"缺少 admin 字典卡移除注记：{marker}"
+
+
+# ---------- 阶段4：病例库前端标记锁（追加，不改动既有断言） ----------
+
+def test_phase4_case_archive_frontend_markers_present():
+    """阶段4 前端标记锁（防回退）：
+    - qc/admin 审核中心「病例库」tab（tabCaseArchive + switchReviewTab('casearchive') 分发 +
+      renderReviewHeader 仅 qc/admin 可见）；
+    - 病例库视图：统计头（N 例在库 / M 移除）+ 科室/时间筛选 + status 徽章
+      （active 绿 chip ok「在库」/ removed 灰 chip「已移除」）+ 质控结论摘要 +
+      record 展开详情（esc 后 <pre>）+ 移除按钮（data-act="ca-remove"）；
+    - remove 必填原因：空值 toast 阻断 + /case-archive/{id}/remove 端点；
+    - doctor 病历质控视图「我的归档」小节（loadQcArch + /case-archive/mine，只读）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 病例库 tab（qc/admin）
+        'id="tabCaseArchive"', "switchReviewTab('casearchive')", "if(t==='casearchive')return loadCaseArchive();",
+        # 视图数据源与渲染
+        "function loadCaseArchive(", "function renderCaseArchive(", "function caseArchRow(",
+        "/api/v1/medical/case-archive",
+        # 统计头（N 例在库 / M 移除）
+        "例在库", "已移除</span>",
+        # 科室/时间筛选
+        'id="caDept"', 'id="caStatus"', 'id="caFrom"', 'id="caTo"', "全部科室",
+        # status 徽章（active 绿 / removed 灰）
+        "chip ok\"><span class=\"dot\"></span>在库</span>",
+        "chip\"><span class=\"dot\"></span>已移除</span>",
+        # 质控结论摘要 + record 展开详情（esc 纪律）
+        "质控结论摘要与病历详情", "qc_conclusion", "esc(JSON.stringify(i.record||{},null,2))",
+        # 移除（必填原因）
+        'data-act="ca-remove"', "function caseArchiveRemove(", "移除原因必填",
+        "/remove'",
+        # doctor 我的归档
+        'id="qcArchCard"', "function loadQcArch(", "/case-archive/mine", "我的归档",
+        "暂无在库归档病历",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    rm = _extract_fn(html, "caseArchiveRemove")
+    assert "if(!reason){toast('移除原因必填');return;}" in rm, \
+        "remove 必须前端阻断空原因（服务端 422 双保险）"
+    hdr = _extract_fn(html, "renderReviewHeader")
+    assert "tabCaseArchive" in hdr, "病例库 tab 可见性必须由 renderReviewHeader 控制（仅 qc/admin）"
+    # humanizeAudit 补 case_archive.* 映射（覆盖率锁配套）
+    hum = _extract_fn(html, "humanizeAudit")
+    assert "case_archive" in hum, "humanizeAudit 必须包含 case_archive.* 事件映射"

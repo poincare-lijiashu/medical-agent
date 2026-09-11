@@ -26,3 +26,13 @@ def _isolate_runtime_flags(tmp_path, monkeypatch):
     from backend.core import runtime_flags
     monkeypatch.setattr(runtime_flags, "FLAGS_FILE", str(tmp_path / "runtime_flags.json"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_case_archive(tmp_path, monkeypatch):
+    """阶段4：每个测试独立的病例归档文件——qc approve 挂点在既有路由测试中触发归档时，
+    绝不读写真实 data/case_archive.json（防测试数据污染真源）。文件默认不存在 → 空库。"""
+    from backend.core import case_archive
+    monkeypatch.setattr(case_archive, "CASE_ARCHIVE_FILE",
+                        str(tmp_path / "case_archive.json"))
+    yield

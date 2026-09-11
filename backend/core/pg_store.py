@@ -154,6 +154,11 @@ async def _init_impl() -> bool:
             await c.execute("""CREATE TABLE IF NOT EXISTS prescriptions(
                 id text primary key, data jsonb, doctor text, status text,
                 updated_at timestamptz default now())""")
+            # 阶段4：病例库合规归档（id=arch-* 业务键；data jsonb 全量留痕 + dept/status
+            # 冗余列便于科室筛选与软删除排查；归档/软删除语义在 case_archive 域模块）
+            await c.execute("""CREATE TABLE IF NOT EXISTS case_archive(
+                id text primary key, data jsonb, dept text, status text,
+                updated_at timestamptz default now())""")
             # 阶段1.1：药品字典（name=规范名唯一键；aliases/brand_names=别名/商品名数组；
             # category=药理类别；level=处方等级/OTC）。1.3 起 medical_drug 读本表做规则匹配。
             await c.execute("""CREATE TABLE IF NOT EXISTS drug_dict(
@@ -780,6 +785,53 @@ def save_prescriptions(items: list, path: str) -> None:
     _json_then_pg(_pg_save_prescriptions, path, items)
 
 
+# ---- 阶段4：病例库合规归档（data jsonb 全量留痕，archived_at 内嵌 data 中，读时按其排序还原追加顺序） ----
+
+_CASE_UPSERT = """INSERT INTO case_archive(id,data,dept,status) VALUES($1,$2::jsonb,$3,$4)
+   ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data, dept=EXCLUDED.dept,
+   status=EXCLUDED.status, updated_at=now()"""
+
+
+async def _pg_load_case_archive() -> list | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT data FROM case_archive ORDER BY data->>'archived_at', id")
+    if not rows:
+        return None
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+        except Exception:  # noqa: BLE001 —— 单行损坏跳过，不拖垮整个列表
+            continue
+        if isinstance(d, dict):
+            out.append(d)
+    return out
+
+
+async def _pg_save_case_archive(items: list) -> None:
+    rows = [(i.get("id"), json.dumps(i, ensure_ascii=False), i.get("dept", ""),
+             i.get("status", "active"))
+            for i in (items or []) if isinstance(i, dict) and i.get("id")]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                await c.execute("DELETE FROM case_archive WHERE NOT (id = ANY($1))",
+                                [r[0] for r in rows])
+            else:
+                await c.execute("DELETE FROM case_archive")
+            if rows:
+                await c.executemany(_CASE_UPSERT, rows)
+
+
+def load_case_archive(path: str, json_loader=None) -> list:
+    """病例库读：PG 可用→PG 真源；不可用/异常/空表→JSON（调用方 json_loader 自有重试语义）。"""
+    return _pg_or_json(_pg_load_case_archive, json_loader, path, [])
+
+
+def save_case_archive(items: list, path: str) -> None:
+    _json_then_pg(_pg_save_case_archive, path, items)
+
+
 # ---- 阶段1.1：药品字典 drug_dict / 相互作用规则 drug_rules（PG 真源 + JSON 兜底） ----
 # 语义与 users/review_queue 完全一致：读 = PG 池可用且域非 stale → PG 真源（空表回落
 # JSON）；写 = JSON 原子写先行 + PG 全量同步（best-effort，域级 stale）。
@@ -1059,6 +1111,27 @@ async def _migrate_impl() -> dict:
                 if rows:
                     await c.executemany(_RX_UPSERT, rows)
                     out["prescriptions_reconciled"] = len(rows)
+        # 阶段4：病例库合规归档——与 review_queue/prescriptions 同纪律（表空才导；PG 非空
+        # 按 id 差集只增不覆盖补齐，JSON ⊇ PG 恒成立，幂等可重复跑）。
+        from backend.core.case_archive import CASE_ARCHIVE_FILE
+        ca_items = _read_json(CASE_ARCHIVE_FILE, [])
+        if isinstance(ca_items, list) and ca_items:
+            if not await c.fetchval("SELECT count(*) FROM case_archive"):
+                rows = [(i.get("id"), json.dumps(i, ensure_ascii=False),
+                         i.get("dept", ""), i.get("status", "active"))
+                        for i in ca_items if isinstance(i, dict) and i.get("id")]
+                if rows:
+                    await c.executemany(_CASE_UPSERT, rows)
+                    out["case_archive"] = len(rows)
+            else:
+                existing = {r["id"] for r in await c.fetch("SELECT id FROM case_archive")}
+                rows = [(i.get("id"), json.dumps(i, ensure_ascii=False),
+                         i.get("dept", ""), i.get("status", "active"))
+                        for i in ca_items
+                        if isinstance(i, dict) and i.get("id") and i["id"] not in existing]
+                if rows:
+                    await c.executemany(_CASE_UPSERT, rows)
+                    out["case_archive_reconciled"] = len(rows)
     return out
 
 

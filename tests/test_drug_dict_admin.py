@@ -225,6 +225,9 @@ def test_frontend_disclaimer_matches_backend_and_docs():
     # rx 视图（id="rxDisclaimer"），仍复用 DRUG_DISCLAIMER 常量（上方逐字一致性锁定不变）
     assert 'id="rxDisclaimer"' in html, "开药工作台（rx 视图）应有免责声明条"
     assert 'id="drugDisclaimer"' not in html, "drug 视图已删除，旧 chat 免责条锚点不应残留"
-    assert 'id="drugDictPanel"' in html, "admin 面板应有药品字典卡"
+    # 阶段4 任务1 语义变更（注明）：admin 数据面板药品字典卡已移除（药品字典管理 UI
+    # 只在药剂科审核中心 tab，renderDrugDictEditor 函数保留供其调用；admin 编辑权限
+    # 后端不变兜底），原「admin 面板应有药品字典卡」正向锁改为反向锁（防回退）。
+    assert 'id="drugDictPanel"' not in html, "admin 数据面板字典卡应已移除（阶段4 任务1）"
     md = (BASE / "docs" / "DEPLOY.md").read_text(encoding="utf-8")
     assert "药品数据免责声明" in md

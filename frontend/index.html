@@ -367,6 +367,11 @@
         <div class="card" id="qcRejCard" style="display:none"><h3>我的质控驳回</h3>
           <div class="src">仅显示您本人提交、被质控驳回的记录（含驳回原因与时间，只读）。</div>
           <div id="qcRej" style="margin-top:8px"></div></div>
+        <!-- 阶段4：doctor 的「我的归档」小节（本人质控通过在库记录，只读；数据隔离由
+             /case-archive/mine 服务端过滤保证；qc/admin 走审核中心「病例库」tab） -->
+        <div class="card" id="qcArchCard" style="display:none"><h3>我的归档</h3>
+          <div class="src">您提交且质控通过、当前在病例库中的病历（只读，含质控结论摘要）。</div>
+          <div id="qcArch" style="margin-top:8px"></div></div>
       </div>
     </section>
 
@@ -393,9 +398,14 @@
         <!-- 跨科室会诊：doctor/pharmacist 的「其它科室会诊协助」收件箱（qc/admin 全局档案视图隐藏） -->
         <button class="btn sm ghost" id="tabConsults" style="display:none" onclick="switchReviewTab('consults')">其它科室会诊协助</button>
         <!-- 问题3：pharmacist 药品字典/相互作用规则管理 tab（renderReviewHeader 控制仅药剂科可见；
-             与 admin 数据面板字典卡复用同一渲染函数，写走 POST /admin/drug/* pharmacist+admin 双角色） -->
+             写走 POST /admin/drug/* pharmacist+admin 双角色）。
+             阶段4 任务1 语义变更：admin 数据面板字典卡已移除（药品字典管理 UI 只在药剂科
+             审核中心 tab 显示，避免管理面板卡片冗余），renderDrugDictEditor 函数保留仅供
+             本 tab 使用；admin 编辑权限后端不变（兜底）。 -->
         <button class="btn sm ghost" id="tabDrugDict" style="display:none" onclick="switchReviewTab('drugdict')">药品字典</button>
         <button class="btn sm ghost" id="tabDrugRules" style="display:none" onclick="switchReviewTab('drugrules')">相互作用规则</button>
+        <!-- 阶段4：病例库 tab（qc/admin 专属；质控 approve 自动归档的检索/移除，renderReviewHeader 控制可见性） -->
+        <button class="btn sm ghost" id="tabCaseArchive" style="display:none" onclick="switchReviewTab('casearchive')">病例库</button>
         <!-- 任务3：qc/admin 全局档案筛选（doctor 视图隐藏） -->
         <input class="inp" id="reviewFilter" aria-label="档案筛选" placeholder="筛选：助手/问题/提交人" spellcheck="false"
                style="max-width:220px;margin-left:auto;display:none" oninput="onReviewFilter(this.value)">
@@ -628,7 +638,7 @@ function go(k){
   else if(k==='kb'){document.getElementById('scr-kb').classList.add('on');loadKb();}
   else if(k==='mdt')document.getElementById('scr-mdt').classList.add('on');
   else if(k==='myconsults'){document.getElementById('scr-myconsults').classList.add('on');loadMyConsults();}
-  else if(k==='qc'){document.getElementById('scr-qc').classList.add('on');loadQcRejections();}  /* 任务2：医生视图「我的质控驳回」卡片 */
+  else if(k==='qc'){document.getElementById('scr-qc').classList.add('on');loadQcRejections();loadQcArch();}  /* 任务2：医生视图「我的质控驳回」卡片；阶段4：doctor「我的归档」小节 */
   else if(k==='rx'){document.getElementById('scr-rx').classList.add('on');loadRx();}  /* 阶段3：开药工作台（取代原 drug 视图） */
   else if(k==='data'){document.getElementById('scr-data').classList.add('on');loadData();}
   else if(k==='arch')document.getElementById('scr-arch').classList.add('on');
@@ -976,6 +986,8 @@ function renderReviewHeader(){  /* 任务3：审核中心按角色切换文案�
   const tdd=document.getElementById('tabDrugDict'),tdr=document.getElementById('tabDrugRules');  /* 问题3：药品字典/相互作用规则管理 tab 仅药剂科可见 */
   if(tdd)tdd.style.display=ph?'':'none';
   if(tdr)tdr.style.display=ph?'':'none';
+  const tca=document.getElementById('tabCaseArchive');  /* 阶段4：病例库 tab 仅 qc/admin 可见 */
+  if(tca)tca.style.display=mine?'none':'';
   const tc=document.getElementById('tabConsults');  /* 跨科室会诊收件箱：doctor/pharmacist 专属第三栏目 */
   if(tc)tc.style.display=mine?'':'none';
   const fi=document.getElementById('reviewFilter');  /* 档案筛选仅 qc/admin 可见 */
@@ -994,9 +1006,12 @@ function switchReviewTab(t){reviewTab=t;
   const tdd=document.getElementById('tabDrugDict'),tdr=document.getElementById('tabDrugRules');  /* 问题3：字典/规则 tab 高亮同步 */
   if(tdd)tdd.className='btn sm '+(t==='drugdict'?'primary':'ghost');
   if(tdr)tdr.className='btn sm '+(t==='drugrules'?'primary':'ghost');
+  const tca=document.getElementById('tabCaseArchive');  /* 阶段4：病例库 tab 高亮同步 */
+  if(tca)tca.className='btn sm '+(t==='casearchive'?'primary':'ghost');
   if(t==='consults')return loadConsultInbox();  /* 会诊收件箱独立数据源（/consults/inbox），不走 renderReview */
   if(t==='drugdict')return renderDrugDictEditor(document.getElementById('reviewBody'));  /* 问题3：药品字典管理（共享编辑器渲染进审核中心） */
   if(t==='drugrules')return renderDrugRulesEditor(document.getElementById('reviewBody'));  /* 问题3：相互作用规则管理 */
+  if(t==='casearchive')return loadCaseArchive();  /* 阶段4：病例库（qc/admin，独立数据源 /case-archive） */
   renderReview();}
 let reviewLoadSeq=0;  /* 问题1：审核中心加载请求序号守卫——点刷新/点审核触发的并发加载只应用
   最新一次响应，过期响应在每个 await 后被丢弃（防旧响应后到覆盖新数据/中途置空 → 列表「时有时无」） */
@@ -1250,6 +1265,97 @@ async function _rxReviewPost(id,body){
   }catch(e){toast('操作失败：'+e.message);}
 }
 function reviewGo(d){reviewPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
+/* ---- 阶段4：病例库（qc/admin 审核中心 tab；数据源 GET /case-archive）----
+   质控 approve 自动归档（后端挂点），本视图提供：统计头（N 例在库 / M 移除）+
+   科室/时间筛选 + status 徽章（active 绿 / removed 灰）+ 质控结论摘要 +
+   record 展开详情（<pre> esc 后入 HTML）+ 移除按钮（qc/admin，原因必填）。 */
+let caseArchItems=[],caseArchStats={active:0,removed:0,total:0};
+async function loadCaseArchive(){
+  const b=document.getElementById('reviewBody');if(!b)return;
+  b.innerHTML='<div class="card"><div class="sk" style="height:18px;width:30%;margin-bottom:14px"></div><div class="sk"></div></div>';
+  try{const r=await fetch('/api/v1/medical/case-archive',{headers:auth()});
+    if(r.status===401){logout();return;}
+    const d=await r.json();
+    caseArchItems=d.items||[];caseArchStats=d.stats||{};
+    renderCaseArchive();
+  }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
+function caseArchFiltered(){  /* 客户端二次筛选（dept/status/日期区间），数据源已按角色限权 */
+  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():'';};
+  const dep=g('caDept'),st=g('caStatus'),from=g('caFrom'),to=g('caTo');
+  return (caseArchItems||[]).filter(i=>(!dep||(i.dept||'')===dep)&&(!st||(i.status||'')===st)
+    &&(!from||String(i.archived_at||'').slice(0,10)>=from)
+    &&(!to||String(i.archived_at||'').slice(0,10)<=to));}
+function renderCaseArchive(){
+  const b=document.getElementById('reviewBody');if(!b)return;
+  /* 重渲染保留当前筛选值（innerHTML 重建会重置表单控件） */
+  const prev={};['caDept','caStatus','caFrom','caTo'].forEach(id=>{const el=document.getElementById(id);if(el)prev[id]=el.value;});
+  const list=caseArchFiltered();
+  const depts=[...new Set((caseArchItems||[]).map(i=>i.dept||'').filter(Boolean))];
+  const rows=list.map(caseArchRow).join('');
+  b.innerHTML=`<div class="card" style="border-left:3px solid var(--accent)">
+    <h3 style="margin:0">病例库（质控通过自动归档）</h3>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <span class="chip ok"><span class="dot"></span>${esc(String(caseArchStats.active??0))} 例在库</span>
+      <span class="chip"><span class="dot"></span>${esc(String(caseArchStats.removed??0))} 已移除</span>
+      <span class="src num">共 ${esc(String(caseArchStats.total??0))} 条 · 移除为软删除留痕（可审计）</span>
+    </div></div>
+  <div class="card">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select class="inp" id="caDept" style="max-width:150px" aria-label="科室筛选" onchange="renderCaseArchive()">
+        <option value="">全部科室</option>${depts.map(d=>`<option value="${esc(d)}"${prev.caDept===d?' selected':''}>${esc(d)}</option>`).join('')}</select>
+      <select class="inp" id="caStatus" style="max-width:130px" aria-label="状态筛选" onchange="renderCaseArchive()">
+        <option value="">全部状态</option>
+        <option value="active"${prev.caStatus==='active'?' selected':''}>在库</option>
+        <option value="removed"${prev.caStatus==='removed'?' selected':''}>已移除</option></select>
+      <input class="inp num" id="caFrom" type="date" style="max-width:160px" aria-label="归档起始日期" value="${esc(prev.caFrom||'')}" onchange="renderCaseArchive()">
+      <input class="inp num" id="caTo" type="date" style="max-width:160px" aria-label="归档截止日期" value="${esc(prev.caTo||'')}" onchange="renderCaseArchive()">
+      <span class="src num">${esc(String(list.length))} 条</span>
+    </div>
+    <ul class="feed" style="margin-top:8px">${rows||'<li><span class="a">暂无归档病例（质控 approve 后自动入库）。</span></li>'}</ul></div>`;}
+function caseArchRow(i){  /* 单条归档行：status 徽章 + 脱敏患者标识 + 结论摘要 + record 展开详情 */
+  const active=i.status==='active';
+  const badge=active?'<span class="chip ok"><span class="dot"></span>在库</span>'
+    :'<span class="chip"><span class="dot"></span>已移除</span>';
+  return `<li style="border-top:1px solid var(--line);padding:10px 0">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <b class="num">${esc(i.id||'')}</b>${badge}
+      <span class="chip mid"><span class="dot"></span>${esc(i.dept||'科室—')}</span>
+      <span class="src">患者标识：${esc(i.patient_ref||'—')}</span>
+      <span class="t num">${fmtTs(i.archived_at)}</span>
+      <span class="src">质控签字：${esc(i.reviewed_by||'—')}</span>
+      ${active?`<button class="btn sm danger" style="margin-left:auto" data-act="ca-remove" data-aid="${esc(i.id||'')}">移除</button>`:''}
+    </div>
+    <details style="margin-top:6px"><summary class="src" style="cursor:pointer">质控结论摘要与病历详情 ▾</summary>
+      <div class="txt" style="white-space:pre-wrap;margin-top:4px">${esc(i.qc_conclusion||'（无结论摘要）')}</div>
+      <div class="src num" style="margin-top:4px">质控置信：${esc(String(i.qc_confidence??'—'))}</div>
+      <pre style="background:var(--rail);border:1px solid var(--line);border-radius:6px;padding:10px;font-size:11.5px;margin:6px 0 0;overflow-x:auto;white-space:pre-wrap">${esc(JSON.stringify(i.record||{},null,2))}</pre>
+      ${(i.labs&&Object.keys(i.labs).length)?`<div class="src" style="margin-top:4px">检验值：${esc(Object.entries(i.labs).map(([k,v])=>k+'='+v).join('；'))}</div>`:''}
+    </details>
+    ${active?'':`<div class="src" style="margin-top:4px">移除人：${esc(i.removed_by||'—')} · 移除原因：${esc(i.removed_reason||'—')}</div>`}
+  </li>`;}
+/* 移除按钮事件委托（与 KB/科室同纪律，禁内联 onclick 拼接 id） */
+if(!window.__caseArchDelegate){window.__caseArchDelegate=true;document.addEventListener('click',e=>{
+  const b=e.target.closest('button[data-act="ca-remove"]');if(!b)return;
+  caseArchiveRemove(b.dataset.aid);});}
+function caseArchiveRemove(aid){  /* 移出病例库：原因必填（空值 toast 阻断 + 服务端 422 双保险） */
+  document.getElementById('mTitle').textContent='移出病例库 · '+aid;
+  document.getElementById('mBody').innerHTML=`<div class="src">移除为软删除（status=removed 留痕，可审计不可静默抹除），移除原因必填并记入审计。</div>
+    <textarea class="inp" id="caRemoveReason" rows="3" aria-label="移除原因（必填）" placeholder="移除原因（必填，如：患者身份信息录入有误需重新归档）" style="margin-top:8px"></textarea>
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn ghost sm" onclick="closeModal()">取消</button>
+      <button class="btn danger sm" id="caRemoveGo">确认移除</button></div>`;
+  openModal();
+  document.getElementById('caRemoveGo').onclick=async()=>{
+    const reason=document.getElementById('caRemoveReason').value.trim();
+    if(!reason){toast('移除原因必填');return;}
+    try{const r=await fetch('/api/v1/medical/case-archive/'+encodeURIComponent(aid)+'/remove',
+      {method:'POST',headers:auth(),body:JSON.stringify({reason})});
+      if(r.status===401){logout();return;}
+      if(r.ok){toast('已移出病例库');closeModal();loadCaseArchive();}
+      else{const d=await r.json();toast('失败：'+(d.detail||r.status));}
+    }catch(e){toast('失败：'+e.message);}
+  };
+}
 let rejectTarget=null, signTarget=null; /* signTarget：待确认的签发操作 {id,dec,note}（F4） */
 /* F4：轻量签发确认（复用 #modal 容器，不要求输入确认词）。确认后才执行 doResolve；
    Escape / 取消 / 关闭 / 点击遮罩均只 closeModal，不产生任何 API 调用。 */
@@ -1654,6 +1760,30 @@ async function loadQcRejections(){
       <div class="txt" style="margin-top:2px">驳回原因：${esc(i.review_note||'未填写')}</div>
     </div>`;}).join(''):'<div class="src">暂无驳回记录。</div>';
   }catch(e){el.innerHTML='<div class="src">⚠ 加载失败</div>';}}
+/* ---- 阶段4：doctor「我的归档」小节（数据源 /case-archive/mine，仅本人 status=active，只读）----
+   qc/admin 走审核中心「病例库」tab（全量+移除），pharmacist 无质控提交（端点 403 → 隐藏）。 */
+let qcArchItems=[];
+async function loadQcArch(){
+  const card=document.getElementById('qcArchCard'),el=document.getElementById('qcArch');
+  if(!card||!el)return;
+  if(ROLE!=='doctor'){card.style.display='none';return;}
+  card.style.display='';
+  el.innerHTML='<div class="src">加载中…</div>';
+  try{const r=await fetch('/api/v1/medical/case-archive/mine',{headers:auth()});
+    if(r.status===401){logout();return;}
+    if(r.status===403){card.style.display='none';return;}  /* 非 doctor 角色（如 pharmacist）端点 403 → 隐藏 */
+    const d=await r.json();qcArchItems=d.items||[];
+    el.innerHTML=qcArchItems.length?qcArchItems.map(i=>`<div style="padding:8px 0;border-top:1px solid var(--line)">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="chip ok"><span class="dot"></span>在库</span>
+        <span class="src">患者标识：${esc(i.patient_ref||'—')}</span>
+        <span class="src">${esc(i.dept||'')}</span>
+        <b class="num">${fmtTs(i.archived_at)}</b>
+        <span class="src">质控签字：${esc(i.reviewed_by||'—')}</span></div>
+      <details style="margin-top:4px"><summary class="src" style="cursor:pointer">质控结论摘要 ▾</summary>
+        <div class="txt" style="white-space:pre-wrap;margin-top:4px">${esc(i.qc_conclusion||'')}</div></details>
+    </div>`).join(''):'<div class="src">暂无在库归档病历。</div>';
+  }catch(e){el.innerHTML='<div class="src">⚠ 加载失败</div>';}}
 /* 任务6：重新提交按钮事件委托（与 KB/科室同纪律，禁内联 onclick 拼接） */
 if(!window.__qcRejDelegate){window.__qcRejDelegate=true;document.addEventListener('click',e=>{
   const b=e.target.closest('button[data-act="qc-resubmit"]');if(!b)return;
@@ -1950,7 +2080,17 @@ function humanizeAudit(e){
     consult_closed:()=>`结束了会诊 ${p.cid||rid||''}`.trim(),
     list_mine:()=>`查看了我的会诊（发起 ${p.initiated??0} · 参与 ${p.participated??0}）`,
     list_inbox:()=>`查看了会诊收件箱（${p.n??0} 条待意见）`,
-    created:()=>`创建了会诊单 ${p.cid||rid||''}`.trim(),
+    created:()=>ev.indexOf('case_archive')===0  /* 阶段4：case_archive.created（PG 点分镜像）→ 归档人话；consult.created → 会诊单 */
+      ?`质控病历已归档病例库（${p.arch_id||rid||''}）`.trim()
+      :`创建了会诊单 ${p.cid||rid||''}`.trim(),
+    /* 阶段4：case_archive.removed（移出病例库软删除，payload 带 arch_id+reason）*/
+    removed:()=>ev.indexOf('case_archive')===0
+      ?`将 ${p.arch_id||rid||''} 移出病例库（原因：${p.reason||'—'}）`.trim()
+      :`移除了 ${p.arch_id||rid||''}`.trim(),
+    /* 阶段4：case_archive.failed（质控 approve 归档失败仅审计，不影响质控主流程）*/
+    failed:()=>ev.indexOf('case_archive')===0
+      ?'病例归档失败（已留痕，不影响质控主流程）'
+      :'操作失败（已留痕）',
     opinion:()=>`提交了会诊意见（${p.dept||'科室未设置'}）`,
     closed:()=>`结束了会诊 ${p.cid||rid||''}`.trim(),
     /* —— 病历质控 —— */
@@ -2177,11 +2317,11 @@ async function loadData(){
             <button class="btn primary sm" id="deptAddBtn">新增科室</button>
           </div>
         </div>
-        <!-- 问题3：药品字典卡升级为可编辑（与 pharmacist 审核中心「药品字典」tab 复用同一
-             渲染函数 renderDrugDictEditor；POST /admin/drug/dict 权限后端同源 pharmacist+admin） -->
-        <div class="panel"><h3>药品字典（可编辑 · AI 辅助生成，临床使用前须经执业药师核对）</h3>
-          <div id="drugDictPanel"><div class="src" style="padding:10px 16px">加载中…</div></div>
-        </div>
+        <!-- 阶段4 任务1 语义变更（注明）：admin 数据面板「药品字典」卡已删除（用户拍板：
+             药品字典管理 UI 只在药剂科审核中心 tab 显示，管理面板不再重复承载药学数据编辑）；
+             renderDrugDictEditor 渲染函数保留（pharmacist tab 专用），POST /admin/drug/dict
+             后端 pharmacist+admin 权限不变（admin 兜底）。原 <div class="panel"> 药品字典卡
+             与 id=drugDictPanel 容器一并移除。 -->
     </div>
     <div class="panel" style="margin-top:16px"><h3>基础设施（只读状态 · 重启命令仅供复制，系统不代执行）</h3><div id="infraRows" style="padding:8px 16px 12px">${infraRows}</div></div>
     <!-- 任务5 + 本批次：应用日志「健康卡」（GET /admin/logs 只读；行可能含用户输入，逐行 esc 防注入） -->
@@ -2206,7 +2346,8 @@ async function loadData(){
   /* 科室管理卡片 + 新增用户科室下拉（数据源 GET /admin/departments） */
   document.getElementById('deptAddBtn').onclick=addDept;
   loadDeptPanel();
-  loadDrugDictPanel();  /* 阶段1.5：药品字典卡随面板加载 */
+  /* 阶段4 任务1：admin 药品字典卡渲染调用已移除（loadDrugDictPanel 随卡片删除，
+     字典管理 UI 只在药剂科审核中心 tab；数据面板少一次 /drug/dict 请求）。 */
   apiGet('/admin/llm/providers').then(renderLlm).catch(()=>{const el=document.getElementById('llmPanel');
     if(el)el.innerHTML='<div class="src" style="padding:10px 16px">⚠ 模型配置加载失败</div>';});
 }
@@ -2255,18 +2396,19 @@ if(!window.__deptDelegate){window.__deptDelegate=true;document.addEventListener(
   const b=e.target.closest('button[data-act="dept-del"]');if(!b)return;
   deleteDept(b.dataset.name);});}
 
-/* ---- 本批问题3：药品字典/相互作用规则编辑器（共享渲染函数，两处复用）----
-   pharmacist 审核中心「药品字典」/「相互作用规则」tab 与 admin 数据面板字典卡调用同一
-   渲染函数（renderDrugDictEditor/renderDrugRulesEditor），权限后端同源：
-   POST /admin/drug/dict|rules 均为 pharmacist+admin（问题3 dict 由 admin 专属放宽，
-   药学专业数据由药剂科维护）。数据源 GET /drug/dict（全量字典+规则+stats+免责声明）。
+/* ---- 问题3：药品字典/相互作用规则编辑器（共享渲染函数）----
+   阶段4 任务1 语义变更：admin 数据面板字典卡已移除，renderDrugDictEditor/
+   renderDrugRulesEditor 仅由 pharmacist 审核中心 tab 调用（原「admin 数据面板字典卡
+   复用同一渲染函数」的挂载点 loadDrugDictPanel 已删除）；权限后端同源：
+   POST /admin/drug/dict|rules 均为 pharmacist+admin（admin 兜底不变）。
+   数据源 GET /drug/dict（全量字典+规则+stats+免责声明）。
    安全纪律：全部用户输入 esc() 转义；编辑/删除按 data 属性 + 事件委托定位
    （禁内联 onclick 拼接药名，与科室删除同纪律）；编辑态锁定定位键（规范名/药对）——
    重命名/调药对不支持（需删除后新增），规避后端按 name/规范药对定位的 update 语义歧义。 */
 let drugDictCache={drugs:[],rules:[],stats:null};
 let drugDictEditName=null;   /* 药品编辑中：null=新增模式；否则被编辑条目规范名（定位键锁定） */
 let drugRuleEditPair=null;   /* 规则编辑中：null=新增模式；否则 '药a\u0001药b' 规范药对键 */
-let drugDictEditorRoot=null; /* 当前编辑器挂载容器（pharmacist=reviewBody / admin=drugDictPanel），保存/删除后原地重渲染 */
+let drugDictEditorRoot=null; /* 当前编辑器挂载容器（pharmacist=reviewBody），保存/删除后原地重渲染 */
 
 function _csv(v){return String(v||'').split(/[,，、]/).map(s=>s.trim()).filter(Boolean);}
 
@@ -2444,12 +2586,10 @@ if(!window.__drugDictDelegate){window.__drugDictDelegate=true;document.addEventL
   const er=e.target.closest('button[data-act="dr-edit"]');if(er){startDrugRuleEdit(parseInt(er.dataset.idx,10));return;}
   const dr=e.target.closest('button[data-act="dr-del"]');if(dr){deleteDrugRule(parseInt(dr.dataset.idx,10));return;}});}
 
-/* ---- 问题3：admin 数据面板「药品字典」卡升级为可编辑（复用 pharmacist 审核中心同一
-   渲染函数 renderDrugDictEditor；POST /admin/drug/dict 后端权限已同源 pharmacist+admin。
-   旧只读版 loadDrugDictPanel/filterDrugDict 移除，容器 id=drugDictPanel 保留）。 ---- */
-async function loadDrugDictPanel(){
-  await renderDrugDictEditor(document.getElementById('drugDictPanel'));
-}
+/* ---- 阶段4 任务1 语义变更（注明）：admin 数据面板「药品字典」卡的挂载函数
+   loadDrugDictPanel（renderDrugDictEditor(document.getElementById('drugDictPanel'))）
+   已随卡片整体删除——字典管理 UI 只在药剂科审核中心 tab（switchReviewTab('drugdict')）；
+   renderDrugDictEditor 函数本身保留供其调用。 ---- */
 
 /* ---- F6 模型配置管理（admin 数据面板）---- */
 let _llmData=null;
