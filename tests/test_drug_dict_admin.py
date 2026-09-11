@@ -214,7 +214,10 @@ def test_frontend_disclaimer_matches_backend_and_docs():
     m = re.search(r"DRUG_DISCLAIMER='([^']+)'", html)
     assert m, "前端应定义 DRUG_DISCLAIMER 常量"
     assert m.group(1) == DISCLAIMER, "前端文案须与后端 drug_dict.DISCLAIMER 逐字一致"
-    assert 'id="drugDisclaimer"' in html, "drug 视图应有免责声明条"
+    # 阶段3 更新注明：开药工作台（rx 视图）取代 drug 视图，免责声明条随之移至
+    # rx 视图（id="rxDisclaimer"），仍复用 DRUG_DISCLAIMER 常量（上方逐字一致性锁定不变）
+    assert 'id="rxDisclaimer"' in html, "开药工作台（rx 视图）应有免责声明条"
+    assert 'id="drugDisclaimer"' not in html, "drug 视图已删除，旧 chat 免责条锚点不应残留"
     assert 'id="drugDictPanel"' in html, "admin 面板应有药品字典卡"
     md = (BASE / "docs" / "DEPLOY.md").read_text(encoding="utf-8")
     assert "药品数据免责声明" in md

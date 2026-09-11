@@ -241,9 +241,6 @@
     <section class="screen" id="scr-chat">
       <div class="shead"><div><h2 id="cTitle"></h2><p id="cDesc"></p></div>
         <div class="spacer"></div><button class="btn secondary sm" onclick="newChat()">新建对话</button></div>
-      <!-- 阶段1.4：药物助手免责声明条（仅 drug 视图显示；文案与后端 drug_dict.DISCLAIMER
-           逐字同源，由 tests/test_drug_dict_admin.py 锁定一致，动态下发留待阶段3） -->
-      <div class="src" id="drugDisclaimer" style="display:none;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--rail)"></div>
       <div class="body" id="msgs"></div>
       <div class="composer">
         <div class="crow">
@@ -261,6 +258,54 @@
           </div>
           <button class="btn primary" id="send">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>发送</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 阶段3：开药工作台（rx 视图，取代原 drug 药物助手导航位；流程：病例→AI 建议→加药→药单→提交） -->
+    <section class="screen" id="scr-rx">
+      <div class="shead"><div><h2>开药工作台</h2><p>AI 字典约束推荐 + 相互作用硬校验；处方直送药剂科审核（双控：审核人≠提交医生）</p></div></div>
+      <div class="body" style="max-width:900px">
+        <!-- 免责声明条（复用 DRUG_DISCLAIMER 常量，与后端 drug_dict.DISCLAIMER 逐字同源） -->
+        <div class="src" id="rxDisclaimer" style="border-left:3px solid var(--warn);padding:8px 12px;margin-bottom:12px"></div>
+        <!-- 工作台内 tab：开药 / 我的处方（阶段3.3） -->
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="btn sm primary" id="rxTabCompose" onclick="switchRxTab('compose')">开药</button>
+          <button class="btn sm ghost" id="rxTabMine" onclick="switchRxTab('mine')">我的处方</button>
+        </div>
+        <div id="rxComposePane">
+          <div class="card" id="rxFormCard"><h3>① 病例摘要</h3>
+            <textarea class="inp" id="rxCase" rows="5" placeholder="粘贴病例要点（诊断、症状、检验、过敏史与正在用药等，20-5000 字）…"></textarea>
+            <div style="margin-top:10px"><button class="btn primary" id="rxSuggestBtn" onclick="rxSuggest()">生成开药建议</button></div>
+          </div>
+          <div id="rxSuggestOut" style="margin-top:12px"></div>
+          <!-- 高危联用阻断条（suggest blocked 时红色显示 + 联用理由输入框，填了才允许提交） -->
+          <div class="card" id="rxBlockPanel" style="display:none;margin-top:12px"></div>
+          <div class="card" style="margin-top:12px"><h3>② 自定义加药</h3>
+            <label class="src" for="rxDictSearch" style="display:block;margin-bottom:6px">字典搜索（GET /drug/dict 前端过滤，点「加入药单」）</label>
+            <input class="inp" id="rxDictSearch" placeholder="输入药名/别名/商品名/分类搜索…" autocomplete="off" spellcheck="false" oninput="rxDictFilter(this.value)">
+            <ul class="feed" id="rxDictList" style="max-height:180px;overflow:auto;margin-top:6px"></ul>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+              <input class="inp" id="rxAddName" style="max-width:160px" placeholder="手动输入药名" spellcheck="false">
+              <input class="inp" id="rxAddDose" style="max-width:120px" placeholder="剂量（如 0.5g）">
+              <input class="inp" id="rxAddFreq" style="max-width:120px" placeholder="频次（如 qd）">
+              <button class="btn secondary sm" onclick="rxAddManual()">添加</button>
+            </div>
+            <!-- 字典外确认弹条：首次点击「添加」显示，同药名再次点击确认才加入 -->
+            <div class="src" id="rxOutOfDictTip" style="display:none;margin-top:6px;border-left:3px solid var(--warn);padding-left:8px"></div>
+          </div>
+          <div class="card" style="margin-top:12px"><h3>③ 已选药单（可删 / 可编辑剂量频次）</h3>
+            <div id="rxSelected"></div>
+            <!-- 改写重提模式横幅（rxStartRewrite 置 rxEditId 后显示） -->
+            <div class="src" id="rxEditBanner" style="display:none;margin-top:10px;border-left:3px solid var(--accent);padding-left:8px"></div>
+            <div style="margin-top:12px"><button class="btn primary" id="rxSubmitBtn" onclick="rxSubmit()">提交开药</button></div>
+          </div>
+        </div>
+        <div id="rxMinePane" style="display:none">
+          <div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><h3 style="margin:0">我的处方</h3>
+            <span class="src">状态流转：待药剂科审核 → 已通过 / 已驳回（驳回可重写，提交后自动重新送审）</span>
+            <button class="btn secondary sm" style="margin-left:auto" onclick="loadRxMine()">刷新</button></div></div>
+          <div id="rxMineList" style="margin-top:12px"></div>
         </div>
       </div>
     </section>
@@ -403,7 +448,7 @@
 <script>
 const ICON={
   literature:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2Z"/><path d="M8 3v18"/></svg>',
-  drug:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="8" width="18" height="8" rx="4" transform="rotate(45 12 12)"/><path d="M8.5 8.5l7 7"/></svg>',
+  rx:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="8" width="18" height="8" rx="4" transform="rotate(45 12 12)"/><path d="M8.5 8.5l7 7"/></svg>',
   imaging:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>',
   case:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>',
   mdt:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="7" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 20a5 5 0 0 1 7-3"/></svg>',
@@ -423,17 +468,16 @@ const ICON={
 };
 const AGENTS={
   literature:{name:'医学文献助手',desc:'查证：答案附文献出处，可点击查原文',endpoint:'/literature/ask',imageOk:false,hint:'例：二甲双胍是一线治疗吗？'},
-  drug:{name:'药物信息助手',desc:'两药同用风险即时核查',endpoint:'/drug/ask',imageOk:false,hint:'例：华法林和布洛芬能一起吃吗？'},
   imaging:{name:'影像辅助阅片',desc:'上传影像，AI 给出初步所见',endpoint:'/imaging/ask',imageOk:true,hint:'上传 CT/DR/病理图片后提问'},
   case:{name:'多模态病例总结',desc:'粘贴病例，生成摘要与鉴别清单',endpoint:'/case/ask',imageOk:true,hint:'粘贴病例要点，可附图片'},
 };
 let cur='literature', curImages=[];
 let CFG={chat:'模型',vl:'多模态模型'};
 let ROLE='doctor';
-const ROLE_NAV={doctor:['overview','literature','drug','imaging','case','mdt','myconsults','qc','review'],
-  pharmacist:['overview','literature','drug','qc','review'],
+const ROLE_NAV={doctor:['overview','literature','rx','imaging','case','mdt','myconsults','qc','review'],
+  pharmacist:['overview','literature','rx','qc','review'],
   admin:['overview','kb','qc','review','data','arch'],
-  qc:['overview','literature','drug','qc','review']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任）；E 角色细分：qc（质控员）可见质控工作台+审核中心，admin 既有入口不变，doctor 行为不变 */
+  qc:['overview','literature','rx','qc','review']};  /* F2：qc 对 doctor/pharmacist 开放（质控面向病案/质控医师，demo 阶段 doctor 兼任）；E 角色细分：qc（质控员）可见质控工作台+审核中心，admin 既有入口不变，doctor 行为不变；阶段3：drug 药物助手独立入口删除，导航位改为 rx 开药工作台 */
 async function loadConfig(){try{const r=await fetch('/api/v1/medical/config',{headers:auth()});if(r.ok){const c=await r.json();CFG.chat=c.chat_model||CFG.chat;CFG.vl=c.vl_model||CFG.vl;
 CFG.full=!!c.qc_auto_sign_full;  /* 任务3：留痕模式开关——qc/admin 审核中心转只读档案 */
 const dot=document.getElementById('kbDot');
@@ -528,7 +572,7 @@ let reviewCount=0, reviewItems=[], reviewPage=0, reviewMe='';
 /* 导航项单一权威源（hash 深链白名单的键集由此派生） */
 const NAV_ITEMS=[
   {g:'总览'},{k:'overview',t:'概览'},
-  {g:'临床助手'},{k:'literature',t:'医学文献'},{k:'drug',t:'药物信息'},{k:'imaging',t:'影像辅助'},{k:'case',t:'病例总结'},
+  {g:'临床助手'},{k:'literature',t:'医学文献'},{k:'rx',t:'开药工作台'},{k:'imaging',t:'影像辅助'},{k:'case',t:'病例总结'},
   {g:'协作'},{k:'mdt',t:'多智能体会诊'},{k:'myconsults',t:'我的会诊'},
   {g:'质控'},{k:'qc',t:'病历质控（病案科）'},{k:'review',t:'审核中心'},
   {g:'系统'},{k:'kb',t:'知识库管理'},{k:'data',t:'数据面板'},{k:'arch',t:'架构 · 合规'},
@@ -572,19 +616,18 @@ function go(k){
   else if(k==='mdt')document.getElementById('scr-mdt').classList.add('on');
   else if(k==='myconsults'){document.getElementById('scr-myconsults').classList.add('on');loadMyConsults();}
   else if(k==='qc'){document.getElementById('scr-qc').classList.add('on');loadQcRejections();}  /* 任务2：医生视图「我的质控驳回」卡片 */
+  else if(k==='rx'){document.getElementById('scr-rx').classList.add('on');loadRx();}  /* 阶段3：开药工作台（取代原 drug 视图） */
   else if(k==='data'){document.getElementById('scr-data').classList.add('on');loadData();}
   else if(k==='arch')document.getElementById('scr-arch').classList.add('on');
   else if(k==='review'){document.getElementById('scr-review').classList.add('on');loadReview();}
   else{document.getElementById('scr-chat').classList.add('on');setupChat(k);}
   renderRail();
 }
-/* 阶段1.4：药物助手免责声明（与后端 backend/core/drug_dict.py 的 DISCLAIMER 逐字同源，
-   由 tests/test_drug_dict_admin.py 锁定一致性；改为后端下发留待阶段3 开药工作台） */
+/* 免责声明常量（与后端 backend/core/drug_dict.py 的 DISCLAIMER 逐字同源，
+   由 tests/test_drug_dict_admin.py 锁定一致性）：阶段3 起展示在开药工作台（rx 视图）免责条 */
 const DRUG_DISCLAIMER='药品数据由 AI 辅助生成，临床使用前必须经执业药师核对；本系统仅供辅助决策，不构成医疗建议。';
 function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textContent=a.name;
   document.getElementById('cDesc').textContent=a.desc;document.getElementById('input').placeholder=a.hint;
-  /* 阶段1.4：免责声明条仅 drug 视图显示 */
-  const dd=document.getElementById('drugDisclaimer');dd.textContent='⚠ '+DRUG_DISCLAIMER;dd.style.display=(k==='drug')?'':'none';
   document.getElementById('attach').style.display=a.imageOk?'inline-flex':'none';clearImg();
   const inp=document.getElementById('input');  /* 任务2：恢复本视图独立草稿（切视图不串字） */
   inp.value=chatInput[k]||'';inp.style.height='auto';
@@ -592,24 +635,7 @@ function setupChat(k){const a=AGENTS[k];document.getElementById('cTitle').textCo
   const h=chatHist[k]||[];
   if(h.length){h.forEach(e=>e.role==='me'?renderUser(e.text,e.images||(e.image?[e.image]:[])):renderBot(e.text,e.meta));}
   else renderBot('你好，我是'+a.name+'。'+a.desc+'。', null, true);
-  if(k==='drug')loadDrugRejections();  /* 阶段0.2：药物助手视图置顶显示本人曾被药剂科驳回的查询 */
   scroll();}
-/* 阶段0.2：药物助手曾被药剂科驳回提示（过渡实现）——drug 类驳回从「我的质控驳回」
-   卡片分流后移到药物助手上下文：本人在 /drug/ask 提交过、被药剂科（pharmacist 一票）
-   驳回的联用查询，置顶提示「曾被药剂科驳回：{问题}（驳回原因）」，最多 5 条，帮助医生
-   回顾未通过的用药查询。加载失败静默，不影响药物助手主流程。 */
-async function loadDrugRejections(){
-  const m=document.getElementById('msgs');if(!m||cur!=='drug')return;
-  try{const r=await fetch('/api/v1/medical/drug/my-rejections',{headers:auth()});
-    if(r.status===401){logout();return;}
-    if(!r.ok)return;
-    const d=await r.json();const items=(d.items||[]).slice(0,5);
-    items.forEach(i=>{const b=document.createElement('div');b.className='row';
-      b.innerHTML=`<div class="avatar">${ICON.drug}</div><div class="bubble" style="border-left:3px solid var(--warn)"><div class="txt md"></div></div>`;
-      b.querySelector('.txt').innerHTML=md('曾被药剂科驳回：'+esc(String(i.question||''))
-        +(i.review_note?('（驳回原因：'+esc(i.review_note)+'）'):''));
-      m.insertBefore(b,m.firstChild);});
-  }catch(e){/* 提示加载失败静默：不影响药物助手主流程 */}}
 function newChat(){chatHist[cur]=[];chatInput[cur]='';if(cur==='literature'){litSessionId=genSid();}setupChat(cur);}
 /* 任务3 会话记忆：每个 literature 会话固定一个 session_id（「新建对话」时更换），
    后端据此注入最近 N 轮问答（仅理解指代，不影响独立检索）。crypto.randomUUID 不可用
@@ -913,6 +939,7 @@ async function closeConsult(id){
 /* ---- review center ---- */
 let reviewTab='pending', historyItems=[];
 let myConfirmItems=[];  /* 任务3：doctor/pharmacist 的「我的待确认」项（my-pending-confirm 数据源） */
+let rxPendingItems=[];  /* 阶段3.2：开药待审队列（GET /prescriptions/pending；pharmacist/qc/admin，doctor 403 不拉取） */
 function canSign(){return (ROLE==='qc'||ROLE==='admin')&&!CFG.full;}  /* 任务2/3：非 drug 类签发/驳回/翻案仅 qc/admin；留痕模式下全局只读档案 */
 /* 本批次任务2：按 agent 分流的签字权（与后端 review_resolve 矩阵一致）——drug 类豁免
    留痕模式（高危恒在 pending），qc/admin/pharmacist 均可签发/驳回（药剂科一票，
@@ -957,6 +984,8 @@ async function loadReview(){
     document.getElementById('purgeBtn').style.display=(ROLE==='admin')?'inline-flex':'none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
       if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending');}catch(e){}
+    try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 阶段3.2：qc/admin 同看开药待审区 */
+      if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}
     const pages=Math.max(1,Math.ceil(reviewItems.length/REVIEW_PER));
     if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
     switchReviewTab(reviewTab);
@@ -975,7 +1004,9 @@ async function loadReviewMine(b){
        doctor 维持旧形态（reviewItems 恒空）。 */
     if(ROLE==='pharmacist'){
       try{const pr=await fetch('/api/v1/medical/review/pending',{headers:auth()});
-        if(pr.ok)reviewItems=(((await pr.json()).pending)||[]).filter(i=>i.agent==='drug');}catch(e){}}
+        if(pr.ok)reviewItems=(((await pr.json()).pending)||[]).filter(i=>i.agent==='drug');}catch(e){}
+      try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 阶段3.2：药剂科开药待审队列 */
+        if(xp.ok)rxPendingItems=(await xp.json()).items||[];}catch(e){/* 开药待审加载失败静默 */}}
     switchReviewTab(reviewTab);
     refreshConsultBadge();  /* 任务4：进入审核中心即刷新「待我意见 + 我的待确认」徽标 */
   }catch(e){b.innerHTML='<div class="card">⚠ '+esc(e.message)+'</div>';}}
@@ -1067,7 +1098,9 @@ function renderReview(){
     const ph=ROLE==='pharmacist';
     const drugItems=ph?(reviewItems||[]).filter(_rvMatch):[];  /* 药剂科：drug 待核对项 */
     const mineItems=(myConfirmItems||[]).filter(_rvMatch);
-    if(!mineItems.length&&!drugItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>${ph?'暂无待核对的药物项。':'没有您的待确认项。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(ph?'药物高危结论需药剂科复核：出现药物禁忌/高危相互作用时会出现在这里，由您签发/驳回。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控'))}</div></div>`;return;}
+    if(!mineItems.length&&!drugItems.length&&!rxPendingItems.length){b.innerHTML=`<div class="empty">${ICON.review}<div>${ph?'暂无待核对项（药物核对/开药待审）。':'没有您的待确认项。'}</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':(ph?'药物高危结论需药剂科复核；开药工作台直送的处方也会出现在这里，由您签发/驳回。':(CFG.full?'留痕模式下 AI 自动签发的高危结论会出现在这里，等待您知情确认。':'留痕模式未开启（QC_AUTO_SIGN_FULL=false），高危结论走人工双控'))}</div></div>`;return;}
+    /* 阶段3.2：开药待审区（pharmacist 专属数据源；doctor 恒返回空串不渲染） */
+    const rxSec=rxPendingSection();
     /* 药剂科 drug 待核对表（置顶；行渲染复用 reviewRow——按 canSignItem 出按钮） */
     const drugSec=(!ph||!drugItems.length)?'':`<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px"><table><thead><tr><th>药物高危待核对（需药剂科复核）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${drugItems.map(p=>reviewRow(p,false)).join('')}</tbody></table></div>`;
     const pagesM=Math.max(1,Math.ceil(mineItems.length/REVIEW_PER));
@@ -1080,11 +1113,11 @@ function renderReview(){
       <button class="btn sm secondary" ${reviewPage>=pagesM-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
     /* 我的待确认为空时只渲染药物待核对表（不出空表壳） */
     const mineTable=mineItems.length?`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rowsM}</tbody></table>${pagerM}</div>`:'';
-    b.innerHTML=drugSec+mineTable;
+    b.innerHTML=rxSec+drugSec+mineTable;
     mountReviewThumbs(drugItems.concat(sliceM));  /* 任务1：待核对/待确认行缩略图条挂载 */
     return;}
   const pend=(reviewItems||[]).filter(_rvMatch);  /* 任务3：筛选后分页 */
-  if(!pend.length){b.innerHTML=`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待质控员/管理员签发。'}</div></div>`;return;}
+  if(!pend.length){b.innerHTML=rxPendingSection()+`<div class="empty">${ICON.review}<div>没有待核对项。</div><div class="lead" style="margin:8px auto 0">${reviewFilterQ?'无匹配结果，可调整筛选词。':'当出现药物禁忌、影像高危征象或证据不足的低置信回答时，会自动进入这里，等待质控员/管理员签发。'}</div></div>`;return;}
   const pages=Math.max(1,Math.ceil(pend.length/REVIEW_PER));
   if(reviewPage>=pages)reviewPage=pages-1; if(reviewPage<0)reviewPage=0;
   const start=reviewPage*REVIEW_PER, slice=pend.slice(start,start+REVIEW_PER);
@@ -1094,8 +1127,57 @@ function renderReview(){
     <button class="btn sm secondary" ${reviewPage===0?'disabled':''} onclick="reviewGo(-1)">‹ 上一页</button>
     <span class="src num">第 ${reviewPage+1} / ${total} 页 · 共 ${reviewItems.length} 项</span>
     <button class="btn sm secondary" ${reviewPage>=total-1?'disabled':''} onclick="reviewGo(1)">下一页 ›</button></div>`;
-  b.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${pager}</div>`;
+  b.innerHTML=rxPendingSection()+`<div class="card" style="padding:0;overflow:hidden"><table><thead><tr><th>项目</th><th>置信度</th><th>风险</th><th>提交人</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>${pager}</div>`;
   mountReviewThumbs(slice);  /* 任务1：待处理行缩略图条挂载 */
+}
+/* ---- 阶段3.2：药剂科开药审核队列（prescriptions/pending → 处方卡 → 通过/驳回） ---- */
+function rxPendingSection(){  /* 开药待审区：pharmacist/qc/admin 渲染；doctor 无权限（403）恒返回空串 */
+  if(ROLE==='doctor')return '';
+  const items=rxPendingItems||[];
+  const head=`<div class="card" style="margin-bottom:12px;border-left:3px solid var(--accent)"><h3 style="margin:0">开药待审（处方队列）</h3>
+    <div class="src" style="margin-top:4px">开药工作台直送的处方：核对药单与相互作用；驳回必须填写意见（双控：不能审核本人提交的处方）。</div></div>`;
+  if(!items.length)return head+'<div class="card" style="margin-bottom:16px"><div class="src">暂无开药待审处方。</div></div>';
+  return head+items.map(rxReviewCard).join('');
+}
+function rxReviewCard(it){  /* 处方卡：医生/科室/病例摘要截断/药单；forced_high_risk 红标 + 联用理由 */
+  const forced=it.forced_high_risk?'<span class="chip bad"><span class="dot"></span>高危强制开立</span>':'';
+  return `<div class="card" data-rxid="${esc(it.id)}" style="margin-bottom:12px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <b class="num">${esc(it.id)}</b>${forced}
+      <span class="src">医生 ${esc(it.doctor||'—')} · 科室 ${esc(it.dept||'—')} · ${fmtTs(it.created_at)}</span>
+      <span style="margin-left:auto;display:inline-flex;gap:6px">
+        <button class="btn sm primary" onclick="rxReview('${esc(it.id)}','approve')">通过</button>
+        <button class="btn sm secondary" onclick="rxReview('${esc(it.id)}','reject')">驳回</button></span></div>
+    <div class="txt" style="margin-top:6px">病例摘要：${esc((it.case_text||'').slice(0,120))}${(it.case_text||'').length>120?'…':''}</div>
+    <ul class="feed" style="margin-top:4px">${(it.drugs||[]).map(d=>`<li><span class="e">${esc(d.name)}</span><span class="src">${esc(d.dose||'剂量待定')} · ${esc(d.freq||'频次待定')}${d.note?' · '+esc(d.note):''}</span></li>`).join('')}</ul>
+    ${(it.contraindication_reason||it.forced_high_risk)?`<div class="src" style="margin-top:4px;border-left:3px solid var(--danger);padding-left:8px">联用理由：${esc(it.contraindication_reason||'（未填写）')}</div>`:''}
+  </div>`;
+}
+async function rxReview(id,action){  /* 通过/驳回：POST /prescriptions/{rid}/review（驳回必填意见，服务端 422 双保险） */
+  if(action==='reject'){
+    document.getElementById('mTitle').textContent='驳回处方 · 填写审核意见';
+    document.getElementById('mBody').innerHTML=`<textarea class="inp" id="rxRejectOp" rows="3" aria-label="驳回意见" placeholder="驳回意见（必填，将反馈给开药医生用于重写）"></textarea>
+      <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn ghost sm" onclick="closeModal()">取消</button>
+        <button class="btn danger sm" id="rxRejectGo">确认驳回</button></div>`;
+    openModal();
+    document.getElementById('rxRejectOp').focus();
+    document.getElementById('rxRejectGo').onclick=async()=>{
+      const op=document.getElementById('rxRejectOp').value.trim();
+      if(!op){toast('驳回必须填写审核意见');return;}
+      closeModal();
+      await _rxReviewPost(id,{action:'reject',opinion:op});
+    };
+    return;}
+  await _rxReviewPost(id,{action:'approve',opinion:''});
+}
+async function _rxReviewPost(id,body){
+  try{const r=await fetch('/api/v1/medical/prescriptions/'+encodeURIComponent(id)+'/review',
+    {method:'POST',headers:auth(),body:JSON.stringify(body)});
+    if(r.status===401){logout();return;}
+    if(r.ok){toast(body.action==='approve'?'处方已签发通过':'已驳回，意见将反馈给开药医生');loadReview();}
+    else{const d=await r.json();toast('操作失败：'+(d.detail||r.status));}
+  }catch(e){toast('操作失败：'+e.message);}
 }
 function reviewGo(d){reviewPage+=d;renderReview();document.getElementById('reviewBody').scrollTop=0;}
 let rejectTarget=null, signTarget=null; /* signTarget：待确认的签发操作 {id,dec,note}（F4） */
@@ -1193,6 +1275,219 @@ document.addEventListener('keydown',e=>{
     else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
   }
 });
+
+/* ---- 阶段3：开药工作台（rx 视图，取代原 drug 药物助手导航位） ----
+   流程：病例粘贴 → POST /prescriptions/suggest（字典约束推荐 + 相互作用硬校验）→
+   勾选/自定义加药（字典外需确认）→ 已选药单（可删/可编辑剂量频次）→
+   提交 POST /prescriptions（高危组合必须附联用理由 contraindication_reason）。
+   被驳回处方走「重写」：回填表单后 POST /prescriptions/{rid}/rewrite 自动重提
+   （rejected→draft→pending_pharm 一次完成，不产生重复处方）。免责声明复用 DRUG_DISCLAIMER。 */
+let rxDictCache={drugs:[]};   /* 药品字典缓存（GET /drug/dict；搜索下拉与字典外判定用） */
+let rxSuggests=[], rxBlocked=false, rxConflicts=[], rxWarnings=[];  /* suggest 结果与校验状态 */
+let rxSelected=[];            /* 已选药单 [{name,dose,freq,note}] */
+let rxEditId='', rxEditForced=false, rxEditReason='';  /* 改写重提模式：目标处方 id / 原高危标记 / 原联用理由 */
+let rxManualConfirm='';       /* 字典外手动加药：二次确认记忆（同药名再次点击才加入） */
+let rxTabCur='compose';       /* 工作台内 tab：compose=开药 / mine=我的处方 */
+let rxMineCache=[];           /* 我的处方缓存（GET /prescriptions/mine） */
+const RX_STATUS={pending_pharm:['待药剂科审核','warn'],approved:['已通过','ok'],
+  rejected:['已驳回','bad'],draft:['草稿','']};  /* 状态徽章：黄/绿/红/灰 */
+async function loadRx(){
+  /* 进入开药工作台：免责声明填充 + 字典缓存懒加载（失败不阻塞表单，提交时服务端仍硬校验） */
+  const dd=document.getElementById('rxDisclaimer');if(dd)dd.textContent='⚠ '+DRUG_DISCLAIMER;
+  if(!rxDictCache.drugs.length){
+    try{const d=await apiGet('/drug/dict');rxDictCache={drugs:d.drugs||[]};}catch(e){/* 静默：不阻塞开药主流程 */}}
+  rxDictFilter(document.getElementById('rxDictSearch')?document.getElementById('rxDictSearch').value:'');
+  renderRxBlock();renderRxSelected();
+}
+function switchRxTab(t){  /* 工作台内 tab 切换（我的处方在进入时拉取最新） */
+  rxTabCur=t;
+  document.getElementById('rxComposePane').style.display=(t==='compose')?'':'none';
+  document.getElementById('rxMinePane').style.display=(t==='mine')?'':'none';
+  document.getElementById('rxTabCompose').className='btn sm '+(t==='compose'?'primary':'ghost');
+  document.getElementById('rxTabMine').className='btn sm '+(t==='mine'?'primary':'ghost');
+  if(t==='mine')loadRxMine();
+}
+async function rxSuggest(){  /* ① 生成开药建议：POST /prescriptions/suggest */
+  const caseText=document.getElementById('rxCase').value.trim();
+  if(caseText.length<20||caseText.length>5000){toast('病例摘要需 20-5000 字');return;}
+  const btn=document.getElementById('rxSuggestBtn');btn.disabled=true;
+  document.getElementById('rxSuggestOut').innerHTML='<div class="card"><div class="sk" style="height:16px;width:40%;margin-bottom:10px"></div><div class="sk"></div></div>';
+  try{
+    const d=await apiPost('/prescriptions/suggest',{case_text:caseText});
+    if(d&&d.detail){const det=d.detail;throw new Error(Array.isArray(det)?det.map(x=>x.msg||x).join('；'):String(det));}
+    rxSuggests=(d.suggestions||[]).map(s=>({...s,pick:true}));  /* 推荐默认全选（勾选框可取消） */
+    rxBlocked=!!d.blocked;rxConflicts=d.conflicts||[];rxWarnings=d.warnings||[];
+    renderRxSuggest();renderRxBlock();
+  }catch(e){document.getElementById('rxSuggestOut').innerHTML='<div class="card">⚠ 建议生成失败：'+esc(e.message)+'</div>';}
+  finally{btn.disabled=false;rxSyncSubmit();}
+}
+function renderRxSuggest(){  /* ② 推荐结果卡片（勾选加入药单）+ 中危组合警示条（黄色） */
+  const el=document.getElementById('rxSuggestOut');let html='';
+  if(rxWarnings.length){
+    html+=`<div class="card" style="border-left:3px solid var(--warn)"><b>⚠ 中危联用警示</b>
+      <ul class="feed" style="margin-top:6px">${rxWarnings.map(w=>`<li><span class="e">${esc((w.pair||[]).join(' × '))}</span><span class="src">${esc(w.note||'')}</span></li>`).join('')}</ul></div>`;}
+  if(rxSuggests.length){
+    html+=`<div class="card"><h3>AI 开药建议（勾选加入药单）</h3>`+
+      rxSuggests.map((s,i)=>`<label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0;cursor:pointer">
+        <input type="checkbox" ${s.pick?'checked':''} onchange="rxPick(${i},this.checked)">
+        <span><b>${esc(s.name)}</b> <span class="src">${esc(s.dose||'剂量待定')} · ${esc(s.freq||'频次待定')}</span>
+        <div class="src">${esc(s.reason||'')}</div></span></label>`).join('')+`</div>`;
+  }else if(!rxBlocked&&!rxWarnings.length){
+    html=`<div class="card"><div class="src">暂无推荐结果：可直接在下方自定义加药。</div></div>`;}
+  el.innerHTML=html;
+}
+function rxPick(i,checked){  /* 勾选/取消推荐药 → 同步已选药单 */
+  const s=rxSuggests[i];if(!s)return;
+  s.pick=checked;
+  rxSelected=rxSelected.filter(d=>d.name!==s.name);
+  if(checked)rxSelected.push({name:s.name,dose:s.dose||'',freq:s.freq||'',note:s.reason||'AI 推荐'});
+  renderRxSelected();
+}
+function renderRxBlock(){  /* 高危联用阻断条（红色）：suggest blocked 或改写原处方为强制开立 */
+  const el=document.getElementById('rxBlockPanel');if(!el)return;
+  if(rxBlocked){
+    el.style.display='';
+    el.innerHTML=`<div style="border-left:3px solid var(--danger);padding-left:10px">
+      <b style="color:var(--danger)">⚠ 高危联用已阻断</b>
+      <div class="src" style="margin-top:4px">推荐组合存在高危相互作用；若最终药单仍含以下组合，必须填写联用理由才能提交（服务端硬校验）：</div>
+      <ul class="feed" style="margin-top:6px">${rxConflicts.map(c=>`<li><span class="e">${esc((c.pair||[]).join(' × '))}（${esc(c.severity||'高危')}）</span><span class="src">${esc(c.note||'')}</span></li>`).join('')}</ul>
+      <input class="inp" id="rxReason" style="margin-top:8px" placeholder="联用理由（填了才允许提交，如：危及生命的感染且无替代方案）" oninput="rxSyncSubmit()">
+    </div>`;
+  }else if(rxEditForced){  /* 改写被驳回的高危强制开立处方：保留联用理由输入（回填原理由） */
+    el.style.display='';
+    el.innerHTML=`<div style="border-left:3px solid var(--danger);padding-left:10px">
+      <b style="color:var(--danger)">⚠ 原处方为高危强制开立</b>
+      <div class="src" style="margin-top:4px">若改写后药单仍含高危联用组合，提交时必须填写联用理由（服务端硬校验）：</div>
+      <input class="inp" id="rxReason" style="margin-top:8px" placeholder="联用理由（填了才允许提交）" oninput="rxSyncSubmit()">
+    </div>`;
+    const r=document.getElementById('rxReason');if(r)r.value=rxEditReason||'';
+  }else{el.style.display='none';el.innerHTML='';}
+  rxSyncSubmit();
+}
+function rxInDict(name){  /* 字典内判定（规范名/别名/商品名，与后端别名图同源数据） */
+  return (rxDictCache.drugs||[]).some(d=>d.name===name||(d.aliases||[]).includes(name)||(d.brand_names||[]).includes(name));}
+function rxDictFilter(q){  /* ③ 字典搜索下拉（前端过滤，最多 12 条防长列表） */
+  const ul=document.getElementById('rxDictList');if(!ul)return;
+  const s=String(q||'').trim().toLowerCase();
+  if(!s){ul.innerHTML='<li><span class="a">输入关键词搜索药品字典（结果点「加入药单」）</span></li>';return;}
+  const hits=(rxDictCache.drugs||[]).filter(d=>{
+    const hay=[d.name,d.category,...(d.aliases||[]),...(d.brand_names||[])].join(' ').toLowerCase();
+    return hay.includes(s);}).slice(0,12);
+  ul.innerHTML=hits.length?hits.map(d=>`<li style="display:flex;gap:8px;align-items:center">
+      <span class="e">${esc(d.name)}</span><span class="src">${esc(d.category||'其他')}</span>
+      <button class="btn sm secondary" style="margin-left:auto" data-name="${esc(d.name)}" onclick="rxAddDict(this.dataset.name)">加入药单</button></li>`).join('')
+    :'<li><span class="a">无匹配药品（可在下方手动输入，字典外需确认）</span></li>';
+}
+function rxAddDict(name){  /* 字典药加入药单（默认空剂量频次，药单内可编辑） */
+  if(rxSelected.some(d=>d.name===name)){toast(name+' 已在药单');return;}
+  const src=(rxDictCache.drugs||[]).find(d=>d.name===name);
+  rxSelected.push({name,dose:'',freq:'',note:'字典添加'+(src&&src.category?(' · '+src.category):'')});
+  renderRxSelected();toast('已加入药单：'+name);
+}
+function rxAddManual(){  /* 手动加药：字典外药名首次点击弹确认条，同药名再次点击才加入 */
+  const name=document.getElementById('rxAddName').value.trim();
+  const dose=document.getElementById('rxAddDose').value.trim();
+  const freq=document.getElementById('rxAddFreq').value.trim();
+  const tip=document.getElementById('rxOutOfDictTip');
+  if(!name){toast('请输入药名');return;}
+  if(rxSelected.some(d=>d.name===name)){toast(name+' 已在药单');return;}
+  if(!rxInDict(name)&&rxManualConfirm!==name){
+    tip.style.display='';tip.textContent='该药不在字典，药剂科将重点审核；确认仍要加入请再次点击「添加」';
+    rxManualConfirm=name;return;}
+  rxManualConfirm='';if(tip)tip.style.display='none';
+  rxSelected.push({name,dose,freq,note:'手动输入'+(rxInDict(name)?'':' · 字典外')});
+  ['rxAddName','rxAddDose','rxAddFreq'].forEach(id=>{document.getElementById(id).value='';});
+  renderRxSelected();
+}
+function renderRxSelected(){  /* ④ 已选药单（可删 / 可编辑剂量频次；字典外药名黄色标记） */
+  const el=document.getElementById('rxSelected');if(!el)return;
+  el.innerHTML=rxSelected.length?rxSelected.map((d,i)=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0">
+      <b style="min-width:110px">${esc(d.name)}</b>
+      <span class="chip ${rxInDict(d.name)?'mid':'warn'}"><span class="dot"></span>${rxInDict(d.name)?'字典内':'字典外'}</span>
+      <input class="inp" style="max-width:130px" placeholder="剂量（如 0.5g）" value="${esc(d.dose)}" oninput="rxEditDrug(${i},'dose',this.value)">
+      <input class="inp" style="max-width:130px" placeholder="频次（如 qd）" value="${esc(d.freq)}" oninput="rxEditDrug(${i},'freq',this.value)">
+      <button class="btn sm ghost" onclick="rxDelDrug(${i})">移除</button>
+      ${d.note?`<span class="src">${esc(d.note)}</span>`:''}</div>`).join('')
+    :'<div class="src">药单为空：勾选上方 AI 建议，或通过字典搜索/手动输入添加药品。</div>';
+  rxSyncSubmit();
+}
+function rxEditDrug(i,k,v){if(rxSelected[i])rxSelected[i][k]=v;}  /* 药单内联编辑剂量/频次 */
+function rxDelDrug(i){rxSelected.splice(i,1);renderRxSelected();}  /* 药单内移除 */
+function rxLiveConflicts(){  /* 当前药单命中的高危组合（blocked 只约束仍留存在药单内的组合） */
+  const names=new Set(rxSelected.map(d=>d.name));
+  return rxConflicts.filter(c=>(c.pair||[]).every(n=>names.has(n)));}
+function rxSyncSubmit(){  /* 「提交开药」按钮可用性：高危组合仍存在且未填联用理由 → 禁用 */
+  const btn=document.getElementById('rxSubmitBtn');if(!btn)return;
+  const reason=(document.getElementById('rxReason')||{value:''}).value.trim();
+  btn.disabled=rxLiveConflicts().length>0&&!reason;
+  const banner=document.getElementById('rxEditBanner');
+  if(banner){banner.style.display=rxEditId?'':'none';
+    if(rxEditId)banner.textContent='正在改写被驳回处方 '+rxEditId+'：修改后提交将自动重新送药剂科审核（不产生新处方）';}
+}
+async function rxSubmit(){  /* ⑥ 提交开药：新建 POST /prescriptions；改写重提 POST /prescriptions/{rid}/rewrite */
+  const caseText=document.getElementById('rxCase').value.trim();
+  if(caseText.length<20||caseText.length>5000){toast('病例摘要需 20-5000 字');return;}
+  if(!rxSelected.length){toast('请至少选择一种药品');return;}
+  const reason=(document.getElementById('rxReason')||{value:''}).value.trim();
+  if(rxLiveConflicts().length&&!reason){toast('存在高危联用组合：必须填写联用理由才能提交');return;}
+  const outDict=rxSelected.filter(d=>!rxInDict(d.name)).map(d=>d.name);
+  if(outDict.length){toast('药品「'+outDict.join('、')+'」不在药品字典，服务端硬校验将拒绝提交，请移除后再试');return;}
+  const btn=document.getElementById('rxSubmitBtn');btn.disabled=true;
+  const body={case_text:caseText,
+    drugs:rxSelected.map(d=>({name:d.name,dose:d.dose,freq:d.freq,note:d.note||''})),
+    contraindication_reason:reason};
+  try{
+    const item=rxEditId
+      ?await apiPost('/prescriptions/'+encodeURIComponent(rxEditId)+'/rewrite',body)  /* 改写重提（rejected→draft→pending_pharm） */
+      :await apiPost('/prescriptions',body);  /* 新建（直送药剂科 → pending_pharm） */
+    if(item&&item.detail){const det=item.detail;throw new Error(Array.isArray(det)?det.map(x=>x.msg||x).join('；'):String(det));}
+    toast(rxEditId?'处方已改写并重新送审':'处方已提交，等待药剂科审核');
+    rxResetCompose();switchRxTab('mine');
+  }catch(e){toast('提交失败：'+e.message);}
+  finally{btn.disabled=false;rxSyncSubmit();}
+}
+function rxResetCompose(){  /* 提交成功后清空工作台表单与状态 */
+  document.getElementById('rxCase').value='';
+  rxSuggests=[];rxBlocked=false;rxConflicts=[];rxWarnings=[];rxSelected=[];rxEditId='';rxEditForced=false;rxEditReason='';rxManualConfirm='';
+  document.getElementById('rxSuggestOut').innerHTML='';
+  const tip=document.getElementById('rxOutOfDictTip');if(tip)tip.style.display='none';
+  ['rxAddName','rxAddDose','rxAddFreq'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  renderRxBlock();renderRxSelected();
+}
+/* ---- 阶段3.3：我的处方（工作台内 tab；GET /prescriptions/mine） ---- */
+async function loadRxMine(){
+  const el=document.getElementById('rxMineList');if(!el)return;
+  el.innerHTML='<div class="card"><div class="sk" style="height:16px;width:30%"></div></div>';
+  try{
+    const d=await apiGet('/prescriptions/mine');
+    rxMineCache=d.items||[];
+    el.innerHTML=rxMineCache.length?rxMineCache.map(rxMineCard).join(''):'<div class="card"><div class="src">暂无处方记录。</div></div>';
+  }catch(e){el.innerHTML='<div class="card">⚠ 处方加载失败：'+esc(e.message)+'</div>';}
+}
+function rxMineCard(it){  /* 状态徽章色：pending_pharm 黄/approved 绿/rejected 红/draft 灰；rejected 显示药剂意见+重写 */
+  const st=RX_STATUS[it.status]||[it.status||'未知',''];
+  const rej=it.status==='rejected'
+    ?`<div class="src" style="margin-top:6px;border-left:3px solid var(--danger);padding-left:8px">药剂科意见：${esc(it.pharm_opinion||'（未填写）')} · 审核人 ${esc(it.pharm_reviewer||'—')}</div>
+      <button class="btn sm secondary" style="margin-top:6px" onclick="rxStartRewrite('${esc(it.id)}')">重写</button>`:'';
+  return `<div class="card" data-rxid="${esc(it.id)}">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip ${st[1]}"><span class="dot"></span>${esc(st[0])}</span>
+      <b class="num">${esc(it.id)}</b><span class="src">${fmtTs(it.created_at)} · 药品 ${esc(String((it.drugs||[]).length))} 种${it.forced_high_risk?' · <span style="color:var(--danger)">高危强制开立</span>':''}</span></div>
+    <div class="txt" style="margin-top:6px">${esc((it.case_text||'').slice(0,80))}${(it.case_text||'').length>80?'…':''}</div>
+    <ul class="feed" style="margin-top:4px">${(it.drugs||[]).map(d=>`<li><span class="e">${esc(d.name)}</span><span class="src">${esc(d.dose||'')} ${esc(d.freq||'')}</span></li>`).join('')}</ul>
+    ${rej}</div>`;
+}
+function rxStartRewrite(id){  /* 重写：回填 case_text/drugs（含原联用理由）到工作台表单 → 提交走 rewrite 自动重提 */
+  const it=(rxMineCache||[]).find(x=>x.id===id);if(!it){toast('未找到该处方');return;}
+  rxEditId=id;rxEditForced=!!it.forced_high_risk;rxEditReason=it.contraindication_reason||'';
+  document.getElementById('rxCase').value=it.case_text||'';
+  rxSelected=(it.drugs||[]).map(d=>({name:d.name,dose:d.dose||'',freq:d.freq||'',note:d.note||''}));
+  rxSuggests=[];rxBlocked=false;rxConflicts=[];rxWarnings=[];rxManualConfirm='';
+  document.getElementById('rxSuggestOut').innerHTML='';
+  const tip=document.getElementById('rxOutOfDictTip');if(tip)tip.style.display='none';
+  switchRxTab('compose');renderRxBlock();renderRxSelected();
+  window.scrollTo(0,0);
+  toast('已回填处方内容：修改后点「提交开药」自动重新送审');
+}
 
 /* ---- 病历质控 ---- */
 function esc(s){return String(s).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -1538,7 +1833,10 @@ function humanizeAudit(e){
       return `AI 问答留痕（置信 ${cf}${p.review?' · 需复核':''}）`;},
     /* —— 智能开药 —— */
     suggested:()=>`AI 开药建议（推荐 ${p.n??0} 种${p.blocked?' · 高危联用已阻断':''}${(p.dropped||[]).length?` · 拦截幻影药 ${p.dropped.length} 个`:''}）`,
-    /* 阶段2.3 处方流转：提交/改写重提/高危强制开立（approved/rejected 复用上方既有键） */
+    /* 阶段2.3 处方流转：提交/改写重提/高危强制开立（approved/rejected 复用上方既有键）；
+       阶段3 查漏结论：prescription 全部审计动作（suggested/submitted/list/list_pending/
+       approved/rejected/rewritten/forced_with_reason）均已映射，无缺口（list/list_pending
+       复用通用文案，event=prescription 语境下语义成立） */
     submitted:()=>`提交了处方送药师审核（${p.n??'?'} 种药${p.forced_high_risk?' · 高危强制开立':''}）`,
     rewritten:()=>`改写了被驳回处方并重新送审（${p.n??'?'} 种药）`,
     forced_with_reason:()=>`高危联用强制开立并附理由（${rid}）`.trim(),
@@ -2046,7 +2344,7 @@ async function loadOverview(){
   /* 任务1：人话化全覆盖——概览「最近活动」同样走 humanizeAudit（后端 recent 已带 payload），esc 后入 HTML */
   const acts=(d.recent&&d.recent.length)? d.recent.map(e=>`<li><span class="t num">${esc(e.ts)}</span><span class="e">${esc(humanizeAudit(e))}</span><span class="a">${esc(e.actor)}</span></li>`).join('') : '<li><span class="a" style="margin:0">暂无活动记录</span></li>';
   const allow=ROLE_NAV[ROLE]||[];
-  const quick=[['literature','医学文献','答案附文献出处'],['drug','药物信息','两药同用风险核查'],['imaging','影像辅助','AI 初步所见'],['case','病例总结','摘要与鉴别清单'],['mdt','多智能体会诊','三专科意见与分歧'],['qc','病历质控','病案科工作台']].filter(([k])=>allow.includes(k)).map(([k,n,dd])=>`<li><button onclick="go('${k}')">${ICON[k]}<span><span class="qn">${n}</span><br><span class="qd">${dd}</span></span><span class="ar">›</span></button></li>`).join('');
+  const quick=[['literature','医学文献','答案附文献出处'],['rx','开药工作台','AI 推荐+药剂科审核'],['imaging','影像辅助','AI 初步所见'],['case','病例总结','摘要与鉴别清单'],['mdt','多智能体会诊','三专科意见与分歧'],['qc','病历质控','病案科工作台']].filter(([k])=>allow.includes(k)).map(([k,n,dd])=>`<li><button onclick="go('${k}')">${ICON[k]}<span><span class="qn">${n}</span><br><span class="qd">${dd}</span></span><span class="ar">›</span></button></li>`).join('');
   const who=document.getElementById('who').textContent||'医师';
   b.innerHTML=`<div class="hero"><h2>欢迎回来，${esc(who)}</h2><p>答案均附出处、高风险结论双人核对；本工具不构成诊断、不开处方。</p></div>
     <div class="stats">${stats}</div>

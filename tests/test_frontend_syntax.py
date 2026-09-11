@@ -303,7 +303,11 @@ def test_phase0_frontend_markers_present():
     """阶段0 前端标记锁（防回退）：
     - 0.1：qcResubmit 从 meta.record 逐栏直填并统计 filled；仅确有预填内容才声明
       「已预填」，旧版无留档条目如实提示手动填写（不再谎报）；
-    - 0.2：药物助手视图置顶「曾被药剂科驳回」提示（loadDrugRejections，独立端点）。"""
+    - 0.2：药物助手视图置顶「曾被药剂科驳回」提示——【阶段3 更新注明】开药工作台
+      （rx 视图）取代 drug 视图，药物助手独立入口整体删除（AGENTS.drug/导航/loadDrugRejections/
+      chat 免责条），0.2 的 drug 视图标记随新结构移除；drug 类历史驳回仍可在
+      审核中心历史与审计流中回溯，相关断言并入 test_phase3_rx_frontend_markers_present
+      的「独立入口已删」反向锁。"""
     html = FRONTEND.read_text(encoding="utf-8")
     for marker in (
         # 0.1：结构化逐栏直填 + 预填内容计数（签名栏 i=6 锁定当前账号不回填）
@@ -312,13 +316,59 @@ def test_phase0_frontend_markers_present():
         "document.getElementById('qcf_'+i).value=v;if(v.trim())filled++;});",
         "${filled?'原病历内容已预填'",                 # 横幅诚实化：有值才声明已预填
         "该记录未留存结构化原病历（旧版条目），请手动填写病历内容",
-        # 0.2：药物助手驳回提示（分流到药物上下文）
-        "if(k==='drug')loadDrugRejections();",
-        "async function loadDrugRejections(",
-        "/api/v1/medical/drug/my-rejections",
-        "曾被药剂科驳回：",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     fn = _extract_fn(html, "qcResubmit")
     assert "filled++" in fn, "qcResubmit 必须统计非空预填栏数（横幅诚实化依据）"
     assert "qcLabs" in fn, "qcResubmit 必须回填检验值（meta.labs → qcLabs）"
+
+
+# ---------- 阶段3：开药前端（rx 视图取代 drug 视图 + 药剂科队列 + 我的处方）标记锁 ----------
+
+def test_phase3_rx_frontend_markers_present():
+    """阶段3 前端标记锁（防回退，docs/plans/pharmacy_roadmap.md 阶段3）：
+    - 3.1 开药工作台：rx 视图/导航位存在，suggest→勾选→自定义加药（字典外确认）→
+      药单→高危阻断+联用理由→提交全链路标记；免责声明条复用 DRUG_DISCLAIMER；
+    - 药物助手独立入口已删（AGENTS.drug / drug 导航项 / loadDrugRejections / chat 免责条）；
+    - 3.2 药剂科开药审核队列：开药待审区 + 通过/驳回（驳回必填意见）+ forced 红标；
+    - 3.3 我的处方：状态徽章（pending_pharm 黄/approved 绿/rejected 红/draft 灰）+
+      驳回意见 + 重写回填（提交走 rewrite 自动重提）。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 3.1 开药工作台：导航与视图骨架
+        "{k:'rx',t:'开药工作台'}", 'id="scr-rx"', "function loadRx(",
+        "function switchRxTab(", 'id="rxTabCompose"', 'id="rxTabMine"',
+        # 3.1 suggest → 推荐卡片（勾选）+ 中危警示
+        "function rxSuggest(", "生成开药建议", "prescriptions/suggest",
+        "function rxPick(", "function renderRxSuggest(", "⚠ 中危联用警示",
+        # 3.1 自定义加药：字典搜索 + 字典外确认弹条
+        "function rxDictFilter(", "function rxAddDict(", "function rxAddManual(",
+        "/drug/dict", "该药不在字典，药剂科将重点审核",
+        # 3.1 已选药单（可删/可编辑）
+        "function renderRxSelected(", "function rxEditDrug(", "function rxDelDrug(",
+        # 3.1 高危联用阻断条 + 联用理由（填了才允许提交）+ 提交
+        'id="rxBlockPanel"', "⚠ 高危联用已阻断", 'id="rxReason"',
+        "contraindication_reason", "function rxSubmit(", "提交开药",
+        "apiPost('/prescriptions',",
+        "prescriptions/'+encodeURIComponent(rxEditId)+'/rewrite",  # 改写重提
+        # 免责声明条（复用 DRUG_DISCLAIMER 常量）
+        'id="rxDisclaimer"', "DRUG_DISCLAIMER",
+        # 3.2 药剂科开药审核队列
+        "prescriptions/pending", "rxPendingItems", "function rxPendingSection(",
+        "开药待审（处方队列）", "function rxReviewCard(", "高危强制开立</span>",
+        "function rxReview(", "_rxReviewPost", "/review'",
+        # 3.3 我的处方：状态徽章 + 驳回意见 + 重写回填
+        "prescriptions/mine", "function loadRxMine(", "function rxMineCard(",
+        "pending_pharm:['待药剂科审核','warn']", "rejected:['已驳回','bad']",
+        "draft:['草稿','']", "function rxStartRewrite(", "药剂科意见：",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    # 药物助手独立入口已删（反向锁：残留即回退）
+    for gone in (
+        "drug:{name:'药物信息助手'",        # AGENTS.drug 独立入口
+        "{k:'drug',t:'药物信息'}",          # drug 导航项
+        "async function loadDrugRejections(",  # drug 视图驳回提示函数
+        'id="drugDisclaimer"',              # chat 屏 drug 免责条（移至 rx 视图）
+        "if(k==='drug')loadDrugRejections();",
+    ):
+        assert gone not in html, f"药物助手独立入口应已删除，仍残留：{gone}"
