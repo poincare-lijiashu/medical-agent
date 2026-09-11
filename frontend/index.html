@@ -2193,6 +2193,8 @@ function humanizeAudit(e){
     drug_dict_changed:()=>p.target==='rules'
       ?`${p.action==='add'?'新增了':p.action==='update'?'更新了':'删除了'}相互作用规则（${p.drug_a||'—'} × ${p.drug_b||'—'}）`
       :`${p.action==='add'?'新增了':p.action==='update'?'更新了':'删除了'}药品字典条目 ${p.name||'—'}`,
+    /* 评测行动项4：规则审校批量标记（drug_rules.reviewed，payload 带 count/decision） */
+    reviewed:()=>`标记了 ${p.count??0} 条相互作用规则审校状态（${p.decision==='unreviewed'?'撤销为未审校':'药师核对通过'}）`,
     llm_add:()=>`新增了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
     llm_remove:()=>`删除了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
     llm_activate:()=>`激活了模型配置（${p.kind||'—'}/${p.pid||'—'}）`,
@@ -2589,6 +2591,7 @@ async function renderDrugRulesEditor(el){  /* 问题3：相互作用规则管理
   el.innerHTML=`<div class="src" style="padding:8px 16px 0">⚠ ${esc(d.disclaimer||DRUG_DISCLAIMER)}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 16px 4px">
       <span class="chip warn"><span class="dot"></span>规则 ${esc(String(st.rules??rules.length))} 条（高危 ${esc(String(st.high??'—'))} / 中危 ${esc(String(st.mid??'—'))}）</span>
+      <span class="chip ${(st.total>0&&st.reviewed===st.total)?'ok':'mid'}"><span class="dot"></span>审校 ${esc(String(st.reviewed??0))}/${esc(String(st.total??rules.length))} · 高危 ${esc(String(st.high_risk_reviewed??0))}/${esc(String(st.high_risk_total??st.high??'—'))}</span>
       <span class="src">高危=开药组合强制阻断（须填联用理由方可开立）；中危=开药时提示警示。</span>
     </div>
     <div class="qgrid" style="padding:4px 16px" id="drForm">
@@ -2603,13 +2606,47 @@ async function renderDrugRulesEditor(el){  /* 问题3：相互作用规则管理
       <button class="btn ghost sm" onclick="resetDrugRuleForm()">重置</button>
       <span class="src" id="drFormHint"></span>
     </div>
-    <ul class="feed" id="drList" style="max-height:320px;overflow:auto">${rules.length?rules.map((r,i)=>`<li><span class="e">${esc(r.drug_a)} × ${esc(r.drug_b)}</span>
+    <div style="display:flex;gap:8px;padding:4px 16px 10px;align-items:center;flex-wrap:wrap">
+      <select class="inp" id="drReview" aria-label="审校筛选" style="max-width:150px" onchange="renderDrugRulesList()">
+        <option value="">全部</option><option value="unreviewed">未审校</option><option value="approved">已审校</option><option value="unreviewed_high">未审校高危</option></select>
+      <button class="btn secondary sm" id="drReviewBtn" onclick="markRulesReviewed()">标记已审校</button>
+      <span class="src">勾选规则后批量标记已审校（审校人以当前登录药师名落痕）</span>
+    </div>
+    <ul class="feed" id="drList" style="max-height:320px;overflow:auto"></ul>`;
+  renderDrugRulesList();
+}
+function renderDrugRulesList(){  /* 评测行动项4：规则列表（审校徽章/筛选/高危默认排前；前端过滤不出网） */
+  const ul=document.getElementById('drList');if(!ul)return;
+  const revOf=r=>r.review_status==='approved';  /* 缺省视为未审校（读取时 computed） */
+  const f=String((document.getElementById('drReview')||{}).value||'');
+  const rules=drugDictCache.rules||[];
+  let view=rules.map((r,i)=>({r,i}));  /* 携带原数组下标：编辑/删除 data-idx 仍定位原始条目 */
+  view.sort((x,y)=>(y.r.severity==='高危')-(x.r.severity==='高危'));  /* 高危默认排前（稳定排序，同档保持原序） */
+  if(f==='approved')view=view.filter(v=>revOf(v.r));
+  else if(f==='unreviewed')view=view.filter(v=>!revOf(v.r));
+  else if(f==='unreviewed_high')view=view.filter(v=>!revOf(v.r)&&v.r.severity==='高危');
+  ul.innerHTML=view.length?view.map(({r,i})=>{
+    const rev=revOf(r);
+    return `<li><input type="checkbox" class="dr-chk" data-key="${esc(r.drug_a+'||'+r.drug_b)}" aria-label="选择规则 ${esc(r.drug_a)} × ${esc(r.drug_b)}">
+      <span class="e">${esc(r.drug_a)} × ${esc(r.drug_b)}</span>
       <span class="chip ${r.severity==='高危'?'bad':'mid'}"><span class="dot"></span>${esc(r.severity||'中危')}</span>
+      <span class="chip ${rev?'ok':''}"><span class="dot"></span>${rev?'已审校':'未审校'}</span>
       <span class="src">${esc(r.mechanism||'')}${r.management?' · 处置：'+esc(r.management):''}</span>
+      ${rev?`<span class="src">审校人：${esc(r.reviewed_by||'—')}${r.reviewed_at?' · '+esc(fmtTs(r.reviewed_at)):''}</span>`:''}
       <span class="a" style="display:inline-flex;gap:6px">
         <button class="btn sm secondary" data-act="dr-edit" data-idx="${i}">编辑</button>
-        <button class="btn sm danger" data-act="dr-del" data-idx="${i}">删除</button></span></li>`).join('')
-      :'<li><span class="a">暂无相互作用规则</span></li>'}</ul>`;
+        <button class="btn sm danger" data-act="dr-del" data-idx="${i}">删除</button></span></li>`;}).join('')
+    :'<li><span class="a">无匹配规则</span></li>';
+}
+async function markRulesReviewed(){  /* 评测行动项4：批量标记已审校（reviewed_by 由后端取当前登录名，不传名防冒充） */
+  const keys=[...document.querySelectorAll('#drList .dr-chk:checked')].map(b=>b.dataset.key);
+  if(!keys.length){toast('请先勾选要标记的规则');return;}
+  const btn=document.getElementById('drReviewBtn');if(btn)btn.disabled=true;
+  try{const r=await apiPost('/admin/drug/rules/review',{keys,decision:'approved'});
+    if(r&&r.ok){toast('已标记 '+keys.length+' 条为已审校');renderDrugRulesEditor(drugDictEditorRoot);}
+    else toast('失败：'+((r&&r.detail)||'未知错误'));
+  }catch(e){toast('标记失败：'+e.message);}
+  finally{if(btn)btn.disabled=false;}
 }
 function resetDrugRuleForm(){
   drugRuleEditPair=null;

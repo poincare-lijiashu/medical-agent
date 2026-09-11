@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import threading
+from datetime import datetime, timezone
 
 from backend.core import pg_store
 
@@ -152,3 +153,71 @@ def stats() -> dict:
              if "AI" in str(r.get("source") or "") or "待药师核对" in str(r.get("source") or ""))
     return {"drugs": len(drugs), "rules": len(rules), "high": high,
             "mid": len(rules) - high, "categories": cats, "ai_marked": ai}
+
+
+# ---------- 评测行动项4：药师审校工作流（审校状态/批量标记/覆盖率统计） ----------
+# 现有规则为 AI 初稿（无 id 字段），以 (drug_a,drug_b) 规范药对做标识；路由层把键编码为
+# "drug_a||drug_b"。审校状态为规则条目可选字段：缺省视为 unreviewed（读取时 computed），
+# 不批量改写现有 JSON——仅被标记条目新增/移除三字段（JSON 兜底 diff 语义）。
+
+REVIEW_DECISIONS = ("approved", "unreviewed")  # approved=药师核对通过；unreviewed=撤销标记
+_REVIEW_FIELDS = ("review_status", "reviewed_by", "reviewed_at")  # approved 写入 / 撤销移除
+
+
+def _review_key(r: dict) -> tuple[str, str]:
+    """规则条目 → 规范药对键（pg_store._norm_pair 同构，与输入顺序无关）。"""
+    return pg_store._norm_pair(r.get("drug_a"), r.get("drug_b"))
+
+
+def _decode_key(key: str) -> tuple[str, str]:
+    """路由层编码键 "drug_a||drug_b" → 规范药对（非法键 ValueError，路由层 422）。"""
+    parts = str(key or "").split("||")
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        raise ValueError(f"键格式需为 drug_a||drug_b：{key}")
+    return pg_store._norm_pair(parts[0], parts[1])
+
+
+def mark_reviewed(keys: list[str], pharmacist: str, decision: str) -> int:
+    """批量标记规则审校状态（执业药师人工审校工具链；实际医学审校由药师人工执行）。
+    keys：["drug_a||drug_b", ...] 编码键列表；pharmacist：审校人（路由层取登录名，落
+    reviewed_by）；decision：approved（写入 review_status/reviewed_by/reviewed_at）|
+    unreviewed（撤销，移除三字段）。
+    写透 save_rules（JSON 原子写兜底 + PG 全量同步）并即时刷新进程内缓存；审计由路由层做。
+    任一键不存在/decision 非法/keys 空 → ValueError 原子拒绝（不做部分写入）。返回标记条数。"""
+    if decision not in REVIEW_DECISIONS:
+        raise ValueError("decision 需为 approved|unreviewed")
+    ks = [str(k or "").strip() for k in (keys or []) if str(k or "").strip()]
+    if not ks:
+        raise ValueError("keys 不能为空")
+    with _lock:
+        rules = load_rules()
+        targets: dict[tuple[str, str], dict] = {}
+        for k in ks:  # 先全量校验再改写（原子：含未知键则整批拒绝）
+            pair = _decode_key(k)
+            hit = next((r for r in rules if _review_key(r) == pair), None)
+            if hit is None:
+                raise ValueError(f"规则不存在：{pair[0]} × {pair[1]}")
+            targets[pair] = hit
+        for r in targets.values():
+            if decision == "approved":
+                r["review_status"] = "approved"
+                r["reviewed_by"] = str(pharmacist or "").strip()
+                r["reviewed_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                for f in _REVIEW_FIELDS:
+                    r.pop(f, None)
+        save_rules(rules)
+        return len(targets)
+
+
+def rules_review_stats() -> dict:
+    """审校覆盖率统计（管理页统计头/运维报告用）：
+    {total, reviewed, unreviewed, high_risk_total, high_risk_reviewed}。
+    reviewed 按 review_status=="approved" 计（缺省视为 unreviewed，读取时 computed）；
+    高危子集口径与 stats()["high"] 一致（severity=="高危"）。"""
+    rules = load_rules()
+    reviewed = sum(1 for r in rules if str(r.get("review_status") or "") == "approved")
+    high = [r for r in rules if r.get("severity") == "高危"]
+    high_rev = sum(1 for r in high if str(r.get("review_status") or "") == "approved")
+    return {"total": len(rules), "reviewed": reviewed, "unreviewed": len(rules) - reviewed,
+            "high_risk_total": len(high), "high_risk_reviewed": high_rev}

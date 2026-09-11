@@ -450,8 +450,10 @@ async def drug_dict_list(user: dict = Depends(require_user)):
     from backend.core import drug_dict as dd
     d = await asyncio.to_thread(dd.load_dict)
     rules = await asyncio.to_thread(dd.load_rules)
-    return {"disclaimer": dd.DISCLAIMER, "drugs": d, "rules": rules,
-            "stats": await asyncio.to_thread(dd.stats)}
+    # 评测行动项4：stats 并入审校覆盖率（reviewed/unreviewed/高危子集；既有键不丢）
+    stats = await asyncio.to_thread(dd.stats)
+    stats.update(await asyncio.to_thread(dd.rules_review_stats))
+    return {"disclaimer": dd.DISCLAIMER, "drugs": d, "rules": rules, "stats": stats}
 
 
 # ---------- admin 药品字典/规则管理（阶段1.5）：add/update/delete 三 action，写透 + 审计 ----------
@@ -562,6 +564,42 @@ async def admin_drug_rules_manage(req: DrugDictManageReq,
                                 {"target": "rules", "action": action,
                                  "drug_a": pair[0], "drug_b": pair[1]})
     return {"ok": True}
+
+
+class DrugRulesReviewReq(BaseModel):
+    """规则审校批量标记请求体（评测行动项4）：keys 为 "drug_a||drug_b" 编码键列表
+    （路由层编码，规范药对与输入顺序无关）；decision=approved|unreviewed。"""
+    keys: list[str]
+    decision: str
+
+
+@router.post("/admin/drug/rules/review")
+async def admin_drug_rules_review(req: DrugRulesReviewReq,
+                                  user: dict = Depends(require_role("pharmacist", "admin"))):
+    """相互作用规则审校批量标记（评测行动项4，pharmacist/admin 双角色）：
+    drug_rules.json 为 AI 初稿，执业药师人工核对后批量标记（实际医学审校由药师人工执行）。
+    keys 编码键 → mark_reviewed 写透（JSON 原子写兜底 + PG 全量同步）+ 缓存即时生效；
+    reviewed_by 落当前登录名（不信任前端传名）；撤销（unreviewed）移除三审校字段。
+    审计 drug_rules.reviewed（count/actor/decision）；返回标记后新 stats（前端统计头刷新）。
+    422：keys 空/键格式非法/键不存在（原子拒绝不部分写入）/decision 非枚举。"""
+    from backend.core import drug_dict as dd
+    decision = (req.decision or "").strip().lower()
+    if decision not in dd.REVIEW_DECISIONS:
+        raise HTTPException(422, "decision 需为 approved|unreviewed")
+    keys = [str(k or "").strip() for k in (req.keys or []) if str(k or "").strip()]
+    if not keys:
+        raise HTTPException(422, "keys 必填（drug_a||drug_b 编码键列表）")
+    actor = user.get("username", "admin")
+    try:
+        n = await asyncio.to_thread(dd.mark_reviewed, keys, actor, decision)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    await asyncio.to_thread(get_audit_logger().write, event_type="drug_rules",
+                            action="reviewed", actor=actor,
+                            payload={"count": n, "decision": decision})
+    await pg_store.mirror_audit("drug_rules.reviewed", actor,
+                                {"count": n, "decision": decision})
+    return {"ok": True, "stats": await asyncio.to_thread(dd.rules_review_stats)}
 
 
 @router.post("/drug/ask", response_model=AskResp)
