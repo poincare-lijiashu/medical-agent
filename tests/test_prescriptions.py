@@ -290,3 +290,235 @@ def test_suggest_case_text_length_422(suggest_env):
     r = c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),
                json={"case_text": "太短的病例"})
     assert r.status_code == 422
+
+
+# ---- 阶段2.3：处方流转端点（提交 / 列表 / 审核双控 / 改写重提）----
+
+SUB = "/api/v1/medical/prescriptions"
+
+
+def _submit(c, tok, drugs, reason="", case_text=CASE):
+    """医生提交开药的公共请求体构造（缺省无禁忌理由）。"""
+    return c.post(SUB, headers=_h(tok),
+                  json={"case_text": case_text, "drugs": drugs,
+                        "contraindication_reason": reason})
+
+
+def _seed_doctor2():
+    """补第二名医生账号（跨医生数据隔离 / 角色拒绝用例）。"""
+    auth_mod.create_user("doctor02", "Med@2026x", "doctor", dept="内科")
+
+
+def test_submit_rx_ok_and_audited(suggest_env):
+    """doctor 提交开药 200 → pending_pharm；审计 prescription.submitted（payload 含 role/channel=web/药数）。"""
+    c, audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    r = _submit(c, doc, [{"name": "华法林", "dose": "2.5mg", "freq": "qd"}])
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["id"].startswith("rx-") and d["status"] == "pending_pharm"
+    assert d["doctor"] == "doctor01" and d["forced_high_risk"] is False
+    hits = [e for e in audit.entries if e["event_type"] == "prescription"
+            and e["payload"].get("action") == "submitted"]
+    assert hits and hits[-1]["actor"] == "doctor01"
+    assert hits[-1]["payload"]["n"] == 1 and hits[-1]["payload"]["rid"] == d["id"]
+    assert hits[-1]["payload"]["channel"] == "web" and hits[-1]["payload"]["role"] == "doctor"
+    assert hits[-1]["payload"]["forced_with_reason"] is False
+    # 我的处方列表可见（只本人）
+    mine = c.get(f"{SUB}/mine", headers=_h(doc))
+    assert mine.status_code == 200
+    assert [i["id"] for i in mine.json()["items"]] == [d["id"]]
+    assert mine.json()["me"] == "doctor01"
+
+
+def test_submit_high_risk_without_reason_422(suggest_env):
+    """服务端再校验（不信任前端）：高危组合（华法林×布洛芬）无理由直提 → 422 且不落库、不留痕。"""
+    c, audit, tmp = suggest_env
+    doc = _login(c, "doctor01")
+    r = _submit(c, doc, [{"name": "华法林"}, {"name": "布洛芬", "dose": "0.3g"}])
+    assert r.status_code == 422
+    assert "高危" in r.json()["detail"]
+    assert not os.path.isfile(tmp / "prescriptions.json"), "校验拒绝不落库"
+    assert not [e for e in audit.entries
+                if e["payload"].get("action") == "submitted"], "拒绝不留 submitted 审计"
+
+
+def test_submit_high_risk_with_reason_forced(suggest_env):
+    """高危组合附禁忌理由 → 200 + forced_high_risk=true；审计 submitted 含 forced_with_reason=true，
+    另留 prescription.forced_with_reason 独立事件（药师重点核对）。"""
+    c, audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    reason = "病情必需，已告知出血风险并加强 INR 监测"
+    r = _submit(c, doc, [{"name": "华法林"}, {"name": "布洛芬"}], reason=reason)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["forced_high_risk"] is True and d["contraindication_reason"] == reason
+    sub = [e for e in audit.entries
+           if e["payload"].get("action") == "submitted"][-1]
+    assert sub["payload"]["forced_with_reason"] is True
+    fw = [e for e in audit.entries if e["event_type"] == "prescription"
+          and e["payload"].get("action") == "forced_with_reason"]
+    assert fw and fw[-1]["actor"] == "doctor01" and fw[-1]["payload"]["rid"] == d["id"]
+    assert "出血" in fw[-1]["payload"]["reason"]
+    assert fw[-1]["payload"]["channel"] == "web"
+
+
+def test_submit_server_side_revalidation_dict_unknown(suggest_env):
+    """服务端硬校验第二道：字典外药名（幻觉）绕过前端直接提交 → 422 拦截、不落库。"""
+    c, _audit, tmp = suggest_env
+    doc = _login(c, "doctor01")
+    r = _submit(c, doc, [{"name": "华法林"}, {"name": "神仙速效散"}])
+    assert r.status_code == 422
+    assert "字典" in r.json()["detail"]
+    assert not os.path.isfile(tmp / "prescriptions.json")
+
+
+def test_review_approve_ok_and_audited(suggest_env):
+    """pharmacist approve 200 → approved + 留痕 reviewer/opinion；审计 prescription.approved（opinion/药数）。"""
+    c, audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    ph = _login(c, "pharm01")
+    r = c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+               json={"action": "approve", "opinion": "相互作用已核对，同意"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "approved" and d["pharm_reviewer"] == "pharm01"
+    hit = [e for e in audit.entries if e["payload"].get("action") == "approved"][-1]
+    assert hit["actor"] == "pharm01" and hit["payload"]["rid"] == rid
+    assert hit["payload"]["n"] == 1 and "核对" in hit["payload"]["opinion"]
+    assert hit["payload"]["channel"] == "web" and hit["payload"]["role"] == "pharmacist"
+
+
+def test_review_reject_requires_opinion_then_rejects(suggest_env):
+    """驳回意见必填（空白 → 422）；附意见驳回 → 200 rejected + 审计 prescription.rejected。"""
+    c, audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    ph = _login(c, "pharm01")
+    r = c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+               json={"action": "reject", "opinion": "   "})
+    assert r.status_code == 422
+    r2 = c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+                json={"action": "reject", "opinion": "剂量超说明书上限，请调整"})
+    assert r2.status_code == 200 and r2.json()["status"] == "rejected"
+    hit = [e for e in audit.entries if e["payload"].get("action") == "rejected"][-1]
+    assert hit["actor"] == "pharm01" and "剂量" in hit["payload"]["opinion"]
+
+
+def test_review_double_control_self_403(suggest_env):
+    """双控：提交人本人审核自己的处方 → 403，且处方状态不被改变。"""
+    c, _audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    r = c.post(f"{SUB}/{rid}/review", headers=_h(doc), json={"action": "approve"})
+    assert r.status_code == 403
+    assert rx.get(rid)["status"] == "pending_pharm", "双控拒绝不改变状态"
+
+
+def test_review_doctor_role_403(suggest_env):
+    """doctor 无审核签字权（403）：用另一医生的处方规避双控干扰，纯角色拒绝。"""
+    c, _audit, _tmp = suggest_env
+    _seed_doctor2()
+    d2 = _login(c, "doctor02", "Med@2026x")
+    rid = _submit(c, d2, [{"name": "华法林"}]).json()["id"]
+    doc = _login(c, "doctor01")
+    assert c.post(f"{SUB}/{rid}/review", headers=_h(doc),
+                  json={"action": "approve"}).status_code == 403
+
+
+def test_review_unknown_rx_404(suggest_env):
+    """审核不存在的处方 → 404。"""
+    c, _audit, _tmp = suggest_env
+    ph = _login(c, "pharm01")
+    assert c.post(f"{SUB}/rx-nope/review", headers=_h(ph),
+                  json={"action": "approve"}).status_code == 404
+
+
+def test_review_draft_status_400(suggest_env):
+    """draft 状态（域层改写未重提）调 approve → 400（域层状态机拒绝非法流转）。"""
+    c, _audit, _tmp = suggest_env
+    r = rx.create(doctor="doctor01", case_text=CASE, drugs=[{"name": "华法林"}])
+    rx.reject(r["id"], "pharm01", "依据不足")
+    rx.rewrite(r["id"], "doctor01", case_text=CASE)  # → draft（未重提）
+    ph = _login(c, "pharm01")
+    resp = c.post(f"{SUB}/{r['id']}/review", headers=_h(ph),
+                  json={"action": "approve", "opinion": "ok"})
+    assert resp.status_code == 400
+
+
+def test_rewrite_owner_resubmit_and_audited(suggest_env):
+    """本人改写被驳回处方：更新药品后自动重提（draft→pending_pharm）；审计 prescription.rewritten；
+    药师可再次审核（闭环）。"""
+    c, audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}, {"name": "布洛芬"}],
+                  reason="病情必需").json()["id"]
+    ph = _login(c, "pharm01")
+    assert c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+                  json={"action": "reject", "opinion": "联用高危，请调整"}).status_code == 200
+    r = c.post(f"{SUB}/{rid}/rewrite", headers=_h(doc),
+               json={"case_text": "改写：停用布洛芬，改外用镇痛，继续抗凝随访。",
+                     "drugs": [{"name": "华法林", "dose": "2.5mg", "freq": "qd"}],
+                     "contraindication_reason": ""})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "pending_pharm" and d["pharm_reviewer"] is None, "draft→再提交自动完成"
+    assert [x["name"] for x in d["drugs"]] == ["华法林"]
+    hit = [e for e in audit.entries if e["payload"].get("action") == "rewritten"][-1]
+    assert hit["actor"] == "doctor01" and hit["payload"]["rid"] == rid
+    assert hit["payload"]["n"] == 1 and hit["payload"]["channel"] == "web"
+    # 闭环：药师可对新版再次签发
+    assert c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+                  json={"action": "approve", "opinion": "已调整，同意"}).status_code == 200
+
+
+def test_rewrite_invalid_content_keeps_rejected_422(suggest_env):
+    """改写内容变成高危组合且无理由 → 422，处方保持 rejected（医生可修正后重试，不产生死态）。"""
+    c, _audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    ph = _login(c, "pharm01")
+    c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+           json={"action": "reject", "opinion": "依据不足"})
+    r = c.post(f"{SUB}/{rid}/rewrite", headers=_h(doc),
+               json={"drugs": [{"name": "华法林"}, {"name": "布洛芬"}]})
+    assert r.status_code == 422
+    assert rx.get(rid)["status"] == "rejected", "校验失败保持 rejected（非 draft）"
+
+
+def test_rewrite_not_owner_403(suggest_env):
+    """非本人改写 → 403（改写仅处方医生本人）。"""
+    c, _audit, _tmp = suggest_env
+    _seed_doctor2()
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    ph = _login(c, "pharm01")
+    c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+           json={"action": "reject", "opinion": "依据不足"})
+    d2 = _login(c, "doctor02", "Med@2026x")
+    r = c.post(f"{SUB}/{rid}/rewrite", headers=_h(d2), json={"case_text": CASE})
+    assert r.status_code == 403
+    assert rx.get(rid)["status"] == "rejected"
+
+
+def test_list_permissions(suggest_env):
+    """mine 只回本人处方；pending 队列 pharmacist/qc/admin 三角色可见，doctor 403（role guard）。"""
+    c, _audit, _tmp = suggest_env
+    _seed_doctor2()
+    doc = _login(c, "doctor01")
+    d2 = _login(c, "doctor02", "Med@2026x")
+    id1 = _submit(c, doc, [{"name": "华法林"}]).json()["id"]
+    id2 = _submit(c, d2, [{"name": "华法林"}]).json()["id"]
+    mine1 = c.get(f"{SUB}/mine", headers=_h(doc)).json()
+    assert [i["id"] for i in mine1["items"]] == [id1]
+    mine2 = c.get(f"{SUB}/mine", headers=_h(d2)).json()
+    assert [i["id"] for i in mine2["items"]] == [id2]
+    for u in ("pharm01", "qc01", "admin01"):
+        tok = _login(c, u)
+        pend = c.get(f"{SUB}/pending", headers=_h(tok))
+        assert pend.status_code == 200, u
+        assert {i["id"] for i in pend.json()["items"]} == {id1, id2}, u
+    assert c.get(f"{SUB}/pending", headers=_h(doc)).status_code == 403, "doctor 无待审队列权限"
+    assert c.get(f"{SUB}/mine", headers=_h(_login(c, "pharm01"))).status_code == 403, \
+        "mine 为 doctor 专属"

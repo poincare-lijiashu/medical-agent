@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -24,6 +25,7 @@ from backend.config import settings
 from backend.core import chat_memory, kb_ingest, llm_config, runtime_flags
 from backend.core import medical_review as review
 from backend.core import pg_store, qc
+from backend.core import prescriptions as rx  # 阶段2.3 处方流转域层（状态机/repo）
 from backend.core.intent import offtopic_tech_reply, prefilter_reply
 from backend.core.llm_factory import get_llm  # suggest 端点走模块级符号（测试 monkeypatch 兼容）
 from backend.core.logger import get_logger
@@ -711,6 +713,199 @@ async def prescription_suggest(req: PrescribeSuggestReq,
                                  "blocked": blocked, "dropped": dropped})
     return {"suggestions": suggestions, "blocked": blocked, "conflicts": conflicts,
             "warnings": warnings, "disclaimer": dd.DISCLAIMER}
+
+
+# ---------- 阶段2.3：处方流转（提交 / 我的处方 / 药剂科待审 / 审核双控 / 改写重提） ----------
+
+class PrescriptionSubmitReq(BaseModel):
+    """医生提交开药请求：病例摘要 20-5000 字 + 至少一种药品（pydantic 越界 → 422）。"""
+    case_text: str = Field(min_length=20, max_length=5000)
+    drugs: list[dict] = Field(min_length=1)
+    contraindication_reason: str = ""
+
+
+class PrescriptionReviewReq(BaseModel):
+    """药剂科审核请求：action 仅 approve|reject（Literal 约束，非法值 422）；
+    opinion 驳回时必填（端点层校验 → 422）。"""
+    action: Literal["approve", "reject"]
+    opinion: str = ""
+
+
+class PrescriptionRewriteReq(BaseModel):
+    """被驳回处方改写请求：字段均可选（None=沿用原值）；case_text 越界由 pydantic 422。"""
+    case_text: str | None = Field(default=None, min_length=20, max_length=5000)
+    drugs: list[dict] | None = None
+    contraindication_reason: str | None = None
+
+
+def _hard_validate_drugs(drugs: list, contraindication_reason: str) -> tuple[list[dict], list[dict], bool]:
+    """提交前服务端规则硬校验（不信任前端；提交与改写重提共用）：
+    - 药名经别名图归一；字典外药名 → ValueError（幻觉拦截，端点层转 422）；
+    - 组合两两查相互作用规则：高危/禁忌命中 → 强制提交必须附 contraindication_reason
+      （缺失 ValueError → 422），有理由放行并标记 forced（forced_with_reason 留痕）。
+    返回 (归一化药品清单, 高危冲突列表, forced 标记)。"""
+    from backend.core import drug_dict as dd
+    amap = dd.alias_map()
+    cleaned: list[dict] = []
+    for d in drugs or []:
+        if not isinstance(d, dict):
+            continue
+        raw = str(d.get("name") or "").strip()
+        name = amap.get(raw)
+        if not name:
+            raise ValueError(f"药品「{raw or '空'}」不在药品字典内，服务端硬校验拒绝（幻觉拦截）")
+        cleaned.append({"name": name, "dose": str(d.get("dose") or "").strip(),
+                        "freq": str(d.get("freq") or "").strip(),
+                        "note": str(d.get("note") or "").strip()})
+    if not cleaned:
+        raise ValueError("至少需一种字典内有效药品（name 必填）")
+    rulemap = dd.rule_map()
+    conflicts: list[dict] = []
+    for i in range(len(cleaned)):
+        for j in range(i + 1, len(cleaned)):
+            rule = rulemap.get(frozenset((cleaned[i]["name"], cleaned[j]["name"])))
+            if not rule:
+                continue
+            sev, mech, mgmt = rule
+            if sev in ("高危", "禁忌"):
+                conflicts.append({"pair": [cleaned[i]["name"], cleaned[j]["name"]],
+                                  "severity": sev, "note": mech + (f"；{mgmt}" if mgmt else "")})
+    forced = bool(conflicts)
+    if forced and not (contraindication_reason or "").strip():
+        pair = "、".join(" × ".join(c["pair"]) for c in conflicts)
+        raise ValueError(f"存在高危相互作用组合（{pair}）："
+                         "强制提交必须填写禁忌理由 contraindication_reason")
+    return cleaned, conflicts, forced
+
+
+def _rx_audit(user: dict, **extra) -> dict:
+    """处方审计公共 payload：角色 + 入口渠道（web 端默认 "web"）+ 调用方附加字段（rid/n/...）。"""
+    p = {"role": user.get("role", ""), "channel": current_channel() or "web"}
+    p.update(extra)
+    return p
+
+
+@router.post("/prescriptions")
+async def prescription_create(req: PrescriptionSubmitReq,
+                              user: dict = Depends(require_role("doctor"))):
+    """医生提交开药（阶段2.3）：服务端规则硬校验（不信任前端）→ 域层 create 直送药剂科
+    （→ pending_pharm）。高危/禁忌组合强制提交时 contraindication_reason 必填（缺失 422）；
+    审计 prescription.submitted（强制开立另留 forced_with_reason 事件供药师重点核对）。"""
+    me = user.get("username", "system")
+    try:
+        cleaned, conflicts, forced = _hard_validate_drugs(req.drugs, req.contraindication_reason)
+    except ValueError as e:  # 硬校验不过 → 422（请求内容不合规）
+        raise HTTPException(422, str(e))
+    try:
+        item = await asyncio.to_thread(rx.create, doctor=me, dept=user.get("dept", ""),
+                                       case_text=req.case_text.strip(), drugs=cleaned,
+                                       contraindication_reason=req.contraindication_reason.strip(),
+                                       forced_high_risk=forced)
+    except ValueError as e:  # 域层兜底（pydantic 已拦大半）→ 400 业务错
+        raise HTTPException(400, str(e))
+    payload = _rx_audit(user, rid=item["id"], n=len(cleaned),
+                        forced_high_risk=forced, forced_with_reason=forced)
+    await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                            action="submitted", actor=me, payload=payload)
+    await pg_store.mirror_audit("prescription.submitted", me, payload)
+    if forced:  # 高危强制开立单独留痕（审计矩阵 forced_with_reason 事件）
+        fp = _rx_audit(user, rid=item["id"],
+                       reason=req.contraindication_reason.strip()[:AUDIT_Q_SNIPPET])
+        await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                                action="forced_with_reason", actor=me, payload=fp)
+        await pg_store.mirror_audit("prescription.forced_with_reason", me, fp)
+    return item
+
+
+@router.get("/prescriptions/mine")
+async def prescription_mine(user: dict = Depends(require_role("doctor"))):
+    """我的处方列表（新→旧；服务端按登录医生过滤，只回本人数据）。"""
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(rx.list_mine, me)
+    await asyncio.to_thread(get_audit_logger().write, event_type="prescription", action="list",
+                            actor=me, payload=_rx_audit(user, n=len(items)))
+    return {"items": items, "me": me}
+
+
+@router.get("/prescriptions/pending")
+async def prescription_pending(user: dict = Depends(require_role("pharmacist", "qc", "admin"))):
+    """药剂科待审队列（pending_pharm，新→旧；pharmacist/qc/admin 可见，doctor 403）。"""
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(rx.list_pending)
+    await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                            action="list_pending", actor=me, payload=_rx_audit(user, n=len(items)))
+    return {"items": items, "me": me}
+
+
+@router.post("/prescriptions/{rid}/review")
+async def prescription_review(rid: str, body: PrescriptionReviewReq,
+                              user: dict = Depends(require_role("pharmacist", "qc", "admin"))):
+    """药剂科签发/驳回（approve|reject）。双控：审核人≠提交医生（本人提交 → 403）；
+    驳回意见必填（缺失 422）；非 pending_pharm 流转由域层状态机拒绝（400）。
+    审计 prescription.approved / prescription.rejected（actor + opinion + 药数）。"""
+    me = user.get("username", "system")
+    cur = await asyncio.to_thread(rx.get, rid)
+    if cur is None:
+        raise HTTPException(404, "处方不存在")
+    if cur.get("doctor") == me:
+        raise HTTPException(403, "双控约束：审核人不能是提交医生本人")
+    if body.action == "reject" and not body.opinion.strip():
+        raise HTTPException(422, "驳回必须填写审核意见（opinion）")
+    payload = _rx_audit(user, rid=rid, n=len(cur.get("drugs") or []),
+                        opinion=body.opinion.strip()[:AUDIT_Q_SNIPPET])
+    try:
+        if body.action == "approve":
+            item = await asyncio.to_thread(rx.approve, rid, me, body.opinion)
+            await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                                    action="approved", actor=me, payload=payload)
+            await pg_store.mirror_audit("prescription.approved", me, payload)
+        else:
+            item = await asyncio.to_thread(rx.reject, rid, me, body.opinion)
+            await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                                    action="rejected", actor=me, payload=payload)
+            await pg_store.mirror_audit("prescription.rejected", me, payload)
+    except ValueError as e:  # 状态机拒绝（draft/approved/rejected 再签发等）→ 400
+        raise HTTPException(400, str(e))
+    return item
+
+
+@router.post("/prescriptions/{rid}/rewrite")
+async def prescription_rewrite(rid: str, body: PrescriptionRewriteReq,
+                               user: dict = Depends(require_role("doctor"))):
+    """医生改写被驳回处方（仅本人）：更新 case_text/drugs/理由（缺省沿用原值）→ 服务端硬校验 →
+    rejected→draft→pending_pharm 一次完成重提。校验不过保持 rejected（422，医生修正后可重试）。
+    审计 prescription.rewritten（改写后仍高危强制开立时另留 forced_with_reason）。"""
+    me = user.get("username", "system")
+    cur = await asyncio.to_thread(rx.get, rid)
+    if cur is None:
+        raise HTTPException(404, "处方不存在")
+    if cur.get("doctor") != me:
+        raise HTTPException(403, "仅处方医生本人可改写")
+    if cur.get("status") != "rejected":
+        raise HTTPException(400, "仅被驳回（rejected）的处方可改写")
+    eff_case = body.case_text if body.case_text is not None else cur["case_text"]
+    eff_drugs = body.drugs if body.drugs is not None else cur["drugs"]
+    eff_reason = (body.contraindication_reason if body.contraindication_reason is not None
+                  else (cur.get("contraindication_reason") or ""))
+    try:
+        cleaned, conflicts, forced = _hard_validate_drugs(eff_drugs, eff_reason)
+    except ValueError as e:  # 校验不过 → 422，处方保持 rejected 供继续修正（不产生死态）
+        raise HTTPException(422, str(e))
+    try:
+        await asyncio.to_thread(rx.rewrite, rid, me, eff_case, cleaned, eff_reason)
+        item = await asyncio.to_thread(rx.submit, rid, me)
+    except ValueError as e:  # 域层兜底（本人/状态已前置校验，理论不可达）→ 400
+        raise HTTPException(400, str(e))
+    payload = _rx_audit(user, rid=rid, n=len(cleaned), forced_high_risk=forced)
+    await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                            action="rewritten", actor=me, payload=payload)
+    await pg_store.mirror_audit("prescription.rewritten", me, payload)
+    if forced:  # 改写后仍高危强制开立 → 单独留痕
+        fp = _rx_audit(user, rid=rid, reason=eff_reason.strip()[:AUDIT_Q_SNIPPET])
+        await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
+                                action="forced_with_reason", actor=me, payload=fp)
+        await pg_store.mirror_audit("prescription.forced_with_reason", me, fp)
+    return item
 
 
 async def _ask_prefilter(agent: str, q: str, actor: str) -> AskResp | None:

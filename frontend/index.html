@@ -1538,6 +1538,10 @@ function humanizeAudit(e){
       return `AI 问答留痕（置信 ${cf}${p.review?' · 需复核':''}）`;},
     /* —— 智能开药 —— */
     suggested:()=>`AI 开药建议（推荐 ${p.n??0} 种${p.blocked?' · 高危联用已阻断':''}${(p.dropped||[]).length?` · 拦截幻影药 ${p.dropped.length} 个`:''}）`,
+    /* 阶段2.3 处方流转：提交/改写重提/高危强制开立（approved/rejected 复用上方既有键） */
+    submitted:()=>`提交了处方送药师审核（${p.n??'?'} 种药${p.forced_high_risk?' · 高危强制开立':''}）`,
+    rewritten:()=>`改写了被驳回处方并重新送审（${p.n??'?'} 种药）`,
+    forced_with_reason:()=>`高危联用强制开立并附理由（${rid}）`.trim(),
     /* —— 影像/病例（VL 链路）—— */
     describe_failed:()=>'影像描述失败（已留痕）',
     vl_failed:()=>'多模态解析失败（已留痕）',
