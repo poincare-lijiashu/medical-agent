@@ -19,6 +19,11 @@ data/*.log
 data/*.tmp
 data/verify_out.txt
 
+# 阶段5 PubMed 扩容拉取缓存（9.7MB 大文件不入库；可在线再生成，离线复现走
+# 脚本降级路径：Milvus 既有 pubmed_seed 行滑窗切分）
+data/kb/pubmed_v2_cache.json
+data/kb/pubmed_v2_run.log
+
 # 模型权重（4.3GB，本地化部署不入库）
 backend/models/
 

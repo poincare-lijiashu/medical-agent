@@ -345,7 +345,11 @@ def ingest_b64(name: str, data_b64: str, doc_tag: str | None = None,
     return ingest_document(name, base64.b64decode(data_b64), doc_tag, doc_kind=doc_kind)
 
 
-BUILTIN_TAGS = {"local_corpus", "pubmed_seed", "sample_guideline"}  # 种子内置库（demo 来源，待阶段 5 替换为院方授权语料）
+# 种子内置库：前三者为阶段 5 前的 demo 来源（local_corpus / sample_guideline 已由 v2 替换，
+# 数据保留保审计）；后二者为阶段 5 新增——pubmed_seed_v2（12 科室 PubMed 扩容库）、
+# clinical_guidelines_v2（真实出处临床指南要点库）。
+BUILTIN_TAGS = {"local_corpus", "pubmed_seed", "sample_guideline",
+                "pubmed_seed_v2", "clinical_guidelines_v2"}
 
 
 def register_doc(doc_tag: str, name: str, chunks: int) -> None:
