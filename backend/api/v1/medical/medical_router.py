@@ -425,6 +425,17 @@ _DRUG_SEV_CONF = {
 }
 
 
+@router.get("/drug/dict")
+async def drug_dict_list(user: dict = Depends(require_user)):
+    """阶段1.5 预留：药品字典管理 list 接口（全量字典+规则+免责声明）。
+    阶段1.2：管理页数据源（只读），增删改端点随阶段1.5 落地（invalidate 钩子已就绪）。"""
+    from backend.core import drug_dict as dd
+    d = await asyncio.to_thread(dd.load_dict)
+    rules = await asyncio.to_thread(dd.load_rules)
+    return {"disclaimer": dd.DISCLAIMER, "drugs": d, "rules": rules,
+            "stats": await asyncio.to_thread(dd.stats)}
+
+
 @router.post("/drug/ask", response_model=AskResp)
 async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
     q = _redactor.redact(req.question)

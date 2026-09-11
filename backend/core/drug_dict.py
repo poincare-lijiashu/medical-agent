@@ -33,6 +33,10 @@ DRUG_SEED_FILE = os.path.join(BASE_DIR, "data", "drug_seed.json")
 _lock = threading.RLock()  # 可重入锁：alias_map/rule_map 持锁内调用 load_dict/load_rules
 _cache: dict = {"dict": None, "rules": None, "alias_map": None, "rule_map": None}
 
+# 免责声明（阶段1.4）：随字典管理 list 接口下发，前端字典/开药界面必须可见
+DISCLAIMER = ("药品数据由 AI 辅助生成，临床使用前必须经执业药师核对；"
+              "本系统仅供辅助决策，不构成医疗建议。")
+
 
 def invalidate() -> None:
     """失效钩子（阶段1.5 管理页变更后调用）：清空进程内缓存与派生图，下次查询重读。"""
