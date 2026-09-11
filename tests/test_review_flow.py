@@ -130,3 +130,34 @@ def test_reopen_auto_signed_item(monkeypatch, tmp_path):
     assert c.post("/api/v1/medical/review/rev-nope/reopen", headers=H(adm)).status_code == 400
     # 未认证 → 401
     assert c.post(f"/api/v1/medical/review/{rid}/reopen").status_code in (401, 403)
+
+
+# ---- 开药审核 UX 问题1：「我的历史」须含本人作为审核人（reviewed_by）的记录 ----
+
+def test_history_includes_reviewed_by_records(monkeypatch, tmp_path):
+    """pharmacist 签发/驳回他人提交的 drug 项后，/review/history 响应必须包含该记录
+    （reviewed_by=pharm01、submitted_by=他人）——前端「我的历史」按
+    submitted_by=me OR reviewed_by=me 过滤的数据源即本响应。
+    服务端保持全量档案语义不变（非 admin 的 images 收窄边界不放宽）；
+    队列文件隔离 + 纯 JSON 模式（PG 在线也不触真库）。"""
+    from backend.core import medical_review as review
+    from backend.core import pg_store
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    monkeypatch.setattr(pg_store, "_pool", None)
+    c = _client()
+    doc = _login(c, "doctor01", "Med@2026")
+    ph = _login(c, "pharm01", "Med@2026")
+    H = lambda t: {"Authorization": "Bearer " + t}
+    rid = review.submit(agent="drug", question="西地那非和硝酸甘油能一起用吗",
+                        answer="禁忌联用，禁止合用", confidence=0.9,
+                        risk_reason="药物禁忌", submitted_by="doctor01")
+    review.resolve(rid, "approved", "pharm01", "药剂科核对无误")
+    # 审核人视角：响应含本人签发的记录（submitted_by=他人、reviewed_by=me）
+    items = c.get("/api/v1/medical/review/history", headers=H(ph)).json()["items"]
+    hit = next(i for i in items if i["id"] == rid)
+    assert hit["reviewed_by"] == "pharm01"
+    assert hit["submitted_by"] == "doctor01"
+    assert hit["status"] == "approved" and hit["resolved_at"]
+    # 提交医生视角：同一记录按 submitted_by=me 可见（既有语义不回退）
+    items_d = c.get("/api/v1/medical/review/history", headers=H(doc)).json()["items"]
+    assert any(i["id"] == rid and i["reviewed_by"] == "pharm01" for i in items_d)

@@ -588,7 +588,10 @@ function renderRail(){
     if(pendingGroup!==null){html+=`<div class="grp">${pendingGroup}</div>`;pendingGroup=null;}
     const act=(cur===it.k)?'active':'';
     let badge='';
-    if(it.k==='review'){
+    if(it.k==='rx'){  /* 开药审核 UX 问题2：rx 导航红点角标=本人被驳回（rejected）处方数；
+        点进「我的处方」清零（本地状态），进入 rx 视图/提交处方后 refreshRxBadge 按服务端真值刷新 */
+      if(rxRejectedCount)badge='<span class="tag red num" title="被驳回的处方">'+rxRejectedCount+'</span>';}
+    else if(it.k==='review'){
       /* 任务6：侧边栏审核中心彩色数字徽标——黄=我的待确认数（doctor/pharmacist；
          qc/admin=待核对数），红=待我意见的会诊数。进入审核中心/提交意见/知情确认后
          由 renderRail 刷新（updateConsultBadge 亦触发）。 */
@@ -997,7 +1000,10 @@ async function loadReviewMine(b){
     myConfirmItems=d.items||[]; reviewMe=d.me||''; reviewCount=myConfirmItems.length; renderRail();
     document.getElementById('purgeBtn').style.display='none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
-      if(h.ok)historyItems=(((await h.json()).items)||[]).filter(i=>i.submitted_by===reviewMe&&i.status!=='pending');}catch(e){}
+      /* 开药审核 UX 问题1：「我的历史」= 本人参与的记录（submitted_by=me OR reviewed_by=me）——
+         pharmacist 签发/驳回他人提交的 drug 项后历史不再为空；他人记录仍不显示（隔离边界不放宽，
+         服务端本就只对 admin 返回全量档案、其余角色 images 收窄）。 */
+      if(h.ok)historyItems=(((await h.json()).items)||[]).filter(i=>(i.submitted_by===reviewMe||i.reviewed_by===reviewMe)&&i.status!=='pending');}catch(e){}
     reviewItems=[];
     /* 本批次任务2：pharmacist（药剂科一票）额外拉取待核对清单并只保留 drug 项——
        药物高危结论需药剂科复核（后端 _REVIEW_ROLES 已放行 pharmacist 读 pending）；
@@ -1055,7 +1061,7 @@ function reviewRow(p,resolved){
       <div data-rthumbs="${esc(p.id)}"></div></td>
       <td class="num">${(p.confidence||0).toFixed(2)}</td><td><span class="chip warn"><span class="dot"></span>${esc(p.risk_reason||'高风险')}</span></td>
       <td class="num">${esc(p.submitted_by)}<div class="src">${fmtTs(p.ts)}</div></td>
-      <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')} ${esc(p.review_note||'')}</div>`+
+      <td>${resolved?(statusChip+`<div class="src">${esc(p.reviewed_by||'')}${p.resolved_at?' · '+fmtTs(p.resolved_at):''} ${esc(p.review_note||'')}</div>`+
         (auto&&canSign()&&p.submitted_by!==reviewMe?`<div style="margin-top:6px"><button class="btn sm secondary" onclick="reopenReview('${p.id}')">转人工复核</button></div>`:'')):
         (mine?'<span class="src">双控：你不能核对本人提交</span>':
         (canSignItem(p)?`<div style="display:inline-flex;gap:6px;vertical-align:middle"><button class="btn sm primary" onclick="resolve('${p.id}','approved')">通过签发</button>
@@ -1247,6 +1253,7 @@ function openReviewDetail(id){const p=(reviewItems||[]).concat(historyItems||[],
     <h4 style="margin-top:14px">AI 回答</h4><div class="txt md">${md(p.answer||'')}</div>
     ${imgsHtml}
     <h4 style="margin-top:14px">提交人</h4><div>${esc(p.submitted_by||'')}</div>
+    ${(p.reviewed_by&&p.status!=='pending')?`<h4 style="margin-top:14px">审核</h4><div>${esc(p.reviewed_by)}${p.resolved_at?' · '+fmtTs(p.resolved_at):''}${p.review_note?' · '+esc(p.review_note):''}</div>`:''}
     ${actions}`;
   openModal();document.getElementById('mBody').querySelector('input,button,textarea,[tabindex]')?.focus();}
 /* F3：影像放大查看（复用 #modal）。data URL 前缀校验：非 data:image/ 一律拒绝渲染 */
@@ -1289,6 +1296,7 @@ let rxEditId='', rxEditForced=false, rxEditReason='';  /* 改写重提模式：�
 let rxManualConfirm='';       /* 字典外手动加药：二次确认记忆（同药名再次点击才加入） */
 let rxTabCur='compose';       /* 工作台内 tab：compose=开药 / mine=我的处方 */
 let rxMineCache=[];           /* 我的处方缓存（GET /prescriptions/mine） */
+let rxRejectedCount=0;        /* 开药审核 UX 问题2：rx 导航红点角标=本人被驳回处方数（本地清零态，refreshRxBadge 按服务端刷新） */
 const RX_STATUS={pending_pharm:['待药剂科审核','warn'],approved:['已通过','ok'],
   rejected:['已驳回','bad'],draft:['草稿','']};  /* 状态徽章：黄/绿/红/灰 */
 async function loadRx(){
@@ -1298,6 +1306,14 @@ async function loadRx(){
     try{const d=await apiGet('/drug/dict');rxDictCache={drugs:d.drugs||[]};}catch(e){/* 静默：不阻塞开药主流程 */}}
   rxDictFilter(document.getElementById('rxDictSearch')?document.getElementById('rxDictSearch').value:'');
   renderRxBlock();renderRxSelected();
+  refreshRxBadge();  /* 开药审核 UX 问题2：切换到 rx 视图即刷新被驳回角标 */
+}
+async function refreshRxBadge(){  /* 开药审核 UX 问题2：rx 导航红点角标数据刷新——/prescriptions/mine 统计本人 rejected 处方数（仅 doctor：mine 为 doctor 专属端点，其他角色静默跳过） */
+  if(ROLE!=='doctor')return;
+  try{const d=await apiGet('/prescriptions/mine');
+    rxRejectedCount=(d.items||[]).filter(i=>i.status==='rejected').length;
+    if(!(cur==='rx'&&rxTabCur==='mine'))renderRail();  /* 正看着「我的处方」列表时保持清零态（点进即视为已读），离开后下次 renderRail 显示真值 */
+  }catch(e){/* 静默：角标刷新失败不干扰开药主流程 */}
 }
 function switchRxTab(t){  /* 工作台内 tab 切换（我的处方在进入时拉取最新） */
   rxTabCur=t;
@@ -1305,7 +1321,8 @@ function switchRxTab(t){  /* 工作台内 tab 切换（我的处方在进入时�
   document.getElementById('rxMinePane').style.display=(t==='mine')?'':'none';
   document.getElementById('rxTabCompose').className='btn sm '+(t==='compose'?'primary':'ghost');
   document.getElementById('rxTabMine').className='btn sm '+(t==='mine'?'primary':'ghost');
-  if(t==='mine')loadRxMine();
+  if(t==='mine'){rxRejectedCount=0;renderRail();loadRxMine();}  /* 开药审核 UX 问题2：点进「我的处方」清零被驳回角标（本地状态） */
+  else renderRail();
 }
 async function rxSuggest(){  /* ① 生成开药建议：POST /prescriptions/suggest */
   const caseText=document.getElementById('rxCase').value.trim();
@@ -1442,7 +1459,7 @@ async function rxSubmit(){  /* ⑥ 提交开药：新建 POST /prescriptions；�
       :await apiPost('/prescriptions',body);  /* 新建（直送药剂科 → pending_pharm） */
     if(item&&item.detail){const det=item.detail;throw new Error(Array.isArray(det)?det.map(x=>x.msg||x).join('；'):String(det));}
     toast(rxEditId?'处方已改写并重新送审':'处方已提交，等待药剂科审核');
-    rxResetCompose();switchRxTab('mine');
+    rxResetCompose();switchRxTab('mine');refreshRxBadge();  /* 开药审核 UX 问题2：提交/重提后刷新角标（重提使驳回数变化；正看「我的处方」时保持清零态） */
   }catch(e){toast('提交失败：'+e.message);}
   finally{btn.disabled=false;rxSyncSubmit();}
 }
@@ -1464,17 +1481,19 @@ async function loadRxMine(){
     el.innerHTML=rxMineCache.length?rxMineCache.map(rxMineCard).join(''):'<div class="card"><div class="src">暂无处方记录。</div></div>';
   }catch(e){el.innerHTML='<div class="card">⚠ 处方加载失败：'+esc(e.message)+'</div>';}
 }
-function rxMineCard(it){  /* 状态徽章色：pending_pharm 黄/approved 绿/rejected 红/draft 灰；rejected 显示药剂意见+重写 */
+function rxMineCard(it){  /* 状态徽章色：pending_pharm 黄/approved 绿/rejected 红/draft 灰；rejected 显示药剂意见+重写；开药审核 UX 问题3：签发/驳回卡显示审核人+操作时间（pharm_reviewed_at，旧记录无值则只显示审核人） */
   const st=RX_STATUS[it.status]||[it.status||'未知',''];
+  const rev=((it.status==='approved'||it.status==='rejected')&&it.pharm_reviewer)
+    ?`<div class="src" style="margin-top:6px">审核人 ${esc(it.pharm_reviewer)}${it.pharm_reviewed_at?' · '+fmtTs(it.pharm_reviewed_at):''}</div>`:'';
   const rej=it.status==='rejected'
-    ?`<div class="src" style="margin-top:6px;border-left:3px solid var(--danger);padding-left:8px">药剂科意见：${esc(it.pharm_opinion||'（未填写）')} · 审核人 ${esc(it.pharm_reviewer||'—')}</div>
+    ?`<div class="src" style="margin-top:6px;border-left:3px solid var(--danger);padding-left:8px">药剂科意见：${esc(it.pharm_opinion||'（未填写）')}</div>
       <button class="btn sm secondary" style="margin-top:6px" onclick="rxStartRewrite('${esc(it.id)}')">重写</button>`:'';
   return `<div class="card" data-rxid="${esc(it.id)}">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip ${st[1]}"><span class="dot"></span>${esc(st[0])}</span>
       <b class="num">${esc(it.id)}</b><span class="src">${fmtTs(it.created_at)} · 药品 ${esc(String((it.drugs||[]).length))} 种${it.forced_high_risk?' · <span style="color:var(--danger)">高危强制开立</span>':''}</span></div>
     <div class="txt" style="margin-top:6px">${esc((it.case_text||'').slice(0,80))}${(it.case_text||'').length>80?'…':''}</div>
     <ul class="feed" style="margin-top:4px">${(it.drugs||[]).map(d=>`<li><span class="e">${esc(d.name)}</span><span class="src">${esc(d.dose||'')} ${esc(d.freq||'')}</span></li>`).join('')}</ul>
-    ${rej}</div>`;
+    ${rev}${rej}</div>`;
 }
 function rxStartRewrite(id){  /* 重写：回填 case_text/drugs（含原联用理由）到工作台表单 → 提交走 rewrite 自动重提 */
   const it=(rxMineCache||[]).find(x=>x.id===id);if(!it){toast('未找到该处方');return;}
@@ -2363,7 +2382,8 @@ function boot(u,r,dept){ROLE=r||'doctor';ME_DEPT=dept||'';setWho(u,r);showLogin(
   const dp=document.getElementById('qcDept');
   if(dp)dp.textContent='当前科室：'+(ME_DEPT||'—')+'（服务端绑定账号科室'+(ME_DEPT?'':'，请联系管理员设置')+'）';
   const hk=hashView();go(hk||'overview');
-  if(hk!=='review')loadReview();}  /* hash 恢复 review 时 go('review') 已加载，避免双请求 */
+  if(hk!=='review')loadReview();  /* hash 恢复 review 时 go('review') 已加载，避免双请求 */
+  refreshRxBadge();}  /* 开药审核 UX 问题2：登录即刷新被驳回处方角标（无需先进 rx 视图） */
 function beforeUnloadGuard(e){  /* 防误关丢失未发送内容：聊天输入或质控字段任一有内容时拦截；发送/拆分清空后自然放行（具名函数供 logout 移除，FIND-09） */
   const qcDirty=[...document.querySelectorAll('[id^="qcf_"]')].some(el=>el.value.trim());
   if(document.getElementById('input').value.trim()||qcDirty){e.preventDefault();e.returnValue='';}

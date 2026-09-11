@@ -100,20 +100,23 @@ def _h(t):
 # ---- 阶段2.1：状态机 + 非法流转 ----
 
 def test_state_machine_happy_path(rx_env):
-    """create → pending_pharm；approve/reject 合法流转并留痕 reviewer/opinion。"""
+    """create → pending_pharm；approve/reject 合法流转并留痕 reviewer/opinion/审核时间。"""
     r1 = rx.create(doctor="doctor01", dept="内科", case_text=CASE,
                    drugs=[{"name": "华法林", "dose": "2.5mg", "freq": "qd"}])
     assert r1["id"].startswith("rx-") and r1["status"] == "pending_pharm"
     assert r1["drugs"][0]["note"] == "" and r1["forced_high_risk"] is False
     assert r1["pharm_reviewer"] is None and r1["pharm_opinion"] is None
+    assert r1["pharm_reviewed_at"] is None  # 开药审核 UX 问题3：审核时间随签发/驳回落值
     ok = rx.approve(r1["id"], "pharm01", "相互作用已核对，同意")
     assert ok["status"] == "approved" and ok["pharm_reviewer"] == "pharm01"
     assert ok["pharm_opinion"] == "相互作用已核对，同意"
+    assert ok["pharm_reviewed_at"], "签发须留审核操作时间（pharm_reviewed_at）"
     r2 = rx.create(doctor="doctor01", case_text=CASE,
                    drugs=[{"name": "华法林"}], contraindication_reason="test",
                    forced_high_risk=True)
     rej = rx.reject(r2["id"], "pharm01", "高危联用，驳回")
     assert rej["status"] == "rejected" and rej["pharm_reviewer"] == "pharm01"
+    assert rej["pharm_reviewed_at"], "驳回须留审核操作时间（pharm_reviewed_at）"
     assert rej["forced_high_risk"] is True
 
 
@@ -157,6 +160,7 @@ def test_rewrite_rejected_to_draft_owner_only(rx_env):
     assert len(d["drugs"]) == 2
     s = rx.submit(r["id"], "doctor01")
     assert s["status"] == "pending_pharm" and s["pharm_reviewer"] is None
+    assert s["pharm_reviewed_at"] is None, "重提清空上一轮审核留痕（reviewer/opinion/时间）"
 
 
 def test_domain_validation_errors(rx_env):

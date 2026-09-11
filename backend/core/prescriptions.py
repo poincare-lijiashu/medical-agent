@@ -120,6 +120,7 @@ def create(*, doctor: str, dept: str = "", case_text: str, drugs: list[dict],
         "status": "pending_pharm",
         "pharm_reviewer": None,
         "pharm_opinion": None,
+        "pharm_reviewed_at": None,  # 药剂科审核操作时间（approve/reject 落值；重提清零，留痕用）
         "created_at": now,
         "updated_at": now,
         "forced_high_risk": bool(forced_high_risk),
@@ -155,6 +156,7 @@ def approve(rx_id: str, pharmacist: str, opinion: str = "") -> dict:
         rx["status"] = "approved"
         rx["pharm_reviewer"] = pharmacist.strip()
         rx["pharm_opinion"] = str(opinion or "").strip()
+        rx["pharm_reviewed_at"] = now
         rx["updated_at"] = now
 
     return _mutate(rx_id, _do)
@@ -171,6 +173,7 @@ def reject(rx_id: str, pharmacist: str, opinion: str = "") -> dict:
         rx["status"] = "rejected"
         rx["pharm_reviewer"] = pharmacist.strip()
         rx["pharm_opinion"] = str(opinion or "").strip()
+        rx["pharm_reviewed_at"] = now
         rx["updated_at"] = now
 
     return _mutate(rx_id, _do)
@@ -213,6 +216,7 @@ def submit(rx_id: str, doctor: str) -> dict:
         rx["status"] = "pending_pharm"
         rx["pharm_reviewer"] = None
         rx["pharm_opinion"] = None
+        rx["pharm_reviewed_at"] = None  # 旧记录可能无此键（dict 赋值即补齐），重提清空上一轮审核留痕
         rx["updated_at"] = now
 
     return _mutate(rx_id, _do)

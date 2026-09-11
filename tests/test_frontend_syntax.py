@@ -372,3 +372,35 @@ def test_phase3_rx_frontend_markers_present():
         "if(k==='drug')loadDrugRejections();",
     ):
         assert gone not in html, f"药物助手独立入口应已删除，仍残留：{gone}"
+
+
+# ---------- 开药审核 UX 三修复标记锁（追加，不改动既有断言） ----------
+
+def test_rx_review_ux_fixes_frontend_markers_present():
+    """开药审核 UX 三修复标记锁（防回退）：
+    - 问题1：pharmacist「我的历史」= 本人参与的记录（submitted_by=me OR reviewed_by=me
+      前端过滤；他人记录仍不显示，数据隔离边界不放宽）；
+    - 问题2：rx 导航红点角标=本人被驳回处方数（refreshRxBadge 从 /prescriptions/mine 统计；
+      切换 rx 视图/提交处方/登录后刷新；点进「我的处方」本地清零）；
+    - 问题3：处方卡与核对详情显示审核人+操作时间（pharm_reviewed_at / resolved_at），
+      审核 history 行同理带操作时间。"""
+    html = FRONTEND.read_text(encoding="utf-8")
+    for marker in (
+        # 问题1：「我的历史」过滤含本人作为审核人的记录
+        "i.submitted_by===reviewMe||i.reviewed_by===reviewMe",
+        # 问题2：rx 被驳回处方红点角标 + 刷新/清零时机
+        "function refreshRxBadge(", "rxRejectedCount",
+        'title="被驳回的处方"',                       # 红点角标语义（tag red num）
+        "rxRejectedCount=0;renderRail();loadRxMine();",  # 点进「我的处方」清零
+        # 问题3：审核人 + 操作时间留痕显示（处方卡 / 核对详情 / history 行）
+        "pharm_reviewed_at", "审核人 ",
+        "' · '+fmtTs(p.resolved_at)",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = _extract_fn(html, "switchRxTab")
+    assert "rxRejectedCount=0" in fn, "switchRxTab(mine) 必须本地清零被驳回角标"
+    badge = _extract_fn(html, "refreshRxBadge")
+    assert "prescriptions/mine" in badge and "rejected" in badge, \
+        "角标数据源必须为 /prescriptions/mine 的 rejected 统计（无需新端点）"
+    assert "ROLE!=='doctor'" in badge, "角标仅 doctor 刷新（mine 为 doctor 专属，避免 403 噪音）"
+    assert html.count("refreshRxBadge()") >= 3, "切换 rx 视图/提交处方/登录后均须刷新角标"
