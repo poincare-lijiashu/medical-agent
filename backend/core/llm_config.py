@@ -67,6 +67,17 @@ def load_config() -> dict:
         return _load_raw()
 
 
+def _invalidate_llm_factory_cache() -> None:
+    """任务3 评测行动项：provider 增删/激活/停用后立即失效 LLMFactory 客户端缓存。
+
+    此前失效钩子只在 admin 路由层（medical_router._reset_llm_cache）——绕过路由
+    直接调用本模块更新函数的路径（脚本/内部调用）不会失效，get_llm 仍复用旧
+    api_key 的实例，key 热更新对已构造客户端不生效。函数内延迟导入避免与
+    llm_factory 的模块级循环导入（llm_factory 顶部 import 本模块的 active_provider）。"""
+    from backend.core.llm_factory import LLMFactory
+    LLMFactory._instances.clear()  # 幂等：路由层 _reset_llm_cache 再次清空为 no-op
+
+
 def save_config(cfg: dict) -> None:
     with _lock:
         _save_raw(cfg)
@@ -142,6 +153,7 @@ def add_provider(kind: str, api_format: str, base_url: str, model_id: str,
             "extra_params": (extra_params or "").strip(),
         })
         _save_raw(cfg)
+        _invalidate_llm_factory_cache()  # 任务3：新增 provider 后旧客户端缓存立即失效
     return pid
 
 
@@ -158,6 +170,7 @@ def remove_provider(kind: str, pid: str) -> bool:
         if cfg[kind]["active"] == pid:
             cfg[kind]["active"] = None
         _save_raw(cfg)
+        _invalidate_llm_factory_cache()  # 任务3：删除（含激活项被删）后旧客户端缓存立即失效
         return True
 
 
@@ -171,6 +184,7 @@ def activate(kind: str, pid: str) -> dict:
             if p.get("id") == pid:
                 cfg[kind]["active"] = pid
                 _save_raw(cfg)
+                _invalidate_llm_factory_cache()  # 任务3：切换激活后旧模型实例立即失效
                 return dict(p)
         raise ValueError("未找到该 provider")
 
@@ -183,6 +197,7 @@ def deactivate(kind: str) -> None:
             raise ValueError("kind 需为 chat 或 vision")
         cfg[kind]["active"] = None
         _save_raw(cfg)
+        _invalidate_llm_factory_cache()  # 任务3：停用（回落 .env 内置配置）后旧实例立即失效
 
 
 def active_provider(kind: str) -> dict | None:
