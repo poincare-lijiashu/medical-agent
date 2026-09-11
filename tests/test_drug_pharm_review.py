@@ -7,7 +7,9 @@
 - 药剂科一票：/review/{rid}/resolve 按 agent 分流——drug → (pharmacist, admin)
   （问题4 收窄注明：原 (qc, admin, pharmacist)——质控科只管病例，drug 签字权收窄为
   药剂科+管理员）；其它 agent → (qc, admin)。双控仍强制（审核人≠提交人）；翻案维持 qc/admin。
-- pending 可见性：pharmacist 在 _REVIEW_ROLES 白名单内（既有），drug 待核对项可见。
+- pending 可见性：pharmacist 在 _REVIEW_ROLES 白名单内（既有），drug 待核对项可见；
+  问题4 彻底收窄（用户拍板）：/review/pending 对 qc 剔除 agent=drug——qc 界面彻底
+  不见 drug 项（含旧遗留），pharmacist/admin 不变（药剂科本职 + 管理员兜底审核权）。
 """
 from fastapi.testclient import TestClient
 
@@ -196,14 +198,25 @@ def test_pharmacist_reopen_still_forbidden(monkeypatch, tmp_path):
     assert c.post(f"/api/v1/medical/review/{rid}/reopen", headers=_h(ph)).status_code == 403
 
 
-def test_pharmacist_pending_visibility_for_drug(monkeypatch, tmp_path):
-    """pending 可见性：pharmacist 可见 drug 高危待核对项（药剂科工作清单的数据源）。"""
+def test_pending_visibility_qc_excludes_drug_pharm_admin_keep(monkeypatch, tmp_path):
+    """pending 可见性（问题4 彻底收窄更新，锁定新语义）：pharmacist/admin 可见 drug
+    高危待核对项（药剂科本职 + 管理员兜底审核权，不变）；qc 响应剔除 agent=drug——
+    qc 界面彻底不见 drug 项（含旧遗留），仅可见其它助手高危项。"""
     c, _ = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     doc = _login(c, "doctor01")
-    rid = c.post("/api/v1/medical/drug/ask", headers=_h(doc),
-                 json={"question": HIGH_RISK_Q}).json()["review_id"]
+    rid_drug = c.post("/api/v1/medical/drug/ask", headers=_h(doc),
+                      json={"question": HIGH_RISK_Q}).json()["review_id"]
+    rid_other = review.submit(agent="literature", question="文献核对项", answer="内容",
+                              confidence=0.5, risk_reason="低置信", submitted_by="doctor01")
     ph = _login(c, "pharm01")
-    r = c.get("/api/v1/medical/review/pending", headers=_h(ph))
-    assert r.status_code == 200
-    assert rid in [i["id"] for i in r.json()["pending"]]
+    adm = _login(c, "admin01")
+    qc = _login(c, "qc01")
+    for tok in (ph, adm):  # pharmacist/admin：drug + 非 drug 均可见（语义不变）
+        ids = [i["id"] for i in
+               c.get("/api/v1/medical/review/pending", headers=_h(tok)).json()["pending"]]
+        assert rid_drug in ids and rid_other in ids
+    ids_qc = [i["id"] for i in
+              c.get("/api/v1/medical/review/pending", headers=_h(qc)).json()["pending"]]
+    assert rid_other in ids_qc, "qc 仍可见其它助手高危项"
+    assert rid_drug not in ids_qc, "qc 界面彻底不见 drug 项（含旧遗留）"

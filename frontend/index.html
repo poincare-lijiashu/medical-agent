@@ -995,7 +995,9 @@ async function loadReview(){
     reviewItems=d.pending; reviewMe=d.me; reviewCount=d.pending.length; renderRail();
     document.getElementById('purgeBtn').style.display=(ROLE==='admin')?'inline-flex':'none';
     try{const h=await fetch('/api/v1/medical/review/history',{headers:auth()});
-      if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending');}catch(e){}
+      /* 问题4 彻底收窄：qc 历史过滤 drug（旧遗留记录不显示，界面彻底不见 drug 项；
+         pharmacist 历史保留 drug——药剂科工作记录；admin 全量保留）。 */
+      if(h.ok)historyItems=((await h.json()).items||[]).filter(i=>i.status!=='pending'&&!(ROLE==='qc'&&i.agent==='drug'));}catch(e){}
     rxPendingItems=[];  /* 问题4：qc 无开药审核权（/prescriptions/pending 403），开药待审区不渲染（不拉取不留旧值） */
     if(ROLE==='admin'){
       try{const xp=await fetch('/api/v1/medical/prescriptions/pending',{headers:auth()});  /* 问题4 收权后仅 admin 拉取开药待审区（qc 403） */

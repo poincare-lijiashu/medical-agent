@@ -471,10 +471,14 @@ def test_rx_round2_reviewed_history_markers_present():
 
 def test_rx_round2_qc_scope_markers_present():
     """问题4 标记锁：qc 不审核药剂——①开药待审区仅 pharmacist/admin 渲染
-    （qc 登录不渲染开药待审区）；②qc/admin 路径不拉取开药待审队列（403 不留旧值）。"""
+    （qc 登录不渲染开药待审区）；②qc/admin 路径不拉取开药待审队列（403 不留旧值）；
+    ③qc 历史过滤 agent=drug（问题4 彻底收窄：qc 界面彻底不见 drug 项，旧遗留不显示；
+    pharmacist 历史保留药剂科工作记录、admin 全量，均不受影响）。"""
     html = FRONTEND.read_text(encoding="utf-8")
     fn = _extract_fn(html, "rxPendingSection")
     assert "ROLE!=='pharmacist'&&ROLE!=='admin'" in fn, \
         "开药待审区必须仅 pharmacist/admin 渲染（qc/doctor 恒空串）"
     assert "if(ROLE==='admin'){" in html, \
         "qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）"
+    assert "!(ROLE==='qc'&&i.agent==='drug')" in html, \
+        "qc 历史列表须过滤 drug 旧遗留记录（pharmacist/admin 历史不受影响）"

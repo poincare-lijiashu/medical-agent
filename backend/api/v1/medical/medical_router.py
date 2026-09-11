@@ -1208,7 +1208,8 @@ async def consult_close(cid: str, user: dict = Depends(require_user)):
 # 且 drug 豁免留痕模式——高危恒在 pending，药剂科任何一人可签发/驳回）；翻案仍仅 qc/admin。
 # 问题4 收窄（用户拍板）：drug 待核对签字权与处方审核权 = **pharmacist+admin**——质控科
 # （qc）只管病例质控，不再参与药物核对与处方审核（_DRUG_RESOLVE_ROLES 移除 qc、
-# /prescriptions/* 审核端点移除 qc）；qc 仍可读 review/pending 处理其它助手高危项。
+# /prescriptions/* 审核端点移除 qc）；qc 仍可读 review/pending 处理其它助手高危项，
+# 且响应对 qc 剔除 agent=drug（qc 界面彻底不见 drug 项，含旧遗留；pharmacist/admin 不变）。
 _REVIEW_ROLES = ("qc", "admin", "doctor", "pharmacist")
 _RESOLVE_ROLES = ("qc", "admin")                       # 非 drug 类签字权（含翻案）
 _DRUG_RESOLVE_ROLES = ("admin", "pharmacist")    # drug 类签字权（问题4 收窄：药剂科一票+管理员，qc 移除）
@@ -1217,6 +1218,8 @@ _DRUG_RESOLVE_ROLES = ("admin", "pharmacist")    # drug 类签字权（问题4 �
 @router.get("/review/pending")
 async def review_pending(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     items = await asyncio.to_thread(review.pending)
+    if user.get("role", "") == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
+        items = [i for i in items if i.get("agent") != "drug"]  # drug 审核权=pharmacist/admin
     await asyncio.to_thread(get_audit_logger().write, event_type="review", action="list_pending",
                             actor=user.get("username", "system"),
                             payload={"n": len(items), "role": user.get("role", "")})
