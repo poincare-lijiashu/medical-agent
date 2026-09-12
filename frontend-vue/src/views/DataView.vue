@@ -395,12 +395,14 @@ async function flagGo() {
 // ---- 用户管理：新增 / 重置密码 / 删除（输入用户名确认防误删） ----
 const nu = reactive({ name: '', role: 'doctor', dept: '', pass: '' })
 // 整改轮 B 任务3（科室-角色归属模型）：选角色 → 科室下拉联动过滤（与后端 validate_role_dept
-// 同规则）：pharmacist 只见药剂科；qc 只见质控科/医务处；doctor 隐藏职能部门；admin 不限。
+// 同规则）：pharmacist 只见药剂科；qc 只见质控科/医务处；doctor 隐藏职能部门；
+// F4 收口：admin 只见医务处（与后端 422 校验同规则联动）。
 const FUNC_DEPTS = ['药剂科', '医务处', '质控科', '病案室']
 const deptOptions = computed(() => {
   const all = deptList.value || []
   if (nu.role === 'pharmacist') return all.filter((n) => n === '药剂科')
   if (nu.role === 'qc') return all.filter((n) => n === '质控科' || n === '医务处')
+  if (nu.role === 'admin') return all.filter((n) => n === '医务处')
   if (nu.role === 'doctor') return all.filter((n) => !FUNC_DEPTS.includes(n))
   return all
 })

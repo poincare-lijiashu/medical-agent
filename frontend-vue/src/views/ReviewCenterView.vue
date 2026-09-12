@@ -42,10 +42,14 @@
       />
     </div>
 
-    <div v-if="loadErr" class="page-body"><el-card shadow="never"><el-alert type="error" :closable="false" show-icon :title="loadErr" /></el-card></div>
+    <!-- F1：加载失败错误条与列表区并存（不再 v-if/v-else 顶掉列表——429/网络失败时
+         列表区整体消失=「假空态」根因）；错误详情在此，列表/空态照常渲染 -->
+    <el-card v-if="loadErr" shadow="never" class="page-body" style="margin-bottom: 10px" data-testid="review-load-error">
+      <el-alert type="error" :closable="false" show-icon :title="loadErr" />
+    </el-card>
 
     <!-- ============ 药品字典 / 相互作用规则 tab（pharmacist） ============ -->
-    <div v-else-if="tab === 'drugdict'" class="page-body"><DrugDictEditor /></div>
+    <div v-if="tab === 'drugdict'" class="page-body"><DrugDictEditor /></div>
     <div v-else-if="tab === 'drugrules'" class="page-body"><DrugRulesEditor /></div>
 
     <!-- ============ 病例库 tab（qc/admin） ============ -->
@@ -162,6 +166,11 @@
 
     <!-- ============ 待处理 / 历史记录 ============ -->
     <div v-else class="page-body" v-loading="loading">
+      <!-- F1：待核对计数头（与侧边栏角标同源对账，服务端真值在页面上可见） -->
+      <el-card v-if="tab === 'pending'" shadow="never" style="border-left: 3px solid var(--accent)" data-testid="pending-count">
+        <b>共 <span class="num">{{ pendItems.length }}</span> 条{{ isMine ? (isPh ? '待办（待审处方）' : '待确认') : '待核对' }}</b>
+        <span class="src" style="margin-left: 8px">{{ isMine ? '与侧边栏角标同源。' : (badges.cfgFull ? '与侧边栏角标同源；留痕模式下 AI 已自动签发项在此只读留档。' : '与侧边栏角标同源；需第二名人员签发/驳回。') }}</span>
+      </el-card>
       <!-- 开药待审区（pharmacist/admin 专属数据源；qc/doctor 403 不拉取不渲染） -->
       <template v-if="tab === 'pending' && (role === 'pharmacist' || role === 'admin')">
         <el-card shadow="never" style="border-left: 3px solid var(--accent)" data-testid="rx-pending-section">
@@ -200,7 +209,8 @@
       <template v-if="tab === 'pending'">
         <el-card v-if="!pendItems.length" shadow="never">
           <div class="empty-box">
-            <div>{{ isMine ? (isPh ? '暂无待办（开药待审）。' : '没有您的待确认项。') : '没有待核对项。' }}</div>
+            <!-- F1：加载失败时空态主文案不再谎报「没有待核对项」（假空误导根因之一） -->
+            <div>{{ loadErr ? '列表加载失败（详见上方错误提示），请点右上角「刷新」重试。' : (isMine ? (isPh ? '暂无待办（开药待审）。' : '没有您的待确认项。') : '没有待核对项。') }}</div>
             <div class="lead" style="margin: 8px auto 0">{{ isMine
               ? (filterQ ? '无匹配结果，可调整筛选词。' : (isPh
                 ? '开药工作台直送的处方会出现在这里，由您签发/驳回；药品字典与相互作用规则在上方标签页维护。'
@@ -430,7 +440,7 @@
 // 状态语义对齐 legacy：reviewItems/myConfirmItems/historyItems/rxPendingItems/rxHistoryItems/
 // reviewMe/reviewFilterQ/分页（12/页）/seq 守卫；canSign=(qc||admin)&&!cfgFull；
 // canSignItem: drug→pharmacist/admin（问题4 收权），其它 agent→canSign。
-import { computed, defineOptions, onMounted, reactive, ref } from 'vue'
+import { computed, defineOptions, onActivated, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api'
 import { md, fmtTs, detailText, splitConsultQuestion, splitAiByDept } from '../utils/assist'
@@ -570,6 +580,13 @@ async function load() {
   }
 }
 onMounted(load)
+// F1：KeepAlive 缓存复活（切路由回来）时重拉——保证列表数据新鲜，防陈旧/空列表误导。
+// 首次 activated 由 onMounted 覆盖（同轮不重复拉取），仅缓存复活时触发。
+const activatedOnce = ref(false)
+onActivated(() => {
+  if (activatedOnce.value) load()
+  activatedOnce.value = true
+})
 
 // ---- 待处理列表（筛选+分页）----
 const pendItems = computed(() => {

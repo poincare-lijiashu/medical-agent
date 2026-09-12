@@ -59,3 +59,40 @@ def test_npmrc_mirror_lock():
     assert npmrc.is_file()
     content = npmrc.read_text(encoding="utf-8")
     assert "registry=https://registry.npmmirror.com" in content
+
+
+# ---- F5：SPA fallback（vue-router createWebHistory 深链刷新 404 修复）----
+
+def test_spa_fallback_deep_links_serve_shell():
+    """/review /rx /kb 等前端路由深链刷新 → 200 直出新壳（不再 404），vue-router 接管。"""
+    for path in ("/review", "/rx", "/kb", "/overview", "/literature", "/mdt", "/qc", "/data"):
+        r = client.get(path)
+        assert r.status_code == 200, f"深链 {path} 应 SPA fallback 直出新壳"
+        assert "/assets/" in r.text and 'id="app"' in r.text, f"深链 {path} 应返回 Vue 新壳 HTML"
+
+
+def test_api_prefix_never_falls_back():
+    """API 前缀不回退：/api/v1/nonexistent 仍 404 JSON（不吐 HTML 壳，前端误调用可辨）。"""
+    r = client.get("/api/v1/nonexistent")
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json().get("detail") == "Not Found"
+
+
+def test_spa_fallback_excluded_prefixes_stay_404():
+    """排除清单前缀不回退 HTML 壳：healthz/readyz 有显式路由；/js 等不存在前缀 404 JSON。"""
+    assert client.get("/healthz").status_code == 200       # 显式路由优先不受 catch-all 影响
+    assert client.get("/readyz").status_code == 200
+    r = client.get("/js/app.js")                            # /js 历史残留前缀：404 JSON 不回壳
+    assert r.status_code == 404 and r.headers["content-type"].startswith("application/json")
+
+
+def test_spa_fallback_assets_still_served():
+    """/assets 静态资源在 catch-all 之下仍 200（文件存在性直出，等价原 StaticFiles 行为）。"""
+    idx = VUE_INDEX.read_text(encoding="utf-8")
+    import re
+
+    m = re.search(r'src="(/assets/[^"]+\.js)"', idx)
+    assert m
+    r = client.get(m.group(1))
+    assert r.status_code == 200, f"catch-all 之后静态资源必须仍可达：{m.group(1)}"

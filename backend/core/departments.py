@@ -38,7 +38,7 @@ def validate_role_dept(role: str, dept: str) -> None:
     - pharmacist → dept 必须为「药剂科」（药师编制在药剂科）；
     - qc → dept 必须 ∈ {质控科, 医务处}（质控编制在质控科/医务处）；
     - doctor → dept 不得为职能部门（临床科室只有医生）；
-    - admin → 不限（管理岗跨科室）。
+    - admin → dept 必须为「医务处」（F4 收口：管理岗归属医务处，不再跨科室放任）。
     违反抛 ValueError（admin/users 端点转 422 中文文案）。"""
     d = (dept or "").strip()
     if role == "pharmacist" and d != "药剂科":
@@ -47,6 +47,8 @@ def validate_role_dept(role: str, dept: str) -> None:
         raise ValueError("质控员（qc）所属科室必须为「质控科」或「医务处」")
     if role == "doctor" and d in FUNCTIONAL_DEPARTMENTS:
         raise ValueError("医生（doctor）所属科室须为临床科室，不能是职能部门（药剂科/质控科/医务处/病案室）")
+    if role == "admin" and d != "医务处":
+        raise ValueError("admin 账号应归属医务处")
 
 
 def _load_json() -> dict:

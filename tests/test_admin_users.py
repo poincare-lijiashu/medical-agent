@@ -107,9 +107,10 @@ def test_deleted_user_token_revoked_immediately(monkeypatch, tmp_path):
 # ---- 整改轮 B 任务3：科室-角色归属模型（建号校验矩阵；存量账号不追溯） ----
 
 def test_admin_create_user_role_dept_matrix(monkeypatch, tmp_path):
-    """三类角色 × 合规/违规建号矩阵（整改轮 B 任务3）：
-    - 合规：doctor→临床科室 / pharmacist→药剂科 / qc→质控科|医务处 均 200；admin 不限；
-    - 违规：pharmacist≠药剂科、qc∉{质控科,医务处}、doctor∈职能部门 → 422 中文文案且不入库；
+    """三类角色 × 合规/违规建号矩阵（整改轮 B 任务3；F4 收口 admin 限医务处）：
+    - 合规：doctor→临床科室 / pharmacist→药剂科 / qc→质控科|医务处 / admin→医务处 均 200；
+    - 违规：pharmacist≠药剂科、qc∉{质控科,医务处}、doctor∈职能部门、
+      admin≠医务处 → 422 中文文案且不入库；
     - seed 存量账号（如 qc01=医务处、admin01=医务处）不受新校验影响（不追溯）。"""
     c = _client(monkeypatch, tmp_path)
     adm = _login(c, "admin01", "Med@2026")
@@ -125,7 +126,8 @@ def test_admin_create_user_role_dept_matrix(monkeypatch, tmp_path):
     assert _mk("ph_ok", "pharmacist", "药剂科").status_code == 200
     assert _mk("qc_ok1", "qc", "质控科").status_code == 200
     assert _mk("qc_ok2", "qc", "医务处").status_code == 200
-    assert _mk("adm_ok", "admin", "病案室").status_code == 200, "admin 不限（职能部门亦可）"
+    assert _mk("adm_ok", "admin", "医务处").status_code == 200, "F4：admin 合规归属=医务处"
+    assert get_user("adm_ok")["dept"] == "医务处"
     # 违规矩阵 → 422 中文文案
     r = _mk("bad_ph1", "pharmacist", "内科")
     assert r.status_code == 422 and "药剂科" in r.json()["detail"]
@@ -139,8 +141,14 @@ def test_admin_create_user_role_dept_matrix(monkeypatch, tmp_path):
     assert r.status_code == 422 and "临床科室" in r.json()["detail"]
     r = _mk("bad_doc2", "doctor", "病案室")
     assert r.status_code == 422 and "临床科室" in r.json()["detail"]
+    # F4：admin × 违规科室 → 422「admin 账号应归属医务处」
+    r = _mk("bad_adm1", "admin", "病案室")
+    assert r.status_code == 422 and "admin 账号应归属医务处" in r.json()["detail"]
+    r = _mk("bad_adm2", "admin", "")
+    assert r.status_code == 422 and "admin 账号应归属医务处" in r.json()["detail"]
     # 违规请求一律不入库
-    for u in ("bad_ph1", "bad_ph2", "bad_qc1", "bad_qc2", "bad_doc1", "bad_doc2"):
+    for u in ("bad_ph1", "bad_ph2", "bad_qc1", "bad_qc2", "bad_doc1", "bad_doc2",
+              "bad_adm1", "bad_adm2"):
         assert get_user(u) is None, f"违规建号不得落库：{u}"
     # 存量账号不追溯：seed 的 qc01（医务处）/admin01（医务处）登录不受影响
     assert c.post("/api/v1/auth/login", json={"username": "qc01", "password": "Med@2026"}).status_code == 200

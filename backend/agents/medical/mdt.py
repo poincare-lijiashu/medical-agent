@@ -24,7 +24,7 @@ from backend.agents.medical.literature.nodes import (
     _ground_citations,
     _parse_json,
 )
-from backend.core.llm_factory import get_llm, get_structured_llm, get_vl_llm
+from backend.core.llm_factory import get_llm, get_structured_llm, get_vl_llm, structured_with_fallback
 from backend.core.logger import get_logger
 from backend.core.medical_drug import check as drug_check
 from backend.core.medical_kb import search_hybrid
@@ -229,12 +229,19 @@ async def pick_departments(question: str, images: list[str] | None = None) -> di
         try:
             if imgs:
                 # 有图：VL 视觉模型读影像 + 组队 prompt（结构化输出 schema 与文本路径一致）
-                llm = get_vl_llm().with_structured_output(ConsultTeam, method="function_calling")
-                d = await llm.ainvoke([HumanMessage(content=_vl_content(
-                    imgs, _SYS + "\n" + prompt + _VL_TEAM_NOTE))])
+                # F3：经 structured_with_fallback 包装——GLM thinking 模型 400
+                # 'Thinking mode does not support this tool_choice' 时自动降级 json_mode 重试
+                vl = get_vl_llm()
+                d = await structured_with_fallback(
+                    vl.with_structured_output(ConsultTeam, method="function_calling"),
+                    ConsultTeam, None, base_llm_fn=lambda: vl,
+                    messages=[HumanMessage(content=_vl_content(
+                        imgs, _SYS + "\n" + prompt + _VL_TEAM_NOTE))])
             else:
-                llm = get_structured_llm("medical_literature", ConsultTeam)
-                d = await llm.ainvoke([HumanMessage(content=_SYS + "\n" + prompt)])
+                # F3：同上——文本路径结构化输出统一走 thinking-400 降级兜底
+                d = await structured_with_fallback(
+                    get_structured_llm("medical_literature", ConsultTeam), ConsultTeam,
+                    _SYS + "\n" + prompt, base_llm_fn=lambda: get_llm("medical_literature"))
             raw = [str(x).strip() for x in (getattr(d, "departments", None) or []) if str(x).strip()]
             reasoning = (getattr(d, "reasoning", "") or "")[:200]
         except Exception as exc:  # noqa: BLE001 —— 单次决策异常不终局，重试一次再定

@@ -29,7 +29,7 @@ from backend.agents.medical.literature.prompts import (
 )
 from backend.agents.medical.literature.state import LiteratureState
 from backend.config import settings
-from backend.core.llm_factory import get_llm, get_structured_llm
+from backend.core.llm_factory import get_llm, get_structured_llm, structured_with_fallback
 from backend.core.logger import get_logger
 from backend.core.medical_audit import get_audit_logger
 from backend.core.medical_kb import search_hybrid
@@ -184,8 +184,11 @@ async def refine_node(state: LiteratureState) -> dict:
 
     decision = None
     try:
-        llm = get_structured_llm("medical_literature", AgenticDecision)
-        decision = await llm.ainvoke([HumanMessage(content=LITERATURE_SYSTEM + "\n" + prompt)])
+        # F3：GLM thinking 模型对 function_calling 结构化输出 400（tool_choice 互斥）时
+        # 自动降级 json_mode 重试——literature.refine_llm_failed 与 mdt 同源问题一并覆盖
+        decision = await structured_with_fallback(
+            get_structured_llm("medical_literature", AgenticDecision), AgenticDecision,
+            LITERATURE_SYSTEM + "\n" + prompt, base_llm_fn=lambda: get_llm("medical_literature"))
     except Exception as exc:  # noqa: BLE001 —— 决策异常 fail-safe：视为 giveup，绝不让异常冒泡
         logger.warning("literature.refine_llm_failed", error=str(exc)[:120])
 

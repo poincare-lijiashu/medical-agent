@@ -152,6 +152,9 @@ def test_validate_role_dept_matrix():
     for f in dept_mod.FUNCTIONAL_DEPARTMENTS:
         with pytest.raises(ValueError, match="临床科室"):
             dept_mod.validate_role_dept("doctor", f)
-    # admin 不限
-    dept_mod.validate_role_dept("admin", "病案室")
-    dept_mod.validate_role_dept("admin", "")
+    # admin → 必须医务处（F4 收口：管理岗归属医务处）
+    dept_mod.validate_role_dept("admin", "医务处")
+    with pytest.raises(ValueError, match="admin 账号应归属医务处"):
+        dept_mod.validate_role_dept("admin", "病案室")
+    with pytest.raises(ValueError, match="admin 账号应归属医务处"):
+        dept_mod.validate_role_dept("admin", "")

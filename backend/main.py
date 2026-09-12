@@ -6,7 +6,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -252,6 +252,31 @@ async def vue_app_index():
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def index():
+    return _vue_index_response()
+
+
+# ---- SPA fallback（F5）：vue-router createWebHistory 深链刷新 404 修复 ----
+# 现象：StaticFiles(html=True) 对 /review、/rx 等前端路由子路径查不到同名文件 → 404，
+# 刷新/直链全挂。修复：catch-all 路由回落 dist/index.html（前端路由接管）。
+# 排除清单（这些前缀不回退到 HTML 壳，保持原语义）：/api（API 未匹配路径仍 404 JSON）、
+# /assets（静态资源——本路由注册先于 StaticFiles mount，静态文件在此做存在性检查直出，
+# 行为与原 mount 等价）、/healthz /readyz /metrics、/docs /redoc /openapi.json、
+# /js（历史残留不存在）、/app（已有显式路由与 mount，深链 /app/xxx 非法路径 404 JSON）。
+# 注册顺序：具体路由（/api/...、/healthz、/、/app…）均已在此前注册，优先匹配不受影响。
+_SPA_FALLBACK_EXCLUDED = ("api", "assets", "healthz", "readyz", "metrics",
+                          "docs", "redoc", "openapi.json", "js", "app")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    first_seg = full_path.split("/", 1)[0].lower()
+    candidate = os.path.normpath(os.path.join(VUE_DIST_DIR, full_path))
+    in_dist = candidate == VUE_DIST_DIR or candidate.startswith(VUE_DIST_DIR + os.sep)
+    # dist 内真实静态文件优先（/assets/*.js、favicon 等；normpath+前缀校验防目录穿越）
+    if in_dist and os.path.isfile(candidate):
+        return FileResponse(candidate)
+    if first_seg in _SPA_FALLBACK_EXCLUDED:
+        raise HTTPException(status_code=404, detail="Not Found")
     return _vue_index_response()
 
 

@@ -154,30 +154,74 @@ def _api(method: str, path: str, token: str = "", body: dict | None = None) -> t
         return r.status, json.loads(r.read().decode("utf-8"))
 
 
+def _purge_created_prescriptions(ids: list[str]) -> None:
+    """F2 防再犯：teardown 自清理本测试创建的处方（按 id 直调域层删除函数）。
+    PG 池初始化在**独立线程**执行——playwright sync（greenlet）上下文内 asyncio.run
+    会静默失败（RuntimeWarning: coroutine 'init' was never awaited → 只删 JSON 漏删
+    PG 真源，实测残留）；线程内与普通脚本等价。审计 jsonl 不动；失败仅告警，
+    残留由 scripts/cleanup_test_data.py 按 [e2e] 标记兜底清。"""
+    ids = [i for i in (ids or []) if i]
+    if not ids:
+        return
+    import threading
+
+    def _do() -> None:
+        try:
+            import asyncio
+
+            from backend.core import pg_store
+            from backend.core.prescriptions import delete_prescriptions
+            pg_ready = asyncio.run(pg_store.init())
+            try:
+                removed = delete_prescriptions(ids)
+            finally:
+                if pg_ready:
+                    asyncio.run(pg_store.close())
+            print(f"[e2e cleanup] 已清理本测试创建的处方"
+                  f"（PG 同步={'on' if pg_ready else 'off'}）：{removed}")
+        except Exception as exc:  # noqa: BLE001 —— 自清理失败不掩盖测试结果
+            print(f"[e2e cleanup] 清理失败（残留由 cleanup_test_data.py 兜底）："
+                  f"{type(exc).__name__}: {exc}")
+
+    th = threading.Thread(target=_do, name="e2e-rx-cleanup", daemon=True)
+    th.start()
+    th.join(timeout=30)
+
+
 def test_parity_rx_reject_and_out_of_dict_flow(page):
     """整改轮 B 任务1+2 e2e 闭环（单会话合并，控 60/min 限流密度）：
     ①API 前置：doctor01 登录并 POST /prescriptions 单药阿司匹林（真实 pending 处方，2 次请求）；
     ②doctor01 UI：开药工作台手动加字典外药「测试」→ 点两次「添加」（外典确认流）→
       行内填 ≥5 字理由 → 提交 → 成功提示（方案A：外典药允许提交）；
     ③pharm01 UI：开药待审——外典处方卡见「含字典外药品·重点审核」红徽（任务2）；
-      阿司匹林处方点「驳回」→ 弹条出现 → 填意见 → 确认 → 成功提示 + 卡片离开队列（任务1）。"""
-    # ---- ① API 前置：真实 pending 处方（阿司匹林为字典内单药） ----
+      阿司匹林处方点「驳回」→ 弹条出现 → 填意见 → 确认 → 成功提示 + 卡片离开队列（任务1）。
+    F2 防再犯：本测试创建的处方统一带 [e2e] 标记（case_text/drugs note），teardown 自清理。"""
+    created_ids: list[str] = []
+    try:
+        _parity_rx_reject_and_out_of_dict_body(page, created_ids)
+    finally:
+        _purge_created_prescriptions(created_ids)  # F2：teardown 删除本测试创建的处方
+
+
+def _parity_rx_reject_and_out_of_dict_body(page, created_ids: list[str]) -> None:
+    # ---- ① API 前置：真实 pending 处方（阿司匹林为字典内单药；case_text/note 带 [e2e] 标记） ----
     st, d = _api("POST", "/api/v1/auth/login", body={"username": "doctor01", "password": DEMO_PASSWORD})
     assert st == 200, d
     doc_tok = d["access_token"]
     st, rx = _api("POST", "/api/v1/medical/prescriptions", doc_tok,
-                  {"case_text": "患者女，52 岁，体检发现血脂偏高，低密度脂蛋白升高，评估后拟抗血小板一级预防。",
-                   "drugs": [{"name": "阿司匹林", "dose": "100mg", "freq": "qd"}],
+                  {"case_text": "[e2e] 患者女，52 岁，体检发现血脂偏高，低密度脂蛋白升高，评估后拟抗血小板一级预防。",
+                   "drugs": [{"name": "阿司匹林", "dose": "100mg", "freq": "qd", "note": "[e2e]"}],
                    "contraindication_reason": ""})
     assert st == 200, rx
     aspirin_id = rx["id"]
+    created_ids.append(aspirin_id)
     assert rx["status"] == "pending_pharm"
 
     # ---- ② doctor01 UI：字典外药「测试」+ 理由 → 提交 200 ----
     _login(page, "doctor01")
     _nav(page, "开药工作台")
     page.locator('[data-testid="rx-case"]').fill(
-        "患者男，45 岁，膝关节术后疼痛，既往用药过敏史不详，需临时镇痛处理观察疗效。")
+        "[e2e] 患者男，45 岁，膝关节术后疼痛，既往用药过敏史不详，需临时镇痛处理观察疗效。")
     manual_name = page.get_by_placeholder("手动输入药名")
     manual_name.fill("测试")
     page.locator('[data-testid="rx-add-manual"]').click()
@@ -186,7 +230,7 @@ def test_parity_rx_reject_and_out_of_dict_flow(page):
     except Exception:  # noqa: BLE001
         page.locator('[data-testid="rx-add-manual"]').click()
         page.locator('[data-testid="rx-ood-reason"]').wait_for(state="visible")
-    page.locator('[data-testid="rx-ood-reason"]').fill("院内制剂目录外镇痛药，临床急需，已告知患者风险")
+    page.locator('[data-testid="rx-ood-reason"]').fill("院内制剂目录外镇痛药，临床急需，已告知患者风险 [e2e]")
     page.locator('[data-testid="rx-submit"]').click()
     # 成功判定用状态（提交成功 → 自动切「我的处方」出 data-rxid 卡片），不依赖瞬时 toast；
     # 若撞上 60/min 限流（429，表单状态保留），等待窗口滑动后重试点击。
@@ -204,6 +248,7 @@ def test_parity_rx_reject_and_out_of_dict_flow(page):
     assert submitted, "提交开药未成功（重试耗尽）"
     ood_id = page.locator('[data-rxid]').first.get_attribute("data-rxid")  # 列表新→旧，首卡即新处方
     assert ood_id and ood_id != aspirin_id
+    created_ids.append(ood_id)
 
     # ---- ③ pharm01 UI：红徽断言（任务2）+ 驳回闭环（任务1） ----
     _login(page, "pharm01")
@@ -244,3 +289,29 @@ def test_parity_rx_reject_and_out_of_dict_flow(page):
             pass
         time.sleep(0.5)
     expect(page.get_by_text(aspirin_id).first).to_be_visible()
+
+
+# ---- F1：qc01 审核中心待处理列表可见 + 计数头（与角标对账） ----
+
+def test_qc_pending_list_visible_with_count_header(page):
+    """F1 验收：qc01 待处理 tab 列表项数 > 0，且「共 N 条待核对」计数头与服务端真值
+    （GET /review/pending，qc 已过滤 drug）一致——角标/计数头/列表三方对账可见。
+    修复前：429/加载失败时 v-if/v-else 结构把列表区整体顶掉 =「假空态」，且无计数头可对账。"""
+    # API 真值（qc 视角 pending 数，即前端 pendItems 源）
+    st, d = _api("POST", "/api/v1/auth/login", body={"username": "qc01", "password": DEMO_PASSWORD})
+    assert st == 200, d
+    st, pend = _api("GET", "/api/v1/medical/review/pending", d["access_token"])
+    assert st == 200, pend
+    server_n = len(pend.get("pending") or [])
+    assert server_n > 0, "前置期望：演示库存在待核对项（当前 51 条）"
+
+    _login(page, "qc01")
+    _nav(page, "审核中心")
+    # 计数头：与 API 真值一致（qc 视角「待核对」）
+    expect(page.locator('[data-testid="pending-count"]')).to_contain_text(f"共 {server_n} 条待核对")
+    # 列表可见（修复前加载失败/渲染异常时为空态或整体消失）
+    expect(page.locator(".rv-table tbody tr").first).to_be_visible()
+    # 角标与计数头对账：侧边栏审核中心徽标数字 = server_n（qc 口径非 drug）
+    badge = page.locator('.rail a.nav:has-text("审核中心") .nav-tag')
+    if server_n > 0:
+        expect(badge).to_have_text(str(server_n))

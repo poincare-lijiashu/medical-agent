@@ -73,6 +73,23 @@ def _save(items: list[dict]) -> None:
     pg_store.save_prescriptions(items, PRESCRIPTIONS_FILE)
 
 
+def delete_prescriptions(ids: list[str]) -> list[str]:
+    """按 id 硬删除处方（F2 e2e 测试数据清理专用；审计 jsonl 不动）。
+
+    JSON 兜底真源过滤重写 + PG 全量同步（save_prescriptions 全量覆盖语义天然完成
+    PG 侧删除）。返回实际删除的 id 清单（不存在的 id 忽略，幂等）。
+    进程锁复用 _lock，与服务端写路径互斥（外部进程调用时依赖调用方保证时序）。"""
+    want = {str(x) for x in (ids or []) if x}
+    if not want:
+        return []
+    with _lock:
+        items = _load()
+        removed = [x.get("id") for x in items if x.get("id") in want]
+        if removed:
+            _save([x for x in items if x.get("id") not in want])
+        return removed
+
+
 def _clean_drugs(drugs) -> list[dict]:
     """药品条目归一：[{name,dose,freq,note}]，name 为空/非 dict 条目丢弃。
     整改轮 B 任务2（字典外药方案 A）：out_of_dict 为真时随条目保留（字典外药

@@ -2,11 +2,13 @@
 # LLM Factory：统一封装大模型调用，按 Agent 类型路由。
 # 规矩：所有 Agent 必须通过此模块获取模型，禁止直接调用 init_chat_model。
 
+import json                                            # json_mode 降级时序列化 JSON Schema 提示
 from typing import Type, Any                          # 类型注解用：Type 表示「某个类本身」，Any 表示任意类型
 from pydantic import BaseModel                        # 结构化输出的 Schema 都是它的子类
 import httpx                                          # HTTP 客户端库（用来自定义网络行为）
 from langchain.chat_models import init_chat_model     # 2.3 学的：创建聊天模型（1.x 写法）
 from langchain_core.language_models import BaseChatModel  # 聊天模型的基类（类型注解用）
+from langchain_core.messages import HumanMessage      # 结构化降级重试时包装消息
 from langchain_core.runnables import Runnable         # 「可运行对象」基类，结构化模型属于它
 
 from backend.config import get_settings               # 读配置（API Key、base_url 等）
@@ -294,6 +296,68 @@ def get_structured_llm(agent_type: str, output_schema: Type[BaseModel]) -> Runna
 def get_vl_llm(temperature: float = 0) -> BaseChatModel:
     """LLMFactory.get_vl_llm 的便捷入口（视觉多模态）。"""
     return LLMFactory.get_vl_llm(temperature=temperature)
+
+
+# ── GLM thinking 兼容降级（F3 通用修）─────────────────────────────
+# 背景：GLM 5.x 等强制思考模型对 with_structured_output(function_calling) 返回
+# 400 'Thinking mode does not support this tool_choice'（思考模式与 tool_choice
+# 强制互斥，重试原样再 400）——mdt.pick_departments ×38 / literature.refine ×10 实锤。
+# 通用兜底：json_mode（response_format=json_object）不依赖 tool_choice，与思考模式兼容。
+_THINKING_400_MARKERS = ("thinking mode", "tool_choice")   # 错误文案小写匹配标记
+
+
+def _is_thinking_tool_choice_400(exc: Exception) -> bool:
+    """识别「thinking 模式与 tool_choice 强制互斥」类 400（仅该类触发降级，
+    其它错误（网络/5xx/鉴权）原样抛出，调用方异常语义零变化）。"""
+    text = str(exc)
+    low = text.lower()
+    return ("400" in text or "bad request" in low) and any(k in low for k in _THINKING_400_MARKERS)
+
+
+def _schema_json_hint(schema_model: Type[BaseModel]) -> str:
+    """json_mode 降级的输出格式说明：json_mode 只切 response_format、不自动注入
+    schema，必须在 prompt 里显式给出 JSON Schema（否则模型不知道字段结构）。"""
+    try:
+        hint = json.dumps(schema_model.model_json_schema(), ensure_ascii=False)
+    except Exception:  # noqa: BLE001 —— schema 提取失败时退化为字段名清单兜底
+        hint = json.dumps({"properties": list(getattr(schema_model, "model_fields", {}).keys())},
+                          ensure_ascii=False)
+    return ("输出格式要求：仅输出一个符合以下 JSON Schema 的 JSON 对象，"
+            "不要输出任何解释、markdown 代码块或其它文字：\n" + hint)
+
+
+async def structured_with_fallback(
+    bound: Runnable,
+    schema_model: Type[BaseModel],
+    prompt: str | None = None,
+    *,
+    base_llm_fn=None,
+    messages: list | None = None,
+):
+    """结构化输出 + thinking/tool_choice 400 自动降级（GLM 5.x 强制思考模型兼容）。
+
+    - bound：get_structured_llm(...)（with_structured_output, function_calling）产物或
+      等价对象（测试 monkeypatch 的假结构化模型同形态）；首选路径 ainvoke 一次；
+    - 失败且错误为「400 + Thinking mode/tool_choice 互斥」→ 用 base_llm_fn() 重建
+      with_structured_output(method="json_mode")、消息尾部追加 JSON Schema 说明重试一次；
+    - json_mode 重试仍失败，或错误非互斥类 → 抛**原错**（调用方既有异常语义不变）。
+    - messages：多模态消息列表（VL 带图路径传列表优先于 prompt）；缺省 [HumanMessage(prompt)]。
+    - base_llm_fn：惰性取原始 BaseChatModel（仅真降级时调用——mock 主路径成功/非互斥
+      错误时零额外行为，与既有 monkeypatch 形态完全兼容）。
+    """
+    msgs = messages if messages is not None else [HumanMessage(content=prompt or "")]
+    try:
+        return await bound.ainvoke(msgs)
+    except Exception as exc:  # noqa: BLE001
+        if base_llm_fn is None or not _is_thinking_tool_choice_400(exc):
+            raise
+        try:
+            fb = base_llm_fn().with_structured_output(schema_model, method="json_mode")
+            fb_msgs = list(msgs) + [HumanMessage(content=_schema_json_hint(schema_model))]
+            logger.warning("llm_factory.structured_fallback_json_mode", error=str(exc)[:160])
+            return await fb.ainvoke(fb_msgs)
+        except Exception:  # noqa: BLE001 —— 降级也失败：抛原始 400（语义最贴近真实根因）
+            raise exc
 
 
 
