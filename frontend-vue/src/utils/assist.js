@@ -82,3 +82,25 @@ export function detailText(error) {
   if (typeof d === 'string' && d) return d
   return errText(error)
 }
+
+// ---- 会诊详情拆分（轮 A 从 ConsultView 提取共享：我的会诊与会诊收件箱同源消费）----
+// 拆出病例原文与 AI 底稿（startRealConsult 拼接格式，legacy splitConsultQuestion 同实现）
+export function splitConsultQuestion(q) {
+  const s = String(q || ''); const mk = '【AI 多智能体会诊底稿】'; const i = s.indexOf(mk)
+  return i >= 0
+    ? { case: s.slice(0, i).trim(), draft: s.slice(i + mk.length).trim() }
+    : { case: s.trim(), draft: '' }
+}
+
+// ai_analysis（「【科室】意见」以空行连接）按科室拆分；无【科室】前缀 → 单块兜底
+// （legacy splitAiByDept 同实现）
+export function splitAiByDept(s) {
+  const t = String(s || ''); const out = []
+  const re = /【([^】]{1,30})】/g; let m, dept = null, li = 0
+  while ((m = re.exec(t))) {
+    if (dept !== null) out.push({ dept, text: t.slice(li, m.index).trim() })
+    dept = m[1]; li = m.index + m[0].length
+  }
+  if (dept !== null) out.push({ dept, text: t.slice(li).trim() })
+  return out.length ? out : (t.trim() ? [{ dept: '', text: t.trim() }] : [])
+}

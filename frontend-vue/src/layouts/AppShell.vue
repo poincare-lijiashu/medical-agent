@@ -28,17 +28,17 @@
             :class="{ active: $route.name === k }"
             :to="`/${k}`"
           >{{ NAV_ITEMS[k].t }}<span
-            v-if="badgeFor(k)"
+            v-for="(b, bi) in badgesFor(k)" :key="bi"
             class="nav-tag"
-            :class="{ red: badgeFor(k).red }"
-            :title="badgeFor(k).title"
-          >{{ badgeFor(k).n }}</span></RouterLink>
+            :class="{ red: b.red }"
+            :title="b.title"
+          >{{ b.n }}</span></RouterLink>
         </template>
       </aside>
       <main class="content">
         <!-- KeepAlive：轮2/3 视图状态跨路由保留（切视图不丢会话历史/表单，等价 legacy 内存态） -->
         <RouterView v-slot="{ Component }">
-          <KeepAlive include="LiteratureView,ImagingView,ConsultView,RxView,ReviewCenterView,QcView,KbView,DataView">
+          <KeepAlive include="LiteratureView,ImagingView,CaseView,ConsultView,RxView,ReviewCenterView,QcView,KbView,DataView">
             <component :is="Component" />
           </KeepAlive>
         </RouterView>
@@ -69,24 +69,36 @@ const railGroups = computed(() => {
 
 const roleLabel = computed(() => ROLE_LABEL[auth.role] || auth.role || '—')
 
-// 导航角标（legacy renderRail 分流逐字语义）：
-// rx=本人被驳回处方数（红）；review 按角色=qc 其它高危项 / admin 全部待核对 / pharmacist 待审处方（红）
-function badgeFor(k) {
+// 导航角标（legacy renderRail 分流逐字语义；返回数组——legacy 徽标为并排叠加）：
+// rx=本人被驳回处方数（红）；review 按角色=qc 其它高危项 / admin 全部待核对 /
+// pharmacist 待审处方（红）+ 轮 A 对齐 legacy：doctor/pharmacist「我的待确认」黄徽标
+// （myConfirmCount）与「待我意见的会诊」红徽标（consultPendingOps，qc/admin 无该 tab 恒不显示）
+function badgesFor(k) {
   if (k === 'rx' && badges.rxRejectedCount) {
-    return { n: badges.rxRejectedCount, red: true, title: '被驳回的处方' }
+    return [{ n: badges.rxRejectedCount, red: true, title: '被驳回的处方' }]
   }
   if (k === 'review') {
-    if (auth.role === 'qc' && badges.reviewTodoCount) {
-      return { n: badges.reviewTodoCount, red: false, title: '待核对（其它助手高危项）' }
+    if (auth.role === 'qc') {
+      return badges.reviewTodoCount
+        ? [{ n: badges.reviewTodoCount, red: false, title: '待核对（其它助手高危项）' }] : []
     }
-    if (auth.role === 'admin' && badges.reviewTodoCount) {
-      return { n: badges.reviewTodoCount, red: false, title: '待核对' }
+    if (auth.role === 'admin') {
+      return badges.reviewTodoCount ? [{ n: badges.reviewTodoCount, red: false, title: '待核对' }] : []
     }
+    // legacy else 分支（doctor/pharmacist）三个徽标按序叠加
+    const out = []
     if (auth.role === 'pharmacist' && badges.reviewTodoCount) {
-      return { n: badges.reviewTodoCount, red: true, title: '待办：待审处方' }
+      out.push({ n: badges.reviewTodoCount, red: true, title: '待办：待审处方' })
     }
+    if (badges.myConfirmCount) {
+      out.push({ n: badges.myConfirmCount, red: false, title: '我的待确认' })
+    }
+    if (badges.consultPendingOps) {
+      out.push({ n: badges.consultPendingOps, red: true, title: '待我意见的会诊' })
+    }
+    return out
   }
-  return null
+  return []
 }
 
 // 进 rx 视图清零被驳回角标（点进即视为已读，legacy switchRxTab('mine') 同语义）；
@@ -103,6 +115,8 @@ onMounted(() => {
   badges.refreshReviewBadge()
   badges.refreshRxBadge()
   badges.loadConfig()
+  // consult 徽标不在此首刷（legacy boot 亦不调 refreshConsultBadge：进审核中心/提交意见/
+  // 发起会诊时刷新；且 /consults/inbox 每拉取一次写一条审计，登录即拉徒增审计与限流压力）
   timer = setInterval(() => badges.poll(), 60_000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })

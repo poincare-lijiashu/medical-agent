@@ -31,6 +31,10 @@
       </el-button>
       <el-button v-if="isPh" size="small" :type="tab === 'drugdict' ? 'primary' : ''" plain data-testid="review-tab-drugdict" @click="switchTab('drugdict')">药品字典</el-button>
       <el-button v-if="isPh" size="small" :type="tab === 'drugrules' ? 'primary' : ''" plain data-testid="review-tab-drugrules" @click="switchTab('drugrules')">相互作用规则</el-button>
+      <!-- 轮 A：第三栏「其它科室会诊协助」=会诊收件箱（doctor/pharmacist 专属，legacy tabConsults） -->
+      <el-button v-if="isMine" size="small" :type="tab === 'consults' ? 'primary' : ''" plain data-testid="review-tab-consults" @click="switchTab('consults')">
+        其它科室会诊协助{{ badges.consultPendingOps ? ' ' + badges.consultPendingOps : '' }}
+      </el-button>
       <el-button v-if="!isMine" size="small" :type="tab === 'casearchive' ? 'primary' : ''" plain data-testid="review-tab-casearchive" @click="switchTab('casearchive')">病例库</el-button>
       <input
         v-if="!isMine" v-model="filterQ" class="inp" style="max-width: 220px; margin-left: auto"
@@ -91,6 +95,68 @@
           </template>
           <li v-else><span class="a">暂无归档病例（质控 approve 后自动入库）。</span></li>
         </ul>
+      </el-card>
+    </div>
+
+    <!-- ============ 会诊协助 tab（轮 A：legacy loadConsultInbox/renderConsultInbox 语义迁移，
+         数据源 GET /consults/inbox；doctor/pharmacist 专属） ============ -->
+    <div v-else-if="tab === 'consults'" class="page-body" v-loading="consultLoading" data-testid="consult-inbox">
+      <el-card v-if="consultErr" shadow="never"><el-alert type="error" :closable="false" show-icon :title="consultErr" /></el-card>
+      <!-- 空态（legacy 逐字：含当前账号科室提示与一票语义） -->
+      <el-card v-else-if="!consultItems.length" shadow="never">
+        <div class="empty-box">
+          <div>暂无其它科室的会诊协助请求。</div>
+          <div class="lead" style="margin: 8px auto 0">当其它科室发起跨科室会诊并邀请您所在科室（{{ consultDept || '未设置' }}）时，会出现在这里；意见仅有建议权，每人一票。</div>
+        </div>
+      </el-card>
+      <el-card v-for="c in consultItems" :key="c.id" shadow="never" style="border-left: 3px solid var(--accent)" :data-cid="c.id">
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+          <h3 style="margin: 0">跨科室会诊协助</h3>
+          <el-tag type="warning" effect="light" size="small" round>进行中</el-tag>
+          <span class="src num" style="margin-left: auto">发起人 {{ c.initiator || '—' }}（{{ c.initiator_dept || '—' }}） · {{ fmtTs(c.created_at) }}</span>
+        </div>
+        <div style="margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center">
+          <span class="src">受邀科室：</span>
+          <el-tag v-for="(dpt, i) in (c.target_depts || [])" :key="i" size="small" effect="plain" round>{{ dpt }}</el-tag>
+        </div>
+        <!-- 三段式详情（ops:false：不出医生意见段——意见由下方表单呈现，legacy consultDetailBlocks 同语义） -->
+        <div style="margin-top: 8px">
+          <h4 style="margin: 0 0 4px">摘要（病例/会诊问题）</h4>
+          <div class="txt" style="white-space: pre-wrap">{{ splitConsultQuestion(c.question).case || '（无）' }}</div>
+          <template v-if="splitConsultQuestion(c.question).draft">
+            <h4 style="margin: 10px 0 4px">AI 会诊小结（共识 · 分歧 · 建议）</h4>
+            <div class="md-body" v-html="md(splitConsultQuestion(c.question).draft)"></div>
+          </template>
+        </div>
+        <el-collapse v-if="splitAiByDept(c.ai_analysis).length" style="margin-top: 10px">
+          <el-collapse-item :title="`各专科 AI 意见（${splitAiByDept(c.ai_analysis).length} 科）`" name="ai">
+            <el-collapse v-for="(a, i) in splitAiByDept(c.ai_analysis)" :key="i" style="margin-bottom: 8px">
+              <el-collapse-item :title="a.dept || 'AI 意见'" :name="String(i)">
+                <div class="md-body" v-html="md(a.text)"></div>
+              </el-collapse-item>
+            </el-collapse>
+          </el-collapse-item>
+        </el-collapse>
+        <!-- 随单影像缩略（data:image/ 白名单过滤，点击放大查看） -->
+        <div v-if="consultThumbs(c).length" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px">
+          <el-image
+            v-for="(u, i) in consultThumbs(c)" :key="i" :src="u" fit="cover"
+            class="cthumb" :preview-src-list="consultThumbs(c)" :initial-index="i" preview-teleported
+          />
+        </div>
+        <!-- 意见表单：本人已提交 → 已提交 chip（医生粒度 mine 判定，legacy o.doctor===consultMe） -->
+        <div v-if="consultMine(c)" style="margin-top: 8px">
+          <el-tag type="success" effect="light" size="small" round>已提交本科室意见（每人一票）</el-tag>
+        </div>
+        <div v-else style="margin-top: 8px">
+          <textarea
+            v-model="opDrafts[c.id]" class="inp" rows="2" :aria-label="'会诊意见 ' + c.id"
+            placeholder="填写您所在科室的会诊意见（仅建议权，无驳回权）"
+          ></textarea>
+          <div style="margin-top: 6px">
+            <el-button size="small" type="primary" @click="submitOpinion(c.id)">提交科室意见</el-button>
+          </div>
+        </div>
       </el-card>
     </div>
 
@@ -360,10 +426,10 @@
 // 状态语义对齐 legacy：reviewItems/myConfirmItems/historyItems/rxPendingItems/rxHistoryItems/
 // reviewMe/reviewFilterQ/分页（12/页）/seq 守卫；canSign=(qc||admin)&&!cfgFull；
 // canSignItem: drug→pharmacist/admin（问题4 收权），其它 agent→canSign。
-import { computed, defineOptions, onMounted, ref } from 'vue'
+import { computed, defineOptions, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api'
-import { md, fmtTs, detailText } from '../utils/assist'
+import { md, fmtTs, detailText, splitConsultQuestion, splitAiByDept } from '../utils/assist'
 import { useAuthStore } from '../stores/auth'
 import { useBadgeStore } from '../stores/badges'
 import DrugDictEditor from '../components/DrugDictEditor.vue'
@@ -409,6 +475,7 @@ let loadSeq = 0 // 加载请求序号守卫：并发加载只应用最新一次�
 function switchTab(t) {
   tab.value = t
   if (t === 'casearchive') loadCaseArchive()
+  if (t === 'consults') loadConsultInbox() // 轮 A：会诊收件箱独立数据源（/consults/inbox），不走 renderReview 语义
 }
 
 // ---- 影像消费（_review_image_view 前端侧）：data:image/ 前缀白名单过滤 ----
@@ -486,6 +553,10 @@ async function load() {
         // pharmacist 待办角标只算待审处方数（药物待核对区已移除）
         badges.reviewTodoCount = (rxPendingItems.value || []).length
       }
+      // 轮 A：进入审核中心即刷新「我的待确认」黄徽标与「待我意见的会诊」红徽标
+      // （legacy loadReviewMine 末尾 renderRail/refreshConsultBadge 同语义）
+      badges.myConfirmCount = (myConfirmItems.value || []).length
+      badges.refreshConsultBadge()
     }
   } catch (e) {
     if (seq !== loadSeq) return
@@ -617,6 +688,58 @@ async function rxReviewPost(id, body) {
   }
 }
 
+// ---- 会诊协助收件箱（轮 A：legacy loadConsultInbox/renderConsultInbox/submitOpinion/
+//      updateConsultBadge 语义迁移，doctor/pharmacist 专属；动态内容经 Vue 模板转义） ----
+const consultItems = ref([])
+const consultMe = ref('')
+const consultDept = ref('')
+const consultLoading = ref(false)
+const consultErr = ref('')
+const opDrafts = reactive({}) // 各会诊单意见草稿（按 id 独立，切 tab 不丢）
+
+async function loadConsultInbox() {
+  consultLoading.value = true
+  consultErr.value = ''
+  try {
+    const { data } = await http.get('/medical/consults/inbox', { silentToast: true })
+    consultItems.value = data.items || []
+    consultMe.value = data.me || ''
+    consultDept.value = data.dept || ''
+    // tab 徽标：待我（本科室）意见数——科室一票口径 o.dept===dept（legacy updateConsultBadge 同实现）
+    badges.meDept = consultDept.value
+    badges.consultPendingOps = (consultItems.value || [])
+      .filter((c) => !((c.opinions || []).some((o) => o.dept === consultDept.value))).length
+  } catch (e) {
+    consultErr.value = '⚠ ' + detailText(e)
+  } finally {
+    consultLoading.value = false
+  }
+}
+
+// 本人是否已提交意见（legacy 行级判定 o.doctor===consultMe，医生粒度）
+function consultMine(c) {
+  return (c.opinions || []).some((o) => o.doctor === consultMe.value)
+}
+
+// 随单影像缩略：data:image/ 前缀白名单过滤（legacy consultThumbs 同实现）
+function consultThumbs(c) {
+  return (c.images || []).filter((u) => String(u).startsWith('data:image/'))
+}
+
+// 提交科室意见（仅建议权无驳回权；空内容阻断文案逐字 legacy）
+async function submitOpinion(id) {
+  const content = String(opDrafts[id] || '').trim()
+  if (!content) { ElMessage.warning('请先填写意见内容'); return }
+  try {
+    await http.post('/medical/consults/' + encodeURIComponent(id) + '/opinion', { content }, { silentToast: true })
+    ElMessage.success('已提交科室意见')
+    delete opDrafts[id]
+    loadConsultInbox()
+  } catch (e) {
+    ElMessage.error('提交失败：' + detailText(e))
+  }
+}
+
 // ---- 病例库（qc/admin；数据源 /case-archive，客户端二次筛选 dept/status/日期区间） ----
 const caItems = ref([])
 const caStats = ref({})
@@ -704,4 +827,6 @@ async function purgeGo() {
   white-space: pre-wrap;
 }
 .empty-box { text-align: center; padding: 28px 0; color: var(--ink-2) }
+/* 会诊缩略图（轮 A：与 ConsultView .cthumb 同款） */
+.cthumb { width: 38px; height: 38px; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; display: block }
 </style>

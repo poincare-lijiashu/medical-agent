@@ -1,8 +1,13 @@
-// 角标/运行时开关 store（轮3）：复刻 legacy refreshReviewBadge / refreshRxBadge 语义——
-// 登录后与定时轮询按服务端真值刷新侧边导航待办角标：
+// 角标/运行时开关 store（轮3，轮 A 增补 consult 徽标）：复刻 legacy refreshReviewBadge /
+// refreshRxBadge / refreshConsultBadge 语义——登录后与定时轮询按服务端真值刷新侧边导航待办角标：
 //   pharmacist = 待审处方数（药物待核对区已随两药快查下线移除，不计 drug 项）；
 //   admin = 全部待核对 + 待审处方；qc = 其它助手高危项（drug 除外，开药审核权收归药剂科+管理员）；
 //   doctor = 被驳回处方数（红点，进 rx 视图/「我的处方」清零后按服务端真值恢复）。
+//   轮 A（legacy updateConsultBadge/refreshConsultBadge）：consultPendingOps = 待我（本科室）
+//   意见的会诊数——doctor/pharmacist 侧边栏红色徽标「待我意见的会诊」；科室一票口径：
+//   本科室任一医生已提交意见（o.dept===meDept）即不计入；qc/admin 无该 tab 不拉取。
+//   myConfirmCount = doctor/pharmacist「我的待确认」数（legacy renderRail 黄色徽标，
+//   进入审核中心 loadReviewMine 按已拉取数据更新）。
 // 同时承载 CFG.qc_auto_sign_full（留痕模式）运行时开关：GET /medical/config，
 // qc/admin 审核中心据此转只读档案（legacy CFG.full 同语义）。
 import { defineStore } from 'pinia'
@@ -13,6 +18,9 @@ export const useBadgeStore = defineStore('badges', {
   state: () => ({
     reviewTodoCount: 0, // 审核中心待办角标（qc/admin/pharmacist 按角色分流计数）
     rxRejectedCount: 0, // rx 导航红点角标 = 本人被驳回处方数（仅 doctor）
+    consultPendingOps: 0, // 轮 A：待我（本科室）意见的会诊数（doctor/pharmacist 红徽标）
+    myConfirmCount: 0, // 轮 A：我的待确认数（doctor/pharmacist 黄徽标，进入审核中心刷新）
+    meDept: '', // 轮 A：当前账号科室（/consults/inbox 响应下发，科室一票口径判定）
     cfgFull: false, // 留痕模式（qc_auto_sign_full）：qc/admin 审核中心只读档案
   }),
   actions: {
@@ -56,7 +64,23 @@ export const useBadgeStore = defineStore('badges', {
         this.rxRejectedCount = (data.items || []).filter((i) => i.status === 'rejected').length
       } catch (_) { /* 静默 */ }
     },
-    // 定时轮询入口（任务⑦）：每 60s 按服务端真值刷新两类角标（登录后由 AppShell 启动）
+    // 轮 A（legacy refreshConsultBadge 逐字语义）：doctor/pharmacist 拉会诊收件箱统计
+    // 「待我（本科室）意见」数；qc/admin 无该 tab 直接跳过。失败静默不干扰主流程。
+    // 视图内刷新（收件箱 load）由视图按已拉取数据直写 consultPendingOps（调方保证）。
+    async refreshConsultBadge() {
+      const auth = useAuthStore()
+      const role = auth.role
+      if (role === 'qc' || role === 'admin') return // qc/admin 无「其它科室会诊协助」tab
+      try {
+        const { data } = await http.get('/medical/consults/inbox', { silentToast: true })
+        this.meDept = data.dept || ''
+        this.consultPendingOps = (data.items || [])
+          .filter((c) => !((c.opinions || []).some((o) => o.dept === this.meDept))).length
+      } catch (_) { /* 静默 */ }
+    },
+    // 定时轮询入口（任务⑦）：每 60s 按服务端真值刷新角标（登录后由 AppShell 启动）。
+    // consult 徽标不进轮询（legacy 无此调用点：仅登录首刷/进审核中心/收件箱刷新/提交意见后，
+    // /consults/inbox 每次拉取会写 list_inbox 审计，60s 轮询将制造审计噪音）。
     async poll() {
       await Promise.all([this.refreshReviewBadge(), this.refreshRxBadge(), this.loadConfig()])
     },
