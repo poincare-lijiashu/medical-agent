@@ -95,3 +95,21 @@ GLM 判"长期债"，DeepSeek 复核"分区结构+标记锁尚可，ESM 拆分 1
 | 4 | 切换默认入口+legacy 移除+标记锁重写+Playwright 适配 | `daf757f` |
 
 **终态**：707 passed · Playwright 6/6 · `/` 直出 Vue 应用 · legacy 已删（tag 永久可回退，checkout 三处无需 node）。**整体回退一条命令**：`git checkout v-legacy-frontend -- frontend backend/main.py tests && git commit`。
+
+## 十、DeepSeek 终评整改（2026-09-12，e67aa1a · 759 passed）
+
+用户实测通过后由 DeepSeek 出全项目终评（87/100，只读）。核实 3 高危属实并全部整改：
+
+| 级别 | 发现 | 处置 |
+|---|---|---|
+| 🔴 | MDT 传图 `image_url` 未归一 `data:` scheme → SSRF（VL 提供商服务端拉内网） | ✅ `enforce_data_url` 四层收口（HTTP/MCP/存储兜底/mdt） |
+| 🟡 | KbView `v-html=kbMsg` 渲染未消毒文件名（全项目唯一裸 v-html）+ token 在 localStorage | ✅ esc() 全拼接收口+标记锁（localStorage 迁移登记 backlog） |
+| 🟡 | run_eval.py 硬编码默认凭据 | ✅ 强制环境变量 |
+| 🟡 | admin base_url 无内网黑名单 → SSRF+key 外发 | ✅ 私网黑名单+LLM_ALLOW_PRIVATE_HOSTS 开关 |
+| 🟡 | kb_ingest doc_tag 未清洗拼 Milvus filter；异步线程无上限 | ✅ _safe_tag 统一+Semaphore(2) |
+| 🟡 | docker-compose 弱口令+PG 端口全接口暴露 | ✅ 127.0.0.1 绑定+密码 env 化（下次重建容器生效） |
+| 🟢 | qc float 500 / rewrite_query 不截断 / 死代码 / 配置文档漂移 / 假池 T5 覆盖错觉 | ✅ 全修+真实 PG 集成冒烟（skipif）补验 |
+
+**登记 backlog**：PG 多实例全表重写竞态（单写者约束）、localStorage→httpOnly cookie、eval 判分改 LLM 判分、_load_json/原子写/路径解析三处重复去重、medical_router.py（2000+行）按域拆分、consults.json 测试隔离缺口。
+
+测试基线演进：659 → **759 passed**。
