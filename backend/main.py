@@ -25,6 +25,8 @@ from backend.api.v1.auth.auth_router import router as auth_router
 logger = get_logger(__name__)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+VUE_DIST_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vue", "dist")
 
 
 def _docs_kwargs(env: str) -> dict:
@@ -219,6 +221,23 @@ async def metrics(user: dict = Depends(require_role("admin"))):
 @app.get("/api/v1/health")
 async def health():
     return {"status": "ok", "service": "MedAssist", "version": settings.app_version}
+
+
+# ---- Vue3 新前端（迁移轮1，手册 docs/plans/vue3_migration.md）----
+# /app 显式入口（直出 dist/index.html，避免 StaticFiles 对无尾斜杠路径的 307 跳转）；
+# /app/assets 等静态资源由下面的 StaticFiles(html=True) 托管。
+# 注意：注册顺序必须在 mount("/app") 之前，否则 Mount 前缀匹配会吞掉显式路由；
+# legacy 主入口 / 与 /js 挂载完全不动（轮4 前并行验证）。
+@app.get("/app", include_in_schema=False)
+async def vue_app_index():
+    idx = os.path.join(VUE_DIST_DIR, "index.html")
+    if os.path.isfile(idx):
+        return FileResponse(idx, media_type="text/html")
+    return {"hint": "frontend-vue/dist 未构建；在 frontend-vue/ 下 npm run build 后可用"}
+
+
+if os.path.isdir(VUE_DIST_DIR):
+    app.mount("/app", StaticFiles(directory=VUE_DIST_DIR, html=True), name="frontend_vue")
 
 
 # ---- 商用前端（自包含单页）----

@@ -1,0 +1,64 @@
+/* 轮1 布局壳样式：对齐 legacy 的 rail 布局（236px 侧栏 + 56px 顶栏），配色向 legacy 靠拢 */
+:root {
+  --bg: #fdfdfd;
+  --panel: #f8f9fb;
+  --rail: #f5f6fa;
+  --ink: #2a2f3a;
+  --ink-2: #5b6472;
+  --ink-3: #7a8494;
+  --line: #e6e8ee;
+  --line-strong: #d6dae2;
+  --accent: #2563c9;
+  --accent-h: #2056ae;
+  --accent-soft: #e8eefb;
+  --r: 8px;
+}
+* { box-sizing: border-box }
+html, body, #app { margin: 0; height: 100% }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: var(--bg); color: var(--ink); line-height: 1.55; font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 顶栏（对齐 legacy header：品牌标 + 用户名/角色/退出） */
+.topbar {
+  position: sticky; top: 0; z-index: 100; height: 56px;
+  display: flex; align-items: center; gap: 16px; padding: 0 20px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.mark { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px }
+.mark .g { width: 26px; height: 26px; color: var(--accent) }
+.mark small { display: block; font-weight: 400; color: var(--ink-3); font-size: 11px }
+.topbar .spacer { flex: 1 }
+.userchip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2) }
+
+/* 主体栅格：侧栏 + 内容（对齐 legacy .app grid） */
+.app-grid { display: grid; grid-template-columns: 236px minmax(0, 1fr); height: calc(100% - 56px) }
+.rail { background: var(--rail); border-right: 1px solid var(--line); padding: 14px 10px; overflow-y: auto }
+.grp { font-size: 11px; color: var(--ink-3); letter-spacing: .02em; padding: 10px 10px 6px }
+.nav {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 9px 10px; border-radius: var(--r); cursor: pointer; font-size: 13.5px;
+  color: var(--ink-2); text-decoration: none; transition: background .15s, color .15s;
+}
+.nav:hover { background: var(--panel); color: var(--ink) }
+.nav.active { background: var(--panel); color: var(--ink); font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--line-strong) }
+.content { overflow-y: auto; min-width: 0 }
+
+/* 页面通用骨架（对齐 legacy .shead/.body） */
+.shead { padding: 18px 26px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px }
+.shead h2 { margin: 0; font-size: 22px; letter-spacing: -.015em }
+.shead p { margin: 2px 0 0; color: var(--ink-3); font-size: 12.5px }
+.page-body { padding: 26px; display: flex; flex-direction: column; gap: 16px; max-width: 980px }
+
+/* 登录页（对齐 legacy .lcard） */
+.login-wrap { min-height: 100%; display: grid; place-items: center; background: var(--bg) }
+.lcard { width: 340px; max-width: 92vw; padding: 32px 30px; text-align: center }
+.lcard h2 { margin: 8px 0 2px; font-size: 22px; letter-spacing: -.015em }
+.lcard .sub { color: var(--ink-3); font-size: 12.5px; margin-bottom: 20px }
+.lcard .lhint {
+  margin-top: 16px; font-size: 11.5px; color: var(--ink-3); line-height: 1.7;
+  text-align: left; border-top: 1px solid var(--line); padding-top: 12px;
+}

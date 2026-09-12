@@ -7,10 +7,19 @@
 
 | 轮 | 内容 | 交付物 |
 |---|---|---|
-| 1 | Vite 脚手架 + 登录/导航/布局壳 + Element Plus + api 客户端（token 拦截器）+ 后端挂载 /app | frontend-vue/ 可登录可导航，dist 构建通过 |
+| 1 ✅ | Vite 脚手架 + 登录/导航/布局壳 + Element Plus + api 客户端（token 拦截器）+ 后端挂载 /app | frontend-vue/ 可登录可导航，dist 构建通过 |
 | 2 | 核心助手视图：文献/影像/MDT 会诊/开药工作台+我的处方（交互最重先啃） | /app 全助手视图可用 |
 | 3 | 管理视图：审核中心/病例库/质控/知识库/审计/字典规则管理/LLM 配置/数据面板 + 角标轮询 | /app 功能对齐 legacy |
 | 4 | 切换默认入口（/=新应用）+ 删 legacy + 标记锁重写 + Playwright 适配 + DEPLOY 构建步骤 | 单一前端，全量回归绿 |
+
+## 轮 1 完成记录（2026-09-12）
+
+- [x] 脚手架：frontend-vue/（Vite6 + Vue3.5 + JS），.npmrc 锁 npmmirror；依赖 element-plus / vue-router / pinia / axios。
+- [x] 布局壳：顶栏（用户名/角色/退出）+ 左侧 rail（ROLE_NAV 按角色过滤，菜单文案语义复制 legacy）+ router-view；登录视图（POST /api/v1/auth/login → token 存 localStorage）；路由守卫（无 token→/login）；概览视图（拉 /medical/overview 指标）；其余菜单项为占位视图（轮2/3 替换）。
+- [x] api 客户端：axios baseURL=/api/v1，请求拦截器带 Bearer；401→清 token→跳登录；非 2xx 统一 ElMessage 中文提示。
+- [x] 构建：vite base=/app/，npm run build 通过（index.html 0.67KB / CSS 363KB / JS 1.11MB）；dist 随轮入库（.gitignore 反向豁免），node_modules 不入库。
+- [x] 后端挂载：main.py 增 GET /app（直出 dist/index.html）+ StaticFiles(html=True) 托管 /app/**；legacy / 与 /js 挂载零改动。
+- [x] 验收：/ 仍 legacy、/app 新壳、/app/assets/*.js 200；curl doctor01 登录→带 token GET /medical/drug/dict（stats drugs=342/rules=307）走通；Playwright 本轮不动（仍指 legacy）；全量 pytest 全绿（含新增 tests/test_vue_shell.py 4 项）。
 
 ## 保存与回退策略（用户要求：随时可回退）
 
