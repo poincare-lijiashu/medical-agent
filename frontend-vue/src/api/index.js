@@ -33,7 +33,8 @@ http.interceptors.response.use(
       if (auth.isLoggedIn) ElMessage.error('登录已过期，请重新登录')
       auth.logout()
       router.push('/login')
-    } else {
+    } else if (!(error && error.config && error.config.silentToast)) {
+      // 调用方可传 { silentToast: true } 关闭全局提示（视图内嵌渲染错误卡片时用，避免双重提示）
       ElMessage.error(errText(error))
     }
     return Promise.reject(error)

@@ -29,7 +29,12 @@
         </template>
       </aside>
       <main class="content">
-        <RouterView />
+        <!-- KeepAlive：轮2 助手视图状态跨路由保留（切视图不丢会话历史/表单，等价 legacy 内存态） -->
+        <RouterView v-slot="{ Component }">
+          <KeepAlive include="LiteratureView,ImagingView,ConsultView,RxView">
+            <component :is="Component" />
+          </KeepAlive>
+        </RouterView>
       </main>
     </div>
   </div>
