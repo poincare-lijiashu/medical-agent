@@ -1,3 +1,11 @@
+# 医疗 Agent 建仓计划（2026-09-03 · 历史原稿）
+
+> **摘要（中文）**：本项目最初的建设计划书，定义了四阶段路线（数据层→鉴权→知识库→多智能体）与验收口径。
+> 原文以英文写就（早期会话产物），作为历史原稿保留原文；实施结果与后续演进见
+> [docs/archive/plans/pharmacy_roadmap.md](../plans/pharmacy_roadmap.md) 与 [docs/archive/qa/PROJECT_EVALUATION.md](../qa/PROJECT_EVALUATION.md)。
+
+---
+
 # Medical Agent Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
