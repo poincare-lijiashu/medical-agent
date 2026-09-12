@@ -1,0 +1,4 @@
+# GitHub 语言统计修正：构建产物标记为 generated（保留文件但不计入语言占比）
+frontend-vue/dist/** linguist-generated
+# 截图/预览图不计入语言检测
+docs/screenshots/** -linguist-detectable
