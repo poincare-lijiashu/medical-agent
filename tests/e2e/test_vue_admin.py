@@ -108,6 +108,26 @@ def test_vue_admin_admin_panels(page):
     expect(page.locator('[data-testid="log-panel"]')).to_be_visible()
     expect(page.locator('[data-testid="llm-panel"]')).to_contain_text("模型配置")
 
+    # 整改轮 B 任务3：建号表单角色→科室下拉联动过滤（只读断言，不实际建号）
+    # pharmacist 只见药剂科；qc 只见质控科/医务处；doctor 隐藏职能部门（药剂科/医务处/质控科/病案室）。
+    # 注：<option> 在收起的 select 下被 Playwright 判为 hidden，故用 to_have_count/to_have_text
+    # （读 textContent，不依赖可见性）断言。
+    role_sel = page.locator('[data-testid="nu-role"]')
+    dept_sel = page.locator('[data-testid="nu-dept"]')
+    expect(dept_sel.locator("option")).to_have_count(12, timeout=10_000)  # 科室字典已加载（占位+11 临床科室）
+    role_sel.select_option("pharmacist")
+    expect(dept_sel.locator("option")).to_have_count(2)  # 占位 + 药剂科
+    expect(dept_sel.locator("option").nth(1)).to_have_text("药剂科")
+    role_sel.select_option("qc")
+    expect(dept_sel.locator("option")).to_have_count(3)  # 占位 + 质控科/医务处
+    qc_opts = [o.text_content() for o in dept_sel.locator("option").all()]
+    assert "质控科" in qc_opts and "医务处" in qc_opts and "药剂科" not in qc_opts
+    role_sel.select_option("doctor")
+    doc_opts = [o.text_content() for o in dept_sel.locator("option").all()]
+    assert doc_opts, "doctor 应有临床科室可选"
+    for f in ("药剂科", "医务处", "质控科", "病案室"):
+        assert f not in doc_opts, f"doctor 建号不应见职能部门：{f}"
+
     # 审核中心：admin 专属 tab（待处理/历史记录/病例库）——病例库 tab 按钮存在即断言（不点击移除）
     _nav(page, "审核中心")
     expect(page.locator('[data-testid="review-title"]')).to_have_text("审核中心 · 高风险双人核对")

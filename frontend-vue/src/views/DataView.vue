@@ -76,17 +76,17 @@
         <div class="qgrid">
           <label>用户名（3-32 位字母/数字/_/-）<input v-model="nu.name" class="inp" autocomplete="off" spellcheck="false" /></label>
           <label>角色
-            <select v-model="nu.role" class="inp">
+            <select v-model="nu.role" class="inp" @change="onRoleChange" data-testid="nu-role">
               <option value="doctor">doctor</option>
               <option value="pharmacist">pharmacist</option>
               <option value="admin">admin</option>
               <option value="qc">qc（质控员）</option>
             </select>
           </label>
-          <label style="grid-column: 1 / -1">科室（必选，质控签名/科室绑定）
-            <select v-model="nu.dept" class="inp">
-              <option value="">{{ deptList.length ? '请选择科室' : '加载中…' }}</option>
-              <option v-for="n in deptList" :key="n" :value="n">{{ n }}</option>
+          <label style="grid-column: 1 / -1">科室（必选，随角色联动过滤：药师→药剂科；质控→质控科/医务处；医生→临床科室）
+            <select v-model="nu.dept" class="inp" data-testid="nu-dept">
+              <option value="">{{ deptOptions.length ? '请选择科室' : '加载中…' }}</option>
+              <option v-for="n in deptOptions" :key="n" :value="n">{{ n }}</option>
             </select>
           </label>
           <label style="grid-column: 1 / -1">密码（≥8 位）<input v-model="nu.pass" type="password" class="inp" autocomplete="new-password" /></label>
@@ -394,6 +394,20 @@ async function flagGo() {
 
 // ---- 用户管理：新增 / 重置密码 / 删除（输入用户名确认防误删） ----
 const nu = reactive({ name: '', role: 'doctor', dept: '', pass: '' })
+// 整改轮 B 任务3（科室-角色归属模型）：选角色 → 科室下拉联动过滤（与后端 validate_role_dept
+// 同规则）：pharmacist 只见药剂科；qc 只见质控科/医务处；doctor 隐藏职能部门；admin 不限。
+const FUNC_DEPTS = ['药剂科', '医务处', '质控科', '病案室']
+const deptOptions = computed(() => {
+  const all = deptList.value || []
+  if (nu.role === 'pharmacist') return all.filter((n) => n === '药剂科')
+  if (nu.role === 'qc') return all.filter((n) => n === '质控科' || n === '医务处')
+  if (nu.role === 'doctor') return all.filter((n) => !FUNC_DEPTS.includes(n))
+  return all
+})
+// 切换角色后当前科室不再合法（如先选药剂科再改医生）→ 自动清空防脏值提交
+function onRoleChange() {
+  if (nu.dept && !deptOptions.value.includes(nu.dept)) nu.dept = ''
+}
 async function createUser() {
   const name = nu.name.trim()
   if (!name || !nu.pass) { ElMessage.warning('请填写用户名与密码'); return }

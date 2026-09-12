@@ -9,11 +9,19 @@
    + 收件箱容器渲染（对照矩阵 D-4/D-5）；
 4. ArchView（admin）：架构·合规静态四卡（对照矩阵 F-8）。
 
+整改轮 B 追加（test_parity_rx_reject_and_out_of_dict_flow）：
+- 任务1 驳回闭环：API 前置创建真实 pending 处方（doctor01 单药阿司匹林）→ pharm01
+  开药待审点「驳回」→ 弹条 → 填意见 → 确认 → 成功提示 + 卡片离开队列；
+- 任务2 方案A：doctor UI 手动加字典外药「测试」→ 行内填理由 → 提交 200 →
+  pharm01 待审卡见「含字典外药品·重点审核」红徽（两项共用一次 pharm01 会话省限流）。
+
 说明：依赖运行中的服务 127.0.0.1:8001（healthz 不通则 skip）；未装 playwright 整文件
 skip；演示口令 = seed（AUTH_DEMO_PASSWORD）Med@2026，与既有 e2e 文件同源。
 doctor01 的三项断言合并为单函数顺序执行（同 test_vue_assist 风格），降低全量套件
 连续执行时 doctor01 的登录/首刷请求密度（服务端 60 次/分钟滑动窗口限流，429 会红）。
 """
+import json
+import time
 import urllib.request
 
 import pytest
@@ -131,3 +139,108 @@ def test_parity_admin_arch_view(page):
     # admin 无「其它科室会诊协助」tab（legacy renderReviewHeader：tc 仅 mine 角色显示）
     _nav(page, "审核中心")
     expect(page.locator('[data-testid="review-tab-consults"]')).to_have_count(0)
+
+
+# ---- 整改轮 B：任务1 驳回闭环 + 任务2 字典外方案A（共用 pharm01 会话省限流） ----
+
+def _api(method: str, path: str, token: str = "", body: dict | None = None) -> tuple[int, dict]:
+    """e2e 内轻量 API 调用（前置造数/断言用，避免为一次 POST 走整套 UI 登录）。"""
+    req = urllib.request.Request(BASE_URL + path, method=method)
+    req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    with urllib.request.urlopen(req, data=data, timeout=10) as r:
+        return r.status, json.loads(r.read().decode("utf-8"))
+
+
+def test_parity_rx_reject_and_out_of_dict_flow(page):
+    """整改轮 B 任务1+2 e2e 闭环（单会话合并，控 60/min 限流密度）：
+    ①API 前置：doctor01 登录并 POST /prescriptions 单药阿司匹林（真实 pending 处方，2 次请求）；
+    ②doctor01 UI：开药工作台手动加字典外药「测试」→ 点两次「添加」（外典确认流）→
+      行内填 ≥5 字理由 → 提交 → 成功提示（方案A：外典药允许提交）；
+    ③pharm01 UI：开药待审——外典处方卡见「含字典外药品·重点审核」红徽（任务2）；
+      阿司匹林处方点「驳回」→ 弹条出现 → 填意见 → 确认 → 成功提示 + 卡片离开队列（任务1）。"""
+    # ---- ① API 前置：真实 pending 处方（阿司匹林为字典内单药） ----
+    st, d = _api("POST", "/api/v1/auth/login", body={"username": "doctor01", "password": DEMO_PASSWORD})
+    assert st == 200, d
+    doc_tok = d["access_token"]
+    st, rx = _api("POST", "/api/v1/medical/prescriptions", doc_tok,
+                  {"case_text": "患者女，52 岁，体检发现血脂偏高，低密度脂蛋白升高，评估后拟抗血小板一级预防。",
+                   "drugs": [{"name": "阿司匹林", "dose": "100mg", "freq": "qd"}],
+                   "contraindication_reason": ""})
+    assert st == 200, rx
+    aspirin_id = rx["id"]
+    assert rx["status"] == "pending_pharm"
+
+    # ---- ② doctor01 UI：字典外药「测试」+ 理由 → 提交 200 ----
+    _login(page, "doctor01")
+    _nav(page, "开药工作台")
+    page.locator('[data-testid="rx-case"]').fill(
+        "患者男，45 岁，膝关节术后疼痛，既往用药过敏史不详，需临时镇痛处理观察疗效。")
+    manual_name = page.get_by_placeholder("手动输入药名")
+    manual_name.fill("测试")
+    page.locator('[data-testid="rx-add-manual"]').click()
+    try:  # 字典外药首次点击只弹确认条，需再次点击才入药单（字典内药一次即入）
+        page.locator('[data-testid="rx-ood-reason"]').wait_for(state="visible", timeout=4_000)
+    except Exception:  # noqa: BLE001
+        page.locator('[data-testid="rx-add-manual"]').click()
+        page.locator('[data-testid="rx-ood-reason"]').wait_for(state="visible")
+    page.locator('[data-testid="rx-ood-reason"]').fill("院内制剂目录外镇痛药，临床急需，已告知患者风险")
+    page.locator('[data-testid="rx-submit"]').click()
+    # 成功判定用状态（提交成功 → 自动切「我的处方」出 data-rxid 卡片），不依赖瞬时 toast；
+    # 若撞上 60/min 限流（429，表单状态保留），等待窗口滑动后重试点击。
+    submitted = False
+    for _ in range(5):
+        try:
+            page.wait_for_selector('[data-rxid]', timeout=8_000)
+            submitted = True
+            break
+        except Exception:  # noqa: BLE001 —— 未出卡片（典型：429 限流）→ 重试提交
+            try:
+                page.locator('[data-testid="rx-submit"]').click(timeout=2_000)
+            except Exception:  # noqa: BLE001
+                pass
+    assert submitted, "提交开药未成功（重试耗尽）"
+    ood_id = page.locator('[data-rxid]').first.get_attribute("data-rxid")  # 列表新→旧，首卡即新处方
+    assert ood_id and ood_id != aspirin_id
+
+    # ---- ③ pharm01 UI：红徽断言（任务2）+ 驳回闭环（任务1） ----
+    _login(page, "pharm01")
+    _nav(page, "审核中心")
+    # 全量套件连跑时四个 e2e 文件共享服务端 60/min 的 IP 限流窗口，首刷可能 429 出空
+    # 列表——用审核中心头部「刷新」按钮（重发 load()）轮询重试，窗口滑动后必恢复。
+    ood_card = page.locator(f'[data-rxid="{ood_id}"]')
+    for _ in range(8):
+        try:
+            expect(ood_card).to_be_visible(timeout=7_000)
+            break
+        except AssertionError:
+            page.get_by_role("button", name="刷新").click()
+    else:  # pragma: no cover —— 限流窗口极端拥塞才走到（重试已耗尽）
+        expect(ood_card).to_be_visible(timeout=7_000)
+    expect(ood_card.locator('[data-testid="rx-ood-badge"]')).to_contain_text("含字典外药品·重点审核")
+    expect(ood_card.get_by_text("字典外", exact=True).first).to_be_visible()  # 外典药行红标
+
+    # 任务1 闭环：驳回 → 弹条 → 意见 → 确认 → 成功提示 + 卡片离开队列
+    aspirin_card = page.locator(f'[data-rxid="{aspirin_id}"]')
+    expect(aspirin_card).to_be_visible()
+    aspirin_card.get_by_role("button", name="驳回").click()
+    dialog = page.locator('.el-dialog:has-text("驳回处方 · 填写审核意见")')
+    expect(dialog).to_be_visible()  # 弹条出现（任务1 复现点：功能正常即锁死闭环）
+    dialog.get_by_label("驳回意见").fill("单药适应症依据不足，请补充病程记录后重新提交")
+    dialog.get_by_role("button", name="确认驳回").click()
+    expect(page.locator(".el-message").first).to_contain_text("已驳回")
+    expect(aspirin_card).to_have_count(0)  # 驳回成功后列表刷新，卡片离开队列
+    # 弹条已关闭，且时间线留痕（历史行可见审核状态）
+    expect(dialog).not_to_be_visible()
+    deadline = time.time() + 10
+    while time.time() < deadline:  # 「我的历史」合并渲染处方审核记录（rejected 落 rxHistoryItems）
+        try:
+            page.click('[data-testid="review-tab-history"]')
+            if page.get_by_text(aspirin_id).count():
+                break
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.5)
+    expect(page.get_by_text(aspirin_id).first).to_be_visible()

@@ -791,25 +791,38 @@ class PrescriptionRewriteReq(BaseModel):
     contraindication_reason: str | None = None
 
 
-def _hard_validate_drugs(drugs: list, contraindication_reason: str) -> tuple[list[dict], list[dict], bool]:
-    """提交前服务端规则硬校验（不信任前端；提交与改写重提共用）：
-    - 药名经别名图归一；字典外药名 → ValueError（幻觉拦截，端点层转 422）；
-    - 组合两两查相互作用规则：高危/禁忌命中 → 强制提交必须附 contraindication_reason
-      （缺失 ValueError → 422），有理由放行并标记 forced（forced_with_reason 留痕）。
-    返回 (归一化药品清单, 高危冲突列表, forced 标记)。"""
+def _hard_validate_drugs(drugs: list, contraindication_reason: str) -> tuple[list[dict], list[dict], bool, list[str]]:
+    """提交前服务端规则硬校验（不信任前端；提交与改写重提共用）。
+    整改轮 B 任务2 语义变更（字典外药方案 A，用户拍板）：
+    - 字典外药**不再 422 拒绝**——真实临床字典不会穷尽所有药，人工手动添加允许外典；
+      该药条目标记 out_of_dict=true，且**必须带 note（≥5 字理由，说明何药/为何用）**，
+      否则 ValueError（端点层转 422）：「字典外药品「X」需填写使用理由（≥5字），
+      将交药剂科重点审核」。suggest 端点的幻觉丢弃**保持不变**（LLM 推荐仍只准字典内，
+      人与 AI 的区别：人工可外典留痕，AI 绝不幻觉）。
+    - 其余不变：药名经别名图归一；组合两两查相互作用规则：高危/禁忌命中 → 强制提交
+      必须附 contraindication_reason（缺失 ValueError → 422），有理由放行并标记 forced。
+    返回 (归一化药品清单, 高危冲突列表, forced 标记, 字典外药名清单)。"""
     from backend.core import drug_dict as dd
     amap = dd.alias_map()
     cleaned: list[dict] = []
+    out_of_dict: list[str] = []
     for d in drugs or []:
         if not isinstance(d, dict):
             continue
         raw = str(d.get("name") or "").strip()
+        note = str(d.get("note") or "").strip()
         name = amap.get(raw)
         if not name:
-            raise ValueError(f"药品「{raw or '空'}」不在药品字典内，服务端硬校验拒绝（幻觉拦截）")
-        cleaned.append({"name": name, "dose": str(d.get("dose") or "").strip(),
-                        "freq": str(d.get("freq") or "").strip(),
-                        "note": str(d.get("note") or "").strip()})
+            # 方案A：外典药放行但强制留痕理由（≥5 字），标记交药剂科重点审核
+            if len(note) < 5:
+                raise ValueError(f"字典外药品「{raw or '空'}」需填写使用理由（≥5字），将交药剂科重点审核")
+            name = raw
+            out_of_dict.append(name)
+        entry = {"name": name, "dose": str(d.get("dose") or "").strip(),
+                 "freq": str(d.get("freq") or "").strip(), "note": note}
+        if name in out_of_dict:  # 仅外典药带条目级标记（域层据此透传/重算处方级标记）
+            entry["out_of_dict"] = True
+        cleaned.append(entry)
     if not cleaned:
         raise ValueError("至少需一种字典内有效药品（name 必填）")
     rulemap = dd.rule_map()
@@ -828,7 +841,7 @@ def _hard_validate_drugs(drugs: list, contraindication_reason: str) -> tuple[lis
         pair = "、".join(" × ".join(c["pair"]) for c in conflicts)
         raise ValueError(f"存在高危相互作用组合（{pair}）："
                          "强制提交必须填写禁忌理由 contraindication_reason")
-    return cleaned, conflicts, forced
+    return cleaned, conflicts, forced, out_of_dict
 
 
 def _rx_audit(user: dict, **extra) -> dict:
@@ -843,10 +856,12 @@ async def prescription_create(req: PrescriptionSubmitReq,
                               user: dict = Depends(require_role("doctor"))):
     """医生提交开药（阶段2.3）：服务端规则硬校验（不信任前端）→ 域层 create 直送药剂科
     （→ pending_pharm）。高危/禁忌组合强制提交时 contraindication_reason 必填（缺失 422）；
-    审计 prescription.submitted（强制开立另留 forced_with_reason 事件供药师重点核对）。"""
+    整改轮 B 任务2（方案A 语义变更）：字典外药允许提交但必须带 ≥5 字使用理由（缺失 422），
+    处方标记 out_of_dict 供药剂科重点审核；审计 prescription.submitted payload 增
+    out_of_dict_drugs=[名]。"""
     me = user.get("username", "system")
     try:
-        cleaned, conflicts, forced = _hard_validate_drugs(req.drugs, req.contraindication_reason)
+        cleaned, conflicts, forced, ood = _hard_validate_drugs(req.drugs, req.contraindication_reason)
     except ValueError as e:  # 硬校验不过 → 422（请求内容不合规）
         raise HTTPException(422, str(e))
     try:
@@ -857,7 +872,8 @@ async def prescription_create(req: PrescriptionSubmitReq,
     except ValueError as e:  # 域层兜底（pydantic 已拦大半）→ 400 业务错
         raise HTTPException(400, str(e))
     payload = _rx_audit(user, rid=item["id"], n=len(cleaned),
-                        forced_high_risk=forced, forced_with_reason=forced)
+                        forced_high_risk=forced, forced_with_reason=forced,
+                        out_of_dict_drugs=ood)  # 方案A：外典药名单随审计留痕
     await asyncio.to_thread(get_audit_logger().write, event_type="prescription",
                             action="submitted", actor=me, payload=payload)
     await pg_store.mirror_audit("prescription.submitted", me, payload)
@@ -946,7 +962,8 @@ async def prescription_rewrite(rid: str, body: PrescriptionRewriteReq,
                                user: dict = Depends(require_role("doctor"))):
     """医生改写被驳回处方（仅本人）：更新 case_text/drugs/理由（缺省沿用原值）→ 服务端硬校验 →
     rejected→draft→pending_pharm 一次完成重提。校验不过保持 rejected（422，医生修正后可重试）。
-    审计 prescription.rewritten（改写后仍高危强制开立时另留 forced_with_reason）。"""
+    整改轮 B 任务2（方案A 语义变更）：改写药单同样适用字典外药规则（外典药必须带 ≥5 字
+    使用理由）；out_of_dict 标记随改写重算。审计 prescription.rewritten。"""
     me = user.get("username", "system")
     cur = await asyncio.to_thread(rx.get, rid)
     if cur is None:
@@ -960,7 +977,7 @@ async def prescription_rewrite(rid: str, body: PrescriptionRewriteReq,
     eff_reason = (body.contraindication_reason if body.contraindication_reason is not None
                   else (cur.get("contraindication_reason") or ""))
     try:
-        cleaned, conflicts, forced = _hard_validate_drugs(eff_drugs, eff_reason)
+        cleaned, conflicts, forced, _ood = _hard_validate_drugs(eff_drugs, eff_reason)
     except ValueError as e:  # 校验不过 → 422，处方保持 rejected 供继续修正（不产生死态）
         raise HTTPException(422, str(e))
     try:
@@ -1921,11 +1938,18 @@ class UserCreateReq(BaseModel):
 @router.post("/admin/users")
 async def admin_create_user(body: UserCreateReq, user: dict = Depends(require_role("admin"))):
     from backend.core.auth import create_user, get_user
+    from backend.core.departments import validate_role_dept
     uname = (body.username or "").strip()
     if not (3 <= len(uname) <= 32) or not re.fullmatch(r"[A-Za-z0-9_\-]+", uname):
         raise HTTPException(400, "用户名需 3-32 位，仅字母/数字/下划线/连字符")
     if len(body.password or "") < 8:
         raise HTTPException(400, "密码至少 8 位")
+    # 整改轮 B 任务3（科室-角色归属模型）：建号时校验角色×科室匹配（存量账号不追溯），
+    # 违反 → 422 中文文案（语义变更：此前 dept 不做角色约束，任意组合可入库）。
+    try:
+        validate_role_dept(body.role, (body.dept or "").strip())
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     try:
         ok = await asyncio.to_thread(create_user, uname, body.password, body.role, False,
                                      (body.dept or "").strip())

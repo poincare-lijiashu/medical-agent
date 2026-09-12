@@ -61,8 +61,10 @@ def test_admin_delete_user_blocks_login_and_self(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path)
     adm = _login(c, "admin01", "Med@2026")
     H = {"Authorization": "Bearer " + adm}
+    # 整改轮 B 任务3（语义变更）：建号校验要求 pharmacist dept=药剂科，请求体相应补 dept
     assert c.post("/api/v1/medical/admin/users", headers=H,
-                  json={"username": "tmp01", "password": "Str0ngPass!", "role": "pharmacist"}).status_code == 200
+                  json={"username": "tmp01", "password": "Str0ngPass!", "role": "pharmacist",
+                        "dept": "药剂科"}).status_code == 200
     # 不能删自己
     assert c.delete("/api/v1/medical/admin/users/admin01", headers=H).status_code == 400
     # 删除后登录失效
@@ -100,3 +102,46 @@ def test_deleted_user_token_revoked_immediately(monkeypatch, tmp_path):
     assert c.get("/api/v1/medical/overview", headers={"Authorization": "Bearer " + t2}).status_code == 200
     assert c.delete("/api/v1/medical/admin/users/tmp02", headers=H).status_code == 200
     assert c.get("/api/v1/medical/overview", headers={"Authorization": "Bearer " + t2}).status_code == 401
+
+
+# ---- 整改轮 B 任务3：科室-角色归属模型（建号校验矩阵；存量账号不追溯） ----
+
+def test_admin_create_user_role_dept_matrix(monkeypatch, tmp_path):
+    """三类角色 × 合规/违规建号矩阵（整改轮 B 任务3）：
+    - 合规：doctor→临床科室 / pharmacist→药剂科 / qc→质控科|医务处 均 200；admin 不限；
+    - 违规：pharmacist≠药剂科、qc∉{质控科,医务处}、doctor∈职能部门 → 422 中文文案且不入库；
+    - seed 存量账号（如 qc01=医务处、admin01=医务处）不受新校验影响（不追溯）。"""
+    c = _client(monkeypatch, tmp_path)
+    adm = _login(c, "admin01", "Med@2026")
+    H = {"Authorization": "Bearer " + adm}
+
+    def _mk(u, role, dept):
+        return c.post("/api/v1/medical/admin/users", headers=H,
+                      json={"username": u, "password": "Str0ngPass!", "role": role, "dept": dept})
+
+    # 合规矩阵 → 200 且 dept 落库
+    assert _mk("doc_ok", "doctor", "内科").status_code == 200
+    assert get_user("doc_ok")["dept"] == "内科"
+    assert _mk("ph_ok", "pharmacist", "药剂科").status_code == 200
+    assert _mk("qc_ok1", "qc", "质控科").status_code == 200
+    assert _mk("qc_ok2", "qc", "医务处").status_code == 200
+    assert _mk("adm_ok", "admin", "病案室").status_code == 200, "admin 不限（职能部门亦可）"
+    # 违规矩阵 → 422 中文文案
+    r = _mk("bad_ph1", "pharmacist", "内科")
+    assert r.status_code == 422 and "药剂科" in r.json()["detail"]
+    r = _mk("bad_ph2", "pharmacist", "")
+    assert r.status_code == 422 and "药剂科" in r.json()["detail"]
+    r = _mk("bad_qc1", "qc", "药剂科")
+    assert r.status_code == 422 and "质控科" in r.json()["detail"] and "医务处" in r.json()["detail"]
+    r = _mk("bad_qc2", "qc", "内科")
+    assert r.status_code == 422 and "质控科" in r.json()["detail"]
+    r = _mk("bad_doc1", "doctor", "药剂科")
+    assert r.status_code == 422 and "临床科室" in r.json()["detail"]
+    r = _mk("bad_doc2", "doctor", "病案室")
+    assert r.status_code == 422 and "临床科室" in r.json()["detail"]
+    # 违规请求一律不入库
+    for u in ("bad_ph1", "bad_ph2", "bad_qc1", "bad_qc2", "bad_doc1", "bad_doc2"):
+        assert get_user(u) is None, f"违规建号不得落库：{u}"
+    # 存量账号不追溯：seed 的 qc01（医务处）/admin01（医务处）登录不受影响
+    assert c.post("/api/v1/auth/login", json={"username": "qc01", "password": "Med@2026"}).status_code == 200
+    assert get_user("qc01")["dept"] == "医务处"

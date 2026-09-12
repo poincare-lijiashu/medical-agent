@@ -73,6 +73,16 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_agent.startup_pg_failed", error=str(exc)[:120])
     try:
+        # 整改轮 B 任务3（科室-角色归属模型）：职能部门（药剂科/医务处/质控科/病案室）
+        # 兜底入库（幂等）——PG 真源与 JSON 兜底两侧同步补齐，科室-角色建号校验依赖其存在。
+        import asyncio as _asyncio
+        from backend.core import departments as _departments
+        added = await _asyncio.to_thread(_departments.ensure_functional_departments)
+        if added:
+            logger.info("medical_agent.startup.functional_departments_added", names="、".join(added))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_agent.startup.functional_departments_failed", error=str(exc)[:120])
+    try:
         from backend.core.embedder import get_bge_m3
         get_bge_m3()
         logger.info("medical_agent.startup.embedder_ready")

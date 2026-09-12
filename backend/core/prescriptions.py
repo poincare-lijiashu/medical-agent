@@ -74,7 +74,9 @@ def _save(items: list[dict]) -> None:
 
 
 def _clean_drugs(drugs) -> list[dict]:
-    """药品条目归一：[{name,dose,freq,note}]，name 为空/非 dict 条目丢弃。"""
+    """药品条目归一：[{name,dose,freq,note}]，name 为空/非 dict 条目丢弃。
+    整改轮 B 任务2（字典外药方案 A）：out_of_dict 为真时随条目保留（字典外药
+    标记必须跨提交/改写/持久化存活），字典内药不写该键（存量数据/断言零扰动）。"""
     out = []
     for d in (drugs or []):
         if not isinstance(d, dict):
@@ -82,10 +84,13 @@ def _clean_drugs(drugs) -> list[dict]:
         name = str(d.get("name") or "").strip()
         if not name:
             continue
-        out.append({"name": name,
-                    "dose": str(d.get("dose") or "").strip(),
-                    "freq": str(d.get("freq") or "").strip(),
-                    "note": str(d.get("note") or "").strip()})
+        entry = {"name": name,
+                 "dose": str(d.get("dose") or "").strip(),
+                 "freq": str(d.get("freq") or "").strip(),
+                 "note": str(d.get("note") or "").strip()}
+        if d.get("out_of_dict"):  # 语义变更（方案A）：字典外药条目级标记透传
+            entry["out_of_dict"] = True
+        out.append(entry)
     return out
 
 
@@ -102,7 +107,9 @@ def create(*, doctor: str, dept: str = "", case_text: str, drugs: list[dict],
     """创建处方（→ pending_pharm 直送药剂科复核），返回处方记录。
 
     forced_high_risk：医生在系统提示高危后仍强制开立时的显式标记（审计/药师重点核对用），
-    不改变状态机流转，仅作留痕。"""
+    不改变状态机流转，仅作留痕。
+    整改轮 B 任务2（字典外药方案 A）：out_of_dict=任一药在字典外即 true（路由层
+    _hard_validate_drugs 已对字典外药强制 note≥5 字理由），供药剂科重点审核与展示。"""
     if not (doctor or "").strip():
         raise ValueError("医生不能为空")
     text = _validate_case_text(case_text)
@@ -116,6 +123,7 @@ def create(*, doctor: str, dept: str = "", case_text: str, drugs: list[dict],
         "dept": str(dept or "").strip(),
         "case_text": text,
         "drugs": cleaned,
+        "out_of_dict": any(d.get("out_of_dict") for d in cleaned),  # 方案A：处方级外典标记
         "contraindication_reason": str(contraindication_reason or "").strip(),
         "status": "pending_pharm",
         "pharm_reviewer": None,
@@ -199,6 +207,8 @@ def rewrite(rx_id: str, doctor: str, case_text: str | None = None,
             rx["drugs"] = cleaned
         if contraindication_reason is not None:
             rx["contraindication_reason"] = str(contraindication_reason).strip()
+        # 方案A（整改轮 B 任务2）：改写后按当前药单重算处方级外典标记（换药可进出字典）
+        rx["out_of_dict"] = any(d.get("out_of_dict") for d in (rx.get("drugs") or []))
         rx["status"] = "draft"
         rx["updated_at"] = now
 

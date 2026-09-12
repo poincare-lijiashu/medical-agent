@@ -4,7 +4,10 @@
      自定义加药（字典搜索前端过滤 + 字典外二次确认）；已选药单（删/编辑剂量频次）；
      提交 POST /prescriptions；「我的处方」tab（状态徽章 pending_pharm 黄/approved 绿/
      rejected 红/draft 灰 + 驳回意见 + 审核人 + 重写回填 → rewrite 自动重提）；
-     DRUG_DISCLAIMER 免责条逐字。 -->
+     DRUG_DISCLAIMER 免责条逐字。
+     整改轮 B 任务2（字典外药方案 A，语义变更）：字典外药允许提交——药单行红标「字典外」
+     + 行内使用理由输入（必填 ≥5 字，提交前端预检 toast 阻断），理由随 note 上送，
+     处方标记 out_of_dict 交药剂科重点审核（此前外典药直接阻断提交）。 -->
 <template>
   <div>
     <div class="shead">
@@ -131,15 +134,23 @@
               v-for="(d, i) in rxSelected" :key="i"
               style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0"
             >
-              <b style="min-width: 110px">{{ d.name }}</b>
-              <el-tag size="small" :type="inDict(d.name) ? 'primary' : 'warning'" effect="light" round>
+              <b style="min-width: 110px" :style="!inDict(d.name) ? 'color: var(--danger, #c0392b)' : ''">{{ d.name }}</b>
+              <el-tag size="small" :type="inDict(d.name) ? 'primary' : 'danger'" effect="light" round>
                 {{ inDict(d.name) ? '字典内' : '字典外' }}</el-tag>
+              <!-- 字典外药（方案A）：行内使用理由输入（必填 ≥5 字，红标星号提示） -->
+              <template v-if="!inDict(d.name)">
+                <span style="color: var(--danger, #c0392b)">*</span>
+                <el-input v-model="d.ood" class="inp" style="max-width: 300px" spellcheck="false"
+                  data-testid="rx-ood-reason" :aria-label="'字典外药品 ' + d.name + ' 使用理由'"
+                  placeholder="字典外使用理由（必填 ≥5 字，说明何药/为何用，将交药剂科重点审核）"
+                />
+              </template>
               <el-input :model-value="d.dose" style="max-width: 130px" placeholder="剂量（如 0.5g）"
                 @update:model-value="rxEditDrug(i, 'dose', $event)" />
               <el-input :model-value="d.freq" style="max-width: 130px" placeholder="频次（如 qd）"
                 @update:model-value="rxEditDrug(i, 'freq', $event)" />
               <el-button size="small" text type="danger" @click="rxDelDrug(i)">移除</el-button>
-              <span v-if="d.note" class="src">{{ d.note }}</span>
+              <span v-if="d.note && inDict(d.name)" class="src">{{ d.note }}</span>
             </div>
           </template>
           <div v-else class="src" data-testid="rx-selected">药单为空：勾选上方 AI 建议，或通过字典搜索/手动输入添加药品。</div>
@@ -335,7 +346,8 @@ function rxAddManual() {
   }
   rxManualConfirm.value = ''
   outOfDictTip.value = ''
-  rxSelected.value.push({ name, dose, freq, note: '手动输入' + (inDict(name) ? '' : ' · 字典外') })
+  // 方案A：字典外药随条目初始化空理由（药单行内必填，提交前端预检）
+  rxSelected.value.push({ name, dose, freq, ood: '', note: '手动输入' + (inDict(name) ? '' : ' · 字典外') })
   manual.name = ''; manual.dose = ''; manual.freq = ''
 }
 
@@ -359,12 +371,27 @@ async function rxSubmit() {
   if (!rxSelected.value.length) { ElMessage.warning('请至少选择一种药品'); return }
   const reason = rxReason.value.trim()
   if (rxLiveConflicts.value.length && !reason) { ElMessage.warning('存在高危联用组合：必须填写联用理由才能提交'); return }
-  const outDict = rxSelected.value.filter((d) => !inDict(d.name)).map((d) => d.name)
-  if (outDict.length) { ElMessage.warning('药品「' + outDict.join('、') + '」不在药品字典，服务端硬校验将拒绝提交，请移除后再试'); return }
+  // 整改轮 B 任务2（字典外药方案 A，语义变更）：外典药允许提交但必须带 ≥5 字使用理由
+  // （前端预检 toast 阻断；服务端 422 双保险；理由随 note 上送，处方标记 out_of_dict
+  // 交药剂科重点审核。此前外典药在此直接阻断提交。）
+  const oodMissing = rxSelected.value.filter((d) => !inDict(d.name) && !(d.ood || '').trim())
+  if (oodMissing.length) {
+    ElMessage.warning('字典外药品「' + oodMissing.map((d) => d.name).join('、') + '」需填写使用理由后才能提交（将交药剂科重点审核）')
+    return
+  }
+  const oodShort = rxSelected.value.filter((d) => !inDict(d.name) && (d.ood || '').trim().length < 5)
+  if (oodShort.length) {
+    ElMessage.warning('字典外药品「' + oodShort.map((d) => d.name).join('、') + '」的使用理由需 ≥5 字（说明何药/为何用）')
+    return
+  }
   submitting.value = true
   const body = {
     case_text: caseText,
-    drugs: rxSelected.value.map((d) => ({ name: d.name, dose: d.dose, freq: d.freq, note: d.note || '' })),
+    // 方案A：字典外药的使用理由经 note 上送（服务端按 note≥5 字校验并标记 out_of_dict）
+    drugs: rxSelected.value.map((d) => ({
+      name: d.name, dose: d.dose, freq: d.freq,
+      note: (!inDict(d.name) && (d.ood || '').trim()) ? d.ood.trim() : (d.note || ''),
+    })),
     contraindication_reason: reason,
   }
   try {
@@ -412,7 +439,11 @@ function rxStartRewrite(id) {
   rxEditForced.value = !!it.forced_high_risk
   rxReason.value = it.contraindication_reason || ''
   rxCase.value = it.case_text || ''
-  rxSelected.value = (it.drugs || []).map((d) => ({ name: d.name, dose: d.dose || '', freq: d.freq || '', note: d.note || '' }))
+  // 方案A：改写回填时，字典外药的理由（服务端存于 note）预填回行内理由输入框
+  rxSelected.value = (it.drugs || []).map((d) => ({
+    name: d.name, dose: d.dose || '', freq: d.freq || '', note: d.note || '',
+    ood: inDict(d.name) ? '' : (d.note || ''),
+  }))
   rxSuggests.value = []; rxBlocked.value = false; rxConflicts.value = []; rxWarnings.value = []
   rxManualConfirm.value = ''; outOfDictTip.value = ''
   suggestLoaded.value = false; suggestErr.value = ''

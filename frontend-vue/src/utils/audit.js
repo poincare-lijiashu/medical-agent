@@ -59,8 +59,9 @@ export function humanizeAudit(e) {
     /* —— 智能开药 —— */
     suggested: () => `AI 开药建议（推荐 ${p.n ?? 0} 种${p.blocked ? ' · 高危联用已阻断' : ''}${(p.dropped || []).length ? ` · 拦截幻影药 ${p.dropped.length} 个` : ''}）`,
     /* 阶段2.3 处方流转：提交/改写重提/高危强制开立（approved/rejected 复用上方既有键）；
-       阶段3 查漏结论：prescription 全部审计动作均已映射；问题3② 补 list_reviewed_by_me */
-    submitted: () => `提交了处方送药师审核（${p.n ?? '?'} 种药${p.forced_high_risk ? ' · 高危强制开立' : ''}）`,
+       阶段3 查漏结论：prescription 全部审计动作均已映射；问题3② 补 list_reviewed_by_me；
+       整改轮 B 任务2（方案A）：submitted 人话带字典外药名单（out_of_dict_drugs） */
+    submitted: () => `提交了处方送药师审核（${p.n ?? '?'} 种药${p.forced_high_risk ? ' · 高危强制开立' : ''}${(p.out_of_dict_drugs || []).length ? ' · 含字典外药 ' + p.out_of_dict_drugs.join('、') : ''}）`,
     rewritten: () => `改写了被驳回处方并重新送审（${p.n ?? '?'} 种药）`,
     forced_with_reason: () => `高危联用强制开立并附理由（${rid}）`.trim(),
     list_reviewed_by_me: () => p.n !== undefined ? `查看了本人审核过的处方（${p.n} 条）` : '查看了本人审核过的处方',

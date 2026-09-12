@@ -584,6 +584,100 @@ def test_reviewed_by_me_role_guard(suggest_env):
         "问题4：qc 无处方审核权，不提供 reviewed-by-me 视图"
 
 
+# ---- 整改轮 B 任务2：字典外药方案 A（允许提交 + 强制理由 ≥5 字 + 标记留痕） ----
+
+OOD_REASON = "临床急需的抗纤维化院内制剂，目录外用药，已告知患者风险并留观"  # ≥5 字理由样例
+
+
+def test_submit_out_of_dict_with_reason_200_marked(suggest_env):
+    """方案A：字典外药附 ≥5 字理由 → 200；条目级 + 处方级 out_of_dict 标记持久化（JSON
+    兜底真源），理由随 note 留痕；审计 submitted payload 带 out_of_dict_drugs=[名]。"""
+    c, audit, tmp = suggest_env
+    doc = _login(c, "doctor01")
+    r = _submit(c, doc, [{"name": "华法林"},
+                         {"name": "神仙速效散", "dose": "1粒", "freq": "tid", "note": OOD_REASON}])
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["out_of_dict"] is True, "任一药外典 → 处方级标记 true"
+    assert "out_of_dict" not in d["drugs"][0], "字典内药不带条目级标记"
+    assert d["drugs"][1]["out_of_dict"] is True and d["drugs"][1]["note"] == OOD_REASON
+    items = json.loads((tmp / "prescriptions.json").read_text(encoding="utf-8"))
+    assert items[0]["out_of_dict"] is True and items[0]["drugs"][1]["out_of_dict"] is True, \
+        "标记持久化（JSON 兜底真源；PG data jsonb 往返见 test_pg_repo）"
+    sub = [e for e in audit.entries if e["payload"].get("action") == "submitted"][-1]
+    assert sub["payload"]["out_of_dict_drugs"] == ["神仙速效散"], "审计留痕外典药名单"
+
+
+def test_submit_out_of_dict_without_reason_422(suggest_env):
+    """方案A：字典外药无理由 → 422 指定中文文案；不落库、不留痕。"""
+    c, audit, tmp = suggest_env
+    doc = _login(c, "doctor01")
+    r = _submit(c, doc, [{"name": "神仙速效散"}])
+    assert r.status_code == 422
+    assert r.json()["detail"] == "字典外药品「神仙速效散」需填写使用理由（≥5字），将交药剂科重点审核"
+    assert not os.path.isfile(tmp / "prescriptions.json"), "校验拒绝不落库"
+    assert not [e for e in audit.entries if e["payload"].get("action") == "submitted"]
+
+
+def test_submit_out_of_dict_reason_too_short_422(suggest_env):
+    """方案A：理由不足 5 字 → 422（≥5 字硬下限，与前端预检一致）。"""
+    c, _audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    r = _submit(c, doc, [{"name": "神仙速效散", "note": "测试"}])
+    assert r.status_code == 422
+    assert "≥5字" in r.json()["detail"]
+
+
+def test_submit_out_of_dict_all_dict_still_clean(suggest_env):
+    """回归：纯字典内药提交 → out_of_dict=False（处方级恒存在为 bool），payload 外典名单为空。"""
+    c, audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    d = _submit(c, doc, [{"name": "华法林"}]).json()
+    assert d["out_of_dict"] is False and "out_of_dict" not in d["drugs"][0]
+    sub = [e for e in audit.entries if e["payload"].get("action") == "submitted"][-1]
+    assert sub["payload"]["out_of_dict_drugs"] == []
+
+
+def test_rewrite_out_of_dict_recompute_and_422(suggest_env):
+    """改写（方案A）：外典药换回字典内药 → 处方级标记重算 False；改写引入外典药无理由 →
+    422 且保持 rejected（不产生死态）。"""
+    c, _audit, _tmp = suggest_env
+    doc = _login(c, "doctor01")
+    rid = _submit(c, doc, [{"name": "华法林"},
+                           {"name": "神仙速效散", "note": OOD_REASON}]).json()["id"]
+    ph = _login(c, "pharm01")
+    assert c.post(f"{SUB}/{rid}/review", headers=_h(ph),
+                  json={"action": "reject", "opinion": "外典药需复核"}).status_code == 200
+    # 无理由引入外典药 → 422 保持 rejected
+    r = c.post(f"{SUB}/{rid}/rewrite", headers=_h(doc),
+               json={"drugs": [{"name": "神仙速效散"}]})
+    assert r.status_code == 422 and rx.get(rid)["status"] == "rejected"
+    # 换回字典内药 → 200 且处方级标记重算 False
+    r2 = c.post(f"{SUB}/{rid}/rewrite", headers=_h(doc),
+                json={"drugs": [{"name": "华法林", "dose": "2.5mg", "freq": "qd"}],
+                      "contraindication_reason": ""})
+    assert r2.status_code == 200, r2.text
+    d = r2.json()
+    assert d["out_of_dict"] is False and "out_of_dict" not in d["drugs"][0]
+    assert d["status"] == "pending_pharm"
+
+
+def test_suggest_still_drops_out_of_dict_after_option_a(suggest_env, monkeypatch):
+    """方案A 回归锁：suggest 幻觉丢弃保持不变——LLM 推荐仍只准字典内（人工手动添加
+    才允许外典，人与 AI 的区别），不因提交端放行而放宽。"""
+    c, _audit, _tmp = suggest_env
+    fake = _FakeLLM(json.dumps([
+        {"name": "华法林", "dose": "2.5mg", "freq": "qd", "reason": "抗凝"},
+        {"name": "神仙速效散", "dose": "1粒", "freq": "tid", "reason": "幻觉药"}],
+        ensure_ascii=False))
+    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_llm",
+                        lambda *a, **k: fake)
+    doc = _login(c, "doctor01")
+    d = c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),
+               json={"case_text": CASE}).json()
+    assert [s["name"] for s in d["suggestions"]] == ["华法林"], "幻觉药仍被丢弃"
+
+
 # ---- 对抗轮 A4：线程级竞态补测（域层 _lock 锁死「同 id 并发流转恰好一个赢家」语义） ----
 
 def _race_two(fn_a, fn_b):

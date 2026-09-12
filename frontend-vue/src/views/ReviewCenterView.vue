@@ -173,6 +173,8 @@
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
             <b class="num">{{ it.id }}</b>
             <el-tag v-if="it.forced_high_risk" type="danger" effect="light" size="small" round>高危强制开立</el-tag>
+            <!-- 整改轮 B 任务2（方案A）：字典外药处方显眼红徽——药剂科重点审核入口 -->
+            <el-tag v-if="it.out_of_dict" type="danger" effect="dark" size="small" round data-testid="rx-ood-badge">含字典外药品·重点审核</el-tag>
             <span class="src">医生 {{ it.doctor || '—' }} · 科室 {{ it.dept || '—' }} · {{ fmtTs(it.created_at) }}</span>
             <span style="margin-left: auto; display: inline-flex; gap: 6px">
               <el-button size="small" type="primary" @click="rxReview(it.id, 'approve')">通过</el-button>
@@ -182,8 +184,10 @@
           <div class="txt" style="margin-top: 6px">病例摘要：{{ (it.case_text || '').slice(0, 120) }}{{ (it.case_text || '').length > 120 ? '…' : '' }}</div>
           <ul class="feed" style="margin-top: 4px">
             <li v-for="(d, di) in (it.drugs || [])" :key="di">
-              <span class="e">{{ d.name }}</span>
-              <span class="src">{{ d.dose || '剂量待定' }} · {{ d.freq || '频次待定' }}{{ d.note ? ' · ' + d.note : '' }}</span>
+              <!-- 方案A：外典药红字 + 字典外徽标；理由（note）随行展示 -->
+              <span class="e" :style="d.out_of_dict ? 'color: var(--danger, #c0392b)' : ''">{{ d.name }}</span>
+              <el-tag v-if="d.out_of_dict" type="danger" effect="light" size="small" round>字典外</el-tag>
+              <span class="src">{{ d.dose || '剂量待定' }} · {{ d.freq || '频次待定' }}{{ d.note ? ' · 理由：' + d.note : '' }}</span>
             </li>
           </ul>
           <div v-if="it.contraindication_reason || it.forced_high_risk" class="src" style="margin-top: 4px; border-left: 3px solid #c0392b; padding-left: 8px">
@@ -641,6 +645,7 @@ async function doResolve() {
     load()
   } catch (e) {
     ElMessage.error('操作失败：' + detailText(e))
+    load() // 整改轮 B 任务1（防僵尸按钮）：400/409 状态失效时强制刷新列表，清掉残留操作按钮
   } finally { resolving.value = false }
 }
 // 双控自动签发翻案：回到待核对由另一名人员人工复核（双控对称：提交人不可翻案）
@@ -649,7 +654,10 @@ async function reopen(id) {
     await http.post('/medical/review/' + encodeURIComponent(id) + '/reopen')
     ElMessage.success('已转人工复核，请在「待处理」中核对')
     load()
-  } catch (e) { ElMessage.error('操作失败：' + detailText(e)) }
+  } catch (e) {
+    ElMessage.error('操作失败：' + detailText(e))
+    load() // 任务1：状态失效（400/409）时同步刷新，防僵尸按钮
+  }
 }
 // 医生对 AI 留痕自动签发项知情确认（仅本人；后端校验+审计 self_confirmed）
 async function selfConfirm(id) {
@@ -657,11 +665,18 @@ async function selfConfirm(id) {
     await http.post('/medical/review/' + encodeURIComponent(id) + '/self-confirm')
     ElMessage.success('已确认知悉，感谢配合')
     load()
-  } catch (e) { ElMessage.error('操作失败：' + detailText(e)) }
+  } catch (e) {
+    ElMessage.error('操作失败：' + detailText(e))
+    load() // 任务1：状态失效（400/409）时同步刷新，防僵尸按钮
+  }
 }
 
 // ---- 开药待审：通过/驳回（POST /prescriptions/{rid}/review；驳回意见必填） ----
+// 整改轮 B 任务1（驳回无反应修复·根因）：rxRejectOn 此前**未声明**（模板/处理函数均在用，
+// script-setup 运行时解析为 undefined）→ 点「驳回」执行 rxRejectOn.value=true 抛 TypeError，
+// 驳回弹条永不出现且无任何提示——即用户实测的「无反应」。补上声明即闭环。
 const rxOpinion = ref('')
+const rxRejectOn = ref(false)
 const rxRejectId = ref('')
 function rxReview(id, action) {
   if (action === 'reject') {
@@ -684,7 +699,11 @@ async function rxReviewPost(id, body) {
     ElMessage.success(body.action === 'approve' ? '处方已签发通过' : '已驳回，意见将反馈给开药医生')
     load()
   } catch (e) {
+    // 整改轮 B 任务1（驳回无反应修复）：错误提示照常透出；无论失败原因（典型：该处方
+    // 状态已变，400「非法状态流转」= 列表未刷新时的僵尸按钮），一律强制刷新列表——
+    // 保证「驳回→弹条→意见→提交→列表刷新」闭环，按钮不再残留于已处理的处方卡上。
     ElMessage.error('操作失败：' + detailText(e))
+    load()
   }
 }
 

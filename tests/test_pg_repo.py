@@ -903,6 +903,27 @@ def test_prescriptions_pg_roundtrip_truth_source(fake_pg, tmp_path, monkeypatch)
     assert loaded[0]["status"] == "pending_pharm" and loaded[0]["forced_high_risk"] is False
 
 
+def test_prescriptions_out_of_dict_pg_json_roundtrip(fake_pg, tmp_path, monkeypatch):
+    """整改轮 B 任务2（字典外药方案A）：条目级 out_of_dict（药品条目）+ 处方级 out_of_dict
+    标记经「JSON 兜底写 + PG data jsonb 全量同步」往返无损（PG 真源读回完整字段）。"""
+    f = tmp_path / "prescriptions.json"
+    monkeypatch.setattr(rx_mod, "PRESCRIPTIONS_FILE", str(f))
+    ood = dict(_RX, id="rx-ood", out_of_dict=True,
+               drugs=[{"name": "华法林", "dose": "2.5mg", "freq": "qd", "note": "监测 INR"},
+                      {"name": "神仙速效散", "dose": "1粒", "freq": "tid",
+                       "note": "外典理由（≥5字）", "out_of_dict": True}])
+    with rx_mod._lock:
+        rx_mod._save([ood])
+    assert json.loads(f.read_text(encoding="utf-8"))[0]["out_of_dict"] is True  # JSON 已落盘
+    assert fake_pg["prescriptions"]["rx-ood"]["out_of_dict"] is True            # PG 已同步
+    f.unlink()  # 删 JSON：读必须仍完整（PG 真源）
+    loaded = rx_mod._load()
+    assert loaded[0]["out_of_dict"] is True
+    assert loaded[0]["drugs"][0].get("out_of_dict") is None   # 字典内药无条目级标记
+    assert loaded[0]["drugs"][1]["out_of_dict"] is True       # 外典药条目级标记完整往返
+    assert loaded[0]["drugs"][1]["note"] == "外典理由（≥5字）"
+
+
 def test_migrate_prescriptions_imports_and_reconciles(fake_pg, tmp_path, monkeypatch):
     """阶段2.1 迁移：prescriptions——PG 表空 → JSON 全量导入；PG 非空 → 按 id 差集
     只增不覆盖补齐（JSON ⊇ PG，幂等可重复跑，与 review_queue 同纪律）。"""

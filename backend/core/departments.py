@@ -21,6 +21,33 @@ _lock = threading.Lock()
 
 DEFAULT_DEPARTMENTS = ["内科", "外科", "口腔科", "妇产科", "儿科", "急诊科"]
 
+# 整改轮 B 任务3（科室-角色归属模型）：职能部门清单（医院真实编制模型）。
+# 药师编制在药剂科、质控在质控科/医务处、临床科室只有医生——职责天然全院。
+# 核对结论：药剂科此前**不在**科室字典（仅作为演示账号 dept 值存在），一并补齐。
+FUNCTIONAL_DEPARTMENTS = ["药剂科", "医务处", "质控科", "病案室"]
+
+
+def ensure_functional_departments() -> list[str]:
+    """职能部门兜底入库（服务启动时调用，幂等）：缺哪个补哪个，返回本次新增名单。
+    PG 池可用时经 add_department 走「JSON 兜底 + PG 全量同步」，两侧真源同步补齐。"""
+    return [name for name in FUNCTIONAL_DEPARTMENTS if add_department(name)]
+
+
+def validate_role_dept(role: str, dept: str) -> None:
+    """科室-角色归属校验（整改轮 B 任务3，仅新建/更新账号时执行，存量账号不追溯）：
+    - pharmacist → dept 必须为「药剂科」（药师编制在药剂科）；
+    - qc → dept 必须 ∈ {质控科, 医务处}（质控编制在质控科/医务处）；
+    - doctor → dept 不得为职能部门（临床科室只有医生）；
+    - admin → 不限（管理岗跨科室）。
+    违反抛 ValueError（admin/users 端点转 422 中文文案）。"""
+    d = (dept or "").strip()
+    if role == "pharmacist" and d != "药剂科":
+        raise ValueError("药师（pharmacist）所属科室必须为「药剂科」")
+    if role == "qc" and d not in ("质控科", "医务处"):
+        raise ValueError("质控员（qc）所属科室必须为「质控科」或「医务处」")
+    if role == "doctor" and d in FUNCTIONAL_DEPARTMENTS:
+        raise ValueError("医生（doctor）所属科室须为临床科室，不能是职能部门（药剂科/质控科/医务处/病案室）")
+
 
 def _load_json() -> dict:
     """departments.json 现状读逻辑（损坏回落默认；JSON 兜底真源）。"""

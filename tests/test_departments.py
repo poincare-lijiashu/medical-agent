@@ -117,3 +117,41 @@ def test_department_routes_require_admin(monkeypatch, tmp_path):
     assert c.post("/api/v1/medical/admin/departments", headers=H,
                   json={"name": "x"}).status_code == 403
     assert c.delete("/api/v1/medical/admin/departments/内科", headers=H).status_code == 403
+
+
+# ---- 整改轮 B 任务3：职能部门 + 科室-角色归属校验 ----
+
+def test_functional_departments_ensure_idempotent(monkeypatch, tmp_path):
+    """职能部门兜底入库（服务启动时调用）：首次全量补齐、再次调用幂等（不重复新增）。"""
+    monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(tmp_path / "departments.json"))
+    added = dept_mod.ensure_functional_departments()
+    assert set(added) == set(dept_mod.FUNCTIONAL_DEPARTMENTS), "缺哪个补哪个（首次全量）"
+    lst = dept_mod.list_departments()
+    assert set(dept_mod.FUNCTIONAL_DEPARTMENTS) <= set(lst)
+    assert dept_mod.ensure_functional_departments() == [], "幂等：已存在不再新增"
+    assert lst.count("药剂科") == 1 and lst.count("病案室") == 1, "无重复条目"
+
+
+def test_validate_role_dept_matrix():
+    """科室-角色归属校验纯函数矩阵（整改轮 B 任务3）：合规放行 / 违规 ValueError 中文文案。"""
+    import pytest
+    # pharmacist → 必须药剂科
+    dept_mod.validate_role_dept("pharmacist", "药剂科")
+    with pytest.raises(ValueError, match="药剂科"):
+        dept_mod.validate_role_dept("pharmacist", "内科")
+    with pytest.raises(ValueError, match="药剂科"):
+        dept_mod.validate_role_dept("pharmacist", "")
+    # qc → ∈ {质控科, 医务处}
+    dept_mod.validate_role_dept("qc", "质控科")
+    dept_mod.validate_role_dept("qc", "医务处")
+    with pytest.raises(ValueError, match="质控科"):
+        dept_mod.validate_role_dept("qc", "药剂科")
+    # doctor → 禁职能部门（临床科室）
+    dept_mod.validate_role_dept("doctor", "内科")
+    dept_mod.validate_role_dept("doctor", "")
+    for f in dept_mod.FUNCTIONAL_DEPARTMENTS:
+        with pytest.raises(ValueError, match="临床科室"):
+            dept_mod.validate_role_dept("doctor", f)
+    # admin 不限
+    dept_mod.validate_role_dept("admin", "病案室")
+    dept_mod.validate_role_dept("admin", "")

@@ -630,3 +630,44 @@ def test_phase6_dedemo_frontend_markers_removed():
     assert "qcSample" not in html, "qcSample() 假病历一键填充必须保持移除（商用不得一键注入虚构病历）"
     assert "填入示例" not in html, "「填入示例」按钮必须保持移除（阶段6 去demo）"
     assert "演示账号" not in html, "用户可见界面不应出现「演示账号」字样（改中性文案，演示账号说明放文档）"
+
+
+# ---------- 整改轮 B：任务1 驳回闭环刷新 / 任务2 字典外方案A / 任务3 科室-角色联动 ----------
+
+def test_round_b_frontend_markers_present():
+    """整改轮 B 三项任务前端标记锁（Vue 语义版）：
+    - 任务1（驳回无反应修复）：开药驳回提交失败分支强制 load() 刷新列表（防僵尸按钮），
+      错误提示照常透出；复核队列签发/驳回/翻案/知情确认同样失败即刷新；
+    - 任务2（字典外药方案 A）：RxView 药单行红标「字典外」+ 行内理由输入（必填 ≥5 字，
+      提交前端预检 toast 阻断），理由随 note 上送；ReviewCenter 开药待审卡「含字典外
+      药品·重点审核」红徽 + 外典药红字；audit.js submitted 人话带外典药名单；
+    - 任务3（科室-角色归属）：DataView 建号表单角色→科室下拉联动过滤（deptOptions，
+      pharmacist 只见药剂科 / qc 只见质控科+医务处 / doctor 隐藏职能部门）+ 切角色清脏值。"""
+    html = _vue_source()
+    for marker in (
+        # 任务2：RxView 方案A（红标 + 理由输入 + 前端预检 + 理由随 note 上送）
+        "data-testid=\"rx-ood-reason\"",
+        "字典外使用理由（必填 ≥5 字，说明何药/为何用，将交药剂科重点审核）",
+        "需填写使用理由后才能提交（将交药剂科重点审核）",
+        "的使用理由需 ≥5 字（说明何药/为何用）",
+        "(!inDict(d.name) && (d.ood || '').trim()) ? d.ood.trim() : (d.note || '')",
+        # 任务2：ReviewCenter 开药待审卡红徽 + 外典药红字/徽标
+        "含字典外药品·重点审核",
+        "d.out_of_dict ? 'color: var(--danger, #c0392b)' : ''",
+        # 任务2：审计人话带外典药名单
+        "含字典外药 ' + p.out_of_dict_drugs.join('、')",
+        # 任务3：DataView 科室下拉联动过滤
+        "const FUNC_DEPTS = ['药剂科', '医务处', '质控科', '病案室']",
+        "function onRoleChange()",
+        "if (nu.role === 'pharmacist') return all.filter((n) => n === '药剂科')",
+        "if (nu.role === 'qc') return all.filter((n) => n === '质控科' || n === '医务处')",
+        "if (nu.role === 'doctor') return all.filter((n) => !FUNC_DEPTS.includes(n))",
+        "@change=\"onRoleChange\"",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    # 任务1：四个列表操作提交函数的失败分支必须刷新列表（防僵尸按钮）
+    for fn_name in ("rxReviewPost", "doResolve", "reopen", "selfConfirm"):
+        fn = _extract_fn(html, fn_name)
+        assert "load()" in fn, f"{fn_name} 失败分支必须强制刷新列表（任务1 防僵尸按钮）"
+    # 任务2 反向锁：外典药直接阻断提交的旧文案必须移除（方案A 语义变更：允许提交+强制理由）
+    assert "服务端硬校验将拒绝提交" not in html, "方案A 后外典药不再阻断提交（旧文案残留即回退）"
