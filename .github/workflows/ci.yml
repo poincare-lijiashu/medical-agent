@@ -1,0 +1,64 @@
+# MedAssist CI —— ubuntu + Python 3.11 + PG service container（postgres:16）
+# 口径承诺：全量 pytest 绿。
+#   - LLM/网络调用全部 mock（openai/httpx 单测均 monkeypatch，不触网）；
+#   - Playwright e2e 未安装时 pytest.importorskip 自动 skip（CI 不装 playwright）；
+#   - PG 不可达时 test_pg_integration 整文件 skipif（探针 3s 连不上即跳）；
+#   - Milvus/嵌入模型相关测试全程注入假客户端/假模型（embedder._model 懒加载可替换）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    services:
+      # 与 .env.example / docker-compose 同源凭证（POSTGRES_* 只作用于容器初始化）
+      postgres:
+        image: postgres:16
+        ports:
+          - 5433:5432
+        env:
+          POSTGRES_USER: medagent
+          POSTGRES_PASSWORD: medagent123
+          POSTGRES_DB: medagent
+        options: >-
+          --health-cmd "pg_isready -U medagent -d medagent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # 应用侧 PG 连接（backend/config.py: pg_host/pg_port/... 环境变量大小写不敏感）
+      PG_HOST: 127.0.0.1
+      PG_PORT: "5433"
+      PG_USER: medagent
+      PG_PASSWORD: medagent123
+      PG_DATABASE: medagent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # torch 不固化（requirements.txt 注释：按 docs/DEPLOY.md 部署矩阵二选一安装）——
+      # CI 先装 CPU 轮缩小体积提速；随后 requirements 解析 sentence-transformers/
+      # FlagEmbedding 的 torch 依赖时直接命中已装版本，不再从 PyPI 拉 CUDA 大包
+      - name: 安装 PyTorch（CPU 轮）
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 安装项目依赖（pytest/pytest-timeout 已固化在 requirements.txt）
+        run: pip install -r requirements.txt
+
+      # service container 是全新空库：先建池+建表（含平滑升级列与 ux_drug_rules_pair
+      # 唯一索引），test_pg_integration 真库冒烟才有 schema 可用（仅幂等 CREATE IF NOT EXISTS）
+      - name: 初始化 PG schema
+        run: python -c "import asyncio; from backend.core import pg_store; print('pg_ready:', asyncio.run(pg_store.init()))"
+
+      # pytest.ini 已带 --timeout=300 --timeout_method=thread（线程法跨平台，Linux 兼容）
+      - name: 运行测试
+        run: pytest -q

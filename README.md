@@ -1,5 +1,13 @@
 # MedAssist（MedicalAssist）· 科室级临床决策支持系统（CDSS）
 
+[![CI](https://github.com/poincare-lijiashu/medical-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/poincare-lijiashu/medical-agent/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/License-MIT-blue)
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.117-009688)
+![Vue](https://img.shields.io/badge/Vue-3-4FC08D)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
+![Tests](https://img.shields.io/badge/Tests-759%20passing-brightgreen)
+
 面向科室级部署的开源 CDSS 参考实现：FastAPI + LangGraph 多智能体 + Vue3 前端 + Milvus 混合检索，全链路 **PHI 脱敏 + 追加式审计 + 人在环（HITL）复核**。
 
 > ⚠️ **免责声明**：本项目为科研与工程演示用途的临床决策**辅助**工具，**非医疗器械、未做临床注册与验证**。所有输出必须经执业医师/药师复核，不构成医疗建议，不得用于对患者的直接诊疗决策。药品字典与相互作用规则由 AI 辅助生成，使用前须经执业药师核对。请遵守所在机构的数据合规要求，接入真实患者数据前完成脱敏与授权评估。
@@ -16,6 +24,66 @@
 | ✅ 病历质控 | 三轨质控：完整性规则引擎（不调 LLM）+ 内涵质量 LLM + ICD/危急值；AI 建议 → 质控员终审签字；可选 HIS 推送适配器 |
 | 🛡 安全底座 | JWT 鉴权（pbkdf2 口令哈希）· 按角色（医生/药师/质控/管理员）授权 · PHI 入站脱敏 · 追加式审计（JSONL + Postgres 双写）· 限流 · 结构化日志轮转 |
 | ⚙️ 管理端 | 模型配置（任意 OpenAI 兼容/Anthropic 供应商在线切换）· 药品字典/规则编辑 · 用户管理 · 数据面板 · 日志健康卡 · 运行时开关 |
+
+## 系统架构
+
+分层架构（客户端 → 接入 → 核心域 → 智能体 → 基础设施），三层安全防线贯穿全链路：
+
+```mermaid
+flowchart TB
+    subgraph CLIENT["客户端层"]
+        direction LR
+        FE["Vue 3 前端<br/>临床工作台 / 管理端"]
+        MOBILE["移动端浏览器"]
+    end
+
+    subgraph API["接入层 · FastAPI api/v1"]
+        direction LR
+        AUTHR["auth 鉴权"]
+        MEDR["medical 业务路由"]
+        ADMINR["admin 管理路由"]
+    end
+
+    subgraph CORE["核心域 backend/core"]
+        direction LR
+        COREAUTH["auth 会话/撤销"]
+        RX["rx 处方/药物规则"]
+        KBC["kb 检索/精排"]
+        AUDIT["audit 追加式审计"]
+        PGS["pg_store<br/>PG+JSON 双写"]
+    end
+
+    subgraph AGENTS["智能体层 backend/agents"]
+        direction LR
+        LIT["literature 文献助手<br/>LangGraph agentic 检索"]
+        MDT["mdt 多智能体会诊"]
+    end
+
+    subgraph INFRA["基础设施层"]
+        direction LR
+        PGDB[("PostgreSQL 16")]
+        MILVUS[("Milvus<br/>稠密+稀疏混合检索")]
+        REDIS[("Redis 可选<br/>多实例共享")]
+        LLM["LLM API<br/>任意 OpenAI 兼容服务"]
+    end
+
+    CLIENT --> API
+    API --> CORE
+    CORE --> AGENTS
+    CORE --> INFRA
+    AGENTS --> INFRA
+
+    subgraph SEC["贯穿全链路的安全防线"]
+        direction LR
+        S1["🛡 幻觉防线<br/>PMID/KB 出处+置信度+agentic 自检"]
+        S2["💊 药师双控<br/>处方强制复核闭环"]
+        S3["📜 审计链<br/>JSONL+PG 追加式留痕"]
+    end
+
+    S1 -.-> LIT
+    S2 -.-> RX
+    S3 -.-> AUDIT
+```
 
 ## 前置要求
 
