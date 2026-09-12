@@ -142,14 +142,23 @@ class ConsultTeam(BaseModel):
     departments: list[str] = Field(default_factory=list,
                                    description="从可选科室清单中选出的专科名（必须与清单完全一致）")
     reasoning: str = Field(default="", description="组队理由（结合病例，简述）")
+    # 分科理由（一句话：基于症状/影像所见判断为何召这些科；带图时优先引用影像所见）。
+    # 与既有 reasoning 并存（schema 加字段向后兼容：旧 mock/调用方无 reason 键不破坏）。
+    reason: str = Field(default="", description="分科理由（一句话：基于症状/影像所见判断为何召这些科；带图时优先引用影像所见）")
 
 
 _TEAM_MAX = 6  # 单次会诊召集科室上限（代码强制截断，防 LLM 全选导致分发面过大）
 
 _CONSULT_TEAM_PROMPT = (
     "你是跨科室会诊发起助手。阅读下面的病例/会诊问题，从【可选科室清单】中自主选出"
-    "最需要参与会诊的专科（1-{maxn} 个，按病例实际需要，宁缺毋滥）。\n"
+    "最需要参与会诊的专科（1-{maxn} 个，按病例实际需要与下方分科规则）。\n"
     "硬性规则：只能从清单中选择，科室名必须与清单完全一致，不得编造清单外的科室。\n"
+    # 分科规则一：分科理由必出（一句话；带图优先引用影像所见——受邀医生要看得懂为何这样定向）
+    "分科规则：必须输出分科理由（一句话：基于症状/影像所见判断为何召这些科；"
+    "附病例影像图片时优先引用影像所见）。\n"
+    # 分科规则二：无明确指向最少 2 科（主科+鉴别科，宁多勿漏）；仅明确影像急症指征允许单科
+    "组队下限：无明确影像/症状指向时最少召 2 科（主科+鉴别科，宁多勿漏）；"
+    "有明确影像急症指征（如靶征/游离气体）才允许单科。\n"
     "任务4 急诊科收口：急诊科仅在存在急危重征象（生命体征不稳/气道受压风险/"
     "怀疑急性冠脉综合征等）时才召集；普通专科症状优先相应专科而非急诊。\n"
     "可选科室清单：{depts}\n病例：{case}\n"
@@ -218,12 +227,14 @@ async def pick_departments(question: str, images: list[str] | None = None) -> di
     from backend.core.consults import ConsultError  # 延迟导入避免环（诊断4 兜底语义）
     depts = await asyncio.to_thread(departments.list_departments)
     if not depts:
-        return {"departments": [], "reasoning": "科室清单为空，无法组队"}
+        return {"departments": [], "reasoning": "科室清单为空，无法组队",
+                "reason": "科室清单为空，无法组队"}
     prompt = _CONSULT_TEAM_PROMPT.format(maxn=_TEAM_MAX,
                                          depts=json.dumps(depts, ensure_ascii=False),
                                          case=(question or "")[:4000])
     imgs = [x for x in (images or []) if x][:_MDT_IMG_CAP]
     reasoning = ""
+    reason = ""
     for attempt in (1, 2):  # LLM 选空/异常 → 原样重试 1 次（诊断4）
         raw: list[str] = []
         try:
@@ -244,13 +255,16 @@ async def pick_departments(question: str, images: list[str] | None = None) -> di
                     _SYS + "\n" + prompt, base_llm_fn=lambda: get_llm("medical_literature"))
             raw = [str(x).strip() for x in (getattr(d, "departments", None) or []) if str(x).strip()]
             reasoning = (getattr(d, "reasoning", "") or "")[:200]
+            # 分科理由解析（旧 mock 对象无 reason 属性 → 回退 reasoning，向后兼容）
+            reason = (getattr(d, "reason", "") or getattr(d, "reasoning", "") or "")[:200]
         except Exception as exc:  # noqa: BLE001 —— 单次决策异常不终局，重试一次再定
             logger.warning("mdt.pick_departments_llm_failed", attempt=attempt, error=str(exc)[:120])
         # 非法科室名过滤（以实时清单为准）+ 去重保序 + [:_TEAM_MAX] 截断
         valid = list(dict.fromkeys(x for x in raw if x in depts))[:_TEAM_MAX]
         if valid:
             return {"departments": _filter_emergency(question, valid),
-                    "reasoning": reasoning or "（未给出理由）"}
+                    "reasoning": reasoning or "（未给出理由）",
+                    "reason": reason or "（未给出理由）"}
     raise ConsultError("未能确定召集科室，请补充病例信息后重试")  # 诊断4：不再全量召集兜底
 
 

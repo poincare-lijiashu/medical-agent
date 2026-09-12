@@ -211,11 +211,12 @@
 <script setup>
 // 状态语义逐字对齐 legacy：rxSuggests/rxBlocked/rxConflicts/rxWarnings/rxSelected/
 // rxEditId/rxEditForced/rxEditReason/rxManualConfirm/rxTab/rxMineCache。
-import { defineOptions, computed, onMounted, reactive, ref } from 'vue'
+import { defineOptions, computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api'
 import { detailText, fmtTs } from '../utils/assist'
 import { DRUG_DISCLAIMER } from '../constants/copy'
+import { useDirtyStore } from '../stores/dirty'
 
 defineOptions({ name: 'RxView' })
 
@@ -253,6 +254,13 @@ const rxMineCache = ref([])
 const mineLoading = ref(false)
 const mineErr = ref('')
 const submitting = ref(false)
+
+// T3 beforeunload 防误关：rx 工作台未保存内容（病例文本非空或已选药单非空）→
+// 脏标记同步进全局 dirty store（AppShell 离开页面前读取弹浏览器原生确认）
+const dirty = useDirtyStore()
+watch(() => [rxCase.value, rxSelected.value.length], ([txt, n]) => {
+  dirty.rx = Boolean(String(txt || '').trim() || n > 0)
+}, { immediate: true })
 
 // ---- 字典（懒加载，失败静默不阻塞表单；提交时服务端仍硬校验） ----
 onMounted(async () => {

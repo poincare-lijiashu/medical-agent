@@ -11,10 +11,10 @@
 | 登录（401 文案/错误提示/登录回跳） | views_core.js `doLogin` | ✅ LoginView.vue |
 | 退出（清凭证+回登录） | views_core.js `logout` | ✅ stores/auth.js + AppShell.vue |
 | 顶栏用户名/角色显示 | views_core.js `setWho` | ✅ AppShell.vue（ROLE_LABEL 中文） |
-| 修改本人密码（POST /auth/change-password） | views_admin.js `openChangePwd` | ❌ 缺失（轮 A 新发现，后续轮补） |
+| 修改本人密码（POST /auth/change-password） | views_admin.js `openChangePwd` | ✅ AppShell.vue（顶栏「改密」入口 + 对话框，前端一致性校验，成功后强制重登） |
 | 侧边导航按角色分组过滤（ROLE_NAV 逐字） | state.js `ROLE_NAV` + views_core.js `renderRail` | ✅ constants/nav.js + AppShell.vue railGroups |
 | hash 深链恢复（白名单+角色过滤） | views_core.js `hashView/go` | N/A（vue-router 历史路由等价接管，路径即深链） |
-| beforeunload 防误关（聊天/质控草稿未发拦截） | app.js `beforeUnloadGuard` | ❌ 缺失（轮 A 新发现，低频浏览器行为，后续轮评估） |
+| beforeunload 防误关（聊天/质控草稿未发拦截） | app.js `beforeUnloadGuard` | ✅ AppShell.vue（登录态 + dirty store 有未保存 rx 工作台内容 → preventDefault 弹原生确认） |
 | rx 导航红点角标（被驳回处方数，进「我的处方」清零） | views_core.js `renderRail` + views_assist.js `refreshRxBadge` | ✅ AppShell.vue badgeFor + stores/badges.js refreshRxBadge |
 | review 导航待办角标（qc 其它高危/admin 全部/pharmacist 待审处方红） | app.js `refreshReviewBadge` + views_core.js `renderRail` | ✅ stores/badges.js refreshReviewBadge + badgeFor |
 | review 导航会诊红徽标（待我（本科室）意见的 consult 数） | views_assist.js `updateConsultBadge/refreshConsultBadge` | ❌ 缺失 → **轮 A 补齐**（badges.consultPendingOps + refreshConsultBadge） |
@@ -93,8 +93,8 @@
 
 ## 轮 A 后仍为 ❌（登记待后续轮）
 
-- A-4 修改本人密码（openChangePwd → 顶栏入口 + change-password 弹条）
-- A-7 beforeunload 防误关（浏览器行为，评估迁移价值）
+- ~~A-4 修改本人密码（openChangePwd → 顶栏入口 + change-password 弹条）~~ → **已补齐**（AppShell.vue 顶栏「改密」入口 + 对话框；前端一致性校验；成功 toast + 强制重登，后端 revoke 旧令牌；标记锁 test_change_password_frontend_markers_present）
+- ~~A-7 beforeunload 防误关（浏览器行为，评估迁移价值）~~ → **已补齐**（AppShell.vue window beforeunload 守卫 + stores/dirty.js 脏标记；rx 工作台 case_text 非空或已选药单非空 → preventDefault 弹原生确认；标记锁 test_beforeunload_guard_frontend_markers_present）
 
 ## Playwright 冒烟锚点（tests/e2e/test_vue_parity.py，3 个测试函数）
 

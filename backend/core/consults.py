@@ -82,7 +82,9 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
     """发起一条跨科室会诊（open），返回会诊 id。
 
     images 与 review 队列同纪律：压缩/截断为纯函数在锁外完成，非法图丢弃不入库；
-    team 为 Agent 动态组队结果 {departments, reasoning}（审计与前端展示用）。
+    team 为 Agent 动态组队结果 {departments, reasoning, reason}（审计与前端展示用；
+    reason=分科理由，随会诊单入库供前端「AI 分科依据」展示；旧调用方无 reason 键
+    → 存空串，向后兼容）。
     """
     if not initiator:
         raise ConsultError("发起人不能为空")
@@ -97,9 +99,11 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
             "id": cid, "initiator": initiator, "initiator_dept": initiator_dept or "",
             "question": question, "images": stored_images,
             "ai_analysis": ai_analysis or "",
-            # Agent 动态组队留痕：{departments: 选中科室, reasoning: 选择理由}
+            # Agent 动态组队留痕：{departments: 选中科室, reasoning: 选择理由,
+            # reason: 分科理由（T1，随单入库供前端展示；旧形态无该键 → 空串向后兼容）}
             "team": ({"departments": list((team or {}).get("departments") or []),
-                      "reasoning": (team or {}).get("reasoning", "")} if team else None),
+                      "reasoning": (team or {}).get("reasoning", ""),
+                      "reason": (team or {}).get("reason", "")} if team else None),
             "target_depts": [d for d in (target_depts or []) if d],
             "opinions": [],  # [{doctor, dept, content, ts}]，每人一票
             "status": "open",

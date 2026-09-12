@@ -486,3 +486,91 @@ def test_consult_images_whitelist_cap_ten(monkeypatch, tmp_path):
     r2 = c.post("/api/v1/medical/consults", headers=_h(doc1),
                 json={"question": "q", "images": ["data:image/jpeg;base64,AAAA"] * 11})
     assert r2.status_code == 422, r2.text  # 张数超上限仍 422
+
+
+# ==================== T1 分科两条规则 + reason 字段（分科理由随单入库） ====================
+
+def test_pick_departments_prompt_two_rules_and_reason_parsed(monkeypatch):
+    """T1 组队 prompt 必须含两条分科规则（①必须输出分科理由·带图优先引用影像所见；
+    ②无明确影像/症状指向最少召 2 科·仅明确影像急症指征允许单科）；LLM 返回的
+    reason（分科理由）被解析透出（旧 mock 无 reason 属性 → 回退 reasoning，向后兼容）。"""
+    seen = []
+
+    class _Fake:
+        async def ainvoke(self, messages):
+            seen.append(messages[-1].content)
+
+            class _D:
+                departments = ["口腔科", "内分泌科"]
+                reasoning = "牙痛+血糖管理"
+                reason = "右下后牙自发痛考虑牙源性感染，血糖异常需内分泌协同评估"
+            return _D()
+
+    monkeypatch.setattr(mdt_mod, "get_structured_llm", lambda *a, **k: _Fake())
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: ["口腔科", "内分泌科"])
+    out = asyncio.run(mdt_mod.pick_departments("右下后牙自发痛 3 天，既往 2 型糖尿病"))
+    prompt = seen[0]
+    # 规则一：分科理由必出（带图优先引用影像所见）
+    assert "必须输出分科理由" in prompt and "影像所见" in prompt
+    # 规则二：无明确指向最少 2 科（宁多勿漏），仅明确影像急症指征（靶征/游离气体）允许单科
+    assert "最少召 2 科" in prompt and "宁多勿漏" in prompt
+    assert "靶征" in prompt and "游离气体" in prompt
+    # reason 字段解析透出
+    assert out["reason"] == "右下后牙自发痛考虑牙源性感染，血糖异常需内分泌协同评估"
+    assert out["reasoning"] == "牙痛+血糖管理"
+
+
+def test_pick_departments_reason_falls_back_to_reasoning(monkeypatch):
+    """T1 向后兼容：旧 mock 对象（仅 departments/reasoning 属性）→ reason 回退 reasoning，
+    既有 pick_departments 调用方零破坏（schema 加字段不重排既有断言）。"""
+    seen = []
+    _patch_structured(monkeypatch, seen, ["口腔科"], reasoning="旧形态理由")
+    monkeypatch.setattr(dept_mod, "list_departments", lambda: ["口腔科"])
+    out = asyncio.run(mdt_mod.pick_departments("右下后牙自发痛 3 天"))
+    assert out["departments"] == ["口腔科"]
+    assert out["reasoning"] == "旧形态理由"
+    assert out["reason"] == "旧形态理由"  # 回退 reasoning（分科理由不缺位）
+
+
+def test_consult_create_stores_dept_reason(monkeypatch, tmp_path):
+    """T1 reason 入库：pick 返回的 reason（分科理由）经 consults.create 随 team 存进
+    会诊单（路由响应 team.reason 可见）；旧形态 team（无 reason 键）→ 存空串向后兼容。"""
+    c = _isolate(monkeypatch, tmp_path)
+    doc1 = _login(c, "doctor01")
+
+    async def fake_pick(question, images=None):
+        return {"departments": ["口腔科", "内分泌科"], "reasoning": "按病例需要",
+                "reason": "牙源性感染主科+内分泌鉴别，宁多勿漏"}
+
+    async def fake_briefs(question, depts, images=None):
+        return {d: f"{d}定向意见" for d in depts}
+
+    monkeypatch.setattr(mdt_mod, "pick_departments", fake_pick)
+    monkeypatch.setattr(mdt_mod, "dept_briefs", fake_briefs)
+    r = c.post("/api/v1/medical/consults", headers=_h(doc1),
+               json={"question": "右下后牙自发痛 3 天，既往 2 型糖尿病"})
+    assert r.status_code == 200, r.text
+    assert r.json()["team"]["reason"] == "牙源性感染主科+内分泌鉴别，宁多勿漏"
+    # 旧形态（team 无 reason 键）向后兼容：core 层存空串，不抛错
+    cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",
+                              target_depts=["口腔科"],
+                              team={"departments": ["口腔科"], "reasoning": "r"})
+    assert consults_mod.get(cid)["team"]["reason"] == ""
+
+
+def test_consult_reason_frontend_markers_present():
+    """T1 前端标记锁：「我的会诊」卡「受邀科室」旁渲染「AI 分科依据：<reason>」
+    （灰色小字 .src；旧会诊单无 team.reason 字段 → v-if 不渲染，读取容错）。"""
+    from tests.test_frontend_syntax import _vue_source
+    html = _vue_source()
+    for marker in (
+        "function deptReason(",
+        'v-if="deptReason(c)"',
+        "AI 分科依据：{{ deptReason(c) }}",
+        'data-testid="consult-dept-reason"',
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    fn = html[html.index("function deptReason("):]
+    fn = fn[:fn.index("\n}", 10)]
+    # 读取容错：必须走 c.team?.reason 式的安全取值（旧单无字段返回空串而非抛错）
+    assert "c.team" in fn and "reason" in fn, "deptReason 必须从容错读取 team.reason"

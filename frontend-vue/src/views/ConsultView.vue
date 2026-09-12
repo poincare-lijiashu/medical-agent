@@ -110,6 +110,8 @@
             <div style="margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center">
               <span class="src">受邀科室：</span>
               <el-tag v-for="(d, i) in (c.target_depts || [])" :key="i" size="small" effect="plain" round>{{ d }}</el-tag>
+              <!-- AI 分科依据（T1）：灰色小字随「受邀科室」展示；旧会诊单无 team.reason 字段 → 不显示（读取容错） -->
+              <span v-if="deptReason(c)" class="src" data-testid="consult-dept-reason">AI 分科依据：{{ deptReason(c) }}</span>
             </div>
             <!-- 三段式详情（legacy consultDetailBlocks 同架构：同一内容只展示一遍） -->
             <div style="margin-top: 8px">
@@ -282,6 +284,13 @@ const splitQuestion = splitConsultQuestion
 // 随单影像缩略：data:image/ 前缀白名单过滤（legacy consultThumbs 同实现）
 function consultThumbs(c) {
   return (c.images || []).filter((u) => String(u).startsWith('data:image/'))
+}
+
+// AI 分科依据（T1）：读取会诊单 team.reason；旧会诊单无 team/reason 字段 → 返回空串
+// （模板 v-if 不渲染，读取容错不抛错）
+function deptReason(c) {
+  const r = c && c.team && c.team.reason
+  return String(r || '').trim()
 }
 
 async function closeConsult(id) {

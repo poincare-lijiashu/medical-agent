@@ -709,3 +709,63 @@ def test_consult_badge_poll_silent_markers_present():
     assert "params: silent ? { silent: 1 } : {}" in consult, \
         "refreshConsultBadge 轮询路径必须带 silent=1 参数（非 silent 刷新点保持业务审计）"
     assert "'/medical/consults/inbox'" in consult, "角标数据源必须为 /consults/inbox"
+
+
+# ---------- T2 修改密码入口 / T3 beforeunload 防误关（矩阵 A-4/A-7 补齐标记锁） ----------
+
+def test_change_password_frontend_markers_present():
+    """T2 标记锁（矩阵 A-4 补齐）：AppShell 顶栏用户名旁「改密」入口 → 对话框
+    （旧密码/新密码/确认新密码）→ 前端一致性校验（非空/两次一致/≥8 位）→
+    POST /auth/change-password（old_password/new_password，以后端 ChangePwdReq 为准）→
+    成功 toast + 强制重新登录（auth.logout 清 token + 跳 /login，后端已 revoke 旧令牌）。"""
+    html = _vue_source()
+    for marker in (
+        # 顶栏入口（用户名旁）
+        'data-testid="topbar-changepwd"', '@click="openChangePwd"', ">改密<",
+        # 对话框三字段（旧密码/新密码/确认新密码）
+        "修改本人密码", 'data-testid="pwd-old"', 'data-testid="pwd-new1"', 'data-testid="pwd-new2"',
+        # 一致性校验 + 提交
+        "两次输入的新密码不一致", "新密码至少 8 位", "function submitChangePwd(",
+        # 端点字段与后端 ChangePwdReq 对齐
+        "old_password: pwdForm.old, new_password: pwdForm.new1",
+        # 成功 toast + 强制重新登录（清 token）
+        "密码已修改，请使用新密码重新登录",
+        "auth.logout() // 改密后旧 token 已被服务端撤销，强制重新登录并清本地凭证",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    shell = (VUE_SRC / "layouts" / "AppShell.vue").read_text(encoding="utf-8")
+    submit = shell[shell.index("async function submitChangePwd("):]
+    submit = submit[:submit.index("\n}", 10)]
+    # 校验顺序锁：一致性/长度校验必须先于请求发出
+    assert submit.index("两次输入的新密码不一致") < submit.index("/auth/change-password"), \
+        "改密前端一致性校验必须先于 POST 请求"
+    assert "router.push('/login')" in submit, "改密成功后必须跳转登录页强制重新登录"
+
+
+def test_beforeunload_guard_frontend_markers_present():
+    """T3 标记锁（矩阵 A-7 补齐，legacy app.js beforeUnloadGuard 语义迁移）：
+    - AppShell 挂 window beforeunload 监听（onMounted 注册/onUnmounted 注销成对）；
+    - 登录态 + 存在进行中操作（dirty.hasUnsaved）→ preventDefault + returnValue 弹原生确认；
+    - dirty store（stores/dirty.js）为脏标记状态源；RxView watch 同步 rx 工作台
+      （case_text 非空或已选药单非空 → dirty.rx）。"""
+    html = _vue_source()
+    for marker in (
+        # AppShell：beforeunload 守卫（登录态 + 脏标记 → preventDefault + returnValue）
+        "window.addEventListener('beforeunload', onBeforeUnload)",
+        "window.removeEventListener('beforeunload', onBeforeUnload)",
+        "function onBeforeUnload(e)",
+        "e.preventDefault()",
+        "e.returnValue = ''",
+        "auth.isLoggedIn && dirty.hasUnsaved",
+        # dirty store：脏标记状态源
+        "useDirtyStore",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    dirty_src = (VUE_SRC / "stores" / "dirty.js").read_text(encoding="utf-8")
+    assert "rx: false" in dirty_src, "dirty store 应持有 rx 工作台脏标记"
+    assert "hasUnsaved" in dirty_src, "dirty store 应暴露 hasUnsaved 聚合判定"
+    # RxView：watch 同步（病例文本非空或已选药单非空 → dirty.rx）
+    rx = (VUE_SRC / "views" / "RxView.vue").read_text(encoding="utf-8")
+    assert "useDirtyStore" in rx and "dirty.rx =" in rx, "RxView 应同步 rx 工作台脏标记"
+    assert "String(txt || '').trim() || n > 0" in rx, \
+        "脏判定口径必须为「case_text 非空或已选药单非空」"

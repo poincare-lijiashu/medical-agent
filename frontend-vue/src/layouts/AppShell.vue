@@ -14,6 +14,7 @@
       <div class="userchip">
         <span>{{ auth.username }}</span>
         <el-tag size="small" effect="plain">{{ roleLabel }}</el-tag>
+        <el-button size="small" text data-testid="topbar-changepwd" @click="openChangePwd">改密</el-button>
         <el-button size="small" text @click="onLogout">退出</el-button>
       </div>
     </header>
@@ -44,18 +45,43 @@
         </RouterView>
       </main>
     </div>
+
+    <!-- 修改本人密码对话框（T2 矩阵 A-4 补齐，legacy views_admin.js openChangePwd 语义迁移）：
+         旧密码/新密码/确认新密码 → 前端一致性校验 → POST /auth/change-password →
+         成功 toast + 强制重新登录（后端改密即 revoke 全部旧令牌，旧 token 必 401） -->
+    <el-dialog v-model="pwdVisible" title="修改本人密码" width="420px" append-to-body>
+      <el-form label-width="90px">
+        <el-form-item label="旧密码">
+          <el-input v-model="pwdForm.old" type="password" show-password data-testid="pwd-old" />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="pwdForm.new1" type="password" show-password data-testid="pwd-new1" placeholder="至少 8 位" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="pwdForm.new2" type="password" show-password data-testid="pwd-new2" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pwdLoading" data-testid="pwd-submit" @click="submitChangePwd">确认修改</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { NAV_ITEMS, NAV_GROUPS, ROLE_NAV, ROLE_LABEL } from '../constants/nav'
 import { useAuthStore } from '../stores/auth'
 import { useBadgeStore } from '../stores/badges'
+import { useDirtyStore } from '../stores/dirty'
+import http, { errText } from '../api'
 
 const auth = useAuthStore()
 const badges = useBadgeStore()
+const dirty = useDirtyStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -111,6 +137,10 @@ watch(() => route.name, (nv, ov) => {
 // 登录态下：首刷角标 + 60s 定时轮询（任务⑦；legacy 仅登录/切视图刷新，轮3 补定时轮询）
 let timer = null
 onMounted(() => {
+  // T3 beforeunload 防误关（矩阵 A-7 补齐，legacy app.js beforeUnloadGuard 语义迁移）：
+  // 登录状态下存在进行中操作（rx 工作台病例文本非空或已选药单非空）→ preventDefault
+  // 弹浏览器原生确认，防误关/误刷新丢失未保存内容
+  window.addEventListener('beforeunload', onBeforeUnload)
   if (!auth.isLoggedIn) return
   badges.refreshReviewBadge()
   badges.refreshRxBadge()
@@ -119,7 +149,58 @@ onMounted(() => {
   // list_inbox 审计写入，不再制造审计噪音；进审核中心/收件箱刷新点仍走业务审计）
   timer = setInterval(() => badges.poll(), 60_000)
 })
-onUnmounted(() => { if (timer) clearInterval(timer) })
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+})
+
+// T3：离开页面前守卫——returnValue 置非空串才会触发浏览器原生「确定要离开？」确认框
+function onBeforeUnload(e) {
+  if (auth.isLoggedIn && dirty.hasUnsaved) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
+// ---- T2 修改本人密码（顶栏「改密」入口，legacy views_admin.js openChangePwd 语义迁移）----
+const pwdVisible = ref(false)
+const pwdLoading = ref(false)
+const pwdForm = reactive({ old: '', new1: '', new2: '' })
+
+function openChangePwd() {
+  pwdForm.old = ''
+  pwdForm.new1 = ''
+  pwdForm.new2 = ''
+  pwdVisible.value = true
+}
+
+// 前端一致性校验（非空/两次一致/≥8 位）→ POST /auth/change-password（old_password/new_password，
+// 以后端 ChangePwdReq 为准）→ 成功 toast + 强制重新登录（后端已 revoke 全部旧令牌）
+async function submitChangePwd() {
+  if (!pwdForm.old || !pwdForm.new1 || !pwdForm.new2) {
+    ElMessage.warning('请填写旧密码与新密码'); return
+  }
+  if (pwdForm.new1 !== pwdForm.new2) {
+    ElMessage.warning('两次输入的新密码不一致'); return
+  }
+  if (pwdForm.new1.length < 8) {
+    ElMessage.warning('新密码至少 8 位'); return
+  }
+  pwdLoading.value = true
+  try {
+    await http.post('/auth/change-password',
+      { old_password: pwdForm.old, new_password: pwdForm.new1 }, { silentToast: true })
+    ElMessage.success('密码已修改，请使用新密码重新登录')
+    pwdVisible.value = false
+    if (timer) clearInterval(timer)
+    auth.logout() // 改密后旧 token 已被服务端撤销，强制重新登录并清本地凭证
+    router.push('/login')
+  } catch (e) {
+    ElMessage.error('修改失败：' + errText(e))
+  } finally {
+    pwdLoading.value = false
+  }
+}
 
 function onLogout() {
   if (timer) clearInterval(timer)
