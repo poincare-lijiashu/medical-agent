@@ -9,7 +9,7 @@
 |---|---|---|
 | 1 ✅ | Vite 脚手架 + 登录/导航/布局壳 + Element Plus + api 客户端（token 拦截器）+ 后端挂载 /app | frontend-vue/ 可登录可导航，dist 构建通过 |
 | 2 ✅ | 核心助手视图：文献/影像/MDT 会诊/开药工作台+我的处方（交互最重先啃） | /app 全助手视图可用 |
-| 3 | 管理视图：审核中心/病例库/质控/知识库/审计/字典规则管理/LLM 配置/数据面板 + 角标轮询 | /app 功能对齐 legacy |
+| 3 ✅ | 管理视图：审核中心/病例库/质控/知识库/审计/字典规则管理/LLM 配置/数据面板 + 角标轮询 | /app 功能对齐 legacy |
 | 4 | 切换默认入口（/=新应用）+ 删 legacy + 标记锁重写 + Playwright 适配 + DEPLOY 构建步骤 | 单一前端，全量回归绿 |
 
 ## 轮 1 完成记录（2026-09-12）
@@ -30,6 +30,34 @@
   - RxView：DRUG_DISCLAIMER 免责条逐字；suggest 推荐默认全选且渲染时同步进药单（复刻 rxPick 语义）+ 中危警示黄条 + blocked 红条 + 联用理由必填联动禁用；字典搜索前端过滤（≤12 条）+ 字典外二次确认弹条；药单增删/剂量频次内联编辑/字典内外标记；提交（字典外前端拦截 + 服务端硬校验兜底）；「我的处方」tab 状态徽章（pending_pharm 黄/approved 绿/rejected 红/draft 灰）+ 审核人/时间 + 驳回意见 + 重写回填 → /rewrite 自动重提。
 - [x] 接线：路由替换 4 项占位（mdt/myconsults→ConsultView）；KeepAlive 保会话状态（切视图不丢历史/表单）；api 拦截器支持 silentToast（视图内嵌错误卡避免双重提示）；共享样式对齐 legacy 语义类名（.inp/.src/.feed/.md-body）。
 - [x] 验收：npm run build 通过；重启 8001 后 /app 直出新 dist（curl 资源引用核对）、legacy / 与 /js 零改动；新增 tests/e2e/test_vue_assist.py（Playwright /app 登录→四视图逐个打开断言关键元素，不触发 LLM，importorskip+healthz 保护）；全量 pytest **705 passed**（704 基线 + 1）。
+
+## 轮 3 完成记录（2026-09-12）
+
+- [x] 管理视图（语义逐字对齐 legacy views_admin.js 1414 行 + util.js humanizeAudit，legacy 零改动）：
+  - ReviewCenterView（707 行）：待处理/历史记录双 tab + 病例库/药品字典/相互作用规则 tab 按角色显隐；
+    签发/驳回（先备注后签发确认，F4 语义）/转人工复核/知情确认；开药待审区（pharmacist/admin 处方卡
+    通过/驳回意见必填弹条）；病例库（qc/admin：stats 头/科室·状态·日期筛选/状态徽章/record JSON 展开/
+    remove 必填原因软删除）；admin「清空待核对」（确认词「清空」）；图片仅消费 data:image/ 白名单
+    （_review_image_view 前端侧：缩略条+详情大图）；加载序号守卫防旧响应覆盖。
+  - QcView（319 行）：粘贴拆分（签名栏锁定不回填）/七栏表单/三档分流徽标/六维度分组+chip 过滤/
+    我的质控驳回（重提链徽标+重新提交预填 resubmit_of）/doctor 我的归档（403 隐藏）。
+  - KbView（226 行）：列表统计头/分页 50/切片预览/删除（内置库「重跑种子脚本可恢复」文案）/
+    上传 data_b64 + 大文件 task_id 轮询进度（2s 间隔上限 20 分钟）。
+  - DataView（604 行）：统计卡只读/审计流（默认收起/搜索/翻页翻头回退/CSV 导出 BOM+引号转义/
+    payload JSON 折叠）/留痕模式运行时开关（确认文案逐字）/新增用户+重置密码+删除（输入用户名确认）/
+    科室管理/基础设施只读卡+复制命令/应用日志健康卡（ERROR/WARNING 高亮）/LLM 配置
+    （chat/vision 组/激活/停用回内置 Qwen/连通性测试/厂商预设 300ms 防抖预填）。
+  - DrugDictEditor（171 行）+ DrugRulesEditor（206 行）：字典增删改（编辑态锁定规范名）；
+    规则严重度徽章/审校状态徽章/覆盖率 chip「审校 X/Y · 高危 Z/W」/筛选含未审校高危/
+    批量标记已审校（reviewed_by 服务端落痕）/高危排前。
+- [x] 共享：utils/audit.js（172 行，humanizeAudit 人话映射逐字迁移+fmtLogSize/fmtUp）；
+  stores/badges.js（64 行，refreshReviewBadge/refreshRxBadge 语义+cfgFull+60s 定时轮询）；
+  AppShell 导航角标（qc=其它高危项/admin=全部待核对/pharmacist=待审处方红/doctor=rx 驳回红，
+  进 rx 清零、离开按服务端恢复）；路由 review/qc/kb/data 替换占位（case/arch 留轮4）。
+- [x] 验收：npm run build 通过（JS 1.26MB）；8001 StaticFiles 即时直出新 dist；新增
+  tests/e2e/test_vue_admin.py（Playwright：pharm01 审核中心+字典两 tab+开药待审区+覆盖率 chip+
+  免责声明；admin 知识库/数据面板/LLM/病例库 tab；qc 病例库 tab；doctor 无管理菜单；不触发 LLM、
+  不执行删除写操作）；全量 pytest **709 passed**（705 基线 + 4）。
 
 ## 保存与回退策略（用户要求：随时可回退）
 
