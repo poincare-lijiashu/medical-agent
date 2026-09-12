@@ -26,6 +26,10 @@ pillow==12.3.0
 rapidocr-onnxruntime==1.4.4
 mcp>=1.8,<2
 setuptools<81
+# CI 兼容钉：mcp 依赖链的 environs 触碰 marshmallow.__version_info__（4.x 已删除该
+# 属性 → 55 个测试收集期 ImportError/AttributeError；3.x 仅 deprecation warning，
+# 与本地基线一致）——钉 <4 锁定可运行组合
+marshmallow<4
 # 测试（TDD 基线 396+ 全绿所需）
 pytest==8.3.4
 # 对抗轮 A3：单测全局超时防线（pytest.ini addopts --timeout=300）
