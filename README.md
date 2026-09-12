@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.117-009688)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
-![Tests](https://img.shields.io/badge/Tests-759%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-755%20passed-brightgreen)
 
 面向科室级部署的开源 CDSS 参考实现：FastAPI + LangGraph 多智能体 + Vue3 前端 + Milvus 混合检索，全链路 **PHI 脱敏 + 追加式审计 + 人在环（HITL）复核**。
 
