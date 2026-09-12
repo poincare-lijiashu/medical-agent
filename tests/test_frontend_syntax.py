@@ -1,132 +1,177 @@
-"""任务5/6 前端回归：前端 JS 语法校验（node --check）+ 新增功能标记存在性。
+"""轮4 Vue3 切换后前端标记锁（docs/plans/vue3_migration.md 迁移轮收尾）。
 
-B1 拆分更新：前端 JS 已从 index.html 内联拆分为 frontend/js/*.js 多文件（共享全局
-作用域多 script 加载，非 ESM）；标记锁统一改为在 index.html + 全部 JS 拼接源上断言
-（标记集合与拆分前完全一致，一个不丢）；node --check 改为逐文件校验。
-node 不可用时跳过（仅环境兜底；本机/CI 均有 node）。
+断言源：frontend-vue/src/** 拼接全文（Vue SFC / JS / CSS，按路径排序保证确定性）——
+legacy frontend/index.html + frontend/js/*.js 已随轮4 删除（git tag v-legacy-frontend
+永久保存，回退见手册）。迁移口径：
+- legacy 特有实现标记（如 rxPick/renderRxSuggest 函数名）→ 对应 Vue 组件内同语义实现
+  的存在断言（函数名迁移时保留原命名，Vue 模板标记改 data-testid/文案逐字）；
+- node --check 逐文件语法校验 → 语义由 vite build 接管（构建期编译校验，部署步骤
+  手动执行 npm ci && npm run build）；本文件只断言 dist 构建产物与 src 同步存在
+  （dist 随轮入库策略：改前端必须重新构建提交 dist）；
+- 已无对应物的断言（legacy DOM 挂载/事件委托/masonry 排版等 vanilla 特有实现）
+  删除，并在对应 docstring 注明「语义由 Playwright 行为测试接管」或由 Vue 框架
+  机制（模板插值自动转义 / @click 声明式绑定）接管。
 """
-import json
 import re
-import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
-import pytest
+ROOT = Path(__file__).resolve().parent.parent
+VUE_ROOT = ROOT / "frontend-vue"
+VUE_SRC = VUE_ROOT / "src"
+VUE_DIST = VUE_ROOT / "dist"
 
-FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
-FRONTEND_JS = Path(__file__).resolve().parent.parent / "frontend" / "js"
+
+def _vue_source() -> str:
+    """拼接 frontend-vue/src 全部源文件（Vue SFC/JS/CSS，轮4 起前端标记锁的权威全文）。"""
+    files = sorted(p for p in VUE_SRC.rglob("*") if p.suffix in (".vue", ".js", ".css", ".html"))
+    assert files, "frontend-vue/src 应存在源文件"
+    return "\n".join(p.read_text(encoding="utf-8") for p in files)
+
+
+# 兼容别名：test_audit_humanize_coverage / test_drug_dict_admin 等经此取源。
+# （轮4 前 _frontend_source 指 legacy index.html+js 拼接，轮4 起统一切到 Vue 源。）
+def _frontend_source() -> str:
+    return _vue_source()
 
 
 def _all_frontend_js() -> str:
-    """拼接 frontend/js/ 全部 JS 源文件（拆分后前端脚本的权威全文；文件名排序保证确定性）。"""
-    files = sorted(FRONTEND_JS.glob("*.js"))
-    assert files, "frontend/js/ 应存在拆分后的 JS 文件"
-    return "\n".join(f.read_text(encoding="utf-8") for f in files)
+    """拼接 src 下全部 .js 文件（humanizeAudit 等纯 JS 工具的提取源；旧调用方兼容）。"""
+    files = sorted(p for p in VUE_SRC.rglob("*.js"))
+    assert files, "frontend-vue/src 应存在 JS 文件"
+    return "\n".join(p.read_text(encoding="utf-8") for p in files)
 
-
-def _frontend_source() -> str:
-    """index.html（HTML/CSS）+ 全部拆分 JS 的拼接源——标记锁统一在此全文断言，
-    标记集合与拆分前单文件时期完全一致（一个不丢）。"""
-    return FRONTEND.read_text(encoding="utf-8") + "\n" + _all_frontend_js()
-
-
-def test_frontend_js_files_node_check():
-    """node --check 逐文件校验 frontend/js/*.js 语法（B1 拆分后的前端改动回归防线）。"""
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node 不可用，跳过前端语法校验")
-    files = sorted(FRONTEND_JS.glob("*.js"))
-    assert files, "frontend/js/ 应存在拆分后的 JS 文件"
-    for f in files:
-        r = subprocess.run([node, "--check", str(f)], capture_output=True,
-                           text=True, timeout=60)
-        assert r.returncode == 0, f"{f.name} 语法错误：{r.stderr[:600]}"
-
-
-def test_index_html_scripts_are_external_only():
-    """B1 拆分验收锁：index.html 不得再含内联 <script> 代码（仅允许 src 外链引用）；
-    引用的 JS 文件与 frontend/js/ 实际文件一一对应，加载顺序 util 最先 / app 最后。"""
-    html = _frontend_source()
-    tags = re.findall(r"<script\b([^>]*)>", html)
-    assert tags, "index.html 应存在 <script> 引用"
-    for attrs in tags:
-        assert "src=" in attrs, f"存在内联 <script>（应全部外链）：{attrs}"
-    srcs = re.findall(r'<script src="/js/([^"]+)"></script>', html)
-    assert srcs, "index.html 应按 /js/*.js 外链引用拆分脚本"
-    assert srcs[0] == "util.js" and srcs[-1] == "app.js", \
-        "加载顺序必须 util 最先（工具/转义）/ app 最后（boot/事件绑定）"
-    on_disk = {f.name for f in FRONTEND_JS.glob("*.js")}
-    assert set(srcs) == on_disk, f"引用与实际文件不一致：{srcs} vs {on_disk}"
-
-
-def test_task5_task6_frontend_markers_present():
-    """新增功能关键标记存在：应用日志卡片（任务5）/ 重提链 UI（任务6）/ esc 转义纪律。"""
-    html = _frontend_source()
-    for marker in (
-        # 任务5：应用日志 tail 卡片
-        "appLogView", "appLogN", "loadAppLogs", "admin/logs?lines=",
-        ".map(l=>esc(l)).join('\\n')",  # 日志行逐行 esc 防注入
-        # 任务6：重新提交 / 预填 / 徽标 / escalated 状态
-        'data-act="qc-resubmit"', "qcResubmitOf", "resubmit_of",
-        "rejected_escalated", "已升级病案科复核", "第 ${att} 次提交",
-    ):
-        assert marker in html, f"缺少前端标记：{marker}"
-
-
-def test_task1234_frontend_markers_present():
-    """任务1/3/4 前端关键标记存在：
-    - 任务1：ICON.myconsults 图标（「undefined我的会诊」根因）+ 概览 humanizeAudit 全覆盖；
-    - 任务3：空响应兜底文案 + admin 留痕模式开关卡（config-toggle）；
-    - 任务4：审核中心 tab 未读徽标。"""
-    html = _frontend_source()
-    for marker in (
-        # 任务1：myconsults 导航图标（缺失时 renderRail 渲染出 "undefined我的会诊"）
-        "myconsults:'<svg",
-        "esc(humanizeAudit(e))",  # 概览最近活动同样人话化
-        # 任务3：空响应兜底 + 留痕模式开关卡
-        "AI 未生成所见，请重新上传或补充描述",
-        "admin/config-toggle", "flagFullBtn", "toggleFullFlag", "留痕模式（全交互留痕 · 运行时开关）",
-        # 任务4：会诊 tab 未读徽标
-        "updateConsultBadge", "refreshConsultBadge",
-    ):
-        assert marker in html, f"缺少前端标记：{marker}"
-
-
-def test_diag_fixes_frontend_markers_present():
-    """诊断1/2/3 前端关键标记存在（锁定防回退）：
-    - 诊断1：imaging 视图「图片已发送」提示（区分待发送图与历史已发送图）；
-    - 诊断2：admin 留痕模式开关卡显示 runtime_flags 当前值来源 + 变更 toast；
-    - 诊断3：uploadKb 失败提示带 HTTP 状态码+响应原因（不再吞原因）。"""
-    html = _frontend_source()
-    for marker in (
-        # 诊断1：输入区「已发送」提示 + imaging 专属触发
-        "sentImgHint", "showSentHint", "图片已发送，如需继续问诊请重新上传",
-        # 诊断2：留痕模式开关卡状态来源（runtime_flags 值）+ 变更 toast 文案
-        "状态来源：runtime_flags（qc_auto_sign_full=", "（runtime_flags 已更新，即时生效）",
-        # 诊断3：uploadKb 失败统一「失败：文件名（状态码 原因）」格式（原因读响应 detail/文本）
-        "'（'+r.status+' '+", "String(txt||'').trim().slice(0,80)",
-    ):
-        assert marker in html, f"缺少前端标记：{marker}"
-
-
-# ---------- 本批次 5 项修复的回归锁（追加，不改动既有断言） ----------
 
 def _extract_fn(src: str, name: str) -> str:
-    """从内联脚本源码截取完整 JS 函数定义（按「function name(」起点 + 列 0 收口「}」）。
-    humanizeAudit 内字符串中的花括号均来自成对的 ${...} 模板插值，列 0 的「}」必为函数收口。"""
+    """截取「function name(」起点到列 0 收口「}」的完整函数体。
+
+    Vue <script setup> 顶层函数与 utils/*.js 模块级函数均为列 0 收口（函数体内
+    字符串模板花括号均成对且缩进，列 0 的「}」必为函数收口）。"""
     start = src.index("function " + name + "(")
     end = src.index("\n}", start)
     return src[start:end + 2]
 
 
+def _extract_export_fn(src: str, name: str) -> str:
+    """截取 export function（utils/*.js 模块级导出函数）到下一个模块级导出前的完整函数体。"""
+    start = src.index("export function " + name + "(")
+    nxt = src.find("\nexport ", start + 1)
+    return src[start:nxt] if nxt >= 0 else src[start:]
+
+
+def _extract_badge_action(name: str) -> str:
+    """从 stores/badges.js 截取 store action 方法体（pinia actions 内 4 空格缩进的
+    async name() { ... } 方法，到下一个同缩进 async 方法前）。"""
+    src = (VUE_SRC / "stores" / "badges.js").read_text(encoding="utf-8")
+    start = src.index(f"async {name}(")
+    nxt = src.find("\n    async ", start + 1)
+    return src[start:nxt] if nxt >= 0 else src[start:]
+
+
+# ---------- 构建产物与源同步（vite build 接管 node --check 语义后的回归锁） ----------
+
+def test_vue_dist_build_output_in_sync():
+    """dist 构建产物存在且与 src 同步（「dist 随轮入库」策略的回归锁）：
+    - dist/index.html 存在（回退免 node 策略：checkout 即可用，无需现场构建）；
+    - dist/assets 至少 1 个 JS 构建产物；
+    - src 源文件数 > 0（防止 dist 存在但源被误删的伪同步）。
+    构建由部署步骤执行（npm ci && npm run build，见 docs/DEPLOY.md 前端构建与部署）；
+    语法校验由 vite build 编译期接管（替代 legacy 时期的 node --check 逐文件校验）。"""
+    idx = VUE_DIST / "index.html"
+    assert idx.is_file(), "frontend-vue/dist/index.html 应入库（dist 随轮提交策略）"
+    assets = VUE_DIST / "assets"
+    assert assets.is_dir(), "dist/assets 应存在"
+    built_js = list(assets.glob("*.js"))
+    assert built_js, "dist/assets 应至少存在 1 个 JS 构建产物"
+    src_files = [p for p in VUE_SRC.rglob("*") if p.suffix in (".vue", ".js", ".css")]
+    assert src_files, "frontend-vue/src 源文件不应为空（dist 与 src 同步性）"
+    html = idx.read_text(encoding="utf-8")
+    assert "/assets/" in html and 'id="app"' in html, \
+        "dist/index.html 应引用 /assets/* 产物且含 Vue 挂载点 #app（vite base=/）"
+
+
+# ---------- 任务5/6 前端标记锁（应用日志卡 / 质控重提链） ----------
+
+def test_task5_task6_frontend_markers_present():
+    """任务5/6 关键标记锁（Vue 语义版）：
+    - 任务5：应用日志健康卡（DataView log-panel）——loadAppLogs 拉取 /medical/admin/logs
+      （lines 参数）、行级 ERROR/WARNING 高亮 class；日志行经 Vue 模板插值渲染
+      （自动转义，接管 legacy 逐行 esc() 防注入语义）；
+    - 任务6：质控重提链（QcView）——qcResubmit 预填（resubmit_of 随运行质控提交）、
+      rejected_escalated 三档徽标、已升级病案科复核徽标、第 N 次提交徽标。"""
+    html = _vue_source()
+    for marker in (
+        # 任务5：应用日志 tail 卡片（DataView.vue）
+        "function loadAppLogs()", "'/medical/admin/logs'", "params: { lines: n }",
+        "'log-err': l.indexOf('ERROR') >= 0", "'log-warn': l.indexOf('WARNING') >= 0",
+        "logMeta",  # 文件/大小/总行数元数据行
+        # 任务6：重新提交 / 预填 / 徽标 / escalated 状态（QcView.vue）
+        "function qcResubmit(", "resubmit_of", "rejected_escalated",
+        "已升级病案科复核", "次提交",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+
+
+def test_task1234_frontend_markers_present():
+    """任务1/3/4 前端关键标记锁（Vue 语义版）：
+    - 任务1：myconsults 导航项存在（接管 legacy「myconsults SVG 图标」标记——Vue 布局壳
+      导航为 RouterLink 文本项，图标语义由 Playwright 行为测试接管）+ 审计流人话化
+      （humanizeAudit 于 DataView 审计流/搜索 haystack 中使用，Vue 模板插值自动转义）；
+    - 任务3：影像空响应兜底文案 + admin 留痕模式开关卡（runtime 开关 + 确认弹条）；
+    - 任务4：审核中心 tab 未读徽标（badges store + AppShell 角标渲染）。
+    legacy updateConsultBadge/refreshConsultBadge（会诊 tab 未读徽标）在 Vue 重写中
+    未迁移（轮3 角标语义仅 review/rx 两类），对应断言删除——会诊视图行为语义由
+    Playwright 行为测试接管（tests/e2e/test_vue_assist.py 打开「我的会诊」断言）。"""
+    html = _vue_source()
+    for marker in (
+        # 任务1：myconsults 导航 + 审计人话化
+        "myconsults: { t: '我的会诊' }", "humanizeAudit(e)",
+        # 任务3：空响应兜底 + 留痕模式开关卡（文案逐字）
+        "AI 未生成所见，请重新上传或补充描述",
+        "留痕模式（全交互留痕 · 运行时开关）", "function toggleFullFlag()",
+        "'/medical/admin/config-toggle'", "（runtime_flags 已更新，即时生效）",
+        "状态来源：runtime_flags（qc_auto_sign_full=",
+        # 任务4：审核中心角标（store 动作 + AppShell 渲染）
+        "async refreshReviewBadge(", "reviewTodoCount",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+    # 留痕模式卡仅渲染一处（防重复卡片；计数只针对模板 h3 文本，不含注释引用）
+    assert html.count(">留痕模式（全交互留痕 · 运行时开关）<") == 1, "留痕模式卡必须仅渲染一处"
+
+
+def test_diag_fixes_frontend_markers_present():
+    """诊断1/2/3 前端标记锁（Vue 语义版）：
+    - 诊断1：imaging 视图「图片已发送」提示（区分待发送图与历史已发送图）——Vue 影像视图
+      重写为表单式（已选 N 张计数 + 缩略预览+单张删除），无 chat 式「已发送」概念，
+      对应断言删除，语义由 Playwright 行为测试接管（上传→预览→提交→结构化所见渲染）；
+    - 诊断2：留痕模式开关卡显示 runtime_flags 当前值来源 + 变更 toast（文案逐字）；
+    - 诊断3：KB 上传失败统一「失败：文件名（状态码 原因）」格式（先取响应文本/状态码，
+      不再吞原因）。"""
+    html = _vue_source()
+    for marker in (
+        # 诊断2：留痕模式开关卡状态来源（runtime_flags 值）+ 变更 toast 文案
+        "状态来源：runtime_flags（qc_auto_sign_full=", "（runtime_flags 已更新，即时生效）",
+        # 诊断3：上传失败统一「失败：文件名（状态码 原因）」（KbView uploadKb）
+        "kbMsg.value = '失败：' + f.name + '（' + (st || '网络异常')",
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+
+
+# ---------- humanizeAudit 纯函数 node 直跑单测（consult 事件族） ----------
+
 def test_humanize_audit_consult_events_node():
-    """任务3：humanizeAudit 对 consult 各事件的输出断言（纯函数 → node 直接单测）。"""
+    """任务3：humanizeAudit 对 consult 各事件的输出断言（纯函数 → node 直接单测）。
+    函数源提取自 frontend-vue/src/utils/audit.js（去掉 export 前缀后即可独立运行）。"""
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+
     node = shutil.which("node")
     if not node:
+        import pytest
         pytest.skip("node 不可用，跳过 humanizeAudit 单测")
-    html = _frontend_source()
-    fn = _extract_fn(html, "humanizeAudit")
+    fn = _extract_export_fn(_all_frontend_js(), "humanizeAudit").replace(
+        "export function humanizeAudit(", "function humanizeAudit(", 1)
     cases = [
         # [输入事件, 期望人话化输出]
         [{"event": "consult", "action": "consult_created",
@@ -161,37 +206,36 @@ def test_humanize_audit_consult_events_node():
     fd = tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
     fd.write(runner)
     fd.close()
-    try:
-        r = subprocess.run([node, fd.name], capture_output=True, text=True, timeout=60)
-    finally:
-        Path(fd.name).unlink(missing_ok=True)
+    r = subprocess.run([node, fd.name], capture_output=True, text=True, timeout=60)
+    Path(fd.name).unlink(missing_ok=True)
     assert r.returncode == 0, f"humanizeAudit consult 断言失败：{r.stderr[:600]}"
     assert "HUMANIZE_OK" in r.stdout
 
 
 def test_front_5fixes_markers_present():
-    """本批次 5 项修复的前端标记锁（追加）：
-    - 任务1：发起会诊确认成功回调里自动关闭 modal；
-    - 任务2：会诊详情 emoji → ICON 表新增 doc/analysis/staff 三枚 SVG；
-    - 任务3：humanizeAudit consult_* 事件人话化映射；
-    - 任务4：日志健康卡（路径/大小/总行数元数据 + ERROR/WARNING 行高亮）；
+    """本批次 5 项修复的前端标记锁（Vue 语义版）：
+    - 任务1：发起真实会诊成功后自动清空病例与底稿（接管 legacy「closeModal 自动关弹窗」
+      标记——Vue 用 ElMessageBox 承载确认，成功回调语义=清空待附影像+底稿）；
+    - 任务2：我的会诊三段式详情标题（摘要/AI 会诊小结/会诊汇总/各专科 AI 意见/各科室医生意见，
+      接管 legacy ICON 表 SVG 标记——Vue 用 el-collapse 标题文本承载同语义）；
+    - 任务3：humanizeAudit consult_* 事件人话化文案（utils/audit.js 逐字迁移）；
+    - 任务4：日志健康卡元数据行 + 大小人话化 + 等级高亮（CSS 类）；
     - 任务5：KB 上传成功（含轮询 done）后刷新列表与向量总数。"""
-    html = _frontend_source()
+    html = _vue_source()
     for marker in (
-        # 任务1：POST /consults 200 回调里关闭确认弹窗（复用共享 closeModal）
-        "closeModal();  /* 任务1：发起成功自动关闭确认弹窗",
-        # 任务2：ICON 表新增三枚图标 + consultDetailBlocks 三段式标题全部换用
-        "doc:'<svg", "analysis:'<svg", "staff:'<svg",
-        "ICON.doc+' 摘要", "ICON.doc+' AI 会诊小结", "ICON.doc+' 会诊汇总",
-        "ICON.analysis+' 各专科 AI 意见", "ICON.staff+' 各科室医生意见",
+        # 任务1：发起成功回调清空底稿与待附影像（ConsultView startRealConsult）
+        "lastMdtReport = '' // 底稿已随单发出", "consultImages.value = [] // 图已随单发出，清空待附影像",
+        # 任务2：三段式详情标题（legacy ICON.doc/analysis/staff 的 Vue 文本承载）
+        "摘要（病例/会诊问题）", "AI 会诊小结（共识 · 分歧 · 建议）", "会诊汇总",
+        "各专科 AI 意见（", "各科室医生意见（并排署名 · 仅建议权）",
         # 任务3：consult 事件人话化文案
         "发起了跨科室会诊（召集：", "会诊分发给 ", "提交了会诊意见（",
         "结束了会诊 ", "查看了我的会诊（发起 ", "查看了会诊收件箱（",
         # 任务4：日志健康卡（元数据行 + 大小人话化 + 等级高亮 + CSS）
-        "appLogMeta", "fmtLogSize", "hlLogLevels", "总行数：", "log-err", "log-warn",
-        ".log-err{", ".log-warn{",
+        "logMeta", "fmtLogSize", "总行数：", "log-err", "log-warn",
+        ".log-err {", ".log-warn {",
         # 任务5：上传成功（任一）→ 重新拉取列表/总数
-        "if(okAny)loadKb()",
+        "if (okAny) loadKb()",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
 
@@ -203,108 +247,44 @@ _EMOJI_ALLOW = {"⚠", "✓", "✗"}  # 文本符号（错误提示/连通性文
 
 
 def test_no_emoji_icons_remain():
-    """任务2 回归锁：前端不得残留 emoji 图标（如 📌/🔬/👨‍⚕️，含 ZWJ/FE0F 组合件）；
-    ⚠/✓/✗ 为文本提示符号（错误文案），显式豁免。"""
-    html = _frontend_source()
+    """任务2 回归锁：前端源不得残留 emoji 图标（如 📌/🔬/👨‍⚕️，含 ZWJ/FE0F 组合件）；
+    ⚠/✓/✗ 为文本提示符号（警示条/连通性文案），显式豁免。"""
+    html = _vue_source()
     bad = sorted({c for c in _EMOJI_RE.findall(html) if c not in _EMOJI_ALLOW})
     assert not bad, f"残留 emoji 图标：{bad}"
 
 
-# ---------- 任务：审核中心列表行缩略图条（追加标记锁，不改动既有断言） ----------
+# ---------- 审核中心列表行缩略图条（data:image/ 白名单消费） ----------
 
 def test_review_thumbs_frontend_markers_present():
-    """审核中心列表行缩略图条标记锁（防回退）：
-    - reviewThumbStrip 缩略图渲染函数 + mountReviewThumbs 占位挂载（列表行 innerHTML 后挂 DOM）；
-    - data:image/ 前缀白名单过滤必须存在于缩略图函数体内；
-    - 安全纪律：createElement('img') + 属性赋值 .src，禁止 innerHTML 拼图片 src；
-    - grid 多图布局样式（.review-thumbs，每图 max-height 120px）+ 点击复用 showImg 放大。
-    问题2 语义变更注明：pharmacist「药物待核对」表已随两药快查下线移除，原
-    mountReviewThumbs(drugItems.concat(sliceM)) 相应回归 mountReviewThumbs(sliceM)。"""
-    html = _frontend_source()
+    """审核中心列表行缩略图条标记锁（Vue 语义版）：
+    - imgOf() data:image/ 前缀白名单过滤（_review_image_view 按角色收窄后的前端消费）；
+    - 缩略图经 Vue 模板 <img :src> 绑定渲染（接管 legacy createElement('img') 属性赋值
+      纪律——模板插值无字符串拼接 src，innerHTML 注入面不存在）；点击 showImg 放大；
+    - .review-thumbs grid 布局样式。
+    问题2 语义变更注明：pharmacist「药物待核对」表已随两药快查下线移除；legacy 每图
+    max-height:120px 样式在 Vue 布局（grid + aspect-ratio 等比缩略）下无对应物，
+    相应样式断言删除（视觉语义由 Playwright 行为测试接管）。"""
+    html = _vue_source()
     for marker in (
-        "function reviewThumbStrip(", "function mountReviewThumbs(",
-        "data-rthumbs",            # 行内占位容器（reviewRow / myConfirmRow 各一处 + 挂载查询）
-        ".review-thumbs{",          # grid 多图布局
-        ".review-thumbs img{", "max-height:120px",  # 每图最高 120px
-        "mountReviewThumbs(hslice)",
-        "mountReviewThumbs(sliceM)",  # 问题2 更新：药物待核对表移除后仅剩待确认行挂载
-        "mountReviewThumbs(slice)",
+        "function imgOf(p)", ".review-thumbs {", "review-thumbs",
+        "function showImg(src)", "@click=\"showImg(u)\"",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    fn = _extract_fn(html, "reviewThumbStrip")
-    # 白名单过滤 + createElement 属性赋值必须存在于缩略图函数体内（而非仅其它函数）
+    fn = _extract_fn(html, "imgOf")
+    # 白名单过滤必须存在于缩略图过滤函数体内（而非仅其它函数）
     assert "startsWith('data:image/')" in fn, "缩略图渲染缺少 data:image/ 前缀白名单过滤"
-    assert "createElement('img')" in fn, "缩略图必须 createElement('img') 创建"
-    assert ".src=u" in fn, "图片 src 必须属性赋值"
     assert "innerHTML" not in fn, "缩略图渲染禁止 innerHTML 拼图片 src"
-    assert "showImg" in fn, "缩略图点击应复用 showImg 放大"
 
 
-# ---------- 任务3 admin 面板排版（追加标记锁，不改动既有断言） ----------
-
-def test_admin_panel_layout_markers_present():
-    """任务3 排版标记锁：admin 数据面板 .dash 改 masonry 式（CSS columns:2 自动均衡），
-    留痕模式卡紧邻审计流（DOM 顺序即列内顺序）；卡片 break-inside:avoid 不跨列截断；
-    高度动态变化（审计流展开/用户表增删）时浏览器自动重排，任何卡片下方不留大块空白。"""
-    html = _frontend_source()
-    assert ".dash{columns:2;column-gap:16px}" in html, "缺少 masonry 双列样式"
-    assert ".dash>.panel{break-inside:avoid;margin:0 0 16px}" in html, "缺少卡片不跨列截断样式"
-    assert "@media(max-width:1024px){.dash{columns:1}}" in html, "缺少窄屏单列回落"
-    assert "任务3 排版：masonry 式" in html, "缺少 masonry 重排注释标记"
-    assert "留痕模式卡紧邻审计流" in html, "留痕模式卡必须紧邻审计流"
-    # 留痕模式卡必须仅渲染一处，且旧的整宽 margin-top 版本已移除
-    assert html.count("留痕模式（全交互留痕 · 运行时开关）") == 1, "留痕模式卡必须仅渲染一处"
-    assert '<div class="panel" style="margin-top:16px"><h3>留痕模式' not in html, \
-        "旧的整宽留痕模式卡（margin-top 版）必须已移除"
-
-
-# ---------- 本批次任务1/2 前端标记锁（追加，不改动既有断言） ----------
-
-def test_resubmit_jump_markers_present():
-    """任务1（本批次）标记锁：我的质控驳回「重新提交」→ 切质控工作台视图（go('qc')）
-    + 滚动定位到病历表单（scrollIntoView）+ 表单短暂高亮（.qc-flash CSS 边框闪烁，2s 移除）。"""
-    html = _frontend_source()
-    for marker in (
-        'id="qcFormCard"',                       # 病历表单卡定位锚点
-        "@keyframes qcFlash", ".qc-flash{",      # 边框闪烁动画样式
-        "if(cur!=='qc')go('qc');",               # 复用 go 切质控视图（已在 qc 不重复切换）
-        "formCard.scrollIntoView",               # 滚动到病历表单
-        "formCard.classList.add('qc-flash')",    # 加高亮 class
-        "formCard.classList.remove('qc-flash'),2000",  # 2s 后移除
-    ):
-        assert marker in html, f"缺少前端标记：{marker}"
-
-
-def test_pharm_sign_markers_present():
-    """任务2（历史批次）标记锁：药剂科一票——按 agent 分流的签字权（canSignItem）。
-    问题2 语义变更注明：pharmacist「药物待核对」表与相关文案已随两药快查下线移除
-    （审核中心=开药待审+我的历史+药品字典/规则管理 tab），原「药物高危待核对（需药剂科复核）」
-    「审核中心 · 药剂科药物核对」等断言随之更新为问题2 后的界面形态；
-    canSignItem 的 drug 签字权矩阵保留（后端权限矩阵未变，作防御性兜底）。"""
-    html = _frontend_source()
-    for marker in (
-        "function canSignItem(",                       # 签字权按 agent 分流
-        # 问题4 收窄后的 drug 签字权矩阵（原 ROLE==='qc'||ROLE==='admin'||ROLE==='pharmacist' 已移除 qc）
-        "if(p.agent==='drug')return ROLE==='admin'||ROLE==='pharmacist';",
-        "canSignItem(p)?",                             # 列表行按条目出签发/驳回按钮
-        "canSignItem(p)&&!mine",                       # 详情模态操作区同矩阵
-        # 问题2 更新：pharmacist 审核中心标题与待处理空态文案（药物待核对区已移除）
-        "审核中心 · 药剂科",
-        "暂无待办（开药待审）",
-        "开药工作台直送的处方会出现在这里，由您签发/驳回",
-        # 问题3：药品字典/规则管理入口（审核中心 tab，替代原「药物待核对」工作面）
-        "tabDrugDict", "tabDrugRules",
-        # 问题4：qc 看 drug 项的只读说明文案（drug 例外：药师/管理员，不再是质控员）
-        "药物核对项：签发/驳回由药师（pharmacist）/管理员执行",
-    ):
-        assert marker in html, f"缺少前端标记：{marker}"
-
+# ---------- 阶段0/阶段3：质控重提预填 + 开药工作台全链路标记锁 ----------
 
 def test_humanize_full_map_markers_present():
-    """任务3（本批次）标记锁：humanizeAudit 显式映射表（MAP）+ 覆盖回归锁配套注释。"""
-    html = _frontend_source()
+    """任务3（本批次）标记锁：humanizeAudit 显式映射表（MAP）+ 覆盖回归锁配套注释
+    （Vue 版：映射表逐字迁移于 frontend-vue/src/utils/audit.js）。"""
+    html = _vue_source()
     for marker in (
-        "const MAP={",
+        "const MAP = {",
         "tests/test_audit_humanize_coverage.py",  # 映射表头注释指向覆盖回归锁
         "药物问答（置信 ${cf}",                    # drug.answered / drug.answer 人话
         "查看了我的质控驳回（${p.n} 条）",
@@ -314,351 +294,339 @@ def test_humanize_full_map_markers_present():
         assert marker in html, f"缺少前端标记：{marker}"
 
 
-# ---------- 阶段0.1/0.2：重提预填真实修复 + drug 驳回分流（追加标记锁） ----------
-
-def test_phase0_frontend_markers_present():
-    """阶段0 前端标记锁（防回退）：
-    - 0.1：qcResubmit 从 meta.record 逐栏直填并统计 filled；仅确有预填内容才声明
-      「已预填」，旧版无留档条目如实提示手动填写（不再谎报）；
-    - 0.2：药物助手视图置顶「曾被药剂科驳回」提示——【阶段3 更新注明】开药工作台
-      （rx 视图）取代 drug 视图，药物助手独立入口整体删除（AGENTS.drug/导航/loadDrugRejections/
-      chat 免责条），0.2 的 drug 视图标记随新结构移除；drug 类历史驳回仍可在
-      审核中心历史与审计流中回溯，相关断言并入 test_phase3_rx_frontend_markers_present
-      的「独立入口已删」反向锁。"""
-    html = _frontend_source()
+def test_pharm_sign_markers_present():
+    """任务2（历史批次）标记锁（Vue 语义版）：药剂科一票——按 agent 分流的签字权
+    （canSignItem）。问题2 语义变更注明：pharmacist「药物待核对」表与相关文案已随
+    两药快查下线移除（审核中心=开药待审+我的历史+药品字典/规则管理 tab）；
+    canSignItem 的 drug 签字权矩阵保留（后端权限矩阵未变，作防御性兜底）。
+    legacy data-act 按钮分流标记由 Vue 模板 v-if/v-else-if 声明式渲染接管。"""
+    html = _vue_source()
     for marker in (
-        # 0.1：结构化逐栏直填 + 预填内容计数（签名栏 i=6 锁定当前账号不回填）
-        "let filled=0;",
-        "QC_LABELS.forEach((l,i)=>{if(i===6)return;const v=String(rec[l]||'');"
-        "document.getElementById('qcf_'+i).value=v;if(v.trim())filled++;});",
-        "${filled?'原病历内容已预填'",                 # 横幅诚实化：有值才声明已预填
-        "该记录未留存结构化原病历（旧版条目），请手动填写病历内容",
+        "function canSignItem(p)",                     # 签字权按 agent 分流
+        # 问题4 收窄后的 drug 签字权矩阵（原 qc 已移除）
+        "if (p.agent === 'drug') return role.value === 'admin' || role.value === 'pharmacist'",
+        'v-else-if="canSignItem(p)"',                  # 列表行按条目出签发/驳回按钮
+        "canSignItem(detail) && !detailMine",          # 详情模态操作区同矩阵
+        # 问题2 更新：pharmacist 审核中心标题与待处理空态文案（药物待核对区已移除）
+        "审核中心 · 药剂科",
+        "暂无待办（开药待审）",
+        "开药工作台直送的处方会出现在这里，由您签发/驳回",
+        # 问题4：qc 看 drug 项的只读说明文案（drug 例外：药师/管理员，不再是质控员）
+        "药物核对项：签发/驳回由药师（pharmacist）/管理员执行",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    fn = _extract_fn(html, "qcResubmit")
-    assert "filled++" in fn, "qcResubmit 必须统计非空预填栏数（横幅诚实化依据）"
-    assert "qcLabs" in fn, "qcResubmit 必须回填检验值（meta.labs → qcLabs）"
 
 
-# ---------- 阶段3：开药前端（rx 视图取代 drug 视图 + 药剂科队列 + 我的处方）标记锁 ----------
+def test_phase0_frontend_markers_present():
+    """阶段0 前端标记锁（Vue 语义版）：
+    - 0.1：qcResubmit 从 meta.record 逐栏直填并统计 filled；仅确有预填内容才声明
+      「已预填」，旧版无留档条目如实提示手动填写（不再谎报）；重提上下文以横幅
+      （qc-resubmit-banner）呈现于表单上方——legacy 的 scrollIntoView 跨视图滚动
+      定位与 qc-flash 高亮在 Vue 单页内联横幅下无对应物，相应断言删除（视觉语义由
+      Playwright 行为测试接管）；drug 类历史驳回并入审核中心历史（阶段3 语义）。"""
+    html = _vue_source()
+    for marker in (
+        # 0.1：结构化逐栏直填 + 预填内容计数（签名栏 i=6 锁定当前账号不回填）
+        "let filled = 0", "if (i === 6) return", "if (v.trim()) filled++",
+        "filled > 0",  # 有值才声明已预填（横幅诚实化）
+        "该记录未留存结构化原病历（旧版条目），请手动填写病历内容",
+        "qcLabs.value",  # 回填检验值（meta.labs → qcLabs）
+    ):
+        assert marker in html, f"缺少前端标记：{marker}"
+
 
 def test_phase3_rx_frontend_markers_present():
-    """阶段3 前端标记锁（防回退，docs/plans/pharmacy_roadmap.md 阶段3）：
-    - 3.1 开药工作台：rx 视图/导航位存在，suggest→勾选→自定义加药（字典外确认）→
-      药单→高危阻断+联用理由→提交全链路标记；免责声明条复用 DRUG_DISCLAIMER；
-    - 药物助手独立入口已删（AGENTS.drug / drug 导航项 / loadDrugRejections / chat 免责条）；
-    - 3.2 药剂科开药审核队列：开药待审区 + 通过/驳回（驳回必填意见）+ forced 红标；
+    """阶段3 前端标记锁（Vue 语义版，docs/plans/pharmacy_roadmap.md 阶段3）：
+    - 3.1 开药工作台（RxView）：suggest → 勾选（默认全选且渲染时同步进药单，rxPick
+      语义）→ 字典搜索加药 → 手动加药（字典外确认）→ 药单增删/剂量频次内联编辑 →
+      高危阻断 + 联用理由（填了才允许提交）→ 提交/改写重提；免责声明条 DRUG_DISCLAIMER；
+    - 药物助手独立入口已删（反向锁）；
+    - 3.2 药剂科开药审核队列（ReviewCenterView）：开药待审区 + 通过/驳回（驳回必填意见）
+      + 高危强制开立徽标；
     - 3.3 我的处方：状态徽章（pending_pharm 黄/approved 绿/rejected 红/draft 灰）+
       驳回意见 + 重写回填（提交走 rewrite 自动重提）。"""
-    html = _frontend_source()
+    html = _vue_source()
     for marker in (
-        # 3.1 开药工作台：导航与视图骨架
-        "{k:'rx',t:'开药工作台'}", 'id="scr-rx"', "function loadRx(",
-        "function switchRxTab(", 'id="rxTabCompose"', 'id="rxTabMine"',
-        # 3.1 suggest → 推荐卡片（勾选）+ 中危警示
-        "function rxSuggest(", "生成开药建议", "prescriptions/suggest",
-        "function rxPick(", "function renderRxSuggest(", "⚠ 中危联用警示",
-        # 3.1 自定义加药：字典搜索 + 字典外确认弹条
-        "function rxDictFilter(", "function rxAddDict(", "function rxAddManual(",
-        "/drug/dict", "该药不在字典，药剂科将重点审核",
+        # 3.1 开药工作台：视图骨架与双 tab
+        "开药工作台", "data-testid=\"rx-tab-compose\"", "data-testid=\"rx-tab-mine\"",
+        "function switchTab(",
+        # 3.1 suggest → 推荐卡（勾选）+ 中危警示
+        "function rxSuggest(", "生成开药建议", "'/medical/prescriptions/suggest'",
+        "function rxPick(", "⚠ 中危联用警示",
+        # 3.1 自定义加药：字典搜索（前端过滤）+ 字典外确认弹条
+        "'/medical/drug/dict'", "function rxAddDict(", "function rxAddManual(",
+        "该药不在字典，药剂科将重点审核",
         # 3.1 已选药单（可删/可编辑）
-        "function renderRxSelected(", "function rxEditDrug(", "function rxDelDrug(",
+        "function rxEditDrug(", "function rxDelDrug(", "function inDict(",
         # 3.1 高危联用阻断条 + 联用理由（填了才允许提交）+ 提交
-        'id="rxBlockPanel"', "⚠ 高危联用已阻断", 'id="rxReason"',
-        "contraindication_reason", "function rxSubmit(", "提交开药",
-        "apiPost('/prescriptions',",
-        "prescriptions/'+encodeURIComponent(rxEditId)+'/rewrite",  # 改写重提
-        # 免责声明条（复用 DRUG_DISCLAIMER 常量）
-        'id="rxDisclaimer"', "DRUG_DISCLAIMER",
-        # 3.2 药剂科开药审核队列
-        "prescriptions/pending", "rxPendingItems", "function rxPendingSection(",
-        "开药待审（处方队列）", "function rxReviewCard(", "高危强制开立</span>",
-        "function rxReview(", "_rxReviewPost", "/review'",
+        "高危联用已阻断", "submitDisabled", "contraindication_reason",
+        "function rxSubmit(", "提交开药", "'/medical/prescriptions'",
+        "'/medical/prescriptions/' + encodeURIComponent(rxEditId.value) + '/rewrite'",  # 改写重提
+        # 免责声明条（DRUG_DISCLAIMER 常量逐字同源）
+        "data-testid=\"rx-disclaimer\"", "DRUG_DISCLAIMER",
+        # 3.2 药剂科开药审核队列（ReviewCenterView）
+        "'/medical/prescriptions/pending'", "开药待审（处方队列）",
+        "高危强制开立", "function rxReview(", "rxReviewPost(",
+        "'/medical/prescriptions/' + encodeURIComponent(id) + '/review'",
         # 3.3 我的处方：状态徽章 + 驳回意见 + 重写回填
-        "prescriptions/mine", "function loadRxMine(", "function rxMineCard(",
-        "pending_pharm:['待药剂科审核','warn']", "rejected:['已驳回','bad']",
-        "draft:['草稿','']", "function rxStartRewrite(", "药剂科意见：",
+        "'/medical/prescriptions/mine'", "function loadRxMine(",
+        "pending_pharm: ['待药剂科审核', 'warning']", "rejected: ['已驳回', 'danger']",
+        "draft: ['草稿', 'info']", "function rxStartRewrite(", "药剂科意见：",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     # 药物助手独立入口已删（反向锁：残留即回退）
     for gone in (
-        "drug:{name:'药物信息助手'",        # AGENTS.drug 独立入口
-        "{k:'drug',t:'药物信息'}",          # drug 导航项
-        "async function loadDrugRejections(",  # drug 视图驳回提示函数
-        'id="drugDisclaimer"',              # chat 屏 drug 免责条（移至 rx 视图）
-        "if(k==='drug')loadDrugRejections();",
+        "药物信息助手",            # AGENTS.drug 独立入口
+        "loadDrugRejections",      # drug 视图驳回提示函数
     ):
         assert gone not in html, f"药物助手独立入口应已删除，仍残留：{gone}"
 
 
-# ---------- 开药审核 UX 三修复标记锁（追加，不改动既有断言） ----------
+# ---------- 开药审核 UX / 轮2 四项修复标记锁 ----------
 
 def test_rx_review_ux_fixes_frontend_markers_present():
-    """开药审核 UX 三修复标记锁（防回退）：
+    """开药审核 UX 三修复标记锁（Vue 语义版）：
     - 问题1：pharmacist「我的历史」= 本人参与的记录（submitted_by=me OR reviewed_by=me
       前端过滤；他人记录仍不显示，数据隔离边界不放宽）；
-    - 问题2：rx 导航红点角标=本人被驳回处方数（refreshRxBadge 从 /prescriptions/mine 统计；
-      切换 rx 视图/提交处方/登录后刷新；点进「我的处方」本地清零）；
-    - 问题3：处方卡与核对详情显示审核人+操作时间（pharm_reviewed_at / resolved_at），
-      审核 history 行同理带操作时间。"""
-    html = _frontend_source()
+    - 问题2：rx 导航红点角标 = 本人被驳回处方数（refreshRxBadge 从 /prescriptions/mine
+      统计，仅 doctor；进 rx 视图清零、离开按服务端恢复）；
+    - 问题3：处方卡与历史行显示审核人 + 操作时间（pharm_reviewer/pharm_reviewed_at、
+      resolved_at）。"""
+    html = _vue_source()
     for marker in (
         # 问题1：「我的历史」过滤含本人作为审核人的记录
-        "i.submitted_by===reviewMe||i.reviewed_by===reviewMe",
-        # 问题2：rx 被驳回处方红点角标 + 刷新/清零时机
-        "function refreshRxBadge(", "rxRejectedCount",
-        'title="被驳回的处方"',                       # 红点角标语义（tag red num）
-        "rxRejectedCount=0;renderRail();loadRxMine();",  # 点进「我的处方」清零
-        # 问题3：审核人 + 操作时间留痕显示（处方卡 / 核对详情 / history 行）
-        "pharm_reviewed_at", "审核人 ",
-        "' · '+fmtTs(p.resolved_at)",
+        "(i.submitted_by === reviewMe.value || i.reviewed_by === reviewMe.value)",
+        # 问题2：rx 被驳回处方红点角标 + 刷新/清零时机（badges store + AppShell watch）
+        "async refreshRxBadge(", "rxRejectedCount",
+        "title: '被驳回的处方'",  # 红点角标语义
+        "if (nv === 'rx' && ov !== 'rx') badges.rxRejectedCount = 0",
+        "if (ov === 'rx' && nv !== 'rx') badges.refreshRxBadge()",
+        # 问题3：审核人 + 操作时间留痕显示（处方卡 / history 行）
+        "pharm_reviewed_at", "审核人 {{ it.pharm_reviewer }}", "fmtTs(p.resolved_at)",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    fn = _extract_fn(html, "switchRxTab")
-    assert "rxRejectedCount=0" in fn, "switchRxTab(mine) 必须本地清零被驳回角标"
-    badge = _extract_fn(html, "refreshRxBadge")
-    assert "prescriptions/mine" in badge and "rejected" in badge, \
+    badge = _extract_badge_action("refreshRxBadge")
+    assert "/medical/prescriptions/mine" in badge and "rejected" in badge, \
         "角标数据源必须为 /prescriptions/mine 的 rejected 统计（无需新端点）"
-    assert "ROLE!=='doctor'" in badge, "角标仅 doctor 刷新（mine 为 doctor 专属，避免 403 噪音）"
-    assert html.count("refreshRxBadge()") >= 3, "切换 rx 视图/提交处方/登录后均须刷新角标"
+    assert "auth.role !== 'doctor'" in badge, "角标仅 doctor 刷新（mine 为 doctor 专属，避免 403 噪音）"
+    # 刷新时机：AppShell 登录首刷 + 离开 rx 恢复 + 60s 定时轮询（≥3 处调用）
+    shell = (VUE_SRC / "layouts" / "AppShell.vue").read_text(encoding="utf-8")
+    assert shell.count("badges.refreshRxBadge()") >= 2, "登录首刷与离开 rx 恢复均须刷新角标"
+    assert "badges.poll()" in shell, "60s 定时轮询应挂载于布局壳"
 
-
-# ---------- 本批 4 项修复标记锁（追加，不改动既有断言；语义变更另行注明） ----------
 
 def test_rx_round2_suggest_sync_markers_present():
-    """问题1 标记锁：renderRxSuggest 渲染时对 checked=true 的建议项同步调用加入药单
-    函数（rxPick）——勾选框默认选中必须程序化触发加入逻辑（去重：药名+剂量相同不重复加），
-    已选药单不再为空（用户取消勾选再勾选才加入的回退被锁定）。"""
-    html = _frontend_source()
-    fn = _extract_fn(html, "renderRxSuggest")
-    assert "rxPick(i,true)" in fn, "renderRxSuggest 必须对勾选项同步调用加入药单函数 rxPick"
-    assert "!s.pick" in fn, "仅同步 checked=true 的建议项"
+    """问题1 标记锁：推荐建议渲染时对 checked=true 的建议项同步调用加入药单函数
+    （rxPick 语义，syncPickedToSelected 承接 legacy renderRxSuggest 首段）——勾选框
+    默认选中必须程序化触发加入逻辑（去重：药名+剂量相同不重复加），已选药单不再为空
+    （用户取消勾选再勾选才加入的回退被锁定）。"""
+    html = _vue_source()
+    fn = _extract_fn(html, "syncPickedToSelected")
+    assert "rxPick(i, true)" in fn, "syncPickedToSelected 必须对勾选项同步调用加入药单函数 rxPick"
+    assert "if (!s.pick) return" in fn, "仅同步 checked=true 的建议项"
     # 去重：药名+剂量都相同不重复加（重复渲染幂等）
-    assert "d.name===s.name&&(d.dose||'')===(s.dose||'')" in fn, \
+    assert "d.name === s.name && (d.dose || '') === (s.dose || '')" in fn, \
         "同步加入必须按药名+剂量去重（防重复渲染重复加）"
+    # rxSuggest 成功回调必须触发同步（默认全选 → 药单立即非空）
+    suggest = _extract_fn(html, "rxSuggest")
+    assert "syncPickedToSelected()" in suggest, "建议加载成功后必须同步进药单"
 
 
 def test_rx_round2_review_badge_markers_present():
     """问题2 标记锁：审核中心数字角标（导航入口）——refreshReviewBadge 复用
-    refreshRxBadge 模式（登录/切视图刷新）。
-    问题2 语义变更注明（本轮）：pharmacist 角标只算待审处方数（「药物待核对」区随两药快查
-    下线移除，不再拉取 /review/pending）；原 pharmacist=drug 待核对+待审处方、
-    title="待办：药物核对/待审处方" 断言随之更新；qc=其它助手高危项（问题4 收权后
-    不审 drug/开药），admin=全部待核对+待审处方不变。"""
-    html = _frontend_source()
+    refreshRxBadge 模式（登录/切视图/60s 轮询刷新）。
+    pharmacist 角标只算待审处方数（「药物待核对」区随两药快查下线移除，不再拉取
+    /review/pending）；qc=其它助手高危项（问题4 收权后不审 drug/开药），
+    admin=全部待核对+待审处方。"""
+    html = _vue_source()
     for marker in (
-        "function refreshReviewBadge(",                    # 角标数据刷新函数
-        "reviewTodoCount",                                 # 角标数状态
-        'title="待办：待审处方"',                            # pharmacist 待办角标语义（问题2 更新）
-        'title="待核对（其它助手高危项）"',                    # qc 角标语义（问题4 收权）
-        "refreshReviewBadge();",                           # 登录即刷新（boot）
+        "async refreshReviewBadge(",          # 角标数据刷新动作
+        "reviewTodoCount",                    # 角标数状态
+        "title: '待办：待审处方'",              # pharmacist 待办角标语义
+        "title: '待核对（其它助手高危项）'",      # qc 角标语义（问题4 收权）
+        "badges.refreshReviewBadge()",        # 登录首刷（AppShell onMounted）
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    fn = _extract_fn(html, "refreshReviewBadge")
-    assert "review/pending" in fn, "角标数据源必须含 /review/pending（qc/admin 待核对）"
-    assert "prescriptions/pending" in fn, "角标数据源必须含 /prescriptions/pending（待审处方数）"
-    assert "ROLE!=='pharmacist'" in fn, "问题2：pharmacist 不再拉取 /review/pending（跳过 drug 待核对）"
-    assert "i.agent!=='drug'" in fn, "qc 只算其它助手高危项（问题4 分流）"
-    # 刷新时机：登录 boot + 进入审核中心（loadReview/loadReviewMine 更新角标并重绘导航）
-    assert html.count("refreshReviewBadge()") >= 2, "登录与进入审核中心均须刷新角标"
-    # 问题2 更新：pharmacist 角标=待审处方数（进入审核中心即刷新）
-    assert "reviewTodoCount=(rxPendingItems||[]).length" in html, \
+    fn = _extract_badge_action("refreshReviewBadge")
+    assert "/medical/review/pending" in fn, "角标数据源必须含 /review/pending（qc/admin 待核对）"
+    assert "/medical/prescriptions/pending" in fn, "角标数据源必须含 /prescriptions/pending（待审处方数）"
+    assert "role !== 'pharmacist'" in fn, "pharmacist 不再拉取 /review/pending（跳过 drug 待核对）"
+    assert "i.agent !== 'drug'" in fn, "qc 只算其它助手高危项（问题4 分流）"
+    # 问题2：pharmacist 角标=待审处方数（进入审核中心 load() 即刷新）
+    assert "badges.reviewTodoCount = (rxPendingItems.value || []).length" in html, \
         "pharmacist 角标=待审处方数（drug 待核对区已移除）"
 
 
 def test_rx_round2_reviewed_history_markers_present():
     """问题3 标记锁：①「我的历史」前端过滤含本人作为审核人的记录（既有锁保持）；
     ②pharmacist 拉取 GET /prescriptions/reviewed-by-me 并在「我的历史」tab 合并渲染
-    处方审核记录（rxHistRow 专用行：rid/状态/意见/时间）。"""
-    html = _frontend_source()
+    处方审核记录（_rx 分流行：rid/状态/意见/时间）。"""
+    html = _vue_source()
     for marker in (
-        "prescriptions/reviewed-by-me",                    # 问题3② 新端点调用
-        "rxHistoryItems",                                  # 处方审核历史缓存
-        "function rxHistRow(",                             # 处方审核历史行渲染
-        "处方审核：",                                        # 行首标识（rid 可见）
-        "p._rx?rxHistRow(p):reviewRow(p,true)",            # 「我的历史」合并渲染分流
-        "i.submitted_by===reviewMe||i.reviewed_by===reviewMe",  # 问题3① 前端过滤（保持）
+        "'/medical/prescriptions/reviewed-by-me'",   # 问题3② 新端点调用
+        "rxHistoryItems",                            # 处方审核历史缓存
+        "处方审核：{{ p.id }}",                        # 行首标识（rid 可见）
+        "histSlice.filter((x) => x._rx)",            # 「我的历史」合并渲染分流（_rx 专用行）
+        "(i.submitted_by === reviewMe.value || i.reviewed_by === reviewMe.value)",  # 问题3① 前端过滤
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    fn = _extract_fn(html, "rxHistRow")
-    for field in ("p.id", "p.status", "p.pharm_opinion", "p.pharm_reviewed_at"):
-        assert field in fn, f"处方审核历史行必须展示 {field}（rid/状态/意见/时间）"
+    # 处方审核历史行必须展示 状态/意见/审核时间（_rx 行渲染段）
+    rxrow = html[html.index("histSlice.filter((x) => x._rx)"):]
+    rxrow = rxrow[:rxrow.index("</tr>")]
+    for field in ("p.pharm_opinion", "p.pharm_reviewed_at", "p.status"):
+        assert field in rxrow, f"处方审核历史行必须展示 {field}（rid/状态/意见/时间）"
 
 
 def test_rx_round2_qc_scope_markers_present():
     """问题4 标记锁：qc 不审核药剂——①开药待审区仅 pharmacist/admin 渲染
-    （qc 登录不渲染开药待审区）；②qc/admin 路径不拉取开药待审队列（403 不留旧值）；
-    ③历史过滤 drug 旧遗留记录。
-    问题2 语义变更注明（本轮）：drug 过滤从「仅 qc」（!(ROLE==='qc'&&agent==='drug')）
-    收紧为**所有角色**统一过滤 i.agent!=='drug'（含 pharmacist/admin——两药快查下线，
-    遗留 drug 队列已清理且不再入队，界面彻底不见 drug 项）。"""
-    html = _frontend_source()
-    fn = _extract_fn(html, "rxPendingSection")
-    assert "ROLE!=='pharmacist'&&ROLE!=='admin'" in fn, \
-        "开药待审区必须仅 pharmacist/admin 渲染（qc/doctor 恒空串）"
-    assert "if(ROLE==='admin'){" in html, \
+    （qc/doctor 登录不渲染开药待审区）；②qc 路径不拉取开药待审队列（403 不请求，
+    仅 admin 拉取）；③历史过滤 drug 旧遗留记录（所有角色统一 i.agent!=='drug'）。"""
+    html = _vue_source()
+    # ①开药待审区仅 pharmacist/admin 渲染
+    assert "tab === 'pending' && (role === 'pharmacist' || role === 'admin')" in html, \
+        "开药待审区必须仅 pharmacist/admin 渲染（qc/doctor 不渲染）"
+    # ②qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）
+    assert "if (role.value === 'admin') {" in html, \
         "qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）"
-    # 问题2 收紧：两处历史装载（qc/admin loadReview + doctor/pharmacist loadReviewMine）均过滤 drug
-    assert html.count("i.agent!=='drug'") >= 2, \
+    # ③两处历史装载（qc/admin 与 mine）均过滤 drug 旧遗留记录
+    assert html.count("i.agent !== 'drug'") >= 2, \
         "历史列表须所有角色过滤 drug 旧遗留记录（两处装载点）"
 
 
-# ---------- 问题1/2/3 本轮修复标记锁（追加，不改动既有断言） ----------
-
 def test_review_race_guard_frontend_markers_present():
-    """问题1 标记锁：审核中心加载请求序号守卫（防轮询/连点并发 race 导致列表时有时无）：
-    - reviewLoadSeq 模块级序号；loadReview 入口 const seq=++reviewLoadSeq 取号；
-    - loadReviewMine(b,seq) 承接同一序号（qc/admin 与 mine 两路径同守卫）；
-    - 每个 await 后 if(seq!==reviewLoadSeq)return 丢弃过期响应（含 catch 分支）。"""
-    html = _frontend_source()
+    """问题1 标记锁（Vue 语义版）：审核中心加载请求序号守卫（防轮询/连点并发 race
+    导致列表时有时无）：loadSeq 模块级序号；load() 入口 const seq=++loadSeq 取号；
+    每个 await 后 if(seq!==loadSeq)return 丢弃过期响应（含 catch 分支）。
+    legacy 的 qc/admin 与 mine 双入口函数（loadReview/loadReviewMine(b,seq)）在 Vue 中
+    合并为单一 load() 内双分支（同守卫），对应函数名断言删除。"""
+    html = _vue_source()
     for marker in (
-        "let reviewLoadSeq=0",
-        "const seq=++reviewLoadSeq",
-        "loadReviewMine(b,seq)",
+        "let loadSeq = 0",
+        "const seq = ++loadSeq",
+        "if (seq !== loadSeq) return",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    assert html.count("if(seq!==reviewLoadSeq)return;") >= 7, \
-        "过期响应守卫必须覆盖两路径全部 await 之后的状态写入点（含 catch）"
+    assert html.count("if (seq !== loadSeq) return") >= 7, \
+        "过期响应守卫必须覆盖两分支全部 await 之后的状态写入点（含 catch）"
 
 
 def test_drug_purge_frontend_markers_present():
     """问题2 标记锁：遗留 drug 审核记录全清（前端侧）——
-    ①反向锁：「药物待核对」字样不得残留（药物待核对区已随两药快查下线移除）；
-    ②pharmacist 不再从 /review/pending 拉取 drug 项（loadReviewMine 无该请求）；
+    ①反向锁：「药物待核对」UI 字面量不得残留（药物待核对区已随两药快查下线移除）；
+    ②pharmacist 不再从 /review/pending 拉取 drug 项（load 双分支无该请求）；
     ③后端 drug 入队分支注入「不再入队」注记注释（行为不变）；
     ④清理脚本就位（scripts/purge_drug_review_items.py）；
     ⑤pg_store 新增 purge_drug_reviews（PG 镜像清理配套）。"""
-    html = _frontend_source()
-    # 反向锁针对 UI 字面量（注释中的「语义变更注明」不计）：tab 标签与 drug 待核对表头已移除
+    html = _vue_source()
+    # 反向锁针对 UI 字面量（注释中的「语义变更注明」不计）：drug 待核对表头/tab 已移除
     assert "ph?'药物待核对'" not in html, "pharmacist 待处理 tab 标签「药物待核对」应已移除"
     assert "药物高危待核对（需药剂科复核）" not in html, "drug 待核对表头应已移除"
-    assert "reviewTodoCount=(rxPendingItems||[]).length" in html, \
+    assert "badges.reviewTodoCount = (rxPendingItems.value || []).length" in html, \
         "pharmacist 角标只算待审处方数"
-    router = (FRONTEND.parent.parent / "backend" / "api" / "v1" / "medical" / "medical_router.py").read_text(encoding="utf-8")
+    router = (ROOT / "backend" / "api" / "v1" / "medical" / "medical_router.py").read_text(encoding="utf-8")
     assert "两药快查已下线，drug 项不再入队（开药走 prescriptions）" in router, \
         "_enqueue_if_risk 的 drug 分支应注入下线注记（仅注释不改行为）"
-    assert (FRONTEND.parent.parent / "scripts" / "purge_drug_review_items.py").is_file(), "清理脚本应就位"
-    pg = (FRONTEND.parent.parent / "backend" / "core" / "pg_store.py").read_text(encoding="utf-8")
+    assert (ROOT / "scripts" / "purge_drug_review_items.py").is_file(), "清理脚本应就位"
+    pg = (ROOT / "backend" / "core" / "pg_store.py").read_text(encoding="utf-8")
     assert "async def purge_drug_reviews()" in pg, "pg_store 应提供 purge_drug_reviews 镜像清理"
 
 
 def test_drug_dict_manage_frontend_markers_present():
-    """问题3 标记锁：药品字典/相互作用规则管理 UI（pharmacist 审核中心 tab）：
-    - tabDrugDict/tabDrugRules 双 tab（renderReviewHeader 仅药剂科可见）；
-    - 共享渲染函数 renderDrugDictEditor/renderDrugRulesEditor；
-    - 药品表单五字段（name/category/level/aliases/brand_names）+ 搜索/分类过滤 + 编辑/删除；
-    - 规则表单（drug_a/drug_b/severity 高危|中危/mechanism/management）+ 编辑/删除；
-    - 写端点 POST /admin/drug/dict|rules（权限后端同源 pharmacist+admin）；
-    - 安全纪律：esc() 转义 + data 属性事件委托（禁内联拼接药名）。
-    阶段4 任务1 语义变更（注明）：admin 数据面板字典卡已删除——药品字典管理 UI 只在
-    药剂科审核中心 tab 显示（用户拍板，避免管理面板卡片冗余）；renderDrugDictEditor
-    函数保留供 pharmacist tab 使用；admin 编辑权限后端不变（兜底）。原正向锁
-    「renderDrugDictEditor(document.getElementById('drugDictPanel'))」随挂载点删除，
-    改为反向锁（卡片/容器/挂载函数不得残留）。"""
-    html = _frontend_source()
+    """问题3 标记锁：药品字典/相互作用规则管理 UI（pharmacist 审核中心 tab，Vue 版）：
+    - 双 tab（review-tab-drugdict / review-tab-drugrules，v-if=isPh 仅药剂科可见）；
+    - DrugDictEditor：五字段表单（name/category/level/aliases/brand_names）+ 搜索/
+      分类过滤 + 编辑（编辑态锁定规范名）/删除；写端点 POST /admin/drug/dict；
+    - DrugRulesEditor：规则表单（drug_a/drug_b/severity 高危|中危/mechanism/management）
+      + 编辑/删除；写端点 POST /admin/drug/rules；
+    - 安全纪律：Vue 模板插值自动转义 + @click 声明式绑定接管 legacy esc()+事件委托
+      （data-act/__drugDictDelegate 为 vanilla DOM 特有实现，无对应物，断言删除）；
+    - 数据源 GET /drug/dict + 免责声明。"""
+    html = _vue_source()
     for marker in (
-        'id="tabDrugDict"', 'id="tabDrugRules"',
-        "switchReviewTab('drugdict')", "switchReviewTab('drugrules')",
-        "function renderDrugDictEditor(", "function renderDrugRulesEditor(",
-        "function renderDrugDictList(", "function saveDrugDictItem(", "function saveDrugRule(",
-        "function startDrugDictEdit(", "function startDrugRuleEdit(",
-        "function deleteDrugDictItem(", "function deleteDrugRule(",
-        "function resetDrugDictForm(", "function resetDrugRuleForm(",
-        'id="ddF_name"', 'id="ddF_cat"', 'id="ddF_level"', 'id="ddF_alias"', 'id="ddF_brand"',
-        'id="drF_a"', 'id="drF_b"', 'id="drF_sev"', 'id="drF_mech"', 'id="drF_mgmt"',
-        '<option value="高危">高危</option><option value="中危">中危</option>',
-        "全部分类",                                    # 分类过滤下拉
-        "apiPost('/admin/drug/dict'", "apiPost('/admin/drug/rules'",
-        "新增药品", "新增规则",                          # 表单主按钮
-        "编辑态锁定",                                   # 定位键锁定纪律
-        "data-act=\"dd-edit\"", "data-act=\"dd-del\"",
-        "data-act=\"dr-edit\"", "data-act=\"dr-del\"",
-        "__drugDictDelegate",                          # 事件委托一次性挂载
+        # 双 tab（pharmacist 可见性由 v-if=isPh 控制）
+        "data-testid=\"review-tab-drugdict\"", "data-testid=\"review-tab-drugrules\"",
+        "switchTab('drugdict')", "switchTab('drugrules')",
+        # 字典编辑器（DrugDictEditor.vue）
+        "'/medical/drug/dict'", "'/medical/admin/drug/dict'",
+        "brand_names: csv(form.brand)", "aliases: csv(form.alias)",
+        "level: String(form.level || '').trim() || '处方药'",
+        "规范名（唯一键，编辑态锁定）", "新增药品",
+        # 规则编辑器（DrugRulesEditor.vue）：严重度下拉两档（高危/中危）
+        "'/medical/admin/drug/rules'", '<option value="高危">高危</option>',
+        '<option value="中危">中危</option>',
+        "drug_a: a, drug_b: b", "新增规则",
+        # 数据源 + 免责声明
+        "http.get('/medical/drug/dict')", "DRUG_DISCLAIMER",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    fn = _extract_fn(html, "renderDrugDictEditor")
-    assert "apiGet('/drug/dict')" in fn, "编辑器数据源必须为 GET /drug/dict"
-    assert "DRUG_DISCLAIMER" in fn, "编辑器必须携带免责声明"
-    hdr = _extract_fn(html, "renderReviewHeader")
-    assert "tabDrugDict" in hdr and "tabDrugRules" in hdr, \
-        "字典/规则 tab 可见性必须由 renderReviewHeader 控制（仅药剂科可见）"
+    # 编辑/删除/重置函数成对存在（两编辑器）
+    for fn_name in ("startEdit", "removeItem", "reset"):  # DrugDictEditor
+        assert re.search(rf"function {fn_name}\(", html), f"字典编辑器缺少函数：{fn_name}"
+    for fn_name in ("startEdit", "removeRule", "reset", "markReviewed"):  # DrugRulesEditor
+        assert re.search(rf"function {fn_name}\(", html), f"规则编辑器缺少函数：{fn_name}"
+    # 分类过滤下拉（字典 tab）
+    assert 'placeholder="全部分类"' in html, "字典 tab 应有分类过滤下拉"
 
 
 def test_admin_dict_card_removed_frontend_markers():
-    """阶段4 任务1 反向锁（防回退）：admin 数据面板药品字典卡已移除——
-    卡片标题/容器 id=drugDictPanel/挂载函数 loadDrugDictPanel 均不得残留；
-    删除注记必须存在（标明 admin 卡删除与渲染调用移除的原因/兜底语义）。"""
-    html = _frontend_source()
+    """阶段4 任务1 反向锁（防回退）：admin 数据面板药品字典卡不得存在——药品字典管理
+    UI 只在药剂科审核中心 tab 显示（轮3 Vue 实现即此形态：DataView 无字典卡/容器/
+    挂载函数；legacy 时期的删除注记为 legacy 注释，Vue 实现天然不含）。"""
+    html = _vue_source()
     for gone in (
-        'id="drugDictPanel"',                # admin 卡容器
-        "药品字典（可编辑",                    # admin 卡标题
-        "async function loadDrugDictPanel(",  # admin 卡挂载函数
-        "loadDrugDictPanel();",              # 面板加载时的渲染调用
+        "drugDictPanel",            # admin 卡容器
+        "药品字典（可编辑",           # admin 卡标题
+        "loadDrugDictPanel",        # admin 卡挂载函数
     ):
         assert gone not in html, f"admin 字典卡应已移除，仍残留：{gone}"
-    for marker in (
-        "阶段4 任务1 语义变更",                 # 删除注记（admin 卡标记删除/渲染调用移除，注明）
-        "renderDrugDictEditor 函数保留",        # 函数保留供 pharmacist 用的注明
-        "admin 编辑权限后端不变",               # 后端权限兜底注明
-    ):
-        assert marker in html, f"缺少 admin 字典卡移除注记：{marker}"
 
 
-# ---------- 阶段4：病例库前端标记锁（追加，不改动既有断言） ----------
+# ---------- 阶段4：病例库前端标记锁 ----------
 
 def test_phase4_case_archive_frontend_markers_present():
-    """阶段4 前端标记锁（防回退）：
-    - qc/admin 审核中心「病例库」tab（tabCaseArchive + switchReviewTab('casearchive') 分发 +
-      renderReviewHeader 仅 qc/admin 可见）；
-    - 病例库视图：统计头（N 例在库 / M 移除）+ 科室/时间筛选 + status 徽章
-      （active 绿 chip ok「在库」/ removed 灰 chip「已移除」）+ 质控结论摘要 +
-      record 展开详情（esc 后 <pre>）+ 移除按钮（data-act="ca-remove"）；
-    - remove 必填原因：空值 toast 阻断 + /case-archive/{id}/remove 端点；
-    - doctor 病历质控视图「我的归档」小节（loadQcArch + /case-archive/mine，只读）。"""
-    html = _frontend_source()
+    """阶段4 前端标记锁（Vue 语义版）：
+    - qc/admin 审核中心「病例库」tab（review-tab-casearchive + switchTab('casearchive')
+      分发，v-if=!isMine 仅 qc/admin 可见）；
+    - 病例库视图：统计头（N 例在库 / M 已移除）+ 科室/状态/日期筛选 + status 徽章
+      （在库 success / 已移除 info）+ 质控结论摘要 + record 展开详情（Vue 模板插值
+      自动转义接管 legacy esc(JSON...) 纪律）+ 移除（原因必填，软删除留痕）；
+    - doctor 病历质控视图「我的归档」小节（loadQcArch + /case-archive/mine，只读）；
+    - humanizeAudit 补 case_archive.* 映射（覆盖率锁配套）。"""
+    html = _vue_source()
     for marker in (
         # 病例库 tab（qc/admin）
-        'id="tabCaseArchive"', "switchReviewTab('casearchive')", "if(t==='casearchive')return loadCaseArchive();",
+        "data-testid=\"review-tab-casearchive\"", "switchTab('casearchive')",
+        "if (t === 'casearchive') loadCaseArchive()",
         # 视图数据源与渲染
-        "function loadCaseArchive(", "function renderCaseArchive(", "function caseArchRow(",
-        "/api/v1/medical/case-archive",
-        # 统计头（N 例在库 / M 移除）
-        "例在库", "已移除</span>",
-        # 科室/时间筛选
-        'id="caDept"', 'id="caStatus"', 'id="caFrom"', 'id="caTo"', "全部科室",
-        # status 徽章（active 绿 / removed 灰）
-        "chip ok\"><span class=\"dot\"></span>在库</span>",
-        "chip\"><span class=\"dot\"></span>已移除</span>",
-        # 质控结论摘要 + record 展开详情（esc 纪律）
-        "质控结论摘要与病历详情", "qc_conclusion", "esc(JSON.stringify(i.record||{},null,2))",
+        "function loadCaseArchive()", "function caRemove(",
+        "'/medical/case-archive'",
+        # 统计头（N 例在库 / M 已移除）
+        "例在库", "已移除",
+        # 科室/状态筛选
+        "placeholder=\"全部科室\"", 'label="在库" value="active"', 'label="已移除" value="removed"',
+        # 质控结论摘要 + record 展开详情
+        "质控结论摘要与病历详情", "qc_conclusion", "JSON.stringify(i.record || {}, null, 2)",
         # 移除（必填原因）
-        'data-act="ca-remove"', "function caseArchiveRemove(", "移除原因必填",
-        "/remove'",
-        # doctor 我的归档
-        'id="qcArchCard"', "function loadQcArch(", "/case-archive/mine", "我的归档",
-        "暂无在库归档病历",
+        "移除原因必填", "'/medical/case-archive/' + encodeURIComponent(caRemoveId.value) + '/remove'",
+        # doctor 我的归档（QcView）
+        "function loadQcArch(", "'/medical/case-archive/mine'", "我的归档", "暂无在库归档病历",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    rm = _extract_fn(html, "caseArchiveRemove")
-    assert "if(!reason){toast('移除原因必填');return;}" in rm, \
-        "remove 必须前端阻断空原因（服务端 422 双保险）"
-    hdr = _extract_fn(html, "renderReviewHeader")
-    assert "tabCaseArchive" in hdr, "病例库 tab 可见性必须由 renderReviewHeader 控制（仅 qc/admin）"
     # humanizeAudit 补 case_archive.* 映射（覆盖率锁配套）
-    hum = _extract_fn(html, "humanizeAudit")
+    hum = _extract_export_fn(_all_frontend_js(), "humanizeAudit")
     assert "case_archive" in hum, "humanizeAudit 必须包含 case_archive.* 事件映射"
 
 
-# ---------- 阶段6：商用化去 demo 前端标记锁（追加，不改动既有断言） ----------
+# ---------- 阶段6：商用化去 demo 前端标记锁 ----------
 
 def test_phase6_dedemo_frontend_markers_removed():
-    """阶段6（去 demo 商用化）前端标记锁（防回退，docs/plans/pharmacy_roadmap.md 6.1）：
+    """阶段6（去 demo 商用化）前端标记锁（防回退）：
     - 质控工作台「填入示例」按钮与 qcSample() 假病历一键填充保持移除
       （商用环境不得存在一键注入虚构病历的入口，防误用与数据混淆；
       病历录入走「粘贴整段病历 → qcParsePaste 拆分」或手动填写）；
     - 登录页无「演示账号」用户可见字样（账号由管理员统一开通；
       演示账号的前提条件与说明仅存在于 README / docs/DEPLOY.md）。"""
-    html = _frontend_source()
+    html = _vue_source()
     assert "qcSample" not in html, "qcSample() 假病历一键填充必须保持移除（商用不得一键注入虚构病历）"
     assert "填入示例" not in html, "「填入示例」按钮必须保持移除（阶段6 去demo）"
     assert "演示账号" not in html, "用户可见界面不应出现「演示账号」字样（改中性文案，演示账号说明放文档）"

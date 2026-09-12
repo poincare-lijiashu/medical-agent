@@ -302,28 +302,27 @@ def test_consult_images_cap_eleven_rejected(monkeypatch, tmp_path):
 # ==================== 前端标记锁（防回退） ====================
 
 def test_mdt_images_frontend_markers_present():
-    """轮 B1 前端标记锁：会诊发起框图片上传（复用 compressImage + ≤10 计数）、
-    发起请求随单带图并在成功后清空、收件箱/「我的会诊」详情缩略图渲染
-    （data:image 白名单 + esc 转义 + 点击 showImg 放大）。
-    B1 拆分后：标记统一在 index.html + frontend/js/*.js 拼接源上断言（集合不变）。"""
-    from tests.test_frontend_syntax import _frontend_source
-    html = _frontend_source()
+    """轮 B1 前端标记锁（Vue 语义版）：会诊发起框图片上传（复用 compressImage + ≤10 计数）、
+    发起请求随单带图并在成功后清空、「我的会诊」详情缩略图渲染（data:image 白名单）。
+    轮4 起断言源 = frontend-vue/src（ConsultView.vue + utils/image.js）；缩略图经 Vue 模板
+    el-image 组件渲染（模板插值 + preview-src-list 点击放大接管 legacy esc/showImg 语义）。"""
+    from tests.test_frontend_syntax import _vue_source
+    html = _vue_source()
     for marker in (
-        # 发起框上传组件（独立于聊天输入区 curImages）
-        'id="consultImg"', "let consultImages=[]",
-        "function addConsultImgs(", "function clearConsultImgs(", "function renderConsultImgs(",
-        "add.map(f=>compressImage(f))",          # 复用 imaging 压缩函数
+        # 发起框上传组件（独立 ref 上传，appendImages 压缩入列）
+        "const consultImages = ref([])", "async function onFiles(",
+        "function clearConsultImgs(", "appendImages(consultImages.value",
+        "(await Promise.all(add.map((f) => compressImage(f))))",  # 复用 imaging 压缩函数
         "最多 ${MAX_IMG} 张，已忽略超出部分",        # ≤10 张计数提示
         # 发起请求随单带图 + 成功清空
-        "images:consultImages.length?consultImages:undefined",
-        "consultImages=[];renderConsultImgs();",
-        # 收件箱列表项 + 「我的会诊」详情缩略图（同一渲染函数，两处挂载）
+        "images: consultImages.value.length ? consultImages.value : undefined",
+        "consultImages.value = [] // 图已随单发出，清空待附影像",
+        # 「我的会诊」详情缩略图（data:image 白名单过滤）
         "function consultThumbs(",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    assert html.count("+consultThumbs(c)") >= 2, "收件箱与「我的会诊」详情均应渲染缩略图条"
+    # 「我的会诊」详情缩略图条（v-if + v-for + preview-src-list 三处消费 consultThumbs(c)）
+    assert html.count("consultThumbs(c)") >= 2, "「我的会诊」详情应渲染缩略图条（含点击放大预览列表）"
     thumbs = html[html.index("function consultThumbs("):]
-    thumbs = thumbs[:thumbs.index("\nfunction ", 10)]
+    thumbs = thumbs[:thumbs.index("\n}", 10)]
     assert "startsWith('data:image/')" in thumbs, "缩略图缺少 data:image/ 前缀白名单过滤"
-    assert "esc(u)" in thumbs, "缩略图 src 必须 esc() 转义"
-    assert "showImg(this.src)" in thumbs, "缩略图点击应复用 showImg 放大"

@@ -5,7 +5,7 @@
   ② f-string 动态 action/事件名（如 resolved_{body.decision}、{agent}.answer）按可取值展开；
   ③ pg_store.mirror_audit 点分事件名（如 "qc.qc_escalated"）取首个「.」后缀——
     admin 数据面板审计流优先取 PG 真源，前端 humanizeAudit 对点分事件按后缀匹配映射表。
-- 从 frontend/index.html 提取 humanizeAudit 内 MAP 映射表键集；
+- 从 frontend-vue/src/utils/audit.js 提取 humanizeAudit 内 MAP 映射表键集（轮4 起 Vue 源为权威全文）；
 - 断言后端事件全集 ⊆ 前端映射键集：未来新增审计事件若不补人话映射，本测试即红。
 - 另用 node 对代表性事件跑 humanizeAudit 输出断言（人话文案质量锁；node 不可用跳过）。
 """
@@ -49,11 +49,11 @@ def _backend_actions() -> set:
 
 def _humanize_map_keys() -> set:
     """前端 humanizeAudit 内 MAP 映射表键集（复用 test_frontend_syntax 的函数提取器；
-    B1 拆分后 humanizeAudit 位于 frontend/js/util.js，从拼接 JS 全文提取）。"""
+    轮4 起 humanizeAudit 位于 frontend-vue/src/utils/audit.js，从拼接 JS 全文提取）。"""
     from tests.test_frontend_syntax import _all_frontend_js, _extract_fn
     fn = _extract_fn(_all_frontend_js(), "humanizeAudit")
-    start = fn.index("const MAP={")
-    block = fn[start:fn.index("\n  };", start)]
+    start = fn.index("const MAP = {")
+    block = fn[start:fn.index("\n  }\n", start)]  # MAP 对象收口（两空格缩进，无分号）
     keys = set(re.findall(r"(?m)^\s{4}([a-z_][a-z_0-9]*):", block))
     assert keys, "未从前端提取到 humanizeAudit MAP 键（映射表结构被改动？）"
     return keys

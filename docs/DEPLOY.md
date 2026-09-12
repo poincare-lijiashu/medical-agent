@@ -31,6 +31,42 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 ```
 
+## 前端构建与部署（Vue3，轮4 起）
+
+> Vue3 + Vite + Element Plus 单页应用（`frontend-vue/`）为唯一前端；legacy vanilla 前端
+> 已删除（git tag `v-legacy-frontend` 永久保存，回退见
+> **[docs/plans/vue3_migration.md](plans/vue3_migration.md)**）。
+
+### 环境要求
+
+| 项 | 要求 | 说明 |
+| --- | --- | --- |
+| Node.js | ≥ 18（含 npm） | 仅构建期需要；服务运行/回退均不需要 node |
+| npm 镜像 | `frontend-vue/.npmrc` 已锁 `registry=https://registry.npmmirror.com` | 网络受限环境保安装成功，无需手工配置 |
+
+### 构建步骤（CI 外手动执行）
+
+```bash
+cd frontend-vue
+npm ci          # 按 package-lock.json 精确安装（首次/依赖变更后）
+npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|css）
+```
+
+### dist 已入库策略
+
+- `frontend-vue/dist/` 构建产物**随源码入库**（.gitignore 反向豁免）：
+  **任何前端改动必须重新构建并把 dist 一并提交**——部署机 checkout 即可用，
+  全程无需 node 环境（测试 `tests/test_frontend_syntax.py::test_vue_dist_build_output_in_sync`
+  锁定 dist 与 src 同步存在）。
+- 产物引用以 `/assets/*` 为前缀（vite base=/），由后端 `backend/main.py` 的
+  StaticFiles(html=True) 同源托管；`/` 与 `/app` 双入口均直出同一份 `dist/index.html`。
+
+### 部署形态
+
+- **单机直跑**：后端 uvicorn 起来即同时服务 API 与前端（无独立前端服务器/CDN 依赖）；
+- **Docker**：镜像内已含 dist（frontend-vue 随上下文构建），无需在容器内跑 npm；
+- 静态资源与 API 同源，CSP 已按产物形态收敛（`script-src 'self'`，无内联脚本）。
+
 ## 模型配置（医院自选供应商）
 
 管理员登录 → 数据面板 → **模型配置**：

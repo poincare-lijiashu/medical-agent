@@ -262,37 +262,36 @@ def test_json_fallback_minimal_diff(env):
 
 def test_frontend_review_markers_present():
     """前端标记锁（防回退）：相互作用规则 tab 审校工具链四件套 + 人话映射配套。
-    B1 拆分后：标记统一在 index.html + frontend/js/*.js 拼接源上断言（集合不变）。"""
-    from tests.test_frontend_syntax import _frontend_source
-    html = _frontend_source()
+    轮4 起断言源 = frontend-vue/src（Vue 源为权威全文；DrugRulesEditor.vue + utils/audit.js）。"""
+    from tests.test_frontend_syntax import _all_frontend_js, _vue_source, _extract_fn
+    html = _vue_source()
     for marker in (
-        # 统计头覆盖率文案（如「审校 42/318 · 高危 12/135」）
-        "审校 ${esc(String(", "· 高危 ${esc(String(",
-        # 筛选下拉（全部/未审校/已审校/未审校高危）
-        'id="drReview"', "renderDrugRulesList()",
-        '<option value="">全部</option>', '<option value="unreviewed">未审校</option>',
-        '<option value="approved">已审校</option>', '<option value="unreviewed_high">未审校高危</option>',
+        # 统计头覆盖率 chip（如「审校 42/318 · 高危 12/135」）
+        'data-testid="drug-coverage"',
+        "审校 {{ st.reviewed ?? 0 }}/{{ st.total ?? rules.length }} · 高危 {{ st.high_risk_reviewed ?? 0 }}/{{ st.high_risk_total ?? st.high ?? '—' }}",
+        # 筛选下拉（全部/未审校/已审校/未审校高危，el-option）
+        '<el-option label="未审校" value="unreviewed" />', '<el-option label="已审校" value="approved" />',
+        '<el-option label="未审校高危" value="unreviewed_high" />',
         # 行勾选框 + 批量「标记已审校」按钮
-        'class="dr-chk"', "function markRulesReviewed(", "标记已审校",
-        "apiPost('/admin/drug/rules/review'",
+        'data-testid="drug-rule-review"', "function markReviewed(", "标记已审校",
+        "'/medical/admin/drug/rules/review'",
         # 审校徽章（已审校/未审校）
-        "已审校", "未审校",
+        "'已审校' : '未审校'",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
-    # 徽章/筛选/排序逻辑必须位于规则列表渲染函数体内（esc 纪律 + 高危默认排前）
-    fn = _extract_fn(html, "renderDrugRulesList")
-    assert "review_status==='approved'" in fn, "徽章必须按 review_status 计算（缺省视为未审校）"
-    assert "chip ok" in fn or "rev?'ok':''" in fn, "已审校徽章必须绿色（chip ok 条件类）"
-    assert "unreviewed_high" in fn, "筛选必须含「未审校高危」分支"
-    assert "esc(" in fn, "列表渲染必须走 esc() 转义纪律"
-    assert "高危" in fn and "sort" in fn, "规则列表默认高危排前（sort）"
-    # 批量标记：从勾选框取编码键，decision=approved，成功后重渲染
-    mk = _extract_fn(html, "markRulesReviewed")
-    assert ".dr-chk" in mk and "dataset.key" in mk, "批量标记必须收集勾选框的 data-key 编码键"
-    assert "decision:'approved'" in mk, "批量标记提交 decision=approved（reviewed_by 由后端取登录名）"
-    assert "renderDrugRulesEditor(drugDictEditorRoot)" in mk, "标记成功后必须重渲染规则编辑器"
+    # 徽章/筛选/排序逻辑：revOf 缺省视为未审校 + 列表高危默认排前（稳定排序）+ unreviewed_high 分支
+    rev = _extract_fn(html, "revOf")
+    assert "review_status === 'approved'" in rev, "徽章必须按 review_status 计算（缺省视为未审校）"
+    assert "reviewFilter.value === 'unreviewed_high'" in html, "筛选必须含「未审校高危」分支"
+    assert "(y.r.severity === '高危') - (x.r.severity === '高危')" in html, \
+        "规则列表默认高危排前（稳定排序）"
+    # 批量标记：从勾选框取编码键，decision=approved，成功后重载
+    mk = _extract_fn(html, "markReviewed")
+    assert "keys: checked.value" in mk, "批量标记必须收集勾选框的规范药对编码键"
+    assert "decision: 'approved'" in mk, "批量标记提交 decision=approved（reviewed_by 由后端取登录名）"
+    assert "await load()" in mk, "标记成功后必须重载规则编辑器"
     # humanizeAudit 补 reviewed 映射（审计覆盖回归锁配套）
-    hum = _extract_fn(html, "humanizeAudit")
+    hum = _extract_fn(_all_frontend_js(), "humanizeAudit")
     assert "reviewed:" in hum, "humanizeAudit MAP 必须补 reviewed（drug_rules.reviewed 人话）"
 
 

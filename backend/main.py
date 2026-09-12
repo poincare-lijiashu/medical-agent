@@ -24,7 +24,8 @@ from backend.api.v1.auth.auth_router import router as auth_router
 
 logger = get_logger(__name__)
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+# Vue3 前端构建产物目录（轮4 起唯一前端；legacy frontend/ 已删除，
+# git tag v-legacy-frontend 永久保存，回退步骤见 docs/plans/vue3_migration.md）。
 VUE_DIST_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vue", "dist")
 
@@ -138,11 +139,6 @@ app.add_middleware(AuditChannelMiddleware)
 app.include_router(medical_router, prefix="/api/v1/medical")
 app.include_router(auth_router, prefix="/api/v1")
 
-# 拆分后前端 JS 静态服务（B1 重构）：index.html 仅保留 HTML/CSS + <script src> 引用，
-# /js/* 由 StaticFiles 托管（同源自源，CSP script-src 'self' 已覆盖外链脚本）；
-# 挂载在 API 路由之后，不与 /api/*、/healthz 等冲突。
-app.mount("/js", StaticFiles(directory=os.path.join(FRONTEND_DIR, "js")), name="frontend_js")
-
 
 @app.middleware("http")
 async def _observability(request: Request, call_next):
@@ -156,15 +152,16 @@ async def _observability(request: Request, call_next):
     return response
 
 
-# 基础安全响应头：所有响应统一携带。'unsafe-inline' 为有意保留——前端 HTML 仍有内联
-# onclick/onsubmit 处理器（JS 本体已拆分为 /js/*.js 外链文件），去掉会导致整站不可用；
-# 其余指令已收敛加载面。
+# 基础安全响应头：所有响应统一携带。轮4 起 Vue3 前端为唯一前端：vite 构建产物全部为
+# 外链 self 脚本（无内联代码），script-src 收紧为 'self'（移除 legacy 时期为内联
+# onclick 处理器保留的 'unsafe-inline'）；style-src 'unsafe-inline' 为 Element Plus
+# 动态样式与内联 style 属性所需；img-src data: 覆盖压缩影像的 data:image/ 白名单消费。
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "default-src 'self'; script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'self'"
     ),
@@ -223,31 +220,37 @@ async def health():
     return {"status": "ok", "service": "MedAssist", "version": settings.app_version}
 
 
-# ---- Vue3 新前端（迁移轮1，手册 docs/plans/vue3_migration.md）----
-# /app 显式入口（直出 dist/index.html，避免 StaticFiles 对无尾斜杠路径的 307 跳转）；
-# /app/assets 等静态资源由下面的 StaticFiles(html=True) 托管。
-# 注意：注册顺序必须在 mount("/app") 之前，否则 Mount 前缀匹配会吞掉显式路由；
-# legacy 主入口 / 与 /js 挂载完全不动（轮4 前并行验证）。
-@app.get("/app", include_in_schema=False)
-async def vue_app_index():
+# ---- Vue3 前端（轮4 起唯一前端，手册 docs/plans/vue3_migration.md）----
+# / 与 /app 双入口均直出 dist/index.html（显式路由避免 StaticFiles 对无尾斜杠路径的
+# 307 跳转与目录列表）；/assets/* 等静态资源由文件末尾的 StaticFiles 托管（注册顺序
+# 必须最后，否则 Mount 前缀匹配会吞掉 /api/*、/healthz 等显式路由）。
+def _vue_index_response():
+    """直出 Vue3 构建产物入口；未构建时给出可操作的 503 提示（dist 随轮入库，正常部署恒 200）。"""
     idx = os.path.join(VUE_DIST_DIR, "index.html")
     if os.path.isfile(idx):
         return FileResponse(idx, media_type="text/html")
-    return {"hint": "frontend-vue/dist 未构建；在 frontend-vue/ 下 npm run build 后可用"}
+    return JSONResponse(
+        {"hint": "frontend-vue/dist 未构建；在 frontend-vue/ 下执行 npm ci && npm run build 后可用"},
+        status_code=503)
 
 
-if os.path.isdir(VUE_DIST_DIR):
-    app.mount("/app", StaticFiles(directory=VUE_DIST_DIR, html=True), name="frontend_vue")
+@app.get("/app", include_in_schema=False)
+async def vue_app_index():
+    return _vue_index_response()
 
 
-# ---- 商用前端（自包含单页）----
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def index():
-    idx = os.path.join(FRONTEND_DIR, "index.html")
-    if os.path.isfile(idx):
-        return FileResponse(idx, media_type="text/html")
-    return {"hint": "frontend/index.html 未找到；API 见 /docs"}
+    return _vue_index_response()
+
+
+if os.path.isdir(VUE_DIST_DIR):
+    # /app：轮1-3 的旧入口（保留兼容历史书签/文档引用）；/：轮4 起默认入口。
+    # vite base=/ 与二者资源引用（/assets/*）一致；/app 下无独立资源（深链由
+    # vue-router catch-all 回落 /overview）。
+    app.mount("/app", StaticFiles(directory=VUE_DIST_DIR, html=True), name="frontend_vue")
+    app.mount("/", StaticFiles(directory=VUE_DIST_DIR, html=True), name="frontend_vue_root")
 
 
 if __name__ == "__main__":

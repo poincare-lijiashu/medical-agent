@@ -1,6 +1,5 @@
-// 路由：轮3 = 核心助手（轮2）+ 管理视图（审核中心/病历质控/知识库管理/数据面板）。
+// 路由：轮4 切换默认入口后 history base=/（与 vite base、后端 / 与 /app 双入口一致）。
 // case（病例总结）与 arch（架构 · 合规）仍为占位视图（不在轮3 范围）。
-// history base=/app/（与 vite base、后端 /app 挂载三方一致）。
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import AppShell from '../layouts/AppShell.vue'
@@ -20,7 +19,7 @@ import DataView from '../views/DataView.vue'
 const STUB_NAV = ['case', 'arch']
 
 const router = createRouter({
-  history: createWebHistory('/app/'),
+  history: createWebHistory('/'),
   routes: [
     { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
     {

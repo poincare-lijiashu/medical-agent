@@ -1,14 +1,13 @@
-"""Vue3 迁移轮1 壳验收（docs/plans/vue3_migration.md）：/app 挂载存在且不影响 legacy。
+"""Vue3 迁移轮4 壳验收（docs/plans/vue3_migration.md）：/ 与 /app 双入口均直出新应用。
 
 轻量断言四件套：
-1. TestClient GET /app 直出新壳 HTML（Vite 构建标记：资源引用带 /app/assets/ 前缀）；
-2. frontend-vue/dist/index.html 构建产物随轮入库（回退免 node 的手册策略）；
-3. legacy 主入口 / 完全不受影响（仍含 /js/state.js 外链标记）；
+1. TestClient GET / 直出 Vue3 新壳（默认入口切换：/assets/ 产物引用 + Vue 挂载点 #app）；
+2. GET /app 直出同一份产物（轮1-3 旧入口保留兼容，/app/assets 旧引用并行可达）；
+3. frontend-vue/dist/index.html 构建产物随轮入库（回退免 node 的手册策略）；
 4. frontend-vue/.npmrc 锁定 npmmirror 镜像（网络受限环境保 npm 安装成功）。
 
-Playwright 浏览器层验证在轮4 前始终指向 legacy 主入口（本轮不动）。
+legacy vanilla 前端已于轮4 删除（git tag v-legacy-frontend 永久保存，回退见手册）。
 """
-import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -21,12 +20,19 @@ VUE_INDEX = VUE_ROOT / "dist" / "index.html"
 client = TestClient(app)
 
 
+def test_root_serves_vue_shell():
+    """轮4 切换验收：GET / 默认入口直出 Vue3 新壳（/assets/* 产物引用 + 挂载点 #app）。"""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "/assets/" in r.text, "新壳 HTML 应引用 /assets/*（轮4 起 vite base=/）"
+    assert 'id="app"' in r.text, "新壳 HTML 应含 Vue 挂载点 #app"
+
+
 def test_app_mount_serves_vue_shell():
-    """GET /app 返回 Vue3 新壳：构建产物 HTML 带 /app/assets/ 资源引用标记。"""
+    """/app 旧入口并行保留：GET /app 直出同一份 Vue3 产物（历史书签兼容）。"""
     r = client.get("/app")
     assert r.status_code == 200
-    assert "/app/assets/" in r.text, "新壳 HTML 应引用 /app/assets/*（vite base=/app/）"
-    assert 'id="app"' in r.text, "新壳 HTML 应含 Vue 挂载点 #app"
+    assert "/assets/" in r.text and 'id="app"' in r.text, "/app 应直出同一份 Vue3 产物"
 
 
 def test_vue_dist_committed():
@@ -36,11 +42,15 @@ def test_vue_dist_committed():
     assert assets.is_dir() and any(assets.iterdir()), "dist/assets 应存在构建出的 JS/CSS"
 
 
-def test_legacy_root_untouched():
-    """legacy 主入口零改动：GET / 仍返回 vanilla 壳（/js/state.js 外链标记）。"""
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "/js/state.js" in r.text, "legacy 首页应仍引用 /js/state.js"
+def test_vue_asset_served_from_root():
+    """静态资源可达：/assets/*.js 经根挂载 StaticFiles 返回 200（默认入口资源链路）。"""
+    idx = VUE_INDEX.read_text(encoding="utf-8")
+    import re
+
+    m = re.search(r'src="(/assets/[^"]+\.js)"', idx)
+    assert m, "dist/index.html 应含 /assets/*.js 产物引用"
+    r = client.get(m.group(1))
+    assert r.status_code == 200, f"构建产物 JS 应可从根路径取到：{m.group(1)}"
 
 
 def test_npmrc_mirror_lock():

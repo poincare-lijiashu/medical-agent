@@ -1,4 +1,4 @@
-"""Vue3 迁移轮3 E2E 冒烟（docs/plans/vue3_migration.md）：/app 管理视图可打开。
+"""Vue3 迁移轮3 E2E 冒烟（docs/plans/vue3_migration.md）：管理视图可打开。
 
 链路：pharm01 登录 → 审核中心（待处理含开药待审区 / 我的历史 / 药品字典 tab 免责声明 /
 相互作用规则 tab 覆盖率 chip）；admin01 → 知识库（向量总数统计）/ 数据面板（审计流/
@@ -7,6 +7,8 @@
 写操作**（只打开视图与断言只读元素，删除/审核按钮一律不点击）。
 
 说明：
+- 轮4 起默认入口 / 直出 Vue3 应用；/app 双入口共用同一份产物均可跑（二选一：
+  本文件统一走 / 主入口，与 test_smoke_flow.py 一致）。
 - 依赖运行中的服务 127.0.0.1:8001（healthz 不通则 skip）；未装 playwright 整文件 skip。
 - 演示口令 = seed（AUTH_DEMO_PASSWORD）Med@2026，与 tests/e2e/test_vue_assist.py 同源。
 """
@@ -38,7 +40,7 @@ def _service_up() -> bool:
 @pytest.fixture(scope="module")
 def page():
     if not _service_up():
-        pytest.skip(f"服务不可达：{BASE_URL}（healthz 未通过），跳过 Vue /app 冒烟")
+        pytest.skip(f"服务不可达：{BASE_URL}（healthz 未通过），跳过 Vue 冒烟")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(base_url=BASE_URL, locale="zh-CN")
@@ -50,10 +52,10 @@ def page():
 
 
 def _login(page, username: str) -> None:
-    """以指定演示账号登录 /app：先清登录态（换角色隔离），再走登录表单。"""
-    page.goto("/app")
+    """以指定演示账号登录主入口 /：先清登录态（换角色隔离），再走登录表单。"""
+    page.goto("/")
     page.evaluate("localStorage.clear()")
-    page.goto("/app")
+    page.goto("/")
     page.wait_for_selector('input[placeholder="用户名"]')
     page.fill('input[placeholder="用户名"]', username)
     page.fill('input[placeholder="密码"]', DEMO_PASSWORD)

@@ -1,12 +1,14 @@
-"""Vue3 迁移轮2 E2E 冒烟（docs/plans/vue3_migration.md）：/app 四助手视图可打开。
+"""Vue3 迁移轮2 E2E 冒烟（docs/plans/vue3_migration.md）：四助手视图可打开。
 
-链路：/app 登录 doctor01 → 依次导航 医学文献 / 影像辅助 / 多智能体会诊 / 我的会诊 /
+链路：主入口 / 登录 doctor01 → 依次导航 医学文献 / 影像辅助 / 多智能体会诊 / 我的会诊 /
 开药工作台 → 断言关键元素（提问框 / 上传按钮 / 病例框 / DRUG_DISCLAIMER 免责文案 /
 药单区）。**不触发任何 LLM 调用**（只打开视图与断言，不点发送/生成/发起）。
 
 说明：
+- 轮4 起默认入口 / 直出 Vue3 应用；/app 双入口共用同一份产物均可跑（二选一：
+  本文件统一走 / 主入口，与 test_smoke_flow.py 一致）。
 - 依赖运行中的服务 127.0.0.1:8001（healthz 不通则 skip）；未装 playwright 整文件 skip。
-- 免责声明断言为 legacy DRUG_DISCLAIMER 逐字片段（tests/test_drug_dict_admin.py 同源锁定）。
+- 免责声明断言为 DRUG_DISCLAIMER 逐字片段（tests/test_drug_dict_admin.py 同源锁定）。
 """
 import urllib.request
 
@@ -17,8 +19,7 @@ pytest.importorskip("playwright")  # 环境没装 playwright → 自动 skip，�
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 BASE_URL = "http://127.0.0.1:8001"
-
-# 与 legacy/后端逐字同源的免责声明片段（DRUG_DISCLAIMER 前半句，足以锁定文案不漂移）
+# 免责声明片段（DRUG_DISCLAIMER 前半句，足以锁定文案不漂移）
 RX_DISCLAIMER_SNIPPET = "药品数据由 AI 辅助生成，临床使用前必须经执业药师核对"
 
 
@@ -33,7 +34,7 @@ def _service_up() -> bool:
 @pytest.fixture(scope="module")
 def page():
     if not _service_up():
-        pytest.skip(f"服务不可达：{BASE_URL}（healthz 未通过），跳过 Vue /app 冒烟")
+        pytest.skip(f"服务不可达：{BASE_URL}（healthz 未通过），跳过 Vue 冒烟")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(base_url=BASE_URL, locale="zh-CN")
@@ -45,8 +46,8 @@ def page():
 
 
 def _login_app(page) -> None:
-    """登录 /app 新壳：占位输入 + 登录按钮 → 等待侧边导航出现。"""
-    page.goto("/app")
+    """登录 Vue 应用：占位输入 + 登录按钮 → 等待侧边导航出现。"""
+    page.goto("/")
     page.wait_for_selector('input[placeholder="用户名"]')
     page.fill('input[placeholder="用户名"]', "doctor01")
     page.fill('input[placeholder="密码"]', "Med@2026")  # seed 演示口令（AUTH_DEMO_PASSWORD）

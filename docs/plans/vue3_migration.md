@@ -10,7 +10,7 @@
 | 1 ✅ | Vite 脚手架 + 登录/导航/布局壳 + Element Plus + api 客户端（token 拦截器）+ 后端挂载 /app | frontend-vue/ 可登录可导航，dist 构建通过 |
 | 2 ✅ | 核心助手视图：文献/影像/MDT 会诊/开药工作台+我的处方（交互最重先啃） | /app 全助手视图可用 |
 | 3 ✅ | 管理视图：审核中心/病例库/质控/知识库/审计/字典规则管理/LLM 配置/数据面板 + 角标轮询 | /app 功能对齐 legacy |
-| 4 | 切换默认入口（/=新应用）+ 删 legacy + 标记锁重写 + Playwright 适配 + DEPLOY 构建步骤 | 单一前端，全量回归绿 |
+| 4 ✅ | 切换默认入口（/=新应用）+ 删 legacy + 标记锁重写 + Playwright 适配 + DEPLOY 构建步骤 | 单一前端，全量回归绿 |
 
 ## 轮 1 完成记录（2026-09-12）
 
@@ -59,23 +59,89 @@
   免责声明；admin 知识库/数据面板/LLM/病例库 tab；qc 病例库 tab；doctor 无管理菜单；不触发 LLM、
   不执行删除写操作）；全量 pytest **709 passed**（705 基线 + 4）。
 
+## 轮 4 完成记录（2026-09-12，迁移完成）
+
+- [x] 切换默认入口：main.py——`/` 与 `/app` 双入口均直出 `frontend-vue/dist/index.html`
+  （显式路由 + 文件末尾 `StaticFiles(html=True)` 托管 `/assets/*`，注册顺序最后防吞
+  API 路由）；移除 legacy `/js` 静态挂载与 legacy index 路由；vite/router base 由
+  `/app/` 切 `/`（产物引用 `/assets/*`）；CSP `script-src` 收紧为 `'self'`（vite 产物
+  全外链无内联脚本，legacy 时期为内联 onclick 保留的 `unsafe-inline` 移除）。
+- [x] 删除 legacy 前端：`frontend/index.html` + `frontend/js/*.js`（8 文件）整体删除，
+  git tag **v-legacy-frontend** 永久保存（回退见下方「整体回退」）。
+- [x] 标记锁重写（25 处断言逐条迁移，断言源 `frontend/js/*` → `frontend-vue/src/**`）：
+  - **改写 22**：legacy 特有实现标记 → Vue 同语义实现断言（rxPick/rxSuggest/qcResubmit/
+    canSignItem/refreshRxBadge 等函数名迁移保留原命名；esc() 纪律 → Vue 模板插值自动
+    转义；data-act 事件委托 → @click 声明式绑定；API 路径改 `/medical/*` 前缀逐字）；
+  - **删 4 个 legacy 特有测试 + 约 12 条无对应物断言**（docstring 注明接管方）：
+    node --check（→ vite build 编译期接管）、index.html 外链拆分锁（→ vite build）、
+    masonry 排版/每图 max-height 样式（→ Element Plus 流式布局，视觉语义 Playwright
+    接管）、scrollIntoView/qc-flash（→ Vue 内联重提横幅）、closeModal/ICON SVG/
+    myconsults SVG/updateConsultBadge（会诊徽标）/sentImgHint（→ Playwright 行为测试
+    或 Vue 表单式重写无对应物）、createElement('img')/showImg(this.src)（→ el-image
+    组件）、loadReviewMine 双函数（→ load() 双分支同守卫）；
+  - **新增 1**：`test_vue_dist_build_output_in_sync`（dist/index.html + assets ≥1 js +
+    src 非空——「dist 随轮入库、改前端必须重新构建提交」策略锁；构建由部署步骤执行，
+    见 docs/DEPLOY.md「前端构建与部署」）；
+  - 同步改源：test_audit_humanize_coverage（MAP 提取适配 audit.js 两空格收口）、
+    test_drug_dict_admin（DRUG_DISCLAIMER 常量正则 + rx-disclaimer）、
+    test_drug_rules_review（el-option/覆盖率 chip/revOf/markReviewed 函数体）、
+    test_mdt_images（consultImages/appendImages/consultThumbs）、
+    test_vue_shell（/ 与 /app 双入口 + /assets 可达，4→5 项）。
+- [x] Playwright 适配：test_smoke_flow.py 重写为 Vue 选择器跑主入口 `/` 全链路
+  （doctor01 登录 → 开药工作台 data-testid → 字典搜「阿司匹林」加入药单 → 提交 →
+  我的处方待审卡 → 退出 → pharm01 → 审核中心「通过」签发 → 处方离开队列）；
+  test_vue_assist / test_vue_admin base 由 `/app` 改 `/`（二选一注明：/app 双入口
+  共用同一份产物亦可跑，统一走主入口与 smoke 一致）。
+- [x] DEPLOY.md 新增「前端构建与部署」小节（node≥18/.npmrc 镜像/npm ci && npm run
+  build/dist 已入库策略/回退手册链接）。
+- [x] 验收：`npm run build` 零错误（index.html 0.67KB / CSS 369KB / JS 1.26MB，
+  chunk>500KB 仅为提示非错误）；重启 8001 后 `/` 与 `/app` 返回同一份新壳 200、
+  `/assets/index-*.js` 200（1.26MB）、doctor01 真实登录 → 带 token `/drug/dict`
+  （drugs=342/rules=307）走通、CSP 已收紧；三个 Playwright 文件 6 passed（含主入口
+  全链路）；全量 pytest **707 passed 零失败**（709 基线 − legacy 特有标记锁 4 +
+  dist 同步锁 1 + 补回 2 + /assets 资源锁 1）。
+
+### 迁移完成 · 最终形态
+
+- **单一前端**：`frontend-vue/`（Vue3.5 + Vite6 + Element Plus + pinia + vue-router +
+  axios），26 个源文件 4011 行（legacy vanilla 8 文件 2878 行）；dist 产物随源入库。
+- 最终组件清单（src/）：
+  | 层 | 文件（行数） |
+  |---|---|
+  | 入口/壳 | main.js(14) · App.vue(4) · styles.css(83) · layouts/AppShell.vue(117) · router/index.js(57) |
+  | 状态/常量 | stores/auth.js(30) · stores/badges.js(63) · constants/nav.js(39) · constants/copy.js(6) |
+  | 工具 | utils/audit.js(170) · utils/assist.js(76) · utils/image.js(54) · api/index.js(39) |
+  | 视图 | ReviewCenterView(674) · DataView(576) · RxView(401) · ConsultView(306) · QcView(300) · KbView(214) · LiteratureView(178) · ImagingView(123) · LoginView(66) · OverviewView(47) · PlaceholderView(21) |
+  | 组件 | components/DrugDictEditor(160) · components/DrugRulesEditor(193) |
+- 后端 API 契约全程零改动（仅 main.py 静态服务段）；免责声明、双控、审计语义均在后端。
+
+## 整体回退（轮 4 后：放弃 Vue3 一键回 vanilla）
+
+legacy 前端已于轮 4 删除，`git tag v-legacy-frontend`（= a1a4c34，700 tests）永久保存。
+回退恢复三处（frontend/ + backend/main.py + tests），无需 node：
+
+```
+git checkout v-legacy-frontend -- frontend backend/main.py tests docs/DEPLOY.md
+git commit -m "revert: rollback to legacy frontend (v-legacy-frontend)"
+```
+
+- `frontend-vue/` 目录删除即可（不影响 legacy 运行；若保留亦无冲突，legacy `frontend/`
+  与 Vue 静态挂载在 main.py 中互斥，checkout 恢复的 main.py 只挂 legacy）。
+- 后端 API 七百测试背书，从未被迁移改动触碰；data/ 审计与队列数据与前端形态无关。
+- 仅需回退到轮 1-3 某一轮（保留 Vue）：`git revert`/`git reset` 到对应轮 commit 即可
+  （每轮独立提交，dist 随轮入库，checkout 即可用）。
+
 ## 保存与回退策略（用户要求：随时可回退）
 
 1. **每轮一个 commit**——任何轮次后 `git revert`/`git reset` 均可回到上一轮完好态。
 2. **dist 构建产物随轮提交**——回退不需要 node 环境，checkout 即可用。
-3. **legacy 前端保留到轮 4**——迁移全程 `/`=legacy 可用，`/app`=新应用并行验证；轮 4 才切换。
-4. **一键整体回退**（放弃 Vue3 回到 vanilla）：
-   ```
-   git checkout v-legacy-frontend -- frontend backend/main.py tests docs/DEPLOY.md
-   git commit -m "revert: rollback to legacy frontend (v-legacy-frontend)"
-   ```
-   （frontend-vue/ 目录删除即可；后端 API 七百测试背书，从未被本轮改动触碰。）
+3. **legacy 前端保留到轮 4**——迁移全程 `/`=legacy 可用，`/app`=新应用并行验证；轮 4 已切换并删除 legacy（整体回退见上方「整体回退」小节）。
+4. **一键整体回退**（放弃 Vue3 回到 vanilla）：见上方「整体回退（轮 4 后）」——checkout tag 恢复 frontend/+main.py+tests 三处，无需 node。
 5. **轮内回退**：每轮验收清单（构建过/Playwright 过/pytest 过）不满足则不合并，工作区 `git checkout -- .` 即弃。
 
 ## 不变项（安全边界）
 
-- 后端 API 契约零改动（700 后端测试锁定）；仅 main.py 增加 /app 静态挂载（轮 1）与切换（轮 4）。
-- Playwright E2E 在轮 4 前始终指向 legacy（= 主入口不变即测试不破）。
+- 后端 API 契约零改动（700 后端测试锁定）；仅 main.py 静态服务段（轮 1 挂载 /app、轮 4 切换 / 并移除 legacy 挂载）。
 - 免责声明、双控、审计语义全部在后端——前端重写不影响合规属性。
 
 ## 技术选型锁定
