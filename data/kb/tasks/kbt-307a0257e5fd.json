@@ -1,0 +1,12 @@
+{
+  "task_id": "kbt-307a0257e5fd",
+  "name": "扫描大书.pdf",
+  "status": "processing",
+  "progress": 0,
+  "total": 0,
+  "error": null,
+  "result": null,
+  "created_at": "2026-09-10T02:56:26.008256+00:00",
+  "scan_pages": 25,
+  "ocr_pages": 10
+}

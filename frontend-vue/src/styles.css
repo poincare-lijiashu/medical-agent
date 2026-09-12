@@ -1,0 +1,99 @@
+/* 轮1 布局壳样式：对齐 legacy 的 rail 布局（236px 侧栏 + 56px 顶栏），配色向 legacy 靠拢 */
+:root {
+  --bg: #fdfdfd;
+  --panel: #f8f9fb;
+  --rail: #f5f6fa;
+  --ink: #2a2f3a;
+  --ink-2: #5b6472;
+  --ink-3: #7a8494;
+  --line: #e6e8ee;
+  --line-strong: #d6dae2;
+  --accent: #2563c9;
+  --accent-h: #2056ae;
+  --accent-soft: #e8eefb;
+  --r: 8px;
+  /* 医学蓝统一（品牌色对齐）：Element Plus 主色覆盖为品牌蓝 #2563c9（本文件在
+     element-plus/dist/index.css 之后加载，:root 同名变量覆盖其默认 #409EFF）。
+     梯度按 Element Plus 混色规则固化：light-N = 品牌蓝混 N% 白，dark-2 = 混 20% 黑。
+     button/link/radio/checkbox/pagination/dialog 等主色消费均走这组变量。 */
+  --el-color-primary: #2563c9;
+  --el-color-primary-light-3: #6692d9; /* 混 30% 白：hover/浅态 */
+  --el-color-primary-light-5: #92b1e4; /* 混 50% 白 */
+  --el-color-primary-light-7: #bed0ef; /* 混 70% 白：disabled 边框 */
+  --el-color-primary-light-8: #d3e0f4; /* 混 80% 白 */
+  --el-color-primary-light-9: #e9effa; /* 混 90% 白：浅底填充 */
+  --el-color-primary-dark-2: #1e4fa1;  /* 混 20% 黑：active 深态 */
+}
+* { box-sizing: border-box }
+html, body, #app { margin: 0; height: 100% }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: var(--bg); color: var(--ink); line-height: 1.55; font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 顶栏（对齐 legacy header：品牌标 + 用户名/角色/退出） */
+.topbar {
+  position: sticky; top: 0; z-index: 100; height: 56px;
+  display: flex; align-items: center; gap: 16px; padding: 0 20px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.mark { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px }
+.mark .g { width: 26px; height: 26px; color: var(--accent) }
+.mark small { display: block; font-weight: 400; color: var(--ink-3); font-size: 11px }
+.topbar .spacer { flex: 1 }
+.userchip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2) }
+
+/* 主体栅格：侧栏 + 内容（对齐 legacy .app grid） */
+.app-grid { display: grid; grid-template-columns: 236px minmax(0, 1fr); height: calc(100% - 56px) }
+.rail { background: var(--rail); border-right: 1px solid var(--line); padding: 14px 10px; overflow-y: auto }
+.grp { font-size: 11px; color: var(--ink-3); letter-spacing: .02em; padding: 10px 10px 6px }
+.nav {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 9px 10px; border-radius: var(--r); cursor: pointer; font-size: 13.5px;
+  color: var(--ink-2); text-decoration: none; transition: background .15s, color .15s;
+}
+.nav:hover { background: var(--panel); color: var(--ink) }
+.nav.active { background: var(--panel); color: var(--ink); font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--line-strong) }
+.content { overflow-y: auto; min-width: 0 }
+
+/* 页面通用骨架（对齐 legacy .shead/.body） */
+.shead { padding: 18px 26px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px }
+.shead h2 { margin: 0; font-size: 22px; letter-spacing: -.015em }
+.shead p { margin: 2px 0 0; color: var(--ink-3); font-size: 12.5px }
+.page-body { padding: 26px; display: flex; flex-direction: column; gap: 16px; max-width: 980px }
+
+/* 登录页（对齐 legacy .lcard） */
+.login-wrap { min-height: 100%; display: grid; place-items: center; background: var(--bg) }
+.lcard { width: 340px; max-width: 92vw; padding: 32px 30px; text-align: center }
+.lcard h2 { margin: 8px 0 2px; font-size: 22px; letter-spacing: -.015em }
+.lcard .sub { color: var(--ink-3); font-size: 12.5px; margin-bottom: 20px }
+.lcard .lhint {
+  margin-top: 16px; font-size: 11.5px; color: var(--ink-3); line-height: 1.7;
+  text-align: left; border-top: 1px solid var(--line); padding-top: 12px;
+}
+
+/* ===== 轮2 助手视图共享样式（对齐 legacy 语义类名，供各视图复用） ===== */
+/* 输入框/文本域（legacy .inp） */
+.inp {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r);
+  font: inherit; color: var(--ink); background: #fff; outline: none;
+}
+.inp:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft) }
+textarea.inp { resize: vertical }
+/* 弱化说明文字（legacy .src） */
+.src { color: var(--ink-3); font-size: 12px; line-height: 1.6 }
+/* 正文（legacy .txt）与引导 label（legacy .lead） */
+.txt { line-height: 1.7 }
+.lead { color: var(--ink-2); font-size: 13.5px }
+/* markdown 渲染容器（v-html 消费 md() 输出） */
+.md-body { line-height: 1.7; word-break: break-word }
+.md-body b { font-weight: 600 }
+.md-body i { font-style: italic }
+/* 列表（legacy .feed/.rules） */
+ul.feed { list-style: none; margin: 0; padding: 0 }
+ul.feed li { padding: 5px 0; border-bottom: 1px dashed var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline }
+ul.feed li:last-child { border-bottom: 0 }
+ul.feed .e { font-weight: 500; color: var(--ink) }
+ol.rules { padding-left: 20px; color: var(--ink-2); line-height: 1.8 }

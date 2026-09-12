@@ -1,0 +1,123 @@
+name: medagent
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: medagent_etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - medagent_etcd:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: minio/minio:latest  # 本地已有；镜像站 m.daocloud.io 拒绝拉取
+    container_name: medagent_minio
+    environment:
+      # 终评 F6 收口：凭证 env 化（.env / .env.local 覆盖；生产必改，默认值仅供本地开发）
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      # 终评 F6 收口：仅绑回环——S3 API/控制台不对局域网暴露（容器网内 milvus 仍走服务名访问）
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - medagent_minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.4.0  # 与既有数据卷 medagent_milvus-db 同版本
+    container_name: medagent_milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "127.0.0.1:19530:19530"
+      - "127.0.0.1:19531:19530"
+      - "127.0.0.1:9091:9091"
+    volumes:
+      - medagent_milvus-db:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio
+
+  postgres:
+    image: postgres:15-alpine  # 本地已有
+    container_name: medagent_pg
+    environment:
+      POSTGRES_USER: medagent
+      # 终评 F6 收口：密码 env 化（.env / .env.local 设 POSTGRES_PASSWORD 覆盖；
+      # 默认 medagent123 仅供本地开发——生产必改强口令）
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medagent123}
+      POSTGRES_DB: medagent
+    ports:
+      # 终评 F6 收口：仅绑回环（宿主 5433 → 容器 5432），不对局域网暴露
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - medagent_pg:/var/lib/postgresql/data
+
+  # 轮 B2 可选 Redis（三级部署之二：院区级多实例才需要）——默认不启用：
+  # 单机内存后端（REDIS_URL 留空）零依赖即可运行。启用条件：多实例部署需限流
+  # 聚合/会话记忆互通/令牌撤销全局生效时，取消本注释块并在 .env.local 设
+  # REDIS_URL=redis://redis:6379/0（步骤与验证清单见 docs/DEPLOY.md「三级部署指南」）。
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: medagent_redis
+  #   ports:
+  #     - "127.0.0.1:6379:6379"
+  #   volumes:
+  #     - medagent_redis:/data
+  #   command: ["redis-server", "--appendonly", "yes"]
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 3
+
+  attu:
+    image: zilliz/attu:v2.4.12  # 本地已有
+    container_name: medagent_attu
+    environment:
+      MILVUS_URL: milvus:19530
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - milvus
+
+  app:
+    build: .
+    container_name: medagent_app
+    env_file: .env.local
+    environment:
+      - MILVUS_URI=http://milvus:19530
+      - PG_HOST=postgres
+      - PG_PORT=5432
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/models:/app/backend/models
+      - ./data:/app/data        # 种子数据/运行数据直接落仓库 data/（备份=拷目录或 scripts/backup.py）
+    depends_on:
+      - milvus
+      - postgres
+
+volumes:
+  medagent_etcd:
+  medagent_minio:
+  medagent_milvus-db:
+  medagent_pg:
+  # medagent_redis:  # 启用 redis 服务时取消注释

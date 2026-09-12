@@ -1,0 +1,2458 @@
+[
+  {
+    "drug_a": "华法林",
+    "drug_b": "布洛芬",
+    "severity": "高危",
+    "mechanism": "NSAID 抑制血小板并置换蛋白结合，显著增加消化道出血风险；避免联用，必要时加用 PPI 并密切监测 INR。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "阿司匹林",
+    "severity": "高危",
+    "mechanism": "双重抗栓使出血风险叠加；仅在明确心血管适应证下联用，需缩短 INR 监测频率。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "地高辛",
+    "drug_b": "胺碘酮",
+    "severity": "高危",
+    "mechanism": "胺碘酮升高地高辛血药浓度，易致中毒；联用时地高辛减量约 50% 并监测浓度与心率。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "克拉霉素",
+    "severity": "禁忌",
+    "mechanism": "克拉霉素强抑制 CYP3A4，辛伐他汀蓄积可致横纹肌溶解；联用禁忌，改用阿托伐他汀低剂量或非他汀。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "红霉素",
+    "severity": "高危",
+    "mechanism": "红霉素抑制 CYP3A4，他汀蓄积肌病风险升高；暂停辛伐他汀或换药。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "西地那非",
+    "drug_b": "硝酸甘油",
+    "severity": "禁忌",
+    "mechanism": "PDE5 抑制剂与硝酸酯类协同致严重低血压，绝对禁忌，24–48 小时内不得同用。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "二甲双胍",
+    "drug_b": "碳酸锂",
+    "severity": "中危",
+    "mechanism": "肾功能相关相互作用及乳酸酸中毒风险，需监测肾功能与锂浓度。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素抑制 CYP3A4 致卡马西平中毒（头晕/共济失调）；避免联用。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "别嘌醇",
+    "drug_b": "卡马西平",
+    "severity": "中危",
+    "mechanism": "重症皮肤反应（SJS/TEN）风险升高（与 HLA-B*5801 相关），出现皮疹立即停药。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "布洛芬竞争 COX-1，削弱阿司匹林抗血小板作用；需错开服药时间或改用其他镇痛药。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "地高辛",
+    "drug_b": "呋塞米",
+    "severity": "高危",
+    "mechanism": "呋塞米致低钾增加地高辛中毒风险；监测血钾与地高辛浓度，必要时补钾。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "二甲双胍",
+    "drug_b": "碘对比剂",
+    "severity": "中危",
+    "mechanism": "碘对比剂可能诱发乳酸酸中毒；造影前评估肾功能，检查当日暂停二甲双胍并于 48 小时后复评。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "氯吡格雷",
+    "drug_b": "奥美拉唑",
+    "severity": "中危",
+    "mechanism": "奥美拉唑抑制 CYP2C19，降低氯吡格雷活化与抗血小板效果；优选泮托拉唑类 PPI。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "吉非罗齐",
+    "severity": "高危",
+    "mechanism": "吉非罗齐显著升高他汀暴露，横纹肌溶解风险增加；避免联用或改用其他降脂方案。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "胺碘酮",
+    "severity": "高危",
+    "mechanism": "胺碘酮抑制华法林代谢致 INR 升高出血风险；联用时华法林减量约 30-50% 并加密监测 INR。",
+    "management": "",
+    "source": "curated_v1"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "氯吡格雷",
+    "severity": "高危",
+    "mechanism": "抗凝+抗血小板双重抗栓，出血风险显著叠加；仅在有明确适应证时联用并加密监测 INR 与出血征象。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "对乙酰氨基酚",
+    "severity": "中危",
+    "mechanism": "连续大剂量（>2g/日）对乙酰氨基酚可增强华法林抗凝并升高 INR；短期小剂量可用，需监测 INR。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "奥美拉唑",
+    "severity": "中危",
+    "mechanism": "奥美拉唑抑制 CYP2C19 可轻度升高华法林暴露；一般无需调整，注意监测 INR。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "卡马西平",
+    "severity": "高危",
+    "mechanism": "卡马西平酶诱导加速华法林清除致抗凝不足，停药后抗凝反跳；需密切监测 INR 并调整剂量。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "别嘌醇",
+    "severity": "中危",
+    "mechanism": "别嘌醇可抑制华法林代谢增强抗凝作用；联用初期监测 INR。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "辛伐他汀",
+    "severity": "中危",
+    "mechanism": "他汀可轻度增强华法林抗凝（CYP 介导）；起始/调量阶段监测 INR。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "红霉素",
+    "severity": "高危",
+    "mechanism": "大环内酯类抑制华法林代谢，INR 显著升高出血风险；尽量避免联用，必要时减量并加密监测。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素强抑制 CYP3A4 升高华法林暴露与出血风险；优选其他抗生素并监测 INR。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "地高辛",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素抑制肠道 P-糖蛋白与菌群，地高辛浓度升高致中毒（恶心/心律失常）；监测浓度并减量。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "地高辛",
+    "drug_b": "奥美拉唑",
+    "severity": "中危",
+    "mechanism": "奥美拉唑可轻度升高地高辛暴露（P-gp 介导）；常规剂量可用，注意监测。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "辛伐他汀",
+    "severity": "高危",
+    "mechanism": "胺碘酮抑制 CYP3A4 致他汀蓄积肌病/横纹肌溶解；辛伐他汀日剂量限 20mg 或换药。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "两者均延长 QT 间期，叠加致尖端扭转性室速风险；避免联用，必要时心电监护。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "碳酸锂",
+    "severity": "中危",
+    "mechanism": "甲状腺功能减退风险叠加（胺碘酮致甲亢/甲减，锂致甲减）；监测 TSH 与临床症状。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "布洛芬",
+    "severity": "高危",
+    "mechanism": "NSAID 减少锂肾清除，血锂浓度升高致中毒（震颤/意识改变）；避免联用或加密监测血锂。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "呋塞米",
+    "severity": "中危",
+    "mechanism": "利尿致钠缺失继而锂重吸收增加，血锂波动；稳定钠摄入并监测血锂浓度。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "红霉素",
+    "severity": "高危",
+    "mechanism": "红霉素抑制 CYP3A4 致卡马西平中毒（头晕/共济失调）；避免联用。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "辛伐他汀",
+    "severity": "中危",
+    "mechanism": "卡马西平酶诱导降低他汀暴露与疗效；必要时调整降脂方案。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "奥美拉唑",
+    "severity": "中危",
+    "mechanism": "相互诱导代谢（CYP2C19/3A4），奥美拉唑浓度降低疗效下降；可换泮托拉唑并观察。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "氯吡格雷",
+    "severity": "中危",
+    "mechanism": "酶诱导降低氯吡格雷活性代谢物，抗血小板效力下降；评估是否换用其他 P2Y12 抑制剂。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "氯吡格雷",
+    "severity": "中危",
+    "mechanism": "双联抗血小板为 ACS/PCI 标准方案，但出血风险叠加；疗程与剂量须由医师评估，勿自行调整。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "二甲双胍",
+    "drug_b": "呋塞米",
+    "severity": "中危",
+    "mechanism": "利尿致容量/肾功能波动，影响乳酸酸中毒风险；监测肾功能，肾功能下降时暂停二甲双胍。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "呋塞米",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 削弱利尿/降压效果并增加肾损伤风险（与 ACEI 合用为「三联肾毒性」）；短期慎用并监测肌酐。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素抑制 CYP3A4 致他汀暴露升高、肌病风险增加；联用期间暂停他汀或换非 CYP3A4 代谢他汀。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "吉非罗齐",
+    "severity": "高危",
+    "mechanism": "吉非罗齐升高他汀暴露，横纹肌溶解风险增加；避免联用，改用其他降脂方案。",
+    "management": "",
+    "source": "curated_v2"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "阿司匹林",
+    "severity": "高危",
+    "mechanism": "DOAC+抗血小板双重抗栓，出血风险显著叠加",
+    "management": "仅在有明确适应证（如房颤+ACS）时联用并严密监测出血",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "布洛芬",
+    "severity": "高危",
+    "mechanism": "NSAID 增加消化道出血风险并可能影响肾功能致 DOAC 暴露升高",
+    "management": "避免联用；必须联用时加 PPI 保护并监测肾功能",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "利伐沙班",
+    "severity": "中危",
+    "mechanism": "胺碘酮抑制 CYP3A4/P-糖蛋白，利伐沙班暴露轻度升高。",
+    "management": "联用期间观察出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "酮康唑",
+    "severity": "高危",
+    "mechanism": "强效 CYP3A4/P-gp 抑制剂显著升高利伐沙班血药浓度",
+    "management": "禁止联用或显著减量并密切监测",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "达比加群酯",
+    "severity": "高危",
+    "mechanism": "胺碘酮抑制 P-糖蛋白，达比加群酯清除减少、血药浓度升高出血风险增加。",
+    "management": "肾功能减退者避免联用；联用时达比加群酯减量并监测出血。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "达比加群酯",
+    "drug_b": "利福平",
+    "severity": "高危",
+    "mechanism": "利福平强效诱导 P-gp 使达比加群浓度显著下降致抗凝不足",
+    "management": "避免联用；必要时换用其他抗凝",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "低分子肝素",
+    "drug_b": "阿司匹林",
+    "severity": "中危",
+    "mechanism": "抗凝+抗血小板出血风险叠加",
+    "management": "联用时监测出血征象",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "低分子肝素",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 增加出血风险",
+    "management": "短期联用需评估，监测出血",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "替格瑞洛",
+    "drug_b": "奥美拉唑",
+    "severity": "中危",
+    "mechanism": "PPI 竞争 CYP2C19 可影响替格瑞洛活化（临床意义有争议）",
+    "management": "可换用影响较小的泮托拉唑或雷贝拉唑",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "替格瑞洛",
+    "drug_b": "辛伐他汀",
+    "severity": "中危",
+    "mechanism": "替格瑞洛抑制 OATP1B1 升高辛伐他汀暴露，肌病风险增加",
+    "management": "辛伐他汀剂量≤40mg/日",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "双嘧达莫",
+    "drug_b": "阿司匹林",
+    "severity": "中危",
+    "mechanism": "双抗血小板叠加出血风险",
+    "management": "仅按适应证联用（如 TIA 二级预防）",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "尿激酶",
+    "drug_b": "阿司匹林",
+    "severity": "高危",
+    "mechanism": "溶栓+抗血小板出血风险显著升高",
+    "management": "溶栓期间避免联用抗血小板/抗凝",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "阿替普酶",
+    "severity": "高危",
+    "mechanism": "溶栓药与华法林叠加，严重出血（颅内/内脏）风险显著增加。",
+    "management": "绝对避免常规联用；溶栓前评估 INR（>1.7 通常为禁忌）。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "氨氯地平",
+    "severity": "中危",
+    "mechanism": "氨氯地平弱抑制 CYP3A4，辛伐他汀暴露升高、肌病风险增加。",
+    "management": "辛伐他汀日剂量不超过 20mg。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "硝苯地平",
+    "drug_b": "克拉霉素",
+    "severity": "中危",
+    "mechanism": "克拉霉素抑制 CYP3A4 显著升高硝苯地平浓度致低血压",
+    "management": "避免联用或硝苯地平减量并监测血压",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "非洛地平",
+    "drug_b": "葡萄柚汁",
+    "severity": "中危",
+    "mechanism": "葡萄柚汁抑制 CYP3A4 升高非洛地平浓度",
+    "management": "服药期间避免饮用葡萄柚汁",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "螺内酯",
+    "drug_b": "缬沙坦",
+    "severity": "高危",
+    "mechanism": "保钾利尿+ARB 高钾风险",
+    "management": "监测血钾",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "缬沙坦",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 削弱降压作用并增加肾功能损害风险",
+    "management": "监测血压与肾功能",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "厄贝沙坦",
+    "drug_b": "锂盐",
+    "severity": "中危",
+    "mechanism": "ARB 升高锂浓度致锂中毒",
+    "management": "监测锂浓度并调整剂量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "氯沙坦",
+    "drug_b": "利福平",
+    "severity": "中危",
+    "mechanism": "利福平诱导代谢降低氯沙坦活性代谢物浓度",
+    "management": "监测降压疗效",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "替米沙坦",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "替米沙坦可轻度升高地高辛浓度",
+    "management": "监测地高辛浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "贝那普利",
+    "drug_b": "螺内酯",
+    "severity": "高危",
+    "mechanism": "ACEI+保钾利尿剂高钾血症风险",
+    "management": "联用监测血钾",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "培哚普利",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 削弱 ACEI 降压并增加肾损",
+    "management": "监测血压与肾功能",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "福辛普利",
+    "drug_b": "碳酸锂",
+    "severity": "中危",
+    "mechanism": "ACEI 升高锂浓度",
+    "management": "监测锂浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "美托洛尔",
+    "drug_b": "维拉帕米",
+    "severity": "高危",
+    "mechanism": "β阻滞剂+非二氢吡啶钙拮抗剂负性传导叠加，心动过缓/传导阻滞风险",
+    "management": "禁止静脉联用；口服联用需心电监测",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "美托洛尔",
+    "drug_b": "胺碘酮",
+    "severity": "中危",
+    "mechanism": "负性频率叠加致心动过缓",
+    "management": "监测心率与传导",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "比索洛尔",
+    "drug_b": "地尔硫卓",
+    "severity": "中危",
+    "mechanism": "负性传导叠加",
+    "management": "监测心率与血压",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "卡维地洛",
+    "drug_b": "格列本脲",
+    "severity": "中危",
+    "mechanism": "β阻滞剂掩盖低血糖症状并延缓恢复",
+    "management": "血糖监测更严格",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "氢氯噻嗪",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "噻嗪利尿剂致低钾血症增加地高辛毒性",
+    "management": "监测血钾，补钾",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "氢氯噻嗪",
+    "severity": "高危",
+    "mechanism": "噻嗪类利尿致钠丢失、近曲小管锂重吸收代偿性增加，血锂升高 25-40% 致中毒。",
+    "management": "避免联用；必须时锂减量 25-40% 并监测血锂与钠摄入。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "吲达帕胺",
+    "drug_b": "锂盐",
+    "severity": "中危",
+    "mechanism": "利尿剂减少锂清除",
+    "management": "监测锂浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "螺内酯",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 削弱利尿降压并增高钾风险（肾功能不全时）",
+    "management": "监测血钾肾功能",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "阿莫西林",
+    "drug_b": "别嘌醇",
+    "severity": "中危",
+    "mechanism": "联用增加皮疹风险",
+    "management": "监测皮疹，出现即停药",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "阿莫西林克拉维酸钾",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "广谱抗菌药干扰肠道菌群可增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "头孢呋辛",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "广谱抗菌药增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "头孢曲松",
+    "drug_b": "钙剂",
+    "severity": "高危",
+    "mechanism": "头孢曲松与钙可形成不溶性沉淀（新生儿尤其危险）",
+    "management": "避免与含钙液在同一通路输注",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "头孢曲松",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "阿奇霉素",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "大环内酯抑制 CYP 升高华法林暴露",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "阿奇霉素",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "大环内酯升高地高辛浓度",
+    "management": "监测地高辛浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "左氧氟沙星",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "氟喹诺酮增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "左氧氟沙星",
+    "severity": "中危",
+    "mechanism": "氟喹诺酮轻度延长 QT，与胺碘酮叠加增加心律失常风险。",
+    "management": "有 QT 延长危险因素者换用其他抗菌药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环丙沙星",
+    "drug_b": "茶碱",
+    "severity": "高危",
+    "mechanism": "环丙沙星抑制 CYP1A2 显著升高茶碱浓度致中毒",
+    "management": "避免联用或茶碱减量并监测浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "环丙沙星",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "莫西沙星",
+    "severity": "高危",
+    "mechanism": "胺碘酮+氟喹诺酮均延长 QT 间期，尖端扭转性室速风险叠加。",
+    "management": "优选不延长 QT 的抗菌药，或心电监护下使用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "甲硝唑",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "甲硝唑抑制华法林代谢增强抗凝",
+    "management": "监测 INR，华法林减量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "甲硝唑",
+    "drug_b": "乙醇",
+    "severity": "高危",
+    "mechanism": "双硫仑样反应（面部潮红/心动过速/恶心）",
+    "management": "服药期间及停药后 3 天内禁酒",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "替硝唑",
+    "drug_b": "乙醇",
+    "severity": "高危",
+    "mechanism": "双硫仑样反应",
+    "management": "服药期间禁酒",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "多西环素",
+    "drug_b": "抗酸剂",
+    "severity": "中危",
+    "mechanism": "含铝镁钙抗酸剂减少四环素吸收",
+    "management": "间隔 2-4 小时服用",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "多西环素",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "万古霉素",
+    "drug_b": "呋塞米",
+    "severity": "中危",
+    "mechanism": "耳毒性叠加（尤其肾功能不全）",
+    "management": "监测听力与肾功能",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "利奈唑胺",
+    "drug_b": "氟西汀",
+    "severity": "高危",
+    "mechanism": "MAO 抑制样相互作用致血清素综合征",
+    "management": "禁止联用；间隔≥14 天",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "利奈唑胺",
+    "drug_b": "右美沙芬",
+    "severity": "高危",
+    "mechanism": "血清素综合征风险",
+    "management": "避免联用",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "美罗培南",
+    "drug_b": "丙戊酸",
+    "severity": "高危",
+    "mechanism": "碳青霉烯显著降低丙戊酸浓度致癫痫发作",
+    "management": "避免联用；确需联用监测丙戊酸浓度并调整",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "亚胺培南西司他丁",
+    "drug_b": "丙戊酸",
+    "severity": "高危",
+    "mechanism": "碳青霉烯降低丙戊酸浓度",
+    "management": "避免联用",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "阿昔洛韦",
+    "drug_b": "丙磺舒",
+    "severity": "中危",
+    "mechanism": "丙磺舒减少阿昔洛韦排泄致蓄积",
+    "management": "肾功能不全者减量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "伐昔洛韦",
+    "drug_b": "丙磺舒",
+    "severity": "中危",
+    "mechanism": "减少伐昔洛韦代谢物排泄",
+    "management": "肾功能不全者减量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "奥司他韦",
+    "severity": "中危",
+    "mechanism": "奥司他韦可抑制华法林代谢（个体差异大），INR 波动。",
+    "management": "用药期间监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "氟康唑",
+    "severity": "高危",
+    "mechanism": "氟康唑抑制 CYP2C9，华法林代谢减慢，INR 显著升高、出血风险增加。",
+    "management": "避免联用；必须联用时华法林减量并 48 小时内复查 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟康唑",
+    "drug_b": "他汀类",
+    "severity": "中危",
+    "mechanism": "氟康唑升高他汀暴露肌病风险",
+    "management": "监测肌酶，他汀减量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "唑类强抑制 CYP3A4，辛伐他汀蓄积致横纹肌溶解风险。",
+    "management": "联用期间暂停辛伐他汀或换普伐他汀/瑞舒伐他汀。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "伊曲康唑",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "伊曲康唑升高地高辛浓度",
+    "management": "监测地高辛浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "两性霉素B",
+    "drug_b": "呋塞米",
+    "severity": "中危",
+    "mechanism": "低钾血症叠加",
+    "management": "监测血钾并补钾",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "复方新诺明",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "磺胺增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "复方新诺明",
+    "drug_b": "甲氨蝶呤",
+    "severity": "高危",
+    "mechanism": "磺胺置换 MTX 并减少清除致骨髓抑制",
+    "management": "避免联用",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "格列齐特",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 增强磺脲类降糖作用致低血糖",
+    "management": "血糖监测更严格",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "格列齐特",
+    "drug_b": "保泰松",
+    "severity": "中危",
+    "mechanism": "增强磺脲类作用",
+    "management": "避免联用",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "格列美脲",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "磺脲类增强华法林抗凝",
+    "management": "监测 INR",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "瑞格列奈",
+    "drug_b": "吉非罗齐",
+    "severity": "高危",
+    "mechanism": "吉非罗齐显著升高瑞格列奈浓度致严重低血糖",
+    "management": "禁止联用",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "瑞格列奈",
+    "drug_b": "克拉霉素",
+    "severity": "中危",
+    "mechanism": "克拉霉素抑制 CYP3A4 升高瑞格列奈浓度",
+    "management": "监测血糖，瑞格列奈减量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "阿卡波糖",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "阿卡波糖减少地高辛吸收",
+    "management": "监测地高辛浓度",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "吡格列酮",
+    "drug_b": "胰岛素",
+    "severity": "中危",
+    "mechanism": "联合降糖低血糖风险",
+    "management": "胰岛素减量并监测血糖",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "西格列汀",
+    "drug_b": "胰岛素",
+    "severity": "中危",
+    "mechanism": "联合降糖低血糖风险",
+    "management": "监测血糖，胰岛素减量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "达格列净",
+    "drug_b": "呋塞米",
+    "severity": "中危",
+    "mechanism": "利尿叠加致脱水低血压",
+    "management": "监测血压与容量",
+    "source": "curated_b1"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "伏立康唑",
+    "severity": "高危",
+    "mechanism": "伏立康唑强抑制 CYP2C9/3A4，华法林暴露大幅升高，出血风险显著增加。",
+    "management": "华法林减量（可减 30-50%）并加密监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "伊曲康唑抑制 CYP3A4，华法林抗凝作用增强，INR 升高。",
+    "management": "尽量避免联用；联用时监测 INR 并调整华法林剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "复方磺胺甲噁唑",
+    "severity": "高危",
+    "mechanism": "磺胺类抑制 CYP2C9 并置换血浆蛋白结合，华法林效应显著增强。",
+    "management": "避免联用，优选其他抗菌药；联用时华法林减半并密切监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "米诺环素",
+    "severity": "中危",
+    "mechanism": "广谱抗菌抑制肠道维生素 K 合成菌群，华法林抗凝效应可能增强。",
+    "management": "联用期间监测 INR，注意出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "利福平",
+    "severity": "高危",
+    "mechanism": "利福平强诱导 CYP2C9/3A4，华法林清除加快、抗凝不足；停用利福平后抗凝反跳。",
+    "management": "不推荐联用；必须联用时加大华法林剂量并频繁监测 INR，停利福平后立即回调。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "苯妥英钠",
+    "severity": "高危",
+    "mechanism": "苯妥英钠诱导 CYP2C9 加速华法林清除；同时苯妥英暴露可被华法林升高（双向作用）。",
+    "management": "密切监测 INR 与苯妥英血药浓度，双向调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "苯巴比妥",
+    "severity": "高危",
+    "mechanism": "苯巴比妥酶诱导加速华法林代谢，抗凝效力下降；停药后 INR 反跳升高。",
+    "management": "避免联用；联用期间加大监测频率，停用巴比妥类后减华法林剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "左甲状腺素钠",
+    "severity": "中危",
+    "mechanism": "甲状腺素增强凝血因子降解，华法林抗凝效应增强，INR 升高。",
+    "management": "起始/调整甲状腺素剂量时监测 INR 并相应调整华法林。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "双氯芬酸",
+    "severity": "高危",
+    "mechanism": "NSAID 抑制血小板功能并损伤胃肠黏膜，与华法林叠加显著增加消化道出血风险。",
+    "management": "避免联用；必须镇痛时优选对乙酰氨基酚并加用 PPI。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "塞来昔布",
+    "severity": "中危",
+    "mechanism": "选择性 COX-2 抑制剂胃肠道出血风险相对低，但仍可升高 INR 并增加出血风险。",
+    "management": "短期低剂量使用并监测 INR，避免长期联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "萘普生",
+    "severity": "高危",
+    "mechanism": "NSAID 抑制血小板并置换蛋白结合，华法林游离浓度升高，消化道出血风险显著增加。",
+    "management": "避免联用，改用对乙酰氨基酚镇痛。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "吲哚美辛",
+    "severity": "高危",
+    "mechanism": "NSAID 强抑制血小板聚集并损伤胃黏膜，与华法林叠加出血风险显著。",
+    "management": "避免联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "洛索洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 抑制血小板功能并增加胃肠黏膜损伤，华法林出血风险升高。",
+    "management": "尽量避免联用；必要时短期使用并监测 INR 与出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "酮洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 抑制血小板并损伤胃肠黏膜，与华法林叠加增加出血风险。",
+    "management": "尽量避免联用，改用对乙酰氨基酚。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "秋水仙碱",
+    "severity": "中危",
+    "mechanism": "秋水仙碱经 CYP3A4/P-gp 代谢，华法林暴露可轻度升高；骨髓抑制叠加致凝血异常。",
+    "management": "联用期间监测 INR 与血常规。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "依诺肝素",
+    "severity": "高危",
+    "mechanism": "低分子肝素与华法林双重抗凝，出血风险显著叠加（桥接治疗时预期内）。",
+    "management": "仅在桥接抗凝时由医师指导下重叠，监测 INR 与抗 Xa、出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "肝素钠",
+    "severity": "高危",
+    "mechanism": "普通肝素与华法林双重抗凝，出血风险显著叠加（体外循环/血栓治疗预期内）。",
+    "management": "重叠期间监测 INR 与 APTT，达标后按方案切换。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "尿激酶",
+    "severity": "高危",
+    "mechanism": "溶栓与口服抗凝叠加，出血风险显著增加。",
+    "management": "避免联用；溶栓期间停用华法林并监测凝血。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "维生素K1",
+    "severity": "中危",
+    "mechanism": "维生素 K1 药理性拮抗华法林作用，INR 下降（过量逆转属治疗用途）。",
+    "management": "仅用于 INR 过高/出血逆转；常规联用可致抗凝失效，注意饮食维生素 K 稳定摄入。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "鱼精蛋白",
+    "severity": "中危",
+    "mechanism": "鱼精蛋白拮抗肝素类抗凝，与华法林无直接代谢作用；围术期止血方案需整体评估。",
+    "management": "按手术抗凝管理方案使用，术后恢复华法林并监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "烟酸",
+    "severity": "中危",
+    "mechanism": "大剂量烟酸可增强华法林抗凝并升高 INR（机制可能与蛋白结合/肝血流相关）。",
+    "management": "联用期间监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "非诺贝特",
+    "severity": "高危",
+    "mechanism": "贝特类置换蛋白结合并抑制华法林代谢，INR 显著升高出血风险增加。",
+    "management": "联用时华法林减量 30% 并密切监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "达比加群酯",
+    "severity": "高危",
+    "mechanism": "两种口服抗凝药联用出血风险显著叠加，无正当适应证。",
+    "management": "严禁常规联用；仅在医嘱下的桥接切换方案中重叠，监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "利伐沙班",
+    "severity": "高危",
+    "mechanism": "口服 Xa 因子抑制剂与华法林双重抗凝，出血风险显著叠加。",
+    "management": "仅在切换方案的短重叠期使用，监测 INR 与出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "阿哌沙班",
+    "severity": "高危",
+    "mechanism": "口服 Xa 因子抑制剂与华法林双重抗凝，出血风险显著叠加。",
+    "management": "仅在切换方案的短重叠期使用，监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "替格瑞洛",
+    "severity": "高危",
+    "mechanism": "P2Y12 抑制剂与华法林双重抗栓，出血风险显著叠加。",
+    "management": "仅在明确适应证（如 PCI 后）下联用，加密监测出血征象与 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "普拉格雷",
+    "severity": "高危",
+    "mechanism": "P2Y12 抑制剂与华法林双重抗栓，出血风险显著叠加。",
+    "management": "仅在明确适应证下联用并加密监测。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "双嘧达莫",
+    "severity": "中危",
+    "mechanism": "双嘧达莫抑制血小板聚集，与华法林叠加轻度增加出血风险。",
+    "management": "联用期间监测出血征象与 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "西洛他唑",
+    "severity": "高危",
+    "mechanism": "PDE3 抑制剂（抗血小板+扩血管）与华法林叠加增加出血风险。",
+    "management": "评估联用必要性，监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "吲哚布芬",
+    "severity": "中危",
+    "mechanism": "可逆性 COX-1 抑制剂与华法林叠加增加出血风险。",
+    "management": "联用期间监测出血征象与 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "羟氯喹",
+    "severity": "中危",
+    "mechanism": "羟氯喹可增强华法林抗凝效应（机制未完全明确），出血风险轻度增加。",
+    "management": "起始联用 2-4 周内监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "奎尼丁",
+    "severity": "高危",
+    "mechanism": "奎尼丁抑制 CYP2C9 并置换蛋白结合，华法林效应显著增强；奎尼丁本身延长 QT。",
+    "management": "避免联用；必须联用时华法林减量并加密监测 INR 与心电图。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "甲氨蝶呤",
+    "severity": "中危",
+    "mechanism": "华法林可增强甲氨蝶呤毒性（蛋白置换），甲氨蝶呤致骨髓抑制亦可影响凝血。",
+    "management": "联用期间监测血常规与 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "他莫昔芬",
+    "severity": "高危",
+    "mechanism": "他莫昔芬抑制华法林代谢，抗凝效应显著增强，出血风险增加（乳腺癌辅助治疗常见联用）。",
+    "management": "联用时华法林减量并密切监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "非布司他",
+    "severity": "中危",
+    "mechanism": "非布司他可轻度影响华法林代谢，INR 波动（个体差异）。",
+    "management": "起始/停用非布司他时监测 INR。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "氨甲环酸",
+    "severity": "中危",
+    "mechanism": "抗纤溶药与抗凝药作用方向相反，联用逻辑冲突，血栓风险升高（止血用途除外）。",
+    "management": "仅在出血事件下短期逆转方案使用；避免常规联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "华法林",
+    "drug_b": "丙硫氧嘧啶",
+    "severity": "中危",
+    "mechanism": "抗甲状腺药减少凝血因子合成，华法林效应增强（甲亢纠正后华法林需求也下降）。",
+    "management": "甲状腺功能变化时监测 INR 并调整华法林。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "达比加群酯",
+    "drug_b": "依诺肝素",
+    "severity": "高危",
+    "mechanism": "直接凝血酶抑制剂与低分子肝素双重抗凝，出血风险显著叠加。",
+    "management": "避免常规联用；切换方案时按清除半衰期安排间隔。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "依诺肝素",
+    "severity": "高危",
+    "mechanism": "Xa 因子抑制剂与低分子肝素双重抗凝，出血风险显著叠加。",
+    "management": "避免常规联用；切换时按药代动力学安排给药间隔。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿哌沙班",
+    "drug_b": "阿司匹林",
+    "severity": "中危",
+    "mechanism": "Xa 因子抑制剂与抗血小板药联用出血风险增加。",
+    "management": "仅在明确适应证下联用并监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "达比加群酯",
+    "drug_b": "维拉帕米",
+    "severity": "高危",
+    "mechanism": "维拉帕米抑制 P-糖蛋白，达比加群暴露升高出血风险；同时负性传导叠加致心动过缓。",
+    "management": "避免联用，尤其肾功能不全者；必要时减量并监测。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "达比加群酯",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素抑制 P-糖蛋白，达比加群暴露升高出血风险增加。",
+    "management": "避免联用，优选不抑制 P-gp 的抗菌药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "达比加群酯",
+    "drug_b": "卡马西平",
+    "severity": "高危",
+    "mechanism": "卡马西平诱导 P-糖蛋白，达比加群暴露下降、抗凝失效。",
+    "management": "避免联用，评估换用其他抗凝药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "利福平",
+    "severity": "高危",
+    "mechanism": "利福平诱导 CYP3A4/P-糖蛋白，利伐沙班暴露下降、抗凝失效致血栓风险。",
+    "management": "禁止联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "卡马西平",
+    "severity": "高危",
+    "mechanism": "卡马西平诱导 CYP3A4/P-糖蛋白，利伐沙班暴露下降、抗凝失效。",
+    "management": "避免联用，考虑 LMWH 或调整抗凝方案。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利伐沙班",
+    "drug_b": "伏立康唑",
+    "severity": "高危",
+    "mechanism": "伏立康唑抑制 CYP3A4/P-糖蛋白，利伐沙班暴露升高出血风险增加。",
+    "management": "联用时利伐沙班减量并监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氯吡格雷",
+    "drug_b": "替格瑞洛",
+    "severity": "高危",
+    "mechanism": "双 P2Y12 抑制剂叠加显著增加出血风险（无正当适应证）。",
+    "management": "避免联用；P2Y12 换药时按药代动力学安排衔接。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氯吡格雷",
+    "drug_b": "依诺肝素",
+    "severity": "中危",
+    "mechanism": "抗血小板+抗凝叠加（ACS 抗栓方案常见），出血风险增加。",
+    "management": "按 ACS 方案规范联用，监测出血征象与血常规。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氯吡格雷",
+    "drug_b": "利福平",
+    "severity": "中危",
+    "mechanism": "利福平诱导 CYP3A4/2C19，氯吡格雷活性代谢物升高但出血风险亦增加（数据不一致）。",
+    "management": "联用期间监测出血征象与血栓事件。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "替格瑞洛",
+    "severity": "中危",
+    "mechanism": "DAPT 标准方案，出血风险叠加；替格瑞洛需与低剂量阿司匹林（≤100mg）联用。",
+    "management": "维持阿司匹林低剂量，监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "普拉格雷",
+    "severity": "中危",
+    "mechanism": "DAPT 方案出血风险叠加；>75 岁/低体重/卒中史者普拉格雷慎用。",
+    "management": "按 PCI 方案规范联用并监测出血。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "双氯芬酸",
+    "severity": "中危",
+    "mechanism": "NSAID 削弱阿司匹林抗血小板结合位点保护并叠加胃肠损伤与心血管风险。",
+    "management": "避免联用；镇痛改用对乙酰氨基酚。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "吲哚美辛",
+    "severity": "中危",
+    "mechanism": "NSAID 竞争 COX-1 削弱阿司匹林心血管保护并叠加胃肠出血风险。",
+    "management": "避免联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿司匹林",
+    "drug_b": "依诺肝素",
+    "severity": "中危",
+    "mechanism": "抗血小板+抗凝叠加（ACS 方案常见），出血风险增加。",
+    "management": "按方案规范联用，监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "西洛他唑",
+    "drug_b": "阿司匹林",
+    "severity": "中危",
+    "mechanism": "两种抗血小板药叠加出血风险增加（外周动脉病方案常见）。",
+    "management": "按适应证联用并监测出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "替格瑞洛",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "NSAID 抑制血小板并损伤胃肠黏膜，与 P2Y12 抑制剂叠加出血风险。",
+    "management": "避免联用；镇痛优选对乙酰氨基酚。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "阿哌沙班",
+    "severity": "中危",
+    "mechanism": "胺碘酮抑制 P-糖蛋白，阿哌沙班暴露轻度升高。",
+    "management": "常规剂量可用，注意出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "氟康唑",
+    "severity": "高危",
+    "mechanism": "氟康唑抑制 CYP3A4/2C9，辛伐他汀暴露升高、肌病风险增加。",
+    "management": "联用期间辛伐他汀减量或暂停，监测肌痛/CK。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "利福平",
+    "severity": "中危",
+    "mechanism": "利福平强诱导 CYP3A4，他汀暴露下降、降脂疗效减弱。",
+    "management": "评估降脂疗效，必要时调整方案。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "地尔硫卓",
+    "severity": "中危",
+    "mechanism": "地尔硫卓抑制 CYP3A4，辛伐他汀暴露升高、肌病风险增加。",
+    "management": "辛伐他汀日剂量限 20mg。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "唑类强抑制 CYP3A4，阿托伐他汀蓄积、横纹肌溶解风险。",
+    "management": "联用期间暂停他汀或换非 CYP3A4 代谢他汀。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "氟康唑",
+    "severity": "中危",
+    "mechanism": "氟康唑抑制 CYP3A4，他汀暴露升高、肌病风险增加。",
+    "management": "监测肌痛/CK，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "利福平",
+    "severity": "中危",
+    "mechanism": "利福平诱导 CYP3A4（首过效应下降但清除加快），他汀暴露波动。",
+    "management": "监测血脂与肌病征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "地尔硫卓",
+    "severity": "中危",
+    "mechanism": "地尔硫卓抑制 CYP3A4，他汀暴露升高、肌病风险增加。",
+    "management": "监测肌痛/CK，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "环孢素",
+    "severity": "高危",
+    "mechanism": "环孢素抑制他汀转运与代谢（OATP1B1/CYP3A4），他汀暴露大幅升高、横纹肌溶解风险。",
+    "management": "他汀减量至最低有效剂量并监测 CK；优选普伐他汀/氟伐他汀小剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "环孢素",
+    "severity": "高危",
+    "mechanism": "环孢素抑制 CYP3A4/OATP1B1，辛伐他汀暴露大幅升高、横纹肌溶解风险。",
+    "management": "辛伐他汀日剂量限 10mg 或换药，监测 CK。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "瑞舒伐他汀",
+    "drug_b": "环孢素",
+    "severity": "高危",
+    "mechanism": "环孢素抑制 OATP1B1 转运，瑞舒伐他汀暴露升高约 7 倍、肌病风险显著。",
+    "management": "瑞舒伐他汀日剂量限 5mg 并监测 CK。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "瑞舒伐他汀",
+    "drug_b": "吉非罗齐",
+    "severity": "高危",
+    "mechanism": "吉非罗齐抑制他汀摄取与葡糖醛酸化，横纹肌溶解风险显著增加。",
+    "management": "禁止联用，改用非诺贝特或调整降脂方案。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "瑞舒伐他汀",
+    "drug_b": "非诺贝特",
+    "severity": "中危",
+    "mechanism": "他汀+贝特叠加肌肉毒性（混合血脂异常常用），横纹肌溶解风险增加。",
+    "management": "监测肌痛/CK 与肝功能，肾功能减退者慎用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "非诺贝特",
+    "severity": "中危",
+    "mechanism": "他汀+贝特叠加肌肉毒性，横纹肌溶解风险增加。",
+    "management": "监测肌痛/CK，晨服贝特晚服他汀分时给药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "非诺贝特",
+    "drug_b": "吉非罗齐",
+    "severity": "中危",
+    "mechanism": "两种贝特类叠加增加肝毒性与胆石风险，无正当适应证。",
+    "management": "避免联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "洛伐他汀",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素强抑制 CYP3A4，洛伐他汀蓄积致横纹肌溶解。",
+    "management": "联用期间暂停他汀。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "洛伐他汀",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "唑类强抑制 CYP3A4，洛伐他汀蓄积致横纹肌溶解。",
+    "management": "联用期间暂停他汀。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "普伐他汀",
+    "drug_b": "环孢素",
+    "severity": "中危",
+    "mechanism": "环孢素抑制 OATP 转运，普伐他汀暴露升高（相对其他他汀风险较低）。",
+    "management": "起始小剂量并监测 CK。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "匹伐他汀",
+    "drug_b": "环孢素",
+    "severity": "高危",
+    "mechanism": "环孢素抑制 OATP1B1，匹伐他汀暴露大幅升高、肌病风险显著。",
+    "management": "匹伐他汀日剂量限 1mg 或避免联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "辛伐他汀",
+    "drug_b": "维拉帕米",
+    "severity": "高危",
+    "mechanism": "维拉帕米抑制 CYP3A4/P-糖蛋白，辛伐他汀暴露大幅升高、横纹肌溶解风险。",
+    "management": "辛伐他汀日剂量限 10mg 或换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿托伐他汀",
+    "drug_b": "维拉帕米",
+    "severity": "中危",
+    "mechanism": "维拉帕米抑制 CYP3A4，他汀暴露升高、肌病风险增加。",
+    "management": "监测肌痛/CK，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氨氯地平",
+    "drug_b": "克拉霉素",
+    "severity": "中危",
+    "mechanism": "克拉霉素抑制 CYP3A4，氨氯地平暴露升高致低血压/外周水肿。",
+    "management": "监测血压与水肿，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "非洛地平",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "唑类强抑制 CYP3A4，非洛地平暴露大幅升高致严重低血压。",
+    "management": "联用期间非洛地平减半或暂停。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "非洛地平",
+    "drug_b": "克拉霉素",
+    "severity": "中危",
+    "mechanism": "克拉霉素抑制 CYP3A4，非洛地平暴露升高致低血压。",
+    "management": "监测血压，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "硝苯地平",
+    "drug_b": "利福平",
+    "severity": "中危",
+    "mechanism": "利福平强诱导 CYP3A4，硝苯地平暴露下降、降压失效。",
+    "management": "监测血压，调整降压方案。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "硝苯地平",
+    "drug_b": "伊曲康唑",
+    "severity": "中危",
+    "mechanism": "伊曲康唑抑制 CYP3A4，硝苯地平暴露升高致低血压。",
+    "management": "监测血压，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "维拉帕米",
+    "drug_b": "卡马西平",
+    "severity": "高危",
+    "mechanism": "双向作用：卡马西平暴露升高致中毒；维拉帕米被诱导降压失效。",
+    "management": "避免联用；必须联用时双向监测浓度与血压。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "维拉帕米",
+    "drug_b": "利福平",
+    "severity": "高危",
+    "mechanism": "利福平强诱导 CYP3A4，维拉帕米暴露大幅下降、药效丧失。",
+    "management": "避免联用，换用不受酶诱导影响的降压药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "美托洛尔",
+    "drug_b": "利多卡因",
+    "severity": "中危",
+    "mechanism": "β阻滞剂降低肝血流，利多卡因清除减慢致中毒（嗜睡/惊厥/心律失常）。",
+    "management": "利多卡因减量并监测血药浓度与神经症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "比索洛尔",
+    "drug_b": "维拉帕米",
+    "severity": "高危",
+    "mechanism": "负性传导/负性肌力叠加，致严重心动过缓、房室传导阻滞与低血压。",
+    "management": "避免联用，尤其房室传导异常或心衰者。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "美托洛尔",
+    "drug_b": "地尔硫卓",
+    "severity": "中危",
+    "mechanism": "地尔硫卓抑制 CYP2D6（美托洛尔代谢）并叠加负性传导，心动过缓风险。",
+    "management": "监测心率与传导，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "美托洛尔",
+    "drug_b": "可乐定",
+    "severity": "高危",
+    "mechanism": "两药撤药时交感反跳叠加，可致高血压危象；中枢性降压与 β 阻滞叠加心动过缓。",
+    "management": "停可乐定必须先撤 β 阻滞剂数天，密切监测血压。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿替洛尔",
+    "drug_b": "维拉帕米",
+    "severity": "中危",
+    "mechanism": "负性传导/负性肌力叠加，心动过缓与低血压风险。",
+    "management": "监测心率血压，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素强抑制 CYP3A4，环孢素暴露大幅升高致肾毒性与高血压。",
+    "management": "避免联用；必须时环孢素大幅减量并监测浓度与肌酐。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "伊曲康唑抑制 CYP3A4，环孢素暴露升高致肾毒性。",
+    "management": "环孢素减量并监测血药浓度与肾功能。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "伏立康唑",
+    "severity": "高危",
+    "mechanism": "伏立康唑强抑制 CYP3A4，环孢素暴露升高致肾毒性。",
+    "management": "环孢素减半起始并监测浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "利福平",
+    "severity": "高危",
+    "mechanism": "利福平强诱导 CYP3A4，环孢素暴露大幅下降、移植排斥风险。",
+    "management": "避免联用；必须时大幅上调环孢素并按浓度滴定。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "苯妥英钠",
+    "severity": "高危",
+    "mechanism": "苯妥英钠诱导 CYP3A4，环孢素暴露下降、排斥风险；环孢素亦可升高苯妥英浓度。",
+    "management": "双向监测两药浓度并调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "地尔硫卓",
+    "severity": "中危",
+    "mechanism": "地尔硫卓抑制 CYP3A4，环孢素暴露升高（有时有意利用以降低费用），肾毒性风险。",
+    "management": "联用时环孢素减量并监测浓度与肌酐。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "他克莫司",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素强抑制 CYP3A4，他克莫司暴露大幅升高致肾毒性/神经毒性。",
+    "management": "避免联用；必须时他克莫司减量并监测浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "他克莫司",
+    "drug_b": "伊曲康唑",
+    "severity": "高危",
+    "mechanism": "伊曲康唑抑制 CYP3A4，他克莫司暴露升高致肾毒性。",
+    "management": "他克莫司减量并监测浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "他克莫司",
+    "drug_b": "利福平",
+    "severity": "高危",
+    "mechanism": "利福平强诱导 CYP3A4，他克莫司暴露大幅下降、排斥风险。",
+    "management": "避免联用；必须时按浓度大幅上调剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "他克莫司",
+    "severity": "中危",
+    "mechanism": "两种钙调磷酸酶抑制剂叠加肾毒性与神经毒性，无常规联用适应证。",
+    "management": "避免常规联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "吗替麦考酚酯",
+    "drug_b": "环孢素",
+    "severity": "中危",
+    "mechanism": "环孢素抑制 MPAG 肠肝循环，霉酚酸暴露下降（免疫抑制强度受损）。",
+    "management": "监测移植排斥征象，必要时调整方案。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "洛伐他汀",
+    "severity": "高危",
+    "mechanism": "环孢素抑制 CYP3A4/OATP，洛伐他汀暴露大幅升高、横纹肌溶解风险。",
+    "management": "洛伐他汀日剂量限 20mg 或换药，监测 CK。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "环孢素",
+    "drug_b": "复方磺胺甲噁唑",
+    "severity": "高危",
+    "mechanism": "叠加肾毒性并显著增加高钾血症风险（两药均减少钾排泄）。",
+    "management": "联用期间监测肌酐与血钾，出现高钾及时停药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "伊马替尼",
+    "drug_b": "辛伐他汀",
+    "severity": "中危",
+    "mechanism": "伊马替尼抑制 CYP3A4，他汀暴露升高、肌病风险增加。",
+    "management": "监测肌痛/CK，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利福平",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "利福平诱导 P-糖蛋白，地高辛暴露下降、心衰控制减弱。",
+    "management": "监测地高辛浓度与心功能，调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利福平",
+    "drug_b": "美托洛尔",
+    "severity": "中危",
+    "mechanism": "利福平诱导 CYP2D6，美托洛尔暴露下降、降压/控率失效。",
+    "management": "监测心率血压，调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利福平",
+    "drug_b": "伊马替尼",
+    "severity": "高危",
+    "mechanism": "利福平强诱导 CYP3A4，伊马替尼暴露下降 70%+，抗肿瘤疗效丧失。",
+    "management": "避免联用；必须时大幅上调伊马替尼并监测疗效。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利福平",
+    "drug_b": "泼尼松",
+    "severity": "中危",
+    "mechanism": "利福平诱导 CYP3A4，泼尼松暴露下降、免疫抑制/抗炎效力减弱。",
+    "management": "必要时上调激素剂量，监测原发病活动。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利福平",
+    "drug_b": "环磷酰胺",
+    "severity": "中危",
+    "mechanism": "利福平诱导代谢酶，环磷酰胺活性/毒性代谢物比例改变。",
+    "management": "监测血常规与出血性膀胱炎征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利福平",
+    "drug_b": "利多卡因",
+    "severity": "中危",
+    "mechanism": "利福平诱导 CYP3A4，利多卡因清除加快、局麻/抗心律失常效力下降。",
+    "management": "必要时上调剂量并监测疗效。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "奥氮平",
+    "severity": "中危",
+    "mechanism": "卡马西平诱导 CYP1A2/3A4，奥氮平暴露下降、抗精神病疗效减弱。",
+    "management": "监测疗效，必要时上调奥氮平剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "利培酮",
+    "severity": "中危",
+    "mechanism": "卡马西平诱导 CYP3A4，利培酮活性部分暴露下降、疗效减弱。",
+    "management": "监测疗效并调整剂量；联用期间关注白细胞（两药均有血液毒性）。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "拉莫三嗪",
+    "severity": "高危",
+    "mechanism": "卡马西平诱导拉莫三嗪葡萄糖醛酸化代谢，拉莫三嗪暴露下降；卡马西平活性代谢物升高致神经毒性。",
+    "management": "拉莫三嗪剂量上调并监测头晕/复视等中毒征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "苯妥英钠",
+    "drug_b": "胺碘酮",
+    "severity": "高危",
+    "mechanism": "胺碘酮抑制 CYP2C9，苯妥英暴露升高致共济失调/眼球震颤；苯妥英亦诱导胺碘酮代谢（双向）。",
+    "management": "监测苯妥英浓度与神经体征，双向调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "苯妥英钠",
+    "drug_b": "左甲状腺素钠",
+    "severity": "中危",
+    "mechanism": "苯妥英置换蛋白结合并加速甲状腺素清除，甲减风险增加。",
+    "management": "监测 TSH，调整左甲状腺素剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "苯妥英钠",
+    "drug_b": "利多卡因",
+    "severity": "中危",
+    "mechanism": "两药中枢/心脏抑制叠加，利多卡因中毒风险增加（苯妥英竞争蛋白结合）。",
+    "management": "利多卡因减量并监测神经症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "丙戊酸钠",
+    "severity": "中危",
+    "mechanism": "双向：丙戊酸抑制卡马西平环氧化物水解致毒性升高；卡马西平诱导丙戊酸代谢使其下降。",
+    "management": "监测卡马西平环氧化物中毒征象与丙戊酸浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "苯巴比妥",
+    "drug_b": "丙戊酸钠",
+    "severity": "高危",
+    "mechanism": "丙戊酸抑制苯巴比妥代谢致蓄积中毒（嗜睡/共济失调）；苯巴比妥诱导丙戊酸清除。",
+    "management": "苯巴比妥减量并监测两药浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "苯妥英钠",
+    "drug_b": "丙戊酸钠",
+    "severity": "高危",
+    "mechanism": "丙戊酸置换蛋白结合并抑制代谢，游离苯妥英显著升高致中毒；苯妥英诱导丙戊酸代谢。",
+    "management": "监测游离苯妥英与丙戊酸浓度，双向调整。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "苯妥英钠",
+    "severity": "中危",
+    "mechanism": "双向酶诱导/抑制，两药浓度波动（多为主要诱导苯妥英代谢）。",
+    "management": "监测两药浓度并调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "索他洛尔",
+    "severity": "高危",
+    "mechanism": "两药均延长 QT 间期并抑制复极，叠加致尖端扭转性室速风险显著增加。",
+    "management": "避免联用；必须时住院心电监护并监测血钾血镁。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "环丙沙星",
+    "severity": "中危",
+    "mechanism": "氟喹诺酮延长 QT，与胺碘酮叠加增加室性心律失常风险。",
+    "management": "高危患者（低钾/器质性心脏病）换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "喹硫平",
+    "severity": "高危",
+    "mechanism": "胺碘酮与喹硫平均延长 QT 间期，尖端扭转性室速风险叠加。",
+    "management": "避免联用；必须时基线/联用心电图监测 QTc。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "齐拉西酮",
+    "severity": "高危",
+    "mechanism": "齐拉西酮延长 QT 作用较强，与胺碘酮叠加尖端扭转性室速风险显著。",
+    "management": "避免联用；必须时心电监护并纠正电解质。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "阿米替林",
+    "severity": "高危",
+    "mechanism": "三环类抗抑郁药延长 QT 并有心脏传导毒性，与胺碘酮叠加致严重室性心律失常。",
+    "management": "避免联用，换用对 QT 影响小的抗抑郁药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "氟西汀",
+    "severity": "中危",
+    "mechanism": "SSRI 可轻度延长 QT，与胺碘酮叠加；氟西汀亦抑制胺碘酮代谢。",
+    "management": "监测心电图与心悸/晕厥症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "奥氮平",
+    "severity": "中危",
+    "mechanism": "奥氮平轻度延长 QT，与胺碘酮叠加；镇静与心动过缓风险增加。",
+    "management": "监测心电图，必要时换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "决奈达隆",
+    "severity": "高危",
+    "mechanism": "两药结构/机制相近，QT 延长与心动过缓叠加，且决奈达隆暴露升高。",
+    "management": "禁止联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "胺碘酮",
+    "drug_b": "伊布利特",
+    "severity": "高危",
+    "mechanism": "伊布利特强延长 QT，与胺碘酮叠加尖端扭转性室速风险显著。",
+    "management": "禁止常规联用；转复方案中错开给药并心电监护。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "索他洛尔",
+    "drug_b": "莫西沙星",
+    "severity": "高危",
+    "mechanism": "两药均显著延长 QT 间期，尖端扭转性室速风险叠加。",
+    "management": "换用不延长 QT 的抗菌药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "索他洛尔",
+    "drug_b": "阿米替林",
+    "severity": "高危",
+    "mechanism": "三环类延长 QT+传导毒性，与 III 类索他洛尔叠加致恶性心律失常。",
+    "management": "避免联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "索他洛尔",
+    "drug_b": "喹硫平",
+    "severity": "中危",
+    "mechanism": "两药均延长 QT，叠加增加室性心律失常风险。",
+    "management": "监测 QTc，有危险因素者换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "西酞普兰",
+    "drug_b": "莫西沙星",
+    "severity": "中危",
+    "mechanism": "西酞普兰剂量依赖性延长 QT，与氟喹诺酮叠加增加心律失常风险。",
+    "management": "西酞普兰不超最大剂量，高危者换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "西酞普兰",
+    "drug_b": "喹硫平",
+    "severity": "中危",
+    "mechanism": "两药均延长 QT 间期，叠加增加尖端扭转性室速风险。",
+    "management": "联用前评估基线心电图，监测 QTc。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "艾司西酞普兰",
+    "drug_b": "莫西沙星",
+    "severity": "中危",
+    "mechanism": "SSRI 延长 QT 与氟喹诺酮叠加，心律失常风险增加。",
+    "management": "监测心电图，高危者换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟哌啶醇",
+    "drug_b": "莫西沙星",
+    "severity": "中危",
+    "mechanism": "氟哌啶醇可延长 QT，与氟喹诺酮叠加（静脉给药风险更高）。",
+    "management": "监测心电图与电解质。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "齐拉西酮",
+    "drug_b": "莫西沙星",
+    "severity": "中危",
+    "mechanism": "齐拉西酮延长 QT 作用较强，与氟喹诺酮叠加。",
+    "management": "避免联用，换用 QT 影响小的抗菌药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "奎尼丁",
+    "drug_b": "胺碘酮",
+    "severity": "高危",
+    "mechanism": "IA 类+III 类复极抑制叠加，QT 显著延长；胺碘酮还升高奎尼丁浓度。",
+    "management": "避免联用；必须时奎尼丁减半并心电监护。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "奎尼丁",
+    "drug_b": "地高辛",
+    "severity": "高危",
+    "mechanism": "奎尼丁抑制 P-糖蛋白并置换组织结合，地高辛浓度升高约 2 倍致中毒。",
+    "management": "地高辛减半并监测浓度与中毒征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "奎尼丁",
+    "drug_b": "美托洛尔",
+    "severity": "中危",
+    "mechanism": "奎尼丁抑制 CYP2D6，美托洛尔暴露升高致心动过缓/低血压。",
+    "management": "β 阻滞剂减量并监测心率血压。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "普罗帕酮",
+    "drug_b": "美托洛尔",
+    "severity": "中危",
+    "mechanism": "普罗帕酮抑制 CYP2D6，美托洛尔暴露升高；两药负性传导叠加致心动过缓。",
+    "management": "β 阻滞剂减量并监测心率。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "普罗帕酮",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "普罗帕酮抑制 P-糖蛋白，地高辛浓度升高约 35-85%。",
+    "management": "地高辛减量并监测浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "普罗帕酮",
+    "drug_b": "胺碘酮",
+    "severity": "高危",
+    "mechanism": "两药抑制钠/钾通道叠加，传导阻滞与促心律失常风险显著增加。",
+    "management": "避免联用；器质性心脏病患者尤其禁忌。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "美西律",
+    "drug_b": "胺碘酮",
+    "severity": "中危",
+    "mechanism": "胺碘酮升高美西律暴露，IB+III 类叠加抑制传导。",
+    "management": "美西律减量并监测心电图。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "利多卡因",
+    "drug_b": "美西律",
+    "severity": "中危",
+    "mechanism": "同 IB 类叠加，中枢神经与心脏抑制风险增加。",
+    "management": "剂量下调并监测神经症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "伊布利特",
+    "drug_b": "莫西沙星",
+    "severity": "高危",
+    "mechanism": "两药均显著延长 QT，尖端扭转性室速风险显著叠加。",
+    "management": "禁止联用。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "决奈达隆",
+    "drug_b": "辛伐他汀",
+    "severity": "高危",
+    "mechanism": "决奈达隆抑制 CYP3A4，辛伐他汀暴露升高、横纹肌溶解风险。",
+    "management": "辛伐他汀日剂量限 20mg 或换药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "决奈达隆",
+    "drug_b": "达比加群酯",
+    "severity": "高危",
+    "mechanism": "决奈达隆抑制 P-糖蛋白，达比加群暴露显著升高出血风险增加。",
+    "management": "达比加群酯减量 50% 或换用利伐沙班并监测出血。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "决奈达隆",
+    "drug_b": "维拉帕米",
+    "severity": "中危",
+    "mechanism": "两药均抑制 P-糖蛋白/CYP3A4 并叠加心动过缓与传导抑制。",
+    "management": "监测心率与传导，必要时换 CCB。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "缬沙坦",
+    "severity": "中危",
+    "mechanism": "ARB 收缩出球小动脉减少锂肾清除，血锂升高致中毒。",
+    "management": "起始/加量后监测血锂与震颤等中毒征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "氯沙坦",
+    "severity": "中危",
+    "mechanism": "ARB 减少锂肾清除，血锂浓度升高。",
+    "management": "监测血锂浓度与中毒症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "吲达帕胺",
+    "severity": "高危",
+    "mechanism": "磺胺类利尿剂致钠丢失，锂重吸收增加、血锂升高致中毒。",
+    "management": "避免联用，换用不影响锂清除的降压药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "氨氯地平",
+    "severity": "中危",
+    "mechanism": "二氢吡啶类 CCB 可轻度升高血锂（机制未明），锂中毒风险轻度增加。",
+    "management": "监测血锂与神经症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "利培酮",
+    "severity": "高危",
+    "mechanism": "锂+抗精神病药叠加神经毒性（意识模糊/锥体外系症状），锂中毒风险增加。",
+    "management": "监测血锂与神经症状，起始阶段尤其谨慎。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "氟西汀",
+    "severity": "中危",
+    "mechanism": "SSRI 可升高血锂浓度；两药 5-HT 活性叠加（锂有 5-HT 增敏作用）。",
+    "management": "监测血锂与血清素综合征早期征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "舍曲林",
+    "severity": "中危",
+    "mechanism": "SSRI 升高血锂并叠加 5-HT 能作用，血清素综合征风险增加。",
+    "management": "监测血锂与震颤/肌阵挛/高热征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "丙戊酸钠",
+    "severity": "中危",
+    "mechanism": "心境稳定剂叠加：镇静、震颤与体重增加加重；血氨升高风险。",
+    "management": "监测血氨/血锂/肝功能，出现意识改变查血氨。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "喹硫平",
+    "severity": "中危",
+    "mechanism": "锂+喹硫平叠加 QT 延长与神经毒性（常见联合方案仍需监测）。",
+    "management": "监测血锂、QTc 与意识状态。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "氨茶碱",
+    "severity": "中危",
+    "mechanism": "茶碱促进锂肾排泄，血锂下降致躁狂复发；停茶碱后反跳。",
+    "management": "联用/停用茶碱时监测血锂并调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "碳酸锂",
+    "drug_b": "美托洛尔",
+    "severity": "中危",
+    "mechanism": "β 阻滞剂可升高血锂并叠加心动过缓；锂亦增强 β 阻滞效应。",
+    "management": "监测血锂与心率。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟西汀",
+    "drug_b": "曲马多",
+    "severity": "高危",
+    "mechanism": "SSRI 强抑制 CYP2D6（曲马多代谢）并叠加 5-HT 能作用，血清素综合征与癫痫发作风险显著增加。",
+    "management": "避免联用；必须时密切观察震颤/肌阵挛/高热/躁动。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "舍曲林",
+    "drug_b": "曲马多",
+    "severity": "高危",
+    "mechanism": "SSRI 与曲马多 5-HT 能作用叠加，血清素综合征与降低癫痫阈值风险。",
+    "management": "避免联用，镇痛换用非 5-HT 能药物。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "文拉法辛",
+    "drug_b": "曲马多",
+    "severity": "高危",
+    "mechanism": "SNRI 与曲马多双重 5-HT/NE 能作用，血清素综合征风险显著增加。",
+    "management": "避免联用；联用时监测血压、心率与 5-HT 征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "度洛西汀",
+    "drug_b": "曲马多",
+    "severity": "中危",
+    "mechanism": "SNRI 与曲马多 5-HT 能叠加，血清素综合征风险增加。",
+    "management": "监测 5-HT 征象，必要时换镇痛方案。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "艾司西酞普兰",
+    "drug_b": "曲马多",
+    "severity": "高危",
+    "mechanism": "SSRI 与曲马多 5-HT 能叠加并降低癫痫阈值，血清素综合征/惊厥风险。",
+    "management": "避免联用，换用其他镇痛药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "舍曲林",
+    "drug_b": "曲唑酮",
+    "severity": "中危",
+    "mechanism": "SSRI+5-HT2 拮抗叠加 5-HT 能作用，血清素综合征风险轻度增加。",
+    "management": "观察震颤/腹泻/躁动，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "文拉法辛",
+    "drug_b": "芬太尼",
+    "severity": "中危",
+    "mechanism": "SNRI 与芬太尼 5-HT 能作用叠加，血清素综合征风险增加；中枢镇静叠加。",
+    "management": "监测 5-HT 征象与呼吸抑制。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "曲马多",
+    "drug_b": "芬太尼",
+    "severity": "中危",
+    "mechanism": "两阿片/5-HT 能药叠加，呼吸抑制与血清素综合征风险增加。",
+    "management": "避免联用；必须时减量并监测呼吸与意识。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟西汀",
+    "drug_b": "布洛芬",
+    "severity": "中危",
+    "mechanism": "SSRI 耗竭血小板 5-HT 损害聚集功能，与 NSAID 叠加显著增加上消化道出血。",
+    "management": "联用时加用 PPI，观察黑便/贫血。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "舍曲林",
+    "drug_b": "阿司匹林",
+    "severity": "中危",
+    "mechanism": "SSRI+抗血小板叠加胃肠出血风险（尤其低剂量阿司匹林一级预防人群）。",
+    "management": "评估联用净获益，必要时加 PPI。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "度洛西汀",
+    "drug_b": "双氯芬酸",
+    "severity": "中危",
+    "mechanism": "SSRI/SNRI+NSAID 叠加上消化道出血风险。",
+    "management": "联用时加 PPI 或换用对乙酰氨基酚。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "帕罗西汀",
+    "drug_b": "萘普生",
+    "severity": "中危",
+    "mechanism": "SSRI+NSAID 叠加胃肠出血风险。",
+    "management": "联用时加 PPI，观察出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "艾司西酞普兰",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "SSRI 损害血小板聚集并可能轻度抑制华法林代谢，INR 升高出血风险增加。",
+    "management": "起始联用 2 周内监测 INR 与出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟西汀",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "氟西汀抑制 CYP2C9/3A4，华法林暴露升高并叠加血小板功能损害。",
+    "management": "监测 INR，必要时减量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "舍曲林",
+    "drug_b": "华法林",
+    "severity": "中危",
+    "mechanism": "SSRI 叠加血小板功能损害，华法林相关出血风险增加。",
+    "management": "监测 INR 与出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟西汀",
+    "drug_b": "氯吡格雷",
+    "severity": "中危",
+    "mechanism": "氟西汀抑制 CYP2C19 可影响氯吡格雷活化，且叠加出血风险（数据不一致）。",
+    "management": "评估血栓/出血风险平衡，优选帕罗西汀等对 CYP2C19 影响小者。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "丙戊酸钠",
+    "drug_b": "拉莫三嗪",
+    "severity": "中危",
+    "mechanism": "丙戊酸强抑制拉莫三嗪葡萄糖醛酸化，拉莫三嗪暴露约升高 2 倍，皮疹/Stevens-Johnson 风险增加。",
+    "management": "拉莫三嗪起始/加量减半并延长间隔，出现皮疹立即停药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "丙戊酸钠",
+    "drug_b": "阿司匹林",
+    "severity": "高危",
+    "mechanism": "阿司匹林置换蛋白结合并抑制丙戊酸 β 氧化，游离丙戊酸升高致中毒；叠加血小板抑制出血风险。",
+    "management": "避免联用；必须时丙戊酸减量并监测浓度与出血。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "丙戊酸钠",
+    "drug_b": "美洛昔康",
+    "severity": "中危",
+    "mechanism": "NSAID 蛋白置换升高游离丙戊酸并叠加出血风险。",
+    "management": "监测丙戊酸浓度与出血征象。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "丙戊酸钠",
+    "drug_b": "氯丙嗪",
+    "severity": "中危",
+    "mechanism": "抗精神病药抑制丙戊酸代谢，镇静与锥体外系症状叠加。",
+    "management": "监测镇静程度与丙戊酸浓度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "卡马西平",
+    "drug_b": "唑吡坦",
+    "severity": "中危",
+    "mechanism": "卡马西平诱导 CYP3A4，唑吡坦暴露下降、催眠失效。",
+    "management": "监测催眠效果，必要时换非 CYP3A4 代谢助眠药。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "苯巴比妥",
+    "drug_b": "唑吡坦",
+    "severity": "中危",
+    "mechanism": "酶诱导降低唑吡坦暴露；中枢镇静叠加（起始期）。",
+    "management": "调整剂量并监测镇静深度。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "地西泮",
+    "drug_b": "吗啡",
+    "severity": "高危",
+    "mechanism": "苯二氮卓与阿片类协同抑制呼吸中枢与镇静，呼吸抑制/死亡风险显著增加。",
+    "management": "避免联用；必须时双方减至最低剂量并监测呼吸。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "地西泮",
+    "drug_b": "芬太尼",
+    "severity": "高危",
+    "mechanism": "苯二氮卓+阿片协同呼吸抑制，围术期/癌痛场景死亡风险显著。",
+    "management": "避免联用，必须有监护与复苏条件。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "唑吡坦",
+    "drug_b": "芬太尼",
+    "severity": "高危",
+    "mechanism": "Z 类药与阿片叠加呼吸抑制与深度镇静风险。",
+    "management": "避免联用；必须时减量并监测呼吸。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿普唑仑",
+    "drug_b": "克拉霉素",
+    "severity": "高危",
+    "mechanism": "克拉霉素抑制 CYP3A4，阿普唑仑暴露大幅升高致深度镇静与呼吸抑制。",
+    "management": "避免联用，换用经葡萄糖醛酸化的劳拉西泮。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "地西泮",
+    "drug_b": "克拉霉素",
+    "severity": "中危",
+    "mechanism": "克拉霉素抑制 CYP3A4，地西泮暴露升高、镇静加深。",
+    "management": "监测镇静，必要时换劳拉西泮。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "丁螺环酮",
+    "drug_b": "氟西汀",
+    "severity": "中危",
+    "mechanism": "氟西汀抑制 CYP3A4 升高丁螺环酮暴露；5-HT 能叠加。",
+    "management": "丁螺环酮减量，观察头晕/静坐不能。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "阿米替林",
+    "drug_b": "苯妥英钠",
+    "severity": "中危",
+    "mechanism": "苯妥英诱导三环类代谢，疗效下降；两药心脏毒性叠加。",
+    "management": "监测抗抑郁疗效与心电图。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氯氮平",
+    "drug_b": "苯妥英钠",
+    "severity": "中危",
+    "mechanism": "苯妥英诱导 CYP1A2，氯氮平暴露下降、疗效减弱。",
+    "management": "监测精神症状，调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "奥氮平",
+    "drug_b": "苯妥英钠",
+    "severity": "中危",
+    "mechanism": "苯妥英诱导 CYP1A2/3A4，奥氮平暴露下降、疗效减弱。",
+    "management": "监测疗效并调整剂量。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氯丙嗪",
+    "drug_b": "氢氯噻嗪",
+    "severity": "中危",
+    "mechanism": "α 阻断+利尿叠加致直立性低血压与跌倒（老年尤甚）。",
+    "management": "监测立位血压，缓慢体位改变。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "氟哌啶醇",
+    "drug_b": "奎尼丁",
+    "severity": "中危",
+    "mechanism": "奎尼丁抑制 CYP2D6，氟哌啶醇暴露升高致锥体外系症状与 QT 延长叠加。",
+    "management": "监测心电图与锥体外系症状。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "左甲状腺素钠",
+    "drug_b": "阿米替林",
+    "severity": "高危",
+    "mechanism": "甲状腺素增强三环类药效，心律失常与癫痫发作风险显著增加（甲亢期尤甚）。",
+    "management": "避免联用；替代治疗起始时三环类减量并监测心电。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "丙戊酸钠",
+    "drug_b": "托吡酯",
+    "severity": "中危",
+    "mechanism": "托吡酯抑制丙戊酸代谢并有碳酸酐酶抑制，高血氨脑病风险增加。",
+    "management": "监测血氨与意识状态，出现脑病查血氨。",
+    "source": "curated_v3"
+  },
+  {
+    "drug_a": "帕罗西汀",
+    "drug_b": "地高辛",
+    "severity": "中危",
+    "mechanism": "帕罗西汀抑制 P-糖蛋白，地高辛浓度轻度升高。",
+    "management": "监测地高辛浓度与中毒征象。",
+    "source": "curated_v3"
+  }
+]

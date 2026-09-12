@@ -1,0 +1,35 @@
+# Medical Agent — inherits EduAgent pinned stack, adds medical deps
+fastapi==0.117.1
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pymilvus==2.4.9
+httpx==0.28.1
+python-dotenv==1.0.1
+pydantic==2.11.4
+pydantic-settings==2.11.0
+langchain==1.2.10
+langchain-core==1.2.16
+langgraph==1.0.9
+langgraph-prebuilt==1.0.8
+FlagEmbedding==1.2.10
+sentence-transformers==3.3.1
+# torch 不固化（按 docs/DEPLOY.md「部署矩阵」按机器形态二选一安装）：
+# GPU 服务器: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# CPU 服务器: pip install torch --index-url https://download.pytorch.org/whl/cpu
+# （EMBED_DEVICE=auto 自动回落；OCR 纯 CPU 无需 GPU；LLM/VL 为远程 API）
+pymupdf==1.24.14
+biopython==1.84
+pillow==12.3.0
+# 任务C 扫描版 PDF/图片 OCR（kb_ingest/ocr.py 运行时依赖，此前漏固化）
+rapidocr-onnxruntime==1.4.4
+mcp>=1.8,<2
+setuptools<81
+# 测试（TDD 基线 396+ 全绿所需）
+pytest==8.3.4
+# 对抗轮 A3：单测全局超时防线（pytest.ini addopts --timeout=300）
+pytest-timeout==2.4.0
+# LLM client (Qwen MaaS via DashScope openai-compat)
+openai==1.66.3
+# redis>=5  # 可选：多实例部署（REDIS_URL 配置后限流/会话/撤销走 Redis；未安装也能运行，自动内存后端）

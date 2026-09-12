@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MedAssist 质量报告 · 2026-09-07</title>
+<style>
+:root{--bg:#fafafa;--card:#fff;--ink:#1a1d21;--sub:#5c6470;--line:#e4e7eb;--ok:#0a7d4b;--warn:#b45309;--bad:#b42318;--accent:#0b5cad}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:920px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:26px;margin:8px 0 4px}h2{font-size:19px;margin:36px 0 10px;border-left:4px solid var(--accent);padding-left:10px}
+.meta{color:var(--sub);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}
+th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+th{color:var(--sub);font-weight:600;background:#f5f7f9}
+.pill{display:inline-block;padding:1px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.p-ok{background:#e6f4ee;color:var(--ok)}.p-mid{background:#fdf0e3;color:var(--warn)}.p-bad{background:#fdeaea;color:var(--bad)}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}
+.kpi div{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi b{display:block;font-size:22px}.kpi span{color:var(--sub);font-size:12px}
+img{max-width:100%;border:1px solid var(--line);border-radius:8px;margin:6px 0}
+code{background:#eef1f4;padding:1px 6px;border-radius:5px;font-size:13px}
+ul{margin:6px 0;padding-left:22px}
+.tag{color:var(--sub);font-size:12px}
+</style>
+</head>
+<body><div class="wrap">
+<h1>MedAssist 质量报告</h1>
+<div class="meta">2026-09-07 · 四阶段全链路（版本控制 → 静态审查 → 动态测试 → TDD 修复 → 数据沉淀）· 执行：TraeCode 技能流水线</div>
+
+<div class="kpi">
+<div><b>110</b><span>测试全绿（+32 新增）</span></div>
+<div><b>21/21</b><span>Playwright E2E（五问答全覆盖）</span></div>
+<div><b>7/7</b><span>探索测试场景</span></div>
+<div><b>9+7+22</b><span>审查/Backlog/UI 发现全修复</span></div>
+<div><b>5</b><span>git 提交（版本基线建立）</span></div>
+</div>
+
+<h2>① 版本控制基线</h2>
+<div class="card">此前项目<b>无任何提交</b>。建立 <code>.gitignore</code> 三道红线（密钥 <code>.env.local</code> / PHI 数据 <code>data/auth|audit|review</code> / 4.3GB 模型权重），拦截 16 个不应入库文件后完成首次提交。
+<table><tr><th>提交</th><th>内容</th></tr>
+<tr><td><code>4f56e5c</code></td><td>chore: initial commit（93 文件 / 105,144 行）</td></tr>
+<tr><td><code>596035b</code></td><td>fix(security): 按 9 项审查发现加固（11 文件，+208/−17）</td></tr></table></div>
+
+<h2>② 静态审查（FastAPI + 前端 JS 双安全规范）</h2>
+<div class="card">审查覆盖 40 个 Python 文件 + 912 行前端 + 部署配置。<b>未发现 Critical</b>；确认安全面：认证依赖全覆盖、双控完整（reviewer≠submitter）、SQL 全参数化、无注入/SSRF/XSS 利用链。</div>
+<table>
+<tr><th>级别</th><th>ID</th><th>发现</th><th>状态</th></tr>
+<tr><td><span class="pill p-mid">Medium</span></td><td>AUTH-REVOKE-001</td><td>撤销表纯内存，重启后已删用户 token 复活</td><td><span class="pill p-ok">已修</span> require_user 回查用户存在性</td></tr>
+<tr><td><span class="pill p-mid">Medium</span></td><td>JS-CSP-001</td><td>无 CSP/安全响应头，页面可被 iframe 内嵌</td><td><span class="pill p-ok">已修</span> 安全头中间件（实测生效）</td></tr>
+<tr><td><span class="pill p-mid">Medium</span></td><td>FASTAPI-BODY-001</td><td>请求体无上限、QcReq 无界 dict</td><td><span class="pill p-mid">Backlog</span></td></tr>
+<tr><td><span class="pill p-mid">Medium</span></td><td>DEPLOY-CREDS-001</td><td>compose 弱凭据 + 端口绑 0.0.0.0</td><td><span class="pill p-ok">已修</span> 127.0.0.1 绑定 + 凭据可注入</td></tr>
+<tr><td>Low×7</td><td>—</td><td>docs 暴露 / CORS 通配 / metrics 匿名 / 演示口令明文 / MDT MemorySaver 无界 / with-open / Dockerfile root</td><td><span class="pill p-ok">5 项已修</span> <span class="pill p-mid">2 项 Backlog</span></td></tr>
+</table>
+
+<h2>③ 动态测试（运行中服务，真实 LLM）</h2>
+<div class="card">
+<b>Playwright E2E 11/11</b>：登录（含错误口令拒绝）→ 概览 → 文献问答（SSE 流式，真实 Qwen 调用完成）→ 药物问答（高危 0.86 + 双人核对标记）→ 审核中心 → admin KB 事件委托（按钮实测触发模态）→ 数据面板。<br>
+<b>探索测试 7/7</b>：空输入防误发、5000 字超长输入、质控缺签名提示、英文别名归一（atorvastatin→阿托伐他汀）、双击防重（仅 1 次请求）、800px 窄窗无横向溢出、全程零 console error。
+</div>
+
+<h2>④ 运行数据洞察（审计日志 N=1406）</h2>
+<div class="card">
+<b>修复价值实证</b>：审计流中发现 <code>event_type="b"/"c"</code>、<code>actor="query"/"answered"/"a"</code> 等错位记录——正是宽容签名缺陷（QUALITY-004）留下的实锤，后续应改为显式关键字参数。<br>
+复核队列 133 项：approved 91 / pending 41 / rejected 1，高危药物自动入队占 112 项，双人核对机制真实运转。
+</div>
+<img src="https://mdn.alipayobjects.com/one_clip/afts/img/fF1PSJ90LhwAAAAAQmAAAAgAoEACAQFr/original" alt="审计事件类型分布">
+<img src="https://mdn.alipayobjects.com/one_clip/afts/img/jMkeRJ2f0IkAAAAAQiAAAAgAoEACAQFr/original" alt="近5日事件趋势">
+
+<h2>⑤ Backlog 收口（第二轮，全部完成）</h2>
+<div class="card">首轮 7 项 Backlog 已全部 TDD 修复（<code>110 passed</code>）：
+<ul>
+<li>✅ 请求体上限中间件（40MB 可配置，超限 413）＋ QcReq/labs 白名单校验</li>
+<li>✅ 审计 write() 全库 26 处迁移显式 kwargs + 错位兜底告警（根因：旧 record 签名错位 + 测试污染，已隔离）</li>
+<li>✅ token 迁 sessionStorage（关标签即失效，logout 双清兼容旧态）</li>
+<li>✅ seed 口令随机化（AUTH_DEMO_PASSWORD 配置优先，conftest 固定测试口令）</li>
+<li>✅ Dockerfile 非 root + HEALTHCHECK；✅ 药物置信度结构化解耦（SEVERITY_CONF 与旧行为逐值锁定）</li>
+</ul>
+<b>UI 规范审计（Web Interface Guidelines）</b>：22 项低成本修复（aria-live/aria-label/label 关联/焦点双层环/Escape+焦点归还/Intl 时间本地化/theme-color/touch-action/装饰 SVG aria-hidden/h1→h2 等，净 +5 行），E2E 11/11 回归全绿；6 项大改动记录不修（URL 状态同步、焦点圈禁等）。<br>
+<b>数据导出</b>：mcp_Excel 产出 <code>docs/qa/audit-export-2026-09-07.xlsx</code>（事件分布/日趋势/复核队列三表）。</div>
+
+<h2>⑥ Backlog（剩余，供决策）</h2>
+<div class="card"><ul>
+<li><b>P2</b>：URL 状态同步/深链（go/分页入 query）；模态焦点圈禁；beforeunload 守卫；skeleton 合成器优化；KB 表分页</li>
+<li><b>P3</b>：限流/撤销表迁 Redis（多实例前置）；MedAssist 封装 MCP Server；GitHub 远端托管（涉医疗数据上云，需决策）</li>
+</ul></div>
+<div class="meta" style="margin-top:28px">报告数据源：pytest / Playwright 实测输出 · data/audit/audit.jsonl（1,406 条）· data/review/queue.json（133 项）· git log</div>
+</div></body></html>

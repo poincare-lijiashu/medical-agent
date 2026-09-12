@@ -1,0 +1,1 @@
+"""MedAssist db package."""

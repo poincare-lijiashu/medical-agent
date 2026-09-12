@@ -1,0 +1,240 @@
+{
+  "mode": "agentic",
+  "cases_file": "D:\\workspace_AI\\workspace_traecode\\xiangmu_traecode\\medical_agent\\eval\\hard_cases.json",
+  "hit_rate": 1.0,
+  "passed": 12,
+  "total": 12,
+  "results": [
+    {
+      "agent": "literature",
+      "question": "胃疼怎么办",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.7,
+      "elapsed_s": 58.89,
+      "note": "历史 fallback：宽泛症状词，KB 术语为 gastralgia/消化不良等",
+      "resp": {
+        "answer": "现有证据未直接涵盖“胃疼”的完整处理，只有急性胃肠炎相关要点。若胃疼伴有腹泻、呕吐，可参考口服补液盐防脱水；若出现高热、血便或症状严重，应避免自行用止泻药并及时就医。由于病因多样，建议由医师评估，证据不足以给出普适方案。\n\n（校验提示：以下论断未被检索证据充分支持：若胃疼伴有腹泻、呕吐，可参考口服补液盐防脱水；若出现高热、血便或症状严重，应避免自行用止泻药并及时就医）",
+        "confidence": 0.7,
+        "needs_human_review": true,
+        "sources": [
+          "guideline_demo:gastroenteritis"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "头疼怎么办",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.88,
+      "elapsed_s": 12.91,
+      "note": "历史 fallback：需改写为头痛/cephalalgia 等",
+      "resp": {
+        "answer": "头疼的处理需先判断可能类型：紧张型头痛常为双侧压迫/紧箍样、轻中度，发作期可选用对乙酰氨基酚或NSAID对症，频繁发作者可考虑预防性阿米替林或行为放松治疗；若伴随发热、感冒症状，普通感冒多为病毒性自限，可选用对乙酰氨基酚或布洛芬退热镇痛并注意休息补液。若出现雷击样剧痛、神经体征、发热、高血压急症、高热不退或意识改变等红旗征象，应及时就医排除继发性头痛。证据不足时请以正式指南和医师判断为准。",
+        "confidence": 0.88,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:tensionheadache",
+          "guideline_demo:commoncold"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "感冒怎么办",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.89,
+      "elapsed_s": 12.64,
+      "note": "历史 fallback：口语病名，KB 为上呼吸道感染",
+      "resp": {
+        "answer": "普通感冒多为病毒性、自限性，通常7-10天可自行好转，治疗以对症支持为主；退热镇痛可选用对乙酰氨基酚或布洛芬，并注意补液和休息。抗生素对感冒无效，不推荐常规使用。若出现高热不退、呼吸困难、意识改变等警示征象，应及时就医评估。",
+        "confidence": 0.89,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:commoncold"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "感冒吃什么药",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 8.52,
+      "note": "历史 fallback：同上+用药意图",
+      "resp": {
+        "answer": "普通感冒多为病毒性自限性疾病，治疗以对症为主，可选用对乙酰氨基酚或布洛芬退热镇痛，并注意补液休息；抗生素对感冒无效，不推荐常规使用。若为流行性感冒且属于重症高危人群，可在发病48小时内启动奥司他韦等神经氨酸酶抑制剂治疗。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:commoncold",
+          "guideline_demo:influenza"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "上腹痛是什么原因",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.74,
+      "elapsed_s": 16.94,
+      "note": "历史 fallback：症状学，需定位到相关疾病文档",
+      "resp": {
+        "answer": "现有证据未直接说明上腹痛的病因。急性胃肠炎和普通感冒的证据仅涉及腹泻、呕吐或呼吸道症状，未涵盖上腹痛鉴别诊断。因此基于给定资料无法可靠判断，需要结合临床进一步评估。\n\n（校验提示：以下论断未被检索证据充分支持：急性胃肠炎和普通感冒的证据仅涉及腹泻、呕吐或呼吸道症状：其中'呕吐'未被给定证据明确支持，且'仅涉及'与原始内容不完全一致）",
+        "confidence": 0.74,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:gastroenteritis",
+          "guideline_demo:commoncold",
+          "PMID:42257103"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "急性胃肠炎怎么办",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 6.7,
+      "note": "历史 fallback",
+      "resp": {
+        "answer": "急性胃肠炎多为病毒性、自限性，治疗关键是口服补液盐防治脱水，应少量多次补液；抗生素仅用于特定细菌或寄生虫病因（如高热血便、旅行者腹泻重症），止泻药需慎用于发热伴血便者，并警惕脱水及电解质紊乱。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:gastroenteritis"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "失眠是怎么回事",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.83,
+      "elapsed_s": 7.72,
+      "note": "历史 fallback：口语，KB 为睡眠障碍/insomnia",
+      "resp": {
+        "answer": "现有证据未直接定义失眠，仅涉及失眠相关干预（如认知行为疗法）或共病影响，因此无法据此准确解释“失眠是怎么回事”。证据不足，建议参考权威睡眠障碍诊断标准（如ICSD或DSM）。",
+        "confidence": 0.83,
+        "needs_human_review": false,
+        "sources": [
+          "PMID:42696962",
+          "PMID:42679519"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "65岁男性多饮多尿消瘦要查什么",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.4,
+      "elapsed_s": 12.47,
+      "note": "历史问题：症状组合，需关联糖尿病文档",
+      "resp": {
+        "answer": "根据提供的证据，多饮多尿消瘦需首先排查糖尿病，建议检测空腹血糖、糖化血红蛋白等以明确诊断；证据未涵盖其他病因的排查，因此超出范围时应进一步结合临床评估。\n\n（校验提示：以下论断未被检索证据充分支持：多饮多尿消瘦需首先排查糖尿病）\n（已剔除无法溯源的引用：来源编号：示例_糖尿病与血脂管理要点）",
+        "confidence": 0.4,
+        "needs_human_review": true,
+        "sources": [],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "膝盖疼上下楼梯加重是什么问题",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.75,
+      "elapsed_s": 37.25,
+      "note": "补充同型：体征定位类",
+      "resp": {
+        "answer": "根据提供的证据，无法确定“膝盖疼上下楼梯加重”的具体诊断；该表现可能是膝关节骨关节炎等相关疾病的症状，但当前文献未提供症状-诊断对应关系。证据不足，建议由医师结合查体与影像学评估，勿依据现有资料下结论。\n\n（校验提示：以下论断未被检索证据充分支持：该表现可能是膝关节骨关节炎等相关疾病的症状，但证据未提供上下楼梯加重与膝骨关节炎的对应关系）",
+        "confidence": 0.75,
+        "needs_human_review": false,
+        "sources": [
+          "PMID:42686182",
+          "PMID:42692567"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "孩子发烧39度要马上退烧吗",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.86,
+      "elapsed_s": 7.66,
+      "note": "补充同型：口语+急诊意图",
+      "resp": {
+        "answer": "发烧39度是否立即退烧，关键不是只看体温数值，而是评估孩子年龄、精神状态与有无警示征象；若为<3个月婴儿或出现嗜睡、拒食、呼吸急促、抽搐等应立即就医评估。退热药（对乙酰氨基酚或布洛芬）按体重规范给药主要用于改善舒适度，而非单纯追求体温降至正常。\n\n（校验提示：以下论断未被检索证据充分支持：发烧39度是否立即退烧，关键不是只看体温数值，而是评估孩子年龄、精神状态与有无警示征象）",
+        "confidence": 0.86,
+        "needs_human_review": false,
+        "sources": [
+          "guideline_demo:pedsfever",
+          "guideline_demo:commoncold"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "长期熬夜对心脏有影响吗",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.83,
+      "elapsed_s": 10.53,
+      "note": "补充同型：生活化问法",
+      "resp": {
+        "answer": "现有提供的证据并未直接研究“长期熬夜”与心脏的关系，因此无法从这些来源得出确切结论。PMID:42679519 显示针对失眠的认知行为治疗可能影响心血管与免疫结局，间接提示睡眠问题与心脏健康相关，但这不能直接等同于熬夜的影响。其他证据分别涉及帕金森病睡眠干预和胆固醇致心脏毒性，均未讨论熬夜。因此，基于现有证据，证据不足，需降低置信度并谨慎解释。",
+        "confidence": 0.83,
+        "needs_human_review": false,
+        "sources": [
+          "PMID:42679519"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "便秘吃什么能缓解",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.83,
+      "elapsed_s": 7.74,
+      "note": "补充同型：口语+干预意图",
+      "resp": {
+        "answer": "现有证据未涉及便秘的饮食缓解方法，无法给出可溯源结论；建议咨询正式临床指南或医师。",
+        "confidence": 0.83,
+        "needs_human_review": false,
+        "sources": [],
+        "error": null
+      }
+    }
+  ]
+}

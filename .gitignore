@@ -1,0 +1,49 @@
+# ===== 医疗项目红线：密钥 / 隐私 / 大文件，严禁入库 =====
+
+# 密钥与本地配置（含 QWEN_API_KEY、AUTH_JWT_SECRET）
+.env.local
+*.key
+*.pem
+
+# 用户隐私数据（密码哈希 / 审计日志含 PHI / 审核队列含病历）
+data/auth/
+data/audit/
+data/review/
+
+# 备份产物（backup.py/restore.py 的 tar.gz 含全量业务数据，严禁入库）
+data/backups/
+
+# 模型配置（含第三方 API Key，严禁入库）
+data/llm_providers.json
+
+# 临时产物（安装/种子过程错误日志与一次性验证输出）
+data/*.err
+data/*.log
+data/*.tmp
+data/verify_out.txt
+
+# 阶段5 PubMed 扩容拉取缓存（9.7MB 大文件不入库；可在线再生成，离线复现走
+# 脚本降级路径：Milvus 既有 pubmed_seed 行滑窗切分）
+data/kb/pubmed_v2_cache.json
+data/kb/pubmed_v2_run.log
+
+# 模型权重（4.3GB，本地化部署不入库）
+backend/models/
+
+# ===== 常规排除 =====
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+logs/
+node_modules/
+dist/
+# Vue3 迁移（轮1）：frontend-vue/dist 构建产物随轮提交（回退免 node 环境，手册既定策略）；
+# node_modules 仍由上方规则排除。注意：上方 `dist/` 是目录通配，需显式反向豁免。
+!frontend-vue/dist/
+!frontend-vue/dist/**
+*.log
+.DS_Store
