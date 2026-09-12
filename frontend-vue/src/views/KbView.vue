@@ -80,7 +80,7 @@
 import { computed, defineOptions, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
-import { fmtTs } from '../utils/assist'
+import { esc, fmtTs } from '../utils/assist'
 
 defineOptions({ name: 'KbView' })
 
@@ -126,22 +126,22 @@ async function pollKbTask(taskId, label) {
       const { data } = await http.get('/medical/admin/kb/upload/status/' + encodeURIComponent(taskId))
       st = data
     } catch (_) {
-      kbMsg.value = label + ' 状态查询失败，重试中…'
+      kbMsg.value = esc(label) + ' 状态查询失败，重试中…'
       continue
     }
-    if (!st) { kbMsg.value = label + ' 任务不存在'; return false }
+    if (!st) { kbMsg.value = esc(label) + ' 任务不存在'; return false }
     if (st.status === 'done') {
-      kbMsg.value = label + ' → 入库 <b class="num">' + ((st.result && st.result.inserted) || st.total || 0) + '</b> 片'
+      kbMsg.value = esc(label) + ' → 入库 <b class="num">' + ((st.result && st.result.inserted) || st.total || 0) + '</b> 片'
       uploadPct.value = 0
       return true
     }
-    if (st.status === 'error') { kbMsg.value = label + ' 失败：' + (st.error || '未知原因'); uploadPct.value = 0; return false }
+    if (st.status === 'error') { kbMsg.value = esc(label) + ' 失败：' + esc(st.error || '未知原因'); uploadPct.value = 0; return false }
     const total = st.total || 0
     const prog = st.progress || 0
     uploadPct.value = total ? Math.min(100, Math.round((prog / total) * 100)) : 0
-    kbMsg.value = label + ' 向量化中 <span class="num">' + prog + ' / ' + (total || '…') + '</span> 片'
+    kbMsg.value = esc(label) + ' 向量化中 <span class="num">' + prog + ' / ' + (total || '…') + '</span> 片'
   }
-  kbMsg.value = label + ' 超时（20 分钟未完成），请稍后在文档列表确认'
+  kbMsg.value = esc(label) + ' 超时（20 分钟未完成），请稍后在文档列表确认'
   uploadPct.value = 0
   return false
 }
@@ -153,8 +153,8 @@ async function uploadKb() {
   let okAny = false
   for (const f of fs) {
     const label = f.name
-    kbMsg.value = '处理中：' + f.name + ' …'
-    if (!/\.(md|txt|pdf)$/i.test(f.name)) { kbMsg.value = f.name + ' 不支持（仅 .md/.txt/.pdf）'; continue }
+    kbMsg.value = '处理中：' + esc(f.name) + ' …'
+    if (!/\.(md|txt|pdf)$/i.test(f.name)) { kbMsg.value = esc(f.name) + ' 不支持（仅 .md/.txt/.pdf）'; continue }
     try {
       const b = await readB64(f)
       // 诊断3：先取响应文本再尝试解析 JSON——413 等非 JSON 体也能带上状态码+原因
@@ -163,21 +163,21 @@ async function uploadKb() {
         r = await http.post('/medical/admin/kb/upload', { name: f.name, data_b64: b }, { silentToast: true })
         d = r.data
       } catch (e) {
-        // 上传失败：统一「失败：文件名（状态码 原因）」，不再吞原因
+        // 上传失败：统一「失败：文件名（状态码 原因）」，不再吞原因（XSS：文件名/detail/message 均经 esc 转义后进 v-html）
         const st = e && e.response && e.response.status
         const det = e && e.response && e.response.data && e.response.data.detail
-        kbMsg.value = '失败：' + f.name + '（' + (st || '网络异常') + ' ' + (det || (e && e.message) || '') + '）'
+        kbMsg.value = '失败：' + esc(f.name) + '（' + (st || '网络异常') + ' ' + esc(det || (e && e.message) || '') + '）'
         continue
       }
       // 大文件返回 task_id → 轮询状态直至完成；小文件同步返回结果
       if (d.mode === 'async' && d.task_id) {
         if (await pollKbTask(d.task_id, f.name + '（大文件，后台向量化）')) okAny = true
       } else {
-        kbMsg.value = `${f.name} → 入库 ${d.inserted} 片`
+        kbMsg.value = `${esc(f.name)} → 入库 ${d.inserted} 片`
         okAny = true
       }
     } catch (e) {
-      kbMsg.value = '失败：' + f.name + '（网络异常：' + (e && e.message) + '）'
+      kbMsg.value = '失败：' + esc(f.name) + '（网络异常：' + esc((e && e.message) || '') + '）'
     }
   }
   if (fileRef.value) fileRef.value.value = ''

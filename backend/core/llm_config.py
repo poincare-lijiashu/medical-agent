@@ -10,6 +10,7 @@ base_url 存原始值（不以 / 结尾）；openai 的 /chat/completions 语义
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -92,6 +93,29 @@ def _validate(kind: str, api_format: str, base_url: str, model_id: str) -> None:
         raise ValueError("base_url 需为 http(s):// 开头的完整 URL")
     if not (model_id or "").strip():
         raise ValueError("model_id 不能为空")
+    _reject_private_host(base_url)
+
+
+def _reject_private_host(base_url: str) -> None:
+    """终评 F4 SSRF 收口：base_url 指向内网/回环地址时拒绝（保存/连通性测试同一防线）。
+
+    覆盖 localhost、127.x、10.x、172.16-31.x、192.168.x、169.254.x（云元数据）、
+    0.0.0.0、::1。development 本地网关经 settings.llm_allow_private_hosts 显式放行。
+    仅拦新增/更新：既有存量 provider 不受影响（读取侧不校验）。"""
+    from urllib.parse import urlparse
+
+    from backend.config import settings
+    if settings.llm_allow_private_hosts:
+        return
+    host = (urlparse(base_url or "").hostname or "").strip().strip("[]").lower()
+    if host == "localhost":
+        raise ValueError("LLM base_url 不允许指向内网/回环地址")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return  # 普通域名（公网 MaaS 端点）放行——不做 DNS 解析拦截（职责在网关侧）
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified:
+        raise ValueError("LLM base_url 不允许指向内网/回环地址")
 
 
 # ---------- 任务2 额外参数逃生舱：解析 / 厂商自动预设 ----------

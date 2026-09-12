@@ -321,7 +321,11 @@ def ingest_document(name: str, raw: bytes, doc_tag: str | None = None,
     # 之前：零 chunk 静默 200；现在：告知用户文档无有效内容（防御静默失败）
     if not chunks:
         raise ValueError("文档未提取到任何有效文本内容（短句/全空白？），请检查文件")
-    tag = doc_tag or ("up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10])
+    tag = _safe_tag(doc_tag) if doc_tag else ("up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10])
+    # 终评 F5：doc_tag 过 _safe_tag（与 delete/preview 同一清洗口径——带引号/过滤字符的
+    # tag 入库后预览可查却删不掉，且拼接 Milvus filter 存在注入面）；清洗后为空回落默认 tag
+    if not tag:
+        tag = "up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10]
     dense, sparse = embed_dense_sparse(chunks, batch_size=32)  # 任务A：窗口走配置默认 1024
     col = _collection()
     try:
@@ -535,7 +539,20 @@ def start_ingest_task(name: str, raw: bytes, doc_tag: str | None = None,
 
 def run_ingest_task(task_id: str, name: str, stored_path: str,
                     doc_tag: str | None = None, doc_kind: str | None = None) -> None:
-    """后台线程主体：extract（扫描版逐页 OCR，进度 scan_pages/ocr_pages 落盘）→
+    """后台线程主体（终评 F5）：全局 Semaphore(2) 限并发摄取——daemon 线程超配额时
+    在本函数入口排队而非全部并发跑（embedding 显存/CPU 不会被 20 个大 PDF 同时打爆），
+    extract→chunk→embed→入库逻辑在 _run_ingest_task_locked 内不变。"""
+    with _INGEST_SEMAPHORE:
+        _run_ingest_task_locked(task_id, name, stored_path, doc_tag, doc_kind)
+
+
+# 终评 F5：后台摄取并发上限（可测：第 3 个任务阻塞到前两个之一释放才进入）
+_INGEST_SEMAPHORE = threading.Semaphore(2)
+
+
+def _run_ingest_task_locked(task_id: str, name: str, stored_path: str,
+                            doc_tag: str | None = None, doc_kind: str | None = None) -> None:
+    """后台线程实际执行体：extract（扫描版逐页 OCR，进度 scan_pages/ocr_pages 落盘）→
     结构感知 chunk → 分批 embed（进度落盘）→ 入 Milvus → manifest。
     任何异常 → status=error + error 原因（前端轮询可见），绝不冒泡杀线程栈。"""
     def _state(**kw) -> dict:
@@ -565,7 +582,10 @@ def run_ingest_task(task_id: str, name: str, stored_path: str,
             raise ValueError("文档未提取到任何有效文本内容（短句/全空白？），请检查文件")
         total = len(chunks)
         _write_task(_state(total=total))
-        tag = doc_tag or ("up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10])
+        tag = _safe_tag(doc_tag) if doc_tag else ("up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10])
+        # 终评 F5：与 ingest_document 同一 doc_tag 清洗口径（delete/preview 一致，防注入/孤儿）
+        if not tag:
+            tag = "up_" + hashlib.md5(name.encode("utf-8")).hexdigest()[:10]
 
         def _cb(done: int) -> None:
             _write_task(_state(total=total, progress=done))

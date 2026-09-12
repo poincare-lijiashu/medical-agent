@@ -177,6 +177,10 @@ def _validated_images(args: dict, key: str = "images") -> list[str] | None:
     if len(imgs) > MAX_IMAGES:
         raise ToolInputError(f"影像图片最多 {MAX_IMAGES} 张，当前 {len(imgs)} 张；请合并或筛选后重试")
     for s in imgs:
+        # SSRF 收口（终评 F1）：仅接受内嵌 data URL，非 data:image/ → invalid params
+        # （拒绝向用户提供的外部 URL 发起服务端请求，与 HTTP AskReq 同语义）
+        if not s.startswith("data:image/"):
+            raise ToolInputError("图片仅支持内嵌 data URL（data:image/...），不接受外部 URL")
         if len(s) > 8_000_000:
             raise ToolInputError("单张图片过大（base64 >8M 字符，约 >6MB），请压缩后重试")
     return imgs

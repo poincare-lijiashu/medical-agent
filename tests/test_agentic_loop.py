@@ -454,3 +454,28 @@ def test_low_score_after_refine_exhausted_falls_back_to_generate(agentic_on, mon
     tr = out.get("refine_trace") or []
     assert [t["attempt"] for t in tr] == [1, 2]            # 轨迹逐轮累积
     assert all(t["action"] == "rewrite" for t in tr)
+
+
+# ---------- 终评 F7：grade_node rewrite_query 限长 + llm_factory 死代码清理锁 ----------
+
+def test_grade_node_rewrite_query_truncated_to_200(monkeypatch):
+    """grade_node 的 rewrite_query 与 refine 节点 new_query 同口径限长
+    （REFINE_QUERY_MAX_LEN=200）：LLM 吐超长改写时代码强制截断，防撑爆后续 prompt。"""
+    long_rewrite = "长" * 500
+
+    async def fake_ask(route, text):
+        assert route == "medical_literature"
+        return '{"sufficient": false, "rewrite_query": "' + long_rewrite + '"}'
+
+    monkeypatch.setattr(lit_nodes, "_ask", fake_ask)
+    out = asyncio.run(lit_nodes.grade_node(LiteratureState(
+        question="q", evidence=[{"source": "KB:x", "content": "内容"}])))
+    assert out["query"] == "长" * lit_nodes.REFINE_QUERY_MAX_LEN
+    assert len(out["query"]) == 200
+
+
+def test_llm_factory_dead_code_removed():
+    """终评 F7：llm_factory 的 _MODEL_ID_MAP 死代码（无任何引用的旧映射表）已删除，
+    防后续误用复活。"""
+    from backend.core import llm_factory
+    assert not hasattr(llm_factory, "_MODEL_ID_MAP")

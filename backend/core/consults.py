@@ -92,6 +92,10 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
         raise ConsultError("会诊问题不能为空")
     cid = "con-" + uuid.uuid4().hex[:10]
     compressed = _compress_images(images)  # 纯函数不持锁，缩短临界区
+    # SSRF 收口（终评 F1）存储层兜底：HTTP 层已 422 拒绝非 data:image/，这里再过滤
+    # 一道（MCP/内部调用绕过 AskReq 时仍不入库），与「非法图丢弃」既有纪律一致。
+    if compressed:
+        compressed = [u for u in compressed if isinstance(u, str) and u.startswith("data:image/")] or None
     stored_images = None if compressed is None else _cap_total_chars(compressed)
     with _lock:
         items = _load()

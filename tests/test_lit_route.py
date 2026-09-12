@@ -34,8 +34,21 @@ def test_multimodal_images_model_and_empty_guard():
     import asyncio
     from backend.api.v1.medical.medical_router import AskReq
     from backend.core.medical_imaging import describe_images
-    assert AskReq(question="q", images=["a", "b"]).images == ["a", "b"]
+    assert AskReq(question="q", images=["data:image/png;base64,AAA",
+                                        "data:image/png;base64,BBB"]).images == \
+        ["data:image/png;base64,AAA", "data:image/png;base64,BBB"]
     assert asyncio.run(describe_images([])) == ""  # 空图不触模型
+
+
+def test_askreq_rejects_non_data_url_images():
+    """SSRF 收口（终评 F1）：非 data:image/ 前缀（http:// 外部 URL/裸 base64）一律
+    ValidationError → 422，绝不把用户字符串原样放进 image_url 让服务端发请求。"""
+    from pydantic import ValidationError
+
+    from backend.api.v1.medical.medical_router import AskReq
+    for bad in ("http://evil.example/img.png", "https://intranet/x.jpg", "AAAAnakedb64"):
+        with pytest.raises(ValidationError, match="data URL"):
+            AskReq(question="q", images=[bad])
 
 
 def test_askreq_rejects_more_than_ten_images():

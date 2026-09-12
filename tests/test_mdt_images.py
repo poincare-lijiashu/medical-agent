@@ -244,12 +244,16 @@ def test_consult_create_with_images_end_to_end(monkeypatch, tmp_path):
     cap = _mock_team_capture(monkeypatch, ["口腔科"])
 
     big = _make_img(2500)  # 2500px 大图：入口 normalize（≤2000）→ 存储（≤1280）双重压缩
+    # SSRF 收口（终评 F1）：非 data:image/ 入口 422 拒绝（存储层丢弃兜底由 test_consults 锁定）
+    assert c.post("/api/v1/medical/consults", headers=_h(doc1),
+                  json={"question": "带外部 URL 的请求", "images": ["http://evil/x.png"]}
+                  ).status_code == 422
     r = c.post("/api/v1/medical/consults", headers=_h(doc1),
                json={"question": "右下后牙自发痛 3 天，既往 2 型糖尿病",
-                     "images": [big, "not-a-data-url"]})
+                     "images": [big]})
     assert r.status_code == 200, r.text
     d = r.json()
-    assert len(d["images"]) == 1  # 非法图丢弃不入库
+    assert len(d["images"]) == 1
     stored = d["images"][0]
     assert len(stored) < len(big), "存储图应为压缩后结果（长度显著减小）"
     assert stored.startswith("data:image/jpeg;base64,")

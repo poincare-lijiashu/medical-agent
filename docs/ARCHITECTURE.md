@@ -19,29 +19,32 @@ Browser(SPA) ──Bearer──▶ FastAPI
 
 ## 分层
 
-- **入口/前端** `backend/main.py` + `frontend/index.html` + `frontend/js/*.js`（Linear/DESIGN.md 风格：冷灰+钴蓝、SVG 图标、无渐变、状态语义、骨架/空态）。FastAPI 挂静态根路由 + `/js` StaticFiles + CORS + 观测中间件（请求计数/时延/X-Request-Id）。
+- **入口/前端** `backend/main.py` + `frontend-vue/`（Vue 3 单页应用）。FastAPI 挂 `/api/v1/*` + 观测中间件（请求计数/时延/X-Request-Id）；前端独立构建（`npm run build` → `frontend-vue/dist/`，随库提交 dist 保持「改前端必须重新构建」纪律）。
 
-### 前端拆分工程决策（B1 重构，2026-09-12）
+### 前端：Vue 3 工程（frontend-vue/，当前实现）
 
-`index.html`（原 2906 行单文件，内联脚本约 2430 行）拆为 HTML/CSS + 7 个 JS 文件，
-按既有代码分区边界连续块搬运，**不改任何函数体**，标记锁测试断言集合不变：
+技术栈：Vue 3.5（`<script setup>` 组合式）+ Vue Router 4 + Pinia + Element Plus + axios + Vite 6。
+构建产物 `dist/` 由 Vite 指纹输出（`assets/index-*.js/css`），CSP 兼容（无内联脚本）。
 
-| 文件 | 内容 | 加载序 |
-|---|---|---|
-| `js/util.js` | esc/humanize/toast/confirmDanger/md/compressImage 等纯工具 | 1（最先） |
-| `js/state.js` | ICON/AGENTS/ROLE_NAV/CFG/会话历史等常量与全局状态 | 2 |
-| `js/api.js` | token/auth/apiGet/apiPost/loadConfig（fetch 封装） | 3 |
-| `js/views_core.js` | 登录/导航/概览 | 4 |
-| `js/views_assist.js` | 文献问答/影像/MDT 会诊/跨科室会诊/开药工作台 | 5 |
-| `js/views_admin.js` | 审核中心/质控/知识库/数据面板/字典与规则管理 | 6 |
-| `js/app.js` | boot/全局事件绑定/init | 7（最后） |
+```
+frontend-vue/src/
+├── main.js            # 应用入口：createApp + Pinia + Router + ElementPlus + styles.css
+├── App.vue            # 根组件（仅挂 RouterView）
+├── styles.css         # 全局设计令牌（冷灰+钴蓝、状态语义色，与 DESIGN.md 对齐）
+├── api/index.js       # axios 实例：baseURL=/api/v1、Bearer 注入、401 清令牌跳登录、errText
+├── router/index.js    # 路由表 + 登录守卫（未登录重定向 /login）
+├── stores/            # Pinia：auth（令牌/角色）、badges（角标轮询）、dirty（未保存脏标记）
+├── layouts/AppShell.vue   # 壳：侧边导航（按角色过滤）+ 顶栏 + beforeunload 守卫
+├── views/             # 12 视图：Login/Overview/Literature/Imaging/Case/Rx/Consult/
+│                      #   ReviewCenter/Qc/Data/Arch/Kb（与路由一一对应）
+├── components/        # DrugDictEditor / DrugRulesEditor（数据面板字典与规则管理卡）
+├── utils/             # assist（esc/md/fmtTs 共享净化）、audit（humanizeAudit）、image（compressImage）
+└── constants/         # nav（角色导航）/ copy（文案）
+```
 
-**刻意不转 ESM**：2800 行单作用域改 ESM 需全量 import/export 机械改写，运行时错误
-`node --check` 查不出，风险不可控；本轮先拿「文件组织」的收益——多 script 文件共享
-全局作用域（顶层 `function` 声明即全局函数，`let/const` 全局词法绑定跨 script 可见），
-`index.html` 按依赖顺序 `<script src="/js/…">` 引用（util 最先 / app 最后），
-CSP `script-src 'self'` 已覆盖外链脚本。**ESM 转换作为后续增量轮**（届时按文件补
-import/export 并以 Playwright 全链路兜底）。
+护栏：前端标记锁测试（`tests/test_frontend_syntax.py` 等）以 `frontend-vue/src/**` 全文为断言源——
+v-html 消费方（如 KbView kbMsg）拼接必须经 `utils/assist.js` 的 `esc()` 转义（终评 F2 XSS 收口）。
+历史 legacy（单文件 index.html + js/*.js 非模块拆分）已随轮4 删除，存档见 git tag v-legacy-frontend。
 - **API 层** `backend/api/v1/`：
   - `auth/` 登录/刷新/`/me`；`deps.py` Bearer 校验 + 角色 + 滑动窗口限流。
   - `medical/medical_router.py` 4 agent + MDT + 审核中心；AskResp 携 `confidence / needs_human_review / sources / review_id / evidence`。
@@ -58,6 +61,9 @@ import/export 并以 Playwright 全链路兜底）。
 
 ## 数据与外部依赖
 - Milvus（向量）+ PostgreSQL（可部署编排内含）+ Qwen(MaaS，OpenAI 兼容) + PubMed/NCBI eutils（文献在线，可选）。
+- **多实例部署限制（backlog）**：PG 镜像层为「JSON 兜底 + 全表重写同步」（save 全量 upsert/delete 重放，
+  last-writer-wins），无行级合并与写冲突检测——多实例并发写会互相覆盖，**多实例部署需先落实单写者
+  约束**（单写多读：仅一个实例持有写权，或引入队列表/乐观锁），见 docs/DEPLOY.md 三级部署指南。
 - 置信度**真实校准**：`conf = 0.35 + 0.35·σ(rerank_top) + 0.30·supported_ratio`（claim 溯源后再降）；`needs_human_review = conf<0.6 ∨ 高风险 ∨ 有被剔除引用`。
 
 ## 自包含

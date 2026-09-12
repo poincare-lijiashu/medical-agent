@@ -145,13 +145,13 @@ def test_diag_fixes_frontend_markers_present():
       对应断言删除，语义由 Playwright 行为测试接管（上传→预览→提交→结构化所见渲染）；
     - 诊断2：留痕模式开关卡显示 runtime_flags 当前值来源 + 变更 toast（文案逐字）；
     - 诊断3：KB 上传失败统一「失败：文件名（状态码 原因）」格式（先取响应文本/状态码，
-      不再吞原因）。"""
+      不再吞原因；终评 F2 XSS 收口：拼接经 esc() 转义后进 v-html）。"""
     html = _vue_source()
     for marker in (
         # 诊断2：留痕模式开关卡状态来源（runtime_flags 值）+ 变更 toast 文案
         "状态来源：runtime_flags（qc_auto_sign_full=", "（runtime_flags 已更新，即时生效）",
-        # 诊断3：上传失败统一「失败：文件名（状态码 原因）」（KbView uploadKb）
-        "kbMsg.value = '失败：' + f.name + '（' + (st || '网络异常')",
+        # 诊断3：上传失败统一「失败：文件名（状态码 原因）」（KbView uploadKb；F2 起 esc 包裹）
+        "kbMsg.value = '失败：' + esc(f.name) + '（' + (st || '网络异常')",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
 
@@ -769,3 +769,31 @@ def test_beforeunload_guard_frontend_markers_present():
     assert "useDirtyStore" in rx and "dirty.rx =" in rx, "RxView 应同步 rx 工作台脏标记"
     assert "String(txt || '').trim() || n > 0" in rx, \
         "脏判定口径必须为「case_text 非空或已选药单非空」"
+
+
+def test_kbview_xss_esc_markers_present():
+    """终评 F2 XSS 收口标记锁（KbView.vue v-html 消费 kbMsg）：所有动态拼接
+    （文件名 label/f.name、后端错误 st.error/det、异常 e.message）必须经 esc() 转义；
+    固定标签 <b>/<span class="num"> 保留（纯静态骨架不受影响）。"""
+    src = (VUE_SRC / "views" / "KbView.vue").read_text(encoding="utf-8")
+    # esc 从 utils/assist 导入（共享实现，与 legacy esc 同净化策略）
+    assert "import { esc, fmtTs } from '../utils/assist'" in src, "KbView 应导入共享 esc()"
+    for marker in (
+        "esc(label) + ' 状态查询失败，重试中…'",
+        "esc(label) + ' 任务不存在'",
+        "esc(label) + ' → 入库 <b class=\"num\">'",
+        "esc(label) + ' 失败：' + esc(st.error || '未知原因')",
+        "esc(label) + ' 向量化中 <span class=\"num\">'",
+        "esc(label) + ' 超时（20 分钟未完成）",
+        "'处理中：' + esc(f.name) + ' …'",
+        "esc(f.name) + ' 不支持（仅 .md/.txt/.pdf）'",
+        "'失败：' + esc(f.name) + '（' + (st || '网络异常') + ' ' + esc(det || (e && e.message) || '') + '）'",
+        "${esc(f.name)} → 入库 ${d.inserted} 片",
+        "'失败：' + esc(f.name) + '（网络异常：' + esc((e && e.message) || '') + '）'",
+    ):
+        assert marker in src, f"KbView kbMsg 拼接缺少 esc() 包裹：{marker}"
+    # 反向锁：kbMsg 拼接处不得再出现未转义的 f.name/label/拼接（esc 漏包即回退）。
+    # 固定标签 <b class="num">/<span class="num"> 为静态骨架，允许保留。
+    body = src[src.index("async function pollKbTask"):]
+    for raw in ("+ label +", "' + f.name + '", "`${f.name}", "+ f.name +"):
+        assert raw not in body, f"KbView kbMsg 出现未转义拼接：{raw}"

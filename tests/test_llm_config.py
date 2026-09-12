@@ -93,6 +93,47 @@ def test_add_provider_validation(monkeypatch, tmp_path):
         lc.activate("chat", "p-nonexistent")
 
 
+# ---- 终评 F4：base_url 内网/回环黑名单（SSRF 收口）+ LLM_ALLOW_PRIVATE_HOSTS 放行开关 ----
+
+def test_base_url_private_hosts_rejected(monkeypatch, tmp_path):
+    """各私网/回环形态一律 ValueError（文案「不允许指向内网/回环地址」）：
+    localhost、127.x、10.x、172.16-31.x、192.168.x、169.254.x（云元数据）、0.0.0.0、::1。"""
+    monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
+    for url in ("http://localhost:11434/v1", "http://127.0.0.1:11434/v1", "http://127.9.9.9/v1",
+                "http://10.1.2.3/v1", "http://172.16.0.9/v1", "http://172.31.255.255/v1",
+                "http://192.168.1.5:8000/v1", "http://169.254.169.254/latest",
+                "http://0.0.0.0:8000", "http://[::1]:8000/v1"):
+        with pytest.raises(ValueError, match="内网/回环"):
+            lc.add_provider("chat", "openai", url, "m", "", "k")
+
+
+def test_base_url_public_host_accepted_and_switch_override(monkeypatch, tmp_path):
+    """公网域名照常放行；LLM_ALLOW_PRIVATE_HOSTS=true（development 本地网关）显式放行内网。"""
+    monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
+    pid = lc.add_provider("chat", "openai", _URL, "m", "", "k")  # 公网域名不受影响
+    assert pid.startswith("p-")
+    # 开关放行：本地网关场景（先证默认拒、再证开关开则过）
+    with pytest.raises(ValueError, match="内网/回环"):
+        lc.add_provider("vision", "openai", "http://127.0.0.1:11434/v1", "ollama", "", "k")
+    from backend.config import settings
+    monkeypatch.setattr(settings, "llm_allow_private_hosts", True)
+    pid2 = lc.add_provider("vision", "openai", "http://127.0.0.1:11434/v1", "ollama", "", "k")
+    assert pid2.startswith("p-")
+
+
+def test_route_add_provider_private_host_400(monkeypatch, tmp_path):
+    """路由层透传：admin 新增 provider 指向内网 → 400 带中文文案（不落盘、不计审计成功）。"""
+    _isolate(monkeypatch, tmp_path)
+    c = TestClient(app)
+    tok = _login(c, "admin01", "Med@2026")
+    r = c.post("/api/v1/medical/admin/llm/providers", headers=_h(tok),
+               json={"kind": "chat", "api_format": "openai", "base_url": "http://192.168.0.9/v1",
+                     "model_id": "m", "display_name": "内网", "api_key": "k"})
+    assert r.status_code == 400, r.text
+    assert "内网/回环" in r.text
+    assert lc.load_config()["chat"]["providers"] == []
+
+
 # ---- test_provider：假 200 / 超时 等分支（monkeypatch httpx.Client，不触网）----
 
 class _Resp:

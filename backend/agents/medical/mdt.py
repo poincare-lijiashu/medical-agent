@@ -198,8 +198,11 @@ _MDT_IMG_CAP = 10  # 与 medical_router.MAX_IMAGES 一致（轮 A2 上限 6→10
 
 
 def _vl_content(images: list[str], prompt: str) -> list[dict]:
-    """多模态消息 content：图片在前、文字在后（与 medical_imaging.describe_images 同构）。"""
-    return ([{"type": "image_url", "image_url": {"url": u}} for u in images]
+    """多模态消息 content：图片在前、文字在后（与 medical_imaging.describe_images 同构）。
+    SSRF 收口（终评 F1）：逐张 enforce_data_url——非 data:image/ 抛 ValueError
+    （用户字符串原样进 image_url 会被服务端当 URL 请求，一律拒绝）。"""
+    from backend.core.img_utils import enforce_data_url
+    return ([{"type": "image_url", "image_url": {"url": enforce_data_url(u)}} for u in images]
             + [{"type": "text", "text": prompt}])
 
 

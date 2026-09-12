@@ -22,11 +22,13 @@ services:
     image: minio/minio:latest  # 本地已有；镜像站 m.daocloud.io 拒绝拉取
     container_name: medagent_minio
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      # 终评 F6 收口：凭证 env 化（.env / .env.local 覆盖；生产必改，默认值仅供本地开发）
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     ports:
-      - "9001:9001"
-      - "9000:9000"
+      # 终评 F6 收口：仅绑回环——S3 API/控制台不对局域网暴露（容器网内 milvus 仍走服务名访问）
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - medagent_minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
@@ -58,10 +60,13 @@ services:
     container_name: medagent_pg
     environment:
       POSTGRES_USER: medagent
-      POSTGRES_PASSWORD: medagent123
+      # 终评 F6 收口：密码 env 化（.env / .env.local 设 POSTGRES_PASSWORD 覆盖；
+      # 默认 medagent123 仅供本地开发——生产必改强口令）
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medagent123}
       POSTGRES_DB: medagent
     ports:
-      - "5433:5432"
+      # 终评 F6 收口：仅绑回环（宿主 5433 → 容器 5432），不对局域网暴露
+      - "127.0.0.1:5433:5432"
     volumes:
       - medagent_pg:/var/lib/postgresql/data
 

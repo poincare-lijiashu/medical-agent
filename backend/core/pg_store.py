@@ -854,11 +854,16 @@ _RULE_UPSERT = """INSERT INTO drug_rules(drug_a,drug_b,severity,mechanism,manage
 _RULE_DEFAULT_SOURCE = "AI辅助生成·待药师核对"
 
 
-def _norm_pair(a, b) -> tuple[str, str]:
+def norm_pair(a, b) -> tuple[str, str]:
     """药对规范化：两药按字典序固定 a<b，保证 (drug_a,drug_b) 唯一键稳定
-    （查重/幂等 upsert/差集补齐都以规范对为准，与输入顺序无关）。"""
+    （查重/幂等 upsert/差集补齐都以规范对为准，与输入顺序无关）。
+    终评 F9：提升为公共名（drug_dict/medical_router 等外部模块统一引用）。"""
     a, b = str(a).strip(), str(b).strip()
     return (a, b) if a <= b else (b, a)
+
+
+# 向后兼容别名：历史调用方（旧测试/脚本）仍可用 _norm_pair
+_norm_pair = norm_pair
 
 
 def _norm_severity(sev) -> str:

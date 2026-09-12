@@ -90,7 +90,7 @@ def save_dict(items: list[dict]) -> None:
 def save_rules(items: list[dict]) -> None:
     """相互作用规则全量写（按规范药对去重，后写生效）：语义同 save_dict，规则图一并失效。"""
     with _lock:
-        cleaned = _dedup(items, lambda i: pg_store._norm_pair(i.get("drug_a"), i.get("drug_b")))
+        cleaned = _dedup(items, lambda i: pg_store.norm_pair(i.get("drug_a"), i.get("drug_b")))
         pg_store.save_drug_rules(cleaned, DRUG_RULES_FILE)
         _cache["rules"] = cleaned
         _cache["rule_map"] = None
@@ -165,8 +165,8 @@ _REVIEW_FIELDS = ("review_status", "reviewed_by", "reviewed_at")  # approved 写
 
 
 def _review_key(r: dict) -> tuple[str, str]:
-    """规则条目 → 规范药对键（pg_store._norm_pair 同构，与输入顺序无关）。"""
-    return pg_store._norm_pair(r.get("drug_a"), r.get("drug_b"))
+    """规则条目 → 规范药对键（pg_store.norm_pair 同构，与输入顺序无关）。"""
+    return pg_store.norm_pair(r.get("drug_a"), r.get("drug_b"))
 
 
 def _decode_key(key: str) -> tuple[str, str]:
@@ -174,7 +174,7 @@ def _decode_key(key: str) -> tuple[str, str]:
     parts = str(key or "").split("||")
     if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
         raise ValueError(f"键格式需为 drug_a||drug_b：{key}")
-    return pg_store._norm_pair(parts[0], parts[1])
+    return pg_store.norm_pair(parts[0], parts[1])
 
 
 def mark_reviewed(keys: list[str], pharmacist: str, decision: str) -> int:

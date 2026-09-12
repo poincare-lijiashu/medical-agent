@@ -47,12 +47,6 @@ _AGENT_MODEL_ROUTING: dict[str, str] = {
 }
 
 
-# # 模型标识符（实际模型） → DeepSeek API 实际接受的 model 名称
-_MODEL_ID_MAP: dict[str, str] = {
-    "deepseek-chat": "deepseek-v4-pro", # 这里面值：可以改成：deepseek_v4-pro
-}
-# 这里的_MODEL_ID_MAP键对应模型的厂商，值是真实的模型
-
 class LLMFactory:
     """大模型工厂（统一获取模型的唯一入口）。
     用 @classmethod 定义方法，意味着不用创建对象、直接用 LLMFactory.get_llm(...) 调用。

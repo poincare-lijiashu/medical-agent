@@ -88,8 +88,8 @@ def test_ask_tools_mapping(monkeypatch):
          "/api/v1/medical/literature/ask", {"question": "高血压诊断标准"}, ask_resp),
         ("drug_check", {"question": "两药能合用吗"},
          "/api/v1/medical/drug/ask", {"question": "两药能合用吗"}, ask_resp),
-        ("imaging_describe", {"question": "看结节", "images": ["a", "b"]},
-         "/api/v1/medical/imaging/ask", {"question": "看结节", "images": ["a", "b"]}, ask_resp),
+        ("imaging_describe", {"question": "看结节", "images": ["data:image/png;base64,AAA", "data:image/png;base64,BBB"]},
+         "/api/v1/medical/imaging/ask", {"question": "看结节", "images": ["data:image/png;base64,AAA", "data:image/png;base64,BBB"]}, ask_resp),
         ("imaging_describe", {"question": "帮我看看"},  # 未传图 → payload 不含 images
          "/api/v1/medical/imaging/ask", {"question": "帮我看看"}, ask_resp),
         ("case_summarize", {"question": "总结病例"},
@@ -388,10 +388,10 @@ def test_consult_create_mapping_and_summary(monkeypatch):
             "images": ["aHVnZQ=="], "opinions": []}
     fake, res = _call_tool(monkeypatch, "consult_create",
                            {"question": "62 岁糖尿病合并高血压，血压控制方案如何制定？",
-                            "images_b64": ["aGVsbG8="]}, resp)
+                            "images_b64": ["data:image/png;base64,aGVsbG8="]}, resp)
     assert fake.calls == [("POST", "/api/v1/medical/consults",
                            {"question": "62 岁糖尿病合并高血压，血压控制方案如何制定？",
-                            "images": ["aGVsbG8="]})]
+                            "images": ["data:image/png;base64,aGVsbG8="]})]
     text = res["content"][0]["text"]
     assert res["isError"] is False
     assert "con-abc123" in text and "心内科、内分泌科" in text and "涉及血压与血糖调控" in text
@@ -509,15 +509,22 @@ def test_tool_name_header_propagated(monkeypatch):
 
 def test_single_image_size_cap(monkeypatch):
     """单张图片 >8M 字符（≈6MB base64）本地拒绝、不发上游请求（与 HTTP AskReq 同阈值）；
-    阈值内放行。"""
+    阈值内放行。SSRF 收口（终评 F1）：非 data:image/ → invalid params（scheme 校验在
+    长度检查之前）。"""
     fake, res = _call_tool(monkeypatch, "imaging_describe",
-                           {"question": "看", "images": ["x" * 8_000_001]})
+                           {"question": "看", "images": ["http://evil/x.png"]})
+    assert res["isError"] is True
+    assert "data URL" in res["content"][0]["text"]
+    assert fake.calls == []
+    fake, res = _call_tool(monkeypatch, "imaging_describe",
+                           {"question": "看", "images": ["data:image/png;base64," + "x" * 8_000_001]})
     assert res["isError"] is True
     assert "过大" in res["content"][0]["text"]
     assert fake.calls == []
     # 边界内（8M 字符整）放行：payload 照常映射上游
+    bounded = "data:image/png;base64," + "x" * (8_000_000 - len("data:image/png;base64,"))
     fake2, res2 = _call_tool(monkeypatch, "imaging_describe",
-                             {"question": "看", "images": ["x" * 8_000_000]}, {})
+                             {"question": "看", "images": [bounded]}, {})
     assert res2["isError"] is False
     assert fake2.calls == [("POST", "/api/v1/medical/imaging/ask",
-                            {"question": "看", "images": ["x" * 8_000_000]})]
+                            {"question": "看", "images": [bounded]})]

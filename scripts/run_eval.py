@@ -25,8 +25,10 @@ import urllib.request
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVAL_DIR = os.path.join(BASE, "eval")
 SERVER = os.environ.get("MEDICAL_SERVER", "http://127.0.0.1:8001")
-EVAL_USER = os.environ.get("MEDICAL_EVAL_USER", "doctor01")
-EVAL_PASS = os.environ.get("MEDICAL_EVAL_PASS", "Med@2026")
+# 凭据安全（终评 F3）：评测口令不再内置默认值——缺失时 login() 明确退出并指路，
+# 防止把真实凭据硬编码进版本库/脚本传播。
+EVAL_USER = os.environ.get("MEDICAL_EVAL_USER", "")
+EVAL_PASS = os.environ.get("MEDICAL_EVAL_PASS", "")
 
 # L1 agentic 检索循环开关：EVAL_AGENTIC=on/off → LITERATURE_AGENTIC（含旧别名兼容）
 AGENTIC = os.environ.get("EVAL_AGENTIC", os.environ.get("LITERATURE_AGENTIC", "off")
@@ -40,8 +42,14 @@ _TOKEN = ""
 
 def login() -> None:
     """登录获取 Bearer 令牌。服务不可达/认证失败输出人话指引后退出码 2——
-    评测前最常见故障就是后端未启动或账号口令不对，裸 traceback 不具备可操作性。"""
+    评测前最常见故障就是后端未启动或账号口令不对，裸 traceback 不具备可操作性。
+    凭据（终评 F3）：MEDICAL_EVAL_USER / MEDICAL_EVAL_PASS 均为必填环境变量，
+    缺失即退出（不再内置默认账号口令）。"""
     global _TOKEN
+    if not EVAL_USER or not EVAL_PASS:
+        print("[eval] 缺少评测凭据：请设置 MEDICAL_EVAL_USER / MEDICAL_EVAL_PASS 环境变量"
+              "（评测账号的登录名与口令，例如 doctor01 对应的口令）。", file=sys.stderr)
+        raise SystemExit(2)
     data = json.dumps({"username": EVAL_USER, "password": EVAL_PASS}).encode("utf-8")
     req = urllib.request.Request(f"{SERVER}/api/v1/auth/login", data=data,
                                  headers={"Content-Type": "application/json"})
@@ -49,7 +57,7 @@ def login() -> None:
         resp = urllib.request.urlopen(req, timeout=30)
     except urllib.error.HTTPError as e:
         hint = (f"[eval] 认证失败（HTTP {e.code}）：请检查评测账号口令——"
-                f"来自环境变量 MEDICAL_EVAL_USER / MEDICAL_EVAL_PASS（默认 doctor01）。")
+                f"来自环境变量 MEDICAL_EVAL_USER / MEDICAL_EVAL_PASS。")
         print(hint, file=sys.stderr)
         raise SystemExit(2) from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:

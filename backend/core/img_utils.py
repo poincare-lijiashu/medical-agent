@@ -22,6 +22,15 @@ MAX_BYTES = 6 * 1024 * 1024   # 单张字节上限（base64 data URL ≈ 字节 
 QUALITY_STEPS = (0.9, 0.8, 0.7, 0.6, 0.5, 0.4)  # JPEG 质量递减步长（下限 0.4）
 
 
+def enforce_data_url(data_url: str) -> str:
+    """SSRF 收口（终评 F1）：拒绝非 data:image/ 前缀的图片输入（HTTP 层 422 /
+    MCP invalid params / MDT VL 层 ValueError），与产品语义一致——前端只发内嵌
+    data URL，绝不向用户提供的外部 URL 发起服务端请求。"""
+    if not isinstance(data_url, str) or not data_url.startswith("data:image/"):
+        raise ValueError("仅支持内嵌图片(data URL)")
+    return data_url
+
+
 def normalize_data_url(data_url: str) -> str:
     """规整单张图片 data URL：超长边等比缩 + JPEG 质量递减重编码至 ≤6MB。
 

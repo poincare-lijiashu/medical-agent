@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 REQUIRED_FIELDS = ["主诉", "现病史", "既往史", "体格检查", "辅助检查", "初步诊断", "医师签名"]
@@ -102,7 +103,9 @@ def icd_check(record: dict, code_table: dict | None) -> dict:
 
 
 def critical_value_check(labs: dict, thresholds: dict | None) -> dict:
-    """危急值硬规则（需院方阈值表 {项目:{low,high}}）。无表→未启用；绝不用臆造数值。"""
+    """危急值硬规则（需院方阈值表 {项目:{low,high}}）。无表→未启用；绝不用臆造数值。
+    终评 F7：阈值含非数值（如 "N/A"、脏数据）不再 500——该值无法比较，跳过该项并
+    warning 留痕（阈值表是院方配置，脏项不应拖垮整份质控）。"""
     if not thresholds:
         return {"track": "危急值", "enabled": False, "flags": [], "note": "未提供院方危急值阈值表"}
     flags = []
@@ -112,11 +115,15 @@ def critical_value_check(labs: dict, thresholds: dict | None) -> dict:
             continue
         try:
             v = float(val)
+            hi = float(th["high"]) if "high" in th else None
+            lo = float(th["low"]) if "low" in th else None
         except (TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "危急值阈值非数值，跳过该项目比对：item=%r threshold=%r", item, th)
             continue
-        if "high" in th and v > float(th["high"]):
+        if hi is not None and v > hi:
             flags.append({"item": item, "value": v, "issue": f"危急高值 >{th['high']}", "level": "危急"})
-        elif "low" in th and v < float(th["low"]):
+        elif lo is not None and v < lo:
             flags.append({"item": item, "value": v, "issue": f"危急低值 <{th['low']}", "level": "危急"})
     return {"track": "危急值", "enabled": True, "flags": flags}
 

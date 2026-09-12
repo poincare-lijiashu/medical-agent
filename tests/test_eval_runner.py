@@ -19,7 +19,25 @@ ev = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ev)
 
 
-def test_login_unreachable_exits_with_hint(monkeypatch, capsys):
+@pytest.fixture
+def creds(monkeypatch):
+    """终评 F3：评测凭据改为必填环境变量（无内置默认）——本文件登录路径测试统一注入。"""
+    monkeypatch.setattr(ev, "EVAL_USER", "doctor01")
+    monkeypatch.setattr(ev, "EVAL_PASS", "Med@2026")
+
+
+def test_login_missing_credentials_exits_with_hint(monkeypatch, capsys):
+    """凭据环境变量缺失 → 中文提示 + 退出码 2，不发请求（终评 F3）。"""
+    monkeypatch.setattr(ev, "EVAL_USER", "")
+    monkeypatch.setattr(ev, "EVAL_PASS", "")
+    with pytest.raises(SystemExit) as ei:
+        ev.login()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert "MEDICAL_EVAL_USER" in err and "MEDICAL_EVAL_PASS" in err
+
+
+def test_login_unreachable_exits_with_hint(creds, monkeypatch, capsys):
     """服务不可达（连接拒绝/DNS 失败）→ 人话提示 + 退出码 2，绝不裸抛 URLError。"""
     def boom(req, timeout):
         raise urllib.error.URLError("ConnectionRefusedError(10061)")
@@ -34,7 +52,7 @@ def test_login_unreachable_exits_with_hint(monkeypatch, capsys):
     assert "backend.main" in err                  # 给出启动指引
 
 
-def test_login_401_exits_with_hint(monkeypatch, capsys):
+def test_login_401_exits_with_hint(creds, monkeypatch, capsys):
     """认证失败（HTTP 401）→ 指明账号口令来源环境变量，退出码 2。"""
     def unauthorized(req, timeout):
         raise urllib.error.HTTPError(ev.SERVER + "/api/v1/auth/login", 401, "Unauthorized",
@@ -49,7 +67,7 @@ def test_login_401_exits_with_hint(monkeypatch, capsys):
     assert "MEDICAL_EVAL_USER" in err and "MEDICAL_EVAL_PASS" in err
 
 
-def test_login_success_records_token(monkeypatch):
+def test_login_success_records_token(creds, monkeypatch):
     """登录成功 → _TOKEN 记录 access_token，不退出。"""
     class _Resp:
         def read(self):

@@ -402,3 +402,57 @@ def test_kb_delete_error_returns_json_not_bare_text(monkeypatch, tmp_path):
     assert r.status_code == 500
     assert r.json()["detail"] == "Milvus 连接失败", "响应必须是可解析 JSON 且含 detail"
     assert [e for e in audit.entries if e["payload"].get("action") == "delete_failed"]
+
+
+# ---- 终评 F5：doc_tag 清洗（与 delete/preview 同口径）+ 后台摄取并发上限 Semaphore(2) ----
+
+def test_ingest_document_sanitizes_doc_tag(monkeypatch, tmp_path):
+    """doc_tag 带引号/过滤字符 → ingest_document 过 _safe_tag 清洗（防 Milvus filter
+    注入/孤儿 tag）；清洗后为空回落默认 up_ 前缀 tag。"""
+    _isolate_kb_dirs(monkeypatch, tmp_path)
+    _mock_embed_and_col(monkeypatch)
+    raw = ("医学内容，足够长以便切分入库测试。" * 30).encode("utf-8")
+    out = kb_ingest.ingest_document("指南.md", raw, doc_tag='ta"g<inject>')
+    assert out["doc_tag"] == "taginject"
+    assert out["doc_tag"] in kb_ingest._load_manifest()
+    # 全为过滤字符 → 清洗为空 → 回落默认 tag
+    out2 = kb_ingest.ingest_document("指南.md", raw, doc_tag='"\'')
+    assert out2["doc_tag"].startswith("up_")
+    # delete/preview 同口径：清洗后的 tag 可预览可删
+    assert kb_ingest.preview_doc('ta"g<inject>')["tag"] == "taginject"
+
+
+def test_ingest_semaphore_limits_concurrency(monkeypatch):
+    """后台摄取全局并发 ≤2：前两个占满配额时第 3 个任务在 Semaphore 处排队
+    （daemon 线程排队而非并发爆），释放后第 3 个才进入——峰值并发恒 ≤2。"""
+    import threading
+    import time
+
+    active: list[str] = []
+    entered: list[str] = []
+    peak = [0]
+    release = threading.Event()
+
+    def fake_locked(task_id, *a, **k):
+        active.append(task_id)
+        peak[0] = max(peak[0], len(active))
+        entered.append(task_id)
+        release.wait(5)
+        active.remove(task_id)
+
+    monkeypatch.setattr(kb_ingest, "_run_ingest_task_locked", fake_locked)
+    ts = [threading.Thread(target=kb_ingest.run_ingest_task,
+                           args=(f"t{i}", "a.md", "p"), daemon=True) for i in range(3)]
+    for t in ts:
+        t.start()
+    deadline = time.time() + 3
+    while time.time() < deadline and len(active) < 2:
+        time.sleep(0.01)
+    time.sleep(0.15)  # 若无信号量，第 3 个此刻必然已进入 → 断言失败
+    assert len(active) == 2, "第 3 个任务应被 Semaphore(2) 排队"
+    assert peak[0] == 2
+    release.set()  # 放行前两个 → 第 3 个进入
+    for t in ts:
+        t.join(timeout=5)
+    assert sorted(entered) == ["t0", "t1", "t2"], "三个任务最终都应执行（排队而非丢弃）"
+    assert peak[0] == 2, "任意时刻并发摄取不得超过 2"

@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     qwen_model_coder: str = "qwen-plus"
     qwen_model_vl: str = "qwen3-vl-plus"
 
+    # 终评 F4 SSRF 收口：管理端 LLM provider 的 base_url 默认拒绝内网/回环地址
+    # （localhost/127.x/10.x/172.16-31.x/192.168.x/169.254.x/0.0.0.0/::1——防把
+    # 内网网关/云元数据端点挂进模型路由）。development 本地网关（如 Ollama
+    # localhost:11434）显式置 LLM_ALLOW_PRIVATE_HOSTS=true 放行；生产保持 false。
+    llm_allow_private_hosts: bool = False
+
     # DeepSeek 兜底（医疗路由不走，仅防其它路由调用时 AttributeError）
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"

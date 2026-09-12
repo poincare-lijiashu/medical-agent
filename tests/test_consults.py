@@ -221,6 +221,37 @@ def test_consult_create_and_get_roundtrip(monkeypatch, tmp_path):
     assert [i["id"] for i in on_disk] == [cid]
 
 
+def test_consult_create_storage_filters_non_data_url(monkeypatch, tmp_path):
+    """SSRF 收口（终评 F1）存储层兜底：绕过 HTTP 校验（MCP/内部调用）时，
+    非 data:image/ 前缀图在 create 内被丢弃不入库；合法 data URL 原样保留。"""
+    import base64
+    import io
+
+    from PIL import Image
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(buf, format="PNG")
+    good = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",
+                              target_depts=["口腔科"],
+                              images=[good, "http://evil/x.png"])
+    item = consults_mod.get(cid)
+    assert len(item["images"]) == 1 and item["images"][0].startswith("data:image/")
+    cid2 = consults_mod.create(initiator="doctor01", question="q2", ai_analysis="a",
+                               target_depts=["口腔科"], images=["http://evil/x.png"])
+    assert consults_mod.get(cid2)["images"] == []
+
+
+def test_mdt_vl_content_rejects_non_data_url():
+    """SSRF 收口（终评 F1）MDT VL 层锁：_vl_content 对每张图 enforce_data_url——
+    非 data:image/ 抛 ValueError（防用户 URL 原样进 image_url 被服务端请求）。"""
+    ok = mdt_mod._vl_content(["data:image/png;base64,AAA"], "prompt")
+    assert ok[0]["image_url"]["url"] == "data:image/png;base64,AAA"
+    for bad in ("http://evil/x.png", "AAAAnakedb64", "data:text/html;base64,AAA"):
+        with pytest.raises(ValueError, match="data URL"):
+            mdt_mod._vl_content([bad], "prompt")
+
+
 def test_consult_inbox_dept_isolation_and_closed_excluded(monkeypatch, tmp_path):
     monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "consults.json"))
     cid = consults_mod.create(initiator="doctor01", question="q", ai_analysis="a",

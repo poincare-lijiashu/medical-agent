@@ -250,7 +250,9 @@ async def grade_node(state: LiteratureState) -> dict:
     )
     raw = await _ask("medical_literature", LITERATURE_SYSTEM + "\n" + prompt)
     d = _parse_json(raw, {"sufficient": True, "rewrite_query": ""})
-    rewrite = (d.get("rewrite_query") or "").strip()
+    # 终评 F7：rewrite_query 与 refine 节点 new_query 同限长（REFINE_QUERY_MAX_LEN=200，
+    # 代码强制截断不信任 LLM 自律——防超长改写撑爆后续 prompt/审计）。
+    rewrite = ((d.get("rewrite_query") or "").strip())[:REFINE_QUERY_MAX_LEN]
     return {
         "sufficient": bool(d.get("sufficient", True)),
         "query": (rewrite or state.get("query") or state["question"]),

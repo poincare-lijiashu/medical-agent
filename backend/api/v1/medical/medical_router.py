@@ -178,9 +178,10 @@ class AskReq(BaseModel):
         if v is not None:
             if len(v) > MAX_IMAGES:
                 raise ValueError(f"影像图片最多 {MAX_IMAGES} 张，当前 {len(v)} 张")
-            from backend.core.img_utils import normalize_data_url
+            from backend.core.img_utils import enforce_data_url, normalize_data_url
             out = []
             for s in v:
+                enforce_data_url(s)  # SSRF 收口（终评 F1）：非 data:image/ → 422（拒绝而非改写）
                 s2 = normalize_data_url(s)
                 if len(s2) > 8_000_000:
                     raise ValueError("单张影像压缩后仍超过 6MB，请压缩后上传")
@@ -535,9 +536,9 @@ async def admin_drug_rules_manage(req: DrugDictManageReq,
     if action != "delete" and sev not in _DRUG_RULE_SEVERITIES:
         raise HTTPException(422, "severity 需为 高危|中危")  # delete 按药对定位，无需 severity
     rules = await asyncio.to_thread(dd.load_rules)
-    pair = pg_store._norm_pair(a, b)
+    pair = pg_store.norm_pair(a, b)
     idx = next((i for i, r in enumerate(rules)
-                if pg_store._norm_pair(r.get("drug_a"), r.get("drug_b")) == pair), -1)
+                if pg_store.norm_pair(r.get("drug_a"), r.get("drug_b")) == pair), -1)
     if action == "add" and idx >= 0:
         raise HTTPException(422, f"规则已存在：{pair[0]} × {pair[1]}")
     if action in ("update", "delete") and idx < 0:
