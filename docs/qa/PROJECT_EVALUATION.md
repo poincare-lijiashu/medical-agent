@@ -82,3 +82,16 @@ GLM 判"长期债"，DeepSeek 复核"分区结构+标记锁尚可，ESM 拆分 1
 | 补 | Milvus 停机挂起修复 | ✅ 检索 RPC 20s 看门狗+客户端重建（DR 发现②固化） | `f32031f` |
 
 测试基线演进：659 → **700 passed**。
+
+## 九、Vue3 前端迁移（2026-09-12 完成，4 轮）
+
+**决策**：用户拍板路径 B（Vue3+Vite+Element Plus 重写，后端零改动）。**回退基线：git tag `v-legacy-frontend`**（= a1a4c34），手册：docs/plans/vue3_migration.md。
+
+| 轮 | 交付 | 提交 |
+|---|---|---|
+| 1 | Vite 脚手架+登录壳+/app 挂载（与 legacy 并行） | `e1f7f4e` |
+| 2 | 核心助手视图（文献 SSE 流式/影像压缩/MDT/开药工作台全语义） | `9e0d2c7` |
+| 3 | 管理视图（审核中心/字典审校/知识库/审计/LLM 配置/角标轮询） | `b5157d6` |
+| 4 | 切换默认入口+legacy 移除+标记锁重写+Playwright 适配 | `daf757f` |
+
+**终态**：707 passed · Playwright 6/6 · `/` 直出 Vue 应用 · legacy 已删（tag 永久可回退，checkout 三处无需 node）。**整体回退一条命令**：`git checkout v-legacy-frontend -- frontend backend/main.py tests && git commit`。
