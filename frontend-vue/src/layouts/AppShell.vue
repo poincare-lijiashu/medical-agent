@@ -115,8 +115,8 @@ onMounted(() => {
   badges.refreshReviewBadge()
   badges.refreshRxBadge()
   badges.loadConfig()
-  // consult 徽标不在此首刷（legacy boot 亦不调 refreshConsultBadge：进审核中心/提交意见/
-  // 发起会诊时刷新；且 /consults/inbox 每拉取一次写一条审计，登录即拉徒增审计与限流压力）
+  // consult 徽标实时化由 poll() 承载（60s 轮询；silent=1 读操作降噪——后端跳过
+  // list_inbox 审计写入，不再制造审计噪音；进审核中心/收件箱刷新点仍走业务审计）
   timer = setInterval(() => badges.poll(), 60_000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })

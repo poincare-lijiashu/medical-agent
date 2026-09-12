@@ -12,6 +12,17 @@
   --accent-h: #2056ae;
   --accent-soft: #e8eefb;
   --r: 8px;
+  /* 医学蓝统一（品牌色对齐）：Element Plus 主色覆盖为品牌蓝 #2563c9（本文件在
+     element-plus/dist/index.css 之后加载，:root 同名变量覆盖其默认 #409EFF）。
+     梯度按 Element Plus 混色规则固化：light-N = 品牌蓝混 N% 白，dark-2 = 混 20% 黑。
+     button/link/radio/checkbox/pagination/dialog 等主色消费均走这组变量。 */
+  --el-color-primary: #2563c9;
+  --el-color-primary-light-3: #6692d9; /* 混 30% 白：hover/浅态 */
+  --el-color-primary-light-5: #92b1e4; /* 混 50% 白 */
+  --el-color-primary-light-7: #bed0ef; /* 混 70% 白：disabled 边框 */
+  --el-color-primary-light-8: #d3e0f4; /* 混 80% 白 */
+  --el-color-primary-light-9: #e9effa; /* 混 90% 白：浅底填充 */
+  --el-color-primary-dark-2: #1e4fa1;  /* 混 20% 黑：active 深态 */
 }
 * { box-sizing: border-box }
 html, body, #app { margin: 0; height: 100% }

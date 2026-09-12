@@ -400,6 +400,35 @@ def test_consult_flow_end_to_end(monkeypatch, tmp_path):
     assert c.post("/api/v1/medical/consults/con-nope/close", headers=_h(doc1)).status_code == 404
 
 
+def test_consult_inbox_silent_flag_audit_matrix(monkeypatch, tmp_path):
+    """T2 方案 A（读操作降噪）：/consults/inbox silent=1（前端 60s 角标轮询路径）
+    跳过 list_inbox 审计写入（前后审计计数不变）；非 silent（视图内刷新路径）
+    照旧写审计（业务审计保留）。两种模式数据返回完全一致。"""
+    c = _isolate(monkeypatch, tmp_path)
+    doc1 = _login(c, "doctor01")  # 口腔科
+    _mock_team(monkeypatch, ["口腔科"])
+    r = c.post("/api/v1/medical/consults", headers=_h(doc1),
+               json={"question": "右下后牙自发痛 3 天，既往 2 型糖尿病"})
+    assert r.status_code == 200, r.text
+
+    def _n_inbox_audit():
+        return len([e for e in get_audit_logger().entries
+                    if e["event_type"] == "consult"
+                    and e["payload"].get("action") == "list_inbox"])
+
+    # 非 silent（默认，视图内刷新/收件箱 load 路径）：照旧写 list_inbox 审计
+    before = _n_inbox_audit()
+    r1 = c.get("/api/v1/medical/consults/inbox", headers=_h(doc1))
+    assert r1.status_code == 200 and r1.json()["items"], r1.text
+    assert _n_inbox_audit() == before + 1, "非 silent 必须照旧写 list_inbox 审计"
+
+    # silent=1（角标轮询路径）：跳过审计写入（前后计数不变），数据返回与非 silent 一致
+    r2 = c.get("/api/v1/medical/consults/inbox", headers=_h(doc1), params={"silent": 1})
+    assert r2.status_code == 200, r2.text
+    assert r2.json() == r1.json(), "silent 与非 silent 数据返回必须完全一致"
+    assert _n_inbox_audit() == before + 1, "silent=1 不得新增 list_inbox 审计"
+
+
 def test_consult_create_prefilter_rejects_short_or_offtopic(monkeypatch, tmp_path):
     """诊断4 发起预检：「你好」（<8 字）或纯技术问题 → 400 引导补充病例，不建单不分发。"""
     c = _isolate(monkeypatch, tmp_path)

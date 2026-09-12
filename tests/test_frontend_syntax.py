@@ -671,3 +671,41 @@ def test_round_b_frontend_markers_present():
         assert "load()" in fn, f"{fn_name} 失败分支必须强制刷新列表（任务1 防僵尸按钮）"
     # 任务2 反向锁：外典药直接阻断提交的旧文案必须移除（方案A 语义变更：允许提交+强制理由）
     assert "服务端硬校验将拒绝提交" not in html, "方案A 后外典药不再阻断提交（旧文案残留即回退）"
+
+
+# ---------- 医学蓝统一（品牌色对齐）+ 会诊角标实时化（方案 A）标记锁 ----------
+
+def test_medical_blue_theme_markers_present():
+    """医学蓝统一标记锁：styles.css :root 覆盖 Element Plus 主色为品牌蓝 #2563c9——
+    Element Plus dist/index.css 只输出 light-3/5/7/8/9 + dark-2 五个梯度变量
+    （button/link/radio/checkbox/pagination/dialog 等主色消费均走这组），
+    值按混色规则固化：light-N = #2563c9 混 N% 白，dark-2 = 混 20% 黑。"""
+    css = (VUE_SRC / "styles.css").read_text(encoding="utf-8")
+    for var, val in (
+        ("--el-color-primary:", "#2563c9"),
+        ("--el-color-primary-light-3:", "#6692d9"),  # 混 30% 白
+        ("--el-color-primary-light-5:", "#92b1e4"),  # 混 50% 白
+        ("--el-color-primary-light-7:", "#bed0ef"),  # 混 70% 白
+        ("--el-color-primary-light-8:", "#d3e0f4"),  # 混 80% 白
+        ("--el-color-primary-light-9:", "#e9effa"),  # 混 90% 白
+        ("--el-color-primary-dark-2:", "#1e4fa1"),   # 混 20% 黑
+    ):
+        assert f"{var} {val}" in css, f"Element Plus 主色覆盖缺失或值不对：{var} {val}"
+    # 概览 hero：描述文字品牌蓝 --accent（浅蓝底 --accent-soft 保证可读性）
+    ov = (VUE_SRC / "views" / "OverviewView.vue").read_text(encoding="utf-8")
+    hero_p = ov[ov.index(".hero p {"):]
+    hero_p = hero_p[:hero_p.index("}")]
+    assert "color: var(--accent" in hero_p, "hero 描述文字应使用品牌蓝 --accent"
+
+
+def test_consult_badge_poll_silent_markers_present():
+    """会诊角标实时化（方案 A）标记锁：
+    - poll() 并入 refreshConsultBadge(true)（仅 doctor/pharmacist 生效，qc/admin 内部跳过）；
+    - 轮询路径请求带 params { silent: 1 }（后端跳过 list_inbox 审计，读操作降噪）；
+    - 非 silent 分支（params: {}）保留——进审核中心/收件箱视图的刷新点业务审计不丢。"""
+    poll = _extract_badge_action("poll")
+    assert "refreshConsultBadge(true)" in poll, "poll() 必须并入 refreshConsultBadge（silent 轮询路径）"
+    consult = _extract_badge_action("refreshConsultBadge")
+    assert "params: silent ? { silent: 1 } : {}" in consult, \
+        "refreshConsultBadge 轮询路径必须带 silent=1 参数（非 silent 刷新点保持业务审计）"
+    assert "'/medical/consults/inbox'" in consult, "角标数据源必须为 /consults/inbox"

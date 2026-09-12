@@ -127,13 +127,15 @@ onMounted(loadOverview)
 </script>
 
 <style scoped>
-/* hero 欢迎语（legacy .hero 同布局：主标题+边界文案） */
+/* hero 欢迎语（legacy .hero 同布局：主标题+边界文案）。医学蓝统一：底改浅蓝
+   （--accent-soft），描述文字用品牌蓝 --accent（点名句「答案均附出处…」）——
+   原深蓝渐变底（含 #2563eb/#4f46e5 杂蓝）配品牌蓝字对比度不足，浅底保证可读性 */
 .hero {
-  background: linear-gradient(135deg, var(--accent, #2563eb), #4f46e5);
-  color: #fff; border-radius: 10px; padding: 18px 20px; margin-bottom: 14px;
+  background: var(--accent-soft, #e8eefb);
+  border-radius: 10px; padding: 18px 20px; margin-bottom: 14px;
 }
-.hero h2 { margin: 0 0 6px; font-size: 18px }
-.hero p { margin: 0; font-size: 12.5px; opacity: 0.92 }
+.hero h2 { margin: 0 0 6px; font-size: 18px; color: var(--accent-h, #2056ae) }
+.hero p { margin: 0; font-size: 12.5px; color: var(--accent, #2563c9); opacity: 1 }
 /* 指标卡行（legacy .stats/.stat 同布局） */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px }
 .stat { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px }

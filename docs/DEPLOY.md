@@ -176,6 +176,15 @@ python scripts/restore.py --backup data/backups/backup_XXX.tar.gz --yes   # 实�
 | 依赖安装 | `pip install -r requirements.txt` | 全部 **版本固化**（含 `pillow`、`rapidocr-onnxruntime==1.4.4`（扫描版 PDF/图片 OCR）、`pytest`） |
 | torch | requirements 不固化 torch 版本 | FlagEmbedding/sentence-transformers 会按平台拉取匹配的 torch；GPU 机自行安装 `torch` + 对应 CUDA 版本 wheel |
 
+### 1.1 部署矩阵（torch 按机器形态二选一安装，嵌入设备自动选择）
+
+| 机器形态 | torch 安装 | 启动验证（日志 `medical_agent.embedder.loading device=...`） |
+| --- | --- | --- |
+| GPU 服务器（N 卡 + CUDA） | `pip install torch --index-url https://download.pytorch.org/whl/cu121` | 核对 `device=cuda` |
+| CPU 服务器 | `pip install torch --index-url https://download.pytorch.org/whl/cpu` | 核对 `device=cpu` |
+
+> `EMBED_DEVICE=auto` 已自动回落：有 CUDA 用 GPU、否则 CPU（回落告警日志 `embedder.device_cuda_fallback`）；OCR（rapidocr-onnxruntime）纯 CPU 推理无需 GPU；LLM/VL 为远程 API，不占本机 GPU。
+
 ### 2. 模型文件（全部相对路径，随 `backend/` 目录整体拷贝）
 
 - `backend/models/`：BGE-M3 + reranker 权重（约 4.3GB，**不进镜像**，卷挂载/单独拷贝）

@@ -65,24 +65,29 @@ export const useBadgeStore = defineStore('badges', {
       } catch (_) { /* 静默 */ }
     },
     // 轮 A（legacy refreshConsultBadge 逐字语义）：doctor/pharmacist 拉会诊收件箱统计
-    // 「待我（本科室）意见」数；qc/admin 无该 tab 直接跳过。失败静默不干扰主流程。
-    // 视图内刷新（收件箱 load）由视图按已拉取数据直写 consultPendingOps（调方保证）。
-    async refreshConsultBadge() {
+    // 「待我（本科室）意见」数；qc/admin 无该 tab 直接跳过（即仅 doctor/pharmacist 生效）。
+    // 失败静默不干扰主流程。视图内刷新（收件箱 load）由视图按已拉取数据直写
+    // consultPendingOps（调方保证）。
+    // silent=true（60s 轮询路径）：请求带 silent=1——后端跳过 list_inbox 审计写入
+    // （读操作降噪，方案 A）；进审核中心/收件箱视图的刷新点不带 silent，业务审计保留。
+    async refreshConsultBadge(silent) {
       const auth = useAuthStore()
       const role = auth.role
       if (role === 'qc' || role === 'admin') return // qc/admin 无「其它科室会诊协助」tab
       try {
-        const { data } = await http.get('/medical/consults/inbox', { silentToast: true })
+        const { data } = await http.get('/medical/consults/inbox',
+          { params: silent ? { silent: 1 } : {}, silentToast: true })
         this.meDept = data.dept || ''
         this.consultPendingOps = (data.items || [])
           .filter((c) => !((c.opinions || []).some((o) => o.dept === this.meDept))).length
       } catch (_) { /* 静默 */ }
     },
     // 定时轮询入口（任务⑦）：每 60s 按服务端真值刷新角标（登录后由 AppShell 启动）。
-    // consult 徽标不进轮询（legacy 无此调用点：仅登录首刷/进审核中心/收件箱刷新/提交意见后，
-    // /consults/inbox 每次拉取会写 list_inbox 审计，60s 轮询将制造审计噪音）。
+    // consult 徽标并入轮询（方案 A：silent=1 读操作降噪——后端跳过 list_inbox 审计，
+    // 60s 轮询不再制造审计噪音；角标实时化，新会诊派单 60s 内可见红徽）。
     async poll() {
-      await Promise.all([this.refreshReviewBadge(), this.refreshRxBadge(), this.loadConfig()])
+      await Promise.all([this.refreshReviewBadge(), this.refreshRxBadge(),
+                         this.refreshConsultBadge(true), this.loadConfig()])
     },
   },
 })

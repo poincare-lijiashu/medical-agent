@@ -1201,16 +1201,19 @@ async def consult_create(req: AskReq, user: dict = Depends(require_user)):
 
 
 @router.get("/consults/inbox")
-async def consult_inbox(user: dict = Depends(require_user)):
+async def consult_inbox(silent: bool = False, user: dict = Depends(require_user)):
     """「其它科室会诊协助」收件箱：当前医生 dept 匹配的 open 会诊单
-    （服务端按 dept 实时过滤隔离；账号未设置科室则恒为空）。"""
+    （服务端按 dept 实时过滤隔离；账号未设置科室则恒为空）。
+    silent=true 供前端角标轮询（读操作降噪）：跳过 list_inbox 审计写入，
+    数据返回与非 silent 完全一致；视图内刷新不传 silent，业务审计照旧保留。"""
     from backend.core import consults
     me = user.get("username", "system")
     dept = user.get("dept", "")
     items = await asyncio.to_thread(consults.inbox_for, dept) if dept else []
-    await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="list_inbox",
-                            actor=me, payload={"n": len(items), "dept": dept,
-                                               "role": user.get("role", "")})
+    if not silent:
+        await asyncio.to_thread(get_audit_logger().write, event_type="consult", action="list_inbox",
+                                actor=me, payload={"n": len(items), "dept": dept,
+                                                   "role": user.get("role", "")})
     return {"items": items, "me": me, "dept": dept}
 
 
