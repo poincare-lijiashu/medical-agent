@@ -90,23 +90,13 @@ flowchart TB
     subgraph CLIENT["客户端层"]
         direction LR
         FE["Vue 3 前端<br/>临床工作台 / 管理端"]
-        MOBILE["移动端浏览器"]
+        MCPC["MCP 客户端<br/>Claude / Cursor 等（stdio 接入）"]
     end
 
-    subgraph API["接入层 · FastAPI api/v1"]
+    subgraph API["接入层 · FastAPI"]
         direction LR
-        AUTHR["auth 鉴权"]
-        MEDR["medical 业务路由"]
-        ADMINR["admin 管理路由"]
-    end
-
-    subgraph CORE["核心域 backend/core"]
-        direction LR
-        COREAUTH["auth 会话/撤销"]
-        RX["rx 处方/药物规则"]
-        KBC["kb 检索/精排"]
-        AUDIT["audit 追加式审计"]
-        PGS["pg_store<br/>PG+JSON 双写"]
+        AUTHR["auth 路由<br/>登录/刷新/改密"]
+        MEDR["medical 路由（单文件）<br/>62 端点：业务/审核/KB/LLM 配置"]
     end
 
     subgraph AGENTS["智能体层 backend/agents"]
@@ -115,17 +105,34 @@ flowchart TB
         MDT["mdt 多智能体会诊"]
     end
 
+    subgraph CORE["核心域 backend/core"]
+        direction LR
+        COREAUTH["auth 会话/撤销"]
+        RX["rx 处方/药物规则"]
+        KBC["kb 检索/精排"]
+        AUDIT["audit 追加式审计"]
+        PGS["pg_store<br/>PG 真源 + JSON 兜底双写"]
+    end
+
+    subgraph INT["对接层 backend/integration"]
+        direction LR
+        HIS["HIS 适配器（可插拔）<br/>对接院内系统"]
+    end
+
     subgraph INFRA["基础设施层"]
         direction LR
         PGDB[("PostgreSQL 16")]
+        JFILE[("JSON 兜底存储<br/>tmp+replace 原子写")]
         MILVUS[("Milvus<br/>稠密+稀疏混合检索")]
         REDIS[("Redis 可选<br/>多实例共享")]
-        LLM["LLM API<br/>任意 OpenAI 兼容服务"]
+        LLM["LLM/VL API<br/>任意 OpenAI 兼容服务"]
+        PUBMED["PubMed eutils<br/>外部文献溯源"]
     end
 
     CLIENT --> API
     API --> CORE
-    CORE --> AGENTS
+    API --> AGENTS
+    AGENTS --> CORE
     CORE --> INFRA
     AGENTS --> INFRA
 
