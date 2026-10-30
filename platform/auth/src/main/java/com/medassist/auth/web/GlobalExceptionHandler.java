@@ -30,11 +30,16 @@ public class GlobalExceptionHandler {
             case CONFLICT, PATIENT_DUPLICATE, REGISTRATION_DUPLICATED,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;
         };
-        return ResponseEntity.status(status)
-                .body(ApiResponse.fail(e.errorCode(), e.getMessage()));
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(status);
+        if (status == HttpStatus.TOO_MANY_REQUESTS) {
+            // 限速响应带 Retry-After，便于前端提示"稍后再试"而不是静默失败
+            builder.header("Retry-After", "300");
+        }
+        return builder.body(ApiResponse.fail(e.errorCode(), e.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

@@ -9,12 +9,13 @@ public record VerifyResp(
         String userId,
         String username,
         List<String> roles,
+        List<String> permissions,
         String orgCode,
         Instant issuedAt,
         Instant expiresAt
 ) {
 
     public static VerifyResp invalid() {
-        return new VerifyResp(false, null, null, List.of(), null, null, null);
+        return new VerifyResp(false, null, null, List.of(), List.of(), null, null, null);
     }
 }

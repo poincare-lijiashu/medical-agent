@@ -21,7 +21,8 @@ external:
     existingSecret: medassist-nacos
   jwt:
     issuer: medassist-auth
-    ttl: PT8H
+    ttl: PT30M
+    refreshTtl: P7D
     existingSecret: medassist-jwt
   skywalking:
     enabled: true

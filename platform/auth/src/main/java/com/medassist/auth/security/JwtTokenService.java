@@ -75,8 +75,8 @@ public class JwtTokenService {
         this.decoder = nimbus;
     }
 
-    /** 为账号签发访问令牌（roles 为签发时刻的角色快照）。 */
-    public IssuedToken issue(UserAccount user, List<String> roles) {
+    /** 为账号签发访问令牌（roles/permissions 为签发时刻快照，网关按此注入身份头）。 */
+    public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = now.plus(props.ttl());
         String tokenId = UUID.randomUUID().toString();
@@ -89,7 +89,8 @@ public class JwtTokenService {
                 .expiresAt(expiresAt)
                 .claim("username", user.username())
                 .claim("name", user.displayName())
-                .claim("roles", roles);
+                .claim("roles", roles)
+                .claim("permissions", permissions);
         if (user.orgCode() != null && !user.orgCode().isBlank()) {
             claims.claim("org", user.orgCode());
         }
@@ -112,11 +113,13 @@ public class JwtTokenService {
         try {
             Jwt jwt = decoder.decode(token);
             List<String> roles = jwt.getClaimAsStringList("roles");
+            List<String> permissions = jwt.getClaimAsStringList("permissions");
             return Optional.of(new TokenClaims(
                     jwt.getSubject(),
                     jwt.getClaimAsString("username"),
                     jwt.getClaimAsString("name"),
                     roles == null ? List.of() : roles,
+                    permissions == null ? List.of() : permissions,
                     jwt.getClaimAsString("org"),
                     jwt.getIssuedAt(),
                     jwt.getExpiresAt(),
@@ -127,6 +130,10 @@ public class JwtTokenService {
         }
     }
 
+    public JwtProperties properties() {
+        return props;
+    }
+
     /** 签发结果。 */
     public record IssuedToken(String token, Instant issuedAt, Instant expiresAt,
                               long expiresInSeconds, String tokenId) {
@@ -134,6 +141,7 @@ public class JwtTokenService {
 
     /** 校验结果（令牌声明快照）。 */
     public record TokenClaims(String userId, String username, String displayName, List<String> roles,
-                              String orgCode, Instant issuedAt, Instant expiresAt, String tokenId) {
+                              List<String> permissions, String orgCode, Instant issuedAt,
+                              Instant expiresAt, String tokenId) {
     }
 }

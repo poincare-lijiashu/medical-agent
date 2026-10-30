@@ -18,6 +18,7 @@ public enum ErrorCode {
     NOT_FOUND(40400, "请求的资源不存在"),
     CONFLICT(40900, "数据已被他人修改，请刷新后重试"),
     VALIDATION_FAILED(42200, "提交内容不符合校验规则"),
+    TOO_MANY_REQUESTS(42900, "操作过于频繁，请稍后再试"),
     INTERNAL_ERROR(50000, "系统处理异常，已记录日志，请联系管理员"),
     UPSTREAM_UNAVAILABLE(50300, "依赖服务暂不可用，请稍后重试"),
 

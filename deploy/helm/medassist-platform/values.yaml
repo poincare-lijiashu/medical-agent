@@ -45,8 +45,9 @@ external:
 
   jwt:
     issuer: medassist-auth
-    # 令牌有效期（ISO-8601）；生产建议 30 分钟 + 刷新机制（P1 落地前保持单班次 8 小时）
-    ttl: PT8H
+    # 访问令牌 30 分钟；P1 引入轮换式刷新令牌（7 天），登出/停用经撤销名单 15s 内生效
+    ttl: PT30M
+    refreshTtl: P7D
     existingSecret: medassist-jwt
     secretKey: secret
 
@@ -59,6 +60,13 @@ external:
     # 高并发网关可按 3 秒窗口限采样数（如 3000）
     sampleNPer3Secs: -1
     agentLogLevel: INFO
+    # 服务端框架插件默认位于 agent 的 optional-plugins/，不激活就只有心跳没有链路
+    # （2026-10-30 实测：未激活时 gateway/auth/empi 均无 trace）。initContainer 会复制下列
+    # 通配符匹配的 jar 到 plugins/；不匹配的插件不会激活，属于无害冗余。
+    optionalPlugins:
+      - "apm-spring-cloud-gateway-4.x-plugin-*.jar"
+      - "apm-spring-webflux-6.x-plugin-*.jar"
+      - "apm-springmvc-annotation-6.x-plugin-*.jar"
 
   # 患者敏感字段加密密钥（EMPI 专用；换密钥会导致存量密文不可解，必须走轮换流程）
   empi:

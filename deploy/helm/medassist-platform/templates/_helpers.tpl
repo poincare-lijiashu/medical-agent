@@ -139,6 +139,8 @@ Java 服务公共环境变量。
   value: {{ .root.Values.external.jwt.issuer | quote }}
 - name: JWT_TTL
   value: {{ .root.Values.external.jwt.ttl | quote }}
+- name: JWT_REFRESH_TTL
+  value: {{ .root.Values.external.jwt.refreshTtl | default "P7D" | quote }}
 - name: JWT_SECRET
   valueFrom:
     secretKeyRef:
@@ -163,7 +165,9 @@ Java 服务公共环境变量。
 {{- end }}
 {{- end -}}
 
-{{/* SkyWalking agent 初始化容器：从官方 agent 镜像复制到 emptyDir（含 plugins 配置） */}}
+{{/* SkyWalking agent 初始化容器：复制 agent，并把服务端框架插件从 optional-plugins 激活。
+   实测（2026-10-30）：Spring Cloud Gateway 与 Spring MVC 的服务端插件默认不在 plugins/ 下，
+   不激活则只有实例心跳、没有链路（gateway 只出 outbound webclient 插件）。 */}}
 {{- define "medassist.skywalkingInit" -}}
 {{- if .root.Values.external.skywalking.enabled }}
 - name: skywalking-agent
@@ -180,7 +184,14 @@ Java 服务公共环境变量。
   command:
     - sh
     - -c
-    - cp -a /skywalking/agent/. /opt/skywalking-agent/ && test -f /opt/skywalking-agent/skywalking-agent.jar
+    - >-
+      cp -a /skywalking/agent/. /opt/skywalking-agent/ &&
+      test -f /opt/skywalking-agent/skywalking-agent.jar &&
+      cd /opt/skywalking-agent/optional-plugins &&
+      {{- range .root.Values.external.skywalking.optionalPlugins }}
+      for f in {{ . }}; do [ -f "$f" ] && cp "$f" /opt/skywalking-agent/plugins/ || true; done &&
+      {{- end }}
+      true
   volumeMounts:
     - name: skywalking-agent
       mountPath: /opt/skywalking-agent

@@ -38,12 +38,20 @@ spring:
 
 # ---- JWT 签发（auth 是唯一签发方；网关用同一密钥校验）----
 # 生产必须注入 JWT_SECRET（≥32 字节，由密钥管理下发）；默认值仅本地联调，启动日志会告警。
+# P1：访问令牌默认 30 分钟 + 轮换式刷新令牌 7 天（登出/停用走撤销名单，网关 15s 内生效）
 medassist:
   auth:
     jwt:
       issuer: ${JWT_ISSUER:medassist-auth}
       secret: ${JWT_SECRET:<dev-jwt-secret>}
-      ttl: ${JWT_TTL:PT8H}
+      ttl: ${JWT_TTL:PT30M}
+      refresh-ttl: ${JWT_REFRESH_TTL:P7D}
+    login-throttle:
+      enabled: ${LOGIN_THROTTLE_ENABLED:true}
+      max-failures: ${LOGIN_THROTTLE_MAX_FAILURES:5}
+      # IP 维度阈值必须远高于账号维度（医院内网共享 NAT 出口，低阈值会连坐整层楼）
+      max-ip-failures: ${LOGIN_THROTTLE_MAX_IP_FAILURES:30}
+      window: ${LOGIN_THROTTLE_WINDOW:PT5M}
 
 management:
   endpoints:

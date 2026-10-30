@@ -155,7 +155,9 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
 |---|---|---|
 | `JWT_SECRET` | 本地联调默认值 | **≥32 字节**，不足则两个服务拒绝启动；使用默认值时启动 WARN |
 | `JWT_ISSUER` | `medassist-auth` | 签发/校验必须一致，防跨系统令牌混用 |
-| `JWT_TTL` | `PT8H` | 覆盖单班次；生产可调短并配套刷新机制 |
+| `JWT_TTL` | `PT30M` | 访问令牌有效期（P1 从 8 小时缩短，配合刷新令牌） |
+| `JWT_REFRESH_TTL` | `P7D` | 刷新令牌有效期；每次刷新即轮换 |
+| `REVOCATION_SYNC_INTERVAL` | `PT15S` | 网关拉取撤销名单周期（登出/停用生效上限） |
 
 ### 接口
 
@@ -217,12 +219,65 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
 的 wheel 缺 protocol，`--no-binary` 从 sdist 安装后引导成功。
 未能本机验证的点（OAP 全链路、镜像构建、kubectl apply）与复核方式见 `deploy/README.md` §8。
 
+## P1 安全加固（2026-10-30）
+
+P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸面设计）：
+
+### 1. 逐接口权限点强制
+
+- 令牌新增 `permissions` 声明（登录时按 role_permission 聚合）；网关注入
+  `X-Permissions` / `X-Token-Id`（与账号/角色/科室头同等对待，客户端伪造一律剥离）；
+- 业务接口只声明权限点、不看角色名：新增角色只改 auth 域配置，业务代码零改动；
+- 覆盖矩阵：
+  - auth：`/users` 读/建/改/停用/分配角色分别要求 `auth:user:read|create|update|disable`、`auth:role:assign`；
+  - empi：查询 `empi:patient:read`；**`reveal=true` 额外要求 `empi:patient:read_phi`**（看患者 ≠ 看敏感标识）；
+    建档/修改/合并/跨系统标识分别对应 create / update / merge / update。
+- 实测：DOCTOR 访问 `/users` → 403（带权限点名称）；DOCTOR/NURSE 查患者均 200；
+  NURSE `reveal=true` → 403，DOCTOR → 200。
+
+### 2. 刷新令牌与撤销
+
+- 访问令牌 TTL 默认 **30 分钟**；刷新令牌 **7 天**，只存 SHA-256 哈希，刷新即轮换
+  （旧值原子撤销，重放 → 401，并发刷新只有一个成功）；
+- 登出 `POST /api/v2/auth/logout`：撤销当前 `jti` + 该账号全部刷新令牌（全端下线）；
+- 网关每 15s 从 auth 内网 `/internal/revocations` 增量拉取撤销名单（内存黑名单），
+  **登出后最迟 15s 生效**；auth 暂不可用时保留旧名单（fail-open 仅限撤销名单，不阻断业务）；
+- 实测：refresh 200 且返回新令牌；旧刷新令牌重放 401；登出 17s 后旧访问令牌 401。
+
+### 3. 登录限速
+
+- 失败次数按 **账号（5 次/5 分钟）** 与 **来源 IP（30 次/5 分钟）** 双维度落 PG 统计，
+  多副本共享同一窗口；触发返回 429 + `Retry-After`；
+- 两维度阈值必须分离：医院内网大量终端共享 NAT 出口，IP 阈值与账号相同会"连坐整层楼"
+  （首版实测：同 IP 其他账号被 429 误伤，已修复）；
+- 实测：5 次错误密码后该账号 429，同 IP 其他账号仍 200。
+
+### 4. 网关入口限流（Sentinel 核心 API）
+
+- 按路径前缀（`/api/v1`、`/api/v2/auth`、`/api/v2/empi`）设置 QPS，超限返回统一 429 壳；
+- **不用 Sentinel Spring Cloud Gateway Adapter**：1.8.9 适配器与 Spring Cloud Gateway 5.x /
+  Spring 7 组合对每个请求抛 `ParamFlowException: $D`（规则无 paramItem），全量 500；
+  改用 Sentinel 核心 `SphU.entry(前缀资源)`，规则仍由 Sentinel 滑动窗口执行；
+- 配置必须用**列表**：Map 键中的 `/` 会被 Spring 宽松绑定吞掉（`/api/v2/auth` → `apiv2auth`），
+  首版规则因此静默失效；
+- 实测：QPS=2 时连击 8 次 → `200,200,429,429,429,429,429,429`，响应体
+  `{"code":42900,"message":"请求过于频繁，请稍后重试","traceId":...}`。
+
+### 5. 数据库迁移
+
+- `V4__auth_tokens.sql`：`refresh_token`（哈希、轮换链、可撤销）、`token_revocation`（jti 黑名单）、
+  `login_attempt`（限速与审计依据）；每小时清理过期数据。
+
+---
+
 ## P0 完成度
 
 P0 计划项已全部落地：骨架、网关双轨路由、auth RBAC、EMPI、统一鉴权、Helm/Argo CD、
-SkyWalking、AI 中台 Nacos 注册、Nacos 生产化。剩余事项进入 P1：
+SkyWalking、AI 中台 Nacos 注册、Nacos 生产化。
 
-- 逐接口权限点强制（当前网关只注入角色；`empi:patient:read_phi` 仅审计）
-- 令牌撤销/刷新（当前 TTL 内旧令牌仍有效）
-- 登录限速与 Sentinel 规则落地
-- Argo Rollouts 灰度发布、日志采集（Loki/ELK）
+P1 已完成第一批（权限点强制、刷新令牌与撤销、登录限速、入口限流）。剩余 P1：
+
+- Argo Rollouts 灰度发布（当前为滚动发布 + PDB）
+- 日志采集（Loki/ELK）与告警规则
+- 会话管理界面（查看/踢出在线设备，基于 refresh_token 表）
+- 审计日志跨域汇聚（当前各域 change_log 自治）

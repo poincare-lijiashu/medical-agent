@@ -12,6 +12,12 @@ spring:
         username: ${NACOS_USERNAME:nacos}
         password: ${NACOS_PASSWORD:nacos}
         namespace: ${NACOS_NAMESPACE:public}
+    sentinel:
+      filter:
+        # 关闭 SCA 的 WebFlux URL 维度过滤器：网关限流统一走路由维度的
+        # SentinelGatewayFilter（SentinelGatewayConfig）。两者同时开启会双重拦截，
+        # 且 WebFlux 过滤器抛出的 FlowException 无人处理会变成 500（2026-10-30 实测）
+        enabled: false
     # 双轨路由（计划书 D9.2 迁移第 1 步：接口兼容层）：
     #   v1 → 现行 Python 服务（AI 中台 + 既有 61 端点），路径原样透传，老代码零改动
     #   v2 → Java 微服务，路径形如 /api/v2/{service}/...；StripPrefix=3 去掉
@@ -58,8 +64,14 @@ medassist:
       enabled: ${GATEWAY_AUTH_ENABLED:true}
       issuer: ${JWT_ISSUER:medassist-auth}
       secret: ${JWT_SECRET:<dev-jwt-secret>}
+      # auth 内网地址：仅用于撤销名单增量同步（不参与请求转发；转发地址见路由配置）
+      auth-uri: ${AUTH_SERVICE_URI:http://127.0.0.1:8081}
+      revocation-sync:
+        enabled: ${REVOCATION_SYNC_ENABLED:true}
+        interval: ${REVOCATION_SYNC_INTERVAL:PT15S}
       whitelist:
         - /api/v2/auth/login
+        - /api/v2/auth/refresh
         # K8s 探针路径为 /actuator/health/liveness|readiness，必须整段放行，
         # 否则探针会拿到 401 被判失败（网关自身的 actuator 也会经过本过滤器）
         - /actuator/**
@@ -67,6 +79,17 @@ medassist:
         - /api/v2/**
       deny-paths:
         - /api/v2/*/internal/**
+    # 入口限流（Sentinel 核心 API，路径前缀维度）。登录失败的账号维度限速在 auth 服务内实现。
+    # 必须用列表：Map 键中的 "/" 会被 Spring 宽松绑定吞掉（实测 /api/v2/auth → apiv2auth）
+    sentinel:
+      enabled: ${SENTINEL_GATEWAY_ENABLED:true}
+      flow-rules:
+        - path: /api/v1
+          qps: ${SENTINEL_QPS_AI_CORE:500}
+        - path: /api/v2/auth
+          qps: ${SENTINEL_QPS_AUTH:200}
+        - path: /api/v2/empi
+          qps: ${SENTINEL_QPS_EMPI:200}
 
 logging:
   level:

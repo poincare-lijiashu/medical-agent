@@ -198,13 +198,18 @@ Chart 在 `autoscaling.enabled=true` 时不渲染 `spec.replicas`，且 Applicat
 
 - Chart 的 initContainer `skywalking-agent` 从 `apache/skywalking-java-agent:9.8.0-java21`
   复制 agent 到 emptyDir（不重建镜像、不污染业务镜像）；
+- **必须激活服务端框架插件**：Spring Cloud Gateway / Spring MVC 的服务端插件在 agent 的
+  `optional-plugins/` 下，默认不加载。实测未激活时三个服务只有实例心跳、**没有链路**；
+  Chart 通过 `external.skywalking.optionalPlugins` 在 initContainer 中把
+  `spring-cloud-gateway-4.x`、`spring-webflux-6.x`、`springmvc-annotation-6.x` 复制到 `plugins/`；
 - 通过 `JAVA_TOOL_OPTIONS` 注入：
   `-javaagent:/opt/skywalking-agent/skywalking-agent.jar -Dskywalking.agent.service_name=<release>-<svc> -Dskywalking.collector.backend_service=<oap>:11800`
-- Spring Cloud Gateway 使用 Reactor Netty，Java agent 的 `spring-webflux` / `reactor-netty`
-  插件负责 WebFlux 入口埋点与 `sw8` 头跨进程传播，下游 auth/empi 自动串联为同一 trace；
-- 采样默认 `-1`（全量）：院内 QPS 低，完整链路是审计与纠纷举证依据。
+- 采样默认 `-1`（全量）：院内 QPS 低，完整链路是审计与纠纷举证依据；
+- 关闭方式：`external.skywalking.enabled=false`（不注入 agent，JVM 参数与镜像保持无 APM 依赖）。
 
-关闭方式：`external.skywalking.enabled=false`（不注入 agent，JVM 参数与镜像保持无 APM 依赖）。
+**实测证据（2026-10-30）**：同一 traceId 内 gateway `/api/v2/auth/login` → auth `POST:/login`
+→ HikariCP/PostgreSQL spans 共 32 个 span、1 个 `CROSS_PROCESS` 引用；empi 查询链路
+29 个 span（gateway 16 + empi 13，含 JDBC）。
 
 ### 6.2 Python（AI 中台）
 
@@ -265,10 +270,26 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d
 
 | 项目 | 原因 | 复核方式 |
 |---|---|---|
-| SkyWalking OAP 全链路 | 外网到 archive.apache.org 约 10KB/s（121MB 发行包需数小时），Docker Hub 不可达无法拉 OAP 镜像 | 集群内按 §6.4 清单验证 |
-| 镜像构建 | 本机无 `maven:3.9-eclipse-temurin-21` 基础镜像且 Docker Hub 不可达 | 院内 Harbor 代理/CI 构建 |
+| 镜像构建 | 本机 Maven 基础镜像拉取时镜像站 TLS 超时（eclipse-temurin 运行镜像已拉到） | 院内 Harbor 代理 / CI 构建 |
 | `kubectl apply` / Argo 同步 | 本机无 K8s 集群 | staging 环境首次同步即为验证 |
 | MySQL 持久化 Nacos | 本机无 MySQL 镜像 | 按 `nacos/README.md` 在预发布环境执行 |
+
+**2026-10-30 补充实测（SkyWalking 全链路，已在本机完成）**
+
+> 先前"外网 10KB/s 无法下载"的结论有误：实际系统代理 `<proxy>` 与清华镜像均可用
+> （清华镜像实测 7.3 MB/s），Docker 也配置了镜像站。已下载 APM 11.0.0 发行包与 Java agent 9.8.0
+> 并完成端到端验证。
+
+| 场景 | 结果 |
+|---|---|
+| OAP 11.0.0 + PostgreSQL 存储启动 | 正常（gRPC 11800 / HTTP 12800），表自动创建 |
+| Java agent 挂载 gateway/auth/empi | 服务出现在 OAP 服务列表 |
+| 跨进程链路（登录） | 同一 traceId 内 gateway `/api/v2/auth/login` → auth `POST:/login` → JDBC spans，32 个 span、1 个 `CROSS_PROCESS` |
+| 跨进程链路（患者查询） | 29 个 span（gateway 16 + empi 13，含 HikariCP/PostgreSQL） |
+| Python agent | `medassist-ai-core` 服务与 `/healthz` 链路进入 OAP |
+| 关键坑 1 | 服务端框架插件在 agent 的 `optional-plugins/`，未激活时只有心跳没有链路 → Chart 已自动复制 |
+| 关键坑 2 | `sw-python` 在 Windows 下子进程存活不稳定 → 本机改用侵入式 `config.init+agent.start` 验证；容器（Linux）仍走 entrypoint 的 `sw-python` |
+| 关键坑 3 | `apache-skywalking` wheel 缺 protocol，`--no-binary` 从 sdist 安装 |
 
 ---
 

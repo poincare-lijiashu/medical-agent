@@ -3,6 +3,7 @@ package com.medassist.gateway.filter;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.gateway.config.GatewayAuthConfig;
 import com.medassist.gateway.config.GatewayAuthProperties;
+import com.medassist.gateway.security.TokenRevocationCache;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -49,7 +50,8 @@ class AuthGlobalFilterTest {
 
     private final GatewayAuthProperties props = props(true);
     private final JwtDecoder decoder = new GatewayAuthConfig().jwtDecoder(props);
-    private final AuthGlobalFilter filter = new AuthGlobalFilter(props, decoder);
+    private final TokenRevocationCache revocations = new TokenRevocationCache(props);
+    private final AuthGlobalFilter filter = new AuthGlobalFilter(props, decoder, revocations);
 
     @Test
     void whitelistedLoginPassesWithoutToken() {
@@ -81,13 +83,16 @@ class AuthGlobalFilterTest {
 
     @Test
     void forgedIdentityHeadersAreStrippedAndReplacedFromToken() {
-        String token = token("doctor01", "DEPT-A", "DOCTOR");
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"),
+                List.of("empi:patient:read", "empi:patient:read_phi"));
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v2/empi/patients")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .header(AuthHeaders.ACTOR, "hacker")
                         .header(AuthHeaders.USER_ID, "00000000-0000-0000-0000-000000000000")
                         .header(AuthHeaders.ROLES, "ADMIN")
+                        .header(AuthHeaders.PERMISSIONS, "*")
+                        .header(AuthHeaders.TOKEN_ID, "00000000-0000-0000-0000-000000000000")
                         .header(AuthHeaders.ORG, "FAKE-DEPT")
                         .build());
         CapturingChain chain = new CapturingChain();
@@ -99,6 +104,9 @@ class AuthGlobalFilterTest {
         assertThat(downstream.getFirst(AuthHeaders.ACTOR)).isEqualTo("doctor01");
         assertThat(downstream.getFirst(AuthHeaders.USER_ID)).isNotEqualTo("00000000-0000-0000-0000-000000000000");
         assertThat(downstream.getFirst(AuthHeaders.ROLES)).isEqualTo("DOCTOR");
+        assertThat(downstream.getFirst(AuthHeaders.PERMISSIONS))
+                .isEqualTo("empi:patient:read,empi:patient:read_phi");
+        assertThat(downstream.getFirst(AuthHeaders.TOKEN_ID)).isNotEqualTo("00000000-0000-0000-0000-000000000000");
         assertThat(downstream.getFirst(AuthHeaders.ORG)).isEqualTo("DEPT-A");
         assertThat(downstream.getFirst(AuthHeaders.TRACE_ID)).isNotBlank();
     }
@@ -171,7 +179,8 @@ class AuthGlobalFilterTest {
 
     @Test
     void disabledSwitchStillStripsForgedHeaders() {
-        AuthGlobalFilter relaxed = new AuthGlobalFilter(props(false), decoder);
+        AuthGlobalFilter relaxed = new AuthGlobalFilter(props(false), decoder,
+                new TokenRevocationCache(props(false)));
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v2/empi/patients")
                         .header(AuthHeaders.ACTOR, "hacker")
@@ -197,22 +206,30 @@ class AuthGlobalFilterTest {
 
     private static GatewayAuthProperties props(boolean enabled) {
         return new GatewayAuthProperties(enabled, ISSUER, SECRET,
-                List.of("/api/v2/auth/login", "/actuator/health", "/actuator/info"),
+                List.of("/api/v2/auth/login", "/api/v2/auth/refresh", "/actuator/**"),
                 List.of("/api/v2/**"),
-                List.of("/api/v2/*/internal/**"));
+                List.of("/api/v2/*/internal/**"),
+                "http://127.0.0.1:8081",
+                new GatewayAuthProperties.RevocationSync(false, java.time.Duration.ofSeconds(15)));
     }
 
     private static String token(String username, String org, String... roles) {
+        return token(username, org, List.of(roles), List.of());
+    }
+
+    private static String token(String username, String org, List<String> roles, List<String> permissions) {
         SecretKey key = new SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
         JwtEncoder encoder = new NimbusJwtEncoder(new ImmutableSecret<>(key));
         Instant now = Instant.now();
         JwtClaimsSet.Builder claims = JwtClaimsSet.builder()
                 .issuer(ISSUER)
                 .subject(UUID.randomUUID().toString())
+                .id(UUID.randomUUID().toString())
                 .issuedAt(now)
                 .expiresAt(now.plusSeconds(600))
                 .claim("username", username)
-                .claim("roles", List.of(roles));
+                .claim("roles", roles)
+                .claim("permissions", permissions);
         if (org != null) {
             claims.claim("org", org);
         }

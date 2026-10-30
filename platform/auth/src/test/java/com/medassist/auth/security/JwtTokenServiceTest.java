@@ -18,6 +18,7 @@ class JwtTokenServiceTest {
 
     private static final String SECRET = "unit-test-secret-0123456789abcdefghijklmnop";
     private static final String ISSUER = "medassist-auth";
+    private static final List<String> PERMISSIONS = List.of("empi:patient:read", "ai:assist:use");
 
     private static final UserAccount USER = new UserAccount(
             UUID.fromString("11111111-2222-3333-4444-555555555555"),
@@ -26,10 +27,9 @@ class JwtTokenServiceTest {
 
     @Test
     void issueAndVerifyRoundTrip() {
-        JwtTokenService service = new JwtTokenService(
-                new JwtProperties(ISSUER, SECRET, Duration.ofHours(8)));
+        JwtTokenService service = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
 
-        JwtTokenService.IssuedToken issued = service.issue(USER, List.of("DOCTOR", "NURSE"));
+        JwtTokenService.IssuedToken issued = service.issue(USER, List.of("DOCTOR", "NURSE"), PERMISSIONS);
 
         assertThat(issued.token()).isNotBlank();
         assertThat(issued.expiresInSeconds()).isBetween(8 * 3600 - 5L, 8 * 3600L);
@@ -39,15 +39,15 @@ class JwtTokenServiceTest {
         assertThat(claims.username()).isEqualTo("zhangsan");
         assertThat(claims.displayName()).isEqualTo("张三");
         assertThat(claims.roles()).containsExactly("DOCTOR", "NURSE");
+        assertThat(claims.permissions()).containsExactlyElementsOf(PERMISSIONS);
         assertThat(claims.orgCode()).isEqualTo("DEPT-01");
         assertThat(claims.tokenId()).isEqualTo(issued.tokenId());
     }
 
     @Test
     void tamperedTokenRejected() {
-        JwtTokenService service = new JwtTokenService(
-                new JwtProperties(ISSUER, SECRET, Duration.ofHours(8)));
-        String token = service.issue(USER, List.of("ADMIN")).token();
+        JwtTokenService service = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
+        String token = service.issue(USER, List.of("ADMIN"), List.of()).token();
 
         // 篡改签名段（保留结构，改变最后 4 个字符）
         String tampered = token.substring(0, token.length() - 4) + "AAAA";
@@ -61,27 +61,24 @@ class JwtTokenServiceTest {
     @Test
     void tokenSignedByOtherSecretRejected() {
         JwtTokenService issuer = new JwtTokenService(
-                new JwtProperties(ISSUER, "another-secret-0123456789abcdefghijklmnop", Duration.ofHours(8)));
-        JwtTokenService verifier = new JwtTokenService(
-                new JwtProperties(ISSUER, SECRET, Duration.ofHours(8)));
+                props(ISSUER, "another-secret-0123456789abcdefghijklmnop", Duration.ofHours(8)));
+        JwtTokenService verifier = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
 
-        assertThat(verifier.verify(issuer.issue(USER, List.of("ADMIN")).token())).isEmpty();
+        assertThat(verifier.verify(issuer.issue(USER, List.of("ADMIN"), List.of()).token())).isEmpty();
     }
 
     @Test
     void tokenFromOtherIssuerRejected() {
         JwtTokenService otherIssuer = new JwtTokenService(
-                new JwtProperties("legacy-ai-platform", SECRET, Duration.ofHours(8)));
-        JwtTokenService verifier = new JwtTokenService(
-                new JwtProperties(ISSUER, SECRET, Duration.ofHours(8)));
+                props("legacy-ai-platform", SECRET, Duration.ofHours(8)));
+        JwtTokenService verifier = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
 
-        assertThat(verifier.verify(otherIssuer.issue(USER, List.of("ADMIN")).token())).isEmpty();
+        assertThat(verifier.verify(otherIssuer.issue(USER, List.of("ADMIN"), List.of()).token())).isEmpty();
     }
 
     @Test
     void expiredTokenRejected() throws Exception {
-        JwtTokenService verifier = new JwtTokenService(
-                new JwtProperties(ISSUER, SECRET, Duration.ofHours(8)));
+        JwtTokenService verifier = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
 
         // 签发器不允许 exp 早于 iat，这里用 Nimbus 直接构造一枚"已过期"的合法签名令牌
         Instant expiredAt = Instant.now().minusSeconds(600);
@@ -102,10 +99,14 @@ class JwtTokenServiceTest {
 
     @Test
     void shortSecretRejectedAtStartup() {
-        assertThatThrownBy(() -> new JwtTokenService(new JwtProperties(ISSUER, "too-short", Duration.ofHours(1))))
+        assertThatThrownBy(() -> new JwtTokenService(props(ISSUER, "too-short", Duration.ofHours(1))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("JWT");
-        assertThatThrownBy(() -> new JwtTokenService(new JwtProperties(ISSUER, null, Duration.ofHours(1))))
+        assertThatThrownBy(() -> new JwtTokenService(props(ISSUER, null, Duration.ofHours(1))))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    private static JwtProperties props(String issuer, String secret, Duration ttl) {
+        return new JwtProperties(issuer, secret, ttl, Duration.ofDays(7));
     }
 }

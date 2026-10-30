@@ -23,8 +23,8 @@ external:
     existingSecret: medassist-nacos
   jwt:
     issuer: medassist-auth
-    # 生产建议 30 分钟 + 刷新令牌（P1 落地后调整；当前 8 小时覆盖单班次）
-    ttl: PT8H
+    ttl: PT30M
+    refreshTtl: P7D
     existingSecret: medassist-jwt
   skywalking:
     enabled: true

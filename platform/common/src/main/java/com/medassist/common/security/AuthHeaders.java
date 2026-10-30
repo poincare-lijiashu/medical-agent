@@ -23,6 +23,17 @@ public final class AuthHeaders {
     /** 角色码列表，英文逗号分隔（如 {@code DOCTOR,NURSE}）。 */
     public static final String ROLES = "X-Roles";
 
+    /**
+     * 权限点列表（英文逗号分隔），由令牌中的 {@code permissions} 声明注入。
+     *
+     * <p>与角色不同：业务接口授权只看权限点，不看角色名，新增角色无需改业务代码。
+     * 权限为**签发时刻快照**，角色调整后需重新登录才生效（与角色 claim 同一边界）。
+     */
+    public static final String PERMISSIONS = "X-Permissions";
+
+    /** 当前令牌 ID（JWT {@code jti}），用于登出撤销与审计串联。 */
+    public static final String TOKEN_ID = "X-Token-Id";
+
     /** 所属科室编码（未绑定科室时网关不下发该头）。 */
     public static final String ORG = "X-Org";
 
@@ -30,7 +41,8 @@ public final class AuthHeaders {
     public static final String TRACE_ID = "X-Trace-Id";
 
     /** 客户端可能伪造、网关必须一律剥离的请求头。 */
-    public static final List<String> CLIENT_SUPPLIED = List.of(ACTOR, USER_ID, ROLES, ORG, TRACE_ID);
+    public static final List<String> CLIENT_SUPPLIED =
+            List.of(ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, TRACE_ID);
 
     private AuthHeaders() {
     }
