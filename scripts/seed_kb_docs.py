@@ -30,6 +30,7 @@ KB_DOCS_DIR = ROOT / "data" / "kb_docs"
 KB_GUIDELINES_V2_DIR = ROOT / "data" / "kb_guidelines_v2"
 DOC_TAG = "kb_docs"
 DOC_TAG_V2 = "clinical_guidelines_v2"
+DOC_TAG_LOCAL = "local_corpus"  # 已废弃的 v0 教学示例（purge 子命令清除数据、保留 manifest 审计行）
 SUPPORTED = (".pdf", ".md", ".markdown", ".txt")
 
 
@@ -126,6 +127,8 @@ def main() -> int:
         print("clean skip", str(e)[:60], flush=True)
     col.insert("medical_kb", data)
     col.load_collection("medical_kb")
+    # 注意：MilvusClient 无 flush API（落盘由服务端管理）；num_entities 短暂滞后属
+    # 正常现象，监控一律用 query count（见 DEPLOY.md Milvus 运维规则）。
     # W4.1 复盘：v1 模式此前不写 manifest——入库成功但 admin 界面不可见、不可删。
     # 与 main_v2 对齐：登记 manifest（kb_list/kb_delete 均以 manifest 为准）。
     from backend.core.kb_ingest import register_doc
@@ -242,7 +245,7 @@ GUIDELINES_V2: list[tuple[str, str, int, list[str]]] = [
         "门诊有基础疾病或老年人：β内酰胺类联合大环内酯类，或呼吸喹诺酮类单药。",
         "住院非重症患者：β内酰胺类联合大环内酯类或呼吸喹诺酮单药；入住 ICU 的重症 CAP：β内酰胺类联合大环内酯类或联合呼吸喹诺酮。",
         "不推荐氨基糖苷类单药治疗肺炎；有误吸风险者应覆盖口腔厌氧菌。",
-        "流感病毒感染后继发细菌性肺炎应考虑金黄色葡萄球菌感染可能。",
+        "流感病毒感染后继发细菌性肺炎应考虑金黄色葡萄球菌感染可能：流感症状一度缓解后再加重、影像快速进展或出现空洞者尤其警惕，经验治疗覆盖金葡菌并结合培养调整。",
         "病原学检查（血/痰培养、肺炎链球菌与军团菌尿抗原、呼吸道病原核酸检测）主要用于重症、初始治疗无效及流行病学可疑特殊病原者，轻症不推荐常规。",
         "启动经验性治疗后 48-72 小时评估病情：无好转应考虑药物未能覆盖病原、耐药、并发症或非感染性疾病，并进一步检查。",
         "抗感染疗程：一般 5-7 天，非典型病原、重症或出现肺外并发症者可适当延长；临床稳定（体温正常、生命体征平稳）后可序贯口服。",
@@ -400,7 +403,7 @@ GUIDELINES_V2: list[tuple[str, str, int, list[str]]] = [
         "双膦酸盐（阿仑膦酸钠、唑来膦酸）为初始治疗一线选择；口服阿仑膦酸钠需晨起空腹足量水送服、服药后 30 分钟保持直立，反流性食管炎/吞咽困难者改静脉唑来膦酸；用药前处理口腔问题（颌骨坏死风险）。",
         "地舒单抗适用于高骨折风险者（肾功能不全者可用），需严格按每 6 个月给药且不可骤停（停药反跳多发性椎体骨折，需双膦酸盐序贯）。",
         "特立帕肽等促骨形成药物适用于极高骨折风险（多发脆性骨折/极低 T 值）者，疗程不超过 24 个月，之后序贯抗骨吸收药物维持获益。",
-        "降钙素不作为一线抗骨松药物，可用于骨折后急性骨痛短期缓解。",
+        "降钙素不作为一线抗骨松药物，仅用于骨折后急性骨痛的短期缓解（一般 2-4 周内）；长期疗效有限且有肿瘤风险信号警示，不替代双膦酸盐等核心抗骨松治疗。",
         "椎体脆性骨折新鲜期疼痛明显者可评估椎体强化术（PVP/PKP）；同时必须启动抗骨松药物治疗预防再骨折。",
         "治疗监测：DXA 每 1-2 年复查；骨转换标志物（CTX/P1NP）3-6 个月评估依从性与疗效；双膦酸盐治疗 3-5 年后评估药物假期（继续或暂停）并持续随访。",
         "糖皮质激素诱导性骨质疏松：长期 ≥2.5-7.5 mg/d 泼尼松等效剂量者应评估 FRAX 并早期干预（钙+维生素 D 基础上按风险选用双膦酸盐等）。",
@@ -592,13 +595,41 @@ def main_v2() -> int:
         print("clean skip", str(e)[:60], flush=True)
     col.insert("medical_kb", data)
     col.load_collection("medical_kb")
+    # MilvusClient 无 flush API（见 main() 注释与 DEPLOY.md 运维规则）。
     register_doc(DOC_TAG_V2, "临床指南要点库（真实出处）", len(data))
     _mark_v2_replaced()
     print(f"INSERTED {len(data)} real-guideline entries (tag={DOC_TAG_V2})", flush=True)
     return 0
 
 
+def purge_deprecated() -> int:
+    """W2.4 语料收尾（评测 P0-3）：物理清除已废弃的 local_corpus demo 数据
+    （21 条教学示例，与新 302 条真实出处语料竞争召回——Hp 探针实测 top1 被旧 demo
+    抢占）。manifest 审计行保留（name 标记数据已清除），幂等。
+
+    用法：python scripts/seed_kb_docs.py purge
+    """
+    from backend.core.medical_kb import _collection
+
+    col = _collection()
+    col.delete("medical_kb", filter=f'document_id == "{DOC_TAG_LOCAL}"')
+    # MilvusClient 无 flush API；逻辑删除对 query 即时生效（过滤条件排除该 tag）。
+    from backend.core.kb_ingest import _load_manifest, _save_manifest
+    m = _load_manifest()
+    info = m.get(DOC_TAG_LOCAL)
+    if info:
+        info["chunks"] = 0
+        if "数据已清除" not in str(info.get("name", "")):
+            info["name"] = f"{info.get('name', DOC_TAG_LOCAL)}（数据已清除，仅存审计记录）"
+        _save_manifest(m)
+    col.load_collection("medical_kb")
+    print(f"PURGED deprecated corpus (tag={DOC_TAG_LOCAL}); manifest audit row kept", flush=True)
+    return 0
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "v2":
         sys.exit(main_v2())
+    if len(sys.argv) > 1 and sys.argv[1] == "purge":
+        sys.exit(purge_deprecated())
     sys.exit(main())

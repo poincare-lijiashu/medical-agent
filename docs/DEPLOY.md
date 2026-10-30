@@ -469,9 +469,19 @@ base_url=`http://<院内地址>/v1`，model_id 对应本地权重）→ 连通�
 localhost/.local 域名无条件拒绝（回环常见写法，白名单可覆盖自有内网域名）。
 
 **知识库语料全本地化**：两份教材 PDF + 中文指南要点库（`clinical_guidelines_v2`，
-本地 md 落盘可审计）+ 本地教学语料均可离线入库；PubMed 摘要走**两段式离线管线**
-（可达环境跑 `seed_kb_pubmed.py` 产出缓存 → 内网 `MEDICAL_OFFLINE_JSON=<缓存>` 入库，
-或 `MEDICAL_EUTILS_BASE` 指向院内代理）——系统运行时**零外网依赖**。
+**27 部/302 条**，本地 md 落盘 `data/kb_guidelines_v2/` 可审计）+ 本地教学语料均可离线入库；
+PubMed 摘要走**两段式离线管线**（可达环境跑 `seed_kb_pubmed.py` 产出缓存 → 内网
+`MEDICAL_OFFLINE_JSON=<缓存>` 入库，或 `MEDICAL_EUTILS_BASE` 指向院内代理）——
+系统运行时**零外网依赖**。
+
+**Milvus 运维规则（W2.4 评测沉淀）**：
+1. 监控行数用 `query(tenant_id=="tenant_default")` 计数，**不要用 `num_entities`**——
+   后者滞后于写入且包含已逻辑删除未 compact 的行，两个方向都会失真；
+2. `MilvusClient` **无 flush API**（落盘由服务端管理，逻辑删除对 query 即时生效）；
+   需要精确统计/compact 时由运维经 ORM 连接（`utility.flush("medical_kb")`）手动执行；
+3. 大量删除后（如 `purge` 子命令清 local_corpus）可择机触发 compact 回收存储；
+4. 语料守护测试 `tests/test_guidelines_corpus_guard.py` 锁定规模/结构/卫生/落盘一致性，
+   修改语料前先看它。
 
 ### 密钥轮换操作（W3.5，JWT secret 零踢出）
 

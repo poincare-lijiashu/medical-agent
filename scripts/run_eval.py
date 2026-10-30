@@ -101,8 +101,10 @@ CASES = [
 
 
 def load_cases(path: str | None) -> list[dict]:
-    """加载用例为统一结构。path 为空 → 内置常规集；否则读难题集 JSON
-    {"cases":[{"q","expect_hit","note"}]}（均为 literature 检索类）。"""
+    """加载用例为统一结构。path 为空 → 内置常规集；否则读 JSON
+    {"cases":[{"q","expect_hit","note","kws"}]}（均为 literature 检索类）。
+    W2.4 扩展：用例可携 kws（任一小写子串命中答案且非 fallback 即通过）——
+    比纯 expect_hit（仅断言非兜底）更强的质量验证，用于新语料病种覆盖。"""
     if not path:
         return [{"agent": a, "question": q, "kws": kws, "note": ""}
                 for a, q, kws in CASES]
@@ -113,8 +115,10 @@ def load_cases(path: str | None) -> list[dict]:
         data = json.load(f)
     cases = []
     for c in data.get("cases", []):
+        kws = c.get("kws")
         cases.append({"agent": str(c.get("agent", "literature")), "question": str(c["q"]),
                       "expect_hit": bool(c.get("expect_hit", True)),
+                      "kws": [str(k) for k in kws] if kws else None,
                       "note": str(c.get("note", ""))})
     return cases
 
@@ -144,9 +148,9 @@ def run_case(case: dict) -> dict:
     elapsed = round(time.monotonic() - t0, 2)
     ans = (o.get("answer") or "").lower()
     fb = is_fallback(o)
-    if "kws" in case:
+    if case.get("kws"):
         hit = (not fb) and any(k.lower() in ans for k in case["kws"])
-        expect = "kw:" + "/".join(case["kws"])
+        expect = "kw:" + "/".join(case["kws"])[:60]
     else:
         hit = (not fb) if case["expect_hit"] else fb
         expect = f"expect_hit={case['expect_hit']}"
