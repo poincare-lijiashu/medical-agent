@@ -495,6 +495,14 @@ DB 密码轮换与三类凭据演练记录：见 docs/KEY_ROTATION_DRILL.md（�
 `python scripts/drill_key_rotation.py llm|db`；DB 轮换要点——ALTER USER 不中断运行中长连接，
 但重启/新实例须新 DSN，PG 无双密码窗口，靠滚动重启顺序保证连续性）。
 
+# W3.5/W4.4 配套：代码仓库跨盘备份（mirror + bundle 双保险）——事故记录见下
+# 事故（2026-10-30）：备份脚本早期修订（无 BOM UTF-8 中文注释 → PS5.1 按 ANSI 解析错位，
+# 变量解析为 null，递归 Remove-Item 打错路径）**摧毁了源工作树**；仓库内容仅因几分钟前
+# 生成的 bundle 快照得以完整恢复（HEAD 84ed1fc）。教训与加固版脚本（scripts/backup_repo.ps1）：
+# ①含变量拼接的递归删除绝不与解析脆弱的脚本共存——脚本全 ASCII、先建临时名验证后原子替换、
+# 永不预删有效备份；②源完整性自检（.git 存在 + HEAD 可读）不过即中止；③bundle 是
+# 救命稻草——按日期留存（git clone <bundle> <dir> 即可恢复，无需已有 repo）。
+
 ### 三、当前等待院方的两件事
 
 1. **接口规范**：HIS/病案系统的提交-回写接口规范（触发时机、字段映射、驳回回写格式、重试与幂等约定）——拿到即可开发适配层；
