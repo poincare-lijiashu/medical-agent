@@ -24,8 +24,8 @@ import java.util.UUID;
 /**
  * 账号管理 API。
  *
- * <p>actor 来源：P0 阶段取网关注入的 {@code X-Actor}（P0-4 接入 JWT 后改为从令牌声明取，
- * 届时本参数由网关侧统一剥离，客户端无法伪造）。
+ * <p>actor 来源：网关注入的 {@code X-Actor}（P0-4 起由网关按 JWT 声明重写，
+ * 客户端提交的同名头会被网关先行剥离，无法伪造）。
  */
 @RestController
 @RequestMapping("/users")

@@ -44,4 +44,9 @@ public record ApiResponse<T>(
     public static <T> ApiResponse<T> fail(ErrorCode errorCode, String message) {
         return new ApiResponse<>(errorCode.code(), message, null, null, Instant.now());
     }
+
+    /** 失败响应并携带链路 ID（网关在路由前拒绝请求时使用，此时链路 ID 由网关生成）。 */
+    public static <T> ApiResponse<T> fail(ErrorCode errorCode, String message, String traceId) {
+        return new ApiResponse<>(errorCode.code(), message, null, traceId, Instant.now());
+    }
 }

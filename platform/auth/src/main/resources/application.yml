@@ -36,6 +36,15 @@ spring:
         password: ${NACOS_PASSWORD:nacos}
         namespace: ${NACOS_NAMESPACE:public}
 
+# ---- JWT 签发（auth 是唯一签发方；网关用同一密钥校验）----
+# 生产必须注入 JWT_SECRET（≥32 字节，由密钥管理下发）；默认值仅本地联调，启动日志会告警。
+medassist:
+  auth:
+    jwt:
+      issuer: ${JWT_ISSUER:medassist-auth}
+      secret: ${JWT_SECRET:<dev-jwt-secret>}
+      ttl: ${JWT_TTL:PT8H}
+
 management:
   endpoints:
     web:

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 角色与组织架构只读仓储（配置数据变更频率低，全部走缓存友好的一次性查询）。
@@ -61,5 +62,23 @@ public class RbacRepository {
                 .param(code)
                 .query(Long.class)
                 .single() > 0;
+    }
+
+    /**
+     * 账号的有效权限点（角色 → 权限聚合，去重排序）。
+     *
+     * <p>不读令牌内快照：角色调整后下一次请求即生效，避免"已撤权仍可操作"。
+     */
+    public List<String> permissionsOfUser(UUID userId) {
+        return jdbc.sql("""
+                        SELECT DISTINCT rp.permission_code
+                          FROM auth_svc.user_role ur
+                          JOIN auth_svc.role_permission rp ON rp.role_code = ur.role_code
+                         WHERE ur.user_id = ?
+                         ORDER BY rp.permission_code
+                        """)
+                .param(userId)
+                .query(String.class)
+                .list();
     }
 }

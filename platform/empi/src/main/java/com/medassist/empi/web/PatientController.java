@@ -25,8 +25,9 @@ import java.util.UUID;
 /**
  * 患者主索引 API。
  *
- * <p>actor 取网关注入的 {@code X-Actor}（P0-4 接入 JWT 后由网关覆盖，客户端不可伪造）；
- * {@code reveal=true} 需 read_phi 权限——P0 暂以审计留痕替代，鉴权在 P0-4 补齐。
+ * <p>actor 取网关注入的 {@code X-Actor}（P0-4 起由网关按 JWT 声明重写，客户端不可伪造）；
+ * {@code reveal=true} 所需的 {@code empi:patient:read_phi} 权限点强制校验列入 P1 授权矩阵，
+ * 当前仅强制审计留痕（见 README「已知边界」）。
  */
 @RestController
 @RequestMapping("/patients")

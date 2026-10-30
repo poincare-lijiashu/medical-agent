@@ -46,6 +46,25 @@ management:
     health:
       show-details: never
 
+# ---- 统一鉴权（P0-4）----
+# 受保护前缀内必须携带有效 Bearer JWT；失败统一 401 壳。
+# 白名单只放行登录与健康检查；/api/v2/*/internal/** 直接 404，内部端点不经网关外泄。
+# v1 兼容层（/api/v1/**）由 Python 服务自行鉴权，P1 迁移完成后收敛到网关。
+medassist:
+  gateway:
+    auth:
+      enabled: ${GATEWAY_AUTH_ENABLED:true}
+      issuer: ${JWT_ISSUER:medassist-auth}
+      secret: ${JWT_SECRET:<dev-jwt-secret>}
+      whitelist:
+        - /api/v2/auth/login
+        - /actuator/health
+        - /actuator/info
+      protected-paths:
+        - /api/v2/**
+      deny-paths:
+        - /api/v2/*/internal/**
+
 logging:
   level:
     root: INFO

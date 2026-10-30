@@ -22,10 +22,10 @@
 
 | 模块 | 端口 | 职责 | 状态 |
 |------|------|------|------|
-| `platform-common` | — | 统一响应 `ApiResponse`、稳定错误码 `ErrorCode`、分页 `PageResult` | 已交付 |
-| `platform-gateway` | 8080 | 统一入口：双轨路由（v1→Python / v2→Java）、Nacos 发现、Sentinel 限流 | 已交付（路由已验证） |
-| `platform-auth` | 8081 | 用户与权限中心（RBAC、组织架构） | 骨架（自检端点已通） |
-| `platform-empi` | 8082 | 患者主索引（建档、合并、跨系统标识映射） | 骨架（自检端点已通） |
+| `platform-common` | — | 统一响应 `ApiResponse`、稳定错误码 `ErrorCode`、分页 `PageResult`、身份头契约 `AuthHeaders` | 已交付 |
+| `platform-gateway` | 8080 | 统一入口：双轨路由（v1→Python / v2→Java）、**JWT 统一鉴权**、Nacos 发现、Sentinel 限流 | 已交付（路由 + 鉴权已验证） |
+| `platform-auth` | 8081 | 用户与权限中心（RBAC、组织架构、登录签发 JWT） | 已交付（P0-3 / P0-4） |
+| `platform-empi` | 8082 | 患者主索引（建档、合并、跨系统标识映射） | 已交付（P0-3） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -47,6 +47,9 @@ mvn -f platform/pom.xml -DskipTests package
 java -jar platform/gateway/target/platform-gateway-0.1.0-SNAPSHOT.jar
 java -jar platform/auth/target/platform-auth-0.1.0-SNAPSHOT.jar
 java -jar platform/empi/target/platform-empi-0.1.0-SNAPSHOT.jar
+
+# 生产必须注入 JWT 密钥（auth 与 gateway 必须一致；本地联调可省略，默认值会打印 WARN）
+$env:JWT_SECRET = "<至少 32 字节的随机串>"
 ```
 
 Nacos 未启动时服务照常运行（`NACOS_DISCOVERY_ENABLED=false` 默认）；
@@ -60,9 +63,9 @@ docker compose up -d nacos
 ## 已验证（2026-10-30 实测）
 
 - `mvn package` 全模块通过，产物为可执行 Spring Boot jar（repackage 已显式绑定）
-- `GET /internal/health`（8081/8082）返回统一壳 `code=0`
-- `GET /api/v2/auth/internal/health` 经网关转发至 8081 → `platform-auth`
-- `GET /api/v2/empi/internal/health` 经网关转发至 8082 → `platform-empi`
+- `GET /internal/health`（8081/8082 直连）返回统一壳 `code=0`
+- 网关路由：`POST /api/v2/auth/login` 命中 8081、`GET /api/v2/empi/patients`（带令牌）命中 8082
+- 内部端点不经网关：`/api/v2/*/internal/**` 自 P0-4 起由网关直接 404（仅集群内可直连访问）
 - `GET /api/v1/medical/config` 经网关透传至 Python 服务，返回 401（下游鉴权生效，路由正确）
 - **Nacos 注册联通**：`platform-auth` 以 `NACOS_DISCOVERY_ENABLED=true` 启动后，
   `GET /nacos/v1/ns/instance/list?serviceName=platform-auth` 返回 1 个 healthy 实例
@@ -112,10 +115,82 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
 **实测结果（2026-10-30）**：建档（自动患者号 P20261030000001）、证件号重复 409、
 默认脱敏 / reveal 明文、合并（源转 MERGED、留痕、审计）、跨系统标识登记全部通过。
 
+## 统一鉴权（P0-4）
+
+### 职责划分
+
+- **auth 是唯一签发方**：`POST /api/v2/auth/login` 校验 bcrypt 后签发 HS256 JWT
+  （`sub`=账号 ID、`username`、`roles`、`org`、`iat/exp/jti`），默认 8 小时。
+- **网关本地校验**：不回调 auth（避免每请求多一次网络往返与单点故障），校验签名 + `iss` + `exp`，
+  通过后**剥离客户端身份头并按令牌重新写入**；失败返回统一壳 401（带 `traceId`）。
+- **下游只信任网关**：auth / empi 只读 `X-Actor / X-User-Id / X-Roles / X-Org`。
+
+### 身份头契约（`common.security.AuthHeaders`）
+
+| 请求头 | 来源 | 说明 |
+|---|---|---|
+| `X-Actor` | JWT `username` | 审计操作者 |
+| `X-User-Id` | JWT `sub` | 账号主键 |
+| `X-Roles` | JWT `roles` | 逗号分隔角色码 |
+| `X-Org` | JWT `org` | 科室编码（无则不注入） |
+| `X-Trace-Id` | 网关生成 | 链路 ID，客户端提交值一律丢弃 |
+
+客户端提交的同名头在**每个请求**（含白名单路径与 v1 兼容层）都会被先剥离，P0-3 遗留的
+「`X-Actor` 可伪造」漏洞已闭环。
+
+### 路径策略（`medassist.gateway.auth`）
+
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `whitelist` | `/api/v2/auth/login`、`/actuator/health`、`/actuator/info` | 免鉴权 |
+| `protected-paths` | `/api/v2/**` | 必须携带有效 `Authorization: Bearer` |
+| `deny-paths` | `/api/v2/*/internal/**` | 直接 404，内部端点不经网关外泄 |
+| `enabled` | `true` | 排障开关（关闭后仍清洗身份头） |
+
+`/api/v1/**` 在迁移期放行，由 Python 服务自行鉴权（实测下游返回其自身 401）；P1 收敛到网关。
+
+### 密钥与有效期（环境变量注入，代码无真实密钥）
+
+| 变量 | 默认 | 约束 |
+|---|---|---|
+| `JWT_SECRET` | 本地联调默认值 | **≥32 字节**，不足则两个服务拒绝启动；使用默认值时启动 WARN |
+| `JWT_ISSUER` | `medassist-auth` | 签发/校验必须一致，防跨系统令牌混用 |
+| `JWT_TTL` | `PT8H` | 覆盖单班次；生产可调短并配套刷新机制 |
+
+### 接口
+
+- `POST /api/v2/auth/login` → `{accessToken, tokenType, expiresIn, expiresAt, user{roles, permissions}}`
+- `GET /api/v2/auth/me`（需令牌）→ 角色与权限点实时查询，改角色下一次请求即生效
+- `POST /internal/token/verify`（仅集群内；网关对该路径返回 404）→ 排障用
+- 登录成功/失败均写 `change_log`（`LOGIN_SUCCESS` / `LOGIN_FAILED` + 原因），**不记录密码与令牌**
+
+### 实测（2026-10-30）
+
+| 场景 | 结果 |
+|---|---|
+| 无令牌访问 `/api/v2/empi/patients` | 401 + `WWW-Authenticate: Bearer` + 统一壳（含 traceId） |
+| 有效令牌访问同一路径 | 200，正常返回患者列表 |
+| 令牌 + 伪造 `X-Actor/X-User-Id/X-Roles/X-Org` | `/me` 返回令牌归属账号（伪造值被覆盖） |
+| `/api/v2/auth/internal/token/verify` | 404（不泄漏内部端点存在性） |
+| 损坏令牌 | 401 |
+| `/api/v1/medical/config` | 透传到 Python 服务，返回下游自身 401（网关未误拦） |
+| 错误密码 / 不存在账号 | 401 同一文案；`LOGIN_FAILED` 审计落库（含原因，且不被异常回滚） |
+| 开发默认密钥 | auth 与网关启动均打印 WARN |
+
+单元测试：`JwtTokenServiceTest` 6 项（签发/篡改/错密钥/错签发方/过期/短密钥）、
+`AuthGlobalFilterTest` 8 项（白名单/无令牌/伪造头/无科室/坏令牌/内部拒绝/v1 放行/开关关闭）全部通过。
+
+### 已知边界（诚实登记）
+
+- **无即时撤销**：停用账号后旧令牌在 TTL 内仍有效 → P1 短 TTL + 刷新令牌 / Redis 撤销列表
+- **无登录限速**：暴力破解防护依赖 P1 Sentinel 规则；当前失败审计已可作为检测数据源
+- **权限点未强制**：网关只注入角色，`empi:patient:read_phi` 等逐接口授权属 P1 授权矩阵
+  （当前 `reveal=true` 仅强制审计，任何已登录账号均可调用）
+- **业务服务裸端口可绕过网关**：auth/empi 只允许内网/集群网络访问（K8s NetworkPolicy）
+
 ## 尚未完成（诚实登记，对应计划书 D10 P0 剩余项）
 
 - K8s Helm Chart / Argo CD 清单（本机无集群，仅本地 compose 形态）
 - SkyWalking 全链路追踪接入
 - AI 中台 Nacos 注册（Python 侧 nacos-sdk-python）
-- 网关统一鉴权过滤器（JWT 校验 + 角色注入，当前仅路由透传）
 - Nacos 生产化（鉴权初始化 + 外部 MySQL + 密钥管理）
