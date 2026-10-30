@@ -14,6 +14,25 @@ from backend.core.stores import get_store
 
 _bearer = HTTPBearer(auto_error=False)
 
+# W3.1 httpOnly cookie 认证（转型计划书 WF-3）：令牌不再进 JS 可达存储。
+# 来源优先级：Bearer header（脚本/评测/服务间调用）→ httpOnly cookie（浏览器同源）。
+_COOKIE_AT = "medassist_at"   # 访问令牌 cookie（max_age=access 过期分钟）
+_COOKIE_RT = "medassist_rt"   # 刷新令牌 cookie（max_age=refresh 过期分钟）
+
+
+def _token_from_request(creds: Optional[HTTPAuthorizationCredentials],
+                        request: Request) -> str:
+    if creds and creds.credentials:
+        return creds.credentials
+    return request.cookies.get(_COOKIE_AT, "")
+
+
+def _token_from_refresh_request(body_token: str, request: Request) -> str:
+    """刷新令牌来源：请求体显式携带优先（兼容既有脚本），否则读 httpOnly cookie。"""
+    if body_token:
+        return body_token
+    return request.cookies.get(_COOKIE_RT, "")
+
 # 令牌撤销：按用户记录"撤销时间戳"，签发早于该时间的令牌一律 401（删除用户/重置密码时登记）。
 # 相比用户名黑名单，新登录签发的令牌立即可用。轮 B2 双后端：本地表保留（默认路径零改变），
 # REDIS_URL 配置后同步写共享存储（TTL=令牌最大寿命，到期自动清理，无需遍历）；
@@ -49,13 +68,15 @@ def ensure_not_revoked(username: Optional[str], iat: float) -> None:
 
 
 def require_user(
+    request: Request,
     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> dict:
     if not settings.auth_enabled:
         return {"username": "anonymous", "role": "admin", "dept": ""}
-    if not creds or not creds.credentials:
+    token = _token_from_request(creds, request)
+    if not token:
         raise HTTPException(status_code=401, detail="未认证：请先登录 /api/v1/auth/login 获取令牌")
-    payload = decode_token(creds.credentials)
+    payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="令牌无效或已过期，请重新登录")
     sub = payload.get("sub")
@@ -82,6 +103,11 @@ def _identity(request: Request) -> str:
     h = request.headers.get("authorization", "")
     if h.startswith("Bearer "):
         p = decode_token(h[7:])
+        if p:
+            return "u:" + str(p.get("sub", ""))
+    ck = request.cookies.get(_COOKIE_AT, "")  # W3.1：cookie 会话的限流身份同样按用户聚合
+    if ck:
+        p = decode_token(ck)
         if p:
             return "u:" + str(p.get("sub", ""))
     return "ip:" + (request.client.host if request.client else "unknown")

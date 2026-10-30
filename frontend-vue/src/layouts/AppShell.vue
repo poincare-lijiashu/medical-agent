@@ -193,7 +193,7 @@ async function submitChangePwd() {
     ElMessage.success('密码已修改，请使用新密码重新登录')
     pwdVisible.value = false
     if (timer) clearInterval(timer)
-    auth.logout() // 改密后旧 token 已被服务端撤销，强制重新登录并清本地凭证
+    await auth.logout() // W3.1：登出清 httpOnly cookie + 本地态（await 完成后再跳，防守卫读到旧 user）
     router.push('/login')
   } catch (e) {
     ElMessage.error('修改失败：' + errText(e))
@@ -202,9 +202,9 @@ async function submitChangePwd() {
   }
 }
 
-function onLogout() {
+async function onLogout() {
   if (timer) clearInterval(timer)
-  auth.logout()
+  await auth.logout() // W3.1：await 清完本地态再跳转
   router.push('/login')
 }
 </script>

@@ -3,6 +3,13 @@ import os
 
 # 必须在任何 backend import 之前：锁定 seed 演示口令，保证既有测试硬编码 Med@2026 不因 A5 随机化而破坏
 os.environ.setdefault("AUTH_DEMO_PASSWORD", "Med@2026")
+# W3.1：测试消费方依赖响应体回带令牌（40+ 处既有断言），此处显式开启；
+# 生产环境不设置该变量 → body 恒空，令牌只经 httpOnly cookie 下发
+os.environ.setdefault("AUTH_TOKEN_IN_BODY", "true")
+# 测试进程强制内存后端：本机 .env.local 可能配置 REDIS_URL（二级形态实测时加入），
+# 且 redis 库已安装会让测试进程真的连上共享 Redis——chat_memory/撤销等测试要求
+# 进程级隔离语义。环境变量优先级高于 .env.local，置空即锁回 MemoryStore。
+os.environ["REDIS_URL"] = ""
 
 import pytest
 

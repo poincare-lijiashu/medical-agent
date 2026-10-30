@@ -1,0 +1,183 @@
+{
+  "mode": "baseline",
+  "cases_file": "builtin",
+  "hit_rate": 1.0,
+  "passed": 9,
+  "total": 9,
+  "results": [
+    {
+      "agent": "literature",
+      "question": "二甲双胍是一线治疗吗？",
+      "expect": "kw:二甲双胍",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.91,
+      "elapsed_s": 21.53,
+      "note": "",
+      "resp": {
+        "answer": "是。中国2型糖尿病防治指南（2020年版）明确推荐二甲双胍为2型糖尿病控制高血糖的一线首选和全程基础用药，无禁忌证应一直保留在治疗方案中。教学示例要点同样将二甲双胍列为2型糖尿病一线用药。需注意后者为教学示例、非完整指南，临床决策以正式指南与医师判断为准。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "中国2型糖尿病防治指南（2020年版）",
+          "guideline_demo:diabetes2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "2型糖尿病血糖控制目标是多少？",
+      "expect": "kw:hba1c/7",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.91,
+      "elapsed_s": 5.16,
+      "note": "",
+      "resp": {
+        "answer": "一般 HbA1c 控制目标为<7%；年轻、病程短、无并发症者可更严格（<6.5%）；老年及低血糖高危者可适当放宽至 7.5%-8.0%。教学示例要点亦提到一般 HbA1c 目标<7%，老年/低血糖风险高者可放宽至 7.5-8%。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "中国2型糖尿病防治指南（2020年版）",
+          "guideline_demo:diabetes2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "他汀类药物降低LDL-C的目标值是多少？",
+      "expect": "kw:ldl/他汀",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.91,
+      "elapsed_s": 3.97,
+      "note": "",
+      "resp": {
+        "answer": "他汀类药物的LDL-C目标值取决于患者的危险分层。ASCVD患者属极高危，LDL-C目标为<1.4 mmol/L且较基线降低≥50%；中危与低危人群的LDL-C目标分别为<2.6 mmol/L与<3.4 mmol/L。他汀类是降LDL-C的基石药物，单药不达标可联合依折麦布，仍不达标可联合PCSK9抑制剂。",
+        "confidence": 0.91,
+        "needs_human_review": false,
+        "sources": [
+          "中国血脂管理指南（2023年）",
+          "guideline_demo:dyslipidemia"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "高血压的诊断标准是多少？",
+      "expect": "kw:mmhg/血压/140",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 4.47,
+      "note": "",
+      "resp": {
+        "answer": "在未使用降压药物的情况下，非同日3次测量诊室血压，收缩压≥140 mmHg和/或舒张压≥90 mmHg即可诊断高血压。家庭自测血压的诊断阈值为≥135/85 mmHg，24小时动态血压平均值≥130/80 mmHg支持诊断。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "中国高血压防治指南（2024年修订版）"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "急性冠脉综合征为什么要用阿司匹林？",
+      "expect": "kw:阿司匹林/aspirin/抗血小板",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.84,
+      "elapsed_s": 14.0,
+      "note": "",
+      "resp": {
+        "answer": "提供的证据未直接说明急性冠脉综合征使用阿司匹林的理由。可核验的相关证据仅涉及急性缺血性卒中：未溶栓患者应尽早启动抗血小板治疗，首选阿司匹林，且不推荐早期常规长期双重抗血小板治疗（轻型卒中/高危TIA短程双抗例外）。因此，基于现有证据无法回答急性冠脉综合征的抗血小板机制或适应证，置信度低。",
+        "confidence": 0.84,
+        "needs_human_review": false,
+        "sources": [
+          "中国急性缺血性卒中诊治指南（2023）"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "华法林和布洛芬能一起吃吗？",
+      "expect": "kw:出血/高危",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.86,
+      "elapsed_s": 0.24,
+      "note": "",
+      "resp": {
+        "answer": "发现以下相互作用（循证规则库）：\n- 【华法林 + 布洛芬｜高危】NSAID 抑制血小板并置换蛋白结合，显著增加消化道出血风险；避免联用，必要时加用 PPI 并密切监测 INR。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "confidence": 0.86,
+        "needs_human_review": true,
+        "sources": [
+          "drug_rules:curated_v2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "西地那非能和硝酸甘油一起用吗",
+      "expect": "kw:禁忌/低血压",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.86,
+      "elapsed_s": 0.22,
+      "note": "",
+      "resp": {
+        "answer": "发现以下相互作用（循证规则库）：\n- 【西地那非 + 硝酸甘油｜高危】PDE5 抑制剂与硝酸酯类协同致严重低血压，绝对禁忌，24–48 小时内不得同用。\n\n⚠️ 以上为规则库初筛，用药调整必须由执业医师/药师决定。",
+        "confidence": 0.86,
+        "needs_human_review": true,
+        "sources": [
+          "drug_rules:curated_v2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "imaging",
+      "question": "帮我看这张头颅CT",
+      "expect": "kw:上传",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.0,
+      "elapsed_s": 0.02,
+      "note": "",
+      "resp": {
+        "answer": "影像辅助阅片：请上传 DICOM/JPG/PNG 影像，我将给出结构化初步所见。",
+        "confidence": 0.0,
+        "needs_human_review": false,
+        "sources": [
+          "imaging:needs_image"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "case",
+      "question": "65岁男性多饮多尿消瘦",
+      "expect": "kw:图片/粘贴",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.0,
+      "elapsed_s": 0.03,
+      "note": "",
+      "resp": {
+        "answer": "多模态病例总结：粘贴病例要点（可附检验/影像图片），我生成结构化摘要与待鉴别清单。",
+        "confidence": 0.0,
+        "needs_human_review": false,
+        "sources": [
+          "case:needs_input"
+        ],
+        "error": null
+      }
+    }
+  ]
+}

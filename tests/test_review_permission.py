@@ -76,7 +76,8 @@ def test_review_resolve_role_matrix(monkeypatch, tmp_path):
     r = c.post(f"/api/v1/medical/review/{rid}/resolve", headers=_h(qc),
                json={"decision": "rejected", "note": "书写不规范"})
     assert r.status_code == 200 and r.json()["status"] == "rejected"
-    # 未认证 → 401/403
+    # 未认证 → 401/403（W3.1：先清 httpOnly cookie，否则 jar 残留登录态会被当成已认证）
+    c.cookies.delete("medassist_at")
     assert c.post(f"/api/v1/medical/review/{rid}/reopen").status_code in (401, 403)
 
 

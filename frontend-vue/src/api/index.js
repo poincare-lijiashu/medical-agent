@@ -1,18 +1,13 @@
 // axios 客户端：baseURL=/api/v1（同源）；
-// 请求拦截器自动带 Bearer token；响应拦截器 401 → 清 token → 跳登录，
+// W3.1：令牌走 httpOnly cookie（浏览器自动携带），不再注入 Authorization；
+// withCredentials 兜底未来反代跨域部署。响应拦截器 401 → 清态 → 跳登录，
 // 其余非 2xx 统一 ElMessage 中文提示（detail 优先透出后端中文文案）。
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { useAuthStore } from '../stores/auth'
 
-const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
-
-http.interceptors.request.use((config) => {
-  const auth = useAuthStore()
-  if (auth.token) config.headers.Authorization = `Bearer ${auth.token}`
-  return config
-})
+const http = axios.create({ baseURL: '/api/v1', timeout: 60000, withCredentials: true })
 
 // 错误 → 中文文案：后端 detail（字符串）优先，其次按状态/网络归因
 export function errText(error) {

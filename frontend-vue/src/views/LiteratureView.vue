@@ -114,10 +114,11 @@ async function send() {
 }
 
 // SSE 流式：401 → 登出跳登录（legacy 同纪律）；error 事件/网络异常 → false 走回落
+// W3.1：认证经 httpOnly cookie 自动携带，不再注入 Authorization
 async function streamLit(q) {
   const res = await fetch('/api/v1/medical/literature/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + auth.token },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question: q, session_id: sessionId.value }),
   })
   if (res.status === 401) { auth.logout(); router.push('/login'); return true }

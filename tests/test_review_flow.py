@@ -136,7 +136,8 @@ def test_reopen_auto_signed_item(monkeypatch, tmp_path):
     assert rid in ids
     # 不存在的条目 → 400
     assert c.post("/api/v1/medical/review/rev-nope/reopen", headers=H(adm)).status_code == 400
-    # 未认证 → 401
+    # 未认证 → 401（W3.1：先清 httpOnly cookie，否则 jar 残留登录态会被当成已认证）
+    c.cookies.delete("medassist_at")
     assert c.post(f"/api/v1/medical/review/{rid}/reopen").status_code in (401, 403)
 
 

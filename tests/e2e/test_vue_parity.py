@@ -24,6 +24,7 @@ import json
 import time
 import urllib.request
 
+import httpx
 import pytest
 
 pytest.importorskip("playwright")  # 环境没装 playwright → 自动 skip，保证 CI 全绿
@@ -32,6 +33,9 @@ from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 BASE_URL = "http://127.0.0.1:8001"
 DEMO_PASSWORD = "Med@2026"
+
+# W3.1：模块级 httpx client——cookie jar 跨 _api 调用持有 httpOnly 会话
+_http = httpx.Client(base_url=BASE_URL, timeout=10)
 
 
 def _service_up() -> bool:
@@ -144,14 +148,17 @@ def test_parity_admin_arch_view(page):
 # ---- 整改轮 B：任务1 驳回闭环 + 任务2 字典外方案A（共用 pharm01 会话省限流） ----
 
 def _api(method: str, path: str, token: str = "", body: dict | None = None) -> tuple[int, dict]:
-    """e2e 内轻量 API 调用（前置造数/断言用，避免为一次 POST 走整套 UI 登录）。"""
-    req = urllib.request.Request(BASE_URL + path, method=method)
-    req.add_header("Content-Type", "application/json")
+    """e2e 内轻量 API 调用（前置造数/断言用，避免为一次 POST 走整套 UI 登录）。
+    W3.1：共享 httpx client 的 cookie jar 跨调用持有 httpOnly 会话——登录一次后
+    后续调用自动携带；token 参数保留（Bearer 兼容路径）。"""
+    headers = {"Content-Type": "application/json"}
     if token:
-        req.add_header("Authorization", "Bearer " + token)
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    with urllib.request.urlopen(req, data=data, timeout=10) as r:
-        return r.status, json.loads(r.read().decode("utf-8"))
+        headers["Authorization"] = "Bearer " + token
+    r = _http.request(method, path, headers=headers, json=body)
+    try:
+        return r.status_code, r.json()
+    except ValueError:
+        return r.status_code, {}
 
 
 def _purge_created_prescriptions(ids: list[str]) -> None:

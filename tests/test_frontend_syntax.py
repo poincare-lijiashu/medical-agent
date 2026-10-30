@@ -728,9 +728,9 @@ def test_change_password_frontend_markers_present():
         "两次输入的新密码不一致", "新密码至少 8 位", "function submitChangePwd(",
         # 端点字段与后端 ChangePwdReq 对齐
         "old_password: pwdForm.old, new_password: pwdForm.new1",
-        # 成功 toast + 强制重新登录（清 token）
+        # 成功 toast + 强制重新登录（W3.1：await 登出清 httpOnly cookie + 本地态）
         "密码已修改，请使用新密码重新登录",
-        "auth.logout() // 改密后旧 token 已被服务端撤销，强制重新登录并清本地凭证",
+        "await auth.logout() // W3.1：登出清 httpOnly cookie + 本地态（await 完成后再跳，防守卫读到旧 user）",
     ):
         assert marker in html, f"缺少前端标记：{marker}"
     shell = (VUE_SRC / "layouts" / "AppShell.vue").read_text(encoding="utf-8")

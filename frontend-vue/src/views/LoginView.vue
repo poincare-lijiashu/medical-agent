@@ -1,4 +1,5 @@
-<!-- 登录视图（轮1）：用户名/密码表单 → POST /api/v1/auth/login → token 存 localStorage → 跳概览；
+<!-- 登录视图（轮1）：用户名/密码表单 → POST /api/v1/auth/login → 服务端写 httpOnly
+     cookie（W3.1，JS 不可读）→ 本地仅记 {username, role} 展示态 → 跳概览；
      401/错误文案由 api 拦截器/本页以中文 ElMessage 提示。 -->
 <template>
   <div class="login-wrap">
@@ -56,7 +57,7 @@ async function onLogin() {
       username: form.username,
       password: form.password,
     })
-    auth.setSession(data.access_token, { username: data.username, role: data.role })
+    auth.setSession({ username: data.username, role: data.role })
     ElMessage.success('登录成功')
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/overview'
     router.push(redirect)

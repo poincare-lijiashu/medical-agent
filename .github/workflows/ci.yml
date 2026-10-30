@@ -1,0 +1,129 @@
+# W4.5 CI/CD 回归门槛（转型计划书）
+#
+# 分层设计：
+# - pytest：合并强制门槛。测试架构自带离线性（不走 lifespan，不加载 bge-m3、不连
+#   Milvus/PG——见 tests/test_review_flow.py 头注），无需模型权重与 services。
+# - eval-baseline：run_eval.py 依赖外部资源（Qwen API key、NCBI 在线拉取、Milvus、
+#   种子灌库），不适合每次 push 都跑——仅在手动触发（workflow_dispatch）或每周一
+#   定时跑，结果 artifact 留档。首次使用前需在仓库 Secrets 配置 QWEN_API_KEY
+#   （可选 QWEN_BASE_URL，默认 DashScope 兼容端点）。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1"  # 每周一 02:00 UTC：pytest + eval 全量
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU torch（torch 不固化，CI 按部署矩阵选 CPU 版）
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run pytest
+        run: python -m pytest -q
+
+  eval-baseline:
+    # 评测基线门槛：pytest 全绿后，手动/定时才跑（控制 API 成本与外网波动面）
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    needs: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: medagent
+          POSTGRES_PASSWORD: medagent123
+          POSTGRES_DB: medagent
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U medagent"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      etcd:
+        image: quay.io/coreos/etcd:v3.5.14
+        env:
+          ETCD_AUTO_COMPACTION_MODE: revision
+          ETCD_AUTO_COMPACTION_RETENTION: "1000"
+          ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+        cmd: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ACCESS_KEY: minioadmin
+          MINIO_SECRET_KEY: minioadmin
+        ports:
+          - 9000:9000
+        cmd: minio server /minio_data
+      milvus:
+        image: milvusdb/milvus:v2.4.0
+        cmd: ["milvus", "run", "standalone"]
+        env:
+          ETCD_ENDPOINTS: etcd:2379
+          MINIO_ADDRESS: minio:9000
+        ports:
+          - 19531:19531
+          - 19530:19530
+    env:
+      APP_ENV: development
+      AUTH_ENABLED: "true"
+      AUTH_JWT_SECRET: ci-only-not-a-prod-secret-0123456789abcdef0123456789abcdef
+      AUTH_SEED_DEMO: "true"
+      AUTH_DEMO_PASSWORD: Med@2026
+      PG_HOST: 127.0.0.1
+      PG_PORT: "5433"
+      PG_USER: medagent
+      PG_PASSWORD: medagent123
+      PG_DATABASE: medagent
+      MILVUS_URI: http://127.0.0.1:19531
+      MILVUS_TOKEN: root:Milvus
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      QWEN_BASE_URL: ${{ secrets.QWEN_BASE_URL }}
+      MEDICAL_EVAL_USER: doctor01
+      MEDICAL_EVAL_PASS: Med@2026
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Seed KB (30 PubMed abstracts, 在线拉取)
+        run: python scripts/seed_kb_pubmed.py
+      - name: Start backend
+        run: |
+          nohup python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001 > uvicorn.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8001/healthz && break
+            sleep 3
+          done
+          curl -sf http://127.0.0.1:8001/healthz || (tail -50 uvicorn.log && exit 1)
+      - name: Run eval baseline（门槛：9/9）
+        run: python scripts/run_eval.py
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval/results_baseline.json
+          if-no-files-found: ignore

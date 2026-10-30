@@ -80,7 +80,8 @@ def test_kb_search_endpoint_ok_and_audited(monkeypatch, tmp_path):
 def test_kb_search_requires_auth_and_validates(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
     tok = _login(c, "doctor01", "Med@2026")
-    # 未认证 → 401
+    # 未认证 → 401（W3.1：先清 httpOnly cookie，否则 jar 里残留登录态会被当成已认证）
+    c.cookies.delete("medassist_at")
     r = c.post("/api/v1/medical/kb/search", json={"query": "q"})
     assert r.status_code in (401, 403)
     # 空 query / top_k 越界 → 422（与 MCP 工具同强度）

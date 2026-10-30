@@ -262,6 +262,15 @@ python scripts/run_eval.py --dry-run
    - [ ] 撤销互通：实例 A 执行改密/删用户 → 持旧令牌请求实例 B 返回 401
    - [ ] 降级演练：`docker stop redis` → 服务不中断（每实例日志一条 `redis.degraded`，限流/撤销降级为单实例语义）；`docker start redis` → 自动重连恢复共享
 
+**二级形态实测记录（2026-10-30，W4.2 转型计划书验收）**：本机宿主双实例（uvicorn 8001/8002，
+`REDIS_URL=redis://127.0.0.1:6379/0`，redis 5.3.1 + `redis:7-alpine`）验证清单 4/4 通过——
+①token 互通：A 登录令牌打 B 返回 200；②限流共享：A 连打 65 次触发 429 后，同身份请求 B 亦 429
+（Redis 聚合计数，key 形如 `rl:u:doctor01:<window>`）；③撤销互通：A 上 admin 删临时用户后，
+其旧令牌在 B 返回 401；④降级演练：`docker stop redis` 期间请求正常响应（非 5xx），`docker start`
+后限流 key 回到 Redis（dbsize 恢复增长）。**踩坑备注：`redis` Python 库为可选依赖
+（requirements.txt 注释行），启用二级形态前必须 `pip install "redis>=5,<6"`，否则 RedisStore
+import 失败静默回落内存镜像（incr 照常返回、无 degraded 外显日志），双实例限流不共享。**
+
 ### 三级：集团级路线图（规划性内容，激活条件标注）
 
 | 方向 | 已就位的模板 / 切换点 | 激活条件 |

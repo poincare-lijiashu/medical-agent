@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     auth_seed_demo: bool = False  # 首次运行是否注入演示账号（doctor01 等）；默认关闭，仅演示环境显式开启
     auth_demo_password: str = ""  # 演示账号统一口令；留空则 seed 时随机生成（仅 dev 演示，生产不 seed）
+    # W3.1：登录/刷新响应体是否回带令牌——默认关闭（令牌只走 httpOnly cookie，浏览器 JS 不可读）。
+    # 仅测试/脚本调试显式开启（conftest 注入）；生产环境绝不设置，否则 token 暴露给 JS 可达面。
+    auth_token_in_body: bool = False
 
     # 请求体上限（MB）：Content-Length 超限直接 413；KbUploadReq base64 需 ~30MB，默认 40 留余量
     max_body_mb: int = 40

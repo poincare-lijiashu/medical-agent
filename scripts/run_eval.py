@@ -66,7 +66,24 @@ def login() -> None:
               f"      请先启动后端（python -m backend.main，默认 127.0.0.1:8001），"
               f"或用 MEDICAL_SERVER 指定正确地址。", file=sys.stderr)
         raise SystemExit(2) from e
-    _TOKEN = json.loads(resp.read().decode("utf-8"))["access_token"]
+    # W3.1：令牌默认只经 httpOnly cookie 下发（body 恒空）——从 Set-Cookie 提取
+    # access 令牌走 Bearer 兼容路径（服务端双轨支持）；body 回带令牌（调试开关
+    # AUTH_TOKEN_IN_BODY）时优先用 body，保持两种部署形态均可评测。
+    body_tok = ""
+    try:
+        body_tok = json.loads(resp.read().decode("utf-8")).get("access_token", "")
+    except (ValueError, AttributeError):
+        pass
+    _TOKEN = body_tok
+    if not _TOKEN:
+        for sc in resp.headers.get_all("Set-Cookie") or []:
+            if sc.startswith("medassist_at="):
+                _TOKEN = sc.split(";", 1)[0].split("=", 1)[1]
+                break
+    if not _TOKEN:
+        print("[eval] 登录响应未携带令牌（无 Set-Cookie 也无 body 字段）——请检查服务版本。",
+              file=sys.stderr)
+        raise SystemExit(2)
 
 
 # (agent, question, 期望命中的关键词任一小写子串) —— 内置常规集
