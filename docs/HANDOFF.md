@@ -1,6 +1,67 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-09-06（阶段 6 已完成并全量回归验证）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-10-30（平台化 P0-5 已闭环、P1 第一批已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+
+## 2026-10-30 平台化进度（P0-5 / P1）
+
+### 提交
+
+| commit | 内容 |
+|---|---|
+| `ed63be5` | P1：权限点强制、刷新令牌与撤销、登录限速、入口限流（Sentinel 核心） |
+| `2ab4ad9` | P0-5：Helm/Argo CD、SkyWalking、Nacos 生产化、AI 中台 Nacos 注册 |
+| `9b66534` | P0-4：网关统一鉴权（JWT + 身份头注入） |
+
+备份：`<backup-dir>\medical_agent.git`（mirror）与
+`medical_agent_20261030_p1.bundle`（HEAD `ed63be5`，bundle verify 通过）。
+
+### 本机实测（全部真实执行）
+
+- `helm lint --strict` 通过；dev/staging/prod 三套 `helm template` 全部渲染（prod 24 资源）
+- 迁移专用入口：auth/empi `--medassist.migrate-only=true` → Flyway 校验 + exit 0
+- Nacos：SDK 3.2.0 注册/注销正常（鉴权开/关两种形态）；Java `platform-auth` 与 Python AI 中台均注册成功；
+  **2.0.11 对 Nacos 2.5.1 静默失败**（已在 requirements 固化 3.2.0）
+- SkyWalking 全链路：OAP 11.0.0（PostgreSQL 存储）+ Java agent 9.8.0 + Python agent 1.3.0
+  - 登录链路：gateway `/api/v2/auth/login` → auth `POST:/login` → JDBC，同 traceId、32 span、1 CROSS_PROCESS
+  - 患者查询：29 span（gateway 16 + empi 13）
+  - 服务端框架插件必须从 agent `optional-plugins/` 复制到 `plugins/`（Chart 已自动做）
+  - `apache-skywalking` wheel 缺 protocol → `--no-binary` 从 sdist 安装
+- P1：DOCTOR 访问 `/users` 403（权限点）；NURSE `reveal=true` 403 / DOCTOR 200；
+  refresh 轮换 + 旧值重放 401；登出 17s 后旧访问令牌 401；
+  5 次错误密码账号 429（同 IP 其他账号仍 200）；入口限流 QPS=2 → `200,200,429,429,...`
+
+### 环境事实更新（my_computer_traecode 协议）
+
+`<other-workspace>\HOST_ENV_TRUTH.md` 已更新 DK-CONT-01 / DK-IMG-01 并追加变更日志；
+DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像含
+`nacos/nacos-server:v2.5.1`、`eclipse-temurin:21-jre-alpine`、`maven:3.9-eclipse-temurin-21`、
+`apache/skywalking-java-agent:9.8.0-java21`、`docker.m.daocloud.io/apache/skywalking-oap-server:11.0.0`。
+
+### 下次开工第一件事
+
+1. **确认 Java 镜像构建是否完成**（本会话退出时仍在后台运行，PID 43268）：
+   `docker images | findstr medassist/platform-gateway`
+   - 未完成则重跑：`docker build --build-arg SERVICE=gateway -t medassist/platform-gateway:0.1.0-SNAPSHOT -f platform/Dockerfile platform`
+   - 完成后：`docker run -d --name gw-test -p 18080:8080 medassist/platform-gateway:0.1.0-SNAPSHOT`，
+     访问 `http://127.0.0.1:18080/actuator/health` 验证；可挂
+     `-v D:\workspace_AI\_tools\skywalking\skywalking-agent:/opt/skywalking-agent:ro`
+     + `JAVA_TOOL_OPTIONS` 验证容器内 agent 链路；把结果补进 `deploy/README.md` §8
+2. **剩余 P1**：Argo Rollouts 灰度、日志采集（Loki/ELK）与告警、会话管理（踢出设备）、审计跨域汇聚
+3. **本地环境现状**：auth/empi/gateway/OAP 均已停止；auth 库 17 账号、0 测试数据；
+   OAP 用二进制启动（`D:\workspace_AI\_tools\skywalking\apache-skywalking-apm-bin`）：
+   `java -Xms256M -Xmx768M -Doap.logDir=<home>\logs -cp "<home>\config;<home>\oap-libs\*" org.apache.skywalking.oap.server.starter.OAPServerStartUp`
+   （环境变量 `SW_STORAGE=postgresql SW_JDBC_URL=jdbc:postgresql://127.0.0.1:5433/skywalking SW_DATA_SOURCE_USER=medagent SW_DATA_SOURCE_PASSWORD=medagent123`）
+
+### 本机踩坑备忘（下次别再踩）
+
+- Windows PowerShell 5.1 按 ANSI 读无 BOM UTF-8：**含中文的 .ps1 必须存 ASCII**，否则解析报错
+- PowerShell 调用 `curl.exe -d '{"k":"v"}'` 会丢双引号 → 用 `Invoke-WebRequest` + UTF8 bytes，
+  或 `--data-binary @body.json`
+- Sentinel Spring Cloud Gateway Adapter 1.8.9 与 SCG 5.x/Spring 7 组合每请求抛
+  `ParamFlowException: $D` → 已改 Sentinel 核心 `SphU.entry`；且限流配置必须用**列表**
+  （Map 键中的 `/` 会被宽松绑定吞掉）
+- `sw-python` 在 Windows 下子进程存活不稳定（容器 Linux 正常）；本机验证用侵入式
+  `config.init(agent_collector_backend_services=...) + agent.start()`
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）
