@@ -1,0 +1,52 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: medassist-gateway
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+    # 双轨路由（计划书 D9.2 迁移第 1 步：接口兼容层）：
+    #   v1 → 现行 Python 服务（AI 中台 + 既有 61 端点），路径原样透传，老代码零改动
+    #   v2 → Java 微服务，路径形如 /api/v2/{service}/...；StripPrefix=3 去掉
+    #        api / v2 / {service} 三段，服务内只保留业务路径（如 /internal/health）
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: ai-core-v1
+              uri: ${AI_CORE_URI:http://127.0.0.1:8001}
+              predicates:
+                - Path=/api/v1/**
+            - id: platform-auth-v2
+              uri: ${PLATFORM_AUTH_URI:http://127.0.0.1:8081}
+              predicates:
+                - Path=/api/v2/auth/**
+              filters:
+                - StripPrefix=3
+            - id: platform-empi-v2
+              uri: ${PLATFORM_EMPI_URI:http://127.0.0.1:8082}
+              predicates:
+                - Path=/api/v2/empi/**
+              filters:
+                - StripPrefix=3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.medassist: DEBUG

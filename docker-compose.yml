@@ -98,6 +98,36 @@ services:
     depends_on:
       - milvus
 
+  # ---- 平台底座（P0，计划书 D2.2）：服务注册与配置中心 ----
+  # 说明：Nacos 为 Java 微服务（platform/*）的注册发现与配置来源；Python AI 中台经
+  # nacos-sdk-python 同样注册（计划书 D6.1）。控制台 http://127.0.0.1:8848/nacos
+  nacos:
+    image: nacos/nacos-server:v2.5.1
+    container_name: medagent_nacos
+    environment:
+      MODE: standalone
+      PREFER_HOST_MODE: hostname
+      # 鉴权：Nacos 2.4+ 出于安全不再自动创建默认管理员（实测客户端注册报
+      # "ErrCode:403 user not found"），本地开发底座默认关闭以便联调；
+      # 【生产必开】NACOS_AUTH_ENABLE=true，并先用控制台初始化管理员、改默认口令、
+      # 改用外部 MySQL 持久化（derby 仅适合单机联调），详见 platform/README.md。
+      NACOS_AUTH_ENABLE: ${NACOS_AUTH_ENABLE:-false}
+      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}
+      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE:-security}
+      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN:-TWVkQXNzaXN0TmFjb3NMb2NhbERldlRva2VuMzJCeXRlcyE=}
+    ports:
+      - "127.0.0.1:8848:8848"
+      - "127.0.0.1:9848:9848"
+      - "127.0.0.1:9849:9849"
+    volumes:
+      - medagent_nacos:/home/nacos/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   app:
     build: .
     profiles: ["full"]  # 默认不启动：后端通常在宿主机直接跑 uvicorn，容器化需 docker compose --profile full up
@@ -123,3 +153,4 @@ volumes:
   medagent_pg:
   medagent_data:
   medagent_redis:
+  medagent_nacos:
