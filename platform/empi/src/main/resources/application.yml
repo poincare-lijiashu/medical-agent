@@ -4,6 +4,27 @@ server:
 spring:
   application:
     name: platform-empi
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: empi-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: empi_svc
+    default-schema: empi_svc
+    locations: classpath:db/migration/empi
+    baseline-on-migrate: true
+    validate-on-migrate: true
+    out-of-order: false
+
   cloud:
     nacos:
       discovery:
@@ -12,6 +33,13 @@ spring:
         username: ${NACOS_USERNAME:nacos}
         password: ${NACOS_PASSWORD:nacos}
         namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 敏感字段加密（生产必须由密钥管理系统注入，禁止使用本默认值）----
+# EMPI_FIELD_KEY：Base64 编码的 32 字节密钥（AES-256）
+# EMPI_HASH_SALT：查重哈希盐（与密钥分离保管）
+empi:
+  field-key: ${EMPI_FIELD_KEY:DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4=}
+  hash-salt: ${EMPI_HASH_SALT:medassist-empi-salt}
 
 management:
   endpoints:

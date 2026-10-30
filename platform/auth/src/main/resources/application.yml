@@ -4,11 +4,32 @@ server:
 spring:
   application:
     name: platform-auth
+
+  # ---- 数据源（服务自治 schema auth_svc；凭据经环境变量注入，默认值仅本地开发）----
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: auth-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  # ---- 版本化迁移（Flyway）：只管理 auth_svc schema，绝不触碰其他域 ----
+  flyway:
+    enabled: true
+    schemas: auth_svc
+    default-schema: auth_svc
+    locations: classpath:db/migration/auth
+    baseline-on-migrate: true
+    validate-on-migrate: true
+    out-of-order: false
+
   cloud:
     nacos:
       discovery:
-        # P0-1 骨架阶段：默认关闭注册；本地底座（docker compose up -d nacos）就绪后
-        # 置 NACOS_DISCOVERY_ENABLED=true 即注册。
         enabled: ${NACOS_DISCOVERY_ENABLED:false}
         server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
         username: ${NACOS_USERNAME:nacos}

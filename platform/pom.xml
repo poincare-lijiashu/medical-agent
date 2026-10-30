@@ -88,6 +88,15 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
           <version>${maven-compiler-plugin.version}</version>
+          <configuration>
+            <!-- 必须显式开启：自建 parent 不具备 spring-boot-starter-parent 的默认配置，
+                 缺少 -parameters 时 Spring MVC 无法反射参数名，
+                 实测报 "Name for argument of type [String] not specified"（500）。 -->
+            <parameters>true</parameters>
+            <compilerArgs>
+              <arg>-Xlint:all</arg>
+            </compilerArgs>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>

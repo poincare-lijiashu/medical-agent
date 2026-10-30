@@ -77,10 +77,43 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
   ②改用外部 MySQL 持久化（内嵌 derby 仅适合单机联调）；③`NACOS_AUTH_TOKEN` /
   `NACOS_AUTH_IDENTITY_*` 全部替换为密钥管理下发的真实值
 
+## Bootstrap 4 + 自建 parent 的四个坑（实测记录）
+
+本项目未使用 `spring-boot-starter-parent`（需要与既有 Python 工程共享仓库结构），以下四项必须显式配置：
+
+| # | 现象 | 修复 |
+|---|------|------|
+| 1 | 产物 jar 只有几十 KB，`java -jar` 报 no main manifest | 显式绑定 `spring-boot-maven-plugin:repackage` |
+| 2 | 接口 500：`Name for argument of type [String] not specified` | 编译加 `-parameters`（`maven-compiler-plugin` 配置） |
+| 3 | 引了 `flyway-core` 但迁移不执行、表不存在 | 必须用 `spring-boot-starter-flyway`（Boot 4 已把自动配置拆为独立模块） |
+| 4 | `No qualifying bean of type com.fasterxml.jackson.databind.ObjectMapper` | Boot 4 已切换到 **Jackson 3**（`tools.jackson.*`），注入 `tools.jackson.databind.ObjectMapper` |
+
+另：Windows 下运行中的 fat jar 会锁定文件，`mvn package` 前需先停服。
+
+## 业务实现（P0-3）
+
+### auth（用户与权限中心）
+
+- 表：`org` / `app_user` / `role` / `permission` / `role_permission` / `user_role` / `change_log`（schema `auth_svc`）
+- 迁移：V1 建表 → V2 RBAC 种子（5 角色 / 13 权限点）→ **V3 从既有 `public.users` 与 `public.departments` 幂等导入**（实测导入 17 账号 / 15 科室）
+- 业务规则：用户名大小写不敏感唯一；密码 ≥8 位且含字母+数字、不得等于用户名；角色必须已定义；
+  乐观锁 CAS；**禁止停用/移除最后一个 ADMIN**（防系统锁死）；全部变更写 `change_log`
+- API：`GET/POST /users`、`GET/PUT /users/{id}`、`POST /users/{id}/disable|enable`、`PUT /users/{id}/roles`、`POST /users/{id}/reset-password`
+
+### empi（患者主索引）
+
+- 表：`patient` / `patient_crosswalk` / `patient_merge_log` / `change_log`（schema `empi_svc`）
+- **敏感字段 AES-256-GCM 加密存储**，查重走加盐 SHA-256 哈希（明文永不建索引）；
+  对外默认脱敏（证件号 `前4****后4`、手机 `前3****后4`），`reveal=true` 才返明文并强制审计
+- 合并采用「标记 + 指针」：源档案 `status=MERGED` + `merged_into`，迁移跨系统标识并写 `merge_log`（可追溯）
+- API：`GET/POST /patients`、`GET/PUT /patients/{id}`、`POST /patients/merge`、
+  `POST/GET /patients/{id}/crosswalk`
+
+**实测结果（2026-10-30）**：建档（自动患者号 P20261030000001）、证件号重复 409、
+默认脱敏 / reveal 明文、合并（源转 MERGED、留痕、审计）、跨系统标识登记全部通过。
+
 ## 尚未完成（诚实登记，对应计划书 D10 P0 剩余项）
 
-- 用户权限中心业务实现（账号/角色/权限矩阵/组织架构 + 数据库迁移脚本）
-- EMPI 业务实现（建档、合并、标识映射 + 数据库迁移脚本）
 - K8s Helm Chart / Argo CD 清单（本机无集群，仅本地 compose 形态）
 - SkyWalking 全链路追踪接入
 - AI 中台 Nacos 注册（Python 侧 nacos-sdk-python）
