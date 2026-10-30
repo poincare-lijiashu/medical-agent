@@ -491,6 +491,9 @@ PubMed 摘要走**两段式离线管线**（可达环境跑 `seed_kb_pubmed.py` 
 
 生产校验：previous 不得为默认弱密钥（轮换过渡期旧密钥仍参与验签，弱旧密钥等同弱主密钥——启动即拒）。
 LLM api_key 轮换：管理端模型配置新增 provider（新 key）→ 连通测试 → 激活 → 删旧，同零中断语义。
+DB 密码轮换与三类凭据演练记录：见 docs/KEY_ROTATION_DRILL.md（复跑入口
+`python scripts/drill_key_rotation.py llm|db`；DB 轮换要点——ALTER USER 不中断运行中长连接，
+但重启/新实例须新 DSN，PG 无双密码窗口，靠滚动重启顺序保证连续性）。
 
 ### 三、当前等待院方的两件事
 
