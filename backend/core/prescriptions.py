@@ -21,6 +21,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from backend.config import settings
 from backend.core import pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -71,6 +72,18 @@ def _load() -> list[dict]:
 def _save(items: list[dict]) -> None:
     # JSON 原子写兜底 + PG 全量同步（best-effort）；运行在调用方 _lock 临界区内
     pg_store.save_prescriptions(items, PRESCRIPTIONS_FILE)
+
+
+def _save_row(item: dict, items: list[dict]) -> None:
+    """W4.1 行级落盘（语义同 medical_review._save_row）：PG 主模式且池可用 → 单行
+    UPSERT（严格，失败抛出防分裂）+ JSON 镜像；灰度回滚/无池/离线 → 全量（行为不变）。
+    处方是单据级变更（create/approve/reject/rewrite/submit 经 _mutate 各改一张单），
+    行级写根除多实例全量同步的 last-writer-wins 互覆。运行在调用方 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_prescription_row(item)
+        pg_store.mirror_json_file(PRESCRIPTIONS_FILE, items)
+    else:
+        _save(items)
 
 
 def delete_prescriptions(ids: list[str]) -> list[str]:
@@ -153,7 +166,7 @@ def create(*, doctor: str, dept: str = "", case_text: str, drugs: list[dict],
     with _lock:
         items = _load()
         items.append(rx)
-        _save(items)
+        _save_row(rx, items)
     return rx
 
 
@@ -165,7 +178,7 @@ def _mutate(rx_id: str, fn) -> dict:
         for i in items:
             if i["id"] == rx_id:
                 fn(i)
-                _save(items)
+                _save_row(i, items)
                 return i
     raise ValueError(f"处方不存在：{rx_id}")
 

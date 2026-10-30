@@ -168,11 +168,13 @@ def create_user(username: str, password: str, role: str, overwrite: bool = False
         rec = {"role": role, "dept": (dept or "").strip(),
                "password_hash": hash_password(password)}
         users[username] = rec
-        if pg_store.has_pool():
+        # W4.1 行级落盘须尊重灰度回滚开关：pg_primary=false（旧编排）回落 save_users
+        # 全量（JSON 先行 + PG best-effort），与 review_queue 行级化同纪律。
+        if settings.pg_primary and pg_store.has_pool():
             pg_store.upsert_user_row(username, rec["role"], rec["dept"], rec["password_hash"])
             pg_store.mirror_json_file(USERS_FILE, users)
         else:
-            _save_users(users)  # 单机/离线：JSON 真源全量
+            _save_users(users)  # 单机/离线/灰度：JSON 真源全量
     return True
 
 
@@ -182,7 +184,7 @@ def delete_user(username: str) -> bool:
         if username not in users:
             return False
         del users[username]
-        if pg_store.has_pool():
+        if settings.pg_primary and pg_store.has_pool():
             pg_store.delete_user_row(username)
             pg_store.mirror_json_file(USERS_FILE, users)
         else:
@@ -197,7 +199,7 @@ def set_password(username: str, new_password: str) -> bool:
             return False
         new_hash = hash_password(new_password)
         users[username]["password_hash"] = new_hash
-        if pg_store.has_pool():
+        if settings.pg_primary and pg_store.has_pool():
             rec = users[username]
             pg_store.upsert_user_row(username, rec.get("role", ""),
                                      rec.get("dept", ""), new_hash)

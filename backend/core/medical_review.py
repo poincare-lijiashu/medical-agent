@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
+from backend.config import settings
 from backend.core import pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -106,6 +107,20 @@ def _save(items: list[dict]) -> None:
     pg_store.save_queue(items, QUEUE_FILE)
 
 
+def _save_row(item: dict, items: list[dict]) -> None:
+    """W4.1 行级落盘：PG 主模式（pg_primary=true 默认）且池可用 → 单行 UPSERT（严格，
+    PG 写失败抛出防分裂）+ JSON 镜像（灾难恢复源）；灰度回滚（pg_primary=false，旧编排）
+    或无池/离线 → JSON 真源全量（save_queue：JSON 先行 + PG best-effort，行为与拆分前
+    完全一致）。
+    行级写根除多实例并发互覆：各实例改不同条目时 save_queue 全量同步的
+    last-writer-wins 不再丢更新。运行在调用方 _lock 临界区内（读-改-写原子性不变）。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_review_row(item)
+        pg_store.mirror_json_file(QUEUE_FILE, items)
+    else:
+        _save(items)
+
+
 def submit(*, agent: str, question: str, answer: str, confidence: float,
            risk_reason: str, submitted_by: str,
            images: list[str] | None = None,
@@ -130,7 +145,7 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
         attempt_n = 1
     with _lock:
         items = _load()
-        items.append({
+        entry = {
             "id": rid, "ts": _now(), "agent": agent, "question": question,
             "answer": answer, "confidence": confidence, "risk_reason": risk_reason,
             "status": "pending", "submitted_by": submitted_by,
@@ -145,8 +160,9 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             "meta": meta,
             # 任务3 全交互留痕：溯源来源存档（JSON 兜底真源；PG 镜像同列）
             "sources": list(sources) if sources else None,
-        })
-        _save(items)
+        }
+        items.append(entry)
+        _save_row(entry, items)
     return rid
 
 
@@ -178,7 +194,7 @@ def self_confirm(rid: str, username: str) -> dict:
                     raise ReviewError("该条目已确认过")
                 i["confirmed_by_self"] = True
                 i["self_confirmed_at"] = _now()
-                _save(items)
+                _save_row(i, items)
                 return i
         raise ReviewError("未找到该审核条目")
 
@@ -260,13 +276,19 @@ def list_all(limit: int = 100, with_images: bool = True) -> list[dict]:
 
 
 def purge_pending() -> int:
-    """清空全部 pending 项（保留已处理历史），返回清除数量。用于清理测试数据。"""
+    """清空全部 pending 项（保留已处理历史），返回清除数量。用于清理测试数据。
+    W4.1：PG 可用走行级批量删除（严格，失败抛出防 PG/JSON 分裂）+ JSON 镜像；
+    无池/离线 → JSON 全量。"""
     with _lock:
         items = _load()
         keep = [i for i in items if i.get("status") != "pending"]
         n = len(items) - len(keep)
         if n:
-            _save(keep)
+            if settings.pg_primary and pg_store.has_pool():
+                pg_store.purge_pending_reviews_strict()
+                pg_store.mirror_json_file(QUEUE_FILE, keep)
+            else:
+                _save(keep)
         return n
 
 
@@ -297,7 +319,7 @@ def resolve(rid: str, decision: str, reviewer: str, note: str = "",
                 i["resolved_at"] = _now()
                 if not keep_images:
                     i["images"] = None  # FIND-03a：人工签发历史瘦身，影像不再留存
-                _save(items)
+                _save_row(i, items)
                 return i
         raise ReviewError("未找到该审核条目")
 
@@ -320,6 +342,6 @@ def reopen(rid: str, operator: str) -> dict:
                 i["reviewed_by"] = None
                 i["review_note"] = None
                 i["resolved_at"] = None
-                _save(items)
+                _save_row(i, items)
                 return i
         raise ReviewError("未找到该审核条目")

@@ -134,6 +134,14 @@ async def _init_impl() -> bool:
             # 读回落 JSON，一旦被其它域成功写"洗白"stale，JSON 独有记录即从 PG 真源读
             # 中"消失"（运行环境实测 imaging 留痕丢失根因，重启后本行自动补列）。
             await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS sources jsonb")
+            # W4.1 review_queue 行级化补列：任务3 知情确认三字段此前不入 PG——
+            # PG 主模式往返即丢，「我的待确认」恒空 / 重复确认校验失效（正确性缺口）。
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS "
+                            "self_confirm_required boolean NOT NULL DEFAULT false")
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS "
+                            "confirmed_by_self boolean")
+            await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS "
+                            "self_confirmed_at text")
             # 任务6：质控重提链——resubmit_of=原驳回记录 id、attempt=第 N 次提交、
             # meta=原始（已脱敏）病历留档，供「我的质控驳回」重新提交预填（旧库平滑升级）
             await c.execute("ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS resubmit_of text")
@@ -290,14 +298,19 @@ async def mirror_user(username: str, role: str, pw_hash: str) -> None:
 
 _REVIEW_COLS = ("id", "ts", "agent", "question", "answer", "confidence", "risk_reason",
                 "status", "submitted_by", "reviewed_by", "review_note", "resolved_at",
-                "resubmit_of", "attempt", "meta", "sources")
+                "resubmit_of", "attempt", "meta", "sources",
+                "self_confirm_required", "confirmed_by_self", "self_confirmed_at")
 
 _REVIEW_UPSERT = """INSERT INTO review_queue(id,ts,agent,question,answer,confidence,risk_reason,
-   status,submitted_by,reviewed_by,review_note,resolved_at,images,resubmit_of,attempt,meta,sources)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb)
+   status,submitted_by,reviewed_by,review_note,resolved_at,images,resubmit_of,attempt,meta,sources,
+   self_confirm_required,confirmed_by_self,self_confirmed_at)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20)
    ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reviewed_by=EXCLUDED.reviewed_by,
    review_note=EXCLUDED.review_note, resolved_at=EXCLUDED.resolved_at,
-   images=EXCLUDED.images, sources=EXCLUDED.sources, updated_at=now()"""
+   images=EXCLUDED.images, sources=EXCLUDED.sources, updated_at=now(),
+   self_confirm_required=EXCLUDED.self_confirm_required,
+   confirmed_by_self=EXCLUDED.confirmed_by_self,
+   self_confirmed_at=EXCLUDED.self_confirmed_at"""
 
 
 def _review_row(item: dict) -> tuple:
@@ -317,7 +330,10 @@ def _review_row(item: dict) -> tuple:
             json.dumps(images, ensure_ascii=False) if images else None,
             item.get("resubmit_of"), attempt,
             json.dumps(meta, ensure_ascii=False) if meta else None,
-            json.dumps(sources, ensure_ascii=False) if sources else None)
+            json.dumps(sources, ensure_ascii=False) if sources else None,
+            bool(item.get("self_confirm_required")),
+            bool(item["confirmed_by_self"]) if item.get("confirmed_by_self") else None,
+            item.get("self_confirmed_at"))
 
 
 async def _mirror_review_impl(item: dict) -> None:
@@ -332,6 +348,16 @@ async def mirror_review(item: dict | None) -> None:
         await _arun(_mirror_review_impl(item))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.mirror_review_failed", error=str(e)[:120])
+
+
+def upsert_review_row(item: dict) -> None:
+    """W4.1 单行 UPSERT（review_queue）：medical_review 域写点的行级落盘——多实例并发
+    各自改不同条目时不再整表互相覆盖（save_queue 全量同步 last-writer-wins 的根除）。
+    无池/离线/失败抛 RuntimeError：调用方（域锁内）决定回落 save_queue 全量。
+    与 upsert_user_row 同纪律：本函数只管 PG 行，JSON 镜像由调用方 mirror_json_file。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("upsert_review_row 需要 PG 池（离线/单机形态请走 save_queue 全量同步）")
+    _run_pg(_mirror_review_impl(item))
 
 
 async def _counts_impl() -> dict:
@@ -404,6 +430,15 @@ async def purge_pending_reviews() -> str:
         return await _arun(_purge_pending_impl())
     except Exception:  # noqa: BLE001
         return ""
+
+
+def purge_pending_reviews_strict() -> str:
+    """W4.1 行级清空（严格版）：与 purge_pending_reviews 同 SQL，但无池/失败抛出——
+    purge 是批量行级删除（按 status），PG 删失败必须让调用方感知（不产生
+    PG 留 pending / JSON 已清 的分裂）；JSON 镜像由调用方 mirror_json_file。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("purge_pending_reviews_strict 需要 PG 池")
+    return _run_pg(_purge_pending_impl())
 
 
 async def _purge_drug_impl() -> str:
@@ -829,6 +864,21 @@ def save_consults(items: list, path: str) -> None:
     _json_then_pg(_pg_save_consults, path, items)
 
 
+def upsert_consult_row(item: dict) -> None:
+    """W4.1 单行 UPSERT（consults）：会诊单为单据级变更（create/opinion/close 各改一张单），
+    行级写根除多实例全量同步互覆。无池/离线/失败抛 RuntimeError（同 upsert_review_row 纪律：
+    调用方按 settings.pg_primary 决定回落 save_consults 全量）。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("upsert_consult_row 需要 PG 池（离线/单机形态请走 save_consults 全量同步）")
+
+    async def _impl():
+        async with _pool.acquire() as c:
+            await c.execute(_CONSULT_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
+                            item.get("initiator", ""), item.get("status", "open"))
+
+    _run_pg(_impl())
+
+
 # ---- 阶段2.1：智能开药处方（data jsonb 全量留痕，created_at 内嵌 data 中，读时按其排序还原追加顺序） ----
 
 _RX_UPSERT = """INSERT INTO prescriptions(id,data,doctor,status) VALUES($1,$2::jsonb,$3,$4)
@@ -874,6 +924,20 @@ def load_prescriptions(path: str, json_loader=None) -> list:
 
 def save_prescriptions(items: list, path: str) -> None:
     _json_then_pg(_pg_save_prescriptions, path, items)
+
+
+def upsert_prescription_row(item: dict) -> None:
+    """W4.1 单行 UPSERT（prescriptions）：处方为单据级变更（create/submit/approve/reject/
+    rewrite 经 _mutate 各改一张单）。无池/离线/失败抛 RuntimeError（同上纪律）。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("upsert_prescription_row 需要 PG 池（离线/单机形态请走 save_prescriptions 全量同步）")
+
+    async def _impl():
+        async with _pool.acquire() as c:
+            await c.execute(_RX_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
+                            item.get("doctor", ""), item.get("status", "pending_pharm"))
+
+    _run_pg(_impl())
 
 
 # ---- 阶段4：病例库合规归档（data jsonb 全量留痕，archived_at 内嵌 data 中，读时按其排序还原追加顺序） ----

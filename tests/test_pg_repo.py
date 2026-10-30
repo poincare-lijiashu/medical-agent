@@ -238,6 +238,10 @@ class FakeConn:
                 item["meta"] = json.loads(r[15]) if r[15] else None
                 # 任务3/任务1：sources 列（任务3 全交互留痕溯源）随 UPSERT 往返
                 item["sources"] = json.loads(r[16]) if r[16] else None
+                # W4.1 行级化：任务3 知情确认三字段随 UPSERT 往返（此前 PG 往返即丢）
+                item["self_confirm_required"] = bool(r[17])
+                item["confirmed_by_self"] = r[18]
+                item["self_confirmed_at"] = r[19]
                 self.db["review_queue"][item["id"]] = item
             return
         if s.startswith("INSERT INTO consults"):

@@ -25,6 +25,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from backend.config import settings
 from backend.core import pg_store
 from backend.core.medical_review import _cap_total_chars, _compress_images
 
@@ -76,6 +77,18 @@ def _save(items: list[dict]) -> None:
     pg_store.save_consults(items, CONSULTS_FILE)
 
 
+def _save_row(item: dict, items: list[dict]) -> None:
+    """W4.1 行级落盘（语义同 medical_review._save_row）：PG 主模式且池可用 → 单行
+    UPSERT（严格，失败抛出防分裂）+ JSON 镜像；灰度回滚/无池/离线 → 全量（行为不变）。
+    会诊单是单据级变更（create/opinion/close 各改一张单），行级写根除多实例
+    全量同步的 last-writer-wins 互覆。运行在调用方 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_consult_row(item)
+        pg_store.mirror_json_file(CONSULTS_FILE, items)
+    else:
+        _save(items)
+
+
 def create(*, initiator: str, question: str, ai_analysis: str, target_depts: list[str],
            team: dict | None = None, images: list[str] | None = None,
            initiator_dept: str = "") -> str:
@@ -99,7 +112,7 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
     stored_images = None if compressed is None else _cap_total_chars(compressed)
     with _lock:
         items = _load()
-        items.append({
+        entry = {
             "id": cid, "initiator": initiator, "initiator_dept": initiator_dept or "",
             "question": question, "images": stored_images,
             "ai_analysis": ai_analysis or "",
@@ -112,8 +125,9 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
             "opinions": [],  # [{doctor, dept, content, ts}]，每人一票
             "status": "open",
             "created_at": _now(), "closed_at": None, "summary": None,
-        })
-        _save(items)
+        }
+        items.append(entry)
+        _save_row(entry, items)
     return cid
 
 
@@ -176,7 +190,7 @@ def add_opinion(cid: str, doctor: str, dept: str, content: str) -> dict:
                     raise ConsultError("该科室已完成意见")
                 i.setdefault("opinions", []).append(
                     {"doctor": doctor, "dept": dept, "content": content, "ts": _now()})
-                _save(items)
+                _save_row(i, items)
                 return i
         raise ConsultNotFoundError("未找到该会诊")
 
@@ -206,6 +220,6 @@ def close(cid: str, initiator: str) -> dict:
                 i["status"] = "closed"
                 i["closed_at"] = _now()
                 i["summary"] = "\n".join(lines)
-                _save(items)
+                _save_row(i, items)
                 return i
         raise ConsultNotFoundError("未找到该会诊")

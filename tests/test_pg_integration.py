@@ -73,8 +73,8 @@ def test_users_upsert_and_select_roundtrip():
 
 
 def test_review_queue_upsert_and_load():
-    """review_queue：同 _REVIEW_UPSERT 形态 upsert 专用测试单（17 参数，含 images/meta/
-    sources 三个 ::jsonb 转换占位）→ SELECT 回读校验 → 清理。"""
+    """review_queue：同 _REVIEW_UPSERT 形态 upsert 专用测试单（20 参数，含 images/meta/
+    sources 三个 ::jsonb 转换占位 + W4.1 知情确认三字段）→ SELECT 回读校验 → 清理。"""
     rid = SMOKE_RX_PREFIX + uuid.uuid4().hex[:8]
 
     async def body():
@@ -83,13 +83,15 @@ def test_review_queue_upsert_and_load():
             await c.execute(pg_store._REVIEW_UPSERT, rid, "2026-01-01T00:00:00", "imaging",
                             "冒烟问题", "冒烟回答", 0.7, "冒烟风险", "pending", "doctor01",
                             None, None, None, '["data:image/png;base64,AAA"]', None, None,
-                            None, '["KB:smoke"]')
+                            None, '["KB:smoke"]', True, None, None)
             row = await c.fetchrow(
-                "SELECT agent, confidence, images, sources FROM review_queue WHERE id=$1", rid)
+                "SELECT agent, confidence, images, sources, self_confirm_required "
+                "FROM review_queue WHERE id=$1", rid)
             assert row["agent"] == "imaging"
             assert abs(row["confidence"] - 0.7) < 1e-9
             assert row["images"] == '["data:image/png;base64,AAA"]'  # jsonb 原文回读
             assert row["sources"] == '["KB:smoke"]'
+            assert row["self_confirm_required"] is True  # W4.1 补列回读
         finally:
             await c.execute("DELETE FROM review_queue WHERE id=$1", rid)
             await c.close()

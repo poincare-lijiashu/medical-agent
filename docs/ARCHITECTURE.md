@@ -61,9 +61,14 @@ v-html 消费方（如 KbView kbMsg）拼接必须经 `utils/assist.js` 的 `esc
 
 ## 数据与外部依赖
 - Milvus（向量）+ PostgreSQL（可部署编排内含）+ Qwen(MaaS，OpenAI 兼容) + PubMed/NCBI eutils（文献在线，可选）。
-- **多实例部署限制（backlog）**：PG 镜像层为「JSON 兜底 + 全表重写同步」（save 全量 upsert/delete 重放，
-  last-writer-wins），无行级合并与写冲突检测——多实例并发写会互相覆盖，**多实例部署需先落实单写者
-  约束**（单写多读：仅一个实例持有写权，或引入队列表/乐观锁），见 docs/DEPLOY.md 三级部署指南。
+- **多实例数据一致性（W4.1 已完成）**：高频写域已行级化——users（auth 三写点）、review_queue
+  （submit/resolve/reopen/self_confirm/purge）、consults、prescriptions（create/_mutate 单据级
+  变更）在 PG 主模式下走**单行 UPSERT**（严格失败抛出防分裂）+ JSON 镜像，多实例并发各自改
+  不同条目不再互相覆盖（全量同步 last-writer-wins 根除）；灰度回滚开关（PG_PRIMARY=false）
+  与无池/离线回落 JSON 全量同步（行为与行级化前一致）。低频域（departments/llm_providers/
+  runtime_flags 等配置类）保留全量同步 best-effort（配置项由 admin 单点维护，无并发互覆面）。
+  review_queue 知情确认三字段（self_confirm_required/confirmed_by_self/self_confirmed_at）
+  已补列入 PG（此前 PG 主模式往返即丢）。
 - 置信度**真实校准**：`conf = 0.35 + 0.35·σ(rerank_top) + 0.30·supported_ratio`（claim 溯源后再降）；`needs_human_review = conf<0.6 ∨ 高风险 ∨ 有被剔除引用`。
 
 ## 自包含

@@ -368,6 +368,10 @@ docker compose --profile full up -d --scale app=3
 ```
 
 - 多实例共享 Milvus/PG/MinIO 基础设施，无需额外协调；审计 JSONL 各实例本地落盘 + PG 双写镜像，跨实例审计以 PG 为准
+- **数据一致性（W4.1 行级化已完成）**：users/review_queue/consults/prescriptions 高频写域在 PG 主模式
+  （PG_PRIMARY=true 默认）走单行 UPSERT——多实例并发写不同条目不丢更新（验收：tests/test_row_level_review.py
+  并发集成）。务必保持 PG_PRIMARY=true；置 false（灰度回滚）后行级写回落全量同步，多实例并发会互相覆盖，
+  仅单实例使用
 - 前置 nginx upstream 指向各实例；健康检查用 `/healthz`（容器 HEALTHCHECK 同源）
 
 ### API 容灾说明
