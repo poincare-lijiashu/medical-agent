@@ -1,0 +1,63 @@
+{{- if and .Values.auth.enabled .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # 名称带 revision：Helm 升级时旧 Job 由 hook-delete-policy 清理，避免不可变字段冲突
+  name: {{ include "medassist.fullname" . }}-migrate-auth-r{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "auth") | nindent 4 }}
+    medassist.io/role: migration
+  annotations:
+    # PreSync：登录/账号表结构必须先于新版本应用就绪
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PreSync
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migration.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "auth") | nindent 8 }}
+        medassist.io/role: migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.auth.image) }}
+          imagePullPolicy: {{ .Values.auth.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # 迁移专用入口：飞书/Argo 前置执行，成功后进程以 0 退出；失败则阻塞发布
+          args:
+            - "--medassist.migrate-only=true"
+            - "--server.port=0"
+            - "--spring.flyway.enabled=true"
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "auth" "jwt" false "empi" false "flyway" true) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+{{- end }}

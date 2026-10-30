@@ -1,0 +1,102 @@
+{{- if .Values.empi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "empi") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "empi") | nindent 4 }}
+spec:
+  {{- if not .Values.empi.autoscaling.enabled }}
+  replicas: {{ .Values.empi.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.empi.revisionHistoryLimit }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "empi") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "empi") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.empi.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: empi
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.empi.image) }}
+          imagePullPolicy: {{ .Values.empi.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.empi.service.port }}
+              protocol: TCP
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "empi" "jwt" false "empi" true) | nindent 12 }}
+            {{- with .Values.empi.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.empi.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.empi.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.empi.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.empi.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.empi.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.empi.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.empi.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.empi.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.empi.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.empi.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.empi.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.empi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.empi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.empi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

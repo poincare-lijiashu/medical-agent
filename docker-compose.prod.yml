@@ -1,0 +1,100 @@
+# ============================================================================
+# 生产形态叠加层（Nacos 鉴权 + MySQL 持久化）
+#
+# 用法（必须与基础 compose 同时使用）：
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d mysql nacos nacos-init
+#
+# 与基础文件的关系：
+#   - 基础文件：单机联调形态（Nacos 内嵌 derby、鉴权关闭），零依赖；
+#   - 本文件：院区级生产形态（Nacos 元数据落 MySQL、开启鉴权、管理员密码一次性初始化）。
+#     有状态底座建议由平台组统一托管；本文件用于单机/双机院区的生产化落地。
+#
+# 必填环境变量（缺失即启动失败，避免"忘了配就用默认值"）：
+#   MYSQL_ROOT_PASSWORD     MySQL root 口令
+#   NACOS_DB_PASSWORD       Nacos 数据库账号口令（用户 nacos 由 MYSQL_USER 创建）
+#   NACOS_ADMIN_PASSWORD    Nacos 控制台/客户端管理员 nacos 的口令
+#   NACOS_AUTH_TOKEN        Base64(≥32 字节) 令牌签名密钥
+#   NACOS_AUTH_IDENTITY_KEY / NACOS_AUTH_IDENTITY_VALUE   服务端间身份标识
+#
+# 生成示例：
+#   openssl rand -base64 32   # NACOS_AUTH_TOKEN
+#   openssl rand -hex 16      # NACOS_AUTH_IDENTITY_KEY / VALUE
+# ============================================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: medagent_mysql
+    restart: unless-stopped
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_bin"
+      - "--default-time-zone=+08:00"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?必须设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: nacos_config
+      MYSQL_USER: ${NACOS_DB_USER:-nacos}
+      MYSQL_PASSWORD: ${NACOS_DB_PASSWORD:?必须设置 NACOS_DB_PASSWORD}
+      TZ: Asia/Shanghai
+    ports:
+      # 仅绑回环：数据库不对局域网暴露（Nacos 容器经服务名访问）
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - medagent_mysql:/var/lib/mysql
+      # 官方 nacos 2.5.1 mysql-schema.sql（已随仓库落盘，纯 DDL 无默认账号）
+      - ./deploy/nacos/mysql-schema.sql:/docker-entrypoint-initdb.d/01-nacos-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  nacos:
+    environment:
+      # 外部 MySQL 持久化（derby 仅适合单机联调，重启/升级会丢元数据）
+      SPRING_DATASOURCE_PLATFORM: mysql
+      MYSQL_SERVICE_HOST: mysql
+      MYSQL_SERVICE_PORT: "3306"
+      MYSQL_SERVICE_DB_NAME: nacos_config
+      MYSQL_SERVICE_USER: ${NACOS_DB_USER:-nacos}
+      MYSQL_SERVICE_PASSWORD: ${NACOS_DB_PASSWORD:?必须设置 NACOS_DB_PASSWORD}
+      MYSQL_SERVICE_DB_PARAM: "characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useUnicode=true&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      # 鉴权强制开启（覆盖基础文件的 false）
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN:?必须设置 NACOS_AUTH_TOKEN（Base64, ≥32 字节）}
+      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:?必须设置 NACOS_AUTH_IDENTITY_KEY}
+      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE:?必须设置 NACOS_AUTH_IDENTITY_VALUE}
+      # 令牌缓存：多实例部署时降低鉴权开销；权限变更存在 ~15s 生效延迟（可接受）
+      NACOS_AUTH_CACHE_ENABLE: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # 一次性任务：2.4+ 不再内置默认管理员密码，首次开启鉴权后必须初始化
+  # 幂等：已初始化过时接口返回错误，脚本记录后正常退出（不阻塞后续启动）
+  nacos-init:
+    image: nacos/nacos-server:v2.5.1
+    container_name: medagent_nacos_init
+    restart: "no"
+    environment:
+      NACOS_ADMIN_PASSWORD: ${NACOS_ADMIN_PASSWORD:?必须设置 NACOS_ADMIN_PASSWORD}
+    depends_on:
+      nacos:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        echo "[nacos-init] 等待 Nacos 就绪..."
+        until curl -fsS http://nacos:8848/nacos/v1/console/health/readiness >/dev/null 2>&1; do sleep 2; done
+        echo "[nacos-init] 初始化管理员密码（仅首次生效）"
+        resp=$$(curl -sS -X POST "http://nacos:8848/nacos/v1/auth/users/admin" -d "password=$$NACOS_ADMIN_PASSWORD")
+        echo "[nacos-init] result: $$resp"
+        case "$$resp" in
+          *'"username":"nacos"'*) echo "[nacos-init] 初始化成功" ;;
+          *) echo "[nacos-init] 已初始化或无需初始化（幂等跳过）" ;;
+        esac
+
+volumes:
+  medagent_mysql:

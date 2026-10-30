@@ -1,0 +1,57 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: medassist-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/part-of: medassist-platform
+    medassist.io/env: prod
+spec:
+  project: medassist
+  source:
+    repoURL: https://git.hospital.local/medassist/medical_agent.git
+    # 生产只跟随经过评审的 tag（v1.0.0 形式），不回滚到分支 HEAD
+    targetRevision: v1.0.0
+    path: deploy/helm/medassist-platform
+    helm:
+      releaseName: medassist
+      valueFiles:
+        - values-prod.yaml
+      # 发布时由 CI 覆写镜像 tag（values-prod.yaml 保持仓库结构，tag 走参数避免每次改文件）
+      parameters:
+        - name: gateway.image.tag
+          value: "1.0.0"
+        - name: auth.image.tag
+          value: "1.0.0"
+        - name: empi.image.tag
+          value: "1.0.0"
+        - name: aiCore.image.tag
+          value: "1.0.0"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medassist-prod
+  syncPolicy:
+    # 生产保留 automated 以便 Git 即真相；如需窗口化发布可改为手动并配合 Argo Rollouts
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - PruneLast=true
+      # 服务端应用：规避 HPA 与 Deployment replicas 等字段的三方合并冲突
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+  revisionHistoryLimit: 10

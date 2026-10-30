@@ -98,9 +98,22 @@ async def lifespan(app: FastAPI):
         logger.info("medical_agent.startup.embedder_ready")
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_agent.startup.embedder_failed", error=str(exc)[:120])
+    try:
+        # P0-5：注册到 Nacos（默认关闭）。内部已做后台重试，不阻塞启动；
+        # 注册失败仅告警——AI 能力优先于"被服务发现"。
+        from backend.core.nacos_registry import registry as _nacos_registry
+        await _nacos_registry.start()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_agent.startup.nacos_failed", error=str(exc)[:120])
     logger.info("medical_agent.startup.done")
     yield
     logger.info("medical_agent.shutdown")
+    try:
+        # 优雅下线：先从 Nacos 摘除，避免滚动更新期间新请求打到正在停止的实例
+        from backend.core.nacos_registry import registry as _nacos_registry
+        await _nacos_registry.stop()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from backend.core import pg_store
         await pg_store.close()

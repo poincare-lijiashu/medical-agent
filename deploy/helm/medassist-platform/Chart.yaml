@@ -1,0 +1,15 @@
+apiVersion: v2
+name: medassist-platform
+description: MedAssist 全院级平台（Java 微服务矩阵 gateway/auth/empi + Python AI 中台）生产部署 Chart
+type: application
+# Chart 版本遵循 SemVer；appVersion 跟随平台版本（与 Maven 0.1.0-SNAPSHOT 对齐）
+version: 0.1.0
+appVersion: "0.1.0-SNAPSHOT"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - his
+  - emr
+  - microservice
+  - medical
+annotations:
+  medassist.io/owner: platform-team

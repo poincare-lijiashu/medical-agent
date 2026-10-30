@@ -316,6 +316,29 @@ import 失败静默回落内存镜像（incr 照常返回、无 degraded 外显�
 | Milvus 集群 | standalone → cluster（etcd/MinIO 依赖已就位，扩 QueryNode/DataNode + 分片） | KB 向量达千万级，或多院区共享统一知识库 |
 | PG 主从 | `pg_async_dsn` 指向主从拓扑（读写分离由 PG 侧代理层实现，应用零改动）；备份恢复见上文数据归属表 | 审计/留痕写入量使单实例 PG 成瓶颈，或要求异地容灾 |
 
+## Kubernetes 生产部署（P0-5，2026-10-30）
+
+Java 微服务矩阵（`platform/`）与 Python AI 中台的集群形态已交付，集中在仓库根 `deploy/`：
+
+- **Helm Chart** `deploy/helm/medassist-platform/`：gateway/auth/empi/ai-core 四服务，
+  含 HPA、PDB、NetworkPolicy、ServiceMonitor、SkyWalking agent 注入与数据库迁移 Hook。
+- **Argo CD** `deploy/argocd/`：AppProject + App-of-Apps，dev/staging/prod 三套 Application
+  （生产只跟 tag）。
+- **Nacos 生产化**：`docker-compose.prod.yml`（MySQL 持久化 + 鉴权 + 管理员初始化）
+  与 `deploy/nacos/README.md` 运行手册。
+- **SkyWalking**：`deploy/observability/`（OAP 11.0.0 + UI + PG 存储）。
+
+要点：
+
+1. 迁移不再由应用进程执行——Helm PreSync Hook Job 以 `--medassist.migrate-only=true`
+   先行迁移，应用侧 `SPRING_FLYWAY_ENABLED=false`（多副本不抢迁移锁）。
+2. 生产密钥全部来自外部 Secret（External Secrets / Sealed Secrets），`secrets.create`
+   仅用于本地 kind 自验。
+3. 本地 uvicorn / java -jar 的开发方式不受影响；`NACOS_ENABLED=false`、
+   `SW_AGENT_COLLECTOR_BACKEND_SERVICES` 为空时零行为变化。
+
+完整步骤、values 说明与本机实测记录见 [`deploy/README.md`](../deploy/README.md)。
+
 ## 高并发部署
 
 ### uvicorn workers（经验公式）

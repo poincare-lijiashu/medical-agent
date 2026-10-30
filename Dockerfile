@@ -14,12 +14,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY frontend ./frontend
 COPY scripts ./scripts
+# P0-5：容器入口脚本（按 SW_AGENT_COLLECTOR_BACKEND_SERVICES 决定是否挂 SkyWalking Python agent）
+COPY deploy/docker/entrypoint.sh /app/deploy/docker/entrypoint.sh
 
 # 非 root 运行：创建专用用户（slim 基于 Debian，自带 useradd）。应用运行时仅需写 /app/data
 # （审计/用户表/队列/知识库）；/app/backend 只读（模型权重经 bind 挂载进 /app/backend/models）。
 RUN useradd -m -u 10001 appuser \
     && mkdir -p /app/data \
-    && chown -R appuser:appuser /app/data
+    && chown -R appuser:appuser /app/data \
+    && chmod +x /app/deploy/docker/entrypoint.sh
 
 USER appuser
 
@@ -28,4 +31,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s CMD python -c "import
 
 # 模型权重不打进镜像：运行时以卷挂载到 /app/backend/models（见 compose 的 models 卷）
 EXPOSE 8001
+ENTRYPOINT ["/app/deploy/docker/entrypoint.sh"]
 CMD ["python","-m","uvicorn","backend.main:app","--host","0.0.0.0","--port","8001"]

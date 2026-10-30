@@ -7,6 +7,9 @@
 #   种子灌库），不适合每次 push 都跑——仅在手动触发（workflow_dispatch）或每周一
 #   定时跑，结果 artifact 留档。首次使用前需在仓库 Secrets 配置 QWEN_API_KEY
 #   （可选 QWEN_BASE_URL，默认 DashScope 兼容端点）。
+# - platform：Java 微服务矩阵（Spring Boot 4）编译 + 单元测试（P0-4 鉴权、P0-5 迁移入口）。
+# - helm：部署清单静态校验（helm lint + 三环境 template + compose 叠加层 config），
+#   不依赖集群，几十秒内可拦住 95% 的清单错误。
 
 name: CI
 
@@ -42,6 +45,55 @@ jobs:
             PGPASSWORD=medagent123 psql -h 127.0.0.1 -U medagent -d medagent -c "CREATE DATABASE medagent_test"
       - name: Run pytest
         run: python -m pytest -q
+
+  platform:
+    # Java 微服务矩阵：编译 + 单测（不连数据库：JWT 与网关过滤器均为纯单元测试）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build & test platform
+        run: mvn -B -f platform/pom.xml package
+
+  helm:
+    # 部署清单静态校验：无需集群，防止 values/模板漂移进入主干
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Helm lint
+        run: helm lint deploy/helm/medassist-platform
+      - name: Render dev / staging / prod
+        run: |
+          set -euo pipefail
+          for env in dev staging prod; do
+            helm template medassist deploy/helm/medassist-platform \
+              -n "medassist-$env" \
+              -f "deploy/helm/medassist-platform/values-$env.yaml" \
+              > "/tmp/manifest-$env.yaml"
+            test -s "/tmp/manifest-$env.yaml"
+            echo "rendered $env: $(grep -c '^kind: ' "/tmp/manifest-$env.yaml") resources"
+          done
+      - name: Validate compose overlays
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only
+          NACOS_DB_PASSWORD: ci-only
+          NACOS_ADMIN_PASSWORD: ci-only
+          NACOS_AUTH_TOKEN: Y2ktb25seS0zMi1ieXRlcy1iYXNlNjQtcGFkZGluZy0=
+          NACOS_AUTH_IDENTITY_KEY: ci
+          NACOS_AUTH_IDENTITY_VALUE: ci
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+          docker compose -f deploy/observability/docker-compose.observability.yml config -q
 
   eval-baseline:
     # 评测基线门槛：pytest 全绿后，手动/定时才跑（控制 API 成本与外网波动面）

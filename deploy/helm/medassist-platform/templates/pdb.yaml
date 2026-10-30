@@ -1,0 +1,36 @@
+{{- /*
+  PDB：保证节点维护/驱逐时在线服务至少留 1 个可用副本。
+  注意：minAvailable 必须小于副本数，否则驱逐会被永久阻塞（配合 HPA 时按 minReplicas 设置）。
+*/}}
+{{- range $component := list "gateway" "auth" "empi" }}
+{{- $svc := index $.Values $component }}
+{{- if and $svc.enabled $svc.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  minAvailable: {{ $svc.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+---
+{{- end }}
+{{- end }}
+{{- if and .Values.aiCore.enabled .Values.aiCore.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "ai-core") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.aiCore.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}
+{{- end }}

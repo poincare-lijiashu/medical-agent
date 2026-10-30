@@ -1,0 +1,83 @@
+# ============================================================================
+# SkyWalking 可观测底座（本地/院区级自建形态）
+#
+# 用途：为 Java 微服务（gateway/auth/empi）与 Python AI 中台提供统一 APM：
+#   - OAP 11800（gRPC，agent 上报）/ 12800（HTTP，UI 与 GraphQL 查询）
+#   - UI  8088
+#   - 存储：PostgreSQL（复用团队熟悉的运维体系；生产建议独立实例 + 定期归档）
+#
+# 用法：
+#   docker compose -f deploy/observability/docker-compose.observability.yml up -d
+#
+# 说明：
+#   - 与主 compose 同为 project=medagent，但独立文件管理，避免业务发布牵动观测底座；
+#   - 镜像可用 SW_OAP_IMAGE / SW_UI_IMAGE 指向院内镜像仓库（外网受限环境）：
+#       $env:SW_OAP_IMAGE="harbor.hospital.local/apache/skywalking-oap-server:11.0.0"
+#   - OAP 11.0.0 / UI 11.0.0 为 2026-08 发布的当前稳定版；Java agent 9.8.0 由
+#     Helm chart 的 initContainer 注入，Python agent 1.3.0 由容器 entrypoint 注入。
+# ============================================================================
+name: medagent
+
+services:
+  skywalking-postgres:
+    image: postgres:15-alpine
+    container_name: medagent_skywalking_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: skywalking
+      POSTGRES_USER: skywalking
+      POSTGRES_PASSWORD: ${SW_PG_PASSWORD:-skywalking}
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - medagent_skywalking_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skywalking -d skywalking"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  skywalking-oap:
+    image: ${SW_OAP_IMAGE:-apache/skywalking-oap-server:11.0.0}
+    container_name: medagent_skywalking_oap
+    restart: unless-stopped
+    environment:
+      SW_STORAGE: postgresql
+      SW_JDBC_URL: jdbc:postgresql://skywalking-postgres:5432/skywalking
+      SW_DATA_SOURCE_USER: skywalking
+      SW_DATA_SOURCE_PASSWORD: ${SW_PG_PASSWORD:-skywalking}
+      # 数据保留：明细 3 天 / 指标 7 天（院内 GP 量级足够回溯；按合规要求调整）
+      SW_CORE_RECORD_DATA_TTL: "3"
+      SW_CORE_METRICS_DATA_TTL: "7"
+      # 关闭匿名遥测上报
+      SW_TELEMETRY: none
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:11800:11800"
+      - "127.0.0.1:12800:12800"
+    depends_on:
+      skywalking-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:12800/internal/l7check >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  skywalking-ui:
+    image: ${SW_UI_IMAGE:-apache/skywalking-ui:11.0.0}
+    container_name: medagent_skywalking_ui
+    restart: unless-stopped
+    environment:
+      SW_OAP_ADDRESS: http://skywalking-oap:12800
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:8088:8080"
+    depends_on:
+      skywalking-oap:
+        condition: service_started
+
+volumes:
+  medagent_skywalking_pg:

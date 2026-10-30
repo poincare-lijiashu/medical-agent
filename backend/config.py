@@ -68,6 +68,26 @@ class Settings(BaseSettings):
     # 服务不中断（见 backend/core/stores.py 与 docs/DEPLOY.md「三级部署指南」）。
     redis_url: str = ""
 
+    # ---- Nacos 服务注册（计划书 D6.1，P0-5）----
+    # 默认关闭：未部署 Nacos 的单机/科室级环境零副作用。开启后本服务以
+    # nacos_service_name 注册为临时实例（SDK 维持心跳），网关与 Java 服务可按服务名发现。
+    # 版本口径：Nacos 2.5.1 服务端实测必须用 nacos-sdk-python 3.x
+    # （2.0.11 注册"成功"但服务端查不到实例，静默失败）。
+    nacos_enabled: bool = False
+    nacos_server_addresses: str = "127.0.0.1:8848"  # 集群：host1:8848,host2:8848,host3:8848
+    nacos_namespace: str = ""                       # 空=public；生产按环境隔离填命名空间 ID
+    nacos_group: str = "DEFAULT_GROUP"
+    nacos_service_name: str = "medassist-ai-core"
+    nacos_username: str = ""                        # 生产开启鉴权后必填
+    nacos_password: str = ""
+    nacos_cluster_name: str = "DEFAULT"
+    nacos_weight: float = 1.0
+    # 容器/多网卡环境必须显式指定：自动探测可能把回环或 docker 网桥地址注册上去（跨主机不可达）
+    nacos_ip: str = ""
+    nacos_log_level: str = "INFO"
+    nacos_metadata: str = ""                        # 追加元数据 k=v,k=v；version/env/lang 自动补齐
+    nacos_register_attempts: int = 10               # 启动注册重试次数（指数退避 2s→60s）
+
     # KB embed 截断窗口（任务A）：BGE-M3 最长支持 8192；256→1024 对齐结构感知切分窗口。
     # 入库与查询两侧共用 embedder 同一默认窗口，向量空间自然一致。
     # 注意 batch 32×1024 token 显存约翻倍，若 OOM 将 kb_ingest._EMBED_BATCH 降为 16。

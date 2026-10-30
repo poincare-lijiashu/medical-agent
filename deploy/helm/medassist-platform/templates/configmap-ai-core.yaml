@@ -1,0 +1,35 @@
+{{- if .Values.aiCore.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "medassist.fullname" . }}-ai-core
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.aiCore.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  SERVER_PORT: {{ .Values.aiCore.service.port | quote }}
+  # 容器内日志统一走 stdout（12-factor），由集群日志采集；根文件系统只读，不落文件
+  LOG_TO_FILE: "off"
+  BGE_M3_PATH: {{ printf "%s/embedding/bge-m3" .Values.aiCore.models.mountPath | quote }}
+  RERANKER_PATH: {{ printf "%s/reranker/bge-reranker-large" .Values.aiCore.models.mountPath | quote }}
+  {{- if .Values.external.nacos.enabled }}
+  NACOS_ENABLED: "true"
+  NACOS_SERVER_ADDRESSES: {{ .Values.external.nacos.serverAddr | quote }}
+  NACOS_NAMESPACE: {{ .Values.external.nacos.namespace | quote }}
+  NACOS_GROUP: "DEFAULT_GROUP"
+  NACOS_SERVICE_NAME: "medassist-ai-core"
+  NACOS_CLUSTER_NAME: "DEFAULT"
+  NACOS_WEIGHT: "1"
+  NACOS_METADATA: "lang=python,cloud=k8s"
+  {{- else }}
+  NACOS_ENABLED: "false"
+  {{- end }}
+  {{- if .Values.external.skywalking.enabled }}
+  SW_AGENT_COLLECTOR_BACKEND_SERVICES: {{ .Values.external.skywalking.oapEndpoint | quote }}
+  SW_AGENT_NAME: "medassist-ai-core"
+  SW_AGENT_SAMPLE: "10000"
+  {{- end }}
+{{- end }}

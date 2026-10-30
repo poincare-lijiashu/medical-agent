@@ -49,10 +49,17 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: never
+      # K8s 探针：liveness 用 livenessState，readiness 必须带上 db——
+      # 数据库不可用时 Pod 不应继续接收流量（否则登录/账号查询全部 500）
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
 
 logging:
   level:

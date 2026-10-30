@@ -1,0 +1,311 @@
+# ============================================================================
+# MedAssist 平台 Helm values（生产默认值）
+#
+# 设计原则：
+# 1) 本 Chart 只部署无状态业务服务。PostgreSQL / Nacos / SkyWalking OAP 等有状态
+#    中间件由平台组统一提供（可复用集群既有实例），通过 external.* 注入连接信息；
+#    避免每个业务 Chart 自带一套数据库导致备份、升级、监控各自为政。
+# 2) 密钥不落 values：默认引用预先创建的 Secret（推荐 External Secrets / Sealed
+#    Secrets 从密钥管理系统同步）；仅本地 kind/minikube 验证可用 secrets.create=true。
+# 3) 在线业务默认 2 副本 + PDB；数据库迁移由 Helm PreSync Hook Job 前置执行，
+#    应用侧关闭 Flyway，避免多副本争抢迁移锁（详见 templates/job-migrate-*.yaml）。
+# ============================================================================
+
+# 院内镜像仓库前缀（如 harbor.hospital.local/medassist）；留空表示直接用 repository 全名
+imageRegistry: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  timezone: Asia/Shanghai
+  springProfiles: k8s
+  imagePullSecrets: []
+
+# ---- 外部中间件（必须由平台组提供）----
+external:
+  postgres:
+    host: postgres.database.svc.cluster.local
+    port: 5432
+    database: medagent
+    existingSecret: medassist-postgres
+    secretKeys:
+      username: username
+      password: password
+
+  nacos:
+    enabled: true
+    serverAddr: nacos.medassist-infra.svc.cluster.local:8848
+    # 生产按环境隔离命名空间（空=public）；Java 侧与 Python 侧必须一致
+    namespace: ""
+    existingSecret: medassist-nacos
+    secretKeys:
+      username: username
+      password: password
+
+  jwt:
+    issuer: medassist-auth
+    # 令牌有效期（ISO-8601）；生产建议 30 分钟 + 刷新机制（P1 落地前保持单班次 8 小时）
+    ttl: PT8H
+    existingSecret: medassist-jwt
+    secretKey: secret
+
+  # SkyWalking OAP（Java agent 与 Python agent 共用同一后端）
+  skywalking:
+    enabled: true
+    oapEndpoint: skywalking-oap.observability.svc.cluster.local:11800
+    agentImage: apache/skywalking-java-agent:9.8.0-java21
+    # 采样：-1 = 全量采样（医疗内网 QPS 低，全量可直接支撑审计与排障）；
+    # 高并发网关可按 3 秒窗口限采样数（如 3000）
+    sampleNPer3Secs: -1
+    agentLogLevel: INFO
+
+  # 患者敏感字段加密密钥（EMPI 专用；换密钥会导致存量密文不可解，必须走轮换流程）
+  empi:
+    existingSecret: medassist-empi
+    secretKeys:
+      fieldKey: field-key      # Base64 编码的 32 字节 AES-256 密钥
+      hashSalt: hash-salt      # 查重哈希盐（与密钥分离保管）
+
+  # Python AI 中台依赖的向量库
+  milvus:
+    uri: http://milvus.medassist-infra.svc.cluster.local:19530
+    # 开启 Milvus 鉴权时提供（未开启留空即可）；Secret 中键名 token
+    existingSecret: ""
+    secretKey: token
+
+# ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
+secrets:
+  create: false
+  postgresUsername: medagent
+  postgresPassword: ""
+  nacosUsername: nacos
+  nacosPassword: ""
+  jwtSecret: ""
+  empiFieldKey: ""
+  empiHashSalt: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# ---- 数据库迁移 Hook（auth / empi 各自的 Flyway 迁移)----
+migration:
+  enabled: true
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 900
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# ---- 网关 ----
+gateway:
+  enabled: true
+  image:
+    repository: medassist/platform-gateway
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 额外环境变量（K8s 原生 env 列表，支持 valueFrom；同名覆盖 application.yml 默认值）
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---- 用户与权限中心 ----
+auth:
+  enabled: true
+  image:
+    repository: medassist/platform-auth
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8081
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---- 患者主索引 ----
+empi:
+  enabled: true
+  image:
+    repository: medassist/platform-empi
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8082
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---- Python AI 中台 ----
+aiCore:
+  enabled: true
+  image:
+    repository: medassist/ai-core
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  revisionHistoryLimit: 5
+  # 模型加载与嵌入推理较慢，优雅停机放宽（SSE 长连接需自然收敛）
+  terminationGracePeriodSeconds: 60
+  service:
+    type: ClusterIP
+    port: 8001
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {cpu: "4", memory: 6Gi}
+  autoscaling:
+    # 默认关闭：嵌入模型常驻显存/内存，按 CPU 扩容会重复加载权重；
+    # 需要横向扩容时优先"多实例 + 共享 Milvus/PG"，并按 QPS 指标扩容（P1）
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  probes:
+    # 冷启动要加载 BGE-M3（CPU 环境可达数分钟），startupProbe 给足 10 分钟
+    startup: {failureThreshold: 60, periodSeconds: 10}
+    liveness: {initialDelaySeconds: 30, periodSeconds: 20, timeoutSeconds: 5, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 3}
+  # 模型权重（4.3GB，BGE-M3 + reranker）：生产用预置 PVC（共享存储 ReadOnlyMany 更佳），
+  # 不允许打进镜像，也不建议每次启动从对象存储拉取。
+  # create=true 仅用于 kind/minikube 自验（空 PVC，需自行灌模型）；生产用 existingClaim。
+  models:
+    existingClaim: medassist-models
+    create: false
+    size: 20Gi
+    storageClassName: ""
+    accessModes: ["ReadWriteOnce"]
+    mountPath: /app/backend/models
+  # 运行态数据（审计/队列/知识库 JSON 兜底）：生产必须持久化
+  data:
+    existingClaim: medassist-ai-core-data
+    create: false
+    size: 5Gi
+    storageClassName: ""
+    accessModes: ["ReadWriteOnce"]
+    mountPath: /app/data
+  # 业务配置（QWEN_API_KEY 等敏感项放 Secret，通过 envFrom 注入）
+  existingSecret: medassist-ai-core
+  env:
+    APP_ENV: production
+    EMBED_DEVICE: cpu
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---- 网络策略（生产建议开启）----
+networkPolicy:
+  enabled: false
+  # 允许哪些命名空间的入站访问网关
+  ingressNamespaceSelector:
+    kubernetes.io/metadata.name: ingress-nginx
+  # 监控命名空间（Prometheus 抓取 /actuator）
+  monitoringNamespaceSelector:
+    kubernetes.io/metadata.name: monitoring
+
+# ---- Prometheus Operator 抓取（可选）----
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# ---- Ingress（仅网关与 AI 中台入口）----
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: medassist.example.com
+      paths:
+        # service 取值：gateway | aiCore
+        - path: /api/v2
+          pathType: Prefix
+          service: gateway
+        - path: /api/v1
+          pathType: Prefix
+          service: gateway
+        - path: /
+          pathType: Prefix
+          service: aiCore
+  tls: []

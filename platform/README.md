@@ -188,9 +188,41 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
   （当前 `reveal=true` 仅强制审计，任何已登录账号均可调用）
 - **业务服务裸端口可绕过网关**：auth/empi 只允许内网/集群网络访问（K8s NetworkPolicy）
 
-## 尚未完成（诚实登记，对应计划书 D10 P0 剩余项）
+## 生产部署（P0-5）
 
-- K8s Helm Chart / Argo CD 清单（本机无集群，仅本地 compose 形态）
-- SkyWalking 全链路追踪接入
-- AI 中台 Nacos 注册（Python 侧 nacos-sdk-python）
-- Nacos 生产化（鉴权初始化 + 外部 MySQL + 密钥管理）
+部署资产集中在仓库根 `deploy/`，完整说明见 [`deploy/README.md`](../deploy/README.md)。
+
+| 交付物 | 位置 | 说明 |
+|---|---|---|
+| Helm Chart | `deploy/helm/medassist-platform/` | 4 服务（gateway/auth/empi/ai-core）+ 迁移 Hook Job + HPA/PDB + NetworkPolicy + ServiceMonitor |
+| Argo CD | `deploy/argocd/` | AppProject + App-of-Apps + dev/staging/prod 三套 Application（生产跟 tag） |
+| SkyWalking | Chart initContainer + `deploy/observability/` | Java agent 9.8.0（`-java21` 镜像）、Python agent 1.3.0（entrypoint 包装）、OAP 11.0.0 自建叠加层 |
+| Nacos 生产化 | `docker-compose.prod.yml` + `deploy/nacos/` | 官方 2.5.1 MySQL schema、鉴权强制开启、管理员密码一次性初始化 |
+| 镜像构建 | `platform/Dockerfile` | 多阶段（Maven → JRE）、非 root、运行镜像不含 APM agent |
+
+关键设计（均为实测固化，不是纸面设计）：
+
+- **迁移前置**：auth/empi 新增 `--medassist.migrate-only=true` 入口（[MigrateOnlyRunner](src/main/java/com/medassist/auth/config/MigrateOnlyRunner.java)），
+  Helm 以 PreSync Hook Job 执行迁移，应用副本 `SPRING_FLYWAY_ENABLED=false`；实测两服务迁移后 exit 0。
+- **APM 与镜像解耦**：SkyWalking agent 由 initContainer 复制进 emptyDir，`JAVA_TOOL_OPTIONS`
+  注入 `-javaagent`；关闭 `external.skywalking.enabled` 即回到无 APM 形态。
+- **探针**：readiness 组加入 `db` 指标（数据库不可用即摘流量）；`/actuator/**` 已加入网关白名单，
+  否则网关自身探针会被 P0-4 的鉴权过滤器拦成 401。
+- **Prometheus**：`micrometer-registry-prometheus` 经 `platform-common` 传递到全部服务，
+  `/actuator/prometheus` 可被抓取（ServiceMonitor 默认关闭，生产 values 开启）。
+
+**实测（2026-10-30）**：`helm lint` 通过、dev/staging/prod 三套 `helm template` 全部渲染成功；
+迁移入口两服务 exit 0；Nacos 鉴权开启后 Java（platform-auth）与 Python（AI 中台）均注册成功；
+`nacos-sdk-python 2.0.11` 对 Nacos 2.5.1 静默失败、3.2.0 正常；SkyWalking Python agent 1.3.0
+的 wheel 缺 protocol，`--no-binary` 从 sdist 安装后引导成功。
+未能本机验证的点（OAP 全链路、镜像构建、kubectl apply）与复核方式见 `deploy/README.md` §8。
+
+## P0 完成度
+
+P0 计划项已全部落地：骨架、网关双轨路由、auth RBAC、EMPI、统一鉴权、Helm/Argo CD、
+SkyWalking、AI 中台 Nacos 注册、Nacos 生产化。剩余事项进入 P1：
+
+- 逐接口权限点强制（当前网关只注入角色；`empi:patient:read_phi` 仅审计）
+- 令牌撤销/刷新（当前 TTL 内旧令牌仍有效）
+- 登录限速与 Sentinel 规则落地
+- Argo Rollouts 灰度发布、日志采集（Loki/ELK）

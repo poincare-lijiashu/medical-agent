@@ -1,0 +1,80 @@
+# 本地 kind / minikube 自验覆盖值（不是生产配置）
+#
+# 特点：
+# - secrets.create=true：由 Chart 生成自验用 Secret（钩子迁移关闭，应用自行迁移）
+# - Nacos / SkyWalking / Ingress / NetworkPolicy 关闭：本地不拉起外部底座
+# - AI 中台默认关闭：模型权重 4.3GB 不在本地镜像里；需要时开启并 create PVC 自行灌模型
+#
+# 用法：
+#   helm upgrade --install medassist deploy/helm/medassist-platform \
+#     -n medassist --create-namespace -f values.yaml -f values-dev.yaml
+secrets:
+  create: true
+  postgresUsername: medagent
+  postgresPassword: medagent123
+  nacosUsername: nacos
+  nacosPassword: nacos
+  jwtSecret: "dev-only-jwt-secret-0123456789abcdef0123456789"
+  empiFieldKey: "DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4="
+  empiHashSalt: "medassist-empi-salt"
+
+external:
+  postgres:
+    host: postgres.medassist-infra.svc.cluster.local
+    port: 5432
+    database: medagent
+  nacos:
+    enabled: false
+  skywalking:
+    enabled: false
+  milvus:
+    uri: http://milvus.medassist-infra.svc.cluster.local:19530
+
+# 本地让应用自行迁移（PreSync 钩子早于 Chart 内 Secret 创建，secrets.create 时不可用）
+migration:
+  enabled: false
+
+gateway:
+  replicaCount: 1
+  autoscaling: {enabled: false}
+  podDisruptionBudget: {enabled: false}
+  resources:
+    requests: {cpu: 100m, memory: 384Mi}
+    limits: {cpu: 500m, memory: 768Mi}
+
+auth:
+  replicaCount: 1
+  autoscaling: {enabled: false}
+  podDisruptionBudget: {enabled: false}
+  resources:
+    requests: {cpu: 100m, memory: 384Mi}
+    limits: {cpu: 500m, memory: 768Mi}
+
+empi:
+  replicaCount: 1
+  autoscaling: {enabled: false}
+  podDisruptionBudget: {enabled: false}
+  resources:
+    requests: {cpu: 100m, memory: 384Mi}
+    limits: {cpu: 500m, memory: 768Mi}
+
+aiCore:
+  enabled: false
+  models: {existingClaim: "", create: true, size: 1Gi}
+  data: {existingClaim: "", create: true, size: 1Gi}
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: medassist.local
+      paths:
+        - {path: /api/v2, pathType: Prefix, service: gateway}
+        - {path: /api/v1, pathType: Prefix, service: gateway}
+        - {path: /, pathType: Prefix, service: aiCore}
+
+networkPolicy:
+  enabled: false
+
+serviceMonitor:
+  enabled: false

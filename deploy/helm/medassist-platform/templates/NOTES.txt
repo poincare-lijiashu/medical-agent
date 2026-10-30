@@ -1,0 +1,41 @@
+MedAssist 平台已部署：{{ .Chart.Name }} {{ .Chart.Version }}（appVersion {{ .Chart.AppVersion }}）
+命名空间：{{ .Release.Namespace }}
+
+1) 入口
+   网关（集群内）：http://{{ include "medassist.componentName" (dict "root" $ "component" "gateway") }}:{{ .Values.gateway.service.port }}
+   登录：POST /api/v2/auth/login  {"username":"...","password":"..."}
+   AI 中台：http://{{ include "medassist.componentName" (dict "root" $ "component" "ai-core") }}:{{ .Values.aiCore.service.port }}（/healthz 探活）
+
+2) 发布前必须确认
+{{- if not .Values.secrets.create }}
+   - 外部 Secret 已创建：{{ .Values.external.postgres.existingSecret }} / {{ .Values.external.nacos.existingSecret }} / {{ .Values.external.jwt.existingSecret }} / {{ .Values.external.empi.existingSecret }}
+     密钥来源应为企业密钥管理（External Secrets / Sealed Secrets），禁止手工 kubectl create secret 长期留存
+{{- else }}
+   - 当前 secrets.create=true：Secret 由 Chart 创建，仅供本地自验；生产必须切回外部 Secret
+{{- end }}
+{{- if .Values.aiCore.enabled }}
+   - AI 中台 PVC：{{ .Values.aiCore.models.existingClaim }}（模型权重）与 {{ .Values.aiCore.data.existingClaim }}（运行数据）
+   - AI 中台业务 Secret：{{ .Values.aiCore.existingSecret }}（QWEN_API_KEY / AUTH_JWT_SECRET 等）
+{{- end }}
+{{- if .Values.migration.enabled }}
+   - 数据库迁移以 Helm PreSync Hook Job 执行：{{ include "medassist.fullname" . }}-migrate-auth-r{{ .Release.Revision }} / -migrate-empi-r{{ .Release.Revision }}
+     迁移失败会阻塞发布；应用副本以 SPRING_FLYWAY_ENABLED=false 启动，不重复迁移
+{{- else }}
+   - migration.enabled=false：Flyway 在应用进程内执行（首次安装可用；多副本滚动升级建议开启 Hook 迁移）
+{{- end }}
+
+3) SkyWalking
+{{- if .Values.external.skywalking.enabled }}
+   OAP：{{ .Values.external.skywalking.oapEndpoint }}；Java agent 由 initContainer 从 {{ .Values.external.skywalking.agentImage }} 复制
+   验证：OAP UI → 服务列表应出现 {{ include "medassist.fullname" . }}-gateway/-auth/-empi 与 medassist-ai-core
+{{- else }}
+   已关闭（external.skywalking.enabled=false）：不注入 agent，JVM 参数与镜像保持无 APM 依赖
+{{- end }}
+
+4) 快速自检
+   kubectl -n {{ .Release.Namespace }} get deploy,pod -l app.kubernetes.io/part-of=medassist-platform
+   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "medassist.componentName" (dict "root" $ "component" "gateway") }}
+   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "medassist.componentName" (dict "root" $ "component" "auth") }} --tail=50
+{{- if .Values.serviceMonitor.enabled }}
+   Prometheus：抓取 /actuator/prometheus（ServiceMonitor {{ include "medassist.fullname" . }}-java）
+{{- end }}

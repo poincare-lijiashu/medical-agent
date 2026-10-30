@@ -41,10 +41,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,gateway
+        include: health,info,gateway,prometheus
   endpoint:
     health:
       show-details: never
+      probes:
+        enabled: true
 
 # ---- 统一鉴权（P0-4）----
 # 受保护前缀内必须携带有效 Bearer JWT；失败统一 401 壳。
@@ -58,8 +60,9 @@ medassist:
       secret: ${JWT_SECRET:<dev-jwt-secret>}
       whitelist:
         - /api/v2/auth/login
-        - /actuator/health
-        - /actuator/info
+        # K8s 探针路径为 /actuator/health/liveness|readiness，必须整段放行，
+        # 否则探针会拿到 401 被判失败（网关自身的 actuator 也会经过本过滤器）
+        - /actuator/**
       protected-paths:
         - /api/v2/**
       deny-paths:

@@ -1,0 +1,36 @@
+{{- /*
+  Prometheus Operator 抓取（可选）。
+  仅选中 Java 服务（gateway/auth/empi）：/actuator/prometheus 由 micrometer-registry-prometheus
+  提供，已在 platform-common 中作为 runtime 依赖引入。
+  AI 中台的 /metrics 需要管理员令牌（见 backend/main.py），不纳入自动抓取，避免为抓取
+  单独开匿名端点（指标含路由分布，属内部信息）。
+*/}}
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "medassist.fullname" . }}-java
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "monitoring") | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "medassist.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["gateway", "auth", "empi"]
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+{{- end }}

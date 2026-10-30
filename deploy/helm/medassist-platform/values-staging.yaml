@@ -1,0 +1,76 @@
+# 预发布（staging）覆盖值：贴近生产拓扑，规模与采样下调
+#
+# 与生产差异：副本 2、HPA 上限 4、SkyWalking 采样 100%（生产全量亦可）、
+# Ingress 使用 staging 域名、Nacos 使用 staging 命名空间隔离。
+imageRegistry: harbor.hospital.local/medassist
+
+global:
+  timezone: Asia/Shanghai
+
+external:
+  postgres:
+    host: pg-staging.medassist-infra.svc.cluster.local
+    port: 5432
+    database: medagent
+    existingSecret: medassist-postgres
+  nacos:
+    enabled: true
+    serverAddr: nacos-staging.medassist-infra.svc.cluster.local:8848
+    # staging 独立命名空间（控制台创建后填命名空间 ID，非名称）
+    namespace: staging
+    existingSecret: medassist-nacos
+  jwt:
+    issuer: medassist-auth
+    ttl: PT8H
+    existingSecret: medassist-jwt
+  skywalking:
+    enabled: true
+    oapEndpoint: skywalking-oap.observability.svc.cluster.local:11800
+  milvus:
+    uri: http://milvus-staging.medassist-infra.svc.cluster.local:19530
+
+migration:
+  enabled: true
+
+gateway:
+  replicaCount: 2
+  autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 70}
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+  hosts:
+    - host: medassist-staging.hospital.local
+      paths:
+        - {path: /api/v2, pathType: Prefix, service: gateway}
+        - {path: /api/v1, pathType: Prefix, service: gateway}
+        - {path: /, pathType: Prefix, service: aiCore}
+  tls:
+    - secretName: medassist-staging-tls
+      hosts: [medassist-staging.hospital.local]
+
+auth:
+  replicaCount: 2
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
+empi:
+  replicaCount: 2
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
+aiCore:
+  enabled: true
+  replicaCount: 1
+  env:
+    APP_ENV: staging
+    EMBED_DEVICE: cpu
+
+networkPolicy:
+  enabled: true
+
+serviceMonitor:
+  enabled: true

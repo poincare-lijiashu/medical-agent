@@ -1,0 +1,40 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: medassist
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: medassist-platform
+spec:
+  description: MedAssist 全院级平台（HIS/EMR 业务微服务 + AI 中台）
+  # 只允许从院内 Git 拉取（禁止任意公共仓库 → 防供应链投毒）
+  sourceRepos:
+    - https://git.hospital.local/medassist/medical_agent.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: medassist-*
+  # 平台 Chart 不创建集群级资源；如未来需要 CRD，请显式加入白名单
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: "*"
+    - group: apps
+      kind: "*"
+    - group: autoscaling
+      kind: "*"
+    - group: batch
+      kind: "*"
+    - group: policy
+      kind: "*"
+    - group: networking.k8s.io
+      kind: "*"
+    - group: monitoring.coreos.com
+      kind: "*"
+  roles:
+    # 只读角色：供值班/审计查看应用状态，不允许同步与删除
+    - name: readonly
+      description: 只读（值班与审计）
+      policies:
+        - p, proj:medassist:readonly, applications, get, medassist/*, allow
+      groups:
+        - medassist-ops

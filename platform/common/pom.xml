@@ -23,6 +23,14 @@
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
     </dependency>
+    <!-- Prometheus 指标导出（P0-5 ServiceMonitor 抓取 /actuator/prometheus 的前提）：
+         runtime 作用域经本模块传递给全部业务服务，Boot 检测到 registry 自动装配。
+         不引入额外代码，仅让既有 actuator 指标具备 Prometheus 文本格式。 -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <scope>runtime</scope>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

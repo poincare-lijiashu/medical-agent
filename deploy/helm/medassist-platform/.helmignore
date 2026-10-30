@@ -1,0 +1,9 @@
+.git
+.gitignore
+.helmignore
+values-dev.yaml
+values-staging.yaml
+values-prod.yaml
+README.md
+*.tmp
+*.bak

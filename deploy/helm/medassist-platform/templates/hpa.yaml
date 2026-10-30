@@ -1,0 +1,68 @@
+{{- /*
+  HPA：Deployment 在 autoscaling.enabled=true 时不设置 spec.replicas，
+  副本数完全交给 HPA，避免 helm upgrade 把 HPA 扩出的副本数覆盖回去。
+  缩容稳定窗口 300s：医疗问诊有突发流量，避免抖动式缩容。
+*/}}
+{{- range $component := list "gateway" "auth" "empi" }}
+{{- $svc := index $.Values $component }}
+{{- if and $svc.enabled $svc.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "medassist.componentName" (dict "root" $ "component" $component) }}
+  minReplicas: {{ $svc.autoscaling.minReplicas }}
+  maxReplicas: {{ $svc.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+---
+{{- end }}
+{{- end }}
+{{- if and .Values.aiCore.enabled .Values.aiCore.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "ai-core") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "medassist.componentName" (dict "root" $ "component" "ai-core") }}
+  minReplicas: {{ .Values.aiCore.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.aiCore.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.aiCore.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

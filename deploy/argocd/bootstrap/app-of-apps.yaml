@@ -1,0 +1,26 @@
+# App-of-Apps 根应用：由它创建 deploy/argocd/applications 下的各环境 Application。
+# 引导步骤见 deploy/argocd/README.md（先 apply AppProject，再 apply 本文件）。
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: medassist-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: medassist
+  source:
+    repoURL: https://git.hospital.local/medassist/medical_agent.git
+    targetRevision: main
+    path: deploy/argocd/applications
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

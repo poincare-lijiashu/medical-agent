@@ -1,0 +1,95 @@
+{{- /*
+  网络策略：只约束入站（Ingress）。出站（Egress）保持放行——业务需要访问 PG/Nacos/
+  Milvus/模型网关，若在 Chart 内硬编码出站 CIDR，换网络即断服；出站隔离应在集群
+  基础设施层按命名空间统一治理（平台组职责）。
+  信任链：客户端 → Ingress Controller → 网关 → auth/empi/ai-core；服务端口不对
+  Ingress 直接暴露，业务服务只接受同命名空间网关 Pod 的访问。
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "gateway") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.service.port }}
+---
+{{- end }}
+{{- range $component := list "auth" "empi" }}
+{{- $svc := index $.Values $component }}
+{{- if $svc.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" $component) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        # 同命名空间内的网关 Pod（namespaceSelector + podSelector 为 AND 语义）
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 14 }}
+        - namespaceSelector:
+            {{- toYaml $.Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ $svc.service.port }}
+---
+{{- end }}
+{{- end }}
+{{- if .Values.aiCore.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "ai-core") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 14 }}
+        # 前端静态资源与 SSE 直连（/api/v1、/）经 Ingress Controller 进入
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.aiCore.service.port }}
+{{- end }}
+{{- end }}

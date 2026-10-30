@@ -1,0 +1,115 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "gateway") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "gateway") | nindent 4 }}
+spec:
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.gateway.revisionHistoryLimit }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 先起新再停旧：网关是在线入口，滚动期间容量不下降
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.gateway.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.gateway.image) }}
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.service.port }}
+              protocol: TCP
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "gateway" "jwt" true "empi" false) | nindent 12 }}
+            {{- if .Values.aiCore.enabled }}
+            - name: AI_CORE_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "ai-core")) .Values.aiCore.service.port | quote }}
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: PLATFORM_AUTH_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "auth")) .Values.auth.service.port | quote }}
+            {{- end }}
+            {{- if .Values.empi.enabled }}
+            - name: PLATFORM_EMPI_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "empi")) .Values.empi.service.port | quote }}
+            {{- end }}
+            {{- with .Values.gateway.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.gateway.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.gateway.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.gateway.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gateway.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.gateway.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.gateway.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.gateway.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.gateway.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.gateway.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.gateway.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

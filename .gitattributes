@@ -1,0 +1,4 @@
+# Shell 脚本必须以 LF 落盘：CRLF 会让容器内 #!/bin/sh 变成 "bad interpreter: /bin/sh^M"
+*.sh text eol=lf
+# SQL 由 MySQL/Flyway 读取，同样保持 LF，避免 Windows 检出后 \r 混入语句
+*.sql text eol=lf

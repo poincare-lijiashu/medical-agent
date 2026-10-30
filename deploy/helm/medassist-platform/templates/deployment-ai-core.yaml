@@ -1,0 +1,207 @@
+{{- if .Values.aiCore.enabled }}
+{{- $modelsClaim := .Values.aiCore.models.existingClaim -}}
+{{- if .Values.aiCore.models.create -}}
+{{- $modelsClaim = printf "%s-models" (include "medassist.fullname" .) -}}
+{{- end -}}
+{{- $dataClaim := .Values.aiCore.data.existingClaim -}}
+{{- if .Values.aiCore.data.create -}}
+{{- $dataClaim = printf "%s-ai-core-data" (include "medassist.fullname" .) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "ai-core") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+spec:
+  {{- if not .Values.aiCore.autoscaling.enabled }}
+  replicas: {{ .Values.aiCore.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.aiCore.revisionHistoryLimit }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-ai-core.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.aiCore.terminationGracePeriodSeconds }}
+      containers:
+        - name: ai-core
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.aiCore.image) }}
+          imagePullPolicy: {{ .Values.aiCore.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.aiCore.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "medassist.fullname" . }}-ai-core
+            {{- if .Values.aiCore.existingSecret }}
+            # 业务密钥（QWEN_API_KEY / QWEN_BASE_URL / AUTH_JWT_SECRET 等）由密钥管理同步
+            - secretRef:
+                name: {{ .Values.aiCore.existingSecret }}
+            {{- end }}
+          env:
+            # 数据库（Python 侧变量名 PG_*，与 Java 侧一致）
+            - name: PG_HOST
+              value: {{ .Values.external.postgres.host | quote }}
+            - name: PG_PORT
+              value: {{ .Values.external.postgres.port | quote }}
+            - name: PG_DATABASE
+              value: {{ .Values.external.postgres.database | quote }}
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "medassist.secretName" (dict "root" $ "external" .Values.external.postgres "suffix" "postgres") }}
+                  key: {{ .Values.external.postgres.secretKeys.username }}
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "medassist.secretName" (dict "root" $ "external" .Values.external.postgres "suffix" "postgres") }}
+                  key: {{ .Values.external.postgres.secretKeys.password }}
+            # Nacos 鉴权（未启用时给空串，SDK 按无鉴权连接）
+            {{- if .Values.external.nacos.enabled }}
+            - name: NACOS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "medassist.secretName" (dict "root" $ "external" .Values.external.nacos "suffix" "nacos") }}
+                  key: {{ .Values.external.nacos.secretKeys.username }}
+            - name: NACOS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "medassist.secretName" (dict "root" $ "external" .Values.external.nacos "suffix" "nacos") }}
+                  key: {{ .Values.external.nacos.secretKeys.password }}
+            # 注册地址取 Pod IP：多网卡/容器环境自动探测可能拿到回环地址
+            - name: NACOS_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
+            # 向量库
+            - name: MILVUS_URI
+              value: {{ .Values.external.milvus.uri | quote }}
+            {{- if .Values.external.milvus.existingSecret }}
+            - name: MILVUS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.milvus.existingSecret }}
+                  key: {{ .Values.external.milvus.secretKey }}
+            {{- end }}
+            {{- if .Values.external.skywalking.enabled }}
+            # SkyWalking Python agent 实例名用 Pod 名，便于在 UI 中定位具体副本
+            - name: SW_AGENT_INSTANCE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.aiCore.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.aiCore.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: {{ .Values.aiCore.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.aiCore.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.aiCore.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.aiCore.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: {{ .Values.aiCore.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.aiCore.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.aiCore.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.aiCore.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.aiCore.resources | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: {{ .Values.aiCore.models.mountPath }}
+              readOnly: true
+            - name: data
+              mountPath: {{ .Values.aiCore.data.mountPath }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ required "aiCore.models.existingClaim 必填（或设置 aiCore.models.create=true）" $modelsClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ required "aiCore.data.existingClaim 必填（或设置 aiCore.data.create=true）" $dataClaim }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.aiCore.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aiCore.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.aiCore.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+{{- if .Values.aiCore.models.create }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "medassist.fullname" . }}-models
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.aiCore.models.accessModes | nindent 4 }}
+  {{- if .Values.aiCore.models.storageClassName }}
+  storageClassName: {{ .Values.aiCore.models.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.aiCore.models.size }}
+---
+{{- end }}
+{{- if .Values.aiCore.data.create }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "medassist.fullname" . }}-ai-core-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ai-core") | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.aiCore.data.accessModes | nindent 4 }}
+  {{- if .Values.aiCore.data.storageClassName }}
+  storageClassName: {{ .Values.aiCore.data.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.aiCore.data.size }}
+{{- end }}
+{{- end }}

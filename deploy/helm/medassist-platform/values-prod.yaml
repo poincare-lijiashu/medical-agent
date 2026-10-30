@@ -1,0 +1,112 @@
+# 生产（prod）覆盖值
+#
+# 与前序环境的硬差异（不要为了省资源而回退）：
+# - 每服务 ≥2 副本 + PDB(minAvailable=1)，滚动 maxUnavailable=0，维护窗口不中断业务
+# - 迁移走 PreSync Hook，应用副本 SPRING_FLYWAY_ENABLED=false（多副本不抢迁移锁）
+# - 网络策略开启；Ingress 强制 TLS；ServiceMonitor 开启
+# - 密钥全部来自外部 Secret，secrets.create 必须为 false
+imageRegistry: harbor.hospital.local/medassist
+
+global:
+  timezone: Asia/Shanghai
+
+external:
+  postgres:
+    host: pg-prod.medassist-infra.svc.cluster.local
+    port: 5432
+    database: medagent
+    existingSecret: medassist-postgres
+  nacos:
+    enabled: true
+    serverAddr: nacos-prod.medassist-infra.svc.cluster.local:8848
+    namespace: prod
+    existingSecret: medassist-nacos
+  jwt:
+    issuer: medassist-auth
+    # 生产建议 30 分钟 + 刷新令牌（P1 落地后调整；当前 8 小时覆盖单班次）
+    ttl: PT8H
+    existingSecret: medassist-jwt
+  skywalking:
+    enabled: true
+    oapEndpoint: skywalking-oap.observability.svc.cluster.local:11800
+    # 全量采样：院内 QPS 低，完整链路是审计与纠纷举证的关键证据
+    sampleNPer3Secs: -1
+    agentLogLevel: WARN
+  milvus:
+    uri: http://milvus-prod.medassist-infra.svc.cluster.local:19530
+    existingSecret: medassist-milvus
+    secretKey: token
+
+migration:
+  enabled: true
+  backoffLimit: 1
+  activeDeadlineSeconds: 900
+
+gateway:
+  replicaCount: 3
+  resources:
+    requests: {cpu: 500m, memory: 768Mi}
+    limits: {cpu: "2", memory: 1536Mi}
+  autoscaling: {enabled: true, minReplicas: 3, maxReplicas: 10, targetCPUUtilizationPercentage: 65}
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+
+auth:
+  replicaCount: 2
+  resources:
+    requests: {cpu: 500m, memory: 768Mi}
+    limits: {cpu: "2", memory: 1536Mi}
+  autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 65}
+  podDisruptionBudget: {enabled: true, minAvailable: 1}
+
+empi:
+  replicaCount: 2
+  resources:
+    requests: {cpu: 500m, memory: 768Mi}
+    limits: {cpu: "2", memory: 1536Mi}
+  autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 65}
+  podDisruptionBudget: {enabled: true, minAvailable: 1}
+
+aiCore:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests: {cpu: "2", memory: 4Gi}
+    limits: {cpu: "6", memory: 8Gi}
+  env:
+    APP_ENV: production
+    # 有 GPU 节点时改 cuda，并配置 nodeSelector/tolerations（见 deploy/README.md）
+    EMBED_DEVICE: cpu
+  # 生产必须由存储团队预置模型 PVC（建议共享存储 ReadOnlyMany，多副本共享同一份权重）
+  models: {existingClaim: medassist-models, create: false}
+  data: {existingClaim: medassist-ai-core-data, create: false}
+  nodeSelector: {}
+  tolerations: []
+
+networkPolicy:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    # 医院内网大文件（教材 PDF）与 SSE 长连接：体上限与读超时必须放大
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: medassist.hospital.local
+      paths:
+        - {path: /api/v2, pathType: Prefix, service: gateway}
+        - {path: /api/v1, pathType: Prefix, service: gateway}
+        - {path: /, pathType: Prefix, service: aiCore}
+  tls:
+    - secretName: medassist-prod-tls
+      hosts: [medassist.hospital.local]
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+  labels:
+    release: kube-prometheus-stack
