@@ -139,6 +139,10 @@ def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
+    # VL mock（零外网纪律，与同文件其它路由测试一致）：此前漏 mock 会真实调用外部
+    # VL API——历史上有网+Key 有效时偶然通过，Key/网络异常即 500「影像描述服务
+    # 暂时不可用」挂掉；单测绝不允许依赖外部服务可用性。
+    monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _FakeVL())
     assert auth_mod.create_user("doctor02", "Med@2026x", "doctor", False, "内科")
     c = TestClient(app)
     tok_doc1 = _login(c, "doctor01", "Med@2026")

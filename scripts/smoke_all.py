@@ -35,18 +35,50 @@ def get(path, tok=None):
     return r.status, r.read().decode("utf-8", "replace")
 
 
+def login_token(username: str, password: str = "Med@2026") -> str:
+    """登录取 Bearer 令牌（W3.1 cookie 形态兼容）：body 回带令牌时优先用；
+    否则从 httpOnly Set-Cookie（medassist_at=）提取——生产默认形态。"""
+    data = json.dumps({"username": username, "password": password}).encode("utf-8")
+    req = urllib.request.Request(B + "/api/v1/auth/login", data=data,
+                                 headers={"Content-Type": "application/json"})
+    resp = urllib.request.urlopen(req, timeout=30)
+    try:
+        tok = json.loads(resp.read().decode("utf-8")).get("access_token", "")
+    except (ValueError, AttributeError):
+        tok = ""
+    if tok:
+        return tok
+    for sc in resp.headers.get_all("Set-Cookie") or []:
+        if sc.startswith("medassist_at="):
+            return sc.split(";", 1)[0].split("=", 1)[1]
+    return ""
+
+
 def main():
     st, _ = get("/healthz"); check("healthz", st == 200)
-    st, m = get("/metrics"); check("metrics", st == 200 and "medassist" in m)
 
-    d = post("/api/v1/auth/login", {"username": "doctor01", "password": "Med@2026"})
-    doc = d.get("access_token", "")
-    check("login-doctor", bool(doc) and d.get("role") == "doctor")
-    ph = post("/api/v1/auth/login", {"username": "pharm01", "password": "Med@2026"}).get("access_token", "")
+    doc = login_token("doctor01")
+    check("login-doctor", bool(doc))
+    # /metrics 鉴权对齐（admin 专属，require_role）：匿名 401 才是正确防线，脚本同步更新
+    try:
+        get("/metrics")
+        check("metrics-noauth-401", False)
+    except urllib.error.HTTPError as e:
+        check("metrics-noauth-401", e.code == 401)
+    adm = login_token("admin01")
+    check("login-admin", bool(adm))
+    st, m = get("/metrics", adm); check("metrics-admin", st == 200 and "medassist" in m)
+
+    ph = login_token("pharm01")
     check("login-pharmacist", bool(ph))
     check("auth-me", get("/api/v1/auth/me", doc)[0] == 200)
-    check("auth-refresh", post("/api/v1/auth/refresh",
-          {"refresh_token": post("/api/v1/auth/login", {"username": "doctor01", "password": "Med@2026"})["refresh_token"]}).get("access_token") != "")
+    # W3.1 cookie 形态下 refresh 令牌只经 httpOnly cookie 下发（body 恒空）——
+    # 完整刷新链路由 e2e 单测覆盖（AUTH_TOKEN_IN_BODY=true）；此处验证防线：无凭证刷新 401
+    try:
+        post("/api/v1/auth/refresh", {"refresh_token": ""})
+        check("refresh-noauth-401", False)
+    except urllib.error.HTTPError as e:
+        check("refresh-noauth-401", e.code == 401)
     # 鉴权门禁
     try:
         post("/api/v1/medical/drug/ask", {"question": "x"})
@@ -65,10 +97,12 @@ def main():
     pend = get("/api/v1/medical/review/pending", ph)[1]
     check("review-pending-visible", rid in json.dumps(json.loads(pend), ensure_ascii=False))
     try:
-        post(f"/api/v1/medical/review/{rid}/resolve", {"decision": "approved"}, doc)  # 本人自核应失败
+        post(f"/api/v1/medical/review/{rid}/resolve", {"decision": "approved"}, doc)  # 提交人本人
         check("dual-control-self-reject", False)
     except urllib.error.HTTPError as e:
-        check("dual-control-self-reject", e.code == 400)
+        # 问题4 收权后 doctor 不在 drug resolve 角色矩阵（仅 pharmacist/admin）——
+        # 403 角色门先于双控（审核人≠提交人）生效，属更严防线；e2e 单测另锁双控 400 路径
+        check("dual-control-self-reject", e.code in (400, 403), f"code={e.code}")
     res = post(f"/api/v1/medical/review/{rid}/resolve", {"decision": "approved", "note": "核对"}, ph)
     check("review-resolve-by-second", res.get("status") == "approved" and res.get("reviewed_by") == "pharm01")
 

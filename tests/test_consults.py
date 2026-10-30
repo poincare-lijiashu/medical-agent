@@ -18,7 +18,8 @@ from backend.core import auth as auth_mod
 from backend.core import consults as consults_mod
 from backend.core import departments as dept_mod
 from backend.core.auth import create_user, seed_default_users
-from backend.core.medical_audit import get_audit_logger
+from backend.api.v1.medical import shared as med_shared
+from backend.core.medical_audit import AuditLog
 from backend.main import app
 
 
@@ -27,6 +28,12 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(tmp_path / "departments.json"))
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     seed_default_users()
+    # 审计隔离（flaky 根治）：端点经 shared.get_audit_logger 动态接入审计器，注入本测试
+    # 专属实例——断言不再读核心层全局单例（entries 为 maxlen=500 有界 deque 且跨测试
+    # 共享，全量跑时缓冲填满后每次 append 挤掉最旧事件，before/after 差值断言出现顺序
+    # 依赖失败）；顺带消除测试写真实 data/audit/audit.jsonl 的副作用。
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: audit)
     return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
 
 
@@ -372,7 +379,7 @@ def test_consult_flow_end_to_end(monkeypatch, tmp_path):
     assert d["team"]["reasoning"] == "牙痛+血糖管理"
     assert d["status"] == "open" and d["initiator"] == "doctor01"
     # 审计：Agent 决策点 consult_dispatch 留痕（选中科室+理由可回溯）
-    ev = [e for e in get_audit_logger().entries
+    ev = [e for e in med_shared.get_audit_logger().entries
           if e["event_type"] == "consult"
           and e["payload"].get("action") == "consult_dispatch"
           and e["payload"].get("cid") == cid]
@@ -443,7 +450,7 @@ def test_consult_inbox_silent_flag_audit_matrix(monkeypatch, tmp_path):
     assert r.status_code == 200, r.text
 
     def _n_inbox_audit():
-        return len([e for e in get_audit_logger().entries
+        return len([e for e in med_shared.get_audit_logger().entries
                     if e["event_type"] == "consult"
                     and e["payload"].get("action") == "list_inbox"])
 

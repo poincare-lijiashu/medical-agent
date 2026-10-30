@@ -26,7 +26,8 @@ from backend.core import auth as auth_mod
 from backend.core import consults as consults_mod
 from backend.core import departments as dept_mod
 from backend.core.auth import create_user, seed_default_users
-from backend.core.medical_audit import get_audit_logger
+from backend.api.v1.medical import shared as med_shared
+from backend.core.medical_audit import AuditLog
 from backend.main import app
 
 
@@ -35,6 +36,11 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(dept_mod, "DEPARTMENTS_FILE", str(tmp_path / "departments.json"))
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     seed_default_users()
+    # 审计隔离（与 test_consults 同模式根治）：端点经 shared.get_audit_logger 动态接入，
+    # 注入本测试专属实例——断言不读核心层全局单例（maxlen=500 有界 deque 跨测试共享，
+    # 全量跑时顺序依赖），也不写真实 data/audit/audit.jsonl。
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: audit)
     return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
 
 
@@ -268,7 +274,7 @@ def test_consult_create_with_images_end_to_end(monkeypatch, tmp_path):
 
     # 审计 consult_created：images_count = 实际入库张数
     cid = d["id"]
-    ev = [e for e in get_audit_logger().entries
+    ev = [e for e in med_shared.get_audit_logger().entries
           if e["event_type"] == "consult"
           and e["payload"].get("action") == "consult_created"
           and e["payload"].get("cid") == cid]
@@ -285,7 +291,7 @@ def test_consult_create_without_images_no_images_key_noise(monkeypatch, tmp_path
     assert r.status_code == 200, r.text
     d = r.json()
     assert not (d.get("images") or [])  # 无图 → 空存储
-    ev = [e for e in get_audit_logger().entries
+    ev = [e for e in med_shared.get_audit_logger().entries
           if e["event_type"] == "consult"
           and e["payload"].get("action") == "consult_created"
           and e["payload"].get("cid") == d["id"]]

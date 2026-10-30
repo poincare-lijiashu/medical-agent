@@ -79,6 +79,11 @@ def test_main_pg_dump_failure_still_archives(iso, monkeypatch, capsys):
 
 def test_main_dry_run_prints_steps_without_output(iso, monkeypatch, capsys):
     """--dry-run：打印将执行步骤（含 pg_dump 命令序列），不产生任何文件。"""
+    # 密封（环境依赖根治）：main() 从 backend.config settings 读 PG 用户/库——
+    # 不密封时会随本机 .env.local 漂移（实测 eduagent/medagent 两态均出现过）。
+    from backend.config import settings as _settings
+    monkeypatch.setattr(_settings, "pg_user", "medagent")
+    monkeypatch.setattr(_settings, "pg_database", "medagent")
     fake = _FakeRun(0)
     monkeypatch.setattr(backup.subprocess, "run", fake)
     assert backup.main(["--dry-run"]) == 0

@@ -35,6 +35,10 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
+# 直跑兜底（与 loadtest.py 同模式）：python scripts/restore.py 直接运行时保证
+# scripts.backup / backend.* 可导入（否则只能 -m 方式跑）。
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 BACKUP_DIR = DATA_DIR / "backups"
