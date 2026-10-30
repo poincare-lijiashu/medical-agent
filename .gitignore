@@ -26,6 +26,9 @@ data/verify_out.txt
 # 脚本降级路径：Milvus 既有 pubmed_seed 行滑窗切分）
 data/kb/pubmed_v2_cache.json
 data/kb/pubmed_v2_run.log
+# PubMed 拉取缓存（两段式语料包：可达环境产出→内网 MEDICAL_OFFLINE_JSON 离线入库；
+# 摘要内容有版权灰度，分发走私有通道，不入公开仓）
+data/kb/pubmed_seed_cache.json
 
 # KB 语料原件（版权教材 PDF 等，80MB+ 不入库；向量已入 Milvus，原件由部署方自备）
 data/kb_docs/*.pdf

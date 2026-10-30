@@ -25,7 +25,11 @@ sys.path.insert(0, str(ROOT))
 from backend.core.embedder import embed_dense_sparse  # noqa: E402
 from backend.core.medical_kb import _collection  # noqa: E402
 
-EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+# eutils 端点可配置（W4.2 网络评议）：国内直连 NCBI 常不可达（SYN_SENT），两种解法——
+# 1) MEDICAL_EUTILS_BASE 指向可达的反代/镜像（如院内代理 https://proxy.corp/entrez/eutils）；
+# 2) 两段式：在可达环境跑本脚本产出缓存 json，内网用 MEDICAL_OFFLINE_JSON 指向该文件离线入库。
+EUTILS = os.environ.get("MEDICAL_EUTILS_BASE",
+                        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils").rstrip("/")
 DOC_TAG = "pubmed_seed"
 PER_TOPIC = int(os.environ.get("MEDICAL_PER_TOPIC", "20"))
 TOTAL_CAP = int(os.environ.get("MEDICAL_TOTAL_CAP", "1500"))
@@ -94,7 +98,12 @@ def abstract(pmid: str) -> str:
     return _get(u).strip()[:1200]
 
 
-def main() -> int:
+OFFLINE_JSON = os.environ.get("MEDICAL_OFFLINE_JSON", "")
+CACHE_JSON = ROOT / "data" / "kb" / "pubmed_seed_cache.json"
+
+
+def _fetch_rows() -> list[dict] | None:
+    """两段式·第一段（可达环境）：在线 esearch+efetch 拉摘要，返回 rows 列表。"""
     seen: set[str] = set()
     rows: list[dict] = []
     for i, term in enumerate(TOPICS, 1):
@@ -119,6 +128,23 @@ def main() -> int:
             added += 1
             time.sleep(0.28)
         print(f"[{i}/{len(TOPICS)}] {term[:38]:38} +{added} (total {len(rows)})", flush=True)
+    return rows
+
+
+def main() -> int:
+    if OFFLINE_JSON:
+        # 两段式·第二段（内网）：MEDICAL_OFFLINE_JSON 指向拉取缓存（第一段在可达环境
+        # 产出），跳过全部网络请求直接入库。缓存格式 = [{"content","source"}, ...]。
+        rows = json.loads(Path(OFFLINE_JSON).read_text(encoding="utf-8"))
+        print(f"OFFLINE mode: {len(rows)} rows from {OFFLINE_JSON}", flush=True)
+    else:
+        rows = _fetch_rows()
+        if rows is None:
+            return 1
+        if not OFFLINE_JSON:
+            CACHE_JSON.parent.mkdir(parents=True, exist_ok=True)
+            CACHE_JSON.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+            print(f"cache saved -> {CACHE_JSON}（内网可用 MEDICAL_OFFLINE_JSON 指向此文件离线入库）", flush=True)
 
     if not rows:
         print("NO_ROWS_FETCHED", flush=True); return 1

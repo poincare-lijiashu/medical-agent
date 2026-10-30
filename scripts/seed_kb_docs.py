@@ -126,6 +126,10 @@ def main() -> int:
         print("clean skip", str(e)[:60], flush=True)
     col.insert("medical_kb", data)
     col.load_collection("medical_kb")
+    # W4.1 复盘：v1 模式此前不写 manifest——入库成功但 admin 界面不可见、不可删。
+    # 与 main_v2 对齐：登记 manifest（kb_list/kb_delete 均以 manifest 为准）。
+    from backend.core.kb_ingest import register_doc
+    register_doc(DOC_TAG, f"KB 语料目录（{len(files)} 个文件）", len(data))
     print(f"INSERTED {len(data)} chunks from {len(files)} guideline file(s)", flush=True)
     return 0
 
