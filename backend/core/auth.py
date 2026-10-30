@@ -56,7 +56,23 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-# ---------- 令牌 ----------
+# ---------- 令牌（W3.5 双 secret 轮换：签发恒用新 secret，验签先新后旧——
+# 换 secret 把旧值挪到 auth_jwt_secret_previous，在线用户旧令牌在自然过期前仍有效，
+# 过渡结束清空 previous 即完成轮换，全程零踢出） ----------
+def _verify_jwt(token: str) -> Optional[dict]:
+    """验签：新 secret 优先，失败且配置了 previous 再试旧 secret（轮换过渡窗口）。"""
+    try:
+        return jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        prev = (settings.auth_jwt_secret_previous or "").strip()
+        if not prev:
+            return None
+        try:
+            return jwt.decode(token, prev, algorithms=["HS256"])
+        except jwt.PyJWTError:
+            return None
+
+
 def create_access_token(username: str, role: str) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -69,13 +85,10 @@ def create_access_token(username: str, role: str) -> str:
 
 
 def decode_token(token: str) -> Optional[dict]:
-    try:
-        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
-        if payload.get("typ") == "refresh":
-            return None  # 刷新令牌不能当访问令牌用
-        return payload
-    except jwt.PyJWTError:
-        return None
+    payload = _verify_jwt(token)
+    if payload and payload.get("typ") == "refresh":
+        return None  # 刷新令牌不能当访问令牌用
+    return payload
 
 
 def create_refresh_token(username: str) -> str:
@@ -87,20 +100,14 @@ def create_refresh_token(username: str) -> str:
 
 
 def decode_refresh_token(token: str) -> Optional[str]:
-    try:
-        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
-        return payload["sub"] if payload.get("typ") == "refresh" else None
-    except jwt.PyJWTError:
-        return None
+    payload = _verify_jwt(token)
+    return payload["sub"] if payload and payload.get("typ") == "refresh" else None
 
 
 def decode_refresh_payload(token: str) -> Optional[dict]:
     """刷新令牌解码为完整载荷（refresh 端点需 iat 做撤销比对）。"""
-    try:
-        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
-        return payload if payload.get("typ") == "refresh" else None
-    except jwt.PyJWTError:
-        return None
+    payload = _verify_jwt(token)
+    return payload if payload and payload.get("typ") == "refresh" else None
 
 
 # ---------- 用户表 ----------

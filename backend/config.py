@@ -95,6 +95,9 @@ class Settings(BaseSettings):
 
     # 鉴权
     auth_jwt_secret: str = "dev-secret-change-in-production"
+    # W3.5 密钥轮换：换 secret 时把旧值挪到这里（过渡期），验签先新后旧——在线用户
+    # 旧令牌在自然过期前仍有效，零踢出；过渡结束（≥最长令牌寿命 10080min）清空本项。
+    auth_jwt_secret_previous: str = ""
     auth_token_expire_minutes: int = 720
     auth_refresh_expire_minutes: int = 10080
     rate_limit_per_min: int = 60

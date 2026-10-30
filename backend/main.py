@@ -42,6 +42,10 @@ def validate_startup_security():
     if settings.app_env.lower() == "production":
         if settings.auth_jwt_secret == "dev-secret-change-in-production":
             raise RuntimeError("生产环境必须设置高熵 AUTH_JWT_SECRET（拒绝使用默认密钥启动）")
+        # W3.5 轮换过渡期：旧 secret 仍参与验签，弱旧密钥等同弱主密钥（签发面虽在新
+        # secret，攻击者可用旧 secret 伪造令牌走 previous 验签分支）——同样拒绝默认值。
+        if settings.auth_jwt_secret_previous == "dev-secret-change-in-production":
+            raise RuntimeError("生产环境 AUTH_JWT_SECRET_PREVIOUS 不得为默认弱密钥（轮换过渡期旧密钥仍参与验签）")
         if not settings.auth_enabled:
             raise RuntimeError("生产环境必须启用鉴权（AUTH_ENABLED=false 拒绝启动）")
         # W3.1：令牌只允许经 httpOnly cookie 下发。生产误开该开关会把令牌回写到
