@@ -157,16 +157,22 @@ def authenticate(username: str, password: str) -> Optional[dict]:
 
 def create_user(username: str, password: str, role: str, overwrite: bool = False,
                 dept: str = "") -> bool:
-    """创建用户；dept 为所属科室（质控签名/科室绑定用，缺省空 = 未设置）。"""
+    """创建用户；dept 为所属科室（质控签名/科室绑定用，缺省空 = 未设置）。
+    W4.1 行级落盘：PG 可用走单行 UPSERT（跨实例并发不互相覆盖），JSON 仅镜像。"""
     if role not in ROLES:
         raise ValueError(f"非法角色: {role}")
     with _users_lock:
         users = _load_users()
         if username in users and not overwrite:
             return False
-        users[username] = {"role": role, "dept": (dept or "").strip(),
-                           "password_hash": hash_password(password)}
-        _save_users(users)
+        rec = {"role": role, "dept": (dept or "").strip(),
+               "password_hash": hash_password(password)}
+        users[username] = rec
+        if pg_store.has_pool():
+            pg_store.upsert_user_row(username, rec["role"], rec["dept"], rec["password_hash"])
+            pg_store.mirror_json_file(USERS_FILE, users)
+        else:
+            _save_users(users)  # 单机/离线：JSON 真源全量
     return True
 
 
@@ -176,7 +182,11 @@ def delete_user(username: str) -> bool:
         if username not in users:
             return False
         del users[username]
-        _save_users(users)
+        if pg_store.has_pool():
+            pg_store.delete_user_row(username)
+            pg_store.mirror_json_file(USERS_FILE, users)
+        else:
+            _save_users(users)
     return True
 
 
@@ -185,8 +195,15 @@ def set_password(username: str, new_password: str) -> bool:
         users = _load_users()
         if username not in users:
             return False
-        users[username]["password_hash"] = hash_password(new_password)
-        _save_users(users)
+        new_hash = hash_password(new_password)
+        users[username]["password_hash"] = new_hash
+        if pg_store.has_pool():
+            rec = users[username]
+            pg_store.upsert_user_row(username, rec.get("role", ""),
+                                     rec.get("dept", ""), new_hash)
+            pg_store.mirror_json_file(USERS_FILE, users)
+        else:
+            _save_users(users)
     return True
 
 

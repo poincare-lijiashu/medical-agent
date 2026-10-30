@@ -602,6 +602,48 @@ def save_users(users: dict, path: str) -> None:
     _json_then_pg(_pg_save_users, path, users)
 
 
+# ---- W4.1 行级增量 API（users 域）：跨实例严格不丢更新的正解 ----
+# 全量同步 save_users 的语义是"整域 DELETE 差集 + UPSERT"——多写者各持局部视图时
+# 天然互相覆盖（实测 17 行账号被清成 1 行）。行级 API 只触达目标行，PG 行级锁
+# 保证并发 UPSERT 全部生效；镜像快照由调用方按需刷新（覆盖无害，PG 是真源）。
+
+async def _pg_upsert_user_row(username: str, role: str, dept: str, password_hash: str) -> None:
+    async with _pool.acquire() as c:
+        await c.execute(_USER_UPSERT, username, role, dept, password_hash)
+
+
+def upsert_user_row(username: str, role: str, dept: str, password_hash: str) -> None:
+    """单行 UPSERT（行级锁，并发多写者互不覆盖）。pg_primary=true：PG 失败抛出防分裂；
+    无池/离线：调用方须自行保证 JSON 真源（本函数只管 PG 行，不落盘）。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("upsert_user_row 需要 PG 池（离线/单机形态请走 save_users 全量同步）")
+    _run_pg(_pg_upsert_user_row(username, role, dept, password_hash))
+
+
+def delete_user_row(username: str) -> int:
+    """单行 DELETE（返回删除行数）。池/离线语义同 upsert_user_row。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("delete_user_row 需要 PG 池（离线/单机形态请走 save_users 全量同步）")
+
+    async def _impl():
+        async with _pool.acquire() as c:
+            res = await c.execute("DELETE FROM users WHERE username=$1", username)
+            return int(res.split()[-1]) if res else 0
+
+    return _run_pg(_impl())
+
+
+def has_pool() -> bool:
+    """PG 池是否可用（W4.1 行级 API 的调用方判据：有池走行级，无池走 JSON 全量）。"""
+    return bool(_pool) and not offline_mode()
+
+
+def mirror_json_file(path: str, data) -> None:
+    """JSON 镜像快照（原子写，best-effort）：PG 主写成功后由调用方刷新，
+    覆盖无害（PG 是真源；灾难时这是最近的恢复源）。"""
+    _write_json_atomic(path, data)
+
+
 # ---- departments（id=顺序号保序，还原 {"list":[...]} 形态） ----
 
 async def _pg_load_departments() -> dict | None:
