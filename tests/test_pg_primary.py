@@ -21,14 +21,32 @@ from backend.core.pg_store import _json_then_pg, _pg_save_users
 
 @pytest.fixture()
 def pg_pool():
-    """连真 PG（本机 5433 容器）；不可用则整文件 skip。"""
+    """连真 PG（本机 5433 容器）；**前后快照恢复 users 表**。
+
+    ⚠️ 事故教训（2026-10-30）：本文件初版直接连生产库并调用真 `_pg_save_users`
+    （全量同步 = DELETE 差集 + UPSERT），把生产 users 表清成只剩测试账号，导致
+    运行实例登录全 401。隔离方案：fixture 进入时快照全表，退出时原样写回——
+    测试窗口外生产表零残留。彻底方案（独立测试库 medagent_test）列入待办。
+    """
     import asyncio
 
     ok = asyncio.run(pg_store.init())
     if not ok:
         pytest.skip("PG 不可用（容器未启动），跳过真源翻转集成测试")
-    yield pg_store._pool
-    asyncio.run(pg_store.close())
+    backup = pg_store.load_users(str(_dummy_users_path())) or {}  # 读 PG 真源全表
+    try:
+        yield pg_store._pool
+    finally:
+        if backup:
+            pg_store.save_users(backup, str(_dummy_users_path()))  # 原样写回
+        asyncio.run(pg_store.close())
+
+
+def _dummy_users_path():
+    """load/save 需要一个 path 参数（PG 可用时仅作镜像落盘路径，不参与真源）。"""
+    import tempfile
+    from pathlib import Path
+    return Path(tempfile.gettempdir()) / "medassist_pg_primary_fixture_users.json"
 
 
 def test_concurrent_read_modify_write_converges(pg_pool, tmp_path):
