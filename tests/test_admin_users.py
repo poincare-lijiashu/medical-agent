@@ -12,7 +12,7 @@ from backend.main import app
 def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     seed_default_users()
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger",
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger",
                         __import__("tests.test_admin_ops", fromlist=["_FakeAudit"])._FakeAudit)
     return TestClient(app)
 

@@ -10,7 +10,8 @@
 """
 from fastapi.testclient import TestClient
 
-from backend.api.v1.medical import medical_router as mr
+from backend.api.v1.medical import literature as lit_route
+from backend.api.v1.medical import shared as med_shared
 from backend.core import medical_review as review
 from backend.core.auth import seed_default_users
 from backend.core.intent import offtopic_tech_reply
@@ -54,7 +55,7 @@ class _CapGraph:
 def _client(monkeypatch, tmp_path):
     seed_default_users()
     log = _FakeAudit()
-    monkeypatch.setattr(mr, "get_audit_logger", lambda: log)
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: log)
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     return TestClient(app), log
 
@@ -134,7 +135,7 @@ def test_stream_tech_question_rejected(monkeypatch, tmp_path):
 def test_medical_question_walks_graph(monkeypatch, tmp_path):
     """「胃疼怎么办」正常走既有流程（替身图被调用，答案透传），无 offtopic_reject。"""
     g = _CapGraph()
-    monkeypatch.setattr(mr, "_lit_graph", g)
+    monkeypatch.setattr(lit_route, "_lit_graph", g)
     c, log = _client(monkeypatch, tmp_path)
     h = _tok(c)
     r = c.post("/api/v1/medical/literature/ask", headers=h, json={"question": "胃疼怎么办"})
@@ -148,7 +149,7 @@ def test_medical_question_walks_graph(monkeypatch, tmp_path):
 def test_mixed_medical_tech_walks_retrieval(monkeypatch, tmp_path):
     """「癌症的python教程」：技术词命中但含医学信号（癌）→ 保守放行，正常走检索。"""
     g = _CapGraph()
-    monkeypatch.setattr(mr, "_lit_graph", g)
+    monkeypatch.setattr(lit_route, "_lit_graph", g)
     c, log = _client(monkeypatch, tmp_path)
     h = _tok(c)
     r = c.post("/api/v1/medical/literature/ask", headers=h,
@@ -234,7 +235,7 @@ class _FbStreamGraph:
 
 def test_literature_fallback_not_enqueued(monkeypatch, tmp_path):
     """任务1 测试锁：fallback 响应后 review_queue 不新增；审计记 fallback_no_enqueue。"""
-    monkeypatch.setattr(mr, "_lit_graph", _FbAskGraph())
+    monkeypatch.setattr(lit_route, "_lit_graph", _FbAskGraph())
     c, log = _client(monkeypatch, tmp_path)
     h = _tok(c)
     r = c.post("/api/v1/medical/literature/ask", headers=h, json={"question": "罕见病治疗进展"})
@@ -250,7 +251,7 @@ def test_literature_fallback_not_enqueued(monkeypatch, tmp_path):
 
 def test_stream_fallback_not_enqueued(monkeypatch, tmp_path):
     """SSE 流式路径同样纪律：fallback 结果不入队（result 事件 review_id 为 null）。"""
-    monkeypatch.setattr(mr, "_lit_graph", _FbStreamGraph())
+    monkeypatch.setattr(lit_route, "_lit_graph", _FbStreamGraph())
     c, log = _client(monkeypatch, tmp_path)
     h = _tok(c)
     r = c.post("/api/v1/medical/literature/stream", headers=h,
@@ -276,7 +277,7 @@ def test_non_fallback_low_confidence_still_enqueued(monkeypatch, tmp_path):
                                "verified": False, "evidence": []},
                     "refine_trace": []}
 
-    monkeypatch.setattr(mr, "_lit_graph", _LowGraph())
+    monkeypatch.setattr(lit_route, "_lit_graph", _LowGraph())
     c, log = _client(monkeypatch, tmp_path)
     h = _tok(c)
     r = c.post("/api/v1/medical/literature/ask", headers=h, json={"question": "罕见病治疗进展"})

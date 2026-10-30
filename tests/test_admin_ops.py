@@ -24,7 +24,7 @@ class _FakeAudit:
 
 def _client(monkeypatch):
     seed_default_users()
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", _FakeAudit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", _FakeAudit)
     return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
 
 

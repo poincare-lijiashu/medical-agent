@@ -178,8 +178,8 @@ def test_audit_recent_pg_unavailable_or_error_returns_none(monkeypatch):
 def test_admin_data_audit_source_pg_with_jsonl_fallback(monkeypatch, tmp_path):
     seed_default_users()
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    from backend.api.v1.medical import medical_router as mr
-    monkeypatch.setattr(mr, "get_audit_logger", lambda: log)
+    from backend.api.v1.medical import shared as med_shared
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: log)
     log.write(event_type="jsonl", action="only_jsonl", actor="u1", payload={"i": 1})
     c = _client(monkeypatch, tmp_path)
     h = {"Authorization": "Bearer " + _login(c, "admin01")}

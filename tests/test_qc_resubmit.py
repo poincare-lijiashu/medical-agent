@@ -28,7 +28,7 @@ def _client(monkeypatch, tmp_path):
     seed_default_users()
     monkeypatch.setattr(qc_mod, "connotation_check", lambda record: list(_DEFECT))
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     return TestClient(app), audit  # 不进 with，跳过 lifespan 的模型预加载
 
 

@@ -7,7 +7,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  核心业务（零感知，不改一行）                                    │
-│  backend/api/v1/medical/medical_router.py                     │
+│  backend/api/v1/medical/qc.py（W4.3 前在 medical_router.py）    │
 │      └─ qc_record 出质控结论后 → _his_push_qc_result()         │
 │             │  只认识两个东西：                                 │
 │             │   ① HisAdapter 抽象接口（backend/integration/base.py）│
@@ -56,7 +56,7 @@ HIS_ADAPTER=<vendor>    # 对接真实医院时填厂商标识（registry 注册
 
 ## 四、接入点与失败语义（唯一真接入示例：qc 质控结论外推）
 
-位置：`medical_router._his_push_qc_result()`（`qc_record` 三个出口各调用一次：自动驳回 / 自动归档 / 入队留痕后）。
+位置：`backend/api/v1/medical/qc.py` 的 `_his_push_qc_result()`（W4.3 router 拆分前在 `medical_router.py`；`qc_record` 三个出口各调用一次：自动驳回 / 自动归档 / 入队留痕后）。
 
 推送 payload：`{"status": "auto_rejected"|"auto_archived"|"enqueued"|"rejected_escalated", "confidence", "defects", "escalated"}`，`record_id` 为本系统复核单号（自动分流路径为空串）。
 

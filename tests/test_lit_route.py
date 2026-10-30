@@ -99,7 +99,8 @@ def _med_client(monkeypatch):
     """文献端点测试客户端：seed 账号 + 替身审计（不污染真实 audit.jsonl）。"""
     from fastapi.testclient import TestClient
 
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
     from backend.core.auth import seed_default_users
     from backend.main import app
 
@@ -108,7 +109,7 @@ def _med_client(monkeypatch):
             pass
 
     seed_default_users()
-    monkeypatch.setattr(mr, "get_audit_logger", lambda: _FakeAudit())
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: _FakeAudit())
     return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
 
 
@@ -120,9 +121,10 @@ def _doctor_headers(c):
 
 def test_ask_response_contains_refine_trace(monkeypatch):
     """/literature/ask 响应新增 refine_trace 字段（从最终 state 构造），供前端渲染改写轨迹。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
 
-    monkeypatch.setattr(mr, "_lit_graph", _FakeAskGraph({
+    monkeypatch.setattr(lit_route, "_lit_graph", _FakeAskGraph({
         "answer": {"text": "答案", "confidence": 0.9, "sources": ["KB:y"],
                    "needs_human_review": False, "verified": True, "evidence": []},
         "refine_trace": _TRACE,
@@ -137,7 +139,8 @@ def test_ask_response_contains_refine_trace(monkeypatch):
 def test_ask_passes_original_query_like_stream(monkeypatch):
     """state 一致性：SSE 流式入口传 original_query=q，非流式 ask 入口必须同样传递——
     refine 决策的 question 取 original_query，两条路径的 state 初值应完全一致。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
 
     captured = {}
 
@@ -148,7 +151,7 @@ def test_ask_passes_original_query_like_stream(monkeypatch):
                                "needs_human_review": False, "verified": True, "evidence": []},
                     "refine_trace": []}
 
-    monkeypatch.setattr(mr, "_lit_graph", _CapGraph())
+    monkeypatch.setattr(lit_route, "_lit_graph", _CapGraph())
     c = _med_client(monkeypatch)
     r = c.post("/api/v1/medical/literature/ask", json={"question": "胃疼怎么办"},
                headers=_doctor_headers(c))
@@ -160,7 +163,8 @@ def test_ask_passes_original_query_like_stream(monkeypatch):
 def test_stream_emits_refine_event_and_result_trace(monkeypatch):
     """/literature/stream：refine 决策发生时实时推送 event: refine（attempt/action/new_query/
     reason/old_query），收尾 result 事件携带完整 refine_trace（SSE 轨迹协议）。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
 
     updates = [
         {"retrieve": {"evidence": []}},
@@ -173,7 +177,7 @@ def test_stream_emits_refine_event_and_result_trace(monkeypatch):
         {"verify": {"answer": {"text": "答案", "confidence": 0.9, "sources": ["KB:y"],
                                "needs_human_review": False, "verified": True, "evidence": []}}},
     ]
-    monkeypatch.setattr(mr, "_lit_graph", _FakeStreamGraph(updates))
+    monkeypatch.setattr(lit_route, "_lit_graph", _FakeStreamGraph(updates))
     c = _med_client(monkeypatch)
     r = c.post("/api/v1/medical/literature/stream", json={"question": "胃疼怎么办"},
                headers=_doctor_headers(c))

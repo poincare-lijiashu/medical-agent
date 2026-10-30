@@ -4,7 +4,7 @@
   list_mine/list_pending/stats；PG 往返与迁移见 test_pg_repo.py（照既有模式补）。
 - 2.2：POST /prescriptions/suggest——字典外药丢弃（幻觉=0）、华法林+布洛芬高危 blocked、
   中危 warnings、审计 prescription.suggested、case_text 422、响应携带 DISCLAIMER；
-  LLM 经 medical_router.get_llm 模块级符号 monkeypatch（fake 不触网）。
+  LLM 经 prescriptions.get_llm 模块级符号 monkeypatch（fake 不触网）。
 """
 import json
 import os
@@ -80,7 +80,7 @@ def suggest_env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger",
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger",
                         lambda: audit)
     monkeypatch.setattr(rx, "PRESCRIPTIONS_FILE", str(tmp_path / "prescriptions.json"))
     _seed_dict(monkeypatch, tmp_path, _RULES_HIGH)
@@ -214,7 +214,7 @@ def test_suggest_drops_out_of_dict_drug(suggest_env, monkeypatch):
         {"name": "warfarin", "dose": "2.5mg", "freq": "qd", "reason": "抗凝"},
         {"name": "神仙速效散", "dose": "1粒", "freq": "tid", "reason": "幻觉药"}],
         ensure_ascii=False))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_llm",
+    monkeypatch.setattr("backend.api.v1.medical.prescriptions.get_llm",
                         lambda *a, **k: fake)
     doc = _login(c, "doctor01")
     r = c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),
@@ -238,7 +238,7 @@ def test_suggest_warfarin_ibuprofen_blocked_no_persist(suggest_env, monkeypatch)
         {"name": "华法林", "dose": "2.5mg", "freq": "qd", "reason": "抗凝"},
         {"name": "布洛芬", "dose": "0.3g", "freq": "bid", "reason": "镇痛"}],
         ensure_ascii=False))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_llm",
+    monkeypatch.setattr("backend.api.v1.medical.prescriptions.get_llm",
                         lambda *a, **k: fake)
     doc = _login(c, "doctor01")
     d = c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),
@@ -259,7 +259,7 @@ def test_suggest_mid_risk_yields_warnings(suggest_env, monkeypatch, tmp_path):
         {"name": "华法林", "dose": "2.5mg", "freq": "qd", "reason": "抗凝"},
         {"name": "布洛芬", "dose": "0.3g", "freq": "bid", "reason": "镇痛"}],
         ensure_ascii=False))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_llm",
+    monkeypatch.setattr("backend.api.v1.medical.prescriptions.get_llm",
                         lambda *a, **k: fake)
     doc = _login(c, "doctor01")
     d = c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),
@@ -274,7 +274,7 @@ def test_suggest_audited_and_role_guarded(suggest_env, monkeypatch):
     fake = _FakeLLM(json.dumps(
         [{"name": "华法林", "dose": "2.5mg", "freq": "qd", "reason": "抗凝"}],
         ensure_ascii=False))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_llm",
+    monkeypatch.setattr("backend.api.v1.medical.prescriptions.get_llm",
                         lambda *a, **k: fake)
     doc = _login(c, "doctor01")
     c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),
@@ -670,7 +670,7 @@ def test_suggest_still_drops_out_of_dict_after_option_a(suggest_env, monkeypatch
         {"name": "华法林", "dose": "2.5mg", "freq": "qd", "reason": "抗凝"},
         {"name": "神仙速效散", "dose": "1粒", "freq": "tid", "reason": "幻觉药"}],
         ensure_ascii=False))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_llm",
+    monkeypatch.setattr("backend.api.v1.medical.prescriptions.get_llm",
                         lambda *a, **k: fake)
     doc = _login(c, "doctor01")
     d = c.post("/api/v1/medical/prescriptions/suggest", headers=_h(doc),

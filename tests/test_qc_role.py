@@ -41,7 +41,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))  # 队列隔离
     seed_default_users()
     log = _FakeAudit()
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: log)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     return TestClient(app), log
 
 

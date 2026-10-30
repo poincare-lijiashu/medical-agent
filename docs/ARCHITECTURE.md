@@ -47,7 +47,7 @@ v-html 消费方（如 KbView kbMsg）拼接必须经 `utils/assist.js` 的 `esc
 历史 legacy（单文件 index.html + js/*.js 非模块拆分）已随轮4 删除，存档见 git tag v-legacy-frontend。
 - **API 层** `backend/api/v1/`：
   - `auth/` 登录/刷新/`/me`；`deps.py` Bearer 校验 + 角色 + 滑动窗口限流。
-  - `medical/medical_router.py` 4 agent + MDT + 审核中心；AskResp 携 `confidence / needs_human_review / sources / review_id / evidence`。
+  - `medical/`（W4.3 域拆分）：`medical_router.py` 聚合入口 + `literature.py`（4 agent 之文献/SSE）+ `drug.py`（两药/字典规则）+ `prescriptions.py`（智能开药/处方流转）+ `imaging.py`（阅片/病例总结）+ `consults.py`（MDT/跨科室会诊）+ `review.py`（审核中心）+ `qc.py`（病历质控/病例库）+ `kb.py`（知识库）+ `admin.py`（用户/科室/运维/LLM 配置）；共享层 `schemas.py`（AskReq/AskResp）+ `shared.py`（审计接入口/PHI 脱敏/`_enqueue_if_risk`/VL 流程）；AskResp 携 `confidence / needs_human_review / sources / review_id / evidence`。
 - **智能体层** `backend/agents/medical/`：
   - `literature/` **多步自检 LangGraph**：`retrieve(search_hybrid)→grade(充分性/改写重试)→generate→verify(claim溯源+校准置信)`；`_ground_citations` 剔除无法核验引用。
   - `mdt.py` 循证+药学+临床三专科**并行**意见（fan-out/join，opinions 用 operator.add 归并）→ 综合，重点前置（headline/urgency/key_actions）+ 标注共识/分歧，整体校准置信。
@@ -121,7 +121,7 @@ api/  ──▶ core/  ──▶ db/、config
 
 | 扩展场景 | 要动的地方 | 不用动的 |
 |---|---|---|
-| **新增 agent**（如「出院小结总结」） | ① `backend/agents/medical/<name>/`（graph+nodes+prompts）；② `medical_router.py` 加 `/<name>/ask` 端点（复用 AskReq/AskResp + `_enqueue_if_risk`）；③ 审计 event_type；④ 前端入口；（可选）eval 用例 | core 层零改动（检索/LLM/审核队列/审计/存储全部现成复用） |
+| **新增 agent**（如「出院小结总结」） | ① `backend/agents/medical/<name>/`（graph+nodes+prompts）；② 对应域模块（或新建域文件）加 `/<name>/ask` 端点（复用 `schemas.AskReq/AskResp` + `shared._enqueue_if_risk`，并在 `medical_router.py` 聚合 include）；③ 审计 event_type；④ 前端入口；（可选）eval 用例 | core 层零改动（检索/LLM/审核队列/审计/存储全部现成复用） |
 | **新增 LLM provider** | 管理端「模型配置」运行时添加（OpenAI 兼容 / Anthropic 两格式已覆盖）——**零代码**，配置即扩展；仅当新格式才动 `llm_factory/llm_config` | 所有 agent/路由 |
 | **更换/新增存储** | `core/pg_store.py` repo 层集中收口（load/save/mirror + JSON 原子写兜底）；`pg_async_dsn` 换 DSN 即换实例 | 业务 core（consults/review/auth 只调 repo 函数）、api、agents |
 | **多实例/Redis 共享存储** | `core/stores.py`（KVStore 最小面协议 + Memory/Redis 双实现 + `get_store` 工厂）；`REDIS_URL` 配置即切换，限流/会话记忆/令牌撤销三组件已接入 | 三组件调用方与全部业务路由（对外接口行为不变；Redis 不可用自动回落内存镜像） |

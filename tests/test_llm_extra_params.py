@@ -41,7 +41,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     seed_default_users()
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", _FakeAudit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", _FakeAudit)
 
 
 def _login(c, u, p):

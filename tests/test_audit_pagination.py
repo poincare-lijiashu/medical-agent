@@ -4,7 +4,7 @@
 """
 from fastapi.testclient import TestClient
 
-from backend.api.v1.medical import medical_router as mr
+from backend.api.v1.medical import shared as med_shared
 from backend.core.auth import seed_default_users
 from backend.core.medical_audit import AuditLog
 from backend.main import app
@@ -33,7 +33,7 @@ def test_admin_data_audit_offset_param(monkeypatch, tmp_path):
     """/admin/data 支持 audit_offset 查询参数（负数按 0 处理，绝不 500）。"""
     seed_default_users()
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr(mr, "get_audit_logger", lambda: log)
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: log)
     for i in range(60):
         log.write(event_type="t", action=f"a{i}", actor="u", payload={"i": i})
     c = TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载

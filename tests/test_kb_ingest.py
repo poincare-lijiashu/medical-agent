@@ -354,7 +354,7 @@ def test_kb_delete_builtin_200_and_audited(monkeypatch, tmp_path):
     monkeypatch.setattr(kb_ingest, "_collection", lambda: _fake_col(5))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     c = TestClient(app)
     atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}
                   ).json()["access_token"]
@@ -375,7 +375,7 @@ def test_kb_delete_uploaded_audits_plain_delete(monkeypatch, tmp_path):
     monkeypatch.setattr(kb_ingest, "_collection", lambda: _fake_col(2))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     c = TestClient(app)
     atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}
                   ).json()["access_token"]
@@ -394,7 +394,7 @@ def test_kb_delete_error_returns_json_not_bare_text(monkeypatch, tmp_path):
     monkeypatch.setattr(kb_ingest, "delete_doc",
                         lambda tag: (_ for _ in ()).throw(RuntimeError("Milvus 连接失败")))
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     c = TestClient(app)
     atok = c.post("/api/v1/auth/login", json={"username": "admin01", "password": "Med@2026"}
                   ).json()["access_token"]

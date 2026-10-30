@@ -120,7 +120,7 @@ def test_route_qc_record_returns_structured_qc_defects(monkeypatch, tmp_path):
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     payload = json.dumps({"defects": [
         {"issue": "主诉与现病史部位矛盾", "level": "高", "category": "一致性"},
         {"issue": " bizarre ", "level": "低", "category": "不存在的维度"},

@@ -25,7 +25,7 @@ def _client(monkeypatch, tmp_path):
     seed_default_users()
     monkeypatch.setattr(qc_mod, "connotation_check", lambda record: [])  # 内涵轨离线假响应
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     return TestClient(app), audit
 
 

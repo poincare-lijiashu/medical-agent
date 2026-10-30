@@ -523,8 +523,8 @@ def test_drug_purge_frontend_markers_present():
     assert "药物高危待核对（需药剂科复核）" not in html, "drug 待核对表头应已移除"
     assert "badges.reviewTodoCount = (rxPendingItems.value || []).length" in html, \
         "pharmacist 角标只算待审处方数"
-    router = (ROOT / "backend" / "api" / "v1" / "medical" / "medical_router.py").read_text(encoding="utf-8")
-    assert "两药快查已下线，drug 项不再入队（开药走 prescriptions）" in router, \
+    shared_src = (ROOT / "backend" / "api" / "v1" / "medical" / "shared.py").read_text(encoding="utf-8")
+    assert "两药快查已下线，drug 项不再入队（开药走 prescriptions）" in shared_src, \
         "_enqueue_if_risk 的 drug 分支应注入下线注记（仅注释不改行为）"
     assert (ROOT / "scripts" / "purge_drug_review_items.py").is_file(), "清理脚本应就位"
     pg = (ROOT / "backend" / "core" / "pg_store.py").read_text(encoding="utf-8")

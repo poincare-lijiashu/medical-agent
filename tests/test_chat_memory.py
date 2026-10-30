@@ -48,9 +48,10 @@ class _FakeAudit:
 
 
 def _med_client(monkeypatch, audit: _FakeAudit) -> TestClient:
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
     seed_default_users()
-    monkeypatch.setattr(mr, "get_audit_logger", lambda: audit)
+    monkeypatch.setattr(med_shared, "get_audit_logger", lambda: audit)
     return TestClient(app)  # 不进 with，跳过 lifespan 的模型预加载
 
 
@@ -217,9 +218,10 @@ def test_generate_node_without_memory_keeps_original_prompt(monkeypatch):
 def test_ask_injects_history_on_third_question(monkeypatch):
     """2 轮历史后第三问：图收到含前文块的 memory_context；审计 memory_used=2；
     响应完成后本轮问答写入记忆。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
     graph = _CapAskGraph()
-    monkeypatch.setattr(mr, "_lit_graph", graph)
+    monkeypatch.setattr(lit_route, "_lit_graph", graph)
     audit = _FakeAudit()
     c = _med_client(monkeypatch, audit)
     H = _doctor_headers(c)
@@ -244,9 +246,10 @@ def test_ask_injects_history_on_third_question(monkeypatch):
 
 def test_ask_without_session_id_no_memory_no_error(monkeypatch):
     """无 session_id（评估脚本/旧客户端）：不注入、审计 memory_used=0、响应正常。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
     graph = _CapAskGraph()
-    monkeypatch.setattr(mr, "_lit_graph", graph)
+    monkeypatch.setattr(lit_route, "_lit_graph", graph)
     audit = _FakeAudit()
     c = _med_client(monkeypatch, audit)
     r = c.post("/api/v1/medical/literature/ask", json={"question": "胃疼怎么办"},
@@ -260,7 +263,8 @@ def test_ask_without_session_id_no_memory_no_error(monkeypatch):
 
 def test_ask_writes_memory_after_response_for_fallback_too(monkeypatch):
     """fallback 兜底答案同样写入记忆（真实问答语义，追问需指代上下文）。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
 
     class _FbGraph:
         async def ainvoke(self, state, config=None):
@@ -269,7 +273,7 @@ def test_ask_writes_memory_after_response_for_fallback_too(monkeypatch):
                                "needs_human_review": True, "verified": False, "evidence": []},
                     "refine_trace": []}
 
-    monkeypatch.setattr(mr, "_lit_graph", _FbGraph())
+    monkeypatch.setattr(lit_route, "_lit_graph", _FbGraph())
     c = _med_client(monkeypatch, _FakeAudit())
     r = c.post("/api/v1/medical/literature/ask",
                json={"question": "胃疼怎么办", "session_id": "s-fb"},
@@ -280,9 +284,10 @@ def test_ask_writes_memory_after_response_for_fallback_too(monkeypatch):
 
 def test_stream_injects_same_memory_context(monkeypatch):
     """流式路径与非流式注入同一 memory_context（SSE 语义一致）+ 审计 memory_used。"""
-    from backend.api.v1.medical import medical_router as mr
+    from backend.api.v1.medical import literature as lit_route
+    from backend.api.v1.medical import shared as med_shared
     graph = _CapStreamGraph()
-    monkeypatch.setattr(mr, "_lit_graph", graph)
+    monkeypatch.setattr(lit_route, "_lit_graph", graph)
     audit = _FakeAudit()
     c = _med_client(monkeypatch, audit)
     H = _doctor_headers(c)

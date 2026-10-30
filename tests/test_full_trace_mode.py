@@ -33,7 +33,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     return TestClient(app), audit
 
 
@@ -94,8 +94,8 @@ def test_all_agents_enqueue_unconditionally(monkeypatch, tmp_path):
                                "verified": True, "evidence": []},
                     "refine_trace": []}
 
-    monkeypatch.setattr("backend.api.v1.medical.medical_router._lit_graph", _LitGraph())
-    monkeypatch.setattr("backend.api.v1.medical.medical_router._mdt_graph", _CapMdtGraph())
+    monkeypatch.setattr("backend.api.v1.medical.literature._lit_graph", _LitGraph())
+    monkeypatch.setattr("backend.api.v1.medical.consults._mdt_graph", _CapMdtGraph())
     monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _FakeVL())
     c, audit = _client(monkeypatch, tmp_path)
     doc = _login(c, "doctor01")
@@ -162,13 +162,13 @@ def test_self_confirm_threshold_boundary(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
     doc = _login(c, "doctor01")
     # 0.59 → 待确认
-    monkeypatch.setattr("backend.api.v1.medical.medical_router._lit_graph", _graph(0.59))
+    monkeypatch.setattr("backend.api.v1.medical.literature._lit_graph", _graph(0.59))
     d59 = c.post("/api/v1/medical/literature/ask", headers=_h(doc),
                  json={"question": "低置信问题甲"}).json()
     it59 = review.get(d59["review_id"])
     assert it59["confidence"] == 0.59 and it59["self_confirm_required"] is True
     # 0.61 → 纯留痕（无待确认）
-    monkeypatch.setattr("backend.api.v1.medical.medical_router._lit_graph", _graph(0.61))
+    monkeypatch.setattr("backend.api.v1.medical.literature._lit_graph", _graph(0.61))
     d61 = c.post("/api/v1/medical/literature/ask", headers=_h(doc),
                  json={"question": "低置信问题乙"}).json()
     it61 = review.get(d61["review_id"])
@@ -287,7 +287,7 @@ class _StreamGraph:
 def test_stream_enqueue_carries_sources(monkeypatch, tmp_path):
     """诊断2：SSE 流式路径 _enqueue_if_risk 与非流式 ask 同纪律补传 sources——
     留痕条目 sources 随条目存档（此前漏传，队内溯源为空）。"""
-    monkeypatch.setattr("backend.api.v1.medical.medical_router._lit_graph", _StreamGraph({
+    monkeypatch.setattr("backend.api.v1.medical.literature._lit_graph", _StreamGraph({
         "text": "常规循证回答", "confidence": 0.83, "sources": ["KB:guideline-stream"],
         "needs_human_review": False, "verified": True, "evidence": []}))
     c, _ = _client(monkeypatch, tmp_path)
@@ -310,7 +310,7 @@ def test_full_mode_off_restores_legacy_enqueue(monkeypatch, tmp_path):
     from backend.core import runtime_flags
     monkeypatch.setattr(runtime_flags, "FLAGS_FILE", str(tmp_path / "runtime_flags.json"))
     runtime_flags.set_flag("qc_auto_sign_full", False)
-    monkeypatch.setattr("backend.api.v1.medical.medical_router._lit_graph",
+    monkeypatch.setattr("backend.api.v1.medical.literature._lit_graph",
                         _LitGraphForOff())
     c, _ = _client(monkeypatch, tmp_path)
     doc = _login(c, "doctor01")

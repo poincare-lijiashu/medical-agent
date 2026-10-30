@@ -76,7 +76,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(drug_dict, "DRUG_DICT_FILE", str(df))
     monkeypatch.setattr(drug_dict, "DRUG_RULES_FILE", str(rf))
     audit = _Audit()
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger",
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger",
                         lambda: audit)
     drug_dict.invalidate()
     yield SimpleNamespace(client=TestClient(app), audit=audit, df=df, rf=rf)

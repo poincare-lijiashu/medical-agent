@@ -36,7 +36,7 @@ def smoke_env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     seed_default_users()  # doctor01/pharm01 演示账号（口令=AUTH_DEMO_PASSWORD=Med@2026）
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger",
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger",
                         lambda: audit)
     monkeypatch.setattr(rx, "PRESCRIPTIONS_FILE", str(tmp_path / "prescriptions.json"))
     monkeypatch.setattr(pg_store, "_pool", None)

@@ -82,7 +82,8 @@ def test_graph_getters_build_once_under_concurrency(monkeypatch):
     import time
 
     import backend.agents.medical.literature.graph as lit_graph_mod
-    from backend.api.v1.medical import medical_router as mr
+    import backend.api.v1.medical.consults as mdt_route
+    import backend.api.v1.medical.literature as lit_route
 
     calls = []
 
@@ -96,17 +97,16 @@ def test_graph_getters_build_once_under_concurrency(monkeypatch):
     monkeypatch.setattr(lit_graph_mod, "build_literature_graph", _slow_builder("lit"))
     monkeypatch.setattr(mdt_mod, "build_mdt_graph", _slow_builder("mdt"))
 
-    orig = (mr._lit_graph, mr._mdt_graph)
-    mr._lit_graph = None
-    mr._mdt_graph = None
+    monkeypatch.setattr(lit_route, "_lit_graph", None)
+    monkeypatch.setattr(mdt_route, "_mdt_graph", None)
     try:
         n = 8
         barrier = threading.Barrier(n)
 
         def worker():
             barrier.wait()
-            mr._get_lit_graph()
-            mr._get_mdt_graph()
+            lit_route._get_lit_graph()
+            mdt_route._get_mdt_graph()
 
         threads = [threading.Thread(target=worker) for _ in range(n)]
         for t in threads:
@@ -116,7 +116,7 @@ def test_graph_getters_build_once_under_concurrency(monkeypatch):
         assert calls.count("lit") == 1
         assert calls.count("mdt") == 1
     finally:
-        mr._lit_graph, mr._mdt_graph = orig
+        pass  # monkeypatch.setattr 自动还原图缓存（含并发重建后的值）
 
 
 def test_get_mdt_graph_is_singleton():

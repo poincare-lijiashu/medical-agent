@@ -100,7 +100,7 @@ def _client(monkeypatch, tmp_path):
     """隔离：内存审计 + 队列文件 tmp + 强制留痕模式（review_id 确定）。"""
     seed_default_users()
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: log)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     return TestClient(app), log

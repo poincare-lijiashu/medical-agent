@@ -91,7 +91,7 @@ def test_imaging_route_audits_vl_truncated(monkeypatch, tmp_path):
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     monkeypatch.setattr(mi, "get_vl_llm",
                         lambda temperature=0: _FakeVL("影像类型：胸部CT。心脏及", "length"))
     c = TestClient(app)
@@ -112,7 +112,7 @@ def test_imaging_route_no_truncated_audit_on_normal_finish(monkeypatch, tmp_path
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: audit)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
     monkeypatch.setattr(mi, "get_vl_llm",
                         lambda temperature=0: _FakeVL("影像未见明确异常", "stop"))
     c = TestClient(app)

@@ -1,0 +1,219 @@
+"""审核中心端点（W4.3 router 拆分）：高危双人核对队列（pending/history/resolve/reopen…）。
+
+签字权矩阵（任务2 收权 + 问题4 收窄 + 药剂科一票）见 _REVIEW_ROLES/_RESOLVE_ROLES/
+_DRUG_RESOLVE_ROLES；图片可见性统一规则见 _review_image_view。
+"""
+from __future__ import annotations
+
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from backend.api.deps import rate_limit, require_role, require_user
+from backend.api.v1.medical import shared as _shared
+from backend.core import case_archive  # 阶段4：病例库合规归档（qc approve 自动归档挂点）
+from backend.core import pg_store
+from backend.core import medical_review as review
+
+router = APIRouter(dependencies=[Depends(rate_limit)])
+
+
+class ResolveReq(BaseModel):
+    decision: str  # approved | rejected
+    note: str = ""
+
+
+# ---------- 审核中心（高危双人核对）----------
+# 任务2+3 审核中心转型：GET 列表（pending/history）保持多角色可见（qc/admin 全局档案 +
+# doctor/pharmacist 前端按「我的记录」过滤展示）；签发/驳回/翻案等**复核操作**收窄为
+# qc/admin（行为变更：原 doctor/pharmacist 可签发，现由质控员/管理员统一行使签字权）。
+# 本批次任务2 药剂科一票：drug 类签发/驳回放宽到 pharmacist（药物高危结论需药剂科复核，
+# 且 drug 豁免留痕模式——高危恒在 pending，药剂科任何一人可签发/驳回）；翻案仍仅 qc/admin。
+# 问题4 收窄（用户拍板）：drug 待核对签字权与处方审核权 = **pharmacist+admin**——质控科
+# （qc）只管病例质控，不再参与药物核对与处方审核（_DRUG_RESOLVE_ROLES 移除 qc、
+# /prescriptions/* 审核端点移除 qc）；qc 仍可读 review/pending 处理其它助手高危项，
+# 且响应对 qc 剔除 agent=drug（qc 界面彻底不见 drug 项，含旧遗留；pharmacist/admin 不变）。
+_REVIEW_ROLES = ("qc", "admin", "doctor", "pharmacist")
+_RESOLVE_ROLES = ("qc", "admin")                       # 非 drug 类签字权（含翻案）
+_DRUG_RESOLVE_ROLES = ("admin", "pharmacist")    # drug 类签字权（问题4 收窄：药剂科一票+管理员，qc 移除）
+
+
+def _review_image_view(item: dict, role: str, username: str) -> dict:
+    """审核中心图片可见性统一收窄（/review/pending 与 /review/history 两条路径共用）。
+
+    规则：图片返回给 = **提交人本人 + admin + 该项审核所需角色**——
+    agent 非 drug 项（imaging/qc 等）→ qc+admin（qc 核对影像是审核依据，需要看图）；
+    agent=drug → pharmacist+admin；doctor 仅本人提交的（患者数据隐私边界保留，
+    他人条目一律剥 images，不因角色放宽暴露面）。"""
+    if item.get("submitted_by") == username or role == "admin":
+        return dict(item)
+    drug = item.get("agent") == "drug"
+    if (role == "qc" and not drug) or (role == "pharmacist" and drug):
+        return dict(item)  # 该项审核所需角色：看图核对
+    return {k: v for k, v in item.items() if k != "images"}
+
+
+@router.get("/review/pending")
+async def review_pending(user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    items = await asyncio.to_thread(review.pending)
+    role = user.get("role", "")
+    me = user.get("username", "system")
+    if role == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
+        items = [i for i in items if i.get("agent") != "drug"]  # drug 审核权=pharmacist/admin
+    # 图片可见性统一规则（与 /review/history 一致）：qc 审非 drug 项可见 images（修复
+    # 「qc 看不到待审 imaging 图片」）；doctor 他人待审项剥 images（原全量返回，同步收紧）
+    items = [_review_image_view(i, role, me) for i in items]
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="list_pending",
+                            actor=user.get("username", "system"),
+                            payload={"n": len(items), "role": user.get("role", "")})
+    return {"pending": items, "me": user.get("username")}
+
+
+@router.get("/review/history")
+async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    """历史列表（任务5 语义更新）：list_all 现按签发方式剥离——仅人工签发记录剥离 images
+    （FIND-03a 人工复核后不留原图）；AI·留痕模式(自动) 签发的记录保留 images（用户自己的
+    交互留痕，前端历史区缩略图可见）。
+    可见性边界（服务端强制，本批修复统一规则）：图片返回给 = 提交人本人 + admin +
+    该项审核所需角色（agent 非 drug 项 → qc+admin：qc 审核需要看图；agent=drug →
+    pharmacist+admin）——原「非本人一律剥 images」导致 qc 历史区看不到 imaging 影像，
+    已修复；doctor 仅本人参与记录可见（隐私边界保留，不扩大暴露面）。"""
+    items = await asyncio.to_thread(review.list_all, limit=50)
+    me = user.get("username", "system")
+    role = user.get("role", "")
+    # 问题3修复（实测结论）：doctor/pharmacist 的「我的历史」数据源改为服务端按人检索
+    # （submitted_by=me OR reviewed_by=me）——原 list_all(limit=50)
+    # 按插入序全局截断，真实队列中 pharmacist 处理的 drug 项被其后大量自动签发条目挤出
+    # 最新 50 条窗口，前端按 reviewed_by=me 过滤恒空。qc/admin 全局档案语义不变。
+    if role in ("doctor", "pharmacist"):
+        items = await asyncio.to_thread(review.list_involved, me)
+    # 图片可见性统一规则（与 /review/pending 一致）：qc 审非 drug 项可见 images（修复
+    # qc 历史区看不到 imaging 影像）；pharmacist 的 drug 项可见；doctor 他人项剥 images；
+    # admin/提交人本人全可见
+    items = [_review_image_view(i, role, me) for i in items]
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="history",
+                            actor=user.get("username", "system"),
+                            payload={"n": len(items), "role": user.get("role", "")})
+    return {"items": items}
+
+
+@router.get("/review/status")
+async def review_status(review_id: str | None = None, user: dict = Depends(require_user)):
+    """复核队列状态只读查询（MCP review_status 工具的承载端点）。
+
+    不带 review_id → 最近 100 条记录的三态计数（pending/approved/rejected + total）；
+    带 review_id → 单条状态元数据（状态/提交人/审核人/风险原因等）。
+    安全边界：单条视图刻意剥离 question/answer/images/meta 等临床内容（只给状态元数据，
+    需要内容走 /review/pending 或 /review/history）；未找到 → 404。
+    """
+    rid = (review_id or "").strip()[:64]
+    actor = user.get("username", "system")
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="status",
+                            actor=actor, payload={"rid": rid or None})
+    if rid:
+        item = await asyncio.to_thread(review.get, rid)
+        if item is None:
+            raise HTTPException(404, "复核单不存在")
+        keys = ("id", "agent", "status", "confidence", "risk_reason", "submitted_by",
+                "reviewed_by", "review_note", "ts", "resolved_at",
+                "self_confirm_required", "resubmit_of", "attempt")
+        return {k: item.get(k) for k in keys if k in item}
+    items = await asyncio.to_thread(review.list_all, with_images=False)
+    counts = {"pending": 0, "approved": 0, "rejected": 0}
+    for it in items:
+        st = it.get("status")
+        if st in counts:
+            counts[st] += 1
+    return {"total": len(items), **counts}
+
+
+@router.get("/review/my-pending-confirm")
+async def review_my_pending_confirm(user: dict = Depends(require_user)):
+    """任务3：当前医生的「待知情确认」项（submitted_by=本人 且 self_confirm_required 且未确认）。
+
+    留痕模式（QC_AUTO_SIGN_FULL）下高危项入队即被 AI 自动签发，医生侧不阻塞；
+    此端点让提交医生补一个知情确认（数据隔离：只返回自己的）。
+    """
+    me = user.get("username", "system")
+    items = await asyncio.to_thread(review.my_pending_confirm, me)
+    return {"items": items, "me": me}
+
+
+@router.post("/review/{rid}/self-confirm")
+async def review_self_confirm(rid: str, user: dict = Depends(require_user)):
+    """任务3：提交医生本人对「AI·留痕模式(自动)」签发的高危项做知情确认（仅本人）。
+
+    标记 confirmed_by_self/self_confirmed_at；审计记 self_confirmed；非本人/无标记/重复确认 → 400。
+    """
+    me = user.get("username", "system")
+    try:
+        item = await asyncio.to_thread(review.self_confirm, rid, me)
+    except review.ReviewError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="self_confirmed",
+                            actor=me, payload={"rid": rid})
+    await pg_store.mirror_review(item)
+    await pg_store.mirror_audit("review.self_confirmed", me, {"rid": rid})
+    return item
+
+
+@router.post("/review/{rid}/resolve")
+async def review_resolve(rid: str, body: ResolveReq,
+                         user: dict = Depends(require_role("qc", "admin", "pharmacist"))):
+    """签发/驳回（按 agent 分流的签字权矩阵）：
+    - 非 drug 类：仅 qc/admin（任务2 收权，原 doctor/pharmacist 可调，属显式行为变更）；
+    - drug 类：pharmacist/admin（问题4 收窄，语义变更：原 qc/admin/pharmacist——用户拍板
+      质控科只管病例，药物核对权=药剂科一票+管理员；drug 亦豁免留痕模式、高危恒在
+      pending，药剂科任何一人可签发/驳回）。
+    双控不变：审核人≠提交人由 review.resolve 强制；翻案（reopen）仍仅 qc/admin。"""
+    reviewer = user.get("username", "system")
+    item = await asyncio.to_thread(review.get, rid)
+    if item is not None:  # 条目不存在时保持旧行为：落入 review.resolve 抛 ReviewError → 400
+        allowed = _DRUG_RESOLVE_ROLES if item.get("agent") == "drug" else _RESOLVE_ROLES
+        if user.get("role", "") not in allowed:
+            if item.get("agent") == "drug":
+                raise HTTPException(403, "药物核对项：仅药师（pharmacist）/管理员可签发/驳回")
+            raise HTTPException(403, "签发/驳回仅质控员（qc）/管理员可执行")
+    try:
+        item = await asyncio.to_thread(review.resolve, rid, body.decision, reviewer, body.note)
+    except review.ReviewError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action=f"resolved_{body.decision}",
+                            actor=reviewer, payload={"rid": rid, "role": user.get("role", "")})
+    await pg_store.mirror_review(item)
+    await pg_store.mirror_audit(f"review.{body.decision}", reviewer, {"rid": rid})
+    if item.get("agent") == "qc" and body.decision == "approved":
+        # 阶段4.2 归档挂点：质控（qc）approve 成功 → 自动归档病例库。全兜底：失败仅审计
+        # case_archive.failed，绝不影响质控主流程（质控结论已签发生效）。
+        try:
+            entry = await asyncio.to_thread(case_archive.archive_from_review, item)
+            await asyncio.to_thread(_shared.get_audit_logger().write, event_type="case_archive",
+                                    action="created", actor=reviewer,
+                                    payload={"rid": rid, "arch_id": entry["id"],
+                                             "dept": entry.get("dept", ""),
+                                             "role": user.get("role", "")})
+            await pg_store.mirror_audit("case_archive.created", reviewer,
+                                        {"rid": rid, "arch_id": entry["id"]})
+        except Exception as e:  # noqa: BLE001 —— 归档失败绝不冒泡
+            await asyncio.to_thread(_shared.get_audit_logger().write, event_type="case_archive",
+                                    action="failed", actor=reviewer,
+                                    payload={"rid": rid, "err": str(e)[:150]})
+            await pg_store.mirror_audit("case_archive.failed", reviewer, {"rid": rid})
+    return item
+
+
+@router.post("/review/{rid}/reopen")
+async def review_reopen(rid: str, user: dict = Depends(require_role(*_RESOLVE_ROLES))):
+    """翻案（转人工复核）：已处理（含 AI 自动签发）条目回到待核对，清除签署信息。
+    双控对称：操作人不能是提交人本人；任务2 收权：仅 qc/admin 可翻案。翻案本身记审计留痕。"""
+    operator = user.get("username", "system")
+    try:
+        item = await asyncio.to_thread(review.reopen, rid, operator)
+    except review.ReviewError as e:
+        raise HTTPException(400, str(e))
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="reopened",
+                            actor=operator, payload={"rid": rid, "role": user.get("role", "")})
+    await pg_store.mirror_review(item)
+    await pg_store.mirror_audit("review.reopened", operator, {"rid": rid})
+    return item

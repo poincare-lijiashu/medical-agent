@@ -18,7 +18,7 @@ def _client(monkeypatch, tmp_path):
     """隔离：内存审计 + 队列文件 tmp。返回 (client, audit_log)。"""
     seed_default_users()
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: log)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     return TestClient(app), log
 

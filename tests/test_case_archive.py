@@ -176,7 +176,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "qc_auto_sign_full", False)  # 关留痕模式：qc 项保持 pending 走人工签发
     seed_default_users()
     log = _FakeAudit()
-    monkeypatch.setattr("backend.api.v1.medical.medical_router.get_audit_logger", lambda: log)
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     return TestClient(app), log
 
 
