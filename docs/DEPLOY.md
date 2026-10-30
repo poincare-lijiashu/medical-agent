@@ -137,7 +137,7 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 | 科室 | PG `departments` | `data/departments.json` | 同上 | 同上 |
 | 审计日志 | PG `audit_log` | `logs/audit.jsonl`（追加式本地兜底） | 同上 | 同上 |
 | 运行时开关（留痕模式等） | PG `runtime_flags`（轮 A3） | `data/runtime_flags.json`（原子写兜底） | 同上 | 同上（重启自动迁移：表空导入/差集补齐） |
-| 知识库向量 | Milvus `medical_kb` | ——（无镜像；manifest 在 `data/kb_manifest.json`） | backup.py tar 包（仅 manifest/文档原件） | 重跑种子脚本重建向量（`seed_kb_*` 系列脚本）；在线上传文档重新上传 |
+| 知识库向量 | Milvus `medical_kb` | ——（无镜像；manifest 在 `data/kb_manifest.json`） | **卷级快照 `scripts/backup_milvus.ps1`**（etcd+minio+milvus 三卷）；backup.py 仅含 manifest/文档原件 | 卷级还原 `scripts/restore_milvus.ps1`；或重跑种子脚本重建（`seed_kb_*`）；在线上传文档重新上传 |
 | 上传原件（KB 文档/任务） | `data/kb_docs`、`data/kb/tasks/`（文件） | —— | backup.py tar 包 | 解包覆盖 data/ |
 | 应用日志 | `logs/app.log`（RotatingFileHandler 5MB×5） | —— | 不入备份（可丢弃） | —— |
 
@@ -159,6 +159,33 @@ python scripts/restore.py --backup data/backups/backup_XXX.tar.gz --yes   # 实�
 - **探针结果（双清除达成）**：文件探针 `data/_restore_probe.json` 已删除（备份内无此文件，镜像删除生效）；PG 探针 `SELECT count(*) FROM runtime_flags WHERE key='_restore_probe'` = **0**（DROP+CREATE 重建后仅 dump 内 1 行 `qc_auto_sign_full`）。
 - **验证输出摘要**：18 个 JSON 行数对比全部 `OK`（如 consults 12/12、drug_dict 342/342、drug_rules 318/318、prescriptions 4/4、review/queue 656/656、runtime_flags 1/1、auth/users 10/10）；PG 关键表 count 与演练前基线一致（users=10、review_queue=641、consults=12、prescriptions=4、drug_dict=342、runtime_flags=1、audit_log=542、llm_providers=4、departments=10）。`drug_rules` PG=307 vs JSON=318 为演练前既有的镜像差集（恢复保真，非本次引入）；重启后差集按既有机制自动补齐。
 - **结论**：备份可恢复、探针双清除、数据计数一致——**演练通过**。
+
+### Milvus 卷级备份（2026-10-30 追加）
+
+`scripts/backup_milvus.ps1` / `scripts/restore_milvus.ps1`：对 Milvus 三元组卷
+（`medagent_etcd` 元数据 / `medagent_minio` 段数据 / `medagent_milvus-db` 本地存储）
+分别打包为 `data/backups/milvus_<ts>/{etcd,minio,milvus}.tgz`（默认保留最近 3 份）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backup_milvus.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore_milvus.ps1 -Snapshot data\backups\milvus_20261030_130837
+```
+
+**演练记录（2026-10-30）**：备份 → `restore_milvus.ps1` 全量还原 → 容器 6/6 Up →
+`run_eval.py` **9/9** 与演练前一致。**演练通过**。
+
+**卷操作纪律（强制，源于同日事故）**：
+
+1. **禁止内联 `sh -c "…\$var…"` 传参**。PowerShell 双引号会插值 `$var`（未定义即空串），
+   曾导致 `rm -rf /\$p/*` 实际执行 `rm -rf //*`，一次清空六个卷、14,049 条知识库向量永久丢失。
+   跨 shell 传递一律：① 单引号包裹（不插值），或 ② 写成 `.ps1`/`.sh` 脚本文件执行。
+2. **破坏性命令先空跑**：任何 `rm`/`find -delete` 前先 `echo` 或 `ls` 打印展开结果，确认路径集合。
+3. **不吞错**：不用 `2>/dev/null || true` 掩盖批量操作；任一环节非零即中止。
+4. **操作前先备份**：涉及卷的操作先跑 `backup_milvus.ps1`，恢复前校验三个包存在且 >1KB
+   （`restore_milvus.ps1` 已内置该校验，缺包直接拒绝清卷）。
+5. **容器重建不等于数据安全**：命名卷随 `docker compose down -v` 删除；匿名卷（镜像 `VOLUME`
+   指令自动创建）不进 `volumes:` 声明，重建即丢。核对实际挂载点用
+   `docker inspect <容器> --format '{{range .Mounts}}{{.Destination}}<-{{.Name}}{{println}}{{end}}'`。
 
 ## 药品数据免责声明
 

@@ -196,7 +196,28 @@ def test_startup_security_allows_auth_disabled_in_dev(monkeypatch):
     monkeypatch.setattr(settings, "app_env", "production")
     monkeypatch.setattr(settings, "auth_jwt_secret", "x" * 40)
     monkeypatch.setattr(settings, "auth_enabled", True)
+    # conftest 为兼容既有 body-token 测试开启了 AUTH_TOKEN_IN_BODY，此处还原生产默认
+    monkeypatch.setattr(settings, "auth_token_in_body", False)
     backend_main.validate_startup_security()  # 生产开启鉴权不拦
+
+
+def test_startup_security_blocks_token_in_body_in_production(monkeypatch):
+    """W3.1：生产环境禁止 AUTH_TOKEN_IN_BODY=true——否则令牌回流到 JS 可达面，
+    httpOnly cookie 防线静默失效。开发环境保留该开关（测试/脚本调试用）。"""
+    import pytest
+
+    from backend import main as backend_main
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "app_env", "development")
+    monkeypatch.setattr(settings, "auth_token_in_body", True)
+    backend_main.validate_startup_security()  # 开发环境（测试依赖）不拦
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "auth_jwt_secret", "x" * 40)
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    with pytest.raises(RuntimeError, match="AUTH_TOKEN_IN_BODY"):
+        backend_main.validate_startup_security()
 
 
 def _app():

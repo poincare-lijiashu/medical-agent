@@ -44,6 +44,12 @@ def validate_startup_security():
             raise RuntimeError("生产环境必须设置高熵 AUTH_JWT_SECRET（拒绝使用默认密钥启动）")
         if not settings.auth_enabled:
             raise RuntimeError("生产环境必须启用鉴权（AUTH_ENABLED=false 拒绝启动）")
+        # W3.1：令牌只允许经 httpOnly cookie 下发。生产误开该开关会把令牌回写到
+        # 响应体（JS 可达面），httpOnly 防线静默失效——拒绝启动而非降级告警。
+        if settings.auth_token_in_body:
+            raise RuntimeError(
+                "生产环境禁止 AUTH_TOKEN_IN_BODY=true（令牌会回到 JS 可达面，"
+                "绕过 httpOnly cookie 防护；该开关仅供测试/脚本调试）")
 
 
 @asynccontextmanager
