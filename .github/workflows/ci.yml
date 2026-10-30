@@ -108,8 +108,13 @@ jobs:
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Seed KB (30 PubMed abstracts, 在线拉取)
-        run: python scripts/seed_kb_pubmed.py
+      - name: Seed KB（离线语料：指南要点 v2 + 教学语料，零外网依赖）
+        # 不用 seed_kb_pubmed.py：NCBI 在线拉取对 runner 网络质量敏感（实测间歇
+        # Remote end closed），且本地模式方针下 eval 基线应以本地语料为准。
+        # 指南要点 67 条 + 教学语料 21 条已实测支撑 baseline 9/9。
+        run: |
+          python scripts/seed_kb_docs.py v2
+          python scripts/seed_kb_local.py
       - name: Start backend
         run: |
           nohup python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001 > uvicorn.log 2>&1 &
@@ -118,6 +123,7 @@ jobs:
             sleep 3
           done
           curl -sf http://127.0.0.1:8001/healthz || (tail -50 uvicorn.log && exit 1)
+          sleep 10  # Milvus collection load 稳定
       - name: Run eval baseline（门槛：9/9）
         run: python scripts/run_eval.py
       - name: Upload eval report

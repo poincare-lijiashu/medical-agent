@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     milvus_retrieve_timeout_s: float = 20.0
     pg_host: str = "127.0.0.1"
     pg_port: int = 5433
+    # W4.1 PG 真源翻转（转型计划书）：true=PG 事务写为主（失败抛出，不静默降级 JSON），
+    # JSON 降为 best-effort 镜像快照；false=旧编排（JSON 先写真源，PG best-effort 镜像）。
+    # 无 PG 池 / PG_OFFLINE 离线模式下两种编排等价（JSON 是唯一持久层）。
+    pg_primary: bool = True
     pg_user: str = "eduagent"
     pg_password: str = ""
     pg_database: str = "eduagent_medical"

@@ -188,6 +188,12 @@ async def _init_impl() -> bool:
             pass
         raise
     _pool = pool
+    # W4.1：池就绪即清 stale——stale 的语义是"本进程内 PG 写失败过"（读回落 JSON）。
+    # 启动期 seed 判空读发生在池就绪前，会被误置 stale 且无后续写来清除（冷启动+
+    # PG 非空场景下该域永远回落旧 JSON——实测登录 401 根因）。池刚就绪时本进程
+    # 尚无写失败，清空是安全的；读路径有空表/异常回落 JSON 的既有保护兜底。
+    _repo_pg_stale.clear()
+    _stale_warned.clear()
     logger.info("pg_store.ready")
     return True
 
@@ -492,24 +498,51 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
 
 
 def _json_then_pg(save_fn, path: str, data) -> None:
-    """repo 写编排：JSON 原子写先行（兜底安全，现状行为），PG 可用再全量同步（best-effort：
-    异常仅告警不冒泡，但置**本域** stale 标志——此后该域读回落 JSON 最新数据，直到该域
-    下次成功写恢复 PG 真源；其它域的 stale 状态不受影响（任务1 域级隔离））。
-    任务2：PG_OFFLINE=on → 仅 JSON 落盘（不置 stale 不告警）；成功写清除本域 stale 的
-    同时重置该 file 的告警去重位（再次 stale 时重新 WARN 一次）。"""
-    _write_json_atomic(path, data)
+    """repo 写编排（W4.1 真源翻转，按 settings.pg_primary 分派）：
+
+    **pg_primary=true（新编排，PG 主写）**：PG 事务写先行——失败直接抛出（上层 500，
+    不产生"PG 没写进但 JSON 写了"的分裂状态）；成功后 JSON 降为 best-effort 镜像快照
+    （失败仅告警，不影响主路径；它是 PG 灾难时最近的恢复源）。
+    **pg_primary=false（旧编排，JSON 主写）**：JSON 原子写先行，PG 可用再全量同步
+    （best-effort，异常置本域 stale——读回落 JSON 最新数据；任务1 域级隔离）。
+
+    共同语义：PG_OFFLINE=on 或无连接池 → JSON 是唯一持久层（单机/测试形态，两编排等价）；
+    成功写清除本域 stale 并重置该 file 的告警去重位。"""
+    from backend.config import get_settings
     domain = os.path.basename(path)
-    if offline_mode():
+    if offline_mode() or not _pool:
+        _write_json_atomic(path, data)
+        if offline_mode():
+            return
+        # 无池但有 PG 配置：JSON 落盘 + 置 stale（读回落 JSON，与旧编排一致）
+        _repo_pg_stale.add(domain)
         return
-    if _pool:
+    if get_settings().pg_primary:
         try:
             _run_pg(save_fn(data))
-            _repo_pg_stale.discard(domain)
-            _stale_warned.discard(domain)  # 任务2：stale 已清除，下次再 stale 重新 WARN
-        except Exception as e:  # noqa: BLE001
-            _repo_pg_stale.add(domain)
-            logger.warning("pg.repo.save_pg_failed", error=str(e)[:120],
+        except Exception as e:
+            # 真源写失败：不写 JSON（避免分裂），向上抛出由调用方决定语义（HTTP 500）
+            logger.warning("pg.repo.primary_write_failed", error=str(e)[:120],
                            file=os.path.basename(path))
+            raise
+        _repo_pg_stale.discard(domain)
+        _stale_warned.discard(domain)
+        try:
+            _write_json_atomic(path, data)  # 镜像快照（PG 灾难时最近的恢复源）
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pg.repo.mirror_json_failed", error=str(e)[:120],
+                           file=os.path.basename(path))
+        return
+    # ---- 旧编排（JSON 主写，pg_primary=false 灰度回滚用）----
+    _write_json_atomic(path, data)
+    try:
+        _run_pg(save_fn(data))
+        _repo_pg_stale.discard(domain)
+        _stale_warned.discard(domain)  # 任务2：stale 已清除，下次再 stale 重新 WARN
+    except Exception as e:  # noqa: BLE001
+        _repo_pg_stale.add(domain)
+        logger.warning("pg.repo.save_pg_failed", error=str(e)[:120],
+                       file=os.path.basename(path))
 
 
 # ---- users（PG 表补 dept 列；兼容旧 users.json 无 dept 字段） ----

@@ -22,6 +22,16 @@ from backend.core import pg_store
 from backend.core import prescriptions as rx_mod
 
 
+@pytest.fixture(autouse=True)
+def _legacy_json_first_orchestration(monkeypatch):
+    """本文件锁定的是**旧编排（JSON 主写 + PG best-effort）**的容错语义：save PG 失败
+    置 stale 不抛出、读回落 JSON。W4.1 翻转后（pg_primary=true 默认，PG 主写失败抛出）
+    该语义仅在灰度回滚开关下成立——新编排语义由 tests/test_pg_primary.py 锁定。"""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "pg_primary", False)
+    yield
+
+
 # ---------- 假 asyncpg 池/连接 ----------
 
 class _FakeTx:
