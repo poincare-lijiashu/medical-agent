@@ -113,7 +113,7 @@ def load_cases(path: str | None) -> list[dict]:
         data = json.load(f)
     cases = []
     for c in data.get("cases", []):
-        cases.append({"agent": "literature", "question": str(c["q"]),
+        cases.append({"agent": str(c.get("agent", "literature")), "question": str(c["q"]),
                       "expect_hit": bool(c.get("expect_hit", True)),
                       "note": str(c.get("note", ""))})
     return cases
@@ -173,6 +173,11 @@ def main() -> int:
     args = ap.parse_args()
 
     cases = load_cases(args.cases)
+    # 难题集（含负样本）与常规基线分开落盘，避免互相覆盖
+    global OUT, _COMPAT_OUT
+    if args.cases:
+        OUT = os.path.join(EVAL_DIR, f"results_hard_{MODE}.json")
+
     if args.dry_run:
         print(f"[dry-run] mode={MODE} cases={len(cases)} out={OUT}")
         for c in cases:
@@ -192,7 +197,8 @@ def main() -> int:
     print(f"\nEVAL[{MODE}] hit_rate = {passed}/{len(results)} = {rate:.0%}")
     report = {"mode": MODE, "cases_file": os.path.abspath(args.cases) if args.cases else "builtin",
               "hit_rate": rate, "passed": passed, "total": len(results), "results": results}
-    for path in (OUT, _COMPAT_OUT):  # 主输出 eval/results_*.json；兼容保留旧摘要文件
+    paths = [OUT] if args.cases else [OUT, _COMPAT_OUT]  # 难题集不覆盖 baseline 兼容摘要
+    for path in paths:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)

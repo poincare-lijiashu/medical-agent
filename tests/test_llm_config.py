@@ -121,6 +121,27 @@ def test_base_url_public_host_accepted_and_switch_override(monkeypatch, tmp_path
     assert pid2.startswith("p-")
 
 
+def test_private_hosts_allowlist_local_mode(monkeypatch, tmp_path):
+    """本地/云端双模式：LLM_PRIVATE_HOSTS_ALLOWLIST 显式白名单下，名单内私网端点
+    （院内 vLLM/Ollama）放行，名单外私网（含云元数据）依然拒绝——本地模式不掏空 SSRF 防线。"""
+    monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
+    from backend.config import settings
+    monkeypatch.setattr(settings, "llm_private_hosts_allowlist",
+                        "vllm.hospital.local,10.1.2.3,192.168.1.5:8000")
+    # 名单内：纯主机（任意端口）放行
+    assert lc.add_provider("chat", "openai", "http://10.1.2.3:8000/v1", "vllm", "", "k").startswith("p-")
+    assert lc.add_provider("chat", "openai", "http://vllm.hospital.local/v1", "vllm", "", "k").startswith("p-")
+    # 名单内：host:port 精确匹配
+    assert lc.add_provider("chat", "openai", "http://192.168.1.5:8000/v1", "vllm", "", "k").startswith("p-")
+    # 名单外：端口不匹配 / 未列入的私网 / 云元数据 —— 依然拒绝
+    with pytest.raises(ValueError, match="白名单"):
+        lc.add_provider("chat", "openai", "http://192.168.1.5:9000/v1", "vllm", "", "k")
+    with pytest.raises(ValueError, match="白名单"):
+        lc.add_provider("chat", "openai", "http://10.9.9.9/v1", "vllm", "", "k")
+    with pytest.raises(ValueError, match="白名单"):
+        lc.add_provider("chat", "openai", "http://169.254.169.254/latest", "meta", "", "k")
+
+
 def test_route_add_provider_private_host_400(monkeypatch, tmp_path):
     """路由层透传：admin 新增 provider 指向内网 → 400 带中文文案（不落盘、不计审计成功）。"""
     _isolate(monkeypatch, tmp_path)

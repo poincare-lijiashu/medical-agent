@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # 内网网关/云元数据端点挂进模型路由）。development 本地网关（如 Ollama
     # localhost:11434）显式置 LLM_ALLOW_PRIVATE_HOSTS=true 放行；生产保持 false。
     llm_allow_private_hosts: bool = False
+    # 本地/云端双模式（W4.2 评议落地）：生产接入院内 vLLM/Ollama（私网地址）时，
+    # 用**显式白名单**替代全局放开——逗号分隔的主机或 host:port（如
+    # "vllm.hospital.local,10.1.2.3:8000"）。仅名单内私网地址放行，
+    # 名单外私网（含云元数据 169.254.x）依然拒绝，SSRF 防线不因本地模式而消失。
+    llm_private_hosts_allowlist: str = ""
 
     # DeepSeek 兜底（医疗路由不走，仅防其它路由调用时 AttributeError）
     deepseek_api_key: str = ""

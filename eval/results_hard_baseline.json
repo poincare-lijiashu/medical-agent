@@ -1,0 +1,85 @@
+{
+  "mode": "baseline",
+  "cases_file": "D:\\workspace_AI\\workspace_traecode\\xiangmu_traecode\\medical_agent\\eval\\hard_cases.json",
+  "hit_rate": 1.0,
+  "passed": 4,
+  "total": 4,
+  "results": [
+    {
+      "agent": "literature",
+      "question": "台风形成的三个必要条件是什么？",
+      "expect": "expect_hit=False",
+      "hit": true,
+      "fallback": true,
+      "confidence": 0.4,
+      "elapsed_s": 6.27,
+      "note": "负样本·出域问题（气象）：医学检索无证据时应走兜底/明确说明范围外，不得编造医学答案",
+      "resp": {
+        "answer": "⚠ 未检索到权威循证证据，以下为模型常识，仅供参考，请务必人工复核。\n\n知识库未检索到相关权威证据。以下仅凭通用医学常识作谨慎参考——但需说明：台风形成属于气象学问题，不是医学问题，我作为临床辅助助手并无相关权威依据，以下为一般性常识，置信度低，建议以气象部门权威资料为准。\n\n- 温暖的海面：海表温度较高，提供水汽和热量（常见说法为约26.5℃以上，具体阈值请以气象权威资料复核）。\n- 合适的大气环境：低层辐合、高层辐散，垂直风切变较小，利于对流系统组织增强。\n- 足够的初始扰动与地转偏向力：需要热带扰动作为起始，且离赤道有一定距离以具备足够地转偏向力，使系统能旋转组织。\n\n以上为常识性概括，非精确指南结论；如需严谨定义与数值阈值，请查阅气象学权威教材或气象部门发布资料。",
+        "confidence": 0.4,
+        "needs_human_review": true,
+        "sources": [
+          "fallback:model-prior"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "如何腌制四川泡菜才能又脆又酸？",
+      "expect": "expect_hit=False",
+      "hit": true,
+      "fallback": true,
+      "confidence": 0.4,
+      "elapsed_s": 6.98,
+      "note": "负样本·出域问题（烹饪）：同上，检测跨域幻觉",
+      "resp": {
+        "answer": "⚠ 未检索到权威循证证据，以下为模型常识，仅供参考，请务必人工复核。\n\n知识库未检索到与“四川泡菜腌制工艺”相关的权威证据，以下仅凭通用生活常识给出谨慎参考，非医疗建议：\n\n1. **脆度关键**：选质地紧实的蔬菜（如萝卜、豇豆、仔姜），洗净后充分晾干表面水分；腌制时保持低温、避光，盐度适中，避免过软。\n2. **酸味来源**：依靠乳酸菌自然发酵，容器需洁净无油、密封良好，使用凉开水或纯净水，避免生水杂菌。\n3. **常见做法要点**：盐、花椒、辣椒、姜蒜等调味，坛沿水封隔绝空气；发酵时间随气温调整，气温高时缩短。\n4. **安全提醒**：若出现霉花、异味、发黏，应丢弃；自制发酵食品存在亚硝酸盐风险，建议适量食用，特殊人群（孕妇、儿童、胃肠疾病者）谨慎。\n5. 具体配比与工艺建议参考正规烹饪书籍或食品科学资料，并结合实际操作环境复核。",
+        "confidence": 0.4,
+        "needs_human_review": true,
+        "sources": [
+          "fallback:model-prior"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "drug",
+      "question": "青霉素和头孢曲松能一起吃吗？",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.5,
+      "elapsed_s": 0.05,
+      "note": "难题·同类抗生素联用：语料内规则未必覆盖，但答案应引用检索证据或谨慎提示而非凭空断言",
+      "resp": {
+        "answer": "未在问题中识别到 ≥2 种可核查药物（识别到：['头孢曲松']）。请同时给出两种药物名称以检查相互作用。本结果为规则库初筛，需药师/医师复核。",
+        "confidence": 0.5,
+        "needs_human_review": false,
+        "sources": [
+          "drug_rules:curated_v2"
+        ],
+        "error": null
+      }
+    },
+    {
+      "agent": "literature",
+      "question": "Ann Arbor 分期体系中 B 症状如何定义？",
+      "expect": "expect_hit=True",
+      "hit": true,
+      "fallback": false,
+      "confidence": 0.9,
+      "elapsed_s": 8.44,
+      "note": "证据边界诚实性：病理学教材含 B 症状内容，期望检索命中（sources 引用教材）且明确指出证据缺口（如阈值未给出）而非编造完整定义",
+      "resp": {
+        "answer": "提供的文献未给出 B 症状的正式定义条目，仅描述其表现为发热、盗汗和体重下降，并指出临床Ⅲ、Ⅳ期或 MC 和 LD 亚型者常有这些系统症状。文献未说明具体的体温阈值、体重下降比例或盗汗判定标准，因此无法给出完整定义，置信度有限。",
+        "confidence": 0.9,
+        "needs_human_review": false,
+        "sources": [
+          "14.+病理学（第10版）"
+        ],
+        "error": null
+      }
+    }
+  ]
+}

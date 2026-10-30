@@ -430,6 +430,36 @@ python scripts/loadtest.py --users 16 --seconds 25 --ramp
 - 预期：质控判定是强领域、强规则的**专项任务**，微调后的 7-8B 专项模型在该任务上优于通用大模型（维度归类、院内书写规范、科室惯用语等院内知识只有微调能吃透）；
 - 迭代：每轮微调后与通用模型 A/B 对比（用留痕数据回放评估），不达标不切换。
 
+### 本地/云端双模式（W4.2 评议落地，2026-10-30）
+
+两种运行形态共用同一套代码与数据层，**切换 = 管理端模型配置的激活动作，零代码**：
+
+| | 云端模式（默认） | 本地模式 |
+| --- | --- | --- |
+| LLM 端点 | 公网 MaaS（阿里百炼/DeepSeek/智谱…，OpenAI 兼容/anthropic） | 院内 vLLM/Ollama（私网地址，OpenAI 兼容） |
+| 数据出域 | 出（经 MaaS 通道） | **不出院**（合规卖点） |
+| token 成本 | 按 token 计费 | 归零（换 GPU 折旧） |
+| 适用 | 科室试点 / 开发 | 院区生产（C→B 路径目标态） |
+
+**切换操作**：管理端「模型配置」→ 新增 provider（kind=chat，api_format=openai，
+base_url=`http://<院内地址>/v1`，model_id 对应本地权重）→ 连通性测试 → **激活**。
+回落云端：`deactivate`（active 置空即回落 .env 内置配置）。
+
+**私网门禁三层放行（SSRF 防线不因本地模式而消失）**：
+
+1. 开发环境调试：`LLM_ALLOW_PRIVATE_HOSTS=true` 全局放行（默认 false）；
+2. **生产本地模式（正式通道）**：`.env` 设 `LLM_PRIVATE_HOSTS_ALLOWLIST=vllm.hospital.local,10.1.2.3:8000`
+   （逗号分隔，host 或 host:port）——**仅名单内端点放行**，名单外私网与云元数据（169.254.x）依然拒绝；
+3. 未配置：仅公网 MaaS 可用（云端模式默认态）。
+
+门禁实现：`backend/core/llm_config.py::_reject_private_host`（保存/连通性测试同一防线）；
+localhost/.local 域名无条件拒绝（回环常见写法，白名单可覆盖自有内网域名）。
+
+**知识库语料全本地化**：两份教材 PDF + 中文指南要点库（`clinical_guidelines_v2`，
+本地 md 落盘可审计）+ 本地教学语料均可离线入库；PubMed 摘要走**两段式离线管线**
+（可达环境跑 `seed_kb_pubmed.py` 产出缓存 → 内网 `MEDICAL_OFFLINE_JSON=<缓存>` 入库，
+或 `MEDICAL_EUTILS_BASE` 指向院内代理）——系统运行时**零外网依赖**。
+
 ### 三、当前等待院方的两件事
 
 1. **接口规范**：HIS/病案系统的提交-回写接口规范（触发时机、字段映射、驳回回写格式、重试与幂等约定）——拿到即可开发适配层；

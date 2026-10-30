@@ -150,11 +150,15 @@ def test_parity_admin_arch_view(page):
 def _api(method: str, path: str, token: str = "", body: dict | None = None) -> tuple[int, dict]:
     """e2e 内轻量 API 调用（前置造数/断言用，避免为一次 POST 走整套 UI 登录）。
     W3.1：共享 httpx client 的 cookie jar 跨调用持有 httpOnly 会话——登录一次后
-    后续调用自动携带；token 参数保留（Bearer 兼容路径）。"""
+    后续调用自动携带；token 参数保留（Bearer 兼容路径）。
+    限流兜底：429（同账号被手工/其它测试打满窗口）等一个窗口后重试一次，消除假红。"""
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
     r = _http.request(method, path, headers=headers, json=body)
+    if r.status_code == 429:
+        time.sleep(62)
+        r = _http.request(method, path, headers=headers, json=body)
     try:
         return r.status_code, r.json()
     except ValueError:

@@ -100,7 +100,12 @@ def _reject_private_host(base_url: str) -> None:
     """终评 F4 SSRF 收口：base_url 指向内网/回环地址时拒绝（保存/连通性测试同一防线）。
 
     覆盖 localhost、127.x、10.x、172.16-31.x、192.168.x、169.254.x（云元数据）、
-    0.0.0.0、::1。development 本地网关经 settings.llm_allow_private_hosts 显式放行。
+    0.0.0.0、::1。三层放行：
+    1) settings.llm_allow_private_hosts=true —— 开发环境全局放行（本地网关调试）；
+    2) settings.llm_private_hosts_allowlist 显式白名单 —— 生产接入院内 vLLM/Ollama
+       的正式通道（"本地/云端双模式"）：仅名单内主机放行，名单外私网（含云元数据）
+       依然拒绝——本地模式不掏空 SSRF 防线；
+    3) 均未配置 —— 公网 MaaS（云端模式）直连。
     仅拦新增/更新：既有存量 provider 不受影响（读取侧不校验）。"""
     from urllib.parse import urlparse
 
@@ -108,14 +113,29 @@ def _reject_private_host(base_url: str) -> None:
     if settings.llm_allow_private_hosts:
         return
     host = (urlparse(base_url or "").hostname or "").strip().strip("[]").lower()
-    if host == "localhost":
-        raise ValueError("LLM base_url 不允许指向内网/回环地址")
+    port = urlparse(base_url or "").port
+    allowlist = [h.strip().lower() for h in
+                 (getattr(settings, "llm_private_hosts_allowlist", "") or "").split(",") if h.strip()]
+    for entry in allowlist:
+        if ":" in entry:  # host:port 精确匹配
+            eh, _, ep = entry.rpartition(":")
+            if host == eh and str(port or "") == ep:
+                return
+        elif host == entry:  # 纯主机匹配（任意端口）
+            return
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return  # 普通域名（公网 MaaS 端点）放行——不做 DNS 解析拦截（职责在网关侧）
+        # 非 IP 主机名：localhost 是本机回环的常见写法，必须显式拒绝（历史回归点：
+        # 仅靠 ip_address 解析会把 localhost 当"公网域名"放行）；其它域名按公网放行，
+        # 不做 DNS 解析拦截（职责在网关侧）。
+        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+            raise ValueError("LLM base_url 不允许指向内网/回环地址（院内推理端点请配置 "
+                             "LLM_PRIVATE_HOSTS_ALLOWLIST 显式白名单）")
+        return
     if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified:
-        raise ValueError("LLM base_url 不允许指向内网/回环地址")
+        raise ValueError("LLM base_url 不允许指向内网/回环地址（院内推理端点请配置 "
+                         "LLM_PRIVATE_HOSTS_ALLOWLIST 显式白名单）")
 
 
 # ---------- 任务2 额外参数逃生舱：解析 / 厂商自动预设 ----------
