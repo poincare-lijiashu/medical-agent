@@ -21,32 +21,26 @@ from backend.core.pg_store import _json_then_pg, _pg_save_users
 
 @pytest.fixture()
 def pg_pool():
-    """连真 PG（本机 5433 容器）；**前后快照恢复 users 表**。
+    """连**独立测试库** medagent_test（conftest 强制 PG_DATABASE，与服务库物理隔离）；
+    进入时清空 users 表（护栏要求干净起点：0→N 属增长，不触发骤缩拒绝），退出关池。
 
-    ⚠️ 事故教训（2026-10-30）：本文件初版直接连生产库并调用真 `_pg_save_users`
-    （全量同步 = DELETE 差集 + UPSERT），把生产 users 表清成只剩测试账号，导致
-    运行实例登录全 401。隔离方案：fixture 进入时快照全表，退出时原样写回——
-    测试窗口外生产表零残留。彻底方案（独立测试库 medagent_test）列入待办。
+    ⚠️ 事故教训（2026-10-30）：初版连生产库并调真 `_pg_save_users`（全量同步），
+    把生产 users 表清成 1 行 → 全站 401。隔离 = 独立库 + 干净起点；生产库护栏
+    （行数骤缩 >50% 拒绝同步）为第二道防线。彻底方案（独立 PG 实例）列待办。
     """
     import asyncio
 
     ok = asyncio.run(pg_store.init())
     if not ok:
         pytest.skip("PG 不可用（容器未启动），跳过真源翻转集成测试")
-    backup = pg_store.load_users(str(_dummy_users_path())) or {}  # 读 PG 真源全表
-    try:
-        yield pg_store._pool
-    finally:
-        if backup:
-            pg_store.save_users(backup, str(_dummy_users_path()))  # 原样写回
-        asyncio.run(pg_store.close())
 
+    async def _clean():
+        async with pg_store._pool.acquire() as c:
+            await c.execute("DELETE FROM users")
 
-def _dummy_users_path():
-    """load/save 需要一个 path 参数（PG 可用时仅作镜像落盘路径，不参与真源）。"""
-    import tempfile
-    from pathlib import Path
-    return Path(tempfile.gettempdir()) / "medassist_pg_primary_fixture_users.json"
+    pg_store._run_pg(_clean())  # 走 pg_store 专用 DB 循环（连接归属该 loop，勿用 asyncio.run）
+    yield pg_store._pool
+    asyncio.run(pg_store.close())
 
 
 def test_concurrent_read_modify_write_converges(pg_pool, tmp_path):

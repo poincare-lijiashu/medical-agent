@@ -187,6 +187,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore_milvus.ps1 -
    指令自动创建）不进 `volumes:` 声明，重建即丢。核对实际挂载点用
    `docker inspect <容器> --format '{{range .Mounts}}{{.Destination}}<-{{.Name}}{{println}}{{end}}'`。
 
+### 测试数据纪律（强制，源于同日 users 表清空事故）
+
+1. **集成测试禁连生产库**：pytest 进程经 `tests/conftest.py` 强制 `PG_DATABASE=medagent_test`
+   （独立库，表结构自动建齐；CI 有对应建库步骤）。
+2. **全量同步 API 有骤缩护栏**：`_pg_save_users` 在旧集合 ≥5 行且新集合 <50% 时拒绝执行
+   （实测 17 行账号被清成 1 行 → 全站 401）。真要清空走显式运维 SQL，不走应用路径。
+3. **新 SQL 进 repo 层必须同步补假池实现**（`tests/test_pg_repo.py` 的 FakeConn 白名单式
+   分派——漏补会让护栏静默失效，测试假绿）。
+
 ## 药品数据免责声明
 
 药品字典与相互作用规则由 AI 辅助生成（种子库 curated_v2 + AI 初稿），仅作临床决策辅助参考，不构成医疗建议；临床使用前必须经执业药师核对。药物助手视图与数据面板「药品字典」卡明示同一免责声明（前端文案与后端 `backend/core/drug_dict.py` 的 `DISCLAIMER` 逐字同源，由测试锁定一致）；字典/规则的管理变更（`POST /admin/drug/dict`、`/admin/drug/rules`，admin/pharmacist）均写审计 `admin.drug_dict_changed` 并写透存储。

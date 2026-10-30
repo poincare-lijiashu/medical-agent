@@ -36,6 +36,10 @@ jobs:
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Create isolated test database（W4.1 事故隔离：pytest 连 medagent_test，见 tests/conftest.py）
+        run: |
+          PGPASSWORD=medagent123 psql -h 127.0.0.1 -U medagent -d medagent -c "SELECT 1 FROM pg_database WHERE datname='medagent_test'" | grep -q 1 || \
+            PGPASSWORD=medagent123 psql -h 127.0.0.1 -U medagent -d medagent -c "CREATE DATABASE medagent_test"
       - name: Run pytest
         run: python -m pytest -q
 

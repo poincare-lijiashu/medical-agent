@@ -70,6 +70,9 @@ class FakeConn:
             return [{"username": k, "role": v.get("role"), "dept": v.get("dept"),
                      "password_hash": v.get("password_hash")}
                     for k, v in self.db["users"].items()]
+        if s.startswith("SELECT count(*) AS n FROM users"):
+            # W4.1 事故护栏（save_users 骤缩拒绝）：护栏写前查旧集合行数
+            return [{"n": len(self.db["users"])}]
         if s.startswith("SELECT name FROM departments"):
             return [{"name": name} for _, name in sorted(self.db["departments"])]
         if s.startswith("SELECT name FROM drug_dict"):

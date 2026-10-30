@@ -10,6 +10,12 @@ os.environ.setdefault("AUTH_TOKEN_IN_BODY", "true")
 # 且 redis 库已安装会让测试进程真的连上共享 Redis——chat_memory/撤销等测试要求
 # 进程级隔离语义。环境变量优先级高于 .env.local，置空即锁回 MemoryStore。
 os.environ["REDIS_URL"] = ""
+# W4.1 事故隔离（2026-10-30）：pytest 集成测试进程连的是真 PG（.env.local 的
+# medagent 库），全量同步 save_* 会用测试数据覆盖生产表（实测 users 17 行被清成
+# 1 行 → 全站 401）。独立测试库 medagent_test（与服务库物理隔离，表结构由
+# pg_store.init() 的 CREATE TABLE IF NOT EXISTS 自动建齐）+ CI 同步建库步骤。
+if not os.environ.get("PG_OFFLINE"):
+    os.environ["PG_DATABASE"] = "medagent_test"
 
 import pytest
 

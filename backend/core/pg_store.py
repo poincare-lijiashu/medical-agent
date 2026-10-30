@@ -575,6 +575,18 @@ async def _pg_save_users(users: dict) -> None:
                 # JSON 已如实落盘，下次任一非空全量同步自然补齐一致性。
                 logger.warning("pg.save_users.skip_empty_wipe")
                 return
+            # W4.1 事故护栏（2026-10-30）：全量同步的差集 DELETE 在"新集合异常骤缩"时
+            # 等同清空真源（实测：集成测试误连生产库，17 行账号被清成 1 行 → 全站 401）。
+            # 旧集合 ≥5 行且新集合 <50% → 拒绝执行（真要清空属运维操作，走显式 SQL）。
+            # 空集跳过（下方既有语义）是本护栏的特例（0% < 50%）。
+            old_rows = await c.fetch("SELECT count(*) AS n FROM users")
+            old_n = old_rows[0]["n"] if old_rows else 0
+            if old_n >= 5 and len(rows) < old_n * 0.5:
+                logger.error("pg.save_users.destructive_sync_rejected",
+                             old_count=old_n, new_count=len(rows))
+                raise RuntimeError(
+                    f"users 全量同步被拒绝：{old_n} 行 → {len(rows)} 行属异常骤缩"
+                    f"（>50% 删减）。真要清空请走显式运维 SQL，不走应用同步路径。")
             await c.execute("DELETE FROM users WHERE NOT (username = ANY($1))",
                             [r[0] for r in rows])
             await c.executemany(_USER_UPSERT, rows)
