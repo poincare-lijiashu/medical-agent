@@ -543,7 +543,6 @@ def _json_then_pg(save_fn, path: str, data) -> None:
 
     共同语义：PG_OFFLINE=on 或无连接池 → JSON 是唯一持久层（单机/测试形态，两编排等价）；
     成功写清除本域 stale 并重置该 file 的告警去重位。"""
-    from backend.config import get_settings
     domain = os.path.basename(path)
     if offline_mode() or not _pool:
         _write_json_atomic(path, data)
@@ -552,7 +551,9 @@ def _json_then_pg(save_fn, path: str, data) -> None:
         # 无池但有 PG 配置：JSON 落盘 + 置 stale（读回落 JSON，与旧编排一致）
         _repo_pg_stale.add(domain)
         return
-    if get_settings().pg_primary:
+    # 读模块级 settings（与其它模块同一单例）：get_settings() 会新建 Settings 实例，
+    # 既浪费（每次写都重解析环境）又会绕过测试/运行期对 settings 的 patch（实测回归）。
+    if settings.pg_primary:
         try:
             _run_pg(save_fn(data))
         except Exception as e:

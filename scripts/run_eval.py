@@ -177,10 +177,16 @@ def main() -> int:
     args = ap.parse_args()
 
     cases = load_cases(args.cases)
-    # 难题集（含负样本）与常规基线分开落盘，避免互相覆盖
+    # 自定义用例集各自落盘，避免互相覆盖：输出名按用例文件名派生
+    # （hard_cases.json 保持历史名 results_hard_{MODE}.json 向后兼容；
+    #  其它如 guideline_cases.json → results_guideline_cases_{MODE}.json）。
     global OUT, _COMPAT_OUT
     if args.cases:
-        OUT = os.path.join(EVAL_DIR, f"results_hard_{MODE}.json")
+        stem = os.path.splitext(os.path.basename(args.cases))[0]
+        if stem == "hard_cases":
+            OUT = os.path.join(EVAL_DIR, f"results_hard_{MODE}.json")
+        else:
+            OUT = os.path.join(EVAL_DIR, f"results_{stem}_{MODE}.json")
 
     if args.dry_run:
         print(f"[dry-run] mode={MODE} cases={len(cases)} out={OUT}")

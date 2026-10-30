@@ -33,6 +33,22 @@ def _clean_auth_state():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_pg_runtime():
+    """评测修复（2026-10-30）：重置 pg_store 进程级运行时状态，杜绝跨测试顺序污染。
+
+    背景：全量跑时 test_pg_repo 的 16 项假池写入断言漂移，而单文件/组合跑全绿——
+    根因是专用 DB 循环（_db_loop）与 stale 集合被前序测试（init/close 流程）留在
+    不一致状态，后续假池协程提交后静默超时（3s 桥接上限）而走 JSON 分支。
+    teardown 统一复位（在 monkeypatch 还原之后执行，不会与各测试自己的 fixture 冲突）。"""
+    yield
+    from backend.core import pg_store
+    pg_store._db_loop = None
+    pg_store._pool = None
+    pg_store._repo_pg_stale.clear()
+    pg_store._stale_warned.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_runtime_flags(tmp_path, monkeypatch):
     """任务3：每个测试独立的 runtime_flags 文件——测试进程绝不读写真实
     data/runtime_flags.json（服务端 admin 运行时切换值不泄漏进测试，

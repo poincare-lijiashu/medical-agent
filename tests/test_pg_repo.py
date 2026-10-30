@@ -309,11 +309,16 @@ def _db() -> dict:
 @pytest.fixture()
 def fake_pg(monkeypatch):
     """注入假池；测试结束由 monkeypatch 还原 _pool=None（JSON 模式）。
-    任务1：stale 标志升级为「域集合」（键=文件名），复位即清空集合。"""
+    任务1：stale 标志升级为「域集合」（键=文件名），复位即清空集合。
+    评测修复（顺序污染）：同时复位专用 DB 循环与告警去重位——此前全量跑时若前序
+    测试停过循环/留过告警位，后续假池写入会静默超时（实测 16 项断言漂移）。"""
     db = _db()
     pool = FakePool(db)
     monkeypatch.setattr(pg_store, "_pool", pool)
     monkeypatch.setattr(pg_store, "_repo_pg_stale", set())  # 域级 stale 集合显式复位
+    monkeypatch.setattr(pg_store, "_stale_warned", set())   # 告警去重位复位
+    monkeypatch.setattr(pg_store, "_db_loop", None)         # 强制每测试重启专用 DB 循环
+    assert pg_store._pool is pool, "假池注入未生效（fixture 失效会让断言静默漂移）"
     yield db
     pg_store._repo_pg_stale.clear()  # 防 monkeypatch teardown 恢复到上一测试的脏值
 

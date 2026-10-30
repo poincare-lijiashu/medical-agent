@@ -106,28 +106,40 @@ async def _db_async() -> int:
         except Exception:  # noqa: BLE001 —— 连接失败返回 None（演练判定用）
             return None
 
-    _psql(f"DROP ROLE IF EXISTS {DRILL_ROLE};")
-    _psql(f"CREATE ROLE {DRILL_ROLE} WITH LOGIN PASSWORD '{OLD_PW}';")
-    _psql(f"GRANT CONNECT ON DATABASE {PG_DB} TO {DRILL_ROLE};")
-    conn = await try_connect(OLD_PW)
-    assert conn is not None, "A 失败：旧密码新连接应成功"
-    print(f"A create+connect(old): OK ({DRILL_ROLE}@{PG_DB})")
+    conn = conn2 = None
+    try:
+        _psql(f"DROP ROLE IF EXISTS {DRILL_ROLE};")
+        _psql(f"CREATE ROLE {DRILL_ROLE} WITH LOGIN PASSWORD '{OLD_PW}';")
+        _psql(f"GRANT CONNECT ON DATABASE {PG_DB} TO {DRILL_ROLE};")
+        conn = await try_connect(OLD_PW)
+        assert conn is not None, "A 失败：旧密码新连接应成功"
+        print(f"A create+connect(old): OK ({DRILL_ROLE}@{PG_DB})")
 
-    _psql(f"ALTER ROLE {DRILL_ROLE} WITH PASSWORD '{NEW_PW}';")
-    v = await conn.fetchval("SELECT 1")
-    print("B existing-connection-after-rotation: OK (SELECT 1 =", v,
-          ") —— 运行中服务连接池零中断")
+        _psql(f"ALTER ROLE {DRILL_ROLE} WITH PASSWORD '{NEW_PW}';")
+        v = await conn.fetchval("SELECT 1")
+        print("B existing-connection-after-rotation: OK (SELECT 1 =", v,
+              ") —— 运行中服务连接池零中断")
 
-    assert await try_connect(OLD_PW) is None, "C 失败：旧密码新连接应被拒绝"
-    print("C new-connect(old): REJECTED")
-    conn2 = await try_connect(NEW_PW)
-    assert conn2 is not None, "D 失败：新密码新连接应成功"
-    print("D new-connect(new): OK —— SOP：改 .env DSN 后滚动重启")
+        assert await try_connect(OLD_PW) is None, "C 失败：旧密码新连接应被拒绝"
+        print("C new-connect(old): REJECTED")
+        conn2 = await try_connect(NEW_PW)
+        assert conn2 is not None, "D 失败：新密码新连接应成功"
+        print("D new-connect(new): OK —— SOP：改 .env DSN 后滚动重启")
+    finally:
+        # 中断/断言失败也必须清理（否则残留 role 影响下次演练与审计）
+        for c in (conn, conn2):
+            if c is not None:
+                try:
+                    await c.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        try:
+            _psql(f"REVOKE CONNECT ON DATABASE {PG_DB} FROM {DRILL_ROLE};")
+            _psql(f"DROP ROLE IF EXISTS {DRILL_ROLE};")
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 清理失败，请手动 DROP ROLE {DRILL_ROLE}: {e}", file=sys.stderr)
+            raise
 
-    await conn.close()
-    await conn2.close()
-    _psql(f"REVOKE CONNECT ON DATABASE {PG_DB} FROM {DRILL_ROLE};")
-    _psql(f"DROP ROLE IF EXISTS {DRILL_ROLE};")
     gone = subprocess.run(
         ["docker", "exec", PG_CONTAINER, "psql", "-U", "medagent", "-d", "postgres",
          "-tAc", f"SELECT 1 FROM pg_roles WHERE rolname='{DRILL_ROLE}';"],
@@ -143,10 +155,10 @@ def drill_db() -> int:
 
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else ""
-    if mode == "llm":
-        sys.exit(drill_llm())
-    if mode == "db":
-        sys.exit(drill_db())
-    print(__doc__)
-    sys.exit(2)
+    # 严格参数校验：只接受恰好一个子命令；任何多余参数（含 --help）只打印文档退出，
+    # 绝不误触发演练（演练会真实改 PG role —— 误触发代价高）。
+    args = sys.argv[1:]
+    if len(args) != 1 or args[0] not in ("llm", "db"):
+        print(__doc__)
+        sys.exit(2)
+    sys.exit(drill_llm() if args[0] == "llm" else drill_db())
