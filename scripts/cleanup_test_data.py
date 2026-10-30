@@ -41,6 +41,10 @@ E2E_RX_IDS = ["rx-0812af6a", "rx-62416c2c", "rx-2e59f904"]
 E2E_MARKER = "[e2e]"        # 条件 C/D：防再犯标记
 E2E_OOD_DRUG = "测试"        # 条件 E：e2e 字典外手动药特征名
 E2E_DOCTOR = "loadtest"     # 条件 B：压测产物
+# 条件 F：历史 e2e 固定用例文案（tests/e2e/test_smoke_flow.py 的 CASE_TEXT 特征串）。
+# 该文案在 2026-09-11 至 2026-10-30 期间被 e2e 反复使用且未打标记，累积 50 条残留
+# （占演示库 54%）；真实业务不会以同一句话重复开方，故可作为高置信识别特征。
+E2E_CASE_FEATURE = "膝关节轻度疼痛"
 
 
 def match_reason(rx: dict) -> str | None:
@@ -49,6 +53,8 @@ def match_reason(rx: dict) -> str | None:
         return "命中明确 id 清单（诊断实锤 e2e 残留）"
     if str(rx.get("doctor") or "") == E2E_DOCTOR:
         return f"医生={E2E_DOCTOR}（压测产物）"
+    if E2E_CASE_FEATURE in str(rx.get("case_text") or ""):
+        return f"病例文本含历史 e2e 固定用例特征「{E2E_CASE_FEATURE}」"
     if E2E_MARKER in str(rx.get("case_text") or ""):
         return f"病例文本含 {E2E_MARKER} 标记"
     for d in rx.get("drugs") or []:

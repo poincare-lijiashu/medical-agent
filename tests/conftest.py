@@ -66,3 +66,21 @@ def _isolate_case_archive(tmp_path, monkeypatch):
     monkeypatch.setattr(case_archive, "CASE_ARCHIVE_FILE",
                         str(tmp_path / "case_archive.json"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_review_queue_and_audit(tmp_path, monkeypatch):
+    """隔离残余缺口根治（2026-10-30 收尾）：审核队列与审计文件此前无全局隔离——
+    未显式 monkeypatch 的测试会写真实 data/review/queue.json 与 data/audit/audit.jsonl。
+
+    实测症状：两个 pytest 进程并行时，Windows 对同一 queue.json 的 os.replace
+    报 PermissionError（WinError 32），表现为"单跑通过、并发偶发失败"。
+    本 fixture 与 runtime_flags / case_archive 同模式：默认指向 tmp_path，
+    测试自身 monkeypatch 会再覆盖（顺序在 autouse 之后，语义不变）。
+    """
+    from backend.core import medical_review
+    monkeypatch.setattr(medical_review, "QUEUE_FILE", str(tmp_path / "review_queue.json"))
+    # 审计：全局单例的落盘路径改到 tmp（entries 内存缓冲不变，路径仅决定新增写入位置）
+    from backend.core import medical_audit
+    monkeypatch.setattr(medical_audit._log, "path", str(tmp_path / "audit.jsonl"))
+    yield

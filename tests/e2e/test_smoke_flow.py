@@ -23,8 +23,11 @@ from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 BASE_URL = "http://127.0.0.1:8001"  # 与运行中的后端服务一致（Vue 产物由后端托管）
 DEMO_PASSWORD = "Med@2026"  # seed 演示口令（backend/core/auth.py，AUTH_DEMO_PASSWORD）
+# [e2e] 标记为强制纪律：本测试会对**真实服务**创建真实处方（黑盒链路验证不可避免），
+# 标记使 scripts/cleanup_test_data.py 能稳定识别并清理，避免演示库被测试数据污染
+# （历史教训：未带标记的 e2e 处方在 data/prescriptions.json 中累积）。
 CASE_TEXT = (
-    "患者女，45 岁，因膝关节轻度疼痛就诊，既往无药物过敏史，肝肾功能正常，"
+    "[e2e] 患者女，45 岁，因膝关节轻度疼痛就诊，既往无药物过敏史，肝肾功能正常，"
     "无消化道溃疡病史，拟行短期口服镇痛治疗，需评估用药方案。"
 )
 
