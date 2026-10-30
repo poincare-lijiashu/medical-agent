@@ -27,6 +27,10 @@ data/verify_out.txt
 data/kb/pubmed_v2_cache.json
 data/kb/pubmed_v2_run.log
 
+# KB 语料原件（版权教材 PDF 等，80MB+ 不入库；向量已入 Milvus，原件由部署方自备）
+data/kb_docs/*.pdf
+data/kb_docs/*.docx
+
 # 模型权重（4.3GB，本地化部署不入库）
 backend/models/
 
