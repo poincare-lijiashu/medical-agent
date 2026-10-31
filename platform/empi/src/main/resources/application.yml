@@ -1,5 +1,7 @@
 server:
   port: 8082
+  # 优雅停机（S10）：在途请求处理完再退出，滚动/灰度期不产生 5xx
+  shutdown: graceful
 
 spring:
   application:
@@ -21,7 +23,8 @@ spring:
     schemas: empi_svc
     default-schema: empi_svc
     locations: classpath:db/migration/empi
-    baseline-on-migrate: true
+    # 生产应设为 false（见 auth 同名说明）：避免掩盖 schema 漂移（S9）
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
     validate-on-migrate: true
     out-of-order: false
 
@@ -34,12 +37,14 @@ spring:
         password: ${NACOS_PASSWORD:nacos}
         namespace: ${NACOS_NAMESPACE:public}
 
-# ---- 敏感字段加密（生产必须由密钥管理系统注入，禁止使用本默认值）----
-# EMPI_FIELD_KEY：Base64 编码的 32 字节密钥（AES-256）
-# EMPI_HASH_SALT：查重哈希盐（与密钥分离保管）
+# ---- 敏感字段加密（密钥必须由密钥管理系统注入，仓库内不得有可用的默认值）----
+# EMPI_FIELD_KEY：Base64 编码的 32 字节密钥（AES-256），缺失则拒绝启动（FieldCipher fail-fast）
+# EMPI_HASH_SALT：查重哈希盐（≥16 字符，与密钥分离保管），缺失则拒绝启动
+# 本地开发用 `--spring.profiles.active=dev` 载入 application-dev.yml 的占位密钥；
+# 生产走外部 Secret（Helm: external.empi.existingSecret / secretKeys）。
 empi:
-  field-key: ${EMPI_FIELD_KEY:DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4=}
-  hash-salt: ${EMPI_HASH_SALT:medassist-empi-salt}
+  field-key: ${EMPI_FIELD_KEY:}
+  hash-salt: ${EMPI_HASH_SALT:}
 
 management:
   endpoints:

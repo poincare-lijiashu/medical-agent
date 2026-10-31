@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
@@ -31,7 +32,7 @@ public class GatewayAuthConfig {
     private static final int MIN_SECRET_BYTES = 32;
 
     @Bean
-    public JwtDecoder jwtDecoder(GatewayAuthProperties props) {
+    public JwtDecoder jwtDecoder(GatewayAuthProperties props, Environment environment) {
         String secret = props.secret();
         byte[] secretBytes = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
         if (secretBytes.length < MIN_SECRET_BYTES) {
@@ -39,6 +40,10 @@ public class GatewayAuthConfig {
                     "JWT 密钥未配置或长度不足 " + MIN_SECRET_BYTES + " 字节，网关拒绝启动（请设置环境变量 JWT_SECRET）");
         }
         if (SecurityDefaults.DEV_JWT_SECRET.equals(secret)) {
+            if (SecurityDefaults.isProduction(environment)) {
+                throw new IllegalStateException(
+                        "检测到生产 profile 仍在使用开发默认 JWT 密钥，网关拒绝启动（请通过 Secret 注入 JWT_SECRET）");
+            }
             log.warn("网关正在使用本地开发默认 JWT 密钥，生产环境必须通过环境变量 JWT_SECRET 覆盖真实密钥");
         }
 

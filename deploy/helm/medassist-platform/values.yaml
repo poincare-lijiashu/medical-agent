@@ -14,6 +14,11 @@
 # 院内镜像仓库前缀（如 harbor.hospital.local/medassist）；留空表示直接用 repository 全名
 imageRegistry: ""
 
+# 环境标识：dev | staging | production
+# 非 dev 环境禁止渲染 SNAPSHOT 镜像 tag（_helpers.tpl 的 medassist.image 会直接 fail），
+# 避免"预发布/生产实际跑的是一个可变的快照版本"（M9）。
+environment: dev
+
 nameOverride: ""
 fullnameOverride: ""
 
@@ -151,7 +156,12 @@ gateway:
     liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
     readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
   # 额外环境变量（K8s 原生 env 列表，支持 valueFrom；同名覆盖 application.yml 默认值）
-  env: []
+  env:
+    # 可信代理网段（逗号分隔 CIDR）：只有来自这些网段的请求才允许用 X-Forwarded-For 推断客户端 IP。
+    # 留空 = 完全不信任 XFF，直接取 TCP 对端地址（安全默认）。
+    # 部署在 Ingress 之后时应填 Ingress/节点网段，否则审计与 IP 限速看到的是 Ingress 地址（M3）。
+    - name: GATEWAY_TRUSTED_PROXIES
+      value: ""
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -339,13 +349,15 @@ rollout:
         duration: 120s
     # 人工闸门：kubectl argo rollouts promote <name> 后才继续
     - pause: {}
+  # 组件开启 HPA 时自动改用这组步骤（setCanaryScale 会与 HPA 互相拉扯，见 _helpers.tpl）
+  hpaSteps:
+    - pause:
+        duration: 120s
+    - pause: {}
   analysis:
     enabled: false
     prometheusAddress: http://prometheus.monitoring.svc:9090
     # 5xx 比例阈值（0~1），低于该值视为通过
     successRateThreshold: 0.99
-    # 默认查询按 job 名匹配 ServiceMonitor 的 job label；按实际抓取配置调整
-    query: |
-      sum(rate(http_server_requests_seconds_count{status!~"5.."}[2m]))
-      /
-      clamp_min(sum(rate(http_server_requests_seconds_count[2m])), 0.001)
+    # 查询由 templates/analysis.yaml 按组件生成（带 component 标签过滤），
+    # 不再使用全局聚合查询——否则 canary 副本的 5xx 会被稳定副本稀释（M10）。

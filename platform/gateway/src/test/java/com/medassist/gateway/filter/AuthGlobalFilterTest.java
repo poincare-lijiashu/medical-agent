@@ -3,6 +3,7 @@ package com.medassist.gateway.filter;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.gateway.config.GatewayAuthConfig;
 import com.medassist.gateway.config.GatewayAuthProperties;
+import com.medassist.gateway.security.ClientIpResolver;
 import com.medassist.gateway.security.TokenRevocationCache;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
@@ -49,9 +51,10 @@ class AuthGlobalFilterTest {
     private static final String ISSUER = "medassist-auth";
 
     private final GatewayAuthProperties props = props(true);
-    private final JwtDecoder decoder = new GatewayAuthConfig().jwtDecoder(props);
+    private final JwtDecoder decoder = new GatewayAuthConfig().jwtDecoder(props, new MockEnvironment());
     private final TokenRevocationCache revocations = new TokenRevocationCache(props);
-    private final AuthGlobalFilter filter = new AuthGlobalFilter(props, decoder, revocations);
+    private final AuthGlobalFilter filter = new AuthGlobalFilter(props, decoder, revocations,
+            new ClientIpResolver(props));
 
     @Test
     void whitelistedLoginPassesWithoutToken() {
@@ -180,7 +183,7 @@ class AuthGlobalFilterTest {
     @Test
     void disabledSwitchStillStripsForgedHeaders() {
         AuthGlobalFilter relaxed = new AuthGlobalFilter(props(false), decoder,
-                new TokenRevocationCache(props(false)));
+                new TokenRevocationCache(props(false)), new ClientIpResolver(props(false)));
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v2/empi/patients")
                         .header(AuthHeaders.ACTOR, "hacker")
@@ -206,11 +209,13 @@ class AuthGlobalFilterTest {
 
     private static GatewayAuthProperties props(boolean enabled) {
         return new GatewayAuthProperties(enabled, ISSUER, SECRET,
-                List.of("/api/v2/auth/login", "/api/v2/auth/refresh", "/actuator/**"),
+                List.of("/api/v2/auth/login", "/api/v2/auth/refresh",
+                        "/actuator/health/**", "/actuator/prometheus"),
                 List.of("/api/v2/**"),
                 List.of("/api/v2/*/internal/**"),
                 "http://127.0.0.1:8081",
-                new GatewayAuthProperties.RevocationSync(false, java.time.Duration.ofSeconds(15)));
+                new GatewayAuthProperties.RevocationSync(false, java.time.Duration.ofSeconds(15), false),
+                new GatewayAuthProperties.ClientIp(List.of()));
     }
 
     private static String token(String username, String org, String... roles) {

@@ -86,6 +86,13 @@ public class PatientService {
         Patient p = repo.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.PATIENT_NOT_FOUND));
         if (reveal) {
+            // 已合并/归档档案不得再读明文：数据已归属目标档案，继续读旧档案等于绕过合并后的授权审计（M5）
+            if (!p.active()) {
+                throw new BusinessException(ErrorCode.PATIENT_MERGE_CONFLICT,
+                        p.mergedInto() == null
+                                ? "该档案已归档，敏感信息不可查看"
+                                : "该档案已合并，请查看目标档案的敏感信息");
+            }
             audit(actor, "PATIENT_VIEW_PHI", id.toString(), Map.of("patientNo", p.patientNo()));
         }
         return toResp(p, reveal);
@@ -147,6 +154,13 @@ public class PatientService {
         if (req.fromId().equals(req.toId())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "源档案与目标档案不能相同");
         }
+        // 按 id 稳定顺序加行锁：A→B 与 B→A 并发时，第二个事务会阻塞到第一个提交后重新读，
+        // 从而看到对方已 MERGED，不会出现 merged_into 互相指向的环（M5）。
+        UUID first = req.fromId().compareTo(req.toId()) < 0 ? req.fromId() : req.toId();
+        UUID second = first.equals(req.fromId()) ? req.toId() : req.fromId();
+        repo.findByIdForUpdate(first);
+        repo.findByIdForUpdate(second);
+
         Patient from = repo.findById(req.fromId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.PATIENT_NOT_FOUND, "源档案不存在"));
         Patient to = repo.findById(req.toId())

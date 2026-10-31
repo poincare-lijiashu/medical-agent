@@ -52,7 +52,8 @@ public class AuditRepository {
 
     public List<AuditEventResp> search(String actor, String action, String targetType,
                                        Instant from, Instant to, int limit, int offset) {
-        return jdbc.sql("SELECT * FROM (" + UNION + ") e ORDER BY e.ts DESC LIMIT :limit OFFSET :offset")
+        // id 决胜列：同一毫秒的多条事件（批量写入）若只按 ts 排序，翻页会出现重复/漏项
+        return jdbc.sql("SELECT * FROM (" + UNION + ") e ORDER BY e.ts DESC, e.id DESC LIMIT :limit OFFSET :offset")
                 .param("actor", orEmpty(actor))
                 .param("action", orEmpty(action))
                 .param("targetType", orEmpty(targetType))

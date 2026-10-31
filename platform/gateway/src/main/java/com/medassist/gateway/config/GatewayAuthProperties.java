@@ -23,22 +23,39 @@ public record GatewayAuthProperties(
         @DefaultValue("true") boolean enabled,
         @DefaultValue("medassist-auth") String issuer,
         String secret,
-        @DefaultValue({"/api/v2/auth/login", "/api/v2/auth/refresh", "/actuator/**"}) List<String> whitelist,
+        @DefaultValue({"/api/v2/auth/login", "/api/v2/auth/refresh",
+                "/actuator/health/**", "/actuator/prometheus"}) List<String> whitelist,
         @DefaultValue("/api/v2/**") List<String> protectedPaths,
         @DefaultValue("/api/v2/*/internal/**") List<String> denyPaths,
         @DefaultValue("http://127.0.0.1:8081") String authUri,
-        @DefaultValue RevocationSync revocationSync
+        @DefaultValue RevocationSync revocationSync,
+        @DefaultValue ClientIp clientIp
 ) {
+
+    /**
+     * 真实客户端 IP 解析（防 X-Forwarded-For 伪造）。
+     *
+     * @param trustedProxies 可信代理网段（CIDR）。为空表示不信任任何 XFF——
+     *                       直接使用 TCP 对端地址（安全默认，适合网关直接暴露的部署）；
+     *                       集群内需填 Ingress / 节点网段，网关按"从右往左跳过可信跳"取真实客户端
+     */
+    public record ClientIp(
+            @DefaultValue List<String> trustedProxies
+    ) {
+    }
 
     /**
      * 撤销名单同步配置。
      *
-     * @param enabled  是否启用（关闭后退化为"无即时撤销"，见 README 已知边界）
-     * @param interval 同步周期；越小越快生效，代价是 auth 内网 QPS 略增
+     * @param enabled           是否启用（关闭后退化为"无即时撤销"，见 README 已知边界）
+     * @param interval          同步周期；越小越快生效，代价是 auth 内网 QPS 略增
+     * @param failFastOnStartup 启动时首次拉取失败是否拒绝启动。默认 true：
+     *                          否则"重启后 5~20s 内撤销名单为空"会把已登出的令牌重新放行（M4）
      */
     public record RevocationSync(
             @DefaultValue("true") boolean enabled,
-            @DefaultValue("PT15S") Duration interval
+            @DefaultValue("PT15S") Duration interval,
+            @DefaultValue("true") boolean failFastOnStartup
     ) {
     }
 }

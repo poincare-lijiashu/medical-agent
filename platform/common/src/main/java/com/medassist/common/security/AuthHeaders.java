@@ -37,12 +37,20 @@ public final class AuthHeaders {
     /** 所属科室编码（未绑定科室时网关不下发该头）。 */
     public static final String ORG = "X-Org";
 
+    /**
+     * 可信客户端 IP（网关按 {@code trusted-proxies} 规则解析后重写，客户端提交值一律丢弃）。
+     *
+     * <p>下游（auth）只读该头，不再自行解析 {@code X-Forwarded-For}——
+     * SCG 对 XFF 是**追加**语义，客户端自带首段即可自选来源 IP（M3）。
+     */
+    public static final String CLIENT_IP = "X-Client-Ip";
+
     /** 链路追踪 ID（网关生成，用于日志与审计串联）。 */
     public static final String TRACE_ID = "X-Trace-Id";
 
     /** 客户端可能伪造、网关必须一律剥离的请求头。 */
     public static final List<String> CLIENT_SUPPLIED =
-            List.of(ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, TRACE_ID);
+            List.of(ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CLIENT_IP, TRACE_ID);
 
     private AuthHeaders() {
     }

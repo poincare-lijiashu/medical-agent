@@ -4,6 +4,10 @@
 # Ingress 使用 staging 域名、Nacos 使用 staging 命名空间隔离。
 imageRegistry: harbor.hospital.local/medassist
 
+# staging 属于"会承接真实流量"的环境：禁止 SNAPSHOT 镜像（M9）。
+# 发布时由 CI 用 --set gateway.image.tag=<build> 覆盖；此处给一个必须存在的不可变基线。
+environment: staging
+
 global:
   timezone: Asia/Shanghai
 
@@ -35,6 +39,11 @@ migration:
 
 gateway:
   replicaCount: 2
+  # 不可变 tag：CI 每次发布用 --set 覆盖为构建号（不允许 SNAPSHOT）
+  image: {repository: medassist/platform-gateway, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - name: GATEWAY_TRUSTED_PROXIES
+      value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 70}
 
 ingress:
@@ -55,11 +64,13 @@ ingress:
 
 auth:
   replicaCount: 2
+  image: {repository: medassist/platform-auth, tag: "0.1.0", pullPolicy: IfNotPresent}
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
 empi:
   replicaCount: 2
+  image: {repository: medassist/platform-empi, tag: "0.1.0", pullPolicy: IfNotPresent}
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 

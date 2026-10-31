@@ -1,5 +1,7 @@
 server:
   port: 8081
+  # 优雅停机（S10）：在途请求处理完再退出，滚动/灰度期不产生 5xx
+  shutdown: graceful
 
 spring:
   application:
@@ -23,7 +25,9 @@ spring:
     schemas: auth_svc
     default-schema: auth_svc
     locations: classpath:db/migration/auth
-    baseline-on-migrate: true
+    # 生产应设为 false：baseline-on-migrate 会把"已有手工 schema 但无版本记录"的情况
+    # 静默标记为已迁移，从而掩盖真实的 schema 漂移（S9）
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
     validate-on-migrate: true
     out-of-order: false
 

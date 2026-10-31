@@ -128,16 +128,16 @@ public class AuthController {
     }
 
     /**
-     * 客户端 IP：网关默认追加 {@code X-Forwarded-For}，取首段（最接近真实客户端）。
-     * 注意首段可被伪造——IP 维度仅作辅助限速，账号维度才是主防线。
+     * 客户端 IP：<b>只读网关注入的 {@code X-Client-Ip}</b>（可信代理链已解析并重写）。
+     *
+     * <p>绝不自行解析 {@code X-Forwarded-For}：SCG 对 XFF 是追加语义，
+     * 客户端自带首段即可伪造来源 IP，会让 IP 维度限速与审计 IP 同时失效（M3）。
+     * 直连 auth（排障/集群内调用）时没有该头，退回 TCP 对端地址。
      */
     private static String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            String first = forwarded.split(",")[0].trim();
-            if (!first.isEmpty()) {
-                return truncate(first, 64);
-            }
+        String trusted = request.getHeader(AuthHeaders.CLIENT_IP);
+        if (trusted != null && !trusted.isBlank() && !"unknown".equalsIgnoreCase(trusted.trim())) {
+            return truncate(trusted.trim(), 64);
         }
         return truncate(request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr(), 64);
     }

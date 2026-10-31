@@ -63,6 +63,17 @@ public class PatientRepository {
                 .param(id).query(MAPPER).optional();
     }
 
+    /**
+     * 加行锁读取（{@code SELECT ... FOR UPDATE}），用于合并这类需要"读-判-写"原子性的场景。
+     *
+     * <p>调用方必须按 id 稳定顺序加锁（见 {@link com.medassist.empi.service.PatientService#merge}），
+     * 否则 A→B 与 B→A 并发仍可能死锁/成环。锁必须在事务内持有。
+     */
+    public Optional<Patient> findByIdForUpdate(UUID id) {
+        return jdbc.sql("SELECT " + COLS + " FROM empi_svc.patient WHERE id = ? FOR UPDATE")
+                .param(id).query(MAPPER).optional();
+    }
+
     /** 证件号查重（仅有效档案；已合并档案的证件号可被复用）。 */
     public Optional<Patient> findActiveByIdNoHash(String idType, String idNoHash) {
         return jdbc.sql("SELECT " + COLS + """

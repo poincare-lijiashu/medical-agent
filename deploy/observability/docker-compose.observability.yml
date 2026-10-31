@@ -109,6 +109,8 @@ services:
     command: -config.file=/etc/promtail/promtail-config.yaml
     volumes:
       - ./loki/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      # 采集进度持久化（S16）：否则容器重启后从头重采，重复入栈并造成写入尖峰
+      - medagent_promtail_positions:/var/lib/promtail
       # Docker Desktop（Windows）同样支持该 socket 挂载
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
@@ -118,3 +120,4 @@ services:
 volumes:
   medagent_skywalking_pg:
   medagent_loki:
+  medagent_promtail_positions:

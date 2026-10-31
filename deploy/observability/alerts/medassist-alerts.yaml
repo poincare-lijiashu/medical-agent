@@ -3,8 +3,12 @@
 #
 # 依赖指标：
 #   * Spring Boot Actuator + Micrometer（/actuator/prometheus，经 ServiceMonitor 抓取）
-#       - http_server_requests_seconds_count{job="...", status=...}
-#       - jvm_memory_used_bytes{area="heap"}
+#       - http_server_requests_seconds_count{component="gateway", status=...}
+#       - jvm_memory_used_bytes{component=..., area="heap"}
+#     component 标签由 ServiceMonitor 的 relabelings 从 Pod 标签注入
+#     （__meta_kubernetes_pod_label_app_kubernetes_io_component）。
+#     此前规则用 job 正则匹配 gateway，但 ServiceMonitor 只有一个共享 job 名，
+#     导致 5xx/P99 告警永远无数据（M11）。
 #   * 业务打点（本平台代码内）
 #       - medassist_auth_login_total{result,reason}     auth 登录结果
 #       - medassist_gateway_rate_limited_total{resource} 网关入口限流次数
@@ -12,8 +16,14 @@
 #       - kube_pod_container_status_restarts_total
 #       - kube_deployment_status_replicas_unavailable
 #
-# 用法：kubectl apply -f deploy/observability/alerts/medassist-alerts.yaml
-#       （job 标签按实际 ServiceMonitor 命名调整，默认用正则匹配 release 名）
+# 部署：
+#   kubectl apply -f deploy/observability/alerts/medassist-alerts.yaml
+#   labels.release 必须与抓取栈的 ruleSelector 一致（kube-prometheus-stack 默认按
+#   Helm release 名选择，prod 的 ServiceMonitor 用的是 kube-prometheus-stack）。
+#   若你的 release 名不同，改 metadata.labels.release。
+#
+# 注意：规则只是"产生告警"，还需要 Alertmanager 的 route/receiver 才会真正送达，
+#       样例见 deploy/observability/alerts/alertmanager-routes.example.yaml。
 # ============================================================================
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -21,14 +31,14 @@ metadata:
   name: medassist-platform-alerts
   namespace: monitoring
   labels:
-    release: prometheus
+    release: kube-prometheus-stack
     app.kubernetes.io/part-of: medassist-platform
 spec:
   groups:
     - name: medassist.availability
       rules:
         - alert: MedassistTargetDown
-          expr: up{job=~".*medassist.*"} == 0
+          expr: up{component=~"gateway|auth|empi"} == 0
           for: 3m
           labels:
             severity: critical
@@ -37,7 +47,7 @@ spec:
             description: "Prometheus 连续 3 分钟无法抓取该实例，可能是 Pod 崩溃或探针失败。"
 
         - alert: MedassistPodRestarting
-          expr: increase(kube_pod_container_status_restarts_total{namespace="medassist"}[15m]) > 3
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"medassist.*"}[15m]) > 3
           for: 5m
           labels:
             severity: warning
@@ -46,7 +56,7 @@ spec:
             description: "15 分钟内重启超过 3 次，检查 CrashLoopBackOff 与启动日志。"
 
         - alert: MedassistReplicasUnavailable
-          expr: kube_deployment_status_replicas_unavailable{namespace="medassist", deployment=~".*medassist.*"} > 0
+          expr: kube_deployment_status_replicas_unavailable{namespace=~"medassist.*"} > 0
           for: 10m
           labels:
             severity: warning
@@ -58,9 +68,9 @@ spec:
       rules:
         - alert: MedassistGateway5xxRate
           expr: |
-            sum(rate(http_server_requests_seconds_count{job=~".*gateway.*", status=~"5.."}[5m]))
+            sum(rate(http_server_requests_seconds_count{component="gateway", status=~"5.."}[5m]))
             /
-            clamp_min(sum(rate(http_server_requests_seconds_count{job=~".*gateway.*"}[5m])), 0.001)
+            clamp_min(sum(rate(http_server_requests_seconds_count{component="gateway"}[5m])), 0.001)
             > 0.05
           for: 5m
           labels:
@@ -72,7 +82,7 @@ spec:
         - alert: MedassistGatewayP99High
           expr: |
             histogram_quantile(0.99,
-              sum(rate(http_server_requests_seconds_bucket{job=~".*gateway.*"}[5m])) by (le)
+              sum(rate(http_server_requests_seconds_bucket{component="gateway"}[5m])) by (le)
             ) > 2
           for: 10m
           labels:
@@ -89,6 +99,15 @@ spec:
           annotations:
             summary: "网关持续触发入口限流"
             description: "按 resource 标签定位被削峰的接口族；结合登录失败指标判断是否为暴力破解。"
+
+        - alert: MedassistDbPoolPending
+          expr: max(hikaricp_connections_pending{component=~"gateway|auth|empi"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "数据库连接池出现排队（{{ $labels.instance }}）"
+            description: "连接池耗尽会直接放大接口延迟，检查慢查询与 maximum-pool-size。"
 
     - name: medassist.auth
       rules:
@@ -114,9 +133,9 @@ spec:
       rules:
         - alert: MedassistJvmHeapHigh
           expr: |
-            sum(jvm_memory_used_bytes{job=~".*medassist.*", area="heap"}) by (instance)
+            sum(jvm_memory_used_bytes{component=~"gateway|auth|empi", area="heap"}) by (instance)
             /
-            clamp_min(sum(jvm_memory_max_bytes{job=~".*medassist.*", area="heap"}) by (instance), 1)
+            clamp_min(sum(jvm_memory_max_bytes{component=~"gateway|auth|empi", area="heap"}) by (instance), 1)
             > 0.9
           for: 10m
           labels:

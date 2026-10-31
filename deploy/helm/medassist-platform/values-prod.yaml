@@ -7,6 +7,9 @@
 # - 密钥全部来自外部 Secret，secrets.create 必须为 false
 imageRegistry: harbor.hospital.local/medassist
 
+# 生产：禁止 SNAPSHOT 镜像（_helpers 会 fail）。Application 通过 parameters 注入 1.0.0。
+environment: production
+
 global:
   timezone: Asia/Shanghai
 
@@ -44,6 +47,11 @@ migration:
 
 gateway:
   replicaCount: 3
+  env:
+    # Ingress-nginx 与节点均位于集群内网段：只有这些来源的 XFF 才可信（M3）。
+    # 若 Ingress 使用独立网段，请按实际收窄，不要直接沿用示例。
+    - name: GATEWAY_TRUSTED_PROXIES
+      value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   resources:
     requests: {cpu: 500m, memory: 768Mi}
     limits: {cpu: "2", memory: 1536Mi}
@@ -52,6 +60,9 @@ gateway:
 
 auth:
   replicaCount: 2
+  env:
+    # 生产禁止 baseline：schema 漂移必须让迁移失败，而不是被静默标记为已迁移（S9）
+    - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
     requests: {cpu: 500m, memory: 768Mi}
     limits: {cpu: "2", memory: 1536Mi}
@@ -60,6 +71,8 @@ auth:
 
 empi:
   replicaCount: 2
+  env:
+    - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
     requests: {cpu: 500m, memory: 768Mi}
     limits: {cpu: "2", memory: 1536Mi}

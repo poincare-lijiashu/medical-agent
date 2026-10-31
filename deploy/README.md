@@ -102,15 +102,25 @@ helm upgrade --install medassist deploy/helm/medassist-platform `
   -n medassist-dev --create-namespace -f deploy/helm/medassist-platform/values-dev.yaml
 
 # 生产（外部 Secret + APM + 网络策略 + PreSync 迁移）
+# 注意：staging/prod 的 values 不允许 SNAPSHOT 镜像，必须由 CI 注入不可变 tag
 helm upgrade --install medassist deploy/helm/medassist-platform `
-  -n medassist-prod --create-namespace -f deploy/helm/medassist-platform/values-prod.yaml
+  -n medassist-prod --create-namespace -f deploy/helm/medassist-platform/values-prod.yaml `
+  --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
+  --set empi.image.tag=1.0.0 --set aiCore.image.tag=1.0.0
 ```
+
+> `environment` 取值 `dev|staging|production`；非 `dev` 时模板遇到 `-SNAPSHOT` tag 会直接
+> `fail`（避免"发布成功但集群仍跑旧快照"）。Argo CD 用 `parameters` 注入 tag，效果等价。
 
 渲染校验（本机已实测）：
 
 ```powershell
-helm lint deploy/helm/medassist-platform
-helm template medassist deploy/helm/medassist-platform -n medassist-prod -f deploy/helm/medassist-platform/values-prod.yaml
+helm lint --strict deploy/helm/medassist-platform
+helm lint --strict deploy/helm/medassist-platform -f deploy/helm/medassist-platform/values-staging.yaml
+helm template medassist deploy/helm/medassist-platform -n medassist-prod `
+  -f deploy/helm/medassist-platform/values-prod.yaml `
+  --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
+  --set empi.image.tag=1.0.0 --set aiCore.image.tag=1.0.0
 ```
 
 ### 4.3 数据库迁移：为什么用 Hook Job
@@ -205,10 +215,13 @@ helm upgrade medassist ./deploy/helm/medassist-platform -n medassist \
   `pause 120s` → **人工闸门**（`kubectl argo rollouts promote <name>`）→ 全量；
 - `rollout.analysis.enabled=true` 时额外渲染 `AnalysisTemplate`，按 Prometheus 的 5xx 比例
   （`successCondition: result[0] >= successRateThreshold`，failureLimit=3）自动判定通过/中止；
-- HPA 与 `setCanaryScale` 会互相拉扯：组件开启 HPA 时请删掉 `setCanaryScale` 步骤，只保留 `pause`；
+  查询按 `component` 标签过滤（ServiceMonitor 的 relabelings 从 Pod 标签注入），
+  避免 canary 的 5xx 被其它服务稀释成"永远通过"；
+- **HPA 与灰度自动避让**：组件 `autoscaling.enabled=true` 时模板自动改用 `rollout.hpaSteps`
+  （只保留 pause 闸门），不会渲染 `setCanaryScale`，因此不需要人工删步骤；
 - 回滚：`kubectl argo rollouts undo <name>`（数据库迁移仍遵循"只前进"，见 §5.3）。
 
-实测（2026-10-31 本机）：`helm lint --strict` 通过；默认渲染 4 Deployment；
+实测（2026-10-31 本机）：`helm lint --strict` 三环境通过；默认渲染 4 Deployment；
 开启 rollout 后渲染 3 Rollout + 3 AnalysisTemplate + 1 Deployment，HPA 的 `scaleTargetRef`
 自动切换为 `argoproj.io/v1alpha1/Rollout`；prod values 默认仍渲染 4 Deployment。
 
@@ -278,12 +291,19 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d lo
 
 **告警规则**：[`alerts/medassist-alerts.yaml`](alerts/medassist-alerts.yaml)（PrometheusRule），覆盖：
 
+> 规则选择器统一用 `component` 标签（ServiceMonitor 通过 relabelings 从 Pod 标签注入），
+> 不再用 job 正则——ServiceMonitor 只有一个共享 job 名，用 job 匹配会导致告警永远无数据。
+> `metadata.labels.release` 必须与抓取栈一致（默认 `kube-prometheus-stack`）。
+> **只部署规则不会送达**：还需要 Alertmanager 的 route/receiver，
+> 样例见 [`alerts/alertmanager-routes.example.yaml`](alerts/alertmanager-routes.example.yaml)。
+
 | 告警 | 依据 | 级别 |
 |---|---|---|
-| `MedassistTargetDown` | `up{job=~".*medassist.*"} == 0` | critical |
+| `MedassistTargetDown` | `up{component=~"gateway\|auth\|empi"} == 0` | critical |
 | `MedassistGateway5xxRate` | 网关 5xx 占比 > 5%（5 分钟） | critical |
 | `MedassistGatewayP99High` | 网关 P99 > 2s（10 分钟） | warning |
 | `MedassistGatewayRateLimited` | `medassist_gateway_rate_limited_total` 速率 > 1/s | warning |
+| `MedassistDbPoolPending` | `hikaricp_connections_pending` > 0（5 分钟） | warning |
 | `MedassistAuthLoginFailureSpike` | `medassist_auth_login_total{result="failure"}` > 0.2/s | warning |
 | `MedassistAuthLoginThrottled` | 同上，`reason="throttled"` > 0.01/s | critical |
 | `MedassistPodRestarting` / `MedassistReplicasUnavailable` | kube-state-metrics | warning |
@@ -371,6 +391,19 @@ Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagen
 | 单测 | `mvn -pl auth -am test` → 9 项全过（新增 `PasswordHasherTest` 3 项：BCrypt 往返、Python 固定向量、畸形哈希拒绝） |
 | 关键坑 4 | SkyWalking 9.8.0 对 SCG 5.0.4 的告警（`LocalResponseCacheAutoConfiguration#responseCacheSizeWeigher` 已移除）**不影响实际链路**：`V412` 变体插件生效，仍产出 GatewayFilter/send 与跨进程引用；不要因此误判为"没有链路"（排障时用 OAP `queryBasicTraces` 按**本地时区**窗口查询，DB 中 `start_time` 是 UTC epoch 毫秒） |
 | 关键坑 5 | 直接以只读方式挂载 agent 目录时，agent 写日志失败（`/opt/skywalking-agent/logs` 只读）→ 需 `SW_LOGGING_DIR` 指向可写目录；Chart 用 initContainer 复制到 emptyDir，天然可写 |
+
+**2026-10-31 评测整改实测（详见 `docs/REVIEW-20261031.md` 第七节）**
+
+| 场景 | 结果 |
+|---|---|
+| EMPI 密钥 fail-fast | 不带 `EMPI_FIELD_KEY` 启动 → 明确报错并退出（不再用仓库默认密钥加密 PHI） |
+| 网关 actuator 收敛 | `/actuator/gateway` → **404**（端点未暴露），`/actuator/health` → 200，启动日志「Exposing 2 endpoints」 |
+| 真实 IP 防伪造 | 伪造 `X-Forwarded-For`/`X-Client-Ip` 登录后，会话记录的 `clientIp` 为真实对端 172.17.0.1 |
+| 输入校验 | `?reveal=abc` → **400** `参数格式不正确：reveal`（原 500） |
+| 合并档案 PHI | 已 MERGED 档案 `?reveal=true` → **409** `该档案已合并，请查看目标档案的敏感信息` |
+| trace ↔ log | auth 日志输出 `[1c4e6c427f6444cdb3a1a9b91fa9d06c]`，与网关注入的 X-Trace-Id 一致 |
+| 迁移索引 | `empi_svc.flyway_schema_history` 出现 `2 | change log ts index`（success=t） |
+| 镜像 tag 守卫 | `helm template -f values-prod.yaml`（未注入 tag）→ 明确失败「环境 production 不允许使用 SNAPSHOT 镜像」 |
 
 ---
 

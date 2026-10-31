@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  网关是 WebFlux：MDC 不跨 reactor 线程传播，故这里不输出 %X{tid}；
+  网关自身每条鉴权日志已在消息里带 traceId=（见 AuthGlobalFilter），
+  下游服务的日志由 TraceMdcFilter 按同一 X-Trace-Id 输出，仍可串联（M12）。
+-->
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+  <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="medassist"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [${APP_NAME}] %logger{36} - %msg%n</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+
+  <logger name="com.medassist" level="DEBUG"/>
+</configuration>

@@ -54,4 +54,9 @@ spec:
       kind: Deployment
       jsonPointers:
         - /spec/replicas
+    # 开启 rollout.enabled 后工作负载是 Rollout，HPA 扩缩同样不能被 selfHeal 拉回（M10）
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/replicas
   revisionHistoryLimit: 10

@@ -53,10 +53,18 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    （`rollout.enabled` 开关，可选 AnalysisTemplate）、Loki/Promtail 日志采集与
    `deploy/observability/alerts/medassist-alerts.yaml` 告警规则、业务指标打点
    （`medassist_auth_login_total` / `medassist_gateway_rate_limited_total`）。
-   下一阶段进入 P2（按计划书）。
-4. **本地环境现状（2026-10-31 10:35）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
-   auth(8081)/empi(8082) 以 agent 方式前台后台运行；OAP(11800/12800) 运行中；
+4. **五路智能体评测 + 整改（2026-10-31 晚）**：意见书 `docs/REVIEW-20261031.md`（第七节为修复状态）。
+   MUST-FIX 12 项全部闭环并实测：EMPI 密钥 fail-fast、actuator 收敛、可信代理取真实 IP、
+   撤销名单启动 fail-closed、合并加行锁 + MERGED 拒绝 reveal、限速函数索引、统一异常映射（400/409）、
+   补 18 项单测、镜像 tag 守卫、灰度按 component 过滤 + HPA 自动避让、告警标签/路由、
+   traceId 入日志。SHOULD-FIX 闭环 S1/S3/S5/S7/S9/S10/S16/S17/S18/S20/S21。
+   **仍未做**：AuthService/TokenRepository/UserService/PatientService 的集成测试（需 Testcontainers 或 PG 测试库）、
+   S2（management 独立端口）、S11（readiness 探活依赖）、S12（egress NP）、S13（ai-core 多副本）、
+   S14/S15（OAP TTL 与认证）、S6（短证件号脱敏）、S8（change_log 分区归档）、O 系列打磨项。
+5. **本地环境现状（2026-10-31 11:30）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
+   auth(8081)/empi(8082, `--spring.profiles.active=dev`) 运行中；OAP(11800/12800)；
    Loki(3101)/Promtail 运行中。收工前按需停止。
+   **注意**：empi 现在必须带 `EMPI_FIELD_KEY`/`EMPI_HASH_SALT` 或 `--spring.profiles.active=dev`，否则拒绝启动。
 
 ### 本机踩坑备忘（下次别再踩）
 

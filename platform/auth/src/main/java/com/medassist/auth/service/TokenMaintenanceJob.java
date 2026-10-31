@@ -31,12 +31,16 @@ public class TokenMaintenanceJob {
         try {
             int refresh = tokens.purgeExpiredRefreshTokens();
             int attempts = tokens.purgeOldAttempts(Instant.now().minus(30, ChronoUnit.DAYS));
-            if (refresh > 0 || attempts > 0) {
-                log.info("token.maintenance.purged refreshTokens={} loginAttempts={}", refresh, attempts);
+            // 撤销名单清理从"网关增量拉取"的热路径移到这里（S21）：
+            // 原实现每次同步都执行一次全表 DELETE，多副本 × 15s 会持续放大行锁
+            int revocations = tokens.purgeExpiredRevocations();
+            if (refresh > 0 || attempts > 0 || revocations > 0) {
+                log.info("token.maintenance.purged refreshTokens={} loginAttempts={} revocations={}",
+                        refresh, attempts, revocations);
             }
         } catch (Exception e) {
-            // 清理失败不影响业务（下次重试）
-            log.warn("token.maintenance.failed reason={}", e.getMessage());
+            // 清理失败不影响业务（下次重试）；保留堆栈便于定位（S: 异常日志丢堆栈）
+            log.warn("token.maintenance.failed", e);
         }
     }
 }

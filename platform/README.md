@@ -138,16 +138,27 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
 | `X-User-Id` | JWT `sub` | 账号主键 |
 | `X-Roles` | JWT `roles` | 逗号分隔角色码 |
 | `X-Org` | JWT `org` | 科室编码（无则不注入） |
+| `X-Client-Ip` | 网关按可信代理链解析 | 真实客户端 IP（客户端提交值一律剥离） |
 | `X-Trace-Id` | 网关生成 | 链路 ID，客户端提交值一律丢弃 |
 
 客户端提交的同名头在**每个请求**（含白名单路径与 v1 兼容层）都会被先剥离，P0-3 遗留的
 「`X-Actor` 可伪造」漏洞已闭环。
 
+**客户端 IP 解析（评测 M3 修正）**：Spring Cloud Gateway 对 `X-Forwarded-For` 是**追加**语义，
+客户端自带首段即可自选来源 IP。现在由 `security.ClientIpResolver` 统一解析：
+
+- 未配置 `trusted-proxies`（默认）→ **完全不信任 XFF**，取 TCP 对端地址；
+- 配置了可信 CIDR → 从 XFF 右侧向左跳过可信跳，第一个非可信地址即真实客户端；
+- 对端不在可信网段 → 同样忽略 XFF；解析失败回退对端地址；
+- 结果写入 `X-Client-Ip`，auth 只读该头，不再自行解析 XFF。
+
+生产建议 `GATEWAY_TRUSTED_PROXIES` 填 Ingress/节点网段（Chart 已在 prod/staging 预置示例）。
+
 ### 路径策略（`medassist.gateway.auth`）
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `whitelist` | `/api/v2/auth/login`、`/actuator/health`、`/actuator/info` | 免鉴权 |
+| `whitelist` | `/api/v2/auth/login`、`/api/v2/auth/refresh`、`/actuator/health/**`、`/actuator/prometheus` | 免鉴权（**不再整段放行 `/actuator/**`**：会把路由表与指标一并裸奔） |
 | `protected-paths` | `/api/v2/**` | 必须携带有效 `Authorization: Bearer` |
 | `deny-paths` | `/api/v2/*/internal/**` | 直接 404，内部端点不经网关外泄 |
 | `enabled` | `true` | 排障开关（关闭后仍清洗身份头） |
@@ -163,6 +174,10 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
 | `JWT_TTL` | `PT30M` | 访问令牌有效期（P1 从 8 小时缩短，配合刷新令牌） |
 | `JWT_REFRESH_TTL` | `P7D` | 刷新令牌有效期；每次刷新即轮换 |
 | `REVOCATION_SYNC_INTERVAL` | `PT15S` | 网关拉取撤销名单周期（登出/停用生效上限） |
+| `REVOCATION_FAIL_FAST` | `true` | 网关启动时首轮撤销名单拉取失败即拒启（避免重启窗口内放行已登出令牌） |
+| `GATEWAY_TRUSTED_PROXIES` | 空 | 可信代理 CIDR 列表；空=不信任 `X-Forwarded-For`，取 TCP 对端地址 |
+| `FLYWAY_BASELINE_ON_MIGRATE` | `true` | 生产设 `false`，避免把"有表无版本记录"静默标记为已迁移 |
+| `EMPI_FIELD_KEY` / `EMPI_HASH_SALT` | 无默认值 | **缺失即拒绝启动**；本地开发用 `--spring.profiles.active=dev` |
 
 ### 接口
 
@@ -304,6 +319,23 @@ P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸
   `deploy/observability/alerts/medassist-alerts.yaml`；
 - 实测：错误密码一次 → `{reason="bad_credentials",result="failure"} 1.0`；
   QPS=1 连击 5 次 → `401,429,429,429,429`，计数 4。
+
+### 9. 异常映射与运行期健壮性（评测整改）
+
+- **统一异常基类** `common.web.AbstractApiExceptionHandler`（auth/empi 各自只给状态映射）：
+  参数类型不匹配 / 报文不可读 / 缺参 → **400**；Bean Validation → **422**；
+  唯一约束冲突 → **409**；429 的 `Retry-After` 取限速窗口真实值（实测 300s = 5 分钟窗口）；
+- **优雅停机**：三个 Java 服务 `server.shutdown: graceful`，Chart 增加 `preStop sleep 10`，
+  滚动/灰度期间不再切在途请求；
+- **trace ↔ log**：`TraceMdcFilter` 把网关注入的 `X-Trace-Id` 写入 MDC，`logback-spring.xml`
+  用 `%X{tid:-}` 输出；实测日志形如 `[platform-auth] [1c4e6c42...d06c] ... login.throttled`；
+- **撤销名单**：启动阻塞首同步，失败即拒启（`REVOCATION_FAIL_FAST=true`）；
+  未初始化前 `isRevoked` fail-closed；容量上限 20 万条并按到期时间裁剪；
+  过期行清理从拉取热路径移到 `TokenMaintenanceJob`（每小时）；
+- **数据库索引**：`V5__audit_and_throttle_indexes.sql` 增加 `(lower(username), ts DESC)` 函数索引，
+  解决登录限速全表扫描；两侧 `change_log` 增加 `(ts DESC, id DESC)`，审计分页加 `id` 决胜列；
+- **测试**：gateway 19 项（鉴权 8 / 限流 3 / 客户端 IP 6 / 撤销缓存 2）、
+  auth 19 项（JWT 6 / 密码 3 / 限速 4 / 异常映射 6）。
 
 ---
 

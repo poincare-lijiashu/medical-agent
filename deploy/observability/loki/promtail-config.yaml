@@ -14,10 +14,16 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  # 放进持久卷（S16）：放在 /tmp 会随容器重启丢失，导致日志从头重复采集、写入尖峰
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push
+
+# 检索提示（M12）：Java 服务日志已带 traceId（形如 [3f2a...32位十六进制]），
+# 用 LogQL 行过滤串联链路，例如：
+#   {container="gw-test"} |= "<traceId>"
+# 刻意不把 traceId 做成标签——高基数标签会撑爆 Loki 索引。
 
 scrape_configs:
   - job_name: docker

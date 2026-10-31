@@ -30,20 +30,41 @@ public class FieldCipher {
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
     private static final int IV_LEN = 12;
     private static final int TAG_BITS = 128;
+    /** 查重盐最小长度：过短的盐可被彩虹表/字典攻击抵消加盐收益（身份证、手机号空间有限）。 */
+    private static final int MIN_SALT_LEN = 16;
 
     private final SecretKey key;
     private final SecureRandom random = new SecureRandom();
     /** 证件号/手机号哈希加盐（防止彩虹表反查）；与密钥分离配置。 */
     private final String hashSalt;
 
-    public FieldCipher(@Value("${empi.field-key}") String base64Key,
-                       @Value("${empi.hash-salt:medassist-empi-salt}") String hashSalt) {
-        byte[] raw = Base64.getDecoder().decode(base64Key);
+    public FieldCipher(@Value("${empi.field-key:}") String base64Key,
+                       @Value("${empi.hash-salt:}") String hashSalt) {
+        // fail-fast：密钥缺失时绝不"用默认值继续跑"——那等于用公开密钥加密全院 PHI
+        if (base64Key == null || base64Key.isBlank()) {
+            throw new IllegalStateException(
+                    "EMPI_FIELD_KEY 未配置：患者敏感字段无法安全加密，服务拒绝启动。"
+                            + "生产请由密钥管理系统注入；本地开发请加 --spring.profiles.active=dev");
+        }
+        byte[] raw;
+        try {
+            raw = Base64.getDecoder().decode(base64Key.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("EMPI_FIELD_KEY 不是合法的 Base64 字符串", e);
+        }
         if (raw.length != 32) {
-            throw new IllegalStateException("EMPI_FIELD_KEY 必须为 Base64 编码的 32 字节密钥");
+            throw new IllegalStateException("EMPI_FIELD_KEY 必须为 Base64 编码的 32 字节密钥（AES-256）");
+        }
+        if (hashSalt == null || hashSalt.isBlank()) {
+            throw new IllegalStateException(
+                    "EMPI_HASH_SALT 未配置：查重哈希将失去抗彩虹表能力，服务拒绝启动。"
+                            + "生产请由密钥管理系统注入；本地开发请加 --spring.profiles.active=dev");
+        }
+        if (hashSalt.trim().length() < MIN_SALT_LEN) {
+            throw new IllegalStateException("EMPI_HASH_SALT 长度不得少于 " + MIN_SALT_LEN + " 个字符");
         }
         this.key = new SecretKeySpec(raw, "AES");
-        this.hashSalt = hashSalt;
+        this.hashSalt = hashSalt.trim();
     }
 
     /** 加密；入参为空返回 null（空值不加密，避免无意义密文）。 */

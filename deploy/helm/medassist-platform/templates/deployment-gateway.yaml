@@ -50,6 +50,11 @@ spec:
           imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          # 先摘流再停机：Service/Ingress 的端点收敛有秒级延迟，直接 SIGTERM 会切在途请求（S10）
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
           ports:
             - name: http
               containerPort: {{ .Values.gateway.service.port }}

@@ -31,8 +31,13 @@ public class PasswordHasher {
 
     private static final String BCrypt_PREFIX = "$2";
     private static final String PBKDF2_PREFIX = "pbkdf2$";
-    /** 迭代次数上限：防止被篡改的超大迭代值拖垮登录线程。 */
-    private static final int MAX_ITERATIONS = 10_000_000;
+    /**
+     * 迭代次数上限：防止被篡改的超大迭代值拖垮登录线程。
+     *
+     * <p>取 1,000,000：远超历史 PBKDF2 实际值（60 万以下），
+     * 同时把单次校验的 CPU 上限压到毫秒级——否则攻击者可借伪造哈希把登录接口变成 CPU 放大器（S3）。
+     */
+    private static final int MAX_ITERATIONS = 1_000_000;
 
     private final BCryptPasswordEncoder bcrypt = new BCryptPasswordEncoder();
 

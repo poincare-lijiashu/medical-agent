@@ -49,6 +49,11 @@ spec:
           imagePullPolicy: {{ .Values.empi.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          # 先摘流再停机（S10）
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
           ports:
             - name: http
               containerPort: {{ .Values.empi.service.port }}

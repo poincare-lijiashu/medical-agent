@@ -3,6 +3,7 @@ package com.medassist.gateway.filter;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.gateway.config.GatewayAuthProperties;
+import com.medassist.gateway.security.ClientIpResolver;
 import com.medassist.gateway.security.TokenRevocationCache;
 import com.medassist.gateway.web.GatewayResponses;
 import org.slf4j.Logger;
@@ -23,6 +24,7 @@ import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.UUID;
 
@@ -52,15 +54,17 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     private final GatewayAuthProperties props;
     private final JwtDecoder decoder;
     private final TokenRevocationCache revocations;
+    private final ClientIpResolver clientIpResolver;
     private final List<PathPattern> whitelist;
     private final List<PathPattern> protectedPaths;
     private final List<PathPattern> denyPaths;
 
     public AuthGlobalFilter(GatewayAuthProperties props, JwtDecoder jwtDecoder,
-                            TokenRevocationCache revocations) {
+                            TokenRevocationCache revocations, ClientIpResolver clientIpResolver) {
         this.props = props;
         this.decoder = jwtDecoder;
         this.revocations = revocations;
+        this.clientIpResolver = clientIpResolver;
         this.whitelist = parse(props.whitelist());
         this.protectedPaths = parse(props.protectedPaths());
         this.denyPaths = parse(props.denyPaths());
@@ -70,9 +74,15 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String traceId = UUID.randomUUID().toString().replace("-", "");
 
+        // 真实客户端 IP：由可信代理链计算，客户端自带的 X-Forwarded-For / X-Client-Ip 一律不可信（M3）
+        InetSocketAddress remote = exchange.getRequest().getRemoteAddress();
+        String clientIp = clientIpResolver.resolve(remote,
+                exchange.getRequest().getHeaders().getFirst("X-Forwarded-For"));
+
         ServerHttpRequest sanitized = exchange.getRequest().mutate()
                 .headers(h -> AuthHeaders.CLIENT_SUPPLIED.forEach(h::remove))
                 .header(AuthHeaders.TRACE_ID, traceId)
+                .header(AuthHeaders.CLIENT_IP, clientIp)
                 .build();
         ServerWebExchange cleaned = exchange.mutate().request(sanitized).build();
 

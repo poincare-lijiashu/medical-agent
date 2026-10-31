@@ -147,9 +147,13 @@ public class TokenRepository {
                 .update();
     }
 
-    /** 撤销名单增量查询（since 为上次同步时间；清理过期行后返回未过期项）。 */
+    /**
+     * 撤销名单增量查询（since 为上次同步时间，只返回未过期项）。
+     *
+     * <p>刻意<b>不在</b>这里做清理：网关每 15s × 多副本都会打到这里，
+     * 全表 DELETE 会持续放大行锁；过期行由 {@link #purgeExpiredRevocations()} 每小时清理。
+     */
     public List<RevocationRecord> listRevocationsSince(Instant since) {
-        jdbc.sql("DELETE FROM auth_svc.token_revocation WHERE expires_at < now()").update();
         return jdbc.sql("""
                         SELECT jti, expires_at
                           FROM auth_svc.token_revocation
@@ -161,6 +165,11 @@ public class TokenRepository {
                         rs.getObject("jti", UUID.class),
                         rs.getTimestamp("expires_at").toInstant()))
                 .list();
+    }
+
+    /** 清理已过期的撤销项（由定时任务调用，不在请求热路径）。 */
+    public int purgeExpiredRevocations() {
+        return jdbc.sql("DELETE FROM auth_svc.token_revocation WHERE expires_at < now()").update();
     }
 
     // ---------------------------------------------------------------- 登录尝试

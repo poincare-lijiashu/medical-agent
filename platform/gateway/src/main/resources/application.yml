@@ -1,5 +1,7 @@
 server:
   port: 8080
+  # 优雅停机（S10）：SIGTERM 后先摘流再停，避免滚动/灰度期间把在途请求切断成 5xx
+  shutdown: graceful
 
 spring:
   application:
@@ -55,7 +57,9 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,gateway,prometheus
+        # 刻意不暴露 gateway 端点：/actuator/gateway 会返回全部路由与下游内网地址，
+        # 是未认证即可读到的内部拓扑（M2）。metrics/info 也一并收敛。
+        include: health,prometheus
   endpoint:
     health:
       show-details: never
@@ -77,12 +81,21 @@ medassist:
       revocation-sync:
         enabled: ${REVOCATION_SYNC_ENABLED:true}
         interval: ${REVOCATION_SYNC_INTERVAL:PT15S}
+        # 启动时首次拉取失败即拒绝启动，避免"重启后撤销名单为空"把已登出令牌放行（M4）
+        fail-fast-on-startup: ${REVOCATION_FAIL_FAST:true}
+      # 真实客户端 IP：只有来自这些网段的请求才允许用 X-Forwarded-For 推断来源。
+      # 为空（默认）= 完全不信任 XFF，直接取 TCP 对端地址（安全默认）。
+      # 集群内建议填 Ingress/NAT 网段，如 10.0.0.0/8,192.168.0.0/16
+      client-ip:
+        trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:}
       whitelist:
         - /api/v2/auth/login
         - /api/v2/auth/refresh
-        # K8s 探针路径为 /actuator/health/liveness|readiness，必须整段放行，
-        # 否则探针会拿到 401 被判失败（网关自身的 actuator 也会经过本过滤器）
-        - /actuator/**
+        # K8s 探针路径为 /actuator/health/liveness|readiness，必须放行，否则探针会拿到 401；
+        # 但**不再放行 /actuator/** 整段**（那会把路由表、指标、bean 信息一并裸奔），
+        # 只精确白名单健康检查与 Prometheus 抓取（后者由 NetworkPolicy 限制来源）。
+        - /actuator/health/**
+        - /actuator/prometheus
       protected-paths:
         - /api/v2/**
       deny-paths:

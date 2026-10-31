@@ -16,6 +16,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -145,7 +146,14 @@ public class AuthService {
                 refresh.token(), refresh.expiresAt(), me);
     }
 
-    /** 刷新：校验刷新令牌 → 立即轮换 → 重新签发访问令牌（角色/权限取当前值）。 */
+    /**
+     * 刷新：校验刷新令牌 → 立即轮换 → 重新签发访问令牌（角色/权限取当前值）。
+     *
+     * <p>加事务：撤销旧令牌与写入新令牌必须同生共死。原实现无事务，
+     * 若 revoke 成功后 insertRefresh 前失败，用户会被强制下线（旧已撤销、新未写入）。
+     * 登录接口仍刻意不加事务（bcrypt 耗时 + 失败审计不能被回滚）。
+     */
+    @Transactional
     public LoginResp refresh(String rawRefreshToken, String clientIp, String userAgent) {
         TokenRepository.RefreshRecord record = tokens.findActive(sha256(rawRefreshToken))
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "登录已过期，请重新登录"));

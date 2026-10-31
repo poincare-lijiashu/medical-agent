@@ -16,6 +16,8 @@ import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
@@ -53,7 +55,13 @@ public class JwtTokenService {
     private final JwtEncoder encoder;
     private final JwtDecoder decoder;
 
+    /** 单元测试用：不带 profile 信息（视为非生产）。 */
     public JwtTokenService(JwtProperties props) {
+        this(props, null);
+    }
+
+    @Autowired
+    public JwtTokenService(JwtProperties props, Environment environment) {
         this.props = props;
 
         String secret = props.secret();
@@ -63,6 +71,11 @@ public class JwtTokenService {
                     "JWT 密钥未配置或长度不足 " + MIN_SECRET_BYTES + " 字节，拒绝启动（请设置环境变量 JWT_SECRET）");
         }
         if (SecurityDefaults.DEV_JWT_SECRET.equals(secret)) {
+            if (SecurityDefaults.isProduction(environment)) {
+                // 生产/预发布绝不允许仓库公开的默认密钥：一旦使用，任何人都能伪造任意身份
+                throw new IllegalStateException(
+                        "检测到生产 profile 仍在使用开发默认 JWT 密钥，拒绝启动（请通过 Secret 注入 JWT_SECRET）");
+            }
             log.warn("正在使用本地开发默认 JWT 密钥，生产环境必须通过环境变量 JWT_SECRET 覆盖真实密钥");
         }
 

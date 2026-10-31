@@ -1,7 +1,14 @@
 {{- /*
   灰度分析模板（可选）：Argo Rollouts 在 canary 步骤中调用 Prometheus，
   5xx 比例低于阈值即通过，连续失败达 failureLimit 则自动中止并回滚。
-  仅在 rollout.enabled && rollout.analysis.enabled 时渲染。
+
+  查询按组件过滤（M10）：ServiceMonitor 会为每个抓取目标打上 component 标签
+  （见 templates/servicemonitor.yaml 的 relabelings），因此这里用
+  {component="<component>"} 只统计该服务自身的 5xx，
+  避免 canary 副本的错误被其它服务/稳定副本稀释成"永远通过"。
+
+  残余限制：同一服务内 canary 与 stable 副本仍共享 component 标签，
+  若要精确定位 canary，需要 rollout 在 Pod 上打 rollouts-pod-template-hash 并在此按 hash 过滤。
 */}}
 {{- if and .Values.rollout.enabled .Values.rollout.analysis.enabled }}
 {{- range $component := .Values.rollout.components }}
@@ -21,7 +28,10 @@ spec:
       provider:
         prometheus:
           address: {{ $.Values.rollout.analysis.prometheusAddress | quote }}
-          query: {{ $.Values.rollout.analysis.query | trim | quote }}
+          query: |
+            sum(rate(http_server_requests_seconds_count{component="{{ $component }}",status!~"5.."}[2m]))
+            /
+            clamp_min(sum(rate(http_server_requests_seconds_count{component="{{ $component }}"}[2m])), 0.001)
 ---
 {{- end }}
 {{- end }}

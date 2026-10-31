@@ -41,12 +41,18 @@ public class SentinelGatewayConfig {
     @PostConstruct
     public void init() {
         if (!props.enabled() || props.flowRules() == null || props.flowRules().isEmpty()) {
-            log.info("sentinel.gateway.disabled");
+            // 配置为空意味着网关没有任何入口容量保护——必须显式告警（S20），
+            // 否则"以为开了限流"会是生产事故的完美伏笔
+            log.warn("sentinel.gateway.disabled（未配置任何入口限流规则，网关将不做削峰）");
             return;
         }
         List<FlowRule> rules = new ArrayList<>();
+        int skipped = 0;
         for (GatewayFlowRuleProperties.FlowRuleSpec spec : props.flowRules()) {
             if (spec.path() == null || spec.path().isBlank() || spec.qps() <= 0) {
+                log.warn("sentinel.gateway.rule.skipped path={} qps={}（path 为空或 qps<=0）",
+                        spec.path(), spec.qps());
+                skipped++;
                 continue;
             }
             FlowRule rule = new FlowRule(spec.path());
@@ -54,7 +60,11 @@ public class SentinelGatewayConfig {
             rule.setCount(spec.qps());
             rules.add(rule);
         }
+        if (rules.isEmpty()) {
+            log.error("sentinel.gateway.rules.empty（全部 {} 条规则被跳过，入口无限流保护）", skipped);
+            return;
+        }
         FlowRuleManager.loadRules(rules);
-        log.info("sentinel.gateway.rules.loaded resources={}", rules.size());
+        log.info("sentinel.gateway.rules.loaded resources={} skipped={}", rules.size(), skipped);
     }
 }

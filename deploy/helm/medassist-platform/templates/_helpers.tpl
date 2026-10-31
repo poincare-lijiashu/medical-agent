@@ -38,13 +38,20 @@ app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/part-of: medassist-platform
 {{- end -}}
 
-{{/* 镜像全名：imageRegistry 为空时直接用 repository（可写完整仓库地址） */}}
+{{/* 镜像全名：imageRegistry 为空时直接用 repository（可写完整仓库地址）。
+   非 dev 环境禁止 SNAPSHOT：可变 tag + IfNotPresent 会导致"发布成功但集群没换镜像"（M9）。 */}}
 {{- define "medassist.image" -}}
+{{- $full := "" -}}
 {{- if .root.Values.imageRegistry -}}
-{{- printf "%s/%s:%s" .root.Values.imageRegistry .image.repository .image.tag -}}
+{{- $full = printf "%s/%s:%s" .root.Values.imageRegistry .image.repository .image.tag -}}
 {{- else -}}
-{{- printf "%s:%s" .image.repository .image.tag -}}
+{{- $full = printf "%s:%s" .image.repository .image.tag -}}
 {{- end -}}
+{{- $env := .root.Values.environment | default "dev" -}}
+{{- if and (ne $env "dev") (hasSuffix "-SNAPSHOT" (toString .image.tag)) -}}
+{{- fail (printf "环境 %s 不允许使用 SNAPSHOT 镜像（%s）：请由 CI 通过 --set 注入不可变 tag" $env $full) -}}
+{{- end -}}
+{{- $full -}}
 {{- end -}}
 
 {{- define "medassist.serviceAccountName" -}}
@@ -232,9 +239,17 @@ apps/v1
 {{/*
   Canary 策略（仅 Rollout 使用）。
   不做流量切分（未引入 Istio/Nginx canary 注解），而是按副本数逐级放量：
-  新版本先起 1 个副本 → 观察 → 人工确认 → 全量。分析模板可选（需 Prometheus）。
+  新版本先起 1 个副本 → 观察 → 人工确认 → 全量。
+
+  与 HPA 冲突处理（M10）：组件开启 autoscaling 时不能出现 setCanaryScale，
+  否则 HPA 与灰度固定副本会互相拉扯；此时自动改用 rollout.hpaSteps（只保留 pause 闸门）。
 */}}
 {{- define "medassist.canaryStrategy" -}}
+{{- $svc := index .root.Values .component -}}
+{{- $steps := .root.Values.rollout.steps -}}
+{{- if and $svc $svc.autoscaling $svc.autoscaling.enabled -}}
+{{- $steps = .root.Values.rollout.hpaSteps -}}
+{{- end -}}
 strategy:
   canary:
     {{- if .root.Values.rollout.analysis.enabled }}
@@ -243,7 +258,7 @@ strategy:
         - templateName: {{ include "medassist.componentName" . }}-success-rate
     {{- end }}
     steps:
-      {{- toYaml .root.Values.rollout.steps | nindent 6 }}
+      {{- toYaml $steps | nindent 6 }}
 {{- end -}}
 
 {{/* Service 名（Ingress 后端引用） */}}

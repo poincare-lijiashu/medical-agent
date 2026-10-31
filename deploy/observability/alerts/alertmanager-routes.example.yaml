@@ -1,0 +1,54 @@
+# ============================================================================
+# Alertmanager 路由样例（不是完整配置，只给出 MedAssist 需要的片段）
+#
+# 背景（M11）：告警规则只负责"产生告警"，如果没有 route/receiver，
+# kube-prometheus-stack 的默认 receiver 是空/null，告警等于"产生但不送达"。
+#
+# 用法：把下面的 route 与 receivers 合并进 Alertmanager 配置
+#   （kube-prometheus-stack: values.alertmanager.config），或用
+#   alertmanagerConfigSelector 引用一个 AlertmanagerConfig CR。
+# 占位符必须替换为院内实际地址（企业微信/钉钉机器人、值班邮箱、短信网关）。
+# ============================================================================
+route:
+  receiver: medassist-default
+  group_by: ["alertname", "namespace", "component"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # critical：立即通知值班（短信/电话），5 分钟未恢复重复提醒
+    - matchers:
+        - severity = critical
+      receiver: medassist-critical
+      group_wait: 10s
+      repeat_interval: 30m
+      continue: true
+    # warning：进入 IM 群，白天聚合
+    - matchers:
+        - severity = warning
+      receiver: medassist-im
+      repeat_interval: 4h
+
+inhibit_rules:
+  # 目标整体不可达时，抑制该实例的 5xx/延迟类衍生告警，避免告警风暴
+  - source_matchers: [alertname = MedassistTargetDown]
+    target_matchers: [severity =~ "warning|critical"]
+    equal: ["instance"]
+
+receivers:
+  - name: medassist-default
+    webhook_configs:
+      - url: "http://alert-sink.medassist-infra.svc:8080/alerts"
+        send_resolved: true
+
+  - name: medassist-critical
+    # 值班短信/电话网关（按院内实际替换）
+    webhook_configs:
+      - url: "http://oncall-gateway.medassist-infra.svc:8080/notify"
+        send_resolved: true
+        max_alerts: 0
+
+  - name: medassist-im
+    webhook_configs:
+      - url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLACE_ME"
+        send_resolved: true
