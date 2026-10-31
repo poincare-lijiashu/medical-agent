@@ -405,6 +405,18 @@ Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagen
 | 迁移索引 | `empi_svc.flyway_schema_history` 出现 `2 | change log ts index`（success=t） |
 | 镜像 tag 守卫 | `helm template -f values-prod.yaml`（未注入 tag）→ 明确失败「环境 production 不允许使用 SNAPSHOT 镜像」 |
 
+**2026-10-31 离网与多副本共享状态实测**
+
+| 场景 | 结果 |
+|---|---|
+| `helm lint --strict`（默认 / dev / staging / prod） | **四套全部通过**（prod 仅输出 SNAPSHOT tag 守卫的 INFO，非失败） |
+| `helm template -f values-prod.yaml` | 渲染出 `REDIS_URL`（`secretKeyRef: medassist-redis/url`）；`EMBED_ALLOW_DOWNLOAD=false`、`PUBMED_ENABLED=false` |
+| `helm template -f values-dev.yaml` | **不**渲染 `REDIS_URL`（dev 未启用 Redis，保持零外部依赖） |
+| `helm template -f values-staging.yaml --set networkPolicy.egress.enabled=true` | ai-core NetworkPolicy 变为 `policyTypes: [Ingress, Egress]`，出站仅 kube-system DNS + 10/8、172.16/12、192.168/16 |
+| 离网自检（`APP_ENV=production`） | 输出 `medical_agent.network_deps`，公网 LLM + PubMed 双告警（提示改院内网关/关 PubMed） |
+| Python 全量回归 | `pytest tests` → **786 passed / 11 skipped** |
+| 镜像构建 | 本机 Docker Desktop 构建期间 API 500（daemon 降级）且大包下载停滞，**未完成**；Dockerfile 已改为国内 apt/pip 源，需在构建机复核（见 `deploy/offline/README.md` §1.1） |
+
 ---
 
 ## 9. 已知边界与后续
