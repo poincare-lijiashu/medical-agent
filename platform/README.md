@@ -102,6 +102,11 @@ Nacos **2.4+ 出于安全不再自动创建默认管理员**：开启 `NACOS_AUT
 - 业务规则：用户名大小写不敏感唯一；密码 ≥8 位且含字母+数字、不得等于用户名；角色必须已定义；
   乐观锁 CAS；**禁止停用/移除最后一个 ADMIN**（防系统锁死）；全部变更写 `change_log`
 - API：`GET/POST /users`、`GET/PUT /users/{id}`、`POST /users/{id}/disable|enable`、`PUT /users/{id}/roles`、`POST /users/{id}/reset-password`
+- **密码哈希兼容（2026-10-31 修复）**：v1 Python 中台用 PBKDF2-SHA256（`pbkdf2$sha256$600000$salt$hash`）存密码，
+  V3 迁移原样导入；Java 侧原先只认 BCrypt，导致**导入的老账号全部无法登录**。现由 `security.PasswordHasher` 统一处理：
+  按前缀识别 BCrypt / PBKDF2、PBKDF2 用 `MessageDigest.isEqual` 恒定时间比较、迭代次数上限防 CPU 打满；
+  登录成功后将旧哈希**在线重写为 BCrypt**（`WHERE password_hash = 旧值` 做 CAS，不推进 version，失败不影响本次登录）。
+  新建/重置密码始终写 BCrypt。
 
 ### empi（患者主索引）
 

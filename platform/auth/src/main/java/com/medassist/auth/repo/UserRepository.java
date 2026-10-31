@@ -167,6 +167,24 @@ public class UserRepository {
                 .update() > 0;
     }
 
+    /**
+     * 历史哈希在线升级（PBKDF2 → BCrypt）。
+     *
+     * <p>按旧哈希做 CAS：并发登录/管理员重置密码时只会有一次替换生效，
+     * 且不推进 version（避免无谓的乐观锁冲突）。
+     */
+    public boolean upgradePasswordHash(UUID id, String oldHash, String newHash) {
+        return jdbc.sql("""
+                        UPDATE auth_svc.app_user
+                           SET password_hash = :newHash, updated_at = now()
+                         WHERE id = :id AND password_hash = :oldHash
+                        """)
+                .param("newHash", newHash)
+                .param("oldHash", oldHash)
+                .param("id", id)
+                .update() > 0;
+    }
+
     /** 记录登录时间（登录成功后调用）。 */
     public void touchLogin(UUID id) {
         jdbc.sql("UPDATE auth_svc.app_user SET last_login_at = now() WHERE id = ?")

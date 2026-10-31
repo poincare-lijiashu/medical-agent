@@ -3,13 +3,13 @@ package com.medassist.auth.service;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.UserRepository;
+import com.medassist.auth.security.PasswordHasher;
 import com.medassist.auth.web.dto.CreateUserReq;
 import com.medassist.auth.web.dto.UpdateUserReq;
 import com.medassist.auth.web.dto.UserResp;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.api.PageResult;
 import com.medassist.common.exception.BusinessException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -43,12 +43,14 @@ public class UserService {
     private final UserRepository users;
     private final RbacRepository rbac;
     private final ObjectMapper objectMapper;
-    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+    private final PasswordHasher hasher;
 
-    public UserService(UserRepository users, RbacRepository rbac, ObjectMapper objectMapper) {
+    public UserService(UserRepository users, RbacRepository rbac, ObjectMapper objectMapper,
+                       PasswordHasher hasher) {
         this.users = users;
         this.rbac = rbac;
         this.objectMapper = objectMapper;
+        this.hasher = hasher;
     }
 
     @Transactional
@@ -66,7 +68,7 @@ public class UserService {
         }
 
         UUID id = UUID.randomUUID();
-        users.insert(new UserAccount(id, username, encoder.encode(req.password()),
+        users.insert(new UserAccount(id, username, hasher.encode(req.password()),
                 req.displayName().trim(), blankToNull(req.employeeNo()), orgCode,
                 UserAccount.STATUS_ACTIVE, 0L, null, null, null));
         users.replaceRoles(id, roles);
@@ -168,7 +170,7 @@ public class UserService {
         UserAccount current = users.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
         validatePassword(newPassword, current.username());
-        users.updatePassword(id, encoder.encode(newPassword));
+        users.updatePassword(id, hasher.encode(newPassword));
         // 审计不记录密码本身，只记录发生重置
         audit(actor, "USER_RESET_PASSWORD", id.toString(), Map.of("username", current.username()));
     }

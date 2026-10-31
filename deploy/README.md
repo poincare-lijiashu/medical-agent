@@ -270,7 +270,6 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d
 
 | 项目 | 原因 | 复核方式 |
 |---|---|---|
-| 镜像构建 | 本机 Maven 基础镜像拉取时镜像站 TLS 超时（eclipse-temurin 运行镜像已拉到） | 院内 Harbor 代理 / CI 构建 |
 | `kubectl apply` / Argo 同步 | 本机无 K8s 集群 | staging 环境首次同步即为验证 |
 | MySQL 持久化 Nacos | 本机无 MySQL 镜像 | 按 `nacos/README.md` 在预发布环境执行 |
 
@@ -290,6 +289,23 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d
 | 关键坑 1 | 服务端框架插件在 agent 的 `optional-plugins/`，未激活时只有心跳没有链路 → Chart 已自动复制 |
 | 关键坑 2 | `sw-python` 在 Windows 下子进程存活不稳定 → 本机改用侵入式 `config.init+agent.start` 验证；容器（Linux）仍走 entrypoint 的 `sw-python` |
 | 关键坑 3 | `apache-skywalking` wheel 缺 protocol，`--no-binary` 从 sdist 安装 |
+
+**2026-10-31 补充实测（镜像构建 + 容器内全链路 + 历史密码兼容）**
+
+| 场景 | 结果 |
+|---|---|
+| `docker build --build-arg SERVICE=gateway -f platform/Dockerfile platform` | **成功**，产物 `medassist/platform-gateway:0.1.0-SNAPSHOT`（多阶段构建，Reactor 3 模块 BUILD SUCCESS） |
+| 容器启动与探针 | `docker run -p 18080:8080` → `/actuator/health` = `{"groups":["liveness","readiness"],"status":"UP"}`；`/actuator/health/liveness` 200 |
+| 容器内统一鉴权 | 无令牌访问 `/api/v2/empi/patients` → **401**；`/api/v2/auth/internal/revocations` → **404**（内部端点不外泄） |
+| 容器内 agent 上报 | `medassist-gateway` 出现在 OAP 服务列表（`host.docker.internal:11800`） |
+| 容器内跨进程链路（登录） | 同一 traceId 内 gateway `/api/v2/auth/login` → auth `POST:/login` → HikariCP/PostgreSQL：**45 span（gateway 17 + auth 28）** |
+| 容器内跨进程链路（患者查询） | 同一 traceId 内 `/api/v2/empi/patients` → `GET:/patients`（gateway + empi） |
+| 授权矩阵（经容器网关） | `pharm01`（PHARMACIST）`:id?reveal=true` → **403** `无权限执行该操作：empi:patient:read_phi`；`pharm01` 访问 `/api/v2/auth/users` → **403**；`doctor01` reveal → **200** 明文（`phiMasked=false`） |
+| **历史密码兼容（已修复）** | v1 Python 中台用 PBKDF2-SHA256 存密码（`pbkdf2$sha256$600000$...`），V3 迁移原样导入；Java auth 原先只认 BCrypt → **导入的老账号全部无法登录**。新增 `PasswordHasher`：按前缀识别 BCrypt/PBKDF2、恒定时间比较、登录成功后**在线升级为 BCrypt**（按旧哈希 CAS，不推进 version） |
+| 兼容性验证 | `doctor01` 登录成功后库内哈希由 `pbkdf2$` 变为 `$2a$10$`；未登录的 `admin01` 保持 `pbkdf2$`（升级是按账号、按次发生） |
+| 单测 | `mvn -pl auth -am test` → 9 项全过（新增 `PasswordHasherTest` 3 项：BCrypt 往返、Python 固定向量、畸形哈希拒绝） |
+| 关键坑 4 | SkyWalking 9.8.0 对 SCG 5.0.4 的告警（`LocalResponseCacheAutoConfiguration#responseCacheSizeWeigher` 已移除）**不影响实际链路**：`V412` 变体插件生效，仍产出 GatewayFilter/send 与跨进程引用；不要因此误判为"没有链路"（排障时用 OAP `queryBasicTraces` 按**本地时区**窗口查询，DB 中 `start_time` 是 UTC epoch 毫秒） |
+| 关键坑 5 | 直接以只读方式挂载 agent 目录时，agent 写日志失败（`/opt/skywalking-agent/logs` 只读）→ 需 `SW_LOGGING_DIR` 指向可写目录；Chart 用 initContainer 复制到 emptyDir，天然可写 |
 
 ---
 

@@ -5,6 +5,7 @@ import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
 import com.medassist.auth.repo.UserRepository;
 import com.medassist.auth.security.JwtTokenService;
+import com.medassist.auth.security.PasswordHasher;
 import com.medassist.auth.web.dto.LoginReq;
 import com.medassist.auth.web.dto.LoginResp;
 import com.medassist.auth.web.dto.MeResp;
@@ -12,7 +13,6 @@ import com.medassist.auth.web.dto.RevocationsResp;
 import com.medassist.auth.web.dto.VerifyResp;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -54,21 +54,23 @@ public class AuthService {
     private final TokenRepository tokens;
     private final JwtTokenService jwt;
     private final LoginThrottle throttle;
+    private final PasswordHasher hasher;
     private final ObjectMapper objectMapper;
-    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     /** 用于用户名不存在时的恒定耗时比对（服务启动时生成一次，内容无意义）。 */
     private final String dummyHash;
 
     public AuthService(UserRepository users, RbacRepository rbac, TokenRepository tokens,
-                       JwtTokenService jwt, LoginThrottle throttle, ObjectMapper objectMapper) {
+                       JwtTokenService jwt, LoginThrottle throttle, PasswordHasher hasher,
+                       ObjectMapper objectMapper) {
         this.users = users;
         this.rbac = rbac;
         this.tokens = tokens;
         this.jwt = jwt;
         this.throttle = throttle;
+        this.hasher = hasher;
         this.objectMapper = objectMapper;
-        this.dummyHash = encoder.encode(UUID.randomUUID().toString());
+        this.dummyHash = hasher.encode(UUID.randomUUID().toString());
     }
 
     /**
@@ -83,7 +85,7 @@ public class AuthService {
 
         Optional<UserAccount> found = users.findByUsername(username);
         if (found.isEmpty()) {
-            encoder.matches(req.password(), dummyHash);  // 恒定耗时，防账号枚举
+            hasher.verify(req.password(), dummyHash);  // 恒定耗时，防账号枚举
             throttle.record(username, clientIp, false);
             audit("anonymous", "LOGIN_FAILED", "unknown",
                     Map.of("username", username, "reason", "USER_NOT_FOUND", "ip", clientIp));
@@ -91,7 +93,7 @@ public class AuthService {
         }
 
         UserAccount user = found.get();
-        if (!encoder.matches(req.password(), user.passwordHash())) {
+        if (!hasher.verify(req.password(), user.passwordHash())) {
             throttle.record(username, clientIp, false);
             audit(user.username(), "LOGIN_FAILED", user.id().toString(),
                     Map.of("reason", "BAD_CREDENTIALS", "ip", clientIp));
@@ -112,6 +114,8 @@ public class AuthService {
         }
 
         List<String> permissions = rbac.permissionsOfUser(user.id());
+        // 历史 PBKDF2 哈希在线升级为 BCrypt：登录成功后一次性重写，失败不影响本次登录
+        upgradeLegacyHash(user, req.password());
         JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions);
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
@@ -218,6 +222,24 @@ public class AuthService {
             return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 不可用", e);
+        }
+    }
+
+    /**
+     * 旧格式哈希在线升级（PBKDF2 → BCrypt）。
+     *
+     * <p>只在当前哈希仍是旧值时替换（仓储层按 password_hash 做 CAS），
+     * 失败仅让下次登录重试，绝不影响本次登录结果。
+     */
+    private void upgradeLegacyHash(UserAccount user, String rawPassword) {
+        if (!hasher.needsUpgrade(user.passwordHash())) {
+            return;
+        }
+        try {
+            users.upgradePasswordHash(user.id(), user.passwordHash(), hasher.encode(rawPassword));
+        } catch (RuntimeException e) {
+            audit(user.username(), "PASSWORD_HASH_UPGRADE_FAILED", user.id().toString(),
+                    Map.of("reason", e.getClass().getSimpleName()));
         }
     }
 

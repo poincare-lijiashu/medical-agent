@@ -39,18 +39,18 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 
 ### 下次开工第一件事
 
-1. **确认 Java 镜像构建是否完成**（本会话退出时仍在后台运行，PID 43268）：
-   `docker images | findstr medassist/platform-gateway`
-   - 未完成则重跑：`docker build --build-arg SERVICE=gateway -t medassist/platform-gateway:0.1.0-SNAPSHOT -f platform/Dockerfile platform`
-   - 完成后：`docker run -d --name gw-test -p 18080:8080 medassist/platform-gateway:0.1.0-SNAPSHOT`，
-     访问 `http://127.0.0.1:18080/actuator/health` 验证；可挂
-     `-v D:\workspace_AI\_tools\skywalking\skywalking-agent:/opt/skywalking-agent:ro`
-     + `JAVA_TOOL_OPTIONS` 验证容器内 agent 链路；把结果补进 `deploy/README.md` §8
-2. **剩余 P1**：Argo Rollouts 灰度、日志采集（Loki/ELK）与告警、会话管理（踢出设备）、审计跨域汇聚
-3. **本地环境现状**：auth/empi/gateway/OAP 均已停止；auth 库 17 账号、0 测试数据；
-   OAP 用二进制启动（`D:\workspace_AI\_tools\skywalking\apache-skywalking-apm-bin`）：
-   `java -Xms256M -Xmx768M -Doap.logDir=<home>\logs -cp "<home>\config;<home>\oap-libs\*" org.apache.skywalking.oap.server.starter.OAPServerStartUp`
-   （环境变量 `SW_STORAGE=postgresql SW_JDBC_URL=jdbc:postgresql://127.0.0.1:5433/skywalking SW_DATA_SOURCE_USER=medagent SW_DATA_SOURCE_PASSWORD=medagent123`）
+1. **Java 镜像与容器链路已验证完成（2026-10-31）**：
+   - `docker build --build-arg SERVICE=gateway -t medassist/platform-gateway:0.1.0-SNAPSHOT -f platform/Dockerfile platform` 成功
+   - 容器 `/actuator/health` = UP；无令牌 401；`/api/v2/*/internal/**` 404
+   - 容器内 agent → OAP：登录链路 **45 span（gateway 17 + auth 28）同 traceId**；患者查询 gateway+empi 同 traceId
+   - 容器内授权矩阵：PHARMACIST reveal 403 / users 403，DOCTOR reveal 200 明文
+   - 详见 `deploy/README.md` §8「2026-10-31 补充实测」
+2. **已修复真实缺陷：历史密码不可登录**。V3 从 Python 中台导入的是 PBKDF2 哈希，Java 只认 BCrypt →
+   新增 `security/PasswordHasher`（BCrypt/PBKDF2 双支持 + 登录后在线升级为 BCrypt，按旧哈希 CAS），
+   新增 `PasswordHasherTest`（3 项）。已实测 doctor01 登录后哈希变 `$2a$10$`，admin01 未登录仍为 `pbkdf2$`。
+3. **剩余 P1**：Argo Rollouts 灰度、日志采集（Loki/ELK）与告警、会话管理（踢出设备）、审计跨域汇聚
+4. **本地环境现状（2026-10-31 10:20）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
+   auth(8081)/empi(8082) 以 agent 方式前台后台运行；OAP(11800/12800) 运行中。收工前按需停止。
 
 ### 本机踩坑备忘（下次别再踩）
 
@@ -62,6 +62,13 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   （Map 键中的 `/` 会被宽松绑定吞掉）
 - `sw-python` 在 Windows 下子进程存活不稳定（容器 Linux 正常）；本机验证用侵入式
   `config.init(agent_collector_backend_services=...) + agent.start()`
+- PowerShell 里 URL 紧跟变量会被吞掉参数：`"...patients/$id?reveal=true"` 会被解析成变量
+  `$id?reveal`（`?` 属于变量名）→ 表现为服务端 500「Invalid UUID string: =true」。
+  正确写法：`$url = 'http://.../patients/' + $id + '?reveal=true'`
+- OAP `queryBasicTraces` 的 `queryDuration` 用 **OAP 本地时区**（本机 +08），而 PG 里 `start_time`
+  是 UTC epoch 毫秒；用 UTC 时间去查会得到空结果，误判"没有链路"
+- 只读挂载 agent 目录时必须设 `SW_LOGGING_DIR`（默认写 `/opt/skywalking-agent/logs` 会只读失败）；
+  Chart 用 emptyDir 复制，无此问题
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）
