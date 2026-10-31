@@ -624,6 +624,34 @@ doctor01 确认 **403**、只读 200。
 
 ---
 
+## 1.29 已完成（2026-11-01，N6 第二批：影像 Worklist 与 PACS 结果回传）
+
+影像集成不做 DICOM 网络协议栈（C-FIND/C-STORE 需要设备联调与专网），而是提供**与 DICOM MWL 同构的 REST 视图 + 状态回传**，
+由院内集成引擎（或 PACS 厂商适配器）做一次字段映射，避免把设备协议塞进业务服务。
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 设备 Worklist | `GET /tech/pacs/worklist?modality=&date=&limit=` | 未完成（APPLIED / IN_PROGRESS）且影像未完成/未取消的检查申请；按 STAT→URGENT→ROUTINE 排序；默认当天、上限 200 |
+| 登记影像 | `POST /tech/pacs/studies` | 以申请号为 `AccessionNumber`；StudyInstanceUID 由 PACS 回传；同申请同 UID 幂等、不同 UID 冲突 |
+| 状态回传 | `POST /tech/pacs/studies/{uid}/status` | `SCHEDULED→ARRIVED→IN_PROGRESS→COMPLETED`，任意未完成态可 `CANCELLED`；全部 CAS + 版本号 |
+| 查询 | `GET /tech/pacs/studies/{uid}`、`GET /tech/pacs/applications/{applicationId}` | 按 UID / 申请查询登记与影像数量、查看链接 |
+
+**数据模型（tech V3）**：`pacs_study`（`application_id`、`study_instance_uid`、`accession_number` 三者唯一）；
+`md_exam_item` 补 `modality`（默认 `OT`），Worklist 按设备类型过滤。
+
+**权限（auth V25）**：`tech:pacs:read`（ADMIN / TECHNICIAN / DOCTOR）、`tech:pacs:write`（ADMIN / TECHNICIAN）。
+
+**PHI 口径**：Worklist 只返回申请号/患者号/项目/部位/优先级，不返回姓名与临床诊断（设备高频轮询）；
+登记与状态回传全部写审计（`PACS_STUDY_REGISTER` / `PACS_STUDY_STATUS`），写操作 `X-Actor` 必填。
+
+**验证**：
+- 全量单测 **421 项全过**（新增影像集成 10 项：登记取字典 Modality/Accession、同 UID 幂等、异 UID 冲突、
+  检验/已报告申请拒绝、状态机与 CAS、Worklist 归一化与上限、非法 Modality、查询不存在）；
+- 新增 `scripts/e2e/tech_pacs_smoke.ps1` **36 项断言全过**：建患者→开检查→Worklist 命中→登记/幂等/冲突/非法 UID
+  →到检→非法跳转 409→执行（系列/图像数）→完成→Worklist 剔除→按 UID/申请查询→不存在 404→药师 403。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
@@ -636,7 +664,7 @@ doctor01 确认 **403**、只读 200。
 | N3 | 医技域 | ✅ 检查/检验申请、标本流转、报告回写与修订、危急值闭环（2026-10-31 第一批已交付） | 申请-执行-报告闭环；危急值强制确认 |
 | N4 | 病历域 | ✅ 模板/质控（含书写时限）/三级签名/归档签署策略/修订留痕/病案修改审批/CDR 检索/打印（2026-10-31 两批已交付） | 电子病历分级 5 级要求项逐条对标 |
 | N5 | 医保域 | ✅ 目录/映射/参保/结算清单（含确认前复核、作废冲正、按就诊对账）+ 目录文件导入（CSV/XML，§1.24）；待接省局真实结算、DRG/DIP | 以省局接口规范为准；对账差异可追溯 |
-| N6 | 集成域 | ✅ 检验结果入站（HL7 v2 ORU，§1.27）；待做影像（DICOM/Worklist）、FHIR 视图 | 只读接入，不直连生产库 |
+| N6 | 集成域 | ✅ 检验结果入站（HL7 v2 ORU，§1.27）；✅ 影像 Worklist/登记/状态回传（§1.29）；待做 FHIR 视图 | 只读接入，不直连生产库 |
 | N7 | 报表/指标 | ✅ 运营报表第一批（人次/收费/实收/未结/药占比/分类/科室，§1.28）；待做 HQMS/单病种上报 | 指标可回溯到明细 |
 
 **不做的事情**：不 fork 开源 HIS 作为底座（评估结论见 `docs/OPEN-SOURCE-HIS-EVALUATION.md`）；
@@ -676,7 +704,7 @@ doctor01 确认 **403**、只读 200。
 | 无药品库存扣减 | 只能记账，不能控库存 | N2 |
 | 欠费预警目前是"查询时计算" | 无后台定时扫描与消息推送 | N7 与报表/消息中心一起做 |
 | 护理执行仅覆盖长嘱逐日 | 临时医嘱执行、输液巡回、生命体征未纳入 | N4 与护理文书一起做 |
-| 医技未接 LIS/PACS | 检验结果已可通过 HL7 v2 ORU 回写（§1.27）；影像（DICOM/Worklist）仍未接 | N6 第二批（DICOM C-STORE/Worklist 或 PACS 视图库） |
+| 医技未接 LIS/PACS | 检验结果已可通过 HL7 v2 ORU 回写（§1.27）；影像已具备 Worklist/登记/状态回传（§1.29），剩余 DICOM C-FIND/C-STORE 设备协议由集成引擎适配 | N6 后续：FHIR 视图 / 设备联调 |
 | 病历导出为打印视图 | 未内置 PDF 生成库（离线依赖受限），由浏览器打印为 PDF | 如需服务端 PDF，在构建机引入 OpenPDF 后补 `/print.pdf` |
 | 病案修改只到"审批通过即回到 SUBMITTED" | 未与病案首页/编目、扫描件归档联动 | 病案管理子系统（未来批次） |
 | 药房未与收费联动 | 发药金额未进收费单（clinical 侧按医嘱计价，两条链尚未打通） | N2 收尾（药品字典与收费项目映射） |

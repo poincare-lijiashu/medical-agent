@@ -5,8 +5,10 @@ import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.CriticalValue;
 import com.medassist.tech.domain.TechModel.ExamItem;
 import com.medassist.tech.domain.TechModel.LisInboundMessage;
+import com.medassist.tech.domain.TechModel.PacsStudy;
 import com.medassist.tech.domain.TechModel.Report;
 import com.medassist.tech.domain.TechModel.Specimen;
+import com.medassist.tech.domain.TechModel.WorklistItem;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -441,6 +443,132 @@ public class TechRepository {
                 .param("reportId", m.reportId()).param("status", m.status())
                 .param("error", m.errorMessage()).param("raw", m.rawMessage())
                 .param("hash", m.messageHash()).param("actor", m.actor()).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 影像（PACS）
+
+    private static final RowMapper<PacsStudy> PACS_MAPPER =
+            (rs, i) -> new PacsStudy(
+                    rs.getObject("id", UUID.class), rs.getObject("application_id", UUID.class),
+                    rs.getString("study_instance_uid"), rs.getString("accession_number"),
+                    rs.getString("modality"), rs.getString("body_part"), rs.getString("status"),
+                    rs.getInt("series_count"), rs.getInt("image_count"), rs.getString("viewer_url"),
+                    rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant(),
+                    rs.getTimestamp("completed_at") == null ? null : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<WorklistItem> WORKLIST_MAPPER =
+            (rs, i) -> new WorklistItem(
+                    rs.getObject("application_id", UUID.class), rs.getString("application_no"),
+                    rs.getString("patient_no"), rs.getString("item_code"), rs.getString("item_name"),
+                    rs.getString("body_part"), rs.getString("priority"),
+                    rs.getString("application_status"), rs.getTimestamp("created_at").toInstant(),
+                    rs.getString("modality"), rs.getObject("study_id", UUID.class),
+                    rs.getString("study_instance_uid"), rs.getString("study_status"),
+                    (Integer) rs.getObject("series_count"), (Integer) rs.getObject("image_count"),
+                    rs.getString("viewer_url"));
+
+    /** 医技项目对应的 DICOM Modality（未配置时 OT）。 */
+    public Optional<String> findItemModality(String itemCode) {
+        return jdbc.sql("""
+                        SELECT modality FROM tech_svc.md_exam_item WHERE item_code = ?
+                        """).param(itemCode).query(String.class).optional();
+    }
+
+    public void insertPacsStudy(PacsStudy s) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.pacs_study
+                            (id, application_id, study_instance_uid, accession_number, modality,
+                             body_part, status, series_count, image_count, viewer_url, version)
+                        VALUES (:id, :appId, :uid, :accession, :modality, CAST(:bodyPart AS text),
+                                :status, :series, :image, CAST(:viewer AS text), 0)
+                        """)
+                .param("id", s.id()).param("appId", s.applicationId()).param("uid", s.studyInstanceUid())
+                .param("accession", s.accessionNumber()).param("modality", s.modality())
+                .param("bodyPart", s.bodyPart()).param("status", s.status())
+                .param("series", s.seriesCount()).param("image", s.imageCount())
+                .param("viewer", s.viewerUrl()).update();
+    }
+
+    public Optional<PacsStudy> findPacsStudyByApplication(UUID applicationId) {
+        return jdbc.sql("""
+                        SELECT id, application_id, study_instance_uid, accession_number, modality,
+                               body_part, status, series_count, image_count, viewer_url,
+                               started_at, completed_at, version, created_at
+                          FROM tech_svc.pacs_study WHERE application_id = ?
+                        """).param(applicationId).query(PACS_MAPPER).optional();
+    }
+
+    public Optional<PacsStudy> findPacsStudyByUid(String studyInstanceUid) {
+        return jdbc.sql("""
+                        SELECT id, application_id, study_instance_uid, accession_number, modality,
+                               body_part, status, series_count, image_count, viewer_url,
+                               started_at, completed_at, version, created_at
+                          FROM tech_svc.pacs_study WHERE study_instance_uid = ?
+                        """).param(studyInstanceUid).query(PACS_MAPPER).optional();
+    }
+
+    /** 加行锁读取影像登记；必须在事务内调用。 */
+    public Optional<PacsStudy> lockPacsStudyByUid(String studyInstanceUid) {
+        return jdbc.sql("""
+                        SELECT id, application_id, study_instance_uid, accession_number, modality,
+                               body_part, status, series_count, image_count, viewer_url,
+                               started_at, completed_at, version, created_at
+                          FROM tech_svc.pacs_study WHERE study_instance_uid = ? FOR UPDATE
+                        """).param(studyInstanceUid).query(PACS_MAPPER).optional();
+    }
+
+    /** 影像状态迁移（CAS：期望状态 + 版本号）；数量为空表示保持不变。 */
+    public boolean updatePacsStudyStatus(String studyInstanceUid, String expected, String next,
+                                         Integer seriesCount, Integer imageCount, String viewerUrl,
+                                         long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.pacs_study
+                           SET status = :next,
+                               series_count = COALESCE(CAST(:series AS integer), series_count),
+                               image_count = COALESCE(CAST(:image AS integer), image_count),
+                               viewer_url = COALESCE(CAST(:viewer AS text), viewer_url),
+                               started_at = CASE WHEN :next = 'IN_PROGRESS' AND started_at IS NULL
+                                                 THEN now() ELSE started_at END,
+                               completed_at = CASE WHEN :next = 'COMPLETED' THEN now() ELSE completed_at END,
+                               version = version + 1,
+                               updated_at = now()
+                         WHERE study_instance_uid = :uid AND status = :expected AND version = :version
+                        """)
+                .param("next", next).param("series", seriesCount).param("image", imageCount)
+                .param("viewer", viewerUrl).param("uid", studyInstanceUid)
+                .param("expected", expected).param("version", expectedVersion).update() > 0;
+    }
+
+    /**
+     * 检查类 Worklist：未完成（APPLIED / IN_PROGRESS）的检查申请，按设备类型与开单日期过滤。
+     *
+     * @param timezone 业务时区（如 Asia/Shanghai），用于把 timestamptz 折算成自然日
+     */
+    public List<WorklistItem> listWorklist(
+            String modality, LocalDate date, String timezone, int limit) {
+        return jdbc.sql("""
+                        SELECT a.id AS application_id, a.application_no, a.patient_no,
+                               a.item_code, a.item_name, a.body_part, a.priority,
+                               a.status AS application_status, a.created_at,
+                               i.modality, s.id AS study_id, s.study_instance_uid,
+                               s.status AS study_status, s.series_count, s.image_count, s.viewer_url
+                          FROM tech_svc.exam_application a
+                          JOIN tech_svc.md_exam_item i ON i.item_code = a.item_code
+                          LEFT JOIN tech_svc.pacs_study s ON s.application_id = a.id
+                         WHERE a.category = 'EXAM'
+                           AND a.status IN ('APPLIED', 'IN_PROGRESS')
+                           AND (s.status IS NULL OR s.status IN ('SCHEDULED', 'ARRIVED', 'IN_PROGRESS'))
+                           AND (CAST(:modality AS text) IS NULL
+                                OR i.modality = CAST(:modality AS text))
+                           AND (a.created_at AT TIME ZONE CAST(:tz AS text))::date = CAST(:date AS date)
+                         ORDER BY CASE a.priority WHEN 'STAT' THEN 0 WHEN 'URGENT' THEN 1 ELSE 2 END,
+                                  a.created_at
+                         LIMIT :limit
+                        """)
+                .param("modality", modality).param("tz", timezone)
+                .param("date", date).param("limit", limit)
+                .query(WORKLIST_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

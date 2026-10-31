@@ -58,9 +58,11 @@ public enum ErrorCode {
     TECH_SPECIMEN_NOT_FOUND(46403, "未找到该标本"),
     TECH_REPORT_NOT_FOUND(46404, "未找到该报告"),
     TECH_CRITICAL_NOT_FOUND(46405, "未找到该危急值"),
+    TECH_PACS_STUDY_NOT_FOUND(46406, "未找到该影像检查登记"),
     TECH_APPLICATION_STATUS_INVALID(46410, "当前申请状态不允许该操作"),
     TECH_REPORT_STATUS_INVALID(46411, "当前报告状态不允许该操作"),
     TECH_CRITICAL_STATUS_INVALID(46412, "当前危急值状态不允许该操作"),
+    TECH_PACS_STATUS_INVALID(46413, "当前影像检查状态不允许该操作"),
 
     // ---- 病历（47xxx）----
     EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),

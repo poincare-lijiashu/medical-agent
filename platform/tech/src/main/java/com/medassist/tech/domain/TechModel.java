@@ -96,4 +96,40 @@ public final class TechModel {
         public static final String IGNORED = "IGNORED";
         public static final String FAILED = "FAILED";
     }
+
+    /**
+     * PACS 影像检查登记（与检查申请一对一）。
+     *
+     * <p>StudyInstanceUID 由 PACS 生成并回传，本服务只做唯一性约束与状态推进；
+     * AccessionNumber 直接复用申请号，保证 HIS 与 PACS 用同一把"业务钥匙"对账。
+     */
+    public record PacsStudy(UUID id, UUID applicationId, String studyInstanceUid,
+                            String accessionNumber, String modality, String bodyPart,
+                            String status, int seriesCount, int imageCount, String viewerUrl,
+                            Instant startedAt, Instant completedAt, long version,
+                            Instant createdAt) {
+
+        public static final String SCHEDULED = "SCHEDULED";
+        public static final String ARRIVED = "ARRIVED";
+        public static final String IN_PROGRESS = "IN_PROGRESS";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean finished() {
+            return COMPLETED.equals(status) || CANCELLED.equals(status);
+        }
+    }
+
+    /**
+     * 影像 Worklist 行（读模型，不落库）。
+     *
+     * <p>刻意不返回临床诊断与患者姓名：worklist 由设备高频轮询，只提供调度所需字段
+     * （申请号/患者号/项目/部位/优先级/设备类型），姓名与诊断留在按申请号查询的详情接口。
+     */
+    public record WorklistItem(UUID applicationId, String applicationNo, String patientNo,
+                               String itemCode, String itemName, String bodyPart, String priority,
+                               String applicationStatus, Instant scheduledAt, String modality,
+                               UUID studyId, String studyInstanceUid, String studyStatus,
+                               Integer seriesCount, Integer imageCount, String viewerUrl) {
+    }
 }

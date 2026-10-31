@@ -19,12 +19,13 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
         return switch (code) {
             case NOT_FOUND, PATIENT_NOT_FOUND, TECH_EXAM_ITEM_NOT_FOUND,
                  TECH_APPLICATION_NOT_FOUND, TECH_SPECIMEN_NOT_FOUND,
-                 TECH_REPORT_NOT_FOUND, TECH_CRITICAL_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 TECH_REPORT_NOT_FOUND, TECH_CRITICAL_NOT_FOUND,
+                 TECH_PACS_STUDY_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  TECH_APPLICATION_STATUS_INVALID, TECH_REPORT_STATUS_INVALID,
-                 TECH_CRITICAL_STATUS_INVALID,
+                 TECH_CRITICAL_STATUS_INVALID, TECH_PACS_STATUS_INVALID,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;

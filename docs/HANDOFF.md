@@ -580,6 +580,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 已知边界（阶段一）：nonce 去重为进程内实现（多副本 60s 窗口内可重放，阶段二换 Redis）；
      请求体摘要固定 `-`（体完整性依赖内网/TLS）；`/internal/**` 的调用方签名待 T5
 
+45. **N6 第二批（2026-11-01）：影像 Worklist 与 PACS 结果回传**
+   - 新增 `GET /tech/pacs/worklist?modality=&date=&limit=`（`tech:pacs:read`）：未完成检查申请 +
+     影像未完成/取消；按 STAT→URGENT→ROUTINE 排序；默认当天、上限 200；**不返回姓名与诊断**
+   - 新增 `POST /tech/pacs/studies`（`tech:pacs:write`）：AccessionNumber 复用申请号；
+     StudyInstanceUID 由 PACS 回传；同申请同 UID 幂等、不同 UID 409；`X-Actor` 必填
+   - 新增 `POST /tech/pacs/studies/{uid}/status`：`SCHEDULED→ARRIVED→IN_PROGRESS→COMPLETED`，
+     任意未完成态可 `CANCELLED`；全部 CAS + 版本号；完成时写 `completed_at`
+   - `tech V3`：`pacs_study`（application/UID/accession 三唯一）+ `md_exam_item.modality`（默认 OT）；
+     `auth V25`：`tech:pacs:read/write`
+   - 审计：`PACS_STUDY_REGISTER`（含 duplicate 标记）、`PACS_STUDY_STATUS`（from/to/数量）
+   - 验证：全量单测 **421 项全过**；`scripts/e2e/tech_pacs_smoke.ps1` **36 项断言全过**（经网关）
+   - 已知限制：DICOM C-FIND/C-STORE 协议未实现，由集成引擎做字段映射；FHIR 影像视图待后续
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -627,6 +640,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 - 网关签名过滤器不能用 `AuthGlobalFilter` 的 -100 顺序：`StripPrefix` 是路由过滤器（order≈声明顺序），
   比它早跑会按 `/api/v2/xxx` 签名而下游看到 `/xxx`，全量 403。
   放在 `LOWEST_PRECEDENCE - 100` 才能覆盖"下游视角"且早于 NettyRoutingFilter
+- 带格式约束的 DTO 字段（如 DICOM StudyInstanceUID 只允许数字与点）会**先于业务校验**返回 422：
+  E2E 想验证"同申请不同 UID → 409"时，第二个 UID 必须同样合法（不能夹字母），
+  否则测到的是 Bean Validation 而不是业务冲突
+- Worklist 这类"设备轮询"接口要把已经 `COMPLETED/CANCELLED` 的影像剔除：
+  只看申请状态（IN_PROGRESS）会导致检查做完仍一直出现在设备列表里
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致
   "无法连接到远程服务器"；本机联调用 `curl.exe --noproxy "*"`，或临时清空系统代理
 - 用 `Start-Process` 起的 java 子进程会随命令会话结束被回收；常驻服务要用后台命令（run_in_background）
