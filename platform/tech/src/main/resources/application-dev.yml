@@ -1,0 +1,9 @@
+# 本地开发专用覆盖（严禁用于 staging/prod）
+tech:
+  empi:
+    # 与 EMPI application-dev.yml 的 empi.internal-token 保持一致
+    internal-token: medassist-dev-internal-token
+
+logging:
+  level:
+    com.medassist: DEBUG

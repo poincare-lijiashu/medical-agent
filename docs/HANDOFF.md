@@ -196,6 +196,21 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - **踩坑**：JdbcClient 传 null 参数时 PostgreSQL 无法推断类型（`$n IS NULL` 报 500），
      所有可空参数必须 `CAST(:p AS text/boolean/uuid/integer)`
    - 下一批 N2 收尾：处方与临床收费联动、前置审方规则、抗菌药物分级授权、医保目录批量导入
+14. **N3 医技域第一批（2026-10-31）：`platform/tech`（8085）已交付并端到端实测**
+   - 申请（LAB 必须带标本类型）→ 标本采集（唯一条码）→ 接收/拒收（拒收作废申请）→
+     开始执行 → 报告（DRAFT）→ 重写草稿 → 审核签发（FINAL + 申请 REPORTED）→
+     修订（追加版本 revision+1，旧版本 is_current=false）→ 申请关闭
+   - **危急值闭环**：报告写入时创建 PENDING；必须"确认 → 关闭"两段式；
+     申请关闭前要求无未闭环危急值；超过 30 分钟未确认标记 overdue
+   - 权限（auth V12，新增 TECHNICIAN 角色）：医师开单/审核/确认；护士采集/确认；
+     技师接收/执行/写报告/关闭；报告书写与审核分离
+   - 网关 `/api/v2/tech/**`（StripPrefix=2）+ 150 QPS；Helm Deployment/HPA/PDB/Service/NP/
+     迁移 Job；ServiceMonitor 与告警补 tech；离网镜像清单补 platform-tech
+   - 实测（经网关 55 项断言全过）：含危急值阻断关闭、未确认不可关闭、拒收作废、修订版本；
+     库内 3 申请/2 标本/3 报告版本/1 危急值/审计 13 类
+   - 单测：tech 20 项（申请 10 / 报告与危急值 10）；平台全量 **152 项** 通过
+   - 下一批 N3 收尾：与 clinical 医嘱联动、LIS/PACS（HL7 v2 ORM/ORU、DICOM）、
+     结构化报告模板、危急值推送
 
 ### 本机踩坑备忘（下次别再踩）
 

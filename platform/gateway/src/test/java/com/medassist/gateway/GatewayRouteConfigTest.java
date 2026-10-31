@@ -64,6 +64,16 @@ class GatewayRouteConfigTest {
     }
 
     @Test
+    @DisplayName("tech 路由只剥 /api/v2（控制器自带 /tech 前缀）")
+    void techRouteStripsTwoSegments() {
+        Map<String, Object> route = route(loadConfig(), "platform-tech-v2");
+
+        assertThat((List<String>) route.get("predicates"))
+                .containsExactly("Path=/api/v2/tech/**");
+        assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
+    }
+
+    @Test
     @DisplayName("empi / auth / audit 路由仍剥 3 段（控制器无服务前缀）")
     void otherRoutesStripThreeSegments() {
         Map<String, Object> config = loadConfig();

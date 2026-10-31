@@ -60,6 +60,13 @@ spring:
                 - Path=/api/v2/pharmacy/**
               filters:
                 - StripPrefix=2
+            # 医技（检查/检验申请、标本、报告、危急值）
+            - id: platform-tech-v2
+              uri: ${PLATFORM_TECH_URI:http://127.0.0.1:8085}
+              predicates:
+                - Path=/api/v2/tech/**
+              filters:
+                - StripPrefix=2
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -138,6 +145,8 @@ medassist:
           qps: ${SENTINEL_QPS_CLINICAL:200}
         - path: /api/v2/pharmacy
           qps: ${SENTINEL_QPS_PHARMACY:150}
+        - path: /api/v2/tech
+          qps: ${SENTINEL_QPS_TECH:150}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
 

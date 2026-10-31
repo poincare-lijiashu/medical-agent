@@ -205,6 +205,41 @@ clinical 业务指标（随 N2 一起打点）；`clinical_change_log` 分区归
 
 ---
 
+## 1.8 已完成（2026-10-31，增量 8：N3 医技域第一批）
+
+新服务 `platform/tech`（8085，schema `tech_svc`），网关 `/api/v2/tech/**`（StripPrefix=2）。
+
+| 能力 | 接口 | 关键保证 |
+|---|---|---|
+| 申请 | `POST /tech/applications` | 项目字典校验；检验项目必须配置标本类型；优先级 ROUTINE/URGENT/STAT；患者经 EMPI 校验 |
+| 标本采集 | `POST /tech/applications/{id}/specimen` | 唯一条码；一张申请只能一个标本（数据库唯一键）；检查类无标本直接 422 |
+| 标本接收/拒收 | `POST /tech/applications/{id}/specimen/receive` | 拒收必须写原因，标本置 REJECTED 且**申请作废**（需重新开单），避免坏标本继续出报告 |
+| 开始执行 | `POST /tech/applications/{id}/start` | 检查类 APPLIED→IN_PROGRESS；检验类必须 RECEIVED 后才能开始 |
+| 报告书写 | `POST /tech/applications/{id}/reports` | 必须 IN_PROGRESS；DRAFT；带危急值时自动创建 PENDING 危急值 |
+| 报告重写 | `POST /tech/reports/{id}/rewrite` | 仅 DRAFT；不产生新版本（改错别字不该留版本） |
+| 报告审核 | `POST /tech/reports/{id}/review` | 通过 → FINAL + 申请 REPORTED；驳回 → 保持草稿并落审计（不销毁技师工作） |
+| 报告修订 | `POST /tech/reports/{id}/amend` | **追加版本** revision+1，旧版本 `is_current=false` 保留历史；新版本 AMENDED |
+| 危急值 | `GET /tech/criticals`、`POST .../acknowledge`、`POST .../close` | 必须"确认 → 关闭"两段式；超过 30 分钟未确认标记 `overdue` |
+| 申请关闭 | `POST /tech/applications/{id}/close` | 必须已出报告，且**无未闭环危急值**——危急值闭环是申请闭环的前置条件 |
+
+**权限（auth V12，新增 TECHNICIAN 角色）**：医师开单/取消/审核报告/确认危急值；
+护士采集标本/确认危急值；技师接收标本、执行、书写与修订报告、关闭危急值与申请。
+报告审核与书写分开授权，避免"自己写自己审"。
+
+**实测（经网关 55 项断言全过）**：开检验申请 → 采集（重复 409）→ 接收 → 开始 →
+写报告（含危急值）→ 重复写 409 → 重写草稿 → 驳回（保持草稿）→ 签发（FINAL/REPORTED）→
+**有未闭环危急值时关闭申请 409** → 未确认直接关闭危急值 409 → 确认 → 关闭 →
+申请关闭 → 修订（revision 2 / AMENDED / 历史 2 条）→ 检查类全流程（无标本、直接执行）→
+拒收标本（申请 CANCELLED）。
+库内核对：3 个申请（2 CLOSED + 1 CANCELLED）、标本 RECEIVED/REJECTED、
+报告 `revision 1 非当前 FINAL + revision 2 当前 AMENDED`、危急值 CLOSED、审计 13 类动作。
+
+**本轮未做（下一批）**：与 clinical 医嘱联动（DRUG/EXAM 医嘱自动生成申请）、
+LIS/PACS 接口适配（HL7 v2 ORM/ORU、DICOM）、报告结构化模板与图文报告、
+危急值短信/钉钉推送。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
@@ -214,7 +249,7 @@ clinical 业务指标（随 N2 一起打点）；`clinical_change_log` 分区归
 | N1.2 | 预交金结算抵扣 | ✅ `paymentMethod=DEPOSIT` + 余额不足拦截（2026-10-31 已交付） | 只能住院用；余额不足 409；抵扣落 SETTLE 流水 |
 | N1.3 | 费用看板与护理执行 | ✅ 看板/欠费预警/护理执行/中途结算续开（2026-10-31 已交付） | 缺口口径一致；未执行不计费；结算后自动续开新单 |
 | N2 | 药房域 | ✅ 药品字典（含医保编码）、库存批次效期、处方审核、发药/退药（2026-10-31 第一批已交付） | 批次效期拦截；发药与收费联动；库存不为负 |
-| N3 | 医技域 | 检查/检验申请、标本流转、报告回写、危急值 | 申请-执行-报告闭环；危急值强制确认 |
+| N3 | 医技域 | ✅ 检查/检验申请、标本流转、报告回写与修订、危急值闭环（2026-10-31 第一批已交付） | 申请-执行-报告闭环；危急值强制确认 |
 | N4 | 病历域 | 结构化病历模板、病程记录、签名与归档、质控规则 | 电子病历分级 5 级要求项逐条对标 |
 | N5 | 医保域 | 目录下载/映射、参保查询、结算清单、DRG/DIP 提示 | 以省局接口规范为准；对账差异可追溯 |
 | N6 | 集成域 | 集成平台适配器（HL7 v2/FHIR/视图库）、CDR | 只读接入，不直连生产库 |
@@ -258,5 +293,7 @@ clinical 业务指标（随 N2 一起打点）；`clinical_change_log` 分区归
 | 欠费预警目前是"查询时计算" | 无后台定时扫描与消息推送 | N7 与报表/消息中心一起做 |
 | 护理执行仅覆盖长嘱逐日 | 临时医嘱执行、输液巡回、生命体征未纳入 | N4 与护理文书一起做 |
 | 无病历/医技 | 三甲核心尚未闭环 | N3–N4 |
+| 医技未接 LIS/PACS | 报告需人工录入；无仪器数据与影像 | N3 收尾（HL7 v2 ORM/ORU、DICOM） |
+| 药房未与收费联动 | 发药金额未进收费单（clinical 侧按医嘱计价，两条链尚未打通） | N2 收尾（药品字典与收费项目映射） |
 | 门诊收费未接支付渠道 | 仅记账 | N5 与医保/支付一起 |
 | 无报表与指标 | 无法支撑评审 | N7 |

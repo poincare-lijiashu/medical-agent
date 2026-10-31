@@ -32,6 +32,8 @@ spec:
           value: "1.0.0"
         - name: pharmacy.image.tag
           value: "1.0.0"
+        - name: tech.image.tag
+          value: "1.0.0"
         - name: aiCore.image.tag
           value: "1.0.0"
   destination:

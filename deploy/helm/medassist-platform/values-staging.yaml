@@ -91,6 +91,12 @@ pharmacy:
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
+tech:
+  replicaCount: 2
+  image: {repository: platform-tech, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
 aiCore:
   enabled: true
   replicaCount: 1

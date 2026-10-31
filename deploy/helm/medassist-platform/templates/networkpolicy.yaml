@@ -35,7 +35,7 @@ spec:
           port: {{ .Values.gateway.service.port }}
 ---
 {{- end }}
-{{- range $component := list "auth" "empi" "clinical" "pharmacy" }}
+{{- range $component := list "auth" "empi" "clinical" "pharmacy" "tech" }}
 {{- $svc := index $.Values $component }}
 {{- if $svc.enabled }}
 apiVersion: networking.k8s.io/v1
@@ -73,6 +73,12 @@ spec:
           podSelector:
             matchLabels:
               {{- include "medassist.selectorLabels" (dict "root" $ "component" "pharmacy") | nindent 14 }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "tech") | nindent 14 }}
         {{- end }}
         - namespaceSelector:
             {{- toYaml $.Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}

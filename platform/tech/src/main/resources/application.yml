@@ -1,0 +1,64 @@
+server:
+  port: 8085
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-tech
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: tech-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: tech_svc
+    default-schema: tech_svc
+    locations: classpath:db/migration/tech
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 服务间调用：tech → empi（内网直连，不经网关）----
+tech:
+  empi:
+    base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
+    internal-token: ${TECH_INTERNAL_TOKEN:}
+    timeout: ${EMPI_TIMEOUT:PT2S}
+  # 危急值超时提醒阈值（分钟）：超过该时长仍未确认，查询接口会标记 overdue
+  critical-timeout-minutes: ${TECH_CRITICAL_TIMEOUT_MINUTES:30}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: DEBUG

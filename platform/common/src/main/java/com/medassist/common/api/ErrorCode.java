@@ -50,7 +50,17 @@ public enum ErrorCode {
     PRESCRIPTION_NOT_FOUND(43404, "未找到该处方"),
     DISPENSE_NOT_FOUND(43405, "未找到该发药单"),
     PRESCRIPTION_STATUS_INVALID(43410, "当前处方状态不允许该操作"),
-    DRUG_RETURN_EXCEEDS(43411, "退药数量超过已发数量");
+    DRUG_RETURN_EXCEEDS(43411, "退药数量超过已发数量"),
+
+    // ---- 医技（46xxx）----
+    TECH_EXAM_ITEM_NOT_FOUND(46401, "未找到该医技项目，或该项目已停用"),
+    TECH_APPLICATION_NOT_FOUND(46402, "未找到该检查/检验申请"),
+    TECH_SPECIMEN_NOT_FOUND(46403, "未找到该标本"),
+    TECH_REPORT_NOT_FOUND(46404, "未找到该报告"),
+    TECH_CRITICAL_NOT_FOUND(46405, "未找到该危急值"),
+    TECH_APPLICATION_STATUS_INVALID(46410, "当前申请状态不允许该操作"),
+    TECH_REPORT_STATUS_INVALID(46411, "当前报告状态不允许该操作"),
+    TECH_CRITICAL_STATUS_INVALID(46412, "当前危急值状态不允许该操作");
 
     private final int code;
     private final String defaultMessage;

@@ -322,6 +322,39 @@ pharmacy:
   tolerations: []
   affinity: {}
 
+# ---- 医技域（检查/检验申请、标本、报告、危急值）----
+tech:
+  enabled: true
+  image:
+    repository: platform-tech
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8085
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- Python AI 中台 ----
 aiCore:
   enabled: true

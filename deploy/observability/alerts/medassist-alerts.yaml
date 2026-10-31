@@ -38,7 +38,7 @@ spec:
     - name: medassist.availability
       rules:
         - alert: MedassistTargetDown
-          expr: up{component=~"gateway|auth|empi|clinical|pharmacy"} == 0
+          expr: up{component=~"gateway|auth|empi|clinical|pharmacy|tech"} == 0
           for: 3m
           labels:
             severity: critical
@@ -101,7 +101,7 @@ spec:
             description: "按 resource 标签定位被削峰的接口族；结合登录失败指标判断是否为暴力破解。"
 
         - alert: MedassistDbPoolPending
-          expr: max(hikaricp_connections_pending{component=~"gateway|auth|empi|clinical|pharmacy"}) > 0
+          expr: max(hikaricp_connections_pending{component=~"gateway|auth|empi|clinical|pharmacy|tech"}) > 0
           for: 5m
           labels:
             severity: warning
@@ -158,9 +158,9 @@ spec:
       rules:
         - alert: MedassistJvmHeapHigh
           expr: |
-            sum(jvm_memory_used_bytes{component=~"gateway|auth|empi|clinical|pharmacy", area="heap"}) by (instance)
+            sum(jvm_memory_used_bytes{component=~"gateway|auth|empi|clinical|pharmacy|tech", area="heap"}) by (instance)
             /
-            clamp_min(sum(jvm_memory_max_bytes{component=~"gateway|auth|empi|clinical|pharmacy", area="heap"}) by (instance), 1)
+            clamp_min(sum(jvm_memory_max_bytes{component=~"gateway|auth|empi|clinical|pharmacy|tech", area="heap"}) by (instance), 1)
             > 0.9
           for: 10m
           labels:
