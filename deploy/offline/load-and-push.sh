@@ -46,6 +46,7 @@ CHART_IMAGES=(
   "platform-clinical:1.0.0"
   "platform-pharmacy:1.0.0"
   "platform-tech:1.0.0"
+  "platform-emr:1.0.0"
   "ai-core:1.0.0"
 )
 

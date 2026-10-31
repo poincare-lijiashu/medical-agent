@@ -67,6 +67,13 @@ spring:
                 - Path=/api/v2/tech/**
               filters:
                 - StripPrefix=2
+            # 病历（模板/书写/签名/归档/质控）
+            - id: platform-emr-v2
+              uri: ${PLATFORM_EMR_URI:http://127.0.0.1:8086}
+              predicates:
+                - Path=/api/v2/emr/**
+              filters:
+                - StripPrefix=2
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -147,6 +154,8 @@ medassist:
           qps: ${SENTINEL_QPS_PHARMACY:150}
         - path: /api/v2/tech
           qps: ${SENTINEL_QPS_TECH:150}
+        - path: /api/v2/emr
+          qps: ${SENTINEL_QPS_EMR:150}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
 

@@ -97,6 +97,12 @@ tech:
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
+emr:
+  replicaCount: 2
+  image: {repository: platform-emr, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
 aiCore:
   enabled: true
   replicaCount: 1

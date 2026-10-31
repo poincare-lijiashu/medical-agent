@@ -85,6 +85,10 @@ spec:
             - name: PLATFORM_TECH_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "tech")) .Values.tech.service.port | quote }}
             {{- end }}
+            {{- if .Values.emr.enabled }}
+            - name: PLATFORM_EMR_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "emr")) .Values.emr.service.port | quote }}
+            {{- end }}
             {{- with .Values.gateway.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

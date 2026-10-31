@@ -60,7 +60,13 @@ public enum ErrorCode {
     TECH_CRITICAL_NOT_FOUND(46405, "未找到该危急值"),
     TECH_APPLICATION_STATUS_INVALID(46410, "当前申请状态不允许该操作"),
     TECH_REPORT_STATUS_INVALID(46411, "当前报告状态不允许该操作"),
-    TECH_CRITICAL_STATUS_INVALID(46412, "当前危急值状态不允许该操作");
+    TECH_CRITICAL_STATUS_INVALID(46412, "当前危急值状态不允许该操作"),
+
+    // ---- 病历（47xxx）----
+    EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),
+    EMR_RECORD_NOT_FOUND(47402, "未找到该病历文书"),
+    EMR_RECORD_STATUS_INVALID(47410, "当前病历状态不允许该操作"),
+    EMR_QC_BLOCKED(47411, "病历质控未通过，存在必须整改的项目");
 
     private final int code;
     private final String defaultMessage;

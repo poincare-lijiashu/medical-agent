@@ -74,6 +74,16 @@ class GatewayRouteConfigTest {
     }
 
     @Test
+    @DisplayName("emr 路由只剥 /api/v2（控制器自带 /emr 前缀）")
+    void emrRouteStripsTwoSegments() {
+        Map<String, Object> route = route(loadConfig(), "platform-emr-v2");
+
+        assertThat((List<String>) route.get("predicates"))
+                .containsExactly("Path=/api/v2/emr/**");
+        assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
+    }
+
+    @Test
     @DisplayName("empi / auth / audit 路由仍剥 3 段（控制器无服务前缀）")
     void otherRoutesStripThreeSegments() {
         Map<String, Object> config = loadConfig();

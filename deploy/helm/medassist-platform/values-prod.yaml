@@ -114,6 +114,16 @@ tech:
   autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 65}
   podDisruptionBudget: {enabled: true, minAvailable: 1}
 
+emr:
+  replicaCount: 2
+  env:
+    - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
+  resources:
+    requests: {cpu: 500m, memory: 768Mi}
+    limits: {cpu: "2", memory: 1536Mi}
+  autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 65}
+  podDisruptionBudget: {enabled: true, minAvailable: 1}
+
 aiCore:
   enabled: true
   # 单副本：AI 中台的审计/复核队列/知识库任务仍落 /app/data 下的 JSON 文件
