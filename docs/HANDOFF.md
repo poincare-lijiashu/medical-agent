@@ -256,6 +256,24 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      E2E 断言暴露后改为 409）；`mvn -Dtest=A,B` 在 PowerShell 里要整体加引号
    - 下一批：N5 医保域（目录映射/参保查询/结算清单/DRG 提示），或 N3 收尾（LIS/PACS）
 
+17. **N5 医保域第一批（2026-10-31）：目录/映射/参保/结算清单**
+   - 新服务 `platform/insurance`（8087，schema `insurance_svc`），网关
+     `/api/v2/insurance/**`（StripPrefix=2）+ 100 QPS
+   - 表：`md_insurance_item`（A/B/C 支付类别、乙类自付比例、限价）、`charge_item_mapping`
+     （收费项目唯一映射）、`insurance_member`（按 patientId UPSERT、有效期/起付线/比例/封顶线）、
+     `settlement_bill`（visit_id 唯一、detail jsonb 明细快照、CONFIRMED 终态）、审计表
+   - 结算：经 clinical 内部接口 `GET /internal/visits/{visitId}/charges` 拉收费明细（唯一真源），
+     服务端计算甲/乙/丙类、起付线、报销比例、封顶线；未映射按丙类并标记 `unmapped`
+   - clinical 新增 `InternalChargeController`（共享令牌、fail-closed）；Helm 增加 insurance
+     全套（Deployment/HPA/PDB/Service/NP/迁移 Job/ServiceMonitor），NP 放行 insurance→empi/clinical
+   - 权限（auth V15）：目录/参保/结算读/结算写四项；REGISTRAR 全给，DOCTOR/QC 只读
+   - 实测（经网关 **32 项断言全过**）：挂号→收费→目录→映射→参保→生成（10.00/10.00/10.00/0.00）
+     →确认→重算 409→批量导入→未参保 409→doctor 确认 403、只读 200；
+     单测 **12 项**；平台全量 **195 项**
+   - **踩坑**：PowerShell 5.1 的 `ConvertFrom-Json` 把 `10.00` 解析成数值 10，
+     断言金额必须用 `[decimal]` 比较（新增 `CheckNum`），不能按字符串比对
+   - 下一批：N5 第二批（省局真实结算/DRG-DIP/目录文件解析），或 N3 收尾（LIS/PACS）
+
 ### 本机踩坑备忘（下次别再踩）
 
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK

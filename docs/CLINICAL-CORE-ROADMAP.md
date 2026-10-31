@@ -297,6 +297,40 @@ QC 审批通过（revision 2 / SUBMITTED / 哈希清空 / 修订历史 1 条）�
 
 ---
 
+## 1.11 已完成（2026-10-31，增量 11：N5 医保域第一批）
+
+新服务 `platform/insurance`（8087，schema `insurance_svc`），网关 `/api/v2/insurance/**`（StripPrefix=2，100 QPS）。
+
+| 能力 | 接口 | 关键保证 |
+|---|---|---|
+| 医保目录 | `GET/POST /insurance/items`、`POST /insurance/items/import`、`PUT /insurance/items/{id}/enabled` | 支付类别 A/B/C、乙类自付比例、限价；按医保编码 UPSERT（重复导入不产生重复行，version+1）；停用后不得再被映射 |
+| 院内映射 | `GET /insurance/mappings`、`PUT /insurance/mappings/{chargeItemCode}` | 一个收费项目只允许一条映射（唯一索引）；映射到已停用目录项直接 404 |
+| 参保登记 | `POST/GET /insurance/members[/{patientId}]` | 按 patientId UPSERT；参保类型/报销比例/起付线/封顶线/有效期；登记前经 EMPI 校验患者为 ACTIVE |
+| 结算清单 | `POST /insurance/settlements`、`GET /insurance/settlements/{id}`、`GET /insurance/settlements/by-visit/{visitId}`、`POST /{id}/confirm` | 收费明细经 clinical 内部接口拉取（唯一真源）；金额全部服务端计算；一张就诊单一张清单；DRAFT 可重算、CONFIRMED 终态 |
+
+**测算口径（本地模型）**：甲类全额纳入；乙类先自付 `selfPayRatio`；丙类/未映射全额自费（明细标记 `unmapped`）；
+纳入金额扣起付线后按报销比例计算统筹支付，封顶线截断；个人自付 = 总费用 − 统筹支付（全部 2 位小数 HALF_UP）。
+
+**安全边界**：`/api/v2/*/internal/**` 网关 404；clinical 内部接口要求共享令牌（fail-closed，恒定时间比较）；
+医保失败不降级——拿不到收费明细返回 503，绝不凭客户端传参编造金额。
+
+**权限（auth V15）**：新增 `insurance:catalog:manage`、`insurance:member:manage`、
+`insurance:settlement:read`、`insurance:settlement:write`；REGISTRAR（收费/医保窗口）四项全给，
+医师/质控只读，ADMIN 全部。
+
+**实测（经网关 32 项断言全过）**：挂号产生收费 → 建目录项（甲类）→ 映射 REG-GENERAL →
+参保登记 → 生成清单（总额 10.00 / 纳入 10.00 / 统筹 10.00 / 自付 0.00）→ 按 visitId 查询 →
+确认（confirmed_by=admin01）→ **重算 409** → 批量导入 2 条 → 未参保患者生成 **409** →
+doctor01 确认 **403**、只读 200。
+库内核对：2 张 CONFIRMED 清单金额与明细一致；目录 3 条（A/B/C 各一）；映射 1 条；
+审计 6 类动作（ITEM_UPSERT / ITEM_IMPORT / MAPPING_UPSERT / MEMBER_UPSERT / BILL_GENERATE / BILL_CONFIRM）。
+单测 12 项（甲/乙/丙类、未映射、封顶线、多行分位、无收费、未参保、重算拒绝、确认状态机）。
+
+**本轮未做（下一批）**：省级医保平台真实结算（需专网/前置机/数字证书）、目录下载文件解析
+（现为 API 批量导入）、DRG/DIP 分组与权重、医保对账。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
@@ -308,7 +342,7 @@ QC 审批通过（revision 2 / SUBMITTED / 哈希清空 / 修订历史 1 条）�
 | N2 | 药房域 | ✅ 药品字典（含医保编码）、库存批次效期、处方审核、发药/退药（2026-10-31 第一批已交付） | 批次效期拦截；发药与收费联动；库存不为负 |
 | N3 | 医技域 | ✅ 检查/检验申请、标本流转、报告回写与修订、危急值闭环（2026-10-31 第一批已交付） | 申请-执行-报告闭环；危急值强制确认 |
 | N4 | 病历域 | ✅ 模板/质控（含书写时限）/三级签名/归档签署策略/修订留痕/病案修改审批/CDR 检索/打印（2026-10-31 两批已交付） | 电子病历分级 5 级要求项逐条对标 |
-| N5 | 医保域 | 目录下载/映射、参保查询、结算清单、DRG/DIP 提示 | 以省局接口规范为准；对账差异可追溯 |
+| N5 | 医保域 | ✅ 医保目录/院内映射/参保登记/结算清单测算与确认（2026-10-31 第一批已交付）；待接省局真实结算、DRG/DIP | 以省局接口规范为准；对账差异可追溯 |
 | N6 | 集成域 | 集成平台适配器（HL7 v2/FHIR/视图库）、CDR | 只读接入，不直连生产库 |
 | N7 | 报表/指标 | 门急诊量、收入、药占比、HQMS/单病种上报 | 指标可回溯到明细 |
 
@@ -355,3 +389,6 @@ QC 审批通过（revision 2 / SUBMITTED / 哈希清空 / 修订历史 1 条）�
 | 药房未与收费联动 | 发药金额未进收费单（clinical 侧按医嘱计价，两条链尚未打通） | N2 收尾（药品字典与收费项目映射） |
 | 门诊收费未接支付渠道 | 仅记账 | N5 与医保/支付一起 |
 | 无报表与指标 | 无法支撑评审 | N7 |
+| 医保未接省局真实结算 | 需专网/前置机/数字证书；当前为本地测算模型与清单留档 | N5 第二批（按省局规范） |
+| 无 DRG/DIP 分组 | 未内置分组器与权重表 | N5 第二批 |
+| 医保目录下载未解析 | 省局目录文件（XML/Excel）尚未解析，现为 API 批量导入 | N5 第二批 |

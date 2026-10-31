@@ -42,6 +42,7 @@
     <module>pharmacy</module>
     <module>tech</module>
     <module>emr</module>
+    <module>insurance</module>
   </modules>
 
   <dependencyManagement>

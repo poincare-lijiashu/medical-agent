@@ -151,4 +151,14 @@ public final class ClinicalModel {
             return EXECUTED.equals(status);
         }
     }
+
+    /**
+     * 费用明细行（只读投影）。
+     *
+     * <p>供医保域生成结算清单时读取；不在此做任何金额计算，避免两份计费口径。
+     */
+    public record ChargeLine(String chargeNo, String itemCode, String itemName,
+                             String category, BigDecimal amount, String chargeStatus) {
+        public static final String UNPAID = "UNPAID";
+    }
 }

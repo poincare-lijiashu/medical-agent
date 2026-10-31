@@ -69,7 +69,15 @@ public enum ErrorCode {
     EMR_RECORD_STATUS_INVALID(47410, "当前病历状态不允许该操作"),
     EMR_QC_BLOCKED(47411, "病历质控未通过，存在必须整改的项目"),
     EMR_CHANGE_REQUEST_INVALID(47412, "病案修改申请状态不允许该操作"),
-    EMR_SIGN_LEVEL_INVALID(47413, "签名级别不正确：必须按 书写医师→主治→主任 顺序签署");
+    EMR_SIGN_LEVEL_INVALID(47413, "签名级别不正确：必须按 书写医师→主治→主任 顺序签署"),
+
+    // ---- 医保（48xxx）----
+    INSURANCE_ITEM_NOT_FOUND(48401, "未找到该医保目录项目"),
+    INSURANCE_MEMBER_NOT_FOUND(48402, "未找到该患者的参保登记"),
+    INSURANCE_BILL_NOT_FOUND(48403, "未找到该医保结算清单"),
+    INSURANCE_NOT_ENROLLED(48410, "该患者无有效参保信息，无法生成医保结算清单"),
+    INSURANCE_BILL_STATUS_INVALID(48411, "当前结算清单状态不允许该操作"),
+    INSURANCE_NO_CHARGE(48412, "该就诊单暂无收费明细，无法生成结算清单");
 
     private final int code;
     private final String defaultMessage;

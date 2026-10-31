@@ -84,6 +84,16 @@ class GatewayRouteConfigTest {
     }
 
     @Test
+    @DisplayName("insurance 路由只剥 /api/v2（控制器自带 /insurance 前缀）")
+    void insuranceRouteStripsTwoSegments() {
+        Map<String, Object> route = route(loadConfig(), "platform-insurance-v2");
+
+        assertThat((List<String>) route.get("predicates"))
+                .containsExactly("Path=/api/v2/insurance/**");
+        assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
+    }
+
+    @Test
     @DisplayName("empi / auth / audit 路由仍剥 3 段（控制器无服务前缀）")
     void otherRoutesStripThreeSegments() {
         Map<String, Object> config = loadConfig();

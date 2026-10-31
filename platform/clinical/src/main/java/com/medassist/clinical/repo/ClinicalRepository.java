@@ -4,6 +4,7 @@ import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
+import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
@@ -434,6 +435,28 @@ public class ClinicalRepository {
                         SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
                           FROM clinical_svc.charge WHERE id = ?
                         """).param(id).query(CHARGE_MAPPER).optional();
+    }
+
+    /**
+     * 就诊单的费用明细行（只读投影，供医保域出结算清单）。
+     *
+     * <p>跨域不直查数据库，调用方必须走内网内部接口。
+     */
+    public List<ChargeLine> listChargeLines(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT c.charge_no, ci.item_code, ci.item_name, ci.category,
+                               ci.amount, c.status AS charge_status
+                          FROM clinical_svc.charge c
+                          JOIN clinical_svc.charge_item ci ON ci.charge_id = c.id
+                         WHERE c.visit_id = ?
+                         ORDER BY ci.created_at
+                        """)
+                .param(visitId)
+                .query((rs, i) -> new ChargeLine(
+                        rs.getString("charge_no"), rs.getString("item_code"),
+                        rs.getString("item_name"), rs.getString("category"),
+                        rs.getBigDecimal("amount"), rs.getString("charge_status")))
+                .list();
     }
 
     public List<Charge> listCharges(UUID visitId) {

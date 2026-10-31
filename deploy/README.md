@@ -82,7 +82,7 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 ### 4.1 构建镜像
 
 ```powershell
-# Java 服务（gateway / auth / empi / clinical / pharmacy / tech / emr 共用一份 Dockerfile）
+# Java 服务（gateway / auth / empi / clinical / pharmacy / tech / emr / insurance 共用一份 Dockerfile）
 docker build --build-arg SERVICE=gateway  -t harbor.hospital.local/medassist/platform-gateway:1.0.0  -f platform/Dockerfile platform
 docker build --build-arg SERVICE=auth     -t harbor.hospital.local/medassist/platform-auth:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=empi     -t harbor.hospital.local/medassist/platform-empi:1.0.0     -f platform/Dockerfile platform
@@ -90,6 +90,7 @@ docker build --build-arg SERVICE=clinical -t harbor.hospital.local/medassist/pla
 docker build --build-arg SERVICE=pharmacy -t harbor.hospital.local/medassist/platform-pharmacy:1.0.0 -f platform/Dockerfile platform
 docker build --build-arg SERVICE=tech     -t harbor.hospital.local/medassist/platform-tech:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=emr      -t harbor.hospital.local/medassist/platform-emr:1.0.0      -f platform/Dockerfile platform
+docker build --build-arg SERVICE=insurance -t harbor.hospital.local/medassist/platform-insurance:1.0.0 -f platform/Dockerfile platform
 
 # AI 中台（根 Dockerfile，含 SkyWalking entrypoint）
 docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .

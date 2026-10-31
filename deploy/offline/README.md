@@ -30,6 +30,7 @@ docker build --build-arg SERVICE=clinical  -t medassist/platform-clinical:1.0.0 
 docker build --build-arg SERVICE=pharmacy  -t medassist/platform-pharmacy:1.0.0 -f platform/Dockerfile platform
 docker build --build-arg SERVICE=tech      -t medassist/platform-tech:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=emr       -t medassist/platform-emr:1.0.0      -f platform/Dockerfile platform
+docker build --build-arg SERVICE=insurance -t medassist/platform-insurance:1.0.0 -f platform/Dockerfile platform
 docker build -t medassist/ai-core:1.0.0 .
 ```
 

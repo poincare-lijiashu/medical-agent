@@ -36,6 +36,8 @@ spec:
           value: "1.0.0"
         - name: emr.image.tag
           value: "1.0.0"
+        - name: insurance.image.tag
+          value: "1.0.0"
         - name: aiCore.image.tag
           value: "1.0.0"
   destination:

@@ -30,6 +30,7 @@
 | `platform-pharmacy` | 8084 | 药房域：药品字典（含医保编码）、库存批次效期、处方审核、发药/退药 | 已交付（N2 第一批） |
 | `platform-tech` | 8085 | 医技域：检查/检验申请、标本流转、报告与修订、危急值闭环 | 已交付（N3 第一批） |
 | `platform-emr` | 8086 | 病历域：结构化模板、质控（含书写时限）、三级签名、归档签署策略、修订留痕、病案修改审批、CDR 检索、打印视图 | 已交付（N4 两批） |
+| `platform-insurance` | 8087 | 医保域：医保目录、院内项目映射、参保登记、结算清单测算与确认 | 已交付（N5 第一批） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -41,10 +42,12 @@
 /api/v2/pharmacy/**     → http://127.0.0.1:8084   （StripPrefix=2，控制器自带 /pharmacy 前缀）
 /api/v2/tech/**         → http://127.0.0.1:8085   （StripPrefix=2，控制器自带 /tech 前缀）
 /api/v2/emr/**          → http://127.0.0.1:8086   （StripPrefix=2，控制器自带 /emr 前缀）
+/api/v2/insurance/**    → http://127.0.0.1:8087   （StripPrefix=2，控制器自带 /insurance 前缀）
 ```
 
 路由目标可用环境变量覆盖：`AI_CORE_URI` / `PLATFORM_AUTH_URI` / `PLATFORM_EMPI_URI` /
-`PLATFORM_CLINICAL_URI` / `PLATFORM_PHARMACY_URI` / `PLATFORM_TECH_URI` / `PLATFORM_EMR_URI`。
+`PLATFORM_CLINICAL_URI` / `PLATFORM_PHARMACY_URI` / `PLATFORM_TECH_URI` / `PLATFORM_EMR_URI` /
+`PLATFORM_INSURANCE_URI`。
 
 ## 构建与运行
 

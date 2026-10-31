@@ -1,0 +1,11 @@
+# 本地开发专用覆盖（严禁用于 staging/prod）
+insurance:
+  empi:
+    internal-token: medassist-dev-internal-token
+  clinical:
+    # 与 clinical application-dev.yml 的 internal-api-token 保持一致
+    internal-token: medassist-dev-internal-token
+
+logging:
+  level:
+    com.medassist: DEBUG

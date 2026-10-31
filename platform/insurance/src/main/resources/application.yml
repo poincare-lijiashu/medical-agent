@@ -1,0 +1,66 @@
+server:
+  port: 8087
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-insurance
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: insurance-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: insurance_svc
+    default-schema: insurance_svc
+    locations: classpath:db/migration/insurance
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 服务间调用（内网直连，不经网关）----
+insurance:
+  empi:
+    base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
+    internal-token: ${INSURANCE_INTERNAL_TOKEN:}
+    timeout: ${EMPI_TIMEOUT:PT2S}
+  clinical:
+    base-url: ${CLINICAL_INTERNAL_URI:http://127.0.0.1:8083}
+    internal-token: ${INSURANCE_CLINICAL_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
+    timeout: ${CLINICAL_TIMEOUT:PT3S}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: DEBUG

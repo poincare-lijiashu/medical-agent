@@ -131,6 +131,25 @@ spec:
     {{- include "medassist.selectorLabels" (dict "root" $ "component" "emr") | nindent 4 }}
 ---
 {{- end }}
+{{- if .Values.insurance.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "insurance") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "insurance") | nindent 4 }}
+spec:
+  type: {{ .Values.insurance.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.insurance.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "medassist.selectorLabels" (dict "root" $ "component" "insurance") | nindent 4 }}
+---
+{{- end }}
 {{- if .Values.aiCore.enabled }}
 apiVersion: v1
 kind: Service

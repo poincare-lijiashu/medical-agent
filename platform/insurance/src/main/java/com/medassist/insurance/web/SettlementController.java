@@ -1,0 +1,85 @@
+package com.medassist.insurance.web;
+
+import com.medassist.common.api.ApiResponse;
+import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.Permissions;
+import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
+import com.medassist.insurance.service.InsuranceService;
+import com.medassist.insurance.web.InsuranceDtos.BillView;
+import com.medassist.insurance.web.InsuranceDtos.GenerateBillReq;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 医保结算清单。
+ *
+ * <p>生成时从临床域拉收费明细并本地测算；确认后清单不可再改。
+ */
+@RestController
+@RequestMapping("/insurance/settlements")
+public class SettlementController {
+
+    private static final String WRITE = "insurance:settlement:write";
+    private static final String READ = "insurance:settlement:read";
+
+    private final InsuranceService service;
+
+    public SettlementController(InsuranceService service) {
+        this.service = service;
+    }
+
+    /** 生成或重算（DRAFT 可重算，CONFIRMED 拒绝）。 */
+    @PostMapping
+    public ApiResponse<BillView> generate(
+            @Valid @RequestBody GenerateBillReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.generate(req.visitId(), actor));
+    }
+
+    @GetMapping("/{id}")
+    public ApiResponse<BillView> detail(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.detail(id));
+    }
+
+    @GetMapping("/by-visit/{visitId}")
+    public ApiResponse<BillView> byVisit(
+            @PathVariable UUID visitId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.byVisit(visitId));
+    }
+
+    @PostMapping("/{id}/confirm")
+    public ApiResponse<BillView> confirm(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.confirm(id, actor));
+    }
+
+    @GetMapping
+    public ApiResponse<List<SettlementBill>> list(
+            @RequestParam(required = false) UUID patientId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.list(patientId, status, limit));
+    }
+}

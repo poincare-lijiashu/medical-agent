@@ -388,6 +388,39 @@ emr:
   tolerations: []
   affinity: {}
 
+# ---- 医保域 ----
+insurance:
+  enabled: true
+  image:
+    repository: platform-insurance
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8087
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- Python AI 中台 ----
 aiCore:
   enabled: true
