@@ -92,9 +92,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    auth(8081)/empi(8082, `--spring.profiles.active=dev`) 运行中；OAP(11800/12800)；
    Loki(3101)/Promtail 运行中。收工前按需停止。
    **注意**：empi 现在必须带 `EMPI_FIELD_KEY`/`EMPI_HASH_SALT` 或 `--spring.profiles.active=dev`，否则拒绝启动。
+7. **HIS 业务域增量 1（2026-10-31）：`platform/clinical` 已交付并端到端实测**
+   - 闭环：号源 → 挂号 → 接诊 → 医嘱 → 计费/收费；表 `clinical_svc.*`（V1 迁移）
+   - 并发/一致性：号源行锁+CAS、同患者同日同科室部分唯一索引、就诊状态机 CAS、
+     医嘱金额服务端按主数据计算、收费 `charge_item.order_id` 唯一 + 增量累加（幂等）
+   - 患者校验：clinical → EMPI `GET /internal/patients/{id}`（`X-Internal-Token`，未配置 fail-closed）
+   - 权限：V6 迁移新增 `clinical:*` 权限点与 `REGISTRAR` 挂号收费员角色
+   - 部署：Chart 增加 clinical（Deployment/HPA/PDB/Service/NP/迁移 Job）、网关路由与限流项
+   - **实测**：挂号→接诊→开 2 条医嘱（16.00+25.00）→ 预览（10 已计 + 41 待计）→ 结算 51.00 PAID
+     → 重复结算返回同一单（幂等）→ 重复挂号 409/42409 → 无权限 403 → 无令牌访问内部接口 403；
+     库内审计 6 类动作、2 条医嘱 CHARGED
+   - 单测：13 项（挂号 5 / 医嘱 4 / 计费 4），平台全量 51 项 Java 测试通过；helm lint 四套通过
+   - **下一批**：住院域 → 药房域 → 医技域 → 病历域 → 医保域（见 `docs/CLINICAL-CORE-ROADMAP.md`）
+   - 已知限制：无退费/红冲、无批量排班与停诊、无药品库存扣减、收费未接支付渠道
 
 ### 本机踩坑备忘（下次别再踩）
 
+- 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致
+  "无法连接到远程服务器"；本机联调用 `curl.exe --noproxy "*"`，或临时清空系统代理
+- 用 `Start-Process` 起的 java 子进程会随命令会话结束被回收；常驻服务要用后台命令（run_in_background）
 - Windows PowerShell 5.1 按 ANSI 读无 BOM UTF-8：**含中文的 .ps1 必须存 ASCII**，否则解析报错
 - PowerShell 调用 `curl.exe -d '{"k":"v"}'` 会丢双引号 → 用 `Invoke-WebRequest` + UTF8 bytes，
   或 `--data-binary @body.json`
