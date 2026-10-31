@@ -1,6 +1,8 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
+import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -93,7 +95,25 @@ public class BillingService {
             }
         }
 
-        if (!repo.markChargePaid(charge.id(), addAmount, paymentMethod.trim(), charge.version())) {
+        String method = paymentMethod.trim().toUpperCase();
+        if ("DEPOSIT".equals(method)) {
+            // 预交金抵扣：仅住院；余额不足直接拒绝（欠费拦截）
+            Admission admission = repo.findActiveAdmissionByVisit(visitId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED,
+                            "只有住院就诊可以使用预交金结算"));
+            BigDecimal payable = charge.totalAmount().add(addAmount);
+            BigDecimal balance = repo.depositBalance(admission.id());
+            if (balance.compareTo(payable) < 0) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "预交金余额不足（余额 " + balance + "，应结 " + payable + "），请先补交");
+            }
+            if (payable.signum() > 0) {
+                repo.insertDeposit(UUID.randomUUID(), admission.id(), payable.negate(),
+                        Deposit.SETTLE, "DEPOSIT", actor, "结算 " + charge.chargeNo());
+            }
+        }
+
+        if (!repo.markChargePaid(charge.id(), addAmount, method, charge.version())) {
             // 版本冲突说明另一个窗口刚结算/退费；交给调用方重试，避免"以为失败其实已扣费"
             throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
         }

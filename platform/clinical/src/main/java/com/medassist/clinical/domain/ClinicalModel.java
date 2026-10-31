@@ -129,5 +129,7 @@ public final class ClinicalModel {
 
         public static final String DEPOSIT = "DEPOSIT";
         public static final String REFUND = "REFUND";
+        /** 结算抵扣（负数流水）。 */
+        public static final String SETTLE = "SETTLE";
     }
 }

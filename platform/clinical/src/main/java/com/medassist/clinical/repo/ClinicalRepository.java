@@ -549,6 +549,15 @@ public class ClinicalRepository {
                         """).param(id).query(ADMISSION_MAPPER).optional();
     }
 
+    public Optional<Admission> findActiveAdmissionByVisit(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission
+                         WHERE visit_id = :visitId AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """).param("visitId", visitId).query(ADMISSION_MAPPER).optional();
+    }
+
     public Optional<Admission> findActiveAdmissionByPatient(UUID patientId) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,

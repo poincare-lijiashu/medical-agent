@@ -1,5 +1,6 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
@@ -179,5 +180,53 @@ class BillingServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CHARGE_STATUS_INVALID);
+    }
+
+    @Test
+    @DisplayName("预交金结算：余额充足时扣减并置为已收费")
+    void settleByDepositDeductsBalance() {
+        Visit inpatient = new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
+                "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+        UUID admissionId = UUID.randomUUID();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("16.00"), Charge.UNPAID, null, null, 1L)));
+        when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of());
+        when(repo.findActiveAdmissionByVisit(visitId)).thenReturn(Optional.of(new Admission(
+                admissionId, "A1", visitId, UUID.randomUUID(), "P1", deptId, null, "doctor01",
+                Admission.IN_HOSPITAL, Instant.now(), null, 0L)));
+        when(repo.depositBalance(admissionId)).thenReturn(new BigDecimal("50.00"));
+        when(repo.markChargePaid(eq(chargeId), eq(BigDecimal.ZERO), eq("DEPOSIT"), eq(1L))).thenReturn(true);
+        when(repo.findChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("16.00"), Charge.PAID, "DEPOSIT",
+                Instant.now(), 2L)));
+
+        ChargeView view = service.settle(visitId, "deposit", "clerk01");
+
+        assertThat(view.status()).isEqualTo(Charge.PAID);
+        verify(repo).insertDeposit(any(), eq(admissionId), eq(new BigDecimal("-16.00")),
+                eq("SETTLE"), eq("DEPOSIT"), eq("clerk01"), eq("结算 C1"));
+    }
+
+    @Test
+    @DisplayName("预交金结算：余额不足直接拒绝（欠费拦截）")
+    void settleByDepositRejectsInsufficientBalance() {
+        Visit inpatient = new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
+                "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+        UUID admissionId = UUID.randomUUID();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("16.00"), Charge.UNPAID, null, null, 1L)));
+        when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of());
+        when(repo.findActiveAdmissionByVisit(visitId)).thenReturn(Optional.of(new Admission(
+                admissionId, "A1", visitId, UUID.randomUUID(), "P1", deptId, null, "doctor01",
+                Admission.IN_HOSPITAL, Instant.now(), null, 0L)));
+        when(repo.depositBalance(admissionId)).thenReturn(new BigDecimal("10.00"));
+
+        assertThatThrownBy(() -> service.settle(visitId, "DEPOSIT", "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("余额不足");
+        verify(repo, never()).insertDeposit(any(), any(), any(), any(), any(), any(), any());
+        verify(repo, never()).markChargePaid(any(), any(), anyString(), anyLong());
     }
 }
