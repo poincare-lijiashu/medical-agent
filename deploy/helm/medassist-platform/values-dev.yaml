@@ -21,8 +21,9 @@ secrets:
   empiFieldKey: "DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4="
   empiHashSalt: "medassist-empi-salt"
   internalApiToken: "dev-only-internal-api-token-0123456789abcdef"
-  # 本地自验密钥（base64 32 字节）；生产必须由密钥管理生成，禁止使用本值
-  internalHmacKeys: '{"active":"gw-dev","keys":{"gw-dev":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}'
+  # 本地自验密钥（base64 32 字节）；生产必须由密钥管理生成，禁止使用本值。
+  # internal.* 为服务→服务调用方密钥（T5），每个调用方一把，泄露只影响一条边。
+  internalHmacKeys: '{"active":"gw-dev","keys":{"gw-dev":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="},"internal":{"clinical":"bWVkYXNzaXN0LWRldi1jbGluaWNhbC0tLS0tLS0tLS0=","emr":"bWVkYXNzaXN0LWRldi1lbXItLS0tLS0tLS0tLS0tLS0=","insurance":"bWVkYXNzaXN0LWRldi1pbnN1cmFuY2UtLS0tLS0tLS0=","pharmacy":"bWVkYXNzaXN0LWRldi1waGFybWFjeS0tLS0tLS0tLS0=","tech":"bWVkYXNzaXN0LWRldi10ZWNoLS0tLS0tLS0tLS0tLS0="}}'
 
 # 本地默认只打点不拦截：便于观察是否存在绕过网关的直连调用
 internalAuth:

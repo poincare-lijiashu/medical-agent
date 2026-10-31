@@ -36,7 +36,7 @@ class InternalSignatureGlobalFilterTest {
 
     private static InternalSignatureGlobalFilter filter(String mode) {
         return new InternalSignatureGlobalFilter(
-                new InternalAuthProperties(mode, 60, KEYS_JSON, 120, false, null),
+                new InternalAuthProperties(mode, 60, KEYS_JSON, 120, false, null, null),
                 InternalKeySet.parse(KEYS_JSON, new ObjectMapper()));
     }
 

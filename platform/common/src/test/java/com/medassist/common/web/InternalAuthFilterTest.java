@@ -29,11 +29,16 @@ class InternalAuthFilterTest {
     private static final String KEY_2 = Base64.getEncoder()
             .encodeToString("fedcba9876543210fedcba9876543210".getBytes(StandardCharsets.UTF_8));
     private static final String KEYS_JSON =
-            "{\"active\":\"k2\",\"keys\":{\"k1\":\"" + KEY_1 + "\",\"k2\":\"" + KEY_2 + "\"}}";
+            "{\"active\":\"k2\",\"keys\":{\"k1\":\"" + KEY_1 + "\",\"k2\":\"" + KEY_2 + "\"},"
+                    + "\"internal\":{\"clinical\":\"" + KEY_1 + "\",\"emr\":\"" + KEY_2 + "\"}}";
 
     private static InternalAuthFilter filter(String mode) {
+        return filter(mode, false);
+    }
+
+    private static InternalAuthFilter filter(String mode, boolean internalRequired) {
         InternalAuthProperties props = new InternalAuthProperties(
-                mode, 60, KEYS_JSON, 120, false, null);
+                mode, 60, KEYS_JSON, 120, internalRequired, null, null);
         return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
                 null);
     }
@@ -221,6 +226,84 @@ class InternalAuthFilterTest {
         filter(InternalAuthProperties.ENFORCE).doFilter(request, new MockHttpServletResponse(), chain);
         assertNotNull(chain.getRequest());
         assertEquals("internal", request.getAttribute(InternalAuthFilter.ATTR_CALLER));
+    }
+
+    // ---------------------------------------------------------------- 调用方签名（T5）
+
+    private static void signCaller(MockHttpServletRequest request, String caller, String secret,
+                                   long timestamp, String nonce) {
+        String canonical = InternalSignature.canonicalCaller(request.getMethod(),
+                request.getRequestURI(), request.getQueryString(), caller, timestamp, nonce,
+                InternalSignature.EMPTY_BODY_HASH);
+        request.addHeader(InternalSignature.HEADER_SIG_VER, InternalSignature.SIG_VERSION_CALLER);
+        request.addHeader(InternalSignature.HEADER_CALLER, caller);
+        request.addHeader(InternalSignature.HEADER_TS, Long.toString(timestamp));
+        request.addHeader(InternalSignature.HEADER_NONCE, nonce);
+        request.addHeader(InternalSignature.HEADER_SIG, InternalSignature.sign(secret, canonical));
+    }
+
+    @Test
+    void callerChannelAcceptsValidSignatureWhenRequired() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/internal/patients/1");
+        request.setQueryString("reveal=false");
+        signCaller(request, "clinical", KEY_1, now(), "caller-nonce-1");
+
+        MockFilterChain chain = new MockFilterChain();
+        filter(InternalAuthProperties.ENFORCE, true).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest());
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+        assertEquals("clinical", request.getAttribute(InternalAuthFilter.ATTR_CALLER));
+    }
+
+    @Test
+    void callerChannelRejectsMissingUnknownAndWrongKey() throws Exception {
+        MockFilterChain chain1 = new MockFilterChain();
+        MockHttpServletRequest missing = new MockHttpServletRequest("GET", "/internal/patients/1");
+        filter(InternalAuthProperties.ENFORCE, true).doFilter(missing, new MockHttpServletResponse(), chain1);
+        assertNull(chain1.getRequest());
+        assertEquals("missing", missing.getAttribute(InternalAuthFilter.ATTR_RESULT));
+
+        MockHttpServletRequest unknown = new MockHttpServletRequest("GET", "/internal/patients/1");
+        signCaller(unknown, "billing", KEY_1, now(), "caller-nonce-2");
+        MockFilterChain chain2 = new MockFilterChain();
+        filter(InternalAuthProperties.ENFORCE, true).doFilter(unknown, new MockHttpServletResponse(), chain2);
+        assertNull(chain2.getRequest());
+        assertEquals("unknown_caller", unknown.getAttribute(InternalAuthFilter.ATTR_RESULT));
+
+        // 用 emr 的密钥冒充 clinical：caller 参与规范串 + 密钥隔离，双重拦截
+        MockHttpServletRequest wrongKey = new MockHttpServletRequest("GET", "/internal/patients/1");
+        signCaller(wrongKey, "clinical", KEY_2, now(), "caller-nonce-3");
+        MockFilterChain chain3 = new MockFilterChain();
+        filter(InternalAuthProperties.ENFORCE, true).doFilter(wrongKey, new MockHttpServletResponse(), chain3);
+        assertNull(chain3.getRequest());
+        assertEquals("bad_sig", wrongKey.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void callerChannelRejectsReplayAndSkew() throws Exception {
+        InternalAuthFilter filter = filter(InternalAuthProperties.ENFORCE, true);
+        long ts = now();
+
+        MockHttpServletRequest first = new MockHttpServletRequest("GET", "/internal/patients/1");
+        signCaller(first, "emr", KEY_2, ts, "caller-replay");
+        MockFilterChain chain1 = new MockFilterChain();
+        filter.doFilter(first, new MockHttpServletResponse(), chain1);
+        assertNotNull(chain1.getRequest());
+
+        MockHttpServletRequest replay = new MockHttpServletRequest("GET", "/internal/patients/1");
+        signCaller(replay, "emr", KEY_2, ts, "caller-replay");
+        MockFilterChain chain2 = new MockFilterChain();
+        filter.doFilter(replay, new MockHttpServletResponse(), chain2);
+        assertNull(chain2.getRequest());
+        assertEquals("replay", replay.getAttribute(InternalAuthFilter.ATTR_RESULT));
+
+        MockHttpServletRequest stale = new MockHttpServletRequest("GET", "/internal/patients/1");
+        signCaller(stale, "emr", KEY_2, now() - 120, "caller-stale");
+        MockFilterChain chain3 = new MockFilterChain();
+        filter.doFilter(stale, new MockHttpServletResponse(), chain3);
+        assertNull(chain3.getRequest());
+        assertEquals("skew", stale.getAttribute(InternalAuthFilter.ATTR_RESULT));
     }
 
     @Test

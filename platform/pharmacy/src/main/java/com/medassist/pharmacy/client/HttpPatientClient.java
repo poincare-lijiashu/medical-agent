@@ -1,5 +1,8 @@
 package com.medassist.pharmacy.client;
 
+import com.medassist.common.security.InternalCallerSigner;
+import com.medassist.common.security.InternalSignatureClientInterceptor;
+
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.pharmacy.config.PharmacyProperties;
@@ -32,7 +35,7 @@ public class HttpPatientClient implements PatientClient {
     private final RestClient client;
     private final String token;
 
-    public HttpPatientClient(PharmacyProperties props) {
+    public HttpPatientClient(PharmacyProperties props, InternalCallerSigner signer) {
         PharmacyProperties.Empi empi = props.empi();
         this.token = empi == null || empi.internalToken() == null ? "" : empi.internalToken();
         if (this.token.isBlank()) {
@@ -46,6 +49,7 @@ public class HttpPatientClient implements PatientClient {
         this.client = RestClient.builder()
                 .baseUrl(empi.baseUrl())
                 .requestFactory(factory)
+                .requestInterceptor(new InternalSignatureClientInterceptor(signer))
                 .build();
     }
 

@@ -1,5 +1,8 @@
 package com.medassist.clinical.client;
 
+import com.medassist.common.security.InternalCallerSigner;
+import com.medassist.common.security.InternalSignatureClientInterceptor;
+
 import com.medassist.clinical.config.ClinicalProperties;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -33,7 +36,7 @@ public class HttpPatientClient implements PatientClient {
     private final RestClient client;
     private final String token;
 
-    public HttpPatientClient(ClinicalProperties props) {
+    public HttpPatientClient(ClinicalProperties props, InternalCallerSigner signer) {
         ClinicalProperties.Empi empi = props.empi();
         this.token = empi.internalToken() == null ? "" : empi.internalToken();
         if (this.token.isBlank()) {
@@ -48,6 +51,7 @@ public class HttpPatientClient implements PatientClient {
         this.client = RestClient.builder()
                 .baseUrl(empi.baseUrl())
                 .requestFactory(factory)
+                .requestInterceptor(new InternalSignatureClientInterceptor(signer))
                 .build();
     }
 

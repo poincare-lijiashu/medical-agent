@@ -58,7 +58,7 @@ public final class AuthHeaders {
             ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CLIENT_IP, TRACE_ID,
             InternalSignature.HEADER_SIG, InternalSignature.HEADER_TS,
             InternalSignature.HEADER_NONCE, InternalSignature.HEADER_KEY_ID,
-            InternalSignature.HEADER_SIG_VER);
+            InternalSignature.HEADER_SIG_VER, InternalSignature.HEADER_CALLER);
 
     private AuthHeaders() {
     }

@@ -1,5 +1,8 @@
 package com.medassist.emr.client;
 
+import com.medassist.common.security.InternalCallerSigner;
+import com.medassist.common.security.InternalSignatureClientInterceptor;
+
 import com.medassist.emr.config.EmrProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,7 +36,7 @@ public class HttpClinicalClient implements ClinicalClient {
     private final RestClient client;
     private final String token;
 
-    public HttpClinicalClient(EmrProperties props) {
+    public HttpClinicalClient(EmrProperties props, InternalCallerSigner signer) {
         EmrProperties.Clinical clinical = props.clinical();
         this.token = clinical == null || clinical.internalToken() == null ? "" : clinical.internalToken();
         if (this.token.isBlank()) {
@@ -47,7 +50,8 @@ public class HttpClinicalClient implements ClinicalClient {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeout);
         factory.setReadTimeout(timeout);
-        this.client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+        this.client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory)
+                .requestInterceptor(new InternalSignatureClientInterceptor(signer)).build();
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.medassist.common.config;
 
+import com.medassist.common.security.InternalCallerSigner;
 import com.medassist.common.web.InternalAuthFilter;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -18,6 +19,8 @@ class InternalAuthAutoConfigurationTest {
     private static final String KEY = Base64.getEncoder()
             .encodeToString("0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8));
     private static final String KEYS_JSON = "{\"active\":\"k1\",\"keys\":{\"k1\":\"" + KEY + "\"}}";
+    private static final String KEYS_JSON_WITH_INTERNAL = "{\"active\":\"k1\",\"keys\":{\"k1\":\"" + KEY
+            + "\"},\"internal\":{\"clinical\":\"" + KEY + "\"}}";
 
     private final WebApplicationContextRunner runner = new WebApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(InternalAuthAutoConfiguration.class));
@@ -68,6 +71,33 @@ class InternalAuthAutoConfigurationTest {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasMessageContaining("非法");
+                });
+    }
+
+    @Test
+    void derivesCallerFromApplicationNameForOutboundSigning() {
+        runner.withPropertyValues(
+                        "spring.application.name=platform-clinical",
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON_WITH_INTERNAL)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(InternalCallerSigner.class);
+                    InternalCallerSigner signer = context.getBean(InternalCallerSigner.class);
+                    assertThat(signer.caller()).isEqualTo("clinical");
+                    assertThat(signer.configured()).isTrue();
+                });
+    }
+
+    @Test
+    void failsFastWhenCallerSignatureRequiredWithoutInternalKeys() {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON,
+                        "medassist.internal-auth.internal-paths-signature-required=true")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("internal");
                 });
     }
 }

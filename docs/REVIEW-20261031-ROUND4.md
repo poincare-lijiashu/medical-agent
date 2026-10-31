@@ -282,12 +282,12 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
 | T2 下游校验 | ✅ 已完成 | `common/web/InternalAuthFilter`（off/log/enforce、时钟偏差、nonce 去重、豁免路径、403 统一响应）；`InternalAuthAutoConfiguration` + `AutoConfiguration.imports`；启动守卫（enforce 无密钥 / 生产 off 拒绝启动） |
 | T3 网关签名 | ✅ 已完成 | `gateway/filter/InternalSignatureGlobalFilter`（order=`LOWEST_PRECEDENCE-100`，晚于 StripPrefix、早于路由）；客户端伪造的 5 个 `X-Internal-*` 头进入 `AuthHeaders.CLIENT_SUPPLIED` 一律剥离 |
 | T4 Helm | ✅ 已完成 | `internalAuth.mode/clockSkewSeconds/nonceTtlSeconds/internalPathsSignatureRequired`；`medassist-internal-hmac` Secret；dev/base/staging=log（先观测）、prod=enforce |
-| T5 调用方签名 | ⏳ 未开始 | `/internal/**` 当前由 `internal-paths-signature-required=false` 保持内部令牌校验，作为下一批独立上线 |
-| T6 E2E + gitleaks | 🟡 部分完成 | **直连业务端口伪造身份头 → 403 已实测**（`scripts/e2e/internal_auth_smoke.ps1` 11 项全过，gateway/emr enforce）；gitleaks 进 CI 未做 |
+| T5 调用方签名 | ✅ 已完成 | keys-json 增 `internal` 按调用方隔离密钥；出站 7 个 Http*Client 统一加 v1i 签名；入站由 `internalPathsSignatureRequired` 控制（默认 false，切换后未签名即 403）；启动守卫要求 required 时必须有 internal 密钥 |
+| T6 E2E + gitleaks | 🟡 部分完成 | **直连业务端口伪造身份头 → 403 已实测**（`internal_auth_smoke.ps1` 11 项）；**调用方通道 8 项实测**（`internal_caller_smoke.ps1`）；gitleaks 进 CI 未做 |
 | T7 运维手册 | ⏳ 未开始 | 轮换/应急/回滚演练记录 |
 | T8 mTLS | ⏸ 可选 | 阶段二另行评审 |
 
-**验证**：全量 `mvn test` **411 项全过**（新增 29 项：签名协议 10 + 过滤器 10 + 网关 4 + 启动守卫 5）。
+**验证**：全量 `mvn test` **430 项全过**（新增 38 项：签名协议 10 + 过滤器 10 + 网关 4 + 启动守卫 7 + 调用方签名 7）。
 
 **实跑验证（2026-11-01，gateway + emr 以 enforce 启动）**：`internal_auth_smoke.ps1` **11 项全过**——
 直连 `:8086` 伪造 `X-Permissions` / 伪造签名 / 无签名均 403，`/actuator/health` 豁免 200，
@@ -295,6 +295,10 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
 `medassist_internal_auth_total{result=...}` 指标有计数。期间修复两个真实缺陷：
 ① Helm 环境变量名少删连字符（`MEDASSIST_INTERNALAUTH_*`）导致 mode 实际未生效；
 ② 过滤器用 Jackson 2 序列化 `Instant` 在 Boot 4（Jackson 3 Web 栈）下抛异常使 403 变 500，已改为手写 JSON。
+
+**调用方通道实跑（2026-11-01，emr `internal-paths-signature-required=true`）**：
+`internal_caller_smoke.ps1` **8 项全过**——无签名 403、合法 v1i 签名 200、
+重放 / 换密钥 / 未知 caller / 签名绑定其它路径 均 403，拒绝结果进指标。
 
 **阶段一口径（写进部署文档，避免误判为"未做完"）**：
 - nonce 去重是进程内实现：单副本严格有效，多副本在 60 秒时间窗内仍可能重放；阶段二换 Redis。

@@ -88,14 +88,19 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
             return;
         }
-        if (isInternalPath(path) && !props.internalPathsSignatureRequiredOrDefault()) {
-            // 服务→服务通道：内部令牌仍由各控制器校验；调用方签名（T5）落地前不在此拦截
-            request.setAttribute(ATTR_CALLER, "internal");
-            chain.doFilter(request, response);
-            return;
-        }
 
-        String result = verify(request);
+        String result;
+        if (isInternalPath(path)) {
+            if (!props.internalPathsSignatureRequiredOrDefault()) {
+                // 服务→服务通道：内部令牌仍由各控制器校验；调用方签名开关未打开时不在此拦截
+                request.setAttribute(ATTR_CALLER, "internal");
+                chain.doFilter(request, response);
+                return;
+            }
+            result = verifyCaller(request);
+        } else {
+            result = verifyGateway(request);
+        }
         request.setAttribute(ATTR_RESULT, result);
         count(result);
 
@@ -117,7 +122,7 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     // ---------------------------------------------------------------- 校验
 
     /** @return ok / missing / bad_version / unknown_key / skew / replay / bad_sig */
-    private String verify(HttpServletRequest request) {
+    private String verifyGateway(HttpServletRequest request) {
         String version = request.getHeader(InternalSignature.HEADER_SIG_VER);
         String keyId = request.getHeader(InternalSignature.HEADER_KEY_ID);
         String timestamp = request.getHeader(InternalSignature.HEADER_TS);
@@ -157,6 +162,58 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         }
         request.setAttribute(ATTR_KEY_ID, keyId);
         request.setAttribute(ATTR_CALLER, "gateway");
+        return "ok";
+    }
+
+    /**
+     * 服务→服务通道校验（v1i）：按 {@code X-Internal-Caller} 选密钥，caller 参与规范串。
+     *
+     * @return ok / missing / bad_version / unknown_caller / skew / replay / bad_sig
+     */
+    private String verifyCaller(HttpServletRequest request) {
+        String version = request.getHeader(InternalSignature.HEADER_SIG_VER);
+        String callerHeader = request.getHeader(InternalSignature.HEADER_CALLER);
+        String timestamp = request.getHeader(InternalSignature.HEADER_TS);
+        String nonce = request.getHeader(InternalSignature.HEADER_NONCE);
+        String signature = request.getHeader(InternalSignature.HEADER_SIG);
+        if (isBlank(version) || isBlank(callerHeader) || isBlank(timestamp)
+                || isBlank(nonce) || isBlank(signature)) {
+            return "missing";
+        }
+        if (!InternalSignature.SIG_VERSION_CALLER.equals(version)) {
+            return "bad_version";
+        }
+        String caller = callerHeader.trim().toLowerCase();
+        if (!caller.matches("[a-z0-9-]{1,32}")) {
+            return "unknown_caller";
+        }
+        String secret = keySet.callerSecret(caller);
+        if (secret == null) {
+            return "unknown_caller";
+        }
+
+        long ts;
+        try {
+            ts = Long.parseLong(timestamp);
+        } catch (NumberFormatException e) {
+            return "missing";
+        }
+        long now = System.currentTimeMillis() / 1000L;
+        if (Math.abs(now - ts) > props.clockSkewSecondsOrDefault()) {
+            return "skew";
+        }
+        // nonce 前缀带 caller，避免不同调用方之间互相"烧掉"随机数
+        if (!nonces.register("c:" + caller + ":" + nonce)) {
+            return "replay";
+        }
+
+        String canonical = InternalSignature.canonicalCaller(request.getMethod(), path(request),
+                request.getQueryString(), caller, ts, nonce, InternalSignature.EMPTY_BODY_HASH);
+        if (!InternalSignature.verify(secret, canonical, signature)) {
+            return "bad_sig";
+        }
+        request.setAttribute(ATTR_KEY_ID, caller);
+        request.setAttribute(ATTR_CALLER, caller);
         return "ok";
     }
 

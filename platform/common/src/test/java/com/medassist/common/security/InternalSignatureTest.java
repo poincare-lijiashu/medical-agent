@@ -125,14 +125,41 @@ class InternalSignatureTest {
     }
 
     @Test
+    void canonicalCallerBindsCallerAndHasNoIdentityHeaders() {
+        String a = InternalSignature.canonicalCaller("get", "/internal/patients/1", "b=2&a=1",
+                "clinical", 1793512800L, "n", InternalSignature.EMPTY_BODY_HASH);
+        String b = InternalSignature.canonicalCaller("GET", "/internal/patients/1", "a=1&b=2",
+                "clinical", 1793512800L, "n", InternalSignature.EMPTY_BODY_HASH);
+        assertEquals(a, b);
+        String[] lines = a.split("\n", -1);
+        assertEquals("v1i", lines[0]);
+        assertEquals("GET", lines[1]);
+        assertEquals("/internal/patients/1", lines[2]);
+        assertEquals("a=1&b=2", lines[3]);
+        assertEquals("clinical", lines[4], "caller 必须进入规范串");
+        assertEquals("1793512800", lines[5]);
+        assertEquals("n", lines[6]);
+        assertEquals("-", lines[7]);
+
+        String other = InternalSignature.canonicalCaller("GET", "/internal/patients/1", "a=1&b=2",
+                "emr", 1793512800L, "n", InternalSignature.EMPTY_BODY_HASH);
+        assertFalse(a.equals(other), "换 caller 必须改变规范串");
+    }
+
+    @Test
     void keySetParsesActiveAndRotationKeys() {
-        String json = "{\"active\":\"k2\",\"keys\":{\"k1\":\"" + KEY_1 + "\",\"k2\":\"" + KEY_2 + "\"}}";
+        String json = "{\"active\":\"k2\",\"keys\":{\"k1\":\"" + KEY_1 + "\",\"k2\":\"" + KEY_2 + "\"},"
+                + "\"internal\":{\"clinical\":\"" + KEY_1 + "\",\"EMR\":\"" + KEY_2 + "\"}}";
         InternalKeySet keySet = InternalKeySet.parse(json, new com.fasterxml.jackson.databind.ObjectMapper());
         assertTrue(keySet.configured());
         assertEquals("k2", keySet.activeKeyId());
         assertEquals(KEY_1, keySet.secret("k1"));
         assertEquals(KEY_2, keySet.secret("k2"));
         assertEquals(null, keySet.secret("k3"));
+        assertTrue(keySet.callerConfigured());
+        assertEquals(KEY_1, keySet.callerSecret("clinical"));
+        assertEquals(KEY_2, keySet.callerSecret("emr"), "调用方标识大小写不敏感");
+        assertEquals(null, keySet.callerSecret("billing"));
         assertFalse(InternalKeySet.empty().configured());
     }
 }

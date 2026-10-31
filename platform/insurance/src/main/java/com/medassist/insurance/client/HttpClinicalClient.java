@@ -1,5 +1,8 @@
 package com.medassist.insurance.client;
 
+import com.medassist.common.security.InternalCallerSigner;
+import com.medassist.common.security.InternalSignatureClientInterceptor;
+
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.insurance.config.InsuranceProperties;
@@ -34,7 +37,7 @@ public class HttpClinicalClient implements ClinicalClient {
     private final RestClient client;
     private final String token;
 
-    public HttpClinicalClient(InsuranceProperties props) {
+    public HttpClinicalClient(InsuranceProperties props, InternalCallerSigner signer) {
         InsuranceProperties.Clinical clinical = props.clinical();
         this.token = clinical == null || clinical.internalToken() == null ? "" : clinical.internalToken();
         if (this.token.isBlank()) {
@@ -48,7 +51,8 @@ public class HttpClinicalClient implements ClinicalClient {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeout);
         factory.setReadTimeout(timeout);
-        this.client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+        this.client = RestClient.builder().baseUrl(baseUrl).requestFactory(factory)
+                .requestInterceptor(new InternalSignatureClientInterceptor(signer)).build();
     }
 
     @Override

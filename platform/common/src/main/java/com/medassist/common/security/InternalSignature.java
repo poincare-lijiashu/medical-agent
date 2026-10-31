@@ -38,7 +38,11 @@ public final class InternalSignature {
     public static final String HEADER_NONCE = "X-Internal-Nonce";
     public static final String HEADER_KEY_ID = "X-Internal-Key-Id";
     public static final String HEADER_SIG_VER = "X-Internal-Sig-Ver";
+    /** 调用方标识（clinical / emr / insurance / pharmacy / tech），服务→服务通道使用。 */
+    public static final String HEADER_CALLER = "X-Internal-Caller";
     public static final String SIG_VERSION = "v1";
+    /** 调用方签名版本（规范串结构与网关通道不同：不含身份头，改为绑定 caller）。 */
+    public static final String SIG_VERSION_CALLER = "v1i";
 
     /** 无请求体摘要时使用（阶段一）。 */
     public static final String EMPTY_BODY_HASH = "-";
@@ -73,6 +77,36 @@ public final class InternalSignature {
         for (String header : IDENTITY_HEADERS) {
             sb.append(headerValue(identityHeaders, header)).append('\n');
         }
+        sb.append(timestamp).append('\n');
+        sb.append(nonce == null ? "" : nonce).append('\n');
+        sb.append(bodyHash == null || bodyHash.isEmpty() ? EMPTY_BODY_HASH : bodyHash);
+        return sb.toString();
+    }
+
+    /**
+     * 调用方通道规范串（v1i）：服务 → 服务。
+     *
+     * <p>与网关通道的区别：内部调用没有 {@code X-Actor} 等用户身份头，身份是"哪个服务"，
+     * 因此把 caller 绑定进规范串；调换 caller 或换密钥都会导致验签失败。
+     * <pre>
+     * v1i
+     * &lt;METHOD&gt;
+     * &lt;path&gt;
+     * &lt;sorted query&gt;
+     * &lt;caller&gt;
+     * &lt;ts&gt;
+     * &lt;nonce&gt;
+     * &lt;body hash&gt;
+     * </pre>
+     */
+    public static String canonicalCaller(String method, String path, String query, String caller,
+                                         long timestamp, String nonce, String bodyHash) {
+        StringBuilder sb = new StringBuilder(160);
+        sb.append(SIG_VERSION_CALLER).append('\n');
+        sb.append(method == null ? "" : method.toUpperCase()).append('\n');
+        sb.append(path == null ? "" : path).append('\n');
+        sb.append(normalizeQuery(query)).append('\n');
+        sb.append(caller == null ? "" : caller).append('\n');
         sb.append(timestamp).append('\n');
         sb.append(nonce == null ? "" : nonce).append('\n');
         sb.append(bodyHash == null || bodyHash.isEmpty() ? EMPTY_BODY_HASH : bodyHash);

@@ -336,12 +336,12 @@ medassist:
 | T7 | 运维手册：轮换/应急/回滚 + 演练记录 | 演练一次通过 |
 | T8（可选） | mTLS：cert-manager、证书挂载、主体交叉校验 | staging 全链路双向校验 |
 
-**落地进度（2026-11-01）**：T1~T4 已完成并通过 411 项单测；T6 的"直连 403"断言已实跑通过
-（`scripts/e2e/internal_auth_smoke.ps1`，gateway/emr enforce）；T5 通过
-`medassist.internal-auth.internal-paths-signature-required=false`（默认）保持现状，
-待全部调用方具备签名能力后切换为 `true`，再按 §8 阶段 3 收口。
+**落地进度（2026-11-01）**：T1~T5 已完成并通过 430 项单测；T6 的"直连 403"与"调用方通道"
+两组断言已实跑通过（`internal_auth_smoke.ps1` 11 项、`internal_caller_smoke.ps1` 8 项）；
+`internal-paths-signature-required` 默认 false，Secret 含 `internal` 密钥且全部调用方升级后再切 true 收口。
 
 ---
 
-*阶段一 T1~T4 已落地（2026-11-01）：先以 `log` 模式在 staging 观测真实调用图，
-确认 `result != ok` 的流量全部完成改造后再切 `enforce`；阶段二（mTLS）另行评审。*
+*阶段一 T1~T5 已落地（2026-11-01）：先以 `log` 模式在 staging 观测真实调用图，
+确认 `result != ok` 的流量全部完成改造后再切 `enforce`；调用方通道在 Secret 含 `internal` 密钥、
+全部服务升级后把 `internal-paths-signature-required` 切 true。阶段二（mTLS）另行评审。*

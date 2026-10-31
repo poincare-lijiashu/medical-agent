@@ -74,7 +74,7 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 | `medassist-nacos` | `username` / `password` | 注册中心鉴权 |
 | `medassist-jwt` | `secret` | JWT 签名密钥（≥32 字节） |
 | `medassist-internal` | `token` | 服务间内部接口令牌（clinical / emr / insurance 内网直连调用 EMPI 与彼此） |
-| `medassist-internal-hmac` | `keys-json` | 服务间 HMAC 签名密钥集（MF-07）：`{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}`；轮换期可同时保留新旧 key |
+| `medassist-internal-hmac` | `keys-json` | 服务间 HMAC 签名密钥集（MF-07）：`{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"},"internal":{"clinical":"<base64>","emr":"<base64>",...}}`；轮换期可同时保留新旧网关 key，`internal` 为每个调用方独立密钥（T5） |
 | `medassist-empi` | `field-key` / `hash-salt` | 患者字段 AES-256 密钥与查重盐（**换密钥会导致存量密文不可解**） |
 | `medassist-ai-core` | `QWEN_API_KEY` / `AUTH_JWT_SECRET` 等 | AI 中台业务密钥（`envFrom` 注入） |
 | `medassist-prod-tls` | `tls.crt` / `tls.key` | Ingress 证书 |

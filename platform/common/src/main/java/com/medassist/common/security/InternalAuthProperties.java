@@ -22,14 +22,15 @@ import java.util.List;
  * <p>未配置密钥且 mode=enforce 时**拒绝启动**：与 EMPI FieldCipher 同规格，
  * 不允许"配错就静默放行"。
  *
- * @param internalPathsSignatureRequired {@code /internal/**}（服务→服务）是否也要求网关签名。
- *        阶段一默认 false：内部令牌校验仍在控制器内执行，调用方签名作为 T5 单独落地；
- *        全量调用方改造完成后再切 true，避免"一开 enforce 就把内部调用全部 403"。
+ * @param internalPathsSignatureRequired {@code /internal/**}（服务→服务）是否也要求调用方签名。
+ *        默认 false：先让全部调用方具备签名能力，再切换为 true（T5 收口）。
+ * @param caller 当前服务作为调用方时的标识（clinical/emr/…）；为空则按
+ *        {@code spring.application.name} 推导（platform-clinical → clinical），一般无需配置。
  */
 @ConfigurationProperties("medassist.internal-auth")
 public record InternalAuthProperties(String mode, Integer clockSkewSeconds, String keysJson,
                                      Integer nonceTtlSeconds, Boolean internalPathsSignatureRequired,
-                                     List<String> exemptPaths) {
+                                     List<String> exemptPaths, String caller) {
 
     public static final String OFF = "off";
     public static final String LOG = "log";
@@ -61,5 +62,10 @@ public record InternalAuthProperties(String mode, Integer clockSkewSeconds, Stri
     public List<String> exemptPathsOrDefault() {
         return exemptPaths == null || exemptPaths.isEmpty()
                 ? List.of("/actuator/health/**", "/actuator/info", "/actuator/prometheus") : exemptPaths;
+    }
+
+    /** 显式配置的调用方标识；为空时由 spring.application.name 推导。 */
+    public String callerOrNull() {
+        return caller == null || caller.isBlank() ? null : caller.trim().toLowerCase();
     }
 }

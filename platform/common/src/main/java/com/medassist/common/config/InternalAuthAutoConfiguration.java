@@ -2,6 +2,7 @@ package com.medassist.common.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.medassist.common.security.InternalAuthProperties;
+import com.medassist.common.security.InternalCallerSigner;
 import com.medassist.common.security.InternalKeySet;
 import com.medassist.common.security.SecurityDefaults;
 import com.medassist.common.web.InternalAuthFilter;
@@ -42,8 +43,42 @@ public class InternalAuthAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public InternalAuthFilter internalAuthFilter(InternalAuthProperties props, Environment environment,
-                                                 ObjectProvider<ObjectMapper> mapperProvider,
+    public InternalKeySet internalKeySet(InternalAuthProperties props,
+                                         ObjectProvider<ObjectMapper> mapperProvider) {
+        return InternalKeySet.parse(props.keysJson(), mapperProvider.getIfAvailable(ObjectMapper::new));
+    }
+
+    /**
+     * 出站签名器（T5）：按 spring.application.name 推导调用方身份（platform-clinical → clinical）。
+     *
+     * <p>未配置调用方密钥时返回 disabled（不附加签名头），这样"开关未打开"的阶段行为不变；
+     * 但一旦 {@code internal-paths-signature-required=true}，调用方密钥集必须存在，否则拒启。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public InternalCallerSigner internalCallerSigner(InternalAuthProperties props, InternalKeySet keySet,
+                                                     Environment environment) {
+        boolean required = props.internalPathsSignatureRequiredOrDefault();
+        if (required && !keySet.callerConfigured()) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.internal-paths-signature-required=true 但 keys-json 未配置 "
+                            + "internal 调用方密钥，服务拒绝启动");
+        }
+        String caller = props.callerOrNull();
+        if (caller == null) {
+            caller = deriveCaller(environment.getProperty("spring.application.name"));
+        }
+        String secret = keySet.callerSecret(caller);
+        if (required && secret == null) {
+            log.warn("internal-auth.caller={} 未配置调用方密钥：本服务发起的 /internal/** 调用将被对端 403", caller);
+        }
+        return InternalCallerSigner.of(caller, secret);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public InternalAuthFilter internalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
+                                                 Environment environment,
                                                  ObjectProvider<MeterRegistry> registryProvider) {
         String mode = props.modeOrDefault();
         if (!InternalAuthProperties.OFF.equals(mode)
@@ -52,9 +87,6 @@ public class InternalAuthAutoConfiguration {
             throw new IllegalStateException(
                     "medassist.internal-auth.mode 非法（" + mode + "）：只允许 off / log / enforce，服务拒绝启动");
         }
-
-        ObjectMapper mapper = mapperProvider.getIfAvailable(ObjectMapper::new);
-        InternalKeySet keySet = InternalKeySet.parse(props.keysJson(), mapper);
 
         if (InternalAuthProperties.ENFORCE.equals(mode) && !keySet.configured()) {
             throw new IllegalStateException(
@@ -68,10 +100,25 @@ public class InternalAuthAutoConfiguration {
             log.warn("medassist.internal-auth.mode=log 但未配置 keys-json：所有请求都无法验签，仅记录日志");
         }
 
-        log.info("internal-auth.mode={} keys={} clockSkew={}s internalPathsRequired={}",
+        log.info("internal-auth.mode={} keys={} clockSkew={}s internalPathsRequired={} internalKeys={}",
                 mode, keySet.configured() ? "configured" : "none",
-                props.clockSkewSecondsOrDefault(), props.internalPathsSignatureRequiredOrDefault());
+                props.clockSkewSecondsOrDefault(), props.internalPathsSignatureRequiredOrDefault(),
+                keySet.callerConfigured() ? "configured" : "none");
         return new InternalAuthFilter(props, keySet, registryProvider.getIfAvailable());
+    }
+
+    /** platform-clinical → clinical；medassist-gateway → gateway；其它原样小写。 */
+    static String deriveCaller(String applicationName) {
+        if (applicationName == null || applicationName.isBlank()) {
+            return null;
+        }
+        String name = applicationName.trim().toLowerCase();
+        if (name.startsWith("platform-")) {
+            name = name.substring("platform-".length());
+        } else if (name.startsWith("medassist-")) {
+            name = name.substring("medassist-".length());
+        }
+        return name;
     }
 
     /**

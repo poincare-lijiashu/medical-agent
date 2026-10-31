@@ -597,6 +597,24 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：全量单测 **421 项全过**；`scripts/e2e/tech_pacs_smoke.ps1` **36 项断言全过**（经网关）
    - 已知限制：DICOM C-FIND/C-STORE 协议未实现，由集成引擎做字段映射；FHIR 影像视图待后续
 
+46. **MF-07 T5（2026-11-01）：/internal/** 调用方签名（服务→服务第二因子）**
+   - 协议 v1i：`v1i / METHOD / path / sorted query / caller / ts / nonce / bodyHash`，
+     与网关通道（v1）分离，caller 参与规范串，换 caller 或换密钥都无法验签
+   - 密钥隔离：keys-json 新增 `internal:{clinical,emr,insurance,pharmacy,tech}`，
+     被调方按 `X-Internal-Caller` 选密钥；一个调用方密钥泄露只影响一条边
+   - 出站：`InternalCallerSigner`（caller 由 `spring.application.name` 推导，platform-clinical → clinical）
+     + `InternalSignatureClientInterceptor`（只对 `/internal/**` 加签名头）；
+     已接入全部 7 个 Http*Client（clinical/pharmacy/tech/emr×2/insurance×2），避免漏改
+   - 入站：`InternalAuthFilter` 在 `internal-paths-signature-required=true` 时校验 v1i
+     （缺失/未知 caller/密钥不符/时间偏差/重放 全部 403）；默认 false（灰度期行为不变）
+   - 启动守卫：required=true 但 keys-json 无 `internal` → 拒绝启动
+   - 保留第一因子：`X-Internal-Token` 仍由各控制器校验，签名是第二因子
+   - Helm：dev 密钥集已含 5 个调用方密钥；切换步骤写在 values.yaml 注释与 deploy/README
+   - 验证：全量单测 **430 项全过**（新增 9 项）；`internal_caller_smoke.ps1` **8 项全过**
+     （emr 以 required=true 实跑：无签名 403、合法 200、重放/换密钥/未知 caller/换路径 403、指标有计数）
+   - 已知限制：全部服务共用同一个 keys-json Secret（能读其他调用方密钥），
+     真正"每服务只挂自己密钥"需按 Deployment 分 Secret 挂载（阶段二随 mTLS 一起做）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

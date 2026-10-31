@@ -122,7 +122,9 @@ internalAuth:
   mode: log
   clockSkewSeconds: 60
   nonceTtlSeconds: 120
-  # /internal/** 的服务→服务调用是否也要求签名（T5 调用方签名落地后再切 true）
+  # /internal/** 的服务→服务调用是否也要求调用方签名（T5）。
+  # 默认 false：先确认 Secret 的 keys-json 已包含 internal.{clinical,emr,insurance,pharmacy,tech}
+  # 且全部调用方已升级，再切 true（切换后未配置密钥的调用方会被 403）。
   internalPathsSignatureRequired: false
 
 # ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
