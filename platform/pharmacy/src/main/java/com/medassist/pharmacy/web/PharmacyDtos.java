@@ -90,12 +90,18 @@ public final class PharmacyDtos {
             @Min(1) Integer days) {
     }
 
-    /** 开方。visitId/visitNo 用于与临床就诊对账，可空（药房手工开方）。 */
+    /**
+     * 开方。
+     *
+     * <p>{@code billingMode}：{@code ORDER}（默认）= 费用由临床医嘱计价，药房只发药；
+     * {@code DISPENSE} = 发药时计价（必须带 visitId，用于未关联临床医嘱的自费处方）。
+     */
     public record CreatePrescriptionReq(
             @NotNull UUID patientId,
             UUID visitId,
             @Size(max = 64) String visitNo,
             UUID deptId,
+            @Pattern(regexp = "ORDER|DISPENSE", message = "计费模式只能是 ORDER/DISPENSE") String billingMode,
             @NotEmpty List<@Valid PrescriptionLine> items) {
     }
 

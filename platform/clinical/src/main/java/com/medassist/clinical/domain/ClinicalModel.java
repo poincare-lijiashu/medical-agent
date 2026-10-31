@@ -161,4 +161,21 @@ public final class ClinicalModel {
                              String category, BigDecimal amount, String chargeStatus) {
         public static final String UNPAID = "UNPAID";
     }
+
+    /**
+     * 药房发药费用关联（N2 收尾）。
+     *
+     * <p>退药冲减的幂等依据：{@code refunded(已冲减) + pending(待财务退费) + done(已退费)}
+     * 三者只增不减，调用方传"累计已退金额"，重复提交不会重复冲账。
+     */
+    public record PharmacyChargeLink(UUID dispenseItemId, UUID visitId, UUID chargeId,
+                                     UUID chargeItemId, String drugCode, String drugName,
+                                     BigDecimal amount, BigDecimal refundedAmount,
+                                     BigDecimal refundPendingAmount, BigDecimal refundDoneAmount) {
+
+        /** 已处理过的退费总额（含已冲减、待退费、已退费）。 */
+        public BigDecimal handledRefund() {
+            return refundedAmount.add(refundPendingAmount).add(refundDoneAmount);
+        }
+    }
 }

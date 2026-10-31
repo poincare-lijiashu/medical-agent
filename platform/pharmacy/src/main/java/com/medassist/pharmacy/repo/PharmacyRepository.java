@@ -58,7 +58,8 @@ public class PharmacyRepository {
             rs.getString("status"), rs.getString("reviewer"),
             rs.getTimestamp("reviewed_at") == null ? null : rs.getTimestamp("reviewed_at").toInstant(),
             rs.getString("reject_reason"), rs.getBigDecimal("total_amount"),
-            rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+            rs.getLong("version"), rs.getTimestamp("created_at").toInstant(),
+            rs.getString("billing_mode"));
 
     private static final RowMapper<PrescriptionItem> RX_ITEM_MAPPER = (rs, i) -> new PrescriptionItem(
             rs.getObject("id", UUID.class), rs.getObject("prescription_id", UUID.class),
@@ -72,7 +73,8 @@ public class PharmacyRepository {
             rs.getObject("id", UUID.class), rs.getString("dispense_no"),
             rs.getObject("prescription_id", UUID.class), rs.getString("operator"),
             rs.getString("checker"), rs.getString("status"), rs.getBigDecimal("total_amount"),
-            rs.getTimestamp("dispensed_at").toInstant(), rs.getLong("version"));
+            rs.getTimestamp("dispensed_at").toInstant(), rs.getLong("version"),
+            rs.getString("billing_status"));
 
     private static final RowMapper<DispenseItem> DISPENSE_ITEM_MAPPER = (rs, i) -> new DispenseItem(
             rs.getObject("id", UUID.class), rs.getObject("dispense_id", UUID.class),
@@ -300,16 +302,17 @@ public class PharmacyRepository {
         jdbc.sql("""
                         INSERT INTO pharmacy_svc.prescription
                             (id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
-                             prescriber, status, total_amount, version)
+                             prescriber, status, total_amount, version, billing_mode)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid),
-                                :prescriber, :status, :total, 0)
+                                :prescriber, :status, :total, 0, :billingMode)
                         """)
                 .param("id", p.id()).param("no", p.prescriptionNo())
                 .param("patientId", p.patientId()).param("patientNo", p.patientNo())
                 .param("visitId", p.visitId()).param("visitNo", p.visitNo())
                 .param("deptId", p.deptId()).param("prescriber", p.prescriber())
-                .param("status", p.status()).param("total", p.totalAmount()).update();
+                .param("status", p.status()).param("total", p.totalAmount())
+                .param("billingMode", p.billingMode()).update();
     }
 
     public void insertPrescriptionItem(PrescriptionItem item) {
@@ -334,7 +337,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
-                               total_amount, version, created_at
+                               total_amount, version, created_at, billing_mode
                           FROM pharmacy_svc.prescription WHERE id = ?
                         """).param(id).query(RX_MAPPER).optional();
     }
@@ -344,7 +347,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
-                               total_amount, version, created_at
+                               total_amount, version, created_at, billing_mode
                           FROM pharmacy_svc.prescription WHERE id = ? FOR UPDATE
                         """).param(id).query(RX_MAPPER).optional();
     }
@@ -378,7 +381,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
-                               total_amount, version, created_at
+                               total_amount, version, created_at, billing_mode
                           FROM pharmacy_svc.prescription
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
@@ -395,13 +398,25 @@ public class PharmacyRepository {
         jdbc.sql("""
                         INSERT INTO pharmacy_svc.dispense
                             (id, dispense_no, prescription_id, operator, checker, status,
-                             total_amount, version)
-                        VALUES (:id, :no, :rxId, :operator, CAST(:checker AS text), :status, :total, 0)
+                             total_amount, version, billing_status)
+                        VALUES (:id, :no, :rxId, :operator, CAST(:checker AS text), :status, :total, 0,
+                                :billingStatus)
                         """)
                 .param("id", d.id()).param("no", d.dispenseNo())
                 .param("rxId", d.prescriptionId()).param("operator", d.operator())
                 .param("checker", d.checker()).param("status", d.status())
-                .param("total", d.totalAmount()).update();
+                .param("total", d.totalAmount())
+                .param("billingStatus", d.billingStatus()).update();
+    }
+
+    /** 更新发药计费状态（补偿重试/afterCommit 回写用；不走版本号，状态机由服务层约束）。 */
+    public boolean updateDispenseBillingStatus(UUID id, String billingStatus) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.dispense
+                           SET billing_status = :status, updated_at = now()
+                         WHERE id = :id
+                        """)
+                .param("status", billingStatus).param("id", id).update() > 0;
     }
 
     public void insertDispenseItem(DispenseItem item) {
@@ -422,7 +437,7 @@ public class PharmacyRepository {
     public Optional<Dispense> findDispense(UUID id) {
         return jdbc.sql("""
                         SELECT id, dispense_no, prescription_id, operator, checker, status,
-                               total_amount, dispensed_at, version
+                               total_amount, dispensed_at, version, billing_status
                           FROM pharmacy_svc.dispense WHERE id = ?
                         """).param(id).query(DISPENSE_MAPPER).optional();
     }
@@ -430,7 +445,7 @@ public class PharmacyRepository {
     public Optional<Dispense> findDispenseByPrescription(UUID prescriptionId) {
         return jdbc.sql("""
                         SELECT id, dispense_no, prescription_id, operator, checker, status,
-                               total_amount, dispensed_at, version
+                               total_amount, dispensed_at, version, billing_status
                           FROM pharmacy_svc.dispense WHERE prescription_id = ?
                         """).param(prescriptionId).query(DISPENSE_MAPPER).optional();
     }
@@ -438,7 +453,7 @@ public class PharmacyRepository {
     public Optional<Dispense> lockDispense(UUID id) {
         return jdbc.sql("""
                         SELECT id, dispense_no, prescription_id, operator, checker, status,
-                               total_amount, dispensed_at, version
+                               total_amount, dispensed_at, version, billing_status
                           FROM pharmacy_svc.dispense WHERE id = ? FOR UPDATE
                         """).param(id).query(DISPENSE_MAPPER).optional();
     }

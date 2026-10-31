@@ -3,6 +3,7 @@ package com.medassist.pharmacy.web;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.pharmacy.service.DrugCatalogService;
+import com.medassist.pharmacy.service.PharmacyBillingService;
 import com.medassist.pharmacy.service.PrescriptionService;
 import com.medassist.pharmacy.service.StockService;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateDrugReq;
@@ -52,7 +53,8 @@ class PharmacyControllerPermissionTest {
         drugController = new DrugController(drugService);
         stockController = new StockController(stockService);
         prescriptionController = new PrescriptionController(prescriptionService);
-        dispenseController = new DispenseController(prescriptionService);
+        dispenseController = new DispenseController(prescriptionService,
+                mock(PharmacyBillingService.class));
     }
 
     @Test
@@ -83,7 +85,7 @@ class PharmacyControllerPermissionTest {
     @Test
     @DisplayName("开方：医师权限 pharmacy:prescription:create 放行")
     void prescriptionCreateAllowedForDoctorPermission() {
-        var req = new CreatePrescriptionReq(id, null, null, null,
+        var req = new CreatePrescriptionReq(id, null, null, null, null,
                 List.of(new PrescriptionLine("D1", 1, null, null, null)));
 
         prescriptionController.create(req, "pharmacy:prescription:create", "doctor01");

@@ -46,7 +46,8 @@ public final class PharmacyModel {
     public record Prescription(UUID id, String prescriptionNo, UUID patientId, String patientNo,
                                UUID visitId, String visitNo, UUID deptId, String prescriber,
                                String status, String reviewer, Instant reviewedAt, String rejectReason,
-                               BigDecimal totalAmount, long version, Instant createdAt) {
+                               BigDecimal totalAmount, long version, Instant createdAt,
+                               String billingMode) {
 
         public static final String PENDING_REVIEW = "PENDING_REVIEW";
         public static final String APPROVED = "APPROVED";
@@ -54,8 +55,18 @@ public final class PharmacyModel {
         public static final String DISPENSED = "DISPENSED";
         public static final String CANCELLED = "CANCELLED";
 
+        /** 费用由临床医嘱计价（默认；药房只发药，不产生第二条计费链）。 */
+        public static final String BILLING_ORDER = "ORDER";
+        /** 发药时计价（必须带 visitId；用于未关联临床医嘱的自费处方）。 */
+        public static final String BILLING_DISPENSE = "DISPENSE";
+
         public boolean dispensable() {
             return APPROVED.equals(status);
+        }
+
+        /** 发药是否需要在收费域记账。 */
+        public boolean chargeOnDispense() {
+            return BILLING_DISPENSE.equals(billingMode);
         }
     }
 
@@ -69,11 +80,26 @@ public final class PharmacyModel {
     /** 发药单。 */
     public record Dispense(UUID id, String dispenseNo, UUID prescriptionId, String operator,
                            String checker, String status, BigDecimal totalAmount,
-                           Instant dispensedAt, long version) {
+                           Instant dispensedAt, long version, String billingStatus) {
 
         public static final String DISPENSED = "DISPENSED";
         public static final String PARTIAL_RETURNED = "PARTIAL_RETURNED";
         public static final String RETURNED = "RETURNED";
+
+        /** 未启用发药计费（处方 billing_mode=ORDER）。 */
+        public static final String BILLING_NONE = "NONE";
+        /** 已提交收费服务、等待确认（afterCommit 执行期间）。 */
+        public static final String BILLING_PENDING = "PENDING";
+        public static final String BILLING_CHARGED = "CHARGED";
+        public static final String BILLING_CHARGE_FAILED = "CHARGE_FAILED";
+        public static final String BILLING_REFUND_PENDING = "REFUND_PENDING";
+        public static final String BILLING_REFUND_FAILED = "REFUND_FAILED";
+
+        public boolean billingAbnormal() {
+            return BILLING_PENDING.equals(billingStatus)
+                    || BILLING_CHARGE_FAILED.equals(billingStatus)
+                    || BILLING_REFUND_FAILED.equals(billingStatus);
+        }
     }
 
     /** 发药明细（按批次）。 */

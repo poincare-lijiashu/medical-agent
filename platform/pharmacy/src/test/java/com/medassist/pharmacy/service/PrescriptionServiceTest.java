@@ -2,6 +2,7 @@ package com.medassist.pharmacy.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.pharmacy.client.ClinicalChargeClient;
 import com.medassist.pharmacy.client.PatientClient;
 import com.medassist.pharmacy.domain.PharmacyModel.Dispense;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseItem;
@@ -47,6 +48,7 @@ class PrescriptionServiceTest {
 
     private PharmacyRepository repo;
     private PatientClient patientClient;
+    private ClinicalChargeClient chargeClient;
     private PrescriptionService service;
 
     private final UUID patientId = UUID.randomUUID();
@@ -65,7 +67,10 @@ class PrescriptionServiceTest {
     void setUp() {
         repo = mock(PharmacyRepository.class);
         patientClient = mock(PatientClient.class);
-        service = new PrescriptionService(repo, patientClient, JsonMapper.builder().build());
+        chargeClient = mock(ClinicalChargeClient.class);
+        PharmacyBillingService billing = new PharmacyBillingService(repo, chargeClient,
+                JsonMapper.builder().build());
+        service = new PrescriptionService(repo, patientClient, billing, JsonMapper.builder().build());
 
         when(patientClient.requireActive(patientId))
                 .thenReturn(new PatientClient.PatientRef(patientId, "P20261031000001", "张三"));
@@ -80,13 +85,22 @@ class PrescriptionServiceTest {
     }
 
     private Prescription rx(String status, BigDecimal total, long version) {
+        return rx(status, total, version, Prescription.BILLING_ORDER);
+    }
+
+    private Prescription rx(String status, BigDecimal total, long version, String billingMode) {
         return new Prescription(rxId, "RX20261031000001", patientId, "P20261031000001",
-                null, null, null, "doctor01", status, null, null, null, total, version, Instant.now());
+                null, null, null, "doctor01", status, null, null, null, total, version, Instant.now(),
+                billingMode);
     }
 
     private Dispense dispense(String status) {
+        return dispense(status, Dispense.BILLING_NONE);
+    }
+
+    private Dispense dispense(String status, String billingStatus) {
         return new Dispense(UUID.randomUUID(), "DP20261031000001", rxId, "pharm01", null,
-                status, new BigDecimal("25.00"), Instant.now(), 0L);
+                status, new BigDecimal("25.00"), Instant.now(), 0L, billingStatus);
     }
 
     private DrugBatch batch(String batchNo, int quantity, int daysToExpire) {
@@ -101,7 +115,7 @@ class PrescriptionServiceTest {
     void createComputesAmountFromCatalog() {
         when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
 
-        PrescriptionView view = service.create(new CreatePrescriptionReq(patientId, null, null, null,
+        PrescriptionView view = service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
                 List.of(new PrescriptionLine("DRUG-AMOX-025", 2, "0.5g", "tid", 3))), "doctor01");
 
         assertThat(view.prescription().status()).isEqualTo(Prescription.PENDING_REVIEW);
@@ -121,7 +135,7 @@ class PrescriptionServiceTest {
     void createRejectsDuplicateDrug() {
         when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
 
-        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null,
+        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
                 List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null),
                         new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
@@ -134,7 +148,7 @@ class PrescriptionServiceTest {
     void createRejectsUnknownDrug() {
         when(repo.findDrugByCode("DRUG-X")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null,
+        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
                 List.of(new PrescriptionLine("DRUG-X", 1, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
@@ -370,5 +384,119 @@ class PrescriptionServiceTest {
         service.returnDrug(dispenseId, new ReturnReq(itemId, 3, "整单退回"), "pharm01");
 
         verify(repo).updateDispenseStatus(eq(dispenseId), eq(Dispense.RETURNED), eq(0L));
+    }
+
+    // ---------------------------------------------------------------- 发药计费（N2 收尾）
+
+    @Test
+    @DisplayName("发药计费：DISPENSE 模式必须关联就诊")
+    void createRejectsDispenseModeWithoutVisit() {
+        when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
+
+        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null,
+                Prescription.BILLING_DISPENSE,
+                List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null))), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("visitId");
+        verify(repo, never()).insertPrescription(any());
+    }
+
+    @Test
+    @DisplayName("发药计费：DISPENSE 模式发药后调用收费域并置 CHARGED")
+    void dispenseInDispenseModeChargesClinical() {
+        UUID visitId = UUID.randomUUID();
+        DrugBatch batch = batch("B-1", 10, 300);
+        PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
+                amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 2, "盒",
+                null, null, null, amoxicillin.price(), new BigDecimal("25.00"));
+
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(new Prescription(
+                rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
+                "doctor01", Prescription.APPROVED, null, null, null,
+                new BigDecimal("25.00"), 3L, Instant.now(), Prescription.BILLING_DISPENSE)));
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
+        when(repo.findDrug(drugId)).thenReturn(Optional.of(amoxicillin));
+        when(repo.listAvailableBatches(eq(drugId), any(LocalDate.class))).thenReturn(List.of(batch));
+        when(repo.deductBatch(any(), anyInt())).thenReturn(true);
+        when(repo.updatePrescriptionStatus(eq(rxId), eq(Prescription.APPROVED),
+                eq(Prescription.DISPENSED), eq(3L), eq(null), eq(null))).thenReturn(true);
+        when(chargeClient.charge(any(), any(), any(), anyString()))
+                .thenReturn(new ClinicalChargeClient.Charged("C20261031000001", new BigDecimal("25.00")));
+        when(repo.findDispense(any())).thenReturn(Optional.of(dispense(Dispense.DISPENSED,
+                Dispense.BILLING_CHARGED)));
+
+        service.dispense(rxId, null, "pharm01");
+
+        verify(repo).insertDispense(org.mockito.ArgumentMatchers.argThat(
+                d -> Dispense.BILLING_PENDING.equals(d.billingStatus())));
+        verify(chargeClient).charge(eq(visitId), any(UUID.class), any(), eq("pharm01"));
+        verify(repo).updateDispenseBillingStatus(any(UUID.class), eq(Dispense.BILLING_CHARGED));
+    }
+
+    @Test
+    @DisplayName("发药计费：收费域不可用 → 标记 CHARGE_FAILED（不回滚发药）")
+    void dispenseChargeFailureIsRecordedForRetry() {
+        UUID visitId = UUID.randomUUID();
+        DrugBatch batch = batch("B-1", 10, 300);
+        PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
+                amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 1, "盒",
+                null, null, null, amoxicillin.price(), new BigDecimal("12.50"));
+
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(new Prescription(
+                rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
+                "doctor01", Prescription.APPROVED, null, null, null,
+                new BigDecimal("12.50"), 3L, Instant.now(), Prescription.BILLING_DISPENSE)));
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
+        when(repo.findDrug(drugId)).thenReturn(Optional.of(amoxicillin));
+        when(repo.listAvailableBatches(eq(drugId), any(LocalDate.class))).thenReturn(List.of(batch));
+        when(repo.deductBatch(any(), anyInt())).thenReturn(true);
+        when(repo.updatePrescriptionStatus(any(), any(), any(), anyLong(), any(), any()))
+                .thenReturn(true);
+        when(chargeClient.charge(any(), any(), any(), anyString()))
+                .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "收费服务暂不可用"));
+
+        service.dispense(rxId, null, "pharm01");
+
+        verify(repo).updateDispenseBillingStatus(any(UUID.class), eq(Dispense.BILLING_CHARGE_FAILED));
+        verify(repo).logChange(eq("pharm01"), eq("DISPENSE_CHARGE_FAILED"), eq("DISPENSE"),
+                anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("退药冲减：按累计已退金额调用收费域，已结算则标记待退费")
+    void returnInDispenseModeSendsCumulativeRefund() {
+        UUID visitId = UUID.randomUUID();
+        UUID dispenseId = UUID.randomUUID();
+        UUID itemId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        DispenseItem before = new DispenseItem(itemId, dispenseId, UUID.randomUUID(), drugId,
+                batchId, "B-1", LocalDate.now().plusDays(100), 5, 0,
+                amoxicillin.price(), new BigDecimal("62.50"));
+        DispenseItem after = new DispenseItem(itemId, dispenseId, before.prescriptionItemId(), drugId,
+                batchId, "B-1", before.expireDate(), 5, 2, amoxicillin.price(), before.amount());
+
+        when(repo.lockDispense(dispenseId)).thenReturn(Optional.of(dispense(Dispense.DISPENSED,
+                Dispense.BILLING_CHARGED)));
+        when(repo.findDispenseItem(itemId)).thenReturn(Optional.of(before));
+        when(repo.addReturnedQuantity(itemId, 2)).thenReturn(true);
+        when(repo.addBatchQuantity(batchId, 2)).thenReturn(true);
+        when(repo.listDispenseItems(dispenseId)).thenReturn(List.of(after));
+        when(repo.updateDispenseStatus(eq(dispenseId), eq(Dispense.PARTIAL_RETURNED), eq(0L)))
+                .thenReturn(true);
+        when(repo.findPrescription(any())).thenReturn(Optional.of(new Prescription(
+                rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
+                "doctor01", Prescription.DISPENSED, null, null, null,
+                new BigDecimal("62.50"), 4L, Instant.now(), Prescription.BILLING_DISPENSE)));
+        when(chargeClient.refund(any(), any(), anyString(), anyString()))
+                .thenReturn(new ClinicalChargeClient.Refunded(BigDecimal.ZERO));
+
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "患者停药"), "pharm01");
+
+        // 累计已退 = 单价 12.50 × 已退 2 = 25.00
+        verify(chargeClient).refund(eq(itemId), org.mockito.ArgumentMatchers.eq(new BigDecimal("25.00")),
+                anyString(), eq("pharm01"));
+        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_CHARGED));
     }
 }

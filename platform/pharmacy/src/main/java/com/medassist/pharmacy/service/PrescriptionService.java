@@ -52,12 +52,14 @@ public class PrescriptionService {
 
     private final PharmacyRepository repo;
     private final PatientClient patientClient;
+    private final PharmacyBillingService billing;
     private final ObjectMapper objectMapper;
 
     public PrescriptionService(PharmacyRepository repo, PatientClient patientClient,
-                               ObjectMapper objectMapper) {
+                               PharmacyBillingService billing, ObjectMapper objectMapper) {
         this.repo = repo;
         this.patientClient = patientClient;
+        this.billing = billing;
         this.objectMapper = objectMapper;
     }
 
@@ -66,6 +68,7 @@ public class PrescriptionService {
     @Transactional
     public PrescriptionView create(CreatePrescriptionReq req, String actor) {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
+        String billingMode = billingModeOf(req.billingMode(), req.visitId());
 
         Set<String> seen = new HashSet<>();
         List<PrescriptionItem> items = new ArrayList<>();
@@ -95,7 +98,7 @@ public class PrescriptionService {
         Prescription rx = new Prescription(prescriptionId, repo.nextPrescriptionNo(),
                 patient.id(), patient.patientNo(), req.visitId(), blankToNull(req.visitNo()),
                 req.deptId(), actor, Prescription.PENDING_REVIEW, null, null, null,
-                total, 0L, null);
+                total, 0L, null, billingMode);
         repo.insertPrescription(rx);
         for (PrescriptionItem item : items) {
             repo.insertPrescriptionItem(item);
@@ -103,7 +106,7 @@ public class PrescriptionService {
 
         audit(actor, "RX_CREATE", "PRESCRIPTION", prescriptionId.toString(), Map.of(
                 "prescriptionNo", rx.prescriptionNo(), "patientNo", patient.patientNo(),
-                "itemCount", items.size(), "totalAmount", total));
+                "itemCount", items.size(), "totalAmount", total, "billingMode", billingMode));
         return new PrescriptionView(repo.findPrescription(prescriptionId).orElseThrow(), items);
     }
 
@@ -195,8 +198,10 @@ public class PrescriptionService {
             }
         }
 
+        String billingStatus = rx.chargeOnDispense()
+                ? Dispense.BILLING_PENDING : Dispense.BILLING_NONE;
         Dispense dispense = new Dispense(dispenseId, repo.nextDispenseNo(), prescriptionId, actor,
-                blankToNull(checker), Dispense.DISPENSED, total, null, 0L);
+                blankToNull(checker), Dispense.DISPENSED, total, null, 0L, billingStatus);
         try {
             repo.insertDispense(dispense);
         } catch (DataIntegrityViolationException e) {
@@ -214,7 +219,12 @@ public class PrescriptionService {
         audit(actor, "DISPENSE", "PRESCRIPTION", prescriptionId.toString(), Map.of(
                 "prescriptionNo", rx.prescriptionNo(), "dispenseNo", dispense.dispenseNo(),
                 "batchCount", dispensed.size(), "totalAmount", total,
-                "checker", dispense.checker() == null ? "" : dispense.checker()));
+                "checker", dispense.checker() == null ? "" : dispense.checker(),
+                "billingMode", rx.billingMode() == null ? Prescription.BILLING_ORDER : rx.billingMode()));
+        // 计费在本地事务提交后执行：失败不回滚发药事实，置 CHARGE_FAILED 供补偿重试
+        if (rx.chargeOnDispense()) {
+            billing.scheduleCharge(dispense, rx.visitId(), dispensed, actor);
+        }
         return dispenseDetail(dispenseId);
     }
 
@@ -258,6 +268,11 @@ public class PrescriptionService {
                 "dispenseNo", dispense.dispenseNo(), "batchNo", item.batchNo(),
                 "quantity", req.quantity(), "amount", item.unitPrice()
                         .multiply(BigDecimal.valueOf(req.quantity())).setScale(2, RoundingMode.HALF_UP)));
+        // 发药计费模式：退药后按"累计已退金额"冲减（未结算改账 / 已结算登记待退费）
+        Prescription rx = repo.findPrescription(dispense.prescriptionId()).orElse(null);
+        if (rx != null && rx.chargeOnDispense() && billable(dispense.billingStatus())) {
+            billing.scheduleRefund(dispenseId, all, actor);
+        }
         return dispenseDetail(dispenseId);
     }
 
@@ -309,6 +324,28 @@ public class PrescriptionService {
 
     private String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s.trim();
+    }
+
+    /**
+     * 计费模式归一化：默认 ORDER（由临床医嘱计价）。
+     *
+     * <p>DISPENSE 必须带 visitId——没有就诊就没有收费单可记，宁可开方时直接拒绝。
+     */
+    private static String billingModeOf(String requested, UUID visitId) {
+        String mode = requested == null || requested.isBlank()
+                ? Prescription.BILLING_ORDER : requested.trim().toUpperCase();
+        if (Prescription.BILLING_DISPENSE.equals(mode) && visitId == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "发药计费（billingMode=DISPENSE）必须关联临床就诊 visitId");
+        }
+        return mode;
+    }
+
+    /** 只有已计费/已有待退费的发药单才需要冲减；NONE/PENDING/CHARGE_FAILED 没有可冲的账。 */
+    private static boolean billable(String billingStatus) {
+        return Dispense.BILLING_CHARGED.equals(billingStatus)
+                || Dispense.BILLING_REFUND_PENDING.equals(billingStatus)
+                || Dispense.BILLING_REFUND_FAILED.equals(billingStatus);
     }
 
     private void audit(String actor, String action, String targetType, String targetId,

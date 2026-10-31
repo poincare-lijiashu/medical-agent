@@ -3,6 +3,7 @@ package com.medassist.pharmacy.web;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
+import com.medassist.pharmacy.service.PharmacyBillingService;
 import com.medassist.pharmacy.service.PrescriptionService;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
@@ -28,11 +29,14 @@ public class DispenseController {
 
     private static final String READ = "pharmacy:read";
     private static final String RETURN = "pharmacy:dispense:return";
+    private static final String EXECUTE = "pharmacy:dispense:execute";
 
     private final PrescriptionService service;
+    private final PharmacyBillingService billing;
 
-    public DispenseController(PrescriptionService service) {
+    public DispenseController(PrescriptionService service, PharmacyBillingService billing) {
         this.service = service;
+        this.billing = billing;
     }
 
     @GetMapping("/{id}")
@@ -52,5 +56,21 @@ public class DispenseController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, RETURN);
         return ApiResponse.ok(service.returnDrug(id, req, actor));
+    }
+
+    /**
+     * 发药计费补偿重试（仅 billing_mode=DISPENSE 的处方）。
+     *
+     * <p>收费域抖动时发药单会置 {@code CHARGE_FAILED / REFUND_FAILED}，由药房窗口或运维重试；
+     * 临床侧按发药明细 id 幂等，重复调用不会重复记账。
+     */
+    @PostMapping("/{id}/billing-retry")
+    public ApiResponse<DispenseView> retryBilling(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, EXECUTE);
+        billing.retry(id, actor);
+        return ApiResponse.ok(service.dispenseDetail(id));
     }
 }

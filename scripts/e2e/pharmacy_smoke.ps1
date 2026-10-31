@@ -73,7 +73,9 @@ $amox = $drugs[0].drug
 $amoxId = $amox.id
 Check 'drug.insuranceCategory' $amox.insuranceCategory 'A'
 CheckAmt 'drug.price' $amox.price 12.50
-CheckAmt 'drug.stock.initial' $drugs[0].totalStock 0
+# Stock accumulates across runs: use a baseline + delta so the script is repeatable.
+$stockBase = [decimal]$drugs[0].totalStock
+Check 'drug.stock.baseline.readable' ($stockBase -ge 0) $true
 
 # ---------------------------------------------------------------- 4. receive batches
 $near = (Get-Date).AddDays(40).ToString('yyyy-MM-dd')
@@ -102,7 +104,7 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/drugs/$amoxId/batches" @{
 Check 'stock.receive.duplicateBatch.409' $r.Status 409
 
 $r = Invoke-Api 'GET' "/api/v2/pharmacy/drugs/$amoxId" $null $token
-CheckAmt 'stock.total' (Res $r).totalStock 13
+CheckAmt 'stock.total' (Res $r).totalStock ($stockBase + 13)
 
 # ---------------------------------------------------------------- 5. prescription
 $r = Invoke-Api 'POST' '/api/v2/pharmacy/prescriptions' @{
@@ -149,7 +151,7 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$rxId/dispense" @{} $toke
 Check 'dispense.repeat.409' $r.Status 409
 
 $r = Invoke-Api 'GET' "/api/v2/pharmacy/drugs/$amoxId" $null $token
-CheckAmt 'stock.afterDispense' (Res $r).totalStock 8
+CheckAmt 'stock.afterDispense' (Res $r).totalStock ($stockBase + 8)
 
 # ---------------------------------------------------------------- 8. return
 $farItem = $disp.items[1].id
@@ -166,7 +168,7 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/dispenses/$dispId/returns" @{
 Check 'return.exceed.409' $r.Status 409
 
 $r = Invoke-Api 'GET' "/api/v2/pharmacy/drugs/$amoxId" $null $token
-CheckAmt 'stock.afterReturn' (Res $r).totalStock 10
+CheckAmt 'stock.afterReturn' (Res $r).totalStock ($stockBase + 10)
 
 # ---------------------------------------------------------------- 9. narcotic double check
 $r = Invoke-Api 'POST' '/api/v2/pharmacy/drugs' @{

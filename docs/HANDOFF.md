@@ -652,6 +652,24 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      渲染核对 KEYSJSON 引用数 dev=7 / staging=14 / prod=0，私钥引用恒为 1（仅网关）
    - 遗留：R5-S17（CI 跑 E2E）与 §7.2 mTLS 仍未做
 
+49. **N2 收尾（2026-11-01）：药房—收费联动（发药计费 / 退药冲减 / 待财务退费）**
+   - 处方新增 `billingMode`：`ORDER`（默认，费用由临床医嘱计价，**不重复计费**）/
+     `DISPENSE`（发药时计价，必须带 `visitId`，否则 422）；`pharmacy V2` 迁移
+   - 发药计费在**本地事务提交后**（afterCommit）调用临床 `POST /internal/pharmacy-charges`：
+     幂等键 `DISPENSE:{dispenseItemId}`，落在当前 UNPAID 收费单（无则新建），金额增量累加；
+     失败置 `CHARGE_FAILED`，由 `POST /pharmacy/dispenses/{id}/billing-retry` 补偿（临床侧幂等）
+   - 退药按"**累计已退金额**"幂等冲减 `POST /internal/pharmacy-refunds`：原单 UNPAID → 写负向明细
+     （`DISPENSE_RETURN:`）并冲减总额；原单已结算 → 只登记 `refund_pending_amount`，**绝不改写已结算账单**；
+     财务实际退款后 `POST /internal/pharmacy-refunds/{id}/complete` 核销
+   - 数据库兜底（`clinical V10`）：`charge_item.amount <> 0`；负金额只允许 `DISPENSE_RETURN:` 前缀（触发器）；
+     无医嘱明细允许 `REG:`/`DISPENSE:`；`pharmacy_charge` 三笔退费之和 ≤ 原发药金额（CHECK）
+   - 部署：`deployment-pharmacy.yaml` 注入 `CLINICAL_INTERNAL_URI`；令牌沿用 `INTERNAL_API_TOKEN`
+   - **实测**：新增 `scripts/e2e/pharmacy_billing_smoke.ps1` **36 项全过**（含"重复发药不重复计费"、
+     "ORDER 模式账单不变"、"先结算再退药 → REFUND_PENDING 且账单未变"、"内部接口无令牌 403/40300"）
+   - 回归：全量单测 **480 项**（临床 +8、药房 +4）；`platform_smoke`（60+ 项）、`pharmacy_smoke`（44 项）全过；
+     `pharmacy_smoke` 的库存断言改为"基线 + 增量"，脚本可重复跑（此前只能跑在干净库上）
+   - 遗留：支付渠道实际退款（随 N5/财务凭证）、处方前置审方规则引擎、药品字典批量导入
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -691,6 +709,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 - 生产守卫别只认 profile 字面量：Helm Chart 给 Java 服务注入的是 `SPRING_PROFILES_ACTIVE=k8s`，
   `isProduction` 漏了 k8s 就等于生产无守卫。现在同时用 `KUBERNETES_SERVICE_HOST` 兜底，
   以后再加环境名也不会漏
+- 事务提交后的动作（`afterCommit`）不会反映在本次响应里：发药接口返回的是 `PENDING`，
+  毫秒后才变 `CHARGED`。E2E 断言这类状态必须**轮询收敛**，否则把正确实现判成失败
+- Mockito 的 `anyString()` **不匹配 null**：给可空参数（reviewer/rejectReason）打桩必须用 `any()`，
+  否则桩不生效、方法返回 false，测试报的是"业务状态冲突"而不是"桩写错"
+- E2E 里的绝对库存/绝对计数会在第二次运行就失败：跨次运行的累积量用"基线 + 增量"断言
+  （本轮已把 `pharmacy_smoke` 的库存检查改成这种写法）
 - 单库多 schema 跨域 UNION 查询要先 `to_regclass('schema.table')` 探测：某域未部署时
   直接写死表名会让整个接口 500（结果还要缓存，别每次查询都探测）
 - `mvn -Pprod-package` 排除 dev 配置后，本地 `java -jar` 仍用普通构建（不带 profile），

@@ -8,6 +8,7 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
@@ -434,6 +435,14 @@ public class ClinicalRepository {
         return jdbc.sql("""
                         SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
                           FROM clinical_svc.charge WHERE id = ?
+                        """).param(id).query(CHARGE_MAPPER).optional();
+    }
+
+    /** 加行锁读取收费单；退药冲减前必须锁单，避免与并发结算互相踩踏。 */
+    public Optional<Charge> lockCharge(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
+                          FROM clinical_svc.charge WHERE id = ? FOR UPDATE
                         """).param(id).query(CHARGE_MAPPER).optional();
     }
 
@@ -927,6 +936,94 @@ public class ClinicalRepository {
                         """)
                 .param("visitId", visitId).param("date", date)
                 .query(NURSING_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 药房发药费用（N2 收尾）
+
+    private static final RowMapper<PharmacyChargeLink> PHARMACY_CHARGE_MAPPER = (rs, i) ->
+            new PharmacyChargeLink(
+                    rs.getObject("dispense_item_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class),
+                    rs.getObject("charge_id", UUID.class),
+                    rs.getObject("charge_item_id", UUID.class),
+                    rs.getString("drug_code"), rs.getString("drug_name"),
+                    rs.getBigDecimal("amount"), rs.getBigDecimal("refunded_amount"),
+                    rs.getBigDecimal("refund_pending_amount"), rs.getBigDecimal("refund_done_amount"));
+
+    private static final String PHARMACY_CHARGE_COLUMNS =
+            "dispense_item_id, visit_id, charge_id, charge_item_id, drug_code, drug_name, "
+                    + "amount, refunded_amount, refund_pending_amount, refund_done_amount";
+
+    public Optional<PharmacyChargeLink> findPharmacyCharge(UUID dispenseItemId) {
+        return jdbc.sql("SELECT " + PHARMACY_CHARGE_COLUMNS
+                        + " FROM clinical_svc.pharmacy_charge WHERE dispense_item_id = ?")
+                .param(dispenseItemId).query(PHARMACY_CHARGE_MAPPER).optional();
+    }
+
+    /** 加行锁读取药房费用关联；退药冲减必须走这里（并发退同一明细时串行）。 */
+    public Optional<PharmacyChargeLink> lockPharmacyCharge(UUID dispenseItemId) {
+        return jdbc.sql("SELECT " + PHARMACY_CHARGE_COLUMNS
+                        + " FROM clinical_svc.pharmacy_charge WHERE dispense_item_id = ? FOR UPDATE")
+                .param(dispenseItemId).query(PHARMACY_CHARGE_MAPPER).optional();
+    }
+
+    public void insertPharmacyCharge(UUID dispenseItemId, UUID visitId, UUID chargeId,
+                                     UUID chargeItemId, String drugCode, String drugName,
+                                     BigDecimal amount) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pharmacy_charge
+                            (dispense_item_id, visit_id, charge_id, charge_item_id,
+                             drug_code, drug_name, amount)
+                        VALUES (:dispenseItemId, :visitId, :chargeId, :chargeItemId,
+                                :drugCode, :drugName, :amount)
+                        ON CONFLICT (dispense_item_id) DO NOTHING
+                        """)
+                .param("dispenseItemId", dispenseItemId).param("visitId", visitId)
+                .param("chargeId", chargeId).param("chargeItemId", chargeItemId)
+                .param("drugCode", drugCode).param("drugName", drugName)
+                .param("amount", amount).update();
+    }
+
+    /** 未结算收费单上的退药冲减：累计已冲减金额（数据库约束保证不超过原金额）。 */
+    public boolean addPharmacyRefundApplied(UUID dispenseItemId, BigDecimal delta) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pharmacy_charge
+                           SET refunded_amount = refunded_amount + :delta, updated_at = now()
+                         WHERE dispense_item_id = :id
+                           AND refunded_amount + refund_pending_amount + refund_done_amount + :delta <= amount
+                        """)
+                .param("delta", delta).param("id", dispenseItemId).update() > 0;
+    }
+
+    /** 已结算收费单：登记待财务退费金额（不改账）。 */
+    public boolean addPharmacyRefundPending(UUID dispenseItemId, BigDecimal delta) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pharmacy_charge
+                           SET refund_pending_amount = refund_pending_amount + :delta, updated_at = now()
+                         WHERE dispense_item_id = :id
+                           AND refunded_amount + refund_pending_amount + refund_done_amount + :delta <= amount
+                        """)
+                .param("delta", delta).param("id", dispenseItemId).update() > 0;
+    }
+
+    /** 财务确认退费：待退费 → 已退费（金额不得超过待退费余额）。 */
+    public boolean completePharmacyRefund(UUID dispenseItemId, BigDecimal amount) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pharmacy_charge
+                           SET refund_pending_amount = refund_pending_amount - :amount,
+                               refund_done_amount = refund_done_amount + :amount,
+                               updated_at = now()
+                         WHERE dispense_item_id = :id AND refund_pending_amount >= :amount
+                        """)
+                .param("amount", amount).param("id", dispenseItemId).update() > 0;
+    }
+
+    /** 待财务退费的药房费用（按更新时间倒序）。 */
+    public List<PharmacyChargeLink> listPendingPharmacyRefunds(int limit) {
+        return jdbc.sql("SELECT " + PHARMACY_CHARGE_COLUMNS
+                        + " FROM clinical_svc.pharmacy_charge"
+                        + " WHERE refund_pending_amount > 0 ORDER BY updated_at DESC LIMIT ?")
+                .param(limit).query(PHARMACY_CHARGE_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

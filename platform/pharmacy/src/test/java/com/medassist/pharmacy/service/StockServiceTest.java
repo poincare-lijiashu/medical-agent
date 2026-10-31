@@ -48,7 +48,9 @@ class StockServiceTest {
     void setUp() {
         repo = mock(PharmacyRepository.class);
         PharmacyProperties props = new PharmacyProperties(
-                new PharmacyProperties.Empi("http://127.0.0.1:8082", "token", Duration.ofSeconds(2)), 90);
+                new PharmacyProperties.Empi("http://127.0.0.1:8082", "token", Duration.ofSeconds(2)),
+                new PharmacyProperties.Clinical("http://127.0.0.1:8083", "token", Duration.ofSeconds(3)),
+                90);
         service = new StockService(repo, props, JsonMapper.builder().build());
         when(repo.findDrug(drugId)).thenReturn(Optional.of(drug));
     }
