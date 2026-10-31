@@ -4,6 +4,7 @@ import com.medassist.clinical.client.PatientClient;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
+import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
@@ -13,6 +14,7 @@ import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateBedsReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateWardReq;
+import com.medassist.clinical.web.ClinicalDtos.DepositView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -220,6 +222,60 @@ public class InpatientService {
                 "admissionNo", a.admissionNo(), "visitNo", visit.visitNo(),
                 "chargeNo", charge.chargeNo(), "totalAmount", charge.totalAmount()));
         return toView(repo.findAdmission(a.id()).orElseThrow());
+    }
+
+    // ---------------------------------------------------------------- 预交金
+
+    /** 缴纳预交金（正数入账）。 */
+    @Transactional
+    public DepositView deposit(UUID admissionId, BigDecimal amount, String method,
+                               String remark, String actor) {
+        Admission a = requireActiveAdmission(admissionId);
+        BigDecimal amt = amount.setScale(2, java.math.RoundingMode.HALF_UP);
+        repo.insertDeposit(UUID.randomUUID(), a.id(), amt, Deposit.DEPOSIT,
+                method.trim(), actor, blankToNull(remark));
+        audit(actor, "DEPOSIT", "ADMISSION", a.id().toString(), Map.of(
+                "admissionNo", a.admissionNo(), "amount", amt, "method", method.trim(),
+                "balance", repo.depositBalance(a.id())));
+        return balance(admissionId);
+    }
+
+    /** 退还预交金（负数入账，不得超过当前余额）。 */
+    @Transactional
+    public DepositView refund(UUID admissionId, BigDecimal amount, String method,
+                              String remark, String actor) {
+        Admission a = requireActiveAdmission(admissionId);
+        BigDecimal amt = amount.setScale(2, java.math.RoundingMode.HALF_UP);
+        BigDecimal balance = repo.depositBalance(a.id());
+        if (balance.compareTo(amt) < 0) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "退还金额超过预交金余额（当前余额 " + balance + "）");
+        }
+        repo.insertDeposit(UUID.randomUUID(), a.id(), amt.negate(), Deposit.REFUND,
+                method.trim(), actor, blankToNull(remark));
+        audit(actor, "DEPOSIT_REFUND", "ADMISSION", a.id().toString(), Map.of(
+                "admissionNo", a.admissionNo(), "amount", amt, "method", method.trim(),
+                "balance", repo.depositBalance(a.id())));
+        return balance(admissionId);
+    }
+
+    public DepositView balance(UUID admissionId) {
+        Admission a = repo.findAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        return new DepositView(repo.depositBalance(a.id()), repo.listDeposits(a.id()));
+    }
+
+    private Admission requireActiveAdmission(UUID admissionId) {
+        Admission a = repo.lockAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        if (!a.active()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该住院登记已出院或已取消，不能操作预交金");
+        }
+        return a;
+    }
+
+    private String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     public AdmissionView detail(UUID admissionId) {

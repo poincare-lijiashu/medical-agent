@@ -148,6 +148,39 @@ class InpatientServiceTest {
     }
 
     @Test
+    @DisplayName("预交金：存入后余额增加，流水记为 DEPOSIT")
+    void depositIncreasesBalance() {
+        UUID admissionId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.depositBalance(admissionId)).thenReturn(new BigDecimal("100.00"));
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.listDeposits(admissionId)).thenReturn(java.util.List.of());
+
+        var view = service.deposit(admissionId, new BigDecimal("100"), "CASH", "首次预交", "clerk01");
+
+        assertThat(view.balance()).isEqualByComparingTo("100.00");
+        verify(repo).insertDeposit(any(), eq(admissionId), eq(new BigDecimal("100.00")),
+                eq("DEPOSIT"), eq("CASH"), eq("clerk01"), eq("首次预交"));
+    }
+
+    @Test
+    @DisplayName("退预交金不得超过余额")
+    void refundRejectedOverBalance() {
+        UUID admissionId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.depositBalance(admissionId)).thenReturn(new BigDecimal("50.00"));
+
+        assertThatThrownBy(() -> service.refund(admissionId, new BigDecimal("60"), "CASH", null, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("50.00");
+        verify(repo, never()).insertDeposit(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("出院：置 DISCHARGED、腾床、结束就诊")
     void dischargeFreesBedAndFinishesVisit() {
         UUID admissionId = UUID.randomUUID();

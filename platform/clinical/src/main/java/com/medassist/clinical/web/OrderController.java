@@ -3,6 +3,7 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.service.OrderService;
 import com.medassist.clinical.web.ClinicalDtos.PlaceOrdersReq;
+import com.medassist.clinical.web.ClinicalDtos.StopOrderReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
@@ -60,5 +61,17 @@ public class OrderController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, ORDER_CREATE);
         return ApiResponse.ok(service.cancel(visitId, orderId, actor));
+    }
+
+    /** 停嘱（住院长嘱）：停嘱当日仍计费，次日起不再计费。 */
+    @PostMapping("/{orderId}/stop")
+    public ApiResponse<VisitOrder> stop(
+            @PathVariable UUID visitId,
+            @PathVariable UUID orderId,
+            @RequestBody(required = false) StopOrderReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, ORDER_CREATE);
+        return ApiResponse.ok(service.stop(visitId, orderId, req == null ? null : req.reason(), actor));
     }
 }

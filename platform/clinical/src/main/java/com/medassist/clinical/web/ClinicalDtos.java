@@ -43,16 +43,21 @@ public final class ClinicalDtos {
             LocalDate visitDate) {
     }
 
-    /** 一条医嘱。 */
+    /** 一条医嘱。{@code orderMode} 可空：默认 TEMP（临时医嘱）；住院可传 LONG（长嘱）。 */
     public record OrderLine(
             @NotBlank String itemCode,
             @Min(1) int quantity,
             String dose,
-            String frequency) {
+            String frequency,
+            String orderMode) {
     }
 
     /** 批量开立医嘱。 */
     public record PlaceOrdersReq(@NotEmpty List<@Valid OrderLine> items) {
+    }
+
+    /** 停嘱。 */
+    public record StopOrderReq(String reason) {
     }
 
     /** 结算（收费）。 */
@@ -107,5 +112,22 @@ public final class ClinicalDtos {
                                 UUID patientId, String patientNo, UUID wardId, String wardName,
                                 UUID bedId, String bedNo, String attendingDoctor, String status,
                                 java.time.Instant admittedAt, java.time.Instant dischargedAt) {
+    }
+
+    /** 按日计费结果（当日新计金额 + 收费单累计）。 */
+    public record DailyBillResult(LocalDate date, int orderCount, BigDecimal billedAmount,
+                                  BigDecimal chargeTotal) {
+    }
+
+    /** 预交金操作（amount 必须为正；退还时服务端取负）。 */
+    public record DepositReq(
+            @NotNull @jakarta.validation.constraints.DecimalMin(value = "0.01", message = "金额必须大于 0")
+            BigDecimal amount,
+            @NotBlank String method,
+            String remark) {
+    }
+
+    /** 预交金余额与流水。 */
+    public record DepositView(BigDecimal balance, List<com.medassist.clinical.domain.ClinicalModel.Deposit> items) {
     }
 }

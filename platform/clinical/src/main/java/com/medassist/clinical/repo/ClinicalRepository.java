@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
+import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
@@ -62,7 +63,10 @@ public class ClinicalRepository {
             rs.getString("item_code"), rs.getString("item_name"), rs.getString("dose"),
             rs.getString("frequency"), rs.getInt("quantity"), rs.getString("unit"),
             rs.getBigDecimal("unit_price"), rs.getBigDecimal("amount"),
-            rs.getString("status"), rs.getString("ordered_by"), rs.getLong("version"));
+            rs.getString("status"), rs.getString("ordered_by"), rs.getLong("version"),
+            rs.getString("order_mode"),
+            rs.getDate("start_date") == null ? null : rs.getDate("start_date").toLocalDate(),
+            rs.getDate("stop_date") == null ? null : rs.getDate("stop_date").toLocalDate());
 
     private static final RowMapper<Charge> CHARGE_MAPPER = (rs, i) -> new Charge(
             rs.getObject("id", UUID.class), rs.getString("charge_no"),
@@ -235,9 +239,11 @@ public class ClinicalRepository {
         jdbc.sql("""
                         INSERT INTO clinical_svc.visit_order
                             (id, order_no, visit_id, order_type, item_code, item_name, dose, frequency,
-                             quantity, unit, unit_price, amount, status, ordered_by, version)
+                             quantity, unit, unit_price, amount, status, ordered_by, version,
+                             order_mode, start_date)
                         VALUES (:id, :orderNo, :visitId, :orderType, :itemCode, :itemName, :dose,
-                                :frequency, :quantity, :unit, :unitPrice, :amount, :status, :orderedBy, 0)
+                                :frequency, :quantity, :unit, :unitPrice, :amount, :status, :orderedBy, 0,
+                                :orderMode, :startDate)
                         """)
                 .param("id", o.id()).param("orderNo", o.orderNo()).param("visitId", o.visitId())
                 .param("orderType", o.orderType()).param("itemCode", o.itemCode())
@@ -245,7 +251,36 @@ public class ClinicalRepository {
                 .param("frequency", o.frequency()).param("quantity", o.quantity())
                 .param("unit", o.unit()).param("unitPrice", o.unitPrice())
                 .param("amount", o.amount()).param("status", o.status())
-                .param("orderedBy", o.orderedBy()).update();
+                .param("orderedBy", o.orderedBy())
+                .param("orderMode", o.orderMode())
+                .param("startDate", o.startDate()).update();
+    }
+
+    /** 停嘱（CAS）：仅 LONG + PLACED 可停；停嘱日仍计费，次日起不再计费。 */
+    public boolean stopLongOrder(UUID orderId, UUID visitId, LocalDate stopDate,
+                                 String operator, String reason) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_order
+                           SET stop_date = :stopDate, stopped_by = :operator, stop_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND visit_id = :visitId
+                           AND order_mode = 'LONG' AND status = 'PLACED' AND stop_date IS NULL
+                        """)
+                .param("stopDate", stopDate).param("operator", operator)
+                .param("reason", reason).param("id", orderId).param("visitId", visitId)
+                .update() > 0;
+    }
+
+    /** 某天可计费的长嘱（未停或停嘱日 &gt;= 计费日）。 */
+    public List<VisitOrder> listBillableLongOrders(UUID visitId, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.visit_order
+                         WHERE visit_id = :visitId AND order_mode = 'LONG' AND status = 'PLACED'
+                           AND start_date <= :date AND (stop_date IS NULL OR stop_date >= :date)
+                         ORDER BY created_at
+                        """)
+                .param("visitId", visitId).param("date", date)
+                .query(ORDER_MAPPER).list();
     }
 
     public List<VisitOrder> listOrders(UUID visitId, String status) {
@@ -312,16 +347,20 @@ public class ClinicalRepository {
                 .param("status", c.status()).update();
     }
 
-    /** 费用明细：order_id 唯一 → 重复结算自动跳过（返回 false 表示已计过费）。 */
-    public boolean insertChargeItem(UUID id, UUID chargeId, UUID orderId, String itemCode,
-                                    String itemName, String category, BigDecimal amount) {
+    /**
+     * 费用明细（幂等键 source_key）：
+     * 一次性医嘱 {@code ORDER:{orderId}}、按日计费 {@code DAILY:{orderId}:{date}}。
+     */
+    public boolean insertChargeItem(UUID id, UUID chargeId, UUID orderId, String sourceKey,
+                                    String itemCode, String itemName, String category, BigDecimal amount) {
         return jdbc.sql("""
                         INSERT INTO clinical_svc.charge_item
-                            (id, charge_id, order_id, item_code, item_name, category, amount)
-                        VALUES (:id, :chargeId, :orderId, :itemCode, :itemName, :category, :amount)
-                        ON CONFLICT (order_id) DO NOTHING
+                            (id, charge_id, order_id, source_key, item_code, item_name, category, amount)
+                        VALUES (:id, :chargeId, :orderId, :sourceKey, :itemCode, :itemName, :category, :amount)
+                        ON CONFLICT (source_key) DO NOTHING
                         """)
                 .param("id", id).param("chargeId", chargeId).param("orderId", orderId)
+                .param("sourceKey", sourceKey)
                 .param("itemCode", itemCode).param("itemName", itemName)
                 .param("category", category).param("amount", amount).update() > 0;
     }
@@ -350,17 +389,29 @@ public class ClinicalRepository {
                 .param(chargeId).query(BigDecimal.class).single();
     }
 
-    /** 挂号费明细（没有对应医嘱，order_id 为 NULL）。 */
+    /** 挂号费明细（没有对应医嘱，order_id 为 NULL，source_key=REG:{id}）。 */
     public void insertChargeItemWithoutOrder(UUID id, UUID chargeId, String itemCode,
                                              String itemName, String category, BigDecimal amount) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.charge_item
-                            (id, charge_id, order_id, item_code, item_name, category, amount)
-                        VALUES (:id, :chargeId, NULL, :itemCode, :itemName, :category, :amount)
+                            (id, charge_id, order_id, source_key, item_code, item_name, category, amount)
+                        VALUES (:id, :chargeId, NULL, :sourceKey, :itemCode, :itemName, :category, :amount)
                         """)
-                .param("id", id).param("chargeId", chargeId).param("itemCode", itemCode)
+                .param("id", id).param("chargeId", chargeId).param("sourceKey", "REG:" + id)
+                .param("itemCode", itemCode)
                 .param("itemName", itemName).param("category", category)
                 .param("amount", amount).update();
+    }
+
+    /** 未结算状态下累加收费单金额（按日计费使用；CAS 防并发丢更新）。 */
+    public boolean addChargeAmount(UUID chargeId, BigDecimal addAmount, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.charge
+                           SET total_amount = total_amount + :add, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'UNPAID'
+                        """)
+                .param("add", addAmount).param("id", chargeId)
+                .param("version", expectedVersion).update() > 0;
     }
 
     /** 收费明细（order_id 可能为空，调用方按可空处理）。 */
@@ -560,6 +611,40 @@ public class ClinicalRepository {
                          ORDER BY admitted_at DESC
                         """).param("wardId", wardId).param("status", status)
                 .query(ADMISSION_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 预交金
+
+    private static final RowMapper<Deposit> DEPOSIT_MAPPER = (rs, i) -> new Deposit(
+            rs.getObject("id", UUID.class), rs.getObject("admission_id", UUID.class),
+            rs.getBigDecimal("amount"), rs.getString("kind"), rs.getString("method"),
+            rs.getString("operator"), rs.getString("remark"),
+            rs.getTimestamp("created_at").toInstant());
+
+    public void insertDeposit(UUID id, UUID admissionId, BigDecimal signedAmount, String kind,
+                              String method, String operator, String remark) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.deposit
+                            (id, admission_id, amount, kind, method, operator, remark)
+                        VALUES (:id, :admissionId, :amount, :kind, :method, :operator, :remark)
+                        """)
+                .param("id", id).param("admissionId", admissionId)
+                .param("amount", signedAmount).param("kind", kind)
+                .param("method", method).param("operator", operator)
+                .param("remark", remark).update();
+    }
+
+    /** 预交金余额（正数=可用余额）。 */
+    public BigDecimal depositBalance(UUID admissionId) {
+        return jdbc.sql("SELECT COALESCE(sum(amount), 0) FROM clinical_svc.deposit WHERE admission_id = ?")
+                .param(admissionId).query(BigDecimal.class).single();
+    }
+
+    public List<Deposit> listDeposits(UUID admissionId) {
+        return jdbc.sql("""
+                        SELECT id, admission_id, amount, kind, method, operator, remark, created_at
+                          FROM clinical_svc.deposit WHERE admission_id = ? ORDER BY created_at
+                        """).param(admissionId).query(DEPOSIT_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

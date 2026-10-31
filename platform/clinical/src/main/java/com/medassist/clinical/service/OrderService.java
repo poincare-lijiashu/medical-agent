@@ -14,6 +14,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,12 +52,14 @@ public class OrderService {
         }
 
         List<VisitOrder> created = new ArrayList<>(lines.size());
+        LocalDate today = LocalDate.now();
         for (OrderLine line : lines) {
             ChargeItemDef item = repo.findChargeItem(line.itemCode().trim())
                     .filter(ChargeItemDef::enabled)
                     .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_ITEM_NOT_FOUND,
                             "医嘱项目不存在或已停用：" + line.itemCode()));
             String orderType = mapOrderType(item);
+            String mode = normalizeMode(line.orderMode(), visit);
             BigDecimal amount = item.price()
                     .multiply(BigDecimal.valueOf(line.quantity()))
                     .setScale(2, RoundingMode.HALF_UP);
@@ -64,15 +67,48 @@ public class OrderService {
                     orderType, item.itemCode(), item.name(),
                     blankToNull(line.dose()), blankToNull(line.frequency()),
                     line.quantity(), item.unit(), item.price(), amount,
-                    VisitOrder.PLACED, actor, 0L);
+                    VisitOrder.PLACED, actor, 0L, mode, today, null);
             repo.insertOrder(order);
             created.add(order);
         }
 
         audit(actor, "ORDER_PLACE", "VISIT", visitId.toString(), Map.of(
                 "visitNo", visit.visitNo(), "count", created.size(),
-                "orderNos", created.stream().map(VisitOrder::orderNo).toList()));
+                "orderNos", created.stream().map(VisitOrder::orderNo).toList(),
+                "longCount", created.stream().filter(VisitOrder::longTerm).count()));
         return created;
+    }
+
+    /** 停嘱：仅住院长嘱可停；停嘱当日仍计费，次日起不再计费。 */
+    @Transactional
+    public VisitOrder stop(UUID visitId, UUID orderId, String reason, String actor) {
+        Visit visit = repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        if (!visit.active()) {
+            throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能停嘱");
+        }
+        String why = (reason == null || reason.isBlank()) ? "医师停嘱" : reason.trim();
+        if (!repo.stopLongOrder(orderId, visitId, LocalDate.now(), actor, why)) {
+            throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
+                    "只有未停止的住院长嘱可以停嘱（临时医嘱请走撤销）");
+        }
+        audit(actor, "ORDER_STOP", "VISIT", visitId.toString(),
+                Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString(), "reason", why));
+        return repo.listOrders(visitId, null).stream()
+                .filter(o -> o.id().equals(orderId)).findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+    }
+
+    /** 医嘱模式：默认临时；长嘱仅限住院。 */
+    private String normalizeMode(String raw, Visit visit) {
+        String mode = (raw == null || raw.isBlank()) ? VisitOrder.TEMP : raw.trim().toUpperCase();
+        if (!VisitOrder.TEMP.equals(mode) && !VisitOrder.LONG.equals(mode)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "医嘱模式只能是 TEMP / LONG");
+        }
+        if (VisitOrder.LONG.equals(mode) && !"INPATIENT".equals(visit.visitType())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "只有住院就诊可以开立长嘱");
+        }
+        return mode;
     }
 
     @Transactional

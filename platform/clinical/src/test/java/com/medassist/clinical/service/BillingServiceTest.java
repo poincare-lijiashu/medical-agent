@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
+import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -57,7 +59,8 @@ class BillingServiceTest {
     private VisitOrder order(String amount) {
         BigDecimal amt = new BigDecimal(amount);
         return new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC", "血常规",
-                null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L);
+                null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
+                VisitOrder.TEMP, LocalDate.now(), null);
     }
 
     @Test
@@ -86,7 +89,7 @@ class BillingServiceTest {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(unpaid));
         when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of(o1, o2));
-        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
         when(repo.markChargePaid(eq(chargeId), any(), eq("CASH"), eq(2L))).thenReturn(true);
         when(repo.findChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
                 chargeId, "C1", visitId, new BigDecimal("43.00"), Charge.PAID, "CASH",
@@ -120,7 +123,7 @@ class BillingServiceTest {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(unpaid));
         when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of(order("25.00")));
-        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
         when(repo.markChargePaid(eq(chargeId), any(), anyString(), eq(0L))).thenReturn(false);
 
         assertThatThrownBy(() -> service.settle(visitId, "CASH", "clerk01"))
@@ -128,5 +131,53 @@ class BillingServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONFLICT);
         verify(repo, never()).markOrdersCharged(any());
+    }
+
+    @Test
+    @DisplayName("按日计费：同一天同一长嘱只计一次，重复调用不累加")
+    void dailyBillIsIdempotentPerDay() {
+        Visit inpatient = new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
+                "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+        Charge unpaid = new Charge(chargeId, "C1", visitId, BigDecimal.ZERO,
+                Charge.UNPAID, null, null, 1L);
+        LocalDate today = LocalDate.now();
+        VisitOrder longOrder = new VisitOrder(UUID.randomUUID(), "O2", visitId, "TREATMENT",
+                "TRT-IV", "静脉输液", null, "qd", 2, "次", new BigDecimal("8.00"),
+                new BigDecimal("16.00"), VisitOrder.PLACED, "doctor01", 0L,
+                VisitOrder.LONG, today, null);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(unpaid));
+        when(repo.listBillableLongOrders(visitId, today)).thenReturn(List.of(longOrder));
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(true, false);
+        when(repo.addChargeAmount(eq(chargeId), eq(new BigDecimal("16.00")), eq(1L))).thenReturn(true);
+        when(repo.findChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("16.00"), Charge.UNPAID, null, null, 2L)));
+
+        DailyBillResult first = service.dailyBill(visitId, today, "clerk01");
+        assertThat(first.orderCount()).isEqualTo(1);
+        assertThat(first.billedAmount()).isEqualByComparingTo("16.00");
+        assertThat(first.chargeTotal()).isEqualByComparingTo("16.00");
+
+        DailyBillResult second = service.dailyBill(visitId, today, "clerk01");
+        assertThat(second.orderCount()).isZero();
+        assertThat(second.billedAmount()).isEqualByComparingTo("0");
+        verify(repo, times(1)).addChargeAmount(any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("已结算的收费单不能继续按日计费")
+    void dailyBillRejectedWhenChargePaid() {
+        Visit inpatient = new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
+                "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("50.00"), Charge.PAID, "CASH",
+                Instant.now(), 3L)));
+
+        assertThatThrownBy(() -> service.dailyBill(visitId, LocalDate.now(), "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CHARGE_STATUS_INVALID);
     }
 }

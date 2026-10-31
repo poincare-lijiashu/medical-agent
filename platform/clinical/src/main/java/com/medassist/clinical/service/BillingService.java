@@ -7,6 +7,7 @@ import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.BillingPreview;
 import com.medassist.clinical.web.ClinicalDtos.ChargeItemView;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
+import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -78,11 +80,14 @@ public class BillingService {
             throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID, "该收费单已退费，不能再收费");
         }
 
-        List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED);
+        // 长嘱按日计费（dailyBill），结算只处理临时医嘱，避免与日报重复计费
+        List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED).stream()
+                .filter(o -> !o.longTerm())
+                .toList();
         BigDecimal addAmount = BigDecimal.ZERO;
         for (VisitOrder o : pending) {
             boolean inserted = repo.insertChargeItem(UUID.randomUUID(), charge.id(), o.id(),
-                    o.itemCode(), o.itemName(), categoryOf(o), o.amount());
+                    "ORDER:" + o.id(), o.itemCode(), o.itemName(), categoryOf(o), o.amount());
             if (inserted) {
                 addAmount = addAmount.add(o.amount());
             }
@@ -99,6 +104,54 @@ public class BillingService {
                 "orderCount", pending.size(), "addedAmount", addAmount,
                 "paymentMethod", paymentMethod.trim()));
         return toView(repo.findChargeByVisit(visitId).orElseThrow());
+    }
+
+    /**
+     * 住院长嘱按日计费：同一长嘱同一天只计一次（source_key 唯一兜底），可安全重跑。
+     *
+     * <p>只计费"当日有效"的长嘱（start_date ≤ date ≤ stop_date），停嘱当日仍计费。
+     */
+    @Transactional
+    public DailyBillResult dailyBill(UUID visitId, LocalDate date, String actor) {
+        LocalDate billDate = date == null ? LocalDate.now() : date;
+        Visit visit = repo.lockVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        if (!"INPATIENT".equals(visit.visitType())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "只有住院就诊支持按日计费");
+        }
+        if (!visit.active()) {
+            throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能计费");
+        }
+        Charge charge = repo.lockChargeByVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
+        if (Charge.PAID.equals(charge.status())) {
+            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID, "收费单已结算，不能再按日计费");
+        }
+
+        List<VisitOrder> orders = repo.listBillableLongOrders(visitId, billDate).stream()
+                .filter(o -> o.billableOn(billDate))
+                .toList();
+        BigDecimal addAmount = BigDecimal.ZERO;
+        int billed = 0;
+        for (VisitOrder o : orders) {
+            String sourceKey = "DAILY:" + o.id() + ":" + billDate;
+            if (repo.insertChargeItem(UUID.randomUUID(), charge.id(), o.id(), sourceKey,
+                    o.itemCode(), o.itemName(), categoryOf(o), o.amount())) {
+                addAmount = addAmount.add(o.amount());
+                billed++;
+            }
+        }
+        if (addAmount.signum() > 0
+                && !repo.addChargeAmount(charge.id(), addAmount, charge.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
+        }
+        Charge latest = repo.findChargeByVisit(visitId).orElseThrow();
+
+        audit(actor, "DAILY_BILL", visitId.toString(), Map.of(
+                "visitNo", visit.visitNo(), "date", billDate.toString(),
+                "orderCount", billed, "billedAmount", addAmount,
+                "chargeTotal", latest.totalAmount()));
+        return new DailyBillResult(billDate, billed, addAmount, latest.totalAmount());
     }
 
     public ChargeView chargeOf(UUID visitId) {

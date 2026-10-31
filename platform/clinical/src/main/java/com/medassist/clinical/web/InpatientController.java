@@ -8,6 +8,8 @@ import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateBedsReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateWardReq;
+import com.medassist.clinical.web.ClinicalDtos.DepositReq;
+import com.medassist.clinical.web.ClinicalDtos.DepositView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
@@ -44,6 +46,7 @@ public class InpatientController {
     private static final String ADMIT = "inpatient:admission:create";
     private static final String BED_ASSIGN = "inpatient:bed:assign";
     private static final String DISCHARGE = "inpatient:admission:discharge";
+    private static final String DEPOSIT_MANAGE = "inpatient:deposit:manage";
     private static final String READ = "inpatient:read";
 
     private final InpatientService service;
@@ -122,5 +125,36 @@ public class InpatientController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, DISCHARGE);
         return ApiResponse.ok(service.discharge(id, actor));
+    }
+
+    /** 缴纳预交金。 */
+    @PostMapping("/inpatient/admissions/{id}/deposits")
+    public ApiResponse<DepositView> deposit(
+            @PathVariable UUID id,
+            @Valid @RequestBody DepositReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, DEPOSIT_MANAGE);
+        return ApiResponse.ok(service.deposit(id, req.amount(), req.method(), req.remark(), actor));
+    }
+
+    /** 退还预交金（不得超过余额）。 */
+    @PostMapping("/inpatient/admissions/{id}/refunds")
+    public ApiResponse<DepositView> refund(
+            @PathVariable UUID id,
+            @Valid @RequestBody DepositReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, DEPOSIT_MANAGE);
+        return ApiResponse.ok(service.refund(id, req.amount(), req.method(), req.remark(), actor));
+    }
+
+    /** 预交金余额与流水。 */
+    @GetMapping("/inpatient/admissions/{id}/deposits")
+    public ApiResponse<DepositView> deposits(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.balance(id));
     }
 }

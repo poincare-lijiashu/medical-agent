@@ -21,6 +21,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,7 +56,7 @@ class OrderServiceTest {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.REGISTERED)));
 
         assertThatThrownBy(() -> service.place(visitId,
-                List.of(new OrderLine("EXM-CBC", 1, null, null)), "doctor01"))
+                List.of(new OrderLine("EXM-CBC", 1, null, null, null)), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VISIT_STATUS_INVALID);
@@ -71,7 +72,7 @@ class OrderServiceTest {
                 new BigDecimal("8.00"), true)));
 
         List<VisitOrder> orders = service.place(visitId,
-                List.of(new OrderLine("TRT-IV", 3, "0.9%NS 250ml", "qd")), "doctor01");
+                List.of(new OrderLine("TRT-IV", 3, "0.9%NS 250ml", "qd", null)), "doctor01");
 
         assertThat(orders).hasSize(1);
         VisitOrder o = orders.get(0);
@@ -90,7 +91,7 @@ class OrderServiceTest {
                 new BigDecimal("10.00"), true)));
 
         assertThatThrownBy(() -> service.place(visitId,
-                List.of(new OrderLine("REG-GENERAL", 1, null, null)), "doctor01"))
+                List.of(new OrderLine("REG-GENERAL", 1, null, null, null)), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.ORDER_ITEM_NOT_FOUND);
@@ -104,6 +105,35 @@ class OrderServiceTest {
         when(repo.cancelOrder(orderId, visitId)).thenReturn(false);
 
         assertThatThrownBy(() -> service.cancel(visitId, orderId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.ORDER_STATUS_INVALID);
+    }
+
+    @Test
+    @DisplayName("门诊不能开长嘱（LONG 仅限住院）")
+    void rejectLongOrderForOutpatient() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findChargeItem("TRT-IV")).thenReturn(Optional.of(new ChargeItemDef(
+                UUID.randomUUID(), "TRT-IV", "静脉输液", "TREATMENT", "次",
+                new BigDecimal("8.00"), true)));
+
+        assertThatThrownBy(() -> service.place(visitId,
+                List.of(new OrderLine("TRT-IV", 1, null, "qd", "LONG")), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).insertOrder(any());
+    }
+
+    @Test
+    @DisplayName("停嘱失败（非长嘱/已停）返回 44410")
+    void stopRejectedWhenNotLongOrder() {
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        UUID orderId = UUID.randomUUID();
+        when(repo.stopLongOrder(eq(orderId), eq(visitId), any(), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.stop(visitId, orderId, "病情好转", "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.ORDER_STATUS_INVALID);

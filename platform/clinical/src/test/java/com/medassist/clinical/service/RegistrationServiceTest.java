@@ -147,7 +147,7 @@ class RegistrationServiceTest {
         when(repo.listOrders(visitId, null)).thenReturn(List.of(
                 new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC", "血常规",
                         null, null, 1, "次", new BigDecimal("25.00"), new BigDecimal("25.00"),
-                        VisitOrder.PLACED, "doctor01", 0L)));
+                        VisitOrder.PLACED, "doctor01", 0L, VisitOrder.TEMP, LocalDate.now(), null)));
 
         assertThatThrownBy(() -> service.cancel(visitId, "clerk01"))
                 .isInstanceOf(BusinessException.class)
