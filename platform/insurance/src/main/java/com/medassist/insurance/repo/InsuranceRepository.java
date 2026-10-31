@@ -3,9 +3,13 @@ package com.medassist.insurance.repo;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
+import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
 import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
+import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
+import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
+import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -563,6 +567,201 @@ public class InsuranceRepository {
                         """)
                 .param("status", status).param("receiptNo", receiptNo).param("message", message)
                 .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- DRG/DIP 分组（N5 第二批 C）
+
+    private static final RowMapper<PaymentScheme> SCHEME_MAPPER = (rs, i) -> new PaymentScheme(
+            rs.getString("code"), rs.getString("name"), rs.getString("type"),
+            rs.getBigDecimal("rate_amount"), rs.getDate("rate_effective_from").toLocalDate(),
+            rs.getBoolean("enabled"), rs.getLong("version"), rs.getString("updated_by"),
+            rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<PaymentGroup> GROUP_MAPPER = (rs, i) -> new PaymentGroup(
+            rs.getString("scheme_code"), rs.getString("group_code"), rs.getString("group_name"),
+            rs.getBigDecimal("weight"), rs.getBoolean("enabled"), rs.getLong("version"),
+            rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<PaymentGroupRule> RULE_MAPPER = (rs, i) -> new PaymentGroupRule(
+            rs.getObject("id", UUID.class), rs.getString("scheme_code"), rs.getInt("priority"),
+            rs.getString("match_type"), rs.getString("diag_prefix"), rs.getString("proc_prefix"),
+            rs.getString("group_code"), rs.getBoolean("enabled"),
+            rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<GroupSimulation> SIMULATION_MAPPER = (rs, i) -> new GroupSimulation(
+            rs.getObject("id", UUID.class), rs.getObject("visit_id", UUID.class),
+            rs.getString("scheme_code"), rs.getString("group_code"), rs.getBoolean("matched"),
+            rs.getString("reason"), rs.getBigDecimal("weight"), rs.getBigDecimal("rate_amount"),
+            rs.getBigDecimal("payment_standard"), rs.getString("diagnoses"),
+            rs.getString("procedures"), rs.getString("input_hash"), rs.getString("created_by"),
+            rs.getTimestamp("created_at").toInstant());
+
+    public List<PaymentScheme> listSchemes() {
+        return jdbc.sql("""
+                        SELECT code, name, type, rate_amount, rate_effective_from, enabled,
+                               version, updated_by, updated_at
+                          FROM insurance_svc.payment_scheme ORDER BY code
+                        """).query(SCHEME_MAPPER).list();
+    }
+
+    public Optional<PaymentScheme> findScheme(String code) {
+        return jdbc.sql("""
+                        SELECT code, name, type, rate_amount, rate_effective_from, enabled,
+                               version, updated_by, updated_at
+                          FROM insurance_svc.payment_scheme WHERE code = ?
+                        """).param(code).query(SCHEME_MAPPER).optional();
+    }
+
+    public void insertScheme(PaymentScheme s) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.payment_scheme
+                            (code, name, type, rate_amount, rate_effective_from, enabled,
+                             version, updated_by, updated_at)
+                        VALUES (:code, :name, :type, :rate, :eff, :enabled, 0, :actor, now())
+                        """)
+                .param("code", s.code()).param("name", s.name()).param("type", s.type())
+                .param("rate", s.rateAmount()).param("eff", s.rateEffectiveFrom())
+                .param("enabled", s.enabled()).param("actor", s.updatedBy()).update();
+    }
+
+    /** 修改方案（CAS；type 不可改由服务层保证）。 */
+    public boolean updateScheme(String code, String name, BigDecimal rateAmount,
+                                LocalDate rateEffectiveFrom, boolean enabled, long expectedVersion,
+                                String actor) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.payment_scheme
+                           SET name = :name, rate_amount = :rate, rate_effective_from = :eff,
+                               enabled = :enabled, version = version + 1, updated_by = :actor,
+                               updated_at = now()
+                         WHERE code = :code AND version = :version
+                        """)
+                .param("name", name).param("rate", rateAmount).param("eff", rateEffectiveFrom)
+                .param("enabled", enabled).param("code", code).param("version", expectedVersion)
+                .param("actor", actor).update() > 0;
+    }
+
+    public List<PaymentGroup> listGroups(String schemeCode, Boolean enabled) {
+        return jdbc.sql("""
+                        SELECT scheme_code, group_code, group_name, weight, enabled, version, updated_at
+                          FROM insurance_svc.payment_group
+                         WHERE scheme_code = :scheme
+                           AND (CAST(:enabled AS boolean) IS NULL OR enabled = CAST(:enabled AS boolean))
+                         ORDER BY group_code
+                        """)
+                .param("scheme", schemeCode).param("enabled", enabled)
+                .query(GROUP_MAPPER).list();
+    }
+
+    public Optional<PaymentGroup> findGroup(String schemeCode, String groupCode) {
+        return jdbc.sql("""
+                        SELECT scheme_code, group_code, group_name, weight, enabled, version, updated_at
+                          FROM insurance_svc.payment_group
+                         WHERE scheme_code = ? AND group_code = ?
+                        """).param(schemeCode).param(groupCode).query(GROUP_MAPPER).optional();
+    }
+
+    /** 导入分组：以文件为准的强制覆盖（变更留痕由服务层逐条写审计）。 */
+    public void upsertGroup(PaymentGroup g) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.payment_group
+                            (scheme_code, group_code, group_name, weight, enabled, version)
+                        VALUES (:scheme, :code, :name, :weight, :enabled, 0)
+                        ON CONFLICT (scheme_code, group_code) DO UPDATE
+                           SET group_name = EXCLUDED.group_name,
+                               weight = EXCLUDED.weight,
+                               enabled = EXCLUDED.enabled,
+                               version = insurance_svc.payment_group.version + 1,
+                               updated_at = now()
+                        """)
+                .param("scheme", g.schemeCode()).param("code", g.groupCode())
+                .param("name", g.groupName()).param("weight", g.weight())
+                .param("enabled", g.enabled()).update();
+    }
+
+    public List<PaymentGroupRule> listRules(String schemeCode, Boolean enabled) {
+        return jdbc.sql("""
+                        SELECT id, scheme_code, priority, match_type, diag_prefix, proc_prefix,
+                               group_code, enabled, created_at
+                          FROM insurance_svc.payment_group_rule
+                         WHERE scheme_code = :scheme
+                           AND (CAST(:enabled AS boolean) IS NULL OR enabled = CAST(:enabled AS boolean))
+                         ORDER BY priority
+                        """)
+                .param("scheme", schemeCode).param("enabled", enabled)
+                .query(RULE_MAPPER).list();
+    }
+
+    public Optional<PaymentGroupRule> findRule(String schemeCode, int priority) {
+        return jdbc.sql("""
+                        SELECT id, scheme_code, priority, match_type, diag_prefix, proc_prefix,
+                               group_code, enabled, created_at
+                          FROM insurance_svc.payment_group_rule
+                         WHERE scheme_code = ? AND priority = ?
+                        """).param(schemeCode).param(priority).query(RULE_MAPPER).optional();
+    }
+
+    /** 按 (方案, 优先级) UPSERT：优先级就是规则身份，导入即覆盖。 */
+    public void upsertRule(PaymentGroupRule r) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.payment_group_rule
+                            (id, scheme_code, priority, match_type, diag_prefix, proc_prefix,
+                             group_code, enabled)
+                        VALUES (:id, :scheme, :priority, :matchType, :diag, :proc, :group, :enabled)
+                        ON CONFLICT (scheme_code, priority) DO UPDATE
+                           SET match_type = EXCLUDED.match_type,
+                               diag_prefix = EXCLUDED.diag_prefix,
+                               proc_prefix = EXCLUDED.proc_prefix,
+                               group_code = EXCLUDED.group_code,
+                               enabled = EXCLUDED.enabled
+                        """)
+                .param("id", r.id()).param("scheme", r.schemeCode())
+                .param("priority", r.priority()).param("matchType", r.matchType())
+                .param("diag", r.diagPrefix()).param("proc", r.procPrefix())
+                .param("group", r.groupCode()).param("enabled", r.enabled()).update();
+    }
+
+    public void insertSimulation(GroupSimulation s) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.payment_group_simulation
+                            (id, visit_id, scheme_code, group_code, matched, reason, weight,
+                             rate_amount, payment_standard, diagnoses, procedures, input_hash,
+                             created_by)
+                        VALUES (:id, :visitId, :scheme, :group, :matched, :reason,
+                                CAST(:weight AS numeric), :rate, CAST(:payment AS numeric),
+                                CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb),
+                                :hash, :actor)
+                        """)
+                .param("id", s.id()).param("visitId", s.visitId()).param("scheme", s.schemeCode())
+                .param("group", s.groupCode()).param("matched", s.matched())
+                .param("reason", s.reason()).param("weight", s.weight())
+                .param("rate", s.rateAmount()).param("payment", s.paymentStandard())
+                .param("diagnoses", s.diagnoses()).param("procedures", s.procedures())
+                .param("hash", s.inputHash()).param("actor", s.createdBy()).update();
+    }
+
+    public Optional<GroupSimulation> findLatestSimulation(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, visit_id, scheme_code, group_code, matched, reason, weight,
+                               rate_amount, payment_standard, diagnoses::text AS diagnoses,
+                               procedures::text AS procedures, input_hash, created_by, created_at
+                          FROM insurance_svc.payment_group_simulation
+                         WHERE visit_id = ?
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """).param(visitId).query(SIMULATION_MAPPER).optional();
+    }
+
+    public List<GroupSimulation> listSimulations(UUID visitId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, visit_id, scheme_code, group_code, matched, reason, weight,
+                               rate_amount, payment_standard, diagnoses::text AS diagnoses,
+                               procedures::text AS procedures, input_hash, created_by, created_at
+                          FROM insurance_svc.payment_group_simulation
+                         WHERE visit_id = :visitId
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """).param("visitId", visitId).param("limit", limit)
+                .query(SIMULATION_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

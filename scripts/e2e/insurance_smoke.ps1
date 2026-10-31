@@ -370,6 +370,95 @@ Check 'export.list.contains' $matchedExport.Count 1
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $doctorToken
 Check 'export.doctor.403' $r.Status 403
 
+# ---------------------------------------------------------------- 6.3 DRG/DIP grouping simulation
+$schemeCode = "DRG-$suffix"
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/schemes' @{
+    code = $schemeCode; name = 'DRG simulation 2026'; type = 'DRG'
+    rateAmount = 100.00; rateEffectiveFrom = $today; enabled = $true
+} $token
+Check 'group.scheme.create' $r.Status 200
+CheckNum 'group.scheme.rate' (Res $r).rateAmount 100.00
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/schemes' @{
+    code = $schemeCode; name = 'dup'; type = 'DRG'; rateAmount = 1; rateEffectiveFrom = $today
+} $token
+Check 'group.scheme.duplicate.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/grouping/schemes/$schemeCode/groups/import" @{
+    groups = @(
+        @{ groupCode = 'GB1'; groupName = 'Respiratory'; weight = 1.5 },
+        @{ groupCode = 'GB2'; groupName = 'Procedure'; weight = 2.0 },
+        @{ groupCode = 'GB3'; groupName = 'Cardiac procedure'; weight = 3.0 }
+    )
+} $token
+Check 'group.groups.import' $r.Status 200
+Check 'group.groups.created' (Res $r).created 3
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/grouping/schemes/$schemeCode/groups/import" @{
+    groups = @(@{ groupCode = 'GB1'; groupName = 'Respiratory'; weight = 1.5 })
+} $token
+Check 'group.groups.idempotent' (Res $r).unchanged 1
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/grouping/schemes/$schemeCode/rules/import" @{
+    rules = @(
+        @{ priority = 1; matchType = 'DIAGNOSIS'; diagPrefix = 'J18'; groupCode = 'GB1' },
+        @{ priority = 2; matchType = 'PROCEDURE'; procPrefix = '88.01'; groupCode = 'GB2' },
+        @{ priority = 3; matchType = 'DIAG_AND_PROC'; diagPrefix = 'I50'; procPrefix = '93.90'; groupCode = 'GB3' }
+    )
+} $token
+Check 'group.rules.import' $r.Status 200
+Check 'group.rules.created' (Res $r).created 3
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/simulate' @{
+    visitId = $visitId; schemeCode = $schemeCode; diagnoses = @('J18.900'); procedures = @()
+} $token
+Check 'group.simulate.diag' $r.Status 200
+Check 'group.simulate.matched' (Res $r).matched 'True'
+Check 'group.simulate.group' (Res $r).groupCode 'GB1'
+CheckNum 'group.simulate.payment' (Res $r).paymentStandard 150.00
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/grouping/by-visit/$visitId" $null $token
+Check 'group.latest.matched' (Res $r).groupCode 'GB1'
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/simulate' @{
+    visitId = $visitId; schemeCode = $schemeCode; diagnoses = @('K35.900'); procedures = @()
+} $token
+Check 'group.simulate.unmatched' (Res $r).matched 'False'
+Check 'group.simulate.unmatched.reason' ((Res $r).reason.Length -gt 0) 'True'
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/simulate' @{
+    visitId = $visitId; schemeCode = $schemeCode; diagnoses = @('I50.900'); procedures = @('93.90')
+} $token
+Check 'group.simulate.combined' (Res $r).groupCode 'GB3'
+CheckNum 'group.simulate.combined.payment' (Res $r).paymentStandard 300.00
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/grouping/by-visit/$visitId/history?limit=10" $null $token
+Check 'group.history.ok' $r.Status 200
+Check 'group.history.count' (@(Res $r).Count -ge 3) 'True'
+
+$r = Invoke-Api 'PUT' "/api/v2/insurance/grouping/schemes/$schemeCode" @{
+    name = 'DRG simulation 2026'; rateAmount = 120.00; rateEffectiveFrom = $today
+    enabled = $true; version = 0
+} $token
+Check 'group.scheme.update' $r.Status 200
+CheckNum 'group.scheme.rate.updated' (Res $r).rateAmount 120.00
+
+$r = Invoke-Api 'PUT' "/api/v2/insurance/grouping/schemes/$schemeCode" @{
+    name = 'DRG simulation 2026'; rateAmount = 130.00; rateEffectiveFrom = $today
+    enabled = $true; version = 0
+} $token
+Check 'group.scheme.update.stale.409' $r.Status 409
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/schemes' @{
+    code = "DRG-DOC-$suffix"; name = 'doc'; type = 'DRG'; rateAmount = 1; rateEffectiveFrom = $today
+} $doctorToken
+Check 'group.scheme.doctor.403' $r.Status 403
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/grouping/simulate' @{
+    visitId = $visitId; schemeCode = $schemeCode; diagnoses = @('J18.900'); procedures = @()
+} $doctorToken
+Check 'group.simulate.doctor.read' $r.Status 200
+
 $r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
     name = "NoIns Patient $suffix"; gender = 'MALE'; birthDate = '1970-01-01'
     idType = 'ID_CARD'; idNo = "11010119700101$suffix"

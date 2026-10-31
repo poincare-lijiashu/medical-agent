@@ -135,4 +135,50 @@ public final class InsuranceModel {
             return !GENERATED.equals(status);
         }
     }
+
+    /**
+     * 医保支付方案（DRG 按权重×费率 / DIP 按分值×点值）。
+     *
+     * <p>方案与权重来自省局下发，本平台只做院内配置与模拟测算；
+     * 费率变更必须携带 version（CAS），避免并发保存静默改变预算口径。
+     */
+    public record PaymentScheme(String code, String name, String type, BigDecimal rateAmount,
+                                LocalDate rateEffectiveFrom, boolean enabled, long version,
+                                String updatedBy, Instant updatedAt) {
+
+        public static final String DRG = "DRG";
+        public static final String DIP = "DIP";
+
+        public boolean drg() {
+            return DRG.equals(type);
+        }
+    }
+
+    /** 方案下的分组：weight 在 DRG 下是权重、在 DIP 下是分值。 */
+    public record PaymentGroup(String schemeCode, String groupCode, String groupName,
+                               BigDecimal weight, boolean enabled, long version, Instant updatedAt) {
+    }
+
+    /**
+     * 入组规则：按 priority 升序取第一个命中项。
+     *
+     * <p>DIAGNOSIS 只看诊断前缀；PROCEDURE 只看手术/操作前缀；DIAG_AND_PROC 两者都要满足。
+     * 前缀匹配用于模拟预分组（ICD 编码前 3~5 位），不是省局正式分组逻辑。
+     */
+    public record PaymentGroupRule(UUID id, String schemeCode, int priority, String matchType,
+                                   String diagPrefix, String procPrefix, String groupCode,
+                                   boolean enabled, Instant createdAt) {
+
+        public static final String DIAGNOSIS = "DIAGNOSIS";
+        public static final String PROCEDURE = "PROCEDURE";
+        public static final String DIAG_AND_PROC = "DIAG_AND_PROC";
+    }
+
+    /** 分组模拟快照（含未入组原因），用于"当时为什么算出这个支付标准"的追溯。 */
+    public record GroupSimulation(UUID id, UUID visitId, String schemeCode, String groupCode,
+                                  boolean matched, String reason, BigDecimal weight,
+                                  BigDecimal rateAmount, BigDecimal paymentStandard,
+                                  String diagnoses, String procedures, String inputHash,
+                                  String createdBy, Instant createdAt) {
+    }
 }

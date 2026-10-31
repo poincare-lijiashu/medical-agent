@@ -483,6 +483,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 301→**316**；`insurance_smoke.ps1` 105→**122 项**全过；
      库内批次 30 张 / 300.00 / ACCEPTED / version=1，审计含 payloadHash 与 before/after
 
+37. **N5 第二批 C（2026-11-01）：DRG/DIP 方案与院内模拟预分组**
+   - 接口：`/insurance/grouping/schemes`（GET/POST/PUT）、`/schemes/{code}/groups|rules`（GET/import）、
+     `POST /simulate`、`GET /by-visit/{id}[/history]`
+   - `insurance V7` 四张表：payment_scheme / payment_group / payment_group_rule / payment_group_simulation
+   - `auth V21`：`insurance:grouping:manage`（ADMIN / INSURANCE_OFFICER），模拟沿用 settlement:read
+   - 口径：按优先级首个命中；支付标准 = 权重 × 费率（2 位 HALF_UP）；
+     未命中或分组停用同样落库并给出原因（不回退低优先级，避免错误口径被掩盖）
+   - 幂等：分组/规则导入内容未变不写库；输入归一化后算 `input_hash`，可复现
+   - 验证：单测 316→**336**；`insurance_smoke.ps1` 122→**147 项**全过；
+     库内费率 100→120 后新模拟 180.00、旧记录仍 150.00（快照生效）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

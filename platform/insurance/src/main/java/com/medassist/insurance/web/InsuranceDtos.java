@@ -5,6 +5,7 @@ import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -130,5 +131,66 @@ public final class InsuranceDtos {
                                      String payloadHash, String status, String receiptNo,
                                      Instant receiptAt, String receiptMessage, String createdBy,
                                      long version, Instant createdAt) {
+    }
+
+    /** 新建支付方案（DRG 费率 / DIP 点值由省局下发，院内只做配置与模拟）。 */
+    public record CreateSchemeReq(
+            @NotBlank @Size(max = 32)
+            @Pattern(regexp = "[A-Za-z0-9_-]+", message = "方案编码只能包含字母、数字、下划线与短横线")
+            String code,
+            @NotBlank @Size(max = 128) String name,
+            @NotBlank @Pattern(regexp = "DRG|DIP", message = "方案类型不合法") String type,
+            @NotNull @DecimalMin("0") BigDecimal rateAmount,
+            @NotNull LocalDate rateEffectiveFrom,
+            Boolean enabled) {
+    }
+
+    /** 修改方案（类型不可改；必须携带当前版本号）。 */
+    public record UpdateSchemeReq(
+            @NotBlank @Size(max = 128) String name,
+            @NotNull @DecimalMin("0") BigDecimal rateAmount,
+            @NotNull LocalDate rateEffectiveFrom,
+            Boolean enabled,
+            @NotNull @Min(0) Long version) {
+    }
+
+    /** 分组（DRG 权重 / DIP 分值）。 */
+    public record GroupReq(
+            @NotBlank @Size(max = 32) String groupCode,
+            @NotBlank @Size(max = 128) String groupName,
+            @NotNull @DecimalMin(value = "0", inclusive = false, message = "权重必须大于 0")
+            BigDecimal weight,
+            Boolean enabled) {
+    }
+
+    public record ImportGroupsReq(@NotEmpty @Valid List<GroupReq> groups) {
+    }
+
+    /** 入组规则（按优先级升序首个命中；前缀匹配用于模拟预分组）。 */
+    public record RuleReq(
+            @NotNull @Min(1) Integer priority,
+            @NotBlank @Pattern(regexp = "DIAGNOSIS|PROCEDURE|DIAG_AND_PROC", message = "规则类型不合法")
+            String matchType,
+            @Size(max = 32) String diagPrefix,
+            @Size(max = 32) String procPrefix,
+            @NotBlank @Size(max = 32) String groupCode,
+            Boolean enabled) {
+    }
+
+    public record ImportRulesReq(@NotEmpty @Valid List<RuleReq> rules) {
+    }
+
+    /** 模拟预分组入参：诊断/手术编码为 ICD 编码（可只给前缀）。 */
+    public record SimulateReq(
+            @NotNull UUID visitId,
+            @NotBlank @Size(max = 32) String schemeCode,
+            List<@Size(max = 32) String> diagnoses,
+            List<@Size(max = 32) String> procedures) {
+    }
+
+    public record GroupImportResult(int total, int created, int updated, int unchanged) {
+    }
+
+    public record RuleImportResult(int total, int created, int updated, int unchanged) {
     }
 }
