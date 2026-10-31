@@ -223,4 +223,29 @@ MF-04 / MF-05 / SF-02 / SF-06 已在 §7 闭环。
 
 ---
 
+## 8. 整改状态（2026-11-01，第三批：解析健壮性与数据库/审计查询）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| SF-08 | CSV 引号未闭合不报错，后续行被并入同一字段 | ✅ 已修 | `splitCsv` 结束时 `quoted==true` 即整体拒绝并给出行号 |
+| SF-09 | 同字段多别名并存时首列静默获胜；可选列名拼错整列静默丢弃 | ✅ 已修 | 表头同字段重复 → 422（指出列号）；未识别非空表头 → `warnings`（随导入结果与审计 detail 回显，不阻断） |
+| SF-10 | code/name 未过滤控制字符（PG 拒写 / 报盘 XML 非法字符） | ✅ 已修 | 解析时剥离 `[\x00-\x1F\x7F]`（保留 `\t`） |
+| SF-11 | 纯逗号文件内存放大；错误消息回显超长单元格原文 | ✅ 已修 | 记录数上限 `MAX_RECORDS=20000`、单元格上限 2048 字符、错误回显截断 50 字符 |
+| SF-12 | 签名策略错误消息回显未截断输入 | ✅ 已修 | docType 回显截断 64 字符 |
+| SF-13 | simulation 表缺 jsonb 形状与 matched 组合约束 | ✅ 已修 | `insurance V10`：`jsonb_typeof(diagnoses/procedures)='array'` + `matched=false OR (group_code/weight/payment_standard 非空)` |
+| SF-14 | 审计查询 OR-参数模式让 (actor, ts) 索引失效 | ✅ 已修 | `AuditRepository` 改为**按过滤组合动态拼接 WHERE**（空条件直接省略），SQL 按 8 种组合缓存；已部署域探测只做一次 |
+| SF-15 | 分组 by-visit 查询返回诊断/手术编码但无审计 | ✅ 已修 | `latestSimulation` / `simulations` 增加 actor 并写 `GROUP_SIM_VIEW`（visitId + 条数） |
+| SF-05（部分） | simulate 入参无长度上限、visitId 无校验 | ⚠️ 部分修复 | `@Size(max=50)` 限制诊断/手术列表，并在 DTO 文档中明确 visitId 仅为留痕键（医保域无就诊主数据，跨域存在性校验留待 N6 集成域） |
+
+**验证**：
+- 单测 349 → **362**（解析器新增 6 项：未闭合引号/重复别名/未识别列警告/控制字符/超长单元格/CRLF 与单 CR；
+  分组新增 `GROUP_SIM_VIEW` 审计 1 项）；
+- `insurance_smoke.ps1` **165 项**、`emr_smoke.ps1` **119 项**全过（无回归）；
+- 库内迁移 `insurance` 到 **V10**；
+- `EXPLAIN`：`actor='qc01'` 的审计分支在 `enable_seqscan=off` 下为
+  **Bitmap Index Scan on ix_auth_change_log_actor_ts**（Index Cond 同时含 actor 与 ts；
+  小表正常设置下 planner 仍选 Seq Scan，属预期）。
+
+---
+
 *第 1–4 节为只读评审结论（未改代码）；第 5 节为建议顺序；第 6 节起记录整改落地与验证。*

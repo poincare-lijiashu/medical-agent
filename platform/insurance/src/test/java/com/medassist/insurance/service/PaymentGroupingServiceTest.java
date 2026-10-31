@@ -303,9 +303,25 @@ class PaymentGroupingServiceTest {
     void latestSimulationMissing() {
         when(repo.findLatestSimulation(visitId)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.latestSimulation(visitId))
+        assertThatThrownBy(() -> service.latestSimulation(visitId, "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_GROUP_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("查询模拟结果留痕 GROUP_SIM_VIEW（含就诊级诊断编码，SF-15）")
+    void latestSimulationWritesViewAudit() {
+        GroupSimulation simulation = new GroupSimulation(UUID.randomUUID(), visitId, "DRG-2026",
+                "GB1", true, "命中", BigDecimal.ONE, new BigDecimal("100.0000"),
+                new BigDecimal("100.00"), "[\"J18.900\"]", "[]", "hash",
+                "yb01", Instant.now());
+        when(repo.findLatestSimulation(visitId)).thenReturn(Optional.of(simulation));
+
+        GroupSimulation result = service.latestSimulation(visitId, "doctor01");
+
+        assertThat(result.groupCode()).isEqualTo("GB1");
+        verify(repo).logChange(eq("doctor01"), eq("GROUP_SIM_VIEW"), eq("PAYMENT_GROUPING"),
+                eq(visitId.toString()), anyString());
     }
 }

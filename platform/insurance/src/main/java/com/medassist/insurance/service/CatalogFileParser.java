@@ -40,8 +40,17 @@ public final class CatalogFileParser {
     /** 单文件最大行数：目录文件按月下发，5000 行足够覆盖常见地市；超出请拆分。 */
     public static final int MAX_ROWS = 5000;
 
+    /** 解析时扫描的物理记录上限（含空行）：防止纯逗号文件把内存放大到数百倍（第四轮 SF-11）。 */
+    public static final int MAX_RECORDS = MAX_ROWS * 4;
+
+    /** 单个单元格最大长度：超出即视为坏文件，避免超长字段进日志/响应（第四轮 SF-11）。 */
+    public static final int MAX_CELL_LENGTH = 2048;
+
     /** 返回给调用方的错误条数上限（避免一个坏文件刷屏）。 */
     public static final int MAX_ERRORS = 20;
+
+    /** 错误消息里回显单元格原文的最大长度（第四轮 SF-11）。 */
+    private static final int MAX_ECHO_LENGTH = 50;
 
     private static final Set<String> CATEGORIES = Set.of("DRUG", "SERVICE", "MATERIAL", "DIAGNOSIS");
     private static final Set<String> PAY_CATEGORIES = Set.of("A", "B", "C");
@@ -68,8 +77,12 @@ public final class CatalogFileParser {
     private CatalogFileParser() {
     }
 
-    /** 解析结果：rows 与 errors 互斥（有错误时调用方必须整体拒绝）。 */
-    public record Parsed(List<Row> rows, List<String> errors) {
+    /**
+     * 解析结果：rows 与 errors 互斥（有错误时调用方必须整体拒绝）。
+     *
+     * @param warnings 非阻断提示（如未识别的表头列），随导入结果一并回显给操作员
+     */
+    public record Parsed(List<Row> rows, List<String> errors, List<String> warnings) {
     }
 
     /** 一行目录数据；{@code enabled} 为空表示文件未给出状态（更新时保留库里原值）。 */
@@ -106,7 +119,11 @@ public final class CatalogFileParser {
         if (text.startsWith("\uFEFF")) {
             text = text.substring(1);
         }
-        List<CsvRecord> records = splitCsv(text);
+        Split split = splitCsv(text);
+        if (split.error() != null) {
+            return fail(split.error());
+        }
+        List<CsvRecord> records = split.records();
         int cursor = 0;
         CsvRecord header = null;
         while (cursor < records.size()) {
@@ -120,11 +137,26 @@ public final class CatalogFileParser {
             return fail("CSV 缺少表头");
         }
         Map<String, Integer> columns = new HashMap<>();
+        List<String> warnings = new ArrayList<>();
+        List<String> headerErrors = new ArrayList<>();
         for (int i = 0; i < header.cells().size(); i++) {
-            String field = ALIASES.get(normalize(header.cells().get(i)));
-            if (field != null) {
-                columns.putIfAbsent(field, i);
+            String raw = header.cells().get(i);
+            String field = ALIASES.get(normalize(raw));
+            if (field == null) {
+                if (raw != null && !raw.isBlank()) {
+                    warnings.add("未识别的列已忽略：" + echo(raw));
+                }
+                continue;
             }
+            // 同字段出现多列（如"医保编码"与"项目编码"同时存在）：静默取首列会让另一列的值被无声丢弃
+            Integer previous = columns.putIfAbsent(field, i);
+            if (previous != null) {
+                headerErrors.add("表头存在重复含义的列：" + echo(raw)
+                        + "（与第 " + (previous + 1) + " 列指向同一字段 " + field + "）");
+            }
+        }
+        if (!headerErrors.isEmpty()) {
+            return new Parsed(List.of(), trimErrors(headerErrors), List.of());
         }
         List<String> missing = new ArrayList<>();
         for (String required : List.of("code", "name", "category", "paycategory")) {
@@ -159,7 +191,7 @@ public final class CatalogFileParser {
                 return fail("目录行数超过上限 " + MAX_ROWS + "，请拆分文件后分批导入");
             }
         }
-        return finish(rows, errors);
+        return finish(rows, errors, warnings);
     }
 
     private static String cell(CsvRecord record, Map<String, Integer> columns, String field) {
@@ -170,14 +202,19 @@ public final class CatalogFileParser {
         return record.cells().get(index);
     }
 
+    /** 切分结果：error 非空表示文件结构不可用（引号未闭合、超长字段、记录数超限）。 */
+    private record Split(List<CsvRecord> records, String error) {
+    }
+
     /** RFC4180 风格切分：引号内允许逗号与换行，{@code ""} 表示一个引号。 */
-    private static List<CsvRecord> splitCsv(String text) {
+    private static Split splitCsv(String text) {
         List<CsvRecord> records = new ArrayList<>();
         List<String> cells = new ArrayList<>();
         StringBuilder cell = new StringBuilder();
         boolean quoted = false;
         int line = 1;
         int recordLine = 1;
+        int quotedFromLine = 0;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (quoted) {
@@ -192,10 +229,15 @@ public final class CatalogFileParser {
                     if (c == '\n') {
                         line++;
                     }
+                    if (cell.length() >= MAX_CELL_LENGTH) {
+                        return new Split(List.of(), "第 " + quotedFromLine
+                                + " 行存在超过 " + MAX_CELL_LENGTH + " 字符的超长字段，请检查文件");
+                    }
                     cell.append(c);
                 }
             } else if (c == '"') {
                 quoted = true;
+                quotedFromLine = line;
             } else if (c == ',') {
                 cells.add(cell.toString());
                 cell.setLength(0);
@@ -205,6 +247,9 @@ public final class CatalogFileParser {
                     line++;
                     cells.add(cell.toString());
                     cell.setLength(0);
+                    if (records.size() >= MAX_RECORDS) {
+                        return tooManyRecords();
+                    }
                     records.add(new CsvRecord(recordLine, List.copyOf(cells)));
                     cells.clear();
                     recordLine = line;
@@ -213,18 +258,34 @@ public final class CatalogFileParser {
                 line++;
                 cells.add(cell.toString());
                 cell.setLength(0);
+                if (records.size() >= MAX_RECORDS) {
+                    return tooManyRecords();
+                }
                 records.add(new CsvRecord(recordLine, List.copyOf(cells)));
                 cells.clear();
                 recordLine = line;
             } else {
+                if (cell.length() >= MAX_CELL_LENGTH) {
+                    return new Split(List.of(), "第 " + line
+                            + " 行存在超过 " + MAX_CELL_LENGTH + " 字符的超长字段，请检查文件");
+                }
                 cell.append(c);
             }
+        }
+        // 引号未闭合：后续所有内容会被并入同一字段，静默入库会把多行脏数据写进名称之类的字段
+        if (quoted) {
+            return new Split(List.of(), "第 " + quotedFromLine
+                    + " 行的引号未闭合，请检查 CSV 格式后重新上传");
         }
         if (cell.length() > 0 || !cells.isEmpty()) {
             cells.add(cell.toString());
             records.add(new CsvRecord(recordLine, List.copyOf(cells)));
         }
-        return records;
+        return new Split(records, null);
+    }
+
+    private static Split tooManyRecords() {
+        return new Split(List.of(), "CSV 记录数超过上限 " + MAX_RECORDS + "，请拆分文件后分批导入");
     }
 
     private record CsvRecord(int lineNo, List<String> cells) {
@@ -293,7 +354,7 @@ public final class CatalogFileParser {
         if (rows.isEmpty() && errors.isEmpty()) {
             return fail("XML 中未找到 item 节点");
         }
-        return finish(rows, errors);
+        return finish(rows, errors, List.of());
     }
 
     private static String localName(XMLStreamReader reader) {
@@ -307,23 +368,23 @@ public final class CatalogFileParser {
                                 String payCategoryRaw, String ratioRaw, String limitRaw,
                                 String enabledRaw, List<String> errors) {
         int before = errors.size();
-        String code = trimToNull(codeRaw);
+        String code = trimToNull(stripControlChars(codeRaw));
         if (code == null) {
             errors.add("第 " + lineNo + " 行：医保编码为空");
         } else if (code.length() > 64) {
             errors.add("第 " + lineNo + " 行：医保编码超过 64 个字符");
         }
-        String name = trimToNull(nameRaw);
+        String name = trimToNull(stripControlChars(nameRaw));
         if (name == null) {
             errors.add("第 " + lineNo + " 行：项目名称为空");
         } else if (name.length() > 128) {
             errors.add("第 " + lineNo + " 行：项目名称超过 128 个字符");
         }
-        String category = upper(trimToNull(categoryRaw));
+        String category = upper(trimToNull(stripControlChars(categoryRaw)));
         if (category == null || !CATEGORIES.contains(category)) {
             errors.add("第 " + lineNo + " 行：目录类别必须是 DRUG/SERVICE/MATERIAL/DIAGNOSIS");
         }
-        String payCategory = upper(trimToNull(payCategoryRaw));
+        String payCategory = upper(trimToNull(stripControlChars(payCategoryRaw)));
         if (payCategory == null || !PAY_CATEGORIES.contains(payCategory)) {
             errors.add("第 " + lineNo + " 行：支付类别必须是 A/B/C");
         }
@@ -357,7 +418,7 @@ public final class CatalogFileParser {
             }
             return new BigDecimal(value);
         } catch (NumberFormatException e) {
-            errors.add("第 " + lineNo + " 行：" + label + "不是合法数字：" + value);
+            errors.add("第 " + lineNo + " 行：" + label + "不是合法数字：" + echo(value));
             return null;
         }
     }
@@ -377,9 +438,9 @@ public final class CatalogFileParser {
         };
     }
 
-    private static Parsed finish(List<Row> rows, List<String> errors) {
+    private static Parsed finish(List<Row> rows, List<String> errors, List<String> warnings) {
         if (!errors.isEmpty()) {
-            return new Parsed(List.of(), trimErrors(errors));
+            return new Parsed(List.of(), trimErrors(errors), warnings);
         }
         if (rows.isEmpty()) {
             return fail("文件中没有目录数据");
@@ -392,9 +453,9 @@ public final class CatalogFileParser {
             }
         }
         if (!duplicates.isEmpty()) {
-            return new Parsed(List.of(), trimErrors(duplicates));
+            return new Parsed(List.of(), trimErrors(duplicates), warnings);
         }
-        return new Parsed(List.copyOf(rows), List.of());
+        return new Parsed(List.copyOf(rows), List.of(), warnings);
     }
 
     private static List<String> trimErrors(List<String> errors) {
@@ -407,7 +468,31 @@ public final class CatalogFileParser {
     }
 
     private static Parsed fail(String message) {
-        return new Parsed(List.of(), List.of(message));
+        return new Parsed(List.of(), List.of(message), List.of());
+    }
+
+    /**
+     * 去掉控制字符（保留制表符）：控制字符会让 PG 拒写、让报盘 XML 出现非法字符
+     * 并被固化进已生成的 payload（第四轮 SF-10）。
+     */
+    private static String stripControlChars(String s) {
+        if (s == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\t' || (c >= 0x20 && c != 0x7F)) {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 错误消息回显：截断到固定长度，避免超长单元格原文进响应与日志（SF-11）。 */
+    private static String echo(String s) {
+        String value = s == null ? "" : s;
+        return value.length() <= MAX_ECHO_LENGTH ? value : value.substring(0, MAX_ECHO_LENGTH) + "…";
     }
 
     private static String requiredLabel(String field) {

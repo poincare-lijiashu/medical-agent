@@ -516,6 +516,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - **SF-06**：`insuranceUsedInYear` 年度边界改用 `BusinessTime.zone()` 显式换算（与报盘同口径）
    - 验证：单测 348→**349**；`insurance_smoke.ps1` 165 项全过；insurance 到 V9
 
+40. **第四轮评测第三批整改（2026-11-01）：解析健壮性与数据库/审计查询**
+   - **SF-08**：CSV 引号未闭合整体拒绝（带行号），不再把后续行并入字段
+   - **SF-09**：表头同字段多别名 → 422；未识别非空表头 → `warnings`（结果与审计 detail 回显）
+   - **SF-10**：解析时剥离控制字符（保留 `\t`），避免 PG 拒写与报盘 XML 非法字符
+   - **SF-11**：记录数上限 20000、单元格上限 2048、错误回显截断 50 字符
+   - **SF-12**：签名策略 docType 回显截断 64 字符
+   - **SF-13**：`insurance V10` 给 simulation 补 jsonb 数组与 matched 组合约束
+   - **SF-14**：`AuditRepository` 改动态 WHERE（空条件省略）+ 8 组合缓存，恢复 (actor, ts) 索引可用性
+   - **SF-15**：分组 by-visit 查询写 `GROUP_SIM_VIEW` 审计
+   - **SF-05（部分）**：simulate 列表 `@Size(max=50)`；visitId 明确为留痕键（跨域校验留待 N6）
+   - 验证：单测 349→**362**；两个 E2E 全过；insurance 到 V10；
+     `EXPLAIN` 显示审计 actor 分支走 `ix_auth_change_log_actor_ts`
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

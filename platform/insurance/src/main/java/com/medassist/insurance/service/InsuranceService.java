@@ -207,13 +207,14 @@ public class InsuranceService {
             detail.put("updated", toUpdate.size());
             detail.put("unchanged", unchanged);
             detail.put("missingInFile", missingInFile);
+            detail.put("warnings", parsed.warnings());
             audit(actor, "ITEM_FILE_IMPORT", "INSURANCE_ITEM", "file", detail);
         }
 
         boolean truncated = changes.size() > MAX_CHANGES_RETURNED;
         return new CatalogImportResult(normalizedMode, fileName, digest, rows.size(),
                 toCreate.size(), toUpdate.size(), unchanged, (int) missingInFile, truncated,
-                changes.stream().limit(MAX_CHANGES_RETURNED).toList());
+                changes.stream().limit(MAX_CHANGES_RETURNED).toList(), parsed.warnings());
     }
 
     /** 文件值未给出的字段保留库里原值；新建时给默认值（比例 0、无限价、启用）。 */

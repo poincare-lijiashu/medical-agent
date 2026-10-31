@@ -106,10 +106,12 @@ public final class InsuranceDtos {
      * @param sha256            文件摘要，用于事后证明"导入的是哪一版文件"
      * @param missingInFile     库里启用中、但本文件未覆盖的目录项数量（只提示，不自动停用）
      * @param changesTruncated  changes 是否被截断（最多返回 50 条，完整计数见 created/updated）
+     * @param warnings          非阻断提示（如未识别的表头列被忽略），不影响导入结果
      */
     public record CatalogImportResult(String mode, String fileName, String sha256, int total,
                                       int created, int updated, int unchanged, int missingInFile,
-                                      boolean changesTruncated, List<CatalogChange> changes) {
+                                      boolean changesTruncated, List<CatalogChange> changes,
+                                      List<String> warnings) {
     }
 
     /** 单条目录变更：action = CREATE / UPDATE，fields 为发生变化的字段名。 */
@@ -191,12 +193,17 @@ public final class InsuranceDtos {
     public record ImportRulesReq(@NotEmpty @Valid List<RuleReq> rules) {
     }
 
-    /** 模拟预分组入参：诊断/手术编码为 ICD 编码（可只给前缀）。 */
+    /**
+     * 模拟预分组入参：诊断/手术编码为 ICD 编码（可只给前缀）。
+     *
+     * <p>列表上限 50：正常病案不会更多，且避免用超大数组刷爆 jsonb 与审计表（第四轮 SF-05）。
+     * {@code visitId} 仅作留痕键——本接口不跨域校验就诊是否存在（医保域无就诊主数据）。
+     */
     public record SimulateReq(
             @NotNull UUID visitId,
             @NotBlank @Size(max = 32) String schemeCode,
-            List<@Size(max = 32) String> diagnoses,
-            List<@Size(max = 32) String> procedures) {
+            @Size(max = 50) List<@Size(max = 32) String> diagnoses,
+            @Size(max = 50) List<@Size(max = 32) String> procedures) {
     }
 
     public record GroupImportResult(int total, int created, int updated, int unchanged) {

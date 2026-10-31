@@ -127,17 +127,19 @@ public class GroupingController {
     @GetMapping("/by-visit/{visitId}")
     public ApiResponse<GroupSimulation> latest(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.latestSimulation(visitId));
+        return ApiResponse.ok(service.latestSimulation(visitId, actor));
     }
 
     @GetMapping("/by-visit/{visitId}/history")
     public ApiResponse<List<GroupSimulation>> history(
             @PathVariable UUID visitId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.simulations(visitId, limit));
+        return ApiResponse.ok(service.simulations(visitId, limit, actor));
     }
 }

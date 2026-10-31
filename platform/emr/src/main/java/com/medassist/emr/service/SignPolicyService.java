@@ -89,8 +89,10 @@ public class SignPolicyService {
     private String normalize(String docType) {
         String type = docType == null ? "" : docType.trim().toUpperCase(Locale.ROOT);
         if (!DOC_TYPES.contains(type)) {
+            // 回显截断：docType 来自路径变量，长度不受限，不截断会让响应/日志被超长串撑爆
+            String shown = type.length() > 64 ? type.substring(0, 64) + "…" : type;
             throw new BusinessException(ErrorCode.EMR_SIGN_POLICY_INVALID,
-                    "文书类型不合法：" + docType + "（可选值 " + String.join("/", DOC_TYPES) + "）");
+                    "文书类型不合法：" + shown + "（可选值 " + String.join("/", DOC_TYPES) + "）");
         }
         return type;
     }

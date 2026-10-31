@@ -287,15 +287,31 @@ public class PaymentGroupingService {
         return simulation;
     }
 
-    public GroupSimulation latestSimulation(UUID visitId) {
-        return repo.findLatestSimulation(visitId)
+    /**
+     * 最近一次模拟结果。
+     *
+     * <p>返回值含就诊级诊断/手术编码（轻度 PHI），读取动作留痕：与病历检索同口径（第四轮 SF-15）。
+     */
+    public GroupSimulation latestSimulation(UUID visitId, String actor) {
+        GroupSimulation simulation = repo.findLatestSimulation(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_GROUP_NOT_FOUND,
                         "该就诊暂无分组模拟记录"));
+        auditSimView(actor, visitId, 1);
+        return simulation;
     }
 
-    public List<GroupSimulation> simulations(UUID visitId, Integer limit) {
+    public List<GroupSimulation> simulations(UUID visitId, Integer limit, String actor) {
         int size = limit == null || limit <= 0 ? 20 : Math.min(limit, MAX_HISTORY);
-        return repo.listSimulations(visitId, size);
+        List<GroupSimulation> history = repo.listSimulations(visitId, size);
+        auditSimView(actor, visitId, history.size());
+        return history;
+    }
+
+    private void auditSimView(String actor, UUID visitId, int count) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("visitId", visitId.toString());
+        detail.put("count", count);
+        audit(actor, "GROUP_SIM_VIEW", visitId.toString(), detail);
     }
 
     private boolean matches(PaymentGroupRule rule, List<String> diagnoses, List<String> procedures) {

@@ -7,6 +7,8 @@ import org.springframework.stereotype.Repository;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 跨域审计汇聚查询（只读）。
@@ -47,8 +49,11 @@ public class AuditRepository {
 
     private final JdbcClient jdbc;
 
-    /** 探测结果缓存（表结构在运行期不会消失，只需拼一次）。 */
-    private volatile String unionCache;
+    /** 已部署域的探测结果（运行期不会消失，只探测一次）。 */
+    private volatile List<Source> deployedSources;
+
+    /** 按过滤组合缓存的 UNION SQL（最多 8 种组合：actor/action/targetType 各有无）。 */
+    private final Map<Integer, String> sqlCache = new ConcurrentHashMap<>();
 
     public AuditRepository(JdbcClient jdbc) {
         this.jdbc = jdbc;
@@ -56,16 +61,27 @@ public class AuditRepository {
 
     public List<AuditEventResp> search(String actor, String action, String targetType,
                                        Instant from, Instant to, int limit, int offset) {
+        String actorValue = orEmpty(actor);
+        String actionValue = orEmpty(action);
+        String targetValue = orEmpty(targetType);
         // id 决胜列：同一毫秒的多条事件（批量写入）若只按 ts 排序，翻页会出现重复/漏项
-        return jdbc.sql("SELECT * FROM (" + union() + ") e ORDER BY e.ts DESC, e.id DESC LIMIT :limit OFFSET :offset")
-                .param("actor", orEmpty(actor))
-                .param("action", orEmpty(action))
-                .param("targetType", orEmpty(targetType))
+        JdbcClient.StatementSpec spec = jdbc.sql("SELECT * FROM ("
+                        + union(actorValue, actionValue, targetValue)
+                        + ") e ORDER BY e.ts DESC, e.id DESC LIMIT :limit OFFSET :offset")
                 .param("fromTs", Timestamp.from(from == null ? BEGINNING : from))
                 .param("toTs", Timestamp.from(to == null ? END : to))
                 .param("limit", limit)
-                .param("offset", offset)
-                .query((rs, i) -> new AuditEventResp(
+                .param("offset", offset);
+        if (!actorValue.isEmpty()) {
+            spec = spec.param("actor", actorValue);
+        }
+        if (!actionValue.isEmpty()) {
+            spec = spec.param("action", actionValue);
+        }
+        if (!targetValue.isEmpty()) {
+            spec = spec.param("targetType", targetValue);
+        }
+        return spec.query((rs, i) -> new AuditEventResp(
                         rs.getString("source"),
                         rs.getLong("id"),
                         rs.getTimestamp("ts").toInstant(),
@@ -78,53 +94,79 @@ public class AuditRepository {
     }
 
     public long count(String actor, String action, String targetType, Instant from, Instant to) {
-        return jdbc.sql("SELECT count(*) FROM (" + union() + ") e")
-                .param("actor", orEmpty(actor))
-                .param("action", orEmpty(action))
-                .param("targetType", orEmpty(targetType))
+        String actorValue = orEmpty(actor);
+        String actionValue = orEmpty(action);
+        String targetValue = orEmpty(targetType);
+        JdbcClient.StatementSpec spec = jdbc.sql("SELECT count(*) FROM ("
+                        + union(actorValue, actionValue, targetValue) + ") e")
                 .param("fromTs", Timestamp.from(from == null ? BEGINNING : from))
-                .param("toTs", Timestamp.from(to == null ? END : to))
-                .query(Long.class)
-                .single();
+                .param("toTs", Timestamp.from(to == null ? END : to));
+        if (!actorValue.isEmpty()) {
+            spec = spec.param("actor", actorValue);
+        }
+        if (!actionValue.isEmpty()) {
+            spec = spec.param("action", actionValue);
+        }
+        if (!targetValue.isEmpty()) {
+            spec = spec.param("targetType", targetValue);
+        }
+        return spec.query(Long.class).single();
     }
 
-    /** 已部署域的 UNION 片段（懒加载 + 双检锁，避免每次查询都探测 schema）。 */
-    private String union() {
-        String cached = unionCache;
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (this) {
-            if (unionCache == null) {
-                unionCache = buildUnion();
-            }
-            return unionCache;
-        }
+    /**
+     * 已部署域的 UNION 片段（按过滤组合缓存）。
+     *
+     * <p>空过滤条件**直接省略**而不是写成 {@code (:actor = '' OR actor = :actor)}：
+     * 后者在 pgjdbc 的 generic plan 下无法做 Index Cond，会让 (actor, ts) 索引完全失效
+     * （第四轮 SF-14）。
+     */
+    private String union(String actor, String action, String targetType) {
+        int key = (actor.isEmpty() ? 0 : 1) | (action.isEmpty() ? 0 : 2)
+                | (targetType.isEmpty() ? 0 : 4);
+        return sqlCache.computeIfAbsent(key, k -> buildUnion(
+                !actor.isEmpty(), !action.isEmpty(), !targetType.isEmpty()));
     }
 
-    private String buildUnion() {
+    private String buildUnion(boolean filterActor, boolean filterAction, boolean filterTarget) {
         StringBuilder sb = new StringBuilder();
-        for (Source source : SOURCES) {
-            if (!tableExists(source.table())) {
-                continue;
-            }
+        StringBuilder where = new StringBuilder(" WHERE ts >= :fromTs AND ts <= :toTs");
+        if (filterActor) {
+            where.append(" AND actor = :actor");
+        }
+        if (filterAction) {
+            where.append(" AND action = :action");
+        }
+        if (filterTarget) {
+            where.append(" AND target_type = :targetType");
+        }
+        for (Source source : sources()) {
             if (sb.length() > 0) {
                 sb.append("\nUNION ALL\n");
             }
             sb.append("""
                     SELECT '%s' AS source, id, ts, actor, action, target_type, target_id, detail::text AS detail
                       FROM %s
-                     WHERE (:actor = '' OR actor = :actor)
-                       AND (:action = '' OR action = :action)
-                       AND (:targetType = '' OR target_type = :targetType)
-                       AND ts >= :fromTs AND ts <= :toTs
-                    """.formatted(source.label(), source.table()));
+                    """.formatted(source.label(), source.table())).append(where);
         }
         if (sb.length() == 0) {
             // 连本服务自己的审计表都没有，说明迁移未完成：直接报错，不返回"看起来正常"的空结果
             throw new IllegalStateException("审计表不存在，请先执行 auth 服务数据库迁移");
         }
         return sb.toString();
+    }
+
+    /** 已部署域（懒加载 + 双检锁；探测只做一次）。 */
+    private List<Source> sources() {
+        List<Source> cached = deployedSources;
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (this) {
+            if (deployedSources == null) {
+                deployedSources = SOURCES.stream().filter(s -> tableExists(s.table())).toList();
+            }
+            return deployedSources;
+        }
     }
 
     private boolean tableExists(String qualifiedName) {
