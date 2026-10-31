@@ -278,7 +278,7 @@ verify valid=true → 归档 ARCHIVED → **归档后修订 409** → 新建第�
 | 归档签署策略 | `emr_svc.sign_policy` | 按文书类型配置归档级别：入院/首程=2（主治）、出院小结/手术记录=3（主任）、病程/门诊/会诊=1；未配置按 1 |
 | 病案修改申请 | `POST/GET /emr/records/{id}/change-requests` | 仅 ARCHIVED 可申请；同一病历同时只允许一条 PENDING（部分唯一索引兜底） |
 | 修改审批 | `POST /emr/records/{id}/change-requests/{requestId}/approve\|reject` | **四眼原则**（申请人不得审批自己的申请）；通过后旧版本留档、revision+1、回到 SUBMITTED、清空签名；驳回不动正文 |
-| CDR 检索 | `GET /emr/records/search?q=&patientId=&docType=&status=&from=&to=` | 标题/正文/病历号/患者号 ILIKE；`%` `_` 已转义；pg_trgm 可用时建 GIN 三元组索引，不可用时退化为顺序扫描 |
+| CDR 检索 | `GET /emr/records/search?q=&patientId=&docType=&status=&from=&to=` | 标题/正文全模糊（trgm GIN），病历号/患者号**前缀**匹配（text_pattern_ops）；`%` `_` 已转义；两路各自叠加过滤并裁剪后 UNION |
 | 打印视图 | `GET /emr/records/{id}/print`（`text/html`） | A4 打印样式、正文 pre-wrap、当前版签名与 SHA-256 页脚；所有病历文本 HTML 转义（防 XSS）；浏览器「打印→另存为 PDF」导出 |
 | 书写时限质控 | 质控规则类型 `TIMELINESS`（V3 迁移） | 创建病历时经 clinical 内部接口取回入院时间并固化到 `visit_started_at`；入院记录 >24h、首程 >8h 记 MAJOR（不阻断）；无入院信息或临床不可用则跳过（fail-open，绝不阻断书写） |
 
@@ -362,6 +362,22 @@ doctor01 确认 **403**、只读 200。
 
 **验证**：单测 231→**237**；`insurance_smoke.ps1` 38→**50 项**全过；
 库内同一 visit 同时存在 VOIDED 与 DRAFT 两张单，作废单带快照与原因，审计新增 `BILL_VOID`。
+
+---
+
+## 1.14 已完成（2026-10-31，第三轮评测第四批：CDR 检索索引）
+
+病历检索从"四列 ILIKE 一条 OR"改为**按索引拆两路**，每路各自叠加患者/文书类型/状态/建档日期过滤并各自
+`LIMIT`，再 `UNION` 去重、整体按建档时间倒序截断：
+
+| 检索对象 | 匹配方式 | 索引 |
+|---|---|---|
+| `title` / `content_text` | `ILIKE '%kw%'`（全模糊） | `ix_record_title_trgm` / `ix_record_text_trgm`（GIN, gin_trgm_ops） |
+| `record_no` / `patient_no` | `LIKE 'kw%'`（**前缀**，语义有调整） | `ix_record_no_prefix` / `ix_record_patient_no_prefix`（B-tree, text_pattern_ops） |
+
+- `V4__cdr_search_index.sql`：pg_trgm 用 DO 块容错安装（装不上不阻断迁移，只退化顺序扫描），随后建索引；
+- `V5__drop_duplicate_trgm_index.sql`：删掉 V4 重复创建的 content_text 索引（V2 已有同列同操作符类）；
+- 验证：单测 237→**239**；`emr_smoke.ps1` **78 项**全过；`EXPLAIN` 两条分支均为 `BitmapOr` 且带 `Index Cond`。
 
 ---
 

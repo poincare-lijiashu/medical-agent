@@ -648,6 +648,25 @@ class RecordServiceTest {
         assertThat(result.qc().results().get(0).message()).contains("8 小时");
     }
 
+    // ---------------------------------------------------------------- CDR 检索
+
+    @Test
+    @DisplayName("检索：关键词同时生成模糊模式与前缀模式，通配符被转义")
+    void searchBuildsPatternAndPrefix() {
+        service.search(" MR2026_01 ", null, null, "signed", null, null, 0);
+
+        verify(repo).searchRecords("%MR2026\\_01%", "MR2026\\_01%", null, null, "SIGNED",
+                null, null, 50);
+    }
+
+    @Test
+    @DisplayName("检索：无关键词时不触发文本与前缀匹配，limit 上限 200")
+    void searchWithoutKeyword() {
+        service.search("   ", null, null, null, null, null, 500);
+
+        verify(repo).searchRecords(null, null, null, null, null, null, null, 200);
+    }
+
     // ---------------------------------------------------------------- 测试夹具
 
     private final UUID reqId = UUID.randomUUID();

@@ -330,6 +330,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 下一批：MF-11 CDR 检索索引（前缀匹配 + trgm 分查）、S-10/S-11（年度累计/按就诊日期）、
      S-28~S-30（E2E 补强、Mockito 去过拟合）；MF-07（HMAC/mTLS）待设计评审
 
+21. **第三轮评测第四批整改（2026-10-31）：CDR 检索索引（MF-11）**
+   - 原实现把 `title / content_text / record_no / patient_no` 四个 ILIKE 用 OR 串在一条 SQL 里：
+     `record_no` 只有普通 btree（`%kw%` 用不上，非 C 排序下连 `kw%` 也用不上），`patient_no` 无索引，
+     BitmapOr 失效 → 病历上万后每次检索全表扫描
+   - 现拆成两路按索引分查、各自叠加过滤条件并各自 LIMIT，再 `UNION` 去重后整体排序截断：
+     - 模糊：`title/content_text ILIKE '%kw%'` → trgm GIN
+     - 编号：`record_no/patient_no LIKE 'kw%'` → `text_pattern_ops` B-tree（**语义改为前缀匹配**）
+   - 迁移：`V4__cdr_search_index.sql`（pg_trgm 用 DO 块容错安装，装不上只退化不失败）、
+     `V5__drop_duplicate_trgm_index.sql`（V2 已有 `ix_record_text_trgm`，删掉 V4 重复建的）
+   - 验证：单测 237→**239**；emr E2E **78 项**全过；`EXPLAIN` 两条分支均为 `BitmapOr` 走索引
+   - 踩坑：写索引迁移前先 `select indexname, indexdef from pg_indexes where schemaname=...`
+     看既有索引，别只看自己写的那份文件（本次就撞上 V2 已建过的 content_text trgm 索引）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -386,6 +399,10 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   是 UTC epoch 毫秒；用 UTC 时间去查会得到空结果，误判"没有链路"
 - 只读挂载 agent 目录时必须设 `SW_LOGGING_DIR`（默认写 `/opt/skywalking-agent/logs` 会只读失败）；
   Chart 用 emptyDir 复制，无此问题
+- PowerShell 参数模式下 `Check 'x' (@(Res $r) | Where-Object {...}).Count 1` 会失效（$actual 拿到 null），
+  唯独 `(@(...).Count)` 这种不带管道的写法没事；断言里只要出现管道就**先赋值给变量再传参**
+- Flyway 建索引前先 `select indexname, indexdef from pg_indexes where schemaname='xx_svc'`：
+  V2 早就建过同列同操作符类的 trgm 索引，V4 又建一遍纯属重复，只能再补 V5 删除
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

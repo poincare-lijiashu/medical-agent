@@ -415,35 +415,72 @@ public class EmrRepository {
     // ---------------------------------------------------------------- CDR 检索
 
     /**
-     * 病历检索（CDR）：标题/正文/病历号/患者号模糊匹配，可叠加患者、文书类型、
-     * 状态与建档日期范围。关键词通配符已由调用方转义。
+     * 病历检索（CDR）。
+     *
+     * <p>两类关键词分开走各自的索引，避免把 OR 条件混在一张表上导致全表扫描：
+     * <ul>
+     *   <li>标题/正文：{@code ILIKE '%kw%'}，走 pg_trgm GIN 索引（V4 迁移创建）；</li>
+     *   <li>病历号/患者号：{@code LIKE 'kw%'} 前缀匹配，走 text_pattern_ops B-tree 索引。</li>
+     * </ul>
+     * 两条分支先各自裁剪到 limit 再合并去重，最后整体按建档时间倒序截断。关键词通配符已由调用方转义。
+     *
+     * @param pattern 形如 {@code %kw%}，为空表示不做文本模糊检索
+     * @param prefix  形如 {@code kw%}，为空表示不做编号前缀检索
      */
-    public List<RecordHit> searchRecords(String pattern, UUID patientId, String docType,
+    public List<RecordHit> searchRecords(String pattern, String prefix, UUID patientId, String docType,
                                          String status, LocalDate from, LocalDate to, int limit) {
-        return jdbc.sql("""
+        String sql = pattern == null ? """
                         SELECT id, record_no, patient_id, patient_no, doc_type, title,
                                author, status, revision, created_at
                           FROM emr_svc.medical_record
-                         WHERE (CAST(:pattern AS text) IS NULL
-                                OR title ILIKE CAST(:pattern AS text) ESCAPE '\\'
-                                OR content_text ILIKE CAST(:pattern AS text) ESCAPE '\\'
-                                OR record_no ILIKE CAST(:pattern AS text) ESCAPE '\\'
-                                OR patient_no ILIKE CAST(:pattern AS text) ESCAPE '\\')
-                           AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
-                           AND (CAST(:docType AS text) IS NULL OR doc_type = CAST(:docType AS text))
-                           AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
-                           AND (CAST(:fromDate AS date) IS NULL OR created_at >= CAST(:fromDate AS date))
-                           AND (CAST(:toDate AS date) IS NULL
-                                OR created_at < CAST(:toDate AS date) + INTERVAL '1 day')
+                         WHERE 1 = 1
+                        """ + SEARCH_FILTERS + """
                          ORDER BY created_at DESC
                          LIMIT :limit
-                        """)
-                .param("pattern", pattern).param("patientId", patientId)
-                .param("docType", docType).param("status", status)
-                .param("fromDate", from).param("toDate", to)
-                .param("limit", limit)
-                .query(HIT_MAPPER).list();
+                        """ : """
+                        SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                               author, status, revision, created_at
+                          FROM (
+                                (SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                                        author, status, revision, created_at
+                                   FROM emr_svc.medical_record
+                                  WHERE (title ILIKE CAST(:pattern AS text) ESCAPE '\\'
+                                         OR content_text ILIKE CAST(:pattern AS text) ESCAPE '\\')
+                                """ + SEARCH_FILTERS + """
+                                  ORDER BY created_at DESC
+                                  LIMIT :limit)
+                                UNION
+                                (SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                                        author, status, revision, created_at
+                                   FROM emr_svc.medical_record
+                                  WHERE (record_no LIKE CAST(:prefix AS text) ESCAPE '\\'
+                                         OR patient_no LIKE CAST(:prefix AS text) ESCAPE '\\')
+                                """ + SEARCH_FILTERS + """
+                                  ORDER BY created_at DESC
+                                  LIMIT :limit)
+                               ) t
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """;
+
+        JdbcClient.StatementSpec spec = jdbc.sql(sql)
+                .param("patientId", patientId).param("docType", docType).param("status", status)
+                .param("fromDate", from).param("toDate", to).param("limit", limit);
+        if (pattern != null) {
+            spec = spec.param("pattern", pattern).param("prefix", prefix);
+        }
+        return spec.query(HIT_MAPPER).list();
     }
+
+    /** 检索公共过滤条件：患者 / 文书类型 / 状态 / 建档日期，均为可选。 */
+    private static final String SEARCH_FILTERS = """
+              AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
+              AND (CAST(:docType AS text) IS NULL OR doc_type = CAST(:docType AS text))
+              AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+              AND (CAST(:fromDate AS date) IS NULL OR created_at >= CAST(:fromDate AS date))
+              AND (CAST(:toDate AS date) IS NULL
+                   OR created_at < CAST(:toDate AS date) + INTERVAL '1 day')
+            """;
 
     // ---------------------------------------------------------------- 归档后修改申请
 

@@ -311,4 +311,25 @@ S-10/S-11（年度累计/按就诊日期校验参保）、S-28~S-30（E2E 补强
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–9 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 10. 整改状态（2026-10-31，第四批：CDR 检索索引）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| MF-11 | searchRecords 四列 ILIKE OR 全表扫描 | ✅ 已修 | ① 查询按索引拆成两路并各自裁剪：`title/content_text ILIKE '%kw%'` 走 trgm GIN，`record_no/patient_no LIKE 'kw%'` 走 `text_pattern_ops` B-tree，两路 `UNION` 去重后再整体排序截断；② `V4__cdr_search_index.sql` 建 `ix_record_title_trgm`(title)、`ix_record_content_trgm`(content_text) 与两个编号前缀索引，pg_trgm 安装失败时迁移不中断、仅退化顺序扫描；③ 公共过滤（患者/文书类型/状态/建档日期）在**两路都强制叠加**，避免分支放大结果集 |
+
+**语义变化（需在接口文档中说明）**：病历号/患者号由"任意位置模糊"改为**前缀匹配**——这是能用索引的前提，
+也符合病案室按号段检索的习惯；标题/正文仍是全模糊。
+
+**验证**：
+- 单测 **237 → 239**（`searchBuildsPatternAndPrefix` 断言两路模式与通配符转义、`searchWithoutKeyword` 断言空关键词不触发匹配且 limit 上限 200）；
+- `emr_smoke.ps1` **78 项**全过（新增病历号前缀命中、"%" 被转义不匹配全表）；
+- 库内 `EXPLAIN`：模糊分支 `BitmapOr(ix_record_title_trgm, ix_record_text_trgm)`；
+  前缀分支 `BitmapOr(ix_record_no_prefix, ix_record_patient_no_prefix)`（`Index Cond: record_no ~>=~ 'MR2026' AND ~<~ 'MR2027'`）。
+
+**踩坑**：V2 早已建过 `ix_record_text_trgm`（content_text），V4 又建了一遍同列同操作符类的
+`ix_record_content_trgm`，属于重复索引（只增写入成本）。因 V4 已应用不能改，补 **V5** 删除重复项；
+写迁移前先用 `pg_indexes` 看一遍既有索引，别只看自己刚写的那个文件。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–10 节记录整改落地与验证。后续批次按第 5 节路线继续。*

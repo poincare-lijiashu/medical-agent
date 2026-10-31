@@ -454,16 +454,22 @@ public class RecordService {
 
     // ---------------------------------------------------------------- 查询
 
-    /** CDR 检索：关键词可空，其余条件均可叠加。 */
+    /**
+     * CDR 检索：关键词可空，其余条件均可叠加。
+     *
+     * <p>关键词同时用于两路检索：标题/正文模糊匹配，病历号/患者号前缀匹配。
+     */
     public List<RecordHit> search(String q, UUID patientId, String docType, String status,
                                   LocalDate from, LocalDate to, Integer limit) {
         String keyword = (q == null || q.isBlank()) ? null : q.trim();
-        String pattern = keyword == null ? null : "%" + escapeLike(keyword) + "%";
+        String escaped = keyword == null ? null : escapeLike(keyword);
+        String pattern = escaped == null ? null : "%" + escaped + "%";
+        String prefix = escaped == null ? null : escaped + "%";
         String normalizedDocType = blankToNull(docType);
         String normalizedStatus = (status == null || status.isBlank())
                 ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.searchRecords(pattern, patientId, normalizedDocType, normalizedStatus,
+        return repo.searchRecords(pattern, prefix, patientId, normalizedDocType, normalizedStatus,
                 from, to, size);
     }
 

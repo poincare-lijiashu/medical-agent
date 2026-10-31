@@ -88,6 +88,7 @@ $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
 Check 'record.create' $r.Status 200
 $rec = Res $r
 $recordId = $rec.record.id
+$recordNo = $rec.record.recordNo
 Check 'record.draft' $rec.record.status 'DRAFT'
 Check 'record.revision' $rec.record.revision 1
 
@@ -159,6 +160,18 @@ Check 'amend.archived.409' $r.Status 409
 $r = Invoke-Api 'GET' "/api/v2/emr/records/search?q=pharyngitis&docType=ADMISSION_NOTE" $null $token
 Check 'search.ok' $r.Status 200
 Check 'search.hits' (@(Res $r).Count -ge 1) 'True'
+
+# record_no / patient_no use prefix matching (index-friendly)
+$prefix = $recordNo.Substring(0, 10)
+$r = Invoke-Api 'GET' "/api/v2/emr/records/search?q=$prefix" $null $token
+Check 'search.byRecordNoPrefix.ok' $r.Status 200
+$prefixHits = @(Res $r)
+$matched = @($prefixHits | Where-Object { $_.recordNo -eq $recordNo })
+Check 'search.byRecordNoPrefix.hit' $matched.Count 1
+
+# "%" must be escaped, never a match-all
+$r = Invoke-Api 'GET' '/api/v2/emr/records/search?q=%25' $null $token
+Check 'search.wildcardEscaped' (@(Res $r).Count) 0
 
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/print" $null $token
 Check 'print.ok' $r.Status 200
