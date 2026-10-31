@@ -63,6 +63,21 @@ public final class EmrDtos {
             @NotBlank @Size(max = 256) String reason) {
     }
 
+    /** 签名请求：level 缺省为书写医师；上级签名按 AUTHOR→ATTENDING→CHIEF 顺序。 */
+    public record SignReq(
+            @Pattern(regexp = "AUTHOR|ATTENDING|CHIEF", message = "签名级别不合法") String level) {
+    }
+
+    /** 归档后病案修改申请（申请人提交拟修改内容）。 */
+    public record ChangeRequestReq(
+            @NotNull Map<String, String> content,
+            @NotBlank @Size(max = 512) String reason) {
+    }
+
+    /** 修改申请审批意见（通过/驳回共用）。 */
+    public record ReviewReq(@Size(max = 512) String comment) {
+    }
+
     /** 病历详情：正文 + 签名 + 修订历史 + 当前版本质控结果。 */
     public record RecordView(MedicalRecord record, List<RecordSignature> signatures,
                              List<Amendment> amendments, List<QcResult> qcResults) {

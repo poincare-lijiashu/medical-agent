@@ -2,9 +2,11 @@ package com.medassist.emr.repo;
 
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
+import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.QcRule;
+import com.medassist.emr.domain.EmrModel.RecordHit;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.domain.EmrModel.Template;
 import org.springframework.jdbc.core.RowMapper;
@@ -65,6 +67,23 @@ public class EmrRepository {
             rs.getObject("id", UUID.class), rs.getObject("record_id", UUID.class),
             rs.getInt("revision"), rs.getString("rule_code"), rs.getString("severity"),
             rs.getBoolean("passed"), rs.getString("message"));
+
+    private static final RowMapper<ChangeRequest> CHANGE_MAPPER = (rs, i) -> new ChangeRequest(
+            rs.getObject("id", UUID.class), rs.getObject("record_id", UUID.class),
+            rs.getString("record_no"), rs.getString("reason"),
+            rs.getString("proposed_content"), rs.getString("proposed_text"),
+            rs.getString("status"), rs.getString("requester"),
+            rs.getTimestamp("requested_at").toInstant(), rs.getString("reviewer"),
+            rs.getTimestamp("reviewed_at") == null ? null : rs.getTimestamp("reviewed_at").toInstant(),
+            rs.getString("review_comment"),
+            rs.getObject("applied_revision") == null ? null : rs.getInt("applied_revision"));
+
+    private static final RowMapper<RecordHit> HIT_MAPPER = (rs, i) -> new RecordHit(
+            rs.getObject("id", UUID.class), rs.getString("record_no"),
+            rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+            rs.getString("doc_type"), rs.getString("title"), rs.getString("author"),
+            rs.getString("status"), rs.getInt("revision"),
+            rs.getTimestamp("created_at").toInstant());
 
     private final JdbcClient jdbc;
 
@@ -201,6 +220,40 @@ public class EmrRepository {
                 .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
+    /** 上级签名（主治/主任）：正文不变，只追加签名并刷新签名人与时间。 */
+    public boolean countersign(UUID id, String signer, String contentHash, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.medical_record
+                           SET signed_by = :signer, signed_at = now(), content_hash = :hash,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SIGNED' AND version = :version
+                        """)
+                .param("signer", signer).param("hash", contentHash)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 当前 revision 已签到的级别（AUTHOR=1/ATTENDING=2/CHIEF=3，未签=0）。 */
+    public int currentSignLevel(UUID recordId, int revision) {
+        Integer level = jdbc.sql("""
+                        SELECT COALESCE(MAX(CASE sign_type
+                                                WHEN 'AUTHOR' THEN 1
+                                                WHEN 'ATTENDING' THEN 2
+                                                WHEN 'CHIEF' THEN 3
+                                                ELSE 0 END), 0)
+                          FROM emr_svc.record_signature
+                         WHERE record_id = :recordId AND revision = :revision
+                        """)
+                .param("recordId", recordId).param("revision", revision)
+                .query(Integer.class).single();
+        return level == null ? 0 : level;
+    }
+
+    /** 归档要求的签名级别；未配置时按 1（书写医师）处理。 */
+    public int requiredSignLevel(String docType) {
+        return jdbc.sql("SELECT required_level FROM emr_svc.sign_policy WHERE doc_type = ?")
+                .param(docType).query(Integer.class).optional().orElse(1);
+    }
+
     /** 归档（CAS：仅 SIGNED 可归档，终态）。 */
     public boolean archiveRecord(UUID id, long expectedVersion) {
         return jdbc.sql("""
@@ -322,6 +375,96 @@ public class EmrRepository {
                         """)
                 .param("recordId", recordId).param("revision", revision)
                 .query(RESULT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- CDR 检索
+
+    /**
+     * 病历检索（CDR）：标题/正文/病历号/患者号模糊匹配，可叠加患者、文书类型、
+     * 状态与建档日期范围。关键词通配符已由调用方转义。
+     */
+    public List<RecordHit> searchRecords(String pattern, UUID patientId, String docType,
+                                         String status, LocalDate from, LocalDate to, int limit) {
+        return jdbc.sql("""
+                        SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                               author, status, revision, created_at
+                          FROM emr_svc.medical_record
+                         WHERE (CAST(:pattern AS text) IS NULL
+                                OR title ILIKE CAST(:pattern AS text) ESCAPE '\\'
+                                OR content_text ILIKE CAST(:pattern AS text) ESCAPE '\\'
+                                OR record_no ILIKE CAST(:pattern AS text) ESCAPE '\\'
+                                OR patient_no ILIKE CAST(:pattern AS text) ESCAPE '\\')
+                           AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
+                           AND (CAST(:docType AS text) IS NULL OR doc_type = CAST(:docType AS text))
+                           AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:fromDate AS date) IS NULL OR created_at >= CAST(:fromDate AS date))
+                           AND (CAST(:toDate AS date) IS NULL
+                                OR created_at < CAST(:toDate AS date) + INTERVAL '1 day')
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("pattern", pattern).param("patientId", patientId)
+                .param("docType", docType).param("status", status)
+                .param("fromDate", from).param("toDate", to)
+                .param("limit", limit)
+                .query(HIT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 归档后修改申请
+
+    public void insertChangeRequest(ChangeRequest c) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.record_change_request
+                            (id, record_id, record_no, reason, proposed_content, proposed_text,
+                             status, requester)
+                        VALUES (:id, :recordId, :recordNo, :reason, CAST(:content AS jsonb),
+                                :text, 'PENDING', :requester)
+                        """)
+                .param("id", c.id()).param("recordId", c.recordId())
+                .param("recordNo", c.recordNo()).param("reason", c.reason())
+                .param("content", c.proposedContent()).param("text", c.proposedText())
+                .param("requester", c.requester()).update();
+    }
+
+    public boolean hasPendingChangeRequest(UUID recordId) {
+        Boolean exists = jdbc.sql("""
+                        SELECT EXISTS (SELECT 1 FROM emr_svc.record_change_request
+                                        WHERE record_id = :recordId AND status = 'PENDING')
+                        """).param("recordId", recordId).query(Boolean.class).single();
+        return Boolean.TRUE.equals(exists);
+    }
+
+    public Optional<ChangeRequest> lockChangeRequest(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, record_id, record_no, reason, proposed_content::text AS proposed_content,
+                               proposed_text, status, requester, requested_at, reviewer,
+                               reviewed_at, review_comment, applied_revision
+                          FROM emr_svc.record_change_request WHERE id = ? FOR UPDATE
+                        """).param(id).query(CHANGE_MAPPER).optional();
+    }
+
+    public List<ChangeRequest> listChangeRequests(UUID recordId) {
+        return jdbc.sql("""
+                        SELECT id, record_id, record_no, reason, proposed_content::text AS proposed_content,
+                               proposed_text, status, requester, requested_at, reviewer,
+                               reviewed_at, review_comment, applied_revision
+                          FROM emr_svc.record_change_request
+                         WHERE record_id = ? ORDER BY requested_at DESC
+                        """).param(recordId).query(CHANGE_MAPPER).list();
+    }
+
+    /** 审批结果（CAS：仅 PENDING 可审批）。 */
+    public boolean reviewChangeRequest(UUID id, String status, String reviewer,
+                                       String comment, Integer appliedRevision) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_change_request
+                           SET status = :status, reviewer = :reviewer, reviewed_at = now(),
+                               review_comment = :comment, applied_revision = :revision
+                         WHERE id = :id AND status = 'PENDING'
+                        """)
+                .param("status", status).param("reviewer", reviewer)
+                .param("comment", comment).param("revision", appliedRevision)
+                .param("id", id).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

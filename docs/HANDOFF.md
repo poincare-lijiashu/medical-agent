@@ -227,6 +227,28 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 下一批 N4 收尾：三级签名（主治/主任）、书写时限质控（入院 24h/首程 8h）、
      归档后病案修改申请、CDR 检索、病历 PDF 导出
 
+16. **N4 病历域第二批（2026-10-31）：三级签名 / 病案修改审批 / CDR 检索 / 打印视图**
+   - 三级签名：`POST /emr/records/{id}/sign` 支持 `{"level":"ATTENDING"|"CHIEF"}`，
+     必须 AUTHOR→ATTENDING→CHIEF 顺序签署；签名级别由 `record_signature` 派生
+     （`MAX(level)`），不在 `medical_record` 冗余存储，避免双写不一致
+   - 归档签署策略：新表 `emr_svc.sign_policy`（V2 迁移），入院/首程=2、出院小结/手术记录=3、
+     病程/门诊/会诊=1；归档时按文书类型校验，未配置按 1
+   - 病案修改申请：新表 `record_change_request` + `ux_change_pending` 部分唯一索引；
+     仅 ARCHIVED 可申请；审批强制四眼原则（申请人≠审批人）；通过后旧版本入 amendment、
+     revision+1、回到 SUBMITTED、清空签名（必须重签重归档）；驳回不动正文
+   - CDR 检索：`GET /emr/records/search` 支持关键词/患者/文书类型/状态/日期范围；
+     `%`/`_` 转义；V2 里 `CREATE EXTENSION pg_trgm` 失败仅告警，不影响功能
+   - 打印视图：`GET /emr/records/{id}/print` 返回 A4 HTML（全部文本 HTML 转义），
+     浏览器「打印→另存为 PDF」导出；**未引入 PDF 库**（离线仓库无 OpenPDF，避免新增依赖）
+   - 权限（auth V14）：新增 `emr:record:approve`，授予 ADMIN/QC
+   - 实测（经网关 **68 项断言全过**）：主治未签时归档 409、加签后归档成功、
+     本人审批 409、QC 审批通过后 revision 2/SUBMITTED/哈希清空、驳回后仍 ARCHIVED；
+     单测 emr 26 项（新增 9 项服务规则 + 2 项打印视图 XSS/元数据）
+   - **踩坑**：新增业务错误码后必须同步改 `GlobalExceptionHandler.statusOf`，
+     否则默认落到 400（本轮 `EMR_SIGN_LEVEL_INVALID`/`EMR_CHANGE_REQUEST_INVALID` 先返回 400，
+     E2E 断言暴露后改为 409）；`mvn -Dtest=A,B` 在 PowerShell 里要整体加引号
+   - 下一批：N4 尾项（书写时限质控，需 clinical 入院时间）或 N5 医保域
+
 ### 本机踩坑备忘（下次别再踩）
 
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK

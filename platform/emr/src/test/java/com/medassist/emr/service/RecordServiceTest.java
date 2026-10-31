@@ -4,16 +4,20 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.emr.client.PatientClient;
 import com.medassist.emr.domain.EmrModel.Amendment;
+import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.QcRule;
+import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.domain.EmrModel.Template;
 import com.medassist.emr.repo.EmrRepository;
 import com.medassist.emr.web.EmrDtos.AmendReq;
+import com.medassist.emr.web.EmrDtos.ChangeRequestReq;
 import com.medassist.emr.web.EmrDtos.CreateRecordReq;
 import com.medassist.emr.web.EmrDtos.HashVerify;
 import com.medassist.emr.web.EmrDtos.QcReport;
 import com.medassist.emr.web.EmrDtos.RecordView;
+import com.medassist.emr.web.EmrDtos.ReviewReq;
 import com.medassist.emr.web.EmrDtos.SaveContentReq;
 import com.medassist.emr.web.EmrDtos.SubmitResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -317,5 +321,168 @@ class RecordServiceTest {
         HashVerify verify = service.verify(recordId);
 
         assertThat(verify.valid()).isFalse();
+    }
+
+    // ---------------------------------------------------------------- 三级签名
+
+    @Test
+    @DisplayName("三级签名：跳级签名被拒绝")
+    void countersignRejectsSkippingLevel() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 4L, "{}")));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.sign(recordId, RecordSignature.ATTENDING, "chief01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_SIGN_LEVEL_INVALID);
+        verify(repo, never()).countersign(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("三级签名：书写医师签完后可由主治加签，内容哈希沿用")
+    void countersignSucceedsAfterAuthor() {
+        MedicalRecord signed = record(MedicalRecord.SIGNED, 1, 5L, "{}");
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(signed));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(1);
+        when(repo.countersign(eq(recordId), eq("attending01"), anyString(), eq(5L))).thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(signed));
+
+        service.sign(recordId, RecordSignature.ATTENDING, "attending01");
+
+        verify(repo).countersign(eq(recordId), eq("attending01"), anyString(), eq(5L));
+        verify(repo).insertSignature(any(RecordSignature.class));
+        verify(repo).logChange(eq("attending01"), eq("RECORD_SIGN"), eq("RECORD"),
+                eq(recordId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("归档：未达到文书要求的签名级别时拒绝")
+    void archiveBlockedBySignPolicy() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 5L, "{}")));
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(2);
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(1);
+
+        assertThatThrownBy(() -> service.archive(recordId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_SIGN_LEVEL_INVALID);
+        verify(repo, never()).archiveRecord(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("归档：达到要求级别后放行")
+    void archivePassesAtRequiredLevel() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 5L, "{}")));
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(2);
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(2);
+        when(repo.archiveRecord(recordId, 5L)).thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(archivedRecord()));
+
+        service.archive(recordId, "chief01");
+
+        verify(repo).archiveRecord(recordId, 5L);
+    }
+
+    // ---------------------------------------------------------------- 归档后修改申请
+
+    @Test
+    @DisplayName("病案修改申请：未归档病历拒绝走申请流程")
+    void changeRequestRequiresArchived() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 5L, "{}")));
+
+        assertThatThrownBy(() -> service.requestChange(recordId,
+                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉"), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_RECORD_STATUS_INVALID);
+        verify(repo, never()).insertChangeRequest(any());
+    }
+
+    @Test
+    @DisplayName("病案修改申请：已有待审批申请时拒绝重复提交")
+    void changeRequestRejectsDuplicatePending() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(archivedRecord()));
+        when(repo.hasPendingChangeRequest(recordId)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.requestChange(recordId,
+                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉"), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
+        verify(repo, never()).insertChangeRequest(any());
+    }
+
+    @Test
+    @DisplayName("病案修改申请：申请人不得审批自己的申请（四眼原则）")
+    void approveRejectsSelfReview() {
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")));
+
+        assertThatThrownBy(() -> service.approveChange(recordId, reqId,
+                new ReviewReq("同意"), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
+        verify(repo, never()).applyAmendment(any(), anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("病案修改申请：审批通过后留档旧版本、revision+1 并回到 SUBMITTED")
+    void approveAppliesChange() {
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")));
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(archivedRecord()));
+        when(repo.applyAmendment(eq(recordId), anyString(), anyString(), eq(6L),
+                eq(MedicalRecord.ARCHIVED))).thenReturn(true);
+        when(repo.reviewChangeRequest(eq(reqId), eq(ChangeRequest.APPROVED), eq("qc01"),
+                any(), eq(2))).thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 2, 7L, "{}")));
+
+        service.approveChange(recordId, reqId, new ReviewReq("同意补正"), "qc01");
+
+        verify(repo).insertAmendment(any(Amendment.class));
+        verify(repo).applyAmendment(eq(recordId), anyString(), anyString(), eq(6L),
+                eq(MedicalRecord.ARCHIVED));
+        verify(repo).reviewChangeRequest(eq(reqId), eq(ChangeRequest.APPROVED), eq("qc01"),
+                any(), eq(2));
+    }
+
+    @Test
+    @DisplayName("病案修改申请：驳回只改申请状态，不动病历正文")
+    void rejectKeepsRecordUntouched() {
+        ChangeRequest pending = pendingRequest("doctor01");
+        ChangeRequest rejected = new ChangeRequest(reqId, recordId, "MR20261031000001",
+                "补充诊断依据", "{}", "text", ChangeRequest.REJECTED, "doctor01",
+                Instant.now(), "qc01", Instant.now(), "依据不足", null);
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pending), Optional.of(rejected));
+        when(repo.reviewChangeRequest(eq(reqId), eq(ChangeRequest.REJECTED), eq("qc01"),
+                eq("依据不足"), org.mockito.ArgumentMatchers.isNull())).thenReturn(true);
+
+        ChangeRequest result = service.rejectChange(recordId, reqId,
+                new ReviewReq("依据不足"), "qc01");
+
+        assertThat(result.status()).isEqualTo(ChangeRequest.REJECTED);
+        verify(repo, never()).applyAmendment(any(), anyString(), anyString(), anyLong(), anyString());
+        verify(repo, never()).insertAmendment(any());
+    }
+
+    // ---------------------------------------------------------------- 测试夹具
+
+    private final UUID reqId = UUID.randomUUID();
+
+    private MedicalRecord archivedRecord() {
+        return new MedicalRecord(recordId, "MR20261031000001", patientId, "P20261031000001",
+                null, null, null, "ADMISSION_NOTE", "TPL-ADMISSION", "入院记录", "{}",
+                "主诉：发热\n", "doctor01", MedicalRecord.ARCHIVED, 1, "chief01", Instant.now(),
+                RecordService.sha256("主诉：发热\n"), Instant.now(), 6L, Instant.now());
+    }
+
+    private ChangeRequest pendingRequest(String requester) {
+        return new ChangeRequest(reqId, recordId, "MR20261031000001", "补充诊断依据",
+                "{\"initialDiagnosis\":\"急性咽炎\"}", "初步诊断：急性咽炎\n",
+                ChangeRequest.PENDING, requester, Instant.now(), null, null, null, null);
     }
 }

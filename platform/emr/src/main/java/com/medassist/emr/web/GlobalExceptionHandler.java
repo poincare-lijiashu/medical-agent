@@ -18,11 +18,12 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
     protected HttpStatus statusOf(ErrorCode code) {
         return switch (code) {
             case NOT_FOUND, PATIENT_NOT_FOUND, EMR_TEMPLATE_NOT_FOUND,
-                 EMR_RECORD_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 EMR_RECORD_NOT_FOUND, EMR_CHANGE_REQUEST_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
-                 EMR_RECORD_STATUS_INVALID, EMR_QC_BLOCKED -> HttpStatus.CONFLICT;
+                 EMR_RECORD_STATUS_INVALID, EMR_QC_BLOCKED,
+                 EMR_SIGN_LEVEL_INVALID, EMR_CHANGE_REQUEST_INVALID -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;

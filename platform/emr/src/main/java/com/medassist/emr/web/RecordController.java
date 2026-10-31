@@ -3,16 +3,24 @@ package com.medassist.emr.web;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
+import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
+import com.medassist.emr.domain.EmrModel.RecordHit;
 import com.medassist.emr.service.RecordService;
 import com.medassist.emr.web.EmrDtos.AmendReq;
+import com.medassist.emr.web.EmrDtos.ChangeRequestReq;
 import com.medassist.emr.web.EmrDtos.CreateRecordReq;
 import com.medassist.emr.web.EmrDtos.HashVerify;
 import com.medassist.emr.web.EmrDtos.QcReport;
 import com.medassist.emr.web.EmrDtos.RecordView;
+import com.medassist.emr.web.EmrDtos.ReviewReq;
 import com.medassist.emr.web.EmrDtos.SaveContentReq;
+import com.medassist.emr.web.EmrDtos.SignReq;
 import com.medassist.emr.web.EmrDtos.SubmitResult;
 import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -42,6 +51,7 @@ public class RecordController {
     private static final String SIGN = "emr:record:sign";
     private static final String ARCHIVE = "emr:record:archive";
     private static final String AMEND = "emr:record:amend";
+    private static final String APPROVE = "emr:record:approve";
 
     private final RecordService service;
 
@@ -77,6 +87,32 @@ public class RecordController {
         return ApiResponse.ok(service.detail(id));
     }
 
+    /** CDR 检索：关键词 + 患者/文书类型/状态/建档日期组合过滤。 */
+    @GetMapping("/search")
+    public ApiResponse<List<RecordHit>> search(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) UUID patientId,
+            @RequestParam(required = false) String docType,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.search(q, patientId, docType, status, from, to, limit));
+    }
+
+    /** 打印视图（HTML，浏览器打印 → 另存为 PDF）。 */
+    @GetMapping(value = "/{id}/print", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> print(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
+                .body(service.printHtml(id));
+    }
+
     /** 保存草稿（版本号必填）。 */
     @PutMapping("/{id}")
     public ApiResponse<RecordView> save(
@@ -107,14 +143,15 @@ public class RecordController {
         return ApiResponse.ok(service.previewQc(id));
     }
 
-    /** 签名（记录签名人与内容 SHA-256）。 */
+    /** 签名（三级：AUTHOR → ATTENDING → CHIEF，缺省为书写医师）。 */
     @PostMapping("/{id}/sign")
     public ApiResponse<RecordView> sign(
             @PathVariable UUID id,
+            @Valid @RequestBody(required = false) SignReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, SIGN);
-        return ApiResponse.ok(service.sign(id, actor));
+        return ApiResponse.ok(service.sign(id, req == null ? null : req.level(), actor));
     }
 
     /** 归档（终态）。 */
@@ -136,6 +173,49 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, AMEND);
         return ApiResponse.ok(service.amend(id, req, actor));
+    }
+
+    /** 归档后病案修改申请。 */
+    @PostMapping("/{id}/change-requests")
+    public ApiResponse<ChangeRequest> requestChange(
+            @PathVariable UUID id,
+            @Valid @RequestBody ChangeRequestReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, AMEND);
+        return ApiResponse.ok(service.requestChange(id, req, actor));
+    }
+
+    @GetMapping("/{id}/change-requests")
+    public ApiResponse<List<ChangeRequest>> listChanges(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.listChanges(id));
+    }
+
+    /** 审批通过：应用修改内容，revision+1 后必须重新签名与归档。 */
+    @PostMapping("/{id}/change-requests/{requestId}/approve")
+    public ApiResponse<RecordView> approveChange(
+            @PathVariable UUID id,
+            @PathVariable UUID requestId,
+            @RequestBody(required = false) ReviewReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, APPROVE);
+        return ApiResponse.ok(service.approveChange(id, requestId, req, actor));
+    }
+
+    /** 审批驳回：病历保持归档不变。 */
+    @PostMapping("/{id}/change-requests/{requestId}/reject")
+    public ApiResponse<ChangeRequest> rejectChange(
+            @PathVariable UUID id,
+            @PathVariable UUID requestId,
+            @RequestBody(required = false) ReviewReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, APPROVE);
+        return ApiResponse.ok(service.rejectChange(id, requestId, req, actor));
     }
 
     /** 校验内容是否被篡改（重算哈希与签名哈希比对）。 */

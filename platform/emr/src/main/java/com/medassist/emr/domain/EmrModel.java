@@ -37,13 +37,64 @@ public final class EmrModel {
         }
     }
 
-    /** 签名记录。 */
+    /**
+     * 签名记录。
+     *
+     * <p>三级签名按 AUTHOR(1) → ATTENDING(2) → CHIEF(3) 顺序签署，
+     * 每一级都绑定当前 revision 的内容哈希；归档时按文书类型要求的级别校验。
+     */
     public record RecordSignature(UUID id, UUID recordId, int revision, String signer,
                                   String signType, Instant signedAt, String contentHash) {
 
         public static final String AUTHOR = "AUTHOR";
         public static final String ATTENDING = "ATTENDING";
         public static final String CHIEF = "CHIEF";
+
+        /** 级别数值；非法签名类型返回 0（由调用方拒绝）。 */
+        public static int levelOf(String signType) {
+            return switch (signType == null ? "" : signType) {
+                case AUTHOR -> 1;
+                case ATTENDING -> 2;
+                case CHIEF -> 3;
+                default -> 0;
+            };
+        }
+
+        /** 级别中文名，用于报错与打印。 */
+        public static String levelName(int level) {
+            return switch (level) {
+                case 1 -> "书写医师";
+                case 2 -> "主治医师";
+                case 3 -> "主任医师";
+                default -> "未签名";
+            };
+        }
+    }
+
+    /** 归档所需的签名级别（按文书类型配置）。 */
+    public record SignPolicy(String docType, int requiredLevel) {
+    }
+
+    /**
+     * 病案修改申请（归档后修改必须经审批）。
+     *
+     * <p>申请人提交拟修改内容，审批人（不得与申请人同一人）通过后才落库，
+     * 落库后 revision+1 并回到 SUBMITTED，必须重新签名与归档。
+     */
+    public record ChangeRequest(UUID id, UUID recordId, String recordNo, String reason,
+                                String proposedContent, String proposedText, String status,
+                                String requester, Instant requestedAt, String reviewer,
+                                Instant reviewedAt, String reviewComment, Integer appliedRevision) {
+
+        public static final String PENDING = "PENDING";
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+    }
+
+    /** CDR 检索命中项（不带正文，避免检索接口返回大对象）。 */
+    public record RecordHit(UUID id, String recordNo, UUID patientId, String patientNo,
+                            String docType, String title, String author, String status,
+                            int revision, Instant createdAt) {
     }
 
     /** 修订历史。 */

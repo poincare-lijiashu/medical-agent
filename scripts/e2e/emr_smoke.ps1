@@ -49,6 +49,12 @@ Check 'login' $r.Status 200
 $token = (Res $r).accessToken
 if (-not $token) { Write-Output "FATAL no token: $($r.Body)"; exit 1 }
 
+# QC user: approves archived change requests (four-eyes principle)
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = 'qc01'; password = $Password }
+Check 'login.qc' $r.Status 200
+$qcToken = (Res $r).accessToken
+if (-not $qcToken) { Write-Output "FATAL no qc token: $($r.Body)"; exit 1 }
+
 # ---------------------------------------------------------------- 2. patient
 $r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
     name = "Emr Patient $suffix"; gender = 'MALE'; birthDate = '1955-02-03'
@@ -119,7 +125,15 @@ $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/verify" $null $token
 Check 'verify.ok' $r.Status 200
 Check 'verify.valid' (Res $r).valid 'True'
 
-# ---------------------------------------------------------------- 7. archive (terminal)
+# ---------------------------------------------------------------- 7. archive needs attending signature
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/archive" $null $token
+Check 'archive.blockedBeforeAttending.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/sign" @{ level = 'ATTENDING' } $token
+Check 'sign.attending.ok' $r.Status 200
+Check 'sign.attending.count' (Res $r).signatures.Count 2
+Check 'sign.attending.type' (Res $r).signatures[1].signType 'ATTENDING'
+
 $r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/archive" $null $token
 Check 'archive.ok' $r.Status 200
 Check 'archive.status' (Res $r).record.status 'ARCHIVED'
@@ -128,6 +142,45 @@ $r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/amend" @{
     content = $full; reason = 'try to amend archived record'
 } $token
 Check 'amend.archived.409' $r.Status 409
+
+# ---------------------------------------------------------------- 7.1 CDR search + print view
+$r = Invoke-Api 'GET' "/api/v2/emr/records/search?q=pharyngitis&docType=ADMISSION_NOTE" $null $token
+Check 'search.ok' $r.Status 200
+Check 'search.hits' (@(Res $r).Count -ge 1) 'True'
+
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/print" $null $token
+Check 'print.ok' $r.Status 200
+Check 'print.hasHash' ($r.Body -match 'SHA-256') 'True'
+
+# ---------------------------------------------------------------- 7.2 archived change request
+$revised = $full.Clone()
+$revised['initialDiagnosis'] = 'acute pharyngitis, bacterial superinfection'
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/change-requests" @{
+    content = $revised; reason = 'add culture result to diagnosis'
+} $token
+Check 'change.request.ok' $r.Status 200
+$reqId = (Res $r).id
+
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/change-requests" $null $token
+Check 'change.list.count' (@(Res $r).Count) 1
+Check 'change.list.status' (@(Res $r))[0].status 'PENDING'
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/change-requests/$reqId/approve" @{
+    comment = 'self approve'
+} $token
+Check 'change.selfApprove.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/change-requests/$reqId/approve" @{
+    comment = 'approved by QC'
+} $qcToken
+Check 'change.approve.ok' $r.Status 200
+Check 'change.approve.status' (Res $r).record.status 'SUBMITTED'
+Check 'change.approve.revision' (Res $r).record.revision 2
+Check 'change.approve.signatureCleared' ("$((Res $r).record.contentHash)" -eq '') 'True'
+Check 'change.approve.historyCount' (@((Res $r).amendments).Count) 1
+
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/verify" $null $token
+Check 'change.verify.invalidUntilResign' (Res $r).valid 'False'
 
 # ---------------------------------------------------------------- 8. second record: amend keeps history
 $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
@@ -157,6 +210,32 @@ Check 'amend.historyRevision' $amendedView.amendments[0].revision 1
 
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$record2Id/verify" $null $token
 Check 'amend.verify.invalidUntilResign' (Res $r).valid 'False'
+
+# ---------------------------------------------------------------- 9. re-sign + archive + rejected change request
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/sign" $null $token
+Check 'record2.resign.author' $r.Status 200
+Check 'record2.resign.authorCount' (Res $r).signatures.Count 2
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/sign" @{ level = 'ATTENDING' } $token
+Check 'record2.resign.attending' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/archive" $null $token
+Check 'record2.archive' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/change-requests" @{
+    content = $full; reason = 'revert diagnosis wording'
+} $token
+Check 'record2.change.request' $r.Status 200
+$req2Id = (Res $r).id
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/change-requests/$req2Id/reject" @{
+    comment = 'insufficient evidence'
+} $qcToken
+Check 'record2.change.reject.ok' $r.Status 200
+Check 'record2.change.reject.status' (Res $r).status 'REJECTED'
+
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$record2Id" $null $token
+Check 'record2.change.reject.recordStillArchived' (Res $r).record.status 'ARCHIVED'
 
 Write-Output "-----"
 Write-Output "RECORD_ID=$recordId"
