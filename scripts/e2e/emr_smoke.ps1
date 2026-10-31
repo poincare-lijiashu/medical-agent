@@ -199,6 +199,11 @@ Check 'search.byRecordNoPrefix.hit' $matched.Count 1
 $r = Invoke-Api 'GET' '/api/v2/emr/records/search?q=%25' $null $token
 Check 'search.wildcardEscaped' (@(Res $r).Count) 0
 
+# N-08: keyword longer than 200 chars must be rejected (no silent truncation)
+$longQ = 'x' * 201
+$r = Invoke-Api 'GET' "/api/v2/emr/records/search?q=$longQ" $null $token
+Check 'search.tooLongKeyword.422' $r.Status 422
+
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/print" $null $token
 Check 'print.ok' $r.Status 200
 Check 'print.hasHash' ($r.Body -match 'SHA-256') 'True'

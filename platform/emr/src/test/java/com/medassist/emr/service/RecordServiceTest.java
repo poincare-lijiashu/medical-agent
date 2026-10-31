@@ -693,6 +693,30 @@ class RecordServiceTest {
     }
 
     @Test
+    @DisplayName("检索：关键词超过 200 字符直接 422，不触库也不留痕（N-08）")
+    void searchRejectsTooLongKeyword() {
+        String tooLong = "x".repeat(RecordService.MAX_KEYWORD_LENGTH + 1);
+
+        assertThatThrownBy(() -> service.search(tooLong, null, null, null, null, null, 50, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).searchRecords(any(), any(), any(), any(), any(), any(), any(), anyInt());
+        verify(repo, never()).logChange(anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("检索：恰好 200 字符仍放行（边界）")
+    void searchAcceptsBoundaryKeywordLength() {
+        String atLimit = "x".repeat(RecordService.MAX_KEYWORD_LENGTH);
+
+        service.search(atLimit, null, null, null, null, null, 50, "doctor01");
+
+        verify(repo).searchRecords("%" + atLimit + "%", atLimit + "%", null, null, null,
+                null, null, 50);
+    }
+
+    @Test
     @DisplayName("时限质控：阈值取规则配置（首程 8 小时），不写死 24")
     void timelinessUsesRuleThreshold() {
         when(repo.lockRecord(recordId)).thenReturn(Optional.of(

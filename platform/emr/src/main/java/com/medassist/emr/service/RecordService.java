@@ -65,6 +65,9 @@ public class RecordService {
     /** 时限类规则拿不到入院时间时的"未评估"结果后缀（与真实超时区分，便于统计）。 */
     static final String NOT_EVALUATED_SUFFIX = ":NOT_EVALUATED";
 
+    /** CDR 检索关键词长度上限（N-08）。 */
+    static final int MAX_KEYWORD_LENGTH = 200;
+
     public RecordService(EmrRepository repo, PatientClient patientClient,
                          ClinicalClient clinicalClient, ObjectMapper objectMapper) {
         this.repo = repo;
@@ -537,6 +540,11 @@ public class RecordService {
     public List<RecordHit> search(String q, UUID patientId, String docType, String status,
                                   LocalDate from, LocalDate to, Integer limit, String actor) {
         String keyword = (q == null || q.isBlank()) ? null : q.trim();
+        // 超长关键词既无检索意义，又会放大 ILIKE/trgm 的计算量：明确拒绝而不是静默截断
+        if (keyword != null && keyword.length() > MAX_KEYWORD_LENGTH) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "检索关键词不得超过 " + MAX_KEYWORD_LENGTH + " 个字符");
+        }
         String escaped = keyword == null ? null : escapeLike(keyword);
         String pattern = escaped == null ? null : "%" + escaped + "%";
         String prefix = escaped == null ? null : escaped + "%";
