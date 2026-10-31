@@ -48,7 +48,7 @@ class InsuranceControllerPermissionTest {
     @DisplayName("目录维护：只有 insurance:catalog:manage 能建目录项")
     void catalogCreateRequiresManage() {
         var req = new ItemReq("I-1", "示例项目", "SERVICE", "A",
-                BigDecimal.ZERO, null, true);
+                BigDecimal.ZERO, null, true, null);
 
         assertThatThrownBy(() -> catalogController.create(req, "insurance:settlement:read", "cashier01"))
                 .isInstanceOf(BusinessException.class)

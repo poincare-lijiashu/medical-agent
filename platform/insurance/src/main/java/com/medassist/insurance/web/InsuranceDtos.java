@@ -22,7 +22,7 @@ public final class InsuranceDtos {
     private InsuranceDtos() {
     }
 
-    /** 新增/更新医保目录项目。 */
+    /** 新增/更新医保目录项目（{@code version} 非空即按乐观锁更新，批量导入不带）。 */
     public record ItemReq(
             @NotBlank @Size(max = 64) String insuranceCode,
             @NotBlank @Size(max = 128) String name,
@@ -31,7 +31,8 @@ public final class InsuranceDtos {
             @NotBlank @Pattern(regexp = "A|B|C", message = "支付类别不合法") String payCategory,
             @DecimalMin("0") @DecimalMax("1") BigDecimal selfPayRatio,
             @DecimalMin("0") BigDecimal priceLimit,
-            Boolean enabled) {
+            Boolean enabled,
+            @DecimalMin("0") Long version) {
     }
 
     /** 目录批量导入（按医保编码 UPSERT）。 */

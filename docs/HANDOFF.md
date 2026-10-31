@@ -359,6 +359,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      内部接口实测返回 `serviceDate`
    - 踩坑：同患者同科室同一天只允许一个在诊挂号（`ux_visit_active`），E2E 造第二张结算单必须换科室
 
+23. **第三轮评测第六批整改（2026-10-31）：并发首插与目录乐观锁（S-14 / S-15）**
+   - **S-14**：`insertBill` 改 `ON CONFLICT DO NOTHING` 返回 boolean；并发首插冲突时服务层 409
+     "该就诊正在被其他终端生成结算清单，请刷新后重试"。选择 409 而不是"回落 updateDraft"：
+     两条并发请求的年度额度可能因其他清单确认而变化，静默合并会把不同口径金额落到同一张单
+   - **S-15**：`upsertItem(item, expectedVersion)`，SQL 加
+     `WHERE :expectedVersion IS NULL OR version = :expectedVersion`；`ItemReq` 增可选 `version`，
+     带版本不一致 → 409；批量导入显式传 null（以文件为准的强制覆盖）
+   - 验证：单测 245→**248**；insurance E2E **66 项**全过（带版本更新 version+1、旧版本 409）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

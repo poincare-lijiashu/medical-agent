@@ -71,10 +71,18 @@ public class InsuranceService {
                 limit == null || limit <= 0 ? 100 : Math.min(limit, 500));
     }
 
+    /**
+     * 新增/更新目录项目。
+     *
+     * <p>请求带 {@code version} 时按乐观锁更新（版本不一致 409），批量导入等强制覆盖场景不带。
+     */
     @Transactional
     public InsuranceItem createItem(ItemReq req, String actor) {
         InsuranceItem item = toItem(req);
-        repo.upsertItem(item);
+        if (repo.upsertItem(item, req.version()).isEmpty()) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "医保目录项目已被他人修改（当前版本与提交版本不一致），请刷新后重试");
+        }
         audit(actor, "ITEM_UPSERT", "INSURANCE_ITEM", item.insuranceCode(), Map.of(
                 "insuranceCode", item.insuranceCode(), "payCategory", item.payCategory()));
         return repo.findItemByCode(item.insuranceCode())
@@ -86,7 +94,8 @@ public class InsuranceService {
         List<String> codes = new ArrayList<>();
         for (ItemReq req : items) {
             InsuranceItem item = toItem(req);
-            repo.upsertItem(item);
+            // 批量导入是"以文件为准"的强制覆盖，不带版本条件
+            repo.upsertItem(item, null);
             codes.add(item.insuranceCode());
         }
         audit(actor, "ITEM_IMPORT", "INSURANCE_ITEM", "batch", Map.of(
@@ -217,7 +226,11 @@ public class InsuranceService {
                     c.total(), c.eligible(), c.deductible(), c.insurance(), c.selfPay(),
                     SettlementBill.DRAFT, detail, actor, null, null,
                     null, null, null, member.reimbursementRatio(), member.cap(), 0L, null);
-            repo.insertBill(created);
+            if (!repo.insertBill(created)) {
+                // 并发首插：另一请求已抢先建单（有效清单唯一索引兜底），让对方刷新后重试
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "该就诊正在被其他终端生成结算清单，请刷新后重试");
+            }
             bill = repo.findBillById(created.id())
                     .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
         }

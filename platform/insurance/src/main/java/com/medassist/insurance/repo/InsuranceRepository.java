@@ -115,8 +115,13 @@ public class InsuranceRepository {
                         """).param(id).query(ITEM_MAPPER).optional();
     }
 
-    /** 目录导入：按医保编码 UPSERT，返回主键（已存在时返回原主键）。 */
-    public UUID upsertItem(InsuranceItem item) {
+    /**
+     * 按医保编码 UPSERT 目录项目。
+     *
+     * @param expectedVersion 乐观锁版本：非空时仅当库里版本一致才更新（不一致返回空，调用方转 409）；
+     *                        批量导入等"强制覆盖"场景传 null
+     */
+    public Optional<UUID> upsertItem(InsuranceItem item, Long expectedVersion) {
         return jdbc.sql("""
                         INSERT INTO insurance_svc.md_insurance_item
                             (id, insurance_code, name, category, pay_category, self_pay_ratio,
@@ -132,6 +137,8 @@ public class InsuranceRepository {
                                enabled = EXCLUDED.enabled,
                                version = insurance_svc.md_insurance_item.version + 1,
                                updated_at = now()
+                         WHERE CAST(:expectedVersion AS bigint) IS NULL
+                            OR insurance_svc.md_insurance_item.version = CAST(:expectedVersion AS bigint)
                         RETURNING id
                         """)
                 .param("id", item.id()).param("code", item.insuranceCode())
@@ -140,7 +147,8 @@ public class InsuranceRepository {
                 .param("selfPayRatio", item.selfPayRatio())
                 .param("priceLimit", item.priceLimit())
                 .param("enabled", item.enabled())
-                .query(UUID.class).single();
+                .param("expectedVersion", expectedVersion)
+                .query(UUID.class).optional();
     }
 
     public boolean setItemEnabled(UUID id, boolean enabled, long expectedVersion) {
@@ -303,8 +311,13 @@ public class InsuranceRepository {
                 .param(id).query(BILL_MAPPER).optional();
     }
 
-    public void insertBill(SettlementBill b) {
-        jdbc.sql("""
+    /**
+     * 插入草稿清单；同一就诊并发首插时靠有效清单唯一索引兜底。
+     *
+     * @return false 表示已被并发请求抢先插入（唯一索引冲突被 ON CONFLICT 吞掉），调用方应返回 409
+     */
+    public boolean insertBill(SettlementBill b) {
+        return jdbc.sql("""
                         INSERT INTO insurance_svc.settlement_bill
                             (id, bill_no, visit_id, patient_id, patient_no, member_id,
                              total_amount, eligible_amount, deductible, insurance_amount,
@@ -313,6 +326,7 @@ public class InsuranceRepository {
                         VALUES (:id, :billNo, :visitId, :patientId, :patientNo, :memberId,
                                 :total, :eligible, :deductible, :insurance, :selfPay, 'DRAFT',
                                 CAST(:detail AS jsonb), :createdBy, :snapshotRatio, :snapshotCap)
+                        ON CONFLICT DO NOTHING
                         """)
                 .param("id", b.id()).param("billNo", b.billNo())
                 .param("visitId", b.visitId()).param("patientId", b.patientId())
@@ -322,7 +336,7 @@ public class InsuranceRepository {
                 .param("selfPay", b.selfPayAmount()).param("detail", b.detail())
                 .param("createdBy", b.createdBy())
                 .param("snapshotRatio", b.snapshotRatio()).param("snapshotCap", b.snapshotCap())
-                .update();
+                .update() > 0;
     }
 
     /** 重算草稿（CAS：仅 DRAFT）；待遇参数可能已调整，快照同步刷新。 */

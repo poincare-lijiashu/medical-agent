@@ -10,6 +10,7 @@ import com.medassist.insurance.domain.InsuranceModel.Member;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.BillView;
+import com.medassist.insurance.web.InsuranceDtos.ItemReq;
 import com.medassist.insurance.web.InsuranceDtos.MappingReq;
 import com.medassist.insurance.web.InsuranceDtos.MemberReq;
 import com.medassist.insurance.web.InsuranceDtos.ReconcileView;
@@ -34,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -62,6 +64,8 @@ class InsuranceServiceTest {
         clinicalClient = mock(ClinicalClient.class);
         service = new InsuranceService(repo, patientClient, clinicalClient,
                 JsonMapper.builder().build());
+        // 默认首插成功；并发首插用例单独覆盖为 false
+        when(repo.insertBill(any())).thenReturn(true);
     }
 
     // ---------------------------------------------------------------- 计算引擎
@@ -349,6 +353,52 @@ class InsuranceServiceTest {
         assertThat(captor.getValue().selfPayAmount()).isEqualByComparingTo("5.00");
         assertThat(view.capUsed()).isEqualByComparingTo("10.00");
         assertThat(view.capRemaining()).isEqualByComparingTo("5.00");
+    }
+
+    @Test
+    @DisplayName("生成：并发首插被有效清单唯一索引拦下时返回 409，而不是 500")
+    void generateConcurrentInsertConflict() {
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
+                member("0", "1.0000", "300000.00")));
+        stubChargeResolution();
+        when(repo.insertBill(any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+    }
+
+    // ---------------------------------------------------------------- 目录乐观锁（S-15）
+
+    private ItemReq itemReq(Long version) {
+        return new ItemReq("I-1", "示例项目", "SERVICE", "A",
+                BigDecimal.ZERO, null, true, version);
+    }
+
+    @Test
+    @DisplayName("目录：带版本更新时版本不一致返回 409，且不写审计")
+    void createItemRejectsStaleVersion() {
+        when(repo.upsertItem(any(), eq(3L))).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.createItem(itemReq(3L), "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).logChange(anyString(), anyString(), anyString(), anyString(),
+                anyString());
+    }
+
+    @Test
+    @DisplayName("目录：批量导入是强制覆盖（不带版本条件），逐条 UPSERT")
+    void importItemsForcesOverwrite() {
+        when(repo.upsertItem(any(), isNull())).thenReturn(Optional.of(UUID.randomUUID()));
+
+        var result = service.importItems(List.of(itemReq(99L)), "cashier01");
+
+        assertThat(result.imported()).isEqualTo(1);
+        verify(repo).upsertItem(any(), isNull());
     }
 
     @Test

@@ -83,6 +83,21 @@ $r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
 } $token
 Check 'item.create' $r.Status 200
 Check 'item.payCategory' (Res $r).payCategory 'A'
+$itemVersion = (Res $r).version
+
+# optimistic lock: matching version updates, stale version 409
+$r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
+    insuranceCode = 'I-REG-A'; name = '普通门诊诊查费（甲类）'; category = 'SERVICE'
+    payCategory = 'A'; selfPayRatio = 0; priceLimit = 50; version = $itemVersion
+} $token
+Check 'item.update.ok' $r.Status 200
+Check 'item.update.version' (Res $r).version ($itemVersion + 1)
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
+    insuranceCode = 'I-REG-A'; name = '普通门诊诊查费（甲类）'; category = 'SERVICE'
+    payCategory = 'A'; selfPayRatio = 0; priceLimit = 50; version = $itemVersion
+} $token
+Check 'item.update.stale.409' $r.Status 409
 
 $r = Invoke-Api 'PUT' '/api/v2/insurance/mappings/REG-GENERAL' @{
     insuranceCode = 'I-REG-A'; enabled = $true
