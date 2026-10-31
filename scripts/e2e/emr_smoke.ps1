@@ -411,6 +411,37 @@ $r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/archive" $null $qcToken
 Check 'dis.archive' $r.Status 200
 Check 'dis.archive.status' (Res $r).record.status 'ARCHIVED'
 
+# ---------------------------------------------------------------- 13. sign policy management (N-04)
+$r = Invoke-Api 'GET' '/api/v2/emr/sign-policies' $null $token
+Check 'policy.list' $r.Status 200
+$policies = @(Res $r)
+$disPolicy = @($policies | Where-Object { $_.docType -eq 'DISCHARGE_SUMMARY' })[0]
+Check 'policy.discharge.level' $disPolicy.requiredLevel 3
+$policyVersion = [int64]$disPolicy.version
+
+# only QC/admin may change the archive signing policy
+$r = Invoke-Api 'PUT' '/api/v2/emr/sign-policies/DISCHARGE_SUMMARY' @{
+    requiredLevel = 3; version = $policyVersion } $doctorToken
+Check 'policy.update.doctor.403' $r.Status 403
+
+# an existing policy cannot be changed without the current version (no silent overwrite)
+$r = Invoke-Api 'PUT' '/api/v2/emr/sign-policies/DISCHARGE_SUMMARY' @{ requiredLevel = 3 } $qcToken
+Check 'policy.update.noVersion.422' $r.Status 422
+
+$r = Invoke-Api 'PUT' '/api/v2/emr/sign-policies/DISCHARGE_SUMMARY' @{
+    requiredLevel = 3; version = $policyVersion } $qcToken
+Check 'policy.update' $r.Status 200
+Check 'policy.update.level' (Res $r).requiredLevel 3
+Check 'policy.update.versionBumped' (Res $r).version ($policyVersion + 1)
+
+# stale version must be rejected (CAS)
+$r = Invoke-Api 'PUT' '/api/v2/emr/sign-policies/DISCHARGE_SUMMARY' @{
+    requiredLevel = 3; version = $policyVersion } $qcToken
+Check 'policy.update.stale.409' $r.Status 409
+
+$r = Invoke-Api 'PUT' '/api/v2/emr/sign-policies/NOT_A_DOC_TYPE' @{ requiredLevel = 1 } $qcToken
+Check 'policy.update.badDocType.422' $r.Status 422
+
 Write-Output "-----"
 Write-Output "RECORD_ID=$recordId"
 Write-Output "RECORD2_ID=$record2Id"

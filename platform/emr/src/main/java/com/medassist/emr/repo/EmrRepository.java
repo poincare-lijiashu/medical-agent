@@ -8,6 +8,7 @@ import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.QcRule;
 import com.medassist.emr.domain.EmrModel.RecordHit;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
+import com.medassist.emr.domain.EmrModel.SignPolicy;
 import com.medassist.emr.domain.EmrModel.Template;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -295,6 +296,54 @@ public class EmrRepository {
     public Optional<Integer> requiredSignLevel(String docType) {
         return jdbc.sql("SELECT required_level FROM emr_svc.sign_policy WHERE doc_type = ?")
                 .param(docType).query(Integer.class).optional();
+    }
+
+    // ---------------------------------------------------------------- 签名策略管理（N-04）
+
+    private static final RowMapper<SignPolicy> POLICY_MAPPER = (rs, i) -> new SignPolicy(
+            rs.getString("doc_type"), rs.getInt("required_level"), rs.getLong("version"),
+            rs.getString("updated_by"),
+            rs.getTimestamp("updated_at") == null ? null : rs.getTimestamp("updated_at").toInstant());
+
+    public List<SignPolicy> listSignPolicies() {
+        return jdbc.sql("""
+                        SELECT doc_type, required_level, version, updated_by, updated_at
+                          FROM emr_svc.sign_policy
+                         ORDER BY doc_type
+                        """).query(POLICY_MAPPER).list();
+    }
+
+    public Optional<SignPolicy> findSignPolicy(String docType) {
+        return jdbc.sql("""
+                        SELECT doc_type, required_level, version, updated_by, updated_at
+                          FROM emr_svc.sign_policy
+                         WHERE doc_type = ?
+                        """).param(docType).query(POLICY_MAPPER).optional();
+    }
+
+    /** 新增策略；并发重复创建时返回 false（由服务层转 409）。 */
+    public boolean insertSignPolicy(String docType, int requiredLevel, String actor) {
+        return jdbc.sql("""
+                        INSERT INTO emr_svc.sign_policy
+                            (doc_type, required_level, version, updated_by, updated_at)
+                        VALUES (:docType, :level, 0, :actor, now())
+                        ON CONFLICT (doc_type) DO NOTHING
+                        """)
+                .param("docType", docType).param("level", requiredLevel)
+                .param("actor", actor).update() > 0;
+    }
+
+    /** 修改策略（期望版本号 CAS）；版本不匹配返回 false。 */
+    public boolean updateSignPolicy(String docType, int requiredLevel, long expectedVersion,
+                                    String actor) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.sign_policy
+                           SET required_level = :level, version = version + 1,
+                               updated_by = :actor, updated_at = now()
+                         WHERE doc_type = :docType AND version = :version
+                        """)
+                .param("level", requiredLevel).param("docType", docType)
+                .param("version", expectedVersion).param("actor", actor).update() > 0;
     }
 
     /** 归档（CAS：仅 SIGNED 可归档，终态）。 */

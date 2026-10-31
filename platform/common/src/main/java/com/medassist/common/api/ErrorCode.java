@@ -70,6 +70,7 @@ public enum ErrorCode {
     EMR_QC_BLOCKED(47411, "病历质控未通过，存在必须整改的项目"),
     EMR_CHANGE_REQUEST_INVALID(47412, "病案修改申请状态不允许该操作"),
     EMR_SIGN_LEVEL_INVALID(47413, "签名级别不正确：必须按 书写医师→主治→主任 顺序签署"),
+    EMR_SIGN_POLICY_INVALID(47414, "签名策略不存在、配置不合法或已被他人修改"),
 
     // ---- 医保（48xxx）----
     INSURANCE_ITEM_NOT_FOUND(48401, "未找到该医保目录项目"),

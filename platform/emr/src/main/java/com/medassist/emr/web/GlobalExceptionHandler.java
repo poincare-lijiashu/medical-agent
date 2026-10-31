@@ -24,7 +24,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  EMR_RECORD_STATUS_INVALID, EMR_QC_BLOCKED,
                  EMR_SIGN_LEVEL_INVALID, EMR_CHANGE_REQUEST_INVALID -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case VALIDATION_FAILED, EMR_SIGN_POLICY_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;

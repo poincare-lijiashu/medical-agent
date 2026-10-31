@@ -435,6 +435,16 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 267→**269**；emr E2E 91→**109 项**、insurance E2E 87 项全过
    - 仍未做：E2E 幂等清理段、Mockito 断言去过拟合（记录在 REVIEW §19）
 
+31. **第三轮评测第十四批整改（2026-11-01）：签名策略可管理（N-04）**
+   - 新增 `GET /api/v2/emr/sign-policies`（需 `emr:record:read`）与
+     `PUT /api/v2/emr/sign-policies/{docType}`（需新增 `emr:policy:manage`，auth **V19** 仅授 QC/ADMIN）
+   - `emr V8`：`sign_policy` 加 `version`（乐观锁）与 `updated_by`；已存在策略修改必须带当前版本
+     （缺失 422、过期 409、并发创建 409），每次变更写 `SIGN_POLICY_UPSERT` 审计并记 before/after
+   - 医师不能改审签要求（否则书写人可自行降低归档门槛，与 S-05 同类风险）
+   - 验证：单测 269→**280**（`SignPolicyServiceTest` 7 + `SignPolicyControllerTest` 4）；
+     `emr_smoke.ps1` 109→**118 项**全过；库内 `auth_svc` 到 V19、`emr_svc` 到 V8，
+     `emr_change_log` 落 `SIGN_POLICY_UPSERT{ before:3, after:3, mode:UPDATE }`
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -495,6 +505,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   唯独 `(@(...).Count)` 这种不带管道的写法没事；断言里只要出现管道就**先赋值给变量再传参**
 - Flyway 建索引前先 `select indexname, indexdef from pg_indexes where schemaname='xx_svc'`：
   V2 早就建过同列同操作符类的 trgm 索引，V4 又建一遍纯属重复，只能再补 V5 删除
+- 核对 Flyway 进度别用 `max(version)`：`flyway_schema_history.version` 是 text，
+  `'9' > '18'`，会误判成"迁移没跑"；用 `order by installed_rank desc limit 1`
+  或直接 `where version in ('18','19')` 查
+- 给配置表加管理接口时补列可以 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... NOT NULL DEFAULT 0`
+  （PG11+ 只改元数据不重写表），存量行自动获得版本号 0，首次修改带 version=0 即可
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

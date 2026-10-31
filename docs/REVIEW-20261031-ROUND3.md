@@ -499,4 +499,24 @@ S-26、S-28~S-30（E2E 补 CHIEF 三级签名与首程 8h、Mockito 去过拟合
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–19 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 20. 整改状态（2026-11-01，第十四批：签名策略可管理 N-04）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| N-04 | `sign_policy` 决定归档前必须签到哪一级（分级评审硬指标），但只能改数据库；同时缺少并发保护，两个窗口保存"最后写赢"可把出院小结从 3 级静默降为 1 级 | ✅ 已修 | 新增 `GET/PUT /emr/sign-policies`；`emr V8` 给策略表加 `version`（乐观锁）与 `updated_by`；已存在策略必须携带当前版本，缺失 422、过期 409、并发创建 409；每次变更写 `SIGN_POLICY_UPSERT` 审计并记 `before/after`；新增权限 `emr:policy:manage`（auth V19，仅 QC/ADMIN），医师只能读 |
+
+**关键设计**：
+- 医师不持有 `emr:policy:manage`：若书写人可改审签要求，等于可自行降低归档门槛（与 S-05 同类风险）；
+- 创建不需要版本号、修改必须带版本号：区分"新增策略"与"改既有策略"，避免误把更新写成覆盖；
+- 文书类型限定为模板 CHECK 允许的 7 个内置值，避免产生永不被引用的孤儿策略。
+
+**验证**：
+- 单测 **269 → 280**（`SignPolicyServiceTest` 7 项、`SignPolicyControllerTest` 4 项）；
+- `emr_smoke.ps1` **109 → 118 项**全过：策略列表含 `DISCHARGE_SUMMARY=3`、医师改 403、
+  缺版本 422、正常改 200 且 version+1、旧版本 409、非法 docType 422；
+- 库内核对：`auth_svc.flyway_schema_history` 到 **19**、`emr_svc` 到 **8**；
+  `emr_change_log` 落 `SIGN_POLICY_UPSERT`（`before=3, after=3, mode=UPDATE`，actor=qc01）。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–20 节记录整改落地与验证。后续批次按第 5 节路线继续。*

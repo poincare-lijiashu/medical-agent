@@ -5,6 +5,7 @@ import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.domain.EmrModel.Template;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -38,6 +39,17 @@ public final class EmrDtos {
 
     /** 启停用模板。 */
     public record ToggleTemplateReq(@NotNull Boolean enabled, @NotNull Long version) {
+    }
+
+    /**
+     * 签名策略修改。
+     *
+     * @param requiredLevel 归档所需签名级别（1 书写医师 / 2 主治 / 3 主任）
+     * @param version       已存在的策略必须携带当前版本号（首次创建不填）；用于防止并发静默降级
+     */
+    public record SignPolicyReq(
+            @NotNull @Min(1) @Max(3) Integer requiredLevel,
+            Long version) {
     }
 
     /** 新建病历草稿。 */

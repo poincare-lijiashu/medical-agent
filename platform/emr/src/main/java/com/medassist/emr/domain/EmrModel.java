@@ -71,8 +71,14 @@ public final class EmrModel {
         }
     }
 
-    /** 归档所需的签名级别（按文书类型配置）。 */
-    public record SignPolicy(String docType, int requiredLevel) {
+    /**
+     * 归档所需的签名级别（按文书类型配置）。
+     *
+     * @param version   乐观锁版本号，修改策略必须携带当前值（防止并发静默降低审签要求）
+     * @param updatedBy 最近一次修改人（管理接口写审计 SIGN_POLICY_UPSERT）
+     */
+    public record SignPolicy(String docType, int requiredLevel, long version,
+                             String updatedBy, Instant updatedAt) {
     }
 
     /**
