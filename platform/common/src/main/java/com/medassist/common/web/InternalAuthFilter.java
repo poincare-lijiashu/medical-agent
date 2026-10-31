@@ -64,20 +64,34 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     private final InternalAuthProperties props;
     private final InternalKeySet keySet;
     private final MeterRegistry meterRegistry;
+    /** v2（Ed25519）验签公钥；未配置时为 null，v2 请求按 unknown_key 拒绝。 */
+    private final java.security.PublicKey gatewayPublicKey;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
     private final NonceCache nonces;
 
     public InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
                               MeterRegistry meterRegistry) {
-        this(props, keySet, meterRegistry, MAX_NONCE_ENTRIES);
+        this(props, keySet, meterRegistry, null, MAX_NONCE_ENTRIES);
+    }
+
+    public InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
+                              MeterRegistry meterRegistry, java.security.PublicKey gatewayPublicKey) {
+        this(props, keySet, meterRegistry, gatewayPublicKey, MAX_NONCE_ENTRIES);
     }
 
     /** 供测试注入容量的构造器：容量策略（过期清理 / 饱和拒绝）需要在小容量下可验证。 */
     InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
                        MeterRegistry meterRegistry, int maxNonceEntries) {
+        this(props, keySet, meterRegistry, null, maxNonceEntries);
+    }
+
+    InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
+                       MeterRegistry meterRegistry, java.security.PublicKey gatewayPublicKey,
+                       int maxNonceEntries) {
         this.props = props;
         this.keySet = keySet;
         this.meterRegistry = meterRegistry;
+        this.gatewayPublicKey = gatewayPublicKey;
         this.nonces = new NonceCache(props.nonceTtlSecondsOrDefault() * 1000L, maxNonceEntries);
     }
 
@@ -138,11 +152,18 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 || isBlank(nonce) || isBlank(signature)) {
             return "missing";
         }
-        if (!InternalSignature.SIG_VERSION.equals(version)) {
+        // v2（Ed25519）：业务服务只持公钥，无法伪造网关身份（第五轮 R5-M3）；
+        // v1（HMAC）：过渡期继续接受，便于"先升级服务、再切换网关算法"的分步上线。
+        boolean v2 = InternalSignature.SIG_VERSION_GATEWAY_ED25519.equals(version);
+        if (v2) {
+            if (gatewayPublicKey == null) {
+                return "unknown_key";
+            }
+        } else if (!InternalSignature.SIG_VERSION.equals(version)) {
             return "bad_version";
         }
-        String secret = keySet.secret(keyId);
-        if (secret == null) {
+        String secret = v2 ? null : keySet.secret(keyId);
+        if (!v2 && secret == null) {
             return "unknown_key";
         }
 
@@ -157,14 +178,21 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             return "skew";
         }
 
-        String canonical = InternalSignature.canonical(request.getMethod(), path(request),
-                request.getQueryString(), identityHeaders(request), ts, nonce,
-                InternalSignature.EMPTY_BODY_HASH);
-        if (!InternalSignature.verify(secret, canonical, signature)) {
+        String canonical = v2
+                ? InternalSignature.canonicalGatewayV2(request.getMethod(), path(request),
+                        request.getQueryString(), identityHeaders(request), ts, nonce,
+                        InternalSignature.EMPTY_BODY_HASH)
+                : InternalSignature.canonical(request.getMethod(), path(request),
+                        request.getQueryString(), identityHeaders(request), ts, nonce,
+                        InternalSignature.EMPTY_BODY_HASH);
+        boolean valid = v2
+                ? InternalSignature.verifyEd25519(gatewayPublicKey, canonical, signature)
+                : InternalSignature.verify(secret, canonical, signature);
+        if (!valid) {
             return "bad_sig";
         }
         // 验签通过后才占用 nonce：反过来的话，任何未认证流量都能先灌满 nonce 表（第五轮 R5-M1）
-        String nonceResult = registerNonce(keyId + ":" + nonce);
+        String nonceResult = registerNonce((v2 ? "v2:" : "") + keyId + ":" + nonce);
         if (nonceResult != null) {
             return nonceResult;
         }

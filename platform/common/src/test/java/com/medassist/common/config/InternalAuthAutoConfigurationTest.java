@@ -141,4 +141,79 @@ class InternalAuthAutoConfigurationTest {
                             .hasMessageContaining("Base64");
                 });
     }
+
+    // ---------------------------------------------------------------- 阶段二：Ed25519 与按调用方密钥
+
+    private static String publicKeyBase64() throws Exception {
+        java.security.KeyPair pair = java.security.KeyPairGenerator.getInstance("Ed25519")
+                .generateKeyPair();
+        return Base64.getEncoder().encodeToString(pair.getPublic().getEncoded());
+    }
+
+    @Test
+    void enforceAcceptsPublicKeyOnlyConfiguration() throws Exception {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=enforce",
+                        "medassist.internal-auth.gateway-signing=ed25519",
+                        "medassist.internal-auth.gateway-public-key=" + publicKeyBase64())
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(InternalAuthFilter.class);
+                });
+    }
+
+    @Test
+    void rejectsMalformedPublicKeyAtStartup() {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=enforce",
+                        "medassist.internal-auth.gateway-public-key=not-a-key")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("gateway-public-key");
+                });
+    }
+
+    @Test
+    void rejectsUnknownGatewaySigningAlgorithm() {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON,
+                        "medassist.internal-auth.gateway-signing=rsa")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("gateway-signing");
+                });
+    }
+
+    @Test
+    void callerKeysAreBoundFromPerServiceProperties() {
+        // Helm 按组件只注入需要的条目：MEDASSIST_INTERNALAUTH_CALLERKEYS_CLINICAL
+        runner.withPropertyValues(
+                        "spring.application.name=platform-clinical",
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.internal-paths-signature-required=true",
+                        "medassist.internal-auth.caller-keys.clinical=" + KEY)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    InternalCallerSigner signer = context.getBean(InternalCallerSigner.class);
+                    assertThat(signer.caller()).isEqualTo("clinical");
+                    assertThat(signer.configured()).isTrue();
+                });
+    }
+
+    @Test
+    void perServiceCallerKeysDoNotLeakOtherCallers() {
+        runner.withPropertyValues(
+                        "spring.application.name=platform-pharmacy",
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.internal-paths-signature-required=true",
+                        "medassist.internal-auth.caller-keys.clinical=" + KEY)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("pharmacy");
+                });
+    }
 }

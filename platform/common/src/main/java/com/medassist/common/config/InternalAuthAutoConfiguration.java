@@ -45,7 +45,9 @@ public class InternalAuthAutoConfiguration {
     @ConditionalOnMissingBean
     public InternalKeySet internalKeySet(InternalAuthProperties props,
                                          ObjectProvider<ObjectMapper> mapperProvider) {
-        return InternalKeySet.parse(props.keysJson(), mapperProvider.getIfAvailable(ObjectMapper::new));
+        return InternalKeySet.parse(props.keysJson(), mapperProvider.getIfAvailable(ObjectMapper::new))
+                // 阶段二：Helm 按组件只注入"自己的 + 直接调用方的"密钥（R5-M3）
+                .withCallerKeys(props.callerKeysOrDefault());
     }
 
     /**
@@ -91,16 +93,28 @@ public class InternalAuthAutoConfiguration {
                     "medassist.internal-auth.mode 非法（" + mode + "）：只允许 off / log / enforce，服务拒绝启动");
         }
 
-        if (InternalAuthProperties.ENFORCE.equals(mode) && !keySet.configured()) {
+        // 公钥在启动期解析：坏密钥必须拒绝启动，而不是让每个请求 403/500（与 v1 同规格）
+        java.security.PublicKey gatewayPublicKey = null;
+        if (props.gatewayPublicKey() != null && !props.gatewayPublicKey().isBlank()) {
+            gatewayPublicKey = com.medassist.common.security.InternalSignature
+                    .parsePublicKey(props.gatewayPublicKey());
+        }
+        // 校验算法取值（网关会用到）；业务服务侧只按请求头版本分支，不受该值影响
+        props.gatewaySigningOrDefault();
+
+        if (InternalAuthProperties.ENFORCE.equals(mode) && !keySet.configured()
+                && gatewayPublicKey == null) {
             throw new IllegalStateException(
-                    "medassist.internal-auth.mode=enforce 但未配置 keys-json（INTERNAL_HMAC_KEYS），服务拒绝启动");
+                    "medassist.internal-auth.mode=enforce 但未配置验签材料："
+                            + "请配置 keys-json（v1/HMAC）或 gateway-public-key（v2/Ed25519），服务拒绝启动");
         }
         if (InternalAuthProperties.OFF.equals(mode) && SecurityDefaults.isProduction(environment)) {
             throw new IllegalStateException(
                     "生产/预发布环境不允许关闭服务间签名校验（medassist.internal-auth.mode=off），服务拒绝启动");
         }
-        if (InternalAuthProperties.LOG.equals(mode) && !keySet.configured()) {
-            log.warn("medassist.internal-auth.mode=log 但未配置 keys-json：所有请求都无法验签，仅记录日志");
+        if (InternalAuthProperties.LOG.equals(mode) && !keySet.configured() && gatewayPublicKey == null) {
+            log.warn("medassist.internal-auth.mode=log 但未配置 keys-json / gateway-public-key："
+                    + "所有请求都无法验签，仅记录日志");
         }
         // nonce 表至少要比时间窗活得久，否则窗内已用过的 nonce 提前过期 → 可重放（第五轮 R5-M2）
         long skew = props.clockSkewSecondsOrDefault();
@@ -111,11 +125,13 @@ public class InternalAuthAutoConfiguration {
                             + skew + ")+1，否则时间窗内可用 nonce 会提前失效并允许重放，服务拒绝启动");
         }
 
-        log.info("internal-auth.mode={} keys={} clockSkew={}s internalPathsRequired={} internalKeys={}",
+        log.info("internal-auth.mode={} keys={} gatewayPublicKey={} clockSkew={}s "
+                        + "internalPathsRequired={} internalKeys={}",
                 mode, keySet.configured() ? "configured" : "none",
+                gatewayPublicKey != null ? "configured" : "none",
                 props.clockSkewSecondsOrDefault(), props.internalPathsSignatureRequiredOrDefault(),
                 keySet.callerConfigured() ? "configured" : "none");
-        return new InternalAuthFilter(props, keySet, registryProvider.getIfAvailable());
+        return new InternalAuthFilter(props, keySet, registryProvider.getIfAvailable(), gatewayPublicKey);
     }
 
     /** platform-clinical → clinical；medassist-gateway → gateway；其它原样小写。 */

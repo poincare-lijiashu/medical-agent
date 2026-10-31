@@ -3,6 +3,7 @@ package com.medassist.common.security;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 服务间签名校验配置（MF-07 阶段一）。
@@ -18,6 +19,15 @@ import java.util.List;
  *     caller: clinical          # 可省略，默认由 spring.application.name 推导
  *     exempt-paths:
  *       - /actuator/health/**
+ *
+ *     # ---- 阶段二（网关非对称签名 + 密钥面收敛）----
+ *     gateway-signing: ed25519  # hmac(v1，过渡期) | ed25519(v2)
+ *     gateway-key-id: gw-v2     # v2 下写入 X-Internal-Key-Id，便于观测（不参与选钥）
+ *     gateway-private-key: "..."# 仅网关持有（PKCS#8 base64）
+ *     gateway-public-key: "..." # 仅业务服务持有（X.509 base64）
+ *     caller-keys:              # 服务→服务通道，按调用方隔离；只挂直接调用方的密钥
+ *       clinical: "..."         # 本服务自己的密钥（出站签名）
+ *       emr: "..."              # 会调用本服务的调用方（入站验签）
  * </pre>
  *
  * <p>豁免路径只放行**确有必要且已由网络策略限制**的端点：探针与 Prometheus 抓取。
@@ -34,11 +44,15 @@ import java.util.List;
 @ConfigurationProperties("medassist.internal-auth")
 public record InternalAuthProperties(String mode, Integer clockSkewSeconds, String keysJson,
                                      Integer nonceTtlSeconds, Boolean internalPathsSignatureRequired,
-                                     List<String> exemptPaths, String caller) {
+                                     List<String> exemptPaths, String caller,
+                                     String gatewaySigning, String gatewayKeyId,
+                                     String gatewayPrivateKey, String gatewayPublicKey,
+                                     Map<String, String> callerKeys) {
 
     public static final String OFF = "off";
     public static final String LOG = "log";
     public static final String ENFORCE = "enforce";
+
 
     public String modeOrDefault() {
         return mode == null || mode.isBlank() ? OFF : mode.trim().toLowerCase();
@@ -77,5 +91,32 @@ public record InternalAuthProperties(String mode, Integer clockSkewSeconds, Stri
     /** 显式配置的调用方标识；为空时由 spring.application.name 推导。 */
     public String callerOrNull() {
         return caller == null || caller.isBlank() ? null : caller.trim().toLowerCase();
+    }
+
+    /** 网关签名算法：默认 hmac（v1，兼容既有部署），可为 ed25519（v2）。 */
+    public String gatewaySigningOrDefault() {
+        String value = gatewaySigning == null || gatewaySigning.isBlank()
+                ? InternalSignature.GATEWAY_SIGNING_HMAC : gatewaySigning.trim().toLowerCase();
+        if (!InternalSignature.GATEWAY_SIGNING_HMAC.equals(value)
+                && !InternalSignature.GATEWAY_SIGNING_ED25519.equals(value)) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.gateway-signing 非法（" + gatewaySigning
+                            + "）：只允许 hmac / ed25519");
+        }
+        return value;
+    }
+
+    public boolean ed25519GatewaySigning() {
+        return InternalSignature.GATEWAY_SIGNING_ED25519.equals(gatewaySigningOrDefault());
+    }
+
+    /** v2 的 key-id 仅用于观测与审计，不参与选钥（公钥只有一把，轮换靠滚动更新公钥）。 */
+    public String gatewayKeyIdOrDefault() {
+        return gatewayKeyId == null || gatewayKeyId.isBlank() ? "gw-v2" : gatewayKeyId.trim();
+    }
+
+    /** 按调用方显式配置的密钥（Helm 按组件裁剪后注入）；空 Map 表示未配置。 */
+    public Map<String, String> callerKeysOrDefault() {
+        return callerKeys == null ? Map.of() : callerKeys;
     }
 }

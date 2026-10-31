@@ -162,4 +162,87 @@ class InternalSignatureTest {
         assertEquals(null, keySet.callerSecret("billing"));
         assertFalse(InternalKeySet.empty().configured());
     }
+
+    // ---------------------------------------------------------------- v2：Ed25519（阶段二）
+
+    private static java.security.KeyPair ed25519() throws Exception {
+        return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    }
+
+    @Test
+    void canonicalV2HasDifferentVersionLineButSameStructure() {
+        String v1 = InternalSignature.canonical("GET", "/clinical/visits", "a=1",
+                identity(), 1793512800L, "n", InternalSignature.EMPTY_BODY_HASH);
+        String v2 = InternalSignature.canonicalGatewayV2("GET", "/clinical/visits", "a=1",
+                identity(), 1793512800L, "n", InternalSignature.EMPTY_BODY_HASH);
+        assertEquals("v1\n" + v1.substring(3), v1);
+        assertTrue(v2.startsWith(InternalSignature.SIG_VERSION_GATEWAY_ED25519 + "\n"));
+        // 除版本行外逐字节一致：保证两种算法覆盖范围相同
+        assertEquals(v1.substring(3), v2.substring(3));
+    }
+
+    @Test
+    void ed25519SignVerifyRoundTripAndTamperDetection() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        String canonical = InternalSignature.canonicalGatewayV2("GET", "/clinical/visits", null,
+                identity(), 1793512800L, "nonce-v2", InternalSignature.EMPTY_BODY_HASH);
+        String signature = InternalSignature.signEd25519(pair.getPrivate(), canonical);
+        assertTrue(InternalSignature.verifyEd25519(pair.getPublic(), canonical, signature));
+
+        Map<String, String> tampered = identity();
+        tampered.put(AuthHeaders.PERMISSIONS, "clinical:visit:read,emr:record:read");
+        String tamperedCanonical = InternalSignature.canonicalGatewayV2("GET", "/clinical/visits",
+                null, tampered, 1793512800L, "nonce-v2", InternalSignature.EMPTY_BODY_HASH);
+        assertFalse(InternalSignature.verifyEd25519(pair.getPublic(), tamperedCanonical, signature),
+                "篡改身份头必须验签失败");
+
+        java.security.KeyPair other = ed25519();
+        assertFalse(InternalSignature.verifyEd25519(other.getPublic(), canonical, signature),
+                "换公钥必须验签失败");
+        assertFalse(InternalSignature.verifyEd25519(pair.getPublic(), canonical, "not-base64!!"));
+        assertFalse(InternalSignature.verifyEd25519(pair.getPublic(), canonical, ""));
+    }
+
+    @Test
+    void ed25519KeyParsingAcceptsBase64AndRejectsGarbage() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        String privateB64 = Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded());
+        String publicB64 = Base64.getEncoder().encodeToString(pair.getPublic().getEncoded());
+        assertTrue(InternalSignature.parsePrivateKey(privateB64) instanceof java.security.PrivateKey);
+        assertTrue(InternalSignature.parsePublicKey(publicB64) instanceof java.security.PublicKey);
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> InternalSignature.parsePrivateKey("not-base64!!!"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> InternalSignature.parsePublicKey(publicB64.substring(0, 8)),
+                "长度不足 32 字节的密钥必须拒绝");
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> InternalSignature.parsePublicKey(""));
+    }
+
+    @Test
+    void callerKeysCanBeInjectedPerServiceWithoutTouchingGatewayKeys() {
+        InternalKeySet base = InternalKeySet.parse(
+                "{\"active\":\"k1\",\"keys\":{\"k1\":\"" + KEY_1 + "\"}}",
+                new com.fasterxml.jackson.databind.ObjectMapper());
+        assertFalse(base.callerConfigured());
+
+        InternalKeySet withCallers = base.withCallerKeys(Map.of(
+                "Clinical", KEY_1, "emr", KEY_2));
+        assertTrue(withCallers.callerConfigured());
+        assertEquals(KEY_1, withCallers.callerSecret("clinical"), "调用方名统一小写");
+        assertEquals(KEY_2, withCallers.callerSecret("emr"));
+        assertEquals(null, withCallers.callerSecret("pharmacy"), "未挂载的调用方不可用");
+        // 只合并调用方通道，网关通道不受影响
+        assertEquals(KEY_1, withCallers.secret("k1"));
+        assertFalse(base.callerConfigured(), "原实例不可变");
+    }
+
+    @Test
+    void callerKeysRejectInvalidBase64() {
+        InternalKeySet base = InternalKeySet.parse("{\"active\":\"k1\",\"keys\":{\"k1\":\"" + KEY_1 + "\"}}",
+                new com.fasterxml.jackson.databind.ObjectMapper());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> base.withCallerKeys(Map.of("clinical", "bad!!")));
+    }
 }

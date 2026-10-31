@@ -89,7 +89,7 @@ huggingface-cli download BAAI/bge-m3 --local-dir bge-m3
 | `bge-m3/` | 向量模型权重目录 |
 | `deploy/offline/` | 本文与两个脚本 |
 | `nacos/mysql-schema.sql` | Nacos 持久化建表（若院方未托管 MySQL） |
-| **Secret 清单与生成脚本** | `medassist-postgres/nacos/jwt/empi/internal/internal-hmac/ai-core`；`internal-hmac` 含网关 key 与 5 个调用方 key，见 §2.2 |
+| **Secret 清单与生成脚本** | `medassist-postgres/nacos/jwt/empi/internal/internal-hmac/ai-core`；`internal-hmac` 含 Ed25519 网关密钥对 + 5 个调用方 key（+ 过渡期 keys-json），见 §2.2 |
 
 ---
 
@@ -110,21 +110,33 @@ huggingface-cli download BAAI/bge-m3 --local-dir bge-m3
 `medassist-internal-hmac`；该 Secret 缺失时**所有业务 Pod 与 7 个迁移 Job 会卡在
 `CreateContainerConfigError`**，`helm upgrade` 表现为"发布成功但起不来"。
 
-安装前按 `deploy/README.md` §2 的 Secret 表**先创建全部 Secret**，其中新增的两个：
+安装前按 `deploy/README.md` §2 的 Secret 表**先创建全部 Secret**，其中：
 
 ```bash
 # 服务间内部接口令牌（第一因子）
 kubectl -n medassist-prod create secret generic medassist-internal \
   --from-literal=token='<≥32 字符随机串>'
 
-# 服务间 HMAC 密钥集（第二因子）：网关 key + 每个调用方 key
-# 生成：openssl rand -base64 32（逐把生成，禁止人工设定、禁止进 Git）
+# 服务间签名密钥（第二因子）。阶段二（Ed25519）需要下列 7 个键，缺任一个都会 CreateContainerConfigError：
+#   keys-json            v1 HMAC 密钥集（过渡期；acceptHmacV1=false 后业务服务不再挂载，仅网关不再使用）
+#   gateway-private-key  Ed25519 私钥 PKCS#8 base64 —— 只挂网关
+#   gateway-public-key   Ed25519 公钥 X.509 base64  —— 只挂业务服务
+#   clinical/emr/insurance/pharmacy/tech  每调用方 HMAC 密钥（base64 32B）
+# 生成：openssl rand -base64 32（逐把）；Ed25519 密钥对见 deploy/README.md §4.2.1（无 openssl 时用 JDK 单文件）
 kubectl -n medassist-prod create secret generic medassist-internal-hmac \
-  --from-literal=keys-json='{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"},"internal":{"clinical":"<base64>","emr":"<base64>","insurance":"<base64>","pharmacy":"<base64>","tech":"<base64>"}}'
+  --from-literal=keys-json='{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}' \
+  --from-literal=gateway-private-key='<Ed25519 PKCS#8 base64>' \
+  --from-literal=gateway-public-key='<Ed25519 X.509 base64>' \
+  --from-literal=clinical='<base64 32B>' \
+  --from-literal=emr='<base64 32B>' \
+  --from-literal=insurance='<base64 32B>' \
+  --from-literal=pharmacy='<base64 32B>' \
+  --from-literal=tech='<base64 32B>'
 ```
 
-> 校验：`kubectl -n medassist-prod get secret medassist-internal-hmac -o jsonpath='{.data.keys-json}' | base64 -d`
-> 应能看到 `active` 与 `internal` 两段；`active` 必须出现在 `keys` 里，否则网关会拒绝启动。
+> 校验：`kubectl -n medassist-prod get secret medassist-internal-hmac -o json | ConvertFrom-Json` 的
+> `data` 应包含上表 7 个键；`keys-json` 解出来必须让 `active` 出现在 `keys` 里，否则网关拒绝启动。
+> 从阶段一（纯 HMAC）升级时，先按 `deploy/README.md` §4.2.1 的三步切换，不要直接跳到终态。
 
 ### 2.3 安装
 

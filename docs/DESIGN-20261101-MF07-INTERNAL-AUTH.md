@@ -93,11 +93,24 @@
   每个调用方（clinical/emr/insurance/…）一对独立密钥，被调方按 `X-Internal-Caller` 选密钥验签。
 - 纵深防御：NetworkPolicy 继续限制只有网关/指定服务可达业务端口；K8s 探针走独立 health 路径豁免。
 
-### 阶段二：mTLS（可选增强）
+### 阶段二：Ed25519 网关签名 + 密钥面按服务裁剪（已落地）
 
-- cert-manager 自建 CA，按服务签发证书（SAN 用 SPIFFE：`spiffe://medassist/ns/<ns>/sa/<service>`）。
-- 下游从证书主体取"调用方身份"，与 HMAC 的 `X-Actor`/`X-Internal-Caller` **交叉校验**（不一致即 403）。
-- HMAC 保留：防止"证书合法但请求被中间件改写"的重放/篡改场景，成本很低。
+阶段一遗留的核心风险（第五轮 R5-M3）：HMAC 是对称的，所有被调方都必须持有网关密钥，
+于是**最弱业务服务沦陷 = 拿到网关签发能力**（可伪造 `X-Permissions` 读 PHI）。
+
+阶段二的解法：
+
+- **网关 → 业务服务改为非对称**：网关持有 Ed25519 私钥（`gateway-private-key`，只挂网关），
+  业务服务只持公钥（`gateway-public-key`）。签名版本升为 `v2`，规范串结构同 v1（仅版本行不同）。
+  任一业务服务被攻破都无法伪造网关身份。
+- **服务 → 服务密钥按组件裁剪**：调用方密钥不再是 `keys-json` 里的一个大 Map，而是 Secret 的独立键
+  （`clinical` / `emr` / …），Helm 按组件只注入"自己的密钥 + 直接调用方的密钥"，
+  某一服务沦陷不再波及全部调用方。
+- **过渡期双栈**：业务服务同时接受 `v1`（HMAC）与 `v2`（Ed25519），
+  因此可以"先给服务加公钥 → 再切网关算法 → 最后移除对称密钥"三步走，全程无 403 窗口。
+
+mTLS 仍作为可选的传输层增强（§7.1），但**不能替代**应用层签名：Service Mesh 侧车若被绕过
+（hostNetwork、直连 Pod IP），传输层身份同样失效。
 
 ---
 
@@ -107,11 +120,11 @@
 
 | 头 | 含义 | 示例 |
 |---|---|---|
-| `X-Internal-Sig` | HMAC-SHA256 结果，Base64URL（无 padding） | `q3J...` |
+| `X-Internal-Sig` | 签名结果，Base64URL（无 padding）：v1 = HMAC-SHA256，v2 = Ed25519 | `q3J...` |
 | `X-Internal-Ts` | 签名时间，Unix 秒 | `1793512800` |
 | `X-Internal-Nonce` | 16 字节随机数的 Base64URL | `9tK...` |
-| `X-Internal-Key-Id` | 密钥版本号（轮换用） | `gw-2026-11` |
-| `X-Internal-Sig-Ver` | 规范化算法版本 | `v1` |
+| `X-Internal-Key-Id` | 密钥版本号（v1 选钥用；v2 仅观测） | `gw-2026-11` / `gw-v2` |
+| `X-Internal-Sig-Ver` | 规范化算法版本 | `v1` / `v2` |
 
 - 这些头**必须加入 `AuthHeaders.CLIENT_SUPPLIED`**，网关在入口一律剥离，防止客户端自带。
 - 头部名沿用现有 `X-` 前缀风格；不做 `Authorization` 复用，避免与用户 JWT 混淆。
@@ -192,6 +205,20 @@ v1
 - 生成要求：`openssl rand -base64 32`，禁止人工设定、禁止进 Git；
   CI 增加密钥扫描（gitleaks）防止再次把 dev 令牌提交入库（MF-09 同源问题）。
 
+**阶段二布局（同一 Secret，按角色分别挂载）**
+
+| Secret 键 | 内容 | 挂载对象 |
+|---|---|---|
+| `keys-json` | `{"active":...,"keys":{...}}`（v1 HMAC，过渡期） | 网关（hmac 模式）/ 业务服务（`acceptHmacV1=true` 时） |
+| `gateway-private-key` | Ed25519 私钥（PKCS#8，base64） | **仅网关** |
+| `gateway-public-key` | Ed25519 公钥（X.509，base64） | 仅业务服务 |
+| `clinical` / `emr` / `insurance` / `pharmacy` / `tech` | 每调用方 HMAC 密钥（base64 32B） | 按调用图裁剪：自己的 + 直接调用方的 |
+
+- 生成：`openssl genpkey -algorithm ed25519` 后取 PKCS#8；公钥用 `openssl pkey -pubout`。
+  离线环境可用 JDK 单文件生成（见 `deploy/README.md` §4.2.1）。
+- 轮换：Ed25519 公钥轮换需与网关私钥同批滚动（无"新旧并存"窗口，约 1 个滚动周期）；
+  因此网关私钥建议 180 天轮换一次并挑选业务低峰。HMAC 调用方密钥仍按 §5.5 常规流程轮换。
+
 ### 5.6 性能评估
 
 | 项 | 量级 | 说明 |
@@ -239,7 +266,21 @@ medassist:
 
 ---
 
-## 7. 阶段二：mTLS 演进路径
+## 7. 阶段二落地：Ed25519（v2）与后续 mTLS
+
+### 7.1 Ed25519 网关签名（已落地，2026-11-01）
+
+| 项 | 实现 |
+|---|---|
+| 算法 | JDK 内置 `Ed25519`（`java.security.Signature`），无第三方依赖，满足离线交付 |
+| 规范串 | 结构同 v1，仅版本行改为 `v2`（版本行参与签名，不可篡改版本降级） |
+| 网关 | `gateway-signing=ed25519` 时用私钥签，`X-Internal-Key-Id` 写 `gateway-key-id`（默认 `gw-v2`，仅观测） |
+| 业务服务 | 持公钥验签；未挂载公钥时 v2 请求按 `unknown_key` 403（fail-closed） |
+| 过渡 | 服务同时接受 v1；`acceptHmacV1=false` 后不再接受 HMAC，业务侧彻底不持对称密钥 |
+| 守卫 | 网关私钥缺失/格式错 → 拒绝启动；服务公钥非法 → 拒绝启动（与 v1 同规格） |
+| 性能 | Ed25519 签发/验签约 20~50 µs（单核），相对内网 RTT 可忽略 |
+
+### 7.2 mTLS（可选增强，未实施）
 
 | 项 | 设计 |
 |---|---|
@@ -268,7 +309,9 @@ medassist:
 3. 阶段 2：prod 按 **emr → insurance → clinical → tech → pharmacy → empi → auth** 逐个 `enforce`
    （先做 PHI/资金域，后做低风险域；auth 最后，避免登录链路抖动影响排障）。
 4. 阶段 3：把 `/internal/**` 从"可选验签"切"必须验签"。
-5. 阶段 4（可选）：mTLS。
+5. 阶段 4：切 v2（Ed25519）——先 `acceptEd25519=true`（服务加公钥、仍接受 v1），
+   回归全量 E2E；再 `gatewaySigning=ed25519`；最后 `acceptHmacV1=false`（业务侧移除对称密钥）。
+6. 阶段 5（可选）：mTLS。
 
 **回滚**：把对应服务 `medassist.internal-auth.mode` 改为 `off` 并滚动重启（ConfigMap 变更，无 DB 迁移）。
 回滚窗口目标 < 1 分钟/服务；`log` 模式可作为中间态（仍打点、不阻断）。

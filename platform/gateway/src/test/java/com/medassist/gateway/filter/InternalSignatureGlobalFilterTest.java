@@ -36,7 +36,7 @@ class InternalSignatureGlobalFilterTest {
 
     private static InternalSignatureGlobalFilter filter(String mode) {
         return new InternalSignatureGlobalFilter(
-                new InternalAuthProperties(mode, 60, KEYS_JSON, 120, false, null, null),
+                new InternalAuthProperties(mode, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null),
                 InternalKeySet.parse(KEYS_JSON, new ObjectMapper()));
     }
 
@@ -113,5 +113,48 @@ class InternalSignatureGlobalFilterTest {
     @Test
     void runsAfterRouteFiltersAndBeforeRouting() {
         assertEquals(Ordered.LOWEST_PRECEDENCE - 100, filter(InternalAuthProperties.OFF).getOrder());
+    }
+
+    // ---------------------------------------------------------------- v2：Ed25519（阶段二）
+
+    private static java.security.KeyPair ed25519() throws Exception {
+        return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    }
+
+    private static InternalSignatureGlobalFilter ed25519Filter(java.security.PrivateKey key) {
+        return new InternalSignatureGlobalFilter(
+                new InternalAuthProperties(InternalAuthProperties.ENFORCE, 60, null, 120, false,
+                        null, null, "ed25519", "gw-v2", null, null, null),
+                InternalKeySet.empty(), key);
+    }
+
+    @Test
+    void ed25519ModeSignsWithPrivateKeyAndDownstreamVerifiesWithPublicKey() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        ServerWebExchange forwarded = run(ed25519Filter(pair.getPrivate()),
+                exchange("http://gateway/api/v2/clinical/visits?a=1"));
+
+        ServerHttpRequest request = forwarded.getRequest();
+        assertEquals(InternalSignature.SIG_VERSION_GATEWAY_ED25519,
+                request.getHeaders().getFirst(InternalSignature.HEADER_SIG_VER));
+        assertEquals("gw-v2", request.getHeaders().getFirst(InternalSignature.HEADER_KEY_ID));
+
+        Map<String, String> identity = new HashMap<>();
+        for (String header : InternalSignature.IDENTITY_HEADERS) {
+            identity.put(header, request.getHeaders().getFirst(header));
+        }
+        String canonical = InternalSignature.canonicalGatewayV2(request.getMethod().name(),
+                request.getURI().getRawPath(), request.getURI().getRawQuery(), identity,
+                Long.parseLong(request.getHeaders().getFirst(InternalSignature.HEADER_TS)),
+                request.getHeaders().getFirst(InternalSignature.HEADER_NONCE),
+                InternalSignature.EMPTY_BODY_HASH);
+        assertTrue(InternalSignature.verifyEd25519(pair.getPublic(), canonical,
+                request.getHeaders().getFirst(InternalSignature.HEADER_SIG)),
+                "下游只持公钥也必须能验签通过");
+
+        // 另一把私钥签出的同一请求不能被该公钥验证（业务服务无法伪造网关身份）
+        java.security.KeyPair attacker = ed25519();
+        assertTrue(!InternalSignature.verifyEd25519(attacker.getPublic(), canonical,
+                request.getHeaders().getFirst(InternalSignature.HEADER_SIG)));
     }
 }

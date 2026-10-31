@@ -38,14 +38,14 @@ class InternalAuthFilterTest {
 
     private static InternalAuthFilter filter(String mode, boolean internalRequired) {
         InternalAuthProperties props = new InternalAuthProperties(
-                mode, 60, KEYS_JSON, 120, internalRequired, null, null);
+                mode, 60, KEYS_JSON, 120, internalRequired, null, null, null, null, null, null, null);
         return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
                 null);
     }
 
     private static InternalAuthFilter filterWithCapacity(int maxNonceEntries) {
         InternalAuthProperties props = new InternalAuthProperties(
-                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null);
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null);
         return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
                 null, maxNonceEntries);
     }
@@ -360,7 +360,7 @@ class InternalAuthFilterTest {
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
                 new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
         InternalAuthProperties props = new InternalAuthProperties(
-                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null);
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null);
         InternalAuthFilter filter = new InternalAuthFilter(props,
                 InternalKeySet.parse(KEYS_JSON, new ObjectMapper()), registry);
 
@@ -388,5 +388,107 @@ class InternalAuthFilterTest {
         assertNotNull(chain.getRequest());
         assertEquals("bad_sig", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
         assertEquals(200, response.getStatus());
+    }
+
+    // ---------------------------------------------------------------- v2：Ed25519（阶段二）
+
+    private static InternalAuthFilter filterWithPublicKey(java.security.PublicKey publicKey) {
+        InternalAuthProperties props = new InternalAuthProperties(
+                InternalAuthProperties.ENFORCE, 60, null, 120, false, null, null,
+                "ed25519", "gw-v2", null, null, null);
+        return new InternalAuthFilter(props, InternalKeySet.empty(), null, publicKey);
+    }
+
+    /** 按网关 v2 的规则签名（业务服务只持公钥）。 */
+    private static void signEd25519(MockHttpServletRequest request,
+                                    java.security.PrivateKey privateKey,
+                                    long timestamp, String nonce) {
+        String canonical = InternalSignature.canonicalGatewayV2(request.getMethod(),
+                request.getRequestURI(), request.getQueryString(), identity(request), timestamp,
+                nonce, InternalSignature.EMPTY_BODY_HASH);
+        request.addHeader(InternalSignature.HEADER_SIG_VER,
+                InternalSignature.SIG_VERSION_GATEWAY_ED25519);
+        request.addHeader(InternalSignature.HEADER_KEY_ID, "gw-v2");
+        request.addHeader(InternalSignature.HEADER_TS, Long.toString(timestamp));
+        request.addHeader(InternalSignature.HEADER_NONCE, nonce);
+        request.addHeader(InternalSignature.HEADER_SIG,
+                InternalSignature.signEd25519(privateKey, canonical));
+    }
+
+    private static java.security.KeyPair ed25519() throws Exception {
+        return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    }
+
+    @Test
+    void enforceAcceptsEd25519GatewaySignature() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        MockHttpServletRequest request = request("GET", "/clinical/visits");
+        signEd25519(request, pair.getPrivate(), now(), "v2-nonce-ok");
+
+        MockFilterChain chain = new MockFilterChain();
+        filterWithPublicKey(pair.getPublic()).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest());
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+        assertEquals("gateway", request.getAttribute(InternalAuthFilter.ATTR_CALLER));
+        assertEquals("gw-v2", request.getAttribute(InternalAuthFilter.ATTR_KEY_ID));
+    }
+
+    @Test
+    void enforceRejectsEd25519SignatureFromAnotherKey() throws Exception {
+        java.security.KeyPair trusted = ed25519();
+        java.security.KeyPair attacker = ed25519();
+        MockHttpServletRequest request = request("GET", "/clinical/visits");
+        signEd25519(request, attacker.getPrivate(), now(), "v2-nonce-forged");
+
+        MockFilterChain chain = new MockFilterChain();
+        filterWithPublicKey(trusted.getPublic()).doFilter(request, new MockHttpServletResponse(), chain);
+        assertNull(chain.getRequest(), "非网关私钥签出的 v2 请求必须被拒绝");
+        assertEquals("bad_sig", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void v2RequestIsRejectedWhenPublicKeyNotConfigured() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        MockHttpServletRequest request = request("GET", "/clinical/visits");
+        signEd25519(request, pair.getPrivate(), now(), "v2-nonce-nokey");
+
+        MockFilterChain chain = new MockFilterChain();
+        // 未挂载公钥（例如上线顺序不当）：fail-closed，而不是退化成不校验
+        filter(InternalAuthProperties.ENFORCE).doFilter(request, new MockHttpServletResponse(), chain);
+        assertNull(chain.getRequest());
+        assertEquals("unknown_key", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void v1RequestIsRejectedWhenOnlyPublicKeyConfigured() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        MockHttpServletRequest request = request("GET", "/clinical/visits");
+        sign(request, KEY_2, "k2", now(), "v1-nonce-after-cutover");
+
+        MockFilterChain chain = new MockFilterChain();
+        filterWithPublicKey(pair.getPublic()).doFilter(request, new MockHttpServletResponse(), chain);
+        assertNull(chain.getRequest(), "切换 v2 后不再接受 HMAC 请求（密钥面已移除）");
+        assertEquals("unknown_key", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void v2ReplayIsRejected() throws Exception {
+        java.security.KeyPair pair = ed25519();
+        InternalAuthFilter filter = filterWithPublicKey(pair.getPublic());
+        long ts = now();
+
+        MockHttpServletRequest first = request("POST", "/clinical/orders");
+        signEd25519(first, pair.getPrivate(), ts, "v2-replay");
+        MockFilterChain chain1 = new MockFilterChain();
+        filter.doFilter(first, new MockHttpServletResponse(), chain1);
+        assertNotNull(chain1.getRequest());
+
+        MockHttpServletRequest replay = request("POST", "/clinical/orders");
+        signEd25519(replay, pair.getPrivate(), ts, "v2-replay");
+        MockFilterChain chain2 = new MockFilterChain();
+        filter.doFilter(replay, new MockHttpServletResponse(), chain2);
+        assertNull(chain2.getRequest());
+        assertEquals("replay", replay.getAttribute(InternalAuthFilter.ATTR_RESULT));
     }
 }

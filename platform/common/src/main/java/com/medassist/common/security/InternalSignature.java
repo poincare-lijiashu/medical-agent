@@ -3,8 +3,14 @@ package com.medassist.common.security;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.Map;
 import java.util.TreeMap;
@@ -41,8 +47,18 @@ public final class InternalSignature {
     /** 调用方标识（clinical / emr / insurance / pharmacy / tech），服务→服务通道使用。 */
     public static final String HEADER_CALLER = "X-Internal-Caller";
     public static final String SIG_VERSION = "v1";
+    /**
+     * 网关签名 v2（Ed25519，阶段二）。
+     *
+     * <p>与 v1 的差异只有两处：版本行与算法。规范串结构保持一致，
+     * 因此同一份"下游视角"的请求在不同算法下签出的覆盖范围相同。
+     */
+    public static final String SIG_VERSION_GATEWAY_ED25519 = "v2";
     /** 调用方签名版本（规范串结构与网关通道不同：不含身份头，改为绑定 caller）。 */
     public static final String SIG_VERSION_CALLER = "v1i";
+    /** 网关签名算法选择（medassist.internal-auth.gateway-signing）。 */
+    public static final String GATEWAY_SIGNING_HMAC = "hmac";
+    public static final String GATEWAY_SIGNING_ED25519 = "ed25519";
 
     /** 无请求体摘要时使用（阶段一）。 */
     public static final String EMPTY_BODY_HASH = "-";
@@ -69,8 +85,27 @@ public final class InternalSignature {
     public static String canonical(String method, String path, String query,
                                    Map<String, String> identityHeaders,
                                    long timestamp, String nonce, String bodyHash) {
+        return canonicalGateway(SIG_VERSION, method, path, query, identityHeaders,
+                timestamp, nonce, bodyHash);
+    }
+
+    /**
+     * 网关通道 v2 规范串（Ed25519）：结构同 v1，仅版本行改为 {@code v2}。
+     *
+     * <p>版本行必须参与签名，否则同一份签名可被改写版本号在"按算法分支"的校验器间反复试探。
+     */
+    public static String canonicalGatewayV2(String method, String path, String query,
+                                            Map<String, String> identityHeaders,
+                                            long timestamp, String nonce, String bodyHash) {
+        return canonicalGateway(SIG_VERSION_GATEWAY_ED25519, method, path, query,
+                identityHeaders, timestamp, nonce, bodyHash);
+    }
+
+    private static String canonicalGateway(String version, String method, String path, String query,
+                                           Map<String, String> identityHeaders,
+                                           long timestamp, String nonce, String bodyHash) {
         StringBuilder sb = new StringBuilder(256);
-        sb.append(SIG_VERSION).append('\n');
+        sb.append(version).append('\n');
         sb.append(method == null ? "" : method.toUpperCase()).append('\n');
         sb.append(path == null ? "" : path).append('\n');
         sb.append(normalizeQuery(query)).append('\n');
@@ -134,6 +169,97 @@ public final class InternalSignature {
         String expected = sign(secretBase64, canonical);
         return MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
                 providedSignature.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // ---------------------------------------------------------------- v2：Ed25519
+
+    private static final String ED25519 = "Ed25519";
+    private static final int ED25519_KEY_BYTES = 32;
+
+    /**
+     * Ed25519 私钥（PKCS#8，Base64 标准编码）。
+     *
+     * <p>私钥**只允许存在于网关**：业务服务仅持公钥，因此任一业务服务沦陷也无法伪造网关身份
+     * （对称 HMAC 时代所有被调方都持有网关密钥，这是第五轮 R5-M3 的核心风险）。
+     */
+    public static PrivateKey parsePrivateKey(String base64) {
+        byte[] bytes = decodeKey(base64, "gateway-private-key", "Ed25519 私钥");
+        try {
+            return KeyFactory.getInstance(ED25519).generatePrivate(new PKCS8EncodedKeySpec(bytes));
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.gateway-private-key 不是合法的 Ed25519 PKCS#8 私钥："
+                            + e.getMessage(), e);
+        }
+    }
+
+    /** Ed25519 公钥（X.509 SubjectPublicKeyInfo，Base64 标准编码）。 */
+    public static PublicKey parsePublicKey(String base64) {
+        byte[] bytes = decodeKey(base64, "gateway-public-key", "Ed25519 公钥");
+        try {
+            return KeyFactory.getInstance(ED25519).generatePublic(new X509EncodedKeySpec(bytes));
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.gateway-public-key 不是合法的 Ed25519 X.509 公钥："
+                            + e.getMessage(), e);
+        }
+    }
+
+    private static byte[] decodeKey(String base64, String property, String what) {
+        if (base64 == null || base64.isBlank()) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth." + property + " 未配置（" + what + "）");
+        }
+        try {
+            byte[] bytes = Base64.getDecoder().decode(base64.trim());
+            if (bytes.length < ED25519_KEY_BYTES) {
+                throw new IllegalStateException("medassist.internal-auth." + property
+                        + " 长度不足 32 字节（" + what + "）");
+            }
+            return bytes;
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("medassist.internal-auth." + property
+                    + " 不是合法 Base64（" + what + "）", e);
+        }
+    }
+
+    /** Ed25519 签名 → Base64URL（无 padding）。 */
+    public static String signEd25519(PrivateKey privateKey, String canonical) {
+        try {
+            Signature signature = Signature.getInstance(ED25519);
+            signature.initSign(privateKey);
+            signature.update(canonical.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(signature.sign());
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException("Ed25519 签名失败", e);
+        }
+    }
+
+    /**
+     * Ed25519 验签。
+     *
+     * <p>签名值来自请求头，格式异常（非法 Base64/长度不符）一律返回 false，
+     * 与"验签不通过"同一出口，避免把异常做成探测 oracle。
+     */
+    public static boolean verifyEd25519(PublicKey publicKey, String canonical,
+                                        String providedSignature) {
+        if (publicKey == null || providedSignature == null || providedSignature.isEmpty()) {
+            return false;
+        }
+        byte[] raw;
+        try {
+            raw = Base64.getUrlDecoder().decode(providedSignature);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        try {
+            Signature signature = Signature.getInstance(ED25519);
+            signature.initVerify(publicKey);
+            signature.update(canonical.getBytes(StandardCharsets.UTF_8));
+            return signature.verify(raw);
+        } catch (java.security.GeneralSecurityException e) {
+            return false;
+        }
     }
 
     /** 请求体摘要（Base64URL）；仅用于未来对 JSON 体做完整性校验。 */

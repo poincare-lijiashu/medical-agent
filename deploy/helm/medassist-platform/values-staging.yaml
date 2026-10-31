@@ -43,9 +43,16 @@ migration:
   enabled: true
 
 # 预发布先用 log 观测真实调用图（MF-07 阶段 0）：把 result != ok 的流量全部改造完，
-# 再切 enforce 并回归全量 E2E。所需 Secret：medassist-internal-hmac（键 keys-json）。
+# 再切 enforce 并回归全量 E2E。
+# 阶段二（v2/Ed25519）：网关只持私钥、业务服务只持公钥；调用方密钥按组件裁剪。
+# 升级前必须先在 Secret medassist-internal-hmac 中预置：
+#   gateway-private-key / gateway-public-key / clinical / emr / insurance / pharmacy / tech
+# 切换顺序见 deploy/README.md §4.2.1。
 internalAuth:
   mode: log
+  gatewaySigning: ed25519
+  acceptEd25519: true
+  mountCallerKeys: true
 
 gateway:
   replicaCount: 2

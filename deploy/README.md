@@ -74,7 +74,7 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 | `medassist-nacos` | `username` / `password` | 注册中心鉴权 |
 | `medassist-jwt` | `secret` | JWT 签名密钥（≥32 字节） |
 | `medassist-internal` | `token` | 服务间内部接口令牌（clinical / emr / insurance 内网直连调用 EMPI 与彼此） |
-| `medassist-internal-hmac` | `keys-json` | 服务间 HMAC 签名密钥集（MF-07）：`{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"},"internal":{"clinical":"<base64>","emr":"<base64>",...}}`；轮换期可同时保留新旧网关 key，`internal` 为每个调用方独立密钥（T5） |
+| `medassist-internal-hmac` | `keys-json`（v1 HMAC，过渡期）<br>`gateway-private-key` / `gateway-public-key`（Ed25519，阶段二）<br>`clinical` / `emr` / `insurance` / `pharmacy` / `tech`（每调用方密钥） | 服务间签名（MF-07）。`keys-json`：`{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}`，轮换期可同时保留新旧网关 key；Ed25519 私钥**只挂网关**、公钥只挂业务服务；调用方密钥按组件裁剪（详见 §4.2.1） |
 | `medassist-empi` | `field-key` / `hash-salt` | 患者字段 AES-256 密钥与查重盐（**换密钥会导致存量密文不可解**） |
 | `medassist-ai-core` | `QWEN_API_KEY` / `AUTH_JWT_SECRET` 等 | AI 中台业务密钥（`envFrom` 注入） |
 | `medassist-prod-tls` | `tls.crt` / `tls.key` | Ingress 证书 |
@@ -113,8 +113,8 @@ docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
 > **顺序要求（prod/staging）**：`internalAuth.mode=enforce` 时，网关与全部业务服务都会读取
 > `medassist-internal-hmac`。**必须先建好该 Secret 再 `helm upgrade`**，否则所有业务 Pod 与
 > 迁移 Job 会卡在 `CreateContainerConfigError`（表现为"发布成功但起不来"）。
-> 密钥内容为 `keys-json`：`{"active":"...","keys":{"...":"<base64 32B>"},"internal":{"clinical":"<base64>",...}}`，
-> `active` 必须出现在 `keys` 中（网关启动时会校验，缺失即拒绝启动）。
+> 阶段二（Ed25519）还需要 `gateway-private-key` / `gateway-public-key` 与 5 个调用方密钥，
+> **同样必须先建好**；完整清单与切换顺序见 §4.2.1。
 
 ```powershell
 # 本地 kind / minikube 自验（Chart 内置 Secret、关闭 APM/网络策略）
@@ -145,6 +145,82 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
   --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
   --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
   --set aiCore.image.tag=1.0.0
+```
+
+### 4.2.1 服务间签名密钥面（MF-07 阶段二：Ed25519 + 按组件裁剪）
+
+**目标**：网关私钥只存在于网关，业务服务只持公钥；调用方密钥按调用图裁剪。
+这样任一业务服务沦陷都无法伪造网关身份，也无法冒充其它调用方。
+
+**Secret `medassist-internal-hmac` 需要的键**
+
+| 键 | 值 | 谁挂载 |
+|---|---|---|
+| `keys-json` | `{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}` | 网关（`gatewaySigning=hmac`）/ 业务服务（`acceptHmacV1=true`） |
+| `gateway-private-key` | Ed25519 私钥 PKCS#8，base64 | **仅网关** |
+| `gateway-public-key` | Ed25519 公钥 X.509，base64 | 仅业务服务 |
+| `clinical` `emr` `insurance` `pharmacy` `tech` | 每调用方 HMAC 密钥（base64 32B） | 自己的 + 直接调用方的（矩阵见下） |
+
+调用方密钥矩阵（`internalAuth.callerKeys`，Helm 自动按组件注入）：
+
+| 组件 | 挂载的调用方密钥 | 原因 |
+|---|---|---|
+| gateway | — | 网关不参与 `/internal/**` 调用 |
+| empi | clinical, emr, insurance, pharmacy, tech | 被这 5 个服务调用查患者 |
+| clinical | clinical, emr, insurance | 自己签发；emr / insurance 会调临床内部接口 |
+| emr | emr | 自己签发 |
+| pharmacy | pharmacy | 自己签发 |
+| tech | tech | 自己签发 |
+| insurance | insurance | 自己签发 |
+| auth | — | 不调用内部接口 |
+
+**生成**（离线环境二选一）：
+
+```powershell
+# 有 openssl 时
+openssl rand -base64 32                        # 调用方密钥 / keys-json 的 keys 值
+
+# 无 openssl（JDK 21 单文件，输出 PKCS#8 私钥与 X.509 公钥的 base64）
+# 把下面的代码存成 EdKeyGen.java 后执行：java EdKeyGen.java
+```
+
+```java
+import java.security.*; import java.util.Base64;
+public class EdKeyGen {
+  public static void main(String[] a) throws Exception {
+    KeyPair p = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    System.out.println("PRIVATE=" + Base64.getEncoder().encodeToString(p.getPrivate().getEncoded()));
+    System.out.println("PUBLIC="  + Base64.getEncoder().encodeToString(p.getPublic().getEncoded()));
+  }
+}
+```
+
+**切换顺序（从阶段一 HMAC 升级，全程不停机）**
+
+1. 把 7 个键（`gateway-private-key`、`gateway-public-key`、5 个调用方密钥）写入 Secret；
+2. `internalAuth.acceptEd25519=true` + `mountCallerKeys=true`（业务服务加公钥、开始按组件挂调用方密钥；
+   此时网关仍签 v1，服务同时接受 v1/v2）→ 跑全量 E2E，确认 `medassist_internal_auth_total{result!="ok"}` 无增长；
+3. `internalAuth.gatewaySigning=ed25519`（网关切 v2；服务已能验 v2，无 403 窗口）；
+4. 观察 1~2 天后 `internalAuth.acceptHmacV1=false`（业务服务不再挂 `keys-json`，对称密钥彻底离开业务侧）。
+
+**回滚**：按相反顺序把 `acceptHmacV1=true` → `gatewaySigning=hmac` → `acceptEd25519=false`。
+每一步只需 `helm upgrade`（环境变量变更，滚动重启），无数据库迁移。
+
+**故障表现与定位**
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| Pod `CreateContainerConfigError` | Secret 缺键（上表任一） | 补齐键后重启；`kubectl describe pod` 会指出缺失键名 |
+| 网关启动失败，日志含 `gateway-private-key` | 私钥缺失/不是 PKCS#8 base64 | 校验生成命令；私钥不要带 PEM 头尾 |
+| 业务服务启动失败，日志含 `gateway-public-key` | 公钥缺失/不是 X.509 base64 | 同上 |
+| 全站 403，`result=unknown_key` | 服务未挂公钥但网关已签 v2 | 先做第 2 步再加第 3 步 |
+| 全站 403，`result=bad_sig` | 公钥与网关私钥不配对 | 用同一对密钥重新写入 Secret 并滚动 |
+
+**验证**
+
+```promql
+sum(rate(medassist_internal_auth_total{result!="ok"}[5m])) by (result)   # 应为 0
+sum(rate(medassist_internal_auth_total{result="ok"}[5m]))                 # 与网关 QPS 同量级
 ```
 
 ### 4.3 数据库迁移：为什么用 Hook Job

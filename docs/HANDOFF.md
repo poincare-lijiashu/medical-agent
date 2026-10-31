@@ -628,6 +628,30 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `clinical_report` 24、`insurance` 161 项 E2E 全过
    - 遗留：R5-M3 密钥面收敛（拆 Secret + 按 Deployment 裁剪）与 R5-S17（CI 跑 E2E）留待阶段二
 
+48. **MF-07 阶段二（2026-11-01）：网关 Ed25519 签名 + 密钥面按服务收敛（R5-M3 闭环）**
+   - 协议：新增签名版本 `v2`（Ed25519，规范串结构同 v1，仅版本行不同）；
+     网关 `gateway-signing=ed25519` 用私钥签，业务服务用公钥验；未挂公钥时 v2 请求按 `unknown_key` 403
+   - **私钥只在网关**：`gateway-private-key` 仅注入 gateway Deployment；业务服务只挂 `gateway-public-key`，
+     因此任一业务服务沦陷都无法伪造网关身份（第五轮 R5-M3 的核心风险）
+   - 调用方密钥按组件裁剪：`keys-json` 不再携带 `internal` Map，改为 Secret 独立键（clinical/emr/...），
+     Helm 按调用图只注入"自己的 + 直接调用方的"（empi 挂 5 把，clinical 挂 3 把，其余只挂自己）
+   - 过渡双栈：业务服务同时接受 v1/v2；`acceptHmacV1=false` 后不再挂 `keys-json`（对称密钥彻底离开业务侧）
+   - 启动守卫：网关私钥缺失/格式错拒启；业务公钥非法拒启；`gateway-signing` 取值非法拒启；enforce 下
+     "既无 keys-json 也无公钥"拒启；密钥错误信息带属性名（`gateway-private-key` / `gateway-public-key`）
+   - Helm：`internalAuth.{gatewaySigning,gatewayKeyId,acceptEd25519,acceptHmacV1,mountCallerKeys,callerKeys}`；
+     `secret.yaml` 按需写入 Ed25519 密钥对与调用方密钥，并在 `secrets.create=true` 时校验缺键即 `fail`
+   - 环境：dev 直接跑 v2（Chart 内置 dev 密钥对）；staging/prod 终态为 v2 + `acceptHmacV1=false`，
+     升级前必须在 `medassist-internal-hmac` 预置 7 个键（`deploy/README.md` §4.2.1 三步切换）
+   - **实测（本机真实链路）**：v2 网关（18090，Ed25519 私钥）→ clinical（18083，只持公钥、无 keys-json）
+     200 且返回真实报表；v1 网关（8080）→ clinical（8083）200（无回归）；直连 18083 无签名 403（missing）；
+     v2 网关 → 未升级的 emr（旧 jar，enforce）403（fail-closed，印证必须先升级服务再切网关）；
+     18083 指标 `medassist_internal_auth_total{result="ok"}=2 / missing=2`
+   - 单测：新增 22 项（签名/验签/篡改/错钥/密钥解析、过滤器 v2 正反例、密钥集合并、自动装配守卫、
+     网关策略 6 项）；平台全量 **468 项** 全绿
+   - 校验：`helm lint --strict`（默认/dev）+ `helm template`（dev/staging/prod）全部渲染；
+     渲染核对 KEYSJSON 引用数 dev=7 / staging=14 / prod=0，私钥引用恒为 1（仅网关）
+   - 遗留：R5-S17（CI 跑 E2E）与 §7.2 mTLS 仍未做
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -656,6 +680,13 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   只比对 version 却不参与 SQL 等于没加锁
 - 加"签署人身份"这类业务约束前先看 E2E 用的是不是同一个人：`admin01` 既建档又签名，
   一加"上级不得为书写人"立刻全红——E2E 必须准备第二个具备该权限的账号（如 doctor01）
+- `@ConfigurationProperties` 的 **record 只能有一个构造器**：为了"兼容旧调用"加第二个构造器后，
+  Spring 找不到默认构造器会直接启动失败（`No default constructor found`）；要么只留规范构造器，
+  要么给规范构造器加 `@ConstructorBinding`。本轮是改测试调用点解决
+- 用 PowerShell 的 `Set-Content` 改 Java 源文件会写入 UTF-8 BOM，javac 报"非法字符 '\ufeff'"；
+  批量改文件请用 `[IO.File]::WriteAllText($p,$t,(New-Object System.Text.UTF8Encoding($false)))`
+- 本机 `Start-Process` 启动的服务会在命令结束时被回收（日志为空、进程立刻消失）；
+  需要常驻就用后台命令（每条服务一条）而不是 `Start-Process`
 - PowerShell `[decimal]$null` 得 0，金额断言函数必须显式挡掉 null/空串，否则字段缺失被误判为 0
 - 生产守卫别只认 profile 字面量：Helm Chart 给 Java 服务注入的是 `SPRING_PROFILES_ACTIVE=k8s`，
   `isProduction` 漏了 k8s 就等于生产无守卫。现在同时用 `KUBERNETES_SERVICE_HOST` 兜底，

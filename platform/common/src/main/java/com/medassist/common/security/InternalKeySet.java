@@ -81,6 +81,26 @@ public final class InternalKeySet {
         target.put(keyId, secret.trim());
     }
 
+    /**
+     * 合并调用方密钥（阶段二 T5 前置）：Helm 只给每个 Pod 注入它需要的条目。
+     *
+     * <p>显式条目优先于 keys-json 里的 {@code internal}（兼容旧 Secret 结构）；
+     * 单个 Pod 只持有"自己的密钥 + 直接调用方的密钥"，某一服务沦陷不会波及全部调用方。
+     */
+    public InternalKeySet withCallerKeys(Map<String, String> extra) {
+        if (extra == null || extra.isEmpty()) {
+            return this;
+        }
+        Map<String, String> merged = new HashMap<>(callerKeys);
+        extra.forEach((caller, secret) -> {
+            if (caller == null || caller.isBlank()) {
+                throw new IllegalStateException("medassist.internal-auth.caller-keys 存在空调用方名");
+            }
+            putIfValid(merged, caller.trim().toLowerCase(), secret);
+        });
+        return new InternalKeySet(activeKeyId, keys, Map.copyOf(merged));
+    }
+
     public boolean configured() {
         return !keys.isEmpty();
     }

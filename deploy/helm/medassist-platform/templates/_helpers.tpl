@@ -161,26 +161,65 @@ Java 服务公共环境变量。
     secretKeyRef:
       name: {{ .root.Values.external.internalApi.existingSecret }}
       key: {{ .root.Values.external.internalApi.secretKey }}
-# ---- 服务间 HMAC 签名（MF-07）----
-# 网关与全部业务服务共用同一密钥集。
+# ---- 服务间签名（MF-07 阶段一 v1 / 阶段二 v2）----
 # 注意 Spring 的宽松绑定规则：环境变量名 = 属性名大写、点换下划线、**连字符直接删除**，
 # 因此 medassist.internal-auth.keys-json 对应 MEDASSIST_INTERNALAUTH_KEYSJSON
 # （写成 MEDASSIST_INTERNAL_AUTH_KEYS_JSON 不会生效，mode 会保持默认 off）。
+#
+# 密钥面按角色裁剪（R5-M3）：
+#   网关     → keys-json（hmac）/ gateway-private-key（ed25519）
+#   业务服务 → keys-json（v1 兼容验签）+ gateway-public-key（v2 验签）+ 按需的调用方密钥
 {{- $ia := .root.Values.internalAuth | default dict }}
 {{- $hmac := .root.Values.external.internalHmac | default dict }}
+{{- $hmacSecret := $hmac.existingSecret | default "medassist-internal-hmac" }}
+{{- $signing := toString ($ia.gatewaySigning | default "hmac") }}
+{{- $isGateway := eq .component "gateway" }}
+{{- $acceptEd25519 := or $ia.acceptEd25519 (eq $signing "ed25519") }}
+{{- $acceptHmacV1 := ne (toString $ia.acceptHmacV1) "false" }}
 - name: MEDASSIST_INTERNALAUTH_MODE
   value: {{ $ia.mode | default "log" | quote }}
 - name: MEDASSIST_INTERNALAUTH_CLOCKSKEWSECONDS
   value: {{ $ia.clockSkewSeconds | default 60 | quote }}
 - name: MEDASSIST_INTERNALAUTH_NONCETTLSECONDS
-  value: {{ $ia.nonceTtlSeconds | default 120 | quote }}
+  value: {{ $ia.nonceTtlSeconds | default 180 | quote }}
 - name: MEDASSIST_INTERNALAUTH_INTERNALPATHSSIGNATUREREQUIRED
   value: {{ $ia.internalPathsSignatureRequired | default false | quote }}
+{{- if and $isGateway (eq $signing "ed25519") }}
+- name: MEDASSIST_INTERNALAUTH_GATEWAYSIGNING
+  value: "ed25519"
+- name: MEDASSIST_INTERNALAUTH_GATEWAYKEYID
+  value: {{ $ia.gatewayKeyId | default "gw-v2" | quote }}
+# 私钥只挂到网关：业务服务即便被攻破也拿不到签发能力
+- name: MEDASSIST_INTERNALAUTH_GATEWAYPRIVATEKEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ $hmacSecret }}
+      key: {{ $hmac.gatewayPrivateKeySecretKey | default "gateway-private-key" }}
+{{- end }}
+{{- if or (and $isGateway (eq $signing "hmac")) (and (not $isGateway) $acceptHmacV1) }}
 - name: MEDASSIST_INTERNALAUTH_KEYSJSON
   valueFrom:
     secretKeyRef:
-      name: {{ $hmac.existingSecret | default "medassist-internal-hmac" }}
+      name: {{ $hmacSecret }}
       key: {{ $hmac.secretKey | default "keys-json" }}
+{{- end }}
+{{- if and (not $isGateway) $acceptEd25519 }}
+# 业务服务只持公钥：验证网关 v2 签名
+- name: MEDASSIST_INTERNALAUTH_GATEWAYPUBLICKEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ $hmacSecret }}
+      key: {{ $hmac.gatewayPublicKeySecretKey | default "gateway-public-key" }}
+{{- end }}
+{{- if $ia.mountCallerKeys }}
+{{- range $caller := (index ($ia.callerKeys | default dict) .component | default list) }}
+- name: MEDASSIST_INTERNALAUTH_CALLERKEYS_{{ upper $caller }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $hmacSecret }}
+      key: {{ $caller }}
+{{- end }}
+{{- end }}
 {{- if .empi }}
 - name: EMPI_FIELD_KEY
   valueFrom:

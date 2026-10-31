@@ -109,11 +109,19 @@ external:
   # Secret 内为 JSON：{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}；
   # 轮换期 keys 同时保留新旧两把，切换 active 后观察 7 天再删旧 key。
   # 生成：openssl rand -base64 32（禁止人工设定、禁止进 Git）。
+  #
+  # 阶段二（v2/Ed25519）把密钥面拆成三类键，按角色分别挂载：
+  #   keys-json          → 网关（hmac 模式签发）与业务服务（v1 兼容验签）
+  #   gateway-private-key→ 仅网关（ed25519 模式签发，PKCS#8 base64）
+  #   gateway-public-key → 仅业务服务（ed25519 验签，X.509 base64）
+  #   <caller>           → 服务→服务通道的每调用方密钥（clinical/emr/…，base64 32B）
   internalHmac:
     existingSecret: medassist-internal-hmac
     secretKey: keys-json
+    gatewayPrivateKeySecretKey: gateway-private-key
+    gatewayPublicKeySecretKey: gateway-public-key
 
-# ---- 服务间签名校验（MF-07 阶段一）----
+# ---- 服务间签名校验（MF-07 阶段一/阶段二）----
 # off     = 关闭（仅允许非集群本地联调）
 # log     = 校验并打点但不拦截（灰度期用来暴露绕过网关的直连流量）
 # enforce = 校验失败 403（staging/production 必须使用）
@@ -125,9 +133,29 @@ internalAuth:
   # nonce 必须比时间窗活得久（≥2×clockSkew+1），否则窗内时间戳 + 已过期 nonce 可重放
   nonceTtlSeconds: 180
   # /internal/** 的服务→服务调用是否也要求调用方签名（T5）。
-  # 默认 false：先确认 Secret 的 keys-json 已包含 internal.{clinical,emr,insurance,pharmacy,tech}
-  # 且全部调用方已升级，再切 true（切换后未配置密钥的调用方会被 403）。
+  # 默认 false：先确认每个服务已挂载 caller-keys（mountCallerKeys=true）且全部调用方已升级，
+  # 再切 true（切换后未配置密钥的调用方会被 403）。
   internalPathsSignatureRequired: false
+  # 网关签名算法：hmac（v1，过渡期）| ed25519（v2，推荐；私钥只在网关，业务服务只持公钥）
+  gatewaySigning: hmac
+  gatewayKeyId: gw-v2
+  # 业务服务是否接受 v2 网关签名（注入公钥）。上线顺序：先 true → 再切 gatewaySigning=ed25519
+  acceptEd25519: false
+  # 业务服务是否仍接受 v1（HMAC）签名并挂载 keys-json。
+  # 这是切换顺序的最后一步：置 false 后业务服务不再持有对称密钥，
+  # 任一业务服务沦陷都无法伪造网关身份（完整步骤见 deploy/README.md §4.2.1）。
+  acceptHmacV1: true
+  # 按组件裁剪调用方密钥（R5-M3）：组件 → 需要的 caller 名，从 Secret 的同名键注入。
+  # 每个 Pod 只持有"自己的密钥 + 直接调用方的密钥"，某一服务沦陷不波及全部调用方。
+  # 开启前需在 medassist-internal-hmac 中预置这些键（见 deploy/README.md §4.2.1）。
+  mountCallerKeys: false
+  callerKeys:
+    empi: [clinical, emr, insurance, pharmacy, tech]
+    clinical: [clinical, emr, insurance]
+    emr: [emr]
+    pharmacy: [pharmacy]
+    tech: [tech]
+    insurance: [insurance]
 
 # ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
 secrets:
@@ -145,6 +173,11 @@ secrets:
   internalApiToken: ""
   # 服务间 HMAC 密钥 JSON（仅 secrets.create=true 的本地自验使用）
   internalHmacKeys: ""
+  # 阶段二：Ed25519 网关密钥对（PKCS#8 / X.509，base64；仅本地自验）
+  internalHmacGatewayPrivateKey: ""
+  internalHmacGatewayPublicKey: ""
+  # 每调用方密钥：caller → base64 32B（仅 secrets.create=true 且 mountCallerKeys=true 时写入）
+  internalCallerKeys: {}
 
 serviceAccount:
   create: true

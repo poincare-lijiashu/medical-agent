@@ -201,12 +201,18 @@ caller 绑定、启动守卫）方向正确且经实跑验证有效；网关"先
 | 第四批 报表与库 | R5-M8、R5-S5、R5-S8 | ✅ | `clinical V9` 补 `charge_item(created_at)` 索引；总额/分类/科室收入统一 `JOIN charge` 排除 REFUNDED；`tech V5` 补 counts 上限 CHECK |
 | 第五批 交付与观测 | R5-M9、R5-S10~S13、R5-S16 | ✅ | 离网手册新增"§2.2 预置 Secret（必须早于 helm upgrade）"并进介质清单；告警新增 `medassist.internal-auth` 组（拒绝速率 + 通过率<50% critical）；values/E2E 注释变量名纠偏；deploy README 补安装顺序；两个签名 E2E 增加 `code=40300` 断言 |
 | 第六批 测试补强 | R5-M10、R5-S14、R5-S15 | ✅ | 新增 `InternalSignatureClientInterceptorTest`（3 项：内部路径签名可验、业务路径不加头、disabled 不加头）；过滤器补指标打点/饱和/验签失败不占 nonce 用例；PACS 补 UID 占用、并发兜底、取消后重做、显式日期用例；启动守卫补 4 项 |
-| 未做（记录） | R5-M3 密钥面收敛、R5-S17 CI 全链路 | ⏳ | 需拆 Secret 并按 Deployment 裁剪挂载，与阶段二 mTLS 一起做；CI 内跑 E2E 需 ubuntu runner 上的 bash 版脚本 |
+| 第七批 阶段二安全收口 | R5-M3 | ✅ | 网关改 **Ed25519（v2）**：私钥只挂网关、业务服务只持公钥，业务服务沦陷也无法伪造网关身份；调用方密钥从 `keys-json` 拆成 Secret 独立键，Helm 按调用图只注入"自己的 + 直接调用方的"；`acceptHmacV1=false` 后对称密钥彻底离开业务侧；三步切换顺序见 `deploy/README.md` §4.2.1 |
+| 未做（记录） | R5-S17 CI 全链路 | ⏳ | CI 内跑 E2E 需 ubuntu runner 上的 bash 版脚本 |
 
 **验证**：全量单测 **446 项全过**（本轮新增 16 项）；
 E2E 实跑：`internal_auth_smoke` **12 项**、`internal_caller_smoke` **9 项**、`tech_pacs_smoke` **36 项**、
 `tech_lis_smoke` **27 项**、`clinical_report_smoke` **24 项**、`insurance_smoke` **161 项** 全过；
 库内迁移 `clinical → V9`、`tech → V5`。
+
+**第七批验证（2026-11-01，R5-M3）**：全量单测 **468 项全过**（第七批新增 22 项）；
+`helm lint --strict`（默认 / dev）+ `helm template`（dev / staging / prod）全部渲染通过；
+本机真实链路：v2 网关（Ed25519 私钥）→ 只持公钥的 clinical 返回 **200**，v1 网关回归 **200**，
+直连无签名 **403**，v2 网关打未升级的 emr **403**（fail-closed）。
 
 **实践发现（新增到踩坑备忘）**：`pg_advisory_xact_lock` 返回 void，用
 `query(Long.class).single()` 会抛"不良的类型值 long"，并被 Spring 的 SQLState 翻译误判为
