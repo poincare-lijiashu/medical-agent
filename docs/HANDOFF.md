@@ -45,6 +45,9 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 容器内 agent → OAP：登录链路 **45 span（gateway 17 + auth 28）同 traceId**；患者查询 gateway+empi 同 traceId
    - 容器内授权矩阵：PHARMACIST reveal 403 / users 403，DOCTOR reveal 200 明文
    - 详见 `deploy/README.md` §8「2026-10-31 补充实测」
+   - **待办**：本机 Docker Desktop 引擎在 ai-core 镜像构建中断后 API 返回 500（hang），
+     需重启 Docker Desktop 恢复；恢复后在构建机执行
+     `docker build -t medassist/ai-core:1.0.0 .` 复核（Dockerfile 已用国内 apt/pip 源）。
 2. **已修复真实缺陷：历史密码不可登录**。V3 从 Python 中台导入的是 PBKDF2 哈希，Java 只认 BCrypt →
    新增 `security/PasswordHasher`（BCrypt/PBKDF2 双支持 + 登录后在线升级为 BCrypt，按旧哈希 CAS），
    新增 `PasswordHasherTest`（3 项）。已实测 doctor01 登录后哈希变 `$2a$10$`，admin01 未登录仍为 `pbkdf2$`。
