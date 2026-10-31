@@ -409,6 +409,14 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 258→**263**；emr E2E 84→**91 项**、insurance E2E 78 项回归全过
    - 库内：emr v7 / auth v18；`emr:record:archive` 仅 ADMIN/QC
 
+28. **第三轮评测第十一批整改（2026-10-31）：审计可追溯与内部接口口径（S-13/S-23）**
+   - `ITEM_UPSERT` / `MEMBER_UPSERT` 审计 detail 增 `before`/`after` 快照（新建时 `before=NEW`）；
+     目录项与参保参数直接决定报销金额，只记新值无法追查"改前是什么"
+   - empi/clinical 三处内部接口统一 403「内部接口不可用」，不再区分"未启用/令牌错误"，
+     避免泄露配置项名与启用状态（恒定时间比较保留）
+   - 验证：单测 263→**264**；insurance E2E 78 项、emr E2E 91 项全过；
+     库内 `ITEM_UPSERT` 审计已带 `before`
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

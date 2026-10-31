@@ -45,12 +45,13 @@ public class InternalPatientController {
     @GetMapping("/{id}")
     public Map<String, Object> get(@PathVariable UUID id,
                                    @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        // 统一泛化文案：不区分"未启用/令牌错误/令牌缺失"，避免外部探测内部接口状态
         if (token.isBlank()) {
-            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "内部接口未启用（缺少 INTERNAL_API_TOKEN）");
+            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
         }
         if (provided == null || !MessageDigest.isEqual(
                 token.getBytes(StandardCharsets.UTF_8), provided.getBytes(StandardCharsets.UTF_8))) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口令牌无效");
+            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
         }
         Patient p = repo.findById(id).orElseThrow(() -> new BusinessException(ErrorCode.PATIENT_NOT_FOUND));
         Map<String, Object> body = new LinkedHashMap<>();

@@ -402,6 +402,25 @@ class InsuranceServiceTest {
     }
 
     @Test
+    @DisplayName("目录：审计记录 old→new 对照（S-13）")
+    void itemAuditCarriesBeforeAfter() {
+        InsuranceItem before = new InsuranceItem(UUID.randomUUID(), "I-1", "旧名称", "SERVICE", "B",
+                new BigDecimal("0.1000"), null, true, 3L);
+        InsuranceItem after = new InsuranceItem(UUID.randomUUID(), "I-1", "示例项目", "SERVICE", "A",
+                BigDecimal.ZERO, null, true, 4L);
+        when(repo.upsertItem(any(), eq(3L))).thenReturn(Optional.of(UUID.randomUUID()));
+        when(repo.findItemByCode("I-1")).thenReturn(Optional.of(before), Optional.of(after));
+
+        service.createItem(itemReq(3L), "cashier01");
+
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(repo).logChange(eq("cashier01"), eq("ITEM_UPSERT"), eq("INSURANCE_ITEM"), eq("I-1"),
+                detail.capture());
+        assertThat(detail.getValue()).contains("\"before\"").contains("旧名称")
+                .contains("\"after\"").contains("示例项目");
+    }
+
+    @Test
     @DisplayName("生成：已确认清单拒绝重算")
     void generateRejectsConfirmedBill() {
         when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));

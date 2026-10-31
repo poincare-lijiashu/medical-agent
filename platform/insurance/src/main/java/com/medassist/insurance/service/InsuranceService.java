@@ -75,18 +75,24 @@ public class InsuranceService {
      * 新增/更新目录项目。
      *
      * <p>请求带 {@code version} 时按乐观锁更新（版本不一致 409），批量导入等强制覆盖场景不带。
+     * 审计记录 old→new 对照（目录项直接决定报销口径，只记新值无法追查"改前是什么"）。
      */
     @Transactional
     public InsuranceItem createItem(ItemReq req, String actor) {
         InsuranceItem item = toItem(req);
+        Optional<InsuranceItem> before = repo.findItemByCode(item.insuranceCode());
         if (repo.upsertItem(item, req.version()).isEmpty()) {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "医保目录项目已被他人修改（当前版本与提交版本不一致），请刷新后重试");
         }
-        audit(actor, "ITEM_UPSERT", "INSURANCE_ITEM", item.insuranceCode(), Map.of(
-                "insuranceCode", item.insuranceCode(), "payCategory", item.payCategory()));
-        return repo.findItemByCode(item.insuranceCode())
+        InsuranceItem saved = repo.findItemByCode(item.insuranceCode())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_ITEM_NOT_FOUND));
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("insuranceCode", saved.insuranceCode());
+        detail.put("before", before.map(InsuranceService::itemSnapshot).orElse(null));
+        detail.put("after", itemSnapshot(saved));
+        audit(actor, "ITEM_UPSERT", "INSURANCE_ITEM", saved.insuranceCode(), detail);
+        return saved;
     }
 
     @Transactional
@@ -159,10 +165,40 @@ public class InsuranceService {
                     "参保信息已被他人修改，请刷新后重试");
         }
         audit(actor, "MEMBER_UPSERT", "MEMBER", patient.id().toString(), Map.of(
-                "patientNo", patient.patientNo(), "insuranceType", member.insuranceType(),
-                "region", member.region(), "ratio", member.reimbursementRatio().toPlainString()));
+                "patientNo", patient.patientNo(), "before", existing.map(InsuranceService::memberSnapshot)
+                        .map(snapshot -> (Object) snapshot).orElse("NEW"),
+                "after", memberSnapshot(repo.findMemberByPatient(patient.id())
+                        .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_MEMBER_NOT_FOUND)))));
         return repo.findMemberByPatient(patient.id())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_MEMBER_NOT_FOUND));
+    }
+
+    /** 目录项快照（审计 old→new 用）。 */
+    private static Map<String, Object> itemSnapshot(InsuranceItem item) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("name", item.name());
+        snapshot.put("category", item.category());
+        snapshot.put("payCategory", item.payCategory());
+        snapshot.put("selfPayRatio", item.selfPayRatio() == null ? null : item.selfPayRatio().toPlainString());
+        snapshot.put("priceLimit", item.priceLimit() == null ? null : item.priceLimit().toPlainString());
+        snapshot.put("enabled", item.enabled());
+        return snapshot;
+    }
+
+    /** 参保快照（审计 old→new 用）。 */
+    private static Map<String, Object> memberSnapshot(Member member) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("insuranceType", member.insuranceType());
+        snapshot.put("region", member.region());
+        snapshot.put("personCategory", member.personCategory());
+        snapshot.put("deductible", member.deductible() == null ? null : member.deductible().toPlainString());
+        snapshot.put("reimbursementRatio", member.reimbursementRatio() == null
+                ? null : member.reimbursementRatio().toPlainString());
+        snapshot.put("cap", member.cap() == null ? null : member.cap().toPlainString());
+        snapshot.put("effectiveFrom", member.effectiveFrom() == null ? null : member.effectiveFrom().toString());
+        snapshot.put("effectiveTo", member.effectiveTo() == null ? null : member.effectiveTo().toString());
+        snapshot.put("status", member.status());
+        return snapshot;
     }
 
     public Member member(UUID patientId) {

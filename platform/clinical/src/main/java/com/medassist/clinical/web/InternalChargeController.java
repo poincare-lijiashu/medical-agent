@@ -72,14 +72,17 @@ public class InternalChargeController {
                 .orElseGet(visit::visitDate);
     }
 
+    /**
+     * 统一泛化文案：不区分"未启用/令牌错误/令牌缺失"，
+     * 避免外部探测出内部接口的启用状态与配置项名称。
+     */
     private void requireToken(String provided) {
         if (token.isBlank()) {
-            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
-                    "内部接口未启用（缺少 CLINICAL_INTERNAL_TOKEN）");
+            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
         }
         if (provided == null || !MessageDigest.isEqual(
                 token.getBytes(StandardCharsets.UTF_8), provided.getBytes(StandardCharsets.UTF_8))) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口令牌无效");
+            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
         }
     }
 }
