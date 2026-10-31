@@ -13,6 +13,8 @@ import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.BillView;
+import com.medassist.insurance.web.InsuranceDtos.CatalogChange;
+import com.medassist.insurance.web.InsuranceDtos.CatalogImportResult;
 import com.medassist.insurance.web.InsuranceDtos.ImportResult;
 import com.medassist.insurance.web.InsuranceDtos.ItemReq;
 import com.medassist.insurance.web.InsuranceDtos.MappingReq;
@@ -29,6 +31,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -50,6 +53,12 @@ import java.util.function.Function;
 public class InsuranceService {
 
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+
+    /** 目录文件上限（与 multipart 配置一致，双重保护）。 */
+    private static final long MAX_FILE_BYTES = 5L * 1024 * 1024;
+
+    /** 预览结果最多返回的变更条数（完整数量见 created/updated）。 */
+    private static final int MAX_CHANGES_RETURNED = 50;
 
     private final InsuranceRepository repo;
     private final PatientClient patientClient;
@@ -108,6 +117,145 @@ public class InsuranceService {
         audit(actor, "ITEM_IMPORT", "INSURANCE_ITEM", "batch", Map.of(
                 "count", codes.size(), "codes", codes.stream().limit(20).toList()));
         return new ImportResult(codes.size(), codes);
+    }
+
+    /**
+     * 目录文件导入（CSV / XML）：先差异预览，确认后再落库。
+     *
+     * <p>商业口径：
+     * <ul>
+     *   <li>预览与落库用同一套比对逻辑，避免"看到 3 条变更、实际写了 5 条"；</li>
+     *   <li>**幂等**：内容未变的目录项不写库、不升版本，同一文件重复 apply 不会产生噪音审计；</li>
+     *   <li>文件未给出 {@code enabled} 时保留库里原值（不把停用项隐式复活），新建默认启用；</li>
+     *   <li>库里启用但文件未覆盖的目录项**只统计不自动停用**（停用必须显式操作）；</li>
+     *   <li>任一解析/校验错误整体拒绝，不做"导一半"。</li>
+     * </ul>
+     */
+    @Transactional
+    public CatalogImportResult importCatalogFile(String fileName, byte[] content, String mode,
+                                                 String actor) {
+        String normalizedMode = (mode == null || mode.isBlank())
+                ? "PREVIEW" : mode.trim().toUpperCase(Locale.ROOT);
+        if (!"PREVIEW".equals(normalizedMode) && !"APPLY".equals(normalizedMode)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "mode 只支持 preview 或 apply");
+        }
+        if (content == null || content.length == 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "请上传非空的目录文件");
+        }
+        if (content.length > MAX_FILE_BYTES) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "目录文件不得超过 " + (MAX_FILE_BYTES / 1024 / 1024) + " MB");
+        }
+        CatalogFileParser.Parsed parsed = CatalogFileParser.parse(fileName, content);
+        if (!parsed.errors().isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "目录文件校验失败：" + String.join("；", parsed.errors()));
+        }
+        List<CatalogFileParser.Row> rows = parsed.rows();
+        List<String> codes = rows.stream().map(CatalogFileParser.Row::code).toList();
+        Map<String, InsuranceItem> existing = new LinkedHashMap<>();
+        for (InsuranceItem item : repo.findItemsByCodes(codes)) {
+            existing.put(item.insuranceCode(), item);
+        }
+
+        List<CatalogFileParser.Row> toCreate = new ArrayList<>();
+        List<CatalogFileParser.Row> toUpdate = new ArrayList<>();
+        List<CatalogChange> changes = new ArrayList<>();
+        int unchanged = 0;
+        for (CatalogFileParser.Row row : rows) {
+            InsuranceItem current = existing.get(row.code());
+            if (current == null) {
+                toCreate.add(row);
+                changes.add(new CatalogChange(row.code(), "CREATE", List.of()));
+                continue;
+            }
+            List<String> diff = changedFields(current, row);
+            if (diff.isEmpty()) {
+                unchanged++;
+            } else {
+                toUpdate.add(row);
+                changes.add(new CatalogChange(row.code(), "UPDATE", diff));
+            }
+        }
+        long missingInFile = repo.countEnabledItemsNotInCodes(codes);
+        String digest = CatalogFileParser.sha256(content);
+
+        if ("APPLY".equals(normalizedMode)) {
+            for (CatalogFileParser.Row row : toCreate) {
+                InsuranceItem item = mergeItem(row, null);
+                repo.upsertItem(item, null);
+                auditFileItem(actor, fileName, row.code(), null, item);
+            }
+            for (CatalogFileParser.Row row : toUpdate) {
+                InsuranceItem before = existing.get(row.code());
+                InsuranceItem item = mergeItem(row, before);
+                repo.upsertItem(item, null);
+                auditFileItem(actor, fileName, row.code(), before, item);
+            }
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("fileName", fileName == null ? "" : fileName);
+            detail.put("sha256", digest);
+            detail.put("total", rows.size());
+            detail.put("created", toCreate.size());
+            detail.put("updated", toUpdate.size());
+            detail.put("unchanged", unchanged);
+            detail.put("missingInFile", missingInFile);
+            audit(actor, "ITEM_FILE_IMPORT", "INSURANCE_ITEM", "file", detail);
+        }
+
+        boolean truncated = changes.size() > MAX_CHANGES_RETURNED;
+        return new CatalogImportResult(normalizedMode, fileName, digest, rows.size(),
+                toCreate.size(), toUpdate.size(), unchanged, (int) missingInFile, truncated,
+                changes.stream().limit(MAX_CHANGES_RETURNED).toList());
+    }
+
+    /** 文件值未给出的字段保留库里原值；新建时给默认值（比例 0、无限价、启用）。 */
+    private InsuranceItem mergeItem(CatalogFileParser.Row row, InsuranceItem before) {
+        BigDecimal ratio = row.selfPayRatio() != null
+                ? row.selfPayRatio()
+                : (before == null || before.selfPayRatio() == null ? BigDecimal.ZERO : before.selfPayRatio());
+        BigDecimal limit = row.priceLimit() != null
+                ? money(row.priceLimit())
+                : (before == null ? null : before.priceLimit());
+        boolean enabled = row.enabled() != null ? row.enabled() : (before == null || before.enabled());
+        return new InsuranceItem(UUID.randomUUID(), row.code(), row.name(), row.category(),
+                row.payCategory(), ratio, limit, enabled, 0L);
+    }
+
+    /** 与库里比对，返回变化字段名（只覆盖文件显式给出的字段，避免"缺列即清零"）。 */
+    private static List<String> changedFields(InsuranceItem current, CatalogFileParser.Row row) {
+        List<String> fields = new ArrayList<>();
+        if (!current.name().equals(row.name())) {
+            fields.add("name");
+        }
+        if (!current.category().equals(row.category())) {
+            fields.add("category");
+        }
+        if (!current.payCategory().equals(row.payCategory())) {
+            fields.add("payCategory");
+        }
+        if (row.selfPayRatio() != null && (current.selfPayRatio() == null
+                || current.selfPayRatio().compareTo(row.selfPayRatio()) != 0)) {
+            fields.add("selfPayRatio");
+        }
+        if (row.priceLimit() != null && (current.priceLimit() == null
+                || current.priceLimit().compareTo(row.priceLimit()) != 0)) {
+            fields.add("priceLimit");
+        }
+        if (row.enabled() != null && current.enabled() != row.enabled()) {
+            fields.add("enabled");
+        }
+        return fields;
+    }
+
+    private void auditFileItem(String actor, String fileName, String code,
+                               InsuranceItem before, InsuranceItem after) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("fileName", fileName == null ? "" : fileName);
+        detail.put("insuranceCode", code);
+        detail.put("before", before == null ? null : itemSnapshot(before));
+        detail.put("after", itemSnapshot(after));
+        audit(actor, "ITEM_FILE_UPSERT", "INSURANCE_ITEM", code, detail);
     }
 
     @Transactional

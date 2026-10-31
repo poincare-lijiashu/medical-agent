@@ -1,17 +1,21 @@
 package com.medassist.insurance.web;
 
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.service.InsuranceService;
+import com.medassist.insurance.web.InsuranceDtos.CatalogImportResult;
 import com.medassist.insurance.web.InsuranceDtos.ImportItemsReq;
 import com.medassist.insurance.web.InsuranceDtos.ImportResult;
 import com.medassist.insurance.web.InsuranceDtos.ItemReq;
 import com.medassist.insurance.web.InsuranceDtos.MappingReq;
 import com.medassist.insurance.web.InsuranceDtos.ToggleReq;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,7 +25,9 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 
@@ -67,6 +73,28 @@ public class CatalogController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.importItems(req.items(), actor));
+    }
+
+    /**
+     * 目录文件导入（CSV / XML）：{@code mode=preview} 只做差异比对，{@code mode=apply} 落库。
+     *
+     * <p>与 JSON 批量导入的区别：文件导入先预览、再确认，且内容未变的目录项不写库（幂等），
+     * 适合"省局按月下发目录"的真实场景。
+     */
+    @PostMapping(value = "/items/import-file", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<CatalogImportResult> importFile(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(defaultValue = "preview") String mode,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        byte[] content;
+        try {
+            content = file.getBytes();
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "读取上传文件失败，请重新上传");
+        }
+        return ApiResponse.ok(service.importCatalogFile(file.getOriginalFilename(), content, mode, actor));
     }
 
     @PutMapping("/items/{id}/enabled")

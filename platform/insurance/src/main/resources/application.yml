@@ -6,6 +6,12 @@ spring:
   application:
     name: platform-insurance
 
+  # 目录文件导入（CSV/XML）需要上传：默认 1MB 不够，且与 service 内 5MB 上限双重保护
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
   datasource:
     url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
     username: ${PG_USER:medagent}

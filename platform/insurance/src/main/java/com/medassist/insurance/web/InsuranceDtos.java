@@ -96,4 +96,21 @@ public final class InsuranceDtos {
     /** 导入结果。 */
     public record ImportResult(int imported, List<String> codes) {
     }
+
+    /**
+     * 目录文件导入结果（preview 与 apply 共用）。
+     *
+     * @param mode              PREVIEW（只比对）/ APPLY（已落库）
+     * @param sha256            文件摘要，用于事后证明"导入的是哪一版文件"
+     * @param missingInFile     库里启用中、但本文件未覆盖的目录项数量（只提示，不自动停用）
+     * @param changesTruncated  changes 是否被截断（最多返回 50 条，完整计数见 created/updated）
+     */
+    public record CatalogImportResult(String mode, String fileName, String sha256, int total,
+                                      int created, int updated, int unchanged, int missingInFile,
+                                      boolean changesTruncated, List<CatalogChange> changes) {
+    }
+
+    /** 单条目录变更：action = CREATE / UPDATE，fields 为发生变化的字段名。 */
+    public record CatalogChange(String insuranceCode, String action, List<String> fields) {
+    }
 }

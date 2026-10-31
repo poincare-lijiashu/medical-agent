@@ -3,7 +3,8 @@
 #
 # Covers: catalog item -> charge-item mapping -> member enrollment
 #         -> settlement bill (server-side calculation) -> confirm -> recompute 409
-#         -> catalog batch import -> permission check (doctor is read-only).
+#         -> catalog batch import -> catalog file import (CSV preview/apply, idempotent)
+#         -> permission check (doctor is read-only).
 #
 # ASCII only (Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
 # Prerequisites: auth :8081, empi :8082, clinical :8083, insurance :8087, gateway :8080
@@ -53,6 +54,19 @@ function CheckNum($name, $actual, $expected) {
 }
 
 function Res($r) { return (($r.Body | ConvertFrom-Json).data) }
+
+# multipart upload (catalog CSV/XML import)
+function Invoke-Upload {
+    param([string]$Path, [string]$FilePath, [string]$Token = $null)
+    $out = [IO.Path]::GetTempFileName()
+    $args = @('--noproxy', '*', '-s', '-o', $out, '-w', '%{http_code}', '-X', 'POST',
+              '-F', "file=@$FilePath", ($BaseUrl + $Path))
+    if ($Token) { $args += @('-H', "Authorization: Bearer $Token") }
+    $code = & curl.exe @args
+    $text = Get-Content -Raw -Path $out -Encoding UTF8
+    Remove-Item $out -Force
+    return [pscustomobject]@{ Status = [int]$code; Body = $text }
+}
 
 # timestamp-based suffix: random 4-digit values collide on idNo/ward unique indexes within a day
 $suffix = (Get-Date).ToString('HHmmssff')
@@ -262,6 +276,53 @@ $r = Invoke-Api 'POST' '/api/v2/insurance/items/import' @{
 } $token
 Check 'item.import' $r.Status 200
 Check 'item.import.count' (Res $r).imported 2
+
+# ---------------------------------------------------------------- 6.1 catalog file import (CSV preview/apply)
+$fileCode = "I-FILE-$suffix"
+$csvPath = Join-Path $env:TEMP "catalog-$suffix.csv"
+$csvBody = "code,name,category,payCategory,selfPayRatio,priceLimit,enabled`n"
+$csvBody += "$fileCode,File Drug Alpha,DRUG,B,0.1,50.00,true`n"
+[IO.File]::WriteAllText($csvPath, $csvBody, (New-Object System.Text.UTF8Encoding($false)))
+
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=preview" $csvPath $token
+Check 'file.preview' $r.Status 200
+Check 'file.preview.mode' (Res $r).mode 'PREVIEW'
+Check 'file.preview.created' (Res $r).created 1
+Check 'file.preview.updated' (Res $r).updated 0
+Check 'file.preview.sha256' (Res $r).sha256.Length 64
+
+# Excel is rejected with a clear message (no POI dependency)
+$xlsxPath = Join-Path $env:TEMP "catalog-$suffix.xlsx"
+[IO.File]::WriteAllText($xlsxPath, $csvBody, (New-Object System.Text.UTF8Encoding($false)))
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=preview" $xlsxPath $token
+Check 'file.xlsx.422' $r.Status 422
+
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=apply" $csvPath $token
+Check 'file.apply' $r.Status 200
+Check 'file.apply.created' (Res $r).created 1
+Check 'file.apply.unchanged' (Res $r).unchanged 0
+
+# same file twice: nothing is rewritten (idempotent, no version churn)
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=preview" $csvPath $token
+Check 'file.previewAgain.created' (Res $r).created 0
+Check 'file.previewAgain.unchanged' (Res $r).unchanged 1
+
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=apply" $csvPath $token
+Check 'file.applyAgain.created' (Res $r).created 0
+Check 'file.applyAgain.unchanged' (Res $r).unchanged 1
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/items?q=$fileCode" $null $token
+Check 'file.item.list' $r.Status 200
+$fileItems = @(Res $r)
+Check 'file.item.count' $fileItems.Count 1
+Check 'file.item.payCategory' $fileItems[0].payCategory 'B'
+CheckNum 'file.item.priceLimit' $fileItems[0].priceLimit 50.00
+
+# doctor is read-only: cannot upload catalog files
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=preview" $csvPath $doctorToken
+Check 'file.doctor.403' $r.Status 403
+
+Remove-Item $csvPath, $xlsxPath -Force
 
 $r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
     name = "NoIns Patient $suffix"; gender = 'MALE'; birthDate = '1970-01-01'

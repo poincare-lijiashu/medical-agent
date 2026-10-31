@@ -10,13 +10,16 @@ import com.medassist.insurance.web.InsuranceDtos.VoidReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -56,6 +59,23 @@ class InsuranceControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(service, never()).createItem(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("目录文件导入：只读权限不能上传，目录维护权限放行")
+    void importFileRequiresManage() {
+        var file = new MockMultipartFile("file", "catalog.csv", "text/csv",
+                "code,name,category,payCategory\nX1,A,DRUG,A\n".getBytes(StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> catalogController.importFile(file, "preview",
+                "insurance:settlement:read", "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(service, never()).importCatalogFile(anyString(), any(), anyString(), anyString());
+
+        catalogController.importFile(file, "preview", "insurance:catalog:manage", "yb01");
+        verify(service).importCatalogFile(eq("catalog.csv"), any(), eq("preview"), eq("yb01"));
     }
 
     @Test

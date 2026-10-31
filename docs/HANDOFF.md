@@ -462,6 +462,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      密钥轮换（双密钥 7 天过渡）、灰度顺序（emr→insurance→clinical→…→auth）与 1 分钟回滚、测试矩阵、T1~T8 任务拆解
    - **未改代码**：MF-07 仍为待实现项，下一批按 T1~T4 落地
 
+35. **N5 第二批 A（2026-11-01）：医保目录文件导入（CSV/XML）**
+   - 新增 `POST /api/v2/insurance/items/import-file?mode=preview|apply`（multipart，需 `insurance:catalog:manage`）
+   - 解析：CSV（UTF-8/BOM、中英文表头、RFC4180 引号）与 XML（属性/子元素，XXE 关闭）；
+     Excel 明确 422 并提示另存 CSV（不引入 POI，保持离网交付轻量）
+   - 商业口径：预览与落库同一套比对；幂等（未变不写库/不升版本）；缺列不覆盖（停用项不隐式复活）；
+     文件未覆盖只统计 `missingInFile` 不自动停用；任一校验错误整体拒绝
+   - 审计：汇总 `ITEM_FILE_IMPORT`（文件名+SHA-256+计数）、逐项 `ITEM_FILE_UPSERT`（before/after）
+   - 配置：`spring.servlet.multipart` 5MB/6MB，service 再限 5MB 与 5000 行
+   - 验证：单测 282→**301**；`insurance_smoke.ps1` 87→**105 项**全过；
+     库内 2 次 apply 仅 1 条逐项审计（第二次 unchanged 未重写）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -527,6 +538,10 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   或直接 `where version in ('18','19')` 查
 - 给配置表加管理接口时补列可以 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... NOT NULL DEFAULT 0`
   （PG11+ 只改元数据不重写表），存量行自动获得版本号 0，首次修改带 version=0 即可
+- `JdbcClient` 的命名参数支持集合展开：`.param("codes", List<String>)` + `WHERE code IN (:codes)`
+  可直接生成占位符列表（5000 个编码一次查询），不必手拼 SQL；空列表要在调用前短路
+- Spring Boot 默认 multipart 单文件上限是 **1MB**：做文件上传前必须配
+  `spring.servlet.multipart.max-file-size/max-request-size`，否则稍大的目录文件直接 500/413
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

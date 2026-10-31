@@ -127,6 +127,31 @@ public class InsuranceRepository {
                         """).param(id).query(ITEM_MAPPER).optional();
     }
 
+    /** 按医保编码批量取目录项（文件导入做差异比对待用，一次查询避免 N+1）。 */
+    public List<InsuranceItem> findItemsByCodes(List<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                        SELECT id, insurance_code, name, category, pay_category,
+                               self_pay_ratio, price_limit, enabled, version
+                          FROM insurance_svc.md_insurance_item
+                         WHERE insurance_code IN (:codes)
+                        """).param("codes", codes).query(ITEM_MAPPER).list();
+    }
+
+    /** 文件未覆盖到的启用中目录项数量（只统计，不自动停用：停用必须显式操作）。 */
+    public long countEnabledItemsNotInCodes(List<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return jdbc.sql("SELECT count(*) FROM insurance_svc.md_insurance_item WHERE enabled")
+                    .query(Long.class).single();
+        }
+        return jdbc.sql("""
+                        SELECT count(*) FROM insurance_svc.md_insurance_item
+                         WHERE enabled AND insurance_code NOT IN (:codes)
+                        """).param("codes", codes).query(Long.class).single();
+    }
+
     /**
      * 按医保编码 UPSERT 目录项目。
      *
