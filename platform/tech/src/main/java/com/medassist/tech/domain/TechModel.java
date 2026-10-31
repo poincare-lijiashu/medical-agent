@@ -79,4 +79,21 @@ public final class TechModel {
             return !CLOSED.equals(status);
         }
     }
+
+    /**
+     * LIS 入站消息（HL7 v2 ORU^R01）留档。
+     *
+     * <p>messageControlId 唯一：LIS 重投同一消息只处理一次（幂等）。
+     * status：PROCESSED 已回写、IGNORED 无需处理（已有签发报告/申请已关闭）、FAILED 处理失败（含原因）。
+     */
+    public record LisInboundMessage(UUID id, String messageControlId, String messageType,
+                                    String sendingApp, String applicationNo, UUID applicationId,
+                                    UUID reportId, String status, String errorMessage,
+                                    String rawMessage, String messageHash, String actor,
+                                    Instant receivedAt) {
+
+        public static final String PROCESSED = "PROCESSED";
+        public static final String IGNORED = "IGNORED";
+        public static final String FAILED = "FAILED";
+    }
 }

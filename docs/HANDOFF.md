@@ -540,6 +540,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：全量单测 **361 项全过**（本批新增守卫 3 项 + 权限负例 3 组）；两个 E2E 全过；
      启动日志 `sign.policy.check.ok`
 
+42. **N6 第一批（2026-11-01）：LIS 入站 HL7 v2 ORU 结果回写**
+   - 新增 `POST /api/v2/tech/lis/oru`（`text/plain` / `application/hl7-v2`），权限 `tech:lis:write`（auth **V23**，仅 ADMIN/TECHNICIAN）
+   - 自研最小 HL7 v2 解析器（不引入 HAPI）：分隔符按 MSH-1/2 读取、`\F\ \S\ \R\ \E\ \T\` 转义还原、CR/LF/CRLF、512KB 上限
+   - 幂等：`MSH-10` 唯一落 `lis_inbound_message`，重复投递返回首次结果（duplicate=true）
+   - 回写只落**报告草稿**；申请 RECEIVED/APPLIED 时先走既有状态机；已签发/关闭/取消 → IGNORED
+   - OBX-8 为 HH/LL 自动生成危急值（CRITICAL/PENDING），必须临床确认闭环
+   - 失败语义：不可解析 → 422 不留库；业务失败 → 落 FAILED 且返回 200 + 原因
+   - `tech V2` 新增 `lis_inbound_message`；审计 `LIS_ORU_PROCESSED/IGNORED/FAILED`
+   - 验证：全量单测 **378 项全过**；新脚本 `tech_lis_smoke.ps1` **27 项断言全过**；
+     库内 2 条消息（PROCESSED/FAILED）、1 条 PENDING 危急值
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -623,6 +634,9 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   （曾把 `package` 变成 `ackage`）
 - 给控制器构造函数加依赖（如 MeterRegistry 封装）会波及所有直接 `new XxxController(service)` 的单测，
   但影响面比改 Service 构造函数小得多——业务打点优先放在控制器层
+- **HL7 v2 字段下标陷阱**：非 MSH 段切分后数组下标 = 字段号（下标 0 是段名，OBR-2 → index 2），
+  而 MSH 段因为 MSH-1 就是分隔符，下标 = 字段号 - 1。两者混用会把 OBR-2 读成 "1"、把 OBX-3 读成 "NM"，
+  表现为"结果全错但不报错"——解析器必须用带 `mshSegment` 标志的取值方法
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

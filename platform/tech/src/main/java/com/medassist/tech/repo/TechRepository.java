@@ -4,6 +4,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.CriticalValue;
 import com.medassist.tech.domain.TechModel.ExamItem;
+import com.medassist.tech.domain.TechModel.LisInboundMessage;
 import com.medassist.tech.domain.TechModel.Report;
 import com.medassist.tech.domain.TechModel.Specimen;
 import org.springframework.jdbc.core.RowMapper;
@@ -387,6 +388,59 @@ public class TechRepository {
                          WHERE application_id = ? AND status <> 'CLOSED'
                         """).param(applicationId).query(Long.class).single();
         return n == null ? 0 : n.intValue();
+    }
+
+    // ---------------------------------------------------------------- LIS 入站消息（N6）
+
+    private static final RowMapper<LisInboundMessage> LIS_MAPPER = (rs, i) -> new LisInboundMessage(
+            rs.getObject("id", UUID.class), rs.getString("message_control_id"),
+            rs.getString("message_type"), rs.getString("sending_app"),
+            rs.getString("application_no"), rs.getObject("application_id", UUID.class),
+            rs.getObject("report_id", UUID.class), rs.getString("status"),
+            rs.getString("error_message"), rs.getString("raw_message"),
+            rs.getString("message_hash"), rs.getString("actor"),
+            rs.getTimestamp("received_at").toInstant());
+
+    public Optional<Application> findApplicationByNo(String applicationNo) {
+        return jdbc.sql("""
+                        SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
+                               applied_by, category, item_code, item_name, body_part, priority,
+                               clinical_diag, specimen_type, status, version, created_at
+                          FROM tech_svc.exam_application WHERE application_no = ?
+                        """).param(applicationNo).query(APP_MAPPER).optional();
+    }
+
+    public Optional<LisInboundMessage> findLisMessageByControlId(String messageControlId) {
+        return jdbc.sql("""
+                        SELECT id, message_control_id, message_type, sending_app, application_no,
+                               application_id, report_id, status, error_message, raw_message,
+                               message_hash, actor, received_at
+                          FROM tech_svc.lis_inbound_message WHERE message_control_id = ?
+                        """).param(messageControlId).query(LIS_MAPPER).optional();
+    }
+
+    /**
+     * 落库入站消息。
+     *
+     * @return false 表示并发下同一控制 ID 已被另一请求落库（唯一索引兜底），调用方应改为读取已有记录
+     */
+    public boolean insertLisMessage(LisInboundMessage m) {
+        return jdbc.sql("""
+                        INSERT INTO tech_svc.lis_inbound_message
+                            (id, message_control_id, message_type, sending_app, application_no,
+                             application_id, report_id, status, error_message, raw_message,
+                             message_hash, actor, received_at)
+                        VALUES (:id, :controlId, :type, :app, :applicationNo,
+                                CAST(:applicationId AS uuid), CAST(:reportId AS uuid), :status,
+                                :error, :raw, :hash, :actor, now())
+                        ON CONFLICT (message_control_id) DO NOTHING
+                        """)
+                .param("id", m.id()).param("controlId", m.messageControlId())
+                .param("type", m.messageType()).param("app", m.sendingApp())
+                .param("applicationNo", m.applicationNo()).param("applicationId", m.applicationId())
+                .param("reportId", m.reportId()).param("status", m.status())
+                .param("error", m.errorMessage()).param("raw", m.rawMessage())
+                .param("hash", m.messageHash()).param("actor", m.actor()).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

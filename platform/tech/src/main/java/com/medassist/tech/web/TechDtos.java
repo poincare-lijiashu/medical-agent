@@ -98,6 +98,17 @@ public final class TechDtos {
     public record CriticalView(CriticalValue critical, boolean overdue) {
     }
 
+    /**
+     * LIS ORU 入站处理结果。
+     *
+     * @param status    PROCESSED / IGNORED / FAILED
+     * @param duplicate true 表示命中幂等（同一 messageControlId 已处理过），返回首次结果
+     */
+    public record OruResult(UUID messageId, String messageControlId, String status,
+                            String applicationNo, UUID applicationId, UUID reportId,
+                            String errorMessage, boolean duplicate) {
+    }
+
     /** 项目字典视图。 */
     public record ExamItemView(ExamItem item) {
     }
