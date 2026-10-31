@@ -1,6 +1,22 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-10-30（平台化 P0-5 已闭环、P1 第一批已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+
+## 2026-11-01 收工状态（下次开工先读这里）
+
+- 今日提交：`485246d`（MF-07 阶段二：Ed25519 + 密钥面收敛）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）
+- 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `medical_agent_20261101_mf07p2/n2billing/audit.bundle`
+- 工作区：clean（收工前已确认）；全量单测 **487 项**全绿
+- 本机运行中（明天可直接复用）：gateway 8080（v1 HMAC enforce）、auth 8081、empi 8082（dev profile）、
+  clinical 8083（签名 off）、pharmacy 8084、tech 8085、emr 8086、insurance 8087；PostgreSQL 5433
+- E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
+  `pharmacy_smoke` 需 `-BaseUrl http://127.0.0.1:8080`）
+- **明天第一件事（建议顺序）**：
+  1. **医嘱 → 处方/检查申请（HIS 主链路）**：clinical 医嘱 afterCommit 转 pharmacy/tech，回写外部单号与状态；
+     需要一张"医嘱项 → 目标服务/目标编码"映射表（跨域映射不能硬编码）
+  2. **病案首页 / 结构化诊断（ICD-10）**：HQMS、DRG 官方分组、医保清单质量的前置基础
+  3. **药品字典批量导入**（CSV/XML，复用药保目录导入模式）+ **R5-S17**（CI 内跑 E2E）
+- 收工动作：Docker Desktop 已关闭（要构建/验证镜像时先启动 Docker）；如需重启本机服务，按《本机踩坑》用后台命令逐条启动，勿用 `Start-Process`
 
 ## 2026-10-30 平台化进度（P0-5 / P1）
 
