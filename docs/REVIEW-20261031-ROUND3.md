@@ -519,4 +519,18 @@ S-26、S-28~S-30（E2E 补 CHIEF 三级签名与首程 8h、Mockito 去过拟合
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–20 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 21. 整改状态（2026-11-01，第十五批：审计按人检索索引 N-05）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| N-05 | 统一审计 `/api/v2/audit/events` 支持按 `actor` 过滤，但三域审计表只有 `(ts)` 与 `(target_type,target_id)` 索引，按人检索全表扫描；等保检查最常见动作就是"查某人某段时间做了什么" | ✅ 已修 | `auth V20` / `emr V9` / `insurance V5` 各补 `(actor, ts DESC)` 索引；auth 附加 `id DESC` 决胜列，与查询的 `ORDER BY ts DESC, id DESC` 对齐 |
+
+**验证**：
+- 迁移后 `pg_indexes` 三张索引存在：`ix_auth_change_log_actor_ts`、`ix_emr_change_actor_ts`、`ix_ins_change_actor_ts`；
+- 库内迁移版本：`auth=20`、`emr=9`、`insurance=5`；
+- 经网关实测 `GET /api/v2/audit/events?actor=qc01` → 200，跨域聚合返回 79 条，
+  最新三条含 `SIGN_POLICY_UPSERT`（emr）与 `RECORD_ARCHIVE`。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–21 节记录整改落地与验证。后续批次按第 5 节路线继续。*

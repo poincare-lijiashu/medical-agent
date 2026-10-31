@@ -445,6 +445,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `emr_smoke.ps1` 109→**118 项**全过；库内 `auth_svc` 到 V19、`emr_svc` 到 V8，
      `emr_change_log` 落 `SIGN_POLICY_UPSERT{ before:3, after:3, mode:UPDATE }`
 
+32. **第三轮评测第十五批整改（2026-11-01）：审计按人检索索引（N-05）**
+   - `auth V20` / `emr V9` / `insurance V5` 各补 `(actor, ts DESC)` 索引（auth 附 `id DESC` 决胜列，
+     与 `ORDER BY ts DESC, id DESC` 对齐）
+   - 验证：三张索引在 `pg_indexes` 存在；迁移版本 auth=20 / emr=9 / insurance=5；
+     经网关 `GET /api/v2/audit/events?actor=qc01` 200 且跨域聚合正常（79 条）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
