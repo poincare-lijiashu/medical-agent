@@ -12,6 +12,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -112,5 +113,22 @@ public final class InsuranceDtos {
 
     /** 单条目录变更：action = CREATE / UPDATE，fields 为发生变化的字段名。 */
     public record CatalogChange(String insuranceCode, String action, List<String> fields) {
+    }
+
+    /** 省局回执登记（REJECTED 时必须给出退回原因）。 */
+    public record ExportReceiptReq(
+            @NotBlank @Pattern(regexp = "ACCEPTED|REJECTED", message = "回执状态不合法")
+            String status,
+            @NotBlank @Size(max = 64) String receiptNo,
+            @Size(max = 512) String message) {
+    }
+
+    /** 导出批次摘要（不含 XML 报文，报文走 /payload 下载）。 */
+    public record ExportBatchSummary(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
+                                     int billCount, BigDecimal totalAmount,
+                                     BigDecimal insuranceAmount, BigDecimal selfPayAmount,
+                                     String payloadHash, String status, String receiptNo,
+                                     Instant receiptAt, String receiptMessage, String createdBy,
+                                     long version, Instant createdAt) {
     }
 }

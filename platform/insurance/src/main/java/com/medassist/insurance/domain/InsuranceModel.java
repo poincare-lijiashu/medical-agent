@@ -112,4 +112,27 @@ public final class InsuranceModel {
             return VOIDED.equals(status);
         }
     }
+
+    /**
+     * 结算清单导出批次（报省局用）。
+     *
+     * <p>payload 固化生成时的 XML 全文，payload_hash 为 SHA-256：
+     * 事后核对"当时报了什么"不依赖目录/参保参数的当前值。
+     * 状态机：GENERATED →（登记回执）→ ACCEPTED / REJECTED，单向不可逆。
+     */
+    public record ExportBatch(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
+                              int billCount, BigDecimal totalAmount, BigDecimal insuranceAmount,
+                              BigDecimal selfPayAmount, String payload, String payloadHash,
+                              String status, String receiptNo, Instant receiptAt,
+                              String receiptMessage, String createdBy, long version,
+                              Instant createdAt) {
+
+        public static final String GENERATED = "GENERATED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String REJECTED = "REJECTED";
+
+        public boolean receipted() {
+            return !GENERATED.equals(status);
+        }
+    }
 }

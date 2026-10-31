@@ -473,6 +473,16 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 282→**301**；`insurance_smoke.ps1` 87→**105 项**全过；
      库内 2 次 apply 仅 1 条逐项审计（第二次 unchanged 未重写）
 
+36. **N5 第二批 B（2026-11-01）：结算清单报盘批次与省局回执**
+   - 新增 `POST /insurance/export-batches?from&to`、`POST /{id}/receipt`、
+     `GET /export-batches`、`GET /{id}`、`GET /{id}/payload`（XML 下载）
+   - 只导 CONFIRMED 清单（按 confirmed_at），单批 ≤500 张、期间 ≤92 天；批次固化 payload + SHA-256
+   - 回执单向 GENERATED→ACCEPTED/REJECTED（CAS），重复登记 409，REJECTED 必填原因
+   - `insurance V6`：`settlement_export_batch` / `settlement_export_item` + 单号序列
+   - 权限：生成与回执需 `insurance:settlement:confirm`（医保办/ADMIN），查询与下载需 read
+   - 验证：单测 301→**316**；`insurance_smoke.ps1` 105→**122 项**全过；
+     库内批次 30 张 / 300.00 / ACCEPTED / version=1，审计含 payloadHash 与 before/after
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

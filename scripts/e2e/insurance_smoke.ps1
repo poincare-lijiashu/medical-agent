@@ -324,6 +324,52 @@ Check 'file.doctor.403' $r.Status 403
 
 Remove-Item $csvPath, $xlsxPath -Force
 
+# ---------------------------------------------------------------- 6.2 settlement export batch + receipt
+$today = (Get-Date).ToString('yyyy-MM-dd')
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
+Check 'export.create' $r.Status 200
+$exportId = (Res $r).id
+$exportBatchNo = (Res $r).batchNo
+$exportHash = (Res $r).payloadHash
+Check 'export.batchNoPrefix' ($exportBatchNo.StartsWith('EB')) 'True'
+Check 'export.status' (Res $r).status 'GENERATED'
+Check 'export.hash' $exportHash.Length 64
+$exportCount = [int]((Res $r).billCount)
+Check 'export.hasBills' ($exportCount -ge 1) 'True'
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/export-batches/$exportId/payload" $null $token
+Check 'export.payload' $r.Status 200
+Check 'export.payload.xml' ($r.Body -match '<settlementBatch') 'True'
+Check 'export.payload.bills' ($r.Body -match '<bill billNo=') 'True'
+Check 'export.payload.summary' ($r.Body -match '<summary billCount=') 'True'
+
+# REJECTED must carry a reason (bean validation -> 422)
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
+    status = 'REJECTED'; receiptNo = 'RJ-1'
+} $token
+Check 'export.reject.noReason.422' $r.Status 422
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
+    status = 'ACCEPTED'; receiptNo = "RC-$suffix"
+} $token
+Check 'export.receipt' $r.Status 200
+Check 'export.receipt.status' (Res $r).status 'ACCEPTED'
+Check 'export.receipt.no' (Res $r).receiptNo "RC-$suffix"
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
+    status = 'ACCEPTED'; receiptNo = "RC2-$suffix"
+} $token
+Check 'export.receipt.twice.409' $r.Status 409
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/export-batches?limit=5" $null $token
+Check 'export.list' $r.Status 200
+$exportList = @(Res $r)
+$matchedExport = @($exportList | Where-Object { $_.batchNo -eq $exportBatchNo })
+Check 'export.list.contains' $matchedExport.Count 1
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $doctorToken
+Check 'export.doctor.403' $r.Status 403
+
 $r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
     name = "NoIns Patient $suffix"; gender = 'MALE'; birthDate = '1970-01-01'
     idType = 'ID_CARD'; idNo = "11010119700101$suffix"

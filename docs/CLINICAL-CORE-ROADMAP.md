@@ -528,6 +528,28 @@ doctor01 确认 **403**、只读 200。
 
 ---
 
+## 1.25 已完成（2026-11-01，N5 第二批 B：结算清单报盘批次与省局回执）
+
+| 能力 | 接口 | 关键保证 |
+|---|---|---|
+| 生成报盘批次 | `POST /insurance/export-batches?from&to`（`insurance:settlement:confirm`） | 只导 `CONFIRMED` 清单（DRAFT/VOIDED 不导），按 `confirmed_at` 落期间；单批 ≤ 500 张、期间 ≤ 92 天、不得晚于今天；空期间 409 |
+| 报文留档 | 批次表 `payload` + `payload_hash` | 固化 XML 与 SHA-256，事后核对不受目录/参保参数后续调整影响 |
+| 回执登记 | `POST /insurance/export-batches/{id}/receipt` | 单向 `GENERATED → ACCEPTED/REJECTED`，期望状态 + 版本号 CAS；重复登记 409；`REJECTED` 必须填原因 |
+| 查询/下载 | `GET /export-batches`、`/{id}`、`/{id}/payload` | 列表不含报文；下载返回 `application/xml` 附件，文件名=批次号 |
+| 审计 | `EXPORT_BATCH_CREATE` / `EXPORT_RECEIPT` | 记录期间、张数、金额、哈希、回执号与 before/after |
+
+**报盘格式**：`settlementBatch version="1"`（院内标准导出格式），属性含批次/期间/汇总，
+每张清单含金额与 `line` 明细；所有文本做 XML 属性转义（项目名/患者号不可信）。
+明细 JSON 损坏时显式失败，不导出残缺报文。
+
+**验证**：
+- 单测 301→**316**（导出服务 10 项、权限 5 项）；
+- `insurance_smoke.ps1` 105→**122 项**全过（生成/哈希/报文/退回必填原因/回执/重复 409/列表/医生 403）；
+- 库内核对：批次 `30 张 / 300.00 / ACCEPTED / version=1`，30 条批次明细，
+  审计 `EXPORT_BATCH_CREATE`（含 payloadHash）与 `EXPORT_RECEIPT`（before→after）。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
@@ -586,6 +608,6 @@ doctor01 确认 **403**、只读 200。
 | 药房未与收费联动 | 发药金额未进收费单（clinical 侧按医嘱计价，两条链尚未打通） | N2 收尾（药品字典与收费项目映射） |
 | 门诊收费未接支付渠道 | 仅记账 | N5 与医保/支付一起 |
 | 无报表与指标 | 无法支撑评审 | N7 |
-| 医保未接省局真实结算 | 需专网/前置机/数字证书；当前为本地测算模型与清单留档 | N5 第二批（按省局规范） |
+| 医保未接省局真实结算 | 需专网/前置机/数字证书；已具备报盘批次 + 回执登记（§1.25），缺省局私有协议适配层 | 按省局规范实现适配层与联调 |
 | 无 DRG/DIP 分组 | 未内置分组器与权重表 | N5 第二批 |
 | 医保目录下载未解析 | 省局 XML/CSV 目录已可解析导入（见 §1.24）；Excel 需另存 CSV | 若省局只发 XLSX，再评估引入 POI |

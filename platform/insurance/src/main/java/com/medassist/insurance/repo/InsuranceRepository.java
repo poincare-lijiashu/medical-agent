@@ -2,6 +2,7 @@ package com.medassist.insurance.repo;
 
 import com.medassist.common.time.BusinessTime;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
+import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
 import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
@@ -469,6 +470,99 @@ public class InsuranceRepository {
                         """)
                 .param("patientId", patientId).param("status", status).param("limit", limit)
                 .query(BILL_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 导出批次（N5 第二批 B）
+
+    private static final RowMapper<ExportBatch> EXPORT_MAPPER = (rs, i) -> new ExportBatch(
+            rs.getObject("id", UUID.class), rs.getString("batch_no"),
+            rs.getDate("period_from").toLocalDate(), rs.getDate("period_to").toLocalDate(),
+            rs.getInt("bill_count"), rs.getBigDecimal("total_amount"),
+            rs.getBigDecimal("insurance_amount"), rs.getBigDecimal("self_pay_amount"),
+            rs.getString("payload"), rs.getString("payload_hash"), rs.getString("status"),
+            rs.getString("receipt_no"),
+            rs.getTimestamp("receipt_at") == null ? null : rs.getTimestamp("receipt_at").toInstant(),
+            rs.getString("receipt_message"), rs.getString("created_by"), rs.getLong("version"),
+            rs.getTimestamp("created_at").toInstant());
+
+    private static final String EXPORT_COLUMNS = """
+            id, batch_no, period_from, period_to, bill_count, total_amount, insurance_amount,
+            self_pay_amount, payload, payload_hash, status, receipt_no, receipt_at,
+            receipt_message, created_by, version, created_at
+            """;
+
+    public String nextExportBatchNo() {
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "insurance_svc.export_batch_no_seq").query(Long.class).single();
+        return "EB" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%05d", seq);
+    }
+
+    /** 期间内已确认（未作废）的清单，按确认时间升序；用于生成报盘。 */
+    public List<SettlementBill> listConfirmedBills(LocalDate from, LocalDate to, int limit) {
+        return jdbc.sql("SELECT " + BILL_COLUMNS + """
+                         FROM insurance_svc.settlement_bill
+                         WHERE status = 'CONFIRMED'
+                           AND confirmed_at >= :fromTs AND confirmed_at < :toTs
+                         ORDER BY confirmed_at, bill_no
+                         LIMIT :limit
+                        """)
+                .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("limit", limit)
+                .query(BILL_MAPPER).list();
+    }
+
+    public void insertExportBatch(ExportBatch b) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.settlement_export_batch
+                            (id, batch_no, period_from, period_to, bill_count, total_amount,
+                             insurance_amount, self_pay_amount, payload, payload_hash, status,
+                             created_by, version)
+                        VALUES (:id, :no, :from, :to, :count, :total, :insurance, :selfPay,
+                                :payload, :hash, 'GENERATED', :actor, 0)
+                        """)
+                .param("id", b.id()).param("no", b.batchNo())
+                .param("from", b.periodFrom()).param("to", b.periodTo())
+                .param("count", b.billCount()).param("total", b.totalAmount())
+                .param("insurance", b.insuranceAmount()).param("selfPay", b.selfPayAmount())
+                .param("payload", b.payload()).param("hash", b.payloadHash())
+                .param("actor", b.createdBy()).update();
+    }
+
+    public void insertExportItem(UUID batchId, UUID billId, String billNo) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.settlement_export_item (batch_id, bill_id, bill_no)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                        """).param(batchId).param(billId).param(billNo).update();
+    }
+
+    public Optional<ExportBatch> findExportBatch(UUID id) {
+        return jdbc.sql("SELECT " + EXPORT_COLUMNS + """
+                         FROM insurance_svc.settlement_export_batch WHERE id = ?
+                        """).param(id).query(EXPORT_MAPPER).optional();
+    }
+
+    public List<ExportBatch> listExportBatches(int limit) {
+        return jdbc.sql("SELECT " + EXPORT_COLUMNS + """
+                         FROM insurance_svc.settlement_export_batch
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """).param("limit", limit).query(EXPORT_MAPPER).list();
+    }
+
+    /** 登记回执：仅 GENERATED 可写，CAS 防止两个窗口重复登记。 */
+    public boolean updateExportReceipt(UUID id, String status, String receiptNo, String message,
+                                       long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_export_batch
+                           SET status = :status, receipt_no = :receiptNo, receipt_message = :message,
+                               receipt_at = now(), version = version + 1
+                         WHERE id = :id AND status = 'GENERATED' AND version = :version
+                        """)
+                .param("status", status).param("receiptNo", receiptNo).param("message", message)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计
