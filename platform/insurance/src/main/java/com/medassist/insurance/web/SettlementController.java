@@ -26,12 +26,16 @@ import java.util.UUID;
  * 医保结算清单。
  *
  * <p>生成时从临床域拉收费明细并本地测算；确认后清单不可再改。
+ *
+ * <p>职责分离：窗口（REGISTRAR）只能生成，确认/作废需要独立的
+ * {@code insurance:settlement:confirm}（医保办/管理员），避免"一个人改目录→出单→确认"全链闭环。
  */
 @RestController
 @RequestMapping("/insurance/settlements")
 public class SettlementController {
 
     private static final String WRITE = "insurance:settlement:write";
+    private static final String CONFIRM = "insurance:settlement:confirm";
     private static final String READ = "insurance:settlement:read";
 
     private final InsuranceService service;
@@ -71,7 +75,7 @@ public class SettlementController {
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
-        Permissions.require(permissions, WRITE);
+        Permissions.require(permissions, CONFIRM);
         return ApiResponse.ok(service.confirm(id, actor));
     }
 
@@ -82,7 +86,7 @@ public class SettlementController {
             @Valid @RequestBody VoidReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
-        Permissions.require(permissions, WRITE);
+        Permissions.require(permissions, CONFIRM);
         return ApiResponse.ok(service.voidBill(id, req.reason(), actor));
     }
 

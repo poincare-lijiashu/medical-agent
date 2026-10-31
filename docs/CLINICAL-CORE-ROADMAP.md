@@ -315,9 +315,9 @@ QC 审批通过（revision 2 / SUBMITTED / 哈希清空 / 修订历史 1 条）�
 **安全边界**：`/api/v2/*/internal/**` 网关 404；clinical 内部接口要求共享令牌（fail-closed，恒定时间比较）；
 医保失败不降级——拿不到收费明细返回 503，绝不凭客户端传参编造金额。
 
-**权限（auth V15）**：新增 `insurance:catalog:manage`、`insurance:member:manage`、
-`insurance:settlement:read`、`insurance:settlement:write`；REGISTRAR（收费/医保窗口）四项全给，
-医师/质控只读，ADMIN 全部。
+**权限（auth V15 + V16）**：`insurance:catalog:manage`、`insurance:member:manage`、
+`insurance:settlement:read`、`insurance:settlement:write`、`insurance:settlement:confirm`；
+窗口（REGISTRAR）出单不确认，医保办（INSURANCE_OFFICER）维护目录与确认，ADMIN 全部（见 §1.17）。
 
 **实测（经网关 32 项断言全过）**：挂号产生收费 → 建目录项（甲类）→ 映射 REG-GENERAL →
 参保登记 → 生成清单（总额 10.00 / 纳入 10.00 / 统筹 10.00 / 自付 0.00）→ 按 visitId 查询 →
@@ -405,6 +405,22 @@ doctor01 确认 **403**、只读 200。
 | 一致性问题 | `setItemEnabled` / `upsertItem` / `member` UPSERT | 三者统一"带版本即 CAS"的语义 |
 
 **验证**：单测 245→**248**；`insurance_smoke.ps1` **66 项**全过。
+
+---
+
+## 1.17 已完成（2026-10-31，第三轮评测第七批：医保职责分离）
+
+| 岗位 | 目录维护 | 参保登记 | 结算查询 | 结算生成 | 结算确认/作废 |
+|---|---|---|---|---|---|
+| REGISTRAR（收费/医保窗口） | ✗ | ✓ | ✓ | ✓ | ✗ |
+| INSURANCE_OFFICER（医保办，V16 新增） | ✓ | ✓ | ✓ | ✗ | ✓ |
+| ADMIN | ✓ | ✓ | ✓ | ✓ | ✓ |
+| DOCTOR / QC | ✗ | ✗ | ✓ | ✗ | ✗ |
+
+`SettlementController` 的 `confirm` / `void` 改为要求 `insurance:settlement:confirm`。
+任意结算链路至少两个岗位，杜绝"单人改目录 → 出单 → 确认"闭环。
+
+**验证**：单测 248→**249**；`insurance_smoke.ps1` 66→**78 项**全过（现场建两个岗位账号跑完整链路）。
 
 ---
 

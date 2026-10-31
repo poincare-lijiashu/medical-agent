@@ -78,7 +78,7 @@ Check 'registration.visitIdPresent' ("$visitId".Length -gt 0) 'True'
 
 # ---------------------------------------------------------------- 3. catalog + mapping
 $r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
-    insuranceCode = 'I-REG-A'; name = '普通门诊诊查费（甲类）'; category = 'SERVICE'
+    insuranceCode = 'I-REG-A'; name = 'General Consultation Fee (Class A)'; category = 'SERVICE'
     payCategory = 'A'; selfPayRatio = 0; priceLimit = 50
 } $token
 Check 'item.create' $r.Status 200
@@ -87,14 +87,14 @@ $itemVersion = (Res $r).version
 
 # optimistic lock: matching version updates, stale version 409
 $r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
-    insuranceCode = 'I-REG-A'; name = '普通门诊诊查费（甲类）'; category = 'SERVICE'
+    insuranceCode = 'I-REG-A'; name = 'General Consultation Fee (Class A)'; category = 'SERVICE'
     payCategory = 'A'; selfPayRatio = 0; priceLimit = 50; version = $itemVersion
 } $token
 Check 'item.update.ok' $r.Status 200
 Check 'item.update.version' (Res $r).version ($itemVersion + 1)
 
 $r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
-    insuranceCode = 'I-REG-A'; name = '普通门诊诊查费（甲类）'; category = 'SERVICE'
+    insuranceCode = 'I-REG-A'; name = 'General Consultation Fee (Class A)'; category = 'SERVICE'
     payCategory = 'A'; selfPayRatio = 0; priceLimit = 50; version = $itemVersion
 } $token
 Check 'item.update.stale.409' $r.Status 409
@@ -196,7 +196,7 @@ $capBill1 = (Res $r).bill.id
 $r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$capBill1/confirm" $null $token
 Check 'cap.bill1.confirm' $r.Status 200
 
-# 同一患者同科室同一天只允许一个在诊挂号，第二次换科室
+# one active outpatient registration per patient+dept+day: use another dept for the 2nd bill
 $r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
     patientId = $capPatient; deptId = '22222222-2222-2222-2222-222222222222'
     doctorId = 'admin01'; visitType = 'OUTPATIENT'
@@ -214,8 +214,8 @@ CheckNum 'cap.bill2.selfPay' (Res $r).bill.selfPayAmount 5.00
 # ---------------------------------------------------------------- 6. batch import + not-enrolled
 $r = Invoke-Api 'POST' '/api/v2/insurance/items/import' @{
     items = @(
-        @{ insuranceCode = 'I-DRUG-B'; name = '示例乙类药品'; category = 'DRUG'; payCategory = 'B'; selfPayRatio = 0.1 },
-        @{ insuranceCode = 'I-MAT-C'; name = '示例丙类耗材'; category = 'MATERIAL'; payCategory = 'C'; selfPayRatio = 0 }
+        @{ insuranceCode = 'I-DRUG-B'; name = 'Sample Class B Drug'; category = 'DRUG'; payCategory = 'B'; selfPayRatio = 0.1 },
+        @{ insuranceCode = 'I-MAT-C'; name = 'Sample Class C Material'; category = 'MATERIAL'; payCategory = 'C'; selfPayRatio = 0 }
     )
 } $token
 Check 'item.import' $r.Status 200
@@ -265,6 +265,70 @@ Check 'perm.doctor.confirm.403' $r.Status 403
 
 $r = Invoke-Api 'GET' "/api/v2/insurance/settlements/$billId" $null $doctorToken
 Check 'perm.doctor.read' $r.Status 200
+
+# ---------------------------------------------------------------- 8. duty separation (S-16)
+$r = Invoke-Api 'POST' '/api/v2/auth/users' @{
+    username = "cashier$suffix"; password = 'Med@2026'; displayName = 'Window Cashier'
+    roles = @('REGISTRAR')
+} $token
+Check 'user.cashier.create' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/auth/users' @{
+    username = "yb$suffix"; password = 'Med@2026'; displayName = 'Insurance Officer'
+    roles = @('INSURANCE_OFFICER')
+} $token
+Check 'user.officer.create' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = "cashier$suffix"; password = 'Med@2026' }
+Check 'login.cashier' $r.Status 200
+$cashierToken = (Res $r).accessToken
+
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = "yb$suffix"; password = 'Med@2026' }
+Check 'login.officer' $r.Status 200
+$officerToken = (Res $r).accessToken
+
+$r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
+    name = "Duty Patient $suffix"; gender = 'FEMALE'; birthDate = '1980-01-01'
+    idType = 'ID_CARD'; idNo = "11010119800101$suffix"
+} $token
+$dutyPatient = (Res $r).id
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $dutyPatient; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 300000
+} $token
+Check 'duty.member.register' $r.Status 200
+$r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
+    patientId = $dutyPatient; deptId = $deptId; doctorId = 'admin01'; visitType = 'OUTPATIENT'
+} $token
+$dutyVisit = (Res $r).id
+
+# window: can generate, cannot confirm, cannot touch catalog
+$r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $dutyVisit } $cashierToken
+Check 'duty.cashier.generate' $r.Status 200
+$dutyBill = (Res $r).bill.id
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$dutyBill/confirm" $null $cashierToken
+Check 'duty.cashier.confirm.403' $r.Status 403
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
+    insuranceCode = "I-DUTY-$suffix"; name = 'Duty Separation Item'; category = 'SERVICE'
+    payCategory = 'C'; selfPayRatio = 0
+} $cashierToken
+Check 'duty.cashier.catalog.403' $r.Status 403
+
+# officer: can maintain catalog and confirm, cannot generate
+$r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
+    insuranceCode = "I-DUTY-$suffix"; name = 'Duty Separation Item'; category = 'SERVICE'
+    payCategory = 'C'; selfPayRatio = 0
+} $officerToken
+Check 'duty.officer.catalog.ok' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$dutyBill/confirm" $null $officerToken
+Check 'duty.officer.confirm.ok' $r.Status 200
+Check 'duty.officer.confirm.by' (Res $r).bill.confirmedBy "yb$suffix"
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $dutyVisit } $officerToken
+Check 'duty.officer.generate.403' $r.Status 403
 
 Write-Output "-----"
 Write-Output "BILL_ID=$billId"

@@ -6,6 +6,7 @@ import com.medassist.insurance.service.InsuranceService;
 import com.medassist.insurance.web.InsuranceDtos.GenerateBillReq;
 import com.medassist.insurance.web.InsuranceDtos.ItemReq;
 import com.medassist.insurance.web.InsuranceDtos.MemberReq;
+import com.medassist.insurance.web.InsuranceDtos.VoidReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,8 +24,8 @@ import static org.mockito.Mockito.verify;
 /**
  * 医保接口权限矩阵（直接驱动 Controller，不启动 Spring 上下文）。
  *
- * <p>锁住 V15 的授权边界：目录维护与参保登记需要 manage；结算生成/确认需要 write；
- * 只读权限不得触发生成、确认或目录改动。
+ * <p>锁住授权边界：目录维护与参保登记需要 manage；结算生成需要 write；
+ * 确认/作废需要独立的 confirm（V16 职责分离，窗口岗不得自行确认）。
  */
 class InsuranceControllerPermissionTest {
 
@@ -84,14 +85,30 @@ class InsuranceControllerPermissionTest {
     }
 
     @Test
-    @DisplayName("结算确认：只读权限不能确认（终态操作）")
-    void confirmRequiresWrite() {
+    @DisplayName("结算确认：只有 confirm 权限可确认（write 不够）")
+    void confirmRequiresConfirmPermission() {
+        var voidReq = new VoidReq("test");
+
         assertThatThrownBy(() -> settlementController.confirm(id,
-                "insurance:settlement:read", "doctor01"))
+                "insurance:settlement:read,insurance:settlement:write", "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        assertThatThrownBy(() -> settlementController.voidBill(id, voidReq,
+                "insurance:settlement:write", "cashier01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(service, never()).confirm(any(), anyString());
+        verify(service, never()).voidBill(any(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("结算确认：持有 confirm 权限放行")
+    void confirmAllowedWithConfirmPermission() {
+        settlementController.confirm(id, "insurance:settlement:confirm", "yb01");
+
+        verify(service).confirm(id, "yb01");
     }
 
     @Test

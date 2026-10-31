@@ -368,6 +368,16 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      带版本不一致 → 409；批量导入显式传 null（以文件为准的强制覆盖）
    - 验证：单测 245→**248**；insurance E2E **66 项**全过（带版本更新 version+1、旧版本 409）
 
+24. **第三轮评测第七批整改（2026-10-31）：医保职责分离（S-16）**
+   - `auth/V16__insurance_duty_separation.sql`：新增权限 `insurance:settlement:confirm` +
+     内置角色 `INSURANCE_OFFICER`（医保办）；REGISTRAR **撤销 catalog:manage**、不授 confirm；
+     医保办有 catalog:manage + confirm 但**没有 settlement:write**
+   - `SettlementController` 的 confirm / void 改要求 `insurance:settlement:confirm`
+   - 效果：窗口（出单）与医保办（确认）分离，改目录的人不能自己出单，出单的人不能自己确认
+   - 验证：单测 248→**249**；insurance E2E 66→**78 项**全过（现场建两个岗位账号跑完整链路）
+   - 踩坑：E2E 脚本必须纯 ASCII——中文用例会被 PowerShell 5.1 当 ANSI 读，
+     尾字节吃掉后面的单引号，报 `The hash literal was incomplete`（已把脚本里历史中文串转 ASCII）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

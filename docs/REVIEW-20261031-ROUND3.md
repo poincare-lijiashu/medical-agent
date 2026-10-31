@@ -370,4 +370,32 @@ S-10/S-11（年度累计/按就诊日期校验参保）、S-28~S-30（E2E 补强
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–12 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 13. 整改状态（2026-10-31，第七批：医保职责分离）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| S-16 | 窗口岗一人可完成"改目录 → 出单 → 确认"全链 | ✅ 已修 | `auth/V16__insurance_duty_separation.sql`：新增权限 `insurance:settlement:confirm`、新增内置角色 `INSURANCE_OFFICER`（医保办）；**REGISTRAR 撤销 catalog:manage、不授 confirm**；医保办持有 catalog:manage + confirm 但**没有 settlement:write**；`SettlementController` 的 confirm/void 改要求 confirm 权限 |
+
+**岗位矩阵（整改后）**
+
+| 角色 | catalog:manage | member:manage | settlement:read | settlement:write | settlement:confirm |
+|---|---|---|---|---|---|
+| REGISTRAR（窗口） | ✗ | ✓ | ✓ | ✓ | ✗ |
+| INSURANCE_OFFICER（医保办） | ✓ | ✓ | ✓ | ✗ | ✓ |
+| ADMIN | ✓ | ✓ | ✓ | ✓ | ✓ |
+| DOCTOR / QC | ✗ | ✗ | ✓ | ✗ | ✗ |
+
+任意一条结算链路至少经过两个岗位；改目录的人无法自己出单，出单的人无法自己确认。
+
+**验证**：
+- 单测 **248 → 249**（write 不能确认/作废、confirm 权限放行）；
+- `insurance_smoke.ps1` **66 → 78 项**全过：现场创建 `REGISTRAR` 与 `INSURANCE_OFFICER` 账号 →
+  窗口出单 200 / 确认 403 / 改目录 403；医保办改目录 200 / 确认 200（`confirmedBy=yb####`）/ 出单 403。
+
+**踩坑**：E2E 脚本必须是纯 ASCII——本次新增中文用例后 PowerShell 5.1 按 ANSI 读取，
+中文字节把后续的单引号当成双字节字符的尾字节"吃掉"，报 `The hash literal was incomplete`
+（不是编码乱码那么直观）。已把脚本里历史遗留的中文串一并转成 ASCII。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–13 节记录整改落地与验证。后续批次按第 5 节路线继续。*
