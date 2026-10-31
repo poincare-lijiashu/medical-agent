@@ -15,6 +15,9 @@ data:
   LOG_TO_FILE: "off"
   BGE_M3_PATH: {{ printf "%s/embedding/bge-m3" .Values.aiCore.models.mountPath | quote }}
   RERANKER_PATH: {{ printf "%s/reranker/bge-reranker-large" .Values.aiCore.models.mountPath | quote }}
+  # 离网默认：只加载本地权重，禁止运行时访问 HuggingFace（院内无外网时否则会挂到超时）
+  EMBED_ALLOW_DOWNLOAD: "false"
+  # 注：PUBMED_ENABLED 走 aiCore.env（values.yaml 默认 true；纯内网环境在 values 覆盖为 false）
   {{- if .Values.external.nacos.enabled }}
   NACOS_ENABLED: "true"
   NACOS_SERVER_ADDRESSES: {{ .Values.external.nacos.serverAddr | quote }}

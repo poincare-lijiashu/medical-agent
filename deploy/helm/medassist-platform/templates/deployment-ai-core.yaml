@@ -100,6 +100,15 @@ spec:
             # 向量库
             - name: MILVUS_URI
               value: {{ .Values.external.milvus.uri | quote }}
+            {{- if .Values.external.redis.enabled }}
+            # 多副本必需：限流计数 / 会话记忆 / 令牌撤销时间戳跨实例共享。
+            # 不配置时退化为进程内内存（单副本可用，多副本会各算各的）。
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.redis.existingSecret }}
+                  key: {{ .Values.external.redis.secretKey }}
+            {{- end }}
             {{- if .Values.external.milvus.existingSecret }}
             - name: MILVUS_TOKEN
               valueFrom:

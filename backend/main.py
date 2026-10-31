@@ -97,7 +97,16 @@ async def lifespan(app: FastAPI):
         get_bge_m3()
         logger.info("medical_agent.startup.embedder_ready")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("medical_agent.startup.embedder_failed", error=str(exc)[:120])
+        # 生产环境升级为 error：权重缺失时知识库检索会整体不可用，必须让人看见
+        _prod = str(getattr(settings, "app_env", "")).lower() in {"production", "prod", "staging"}
+        (logger.error if _prod else logger.warning)(
+            "medical_agent.startup.embedder_failed", error=str(exc)[:240])
+    try:
+        # 离网自检：把"哪些能力依赖外网"在启动日志里讲清楚（不阻断启动）
+        from backend.core.offline_guard import log_network_dependencies
+        log_network_dependencies()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_agent.startup.network_deps_failed", error=str(exc)[:120])
     try:
         # P0-5：注册到 Nacos（默认关闭）。内部已做后台重试，不阻塞启动；
         # 注册失败仅告警——AI 能力优先于"被服务发现"。

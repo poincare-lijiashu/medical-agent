@@ -1,0 +1,40 @@
+# ============================================================================
+# MedAssist 离网交付镜像清单（air-gapped image list）
+#
+# 用法：
+#   1) 在有外网/有镜像站的机器上：./pull-and-save.ps1   （或 pull-and-save.sh）
+#   2) 拷贝 images-doctor.tar / images-*.tar 到院内跳板机
+#   3) 在院内主机：./load-and-push.sh <registry-host>
+#   4) helm install 时用 --set imageRegistry=<registry-host>/medassist
+#
+# 规则：
+#   * 每一行一个镜像（可带注释）；**必须写死版本 tag**，禁止 latest；
+#   * 交付时把下面 "业务镜像" 的版本改为本次构建号（CI 产出）；
+#   * 镜像总量约 4~6 GB（Milvus 与 OAP 占大头），按需裁剪：
+#     - 不用 Milvus/Attu/etcd/MinIO 的科室级部署，可只搬前 4 个业务镜像 + PG + Redis + Nacos。
+# ============================================================================
+
+# ---- 业务镜像（本次发布产物，tag 由 CI 注入，必须与 Chart values 一致）----
+harbor.hospital.local/medassist/platform-gateway:1.0.0
+harbor.hospital.local/medassist/platform-auth:1.0.0
+harbor.hospital.local/medassist/platform-empi:1.0.0
+harbor.hospital.local/medassist/ai-core:1.0.0
+
+# ---- 基础设施（有状态中间件；如院方已有托管实例可跳过）----
+postgres:15-alpine
+redis:7-alpine
+nacos/nacos-server:v2.5.1
+mysql:8.0.36
+
+# ---- 向量检索（知识库 RAG）----
+milvusdb/milvus:v2.4.0
+quay.io/coreos/etcd:v3.5.14
+minio/minio:RELEASE.2024-12-18T13-15-44Z
+zilliz/attu:v2.4.12
+
+# ---- 可观测（APM / 日志）----
+apache/skywalking-oap-server:11.0.0
+apache/skywalking-ui:11.0.0
+apache/skywalking-java-agent:9.8.0-java21
+grafana/loki:3.4.2
+grafana/promtail:3.4.2

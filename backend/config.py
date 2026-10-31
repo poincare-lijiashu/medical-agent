@@ -113,6 +113,16 @@ class Settings(BaseSettings):
     bge_reranker_path: str = ""
     minilm_intent_model_path: str = ""
 
+    # ---- 离网（air-gapped）运行 ----
+    # 院内网络通常没有外网、更没有代理。以下开关保证"没网也能跑"：
+    # embed_allow_download=False（默认）：BGE-M3 只从本地目录加载，禁止运行时去
+    #   HuggingFace 拉权重（否则无外网时启动会卡在网络超时上）。院内交付前把权重
+    #   预置到 BGE_M3_PATH（Helm 已挂 models PVC 到 /app/backend/models）。
+    # pubmed_enabled=True：PubMed 文献检索（eutils.ncbi.nlm.nih.gov）需要外网；
+    #   纯内网环境置 false，检索直接跳过，不产生任何网络等待。
+    embed_allow_download: bool = False
+    pubmed_enabled: bool = True
+
     # 鉴权
     auth_jwt_secret: str = "dev-secret-change-in-production"
     # W3.5 密钥轮换：换 secret 时把旧值挪到这里（过渡期），验签先新后旧——在线用户

@@ -33,6 +33,11 @@ external:
     oapEndpoint: skywalking-oap.observability.svc.cluster.local:11800
   milvus:
     uri: http://milvus-staging.medassist-infra.svc.cluster.local:19530
+  # 多副本共享状态（限流计数 / 会话记忆 / 撤销时间戳）：staging 起必须开启，
+  # 否则多副本各算各的（限流失真、会话串号）。Secret 内键 url 存完整连接串。
+  redis:
+    enabled: true
+    existingSecret: medassist-redis
 
 migration:
   enabled: true

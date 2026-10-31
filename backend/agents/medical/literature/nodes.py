@@ -64,6 +64,9 @@ _PUBMED_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)  # �
 
 async def _pubmed_ids(q: str, k: int = 5):
     global _PUBMED_BREAKER_UNTIL
+    # 离网开关：院内无外网时置 PUBMED_ENABLED=false，直接跳过（连 DNS 都不发）
+    if not bool(getattr(settings, "pubmed_enabled", True)):
+        return []
     if time.monotonic() < _PUBMED_BREAKER_UNTIL:
         return []  # 熔断中：跳过，不挂时间
     try:

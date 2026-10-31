@@ -409,9 +409,18 @@ Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagen
 
 ## 9. 已知边界与后续
 
+- **离网交付（无外网/无 VPN）**：镜像清单、`docker save/load`、院内 Harbor 推送、模型权重预置、
+  断网验收步骤见 [`deploy/offline/README.md`](offline/README.md)。运行时离网开关：
+  `EMBED_ALLOW_DOWNLOAD=false`（默认，权重缺失直接报错）、`PUBMED_ENABLED`（生产 false）、
+  `backend/core/offline_guard.py` 启动自检网络依赖。
+- **Redis（多副本共享状态）**：`external.redis.enabled=true` 时注入 `REDIS_URL`（Secret 键 `url`，
+  完整连接串）。staging/prod 已默认开启；关闭会退化为进程内内存（多副本限流/会话失真）。
+- **AI 中台单副本约束**：审计/复核队列/知识库任务仍落 `/app/data` JSON，多副本会互相覆盖；
+  扩容前先迁 PG/Redis，再换共享存储并开 PDB（`values-prod.yaml` 已注记）。
 - **Argo CD 仓库地址为占位**：落地时替换并配置仓库凭据（见 §5.1）
 - **AI 中台 /metrics 未纳入抓取**：需管理员令牌（防止路由分布外泄），P1 改为独立内网指标端点
 - **Nacos 单机形态**：compose 生产叠加层是单机 + 外部 MySQL；HA 需 3 节点集群
 - **迁移只前进**：回滚应用版本前需确认表结构兼容（§5.3）
 - **GPU 推理**：`aiCore.env.EMBED_DEVICE=cuda` + nodeSelector/tolerations 按院区 GPU 节点配置
-- **P1 待办**：令牌撤销/刷新、逐接口权限点强制、Argo Rollouts 灰度、日志采集（Loki/ELK）
+- **院内信息化与医保对接**：网络分区、医保专线/前置机、接口规范要点与落地路线见
+  [`docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md`](../docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md)

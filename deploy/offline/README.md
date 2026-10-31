@@ -1,0 +1,147 @@
+# 离网（air-gapped）交付手册
+
+> 目标：**院内网络没有任何外网出口、也没有代理**，整套系统仍能完成安装、启动、升级。
+> 本文所有步骤都不要求部署主机访问互联网；联网只发生在"准备阶段"的一台搬运机上。
+
+---
+
+## 0. 一句话流程
+
+```
+[联网机] 构建镜像 → pull-and-save → 拷贝介质
+        ↓（U 盘 / 内网文件中转 / 跳板机）
+[院内主机] load-and-push → 推到 Harbor → helm install → 导入模型权重 → 验收
+```
+
+---
+
+## 1. 准备阶段（可联网的一台机器）
+
+### 1.1 构建业务镜像
+
+```bash
+docker build --build-arg SERVICE=gateway -t harbor.hospital.local/medassist/platform-gateway:1.0.0 -f platform/Dockerfile platform
+docker build --build-arg SERVICE=auth    -t harbor.hospital.local/medassist/platform-auth:1.0.0    -f platform/Dockerfile platform
+docker build --build-arg SERVICE=empi    -t harbor.hospital.local/medassist/platform-empi:1.0.0    -f platform/Dockerfile platform
+docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
+```
+
+构建阶段需要 Maven 与 PyPI；**运行阶段不需要**（多阶段构建，运行镜像只含 JRE / venv）。
+
+### 1.2 打包 Chart
+
+```bash
+helm package deploy/helm/medassist-platform -d offline-bundle/
+# 产物：medassist-platform-0.1.1.tgz
+```
+
+### 1.3 拉取并保存全部镜像
+
+```powershell
+.\deploy\offline\pull-and-save.ps1 -OutDir .\offline-bundle
+# 生成 *.tar + MANIFEST.txt（含 digest 与大小）
+```
+
+`images.txt` 逐行列出镜像；**业务镜像 tag 必须与 Chart values 一致**，第三方镜像已固定版本，禁止 `latest`。
+
+### 1.4 预置向量模型权重（BGE-M3）
+
+系统默认 `EMBED_ALLOW_DOWNLOAD=false`：**运行时不会去 HuggingFace 下载权重**，缺失则知识库检索报错。
+
+```bash
+# 在联网机下载权重目录（约 2.2 GB），随介质一起拷贝
+huggingface-cli download BAAI/bge-m3 --local-dir bge-m3
+```
+
+院内落盘位置对应 Helm 的 models PVC（默认挂载 `/app/backend/models`），容器内设置
+`BGE_M3_PATH=/app/backend/models/bge-m3`。
+
+### 1.5 介质清单（缺一不可）
+
+| 文件 | 说明 |
+|---|---|
+| `*.tar` | 全部镜像（含 MANIFEST 校验） |
+| `medassist-platform-<ver>.tgz` | Helm Chart |
+| `bge-m3/` | 向量模型权重目录 |
+| `deploy/offline/` | 本文与两个脚本 |
+| `nacos/mysql-schema.sql` | Nacos 持久化建表（若院方未托管 MySQL） |
+
+---
+
+## 2. 部署阶段（院内，无外网）
+
+### 2.1 推镜像到院内 Harbor
+
+```bash
+./load-and-push.sh harbor.hospital.local/medassist ./offline-bundle
+```
+
+脚本会把第三方镜像也推到同一 Harbor（`harbor.hospital.local/postgres:15-alpine` 等），
+保证集群拉镜像时**没有任何外网请求**。
+
+### 2.2 安装
+
+```bash
+helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \
+  -n medassist-prod --create-namespace \
+  -f values-prod.yaml \
+  --set imageRegistry=harbor.hospital.local/medassist/medassist \
+  --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 \
+  --set empi.image.tag=1.0.0 --set aiCore.image.tag=1.0.0 \
+  --set gateway.env[0].name=GATEWAY_TRUSTED_PROXIES --set gateway.env[0].value=<集群内网段>
+```
+
+> `environment: production` 下若 image tag 仍是 `-SNAPSHOT`，渲染会直接失败（防止"发布成功但跑旧快照"）。
+
+### 2.3 AI 中台离网配置（重要）
+
+| 变量 | 院内取值 | 说明 |
+|---|---|---|
+| `QWEN_BASE_URL` | `http://vllm.hospital.local/v1` | 指向院内 vLLM / Ollama 网关；**不要用公网 dashscope** |
+| `QWEN_API_KEY` | 内部网关口令（可留空） | 内网网关通常不校验 |
+| `LLM_PRIVATE_HOSTS_ALLOWLIST` | `vllm.hospital.local` | 私网模型地址必须显式白名单（防 SSRF 防线不失效） |
+| `PUBMED_ENABLED` | `false` | 纯内网必须关闭，检索不再尝试访问 NCBI |
+| `EMBED_ALLOW_DOWNLOAD` | `false`（默认） | 只加载本地权重 |
+| `BGE_M3_PATH` | `/app/backend/models/bge-m3` | 上一步预置的权重目录 |
+
+启动日志会打印 `medical_agent.network_deps`，列出当前仍指向公网的依赖；
+`APP_ENV=production` 且存在公网 LLM 地址时输出 WARN，便于巡检发现漏改。
+
+### 2.4 验收（全部离线完成）
+
+```bash
+kubectl -n medassist-prod get pods            # 全部 Running/Ready
+kubectl -n medassist-prod describe pod <pod> | grep -i image   # 镜像必须来自院内 Harbor
+kubectl -n medassist-prod get events --sort-by=.lastTimestamp | grep -i "pull"  # 不应出现外网拉取失败
+```
+
+再用网关走一遍：登录 → 患者查询 → 知识库检索 → 文献问答（离线时应走"无文献证据"降级，不报错、不卡顿）。
+
+---
+
+## 3. 常见问题
+
+**Q：镜像拉不到，报 `no such host`？**
+A：`imageRegistry` 没指到院内 Harbor，或第三方镜像没按 `load-and-push.sh` 推到同一 registry。
+
+**Q：AI 问答超时 30s？**
+A：`QWEN_BASE_URL` 还是公网地址。院内必须指向内部推理网关，并把主机加入
+`LLM_PRIVATE_HOSTS_ALLOWLIST`。
+
+**Q：知识库检索报"权重未就绪"？**
+A：没有预置 BGE-M3。把权重放到 models PVC，并确认 `BGE_M3_PATH` 目录存在；
+本轮起系统**不会**自动联网下载（这是刻意的：无外网时静默下载会把启动拖成几分钟超时）。
+
+**Q：文献回答里没有 PubMed 引用？**
+A：`PUBMED_ENABLED=false` 的正常表现；文献能力的检索证据来自院内知识库与指南语料。
+
+---
+
+## 4. 与"开发机"的边界
+
+本仓库**不假设**任何开发机路径或端口：
+
+- 代码/配置中无 `D:\...`、`C:\Users\...` 等绝对路径（脚本说明已改为 `python scripts/xxx.py`）；
+- 服务之间的地址全部走环境变量（`PG_HOST`、`MILVUS_URI`、`NACOS_SERVER_ADDR` …），
+  Chart 用 Service DNS 注入，不依赖 `127.0.0.1`；
+- 交付物是"镜像 tar + Chart + 模型权重"，与构建机解耦；构建机下线不影响院内运行。

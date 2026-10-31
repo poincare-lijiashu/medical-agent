@@ -39,6 +39,11 @@ external:
     uri: http://milvus-prod.medassist-infra.svc.cluster.local:19530
     existingSecret: medassist-milvus
     secretKey: token
+  # 多副本共享状态（限流计数 / 会话记忆 / 撤销时间戳）：生产必须开启。
+  # 两台 AI 中台实例（或后续扩容）各算各的会导致限流失真、会话串号。
+  redis:
+    enabled: true
+    existingSecret: medassist-redis
 
 migration:
   enabled: true
@@ -81,6 +86,9 @@ empi:
 
 aiCore:
   enabled: true
+  # 单副本：AI 中台的审计/复核队列/知识库任务仍落 /app/data 下的 JSON 文件
+  # （多副本并发写会互相覆盖）。扩容前必须先把这些状态迁到 PG/Redis，
+  # 再把 models/data 换成共享存储（ReadOnlyMany/RWX）并开启 PDB。
   replicaCount: 1
   resources:
     requests: {cpu: "2", memory: 4Gi}
@@ -89,6 +97,9 @@ aiCore:
     APP_ENV: production
     # 有 GPU 节点时改 cuda，并配置 nodeSelector/tolerations（见 deploy/README.md）
     EMBED_DEVICE: cpu
+    # 院内默认无外网：关闭 PubMed 检索（不产生任何外网等待）。
+    # 若院方开通了 NCBI 白名单，可改回 "true"。
+    PUBMED_ENABLED: "false"
   # 生产必须由存储团队预置模型 PVC（建议共享存储 ReadOnlyMany，多副本共享同一份权重）
   models: {existingClaim: medassist-models, create: false}
   data: {existingClaim: medassist-ai-core-data, create: false}

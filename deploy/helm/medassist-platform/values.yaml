@@ -87,6 +87,15 @@ external:
     existingSecret: ""
     secretKey: token
 
+  # Redis：AI 中台多副本的共享状态后端（登录/问答限流计数、会话记忆、令牌撤销时间戳）。
+  # 关闭时退化为进程内内存——单副本可用，多副本会各算各的（限流失真、会话串号）；
+  # 因此 staging/production 必须开启（见 values-staging.yaml / values-prod.yaml）。
+  redis:
+    enabled: false
+    # Secret 中存放完整连接串（redis://:密码@host:6379/0），键名 url
+    existingSecret: medassist-redis
+    secretKey: url
+
 # ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
 secrets:
   create: false
@@ -97,6 +106,8 @@ secrets:
   jwtSecret: ""
   empiFieldKey: ""
   empiHashSalt: ""
+  # 仅 external.redis.enabled=true 时使用：完整连接串（redis://:密码@host:6379/0）
+  redisUrl: ""
 
 serviceAccount:
   create: true
@@ -287,6 +298,8 @@ aiCore:
   env:
     APP_ENV: production
     EMBED_DEVICE: cpu
+    # PubMed 文献检索需要外网；纯内网部署（医院常态）改成 "false"
+    PUBMED_ENABLED: "true"
   nodeSelector: {}
   tolerations: []
   affinity: {}

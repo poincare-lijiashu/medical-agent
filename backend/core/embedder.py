@@ -59,10 +59,27 @@ def get_bge_m3():
         from FlagEmbedding import BGEM3FlagModel
         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         local = _resolve_local_path(settings.bge_m3_path, backend_dir)
+        allow_download = bool(getattr(settings, "embed_allow_download", False))
+        if local and os.path.isdir(local):
+            path = local
+        elif allow_download:
+            # 仅显式允许时才接受"模型 ID"，由 FlagEmbedding/HF 联网拉取（开发机用）
+            path = settings.bge_m3_path
+        else:
+            # 离网默认：权重缺失就明确失败，绝不静默联网（院内无外网时否则会长时间挂起）
+            raise RuntimeError(
+                "BGE-M3 权重未就绪：BGE_M3_PATH="
+                f"{settings.bge_m3_path!r} 不是本地目录，且 EMBED_ALLOW_DOWNLOAD=false。"
+                "请把权重预置到 BGE_M3_PATH（容器内默认挂载 /app/backend/models），"
+                "或在允许联网的开发环境显式设置 EMBED_ALLOW_DOWNLOAD=true。"
+            )
+        if not allow_download:
+            # 双保险：即使底层库尝试联网，也强制离线（避免无外网环境下长时间 DNS/TLS 超时）
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         dev = device()
         fp16 = dev == "cuda"  # fp16 仅在 GPU 上加速；CPU 上用 fp32 更稳
-        path = local if (local and os.path.isdir(local)) else settings.bge_m3_path
-        logger.info("medical_agent.embedder.loading", path=path, device=dev)
+        logger.info("medical_agent.embedder.loading", path=path, device=dev, allow_download=allow_download)
         _model = BGEM3FlagModel(path, use_fp16=fp16, device=dev)
         logger.info("medical_agent.embedder.loaded", device=dev)
         return _model
