@@ -28,8 +28,9 @@ public class HttpPatientClient implements PatientClient {
 
     private static final Logger log = LoggerFactory.getLogger(HttpPatientClient.class);
 
-    /** EMPI 内部接口返回的最小投影（不含 PHI 明文）。 */
-    public record InternalPatient(UUID id, String patientNo, String name, String status) {
+    /** EMPI 内部接口返回的最小投影（不含 PHI 明文；birthDate 仅用于用药安全规则）。 */
+    public record InternalPatient(UUID id, String patientNo, String name, String status,
+                                  java.time.LocalDate birthDate) {
     }
 
     private final RestClient client;
@@ -75,6 +76,6 @@ public class HttpPatientClient implements PatientClient {
             throw new BusinessException(ErrorCode.PATIENT_MERGE_CONFLICT,
                     "该患者档案状态为 " + p.status() + "，不能开方（请使用主档案）");
         }
-        return new PatientRef(p.id(), p.patientNo(), p.name());
+        return new PatientRef(p.id(), p.patientNo(), p.name(), p.birthDate());
     }
 }

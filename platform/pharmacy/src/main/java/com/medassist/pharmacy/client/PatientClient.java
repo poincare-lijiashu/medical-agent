@@ -1,5 +1,6 @@
 package com.medassist.pharmacy.client;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -10,8 +11,12 @@ import java.util.UUID;
  */
 public interface PatientClient {
 
-    /** 患者最小投影（跨服务只传必要字段）。 */
-    record PatientRef(UUID id, String patientNo, String name) {
+    /**
+     * 患者最小投影（跨服务只传必要字段）。
+     *
+     * <p>{@code birthDate} 仅用于用药安全规则（儿童/老年禁忌），不参与展示。
+     */
+    record PatientRef(UUID id, String patientNo, String name, LocalDate birthDate) {
     }
 
     PatientRef requireActive(UUID patientId);

@@ -7,6 +7,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
+import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -42,7 +43,9 @@ public class PharmacyRepository {
             rs.getObject("package_size") == null ? null : rs.getInt("package_size"),
             rs.getBigDecimal("price"), rs.getString("insurance_code"),
             rs.getString("insurance_category"), rs.getInt("antibiotic_level"),
-            rs.getBoolean("narcotic"), rs.getBoolean("enabled"), rs.getLong("version"));
+            rs.getBoolean("narcotic"), rs.getBoolean("enabled"), rs.getLong("version"),
+            rs.getBigDecimal("max_daily_dose"), rs.getBoolean("pediatric_contraindicated"),
+            rs.getBoolean("elderly_caution"));
 
     private static final RowMapper<DrugBatch> BATCH_MAPPER = (rs, i) -> new DrugBatch(
             rs.getObject("id", UUID.class), rs.getObject("drug_id", UUID.class),
@@ -67,7 +70,10 @@ public class PharmacyRepository {
             rs.getString("spec"), rs.getInt("quantity"), rs.getString("unit"),
             rs.getString("dosage"), rs.getString("frequency"),
             rs.getObject("days") == null ? null : rs.getInt("days"),
-            rs.getBigDecimal("unit_price"), rs.getBigDecimal("amount"));
+            rs.getBigDecimal("unit_price"), rs.getBigDecimal("amount"),
+            rs.getBigDecimal("single_dose"), rs.getString("dose_unit"),
+            rs.getObject("times_per_day") == null ? null : rs.getInt("times_per_day"),
+            rs.getBigDecimal("daily_dose"));
 
     private static final RowMapper<Dispense> DISPENSE_MAPPER = (rs, i) -> new Dispense(
             rs.getObject("id", UUID.class), rs.getString("dispense_no"),
@@ -119,7 +125,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, drug_code, name, trade_name, spec, dosage_form, unit,
                                package_unit, package_size, price, insurance_code,
-                               insurance_category, antibiotic_level, narcotic, enabled, version
+                               insurance_category, antibiotic_level, narcotic, enabled, version, max_daily_dose, pediatric_contraindicated, elderly_caution
                           FROM pharmacy_svc.md_drug WHERE id = ?
                         """).param(id).query(DRUG_MAPPER).optional();
     }
@@ -128,7 +134,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, drug_code, name, trade_name, spec, dosage_form, unit,
                                package_unit, package_size, price, insurance_code,
-                               insurance_category, antibiotic_level, narcotic, enabled, version
+                               insurance_category, antibiotic_level, narcotic, enabled, version, max_daily_dose, pediatric_contraindicated, elderly_caution
                           FROM pharmacy_svc.md_drug WHERE drug_code = ?
                         """).param(drugCode).query(DRUG_MAPPER).optional();
     }
@@ -140,7 +146,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, drug_code, name, trade_name, spec, dosage_form, unit,
                                package_unit, package_size, price, insurance_code,
-                               insurance_category, antibiotic_level, narcotic, enabled, version
+                               insurance_category, antibiotic_level, narcotic, enabled, version, max_daily_dose, pediatric_contraindicated, elderly_caution
                           FROM pharmacy_svc.md_drug
                          WHERE (CAST(:pattern AS text) IS NULL OR name ILIKE CAST(:pattern AS text)
                                 OR drug_code ILIKE CAST(:pattern AS text)
@@ -160,11 +166,12 @@ public class PharmacyRepository {
                         INSERT INTO pharmacy_svc.md_drug
                             (id, drug_code, name, trade_name, spec, dosage_form, unit,
                              package_unit, package_size, price, insurance_code,
-                             insurance_category, antibiotic_level, narcotic, enabled, version)
+                             insurance_category, antibiotic_level, narcotic, enabled, version, max_daily_dose, pediatric_contraindicated, elderly_caution)
                         VALUES (:id, :code, :name, CAST(:tradeName AS text), :spec, :form, :unit,
                                 CAST(:packageUnit AS text), CAST(:packageSize AS integer), :price,
                                 CAST(:insuranceCode AS text),
-                                :insuranceCategory, :antibioticLevel, :narcotic, true, 0)
+                                :insuranceCategory, :antibioticLevel, :narcotic, true, 0,
+                                CAST(:maxDailyDose AS numeric), :pediatric, :elderly)
                         """)
                 .param("id", d.id()).param("code", d.drugCode()).param("name", d.name())
                 .param("tradeName", d.tradeName()).param("spec", d.spec())
@@ -173,7 +180,10 @@ public class PharmacyRepository {
                 .param("price", d.price()).param("insuranceCode", d.insuranceCode())
                 .param("insuranceCategory", d.insuranceCategory())
                 .param("antibioticLevel", d.antibioticLevel())
-                .param("narcotic", d.narcotic()).update();
+                .param("narcotic", d.narcotic())
+                .param("maxDailyDose", d.maxDailyDose())
+                .param("pediatric", d.pediatricContraindicated())
+                .param("elderly", d.elderlyCaution()).update();
     }
 
     /** 调价（CAS：版本号必须一致；历史处方保存的是快照，不受影响）。 */
@@ -319,10 +329,12 @@ public class PharmacyRepository {
         jdbc.sql("""
                         INSERT INTO pharmacy_svc.prescription_item
                             (id, prescription_id, drug_id, drug_code, drug_name, spec, quantity,
-                             unit, dosage, frequency, days, unit_price, amount)
+                             unit, dosage, frequency, days, unit_price, amount, single_dose, dose_unit, times_per_day)
                         VALUES (:id, :rxId, :drugId, :code, :name, :spec, :qty,
                                 :unit, CAST(:dosage AS text), CAST(:frequency AS text),
-                                CAST(:days AS integer), :unitPrice, :amount)
+                                CAST(:days AS integer), :unitPrice, :amount,
+                                CAST(:singleDose AS numeric), CAST(:doseUnit AS text),
+                                CAST(:timesPerDay AS integer))
                         """)
                 .param("id", item.id()).param("rxId", item.prescriptionId())
                 .param("drugId", item.drugId()).param("code", item.drugCode())
@@ -330,7 +342,9 @@ public class PharmacyRepository {
                 .param("qty", item.quantity()).param("unit", item.unit())
                 .param("dosage", item.dosage()).param("frequency", item.frequency())
                 .param("days", item.days()).param("unitPrice", item.unitPrice())
-                .param("amount", item.amount()).update();
+                .param("amount", item.amount())
+                .param("singleDose", item.singleDose()).param("doseUnit", item.doseUnit())
+                .param("timesPerDay", item.timesPerDay()).update();
     }
 
     public Optional<Prescription> findPrescription(UUID id) {
@@ -355,7 +369,7 @@ public class PharmacyRepository {
     public List<PrescriptionItem> listPrescriptionItems(UUID prescriptionId) {
         return jdbc.sql("""
                         SELECT id, prescription_id, drug_id, drug_code, drug_name, spec, quantity,
-                               unit, dosage, frequency, days, unit_price, amount
+                               unit, dosage, frequency, days, unit_price, amount, single_dose, dose_unit, times_per_day, daily_dose
                           FROM pharmacy_svc.prescription_item
                          WHERE prescription_id = ? ORDER BY created_at
                         """).param(prescriptionId).query(RX_ITEM_MAPPER).list();
@@ -512,6 +526,34 @@ public class PharmacyRepository {
                           FROM pharmacy_svc.dispense_return
                          WHERE dispense_id = ? ORDER BY created_at
                         """).param(dispenseId).query(RETURN_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 审方记录
+
+    private static final RowMapper<PrescriptionAudit> AUDIT_MAPPER = (rs, i) -> new PrescriptionAudit(
+            rs.getObject("id", UUID.class), rs.getObject("prescription_id", UUID.class),
+            rs.getString("phase"), rs.getString("level"), rs.getString("rule_code"),
+            rs.getString("message"), rs.getTimestamp("created_at").toInstant());
+
+    public void insertAudit(PrescriptionAudit audit) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.prescription_audit
+                            (id, prescription_id, phase, level, rule_code, message, detail)
+                        VALUES (:id, :rxId, :phase, :level, :ruleCode, :message, CAST(:detail AS jsonb))
+                        """)
+                .param("id", audit.id()).param("rxId", audit.prescriptionId())
+                .param("phase", audit.phase()).param("level", audit.level())
+                .param("ruleCode", audit.ruleCode()).param("message", audit.message())
+                .param("detail", "{}").update();
+    }
+
+    /** 某处方的全部审方记录（按时间正序）。 */
+    public List<PrescriptionAudit> listAudits(UUID prescriptionId) {
+        return jdbc.sql("""
+                        SELECT id, prescription_id, phase, level, rule_code, message, created_at
+                          FROM pharmacy_svc.prescription_audit
+                         WHERE prescription_id = ? ORDER BY created_at
+                        """).param(prescriptionId).query(AUDIT_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

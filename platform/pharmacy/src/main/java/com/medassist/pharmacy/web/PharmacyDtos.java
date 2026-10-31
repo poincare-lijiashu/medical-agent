@@ -6,6 +6,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
+import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
@@ -34,7 +35,7 @@ public final class PharmacyDtos {
 
     // ---------------------------------------------------------------- 药品字典
 
-    /** 新建药品。 */
+    /** 新建药品（含用药安全属性：日剂量上限、儿童禁用、老年慎用）。 */
     public record CreateDrugReq(
             @NotBlank @Size(max = 64) String drugCode,
             @NotBlank @Size(max = 128) String name,
@@ -49,7 +50,10 @@ public final class PharmacyDtos {
             @Size(max = 32) String insuranceCode,
             @Pattern(regexp = "A|B|C|NONE", message = "医保类别只能是 A/B/C/NONE") String insuranceCategory,
             @Min(0) Integer antibioticLevel,
-            Boolean narcotic) {
+            Boolean narcotic,
+            @DecimalMin(value = "0.001", message = "日剂量上限必须大于 0") BigDecimal maxDailyDose,
+            Boolean pediatricContraindicated,
+            Boolean elderlyCaution) {
     }
 
     /** 调价（历史处方保存快照，不受影响）。 */
@@ -81,13 +85,21 @@ public final class PharmacyDtos {
 
     // ---------------------------------------------------------------- 处方
 
-    /** 处方药品行。 */
+    /**
+     * 处方药品行。
+     *
+     * <p>结构化剂量（singleDose + doseUnit + timesPerDay）可选；三项要么全给、要么全不给。
+     * 只给自由文本 "0.5g tid" 时，日剂量上限规则跳过（不猜测文本语义）。
+     */
     public record PrescriptionLine(
             @NotBlank String drugCode,
             @Min(1) int quantity,
             @Size(max = 64) String dosage,
             @Size(max = 32) String frequency,
-            @Min(1) Integer days) {
+            @Min(1) Integer days,
+            @DecimalMin(value = "0.001", message = "单次剂量必须大于 0") BigDecimal singleDose,
+            @Size(max = 16) String doseUnit,
+            @Min(1) @jakarta.validation.constraints.Max(24) Integer timesPerDay) {
     }
 
     /**
@@ -129,6 +141,23 @@ public final class PharmacyDtos {
 
     /** 发药视图（含按批次的明细与退药记录）。 */
     public record DispenseView(Dispense dispense, List<DispenseItem> items, List<DispenseReturn> returns) {
+    }
+
+    /**
+     * 审方结果视图。
+     *
+     * @param blocked 存在 BLOCK 级问题（审核不可通过）
+     */
+    public record PrescriptionAuditView(UUID prescriptionId, List<PrescriptionAudit> audits,
+                                        boolean blocked, boolean warned) {
+
+        public static PrescriptionAuditView of(UUID prescriptionId, List<PrescriptionAudit> audits) {
+            boolean blocked = audits.stream()
+                    .anyMatch(a -> PrescriptionAudit.LEVEL_BLOCK.equals(a.level()));
+            boolean warned = audits.stream()
+                    .anyMatch(a -> PrescriptionAudit.LEVEL_WARN.equals(a.level()));
+            return new PrescriptionAuditView(prescriptionId, audits, blocked, warned);
+        }
     }
 
     /** 药品视图（附带当前总库存，便于药房窗口判断）。 */

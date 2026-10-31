@@ -10,6 +10,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
+import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.repo.PharmacyRepository;
 import com.medassist.pharmacy.web.PharmacyDtos.CreatePrescriptionReq;
@@ -53,13 +54,16 @@ public class PrescriptionService {
     private final PharmacyRepository repo;
     private final PatientClient patientClient;
     private final PharmacyBillingService billing;
+    private final PrescriptionAuditService auditService;
     private final ObjectMapper objectMapper;
 
     public PrescriptionService(PharmacyRepository repo, PatientClient patientClient,
-                               PharmacyBillingService billing, ObjectMapper objectMapper) {
+                               PharmacyBillingService billing, PrescriptionAuditService auditService,
+                               ObjectMapper objectMapper) {
         this.repo = repo;
         this.patientClient = patientClient;
         this.billing = billing;
+        this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
 
@@ -69,9 +73,11 @@ public class PrescriptionService {
     public PrescriptionView create(CreatePrescriptionReq req, String actor) {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
         String billingMode = billingModeOf(req.billingMode(), req.visitId());
+        Integer ageYears = ageOf(patient);
 
         Set<String> seen = new HashSet<>();
         List<PrescriptionItem> items = new ArrayList<>();
+        List<Drug> drugs = new ArrayList<>();
         BigDecimal total = BigDecimal.ZERO;
         UUID prescriptionId = UUID.randomUUID();
 
@@ -85,14 +91,25 @@ public class PrescriptionService {
                     .filter(Drug::enabled)
                     .orElseThrow(() -> new BusinessException(ErrorCode.DRUG_NOT_FOUND,
                             "药品不存在或已停用：" + code));
+            validateDose(line);
             BigDecimal amount = drug.price()
                     .multiply(BigDecimal.valueOf(line.quantity()))
                     .setScale(2, RoundingMode.HALF_UP);
+            BigDecimal dailyDose = dailyDoseOf(line);
             items.add(new PrescriptionItem(UUID.randomUUID(), prescriptionId, drug.id(),
                     drug.drugCode(), drug.name(), drug.spec(), line.quantity(), drug.unit(),
                     blankToNull(line.dosage()), blankToNull(line.frequency()), line.days(),
-                    drug.price(), amount));
+                    drug.price(), amount,
+                    line.singleDose(), blankToNull(line.doseUnit()), line.timesPerDay(), dailyDose));
+            drugs.add(drug);
             total = total.add(amount);
+        }
+
+        // 前置审方：BLOCK 级直接拒绝开方（避免患者拿到禁忌处方）
+        List<PrescriptionAuditService.Finding> findings = auditService.evaluate(items, drugs, ageYears);
+        if (auditService.hasBlock(findings)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "处方存在用药禁忌，请修改后重新开立：" + blockMessages(findings));
         }
 
         Prescription rx = new Prescription(prescriptionId, repo.nextPrescriptionNo(),
@@ -103,10 +120,12 @@ public class PrescriptionService {
         for (PrescriptionItem item : items) {
             repo.insertPrescriptionItem(item);
         }
+        auditService.record(prescriptionId, PrescriptionAudit.PHASE_CREATE, findings);
 
         audit(actor, "RX_CREATE", "PRESCRIPTION", prescriptionId.toString(), Map.of(
                 "prescriptionNo", rx.prescriptionNo(), "patientNo", patient.patientNo(),
-                "itemCount", items.size(), "totalAmount", total, "billingMode", billingMode));
+                "itemCount", items.size(), "totalAmount", total, "billingMode", billingMode,
+                "auditFindings", findings.size()));
         return new PrescriptionView(repo.findPrescription(prescriptionId).orElseThrow(), items);
     }
 
@@ -119,6 +138,18 @@ public class PrescriptionService {
         if (!Prescription.PENDING_REVIEW.equals(rx.status())) {
             throw new BusinessException(ErrorCode.PRESCRIPTION_STATUS_INVALID,
                     "只有待审核处方可以审核，当前：" + rx.status());
+        }
+        // 审核复评：药品字典可能在开方后被修改（新增禁忌/调低剂量上限），必须按当前字典再判一次
+        List<PrescriptionItem> reviewItems = repo.listPrescriptionItems(prescriptionId);
+        List<Drug> reviewDrugs = reviewItems.stream()
+                .map(i -> repo.findDrug(i.drugId()).orElse(null))
+                .toList();
+        List<PrescriptionAuditService.Finding> findings =
+                auditService.evaluate(reviewItems, reviewDrugs, null);
+        auditService.record(prescriptionId, PrescriptionAudit.PHASE_REVIEW, findings);
+        if (approve && auditService.hasBlock(findings)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "处方存在严重用药禁忌，不能通过审核，请驳回并让医师修改后重开：" + blockMessages(findings));
         }
         String rejectReason = null;
         String next;
@@ -324,6 +355,53 @@ public class PrescriptionService {
 
     private String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s.trim();
+    }
+
+    /** 患者年龄（出生日期缺失时返回 null，年龄相关规则跳过）。 */
+    private static Integer ageOf(PatientClient.PatientRef patient) {
+        if (patient == null || patient.birthDate() == null) {
+            return null;
+        }
+        return java.time.Period.between(patient.birthDate(), BusinessTime.today()).getYears();
+    }
+
+    /** 结构化剂量三项要么全给、要么全不给（避免"只填单次剂量"导致日剂量算错）。 */
+    private static void validateDose(PrescriptionLine line) {
+        boolean anyDose = line.singleDose() != null
+                || (line.doseUnit() != null && !line.doseUnit().isBlank())
+                || line.timesPerDay() != null;
+        boolean complete = line.singleDose() != null
+                && line.doseUnit() != null && !line.doseUnit().isBlank()
+                && line.timesPerDay() != null;
+        if (anyDose && !complete) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "结构化剂量需同时提供单次剂量、单位与每日次数（药品：" + line.drugCode() + "）");
+        }
+    }
+
+    /** 日剂量 = 单次剂量 × 每日次数（与数据库生成列同口径）。 */
+    private static BigDecimal dailyDoseOf(PrescriptionLine line) {
+        if (line.singleDose() == null || line.timesPerDay() == null) {
+            return null;
+        }
+        return line.singleDose().multiply(BigDecimal.valueOf(line.timesPerDay()))
+                .setScale(3, RoundingMode.HALF_UP);
+    }
+
+    private static String blockMessages(List<PrescriptionAuditService.Finding> findings) {
+        return findings.stream()
+                .filter(f -> PrescriptionAudit.LEVEL_BLOCK.equals(f.level()))
+                .map(PrescriptionAuditService.Finding::message)
+                .distinct()
+                .collect(java.util.stream.Collectors.joining("；"));
+    }
+
+    /** 审方记录查询（药师端展示）。 */
+    public com.medassist.pharmacy.web.PharmacyDtos.PrescriptionAuditView auditView(UUID prescriptionId) {
+        repo.findPrescription(prescriptionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));
+        return com.medassist.pharmacy.web.PharmacyDtos.PrescriptionAuditView
+                .of(prescriptionId, auditService.list(prescriptionId));
     }
 
     /**

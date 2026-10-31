@@ -670,6 +670,21 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `pharmacy_smoke` 的库存断言改为"基线 + 增量"，脚本可重复跑（此前只能跑在干净库上）
    - 遗留：支付渠道实际退款（随 N5/财务凭证）、处方前置审方规则引擎、药品字典批量导入
 
+50. **N2 补强（2026-11-01）：处方前置审方（用药安全规则）**
+   - 药品字典新增安全属性（`pharmacy V3`）：`max_daily_dose`、`pediatric_contraindicated`、`elderly_caution`
+   - 处方明细新增结构化剂量：`single_dose`/`dose_unit`/`times_per_day`，`daily_dose` 为**数据库生成列**
+     （single_dose × times_per_day），三项要么全给要么全不给（否则 422）
+   - 规则：`R-DOSE-001` 日剂量超限 → **BLOCK**；`R-PED-001` 儿童（<14）禁用 → **BLOCK**；
+     `R-GER-001` 老年（≥65）慎用 → WARN；`R-ABX-001` 特殊使用级抗菌药 → WARN；`R-NARC-001` 麻醉类 → INFO
+   - 开方：出现 BLOCK 直接 422（不落处方）；WARN/INFO 落 `prescription_audit`
+   - 审核：按**当前字典**复评（phase=REVIEW），有 BLOCK 不能通过（只能驳回后重开）；
+     查询 `GET /pharmacy/prescriptions/{id}/audit` 返回 `audits/blocked/warned`
+   - EMPI 内部接口新增 `birthDate`（最小必要字段；年龄缺失时年龄规则跳过）
+   - **实测**：新增 `pharmacy_audit_smoke.ps1` **22 项全过**（剂量超限 422、剂量合规 200、
+     结构化剂量缺项 422、儿童禁用药 422、特殊级抗菌药 WARN 且审核通过、CREATE/REVIEW 两阶段记录）
+   - 回归：全量单测 **487 项**；`pharmacy_smoke`、`pharmacy_billing_smoke`、`platform_smoke` 全过
+   - 遗留：抗菌药物分级授权（需医师职称/会诊单）、肝肾功能剂量调整（需检验值）、相互作用库、字典批量导入
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -715,6 +730,10 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   否则桩不生效、方法返回 false，测试报的是"业务状态冲突"而不是"桩写错"
 - E2E 里的绝对库存/绝对计数会在第二次运行就失败：跨次运行的累积量用"基线 + 增量"断言
   （本轮已把 `pharmacy_smoke` 的库存检查改成这种写法）
+- Windows PowerShell 5.1 按 ANSI 读**无 BOM** 脚本：脚本里写中文字符串常量（如 `-like '*日剂量*'`）
+  会被读成乱码，断言必失败。E2E 脚本一律 ASCII，中文内容用状态码/规则码/ASCII 片段校验
+- 给 record 加字段会波及**所有** `new` 调用（含测试里的对象构造）：先全仓 grep 再改；
+  Maven 增量编译有时不会因测试源码变化而重编，看到 `NoSuchMethodError` 先 `clean test-compile`
 - 单库多 schema 跨域 UNION 查询要先 `to_regclass('schema.table')` 探测：某域未部署时
   直接写死表名会让整个接口 500（结果还要缓存，别每次查询都探测）
 - `mvn -Pprod-package` 排除 dev 配置后，本地 `java -jar` 仍用普通构建（不带 profile），

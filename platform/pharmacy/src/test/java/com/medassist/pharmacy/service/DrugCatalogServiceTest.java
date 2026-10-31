@@ -48,7 +48,7 @@ class DrugCatalogServiceTest {
 
         DrugView view = service.create(new CreateDrugReq("DRUG-AMOX-025", "阿莫西林胶囊", "阿莫仙",
                 "0.25g*24粒", "CAPSULE", "盒", "粒", 24, new BigDecimal("12.5"),
-                "XA01AA0401010101010", "A", 1, false), "pharm01");
+                "XA01AA0401010101010", "A", 1, false, null, null, null), "pharm01");
 
         assertThat(view.drug().price()).isEqualByComparingTo("12.50");
         assertThat(view.drug().insuranceCategory()).isEqualTo(Drug.INSURANCE_A);
@@ -65,7 +65,7 @@ class DrugCatalogServiceTest {
 
         DrugView view = service.create(new CreateDrugReq("DRUG-NS-500", "0.9%氯化钠注射液", null,
                 "500ml", "INJECTION", "瓶", "瓶", 1, new BigDecimal("3.20"),
-                null, null, null, null), "pharm01");
+                null, null, null, null, null, null, null), "pharm01");
 
         assertThat(view.drug().insuranceCategory()).isEqualTo(Drug.INSURANCE_NONE);
         assertThat(view.drug().antibioticLevel()).isZero();
@@ -79,7 +79,7 @@ class DrugCatalogServiceTest {
 
         assertThatThrownBy(() -> service.create(new CreateDrugReq("DRUG-AMOX-025", "阿莫西林胶囊",
                 null, "0.25g*24粒", "CAPSULE", "盒", null, null, new BigDecimal("12.50"),
-                null, null, null, null), "pharm01"))
+                null, null, null, null, null, null, null), "pharm01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONFLICT);
@@ -113,6 +113,6 @@ class DrugCatalogServiceTest {
 
     private Drug drug() {
         return new Drug(drugId, "DRUG-AMOX-025", "阿莫西林胶囊", "阿莫仙", "0.25g*24粒",
-                "CAPSULE", "盒", "粒", 24, new BigDecimal("12.50"), null, "A", 1, false, true, 0L);
+                "CAPSULE", "盒", "粒", 24, new BigDecimal("12.50"), null, "A", 1, false, true, 0L, null, false, false);
     }
 }

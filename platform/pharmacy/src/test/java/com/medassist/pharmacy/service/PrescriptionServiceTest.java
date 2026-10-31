@@ -57,11 +57,11 @@ class PrescriptionServiceTest {
 
     private final Drug amoxicillin = new Drug(drugId, "DRUG-AMOX-025", "阿莫西林胶囊", "阿莫仙",
             "0.25g*24粒", "CAPSULE", "盒", "粒", 24, new BigDecimal("12.50"),
-            "XA01AA0401010101010", "A", 1, false, true, 0L);
+            "XA01AA0401010101010", "A", 1, false, true, 0L, null, false, false);
 
     private final Drug morphine = new Drug(UUID.randomUUID(), "DRUG-MOR-10", "盐酸吗啡注射液", null,
             "10mg", "INJECTION", "支", "支", 1, new BigDecimal("5.60"),
-            null, "B", 0, true, true, 0L);
+            null, "B", 0, true, true, 0L, null, false, false);
 
     @BeforeEach
     void setUp() {
@@ -70,10 +70,10 @@ class PrescriptionServiceTest {
         chargeClient = mock(ClinicalChargeClient.class);
         PharmacyBillingService billing = new PharmacyBillingService(repo, chargeClient,
                 JsonMapper.builder().build());
-        service = new PrescriptionService(repo, patientClient, billing, JsonMapper.builder().build());
+        service = new PrescriptionService(repo, patientClient, billing, new PrescriptionAuditService(repo), JsonMapper.builder().build());
 
         when(patientClient.requireActive(patientId))
-                .thenReturn(new PatientClient.PatientRef(patientId, "P20261031000001", "张三"));
+                .thenReturn(new PatientClient.PatientRef(patientId, "P20261031000001", "张三", java.time.LocalDate.of(1990, 1, 1)));
         when(repo.nextPrescriptionNo()).thenReturn("RX20261031000001");
         when(repo.nextDispenseNo()).thenReturn("DP20261031000001");
         when(repo.listPrescriptionItems(rxId)).thenReturn(List.of());
@@ -116,7 +116,7 @@ class PrescriptionServiceTest {
         when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
 
         PrescriptionView view = service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
-                List.of(new PrescriptionLine("DRUG-AMOX-025", 2, "0.5g", "tid", 3))), "doctor01");
+                List.of(new PrescriptionLine("DRUG-AMOX-025", 2, "0.5g", "tid", 3, null, null, null))), "doctor01");
 
         assertThat(view.prescription().status()).isEqualTo(Prescription.PENDING_REVIEW);
         assertThat(view.prescription().totalAmount()).isEqualByComparingTo("25.00");
@@ -136,8 +136,8 @@ class PrescriptionServiceTest {
         when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
 
         assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
-                List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null),
-                        new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null))), "doctor01"))
+                List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null, null, null, null),
+                        new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("重复开立");
         verify(repo, never()).insertPrescription(any());
@@ -149,7 +149,7 @@ class PrescriptionServiceTest {
         when(repo.findDrugByCode("DRUG-X")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
-                List.of(new PrescriptionLine("DRUG-X", 1, null, null, null))), "doctor01"))
+                List.of(new PrescriptionLine("DRUG-X", 1, null, null, null, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.DRUG_NOT_FOUND);
@@ -218,7 +218,7 @@ class PrescriptionServiceTest {
         DrugBatch far = batch("B-FAR", 10, 300);
         PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
                 amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 5, "盒",
-                null, null, null, amoxicillin.price(), new BigDecimal("62.50"));
+                null, null, null, amoxicillin.price(), new BigDecimal("62.50"), null, null, null, null);
 
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
                 new BigDecimal("62.50"), 3L)));
@@ -245,7 +245,7 @@ class PrescriptionServiceTest {
         DrugBatch only = batch("B-1", 2, 30);
         PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
                 amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 5, "盒",
-                null, null, null, amoxicillin.price(), new BigDecimal("62.50"));
+                null, null, null, amoxicillin.price(), new BigDecimal("62.50"), null, null, null, null);
 
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
                 new BigDecimal("62.50"), 3L)));
@@ -267,7 +267,7 @@ class PrescriptionServiceTest {
     void dispenseNarcoticRequiresChecker() {
         PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, morphine.id(),
                 morphine.drugCode(), morphine.name(), morphine.spec(), 1, "支",
-                null, null, null, morphine.price(), new BigDecimal("5.60"));
+                null, null, null, morphine.price(), new BigDecimal("5.60"), null, null, null, null);
 
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
                 new BigDecimal("5.60"), 3L)));
@@ -285,7 +285,7 @@ class PrescriptionServiceTest {
     void dispenseNarcoticRejectsSameChecker() {
         PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, morphine.id(),
                 morphine.drugCode(), morphine.name(), morphine.spec(), 1, "支",
-                null, null, null, morphine.price(), new BigDecimal("5.60"));
+                null, null, null, morphine.price(), new BigDecimal("5.60"), null, null, null, null);
 
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
                 new BigDecimal("5.60"), 3L)));
@@ -395,7 +395,7 @@ class PrescriptionServiceTest {
 
         assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null,
                 Prescription.BILLING_DISPENSE,
-                List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null))), "doctor01"))
+                List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("visitId");
         verify(repo, never()).insertPrescription(any());
@@ -408,7 +408,7 @@ class PrescriptionServiceTest {
         DrugBatch batch = batch("B-1", 10, 300);
         PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
                 amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 2, "盒",
-                null, null, null, amoxicillin.price(), new BigDecimal("25.00"));
+                null, null, null, amoxicillin.price(), new BigDecimal("25.00"), null, null, null, null);
 
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
@@ -441,7 +441,7 @@ class PrescriptionServiceTest {
         DrugBatch batch = batch("B-1", 10, 300);
         PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
                 amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 1, "盒",
-                null, null, null, amoxicillin.price(), new BigDecimal("12.50"));
+                null, null, null, amoxicillin.price(), new BigDecimal("12.50"), null, null, null, null);
 
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
@@ -498,5 +498,41 @@ class PrescriptionServiceTest {
         verify(chargeClient).refund(eq(itemId), org.mockito.ArgumentMatchers.eq(new BigDecimal("25.00")),
                 anyString(), eq("pharm01"));
         verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_CHARGED));
+    }
+
+    // ---------------------------------------------------------------- 前置审方（用药安全）
+
+    @Test
+    @DisplayName("前置审方：儿童禁用药品开方直接拒绝，且不落处方")
+    void createRejectsPediatricContraindicatedDrug() {
+        when(patientClient.requireActive(patientId)).thenReturn(new PatientClient.PatientRef(
+                patientId, "P20261031000001", "小明", LocalDate.now().minusYears(5)));
+        Drug childForbidden = new Drug(UUID.randomUUID(), "DRUG-KID", "儿童禁用药", null, "1g",
+                "TABLET", "盒", "片", 10, new BigDecimal("10.00"), null, "A", 0, false, true, 0L,
+                null, true, false);
+        when(repo.findDrugByCode("DRUG-KID")).thenReturn(Optional.of(childForbidden));
+
+        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null, null,
+                null, List.of(new PrescriptionLine("DRUG-KID", 1, null, null, null, null, null, null))),
+                "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("用药禁忌");
+        verify(repo, never()).insertPrescription(any());
+    }
+
+    @Test
+    @DisplayName("前置审方：WARN 级问题落审方记录，处方仍可开立")
+    void createRecordsWarnFindings() {
+        Drug specialAntibiotic = new Drug(UUID.randomUUID(), "DRUG-ABX3", "特殊级抗菌药", null, "1g",
+                "INJECTION", "支", "支", 1, new BigDecimal("88.00"), null, "B", 3, false, true, 0L,
+                null, false, false);
+        when(repo.findDrugByCode("DRUG-ABX3")).thenReturn(Optional.of(specialAntibiotic));
+
+        service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
+                List.of(new PrescriptionLine("DRUG-ABX3", 1, null, null, null, null, null, null))),
+                "doctor01");
+
+        verify(repo).insertAudit(any());
+        verify(repo).insertPrescription(any(Prescription.class));
     }
 }

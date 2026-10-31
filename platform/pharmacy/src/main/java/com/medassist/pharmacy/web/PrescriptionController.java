@@ -8,6 +8,7 @@ import com.medassist.pharmacy.service.PrescriptionService;
 import com.medassist.pharmacy.web.PharmacyDtos.CreatePrescriptionReq;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseReq;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
+import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionAuditView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
 import com.medassist.pharmacy.web.PharmacyDtos.ReviewReq;
@@ -80,7 +81,7 @@ public class PrescriptionController {
         return ApiResponse.ok(service.detail(id));
     }
 
-    /** 审核：approve=true 通过；false 驳回（必须写理由）。 */
+    /** 审核：approve=true 通过；false 驳回（必须写理由）。存在 BLOCK 级审方问题时不能通过。 */
     @PostMapping("/{id}/review")
     public ApiResponse<PrescriptionView> review(
             @PathVariable UUID id,
@@ -89,6 +90,15 @@ public class PrescriptionController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, REVIEW);
         return ApiResponse.ok(service.review(id, req.approve(), req.reason(), actor));
+    }
+
+    /** 审方记录（开方/审核两次评估的规则命中，供药师端展示与追溯）。 */
+    @GetMapping("/{id}/audit")
+    public ApiResponse<PrescriptionAuditView> audit(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.auditView(id));
     }
 
     /** 发药（按近效期优先扣批次；麻醉/精神类必须提供核对人）。 */

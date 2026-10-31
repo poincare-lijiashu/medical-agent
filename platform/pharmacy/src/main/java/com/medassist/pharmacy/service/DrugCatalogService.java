@@ -49,7 +49,10 @@ public class DrugCatalogService {
                 req.insuranceCategory() == null || req.insuranceCategory().isBlank()
                         ? Drug.INSURANCE_NONE : req.insuranceCategory().trim(),
                 req.antibioticLevel() == null ? 0 : req.antibioticLevel(),
-                Boolean.TRUE.equals(req.narcotic()), true, 0L);
+                Boolean.TRUE.equals(req.narcotic()), true, 0L,
+                req.maxDailyDose() == null ? null : req.maxDailyDose().setScale(3, RoundingMode.HALF_UP),
+                Boolean.TRUE.equals(req.pediatricContraindicated()),
+                Boolean.TRUE.equals(req.elderlyCaution()));
         try {
             repo.insertDrug(drug);
         } catch (DataIntegrityViolationException e) {
@@ -57,7 +60,10 @@ public class DrugCatalogService {
         }
         audit(actor, "DRUG_CREATE", "DRUG", drug.id().toString(), Map.of(
                 "drugCode", drug.drugCode(), "name", drug.name(), "price", drug.price(),
-                "insuranceCategory", drug.insuranceCategory()));
+                "insuranceCategory", drug.insuranceCategory(),
+                "maxDailyDose", drug.maxDailyDose() == null ? "" : drug.maxDailyDose(),
+                "pediatricContraindicated", drug.pediatricContraindicated(),
+                "elderlyCaution", drug.elderlyCaution()));
         return new DrugView(drug, 0);
     }
 

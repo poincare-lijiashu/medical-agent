@@ -20,7 +20,9 @@ public final class PharmacyModel {
     public record Drug(UUID id, String drugCode, String name, String tradeName, String spec,
                        String dosageForm, String unit, String packageUnit, Integer packageSize,
                        BigDecimal price, String insuranceCode, String insuranceCategory,
-                       int antibioticLevel, boolean narcotic, boolean enabled, long version) {
+                       int antibioticLevel, boolean narcotic, boolean enabled, long version,
+                       BigDecimal maxDailyDose, boolean pediatricContraindicated,
+                       boolean elderlyCaution) {
 
         public static final String INSURANCE_A = "A";
         public static final String INSURANCE_B = "B";
@@ -70,11 +72,28 @@ public final class PharmacyModel {
         }
     }
 
-    /** 处方明细（含价格快照）。 */
+    /** 处方明细（含价格快照；结构化剂量可选，缺失时剂量规则跳过）。 */
     public record PrescriptionItem(UUID id, UUID prescriptionId, UUID drugId, String drugCode,
                                    String drugName, String spec, int quantity, String unit,
                                    String dosage, String frequency, Integer days,
-                                   BigDecimal unitPrice, BigDecimal amount) {
+                                   BigDecimal unitPrice, BigDecimal amount,
+                                   BigDecimal singleDose, String doseUnit, Integer timesPerDay,
+                                   BigDecimal dailyDose) {
+    }
+
+    /**
+     * 审方记录（追加式）。
+     *
+     * @param phase CREATE=开方时评估 / REVIEW=审核时复评（药品字典可能已变）
+     */
+    public record PrescriptionAudit(UUID id, UUID prescriptionId, String phase, String level,
+                                    String ruleCode, String message, Instant createdAt) {
+
+        public static final String LEVEL_BLOCK = "BLOCK";
+        public static final String LEVEL_WARN = "WARN";
+        public static final String LEVEL_INFO = "INFO";
+        public static final String PHASE_CREATE = "CREATE";
+        public static final String PHASE_REVIEW = "REVIEW";
     }
 
     /** 发药单。 */

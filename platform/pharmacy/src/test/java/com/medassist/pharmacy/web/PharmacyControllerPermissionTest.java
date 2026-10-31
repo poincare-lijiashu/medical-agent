@@ -61,7 +61,7 @@ class PharmacyControllerPermissionTest {
     @DisplayName("药品字典维护：只有 pharmacy:drug:manage 能建药")
     void drugCreateRequiresManage() {
         var req = new CreateDrugReq("D1", "药A", null, "1g", "TABLET", "盒", null, null,
-                java.math.BigDecimal.ONE, null, null, null, null);
+                java.math.BigDecimal.ONE, null, null, null, null, null, null, null);
 
         assertThatThrownBy(() -> drugController.create(req, "pharmacy:read", "pharm01"))
                 .isInstanceOf(BusinessException.class)
@@ -86,7 +86,7 @@ class PharmacyControllerPermissionTest {
     @DisplayName("开方：医师权限 pharmacy:prescription:create 放行")
     void prescriptionCreateAllowedForDoctorPermission() {
         var req = new CreatePrescriptionReq(id, null, null, null, null,
-                List.of(new PrescriptionLine("D1", 1, null, null, null)));
+                List.of(new PrescriptionLine("D1", 1, null, null, null, null, null, null)));
 
         prescriptionController.create(req, "pharmacy:prescription:create", "doctor01");
 

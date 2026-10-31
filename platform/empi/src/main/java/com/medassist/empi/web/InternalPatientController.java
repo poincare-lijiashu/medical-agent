@@ -25,7 +25,8 @@ import java.util.UUID;
  *   <li>网关对 {@code /api/v2/*&#47;internal/**} 直接 404，外部无法经网关访问；</li>
  *   <li>仍要求共享令牌 {@code X-Internal-Token}，令牌未配置时**拒绝所有请求**（fail-closed），
  *       避免"忘了配令牌"变成裸奔的内部接口；</li>
- *   <li>只返回最小字段（id/patientNo/name/status），证件号、手机号、住址一律不出域；</li>
+ *   <li>只返回最小字段（id/patientNo/name/status/birthDate），证件号、手机号、住址一律不出域；</li>
+ *   <li>{@code birthDate} 供用药安全规则判断儿童/老年人群（不做任何展示），仍属最小必要；</li>
  *   <li>恒定时间比较，避免令牌被逐字符探测。</li>
  * </ul>
  */
@@ -59,6 +60,8 @@ public class InternalPatientController {
         body.put("patientNo", p.patientNo());
         body.put("name", p.name());
         body.put("status", p.status());
+        // 用药安全规则需要年龄（儿童/老年禁忌），只返回出生日期，不返回证件号/联系方式
+        body.put("birthDate", p.birthDate());
         return body;
     }
 }

@@ -42,7 +42,7 @@ class StockServiceTest {
 
     private final UUID drugId = UUID.randomUUID();
     private final Drug drug = new Drug(drugId, "DRUG-AMOX-025", "阿莫西林胶囊", null, "0.25g*24粒",
-            "CAPSULE", "盒", "粒", 24, new BigDecimal("12.50"), null, "A", 1, false, true, 0L);
+            "CAPSULE", "盒", "粒", 24, new BigDecimal("12.50"), null, "A", 1, false, true, 0L, null, false, false);
 
     @BeforeEach
     void setUp() {
@@ -99,7 +99,7 @@ class StockServiceTest {
     @DisplayName("入库：停用药品拒收")
     void receiveRejectsDisabledDrug() {
         Drug disabled = new Drug(drugId, drug.drugCode(), drug.name(), null, drug.spec(),
-                drug.dosageForm(), drug.unit(), null, null, drug.price(), null, "A", 1, false, false, 0L);
+                drug.dosageForm(), drug.unit(), null, null, drug.price(), null, "A", 1, false, false, 0L, null, false, false);
         when(repo.findDrug(drugId)).thenReturn(Optional.of(disabled));
 
         assertThatThrownBy(() -> service.receive(drugId,
