@@ -11,7 +11,7 @@ import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
-import com.medassist.clinical.support.BusinessTime;
+import com.medassist.common.time.BusinessTime;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;

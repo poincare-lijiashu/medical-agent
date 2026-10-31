@@ -1,0 +1,93 @@
+package com.medassist.pharmacy.domain;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.UUID;
+
+/**
+ * 药房领域模型（不可变记录）。
+ *
+ * <p>约定与临床核心一致：状态用字符串常量 + 数据库 CHECK 双保险；金额一律 {@link BigDecimal}；
+ * 库存只能通过原子 UPDATE 变更，模型本身不提供 setter。
+ */
+public final class PharmacyModel {
+
+    private PharmacyModel() {
+    }
+
+    /** 药品字典。 */
+    public record Drug(UUID id, String drugCode, String name, String tradeName, String spec,
+                       String dosageForm, String unit, String packageUnit, Integer packageSize,
+                       BigDecimal price, String insuranceCode, String insuranceCategory,
+                       int antibioticLevel, boolean narcotic, boolean enabled, long version) {
+
+        public static final String INSURANCE_A = "A";
+        public static final String INSURANCE_B = "B";
+        public static final String INSURANCE_C = "C";
+        public static final String INSURANCE_NONE = "NONE";
+    }
+
+    /** 库存批次。 */
+    public record DrugBatch(UUID id, UUID drugId, String drugCode, String drugName, String batchNo,
+                            LocalDate expireDate, int quantity, String supplier, long version) {
+
+        /** 是否已过效期（按业务日判断：expire_date < today 即不可发）。 */
+        public boolean expiredOn(LocalDate today) {
+            return expireDate.isBefore(today);
+        }
+
+        public boolean availableOn(LocalDate today) {
+            return quantity > 0 && !expiredOn(today);
+        }
+    }
+
+    /** 处方。 */
+    public record Prescription(UUID id, String prescriptionNo, UUID patientId, String patientNo,
+                               UUID visitId, String visitNo, UUID deptId, String prescriber,
+                               String status, String reviewer, Instant reviewedAt, String rejectReason,
+                               BigDecimal totalAmount, long version, Instant createdAt) {
+
+        public static final String PENDING_REVIEW = "PENDING_REVIEW";
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+        public static final String DISPENSED = "DISPENSED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean dispensable() {
+            return APPROVED.equals(status);
+        }
+    }
+
+    /** 处方明细（含价格快照）。 */
+    public record PrescriptionItem(UUID id, UUID prescriptionId, UUID drugId, String drugCode,
+                                   String drugName, String spec, int quantity, String unit,
+                                   String dosage, String frequency, Integer days,
+                                   BigDecimal unitPrice, BigDecimal amount) {
+    }
+
+    /** 发药单。 */
+    public record Dispense(UUID id, String dispenseNo, UUID prescriptionId, String operator,
+                           String checker, String status, BigDecimal totalAmount,
+                           Instant dispensedAt, long version) {
+
+        public static final String DISPENSED = "DISPENSED";
+        public static final String PARTIAL_RETURNED = "PARTIAL_RETURNED";
+        public static final String RETURNED = "RETURNED";
+    }
+
+    /** 发药明细（按批次）。 */
+    public record DispenseItem(UUID id, UUID dispenseId, UUID prescriptionItemId, UUID drugId,
+                               UUID batchId, String batchNo, LocalDate expireDate, int quantity,
+                               int returnedQuantity, BigDecimal unitPrice, BigDecimal amount) {
+
+        public int returnable() {
+            return quantity - returnedQuantity;
+        }
+    }
+
+    /** 退药记录（追加式）。 */
+    public record DispenseReturn(UUID id, UUID dispenseId, UUID dispenseItemId, int quantity,
+                                 String reason, String operator, Instant createdAt) {
+    }
+}

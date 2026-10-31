@@ -30,6 +30,8 @@ spec:
         # clinical 必须显式注入：values 默认 0.1.0-SNAPSHOT，production 环境会 fail 渲染
         - name: clinical.image.tag
           value: "1.0.0"
+        - name: pharmacy.image.tag
+          value: "1.0.0"
         - name: aiCore.image.tag
           value: "1.0.0"
   destination:

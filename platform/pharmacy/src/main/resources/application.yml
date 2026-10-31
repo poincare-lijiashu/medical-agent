@@ -1,0 +1,66 @@
+server:
+  port: 8084
+  # 优雅停机：在途发药事务（含库存扣减）处理完再退出
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-pharmacy
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: pharmacy-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: pharmacy_svc
+    default-schema: pharmacy_svc
+    locations: classpath:db/migration/pharmacy
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 服务间调用：pharmacy → empi（内网直连，不经网关）----
+# 与 clinical 共用同一个内部令牌（EMPI 侧 EMPI_INTERNAL_TOKEN）；未配置时服务拒绝启动
+pharmacy:
+  empi:
+    base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
+    internal-token: ${PHARMACY_INTERNAL_TOKEN:}
+    timeout: ${EMPI_TIMEOUT:PT2S}
+  # 近效期阈值：剩余天数 <= 该值时在库存预警中列出（不拦截发药）
+  near-expiry-days: ${PHARMACY_NEAR_EXPIRY_DAYS:90}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: DEBUG

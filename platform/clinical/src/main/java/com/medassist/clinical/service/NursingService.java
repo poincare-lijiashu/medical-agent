@@ -4,7 +4,7 @@ import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
-import com.medassist.clinical.support.BusinessTime;
+import com.medassist.common.time.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
 import com.medassist.common.api.ErrorCode;

@@ -7,7 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.repo.ClinicalRepository;
-import com.medassist.clinical.support.BusinessTime;
+import com.medassist.common.time.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.CreateSlotReq;
 import com.medassist.clinical.web.ClinicalDtos.RegisterReq;
 import com.medassist.common.api.ErrorCode;

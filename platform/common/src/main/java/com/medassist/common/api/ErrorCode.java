@@ -45,7 +45,12 @@ public enum ErrorCode {
 
     // ---- 药房（43xxx）----
     DRUG_STOCK_INSUFFICIENT(43401, "药品库存不足"),
-    DRUG_BATCH_EXPIRED(43402, "所选批次已过期，禁止发药");
+    DRUG_BATCH_EXPIRED(43402, "所选批次已过期，禁止发药"),
+    DRUG_NOT_FOUND(43403, "未找到该药品，或该药品已停用"),
+    PRESCRIPTION_NOT_FOUND(43404, "未找到该处方"),
+    DISPENSE_NOT_FOUND(43405, "未找到该发药单"),
+    PRESCRIPTION_STATUS_INVALID(43410, "当前处方状态不允许该操作"),
+    DRUG_RETURN_EXCEEDS(43411, "退药数量超过已发数量");
 
     private final int code;
     private final String defaultMessage;

@@ -173,6 +173,38 @@ clinical 业务指标（随 N2 一起打点）；`clinical_change_log` 分区归
 
 ---
 
+## 1.7 已完成（2026-10-31，增量 7：N2 药房域第一批）
+
+新服务 `platform/pharmacy`（8084，schema `pharmacy_svc`），网关 `/api/v2/pharmacy/**`（StripPrefix=2）。
+
+| 能力 | 接口 | 关键保证 |
+|---|---|---|
+| 药品字典 | `POST/GET/PUT /pharmacy/drugs**` | 院内编码唯一；医保编码/类别（A/B/C/NONE）与抗菌药物分级随字典维护；调价必须带版本号（CAS），历史处方保存价格快照 |
+| 库存批次 | `POST /pharmacy/drugs/{id}/batches`、`GET /pharmacy/stock-warnings` | 同药品同批号唯一；**过期药品拒收**；扣减用 `quantity >= ?` 原子更新，库存不会为负；近效期 90 天预警 |
+| 处方 | `POST /pharmacy/prescriptions` | 患者经 EMPI 内网校验；同一药品不可重复开立；金额由服务端按字典价计算 |
+| 处方审核 | `POST /pharmacy/prescriptions/{id}/review` | 待审核 → 通过/驳回（驳回必须写理由）；状态机 CAS |
+| 发药 | `POST /pharmacy/prescriptions/{id}/dispense` | **FEFO 近效期优先**，可跨批次拆分；过期批次永不出库；一张处方只能发一次（数据库唯一键）；库存不足整笔拒绝，不部分发药 |
+| 麻醉/精神类 | 同上（`checker`） | **强制双人核对**：缺核对人 422、核对人=发药人 422（法规要求，不能只写 SOP） |
+| 退药 | `POST /pharmacy/dispenses/{id}/returns` | 不得超过已发未退数量（`returned_quantity + ? <= quantity`）；回补原批次，不新建批次；全退 → RETURNED，部分退 → PARTIAL_RETURNED |
+| 审计 | `pharmacy_change_log` | DRUG_CREATE / DRUG_PRICE / STOCK_RECEIVE / RX_CREATE / RX_APPROVE / RX_REJECT / DISPENSE / DISPENSE_RETURN |
+
+**权限（auth V11，三权分立）**：`pharmacy:prescription:create`（DOCTOR）、
+`pharmacy:prescription:review` / `dispense:execute` / `dispense:return` / `drug:manage` /
+`stock:manage`（PHARMACIST）、`pharmacy:read`（全员）。医师不能审核或发药，药师不能开方。
+
+**实测（经网关 44 项断言全过）**：入库 2 批（3 近效期 / 10 远期）→ 过期药入库 409 →
+重复批号 409 → 开方 5 盒（62.50）→ 重复药品 422 → 未审核发药 409 → 审核通过 →
+发药按 FEFO 拆成 3+2 → 重复发药 409 → 库存 8 → 退 2（PARTIAL_RETURNED）→ 超量退药 409 →
+库存回到 10 → 麻醉药无核对人 422 / 同人核对 422 / 双人核对成功。
+库内核对：`B-NEAR=0 / B-FAR=10 / B-MOR=4`、发药明细 3 条含 `returned_quantity`、退药 1 条、
+审计 6 类动作。
+
+**本轮未做（下一批）**：处方与 clinical 收费联动（发药金额计入住院/门诊收费单）、
+处方前置审方规则引擎（相互作用/剂量/儿童禁用）、抗菌药物分级授权校验（需医师职称数据）、
+药品字典与医保目录批量导入。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
@@ -181,7 +213,7 @@ clinical 业务指标（随 N2 一起打点）；`clinical_change_log` 分区归
 | N1.1 | 住院医嘱与日清单 | ✅ 长嘱/临嘱、停嘱、按日计费、预交金（2026-10-31 已交付） | 同日不重复计费；停嘱后不再计费；退预交金不超余额 |
 | N1.2 | 预交金结算抵扣 | ✅ `paymentMethod=DEPOSIT` + 余额不足拦截（2026-10-31 已交付） | 只能住院用；余额不足 409；抵扣落 SETTLE 流水 |
 | N1.3 | 费用看板与护理执行 | ✅ 看板/欠费预警/护理执行/中途结算续开（2026-10-31 已交付） | 缺口口径一致；未执行不计费；结算后自动续开新单 |
-| N2 | 药房域 | 药品字典（医保编码映射）、库存批次、发药/退药、处方审核 | 批次效期拦截；发药与收费联动；库存不为负 |
+| N2 | 药房域 | ✅ 药品字典（含医保编码）、库存批次效期、处方审核、发药/退药（2026-10-31 第一批已交付） | 批次效期拦截；发药与收费联动；库存不为负 |
 | N3 | 医技域 | 检查/检验申请、标本流转、报告回写、危急值 | 申请-执行-报告闭环；危急值强制确认 |
 | N4 | 病历域 | 结构化病历模板、病程记录、签名与归档、质控规则 | 电子病历分级 5 级要求项逐条对标 |
 | N5 | 医保域 | 目录下载/映射、参保查询、结算清单、DRG/DIP 提示 | 以省局接口规范为准；对账差异可追溯 |

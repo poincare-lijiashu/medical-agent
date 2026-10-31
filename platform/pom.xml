@@ -39,6 +39,7 @@
     <module>auth</module>
     <module>empi</module>
     <module>clinical</module>
+    <module>pharmacy</module>
   </modules>
 
   <dependencyManagement>

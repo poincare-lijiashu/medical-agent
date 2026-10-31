@@ -77,6 +77,10 @@ spec:
             - name: PLATFORM_CLINICAL_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "clinical")) .Values.clinical.service.port | quote }}
             {{- end }}
+            {{- if .Values.pharmacy.enabled }}
+            - name: PLATFORM_PHARMACY_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "pharmacy")) .Values.pharmacy.service.port | quote }}
+            {{- end }}
             {{- with .Values.gateway.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

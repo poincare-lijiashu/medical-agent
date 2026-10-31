@@ -181,6 +181,21 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      三条 DB 兜底用反例直插验证被拒绝
    - **未做（如实记录）**：Testcontainers 集成测试（离线仓库缺 `testcontainers-postgresql`，
      需有网构建机首次拉依赖）；行级授权（缺"用户↔病区"组织数据，N2 前置）；clinical 业务指标；change_log 分区
+13. **N2 药房域第一批（2026-10-31）：`platform/pharmacy`（8084）已交付并端到端实测**
+   - 药品字典（医保编码/类别、抗菌分级、麻醉标记）、库存批次效期、处方审核、FEFO 发药、退药
+   - 数据库兜底：同药品同批号唯一、`quantity >= 0`、`returned_quantity + ? <= quantity`、
+     `dispense.prescription_id` 唯一（一张处方只发一次）、过期药品拒收（应用层 + 效期 SQL 过滤）
+   - **麻醉/精神类强制双人核对**（缺核对人/同人核对均 422）
+   - 权限（auth V11，三权分立）：医师只能开方；药师审核/发药/退药/字典/库存；全员只读
+   - 网关新增 `/api/v2/pharmacy/**`（StripPrefix=2）与 150 QPS 限流；Helm 增加
+     Deployment/HPA/PDB/Service/NP/迁移 Job；ServiceMonitor 与告警补 pharmacy
+   - 实测（经网关 44 项断言全过）：入库 → 过期/重复批号拦截 → 开方 62.50 → 重复药品 422 →
+     未审核发药 409 → 审核 → FEFO 拆分 3+2 → 重复发药 409 → 退 2 → 超量退药 409 →
+     麻醉药双人核对三种分支；库内 `B-NEAR=0 / B-FAR=10 / B-MOR=4`、审计 6 类
+   - 单测：pharmacy 33 项（处方 15 / 库存 5 / 字典 5 / 权限 7 + 其他）；平台全量 **132 项** 通过
+   - **踩坑**：JdbcClient 传 null 参数时 PostgreSQL 无法推断类型（`$n IS NULL` 报 500），
+     所有可空参数必须 `CAST(:p AS text/boolean/uuid/integer)`
+   - 下一批 N2 收尾：处方与临床收费联动、前置审方规则、抗菌药物分级授权、医保目录批量导入
 
 ### 本机踩坑备忘（下次别再踩）
 
@@ -197,6 +212,8 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   （表现为 500 而不是 409）：重复判定要先查后写，catch 分支里不要再发 SQL
 - 自己写的 plpgsql 触发器用 `USING ERRCODE = 'check_violation'` 时，Spring 统一抛
   `DataIntegrityViolationException`（与 CHECK 一致），可按同一套 catch 处理
+- `JdbcClient` 绑定 null 参数时 PostgreSQL 无法推断类型（`$5 IS NULL` → 500
+  "could not determine data type"）：所有可空参数必须 `CAST(:p AS text/boolean/uuid/integer)`
 - PowerShell 里**不能把函数命名为 `Data`**（`function Data($r)` 会被解析成 `data` 语句块，
   报 "The Data section is missing its statement block"）；同理避免 `function`/`filter` 等关键字
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，

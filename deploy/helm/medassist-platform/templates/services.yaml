@@ -74,6 +74,25 @@ spec:
     {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 4 }}
 ---
 {{- end }}
+{{- if .Values.pharmacy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "pharmacy") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "pharmacy") | nindent 4 }}
+spec:
+  type: {{ .Values.pharmacy.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.pharmacy.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "medassist.selectorLabels" (dict "root" $ "component" "pharmacy") | nindent 4 }}
+---
+{{- end }}
 {{- if .Values.aiCore.enabled }}
 apiVersion: v1
 kind: Service

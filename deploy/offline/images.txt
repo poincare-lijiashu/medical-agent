@@ -21,6 +21,7 @@ medassist/platform-gateway:1.0.0
 medassist/platform-auth:1.0.0
 medassist/platform-empi:1.0.0
 medassist/platform-clinical:1.0.0
+medassist/platform-pharmacy:1.0.0
 medassist/ai-core:1.0.0
 
 # ---- 基础设施（有状态中间件；如院方已有托管实例可跳过）----

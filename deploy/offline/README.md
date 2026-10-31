@@ -27,6 +27,7 @@ docker build --build-arg SERVICE=gateway   -t medassist/platform-gateway:1.0.0  
 docker build --build-arg SERVICE=auth      -t medassist/platform-auth:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=empi      -t medassist/platform-empi:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=clinical  -t medassist/platform-clinical:1.0.0 -f platform/Dockerfile platform
+docker build --build-arg SERVICE=pharmacy  -t medassist/platform-pharmacy:1.0.0 -f platform/Dockerfile platform
 docker build -t medassist/ai-core:1.0.0 .
 ```
 
@@ -106,7 +107,8 @@ helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \
   -n medassist-prod --create-namespace \
   -f values-prod.yaml \
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 \
-  --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set aiCore.image.tag=1.0.0 \
+  --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 \
+  --set aiCore.image.tag=1.0.0 \
   --set gateway.env[0].name=GATEWAY_TRUSTED_PROXIES --set gateway.env[0].value=<集群内网段>
 ```
 

@@ -26,6 +26,8 @@
 | `platform-gateway` | 8080 | 统一入口：双轨路由（v1→Python / v2→Java）、**JWT 统一鉴权**、Nacos 发现、Sentinel 限流 | 已交付（路由 + 鉴权已验证） |
 | `platform-auth` | 8081 | 用户与权限中心（RBAC、组织架构、登录签发 JWT） | 已交付（P0-3 / P0-4） |
 | `platform-empi` | 8082 | 患者主索引（建档、合并、跨系统标识映射） | 已交付（P0-3） |
+| `platform-clinical` | 8083 | 临床核心：号源/挂号/接诊/医嘱/计费、住院 ADT、预交金、护理执行、费用看板 | 已交付（N1 系列） |
+| `platform-pharmacy` | 8084 | 药房域：药品字典（含医保编码）、库存批次效期、处方审核、发药/退药 | 已交付（N2 第一批） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -33,9 +35,12 @@
 /api/v1/**              → http://127.0.0.1:8001   （现行 Python 服务，路径原样透传，老代码零改动）
 /api/v2/auth/**         → http://127.0.0.1:8081   （StripPrefix=3 → /internal/health 等）
 /api/v2/empi/**         → http://127.0.0.1:8082   （StripPrefix=3）
+/api/v2/clinical/**     → http://127.0.0.1:8083   （StripPrefix=2，控制器自带 /clinical 前缀）
+/api/v2/pharmacy/**     → http://127.0.0.1:8084   （StripPrefix=2，控制器自带 /pharmacy 前缀）
 ```
 
-路由目标可用环境变量覆盖：`AI_CORE_URI` / `PLATFORM_AUTH_URI` / `PLATFORM_EMPI_URI`。
+路由目标可用环境变量覆盖：`AI_CORE_URI` / `PLATFORM_AUTH_URI` / `PLATFORM_EMPI_URI` /
+`PLATFORM_CLINICAL_URI` / `PLATFORM_PHARMACY_URI`。
 
 ## 构建与运行
 

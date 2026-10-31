@@ -4,7 +4,7 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
-import com.medassist.clinical.support.BusinessTime;
+import com.medassist.common.time.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.OrderLine;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;

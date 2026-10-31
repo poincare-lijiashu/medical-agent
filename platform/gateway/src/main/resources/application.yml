@@ -53,6 +53,13 @@ spring:
                 - Path=/api/v2/clinical/**
               filters:
                 - StripPrefix=2
+            # 药房（药品字典/库存/处方/发药）
+            - id: platform-pharmacy-v2
+              uri: ${PLATFORM_PHARMACY_URI:http://127.0.0.1:8084}
+              predicates:
+                - Path=/api/v2/pharmacy/**
+              filters:
+                - StripPrefix=2
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -129,6 +136,8 @@ medassist:
           qps: ${SENTINEL_QPS_CLINICAL_INPATIENT:60}
         - path: /api/v2/clinical
           qps: ${SENTINEL_QPS_CLINICAL:200}
+        - path: /api/v2/pharmacy
+          qps: ${SENTINEL_QPS_PHARMACY:150}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
 

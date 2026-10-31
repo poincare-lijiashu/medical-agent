@@ -7,7 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
-import com.medassist.clinical.support.BusinessTime;
+import com.medassist.common.time.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.BillingPreview;
 import com.medassist.clinical.web.ClinicalDtos.ChargeItemView;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;

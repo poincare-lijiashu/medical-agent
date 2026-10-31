@@ -9,7 +9,7 @@ import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
-import com.medassist.clinical.support.BusinessTime;
+import com.medassist.common.time.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
