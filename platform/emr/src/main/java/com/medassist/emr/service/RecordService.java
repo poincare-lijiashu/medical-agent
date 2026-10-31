@@ -85,9 +85,16 @@ public class RecordService {
         Map<String, String> content = req.content() == null ? Map.of() : req.content();
         String contentText = render(template.schemaJson(), content);
 
-        // 入院时间从临床域取回并固化；取不到（门诊/上游不可用）时留空，时限规则自动跳过
-        Instant visitStartedAt = req.visitId() == null
-                ? null : clinicalClient.admittedAt(req.visitId()).orElse(null);
+        // 就诊画像：归属患者（防止病历挂到别人就诊上）+ 入院时间（书写时限基准）
+        Optional<ClinicalClient.VisitRef> visitRef = req.visitId() == null
+                ? Optional.empty() : clinicalClient.visit(req.visitId());
+        visitRef.map(ClinicalClient.VisitRef::patientId)
+                .filter(owner -> !patient.id().equals(owner))
+                .ifPresent(owner -> {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                            "就诊号 " + req.visitId() + " 不属于该患者，请核对后重新开立病历");
+                });
+        Instant visitStartedAt = visitRef.map(ClinicalClient.VisitRef::admittedAt).orElse(null);
 
         MedicalRecord record = new MedicalRecord(UUID.randomUUID(), repo.nextRecordNo(),
                 patient.id(), patient.patientNo(), req.visitId(), blankToNull(req.visitNo()),
@@ -313,7 +320,8 @@ public class RecordService {
      * 修订：签名后修改必须留痕。
      *
      * <p>旧版本写入 record_amendment，正文覆盖为 revision+1，状态回到 SUBMITTED 并清空签名——
-     * 修改过的病历必须重新签名，且归档后不允许修订（需走病案修改流程，当前未实现）。
+     * 修改过的病历必须重新签名。已归档病历不允许修订，须走病案修改申请（申请→审批）流程。
+     * 修订留痕的 author 恒取病历书写人（record.author），不取最后签名人，避免责任链错位。
      */
     @Transactional
     public RecordView amend(UUID id, AmendReq req, String actor) {
@@ -331,11 +339,11 @@ public class RecordService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_TEMPLATE_NOT_FOUND));
         String newText = render(template.schemaJson(), req.content());
 
-        // 先留旧版本（含旧哈希），再覆盖正文
+        // 先留旧版本（含旧哈希），再覆盖正文；author 恒取书写人，不取最后签名人
         repo.insertAmendment(new Amendment(UUID.randomUUID(), id, record.revision(),
                 record.content(), record.contentText(),
                 record.contentHash() == null ? sha256(record.contentText()) : record.contentHash(),
-                record.signedBy() == null ? record.author() : record.signedBy(), req.reason().trim(), null));
+                record.author(), req.reason().trim(), null));
 
         if (!repo.applyAmendment(id, toJson(req.content()), newText, record.version(), record.status())) {
             throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
@@ -392,7 +400,7 @@ public class RecordService {
         repo.insertAmendment(new Amendment(UUID.randomUUID(), recordId, record.revision(),
                 record.content(), record.contentText(),
                 record.contentHash() == null ? sha256(record.contentText()) : record.contentHash(),
-                record.signedBy() == null ? record.author() : record.signedBy(),
+                record.author(),
                 "病案修改申请审批通过：" + request.reason(), null));
         if (!repo.applyAmendment(recordId, request.proposedContent(), request.proposedText(),
                 record.version(), MedicalRecord.ARCHIVED)) {
@@ -466,7 +474,8 @@ public class RecordService {
         String escaped = keyword == null ? null : escapeLike(keyword);
         String pattern = escaped == null ? null : "%" + escaped + "%";
         String prefix = escaped == null ? null : escaped + "%";
-        String normalizedDocType = blankToNull(docType);
+        String normalizedDocType = blankToNull(docType) == null
+                ? null : docType.trim().toUpperCase();
         String normalizedStatus = (status == null || status.isBlank())
                 ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
@@ -512,14 +521,19 @@ public class RecordService {
         return repo.listRecords(normalized, patientId, visitId, size);
     }
 
-    /** 校验内容哈希：重新计算并与签名时保存的哈希比对。 */
+    /** 校验内容哈希：重新计算正文哈希，并核对当前版本各级签名保存的哈希是否一致。 */
     public HashVerify verify(UUID id) {
         MedicalRecord record = repo.findRecord(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
         String recomputed = sha256(record.contentText());
         String stored = record.contentHash();
         boolean valid = stored != null && stored.equals(recomputed);
-        return new HashVerify(valid, stored, recomputed);
+        List<String> mismatches = repo.listSignatures(id).stream()
+                .filter(s -> s.revision() == record.revision())
+                .filter(s -> !recomputed.equals(s.contentHash()))
+                .map(s -> s.signType() + ":" + s.signer())
+                .toList();
+        return new HashVerify(valid, stored, recomputed, mismatches.isEmpty(), mismatches);
     }
 
     // ---------------------------------------------------------------- 质控引擎
@@ -529,6 +543,7 @@ public class RecordService {
      *
      * <p>SIGNATURE_REQUIRED 在提交阶段不适用（此时还没有签名），留待归档前校验；
      * TIMELINESS 以"入院时间 → 提交时刻"计算，没有入院信息（门诊/上游不可用）时跳过。
+     * TIMELINESS 只对首版（revision == 1）评估：修订重提交时早已超时，再报一遍只会淹没真正的缺陷。
      */
     private QcReport evaluate(MedicalRecord record, Map<String, String> content, Instant now,
                               Optional<Instant> visitStartedAt) {
@@ -541,6 +556,9 @@ public class RecordService {
             Boolean passed;
             String message = rule.message();
             if (QcRule.TIMELINESS.equals(rule.ruleType())) {
+                if (record.revision() > 1) {
+                    continue;
+                }
                 if (visitStartedAt == null || visitStartedAt.isEmpty()) {
                     // 明确记录"未评估"：早期直接 continue，会让时限质控在配置错误时静默消失，
                     // 报表看起来"全部通过"。现在至少留一条可查的待核查项。

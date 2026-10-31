@@ -24,6 +24,7 @@ import com.medassist.emr.web.EmrDtos.SubmitResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
@@ -680,6 +681,88 @@ class RecordServiceTest {
         assertThat(html).contains("未归档");
         verify(repo).logChange(eq("doctor01"), eq("RECORD_PRINT"), eq("MEDICAL_RECORD"),
                 eq(recordId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("检索：文书类型大小写不敏感（S-22）")
+    void searchNormalizesDocType() {
+        service.search("x", null, " admission_note ", null, null, null, 10, "doctor01");
+
+        verify(repo).searchRecords(anyString(), anyString(), any(), eq("ADMISSION_NOTE"),
+                any(), any(), any(), eq(10));
+    }
+
+    // ------------------------------------------------ 责任链 / 完整性 / 就诊归属（S-01 / S-04 / S-09）
+
+    @Test
+    @DisplayName("修订：留痕 author 恒为书写人，不取最后签名人（S-01）")
+    void amendmentAuthorIsTheWriter() {
+        MedicalRecord signed = new MedicalRecord(recordId, "MR20261031000001", patientId,
+                "P20261031000001", null, null, null, "ADMISSION_NOTE", "TPL-ADMISSION",
+                "入院记录", "{}", "主诉：发热\n", "doctor01", MedicalRecord.SIGNED, 1,
+                "chief01", Instant.now(), RecordService.sha256("主诉：发热\n"), null, 3L, Instant.now());
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(signed));
+        when(repo.findTemplateByCode("TPL-ADMISSION")).thenReturn(Optional.of(template()));
+        when(repo.applyAmendment(eq(recordId), anyString(), anyString(), eq(3L),
+                eq(MedicalRecord.SIGNED))).thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 2, 4L, "{}")));
+
+        service.amend(recordId, new AmendReq(Map.of("chiefComplaint", "发热"), "补充现病史"),
+                "doctor01");
+
+        ArgumentCaptor<Amendment> captor = ArgumentCaptor.forClass(Amendment.class);
+        verify(repo).insertAmendment(captor.capture());
+        assertThat(captor.getValue().author()).isEqualTo("doctor01");
+    }
+
+    @Test
+    @DisplayName("时限质控：修订重提交（revision>1）不再重复评估（S-03）")
+    void timelinessSkippedOnRevision() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 2, 5L, "{\"chiefComplaint\":\"发热\"}")));
+        when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(24)));
+        when(repo.updateStatus(recordId, MedicalRecord.DRAFT, MedicalRecord.SUBMITTED, 5L))
+                .thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 2, 6L, "{}")));
+
+        SubmitResult result = service.submit(recordId, "doctor01");
+
+        assertThat(result.qc().results()).isEmpty();
+        assertThat(result.qc().passed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("创建：就诊号不属于该患者时拒绝（S-04）")
+    void createRejectsVisitOfAnotherPatient() {
+        when(repo.findTemplateByCode("TPL-ADMISSION")).thenReturn(Optional.of(template()));
+        when(clinicalClient.visit(any())).thenReturn(Optional.of(
+                new ClinicalClient.VisitRef(UUID.randomUUID(), null)));
+
+        CreateRecordReq req = new CreateRecordReq(patientId, UUID.randomUUID(), null, null,
+                "TPL-ADMISSION", "入院记录", Map.of("chiefComplaint", "发热"));
+
+        assertThatThrownBy(() -> service.create(req, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).insertRecord(any(), any());
+    }
+
+    @Test
+    @DisplayName("完整性校验：签名行哈希与正文不一致时报出（S-09）")
+    void verifyReportsSignatureMismatch() {
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 3L, "{}")));
+        when(repo.listSignatures(recordId)).thenReturn(List.of(
+                new RecordSignature(UUID.randomUUID(), recordId, 1, "doctor01",
+                        RecordSignature.AUTHOR, Instant.now(), "deadbeef")));
+
+        HashVerify verify = service.verify(recordId);
+
+        assertThat(verify.signaturesValid()).isFalse();
+        assertThat(verify.signatureMismatches()).containsExactly("AUTHOR:doctor01");
     }
 
     // ---------------------------------------------------------------- 测试夹具

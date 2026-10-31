@@ -97,6 +97,25 @@ $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/print" $null $token
 Check 'print.draft.ok' $r.Status 200
 Check 'print.draft.watermark' ($r.Body -match 'NOT ARCHIVED') 'True'
 
+# S-04: a visit that belongs to another patient must be rejected
+$r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
+    name = "Other Patient $suffix"; gender = 'FEMALE'; birthDate = '1990-01-01'
+    idType = 'ID_CARD'; idNo = "11010119900101$suffix"
+} $token
+$otherPatient = (Res $r).id
+$r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
+    patientId = $otherPatient; deptId = '11111111-1111-1111-1111-111111111111'
+    doctorId = 'admin01'; visitType = 'OUTPATIENT'
+} $token
+Check 'record.visitOwnership.reg' $r.Status 200
+$otherVisit = (Res $r).id
+
+$r = Invoke-Api 'POST' '/api/v2/emr/records' @{
+    patientId = $patientId; visitId = $otherVisit; templateCode = 'TPL-ADMISSION'
+    title = 'Cross Patient Note'; content = @{ physicalExam = 'x' }
+} $token
+Check 'record.visitOwnership.422' $r.Status 422
+
 # QC preview: chief complaint missing => fatal
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/qc" $null $token
 Check 'qc.preview' $r.Status 200
@@ -138,6 +157,7 @@ Check 'sign.signatureType' $signed.signatures[0].signType 'AUTHOR'
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/verify" $null $token
 Check 'verify.ok' $r.Status 200
 Check 'verify.valid' (Res $r).valid 'True'
+Check 'verify.signaturesValid' (Res $r).signaturesValid 'True'
 
 # ---------------------------------------------------------------- 7. archive needs attending signature
 $r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/archive" $null $token

@@ -111,8 +111,13 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
+        // 整页 PHI：禁脚本、禁外链、禁缓存，避免病历被浏览器/代理留存
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
+                .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Cache-Control", "no-store, no-cache, must-revalidate, private")
+                .header("Pragma", "no-cache")
                 .body(service.printHtml(id, actor));
     }
 

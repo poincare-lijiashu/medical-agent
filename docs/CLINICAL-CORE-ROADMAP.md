@@ -437,6 +437,22 @@ doctor01 确认 **403**、只读 200。
 
 ---
 
+## 1.19 已完成（2026-10-31，第三轮评测第九批：病历责任链与完整性）
+
+| 能力 | 位置 | 关键保证 |
+|---|---|---|
+| 就诊归属校验 | clinical `GET /internal/visits/{visitId}` + emr `create` | 病历不能挂到他人就诊（422）；上游不可用时 fail-open，不阻断书写 |
+| 修订责任链 | `amendment.author = record.author()` | 留痕始终是书写人，不再被最后签名人覆盖 |
+| 时限质控去噪 | `evaluate` 仅 `revision == 1` 评估 TIMELINESS | 修订重提交不再重复报"早已超时" |
+| 完整性校验 | `GET /emr/records/{id}/verify` | 增加 `signaturesValid` / `signatureMismatches`，逐级核对签名哈希 |
+| 审批约束 | emr/V6 `ck_change_reviewed` | APPROVED 必须有 `applied_revision`，REJECTED 必须没有 |
+| 打印安全头 | `RecordController.print` | CSP `default-src 'none'`、nosniff、no-store |
+| 检索参数归一 | `RecordService.search` | docType 大小写不敏感 |
+
+**验证**：单测 253→**258**；`emr_smoke.ps1` 81→**84 项**全过；insurance E2E 78 项回归全过。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

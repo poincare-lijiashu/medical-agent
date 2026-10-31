@@ -414,4 +414,27 @@ S-10/S-11（年度累计/按就诊日期校验参保）、S-28~S-30（E2E 补强
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–14 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 15. 整改状态（2026-10-31，第九批：病历责任链与完整性）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| S-01 | 修订留痕 `amendment.author` 取最后签名人，责任链错乱 | ✅ 已修 | `amend` / `approveChange` 统一写 `record.author()`（书写人），`signed_by` 只作"最后签名人"展示 |
+| S-03 | TIMELINESS 对修订重提交必然超时，噪声淹没缺陷 | ✅ 已修 | `evaluate` 中 `record.revision() > 1` 时跳过 TIMELINESS（只对首版评估） |
+| S-04 | 创建病历不校验就诊归属患者 | ✅ 已修 | clinical 新增 `GET /internal/visits/{visitId}`（返回 patientId/visitType/visitDate/入出院时间）；emr 创建时比对，不一致 **422**；就诊取不到时 fail-open（不阻断书写） |
+| S-08 | `amend` 注释写"病案修改流程当前未实现" | ✅ 已修 | 注释改为现状：归档病历走"申请→审批"流程 |
+| S-09 | verify 只比对正文哈希，不校验签名行 | ✅ 已修 | 返回 `signaturesValid` + `signatureMismatches`（如 `CHIEF:chief01`），逐级核对当前版本签名哈希 |
+| S-18 | `ck_change_reviewed` 未约束 APPROVED → applied_revision | ✅ 已修 | emr/V6：APPROVED 必须有 `applied_revision`，REJECTED 必须没有 |
+| S-21 | 打印页缺 CSP/nosniff/no-store | ✅ 已修 | 打印响应加 `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store` |
+| S-22 | docType 未归一大小写 | ✅ 已修 | 检索入参 `trim().toUpperCase()` |
+
+**验证**：
+- 单测 **253 → 258**（修订作者 1、revision>1 跳过时限 1、就诊归属 422 1、签名哈希不一致 1、docType 归一 1）；
+- `emr_smoke.ps1` **81 → 84 项**全过（跨患者就诊 422、`signaturesValid=true`）；
+- `insurance_smoke.ps1` 78 项回归全过；库内 emr 迁移到 v6。
+
+**踩坑**：`/api/v2/clinical/registrations` 会校验科室是否存在（`科室不存在` 404），
+E2E 造挂号必须用 seed 里的科室 UUID，不能随手编一个。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–15 节记录整改落地与验证。后续批次按第 5 节路线继续。*

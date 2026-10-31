@@ -88,8 +88,15 @@ public final class EmrDtos {
                            List<QcResult> results) {
     }
 
-    /** 哈希校验结果。 */
-    public record HashVerify(boolean valid, String storedHash, String recomputedHash) {
+    /**
+     * 内容完整性校验结果。
+     *
+     * @param valid               正文当前哈希是否等于落库哈希
+     * @param signaturesValid     当前版本各级签名保存的哈希是否与正文一致（签名行被篡改时为 false）
+     * @param signatureMismatches 不一致的签名（形如 {@code CHIEF:chief01}），便于定位
+     */
+    public record HashVerify(boolean valid, String storedHash, String recomputedHash,
+                             boolean signaturesValid, List<String> signatureMismatches) {
     }
 
     /** 模板视图。 */

@@ -386,6 +386,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      检索接口改要求该权限；单份病历查阅仍是 `emr:record:read`（护士/窗口不受影响）
    - 验证：单测 249→**253**；emr E2E 78→**81 项**全过；库内已出现 RECORD_PRINT/RECORD_SEARCH
 
+26. **第三轮评测第九批整改（2026-10-31）：病历责任链与完整性（S-01/03/04/08/09/18/21/22）**
+   - S-01：修订/审批留痕 `amendment.author` 恒写 `record.author()`（不再取最后签名人）
+   - S-03：TIMELINESS 只在 `revision == 1` 评估，修订重提交不再报早已超时
+   - S-04：clinical 新增 `GET /internal/visits/{visitId}`（patientId/类型/日期/入出院时间）；
+     emr 建病历比对归属，不一致 422；就诊取不到 fail-open（不阻断书写）
+   - S-08：amend 注释改为现状（归档后走申请→审批）
+   - S-09：`verify` 增加 `signaturesValid` / `signatureMismatches`，逐级核对签名哈希
+   - S-18：emr/V6 约束 APPROVED 必须有 `applied_revision`、REJECTED 必须没有
+   - S-21：打印响应加 CSP/nosniff/no-store/Pragma
+   - S-22：检索 docType 归一为大写
+   - 验证：单测 253→**258**；emr E2E 81→**84 项**、insurance E2E 78 项回归全过
+   - 踩坑：`/clinical/registrations` 校验科室存在性（404 科室不存在），E2E 必须用 seed 科室 UUID
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
