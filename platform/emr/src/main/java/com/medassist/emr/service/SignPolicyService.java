@@ -34,6 +34,11 @@ public class SignPolicyService {
             "ADMISSION_NOTE", "FIRST_COURSE", "PROGRESS_NOTE", "DISCHARGE_SUMMARY",
             "OPERATION_NOTE", "OUTPATIENT_NOTE", "CONSULT_NOTE");
 
+    /** 允许的文书类型（供启动守卫在报错信息里列出可选值）。 */
+    public static Set<String> docTypes() {
+        return DOC_TYPES;
+    }
+
     private final EmrRepository repo;
     private final ObjectMapper objectMapper;
 

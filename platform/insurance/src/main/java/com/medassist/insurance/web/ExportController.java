@@ -1,8 +1,10 @@
 package com.medassist.insurance.web;
 
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
+import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.service.SettlementExportService;
 import com.medassist.insurance.web.InsuranceDtos.CancelExportReq;
@@ -46,9 +48,11 @@ public class ExportController {
     private static final String DOWNLOAD = "insurance:export:download";
 
     private final SettlementExportService service;
+    private final InsuranceMetrics metrics;
 
-    public ExportController(SettlementExportService service) {
+    public ExportController(SettlementExportService service, InsuranceMetrics metrics) {
         this.service = service;
+        this.metrics = metrics;
     }
 
     /** 生成报盘批次（期间内**尚未报盘**的已确认清单）。 */
@@ -57,11 +61,17 @@ public class ExportController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, CONFIRM);
-        SettlementExportService.ExportCreateResult result = service.create(from, to, actor);
-        return ApiResponse.ok(service.summary(result.batch(),
-                result.excludedAlreadyExported(), result.remainingPending()));
+        try {
+            SettlementExportService.ExportCreateResult result = service.create(from, to, actor);
+            metrics.exportAction("create", true);
+            return ApiResponse.ok(service.summary(result.batch(),
+                    result.excludedAlreadyExported(), result.remainingPending()));
+        } catch (BusinessException e) {
+            metrics.exportAction("create", false);
+            throw e;
+        }
     }
 
     /** 登记省局回执（ACCEPTED / REJECTED，仅未登记过的批次）。 */
@@ -70,9 +80,16 @@ public class ExportController {
             @PathVariable UUID id,
             @Valid @RequestBody ExportReceiptReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, CONFIRM);
-        return ApiResponse.ok(service.summary(service.receipt(id, req, actor), 0, 0));
+        try {
+            ExportBatchSummary summary = service.summary(service.receipt(id, req, actor), 0, 0);
+            metrics.exportAction("receipt", true);
+            return ApiResponse.ok(summary);
+        } catch (BusinessException e) {
+            metrics.exportAction("receipt", false);
+            throw e;
+        }
     }
 
     /** 撤销未回执的批次（GENERATED → CANCELLED），撤销后清单可在新批次重报。 */
@@ -81,9 +98,16 @@ public class ExportController {
             @PathVariable UUID id,
             @Valid @RequestBody CancelExportReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, CONFIRM);
-        return ApiResponse.ok(service.summary(service.cancel(id, req.reason(), actor), 0, 0));
+        try {
+            ExportBatchSummary summary = service.summary(service.cancel(id, req.reason(), actor), 0, 0);
+            metrics.exportAction("cancel", true);
+            return ApiResponse.ok(summary);
+        } catch (BusinessException e) {
+            metrics.exportAction("cancel", false);
+            throw e;
+        }
     }
 
     @GetMapping
@@ -107,13 +131,19 @@ public class ExportController {
     public ResponseEntity<String> payload(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, DOWNLOAD);
-        ExportBatch batch = service.payload(id, actor);
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("application/xml; charset=UTF-8"))
-                .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename=\"" + batch.batchNo() + ".xml\"")
-                .body(batch.payload());
+        try {
+            ExportBatch batch = service.payload(id, actor);
+            metrics.exportAction("download", true);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("application/xml; charset=UTF-8"))
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            "attachment; filename=\"" + batch.batchNo() + ".xml\"")
+                    .body(batch.payload());
+        } catch (BusinessException e) {
+            metrics.exportAction("download", false);
+            throw e;
+        }
     }
 }

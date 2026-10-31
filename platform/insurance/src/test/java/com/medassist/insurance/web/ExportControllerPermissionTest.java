@@ -2,6 +2,7 @@ package com.medassist.insurance.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.service.SettlementExportService;
 import com.medassist.insurance.web.InsuranceDtos.CancelExportReq;
@@ -40,7 +41,7 @@ class ExportControllerPermissionTest {
     @BeforeEach
     void setUp() {
         service = mock(SettlementExportService.class);
-        controller = new ExportController(service);
+        controller = new ExportController(service, mock(InsuranceMetrics.class));
     }
 
     private ExportBatch batch() {
@@ -127,5 +128,19 @@ class ExportControllerPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
+    }
+
+    @Test
+    @DisplayName("列表与报文下载：无权限头 403（补齐负例）")
+    void listAndPayloadRejectMissingHeader() {
+        assertThatThrownBy(() -> controller.list(null, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        assertThatThrownBy(() -> controller.payload(id, null, "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(service, never()).payload(any(), anyString());
     }
 }

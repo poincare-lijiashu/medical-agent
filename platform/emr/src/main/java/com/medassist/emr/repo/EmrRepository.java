@@ -298,6 +298,18 @@ public class EmrRepository {
                 .param(docType).query(Integer.class).optional();
     }
 
+    /** 模板表里出现过的全部文书类型（启动时与签名策略做包含校验）。 */
+    public List<String> listTemplateDocTypes() {
+        return jdbc.sql("SELECT DISTINCT doc_type FROM emr_svc.md_template ORDER BY doc_type")
+                .query(String.class).list();
+    }
+
+    /** 签名策略已配置的全部文书类型。 */
+    public List<String> listPolicyDocTypes() {
+        return jdbc.sql("SELECT doc_type FROM emr_svc.sign_policy ORDER BY doc_type")
+                .query(String.class).list();
+    }
+
     // ---------------------------------------------------------------- 签名策略管理（N-04）
 
     private static final RowMapper<SignPolicy> POLICY_MAPPER = (rs, i) -> new SignPolicy(

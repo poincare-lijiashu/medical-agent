@@ -61,7 +61,7 @@ public class GroupingController {
     public ApiResponse<PaymentScheme> createScheme(
             @Valid @RequestBody CreateSchemeReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.createScheme(req, actor));
     }
@@ -71,7 +71,7 @@ public class GroupingController {
             @PathVariable String code,
             @Valid @RequestBody UpdateSchemeReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.updateScheme(code, req, actor));
     }
@@ -90,7 +90,7 @@ public class GroupingController {
             @PathVariable String code,
             @Valid @RequestBody ImportGroupsReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.importGroups(code, req.groups(), actor));
     }
@@ -109,7 +109,7 @@ public class GroupingController {
             @PathVariable String code,
             @Valid @RequestBody ImportRulesReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.importRules(code, req.rules(), actor));
     }
@@ -119,7 +119,7 @@ public class GroupingController {
     public ApiResponse<GroupSimulation> simulate(
             @Valid @RequestBody SimulateReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.simulate(req, actor));
     }
@@ -128,7 +128,7 @@ public class GroupingController {
     public ApiResponse<GroupSimulation> latest(
             @PathVariable UUID visitId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.latestSimulation(visitId, actor));
     }
@@ -138,7 +138,7 @@ public class GroupingController {
             @PathVariable UUID visitId,
             @RequestParam(required = false) Integer limit,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.simulations(visitId, limit, actor));
     }

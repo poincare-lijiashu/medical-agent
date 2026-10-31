@@ -2,6 +2,7 @@ package com.medassist.insurance.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.service.InsuranceService;
 import com.medassist.insurance.web.InsuranceDtos.GenerateBillReq;
 import com.medassist.insurance.web.InsuranceDtos.ItemReq;
@@ -43,7 +44,7 @@ class InsuranceControllerPermissionTest {
     @BeforeEach
     void setUp() {
         service = mock(InsuranceService.class);
-        catalogController = new CatalogController(service);
+        catalogController = new CatalogController(service, mock(InsuranceMetrics.class));
         memberController = new MemberController(service);
         settlementController = new SettlementController(service);
     }

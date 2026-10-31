@@ -105,6 +105,28 @@ class GroupingControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("方案修改与规则导入：只读权限 403（补齐负例）")
+    void updateSchemeAndImportRulesRequireManage() {
+        var update = new InsuranceDtos.UpdateSchemeReq("n", new BigDecimal("1"),
+                LocalDate.now(), true, 0L);
+        var rules = new InsuranceDtos.ImportRulesReq(List.of(
+                new InsuranceDtos.RuleReq(1, "DIAGNOSIS", "J18", null, "GB1", true)));
+
+        assertThatThrownBy(() -> controller.updateScheme("DRG-2026", update,
+                "insurance:settlement:read", "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        assertThatThrownBy(() -> controller.importRules("DRG-2026", rules,
+                "insurance:settlement:read", "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(service, never()).updateScheme(anyString(), any(), anyString());
+        verify(service, never()).importRules(anyString(), any(), anyString());
+    }
+
+    @Test
     @DisplayName("模拟测算：无权限头 403")
     void simulateRequiresPermission() {
         var req = new SimulateReq(visitId, "DRG-2026", List.of("J18.900"), List.of());

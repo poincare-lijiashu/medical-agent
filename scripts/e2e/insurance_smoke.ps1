@@ -322,7 +322,23 @@ CheckNum 'file.item.priceLimit' $fileItems[0].priceLimit 50.00
 $r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=preview" $csvPath $doctorToken
 Check 'file.doctor.403' $r.Status 403
 
-Remove-Item $csvPath, $xlsxPath -Force
+# XML catalog (attribute form) goes through the same preview path
+$xmlCode = "I-XML-$suffix"
+$xmlPath = Join-Path $env:TEMP "catalog-$suffix.xml"
+$xmlBody = "<catalog><item code=`"$xmlCode`" name=`"Xml Item`" category=`"SERVICE`" payCategory=`"A`" priceLimit=`"20.00`"/></catalog>"
+[IO.File]::WriteAllText($xmlPath, $xmlBody, (New-Object System.Text.UTF8Encoding($false)))
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=preview" $xmlPath $token
+Check 'file.xml.preview' $r.Status 200
+Check 'file.xml.created' (Res $r).created 1
+
+$r = Invoke-Upload "/api/v2/insurance/items/import-file?mode=apply" $xmlPath $token
+Check 'file.xml.apply' $r.Status 200
+Check 'file.xml.applied' (Res $r).created 1
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/items?q=$xmlCode" $null $token
+Check 'file.xml.list' (@(Res $r).Count) 1
+
+Remove-Item $csvPath, $xlsxPath, $xmlPath -Force
 
 # ---------------------------------------------------------------- 6.2 settlement export batch + receipt
 $today = (Get-Date).ToString('yyyy-MM-dd')
@@ -372,6 +388,18 @@ Check 'export.cancel.status' (Res $r).status 'CANCELLED'
 
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
 Check 'export.reCreateAfterCancel' $r.Status 200
+$exportId = (Res $r).id
+$exportBatchNo = (Res $r).batchNo
+
+# REJECTED with a reason reaches the terminal state (and releases the bills for re-export)
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
+    status = 'REJECTED'; receiptNo = "RJ-$suffix"; message = 'amount mismatch'
+} $token
+Check 'export.reject.ok' $r.Status 200
+Check 'export.reject.status' (Res $r).status 'REJECTED'
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
+Check 'export.reCreateAfterReject' $r.Status 200
 $exportId = (Res $r).id
 $exportBatchNo = (Res $r).batchNo
 

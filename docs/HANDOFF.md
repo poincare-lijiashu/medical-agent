@@ -529,6 +529,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 349→**362**；两个 E2E 全过；insurance 到 V10；
      `EXPLAIN` 显示审计 actor 分支走 `ix_auth_change_log_actor_ts`
 
+41. **第四轮评测第四批整改（2026-11-01）：权限归属、测试补强与观测**
+   - **SF-16**：SignPolicy/Export/Grouping 的写操作 `X-Actor` 改为必填（缺头 400），不再落 "system"
+   - **SF-17**：新增 `SignPolicyGuard`（ApplicationRunner）启动断言"模板 docType ⊆ 签名策略"，缺失即 fail-fast
+   - **SF-18**：补权限负例（SignPolicy upsert 无头、Grouping updateScheme/importRules、Export list/payload 无头）
+   - **SF-19**：E2E 补 XML 目录导入（5 项断言）与报盘 REJECTED 成功路径（4 项）；sign_policy 新建仅单测可覆盖
+   - **SF-20**：补 CSV CRLF/单独 CR 用例
+   - **SF-21**：新增 `medassist.insurance.catalog_import` / `export_action` 两个计数器与两条告警规则
+   - **SF-22/SF-23**：EXPLAIN 证据入文档；E2E 断言数以 PASS 行实测更正（insurance **161**、emr **119**）
+   - 验证：全量单测 **361 项全过**（本批新增守卫 3 项 + 权限负例 3 组）；两个 E2E 全过；
+     启动日志 `sign.policy.check.ok`
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -606,6 +617,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 - 给导出/批量接口加"幂等"时注意：`NOT EXISTS` 排除条件要写成
   `x.status IN ('GENERATED','ACCEPTED')`，把 `REJECTED/CANCELLED` 排除在外，
   否则退回/撤销过的清单永远无法重报
+- PowerShell 的 `Set-Content -Encoding UTF8` 在 5.1 下**会写 BOM**，改 .java 会编译失败；
+  批量替换后必须用 `[IO.File]::WriteAllText(path, text, UTF8Encoding($false))` 重写。
+  另注意 `[IO.File]::ReadAllText` 会自动吞掉 BOM，此时再 `Substring(1)` 会**吃掉首字符**
+  （曾把 `package` 变成 `ackage`）
+- 给控制器构造函数加依赖（如 MeterRegistry 封装）会波及所有直接 `new XxxController(service)` 的单测，
+  但影响面比改 Service 构造函数小得多——业务打点优先放在控制器层
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

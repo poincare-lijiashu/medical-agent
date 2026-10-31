@@ -5,6 +5,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
+import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.service.InsuranceService;
@@ -40,9 +41,11 @@ public class CatalogController {
     private static final String READ = "insurance:settlement:read";
 
     private final InsuranceService service;
+    private final InsuranceMetrics metrics;
 
-    public CatalogController(InsuranceService service) {
+    public CatalogController(InsuranceService service, InsuranceMetrics metrics) {
         this.service = service;
+        this.metrics = metrics;
     }
 
     @GetMapping("/items")
@@ -92,9 +95,18 @@ public class CatalogController {
         try {
             content = file.getBytes();
         } catch (IOException e) {
+            metrics.catalogImport(mode, false);
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "读取上传文件失败，请重新上传");
         }
-        return ApiResponse.ok(service.importCatalogFile(file.getOriginalFilename(), content, mode, actor));
+        try {
+            CatalogImportResult result = service.importCatalogFile(
+                    file.getOriginalFilename(), content, mode, actor);
+            metrics.catalogImport(mode, true);
+            return ApiResponse.ok(result);
+        } catch (BusinessException e) {
+            metrics.catalogImport(mode, false);
+            throw e;
+        }
     }
 
     @PutMapping("/items/{id}/enabled")

@@ -49,7 +49,7 @@ public class SignPolicyController {
             @PathVariable String docType,
             @Valid @RequestBody SignPolicyReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.upsert(docType, req.requiredLevel(), req.version(), actor));
     }

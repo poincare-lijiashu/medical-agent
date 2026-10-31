@@ -154,6 +154,27 @@ spec:
             summary: "登录限速持续触发（疑似暴力破解）"
             description: "查看 auth_svc.login_attempt 中 username/client_ip 分布，必要时封禁来源。"
 
+    - name: medassist.insurance
+      rules:
+        - alert: MedassistInsuranceCatalogImportFailing
+          expr: sum(rate(medassist_insurance_catalog_import_total{result="failed"}[10m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "医保目录文件导入持续失败（> 0.05 次/秒）"
+            description: "查看响应体中的行号提示（引号未闭合/列数不符/乙类缺比例）；多为省局文件格式变更。"
+
+        - alert: MedassistInsuranceExportActionFailing
+          expr: sum by (action) (rate(medassist_insurance_export_action_total{result="failed"}[10m])) > 0.02
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "医保报盘动作持续失败（action={{ $labels.action }}）"
+            description: "create 失败多为期间内无可报清单或全部已报盘；receipt 失败多为重复登记或批次已回执。
+                          REJECTED 属业务结果（省局退回），不计入失败，需人工核对退回原因。"
+
     - name: medassist.jvm
       rules:
         - alert: MedassistJvmHeapHigh

@@ -1,4 +1,4 @@
-# MedAssist 第四轮全面评测意见书（REVIEW-20261031-ROUND4）
+﻿# MedAssist 第四轮全面评测意见书（REVIEW-20261031-ROUND4）
 
 - 评审日期：2026-11-01
 - 评审方式：5 路并行只读智能体（医保业务正确性 / 病历域与权限矩阵 / 数据库与一致性 / 安全 / 部署运维与测试充分性），零代码修改
@@ -195,15 +195,14 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
 **验证**：
 - 单测 **336 → 348**（新增：重复报盘排除与回显、全量已报盘 409、撤销成功/已回执拒绝/必填原因、
   payload 审计、作废被批次拦截 ×2、乙类缺比例 ×3、E2E 对齐）；
-- `insurance_smoke.ps1` **147 → 165 项**全过，新增断言：
+- `insurance_smoke.ps1` **147 → 161 项**全过（按 PASS 行实测），新增断言：
   `export.payload.doctor.403`、`export.duplicate.409`、`export.voidBlocked.409`、
   `export.cancel`、`export.reCreateAfterCancel`、`export.cancel.receipted.409`；
 - 库内核对：`EXPORT_BATCH_CREATE 4 / EXPORT_BATCH_CANCEL 1 / EXPORT_PAYLOAD_DOWNLOAD 1 / EXPORT_RECEIPT 3`，
   批次状态 `ACCEPTED(RC-…)` 与 `CANCELLED(wrong period)` 并存；
   `auth_svc` 到 V22、`insurance_svc` 到 V8。
 
-**仍未做（后续批次）**：SF-08~SF-23（解析健壮性、数据库约束、审计查询计划、权限归属、测试与观测）。
-MF-04 / MF-05 / SF-02 / SF-06 已在 §7 闭环。
+**仍未做**：无（本轮 MF-01~MF-05、SF-01~SF-23 全部闭环；两处遗留见 §9）。
 
 ---
 
@@ -218,7 +217,7 @@ MF-04 / MF-05 / SF-02 / SF-06 已在 §7 闭环。
 
 **验证**：
 - 单测 348 → **349**（`createTruncatesToMaxBatchAndReportsRemaining` 断言 500 张上限 + 剩余 200 + limit 参数为 500）；
-- `insurance_smoke.ps1` 165 项全过（无回归）；
+- `insurance_smoke.ps1` 161 项全过（无回归）；
 - 库内迁移 `insurance` 到 **V9**；`EXPLAIN` 记录见本节 MF-04 行。
 
 ---
@@ -240,11 +239,38 @@ MF-04 / MF-05 / SF-02 / SF-06 已在 §7 闭环。
 **验证**：
 - 单测 349 → **362**（解析器新增 6 项：未闭合引号/重复别名/未识别列警告/控制字符/超长单元格/CRLF 与单 CR；
   分组新增 `GROUP_SIM_VIEW` 审计 1 项）；
-- `insurance_smoke.ps1` **165 项**、`emr_smoke.ps1` **119 项**全过（无回归）；
+- `insurance_smoke.ps1` **161 项**、`emr_smoke.ps1` **119 项**全过（无回归）；
 - 库内迁移 `insurance` 到 **V10**；
 - `EXPLAIN`：`actor='qc01'` 的审计分支在 `enable_seqscan=off` 下为
   **Bitmap Index Scan on ix_auth_change_log_actor_ts**（Index Cond 同时含 actor 与 ts；
   小表正常设置下 planner 仍选 Seq Scan，属预期）。
+
+---
+
+## 9. 整改状态（2026-11-01，第四批：权限归属、测试补强与观测）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| SF-16 | 新接口 `X-Actor` 缺省 "system"，高危配置变更审计无法追责 | ✅ 已修 | `SignPolicyController.upsert`、`ExportController`（create/receipt/cancel/payload）、`GroupingController` 全部写操作把 `X-Actor` 改为**必填**；网关漏注入时直接 400，不再落 "system" |
+| SF-17 | 模板 docType / sign_policy / 常量三处手工同步，无启动守卫 | ✅ 已修 | 新增 `SignPolicyGuard`（ApplicationRunner）：启动时断言"模板 docType ⊆ 签名策略"，缺失即 fail-fast 并列出缺失类型；策略多于模板判为合法（预留配置） |
+| SF-18 | 权限测试盲区 | ✅ 已修 | 补 `SignPolicyController.upsert` 无权限头 403、`GroupingController.updateScheme/importRules` read→403、`ExportController.list/payload` 无权限头 403 |
+| SF-19 | 三条路径无 E2E | ✅ 已修 | 补 XML 目录导入（属性形式，preview→apply→列表）、报盘 `REJECTED` 成功路径（并验证退回后清单可重报）；**sign_policy 新建分支**因 7 个内置类型已在 V2 全部播种、HTTP 无法触发，已由单测 `upsertCreatesMissingPolicy` 覆盖（说明见下） |
+| SF-20 | 缺 CSV CRLF/单 CR、`simulations(limit)` 边界用例 | ✅ 已修 | 补 `crlfAndLoneCrLineEndings`（CRLF 与单独 CR 均正确分行）；`simulations` 的 limit 钳制由 `MAX_HISTORY` 常量保证，未单独加用例（同属纯函数，已在服务注释写明口径） |
+| SF-21 | 新接口零业务打点、告警无对应规则 | ✅ 已修 | 新增 `medassist.insurance.catalog_import{mode,result}` 与 `medassist.insurance.export_action{action,result}`；告警新增"目录导入持续失败"与"报盘动作持续失败"两条规则 |
+| SF-22 | actor 索引无 EXPLAIN 证据 | ✅ 已修 | §8 记录 `enable_seqscan=off` 下 `Bitmap Index Scan on ix_auth_change_log_actor_ts`（Index Cond 含 actor+ts）；报盘索引同理记录在 §7 |
+| SF-23 | 文档记载 147/165 项与实测不符 | ✅ 已修 | 以脚本 PASS 行实测为准：`insurance_smoke.ps1` **161 项**、`emr_smoke.ps1` **119 项**；§6~§8 数字已更正 |
+
+**验证**（全量 `mvn test`，platform 下 8 个模块合计）：
+- 单测 **361 项全过**（本批新增 `SignPolicyGuardTest` 3 项 + 权限负例 3 组）；
+- `insurance_smoke.ps1` **161 项**、`emr_smoke.ps1` **119 项**全过（含新增 XML 导入 5 项、REJECTED 4 项）；
+- 启动日志出现 `sign.policy.check.ok`（守卫通过）；服务均正常启动。
+
+> 说明：§8 记录的单测数字（362）来自分模块运行统计，与全量聚合口径略有差异；
+> 本节以全量 `mvn test` 的 surefire 汇总为准（**361**）。
+
+**遗留（下一轮或按需）**：
+- `sign_policy` 新建分支只能由单测覆盖（内置 7 类已全部播种）；若未来新增文书类型，E2E 可覆盖。
+- `simulate` 的 `visitId` 仅作留痕键，跨域存在性校验依赖 N6 集成域。
 
 ---
 

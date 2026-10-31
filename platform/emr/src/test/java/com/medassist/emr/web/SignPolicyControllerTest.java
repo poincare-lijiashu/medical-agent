@@ -51,6 +51,18 @@ class SignPolicyControllerTest {
     }
 
     @Test
+    @DisplayName("配置：无权限头 403（不能靠缺头绕过）")
+    void upsertRejectedWithoutPermissionsHeader() {
+        var req = new SignPolicyReq(2, 0L);
+
+        assertThatThrownBy(() -> controller.upsert("PROGRESS_NOTE", req, null, "qc01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(service, never()).upsert(anyString(), anyInt(), anyLong(), anyString());
+    }
+
+    @Test
     @DisplayName("配置：病案质控放行并透传操作人")
     void upsertAllowedForQcPermission() {
         var req = new SignPolicyReq(2, 3L);
