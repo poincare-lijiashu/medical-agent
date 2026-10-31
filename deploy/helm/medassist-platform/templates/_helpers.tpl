@@ -162,23 +162,21 @@ Java 服务公共环境变量。
       name: {{ .root.Values.external.internalApi.existingSecret }}
       key: {{ .root.Values.external.internalApi.secretKey }}
 # ---- 服务间 HMAC 签名（MF-07）----
-# 网关与全部业务服务共用同一密钥集；属性名经 Spring 宽松绑定映射为
-#   MEDASSIST_INTERNAL_AUTH_MODE              → medassist.internal-auth.mode
-#   MEDASSIST_INTERNAL_AUTH_KEYS_JSON         → medassist.internal-auth.keys-json
-#   MEDASSIST_INTERNAL_AUTH_CLOCK_SKEW_SECONDS→ medassist.internal-auth.clock-skew-seconds
-#   MEDASSIST_INTERNAL_AUTH_NONCE_TTL_SECONDS → medassist.internal-auth.nonce-ttl-seconds
-#   MEDASSIST_INTERNAL_AUTH_INTERNAL_PATHS_SIGNATURE_REQUIRED → ...internal-paths-signature-required
+# 网关与全部业务服务共用同一密钥集。
+# 注意 Spring 的宽松绑定规则：环境变量名 = 属性名大写、点换下划线、**连字符直接删除**，
+# 因此 medassist.internal-auth.keys-json 对应 MEDASSIST_INTERNALAUTH_KEYSJSON
+# （写成 MEDASSIST_INTERNAL_AUTH_KEYS_JSON 不会生效，mode 会保持默认 off）。
 {{- $ia := .root.Values.internalAuth | default dict }}
 {{- $hmac := .root.Values.external.internalHmac | default dict }}
-- name: MEDASSIST_INTERNAL_AUTH_MODE
+- name: MEDASSIST_INTERNALAUTH_MODE
   value: {{ $ia.mode | default "log" | quote }}
-- name: MEDASSIST_INTERNAL_AUTH_CLOCK_SKEW_SECONDS
+- name: MEDASSIST_INTERNALAUTH_CLOCKSKEWSECONDS
   value: {{ $ia.clockSkewSeconds | default 60 | quote }}
-- name: MEDASSIST_INTERNAL_AUTH_NONCE_TTL_SECONDS
+- name: MEDASSIST_INTERNALAUTH_NONCETTLSECONDS
   value: {{ $ia.nonceTtlSeconds | default 120 | quote }}
-- name: MEDASSIST_INTERNAL_AUTH_INTERNAL_PATHS_SIGNATURE_REQUIRED
+- name: MEDASSIST_INTERNALAUTH_INTERNALPATHSSIGNATUREREQUIRED
   value: {{ $ia.internalPathsSignatureRequired | default false | quote }}
-- name: MEDASSIST_INTERNAL_AUTH_KEYS_JSON
+- name: MEDASSIST_INTERNALAUTH_KEYSJSON
   valueFrom:
     secretKeyRef:
       name: {{ $hmac.existingSecret | default "medassist-internal-hmac" }}

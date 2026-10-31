@@ -573,10 +573,14 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `/internal/**` 在 `internal-paths-signature-required=false`（默认）时仍由控制器校验内部令牌，
      调用方签名作为 T5 单独上线
    - 密钥：`medassist-internal-hmac` Secret（键 `keys-json`），JSON 支持 active + 多 key 并行轮换；
-     Helm 经 `MEDASSIST_INTERNAL_AUTH_*` 环境变量宽松绑定，**无需改各服务 application.yml**
+     Helm 注入 `MEDASSIST_INTERNALAUTH_*`（连字符删除后的宽松绑定名），**无需改各服务 application.yml**
    - 灰度：values-dev / base / staging = `log`（只打点不拦截，先摸清真实调用图），prod = `enforce`；
      指标 `medassist.internal.auth{result=ok|missing|skew|replay|unknown_key|bad_sig|bad_version}`
-   - 验证：全量单测 **411 项全过**（新增签名协议 10 项 + 过滤器行为 10 项 + 网关签名 4 项 + 启动守卫 5 项）
+   - 验证：全量单测 **411 项全过**（新增签名协议 10 项 + 过滤器行为 10 项 + 网关签名 4 项 + 启动守卫 5 项）；
+     新增 `scripts/e2e/internal_auth_smoke.ps1` **11 项断言全过**（gateway/emr 以 enforce 实跑）：
+     直连 `:8086` 伪造 `X-Permissions`/伪造签名/无签名均 **403**、`/actuator/health` 豁免 200、
+     经网关同请求 200、客户端伪造签名头不影响、低权账号经网关自提权限被拒、指标 `medassist_internal_auth_total` 有计数
+   - 环境变量命名（已修正 Helm）：`medassist.internal-auth.*` → `MEDASSIST_INTERNALAUTH_*`（连字符删除）
    - 已知边界（阶段一）：nonce 去重为进程内实现（多副本 60s 窗口内可重放，阶段二换 Redis）；
      请求体摘要固定 `-`（体完整性依赖内网/TLS）；`/internal/**` 的调用方签名待 T5
 
@@ -645,6 +649,16 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   否则测到的是 Bean Validation 而不是业务冲突
 - Worklist 这类"设备轮询"接口要把已经 `COMPLETED/CANCELLED` 的影像剔除：
   只看申请状态（IN_PROGRESS）会导致检查做完仍一直出现在设备列表里
+- Spring 环境变量宽松绑定会**删掉连字符**：`medassist.internal-auth.mode` 对应
+  `MEDASSIST_INTERNALAUTH_MODE`，不是 `MEDASSIST_INTERNAL_AUTH_MODE`。
+  写错不会报错，只会"配置像没生效"（mode 保持 off）；凡是带 `-` 的属性前缀都要按此自检
+- Boot 4 的 Web 层已切 **Jackson 3（`tools.jackson`）**，但 classpath 里仍有 Jackson 2。
+  在过滤器里用 Jackson 2 序列化 `Instant` 会缺 JSR-310 模块并抛异常 → 拒绝响应变 500。
+  安全拒绝路径必须**手写 JSON 或使用常量结构**，不能依赖可能缺模块的序列化器
+- `mvn package` 打印 "Replacing main artifact ... repackaged" 不代表 jar 真的更新：
+  实测出现过 fat jar 时间戳与大小都不变、内部 `platform-common.jar` 仍是旧版（缺新类），
+  导致"配置已生效但行为没变"。怀疑产物不新时，**先删 target 下的 jar 再打包**，
+  并用 `jar tf` 检查嵌套依赖里的类是否存在
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致
   "无法连接到远程服务器"；本机联调用 `curl.exe --noproxy "*"`，或临时清空系统代理
 - 用 `Start-Process` 起的 java 子进程会随命令会话结束被回收；常驻服务要用后台命令（run_in_background）

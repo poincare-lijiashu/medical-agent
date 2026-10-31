@@ -35,7 +35,7 @@ class InternalAuthFilterTest {
         InternalAuthProperties props = new InternalAuthProperties(
                 mode, 60, KEYS_JSON, 120, false, null);
         return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
-                null, null);
+                null);
     }
 
     private static MockHttpServletRequest request(String method, String uri) {

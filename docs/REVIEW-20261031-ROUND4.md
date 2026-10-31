@@ -283,11 +283,18 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
 | T3 网关签名 | ✅ 已完成 | `gateway/filter/InternalSignatureGlobalFilter`（order=`LOWEST_PRECEDENCE-100`，晚于 StripPrefix、早于路由）；客户端伪造的 5 个 `X-Internal-*` 头进入 `AuthHeaders.CLIENT_SUPPLIED` 一律剥离 |
 | T4 Helm | ✅ 已完成 | `internalAuth.mode/clockSkewSeconds/nonceTtlSeconds/internalPathsSignatureRequired`；`medassist-internal-hmac` Secret；dev/base/staging=log（先观测）、prod=enforce |
 | T5 调用方签名 | ⏳ 未开始 | `/internal/**` 当前由 `internal-paths-signature-required=false` 保持内部令牌校验，作为下一批独立上线 |
-| T6 E2E + gitleaks | ⏳ 未开始 | 需补"直连业务端口伪造身份头 → 403"断言；密钥扫码进 CI |
+| T6 E2E + gitleaks | 🟡 部分完成 | **直连业务端口伪造身份头 → 403 已实测**（`scripts/e2e/internal_auth_smoke.ps1` 11 项全过，gateway/emr enforce）；gitleaks 进 CI 未做 |
 | T7 运维手册 | ⏳ 未开始 | 轮换/应急/回滚演练记录 |
 | T8 mTLS | ⏸ 可选 | 阶段二另行评审 |
 
 **验证**：全量 `mvn test` **411 项全过**（新增 29 项：签名协议 10 + 过滤器 10 + 网关 4 + 启动守卫 5）。
+
+**实跑验证（2026-11-01，gateway + emr 以 enforce 启动）**：`internal_auth_smoke.ps1` **11 项全过**——
+直连 `:8086` 伪造 `X-Permissions` / 伪造签名 / 无签名均 403，`/actuator/health` 豁免 200，
+经网关同请求 200，客户端伪造签名头被剥离，低权账号经网关自提权限被拒，
+`medassist_internal_auth_total{result=...}` 指标有计数。期间修复两个真实缺陷：
+① Helm 环境变量名少删连字符（`MEDASSIST_INTERNALAUTH_*`）导致 mode 实际未生效；
+② 过滤器用 Jackson 2 序列化 `Instant` 在 Boot 4（Jackson 3 Web 栈）下抛异常使 403 变 500，已改为手写 JSON。
 
 **阶段一口径（写进部署文档，避免误判为"未做完"）**：
 - nonce 去重是进程内实现：单副本严格有效，多副本在 60 秒时间窗内仍可能重放；阶段二换 Redis。

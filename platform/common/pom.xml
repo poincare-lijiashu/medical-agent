@@ -23,18 +23,13 @@
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
     </dependency>
-    <!-- 服务间签名的密钥集解析与 403 响应序列化（MF-07）：optional 仅用于编译，
-         各业务服务经 spring-boot-starter-web 自带 jackson-databind。 -->
+    <!-- 服务间签名的密钥集 JSON 解析（MF-07）：optional 仅用于编译，
+         各业务服务经 spring-boot-starter-web 自带 jackson-databind。
+         注意：403 响应体是手写 JSON，不走 Jackson——Boot 4 Web 层已切 Jackson 3，
+         在过滤器里序列化 Instant 会因缺 JSR-310 模块抛异常变成 500。 -->
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <optional>true</optional>
-    </dependency>
-    <!-- 403 响应体含 Instant（ApiResponse.timestamp）：本地兜底 ObjectMapper 需注册 JSR-310。
-         各服务的 Boot ObjectMapper 已自带该模块，这里只为 common 自身与测试可用。 -->
-    <dependency>
-      <groupId>com.fasterxml.jackson.datatype</groupId>
-      <artifactId>jackson-datatype-jsr310</artifactId>
       <optional>true</optional>
     </dependency>
     <!-- Prometheus 指标导出（P0-5 ServiceMonitor 抓取 /actuator/prometheus 的前提）：

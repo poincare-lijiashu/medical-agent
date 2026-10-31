@@ -1,7 +1,5 @@
 package com.medassist.common.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.InternalAuthProperties;
@@ -21,6 +19,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,20 +57,20 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     public static final String ATTR_CALLER = "medassist.internal-auth.caller";
 
     private static final String METRIC_NAME = "medassist.internal.auth";
+    private static final String REJECT_MESSAGE = "请求来源未通过校验";
+    private static final int MAX_TRACE_LENGTH = 64;
     private static final int MAX_NONCE_ENTRIES = 200_000;
 
     private final InternalAuthProperties props;
     private final InternalKeySet keySet;
-    private final ObjectMapper mapper;
     private final MeterRegistry meterRegistry;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
     private final NonceCache nonces;
 
     public InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
-                              ObjectMapper mapper, MeterRegistry meterRegistry) {
+                              MeterRegistry meterRegistry) {
         this.props = props;
         this.keySet = keySet;
-        this.mapper = mapper == null ? new ObjectMapper().findAndRegisterModules() : mapper;
         this.meterRegistry = meterRegistry;
         this.nonces = new NonceCache(props.nonceTtlSecondsOrDefault() * 1000L, MAX_NONCE_ENTRIES);
     }
@@ -204,13 +203,30 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        ApiResponse<Void> body = ApiResponse.fail(ErrorCode.FORBIDDEN, "请求来源未通过校验", traceId);
-        response.getWriter().write(mapper.writeValueAsString(body));
+        // 手写响应体：不依赖 Jackson 的 JavaTime 模块。
+        // Boot 4 的 Web 层已切到 Jackson 3，若这里用 Jackson 2 序列化 Instant 会抛
+        // InvalidDefinitionException（实测 500），拒绝响应必须是"绝不失败"的路径。
+        StringBuilder body = new StringBuilder(160)
+                .append("{\"code\":").append(ErrorCode.FORBIDDEN.code())
+                .append(",\"message\":\"").append(REJECT_MESSAGE).append('"');
+        if (traceId != null) {
+            body.append(",\"traceId\":\"").append(traceId).append('"');
+        }
+        body.append(",\"timestamp\":\"").append(Instant.now()).append("\"}");
+        response.getWriter().write(body.toString());
     }
 
+    /** traceId 只允许安全字符并限长，避免把客户端头原样拼进 JSON。 */
     private static String traceId(HttpServletRequest request) {
         String trace = request.getHeader(AuthHeaders.TRACE_ID);
-        return trace == null || trace.isBlank() ? null : trace;
+        if (trace == null || trace.isBlank()) {
+            return null;
+        }
+        String value = trace.trim();
+        if (value.length() > MAX_TRACE_LENGTH) {
+            value = value.substring(0, MAX_TRACE_LENGTH);
+        }
+        return value.matches("[A-Za-z0-9_.-]+") ? value : null;
     }
 
     private static boolean isBlank(String value) {

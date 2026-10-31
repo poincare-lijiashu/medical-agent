@@ -53,8 +53,7 @@ public class InternalAuthAutoConfiguration {
                     "medassist.internal-auth.mode 非法（" + mode + "）：只允许 off / log / enforce，服务拒绝启动");
         }
 
-        ObjectMapper mapper = mapperProvider.getIfAvailable(
-                () -> new ObjectMapper().findAndRegisterModules());
+        ObjectMapper mapper = mapperProvider.getIfAvailable(ObjectMapper::new);
         InternalKeySet keySet = InternalKeySet.parse(props.keysJson(), mapper);
 
         if (InternalAuthProperties.ENFORCE.equals(mode) && !keySet.configured()) {
@@ -72,7 +71,7 @@ public class InternalAuthAutoConfiguration {
         log.info("internal-auth.mode={} keys={} clockSkew={}s internalPathsRequired={}",
                 mode, keySet.configured() ? "configured" : "none",
                 props.clockSkewSecondsOrDefault(), props.internalPathsSignatureRequiredOrDefault());
-        return new InternalAuthFilter(props, keySet, mapper, registryProvider.getIfAvailable());
+        return new InternalAuthFilter(props, keySet, registryProvider.getIfAvailable());
     }
 
     /**
