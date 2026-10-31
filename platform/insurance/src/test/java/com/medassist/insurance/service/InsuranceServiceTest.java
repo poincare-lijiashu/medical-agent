@@ -7,6 +7,7 @@ import com.medassist.insurance.client.PatientClient;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
+import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.BillView;
@@ -418,6 +419,71 @@ class InsuranceServiceTest {
                 detail.capture());
         assertThat(detail.getValue()).contains("\"before\"").contains("旧名称")
                 .contains("\"after\"").contains("示例项目");
+    }
+
+    // ---------------------------------------------------------------- 参保历史（S-12）
+
+    private void stubPatient() {
+        when(patientClient.requireActive(patientId))
+                .thenReturn(new PatientClient.PatientRef(patientId, "P0001", "Zhang San"));
+    }
+
+    private MemberReq memberReq(String status) {
+        return new MemberReq(patientId, "EMPLOYEE", "LOCAL", null, BigDecimal.ZERO,
+                BigDecimal.ONE, new BigDecimal("300000"), null, null, status);
+    }
+
+    private Member disabledMember() {
+        return new Member(UUID.randomUUID(), patientId, "P0001", "EMPLOYEE", "本地", null,
+                BigDecimal.ZERO, BigDecimal.ONE, new BigDecimal("300000"),
+                LocalDate.now().minusDays(30), null, Member.DISABLED, 2L);
+    }
+
+    @Test
+    @DisplayName("参保：首次登记写入 CREATE 历史（S-12）")
+    void registerMemberAppendsCreateHistory() {
+        stubPatient();
+        Member saved = member("0", "1.0000", "300000.00");
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.empty(), Optional.of(saved));
+        when(repo.upsertMember(any(), eq(0L))).thenReturn(Optional.of(saved.id()));
+
+        service.registerMember(memberReq(null), "cashier01");
+
+        ArgumentCaptor<MemberHistory> captor = ArgumentCaptor.forClass(MemberHistory.class);
+        verify(repo).appendMemberHistory(captor.capture());
+        assertThat(captor.getValue().changeType()).isEqualTo(MemberHistory.CREATE);
+        assertThat(captor.getValue().changedBy()).isEqualTo("cashier01");
+    }
+
+    @Test
+    @DisplayName("参保：已停用参保不能靠默认值复活（409，S-12）")
+    void disabledMemberCannotBeRevivedImplicitly() {
+        stubPatient();
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(disabledMember()));
+
+        assertThatThrownBy(() -> service.registerMember(memberReq(null), "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).upsertMember(any(), anyLong());
+        verify(repo, never()).appendMemberHistory(any());
+    }
+
+    @Test
+    @DisplayName("参保：显式 ACTIVE 才可恢复，并留痕 ENABLE（S-12）")
+    void explicitActiveRevivesAndRecordsEnable() {
+        stubPatient();
+        Member disabled = disabledMember();
+        Member revived = member("0", "1.0000", "300000.00");
+        when(repo.findMemberByPatient(patientId))
+                .thenReturn(Optional.of(disabled), Optional.of(revived));
+        when(repo.upsertMember(any(), eq(disabled.version()))).thenReturn(Optional.of(revived.id()));
+
+        service.registerMember(memberReq(Member.ACTIVE), "yb01");
+
+        ArgumentCaptor<MemberHistory> captor = ArgumentCaptor.forClass(MemberHistory.class);
+        verify(repo).appendMemberHistory(captor.capture());
+        assertThat(captor.getValue().changeType()).isEqualTo(MemberHistory.ENABLE);
     }
 
     @Test

@@ -468,4 +468,20 @@ S-26、S-28~S-30（E2E 补 CHIEF 三级签名与首程 8h、Mockito 去过拟合
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–17 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 18. 整改状态（2026-10-31，第十二批：参保历史与停用保护）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| S-12 | 参保 UPSERT 全覆盖，停用状态被默认 ACTIVE "复活"；无参保历史 | ✅ 已修 | ① `insurance/V4` 新增追加式 `insurance_member_history`（CREATE/UPDATE/DISABLE/ENABLE + 变更人 + 时点 + 参数快照）；② 已停用参保必须**显式**提交 `status=ACTIVE` 才可恢复（否则 409，杜绝默认值复活）；③ 新增 `GET /insurance/members/{patientId}/history` 查询变更轨迹 |
+
+**行为变化（需告知窗口岗）**：停用参保后再次登记必须显式带 `status=ACTIVE`，
+前端"直接保存"会收到 409「参保已停用，如需恢复请显式提交 status=ACTIVE」。
+
+**验证**：
+- 单测 **264 → 267**（CREATE 留痕、停用不可隐式复活、显式启用留痕 ENABLE）；
+- `insurance_smoke.ps1` **78 → 87 项**全过（改→停用→隐式复活 409→显式启用 200→历史 4 条，顺序 `ENABLE,DISABLE,UPDATE,CREATE`）；
+- 库内：insurance 迁移到 v4，`insurance_member_history` 结构与索引符合预期。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–18 节记录整改落地与验证。后续批次按第 5 节路线继续。*

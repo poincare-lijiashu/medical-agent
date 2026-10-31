@@ -479,6 +479,18 @@ doctor01 确认 **403**、只读 200。
 
 ---
 
+## 1.22 已完成（2026-10-31，第三轮评测第十二批：参保历史与停用保护）
+
+| 能力 | 位置 | 关键保证 |
+|---|---|---|
+| 参保历史 | `insurance_member_history`（insurance/V4） | 追加式记录 CREATE/UPDATE/DISABLE/ENABLE + 变更人 + 时点 + 参数快照 |
+| 停用保护 | `InsuranceService.registerMember` | 已停用参保必须显式 `status=ACTIVE` 才可恢复，否则 409（不被默认值复活） |
+| 历史查询 | `GET /insurance/members/{patientId}/history?limit=` | 最新在前，可还原任意时点待遇（起付线/比例/封顶/有效期/状态） |
+
+**验证**：单测 264→**267**；`insurance_smoke.ps1` 78→**87 项**全过（历史顺序 `ENABLE,DISABLE,UPDATE,CREATE`）。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

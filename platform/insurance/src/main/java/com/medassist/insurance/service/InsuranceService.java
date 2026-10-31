@@ -9,6 +9,7 @@ import com.medassist.insurance.domain.InsuranceModel.BillLine;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
+import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.BillView;
@@ -145,10 +146,27 @@ public class InsuranceService {
 
     // ---------------------------------------------------------------- 参保登记
 
+    /**
+     * 参保登记（按 patientId UPSERT）。
+     *
+     * <p>两条硬规则：
+     * <ol>
+     *   <li>已停用的参保不能靠"不传 status 走默认 ACTIVE"复活——必须显式提交 {@code status=ACTIVE}，
+     *       且会留痕为 ENABLE；</li>
+     *   <li>每次写入都追加一条 {@code insurance_member_history}（CREATE/UPDATE/DISABLE/ENABLE），
+     *       待遇参数改过什么可逐条追溯。</li>
+     * </ol>
+     */
     @Transactional
     public Member registerMember(MemberReq req, String actor) {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
         Optional<Member> existing = repo.findMemberByPatient(patient.id());
+        existing.filter(old -> Member.DISABLED.equals(old.status()))
+                .filter(old -> req.status() == null || !Member.ACTIVE.equals(req.status()))
+                .ifPresent(old -> {
+                    throw new BusinessException(ErrorCode.CONFLICT,
+                            "该患者参保已停用；如需恢复请显式提交 status=ACTIVE（将留痕为重新启用）");
+                });
         Member member = new Member(existing.map(Member::id).orElseGet(UUID::randomUUID),
                 patient.id(), patient.patientNo(), req.insuranceType().trim(), req.region().trim(),
                 blankToNull(req.personCategory()),
@@ -164,13 +182,38 @@ public class InsuranceService {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "参保信息已被他人修改，请刷新后重试");
         }
-        audit(actor, "MEMBER_UPSERT", "MEMBER", patient.id().toString(), Map.of(
-                "patientNo", patient.patientNo(), "before", existing.map(InsuranceService::memberSnapshot)
-                        .map(snapshot -> (Object) snapshot).orElse("NEW"),
-                "after", memberSnapshot(repo.findMemberByPatient(patient.id())
-                        .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_MEMBER_NOT_FOUND)))));
-        return repo.findMemberByPatient(patient.id())
+        Member saved = repo.findMemberByPatient(patient.id())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_MEMBER_NOT_FOUND));
+        String changeType = changeTypeOf(existing.orElse(null), saved);
+        repo.appendMemberHistory(new MemberHistory(UUID.randomUUID(), saved.id(), saved.patientId(),
+                saved.patientNo(), saved.insuranceType(), saved.region(), saved.personCategory(),
+                saved.deductible(), saved.reimbursementRatio(), saved.cap(),
+                saved.effectiveFrom(), saved.effectiveTo(), saved.status(), saved.version(),
+                changeType, actor, null, null));
+        audit(actor, "MEMBER_UPSERT", "MEMBER", patient.id().toString(), Map.of(
+                "patientNo", patient.patientNo(), "changeType", changeType,
+                "before", existing.map(InsuranceService::memberSnapshot)
+                        .map(snapshot -> (Object) snapshot).orElse("NEW"),
+                "after", memberSnapshot(saved)));
+        return saved;
+    }
+
+    /** 变更类型：新建 / 启停 / 一般修改。 */
+    private static String changeTypeOf(Member before, Member after) {
+        if (before == null) {
+            return MemberHistory.CREATE;
+        }
+        if (!before.status().equals(after.status())) {
+            return Member.DISABLED.equals(after.status())
+                    ? MemberHistory.DISABLE : MemberHistory.ENABLE;
+        }
+        return MemberHistory.UPDATE;
+    }
+
+    /** 参保变更历史（最新在前）。 */
+    public List<MemberHistory> memberHistory(UUID patientId, Integer limit) {
+        int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
+        return repo.listMemberHistory(patientId, size);
     }
 
     /** 目录项快照（审计 old→new 用）。 */

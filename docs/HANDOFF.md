@@ -417,6 +417,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 263→**264**；insurance E2E 78 项、emr E2E 91 项全过；
      库内 `ITEM_UPSERT` 审计已带 `before`
 
+29. **第三轮评测第十二批整改（2026-10-31）：参保历史与停用保护（S-12）**
+   - `insurance/V4` 新增追加式 `insurance_member_history`（CREATE/UPDATE/DISABLE/ENABLE）：
+     每次登记/变更都留一条参数快照 + 变更人 + 时点，可还原任意时点待遇口径
+   - 停用参保必须**显式**带 `status=ACTIVE` 才能恢复，否则 409（不再被默认值复活）
+   - 新增 `GET /insurance/members/{patientId}/history?limit=`
+   - 验证：单测 264→**267**；insurance E2E 78→**87 项**全过
+     （历史顺序 `ENABLE,DISABLE,UPDATE,CREATE`）；库内 insurance 迁移到 v4
+   - 行为变化：前端"直接保存"恢复停用参保会收到 409，需引导用户显式重新启用
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

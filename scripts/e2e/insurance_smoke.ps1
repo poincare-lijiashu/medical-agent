@@ -119,6 +119,41 @@ Check 'member.status' (Res $r).status 'ACTIVE'
 $r = Invoke-Api 'GET' "/api/v2/insurance/members/$patientId" $null $token
 Check 'member.get' $r.Status 200
 
+# ---------------------------------------------------------------- 4.1 member history + disable/revive (S-12)
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $patientId; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 300000; personCategory = 'ACTIVE_WORKER'
+} $token
+Check 'member.update.ok' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $patientId; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 300000; status = 'DISABLED'
+} $token
+Check 'member.disable.ok' $r.Status 200
+Check 'member.disable.status' (Res $r).status 'DISABLED'
+
+# a disabled membership must not come back by simply omitting status
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $patientId; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 300000
+} $token
+Check 'member.reviveImplicit.409' $r.Status 409
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $patientId; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 300000; status = 'ACTIVE'
+} $token
+Check 'member.reviveExplicit.ok' $r.Status 200
+Check 'member.reviveExplicit.status' (Res $r).status 'ACTIVE'
+
+$r = Invoke-Api 'GET' "/api/v2/insurance/members/$patientId/history" $null $token
+Check 'member.history.ok' $r.Status 200
+$hist = @(Res $r)
+Check 'member.history.count' $hist.Count 4
+$histTypes = ($hist | ForEach-Object { $_.changeType }) -join ','
+Check 'member.history.types' $histTypes 'ENABLE,DISABLE,UPDATE,CREATE'
+
 # ---------------------------------------------------------------- 5. settlement bill
 $r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $visitId } $token
 Check 'bill.generate' $r.Status 200

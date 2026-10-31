@@ -54,6 +54,25 @@ public final class InsuranceModel {
     }
 
     /**
+     * 参保变更历史（追加式）。
+     *
+     * <p>只插入不更新：每次登记/修改/停用/启用都留一条，参数取"变更后"的快照，
+     * 配合 changed_at 即可还原任意时点的待遇口径。
+     */
+    public record MemberHistory(UUID id, UUID memberId, UUID patientId, String patientNo,
+                                String insuranceType, String region, String personCategory,
+                                BigDecimal deductible, BigDecimal reimbursementRatio, BigDecimal cap,
+                                LocalDate effectiveFrom, LocalDate effectiveTo, String status,
+                                long version, String changeType, String changedBy,
+                                Instant changedAt, String note) {
+
+        public static final String CREATE = "CREATE";
+        public static final String UPDATE = "UPDATE";
+        public static final String DISABLE = "DISABLE";
+        public static final String ENABLE = "ENABLE";
+    }
+
+    /**
      * 结算清单明细行（含未映射与超限价标记，便于对账追溯）。
      *
      * @param chargeStatus  收费单状态快照（PAID/UNPAID；REFUNDED 不进入清单）

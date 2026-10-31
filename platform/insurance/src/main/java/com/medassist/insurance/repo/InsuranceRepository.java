@@ -4,6 +4,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
+import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -42,6 +43,17 @@ public class InsuranceRepository {
             rs.getDate("effective_from").toLocalDate(),
             rs.getDate("effective_to") == null ? null : rs.getDate("effective_to").toLocalDate(),
             rs.getString("status"), rs.getLong("version"));
+
+    private static final RowMapper<MemberHistory> MEMBER_HISTORY_MAPPER = (rs, i) -> new MemberHistory(
+            rs.getObject("id", UUID.class), rs.getObject("member_id", UUID.class),
+            rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+            rs.getString("insurance_type"), rs.getString("region"), rs.getString("person_category"),
+            rs.getBigDecimal("deductible"), rs.getBigDecimal("reimbursement_ratio"),
+            rs.getBigDecimal("cap"), rs.getDate("effective_from").toLocalDate(),
+            rs.getDate("effective_to") == null ? null : rs.getDate("effective_to").toLocalDate(),
+            rs.getString("status"), rs.getLong("version"), rs.getString("change_type"),
+            rs.getString("changed_by"), rs.getTimestamp("changed_at").toInstant(),
+            rs.getString("note"));
 
     private static final RowMapper<SettlementBill> BILL_MAPPER = (rs, i) -> new SettlementBill(
             rs.getObject("id", UUID.class), rs.getString("bill_no"),
@@ -217,6 +229,45 @@ public class InsuranceRepository {
                                status, version
                           FROM insurance_svc.insurance_member WHERE id = ?
                         """).param(id).query(MEMBER_MAPPER).optional();
+    }
+
+    /** 参保变更历史（追加式，最新在前）。 */
+    public List<MemberHistory> listMemberHistory(UUID patientId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, member_id, patient_id, patient_no, insurance_type, region,
+                               person_category, deductible, reimbursement_ratio, cap,
+                               effective_from, effective_to, status, version, change_type,
+                               changed_by, changed_at, note
+                          FROM insurance_svc.insurance_member_history
+                         WHERE patient_id = :patientId
+                         ORDER BY changed_at DESC
+                         LIMIT :limit
+                        """)
+                .param("patientId", patientId).param("limit", limit)
+                .query(MEMBER_HISTORY_MAPPER).list();
+    }
+
+    public void appendMemberHistory(MemberHistory h) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.insurance_member_history
+                            (id, member_id, patient_id, patient_no, insurance_type, region,
+                             person_category, deductible, reimbursement_ratio, cap,
+                             effective_from, effective_to, status, version, change_type,
+                             changed_by, note)
+                        VALUES (:id, :memberId, :patientId, :patientNo, :insuranceType, :region,
+                                :personCategory, :deductible, :ratio, :cap,
+                                :fromDate, CAST(:toDate AS date), :status, :version, :changeType,
+                                :changedBy, :note)
+                        """)
+                .param("id", h.id()).param("memberId", h.memberId())
+                .param("patientId", h.patientId()).param("patientNo", h.patientNo())
+                .param("insuranceType", h.insuranceType()).param("region", h.region())
+                .param("personCategory", h.personCategory()).param("deductible", h.deductible())
+                .param("ratio", h.reimbursementRatio()).param("cap", h.cap())
+                .param("fromDate", h.effectiveFrom()).param("toDate", h.effectiveTo())
+                .param("status", h.status()).param("version", h.version())
+                .param("changeType", h.changeType()).param("changedBy", h.changedBy())
+                .param("note", h.note()).update();
     }
 
     /**

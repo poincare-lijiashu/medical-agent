@@ -4,6 +4,7 @@ import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import com.medassist.insurance.domain.InsuranceModel.Member;
+import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
 import com.medassist.insurance.service.InsuranceService;
 import com.medassist.insurance.web.InsuranceDtos.MemberReq;
 import jakarta.validation.Valid;
@@ -13,8 +14,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /** 参保登记（本地快照；按 patientId UPSERT）。 */
@@ -46,5 +49,15 @@ public class MemberController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.member(patientId));
+    }
+
+    /** 参保变更历史（追加式，最新在前）：待遇参数与启停状态逐条可追溯。 */
+    @GetMapping("/{patientId}/history")
+    public ApiResponse<List<MemberHistory>> history(
+            @PathVariable UUID patientId,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.memberHistory(patientId, limit));
     }
 }
