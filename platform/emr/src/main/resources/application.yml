@@ -39,12 +39,12 @@ spring:
 emr:
   empi:
     base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
-    internal-token: ${EMR_INTERNAL_TOKEN:}
+    internal-token: ${INTERNAL_API_TOKEN:${EMR_INTERNAL_TOKEN:}}
     timeout: ${EMPI_TIMEOUT:PT2S}
   # ---- 服务间调用：emr → clinical（读取入院时间，用于书写时限质控）----
   clinical:
     base-url: ${CLINICAL_INTERNAL_URI:http://127.0.0.1:8083}
-    internal-token: ${EMR_CLINICAL_TOKEN:${EMR_INTERNAL_TOKEN:}}
+    internal-token: ${INTERNAL_API_TOKEN:${EMR_INTERNAL_TOKEN:}}
     timeout: ${CLINICAL_TIMEOUT:PT2S}
 
 management:

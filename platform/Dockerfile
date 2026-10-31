@@ -33,8 +33,9 @@ RUN mvn -B -q -DskipTests dependency:go-offline || true
 
 COPY . .
 ARG SERVICE
+# -Pprod-package：物理排除 application-dev.yml（其中内部令牌是仓库公开常量，不得进生产镜像）
 RUN test -n "${SERVICE}" && \
-    mvn -B -pl "${SERVICE}" -am -DskipTests package && \
+    mvn -B -pl "${SERVICE}" -am -DskipTests -Pprod-package package && \
     cp "${SERVICE}"/target/*.jar /tmp/app.jar
 
 FROM ${RUNTIME_IMAGE}

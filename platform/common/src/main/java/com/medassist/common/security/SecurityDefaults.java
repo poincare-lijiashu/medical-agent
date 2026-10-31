@@ -24,17 +24,28 @@ public final class SecurityDefaults {
     private SecurityDefaults() {
     }
 
-    /** 是否处于会承接真实流量的环境（staging 也按生产口径处理，避免"预发布用弱密钥"的滑坡）。 */
+    /**
+     * 是否处于会承接真实流量的环境。
+     *
+     * <p>三重判定，任一命中即按生产口径处理：
+     * <ol>
+     *   <li>profile 为 {@code prod}/{@code production}/{@code staging}；</li>
+     *   <li>profile 为 {@code k8s}——Helm Chart 的默认运行 profile，生产 Pod 实际就是它，
+     *       早期只认 prod/staging 会让生产守卫完全失效；</li>
+     *   <li>进程运行在 Kubernetes 集群内（自动注入 {@code KUBERNETES_SERVICE_HOST}），
+     *       不依赖 profile 命名，防止"忘开 profile 就绕过守卫"。</li>
+     * </ol>
+     */
     public static boolean isProduction(Environment env) {
-        if (env == null) {
-            return false;
-        }
-        for (String profile : env.getActiveProfiles()) {
-            String p = profile.toLowerCase();
-            if (p.equals("prod") || p.equals("production") || p.equals("staging")) {
-                return true;
+        if (env != null) {
+            for (String profile : env.getActiveProfiles()) {
+                String p = profile.toLowerCase();
+                if (p.equals("prod") || p.equals("production")
+                        || p.equals("staging") || p.equals("k8s")) {
+                    return true;
+                }
             }
         }
-        return false;
+        return System.getenv("KUBERNETES_SERVICE_HOST") != null;
     }
 }

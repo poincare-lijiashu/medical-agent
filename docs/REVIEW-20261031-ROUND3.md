@@ -263,4 +263,30 @@ MF-12~13（离网文档两处，1 分钟级）→ S-24~S-27 → MF-18~19 + S-28~
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7 节记录第一批整改的落地与验证。后续批次按第 5 节路线继续，每批真库端到端验证后提交。*
+## 8. 整改状态（2026-10-31，第二批：安全加固 + 部署文档）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| MF-10 | 生产 JWT 默认密钥守卫失效 | ✅ 已修 | 根因：Helm 默认运行 profile 是 `k8s`，而 `isProduction` 只认 prod/staging。现增加 `k8s` 识别 + `KUBERNETES_SERVICE_HOST` 集群判定（不依赖 profile 命名）；补 3 项单测 |
+| MF-09 | dev 令牌打进生产镜像 | ✅ 已修（构建侧） | 新增 Maven profile `-Pprod-package` 物理排除 `application-dev.yml`，Dockerfile 已改用该 profile；集群部署用 `k8s` profile 本就不读 dev 配置，不受影响。**该令牌是仓库公开常量，按已泄露处理并轮换** |
+| MF-08 | 时限质控可静默失效 | ✅ 已修 | ① 拿不到入院时间时落 `QC-*-TIME:NOT_EVALUATED`（MINOR，不阻断提交），QC 报告可见；② 提交时回源临床域并补写 `visit_started_at`（自愈瞬时故障），preview 只读回源不落库 |
+| S-19 | 统一审计只覆盖 auth/empi | ✅ 已修 | `AuditRepository` 改为用 `to_regclass` 探测实际存在的审计表后拼 UNION（白名单常量），覆盖 auth/empi/clinical/pharmacy/tech/emr/insurance；结果缓存复用，缺域部署不再整表报错 |
+| S-20 | 内部令牌 6 个变量名 4 条回落链 | ✅ 已修 | 全平台首选 `INTERNAL_API_TOKEN`（Helm `commonEnv` 统一注入），各服务 `<SVC>_INTERNAL_TOKEN` 仅作兼容回落；去掉 `*_CLINICAL_TOKEN` / `*_INTERNAL_API_TOKEN` 分支 |
+| MF-12 | 离网命令缺 insurance tag | ✅ 已修 | 补 `--set insurance.image.tag=1.0.0`，注记改为"5 个后续服务必须显式给出" |
+| MF-13 | Secret 清单缺 medassist-internal | ✅ 已修 | `deploy/README` §3 补行；离网 README 同步 |
+| S-24 | 生产安装示例 --set 不全 | ✅ 已修 | `deploy/README` §4.2 安装与渲染校验均补全 9 个组件 tag |
+| S-25 | 离网缺 SkyWalking agentImage 覆写指引 | ✅ 已修 | 离网 README §2.2 补 `--set external.skywalking.agentImage=<harbor>/apache/...` |
+| S-27 | values-dev 缺 clinical 块 | ✅ 已修 | 补 clinical 单副本块，与 emr/insurance 同款 |
+
+**验证**：单测 **215 → 218**（新增 `SecurityDefaultsTest` 3 项）；`emr_smoke.ps1` 全过；
+实测统一审计接口 `GET /api/v2/audit/events` 返回 `source=emr|insurance|pharmacy` 的事件
+（RECORD_SIGN 含 AUTHOR/ATTENDING 两级、BILL_GENERATE、DISPENSE）；
+实测"visitId 指向不存在的就诊"建病历 → QC 返回 `QC-ADM-TIME:NOT_EVALUATED`
+（`passed=true`、`minor=1`，不阻断提交）。
+
+**仍未做**：MF-07（下游身份头 HMAC/mTLS，需设计评审后单独立项）、MF-05（清单确认前校验与 VOIDED 冲正）、
+MF-11（CDR 检索索引）、MF-18（权限矩阵自动化测试）、S-10/S-11（年度累计/按就诊日期校验参保）。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–8 节记录整改落地与验证。后续批次按第 5 节路线继续。*

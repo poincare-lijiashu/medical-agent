@@ -154,6 +154,13 @@ Java 服务公共环境变量。
       name: {{ include "medassist.secretName" (dict "root" .root "external" .root.Values.external.jwt "suffix" "jwt") }}
       key: {{ .root.Values.external.jwt.secretKey }}
 {{- end }}
+# 服务间内部接口令牌：全平台唯一变量名（一处轮换、全部滚动重启即可）。
+# 各服务的 <SVC>_INTERNAL_TOKEN 仅作兼容回落，新部署只需维护 INTERNAL_API_TOKEN。
+- name: INTERNAL_API_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .root.Values.external.internalApi.existingSecret }}
+      key: {{ .root.Values.external.internalApi.secretKey }}
 {{- if .empi }}
 - name: EMPI_FIELD_KEY
   valueFrom:

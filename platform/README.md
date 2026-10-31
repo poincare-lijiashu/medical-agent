@@ -55,6 +55,9 @@
 # 构建（首次需下载依赖）
 mvn -f platform/pom.xml -DskipTests package
 
+# 生产包构建：物理排除 application-dev.yml（内含开发用内部令牌，不得进生产镜像）
+mvn -f platform/pom.xml -Pprod-package -DskipTests package
+
 # 运行（三个终端，或按需启动）
 java -jar platform/gateway/target/platform-gateway-0.1.0-SNAPSHOT.jar
 java -jar platform/auth/target/platform-auth-0.1.0-SNAPSHOT.jar

@@ -69,6 +69,7 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 | `medassist-postgres` | `username` / `password` | 数据库账号 |
 | `medassist-nacos` | `username` / `password` | 注册中心鉴权 |
 | `medassist-jwt` | `secret` | JWT 签名密钥（≥32 字节） |
+| `medassist-internal` | `token` | 服务间内部接口令牌（clinical / emr / insurance 内网直连调用 EMPI 与彼此） |
 | `medassist-empi` | `field-key` / `hash-salt` | 患者字段 AES-256 密钥与查重盐（**换密钥会导致存量密文不可解**） |
 | `medassist-ai-core` | `QWEN_API_KEY` / `AUTH_JWT_SECRET` 等 | AI 中台业务密钥（`envFrom` 注入） |
 | `medassist-prod-tls` | `tls.crt` / `tls.key` | Ingress 证书 |
@@ -110,11 +111,13 @@ helm upgrade --install medassist deploy/helm/medassist-platform `
   -n medassist-dev --create-namespace -f deploy/helm/medassist-platform/values-dev.yaml
 
 # 生产（外部 Secret + APM + 网络策略 + PreSync 迁移）
-# 注意：staging/prod 的 values 不允许 SNAPSHOT 镜像，必须由 CI 注入不可变 tag
+# 注意：staging/prod 的 values 不允许 SNAPSHOT 镜像，必须由 CI 注入不可变 tag（9 个组件一个都不能少）
 helm upgrade --install medassist deploy/helm/medassist-platform `
   -n medassist-prod --create-namespace -f deploy/helm/medassist-platform/values-prod.yaml `
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
-  --set empi.image.tag=1.0.0 --set aiCore.image.tag=1.0.0
+  --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
+  --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
+  --set aiCore.image.tag=1.0.0
 ```
 
 > `environment` 取值 `dev|staging|production`；非 `dev` 时模板遇到 `-SNAPSHOT` tag 会直接
@@ -128,7 +131,9 @@ helm lint --strict deploy/helm/medassist-platform -f deploy/helm/medassist-platf
 helm template medassist deploy/helm/medassist-platform -n medassist-prod `
   -f deploy/helm/medassist-platform/values-prod.yaml `
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
-  --set empi.image.tag=1.0.0 --set aiCore.image.tag=1.0.0
+  --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
+  --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
+  --set aiCore.image.tag=1.0.0
 ```
 
 ### 4.3 数据库迁移：为什么用 Hook Job

@@ -183,6 +183,22 @@ public class EmrRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
+    /**
+     * 补写入院时间（自愈）：仅当当前为空时写入，避免覆盖已固化的基准。
+     *
+     * <p>场景：创建病历时临床域短暂不可用，导致入院时间没取到；提交时回源成功则补写，
+     * 让时限质控恢复可用，而不是永久跳过。
+     */
+    public boolean bindVisitStartedAt(UUID recordId, java.time.Instant startedAt) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.medical_record
+                           SET visit_started_at = CAST(:ts AS timestamptz), updated_at = now()
+                         WHERE id = :id AND visit_started_at IS NULL
+                        """)
+                .param("ts", java.time.OffsetDateTime.ofInstant(startedAt, java.time.ZoneOffset.UTC))
+                .param("id", recordId).update() > 0;
+    }
+
     public Optional<MedicalRecord> findRecord(UUID id) {
         return jdbc.sql("""
                         SELECT id, record_no, patient_id, patient_no, visit_id, visit_no, dept_id,

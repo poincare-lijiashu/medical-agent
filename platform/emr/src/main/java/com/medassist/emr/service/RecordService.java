@@ -62,6 +62,9 @@ public class RecordService {
     private final ClinicalClient clinicalClient;
     private final ObjectMapper objectMapper;
 
+    /** 时限类规则拿不到入院时间时的"未评估"结果后缀（与真实超时区分，便于统计）。 */
+    static final String NOT_EVALUATED_SUFFIX = ":NOT_EVALUATED";
+
     public RecordService(EmrRepository repo, PatientClient patientClient,
                          ClinicalClient clinicalClient, ObjectMapper objectMapper) {
         this.repo = repo;
@@ -130,7 +133,7 @@ public class RecordService {
                     "只有草稿可以提交，当前：" + record.status());
         }
         Map<String, String> content = fromJson(record.content());
-        QcReport qc = evaluate(record, content, Instant.now(), repo.visitStartedAt(id));
+        QcReport qc = evaluate(record, content, Instant.now(), resolveVisitStartedAt(record, true));
         if (qc.fatalCount() > 0) {
             String detail = qc.results().stream()
                     .filter(r -> !r.passed() && QcRule.FATAL.equals(r.severity()))
@@ -155,7 +158,27 @@ public class RecordService {
     public QcReport previewQc(UUID id) {
         MedicalRecord record = repo.findRecord(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        return evaluate(record, fromJson(record.content()), Instant.now(), repo.visitStartedAt(id));
+        return evaluate(record, fromJson(record.content()), Instant.now(),
+                resolveVisitStartedAt(record, false));
+    }
+
+    /**
+     * 解析入院时间：优先用创建时固化的值；为空且 visitId 非空时回源临床域。
+     *
+     * <p>回源只解决"创建时临床域短暂不可用"的瞬时故障，避免时限质控永久跳过；
+     * preview 不落库（只读语义），submit 回源成功才补写固化。
+     */
+    private Optional<Instant> resolveVisitStartedAt(MedicalRecord record, boolean persist) {
+        Optional<Instant> cached = repo.visitStartedAt(record.id());
+        if (cached.isPresent() || record.visitId() == null) {
+            return cached;
+        }
+        Optional<Instant> fetched = clinicalClient.admittedAt(record.visitId());
+        if (fetched.isPresent() && persist && repo.bindVisitStartedAt(record.id(), fetched.get())) {
+            audit("system", "RECORD_TIMELINESS_BIND", "RECORD", record.id().toString(),
+                    Map.of("recordNo", record.recordNo(), "visitId", record.visitId().toString()));
+        }
+        return fetched;
     }
 
     // ---------------------------------------------------------------- 签名 / 归档
@@ -500,7 +523,13 @@ public class RecordService {
             String message = rule.message();
             if (QcRule.TIMELINESS.equals(rule.ruleType())) {
                 if (visitStartedAt == null || visitStartedAt.isEmpty()) {
-                    passed = null;
+                    // 明确记录"未评估"：早期直接 continue，会让时限质控在配置错误时静默消失，
+                    // 报表看起来"全部通过"。现在至少留一条可查的待核查项。
+                    results.add(new QcResult(UUID.randomUUID(), record.id(), record.revision(),
+                            rule.ruleCode() + NOT_EVALUATED_SUFFIX, QcRule.MINOR, false,
+                            rule.message() + "（未评估：未取到入院时间，请核对就诊号与临床域连通性）"));
+                    minor++;
+                    continue;
                 } else {
                     int limit = rule.threshold() == null ? 24 : rule.threshold();
                     Duration elapsed = Duration.between(visitStartedAt.get(), now);

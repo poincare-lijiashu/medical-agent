@@ -290,6 +290,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 下一批：第三轮意见书第二批（JWT_SECRET fail-fast、dev 令牌出 jar、时限 NOT_EVALUATED、
      审计 UNION 补全、令牌变量统一）
 
+19. **第三轮评测第二批整改（2026-10-31）：安全加固 + 部署文档**
+   - **MF-10 根因**：`SecurityDefaults.isProduction` 只认 prod/production/staging，而 Helm
+     `global.springProfiles` 默认是 **k8s** → 生产 Pod 实际走"非生产"分支，JWT 默认密钥守卫形同虚设。
+     现增加 k8s 识别 + `KUBERNETES_SERVICE_HOST` 集群判定（不依赖 profile 命名），补 3 项单测
+   - **MF-09**：`platform/pom.xml` 新增 `-Pprod-package` profile，构建时物理排除
+     `application-dev.yml`；Dockerfile 已改用该 profile。集群用 k8s profile 本就不读 dev 配置，
+     不受影响；**dev 内部令牌是仓库公开常量，按已泄露处理并轮换**
+   - **MF-08**：拿不到入院时间时落 `QC-*-TIME:NOT_EVALUATED`（MINOR 不阻断），不再静默跳过；
+     submit 时回源临床域并补写 `visit_started_at`（`bindVisitStartedAt` 仅空值更新），preview 只读回源
+   - **S-19**：`AuditRepository` 用 `to_regclass` 探测实际存在的审计表后拼 UNION（白名单常量 + 缓存），
+     覆盖 7 个域。实测 `/api/v2/audit/events` 已能查到 emr/insurance/pharmacy 的动作
+   - **S-20**：全平台首选 `INTERNAL_API_TOKEN`（Helm `commonEnv` 统一注入同一 Secret），
+     各服务 `<SVC>_INTERNAL_TOKEN` 只作兼容回落
+   - **部署文档**：离网命令补 insurance tag + SkyWalking agentImage 覆写；Secret 表补
+     `medassist-internal`；生产安装/渲染示例补全 9 个组件 tag；values-dev 补 clinical 块
+   - 验证：单测 215→**218**；emr E2E 全过；实测 NOT_EVALUATED 与跨域审计均符合预期
+   - 下一批：第三轮意见书第三批（MF-05 清单确认前校验+VOIDED 冲正+对账、S-10/S-11），
+     或 MF-11 CDR 索引 / MF-18 权限矩阵测试
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -317,6 +336,13 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 - 加"签署人身份"这类业务约束前先看 E2E 用的是不是同一个人：`admin01` 既建档又签名，
   一加"上级不得为书写人"立刻全红——E2E 必须准备第二个具备该权限的账号（如 doctor01）
 - PowerShell `[decimal]$null` 得 0，金额断言函数必须显式挡掉 null/空串，否则字段缺失被误判为 0
+- 生产守卫别只认 profile 字面量：Helm Chart 给 Java 服务注入的是 `SPRING_PROFILES_ACTIVE=k8s`，
+  `isProduction` 漏了 k8s 就等于生产无守卫。现在同时用 `KUBERNETES_SERVICE_HOST` 兜底，
+  以后再加环境名也不会漏
+- 单库多 schema 跨域 UNION 查询要先 `to_regclass('schema.table')` 探测：某域未部署时
+  直接写死表名会让整个接口 500（结果还要缓存，别每次查询都探测）
+- `mvn -Pprod-package` 排除 dev 配置后，本地 `java -jar` 仍用普通构建（不带 profile），
+  两条链路互不影响；Dockerfile 必须固定带 `-Pprod-package`
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，
   否则 `imageRegistry=harbor/medassist` + `repository=medassist/platform-gateway` 会拼成三层
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致

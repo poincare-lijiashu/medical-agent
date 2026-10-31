@@ -39,11 +39,11 @@ spring:
 insurance:
   empi:
     base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
-    internal-token: ${INSURANCE_INTERNAL_TOKEN:}
+    internal-token: ${INTERNAL_API_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
     timeout: ${EMPI_TIMEOUT:PT2S}
   clinical:
     base-url: ${CLINICAL_INTERNAL_URI:http://127.0.0.1:8083}
-    internal-token: ${INSURANCE_CLINICAL_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
+    internal-token: ${INTERNAL_API_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
     timeout: ${CLINICAL_TIMEOUT:PT3S}
 
 management:

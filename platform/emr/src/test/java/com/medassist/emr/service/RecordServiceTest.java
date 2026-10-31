@@ -265,8 +265,8 @@ class RecordServiceTest {
     }
 
     @Test
-    @DisplayName("时限质控：无入院信息（门诊/上游不可用）时跳过，不产生结果")
-    void timelinessSkippedWithoutAdmission() {
+    @DisplayName("时限质控：无入院信息时落 NOT_EVALUATED 待核查项（不再静默跳过）")
+    void timelinessNotEvaluatedWithoutAdmission() {
         when(repo.lockRecord(recordId)).thenReturn(Optional.of(
                 record(MedicalRecord.DRAFT, 1, 1L, "{}")));
         when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(24)));
@@ -279,7 +279,12 @@ class RecordServiceTest {
         SubmitResult result = service.submit(recordId, "doctor01");
 
         assertThat(result.qc().passed()).isTrue();
-        assertThat(result.qc().results()).isEmpty();
+        assertThat(result.qc().minorCount()).isEqualTo(1);
+        assertThat(result.qc().results()).hasSize(1);
+        assertThat(result.qc().results().get(0).ruleCode())
+                .isEqualTo("QC-ADM-TIME" + RecordService.NOT_EVALUATED_SUFFIX);
+        assertThat(result.qc().results().get(0).passed()).isFalse();
+        assertThat(result.qc().results().get(0).message()).contains("未评估");
     }
 
     // ---------------------------------------------------------------- 签名 / 归档
