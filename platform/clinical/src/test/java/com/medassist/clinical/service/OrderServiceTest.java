@@ -100,7 +100,7 @@ class OrderServiceTest {
     @Test
     @DisplayName("已计费医嘱不可撤销")
     void rejectCancelChargedOrder() {
-        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         UUID orderId = UUID.randomUUID();
         when(repo.cancelOrder(orderId, visitId)).thenReturn(false);
 
@@ -129,7 +129,7 @@ class OrderServiceTest {
     @Test
     @DisplayName("停嘱失败（非长嘱/已停）返回 44410")
     void stopRejectedWhenNotLongOrder() {
-        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         UUID orderId = UUID.randomUUID();
         when(repo.stopLongOrder(eq(orderId), eq(visitId), any(), any(), any())).thenReturn(false);
 

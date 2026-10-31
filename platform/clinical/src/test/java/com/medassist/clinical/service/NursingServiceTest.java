@@ -63,6 +63,33 @@ class NursingServiceTest {
     }
 
     @Test
+    @DisplayName("不允许为未来日期记录执行（与按日计费口径一致）")
+    void rejectFutureDate() {
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(admission(Admission.IN_HOSPITAL)));
+
+        assertThatThrownBy(() -> service.record(admissionId,
+                new NursingExecutionReq(orderId, LocalDate.now().plusDays(1), "EXECUTED", null), "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("未来日期");
+        verify(repo, never()).insertNursingExecution(any());
+    }
+
+    @Test
+    @DisplayName("已计费后补记 REFUSED：409（避免账实不符且无冲正路径）")
+    void rejectRefusedAfterBilled() {
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(admission(Admission.IN_HOSPITAL)));
+        when(repo.findOrder(visitId, orderId)).thenReturn(Optional.of(
+                order(VisitOrder.LONG, VisitOrder.PLACED, LocalDate.now(), null)));
+        when(repo.existsDailyCharge(orderId, LocalDate.now())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.record(admissionId,
+                new NursingExecutionReq(orderId, null, "REFUSED", null), "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已计费");
+        verify(repo, never()).insertNursingExecution(any());
+    }
+
+    @Test
     @DisplayName("记录已执行：落库并返回医嘱号/项目名")
     void recordExecuted() {
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(admission(Admission.IN_HOSPITAL)));

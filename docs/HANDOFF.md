@@ -162,6 +162,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      → 出院（床 FREE、就诊 FINISHED）→ 出院后护理记录 409
    - 单测：clinical 42、gateway 6；平台全量 **82 项** Java 测试通过（0 失败 0 错误）
    - 下一批：**N2 药房域**（药品字典/库存批次效期/发药退药/处方审核）→ N3 医技 → N4 病历 → N5 医保
+12. **第二轮五路评测整改（2026-10-31）**：意见书 `docs/REVIEW-20261031-ROUND2.md`（第 6 节为整改状态）
+   - **并发/账务**：统一锁顺序 visit → admission → bed；结算 DEPOSIT 分支改 `lockActiveAdmissionByVisit`；
+     pending 医嘱 `FOR UPDATE`；已计费条数不符整笔回滚；discharge 先锁 visit 且 freeBed/updateVisitStatus 失败抛错
+   - **DB 兜底（V7）**：预交金余额非负触发器、护理执行不许未来日期（CHECK）+ 只允许长嘱（触发器）、
+     `DAILY:↔LONG` / `ORDER:↔TEMP` 触发器、`ix_admission_active` 部分索引
+   - **V8**：`UNPAID/REFUNDED ⇒ paid_at IS NULL`
+   - **规则**：出院需当日长嘱已计费；欠费缺口含"当日未计长嘱"；取消挂号冲销未结挂号费单；
+     护理已计费后不许改 REFUSED；新增 `BusinessTime`（Asia/Shanghai，可用 `CLINICAL_ZONE` 覆盖）
+   - **权限（auth V10）**：`inpatient:finance:read:all`（仅 ADMIN，alerts 不带 wardId 时必需）、
+     `inpatient:nursing:read`（DOCTOR/NURSE/ADMIN）；finance/alerts 读操作落审计
+   - **部署**：prod 补 `clinical.image.tag`；镜像路径统一为 `repository=platform-*` +
+     `imageRegistry=.../medassist`（消除三层）；离网脚本补 clinical 且本地镜像直接 save；
+     迁移 Job 注入 `FLYWAY_BASELINE_ON_MIGRATE=false`；ServiceMonitor/告警补 clinical
+   - **回归资产**：`scripts/e2e/platform_smoke.ps1`（经网关 60 项断言）、
+     `InpatientControllerPermissionTest`（9 项）、`GatewayRouteConfigTest`（4 项）
+   - 实测：平台 **99 项** Java 测试全绿；真库迁移 clinical V8 / auth V10；端到端 60 项断言全过；
+     三条 DB 兜底用反例直插验证被拒绝
+   - **未做（如实记录）**：Testcontainers 集成测试（离线仓库缺 `testcontainers-postgresql`，
+     需有网构建机首次拉依赖）；行级授权（缺"用户↔病区"组织数据，N2 前置）；clinical 业务指标；change_log 分区
 
 ### 本机踩坑备忘（下次别再踩）
 
@@ -176,6 +195,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   写错不会启动报错，只会在真实调用时全量 404（已加 `GatewayRouteConfigTest` 兜底）
 - PostgreSQL 语句失败（唯一键/CHECK）后事务进入 aborted 状态，**catch 里再查库会二次失败**
   （表现为 500 而不是 409）：重复判定要先查后写，catch 分支里不要再发 SQL
+- 自己写的 plpgsql 触发器用 `USING ERRCODE = 'check_violation'` 时，Spring 统一抛
+  `DataIntegrityViolationException`（与 CHECK 一致），可按同一套 catch 处理
+- PowerShell 里**不能把函数命名为 `Data`**（`function Data($r)` 会被解析成 `data` 语句块，
+  报 "The Data section is missing its statement block"）；同理避免 `function`/`filter` 等关键字
+- Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，
+  否则 `imageRegistry=harbor/medassist` + `repository=medassist/platform-gateway` 会拼成三层
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致
   "无法连接到远程服务器"；本机联调用 `curl.exe --noproxy "*"`，或临时清空系统代理
 - 用 `Start-Process` 起的 java 子进程会随命令会话结束被回收；常驻服务要用后台命令（run_in_background）

@@ -1,0 +1,139 @@
+package com.medassist.clinical.web;
+
+import com.medassist.clinical.service.InpatientFinanceService;
+import com.medassist.clinical.service.InpatientService;
+import com.medassist.clinical.service.NursingService;
+import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
+import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * 接口级权限矩阵（不依赖 Spring 上下文，直接驱动 Controller）。
+ *
+ * <p>为什么需要这层测试：业务服务的单测不经过 Controller，权限串写错（例如把
+ * {@code inpatient:nursing:read} 写成 {@code inpatient:read}）单测全绿但线上越权。
+ */
+class InpatientControllerPermissionTest {
+
+    private InpatientService service;
+    private InpatientFinanceService financeService;
+    private NursingService nursingService;
+    private InpatientController controller;
+
+    private final UUID admissionId = UUID.randomUUID();
+    private final UUID wardId = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        service = mock(InpatientService.class);
+        financeService = mock(InpatientFinanceService.class);
+        nursingService = mock(NursingService.class);
+        controller = new InpatientController(service, financeService, nursingService);
+    }
+
+    @Test
+    @DisplayName("费用看板：缺少 inpatient:finance:read 时 403，且不触达服务层")
+    void financeRequiresPermission() {
+        assertThatThrownBy(() -> controller.finance(admissionId, "inpatient:read", "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(financeService, never()).finance(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("费用看板：有权限时透传操作者（用于审计）")
+    void financePassesActor() {
+        controller.finance(admissionId, "inpatient:finance:read", "clerk01");
+
+        verify(financeService).finance(admissionId, "clerk01");
+    }
+
+    @Test
+    @DisplayName("欠费预警：不带 wardId 且无全院权限时 422（防横向枚举全院患者）")
+    void alertsWithoutWardRequiresAllScope() {
+        assertThatThrownBy(() -> controller.alerts(null, "inpatient:finance:read", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(financeService, never()).alerts(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("欠费预警：带 wardId 时病区级权限即可")
+    void alertsWithWardAllowed() {
+        when(financeService.alerts(eq(wardId), anyString()))
+                .thenReturn(List.of(new InpatientAlert(admissionId, "A1", "P1", null, "01",
+                        new BigDecimal("10.00"), BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("10.00"))));
+
+        var resp = controller.alerts(wardId, "inpatient:finance:read", "nurse01");
+
+        assertThat(resp.data()).hasSize(1);
+        verify(financeService).alerts(wardId, "nurse01");
+    }
+
+    @Test
+    @DisplayName("欠费预警：持有全院权限时可不带 wardId")
+    void alertsAllScopeAllowed() {
+        controller.alerts(null, "inpatient:finance:read,inpatient:finance:read:all", "admin01");
+
+        verify(financeService).alerts(null, "admin01");
+    }
+
+    @Test
+    @DisplayName("护理执行列表：只有 inpatient:read 不够（属护理文书）")
+    void nursingListRequiresNursingRead() {
+        assertThatThrownBy(() -> controller.nursingExecutions(admissionId, null, "inpatient:read"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(nursingService, never()).list(any(), any());
+    }
+
+    @Test
+    @DisplayName("护理执行列表：inpatient:nursing:read 放行")
+    void nursingListAllowedWithNursingRead() {
+        controller.nursingExecutions(admissionId, null, "inpatient:nursing:read");
+
+        verify(nursingService).list(admissionId, null);
+    }
+
+    @Test
+    @DisplayName("记录护理执行：需要 inpatient:nursing:execute")
+    void nursingExecuteRequiresPermission() {
+        var req = new NursingExecutionReq(UUID.randomUUID(), null, "EXECUTED", null);
+
+        assertThatThrownBy(() -> controller.executeNursing(admissionId, req, "inpatient:nursing:read", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(nursingService, never()).record(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("权限头为空：提示重新登录（403，不误报 401）")
+    void emptyPermissionsHeaderIsForbidden() {
+        assertThatThrownBy(() -> controller.finance(admissionId, null, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+    }
+}

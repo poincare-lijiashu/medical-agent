@@ -4,6 +4,7 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.support.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.OrderLine;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -52,7 +53,7 @@ public class OrderService {
         }
 
         List<VisitOrder> created = new ArrayList<>(lines.size());
-        LocalDate today = LocalDate.now();
+        LocalDate today = BusinessTime.today();
         for (OrderLine line : lines) {
             ChargeItemDef item = repo.findChargeItem(line.itemCode().trim())
                     .filter(ChargeItemDef::enabled)
@@ -82,13 +83,14 @@ public class OrderService {
     /** 停嘱：仅住院长嘱可停；停嘱当日仍计费，次日起不再计费。 */
     @Transactional
     public VisitOrder stop(UUID visitId, UUID orderId, String reason, String actor) {
-        Visit visit = repo.findVisit(visitId)
+        // 锁 visit：与 settle/dailyBill 串行，避免"停嘱的同时正在按日计费"读到中间态
+        Visit visit = repo.lockVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         if (!visit.active()) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能停嘱");
         }
         String why = (reason == null || reason.isBlank()) ? "医师停嘱" : reason.trim();
-        if (!repo.stopLongOrder(orderId, visitId, LocalDate.now(), actor, why)) {
+        if (!repo.stopLongOrder(orderId, visitId, BusinessTime.today(), actor, why)) {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未停止的住院长嘱可以停嘱（临时医嘱请走撤销）");
         }
@@ -113,7 +115,8 @@ public class OrderService {
 
     @Transactional
     public VisitOrder cancel(UUID visitId, UUID orderId, String actor) {
-        Visit visit = repo.findVisit(visitId)
+        // 锁 visit：与 settle 串行，避免"结算读取 pending 的同时医嘱被撤销却仍被收费"
+        Visit visit = repo.lockVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         if (!visit.active()) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束或已取消，不能撤销医嘱");

@@ -58,7 +58,10 @@ public class InpatientController {
     private static final String DISCHARGE = "inpatient:admission:discharge";
     private static final String DEPOSIT_MANAGE = "inpatient:deposit:manage";
     private static final String FINANCE_READ = "inpatient:finance:read";
+    /** 全院费用视图（可跨病区查看欠费）：默认只授予 ADMIN，按角色收紧见 auth V10。 */
+    private static final String FINANCE_READ_ALL = "inpatient:finance:read:all";
     private static final String NURSING_EXECUTE = "inpatient:nursing:execute";
+    private static final String NURSING_READ = "inpatient:nursing:read";
     private static final String READ = "inpatient:read";
 
     private final InpatientService service;
@@ -177,22 +180,35 @@ public class InpatientController {
 
     // ---------------------------------------------------------------- 费用看板 / 欠费预警
 
-    /** 住院费用看板：已计/已结/未结/待计/预交金余额/当日长嘱与已计金额/欠费缺口。 */
+    /** 住院费用看板：已计/已结/未结/待计/当日未计长嘱/预交金余额/欠费缺口。 */
     @GetMapping("/inpatient/admissions/{id}/finance")
     public ApiResponse<InpatientFinanceView> finance(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, FINANCE_READ);
-        return ApiResponse.ok(financeService.finance(id));
+        return ApiResponse.ok(financeService.finance(id, actor));
     }
 
-    /** 中途欠费预警：返回缺口大于 0 的在院患者，按缺口倒序；wardId 为空时查全院。 */
+    /**
+     * 中途欠费预警：返回缺口大于 0 的在院患者，按缺口倒序。
+     *
+     * <p>数据范围：{@code wardId} 为空等同于"全院"，只有持有
+     * {@code inpatient:finance:read:all} 的角色（默认 ADMIN）才允许；其余角色必须指定病区，
+     * 否则任一护士/挂号员都能枚举全院欠费患者的床号与欠费金额。
+     */
     @GetMapping("/inpatient/alerts")
     public ApiResponse<List<InpatientAlert>> alerts(
             @RequestParam(required = false) UUID wardId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, FINANCE_READ);
-        return ApiResponse.ok(financeService.alerts(wardId));
+        if (wardId == null && !Permissions.has(permissions, FINANCE_READ_ALL)) {
+            throw new com.medassist.common.exception.BusinessException(
+                    com.medassist.common.api.ErrorCode.VALIDATION_FAILED,
+                    "查询全院欠费预警需要 inpatient:finance:read:all 权限；请指定 wardId 查询本病区");
+        }
+        return ApiResponse.ok(financeService.alerts(wardId, actor));
     }
 
     // ---------------------------------------------------------------- 护理执行记录
@@ -208,13 +224,13 @@ public class InpatientController {
         return ApiResponse.ok(nursingService.record(id, req, actor));
     }
 
-    /** 护理执行记录列表（date 为空返回全部）。 */
+    /** 护理执行记录列表（date 为空返回全部；属护理文书，限医护与管理员）。 */
     @GetMapping("/inpatient/admissions/{id}/nursing-executions")
     public ApiResponse<List<NursingExecutionView>> nursingExecutions(
             @PathVariable UUID id,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
-        Permissions.require(permissions, READ);
+        Permissions.require(permissions, NURSING_READ);
         return ApiResponse.ok(nursingService.list(id, date));
     }
 }

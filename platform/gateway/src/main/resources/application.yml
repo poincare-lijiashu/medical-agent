@@ -120,6 +120,13 @@ medassist:
           qps: ${SENTINEL_QPS_AUTH:200}
         - path: /api/v2/empi
           qps: ${SENTINEL_QPS_EMPI:200}
+        # 重型查询单独限流：费用看板/欠费预警按在院患者逐条聚合（N+1），
+        # 护理站轮询会吃满 /api/v2/clinical 的共享桶，殃及挂号收费。
+        # 匹配是"列表顺序 + startsWith"，因此必须放在 /api/v2/clinical 之前。
+        - path: /api/v2/clinical/inpatient/alerts
+          qps: ${SENTINEL_QPS_CLINICAL_ALERTS:5}
+        - path: /api/v2/clinical/inpatient
+          qps: ${SENTINEL_QPS_CLINICAL_INPATIENT:60}
         - path: /api/v2/clinical
           qps: ${SENTINEL_QPS_CLINICAL:200}
         - path: /api/v2/audit

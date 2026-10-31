@@ -64,4 +64,33 @@ class GatewayRouteConfigTest {
         assertThat((List<String>) route(config, "platform-audit-v2").get("filters"))
                 .contains("StripPrefix=3");
     }
+
+    @Test
+    @DisplayName("internal 路径必须在网关被拒（删掉这行不会有人发现，所以用测试锁住）")
+    void internalPathsAreDenied() {
+        Map<String, Object> gateway = medassistGateway(loadConfig());
+        Map<String, Object> auth = (Map<String, Object>) gateway.get("auth");
+
+        assertThat((List<String>) auth.get("deny-paths"))
+                .contains("/api/v2/*/internal/**");
+    }
+
+    @Test
+    @DisplayName("重型查询（欠费预警）限流规则必须排在 /api/v2/clinical 之前")
+    void heavyQueryRulesPrecedeCatchAll() {
+        Map<String, Object> sentinel = (Map<String, Object>) medassistGateway(loadConfig()).get("sentinel");
+        List<Map<String, Object>> rules = (List<Map<String, Object>>) sentinel.get("flow-rules");
+
+        List<String> paths = rules.stream().map(r -> (String) r.get("path")).toList();
+        int alerts = paths.indexOf("/api/v2/clinical/inpatient/alerts");
+        int catchAll = paths.indexOf("/api/v2/clinical");
+        assertThat(alerts).as("缺少欠费预警独立限流规则").isGreaterThanOrEqualTo(0);
+        assertThat(alerts).as("前缀匹配按列表顺序命中，具体规则必须在前").isLessThan(catchAll);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> medassistGateway(Map<String, Object> config) {
+        Map<String, Object> medassist = (Map<String, Object>) config.get("medassist");
+        return (Map<String, Object>) medassist.get("gateway");
+    }
 }

@@ -7,6 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.support.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.CreateSlotReq;
 import com.medassist.clinical.web.ClinicalDtos.RegisterReq;
 import com.medassist.common.api.ErrorCode;
@@ -63,7 +64,7 @@ public class RegistrationService {
         if (!List.of("AM", "PM", "NIGHT").contains(period)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "时段只能是 AM / PM / NIGHT");
         }
-        if (req.workDate().isBefore(LocalDate.now())) {
+        if (req.workDate().isBefore(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能为过去的日期建号源");
         }
         Slot slot = new Slot(UUID.randomUUID(), dept.id(), req.doctorId().trim(), req.workDate(),
@@ -94,7 +95,7 @@ public class RegistrationService {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
 
         // 2) 号源：锁行 → 校验 → CAS 占号
-        LocalDate visitDate = req.visitDate() == null ? LocalDate.now() : req.visitDate();
+        LocalDate visitDate = req.visitDate() == null ? BusinessTime.today() : req.visitDate();
         Slot slot = null;
         if (req.slotId() != null) {
             slot = repo.lockSlot(req.slotId())
@@ -207,11 +208,14 @@ public class RegistrationService {
         if (!repo.updateVisitStatus(v.id(), Visit.REGISTERED, Visit.CANCELLED, v.version())) {
             throw new BusinessException(ErrorCode.CONFLICT);
         }
+        // 未结的挂号费单随取消一并作废：否则会留下一张"永远不能结算"的悬挂账
+        int voided = repo.cancelOpenCharges(visitId);
         if (v.slotId() != null) {
             repo.releaseSlot(v.slotId());
         }
         audit(actor, "VISIT_CANCEL", "VISIT", visitId.toString(), Map.of(
-                "visitNo", v.visitNo(), "slotReleased", v.slotId() != null));
+                "visitNo", v.visitNo(), "slotReleased", v.slotId() != null,
+                "voidedCharges", voided));
         return repo.findVisit(visitId).orElseThrow();
     }
 

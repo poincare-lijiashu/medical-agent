@@ -137,7 +137,9 @@ public final class ClinicalDtos {
      * 住院费用看板。
      *
      * <p>口径：{@code billedTotal} 为全部收费单累计（含已结与未结）；
-     * {@code shortfall = max(0, 未结金额 + 待计临时医嘱 - 预交金余额)}，大于 0 即欠费预警。
+     * {@code dailyLongAmount} 为"当日应计未计"的长期医嘱金额（已按日计费的、被护理标记
+     * 未执行的都不计入）；{@code shortfall = max(0, 未结 + 待计 + 当日未计长嘱 − 预交金余额)}，
+     * 大于 0 即欠费预警。
      */
     public record InpatientFinanceView(
             UUID admissionId, String admissionNo, UUID visitId, String visitNo,

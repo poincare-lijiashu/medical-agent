@@ -17,8 +17,10 @@ import java.time.Instant;
  * 任一维度达到 {@code maxFailures} 即拒绝登录并返回 429。计数直接落 PG，
  * 多副本共享同一窗口（无需 Redis / 粘性会话）。
  *
- * <p>已知边界：IP 取自网关转发的 {@code X-Forwarded-For} 首段，可被伪造用于绕过 IP 维度，
- * 但针对具体账号的 username 维度仍有效；如需强 IP 约束，应在 Ingress 层做真实源地址限速。
+ * <p>来源 IP 口径（2026-10-31 已修）：只读取网关按 trusted-proxies 规则重写的
+ * {@code X-Client-Ip}，auth 不再自行解析 {@code X-Forwarded-For}（SCG 对 XFF 是追加语义，
+ * 客户端自带首段即可自选来源 IP）。网关未注入该头时退化为"未知来源"，username 维度仍然有效。
+ * 如需更强的 IP 约束，应在 Ingress 层做真实源地址限速。
  */
 @Service
 public class LoginThrottle {

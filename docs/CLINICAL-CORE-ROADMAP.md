@@ -121,6 +121,58 @@ EMPI 侧令牌未配置时 fail-closed；网关对 `/api/v2/*/internal/**` 一�
 
 ---
 
+## 1.6 已完成（2026-10-31，增量 6：第二轮评测整改）
+
+五路智能体评审（业务/数据库/安全/部署/测试）共 13 项 MUST-FIX + 15 项 SHOULD-FIX，
+意见书见 `docs/REVIEW-20261031-ROUND2.md`。本轮只改必要项，并把可数据库化的约束全部下沉。
+
+**并发与账务（最关键的三个）**
+
+| 问题 | 修复 | 数据库兜底 |
+|---|---|---|
+| 结算抵扣与退费并发可把余额做成负数 | 统一锁顺序 visit → admission；DEPOSIT 分支 `FOR UPDATE` | V7 触发器：`sum(amount) >= 0` |
+| 出院与按日计费并发会留下未结单 | discharge 先 `lockVisit`；`freeBed`/`updateVisitStatus` 失败即回滚 | — |
+| 结算中撤销医嘱仍被收费 | pending 医嘱 `FOR UPDATE`；已计费条数不符整笔回滚 | — |
+
+**规则与口径**
+
+| 项 | 变化 |
+|---|---|
+| 出院条件 | 增加"当日有效长嘱已计费"（REFUSED/OMITTED 不计入缺口）——应收尽收 |
+| 欠费缺口 | `max(0, 未结 + 待计临时 + 当日未计长嘱 − 预交金余额)`，不再滞后一天 |
+| 护理执行 | 禁止未来日期；已计费后再记 REFUSED/OMITTED 直接 409（无冲正路径时不制造账实不符） |
+| 时区 | 新增 `BusinessTime`（默认 Asia/Shanghai，`CLINICAL_ZONE` 可覆盖），替代 JVM 默认时区 |
+| 取消挂号 | 未结挂号费单同步置 REFUNDED，不再悬挂 |
+| 幂等键 | V7 触发器强制 `DAILY:↔LONG`、`ORDER:↔TEMP`、`REG:` 无医嘱 |
+
+**权限与审计**
+
+- 新增 `inpatient:finance:read:all`（仅 ADMIN）：不带 `wardId` 查全院欠费患者需要它，否则 422。
+- 新增 `inpatient:nursing:read`（DOCTOR/NURSE/ADMIN）：护理执行记录不再对挂号员开放。
+- 费用看板与欠费预警的**读操作**也落审计（`FINANCE_READ` / `ALERTS_READ`）。
+
+**部署**
+
+- prod Argo CD 补 `clinical.image.tag`（此前 production 渲染直接失败）。
+- 镜像路径统一：`repository=platform-*` + `imageRegistry=.../medassist`，消除 `medassist/medassist` 三层。
+- 离网脚本补 clinical；`pull-and-save` 对本地已有镜像直接 save，不再假装 pull。
+- 迁移 Job 显式下发 `FLYWAY_BASELINE_ON_MIGRATE=false`。
+- ServiceMonitor/告警补 clinical（含 5xx 与 P99 规则）。
+
+**回归防线**
+
+- `scripts/e2e/platform_smoke.ps1`：经网关 60 项断言（含本轮所有新增拦截）。
+- `InpatientControllerPermissionTest`（9 项）、`GatewayRouteConfigTest` 增至 4 项。
+
+**测试**：平台 **99 项** Java 测试全绿；真实库迁移到 clinical V8 / auth V10；
+三条数据库兜底用反例直插验证被拒绝（余额为负、未来执行日期、DAILY 对应临时医嘱）。
+
+**明确未做（如实记录）**：Testcontainers 集成测试（离线 Maven 仓库缺 `testcontainers-postgresql`，
+需在有网构建机首次拉依赖）；真正的行级授权（缺"用户↔病区"组织数据，列为 N2 前置输入）；
+clinical 业务指标（随 N2 一起打点）；`clinical_change_log` 分区归档（N7）。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
@@ -167,7 +219,8 @@ EMPI 侧令牌未配置时 fail-closed；网关对 `/api/v2/*/internal/**` 一�
 
 | 限制 | 影响 | 计划 |
 |---|---|---|
-| 无退费/红冲流程 | 已收费只能人工处理 | N2 与财务凭证一起做 |
+| 无退费/红冲流程 | 已收费只能人工处理；已计费后补记护理异常会被拒绝 | N2 与财务凭证一起做 |
+| 无行级（病区/患者）数据授权 | 有权限点即可查任意 admissionId 的费用与预交金（alerts 已收敛为病区级/全院级） | N2 前置：需 HR/组织架构同步"用户↔病区" |
 | 号源按"科室+医生+日期+时段"手工建 | 无批量排班/停诊 | 下一批做排班模板与停诊 |
 | 无药品库存扣减 | 只能记账，不能控库存 | N2 |
 | 欠费预警目前是"查询时计算" | 无后台定时扫描与消息推送 | N7 与报表/消息中心一起做 |

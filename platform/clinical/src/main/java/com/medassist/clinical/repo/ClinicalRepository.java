@@ -11,6 +11,7 @@ import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.support.BusinessTime;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -97,8 +98,10 @@ public class ClinicalRepository {
     }
 
     private String nextNo(String sequence, String prefix) {
-        Long seq = jdbc.sql("SELECT nextval('" + sequence + "')").query(Long.class).single();
-        return prefix + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+        // 序列名走绑定参数（CAST 为 regclass），避免把标识符拼进 SQL 文本
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", sequence).query(Long.class).single();
+        return prefix + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
                 + String.format("%06d", seq);
     }
 
@@ -284,6 +287,57 @@ public class ClinicalRepository {
                 .query(ORDER_MAPPER).list();
     }
 
+    /** 加行锁读取某天可计费的长嘱；必须在事务内调用（防并发停嘱/撤销）。 */
+    public List<VisitOrder> lockBillableLongOrders(UUID visitId, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.visit_order
+                         WHERE visit_id = :visitId AND order_mode = 'LONG' AND status = 'PLACED'
+                           AND start_date <= :date AND (stop_date IS NULL OR stop_date >= :date)
+                         ORDER BY created_at
+                           FOR UPDATE
+                        """)
+                .param("visitId", visitId).param("date", date)
+                .query(ORDER_MAPPER).list();
+    }
+
+    /**
+     * 当日"应计未计"的长嘱（出院前必须为空，费用看板用于计算缺口）。
+     *
+     * <p>护理执行记录为 REFUSED / OMITTED 的医嘱视为不应计费，不计入缺口。
+     */
+    public List<VisitOrder> listUnbilledDailyOrders(UUID visitId, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT o.* FROM clinical_svc.visit_order o
+                         WHERE o.visit_id = :visitId AND o.order_mode = 'LONG' AND o.status = 'PLACED'
+                           AND o.start_date <= :date AND (o.stop_date IS NULL OR o.stop_date >= :date)
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM clinical_svc.charge_item ci
+                                   JOIN clinical_svc.charge c ON c.id = ci.charge_id
+                                  WHERE c.visit_id = o.visit_id
+                                    AND ci.source_key = 'DAILY:' || o.id::text || ':' || :dateText)
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM clinical_svc.nursing_execution ne
+                                  WHERE ne.order_id = o.id AND ne.exec_date = :date
+                                    AND ne.status <> 'EXECUTED')
+                         ORDER BY o.created_at
+                        """)
+                .param("visitId", visitId).param("date", date)
+                .param("dateText", date.toString())
+                .query(ORDER_MAPPER).list();
+    }
+
+    /** 当日"应计未计"的长嘱条数（出院前必须为 0）。 */
+    public int countUnbilledDailyOrders(UUID visitId, LocalDate date) {
+        return listUnbilledDailyOrders(visitId, date).size();
+    }
+
+    /** 某医嘱某日是否已按日计费（护理补记非 EXECUTED 前必须确认未收费）。 */
+    public boolean existsDailyCharge(UUID orderId, LocalDate date) {
+        Long n = jdbc.sql("SELECT count(*) FROM clinical_svc.charge_item WHERE source_key = ?")
+                .param("DAILY:" + orderId + ":" + date).query(Long.class).single();
+        return n != null && n > 0;
+    }
+
     public Optional<VisitOrder> findOrder(UUID visitId, UUID orderId) {
         return jdbc.sql("""
                         SELECT * FROM clinical_svc.visit_order WHERE id = :orderId AND visit_id = :visitId
@@ -304,6 +358,21 @@ public class ClinicalRepository {
                          WHERE visit_id = :visitId AND status = :status ORDER BY created_at
                         """).param("visitId", visitId).param("status", status)
                 .query(ORDER_MAPPER).list();
+    }
+
+    /**
+     * 加行锁读取待计费的临时医嘱；必须在事务内调用。
+     *
+     * <p>结算时对 pending 医嘱加锁，避免"结算进行中该医嘱被并发撤销却仍被收费"。
+     */
+    public List<VisitOrder> lockPlacedTempOrders(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.visit_order
+                         WHERE visit_id = :visitId AND status = 'PLACED' AND order_mode = 'TEMP'
+                         ORDER BY created_at
+                           FOR UPDATE
+                        """)
+                .param("visitId", visitId).query(ORDER_MAPPER).list();
     }
 
     /** 医嘱置为已计费（CAS：仅 PLACED 可迁移）。返回成功条数。 */
@@ -390,6 +459,15 @@ public class ClinicalRepository {
                          WHERE visit_id = ? AND status = 'PLACED' AND order_mode = 'TEMP'
                         """).param(visitId).query(Long.class).single();
         return n == null ? 0 : n.intValue();
+    }
+
+    /** 作废该就诊的未结收费单（取消挂号时调用：避免悬挂一张永远不能结算的挂号费单）。 */
+    public int cancelOpenCharges(UUID visitId) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.charge
+                           SET status = 'REFUNDED', version = version + 1, updated_at = now()
+                         WHERE visit_id = :visitId AND status = 'UNPAID'
+                        """).param("visitId", visitId).update();
     }
 
     public void insertCharge(Charge c) {
@@ -580,8 +658,9 @@ public class ClinicalRepository {
     }
 
     public String nextAdmissionNo() {
-        Long seq = jdbc.sql("SELECT nextval('clinical_svc.admission_no_seq')").query(Long.class).single();
-        return "A" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "clinical_svc.admission_no_seq").query(Long.class).single();
+        return "A" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
                 + String.format("%06d", seq);
     }
 
@@ -615,6 +694,23 @@ public class ClinicalRepository {
                                attending_doctor, status, admitted_at, discharged_at, version
                           FROM clinical_svc.admission WHERE id = ? FOR UPDATE
                         """).param(id).query(ADMISSION_MAPPER).optional();
+    }
+
+    /**
+     * 加行锁读取该就诊的在院登记；必须在事务内调用。
+     *
+     * <p>预交金的一切写操作（存入/退还/结算抵扣）都必须先拿这把锁，
+     * 否则"读余额→校验→插负流水"在并发下会把余额做成负数。
+     * 锁顺序约定：visit → admission → bed（与 settle/dailyBill/discharge 保持一致）。
+     */
+    public Optional<Admission> lockActiveAdmissionByVisit(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission
+                         WHERE visit_id = :visitId AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                           FOR UPDATE
+                        """).param("visitId", visitId).query(ADMISSION_MAPPER).optional();
     }
 
     public Optional<Admission> findActiveAdmissionByVisit(UUID visitId) {

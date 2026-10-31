@@ -9,6 +9,7 @@ import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.support.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
@@ -123,7 +124,7 @@ public class InpatientService {
         // 住院就诊：状态直接 IN_TREATMENT（入院即可开医嘱），复用门诊的就诊/医嘱/收费模型
         Visit visit = new Visit(UUID.randomUUID(), repo.nextVisitNo(), patient.id(), patient.patientNo(),
                 ward.deptId(), req.attendingDoctor().trim(), null, "INPATIENT",
-                Visit.IN_TREATMENT, LocalDate.now(), 0L);
+                Visit.IN_TREATMENT, BusinessTime.today(), 0L);
         try {
             repo.insertVisit(visit);
         } catch (DataIntegrityViolationException e) {
@@ -142,7 +143,14 @@ public class InpatientService {
                 req.attendingDoctor().trim(),
                 bed == null ? Admission.ADMITTED : Admission.IN_HOSPITAL,
                 null, null, 0L);
-        repo.insertAdmission(admission);
+        try {
+            repo.insertAdmission(admission);
+        } catch (DataIntegrityViolationException e) {
+            // 并发入院时由 ux_admission_patient_active / ux_admission_bed_active 兜底，
+            // 必须转成 409 而不是 500（预检与插入之间仍有窗口）
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该患者已在院或该床位已被占用，请刷新后重试");
+        }
 
         audit(actor, "ADMIT", "ADMISSION", admission.id().toString(), Map.of(
                 "admissionNo", admission.admissionNo(), "visitNo", visit.visitNo(),
@@ -192,15 +200,31 @@ public class InpatientService {
 
     // ---------------------------------------------------------------- 出院
 
+    /**
+     * 出院。
+     *
+     * <p>并发要点：先锁 visit（与 settle / dailyBill 串行），再锁 admission、床位。
+     * 否则"出院检查通过 → 护理站同时跑当日按日计费 → 出院成功"会留下人已出院、
+     * 账上却挂着一张有金额的未结单。
+     *
+     * <p>出院条件：无有金额的未结单 + 无未计费临时医嘱 + 当日有效长嘱已计费
+     * （REFUSED / OMITTED 的长嘱不计入缺口）。
+     */
     @Transactional
     public AdmissionView discharge(UUID admissionId, String actor) {
+        Admission snapshot = repo.findAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        // 统一锁顺序：visit → admission → bed
+        repo.lockVisit(snapshot.visitId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+
         Admission a = repo.lockAdmission(admissionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
         if (!Admission.IN_HOSPITAL.equals(a.status())) {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "只有在院（IN_HOSPITAL）状态可以出院，当前：" + a.status());
         }
-        // 中途结算后可能已有多张收费单，出院只要求"没有有金额的未结单 + 没有未计费临时医嘱"
+        // 中途结算后可能已有多张收费单，出院只要求"没有有金额的未结单 + 没有未计费医嘱"
         if (repo.hasUnsettledCharge(a.visitId())) {
             throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
                     "出院前必须结清费用（存在未结算收费单）");
@@ -210,17 +234,27 @@ public class InpatientService {
             throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
                     "还有 " + unbilled + " 条临时医嘱未计费，请先结算再办理出院");
         }
+        LocalDate today = BusinessTime.today();
+        int unbilledDaily = repo.countUnbilledDailyOrders(a.visitId(), today);
+        if (unbilledDaily > 0) {
+            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
+                    "还有 " + unbilledDaily + " 条长期医嘱当日（" + today + "）未计费，请先按日计费再办理出院");
+        }
         if (!repo.updateAdmissionStatus(a.id(), Admission.IN_HOSPITAL, Admission.DISCHARGED, a.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");
         }
         if (a.bedId() != null) {
             Bed bed = repo.lockBed(a.bedId())
                     .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "床位不存在"));
-            repo.freeBed(bed.id(), bed.version());
+            if (!repo.freeBed(bed.id(), bed.version())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "床位状态异常（可能已被释放），出院未完成");
+            }
         }
         Visit visit = repo.findVisit(a.visitId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
-        repo.updateVisitStatus(visit.id(), Visit.IN_TREATMENT, Visit.FINISHED, visit.version());
+        if (!repo.updateVisitStatus(visit.id(), Visit.IN_TREATMENT, Visit.FINISHED, visit.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "就诊状态已变化，出院未完成");
+        }
 
         Charge latest = repo.findLatestCharge(a.visitId()).orElse(null);
         audit(actor, "DISCHARGE", "ADMISSION", a.id().toString(), Map.of(
@@ -271,7 +305,17 @@ public class InpatientService {
         return new DepositView(repo.depositBalance(a.id()), repo.listDeposits(a.id()));
     }
 
+    /**
+     * 锁定在院登记：统一锁顺序 visit → admission。
+     *
+     * <p>预交金的写入（存入/退还）与结算抵扣必须复用同一把 admission 行锁，
+     * 否则并发下"读余额 → 校验 → 插负流水"会互相覆盖，把余额做成负数。
+     */
     private Admission requireActiveAdmission(UUID admissionId) {
+        Admission snapshot = repo.findAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        repo.lockVisit(snapshot.visitId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         Admission a = repo.lockAdmission(admissionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
         if (!a.active()) {

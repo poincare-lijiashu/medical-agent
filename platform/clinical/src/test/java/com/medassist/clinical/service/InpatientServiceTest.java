@@ -135,6 +135,8 @@ class InpatientServiceTest {
         UUID admissionId = UUID.randomUUID();
         Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
                 null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(a.visitId())).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.hasUnsettledCharge(a.visitId())).thenReturn(true);
 
@@ -152,6 +154,8 @@ class InpatientServiceTest {
         UUID visitId = UUID.randomUUID();
         Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
                 null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
         when(repo.countUnbilledTempOrders(visitId)).thenReturn(2);
@@ -163,14 +167,35 @@ class InpatientServiceTest {
     }
 
     @Test
+    @DisplayName("当日有效长嘱未计费不得出院（应收尽收）")
+    void dischargeRejectsUnbilledDailyOrders() {
+        UUID admissionId = UUID.randomUUID();
+        UUID visitId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
+        when(repo.countUnbilledTempOrders(visitId)).thenReturn(0);
+        when(repo.countUnbilledDailyOrders(eq(visitId), any(LocalDate.class))).thenReturn(1);
+
+        assertThatThrownBy(() -> service.discharge(admissionId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("长期医嘱");
+        verify(repo, never()).updateAdmissionStatus(any(), any(), any(), anyLong());
+    }
+
+    @Test
     @DisplayName("预交金：存入后余额增加，流水记为 DEPOSIT")
     void depositIncreasesBalance() {
         UUID admissionId = UUID.randomUUID();
         Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
                 null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(a.visitId())).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.depositBalance(admissionId)).thenReturn(new BigDecimal("100.00"));
-        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.listDeposits(admissionId)).thenReturn(java.util.List.of());
 
         var view = service.deposit(admissionId, new BigDecimal("100"), "CASH", "首次预交", "clerk01");
@@ -186,6 +211,8 @@ class InpatientServiceTest {
         UUID admissionId = UUID.randomUUID();
         Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
                 null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(a.visitId())).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.depositBalance(admissionId)).thenReturn(new BigDecimal("50.00"));
 
@@ -203,9 +230,14 @@ class InpatientServiceTest {
         UUID visitId = UUID.randomUUID();
         Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
                 bedId, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 4L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                new Visit(visitId, "V1", patientId, "P1", deptId, "doctor01", null,
+                        "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 1L)));
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
         when(repo.countUnbilledTempOrders(visitId)).thenReturn(0);
+        when(repo.countUnbilledDailyOrders(eq(visitId), any(LocalDate.class))).thenReturn(0);
         when(repo.findLatestCharge(visitId)).thenReturn(Optional.of(
                 new Charge(UUID.randomUUID(), "C1", visitId, new BigDecimal("88.00"),
                         Charge.PAID, "CASH", Instant.now(), 2L)));

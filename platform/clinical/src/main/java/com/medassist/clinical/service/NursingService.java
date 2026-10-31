@@ -4,6 +4,7 @@ import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.support.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
 import com.medassist.common.api.ErrorCode;
@@ -51,7 +52,11 @@ public class NursingService {
         if (!admission.active()) {
             throw new BusinessException(ErrorCode.CONFLICT, "该住院登记已出院或已取消，不能记录护理执行");
         }
-        LocalDate execDate = req.execDate() == null ? LocalDate.now() : req.execDate();
+        LocalDate execDate = req.execDate() == null ? BusinessTime.today() : req.execDate();
+        if (execDate.isAfter(BusinessTime.today())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "不能为未来日期（" + execDate + "）记录护理执行");
+        }
         VisitOrder order = repo.findOrder(admission.visitId(), req.orderId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_ITEM_NOT_FOUND,
                         "医嘱不存在或不属于该住院就诊"));
@@ -63,6 +68,13 @@ public class NursingService {
                     "该长嘱在 " + execDate + " 不在有效期内（可能尚未开始、已停嘱或已撤销）");
         }
         String status = normalizeStatus(req.status());
+
+        // 已按日计费后再补记"未执行/拒绝"会让当日多收，且当前没有红冲流程：
+        // 直接拒绝，提示先走冲正（避免账实不符被医保飞检扣分）。
+        if (!NursingExecution.EXECUTED.equals(status) && repo.existsDailyCharge(order.id(), execDate)) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该医嘱 " + execDate + " 已计费，不能再记为 " + status + "；请先冲正费用再更正执行记录");
+        }
 
         // 先查后插：PostgreSQL 语句失败后事务会进入 aborted 状态，
         // 若在 catch 里再查库会二次失败（实测 500），因此重复判定必须放在写入之前。

@@ -7,6 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.support.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.BillingPreview;
 import com.medassist.clinical.web.ClinicalDtos.ChargeItemView;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
@@ -54,7 +55,7 @@ public class BillingService {
         this.objectMapper = objectMapper;
     }
 
-    /** 收费前预览：当前未结金额、待计医嘱、当前收费单。 */
+    /** 收费前预览：累计已计金额（全部收费单）、待计临时医嘱、当前收费单。 */
     public BillingPreview preview(UUID visitId) {
         Visit visit = repo.findVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
@@ -67,13 +68,26 @@ public class BillingService {
         BigDecimal pendingAmount = pending.stream()
                 .map(VisitOrder::amount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return new BillingPreview(charge.totalAmount(), pendingAmount, pending.size(), toView(charge));
+        // 口径与费用看板一致：已计 = 该就诊全部有效收费单之和（中途结算后可能多张；作废单不计）
+        BigDecimal billedTotal = repo.listCharges(visitId).stream()
+                .filter(c -> !Charge.REFUNDED.equals(c.status()))
+                .map(Charge::totalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return new BillingPreview(billedTotal, pendingAmount, pending.size(), toView(charge));
     }
 
     /**
      * 结算：把待计临时医嘱并入当前收费单并置为已收费。
      *
      * <p>没有待计内容时返回最近一张收费单（HTTP 200），调用方可安全重试。
+     *
+     * <p>并发要点：
+     * <ul>
+     *   <li>先锁 visit（与 dailyBill/discharge 串行），再锁未结收费单；</li>
+     *   <li>待计医嘱用 {@code FOR UPDATE} 读出，避免"结算中该医嘱被并发撤销却仍被收费"；</li>
+     *   <li>预交金抵扣时必须先锁 admission，与退费串行，否则余额可被做成负数；</li>
+     *   <li>医嘱置为已计费的条数必须与入账条数一致，否则回滚。</li>
+     * </ul>
      */
     @Transactional
     public ChargeView settle(UUID visitId, String paymentMethod, String actor) {
@@ -84,9 +98,7 @@ public class BillingService {
         }
 
         // 长嘱按日计费（dailyBill），结算只处理临时医嘱，避免与日报重复计费
-        List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED).stream()
-                .filter(o -> !o.longTerm())
-                .toList();
+        List<VisitOrder> pending = repo.lockPlacedTempOrders(visitId);
 
         Charge charge = repo.lockOpenCharge(visitId).orElse(null);
         if (charge == null) {
@@ -113,8 +125,8 @@ public class BillingService {
         BigDecimal payable = charge.totalAmount().add(addAmount);
         String method = paymentMethod.trim().toUpperCase();
         if ("DEPOSIT".equals(method)) {
-            // 预交金抵扣：仅住院；余额不足直接拒绝（欠费拦截）
-            Admission admission = repo.findActiveAdmissionByVisit(visitId)
+            // 预交金抵扣：仅住院；必须先锁 admission，与退费在同一把锁上串行
+            Admission admission = repo.lockActiveAdmissionByVisit(visitId)
                     .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED,
                             "只有住院就诊可以使用预交金结算"));
             BigDecimal balance = repo.depositBalance(admission.id());
@@ -132,7 +144,12 @@ public class BillingService {
             // 版本冲突说明另一个窗口刚结算/退费；交给调用方重试，避免"以为失败其实已扣费"
             throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
         }
-        repo.markOrdersCharged(pending.stream().map(VisitOrder::id).toList());
+        int charged = repo.markOrdersCharged(pending.stream().map(VisitOrder::id).toList());
+        if (charged != pending.size()) {
+            // 有医嘱在结算过程中被改成非 PLACED（例如并发撤销）：整笔回滚，不能"钱收了医嘱还挂着"
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "有 " + (pending.size() - charged) + " 条医嘱状态已变化，本次结算已撤销，请刷新后重试");
+        }
 
         audit(actor, "CHARGE_SETTLE", visitId.toString(), Map.of(
                 "visitNo", visit.visitNo(), "chargeNo", charge.chargeNo(),
@@ -149,7 +166,7 @@ public class BillingService {
      */
     @Transactional
     public DailyBillResult dailyBill(UUID visitId, LocalDate date, String actor) {
-        LocalDate billDate = date == null ? LocalDate.now() : date;
+        LocalDate billDate = date == null ? BusinessTime.today() : date;
         Visit visit = repo.lockVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         if (!"INPATIENT".equals(visit.visitType())) {
@@ -158,7 +175,7 @@ public class BillingService {
         if (!visit.active()) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能计费");
         }
-        if (billDate.isAfter(LocalDate.now())) {
+        if (billDate.isAfter(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能对未来日期按日计费");
         }
 
@@ -167,7 +184,7 @@ public class BillingService {
 
         List<VisitOrder> billable = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
-        for (VisitOrder o : repo.listBillableLongOrders(visitId, billDate)) {
+        for (VisitOrder o : repo.lockBillableLongOrders(visitId, billDate)) {
             if (!o.billableOn(billDate)) {
                 continue;
             }

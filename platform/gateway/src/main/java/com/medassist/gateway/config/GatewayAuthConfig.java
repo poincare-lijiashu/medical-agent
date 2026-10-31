@@ -33,6 +33,13 @@ public class GatewayAuthConfig {
 
     @Bean
     public JwtDecoder jwtDecoder(GatewayAuthProperties props, Environment environment) {
+        // 逃生阀守卫：GATEWAY_AUTH_ENABLED=false 会让 /api/v2/** 全部裸奔，
+        // 生产环境必须直接拒绝启动（与"生产禁用开发默认密钥"同一原则）。
+        if (!props.enabled() && SecurityDefaults.isProduction(environment)) {
+            throw new IllegalStateException(
+                    "生产环境不允许关闭网关鉴权（GATEWAY_AUTH_ENABLED=false），网关拒绝启动");
+        }
+
         String secret = props.secret();
         byte[] secretBytes = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
         if (secretBytes.length < MIN_SECRET_BYTES) {
