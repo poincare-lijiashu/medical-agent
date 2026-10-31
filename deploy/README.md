@@ -82,14 +82,18 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 ### 4.1 构建镜像
 
 ```powershell
-# Java 服务（gateway / auth / empi 共用一份 Dockerfile）
-docker build --build-arg SERVICE=gateway -t harbor.hospital.local/medassist/platform-gateway:1.0.0 -f platform/Dockerfile platform
-docker build --build-arg SERVICE=auth    -t harbor.hospital.local/medassist/platform-auth:1.0.0    -f platform/Dockerfile platform
-docker build --build-arg SERVICE=empi    -t harbor.hospital.local/medassist/platform-empi:1.0.0    -f platform/Dockerfile platform
+# Java 服务（gateway / auth / empi / clinical 共用一份 Dockerfile）
+docker build --build-arg SERVICE=gateway  -t harbor.hospital.local/medassist/platform-gateway:1.0.0  -f platform/Dockerfile platform
+docker build --build-arg SERVICE=auth     -t harbor.hospital.local/medassist/platform-auth:1.0.0     -f platform/Dockerfile platform
+docker build --build-arg SERVICE=empi     -t harbor.hospital.local/medassist/platform-empi:1.0.0     -f platform/Dockerfile platform
+docker build --build-arg SERVICE=clinical -t harbor.hospital.local/medassist/platform-clinical:1.0.0 -f platform/Dockerfile platform
 
 # AI 中台（根 Dockerfile，含 SkyWalking entrypoint）
 docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
 ```
+
+> 镜像最后一段（`platform-*` / `ai-core`）必须与 `values.yaml` 的 `*.image.repository` 一致；
+> 前半段必须与 `imageRegistry` 一致。两处都带组织前缀会拼成 `.../medassist/medassist/...`（拉不到）。
 
 运行镜像特点：非 root（uid 10001）、仅 `/tmp` 可写（配合 `readOnlyRootFilesystem`）、
 不含 SkyWalking agent（由 initContainer 注入，镜像与 APM 解耦）。
