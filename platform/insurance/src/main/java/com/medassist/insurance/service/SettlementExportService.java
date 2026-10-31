@@ -83,6 +83,9 @@ public class SettlementExportService {
         if (to.isAfter(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "导出期间不能晚于今天");
         }
+        // 同期间的并发生成必须互斥：否则两个事务的 NOT EXISTS 都在对方提交前查空，
+        // 同一批清单会进入两个 GENERATED 批次 → 省局重复结算（第五轮 R5-M5）
+        repo.lockExportPeriod(from, to);
         // 已报盘（GENERATED/ACCEPTED）的清单不再重复纳入；退回/撤销批次可重报
         long excluded = repo.countConfirmedBillsAlreadyExported(from, to);
         long pending = repo.countConfirmedBillsPending(from, to);

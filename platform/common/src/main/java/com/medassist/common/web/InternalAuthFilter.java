@@ -69,10 +69,16 @@ public class InternalAuthFilter extends OncePerRequestFilter {
 
     public InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
                               MeterRegistry meterRegistry) {
+        this(props, keySet, meterRegistry, MAX_NONCE_ENTRIES);
+    }
+
+    /** 供测试注入容量的构造器：容量策略（过期清理 / 饱和拒绝）需要在小容量下可验证。 */
+    InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
+                       MeterRegistry meterRegistry, int maxNonceEntries) {
         this.props = props;
         this.keySet = keySet;
         this.meterRegistry = meterRegistry;
-        this.nonces = new NonceCache(props.nonceTtlSecondsOrDefault() * 1000L, MAX_NONCE_ENTRIES);
+        this.nonces = new NonceCache(props.nonceTtlSecondsOrDefault() * 1000L, maxNonceEntries);
     }
 
     @Override
@@ -150,15 +156,17 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         if (Math.abs(now - ts) > props.clockSkewSecondsOrDefault()) {
             return "skew";
         }
-        if (!nonces.register(keyId + ":" + nonce)) {
-            return "replay";
-        }
 
         String canonical = InternalSignature.canonical(request.getMethod(), path(request),
                 request.getQueryString(), identityHeaders(request), ts, nonce,
                 InternalSignature.EMPTY_BODY_HASH);
         if (!InternalSignature.verify(secret, canonical, signature)) {
             return "bad_sig";
+        }
+        // 验签通过后才占用 nonce：反过来的话，任何未认证流量都能先灌满 nonce 表（第五轮 R5-M1）
+        String nonceResult = registerNonce(keyId + ":" + nonce);
+        if (nonceResult != null) {
+            return nonceResult;
         }
         request.setAttribute(ATTR_KEY_ID, keyId);
         request.setAttribute(ATTR_CALLER, "gateway");
@@ -202,19 +210,29 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         if (Math.abs(now - ts) > props.clockSkewSecondsOrDefault()) {
             return "skew";
         }
-        // nonce 前缀带 caller，避免不同调用方之间互相"烧掉"随机数
-        if (!nonces.register("c:" + caller + ":" + nonce)) {
-            return "replay";
-        }
 
         String canonical = InternalSignature.canonicalCaller(request.getMethod(), path(request),
                 request.getQueryString(), caller, ts, nonce, InternalSignature.EMPTY_BODY_HASH);
         if (!InternalSignature.verify(secret, canonical, signature)) {
             return "bad_sig";
         }
+        // 同网关通道：验签通过后才占 nonce；前缀带 caller，避免不同调用方互相"烧掉"随机数
+        String nonceResult = registerNonce("c:" + caller + ":" + nonce);
+        if (nonceResult != null) {
+            return nonceResult;
+        }
         request.setAttribute(ATTR_KEY_ID, caller);
         request.setAttribute(ATTR_CALLER, caller);
         return "ok";
+    }
+
+    /** @return null 表示首次出现（放行）；否则返回拒绝原因 replay / saturated */
+    private String registerNonce(String key) {
+        return switch (nonces.register(key)) {
+            case FRESH -> null;
+            case REPLAY -> "replay";
+            case SATURATED -> "saturated";
+        };
     }
 
     private static Map<String, String> identityHeaders(HttpServletRequest request) {
@@ -290,10 +308,21 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         return value == null || value.isBlank();
     }
 
-    /** 进程内 nonce 去重（TTL 到期自动失效；容量超限时惰性清理）。 */
+    /**
+     * 进程内 nonce 去重（TTL 到期自动失效）。
+     *
+     * <p>容量策略：优先清理已过期条目；仍然满额时**拒绝新 nonce**（fail-closed，返回 SATURATED
+     * 由调用方按 403 处理），绝不整体清空——清空等于主动把已用过的 nonce 全部放回可用状态，
+     * 在 TTL 窗口内重新打开重放（第五轮 R5-M1）。
+     */
     private static final class NonceCache {
 
+        enum Outcome { FRESH, REPLAY, SATURATED }
+
+        private static final int PURGE_BUDGET = 2000;
+
         private final Map<String, Long> seen = new ConcurrentHashMap<>();
+        private final java.util.Queue<String> insertionOrder = new java.util.concurrent.ConcurrentLinkedQueue<>();
         private final long ttlMillis;
         private final int maxEntries;
 
@@ -302,15 +331,10 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             this.maxEntries = maxEntries;
         }
 
-        /** @return true 表示首次出现；false 表示 TTL 内重复（重放） */
-        boolean register(String key) {
+        Outcome register(String key) {
             long now = System.currentTimeMillis();
-            if (seen.size() >= maxEntries) {
-                seen.entrySet().removeIf(entry -> entry.getValue() <= now);
-                if (seen.size() >= maxEntries) {
-                    // 极端流量下仍满：整体清空优于无限增长（60 秒窗口内影响可接受）
-                    seen.clear();
-                }
+            if (seen.size() >= maxEntries && !purgeExpired(now)) {
+                return Outcome.SATURATED;
             }
             boolean[] fresh = {false};
             seen.compute(key, (k, expiry) -> {
@@ -320,7 +344,33 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 }
                 return expiry;
             });
-            return fresh[0];
+            if (fresh[0]) {
+                insertionOrder.add(key);
+            }
+            return fresh[0] ? Outcome.FRESH : Outcome.REPLAY;
+        }
+
+        /** 按插入顺序从头部清理过期条目，单次最多 PURGE_BUDGET 条，避免长尾延迟。 */
+        private boolean purgeExpired(long now) {
+            int budget = PURGE_BUDGET;
+            while (budget-- > 0) {
+                String head = insertionOrder.poll();
+                if (head == null) {
+                    break;
+                }
+                Long expiry = seen.get(head);
+                if (expiry == null) {
+                    continue;
+                }
+                if (expiry <= now) {
+                    seen.remove(head, expiry);
+                } else {
+                    // 头部尚未过期：说明整体都还新鲜，停止（放回队尾以保持顺序近似）
+                    insertionOrder.add(head);
+                    break;
+                }
+            }
+            return seen.size() < maxEntries;
         }
     }
 }

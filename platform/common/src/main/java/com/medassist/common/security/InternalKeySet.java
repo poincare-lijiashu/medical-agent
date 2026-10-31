@@ -46,23 +46,39 @@ public final class InternalKeySet {
             JsonNode root = mapper.readTree(json);
             String active = root.path("active").asText(null);
             Map<String, String> keys = new HashMap<>();
-            root.path("keys").fields().forEachRemaining(entry -> {
-                String secret = entry.getValue().asText("");
-                if (!secret.isBlank()) {
-                    keys.put(entry.getKey(), secret);
-                }
-            });
+            root.path("keys").fields().forEachRemaining(entry ->
+                    putIfValid(keys, entry.getKey(), entry.getValue().asText("")));
             Map<String, String> callerKeys = new HashMap<>();
-            root.path("internal").fields().forEachRemaining(entry -> {
-                String secret = entry.getValue().asText("");
-                if (!secret.isBlank()) {
-                    callerKeys.put(entry.getKey().toLowerCase(), secret);
-                }
-            });
+            root.path("internal").fields().forEachRemaining(entry ->
+                    putIfValid(callerKeys, entry.getKey().toLowerCase(), entry.getValue().asText("")));
             return new InternalKeySet(active, Map.copyOf(keys), Map.copyOf(callerKeys));
         } catch (Exception e) {
             throw new IllegalStateException("medassist.internal-auth.keys-json 解析失败：" + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 密钥必须是可解码的 Base64（且 ≥16 字节）。
+     *
+     * <p>在解析期就校验，而不是等第一次签名时才抛异常：坏密钥若通过启动守卫，
+     * 运行期会让每个请求 500 而不是可预期的 403（第五轮 R5-S4）。
+     */
+    private static void putIfValid(Map<String, String> target, String keyId, String secret) {
+        if (secret == null || secret.isBlank()) {
+            return;
+        }
+        byte[] decoded;
+        try {
+            decoded = java.util.Base64.getDecoder().decode(secret.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.keys-json 中密钥 " + keyId + " 不是合法 Base64");
+        }
+        if (decoded.length < 16) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.keys-json 中密钥 " + keyId + " 长度不足 16 字节");
+        }
+        target.put(keyId, secret.trim());
     }
 
     public boolean configured() {

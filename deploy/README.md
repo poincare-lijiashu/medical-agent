@@ -110,6 +110,12 @@ docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
 
 ### 4.2 安装
 
+> **顺序要求（prod/staging）**：`internalAuth.mode=enforce` 时，网关与全部业务服务都会读取
+> `medassist-internal-hmac`。**必须先建好该 Secret 再 `helm upgrade`**，否则所有业务 Pod 与
+> 迁移 Job 会卡在 `CreateContainerConfigError`（表现为"发布成功但起不来"）。
+> 密钥内容为 `keys-json`：`{"active":"...","keys":{"...":"<base64 32B>"},"internal":{"clinical":"<base64>",...}}`，
+> `active` 必须出现在 `keys` 中（网关启动时会校验，缺失即拒绝启动）。
+
 ```powershell
 # 本地 kind / minikube 自验（Chart 内置 Secret、关闭 APM/网络策略）
 helm upgrade --install medassist deploy/helm/medassist-platform `

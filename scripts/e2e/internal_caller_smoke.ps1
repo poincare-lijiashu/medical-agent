@@ -77,6 +77,7 @@ $nonce = "caller-$([Guid]::NewGuid().ToString('N').Substring(0,16))"
 # ---------------------------------------------------------------- 1. unsigned
 $r = Invoke-Curl 'GET' "$EmrUrl/internal/health"
 Check 'caller.unsigned' $r.Status 403
+Check 'caller.unsigned.code' ((($r.Body | ConvertFrom-Json).code)) 40300
 
 # ---------------------------------------------------------------- 2. valid signature
 $h = New-SignatureHeaders 'GET' '/internal/health' $Caller $CallerKey $ts $nonce

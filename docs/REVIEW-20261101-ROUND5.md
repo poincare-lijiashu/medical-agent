@@ -191,4 +191,28 @@ caller 绑定、启动守卫）方向正确且经实跑验证有效；网关"先
 
 ---
 
+## 7. 整改状态（2026-11-01，第一批~第五批已落地）
+
+| 批次 | 覆盖项 | 状态 | 落地要点 |
+|---|---|---|---|
+| 第一批 资金红线 | R5-M5、R5-M6 | ✅ | `InsuranceRepository.lockExportPeriod`：按期间取 `pg_advisory_xact_lock`（CTE 包一层返回常量列，避免 void 列映射失败）；目录导入**更新路径**补乙类比例校验 |
+| 第二批 安全收口 | R5-M1、R5-M2、R5-S1~S4 | ✅ | nonce 改为**验签通过后**才占用；容量满时清理过期、仍满则 `saturated` fail-closed（绝不整体清空）；`nonceTtl ≥ 2×skew+1` 启动断言（默认改 180s）；`X-Internal-Token` 加入剥离清单；网关校验 `active ∈ keys`；required 时本服务 caller 无密钥即拒启；密钥解析期校验 Base64 与最小长度 |
+| 第三批 PACS | R5-M4、R5-M7、R5-S6、R5-S7 | ✅ | 登记前按 UID 预查归属（不再靠 catch 后二次查库）；并发兜底只给可读 409；worklist 改 `LEFT JOIN` + `COALESCE(modality,'OT')`；日期改"不传=开单日≤今天"，绝对时刻传参可走索引；`tech V4` 部分唯一索引允许取消后重做 |
+| 第四批 报表与库 | R5-M8、R5-S5、R5-S8 | ✅ | `clinical V9` 补 `charge_item(created_at)` 索引；总额/分类/科室收入统一 `JOIN charge` 排除 REFUNDED；`tech V5` 补 counts 上限 CHECK |
+| 第五批 交付与观测 | R5-M9、R5-S10~S13、R5-S16 | ✅ | 离网手册新增"§2.2 预置 Secret（必须早于 helm upgrade）"并进介质清单；告警新增 `medassist.internal-auth` 组（拒绝速率 + 通过率<50% critical）；values/E2E 注释变量名纠偏；deploy README 补安装顺序；两个签名 E2E 增加 `code=40300` 断言 |
+| 第六批 测试补强 | R5-M10、R5-S14、R5-S15 | ✅ | 新增 `InternalSignatureClientInterceptorTest`（3 项：内部路径签名可验、业务路径不加头、disabled 不加头）；过滤器补指标打点/饱和/验签失败不占 nonce 用例；PACS 补 UID 占用、并发兜底、取消后重做、显式日期用例；启动守卫补 4 项 |
+| 未做（记录） | R5-M3 密钥面收敛、R5-S17 CI 全链路 | ⏳ | 需拆 Secret 并按 Deployment 裁剪挂载，与阶段二 mTLS 一起做；CI 内跑 E2E 需 ubuntu runner 上的 bash 版脚本 |
+
+**验证**：全量单测 **446 项全过**（本轮新增 16 项）；
+E2E 实跑：`internal_auth_smoke` **12 项**、`internal_caller_smoke` **9 项**、`tech_pacs_smoke` **36 项**、
+`tech_lis_smoke` **27 项**、`clinical_report_smoke` **24 项**、`insurance_smoke` **161 项** 全过；
+库内迁移 `clinical → V9`、`tech → V5`。
+
+**实践发现（新增到踩坑备忘）**：`pg_advisory_xact_lock` 返回 void，用
+`query(Long.class).single()` 会抛"不良的类型值 long"，并被 Spring 的 SQLState 翻译误判为
+`DataIntegrityViolationException` → 业务侧表现为 409（错得很有欺骗性）。必须用
+`WITH acquired AS (SELECT pg_advisory_xact_lock(...)) SELECT 1 FROM acquired` 之类带结果列的写法。
+
+---
+
 *本意见书由 5 路并行只读评测智能体产出并汇编；所有 MUST-FIX 均给出文件与行号，整改时请先复现再修改。*

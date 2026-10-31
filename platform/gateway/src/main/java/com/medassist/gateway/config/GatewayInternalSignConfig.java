@@ -38,6 +38,13 @@ public class GatewayInternalSignConfig {
                     "网关已启用服务间签名（medassist.internal-auth.mode=" + mode
                             + "）但未配置 keys-json（INTERNAL_HMAC_KEYS），网关拒绝启动");
         }
+        // active 必须真实存在：拼错时网关能正常启动但每个请求都不签名，
+        // enforce 下全站 403（fail-closed 但自我瘫痪，第五轮 R5-S2）
+        if (!InternalAuthProperties.OFF.equals(mode) && keySet.secret(keySet.activeKeyId()) == null) {
+            throw new IllegalStateException(
+                    "网关 keys-json 的 active（" + keySet.activeKeyId()
+                            + "）不在 keys 中，网关将无法为任何请求签名，拒绝启动");
+        }
         log.info("gateway.internal-sign mode={} keyId={} keys={}", mode,
                 keySet.activeKeyId(), keySet.configured() ? "configured" : "none");
         return new InternalSignatureGlobalFilter(props, keySet);

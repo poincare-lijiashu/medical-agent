@@ -514,6 +514,29 @@ public class InsuranceRepository {
     }
 
     /**
+     * 期间级串行化锁（事务级 advisory lock）。
+     *
+     * <p>为什么必须加：{@link #listConfirmedBills} 的 `FOR SHARE` 只锁"查到的行"，
+     * 两个并发 create 事务各自的 NOT EXISTS 都在对方提交前查空，`FOR SHARE` 之间互相兼容，
+     * 于是同一批 CONFIRMED 清单会同时进入两个 GENERATED 批次 → 省局重复结算（第五轮 R5-M5）。
+     * 事务提交/回滚时自动释放，不需要显式解锁。
+     *
+     * <p>锁粒度取"期间"而不是全表：不同月份可以并发生成，只有同期间互斥。
+     */
+    public void lockExportPeriod(LocalDate from, LocalDate to) {
+        // pg_advisory_xact_lock 返回 void，直接 query(Long.class) 会因无法映射 void 列而报错；
+        // 用 CTE 包一层并返回常量 1，既拿到锁又有可映射的结果列。
+        jdbc.sql("""
+                        WITH acquired AS (
+                            SELECT pg_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))
+                        )
+                        SELECT 1 FROM acquired
+                        """)
+                .param("key", "insurance:settlement-export:" + from + ":" + to)
+                .query(Integer.class).single();
+    }
+
+    /**
      * 期间内**尚未报盘**的已确认清单，按确认时间升序。
      *
      * <p>排除已属 GENERATED / ACCEPTED 批次的清单（第四轮 MF-01：同一清单不得重复报盘）；
@@ -521,6 +544,7 @@ public class InsuranceRepository {
      *
      * <p>`FOR SHARE` 锁住被选中的清单行：与作废（UPDATE）互斥，
      * 避免"查完清单→写批次"之间被并发作废（第四轮 SF-07）。
+     * 注意它**不能**防两个 create 之间的竞争，那由 {@link #lockExportPeriod} 负责。
      */
     public List<SettlementBill> listConfirmedBills(LocalDate from, LocalDate to, int limit) {
         return jdbc.sql("SELECT " + BILL_COLUMNS + """

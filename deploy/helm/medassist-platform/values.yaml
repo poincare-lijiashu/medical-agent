@@ -117,11 +117,13 @@ external:
 # off     = 关闭（仅允许非集群本地联调）
 # log     = 校验并打点但不拦截（灰度期用来暴露绕过网关的直连流量）
 # enforce = 校验失败 403（staging/production 必须使用）
-# 各服务通过环境变量 MEDASSIST_INTERNAL_AUTH_* 绑定，无需改 application.yml。
+# 各服务通过环境变量 MEDASSIST_INTERNALAUTH_* 绑定（Spring 宽松绑定会删除连字符），
+# 无需改 application.yml。
 internalAuth:
   mode: log
   clockSkewSeconds: 60
-  nonceTtlSeconds: 120
+  # nonce 必须比时间窗活得久（≥2×clockSkew+1），否则窗内时间戳 + 已过期 nonce 可重放
+  nonceTtlSeconds: 180
   # /internal/** 的服务→服务调用是否也要求调用方签名（T5）。
   # 默认 false：先确认 Secret 的 keys-json 已包含 internal.{clinical,emr,insurance,pharmacy,tech}
   # 且全部调用方已升级，再切 true（切换后未配置密钥的调用方会被 403）。

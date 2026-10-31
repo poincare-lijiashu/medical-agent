@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -67,6 +69,22 @@ class SettlementExportServiceTest {
                 LocalDate.now(), 1, new BigDecimal("10.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), "<x/>", "hash", status, null, null, null,
                 null, null, null, "yb01", version, Instant.now());
+    }
+
+    @Test
+    @DisplayName("生成批次前先取期间级 advisory lock（R5-M5 防并发重复报盘）")
+    void createAcquiresPeriodLockBeforeCounting() {
+        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
+        LocalDate day = LocalDate.now();
+
+        service.create(day, day, "yb01");
+
+        InOrder order = inOrder(repo);
+        order.verify(repo).lockExportPeriod(day, day);
+        order.verify(repo).countConfirmedBillsPending(day, day);
+        order.verify(repo).insertExportBatch(any());
     }
 
     @Test

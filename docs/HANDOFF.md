@@ -615,6 +615,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 已知限制：全部服务共用同一个 keys-json Secret（能读其他调用方密钥），
      真正"每服务只挂自己密钥"需按 Deployment 分 Secret 挂载（阶段二随 mTLS 一起做）
 
+47. **第五轮意见书整改（2026-11-01）：资金红线 / 安全收口 / PACS / 报表 / 交付 / 测试**
+   - 资金：`lockExportPeriod` 按期间取事务级 advisory lock（CTE 返回常量列）；目录导入更新路径补乙类比例校验
+   - 安全：nonce 改验签后占用 + `saturated` fail-closed（不再整体清空）；`nonceTtl ≥ 2×skew+1` 启动断言
+     （默认 180s）；`X-Internal-Token` 入剥离清单；网关校验 `active ∈ keys`；caller 密钥缺失拒启；密钥 Base64 校验
+   - PACS：登记前按 UID 预查；worklist 改 LEFT JOIN + COALESCE；日期语义改"≤今天"并传绝对时刻；
+     `tech V4` 部分唯一索引允许取消后重做；`tech V5` counts 上限 CHECK
+   - 报表：`clinical V9` 补 `charge_item(created_at)`；总额/分类/科室收入排除 REFUNDED
+   - 交付：离网手册 §2.2 预置 Secret；新增 `medassist.internal-auth` 告警组；deploy README 安装顺序
+   - 测试：新增出站拦截器 3 项、过滤器指标/饱和 2 项、PACS 4 项、启动守卫 4 项
+   - 验证：全量单测 **446 项**；`internal_auth` 12、`internal_caller` 9、`tech_pacs` 36、`tech_lis` 27、
+     `clinical_report` 24、`insurance` 161 项 E2E 全过
+   - 遗留：R5-M3 密钥面收敛（拆 Secret + 按 Deployment 裁剪）与 R5-S17（CI 跑 E2E）留待阶段二
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -667,6 +680,9 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   否则测到的是 Bean Validation 而不是业务冲突
 - Worklist 这类"设备轮询"接口要把已经 `COMPLETED/CANCELLED` 的影像剔除：
   只看申请状态（IN_PROGRESS）会导致检查做完仍一直出现在设备列表里
+- `pg_advisory_xact_lock` 等返回 **void** 的 PG 函数不能用 `query(Long.class).single()`：
+  驱动报"不良的类型值 long"，Spring 的 SQLState 翻译会把它误判成 `DataIntegrityViolationException`，
+  业务侧表现成 409（极具欺骗性）。要写成 `WITH l AS (SELECT pg_advisory_xact_lock(...)) SELECT 1 FROM l`
 - Spring 环境变量宽松绑定会**删掉连字符**：`medassist.internal-auth.mode` 对应
   `MEDASSIST_INTERNALAUTH_MODE`，不是 `MEDASSIST_INTERNAL_AUTH_MODE`。
   写错不会报错，只会"配置像没生效"（mode 保持 off）；凡是带 `-` 的属性前缀都要按此自检

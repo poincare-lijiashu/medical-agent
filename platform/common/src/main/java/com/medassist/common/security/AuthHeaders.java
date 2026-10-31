@@ -48,15 +48,21 @@ public final class AuthHeaders {
     /** 链路追踪 ID（网关生成，用于日志与审计串联）。 */
     public static final String TRACE_ID = "X-Trace-Id";
 
+    /** 服务间内部接口令牌头（第一因子）；客户端提交同名头一律剥离。 */
+    public static final String INTERNAL_TOKEN = "X-Internal-Token";
+
     /**
      * 客户端可能伪造、网关必须一律剥离的请求头。
      *
      * <p>包含 MF-07 的签名头：客户端自带 {@code X-Internal-Sig} 等不会有任何作用，
      * 网关在入口先全部删除，再由签名过滤器按最终身份头重新签发。
+     *
+     * <p>含 {@code X-Internal-Token}：业务服务的内部接口令牌只应由服务自身持有，
+     * 客户端经网关提交的同名头没有任何合法用途（第五轮 R5-S1）。
      */
     public static final List<String> CLIENT_SUPPLIED = List.of(
             ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CLIENT_IP, TRACE_ID,
-            InternalSignature.HEADER_SIG, InternalSignature.HEADER_TS,
+            INTERNAL_TOKEN, InternalSignature.HEADER_SIG, InternalSignature.HEADER_TS,
             InternalSignature.HEADER_NONCE, InternalSignature.HEADER_KEY_ID,
             InternalSignature.HEADER_SIG_VER, InternalSignature.HEADER_CALLER);
 

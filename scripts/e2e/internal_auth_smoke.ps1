@@ -8,9 +8,10 @@
 #
 # Prerequisites:
 #   - gateway :8080 and emr :8086 running with
-#       MEDASSIST_INTERNAL_AUTH_MODE=enforce
-#       MEDASSIST_INTERNAL_AUTH_KEYS_JSON={"active":"gw-dev","keys":{"gw-dev":"<base64 32B>"}}
-#     (the same keys-json on both sides)
+#       MEDASSIST_INTERNALAUTH_MODE=enforce
+#       MEDASSIST_INTERNALAUTH_KEYSJSON={"active":"gw-dev","keys":{"gw-dev":"<base64 32B>"}}
+#     (the same keys-json on both sides; note Spring drops hyphens in env var names,
+#      so it is MEDASSIST_INTERNALAUTH_* and NOT MEDASSIST_INTERNAL_AUTH_*)
 #   - auth :8081, empi :8082 are up
 #
 # Usage:
@@ -71,6 +72,7 @@ Check 'gateway.forgedSigIgnored' $r.Status 200
 # ---------------------------------------------------------------- 3. direct access must be rejected (enforce)
 $r = Invoke-Curl 'GET' "$EmrUrl/emr/templates" $null @{ 'X-Permissions' = 'emr:record:read' }
 Check 'direct.forgedPermissions' $r.Status 403
+Check 'direct.forgedPermissions.code' ((($r.Body | ConvertFrom-Json).code)) 40300
 
 $r = Invoke-Curl 'GET' "$EmrUrl/emr/templates"
 Check 'direct.noHeaders' $r.Status 403

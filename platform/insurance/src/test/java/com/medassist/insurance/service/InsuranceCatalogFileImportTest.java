@@ -172,6 +172,37 @@ class InsuranceCatalogFileImportTest {
     }
 
     @Test
+    @DisplayName("乙类更新：库里原为 C 且无比例、文件改成 B 又不给比例 → 拒绝（R5-M6）")
+    void rejectsClassBUpdateWhenNeitherFileNorDbHasRatio() {
+        when(repo.findItemsByCodes(anyList())).thenReturn(List.of(
+                item("B", "原丙类", "SERVICE", "C", null, null, true, 2L)));
+
+        assertThatThrownBy(() -> service.importCatalogFile("catalog.csv",
+                csv("B,新乙类,SERVICE,B\n"), "apply", "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("自付比例")
+                .hasMessageContaining("第 2 行")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).upsertItem(any(), any());
+    }
+
+    @Test
+    @DisplayName("乙类更新：库里原为 C 无比例、文件给比例 → 允许")
+    void allowsClassBUpdateWhenFileProvidesRatio() {
+        when(repo.findItemsByCodes(anyList())).thenReturn(List.of(
+                item("B", "原丙类", "SERVICE", "C", null, null, true, 2L)));
+
+        service.importCatalogFile("catalog.csv",
+                csvWithRatio("B,新乙类,SERVICE,B,0.15\n"), "apply", "yb01");
+
+        ArgumentCaptor<InsuranceItem> captor = ArgumentCaptor.forClass(InsuranceItem.class);
+        verify(repo).upsertItem(captor.capture(), isNull());
+        assertThat(captor.getValue().payCategory()).isEqualTo("B");
+        assertThat(captor.getValue().selfPayRatio()).isEqualByComparingTo("0.15");
+    }
+
+    @Test
     @DisplayName("非法 mode：422")
     void invalidModeRejected() {
         assertThatThrownBy(() -> service.importCatalogFile("catalog.csv", csv("A,甲,DRUG,A\n"),

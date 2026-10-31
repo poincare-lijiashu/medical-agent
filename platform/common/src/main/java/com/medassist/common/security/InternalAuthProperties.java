@@ -13,11 +13,15 @@ import java.util.List;
  *     mode: off            # off | log | enforce（生产只允许 log / enforce）
  *     clock-skew-seconds: 60
  *     keys-json: '{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}'
- *     nonce-ttl-seconds: 120
+ *     nonce-ttl-seconds: 120    # 必须 ≥ 2×clock-skew+1
  *     internal-paths-signature-required: false
+ *     caller: clinical          # 可省略，默认由 spring.application.name 推导
  *     exempt-paths:
- *       - /actuator/**
+ *       - /actuator/health/**
  * </pre>
+ *
+ * <p>豁免路径只放行**确有必要且已由网络策略限制**的端点：探针与 Prometheus 抓取。
+ * 不要写成 {@code /actuator/**}——那会把 metrics/info 等诊断端点一并豁免。
  *
  * <p>未配置密钥且 mode=enforce 时**拒绝启动**：与 EMPI FieldCipher 同规格，
  * 不允许"配错就静默放行"。
@@ -44,8 +48,14 @@ public record InternalAuthProperties(String mode, Integer clockSkewSeconds, Stri
         return clockSkewSeconds == null || clockSkewSeconds <= 0 ? 60 : clockSkewSeconds;
     }
 
+    /**
+     * nonce 保留时长。
+     *
+     * <p>默认 180 秒（3×默认时间窗）：必须明显大于 2×时钟偏差，否则"窗口内仍合法的时间戳"
+     * 配上一个已过期的 nonce 就能重放（第五轮 R5-M2，启动时由自动配置断言）。
+     */
     public long nonceTtlSecondsOrDefault() {
-        return nonceTtlSeconds == null || nonceTtlSeconds <= 0 ? 120 : nonceTtlSeconds;
+        return nonceTtlSeconds == null || nonceTtlSeconds <= 0 ? 180 : nonceTtlSeconds;
     }
 
     public boolean internalPathsSignatureRequiredOrDefault() {

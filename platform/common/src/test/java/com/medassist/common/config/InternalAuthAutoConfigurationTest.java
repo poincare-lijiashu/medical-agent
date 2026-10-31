@@ -100,4 +100,45 @@ class InternalAuthAutoConfigurationTest {
                             .hasMessageContaining("internal");
                 });
     }
+
+    @Test
+    void failsFastWhenOwnCallerKeyMissing() {
+        runner.withPropertyValues(
+                        "spring.application.name=platform-pharmacy",
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON_WITH_INTERNAL,
+                        "medassist.internal-auth.internal-paths-signature-required=true")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("pharmacy");
+                });
+    }
+
+    @Test
+    void rejectsNonceTtlShorterThanTwiceClockSkew() {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON,
+                        "medassist.internal-auth.clock-skew-seconds=300",
+                        "medassist.internal-auth.nonce-ttl-seconds=120")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("nonce-ttl-seconds");
+                });
+    }
+
+    @Test
+    void rejectsInvalidBase64Key() {
+        String broken = "{\"active\":\"k1\",\"keys\":{\"k1\":\"not-base64!!!\"}}";
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + broken)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("Base64");
+                });
+    }
 }

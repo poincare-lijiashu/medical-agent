@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
@@ -490,12 +491,16 @@ public class TechRepository {
                 .param("viewer", s.viewerUrl()).update();
     }
 
-    public Optional<PacsStudy> findPacsStudyByApplication(UUID applicationId) {
+    /** 某申请的**当前**影像登记（未取消）；已取消的记录只作为历史保留，不参与幂等判断。 */
+    public Optional<PacsStudy> findActivePacsStudyByApplication(UUID applicationId) {
         return jdbc.sql("""
                         SELECT id, application_id, study_instance_uid, accession_number, modality,
                                body_part, status, series_count, image_count, viewer_url,
                                started_at, completed_at, version, created_at
-                          FROM tech_svc.pacs_study WHERE application_id = ?
+                          FROM tech_svc.pacs_study
+                         WHERE application_id = ? AND status <> 'CANCELLED'
+                         ORDER BY created_at DESC
+                         LIMIT 1
                         """).param(applicationId).query(PACS_MAPPER).optional();
     }
 
@@ -541,33 +546,44 @@ public class TechRepository {
     }
 
     /**
-     * 检查类 Worklist：未完成（APPLIED / IN_PROGRESS）的检查申请，按设备类型与开单日期过滤。
+     * 检查类 Worklist：未完成的检查申请（APPLIED / IN_PROGRESS），按设备类型与开单时间过滤。
      *
-     * @param timezone 业务时区（如 Asia/Shanghai），用于把 timestamptz 折算成自然日
+     * <p>三点刻意设计（第五轮 R5-M7 / R5-S6）：
+     * <ul>
+     *   <li>字典表用 LEFT JOIN + COALESCE：医技项目改码或停用不会让申请从设备列表"静默消失"；</li>
+     *   <li>时间过滤用调用方算好的绝对时刻 [fromTs, toTs)，不用 {@code AT TIME ZONE} 逐行折算——
+     *       后者无法走索引，且在夜班跨天场景下语义容易错；</li>
+     *   <li>fromTs 可为 null（表示"开单日 ≤ 今天"），夜班 23 点开单的检查次日仍能看到。</li>
+     * </ul>
      */
-    public List<WorklistItem> listWorklist(
-            String modality, LocalDate date, String timezone, int limit) {
+    public List<WorklistItem> listWorklist(String modality, OffsetDateTime fromTs, OffsetDateTime toTs,
+                                           int limit) {
         return jdbc.sql("""
                         SELECT a.id AS application_id, a.application_no, a.patient_no,
                                a.item_code, a.item_name, a.body_part, a.priority,
                                a.status AS application_status, a.created_at,
-                               i.modality, s.id AS study_id, s.study_instance_uid,
+                               COALESCE(i.modality, 'OT') AS modality,
+                               s.id AS study_id, s.study_instance_uid,
                                s.status AS study_status, s.series_count, s.image_count, s.viewer_url
                           FROM tech_svc.exam_application a
-                          JOIN tech_svc.md_exam_item i ON i.item_code = a.item_code
-                          LEFT JOIN tech_svc.pacs_study s ON s.application_id = a.id
+                          LEFT JOIN tech_svc.md_exam_item i ON i.item_code = a.item_code
+                          LEFT JOIN tech_svc.pacs_study s
+                                 ON s.application_id = a.id AND s.status <> 'CANCELLED'
                          WHERE a.category = 'EXAM'
                            AND a.status IN ('APPLIED', 'IN_PROGRESS')
                            AND (s.status IS NULL OR s.status IN ('SCHEDULED', 'ARRIVED', 'IN_PROGRESS'))
                            AND (CAST(:modality AS text) IS NULL
-                                OR i.modality = CAST(:modality AS text))
-                           AND (a.created_at AT TIME ZONE CAST(:tz AS text))::date = CAST(:date AS date)
+                                OR COALESCE(i.modality, 'OT') = CAST(:modality AS text))
+                           AND (CAST(:fromTs AS timestamptz) IS NULL
+                                OR a.created_at >= CAST(:fromTs AS timestamptz))
+                           AND (CAST(:toTs AS timestamptz) IS NULL
+                                OR a.created_at < CAST(:toTs AS timestamptz))
                          ORDER BY CASE a.priority WHEN 'STAT' THEN 0 WHEN 'URGENT' THEN 1 ELSE 2 END,
                                   a.created_at
                          LIMIT :limit
                         """)
-                .param("modality", modality).param("tz", timezone)
-                .param("date", date).param("limit", limit)
+                .param("modality", modality).param("fromTs", fromTs).param("toTs", toTs)
+                .param("limit", limit)
                 .query(WORKLIST_MAPPER).list();
     }
 

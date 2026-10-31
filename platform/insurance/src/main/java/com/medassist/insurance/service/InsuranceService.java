@@ -176,6 +176,14 @@ public class InsuranceService {
                 changes.add(new CatalogChange(row.code(), "CREATE", List.of()));
                 continue;
             }
+            // 更新路径同样要挡：库里 C 类无比例 → 文件改成 B 且未给比例时，
+            // mergeItem 会把 null 兜成 0，测算按 0 全额纳入（第五轮 R5-M6，MF-03 的补漏）
+            if ("B".equals(row.payCategory()) && row.selfPayRatio() == null
+                    && current.selfPayRatio() == null) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "第 " + row.lineNo() + " 行：乙类（B）目录项必须提供自付比例（0~1）："
+                                + row.code() + "（库内该目录项也未设置比例）");
+            }
             List<String> diff = changedFields(current, row);
             if (diff.isEmpty()) {
                 unchanged++;

@@ -70,7 +70,10 @@ public class InternalAuthAutoConfiguration {
         }
         String secret = keySet.callerSecret(caller);
         if (required && secret == null) {
-            log.warn("internal-auth.caller={} 未配置调用方密钥：本服务发起的 /internal/** 调用将被对端 403", caller);
+            // 与其余启动守卫同规格：宁可拒绝启动，也不要"能起来但所有内部调用都 403"（第五轮 R5-S3）
+            throw new IllegalStateException(
+                    "medassist.internal-auth.internal-paths-signature-required=true 但本服务调用方 "
+                            + caller + " 无密钥（keys-json.internal." + caller + "），服务拒绝启动");
         }
         return InternalCallerSigner.of(caller, secret);
     }
@@ -98,6 +101,14 @@ public class InternalAuthAutoConfiguration {
         }
         if (InternalAuthProperties.LOG.equals(mode) && !keySet.configured()) {
             log.warn("medassist.internal-auth.mode=log 但未配置 keys-json：所有请求都无法验签，仅记录日志");
+        }
+        // nonce 表至少要比时间窗活得久，否则窗内已用过的 nonce 提前过期 → 可重放（第五轮 R5-M2）
+        long skew = props.clockSkewSecondsOrDefault();
+        long ttl = props.nonceTtlSecondsOrDefault();
+        if (ttl < 2 * skew + 1) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.nonce-ttl-seconds(" + ttl + ") 必须 ≥ 2×clock-skew-seconds("
+                            + skew + ")+1，否则时间窗内可用 nonce 会提前失效并允许重放，服务拒绝启动");
         }
 
         log.info("internal-auth.mode={} keys={} clockSkew={}s internalPathsRequired={} internalKeys={}",

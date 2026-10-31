@@ -89,6 +89,7 @@ huggingface-cli download BAAI/bge-m3 --local-dir bge-m3
 | `bge-m3/` | 向量模型权重目录 |
 | `deploy/offline/` | 本文与两个脚本 |
 | `nacos/mysql-schema.sql` | Nacos 持久化建表（若院方未托管 MySQL） |
+| **Secret 清单与生成脚本** | `medassist-postgres/nacos/jwt/empi/internal/internal-hmac/ai-core`；`internal-hmac` 含网关 key 与 5 个调用方 key，见 §2.2 |
 
 ---
 
@@ -103,7 +104,29 @@ huggingface-cli download BAAI/bge-m3 --local-dir bge-m3
 脚本会把第三方镜像也推到同一 Harbor（`harbor.hospital.local/postgres:15-alpine` 等），
 保证集群拉镜像时**没有任何外网请求**。
 
-### 2.2 安装
+### 2.2 预置 Secret（必须早于 helm upgrade）
+
+`values-prod.yaml` 走 `internalAuth.mode=enforce`，网关与全部业务服务都会读取
+`medassist-internal-hmac`；该 Secret 缺失时**所有业务 Pod 与 7 个迁移 Job 会卡在
+`CreateContainerConfigError`**，`helm upgrade` 表现为"发布成功但起不来"。
+
+安装前按 `deploy/README.md` §2 的 Secret 表**先创建全部 Secret**，其中新增的两个：
+
+```bash
+# 服务间内部接口令牌（第一因子）
+kubectl -n medassist-prod create secret generic medassist-internal \
+  --from-literal=token='<≥32 字符随机串>'
+
+# 服务间 HMAC 密钥集（第二因子）：网关 key + 每个调用方 key
+# 生成：openssl rand -base64 32（逐把生成，禁止人工设定、禁止进 Git）
+kubectl -n medassist-prod create secret generic medassist-internal-hmac \
+  --from-literal=keys-json='{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"},"internal":{"clinical":"<base64>","emr":"<base64>","insurance":"<base64>","pharmacy":"<base64>","tech":"<base64>"}}'
+```
+
+> 校验：`kubectl -n medassist-prod get secret medassist-internal-hmac -o jsonpath='{.data.keys-json}' | base64 -d`
+> 应能看到 `active` 与 `internal` 两段；`active` 必须出现在 `keys` 里，否则网关会拒绝启动。
+
+### 2.3 安装
 
 ```bash
 helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \

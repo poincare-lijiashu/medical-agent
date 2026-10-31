@@ -40,25 +40,34 @@ public class ReportRepository {
                 .list();
     }
 
-    /** 期间费用总额（费用发生口径，charge_item.created_at）。 */
+    /**
+     * 期间费用总额（费用发生口径，charge_item.created_at）。
+     *
+     * <p>排除 REFUNDED 收费单的明细：这些费用已作废，计入总额会让"总费用"与
+     * "实收+未结+退费"对不上，并虚增药占比（第五轮 R5-S5）。
+     */
     public BigDecimal totalCharge(OffsetDateTime fromTs, OffsetDateTime toTs) {
         return jdbc.sql("""
-                        SELECT COALESCE(SUM(amount), 0)
-                          FROM clinical_svc.charge_item
-                         WHERE created_at >= :fromTs AND created_at < :toTs
+                        SELECT COALESCE(SUM(ci.amount), 0)
+                          FROM clinical_svc.charge_item ci
+                          JOIN clinical_svc.charge ch ON ch.id = ci.charge_id
+                         WHERE ci.created_at >= :fromTs AND ci.created_at < :toTs
+                           AND ch.status <> 'REFUNDED'
                         """)
                 .param("fromTs", fromTs).param("toTs", toTs)
                 .query(BigDecimal.class).single();
     }
 
-    /** 按费用分类汇总。 */
+    /** 按费用分类汇总（同样排除已退费收费单，口径与总额一致）。 */
     public List<CategoryAmount> chargeByCategory(OffsetDateTime fromTs, OffsetDateTime toTs) {
         return jdbc.sql("""
-                        SELECT category, COALESCE(SUM(amount), 0) AS total
-                          FROM clinical_svc.charge_item
-                         WHERE created_at >= :fromTs AND created_at < :toTs
-                         GROUP BY category
-                         ORDER BY total DESC, category
+                        SELECT ci.category, COALESCE(SUM(ci.amount), 0) AS total
+                          FROM clinical_svc.charge_item ci
+                          JOIN clinical_svc.charge ch ON ch.id = ci.charge_id
+                         WHERE ci.created_at >= :fromTs AND ci.created_at < :toTs
+                           AND ch.status <> 'REFUNDED'
+                         GROUP BY ci.category
+                         ORDER BY total DESC, ci.category
                         """)
                 .param("fromTs", fromTs).param("toTs", toTs)
                 .query((rs, i) -> new CategoryAmount(rs.getString("category"),
@@ -83,7 +92,7 @@ public class ReportRepository {
     public record ChargeStatusSum(String status, BigDecimal total) {
     }
 
-    /** 科室收入（费用明细 join 就诊取科室）。 */
+    /** 科室收入（费用明细 join 就诊取科室；排除已退费收费单，与总额口径一致）。 */
     public List<DeptRevenue> revenueByDept(OffsetDateTime fromTs, OffsetDateTime toTs) {
         return jdbc.sql("""
                         SELECT v.dept_id::text AS dept_id, d.name AS dept_name,
@@ -93,6 +102,7 @@ public class ReportRepository {
                           JOIN clinical_svc.visit v ON v.id = ch.visit_id
                           LEFT JOIN clinical_svc.md_dept d ON d.id = v.dept_id
                          WHERE ci.created_at >= :fromTs AND ci.created_at < :toTs
+                           AND ch.status <> 'REFUNDED'
                          GROUP BY v.dept_id, d.name
                          ORDER BY total DESC
                         """)

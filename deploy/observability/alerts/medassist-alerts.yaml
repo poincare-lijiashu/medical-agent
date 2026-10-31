@@ -154,6 +154,35 @@ spec:
             summary: "登录限速持续触发（疑似暴力破解）"
             description: "查看 auth_svc.login_attempt 中 username/client_ip 分布，必要时封禁来源。"
 
+    - name: medassist.internal-auth
+      rules:
+        # 灰度（log）期看"是否存在绕过网关的直连流量"；切 enforce 后看是否被大范围误伤。
+        # 指标来自 common 的 InternalAuthFilter：result=ok|missing|bad_sig|skew|replay|
+        # unknown_key|unknown_caller|bad_version|saturated
+        - alert: MedassistInternalAuthRejectSpike
+          expr: sum(rate(medassist_internal_auth_total{result!="ok"}[5m])) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "服务间签名校验拒绝速率异常（> 0.5 次/秒）"
+            description: "按 result 区分：missing/bad_sig 多为网关与下游密钥不一致或存在绕过网关的直连调用；
+                          replay 需排查重放；saturated 说明 nonce 表被打满（疑似攻击或配置异常）。"
+
+        - alert: MedassistInternalAuthRejectAllTraffic
+          expr: |
+            (
+              sum(rate(medassist_internal_auth_total{result="ok"}[5m]))
+              /
+              sum(rate(medassist_internal_auth_total[5m]))
+            ) < 0.5
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "服务间签名通过率低于 50%（近乎全站被拒）"
+            description: "典型原因是密钥未同步（keys-json 不一致）或 active 配置错误；先核对两侧 Secret，再考虑临时切 log 模式止血。"
+
     - name: medassist.insurance
       rules:
         - alert: MedassistInsuranceCatalogImportFailing

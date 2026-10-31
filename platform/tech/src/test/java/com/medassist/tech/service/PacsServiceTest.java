@@ -14,6 +14,9 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,6 +24,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -70,9 +74,10 @@ class PacsServiceTest {
     @DisplayName("登记：Modality 缺省取项目字典，AccessionNumber 复用申请号，写审计")
     void registerUsesItemModalityAndAccession() {
         PacsStudy stored = study(UID, PacsStudy.SCHEDULED);
-        when(repo.findPacsStudyByApplication(appId)).thenReturn(Optional.empty());
+        when(repo.findActivePacsStudyByApplication(appId)).thenReturn(Optional.empty());
         when(repo.findItemModality(examCode)).thenReturn(Optional.of(MODALITY));
-        when(repo.findPacsStudyByUid(UID)).thenReturn(Optional.of(stored));
+        // 第一次是登记前的 UID 归属预查（空），第二次是落库后的回读
+        when(repo.findPacsStudyByUid(UID)).thenReturn(Optional.empty(), Optional.of(stored));
 
         PacsStudy result = service.register(registerReq(UID), "tech01");
 
@@ -88,7 +93,7 @@ class PacsServiceTest {
     @DisplayName("登记：同申请同 UID 幂等返回，不再插入")
     void registerIsIdempotentForSameUid() {
         PacsStudy existing = study(UID, PacsStudy.SCHEDULED);
-        when(repo.findPacsStudyByApplication(appId)).thenReturn(Optional.of(existing));
+        when(repo.findActivePacsStudyByApplication(appId)).thenReturn(Optional.of(existing));
 
         PacsStudy result = service.register(registerReq(UID), "tech01");
 
@@ -99,7 +104,7 @@ class PacsServiceTest {
     @Test
     @DisplayName("登记：同申请不同 UID 冲突")
     void registerRejectsDifferentUid() {
-        when(repo.findPacsStudyByApplication(appId))
+        when(repo.findActivePacsStudyByApplication(appId))
                 .thenReturn(Optional.of(study("1.2.3.4.5", PacsStudy.SCHEDULED)));
 
         assertThatThrownBy(() -> service.register(registerReq(UID), "tech01"))
@@ -167,14 +172,29 @@ class PacsServiceTest {
     }
 
     @Test
-    @DisplayName("Worklist：Modality 转大写、limit 上限 200、默认当天")
+    @DisplayName("Worklist：Modality 转大写、limit 上限 200、不传日期=开单日≤今天")
     void worklistNormalizesAndClamps() {
-        when(repo.listWorklist(MODALITY, BusinessTime.today(), BusinessTime.zone().getId(), 200))
-                .thenReturn(List.of());
+        ZoneId zone = BusinessTime.zone();
+        OffsetDateTime toTs = BusinessTime.today().plusDays(1).atStartOfDay(zone).toOffsetDateTime();
+        when(repo.listWorklist(MODALITY, null, toTs, 200)).thenReturn(List.of());
 
         service.worklist("ct", null, 1000);
 
-        verify(repo).listWorklist(MODALITY, BusinessTime.today(), BusinessTime.zone().getId(), 200);
+        verify(repo).listWorklist(MODALITY, null, toTs, 200);
+    }
+
+    @Test
+    @DisplayName("Worklist：显式日期只取该自然日开单（R5-S6）")
+    void worklistUsesExplicitDayWindow() {
+        LocalDate day = LocalDate.of(2026, 11, 1);
+        ZoneId zone = BusinessTime.zone();
+        OffsetDateTime fromTs = day.atStartOfDay(zone).toOffsetDateTime();
+        OffsetDateTime toTs = day.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
+        when(repo.listWorklist(eq(MODALITY), eq(fromTs), eq(toTs), anyInt())).thenReturn(List.of());
+
+        service.worklist(MODALITY, day, 10);
+
+        verify(repo).listWorklist(MODALITY, fromTs, toTs, 10);
     }
 
     @Test
@@ -193,5 +213,49 @@ class PacsServiceTest {
         assertThatThrownBy(() -> service.byUid("1.2.3"))
                 .satisfies(e -> assertThat(((BusinessException) e).errorCode())
                         .isEqualTo(ErrorCode.TECH_PACS_STUDY_NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("登记：UID 已被其它申请占用 → 409 且不再插入（R5-M4）")
+    void registerRejectsUidOwnedByAnotherApplication() {
+        when(repo.findActivePacsStudyByApplication(appId)).thenReturn(Optional.empty());
+        when(repo.findPacsStudyByUid(UID)).thenReturn(Optional.of(study(UID, PacsStudy.SCHEDULED)));
+
+        assertThatThrownBy(() -> service.register(registerReq(UID), "tech01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已被其它申请登记")
+                .satisfies(e -> assertThat(((BusinessException) e).errorCode())
+                        .isEqualTo(ErrorCode.CONFLICT));
+        verify(repo, never()).insertPacsStudy(any());
+    }
+
+    @Test
+    @DisplayName("登记：并发插入撞唯一键 → 409 且不做二次查库（R5-M4）")
+    void registerHandlesConcurrentInsertWithoutSecondQuery() {
+        when(repo.findActivePacsStudyByApplication(appId)).thenReturn(Optional.empty());
+        when(repo.findPacsStudyByUid(UID)).thenReturn(Optional.empty());
+        when(repo.findItemModality(examCode)).thenReturn(Optional.of(MODALITY));
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DuplicateKeyException("dup"))
+                .when(repo).insertPacsStudy(any(PacsStudy.class));
+
+        assertThatThrownBy(() -> service.register(registerReq(UID), "tech01"))
+                .satisfies(e -> assertThat(((BusinessException) e).errorCode())
+                        .isEqualTo(ErrorCode.CONFLICT));
+        // 事务已中止时再查库会二次失败变 500，因此只能查一次（预查由前面的 thenReturn 控制）
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.times(1)).findPacsStudyByUid(UID);
+    }
+
+    @Test
+    @DisplayName("登记：申请取消过仍可重做（历史记录保留，R5-S7）")
+    void registerAllowsRedoAfterCancellation() {
+        when(repo.findActivePacsStudyByApplication(appId)).thenReturn(Optional.empty());
+        when(repo.findPacsStudyByUid(UID)).thenReturn(Optional.empty(),
+                Optional.of(study(UID, PacsStudy.SCHEDULED)));
+        when(repo.findItemModality(examCode)).thenReturn(Optional.of(MODALITY));
+
+        PacsStudy result = service.register(registerReq(UID), "tech01");
+
+        assertThat(result.status()).isEqualTo(PacsStudy.SCHEDULED);
+        verify(repo).insertPacsStudy(any(PacsStudy.class));
     }
 }

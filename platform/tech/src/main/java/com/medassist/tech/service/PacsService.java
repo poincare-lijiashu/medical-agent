@@ -16,6 +16,8 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,11 +29,16 @@ import java.util.regex.Pattern;
 /**
  * 影像（PACS）集成：检查申请 → 登记 Study → 检查进度回传。
  *
- * <p>状态机（严格单向，全部 CAS）：
+ * <p>状态机（全部 CAS + 版本号；**不允许回退**）：
  * <pre>
  *   SCHEDULED --ARRIVED--> ARRIVED --IN_PROGRESS--> IN_PROGRESS --COMPLETED--> COMPLETED
+ *   SCHEDULED --IN_PROGRESS--> IN_PROGRESS        （部分设备只上报 MPPS，无到检事件）
  *   SCHEDULED/ARRIVED/IN_PROGRESS --CANCELLED--> CANCELLED
  * </pre>
+ *
+ * <p>COMPLETED / CANCELLED 是终态。申请维度允许"取消后重做"：新登记会生成一条新记录，
+ * 已取消的那条作为历史保留（DB 侧由部分唯一索引 `ux_pacs_study_active_application` 保证
+ * 同一申请同时只有一条未取消记录，第五轮 R5-S7）。
  *
  * <p>边界：影像状态与报告状态解耦——PACS 只负责"检查做没做"，报告仍由医技域签发；
  * 登记成功后 AccessionNumber 固定为申请号，供 PACS 与 HIS 对账。
@@ -57,16 +64,22 @@ public class PacsService {
     }
 
     /**
-     * 影像 Worklist：未完成的检查申请（APPLIED / IN_PROGRESS），按设备类型与开单日期过滤。
+     * 影像 Worklist：未完成的检查申请（APPLIED / IN_PROGRESS）。
+     *
+     * <p>日期语义：不传 date = "开单日 ≤ 今天"（含全部积压），避免夜班 23 点开单的检查
+     * 次日默认查不到；传 date = 只取该自然日开单的申请（第五轮 R5-S6）。
      *
      * <p>只返回调度字段（申请号/患者号/项目/部位/优先级），不含姓名与临床诊断——
      * 该接口由设备高频轮询，明细请按申请号查询。
      */
     public List<WorklistItem> worklist(String modality, LocalDate date, Integer limit) {
         String normalized = normalizeModality(modality);
-        LocalDate day = date == null ? BusinessTime.today() : date;
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
-        return repo.listWorklist(normalized, day, BusinessTime.zone().getId(), size);
+        ZoneId zone = BusinessTime.zone();
+        OffsetDateTime fromTs = date == null ? null : date.atStartOfDay(zone).toOffsetDateTime();
+        OffsetDateTime toTs = (date == null ? BusinessTime.today() : date)
+                .plusDays(1).atStartOfDay(zone).toOffsetDateTime();
+        return repo.listWorklist(normalized, fromTs, toTs, size);
     }
 
     /** 登记影像检查；同一申请 + 同一 UID 幂等返回，不同 UID 冲突。 */
@@ -85,9 +98,17 @@ public class PacsService {
         }
 
         String uid = req.studyInstanceUid().trim();
-        Optional<PacsStudy> existing = repo.findPacsStudyByApplication(app.id());
+        Optional<PacsStudy> existing = repo.findActivePacsStudyByApplication(app.id());
         if (existing.isPresent()) {
             return sameUid(existing.get(), uid, actor);
+        }
+        // 预查 UID 归属：若该 UID 已被**其它申请**占用，直接给出可读冲突，
+        // 不能指望 catch DataIntegrityViolationException 后再查库——那时事务已中止（第五轮 R5-M4）
+        Optional<PacsStudy> sameUidElsewhere = repo.findPacsStudyByUid(uid);
+        if (sameUidElsewhere.isPresent()) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该影像检查号（StudyInstanceUID）已被其它申请登记："
+                            + sameUidElsewhere.get().accessionNumber());
         }
 
         String modality = isBlank(req.modality())
@@ -100,11 +121,9 @@ public class PacsService {
         try {
             repo.insertPacsStudy(study);
         } catch (DataIntegrityViolationException e) {
-            // 并发登记：唯一索引兜底。同 UID 视为幂等，否则判定为冲突
-            return repo.findPacsStudyByApplication(app.id())
-                    .map(s -> sameUid(s, uid, actor))
-                    .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
-                            "该影像检查正在被其他请求登记，请刷新后重试"));
+            // 并发兜底：事务此时已中止，**不能再查库**（会二次失败变 500），只能给出可读冲突
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该影像检查正在被其他请求登记，或检查号已被占用，请刷新后重试");
         }
         audit(actor, "PACS_STUDY_REGISTER", study.id().toString(), Map.of(
                 "applicationNo", app.applicationNo(), "studyInstanceUid", uid,
@@ -144,7 +163,7 @@ public class PacsService {
     }
 
     public PacsStudy byApplication(UUID applicationId) {
-        return repo.findPacsStudyByApplication(applicationId)
+        return repo.findActivePacsStudyByApplication(applicationId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_PACS_STUDY_NOT_FOUND));
     }
 

@@ -43,6 +43,13 @@ class InternalAuthFilterTest {
                 null);
     }
 
+    private static InternalAuthFilter filterWithCapacity(int maxNonceEntries) {
+        InternalAuthProperties props = new InternalAuthProperties(
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null);
+        return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
+                null, maxNonceEntries);
+    }
+
     private static MockHttpServletRequest request(String method, String uri) {
         MockHttpServletRequest request = new MockHttpServletRequest(method, uri);
         request.addHeader(AuthHeaders.ACTOR, "doctor01");
@@ -304,6 +311,71 @@ class InternalAuthFilterTest {
         filter.doFilter(stale, new MockHttpServletResponse(), chain3);
         assertNull(chain3.getRequest());
         assertEquals("skew", stale.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void nonceIsNotConsumedWhenSignatureFails() throws Exception {
+        InternalAuthFilter filter = filter(InternalAuthProperties.ENFORCE);
+        long ts = now();
+
+        // 先用错误密钥"占坑"：若 nonce 在验签前注册，随后的正确请求会被误判为重放
+        MockHttpServletRequest bad = request("GET", "/clinical/visits");
+        sign(bad, KEY_1, "k2", ts, "nonce-shared");
+        MockFilterChain chain1 = new MockFilterChain();
+        filter.doFilter(bad, new MockHttpServletResponse(), chain1);
+        assertNull(chain1.getRequest());
+        assertEquals("bad_sig", bad.getAttribute(InternalAuthFilter.ATTR_RESULT));
+
+        MockHttpServletRequest good = request("GET", "/clinical/visits");
+        sign(good, KEY_2, "k2", ts, "nonce-shared");
+        MockFilterChain chain2 = new MockFilterChain();
+        filter.doFilter(good, new MockHttpServletResponse(), chain2);
+        assertNotNull(chain2.getRequest(), "验签失败不应占用 nonce（R5-M1）");
+        assertEquals("ok", good.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void saturatedNonceCacheRejectsInsteadOfClearing() throws Exception {
+        InternalAuthFilter filter = filterWithCapacity(2);
+        long ts = now();
+
+        for (String nonce : new String[]{"n1", "n2"}) {
+            MockHttpServletRequest ok = request("GET", "/clinical/visits");
+            sign(ok, KEY_2, "k2", ts, nonce);
+            MockFilterChain chain = new MockFilterChain();
+            filter.doFilter(ok, new MockHttpServletResponse(), chain);
+            assertNotNull(chain.getRequest());
+        }
+
+        MockHttpServletRequest overflow = request("GET", "/clinical/visits");
+        sign(overflow, KEY_2, "k2", ts, "n3");
+        MockFilterChain chain = new MockFilterChain();
+        filter.doFilter(overflow, new MockHttpServletResponse(), chain);
+        assertNull(chain.getRequest(), "容量满时必须 fail-closed，不能整体清空（R5-M1）");
+        assertEquals("saturated", overflow.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void recordsResultInMeterRegistry() throws Exception {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        InternalAuthProperties props = new InternalAuthProperties(
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null);
+        InternalAuthFilter filter = new InternalAuthFilter(props,
+                InternalKeySet.parse(KEYS_JSON, new ObjectMapper()), registry);
+
+        MockHttpServletRequest ok = request("GET", "/clinical/visits");
+        sign(ok, KEY_2, "k2", now(), "metric-ok");
+        filter.doFilter(ok, new MockHttpServletResponse(), new MockFilterChain());
+
+        MockHttpServletRequest bad = request("GET", "/clinical/visits");
+        sign(bad, KEY_1, "k2", now(), "metric-bad");
+        filter.doFilter(bad, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertEquals(1.0, registry.get("medassist.internal.auth").tag("result", "ok")
+                .counter().count(), 1e-9);
+        assertEquals(1.0, registry.get("medassist.internal.auth").tag("result", "bad_sig")
+                .counter().count(), 1e-9);
     }
 
     @Test
