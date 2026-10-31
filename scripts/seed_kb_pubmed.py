@@ -6,7 +6,7 @@
 - 幂等：所有行 document_id="pubmed_seed"，不碰 sample_guideline；跨主题按 PMID 去重。
 
 用法（需 Milvus 在 19531 运行）：
-    D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/seed_kb_pubmed.py
+    python scripts/seed_kb_pubmed.py
 可选：MEDICAL_TOTAL_CAP(默认900) / MEDICAL_PER_TOPIC(默认20)。
 """
 from __future__ import annotations

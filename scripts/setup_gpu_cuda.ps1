@@ -3,8 +3,12 @@
 # Run when a good connection is available (this box's international bandwidth is poor;
 # the CPU fallback is fully functional). embedder/reranker auto-select GPU once this succeeds.
 
+# Interpreter: pass -PythonExe "C:\path\to\venv\python.exe"; defaults to python on PATH.
+# Keep this file ASCII-only (Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
+param([string]$PythonExe = "python")
+
 $ErrorActionPreference = "Stop"
-$py = "python"
+$py = $PythonExe
 $proj = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 
 Write-Host "[1/4] snapshot current versions (rollback baseline)"

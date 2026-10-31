@@ -1,7 +1,7 @@
 """任务A/B/C 重摄后检索验证：3 个教材问题检索命中 + conf + 新 chunk 标题前缀抽查。
 
 独立进程运行（加载新代码：embed 窗口 1024 / 结构感知 chunk），直连 Milvus 验证数据层。
-用法：D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/verify_kb_abc.py
+用法：python scripts/verify_kb_abc.py
 """
 from __future__ import annotations
 

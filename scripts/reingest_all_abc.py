@@ -8,7 +8,7 @@
   4. 种子脚本独立进程重摄：seed_kb_local / seed_kb_docs / seed_kb_pubmed（网络）；
   5. 最终 doc_count 汇总报告。
 
-用法：D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/reingest_all_abc.py
+用法：python scripts/reingest_all_abc.py
 """
 from __future__ import annotations
 

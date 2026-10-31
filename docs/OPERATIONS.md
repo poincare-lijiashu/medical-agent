@@ -1,8 +1,8 @@
 # MedAssist 运维手册
 
-## 本地运行（conda env `edu_agent`，py3.11）
+## 本地运行（任意已装 `requirements.txt` 的 Python 3.11+ 环境）
 ```powershell
-cd D:\workspace_AI\workspace_qoder\medical_agent
+cd <仓库根目录>
 # 基础设施（Milvus 19531 / Postgres 5433 / Attu 3001）
 docker compose up -d
 # 知识库注入

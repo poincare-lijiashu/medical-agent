@@ -1,6 +1,6 @@
 {
   "mode": "agentic",
-  "cases_file": "D:\\workspace_AI\\workspace_traecode\\xiangmu_traecode\\medical_agent\\eval\\hard_cases.json",
+  "cases_file": "eval/hard_cases.json",
   "hit_rate": 1.0,
   "passed": 12,
   "total": 12,

@@ -3,7 +3,7 @@
 全院级 HIS 平台的 Java 业务侧骨架，与仓库根部的 Python `backend/`（AI 中台）共同构成
 "Java 业务 + Python AI" 的双栈形态（对标卫宁 WiNEX 的 WiNGPT 独立 AI 引擎形态）。
 
-计划书依据：`C:\Users\19231\Desktop\MedAssist-转型计划书.md` 附录 D（v4.0）D2/D3/D6/D9。
+计划书依据：《MedAssist 转型计划书》v4.0 附录 D（D2/D3/D6/D9）——计划书不入库，按内部文档管理。
 
 ## 版本基线（2026-10-30 经 repo1.maven.org maven-metadata.xml 核实，非凭记忆）
 

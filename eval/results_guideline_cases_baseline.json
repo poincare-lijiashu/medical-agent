@@ -1,6 +1,6 @@
 {
   "mode": "baseline",
-  "cases_file": "D:\\workspace_AI\\workspace_traecode\\xiangmu_traecode\\medical_agent\\eval\\guideline_cases.json",
+  "cases_file": "eval/guideline_cases.json",
   "hit_rate": 1.0,
   "passed": 19,
   "total": 19,

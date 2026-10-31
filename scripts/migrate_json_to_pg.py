@@ -2,7 +2,7 @@
 
 lifespan 启动时已自动触发（仅 PG 表空且 JSON 有数据时导入，ON CONFLICT DO NOTHING）；
 本脚本用于手动补跑/验证迁移结果：
-    D:/software_work/conda_envs/edu_agent/python.exe scripts/migrate_json_to_pg.py
+    python scripts/migrate_json_to_pg.py
 """
 import asyncio
 import os

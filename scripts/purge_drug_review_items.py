@@ -12,7 +12,7 @@
 
 输出：移除 N 项 / 剩余 M（JSON）+ PG 删除行数（或跳过原因）。幂等：重复运行
 第二次移除 0 项。用法：
-    D:/software_work/conda_envs/edu_agent/python.exe scripts/purge_drug_review_items.py
+    python scripts/purge_drug_review_items.py
 """
 import asyncio
 import json

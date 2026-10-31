@@ -8,7 +8,7 @@ Milvus 走 settings.milvus_uri + db_base.get_milvus_token。不依赖 EduAgent�
 院方授权的真实指南语料（scripts/seed_kb_docs.py 重摄覆盖）；替换前检索仍可用。
 
 用法：
-    D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/seed_kb.py
+    python scripts/seed_kb.py
 """
 from __future__ import annotations
 

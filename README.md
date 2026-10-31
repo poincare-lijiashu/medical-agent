@@ -30,7 +30,7 @@ Qwen 驱动的循证医疗辅助系统，**商用级形态的可运行成品**�
 ## 快速开始（自包含，不依赖 EduAgent）
 
 ```powershell
-cd <repo>
+cd <仓库根目录>
 
 # 0. 基础设施（Milvus 19531 + Postgres + Attu），首次会拉镜像
 docker compose up -d
@@ -49,6 +49,9 @@ python -m backend.main
 python -m pytest tests\ -v
 python scripts\run_eval.py   # 需后端在运行，期望 hit_rate 9/9
 ```
+
+> `python` 指已装好 `requirements.txt` 的解释器（虚拟环境/conda 均可）；
+> 生产部署不依赖开发机：见 `deploy/offline/README.md`（离网交付）与 `docs/DEPLOY.md`。
 
 ## 架构
 

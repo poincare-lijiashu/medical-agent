@@ -86,18 +86,21 @@ curl.exe -s -X POST http://127.0.0.1:8001/api/v1/auth/login ^
 {
   "mcpServers": {
     "medassist": {
-      "command": "D:\\software_work\\conda_envs\\edu_agent\\python.exe",
+      "command": "<Python 解释器绝对路径，如 C:\\Python312\\python.exe>",
       "args": [
-        "D:\\workspace_AI\\workspace_traecode\\xiangmu_traecode\\medical_agent\\scripts\\mcp_server.py"
+        "<仓库根目录>\\scripts\\mcp_server.py"
       ],
       "env": {
-        "MEDASSIST_URL": "http://127.0.0.1:8001",
+        "MEDASSIST_URL": "http://<MedAssist 服务地址>:8001",
         "MCP_TOKEN": "<access_token>"
       }
     }
   }
 }
 ```
+
+> 上面的 `<...>` 为占位符：请按实际部署环境填写，不要照抄文档里的示例路径。
+> 服务部署在别的机器时，`MEDASSIST_URL` 填该机器的内网地址（不要用 127.0.0.1）。
 
 重启 Claude Desktop 后即可对话使用，例如：「用 literature_query 查一下高血压 3 级的诊断标准」「用 kb_search 检索血脂管理要点给我原文」「用 qc_parse 质控这份病历」。
 

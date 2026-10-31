@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """阶段1.2 药品数据扩容·第一批：追加 70 新药 + 70 规则到 data/drug_dict.json / drug_rules.json。
-运行：D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts\\expand_drug_batch1.py
+运行：python scripts/expand_drug_batch1.py
 幂等：按 name 去重，已存在条目跳过（不覆盖 legacy 数据）。"""
 import json, io, os
 

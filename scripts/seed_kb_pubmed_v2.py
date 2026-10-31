@@ -11,7 +11,7 @@
 - 登记：register_doc("pubmed_seed_v2", "PubMed 临床文献库（扩容·12科室）", n)。
 
 用法（Milvus 在线即可，外网拉取失败自动降级）：
-    D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/seed_kb_pubmed_v2.py
+    python scripts/seed_kb_pubmed_v2.py
 可选：MEDICAL_V2_PER_TOPIC(默认80) / MEDICAL_V2_TARGET(默认7000) / MEDICAL_V2_CACHE(缓存路径)。
 """
 from __future__ import annotations

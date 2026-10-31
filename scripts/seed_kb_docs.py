@@ -13,8 +13,8 @@
 描述追加"（已废弃，由 clinical_guidelines_v2 替换）"（不删保审计）。
 
 用法：
-    D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/seed_kb_docs.py        # v1 目录模式
-    D:\\software_work\\conda_envs\\edu_agent\\python.exe scripts/seed_kb_docs.py v2     # 阶段5 真实指南要点
+    python scripts/seed_kb_docs.py        # v1 目录模式
+    python scripts/seed_kb_docs.py v2     # 阶段5 真实指南要点
 """
 from __future__ import annotations
 
