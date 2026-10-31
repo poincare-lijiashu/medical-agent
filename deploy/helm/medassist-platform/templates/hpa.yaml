@@ -3,7 +3,7 @@
   副本数完全交给 HPA，避免 helm upgrade 把 HPA 扩出的副本数覆盖回去。
   缩容稳定窗口 300s：医疗问诊有突发流量，避免抖动式缩容。
 */}}
-{{- range $component := list "gateway" "auth" "empi" }}
+{{- range $component := list "gateway" "auth" "empi" "clinical" }}
 {{- $svc := index $.Values $component }}
 {{- if and $svc.enabled $svc.autoscaling.enabled }}
 apiVersion: autoscaling/v2

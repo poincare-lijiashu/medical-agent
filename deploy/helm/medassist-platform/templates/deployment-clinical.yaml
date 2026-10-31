@@ -1,0 +1,123 @@
+{{- if .Values.clinical.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "clinical") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "clinical") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "clinical") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "clinical") | nindent 4 }}
+spec:
+  {{- if not .Values.clinical.autoscaling.enabled }}
+  replicas: {{ .Values.clinical.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.clinical.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "clinical") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.clinical.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: clinical
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.clinical.image) }}
+          imagePullPolicy: {{ .Values.clinical.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.clinical.service.port }}
+              protocol: TCP
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "clinical" "jwt" false "empi" false) | nindent 12 }}
+            {{- if .Values.empi.enabled }}
+            # 患者主索引内网地址（不经网关；内部接口仍要求令牌）
+            - name: EMPI_INTERNAL_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "empi")) .Values.empi.service.port | quote }}
+            {{- end }}
+            # 服务间令牌：须与 EMPI 的 INTERNAL_API_TOKEN 一致
+            - name: CLINICAL_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.internalApi.existingSecret }}
+                  key: {{ .Values.external.internalApi.secretKey }}
+            {{- with .Values.clinical.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.clinical.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.clinical.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.clinical.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.clinical.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.clinical.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.clinical.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.clinical.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.clinical.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.clinical.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.clinical.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.clinical.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.clinical.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clinical.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.clinical.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

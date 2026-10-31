@@ -96,6 +96,11 @@ external:
     existingSecret: medassist-redis
     secretKey: url
 
+  # 服务间内部接口令牌（clinical → empi 查询患者；empi 侧 INTERNAL_API_TOKEN）
+  internalApi:
+    existingSecret: medassist-internal
+    secretKey: token
+
 # ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
 secrets:
   create: false
@@ -108,6 +113,8 @@ secrets:
   empiHashSalt: ""
   # 仅 external.redis.enabled=true 时使用：完整连接串（redis://:密码@host:6379/0）
   redisUrl: ""
+  # 服务间内部令牌（≥32 字符）；生产必须由密钥管理注入，不得使用默认值
+  internalApiToken: ""
 
 serviceAccount:
   create: true
@@ -223,6 +230,39 @@ empi:
   service:
     type: ClusterIP
     port: 8082
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---- 临床核心（门诊挂号/接诊/医嘱/收费）----
+clinical:
+  enabled: true
+  image:
+    repository: medassist/platform-clinical
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8083
   resources:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}

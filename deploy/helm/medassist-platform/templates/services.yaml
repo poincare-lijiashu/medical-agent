@@ -55,6 +55,25 @@ spec:
     {{- include "medassist.selectorLabels" (dict "root" $ "component" "empi") | nindent 4 }}
 ---
 {{- end }}
+{{- if .Values.clinical.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "clinical") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "clinical") | nindent 4 }}
+spec:
+  type: {{ .Values.clinical.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.clinical.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 4 }}
+---
+{{- end }}
 {{- if .Values.aiCore.enabled }}
 apiVersion: v1
 kind: Service

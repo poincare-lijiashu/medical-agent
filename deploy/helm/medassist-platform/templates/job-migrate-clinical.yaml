@@ -1,0 +1,66 @@
+{{- if and .Values.clinical.enabled .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "medassist.fullname" . }}-migrate-clinical-r{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "clinical") | nindent 4 }}
+    medassist.io/role: migration
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "argocd.argoproj.io/hook": PreSync
+    "argocd.argoproj.io/hook-delete-policy": BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migration.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 8 }}
+        medassist.io/role: migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.clinical.image) }}
+          imagePullPolicy: {{ .Values.clinical.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - "--medassist.migrate-only=true"
+            - "--server.port=0"
+            - "--spring.flyway.enabled=true"
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "clinical" "jwt" false "empi" false "flyway" true) | nindent 12 }}
+            # 迁移进程同样需要内部令牌（HttpPatientClient 构造时 fail-fast）
+            - name: CLINICAL_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.internalApi.existingSecret }}
+                  key: {{ .Values.external.internalApi.secretKey }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+{{- end }}

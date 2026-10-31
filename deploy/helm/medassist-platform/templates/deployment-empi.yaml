@@ -60,6 +60,12 @@ spec:
               protocol: TCP
           env:
             {{- include "medassist.commonEnv" (dict "root" $ "component" "empi" "jwt" false "empi" true) | nindent 12 }}
+            # 内部接口令牌（clinical → empi 查询患者）；未配置时内部接口 fail-closed
+            - name: INTERNAL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.internalApi.existingSecret }}
+                  key: {{ .Values.external.internalApi.secretKey }}
             {{- with .Values.empi.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

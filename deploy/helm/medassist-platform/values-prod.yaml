@@ -84,6 +84,16 @@ empi:
   autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 65}
   podDisruptionBudget: {enabled: true, minAvailable: 1}
 
+clinical:
+  replicaCount: 3
+  env:
+    - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
+  resources:
+    requests: {cpu: 500m, memory: 768Mi}
+    limits: {cpu: "2", memory: 1536Mi}
+  autoscaling: {enabled: true, minReplicas: 3, maxReplicas: 8, targetCPUUtilizationPercentage: 65}
+  podDisruptionBudget: {enabled: true, minAvailable: 2}
+
 aiCore:
   enabled: true
   # 单副本：AI 中台的审计/复核队列/知识库任务仍落 /app/data 下的 JSON 文件

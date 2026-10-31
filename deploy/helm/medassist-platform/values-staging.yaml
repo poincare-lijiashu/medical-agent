@@ -79,6 +79,12 @@ empi:
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
+clinical:
+  replicaCount: 2
+  image: {repository: medassist/platform-clinical, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
 aiCore:
   enabled: true
   replicaCount: 1
