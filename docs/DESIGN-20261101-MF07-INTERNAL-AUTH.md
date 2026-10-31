@@ -1,7 +1,7 @@
 # MedAssist 服务间身份信任加固设计评审（MF-07）
 
 - 文档编号：DESIGN-20261101-MF07
-- 状态：**设计评审稿（未改代码）**
+- 状态：**阶段一 T1~T4 已落地（2026-11-01）**；T5（`/internal/**` 调用方签名）、T6/T7 待做，阶段二（mTLS）另行评审
 - 关联意见：`docs/REVIEW-20261031-ROUND3.md` MF-07（下游零校验身份头）、MF-09（dev 内部令牌入库）、MF-10（JWT 默认密钥）
 - 适用版本：platform 0.1.0-SNAPSHOT（gateway/auth/empi/clinical/pharmacy/tech/emr/insurance）
 
@@ -336,7 +336,11 @@ medassist:
 | T7 | 运维手册：轮换/应急/回滚 + 演练记录 | 演练一次通过 |
 | T8（可选） | mTLS：cert-manager、证书挂载、主体交叉校验 | staging 全链路双向校验 |
 
+**落地进度（2026-11-01）**：T1~T4 已完成并通过 411 项单测；T5 通过
+`medassist.internal-auth.internal-paths-signature-required=false`（默认）保持现状，
+待全部调用方具备签名能力后切换为 `true`，再按 §8 阶段 3 收口。
+
 ---
 
-*本文为设计评审稿：落实前需完成 T1~T4 并先在 staging 以 `log` 模式观测真实调用图；
-阶段二（mTLS）另行评审。*
+*阶段一 T1~T4 已落地（2026-11-01）：先以 `log` 模式在 staging 观测真实调用图，
+确认 `result != ok` 的流量全部完成改造后再切 `enforce`；阶段二（mTLS）另行评审。*

@@ -20,6 +20,13 @@ secrets:
   jwtSecret: "dev-only-jwt-secret-0123456789abcdef0123456789"
   empiFieldKey: "DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4="
   empiHashSalt: "medassist-empi-salt"
+  internalApiToken: "dev-only-internal-api-token-0123456789abcdef"
+  # 本地自验密钥（base64 32 字节）；生产必须由密钥管理生成，禁止使用本值
+  internalHmacKeys: '{"active":"gw-dev","keys":{"gw-dev":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}'
+
+# 本地默认只打点不拦截：便于观察是否存在绕过网关的直连调用
+internalAuth:
+  mode: log
 
 external:
   postgres:

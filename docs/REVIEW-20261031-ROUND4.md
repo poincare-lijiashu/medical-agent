@@ -274,4 +274,26 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
 
 ---
 
+## 10. MF-07 阶段一落地（2026-11-01，网关→业务服务 HMAC）
+
+| 任务 | 状态 | 交付物 |
+|---|---|---|
+| T1 签名协议 | ✅ 已完成 | `common/security/InternalSignature`（canonical v1 + HMAC-SHA256 + 常量时间比较 + query 归一化）、`InternalKeySet`（active + 多 key 轮换）、`InternalAuthProperties` |
+| T2 下游校验 | ✅ 已完成 | `common/web/InternalAuthFilter`（off/log/enforce、时钟偏差、nonce 去重、豁免路径、403 统一响应）；`InternalAuthAutoConfiguration` + `AutoConfiguration.imports`；启动守卫（enforce 无密钥 / 生产 off 拒绝启动） |
+| T3 网关签名 | ✅ 已完成 | `gateway/filter/InternalSignatureGlobalFilter`（order=`LOWEST_PRECEDENCE-100`，晚于 StripPrefix、早于路由）；客户端伪造的 5 个 `X-Internal-*` 头进入 `AuthHeaders.CLIENT_SUPPLIED` 一律剥离 |
+| T4 Helm | ✅ 已完成 | `internalAuth.mode/clockSkewSeconds/nonceTtlSeconds/internalPathsSignatureRequired`；`medassist-internal-hmac` Secret；dev/base/staging=log（先观测）、prod=enforce |
+| T5 调用方签名 | ⏳ 未开始 | `/internal/**` 当前由 `internal-paths-signature-required=false` 保持内部令牌校验，作为下一批独立上线 |
+| T6 E2E + gitleaks | ⏳ 未开始 | 需补"直连业务端口伪造身份头 → 403"断言；密钥扫码进 CI |
+| T7 运维手册 | ⏳ 未开始 | 轮换/应急/回滚演练记录 |
+| T8 mTLS | ⏸ 可选 | 阶段二另行评审 |
+
+**验证**：全量 `mvn test` **411 项全过**（新增 29 项：签名协议 10 + 过滤器 10 + 网关 4 + 启动守卫 5）。
+
+**阶段一口径（写进部署文档，避免误判为"未做完"）**：
+- nonce 去重是进程内实现：单副本严格有效，多副本在 60 秒时间窗内仍可能重放；阶段二换 Redis。
+- 请求体摘要固定 `-`：本阶段防身份头/方法/路径/查询串篡改，体完整性依赖内网/TLS。
+- `log` 模式只打点不拦截，用于灰度观测"是否存在绕过网关的直连流量"；`enforce` 才真正阻断。
+- **不允许**在生产把 mode 设为 `off`（服务启动守卫会直接拒绝）。
+
 *第 1–4 节为只读评审结论（未改代码）；第 5 节为建议顺序；第 6 节起记录整改落地与验证。*
+

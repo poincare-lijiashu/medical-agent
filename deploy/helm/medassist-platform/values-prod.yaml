@@ -50,6 +50,13 @@ migration:
   backoffLimit: 1
   activeDeadlineSeconds: 900
 
+# 生产强制校验（MF-07）：网关签发的 HMAC 是业务服务接受身份头的**唯一**前提。
+# 密钥来自外部 Secret medassist-internal-hmac（键 keys-json），轮换流程见
+# docs/DESIGN-20261101-MF07-INTERNAL-AUTH.md §5.5；应急回滚可临时切 log（不允许 off，
+# 服务启动守卫会拒绝）。
+internalAuth:
+  mode: enforce
+
 gateway:
   replicaCount: 3
   env:

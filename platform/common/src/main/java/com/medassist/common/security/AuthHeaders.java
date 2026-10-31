@@ -48,9 +48,17 @@ public final class AuthHeaders {
     /** 链路追踪 ID（网关生成，用于日志与审计串联）。 */
     public static final String TRACE_ID = "X-Trace-Id";
 
-    /** 客户端可能伪造、网关必须一律剥离的请求头。 */
-    public static final List<String> CLIENT_SUPPLIED =
-            List.of(ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CLIENT_IP, TRACE_ID);
+    /**
+     * 客户端可能伪造、网关必须一律剥离的请求头。
+     *
+     * <p>包含 MF-07 的签名头：客户端自带 {@code X-Internal-Sig} 等不会有任何作用，
+     * 网关在入口先全部删除，再由签名过滤器按最终身份头重新签发。
+     */
+    public static final List<String> CLIENT_SUPPLIED = List.of(
+            ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CLIENT_IP, TRACE_ID,
+            InternalSignature.HEADER_SIG, InternalSignature.HEADER_TS,
+            InternalSignature.HEADER_NONCE, InternalSignature.HEADER_KEY_ID,
+            InternalSignature.HEADER_SIG_VER);
 
     private AuthHeaders() {
     }

@@ -105,6 +105,26 @@ external:
     existingSecret: medassist-internal
     secretKey: token
 
+  # 服务间 HMAC 签名密钥（MF-07）：网关 → 业务服务。
+  # Secret 内为 JSON：{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}；
+  # 轮换期 keys 同时保留新旧两把，切换 active 后观察 7 天再删旧 key。
+  # 生成：openssl rand -base64 32（禁止人工设定、禁止进 Git）。
+  internalHmac:
+    existingSecret: medassist-internal-hmac
+    secretKey: keys-json
+
+# ---- 服务间签名校验（MF-07 阶段一）----
+# off     = 关闭（仅允许非集群本地联调）
+# log     = 校验并打点但不拦截（灰度期用来暴露绕过网关的直连流量）
+# enforce = 校验失败 403（staging/production 必须使用）
+# 各服务通过环境变量 MEDASSIST_INTERNAL_AUTH_* 绑定，无需改 application.yml。
+internalAuth:
+  mode: log
+  clockSkewSeconds: 60
+  nonceTtlSeconds: 120
+  # /internal/** 的服务→服务调用是否也要求签名（T5 调用方签名落地后再切 true）
+  internalPathsSignatureRequired: false
+
 # ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
 secrets:
   create: false
@@ -119,6 +139,8 @@ secrets:
   redisUrl: ""
   # 服务间内部令牌（≥32 字符）；生产必须由密钥管理注入，不得使用默认值
   internalApiToken: ""
+  # 服务间 HMAC 密钥 JSON（仅 secrets.create=true 的本地自验使用）
+  internalHmacKeys: ""
 
 serviceAccount:
   create: true

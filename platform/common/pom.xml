@@ -23,6 +23,20 @@
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
     </dependency>
+    <!-- 服务间签名的密钥集解析与 403 响应序列化（MF-07）：optional 仅用于编译，
+         各业务服务经 spring-boot-starter-web 自带 jackson-databind。 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- 403 响应体含 Instant（ApiResponse.timestamp）：本地兜底 ObjectMapper 需注册 JSR-310。
+         各服务的 Boot ObjectMapper 已自带该模块，这里只为 common 自身与测试可用。 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+      <optional>true</optional>
+    </dependency>
     <!-- Prometheus 指标导出（P0-5 ServiceMonitor 抓取 /actuator/prometheus 的前提）：
          runtime 作用域经本模块传递给全部业务服务，Boot 检测到 registry 自动装配。
          不引入额外代码，仅让既有 actuator 指标具备 Prometheus 文本格式。 -->
@@ -30,6 +44,13 @@
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-registry-prometheus</artifactId>
       <scope>runtime</scope>
+    </dependency>
+    <!-- 服务间签名过滤器的指标打点（MF-07）：optional 仅用于编译，
+         运行时由各服务的 actuator 提供 micrometer-core。 -->
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <optional>true</optional>
     </dependency>
     <!-- 统一异常映射基类需要 Web MVC 与 JDBC 的异常类型。
          optional=true：只用于编译，不向下游传递依赖（业务服务本就有这些依赖）。 -->

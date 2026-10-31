@@ -161,6 +161,28 @@ Java 服务公共环境变量。
     secretKeyRef:
       name: {{ .root.Values.external.internalApi.existingSecret }}
       key: {{ .root.Values.external.internalApi.secretKey }}
+# ---- 服务间 HMAC 签名（MF-07）----
+# 网关与全部业务服务共用同一密钥集；属性名经 Spring 宽松绑定映射为
+#   MEDASSIST_INTERNAL_AUTH_MODE              → medassist.internal-auth.mode
+#   MEDASSIST_INTERNAL_AUTH_KEYS_JSON         → medassist.internal-auth.keys-json
+#   MEDASSIST_INTERNAL_AUTH_CLOCK_SKEW_SECONDS→ medassist.internal-auth.clock-skew-seconds
+#   MEDASSIST_INTERNAL_AUTH_NONCE_TTL_SECONDS → medassist.internal-auth.nonce-ttl-seconds
+#   MEDASSIST_INTERNAL_AUTH_INTERNAL_PATHS_SIGNATURE_REQUIRED → ...internal-paths-signature-required
+{{- $ia := .root.Values.internalAuth | default dict }}
+{{- $hmac := .root.Values.external.internalHmac | default dict }}
+- name: MEDASSIST_INTERNAL_AUTH_MODE
+  value: {{ $ia.mode | default "log" | quote }}
+- name: MEDASSIST_INTERNAL_AUTH_CLOCK_SKEW_SECONDS
+  value: {{ $ia.clockSkewSeconds | default 60 | quote }}
+- name: MEDASSIST_INTERNAL_AUTH_NONCE_TTL_SECONDS
+  value: {{ $ia.nonceTtlSeconds | default 120 | quote }}
+- name: MEDASSIST_INTERNAL_AUTH_INTERNAL_PATHS_SIGNATURE_REQUIRED
+  value: {{ $ia.internalPathsSignatureRequired | default false | quote }}
+- name: MEDASSIST_INTERNAL_AUTH_KEYS_JSON
+  valueFrom:
+    secretKeyRef:
+      name: {{ $hmac.existingSecret | default "medassist-internal-hmac" }}
+      key: {{ $hmac.secretKey | default "keys-json" }}
 {{- if .empi }}
 - name: EMPI_FIELD_KEY
   valueFrom:

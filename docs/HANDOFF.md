@@ -560,6 +560,26 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：全量单测 **382 项全过**；`clinical_report_smoke.ps1` **24 项断言全过**
    - 已知限制：预交金净流入与医保结算金额未纳入（分属住院押金与医保域）
 
+44. **MF-07 阶段一（2026-11-01）：网关→业务服务 HMAC 签名（T1~T4）**
+   - 协议：`common/security/InternalSignature`，规范串 v1 = 版本/方法/路径/排序后查询串/8 个身份头/时间戳/nonce/体摘要；
+     HMAC-SHA256→Base64URL，`MessageDigest.isEqual` 常量时间比较
+   - 网关：`InternalSignatureGlobalFilter`（order = `LOWEST_PRECEDENCE-100`，**晚于 StripPrefix**，
+     签的是下游实际看到的方法/路径/查询串）；客户端自带的 5 个 `X-Internal-*` 头已加入
+     `AuthHeaders.CLIENT_SUPPLIED`，入口一律剥离后重新签发
+   - 下游：`InternalAuthFilter`（common 自动配置，`META-INF/spring/...AutoConfiguration.imports`），
+     mode=off/log/enforce；失败统一 403 `ApiResponse.fail(FORBIDDEN,"请求来源未通过校验")`，不区分原因
+   - 启动守卫：mode 非法 / enforce 无密钥 / 生产环境 off → 拒绝启动；网关侧 mode≠off 无密钥同样拒绝启动
+   - 豁免：`/actuator/health/**`、`/actuator/info`、`/actuator/prometheus`；
+     `/internal/**` 在 `internal-paths-signature-required=false`（默认）时仍由控制器校验内部令牌，
+     调用方签名作为 T5 单独上线
+   - 密钥：`medassist-internal-hmac` Secret（键 `keys-json`），JSON 支持 active + 多 key 并行轮换；
+     Helm 经 `MEDASSIST_INTERNAL_AUTH_*` 环境变量宽松绑定，**无需改各服务 application.yml**
+   - 灰度：values-dev / base / staging = `log`（只打点不拦截，先摸清真实调用图），prod = `enforce`；
+     指标 `medassist.internal.auth{result=ok|missing|skew|replay|unknown_key|bad_sig|bad_version}`
+   - 验证：全量单测 **411 项全过**（新增签名协议 10 项 + 过滤器行为 10 项 + 网关签名 4 项 + 启动守卫 5 项）
+   - 已知边界（阶段一）：nonce 去重为进程内实现（多副本 60s 窗口内可重放，阶段二换 Redis）；
+     请求体摘要固定 `-`（体完整性依赖内网/TLS）；`/internal/**` 的调用方签名待 T5
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -598,6 +618,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   两条链路互不影响；Dockerfile 必须固定带 `-Pprod-package`
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，
   否则 `imageRegistry=harbor/medassist` + `repository=medassist/platform-gateway` 会拼成三层
+- common 模块要自动装配，必须提供 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`：
+  各业务服务主类都在 `com.medassist.<svc>` 下，**扫描不到 `com.medassist.common`**，
+  只写 `@AutoConfiguration` 不写 imports 等于零生效
+- 自动配置里引用 `MeterRegistry` / `ObjectMapper` 这类"运行时由服务提供"的类型，
+  依赖要声明为 `optional=true`；同时给 `ObjectMapper` 兜底 `findAndRegisterModules()`，
+  否则 common 自己的单测在序列化 `Instant` 时会抛 `InvalidDefinitionException`
+- 网关签名过滤器不能用 `AuthGlobalFilter` 的 -100 顺序：`StripPrefix` 是路由过滤器（order≈声明顺序），
+  比它早跑会按 `/api/v2/xxx` 签名而下游看到 `/xxx`，全量 403。
+  放在 `LOWEST_PRECEDENCE - 100` 才能覆盖"下游视角"且早于 NettyRoutingFilter
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致
   "无法连接到远程服务器"；本机联调用 `curl.exe --noproxy "*"`，或临时清空系统代理
 - 用 `Start-Process` 起的 java 子进程会随命令会话结束被回收；常驻服务要用后台命令（run_in_background）

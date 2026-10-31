@@ -42,6 +42,11 @@ external:
 migration:
   enabled: true
 
+# 预发布先用 log 观测真实调用图（MF-07 阶段 0）：把 result != ok 的流量全部改造完，
+# 再切 enforce 并回归全量 E2E。所需 Secret：medassist-internal-hmac（键 keys-json）。
+internalAuth:
+  mode: log
+
 gateway:
   replicaCount: 2
   # 不可变 tag：CI 每次发布用 --set 覆盖为构建号（不允许 SNAPSHOT）

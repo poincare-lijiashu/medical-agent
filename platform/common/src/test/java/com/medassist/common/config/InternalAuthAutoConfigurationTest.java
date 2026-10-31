@@ -1,0 +1,73 @@
+package com.medassist.common.config;
+
+import com.medassist.common.web.InternalAuthFilter;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * 自动装配与启动守卫（MF-07）：enforce 无密钥、生产 off、非法 mode 都必须拒绝启动。
+ */
+class InternalAuthAutoConfigurationTest {
+
+    private static final String KEY = Base64.getEncoder()
+            .encodeToString("0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8));
+    private static final String KEYS_JSON = "{\"active\":\"k1\",\"keys\":{\"k1\":\"" + KEY + "\"}}";
+
+    private final WebApplicationContextRunner runner = new WebApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(InternalAuthAutoConfiguration.class));
+
+    @Test
+    void registersFilterAndRegistrationBeanWhenKeysConfigured() {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(InternalAuthFilter.class);
+                    assertThat(context).hasBean("internalAuthFilterRegistration");
+                });
+    }
+
+    @Test
+    void defaultsToOffOutsideProduction() {
+        runner.run(context -> assertThat(context).hasSingleBean(InternalAuthFilter.class));
+    }
+
+    @Test
+    void failsFastWhenEnforceWithoutKeys() {
+        runner.withPropertyValues("medassist.internal-auth.mode=enforce")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("keys-json");
+                });
+    }
+
+    @Test
+    void rejectsOffInProductionProfile() {
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=off",
+                        "spring.profiles.active=prod")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("mode=off");
+                });
+    }
+
+    @Test
+    void rejectsUnknownMode() {
+        runner.withPropertyValues("medassist.internal-auth.mode=strict",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("非法");
+                });
+    }
+}
