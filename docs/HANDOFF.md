@@ -274,8 +274,23 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      断言金额必须用 `[decimal]` 比较（新增 `CheckNum`），不能按字符串比对
    - 下一批：N5 第二批（省局真实结算/DRG-DIP/目录文件解析），或 N3 收尾（LIS/PACS）
 
-### 本机踩坑备忘（下次别再踩）
+18. **第三轮评测第一批整改（2026-10-31）：金额与身份正确性**
+   - 依据 `docs/REVIEW-20261031-ROUND3.md` 第 5 节第一批，闭环 MF-01/02/03/04/06/19(部分) + 测试 MF-14~17
+   - 结算口径：`calculate` 剔除 REFUNDED 收费单（计数入审计 `skippedRefunded`），
+     非 PAID/UNPAID **fail-closed**；全部退费拒绝出零元清单；BillLine 增 `chargeStatus`/`overLimitAmount`
+   - 乙类限价：按 `min(amount, priceLimit)` 计算纳入基数，超限部分全额自费
+   - 负数金额拒绝（提示走红冲）；`insurance > total` 截断补用例
+   - 参保 UPSERT 改 `upsertMember(member, expectedVersion)`，`DO UPDATE ... WHERE version = :version`，
+     无行返回即 409（与 setItemEnabled 的 CAS 语义对齐）
+   - 时限质控改 `Duration.compareTo(ofHours(threshold))`，8h59m 判超时（原 `toHours()` 截断放过）
+   - 签名身份：AUTHOR 必须书写人本人；ATTENDING/CHIEF 不得是书写人、不得与上一级同人
+   - **E2E 连带改动**：emr_smoke 主治签字改用 doctor01（admin01 是书写人，自签必 409），
+     新增 `sign.attending.self.409`；insurance_smoke 新增"退费就诊 → 409"与 `lineChargeStatus` 断言
+   - 验证：单测 195→**215**；insurance E2E 32→**38 项**、emr E2E 全过；库内审计含 skippedRefunded
+   - 下一批：第三轮意见书第二批（JWT_SECRET fail-fast、dev 令牌出 jar、时限 NOT_EVALUATED、
+     审计 UNION 补全、令牌变量统一）
 
+### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
 - `JdbcClient` 下 CHECK 约束/唯一约束都表现为 `DataIntegrityViolationException`；
@@ -296,6 +311,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 - 给仓储方法加重载（如 `insertRecord(record, visitStartedAt)`）后，旧的
   `verify(repo).insertRecord(any())` 会因签名不匹配而失败；要么改断言参数（含 `isNull()`），
   要么不留单参重载——Mockito 按方法签名匹配，不会自动挑选可用重载
+- `ON CONFLICT (col) DO UPDATE` 里想用乐观锁，必须 `WHERE table.version = :version` 并把
+  `RETURNING id` 用 `.optional()` 读（不是 `.single()`）：冲突时返回空行才是 409 信号；
+  只比对 version 却不参与 SQL 等于没加锁
+- 加"签署人身份"这类业务约束前先看 E2E 用的是不是同一个人：`admin01` 既建档又签名，
+  一加"上级不得为书写人"立刻全红——E2E 必须准备第二个具备该权限的账号（如 doctor01）
+- PowerShell `[decimal]$null` 得 0，金额断言函数必须显式挡掉 null/空串，否则字段缺失被误判为 0
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，
   否则 `imageRegistry=harbor/medassist` + `repository=medassist/platform-gateway` 会拼成三层
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致

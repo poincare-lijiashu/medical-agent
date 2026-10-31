@@ -53,10 +53,16 @@ public final class InsuranceModel {
         }
     }
 
-    /** 结算清单明细行（含未映射标记，便于对账追溯）。 */
+    /**
+     * 结算清单明细行（含未映射与超限价标记，便于对账追溯）。
+     *
+     * @param chargeStatus  收费单状态快照（PAID/UNPAID；REFUNDED 不进入清单）
+     * @param overLimitAmount 超出医保支付限价、全额自付的金额（无目录或无限价时为 0）
+     */
     public record BillLine(String chargeNo, String itemCode, String itemName, String category,
-                           BigDecimal amount, String insuranceCode, String payCategory,
-                           BigDecimal selfPayRatio, BigDecimal eligibleAmount, boolean unmapped) {
+                           String chargeStatus, BigDecimal amount, String insuranceCode,
+                           String payCategory, BigDecimal selfPayRatio,
+                           BigDecimal overLimitAmount, BigDecimal eligibleAmount, boolean unmapped) {
     }
 
     /** 医保结算清单。 */

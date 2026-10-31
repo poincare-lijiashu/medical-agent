@@ -331,6 +331,24 @@ doctor01 确认 **403**、只读 200。
 
 ---
 
+## 1.12 已完成（2026-10-31，第三轮评测第一批整改）
+
+依据 `docs/REVIEW-20261031-ROUND3.md`，修复"会产生错误金额/错误签名"的 6 类问题：
+
+| 问题 | 修复 |
+|---|---|
+| 结算计入已退费（REFUNDED）收费单 | `calculate` 剔除 REFUNDED 并计数（审计 `skippedRefunded`），非 PAID/UNPAID **fail-closed**；全部退费拒绝出零元清单；与 clinical 既有口径一致 |
+| 乙类限价未生效 | 按 `min(amount, priceLimit)` 计算纳入基数，超限部分全额自费（明细 `overLimitAmount`） |
+| 负数金额可产生负统筹 | 直接拒绝并提示走红冲；补 `insurance > total` 截断用例 |
+| 参保 UPSERT 乐观锁失效 | `DO UPDATE ... WHERE version = :version`，无行返回即 409 |
+| 时限质控 `toHours()` 截断 | 改 `Duration.compareTo(ofHours(threshold))`，8h59m 判超时；超时消息精确到分钟 |
+| 三级签名可同人连签 | AUTHOR 必须书写人本人；ATTENDING/CHIEF 不得为书写人，且不得与上一级同人 |
+
+**验证**：单测 195→**215**；`insurance_smoke.ps1` 32→**38 项**（新增退费就诊 409、`lineChargeStatus`）、
+`emr_smoke.ps1` 全过（新增 `sign.attending.self.409`，主治改由 doctor01 签署）。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

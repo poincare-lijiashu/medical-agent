@@ -57,6 +57,12 @@ Check 'login.qc' $r.Status 200
 $qcToken = (Res $r).accessToken
 if (-not $qcToken) { Write-Output "FATAL no qc token: $($r.Body)"; exit 1 }
 
+# Attending doctor: MUST be a different person from the author (MF-02 signer identity)
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = 'doctor01'; password = $Password }
+Check 'login.doctor' $r.Status 200
+$doctorToken = (Res $r).accessToken
+if (-not $doctorToken) { Write-Output "FATAL no doctor token: $($r.Body)"; exit 1 }
+
 # ---------------------------------------------------------------- 2. patient
 $r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
     name = "Emr Patient $suffix"; gender = 'MALE'; birthDate = '1955-02-03'
@@ -131,10 +137,14 @@ Check 'verify.valid' (Res $r).valid 'True'
 $r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/archive" $null $token
 Check 'archive.blockedBeforeAttending.409' $r.Status 409
 
+# self countersign must be rejected: author (admin01) cannot sign ATTENDING
 $r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/sign" @{ level = 'ATTENDING' } $token
+Check 'sign.attending.self.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/sign" @{ level = 'ATTENDING' } $doctorToken
 Check 'sign.attending.ok' $r.Status 200
-Check 'sign.attending.count' (Res $r).signatures.Count 2
-Check 'sign.attending.type' (Res $r).signatures[1].signType 'ATTENDING'
+Check 'sign.attending.count' ((Res $r).signatures | Where-Object { $_.revision -eq 1 }).Count 2
+Check 'sign.attending.type' ((Res $r).signatures | Where-Object { $_.signType -eq 'ATTENDING' }).signer 'doctor01'
 
 $r = Invoke-Api 'POST' "/api/v2/emr/records/$recordId/archive" $null $token
 Check 'archive.ok' $r.Status 200
@@ -218,7 +228,7 @@ $r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/sign" $null $token
 Check 'record2.resign.author' $r.Status 200
 Check 'record2.resign.authorCount' (Res $r).signatures.Count 2
 
-$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/sign" @{ level = 'ATTENDING' } $token
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/sign" @{ level = 'ATTENDING' } $doctorToken
 Check 'record2.resign.attending' $r.Status 200
 
 $r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/archive" $null $token

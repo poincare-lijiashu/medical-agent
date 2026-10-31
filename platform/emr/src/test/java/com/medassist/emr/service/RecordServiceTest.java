@@ -539,6 +539,110 @@ class RecordServiceTest {
         verify(repo, never()).insertAmendment(any());
     }
 
+    // ---------------------------------------------------------------- 签署人身份（MF-02）
+
+    @Test
+    @DisplayName("签名：非书写医师不能代签 AUTHOR")
+    void nonAuthorCannotSignAuthor() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 3L, "{}")));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.sign(recordId, RecordSignature.AUTHOR, "other01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_SIGN_LEVEL_INVALID);
+        verify(repo, never()).signRecord(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("签名：书写医师本人不能给自己加签主治")
+    void authorCannotCountersignAttending() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 4L, "{}")));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(1);
+
+        assertThatThrownBy(() -> service.sign(recordId, RecordSignature.ATTENDING, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_SIGN_LEVEL_INVALID);
+        verify(repo, never()).countersign(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("签名：同一人不能连签两级（主治签完不能再签主任）")
+    void previousSignerCannotSignNextLevel() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 5L, "{}")));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(2);
+        when(repo.listSignatures(recordId)).thenReturn(List.of(
+                new RecordSignature(UUID.randomUUID(), recordId, 1, "doctor01",
+                        RecordSignature.AUTHOR, Instant.now(), "h1"),
+                new RecordSignature(UUID.randomUUID(), recordId, 1, "attending01",
+                        RecordSignature.ATTENDING, Instant.now(), "h1")));
+
+        assertThatThrownBy(() -> service.sign(recordId, RecordSignature.CHIEF, "attending01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_SIGN_LEVEL_INVALID);
+        verify(repo, never()).countersign(any(), anyString(), anyString(), anyLong());
+    }
+
+    // ---------------------------------------------------------------- CAS 冲突（MF-17）
+
+    @Test
+    @DisplayName("签名：CAS 失败返回 409，不落签名记录")
+    void signCasConflict() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 3L, "{}")));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(0);
+        when(repo.signRecord(eq(recordId), eq("doctor01"), anyString(), eq(3L)))
+                .thenReturn(false);
+
+        assertThatThrownBy(() -> service.sign(recordId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).insertSignature(any(RecordSignature.class));
+    }
+
+    @Test
+    @DisplayName("归档：CAS 失败返回 409")
+    void archiveCasConflict() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 5L, "{}")));
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(1);
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(1);
+        when(repo.archiveRecord(recordId, 5L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.archive(recordId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+    }
+
+    // ---------------------------------------------------------------- 时限边界（MF-04）
+
+    @Test
+    @DisplayName("时限：8 小时 59 分必须判为超时（不得按 toHours 截断放宽）")
+    void timelinessStrictBoundary() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 1, 1L, "{}")));
+        when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(8)));
+        when(repo.visitStartedAt(recordId)).thenReturn(Optional.of(
+                Instant.now().minus(java.time.Duration.ofMinutes(8 * 60 + 59))));
+        when(repo.updateStatus(recordId, MedicalRecord.DRAFT, MedicalRecord.SUBMITTED, 1L))
+                .thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 2L, "{}")));
+
+        SubmitResult result = service.submit(recordId, "doctor01");
+
+        assertThat(result.qc().majorCount()).isEqualTo(1);
+        assertThat(result.qc().results().get(0).passed()).isFalse();
+        assertThat(result.qc().results().get(0).message()).contains("8 小时");
+    }
+
     // ---------------------------------------------------------------- 测试夹具
 
     private final UUID reqId = UUID.randomUUID();

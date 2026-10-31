@@ -116,6 +116,7 @@ CheckNum 'bill.insurance' $billView.bill.insuranceAmount 10.00
 CheckNum 'bill.selfPay' $billView.bill.selfPayAmount 0.00
 Check 'bill.lineCount' (@($billView.lines).Count) 1
 Check 'bill.lineMapped' $billView.lines[0].unmapped 'False'
+Check 'bill.lineChargeStatus' $billView.lines[0].chargeStatus 'UNPAID'
 
 $r = Invoke-Api 'GET' "/api/v2/insurance/settlements/by-visit/$visitId" $null $token
 Check 'bill.byVisit' $r.Status 200
@@ -150,6 +151,32 @@ $r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
 $visit2 = (Res $r).id
 $r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $visit2 } $token
 Check 'bill.notEnrolled.409' $r.Status 409
+
+# ---------------------------------------------------------------- 6.5 refunded charges are excluded (MF-01)
+$r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
+    name = "Refund Patient $suffix"; gender = 'MALE'; birthDate = '1975-05-05'
+    idType = 'ID_CARD'; idNo = "11010119750505$suffix"
+} $token
+Check 'refund.patient.create' $r.Status 200
+$refundPatient = (Res $r).id
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $refundPatient; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 300000
+} $token
+Check 'refund.member.register' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
+    patientId = $refundPatient; deptId = $deptId; doctorId = 'admin01'; visitType = 'OUTPATIENT'
+} $token
+Check 'refund.registration' $r.Status 200
+$refundVisit = (Res $r).id
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$refundVisit/cancel" $null $token
+Check 'refund.cancelVisit' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $refundVisit } $token
+Check 'bill.allRefunded.409' $r.Status 409
 
 # ---------------------------------------------------------------- 7. permission: doctor read-only
 $r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$billId/confirm" $null $doctorToken

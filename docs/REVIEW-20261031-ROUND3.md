@@ -239,4 +239,28 @@ MF-12~13（离网文档两处，1 分钟级）→ S-24~S-27 → MF-18~19 + S-28~
 
 ---
 
-*本意见书仅记录评审结论与建议，未对任何代码/配置做修改。整改请按第 5 节路线分批进行，每批真库端到端验证后提交。*
+## 7. 整改状态（2026-10-31，第一批已闭环）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| MF-01 | 结算计入 REFUNDED / 未知状态收费 | ✅ 已修 | `InsuranceService.calculate` 剔除 REFUNDED 并计数，非 PAID/UNPAID **fail-closed**；全部退费时拒绝出零元清单；明细行新增 `chargeStatus` 快照；与 clinical 既有口径（`BillingService` 过滤 REFUNDED）一致 |
+| MF-03 | 参保 UPSERT 乐观锁失效 | ✅ 已修 | `upsertMember(member, expectedVersion)` 的 `ON CONFLICT DO UPDATE` 增加 `WHERE version = :version`，无行返回即 409 |
+| MF-04 | 时限质控 `toHours()` 截断 | ✅ 已修 | 改 `Duration.compareTo(ofHours(threshold))`；超时消息带"已 X 小时 Y 分钟" |
+| MF-02 | 三级签名无签署人身份约束 | ✅ 已修 | AUTHOR 必须书写人本人；上级签名不得为书写人、不得与上一级同人（查询当前 revision 签名表） |
+| MF-06 | 乙类限价未参与测算 | ✅ 已修 | 按 `min(amount, priceLimit)` 计算纳入基数，超限部分记 `overLimitAmount` 全额自费 |
+| MF-19（部分） | calculate 无负数防护 | ✅ 已修 | 负数金额直接拒绝并提示走红冲；`insurance > total` 截断补用例 |
+| MF-14 | 参保 CRUD/UPSERT 零测试 | ✅ 已修 | 新增二次登记复用 id/version、CAS 冲突、映射停用拒绝 3 例 |
+| MF-15 | DRAFT 重算与并发冲突零覆盖 | ✅ 已修 | 新增 `generateRecomputesDraftBill` / `generateDraftCasConflict` / `generateRejectsAllRefunded` |
+| MF-16 | resolver 停用分支零覆盖 | ✅ 已修 | 新增映射停用、目录停用两例（断言 C 类 + unmapped + 纳入 0） |
+| MF-17 | CAS-false → CONFLICT 分支未测 | ✅ 已修 | 新增 sign/archive/confirm 三条 CAS 冲突用例（并断言不落后续写入） |
+
+**验证**：平台单测 **195 → 215 项全绿**（insurance 12→26、emr 29→35）；
+经网关真库 E2E：`insurance_smoke.ps1` **32 → 38 项**全过（新增"已退费收费全部剔除 → 409"）、
+`emr_smoke.ps1` 全过（新增"书写医师自签主治 409"、主治改由 doctor01 签署）；
+库内核对：新增清单审计含 `skippedRefunded`/`lines`，退费就诊未生成清单。
+
+**第二批（安全加固）与第三批（清单闭环）尚未开始**，见第 5 节。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7 节记录第一批整改的落地与验证。后续批次按第 5 节路线继续，每批真库端到端验证后提交。*

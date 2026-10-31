@@ -199,7 +199,13 @@ public class InsuranceRepository {
                         """).param(id).query(MEMBER_MAPPER).optional();
     }
 
-    public UUID upsertMember(Member m) {
+    /**
+     * 参保登记 UPSERT（带版本 CAS）。
+     *
+     * <p>已存在参保时必须匹配 {@code expectedVersion}，否则不更新、返回空——
+     * 由服务层转 409。不覆盖 version 的"最后写赢"会让并发编辑静默丢失待遇参数。
+     */
+    public Optional<UUID> upsertMember(Member m, long expectedVersion) {
         return jdbc.sql("""
                         INSERT INTO insurance_svc.insurance_member
                             (id, patient_id, patient_no, insurance_type, region, person_category,
@@ -220,6 +226,7 @@ public class InsuranceRepository {
                                status = EXCLUDED.status,
                                version = insurance_svc.insurance_member.version + 1,
                                updated_at = now()
+                         WHERE insurance_svc.insurance_member.version = :version
                         RETURNING id
                         """)
                 .param("id", m.id()).param("patientId", m.patientId())
@@ -228,7 +235,8 @@ public class InsuranceRepository {
                 .param("deductible", m.deductible()).param("ratio", m.reimbursementRatio())
                 .param("cap", m.cap()).param("fromDate", m.effectiveFrom())
                 .param("toDate", m.effectiveTo()).param("status", m.status())
-                .query(UUID.class).single();
+                .param("version", expectedVersion)
+                .query(UUID.class).optional();
     }
 
     // ---------------------------------------------------------------- 结算清单

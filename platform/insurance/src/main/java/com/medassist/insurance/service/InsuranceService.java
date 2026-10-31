@@ -142,7 +142,11 @@ public class InsuranceService {
                 req.effectiveTo(),
                 req.status() == null ? Member.ACTIVE : req.status(),
                 existing.map(Member::version).orElse(0L));
-        repo.upsertMember(member);
+        long expectedVersion = existing.map(Member::version).orElse(0L);
+        if (repo.upsertMember(member, expectedVersion).isEmpty()) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "参保信息已被他人修改，请刷新后重试");
+        }
         audit(actor, "MEMBER_UPSERT", "MEMBER", patient.id().toString(), Map.of(
                 "patientNo", patient.patientNo(), "insuranceType", member.insuranceType(),
                 "region", member.region(), "ratio", member.reimbursementRatio().toPlainString()));
@@ -174,6 +178,11 @@ public class InsuranceService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_NOT_ENROLLED));
 
         Computation c = calculate(summary.lines(), resolver(), member);
+        if (c.lines().isEmpty()) {
+            // 全部收费单已退费：没有可结算的明细，不能出零元清单
+            throw new BusinessException(ErrorCode.INSURANCE_NO_CHARGE,
+                    "该就诊单收费已全部退费，无可结算费用");
+        }
         String detail = toJson(c.lines());
 
         Optional<SettlementBill> existing = repo.lockBillByVisit(visitId);
@@ -202,7 +211,8 @@ public class InsuranceService {
         audit(actor, "BILL_GENERATE", "SETTLEMENT_BILL", bill.id().toString(), Map.of(
                 "billNo", bill.billNo(), "visitId", visitId.toString(),
                 "total", c.total().toPlainString(), "insurance", c.insurance().toPlainString(),
-                "selfPay", c.selfPay().toPlainString()));
+                "selfPay", c.selfPay().toPlainString(), "lines", c.lines().size(),
+                "skippedRefunded", c.skippedRefunded()));
         return new BillView(bill, c.lines());
     }
 
@@ -246,15 +256,27 @@ public class InsuranceService {
 
     // ---------------------------------------------------------------- 计算引擎
 
-    /** 计算结果（金额保留 2 位小数，HALF_UP）。 */
+    /** 计算结果（金额保留 2 位小数，HALF_UP）；skippedRefunded 为被剔除的已退费收费行数。 */
     record Computation(BigDecimal total, BigDecimal eligible, BigDecimal deductible,
-                       BigDecimal insurance, BigDecimal selfPay, List<BillLine> lines) {
+                       BigDecimal insurance, BigDecimal selfPay, int skippedRefunded,
+                       List<BillLine> lines) {
     }
 
+    private static final String STATUS_PAID = "PAID";
+    private static final String STATUS_UNPAID = "UNPAID";
+    private static final String STATUS_REFUNDED = "REFUNDED";
+
     /**
-     * 本地测算：目录支付类别 + 参保待遇。
+     * 本地测算：目录支付类别 + 参保待遇 + 支付限价。
      *
-     * @param resolver 收费项目编码 → 医保目录项目（未映射/停用返回 null，按丙类处理）
+     * <p>口径（有代码即口径，不允许"带出来但不用"）：
+     * <ol>
+     *   <li>收费单状态：REFUNDED 整单剔除（不进入清单）；非 PAID/UNPAID 一律 fail-closed；</li>
+     *   <li>甲类全额纳入；乙类先自付 selfPayRatio；丙类/未映射/目录停用全额自费；</li>
+     *   <li>乙类等有支付限价的项目：限价内部分参与纳入计算，超限部分全额自付（overLimitAmount）；</li>
+     *   <li>纳入金额扣除起付线后按报销比例计算统筹支付，封顶线与总额双重截断；</li>
+     *   <li>负数金额直接拒绝（退费走红冲单，不进入本地测算）。</li>
+     * </ol>
      */
     static Computation calculate(List<ClinicalClient.ChargeLine> lines,
                                  Function<String, InsuranceItem> resolver,
@@ -262,8 +284,24 @@ public class InsuranceService {
         List<BillLine> detail = new ArrayList<>(lines.size());
         BigDecimal total = ZERO;
         BigDecimal eligible = ZERO;
+        int skippedRefunded = 0;
         for (ClinicalClient.ChargeLine line : lines) {
+            String rawStatus = line.chargeStatus() == null ? "" : line.chargeStatus().trim().toUpperCase();
+            if (STATUS_REFUNDED.equals(rawStatus)) {
+                skippedRefunded++;
+                continue;
+            }
+            if (!STATUS_PAID.equals(rawStatus) && !STATUS_UNPAID.equals(rawStatus)) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "收费单状态不可用于医保结算：" + line.chargeNo() + "[" + line.chargeStatus() + "]");
+            }
             BigDecimal amount = money(line.amount());
+            if (amount.signum() < 0) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "收费明细存在负数金额，请走红冲流程：" + line.chargeNo()
+                                + "/" + line.itemCode() + " = " + amount.toPlainString());
+            }
+
             InsuranceItem item = resolver.apply(line.itemCode());
             String payCategory = item == null ? InsuranceItem.PAY_C : item.payCategory();
             BigDecimal selfPayRatio = switch (payCategory) {
@@ -272,14 +310,22 @@ public class InsuranceService {
                         ? BigDecimal.ZERO : item.selfPayRatio();
                 default -> BigDecimal.ONE;
             };
-            BigDecimal lineEligible = amount.multiply(BigDecimal.ONE.subtract(selfPayRatio))
+            // 支付限价：超出部分全额自费，只有限价内金额参与纳入计算
+            BigDecimal billable = amount;
+            BigDecimal overLimit = ZERO;
+            if (item != null && item.priceLimit() != null
+                    && amount.compareTo(item.priceLimit()) > 0) {
+                billable = money(item.priceLimit());
+                overLimit = money(amount.subtract(billable));
+            }
+            BigDecimal lineEligible = billable.multiply(BigDecimal.ONE.subtract(selfPayRatio))
                     .setScale(2, RoundingMode.HALF_UP);
             total = total.add(amount);
             eligible = eligible.add(lineEligible);
             detail.add(new BillLine(line.chargeNo(), line.itemCode(), line.itemName(),
-                    line.category(), amount,
+                    line.category(), rawStatus, amount,
                     item == null ? null : item.insuranceCode(), payCategory, selfPayRatio,
-                    lineEligible, item == null));
+                    overLimit, lineEligible, item == null));
         }
         total = money(total);
         eligible = money(eligible);
@@ -296,7 +342,7 @@ public class InsuranceService {
             insurance = total;
         }
         BigDecimal selfPay = money(total.subtract(insurance));
-        return new Computation(total, eligible, deductible, insurance, selfPay, detail);
+        return new Computation(total, eligible, deductible, insurance, selfPay, skippedRefunded, detail);
     }
 
     private Function<String, InsuranceItem> resolver() {

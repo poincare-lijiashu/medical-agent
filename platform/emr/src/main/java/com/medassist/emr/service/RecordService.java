@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -190,6 +191,7 @@ public class RecordService {
                     "当前已签到「" + RecordSignature.levelName(currentLevel) + "」，"
                             + "下一步应签「" + RecordSignature.levelName(currentLevel + 1) + "」");
         }
+        ensureSignerIdentity(record, targetLevel, currentLevel, actor);
 
         String hash;
         if (targetLevel == 1) {
@@ -217,6 +219,44 @@ public class RecordService {
                 "recordNo", record.recordNo(), "revision", record.revision(),
                 "level", targetLevel, "signType", signType, "hash", hash));
         return detail(id);
+    }
+
+    /**
+     * 签署人身份约束（不需要职称数据即可执行的最小合规校验）。
+     *
+     * <ul>
+     *   <li>书写医师级：必须由病历书写人本人签署，不允许他人代签 AUTHOR；</li>
+     *   <li>上级签名：不得由书写人本人签，也不得与上一级签署人同一人——
+     *       否则"逐级审签"退化为一个人连签三级。</li>
+     * </ul>
+     * 职称校验（主治才能签 ATTENDING 等）待 HR 组织数据接入后补。
+     */
+    private void ensureSignerIdentity(MedicalRecord record, int targetLevel, int currentLevel,
+                                      String actor) {
+        String author = record.author();
+        if (targetLevel == 1) {
+            if (author != null && !author.equals(actor)) {
+                throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
+                        "病历须由书写医师本人签名：书写医师 " + author + "，当前登录 " + actor);
+            }
+            return;
+        }
+        if (author != null && author.equals(actor)) {
+            throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
+                    "「" + RecordSignature.levelName(targetLevel) + "」签名不能由书写医师本人完成，须上级医师审签");
+        }
+        String previousSigner = repo.listSignatures(record.id()).stream()
+                .filter(s -> s.revision() == record.revision())
+                .filter(s -> RecordSignature.levelOf(s.signType()) == currentLevel)
+                .map(RecordSignature::signer)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (previousSigner != null && previousSigner.equals(actor)) {
+            throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
+                    "「" + RecordSignature.levelName(targetLevel) + "」签名必须由不同医师完成："
+                            + RecordSignature.levelName(currentLevel) + "已由 " + previousSigner + " 签署");
+        }
     }
 
     @Transactional
@@ -462,11 +502,16 @@ public class RecordService {
                 if (visitStartedAt == null || visitStartedAt.isEmpty()) {
                     passed = null;
                 } else {
-                    long hours = Math.max(0, Duration.between(visitStartedAt.get(), now).toHours());
                     int limit = rule.threshold() == null ? 24 : rule.threshold();
-                    passed = hours <= limit;
+                    Duration elapsed = Duration.between(visitStartedAt.get(), now);
+                    if (elapsed.isNegative()) {
+                        elapsed = Duration.ZERO;
+                    }
+                    // 精确比较：8h59m 必须判为超时，不能因为 toHours() 截断而放宽近 1 小时
+                    passed = elapsed.compareTo(Duration.ofHours(limit)) <= 0;
                     if (!passed) {
-                        message = rule.message() + "（已 " + hours + " 小时）";
+                        message = rule.message() + "（已 " + elapsed.toHours() + " 小时 "
+                                + (elapsed.toMinutes() % 60) + " 分钟）";
                     }
                 }
             } else {
