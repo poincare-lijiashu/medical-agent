@@ -31,6 +31,18 @@ public enum ErrorCode {
     REGISTRATION_NO_SLOT(42401, "该时段号源已满"),
     REGISTRATION_DUPLICATED(42409, "该患者本次就诊已挂号"),
 
+    // ---- 就诊（42xxx 续）----
+    VISIT_NOT_FOUND(42404, "未找到该就诊记录"),
+    VISIT_STATUS_INVALID(42410, "当前就诊状态不允许该操作"),
+
+    // ---- 医嘱（44xxx）----
+    ORDER_ITEM_NOT_FOUND(44401, "未找到该医嘱项目，或该项目已停用"),
+    ORDER_STATUS_INVALID(44410, "当前医嘱状态不允许该操作"),
+
+    // ---- 收费（45xxx）----
+    CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
+    CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),
+
     // ---- 药房（43xxx）----
     DRUG_STOCK_INSUFFICIENT(43401, "药品库存不足"),
     DRUG_BATCH_EXPIRED(43402, "所选批次已过期，禁止发药");

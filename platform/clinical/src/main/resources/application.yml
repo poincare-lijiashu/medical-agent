@@ -1,0 +1,65 @@
+server:
+  port: 8083
+  # 优雅停机：在途收费/挂号请求处理完再退出
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-clinical
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: clinical-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: clinical_svc
+    default-schema: clinical_svc
+    locations: classpath:db/migration/clinical
+    # 生产设为 false（与 auth/empi 一致：schema 漂移必须让迁移失败而不是被掩盖）
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 服务间调用：clinical → empi（内网直连，不经网关）----
+# CLINICAL_INTERNAL_TOKEN 必须与 EMPI 的 INTERNAL_API_TOKEN 一致；未配置时服务拒绝启动
+clinical:
+  empi:
+    base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
+    internal-token: ${CLINICAL_INTERNAL_TOKEN:}
+    timeout: ${EMPI_TIMEOUT:PT2S}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: DEBUG

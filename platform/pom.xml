@@ -38,6 +38,7 @@
     <module>gateway</module>
     <module>auth</module>
     <module>empi</module>
+    <module>clinical</module>
   </modules>
 
   <dependencyManagement>

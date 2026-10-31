@@ -45,6 +45,8 @@ spring:
 empi:
   field-key: ${EMPI_FIELD_KEY:}
   hash-salt: ${EMPI_HASH_SALT:}
+  # 服务间内部接口令牌（clinical → empi 查询患者）；未配置时内部接口一律拒绝（fail-closed）
+  internal-token: ${INTERNAL_API_TOKEN:}
 
 management:
   endpoints:

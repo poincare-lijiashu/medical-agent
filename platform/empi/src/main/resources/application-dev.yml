@@ -8,6 +8,8 @@
 empi:
   field-key: DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4=
   hash-salt: medassist-empi-dev-salt
+  # 本机联调用的内部令牌（与 clinical 的 CLINICAL_INTERNAL_TOKEN 保持一致）
+  internal-token: medassist-dev-internal-token
 
 logging:
   level:

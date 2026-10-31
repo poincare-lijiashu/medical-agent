@@ -44,6 +44,13 @@ spring:
                 - Path=/api/v2/empi/**
               filters:
                 - StripPrefix=3
+            # 临床核心（挂号/就诊/医嘱/收费）
+            - id: platform-clinical-v2
+              uri: ${PLATFORM_CLINICAL_URI:http://127.0.0.1:8083}
+              predicates:
+                - Path=/api/v2/clinical/**
+              filters:
+                - StripPrefix=3
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -111,6 +118,8 @@ medassist:
           qps: ${SENTINEL_QPS_AUTH:200}
         - path: /api/v2/empi
           qps: ${SENTINEL_QPS_EMPI:200}
+        - path: /api/v2/clinical
+          qps: ${SENTINEL_QPS_CLINICAL:200}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
 

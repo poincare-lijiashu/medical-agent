@@ -1,0 +1,132 @@
+package com.medassist.clinical.service;
+
+import com.medassist.clinical.domain.ClinicalModel.Charge;
+import com.medassist.clinical.domain.ClinicalModel.Visit;
+import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
+import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalDtos.ChargeView;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * 计费域规则：幂等、增量累加、状态机。
+ */
+class BillingServiceTest {
+
+    private ClinicalRepository repo;
+    private BillingService service;
+
+    private final UUID visitId = UUID.randomUUID();
+    private final UUID chargeId = UUID.randomUUID();
+    private final UUID deptId = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        repo = mock(ClinicalRepository.class);
+        service = new BillingService(repo, JsonMapper.builder().build());
+        when(repo.listChargeItems(chargeId)).thenReturn(List.of());
+    }
+
+    private Visit visit(String status) {
+        return new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
+                "OUTPATIENT", status, LocalDate.now(), 0L);
+    }
+
+    private VisitOrder order(String amount) {
+        BigDecimal amt = new BigDecimal(amount);
+        return new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC", "血常规",
+                null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L);
+    }
+
+    @Test
+    @DisplayName("已收费的就诊重复结算：直接返回原单，不重复累加")
+    void settleIsIdempotentWhenPaid() {
+        Charge paid = new Charge(chargeId, "C1", visitId, new BigDecimal("35.00"),
+                Charge.PAID, "CASH", Instant.now(), 2L);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(paid));
+
+        ChargeView view = service.settle(visitId, "CASH", "clerk01");
+
+        assertThat(view.status()).isEqualTo(Charge.PAID);
+        assertThat(view.totalAmount()).isEqualByComparingTo("35.00");
+        verify(repo, never()).markChargePaid(any(), any(), anyString(), anyLong());
+        verify(repo, never()).markOrdersCharged(any());
+    }
+
+    @Test
+    @DisplayName("结算：待计医嘱 25.00 + 8.00 并入收费单，并置医嘱为已计费")
+    void settleAddsPendingOrders() {
+        Charge unpaid = new Charge(chargeId, "C1", visitId, new BigDecimal("10.00"),
+                Charge.UNPAID, null, null, 2L);
+        VisitOrder o1 = order("25.00");
+        VisitOrder o2 = order("8.00");
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(unpaid));
+        when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of(o1, o2));
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+        when(repo.markChargePaid(eq(chargeId), any(), eq("CASH"), eq(2L))).thenReturn(true);
+        when(repo.findChargeByVisit(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("43.00"), Charge.PAID, "CASH",
+                Instant.now(), 3L)));
+
+        ChargeView view = service.settle(visitId, "CASH", "clerk01");
+
+        assertThat(view.status()).isEqualTo(Charge.PAID);
+        assertThat(view.totalAmount()).isEqualByComparingTo("43.00");
+        verify(repo).markChargePaid(eq(chargeId), eq(new BigDecimal("33.00")), eq("CASH"), eq(2L));
+        verify(repo).markOrdersCharged(List.of(o1.id(), o2.id()));
+    }
+
+    @Test
+    @DisplayName("已取消的就诊不能收费")
+    void rejectSettleCancelledVisit() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.CANCELLED)));
+
+        assertThatThrownBy(() -> service.settle(visitId, "CASH", "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VISIT_STATUS_INVALID);
+        verify(repo, never()).markChargePaid(any(), any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("并发结算版本冲突：返回 409，而不是假装成功")
+    void rejectSettleOnVersionConflict() {
+        Charge unpaid = new Charge(chargeId, "C1", visitId, new BigDecimal("10.00"),
+                Charge.UNPAID, null, null, 0L);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockChargeByVisit(visitId)).thenReturn(Optional.of(unpaid));
+        when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of(order("25.00")));
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+        when(repo.markChargePaid(eq(chargeId), any(), anyString(), eq(0L))).thenReturn(false);
+
+        assertThatThrownBy(() -> service.settle(visitId, "CASH", "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).markOrdersCharged(any());
+    }
+}
