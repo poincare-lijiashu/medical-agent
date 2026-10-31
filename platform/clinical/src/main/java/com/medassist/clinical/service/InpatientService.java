@@ -200,11 +200,15 @@ public class InpatientService {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "只有在院（IN_HOSPITAL）状态可以出院，当前：" + a.status());
         }
-        Charge charge = repo.findChargeByVisit(a.visitId())
-                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
-        if (!Charge.PAID.equals(charge.status())) {
+        // 中途结算后可能已有多张收费单，出院只要求"没有有金额的未结单 + 没有未计费临时医嘱"
+        if (repo.hasUnsettledCharge(a.visitId())) {
             throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
-                    "出院前必须结清费用（收费单 " + charge.chargeNo() + " 当前 " + charge.status() + "）");
+                    "出院前必须结清费用（存在未结算收费单）");
+        }
+        int unbilled = repo.countUnbilledTempOrders(a.visitId());
+        if (unbilled > 0) {
+            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
+                    "还有 " + unbilled + " 条临时医嘱未计费，请先结算再办理出院");
         }
         if (!repo.updateAdmissionStatus(a.id(), Admission.IN_HOSPITAL, Admission.DISCHARGED, a.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");
@@ -218,9 +222,11 @@ public class InpatientService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         repo.updateVisitStatus(visit.id(), Visit.IN_TREATMENT, Visit.FINISHED, visit.version());
 
+        Charge latest = repo.findLatestCharge(a.visitId()).orElse(null);
         audit(actor, "DISCHARGE", "ADMISSION", a.id().toString(), Map.of(
                 "admissionNo", a.admissionNo(), "visitNo", visit.visitNo(),
-                "chargeNo", charge.chargeNo(), "totalAmount", charge.totalAmount()));
+                "chargeNo", latest == null ? "" : latest.chargeNo(),
+                "totalAmount", latest == null ? BigDecimal.ZERO : latest.totalAmount()));
         return toView(repo.findAdmission(a.id()).orElseThrow());
     }
 

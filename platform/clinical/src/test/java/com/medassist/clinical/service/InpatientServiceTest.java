@@ -136,14 +136,29 @@ class InpatientServiceTest {
         Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
                 null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
-        when(repo.findChargeByVisit(a.visitId())).thenReturn(Optional.of(
-                new Charge(UUID.randomUUID(), "C1", a.visitId(), new BigDecimal("88.00"),
-                        Charge.UNPAID, null, null, 0L)));
+        when(repo.hasUnsettledCharge(a.visitId())).thenReturn(true);
 
         assertThatThrownBy(() -> service.discharge(admissionId, "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CHARGE_STATUS_INVALID);
+        verify(repo, never()).updateAdmissionStatus(any(), any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("还有未计费的临时医嘱不得出院")
+    void dischargeRejectsUnbilledOrders() {
+        UUID admissionId = UUID.randomUUID();
+        UUID visitId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
+        when(repo.countUnbilledTempOrders(visitId)).thenReturn(2);
+
+        assertThatThrownBy(() -> service.discharge(admissionId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("临时医嘱");
         verify(repo, never()).updateAdmissionStatus(any(), any(), any(), anyLong());
     }
 
@@ -189,7 +204,9 @@ class InpatientServiceTest {
         Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
                 bedId, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 4L);
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
-        when(repo.findChargeByVisit(visitId)).thenReturn(Optional.of(
+        when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
+        when(repo.countUnbilledTempOrders(visitId)).thenReturn(0);
+        when(repo.findLatestCharge(visitId)).thenReturn(Optional.of(
                 new Charge(UUID.randomUUID(), "C1", visitId, new BigDecimal("88.00"),
                         Charge.PAID, "CASH", Instant.now(), 2L)));
         when(repo.updateAdmissionStatus(admissionId, Admission.IN_HOSPITAL, Admission.DISCHARGED, 4L))

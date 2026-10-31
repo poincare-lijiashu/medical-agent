@@ -3,6 +3,7 @@ package com.medassist.clinical.service;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
+import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -19,21 +20,28 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
- * 门诊计费与收费。
+ * 计费与收费。
  *
  * <p>幂等设计（这是收费系统最容易出事故的地方）：
  * <ul>
- *   <li>结算前先 {@code SELECT ... FOR UPDATE} 锁就诊与收费单，同一就诊的并发结算串行化；</li>
- *   <li>已 PAID 的收费单直接返回原单（重复提交收费请求不会多收一次）；</li>
- *   <li>费用明细 {@code order_id} 有唯一约束，即使锁失效也不会为同一医嘱生成第二条明细；</li>
+ *   <li>结算前先 {@code SELECT ... FOR UPDATE} 锁就诊，同一就诊的并发结算串行化；</li>
+ *   <li>没有待计内容时直接返回最近一张收费单（重复提交收费请求不会多收一次）；</li>
+ *   <li>费用明细 {@code source_key} 有唯一约束，即使锁失效也不会为同一医嘱生成第二条明细；</li>
  *   <li>金额用增量累加（{@code total_amount = total_amount + ?}），不覆盖写，避免并发丢更新。</li>
  * </ul>
+ *
+ * <p>住院中途结算：结算会把当前收费单置为 PAID；后续产生的费用在下次计费/收费时
+ * <b>自动续开新单</b>（数据库层保证每个就诊最多一张 UNPAID 收费单），出院时要求不存在
+ * 有金额的未结单。
  */
 @Service
 public class BillingService {
@@ -46,13 +54,16 @@ public class BillingService {
         this.objectMapper = objectMapper;
     }
 
-    /** 收费前预览：已计金额、待计医嘱、当前收费单。 */
+    /** 收费前预览：当前未结金额、待计医嘱、当前收费单。 */
     public BillingPreview preview(UUID visitId) {
         Visit visit = repo.findVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
-        Charge charge = repo.findChargeByVisit(visitId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND, "该就诊没有收费单：" + visit.visitNo()));
-        List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED);
+        Charge charge = currentCharge(visit)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND,
+                        "该就诊没有收费单：" + visit.visitNo()));
+        List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED).stream()
+                .filter(o -> !o.longTerm())
+                .toList();
         BigDecimal pendingAmount = pending.stream()
                 .map(VisitOrder::amount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -60,9 +71,9 @@ public class BillingService {
     }
 
     /**
-     * 结算：把待计医嘱并入收费单并置为已收费。
+     * 结算：把待计临时医嘱并入当前收费单并置为已收费。
      *
-     * <p>已结算的就诊返回原收费单（HTTP 200），调用方可安全重试。
+     * <p>没有待计内容时返回最近一张收费单（HTTP 200），调用方可安全重试。
      */
     @Transactional
     public ChargeView settle(UUID visitId, String paymentMethod, String actor) {
@@ -71,21 +82,25 @@ public class BillingService {
         if (Visit.CANCELLED.equals(visit.status())) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "该就诊已取消，不能收费");
         }
-        Charge charge = repo.lockChargeByVisit(visitId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
-        if (Charge.PAID.equals(charge.status())) {
-            audit(actor, "CHARGE_SETTLE_IDEMPOTENT", visitId.toString(),
-                    Map.of("visitNo", visit.visitNo(), "chargeNo", charge.chargeNo()));
-            return toView(charge);
-        }
-        if (Charge.REFUNDED.equals(charge.status())) {
-            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID, "该收费单已退费，不能再收费");
-        }
 
         // 长嘱按日计费（dailyBill），结算只处理临时医嘱，避免与日报重复计费
         List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED).stream()
                 .filter(o -> !o.longTerm())
                 .toList();
+
+        Charge charge = repo.lockOpenCharge(visitId).orElse(null);
+        if (charge == null) {
+            Charge latest = repo.findLatestCharge(visitId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
+            if (pending.isEmpty()) {
+                audit(actor, "CHARGE_SETTLE_IDEMPOTENT", visitId.toString(),
+                        Map.of("visitNo", visit.visitNo(), "chargeNo", latest.chargeNo()));
+                return toView(latest);
+            }
+            // 中途结算后产生的新费用：续开一张收费单
+            charge = newCharge(visit);
+        }
+
         BigDecimal addAmount = BigDecimal.ZERO;
         for (VisitOrder o : pending) {
             boolean inserted = repo.insertChargeItem(UUID.randomUUID(), charge.id(), o.id(),
@@ -95,13 +110,13 @@ public class BillingService {
             }
         }
 
+        BigDecimal payable = charge.totalAmount().add(addAmount);
         String method = paymentMethod.trim().toUpperCase();
         if ("DEPOSIT".equals(method)) {
             // 预交金抵扣：仅住院；余额不足直接拒绝（欠费拦截）
             Admission admission = repo.findActiveAdmissionByVisit(visitId)
                     .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED,
                             "只有住院就诊可以使用预交金结算"));
-            BigDecimal payable = charge.totalAmount().add(addAmount);
             BigDecimal balance = repo.depositBalance(admission.id());
             if (balance.compareTo(payable) < 0) {
                 throw new BusinessException(ErrorCode.CONFLICT,
@@ -123,13 +138,14 @@ public class BillingService {
                 "visitNo", visit.visitNo(), "chargeNo", charge.chargeNo(),
                 "orderCount", pending.size(), "addedAmount", addAmount,
                 "paymentMethod", paymentMethod.trim()));
-        return toView(repo.findChargeByVisit(visitId).orElseThrow());
+        return toView(repo.findCharge(charge.id()).orElseThrow());
     }
 
     /**
      * 住院长嘱按日计费：同一长嘱同一天只计一次（source_key 唯一兜底），可安全重跑。
      *
-     * <p>只计费"当日有效"的长嘱（start_date ≤ date ≤ stop_date），停嘱当日仍计费。
+     * <p>只计费"当日有效"的长嘱（start_date ≤ date ≤ stop_date），停嘱当日仍计费；
+     * 当日护理执行记录为 REFUSED / OMITTED 的医嘱不计费（执行与计费对账）。
      */
     @Transactional
     public DailyBillResult dailyBill(UUID visitId, LocalDate date, String actor) {
@@ -142,18 +158,41 @@ public class BillingService {
         if (!visit.active()) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能计费");
         }
-        Charge charge = repo.lockChargeByVisit(visitId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
-        if (Charge.PAID.equals(charge.status())) {
-            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID, "收费单已结算，不能再按日计费");
+        if (billDate.isAfter(LocalDate.now())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能对未来日期按日计费");
         }
 
-        List<VisitOrder> orders = repo.listBillableLongOrders(visitId, billDate).stream()
-                .filter(o -> o.billableOn(billDate))
-                .toList();
+        Map<UUID, NursingExecution> executions = repo.listNursingExecutions(visitId, billDate).stream()
+                .collect(Collectors.toMap(NursingExecution::orderId, Function.identity(), (a, b) -> a));
+
+        List<VisitOrder> billable = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        for (VisitOrder o : repo.listBillableLongOrders(visitId, billDate)) {
+            if (!o.billableOn(billDate)) {
+                continue;
+            }
+            NursingExecution exec = executions.get(o.id());
+            if (exec != null && !exec.executed()) {
+                skipped.add(o.orderNo());
+                continue;
+            }
+            billable.add(o);
+        }
+
+        Charge charge = repo.lockOpenCharge(visitId).orElse(null);
+        if (charge == null) {
+            if (billable.isEmpty()) {
+                BigDecimal total = repo.findLatestCharge(visitId)
+                        .map(Charge::totalAmount).orElse(BigDecimal.ZERO);
+                return new DailyBillResult(billDate, 0, BigDecimal.ZERO, total, skipped);
+            }
+            // 中途结算后继续住院：续开收费单
+            charge = newCharge(visit);
+        }
+
         BigDecimal addAmount = BigDecimal.ZERO;
         int billed = 0;
-        for (VisitOrder o : orders) {
+        for (VisitOrder o : billable) {
             String sourceKey = "DAILY:" + o.id() + ":" + billDate;
             if (repo.insertChargeItem(UUID.randomUUID(), charge.id(), o.id(), sourceKey,
                     o.itemCode(), o.itemName(), categoryOf(o), o.amount())) {
@@ -165,23 +204,39 @@ public class BillingService {
                 && !repo.addChargeAmount(charge.id(), addAmount, charge.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
         }
-        Charge latest = repo.findChargeByVisit(visitId).orElseThrow();
+        Charge latest = repo.findCharge(charge.id()).orElseThrow();
 
-        audit(actor, "DAILY_BILL", visitId.toString(), Map.of(
-                "visitNo", visit.visitNo(), "date", billDate.toString(),
-                "orderCount", billed, "billedAmount", addAmount,
-                "chargeTotal", latest.totalAmount()));
-        return new DailyBillResult(billDate, billed, addAmount, latest.totalAmount());
+        if (billed > 0 || !skipped.isEmpty()) {
+            audit(actor, "DAILY_BILL", visitId.toString(), Map.of(
+                    "visitNo", visit.visitNo(), "date", billDate.toString(),
+                    "orderCount", billed, "billedAmount", addAmount,
+                    "skippedOrderNos", skipped, "chargeTotal", latest.totalAmount()));
+        }
+        return new DailyBillResult(billDate, billed, addAmount, latest.totalAmount(), skipped);
     }
 
+    /** 最近一张收费单（含明细），兼容"中途结算后存在多张单"。 */
     public ChargeView chargeOf(UUID visitId) {
-        repo.findVisit(visitId).orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
-        Charge charge = repo.findChargeByVisit(visitId)
+        Visit visit = repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        Charge charge = currentCharge(visit)
                 .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
         return toView(charge);
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /** 当前收费单：优先未结单，否则最近一张。 */
+    private java.util.Optional<Charge> currentCharge(Visit visit) {
+        return repo.findOpenCharge(visit.id()).or(() -> repo.findLatestCharge(visit.id()));
+    }
+
+    private Charge newCharge(Visit visit) {
+        Charge charge = new Charge(UUID.randomUUID(), repo.nextChargeNo(), visit.id(),
+                BigDecimal.ZERO, Charge.UNPAID, null, null, 0L);
+        repo.insertCharge(charge);
+        return charge;
+    }
 
     private String categoryOf(VisitOrder o) {
         return switch (o.orderType()) {

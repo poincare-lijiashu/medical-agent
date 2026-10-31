@@ -45,12 +45,14 @@ spring:
               filters:
                 - StripPrefix=3
             # 临床核心（挂号/就诊/医嘱/收费）
+            # 注意：clinical 服务的控制器自带 /clinical 前缀（BillingController 等），
+            # 因此这里只剥掉 /api/v2，剥 3 段会变成 /wards 导致全量 404。
             - id: platform-clinical-v2
               uri: ${PLATFORM_CLINICAL_URI:http://127.0.0.1:8083}
               predicates:
                 - Path=/api/v2/clinical/**
               filters:
-                - StripPrefix=3
+                - StripPrefix=2
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2

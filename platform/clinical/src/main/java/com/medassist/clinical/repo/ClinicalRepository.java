@@ -6,6 +6,7 @@ import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
+import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
@@ -26,11 +27,11 @@ import java.util.UUID;
  *
  * <p>关键并发语义：
  * <ul>
- *   <li>{@link #lockSlot} / {@link #lockVisit} / {@link #lockChargeByVisit} 使用
+ *   <li>{@link #lockSlot} / {@link #lockVisit} / {@link #lockOpenCharge} 使用
  *       {@code SELECT ... FOR UPDATE}，必须在事务内调用；</li>
  *   <li>{@link #occupySlot} 用 {@code booked < total} 作为数据库级守卫，
  *       即使应用层判断被绕过也不会超卖；</li>
- *   <li>{@link #insertChargeItem} 依赖 {@code order_id} 唯一约束实现"同一医嘱只计一次"。</li>
+ *   <li>{@link #insertChargeItem} 依赖 {@code source_key} 唯一索引实现"同一医嘱/同一天只计一次"。</li>
  * </ul>
  */
 @Repository
@@ -283,6 +284,14 @@ public class ClinicalRepository {
                 .query(ORDER_MAPPER).list();
     }
 
+    public Optional<VisitOrder> findOrder(UUID visitId, UUID orderId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.visit_order WHERE id = :orderId AND visit_id = :visitId
+                        """)
+                .param("orderId", orderId).param("visitId", visitId)
+                .query(ORDER_MAPPER).optional();
+    }
+
     public List<VisitOrder> listOrders(UUID visitId, String status) {
         if (status == null || status.isBlank()) {
             return jdbc.sql("""
@@ -321,19 +330,66 @@ public class ClinicalRepository {
 
     // ---------------------------------------------------------------- 收费
 
-    public Optional<Charge> findChargeByVisit(UUID visitId) {
+    /** 当前未结收费单（每个就诊最多一张，部分唯一索引兜底）。 */
+    public Optional<Charge> findOpenCharge(UUID visitId) {
         return jdbc.sql("""
                         SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
-                          FROM clinical_svc.charge WHERE visit_id = ?
+                          FROM clinical_svc.charge
+                         WHERE visit_id = ? AND status = 'UNPAID'
+                         ORDER BY created_at DESC LIMIT 1
                         """).param(visitId).query(CHARGE_MAPPER).optional();
     }
 
-    /** 加行锁读取收费单；必须在事务内调用。 */
-    public Optional<Charge> lockChargeByVisit(UUID visitId) {
+    /** 加行锁读取未结收费单；必须在事务内调用。 */
+    public Optional<Charge> lockOpenCharge(UUID visitId) {
         return jdbc.sql("""
                         SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
-                          FROM clinical_svc.charge WHERE visit_id = ? FOR UPDATE
+                          FROM clinical_svc.charge
+                         WHERE visit_id = ? AND status = 'UNPAID'
+                         ORDER BY created_at DESC LIMIT 1
+                           FOR UPDATE
                         """).param(visitId).query(CHARGE_MAPPER).optional();
+    }
+
+    /** 最近一张收费单（结算幂等返回用；中途结算后可能有历史已结单）。 */
+    public Optional<Charge> findLatestCharge(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
+                          FROM clinical_svc.charge WHERE visit_id = ?
+                         ORDER BY created_at DESC LIMIT 1
+                        """).param(visitId).query(CHARGE_MAPPER).optional();
+    }
+
+    public Optional<Charge> findCharge(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
+                          FROM clinical_svc.charge WHERE id = ?
+                        """).param(id).query(CHARGE_MAPPER).optional();
+    }
+
+    public List<Charge> listCharges(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, charge_no, visit_id, total_amount, status, payment_method, paid_at, version
+                          FROM clinical_svc.charge WHERE visit_id = ? ORDER BY created_at
+                        """).param(visitId).query(CHARGE_MAPPER).list();
+    }
+
+    /** 是否存在"有金额的未结收费单"（出院前必须为 false）。 */
+    public boolean hasUnsettledCharge(UUID visitId) {
+        Long n = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.charge
+                         WHERE visit_id = ? AND status = 'UNPAID' AND total_amount > 0
+                        """).param(visitId).query(Long.class).single();
+        return n != null && n > 0;
+    }
+
+    /** 未计费的临时医嘱条数（出院前必须为 0；长嘱不在此列，出院即视为停止）。 */
+    public int countUnbilledTempOrders(UUID visitId) {
+        Long n = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.visit_order
+                         WHERE visit_id = ? AND status = 'PLACED' AND order_mode = 'TEMP'
+                        """).param(visitId).query(Long.class).single();
+        return n == null ? 0 : n.intValue();
     }
 
     public void insertCharge(Charge c) {
@@ -387,6 +443,18 @@ public class ClinicalRepository {
     public BigDecimal sumChargedItems(UUID chargeId) {
         return jdbc.sql("SELECT COALESCE(sum(amount), 0) FROM clinical_svc.charge_item WHERE charge_id = ?")
                 .param(chargeId).query(BigDecimal.class).single();
+    }
+
+    /** 某就诊某日按日计费（DAILY）的金额合计，用于费用看板对账。 */
+    public BigDecimal sumDailyBilled(UUID visitId, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT COALESCE(sum(ci.amount), 0)
+                          FROM clinical_svc.charge_item ci
+                          JOIN clinical_svc.charge c ON c.id = ci.charge_id
+                         WHERE c.visit_id = :visitId AND ci.source_key LIKE 'DAILY:%:' || :date
+                        """)
+                .param("visitId", visitId).param("date", date.toString())
+                .query(BigDecimal.class).single();
     }
 
     /** 挂号费明细（没有对应医嘱，order_id 为 NULL，source_key=REG:{id}）。 */
@@ -603,6 +671,26 @@ public class ClinicalRepository {
                 .param("operator", operator).update();
     }
 
+    /** 在院登记（ADMITTED + IN_HOSPITAL）；wardId 为空时返回全院。 */
+    public List<Admission> listActiveAdmissions(UUID wardId) {
+        if (wardId == null) {
+            return jdbc.sql("""
+                            SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                                   attending_doctor, status, admitted_at, discharged_at, version
+                              FROM clinical_svc.admission
+                             WHERE status IN ('ADMITTED', 'IN_HOSPITAL')
+                             ORDER BY admitted_at DESC
+                            """).query(ADMISSION_MAPPER).list();
+        }
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission
+                         WHERE ward_id = :wardId AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                         ORDER BY admitted_at DESC
+                        """).param("wardId", wardId).query(ADMISSION_MAPPER).list();
+    }
+
     public List<Admission> listAdmissions(UUID wardId, String status) {
         if (wardId == null) {
             return jdbc.sql("""
@@ -654,6 +742,56 @@ public class ClinicalRepository {
                         SELECT id, admission_id, amount, kind, method, operator, remark, created_at
                           FROM clinical_svc.deposit WHERE admission_id = ? ORDER BY created_at
                         """).param(admissionId).query(DEPOSIT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 护理执行
+
+    private static final RowMapper<NursingExecution> NURSING_MAPPER = (rs, i) -> new NursingExecution(
+            rs.getObject("id", UUID.class), rs.getObject("admission_id", UUID.class),
+            rs.getObject("visit_id", UUID.class), rs.getObject("order_id", UUID.class),
+            rs.getDate("exec_date").toLocalDate(), rs.getString("status"),
+            rs.getString("executor"), rs.getString("note"),
+            rs.getTimestamp("created_at").toInstant());
+
+    public void insertNursingExecution(NursingExecution e) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_execution
+                            (id, admission_id, visit_id, order_id, exec_date, status, executor, note)
+                        VALUES (:id, :admissionId, :visitId, :orderId, :execDate, :status, :executor, :note)
+                        """)
+                .param("id", e.id()).param("admissionId", e.admissionId())
+                .param("visitId", e.visitId()).param("orderId", e.orderId())
+                .param("execDate", e.execDate()).param("status", e.status())
+                .param("executor", e.executor()).param("note", e.note()).update();
+    }
+
+    public Optional<NursingExecution> findNursingExecution(UUID orderId, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT id, admission_id, visit_id, order_id, exec_date, status, executor, note, created_at
+                          FROM clinical_svc.nursing_execution
+                         WHERE order_id = :orderId AND exec_date = :date
+                        """)
+                .param("orderId", orderId).param("date", date)
+                .query(NURSING_MAPPER).optional();
+    }
+
+    /** 某就诊的护理执行记录；date 为空时返回全部。 */
+    public List<NursingExecution> listNursingExecutions(UUID visitId, LocalDate date) {
+        if (date == null) {
+            return jdbc.sql("""
+                            SELECT id, admission_id, visit_id, order_id, exec_date, status, executor, note, created_at
+                              FROM clinical_svc.nursing_execution
+                             WHERE visit_id = ? ORDER BY exec_date DESC, created_at DESC
+                            """).param(visitId).query(NURSING_MAPPER).list();
+        }
+        return jdbc.sql("""
+                        SELECT id, admission_id, visit_id, order_id, exec_date, status, executor, note, created_at
+                          FROM clinical_svc.nursing_execution
+                         WHERE visit_id = :visitId AND exec_date = :date
+                         ORDER BY created_at DESC
+                        """)
+                .param("visitId", visitId).param("date", date)
+                .query(NURSING_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

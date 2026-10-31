@@ -132,4 +132,23 @@ public final class ClinicalModel {
         /** 结算抵扣（负数流水）。 */
         public static final String SETTLE = "SETTLE";
     }
+
+    /**
+     * 护理执行记录（长嘱逐日执行，追加式）。
+     *
+     * <p>按日计费时以本记录核对：REFUSED / OMITTED 的医嘱当日不计费；
+     * 尚无记录时按"已执行"计费，兼容护理站尚未上线的科室。
+     */
+    public record NursingExecution(UUID id, UUID admissionId, UUID visitId, UUID orderId,
+                                   LocalDate execDate, String status, String executor,
+                                   String note, Instant createdAt) {
+
+        public static final String EXECUTED = "EXECUTED";
+        public static final String REFUSED = "REFUSED";
+        public static final String OMITTED = "OMITTED";
+
+        public boolean executed() {
+            return EXECUTED.equals(status);
+        }
+    }
 }

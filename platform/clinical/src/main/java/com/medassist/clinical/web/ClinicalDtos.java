@@ -114,9 +114,9 @@ public final class ClinicalDtos {
                                 java.time.Instant admittedAt, java.time.Instant dischargedAt) {
     }
 
-    /** 按日计费结果（当日新计金额 + 收费单累计）。 */
+    /** 按日计费结果（当日新计金额 + 收费单累计 + 因未执行而跳过的医嘱）。 */
     public record DailyBillResult(LocalDate date, int orderCount, BigDecimal billedAmount,
-                                  BigDecimal chargeTotal) {
+                                  BigDecimal chargeTotal, List<String> skippedOrderNos) {
     }
 
     /** 预交金操作（amount 必须为正；退还时服务端取负）。 */
@@ -129,5 +129,48 @@ public final class ClinicalDtos {
 
     /** 预交金余额与流水。 */
     public record DepositView(BigDecimal balance, List<com.medassist.clinical.domain.ClinicalModel.Deposit> items) {
+    }
+
+    // ---------------------------------------------------------------- 住院费用看板 / 欠费预警
+
+    /**
+     * 住院费用看板。
+     *
+     * <p>口径：{@code billedTotal} 为全部收费单累计（含已结与未结）；
+     * {@code shortfall = max(0, 未结金额 + 待计临时医嘱 - 预交金余额)}，大于 0 即欠费预警。
+     */
+    public record InpatientFinanceView(
+            UUID admissionId, String admissionNo, UUID visitId, String visitNo,
+            String patientNo, UUID wardId, String wardName, UUID bedId, String bedNo, String status,
+            java.time.Instant admittedAt,
+            BigDecimal billedTotal, BigDecimal settledTotal, BigDecimal unpaidTotal,
+            BigDecimal depositBalance,
+            BigDecimal pendingAmount, int pendingOrderCount,
+            BigDecimal dailyLongAmount, int dailyLongOrderCount,
+            BigDecimal todayBilledAmount,
+            BigDecimal shortfall, boolean warning) {
+    }
+
+    /** 欠费预警条目（仅返回 shortfall &gt; 0 的在院患者）。 */
+    public record InpatientAlert(UUID admissionId, String admissionNo, String patientNo,
+                                 UUID bedId, String bedNo, BigDecimal unpaidTotal,
+                                 BigDecimal pendingAmount, BigDecimal depositBalance,
+                                 BigDecimal shortfall) {
+    }
+
+    // ---------------------------------------------------------------- 护理执行记录
+
+    /** 护理执行记录提交（execDate 缺省为当天）。 */
+    public record NursingExecutionReq(
+            @NotNull UUID orderId,
+            LocalDate execDate,
+            @NotBlank String status,
+            String note) {
+    }
+
+    /** 护理执行记录视图。 */
+    public record NursingExecutionView(UUID id, UUID admissionId, UUID orderId, String orderNo,
+                                       String itemName, LocalDate execDate, String status,
+                                       String executor, String note, java.time.Instant createdAt) {
     }
 }

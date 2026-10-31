@@ -126,7 +126,7 @@ class RegistrationServiceTest {
                 "OUTPATIENT", Visit.REGISTERED, LocalDate.now(), 3L);
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit));
         when(repo.listOrders(visitId, null)).thenReturn(List.of());
-        when(repo.findChargeByVisit(visitId)).thenReturn(Optional.of(
+        when(repo.listCharges(visitId)).thenReturn(List.of(
                 new Charge(UUID.randomUUID(), "C1", visitId, new BigDecimal("10.00"),
                         Charge.UNPAID, null, null, 0L)));
         when(repo.updateVisitStatus(visitId, Visit.REGISTERED, Visit.CANCELLED, 3L)).thenReturn(true);

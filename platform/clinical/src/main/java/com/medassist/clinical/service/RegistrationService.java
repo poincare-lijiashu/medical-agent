@@ -201,11 +201,9 @@ public class RegistrationService {
         if (!repo.listOrders(visitId, null).isEmpty()) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "该就诊已开立医嘱，不能直接取消挂号");
         }
-        repo.findChargeByVisit(visitId).ifPresent(c -> {
-            if (Charge.PAID.equals(c.status())) {
-                throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID, "该就诊已收费，请走退费流程");
-            }
-        });
+        if (repo.listCharges(visitId).stream().anyMatch(c -> Charge.PAID.equals(c.status()))) {
+            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID, "该就诊已收费，请走退费流程");
+        }
         if (!repo.updateVisitStatus(v.id(), Visit.REGISTERED, Visit.CANCELLED, v.version())) {
             throw new BusinessException(ErrorCode.CONFLICT);
         }

@@ -137,6 +137,31 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      → 结算 **25.00 PAID / DEPOSIT** → 余额 **15.00** → 出院成功；流水 `+10 / +30 / -25`
    - 单测：clinical 26 项；平台全量 **64 项** Java 测试通过（0 失败 0 错误）
    - 下一批：N1.3 住院费用看板 + 中途欠费预警 + 护理执行记录（执行 vs 计费对账）→ N2 药房
+11. **HIS 业务域增量 5（2026-10-31）：费用看板 / 欠费预警 / 护理执行 / 中途结算续开**
+   - **中途结算续开**（V6 迁移）：`charge.visit_id` 唯一约束改为"每个就诊最多一张 UNPAID"
+     部分唯一索引；结算后再产生费用时 settle / dailyBill 自动续开新单；出院改为
+     "无有金额未结单 + 无未计费临时医嘱"
+   - **费用看板** `GET /clinical/inpatient/admissions/{id}/finance`：已计/已结/未结/待计/
+     预交金余额/当日长嘱金额/当日已计/缺口；`缺口 = max(0, 未结 + 待计 − 预交金余额)`
+   - **欠费预警** `GET /clinical/inpatient/alerts?wardId=`：只返回缺口 > 0 的在院患者，按缺口倒序
+   - **护理执行** `POST/GET /clinical/inpatient/admissions/{id}/nursing-executions`：
+     EXECUTED / REFUSED / OMITTED，`UNIQUE(order_id, exec_date)` 追加式；出院后不可补记
+   - **执行→计费对账**：dailyBill 对当日 REFUSED/OMITTED 的长嘱不计费并返回 `skippedOrderNos`；
+     无执行记录仍计费（兼容护理站未上线科室）；新增"禁止未来日期计费"（422）
+   - 权限（auth V9）：`inpatient:finance:read`（ADMIN/DOCTOR/NURSE/REGISTRAR）、
+     `inpatient:nursing:execute`（ADMIN/NURSE）
+   - **修复真实缺陷（网关）**：clinical 路由 `StripPrefix=3` 把 `/api/v2/clinical/wards`
+     剥成 `/wards`，而 clinical 控制器自带 `/clinical` → 经网关访问临床接口全量 404。
+     改为 `StripPrefix=2`，新增 `GatewayRouteConfigTest`（2 项）做配置级回归。
+     **注意**：本地 `medassist/platform-gateway:0.1.0-SNAPSHOT` 镜像仍是旧配置，
+     本轮 E2E 用源码 jar 起在 18080；镜像需在构建机重新 `docker build` 后再用。
+   - 实测（全部经网关，55 项断言全过）：入院占床 → 2 长嘱(8/25)+1 临嘱(25) →
+     REFUSED（重复 409）→ 日计 8.00 跳过 1 条 → 重跑 0 → 未来日期 422 →
+     看板缺口 33 预警 → alerts 命中 → 预交 50 缺口 0 → CASH 结算 33 →
+     新增临嘱 16 → DEPOSIT 自动续开新单 16（余额 34）→ 重复结算幂等 → 看板 49/49/0/0
+     → 出院（床 FREE、就诊 FINISHED）→ 出院后护理记录 409
+   - 单测：clinical 42、gateway 6；平台全量 **82 项** Java 测试通过（0 失败 0 错误）
+   - 下一批：**N2 药房域**（药品字典/库存批次效期/发药退药/处方审核）→ N3 医技 → N4 病历 → N5 医保
 
 ### 本机踩坑备忘（下次别再踩）
 
@@ -146,6 +171,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   `catch (DuplicateKeyException)` 会漏掉部分场景，要按需要捕获父类并给出可读文案
 - 部分唯一索引的 WHERE 条件要写清业务范围：门诊重复挂号与住院重复入院必须分别由
   不同索引拦截，否则"上午门诊、下午收住院"会被误判为重复就诊
+- Spring Cloud Gateway 的 `StripPrefix` 段数必须与下游控制器前缀严格对应：
+  auth/empi 控制器无服务前缀（剥 3 段），clinical 控制器自带 `/clinical`（剥 2 段）；
+  写错不会启动报错，只会在真实调用时全量 404（已加 `GatewayRouteConfigTest` 兜底）
+- PostgreSQL 语句失败（唯一键/CHECK）后事务进入 aborted 状态，**catch 里再查库会二次失败**
+  （表现为 500 而不是 409）：重复判定要先查后写，catch 分支里不要再发 SQL
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致
   "无法连接到远程服务器"；本机联调用 `curl.exe --noproxy "*"`，或临时清空系统代理
 - 用 `Start-Process` 起的 java 子进程会随命令会话结束被回收；常驻服务要用后台命令（run_in_background）
