@@ -59,9 +59,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    补 18 项单测、镜像 tag 守卫、灰度按 component 过滤 + HPA 自动避让、告警标签/路由、
    traceId 入日志。SHOULD-FIX 闭环 S1/S3/S5/S7/S9/S10/S16/S17/S18/S20/S21。
    **仍未做**：AuthService/TokenRepository/UserService/PatientService 的集成测试（需 Testcontainers 或 PG 测试库）、
-   S2（management 独立端口）、S11（readiness 探活依赖）、S12（egress NP）、S13（ai-core 多副本）、
+   S2（management 独立端口）、S11（readiness 探活依赖）、S12（egress NP）、
+   S13（ai-core 多副本：**需先把 /app/data 文件态迁 PG/Redis**，见下面第 5 条）、
    S14/S15（OAP TTL 与认证）、S6（短证件号脱敏）、S8（change_log 分区归档）、O 系列打磨项。
-5. **本地环境现状（2026-10-31 11:30）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
+5. **离网 + 去本机化（2026-10-31 本轮，已交付）**：
+   - 运行时离网：`EMBED_ALLOW_DOWNLOAD=false`（权重缺失**报错不下载**）、`HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE`、
+     `PUBMED_ENABLED`（prod=false，连 DNS 不发）、`backend/core/offline_guard.py` 启动自检并输出
+     `medical_agent.network_deps`；ConfigMap 固化 `EMBED_ALLOW_DOWNLOAD: "false"`。
+   - 交付包：`deploy/offline/{images.txt,pull-and-save.ps1,load-and-push.sh,README.md}`
+     （固定版本镜像清单 → save → 院内 load + 推 Harbor → helm upgrade；含断网验收与 FAQ）。
+   - 多副本共享状态：Chart 新增 `external.redis.{enabled,existingSecret,secretKey}` → 注入 `REDIS_URL`；
+     staging/prod 默认开启，dev 关闭；`requirements.txt` 固化 `redis==5.2.1`（原先注释掉，开启 Redis 也会静默退内存）。
+   - 去本机化：README/EVAL/INTEGRATION/MCP/OPERATIONS/HANDOFF 与脚本说明的 `D:\...` 绝对路径统一改为 `python ...`；
+     `platform/README.md` 移除本机计划书路径；`scripts/setup_gpu_cuda.ps1` 改为 `-PythonExe` 参数（默认 PATH 上 python）。
+   - 调研：`docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md`（医院信息化分层/网络分区/医保专线+前置机/接口规范要点/落地路线/风险）。
+   - 验证：`helm lint --strict` 四套（默认/dev/staging/prod）通过；`helm template` 实测 prod 渲染 `REDIS_URL`、
+     dev 不渲染；`pytest` 全量 **786 passed / 11 skipped**。
+   - **AI 中台仍限单副本**：审计/复核队列/KB 任务落 `/app/data` JSON，多副本会互相覆盖；
+     扩容前必须先迁 PG/Redis（S13 顺延为有前置条件的工作项）。
+6. **本地环境现状（2026-10-31 11:30）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
    auth(8081)/empi(8082, `--spring.profiles.active=dev`) 运行中；OAP(11800/12800)；
    Loki(3101)/Promtail 运行中。收工前按需停止。
    **注意**：empi 现在必须带 `EMPI_FIELD_KEY`/`EMPI_HASH_SALT` 或 `--spring.profiles.active=dev`，否则拒绝启动。
