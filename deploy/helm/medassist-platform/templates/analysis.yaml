@@ -1,0 +1,27 @@
+{{- /*
+  灰度分析模板（可选）：Argo Rollouts 在 canary 步骤中调用 Prometheus，
+  5xx 比例低于阈值即通过，连续失败达 failureLimit 则自动中止并回滚。
+  仅在 rollout.enabled && rollout.analysis.enabled 时渲染。
+*/}}
+{{- if and .Values.rollout.enabled .Values.rollout.analysis.enabled }}
+{{- range $component := .Values.rollout.components }}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" $component) }}-success-rate
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  metrics:
+    - name: success-rate
+      interval: 60s
+      failureLimit: 3
+      successCondition: result[0] >= {{ $.Values.rollout.analysis.successRateThreshold }}
+      provider:
+        prometheus:
+          address: {{ $.Values.rollout.analysis.prometheusAddress | quote }}
+          query: {{ $.Values.rollout.analysis.query | trim | quote }}
+---
+{{- end }}
+{{- end }}

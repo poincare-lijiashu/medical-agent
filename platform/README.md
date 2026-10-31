@@ -295,6 +295,16 @@ P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸
 - **部署边界**：单库多 schema 时直接 UNION；若各域拆分独立数据库，需改为 PostgreSQL FDW
   或把审计事件投递到 Loki/OLAP 后由查询层合并（已在代码注释登记）。
 
+### 8. 业务指标打点（告警依据）
+
+- auth：`medassist_auth_login_total{result,reason}`，reason ∈
+  `none / bad_credentials / user_not_found / account_disabled / no_role / throttled`；
+- gateway：`medassist_gateway_rate_limited_total{resource}`，按接口族区分；
+- 暴露在 `/actuator/prometheus`（micrometer），配套 PrometheusRule 见
+  `deploy/observability/alerts/medassist-alerts.yaml`；
+- 实测：错误密码一次 → `{reason="bad_credentials",result="failure"} 1.0`；
+  QPS=1 连击 5 次 → `401,429,429,429,429`，计数 4。
+
 ---
 
 ## P0 完成度
@@ -302,8 +312,5 @@ P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸
 P0 计划项已全部落地：骨架、网关双轨路由、auth RBAC、EMPI、统一鉴权、Helm/Argo CD、
 SkyWalking、AI 中台 Nacos 注册、Nacos 生产化。
 
-P1 已完成：权限点强制、刷新令牌与撤销、登录限速、入口限流、会话管理、审计跨域汇聚。
-剩余 P1：
-
-- Argo Rollouts 灰度发布（当前为滚动发布 + PDB）
-- 日志采集（Loki/ELK）与告警规则
+P1 已完成：权限点强制、刷新令牌与撤销、登录限速、入口限流、会话管理、审计跨域汇聚、
+Argo Rollouts 灰度（可选）、日志采集（Loki/Promtail）与告警规则、业务指标打点。

@@ -4,6 +4,7 @@ import com.alibaba.csp.sentinel.slots.block.RuleConstant;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRule;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRuleManager;
 import com.medassist.gateway.config.GatewayFlowRuleProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -52,7 +53,7 @@ class RouteRateLimitFilterTest {
     @Test
     void blocksWhenQpsExceededWithUnifiedEnvelope() {
         loadRules();
-        RouteRateLimitFilter filter = new RouteRateLimitFilter(props());
+        RouteRateLimitFilter filter = new RouteRateLimitFilter(props(), new SimpleMeterRegistry());
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.post("/api/v2/auth/login").build());
         CapturingChain chain = new CapturingChain();
@@ -67,7 +68,7 @@ class RouteRateLimitFilterTest {
     @Test
     void passesWhenUnderLimit() {
         loadRules();
-        RouteRateLimitFilter filter = new RouteRateLimitFilter(props());
+        RouteRateLimitFilter filter = new RouteRateLimitFilter(props(), new SimpleMeterRegistry());
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v2/empi/patients").build());
         CapturingChain chain = new CapturingChain();
@@ -80,7 +81,7 @@ class RouteRateLimitFilterTest {
     @Test
     void passesPathsWithoutRule() {
         loadRules();
-        RouteRateLimitFilter filter = new RouteRateLimitFilter(props());
+        RouteRateLimitFilter filter = new RouteRateLimitFilter(props(), new SimpleMeterRegistry());
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/actuator/health").build());
         CapturingChain chain = new CapturingChain();

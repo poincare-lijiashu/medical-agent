@@ -1,6 +1,7 @@
 {{- if .Values.empi.enabled }}
-apiVersion: apps/v1
-kind: Deployment
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "empi") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "empi") }}
+kind: {{ $kind }}
 metadata:
   name: {{ include "medassist.componentName" (dict "root" $ "component" "empi") }}
   namespace: {{ .Release.Namespace }}
@@ -11,11 +12,16 @@ spec:
   replicas: {{ .Values.empi.replicaCount }}
   {{- end }}
   revisionHistoryLimit: {{ .Values.empi.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "empi") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+  {{- end }}
   selector:
     matchLabels:
       {{- include "medassist.selectorLabels" (dict "root" $ "component" "empi") | nindent 6 }}

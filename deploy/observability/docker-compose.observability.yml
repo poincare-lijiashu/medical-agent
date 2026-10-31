@@ -79,5 +79,42 @@ services:
       skywalking-oap:
         condition: service_started
 
+  # ---- 日志采集：Loki + Promtail --------------------------------------------
+  # 本地以 Docker API 发现本项目容器并采集 stdout/stderr；
+  # K8s 生产环境改用 Promtail/Alloy DaemonSet（见 deploy/README.md「日志采集」）。
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.4.2}
+    container_name: medagent_loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yaml
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      # 宿主机 3100 可能被其他进程占用；容器内仍为 3100，Promtail 走服务名直连
+      - "127.0.0.1:${LOKI_HOST_PORT:-3101}:3100"
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - medagent_loki:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready | grep -q ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  promtail:
+    image: ${PROMTAIL_IMAGE:-grafana/promtail:3.4.2}
+    container_name: medagent_promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    volumes:
+      - ./loki/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      # Docker Desktop（Windows）同样支持该 socket 挂载
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+
 volumes:
   medagent_skywalking_pg:
+  medagent_loki:

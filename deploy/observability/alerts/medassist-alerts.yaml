@@ -1,0 +1,126 @@
+# ============================================================================
+# MedAssist 告警规则（Prometheus Operator：monitoring.coreos.com/v1 PrometheusRule）
+#
+# 依赖指标：
+#   * Spring Boot Actuator + Micrometer（/actuator/prometheus，经 ServiceMonitor 抓取）
+#       - http_server_requests_seconds_count{job="...", status=...}
+#       - jvm_memory_used_bytes{area="heap"}
+#   * 业务打点（本平台代码内）
+#       - medassist_auth_login_total{result,reason}     auth 登录结果
+#       - medassist_gateway_rate_limited_total{resource} 网关入口限流次数
+#   * kube-state-metrics
+#       - kube_pod_container_status_restarts_total
+#       - kube_deployment_status_replicas_unavailable
+#
+# 用法：kubectl apply -f deploy/observability/alerts/medassist-alerts.yaml
+#       （job 标签按实际 ServiceMonitor 命名调整，默认用正则匹配 release 名）
+# ============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: medassist-platform-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+    app.kubernetes.io/part-of: medassist-platform
+spec:
+  groups:
+    - name: medassist.availability
+      rules:
+        - alert: MedassistTargetDown
+          expr: up{job=~".*medassist.*"} == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MedAssist 抓取目标不可达（{{ $labels.instance }}）"
+            description: "Prometheus 连续 3 分钟无法抓取该实例，可能是 Pod 崩溃或探针失败。"
+
+        - alert: MedassistPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="medassist"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "容器反复重启：{{ $labels.pod }}/{{ $labels.container }}"
+            description: "15 分钟内重启超过 3 次，检查 CrashLoopBackOff 与启动日志。"
+
+        - alert: MedassistReplicasUnavailable
+          expr: kube_deployment_status_replicas_unavailable{namespace="medassist", deployment=~".*medassist.*"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.deployment }} 存在不可用副本"
+            description: "持续 10 分钟有副本不可用，检查就绪探针与资源限制。"
+
+    - name: medassist.http
+      rules:
+        - alert: MedassistGateway5xxRate
+          expr: |
+            sum(rate(http_server_requests_seconds_count{job=~".*gateway.*", status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_server_requests_seconds_count{job=~".*gateway.*"}[5m])), 0.001)
+            > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "网关 5xx 比例超过 5%"
+            description: "近 5 分钟 5xx/总请求 > 5%，先看 SkyWalking 最慢链路与下游错误。"
+
+        - alert: MedassistGatewayP99High
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_server_requests_seconds_bucket{job=~".*gateway.*"}[5m])) by (le)
+            ) > 2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "网关 P99 延迟超过 2s"
+            description: "检查下游 auth/empi/AI 中台耗时与数据库慢查询。"
+
+        - alert: MedassistGatewayRateLimited
+          expr: sum(rate(medassist_gateway_rate_limited_total[5m])) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "网关持续触发入口限流"
+            description: "按 resource 标签定位被削峰的接口族；结合登录失败指标判断是否为暴力破解。"
+
+    - name: medassist.auth
+      rules:
+        - alert: MedassistAuthLoginFailureSpike
+          expr: sum(rate(medassist_auth_login_total{result="failure"}[5m])) > 0.2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "登录失败速率异常（> 0.2 次/秒）"
+            description: "结合 reason 标签区分密码错误/账号不存在；持续升高可能是撞库攻击。"
+
+        - alert: MedassistAuthLoginThrottled
+          expr: sum(rate(medassist_auth_login_total{result="failure",reason="throttled"}[5m])) > 0.01
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "登录限速持续触发（疑似暴力破解）"
+            description: "查看 auth_svc.login_attempt 中 username/client_ip 分布，必要时封禁来源。"
+
+    - name: medassist.jvm
+      rules:
+        - alert: MedassistJvmHeapHigh
+          expr: |
+            sum(jvm_memory_used_bytes{job=~".*medassist.*", area="heap"}) by (instance)
+            /
+            clamp_min(sum(jvm_memory_max_bytes{job=~".*medassist.*", area="heap"}) by (instance), 1)
+            > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "JVM 堆使用率超过 90%（{{ $labels.instance }}）"
+            description: "检查 GC 日志与内存限制；持续高位可能触发 OOMKilled。"

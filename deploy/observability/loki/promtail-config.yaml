@@ -1,0 +1,40 @@
+# ============================================================================
+# Promtail 采集配置（本地 compose 形态：经 Docker API 发现容器并读取日志）
+#
+# 标签约定：
+#   service  = compose service 名（gateway / auth / empi / ai-core ...）
+#   container= 容器名
+#   stream   = stdout / stderr
+#
+# K8s 生产环境不用本文件：改用 Promtail/Alloy DaemonSet（按 namespace=medassist 过滤），
+# 对应清单与标签建议见 deploy/README.md「日志采集」章节。
+# ============================================================================
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: stream
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+      # 只采集本项目容器（compose project 名为 medagent）
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        regex: medagent
+        action: keep
+    pipeline_stages:
+      - docker: {}

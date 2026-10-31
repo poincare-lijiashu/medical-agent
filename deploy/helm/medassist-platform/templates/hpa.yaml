@@ -15,8 +15,8 @@ metadata:
     {{- include "medassist.labels" (dict "root" $ "component" $component) | nindent 4 }}
 spec:
   scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
+    apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" $component) }}
+    kind: {{ include "medassist.workloadKind" (dict "root" $ "component" $component) }}
     name: {{ include "medassist.componentName" (dict "root" $ "component" $component) }}
   minReplicas: {{ $svc.autoscaling.minReplicas }}
   maxReplicas: {{ $svc.autoscaling.maxReplicas }}

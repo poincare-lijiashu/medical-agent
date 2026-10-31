@@ -9,6 +9,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.gateway.config.GatewayFlowRuleProperties;
 import com.medassist.gateway.web.GatewayResponses;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -37,14 +38,16 @@ public class RouteRateLimitFilter implements GlobalFilter, Ordered {
     private static final Logger log = LoggerFactory.getLogger(RouteRateLimitFilter.class);
 
     private final List<GatewayFlowRuleProperties.FlowRuleSpec> rules;
+    private final MeterRegistry meterRegistry;
 
-    public RouteRateLimitFilter(GatewayFlowRuleProperties props) {
+    public RouteRateLimitFilter(GatewayFlowRuleProperties props, MeterRegistry meterRegistry) {
         // 长前缀优先：/api/v2/auth 先于 /api/v2 命中
         this.rules = props.flowRules() == null ? List.of()
                 : props.flowRules().stream()
                 .filter(r -> r.path() != null && !r.path().isBlank())
                 .sorted(Comparator.comparingInt((GatewayFlowRuleProperties.FlowRuleSpec r) -> r.path().length()).reversed())
                 .toList();
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
@@ -60,6 +63,8 @@ public class RouteRateLimitFilter implements GlobalFilter, Ordered {
             entry = SphU.entry(resource, ResourceTypeConstants.COMMON_API_GATEWAY, EntryType.IN);
         } catch (BlockException e) {
             log.warn("gateway.rate_limited resource={} path={}", resource, path);
+            // 指标：Prometheus 规则 GatewayRateLimited 依赖该计数（按接口族区分，避免单条高基数标签）
+            meterRegistry.counter("medassist.gateway.rate_limited", "resource", resource).increment();
             String traceId = exchange.getRequest().getHeaders().getFirst(AuthHeaders.TRACE_ID);
             return GatewayResponses.reject(exchange, HttpStatus.TOO_MANY_REQUESTS,
                     ErrorCode.TOO_MANY_REQUESTS, "请求过于频繁，请稍后重试", traceId);

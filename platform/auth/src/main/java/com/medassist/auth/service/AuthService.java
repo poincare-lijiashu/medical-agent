@@ -14,6 +14,7 @@ import com.medassist.auth.web.dto.SessionResp;
 import com.medassist.auth.web.dto.VerifyResp;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -57,13 +58,14 @@ public class AuthService {
     private final LoginThrottle throttle;
     private final PasswordHasher hasher;
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meterRegistry;
 
     /** 用于用户名不存在时的恒定耗时比对（服务启动时生成一次，内容无意义）。 */
     private final String dummyHash;
 
     public AuthService(UserRepository users, RbacRepository rbac, TokenRepository tokens,
                        JwtTokenService jwt, LoginThrottle throttle, PasswordHasher hasher,
-                       ObjectMapper objectMapper) {
+                       ObjectMapper objectMapper, MeterRegistry meterRegistry) {
         this.users = users;
         this.rbac = rbac;
         this.tokens = tokens;
@@ -71,6 +73,7 @@ public class AuthService {
         this.throttle = throttle;
         this.hasher = hasher;
         this.objectMapper = objectMapper;
+        this.meterRegistry = meterRegistry;
         this.dummyHash = hasher.encode(UUID.randomUUID().toString());
     }
 
@@ -82,12 +85,19 @@ public class AuthService {
      */
     public LoginResp login(LoginReq req, String clientIp, String userAgent) {
         String username = req.username().trim();
-        throttle.check(username, clientIp);
+        try {
+            throttle.check(username, clientIp);
+        } catch (BusinessException e) {
+            // 命中登录限速（429）：单独打点，便于告警区分"密码错误"与"被刷"
+            countLogin("failure", "throttled");
+            throw e;
+        }
 
         Optional<UserAccount> found = users.findByUsername(username);
         if (found.isEmpty()) {
             hasher.verify(req.password(), dummyHash);  // 恒定耗时，防账号枚举
             throttle.record(username, clientIp, false);
+            countLogin("failure", "user_not_found");
             audit("anonymous", "LOGIN_FAILED", "unknown",
                     Map.of("username", username, "reason", "USER_NOT_FOUND", "ip", clientIp));
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "用户名或密码错误");
@@ -96,12 +106,14 @@ public class AuthService {
         UserAccount user = found.get();
         if (!hasher.verify(req.password(), user.passwordHash())) {
             throttle.record(username, clientIp, false);
+            countLogin("failure", "bad_credentials");
             audit(user.username(), "LOGIN_FAILED", user.id().toString(),
                     Map.of("reason", "BAD_CREDENTIALS", "ip", clientIp));
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "用户名或密码错误");
         }
         if (!user.active()) {
             throttle.record(username, clientIp, false);
+            countLogin("failure", "account_disabled");
             audit(user.username(), "LOGIN_FAILED", user.id().toString(),
                     Map.of("reason", "ACCOUNT_" + user.status()));
             throw new BusinessException(ErrorCode.FORBIDDEN, "账号已停用或锁定，请联系管理员");
@@ -110,6 +122,7 @@ public class AuthService {
         List<String> roles = users.rolesOf(user.id());
         if (roles.isEmpty()) {
             throttle.record(username, clientIp, false);
+            countLogin("failure", "no_role");
             audit(user.username(), "LOGIN_FAILED", user.id().toString(), Map.of("reason", "NO_ROLE"));
             throw new BusinessException(ErrorCode.FORBIDDEN, "账号未分配角色，请联系管理员");
         }
@@ -122,6 +135,7 @@ public class AuthService {
 
         users.touchLogin(user.id());
         throttle.record(username, clientIp, true);
+        countLogin("success", "none");
         audit(user.username(), "LOGIN_SUCCESS", user.id().toString(),
                 Map.of("roles", roles, "tokenId", access.tokenId(), "ip", clientIp));
 
@@ -269,6 +283,11 @@ public class AuthService {
             audit(user.username(), "PASSWORD_HASH_UPGRADE_FAILED", user.id().toString(),
                     Map.of("reason", e.getClass().getSimpleName()));
         }
+    }
+
+    /** 登录结果指标：Prometheus 规则 AuthLoginFailureSpike / AuthLoginThrottled 依赖该计数。 */
+    private void countLogin(String result, String reason) {
+        meterRegistry.counter("medassist.auth.login", "result", result, "reason", reason).increment();
     }
 
     private void audit(String actor, String action, String targetId, Map<String, Object> detail) {

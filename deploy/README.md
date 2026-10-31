@@ -190,6 +190,28 @@ argocd app rollback medassist-prod <REVISION>
 Chart 在 `autoscaling.enabled=true` 时不渲染 `spec.replicas`，且 Application 配置
 `ignoreDifferences: /spec/replicas`，避免 Argo 把 HPA 扩出来的副本数拉回 Git 值。
 
+### 5.5 Argo Rollouts 灰度（可选）
+
+默认关闭（渲染 Deployment + PDB）。集群装好 `argo-rollouts` CRD 后：
+
+```bash
+helm upgrade medassist ./deploy/helm/medassist-platform -n medassist \
+  --set rollout.enabled=true --set rollout.analysis.enabled=true
+```
+
+- 仅 `rollout.components` 内的组件（默认 gateway/auth/empi）渲染为 `argoproj.io/v1alpha1 Rollout`，
+  AI 中台仍保持 Deployment；
+- 策略为**副本级灰度**（未引入 Istio/Nginx 流量切分）：`setCanaryScale.replicas=1` →
+  `pause 120s` → **人工闸门**（`kubectl argo rollouts promote <name>`）→ 全量；
+- `rollout.analysis.enabled=true` 时额外渲染 `AnalysisTemplate`，按 Prometheus 的 5xx 比例
+  （`successCondition: result[0] >= successRateThreshold`，failureLimit=3）自动判定通过/中止；
+- HPA 与 `setCanaryScale` 会互相拉扯：组件开启 HPA 时请删掉 `setCanaryScale` 步骤，只保留 `pause`；
+- 回滚：`kubectl argo rollouts undo <name>`（数据库迁移仍遵循"只前进"，见 §5.3）。
+
+实测（2026-10-31 本机）：`helm lint --strict` 通过；默认渲染 4 Deployment；
+开启 rollout 后渲染 3 Rollout + 3 AnalysisTemplate + 1 Deployment，HPA 的 `scaleTargetRef`
+自动切换为 `argoproj.io/v1alpha1/Rollout`；prod values 默认仍渲染 4 Deployment。
+
 ---
 
 ## 6. SkyWalking 接入
@@ -235,6 +257,45 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d
 2. 网关调一次 `POST /api/v2/auth/login`，在 UI 中应看到 gateway → auth 的跨进程链路（同一 traceId）
 3. AI 中台发起一次问答，应看到 ai-core 的 FastAPI 入口 span
 4. 采样率为 -1 时每个请求都有 trace；若调低采样，按比例抽样
+
+### 6.5 日志采集（Loki/Promtail）与告警
+
+**本地/院区自建形态**（已随 compose 提供）：
+
+```bash
+docker compose -f deploy/observability/docker-compose.observability.yml up -d loki promtail
+# Loki API：http://127.0.0.1:3101（宿主机 3100 常被占用，可用 LOKI_HOST_PORT 覆盖）
+```
+
+- `loki/loki-config.yaml`：单副本 + 文件系统 + TSDB(v13)，保留 30 天，关闭匿名统计；
+- `loki/promtail-config.yaml`：经 Docker API 发现容器，按 compose project=`medagent` 过滤，
+  标签 `service`（compose service）/`container`/`stream`；
+- 生产建议：3 副本 + 对象存储（MinIO/S3），或直接用 Loki 分布式 Helm Chart。
+
+**Kubernetes 形态**：不要用上面的 promtail 配置。部署 Promtail/Alloy DaemonSet，
+按 `namespace=medassist` 过滤，标签至少保留 `namespace` / `pod` / `container` / `app.kubernetes.io/component`
+（与 SkyWalking 的 service 名对齐，便于"trace → 日志"跳转）。
+
+**告警规则**：[`alerts/medassist-alerts.yaml`](alerts/medassist-alerts.yaml)（PrometheusRule），覆盖：
+
+| 告警 | 依据 | 级别 |
+|---|---|---|
+| `MedassistTargetDown` | `up{job=~".*medassist.*"} == 0` | critical |
+| `MedassistGateway5xxRate` | 网关 5xx 占比 > 5%（5 分钟） | critical |
+| `MedassistGatewayP99High` | 网关 P99 > 2s（10 分钟） | warning |
+| `MedassistGatewayRateLimited` | `medassist_gateway_rate_limited_total` 速率 > 1/s | warning |
+| `MedassistAuthLoginFailureSpike` | `medassist_auth_login_total{result="failure"}` > 0.2/s | warning |
+| `MedassistAuthLoginThrottled` | 同上，`reason="throttled"` > 0.01/s | critical |
+| `MedassistPodRestarting` / `MedassistReplicasUnavailable` | kube-state-metrics | warning |
+| `MedassistJvmHeapHigh` | JVM 堆使用率 > 90% | warning |
+
+业务指标由代码直接打点（不依赖日志解析）：
+`medassist_auth_login_total{result,reason}`（success / failure + 失败原因）、
+`medassist_gateway_rate_limited_total{resource}`（按接口族）。
+
+**实测（2026-10-31 本机）**：Loki 3.4.2 healthy；`POST /loki/api/v1/push` → 204，
+`query_range` 查到写入的测试日志；Promtail 3.4.2 启动后自动发现容器，
+Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagent_redis` 的真实 stdout 日志。
 
 ---
 
@@ -303,6 +364,8 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d
 | 授权矩阵（经容器网关） | `pharm01`（PHARMACIST）`:id?reveal=true` → **403** `无权限执行该操作：empi:patient:read_phi`；`pharm01` 访问 `/api/v2/auth/users` → **403**；`doctor01` reveal → **200** 明文（`phiMasked=false`） |
 | 会话管理（经容器网关） | `GET /api/v2/auth/sessions` 200（8 条）→ `DELETE /sessions/{id}` 200 → 再查 7 条；doctor01 删除 pharm01 会话 → **404** |
 | 审计汇聚（经容器网关） | `GET /api/v2/audit/events?targetType=PATIENT`（admin01）→ 200，返回 empi `PATIENT_VIEW_PHI` 事件；doctor01 → **403**（缺 `audit:log:read`） |
+| 业务指标（告警依据） | auth：错误密码一次 → `medassist_auth_login_total{reason="bad_credentials",result="failure"} 1.0`；网关 `SENTINEL_QPS_AUTH=1` 连击 5 次 → `401,429,429,429,429`，`medassist_gateway_rate_limited_total{resource="/api/v2/auth"} 4.0` |
+| Loki 日志链路 | Loki 3.4.2 healthy；push 204 + `query_range` 命中；Promtail 发现容器后 `container` 标签出现 `medagent_pg/nacos/redis` 真实日志 |
 | **历史密码兼容（已修复）** | v1 Python 中台用 PBKDF2-SHA256 存密码（`pbkdf2$sha256$600000$...`），V3 迁移原样导入；Java auth 原先只认 BCrypt → **导入的老账号全部无法登录**。新增 `PasswordHasher`：按前缀识别 BCrypt/PBKDF2、恒定时间比较、登录成功后**在线升级为 BCrypt**（按旧哈希 CAS，不推进 version） |
 | 兼容性验证 | `doctor01` 登录成功后库内哈希由 `pbkdf2$` 变为 `$2a$10$`；未登录的 `admin01` 保持 `pbkdf2$`（升级是按账号、按次发生） |
 | 单测 | `mvn -pl auth -am test` → 9 项全过（新增 `PasswordHasherTest` 3 项：BCrypt 往返、Python 固定向量、畸形哈希拒绝） |

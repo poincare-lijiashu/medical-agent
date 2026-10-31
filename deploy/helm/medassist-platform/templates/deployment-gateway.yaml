@@ -1,6 +1,7 @@
 {{- if .Values.gateway.enabled }}
-apiVersion: apps/v1
-kind: Deployment
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "gateway") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "gateway") }}
+kind: {{ $kind }}
 metadata:
   name: {{ include "medassist.componentName" (dict "root" $ "component" "gateway") }}
   namespace: {{ .Release.Namespace }}
@@ -11,12 +12,17 @@ spec:
   replicas: {{ .Values.gateway.replicaCount }}
   {{- end }}
   revisionHistoryLimit: {{ .Values.gateway.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "gateway") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       # 先起新再停旧：网关是在线入口，滚动期间容量不下降
       maxSurge: 1
       maxUnavailable: 0
+  {{- end }}
   selector:
     matchLabels:
       {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 6 }}

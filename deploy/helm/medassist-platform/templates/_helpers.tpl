@@ -212,6 +212,40 @@ Java 服务公共环境变量。
   emptyDir: {}
 {{- end -}}
 
+{{/* 工作负载类型：rollout.enabled=true 且组件在 rollout.components 内时用 Argo Rollouts 的 Rollout */}}
+{{- define "medassist.workloadKind" -}}
+{{- if and .root.Values.rollout.enabled (has .component .root.Values.rollout.components) -}}
+Rollout
+{{- else -}}
+Deployment
+{{- end -}}
+{{- end -}}
+
+{{- define "medassist.workloadApiVersion" -}}
+{{- if eq (include "medassist.workloadKind" .) "Rollout" -}}
+argoproj.io/v1alpha1
+{{- else -}}
+apps/v1
+{{- end -}}
+{{- end -}}
+
+{{/*
+  Canary 策略（仅 Rollout 使用）。
+  不做流量切分（未引入 Istio/Nginx canary 注解），而是按副本数逐级放量：
+  新版本先起 1 个副本 → 观察 → 人工确认 → 全量。分析模板可选（需 Prometheus）。
+*/}}
+{{- define "medassist.canaryStrategy" -}}
+strategy:
+  canary:
+    {{- if .root.Values.rollout.analysis.enabled }}
+    analysis:
+      templates:
+        - templateName: {{ include "medassist.componentName" . }}-success-rate
+    {{- end }}
+    steps:
+      {{- toYaml .root.Values.rollout.steps | nindent 6 }}
+{{- end -}}
+
 {{/* Service 名（Ingress 后端引用） */}}
 {{- define "medassist.serviceNameFor" -}}
 {{- $map := dict "gateway" "gateway" "auth" "auth" "empi" "empi" "aiCore" "ai-core" -}}

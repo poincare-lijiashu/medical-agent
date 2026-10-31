@@ -1,0 +1,53 @@
+# ============================================================================
+# Loki 单机配置（本地/院区级自建形态）
+#
+# 取舍：
+#   * 单副本 + 文件系统存储 + TSDB 索引（v13），无需对象存储，运维成本最低；
+#   * 保留 30 天，超过后由 compactor 清理（院内合规若要求更久，调 retention_period
+#     并改用 S3/MinIO 作为 object_store）；
+#   * 关闭匿名使用统计上报。
+#
+# 生产建议：3 副本 + 对象存储（MinIO/S3）+ 独立 compactor，或改用 Loki 分布式部署。
+# ============================================================================
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 720h
+  # 院内日志量有限；限流用于防止单个容器异常刷屏拖垮底座
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+  max_query_lookback: 720h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+analytics:
+  reporting_enabled: false

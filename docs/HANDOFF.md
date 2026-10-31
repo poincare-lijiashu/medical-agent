@@ -48,9 +48,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 2. **已修复真实缺陷：历史密码不可登录**。V3 从 Python 中台导入的是 PBKDF2 哈希，Java 只认 BCrypt →
    新增 `security/PasswordHasher`（BCrypt/PBKDF2 双支持 + 登录后在线升级为 BCrypt，按旧哈希 CAS），
    新增 `PasswordHasherTest`（3 项）。已实测 doctor01 登录后哈希变 `$2a$10$`，admin01 未登录仍为 `pbkdf2$`。
-3. **剩余 P1**：Argo Rollouts 灰度、日志采集（Loki/ELK）与告警、会话管理（踢出设备）、审计跨域汇聚
-4. **本地环境现状（2026-10-31 10:20）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
-   auth(8081)/empi(8082) 以 agent 方式前台后台运行；OAP(11800/12800) 运行中。收工前按需停止。
+3. **P1 已全部交付（2026-10-31）**：会话管理（`/api/v2/auth/sessions` 查看/踢出）、
+   审计跨域汇聚（`/api/v2/audit/events`，`audit:log:read`）、Argo Rollouts 灰度
+   （`rollout.enabled` 开关，可选 AnalysisTemplate）、Loki/Promtail 日志采集与
+   `deploy/observability/alerts/medassist-alerts.yaml` 告警规则、业务指标打点
+   （`medassist_auth_login_total` / `medassist_gateway_rate_limited_total`）。
+   下一阶段进入 P2（按计划书）。
+4. **本地环境现状（2026-10-31 10:35）**：medagent_pg / nacos / redis 运行中；gw-test 容器（18080）运行中；
+   auth(8081)/empi(8082) 以 agent 方式前台后台运行；OAP(11800/12800) 运行中；
+   Loki(3101)/Promtail 运行中。收工前按需停止。
 
 ### 本机踩坑备忘（下次别再踩）
 

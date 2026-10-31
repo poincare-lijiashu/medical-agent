@@ -1,6 +1,7 @@
 {{- if .Values.auth.enabled }}
-apiVersion: apps/v1
-kind: Deployment
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "auth") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "auth") }}
+kind: {{ $kind }}
 metadata:
   name: {{ include "medassist.componentName" (dict "root" $ "component" "auth") }}
   namespace: {{ .Release.Namespace }}
@@ -11,11 +12,16 @@ spec:
   replicas: {{ .Values.auth.replicaCount }}
   {{- end }}
   revisionHistoryLimit: {{ .Values.auth.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "auth") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+  {{- end }}
   selector:
     matchLabels:
       {{- include "medassist.selectorLabels" (dict "root" $ "component" "auth") | nindent 6 }}
