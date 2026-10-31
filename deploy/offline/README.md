@@ -145,3 +145,19 @@ A：`PUBMED_ENABLED=false` 的正常表现；文献能力的检索证据来自�
 - 服务之间的地址全部走环境变量（`PG_HOST`、`MILVUS_URI`、`NACOS_SERVER_ADDR` …），
   Chart 用 Service DNS 注入，不依赖 `127.0.0.1`；
 - 交付物是"镜像 tar + Chart + 模型权重"，与构建机解耦；构建机下线不影响院内运行。
+
+### 4.1 网络层兜底（可选但推荐）
+
+配置开关之外，还可用 NetworkPolicy 从网络层"焊死"公网出站：
+
+```bash
+# 先在 staging 打开（验证 DNS / PG / Redis / Milvus / Nacos / OAP / 院内 LLM 全通）
+helm upgrade medassist deploy/helm/medassist-platform -f values-staging.yaml \
+  --set networkPolicy.egress.enabled=true
+
+# 验证通过后再上生产；集群网段不是 RFC1918 时改写 networkPolicy.egress.allowedCidrs
+```
+
+开启后 ai-core 只能访问集群 DNS 与 `allowedCidrs` 内的私网地址，公网目标（HuggingFace/PubMed）
+被直接拒绝。**不要跳过 staging 验证**——白名单与实际网段不符时表现为"服务名解析失败/连接超时"，
+比配置错误更难排查。

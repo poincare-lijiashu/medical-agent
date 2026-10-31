@@ -1,7 +1,12 @@
 {{- /*
-  网络策略：只约束入站（Ingress）。出站（Egress）保持放行——业务需要访问 PG/Nacos/
-  Milvus/模型网关，若在 Chart 内硬编码出站 CIDR，换网络即断服；出站隔离应在集群
+  网络策略：默认只约束入站（Ingress）。出站（Egress）默认放行——业务需要访问 PG/Nacos/
+  Milvus/模型网关，若在 Chart 内硬编码出站 CIDR，换网络即断服；出站隔离默认由集群
   基础设施层按命名空间统一治理（平台组职责）。
+
+  例外：networkPolicy.egress.enabled=true 时，对 ai-core 追加出站白名单（仅集群 DNS +
+  私网 CIDR），用于"从网络层保证运行时不连公网"（HuggingFace/PubMed 等）。这是可选项，
+  因为一旦集群网段与 allowedCidrs 不符会直接断服——必须先在 staging 验证再上 prod。
+
   信任链：客户端 → Ingress Controller → 网关 → auth/empi/ai-core；服务端口不对
   Ingress 直接暴露，业务服务只接受同命名空间网关 Pod 的访问。
 */}}
@@ -63,6 +68,7 @@ spec:
 {{- end }}
 {{- end }}
 {{- if .Values.aiCore.enabled }}
+{{- $egress := .Values.networkPolicy.egress }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -74,7 +80,11 @@ spec:
   podSelector:
     matchLabels:
       {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}
-  policyTypes: ["Ingress"]
+  policyTypes:
+    - Ingress
+    {{- if $egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     - from:
         - namespaceSelector:
@@ -91,5 +101,25 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.aiCore.service.port }}
+  {{- if $egress.enabled }}
+  egress:
+    # 1) 集群 DNS（否则一切服务名解析失败，且故障现象极具迷惑性）
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $egress.dnsNamespace }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 2) 私网 CIDR 全端口：PG/Redis/Nacos/Milvus/OAP/院内 LLM 网关
+    #    公网目标不在白名单内 → 被拒（HF/PubMed 等运行时下载从网络层兜死）
+    - to:
+        {{- range $egress.allowedCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+  {{- end }}
 {{- end }}
 {{- end }}

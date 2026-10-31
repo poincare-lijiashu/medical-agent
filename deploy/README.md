@@ -415,6 +415,9 @@ Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagen
   `backend/core/offline_guard.py` 启动自检网络依赖。
 - **Redis（多副本共享状态）**：`external.redis.enabled=true` 时注入 `REDIS_URL`（Secret 键 `url`，
   完整连接串）。staging/prod 已默认开启；关闭会退化为进程内内存（多副本限流/会话失真）。
+- **出站管控可选**：`networkPolicy.egress.enabled=true` 时仅 ai-core 生效（集群 DNS + 私网 CIDR），
+  默认关闭以免集群网段不符时断服；上线顺序见 `deploy/offline/README.md` §4.1。其余组件出站仍
+  交给集群基础设施层统一治理。
 - **AI 中台单副本约束**：审计/复核队列/知识库任务仍落 `/app/data` JSON，多副本会互相覆盖；
   扩容前先迁 PG/Redis，再换共享存储并开 PDB（`values-prod.yaml` 已注记）。
 - **Argo CD 仓库地址为占位**：落地时替换并配置仓库凭据（见 §5.1）

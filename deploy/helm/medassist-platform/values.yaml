@@ -313,6 +313,17 @@ networkPolicy:
   # 监控命名空间（Prometheus 抓取 /actuator）
   monitoringNamespaceSelector:
     kubernetes.io/metadata.name: monitoring
+  # 出站管控（默认关闭）：开启后 ai-core 只能访问"私网 CIDR + 集群 DNS"，
+  # 从网络层保证运行时不偷偷连 HuggingFace/PubMed 等公网服务。
+  # 上线顺序：先在 staging 开启，验证 PG/Redis/Milvus/Nacos/OAP/LLM 网关全通，
+  # 再在 prod 开启；集群网段不是 RFC1918 时按实际改写 allowedCidrs。
+  egress:
+    enabled: false
+    dnsNamespace: kube-system
+    allowedCidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
 
 # ---- Prometheus Operator 抓取（可选）----
 serviceMonitor:

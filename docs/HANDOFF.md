@@ -72,6 +72,10 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      staging/prod 默认开启，dev 关闭；`requirements.txt` 固化 `redis==5.2.1`（原先注释掉，开启 Redis 也会静默退内存）。
    - 去本机化：README/EVAL/INTEGRATION/MCP/OPERATIONS/HANDOFF 与脚本说明的 `D:\...` 绝对路径统一改为 `python ...`；
      `platform/README.md` 移除本机计划书路径；`scripts/setup_gpu_cuda.ps1` 改为 `-PythonExe` 参数（默认 PATH 上 python）。
+   - 网络层兜底（可选）：`networkPolicy.egress.enabled=true` 时 ai-core 只允许集群 DNS + 私网 CIDR，
+     公网（HF/PubMed）直接拒绝；默认关闭，要求先在 staging 验证再上 prod（`deploy/offline/README.md` §4.1）。
+   - **修复真实缺陷**：`Dockerfile` 仍 `COPY frontend ./frontend`，而 legacy `frontend/` 已在轮4 删除
+     → 镜像构建必失败；改为 `COPY frontend-vue/dist`（产物已入库，免 node 环境），README 架构说明同步。
    - 调研：`docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md`（医院信息化分层/网络分区/医保专线+前置机/接口规范要点/落地路线/风险）。
    - 验证：`helm lint --strict` 四套（默认/dev/staging/prod）通过；`helm template` 实测 prod 渲染 `REDIS_URL`、
      dev 不渲染；`pytest` 全量 **786 passed / 11 skipped**。
