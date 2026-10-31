@@ -240,14 +240,21 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `%`/`_` 转义；V2 里 `CREATE EXTENSION pg_trgm` 失败仅告警，不影响功能
    - 打印视图：`GET /emr/records/{id}/print` 返回 A4 HTML（全部文本 HTML 转义），
      浏览器「打印→另存为 PDF」导出；**未引入 PDF 库**（离线仓库无 OpenPDF，避免新增依赖）
+   - 书写时限质控（V3 迁移）：创建病历时经 clinical 内部接口
+     `GET /internal/admissions/by-visit/{visitId}`（共享令牌）取回入院时间，固化到
+     `medical_record.visit_started_at`；`TIMELINESS` 规则按 now-入院时间 计算，
+     入院记录 >24h、首程 >8h 记 MAJOR（不阻断）；门诊/上游不可用时跳过（fail-open）
+   - Helm：emr 注入 `CLINICAL_INTERNAL_URI`，NetworkPolicy 允许 emr → clinical；
+     令牌沿用共享内部令牌（`EMR_CLINICAL_TOKEN` 缺省回落到 `EMR_INTERNAL_TOKEN`）
    - 权限（auth V14）：新增 `emr:record:approve`，授予 ADMIN/QC
-   - 实测（经网关 **68 项断言全过**）：主治未签时归档 409、加签后归档成功、
-     本人审批 409、QC 审批通过后 revision 2/SUBMITTED/哈希清空、驳回后仍 ARCHIVED；
-     单测 emr 26 项（新增 9 项服务规则 + 2 项打印视图 XSS/元数据）
+   - 实测（经网关 **77 项断言全过**）：主治未签时归档 409、加签后归档成功、
+     本人审批 409、QC 审批通过后 revision 2/SUBMITTED/哈希清空、驳回后仍 ARCHIVED、
+     真住院 → 带 visitId 建病历 → 质控含 `QC-ADM-TIME` 且通过；
+     单测 emr **29 项**（含 3 项时限规则）、平台全量 **182 项**
    - **踩坑**：新增业务错误码后必须同步改 `GlobalExceptionHandler.statusOf`，
      否则默认落到 400（本轮 `EMR_SIGN_LEVEL_INVALID`/`EMR_CHANGE_REQUEST_INVALID` 先返回 400，
      E2E 断言暴露后改为 409）；`mvn -Dtest=A,B` 在 PowerShell 里要整体加引号
-   - 下一批：N4 尾项（书写时限质控，需 clinical 入院时间）或 N5 医保域
+   - 下一批：N5 医保域（目录映射/参保查询/结算清单/DRG 提示），或 N3 收尾（LIS/PACS）
 
 ### 本机踩坑备忘（下次别再踩）
 
@@ -268,6 +275,9 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   "could not determine data type"）：所有可空参数必须 `CAST(:p AS text/boolean/uuid/integer)`
 - PowerShell 里**不能把函数命名为 `Data`**（`function Data($r)` 会被解析成 `data` 语句块，
   报 "The Data section is missing its statement block"）；同理避免 `function`/`filter` 等关键字
+- 给仓储方法加重载（如 `insertRecord(record, visitStartedAt)`）后，旧的
+  `verify(repo).insertRecord(any())` 会因签名不匹配而失败；要么改断言参数（含 `isNull()`），
+  要么不留单参重载——Mockito 按方法签名匹配，不会自动挑选可用重载
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，
   否则 `imageRegistry=harbor/medassist` + `repository=medassist/platform-gateway` 会拼成三层
 - 开了 Clash（系统代理）时，PowerShell 5.1 的 `Invoke-RestMethod` 会把 `127.0.0.1` 也送进代理导致

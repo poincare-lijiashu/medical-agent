@@ -2,6 +2,7 @@ package com.medassist.emr.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.emr.client.ClinicalClient;
 import com.medassist.emr.client.PatientClient;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
@@ -50,6 +51,7 @@ class RecordServiceTest {
 
     private EmrRepository repo;
     private PatientClient patientClient;
+    private ClinicalClient clinicalClient;
     private RecordService service;
 
     private final UUID recordId = UUID.randomUUID();
@@ -65,7 +67,8 @@ class RecordServiceTest {
     void setUp() {
         repo = mock(EmrRepository.class);
         patientClient = mock(PatientClient.class);
-        service = new RecordService(repo, patientClient, JsonMapper.builder().build());
+        clinicalClient = mock(ClinicalClient.class);
+        service = new RecordService(repo, patientClient, clinicalClient, JsonMapper.builder().build());
         when(patientClient.requireActive(patientId))
                 .thenReturn(new PatientClient.PatientRef(patientId, "P20261031000001", "张三"));
         when(repo.nextRecordNo()).thenReturn("MR20261031000001");
@@ -93,6 +96,12 @@ class RecordServiceTest {
                         QcRule.REQUIRED_FIELD, "chiefComplaint", null, QcRule.FATAL, "主诉为必填项", true),
                 new QcRule(UUID.randomUUID(), "QC-ADM-DX", "初步诊断不少于 10 字", "ADMISSION_NOTE",
                         QcRule.MIN_LENGTH, "initialDiagnosis", 10, QcRule.MAJOR, "初步诊断过于简略", true));
+    }
+
+    private QcRule timelinessRule(int hours) {
+        return new QcRule(UUID.randomUUID(), "QC-ADM-TIME", "入院记录 24 小时内完成",
+                "ADMISSION_NOTE", QcRule.TIMELINESS, null, hours, QcRule.MAJOR,
+                "入院记录应在患者入院后 24 小时内完成", true);
     }
 
     // ---------------------------------------------------------------- 渲染与哈希
@@ -130,7 +139,7 @@ class RecordServiceTest {
         assertThat(view.record().status()).isEqualTo(MedicalRecord.DRAFT);
         assertThat(view.record().revision()).isEqualTo(1);
         assertThat(view.record().docType()).isEqualTo("ADMISSION_NOTE");
-        verify(repo).insertRecord(any(MedicalRecord.class));
+        verify(repo).insertRecord(any(MedicalRecord.class), org.mockito.ArgumentMatchers.isNull());
         verify(repo).logChange(eq("doctor01"), eq("RECORD_CREATE"), eq("RECORD"),
                 anyString(), anyString());
     }
@@ -210,6 +219,67 @@ class RecordServiceTest {
         assertThat(report.fatalCount()).isZero();
         assertThat(report.majorCount()).isEqualTo(1);
         verify(repo, never()).insertQcResult(any());
+    }
+
+    // ---------------------------------------------------------------- 时限质控
+
+    @Test
+    @DisplayName("时限质控：入院超过 24 小时记 MAJOR（不阻断提交）")
+    void timelinessViolationIsMajor() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 1, 1L, "{}")));
+        when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(24)));
+        when(repo.visitStartedAt(recordId)).thenReturn(Optional.of(
+                Instant.now().minus(java.time.Duration.ofHours(30))));
+        when(repo.updateStatus(recordId, MedicalRecord.DRAFT, MedicalRecord.SUBMITTED, 1L))
+                .thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 2L, "{}")));
+
+        SubmitResult result = service.submit(recordId, "doctor01");
+
+        assertThat(result.qc().passed()).isTrue();
+        assertThat(result.qc().majorCount()).isEqualTo(1);
+        assertThat(result.qc().results().get(0).message()).contains("已 30 小时");
+    }
+
+    @Test
+    @DisplayName("时限质控：入院 2 小时内提交通过")
+    void timelinessWithinWindowPasses() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 1, 1L, "{}")));
+        when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(24)));
+        when(repo.visitStartedAt(recordId)).thenReturn(Optional.of(
+                Instant.now().minus(java.time.Duration.ofHours(2))));
+        when(repo.updateStatus(recordId, MedicalRecord.DRAFT, MedicalRecord.SUBMITTED, 1L))
+                .thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 2L, "{}")));
+
+        SubmitResult result = service.submit(recordId, "doctor01");
+
+        assertThat(result.qc().passed()).isTrue();
+        assertThat(result.qc().majorCount()).isZero();
+        assertThat(result.qc().results()).hasSize(1);
+        assertThat(result.qc().results().get(0).passed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("时限质控：无入院信息（门诊/上游不可用）时跳过，不产生结果")
+    void timelinessSkippedWithoutAdmission() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 1, 1L, "{}")));
+        when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(24)));
+        when(repo.visitStartedAt(recordId)).thenReturn(Optional.empty());
+        when(repo.updateStatus(recordId, MedicalRecord.DRAFT, MedicalRecord.SUBMITTED, 1L))
+                .thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 2L, "{}")));
+
+        SubmitResult result = service.submit(recordId, "doctor01");
+
+        assertThat(result.qc().passed()).isTrue();
+        assertThat(result.qc().results()).isEmpty();
     }
 
     // ---------------------------------------------------------------- 签名 / 归档

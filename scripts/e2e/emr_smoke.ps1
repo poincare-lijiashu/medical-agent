@@ -2,14 +2,16 @@
 # MedAssist EMR smoke test, through the gateway.
 #
 # Covers: template -> draft -> QC (fatal blocks submit) -> submit -> sign
-#         -> hash verify -> archive -> amendment (history + re-sign required).
+#         -> hash verify -> archive (3-level policy) -> amendment
+#         -> CDR search / print -> archived change request (4-eyes)
+#         -> timeliness QC with real admission (needs clinical).
 #
 # ASCII only (Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
-# Prerequisites: auth :8081, empi :8082, emr :8086, gateway :18080
+# Prerequisites: auth :8081, empi :8082, clinical :8083, emr :8086, gateway :8080
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\emr_smoke.ps1
 # ============================================================================
 param(
-    [string]$BaseUrl = "http://127.0.0.1:18080",
+    [string]$BaseUrl = "http://127.0.0.1:8080",
     [string]$Username = "admin01",
     [string]$Password = "Med@2026"
 )
@@ -236,6 +238,38 @@ Check 'record2.change.reject.status' (Res $r).status 'REJECTED'
 
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$record2Id" $null $token
 Check 'record2.change.reject.recordStillArchived' (Res $r).record.status 'ARCHIVED'
+
+# ---------------------------------------------------------------- 10. timeliness QC (needs clinical :8083)
+$deptId = '11111111-1111-1111-1111-111111111111'
+$r = Invoke-Api 'POST' '/api/v2/clinical/wards' @{
+    code = "WARD-T$suffix"; name = "Timeliness Ward $suffix"; deptId = $deptId
+} $token
+Check 'ward.create' $r.Status 200
+$wardId = (Res $r).id
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/wards/$wardId/beds" @{ bedNos = @('A1') } $token
+Check 'bed.create' $r.Status 200
+$bedId = (Res $r)[0].id
+
+$r = Invoke-Api 'POST' '/api/v2/clinical/inpatient/admissions' @{
+    patientId = $patientId; wardId = $wardId; bedId = $bedId; attendingDoctor = 'admin01'
+} $token
+Check 'admission.create' $r.Status 200
+$visitId = (Res $r).visitId
+Check 'admission.visitIdPresent' ("$visitId".Length -gt 0) 'True'
+
+$r = Invoke-Api 'POST' '/api/v2/emr/records' @{
+    patientId = $patientId; visitId = $visitId; templateCode = 'TPL-ADMISSION'
+    title = 'Admission Note Timeliness'; content = $full
+} $token
+Check 'timeliness.record.create' $r.Status 200
+$timelinessRecordId = (Res $r).record.id
+
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$timelinessRecordId/qc" $null $token
+Check 'timeliness.qc.ok' $r.Status 200
+$timeRules = @((Res $r).results | Where-Object { $_.ruleCode -eq 'QC-ADM-TIME' })
+Check 'timeliness.rule.present' $timeRules.Count 1
+Check 'timeliness.rule.passed' $timeRules[0].passed 'True'
 
 Write-Output "-----"
 Write-Output "RECORD_ID=$recordId"

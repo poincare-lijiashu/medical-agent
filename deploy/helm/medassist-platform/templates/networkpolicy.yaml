@@ -86,6 +86,15 @@ spec:
             matchLabels:
               {{- include "medassist.selectorLabels" (dict "root" $ "component" "emr") | nindent 14 }}
         {{- end }}
+        {{- if eq $component "clinical" }}
+        # 病历域读取入院时间（书写时限质控），内网直连内部接口
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "emr") | nindent 14 }}
+        {{- end }}
         - namespaceSelector:
             {{- toYaml $.Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
       ports:

@@ -722,6 +722,22 @@ public class ClinicalRepository {
                         """).param("visitId", visitId).query(ADMISSION_MAPPER).optional();
     }
 
+    /**
+     * 按就诊号查最新一次住院（含已出院）。
+     *
+     * <p>供病历域做书写时限校验：出院后补录病历仍需拿到入院时间。
+     */
+    public Optional<Admission> findLatestAdmissionByVisit(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission
+                         WHERE visit_id = :visitId
+                         ORDER BY admitted_at DESC
+                         LIMIT 1
+                        """).param("visitId", visitId).query(ADMISSION_MAPPER).optional();
+    }
+
     public Optional<Admission> findActiveAdmissionByPatient(UUID patientId) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,

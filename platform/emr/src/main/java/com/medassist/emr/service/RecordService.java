@@ -2,6 +2,7 @@ package com.medassist.emr.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.emr.client.ClinicalClient;
 import com.medassist.emr.client.PatientClient;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
@@ -29,12 +30,15 @@ import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -54,11 +58,14 @@ public class RecordService {
 
     private final EmrRepository repo;
     private final PatientClient patientClient;
+    private final ClinicalClient clinicalClient;
     private final ObjectMapper objectMapper;
 
-    public RecordService(EmrRepository repo, PatientClient patientClient, ObjectMapper objectMapper) {
+    public RecordService(EmrRepository repo, PatientClient patientClient,
+                         ClinicalClient clinicalClient, ObjectMapper objectMapper) {
         this.repo = repo;
         this.patientClient = patientClient;
+        this.clinicalClient = clinicalClient;
         this.objectMapper = objectMapper;
     }
 
@@ -74,6 +81,10 @@ public class RecordService {
         Map<String, String> content = req.content() == null ? Map.of() : req.content();
         String contentText = render(template.schemaJson(), content);
 
+        // 入院时间从临床域取回并固化；取不到（门诊/上游不可用）时留空，时限规则自动跳过
+        Instant visitStartedAt = req.visitId() == null
+                ? null : clinicalClient.admittedAt(req.visitId()).orElse(null);
+
         MedicalRecord record = new MedicalRecord(UUID.randomUUID(), repo.nextRecordNo(),
                 patient.id(), patient.patientNo(), req.visitId(), blankToNull(req.visitNo()),
                 req.deptId(), template.docType(), template.templateCode(),
@@ -81,7 +92,7 @@ public class RecordService {
                         ? template.name() + " " + patient.name() : req.title().trim(),
                 toJson(content), contentText, actor, MedicalRecord.DRAFT, 1,
                 null, null, null, null, 0L, null);
-        repo.insertRecord(record);
+        repo.insertRecord(record, visitStartedAt);
         audit(actor, "RECORD_CREATE", "RECORD", record.id().toString(), Map.of(
                 "recordNo", record.recordNo(), "patientNo", patient.patientNo(),
                 "docType", record.docType(), "templateCode", record.templateCode()));
@@ -118,7 +129,7 @@ public class RecordService {
                     "只有草稿可以提交，当前：" + record.status());
         }
         Map<String, String> content = fromJson(record.content());
-        QcReport qc = evaluate(record, content);
+        QcReport qc = evaluate(record, content, Instant.now(), repo.visitStartedAt(id));
         if (qc.fatalCount() > 0) {
             String detail = qc.results().stream()
                     .filter(r -> !r.passed() && QcRule.FATAL.equals(r.severity()))
@@ -143,7 +154,7 @@ public class RecordService {
     public QcReport previewQc(UUID id) {
         MedicalRecord record = repo.findRecord(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        return evaluate(record, fromJson(record.content()));
+        return evaluate(record, fromJson(record.content()), Instant.now(), repo.visitStartedAt(id));
     }
 
     // ---------------------------------------------------------------- 签名 / 归档
@@ -432,26 +443,43 @@ public class RecordService {
     // ---------------------------------------------------------------- 质控引擎
 
     /**
-     * 内置三类规则，避免引入表达式引擎（表达式求值是可注入面，且难以审计）。
+     * 内置四类规则，避免引入表达式引擎（表达式求值是可注入面，且难以审计）。
      *
-     * <p>SIGNATURE_REQUIRED 在提交阶段不适用（此时还没有签名），留待归档前校验。
+     * <p>SIGNATURE_REQUIRED 在提交阶段不适用（此时还没有签名），留待归档前校验；
+     * TIMELINESS 以"入院时间 → 提交时刻"计算，没有入院信息（门诊/上游不可用）时跳过。
      */
-    private QcReport evaluate(MedicalRecord record, Map<String, String> content) {
+    private QcReport evaluate(MedicalRecord record, Map<String, String> content, Instant now,
+                              Optional<Instant> visitStartedAt) {
         List<QcRule> rules = repo.listQcRules(record.docType());
         List<QcResult> results = new ArrayList<>();
         int fatal = 0;
         int major = 0;
         int minor = 0;
         for (QcRule rule : rules) {
-            Boolean passed = switch (rule.ruleType()) {
-                case QcRule.REQUIRED_FIELD -> notBlank(content.get(rule.fieldKey()));
-                case QcRule.MIN_LENGTH -> {
-                    String v = content.get(rule.fieldKey());
-                    int min = rule.threshold() == null ? 1 : rule.threshold();
-                    yield v != null && v.trim().length() >= min;
+            Boolean passed;
+            String message = rule.message();
+            if (QcRule.TIMELINESS.equals(rule.ruleType())) {
+                if (visitStartedAt == null || visitStartedAt.isEmpty()) {
+                    passed = null;
+                } else {
+                    long hours = Math.max(0, Duration.between(visitStartedAt.get(), now).toHours());
+                    int limit = rule.threshold() == null ? 24 : rule.threshold();
+                    passed = hours <= limit;
+                    if (!passed) {
+                        message = rule.message() + "（已 " + hours + " 小时）";
+                    }
                 }
-                default -> null;
-            };
+            } else {
+                passed = switch (rule.ruleType()) {
+                    case QcRule.REQUIRED_FIELD -> notBlank(content.get(rule.fieldKey()));
+                    case QcRule.MIN_LENGTH -> {
+                        String v = content.get(rule.fieldKey());
+                        int min = rule.threshold() == null ? 1 : rule.threshold();
+                        yield v != null && v.trim().length() >= min;
+                    }
+                    default -> null;
+                };
+            }
             if (passed == null) {
                 continue;
             }
@@ -465,7 +493,7 @@ public class RecordService {
                 }
             }
             results.add(new QcResult(UUID.randomUUID(), record.id(), record.revision(),
-                    rule.ruleCode(), rule.severity(), passed, rule.message()));
+                    rule.ruleCode(), rule.severity(), passed, message));
         }
         return new QcReport(fatal == 0, fatal, major, minor, results);
     }

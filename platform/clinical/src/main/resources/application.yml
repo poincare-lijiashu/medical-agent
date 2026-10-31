@@ -44,6 +44,8 @@ clinical:
     base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
     internal-token: ${CLINICAL_INTERNAL_TOKEN:}
     timeout: ${EMPI_TIMEOUT:PT2S}
+  # 入站内部接口令牌（病历域读取入院时间）；未单独配置时沿用同一个服务间令牌
+  internal-api-token: ${CLINICAL_INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
 
 management:
   endpoints:

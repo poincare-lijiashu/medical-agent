@@ -63,6 +63,11 @@ spec:
             - name: EMPI_INTERNAL_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "empi")) .Values.empi.service.port | quote }}
             {{- end }}
+            {{- if .Values.clinical.enabled }}
+            # 临床域读取入院时间（书写时限质控），内网直连
+            - name: CLINICAL_INTERNAL_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "clinical")) .Values.clinical.service.port | quote }}
+            {{- end }}
             # 服务间令牌：须与 EMPI 的 INTERNAL_API_TOKEN 一致
             - name: EMR_INTERNAL_TOKEN
               valueFrom:

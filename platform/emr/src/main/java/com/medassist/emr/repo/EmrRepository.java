@@ -144,16 +144,20 @@ public class EmrRepository {
 
     // ---------------------------------------------------------------- 病历
 
-    public void insertRecord(MedicalRecord r) {
+    /**
+     * 插入病历；{@code visitStartedAt} 为创建时从临床域取回的入院时间（门诊为空），
+     * 供书写时限质控使用。
+     */
+    public void insertRecord(MedicalRecord r, java.time.Instant visitStartedAt) {
         jdbc.sql("""
                         INSERT INTO emr_svc.medical_record
                             (id, record_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                              doc_type, template_code, title, content, content_text, author,
-                             status, revision, version)
+                             status, revision, version, visit_started_at)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid), :docType,
                                 :templateCode, :title, CAST(:content AS jsonb), :contentText,
-                                :author, :status, 1, 0)
+                                :author, :status, 1, 0, CAST(:visitStartedAt AS timestamptz))
                         """)
                 .param("id", r.id()).param("no", r.recordNo())
                 .param("patientId", r.patientId()).param("patientNo", r.patientNo())
@@ -161,7 +165,22 @@ public class EmrRepository {
                 .param("deptId", r.deptId()).param("docType", r.docType())
                 .param("templateCode", r.templateCode()).param("title", r.title())
                 .param("content", r.content()).param("contentText", r.contentText())
-                .param("author", r.author()).param("status", r.status()).update();
+                .param("author", r.author()).param("status", r.status())
+                .param("visitStartedAt", visitStartedAt == null ? null
+                        : java.time.OffsetDateTime.ofInstant(visitStartedAt, java.time.ZoneOffset.UTC))
+                .update();
+    }
+
+    /** 病历创建时固化的入院时间；门诊病历为空。 */
+    public Optional<java.time.Instant> visitStartedAt(UUID recordId) {
+        List<java.time.Instant> rows = jdbc.sql("""
+                        SELECT visit_started_at FROM emr_svc.medical_record
+                         WHERE id = :id AND visit_started_at IS NOT NULL
+                        """)
+                .param("id", recordId)
+                .query((rs, i) -> rs.getTimestamp("visit_started_at").toInstant())
+                .list();
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     public Optional<MedicalRecord> findRecord(UUID id) {

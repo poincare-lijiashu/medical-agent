@@ -111,6 +111,7 @@ public final class EmrModel {
         public static final String REQUIRED_FIELD = "REQUIRED_FIELD";
         public static final String MIN_LENGTH = "MIN_LENGTH";
         public static final String SIGNATURE_REQUIRED = "SIGNATURE_REQUIRED";
+        public static final String TIMELINESS = "TIMELINESS";
 
         public static final String FATAL = "FATAL";
         public static final String MAJOR = "MAJOR";

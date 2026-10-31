@@ -2,6 +2,9 @@
 emr:
   empi:
     internal-token: medassist-dev-internal-token
+  clinical:
+    # 与 clinical application-dev.yml 的 internal-api-token 保持一致
+    internal-token: medassist-dev-internal-token
 
 logging:
   level:
