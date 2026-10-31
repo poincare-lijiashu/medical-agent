@@ -1,11 +1,22 @@
 FROM python:3.11-slim
 
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 构建期镜像源（国内网络默认，不依赖科学上网）：apt 与 pip 都走国内镜像。
+# 有内网 apt/pypi 仓的机构用 --build-arg 覆盖即可，例如：
+#   docker build --build-arg APT_MIRROR=mirrors.hospital.local --build-arg PIP_INDEX_URL=http://pypi.hospital.local/simple .
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_INDEX_URL=${PIP_INDEX_URL}
 
 WORKDIR /app
 
-# 系统依赖：PyMuPDF/构建需要的基础库
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 系统依赖：PyMuPDF/构建需要的基础库。
+# Debian 12/13 的源文件是 debian.sources（deb822 格式）；老镜像可能仍是 sources.list，两者都替换。
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        if [ -f "$f" ]; then sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" "$f"; fi; \
+    done; \
+    apt-get update && apt-get install -y --no-install-recommends \
     build-essential libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

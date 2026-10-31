@@ -28,12 +28,24 @@ docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
 
 构建阶段需要 Maven 与 PyPI；**运行阶段不需要**（多阶段构建，运行镜像只含 JRE / venv）。
 
-### 1.2 打包 Chart
+构建机默认走国内镜像（不需要科学上网）：`Dockerfile` 内 apt 默认 `mirrors.aliyun.com`、
+pip 默认清华源；有内网仓库时用 `--build-arg APT_MIRROR=... --build-arg PIP_INDEX_URL=...` 覆盖。
 
+```bash
+docker build \
+  --build-arg APT_MIRROR=mirrors.hospital.local \
+  --build-arg PIP_INDEX_URL=http://pypi.hospital.local/simple \
+  -t harbor.hospital.local/medassist/ai-core:1.0.0 .
+```
+
+### 1.2 打包 Chart
 ```bash
 helm package deploy/helm/medassist-platform -d offline-bundle/
 # 产物：medassist-platform-0.1.1.tgz
 ```
+
+> ai-core 镜像较大（含 torch/transformers，数 GB 级），构建机预留 ≥15GB 磁盘与 ≥8GB 内存；
+> 构建产物不要求与开发机一致，只要 `images.txt` 的 tag 与 Chart 一致即可。
 
 ### 1.3 拉取并保存全部镜像
 

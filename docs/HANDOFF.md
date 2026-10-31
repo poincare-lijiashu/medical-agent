@@ -76,6 +76,10 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      公网（HF/PubMed）直接拒绝；默认关闭，要求先在 staging 验证再上 prod（`deploy/offline/README.md` §4.1）。
    - **修复真实缺陷**：`Dockerfile` 仍 `COPY frontend ./frontend`，而 legacy `frontend/` 已在轮4 删除
      → 镜像构建必失败；改为 `COPY frontend-vue/dist`（产物已入库，免 node 环境），README 架构说明同步。
+   - **构建期去外网依赖**：`Dockerfile` 的 apt 默认 `mirrors.aliyun.com`、pip 默认清华源，
+     可用 `--build-arg APT_MIRROR/PIP_INDEX_URL` 覆盖为院内仓库（不需要科学上网即可构建）。
+     **未在本机完成整镜像构建**：本机 Docker Desktop 构建期间 API 500（daemon 降级）+ PyPI 大包下载停滞，
+     已停止；静态校验（COPY 源存在、entrypoint 可执行、dist 已入库）通过，镜像构建需在构建机上验证。
    - 调研：`docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md`（医院信息化分层/网络分区/医保专线+前置机/接口规范要点/落地路线/风险）。
    - 验证：`helm lint --strict` 四套（默认/dev/staging/prod）通过；`helm template` 实测 prod 渲染 `REDIS_URL`、
      dev 不渲染；`pytest` 全量 **786 passed / 11 skipped**。
