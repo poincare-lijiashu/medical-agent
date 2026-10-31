@@ -100,6 +100,7 @@ class SettlementExportServiceTest {
     @DisplayName("生成批次：回显被跳过的已报盘张数（MF-01）")
     void createReportsExcludedCount() {
         when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(3L);
+        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(4L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
@@ -112,23 +113,28 @@ class SettlementExportServiceTest {
         verify(repo).logChange(eq("yb01"), eq("EXPORT_BATCH_CREATE"), eq("EXPORT_BATCH"),
                 eq("EB2026110100001"), detail.capture());
         assertThat(detail.getValue()).contains("\"excludedAlreadyExported\":3");
-        assertThat(service.summary(result.batch(), 3).excludedAlreadyExported()).isEqualTo(3);
+        assertThat(service.summary(result.batch(), 3, 0).excludedAlreadyExported()).isEqualTo(3);
     }
 
     @Test
-    @DisplayName("单批超过 500 张：422")
-    void createRejectsTooManyBills() {
+    @DisplayName("单批超过 500 张：只出前 500 张并回显剩余，不再拒绝（SF-02）")
+    void createTruncatesToMaxBatchAndReportsRemaining() {
         List<SettlementBill> bills = new ArrayList<>();
-        for (int i = 0; i < 501; i++) {
+        for (int i = 0; i < 500; i++) {
             bills.add(bill());
         }
+        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(700L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(bills);
+        when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
-        assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
-                .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).errorCode())
-                .isEqualTo(ErrorCode.VALIDATION_FAILED);
-        verify(repo, never()).insertExportBatch(any());
+        SettlementExportService.ExportCreateResult result =
+                service.create(LocalDate.now(), LocalDate.now(), "yb01");
+
+        assertThat(result.batch().billCount()).isEqualTo(500);
+        assertThat(result.remainingPending()).isEqualTo(200);
+        ArgumentCaptor<Integer> limit = ArgumentCaptor.forClass(Integer.class);
+        verify(repo).listConfirmedBills(any(), any(), limit.capture());
+        assertThat(limit.getValue()).isEqualTo(500);
     }
 
     @Test
@@ -150,6 +156,7 @@ class SettlementExportServiceTest {
     @Test
     @DisplayName("生成批次：XML 含转义后的项目名、哈希 64 位、逐张落 item 并写审计")
     void createBuildsPayloadAndAudits() {
+        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
@@ -177,6 +184,7 @@ class SettlementExportServiceTest {
                 new BigDecimal("0.00"), SettlementBill.CONFIRMED, "not-json", "admin01", "yb01",
                 Instant.now(), null, null, null, BigDecimal.ONE, new BigDecimal("300000"), 1L,
                 Instant.now());
+        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(broken));
 
         assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))

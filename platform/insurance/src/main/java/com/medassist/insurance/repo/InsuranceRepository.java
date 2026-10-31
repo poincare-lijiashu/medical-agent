@@ -362,6 +362,10 @@ public class InsuranceRepository {
      *
      * <p>口径说明：按**确认时间**归属年度（基金实际支付年度），作废单与草稿不计入，
      * 重算/对账时通过 {@code excludeBillId} 排除当前清单自身，保证"生成时 = 复核时 = 对账时"。
+     *
+     * <p>年度边界必须用 {@link BusinessTime#zone()} 显式换算成绝对时刻再比较：
+     * 直接 `confirmed_at >= CAST(date AS timestamptz)` 会按**数据库会话时区**解释，
+     * 会话为 UTC 时北京时间 1 月 1 日 00:00–08:00 确认的清单会被算进上一年度（第四轮 SF-06）。
      */
     public BigDecimal insuranceUsedInYear(UUID patientId, LocalDate day, UUID excludeBillId) {
         LocalDate yearStart = LocalDate.of(day.getYear(), 1, 1);
@@ -370,11 +374,14 @@ public class InsuranceRepository {
                           FROM insurance_svc.settlement_bill
                          WHERE patient_id = :patientId
                            AND status = 'CONFIRMED'
-                           AND confirmed_at >= CAST(:yearStart AS date)
-                           AND confirmed_at < CAST(:yearStart AS date) + INTERVAL '1 year'
+                           AND confirmed_at >= :fromTs
+                           AND confirmed_at < :toTs
                            AND (CAST(:excludeId AS uuid) IS NULL OR id <> CAST(:excludeId AS uuid))
                         """)
-                .param("patientId", patientId).param("yearStart", yearStart)
+                .param("patientId", patientId)
+                .param("fromTs", yearStart.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("toTs", yearStart.plusYears(1).atStartOfDay(BusinessTime.zone())
+                        .toOffsetDateTime())
                 .param("excludeId", excludeBillId)
                 .query(BigDecimal.class).single();
     }
@@ -544,6 +551,25 @@ public class InsuranceRepository {
                          WHERE b.status = 'CONFIRMED'
                            AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
                            AND EXISTS (
+                               SELECT 1
+                                 FROM insurance_svc.settlement_export_item i
+                                 JOIN insurance_svc.settlement_export_batch x ON x.id = i.batch_id
+                                WHERE i.bill_id = b.id
+                                  AND x.status IN ('GENERATED', 'ACCEPTED'))
+                        """)
+                .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .query(Long.class).single();
+    }
+
+    /** 期间内**待报盘**（已确认且未属有效批次）的清单数量；用于分批导出时回显剩余张数。 */
+    public long countConfirmedBillsPending(LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                          FROM insurance_svc.settlement_bill b
+                         WHERE b.status = 'CONFIRMED'
+                           AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
+                           AND NOT EXISTS (
                                SELECT 1
                                  FROM insurance_svc.settlement_export_item i
                                  JOIN insurance_svc.settlement_export_batch x ON x.id = i.batch_id

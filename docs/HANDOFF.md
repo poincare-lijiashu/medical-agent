@@ -507,6 +507,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 336→**348**；`insurance_smoke.ps1` 147→**165 项**全过；
      auth 到 V22、insurance 到 V8
 
+39. **第四轮评测第二批整改（2026-11-01）：可用性与部署**
+   - **MF-04**：`insurance V9` 建部分索引 `(confirmed_at, bill_no) WHERE status='CONFIRMED'`；
+     `enable_seqscan=off` 实测 Index Only Scan（表小，正常设置下仍可能走顺序扫描）
+   - **MF-05**：deploy/README §3.2 的 PG 建表权限补全 7 个业务 schema + public，
+     并写明"缺权限 → 迁移 Hook Job 失败 → helm 卡在 pre-upgrade"与排障关键字
+   - **SF-02**：单批上限改为"生成 500 张 + 回显 `remainingPending`"，再次调用自动续批，不再 422
+   - **SF-06**：`insuranceUsedInYear` 年度边界改用 `BusinessTime.zone()` 显式换算（与报盘同口径）
+   - 验证：单测 348→**349**；`insurance_smoke.ps1` 165 项全过；insurance 到 V9
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

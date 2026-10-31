@@ -53,7 +53,7 @@ class ExportControllerPermissionTest {
     private ExportBatchSummary summary() {
         return new ExportBatchSummary(id, "EB2026110100001", LocalDate.now(), LocalDate.now(), 1,
                 new BigDecimal("10.00"), new BigDecimal("10.00"), BigDecimal.ZERO, "hash",
-                ExportBatch.GENERATED, null, null, null, null, null, "yb01", 0L, Instant.now(), 0);
+                ExportBatch.GENERATED, null, null, null, null, null, "yb01", 0L, Instant.now(), 0, 0);
     }
 
     @Test
@@ -90,8 +90,8 @@ class ExportControllerPermissionTest {
     @DisplayName("生成批次：confirm 放行并返回摘要（不含报文）")
     void createAllowedForConfirm() {
         when(service.create(LocalDate.now(), LocalDate.now(), "yb01"))
-                .thenReturn(new SettlementExportService.ExportCreateResult(batch(), 0));
-        when(service.summary(any(ExportBatch.class), anyInt())).thenReturn(summary());
+                .thenReturn(new SettlementExportService.ExportCreateResult(batch(), 0, 0));
+        when(service.summary(any(ExportBatch.class), anyInt(), anyInt())).thenReturn(summary());
 
         var resp = controller.create(LocalDate.now(), LocalDate.now(),
                 "insurance:settlement:confirm", "yb01");

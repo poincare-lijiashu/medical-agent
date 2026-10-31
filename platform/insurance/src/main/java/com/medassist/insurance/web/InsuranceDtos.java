@@ -132,6 +132,7 @@ public final class InsuranceDtos {
      * 导出批次摘要（不含 XML 报文，报文走 /payload 下载）。
      *
      * @param excludedAlreadyExported 生成批次时因"已属其它有效批次"而被跳过的清单数（仅生成时非 0）
+     * @param remainingPending        生成批次后本期间仍未报盘的清单数（>0 表示需再生成一批，SF-02）
      */
     public record ExportBatchSummary(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
                                      int billCount, BigDecimal totalAmount,
@@ -140,7 +141,7 @@ public final class InsuranceDtos {
                                      Instant receiptAt, String receiptMessage,
                                      String cancelledReason, Instant cancelledAt,
                                      String createdBy, long version, Instant createdAt,
-                                     int excludedAlreadyExported) {
+                                     int excludedAlreadyExported, int remainingPending) {
     }
 
     /** 新建支付方案（DRG 费率 / DIP 点值由省局下发，院内只做配置与模拟）。 */

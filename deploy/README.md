@@ -28,7 +28,7 @@ deploy/
                      └────────┬─────────────┬─────────────┬─────────────┘
                               │             │             │
               ┌───────────────┴─────────────┴─────────────┴──────────────┐
-              │ PostgreSQL（auth_svc / empi_svc / public）               │
+              │ PostgreSQL（7 个业务 schema + public）                    │
               │ Nacos 2.5.1（注册发现，鉴权开启 + MySQL 持久化）          │
               │ SkyWalking 11.0.0（OAP 11800/12800，Java+Python agent）  │
               │ Milvus（向量库，AI 中台依赖）                             │
@@ -58,7 +58,11 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 ## 3. 前置条件（平台组准备，业务 Chart 不代管）
 
 1. **命名空间**：`medassist-dev` / `medassist-staging` / `medassist-prod`（Argo CD 会自动创建）
-2. **PostgreSQL**：库 `medagent`，账号具备 `auth_svc` / `empi_svc` / `public` 建表权限
+2. **PostgreSQL**：库 `medagent`，账号具备以下 **7 个业务 schema** 的建表权限：
+   `auth_svc` / `empi_svc` / `clinical_svc` / `pharmacy_svc` / `tech_svc` / `emr_svc` / `insurance_svc`
+   （另需 `public`）。缺任一 schema 权限会导致对应服务的迁移 Hook Job 失败，
+   `helm upgrade` 卡在 `pre-upgrade` 且不继续发布——排障时先看迁移 Job 日志里的
+   `permission denied for schema xxx_svc`。
 3. **Nacos**：见 [`nacos/README.md`](nacos/README.md)（鉴权 + MySQL）
 4. **SkyWalking OAP**：11800（gRPC）可达；UI 供运维查看
 5. **Milvus**：AI 中台向量库地址与（可选）token

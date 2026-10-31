@@ -202,7 +202,24 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
   批次状态 `ACCEPTED(RC-…)` 与 `CANCELLED(wrong period)` 并存；
   `auth_svc` 到 V22、`insurance_svc` 到 V8。
 
-**仍未做（后续批次）**：MF-04 报盘索引、MF-05 部署文档权限、SF-02 单日超 500 张分批、SF-06 年度时区口径。
+**仍未做（后续批次）**：SF-08~SF-23（解析健壮性、数据库约束、审计查询计划、权限归属、测试与观测）。
+MF-04 / MF-05 / SF-02 / SF-06 已在 §7 闭环。
+
+---
+
+## 7. 整改状态（2026-11-01，第二批：可用性与部署）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| MF-04 | `listConfirmedBills` 无 `confirmed_at` 索引，报盘必然顺序扫描 | ✅ 已修 | `insurance V9` 建部分索引 `(confirmed_at, bill_no) WHERE status='CONFIRMED'`；`enable_seqscan=off` 下实测为 **Index Only Scan**（本项目表还小，正常设置下 planner 仍可能选顺序扫描，属正常） |
+| MF-05 | deploy/README PG 建表权限清单缺 5 个业务 schema | ✅ 已修 | §3.2 改为 7 个业务 schema + public，并注明"缺权限 → 迁移 Hook Job 失败 → helm 卡在 pre-upgrade"及排障关键字 `permission denied for schema` |
+| SF-02 | 单日 >500 张时任何子区间都超限，期间永远无法导出 | ✅ 已修 | 改为"生成当前批 ≤500 张 + 回显 `remainingPending`"，操作员再次调用即自动续批（已报盘清单已被排除）；不再以 422 拒绝 |
+| SF-06 | 年度已用统筹按 DB 会话时区解释日期边界 | ✅ 已修 | `insuranceUsedInYear` 改为用 `BusinessTime.zone()` 显式换算年度起止为绝对时刻（与 `listConfirmedBills` 同口径） |
+
+**验证**：
+- 单测 348 → **349**（`createTruncatesToMaxBatchAndReportsRemaining` 断言 500 张上限 + 剩余 200 + limit 参数为 500）；
+- `insurance_smoke.ps1` 165 项全过（无回归）；
+- 库内迁移 `insurance` 到 **V9**；`EXPLAIN` 记录见本节 MF-04 行。
 
 ---
 

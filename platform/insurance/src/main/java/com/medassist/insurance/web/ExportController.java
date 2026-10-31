@@ -60,7 +60,8 @@ public class ExportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, CONFIRM);
         SettlementExportService.ExportCreateResult result = service.create(from, to, actor);
-        return ApiResponse.ok(service.summary(result.batch(), result.excludedAlreadyExported()));
+        return ApiResponse.ok(service.summary(result.batch(),
+                result.excludedAlreadyExported(), result.remainingPending()));
     }
 
     /** 登记省局回执（ACCEPTED / REJECTED，仅未登记过的批次）。 */
@@ -71,7 +72,7 @@ public class ExportController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, CONFIRM);
-        return ApiResponse.ok(service.summary(service.receipt(id, req, actor), 0));
+        return ApiResponse.ok(service.summary(service.receipt(id, req, actor), 0, 0));
     }
 
     /** 撤销未回执的批次（GENERATED → CANCELLED），撤销后清单可在新批次重报。 */
@@ -82,7 +83,7 @@ public class ExportController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, CONFIRM);
-        return ApiResponse.ok(service.summary(service.cancel(id, req.reason(), actor), 0));
+        return ApiResponse.ok(service.summary(service.cancel(id, req.reason(), actor), 0, 0));
     }
 
     @GetMapping

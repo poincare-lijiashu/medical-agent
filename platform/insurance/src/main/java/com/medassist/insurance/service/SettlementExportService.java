@@ -57,12 +57,13 @@ public class SettlementExportService {
     }
 
     /**
-     * 生成批次的结果：批次本体 + 因"已属其它有效批次"被跳过的清单数。
+     * 生成批次的结果：批次本体 + 被跳过的已报盘张数 + 本期间仍未报盘的剩余张数。
      *
-     * <p>回显跳过数量是刻意的：操作员需要知道"本期间还有几张没进这批"，
-     * 否则会误以为已全部报盘（第四轮 MF-01）。
+     * <p>两个数量都是刻意回显的：操作员需要知道"本期间还有几张没进这批"（第四轮 MF-01），
+     * 以及"超过单批上限、需要再生成一批"的部分（第四轮 SF-02）。
      */
-    public record ExportCreateResult(ExportBatch batch, int excludedAlreadyExported) {
+    public record ExportCreateResult(ExportBatch batch, int excludedAlreadyExported,
+                                     int remainingPending) {
     }
 
     // ---------------------------------------------------------------- 生成批次
@@ -84,18 +85,21 @@ public class SettlementExportService {
         }
         // 已报盘（GENERATED/ACCEPTED）的清单不再重复纳入；退回/撤销批次可重报
         long excluded = repo.countConfirmedBillsAlreadyExported(from, to);
-        List<SettlementBill> bills = repo.listConfirmedBills(from, to, MAX_BILLS + 1);
-        if (bills.isEmpty()) {
+        long pending = repo.countConfirmedBillsPending(from, to);
+        if (pending == 0) {
             if (excluded > 0) {
                 throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY,
                         "本期间 " + excluded + " 张清单均已纳入其它批次，无需重复报盘");
             }
             throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY);
         }
-        if (bills.size() > MAX_BILLS) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "本期间待报盘清单超过 " + MAX_BILLS + " 张，请缩短期间或按日期分批导出");
+        // 单批最多 500 张：超出部分不拒绝，而是生成当前批并回显剩余张数，
+        // 操作员再次调用即自动接着报（已报盘清单已被排除，天然续批，SF-02）
+        List<SettlementBill> bills = repo.listConfirmedBills(from, to, MAX_BILLS);
+        if (bills.isEmpty()) {
+            throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY);
         }
+        int remaining = (int) Math.max(0, pending - bills.size());
 
         String batchNo = repo.nextExportBatchNo();
         String payload = buildPayload(batchNo, from, to, bills);
@@ -116,11 +120,13 @@ public class SettlementExportService {
         detail.put("periodTo", to.toString());
         detail.put("billCount", bills.size());
         detail.put("excludedAlreadyExported", excluded);
+        detail.put("remainingPending", remaining);
         detail.put("totalAmount", total.toPlainString());
         detail.put("insuranceAmount", insurance.toPlainString());
         detail.put("payloadHash", batch.payloadHash());
         audit(actor, "EXPORT_BATCH_CREATE", batchNo, detail);
-        return new ExportCreateResult(repo.findExportBatch(batch.id()).orElse(batch), (int) excluded);
+        return new ExportCreateResult(repo.findExportBatch(batch.id()).orElse(batch),
+                (int) excluded, remaining);
     }
 
     // ---------------------------------------------------------------- 回执
@@ -195,20 +201,21 @@ public class SettlementExportService {
     public List<ExportBatchSummary> list(Integer limit) {
         int size = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
         return repo.listExportBatches(size).stream()
-                .map(b -> summary(b, 0)).toList();
+                .map(b -> summary(b, 0, 0)).toList();
     }
 
     public ExportBatchSummary summary(UUID id) {
-        return summary(find(id), 0);
+        return summary(find(id), 0, 0);
     }
 
-    public ExportBatchSummary summary(ExportBatch batch, int excludedAlreadyExported) {
+    public ExportBatchSummary summary(ExportBatch batch, int excludedAlreadyExported,
+                                       int remainingPending) {
         return new ExportBatchSummary(batch.id(), batch.batchNo(), batch.periodFrom(),
                 batch.periodTo(), batch.billCount(), batch.totalAmount(),
                 batch.insuranceAmount(), batch.selfPayAmount(), batch.payloadHash(),
                 batch.status(), batch.receiptNo(), batch.receiptAt(), batch.receiptMessage(),
                 batch.cancelledReason(), batch.cancelledAt(), batch.createdBy(),
-                batch.version(), batch.createdAt(), excludedAlreadyExported);
+                batch.version(), batch.createdAt(), excludedAlreadyExported, remainingPending);
     }
 
     /**
