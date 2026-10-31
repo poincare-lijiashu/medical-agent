@@ -378,6 +378,14 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 踩坑：E2E 脚本必须纯 ASCII——中文用例会被 PowerShell 5.1 当 ANSI 读，
      尾字节吃掉后面的单引号，报 `The hash literal was incomplete`（已把脚本里历史中文串转 ASCII）
 
+25. **第三轮评测第八批整改（2026-10-31）：病历检索/打印的审计与水印（S-07）**
+   - **审计**：打印落 `RECORD_PRINT`（病历号/状态/版本）、检索落 `RECORD_SEARCH`
+     （关键词/患者/文书类型/状态/命中数）到 `emr_change_log`
+   - **水印**：非 ARCHIVED 打印输出对角线「未归档 · NOT ARCHIVED」（position:fixed 逐页出现）
+   - **权限**：`auth/V17` 新增 `emr:record:search`（仅 ADMIN/DOCTOR/QC），
+     检索接口改要求该权限；单份病历查阅仍是 `emr:record:read`（护士/窗口不受影响）
+   - 验证：单测 249→**253**；emr E2E 78→**81 项**全过；库内已出现 RECORD_PRINT/RECORD_SEARCH
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

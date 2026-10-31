@@ -92,6 +92,11 @@ $recordNo = $rec.record.recordNo
 Check 'record.draft' $rec.record.status 'DRAFT'
 Check 'record.revision' $rec.record.revision 1
 
+# unarchived print must carry the watermark (S-07)
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/print" $null $token
+Check 'print.draft.ok' $r.Status 200
+Check 'print.draft.watermark' ($r.Body -match 'NOT ARCHIVED') 'True'
+
 # QC preview: chief complaint missing => fatal
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/qc" $null $token
 Check 'qc.preview' $r.Status 200
@@ -176,6 +181,7 @@ Check 'search.wildcardEscaped' (@(Res $r).Count) 0
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$recordId/print" $null $token
 Check 'print.ok' $r.Status 200
 Check 'print.hasHash' ($r.Body -match 'SHA-256') 'True'
+Check 'print.archived.noWatermark' ($r.Body -match 'NOT ARCHIVED') 'False'
 
 # ---------------------------------------------------------------- 7.2 archived change request
 $revised = $full.Clone()

@@ -651,20 +651,35 @@ class RecordServiceTest {
     // ---------------------------------------------------------------- CDR 检索
 
     @Test
-    @DisplayName("检索：关键词同时生成模糊模式与前缀模式，通配符被转义")
+    @DisplayName("检索：关键词同时生成模糊模式与前缀模式，通配符被转义且留痕")
     void searchBuildsPatternAndPrefix() {
-        service.search(" MR2026_01 ", null, null, "signed", null, null, 0);
+        service.search(" MR2026_01 ", null, null, "signed", null, null, 0, "doctor01");
 
         verify(repo).searchRecords("%MR2026\\_01%", "MR2026\\_01%", null, null, "SIGNED",
                 null, null, 50);
+        verify(repo).logChange(eq("doctor01"), eq("RECORD_SEARCH"), eq("MEDICAL_RECORD"),
+                eq("search"), anyString());
     }
 
     @Test
     @DisplayName("检索：无关键词时不触发文本与前缀匹配，limit 上限 200")
     void searchWithoutKeyword() {
-        service.search("   ", null, null, null, null, null, 500);
+        service.search("   ", null, null, null, null, null, 500, "doctor01");
 
         verify(repo).searchRecords(null, null, null, null, null, null, null, 200);
+    }
+
+    @Test
+    @DisplayName("打印：留痕记录病历号与状态")
+    void printWritesAudit() {
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 1, 1L, "{}")));
+
+        String html = service.printHtml(recordId, "doctor01");
+
+        assertThat(html).contains("未归档");
+        verify(repo).logChange(eq("doctor01"), eq("RECORD_PRINT"), eq("MEDICAL_RECORD"),
+                eq(recordId.toString()), anyString());
     }
 
     // ---------------------------------------------------------------- 测试夹具

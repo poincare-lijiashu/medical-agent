@@ -17,11 +17,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RecordPrintRendererTest {
 
     private MedicalRecord record(String text) {
+        return record(text, MedicalRecord.ARCHIVED);
+    }
+
+    private MedicalRecord record(String text, String status) {
         return new MedicalRecord(UUID.randomUUID(), "MR20261031000001", UUID.randomUUID(),
                 "P20261031000001", null, null, null, "ADMISSION_NOTE", "TPL-ADMISSION",
-                "入院记录", "{}", text, "doctor01", MedicalRecord.ARCHIVED, 1,
+                "入院记录", "{}", text, "doctor01", status, 1,
                 "chief01", Instant.parse("2026-10-31T02:00:00Z"),
                 RecordService.sha256(text), Instant.now(), 1L, Instant.now());
+    }
+
+    @Test
+    @DisplayName("打印视图：未归档文书带对角线水印，已归档不带")
+    void watermarkOnlyForUnarchived() {
+        assertThat(RecordPrintRenderer.render(record("主诉：发热\n", MedicalRecord.SIGNED), List.of()))
+                .contains("未归档 · NOT ARCHIVED");
+        assertThat(RecordPrintRenderer.render(record("主诉：发热\n"), List.of()))
+                .doesNotContain("NOT ARCHIVED");
     }
 
     @Test

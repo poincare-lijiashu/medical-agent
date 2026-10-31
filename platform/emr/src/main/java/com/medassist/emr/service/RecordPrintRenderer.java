@@ -57,8 +57,17 @@ public final class RecordPrintRenderer {
                 .append(".hash{font-family:Consolas,monospace;font-size:7.5pt;color:#555;")
                 .append("word-break:break-all;margin-top:4mm}")
                 .append(".foot{text-align:center;font-size:9pt;color:#666;margin-top:6mm}")
+                .append(".wm{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);")
+                .append("font-size:58pt;color:rgba(190,0,0,.13);letter-spacing:10px;")
+                .append("white-space:nowrap;pointer-events:none;z-index:9}")
                 .append("@media print{.no-print{display:none}}")
-                .append("</style></head><body><div class=\"sheet\">");
+                .append("</style></head><body>");
+
+        // 未归档文书打印必须带水印：水印随每一页出现（position:fixed），避免草稿/已签名稿被当作正式病历使用
+        if (!MedicalRecord.ARCHIVED.equals(record.status())) {
+            sb.append("<div class=\"wm\">未归档 · NOT ARCHIVED</div>");
+        }
+        sb.append("<div class=\"sheet\">");
 
         sb.append("<h1>").append(esc(docTypeName(record.docType()))).append("</h1>");
 

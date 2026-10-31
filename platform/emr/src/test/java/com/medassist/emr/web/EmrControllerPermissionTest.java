@@ -106,6 +106,29 @@ class EmrControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("CDR 检索：只有 emr:record:search 可用，只读权限不够（V17）")
+    void searchRequiresSearchPermission() {
+        assertThatThrownBy(() -> controller.search("x", null, null, null, null, null, null,
+                "emr:record:read", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(service, never()).search(any(), any(), any(), any(), any(), any(), any(), anyString());
+
+        controller.search("x", null, null, null, null, null, null,
+                "emr:record:search", "doctor01");
+        verify(service).search("x", null, null, null, null, null, null, "doctor01");
+    }
+
+    @Test
+    @DisplayName("打印：只读权限放行，并把操作人传给服务层留痕")
+    void printAllowedForReadPermission() {
+        controller.print(id, "emr:record:read", "nurse01");
+
+        verify(service).printHtml(id, "nurse01");
+    }
+
+    @Test
     @DisplayName("权限头缺失：提示重新登录（403）")
     void emptyPermissionsHeader() {
         assertThatThrownBy(() -> controller.detail(id, null))

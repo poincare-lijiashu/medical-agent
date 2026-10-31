@@ -458,9 +458,10 @@ public class RecordService {
      * CDR 检索：关键词可空，其余条件均可叠加。
      *
      * <p>关键词同时用于两路检索：标题/正文模糊匹配，病历号/患者号前缀匹配。
+     * 检索本身也要留痕（谁、什么条件、命中多少条），用于事后核查 PHI 访问。
      */
     public List<RecordHit> search(String q, UUID patientId, String docType, String status,
-                                  LocalDate from, LocalDate to, Integer limit) {
+                                  LocalDate from, LocalDate to, Integer limit, String actor) {
         String keyword = (q == null || q.isBlank()) ? null : q.trim();
         String escaped = keyword == null ? null : escapeLike(keyword);
         String pattern = escaped == null ? null : "%" + escaped + "%";
@@ -469,15 +470,27 @@ public class RecordService {
         String normalizedStatus = (status == null || status.isBlank())
                 ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.searchRecords(pattern, prefix, patientId, normalizedDocType, normalizedStatus,
-                from, to, size);
+        List<RecordHit> hits = repo.searchRecords(pattern, prefix, patientId, normalizedDocType,
+                normalizedStatus, from, to, size);
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("keyword", keyword == null ? "" : keyword);
+        detail.put("patientId", patientId == null ? "" : patientId.toString());
+        detail.put("docType", normalizedDocType == null ? "" : normalizedDocType);
+        detail.put("status", normalizedStatus == null ? "" : normalizedStatus);
+        detail.put("hits", hits.size());
+        audit(actor, "RECORD_SEARCH", "MEDICAL_RECORD", "search", detail);
+        return hits;
     }
 
-    /** 打印视图（HTML，浏览器打印为 PDF）。 */
-    public String printHtml(UUID id) {
+    /** 打印视图（HTML，浏览器打印为 PDF）；未归档文书带"未归档"水印，并留痕。 */
+    public String printHtml(UUID id, String actor) {
         MedicalRecord record = repo.findRecord(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        return RecordPrintRenderer.render(record, repo.listSignatures(id));
+        String html = RecordPrintRenderer.render(record, repo.listSignatures(id));
+        audit(actor, "RECORD_PRINT", "MEDICAL_RECORD", id.toString(), Map.of(
+                "recordNo", record.recordNo(), "status", record.status(),
+                "revision", record.revision()));
+        return html;
     }
 
     /** 转义 LIKE 通配符，避免用户输入 % 或 _ 变成全表匹配。 */

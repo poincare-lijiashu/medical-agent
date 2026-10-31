@@ -47,6 +47,7 @@ public class RecordController {
 
     private static final String CREATE = "emr:record:create";
     private static final String READ = "emr:record:read";
+    private static final String SEARCH = "emr:record:search";
     private static final String SUBMIT = "emr:record:submit";
     private static final String SIGN = "emr:record:sign";
     private static final String ARCHIVE = "emr:record:archive";
@@ -87,7 +88,7 @@ public class RecordController {
         return ApiResponse.ok(service.detail(id));
     }
 
-    /** CDR 检索：关键词 + 患者/文书类型/状态/建档日期组合过滤。 */
+    /** CDR 检索：关键词 + 患者/文书类型/状态/建档日期组合过滤；检索行为留痕。 */
     @GetMapping("/search")
     public ApiResponse<List<RecordHit>> search(
             @RequestParam(required = false) String q,
@@ -97,20 +98,22 @@ public class RecordController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
-        Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.search(q, patientId, docType, status, from, to, limit));
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, SEARCH);
+        return ApiResponse.ok(service.search(q, patientId, docType, status, from, to, limit, actor));
     }
 
-    /** 打印视图（HTML，浏览器打印 → 另存为 PDF）。 */
+    /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */
     @GetMapping(value = "/{id}/print", produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> print(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
-                .body(service.printHtml(id));
+                .body(service.printHtml(id, actor));
     }
 
     /** 保存草稿（版本号必填）。 */
