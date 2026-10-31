@@ -301,6 +301,8 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d
 | 容器内跨进程链路（登录） | 同一 traceId 内 gateway `/api/v2/auth/login` → auth `POST:/login` → HikariCP/PostgreSQL：**45 span（gateway 17 + auth 28）** |
 | 容器内跨进程链路（患者查询） | 同一 traceId 内 `/api/v2/empi/patients` → `GET:/patients`（gateway + empi） |
 | 授权矩阵（经容器网关） | `pharm01`（PHARMACIST）`:id?reveal=true` → **403** `无权限执行该操作：empi:patient:read_phi`；`pharm01` 访问 `/api/v2/auth/users` → **403**；`doctor01` reveal → **200** 明文（`phiMasked=false`） |
+| 会话管理（经容器网关） | `GET /api/v2/auth/sessions` 200（8 条）→ `DELETE /sessions/{id}` 200 → 再查 7 条；doctor01 删除 pharm01 会话 → **404** |
+| 审计汇聚（经容器网关） | `GET /api/v2/audit/events?targetType=PATIENT`（admin01）→ 200，返回 empi `PATIENT_VIEW_PHI` 事件；doctor01 → **403**（缺 `audit:log:read`） |
 | **历史密码兼容（已修复）** | v1 Python 中台用 PBKDF2-SHA256 存密码（`pbkdf2$sha256$600000$...`），V3 迁移原样导入；Java auth 原先只认 BCrypt → **导入的老账号全部无法登录**。新增 `PasswordHasher`：按前缀识别 BCrypt/PBKDF2、恒定时间比较、登录成功后**在线升级为 BCrypt**（按旧哈希 CAS，不推进 version） |
 | 兼容性验证 | `doctor01` 登录成功后库内哈希由 `pbkdf2$` 变为 `$2a$10$`；未登录的 `admin01` 保持 `pbkdf2$`（升级是按账号、按次发生） |
 | 单测 | `mvn -pl auth -am test` → 9 项全过（新增 `PasswordHasherTest` 3 项：BCrypt 往返、Python 固定向量、畸形哈希拒绝） |

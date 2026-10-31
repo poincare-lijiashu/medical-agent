@@ -259,7 +259,7 @@ P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸
 
 ### 4. 网关入口限流（Sentinel 核心 API）
 
-- 按路径前缀（`/api/v1`、`/api/v2/auth`、`/api/v2/empi`）设置 QPS，超限返回统一 429 壳；
+- 按路径前缀（`/api/v1`、`/api/v2/auth`、`/api/v2/empi`、`/api/v2/audit`）设置 QPS，超限返回统一 429 壳；
 - **不用 Sentinel Spring Cloud Gateway Adapter**：1.8.9 适配器与 Spring Cloud Gateway 5.x /
   Spring 7 组合对每个请求抛 `ParamFlowException: $D`（规则无 paramItem），全量 500；
   改用 Sentinel 核心 `SphU.entry(前缀资源)`，规则仍由 Sentinel 滑动窗口执行；
@@ -273,6 +273,28 @@ P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸
 - `V4__auth_tokens.sql`：`refresh_token`（哈希、轮换链、可撤销）、`token_revocation`（jti 黑名单）、
   `login_attempt`（限速与审计依据）；每小时清理过期数据。
 
+### 6. 会话管理（查看 / 踢出设备）
+
+- `GET /api/v2/auth/sessions`：返回本人活跃会话（= 未撤销、未过期的刷新令牌），含 IP、UA、
+  签发时间、最近使用、到期时间；
+- `DELETE /api/v2/auth/sessions/{id}`：踢出指定设备。更新条件强制 `id + user_id`，
+  跨账号操作返回 **404**（不泄漏他人会话是否存在）；撤销后该设备无法续期，
+  已签发的访问令牌按 TTL 自然过期（≤30 分钟）；
+- 刷新轮换会撤销旧行，因此列表天然"一台设备一行"，不会随刷新次数膨胀；
+- 实测：经网关 `sessions` 200（8 条）→ 删除 1 条 200 → 再查 7 条；
+  用 doctor01 令牌删除 pharm01 会话 → 404。
+
+### 7. 审计跨域汇聚
+
+- `GET /api/v2/audit/events`（auth 服务提供，网关 StripPrefix=3）：`UNION ALL`
+  `auth_svc.change_log` 与 `empi_svc.change_log`，按时间倒序分页，支持
+  `actor / action / targetType / from / to` 过滤；
+- 权限点 **`audit:log:read`**（ADMIN、QC 默认持有），DOCTOR 访问 403；
+- 过滤参数以空串表示"不限"、时间窗默认 [epoch, 9999]，避免 JDBC NULL 参数类型推断问题；
+  分页上限沿用 `PageResult.MAX_PAGE_SIZE`；
+- **部署边界**：单库多 schema 时直接 UNION；若各域拆分独立数据库，需改为 PostgreSQL FDW
+  或把审计事件投递到 Loki/OLAP 后由查询层合并（已在代码注释登记）。
+
 ---
 
 ## P0 完成度
@@ -280,9 +302,8 @@ P1 第一批聚焦"认证与授权闭环"，全部为本机实测通过（非纸
 P0 计划项已全部落地：骨架、网关双轨路由、auth RBAC、EMPI、统一鉴权、Helm/Argo CD、
 SkyWalking、AI 中台 Nacos 注册、Nacos 生产化。
 
-P1 已完成第一批（权限点强制、刷新令牌与撤销、登录限速、入口限流）。剩余 P1：
+P1 已完成：权限点强制、刷新令牌与撤销、登录限速、入口限流、会话管理、审计跨域汇聚。
+剩余 P1：
 
 - Argo Rollouts 灰度发布（当前为滚动发布 + PDB）
 - 日志采集（Loki/ELK）与告警规则
-- 会话管理界面（查看/踢出在线设备，基于 refresh_token 表）
-- 审计日志跨域汇聚（当前各域 change_log 自治）

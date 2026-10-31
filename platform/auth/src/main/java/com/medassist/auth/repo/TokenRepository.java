@@ -91,6 +91,45 @@ public class TokenRepository {
                 .update();
     }
 
+    /**
+     * 当前账号的活跃会话（= 未撤销、未过期的刷新令牌）。
+     *
+     * <p>每次刷新都会轮换并撤销旧行，因此这里返回的实际上是"每台设备一行"，
+     * 不会随刷新次数膨胀。按最近使用时间倒序，便于前端展示"最近登录"。
+     */
+    public List<SessionRecord> listActiveSessions(UUID userId) {
+        return jdbc.sql("""
+                        SELECT id, client_ip, user_agent, issued_at, last_used_at, expires_at
+                          FROM auth_svc.refresh_token
+                         WHERE user_id = :userId
+                           AND revoked_at IS NULL
+                           AND expires_at > now()
+                         ORDER BY COALESCE(last_used_at, issued_at) DESC
+                        """)
+                .param("userId", userId)
+                .query((rs, i) -> new SessionRecord(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("client_ip"),
+                        rs.getString("user_agent"),
+                        rs.getTimestamp("issued_at").toInstant(),
+                        rs.getTimestamp("last_used_at") == null
+                                ? null : rs.getTimestamp("last_used_at").toInstant(),
+                        rs.getTimestamp("expires_at").toInstant()))
+                .list();
+    }
+
+    /** 撤销指定会话（限定本人，防越权踢别人设备）；返回 false 表示不存在/已撤销。 */
+    public boolean revokeSession(UUID userId, UUID sessionId) {
+        return jdbc.sql("""
+                        UPDATE auth_svc.refresh_token
+                           SET revoked_at = now(), last_used_at = now()
+                         WHERE id = :id AND user_id = :userId AND revoked_at IS NULL
+                        """)
+                .param("id", sessionId)
+                .param("userId", userId)
+                .update() > 0;
+    }
+
     // ---------------------------------------------------------------- 访问令牌撤销
 
     public void revokeJti(UUID jti, UUID userId, Instant expiresAt, String reason, String revokedBy) {
@@ -177,5 +216,9 @@ public class TokenRepository {
     }
 
     public record RevocationRecord(UUID jti, Instant expiresAt) {
+    }
+
+    public record SessionRecord(UUID id, String clientIp, String userAgent,
+                                Instant issuedAt, Instant lastUsedAt, Instant expiresAt) {
     }
 }

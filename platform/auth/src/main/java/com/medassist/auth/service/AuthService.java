@@ -10,6 +10,7 @@ import com.medassist.auth.web.dto.LoginReq;
 import com.medassist.auth.web.dto.LoginResp;
 import com.medassist.auth.web.dto.MeResp;
 import com.medassist.auth.web.dto.RevocationsResp;
+import com.medassist.auth.web.dto.SessionResp;
 import com.medassist.auth.web.dto.VerifyResp;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -194,6 +195,33 @@ public class AuthService {
         return new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
                 user.orgCode(), users.rolesOf(user.id()), rbac.permissionsOfUser(user.id()),
                 user.lastLoginAt());
+    }
+
+    /**
+     * 当前账号的活跃会话（设备）列表。
+     *
+     * <p>会话即一条未撤销、未过期的刷新令牌；刷新轮换会撤销旧行，
+     * 所以同一设备只保留最新一条，不会随刷新次数膨胀。
+     */
+    public List<SessionResp> sessions(UUID userId) {
+        return tokens.listActiveSessions(userId).stream()
+                .map(s -> new SessionResp(s.id(), s.clientIp(), s.userAgent(),
+                        s.issuedAt(), s.lastUsedAt(), s.expiresAt()))
+                .toList();
+    }
+
+    /**
+     * 踢出指定会话（仅限本人）。
+     *
+     * <p>撤销后该设备的刷新令牌立即失效（无法再换访问令牌）；
+     * 其已签发的访问令牌按 TTL 自然过期（≤30 分钟），符合"踢出 = 切断续期"的语义。
+     */
+    public void revokeSession(UUID userId, UUID sessionId, String actor) {
+        if (!tokens.revokeSession(userId, sessionId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "会话不存在或已失效");
+        }
+        audit(actor, "SESSION_REVOKE", userId.toString(),
+                Map.of("sessionId", sessionId.toString()));
     }
 
     /** 内部令牌校验（排障用；不用于网关鉴权主链路——网关注入身份时本地校验）。 */

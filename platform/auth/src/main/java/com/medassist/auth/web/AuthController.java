@@ -6,6 +6,7 @@ import com.medassist.auth.web.dto.LoginResp;
 import com.medassist.auth.web.dto.MeResp;
 import com.medassist.auth.web.dto.RefreshReq;
 import com.medassist.auth.web.dto.RevocationsResp;
+import com.medassist.auth.web.dto.SessionResp;
 import com.medassist.auth.web.dto.VerifyResp;
 import com.medassist.auth.web.dto.VerifyTokenReq;
 import com.medassist.common.api.ApiResponse;
@@ -14,7 +15,9 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -23,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -78,6 +82,24 @@ public class AuthController {
     @GetMapping("/me")
     public ApiResponse<MeResp> me(@RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId) {
         return ApiResponse.ok(service.me(parseUserId(userId)));
+    }
+
+    /** 我的活跃会话（设备）列表：仅本人可见，用于"发现异常登录并踢出"。 */
+    @GetMapping("/sessions")
+    public ApiResponse<List<SessionResp>> sessions(
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId) {
+        return ApiResponse.ok(service.sessions(parseUserId(userId)));
+    }
+
+    /** 踢出指定会话：后端强制 userId 条件，不能跨账号操作。 */
+    @DeleteMapping("/sessions/{id}")
+    public ApiResponse<Void> revokeSession(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        UUID user = parseUserId(userId);
+        service.revokeSession(user, id, actor == null || actor.isBlank() ? user.toString() : actor);
+        return ApiResponse.ok(null);
     }
 
     /** 内部：网关增量拉取访问令牌撤销名单（只允许集群内直连）。 */
