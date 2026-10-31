@@ -37,12 +37,24 @@ $manifest = @()
 $failed = @()
 
 foreach ($img in $images) {
-    Write-Host "== pull $img" -ForegroundColor Cyan
-    docker pull $img
-    if ($LASTEXITCODE -ne 0) {
-        $failed += $img
-        Write-Host "!! pull failed: $img" -ForegroundColor Red
-        continue
+    # Business images (medassist/*) are built locally, never pulled from a registry.
+    # If the image is already present locally we save it directly; otherwise we try a pull
+    # (third-party images) and report a clear failure instead of aborting the whole bundle.
+    $localExists = $false
+    docker image inspect $img *> $null
+    if ($LASTEXITCODE -eq 0) { $localExists = $true }
+
+    if (-not $localExists) {
+        Write-Host "== pull $img" -ForegroundColor Cyan
+        docker pull $img
+        if ($LASTEXITCODE -ne 0) {
+            $failed += $img
+            Write-Host "!! image not present locally and pull failed: $img" -ForegroundColor Red
+            Write-Host "   (business images must be built first: see README section 1.1)" -ForegroundColor Yellow
+            continue
+        }
+    } else {
+        Write-Host "== local image found, skip pull: $img" -ForegroundColor DarkGray
     }
 
     $safe = ($img -replace '[^A-Za-z0-9._-]', '_')

@@ -195,6 +195,14 @@ argocd app rollback medassist-prod <REVISION>
 数据库迁移**不回滚**（Flyway 只向前）：回滚应用版本前，必须确认旧版本代码与新表结构兼容
 （本项目约定：迁移只做加法，删除列/改名需跨两个版本）。
 
+> **临床 V6 起的特殊护栏（2026-10-31）**：`V6__nursing_execution_and_multi_charge.sql`
+> 删除了 `charge.visit_id` 的唯一约束，改为"每个就诊最多一张 UNPAID 单"的部分唯一索引。
+> 旧版本代码假设"一就诊一单"，遇到新版本续开的第二张单会查错/双记。因此：
+> 1) 发布 V6 之后**禁止直接回滚到旧版 clinical 镜像**；
+> 2) 确需回滚时，先执行
+>    `SELECT visit_id, count(*) FROM clinical_svc.charge WHERE status='UNPAID' GROUP BY 1 HAVING count(*) > 1;`
+>    确认结果为空（每就诊 ≤1 张未结单），再恢复唯一约束，最后回滚镜像。
+
 ### 5.4 HPA 与 git 的副本数冲突
 
 Chart 在 `autoscaling.enabled=true` 时不渲染 `spec.replicas`，且 Application 配置

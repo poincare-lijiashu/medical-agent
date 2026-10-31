@@ -8,6 +8,9 @@
 # 用法：
 #   helm upgrade --install medassist deploy/helm/medassist-platform \
 #     -n medassist --create-namespace -f values.yaml -f values-dev.yaml
+# 本地 kind/minikube：业务镜像由本机构建，tag 为 medassist/platform-*，因此前缀写 medassist
+imageRegistry: medassist
+
 secrets:
   create: true
   postgresUsername: medagent

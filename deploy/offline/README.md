@@ -20,11 +20,19 @@
 ### 1.1 构建业务镜像
 
 ```bash
-docker build --build-arg SERVICE=gateway -t harbor.hospital.local/medassist/platform-gateway:1.0.0 -f platform/Dockerfile platform
-docker build --build-arg SERVICE=auth    -t harbor.hospital.local/medassist/platform-auth:1.0.0    -f platform/Dockerfile platform
-docker build --build-arg SERVICE=empi    -t harbor.hospital.local/medassist/platform-empi:1.0.0    -f platform/Dockerfile platform
-docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
+# 业务镜像统一以 medassist/<service>:<tag> 构建（与本地开发一致），推送时再由
+# load-and-push.sh 改名为 {院内Harbor}/<service>:<tag>，与 Chart 的
+# imageRegistry + repository(platform-*) 拼接结果一致。
+docker build --build-arg SERVICE=gateway   -t medassist/platform-gateway:1.0.0  -f platform/Dockerfile platform
+docker build --build-arg SERVICE=auth      -t medassist/platform-auth:1.0.0     -f platform/Dockerfile platform
+docker build --build-arg SERVICE=empi      -t medassist/platform-empi:1.0.0     -f platform/Dockerfile platform
+docker build --build-arg SERVICE=clinical  -t medassist/platform-clinical:1.0.0 -f platform/Dockerfile platform
+docker build -t medassist/ai-core:1.0.0 .
 ```
+
+> **gateway 镜像必须包含当前代码**：网关路由配置（`/api/v2/clinical/**` 使用 StripPrefix=2）
+> 在 2026-10-31 修复过，旧镜像会导致临床接口经网关全量 404。构建前先 `git log --oneline -5` 确认
+> 包含 `fix(gateway)` 提交，CI 用 `GatewayRouteConfigTest` 兜底。
 
 构建阶段需要 Maven 与 PyPI；**运行阶段不需要**（多阶段构建，运行镜像只含 JRE / venv）。
 
@@ -97,11 +105,14 @@ huggingface-cli download BAAI/bge-m3 --local-dir bge-m3
 helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \
   -n medassist-prod --create-namespace \
   -f values-prod.yaml \
-  --set imageRegistry=harbor.hospital.local/medassist/medassist \
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 \
-  --set empi.image.tag=1.0.0 --set aiCore.image.tag=1.0.0 \
+  --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set aiCore.image.tag=1.0.0 \
   --set gateway.env[0].name=GATEWAY_TRUSTED_PROXIES --set gateway.env[0].value=<集群内网段>
 ```
+
+> `imageRegistry` 已在 `values-prod.yaml` 固定为 `harbor.hospital.local/medassist`，**不需要**再 `--set`
+> （重复叠加会拼成 `.../medassist/medassist` 三层，镜像必然拉不到）。
+> `clinical.image.tag` 必须显式给出：values 默认 `0.1.0-SNAPSHOT`，production 环境会直接渲染失败。
 
 > `environment: production` 下若 image tag 仍是 `-SNAPSHOT`，渲染会直接失败（防止"发布成功但跑旧快照"）。
 

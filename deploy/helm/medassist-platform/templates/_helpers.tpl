@@ -170,6 +170,12 @@ Java 服务公共环境变量。
 - name: SPRING_FLYWAY_ENABLED
   value: "false"
 {{- end }}
+{{- if .flyway }}
+# 迁移 Job 显式下发 baseline 策略：prod/staging 必须 false（schema 漂移要让迁移失败，
+# 而不是被静默 baseline）。values-prod 里的 clinical.env 不会渲染到 Job，故在此统一注入。
+- name: FLYWAY_BASELINE_ON_MIGRATE
+  value: {{ .root.Values.migration.baselineOnMigrate | default false | quote }}
+{{- end }}
 {{- end -}}
 
 {{/* SkyWalking agent 初始化容器：复制 agent，并把服务端框架插件从 optional-plugins 激活。

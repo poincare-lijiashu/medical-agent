@@ -15,11 +15,13 @@
 # ============================================================================
 
 # ---- 业务镜像（本次发布产物，tag 由 CI 注入，必须与 Chart values 一致）----
-harbor.hospital.local/medassist/platform-gateway:1.0.0
-harbor.hospital.local/medassist/platform-auth:1.0.0
-harbor.hospital.local/medassist/platform-empi:1.0.0
-harbor.hospital.local/medassist/platform-clinical:1.0.0
-harbor.hospital.local/medassist/ai-core:1.0.0
+# 这些镜像在构建机上就以此 tag 构建（见 README §1.1），pull-and-save 会直接 docker save，
+# 不会尝试从公网 pull（medassist/* 不是公开仓库）。
+medassist/platform-gateway:1.0.0
+medassist/platform-auth:1.0.0
+medassist/platform-empi:1.0.0
+medassist/platform-clinical:1.0.0
+medassist/ai-core:1.0.0
 
 # ---- 基础设施（有状态中间件；如院方已有托管实例可跳过）----
 postgres:15-alpine

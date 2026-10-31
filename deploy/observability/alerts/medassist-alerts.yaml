@@ -38,7 +38,7 @@ spec:
     - name: medassist.availability
       rules:
         - alert: MedassistTargetDown
-          expr: up{component=~"gateway|auth|empi"} == 0
+          expr: up{component=~"gateway|auth|empi|clinical"} == 0
           for: 3m
           labels:
             severity: critical
@@ -101,13 +101,38 @@ spec:
             description: "按 resource 标签定位被削峰的接口族；结合登录失败指标判断是否为暴力破解。"
 
         - alert: MedassistDbPoolPending
-          expr: max(hikaricp_connections_pending{component=~"gateway|auth|empi"}) > 0
+          expr: max(hikaricp_connections_pending{component=~"gateway|auth|empi|clinical"}) > 0
           for: 5m
           labels:
             severity: warning
           annotations:
             summary: "数据库连接池出现排队（{{ $labels.instance }}）"
             description: "连接池耗尽会直接放大接口延迟，检查慢查询与 maximum-pool-size。"
+
+        - alert: MedassistClinical5xxRate
+          expr: |
+            sum(rate(http_server_requests_seconds_count{component="clinical", status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_server_requests_seconds_count{component="clinical"}[5m])), 0.001)
+            > 0.02
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "临床核心 5xx 比例超过 2%"
+            description: "挂号/收费/住院链路错误升高，先看临床服务日志与数据库锁等待（收费结算用行锁）。"
+
+        - alert: MedassistClinicalP99High
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_server_requests_seconds_bucket{component="clinical"}[5m])) by (le)
+            ) > 3
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "临床核心 P99 延迟超过 3s"
+            description: "多为数据库慢查询或行锁等待（settle/dailyBill/discharge 均持有 visit 行锁）。"
 
     - name: medassist.auth
       rules:
@@ -133,9 +158,9 @@ spec:
       rules:
         - alert: MedassistJvmHeapHigh
           expr: |
-            sum(jvm_memory_used_bytes{component=~"gateway|auth|empi", area="heap"}) by (instance)
+            sum(jvm_memory_used_bytes{component=~"gateway|auth|empi|clinical", area="heap"}) by (instance)
             /
-            clamp_min(sum(jvm_memory_max_bytes{component=~"gateway|auth|empi", area="heap"}) by (instance), 1)
+            clamp_min(sum(jvm_memory_max_bytes{component=~"gateway|auth|empi|clinical", area="heap"}) by (instance), 1)
             > 0.9
           for: 10m
           labels:

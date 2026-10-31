@@ -11,7 +11,11 @@
 #    应用侧关闭 Flyway，避免多副本争抢迁移锁（详见 templates/job-migrate-*.yaml）。
 # ============================================================================
 
-# 院内镜像仓库前缀（如 harbor.hospital.local/medassist）；留空表示直接用 repository 全名
+# 院内镜像仓库前缀（如 harbor.hospital.local/medassist）；留空表示直接用 repository 全名。
+# 各服务的 repository 是"仓库内的项目名"（如 platform-gateway），最终镜像为
+#   {imageRegistry}/{repository}:{tag}
+# 因此这里不要再带 /medassist 后缀，否则会拼成 medassist/medassist/...（三层）。
+# 本地 kind 自验请在 values-dev.yaml 设 imageRegistry=medassist。
 imageRegistry: ""
 
 # 环境标识：dev | staging | production
@@ -138,6 +142,8 @@ securityContext:
 # ---- 数据库迁移 Hook（auth / empi 各自的 Flyway 迁移)----
 migration:
   enabled: true
+  # 迁移 Job 的 Flyway baseline 策略：默认 false（schema 漂移必须让迁移失败，不能被静默 baseline）
+  baselineOnMigrate: false
   backoffLimit: 2
   activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: 900
@@ -149,7 +155,7 @@ migration:
 gateway:
   enabled: true
   image:
-    repository: medassist/platform-gateway
+    repository: platform-gateway
     tag: "0.1.0-SNAPSHOT"
     pullPolicy: IfNotPresent
   replicaCount: 2
@@ -188,7 +194,7 @@ gateway:
 auth:
   enabled: true
   image:
-    repository: medassist/platform-auth
+    repository: platform-auth
     tag: "0.1.0-SNAPSHOT"
     pullPolicy: IfNotPresent
   replicaCount: 2
@@ -221,7 +227,7 @@ auth:
 empi:
   enabled: true
   image:
-    repository: medassist/platform-empi
+    repository: platform-empi
     tag: "0.1.0-SNAPSHOT"
     pullPolicy: IfNotPresent
   replicaCount: 2
@@ -254,7 +260,7 @@ empi:
 clinical:
   enabled: true
   image:
-    repository: medassist/platform-clinical
+    repository: platform-clinical
     tag: "0.1.0-SNAPSHOT"
     pullPolicy: IfNotPresent
   replicaCount: 2
@@ -287,7 +293,7 @@ clinical:
 aiCore:
   enabled: true
   image:
-    repository: medassist/ai-core
+    repository: ai-core
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   replicaCount: 1

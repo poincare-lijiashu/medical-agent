@@ -45,7 +45,7 @@ migration:
 gateway:
   replicaCount: 2
   # 不可变 tag：CI 每次发布用 --set 覆盖为构建号（不允许 SNAPSHOT）
-  image: {repository: medassist/platform-gateway, tag: "0.1.0", pullPolicy: IfNotPresent}
+  image: {repository: platform-gateway, tag: "0.1.0", pullPolicy: IfNotPresent}
   env:
     - name: GATEWAY_TRUSTED_PROXIES
       value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -69,19 +69,19 @@ ingress:
 
 auth:
   replicaCount: 2
-  image: {repository: medassist/platform-auth, tag: "0.1.0", pullPolicy: IfNotPresent}
+  image: {repository: platform-auth, tag: "0.1.0", pullPolicy: IfNotPresent}
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
 empi:
   replicaCount: 2
-  image: {repository: medassist/platform-empi, tag: "0.1.0", pullPolicy: IfNotPresent}
+  image: {repository: platform-empi, tag: "0.1.0", pullPolicy: IfNotPresent}
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
 clinical:
   replicaCount: 2
-  image: {repository: medassist/platform-clinical, tag: "0.1.0", pullPolicy: IfNotPresent}
+  image: {repository: platform-clinical, tag: "0.1.0", pullPolicy: IfNotPresent}
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 

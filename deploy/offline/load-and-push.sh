@@ -36,12 +36,15 @@ for tar in "$BUNDLE_DIR"/*.tar; do
 done
 
 echo "== retag + push"
-# Images that the chart consumes directly through imageRegistry
+# 业务镜像：本地构建 tag 为 medassist/platform-*:1.0.0（见 README §1.1），
+# 推到院内 Harbor 后为 {REGISTRY_PREFIX}/platform-*:1.0.0，
+# 与 Chart 的 imageRegistry + repository(platform-*) 拼接结果一致。
 CHART_IMAGES=(
-  "medassist/platform-gateway:1.0.0"
-  "medassist/platform-auth:1.0.0"
-  "medassist/platform-empi:1.0.0"
-  "medassist/ai-core:1.0.0"
+  "platform-gateway:1.0.0"
+  "platform-auth:1.0.0"
+  "platform-empi:1.0.0"
+  "platform-clinical:1.0.0"
+  "ai-core:1.0.0"
 )
 
 # Third-party images: pushed with their original path under the same registry,
@@ -73,8 +76,9 @@ push_image() {
 }
 
 for img in "${CHART_IMAGES[@]}"; do
-  # harbor.hospital.local/medassist/medassist/platform-gateway:1.0.0
-  push_image "$img" "${REGISTRY_PREFIX}/${img}"
+  # src = 本地构建 tag（medassist/platform-gateway:1.0.0）
+  # dst = harbor.hospital.local/medassist/platform-gateway:1.0.0
+  push_image "medassist/${img}" "${REGISTRY_PREFIX}/${img}"
 done
 
 for img in "${THIRD_PARTY[@]}"; do
