@@ -13,6 +13,8 @@ import org.springframework.web.client.RestClientException;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +81,7 @@ public class HttpClinicalClient implements ClinicalClient {
         }
         UUID patientId = uuid(body.get("patientId"));
         String patientNo = str(body.get("patientNo"));
+        LocalDate serviceDate = date(body.get("serviceDate"));
         List<ChargeLine> lines = new ArrayList<>();
         Object rawLines = body.get("lines");
         if (rawLines instanceof List<?> rows) {
@@ -95,7 +98,19 @@ public class HttpClinicalClient implements ClinicalClient {
                         str(m.get("chargeStatus"))));
             }
         }
-        return new ChargeSummary(visitId, patientId, patientNo, lines);
+        return new ChargeSummary(visitId, patientId, patientNo, serviceDate, lines);
+    }
+
+    private static LocalDate date(Object o) {
+        if (o == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(String.valueOf(o));
+        } catch (DateTimeParseException e) {
+            log.warn("insurance.clinical_bad_service_date value={}", o);
+            return null;
+        }
     }
 
     private static UUID uuid(Object o) {

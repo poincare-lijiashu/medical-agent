@@ -309,7 +309,8 @@ QC 审批通过（revision 2 / SUBMITTED / 哈希清空 / 修订历史 1 条）�
 | 结算清单 | `POST /insurance/settlements`、`GET /insurance/settlements/{id}`、`GET /insurance/settlements/by-visit/{visitId}`、`POST /{id}/confirm` | 收费明细经 clinical 内部接口拉取（唯一真源）；金额全部服务端计算；一张就诊单一张清单；DRAFT 可重算、CONFIRMED 终态 |
 
 **测算口径（本地模型）**：甲类全额纳入；乙类先自付 `selfPayRatio`；丙类/未映射全额自费（明细标记 `unmapped`）；
-纳入金额扣起付线后按报销比例计算统筹支付，封顶线截断；个人自付 = 总费用 − 统筹支付（全部 2 位小数 HALF_UP）。
+纳入金额扣起付线后按报销比例计算统筹支付，按**年度剩余封顶额度**（封顶 − 本年度已确认清单统筹）与总额双重截断；
+个人自付 = 总费用 − 统筹支付（全部 2 位小数 HALF_UP）。参保有效期按**就诊业务日期**校验（见 §1.15）。
 
 **安全边界**：`/api/v2/*/internal/**` 网关 404；clinical 内部接口要求共享令牌（fail-closed，恒定时间比较）；
 医保失败不降级——拿不到收费明细返回 503，绝不凭客户端传参编造金额。
@@ -378,6 +379,20 @@ doctor01 确认 **403**、只读 200。
 - `V4__cdr_search_index.sql`：pg_trgm 用 DO 块容错安装（装不上不阻断迁移，只退化顺序扫描），随后建索引；
 - `V5__drop_duplicate_trgm_index.sql`：删掉 V4 重复创建的 content_text 索引（V2 已有同列同操作符类）；
 - 验证：单测 237→**239**；`emr_smoke.ps1` **78 项**全过；`EXPLAIN` 两条分支均为 `BitmapOr` 且带 `Index Cond`。
+
+---
+
+## 1.15 已完成（2026-10-31，第三轮评测第五批：参保日期口径 + 年度封顶）
+
+| 能力 | 位置 | 关键保证 |
+|---|---|---|
+| 就诊业务日期 | clinical `/internal/visits/{id}/charges` → `serviceDate` | 住院取出院日（未出院取入院日），门诊/急诊取挂号日；旧接口缺字段时回退业务"今天" |
+| 参保有效期 | `InsuranceService.generate` → `member.activeOn(serviceDate)` | 跨年/跨月补结算按当时参保判断，不因今天过期而拒绝 |
+| 年度封顶累计 | `insuranceUsedInYear(patientId, day, excludeBillId)` | 同参保人本自然年 **CONFIRMED** 清单统筹合计；草稿/作废不计入；重算、确认复核、对账统一排除清单自身 |
+| 额度展示 | `BillView.capUsed / capRemaining` + 审计 | `capRemaining` 为本次测算前剩余额度；封顶未配置（cap<=0）为 null，表示不限额 |
+| 大病保险段 | 未建模 | 依赖省局政策（起付线/分段比例/目录），N5 接省局接口时统一做；插入点固定：统筹截断之后、自付计算之前 |
+
+**验证**：单测 239→**245**；`insurance_smoke.ps1` 50→**63 项**全过（cap=15 时首单统筹 10、次单统筹 5）。
 
 ---
 

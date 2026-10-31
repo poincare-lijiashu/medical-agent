@@ -65,8 +65,14 @@ public final class InsuranceDtos {
     public record GenerateBillReq(@NotNull UUID visitId) {
     }
 
-    /** 结算清单视图：汇总 + 明细行。 */
-    public record BillView(SettlementBill bill, List<BillLine> lines) {
+    /**
+     * 结算清单视图：汇总 + 明细行 + 年度封顶口径。
+     *
+     * <p>{@code capUsed} 为本自然年同参保人已确认清单的统筹合计，{@code capRemaining} 为本次测算前的
+     * 剩余额度（封顶未配置时为 null）；读历史清单不重算，两者均为 null。
+     */
+    public record BillView(SettlementBill bill, List<BillLine> lines,
+                           BigDecimal capUsed, BigDecimal capRemaining) {
     }
 
     /** 作废（红冲）请求：必须写明原因，留痕到清单与审计。 */

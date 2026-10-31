@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.time.BusinessTime;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,8 +53,23 @@ public class InternalChargeController {
         body.put("visitId", visit.id());
         body.put("patientId", visit.patientId());
         body.put("patientNo", visit.patientNo());
+        // 业务日期：医保按"费用发生/出院日期"校验参保与年度封顶，不能按请求时刻的今天
+        body.put("serviceDate", serviceDate(visit));
         body.put("lines", lines);
         return body;
+    }
+
+    /**
+     * 就诊业务日期：住院取出院日期（未出院取入院日期），门诊/急诊取挂号日期。
+     *
+     * <p>跨年补结算时，用"今天"校验参保会把去年有效的参保判成失效，因此必须回到就诊本身。
+     */
+    private LocalDate serviceDate(Visit visit) {
+        return repo.findLatestAdmissionByVisit(visit.id())
+                .map(a -> LocalDate.ofInstant(
+                        a.dischargedAt() == null ? a.admittedAt() : a.dischargedAt(),
+                        BusinessTime.zone()))
+                .orElseGet(visit::visitDate);
     }
 
     private void requireToken(String provided) {

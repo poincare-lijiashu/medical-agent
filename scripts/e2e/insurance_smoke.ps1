@@ -152,6 +152,50 @@ Check 'bill.regenerate.status' (Res $r).bill.status 'DRAFT'
 $newBillId = (Res $r).bill.id
 Check 'bill.regenerate.newId' ($newBillId -ne $billId) 'True'
 
+# ---------------------------------------------------------------- 5.2 annual cap accumulation (S-10)
+$r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
+    name = "Cap Patient $suffix"; gender = 'MALE'; birthDate = '1965-03-03'
+    idType = 'ID_CARD'; idNo = "11010119650303$suffix"
+} $token
+Check 'cap.patient.create' $r.Status 200
+$capPatient = (Res $r).id
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/members' @{
+    patientId = $capPatient; insuranceType = 'EMPLOYEE'; region = 'LOCAL'
+    deductible = 0; reimbursementRatio = 1.0; cap = 15
+} $token
+Check 'cap.member.register' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
+    patientId = $capPatient; deptId = $deptId; doctorId = 'admin01'; visitType = 'OUTPATIENT'
+} $token
+$capVisit1 = (Res $r).id
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $capVisit1 } $token
+Check 'cap.bill1.generate' $r.Status 200
+CheckNum 'cap.bill1.insurance' (Res $r).bill.insuranceAmount 10.00
+CheckNum 'cap.bill1.capUsed' (Res $r).capUsed 0.00
+CheckNum 'cap.bill1.capRemaining' (Res $r).capRemaining 15.00
+$capBill1 = (Res $r).bill.id
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$capBill1/confirm" $null $token
+Check 'cap.bill1.confirm' $r.Status 200
+
+# 同一患者同科室同一天只允许一个在诊挂号，第二次换科室
+$r = Invoke-Api 'POST' '/api/v2/clinical/registrations' @{
+    patientId = $capPatient; deptId = '22222222-2222-2222-2222-222222222222'
+    doctorId = 'admin01'; visitType = 'OUTPATIENT'
+} $token
+Check 'cap.visit2.registration' $r.Status 200
+$capVisit2 = (Res $r).id
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $capVisit2 } $token
+Check 'cap.bill2.generate' $r.Status 200
+CheckNum 'cap.bill2.capUsed' (Res $r).capUsed 10.00
+CheckNum 'cap.bill2.capRemaining' (Res $r).capRemaining 5.00
+CheckNum 'cap.bill2.insurance' (Res $r).bill.insuranceAmount 5.00
+CheckNum 'cap.bill2.selfPay' (Res $r).bill.selfPayAmount 5.00
+
 # ---------------------------------------------------------------- 6. batch import + not-enrolled
 $r = Invoke-Api 'POST' '/api/v2/insurance/items/import' @{
     items = @(

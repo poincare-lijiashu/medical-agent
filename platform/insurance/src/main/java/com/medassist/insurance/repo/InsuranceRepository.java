@@ -268,6 +268,28 @@ public class InsuranceRepository {
                 .param(visitId).query(BILL_MAPPER).optional();
     }
 
+    /**
+     * 年度已用统筹额度：同一参保人、同一自然年内已确认（CONFIRMED）清单的统筹支付合计。
+     *
+     * <p>口径说明：按**确认时间**归属年度（基金实际支付年度），作废单与草稿不计入，
+     * 重算/对账时通过 {@code excludeBillId} 排除当前清单自身，保证"生成时 = 复核时 = 对账时"。
+     */
+    public BigDecimal insuranceUsedInYear(UUID patientId, LocalDate day, UUID excludeBillId) {
+        LocalDate yearStart = LocalDate.of(day.getYear(), 1, 1);
+        return jdbc.sql("""
+                        SELECT COALESCE(SUM(insurance_amount), 0)
+                          FROM insurance_svc.settlement_bill
+                         WHERE patient_id = :patientId
+                           AND status = 'CONFIRMED'
+                           AND confirmed_at >= CAST(:yearStart AS date)
+                           AND confirmed_at < CAST(:yearStart AS date) + INTERVAL '1 year'
+                           AND (CAST(:excludeId AS uuid) IS NULL OR id <> CAST(:excludeId AS uuid))
+                        """)
+                .param("patientId", patientId).param("yearStart", yearStart)
+                .param("excludeId", excludeBillId)
+                .query(BigDecimal.class).single();
+    }
+
     public Optional<SettlementBill> findBillById(UUID id) {
         return jdbc.sql("SELECT " + BILL_COLUMNS
                         + " FROM insurance_svc.settlement_bill WHERE id = ?")

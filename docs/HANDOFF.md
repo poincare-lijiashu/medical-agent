@@ -343,6 +343,22 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 踩坑：写索引迁移前先 `select indexname, indexdef from pg_indexes where schemaname=...`
      看既有索引，别只看自己写的那份文件（本次就撞上 V2 已建过的 content_text trgm 索引）
 
+22. **第三轮评测第五批整改（2026-10-31）：参保日期口径 + 年度封顶累计（S-11 / S-10）**
+   - **S-11 参保按就诊日期**：clinical `/internal/visits/{id}/charges` 增返 `serviceDate`
+     （住院：出院日优先、未出院取入院日；门诊/急诊：挂号日）；insurance 用 `member.activeOn(serviceDate)`
+     校验，跨年补结算不再因"今天参保已过期"被拒；字段缺失/解析失败回退业务"今天"（兼容旧临床）
+   - **S-10 年度封顶**：`InsuranceRepository.insuranceUsedInYear(patientId, day, excludeBillId)`
+     汇总本自然年 CONFIRMED 清单统筹（按确认时间归属年度）；`calculate` 增加 `capUsed` 重载，
+     剩余额度 = cap − used（cap<=0 视为不限额，`capRemaining` 返回 null）；
+     `BillView` 增 `capUsed/capRemaining`，`BILL_GENERATE` 审计同时记录 serviceDate 与额度
+   - **重算/复核/对账**统一 `excludeBillId = bill.id()`：已确认清单重算时不能把自己算进已用额度，
+     否则 confirm 复核与 reconcile 永远对不上
+   - **大病段未建模**：本地测算边界写清"单次清单 + 年度统筹额度"，大病保险依赖省局政策参数，
+     留到 N5 接省局接口时统一做（插入点固定：统筹截断之后、自付计算之前）
+   - 验证：单测 239→**245**；insurance E2E 50→**63 项**全过（cap=15，第一单统筹 10、第二单统筹 5）；
+     内部接口实测返回 `serviceDate`
+   - 踩坑：同患者同科室同一天只允许一个在诊挂号（`ux_visit_active`），E2E 造第二张结算单必须换科室
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

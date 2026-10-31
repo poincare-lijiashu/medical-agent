@@ -163,6 +163,43 @@ class InsuranceServiceTest {
     }
 
     @Test
+    @DisplayName("年度累计：封顶按已用额度扣减，超出剩余额度部分转自付")
+    void capConsidersAnnualUsage() {
+        InsuranceService.Computation c = InsuranceService.calculate(
+                List.of(line("A1", "10.00")), catalog(Map.of("A1", item("I-A1", "A", "0"))),
+                member("0", "1.0000", "15.00"), new BigDecimal("10.00"));
+
+        assertThat(c.insurance()).isEqualByComparingTo("5.00");
+        assertThat(c.selfPay()).isEqualByComparingTo("5.00");
+        assertThat(c.capUsed()).isEqualByComparingTo("10.00");
+        assertThat(c.capRemaining()).isEqualByComparingTo("5.00");
+    }
+
+    @Test
+    @DisplayName("年度额度已用尽：本次统筹为 0，全部自付")
+    void capExhaustedThisYear() {
+        InsuranceService.Computation c = InsuranceService.calculate(
+                List.of(line("A1", "10.00")), catalog(Map.of("A1", item("I-A1", "A", "0"))),
+                member("0", "1.0000", "15.00"), new BigDecimal("15.00"));
+
+        assertThat(c.insurance()).isEqualByComparingTo("0.00");
+        assertThat(c.selfPay()).isEqualByComparingTo("10.00");
+        assertThat(c.capRemaining()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    @DisplayName("未配置封顶（cap<=0）：不限额，剩余额度为空")
+    void capNotConfiguredMeansUnlimited() {
+        InsuranceService.Computation c = InsuranceService.calculate(
+                List.of(line("A1", "10.00")), catalog(Map.of("A1", item("I-A1", "A", "0"))),
+                member("0", "1.0000", "0"), new BigDecimal("9999.00"));
+
+        assertThat(c.insurance()).isEqualByComparingTo("10.00");
+        assertThat(c.capRemaining()).isNull();
+        assertThat(c.capUsed()).isEqualByComparingTo("9999.00");
+    }
+
+    @Test
     @DisplayName("多行精确到分：33.33 × 3 = 99.99")
     void multiLineRounding() {
         InsuranceService.Computation c = InsuranceService.calculate(
@@ -240,6 +277,78 @@ class InsuranceServiceTest {
         verify(repo).insertBill(any(SettlementBill.class));
         verify(repo).logChange(eq("cashier01"), eq("BILL_GENERATE"), eq("SETTLEMENT_BILL"),
                 anyString(), anyString());
+    }
+
+    // ---------------------------------------------------------------- 就诊日期参保 / 年度封顶（S-11 / S-10）
+
+    private ClinicalClient.ChargeSummary summaryOn(String amount, LocalDate serviceDate) {
+        return new ClinicalClient.ChargeSummary(visitId, patientId, "P0001", serviceDate,
+                List.of(line("REG-GENERAL", amount)));
+    }
+
+    private Member memberWith(LocalDate from, LocalDate to, String cap) {
+        return new Member(UUID.randomUUID(), patientId, "P0001", "EMPLOYEE", "本地", "在职",
+                BigDecimal.ZERO, BigDecimal.ONE, new BigDecimal(cap), from, to,
+                Member.ACTIVE, 0L);
+    }
+
+    private void stubChargeResolution() {
+        when(repo.findMapping("REG-GENERAL")).thenReturn(Optional.of(
+                new ChargeMapping(UUID.randomUUID(), "REG-GENERAL", "I-REG", true, 0L)));
+        when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
+        when(repo.lockBillByVisit(visitId)).thenReturn(Optional.empty());
+        when(repo.nextBillNo()).thenReturn("SB20261031000001");
+        when(repo.findBillById(any())).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 0L)));
+    }
+
+    @Test
+    @DisplayName("生成：按就诊日期校验参保，过期不影响历史就诊补结算")
+    void generateChecksMemberOnServiceDate() {
+        LocalDate serviceDate = LocalDate.now().minusDays(40);
+        when(clinicalClient.charges(visitId)).thenReturn(summaryOn("10.00", serviceDate));
+        // 参保在就诊日有效、但今天已过期：按"今天"校验会误判为未参保
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
+                memberWith(serviceDate.minusDays(60), serviceDate.plusDays(1), "300000.00")));
+        stubChargeResolution();
+
+        BillView view = service.generate(visitId, "cashier01");
+
+        assertThat(view.bill().status()).isEqualTo(SettlementBill.DRAFT);
+    }
+
+    @Test
+    @DisplayName("生成：就诊日期尚未进入参保有效期时拒绝")
+    void generateRejectsMemberNotYetActiveOnServiceDate() {
+        LocalDate serviceDate = LocalDate.now().minusDays(40);
+        when(clinicalClient.charges(visitId)).thenReturn(summaryOn("10.00", serviceDate));
+        // 今天才生效的参保不能用于 40 天前的就诊
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
+                memberWith(LocalDate.now().minusDays(5), null, "300000.00")));
+
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_NOT_ENROLLED);
+        verify(repo, never()).insertBill(any());
+    }
+
+    @Test
+    @DisplayName("生成：封顶线扣减本年度已用统筹，只剩剩余额度")
+    void generateDeductsAnnualUsedCap() {
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
+                memberWith(LocalDate.now().minusDays(30), null, "15.00")));
+        when(repo.insuranceUsedInYear(eq(patientId), any(), any())).thenReturn(new BigDecimal("10.00"));
+        stubChargeResolution();
+
+        BillView view = service.generate(visitId, "cashier01");
+
+        ArgumentCaptor<SettlementBill> captor = ArgumentCaptor.forClass(SettlementBill.class);
+        verify(repo).insertBill(captor.capture());
+        assertThat(captor.getValue().insuranceAmount()).isEqualByComparingTo("5.00");
+        assertThat(captor.getValue().selfPayAmount()).isEqualByComparingTo("5.00");
+        assertThat(view.capUsed()).isEqualByComparingTo("10.00");
+        assertThat(view.capRemaining()).isEqualByComparingTo("5.00");
     }
 
     @Test

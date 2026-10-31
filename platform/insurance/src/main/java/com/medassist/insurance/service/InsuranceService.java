@@ -40,8 +40,9 @@ import java.util.function.Function;
  * <ol>
  *   <li>甲类：全额纳入；乙类：先自付 selfPayRatio，其余纳入；丙类：全额自费；</li>
  *   <li>未映射或映射已停用的收费项目按丙类处理，并在明细里标记 unmapped，便于对账；</li>
- *   <li>纳入金额扣除起付线后，按参保报销比例计算统筹支付，并以封顶线截断；</li>
- *   <li>个人自付 = 总费用 − 统筹支付。</li>
+ *   <li>纳入金额扣除起付线后，按参保报销比例计算统筹支付，并以**年度剩余封顶额度**与总额双重截断；</li>
+ *   <li>个人自付 = 总费用 − 统筹支付；</li>
+ *   <li>参保有效期按就诊业务日期校验，年度额度按清单确认时间归属自然年。</li>
  * </ol>
  */
 @Service
@@ -167,6 +168,10 @@ public class InsuranceService {
      * 生成/重算结算清单。
      *
      * <p>同一就诊单只有一张清单：DRAFT 可重算（版本号 CAS），CONFIRMED 拒绝重算。
+     *
+     * <p>参保有效期按**就诊业务日期**（门诊挂号日 / 住院出院日）校验，而不是请求时刻的"今天"：
+     * 跨年补结算、月末补录时才不会把当时有效的参保判成失效。封顶线按**年度累计**扣减
+     * （已确认清单的统筹合计），单次测算只是年度额度里的一段。
      */
     @Transactional
     public BillView generate(UUID visitId, String actor) {
@@ -174,11 +179,17 @@ public class InsuranceService {
         if (summary.lines().isEmpty()) {
             throw new BusinessException(ErrorCode.INSURANCE_NO_CHARGE);
         }
+        LocalDate serviceDate = summary.serviceDate() == null
+                ? BusinessTime.today() : summary.serviceDate();
         Member member = repo.findMemberByPatient(summary.patientId())
-                .filter(m -> m.activeOn(BusinessTime.today()))
-                .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_NOT_ENROLLED));
+                .filter(m -> m.activeOn(serviceDate))
+                .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_NOT_ENROLLED,
+                        "该患者在就诊日期 " + serviceDate + " 无有效参保信息"));
 
-        Computation c = calculate(summary.lines(), resolver(), member);
+        Optional<SettlementBill> existing = repo.lockBillByVisit(visitId);
+        BigDecimal capUsed = repo.insuranceUsedInYear(summary.patientId(), BusinessTime.today(),
+                existing.map(SettlementBill::id).orElse(null));
+        Computation c = calculate(summary.lines(), resolver(), member, capUsed);
         if (c.lines().isEmpty()) {
             // 全部收费单已退费：没有可结算的明细，不能出零元清单
             throw new BusinessException(ErrorCode.INSURANCE_NO_CHARGE,
@@ -186,7 +197,6 @@ public class InsuranceService {
         }
         String detail = toJson(c.lines());
 
-        Optional<SettlementBill> existing = repo.lockBillByVisit(visitId);
         SettlementBill bill;
         if (existing.isPresent()) {
             SettlementBill old = existing.get();
@@ -213,10 +223,13 @@ public class InsuranceService {
         }
         audit(actor, "BILL_GENERATE", "SETTLEMENT_BILL", bill.id().toString(), Map.of(
                 "billNo", bill.billNo(), "visitId", visitId.toString(),
+                "serviceDate", serviceDate.toString(),
                 "total", c.total().toPlainString(), "insurance", c.insurance().toPlainString(),
                 "selfPay", c.selfPay().toPlainString(), "lines", c.lines().size(),
+                "capUsed", c.capUsed().toPlainString(),
+                "capRemaining", c.capRemaining() == null ? "UNLIMITED" : c.capRemaining().toPlainString(),
                 "skippedRefunded", c.skippedRefunded()));
-        return new BillView(bill, c.lines());
+        return new BillView(bill, c.lines(), c.capUsed(), c.capRemaining());
     }
 
     @Transactional
@@ -273,9 +286,7 @@ public class InsuranceService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND,
                         "该就诊单没有有效结算清单"));
         Optional<Member> snapshot = snapshotMember(bill);
-        Computation fresh = snapshot
-                .map(m -> calculate(clinicalClient.charges(visitId).lines(), resolver(), m))
-                .orElse(null);
+        Computation fresh = snapshot.map(m -> recompute(bill, m)).orElse(null);
         boolean matched = fresh != null
                 && fresh.total().compareTo(bill.totalAmount()) == 0
                 && fresh.insurance().compareTo(bill.insuranceAmount()) == 0;
@@ -286,6 +297,17 @@ public class InsuranceService {
                 parse(bill.detail()).size(), fresh == null ? -1 : fresh.lines().size());
     }
 
+    /**
+     * 用指定待遇重算某张清单的当前值。
+     *
+     * <p>年度封顶累计必须排除清单自身：已确认清单重算时若把自己也算进已用额度，
+     * 复核/对账会永远对不上。
+     */
+    private Computation recompute(SettlementBill bill, Member member) {
+        return calculate(clinicalClient.charges(bill.visitId()).lines(), resolver(), member,
+                repo.insuranceUsedInYear(bill.patientId(), BusinessTime.today(), bill.id()));
+    }
+
     /** 确认前复核：按生成时的待遇快照重算，费用或口径变了就拒绝确认。 */
     private void verifyChargesUnchanged(SettlementBill bill) {
         Optional<Member> snapshot = snapshotMember(bill);
@@ -293,15 +315,14 @@ public class InsuranceService {
             // 历史清单 + 参保已删除：无法复核，不阻断（但要靠对账接口人工核对）
             return;
         }
-        Computation fresh = calculate(clinicalClient.charges(bill.visitId()).lines(),
-                resolver(), snapshot.get());
+        Computation fresh = recompute(bill, snapshot.get());
         boolean changed = fresh.total().compareTo(bill.totalAmount()) != 0
                 || fresh.insurance().compareTo(bill.insuranceAmount()) != 0;
         if (changed) {
             throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
                     "费用或参保待遇已变化（清单实收 " + bill.totalAmount().toPlainString()
                             + " / 当前 " + fresh.total().toPlainString()
-                            + "），请作废后重新生成清单");
+                            + "，含年度封顶累计），请作废后重新生成清单");
         }
     }
 
@@ -326,7 +347,7 @@ public class InsuranceService {
         SettlementBill bill = repo.findBillByVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND,
                         "该就诊单尚未生成结算清单"));
-        return new BillView(bill, parse(bill.detail()));
+        return new BillView(bill, parse(bill.detail()), null, null);
     }
 
     public List<SettlementBill> list(UUID patientId, String status, Integer limit) {
@@ -337,15 +358,21 @@ public class InsuranceService {
     private BillView view(UUID billId) {
         SettlementBill bill = repo.findBillById(billId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
-        return new BillView(bill, parse(bill.detail()));
+        return new BillView(bill, parse(bill.detail()), null, null);
     }
 
     // ---------------------------------------------------------------- 计算引擎
 
-    /** 计算结果（金额保留 2 位小数，HALF_UP）；skippedRefunded 为被剔除的已退费收费行数。 */
+    /**
+     * 计算结果（金额保留 2 位小数，HALF_UP）。
+     *
+     * @param skippedRefunded 被剔除的已退费收费行数
+     * @param capUsed         本年度已用统筹（同参保人已确认清单合计）
+     * @param capRemaining    本次测算前的剩余封顶额度；为空表示未配置封顶（不限额）
+     */
     record Computation(BigDecimal total, BigDecimal eligible, BigDecimal deductible,
                        BigDecimal insurance, BigDecimal selfPay, int skippedRefunded,
-                       List<BillLine> lines) {
+                       BigDecimal capUsed, BigDecimal capRemaining, List<BillLine> lines) {
     }
 
     private static final String STATUS_PAID = "PAID";
@@ -353,20 +380,31 @@ public class InsuranceService {
     private static final String STATUS_REFUNDED = "REFUNDED";
 
     /**
-     * 本地测算：目录支付类别 + 参保待遇 + 支付限价。
+     * 本地测算：目录支付类别 + 参保待遇 + 支付限价 + 年度封顶累计。
      *
      * <p>口径（有代码即口径，不允许"带出来但不用"）：
      * <ol>
      *   <li>收费单状态：REFUNDED 整单剔除（不进入清单）；非 PAID/UNPAID 一律 fail-closed；</li>
      *   <li>甲类全额纳入；乙类先自付 selfPayRatio；丙类/未映射/目录停用全额自费；</li>
      *   <li>乙类等有支付限价的项目：限价内部分参与纳入计算，超限部分全额自付（overLimitAmount）；</li>
-     *   <li>纳入金额扣除起付线后按报销比例计算统筹支付，封顶线与总额双重截断；</li>
+     *   <li>纳入金额扣除起付线后按报销比例计算统筹支付，并以**年度剩余封顶额度**与总额双重截断；</li>
      *   <li>负数金额直接拒绝（退费走红冲单，不进入本地测算）。</li>
      * </ol>
      */
     static Computation calculate(List<ClinicalClient.ChargeLine> lines,
                                  Function<String, InsuranceItem> resolver,
                                  Member member) {
+        return calculate(lines, resolver, member, ZERO);
+    }
+
+    /**
+     * 带年度累计额度的测算。
+     *
+     * @param capUsed 本年度已用统筹；封顶线按"已用 + 本次"判断，超出剩额度部分转个人自付
+     */
+    static Computation calculate(List<ClinicalClient.ChargeLine> lines,
+                                 Function<String, InsuranceItem> resolver,
+                                 Member member, BigDecimal capUsed) {
         List<BillLine> detail = new ArrayList<>(lines.size());
         BigDecimal total = ZERO;
         BigDecimal eligible = ZERO;
@@ -421,14 +459,18 @@ public class InsuranceService {
                 ? BigDecimal.ZERO : member.reimbursementRatio();
         BigDecimal insurance = base.multiply(ratio).setScale(2, RoundingMode.HALF_UP);
         BigDecimal cap = money(member.cap() == null ? ZERO : member.cap());
-        if (cap.signum() > 0 && insurance.compareTo(cap) > 0) {
-            insurance = cap;
+        BigDecimal used = money(capUsed == null ? ZERO : capUsed);
+        // 封顶为 0 或负数视为未配置（不限额）；配置后按"年度剩余额度"截断
+        BigDecimal remaining = cap.signum() > 0 ? cap.subtract(used).max(ZERO) : null;
+        if (remaining != null && insurance.compareTo(remaining) > 0) {
+            insurance = remaining;
         }
         if (insurance.compareTo(total) > 0) {
             insurance = total;
         }
         BigDecimal selfPay = money(total.subtract(insurance));
-        return new Computation(total, eligible, deductible, insurance, selfPay, skippedRefunded, detail);
+        return new Computation(total, eligible, deductible, insurance, selfPay, skippedRefunded,
+                used, remaining, detail);
     }
 
     private Function<String, InsuranceItem> resolver() {

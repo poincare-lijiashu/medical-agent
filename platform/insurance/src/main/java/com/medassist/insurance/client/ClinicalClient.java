@@ -1,6 +1,7 @@
 package com.medassist.insurance.client;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -12,8 +13,18 @@ public interface ClinicalClient {
                       BigDecimal amount, String chargeStatus) {
     }
 
-    /** 一次就诊的收费汇总：患者主键 + 明细行。 */
-    record ChargeSummary(UUID visitId, UUID patientId, String patientNo, List<ChargeLine> lines) {
+    /**
+     * 一次就诊的收费汇总：患者主键 + 业务日期 + 明细行。
+     *
+     * <p>{@code serviceDate} 是就诊业务日期（门诊挂号日 / 住院出院日），医保用它校验参保有效期
+     * 与年度封顶归属；旧版临床接口不返回时为空，调用方回退到业务"今天"。
+     */
+    record ChargeSummary(UUID visitId, UUID patientId, String patientNo, LocalDate serviceDate,
+                         List<ChargeLine> lines) {
+
+        public ChargeSummary(UUID visitId, UUID patientId, String patientNo, List<ChargeLine> lines) {
+            this(visitId, patientId, patientNo, null, lines);
+        }
     }
 
     ChargeSummary charges(UUID visitId);
