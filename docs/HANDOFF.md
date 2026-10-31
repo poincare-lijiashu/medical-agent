@@ -551,6 +551,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：全量单测 **378 项全过**；新脚本 `tech_lis_smoke.ps1` **27 项断言全过**；
      库内 2 条消息（PROCESSED/FAILED）、1 条 PENDING 危急值
 
+43. **N7 第一批（2026-11-01）：临床运营指标报表**
+   - 新增 `GET /clinical/reports/operations?from=&to=`，权限 `clinical:report:read`（auth **V24**，ADMIN/REGISTRAR/DOCTOR）
+   - 指标：门诊/急诊/住院人次（取消单列不计人次）、总费用、实收/未结/退费、药占比、
+     日均收费、分类收入、科室收入（含科室名）；期间 ≤366 天
+   - 口径全部取自 `clinical_svc` 自身表（visit / charge_item / charge / md_dept），不跨域
+   - 时间窗用 `BusinessTime.zone()` 换绝对时刻，避免 date→timestamptz 依赖会话时区
+   - 验证：全量单测 **382 项全过**；`clinical_report_smoke.ps1` **24 项断言全过**
+   - 已知限制：预交金净流入与医保结算金额未纳入（分属住院押金与医保域）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
