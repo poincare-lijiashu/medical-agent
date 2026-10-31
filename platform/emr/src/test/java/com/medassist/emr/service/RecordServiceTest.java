@@ -692,6 +692,47 @@ class RecordServiceTest {
                 any(), any(), any(), eq(10));
     }
 
+    @Test
+    @DisplayName("时限质控：阈值取规则配置（首程 8 小时），不写死 24")
+    void timelinessUsesRuleThreshold() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.DRAFT, 1, 1L, "{}")));
+        when(repo.listQcRules("ADMISSION_NOTE")).thenReturn(List.of(timelinessRule(8)));
+        when(repo.visitStartedAt(recordId)).thenReturn(Optional.of(
+                Instant.now().minus(java.time.Duration.ofHours(9))));
+        when(repo.updateStatus(recordId, MedicalRecord.DRAFT, MedicalRecord.SUBMITTED, 1L))
+                .thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 2L, "{}")));
+
+        SubmitResult result = service.submit(recordId, "doctor01");
+
+        assertThat(result.qc().majorCount()).isEqualTo(1);
+        assertThat(result.qc().results().get(0).message()).contains("已 9 小时");
+    }
+
+    @Test
+    @DisplayName("签名：三级签名写到 CHIEF（归档策略 3 级的场景）")
+    void countersignChiefAtLevel3() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 7L, "{}")));
+        when(repo.currentSignLevel(recordId, 1)).thenReturn(2);
+        when(repo.listSignatures(recordId)).thenReturn(List.of(
+                new RecordSignature(UUID.randomUUID(), recordId, 1, "doctor01",
+                        RecordSignature.AUTHOR, Instant.now(), "h1"),
+                new RecordSignature(UUID.randomUUID(), recordId, 1, "attending01",
+                        RecordSignature.ATTENDING, Instant.now(), "h1")));
+        when(repo.countersign(eq(recordId), eq("chief01"), anyString(), eq(7L))).thenReturn(true);
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 8L, "{}")));
+
+        service.sign(recordId, RecordSignature.CHIEF, "chief01");
+
+        verify(repo).countersign(eq(recordId), eq("chief01"), anyString(), eq(7L));
+        verify(repo).insertSignature(org.mockito.ArgumentMatchers.argThat(
+                s -> RecordSignature.CHIEF.equals(s.signType()) && "chief01".equals(s.signer())));
+    }
+
     // ------------------------------------------------ 责任链 / 完整性 / 就诊归属（S-01 / S-04 / S-09）
 
     @Test

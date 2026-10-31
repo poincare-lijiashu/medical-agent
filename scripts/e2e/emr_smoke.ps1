@@ -43,7 +43,8 @@ function Check($name, $actual, $expected) {
 
 function Res($r) { return (($r.Body | ConvertFrom-Json).data) }
 
-$suffix = Get-Random -Minimum 1000 -Maximum 9999
+# timestamp-based suffix: random 4-digit values collide on idNo/ward unique indexes within a day
+$suffix = (Get-Date).ToString('HHmmssff')
 
 # ---------------------------------------------------------------- 1. login
 $r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = $Username; password = $Password }
@@ -342,9 +343,78 @@ $timeRules = @((Res $r).results | Where-Object { $_.ruleCode -eq 'QC-ADM-TIME' }
 Check 'timeliness.rule.present' $timeRules.Count 1
 Check 'timeliness.rule.passed' $timeRules[0].passed 'True'
 
+# ---------------------------------------------------------------- 11. first course 8h rule (S-28)
+$r = Invoke-Api 'POST' '/api/v2/emr/templates' @{
+    templateCode = "TPL-FC-$suffix"; name = 'First Course'
+    docType = 'FIRST_COURSE'; scope = 'INPATIENT'
+    schemaJson = '[{"key":"course","label":"Course","type":"TEXTAREA","required":true}]'
+} $qcToken
+Check 'tpl.first.manage' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/emr/records' @{
+    patientId = $patientId; visitId = $visitId; templateCode = "TPL-FC-$suffix"
+    title = 'First Course Note'; content = @{ course = 'admitted, plan ordered' }
+} $token
+Check 'first.record.create' $r.Status 200
+$firstRecordId = (Res $r).record.id
+
+$r = Invoke-Api 'GET' "/api/v2/emr/records/$firstRecordId/qc" $null $token
+Check 'first.qc.ok' $r.Status 200
+$fcRules = @((Res $r).results | Where-Object { $_.ruleCode -eq 'QC-FC-TIME' })
+Check 'first.qc.rulePresent' $fcRules.Count 1
+Check 'first.qc.rulePassed' $fcRules[0].passed 'True'
+
+# ---------------------------------------------------------------- 12. three-level signing + archive (S-28)
+$r = Invoke-Api 'POST' '/api/v2/auth/users' @{
+    username = "chief$suffix"; password = 'Med@2026'; displayName = 'Chief Physician'
+    roles = @('DOCTOR')
+} $token
+Check 'chief.user.create' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = "chief$suffix"; password = 'Med@2026' }
+Check 'login.chief' $r.Status 200
+$chiefToken = (Res $r).accessToken
+
+$r = Invoke-Api 'POST' '/api/v2/emr/templates' @{
+    templateCode = "TPL-DIS-$suffix"; name = 'Discharge Summary'
+    docType = 'DISCHARGE_SUMMARY'; scope = 'INPATIENT'
+    schemaJson = '[{"key":"course","label":"Course","type":"TEXTAREA","required":true}]'
+} $qcToken
+Check 'tpl.discharge.manage' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/emr/records' @{
+    patientId = $patientId; visitId = $visitId; templateCode = "TPL-DIS-$suffix"
+    title = 'Discharge Summary'; content = @{ course = 'treated and improved' }
+} $token
+Check 'dis.record.create' $r.Status 200
+$disRecordId = (Res $r).record.id
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/submit" $null $token
+Check 'dis.submit' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/sign" @{ level = 'AUTHOR' } $token
+Check 'dis.sign.author' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/sign" @{ level = 'ATTENDING' } $doctorToken
+Check 'dis.sign.attending' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/sign" @{ level = 'CHIEF' } $token
+Check 'dis.sign.chief.self.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/sign" @{ level = 'CHIEF' } $chiefToken
+Check 'dis.sign.chief' $r.Status 200
+Check 'dis.signatures.count' (@((Res $r).signatures).Count) 3
+$chiefSigs = @((Res $r).signatures | Where-Object { $_.signType -eq 'CHIEF' })
+Check 'dis.signatures.chiefPresent' $chiefSigs.Count 1
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$disRecordId/archive" $null $qcToken
+Check 'dis.archive' $r.Status 200
+Check 'dis.archive.status' (Res $r).record.status 'ARCHIVED'
+
 Write-Output "-----"
 Write-Output "RECORD_ID=$recordId"
 Write-Output "RECORD2_ID=$record2Id"
+Write-Output "DISCHARGE_ID=$disRecordId"
 if ($script:fail -gt 0) { Write-Output "RESULT FAIL ($script:fail)"; exit 1 }
 Write-Output 'RESULT PASS'
 exit 0

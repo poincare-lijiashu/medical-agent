@@ -484,4 +484,19 @@ S-26、S-28~S-30（E2E 补 CHIEF 三级签名与首程 8h、Mockito 去过拟合
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–18 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 19. 整改状态（2026-10-31，第十三批：测试网补强）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| S-28 | CHIEF 三级签名与 3 级归档策略无端到端；FIRST_COURSE 8h 规则零覆盖 | ✅ 已修 | `emr_smoke.ps1` 新增两段：① 出院小结 AUTHOR→ATTENDING→CHIEF→QC 归档全链（含"书写人自签 CHIEF 409"）；② 首程记录质控 `QC-FC-TIME` 存在且通过。单测补 `countersignChiefAtLevel3`、`timelinessUsesRuleThreshold`（8h 阈值，9h 判超时） |
+| S-29（部分） | E2E 4 位随机后缀会撞 idNo/ward 唯一索引 | ✅ 已修 | `emr_smoke.ps1` / `insurance_smoke.ps1` 后缀改为 `HHmmssff` 时间戳（8 位数字），按天复跑不再撞号；**幂等清理段仍未做**（记为遗留） |
+| S-30（部分） | `CheckNum` 对 null 宽容（`[decimal]$null = 0` 假 PASS） | ✅ 已修 | `insurance_smoke.ps1` 的 `CheckNum` 对 null/空串显式 FAIL 并输出 `<null>`；**Mockito 过拟合改造仍未做**（记为遗留） |
+
+**验证**：
+- 单测 **267 → 269**；
+- `emr_smoke.ps1` **91 → 109 项**全过（三级签名 3 条、归档 2 条、首程质控 3 条、模板 2 条等）；
+- `insurance_smoke.ps1` **87 项**全过（改用时间戳后缀后复跑不受历史数据影响）。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–19 节记录整改落地与验证。后续批次按第 5 节路线继续。*

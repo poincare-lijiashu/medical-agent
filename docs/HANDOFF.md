@@ -426,6 +426,15 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      （历史顺序 `ENABLE,DISABLE,UPDATE,CREATE`）；库内 insurance 迁移到 v4
    - 行为变化：前端"直接保存"恢复停用参保会收到 409，需引导用户显式重新启用
 
+30. **第三轮评测第十三批整改（2026-10-31）：测试网补强（S-28/29/30）**
+   - `emr_smoke.ps1` 新增出院小结三级签名全链（AUTHOR→ATTENDING→CHIEF→QC 归档），
+     含"书写人自签 CHIEF → 409"与 signatures=3 断言；新增首程 `QC-FC-TIME` 质控断言
+   - 单测补 `countersignChiefAtLevel3`、`timelinessUsesRuleThreshold`（8h 规则阈值，9h 判超时）
+   - E2E 后缀改 `HHmmssff` 时间戳（8 位数字），不再撞 idNo/ward 唯一索引
+   - `CheckNum` 对 null/空串显式 FAIL（避免 `[decimal]$null=0` 假 PASS）
+   - 验证：单测 267→**269**；emr E2E 91→**109 项**、insurance E2E 87 项全过
+   - 仍未做：E2E 幂等清理段、Mockito 断言去过拟合（记录在 REVIEW §19）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

@@ -41,14 +41,21 @@ function Check($name, $actual, $expected) {
 }
 
 # Amounts come back as JSON numbers (10.00 -> 10 in PowerShell), compare numerically.
+# A missing field must FAIL, not silently become 0 (PowerShell casts $null to 0).
 function CheckNum($name, $actual, $expected) {
+    if ($null -eq $actual -or "$actual".Trim() -eq '') {
+        Write-Output "FAIL $name expected=$expected actual=<null>"
+        $script:fail++
+        return
+    }
     if ([decimal]$actual -eq [decimal]$expected) { Write-Output "PASS $name = $actual" }
     else { Write-Output "FAIL $name expected=$expected actual=$actual"; $script:fail++ }
 }
 
 function Res($r) { return (($r.Body | ConvertFrom-Json).data) }
 
-$suffix = Get-Random -Minimum 1000 -Maximum 9999
+# timestamp-based suffix: random 4-digit values collide on idNo/ward unique indexes within a day
+$suffix = (Get-Date).ToString('HHmmssff')
 
 # ---------------------------------------------------------------- 1. login
 $r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = $Username; password = $Password }
