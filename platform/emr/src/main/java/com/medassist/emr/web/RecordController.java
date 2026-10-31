@@ -226,6 +226,17 @@ public class RecordController {
         return ApiResponse.ok(service.rejectChange(id, requestId, req, actor));
     }
 
+    /** 申请人撤回待审批申请（仅本人、仅 PENDING），撤回后可重新申请。 */
+    @PostMapping("/{id}/change-requests/{requestId}/withdraw")
+    public ApiResponse<ChangeRequest> withdrawChange(
+            @PathVariable UUID id,
+            @PathVariable UUID requestId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, AMEND);
+        return ApiResponse.ok(service.withdrawChange(id, requestId, actor));
+    }
+
     /** 校验内容是否被篡改（重算哈希与签名哈希比对）。 */
     @GetMapping("/{id}/verify")
     public ApiResponse<HashVerify> verify(

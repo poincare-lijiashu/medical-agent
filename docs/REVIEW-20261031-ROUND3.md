@@ -437,4 +437,20 @@ E2E 造挂号必须用 seed 里的科室 UUID，不能随手编一个。
 
 ---
 
-*第 1–6 节为只读评审结论（未改代码）；第 7–15 节记录整改落地与验证。后续批次按第 5 节路线继续。*
+## 16. 整改状态（2026-10-31，第十批：修改申请闭环与归档权收敛）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| S-02 | 审批产生的修订与申请单无关联，追溯要跨表拼接 | ✅ 已修 | `emr/V7` 给 `record_amendment` 加 `change_request_id`（含外键与部分索引）；审批通过时写入；归档审计自动带 `changeRequestId` |
+| S-06 | PENDING 申请无法撤回、驳回后重提无关联 | ✅ 已修 | 新增 `POST /emr/records/{id}/change-requests/{rid}/withdraw`（仅本人、仅 PENDING，CAS + 审计 `RECORD_CHANGE_WITHDRAW`）；`ChangeRequestReq` 增 `resubmitOf`，只允许关联同病历且已驳回/已撤回的申请 |
+| S-05（归档权） | DOCTOR 自查自归档 | ✅ 已修 | `auth/V18` 撤销 DOCTOR 的 `emr:record:archive`，改授 QC 与 ADMIN |
+| S-05（策略 fail-open） | 查不到 `sign_policy` 时静默按 1 级放行 | ✅ 已修 | `requiredSignLevel` 返回 Optional，归档时缺失即 **409**「未配置归档签名策略」，不再默认放行 |
+
+**验证**：
+- 单测 **258 → 263**（策略缺失拒绝、归档审计带申请单号、撤回成功、非申请人撤回拒绝、重提关联校验）；
+- `emr_smoke.ps1` **84 → 91 项**全过（重提带 `resubmitOf`、他人撤回 409、撤回后释放 PENDING 通道）；
+- 库内：emr 迁移到 v7、auth 到 v18；`emr:record:archive` 仅 ADMIN/QC。
+
+---
+
+*第 1–6 节为只读评审结论（未改代码）；第 7–16 节记录整改落地与验证。后续批次按第 5 节路线继续。*

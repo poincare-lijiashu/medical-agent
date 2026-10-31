@@ -288,6 +288,28 @@ Check 'record2.change.reject.status' (Res $r).status 'REJECTED'
 $r = Invoke-Api 'GET' "/api/v2/emr/records/$record2Id" $null $token
 Check 'record2.change.reject.recordStillArchived' (Res $r).record.status 'ARCHIVED'
 
+# ---------------------------------------------------------------- 9.1 withdraw + resubmit (S-06)
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/change-requests" @{
+    content = $full; reason = 'second attempt'; resubmitOf = $req2Id
+} $token
+Check 'change.resubmit.ok' $r.Status 200
+Check 'change.resubmit.link' (Res $r).resubmitOf $req2Id
+$req3Id = (Res $r).id
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/change-requests/$req3Id/withdraw" $null $doctorToken
+Check 'change.withdraw.other.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/change-requests/$req3Id/withdraw" $null $token
+Check 'change.withdraw.ok' $r.Status 200
+Check 'change.withdraw.status' (Res $r).status 'WITHDRAWN'
+
+# withdraw releases the single-PENDING slot, so a new request can be filed
+$r = Invoke-Api 'POST' "/api/v2/emr/records/$record2Id/change-requests" @{
+    content = $full; reason = 'third attempt'; resubmitOf = $req3Id
+} $token
+Check 'change.afterWithdraw.ok' $r.Status 200
+Check 'change.afterWithdraw.status' (Res $r).status 'PENDING'
+
 # ---------------------------------------------------------------- 10. timeliness QC (needs clinical :8083)
 $deptId = '11111111-1111-1111-1111-111111111111'
 $r = Invoke-Api 'POST' '/api/v2/clinical/wards' @{

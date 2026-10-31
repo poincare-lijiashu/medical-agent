@@ -437,7 +437,7 @@ class RecordServiceTest {
     void archiveBlockedBySignPolicy() {
         when(repo.lockRecord(recordId)).thenReturn(Optional.of(
                 record(MedicalRecord.SIGNED, 1, 5L, "{}")));
-        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(2);
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(Optional.of(2));
         when(repo.currentSignLevel(recordId, 1)).thenReturn(1);
 
         assertThatThrownBy(() -> service.archive(recordId, "doctor01"))
@@ -452,7 +452,7 @@ class RecordServiceTest {
     void archivePassesAtRequiredLevel() {
         when(repo.lockRecord(recordId)).thenReturn(Optional.of(
                 record(MedicalRecord.SIGNED, 1, 5L, "{}")));
-        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(2);
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(Optional.of(2));
         when(repo.currentSignLevel(recordId, 1)).thenReturn(2);
         when(repo.archiveRecord(recordId, 5L)).thenReturn(true);
         when(repo.findRecord(recordId)).thenReturn(Optional.of(archivedRecord()));
@@ -471,7 +471,7 @@ class RecordServiceTest {
                 record(MedicalRecord.SIGNED, 1, 5L, "{}")));
 
         assertThatThrownBy(() -> service.requestChange(recordId,
-                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉"), "doctor01"))
+                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉", null), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.EMR_RECORD_STATUS_INVALID);
@@ -485,7 +485,7 @@ class RecordServiceTest {
         when(repo.hasPendingChangeRequest(recordId)).thenReturn(true);
 
         assertThatThrownBy(() -> service.requestChange(recordId,
-                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉"), "doctor01"))
+                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉", null), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
@@ -532,7 +532,7 @@ class RecordServiceTest {
         ChangeRequest pending = pendingRequest("doctor01");
         ChangeRequest rejected = new ChangeRequest(reqId, recordId, "MR20261031000001",
                 "补充诊断依据", "{}", "text", ChangeRequest.REJECTED, "doctor01",
-                Instant.now(), "qc01", Instant.now(), "依据不足", null);
+                Instant.now(), "qc01", Instant.now(), "依据不足", null, null);
         when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pending), Optional.of(rejected));
         when(repo.reviewChangeRequest(eq(reqId), eq(ChangeRequest.REJECTED), eq("qc01"),
                 eq("依据不足"), org.mockito.ArgumentMatchers.isNull())).thenReturn(true);
@@ -617,7 +617,7 @@ class RecordServiceTest {
     void archiveCasConflict() {
         when(repo.lockRecord(recordId)).thenReturn(Optional.of(
                 record(MedicalRecord.SIGNED, 1, 5L, "{}")));
-        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(1);
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(Optional.of(1));
         when(repo.currentSignLevel(recordId, 1)).thenReturn(1);
         when(repo.archiveRecord(recordId, 5L)).thenReturn(false);
 
@@ -779,6 +779,87 @@ class RecordServiceTest {
     private ChangeRequest pendingRequest(String requester) {
         return new ChangeRequest(reqId, recordId, "MR20261031000001", "补充诊断依据",
                 "{\"initialDiagnosis\":\"急性咽炎\"}", "初步诊断：急性咽炎\n",
-                ChangeRequest.PENDING, requester, Instant.now(), null, null, null, null);
+                ChangeRequest.PENDING, requester, Instant.now(), null, null, null, null, null);
+    }
+
+    // ------------------------------------------------ 修改申请闭环（S-02 / S-05 / S-06）
+
+    @Test
+    @DisplayName("归档：未配置签名策略时 fail-closed，不按 1 级放行（S-05）")
+    void archiveRejectsWhenPolicyMissing() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 1, 5L, "{}")));
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.archive(recordId, "qc01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_SIGN_LEVEL_INVALID);
+        verify(repo, never()).archiveRecord(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("归档：由申请产生的版本，归档审计带上申请单号（S-02）")
+    void archiveAuditCarriesChangeRequestId() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SIGNED, 2, 8L, "{}")));
+        when(repo.requiredSignLevel("ADMISSION_NOTE")).thenReturn(Optional.of(1));
+        when(repo.currentSignLevel(recordId, 2)).thenReturn(1);
+        when(repo.archiveRecord(recordId, 8L)).thenReturn(true);
+        when(repo.findAmendmentByRevision(recordId, 2)).thenReturn(Optional.of(
+                new Amendment(UUID.randomUUID(), recordId, 1, "{}", "text", "hash", "doctor01",
+                        "审批通过", reqId, Instant.now())));
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(archivedRecord()));
+
+        service.archive(recordId, "qc01");
+
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(repo).logChange(eq("qc01"), eq("RECORD_ARCHIVE"), eq("RECORD"),
+                eq(recordId.toString()), detail.capture());
+        assertThat(detail.getValue()).contains(reqId.toString());
+    }
+
+    @Test
+    @DisplayName("撤回：申请人本人可撤回待审批申请（S-06）")
+    void withdrawByRequester() {
+        ChangeRequest withdrawn = new ChangeRequest(reqId, recordId, "MR20261031000001",
+                "补充诊断依据", "{}", "text", ChangeRequest.WITHDRAWN, "doctor01",
+                Instant.now(), "doctor01", Instant.now(), "申请人撤回", null, null);
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")),
+                Optional.of(withdrawn));
+        when(repo.withdrawChangeRequest(reqId, "doctor01")).thenReturn(true);
+
+        ChangeRequest result = service.withdrawChange(recordId, reqId, "doctor01");
+
+        assertThat(result.status()).isEqualTo(ChangeRequest.WITHDRAWN);
+        verify(repo).logChange(eq("doctor01"), eq("RECORD_CHANGE_WITHDRAW"), eq("RECORD"),
+                eq(recordId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("撤回：非申请人不能撤回他人申请")
+    void withdrawRejectsOtherUser() {
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")));
+
+        assertThatThrownBy(() -> service.withdrawChange(recordId, reqId, "qc01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
+        verify(repo, never()).withdrawChangeRequest(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("重提：只能关联已驳回/已撤回的同病历申请（S-06）")
+    void resubmitMustReferenceClosedRequest() {
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(archivedRecord()));
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")));
+
+        assertThatThrownBy(() -> service.requestChange(recordId,
+                new ChangeRequestReq(Map.of("chiefComplaint", "发热"), "补充主诉", reqId),
+                "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
+        verify(repo, never()).insertChangeRequest(any());
     }
 }

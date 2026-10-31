@@ -55,6 +55,7 @@ public class EmrRepository {
             rs.getObject("id", UUID.class), rs.getObject("record_id", UUID.class),
             rs.getInt("revision"), rs.getString("content"), rs.getString("content_text"),
             rs.getString("content_hash"), rs.getString("author"), rs.getString("reason"),
+            rs.getObject("change_request_id", UUID.class),
             rs.getTimestamp("created_at").toInstant());
 
     private static final RowMapper<QcRule> RULE_MAPPER = (rs, i) -> new QcRule(
@@ -76,7 +77,8 @@ public class EmrRepository {
             rs.getTimestamp("requested_at").toInstant(), rs.getString("reviewer"),
             rs.getTimestamp("reviewed_at") == null ? null : rs.getTimestamp("reviewed_at").toInstant(),
             rs.getString("review_comment"),
-            rs.getObject("applied_revision") == null ? null : rs.getInt("applied_revision"));
+            rs.getObject("applied_revision") == null ? null : rs.getInt("applied_revision"),
+            rs.getObject("resubmit_of", UUID.class));
 
     private static final RowMapper<RecordHit> HIT_MAPPER = (rs, i) -> new RecordHit(
             rs.getObject("id", UUID.class), rs.getString("record_no"),
@@ -283,10 +285,16 @@ public class EmrRepository {
         return level == null ? 0 : level;
     }
 
-    /** 归档要求的签名级别；未配置时按 1（书写医师）处理。 */
-    public int requiredSignLevel(String docType) {
+    /**
+     * 归档要求的签名级别。
+     *
+     * <p>未配置策略时**拒绝**而不是默认按 1 级放行：fail-open 会让漏配的文书类型
+     * 变成"书写医师签完即可归档"，与三甲审签要求直接冲突。策略表已覆盖全部内置 docType，
+     * 新增文书类型必须同步补策略（见 V2 / V7 说明）。
+     */
+    public Optional<Integer> requiredSignLevel(String docType) {
         return jdbc.sql("SELECT required_level FROM emr_svc.sign_policy WHERE doc_type = ?")
-                .param(docType).query(Integer.class).optional().orElse(1);
+                .param(docType).query(Integer.class).optional();
     }
 
     /** 归档（CAS：仅 SIGNED 可归档，终态）。 */
@@ -358,23 +366,38 @@ public class EmrRepository {
     public void insertAmendment(Amendment a) {
         jdbc.sql("""
                         INSERT INTO emr_svc.record_amendment
-                            (id, record_id, revision, content, content_text, content_hash, author, reason)
+                            (id, record_id, revision, content, content_text, content_hash, author,
+                             reason, change_request_id)
                         VALUES (:id, :recordId, :revision, CAST(:content AS jsonb), :contentText,
-                                :hash, :author, :reason)
+                                :hash, :author, :reason, :changeRequestId)
                         """)
                 .param("id", a.id()).param("recordId", a.recordId())
                 .param("revision", a.revision()).param("content", a.content())
                 .param("contentText", a.contentText()).param("hash", a.contentHash())
-                .param("author", a.author()).param("reason", a.reason()).update();
+                .param("author", a.author()).param("reason", a.reason())
+                .param("changeRequestId", a.changeRequestId()).update();
     }
 
     public List<Amendment> listAmendments(UUID recordId) {
         return jdbc.sql("""
                         SELECT id, record_id, revision, content::text AS content, content_text,
-                               content_hash, author, reason, created_at
+                               content_hash, author, reason, change_request_id, created_at
                           FROM emr_svc.record_amendment
                          WHERE record_id = ? ORDER BY revision
                         """).param(recordId).query(AMEND_MAPPER).list();
+    }
+
+    /** 某版本的修订留痕（用于判断该版是否由病案修改申请产生）。 */
+    public Optional<Amendment> findAmendmentByRevision(UUID recordId, int revision) {
+        return jdbc.sql("""
+                        SELECT id, record_id, revision, content::text AS content, content_text,
+                               content_hash, author, reason, change_request_id, created_at
+                          FROM emr_svc.record_amendment
+                         WHERE record_id = :recordId AND revision = :revision
+                         ORDER BY created_at DESC LIMIT 1
+                        """)
+                .param("recordId", recordId).param("revision", revision)
+                .query(AMEND_MAPPER).optional();
     }
 
     // ---------------------------------------------------------------- 质控
@@ -488,14 +511,14 @@ public class EmrRepository {
         jdbc.sql("""
                         INSERT INTO emr_svc.record_change_request
                             (id, record_id, record_no, reason, proposed_content, proposed_text,
-                             status, requester)
+                             status, requester, resubmit_of)
                         VALUES (:id, :recordId, :recordNo, :reason, CAST(:content AS jsonb),
-                                :text, 'PENDING', :requester)
+                                :text, 'PENDING', :requester, :resubmitOf)
                         """)
                 .param("id", c.id()).param("recordId", c.recordId())
                 .param("recordNo", c.recordNo()).param("reason", c.reason())
                 .param("content", c.proposedContent()).param("text", c.proposedText())
-                .param("requester", c.requester()).update();
+                .param("requester", c.requester()).param("resubmitOf", c.resubmitOf()).update();
     }
 
     public boolean hasPendingChangeRequest(UUID recordId) {
@@ -510,7 +533,7 @@ public class EmrRepository {
         return jdbc.sql("""
                         SELECT id, record_id, record_no, reason, proposed_content::text AS proposed_content,
                                proposed_text, status, requester, requested_at, reviewer,
-                               reviewed_at, review_comment, applied_revision
+                               reviewed_at, review_comment, applied_revision, resubmit_of
                           FROM emr_svc.record_change_request WHERE id = ? FOR UPDATE
                         """).param(id).query(CHANGE_MAPPER).optional();
     }
@@ -519,10 +542,21 @@ public class EmrRepository {
         return jdbc.sql("""
                         SELECT id, record_id, record_no, reason, proposed_content::text AS proposed_content,
                                proposed_text, status, requester, requested_at, reviewer,
-                               reviewed_at, review_comment, applied_revision
+                               reviewed_at, review_comment, applied_revision, resubmit_of
                           FROM emr_svc.record_change_request
                          WHERE record_id = ? ORDER BY requested_at DESC
                         """).param(recordId).query(CHANGE_MAPPER).list();
+    }
+
+    /** 申请人撤回（CAS：仅本人、仅 PENDING）。 */
+    public boolean withdrawChangeRequest(UUID id, String requester) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_change_request
+                           SET status = 'WITHDRAWN', reviewer = :requester, reviewed_at = now(),
+                               review_comment = '申请人撤回'
+                         WHERE id = :id AND status = 'PENDING' AND requester = :requester
+                        """)
+                .param("id", id).param("requester", requester).update() > 0;
     }
 
     /** 审批结果（CAS：仅 PENDING 可审批）。 */

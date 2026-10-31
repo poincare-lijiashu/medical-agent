@@ -68,10 +68,11 @@ public final class EmrDtos {
             @Pattern(regexp = "AUTHOR|ATTENDING|CHIEF", message = "签名级别不合法") String level) {
     }
 
-    /** 归档后病案修改申请（申请人提交拟修改内容）。 */
+    /** 病案修改申请（{@code resubmitOf} 仅在重新申请时指向被驳回/撤回的上一条）。 */
     public record ChangeRequestReq(
             @NotNull Map<String, String> content,
-            @NotBlank @Size(max = 512) String reason) {
+            @NotBlank @Size(max = 512) String reason,
+            UUID resubmitOf) {
     }
 
     /** 修改申请审批意见（通过/驳回共用）。 */

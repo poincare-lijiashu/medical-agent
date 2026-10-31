@@ -399,6 +399,16 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 253→**258**；emr E2E 81→**84 项**、insurance E2E 78 项回归全过
    - 踩坑：`/clinical/registrations` 校验科室存在性（404 科室不存在），E2E 必须用 seed 科室 UUID
 
+27. **第三轮评测第十批整改（2026-10-31）：修改申请闭环 + 归档权收敛（S-02/05/06）**
+   - S-02：`emr/V7` 给 `record_amendment` 加 `change_request_id`；审批通过写入申请单号，
+     归档审计自动带 `changeRequestId`
+   - S-06：新增 `POST /emr/records/{id}/change-requests/{rid}/withdraw`（仅本人、仅 PENDING、CAS + 审计）；
+     `ChangeRequestReq.resubmitOf` 只能关联同病历且已驳回/已撤回的申请
+   - S-05：`auth/V18` 撤销 DOCTOR 的 `emr:record:archive`（改授 QC/ADMIN）；
+     `requiredSignLevel` 返回 Optional，策略缺失时归档 **409**，不再默认按 1 级放行
+   - 验证：单测 258→**263**；emr E2E 84→**91 项**、insurance E2E 78 项回归全过
+   - 库内：emr v7 / auth v18；`emr:record:archive` 仅 ADMIN/QC
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）

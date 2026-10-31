@@ -80,15 +80,21 @@ public final class EmrModel {
      *
      * <p>申请人提交拟修改内容，审批人（不得与申请人同一人）通过后才落库，
      * 落库后 revision+1 并回到 SUBMITTED，必须重新签名与归档。
+     * 待审批期间申请人可撤回；被驳回/撤回后可重新申请，并用 {@code resubmitOf} 关联上一条。
+     *
+     * @param resubmitOf 重新申请时指向被驳回/被撤回的上一条申请（首次申请为空）
      */
     public record ChangeRequest(UUID id, UUID recordId, String recordNo, String reason,
                                 String proposedContent, String proposedText, String status,
                                 String requester, Instant requestedAt, String reviewer,
-                                Instant reviewedAt, String reviewComment, Integer appliedRevision) {
+                                Instant reviewedAt, String reviewComment, Integer appliedRevision,
+                                UUID resubmitOf) {
 
         public static final String PENDING = "PENDING";
         public static final String APPROVED = "APPROVED";
         public static final String REJECTED = "REJECTED";
+        /** 申请人撤回（仅 PENDING 可撤回）。 */
+        public static final String WITHDRAWN = "WITHDRAWN";
     }
 
     /** CDR 检索命中项（不带正文，避免检索接口返回大对象）。 */
@@ -97,10 +103,15 @@ public final class EmrModel {
                             int revision, Instant createdAt) {
     }
 
-    /** 修订历史。 */
+    /**
+     * 修订历史（追加式）。
+     *
+     * @param author          恒为病历书写人（不是签名人），保证责任链不被上级签名覆盖
+     * @param changeRequestId 由病案修改申请产生的修订指向该申请；普通修订为空
+     */
     public record Amendment(UUID id, UUID recordId, int revision, String content,
                             String contentText, String contentHash, String author,
-                            String reason, Instant createdAt) {
+                            String reason, UUID changeRequestId, Instant createdAt) {
     }
 
     /** 质控规则。 */

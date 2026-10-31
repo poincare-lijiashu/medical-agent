@@ -297,7 +297,11 @@ public class RecordService {
             throw new BusinessException(ErrorCode.EMR_RECORD_STATUS_INVALID,
                     "只有已签名病历可以归档，当前：" + record.status());
         }
-        int required = repo.requiredSignLevel(record.docType());
+        // 未配置归档签名策略时拒绝归档（fail-closed），避免漏配的文书类型被"书写医师签完即归档"
+        int required = repo.requiredSignLevel(record.docType())
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
+                        "「" + RecordPrintRenderer.docTypeName(record.docType())
+                                + "」未配置归档签名策略，请联系病案室配置 sign_policy"));
         int current = repo.currentSignLevel(id, record.revision());
         if (current < required) {
             throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
@@ -308,9 +312,15 @@ public class RecordService {
         if (!repo.archiveRecord(id, record.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
         }
-        audit(actor, "RECORD_ARCHIVE", "RECORD", id.toString(), Map.of(
-                "recordNo", record.recordNo(), "revision", record.revision(),
-                "signLevel", current));
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("recordNo", record.recordNo());
+        detail.put("revision", record.revision());
+        detail.put("signLevel", current);
+        // 该版本若由病案修改申请产生，归档审计直接带上申请单号，免去跨表人工拼接
+        repo.findAmendmentByRevision(id, record.revision())
+                .map(Amendment::changeRequestId)
+                .ifPresent(requestId -> detail.put("changeRequestId", requestId.toString()));
+        audit(actor, "RECORD_ARCHIVE", "RECORD", id.toString(), detail);
         return detail(id);
     }
 
@@ -343,7 +353,7 @@ public class RecordService {
         repo.insertAmendment(new Amendment(UUID.randomUUID(), id, record.revision(),
                 record.content(), record.contentText(),
                 record.contentHash() == null ? sha256(record.contentText()) : record.contentHash(),
-                record.author(), req.reason().trim(), null));
+                record.author(), req.reason().trim(), null, null));
 
         if (!repo.applyAmendment(id, toJson(req.content()), newText, record.version(), record.status())) {
             throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
@@ -360,6 +370,7 @@ public class RecordService {
      * 归档后修改申请：先申请、后审批，审批通过才改正文。
      *
      * <p>同一份病历同时只允许一条待审批申请（数据库唯一索引兜底）。
+     * 被驳回或撤回后可以带 {@code resubmitOf} 重新申请，便于追溯同一诉求的完整处理轨迹。
      */
     @Transactional
     public ChangeRequest requestChange(UUID recordId, ChangeRequestReq req, String actor) {
@@ -373,17 +384,72 @@ public class RecordService {
             throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
                     "该病历已有待审批的修改申请，请等待审批结果");
         }
+        UUID resubmitOf = validateResubmit(recordId, req.resubmitOf());
         Template template = repo.findTemplateByCode(record.templateCode())
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_TEMPLATE_NOT_FOUND));
         String text = render(template.schemaJson(), req.content());
         ChangeRequest request = new ChangeRequest(UUID.randomUUID(), recordId, record.recordNo(),
                 req.reason().trim(), toJson(req.content()), text, ChangeRequest.PENDING,
-                actor, null, null, null, null, null);
+                actor, null, null, null, null, null, resubmitOf);
         repo.insertChangeRequest(request);
-        audit(actor, "RECORD_CHANGE_REQUEST", "RECORD", recordId.toString(), Map.of(
-                "recordNo", record.recordNo(), "revision", record.revision(),
-                "reason", req.reason().trim()));
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("recordNo", record.recordNo());
+        detail.put("revision", record.revision());
+        detail.put("reason", req.reason().trim());
+        if (resubmitOf != null) {
+            detail.put("resubmitOf", resubmitOf.toString());
+        }
+        audit(actor, "RECORD_CHANGE_REQUEST", "RECORD", recordId.toString(), detail);
         return request;
+    }
+
+    /** 重提关联校验：必须同病历、且原申请已被驳回或撤回。 */
+    private UUID validateResubmit(UUID recordId, UUID resubmitOf) {
+        if (resubmitOf == null) {
+            return null;
+        }
+        ChangeRequest previous = repo.lockChangeRequest(resubmitOf)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_NOT_FOUND));
+        if (!previous.recordId().equals(recordId)) {
+            throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
+                    "只能关联同一份病历的历史申请");
+        }
+        if (!ChangeRequest.REJECTED.equals(previous.status())
+                && !ChangeRequest.WITHDRAWN.equals(previous.status())) {
+            throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
+                    "只能关联已驳回或已撤回的申请，当前：" + previous.status());
+        }
+        return resubmitOf;
+    }
+
+    /**
+     * 申请人撤回待审批申请：只有申请人本人、且仍处于 PENDING 时可用。
+     *
+     * <p>撤回后释放"同一病历一条 PENDING"的通道，可重新申请（带 resubmitOf 关联）。
+     */
+    @Transactional
+    public ChangeRequest withdrawChange(UUID recordId, UUID requestId, String actor) {
+        ChangeRequest request = repo.lockChangeRequest(requestId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_NOT_FOUND));
+        if (!request.recordId().equals(recordId)) {
+            throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_NOT_FOUND);
+        }
+        if (!ChangeRequest.PENDING.equals(request.status())) {
+            throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
+                    "该申请已处理（" + request.status() + "），不能撤回");
+        }
+        if (!request.requester().equals(actor)) {
+            throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
+                    "只有申请人本人可以撤回申请");
+        }
+        if (!repo.withdrawChangeRequest(requestId, actor)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该申请已被处理，请刷新后重试");
+        }
+        audit(actor, "RECORD_CHANGE_WITHDRAW", "RECORD", recordId.toString(), Map.of(
+                "recordNo", request.recordNo(), "requestId", requestId.toString(),
+                "reason", request.reason()));
+        return repo.lockChangeRequest(requestId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_NOT_FOUND));
     }
 
     /** 审批通过：旧版本留档、应用新内容、revision+1 并回到 SUBMITTED（需重新签名与归档）。 */
@@ -401,7 +467,7 @@ public class RecordService {
                 record.content(), record.contentText(),
                 record.contentHash() == null ? sha256(record.contentText()) : record.contentHash(),
                 record.author(),
-                "病案修改申请审批通过：" + request.reason(), null));
+                "病案修改申请审批通过：" + request.reason(), requestId, null));
         if (!repo.applyAmendment(recordId, request.proposedContent(), request.proposedText(),
                 record.version(), MedicalRecord.ARCHIVED)) {
             throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");

@@ -453,6 +453,20 @@ doctor01 确认 **403**、只读 200。
 
 ---
 
+## 1.20 已完成（2026-10-31，第三轮评测第十批：修改申请闭环 + 归档权收敛）
+
+| 能力 | 位置 | 关键保证 |
+|---|---|---|
+| 修订↔申请关联 | `record_amendment.change_request_id`（emr/V7） | 审批产生的修订直接指向申请单；归档审计自动带 `changeRequestId` |
+| 申请撤回 | `POST /emr/records/{id}/change-requests/{rid}/withdraw` | 仅申请人本人、仅 PENDING、CAS + 审计；撤回后释放"单条 PENDING"通道 |
+| 重新申请 | `ChangeRequestReq.resubmitOf` | 只能关联同病历且已驳回/已撤回的申请，完整保留诉求处理轨迹 |
+| 归档权 | `auth/V18` | 撤销 DOCTOR 归档权，改授 QC 与 ADMIN；书写人不能自己归档 |
+| 策略缺失 | `requiredSignLevel` 返回 Optional | 未配置 `sign_policy` 时归档 409，不再默认按 1 级放行 |
+
+**验证**：单测 258→**263**；`emr_smoke.ps1` 84→**91 项**全过；emr/insurance E2E 回归全过。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
