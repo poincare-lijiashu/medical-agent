@@ -12,6 +12,7 @@ import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.BillView;
 import com.medassist.insurance.web.InsuranceDtos.MappingReq;
 import com.medassist.insurance.web.InsuranceDtos.MemberReq;
+import com.medassist.insurance.web.InsuranceDtos.ReconcileView;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -181,10 +182,18 @@ class InsuranceServiceTest {
     }
 
     private SettlementBill bill(String status, long version) {
+        return bill(status, version, null, null);
+    }
+
+    private SettlementBill bill(String status, long version, String snapshotRatio, String snapshotCap) {
         return new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
                 UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                 BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
-                status, "[]", "cashier01", null, null, version, Instant.now());
+                status, "[]", "cashier01", null, null,
+                null, null, null,
+                snapshotRatio == null ? null : new BigDecimal(snapshotRatio),
+                snapshotCap == null ? null : new BigDecimal(snapshotCap),
+                version, Instant.now());
     }
 
     @Test
@@ -250,7 +259,7 @@ class InsuranceServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_BILL_STATUS_INVALID);
         verify(repo, never()).updateDraftBill(any(), any(), any(), any(), any(), any(),
-                anyString(), anyLong());
+                anyString(), any(), any(), anyLong());
     }
 
     @Test
@@ -263,7 +272,7 @@ class InsuranceServiceTest {
                         UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                         BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
                         SettlementBill.CONFIRMED, "[]", "cashier01", "cashier01", Instant.now(),
-                        3L, Instant.now())));
+                        null, null, null, null, null, 3L, Instant.now())));
 
         BillView view = service.confirm(billId, "cashier01");
 
@@ -419,7 +428,8 @@ class InsuranceServiceTest {
         when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
         when(repo.lockBillByVisit(visitId)).thenReturn(Optional.of(
                 bill(SettlementBill.DRAFT, 7L)));
-        when(repo.updateDraftBill(eq(billId), any(), any(), any(), any(), any(), anyString(), eq(7L)))
+        when(repo.updateDraftBill(eq(billId), any(), any(), any(), any(), any(), anyString(),
+                any(), any(), eq(7L)))
                 .thenReturn(true);
         when(repo.findBillById(billId)).thenReturn(Optional.of(
                 bill(SettlementBill.DRAFT, 8L)));
@@ -428,7 +438,7 @@ class InsuranceServiceTest {
 
         assertThat(view.bill().version()).isEqualTo(8L);
         verify(repo).updateDraftBill(eq(billId), any(), any(), any(), any(), any(),
-                anyString(), eq(7L));
+                anyString(), any(), any(), eq(7L));
         verify(repo, never()).insertBill(any());
     }
 
@@ -443,7 +453,8 @@ class InsuranceServiceTest {
         when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
         when(repo.lockBillByVisit(visitId)).thenReturn(Optional.of(
                 bill(SettlementBill.DRAFT, 7L)));
-        when(repo.updateDraftBill(any(), any(), any(), any(), any(), any(), anyString(), anyLong()))
+        when(repo.updateDraftBill(any(), any(), any(), any(), any(), any(), anyString(),
+                any(), any(), anyLong()))
                 .thenReturn(false);
 
         assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
@@ -529,5 +540,120 @@ class InsuranceServiceTest {
                 .isEqualTo(ErrorCode.INSURANCE_ITEM_NOT_FOUND);
         verify(repo, never()).upsertMapping(any(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    // ---------------------------------------------------------------- 清单闭环（MF-05）
+
+    /** 带待遇快照与自定义金额的清单（对账/复核用例用）。 */
+    private SettlementBill billWithAmounts(String status, String total, String insurance,
+                                           String ratio, String cap) {
+        return new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
+                UUID.randomUUID(), new BigDecimal(total), new BigDecimal(total),
+                BigDecimal.ZERO, new BigDecimal(insurance),
+                new BigDecimal(total).subtract(new BigDecimal(insurance)),
+                status, "[]", "cashier01", null, null,
+                null, null, null,
+                ratio == null ? null : new BigDecimal(ratio),
+                cap == null ? null : new BigDecimal(cap),
+                2L, Instant.now());
+    }
+
+    @Test
+    @DisplayName("确认：费用已变化时拒绝（提示作废后重新生成）")
+    void confirmRejectsWhenChargesChanged() {
+        // 清单按 8.00 统筹入档，但当前收费重算应为 10.00（比例 100%）
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                billWithAmounts(SettlementBill.DRAFT, "10.00", "8.00", "1.0000", "300000.00")));
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(repo.findMapping("REG-GENERAL")).thenReturn(Optional.of(
+                new ChargeMapping(UUID.randomUUID(), "REG-GENERAL", "I-REG", true, 0L)));
+        when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
+
+        assertThatThrownBy(() -> service.confirm(billId, "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("费用或参保待遇已变化");
+        verify(repo, never()).confirmBill(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("确认：费用一致时放行")
+    void confirmPassesWhenChargesMatch() {
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                billWithAmounts(SettlementBill.DRAFT, "10.00", "10.00", "1.0000", "300000.00")));
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(repo.findMapping("REG-GENERAL")).thenReturn(Optional.of(
+                new ChargeMapping(UUID.randomUUID(), "REG-GENERAL", "I-REG", true, 0L)));
+        when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
+        when(repo.confirmBill(eq(billId), eq("cashier01"), eq(2L))).thenReturn(true);
+        when(repo.findBillById(billId)).thenReturn(Optional.of(
+                billWithAmounts(SettlementBill.CONFIRMED, "10.00", "10.00", "1.0000", "300000.00")));
+
+        service.confirm(billId, "cashier01");
+
+        verify(repo).confirmBill(eq(billId), eq("cashier01"), eq(2L));
+    }
+
+    @Test
+    @DisplayName("作废：已确认清单可作废并留痕")
+    void voidConfirmedBill() {
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                bill(SettlementBill.CONFIRMED, 3L)));
+        when(repo.voidBill(eq(billId), eq("费用录错"), eq("cashier01"), eq(3L))).thenReturn(true);
+        when(repo.findBillById(billId)).thenReturn(Optional.of(
+                bill(SettlementBill.VOIDED, 4L)));
+
+        BillView view = service.voidBill(billId, " 费用录错 ", "cashier01");
+
+        assertThat(view.bill().status()).isEqualTo(SettlementBill.VOIDED);
+        verify(repo).voidBill(eq(billId), eq("费用录错"), eq("cashier01"), eq(3L));
+        verify(repo).logChange(eq("cashier01"), eq("BILL_VOID"), eq("SETTLEMENT_BILL"),
+                eq(billId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("作废：草稿不能作废（只有已确认才需要红冲）")
+    void voidRejectsDraft() {
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                bill(SettlementBill.DRAFT, 2L)));
+
+        assertThatThrownBy(() -> service.voidBill(billId, "误操作", "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_BILL_STATUS_INVALID);
+        verify(repo, never()).voidBill(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("对账：清单与当前收费一致时 matched=true")
+    void reconcileMatched() {
+        when(repo.findBillByVisit(visitId)).thenReturn(Optional.of(
+                billWithAmounts(SettlementBill.CONFIRMED, "10.00", "10.00", "1.0000", "300000.00")));
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(repo.findMapping("REG-GENERAL")).thenReturn(Optional.of(
+                new ChargeMapping(UUID.randomUUID(), "REG-GENERAL", "I-REG", true, 0L)));
+        when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
+
+        ReconcileView view = service.reconcile(visitId);
+
+        assertThat(view.matched()).isTrue();
+        assertThat(view.chargeTotal()).isEqualByComparingTo("10.00");
+        assertThat(view.chargeInsurance()).isEqualByComparingTo("10.00");
+    }
+
+    @Test
+    @DisplayName("对账：清单统筹与重算不一致时 matched=false（提示作废重开）")
+    void reconcileMismatched() {
+        when(repo.findBillByVisit(visitId)).thenReturn(Optional.of(
+                billWithAmounts(SettlementBill.CONFIRMED, "10.00", "8.00", "1.0000", "300000.00")));
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(repo.findMapping("REG-GENERAL")).thenReturn(Optional.of(
+                new ChargeMapping(UUID.randomUUID(), "REG-GENERAL", "I-REG", true, 0L)));
+        when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
+
+        ReconcileView view = service.reconcile(visitId);
+
+        assertThat(view.matched()).isFalse();
+        assertThat(view.billInsurance()).isEqualByComparingTo("8.00");
+        assertThat(view.chargeInsurance()).isEqualByComparingTo("10.00");
     }
 }

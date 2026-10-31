@@ -65,16 +65,32 @@ public final class InsuranceModel {
                            BigDecimal overLimitAmount, BigDecimal eligibleAmount, boolean unmapped) {
     }
 
-    /** 医保结算清单。 */
+    /**
+     * 医保结算清单。
+     *
+     * <p>状态机：DRAFT →（确认，校验费用闭合）→ CONFIRMED →（作废）→ VOIDED。
+     * 作废后同一就诊可重新生成；drafts 可重算，CONFIRMED 不可改只能作废。
+     *
+     * <p>snapshotRatio / snapshotCap 与 deductible 列一起构成"生成时的待遇快照"，
+     * 确认复核与对账都按快照重算，避免参保参数中途调整导致误判。
+     */
     public record SettlementBill(UUID id, String billNo, UUID visitId, UUID patientId,
                                  String patientNo, UUID memberId, BigDecimal totalAmount,
                                  BigDecimal eligibleAmount, BigDecimal deductible,
                                  BigDecimal insuranceAmount, BigDecimal selfPayAmount,
                                  String status, String detail, String createdBy,
-                                 String confirmedBy, Instant confirmedAt, long version,
-                                 Instant createdAt) {
+                                 String confirmedBy, Instant confirmedAt,
+                                 String voidReason, String voidedBy, Instant voidedAt,
+                                 BigDecimal snapshotRatio, BigDecimal snapshotCap,
+                                 long version, Instant createdAt) {
 
         public static final String DRAFT = "DRAFT";
         public static final String CONFIRMED = "CONFIRMED";
+        /** 作废（红冲）：CONFIRMED 之后发现费用或口径有误时使用，单向不可逆。 */
+        public static final String VOIDED = "VOIDED";
+
+        public boolean voided() {
+            return VOIDED.equals(status);
+        }
     }
 }

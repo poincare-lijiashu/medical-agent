@@ -52,7 +52,19 @@ public class InsuranceRepository {
             rs.getBigDecimal("self_pay_amount"), rs.getString("status"),
             rs.getString("detail"), rs.getString("created_by"), rs.getString("confirmed_by"),
             rs.getTimestamp("confirmed_at") == null ? null : rs.getTimestamp("confirmed_at").toInstant(),
+            rs.getString("void_reason"), rs.getString("voided_by"),
+            rs.getTimestamp("voided_at") == null ? null : rs.getTimestamp("voided_at").toInstant(),
+            rs.getBigDecimal("snapshot_ratio"), rs.getBigDecimal("snapshot_cap"),
             rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    /** 结算清单统一列清单（含作废留痕与待遇快照）。 */
+    private static final String BILL_COLUMNS = """
+            id, bill_no, visit_id, patient_id, patient_no, member_id,
+            total_amount, eligible_amount, deductible, insurance_amount, self_pay_amount,
+            status, detail::text AS detail, created_by, confirmed_by, confirmed_at,
+            void_reason, voided_by, voided_at, snapshot_ratio, snapshot_cap,
+            version, created_at
+            """;
 
     private final JdbcClient jdbc;
 
@@ -241,45 +253,32 @@ public class InsuranceRepository {
 
     // ---------------------------------------------------------------- 结算清单
 
+    /** 该就诊的"有效"清单：作废单不算，因此作废后可以重新生成。 */
     public Optional<SettlementBill> findBillByVisit(UUID visitId) {
-        return jdbc.sql("""
-                        SELECT id, bill_no, visit_id, patient_id, patient_no, member_id,
-                               total_amount, eligible_amount, deductible, insurance_amount,
-                               self_pay_amount, status, detail::text AS detail, created_by,
-                               confirmed_by, confirmed_at, version, created_at
-                          FROM insurance_svc.settlement_bill WHERE visit_id = ?
-                        """).param(visitId).query(BILL_MAPPER).optional();
+        return jdbc.sql("SELECT " + BILL_COLUMNS
+                        + " FROM insurance_svc.settlement_bill WHERE visit_id = ? AND status <> 'VOIDED'")
+                .param(visitId).query(BILL_MAPPER).optional();
     }
 
-    /** 加行锁；必须在事务内调用。 */
+    /** 加行锁；必须在事务内调用（同样只看有效清单）。 */
     public Optional<SettlementBill> lockBillByVisit(UUID visitId) {
-        return jdbc.sql("""
-                        SELECT id, bill_no, visit_id, patient_id, patient_no, member_id,
-                               total_amount, eligible_amount, deductible, insurance_amount,
-                               self_pay_amount, status, detail::text AS detail, created_by,
-                               confirmed_by, confirmed_at, version, created_at
-                          FROM insurance_svc.settlement_bill WHERE visit_id = ? FOR UPDATE
-                        """).param(visitId).query(BILL_MAPPER).optional();
+        return jdbc.sql("SELECT " + BILL_COLUMNS
+                        + " FROM insurance_svc.settlement_bill WHERE visit_id = ? AND status <> 'VOIDED'"
+                        + " FOR UPDATE")
+                .param(visitId).query(BILL_MAPPER).optional();
     }
 
     public Optional<SettlementBill> findBillById(UUID id) {
-        return jdbc.sql("""
-                        SELECT id, bill_no, visit_id, patient_id, patient_no, member_id,
-                               total_amount, eligible_amount, deductible, insurance_amount,
-                               self_pay_amount, status, detail::text AS detail, created_by,
-                               confirmed_by, confirmed_at, version, created_at
-                          FROM insurance_svc.settlement_bill WHERE id = ?
-                        """).param(id).query(BILL_MAPPER).optional();
+        return jdbc.sql("SELECT " + BILL_COLUMNS
+                        + " FROM insurance_svc.settlement_bill WHERE id = ?")
+                .param(id).query(BILL_MAPPER).optional();
     }
 
+    /** 加行锁；作废单也需要能加锁（作废校验要用）。 */
     public Optional<SettlementBill> lockBillById(UUID id) {
-        return jdbc.sql("""
-                        SELECT id, bill_no, visit_id, patient_id, patient_no, member_id,
-                               total_amount, eligible_amount, deductible, insurance_amount,
-                               self_pay_amount, status, detail::text AS detail, created_by,
-                               confirmed_by, confirmed_at, version, created_at
-                          FROM insurance_svc.settlement_bill WHERE id = ? FOR UPDATE
-                        """).param(id).query(BILL_MAPPER).optional();
+        return jdbc.sql("SELECT " + BILL_COLUMNS
+                        + " FROM insurance_svc.settlement_bill WHERE id = ? FOR UPDATE")
+                .param(id).query(BILL_MAPPER).optional();
     }
 
     public void insertBill(SettlementBill b) {
@@ -287,10 +286,11 @@ public class InsuranceRepository {
                         INSERT INTO insurance_svc.settlement_bill
                             (id, bill_no, visit_id, patient_id, patient_no, member_id,
                              total_amount, eligible_amount, deductible, insurance_amount,
-                             self_pay_amount, status, detail, created_by)
+                             self_pay_amount, status, detail, created_by,
+                             snapshot_ratio, snapshot_cap)
                         VALUES (:id, :billNo, :visitId, :patientId, :patientNo, :memberId,
                                 :total, :eligible, :deductible, :insurance, :selfPay, 'DRAFT',
-                                CAST(:detail AS jsonb), :createdBy)
+                                CAST(:detail AS jsonb), :createdBy, :snapshotRatio, :snapshotCap)
                         """)
                 .param("id", b.id()).param("billNo", b.billNo())
                 .param("visitId", b.visitId()).param("patientId", b.patientId())
@@ -298,23 +298,28 @@ public class InsuranceRepository {
                 .param("total", b.totalAmount()).param("eligible", b.eligibleAmount())
                 .param("deductible", b.deductible()).param("insurance", b.insuranceAmount())
                 .param("selfPay", b.selfPayAmount()).param("detail", b.detail())
-                .param("createdBy", b.createdBy()).update();
+                .param("createdBy", b.createdBy())
+                .param("snapshotRatio", b.snapshotRatio()).param("snapshotCap", b.snapshotCap())
+                .update();
     }
 
-    /** 重算草稿（CAS：仅 DRAFT）。 */
+    /** 重算草稿（CAS：仅 DRAFT）；待遇参数可能已调整，快照同步刷新。 */
     public boolean updateDraftBill(UUID id, BigDecimal total, BigDecimal eligible,
                                    BigDecimal deductible, BigDecimal insurance, BigDecimal selfPay,
-                                   String detail, long expectedVersion) {
+                                   String detail, BigDecimal snapshotRatio, BigDecimal snapshotCap,
+                                   long expectedVersion) {
         return jdbc.sql("""
                         UPDATE insurance_svc.settlement_bill
                            SET total_amount = :total, eligible_amount = :eligible,
                                deductible = :deductible, insurance_amount = :insurance,
                                self_pay_amount = :selfPay, detail = CAST(:detail AS jsonb),
+                               snapshot_ratio = :snapshotRatio, snapshot_cap = :snapshotCap,
                                version = version + 1, updated_at = now()
                          WHERE id = :id AND status = 'DRAFT' AND version = :version
                         """)
                 .param("total", total).param("eligible", eligible).param("deductible", deductible)
                 .param("insurance", insurance).param("selfPay", selfPay).param("detail", detail)
+                .param("snapshotRatio", snapshotRatio).param("snapshotCap", snapshotCap)
                 .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
@@ -330,13 +335,21 @@ public class InsuranceRepository {
                 .update() > 0;
     }
 
-    public List<SettlementBill> listBills(UUID patientId, String status, int limit) {
+    /** 作废（CAS：仅 CONFIRMED）；作废后该就诊可重新生成清单。 */
+    public boolean voidBill(UUID id, String reason, String actor, long expectedVersion) {
         return jdbc.sql("""
-                        SELECT id, bill_no, visit_id, patient_id, patient_no, member_id,
-                               total_amount, eligible_amount, deductible, insurance_amount,
-                               self_pay_amount, status, detail::text AS detail, created_by,
-                               confirmed_by, confirmed_at, version, created_at
-                          FROM insurance_svc.settlement_bill
+                        UPDATE insurance_svc.settlement_bill
+                           SET status = 'VOIDED', void_reason = :reason, voided_by = :actor,
+                               voided_at = now(), version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'CONFIRMED' AND version = :version
+                        """)
+                .param("reason", reason).param("actor", actor)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public List<SettlementBill> listBills(UUID patientId, String status, int limit) {
+        return jdbc.sql("SELECT " + BILL_COLUMNS + """
+                         FROM insurance_svc.settlement_bill
                          WHERE (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
                            AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                          ORDER BY created_at DESC

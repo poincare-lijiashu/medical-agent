@@ -16,6 +16,7 @@ import com.medassist.insurance.web.InsuranceDtos.ImportResult;
 import com.medassist.insurance.web.InsuranceDtos.ItemReq;
 import com.medassist.insurance.web.InsuranceDtos.MappingReq;
 import com.medassist.insurance.web.InsuranceDtos.MemberReq;
+import com.medassist.insurance.web.InsuranceDtos.ReconcileView;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -194,7 +195,8 @@ public class InsuranceService {
                         "结算清单已确认，不能重算：" + old.billNo());
             }
             if (!repo.updateDraftBill(old.id(), c.total(), c.eligible(), c.deductible(),
-                    c.insurance(), c.selfPay(), detail, old.version())) {
+                    c.insurance(), c.selfPay(), detail,
+                    member.reimbursementRatio(), member.cap(), old.version())) {
                 throw new BusinessException(ErrorCode.CONFLICT, "结算清单已被他人修改，请刷新后重试");
             }
             bill = repo.findBillById(old.id())
@@ -203,7 +205,8 @@ public class InsuranceService {
             SettlementBill created = new SettlementBill(UUID.randomUUID(), repo.nextBillNo(),
                     visitId, summary.patientId(), summary.patientNo(), member.id(),
                     c.total(), c.eligible(), c.deductible(), c.insurance(), c.selfPay(),
-                    SettlementBill.DRAFT, detail, actor, null, null, 0L, null);
+                    SettlementBill.DRAFT, detail, actor, null, null,
+                    null, null, null, member.reimbursementRatio(), member.cap(), 0L, null);
             repo.insertBill(created);
             bill = repo.findBillById(created.id())
                     .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
@@ -224,12 +227,95 @@ public class InsuranceService {
             throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
                     "只有草稿状态的结算清单可以确认，当前：" + bill.status());
         }
+        // 确认前复核费用闭合：清单生成后临床仍可能继续计费或退费，金额不一致不得入档
+        verifyChargesUnchanged(bill);
         if (!repo.confirmBill(billId, actor, bill.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "结算清单状态已变化，请刷新后重试");
         }
         audit(actor, "BILL_CONFIRM", "SETTLEMENT_BILL", billId.toString(), Map.of(
                 "billNo", bill.billNo(), "total", bill.totalAmount().toPlainString()));
         return view(billId);
+    }
+
+    /**
+     * 作废（红冲）：CONFIRMED → VOIDED，单向不可逆。
+     *
+     * <p>作废后该就诊可以重新生成清单（有效清单唯一索引排除 VOIDED），
+     * 原单保留全部金额、确认人与作废原因，供对账与审计追溯。
+     */
+    @Transactional
+    public BillView voidBill(UUID billId, String reason, String actor) {
+        SettlementBill bill = repo.lockBillById(billId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
+        if (!SettlementBill.CONFIRMED.equals(bill.status())) {
+            throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
+                    "只有已确认的结算清单可以作废，当前：" + bill.status());
+        }
+        String normalized = reason == null ? "" : reason.trim();
+        if (!repo.voidBill(billId, normalized, actor, bill.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "结算清单状态已变化，请刷新后重试");
+        }
+        audit(actor, "BILL_VOID", "SETTLEMENT_BILL", billId.toString(), Map.of(
+                "billNo", bill.billNo(), "reason", normalized,
+                "total", bill.totalAmount().toPlainString(),
+                "insurance", bill.insuranceAmount().toPlainString()));
+        return view(billId);
+    }
+
+    /**
+     * 按就诊对账：清单金额 vs 当前收费重算结果。
+     *
+     * <p>用清单生成时的待遇快照重算，避免参保参数事后调整造成假差异；
+     * 历史清单无快照时退回当前参保参数，参保也查不到则直接按 0 待遇无法比对（matched=false）。
+     */
+    public ReconcileView reconcile(UUID visitId) {
+        SettlementBill bill = repo.findBillByVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND,
+                        "该就诊单没有有效结算清单"));
+        Optional<Member> snapshot = snapshotMember(bill);
+        Computation fresh = snapshot
+                .map(m -> calculate(clinicalClient.charges(visitId).lines(), resolver(), m))
+                .orElse(null);
+        boolean matched = fresh != null
+                && fresh.total().compareTo(bill.totalAmount()) == 0
+                && fresh.insurance().compareTo(bill.insuranceAmount()) == 0;
+        return new ReconcileView(visitId, bill.billNo(), bill.status(), matched,
+                bill.totalAmount(), fresh == null ? null : fresh.total(),
+                bill.insuranceAmount(), fresh == null ? null : fresh.insurance(),
+                bill.selfPayAmount(), fresh == null ? null : fresh.selfPay(),
+                parse(bill.detail()).size(), fresh == null ? -1 : fresh.lines().size());
+    }
+
+    /** 确认前复核：按生成时的待遇快照重算，费用或口径变了就拒绝确认。 */
+    private void verifyChargesUnchanged(SettlementBill bill) {
+        Optional<Member> snapshot = snapshotMember(bill);
+        if (snapshot.isEmpty()) {
+            // 历史清单 + 参保已删除：无法复核，不阻断（但要靠对账接口人工核对）
+            return;
+        }
+        Computation fresh = calculate(clinicalClient.charges(bill.visitId()).lines(),
+                resolver(), snapshot.get());
+        boolean changed = fresh.total().compareTo(bill.totalAmount()) != 0
+                || fresh.insurance().compareTo(bill.insuranceAmount()) != 0;
+        if (changed) {
+            throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
+                    "费用或参保待遇已变化（清单实收 " + bill.totalAmount().toPlainString()
+                            + " / 当前 " + fresh.total().toPlainString()
+                            + "），请作废后重新生成清单");
+        }
+    }
+
+    /** 清单生成时的待遇快照；缺快照时退回当前参保（历史数据兼容）。 */
+    private Optional<Member> snapshotMember(SettlementBill bill) {
+        BigDecimal ratio = bill.snapshotRatio();
+        BigDecimal cap = bill.snapshotCap();
+        if (ratio == null) {
+            return bill.memberId() == null ? Optional.empty() : repo.findMemberById(bill.memberId());
+        }
+        return Optional.of(new Member(bill.memberId(), bill.patientId(), bill.patientNo(),
+                "-", "-", null,
+                bill.deductible() == null ? ZERO : bill.deductible(),
+                ratio, cap, null, null, Member.ACTIVE, 0L));
     }
 
     public BillView detail(UUID billId) {

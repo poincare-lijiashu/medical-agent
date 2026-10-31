@@ -7,6 +7,8 @@ import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.service.InsuranceService;
 import com.medassist.insurance.web.InsuranceDtos.BillView;
 import com.medassist.insurance.web.InsuranceDtos.GenerateBillReq;
+import com.medassist.insurance.web.InsuranceDtos.ReconcileView;
+import com.medassist.insurance.web.InsuranceDtos.VoidReq;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -71,6 +73,26 @@ public class SettlementController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, WRITE);
         return ApiResponse.ok(service.confirm(id, actor));
+    }
+
+    /** 作废（红冲）：已确认清单单向作废，作废后该就诊可重新生成。 */
+    @PostMapping("/{id}/void")
+    public ApiResponse<BillView> voidBill(
+            @PathVariable UUID id,
+            @Valid @RequestBody VoidReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.voidBill(id, req.reason(), actor));
+    }
+
+    /** 按就诊对账：清单金额 vs 当前收费重算结果。 */
+    @GetMapping("/reconcile/{visitId}")
+    public ApiResponse<ReconcileView> reconcile(
+            @PathVariable UUID visitId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.reconcile(visitId));
     }
 
     @GetMapping

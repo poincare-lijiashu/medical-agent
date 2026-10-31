@@ -311,9 +311,30 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 下一批：第三轮意见书第三批（MF-05 清单确认前校验+VOIDED 冲正+对账、S-10/S-11），
      或 MF-11 CDR 检索索引、S-28~S-30（E2E 补强）
 
+20. **第三轮评测第三批整改（2026-10-31）：医保结算清单闭环**
+   - **确认前复核**：`confirm` 用清单生成时的待遇快照重拉临床收费重算，总额或统筹不一致直接 409
+     "费用或参保待遇已变化，请作废后重新生成"
+   - **VOIDED 冲正**：CONFIRMED → VOIDED 单向，落 `void_reason/voided_by/voided_at`；
+     作废后同一就诊可重新生成（`ux_bill_visit_active (visit_id) WHERE status <> 'VOIDED'`）
+   - **对账接口**：`GET /insurance/settlements/reconcile/{visitId}` 返回清单 vs 当前收费的
+     总额/统筹/自付/明细行数与 `matched`
+   - **待遇快照**：新增 `snapshot_ratio`/`snapshot_cap`（起付线用既有 deductible 列），
+     确认复核与对账都按快照重算，参保参数事后调整不会造成假差异
+   - **金额勾稽**：`ck_bill_amounts`（统筹 ≤ 纳入、统筹 + 自付 = 总额）；**不加** `deductible <= eligible`
+   - 新接口：`POST /insurance/settlements/{id}/void`（write 权限）
+   - **踩坑**：加新状态必须把所有"枚举型 CHECK"一起梳理——V1 的 `ck_bill_confirmed` 只允许
+     CONFIRMED(有确认人)/DRAFT，导致 VOIDED 更新被数据库拒绝（E2E 首跑 409）；V2 已应用不能改，
+     补 V3 放宽约束
+   - 验证：单测 231→**237**；insurance E2E 38→**50 项**全过；库内同一 visit 存在 VOIDED+DRAFT 两单、
+     作废单带快照与原因、审计新增 BILL_VOID
+   - 下一批：MF-11 CDR 检索索引（前缀匹配 + trgm 分查）、S-10/S-11（年度累计/按就诊日期）、
+     S-28~S-30（E2E 补强、Mockito 去过拟合）；MF-07（HMAC/mTLS）待设计评审
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
+- 加新状态时别只改 status 列自己的 CHECK：`ck_bill_confirmed` 这类"按状态组合约束其他列"的规则
+  同样会拦住新状态（VOIDED 被 V1 约束拒绝，只能补 V3 修）；Flyway 已应用的迁移不能改，只能加新版本
 - `JdbcClient` 下 CHECK 约束/唯一约束都表现为 `DataIntegrityViolationException`；
   `catch (DuplicateKeyException)` 会漏掉部分场景，要按需要捕获父类并给出可读文案
 - 部分唯一索引的 WHERE 条件要写清业务范围：门诊重复挂号与住院重复入院必须分别由

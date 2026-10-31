@@ -69,6 +69,23 @@ public final class InsuranceDtos {
     public record BillView(SettlementBill bill, List<BillLine> lines) {
     }
 
+    /** 作废（红冲）请求：必须写明原因，留痕到清单与审计。 */
+    public record VoidReq(@NotBlank @Size(max = 512) String reason) {
+    }
+
+    /**
+     * 按就诊对账结果：清单金额 vs 当前收费重算。
+     *
+     * <p>{@code matched=false} 表示清单与当前费用/待遇不一致，需要作废后重新生成；
+     * {@code chargeTotal} 为空表示参保信息已不存在、无法重算。
+     */
+    public record ReconcileView(UUID visitId, String billNo, String billStatus, boolean matched,
+                                BigDecimal billTotal, BigDecimal chargeTotal,
+                                BigDecimal billInsurance, BigDecimal chargeInsurance,
+                                BigDecimal billSelfPay, BigDecimal chargeSelfPay,
+                                int billLineCount, int chargeLineCount) {
+    }
+
     /** 导入结果。 */
     public record ImportResult(int imported, List<String> codes) {
     }

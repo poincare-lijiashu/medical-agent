@@ -130,6 +130,28 @@ Check 'bill.confirm.by' (Res $r).bill.confirmedBy 'admin01'
 $r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $visitId } $token
 Check 'bill.recompute.confirmed.409' $r.Status 409
 
+# ---------------------------------------------------------------- 5.1 reconcile + void + regenerate
+$r = Invoke-Api 'GET' "/api/v2/insurance/settlements/reconcile/$visitId" $null $token
+Check 'reconcile.ok' $r.Status 200
+Check 'reconcile.matched' (Res $r).matched 'True'
+CheckNum 'reconcile.billTotal' (Res $r).billTotal 10.00
+CheckNum 'reconcile.chargeTotal' (Res $r).chargeTotal 10.00
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$billId/void" @{ reason = 'wrong item price' } $token
+Check 'bill.void' $r.Status 200
+Check 'bill.void.status' (Res $r).bill.status 'VOIDED'
+Check 'bill.void.reason' (Res $r).bill.voidReason 'wrong item price'
+Check 'bill.void.by' (Res $r).bill.voidedBy 'admin01'
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$billId/void" @{ reason = 'again' } $token
+Check 'bill.void.twice.409' $r.Status 409
+
+$r = Invoke-Api 'POST' '/api/v2/insurance/settlements' @{ visitId = $visitId } $token
+Check 'bill.regenerate.afterVoid' $r.Status 200
+Check 'bill.regenerate.status' (Res $r).bill.status 'DRAFT'
+$newBillId = (Res $r).bill.id
+Check 'bill.regenerate.newId' ($newBillId -ne $billId) 'True'
+
 # ---------------------------------------------------------------- 6. batch import + not-enrolled
 $r = Invoke-Api 'POST' '/api/v2/insurance/items/import' @{
     items = @(
