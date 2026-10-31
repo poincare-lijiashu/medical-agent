@@ -1,11 +1,14 @@
 package com.medassist.clinical.repo;
 
+import com.medassist.clinical.domain.ClinicalModel.Admission;
+import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
+import com.medassist.clinical.domain.ClinicalModel.Ward;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -374,6 +377,189 @@ public class ClinicalRepository {
                         rs.getString("category"),
                         rs.getBigDecimal("amount")})
                 .list();
+    }
+
+    // ---------------------------------------------------------------- 住院（ADT）
+
+    private static final RowMapper<Ward> WARD_MAPPER = (rs, i) -> new Ward(
+            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+            rs.getObject("dept_id", UUID.class), rs.getBoolean("enabled"));
+
+    private static final RowMapper<Bed> BED_MAPPER = (rs, i) -> new Bed(
+            rs.getObject("id", UUID.class), rs.getObject("ward_id", UUID.class),
+            rs.getString("bed_no"), rs.getString("status"), rs.getLong("version"));
+
+    private static final RowMapper<Admission> ADMISSION_MAPPER = (rs, i) -> new Admission(
+            rs.getObject("id", UUID.class), rs.getString("admission_no"),
+            rs.getObject("visit_id", UUID.class), rs.getObject("patient_id", UUID.class),
+            rs.getString("patient_no"), rs.getObject("ward_id", UUID.class),
+            rs.getObject("bed_id", UUID.class), rs.getString("attending_doctor"),
+            rs.getString("status"), rs.getTimestamp("admitted_at").toInstant(),
+            rs.getTimestamp("discharged_at") == null ? null : rs.getTimestamp("discharged_at").toInstant(),
+            rs.getLong("version"));
+
+    public Optional<Ward> findWard(UUID id) {
+        return jdbc.sql("SELECT id, code, name, dept_id, enabled FROM clinical_svc.ward WHERE id = ?")
+                .param(id).query(WARD_MAPPER).optional();
+    }
+
+    public Optional<Ward> findWardByCode(String code) {
+        return jdbc.sql("SELECT id, code, name, dept_id, enabled FROM clinical_svc.ward WHERE code = ?")
+                .param(code).query(WARD_MAPPER).optional();
+    }
+
+    public void insertWard(Ward w) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.ward (id, code, name, dept_id, enabled, version)
+                        VALUES (:id, :code, :name, :deptId, true, 0)
+                        """)
+                .param("id", w.id()).param("code", w.code())
+                .param("name", w.name()).param("deptId", w.deptId()).update();
+    }
+
+    public void insertBed(UUID id, UUID wardId, String bedNo) {
+        jdbc.sql("INSERT INTO clinical_svc.bed (id, ward_id, bed_no, status, version) VALUES (?, ?, ?, 'FREE', 0)")
+                .param(id).param(wardId).param(bedNo).update();
+    }
+
+    public List<Bed> listBeds(UUID wardId) {
+        return jdbc.sql("""
+                        SELECT id, ward_id, bed_no, status, version FROM clinical_svc.bed
+                         WHERE ward_id = ? ORDER BY bed_no
+                        """).param(wardId).query(BED_MAPPER).list();
+    }
+
+    public Optional<Bed> findBed(UUID id) {
+        return jdbc.sql("SELECT id, ward_id, bed_no, status, version FROM clinical_svc.bed WHERE id = ?")
+                .param(id).query(BED_MAPPER).optional();
+    }
+
+    /** 加行锁读取床位；必须在事务内调用。 */
+    public Optional<Bed> lockBed(UUID id) {
+        return jdbc.sql("SELECT id, ward_id, bed_no, status, version FROM clinical_svc.bed WHERE id = ? FOR UPDATE")
+                .param(id).query(BED_MAPPER).optional();
+    }
+
+    /** 占床（CAS：仅 FREE 可占）。 */
+    public boolean occupyBed(UUID bedId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.bed
+                           SET status = 'OCCUPIED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'FREE'
+                        """)
+                .param("id", bedId).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 腾床（CAS：仅 OCCUPIED 可释放）。 */
+    public boolean freeBed(UUID bedId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.bed
+                           SET status = 'FREE', version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'OCCUPIED'
+                        """)
+                .param("id", bedId).param("version", expectedVersion).update() > 0;
+    }
+
+    public String nextAdmissionNo() {
+        Long seq = jdbc.sql("SELECT nextval('clinical_svc.admission_no_seq')").query(Long.class).single();
+        return "A" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq);
+    }
+
+    public void insertAdmission(Admission a) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.admission
+                            (id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                             attending_doctor, status, version)
+                        VALUES (:id, :admissionNo, :visitId, :patientId, :patientNo, :wardId, :bedId,
+                                :doctor, :status, 0)
+                        """)
+                .param("id", a.id()).param("admissionNo", a.admissionNo())
+                .param("visitId", a.visitId()).param("patientId", a.patientId())
+                .param("patientNo", a.patientNo()).param("wardId", a.wardId())
+                .param("bedId", a.bedId()).param("doctor", a.attendingDoctor())
+                .param("status", a.status()).update();
+    }
+
+    public Optional<Admission> findAdmission(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission WHERE id = ?
+                        """).param(id).query(ADMISSION_MAPPER).optional();
+    }
+
+    /** 加行锁读取住院登记；必须在事务内调用。 */
+    public Optional<Admission> lockAdmission(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission WHERE id = ? FOR UPDATE
+                        """).param(id).query(ADMISSION_MAPPER).optional();
+    }
+
+    public Optional<Admission> findActiveAdmissionByPatient(UUID patientId) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission
+                         WHERE patient_id = :patientId AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """).param("patientId", patientId).query(ADMISSION_MAPPER).optional();
+    }
+
+    /** 更新床位（CAS）；用于分床/转床。首次分床同时把 ADMITTED 提升为 IN_HOSPITAL。 */
+    public boolean updateAdmissionBed(UUID id, UUID bedId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.admission
+                           SET bed_id = :bedId,
+                               status = CASE WHEN status = 'ADMITTED' THEN 'IN_HOSPITAL' ELSE status END,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """)
+                .param("bedId", bedId).param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 住院状态迁移（CAS）。 */
+    public boolean updateAdmissionStatus(UUID id, String expected, String next, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.admission
+                           SET status = :next, version = version + 1, updated_at = now(),
+                               discharged_at = CASE WHEN :next = 'DISCHARGED' THEN now() ELSE discharged_at END
+                         WHERE id = :id AND status = :expected AND version = :version
+                        """)
+                .param("next", next).param("id", id)
+                .param("expected", expected).param("version", expectedVersion).update() > 0;
+    }
+
+    public void logBedTransfer(UUID admissionId, UUID fromBedId, UUID toBedId,
+                               String reason, String operator) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.bed_transfer
+                            (admission_id, from_bed_id, to_bed_id, reason, operator)
+                        VALUES (:admissionId, :fromBedId, :toBedId, :reason, :operator)
+                        """)
+                .param("admissionId", admissionId).param("fromBedId", fromBedId)
+                .param("toBedId", toBedId).param("reason", reason)
+                .param("operator", operator).update();
+    }
+
+    public List<Admission> listAdmissions(UUID wardId, String status) {
+        if (wardId == null) {
+            return jdbc.sql("""
+                            SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                                   attending_doctor, status, admitted_at, discharged_at, version
+                              FROM clinical_svc.admission WHERE status = :status
+                             ORDER BY admitted_at DESC
+                            """).param("status", status).query(ADMISSION_MAPPER).list();
+        }
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission
+                         WHERE ward_id = :wardId AND status = :status
+                         ORDER BY admitted_at DESC
+                        """).param("wardId", wardId).param("status", status)
+                .query(ADMISSION_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

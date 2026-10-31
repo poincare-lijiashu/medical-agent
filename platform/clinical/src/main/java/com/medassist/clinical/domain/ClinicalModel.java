@@ -71,4 +71,36 @@ public final class ClinicalModel {
         public static final String PAID = "PAID";
         public static final String REFUNDED = "REFUNDED";
     }
+
+    /** 病区。 */
+    public record Ward(UUID id, String code, String name, UUID deptId, boolean enabled) {
+    }
+
+    /** 床位。 */
+    public record Bed(UUID id, UUID wardId, String bedNo, String status, long version) {
+
+        public static final String FREE = "FREE";
+        public static final String OCCUPIED = "OCCUPIED";
+        public static final String RESERVED = "RESERVED";
+        public static final String DISABLED = "DISABLED";
+
+        public boolean free() {
+            return FREE.equals(status);
+        }
+    }
+
+    /** 住院登记。 */
+    public record Admission(UUID id, String admissionNo, UUID visitId, UUID patientId,
+                            String patientNo, UUID wardId, UUID bedId, String attendingDoctor,
+                            String status, Instant admittedAt, Instant dischargedAt, long version) {
+
+        public static final String ADMITTED = "ADMITTED";
+        public static final String IN_HOSPITAL = "IN_HOSPITAL";
+        public static final String DISCHARGED = "DISCHARGED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean active() {
+            return ADMITTED.equals(status) || IN_HOSPITAL.equals(status);
+        }
+    }
 }

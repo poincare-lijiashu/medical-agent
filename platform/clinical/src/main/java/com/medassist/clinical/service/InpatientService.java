@@ -1,0 +1,281 @@
+package com.medassist.clinical.service;
+
+import com.medassist.clinical.client.PatientClient;
+import com.medassist.clinical.domain.ClinicalModel.Admission;
+import com.medassist.clinical.domain.ClinicalModel.Bed;
+import com.medassist.clinical.domain.ClinicalModel.Charge;
+import com.medassist.clinical.domain.ClinicalModel.Dept;
+import com.medassist.clinical.domain.ClinicalModel.Visit;
+import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
+import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
+import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
+import com.medassist.clinical.web.ClinicalDtos.CreateBedsReq;
+import com.medassist.clinical.web.ClinicalDtos.CreateWardReq;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * 住院 ADT（入院登记 / 分床 / 转床 / 出院）。
+ *
+ * <p>为什么住院复用 clinical 的 visit + order + charge，而不是另起一套账：
+ * <ul>
+ *   <li>住院医嘱与住院费用必须同源同事务，否则出院结算时一定对不上；</li>
+ *   <li>一张床同时只能有一个在院患者（部分唯一索引 + 床位行锁双保险）；</li>
+ *   <li>同一患者同时只能有一次在院登记（部分唯一索引）；</li>
+ *   <li>出院前必须结清（charge.status = PAID），避免"人走了账还挂着"。</li>
+ * </ul>
+ */
+@Service
+public class InpatientService {
+
+    private final ClinicalRepository repo;
+    private final PatientClient patientClient;
+    private final ObjectMapper objectMapper;
+
+    public InpatientService(ClinicalRepository repo, PatientClient patientClient,
+                            ObjectMapper objectMapper) {
+        this.repo = repo;
+        this.patientClient = patientClient;
+        this.objectMapper = objectMapper;
+    }
+
+    // ---------------------------------------------------------------- 病区 / 床位
+
+    @Transactional
+    public Ward createWard(CreateWardReq req, String actor) {
+        Dept dept = repo.findDept(req.deptId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "科室不存在"));
+        if (!dept.enabled()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "科室已停用");
+        }
+        Ward ward = new Ward(UUID.randomUUID(), req.code().trim(), req.name().trim(), dept.id(), true);
+        try {
+            repo.insertWard(ward);
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(ErrorCode.CONFLICT, "病区编码已存在：" + req.code());
+        }
+        audit(actor, "WARD_CREATE", "WARD", ward.id().toString(),
+                Map.of("code", ward.code(), "name", ward.name(), "deptCode", dept.deptCode()));
+        return ward;
+    }
+
+    @Transactional
+    public List<Bed> createBeds(UUID wardId, CreateBedsReq req, String actor) {
+        requireWard(wardId);
+        List<Bed> created = new ArrayList<>();
+        for (String raw : req.bedNos()) {
+            String bedNo = raw.trim();
+            UUID id = UUID.randomUUID();
+            try {
+                repo.insertBed(id, wardId, bedNo);
+            } catch (DataIntegrityViolationException e) {
+                throw new BusinessException(ErrorCode.CONFLICT, "床位号已存在：" + bedNo);
+            }
+            created.add(new Bed(id, wardId, bedNo, Bed.FREE, 0L));
+        }
+        audit(actor, "BED_CREATE", "WARD", wardId.toString(),
+                Map.of("count", created.size(), "bedNos", created.stream().map(Bed::bedNo).toList()));
+        return created;
+    }
+
+    public List<Bed> listBeds(UUID wardId) {
+        requireWard(wardId);
+        return repo.listBeds(wardId);
+    }
+
+    // ---------------------------------------------------------------- 入院
+
+    @Transactional
+    public AdmissionView admit(AdmitReq req, String actor) {
+        Ward ward = requireWard(req.wardId());
+        PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
+
+        repo.findActiveAdmissionByPatient(patient.id()).ifPresent(a -> {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该患者已在院（住院号 " + a.admissionNo() + "），不能重复入院");
+        });
+
+        Bed bed = null;
+        if (req.bedId() != null) {
+            bed = lockFreeBed(req.bedId(), ward.id());
+            if (!repo.occupyBed(bed.id(), bed.version())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "床位已被占用，请刷新后重试");
+            }
+        }
+
+        // 住院就诊：状态直接 IN_TREATMENT（入院即可开医嘱），复用门诊的就诊/医嘱/收费模型
+        Visit visit = new Visit(UUID.randomUUID(), repo.nextVisitNo(), patient.id(), patient.patientNo(),
+                ward.deptId(), req.attendingDoctor().trim(), null, "INPATIENT",
+                Visit.IN_TREATMENT, LocalDate.now(), 0L);
+        try {
+            repo.insertVisit(visit);
+        } catch (DataIntegrityViolationException e) {
+            // 唯一索引兜底：同日同科室已有在途门诊就诊（住院重复入院由 admission 唯一索引拦截）
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该患者当日在该科室已有在途门诊就诊，请先结束门诊或核对是否重复入院");
+        }
+
+        // 住院收费单：入院即建（金额 0），后续医嘱增量累加，出院前必须结清
+        Charge charge = new Charge(UUID.randomUUID(), repo.nextChargeNo(), visit.id(),
+                BigDecimal.ZERO, Charge.UNPAID, null, null, 0L);
+        repo.insertCharge(charge);
+
+        Admission admission = new Admission(UUID.randomUUID(), repo.nextAdmissionNo(), visit.id(),
+                patient.id(), patient.patientNo(), ward.id(), bed == null ? null : bed.id(),
+                req.attendingDoctor().trim(),
+                bed == null ? Admission.ADMITTED : Admission.IN_HOSPITAL,
+                null, null, 0L);
+        repo.insertAdmission(admission);
+
+        audit(actor, "ADMIT", "ADMISSION", admission.id().toString(), Map.of(
+                "admissionNo", admission.admissionNo(), "visitNo", visit.visitNo(),
+                "patientNo", patient.patientNo(), "wardCode", ward.code(),
+                "bedNo", bed == null ? "" : bed.bedNo(),
+                "chargeNo", charge.chargeNo()));
+        return toView(repo.findAdmission(admission.id()).orElseThrow());
+    }
+
+    // ---------------------------------------------------------------- 分床 / 转床
+
+    @Transactional
+    public AdmissionView assignBed(UUID admissionId, AssignBedReq req, String actor) {
+        Admission a = repo.lockAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        if (!a.active()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该住院登记已出院或已取消");
+        }
+        if (req.bedId().equals(a.bedId())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "目标床位与当前床位相同");
+        }
+        Bed target = lockFreeBed(req.bedId(), a.wardId());
+        if (!repo.occupyBed(target.id(), target.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "床位已被占用，请刷新后重试");
+        }
+        if (!repo.updateAdmissionBed(a.id(), target.id(), a.version())) {
+            // 事务回滚会同时撤销上面那次占床
+            throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");
+        }
+
+        UUID fromBedId = a.bedId();
+        if (fromBedId != null) {
+            Bed from = repo.lockBed(fromBedId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "原床位不存在"));
+            if (!repo.freeBed(from.id(), from.version())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "原床位状态异常，请刷新后重试");
+            }
+        }
+        String reason = req.reason() == null || req.reason().isBlank()
+                ? (fromBedId == null ? "入院分床" : "转床") : req.reason().trim();
+        repo.logBedTransfer(a.id(), fromBedId, target.id(), reason, actor);
+        audit(actor, fromBedId == null ? "BED_ASSIGN" : "BED_TRANSFER", "ADMISSION", a.id().toString(),
+                Map.of("admissionNo", a.admissionNo(), "fromBedId", String.valueOf(fromBedId),
+                        "toBedId", target.id().toString(), "bedNo", target.bedNo(), "reason", reason));
+        return toView(repo.findAdmission(a.id()).orElseThrow());
+    }
+
+    // ---------------------------------------------------------------- 出院
+
+    @Transactional
+    public AdmissionView discharge(UUID admissionId, String actor) {
+        Admission a = repo.lockAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        if (!Admission.IN_HOSPITAL.equals(a.status())) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "只有在院（IN_HOSPITAL）状态可以出院，当前：" + a.status());
+        }
+        Charge charge = repo.findChargeByVisit(a.visitId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
+        if (!Charge.PAID.equals(charge.status())) {
+            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
+                    "出院前必须结清费用（收费单 " + charge.chargeNo() + " 当前 " + charge.status() + "）");
+        }
+        if (!repo.updateAdmissionStatus(a.id(), Admission.IN_HOSPITAL, Admission.DISCHARGED, a.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");
+        }
+        if (a.bedId() != null) {
+            Bed bed = repo.lockBed(a.bedId())
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "床位不存在"));
+            repo.freeBed(bed.id(), bed.version());
+        }
+        Visit visit = repo.findVisit(a.visitId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        repo.updateVisitStatus(visit.id(), Visit.IN_TREATMENT, Visit.FINISHED, visit.version());
+
+        audit(actor, "DISCHARGE", "ADMISSION", a.id().toString(), Map.of(
+                "admissionNo", a.admissionNo(), "visitNo", visit.visitNo(),
+                "chargeNo", charge.chargeNo(), "totalAmount", charge.totalAmount()));
+        return toView(repo.findAdmission(a.id()).orElseThrow());
+    }
+
+    public AdmissionView detail(UUID admissionId) {
+        return toView(repo.findAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在")));
+    }
+
+    public List<AdmissionView> listByWard(UUID wardId, String status) {
+        requireWard(wardId);
+        String s = (status == null || status.isBlank()) ? Admission.IN_HOSPITAL : status.trim().toUpperCase();
+        return repo.listAdmissions(wardId, s).stream().map(this::toView).toList();
+    }
+
+    // ---------------------------------------------------------------- 内部
+
+    private Ward requireWard(UUID wardId) {
+        Ward ward = repo.findWard(wardId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "病区不存在"));
+        if (!ward.enabled()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "病区已停用");
+        }
+        return ward;
+    }
+
+    /** 锁床位并校验：存在、属于目标病区、状态 FREE。 */
+    private Bed lockFreeBed(UUID bedId, UUID wardId) {
+        Bed bed = repo.lockBed(bedId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "床位不存在"));
+        if (!bed.wardId().equals(wardId)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "床位不属于该病区");
+        }
+        if (!bed.free()) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "床位 " + bed.bedNo() + " 当前状态为 " + bed.status() + "，不可占用");
+        }
+        return bed;
+    }
+
+    private AdmissionView toView(Admission a) {
+        Visit visit = repo.findVisit(a.visitId()).orElse(null);
+        Ward ward = repo.findWard(a.wardId()).orElse(null);
+        Bed bed = a.bedId() == null ? null : repo.findBed(a.bedId()).orElse(null);
+        return new AdmissionView(a.id(), a.admissionNo(), a.visitId(),
+                visit == null ? "" : visit.visitNo(), a.patientId(), a.patientNo(),
+                a.wardId(), ward == null ? "" : ward.name(),
+                a.bedId(), bed == null ? "" : bed.bedNo(),
+                a.attendingDoctor(), a.status(), a.admittedAt(), a.dischargedAt());
+    }
+
+    private void audit(String actor, String action, String targetType, String targetId,
+                       Map<String, Object> detail) {
+        try {
+            repo.logChange(actor, action, targetType, targetId,
+                    objectMapper.writeValueAsString(new LinkedHashMap<>(detail)));
+        } catch (JacksonException e) {
+            repo.logChange(actor, action, targetType, targetId, "{\"_detail_serialize_failed\":true}");
+        }
+    }
+}

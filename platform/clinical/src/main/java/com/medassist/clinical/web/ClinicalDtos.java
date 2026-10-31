@@ -74,4 +74,38 @@ public final class ClinicalDtos {
     public record BillingPreview(BigDecimal chargedTotal, BigDecimal pendingAmount,
                                  int pendingOrderCount, ChargeView charge) {
     }
+
+    // ---------------------------------------------------------------- 住院（ADT）
+
+    /** 新建病区。 */
+    public record CreateWardReq(
+            @NotBlank String code,
+            @NotBlank String name,
+            @NotNull UUID deptId) {
+    }
+
+    /** 批量建床（同一病区）。 */
+    public record CreateBedsReq(@NotEmpty List<@NotBlank String> bedNos) {
+    }
+
+    /** 入院登记（bedId 可空：先登记后分床）。 */
+    public record AdmitReq(
+            @NotNull UUID patientId,
+            @NotNull UUID wardId,
+            UUID bedId,
+            @NotBlank String attendingDoctor) {
+    }
+
+    /** 分床 / 转床。 */
+    public record AssignBedReq(
+            @NotNull UUID bedId,
+            String reason) {
+    }
+
+    /** 住院登记视图（含就诊号，便于与医嘱/收费对照）。 */
+    public record AdmissionView(UUID id, String admissionNo, UUID visitId, String visitNo,
+                                UUID patientId, String patientNo, UUID wardId, String wardName,
+                                UUID bedId, String bedNo, String attendingDoctor, String status,
+                                java.time.Instant admittedAt, java.time.Instant dischargedAt) {
+    }
 }

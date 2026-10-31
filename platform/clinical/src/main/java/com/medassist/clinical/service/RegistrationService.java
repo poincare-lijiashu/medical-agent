@@ -11,6 +11,7 @@ import com.medassist.clinical.web.ClinicalDtos.CreateSlotReq;
 import com.medassist.clinical.web.ClinicalDtos.RegisterReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -126,8 +127,13 @@ public class RegistrationService {
         Visit visit = new Visit(UUID.randomUUID(), repo.nextVisitNo(), patient.id(), patient.patientNo(),
                 dept.id(), req.doctorId().trim(), slot == null ? null : slot.id(), visitType,
                 Visit.REGISTERED, visitDate, 0L);
-        repo.insertVisit(visit);
-
+        try {
+            repo.insertVisit(visit);
+        } catch (DataIntegrityViolationException e) {
+            // 并发下"查询未命中但插入撞唯一索引"：给出与预检一致的语义，而不是泛化 409
+            throw new BusinessException(ErrorCode.REGISTRATION_DUPLICATED,
+                    "该患者当日该科室已有在途门诊就诊，请勿重复挂号");
+        }
         // 5) 挂号即生成收费单（诊查费），后续医嘱只做增量
         ChargeItemDef fee = repo.findChargeItem("EMERGENCY".equals(visitType) ? ITEM_EMERGENCY : ITEM_GENERAL)
                 .filter(ChargeItemDef::enabled)
