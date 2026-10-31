@@ -5,6 +5,7 @@ import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.service.SettlementExportService;
+import com.medassist.insurance.web.InsuranceDtos.CancelExportReq;
 import com.medassist.insurance.web.InsuranceDtos.ExportBatchSummary;
 import com.medassist.insurance.web.InsuranceDtos.ExportReceiptReq;
 import jakarta.validation.Valid;
@@ -28,8 +29,13 @@ import java.util.UUID;
 /**
  * 医保结算清单导出批次与省局回执（N5 第二批 B）。
  *
- * <p>权限：生成批次与登记回执属"对外报盘"，需要 {@code insurance:settlement:confirm}
- * （医保办/管理员）；查询与下载报文需要 {@code insurance:settlement:read}。
+ * <p>权限分层：
+ * <ul>
+ *   <li>生成批次 / 登记回执 / 撤销批次：{@code insurance:settlement:confirm}（医保办、管理员）；</li>
+ *   <li>批次列表与摘要（不含报文）：{@code insurance:settlement:read}；</li>
+ *   <li>报文下载（含批量患者号与项目明细）：{@code insurance:export:download}（仅医保办、管理员），
+ *       且动作写审计（第四轮 MF-02）。</li>
+ * </ul>
  */
 @RestController
 @RequestMapping("/insurance/export-batches")
@@ -37,6 +43,7 @@ public class ExportController {
 
     private static final String CONFIRM = "insurance:settlement:confirm";
     private static final String READ = "insurance:settlement:read";
+    private static final String DOWNLOAD = "insurance:export:download";
 
     private final SettlementExportService service;
 
@@ -44,7 +51,7 @@ public class ExportController {
         this.service = service;
     }
 
-    /** 生成报盘批次（期间内已确认清单）。 */
+    /** 生成报盘批次（期间内**尚未报盘**的已确认清单）。 */
     @PostMapping
     public ApiResponse<ExportBatchSummary> create(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -52,12 +59,8 @@ public class ExportController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, CONFIRM);
-        ExportBatch batch = service.create(from, to, actor);
-        return ApiResponse.ok(new ExportBatchSummary(batch.id(), batch.batchNo(),
-                batch.periodFrom(), batch.periodTo(), batch.billCount(), batch.totalAmount(),
-                batch.insuranceAmount(), batch.selfPayAmount(), batch.payloadHash(),
-                batch.status(), batch.receiptNo(), batch.receiptAt(), batch.receiptMessage(),
-                batch.createdBy(), batch.version(), batch.createdAt()));
+        SettlementExportService.ExportCreateResult result = service.create(from, to, actor);
+        return ApiResponse.ok(service.summary(result.batch(), result.excludedAlreadyExported()));
     }
 
     /** 登记省局回执（ACCEPTED / REJECTED，仅未登记过的批次）。 */
@@ -68,12 +71,18 @@ public class ExportController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, CONFIRM);
-        ExportBatch batch = service.receipt(id, req, actor);
-        return ApiResponse.ok(new ExportBatchSummary(batch.id(), batch.batchNo(),
-                batch.periodFrom(), batch.periodTo(), batch.billCount(), batch.totalAmount(),
-                batch.insuranceAmount(), batch.selfPayAmount(), batch.payloadHash(),
-                batch.status(), batch.receiptNo(), batch.receiptAt(), batch.receiptMessage(),
-                batch.createdBy(), batch.version(), batch.createdAt()));
+        return ApiResponse.ok(service.summary(service.receipt(id, req, actor), 0));
+    }
+
+    /** 撤销未回执的批次（GENERATED → CANCELLED），撤销后清单可在新批次重报。 */
+    @PostMapping("/{id}/cancel")
+    public ApiResponse<ExportBatchSummary> cancel(
+            @PathVariable UUID id,
+            @Valid @RequestBody CancelExportReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, CONFIRM);
+        return ApiResponse.ok(service.summary(service.cancel(id, req.reason(), actor), 0));
     }
 
     @GetMapping
@@ -92,13 +101,14 @@ public class ExportController {
         return ApiResponse.ok(service.summary(id));
     }
 
-    /** 下载报盘 XML（原样返回，服务端另存为 .xml 归档）。 */
+    /** 下载报盘 XML（原样返回，服务端另存为 .xml 归档）；含批量 PHI，独立权限 + 审计。 */
     @GetMapping(value = "/{id}/payload", produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> payload(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
-        Permissions.require(permissions, READ);
-        ExportBatch batch = service.payload(id);
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, DOWNLOAD);
+        ExportBatch batch = service.payload(id, actor);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/xml; charset=UTF-8"))
                 .header(HttpHeaders.CONTENT_DISPOSITION,

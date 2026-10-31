@@ -343,11 +343,37 @@ Check 'export.payload.xml' ($r.Body -match '<settlementBatch') 'True'
 Check 'export.payload.bills' ($r.Body -match '<bill billNo=') 'True'
 Check 'export.payload.summary' ($r.Body -match '<summary billCount=') 'True'
 
+# batch payload carries batch PHI: needs insurance:export:download (MF-02)
+$r = Invoke-Api 'GET' "/api/v2/insurance/export-batches/$exportId/payload" $null $doctorToken
+Check 'export.payload.doctor.403' $r.Status 403
+
+# the same confirmed bill must not be exported twice (MF-01)
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
+Check 'export.duplicate.409' $r.Status 409
+
+# a bill already in a GENERATED batch cannot be voided (SF-01)
+$r = Invoke-Api 'POST' "/api/v2/insurance/settlements/$capBill1/void" @{
+    reason = 'void while exported'
+} $token
+Check 'export.voidBlocked.409' $r.Status 409
+
 # REJECTED must carry a reason (bean validation -> 422)
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
     status = 'REJECTED'; receiptNo = 'RJ-1'
 } $token
 Check 'export.reject.noReason.422' $r.Status 422
+
+# cancel an un-receipted batch, then the bills can be exported again (SF-01)
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/cancel" @{
+    reason = 'wrong period'
+} $token
+Check 'export.cancel' $r.Status 200
+Check 'export.cancel.status' (Res $r).status 'CANCELLED'
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
+Check 'export.reCreateAfterCancel' $r.Status 200
+$exportId = (Res $r).id
+$exportBatchNo = (Res $r).batchNo
 
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
     status = 'ACCEPTED'; receiptNo = "RC-$suffix"
@@ -360,6 +386,11 @@ $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{
     status = 'ACCEPTED'; receiptNo = "RC2-$suffix"
 } $token
 Check 'export.receipt.twice.409' $r.Status 409
+
+$r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/cancel" @{
+    reason = 'late cancel'
+} $token
+Check 'export.cancel.receipted.409' $r.Status 409
 
 $r = Invoke-Api 'GET' "/api/v2/insurance/export-batches?limit=5" $null $token
 Check 'export.list' $r.Status 200

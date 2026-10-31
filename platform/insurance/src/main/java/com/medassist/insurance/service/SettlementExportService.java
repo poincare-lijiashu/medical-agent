@@ -56,10 +56,19 @@ public class SettlementExportService {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 生成批次的结果：批次本体 + 因"已属其它有效批次"被跳过的清单数。
+     *
+     * <p>回显跳过数量是刻意的：操作员需要知道"本期间还有几张没进这批"，
+     * 否则会误以为已全部报盘（第四轮 MF-01）。
+     */
+    public record ExportCreateResult(ExportBatch batch, int excludedAlreadyExported) {
+    }
+
     // ---------------------------------------------------------------- 生成批次
 
     @Transactional
-    public ExportBatch create(LocalDate from, LocalDate to, String actor) {
+    public ExportCreateResult create(LocalDate from, LocalDate to, String actor) {
         if (from == null || to == null) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "请指定导出期间（from/to）");
         }
@@ -73,13 +82,19 @@ public class SettlementExportService {
         if (to.isAfter(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "导出期间不能晚于今天");
         }
+        // 已报盘（GENERATED/ACCEPTED）的清单不再重复纳入；退回/撤销批次可重报
+        long excluded = repo.countConfirmedBillsAlreadyExported(from, to);
         List<SettlementBill> bills = repo.listConfirmedBills(from, to, MAX_BILLS + 1);
         if (bills.isEmpty()) {
+            if (excluded > 0) {
+                throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY,
+                        "本期间 " + excluded + " 张清单均已纳入其它批次，无需重复报盘");
+            }
             throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY);
         }
         if (bills.size() > MAX_BILLS) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "本期间已确认清单超过 " + MAX_BILLS + " 张，请缩短期间分批导出");
+                    "本期间待报盘清单超过 " + MAX_BILLS + " 张，请缩短期间或按日期分批导出");
         }
 
         String batchNo = repo.nextExportBatchNo();
@@ -90,7 +105,7 @@ public class SettlementExportService {
 
         ExportBatch batch = new ExportBatch(UUID.randomUUID(), batchNo, from, to, bills.size(),
                 total, insurance, selfPay, payload, sha256(payload), ExportBatch.GENERATED,
-                null, null, null, actor, 0L, Instant.now());
+                null, null, null, null, null, null, actor, 0L, Instant.now());
         repo.insertExportBatch(batch);
         for (SettlementBill bill : bills) {
             repo.insertExportItem(batch.id(), bill.id(), bill.billNo());
@@ -100,11 +115,12 @@ public class SettlementExportService {
         detail.put("periodFrom", from.toString());
         detail.put("periodTo", to.toString());
         detail.put("billCount", bills.size());
+        detail.put("excludedAlreadyExported", excluded);
         detail.put("totalAmount", total.toPlainString());
         detail.put("insuranceAmount", insurance.toPlainString());
         detail.put("payloadHash", batch.payloadHash());
         audit(actor, "EXPORT_BATCH_CREATE", batchNo, detail);
-        return repo.findExportBatch(batch.id()).orElse(batch);
+        return new ExportCreateResult(repo.findExportBatch(batch.id()).orElse(batch), (int) excluded);
     }
 
     // ---------------------------------------------------------------- 回执
@@ -137,32 +153,84 @@ public class SettlementExportService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_EXPORT_NOT_FOUND));
     }
 
+    // ---------------------------------------------------------------- 撤销
+
+    /**
+     * 撤销未回执的批次（GENERATED → CANCELLED）。
+     *
+     * <p>存在的意义：批次一旦生成就把清单"锁住"（不得重复报盘、不得作废），
+     * 若生成后发现有误（期间选错、金额异常），必须有正规出口；
+     * 已回执（ACCEPTED/REJECTED）的批次不可撤销，只能走省局冲销流程。
+     */
+    @Transactional
+    public ExportBatch cancel(UUID id, String reason, String actor) {
+        ExportBatch batch = find(id);
+        if (ExportBatch.CANCELLED.equals(batch.status())) {
+            throw new BusinessException(ErrorCode.INSURANCE_EXPORT_INVALID, "该批次已撤销");
+        }
+        if (batch.receipted()) {
+            throw new BusinessException(ErrorCode.INSURANCE_EXPORT_INVALID,
+                    "该批次已登记回执（" + batch.status() + "），不能撤销；请按省局流程冲销");
+        }
+        String normalized = reason == null ? "" : reason.trim();
+        if (normalized.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "撤销报盘批次必须填写原因");
+        }
+        if (!repo.cancelExportBatch(id, normalized, actor, batch.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "导出批次已被他人更新，请刷新后重试");
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("batchNo", batch.batchNo());
+        detail.put("before", batch.status());
+        detail.put("after", ExportBatch.CANCELLED);
+        detail.put("reason", normalized);
+        detail.put("billCount", batch.billCount());
+        detail.put("payloadHash", batch.payloadHash());
+        audit(actor, "EXPORT_BATCH_CANCEL", batch.batchNo(), detail);
+        return find(id);
+    }
+
     // ---------------------------------------------------------------- 查询
 
     public List<ExportBatchSummary> list(Integer limit) {
         int size = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
-        return repo.listExportBatches(size).stream().map(SettlementExportService::summary).toList();
+        return repo.listExportBatches(size).stream()
+                .map(b -> summary(b, 0)).toList();
     }
 
     public ExportBatchSummary summary(UUID id) {
-        return summary(find(id));
+        return summary(find(id), 0);
     }
 
-    /** 报盘 XML 原文（下载）；哈希与批次记录一致，便于对账。 */
-    public ExportBatch payload(UUID id) {
-        return find(id);
+    public ExportBatchSummary summary(ExportBatch batch, int excludedAlreadyExported) {
+        return new ExportBatchSummary(batch.id(), batch.batchNo(), batch.periodFrom(),
+                batch.periodTo(), batch.billCount(), batch.totalAmount(),
+                batch.insuranceAmount(), batch.selfPayAmount(), batch.payloadHash(),
+                batch.status(), batch.receiptNo(), batch.receiptAt(), batch.receiptMessage(),
+                batch.cancelledReason(), batch.cancelledAt(), batch.createdBy(),
+                batch.version(), batch.createdAt(), excludedAlreadyExported);
+    }
+
+    /**
+     * 报盘 XML 原文（下载）。
+     *
+     * <p>整批报文含患者号与项目明细（批量 PHI），下载动作必须留痕：
+     * 与病历打印/检索同口径（第三轮 S-07 / 第四轮 MF-02）。
+     */
+    public ExportBatch payload(UUID id, String actor) {
+        ExportBatch batch = find(id);
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("batchNo", batch.batchNo());
+        detail.put("payloadHash", batch.payloadHash());
+        detail.put("billCount", batch.billCount());
+        detail.put("status", batch.status());
+        audit(actor, "EXPORT_PAYLOAD_DOWNLOAD", batch.batchNo(), detail);
+        return batch;
     }
 
     private ExportBatch find(UUID id) {
         return repo.findExportBatch(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_EXPORT_NOT_FOUND));
-    }
-
-    private static ExportBatchSummary summary(ExportBatch b) {
-        return new ExportBatchSummary(b.id(), b.batchNo(), b.periodFrom(), b.periodTo(),
-                b.billCount(), b.totalAmount(), b.insuranceAmount(), b.selfPayAmount(),
-                b.payloadHash(), b.status(), b.receiptNo(), b.receiptAt(), b.receiptMessage(),
-                b.createdBy(), b.version(), b.createdAt());
     }
 
     // ---------------------------------------------------------------- 报文

@@ -177,4 +177,33 @@ upsert 并发语义无绕过、XXE 三属性齐设、multipart 双重限流闭�
 
 ---
 
-*第 1–4 节为只读评审结论（未改代码）。整改落地后按惯例在本文追加"整改状态"小节。*
+## 6. 整改状态（2026-11-01，第一批：报盘闭环与资金/PHI 红线）
+
+| 编号 | 问题 | 状态 | 落地方式 |
+|---|---|---|---|
+| MF-01 | 同一 CONFIRMED 清单可被重复报盘 | ✅ 已修 | `listConfirmedBills` 加 `NOT EXISTS` 排除已属 `GENERATED/ACCEPTED` 批次的清单（`REJECTED/CANCELLED` 不阻止重报）；新增 `countConfirmedBillsAlreadyExported` 让生成结果回显"被跳过张数"；本期间全部已报盘时 409 并给出张数 |
+| MF-02 | 报盘 payload 批量 PHI 只读即可下载且零审计 | ✅ 已修 | `auth V22` 新增 `insurance:export:download`（仅 ADMIN/INSURANCE_OFFICER）；payload 端点改要求该权限；下载动作写 `EXPORT_PAYLOAD_DOWNLOAD`（批次号/哈希/张数/状态）；列表与摘要仍只需 read |
+| MF-03 | 乙类目录缺省自付比例静默置 0 | ✅ 已修 | `toItem`（JSON 建项/批量导入）与 `importCatalogFile`（文件新建）均要求 `payCategory=B` 必须给比例，缺省即 422（文件路径带行号）；更新场景沿用库里原值不视为清零 |
+| SF-01 | 已报盘清单可被静默作废 | ✅ 已修 | `voidBill` 先查 `findActiveBatchByBill`：`GENERATED` → 提示先撤销批次；`ACCEPTED` → 提示按省局冲销；两者均 409。新增 `POST /export-batches/{id}/cancel`（`GENERATED → CANCELLED`，必填原因、CAS、审计 `EXPORT_BATCH_CANCEL`），撤销后清单可重报 |
+| SF-07 | 导出生成与作废并发（TOCTOU） | ✅ 已修 | `listConfirmedBills` 追加 `FOR SHARE OF b`，与作废的 `UPDATE` 行锁互斥；`insurance V8` 补 `(bill_id, batch_id)` 反查索引 |
+
+**数据迁移**：
+- `insurance V8`：批次状态增加 `CANCELLED`（替换原内联 CHECK）并补 `cancelled_reason/by/at`；
+  `ck_export_receipt` 改为四态穷举；清单→批次反查索引。
+- `auth V22`：`insurance:export:download` 授权（含兜底 DELETE）。
+
+**验证**：
+- 单测 **336 → 348**（新增：重复报盘排除与回显、全量已报盘 409、撤销成功/已回执拒绝/必填原因、
+  payload 审计、作废被批次拦截 ×2、乙类缺比例 ×3、E2E 对齐）；
+- `insurance_smoke.ps1` **147 → 165 项**全过，新增断言：
+  `export.payload.doctor.403`、`export.duplicate.409`、`export.voidBlocked.409`、
+  `export.cancel`、`export.reCreateAfterCancel`、`export.cancel.receipted.409`；
+- 库内核对：`EXPORT_BATCH_CREATE 4 / EXPORT_BATCH_CANCEL 1 / EXPORT_PAYLOAD_DOWNLOAD 1 / EXPORT_RECEIPT 3`，
+  批次状态 `ACCEPTED(RC-…)` 与 `CANCELLED(wrong period)` 并存；
+  `auth_svc` 到 V22、`insurance_svc` 到 V8。
+
+**仍未做（后续批次）**：MF-04 报盘索引、MF-05 部署文档权限、SF-02 单日超 500 张分批、SF-06 年度时区口径。
+
+---
+
+*第 1–4 节为只读评审结论（未改代码）；第 5 节为建议顺序；第 6 节起记录整改落地与验证。*

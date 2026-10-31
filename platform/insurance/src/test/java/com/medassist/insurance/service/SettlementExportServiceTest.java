@@ -33,7 +33,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 医保导出批次：期间校验、XML 报盘与哈希、回执 CAS 与审计。
+ * 医保导出批次：期间校验、报盘互斥、XML 报盘与哈希、回执/撤销 CAS 与审计。
  */
 class SettlementExportServiceTest {
 
@@ -66,12 +66,13 @@ class SettlementExportServiceTest {
         return new ExportBatch(UUID.randomUUID(), "EB2026110100001", LocalDate.now(),
                 LocalDate.now(), 1, new BigDecimal("10.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), "<x/>", "hash", status, null, null, null,
-                "yb01", version, Instant.now());
+                null, null, null, "yb01", version, Instant.now());
     }
 
     @Test
     @DisplayName("期间内无已确认清单：409")
     void createRejectsEmptyPeriod() {
+        when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(0L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
@@ -79,6 +80,39 @@ class SettlementExportServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_EXPORT_EMPTY);
         verify(repo, never()).insertExportBatch(any());
+    }
+
+    @Test
+    @DisplayName("本期间清单已全部报盘：409 并在消息中给出张数（MF-01）")
+    void createRejectsWhenAllAlreadyExported() {
+        when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(7L);
+        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("7")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_EXPORT_EMPTY);
+        verify(repo, never()).insertExportBatch(any());
+    }
+
+    @Test
+    @DisplayName("生成批次：回显被跳过的已报盘张数（MF-01）")
+    void createReportsExcludedCount() {
+        when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(3L);
+        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
+
+        SettlementExportService.ExportCreateResult result =
+                service.create(LocalDate.now(), LocalDate.now(), "yb01");
+
+        assertThat(result.excludedAlreadyExported()).isEqualTo(3);
+        assertThat(result.batch().billCount()).isEqualTo(1);
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(repo).logChange(eq("yb01"), eq("EXPORT_BATCH_CREATE"), eq("EXPORT_BATCH"),
+                eq("EB2026110100001"), detail.capture());
+        assertThat(detail.getValue()).contains("\"excludedAlreadyExported\":3");
+        assertThat(service.summary(result.batch(), 3).excludedAlreadyExported()).isEqualTo(3);
     }
 
     @Test
@@ -119,8 +153,10 @@ class SettlementExportServiceTest {
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
-        ExportBatch batch = service.create(LocalDate.now(), LocalDate.now(), "yb01");
+        SettlementExportService.ExportCreateResult result =
+                service.create(LocalDate.now(), LocalDate.now(), "yb01");
 
+        ExportBatch batch = result.batch();
         assertThat(batch.payload()).contains("<settlementBatch").contains("A&amp;B")
                 .contains("<line chargeNo=\"CH1\"");
         assertThat(batch.payloadHash()).hasSize(64);
@@ -130,8 +166,6 @@ class SettlementExportServiceTest {
         verify(repo).insertExportBatch(captor.capture());
         assertThat(captor.getValue().status()).isEqualTo(ExportBatch.GENERATED);
         verify(repo).insertExportItem(captor.getValue().id(), billId, "SB001");
-        verify(repo).logChange(eq("yb01"), eq("EXPORT_BATCH_CREATE"), eq("EXPORT_BATCH"),
-                eq("EB2026110100001"), anyString());
     }
 
     @Test
@@ -208,6 +242,67 @@ class SettlementExportServiceTest {
         assertThat(result.status()).isEqualTo(ExportBatch.ACCEPTED);
         verify(repo).logChange(eq("yb01"), eq("EXPORT_RECEIPT"), eq("EXPORT_BATCH"),
                 eq("EB2026110100001"), anyString());
+    }
+
+    // ---------------------------------------------------------------- 撤销（SF-01）
+
+    @Test
+    @DisplayName("撤销：未回执批次成功，落 CANCELLED 并写审计")
+    void cancelGeneratedBatch() {
+        ExportBatch generated = batch(ExportBatch.GENERATED, 0L);
+        ExportBatch cancelled = batch(ExportBatch.CANCELLED, 1L);
+        when(repo.findExportBatch(generated.id()))
+                .thenReturn(Optional.of(generated)).thenReturn(Optional.of(cancelled));
+        when(repo.cancelExportBatch(generated.id(), "period wrong", "yb01", 0L)).thenReturn(true);
+
+        ExportBatch result = service.cancel(generated.id(), "period wrong", "yb01");
+
+        assertThat(result.status()).isEqualTo(ExportBatch.CANCELLED);
+        verify(repo).logChange(eq("yb01"), eq("EXPORT_BATCH_CANCEL"), eq("EXPORT_BATCH"),
+                eq("EB2026110100001"), anyString());
+    }
+
+    @Test
+    @DisplayName("撤销：已回执批次拒绝（只能走省局冲销）")
+    void cancelRejectsReceiptedBatch() {
+        ExportBatch accepted = batch(ExportBatch.ACCEPTED, 1L);
+        when(repo.findExportBatch(accepted.id())).thenReturn(Optional.of(accepted));
+
+        assertThatThrownBy(() -> service.cancel(accepted.id(), "wrong", "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能撤销")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_EXPORT_INVALID);
+        verify(repo, never()).cancelExportBatch(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("撤销：原因为空拒绝")
+    void cancelRequiresReason() {
+        ExportBatch generated = batch(ExportBatch.GENERATED, 0L);
+        when(repo.findExportBatch(generated.id())).thenReturn(Optional.of(generated));
+
+        assertThatThrownBy(() -> service.cancel(generated.id(), "  ", "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    // ---------------------------------------------------------------- 报文下载（MF-02）
+
+    @Test
+    @DisplayName("报文下载：写 EXPORT_PAYLOAD_DOWNLOAD 审计（含批次号与哈希）")
+    void payloadDownloadWritesAudit() {
+        ExportBatch generated = batch(ExportBatch.GENERATED, 0L);
+        when(repo.findExportBatch(generated.id())).thenReturn(Optional.of(generated));
+
+        ExportBatch result = service.payload(generated.id(), "yb01");
+
+        assertThat(result.payload()).isEqualTo("<x/>");
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(repo).logChange(eq("yb01"), eq("EXPORT_PAYLOAD_DOWNLOAD"), eq("EXPORT_BATCH"),
+                eq("EB2026110100001"), detail.capture());
+        assertThat(detail.getValue()).contains("EB2026110100001", "hash", "billCount");
     }
 
     @Test

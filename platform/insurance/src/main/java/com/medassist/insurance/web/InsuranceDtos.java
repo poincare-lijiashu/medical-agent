@@ -124,13 +124,23 @@ public final class InsuranceDtos {
             @Size(max = 512) String message) {
     }
 
-    /** 导出批次摘要（不含 XML 报文，报文走 /payload 下载）。 */
+    /** 撤销未回执的报盘批次（撤销后其清单可在新批次重报）。 */
+    public record CancelExportReq(@NotBlank @Size(max = 256) String reason) {
+    }
+
+    /**
+     * 导出批次摘要（不含 XML 报文，报文走 /payload 下载）。
+     *
+     * @param excludedAlreadyExported 生成批次时因"已属其它有效批次"而被跳过的清单数（仅生成时非 0）
+     */
     public record ExportBatchSummary(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
                                      int billCount, BigDecimal totalAmount,
                                      BigDecimal insuranceAmount, BigDecimal selfPayAmount,
                                      String payloadHash, String status, String receiptNo,
-                                     Instant receiptAt, String receiptMessage, String createdBy,
-                                     long version, Instant createdAt) {
+                                     Instant receiptAt, String receiptMessage,
+                                     String cancelledReason, Instant cancelledAt,
+                                     String createdBy, long version, Instant createdAt,
+                                     int excludedAlreadyExported) {
     }
 
     /** 新建支付方案（DRG 费率 / DIP 点值由省局下发，院内只做配置与模拟）。 */

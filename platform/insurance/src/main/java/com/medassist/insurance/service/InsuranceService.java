@@ -7,6 +7,7 @@ import com.medassist.insurance.client.ClinicalClient;
 import com.medassist.insurance.client.PatientClient;
 import com.medassist.insurance.domain.InsuranceModel.BillLine;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
+import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
 import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
@@ -165,6 +166,12 @@ public class InsuranceService {
         for (CatalogFileParser.Row row : rows) {
             InsuranceItem current = existing.get(row.code());
             if (current == null) {
+                // 新建乙类必须给出自付比例：文件漏列时按 0 落库会让统筹支付虚高（第四轮 MF-03）
+                if ("B".equals(row.payCategory()) && row.selfPayRatio() == null) {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                            "第 " + row.lineNo() + " 行：乙类（B）目录项必须提供自付比例（0~1）："
+                                    + row.code());
+                }
                 toCreate.add(row);
                 changes.add(new CatalogChange(row.code(), "CREATE", List.of()));
                 continue;
@@ -495,6 +502,10 @@ public class InsuranceService {
      *
      * <p>作废后该就诊可以重新生成清单（有效清单唯一索引排除 VOIDED），
      * 原单保留全部金额、确认人与作废原因，供对账与审计追溯。
+     *
+     * <p>已纳入报盘批次（GENERATED/ACCEPTED）的清单不得直接作废：
+     * 否则报文已固化、省局台账与院内台账劈叉（第四轮 SF-01）。
+     * 未回执批次先撤销批次，已回执批次须按省局冲销流程处理。
      */
     @Transactional
     public BillView voidBill(UUID billId, String reason, String actor) {
@@ -504,6 +515,14 @@ public class InsuranceService {
             throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
                     "只有已确认的结算清单可以作废，当前：" + bill.status());
         }
+        repo.findActiveBatchByBill(billId).ifPresent(batch -> {
+            String hint = ExportBatch.GENERATED.equals(batch.status())
+                    ? "请先撤销报盘批次 " + batch.batchNo() + " 后再作废"
+                    : "批次 " + batch.batchNo() + " 已登记回执（" + batch.status()
+                            + "），须按省局冲销流程处理后再作废";
+            throw new BusinessException(ErrorCode.INSURANCE_EXPORT_INVALID,
+                    "该清单已纳入报盘批次，" + hint);
+        });
         String normalized = reason == null ? "" : reason.trim();
         if (!repo.voidBill(billId, normalized, actor, bill.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "结算清单状态已变化，请刷新后重试");
@@ -733,6 +752,11 @@ public class InsuranceService {
     }
 
     private InsuranceItem toItem(ItemReq req) {
+        // 乙类必须先自付一定比例；缺省按 0 会全额纳入，统筹支付虚高（第四轮 MF-03）
+        if ("B".equals(req.payCategory()) && req.selfPayRatio() == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "乙类（B）目录项必须提供自付比例（0~1）：" + req.insuranceCode().trim());
+        }
         return new InsuranceItem(UUID.randomUUID(), req.insuranceCode().trim(), req.name().trim(),
                 req.category(), req.payCategory(),
                 req.selfPayRatio() == null ? BigDecimal.ZERO : req.selfPayRatio(),

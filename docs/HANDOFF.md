@@ -494,6 +494,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 验证：单测 316→**336**；`insurance_smoke.ps1` 122→**147 项**全过；
      库内费率 100→120 后新模拟 180.00、旧记录仍 150.00（快照生效）
 
+38. **第四轮评测第一批整改（2026-11-01）：报盘闭环与资金/PHI 红线**
+   - **MF-01**：`listConfirmedBills` 用 `NOT EXISTS` 排除已属 `GENERATED/ACCEPTED` 批次的清单；
+     生成结果回显 `excludedAlreadyExported`；全量已报盘 → 409 并给出张数
+   - **MF-02**：`auth V22` 新增 `insurance:export:download`（仅 ADMIN/医保办）；payload 端点改要求该权限，
+     下载写 `EXPORT_PAYLOAD_DOWNLOAD` 审计（批次号/哈希/张数）
+   - **MF-03**：乙类未给自付比例 → 422（JSON 建项/批量导入/文件新建三条路径一致；更新沿用原值）
+   - **SF-01**：作废前查 `findActiveBatchByBill`，GENERATED → 先撤销批次、ACCEPTED → 走省局冲销，均 409；
+     新增 `POST /export-batches/{id}/cancel`（GENERATED → CANCELLED，必填原因、CAS、审计）
+   - **SF-07**：`listConfirmedBills` 追加 `FOR SHARE`，与服务层作废 UPDATE 互斥
+   - `insurance V8`：批次加 `CANCELLED` 状态与 `cancelled_*` 列；补 `(bill_id, batch_id)` 索引
+   - 验证：单测 336→**348**；`insurance_smoke.ps1` 147→**165 项**全过；
+     auth 到 V22、insurance 到 V8
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -563,6 +576,14 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   可直接生成占位符列表（5000 个编码一次查询），不必手拼 SQL；空列表要在调用前短路
 - Spring Boot 默认 multipart 单文件上限是 **1MB**：做文件上传前必须配
   `spring.servlet.multipart.max-file-size/max-request-size`，否则稍大的目录文件直接 500/413
+- V6 里 `status text ... CHECK (...)` 是**内联**约束，PG 自动命名
+  `settlement_export_batch_status_check`：想放宽状态枚举必须同时 `DROP` 这个名字，
+  只删自己命名的 `ck_export_status` 会留下旧约束，新状态仍被拒
+- `SELECT ... LIMIT n FOR SHARE` 合法，可用于"生成批次时锁住待报盘清单"；
+  但只能对主表用 `FOR SHARE OF 别名`，子查询里的表不加锁（避免与待报盘集合无关的行被锁）
+- 给导出/批量接口加"幂等"时注意：`NOT EXISTS` 排除条件要写成
+  `x.status IN ('GENERATED','ACCEPTED')`，把 `REJECTED/CANCELLED` 排除在外，
+  否则退回/撤销过的清单永远无法重报
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

@@ -49,6 +49,11 @@ class InsuranceCatalogFileImportTest {
         return ("code,name,category,payCategory\n" + body).getBytes(StandardCharsets.UTF_8);
     }
 
+    private static byte[] csvWithRatio(String body) {
+        return ("code,name,category,payCategory,selfPayRatio\n" + body)
+                .getBytes(StandardCharsets.UTF_8);
+    }
+
     private static InsuranceItem item(String code, String name, String category, String pay,
                                       String ratio, String limit, boolean enabled, long version) {
         return new InsuranceItem(UUID.randomUUID(), code, name, category, pay,
@@ -64,7 +69,7 @@ class InsuranceCatalogFileImportTest {
         when(repo.countEnabledItemsNotInCodes(anyList())).thenReturn(7L);
 
         CatalogImportResult result = service.importCatalogFile("catalog.csv",
-                csv("A,新名称,DRUG,A\nB,新增项目,SERVICE,B\n"), "preview", "yb01");
+                csvWithRatio("A,新名称,DRUG,A,\nB,新增项目,SERVICE,B,0.1\n"), "preview", "yb01");
 
         assertThat(result.mode()).isEqualTo("PREVIEW");
         assertThat(result.total()).isEqualTo(2);
@@ -91,7 +96,7 @@ class InsuranceCatalogFileImportTest {
         when(repo.countEnabledItemsNotInCodes(anyList())).thenReturn(1L);
 
         CatalogImportResult result = service.importCatalogFile("catalog.csv",
-                csv("A,同名,DRUG,A\nB,新增项目,SERVICE,B\n"), "apply", "yb01");
+                csvWithRatio("A,同名,DRUG,A,\nB,新增项目,SERVICE,B,0.1\n"), "apply", "yb01");
 
         assertThat(result.mode()).isEqualTo("APPLY");
         assertThat(result.created()).isEqualTo(1);
@@ -101,7 +106,7 @@ class InsuranceCatalogFileImportTest {
         verify(repo).upsertItem(captor.capture(), isNull());
         assertThat(captor.getValue().insuranceCode()).isEqualTo("B");
         assertThat(captor.getValue().enabled()).isTrue();
-        assertThat(captor.getValue().selfPayRatio()).isEqualByComparingTo("0");
+        assertThat(captor.getValue().selfPayRatio()).isEqualByComparingTo("0.1");
         verify(repo).logChange(eq("yb01"), eq("ITEM_FILE_UPSERT"), eq("INSURANCE_ITEM"),
                 eq("B"), anyString());
         verify(repo).logChange(eq("yb01"), eq("ITEM_FILE_IMPORT"), eq("INSURANCE_ITEM"),
@@ -140,6 +145,30 @@ class InsuranceCatalogFileImportTest {
         assertThat(saved.selfPayRatio()).isEqualByComparingTo("0.20");
         assertThat(saved.priceLimit()).isEqualByComparingTo("10.00");
         assertThat(saved.enabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("乙类新建缺自付比例：整体拒绝并指出行号（MF-03）")
+    void rejectsClassBWithoutRatio() {
+        assertThatThrownBy(() -> service.importCatalogFile("catalog.csv",
+                csv("B,新增乙类,SERVICE,B\n"), "preview", "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("自付比例")
+                .hasMessageContaining("第 2 行");
+        verify(repo, never()).upsertItem(any(), any());
+    }
+
+    @Test
+    @DisplayName("乙类更新未给比例：允许沿用库里原值（不是静默清零）")
+    void classBUpdateKeepsExistingRatio() {
+        when(repo.findItemsByCodes(anyList())).thenReturn(List.of(
+                item("B", "旧乙类", "SERVICE", "B", "0.20", null, true, 2L)));
+
+        service.importCatalogFile("catalog.csv", csv("B,新乙类,SERVICE,B\n"), "apply", "yb01");
+
+        ArgumentCaptor<InsuranceItem> captor = ArgumentCaptor.forClass(InsuranceItem.class);
+        verify(repo).upsertItem(captor.capture(), isNull());
+        assertThat(captor.getValue().selfPayRatio()).isEqualByComparingTo("0.20");
     }
 
     @Test

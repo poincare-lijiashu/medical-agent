@@ -5,6 +5,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.insurance.client.ClinicalClient;
 import com.medassist.insurance.client.PatientClient;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
+import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
 import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
@@ -236,6 +237,14 @@ class InsuranceServiceTest {
                 snapshotRatio == null ? null : new BigDecimal(snapshotRatio),
                 snapshotCap == null ? null : new BigDecimal(snapshotCap),
                 version, Instant.now());
+    }
+
+    private ExportBatch exportBatch(String status) {
+        return new ExportBatch(UUID.randomUUID(), "EB20261101000001",
+                java.time.LocalDate.now(), java.time.LocalDate.now(), 1,
+                new BigDecimal("10.00"), new BigDecimal("8.00"), new BigDecimal("2.00"),
+                "<settlementBatch/>", "hash", status, null, null, null,
+                null, null, null, "yb01", 0L, Instant.now());
     }
 
     @Test
@@ -865,6 +874,62 @@ class InsuranceServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_BILL_STATUS_INVALID);
         verify(repo, never()).voidBill(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("作废：已纳入未回执报盘批次时拒绝，提示先撤销批次（SF-01）")
+    void voidRejectsBillInGeneratedExportBatch() {
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                bill(SettlementBill.CONFIRMED, 3L)));
+        when(repo.findActiveBatchByBill(billId)).thenReturn(Optional.of(exportBatch(
+                ExportBatch.GENERATED)));
+
+        assertThatThrownBy(() -> service.voidBill(billId, "费用录错", "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("撤销报盘批次")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_EXPORT_INVALID);
+        verify(repo, never()).voidBill(any(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("作废：已回执报盘批次时拒绝，提示按省局冲销（SF-01）")
+    void voidRejectsBillInAcceptedExportBatch() {
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                bill(SettlementBill.CONFIRMED, 3L)));
+        when(repo.findActiveBatchByBill(billId)).thenReturn(Optional.of(exportBatch(
+                ExportBatch.ACCEPTED)));
+
+        assertThatThrownBy(() -> service.voidBill(billId, "费用录错", "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("冲销")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_EXPORT_INVALID);
+    }
+
+    @Test
+    @DisplayName("目录：乙类未给自付比例时拒绝（缺省 0 会让统筹支付虚高，MF-03）")
+    void createItemRejectsClassBWithoutRatio() {
+        ItemReq req = new ItemReq("I-B", "乙类项目", "SERVICE", "B", null, null, true, null);
+
+        assertThatThrownBy(() -> service.createItem(req, "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("自付比例")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).upsertItem(any(), any());
+    }
+
+    @Test
+    @DisplayName("目录：JSON 批量导入同样拦截乙类缺比例（与文件导入口径一致）")
+    void importItemsRejectsClassBWithoutRatio() {
+        ItemReq req = new ItemReq("I-B2", "乙类项目", "SERVICE", "B", null, null, true, null);
+
+        assertThatThrownBy(() -> service.importItems(List.of(req), "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).upsertItem(any(), any());
     }
 
     @Test

@@ -486,13 +486,17 @@ public class InsuranceRepository {
             rs.getString("payload"), rs.getString("payload_hash"), rs.getString("status"),
             rs.getString("receipt_no"),
             rs.getTimestamp("receipt_at") == null ? null : rs.getTimestamp("receipt_at").toInstant(),
-            rs.getString("receipt_message"), rs.getString("created_by"), rs.getLong("version"),
+            rs.getString("receipt_message"), rs.getString("cancelled_reason"),
+            rs.getString("cancelled_by"),
+            rs.getTimestamp("cancelled_at") == null ? null : rs.getTimestamp("cancelled_at").toInstant(),
+            rs.getString("created_by"), rs.getLong("version"),
             rs.getTimestamp("created_at").toInstant());
 
     private static final String EXPORT_COLUMNS = """
             id, batch_no, period_from, period_to, bill_count, total_amount, insurance_amount,
             self_pay_amount, payload, payload_hash, status, receipt_no, receipt_at,
-            receipt_message, created_by, version, created_at
+            receipt_message, cancelled_reason, cancelled_by, cancelled_at, created_by,
+            version, created_at
             """;
 
     public String nextExportBatchNo() {
@@ -502,19 +506,66 @@ public class InsuranceRepository {
                 + String.format("%05d", seq);
     }
 
-    /** 期间内已确认（未作废）的清单，按确认时间升序；用于生成报盘。 */
+    /**
+     * 期间内**尚未报盘**的已确认清单，按确认时间升序。
+     *
+     * <p>排除已属 GENERATED / ACCEPTED 批次的清单（第四轮 MF-01：同一清单不得重复报盘）；
+     * REJECTED（退回）与 CANCELLED（撤销）批次不阻止重报。
+     *
+     * <p>`FOR SHARE` 锁住被选中的清单行：与作废（UPDATE）互斥，
+     * 避免"查完清单→写批次"之间被并发作废（第四轮 SF-07）。
+     */
     public List<SettlementBill> listConfirmedBills(LocalDate from, LocalDate to, int limit) {
         return jdbc.sql("SELECT " + BILL_COLUMNS + """
-                         FROM insurance_svc.settlement_bill
-                         WHERE status = 'CONFIRMED'
-                           AND confirmed_at >= :fromTs AND confirmed_at < :toTs
-                         ORDER BY confirmed_at, bill_no
+                         FROM insurance_svc.settlement_bill b
+                         WHERE b.status = 'CONFIRMED'
+                           AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM insurance_svc.settlement_export_item i
+                                 JOIN insurance_svc.settlement_export_batch x ON x.id = i.batch_id
+                                WHERE i.bill_id = b.id
+                                  AND x.status IN ('GENERATED', 'ACCEPTED'))
+                         ORDER BY b.confirmed_at, b.bill_no
                          LIMIT :limit
+                        FOR SHARE OF b
                         """)
                 .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
                 .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
                 .param("limit", limit)
                 .query(BILL_MAPPER).list();
+    }
+
+    /** 期间内已确认但**已报盘**的清单数量（用于生成前回显"被跳过多少张"）。 */
+    public long countConfirmedBillsAlreadyExported(LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                          FROM insurance_svc.settlement_bill b
+                         WHERE b.status = 'CONFIRMED'
+                           AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM insurance_svc.settlement_export_item i
+                                 JOIN insurance_svc.settlement_export_batch x ON x.id = i.batch_id
+                                WHERE i.bill_id = b.id
+                                  AND x.status IN ('GENERATED', 'ACCEPTED'))
+                        """)
+                .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .query(Long.class).single();
+    }
+
+    /** 某张清单当前所在的有效批次（GENERATED / ACCEPTED），用于作废前的报盘校验。 */
+    public Optional<ExportBatch> findActiveBatchByBill(UUID billId) {
+        return jdbc.sql("SELECT " + EXPORT_COLUMNS + """
+                         FROM insurance_svc.settlement_export_batch
+                         WHERE status IN ('GENERATED', 'ACCEPTED')
+                           AND id IN (SELECT batch_id
+                                        FROM insurance_svc.settlement_export_item
+                                       WHERE bill_id = ?)
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """).param(billId).query(EXPORT_MAPPER).optional();
     }
 
     public void insertExportBatch(ExportBatch b) {
@@ -566,6 +617,19 @@ public class InsuranceRepository {
                          WHERE id = :id AND status = 'GENERATED' AND version = :version
                         """)
                 .param("status", status).param("receiptNo", receiptNo).param("message", message)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 撤销批次：仅 GENERATED 可撤销（已回执的必须走省局冲销），CAS。 */
+    public boolean cancelExportBatch(UUID id, String reason, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_export_batch
+                           SET status = 'CANCELLED', cancelled_reason = :reason,
+                               cancelled_by = :actor, cancelled_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'GENERATED' AND version = :version
+                        """)
+                .param("reason", reason).param("actor", actor)
                 .param("id", id).param("version", expectedVersion).update() > 0;
     }
 

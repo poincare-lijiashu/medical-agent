@@ -118,21 +118,29 @@ public final class InsuranceModel {
      *
      * <p>payload 固化生成时的 XML 全文，payload_hash 为 SHA-256：
      * 事后核对"当时报了什么"不依赖目录/参保参数的当前值。
-     * 状态机：GENERATED →（登记回执）→ ACCEPTED / REJECTED，单向不可逆。
+     * 状态机：GENERATED →（登记回执）→ ACCEPTED / REJECTED；GENERATED →（撤销）→ CANCELLED。
+     * 撤销后其清单可在新批次重报；已回执批次不可撤销（需走省局冲销）。
      */
     public record ExportBatch(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
                               int billCount, BigDecimal totalAmount, BigDecimal insuranceAmount,
                               BigDecimal selfPayAmount, String payload, String payloadHash,
                               String status, String receiptNo, Instant receiptAt,
-                              String receiptMessage, String createdBy, long version,
+                              String receiptMessage, String cancelledReason, String cancelledBy,
+                              Instant cancelledAt, String createdBy, long version,
                               Instant createdAt) {
 
         public static final String GENERATED = "GENERATED";
         public static final String ACCEPTED = "ACCEPTED";
         public static final String REJECTED = "REJECTED";
+        /** 撤销（仅 GENERATED 可撤销）：批次作废，清单可重新报盘。 */
+        public static final String CANCELLED = "CANCELLED";
 
         public boolean receipted() {
-            return !GENERATED.equals(status);
+            return !GENERATED.equals(status) && !CANCELLED.equals(status);
+        }
+
+        public boolean cancelled() {
+            return CANCELLED.equals(status);
         }
     }
 
