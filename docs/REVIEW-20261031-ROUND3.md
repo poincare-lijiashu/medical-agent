@@ -277,15 +277,17 @@ MF-12~13（离网文档两处，1 分钟级）→ S-24~S-27 → MF-18~19 + S-28~
 | S-24 | 生产安装示例 --set 不全 | ✅ 已修 | `deploy/README` §4.2 安装与渲染校验均补全 9 个组件 tag |
 | S-25 | 离网缺 SkyWalking agentImage 覆写指引 | ✅ 已修 | 离网 README §2.2 补 `--set external.skywalking.agentImage=<harbor>/apache/...` |
 | S-27 | values-dev 缺 clinical 块 | ✅ 已修 | 补 clinical 单副本块，与 emr/insurance 同款 |
+| MF-18 | 权限矩阵无自动化验证 | ✅ 已修 | 新增 `InsuranceControllerPermissionTest`（6 项：目录/参保需 manage、生成/确认需 write、只读放行、空头 403）与 `EmrControllerPermissionTest`（7 项：书写需 create、签名需 sign、归档≠修订、**医师不能自审**、质控审批放行、只读放行） |
 
-**验证**：单测 **215 → 218**（新增 `SecurityDefaultsTest` 3 项）；`emr_smoke.ps1` 全过；
+**验证**：单测 **215 → 231**（新增 `SecurityDefaultsTest` 3 项、`InsuranceControllerPermissionTest` 6 项、
+`EmrControllerPermissionTest` 7 项）；`emr_smoke.ps1` 全过；
 实测统一审计接口 `GET /api/v2/audit/events` 返回 `source=emr|insurance|pharmacy` 的事件
 （RECORD_SIGN 含 AUTHOR/ATTENDING 两级、BILL_GENERATE、DISPENSE）；
 实测"visitId 指向不存在的就诊"建病历 → QC 返回 `QC-ADM-TIME:NOT_EVALUATED`
 （`passed=true`、`minor=1`，不阻断提交）。
 
 **仍未做**：MF-07（下游身份头 HMAC/mTLS，需设计评审后单独立项）、MF-05（清单确认前校验与 VOIDED 冲正）、
-MF-11（CDR 检索索引）、MF-18（权限矩阵自动化测试）、S-10/S-11（年度累计/按就诊日期校验参保）。
+MF-11（CDR 检索索引）、S-10/S-11（年度累计/按就诊日期校验参保）、S-28~S-30（E2E 补强与 Mockito 过拟合）。
 
 ---
 

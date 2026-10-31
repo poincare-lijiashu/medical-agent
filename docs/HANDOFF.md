@@ -305,9 +305,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      各服务 `<SVC>_INTERNAL_TOKEN` 只作兼容回落
    - **部署文档**：离网命令补 insurance tag + SkyWalking agentImage 覆写；Secret 表补
      `medassist-internal`；生产安装/渲染示例补全 9 个组件 tag；values-dev 补 clinical 块
-   - 验证：单测 215→**218**；emr E2E 全过；实测 NOT_EVALUATED 与跨域审计均符合预期
+   - **MF-18 权限矩阵**：新增 `InsuranceControllerPermissionTest`（6 项）与
+     `EmrControllerPermissionTest`（7 项，含"医师只有修订权不能自审病案修改"）
+   - 验证：单测 215→**231**；emr E2E 全过；实测 NOT_EVALUATED 与跨域审计均符合预期
    - 下一批：第三轮意见书第三批（MF-05 清单确认前校验+VOIDED 冲正+对账、S-10/S-11），
-     或 MF-11 CDR 索引 / MF-18 权限矩阵测试
+     或 MF-11 CDR 检索索引、S-28~S-30（E2E 补强）
 
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
