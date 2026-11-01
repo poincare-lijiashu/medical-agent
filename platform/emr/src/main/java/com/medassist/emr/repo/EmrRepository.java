@@ -4,6 +4,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.domain.EmrModel.HqmsExportBatch;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.QcRule;
@@ -835,6 +836,180 @@ public class EmrRepository {
                 .param("status", status).param("patientId", patientId)
                 .param("deptId", deptId).param("limit", limit)
                 .query(HOMEPAGE_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- HQMS 上报批次
+
+    private static final RowMapper<HqmsExportBatch> HQMS_MAPPER = (rs, i) -> new HqmsExportBatch(
+            rs.getObject("id", UUID.class), rs.getString("batch_no"),
+            rs.getDate("period_from").toLocalDate(), rs.getDate("period_to").toLocalDate(),
+            rs.getInt("homepage_count"), rs.getBigDecimal("total_amount"),
+            rs.getString("payload"), rs.getString("payload_hash"), rs.getString("status"),
+            rs.getString("receipt_no"), rs.getString("receipt_message"), instant(rs, "receipt_at"),
+            rs.getString("cancelled_reason"), instant(rs, "cancelled_at"),
+            rs.getString("created_by"), rs.getLong("version"), instant(rs, "created_at"));
+
+    private static final String HQMS_COLUMNS = """
+            id, batch_no, period_from, period_to, homepage_count, total_amount, payload,
+            payload_hash, status, receipt_no, receipt_message, receipt_at, cancelled_reason,
+            cancelled_at, created_by, version, created_at
+            """;
+
+    /** 批次单号 HQYYYYMMDD######。 */
+    public String nextHqmsBatchNo() {
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "emr_svc.hqms_batch_no_seq").query(Long.class).single();
+        return "HQ" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq);
+    }
+
+    /**
+     * 上报期间的串行化锁（事务级 advisory lock）。
+     *
+     * <p>与医保报盘同一原因：并发 create 时各自的 NOT EXISTS 都在对方提交前查空，
+     * 同一首页会进入两个 GENERATED 批次。触发器是最后一道保险，这里先让并发排队。
+     */
+    public void lockHqmsPeriod(LocalDate from, LocalDate to) {
+        jdbc.sql("""
+                        WITH acquired AS (
+                            SELECT pg_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))
+                        )
+                        SELECT 1 FROM acquired
+                        """)
+                .param("key", "emr:hqms-export:" + from + ":" + to)
+                .query(Integer.class).single();
+    }
+
+    /** 期间内已归档、且尚未进入有效批次（GENERATED/ACCEPTED）的首页数。 */
+    public long countHqmsPending(LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                          FROM emr_svc.record_homepage h
+                         WHERE h.status = 'ARCHIVED'
+                           AND h.discharged_at IS NOT NULL
+                           AND (h.discharged_at AT TIME ZONE 'Asia/Shanghai')::date
+                               BETWEEN :from AND :to
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM emr_svc.hqms_export_item i
+                                 JOIN emr_svc.hqms_export_batch b ON b.id = i.batch_id
+                                WHERE i.homepage_id = h.id
+                                  AND b.status IN ('GENERATED', 'ACCEPTED'))
+                        """)
+                .param("from", from).param("to", to)
+                .query(Long.class).single();
+    }
+
+    /** 期间内已归档、但已被有效批次占用的首页数（用于"均已上报"的提示）。 */
+    public long countHqmsAlreadyExported(LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                          FROM emr_svc.record_homepage h
+                         WHERE h.status = 'ARCHIVED'
+                           AND h.discharged_at IS NOT NULL
+                           AND (h.discharged_at AT TIME ZONE 'Asia/Shanghai')::date
+                               BETWEEN :from AND :to
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM emr_svc.hqms_export_item i
+                                 JOIN emr_svc.hqms_export_batch b ON b.id = i.batch_id
+                                WHERE i.homepage_id = h.id
+                                  AND b.status IN ('GENERATED', 'ACCEPTED'))
+                        """)
+                .param("from", from).param("to", to)
+                .query(Long.class).single();
+    }
+
+    /** 待上报首页（已归档、期间内、未被有效批次占用），按出院时间升序。 */
+    public List<Homepage> listHqmsPending(LocalDate from, LocalDate to, int limit) {
+        return jdbc.sql("SELECT " + HOMEPAGE_COLUMNS + """
+                          FROM emr_svc.record_homepage h
+                         WHERE h.status = 'ARCHIVED'
+                           AND h.discharged_at IS NOT NULL
+                           AND (h.discharged_at AT TIME ZONE 'Asia/Shanghai')::date
+                               BETWEEN :from AND :to
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM emr_svc.hqms_export_item i
+                                 JOIN emr_svc.hqms_export_batch b ON b.id = i.batch_id
+                                WHERE i.homepage_id = h.id
+                                  AND b.status IN ('GENERATED', 'ACCEPTED'))
+                         ORDER BY h.discharged_at, h.homepage_no
+                         LIMIT :limit
+                        """)
+                .param("from", from).param("to", to).param("limit", limit)
+                .query(HOMEPAGE_MAPPER).list();
+    }
+
+    public void insertHqmsBatch(HqmsExportBatch b) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.hqms_export_batch
+                            (id, batch_no, period_from, period_to, homepage_count, total_amount,
+                             payload, payload_hash, status, created_by, version)
+                        VALUES (:id, :batchNo, :from, :to, :count, :total,
+                                :payload, :hash, :status, :actor, 0)
+                        """)
+                .param("id", b.id()).param("batchNo", b.batchNo())
+                .param("from", b.periodFrom()).param("to", b.periodTo())
+                .param("count", b.homepageCount()).param("total", b.totalAmount())
+                .param("payload", b.payload()).param("hash", b.payloadHash())
+                .param("status", b.status()).param("actor", b.createdBy()).update();
+    }
+
+    public void insertHqmsItem(UUID batchId, Homepage h) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.hqms_export_item
+                            (batch_id, homepage_id, homepage_no, patient_no, discharged_at,
+                             total_amount)
+                        VALUES (:batchId, :homepageId, :homepageNo, :patientNo,
+                                CAST(:dischargedAt AS timestamptz), :totalAmount)
+                        """)
+                .param("batchId", batchId).param("homepageId", h.id())
+                .param("homepageNo", h.homepageNo()).param("patientNo", h.patientNo())
+                .param("dischargedAt", ts(h.dischargedAt()))
+                .param("totalAmount", h.totalAmount()).update();
+    }
+
+    public Optional<HqmsExportBatch> findHqmsBatch(UUID id) {
+        return jdbc.sql("SELECT " + HQMS_COLUMNS
+                        + " FROM emr_svc.hqms_export_batch WHERE id = ?")
+                .param(id).query(HQMS_MAPPER).optional();
+    }
+
+    public List<HqmsExportBatch> listHqmsBatches(int limit) {
+        return jdbc.sql("SELECT " + HQMS_COLUMNS + """
+                          FROM emr_svc.hqms_export_batch
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("limit", limit).query(HQMS_MAPPER).list();
+    }
+
+    /** 登记回执（CAS：仅 GENERATED 可回执）。 */
+    public boolean updateHqmsReceipt(UUID id, String status, String receiptNo, String message,
+                                     long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.hqms_export_batch
+                           SET status = :status, receipt_no = :receiptNo,
+                               receipt_message = :message, receipt_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'GENERATED' AND version = :version
+                        """)
+                .param("status", status).param("receiptNo", receiptNo)
+                .param("message", message).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 撤销未回执批次（CAS：仅 GENERATED 可撤销）。 */
+    public boolean cancelHqmsBatch(UUID id, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.hqms_export_batch
+                           SET status = 'CANCELLED', cancelled_reason = :reason, cancelled_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'GENERATED' AND version = :version
+                        """)
+                .param("reason", reason).param("id", id).param("version", expectedVersion)
+                .update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

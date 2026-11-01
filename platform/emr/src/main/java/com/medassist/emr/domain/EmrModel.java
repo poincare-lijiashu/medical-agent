@@ -185,4 +185,30 @@ public final class EmrModel {
     public record HomepageProcedure(String code, String name, LocalDate date, String surgeon,
                                     String anesthesia, String incisionLevel) {
     }
+
+    /**
+     * 病案首页 HQMS 上报批次。
+     *
+     * <p>报文与哈希在生成时固化；回执与撤销都是单向迁移（CAS）。
+     * 一个首页同时只能出现在一个有效批次（GENERATED / ACCEPTED），数据库触发器兜底。
+     *
+     * @param payload 固化报文（XML），下载时原样返回
+     */
+    public record HqmsExportBatch(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
+                                  int homepageCount, BigDecimal totalAmount, String payload,
+                                  String payloadHash, String status, String receiptNo,
+                                  String receiptMessage, Instant receiptAt, String cancelledReason,
+                                  Instant cancelledAt, String createdBy, long version,
+                                  Instant createdAt) {
+
+        public static final String GENERATED = "GENERATED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String REJECTED = "REJECTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        /** 已登记回执（成功或退回）后不能再回执，也不能撤销。 */
+        public boolean receipted() {
+            return ACCEPTED.equals(status) || REJECTED.equals(status);
+        }
+    }
 }

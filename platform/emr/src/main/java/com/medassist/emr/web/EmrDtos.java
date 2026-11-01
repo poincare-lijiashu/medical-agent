@@ -190,4 +190,34 @@ public final class EmrDtos {
                                List<Map<String, Object>> procedures,
                                Map<String, java.math.BigDecimal> feeSummary) {
     }
+
+    // ---------------------------------------------------------------- HQMS 上报
+
+    /** HQMS 回执：ACCEPTED / REJECTED（退回必须写原因）。 */
+    public record HqmsReceiptReq(
+            @NotBlank @Pattern(regexp = "ACCEPTED|REJECTED", message = "回执状态不合法") String status,
+            @NotBlank @Size(max = 64) String receiptNo,
+            @Size(max = 512) String message) {
+    }
+
+    /** 撤销未回执的上报批次（必须写原因）。 */
+    public record CancelHqmsExportReq(
+            @NotBlank @Size(max = 512) String reason) {
+    }
+
+    /**
+     * 上报批次摘要（不含报文本身，避免列表接口返回大字段）。
+     *
+     * @param excludedAlreadyExported 期间内已上报、本次被排除的首页数
+     * @param remainingPending        超过单批上限、本期间仍需再报的首页数
+     */
+    public record HqmsExportBatchSummary(UUID id, String batchNo, java.time.LocalDate periodFrom,
+                                         java.time.LocalDate periodTo, int homepageCount,
+                                         java.math.BigDecimal totalAmount, String payloadHash,
+                                         String status, String receiptNo, String receiptMessage,
+                                         java.time.Instant receiptAt, String cancelledReason,
+                                         java.time.Instant cancelledAt, String createdBy,
+                                         long version, java.time.Instant createdAt,
+                                         int excludedAlreadyExported, int remainingPending) {
+    }
 }
