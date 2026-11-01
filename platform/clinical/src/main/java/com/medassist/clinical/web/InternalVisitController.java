@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -62,6 +63,34 @@ public class InternalVisitController {
         body.put("admittedAt", admission.map(Admission::admittedAt).map(ISO::format).orElse(null));
         body.put("dischargedAt", admission.map(Admission::dischargedAt)
                 .map(ISO::format).orElse(null));
+        return body;
+    }
+
+    /**
+     * 就诊诊断（医保清单/病案首页取值）：主诊断排在最前，按录入顺序返回。
+     *
+     * <p>只返回编码、名称与主诊断标记；不暴露录入人等内部字段。
+     */
+    @GetMapping("/{visitId}/diagnoses")
+    public Map<String, Object> diagnoses(@PathVariable UUID visitId,
+                                         @RequestHeader(value = "X-Internal-Token", required = false)
+                                         String provided) {
+        requireToken(provided);
+        Visit visit = repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "就诊记录不存在"));
+        List<Map<String, Object>> items = repo.listVisitDiagnoses(visitId).stream()
+                .map(d -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("code", d.code());
+                    row.put("name", d.name());
+                    row.put("primary", d.primaryFlag());
+                    return row;
+                })
+                .toList();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("visitId", visitId);
+        body.put("patientId", visit.patientId());
+        body.put("diagnoses", items);
         return body;
     }
 

@@ -27,5 +27,20 @@ public interface ClinicalClient {
         }
     }
 
+    /** 诊断（ICD-10）。 */
+    record Diagnosis(String code, String name, boolean primary) {
+    }
+
+    /** 就诊诊断汇总；无诊断时为空列表。 */
+    record DiagnosisSummary(UUID visitId, List<Diagnosis> diagnoses) {
+    }
+
     ChargeSummary charges(UUID visitId);
+
+    /**
+     * 拉取就诊诊断（结算清单头的主诊断与其他诊断）。
+     *
+     * <p>临床不可达时与 {@link #charges} 一样抛 503：清单缺诊断会导致报盘退回。
+     */
+    DiagnosisSummary diagnoses(UUID visitId);
 }

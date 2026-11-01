@@ -97,6 +97,12 @@ Check 'registration.create' $r.Status 200
 $visitId = (Res $r).id
 Check 'registration.visitIdPresent' ("$visitId".Length -gt 0) 'True'
 
+# structured diagnosis (ICD-10): the settlement bill snapshots the primary diagnosis
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/diagnoses" @{
+    code = 'J06.900'; primary = $true
+} $token
+Check 'diagnosis.primary' $r.Status 200
+
 # ---------------------------------------------------------------- 3. catalog + mapping
 $r = Invoke-Api 'POST' '/api/v2/insurance/items' @{
     insuranceCode = 'I-REG-A'; name = 'General Consultation Fee (Class A)'; category = 'SERVICE'
@@ -188,6 +194,8 @@ CheckNum 'bill.selfPay' $billView.bill.selfPayAmount 0.00
 Check 'bill.lineCount' (@($billView.lines).Count) 1
 Check 'bill.lineMapped' $billView.lines[0].unmapped 'False'
 Check 'bill.lineChargeStatus' $billView.lines[0].chargeStatus 'UNPAID'
+Check 'bill.primaryDiagnosis' $billView.bill.primaryDiagnosisCode 'J06.900'
+Check 'bill.diagnosisCount' $billView.bill.diagnosisCount 1
 
 $r = Invoke-Api 'GET' "/api/v2/insurance/settlements/by-visit/$visitId" $null $token
 Check 'bill.byVisit' $r.Status 200

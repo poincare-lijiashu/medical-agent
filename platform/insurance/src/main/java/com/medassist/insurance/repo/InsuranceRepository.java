@@ -72,7 +72,9 @@ public class InsuranceRepository {
             rs.getString("void_reason"), rs.getString("voided_by"),
             rs.getTimestamp("voided_at") == null ? null : rs.getTimestamp("voided_at").toInstant(),
             rs.getBigDecimal("snapshot_ratio"), rs.getBigDecimal("snapshot_cap"),
-            rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+            rs.getLong("version"), rs.getTimestamp("created_at").toInstant(),
+            rs.getString("primary_diagnosis_code"), rs.getString("primary_diagnosis_name"),
+            rs.getInt("diagnosis_count"));
 
     /** 结算清单统一列清单（含作废留痕与待遇快照）。 */
     private static final String BILL_COLUMNS = """
@@ -80,6 +82,7 @@ public class InsuranceRepository {
             total_amount, eligible_amount, deductible, insurance_amount, self_pay_amount,
             status, detail::text AS detail, created_by, confirmed_by, confirmed_at,
             void_reason, voided_by, voided_at, snapshot_ratio, snapshot_cap,
+            primary_diagnosis_code, primary_diagnosis_name, diagnosis_count,
             version, created_at
             """;
 
@@ -445,6 +448,29 @@ public class InsuranceRepository {
                 .param("insurance", insurance).param("selfPay", selfPay).param("detail", detail)
                 .param("snapshotRatio", snapshotRatio).param("snapshotCap", snapshotCap)
                 .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /**
+     * 写入诊断快照（生成/重算清单时调用）。
+     *
+     * <p>单独一个 UPDATE 而不是塞进 insert/update：诊断是"内容快照"，
+     * 与金额、待遇快照分开维护，报盘时只读清单即可拿到完整诊断。
+     */
+    public boolean updateBillDiagnoses(UUID id, String primaryCode, String primaryName,
+                                       int diagnosisCount, String diagnosesJson) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_bill
+                           SET primary_diagnosis_code = CAST(:primaryCode AS text),
+                               primary_diagnosis_name = CAST(:primaryName AS text),
+                               diagnosis_count = :diagnosisCount,
+                               diagnoses = CAST(:diagnoses AS jsonb),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT'
+                        """)
+                .param("primaryCode", primaryCode).param("primaryName", primaryName)
+                .param("diagnosisCount", diagnosisCount)
+                .param("diagnoses", diagnosesJson == null ? "[]" : diagnosesJson)
+                .param("id", id).update() > 0;
     }
 
     /** 确认（CAS：仅 DRAFT）。 */

@@ -101,7 +101,9 @@ public final class InsuranceModel {
                                  String confirmedBy, Instant confirmedAt,
                                  String voidReason, String voidedBy, Instant voidedAt,
                                  BigDecimal snapshotRatio, BigDecimal snapshotCap,
-                                 long version, Instant createdAt) {
+                                 long version, Instant createdAt,
+                                 String primaryDiagnosisCode, String primaryDiagnosisName,
+                                 int diagnosisCount) {
 
         public static final String DRAFT = "DRAFT";
         public static final String CONFIRMED = "CONFIRMED";

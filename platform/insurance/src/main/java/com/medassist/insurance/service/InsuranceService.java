@@ -448,6 +448,18 @@ public class InsuranceService {
                     "该就诊单收费已全部退费，无可结算费用");
         }
         String detail = toJson(c.lines());
+        // 诊断快照：清单抬头用主诊断，全部诊断落 jsonb 供报盘/DRG 使用
+        ClinicalClient.DiagnosisSummary diagnosisSummary = clinicalClient.diagnoses(visitId);
+        List<ClinicalClient.Diagnosis> diagnoses = diagnosisSummary == null
+                || diagnosisSummary.diagnoses() == null
+                ? List.of() : diagnosisSummary.diagnoses();
+        ClinicalClient.Diagnosis primaryDiagnosis = diagnoses.stream()
+                .filter(ClinicalClient.Diagnosis::primary)
+                .findFirst()
+                .orElse(diagnoses.isEmpty() ? null : diagnoses.get(0));
+        String primaryCode = primaryDiagnosis == null ? null : primaryDiagnosis.code();
+        String primaryName = primaryDiagnosis == null ? null : primaryDiagnosis.name();
+        String diagnosesJson = toJsonValue(diagnoses);
 
         SettlementBill bill;
         if (existing.isPresent()) {
@@ -461,6 +473,7 @@ public class InsuranceService {
                     member.reimbursementRatio(), member.cap(), old.version())) {
                 throw new BusinessException(ErrorCode.CONFLICT, "结算清单已被他人修改，请刷新后重试");
             }
+            repo.updateBillDiagnoses(old.id(), primaryCode, primaryName, diagnoses.size(), diagnosesJson);
             bill = repo.findBillById(old.id())
                     .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
         } else {
@@ -468,12 +481,14 @@ public class InsuranceService {
                     visitId, summary.patientId(), summary.patientNo(), member.id(),
                     c.total(), c.eligible(), c.deductible(), c.insurance(), c.selfPay(),
                     SettlementBill.DRAFT, detail, actor, null, null,
-                    null, null, null, member.reimbursementRatio(), member.cap(), 0L, null);
+                    null, null, null, member.reimbursementRatio(), member.cap(), 0L, null,
+                    primaryCode, primaryName, diagnoses.size());
             if (!repo.insertBill(created)) {
                 // 并发首插：另一请求已抢先建单（有效清单唯一索引兜底），让对方刷新后重试
                 throw new BusinessException(ErrorCode.CONFLICT,
                         "该就诊正在被其他终端生成结算清单，请刷新后重试");
             }
+            repo.updateBillDiagnoses(created.id(), primaryCode, primaryName, diagnoses.size(), diagnosesJson);
             bill = repo.findBillById(created.id())
                     .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
         }
@@ -787,6 +802,14 @@ public class InsuranceService {
 
     private static String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s.trim();
+    }
+
+    private String toJsonValue(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JacksonException e) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "诊断快照无法序列化");
+        }
     }
 
     private String toJson(List<BillLine> lines) {

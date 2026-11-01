@@ -105,6 +105,45 @@ public class HttpClinicalClient implements ClinicalClient {
         return new ChargeSummary(visitId, patientId, patientNo, serviceDate, lines);
     }
 
+    @Override
+    @SuppressWarnings("unchecked")
+    public DiagnosisSummary diagnoses(UUID visitId) {
+        if (visitId == null) {
+            return new DiagnosisSummary(null, List.of());
+        }
+        if (token.isBlank()) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "医保服务未配置临床域内部令牌，无法读取诊断");
+        }
+        Map<?, ?> body;
+        try {
+            body = client.get()
+                    .uri("/internal/visits/{visitId}/diagnoses", visitId)
+                    .header("X-Internal-Token", token)
+                    .retrieve()
+                    .body(Map.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "该就诊单不存在，无法读取诊断");
+        } catch (RestClientException e) {
+            log.warn("insurance.clinical_diagnosis_unavailable visitId={} err={}",
+                    visitId, e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "临床诊断服务暂不可用，无法生成结算清单，请稍后重试");
+        }
+        List<Diagnosis> items = new ArrayList<>();
+        Object raw = body == null ? null : body.get("diagnoses");
+        if (raw instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (!(row instanceof Map<?, ?> m)) {
+                    continue;
+                }
+                items.add(new Diagnosis(str(m.get("code")), str(m.get("name")),
+                        Boolean.TRUE.equals(m.get("primary"))));
+            }
+        }
+        return new DiagnosisSummary(visitId, items);
+    }
+
     private static LocalDate date(Object o) {
         if (o == null) {
             return null;

@@ -36,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -236,7 +237,7 @@ class InsuranceServiceTest {
                 null, null, null,
                 snapshotRatio == null ? null : new BigDecimal(snapshotRatio),
                 snapshotCap == null ? null : new BigDecimal(snapshotCap),
-                version, Instant.now());
+                version, Instant.now(), null, null, 0);
     }
 
     private ExportBatch exportBatch(String status) {
@@ -291,6 +292,23 @@ class InsuranceServiceTest {
         verify(repo).insertBill(any(SettlementBill.class));
         verify(repo).logChange(eq("cashier01"), eq("BILL_GENERATE"), eq("SETTLEMENT_BILL"),
                 anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("生成：把临床诊断快照写入清单（主诊断 + 诊断数 + 全量 JSON）")
+    void generateSnapshotsDiagnoses() {
+        when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
+        when(clinicalClient.diagnoses(visitId)).thenReturn(new ClinicalClient.DiagnosisSummary(visitId,
+                List.of(new ClinicalClient.Diagnosis("J06.900", "URTI", true),
+                        new ClinicalClient.Diagnosis("I10.x00", "HTN", false))));
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
+                member("0", "1.0000", "300000.00")));
+        stubChargeResolution();
+
+        service.generate(visitId, "cashier01");
+
+        verify(repo).updateBillDiagnoses(any(), eq("J06.900"), eq("URTI"), eq(2),
+                contains("I10.x00"));
     }
 
     // ---------------------------------------------------------------- 就诊日期参保 / 年度封顶（S-11 / S-10）
@@ -525,7 +543,7 @@ class InsuranceServiceTest {
                         UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                         BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
                         SettlementBill.CONFIRMED, "[]", "cashier01", "cashier01", Instant.now(),
-                        null, null, null, null, null, 3L, Instant.now())));
+                        null, null, null, null, null, 3L, Instant.now(), null, null, 0)));
 
         BillView view = service.confirm(billId, "cashier01");
 
@@ -808,7 +826,7 @@ class InsuranceServiceTest {
                 null, null, null,
                 ratio == null ? null : new BigDecimal(ratio),
                 cap == null ? null : new BigDecimal(cap),
-                2L, Instant.now());
+                2L, Instant.now(), null, null, 0);
     }
 
     @Test

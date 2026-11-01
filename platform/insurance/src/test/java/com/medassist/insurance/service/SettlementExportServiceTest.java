@@ -61,7 +61,8 @@ class SettlementExportServiceTest {
                 UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), new BigDecimal("10.00"), new BigDecimal("0.00"),
                 SettlementBill.CONFIRMED, DETAIL, "admin01", "yb01", Instant.now(),
-                null, null, null, new BigDecimal("1.0"), new BigDecimal("300000"), 1L, Instant.now());
+                null, null, null, new BigDecimal("1.0"), new BigDecimal("300000"), 1L, Instant.now(),
+                null, null, 0);
     }
 
     private ExportBatch batch(String status, long version) {
@@ -201,7 +202,7 @@ class SettlementExportServiceTest {
                 new BigDecimal("10.00"), new BigDecimal("0.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), SettlementBill.CONFIRMED, "not-json", "admin01", "yb01",
                 Instant.now(), null, null, null, BigDecimal.ONE, new BigDecimal("300000"), 1L,
-                Instant.now());
+                Instant.now(), null, null, 0);
         when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(broken));
 
