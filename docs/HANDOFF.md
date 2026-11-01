@@ -1,21 +1,21 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 / **医嘱 → 药房处方** / **撤销·停嘱 → 处方作废** / **医嘱 → 检查检验申请** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 / **医嘱 → 药房处方** / **撤销·停嘱 → 处方作废** / **医嘱 → 检查检验申请** / **结构化诊断 ICD-10** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
-  `e350fad`（**医嘱 → 检查/检验申请**）
+  `e350fad`（**医嘱 → 检查/检验申请**）、本批（**结构化诊断 ICD-10**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **515 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **524 项**全绿
 - 本机环境（2026-11-01 13:20）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **病案首页 / 结构化诊断（ICD-10）**：HQMS、DRG 官方分组、医保清单质量的前置基础
+  1. **病案首页**：把诊断（§1.35）接到首页与医保清单，DRG 分组才能用真实诊断
   2. **医嘱项 → 下游编码映射表**：多院区/多厂商时靠编码一致跑不通，需要独立映射主数据
   3. **药品字典批量导入**（CSV/XML，复用药保目录导入模式）+ **R5-S17**（CI 内跑 E2E）
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
@@ -758,6 +758,23 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 回归：全量单测 **515 项**（临床 +3、医技 +6）；`platform_smoke`、`tech_smoke`、`pharmacy_smoke`、
      `pharmacy_billing_smoke`、`pharmacy_audit_smoke`、`clinical_pharmacy_order_smoke` 全过
    - 遗留：耗材医嘱 → SPD/物资（无下游域）、治疗医嘱执行登记、"医嘱项 → 下游编码"映射表
+
+54. **结构化诊断（2026-11-01）：ICD-10 字典 + 就诊诊断**
+   - `clinical V13`：`md_diagnosis`（编码唯一、名称、系统分类、启停用，内置 12 条常用编码）
+     + `visit_diagnosis`（编码 + 名称快照 + 主诊断标记 + 录入人/时间）
+   - 数据库兜底：部分唯一索引 `(visit_id) WHERE primary_flag` 保证**一个就诊只有一条主诊断**；
+     `UNIQUE (visit_id, code)` 保证同码不重复
+   - 服务规则：换主诊断在同一事务内"先清旧后设新"；重复下达 409；未知编码 404；
+     就诊结束/取消后诊断只读（409）；字典改名不影响历史（名称快照）
+   - 权限（`auth V26`）：`clinical:diagnosis:read/write`（ADMIN 全量、DOCTOR 读写、NURSE/QC 只读）
+   - API：`GET /clinical/diagnoses`（字典检索）、`GET/POST /clinical/visits/{id}/diagnoses`、
+     `POST .../{diagnosisId}/primary`、`DELETE .../{diagnosisId}`
+   - **实测**：新增 `clinical_diagnosis_smoke.ps1` **27 项全过**（第二主诊断 409、换主后主诊断数恒为 1、
+     同码 409、未知 404、结束就诊后 409）
+   - 回归：全量单测 **524 项**（临床 +9）；`platform_smoke`、`clinical_report_smoke`、
+     药房 4 支、医技 2 支 E2E 全过
+   - 顺手修：`clinical_report_smoke` 的"药占比=0"改为"非负"——共享开发库里已有药品收入时不再误报
+   - 遗留：诊断进入病案首页/医保清单/DRG 分组；入院病情、修正诊断留痕；ICD 目录批量导入
 
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK

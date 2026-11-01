@@ -60,6 +60,16 @@ public final class ClinicalDtos {
     public record StopOrderReq(String reason) {
     }
 
+    /**
+     * 下达诊断。
+     *
+     * <p>{@code primary=true} 表示主诊断；一个就诊只能有一条主诊断（已有主诊断时 409）。
+     */
+    public record AddDiagnosisReq(
+            @NotBlank String code,
+            Boolean primary) {
+    }
+
     /** 结算（收费）。 */
     public record SettleReq(@NotBlank String paymentMethod) {
     }

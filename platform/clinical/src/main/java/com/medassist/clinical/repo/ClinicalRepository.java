@@ -7,10 +7,12 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
+import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
+import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.common.time.BusinessTime;
@@ -74,6 +76,16 @@ public class ClinicalRepository {
             rs.getString("transfer_status"), rs.getString("external_type"),
             rs.getObject("external_id", UUID.class), rs.getString("external_no"),
             rs.getString("transfer_error"));
+
+    private static final RowMapper<DiagnosisDef> DIAG_DEF_MAPPER = (rs, i) -> new DiagnosisDef(
+            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+            rs.getString("category"), rs.getBoolean("enabled"), rs.getLong("version"));
+
+    private static final RowMapper<VisitDiagnosis> VISIT_DIAG_MAPPER = (rs, i) -> new VisitDiagnosis(
+            rs.getObject("id", UUID.class), rs.getObject("visit_id", UUID.class),
+            rs.getString("code"), rs.getString("name"), rs.getBoolean("primary_flag"),
+            rs.getInt("sort_no"), rs.getString("diagnosed_by"),
+            rs.getTimestamp("diagnosed_at").toInstant(), rs.getLong("version"));
 
     private static final RowMapper<Charge> CHARGE_MAPPER = (rs, i) -> new Charge(
             rs.getObject("id", UUID.class), rs.getString("charge_no"),
@@ -428,6 +440,109 @@ public class ClinicalRepository {
                          WHERE id = :id AND visit_id = :visitId AND status = 'PLACED'
                         """)
                 .param("id", orderId).param("visitId", visitId).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 诊断
+
+    public Optional<DiagnosisDef> findDiagnosisByCode(String code) {
+        return jdbc.sql("""
+                        SELECT id, code, name, category, enabled, version
+                          FROM clinical_svc.md_diagnosis WHERE code = ?
+                        """).param(code).query(DIAG_DEF_MAPPER).optional();
+    }
+
+    /** 诊断检索（只列启用项）：keyword 匹配编码或名称。 */
+    public List<DiagnosisDef> listDiagnosisDefs(String keyword, int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT id, code, name, category, enabled, version
+                          FROM clinical_svc.md_diagnosis
+                         WHERE enabled = true
+                           AND (CAST(:pattern AS text) IS NULL
+                                OR code ILIKE CAST(:pattern AS text)
+                                OR name ILIKE CAST(:pattern AS text))
+                         ORDER BY code
+                         LIMIT :limit
+                        """)
+                .param("pattern", pattern).param("limit", limit)
+                .query(DIAG_DEF_MAPPER).list();
+    }
+
+    /** 就诊诊断（主诊断优先，其次按录入顺序）。 */
+    public List<VisitDiagnosis> listVisitDiagnoses(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, visit_id, code, name, primary_flag, sort_no,
+                               diagnosed_by, diagnosed_at, version
+                          FROM clinical_svc.visit_diagnosis
+                         WHERE visit_id = ?
+                         ORDER BY primary_flag DESC, sort_no, diagnosed_at
+                        """).param(visitId).query(VISIT_DIAG_MAPPER).list();
+    }
+
+    public Optional<VisitDiagnosis> findVisitDiagnosis(UUID visitId, UUID id) {
+        return jdbc.sql("""
+                        SELECT id, visit_id, code, name, primary_flag, sort_no,
+                               diagnosed_by, diagnosed_at, version
+                          FROM clinical_svc.visit_diagnosis
+                         WHERE visit_id = :visitId AND id = :id
+                        """)
+                .param("visitId", visitId).param("id", id)
+                .query(VISIT_DIAG_MAPPER).optional();
+    }
+
+    public boolean existsPrimaryDiagnosis(UUID visitId) {
+        Long n = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.visit_diagnosis
+                         WHERE visit_id = ? AND primary_flag
+                        """).param(visitId).query(Long.class).single();
+        return n != null && n > 0;
+    }
+
+    public int nextDiagnosisSortNo(UUID visitId) {
+        Integer max = jdbc.sql("""
+                        SELECT COALESCE(max(sort_no), 0) FROM clinical_svc.visit_diagnosis
+                         WHERE visit_id = ?
+                        """).param(visitId).query(Integer.class).single();
+        return (max == null ? 0 : max) + 1;
+    }
+
+    public void insertVisitDiagnosis(VisitDiagnosis d) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.visit_diagnosis
+                            (id, visit_id, code, name, primary_flag, sort_no,
+                             diagnosed_by, version)
+                        VALUES (:id, :visitId, :code, :name, :primaryFlag, :sortNo,
+                                :diagnosedBy, 0)
+                        """)
+                .param("id", d.id()).param("visitId", d.visitId()).param("code", d.code())
+                .param("name", d.name()).param("primaryFlag", d.primaryFlag())
+                .param("sortNo", d.sortNo()).param("diagnosedBy", d.diagnosedBy()).update();
+    }
+
+    /** 清空主诊断标记（换主诊断时先清再设，事务内保证仍然只有一条）。 */
+    public boolean clearPrimaryDiagnosis(UUID visitId) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_diagnosis
+                           SET primary_flag = false, version = version + 1
+                         WHERE visit_id = :visitId AND primary_flag
+                        """).param("visitId", visitId).update() > 0;
+    }
+
+    public boolean setPrimaryDiagnosis(UUID visitId, UUID id) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_diagnosis
+                           SET primary_flag = true, version = version + 1
+                         WHERE visit_id = :visitId AND id = :id
+                        """)
+                .param("visitId", visitId).param("id", id).update() > 0;
+    }
+
+    public boolean deleteVisitDiagnosis(UUID visitId, UUID id) {
+        return jdbc.sql("""
+                        DELETE FROM clinical_svc.visit_diagnosis
+                         WHERE visit_id = :visitId AND id = :id
+                        """)
+                .param("visitId", visitId).param("id", id).update() > 0;
     }
 
     // ---------------------------------------------------------------- 收费

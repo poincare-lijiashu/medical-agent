@@ -52,6 +52,22 @@ public final class ClinicalModel {
         }
     }
 
+    /** 诊断字典（ICD-10）。 */
+    public record DiagnosisDef(UUID id, String code, String name, String category,
+                               boolean enabled, long version) {
+    }
+
+    /**
+     * 就诊诊断。
+     *
+     * <p>{@code name} 是下达时的名称快照（字典改名不影响历史诊断）；
+     * 一个就诊最多一条主诊断，由部分唯一索引在数据库层兜底。
+     */
+    public record VisitDiagnosis(UUID id, UUID visitId, String code, String name,
+                                 boolean primaryFlag, int sortNo, String diagnosedBy,
+                                 Instant diagnosedAt, long version) {
+    }
+
     /** 医嘱。 */
     public record VisitOrder(UUID id, String orderNo, UUID visitId, String orderType,
                              String itemCode, String itemName, String dose, String frequency,
