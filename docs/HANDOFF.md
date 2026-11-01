@@ -13,24 +13,26 @@
   `cd93cb8`（**手术麻醉域第一批**）、`caff4de`（**知识库域第一批**）、`8fad3d2`（**手术麻醉域第二批**）、
   `563cbe7`（**手术麻醉域第三批**）、`a1d4db1`（**手术麻醉域第四批：分级审批 + 利用率报表**）、
   `8eac62d`（**手术麻醉域第五批：术中收费打包**）、`69a822e`（**药房域第二批：麻醉药品五专闭环**）、
-  `f82562d`（**手术麻醉域第六批：术前访视与麻醉评估单**）
+  `f82562d`（**手术麻醉域第六批：术前访视与麻醉评估单**）、
+  `HASH_KB2`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **737 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **757 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V32**、`clinical_svc` → **V21**、`pharmacy_svc` → **V6**、
-  `emr_svc` → **V14**、`insurance_svc` → **V12**、`kb_svc` → **V1**
+  本日迁移已在真实库执行：`auth_svc` → **V33**、`clinical_svc` → **V21**、`pharmacy_svc` → **V6**、
+  `emr_svc` → **V14**、`insurance_svc` → **V12**、`kb_svc` → **V2**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
-     URL 抓取、带引用的生成式问答（LLM 未配置时继续显式拒绝，不伪造回答）、检索评测集（召回率/忠实度/时延）
+  1. **知识库第三批的前置条件**：pgvector 当前不可用（`pg_available_extensions` 实测无 `vector`），
+     需先换装带 pgvector 的 PG 镜像或编译扩展，才能做 `vector` 列 + HNSW 与 `kb_eval.ps1` 时延对比；
+     生成式问答需大模型配置（保持 `grounded/citations/refusal` 结构与拒答语义不变）
   2. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
-     术中收费核对 / 麻精专册 / 术前访视 / 知识库检索"七页
+     术中收费核对 / 麻精专册 / 术前访视 / 知识库检索与问答（`/kb/spaces/{id}/answer`）"七页
   3. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
   4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
@@ -1083,10 +1085,45 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`clinical_svc` → **V21**
    - 遗留：麻醉医师独立角色、访视模板/批量打印、移动端采集、麻醉门诊预约
 
+71. **知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测（2026-11-01）**
+   - **`kb V2`**：来源类型扩到 7 种（新增 `HTML/MARKDOWN/TEXT`，约束改名 `ck_kb_document_source_type`）；
+     新增 `raw_char_count`（解析前长度）、`parse_notes`（解析方式 + 清洗动作，与索引告警 `error_message` 分开）、
+     `kb_answer_log`（grounded / refused_reason / cited_count / latency_ms / top_score）
+   - **解析（纯 Java，无新依赖）**：`com.medassist.kb.parse.DocumentParser`
+     - HTML：去 `script/style/noscript/template/svg` 整块、去注释、块级标签转换行、去剩余标签、实体解码（命名 +
+       十进制/十六进制数字，`&amp;` 最后解码避免二次解码）、行内空白收敛
+     - Markdown：去代码围栏行、表格分隔行、标题井号、引用符、列表符号；图片→alt、链接→文字、行内代码→内容、
+       粗体/斜体→文字；表格竖线不单独删除（保留单元格文字）
+     - 纯文本：只统一换行 + 压缩连续空行，**不动正文**（引用保真）
+     - 自动探测：未声明类型时按 HTML 特征（文档级标签或 ≥3 个标签）/ Markdown 特征（标题、围栏、表格、强调
+       至少两类信号）识别，防止"粘贴网页当纯文本"把标签写进索引
+     - 显式拒绝：pdf/doc/docx/xls/xlsx/ppt/pptx/rtf/odt/zip/图片 → `KB_PARSE_UNSUPPORTED`(49414) → **422**，
+       文案给出"转文本或 Markdown"的可执行建议；正文含 NUL/控制字符按二进制拒绝；清洗后为空 → 422
+   - **抽取式问答**：`POST /kb/spaces/{id}/answer`（`kb:answer`，`auth V33`）
+     - 答案 = 命中原文按序拼接（`【n】` + 逐条 `quote/charStart/charEnd/citation`），`extractive=true`、
+       `llmUsed=false`；片段按句子边界截断（不腰斩诊断标准），单条上限 `kb.answer.max-chars-per-chunk`（400）
+     - 无命中 → `grounded=false` + `refusedReason`（`NO_EVIDENCE` / `SPACE_EMPTY`）+ 明确拒答文案；绝不生成推测
+     - `RetrievalService.retrieve()` 返回完整命中，`search()` 复用同一召回与 RRF 融合，避免搜索/问答口径分叉
+   - **检索评测**：`scripts/e2e/kb_eval.ps1`（6 篇语料 + 8 条固定查询）输出 `RECALL_AT_3` / `MRR` /
+     `P95_SERVER_MS` / `P95_CLIENT_MS`，阈值门禁 recall ≥ 0.85、client P95 ≤ 1500ms
+   - **实测**：全量单测 **757 项**全绿（+20：解析 11 / 问答 7 / 文档 2）；
+     `kb_answer_smoke.ps1`（42 项断言）PASS；`kb_eval.ps1` PASS（`RECALL_AT_3=1.000`、`MRR=1.000`、
+     `P95_SERVER_MS=1`、`P95_CLIENT_MS=44`）；回归 `kb_search_smoke`、`platform_smoke` PASS
+   - **真实库证据**：HTML `char_count=168 / raw_char_count=445`、Markdown `242 / 309`；
+     `kb_answer_log` 4 条含 1 条 `grounded=false / NO_EVIDENCE`；
+     反例 `source_type='PDF'` → `ck_kb_document_source_type` 拒绝、`raw_char_count=-1` → `ck_kb_document_raw_chars` 拒绝
+   - 迁移：`kb_svc` → **V2**、`auth_svc` → **V33**
+   - 遗留：**pgvector 在本机 PG 镜像不可用**（`pg_available_extensions` 无 `vector`），向量检索仍是
+     `real[]` + 点积 O(n)；生成式问答需 LLM 配置与忠实度评测；PDF/Word/OCR 需离线解析库；URL 抓取需出网
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
   `url=[]`、列表过滤不到刚创建的记录）。要写注释就用英文
+- **清洗后的正文不要补尾部换行**：`char_count` 会跟着变，切片 `charStart/charEnd` 与前端高亮
+  都会偏移一位（本批 `collapseBlankLines` 只 `strip()`，不追加 `\n`）
+- **PowerShell 5.1 的 `Invoke-WebRequest` 在中文环境把 `Content` 当字节数组**：健康检查只判状态码，
+  要读内容就走 `curl.exe` + 临时文件（E2E 里的 `Invoke-Api` 即此套路）
 - **advisory lock 的键不能按业务参数拼**（如 `emr:hqms-export:{from}:{to}`）：参数不同的两个事务
   会拿到不同锁，看似"加了锁"其实完全不互斥；要串行就全局单键，或按 ID 排序逐行锁
 - **新增服务模块必须同时补 `MigrateOnlyRunner`**：`--medassist.migrate-only=true` 是自定义属性，

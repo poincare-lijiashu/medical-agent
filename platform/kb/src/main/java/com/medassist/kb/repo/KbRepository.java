@@ -46,7 +46,8 @@ public class KbRepository {
             rs.getObject("id", UUID.class), rs.getObject("space_id", UUID.class),
             rs.getString("title"), rs.getString("source_type"), rs.getString("source_uri"),
             rs.getString("content_hash"), rs.getString("status"), rs.getInt("chunk_count"),
-            rs.getInt("char_count"), rs.getString("error_message"), rs.getString("created_by"),
+            rs.getInt("char_count"), rs.getInt("raw_char_count"), rs.getString("parse_notes"),
+            rs.getString("error_message"), rs.getString("created_by"),
             rs.getLong("version"), instant(rs, "created_at"));
 
     private static final RowMapper<IngestTask> TASK_MAPPER = (rs, i) -> new IngestTask(
@@ -151,14 +152,17 @@ public class KbRepository {
         jdbc.sql("""
                         INSERT INTO kb_svc.kb_document
                             (id, space_id, title, source_type, source_uri, content, content_hash,
-                             status, chunk_count, char_count, created_by, version)
+                             status, chunk_count, char_count, raw_char_count, parse_notes,
+                             created_by, version)
                         VALUES (:id, :spaceId, :title, :sourceType, :sourceUri, :content, :hash,
-                                :status, 0, :charCount, :createdBy, 0)
+                                :status, 0, :charCount, :rawCharCount, :parseNotes, :createdBy, 0)
                         """)
                 .param("id", d.id()).param("spaceId", d.spaceId()).param("title", d.title())
                 .param("sourceType", d.sourceType()).param("sourceUri", d.sourceUri())
                 .param("content", content).param("hash", d.contentHash())
                 .param("status", d.status()).param("charCount", d.charCount())
+                .param("rawCharCount", d.rawCharCount())
+                .param("parseNotes", truncate(d.parseNotes(), 500))
                 .param("createdBy", d.createdBy()).update();
     }
 
@@ -406,6 +410,26 @@ public class KbRepository {
                 .param("mode", mode).param("topK", topK).param("hitCount", hitCount)
                 .param("vectorUsed", vectorUsed).param("latencyMs", latencyMs)
                 .param("topScore", topScore).update();
+    }
+
+    /**
+     * 抽取式回答审计：无论是否命中都记录，拒答率与问答时延都从这里取数。
+     *
+     * @param refusedReason 仅 grounded=false 时有值（NO_EVIDENCE / SPACE_EMPTY）
+     */
+    public void logAnswer(UUID spaceId, String actor, String question, boolean grounded,
+                          String refusedReason, int citedCount, int latencyMs, Double topScore) {
+        jdbc.sql("""
+                        INSERT INTO kb_svc.kb_answer_log
+                            (space_id, actor, question, grounded, refused_reason, cited_count,
+                             latency_ms, top_score)
+                        VALUES (:spaceId, :actor, :question, :grounded, :refusedReason, :citedCount,
+                                :latencyMs, CAST(:topScore AS numeric))
+                        """)
+                .param("spaceId", spaceId).param("actor", actor)
+                .param("question", truncate(question, 500)).param("grounded", grounded)
+                .param("refusedReason", refusedReason).param("citedCount", citedCount)
+                .param("latencyMs", latencyMs).param("topScore", topScore).update();
     }
 
     public void logChange(String actor, String action, String targetType, String targetId,

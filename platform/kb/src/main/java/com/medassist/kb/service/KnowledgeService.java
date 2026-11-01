@@ -5,6 +5,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.kb.domain.KbModel.Document;
 import com.medassist.kb.domain.KbModel.Member;
 import com.medassist.kb.domain.KbModel.Space;
+import com.medassist.kb.parse.DocumentParser;
 import com.medassist.kb.repo.KbRepository;
 import com.medassist.kb.web.KbDtos.AddMemberReq;
 import com.medassist.kb.web.KbDtos.CreateDocumentReq;
@@ -134,7 +135,10 @@ public class KnowledgeService {
     @Transactional
     public Document createDocument(UUID spaceId, CreateDocumentReq req, String actor, UUID userId) {
         guard.requireRole(spaceId, userId, Member.EDITOR);
-        String content = req.content();
+        // 写入时一次解析（HTML/Markdown 清洗），之后的切片、去重哈希、引用偏移都基于这份正文
+        DocumentParser.Parsed parsed = DocumentParser.parse(req.sourceType(), req.sourceUri(),
+                req.content());
+        String content = parsed.content();
         String hash = sha256(content);
         repo.findActiveByHash(spaceId, hash).ifPresent(existing -> {
             throw new BusinessException(ErrorCode.KB_DOCUMENT_DUPLICATE,
@@ -142,7 +146,8 @@ public class KnowledgeService {
         });
         Document document = new Document(UUID.randomUUID(), spaceId, req.title().trim(),
                 req.sourceType() == null ? "MANUAL" : req.sourceType(), blankToNull(req.sourceUri()),
-                hash, Document.PENDING, 0, content.length(), null, actor, 0L, Instant.now());
+                hash, Document.PENDING, 0, content.length(), parsed.rawChars(), parsed.notesText(),
+                null, actor, 0L, Instant.now());
         try {
             repo.insertDocument(document, content);
         } catch (DataIntegrityViolationException e) {
@@ -151,7 +156,8 @@ public class KnowledgeService {
         repo.insertTask(UUID.randomUUID(), document.id(), "INDEX");
         audit(actor, "KB_DOCUMENT_CREATE", "KB_DOCUMENT", document.id().toString(),
                 Map.of("spaceId", spaceId.toString(), "title", document.title(),
-                        "charCount", document.charCount()));
+                        "charCount", document.charCount(), "rawCharCount", document.rawCharCount(),
+                        "parseKind", parsed.kind()));
         return document;
     }
 

@@ -14,9 +14,11 @@ import java.time.Duration;
  * @param search    混合检索参数
  * @param ingest    异步索引参数
  * @param embedding 向量模型参数
+ * @param answer    抽取式问答参数
  */
 @ConfigurationProperties(prefix = "kb")
-public record KbProperties(Chunk chunk, Search search, Ingest ingest, Embedding embedding) {
+public record KbProperties(Chunk chunk, Search search, Ingest ingest, Embedding embedding,
+                           Answer answer) {
 
     public KbProperties {
         chunk = chunk == null ? new Chunk(600, 80) : chunk;
@@ -24,6 +26,7 @@ public record KbProperties(Chunk chunk, Search search, Ingest ingest, Embedding 
         ingest = ingest == null ? new Ingest(true, 5000, 5, 5) : ingest;
         embedding = embedding == null ? new Embedding(false, null, "", "", 1536, Duration.ofSeconds(10))
                 : embedding;
+        answer = answer == null ? new Answer(3, 400) : answer;
     }
 
     /** @param maxChars     单块最大字符数
@@ -76,6 +79,19 @@ public record KbProperties(Chunk chunk, Search search, Ingest ingest, Embedding 
         public boolean usable() {
             return enabled && apiKey != null && !apiKey.isBlank()
                     && baseUrl != null && !baseUrl.isBlank();
+        }
+    }
+
+    /**
+     * 抽取式问答（不接大模型：答案完全由命中原文拼接，故只需要控制"拼多少"）。
+     *
+     * @param maxChunks         参与拼接的片段上限（越多越完整，但也越像"复制粘贴"）
+     * @param maxCharsPerChunk  单条证据最多取多少字符（按句子边界截断）
+     */
+    public record Answer(int maxChunks, int maxCharsPerChunk) {
+        public Answer {
+            maxChunks = maxChunks <= 0 ? 3 : Math.min(maxChunks, 10);
+            maxCharsPerChunk = maxCharsPerChunk < 80 ? 400 : maxCharsPerChunk;
         }
     }
 }

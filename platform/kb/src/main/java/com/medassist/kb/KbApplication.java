@@ -18,8 +18,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *   <li>检索是读多写少、可缓存的负载，后续要独立扩副本与限流。</li>
  * </ul>
  *
- * <p>本批**不包含**生成式问答：没有配置向量/大模型时只做关键词检索，
- * 不伪造"AI 回答"（去 demo 化的底线：宁可少一个功能，也不产出不可信内容）。
+ * <p>问答是**抽取式**的：答案由命中原文片段拼接，逐条标注引用（{@code extractive=true}、
+ * {@code llmUsed=false}），检索不到证据就拒答；没有配置大模型时不伪造"AI 回答"
+ * （去 demo 化的底线：宁可少一个功能，也不产出不可信内容）。
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan("com.medassist.kb.config")

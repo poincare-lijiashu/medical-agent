@@ -113,6 +113,7 @@ public enum ErrorCode {
     KB_SPACE_STATUS_INVALID(49411, "当前知识空间状态不允许该操作"),
     KB_DOCUMENT_STATUS_INVALID(49412, "当前文档状态不允许该操作"),
     KB_QUERY_INVALID(49413, "检索词为空或不合法，请调整后重试"),
+    KB_PARSE_UNSUPPORTED(49414, "该文件格式暂不支持解析，请转为纯文本或 Markdown 后入库"),
     KB_EMBEDDING_UNAVAILABLE(49420, "向量模型未配置，当前仅支持关键词检索");
 
     private final int code;

@@ -55,7 +55,8 @@ class KnowledgeServiceTest {
 
     private Document document(String status, long version) {
         return new Document(documentId, spaceId, "急性心衰诊疗规范", "MANUAL", null,
-                "hash-1", status, 3, 1200, null, "doctor01", version, Instant.now());
+                "hash-1", status, 3, 1200, 1200, "解析方式=PLAIN", null, "doctor01", version,
+                Instant.now());
     }
 
     @Test
@@ -140,7 +141,39 @@ class KnowledgeServiceTest {
         assertThat(captor.getValue().status()).isEqualTo(Document.PENDING);
         assertThat(captor.getValue().contentHash()).hasSize(64);
         assertThat(created.charCount()).isEqualTo(4);
+        assertThat(created.parseNotes()).isEqualTo("解析方式=PLAIN");
         verify(repo).insertTask(any(), eq(created.id()), eq("INDEX"));
+    }
+
+    @Test
+    @DisplayName("写入 HTML 文档：落库的是清洗后正文，rawCharCount 记录原始长度，parseNotes 留解析方式")
+    void createDocumentParsesHtmlBeforePersisting() {
+        when(guard.requireRole(spaceId, userId, Member.EDITOR)).thenReturn(space());
+        when(repo.findActiveByHash(eq(spaceId), anyString())).thenReturn(Optional.empty());
+
+        Document created = service.createDocument(spaceId, new CreateDocumentReq("阑尾炎",
+                "<p>急性&nbsp;阑尾炎</p><script>track()</script>", "HTML", null),
+                "doctor01", userId);
+
+        ArgumentCaptor<String> content = ArgumentCaptor.forClass(String.class);
+        verify(repo).insertDocument(any(), content.capture());
+        assertThat(content.getValue()).isEqualTo("急性 阑尾炎");
+        assertThat(created.charCount()).isEqualTo(6);
+        assertThat(created.rawCharCount()).isGreaterThan(created.charCount());
+        assertThat(created.parseNotes()).startsWith("解析方式=HTML");
+    }
+
+    @Test
+    @DisplayName("写入 PDF：422 显式拒绝，不落库也不入队（不留半成品文档）")
+    void createDocumentRejectsUnsupportedFormat() {
+        when(guard.requireRole(spaceId, userId, Member.EDITOR)).thenReturn(space());
+
+        assertThatThrownBy(() -> service.createDocument(spaceId, new CreateDocumentReq(
+                "诊疗指南", "%PDF-1.7 ...", "UPLOAD", "guide.pdf"), "doctor01", userId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.KB_PARSE_UNSUPPORTED));
+        verify(repo, never()).insertDocument(any(), anyString());
+        verify(repo, never()).insertTask(any(), any(), anyString());
     }
 
     @Test

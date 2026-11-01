@@ -27,6 +27,10 @@ import java.util.UUID;
  *
  * <p>每次检索写一条 {@code kb_query_log}（命中数/是否用向量/时延/top 分数），
  * 这些指标就是后续做召回率回归与容量评估的数据基础。
+ *
+ * <p>{@link #retrieve} 返回**完整原文**的命中，供抽取式问答拼接证据；
+ * {@link #search} 在其上做片段截断与检索审计，两者共用同一套召回与融合逻辑，
+ * 避免"搜索接口与问答接口召回规则不一致"这种常见分叉。
  */
 @Service
 public class RetrievalService {
@@ -49,7 +53,28 @@ public class RetrievalService {
         this.props = props;
     }
 
+    /**
+     * 检索并落审计（对外接口用）。
+     *
+     * @param actor 操作者（审计用，可为用户名）
+     */
     public SearchResult search(UUID spaceId, SearchReq req, String actor, UUID userId) {
+        RetrievalOutcome outcome = retrieve(spaceId, req, userId);
+        repo.logQuery(spaceId, actor, req.query(), outcome.mode(), outcome.topK(),
+                outcome.hits().size(), outcome.vectorUsed(), outcome.latencyMs(),
+                outcome.topScore());
+
+        List<SearchHit> hits = outcome.hits().stream().map(RetrievalService::toView).toList();
+        return new SearchResult(outcome.mode(), outcome.vectorUsed(), outcome.degraded(),
+                outcome.degradedReason(), outcome.latencyMs(), hits.size(), hits);
+    }
+
+    /**
+     * 检索（不做审计，返回完整原文）。抽取式问答复用它，保证两条链路召回口径一致。
+     *
+     * <p>权限与空间状态在这里统一校验：调用方不需要（也不能）绕过 {@link SpaceAccessGuard}。
+     */
+    public RetrievalOutcome retrieve(UUID spaceId, SearchReq req, UUID userId) {
         guard.requireReadable(spaceId, userId);
         String tsQuery = TextTerms.toTsQuery(req.query());
         if (tsQuery.isBlank()) {
@@ -96,14 +121,8 @@ public class RetrievalService {
                 props.search().rrfK(), topK);
         int latencyMs = (int) ((System.nanoTime() - started) / 1_000_000L);
         String effectiveMode = vectorUsed ? "HYBRID" : "KEYWORD";
-        Double topScore = merged.isEmpty() ? null : merged.get(0).score();
-
-        repo.logQuery(spaceId, actor, req.query(), effectiveMode, topK, merged.size(),
-                vectorUsed, latencyMs, topScore);
-
-        List<SearchHit> hits = merged.stream().map(RetrievalService::toView).toList();
-        return new SearchResult(effectiveMode, vectorUsed, degraded && !vectorUsed,
-                (degraded && !vectorUsed) ? degradedReason : null, latencyMs, hits.size(), hits);
+        return new RetrievalOutcome(effectiveMode, vectorUsed, degraded && !vectorUsed,
+                (degraded && !vectorUsed) ? degradedReason : null, latencyMs, topK, merged);
     }
 
     private static SearchHit toView(Hit hit) {
@@ -113,5 +132,25 @@ public class RetrievalService {
         String citation = hit.documentTitle() + " 第 " + (hit.seq() + 1) + " 段";
         return new SearchHit(hit.chunkId(), hit.documentId(), hit.documentTitle(), hit.seq(),
                 hit.charStart(), hit.charEnd(), snippet, hit.score(), hit.matchedBy(), citation);
+    }
+
+    /**
+     * 检索结果（完整命中）。
+     *
+     * @param mode           实际生效模式（KEYWORD / HYBRID）
+     * @param vectorUsed     本次是否真的用到了向量
+     * @param degraded       是否发生降级
+     * @param degradedReason 降级原因（EMBEDDING_UNAVAILABLE / EMBEDDING_FAILED / NO_VECTORS）
+     * @param latencyMs      召回 + 融合耗时（不含后续审计写库）
+     * @param topK           本次生效的 topK（已按配置收敛）
+     * @param hits           融合后的命中（按 RRF 分数降序）
+     */
+    public record RetrievalOutcome(String mode, boolean vectorUsed, boolean degraded,
+                                   String degradedReason, int latencyMs, int topK, List<Hit> hits) {
+
+        /** 融合分数（RRF 分数量纲与相似度不同，仅用于排序与观测，不作为"置信度"对用户展示）。 */
+        public Double topScore() {
+            return hits.isEmpty() ? null : hits.get(0).score();
+        }
     }
 }

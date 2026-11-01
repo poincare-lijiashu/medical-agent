@@ -61,6 +61,10 @@ kb:
     model: ${KB_EMBEDDING_MODEL:text-embedding-3-small}
     dimension: ${KB_EMBEDDING_DIMENSION:1536}
     timeout: ${KB_EMBEDDING_TIMEOUT:PT10S}
+  # 抽取式问答：答案完全由命中原文拼接（不调用大模型），此处只控制拼多少
+  answer:
+    max-chunks: ${KB_ANSWER_MAX_CHUNKS:3}
+    max-chars-per-chunk: ${KB_ANSWER_MAX_CHARS_PER_CHUNK:400}
 
 management:
   endpoints:

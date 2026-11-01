@@ -47,7 +47,7 @@ class RetrievalServiceTest {
         embedding = mock(EmbeddingProvider.class);
         // 默认配置：rrfK=60, candidateMultiplier=4, maxTopK=50
         service = new RetrievalService(repo, guard, embedding,
-                new KbProperties(null, null, null, null));
+                new KbProperties(null, null, null, null, null));
         when(guard.requireReadable(spaceId, userId)).thenReturn(new Space(spaceId, "kb",
                 "知识库", null, null, Space.PRIVATE, Space.ACTIVE, "admin01", 0L, Instant.now()));
     }

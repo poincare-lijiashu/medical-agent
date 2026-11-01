@@ -22,7 +22,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case FORBIDDEN, KB_SPACE_ACCESS_DENIED -> HttpStatus.FORBIDDEN;
             case CONFLICT, KB_SPACE_DUPLICATE, KB_DOCUMENT_DUPLICATE,
                  KB_SPACE_STATUS_INVALID, KB_DOCUMENT_STATUS_INVALID -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED, KB_QUERY_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case VALIDATION_FAILED, KB_QUERY_INVALID, KB_PARSE_UNSUPPORTED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE, KB_EMBEDDING_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;

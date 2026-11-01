@@ -6,9 +6,12 @@ import com.medassist.common.security.Permissions;
 import com.medassist.kb.domain.KbModel.Document;
 import com.medassist.kb.domain.KbModel.Member;
 import com.medassist.kb.domain.KbModel.Space;
+import com.medassist.kb.service.AnswerService;
 import com.medassist.kb.service.KnowledgeService;
 import com.medassist.kb.service.RetrievalService;
 import com.medassist.kb.web.KbDtos.AddMemberReq;
+import com.medassist.kb.web.KbDtos.AnswerReq;
+import com.medassist.kb.web.KbDtos.AnswerResult;
 import com.medassist.kb.web.KbDtos.CreateDocumentReq;
 import com.medassist.kb.web.KbDtos.CreateSpaceReq;
 import com.medassist.kb.web.KbDtos.SearchReq;
@@ -46,13 +49,17 @@ public class KbSpaceController {
     private static final String DOC_READ = "kb:document:read";
     private static final String DOC_WRITE = "kb:document:write";
     private static final String SEARCH = "kb:search";
+    private static final String ANSWER = "kb:answer";
 
     private final KnowledgeService knowledgeService;
     private final RetrievalService retrievalService;
+    private final AnswerService answerService;
 
-    public KbSpaceController(KnowledgeService knowledgeService, RetrievalService retrievalService) {
+    public KbSpaceController(KnowledgeService knowledgeService, RetrievalService retrievalService,
+                             AnswerService answerService) {
         this.knowledgeService = knowledgeService;
         this.retrievalService = retrievalService;
+        this.answerService = answerService;
     }
 
     @GetMapping
@@ -150,6 +157,22 @@ public class KbSpaceController {
             @RequestHeader(value = AuthHeaders.USER_ID, required = false) UUID userId) {
         Permissions.require(permissions, SEARCH);
         return ApiResponse.ok(retrievalService.search(spaceId, req, actor, userId));
+    }
+
+    /**
+     * 抽取式带引用回答。
+     *
+     * <p>与检索是两个权限点（{@code kb:answer}）：检索可以全员开放，问答要求更高；
+     * 空间成员校验仍由服务层统一做，不会因为带了权限点就越过隔离。
+     */
+    @PostMapping("/{spaceId}/answer")
+    public ApiResponse<AnswerResult> answer(
+            @PathVariable UUID spaceId, @Valid @RequestBody AnswerReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) UUID userId) {
+        Permissions.require(permissions, ANSWER);
+        return ApiResponse.ok(answerService.answer(spaceId, req, actor, userId));
     }
 
     @GetMapping("/{spaceId}/stats")

@@ -45,10 +45,18 @@ public final class KbModel {
         }
     }
 
-    /** 知识文档（正文原文保存，用于引用溯源）。 */
+    /**
+     * 知识文档（正文原文保存，用于引用溯源）。
+     *
+     * @param charCount    解析后正文长度（切片偏移相对它计算）
+     * @param rawCharCount 解析前原始输入长度（与 charCount 的差值即清洗掉的噪声）
+     * @param parseNotes   解析告警（实际解析方式 + 清洗动作）
+     * @param errorMessage 索引告警（如"仅关键词索引"），与 parseNotes 分开
+     */
     public record Document(UUID id, UUID spaceId, String title, String sourceType, String sourceUri,
                            String contentHash, String status, int chunkCount, int charCount,
-                           String errorMessage, String createdBy, long version, Instant createdAt) {
+                           int rawCharCount, String parseNotes, String errorMessage,
+                           String createdBy, long version, Instant createdAt) {
 
         public static final String PENDING = "PENDING";
         public static final String INDEXING = "INDEXING";
