@@ -31,9 +31,11 @@ import java.util.UUID;
 public class SurgeryService {
 
     private final ClinicalRepository repo;
+    private final SurgeryLevelService levelService;
 
-    public SurgeryService(ClinicalRepository repo) {
+    public SurgeryService(ClinicalRepository repo, SurgeryLevelService levelService) {
         this.repo = repo;
+        this.levelService = levelService;
     }
 
     /** 手术编码搜索（只返回启用项）。 */
@@ -83,6 +85,8 @@ public class SurgeryService {
     @Transactional
     public SurgeryCase start(UUID visitId, UUID caseId, long version, String actor) {
         SurgeryCase current = requireCase(visitId, caseId);
+        // 分级门槛在前：分级决定"这台手术能不能做"，知情同意决定"患者是否授权"
+        levelService.requireStartApproved(caseId);
         requireConsents(caseId);
         if (!repo.startSurgery(caseId, Instant.now(), version)) {
             throw new BusinessException(ErrorCode.CONFLICT, "手术状态已变化，请刷新后重试");

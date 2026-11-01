@@ -1,12 +1,15 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
+import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.TheatreDtos.CancelScheduleReq;
 import com.medassist.clinical.web.TheatreDtos.CreateRoomReq;
+import com.medassist.clinical.web.TheatreDtos.DailyUtilization;
 import com.medassist.clinical.web.TheatreDtos.RoomStatusReq;
+import com.medassist.clinical.web.TheatreDtos.RoomUtilization;
 import com.medassist.clinical.web.TheatreDtos.ScheduleReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -15,10 +18,15 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -163,6 +171,107 @@ public class TheatreService {
         return repo.listSchedulesByRoom(roomId,
                 day.atStartOfDay(BusinessTime.zone()).toInstant(),
                 day.plusDays(1).atStartOfDay(BusinessTime.zone()).toInstant());
+    }
+
+    // ---------------------------------------------------------------- 利用率报表
+
+    /** 默认开放时段：08:00–18:00（可用 {@code openFrom/openTo} 覆盖，报表现算不落表）。 */
+    private static final LocalTime DEFAULT_OPEN_FROM = LocalTime.of(8, 0);
+    private static final LocalTime DEFAULT_OPEN_TO = LocalTime.of(18, 0);
+    /** 单次统计区间上限（防止一次拉一整年把库拖垮）。 */
+    private static final int MAX_RANGE_DAYS = 92;
+
+    /**
+     * 单个手术间的利用率与接台周转。
+     *
+     * <p>利用率 = 开放时段内被未取消排台占用的分钟 ÷ 开放时段总分钟。
+     * 口径在仓储 SQL 中统一实现，逐日行与合计行同源，避免"日报表与月报表对不上"。
+     */
+    public RoomUtilization utilization(UUID roomId, LocalDate from, LocalDate to,
+                                       LocalTime openFrom, LocalTime openTo) {
+        OperatingRoom room = repo.findOperatingRoom(roomId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术间"));
+        Window window = resolveWindow(from, to, openFrom, openTo);
+        return computeUtilization(room, window);
+    }
+
+    /** 全院手术间利用率（只统计 ACTIVE 手术间，按编码排序）。 */
+    public List<RoomUtilization> hospitalUtilization(LocalDate from, LocalDate to,
+                                                     LocalTime openFrom, LocalTime openTo) {
+        Window window = resolveWindow(from, to, openFrom, openTo);
+        List<RoomUtilization> result = new ArrayList<>();
+        for (OperatingRoom room : repo.listOperatingRooms(OperatingRoom.ACTIVE, 200)) {
+            result.add(computeUtilization(room, window));
+        }
+        return result;
+    }
+
+    private RoomUtilization computeUtilization(OperatingRoom room, Window window) {
+        ZoneId zone = BusinessTime.zone();
+        long availablePerDay = Duration.between(window.openFrom(), window.openTo()).toMinutes();
+        List<RoomDayUsage> rows = repo.listRoomDayUsage(room.id(),
+                window.from().atStartOfDay(zone).toInstant(),
+                window.to().plusDays(1).atStartOfDay(zone).toInstant(),
+                (int) (window.openFrom().toSecondOfDay() / 60),
+                (int) (window.openTo().toSecondOfDay() / 60));
+        List<DailyUtilization> days = new ArrayList<>(rows.size());
+        int scheduled = 0;
+        int completed = 0;
+        int cancelled = 0;
+        int turnoverCount = 0;
+        long occupied = 0;
+        long turnover = 0;
+        for (RoomDayUsage row : rows) {
+            LocalDate day = row.dayStart().atZone(zone).toLocalDate();
+            days.add(new DailyUtilization(day, row.scheduledCount(), row.completedCount(),
+                    row.cancelledCount(), row.occupiedMinutes(), availablePerDay,
+                    row.turnoverMinutes(), row.turnoverCount(),
+                    rate(row.occupiedMinutes(), availablePerDay)));
+            scheduled += row.scheduledCount();
+            completed += row.completedCount();
+            cancelled += row.cancelledCount();
+            occupied += row.occupiedMinutes();
+            turnover += row.turnoverMinutes();
+            turnoverCount += row.turnoverCount();
+        }
+        long totalAvailable = availablePerDay * rows.size();
+        return new RoomUtilization(room.id(), room.code(), room.name(), window.from(),
+                window.to(), window.openFrom().toString(), window.openTo().toString(), days,
+                scheduled, completed, cancelled, occupied, totalAvailable, turnover,
+                turnoverCount, rate(occupied, totalAvailable));
+    }
+
+    /** 利用率比率（0~1，保留 4 位小数；可用时长为 0 时记 0，绝不做除零）。 */
+    private static BigDecimal rate(long occupiedMinutes, long availableMinutes) {
+        if (availableMinutes <= 0) {
+            return BigDecimal.ZERO.setScale(4, RoundingMode.HALF_UP);
+        }
+        return BigDecimal.valueOf(occupiedMinutes)
+                .divide(BigDecimal.valueOf(availableMinutes), 4, RoundingMode.HALF_UP);
+    }
+
+    private static Window resolveWindow(LocalDate from, LocalDate to, LocalTime openFrom,
+                                        LocalTime openTo) {
+        LocalDate f = from == null ? BusinessTime.today().minusDays(6) : from;
+        LocalDate t = to == null ? BusinessTime.today() : to;
+        if (t.isBefore(f)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "结束日期不能早于开始日期");
+        }
+        if (ChronoUnit.DAYS.between(f, t) + 1 > MAX_RANGE_DAYS) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "统计区间不能超过 " + MAX_RANGE_DAYS + " 天");
+        }
+        LocalTime of = openFrom == null ? DEFAULT_OPEN_FROM : openFrom;
+        LocalTime ot = openTo == null ? DEFAULT_OPEN_TO : openTo;
+        if (!ot.isAfter(of)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "开放时段的结束时间必须晚于开始时间");
+        }
+        return new Window(f, t, of, ot);
+    }
+
+    /** 已归一化的统计窗口（日期 + 每日开放时段）。 */
+    private record Window(LocalDate from, LocalDate to, LocalTime openFrom, LocalTime openTo) {
     }
 
     // ---------------------------------------------------------------- 内部工具

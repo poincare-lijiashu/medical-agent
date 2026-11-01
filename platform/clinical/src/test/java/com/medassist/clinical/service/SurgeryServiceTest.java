@@ -38,6 +38,7 @@ import static org.mockito.Mockito.when;
 class SurgeryServiceTest {
 
     private ClinicalRepository repo;
+    private SurgeryLevelService levelService;
     private SurgeryService service;
 
     private final UUID visitId = UUID.randomUUID();
@@ -52,7 +53,8 @@ class SurgeryServiceTest {
     @BeforeEach
     void setUp() {
         repo = mock(ClinicalRepository.class);
-        service = new SurgeryService(repo);
+        levelService = mock(SurgeryLevelService.class);
+        service = new SurgeryService(repo, levelService);
     }
 
     private Visit visit(String visitType) {
@@ -165,6 +167,7 @@ class SurgeryServiceTest {
         SurgeryCase result = service.start(visitId, caseId, 0L, "doctor01");
 
         assertThat(result.status()).isEqualTo(SurgeryCase.IN_PROGRESS);
+        verify(levelService).requireStartApproved(caseId);
         verify(repo).logChange(eq("doctor01"), eq("SURGERY_START"), eq("SURGERY_CASE"),
                 eq(caseId.toString()), anyString());
     }
@@ -196,6 +199,24 @@ class SurgeryServiceTest {
                     assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
                     assertThat(e.getMessage()).contains("麻醉知情同意");
                 });
+        verify(repo, never()).startSurgery(any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("开始手术：分级门槛未通过 → 422，且不再校验同意书/不改状态")
+    void startRejectsUnapprovedLevel() {
+        when(repo.lockSurgeryCase(caseId))
+                .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)));
+        org.mockito.Mockito.doThrow(new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "开台前必须完成手术分级（当前未分级）"))
+                .when(levelService).requireStartApproved(caseId);
+
+        assertThatThrownBy(() -> service.start(visitId, caseId, 0L, "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+                    assertThat(e.getMessage()).contains("手术分级");
+                });
+        verify(repo, never()).listActiveConsentTypes(any());
         verify(repo, never()).startSurgery(any(), any(), anyLong());
     }
 

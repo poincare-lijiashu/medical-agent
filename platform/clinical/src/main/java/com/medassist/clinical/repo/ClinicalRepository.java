@@ -16,9 +16,11 @@ import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
+import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryConsent;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryLevel;
 import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
 import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
@@ -1964,6 +1966,164 @@ public class ClinicalRepository {
                         SELECT consent_type FROM clinical_svc.surgery_consent
                          WHERE surgery_case_id = ? AND revoked_at IS NULL
                         """).param(surgeryCaseId).query(String.class).list();
+    }
+
+    // ---------------------------------------------------------------- 手术分级（V18）
+
+    private static final RowMapper<SurgeryLevel> SURGERY_LEVEL_MAPPER = (rs, i) -> new SurgeryLevel(
+            rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+            rs.getInt("level"), rs.getString("approval_status"), rs.getString("applied_by"),
+            instantOf(rs, "applied_at"), rs.getString("reviewed_by"),
+            instantOf(rs, "reviewed_at"), rs.getString("reject_reason"),
+            rs.getString("created_by"), rs.getLong("version"), instantOf(rs, "created_at"));
+
+    public Optional<SurgeryLevel> findSurgeryLevel(UUID surgeryCaseId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.surgery_level WHERE surgery_case_id = ?")
+                .param(surgeryCaseId).query(SURGERY_LEVEL_MAPPER).optional();
+    }
+
+    public void insertSurgeryLevel(SurgeryLevel l) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.surgery_level
+                            (id, surgery_case_id, level, approval_status, applied_by, applied_at,
+                             created_by, version)
+                        VALUES (:id, :caseId, :level, :status, :appliedBy, now(), :createdBy, 0)
+                        """)
+                .param("id", l.id()).param("caseId", l.surgeryCaseId()).param("level", l.level())
+                .param("status", l.approvalStatus()).param("appliedBy", l.appliedBy())
+                .param("createdBy", l.createdBy()).update();
+    }
+
+    /**
+     * 重新申请分级：清空上一次的审批结论。
+     *
+     * <p>为什么"改分级"必须清空 reviewed_*：把 4 级改成 3 级却保留原审批结论，
+     * 等于用一个旧结论批准了一个新申请（数据库触发器也会拒绝这种写法）。
+     */
+    public boolean resetSurgeryLevel(UUID surgeryCaseId, int level, String approvalStatus,
+                                     String appliedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_level
+                           SET level = :level, approval_status = :status,
+                               applied_by = :appliedBy, applied_at = now(),
+                               reviewed_by = NULL, reviewed_at = NULL, reject_reason = NULL,
+                               version = version + 1, updated_at = now()
+                         WHERE surgery_case_id = :caseId AND version = :version
+                        """)
+                .param("level", level).param("status", approvalStatus)
+                .param("appliedBy", appliedBy).param("caseId", surgeryCaseId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean approveSurgeryLevel(UUID surgeryCaseId, String reviewedBy,
+                                       long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_level
+                           SET approval_status = 'APPROVED', reviewed_by = :reviewedBy,
+                               reviewed_at = now(), reject_reason = NULL,
+                               version = version + 1, updated_at = now()
+                         WHERE surgery_case_id = :caseId AND approval_status = 'PENDING'
+                           AND version = :version
+                        """)
+                .param("reviewedBy", reviewedBy).param("caseId", surgeryCaseId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean rejectSurgeryLevel(UUID surgeryCaseId, String reason, String reviewedBy,
+                                      long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_level
+                           SET approval_status = 'REJECTED', reviewed_by = :reviewedBy,
+                               reviewed_at = now(), reject_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE surgery_case_id = :caseId AND approval_status = 'PENDING'
+                           AND version = :version
+                        """)
+                .param("reason", reason).param("reviewedBy", reviewedBy)
+                .param("caseId", surgeryCaseId).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 手术间利用率（V18）
+
+    private static final RowMapper<RoomDayUsage> ROOM_DAY_USAGE_MAPPER = (rs, i) -> new RoomDayUsage(
+            instantOf(rs, "day_start"), rs.getInt("scheduled_count"),
+            rs.getInt("completed_count"), rs.getInt("cancelled_count"),
+            rs.getLong("occupied_minutes"), rs.getLong("turnover_minutes"),
+            rs.getInt("turnover_count"));
+
+    /**
+     * 某手术间在 [fromAt, toAtExclusive) 内按天聚合：台次、占用分钟、接台间隙。
+     *
+     * <p>口径（写进 SQL 而不是 Java，避免报表与看板两套算法）：
+     * <ul>
+     *   <li>占用分钟只统计**未取消**的排台，且与每日开放时段 [openMinute, closeMinute) 取交集，
+     *       跨零点或超出开放时段的排台不会被算成满勤；</li>
+     *   <li>接台间隙 = 同一房间同一天相邻两台（未取消）之间的空闲分钟，负数按 0 计；</li>
+     *   <li>没有排台的日期也会返回一行（generate_series），前端可以直接画连续曲线。</li>
+     * </ul>
+     */
+    public List<RoomDayUsage> listRoomDayUsage(UUID roomId, java.time.Instant fromAt,
+                                               java.time.Instant toAtExclusive,
+                                               int openMinuteOfDay, int closeMinuteOfDay) {
+        return jdbc.sql("""
+                        WITH days AS (
+                            SELECT generate_series(CAST(:fromAt AS timestamptz),
+                                                   CAST(:toAt AS timestamptz) - interval '1 day',
+                                                   interval '1 day') AS day_start
+                        ),
+                        windows AS (
+                            SELECT day_start,
+                                   day_start + make_interval(mins => CAST(:openMin AS int))
+                                       AS win_start,
+                                   day_start + make_interval(mins => CAST(:closeMin AS int))
+                                       AS win_end
+                              FROM days
+                        ),
+                        joined AS (
+                            SELECT w.day_start, s.id, s.status, s.planned_start, s.planned_end,
+                                   w.win_start, w.win_end
+                              FROM windows w
+                              LEFT JOIN clinical_svc.surgery_schedule s
+                                ON s.room_id = :roomId
+                               AND s.planned_start < w.win_end
+                               AND s.planned_end > w.win_start
+                        ),
+                        gaps AS (
+                            SELECT day_start,
+                                   EXTRACT(EPOCH FROM (
+                                       planned_start - lag(planned_end) OVER (
+                                           PARTITION BY day_start ORDER BY planned_start)
+                                   )) / 60 AS gap_minutes
+                              FROM joined
+                             WHERE status IS NOT NULL AND status <> 'CANCELLED'
+                        )
+                        SELECT j.day_start,
+                               count(j.id) FILTER (WHERE j.status <> 'CANCELLED')
+                                   AS scheduled_count,
+                               count(j.id) FILTER (WHERE j.status = 'COMPLETED')
+                                   AS completed_count,
+                               count(j.id) FILTER (WHERE j.status = 'CANCELLED')
+                                   AS cancelled_count,
+                               COALESCE(sum(
+                                   GREATEST(0, EXTRACT(EPOCH FROM (
+                                       LEAST(j.planned_end, j.win_end)
+                                       - GREATEST(j.planned_start, j.win_start))) / 60)
+                               ) FILTER (WHERE j.status <> 'CANCELLED'), 0) AS occupied_minutes,
+                               COALESCE((SELECT sum(GREATEST(0, g.gap_minutes))
+                                           FROM gaps g WHERE g.day_start = j.day_start), 0)
+                                   AS turnover_minutes,
+                               COALESCE((SELECT count(*) FROM gaps g
+                                          WHERE g.day_start = j.day_start
+                                            AND g.gap_minutes IS NOT NULL), 0)
+                                   AS turnover_count
+                          FROM joined j
+                         GROUP BY j.day_start
+                         ORDER BY j.day_start
+                        """)
+                .param("fromAt", ts(fromAt)).param("toAt", ts(toAtExclusive))
+                .param("openMin", openMinuteOfDay).param("closeMin", closeMinuteOfDay)
+                .param("roomId", roomId).query(ROOM_DAY_USAGE_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

@@ -6,6 +6,7 @@ import com.medassist.clinical.service.TheatreService;
 import com.medassist.clinical.web.TheatreDtos.CancelScheduleReq;
 import com.medassist.clinical.web.TheatreDtos.CreateRoomReq;
 import com.medassist.clinical.web.TheatreDtos.RoomStatusReq;
+import com.medassist.clinical.web.TheatreDtos.RoomUtilization;
 import com.medassist.clinical.web.TheatreDtos.ScheduleReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -108,5 +110,39 @@ public class TheatreController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, WRITE);
         return ApiResponse.ok(service.cancel(visitId, caseId, req, actor));
+    }
+
+    /**
+     * 单手术间利用率与接台周转（按天）。
+     *
+     * <p>不传 from/to 默认最近 7 天；不传 openFrom/openTo 默认 08:00–18:00。
+     * 区间上限 92 天，超过直接 422（避免一次拉全年把库拖垮）。
+     */
+    @GetMapping("/operating-rooms/{roomId}/utilization")
+    public ApiResponse<RoomUtilization> utilization(
+            @PathVariable UUID roomId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate to,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "HH:mm") LocalTime openFrom,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "HH:mm") LocalTime openTo,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.utilization(roomId, from, to, openFrom, openTo));
+    }
+
+    /** 全院手术间利用率（只统计 ACTIVE 手术间）。 */
+    @GetMapping("/surgery/utilization")
+    public ApiResponse<List<RoomUtilization>> hospitalUtilization(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate to,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "HH:mm") LocalTime openFrom,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "HH:mm") LocalTime openTo,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.hospitalUtilization(from, to, openFrom, openTo));
     }
 }

@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -92,5 +93,29 @@ public final class TheatreDtos {
 
     /** 麻醉记录视图（记录 + 生命体征时间线）。 */
     public record AnesthesiaView(AnesthesiaRecord record, List<AnesthesiaVital> vitals) {
+    }
+
+    /**
+     * 单日利用率。
+     *
+     * @param occupiedMinutes 开放时段内的排台占用分钟（已取消排台不计）
+     * @param availableMinutes 当日开放时段总分钟
+     * @param turnoverMinutes 接台间隙合计（相邻两台之间的空闲分钟）
+     * @param utilizationRate 占用 ÷ 可用，0~1，保留 4 位
+     */
+    public record DailyUtilization(LocalDate date, int scheduledCount, int completedCount,
+                                   int cancelledCount, long occupiedMinutes,
+                                   long availableMinutes, long turnoverMinutes,
+                                   int turnoverCount, BigDecimal utilizationRate) {
+    }
+
+    /** 手术间利用率报表（逐日 + 合计）。 */
+    public record RoomUtilization(UUID roomId, String roomCode, String roomName, LocalDate from,
+                                  LocalDate to, String openFrom, String openTo,
+                                  List<DailyUtilization> days, int totalScheduled,
+                                  int totalCompleted, int totalCancelled,
+                                  long totalOccupiedMinutes, long totalAvailableMinutes,
+                                  long totalTurnoverMinutes, int turnoverCount,
+                                  BigDecimal utilizationRate) {
     }
 }

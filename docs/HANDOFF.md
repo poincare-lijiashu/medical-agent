@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~三批** / **知识库域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~四批** / **知识库域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
@@ -11,12 +11,12 @@
   `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）、`0995eea`（**第六轮 P1 跨域一致性**）、
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）、`cb68a1e`（**第六轮 P3 读留痕/四眼/报盘诊断**）、
   `cd93cb8`（**手术麻醉域第一批**）、`caff4de`（**知识库域第一批**）、`8fad3d2`（**手术麻醉域第二批**）、
-  `563cbe7`（**手术麻醉域第三批**）
+  `563cbe7`（**手术麻醉域第三批**）、`__LEVEL_BATCH__`（**手术麻醉域第四批：分级审批 + 利用率报表**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **659 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **688 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V30**、`clinical_svc` → **V17**、`emr_svc` → **V14**、
+  本日迁移已在真实库执行：`auth_svc` → **V31**、`clinical_svc` → **V18**、`emr_svc` → **V14**、
   `insurance_svc` → **V12**、`kb_svc` → **V1**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
@@ -24,12 +24,13 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **手术麻醉第四批**：手术分级审批（三/四级需主任审批）、麻醉药品专用处方闭环、术中收费打包
-     （手术/麻醉/耗材一次计费）、手术间利用率与接台周转报表
+  1. **手术麻醉第五批**：麻醉药品专用处方闭环（五专管理 + 处方权 + 空安瓿回收）、
+     术中收费打包（手术/麻醉/耗材一次计费，与收费单/医保清单对齐）、术前访视与麻醉评估单
   2. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
      URL 抓取、带引用的生成式问答（LLM 未配置时继续显式拒绝，不伪造回答）、检索评测集（召回率/忠实度/时延）
   3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
-     web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板 / DRG / 知识库检索"五页
+     web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
+     DRG / 知识库检索"五页
   4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
@@ -1013,6 +1014,28 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`clinical_svc` → **V17**
    - 遗留：同意书模板与 CA 签名、术前访视/麻醉评估、手术分级审批、麻醉药品闭环、术中收费打包
 
+67. **手术麻醉域第四批：手术分级审批 + 手术间利用率与接台周转（2026-11-01）**
+   - **`clinical V18`**：`surgery_level`（一台手术一份）+ `ix_schedule_room_active`（利用率部分索引）
+   - **`auth V31`**：新增 `clinical:surgery:approve`（ADMIN/QC），**与 write 分离**：
+     申请由术者（write），审批由医务/质控（approve）；复用 write 等于让每个能录手术的人自批
+   - **分级规则**：1~2 级自动 `NOT_REQUIRED`；3~4 级 `PENDING`；
+     数据库 `CHECK` 把"级别 ↔ 状态"绑死（1~2 级不可能出现 PENDING，3~4 级不可能 NOT_REQUIRED）
+   - **审批流**：`PUT /clinical/surgery-cases/{id}/level`、`POST /level/approve`、`POST /level/reject`
+     （驳回必须写原因）；**重新申请会清空上次审批结论**，触发器禁止"改级别却沿用 APPROVED"
+   - **四眼原则**：申请人不得审批/驳回自己提交的分级（服务层校验）；同级 PENDING/APPROVED 重复提交 409，
+     否则申请人可以改写 `applied_by` 再自批，四眼形同虚设
+   - **开台门槛**：`SurgeryService.start` 顺序 = 分级门槛 → 知情同意 → 状态机 CAS；
+     未分级 / 审批中 / 已驳回均 422（同样不做配置开关）
+   - **利用率报表**：`GET /clinical/operating-rooms/{roomId}/utilization` 与 `GET /clinical/surgery/utilization`，
+     逐日返回排台/完成/取消台次、占用分钟、接台间隙、利用率；默认 08:00–18:00、最近 7 天、上限 92 天；
+     占用分钟与开放时段取交集（跨零点排台不会被算成满勤）
+   - **实测**：全量单测 **688 项**全绿（+29）；新增 `clinical_surgery_level_smoke.ps1`（83 项断言）PASS；
+     `clinical_surgery_smoke` / `clinical_surgery_theatre_smoke` / `clinical_preop_consent_smoke` 回归 PASS
+     （三者均在开台前补 1 级分级）；真实库反例：直改已审批级别 → 触发器拒绝、APPROVED 缺审批人 → CHECK、
+     1 级置 PENDING → CHECK flow；审计表 `SURGERY_LEVEL_SET/APPROVE/REJECT` 三类齐全
+   - 迁移：`clinical_svc` → **V18**、`auth_svc` → **V31**
+   - 遗留：麻醉药品专用处方闭环（五专/处方权/空安瓿）、术中收费打包、术前访视与麻醉评估单
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1193,6 +1216,14 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 - **HL7 v2 字段下标陷阱**：非 MSH 段切分后数组下标 = 字段号（下标 0 是段名，OBR-2 → index 2），
   而 MSH 段因为 MSH-1 就是分隔符，下标 = 字段号 - 1。两者混用会把 OBR-2 读成 "1"、把 OBX-3 读成 "NM"，
   表现为"结果全错但不报错"——解析器必须用带 `mshSegment` 标志的取值方法
+- **按天聚合时不要在 LEFT JOIN 的 ON 里过滤状态**：`ON ... AND s.status <> 'CANCELLED'` 会让
+  "取消台次"恒为 0（行根本没进来）。正确做法是**行全取、聚合时用 `FILTER (WHERE ...)`**，
+  取消台次与占用分钟各用各的过滤条件
+- **返回可空实体时用 200 + 空 data，而不是 404**：`ApiResponse` 带 `@JsonInclude(NON_NULL)`，
+  `data` 为 null 时整个字段被省略；E2E 断言"尚未提交"要用 `"$(Res $r)" -eq ''`，
+  不能写成比较 `$null`（PowerShell 下 `@($null)` 之类的写法极易误判）
+- **四眼原则要连"重新提交"一起管**：只校验"审批人 ≠ 申请人"是不够的，若允许同级重复提交，
+  申请人先把 `applied_by` 改成别人再自批就绕过了；本批对同级 PENDING/APPROVED 一律 409
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

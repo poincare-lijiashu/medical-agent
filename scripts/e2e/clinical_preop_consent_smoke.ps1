@@ -89,6 +89,10 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases" @{
 Check 'surgery.plan' $r.Status 200
 $caseId = (Res $r).id
 
+# level 1 => exempt from approval, but the record itself is mandatory before opening
+$r = Invoke-Api 'PUT' "/api/v2/clinical/surgery-cases/$caseId/level" @{ level = 1 } $token
+Check 'surgery.level' $r.Status 200
+
 # ---------------------------------------------------------------- 3. preop summary baseline
 $r = Invoke-Api 'GET' "/api/v2/clinical/surgery-cases/$caseId/preop-summary" $null $token
 Check 'summary.baseline' $r.Status 200

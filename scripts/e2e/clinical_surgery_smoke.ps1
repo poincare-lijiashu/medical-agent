@@ -132,6 +132,11 @@ Check 'surgery.plan.outpatient.422' $r.Status 422
 
 # ---------------------------------------------------------------- 5. state machine
 # opening a case requires signed surgical + anesthesia consents (hard gate)
+# and a surgery level record (level 1/2 are auto exempt from approval)
+$r = Invoke-Api 'PUT' "/api/v2/clinical/surgery-cases/$caseId/level" @{ level = 1 } $token
+Check 'surgery.level' $r.Status 200
+Check 'surgery.level.status' (Res $r).approvalStatus 'NOT_REQUIRED'
+
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseId/start" @{
     version = 0
 } $token

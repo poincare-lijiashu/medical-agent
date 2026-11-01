@@ -105,6 +105,11 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases" @{
 Check 'surgery.b.plan' $r.Status 200
 $caseB = (Res $r).id
 
+# level 1 => exempt from approval, but the record itself is mandatory before opening
+$r = Invoke-Api 'PUT' "/api/v2/clinical/surgery-cases/$caseA/level" @{ level = 1 } $token
+Check 'surgery.a.level' $r.Status 200
+Check 'surgery.a.level.status' (Res $r).approvalStatus 'NOT_REQUIRED'
+
 # ---------------------------------------------------------------- 4. rooms
 $roomCode = "OR-$suffix"
 $r = Invoke-Api 'POST' '/api/v2/clinical/operating-rooms' @{

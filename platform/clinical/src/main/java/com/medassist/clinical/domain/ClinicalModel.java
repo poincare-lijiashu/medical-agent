@@ -261,6 +261,51 @@ public final class ClinicalModel {
         }
     }
 
+    /**
+     * 手术分级（一台手术一条）。
+     *
+     * <p>分级与审批状态在数据库层强绑定：1~2 级只能 {@code NOT_REQUIRED}，
+     * 3~4 级只能在 {@code PENDING / APPROVED / REJECTED} 之间流转。
+     * 三、四级手术未审批通过不得开台（由 {@code SurgeryService} 强制校验）。
+     */
+    public record SurgeryLevel(UUID id, UUID surgeryCaseId, int level, String approvalStatus,
+                               String appliedBy, Instant appliedAt, String reviewedBy,
+                               Instant reviewedAt, String rejectReason, String createdBy,
+                               long version, Instant createdAt) {
+
+        public static final String NOT_REQUIRED = "NOT_REQUIRED";
+        public static final String PENDING = "PENDING";
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+
+        public static final int MIN_LEVEL = 1;
+        public static final int MAX_LEVEL = 4;
+        /** 三级及以上手术需要审批。 */
+        public static final int APPROVAL_THRESHOLD = 3;
+
+        /** 该分级下审批状态应该是"免审批"还是"待审批"。 */
+        public static String initialStatus(int level) {
+            return level >= APPROVAL_THRESHOLD ? PENDING : NOT_REQUIRED;
+        }
+
+        /** 是否满足开台条件（免审批，或三级以上且已审批通过）。 */
+        public boolean clearedForStart() {
+            return level < APPROVAL_THRESHOLD ? NOT_REQUIRED.equals(approvalStatus)
+                    : APPROVED.equals(approvalStatus);
+        }
+    }
+
+    /**
+     * 手术间利用率的"每日一行"聚合（仓储层投影，不落表）。
+     *
+     * @param occupiedMinutes 落在开放时段内的排台占用分钟（已取消排台不计）
+     * @param turnoverMinutes 接台间隙合计：相邻两台（未取消）之间的空闲分钟
+     */
+    public record RoomDayUsage(Instant dayStart, int scheduledCount, int completedCount,
+                               int cancelledCount, long occupiedMinutes, long turnoverMinutes,
+                               int turnoverCount) {
+    }
+
     /** 收费单。 */
     public record Charge(UUID id, String chargeNo, UUID visitId, BigDecimal totalAmount,
                          String status, String paymentMethod, Instant paidAt, long version) {

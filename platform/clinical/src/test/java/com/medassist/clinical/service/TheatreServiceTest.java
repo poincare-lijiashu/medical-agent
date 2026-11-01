@@ -1,11 +1,13 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
+import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.TheatreDtos.CancelScheduleReq;
 import com.medassist.clinical.web.TheatreDtos.CreateRoomReq;
+import com.medassist.clinical.web.TheatreDtos.RoomUtilization;
 import com.medassist.clinical.web.TheatreDtos.ScheduleReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -16,6 +18,9 @@ import org.mockito.ArgumentCaptor;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -225,5 +230,89 @@ class TheatreServiceTest {
         assertThatThrownBy(() -> service.board(roomId, null))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    // ---------------------------------------------------------------- 利用率
+
+    @Test
+    @DisplayName("利用率：逐日聚合 + 合计，比率保留 4 位（120/600=0.2000，120/1200=0.1000）")
+    void utilizationAggregatesDaysAndTotals() {
+        when(repo.findOperatingRoom(roomId)).thenReturn(Optional.of(room("ACTIVE")));
+        when(repo.listRoomDayUsage(eq(roomId), any(Instant.class), any(Instant.class), eq(480),
+                eq(1080)))
+                .thenReturn(List.of(
+                        new RoomDayUsage(Instant.parse("2026-10-31T16:00:00Z"), 2, 1, 0, 120,
+                                30, 1),
+                        new RoomDayUsage(Instant.parse("2026-11-01T16:00:00Z"), 0, 0, 0, 0, 0, 0)));
+
+        RoomUtilization result = service.utilization(roomId, LocalDate.of(2026, 11, 1),
+                LocalDate.of(2026, 11, 2), LocalTime.of(8, 0), LocalTime.of(18, 0));
+
+        assertThat(result.days()).hasSize(2);
+        assertThat(result.days().get(0).date()).isEqualTo(LocalDate.of(2026, 11, 1));
+        assertThat(result.days().get(0).availableMinutes()).isEqualTo(600);
+        assertThat(result.days().get(0).utilizationRate())
+                .isEqualByComparingTo("0.2000");
+        assertThat(result.totalScheduled()).isEqualTo(2);
+        assertThat(result.totalCompleted()).isEqualTo(1);
+        assertThat(result.totalOccupiedMinutes()).isEqualTo(120);
+        assertThat(result.totalAvailableMinutes()).isEqualTo(1200);
+        assertThat(result.totalTurnoverMinutes()).isEqualTo(30);
+        assertThat(result.utilizationRate()).isEqualByComparingTo("0.1000");
+    }
+
+    @Test
+    @DisplayName("利用率：开放时段倒置 → 422；结束日期早于开始 → 422")
+    void utilizationRejectsInvalidWindow() {
+        when(repo.findOperatingRoom(roomId)).thenReturn(Optional.of(room("ACTIVE")));
+        LocalDate day = LocalDate.of(2026, 11, 1);
+
+        assertThatThrownBy(() -> service.utilization(roomId, day, day, LocalTime.of(18, 0),
+                LocalTime.of(8, 0)))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+
+        assertThatThrownBy(() -> service.utilization(roomId, day.plusDays(1), day,
+                LocalTime.of(8, 0), LocalTime.of(18, 0)))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    @DisplayName("利用率：区间超过 92 天 → 422")
+    void utilizationRejectsTooLongRange() {
+        when(repo.findOperatingRoom(roomId)).thenReturn(Optional.of(room("ACTIVE")));
+        LocalDate from = LocalDate.of(2026, 1, 1);
+
+        assertThatThrownBy(() -> service.utilization(roomId, from, from.plusDays(92),
+                null, null))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    @DisplayName("利用率：手术间不存在 → 404")
+    void utilizationRejectsUnknownRoom() {
+        when(repo.findOperatingRoom(roomId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.utilization(roomId, null, null, null, null))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("全院利用率：只统计 ACTIVE 手术间")
+    void hospitalUtilizationListsActiveRooms() {
+        when(repo.listOperatingRooms(OperatingRoom.ACTIVE, 200))
+                .thenReturn(List.of(room("ACTIVE")));
+        when(repo.listRoomDayUsage(eq(roomId), any(Instant.class), any(Instant.class), eq(480),
+                eq(1080))).thenReturn(List.of());
+
+        List<RoomUtilization> result = service.hospitalUtilization(LocalDate.of(2026, 11, 1),
+                LocalDate.of(2026, 11, 1), LocalTime.of(8, 0), LocalTime.of(18, 0));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).totalAvailableMinutes()).isZero();
+        assertThat(result.get(0).utilizationRate()).isEqualByComparingTo("0.0000");
     }
 }
