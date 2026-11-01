@@ -23,7 +23,7 @@ public record KbProperties(Chunk chunk, Search search, Ingest ingest, Embedding 
     public KbProperties {
         chunk = chunk == null ? new Chunk(600, 80) : chunk;
         search = search == null ? new Search(60, 4, 50) : search;
-        ingest = ingest == null ? new Ingest(true, 5000, 5, 5) : ingest;
+        ingest = ingest == null ? new Ingest(true, 5000, 5, 5, 600) : ingest;
         embedding = embedding == null ? new Embedding(false, null, "", "", 1536, Duration.ofSeconds(10))
                 : embedding;
         answer = answer == null ? new Answer(3, 400) : answer;
@@ -52,12 +52,16 @@ public record KbProperties(Chunk chunk, Search search, Ingest ingest, Embedding 
     /** @param enabled     是否启用后台索引 worker
      *  @param intervalMs  轮询间隔
      *  @param batchSize   单次抢占任务数
-     *  @param maxAttempts 最大尝试次数（超过后任务置 FAILED 不再重试） */
-    public record Ingest(boolean enabled, long intervalMs, int batchSize, int maxAttempts) {
+     *  @param maxAttempts 最大尝试次数（超过后任务置 FAILED 不再重试）
+     *  @param leaseSeconds RUNNING 任务的租约时长：worker 崩溃后超过该时长可被重新抢占，
+     *                      否则任务会永远停在 RUNNING、文档永远卡在 INDEXING */
+    public record Ingest(boolean enabled, long intervalMs, int batchSize, int maxAttempts,
+                         int leaseSeconds) {
         public Ingest {
             intervalMs = intervalMs <= 0 ? 5000 : intervalMs;
             batchSize = batchSize <= 0 ? 5 : batchSize;
             maxAttempts = maxAttempts <= 0 ? 5 : maxAttempts;
+            leaseSeconds = leaseSeconds < 60 ? 600 : leaseSeconds;
         }
     }
 

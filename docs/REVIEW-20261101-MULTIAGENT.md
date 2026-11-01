@@ -145,7 +145,18 @@
 真实库迁移 `insurance_svc → V13`；反例：同清单进第二个 GENERATED 批次被触发器拒绝。
 
 **仍未整改（后续批次）**：B2（长嘱 quantity 口径，需业务口径决策）、B3（退药退费/驳回联动，需红冲单据链路）、
-D1（事务内 HTTP 长锁）、E1（X-Actor 归因统一）、F1（empi 单测与合并 E2E），以及全部 33 条 SHOULD-FIX。
+E1（X-Actor 归因统一），以及其余 SHOULD-FIX。D1 已在第二批修复。
+
+### 第二批（2026-11-01 晚，测试与可靠性防线）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| F1 | ✅ 已修复 | `PatientServiceTest` 15 项 + `empi_patient_smoke.ps1` 30 项断言（此前 empi 模块零测试） |
+| SHOULD #6 | ✅ 已修复 | 8 个域新增 `V*__append_only_audit.sql`：`change_log` / `prescription_audit` / `kb_answer_log` 一律禁止 UPDATE/DELETE；麻醉药品专册补 `BEFORE DELETE` |
+| SHOULD #7 | ✅ 已修复 | `claimTasks` 支持"超出租约的 RUNNING 重抢"（`kb.ingest.lease-seconds`，默认 600s）；真实库验证 5 秒内自愈 |
+| SHOULD #21 | ✅ 已修复 | `scripts/e2e/db_guardrails.ps1`（13 项真实库反例，可进回归） |
+| SHOULD #23 | ✅ 已修复 | `IngestTaskWorkerTest` 覆盖空轮询/正常处理/失败回写不阻断 |
+| D1 | ✅ 已修复 | 首页重算与医保清单生成：跨服务读取移到行锁之前（首页增加"无锁状态预判 + 取锁后复核"） |
 
 ---
 

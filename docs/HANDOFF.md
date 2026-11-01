@@ -15,21 +15,23 @@
   `8eac62d`（**手术麻醉域第五批：术中收费打包**）、`69a822e`（**药房域第二批：麻醉药品五专闭环**）、
   `f82562d`（**手术麻醉域第六批：术前访视与麻醉评估单**）、
   `b28637f`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）、
-  `873752a`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）
+  `873752a`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）、
+  `HASH_REVIEW2`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **764 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **782 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V33**、`clinical_svc` → **V21**、`pharmacy_svc` → **V6**、
-  `emr_svc` → **V14**、`insurance_svc` → **V13**、`kb_svc` → **V2**
+  本日迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V22**、
+  `pharmacy_svc` → **V7**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
+  `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **评审整改第二批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"，再改日计费/处方生成）、
-     B3 退药退费与处方驳回联动（红冲单据链路）、D1 事务内 HTTP 长锁、E1 `X-Actor` 归因统一、F1 empi 单测
+  1. **评审整改第三批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"）、B3 退药退费与处方驳回联动（红冲单据）、
+     E1 `X-Actor` 归因统一；其余 SHOULD-FIX 见意见书"仍未整改"
   2. **知识库第三批的前置条件**：pgvector 当前不可用（`pg_available_extensions` 实测无 `vector`），
      需先换装带 pgvector 的 PG 镜像或编译扩展，才能做 `vector` 列 + HNSW 与 `kb_eval.ps1` 时延对比；
      生成式问答需大模型配置（保持 `grounded/citations/refusal` 结构与拒答语义不变）
@@ -1147,6 +1149,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 遗留：B2 长嘱 quantity 口径（需业务定"日量 vs 总量"）、B3 退药退费与驳回联动（红冲单据）、
      D1 事务内 HTTP 长锁、E1 `X-Actor` 归因统一、F1 empi 单测，以及 33 条 SHOULD-FIX
 
+73. **第七轮多智能体评审整改第二批（2026-11-01 晚，测试与可靠性防线）**
+   - **F1 empi 零测试**：新增 `PatientServiceTest`（15 项）+ `empi_patient_smoke.ps1`（30 项断言）；
+     覆盖证件号查重、证件类型归一、脱敏/`reveal` 与 PHI 读审计、合并稳定锁序、合并后禁改/禁读明文
+   - **审计只读（SHOULD #6）**：8 个域各加 `V*__append_only_audit.sql` 触发器（BEFORE UPDATE OR DELETE 一律拒绝）；
+     麻醉药品专册额外补 `BEFORE DELETE`（V6 只挡了改事实字段）
+   - **KB 索引租约（SHOULD #7）**：`claimTasks` 支持"超出租约的 RUNNING 重抢"，新增
+     `kb.ingest.lease-seconds`（默认 600）；**真实库验证**：任务置 RUNNING 且回拨 30 分钟 → 5 秒内重抢，
+     文档 version 2→3 重新就绪
+   - **DB 反例固化（SHOULD #21）**：`scripts/e2e/db_guardrails.ps1`（13 项，真实库），含 KB 来源类型/切片区间、
+     医保批次金额/期间/状态、报盘清单唯一性（含 REJECTED 可重报正例）、四域审计表只读
+   - **worker 编排测试（SHOULD #23）**：`IngestTaskWorkerTest` 3 项（空轮询/正常/失败回写不阻断）
+   - **去锁内 HTTP（D1）**：`HomepageService.recalculate` 改为"无锁读 + 状态预判 → 取下游数据 → 取锁复核"；
+     `InsuranceService` 生成清单时诊断快照先取、再锁清单行
+   - **实测**：全量单测 **782 项**全绿（+18）；`db_guardrails.ps1` 13/13 PASS；
+     `empi_patient_smoke.ps1` 30 项 PASS；回归 `platform_smoke` / `pharmacy_smoke` / `kb_search_smoke` /
+     `emr_homepage_smoke` / `insurance_smoke` 全 PASS
+   - 迁移：`auth V34`、`empi V3`、`clinical V22`、`pharmacy V7`、`tech V7`、`emr V15`、`insurance V14`、`kb V3`
+   - 遗留：B2（长嘱 quantity 口径）、B3（退药退费/驳回联动）、E1（X-Actor 归因）、其余 SHOULD-FIX
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1160,6 +1181,10 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   三处 `new GatewayAuthProperties(...)` 都要补参数，否则编译失败
 - **内部接口一旦 fail-closed，所有调用方必须同时带令牌**：auth 的 `/internal/**` 改校验后，
   网关撤销名单同步若不带头会 403 → 配合 `fail-fast-on-startup=true` 直接拒绝启动（这次是刻意这样设计的）
+- **psql 的中文报错不能当断言模式写进 E2E**：`.ps1` 必须是纯 ASCII，写中文匹配串会因 PowerShell 5.1
+  按 ANSI 读文件而永远匹配不到；`db_guardrails.ps1` 因此只断言"被拒绝（退出码非 0）"，不断言具体文案
+- **审计表触发器只对"有数据的 UPDATE/DELETE"生效**：空表 UPDATE 影响 0 行不会触发，
+  反例脚本必须先查 `count(*)`，为空则 SKIP，否则会误判为"防护失效"
 - **advisory lock 的键不能按业务参数拼**（如 `emr:hqms-export:{from}:{to}`）：参数不同的两个事务
   会拿到不同锁，看似"加了锁"其实完全不互斥；要串行就全局单键，或按 ID 排序逐行锁
 - **新增服务模块必须同时补 `MigrateOnlyRunner`**：`--medassist.migrate-only=true` 是自定义属性，

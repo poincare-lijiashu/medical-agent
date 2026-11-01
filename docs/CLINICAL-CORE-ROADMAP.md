@@ -1349,6 +1349,38 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.54 已完成（2026-11-01，第七轮多智能体评审整改第二批：测试与可靠性防线）
+
+第一批修的是"发布/安全/资金红线"，本批修的是**防线缺失**：患者主索引零测试、
+审计表可被直连库篡改、索引任务可能永久卡死、事务内持锁调下游。
+
+| 项 | 修复 | 关键实现 |
+|---|---|---|
+| F1 | empi 模块此前零单测 | `PatientServiceTest`（15 项）：证件号查重带出既有档案号、无证件号归一 NONE 且不查重、脱敏/`reveal` 边界与 PHI 读审计、合并后禁读明文/禁改/禁登记标识、合并按 id 稳定顺序加锁、CAS 冲突；新增 `empi_patient_smoke.ps1`（30 项断言） |
+| #6 | 审计表只靠"服务层不提供更新/删除" | 8 个域各加 `V*__append_only_audit.sql`：`BEFORE UPDATE OR DELETE` 触发器一律拒绝；同时给麻醉药品专册补 `BEFORE DELETE` 防护（V6 只挡了改事实字段） |
+| #7 | KB 索引任务 RUNNING 无租约 | `claimTasks` 增加"超出租约的 RUNNING 可重抢"；新增 `kb.ingest.lease-seconds`（默认 600）；补 `IngestTaskWorkerTest`（3 项：空轮询/正常处理/失败回写且不阻断后续） |
+| #21 | 数据库反例只写在 HANDOFF 里 | 新增 `scripts/e2e/db_guardrails.ps1`（13 项）：KB 来源类型/原始长度/切片区间/可见性、医保批次金额与期间与状态、报盘清单唯一性（含 REJECTED 可重报的正例）、四个域审计表只读 |
+| D1 | 事务内持行锁调跨服务 HTTP | `HomepageService.recalculate`：先无锁读+状态预判 → 取下游数据 → 再取锁复核（CAS）；`InsuranceService` 生成清单：诊断快照先取、再锁清单行 |
+
+**实测**
+- 全量单测 **782 项**全绿（+18：empi 15 / KB worker 3）
+- `db_guardrails.ps1` **13/13 PASS**（真实库；含"同清单进第二个 GENERATED 批次被拒 + REJECTED 后可重报"）
+- `empi_patient_smoke.ps1` **30 项 PASS**：建档脱敏 → 重复 409 → 非 PHI 权限 reveal 403（药师）→
+  医生 reveal 明文 → 乐观锁 409 → 合并（源 MERGED、跨系统标识迁移）→ 合并后读明文/改档/登记均 409 → 自合并 422
+- **租约回收真实验证**：把任务置为 RUNNING 且 `updated_at` 回拨 30 分钟，worker 在 5 秒内重抢，
+  文档 `version 2 → 3` 重新就绪（无此修复会永久停在 INDEXING）
+- 回归 PASS：`platform_smoke`、`pharmacy_smoke`、`kb_search_smoke`、`emr_homepage_smoke`、`insurance_smoke`
+- 迁移：`auth V34` / `empi V3` / `clinical V22` / `pharmacy V7` / `tech V7` / `emr V15` /
+  `insurance V14` / `kb V3`（均为"审计追加式防护"）
+
+**本批不做（下一批）**
+- **B2 长嘱 quantity 口径**：需先定"日量 vs 总量"业务契约（改错方向会造成新的账实不符）
+- **B3 退药退费 / 处方驳回联动**：需红冲与退费单据链路（涉及财务凭证）
+- **E1 `X-Actor` 归因统一**：59 个 Controller 的缺头语义需逐个确认 400/409，属独立批次
+- 其余 SHOULD-FIX（网关超时熔断、反亲和、ai-core 单点、日志脱敏管线、statusOf 契约测试等）
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

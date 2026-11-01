@@ -134,13 +134,16 @@ public class HomepageService {
      */
     @Transactional
     public HomepageView recalculate(UUID id, String actor) {
-        Homepage current = repo.lockHomepage(id)
+        // 先做跨服务读取，再取行锁：HTTP 调用放在 FOR UPDATE 之后会把首页行锁持到下游超时，
+        // 同一首页的提交/归档/再次重算会全部排队（多智能体评审 D1）。
+        Homepage snapshotBefore = repo.findHomepage(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
-        if (!Homepage.DRAFT.equals(current.status())) {
+        // 先做一次无锁状态判断：已提交/归档的首页根本不该触发跨服务调用
+        if (!Homepage.DRAFT.equals(snapshotBefore.status())) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
-                    "只有草稿状态可以重新生成快照，当前：" + current.status());
+                    "只有草稿状态可以重新生成快照，当前：" + snapshotBefore.status());
         }
-        ClinicalClient.HomepageSource src = clinicalClient.homepageSource(current.visitId());
+        ClinicalClient.HomepageSource src = clinicalClient.homepageSource(snapshotBefore.visitId());
         if (!"DISCHARGED".equalsIgnoreCase(src.admissionStatus())) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID,
                     "住院状态为 " + src.admissionStatus() + "，不能重新生成病案首页");
@@ -151,6 +154,13 @@ public class HomepageService {
         }
         Snapshot snapshot = snapshot(src);
         int stayDays = stayDays(src.admittedAt(), src.dischargedAt());
+
+        Homepage current = repo.lockHomepage(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+        if (!Homepage.DRAFT.equals(current.status())) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "只有草稿状态可以重新生成快照，当前：" + current.status());
+        }
         if (!repo.recalculateHomepage(id, current.version(), snapshot.diagnosesJson(),
                 snapshot.proceduresJson(), snapshot.feeSummaryJson(), snapshot.total(),
                 src.admittedAt(), src.dischargedAt(), stayDays)) {

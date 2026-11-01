@@ -40,7 +40,7 @@ public class IngestTaskWorker {
     @Scheduled(fixedDelayString = "${kb.ingest.interval-ms:5000}")
     public void tick() {
         List<IngestTask> tasks = repo.claimTasks(props.ingest().batchSize(),
-                props.ingest().maxAttempts());
+                props.ingest().maxAttempts(), props.ingest().leaseSeconds());
         if (tasks.isEmpty()) {
             return;
         }

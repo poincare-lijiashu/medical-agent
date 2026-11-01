@@ -52,6 +52,8 @@ kb:
     interval-ms: ${KB_INGEST_INTERVAL_MS:5000}
     batch-size: ${KB_INGEST_BATCH_SIZE:5}
     max-attempts: ${KB_INGEST_MAX_ATTEMPTS:5}
+    # RUNNING 任务租约：worker 崩溃超过该时长后任务可被重抢（否则文档永远卡在 INDEXING）
+    lease-seconds: ${KB_INGEST_LEASE_SECONDS:600}
   # 向量模型（OpenAI 兼容 /embeddings）。默认关闭：未配置时检索自动退化为关键词模式，
   # 绝不写入"假向量"造成"看起来有语义检索"的演示假象。
   embedding:

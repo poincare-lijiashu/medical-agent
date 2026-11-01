@@ -289,22 +289,34 @@ public class KbRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /** 原子抢占（多副本安全）。 */
-    public List<IngestTask> claimTasks(int limit, int maxAttempts) {
+    /**
+     * 原子抢占（多副本安全）。
+     *
+     * <p>除 PENDING / FAILED 外，**超出租约的 RUNNING 也可被重抢**：worker 崩溃（Pod 被驱逐、
+     * OOM、发布滚动）时任务会永久停在 RUNNING，而"同文档只允许一个活跃任务"的部分唯一索引
+     * 又会拦住重建索引 → 文档永远卡在 INDEXING。租约到期重抢是唯一的自愈路径。
+     *
+     * @param leaseSeconds RUNNING 超过该时长未更新视为 worker 已失联
+     */
+    public List<IngestTask> claimTasks(int limit, int maxAttempts, int leaseSeconds) {
         return jdbc.sql("""
                         UPDATE kb_svc.kb_ingest_task t
                            SET status = 'RUNNING', attempts = t.attempts + 1, updated_at = now()
                          WHERE t.id IN (
                              SELECT id FROM kb_svc.kb_ingest_task
-                              WHERE status IN ('PENDING', 'FAILED')
-                                AND next_run_at <= now()
-                                AND attempts < :maxAttempts
+                              WHERE attempts < :maxAttempts
+                                AND (
+                                     (status IN ('PENDING', 'FAILED') AND next_run_at <= now())
+                                     OR (status = 'RUNNING'
+                                         AND updated_at < now() - (interval '1 second' * :leaseSeconds))
+                                )
                               ORDER BY created_at
                               FOR UPDATE SKIP LOCKED
                               LIMIT :limit)
                         RETURNING id, document_id, type, status, attempts
                         """)
                 .param("maxAttempts", maxAttempts).param("limit", limit)
+                .param("leaseSeconds", leaseSeconds)
                 .query(TASK_MAPPER).list();
     }
 

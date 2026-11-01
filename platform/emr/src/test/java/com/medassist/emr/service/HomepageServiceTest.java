@@ -272,9 +272,10 @@ class HomepageServiceTest {
     }
 
     @Test
-    @DisplayName("重新生成：已提交的首页不允许重算")
+    @DisplayName("重新生成：已提交的首页不允许重算（读取在前，但仍以加锁后的状态为准）")
     void recalculateRejectsSubmitted() {
         Homepage submitted = submittedHomepage("admin01");
+        when(repo.findHomepage(submitted.id())).thenReturn(Optional.of(submitted));
         when(repo.lockHomepage(submitted.id())).thenReturn(Optional.of(submitted));
 
         assertThatThrownBy(() -> service.recalculate(submitted.id(), "qc01"))

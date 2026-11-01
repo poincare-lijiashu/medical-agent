@@ -438,6 +438,13 @@ public class InsuranceService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_NOT_ENROLLED,
                         "该患者在就诊日期 " + serviceDate + " 无有效参保信息"));
 
+        // 诊断快照先取（跨服务 HTTP），再锁清单行：锁内调下游会把清单行锁持到 HTTP 超时，
+        // 同一就诊的重算/确认会排队（多智能体评审 D1）。
+        ClinicalClient.DiagnosisSummary diagnosisSummary = clinicalClient.diagnoses(visitId);
+        List<ClinicalClient.Diagnosis> diagnoses = diagnosisSummary == null
+                || diagnosisSummary.diagnoses() == null
+                ? List.of() : diagnosisSummary.diagnoses();
+
         Optional<SettlementBill> existing = repo.lockBillByVisit(visitId);
         BigDecimal capUsed = repo.insuranceUsedInYear(summary.patientId(), BusinessTime.today(),
                 existing.map(SettlementBill::id).orElse(null));
@@ -449,10 +456,6 @@ public class InsuranceService {
         }
         String detail = toJson(c.lines());
         // 诊断快照：清单抬头用主诊断，全部诊断落 jsonb 供报盘/DRG 使用
-        ClinicalClient.DiagnosisSummary diagnosisSummary = clinicalClient.diagnoses(visitId);
-        List<ClinicalClient.Diagnosis> diagnoses = diagnosisSummary == null
-                || diagnosisSummary.diagnoses() == null
-                ? List.of() : diagnosisSummary.diagnoses();
         ClinicalClient.Diagnosis primaryDiagnosis = diagnoses.stream()
                 .filter(ClinicalClient.Diagnosis::primary)
                 .findFirst()
