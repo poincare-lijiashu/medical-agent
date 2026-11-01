@@ -101,6 +101,16 @@ public class HomepageController {
         return ApiResponse.ok(service.update(id, req, actor));
     }
 
+    /** 重新生成快照（仅草稿；出院后退费/补录诊断导致快照过期时使用）。 */
+    @PostMapping("/{id}/recalculate")
+    public ApiResponse<HomepageView> recalculate(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.recalculate(id, actor));
+    }
+
     /** 提交（完整性校验不通过返回 409 与缺失项明细）。 */
     @PostMapping("/{id}/submit")
     public ApiResponse<HomepageView> submit(

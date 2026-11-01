@@ -13,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -179,7 +180,10 @@ public final class EmrDtos {
             @Size(max = 64) String residentPhysician,
             @Size(max = 64) String coder,
             @Size(max = 20, message = "手术操作不得超过 20 条")
-            List<@Valid HomepageProcedureReq> procedures) {
+            List<@Valid HomepageProcedureReq> procedures,
+            /** 死亡时间：离院方式=DEATH 时提交前必填（第六轮 MF-06）。 */
+            Instant deathTime,
+            @Size(max = 256) String deathCause) {
     }
 
     /**

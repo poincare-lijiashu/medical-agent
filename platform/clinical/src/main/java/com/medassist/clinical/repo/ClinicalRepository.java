@@ -693,17 +693,32 @@ public class ClinicalRepository {
      * 就诊单的费用明细行（只读投影，供医保域出结算清单）。
      *
      * <p>跨域不直查数据库，调用方必须走内网内部接口。
+     *
+     * <p>净额口径（第六轮 MF-04）：已结算收费单不允许改账，退药只登记
+     * {@code pharmacy_charge.refund_pending_amount}；这里把它作为**负向虚拟行**输出，
+     * 使清单与病案首页、收费单在"退药后"仍然对得上，而不是按毛额多申报。
      */
     public List<ChargeLine> listChargeLines(UUID visitId) {
         return jdbc.sql("""
-                        SELECT c.charge_no, ci.item_code, ci.item_name, ci.category,
-                               ci.amount, c.status AS charge_status
-                          FROM clinical_svc.charge c
-                          JOIN clinical_svc.charge_item ci ON ci.charge_id = c.id
-                         WHERE c.visit_id = ?
-                         ORDER BY ci.created_at
+                        SELECT t.charge_no, t.item_code, t.item_name, t.category, t.amount,
+                               t.charge_status
+                          FROM (
+                               SELECT c.charge_no, ci.item_code, ci.item_name, ci.category,
+                                      ci.amount, c.status AS charge_status, ci.created_at
+                                 FROM clinical_svc.charge c
+                                 JOIN clinical_svc.charge_item ci ON ci.charge_id = c.id
+                                WHERE c.visit_id = :visitId
+                               UNION ALL
+                               -- 已结算退药的待退费：按该药原始项目出负行
+                               SELECT c.charge_no, pc.drug_code, pc.drug_name, 'DRUG',
+                                      (-pc.refund_pending_amount), c.status, pc.updated_at
+                                 FROM clinical_svc.pharmacy_charge pc
+                                 JOIN clinical_svc.charge c ON c.id = pc.charge_id
+                                WHERE pc.visit_id = :visitId AND pc.refund_pending_amount > 0
+                          ) t
+                         ORDER BY t.created_at
                         """)
-                .param(visitId)
+                .param("visitId", visitId)
                 .query((rs, i) -> new ChargeLine(
                         rs.getString("charge_no"), rs.getString("item_code"),
                         rs.getString("item_name"), rs.getString("category"),
@@ -716,14 +731,27 @@ public class ClinicalRepository {
      *
      * <p>只返回出现过的类别，未出现的类别由调用方补 0；
      * 金额在数据库内聚合，避免把全部明细拉到应用层再求和。
+     *
+     * <p>净额口径（第六轮 MF-04）：已结算退药的"待财务退费"在这里作为 DRUG 类的减项，
+     * 否则首页金额会比清单多出未退金额，出院后无法纠正。
      */
     public Map<String, BigDecimal> sumChargeByCategory(UUID visitId) {
         List<Map.Entry<String, BigDecimal>> rows = jdbc.sql("""
-                        SELECT ci.category, COALESCE(sum(ci.amount), 0) AS amount
-                          FROM clinical_svc.charge c
-                          JOIN clinical_svc.charge_item ci ON ci.charge_id = c.id
-                         WHERE c.visit_id = :visitId AND c.status <> 'REFUNDED'
-                         GROUP BY ci.category
+                        SELECT t.category, COALESCE(sum(t.amount), 0) AS amount
+                          FROM (
+                               SELECT ci.category, ci.amount
+                                 FROM clinical_svc.charge c
+                                 JOIN clinical_svc.charge_item ci ON ci.charge_id = c.id
+                                WHERE c.visit_id = :visitId AND c.status <> 'REFUNDED'
+                               UNION ALL
+                               SELECT 'DRUG', (-pc.refund_pending_amount)
+                                 FROM clinical_svc.pharmacy_charge pc
+                                 JOIN clinical_svc.charge c ON c.id = pc.charge_id
+                                WHERE pc.visit_id = :visitId
+                                  AND pc.refund_pending_amount > 0
+                                  AND c.status <> 'REFUNDED'
+                          ) t
+                         GROUP BY t.category
                         """)
                 .param("visitId", visitId)
                 .query((rs, i) -> Map.entry(rs.getString("category"), rs.getBigDecimal("amount")))

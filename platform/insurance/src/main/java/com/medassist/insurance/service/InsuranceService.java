@@ -658,6 +658,18 @@ public class InsuranceService {
                        BigDecimal capUsed, BigDecimal capRemaining, List<BillLine> lines) {
     }
 
+    /** 按收费项目聚合的净额行：退药红冲（负向）与原收费行在同一项目内相抵。 */
+    private static final class NetLine {
+        private final ClinicalClient.ChargeLine sample;
+        private final String status;
+        private BigDecimal amount = ZERO;
+
+        private NetLine(ClinicalClient.ChargeLine sample, String status) {
+            this.sample = sample;
+            this.status = status;
+        }
+    }
+
     private static final String STATUS_PAID = "PAID";
     private static final String STATUS_UNPAID = "UNPAID";
     private static final String STATUS_REFUNDED = "REFUNDED";
@@ -668,10 +680,12 @@ public class InsuranceService {
      * <p>口径（有代码即口径，不允许"带出来但不用"）：
      * <ol>
      *   <li>收费单状态：REFUNDED 整单剔除（不进入清单）；非 PAID/UNPAID 一律 fail-closed；</li>
+     *   <li>**按收费项目汇总净额**：退药红冲行（负向）与原收费行同项目相抵后再申报，
+     *       与病案首页 {@code sumChargeByCategory} 的净额口径一致（第六轮 MF-04）；</li>
+     *   <li>净额为负 = 只有红冲没有原行（数据异常），fail-closed；净额为 0 = 全额退回，不申报；</li>
      *   <li>甲类全额纳入；乙类先自付 selfPayRatio；丙类/未映射/目录停用全额自费；</li>
      *   <li>乙类等有支付限价的项目：限价内部分参与纳入计算，超限部分全额自付（overLimitAmount）；</li>
-     *   <li>纳入金额扣除起付线后按报销比例计算统筹支付，并以**年度剩余封顶额度**与总额双重截断；</li>
-     *   <li>负数金额直接拒绝（退费走红冲单，不进入本地测算）。</li>
+     *   <li>纳入金额扣除起付线后按报销比例计算统筹支付，并以**年度剩余封顶额度**与总额双重截断。</li>
      * </ol>
      */
     static Computation calculate(List<ClinicalClient.ChargeLine> lines,
@@ -692,6 +706,9 @@ public class InsuranceService {
         BigDecimal total = ZERO;
         BigDecimal eligible = ZERO;
         int skippedRefunded = 0;
+
+        // 1) 先按收费项目合并净额（红冲行与原行相抵），同时做状态校验
+        Map<String, NetLine> net = new LinkedHashMap<>();
         for (ClinicalClient.ChargeLine line : lines) {
             String rawStatus = line.chargeStatus() == null ? "" : line.chargeStatus().trim().toUpperCase();
             if (STATUS_REFUNDED.equals(rawStatus)) {
@@ -702,14 +719,30 @@ public class InsuranceService {
                 throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                         "收费单状态不可用于医保结算：" + line.chargeNo() + "[" + line.chargeStatus() + "]");
             }
-            BigDecimal amount = money(line.amount());
+            NetLine acc = net.get(line.itemCode());
+            if (acc == null) {
+                acc = new NetLine(line, rawStatus);
+                net.put(line.itemCode(), acc);
+            }
+            acc.amount = acc.amount.add(money(line.amount()));
+        }
+
+        // 2) 按净额逐项计算
+        for (NetLine acc : net.values()) {
+            String itemCode = acc.sample.itemCode();
+            BigDecimal amount = money(acc.amount);
             if (amount.signum() < 0) {
+                // 孤立负数：只有退药红冲、没有对应的原收费行，属于数据异常，不能猜口径
                 throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                        "收费明细存在负数金额，请走红冲流程：" + line.chargeNo()
-                                + "/" + line.itemCode() + " = " + amount.toPlainString());
+                        "收费项目 " + itemCode + " 的退费金额超过原收费金额（净额 "
+                                + amount.toPlainString() + "），请先核对红冲记录");
+            }
+            if (amount.signum() == 0) {
+                // 全额退回：该项目无需申报，但仍计入"红冲"语义（不产生明细行）
+                continue;
             }
 
-            InsuranceItem item = resolver.apply(line.itemCode());
+            InsuranceItem item = resolver.apply(itemCode);
             String payCategory = item == null ? InsuranceItem.PAY_C : item.payCategory();
             BigDecimal selfPayRatio = switch (payCategory) {
                 case InsuranceItem.PAY_A -> BigDecimal.ZERO;
@@ -729,8 +762,8 @@ public class InsuranceService {
                     .setScale(2, RoundingMode.HALF_UP);
             total = total.add(amount);
             eligible = eligible.add(lineEligible);
-            detail.add(new BillLine(line.chargeNo(), line.itemCode(), line.itemName(),
-                    line.category(), rawStatus, amount,
+            detail.add(new BillLine(acc.sample.chargeNo(), itemCode, acc.sample.itemName(),
+                    acc.sample.category(), acc.status, amount,
                     item == null ? null : item.insuranceCode(), payCategory, selfPayRatio,
                     overLimit, lineEligible, item == null));
         }

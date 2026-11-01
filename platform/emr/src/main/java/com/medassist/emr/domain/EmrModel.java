@@ -154,10 +154,13 @@ public final class EmrModel {
      * @param feeSummary JSON 对象 {收费类别: 金额}
      */
     public record Homepage(UUID id, String homepageNo, UUID visitId, UUID admissionId,
-                           UUID patientId, String patientNo, String patientName, String visitNo,
+                           UUID patientId, String patientNo, String patientName,
+                           String patientSex, LocalDate birthDate, Integer admitAge,
+                           String visitNo,
                            UUID deptId, String deptName, UUID wardId, String wardName, String bedNo,
                            Instant admittedAt, Instant dischargedAt, int stayDays,
                            String attendingDoctor, String admissionWay, String dischargeMode,
+                           Instant deathTime, String deathCause,
                            String readmitPlan, String maritalStatus, String occupation, String nation,
                            String bloodType, String rhFactor, int rescueCount, int rescueSuccessCount,
                            boolean criticalCase, boolean hospitalInfection,

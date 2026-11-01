@@ -89,6 +89,9 @@ public final class HomepagePrintRenderer {
                 .append("<span>住院号：").append(esc(h.visitNo())).append("</span>")
                 .append("<span>患者号：").append(esc(h.patientNo())).append("</span>")
                 .append("<span>姓名：").append(esc(h.patientName())).append("</span>")
+                .append("<span>性别：").append(esc(sexName(h.patientSex()))).append("</span>")
+                .append("<span>年龄：").append(h.admitAge() == null ? "" : h.admitAge())
+                .append(" 岁</span>")
                 .append("<span>科室：").append(esc(h.deptName())).append("</span>")
                 .append("<span>病区/床位：").append(esc(h.wardName())).append(" / ")
                 .append(esc(h.bedNo())).append("</span>")
@@ -107,6 +110,10 @@ public final class HomepagePrintRenderer {
                 .append("</td></tr>");
         sb.append("<tr><th>主治医师</th><td>").append(esc(h.attendingDoctor()))
                 .append("</td><th>住院医师</th><td>").append(esc(h.residentPhysician())).append("</td></tr>");
+        if ("DEATH".equals(h.dischargeMode())) {
+            sb.append("<tr><th>死亡时间</th><td>").append(ts(h.deathTime()))
+                    .append("</td><th>死亡原因</th><td>").append(esc(h.deathCause())).append("</td></tr>");
+        }
         sb.append("<tr><th>主任医师</th><td>").append(esc(h.chiefPhysician()))
                 .append("</td><th>编码员</th><td>").append(esc(h.coder())).append("</td></tr>");
         sb.append("</table>");
@@ -174,6 +181,15 @@ public final class HomepagePrintRenderer {
 
     static String dischargeMode(String mode) {
         return mode == null ? "" : DISCHARGE_MODES.getOrDefault(mode, mode);
+    }
+
+    /** 性别展示（首页打印/HQMS 口径统一为 MALE/FEMALE/UNKNOWN）。 */
+    static String sexName(String sex) {
+        return switch (nullToEmpty(sex)) {
+            case "MALE" -> "男";
+            case "FEMALE" -> "女";
+            default -> "未知";
+        };
     }
 
     static String admissionWay(String way) {

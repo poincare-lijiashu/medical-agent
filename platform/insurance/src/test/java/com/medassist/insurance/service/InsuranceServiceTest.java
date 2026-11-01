@@ -607,7 +607,7 @@ class InsuranceServiceTest {
     }
 
     @Test
-    @DisplayName("负数金额拒绝（退费应走红冲，不进入本地测算）")
+    @DisplayName("孤立负数拒绝（只有红冲没有原收费行，属于数据异常）")
     void negativeAmountRejected() {
         assertThatThrownBy(() -> InsuranceService.calculate(
                 List.of(line("A1", "-10.00")),
@@ -616,6 +616,36 @@ class InsuranceServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("退药红冲：同项目负数与原收费行相抵，按净额申报（MF-04）")
+    void refundNetsAgainstOriginalLine() {
+        InsuranceService.Computation c = InsuranceService.calculate(
+                List.of(line("A1", "100.00"), line("A1", "-30.00", "PAID")),
+                catalog(Map.of("A1", item("I-A1", "A", "0"))),
+                member("0", "1.0000", "300000.00"));
+
+        assertThat(c.total()).isEqualByComparingTo("70.00");
+        assertThat(c.insurance()).isEqualByComparingTo("70.00");
+        assertThat(c.lines()).hasSize(1);
+        assertThat(c.lines().get(0).itemCode()).isEqualTo("A1");
+        assertThat(c.lines().get(0).amount()).isEqualByComparingTo("70.00");
+    }
+
+    @Test
+    @DisplayName("退药全额退回：净额为 0 的项目不产生明细行（MF-04）")
+    void fullyRefundedItemSkipped() {
+        InsuranceService.Computation c = InsuranceService.calculate(
+                List.of(line("A1", "50.00"), line("A1", "-50.00", "PAID"),
+                        line("B1", "20.00")),
+                catalog(Map.of("A1", item("I-A1", "A", "0"),
+                        "B1", item("I-B1", "A", "0"))),
+                member("0", "1.0000", "300000.00"));
+
+        assertThat(c.total()).isEqualByComparingTo("20.00");
+        assertThat(c.lines()).hasSize(1);
+        assertThat(c.lines().get(0).itemCode()).isEqualTo("B1");
     }
 
     @Test

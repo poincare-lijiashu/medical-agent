@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 
 /**
@@ -76,7 +77,8 @@ public class HomepageService {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID,
                     "住院起止时间不完整，无法计算住院天数");
         }
-        PatientClient.PatientRef patient = patientClient.requireActive(src.patientId());
+        // 死亡病例也必须能生成首页（DECEASED 不是 MERGED，只排除已合并档案）
+        PatientClient.PatientRef patient = patientClient.requireExists(src.patientId());
         if (repo.findHomepageByVisit(req.visitId()).isPresent()) {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "该就诊已存在病案首页，请直接查询或重新生成前先核对");
@@ -97,11 +99,13 @@ public class HomepageService {
 
         Homepage homepage = new Homepage(UUID.randomUUID(), repo.nextHomepageNo(),
                 src.visitId(), src.admissionId(), src.patientId(), src.patientNo(), patient.name(),
+                normalizeSex(patient.patientSex()), patient.birthDate(),
+                ageAt(patient.birthDate(), src.admittedAt()),
                 blankToNull(src.visitNo()), src.deptId(), blankToNull(src.deptName()),
                 src.wardId(), blankToNull(src.wardName()), blankToNull(src.bedNo()),
                 src.admittedAt(), src.dischargedAt(), stayDays(src.admittedAt(), src.dischargedAt()),
-                blankToNull(src.attendingDoctor()), null, null, "NONE", null, null, null,
-                null, null, 0, 0, false, false, null, null, null,
+                blankToNull(src.attendingDoctor()), null, null, null, null, "NONE",
+                null, null, null, null, null, 0, 0, false, false, null, null, null,
                 toJson(diagnoses), "[]", toJson(feeSummary), total, Homepage.DRAFT,
                 null, null, null, null, 0L, null);
         repo.insertHomepage(homepage);
@@ -114,6 +118,50 @@ public class HomepageService {
         detail.put("stayDays", homepage.stayDays());
         audit(actor, "HOMEPAGE_CREATE", "HOMEPAGE", homepage.id().toString(), detail);
         return detail(homepage.id());
+    }
+
+    // ---------------------------------------------------------------- 重新生成快照
+
+    /**
+     * 重新生成首页快照（仅草稿）。
+     *
+     * <p>为什么需要：诊断与费用是"生成时快照"，但出院后仍可能发生退费/补录诊断。
+     * 没有这个出口，归档件的金额会与临床账实永久不符且只能改库（第六轮 MF-05）。
+     * 重算只在草稿态允许，差异写入审计；提交/归档后由数据库触发器兜底拒绝。
+     */
+    @Transactional
+    public HomepageView recalculate(UUID id, String actor) {
+        Homepage current = repo.lockHomepage(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+        if (!Homepage.DRAFT.equals(current.status())) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "只有草稿状态可以重新生成快照，当前：" + current.status());
+        }
+        ClinicalClient.HomepageSource src = clinicalClient.homepageSource(current.visitId());
+        if (!"DISCHARGED".equalsIgnoreCase(src.admissionStatus())) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID,
+                    "住院状态为 " + src.admissionStatus() + "，不能重新生成病案首页");
+        }
+        if (src.admittedAt() == null || src.dischargedAt() == null) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID,
+                    "住院起止时间不完整，无法重新生成病案首页");
+        }
+        Snapshot snapshot = snapshot(src);
+        int stayDays = stayDays(src.admittedAt(), src.dischargedAt());
+        if (!repo.recalculateHomepage(id, current.version(), snapshot.diagnosesJson(),
+                snapshot.feeSummaryJson(), snapshot.total(), src.admittedAt(), src.dischargedAt(),
+                stayDays)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "病案首页已被他人修改，请刷新后重试");
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("homepageNo", current.homepageNo());
+        detail.put("totalBefore", current.totalAmount() == null
+                ? "0.00" : current.totalAmount().toPlainString());
+        detail.put("totalAfter", snapshot.total().toPlainString());
+        detail.put("diagnosisCount", snapshot.diagnosisCount());
+        detail.put("stayDays", stayDays);
+        audit(actor, "HOMEPAGE_RECALCULATE", "HOMEPAGE", id.toString(), detail);
+        return detail(id);
     }
 
     // ---------------------------------------------------------------- 补录（草稿）
@@ -143,10 +191,12 @@ public class HomepageService {
                 ? current.attendingDoctor() : req.attendingDoctor().trim();
         Homepage updated = new Homepage(current.id(), current.homepageNo(), current.visitId(),
                 current.admissionId(), current.patientId(), current.patientNo(), current.patientName(),
+                current.patientSex(), current.birthDate(), current.admitAge(),
                 current.visitNo(), current.deptId(), deptName, current.wardId(), wardName,
                 blankToNull(req.bedNo()), current.admittedAt(), current.dischargedAt(),
                 current.stayDays(), attending,
                 upper(req.admissionWay()), upper(req.dischargeMode()),
+                req.deathTime(), blankToNull(req.deathCause()),
                 upper(req.readmitPlan()) == null ? "NONE" : upper(req.readmitPlan()),
                 upper(req.maritalStatus()), blankToNull(req.occupation()), blankToNull(req.nation()),
                 upper(req.bloodType()), upper(req.rhFactor()), rescueCount, rescueSuccess,
@@ -182,6 +232,17 @@ public class HomepageService {
         if (!missing.isEmpty()) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_INCOMPLETE,
                     "病案首页必填项未完成：" + String.join("、", missing));
+        }
+        // 提交前费用/诊断指纹校验：出院后退费或补录诊断会让快照与临床账实不符，
+        // 一旦提交/归档就再也改不了（第六轮 MF-05）。不一致时要求先重新生成。
+        ClinicalClient.HomepageSource src = clinicalClient.homepageSource(h.visitId());
+        Snapshot fresh = snapshot(src);
+        if (!snapshotMatches(h, fresh)) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "临床诊断或费用已变化（首页合计 "
+                            + (h.totalAmount() == null ? "0.00" : h.totalAmount().toPlainString())
+                            + " / 当前 " + fresh.total().toPlainString()
+                            + "），请先重新生成病案首页再提交");
         }
         if (!repo.submitHomepage(id, actor, h.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "病案首页已被他人修改，请刷新后重试");
@@ -242,6 +303,59 @@ public class HomepageService {
 
     // ---------------------------------------------------------------- 内部工具
 
+    /** 由临床域数据构建的首页快照（生成与重新生成共用同一套口径）。 */
+    private record Snapshot(String diagnosesJson, String feeSummaryJson, BigDecimal total,
+                            int diagnosisCount) {
+    }
+
+    private Snapshot snapshot(ClinicalClient.HomepageSource src) {
+        Map<String, BigDecimal> feeSummary = normalizeFees(src.feeSummary());
+        BigDecimal total = feeSummary.values().stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+        List<Map<String, Object>> diagnoses = new ArrayList<>();
+        for (ClinicalClient.Diagnosis d : src.diagnoses()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("code", d.code());
+            row.put("name", d.name());
+            row.put("primary", d.primary());
+            diagnoses.add(row);
+        }
+        return new Snapshot(toJson(diagnoses), toJson(feeSummary), total, diagnoses.size());
+    }
+
+    /**
+     * 首页已有快照是否仍与临床一致（提交前的指纹校验）。
+     *
+     * <p>比较口径不看 JSON 文本，而是规范化后的"费用类别金额 + 诊断编码/主诊断标记"，
+     * 避免键序与金额格式造成的误判。
+     */
+    private boolean snapshotMatches(Homepage h, Snapshot fresh) {
+        if (h.totalAmount() == null
+                || h.totalAmount().setScale(2, RoundingMode.HALF_UP).compareTo(fresh.total()) != 0) {
+            return false;
+        }
+        if (!canonicalFees(h.feeSummary()).equals(canonicalFees(fresh.feeSummaryJson()))) {
+            return false;
+        }
+        return canonicalDiagnoses(h.diagnoses()).equals(canonicalDiagnoses(fresh.diagnosesJson()));
+    }
+
+    private Map<String, BigDecimal> canonicalFees(String json) {
+        return new TreeMap<>(normalizeFees(readJsonMap(json)));
+    }
+
+    private List<String> canonicalDiagnoses(String json) {
+        return readJsonList(json).stream()
+                .map(d -> str(d.get("code")) + "|" + (Boolean.TRUE.equals(d.get("primary")) ? "1" : "0"))
+                .sorted()
+                .toList();
+    }
+
+    private static String str(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
     /** 提交前的完整性校验项；返回空表示可提交。 */
     private List<String> completenessIssues(Homepage h) {
         List<String> missing = new ArrayList<>();
@@ -250,6 +364,10 @@ public class HomepageService {
         }
         if (h.dischargeMode() == null) {
             missing.add("离院方式");
+        }
+        // 死亡病例必须写死亡时间（数据库在提交态也有 CHECK 兜底）
+        if ("DEATH".equals(h.dischargeMode()) && h.deathTime() == null) {
+            missing.add("死亡时间");
         }
         if (blankToNull(h.chiefPhysician()) == null) {
             missing.add("主任医师签名");
@@ -292,6 +410,29 @@ public class HomepageService {
         LocalDate out = LocalDate.ofInstant(dischargedAt, BusinessTime.zone());
         long days = ChronoUnit.DAYS.between(in, out);
         return (int) Math.max(1, days);
+    }
+
+    /** 性别口径归一：只接受 MALE/FEMALE/UNKNOWN，其他历史值按 UNKNOWN 处理（HQMS 必填项）。 */
+    static String normalizeSex(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "UNKNOWN";
+        }
+        return switch (raw.trim().toUpperCase()) {
+            case "MALE", "FEMALE" -> raw.trim().toUpperCase();
+            case "M", "1" -> "MALE";
+            case "F", "2" -> "FEMALE";
+            default -> "UNKNOWN";
+        };
+    }
+
+    /** 入院年龄（岁）：出生日期为空时返回 null（历史数据），负数按 0 处理。 */
+    static Integer ageAt(LocalDate birthDate, Instant admittedAt) {
+        if (birthDate == null || admittedAt == null) {
+            return null;
+        }
+        LocalDate in = LocalDate.ofInstant(admittedAt, BusinessTime.zone());
+        long years = ChronoUnit.YEARS.between(birthDate, in);
+        return (int) Math.max(0, Math.min(years, 150));
     }
 
     private String proceduresJson(List<HomepageProcedureReq> procedures) {

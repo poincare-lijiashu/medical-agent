@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -94,12 +95,16 @@ public class EmrRepository {
             rs.getObject("id", UUID.class), rs.getString("homepage_no"),
             rs.getObject("visit_id", UUID.class), rs.getObject("admission_id", UUID.class),
             rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
-            rs.getString("patient_name"), rs.getString("visit_no"),
+            rs.getString("patient_name"), rs.getString("patient_sex"),
+            rs.getDate("birth_date") == null ? null : rs.getDate("birth_date").toLocalDate(),
+            rs.getObject("admit_age") == null ? null : rs.getInt("admit_age"),
+            rs.getString("visit_no"),
             rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
             rs.getObject("ward_id", UUID.class), rs.getString("ward_name"), rs.getString("bed_no"),
             instant(rs, "admitted_at"), instant(rs, "discharged_at"), rs.getInt("stay_days"),
             rs.getString("attending_doctor"), rs.getString("admission_way"),
-            rs.getString("discharge_mode"), rs.getString("readmit_plan"),
+            rs.getString("discharge_mode"), instant(rs, "death_time"), rs.getString("death_cause"),
+            rs.getString("readmit_plan"),
             rs.getString("marital_status"), rs.getString("occupation"), rs.getString("nation"),
             rs.getString("blood_type"), rs.getString("rh_factor"),
             rs.getInt("rescue_count"), rs.getInt("rescue_success_count"),
@@ -677,8 +682,10 @@ public class EmrRepository {
 
     private static final String HOMEPAGE_COLUMNS = """
             id, homepage_no, visit_id, admission_id, patient_id, patient_no, patient_name,
+            patient_sex, birth_date, admit_age,
             visit_no, dept_id, dept_name, ward_id, ward_name, bed_no, admitted_at, discharged_at,
-            stay_days, attending_doctor, admission_way, discharge_mode, readmit_plan,
+            stay_days, attending_doctor, admission_way, discharge_mode, death_time, death_cause,
+            readmit_plan,
             marital_status, occupation, nation, blood_type, rh_factor, rescue_count,
             rescue_success_count, critical_case, hospital_infection, chief_physician,
             resident_physician, coder, diagnoses::text AS diagnoses,
@@ -690,18 +697,22 @@ public class EmrRepository {
         jdbc.sql("""
                         INSERT INTO emr_svc.record_homepage
                             (id, homepage_no, visit_id, admission_id, patient_id, patient_no,
-                             patient_name, visit_no, dept_id, dept_name, ward_id, ward_name,
+                             patient_name, patient_sex, birth_date, admit_age, visit_no,
+                             dept_id, dept_name, ward_id, ward_name,
                              bed_no, admitted_at, discharged_at, stay_days, attending_doctor,
-                             admission_way, discharge_mode, readmit_plan, marital_status,
+                             admission_way, discharge_mode, death_time, death_cause,
+                             readmit_plan, marital_status,
                              occupation, nation, blood_type, rh_factor, rescue_count,
                              rescue_success_count, critical_case, hospital_infection,
                              chief_physician, resident_physician, coder, diagnoses, procedures,
                              fee_summary, total_amount, status, version)
                         VALUES (:id, :homepageNo, :visitId, CAST(:admissionId AS uuid), :patientId,
-                                :patientNo, :patientName, :visitNo, CAST(:deptId AS uuid), :deptName,
+                                :patientNo, :patientName, :patientSex, CAST(:birthDate AS date),
+                                :admitAge, :visitNo, CAST(:deptId AS uuid), :deptName,
                                 CAST(:wardId AS uuid), :wardName, :bedNo,
                                 CAST(:admittedAt AS timestamptz), CAST(:dischargedAt AS timestamptz),
                                 :stayDays, :attendingDoctor, :admissionWay, :dischargeMode,
+                                CAST(:deathTime AS timestamptz), :deathCause,
                                 :readmitPlan, :maritalStatus, :occupation, :nation, :bloodType,
                                 :rhFactor, :rescueCount, :rescueSuccessCount, :criticalCase,
                                 :hospitalInfection, :chiefPhysician, :residentPhysician, :coder,
@@ -711,13 +722,17 @@ public class EmrRepository {
                 .param("id", h.id()).param("homepageNo", h.homepageNo())
                 .param("visitId", h.visitId()).param("admissionId", h.admissionId())
                 .param("patientId", h.patientId()).param("patientNo", h.patientNo())
-                .param("patientName", h.patientName()).param("visitNo", h.visitNo())
+                .param("patientName", h.patientName()).param("patientSex", h.patientSex())
+                .param("birthDate", h.birthDate() == null ? null : h.birthDate().toString())
+                .param("admitAge", h.admitAge())
+                .param("visitNo", h.visitNo())
                 .param("deptId", h.deptId()).param("deptName", h.deptName())
                 .param("wardId", h.wardId()).param("wardName", h.wardName())
                 .param("bedNo", h.bedNo())
                 .param("admittedAt", ts(h.admittedAt())).param("dischargedAt", ts(h.dischargedAt()))
                 .param("stayDays", h.stayDays()).param("attendingDoctor", h.attendingDoctor())
                 .param("admissionWay", h.admissionWay()).param("dischargeMode", h.dischargeMode())
+                .param("deathTime", ts(h.deathTime())).param("deathCause", h.deathCause())
                 .param("readmitPlan", h.readmitPlan()).param("maritalStatus", h.maritalStatus())
                 .param("occupation", h.occupation()).param("nation", h.nation())
                 .param("bloodType", h.bloodType()).param("rhFactor", h.rhFactor())
@@ -768,7 +783,10 @@ public class EmrRepository {
                         UPDATE emr_svc.record_homepage
                            SET dept_name = :deptName, ward_name = :wardName, bed_no = :bedNo,
                                attending_doctor = :attendingDoctor, admission_way = :admissionWay,
-                               discharge_mode = :dischargeMode, readmit_plan = :readmitPlan,
+                               discharge_mode = :dischargeMode,
+                               death_time = CAST(:deathTime AS timestamptz),
+                               death_cause = :deathCause,
+                               readmit_plan = :readmitPlan,
                                marital_status = :maritalStatus, occupation = :occupation,
                                nation = :nation, blood_type = :bloodType, rh_factor = :rhFactor,
                                rescue_count = :rescueCount,
@@ -784,6 +802,7 @@ public class EmrRepository {
                 .param("deptName", h.deptName()).param("wardName", h.wardName())
                 .param("bedNo", h.bedNo()).param("attendingDoctor", h.attendingDoctor())
                 .param("admissionWay", h.admissionWay()).param("dischargeMode", h.dischargeMode())
+                .param("deathTime", ts(h.deathTime())).param("deathCause", h.deathCause())
                 .param("readmitPlan", h.readmitPlan()).param("maritalStatus", h.maritalStatus())
                 .param("occupation", h.occupation()).param("nation", h.nation())
                 .param("bloodType", h.bloodType()).param("rhFactor", h.rhFactor())
@@ -795,6 +814,35 @@ public class EmrRepository {
                 .param("residentPhysician", h.residentPhysician())
                 .param("coder", h.coder())
                 .param("procedures", h.procedures())
+                .param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /**
+     * 重新生成首页快照（CAS：仅 DRAFT）。
+     *
+     * <p>病案首页诊断/费用是"生成时快照"，出院后退费或补录诊断会让快照与临床账实不符；
+     * 这里按当前临床数据重算，仅允许在草稿态（提交后由触发器拒绝修改）。
+     */
+    public boolean recalculateHomepage(UUID id, long expectedVersion, String diagnoses,
+                                       String feeSummary, BigDecimal totalAmount,
+                                       java.time.Instant admittedAt, java.time.Instant dischargedAt,
+                                       int stayDays) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_homepage
+                           SET diagnoses = CAST(:diagnoses AS jsonb),
+                               fee_summary = CAST(:feeSummary AS jsonb),
+                               total_amount = :totalAmount,
+                               admitted_at = CAST(:admittedAt AS timestamptz),
+                               discharged_at = CAST(:dischargedAt AS timestamptz),
+                               stay_days = :stayDays,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("diagnoses", diagnoses).param("feeSummary", feeSummary)
+                .param("totalAmount", totalAmount)
+                .param("admittedAt", ts(admittedAt)).param("dischargedAt", ts(dischargedAt))
+                .param("stayDays", stayDays)
                 .param("id", id).param("version", expectedVersion)
                 .update() > 0;
     }

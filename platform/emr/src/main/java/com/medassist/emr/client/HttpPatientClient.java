@@ -23,7 +23,8 @@ public class HttpPatientClient implements PatientClient {
 
     private static final Logger log = LoggerFactory.getLogger(HttpPatientClient.class);
 
-    public record InternalPatient(UUID id, String patientNo, String name, String status) {
+    public record InternalPatient(UUID id, String patientNo, String name, String status,
+                                  String gender, java.time.LocalDate birthDate) {
     }
 
     private final RestClient client;
@@ -48,7 +49,26 @@ public class HttpPatientClient implements PatientClient {
     }
 
     @Override
+    public PatientRef requireExists(UUID patientId) {
+        InternalPatient p = fetch(patientId);
+        if ("MERGED".equals(p.status())) {
+            throw new BusinessException(ErrorCode.PATIENT_MERGE_CONFLICT,
+                    "该患者档案已合并到主档案，请使用主档案");
+        }
+        return new PatientRef(p.id(), p.patientNo(), p.name(), p.gender(), p.birthDate());
+    }
+
+    @Override
     public PatientRef requireActive(UUID patientId) {
+        InternalPatient p = fetch(patientId);
+        if (!"ACTIVE".equals(p.status())) {
+            throw new BusinessException(ErrorCode.PATIENT_MERGE_CONFLICT,
+                    "该患者档案状态为 " + p.status() + "，不能书写病历（请使用主档案）");
+        }
+        return new PatientRef(p.id(), p.patientNo(), p.name(), p.gender(), p.birthDate());
+    }
+
+    private InternalPatient fetch(UUID patientId) {
         InternalPatient p;
         try {
             p = client.get()
@@ -65,10 +85,6 @@ public class HttpPatientClient implements PatientClient {
         if (p == null || p.id() == null) {
             throw new BusinessException(ErrorCode.PATIENT_NOT_FOUND);
         }
-        if (!"ACTIVE".equals(p.status())) {
-            throw new BusinessException(ErrorCode.PATIENT_MERGE_CONFLICT,
-                    "该患者档案状态为 " + p.status() + "，不能书写病历（请使用主档案）");
-        }
-        return new PatientRef(p.id(), p.patientNo(), p.name());
+        return p;
     }
 }

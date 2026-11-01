@@ -226,10 +226,11 @@ class HqmsExportServiceTest {
 
     private Homepage homepage() {
         return new Homepage(homepageId, "HP20261101000001", UUID.randomUUID(), UUID.randomUUID(),
-                UUID.randomUUID(), "P20261101000001", "张三", "V001", UUID.randomUUID(), "内科",
+                UUID.randomUUID(), "P20261101000001", "张三", "MALE", LocalDate.of(1980, 5, 20), 45,
+                "V001", UUID.randomUUID(), "内科",
                 UUID.randomUUID(), "一病区", "A1", Instant.parse("2026-11-01T02:00:00Z"),
                 Instant.parse("2026-11-01T08:00:00Z"), 1, "doctor01", "OUTPATIENT", "BY_DOCTOR",
-                "NONE", "MARRIED", "Engineer", "Han", "A", "POSITIVE", 0, 0, false, false,
+                null, null, "NONE", "MARRIED", "Engineer", "Han", "A", "POSITIVE", 0, 0, false, false,
                 "chief01", "resident01", "coder01",
                 "[{\"code\":\"J18.900\",\"name\":\"肺炎\",\"primary\":true}]", "[]",
                 "{\"REGISTRATION\":0.00,\"EXAM\":25.00}", new BigDecimal("25.00"),

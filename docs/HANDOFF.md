@@ -10,17 +10,16 @@
   `55fe6f2`（**医保清单引用诊断**）、`f2c208f`（**病案首页 HQMS**）、`a036535`（**DRG 分组自动取数**）、
   `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）、`0995eea`（**第六轮 P1 跨域一致性**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **560 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **568 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V28**、`clinical_svc` → **V14**、`emr_svc` → **V12**、`insurance_svc` → **V12**
+  本日迁移已在真实库执行：`auth_svc` → **V28**、`clinical_svc` → **V14**、`emr_svc` → **V13**、`insurance_svc` → **V12**
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **ROUND6 剩余 MUST-FIX**（顺序建议）：MF-04 退费口径（负向明细让医保清单永久 422）、
-     MF-05 首页可重算（`POST /homepages/{id}/recalculate` + 费用指纹）、MF-06 首页性别/出生日期/年龄
-     与死亡病例、MF-12~15（读留痕、四眼单人可满足等）
+  1. **ROUND6 最后一组 MUST-FIX**：MF-12~15（首页 list/detail 读留痕与 PHI 收敛、
+     四眼归档可被单人满足、打印下载留痕补全）
   2. **手术麻醉域 + ICD-9-CM-3 手术编码字典**：首页手术操作目前手工录入，接手术域后可自动生成、
      联动收费，并让 DRG 分组拿到真实手术编码
   3. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
@@ -891,6 +890,24 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - **实测**：全量单测 **560 项**全绿；`clinical_pharmacy_order_smoke`、`clinical_tech_order_smoke`、
      `pharmacy_billing_smoke`、`platform_smoke` 全 PASS；闭环实测"撤销→任务 PENDING→整单退药→处方 CANCELLED→任务 DONE"
    - 遗留：R6-MF-04~06、MF-12~15
+
+61. **第六轮 P2：退费净额口径 / 首页可重算 / 人群信息（2026-11-01，R6-MF-04/05/06）**
+   - **MF-04 净额口径**：
+     - `ClinicalRepository.listChargeLines`：已结算退药的 `refund_pending_amount` 作为**负向虚拟行**输出
+       （UNION ALL，按药品原始项目 code）；`sumChargeByCategory`（首页费用）同样加该减项
+     - `InsuranceService.calculate`：先按收费项目**合并净额**再测算——红冲与原行相抵；
+       净额 < 0（孤立红冲）才 422，净额 = 0（全额退回）不产生明细行
+   - **MF-05 首页可重算**：`POST /emr/homepages/{id}/recalculate`（仅 DRAFT，重取临床快照，
+     差异写审计）；`submit` 前做费用/诊断**指纹校验**（不一致 409 要求先重算）；
+     `EmrRepository.recalculateHomepage` 为 CAS（`status='DRAFT' AND version=?`）
+   - **MF-06 人群信息**：`emr V13` 增 `patient_sex/birth_date/admit_age/death_time/death_cause`
+     - 触发器：人口学快照**任何状态都不可改**；死亡信息提交/归档后只读；提交态 DB CHECK 强制 DEATH→death_time
+     - `PatientClient` 拆 `requireExists`（DECEASED 可建首页，仅排除 MERGED）；EMPI `/internal/patients/{id}` 补 `gender`
+     - HQMS 报文与打印视图带 `patientSex/age/birthDate/deathTime/deathCause`；提交完整性校验加"死亡时间"
+   - **实测**：全量单测 **568 项**全绿；内部费用接口返回 `+25.00` 与 `-25.00`（净额 0）；
+     `emr_homepage_smoke`、`emr_hqms_export_smoke`、`insurance_smoke`、`platform_smoke` 全 PASS
+   - 迁移：`emr_svc` → **V13**、`clinical_svc` → **V14**
+   - 遗留：R6-MF-12~15（首页读留痕、四眼归档单人可满足、批量 PHI 收敛）
 
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的

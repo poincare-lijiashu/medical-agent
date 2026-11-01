@@ -70,8 +70,8 @@ class RecordServiceTest {
         patientClient = mock(PatientClient.class);
         clinicalClient = mock(ClinicalClient.class);
         service = new RecordService(repo, patientClient, clinicalClient, JsonMapper.builder().build());
-        when(patientClient.requireActive(patientId))
-                .thenReturn(new PatientClient.PatientRef(patientId, "P20261031000001", "张三"));
+        when(patientClient.requireActive(patientId)).thenReturn(new PatientClient.PatientRef(
+                patientId, "P20261031000001", "张三", "MALE", java.time.LocalDate.of(1980, 5, 20)));
         when(repo.nextRecordNo()).thenReturn("MR20261031000001");
         when(repo.findTemplateByCode("TPL-ADMISSION")).thenReturn(Optional.of(template()));
         when(repo.listSignatures(any())).thenReturn(List.of());
