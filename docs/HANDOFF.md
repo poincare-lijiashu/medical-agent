@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一批** / **知识库域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
@@ -12,18 +12,23 @@
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）、`cb68a1e`（**第六轮 P3 读留痕/四眼/报盘诊断**）、
   `cd93cb8`（**手术麻醉域第一批**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **587 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **617 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V29**、`clinical_svc` → **V15**、`emr_svc` → **V14**、`insurance_svc` → **V12**
+  本日迁移已在真实库执行：`auth_svc` → **V30**、`clinical_svc` → **V15**、`emr_svc` → **V14**、
+  `insurance_svc` → **V12**、`kb_svc` → **V1**
+- **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
+  tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **手术麻醉域第二批**：排台（手术间/台次/接台）、麻醉记录单、术中护理记录、术前讨论与知情同意、
-     术中收费打包（第一批已交付"字典 + 记录 + 首页/DRG 取数"，见第 63 条）
-  2. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
-  3. **ROUND6 的 SHOULD-FIX / 建议项**（错误码可读性、索引与时区口径、对账与可观测）
+  1. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
+     URL 抓取、带引用的生成式问答（LLM 未配置时继续显式拒绝，不伪造回答）、检索评测集（召回率/忠实度/时延）
+  2. **手术麻醉域第二批**：排台（手术间/台次/接台）、麻醉记录单、术中护理、术前讨论与知情同意
+  3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
+     web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / DRG / 知识库检索"四页
+  4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -949,6 +954,30 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`clinical_svc` → **V15**、`auth_svc` → **V29**
    - 遗留：排台（手术间/台次/接台）、麻醉记录单、术中护理、术前讨论与知情同意
 
+64. **知识库域第一批：知识空间隔离 + 中文切片 + 混合检索 + 引用溯源（2026-11-01）**
+   - **新服务 `platform/kb`**：端口 8088、schema `kb_svc`；网关 `/api/v2/kb/**`（StripPrefix=2）+ 限流 60 qps；
+     启动顺序在 auth 之后、gateway 之前（gateway 的撤销同步 fail-fast 依赖 auth）
+   - **`kb V1`**：`kb_space` / `kb_space_member`(OWNER/EDITOR/VIEWER) / `kb_document` / `kb_chunk` /
+     `kb_ingest_task` / `kb_query_log` / `kb_change_log`
+   - **中文检索（关键）**：PostgreSQL 默认分词器不切中文，`to_tsvector('simple','急性阑尾炎')` 是**一个词元**，
+     查"阑尾炎"永远不命中。入库把正文转成**二元组 + 英数小写词**写 `terms`，配
+     `gin(to_tsvector('simple', terms))`；查询走同一转换后 OR 连接
+   - **混合检索**：关键词 `ts_rank` + 向量点积（embedding 入库前 L2 归一化），**RRF(k=60) 只按名次融合**；
+     响应带 `matchedBy = KEYWORD/VECTOR/KEYWORD+VECTOR`
+   - **引用溯源**：切片保存 `char_start/char_end`（相对原文，Java code unit 口径）与章节提示；
+     检索返回 `snippet + citation(文档名 第 N 段)`，前端可直接高亮原文
+   - **隔离与权限**：两级授权（权限点 `auth V30` + 空间成员角色）；PUBLIC 空间对登录用户只读；
+     无 `X-User-Id` 一律 403；跨空间读 → 403（不是 404）
+   - **异步索引**：`PENDING` → worker `FOR UPDATE SKIP LOCKED` 抢占 → `READY`；失败按 30s×attempts 退避；
+     同一文档同时只允许一个活跃任务（部分唯一索引）
+   - **去 demo 化**：向量模型默认关闭；未配置 → 文档 `error_message` 写"仅关键词索引"、
+     检索响应 `degraded=true / degradedReason=EMBEDDING_UNAVAILABLE`；调用失败降级为
+     `EMBEDDING_FAILED` 而不是整体 500；**从不写占位向量**
+   - **实测**：全量单测 **617 项**全绿（+30）；新增 `scripts/e2e/kb_search_smoke.ps1` 46 项断言 PASS；
+     `platform_smoke` 经网关回归 PASS；`kb_query_log`/`kb_change_log` 已落库
+   - 迁移：`kb_svc` → **V1**、`auth_svc` → **V30**
+   - 遗留：pgvector+HNSW、PDF/Word/HTML 解析、带引用的生成式问答、检索评测集
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1028,6 +1057,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   否则报 `Unknown lifecycle phase ".failIfNoSpecifiedTests=false"`；同理 `"-Dtest=Xxx"`
 - 手术编码这类**字典驱动的业务表**不要给业务列加外键：字典项停用/被替换后，历史记录仍要保留名称快照，
   FK 会挡住字典维护。用"应用层校验 + 名称快照"而不是 FK
+- **归档接口不要在归档之后再调用"要求 ACTIVE"的守卫来取返回值**：`archive(...)` 成功后再
+  `requireActive(id)` 会把自己刚归档的实体判为"不可访问"，于是**写成功了却返回 409**。
+  正确做法是归档后直接 `findById` 返回（本次 E2E 抓到，单测补了回归用例）
+- **PostgreSQL 默认分词不切中文**：`to_tsvector('simple','急性阑尾炎')` 只有一个词元，
+  查询"阑尾炎"永远不命中。要么装 zhparser，要么入库时自己转**中文二元组**（本项目选后者，零依赖）
+- PowerShell 里 `Check x (@(...)).Count -gt 0` 这种写法会把 `-gt` `0` 当成额外实参，
+  断言恒假；必须整体加括号：`Check x ((@(...) | ...).Count -gt 0)`，或先算到变量再比较
+- **E2E 需要中文数据时不要往 .ps1 里写中文**（脚本必须 ASCII）：把正文与查询词放
+  `scripts/e2e/fixtures/*.txt`，脚本用 `[IO.File]::ReadAllText(path, UTF8)` 读取，两边都干净
+- `JdbcClient` 绑定可空数值列（如 `topScore`）必须 `CAST(:p AS numeric)`：直接传 null 时
+  PG 推断不出类型会报 "could not determine data type"
 - `mvn -Pprod-package` 排除 dev 配置后，本地 `java -jar` 仍用普通构建（不带 profile），
   两条链路互不影响；Dockerfile 必须固定带 `-Pprod-package`
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，

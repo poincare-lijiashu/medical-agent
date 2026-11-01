@@ -414,6 +414,48 @@ tech:
   tolerations: []
   affinity: {}
 
+# ---- 知识库域（知识空间/文档切片/混合检索）----
+kb:
+  enabled: true
+  image:
+    repository: platform-kb
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8088
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 向量模型：默认关闭。未配置时检索退化为关键词模式，接口显式返回 degraded=true
+  embedding:
+    enabled: false
+    baseUrl: ""
+    model: "text-embedding-3-small"
+    dimension: 1536
+    # 复用已有 Secret 时填名字与 key（不要在此处写明文 Key）
+    existingSecret: ""
+    secretKey: api-key
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- 病历域（模板/书写/签名/归档/质控）----
 emr:
   enabled: true

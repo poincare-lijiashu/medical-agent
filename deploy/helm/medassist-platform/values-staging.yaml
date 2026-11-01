@@ -121,6 +121,12 @@ insurance:
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
+kb:
+  replicaCount: 2
+  image: {repository: platform-kb, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
 aiCore:
   enabled: true
   replicaCount: 1

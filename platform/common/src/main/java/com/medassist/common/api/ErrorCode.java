@@ -94,7 +94,18 @@ public enum ErrorCode {
     INSURANCE_NO_CHARGE(48412, "该就诊单暂无收费明细，无法生成结算清单"),
     INSURANCE_EXPORT_EMPTY(48413, "该期间没有已确认的医保结算清单，无法导出"),
     INSURANCE_EXPORT_INVALID(48414, "当前导出批次状态不允许该操作"),
-    INSURANCE_SCHEME_INVALID(48415, "支付方案配置不合法或已被他人修改");
+    INSURANCE_SCHEME_INVALID(48415, "支付方案配置不合法或已被他人修改"),
+
+    // ---- 知识库（49xxx）----
+    KB_SPACE_NOT_FOUND(49401, "未找到该知识空间"),
+    KB_DOCUMENT_NOT_FOUND(49402, "未找到该知识文档"),
+    KB_SPACE_DUPLICATE(49409, "知识空间编码已存在"),
+    KB_DOCUMENT_DUPLICATE(49408, "该知识空间已存在内容完全相同的文档"),
+    KB_SPACE_ACCESS_DENIED(49410, "你不是该知识空间的成员，无权访问"),
+    KB_SPACE_STATUS_INVALID(49411, "当前知识空间状态不允许该操作"),
+    KB_DOCUMENT_STATUS_INVALID(49412, "当前文档状态不允许该操作"),
+    KB_QUERY_INVALID(49413, "检索词为空或不合法，请调整后重试"),
+    KB_EMBEDDING_UNAVAILABLE(49420, "向量模型未配置，当前仅支持关键词检索");
 
     private final int code;
     private final String defaultMessage;

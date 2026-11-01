@@ -81,6 +81,13 @@ spring:
                 - Path=/api/v2/insurance/**
               filters:
                 - StripPrefix=2
+            # 知识库（知识空间/文档/切片/企业检索）
+            - id: platform-kb-v2
+              uri: ${PLATFORM_KB_URI:http://127.0.0.1:8088}
+              predicates:
+                - Path=/api/v2/kb/**
+              filters:
+                - StripPrefix=2
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -165,6 +172,8 @@ medassist:
           qps: ${SENTINEL_QPS_EMR:150}
         - path: /api/v2/insurance
           qps: ${SENTINEL_QPS_INSURANCE:100}
+        - path: /api/v2/kb
+          qps: ${SENTINEL_QPS_KB:60}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
 

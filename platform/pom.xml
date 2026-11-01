@@ -43,6 +43,7 @@
     <module>tech</module>
     <module>emr</module>
     <module>insurance</module>
+    <module>kb</module>
   </modules>
 
   <dependencyManagement>

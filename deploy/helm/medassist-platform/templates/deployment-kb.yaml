@@ -1,0 +1,128 @@
+{{- if .Values.kb.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "kb") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "kb") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "kb") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "kb") | nindent 4 }}
+spec:
+  {{- if not .Values.kb.autoscaling.enabled }}
+  replicas: {{ .Values.kb.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.kb.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "kb") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "kb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "kb") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.kb.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kb
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.kb.image) }}
+          imagePullPolicy: {{ .Values.kb.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.kb.service.port }}
+              protocol: TCP
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "kb" "jwt" false "empi" false) | nindent 12 }}
+            # 向量模型：未配置时检索自动退化为关键词模式（不会写入占位向量）
+            - name: KB_EMBEDDING_ENABLED
+              value: {{ .Values.kb.embedding.enabled | quote }}
+            - name: KB_EMBEDDING_BASE_URL
+              value: {{ .Values.kb.embedding.baseUrl | quote }}
+            - name: KB_EMBEDDING_MODEL
+              value: {{ .Values.kb.embedding.model | quote }}
+            - name: KB_EMBEDDING_DIMENSION
+              value: {{ .Values.kb.embedding.dimension | quote }}
+            {{- if .Values.kb.embedding.existingSecret }}
+            - name: KB_EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kb.embedding.existingSecret }}
+                  key: {{ .Values.kb.embedding.secretKey }}
+            {{- end }}
+            {{- with .Values.kb.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.kb.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.kb.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.kb.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kb.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.kb.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.kb.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.kb.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.kb.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.kb.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.kb.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.kb.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.kb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.kb.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

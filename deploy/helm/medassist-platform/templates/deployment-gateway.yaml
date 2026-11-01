@@ -93,6 +93,10 @@ spec:
             - name: PLATFORM_INSURANCE_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "insurance")) .Values.insurance.service.port | quote }}
             {{- end }}
+            {{- if .Values.kb.enabled }}
+            - name: PLATFORM_KB_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "kb")) .Values.kb.service.port | quote }}
+            {{- end }}
             {{- with .Values.gateway.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

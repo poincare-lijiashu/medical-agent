@@ -58,8 +58,8 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 ## 3. 前置条件（平台组准备，业务 Chart 不代管）
 
 1. **命名空间**：`medassist-dev` / `medassist-staging` / `medassist-prod`（Argo CD 会自动创建）
-2. **PostgreSQL**：库 `medagent`，账号具备以下 **7 个业务 schema** 的建表权限：
-   `auth_svc` / `empi_svc` / `clinical_svc` / `pharmacy_svc` / `tech_svc` / `emr_svc` / `insurance_svc`
+2. **PostgreSQL**：库 `medagent`，账号具备以下 **8 个业务 schema** 的建表权限：
+   `auth_svc` / `empi_svc` / `clinical_svc` / `pharmacy_svc` / `tech_svc` / `emr_svc` / `insurance_svc` / `kb_svc`
    （另需 `public`）。缺任一 schema 权限会导致对应服务的迁移 Hook Job 失败，
    `helm upgrade` 卡在 `pre-upgrade` 且不继续发布——排障时先看迁移 Job 日志里的
    `permission denied for schema xxx_svc`。
@@ -88,7 +88,7 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 ### 4.1 构建镜像
 
 ```powershell
-# Java 服务（gateway / auth / empi / clinical / pharmacy / tech / emr / insurance 共用一份 Dockerfile）
+# Java 服务（gateway / auth / empi / clinical / pharmacy / tech / emr / insurance / kb 共用一份 Dockerfile）
 docker build --build-arg SERVICE=gateway  -t harbor.hospital.local/medassist/platform-gateway:1.0.0  -f platform/Dockerfile platform
 docker build --build-arg SERVICE=auth     -t harbor.hospital.local/medassist/platform-auth:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=empi     -t harbor.hospital.local/medassist/platform-empi:1.0.0     -f platform/Dockerfile platform
@@ -97,6 +97,7 @@ docker build --build-arg SERVICE=pharmacy -t harbor.hospital.local/medassist/pla
 docker build --build-arg SERVICE=tech     -t harbor.hospital.local/medassist/platform-tech:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=emr      -t harbor.hospital.local/medassist/platform-emr:1.0.0      -f platform/Dockerfile platform
 docker build --build-arg SERVICE=insurance -t harbor.hospital.local/medassist/platform-insurance:1.0.0 -f platform/Dockerfile platform
+docker build --build-arg SERVICE=kb       -t harbor.hospital.local/medassist/platform-kb:1.0.0       -f platform/Dockerfile platform
 
 # AI 中台（根 Dockerfile，含 SkyWalking entrypoint）
 docker build -t harbor.hospital.local/medassist/ai-core:1.0.0 .
@@ -128,6 +129,7 @@ helm upgrade --install medassist deploy/helm/medassist-platform `
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
   --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
   --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
+  --set kb.image.tag=1.0.0 `
   --set aiCore.image.tag=1.0.0
 ```
 
@@ -144,6 +146,7 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
   --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
   --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
+  --set kb.image.tag=1.0.0 `
   --set aiCore.image.tag=1.0.0
 ```
 
@@ -172,6 +175,7 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
 | pharmacy | pharmacy | 自己签发 |
 | tech | tech | 自己签发 |
 | insurance | insurance | 自己签发 |
+| kb | — | 知识库不调用其它域内部接口（检索与索引都是本地数据） |
 | auth | — | 不调用内部接口 |
 
 服务间地址与令牌矩阵（新增调用边必须"地址 + 网络策略 + 调用方密钥"三件套齐全）：

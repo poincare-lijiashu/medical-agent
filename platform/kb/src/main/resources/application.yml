@@ -1,0 +1,82 @@
+server:
+  port: 8088
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-kb
+
+  datasource:
+    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: kb-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: kb_svc
+    default-schema: kb_svc
+    locations: classpath:db/migration/kb
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 知识库域配置 ----
+kb:
+  # 切片：单块最大字符数（中文按字符计）与相邻块重叠字符数
+  chunk:
+    max-chars: ${KB_CHUNK_MAX_CHARS:600}
+    overlap-chars: ${KB_CHUNK_OVERLAP:80}
+  # 混合检索（RRF，Reciprocal Rank Fusion）：k 越大越平滑，一般取 60
+  search:
+    rrf-k: ${KB_RRF_K:60}
+    candidate-multiplier: ${KB_CANDIDATE_MULTIPLIER:4}
+    max-top-k: ${KB_MAX_TOP_K:50}
+  # 异步索引 worker
+  ingest:
+    enabled: ${KB_INGEST_ENABLED:true}
+    interval-ms: ${KB_INGEST_INTERVAL_MS:5000}
+    batch-size: ${KB_INGEST_BATCH_SIZE:5}
+    max-attempts: ${KB_INGEST_MAX_ATTEMPTS:5}
+  # 向量模型（OpenAI 兼容 /embeddings）。默认关闭：未配置时检索自动退化为关键词模式，
+  # 绝不写入"假向量"造成"看起来有语义检索"的演示假象。
+  embedding:
+    enabled: ${KB_EMBEDDING_ENABLED:false}
+    base-url: ${KB_EMBEDDING_BASE_URL:https://api.openai.com/v1}
+    api-key: ${KB_EMBEDDING_API_KEY:}
+    model: ${KB_EMBEDDING_MODEL:text-embedding-3-small}
+    dimension: ${KB_EMBEDDING_DIMENSION:1536}
+    timeout: ${KB_EMBEDDING_TIMEOUT:PT10S}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: DEBUG
