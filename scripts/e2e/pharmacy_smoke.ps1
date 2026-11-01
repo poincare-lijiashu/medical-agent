@@ -184,6 +184,12 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/drugs/$morId/batches" @{
 } $token
 Check 'stock.receive.narcotic' $r.Status 200
 
+# narcotic drugs require a licensed prescriber (pharmacy V6)
+$r = Invoke-Api 'POST' '/api/v2/pharmacy/narcotic/prescribers' @{
+    prescriber = 'admin01'; licenseNo = 'MZ-E2E'
+} $token
+Check 'narcotic.prescriber.grant' $r.Status 200
+
 $r = Invoke-Api 'POST' '/api/v2/pharmacy/prescriptions' @{
     patientId = $patientId
     items = @(@{ drugCode = "DRUG-MOR-$suffix"; quantity = 1 })

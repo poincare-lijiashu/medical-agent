@@ -6,6 +6,8 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseItem;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
+import com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber;
+import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
@@ -608,6 +610,174 @@ public class PharmacyRepository {
                           FROM pharmacy_svc.prescription_audit
                          WHERE prescription_id = ? ORDER BY created_at
                         """).param(prescriptionId).query(AUDIT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 麻醉药品（V6）
+
+    private static final RowMapper<NarcoticPrescriber> NARCOTIC_PRESCRIBER_MAPPER =
+            (rs, i) -> new NarcoticPrescriber(
+                    rs.getObject("id", UUID.class), rs.getString("prescriber"),
+                    rs.getString("license_no"), rs.getString("granted_by"),
+                    instantOf(rs, "granted_at"), rs.getString("revoked_by"),
+                    instantOf(rs, "revoked_at"), rs.getString("revoke_reason"),
+                    rs.getBoolean("enabled"), rs.getLong("version"));
+
+    private static final RowMapper<NarcoticRegister> NARCOTIC_REGISTER_MAPPER =
+            (rs, i) -> new NarcoticRegister(
+                    rs.getObject("id", UUID.class), rs.getObject("dispense_item_id", UUID.class),
+                    rs.getObject("dispense_id", UUID.class),
+                    rs.getObject("prescription_id", UUID.class), rs.getString("prescription_no"),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getObject("drug_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getString("spec"), rs.getInt("quantity"),
+                    rs.getString("unit"), rs.getString("batch_no"), rs.getString("prescriber"),
+                    rs.getString("dispenser"), rs.getString("checker"),
+                    instantOf(rs, "dispensed_at"), rs.getInt("ampoule_returned"),
+                    instantOf(rs, "ampoule_returned_at"), rs.getString("ampoule_receiver"),
+                    rs.getString("status"), rs.getLong("version"), instantOf(rs, "created_at"));
+
+    private static java.time.Instant instantOf(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
+    }
+
+    /** Instant → OffsetDateTime（JdbcClient 绑定 timestamptz 用 UTC 偏移，不做本地时区换算）。 */
+    private static java.time.OffsetDateTime ts(java.time.Instant instant) {
+        return instant == null ? null : java.time.OffsetDateTime.ofInstant(
+                instant, java.time.ZoneOffset.UTC);
+    }
+
+    public Optional<NarcoticPrescriber> findNarcoticPrescriber(String prescriber) {
+        return jdbc.sql("SELECT * FROM pharmacy_svc.narcotic_prescriber WHERE prescriber = ?")
+                .param(prescriber).query(NARCOTIC_PRESCRIBER_MAPPER).optional();
+    }
+
+    public List<NarcoticPrescriber> listNarcoticPrescribers(Boolean enabled, int limit) {
+        return jdbc.sql("""
+                        SELECT * FROM pharmacy_svc.narcotic_prescriber
+                         WHERE (CAST(:enabled AS boolean) IS NULL
+                                OR enabled = CAST(:enabled AS boolean))
+                         ORDER BY enabled DESC, prescriber
+                         LIMIT :limit
+                        """)
+                .param("enabled", enabled).param("limit", limit)
+                .query(NARCOTIC_PRESCRIBER_MAPPER).list();
+    }
+
+    /**
+     * 授予处方权（已存在则重新启用并刷新证书号）。
+     *
+     * <p>用 upsert 而不是"先查再插"：并发授予同一医师会撞唯一键，
+     * upsert 让重复授予变成幂等操作，且不会因为唯一键冲突把事务打成 aborted。
+     */
+    public void upsertNarcoticPrescriber(NarcoticPrescriber p) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.narcotic_prescriber
+                            (id, prescriber, license_no, granted_by, granted_at, enabled, version)
+                        VALUES (:id, :prescriber, CAST(:licenseNo AS text), :grantedBy, now(),
+                                true, 0)
+                        ON CONFLICT (prescriber) DO UPDATE
+                           SET license_no = CAST(:licenseNo AS text),
+                               granted_by = :grantedBy, granted_at = now(),
+                               revoked_by = NULL, revoked_at = NULL, revoke_reason = NULL,
+                               enabled = true, version = pharmacy_svc.narcotic_prescriber.version + 1,
+                               updated_at = now()
+                        """)
+                .param("id", p.id()).param("prescriber", p.prescriber())
+                .param("licenseNo", p.licenseNo()).param("grantedBy", p.grantedBy()).update();
+    }
+
+    /** 撤销处方权（CAS：仅启用中可撤销，版本一致）。 */
+    public boolean revokeNarcoticPrescriber(String prescriber, String reason, String actor,
+                                            long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.narcotic_prescriber
+                           SET enabled = false, revoked_by = :actor, revoked_at = now(),
+                               revoke_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE prescriber = :prescriber AND enabled AND version = :version
+                        """)
+                .param("actor", actor).param("reason", reason)
+                .param("prescriber", prescriber).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public void insertNarcoticRegister(NarcoticRegister r) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.narcotic_register
+                            (id, dispense_item_id, dispense_id, prescription_id, prescription_no,
+                             patient_id, patient_no, drug_id, drug_code, drug_name, spec, quantity,
+                             unit, batch_no, prescriber, dispenser, checker, dispensed_at, status,
+                             version)
+                        VALUES (:id, :dispenseItemId, :dispenseId, :prescriptionId,
+                                :prescriptionNo, :patientId, :patientNo, :drugId, :drugCode,
+                                :drugName, :spec, :quantity, :unit, :batchNo, :prescriber,
+                                :dispenser, :checker, CAST(:dispensedAt AS timestamptz),
+                                'PENDING_RETURN', 0)
+                        """)
+                .param("id", r.id()).param("dispenseItemId", r.dispenseItemId())
+                .param("dispenseId", r.dispenseId()).param("prescriptionId", r.prescriptionId())
+                .param("prescriptionNo", r.prescriptionNo()).param("patientId", r.patientId())
+                .param("patientNo", r.patientNo()).param("drugId", r.drugId())
+                .param("drugCode", r.drugCode()).param("drugName", r.drugName())
+                .param("spec", r.spec()).param("quantity", r.quantity()).param("unit", r.unit())
+                .param("batchNo", r.batchNo()).param("prescriber", r.prescriber())
+                .param("dispenser", r.dispenser()).param("checker", r.checker())
+                .param("dispensedAt", ts(r.dispensedAt())).update();
+    }
+
+    public Optional<NarcoticRegister> findNarcoticRegister(UUID id) {
+        return jdbc.sql("SELECT * FROM pharmacy_svc.narcotic_register WHERE id = ?")
+                .param(id).query(NARCOTIC_REGISTER_MAPPER).optional();
+    }
+
+    public Optional<NarcoticRegister> lockNarcoticRegister(UUID id) {
+        return jdbc.sql("SELECT * FROM pharmacy_svc.narcotic_register WHERE id = ? FOR UPDATE")
+                .param(id).query(NARCOTIC_REGISTER_MAPPER).optional();
+    }
+
+    public List<NarcoticRegister> listNarcoticRegisters(java.time.Instant fromAt,
+                                                        java.time.Instant toAt,
+                                                        UUID patientId, String status, int limit) {
+        return jdbc.sql("""
+                        SELECT * FROM pharmacy_svc.narcotic_register
+                         WHERE dispensed_at >= CAST(:fromAt AS timestamptz)
+                           AND dispensed_at < CAST(:toAt AS timestamptz)
+                           AND (CAST(:patientId AS uuid) IS NULL
+                                OR patient_id = CAST(:patientId AS uuid))
+                           AND (CAST(:status AS text) IS NULL
+                                OR status = CAST(:status AS text))
+                         ORDER BY dispensed_at DESC
+                         LIMIT :limit
+                        """)
+                .param("fromAt", ts(fromAt)).param("toAt", ts(toAt))
+                .param("patientId", patientId).param("status", status).param("limit", limit)
+                .query(NARCOTIC_REGISTER_MAPPER).list();
+    }
+
+    /** 该患者该药品"空安瓿未回收"的登记条数（再次开方的硬门槛）。 */
+    public long countOutstandingNarcotic(UUID patientId, UUID drugId) {
+        Long count = jdbc.sql("""
+                        SELECT count(*) FROM pharmacy_svc.narcotic_register
+                         WHERE patient_id = ? AND drug_id = ? AND status = 'PENDING_RETURN'
+                        """).param(patientId).param(drugId).query(Long.class).single();
+        return count == null ? 0 : count;
+    }
+
+    /** 登记空安瓿回收（CAS：仅待回收 + 版本一致）。 */
+    public boolean returnNarcoticAmpoule(UUID id, int quantity, String receiver,
+                                         long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.narcotic_register
+                           SET ampoule_returned = :qty, ampoule_returned_at = now(),
+                               ampoule_receiver = :receiver,
+                               status = CASE WHEN :qty = quantity THEN 'RETURNED'
+                                             ELSE status END,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'PENDING_RETURN' AND version = :version
+                        """)
+                .param("qty", quantity).param("receiver", receiver)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

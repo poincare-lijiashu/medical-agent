@@ -9,6 +9,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseItem;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
+import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
@@ -60,15 +61,17 @@ public class PrescriptionService {
     private final PatientClient patientClient;
     private final PharmacyBillingService billing;
     private final PrescriptionAuditService auditService;
+    private final NarcoticService narcoticService;
     private final ObjectMapper objectMapper;
 
     public PrescriptionService(PharmacyRepository repo, PatientClient patientClient,
                                PharmacyBillingService billing, PrescriptionAuditService auditService,
-                               ObjectMapper objectMapper) {
+                               NarcoticService narcoticService, ObjectMapper objectMapper) {
         this.repo = repo;
         this.patientClient = patientClient;
         this.billing = billing;
         this.auditService = auditService;
+        this.narcoticService = narcoticService;
         this.objectMapper = objectMapper;
     }
 
@@ -182,6 +185,9 @@ public class PrescriptionService {
             total = total.add(amount);
         }
 
+        // 麻醉药品双重门槛：处方权名单（人事资格）+ 上次空安瓿已回收
+        requireNarcoticLicence(drugs, patient, actor);
+
         // 前置审方：BLOCK 级直接拒绝开方（避免患者拿到禁忌处方）
         List<PrescriptionAuditService.Finding> findings = auditService.evaluate(items, drugs, ageYears);
         if (auditService.hasBlock(findings)) {
@@ -275,7 +281,10 @@ public class PrescriptionService {
         if (items.isEmpty()) {
             throw new BusinessException(ErrorCode.PRESCRIPTION_STATUS_INVALID, "处方没有明细，不能发药");
         }
-        requireNarcoticDoubleCheck(items, checker, actor);
+        Set<UUID> narcoticItemIds = narcoticItemIds(items);
+        if (!narcoticItemIds.isEmpty()) {
+            requireDoubleCheck(checker, actor);
+        }
 
         UUID dispenseId = UUID.randomUUID();
         LocalDate today = BusinessTime.today();
@@ -331,11 +340,15 @@ public class PrescriptionService {
                 rx.version(), null, null)) {
             throw new BusinessException(ErrorCode.CONFLICT, "处方状态已变化，请刷新后重试");
         }
+        // 麻醉药品专册登记：与发药同事务，发药成功必然有册可查
+        int narcoticRegistered = registerNarcotics(rx, items, dispensed, narcoticItemIds,
+                actor, checker);
 
         audit(actor, "DISPENSE", "PRESCRIPTION", prescriptionId.toString(), Map.of(
                 "prescriptionNo", rx.prescriptionNo(), "dispenseNo", dispense.dispenseNo(),
                 "batchCount", dispensed.size(), "totalAmount", total,
                 "checker", dispense.checker() == null ? "" : dispense.checker(),
+                "narcoticRegistered", narcoticRegistered,
                 "billingMode", rx.billingMode() == null ? Prescription.BILLING_ORDER : rx.billingMode()));
         // 计费在本地事务提交后执行：失败不回滚发药事实，置 CHARGE_FAILED 供补偿重试
         if (rx.chargeOnDispense()) {
@@ -424,17 +437,9 @@ public class PrescriptionService {
     /**
      * 麻醉/精神类双人核对。
      *
-     * <p>逐条查药品字典（明细通常 ≤10 条）；以当前字典为准而不是处方快照——
-     * 药品被新标记为麻醉类时，历史处方发药也应触发双人核对（安全优先）。
+     * <p>以当前字典为准而不是处方快照——药品被新标记为麻醉类时，历史处方发药也应触发双人核对（安全优先）。
      */
-    private void requireNarcoticDoubleCheck(List<PrescriptionItem> items, String checker, String actor) {
-        boolean narcotic = items.stream()
-                .map(item -> repo.findDrug(item.drugId()))
-                .flatMap(java.util.Optional::stream)
-                .anyMatch(Drug::narcotic);
-        if (!narcotic) {
-            return;
-        }
+    private void requireDoubleCheck(String checker, String actor) {
         if (checker == null || checker.isBlank()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "含麻醉/精神类药品的处方必须双人核对：请提供核对人（checker）");
@@ -443,6 +448,63 @@ public class PrescriptionService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "核对人不能与发药人相同（双人核对要求两名不同药师）");
         }
+    }
+
+    /** 处方中麻醉药品明细的 id 集合（逐条查当前字典，明细通常 ≤10 条）。 */
+    private Set<UUID> narcoticItemIds(List<PrescriptionItem> items) {
+        Set<UUID> ids = new HashSet<>();
+        for (PrescriptionItem item : items) {
+            if (repo.findDrug(item.drugId()).map(Drug::narcotic).orElse(false)) {
+                ids.add(item.id());
+            }
+        }
+        return ids;
+    }
+
+    /**
+     * 开方前的麻醉药品门槛：处方权名单 + 上次空安瓿已回收。
+     *
+     * <p>放在审方之前：没有处方权时连审方都不必跑，错误信息也更贴近根因。
+     */
+    private void requireNarcoticLicence(List<Drug> drugs, PatientClient.PatientRef patient,
+                                        String actor) {
+        List<Drug> narcotics = drugs.stream().filter(Drug::narcotic).toList();
+        if (narcotics.isEmpty()) {
+            return;
+        }
+        narcoticService.requireLicensed(actor);
+        for (Drug drug : narcotics) {
+            narcoticService.requireAmpouleReturned(patient.id(), drug);
+        }
+    }
+
+    /** 按发药明细写专册（一条明细一行），返回登记条数。 */
+    private int registerNarcotics(Prescription rx, List<PrescriptionItem> items,
+                                  List<DispenseItem> dispensed, Set<UUID> narcoticItemIds,
+                                  String actor, String checker) {
+        if (narcoticItemIds.isEmpty()) {
+            return 0;
+        }
+        Map<UUID, PrescriptionItem> byId = new LinkedHashMap<>();
+        for (PrescriptionItem item : items) {
+            byId.put(item.id(), item);
+        }
+        String safeChecker = checker == null ? "" : checker.trim();
+        java.time.Instant at = java.time.Instant.now();
+        int count = 0;
+        for (DispenseItem di : dispensed) {
+            PrescriptionItem pi = byId.get(di.prescriptionItemId());
+            if (pi == null || !narcoticItemIds.contains(pi.id())) {
+                continue;
+            }
+            repo.insertNarcoticRegister(new NarcoticRegister(UUID.randomUUID(), di.id(),
+                    di.dispenseId(), rx.id(), rx.prescriptionNo(), rx.patientId(), rx.patientNo(),
+                    pi.drugId(), pi.drugCode(), pi.drugName(), pi.spec(), di.quantity(), pi.unit(),
+                    di.batchNo(), rx.prescriber(), actor, safeChecker, at, 0, null, null,
+                    NarcoticRegister.PENDING_RETURN, 0L, at));
+            count++;
+        }
+        return count;
     }
 
     private String blankToNull(String s) {

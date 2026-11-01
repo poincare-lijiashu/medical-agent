@@ -135,4 +135,40 @@ public final class PharmacyModel {
     public record DispenseReturn(UUID id, UUID dispenseId, UUID dispenseItemId, int quantity,
                                  String reason, String operator, Instant createdAt) {
     }
+
+    /**
+     * 麻醉药品处方权名单（医务科授予/撤销）。
+     *
+     * <p>注意：这不是"能不能开方"的权限点，而是**人事资格**——
+     * 医师即使有 {@code pharmacy:prescription:create}，不在本名单内也不能开麻醉药品。
+     */
+    public record NarcoticPrescriber(UUID id, String prescriber, String licenseNo,
+                                     String grantedBy, Instant grantedAt, String revokedBy,
+                                     Instant revokedAt, String revokeReason, boolean enabled,
+                                     long version) {
+    }
+
+    /**
+     * 麻醉药品专册登记（一次发药明细一行，追加式）。
+     *
+     * <p>空安瓿回收状态机：{@code PENDING_RETURN → RETURNED}。
+     * 回收数量必须等于发药数量（数据库 CHECK 兜底），未回收前不得再次开具同一药品。
+     */
+    public record NarcoticRegister(UUID id, UUID dispenseItemId, UUID dispenseId,
+                                   UUID prescriptionId, String prescriptionNo, UUID patientId,
+                                   String patientNo, UUID drugId, String drugCode, String drugName,
+                                   String spec, int quantity, String unit, String batchNo,
+                                   String prescriber, String dispenser, String checker,
+                                   Instant dispensedAt, int ampouleReturned,
+                                   Instant ampouleReturnedAt, String ampouleReceiver,
+                                   String status, long version, Instant createdAt) {
+
+        public static final String PENDING_RETURN = "PENDING_RETURN";
+        public static final String RETURNED = "RETURNED";
+
+        /** 待回收的空安瓿数量。 */
+        public int outstanding() {
+            return quantity - ampouleReturned;
+        }
+    }
 }

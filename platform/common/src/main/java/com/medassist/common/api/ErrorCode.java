@@ -53,6 +53,14 @@ public enum ErrorCode {
     PRESCRIPTION_STATUS_INVALID(43410, "当前处方状态不允许该操作"),
     DRUG_RETURN_EXCEEDS(43411, "退药数量超过已发数量"),
 
+    // ---- 麻醉药品（43xxx 续）----
+    NARCOTIC_REGISTER_NOT_FOUND(43407, "未找到该麻醉药品专册登记"),
+    NARCOTIC_PRESCRIBER_NOT_FOUND(43408, "未找到该医师的麻醉药品处方权记录"),
+    NARCOTIC_PRESCRIBER_REQUIRED(43420, "该医师未取得麻醉药品处方权，不能开具麻醉药品"),
+    NARCOTIC_AMPOULE_OUTSTANDING(43421, "该患者上次麻醉药品的空安瓿尚未回收，暂不能再次开具"),
+    NARCOTIC_AMPOULE_INVALID(43422, "空安瓿回收数量必须等于发药数量"),
+    NARCOTIC_PRESCRIBER_STATE_INVALID(43423, "该医师的麻醉药品处方权状态不允许该操作"),
+
     // ---- 医技（46xxx）----
     TECH_EXAM_ITEM_NOT_FOUND(46401, "未找到该医技项目，或该项目已停用"),
     TECH_APPLICATION_NOT_FOUND(46402, "未找到该检查/检验申请"),

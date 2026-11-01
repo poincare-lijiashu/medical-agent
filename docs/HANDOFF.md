@@ -12,26 +12,26 @@
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）、`cb68a1e`（**第六轮 P3 读留痕/四眼/报盘诊断**）、
   `cd93cb8`（**手术麻醉域第一批**）、`caff4de`（**知识库域第一批**）、`8fad3d2`（**手术麻醉域第二批**）、
   `563cbe7`（**手术麻醉域第三批**）、`a1d4db1`（**手术麻醉域第四批：分级审批 + 利用率报表**）、
-  `8eac62d`（**手术麻醉域第五批：术中收费打包**）
+  `8eac62d`（**手术麻醉域第五批：术中收费打包**）、`__NARCOTIC_BATCH__`（**药房域第二批：麻醉药品五专闭环**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **703 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **723 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V31**、`clinical_svc` → **V20**、`emr_svc` → **V14**、
-  `insurance_svc` → **V12**、`kb_svc` → **V1**
+  本日迁移已在真实库执行：`auth_svc` → **V32**、`clinical_svc` → **V20**、`pharmacy_svc` → **V6**、
+  `emr_svc` → **V14**、`insurance_svc` → **V12**、`kb_svc` → **V1**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **手术麻醉第六批**：麻醉药品专用处方闭环（五专管理 + 处方权 + 空安瓿回收）、
-     术前访视与麻醉评估单（术前核查清单已就绪，逐项补齐即可）
+  1. **手术麻醉第六批**：术前访视与麻醉评估单（访视医师/气道评估 Mallampati/禁食/既往麻醉史，
+     签署后冻结），并作为三、四级手术开台的补充核查项
   2. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
      URL 抓取、带引用的生成式问答（LLM 未配置时继续显式拒绝，不伪造回答）、检索评测集（召回率/忠实度/时延）
   3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
-     术中收费核对 / 知识库检索"五页
+     术中收费核对 / 麻精专册 / 知识库检索"六页
   4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
@@ -1056,6 +1056,20 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`clinical_svc` → **V20**
    - 遗留：物价调整审批、医保支付比例、耗材条码核销、手术收入单独报表口径
 
+69. **药房域第二批：麻醉药品"五专"闭环（2026-11-01）**
+   - **`pharmacy V6`**：`narcotic_prescriber`（处方权名单，撤销留原因）、`narcotic_register`（专册，
+     一次发药明细一行）、触发器禁止改专册事实字段、示例麻醉药品 `DRUG-MOR-10`
+   - **`auth V32`**：`pharmacy:narcotic:manage`（ADMIN/PHARMACIST）——处方权授予与"能否开方"是两个权限面
+   - **专权**：开方校验名单（内网医嘱转处方同样按 `prescriber` 判定）；不在名单 422
+   - **专册**：发药同事务登记（患者/药品/批号/数量/处方医师/发药人/核对人），`PENDING_RETURN` 起
+   - **空安瓿**：回收数量必须等于发药数量；同一患者同一药品有未回收登记时拒绝再开；重复回收 422
+   - **实测**：全量单测 **723 项**全绿（+20）；新增 `pharmacy_narcotic_smoke.ps1`（44 项断言）PASS；
+     `pharmacy_smoke` 回归 PASS（已补"先授予处方权"）；真实库反例：直改专册数量 → 触发器拒绝、
+     `RETURNED` 但回收 0 → `ck_narcotic_return_state` 拒绝；审计 `NARCOTIC_PRESCRIBER_GRANT/REVOKE`、
+     `NARCOTIC_AMPOULE_RETURN` 三类齐落
+   - 迁移：`pharmacy_svc` → **V6**、`auth_svc` → **V32**
+   - 遗留：麻精药品专用柜/双人双锁实物管理、处方限量规则、销毁登记、卫健委上报接口
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1252,6 +1266,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   否则业务上 200 的接口在库里被拒，前端只看到笼统 409
 - `insertChargeItem` 的 `order_id` 可空，`JdbcClient` 传 null 必须 `CAST(:orderId AS uuid)`：
   不 CAST 时 PG 推断不出类型直接报错；既有调用都传了真实 orderId，问题只在"无医嘱"路径暴露
+- **新增 `ErrorCode` 后必须同步各服务的 `GlobalExceptionHandler.statusOf`**：未登记的码会落到
+  `default -> 400`，业务明明抛 422/404，E2E 却全红（本轮 4 条断言就是被 400 打回）。
+  改完枚举先 grep 所有 `class GlobalExceptionHandler`（clinical / pharmacy / tech / emr / insurance / kb）
+- 需要多角色串联的 E2E（医师开方、药师发药、管理员授权、质控只读）要**四个 token 分开拿**：
+  用同一 token 测"越权 403"永远测不出来；本轮 `pharmacy_narcotic_smoke` 就是 admin/pharm/doctor/qc 四账号
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

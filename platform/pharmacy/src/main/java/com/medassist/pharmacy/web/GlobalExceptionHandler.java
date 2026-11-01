@@ -23,14 +23,17 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
     protected HttpStatus statusOf(ErrorCode code) {
         return switch (code) {
             case NOT_FOUND, PATIENT_NOT_FOUND, DRUG_NOT_FOUND, PRESCRIPTION_NOT_FOUND,
-                 DISPENSE_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 DISPENSE_NOT_FOUND, NARCOTIC_REGISTER_NOT_FOUND,
+                 NARCOTIC_PRESCRIBER_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
                  PRESCRIPTION_STATUS_INVALID, DRUG_RETURN_EXCEEDS,
+                 NARCOTIC_PRESCRIBER_STATE_INVALID,
                  ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case VALIDATION_FAILED, NARCOTIC_PRESCRIBER_REQUIRED, NARCOTIC_AMPOULE_OUTSTANDING,
+                 NARCOTIC_AMPOULE_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;

@@ -75,7 +75,10 @@ class PrescriptionServiceTest {
         chargeClient = mock(ClinicalChargeClient.class);
         PharmacyBillingService billing = new PharmacyBillingService(repo, chargeClient,
                 JsonMapper.builder().build());
-        service = new PrescriptionService(repo, patientClient, billing, new PrescriptionAuditService(repo), JsonMapper.builder().build());
+        service = new PrescriptionService(repo, patientClient, billing,
+                new PrescriptionAuditService(repo),
+                new NarcoticService(repo, JsonMapper.builder().build()),
+                JsonMapper.builder().build());
 
         when(patientClient.requireActive(patientId))
                 .thenReturn(new PatientClient.PatientRef(patientId, "P20261031000001", "张三", java.time.LocalDate.of(1990, 1, 1)));
@@ -664,5 +667,87 @@ class PrescriptionServiceTest {
 
         verify(repo).insertAudit(any());
         verify(repo).insertPrescription(any(Prescription.class));
+    }
+
+    // ---------------------------------------------------------------- 麻醉药品（V6 五专）
+
+    @Test
+    @DisplayName("麻醉药品：医师不在处方权名单 → 422，不落处方")
+    void createNarcoticRequiresLicence() {
+        when(repo.findDrugByCode(morphine.drugCode())).thenReturn(Optional.of(morphine));
+        when(repo.findNarcoticPrescriber("doctor01")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null,
+                null, null, List.of(new PrescriptionLine(morphine.drugCode(), 1, null, null, null,
+                        null, null, null))), "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NARCOTIC_PRESCRIBER_REQUIRED));
+        verify(repo, never()).insertPrescription(any());
+    }
+
+    @Test
+    @DisplayName("麻醉药品：上次空安瓿未回收 → 422，不落处方")
+    void createNarcoticRequiresAmpouleReturned() {
+        when(repo.findDrugByCode(morphine.drugCode())).thenReturn(Optional.of(morphine));
+        when(repo.findNarcoticPrescriber("doctor01")).thenReturn(Optional.of(
+                prescriber(true)));
+        when(repo.countOutstandingNarcotic(patientId, morphine.id())).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.create(new CreatePrescriptionReq(patientId, null, null,
+                null, null, List.of(new PrescriptionLine(morphine.drugCode(), 1, null, null, null,
+                        null, null, null))), "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NARCOTIC_AMPOULE_OUTSTANDING));
+        verify(repo, never()).insertPrescription(any());
+    }
+
+    @Test
+    @DisplayName("麻醉药品：有处方权且空安瓿已回收 → 可以开方")
+    void createNarcoticOk() {
+        when(repo.findDrugByCode(morphine.drugCode())).thenReturn(Optional.of(morphine));
+        when(repo.findNarcoticPrescriber("doctor01")).thenReturn(Optional.of(
+                prescriber(true)));
+        when(repo.countOutstandingNarcotic(patientId, morphine.id())).thenReturn(0L);
+
+        service.create(new CreatePrescriptionReq(patientId, null, null, null, null,
+                List.of(new PrescriptionLine(morphine.drugCode(), 1, null, null, null, null, null,
+                        null))), "doctor01");
+
+        verify(repo).insertPrescription(any(Prescription.class));
+    }
+
+    @Test
+    @DisplayName("麻醉药品：发药成功同事务写专册登记（待回收空安瓿）")
+    void dispenseNarcoticWritesRegister() {
+        DrugBatch batch = new DrugBatch(UUID.randomUUID(), morphine.id(), morphine.drugCode(),
+                morphine.name(), "M-1", LocalDate.now().plusDays(300), 5, "国药", 0L);
+        PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, morphine.id(),
+                morphine.drugCode(), morphine.name(), morphine.spec(), 1, "支",
+                null, null, null, morphine.price(), new BigDecimal("5.60"), null, null, null, null);
+
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
+                new BigDecimal("5.60"), 3L)));
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
+        when(repo.findDrug(morphine.id())).thenReturn(Optional.of(morphine));
+        when(repo.listAvailableBatches(eq(morphine.id()), any(LocalDate.class)))
+                .thenReturn(List.of(batch));
+        when(repo.deductBatch(any(), anyInt())).thenReturn(true);
+        when(repo.updatePrescriptionStatus(any(), any(), any(), anyLong(), any(), any()))
+                .thenReturn(true);
+
+        service.dispense(rxId, "pharm02", "pharm01");
+
+        verify(repo).insertNarcoticRegister(any());
+        verify(repo).logChange(eq("pharm01"), eq("DISPENSE"), eq("PRESCRIPTION"),
+                eq(rxId.toString()), anyString());
+    }
+
+    private com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber prescriber(
+            boolean enabled) {
+        return new com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber(
+                UUID.randomUUID(), "doctor01", "MZ-001", "admin01", Instant.now(),
+                enabled ? null : "admin01", enabled ? null : Instant.now(),
+                enabled ? null : "离职", enabled, 0L);
     }
 }
