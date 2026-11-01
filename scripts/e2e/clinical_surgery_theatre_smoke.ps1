@@ -146,6 +146,17 @@ Check 'board.ok' $r.Status 200
 Check 'board.count' (@(Res $r).Count) 2
 
 # ---------------------------------------------------------------- 6. start surgery -> schedule IN_PROGRESS
+# opening a case requires signed surgical + anesthesia consents (hard gate)
+$r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseA/consents" @{
+    consentType = 'SURGERY'; signerName = 'Patient'; signerRelation = 'SELF'
+} $token
+Check 'consent.surgery' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseA/consents" @{
+    consentType = 'ANESTHESIA'; signerName = 'Patient'; signerRelation = 'SELF'
+} $token
+Check 'consent.anesthesia' $r.Status 200
+
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseA/start" @{ version = 0 } $token
 Check 'surgery.a.start' $r.Status 200
 Check 'surgery.a.status' (Res $r).status 'IN_PROGRESS'

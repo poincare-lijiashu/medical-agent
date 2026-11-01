@@ -131,6 +131,22 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$outpatientVisit/surgery-cases" 
 Check 'surgery.plan.outpatient.422' $r.Status 422
 
 # ---------------------------------------------------------------- 5. state machine
+# opening a case requires signed surgical + anesthesia consents (hard gate)
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseId/start" @{
+    version = 0
+} $token
+Check 'surgery.start.noConsent.422' $r.Status 422
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseId/consents" @{
+    consentType = 'SURGERY'; signerName = 'Patient'; signerRelation = 'SELF'
+} $token
+Check 'consent.surgery' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseId/consents" @{
+    consentType = 'ANESTHESIA'; signerName = 'Patient'; signerRelation = 'SELF'
+} $token
+Check 'consent.anesthesia' $r.Status 200
+
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseId/start" @{
     version = 99
 } $token

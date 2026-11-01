@@ -228,6 +228,39 @@ public final class ClinicalModel {
         public static final String SIGNED = "SIGNED";
     }
 
+    /** 术前讨论记录（一台手术一份，签署后冻结）。 */
+    public record PreopDiscussion(UUID id, UUID surgeryCaseId, Instant discussionAt,
+                                  String moderator, String participants, String diagnosisSummary,
+                                  String procedurePlan, String risks, String anesthesiaPlan,
+                                  String bloodPreparation, String status, String signedBy,
+                                  Instant signedAt, String createdBy, long version,
+                                  Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SIGNED = "SIGNED";
+    }
+
+    /**
+     * 知情同意书（插入即已签署事实；写错只能作废后重签）。
+     *
+     * <p>{@code revokedAt} 非空表示该份已作废，不再计入"术前同意书齐全"。
+     */
+    public record SurgeryConsent(UUID id, UUID surgeryCaseId, String consentType,
+                                 String signerName, String signerRelation, Instant signedAt,
+                                 String witness, String notes, Instant revokedAt,
+                                 String revokeReason, String createdBy, long version,
+                                 Instant createdAt) {
+
+        public static final String SURGERY = "SURGERY";
+        public static final String ANESTHESIA = "ANESTHESIA";
+        public static final String BLOOD_TRANSFUSION = "BLOOD_TRANSFUSION";
+        public static final String SPECIAL = "SPECIAL";
+
+        public boolean active() {
+            return revokedAt == null;
+        }
+    }
+
     /** 收费单。 */
     public record Charge(UUID id, String chargeNo, UUID visitId, BigDecimal totalAmount,
                          String status, String paymentMethod, Instant paidAt, long version) {

@@ -15,8 +15,10 @@ import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
+import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryConsent;
 import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
 import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
@@ -1836,6 +1838,132 @@ public class ClinicalRepository {
                         """)
                 .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
                 .update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 术前讨论 / 知情同意（V17）
+
+    private static final RowMapper<PreopDiscussion> PREOP_MAPPER = (rs, i) -> new PreopDiscussion(
+            rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+            instantOf(rs, "discussion_at"), rs.getString("moderator"),
+            rs.getString("participants"), rs.getString("diagnosis_summary"),
+            rs.getString("procedure_plan"), rs.getString("risks"),
+            rs.getString("anesthesia_plan"), rs.getString("blood_preparation"),
+            rs.getString("status"), rs.getString("signed_by"), instantOf(rs, "signed_at"),
+            rs.getString("created_by"), rs.getLong("version"), instantOf(rs, "created_at"));
+
+    private static final RowMapper<SurgeryConsent> CONSENT_MAPPER = (rs, i) -> new SurgeryConsent(
+            rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+            rs.getString("consent_type"), rs.getString("signer_name"),
+            rs.getString("signer_relation"), instantOf(rs, "signed_at"), rs.getString("witness"),
+            rs.getString("notes"), instantOf(rs, "revoked_at"), rs.getString("revoke_reason"),
+            rs.getString("created_by"), rs.getLong("version"), instantOf(rs, "created_at"));
+
+    public Optional<PreopDiscussion> findPreopByCase(UUID surgeryCaseId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.preop_discussion WHERE surgery_case_id = ?")
+                .param(surgeryCaseId).query(PREOP_MAPPER).optional();
+    }
+
+    public void insertPreop(PreopDiscussion d) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.preop_discussion
+                            (id, surgery_case_id, discussion_at, moderator, participants,
+                             diagnosis_summary, procedure_plan, risks, anesthesia_plan,
+                             blood_preparation, status, created_by, version)
+                        VALUES (:id, :caseId, CAST(:discussionAt AS timestamptz), :moderator,
+                                :participants, :diagnosisSummary, :procedurePlan, :risks,
+                                :anesthesiaPlan, :bloodPreparation, 'DRAFT', :createdBy, 0)
+                        """)
+                .param("id", d.id()).param("caseId", d.surgeryCaseId())
+                .param("discussionAt", ts(d.discussionAt())).param("moderator", d.moderator())
+                .param("participants", d.participants())
+                .param("diagnosisSummary", d.diagnosisSummary())
+                .param("procedurePlan", d.procedurePlan()).param("risks", d.risks())
+                .param("anesthesiaPlan", d.anesthesiaPlan())
+                .param("bloodPreparation", d.bloodPreparation())
+                .param("createdBy", d.createdBy()).update();
+    }
+
+    public boolean updatePreopDraft(PreopDiscussion d, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.preop_discussion
+                           SET discussion_at = CAST(:discussionAt AS timestamptz),
+                               moderator = :moderator, participants = :participants,
+                               diagnosis_summary = :diagnosisSummary,
+                               procedure_plan = :procedurePlan, risks = :risks,
+                               anesthesia_plan = :anesthesiaPlan,
+                               blood_preparation = :bloodPreparation,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("discussionAt", ts(d.discussionAt())).param("moderator", d.moderator())
+                .param("participants", d.participants())
+                .param("diagnosisSummary", d.diagnosisSummary())
+                .param("procedurePlan", d.procedurePlan()).param("risks", d.risks())
+                .param("anesthesiaPlan", d.anesthesiaPlan())
+                .param("bloodPreparation", d.bloodPreparation())
+                .param("id", d.id()).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean signPreop(UUID id, String signedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.preop_discussion
+                           SET status = 'SIGNED', signed_by = :signedBy, signed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public List<SurgeryConsent> listConsentsByCase(UUID surgeryCaseId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_consent
+                         WHERE surgery_case_id = ? ORDER BY created_at DESC
+                        """).param(surgeryCaseId).query(CONSENT_MAPPER).list();
+    }
+
+    public Optional<SurgeryConsent> findActiveConsent(UUID surgeryCaseId, String consentType) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_consent
+                         WHERE surgery_case_id = :caseId AND consent_type = :type
+                           AND revoked_at IS NULL
+                        """)
+                .param("caseId", surgeryCaseId).param("type", consentType)
+                .query(CONSENT_MAPPER).optional();
+    }
+
+    public void insertConsent(SurgeryConsent c) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.surgery_consent
+                            (id, surgery_case_id, consent_type, signer_name, signer_relation,
+                             signed_at, witness, notes, created_by, version)
+                        VALUES (:id, :caseId, :consentType, :signerName, :signerRelation,
+                                CAST(:signedAt AS timestamptz), :witness, :notes, :createdBy, 0)
+                        """)
+                .param("id", c.id()).param("caseId", c.surgeryCaseId())
+                .param("consentType", c.consentType()).param("signerName", c.signerName())
+                .param("signerRelation", c.signerRelation())
+                .param("signedAt", ts(c.signedAt())).param("witness", c.witness())
+                .param("notes", c.notes()).param("createdBy", c.createdBy()).update();
+    }
+
+    public boolean revokeConsent(UUID id, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_consent
+                           SET revoked_at = now(), revoke_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND revoked_at IS NULL AND version = :version
+                        """)
+                .param("reason", reason).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 该手术当前有效的同意书类型（手术开始的硬门槛校验用）。 */
+    public List<String> listActiveConsentTypes(UUID surgeryCaseId) {
+        return jdbc.sql("""
+                        SELECT consent_type FROM clinical_svc.surgery_consent
+                         WHERE surgery_case_id = ? AND revoked_at IS NULL
+                        """).param(surgeryCaseId).query(String.class).list();
     }
 
     // ---------------------------------------------------------------- 审计

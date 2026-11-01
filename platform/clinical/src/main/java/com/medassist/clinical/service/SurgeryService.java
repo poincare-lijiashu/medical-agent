@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -82,6 +83,7 @@ public class SurgeryService {
     @Transactional
     public SurgeryCase start(UUID visitId, UUID caseId, long version, String actor) {
         SurgeryCase current = requireCase(visitId, caseId);
+        requireConsents(caseId);
         if (!repo.startSurgery(caseId, Instant.now(), version)) {
             throw new BusinessException(ErrorCode.CONFLICT, "手术状态已变化，请刷新后重试");
         }
@@ -121,6 +123,26 @@ public class SurgeryService {
         audit(actor, "SURGERY_CANCEL", current, Map.of("before", current.status(),
                 "reason", reason));
         return requireCase(visitId, caseId);
+    }
+
+    /**
+     * 开台硬门槛：手术与麻醉知情同意必须已签署且有效。
+     *
+     * <p>不做成可配置开关：知情同意是法律要求的必备文书，"能配置关掉"本身就是合规风险。
+     */
+    private void requireConsents(UUID caseId) {
+        List<String> active = repo.listActiveConsentTypes(caseId);
+        List<String> missing = new ArrayList<>();
+        if (!active.contains("SURGERY")) {
+            missing.add("手术知情同意");
+        }
+        if (!active.contains("ANESTHESIA")) {
+            missing.add("麻醉知情同意");
+        }
+        if (!missing.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "手术开始前必须完成" + String.join("、", missing) + "书的签署");
+        }
     }
 
     private SurgeryCase requireCase(UUID visitId, UUID caseId) {

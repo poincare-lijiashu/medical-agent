@@ -159,6 +159,7 @@ class SurgeryServiceTest {
         when(repo.lockSurgeryCase(caseId))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.IN_PROGRESS)));
+        when(repo.listActiveConsentTypes(caseId)).thenReturn(List.of("SURGERY", "ANESTHESIA"));
         when(repo.startSurgery(eq(caseId), any(Instant.class), eq(0L))).thenReturn(true);
 
         SurgeryCase result = service.start(visitId, caseId, 0L, "doctor01");
@@ -173,6 +174,7 @@ class SurgeryServiceTest {
     void startStaleVersion() {
         when(repo.lockSurgeryCase(caseId))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)));
+        when(repo.listActiveConsentTypes(caseId)).thenReturn(List.of("SURGERY", "ANESTHESIA"));
         when(repo.startSurgery(eq(caseId), any(Instant.class), eq(0L))).thenReturn(false);
 
         assertThatThrownBy(() -> service.start(visitId, caseId, 0L, "doctor01"))
@@ -180,6 +182,21 @@ class SurgeryServiceTest {
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
         verify(repo, never()).logChange(anyString(), anyString(), anyString(), anyString(),
                 anyString());
+    }
+
+    @Test
+    @DisplayName("开始手术：缺手术/麻醉知情同意 → 422（开台硬门槛）")
+    void startRejectsMissingConsents() {
+        when(repo.lockSurgeryCase(caseId))
+                .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)));
+        when(repo.listActiveConsentTypes(caseId)).thenReturn(List.of("SURGERY"));
+
+        assertThatThrownBy(() -> service.start(visitId, caseId, 0L, "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+                    assertThat(e.getMessage()).contains("麻醉知情同意");
+                });
+        verify(repo, never()).startSurgery(any(), any(), anyLong());
     }
 
     @Test
