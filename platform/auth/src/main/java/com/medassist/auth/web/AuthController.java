@@ -15,6 +15,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,6 +26,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -40,9 +43,13 @@ import java.util.UUID;
 public class AuthController {
 
     private final AuthService service;
+    private final String internalToken;
 
-    public AuthController(AuthService service) {
+    public AuthController(AuthService service,
+                          @Value("${medassist.auth.internal-token:${INTERNAL_API_TOKEN:}}")
+                          String internalToken) {
         this.service = service;
+        this.internalToken = internalToken == null ? "" : internalToken;
     }
 
     /** 登录：校验 bcrypt 密码，签发访问令牌 + 刷新令牌。网关白名单中唯一放行的业务路径。 */
@@ -102,16 +109,42 @@ public class AuthController {
         return ApiResponse.ok(null);
     }
 
-    /** 内部：网关增量拉取访问令牌撤销名单（只允许集群内直连）。 */
+    /**
+     * 内部：网关增量拉取访问令牌撤销名单（只允许集群内直连）。
+     *
+     * <p>必须校验内部令牌：该接口返回全院已撤销的 jti 列表，等于暴露"谁被踢下线"，
+     * 且 {@code /internal/token/verify} 会返回完整 claims；只靠"网关 404"挡外部
+     * 不足以防止集群内任意主机（含沦陷 Pod）调用。
+     */
     @GetMapping("/internal/revocations")
-    public ApiResponse<RevocationsResp> revocations(@RequestParam(defaultValue = "0") long since) {
+    public ApiResponse<RevocationsResp> revocations(
+            @RequestParam(defaultValue = "0") long since,
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireInternalToken(provided);
         return ApiResponse.ok(service.revocationsSince(Instant.ofEpochMilli(Math.max(0, since))));
     }
 
     /** 内部令牌校验（集群内排障；网关对该路径直接 404，不对外暴露）。 */
     @PostMapping("/internal/token/verify")
-    public ApiResponse<VerifyResp> verify(@Valid @RequestBody VerifyTokenReq req) {
+    public ApiResponse<VerifyResp> verify(
+            @Valid @RequestBody VerifyTokenReq req,
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireInternalToken(provided);
         return ApiResponse.ok(service.verify(req.token()));
+    }
+
+    /**
+     * 内部接口 fail-closed 校验：令牌未配置即拒绝（避免"忘了配"变成裸奔），
+     * 且用恒定时间比较，防止逐字符探测。
+     */
+    private void requireInternalToken(String provided) {
+        if (internalToken.isBlank()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
+        }
+        if (provided == null || !MessageDigest.isEqual(
+                internalToken.getBytes(StandardCharsets.UTF_8), provided.getBytes(StandardCharsets.UTF_8))) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
+        }
     }
 
     // ---------------------------------------------------------------- 内部方法

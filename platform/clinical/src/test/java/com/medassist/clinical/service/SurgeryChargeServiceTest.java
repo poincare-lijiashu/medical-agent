@@ -347,6 +347,23 @@ class SurgeryChargeServiceTest {
     }
 
     @Test
+    @DisplayName("计费：就诊已结束（已出院）→ 409（不允许出院后补计，否则挂永远收不到的未结单）")
+    void chargeRejectsFinishedVisit() {
+        when(repo.findSurgeryCase(caseId))
+                .thenReturn(Optional.of(surgery(SurgeryCase.COMPLETED, "GENERAL")));
+        stubStandardRules();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.FINISHED)));
+
+        assertThatThrownBy(() -> service.charge(caseId, "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.VISIT_STATUS_INVALID);
+                    assertThat(e.getMessage()).contains("已结束");
+                });
+        verify(repo, never()).insertChargeItem(any(), any(), any(), anyString(), anyString(),
+                anyString(), anyString(), any());
+    }
+
+    @Test
     @DisplayName("预览：数量 2 的耗材按 单价×2 计算")
     void previewMultipliesQuantity() {
         when(repo.findSurgeryCase(caseId))

@@ -90,6 +90,24 @@ class SettlementExportServiceTest {
     }
 
     @Test
+    @DisplayName("生成批次：V13 数据库兜底拒绝同清单重复报盘 → 409 且整批回滚")
+    void createMapsDuplicateExportItemToConflict() {
+        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint"))
+                .when(repo).insertExportItem(any(), any(), anyString());
+        LocalDate day = LocalDate.now();
+
+        assertThatThrownBy(() -> service.create(day, day, "yb01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.INSURANCE_EXPORT_INVALID);
+                    assertThat(e.getMessage()).contains("已回滚");
+                });
+    }
+
+    @Test
     @DisplayName("期间内无已确认清单：409")
     void createRejectsEmptyPeriod() {
         when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(0L);

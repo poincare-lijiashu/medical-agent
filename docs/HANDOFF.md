@@ -14,27 +14,30 @@
   `563cbe7`（**手术麻醉域第三批**）、`a1d4db1`（**手术麻醉域第四批：分级审批 + 利用率报表**）、
   `8eac62d`（**手术麻醉域第五批：术中收费打包**）、`69a822e`（**药房域第二批：麻醉药品五专闭环**）、
   `f82562d`（**手术麻醉域第六批：术前访视与麻醉评估单**）、
-  `b28637f`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）
+  `b28637f`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）、
+  `HASH_REVIEW1`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **757 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **764 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
   本日迁移已在真实库执行：`auth_svc` → **V33**、`clinical_svc` → **V21**、`pharmacy_svc` → **V6**、
-  `emr_svc` → **V14**、`insurance_svc` → **V12**、`kb_svc` → **V2**
+  `emr_svc` → **V14**、`insurance_svc` → **V13**、`kb_svc` → **V2**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **知识库第三批的前置条件**：pgvector 当前不可用（`pg_available_extensions` 实测无 `vector`），
+  1. **评审整改第二批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"，再改日计费/处方生成）、
+     B3 退药退费与处方驳回联动（红冲单据链路）、D1 事务内 HTTP 长锁、E1 `X-Actor` 归因统一、F1 empi 单测
+  2. **知识库第三批的前置条件**：pgvector 当前不可用（`pg_available_extensions` 实测无 `vector`），
      需先换装带 pgvector 的 PG 镜像或编译扩展，才能做 `vector` 列 + HNSW 与 `kb_eval.ps1` 时延对比；
      生成式问答需大模型配置（保持 `grounded/citations/refusal` 结构与拒答语义不变）
-  2. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
+  3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
      术中收费核对 / 麻精专册 / 术前访视 / 知识库检索与问答（`/kb/spaces/{id}/answer`）"七页
-  3. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
-  4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
+  4. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
+  5. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -1116,6 +1119,34 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 遗留：**pgvector 在本机 PG 镜像不可用**（`pg_available_extensions` 无 `vector`），向量检索仍是
      `real[]` + 点积 O(n)；生成式问答需 LLM 配置与忠实度评测；PDF/Word/OCR 需离线解析库；URL 抓取需出网
 
+72. **第七轮多智能体评审整改第一批（2026-11-01，A1/A2/A3/C1/C2/B1/B4/B5/D2）**
+   - 意见书 `docs/REVIEW-20261101-MULTIAGENT.md`（六路并行评审：业务财务/数据库/安全/部署/测试/架构），
+     本批落地 9 条 MUST-FIX，其余条目保留在"仍未整改"清单
+   - **A1 发布链**：`platform-prod.yaml` 补 `kb.image.tag`（此前非 dev 遇 SNAPSHOT 直接 fail 渲染）；
+     离线 `load-and-push.sh` 的 `CHART_IMAGES` 补 `platform-kb:1.0.0`
+   - **A2 日志**：9 个服务基础 `application.yml` 的 `com.medassist` 由 DEBUG 改 INFO，DEBUG 移入
+     `application-dev.yml`（auth/gateway/kb 的 dev 配置为本批新增）；生产不再把 PHI 以 DEBUG 写进 Loki
+   - **A3 监控**：ServiceMonitor 组件列表 + 告警三处 `component=~` 补 `kb`
+   - **C1 auth 内部接口**：`/internal/revocations`、`/internal/token/verify` 加 `X-Internal-Token`
+     fail-closed 恒定时间校验；网关 `TokenRevocationCache` 同步带同一令牌，缺令牌直接判同步失败
+     （fail-fast 把"漏配令牌"暴露在启动期）
+   - **C2 staging**：`internalAuth.mode: log → enforce`（log 模式校验失败仍放行，等于签名机制形同虚设）
+   - **B1 医保报盘**：`insurance V13` 触发器 `guard_export_item_single_active_batch`——按 bill_id 取
+     事务级 advisory lock 后判定"同一清单不得同属两个 GENERATED/ACCEPTED 批次"；`REJECTED` 不占位可重报；
+     服务层把唯一冲突映射为 409 并整批回滚（期间级 advisory lock 只保留为性能优化）
+   - **B4 出院后计费**：`SurgeryChargeService.charge` 增加 `visit.active()` 校验
+   - **B5 出院漏计**：新增 `countUnbilledDailyOrders(visitId, from, to)`（`generate_series` 逐日展开，
+     口径与单日一致，护理 REFUSED/OMITTED 仍豁免），出院门禁从"只查当日"改为"入院日至今日"
+   - **D2 知情同意**：`ConsentReq` 移除客户端 `signedAt`（服务端取当前时间）；手术 `IN_PROGRESS` 起拒绝新增
+   - **实测**：全量单测 **764 项**全绿（+7）；E2E PASS：`clinical_preop_consent_smoke`（已重排为
+     "重签在开台前"并新增 `consent.afterStart.422`）、`clinical_surgery_charge_smoke`、`insurance_smoke`、
+     `platform_smoke`、`kb_answer_smoke`；真实库 `insurance_svc → V13`，
+     反例"同清单进第二个 GENERATED 批次被拒 / REJECTED 后可重报"验证通过并已清理测试数据；
+     auth 内部接口实测 403/403/200
+   - 迁移：`insurance_svc` → **V13**（auth V33 / clinical V21 / kb V2 不变）
+   - 遗留：B2 长嘱 quantity 口径（需业务定"日量 vs 总量"）、B3 退药退费与驳回联动（红冲单据）、
+     D1 事务内 HTTP 长锁、E1 `X-Actor` 归因统一、F1 empi 单测，以及 33 条 SHOULD-FIX
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1124,6 +1155,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   都会偏移一位（本批 `collapseBlankLines` 只 `strip()`，不追加 `\n`）
 - **PowerShell 5.1 的 `Invoke-WebRequest` 在中文环境把 `Content` 当字节数组**：健康检查只判状态码，
   要读内容就走 `curl.exe` + 临时文件（E2E 里的 `Invoke-Api` 即此套路）
+- **给 `@ConfigurationProperties` record 增加字段会破坏测试里的位置构造**：`GatewayAuthProperties`
+  加 `internalToken` 后，`TokenRevocationCacheTest` / `AuthFilterTest` / `ClientIpResolverTest`
+  三处 `new GatewayAuthProperties(...)` 都要补参数，否则编译失败
+- **内部接口一旦 fail-closed，所有调用方必须同时带令牌**：auth 的 `/internal/**` 改校验后，
+  网关撤销名单同步若不带头会 403 → 配合 `fail-fast-on-startup=true` 直接拒绝启动（这次是刻意这样设计的）
 - **advisory lock 的键不能按业务参数拼**（如 `emr:hqms-export:{from}:{to}`）：参数不同的两个事务
   会拿到不同锁，看似"加了锁"其实完全不互斥；要串行就全局单键，或按 ID 排序逐行锁
 - **新增服务模块必须同时补 `MigrateOnlyRunner`**：`--medassist.migrate-only=true` 是自定义属性，

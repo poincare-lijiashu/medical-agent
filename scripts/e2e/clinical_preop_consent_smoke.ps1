@@ -5,8 +5,8 @@
 #         -> sign without participants/plan 422 -> fill + sign -> frozen
 #         -> opening blocked without consents 422 -> add SURGERY consent
 #         -> duplicate type 409 -> summary still missing ANESTHESIA
-#         -> add ANESTHESIA -> readyForSurgery true -> surgery starts
-#         -> revoke requires reason / revoke + re-sign -> complete surgery
+#         -> add ANESTHESIA -> readyForSurgery true -> revoke + re-sign (still PLANNED)
+#         -> surgery starts -> adding consent after start 422 -> complete surgery
 #         -> consent on finished surgery 422 -> permission (QC read-only).
 #
 # ASCII only (Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
@@ -164,11 +164,7 @@ Check 'summary.ready' (Res $r).readyForSurgery 'True'
 Check 'summary.discussionSigned' (Res $r).discussion.status 'SIGNED'
 Check 'summary.consentCount' (@((Res $r).consents).Count) 2
 
-$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseId/start" @{ version = 0 } $token
-Check 'start.ok' $r.Status 200
-Check 'start.status' (Res $r).status 'IN_PROGRESS'
-
-# ---------------------------------------------------------------- 6. revoke + re-sign
+# ---------------------------------------------------------------- 6. revoke + re-sign (before start)
 $r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseId/consents" @{
     consentType = 'SPECIAL'; signerName = 'Patient A'; notes = 'special procedure'
 } $token
@@ -191,7 +187,22 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseId/consents" @{
 } $token
 Check 'consent.resign' $r.Status 200
 
-# ---------------------------------------------------------------- 7. finish + post-op guard
+$r = Invoke-Api 'GET' "/api/v2/clinical/surgery-cases/$caseId/preop-summary" $null $token
+Check 'summary.afterResign.missing' ((Res $r).missingConsents -join ',') ''
+Check 'summary.afterResign.ready' (Res $r).readyForSurgery 'True'
+
+# ---------------------------------------------------------------- 7. start + post-start guard
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseId/start" @{ version = 0 } $token
+Check 'start.ok' $r.Status 200
+Check 'start.status' (Res $r).status 'IN_PROGRESS'
+
+# hard rule: no consent can be added once the case started (prevents back-dated signing)
+$r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseId/consents" @{
+    consentType = 'BLOOD_TRANSFUSION'; signerName = 'Patient B'
+} $token
+Check 'consent.afterStart.422' $r.Status 422
+
+# ---------------------------------------------------------------- 8. finish + post-op guard
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseId/complete" @{ version = 1 } $token
 Check 'surgery.complete' $r.Status 200
 Check 'surgery.completed' (Res $r).status 'COMPLETED'
@@ -201,7 +212,7 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseId/consents" @{
 } $token
 Check 'consent.afterComplete.422' $r.Status 422
 
-# ---------------------------------------------------------------- 8. permission
+# ---------------------------------------------------------------- 9. permission
 $r = Invoke-Api 'GET' "/api/v2/clinical/surgery-cases/$caseId/preop-summary" $null $qcToken
 Check 'perm.qc.read' $r.Status 200
 

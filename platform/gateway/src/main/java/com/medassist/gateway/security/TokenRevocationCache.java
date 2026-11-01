@@ -117,8 +117,17 @@ public class TokenRevocationCache implements InitializingBean {
     private boolean doSync() {
         long since = lastSyncMillis.get();
         try {
+            String token = props.internalToken();
+            if (token == null || token.isBlank()) {
+                // auth 侧内部接口是 fail-closed 的：没有令牌必然 403，直接按失败处理，
+                // 让 fail-fast 在启动期就把"漏配令牌"暴露出来，而不是静默空名单运行。
+                log.error("gateway.revocation.sync.missing_token 未配置内部令牌，无法同步撤销名单；"
+                        + "请注入 INTERNAL_API_TOKEN（或 medassist.gateway.auth.internal-token）");
+                return false;
+            }
             String body = client.get()
                     .uri(uri -> uri.path("/internal/revocations").queryParam("since", since).build())
+                    .header("X-Internal-Token", token)
                     .retrieve()
                     .bodyToMono(String.class)
                     .block(SYNC_TIMEOUT);

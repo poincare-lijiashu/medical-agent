@@ -3,3 +3,8 @@ kb:
   ingest:
     # 本地希望"写完立刻可检索"，把轮询间隔压到 1 秒（生产默认 5 秒）
     interval-ms: 1000
+
+# 基础配置统一 INFO（避免 DEBUG 把文档原文/PHI 写进生产日志）
+logging:
+  level:
+    com.medassist: DEBUG

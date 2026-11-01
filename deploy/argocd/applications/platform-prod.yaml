@@ -38,6 +38,9 @@ spec:
           value: "1.0.0"
         - name: insurance.image.tag
           value: "1.0.0"
+        # kb 同样必须显式注入（默认 SNAPSHOT，production 环境会 fail 渲染）
+        - name: kb.image.tag
+          value: "1.0.0"
         - name: aiCore.image.tag
           value: "1.0.0"
   destination:

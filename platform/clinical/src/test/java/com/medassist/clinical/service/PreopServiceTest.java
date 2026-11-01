@@ -166,9 +166,23 @@ class PreopServiceTest {
         when(repo.findSurgeryCase(caseId)).thenReturn(Optional.of(surgery(SurgeryCase.COMPLETED)));
 
         assertThatThrownBy(() -> service.addConsent(caseId,
-                new ConsentReq("SURGERY", "张三", "本人", null, null, null), "doctor01"))
+                new ConsentReq("SURGERY", "张三", "本人", null, null), "doctor01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).insertConsent(any());
+    }
+
+    @Test
+    @DisplayName("新增同意书：手术已开始 → 422（禁止术中/术后补签绕过开台门槛）")
+    void addConsentRejectsInProgressCase() {
+        when(repo.findSurgeryCase(caseId)).thenReturn(Optional.of(surgery(SurgeryCase.IN_PROGRESS)));
+
+        assertThatThrownBy(() -> service.addConsent(caseId,
+                new ConsentReq("SURGERY", "张三", "本人", null, null), "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+                    assertThat(e.getMessage()).contains("已开始");
+                });
         verify(repo, never()).insertConsent(any());
     }
 
@@ -180,7 +194,7 @@ class PreopServiceTest {
                 .thenReturn(Optional.of(consent("SURGERY", true)));
 
         assertThatThrownBy(() -> service.addConsent(caseId,
-                new ConsentReq("surgery", "张三", "本人", null, null, null), "doctor01"))
+                new ConsentReq("surgery", "张三", "本人", null, null), "doctor01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
         verify(repo, never()).insertConsent(any());
@@ -193,7 +207,7 @@ class PreopServiceTest {
         when(repo.findActiveConsent(caseId, "ANESTHESIA")).thenReturn(Optional.empty());
 
         SurgeryConsent created = service.addConsent(caseId,
-                new ConsentReq("anesthesia", "李四", "配偶", null, "nurse01", null), "doctor01");
+                new ConsentReq("anesthesia", "李四", "配偶", "nurse01", null), "doctor01");
 
         assertThat(created.consentType()).isEqualTo("ANESTHESIA");
         assertThat(created.signedAt()).isNotNull();

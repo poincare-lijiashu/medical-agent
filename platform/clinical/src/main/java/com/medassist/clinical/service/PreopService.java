@@ -138,19 +138,22 @@ public class PreopService {
     @Transactional
     public SurgeryConsent addConsent(UUID caseId, ConsentReq req, String actor) {
         SurgeryCase surgery = requireCase(caseId);
-        if (SurgeryCase.COMPLETED.equals(surgery.status())
+        // 已开台后不允许补签：否则"术中/术后补一张术前同意书"即可绕过开台门槛
+        if (SurgeryCase.IN_PROGRESS.equals(surgery.status())
+                || SurgeryCase.COMPLETED.equals(surgery.status())
                 || SurgeryCase.CANCELLED.equals(surgery.status())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "手术已结束/已取消，不能再新增知情同意书");
+                    "手术已开始/已结束/已取消，不能再新增知情同意书" +
+                            "（如确需补签，请走病案修改审批并说明原因）");
         }
         String type = req.consentType().trim().toUpperCase();
         if (repo.findActiveConsent(caseId, type).isPresent()) {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "该手术已有有效的「" + type + "」同意书；如需重签请先作废原记录");
         }
+        // 签署时间一律服务端取当前时间：客户端传值等于允许倒签（法律文书时间不得伪造）
         SurgeryConsent consent = new SurgeryConsent(UUID.randomUUID(), caseId, type,
-                req.signerName().trim(), blankToNull(req.signerRelation()),
-                req.signedAt() == null ? Instant.now() : req.signedAt(),
+                req.signerName().trim(), blankToNull(req.signerRelation()), Instant.now(),
                 blankToNull(req.witness()), blankToNull(req.notes()), null, null, actor, 0L,
                 Instant.now());
         try {

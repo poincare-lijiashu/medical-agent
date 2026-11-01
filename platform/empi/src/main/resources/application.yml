@@ -65,4 +65,4 @@ management:
 logging:
   level:
     root: INFO
-    com.medassist: DEBUG
+    com.medassist: INFO

@@ -83,6 +83,7 @@ class ClientIpResolverTest {
                 List.of("/api/v2/**"),
                 List.of("/api/v2/*/internal/**"),
                 "http://127.0.0.1:8081",
+                "unit-test-internal-token",
                 new GatewayAuthProperties.RevocationSync(false, Duration.ofSeconds(15), false),
                 new GatewayAuthProperties.ClientIp(cidrs));
     }

@@ -235,10 +235,18 @@ public class InpatientService {
                     "还有 " + unbilled + " 条临时医嘱未计费，请先结算再办理出院");
         }
         LocalDate today = BusinessTime.today();
-        int unbilledDaily = repo.countUnbilledDailyOrders(a.visitId(), today);
+        // 必须校验"入院以来全部有效日"，不能只看当天：某日漏跑按日计费时当天可能为 0，
+        // 出院后就诊结束又无法补计 → 永久漏收。
+        LocalDate firstDay = a.admittedAt() == null ? today
+                : a.admittedAt().atZone(BusinessTime.zone()).toLocalDate();
+        if (firstDay.isAfter(today)) {
+            firstDay = today;
+        }
+        int unbilledDaily = repo.countUnbilledDailyOrders(a.visitId(), firstDay, today);
         if (unbilledDaily > 0) {
             throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
-                    "还有 " + unbilledDaily + " 条长期医嘱当日（" + today + "）未计费，请先按日计费再办理出院");
+                    "还有 " + unbilledDaily + " 条长期医嘱（" + firstDay + " 至 " + today
+                            + "）未按日计费，请先补计再办理出院");
         }
         if (!repo.updateAdmissionStatus(a.id(), Admission.IN_HOSPITAL, Admission.DISCHARGED, a.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");

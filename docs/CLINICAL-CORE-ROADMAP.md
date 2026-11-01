@@ -1317,6 +1317,38 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.53 已完成（2026-11-01，第七轮多智能体评审整改第一批）
+
+六路并行评审（业务财务 / 数据库并发 / 安全 / 部署 / 测试 / 架构）出意见书
+`docs/REVIEW-20261101-MULTIAGENT.md`，本批按"有则改之"落地 9 条 MUST-FIX（发布阻断 3 + 资金红线 1 +
+安全 2 + 账实/法律 3），其余条目保留在意见书"仍未整改"清单。
+
+| 编号 | 修复 | 关键实现 |
+|---|---|---|
+| A1 | 发布链缺 kb | Argo prod 补 `kb.image.tag`；离线 `CHART_IMAGES` 补 `platform-kb:1.0.0`（此前 prod 渲染直接 fail） |
+| A2 | 生产日志 DEBUG + 无脱敏 | 9 服务基础日志改 INFO，DEBUG 只在 `application-dev.yml`；k8s profile 不再继承 DEBUG（PHI 不入 Loki） |
+| A3 | kb 脱离监控 | ServiceMonitor 组件列表与 3 处告警表达式补 `kb` |
+| C1 | auth 内部接口零鉴权 | `/internal/revocations`、`/internal/token/verify` 增加 `X-Internal-Token` fail-closed 恒定时间校验；网关撤销名单同步带同一令牌，缺令牌按同步失败处理（fail-fast 暴露漏配） |
+| C2 | staging 签名 fail-open | `internalAuth.mode: log → enforce`，与生产同口径 |
+| B1 | 报盘同清单可进两批 | `insurance V13` 触发器：按 bill_id 取事务级 advisory lock 后判定"不得同属两个 GENERATED/ACCEPTED 批次"；`REJECTED` 不占位可重报；服务层唯一冲突 → 409 整批回滚 |
+| B4 | 出院后仍可打包计费 | `SurgeryChargeService.charge` 校验 `visit.active()`，已结束就诊 409 |
+| B5 | 出院只查当日漏计 | `countUnbilledDailyOrders(visitId, from, to)` 用 `generate_series` 展开入院至今日逐日校验（护理 REFUSED/OMITTED 仍豁免），历史漏计不再永久漏收 |
+| D2 | 知情同意可倒签/补签 | `ConsentReq` 移除客户端 `signedAt`（服务端取当前时间）；`IN_PROGRESS` 起拒绝新增同意书 |
+
+**实测**
+- 全量单测 **764 项**全绿（+7：auth 内部鉴权 4 / 医保报单冲突 1 / 开台后禁补签 1 / 出院后计费 1）
+- E2E PASS：`clinical_preop_consent_smoke`（已重排为"重签发生在开台前 + 新增 `consent.afterStart.422`"）、
+  `clinical_surgery_charge_smoke`、`insurance_smoke`、`platform_smoke`（经网关 8080）、`kb_answer_smoke`
+- 真实库：`insurance_svc → V13` 迁移成功；反例验证"同一清单插入第二个 GENERATED 批次被拒绝"、
+  "批次改 REJECTED 后允许重报"、测试数据已清理
+- auth 内部接口实测：无令牌 403 / 错误令牌 403 / 正确令牌 200；网关在 fail-fast 模式下正常启动（证明同步带令牌）
+
+**本批不做（下一批）**：B2 长嘱 quantity 口径（需先定"日量 vs 总量"业务口径）、B3 退药退费与处方驳回联动
+（需红冲/退费单据链路）、D1 事务内 HTTP 长锁改造、E1 `X-Actor` 归因统一、F1 empi 单测与合并 E2E，
+以及 33 条 SHOULD-FIX。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

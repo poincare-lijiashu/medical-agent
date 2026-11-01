@@ -122,6 +122,8 @@ medassist:
       secret: ${JWT_SECRET:<dev-jwt-secret>}
       # auth 内网地址：仅用于撤销名单增量同步（不参与请求转发；转发地址见路由配置）
       auth-uri: ${AUTH_SERVICE_URI:http://127.0.0.1:8081}
+      # auth 的 /internal/** 已 fail-closed 校验，同步撤销名单必须带同一令牌
+      internal-token: ${INTERNAL_API_TOKEN:${GATEWAY_INTERNAL_TOKEN:}}
       revocation-sync:
         enabled: ${REVOCATION_SYNC_ENABLED:true}
         interval: ${REVOCATION_SYNC_INTERVAL:PT15S}
@@ -180,4 +182,4 @@ medassist:
 logging:
   level:
     root: INFO
-    com.medassist: DEBUG
+    com.medassist: INFO

@@ -79,6 +79,12 @@ public class SurgeryChargeService {
         if (Visit.CANCELLED.equals(visit.status())) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "该就诊已取消，不能计费");
         }
+        // 必须校验就诊仍在进行：否则"出院 → 完成手术 → 打包计费"会挂一张永远收不到的
+        // UNPAID 单（出院门禁只查出院时点，事后产生的费用无人再结算）
+        if (!visit.active()) {
+            throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID,
+                    "该就诊已结束（已出院/已完成），不能再计费；请先核对出院结算流程");
+        }
         List<ChargeLineView> lines = resolveLines(surgery);
         if (lines.isEmpty()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,

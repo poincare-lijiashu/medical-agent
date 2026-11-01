@@ -16,6 +16,7 @@ import java.util.List;
  * @param protectedPaths    受保护路径（PathPattern 语法，默认 {@code /api/v2/**}）
  * @param denyPaths         直接拒绝的内部路径（统一 404）
  * @param authUri           auth 服务内网地址（撤销名单增量同步用，不参与请求转发）
+ * @param internalToken     内部接口令牌（auth 的 /internal/** 已 fail-closed 校验，必须随请求带头）
  * @param revocationSync    访问令牌撤销名单同步配置
  */
 @ConfigurationProperties(prefix = "medassist.gateway.auth")
@@ -28,6 +29,7 @@ public record GatewayAuthProperties(
         @DefaultValue("/api/v2/**") List<String> protectedPaths,
         @DefaultValue("/api/v2/*/internal/**") List<String> denyPaths,
         @DefaultValue("http://127.0.0.1:8081") String authUri,
+        String internalToken,
         @DefaultValue RevocationSync revocationSync,
         @DefaultValue ClientIp clientIp
 ) {

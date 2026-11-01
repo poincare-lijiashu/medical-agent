@@ -1,0 +1,5 @@
+# 本地开发专用覆盖（严禁用于 staging/prod）
+# 基础配置统一 INFO（避免 DEBUG 把 PHI 写进生产日志），本地联调才开 DEBUG
+logging:
+  level:
+    com.medassist: DEBUG

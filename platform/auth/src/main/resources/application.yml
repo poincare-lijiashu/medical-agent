@@ -45,6 +45,9 @@ spring:
 # P1：访问令牌默认 30 分钟 + 轮换式刷新令牌 7 天（登出/停用走撤销名单，网关 15s 内生效）
 medassist:
   auth:
+    # 内部接口令牌（/internal/**）：与全平台 INTERNAL_API_TOKEN 同源，未配置时内部接口
+    # 一律拒绝（fail-closed）——避免"忘了配"让撤销名单与 token 校验接口裸奔。
+    internal-token: ${INTERNAL_API_TOKEN:${AUTH_INTERNAL_TOKEN:}}
     jwt:
       issuer: ${JWT_ISSUER:medassist-auth}
       secret: ${JWT_SECRET:<dev-jwt-secret>}
@@ -76,4 +79,4 @@ management:
 logging:
   level:
     root: INFO
-    com.medassist: DEBUG
+    com.medassist: INFO

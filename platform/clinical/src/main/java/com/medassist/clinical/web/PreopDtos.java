@@ -30,13 +30,17 @@ public final class PreopDtos {
             Long version) {
     }
 
-    /** 知情同意书（插入即已签署事实；写错只能作废后重签）。 */
+    /**
+     * 知情同意书（插入即已签署事实；写错只能作废后重签）。
+     *
+     * <p>**签署时间不接受客户端传值**：法律文书的签署时间必须由服务端取当前时间，
+     * 否则可以"倒签"到术前任意时点，知情同意的法律门槛形同虚设。
+     */
     public record ConsentReq(
             @NotBlank @Pattern(regexp = "SURGERY|ANESTHESIA|BLOOD_TRANSFUSION|SPECIAL",
                     message = "同意书类型不合法") String consentType,
             @NotBlank @Size(max = 64) String signerName,
             @Size(max = 32) String signerRelation,
-            Instant signedAt,
             @Size(max = 64) String witness,
             @Size(max = 500) String notes) {
     }

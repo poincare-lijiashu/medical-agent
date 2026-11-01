@@ -9,6 +9,7 @@ import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.ExportBatchSummary;
 import com.medassist.insurance.web.InsuranceDtos.ExportReceiptReq;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -114,8 +115,15 @@ public class SettlementExportService {
                 total, insurance, selfPay, payload, sha256(payload), ExportBatch.GENERATED,
                 null, null, null, null, null, null, actor, 0L, Instant.now());
         repo.insertExportBatch(batch);
-        for (SettlementBill bill : bills) {
-            repo.insertExportItem(batch.id(), bill.id(), bill.billNo());
+        try {
+            for (SettlementBill bill : bills) {
+                repo.insertExportItem(batch.id(), bill.id(), bill.billNo());
+            }
+        } catch (DataIntegrityViolationException e) {
+            // V13 触发器兜底：重叠期间并发/串行生成时，同一清单不得进两个有效批次。
+            // 这里整批回滚并返回 409，让操作员刷新后重报（剩余清单会被重新筛选）。
+            throw new BusinessException(ErrorCode.INSURANCE_EXPORT_INVALID,
+                    "部分结算清单已被其它有效报盘批次包含，本批已回滚，请刷新后重新生成");
         }
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("batchNo", batchNo);

@@ -178,7 +178,7 @@ class InpatientServiceTest {
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
         when(repo.countUnbilledTempOrders(visitId)).thenReturn(0);
-        when(repo.countUnbilledDailyOrders(eq(visitId), any(LocalDate.class))).thenReturn(1);
+        when(repo.countUnbilledDailyOrders(eq(visitId), any(LocalDate.class), any(LocalDate.class))).thenReturn(1);
 
         assertThatThrownBy(() -> service.discharge(admissionId, "doctor01"))
                 .isInstanceOf(BusinessException.class)
@@ -237,7 +237,7 @@ class InpatientServiceTest {
         when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
         when(repo.hasUnsettledCharge(visitId)).thenReturn(false);
         when(repo.countUnbilledTempOrders(visitId)).thenReturn(0);
-        when(repo.countUnbilledDailyOrders(eq(visitId), any(LocalDate.class))).thenReturn(0);
+        when(repo.countUnbilledDailyOrders(eq(visitId), any(LocalDate.class), any(LocalDate.class))).thenReturn(0);
         when(repo.findLatestCharge(visitId)).thenReturn(Optional.of(
                 new Charge(UUID.randomUUID(), "C1", visitId, new BigDecimal("88.00"),
                         Charge.PAID, "CASH", Instant.now(), 2L)));

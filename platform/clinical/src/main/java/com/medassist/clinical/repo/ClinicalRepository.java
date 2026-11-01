@@ -486,6 +486,39 @@ public class ClinicalRepository {
         return listUnbilledDailyOrders(visitId, date).size();
     }
 
+    /**
+     * 区间内（含首尾）"应计未计"的长嘱条数：**出院门禁**用。
+     *
+     * <p>为什么不能只查当天：历史某日漏跑按日计费时，出院当天可能是 0，
+     * 但出院后就诊结束、`dailyBill` 又拒绝补计 → 这笔钱永久收不到。
+     * 用 generate_series 展开每一天，与单日判定口径完全一致（含护理 REFUSED/OMITTED 豁免）。
+     */
+    public int countUnbilledDailyOrders(UUID visitId, LocalDate from, LocalDate to) {
+        Long n = jdbc.sql("""
+                        SELECT count(*)
+                          FROM generate_series(CAST(:fromDate AS date), CAST(:toDate AS date),
+                                               interval '1 day') AS d(day)
+                          JOIN clinical_svc.visit_order o
+                            ON o.visit_id = :visitId
+                           AND o.order_mode = 'LONG' AND o.status = 'PLACED'
+                           AND o.start_date <= d.day::date
+                           AND (o.stop_date IS NULL OR o.stop_date >= d.day::date)
+                         WHERE NOT EXISTS (
+                                 SELECT 1 FROM clinical_svc.charge_item ci
+                                   JOIN clinical_svc.charge c ON c.id = ci.charge_id
+                                  WHERE c.visit_id = o.visit_id
+                                    AND ci.source_key =
+                                        'DAILY:' || o.id::text || ':' || d.day::date::text)
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM clinical_svc.nursing_execution ne
+                                  WHERE ne.order_id = o.id AND ne.exec_date = d.day::date
+                                    AND ne.status <> 'EXECUTED')
+                        """)
+                .param("visitId", visitId).param("fromDate", from).param("toDate", to)
+                .query(Long.class).single();
+        return n == null ? 0 : n.intValue();
+    }
+
     /** 某医嘱某日是否已按日计费（护理补记非 EXECUTED 前必须确认未收费）。 */
     public boolean existsDailyCharge(UUID orderId, LocalDate date) {
         Long n = jdbc.sql("SELECT count(*) FROM clinical_svc.charge_item WHERE source_key = ?")

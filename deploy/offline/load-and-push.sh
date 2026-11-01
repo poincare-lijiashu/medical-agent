@@ -48,6 +48,7 @@ CHART_IMAGES=(
   "platform-tech:1.0.0"
   "platform-emr:1.0.0"
   "platform-insurance:1.0.0"
+  "platform-kb:1.0.0"
   "ai-core:1.0.0"
 )
 
