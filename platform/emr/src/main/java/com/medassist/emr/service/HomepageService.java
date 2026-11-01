@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 病案首页：生成（临床快照）、补录、提交、归档与打印。
@@ -107,7 +108,8 @@ public class HomepageService {
                 src.admittedAt(), src.dischargedAt(), stayDays(src.admittedAt(), src.dischargedAt()),
                 blankToNull(src.attendingDoctor()), null, null, null, null, "NONE",
                 null, null, null, null, null, 0, 0, false, false, null, null, null,
-                toJson(diagnoses), "[]", toJson(feeSummary), total, Homepage.DRAFT,
+                toJson(diagnoses), surgeryProceduresJson(src.procedures()), toJson(feeSummary),
+                total, Homepage.DRAFT,
                 null, null, null, null, null, 0L, null);
         repo.insertHomepage(homepage);
 
@@ -150,8 +152,8 @@ public class HomepageService {
         Snapshot snapshot = snapshot(src);
         int stayDays = stayDays(src.admittedAt(), src.dischargedAt());
         if (!repo.recalculateHomepage(id, current.version(), snapshot.diagnosesJson(),
-                snapshot.feeSummaryJson(), snapshot.total(), src.admittedAt(), src.dischargedAt(),
-                stayDays)) {
+                snapshot.proceduresJson(), snapshot.feeSummaryJson(), snapshot.total(),
+                src.admittedAt(), src.dischargedAt(), stayDays)) {
             throw new BusinessException(ErrorCode.CONFLICT, "病案首页已被他人修改，请刷新后重试");
         }
         Map<String, Object> detail = new LinkedHashMap<>();
@@ -357,8 +359,8 @@ public class HomepageService {
     }
 
     /** 由临床域数据构建的首页快照（生成与重新生成共用同一套口径）。 */
-    private record Snapshot(String diagnosesJson, String feeSummaryJson, BigDecimal total,
-                            int diagnosisCount) {
+    private record Snapshot(String diagnosesJson, String proceduresJson, String feeSummaryJson,
+                            BigDecimal total, int diagnosisCount) {
     }
 
     private Snapshot snapshot(ClinicalClient.HomepageSource src) {
@@ -374,7 +376,31 @@ public class HomepageService {
             row.put("primary", d.primary());
             diagnoses.add(row);
         }
-        return new Snapshot(toJson(diagnoses), toJson(feeSummary), total, diagnoses.size());
+        return new Snapshot(toJson(diagnoses), surgeryProceduresJson(src.procedures()),
+                toJson(feeSummary), total, diagnoses.size());
+    }
+
+    /**
+     * 已完成手术 → 首页手术操作 JSON（第六轮之后：手术操作不再手工录入）。
+     *
+     * <p>病案室仍可在草稿态补充切口等级/麻醉方式，提交后只读。
+     */
+    private String surgeryProceduresJson(List<ClinicalClient.Procedure> procedures) {
+        if (procedures == null || procedures.isEmpty()) {
+            return "[]";
+        }
+        List<Map<String, Object>> rows = new ArrayList<>(procedures.size());
+        for (ClinicalClient.Procedure p : procedures) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("code", p.code());
+            row.put("name", p.name());
+            row.put("date", p.date());
+            row.put("surgeon", p.surgeon());
+            row.put("anesthesia", p.anesthesia());
+            row.put("incisionLevel", p.incisionLevel());
+            rows.add(row);
+        }
+        return toJson(rows);
     }
 
     /**
@@ -391,7 +417,32 @@ public class HomepageService {
         if (!canonicalFees(h.feeSummary()).equals(canonicalFees(fresh.feeSummaryJson()))) {
             return false;
         }
+        if (!proceduresCoverClinical(h.procedures(), fresh.proceduresJson())) {
+            return false;
+        }
         return canonicalDiagnoses(h.diagnoses()).equals(canonicalDiagnoses(fresh.diagnosesJson()));
+    }
+
+    /**
+     * 手术操作指纹：临床已完成的手术必须全部出现在首页快照中（按编码计数量）。
+     *
+     * <p>为什么不做全等比较：病案室在草稿态可以补录外院手术、补充切口/麻醉信息，
+     * 但**不能丢掉**临床已记录的手术——否则 DRG 权重失真。出院后又完成一台手术时，
+     * 首页必须重新生成才能提交。
+     */
+    private boolean proceduresCoverClinical(String homepageJson, String clinicalJson) {
+        Map<String, Long> clinical = countProceduresByCode(clinicalJson);
+        if (clinical.isEmpty()) {
+            return true;
+        }
+        Map<String, Long> homepage = countProceduresByCode(homepageJson);
+        return clinical.entrySet().stream()
+                .allMatch(e -> homepage.getOrDefault(e.getKey(), 0L) >= e.getValue());
+    }
+
+    private Map<String, Long> countProceduresByCode(String json) {
+        return readJsonList(json).stream()
+                .collect(Collectors.groupingBy(p -> str(p.get("code")), Collectors.counting()));
     }
 
     private Map<String, BigDecimal> canonicalFees(String json) {

@@ -142,6 +142,35 @@ public final class ClinicalModel {
         public static final String FAILED = "FAILED";
     }
 
+    /** 手术操作字典（ICD-9-CM-3）：停用后不可新选，历史记录保留名称快照。 */
+    public record OperationCatalog(String code, String name, String category, boolean enabled,
+                                   long version) {
+    }
+
+    /**
+     * 手术记录（手术麻醉域第一批）。
+     *
+     * <p>状态机：{@code PLANNED → IN_PROGRESS → COMPLETED}，任一非终态可 {@code CANCELLED}。
+     * 病案首页手术操作与 DRG 分组只取 {@code COMPLETED} 记录。
+     */
+    public record SurgeryCase(UUID id, String caseNo, UUID visitId, UUID admissionId,
+                              UUID patientId, String operationCode, String operationName,
+                              Instant plannedAt, Instant startedAt, Instant endedAt,
+                              String surgeon, String assistant, String anesthesiaType,
+                              String asaGrade, String incisionLevel, String status,
+                              String cancelReason, String createdBy, long version,
+                              Instant createdAt) {
+
+        public static final String PLANNED = "PLANNED";
+        public static final String IN_PROGRESS = "IN_PROGRESS";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean completed() {
+            return COMPLETED.equals(status);
+        }
+    }
+
     /** 收费单。 */
     public record Charge(UUID id, String chargeNo, UUID visitId, BigDecimal totalAmount,
                          String status, String paymentMethod, Instant paidAt, long version) {

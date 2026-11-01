@@ -9,8 +9,10 @@ import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
@@ -1319,6 +1321,149 @@ public class ClinicalRepository {
                         + " FROM clinical_svc.pharmacy_charge"
                         + " WHERE refund_pending_amount > 0 ORDER BY updated_at DESC LIMIT ?")
                 .param(limit).query(PHARMACY_CHARGE_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 手术麻醉（V15）
+
+    private static final RowMapper<OperationCatalog> OPERATION_MAPPER = (rs, i) -> new OperationCatalog(
+            rs.getString("code"), rs.getString("name"), rs.getString("category"),
+            rs.getBoolean("enabled"), rs.getLong("version"));
+
+    private static final RowMapper<SurgeryCase> SURGERY_MAPPER = (rs, i) -> new SurgeryCase(
+            rs.getObject("id", UUID.class), rs.getString("case_no"),
+            rs.getObject("visit_id", UUID.class), rs.getObject("admission_id", UUID.class),
+            rs.getObject("patient_id", UUID.class), rs.getString("operation_code"),
+            rs.getString("operation_name"), instantOf(rs, "planned_at"),
+            instantOf(rs, "started_at"), instantOf(rs, "ended_at"),
+            rs.getString("surgeon"), rs.getString("assistant"),
+            rs.getString("anesthesia_type"), rs.getString("asa_grade"),
+            rs.getString("incision_level"), rs.getString("status"),
+            rs.getString("cancel_reason"), rs.getString("created_by"),
+            rs.getLong("version"), instantOf(rs, "created_at"));
+
+    private static java.time.Instant instantOf(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
+    }
+
+    /** Instant → OffsetDateTime（JdbcClient 绑定 timestamptz 用 UTC 偏移，不做本地时区换算）。 */
+    private static java.time.OffsetDateTime ts(java.time.Instant instant) {
+        return instant == null ? null : java.time.OffsetDateTime.ofInstant(
+                instant, java.time.ZoneOffset.UTC);
+    }
+
+    /** 手术编码搜索（编码前缀或名称包含；只搜启用项）。 */
+    public List<OperationCatalog> searchOperationCatalog(String keyword, int limit) {
+        String like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT code, name, category, enabled, version
+                          FROM clinical_svc.operation_catalog
+                         WHERE enabled
+                           AND (CAST(:like AS text) IS NULL
+                                OR code ILIKE CAST(:like AS text)
+                                OR name ILIKE CAST(:like AS text))
+                         ORDER BY code
+                         LIMIT :limit
+                        """)
+                .param("like", like).param("limit", limit)
+                .query(OPERATION_MAPPER).list();
+    }
+
+    public Optional<OperationCatalog> findOperation(String code) {
+        return jdbc.sql("""
+                        SELECT code, name, category, enabled, version
+                          FROM clinical_svc.operation_catalog WHERE code = ?
+                        """).param(code).query(OPERATION_MAPPER).optional();
+    }
+
+    /** 手术号 OPYYYYMMDD######。 */
+    public String nextSurgeryCaseNo() {
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "clinical_svc.surgery_case_no_seq").query(Long.class).single();
+        return "OP" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq);
+    }
+
+    public void insertSurgeryCase(SurgeryCase c) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.surgery_case
+                            (id, case_no, visit_id, admission_id, patient_id, operation_code,
+                             operation_name, planned_at, started_at, ended_at, surgeon, assistant,
+                             anesthesia_type, asa_grade, incision_level, status, created_by, version)
+                        VALUES (:id, :caseNo, :visitId, CAST(:admissionId AS uuid), :patientId,
+                                :operationCode, :operationName, CAST(:plannedAt AS timestamptz),
+                                CAST(:startedAt AS timestamptz), CAST(:endedAt AS timestamptz),
+                                :surgeon, :assistant, :anesthesiaType, :asaGrade,
+                                :incisionLevel, :status, :createdBy, 0)
+                        """)
+                .param("id", c.id()).param("caseNo", c.caseNo()).param("visitId", c.visitId())
+                .param("admissionId", c.admissionId()).param("patientId", c.patientId())
+                .param("operationCode", c.operationCode())
+                .param("operationName", c.operationName()).param("plannedAt", ts(c.plannedAt()))
+                .param("startedAt", ts(c.startedAt())).param("endedAt", ts(c.endedAt()))
+                .param("surgeon", c.surgeon()).param("assistant", c.assistant())
+                .param("anesthesiaType", c.anesthesiaType()).param("asaGrade", c.asaGrade())
+                .param("incisionLevel", c.incisionLevel()).param("status", c.status())
+                .param("createdBy", c.createdBy()).update();
+    }
+
+    public List<SurgeryCase> listSurgeryCases(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_case
+                         WHERE visit_id = ? ORDER BY created_at
+                        """).param(visitId).query(SURGERY_MAPPER).list();
+    }
+
+    /** 只取已完成手术（病案首页与 DRG 分组的取数口径）。 */
+    public List<SurgeryCase> listCompletedSurgeryCases(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_case
+                         WHERE visit_id = ? AND status = 'COMPLETED'
+                         ORDER BY started_at, created_at
+                        """).param(visitId).query(SURGERY_MAPPER).list();
+    }
+
+    public Optional<SurgeryCase> lockSurgeryCase(UUID id) {
+        return jdbc.sql("SELECT * FROM clinical_svc.surgery_case WHERE id = ? FOR UPDATE")
+                .param(id).query(SURGERY_MAPPER).optional();
+    }
+
+    /** 开始手术（CAS：仅 PLANNED）。 */
+    public boolean startSurgery(UUID id, java.time.Instant startedAt, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_case
+                           SET status = 'IN_PROGRESS', started_at = CAST(:startedAt AS timestamptz),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'PLANNED' AND version = :version
+                        """)
+                .param("startedAt", ts(startedAt)).param("id", id)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 完成手术（CAS：仅 IN_PROGRESS）。 */
+    public boolean completeSurgery(UUID id, java.time.Instant endedAt, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_case
+                           SET status = 'COMPLETED', ended_at = CAST(:endedAt AS timestamptz),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'IN_PROGRESS' AND version = :version
+                        """)
+                .param("endedAt", ts(endedAt)).param("id", id)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 取消手术（CAS：非终态可取消，必须写原因）。 */
+    public boolean cancelSurgery(UUID id, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_case
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('PLANNED', 'IN_PROGRESS')
+                           AND version = :version
+                        """)
+                .param("reason", reason).param("id", id)
+                .param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

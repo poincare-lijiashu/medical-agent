@@ -34,11 +34,21 @@ public interface ClinicalClient {
                           Instant admittedAt, Instant dischargedAt,
                           UUID wardId, String wardName, UUID bedId, String bedNo,
                           String attendingDoctor, List<Diagnosis> diagnoses,
+                          List<Procedure> procedures,
                           Map<String, BigDecimal> feeSummary, BigDecimal totalAmount) {
     }
 
     /** 诊断快照项。 */
     record Diagnosis(String code, String name, boolean primary) {
+    }
+
+    /**
+     * 手术操作快照项（来自临床域"已完成"手术记录）。
+     *
+     * <p>病案室仍可在草稿态修正（如补充切口等级），但提交后只读。
+     */
+    record Procedure(String code, String name, String date, String surgeon,
+                     String anesthesia, String incisionLevel) {
     }
 
     /**

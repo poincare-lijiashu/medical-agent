@@ -131,6 +131,18 @@ public class HttpClinicalClient implements ClinicalClient {
                 }
             }
         }
+        // 已完成手术（临床域只回传 COMPLETED），直接固化为首页手术操作快照
+        List<Procedure> procedures = new ArrayList<>();
+        if (body.get("procedures") instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (!(row instanceof Map<?, ?> m)) {
+                    continue;
+                }
+                procedures.add(new Procedure(str(m.get("code")), str(m.get("name")),
+                        str(m.get("date")), str(m.get("surgeon")), str(m.get("anesthesia")),
+                        str(m.get("incisionLevel"))));
+            }
+        }
         return new HomepageSource(visitId,
                 str(body.get("visitNo")), str(body.get("visitType")), str(body.get("visitStatus")),
                 uuid(body.get("patientId")), str(body.get("patientNo")),
@@ -140,7 +152,7 @@ public class HttpClinicalClient implements ClinicalClient {
                 instant(body.get("admittedAt")), instant(body.get("dischargedAt")),
                 uuid(body.get("wardId")), str(body.get("wardName")),
                 uuid(body.get("bedId")), str(body.get("bedNo")),
-                str(body.get("attendingDoctor")), diagnoses, feeSummary,
+                str(body.get("attendingDoctor")), diagnoses, procedures, feeSummary,
                 decimal(body.get("totalAmount")));
     }
 

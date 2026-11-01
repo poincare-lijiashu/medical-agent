@@ -206,7 +206,7 @@ class HomepageServiceTest {
                 "INPATIENT", "FINISHED", patientId, "P20261101000001", UUID.randomUUID(), "内科",
                 admissionId, "A001", "DISCHARGED", admittedAt, dischargedAt, UUID.randomUUID(),
                 "一病区", UUID.randomUUID(), "A1", "doctor01",
-                List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true)),
+                List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true)), List.of(),
                 Map.of("EXAM", new BigDecimal("300.00")), new BigDecimal("300.00"));
         when(clinicalClient.homepageSource(visitId)).thenReturn(changed);
 
@@ -217,12 +217,48 @@ class HomepageServiceTest {
     }
 
     @Test
+    @DisplayName("提交前指纹校验：临床已完成手术未带入首页 → 409（不能丢手术，DRG 会失真）")
+    void submitRejectsMissingSurgicalProcedure() {
+        Homepage draft = completeDraft();
+        when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(draft));
+        when(clinicalClient.homepageSource(visitId)).thenReturn(sourceWithProcedures(
+                List.of(new ClinicalClient.Procedure("47.0901", "阑尾切除术", "2026-11-01",
+                        "doctor01", "GENERAL", "II"))));
+
+        assertThatThrownBy(() -> service.submit(draft.id(), "admin01", SUBMITTER_ID))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
+        verify(repo, never()).submitHomepage(any(), anyString(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("提交前指纹校验：首页额外补录外院手术允许提交（只校验临床手术不丢）")
+    void submitAllowsExtraManualProcedure() {
+        Homepage draft = draftWithProcedures("[{\"code\":\"47.0901\",\"name\":\"阑尾切除术\","
+                + "\"date\":\"2026-11-01\",\"surgeon\":\"doctor01\",\"anesthesia\":\"GENERAL\","
+                + "\"incisionLevel\":\"II\"},{\"code\":\"88.0100\",\"name\":\"外院穿刺\","
+                + "\"date\":null,\"surgeon\":\"doctor01\",\"anesthesia\":\"LOCAL\","
+                + "\"incisionLevel\":\"II\"}]");
+        when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(draft));
+        when(repo.submitHomepage(draft.id(), "admin01", SUBMITTER_ID, draft.version()))
+                .thenReturn(true);
+        when(repo.findHomepage(draft.id())).thenReturn(Optional.of(draft));
+        when(clinicalClient.homepageSource(visitId)).thenReturn(sourceWithProcedures(
+                List.of(new ClinicalClient.Procedure("47.0901", "阑尾切除术", "2026-11-01",
+                        "doctor01", "GENERAL", "II"))));
+
+        service.submit(draft.id(), "admin01", SUBMITTER_ID);
+
+        verify(repo).submitHomepage(draft.id(), "admin01", SUBMITTER_ID, draft.version());
+    }
+
+    @Test
     @DisplayName("重新生成：草稿态按当前临床数据刷新快照并留痕（MF-05）")
     void recalculateRefreshesDraftSnapshot() {
         Homepage draft = homepage(Homepage.DRAFT);
         when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(draft));
         when(repo.recalculateHomepage(eq(draft.id()), eq(0L), anyString(), anyString(),
-                any(), any(), any(), anyInt())).thenReturn(true);
+                anyString(), any(), any(), any(), anyInt())).thenReturn(true);
         when(repo.findHomepage(draft.id())).thenReturn(Optional.of(draft));
         when(clinicalClient.homepageSource(visitId)).thenReturn(source("INPATIENT", "DISCHARGED",
                 dischargedAt, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
@@ -230,7 +266,7 @@ class HomepageServiceTest {
         service.recalculate(draft.id(), "admin01");
 
         verify(repo).recalculateHomepage(eq(draft.id()), eq(0L), anyString(), anyString(),
-                eq(new BigDecimal("268.00")), any(), any(), anyInt());
+                anyString(), eq(new BigDecimal("268.00")), any(), any(), anyInt());
         verify(repo).logChange(eq("admin01"), eq("HOMEPAGE_RECALCULATE"), eq("HOMEPAGE"),
                 eq(draft.id().toString()), anyString());
     }
@@ -245,7 +281,7 @@ class HomepageServiceTest {
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID));
         verify(repo, never()).recalculateHomepage(any(), anyLong(), anyString(), anyString(),
-                any(), any(), any(), anyInt());
+                anyString(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -477,6 +513,22 @@ class HomepageServiceTest {
                 null, null, null, null, null, 0L, Instant.now());
     }
 
+    private Homepage draftWithProcedures(String proceduresJson) {
+        Homepage base = completeDraft();
+        return new Homepage(base.id(), base.homepageNo(), base.visitId(), base.admissionId(),
+                base.patientId(), base.patientNo(), base.patientName(),
+                base.patientSex(), base.birthDate(), base.admitAge(), base.visitNo(),
+                base.deptId(), base.deptName(), base.wardId(), base.wardName(), base.bedNo(),
+                base.admittedAt(), base.dischargedAt(), base.stayDays(), base.attendingDoctor(),
+                base.admissionWay(), base.dischargeMode(), base.deathTime(), base.deathCause(),
+                base.readmitPlan(), base.maritalStatus(), base.occupation(), base.nation(),
+                base.bloodType(), base.rhFactor(), base.rescueCount(), base.rescueSuccessCount(),
+                base.criticalCase(), base.hospitalInfection(), base.chiefPhysician(),
+                base.residentPhysician(), base.coder(), base.diagnoses(), proceduresJson,
+                base.feeSummary(), base.totalAmount(), Homepage.DRAFT, null, null, null, null,
+                null, 0L, Instant.now());
+    }
+
     private Homepage homepage(String status) {
         return new Homepage(UUID.randomUUID(), "HP20261101000001", visitId, admissionId, patientId,
                 "P20261101000001", "张三", "MALE", LocalDate.of(1980, 5, 20), 45,
@@ -485,6 +537,18 @@ class HomepageServiceTest {
                 "NONE", null, null, null, null, null, 0, 0, false, false, null, null, null,
                 "[]", "[]", "{\"EXAM\":268.00}", new BigDecimal("268.00"), status,
                 null, null, null, null, null, 0L, Instant.now());
+    }
+
+    private ClinicalClient.HomepageSource sourceWithProcedures(
+            List<ClinicalClient.Procedure> procedures) {
+        ClinicalClient.HomepageSource base = source("INPATIENT", "DISCHARGED", dischargedAt,
+                List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true)));
+        return new ClinicalClient.HomepageSource(base.visitId(), base.visitNo(), base.visitType(),
+                base.visitStatus(), base.patientId(), base.patientNo(), base.deptId(),
+                base.deptName(), base.admissionId(), base.admissionNo(), base.admissionStatus(),
+                base.admittedAt(), base.dischargedAt(), base.wardId(), base.wardName(),
+                base.bedId(), base.bedNo(), base.attendingDoctor(), base.diagnoses(), procedures,
+                base.feeSummary(), base.totalAmount());
     }
 
     private ClinicalClient.HomepageSource source(String visitType, String admissionStatus,
@@ -496,7 +560,7 @@ class HomepageServiceTest {
                 outpatient ? null : admissionId,
                 outpatient ? null : "A001",
                 admissionStatus, admittedAt, discharged, UUID.randomUUID(), "一病区",
-                UUID.randomUUID(), "A1", "doctor01", diagnoses,
+                UUID.randomUUID(), "A1", "doctor01", diagnoses, List.of(),
                 Map.of("EXAM", new BigDecimal("268.00")), new BigDecimal("268.00"));
     }
 }

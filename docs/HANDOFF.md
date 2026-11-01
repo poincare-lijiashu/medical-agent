@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0+P1 整改** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
@@ -11,16 +11,16 @@
   `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）、`0995eea`（**第六轮 P1 跨域一致性**）、
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）、`cb68a1e`（**第六轮 P3 读留痕/四眼/报盘诊断**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **572 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **587 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V28**、`clinical_svc` → **V14**、`emr_svc` → **V14**、`insurance_svc` → **V12**
+  本日迁移已在真实库执行：`auth_svc` → **V29**、`clinical_svc` → **V15**、`emr_svc` → **V14**、`insurance_svc` → **V12**
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **手术麻醉域 + ICD-9-CM-3 手术编码字典**：首页手术操作目前手工录入，接手术域后可自动生成、
-     联动收费，并让 DRG 分组拿到真实手术编码
+  1. **手术麻醉域第二批**：排台（手术间/台次/接台）、麻醉记录单、术中护理记录、术前讨论与知情同意、
+     术中收费打包（第一批已交付"字典 + 记录 + 首页/DRG 取数"，见第 63 条）
   2. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
   3. **ROUND6 的 SHOULD-FIX / 建议项**（错误码可读性、索引与时区口径、对账与可观测）
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
@@ -924,6 +924,30 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`emr_svc` → **V14**
    - **ROUND6 的 15 条 MUST-FIX 至此全部收口**
 
+63. **手术麻醉域第一批：ICD-9-CM-3 字典 + 手术记录 + 首页/DRG 取数（2026-11-01）**
+   - **`clinical V15`**：`operation_catalog`（可停用，名称快照）、`surgery_case`、序列 `surgery_case_no_seq`
+     - 约束：`ux_surgery_case_active`（同就诊同手术仅一条未取消，部分唯一索引）、
+       `ck_surgery_time`（结束不早于开始）、`ck_surgery_cancel`（CANCELLED 必须写原因）
+     - 种子 10 条常见手术（阑尾/腹腔镜胆囊/疝/结肠镜/剖宫产/髋膝置换/肺穿刺/血透/皮肤缝合）
+   - **状态机**：`PLANNED → IN_PROGRESS → COMPLETED`，非终态可 `CANCELLED`；全部 CAS（期望状态 + 版本号），
+     迁移写 `clinical_change_log`（`SURGERY_PLAN/START/COMPLETE/CANCEL`，targetType `SURGERY_CASE`）
+   - **规则**：只住院可排手术（门诊 422）；编码必须存在且启用；同就诊同手术重复 → 409（唯一索引兜底，
+     取消后释放位置）；计划时快照字典名称 + 自动填充当次住院 `admission_id`
+   - **API**：`/clinical/operation-catalog`、`/clinical/visits/{visitId}/surgery-cases`（GET/POST）、
+     `.../{id}/start|complete|cancel`；权限 `clinical:surgery:read|write`（`auth V29`：ADMIN/DOCTOR 读写，
+     NURSE/QC 只读）
+   - **首页联动**：`homepage-source` 增 `procedures`（只取 COMPLETED，日期按 `Asia/Shanghai`）；
+     首页生成/重算自动带出；`HttpClinicalClient` 解析该字段；`recalculateHomepage` 增 `procedures` 参数
+   - **首页指纹口径（关键设计取舍）**：手术操作**不做全等比较**，只校验"临床已完成手术必须全部出现在首页"
+     （按编码计数量）。理由：病案室要能补录外院手术/修正切口麻醉，但不能丢掉临床手术（否则 DRG 权重失真）；
+     全等比较会让"补录"永远 409（本轮回归即因此全红，已改）
+   - **实测**：全量单测 **587 项**全绿（手术域 +13、首页手术指纹 +2）；
+     新增 `clinical_surgery_smoke.ps1` 46 项断言 PASS；`emr_homepage_smoke`、`emr_hqms_export_smoke`、
+     `insurance_drg_smoke`、`clinical_pharmacy_order_smoke`、`platform_smoke` 回归全 PASS
+   - 数据库反例：取消不写原因 / 重复未取消手术 / 结束早于开始 三条均被拒绝
+   - 迁移：`clinical_svc` → **V15**、`auth_svc` → **V29**
+   - 遗留：排台（手术间/台次/接台）、麻醉记录单、术中护理、术前讨论与知情同意
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -996,6 +1020,13 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   Maven 增量编译有时不会因测试源码变化而重编，看到 `NoSuchMethodError` 先 `clean test-compile`
 - 单库多 schema 跨域 UNION 查询要先 `to_regclass('schema.table')` 探测：某域未部署时
   直接写死表名会让整个接口 500（结果还要缓存，别每次查询都探测）
+- **提交前指纹不要对"可人工补录"的字段做全等比较**：手术操作由临床域自动带出，但病案室需要补录
+  外院手术/修正切口等级。做成全等比较后"补录"永远 409，回归测试直接全红；正确口径是
+  "系统内的事实必须全部覆盖（按编码计数量），人工附加项允许存在"
+- PowerShell 传 `-Dxxx.yyy=zzz`（含点号）必须加引号：`mvn ... "-Dsurefire.failIfNoSpecifiedTests=false"`，
+  否则报 `Unknown lifecycle phase ".failIfNoSpecifiedTests=false"`；同理 `"-Dtest=Xxx"`
+- 手术编码这类**字典驱动的业务表**不要给业务列加外键：字典项停用/被替换后，历史记录仍要保留名称快照，
+  FK 会挡住字典维护。用"应用层校验 + 名称快照"而不是 FK
 - `mvn -Pprod-package` 排除 dev 配置后，本地 `java -jar` 仍用普通构建（不带 profile），
   两条链路互不影响；Dockerfile 必须固定带 `-Pprod-package`
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，

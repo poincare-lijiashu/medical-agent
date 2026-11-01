@@ -149,6 +149,23 @@ public class InternalVisitController {
 
         Map<String, BigDecimal> feeSummary = repo.sumChargeByCategory(visitId);
         body.put("feeSummary", feeSummary);
+
+        // 手术操作：只取"已完成"手术记录（未完成的手术不能进病案，否则虚增手术操作）
+        List<Map<String, Object>> procedures = repo.listCompletedSurgeryCases(visitId).stream()
+                .map(s -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("code", s.operationCode());
+                    row.put("name", s.operationName());
+                    row.put("date", s.startedAt() == null ? null
+                            : java.time.LocalDate.ofInstant(s.startedAt(),
+                                    com.medassist.common.time.BusinessTime.zone()).toString());
+                    row.put("surgeon", s.surgeon());
+                    row.put("anesthesia", s.anesthesiaType());
+                    row.put("incisionLevel", s.incisionLevel());
+                    return row;
+                })
+                .toList();
+        body.put("procedures", procedures);
         body.put("totalAmount", feeSummary.values().stream()
                 .reduce(BigDecimal.ZERO, BigDecimal::add));
         return body;

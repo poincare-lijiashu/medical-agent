@@ -827,12 +827,13 @@ public class EmrRepository {
      * 这里按当前临床数据重算，仅允许在草稿态（提交后由触发器拒绝修改）。
      */
     public boolean recalculateHomepage(UUID id, long expectedVersion, String diagnoses,
-                                       String feeSummary, BigDecimal totalAmount,
+                                       String procedures, String feeSummary, BigDecimal totalAmount,
                                        java.time.Instant admittedAt, java.time.Instant dischargedAt,
                                        int stayDays) {
         return jdbc.sql("""
                         UPDATE emr_svc.record_homepage
                            SET diagnoses = CAST(:diagnoses AS jsonb),
+                               procedures = CAST(:procedures AS jsonb),
                                fee_summary = CAST(:feeSummary AS jsonb),
                                total_amount = :totalAmount,
                                admitted_at = CAST(:admittedAt AS timestamptz),
@@ -841,7 +842,8 @@ public class EmrRepository {
                                version = version + 1, updated_at = now()
                          WHERE id = :id AND status = 'DRAFT' AND version = :version
                         """)
-                .param("diagnoses", diagnoses).param("feeSummary", feeSummary)
+                .param("diagnoses", diagnoses).param("procedures", procedures)
+                .param("feeSummary", feeSummary)
                 .param("totalAmount", totalAmount)
                 .param("admittedAt", ts(admittedAt)).param("dischargedAt", ts(dischargedAt))
                 .param("stayDays", stayDays)
