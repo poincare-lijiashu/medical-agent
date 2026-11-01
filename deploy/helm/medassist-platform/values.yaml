@@ -152,7 +152,7 @@ internalAuth:
   callerKeys:
     empi: [clinical, emr, insurance, pharmacy, tech]
     clinical: [clinical, emr, insurance]
-    emr: [emr]
+    emr: [emr, insurance]
     pharmacy: [pharmacy]
     tech: [tech]
     insurance: [insurance]

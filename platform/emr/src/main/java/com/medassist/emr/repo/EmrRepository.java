@@ -864,19 +864,23 @@ public class EmrRepository {
     }
 
     /**
-     * 上报期间的串行化锁（事务级 advisory lock）。
+     * HQMS 上报的串行化锁（事务级 advisory lock，全局单键）。
      *
      * <p>与医保报盘同一原因：并发 create 时各自的 NOT EXISTS 都在对方提交前查空，
-     * 同一首页会进入两个 GENERATED 批次。触发器是最后一道保险，这里先让并发排队。
+     * 同一首页会进入两个 GENERATED 批次。
+     *
+     * <p>键必须是**全局单键**（第六轮 MF-07）：按期间拼键时，期间重叠但不相等的两次
+     * create（如 1..31 与 10..20）会取得不同锁，互不等待，同一首页照样能进两个批次。
+     * 数据库侧由 `ux_hqms_item_active_homepage` 唯一索引兜底，这里让正常并发先排队。
      */
-    public void lockHqmsPeriod(LocalDate from, LocalDate to) {
+    public void lockHqmsExport() {
         jdbc.sql("""
                         WITH acquired AS (
                             SELECT pg_advisory_xact_lock(hashtextextended(CAST(:key AS text), 0))
                         )
                         SELECT 1 FROM acquired
                         """)
-                .param("key", "emr:hqms-export:" + from + ":" + to)
+                .param("key", "emr:hqms-export")
                 .query(Integer.class).single();
     }
 
@@ -892,9 +896,8 @@ public class EmrRepository {
                            AND NOT EXISTS (
                                SELECT 1
                                  FROM emr_svc.hqms_export_item i
-                                 JOIN emr_svc.hqms_export_batch b ON b.id = i.batch_id
                                 WHERE i.homepage_id = h.id
-                                  AND b.status IN ('GENERATED', 'ACCEPTED'))
+                                  AND i.active)
                         """)
                 .param("from", from).param("to", to)
                 .query(Long.class).single();
@@ -912,9 +915,8 @@ public class EmrRepository {
                            AND EXISTS (
                                SELECT 1
                                  FROM emr_svc.hqms_export_item i
-                                 JOIN emr_svc.hqms_export_batch b ON b.id = i.batch_id
                                 WHERE i.homepage_id = h.id
-                                  AND b.status IN ('GENERATED', 'ACCEPTED'))
+                                  AND i.active)
                         """)
                 .param("from", from).param("to", to)
                 .query(Long.class).single();
@@ -931,9 +933,8 @@ public class EmrRepository {
                            AND NOT EXISTS (
                                SELECT 1
                                  FROM emr_svc.hqms_export_item i
-                                 JOIN emr_svc.hqms_export_batch b ON b.id = i.batch_id
                                 WHERE i.homepage_id = h.id
-                                  AND b.status IN ('GENERATED', 'ACCEPTED'))
+                                  AND i.active)
                          ORDER BY h.discharged_at, h.homepage_no
                          LIMIT :limit
                         """)

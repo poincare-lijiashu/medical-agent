@@ -168,11 +168,27 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
 | gateway | — | 网关不参与 `/internal/**` 调用 |
 | empi | clinical, emr, insurance, pharmacy, tech | 被这 5 个服务调用查患者 |
 | clinical | clinical, emr, insurance | 自己签发；emr / insurance 会调临床内部接口 |
-| emr | emr | 自己签发 |
+| emr | emr, insurance | 自己签发；医保域 DRG 模拟分组会调病案首页内部接口 |
 | pharmacy | pharmacy | 自己签发 |
 | tech | tech | 自己签发 |
 | insurance | insurance | 自己签发 |
 | auth | — | 不调用内部接口 |
+
+服务间地址与令牌矩阵（新增调用边必须"地址 + 网络策略 + 调用方密钥"三件套齐全）：
+
+| 调用方 → 被调用方 | 环境变量（Helm 自动注入） | 网络策略 | 调用方密钥 |
+|---|---|---|---|
+| clinical → empi | `EMPI_INTERNAL_URI` | empi 入站放行 clinical | `empi: [clinical, ...]` |
+| emr → empi | `EMPI_INTERNAL_URI` | empi 入站放行 emr | `empi: [..., emr, ...]` |
+| insurance → empi | `EMPI_INTERNAL_URI` | empi 入站放行 insurance | `empi: [..., insurance, ...]` |
+| pharmacy → empi | `EMPI_INTERNAL_URI` | empi 入站放行 pharmacy | `empi: [..., pharmacy, ...]` |
+| tech → empi | `EMPI_INTERNAL_URI` | empi 入站放行 tech | `empi: [..., tech, ...]` |
+| emr → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 emr | `clinical: [clinical, emr, insurance]` |
+| insurance → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 insurance | `clinical: [..., insurance]` |
+| insurance → emr | `EMR_INTERNAL_URI` | emr 入站放行 insurance | `emr: [emr, insurance]` |
+
+> 回退地址是 `127.0.0.1:<port>`（本地单机自验用）。**任何新调用边只要漏了上表任一件套，
+> 本地都能跑通、staging/prod 才暴露**，表现为 503/超时或 `internalPathsSignatureRequired=true` 时的 403。
 
 **生成**（离线环境二选一）：
 
@@ -225,8 +241,9 @@ sum(rate(medassist_internal_auth_total{result="ok"}[5m]))                 # 与�
 
 ### 4.3 数据库迁移：为什么用 Hook Job
 
-auth / empi 内置 Flyway。多副本滚动更新时，多个 Pod 会同时抢 schema 历史表锁——
-先到的迁移、后到的可能超时重启。Chart 的做法：
+auth / empi / clinical / pharmacy / tech / emr / insurance 均内置 Flyway，各模块都有自己的
+`MigrateOnlyRunner`（`--medassist.migrate-only=true` 时执行完迁移立即退出，不起 Web 容器）。多个 Pod 滚动更新时，
+如果没有这个 Runner，迁移 Job 会常驻到 `activeDeadlineSeconds` 超时失败，把整个 PreSync 拖垮。
 
 1. `pre-install / pre-upgrade` Hook Job 以 `--medassist.migrate-only=true` 启动同一镜像：
    Flyway 在上下文初始化阶段执行迁移，成功后 `SpringApplication.exit` 以 0 退出；

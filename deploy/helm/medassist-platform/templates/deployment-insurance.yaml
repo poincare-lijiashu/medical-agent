@@ -68,6 +68,11 @@ spec:
             - name: CLINICAL_INTERNAL_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "clinical")) .Values.clinical.service.port | quote }}
             {{- end }}
+            {{- if .Values.emr.enabled }}
+            # DRG 模拟分组默认从病案首页取手术操作（第六轮 MF-10：缺这条会回落 127.0.0.1:8086）
+            - name: EMR_INTERNAL_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "emr")) .Values.emr.service.port | quote }}
+            {{- end }}
             # 服务间令牌：须与 EMPI 的 INTERNAL_API_TOKEN 一致
             - name: INSURANCE_INTERNAL_TOKEN
               valueFrom:

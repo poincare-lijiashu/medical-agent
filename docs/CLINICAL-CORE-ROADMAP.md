@@ -935,6 +935,44 @@ HQMS 上报失败的逐条明细回执、手术操作编码（ICD-9-CM-3）字�
 
 ---
 
+## 1.40 已完成（2026-11-01，第六轮评测 P0 发布阻断批）
+
+`docs/REVIEW-20261101-ROUND6.md` 的 15 条 MUST-FIX 中，先收口"上线即出事"的 5 条
+（重复上报、归档件可删可改、迁移 Job 卡死、新增调用边部署三缺）。全部以**新增迁移 + 应用层校验**
+解决，已应用的 V10/V11 一字未改。
+
+| 编号 | 风险 | 本次落地 |
+|---|---|---|
+| R6-MF-07 | 同一首页可进两个有效批次 → 向省局重复上报 | advisory lock 改**全局单键** `emr:hqms-export`（期间重叠也互斥）；`emr V12` 给明细加 `active` + **部分唯一索引** `ux_hqms_item_active_homepage(homepage_id) WHERE active`，并把待上报查询从 `EXISTS(join 批次)` 改为 `i.active` |
+| R6-MF-08 | 归档首页可物理删除、可直插伪造快照、`procedures`/`discharged_at` 归档后仍可改 | `emr V12`：`BEFORE INSERT` 只允许 DRAFT；`BEFORE UPDATE` 收敛为单向状态机 + 提交后快照列全只读（含 手术操作/患者姓名/首页号/住院天数/入院出院时间）；新增 `BEFORE DELETE`（仅 DRAFT 且未被上报引用） |
+| R6-MF-09 | 删一条明细即可"释放"首页重报；ACCEPTED 可被改成 CANCELLED 释放整批 | `emr V12`：明细 `BEFORE UPDATE OR DELETE` 在批次为 GENERATED/ACCEPTED 时一律拒绝；批次 `BEFORE UPDATE` 只允许 `GENERATED→ACCEPTED/REJECTED/CANCELLED` 且固化列（期间/份数/金额/报文/哈希）不可改；`AFTER UPDATE` 在退回/撤销时释放明细 |
+| R6-MF-10 | insurance→emr 调用边：地址、NetworkPolicy、调用方密钥三处全缺（生产必 503/403） | `deployment-insurance.yaml` 注入 `EMR_INTERNAL_URI`；`networkpolicy.yaml` 的 emr 段放行 insurance；`values.yaml` 改 `callerKeys.emr: [emr, insurance]`；`deploy/README.md` 补"服务间地址与令牌矩阵" |
+| R6-MF-11 | emr/insurance/pharmacy/tech 无 `MigrateOnlyRunner`，迁移 Job 常驻到 `activeDeadlineSeconds` 超时 | 四个模块各补 `config/MigrateOnlyRunner`（`--medassist.migrate-only=true` 时打印连接信息后 `SpringApplication.exit(0)`） |
+
+**应用层配套**：`HqmsExportService.create` 对明细插入捕获 `DataIntegrityViolationException` → **409**
+（"有首页已被其它有效上报批次占用，请刷新后重新生成"），不再把并发冲突暴露成 500。
+
+**数据库反例实测（真实库 15.19，逐条 psql 验证）**
+
+| 反例 | 期望 | 实际 |
+|---|---|---|
+| `DELETE` 已归档首页 | 拒绝 | `病案首页已提交/已归档，不允许删除（只能通过病案修改申请留痕更正）` |
+| `UPDATE` ACCEPTED 批次的明细 | 拒绝 | `批次 … 仍为有效状态（ACCEPTED），其上报明细不可修改或删除` |
+| ACCEPTED 批次改 `CANCELLED` | 拒绝 | `上报批次 HQ20261101000003 已回执/撤销（ACCEPTED），不允许再修改` |
+| 直插 `status='ARCHIVED'` 的首页 | 拒绝 | `病案首页只能以草稿（DRAFT）状态创建，必须走 生成→提交→归档 流程` |
+| 已上报首页插入第二个 GENERATED 批次 | 拒绝 | `病案首页 HP20261101000006 已纳入有效上报批次，不能重复上报` |
+
+**迁移专用入口实测**：`java -jar platform-emr.jar --medassist.migrate-only=true --server.port=0`
+→ 4 秒完成 Flyway 后 `migrate.only.completed` 并 `exit=0`（此前会常驻不退出）。
+
+**回归**：全量单测 **552 项**全绿（上报 +1：唯一冲突转 409）；
+`emr_hqms_export_smoke`（42 项）、`emr_homepage_smoke`、`emr_smoke`、`platform_smoke` 全部 PASS。
+
+**仍未做（ROUND6 剩余 MUST-FIX）**：MF-01~06（转送/停嘱/退费跨域一致性、首页可重算与性别年龄）、
+MF-12~15（首页读留痕、四眼单人可满足等），排期见 `REVIEW-20261101-ROUND6.md` §5。
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

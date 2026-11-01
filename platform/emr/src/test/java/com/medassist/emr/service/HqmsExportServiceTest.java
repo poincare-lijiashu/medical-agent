@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
@@ -28,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -110,11 +112,30 @@ class HqmsExportServiceTest {
                 .contains("<diagnosis code=\"J18.900\"")
                 .contains("<fee category=\"EXAM\" amount=\"25.00\"/>");
         verify(repo).insertHqmsItem(batch.id(), homepage);
+        // 并发串行必须用全局单键（按期间拼键时重叠期间不互斥，第六轮 MF-07）
+        verify(repo).lockHqmsExport();
         // 2 条待上报，单批只取到 1 条 → 还有 1 条要再报
         assertThat(result.remainingPending()).isEqualTo(1);
         assertThat(result.excludedAlreadyExported()).isZero();
         verify(repo).logChange(eq("qc01"), eq("HQMS_BATCH_CREATE"), eq("HQMS_BATCH"),
                 eq("HQ20261101000001"), anyString());
+    }
+
+    @Test
+    @DisplayName("明细唯一约束冲突（并发被他人抢先上报）转 409，而不是 500")
+    void createTranslatesUniqueViolationToConflict() {
+        when(repo.countHqmsPending(today, today)).thenReturn(1L);
+        when(repo.countHqmsAlreadyExported(today, today)).thenReturn(0L);
+        Homepage homepage = homepage();
+        when(repo.listHqmsPending(today, today, 500)).thenReturn(List.of(homepage));
+        doThrow(new DataIntegrityViolationException("ux_hqms_item_active_homepage"))
+                .when(repo).insertHqmsItem(any(), any());
+
+        assertThatThrownBy(() -> service.create(today, today, "qc01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT);
+                    assertThat(e.getMessage()).contains("上报批次");
+                });
     }
 
     @Test

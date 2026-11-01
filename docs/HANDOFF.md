@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0 整改** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
@@ -850,7 +850,35 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 遗留：与国家/省 HQMS 平台真实对接（字段规范与前置机）、逐条失败明细回执、
      手术操作 ICD-9-CM-3 字典
 
+59. **第六轮评测 P0 发布阻断批（2026-11-01，R6-MF-07/08/09/10/11）**
+   - `emr V12__homepage_hqms_guardrails.sql`（**新增，V10/V11 未改**）：
+     - 首页：`BEFORE INSERT` 只允许 `DRAFT`；`BEFORE UPDATE` 收敛为单向状态机
+       （DRAFT→SUBMITTED→ARCHIVED）+ 提交后快照列全只读（诊断/手术/费用/患者姓名/首页号/
+       住院天数/入出院时间）；新增 `BEFORE DELETE`（仅 DRAFT 且未被上报引用）
+     - 明细：新增 `active` 列（由批次状态触发器维护）+ **部分唯一索引**
+       `ux_hqms_item_active_homepage(homepage_id) WHERE active`；有效批次内 `UPDATE/DELETE` 一律拒绝
+     - 批次：`BEFORE UPDATE` 只允许 `GENERATED→ACCEPTED/REJECTED/CANCELLED` 且固化列不可改；
+       `AFTER UPDATE` 在退回/撤销时把明细 `active` 置 false（释放首页可重报）
+     - 历史脏数据回填：按批次状态推导 `active`，同一首页若有多个有效批次只保留最近一个
+   - `EmrRepository.lockHqmsPeriod(from,to)` → `lockHqmsExport()`：advisory lock 改**全局单键**
+     `emr:hqms-export`（按期间拼键时重叠期间不互斥）；待上报三处查询改用 `i.active`
+   - `HqmsExportService.create`：明细插入捕获 `DataIntegrityViolationException` → 409
+   - `MigrateOnlyRunner` 补到 **emr / insurance / pharmacy / tech** 四个模块（此前只有 auth/clinical/empi），
+     迁移 Hook Job 不再常驻到 `activeDeadlineSeconds` 超时
+   - Helm：`deployment-insurance.yaml` 注入 `EMR_INTERNAL_URI`；`networkpolicy.yaml` emr 段放行 insurance；
+     `values.yaml` → `callerKeys.emr: [emr, insurance]`；`deploy/README.md` 新增"服务间地址与令牌矩阵"
+   - **实测**：psql 反例 5 条全被拒（删归档首页/改有效批次明细/ACCEPTED 改 CANCELLED/
+     直插 ARCHIVED/同首页入第二批）；`migrate-only` 4 秒 `exit=0`
+   - 回归：全量单测 **552 项**全绿；`emr_hqms_export_smoke`、`emr_homepage_smoke`、`emr_smoke`、`platform_smoke` 全过
+   - 遗留：ROUND6 的 MF-01~06、MF-12~15（转送/停嘱/退费跨域一致性与首页可重算、读留痕等）
+
 ### 本机踩坑备忘（下次别再踩）
+- **advisory lock 的键不能按业务参数拼**（如 `emr:hqms-export:{from}:{to}`）：参数不同的两个事务
+  会拿到不同锁，看似"加了锁"其实完全不互斥；要串行就全局单键，或按 ID 排序逐行锁
+- **新增服务模块必须同时补 `MigrateOnlyRunner`**：`--medassist.migrate-only=true` 是自定义属性，
+  没有 Runner 时应用照常启动并常驻，迁移 Hook Job 会拖到 `activeDeadlineSeconds` 超时，发布被阻塞
+- 数据库触发器兜底要区分**并发安全**与**顺序安全**：`BEFORE INSERT ... IF EXISTS(...)` 在
+  READ COMMITTED 下两个并发事务互相看不见未提交行，必须配部分唯一索引才是约束级幂等
 - "缺省即自动取数、显式空数组即无"的接口，E2E 里 `@{ procedures = @() }` 会序列化成 `[]`（显式无），
   不是缺省；要测自动取数就**别放这个键**（本次 DRG 冒烟踩到）
 - 医嘱只能开 `DRUG/TREATMENT/EXAM/MATERIAL` 类收费项目：`REG-*`（CONSULTATION）开医嘱会返回

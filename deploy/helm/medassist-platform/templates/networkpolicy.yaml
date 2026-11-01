@@ -107,6 +107,15 @@ spec:
             matchLabels:
               {{- include "medassist.selectorLabels" (dict "root" $ "component" "insurance") | nindent 14 }}
         {{- end }}
+        {{- if eq $component "emr" }}
+        # 医保域 DRG 模拟分组读取病案首页手术操作（第六轮 MF-10：prod 开了 NetworkPolicy，缺此段必 403/超时）
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "insurance") | nindent 14 }}
+        {{- end }}
         - namespaceSelector:
             {{- toYaml $.Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
       ports:

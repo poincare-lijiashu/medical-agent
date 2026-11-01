@@ -8,6 +8,7 @@ import com.medassist.emr.domain.EmrModel.HqmsExportBatch;
 import com.medassist.emr.repo.EmrRepository;
 import com.medassist.emr.web.EmrDtos.HqmsExportBatchSummary;
 import com.medassist.emr.web.EmrDtos.HqmsReceiptReq;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -81,8 +82,8 @@ public class HqmsExportService {
         if (to.isAfter(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "上报期间不能晚于今天");
         }
-        // 并发 create 的 NOT EXISTS 会在对方提交前查空，必须按期间串行
-        repo.lockHqmsPeriod(from, to);
+        // 并发 create 的 NOT EXISTS 会在对方提交前查空，必须全局串行（不能按期间拼锁键）
+        repo.lockHqmsExport();
         long excluded = repo.countHqmsAlreadyExported(from, to);
         long pending = repo.countHqmsPending(from, to);
         if (pending == 0) {
@@ -109,8 +110,15 @@ public class HqmsExportService {
                 homepages.size(), total, payload, sha256(payload), HqmsExportBatch.GENERATED,
                 null, null, null, null, null, actor, 0L, Instant.now());
         repo.insertHqmsBatch(batch);
-        for (Homepage homepage : homepages) {
-            repo.insertHqmsItem(batch.id(), homepage);
+        try {
+            for (Homepage homepage : homepages) {
+                repo.insertHqmsItem(batch.id(), homepage);
+            }
+        } catch (DataIntegrityViolationException e) {
+            // 唯一索引 ux_hqms_item_active_homepage / 触发器 trg_hqms_item_once 兜底：
+            // 并发下另一事务已把同一首页纳入有效批次。事务此时已中止，只能整体回滚并给冲突提示。
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "有首页已被其它有效上报批次占用（可能刚刚被他人提交），请刷新后重新生成");
         }
 
         Map<String, Object> detail = new LinkedHashMap<>();
