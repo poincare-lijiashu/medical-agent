@@ -60,7 +60,7 @@ class ReportServiceTest {
     private Application app(String status, long version) {
         return new Application(appId, "AP20261031000001", patientId, "P20261031000001",
                 null, null, null, "doctor01", "LAB", "EXM-CBC", "血常规", null, "ROUTINE",
-                null, "全血", status, version, Instant.now());
+                null, "全血", status, version, Instant.now(), null);
     }
 
     private Report report(String status, int revision) {

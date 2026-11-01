@@ -1,22 +1,22 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 / **医嘱 → 药房处方主链路** / **撤销·停嘱 → 处方作废** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 / **医嘱 → 药房处方** / **撤销·停嘱 → 处方作废** / **医嘱 → 检查检验申请** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
-  `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方主链路**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）
+  `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
+  本批（**医嘱 → 检查/检验申请**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **506 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **515 项**全绿
 - 本机环境（2026-11-01 13:20）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **检查/检验医嘱 → 医技申请**：复用 `OrderTransferService` 的转送状态机与幂等设计
-     （`transfer_status` + `external_*` 已经是通用字段，只差 tech 侧内部接口与医嘱项映射）
-  2. **病案首页 / 结构化诊断（ICD-10）**：HQMS、DRG 官方分组、医保清单质量的前置基础
+  1. **病案首页 / 结构化诊断（ICD-10）**：HQMS、DRG 官方分组、医保清单质量的前置基础
+  2. **医嘱项 → 下游编码映射表**：多院区/多厂商时靠编码一致跑不通，需要独立映射主数据
   3. **药品字典批量导入**（CSV/XML，复用药保目录导入模式）+ **R5-S17**（CI 内跑 E2E）
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
@@ -726,7 +726,7 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `transfer-retry` → `TRANSFERRED`，`transferError` 清空
    - 回归：全量单测 **498 项**（临床 +8、药房 +3）；`platform_smoke`、`pharmacy_smoke`、
      `pharmacy_billing_smoke`、`pharmacy_audit_smoke` 全过
-   - 遗留：**医嘱撤销/停嘱 → 处方作废联动**（已在本批 §52 补齐）、检查/检验医嘱 → 医技申请、
+   - 遗留：**医嘱撤销/停嘱 → 处方作废联动**（§52 已补）、**检查/检验医嘱 → 医技申请**（§53 已补）、
      "医嘱项 → 目标服务/目标编码"映射表（当前依赖两域编码一致）
 
 52. **用药安全闭环（2026-11-01）：医嘱撤销/停嘱 → 处方作废**
@@ -741,6 +741,23 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      审批通过 → 撤销医嘱 → 医嘱 `CANCELLED`、处方 `CANCELLED`；
      另一条药品医嘱发药后撤销 → **409**，处方仍 `DISPENSED`
    - 回归：全量单测 **506 项**（临床 +4、药房 +4）；四个回归 E2E 全过
+
+53. **HIS 主链路第二步（2026-11-01）：医嘱 → 检查/检验申请**
+   - `tech V6`：`exam_application.source_order_id`（部分唯一索引）+ `cancel_reason`
+   - 内部接口 `POST /internal/applications`：类别（LAB/EXAM）与标本类型由**医技字典**决定；
+     重复转送幂等；`POST /internal/applications/cancel-by-order` 仅 `APPLIED` 可作废（已采集/执行中 409）
+   - `OrderTransferService` 通用化：`DRUG`→药房、`EXAM`→医技，共用 `transfer_status`/`external_*`/
+     `transfer-retry`/`cancelDownstream`（急诊检查与药房走同一套补偿语义）
+   - `clinical V12`：补 `EXM-CT-CHEST`（260.00）、`LAB-K`（8.00）收费项目，编码与医技字典一致
+   - 部署：`deployment-clinical.yaml` 注入 `TECH_INTERNAL_URI`；dev profile 补 `clinical.tech.internal-token`
+     与 `tech.internal-api-token`
+   - **实测**：新增 `clinical_tech_order_smoke.ps1` **34 项全过**：
+     混合检查+检验医嘱 → 两条 `TRANSFERRED`（`EXAM_APPLICATION`、`AP` 前缀）→ 类别/标本类型与字典一致 →
+     撤销检查医嘱 → 申请 `CANCELLED` → 检验标本采集后撤销 → **409**（申请仍 `SPECIMEN_COLLECTED`）→
+     已撤销医嘱重试 **409** → 内部接口无令牌 403/40300
+   - 回归：全量单测 **515 项**（临床 +3、医技 +6）；`platform_smoke`、`tech_smoke`、`pharmacy_smoke`、
+     `pharmacy_billing_smoke`、`pharmacy_audit_smoke`、`clinical_pharmacy_order_smoke` 全过
+   - 遗留：耗材医嘱 → SPD/物资（无下游域）、治疗医嘱执行登记、"医嘱项 → 下游编码"映射表
 
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK

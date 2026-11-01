@@ -7,12 +7,17 @@ import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.ExamItem;
 import com.medassist.tech.domain.TechModel.Specimen;
 import com.medassist.tech.repo.TechRepository;
+import com.medassist.tech.web.TechDtos.ApplicationCancelView;
 import com.medassist.tech.web.TechDtos.ApplicationView;
+import com.medassist.tech.web.TechDtos.CancelFromOrderReq;
 import com.medassist.tech.web.TechDtos.CollectSpecimenReq;
 import com.medassist.tech.web.TechDtos.CreateApplicationReq;
+import com.medassist.tech.web.TechDtos.CreateFromOrderReq;
+import com.medassist.tech.web.TechDtos.OrderApplicationView;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -62,7 +67,7 @@ class ApplicationServiceTest {
     private Application app(String status, long version) {
         return new Application(appId, "AP20261031000001", patientId, "P20261031000001",
                 null, null, null, "doctor01", "LAB", labCode, "血常规", null, "ROUTINE",
-                null, "全血", status, version, Instant.now());
+                null, "全血", status, version, Instant.now(), null);
     }
 
     private CreateApplicationReq labReq() {
@@ -76,7 +81,7 @@ class ApplicationServiceTest {
         when(repo.findApplication(any())).thenAnswer(inv -> Optional.of(new Application(
                 inv.getArgument(0), "AP20261031000001", patientId, "P20261031000001",
                 null, null, null, "doctor01", "LAB", labCode, "血常规", null, "URGENT",
-                "发热待查", "全血", Application.APPLIED, 0L, Instant.now())));
+                "发热待查", "全血", Application.APPLIED, 0L, Instant.now(), null)));
 
         ApplicationView view = service.create(labReq(), "doctor01");
 
@@ -118,7 +123,7 @@ class ApplicationServiceTest {
     void collectRejectsExamCategory() {
         Application exam = new Application(appId, "AP1", patientId, "P1", null, null, null,
                 "doctor01", "EXAM", examCode, "胸部CT平扫", null, "ROUTINE", null, null,
-                Application.APPLIED, 0L, Instant.now());
+                Application.APPLIED, 0L, Instant.now(), null);
         when(repo.lockApplication(appId)).thenReturn(Optional.of(exam));
 
         assertThatThrownBy(() -> service.collectSpecimen(appId, new CollectSpecimenReq(null), "nurse01"))
@@ -211,5 +216,102 @@ class ApplicationServiceTest {
         service.close(appId, "tech01");
 
         verify(repo).updateApplicationStatus(appId, Application.REPORTED, Application.CLOSED, 4L);
+    }
+
+    // ------------------------------------------------ 医嘱转申请（HIS 主链路）
+
+    private CreateFromOrderReq fromOrder(UUID orderId, String itemCode) {
+        return new CreateFromOrderReq(orderId, patientId, null, null, null, "doctor01",
+                itemCode, null, "ROUTINE", null);
+    }
+
+    @Test
+    @DisplayName("医嘱转申请：同一医嘱重复转送返回已有申请（幂等，不新建）")
+    void createFromOrderIsIdempotent() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.findApplicationBySourceOrder(orderId))
+                .thenReturn(Optional.of(app(Application.APPLIED, 0L)));
+
+        OrderApplicationView view = service.createFromOrder(fromOrder(orderId, labCode), "clinical");
+
+        assertThat(view.duplicate()).isTrue();
+        assertThat(view.applicationId()).isEqualTo(appId);
+        verify(repo, never()).insertApplication(any());
+    }
+
+    @Test
+    @DisplayName("医嘱转申请：类别由医技字典决定，appliedBy 取下医嘱医师并记录来源医嘱")
+    void createFromOrderUsesDictionaryCategory() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.findApplicationBySourceOrder(orderId)).thenReturn(Optional.empty());
+        when(repo.findExamItemByCode(examCode)).thenReturn(Optional.of(examItem));
+
+        service.createFromOrder(fromOrder(orderId, examCode), "clinical");
+
+        ArgumentCaptor<Application> captor = ArgumentCaptor.forClass(Application.class);
+        verify(repo).insertApplication(captor.capture());
+        assertThat(captor.getValue().category()).isEqualTo("EXAM");
+        assertThat(captor.getValue().sourceOrderId()).isEqualTo(orderId);
+        assertThat(captor.getValue().appliedBy()).isEqualTo("doctor01");
+    }
+
+    @Test
+    @DisplayName("医嘱作废：无申请（未转送）返回 cancelled=false，不报错")
+    void cancelFromOrderWithoutApplication() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockApplicationBySourceOrder(orderId)).thenReturn(Optional.empty());
+
+        ApplicationCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, null, null), "clinical");
+
+        assertThat(view.cancelled()).isFalse();
+        assertThat(view.applicationId()).isNull();
+        verify(repo, never()).cancelApplication(any(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：APPLIED → CANCELLED，按版本号 CAS 并留痕")
+    void cancelFromOrderCancelsApplied() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockApplicationBySourceOrder(orderId))
+                .thenReturn(Optional.of(app(Application.APPLIED, 2L)));
+        when(repo.cancelApplication(appId, 2L, "医嘱撤销")).thenReturn(true);
+
+        ApplicationCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, "医嘱撤销", "doctor01"), "clinical");
+
+        assertThat(view.cancelled()).isTrue();
+        assertThat(view.status()).isEqualTo(Application.CANCELLED);
+        verify(repo).logChange(eq("doctor01"), eq("APP_CANCEL_FROM_ORDER"), eq("APPLICATION"),
+                eq(appId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：已采集标本/执行中的申请拒绝（需医技人工处理）")
+    void cancelFromOrderRejectsCollected() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockApplicationBySourceOrder(orderId))
+                .thenReturn(Optional.of(app(Application.SPECIMEN_COLLECTED, 1L)));
+
+        assertThatThrownBy(() -> service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, null, null), "clinical"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TECH_APPLICATION_STATUS_INVALID);
+        verify(repo, never()).cancelApplication(any(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：已作废幂等返回，不重复写库")
+    void cancelFromOrderIsIdempotent() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockApplicationBySourceOrder(orderId))
+                .thenReturn(Optional.of(app(Application.CANCELLED, 3L)));
+
+        ApplicationCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, null, null), "clinical");
+
+        assertThat(view.cancelled()).isTrue();
+        verify(repo, never()).cancelApplication(any(), anyLong(), anyString());
     }
 }

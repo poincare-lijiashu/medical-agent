@@ -38,6 +38,51 @@ public final class TechDtos {
             @Size(max = 256) String clinicalDiag) {
     }
 
+    /**
+     * 临床医嘱转申请（仅内网接口使用）。
+     *
+     * <p>与手工开单的差别：必须带 {@code orderId}（幂等键），{@code appliedBy} 为下医嘱医师。
+     */
+    public record CreateFromOrderReq(
+            @NotNull UUID orderId,
+            @NotNull UUID patientId,
+            UUID visitId,
+            @Size(max = 64) String visitNo,
+            UUID deptId,
+            @Size(max = 64) String appliedBy,
+            @NotBlank @Size(max = 64) String itemCode,
+            @Size(max = 64) String bodyPart,
+            @Pattern(regexp = "ROUTINE|URGENT|STAT", message = "优先级只能是 ROUTINE/URGENT/STAT")
+            String priority,
+            @Size(max = 256) String clinicalDiag) {
+    }
+
+    /**
+     * 医嘱转申请结果。
+     *
+     * @param duplicate true=该医嘱此前已生成过申请（幂等返回，未新建）
+     */
+    public record OrderApplicationView(UUID applicationId, String applicationNo, UUID orderId,
+                                       boolean duplicate, String category, String itemName,
+                                       String status) {
+    }
+
+    /** 按医嘱作废申请（医嘱撤销/停嘱联动）。 */
+    public record CancelFromOrderReq(
+            @NotNull UUID orderId,
+            @Size(max = 256) String reason,
+            @Size(max = 64) String actor) {
+    }
+
+    /**
+     * 申请作废结果。
+     *
+     * @param cancelled true=本次或此前已作废；false=该医嘱没有申请（未转送过）
+     */
+    public record ApplicationCancelView(UUID applicationId, String applicationNo,
+                                        String status, boolean cancelled) {
+    }
+
     /** 采集标本（检验）。 */
     public record CollectSpecimenReq(@Size(max = 32) String specimenType) {
     }

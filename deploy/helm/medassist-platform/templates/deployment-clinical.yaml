@@ -69,6 +69,11 @@ spec:
             - name: PHARMACY_INTERNAL_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "pharmacy")) .Values.pharmacy.service.port | quote }}
             {{- end }}
+            {{- if .Values.tech.enabled }}
+            # 检查/检验医嘱转申请：医技内网直连（不经网关；内部接口仍要求令牌）
+            - name: TECH_INTERNAL_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "tech")) .Values.tech.service.port | quote }}
+            {{- end }}
             # 服务间令牌：须与 EMPI 的 INTERNAL_API_TOKEN 一致
             - name: CLINICAL_INTERNAL_TOKEN
               valueFrom:

@@ -12,11 +12,14 @@ import java.time.Duration;
  * @param pharmacy {@code pharmacy.base-url} 药房内网地址（医嘱转处方），令牌与 EMPI 共用
  */
 @ConfigurationProperties(prefix = "clinical")
-public record ClinicalProperties(Empi empi, Pharmacy pharmacy) {
+public record ClinicalProperties(Empi empi, Pharmacy pharmacy, Tech tech) {
 
     public record Empi(String baseUrl, String internalToken, Duration timeout) {
     }
 
     public record Pharmacy(String baseUrl, String internalToken, Duration timeout) {
+    }
+
+    public record Tech(String baseUrl, String internalToken, Duration timeout) {
     }
 }

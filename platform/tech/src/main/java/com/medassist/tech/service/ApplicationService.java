@@ -7,9 +7,13 @@ import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.ExamItem;
 import com.medassist.tech.domain.TechModel.Specimen;
 import com.medassist.tech.repo.TechRepository;
+import com.medassist.tech.web.TechDtos.ApplicationCancelView;
 import com.medassist.tech.web.TechDtos.ApplicationView;
+import com.medassist.tech.web.TechDtos.CancelFromOrderReq;
 import com.medassist.tech.web.TechDtos.CollectSpecimenReq;
 import com.medassist.tech.web.TechDtos.CreateApplicationReq;
+import com.medassist.tech.web.TechDtos.CreateFromOrderReq;
+import com.medassist.tech.web.TechDtos.OrderApplicationView;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -50,6 +55,73 @@ public class ApplicationService {
 
     @Transactional
     public ApplicationView create(CreateApplicationReq req, String actor) {
+        return createInternal(req, actor, null);
+    }
+
+    /**
+     * 临床医嘱转检查/检验申请（内网接口）。
+     *
+     * <p>幂等：同一 {@code orderId} 只生成一张申请；已存在时原样返回（duplicate=true）。
+     * 项目类别（LAB/EXAM）与标本类型由**医技字典**决定，临床只传项目编码——
+     * 两侧编码一致是当前约定，多院区/多厂商时再引入映射表。
+     */
+    @Transactional
+    public OrderApplicationView createFromOrder(CreateFromOrderReq req, String actor) {
+        Optional<Application> existing = repo.findApplicationBySourceOrder(req.orderId());
+        if (existing.isPresent()) {
+            Application app = existing.get();
+            return new OrderApplicationView(app.id(), app.applicationNo(), req.orderId(), true,
+                    app.category(), app.itemName(), app.status());
+        }
+        String appliedBy = blankToNull(req.appliedBy());
+        String effectiveActor = appliedBy == null ? actor : appliedBy;
+        CreateApplicationReq delegated = new CreateApplicationReq(req.patientId(), req.visitId(),
+                req.visitNo(), req.deptId(), req.itemCode(), req.bodyPart(), req.priority(),
+                req.clinicalDiag());
+        ApplicationView view;
+        try {
+            view = createInternal(delegated, effectiveActor, req.orderId());
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该医嘱已生成申请，请刷新后重试");
+        }
+        Application app = view.application();
+        return new OrderApplicationView(app.id(), app.applicationNo(), req.orderId(), false,
+                app.category(), app.itemName(), app.status());
+    }
+
+    /**
+     * 按医嘱作废申请（医嘱撤销/停嘱联动）。
+     *
+     * <p>只有 {@code APPLIED}（尚未采集/执行）可以作废；已采集或执行中必须人工处理，
+     * 否则会出现"标本已采、检查已做，单子却被作废"的账实不符。
+     */
+    @Transactional
+    public ApplicationCancelView cancelFromOrder(CancelFromOrderReq req, String actor) {
+        Optional<Application> found = repo.lockApplicationBySourceOrder(req.orderId());
+        if (found.isEmpty()) {
+            return new ApplicationCancelView(null, null, null, false);
+        }
+        Application app = found.get();
+        if (Application.CANCELLED.equals(app.status())) {
+            return new ApplicationCancelView(app.id(), app.applicationNo(), app.status(), true);
+        }
+        if (!Application.APPLIED.equals(app.status())) {
+            throw new BusinessException(ErrorCode.TECH_APPLICATION_STATUS_INVALID,
+                    "申请 " + app.applicationNo() + " 已进入执行流程（" + app.status()
+                            + "），不能随医嘱作废，请医技人工处理");
+        }
+        String who = blankToNull(req.actor()) == null ? actor : blankToNull(req.actor());
+        String why = blankToNull(req.reason()) == null ? "医嘱撤销" : blankToNull(req.reason());
+        if (!repo.cancelApplication(app.id(), app.version(), why)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "申请状态已变化，请刷新后重试");
+        }
+        audit(who, "APP_CANCEL_FROM_ORDER", "APPLICATION", app.id().toString(), Map.of(
+                "applicationNo", app.applicationNo(), "orderId", req.orderId().toString(),
+                "reason", why));
+        return new ApplicationCancelView(app.id(), app.applicationNo(), Application.CANCELLED, true);
+    }
+
+    private ApplicationView createInternal(CreateApplicationReq req, String actor, UUID sourceOrderId) {
         ExamItem item = repo.findExamItemByCode(req.itemCode().trim())
                 .filter(ExamItem::enabled)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_EXAM_ITEM_NOT_FOUND,
@@ -67,7 +139,7 @@ public class ApplicationService {
                 blankToNull(req.bodyPart()),
                 req.priority() == null || req.priority().isBlank() ? "ROUTINE" : req.priority(),
                 blankToNull(req.clinicalDiag()), item.specimenType(),
-                Application.APPLIED, 0L, null);
+                Application.APPLIED, 0L, null, sourceOrderId);
         repo.insertApplication(app);
         audit(actor, "APP_CREATE", "APPLICATION", app.id().toString(), Map.of(
                 "applicationNo", app.applicationNo(), "patientNo", patient.patientNo(),

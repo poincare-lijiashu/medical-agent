@@ -41,6 +41,8 @@ tech:
     base-url: ${EMPI_INTERNAL_URI:http://127.0.0.1:8082}
     internal-token: ${INTERNAL_API_TOKEN:${TECH_INTERNAL_TOKEN:}}
     timeout: ${EMPI_TIMEOUT:PT2S}
+  # 入站内部接口令牌（临床医嘱转检查/检验申请）；与出站共用同一令牌
+  internal-api-token: ${INTERNAL_API_TOKEN:${TECH_INTERNAL_TOKEN:}}
   # 危急值超时提醒阈值（分钟）：超过该时长仍未确认，查询接口会标记 overdue
   critical-timeout-minutes: ${TECH_CRITICAL_TIMEOUT_MINUTES:30}
 

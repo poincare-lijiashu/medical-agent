@@ -49,6 +49,11 @@ clinical:
     base-url: ${PHARMACY_INTERNAL_URI:http://127.0.0.1:8084}
     internal-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
     timeout: ${PHARMACY_TIMEOUT:PT3S}
+  # 检查/检验医嘱转申请：医技内网直连（不经网关），失败只把医嘱标记为可重试
+  tech:
+    base-url: ${TECH_INTERNAL_URI:http://127.0.0.1:8085}
+    internal-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
+    timeout: ${TECH_TIMEOUT:PT3S}
   # 入站内部接口令牌（病历域读取入院时间、医保域拉取收费明细）；与出站共用同一令牌
   internal-api-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
 

@@ -63,7 +63,7 @@ class LisInboundServiceTest {
     private Application app(String status) {
         return new Application(appId, "AP20261101000001", UUID.randomUUID(), "P001",
                 null, null, null, "doctor01", "LAB", "LAB-K", "血清钾", null, "ROUTINE",
-                null, "血清", status, 0L, Instant.now());
+                null, "血清", status, 0L, Instant.now(), null);
     }
 
     private Report report(String status) {

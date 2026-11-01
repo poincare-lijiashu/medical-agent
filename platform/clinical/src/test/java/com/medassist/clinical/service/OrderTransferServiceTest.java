@@ -1,6 +1,7 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.client.PharmacyOrderClient;
+import com.medassist.clinical.client.TechOrderClient;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -35,6 +36,7 @@ class OrderTransferServiceTest {
 
     private ClinicalRepository repo;
     private PharmacyOrderClient client;
+    private TechOrderClient techClient;
     private OrderTransferService service;
 
     private final UUID visitId = UUID.randomUUID();
@@ -45,7 +47,8 @@ class OrderTransferServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         client = mock(PharmacyOrderClient.class);
-        service = new OrderTransferService(repo, client, JsonMapper.builder().build());
+        techClient = mock(TechOrderClient.class);
+        service = new OrderTransferService(repo, client, techClient, JsonMapper.builder().build());
     }
 
     private Visit visit() {
@@ -139,11 +142,60 @@ class OrderTransferServiceTest {
     }
 
     @Test
-    @DisplayName("重试：非药品医嘱拒绝（无处方可开）")
-    void retryRejectsNonDrugOrder() {
+    @DisplayName("检查医嘱：转送医技申请（externalType=EXAM_APPLICATION）")
+    void scheduleTransfersExamOrderToTech() {
+        VisitOrder order = order("EXAM", VisitOrder.PLACED, VisitOrder.TRANSFER_NONE);
+        UUID appId = UUID.randomUUID();
+        when(techClient.createFromOrder(eq(orderId), eq(patientId), eq(visitId), eq("V1"), any(),
+                eq("doctor01"), eq("DRUG-AMOX-025"), isNull(), eq("ROUTINE"), isNull()))
+                .thenReturn(new TechOrderClient.AppRef(appId, "AP20261101000001", false,
+                        "LAB", "阿莫西林胶囊"));
+
+        List<VisitOrder> result = service.schedule(visit(), List.of(order), "doctor01");
+
+        assertThat(result.get(0).transferStatus()).isEqualTo(VisitOrder.TRANSFER_PENDING);
+        verify(repo).updateOrderTransfer(eq(orderId), eq(VisitOrder.TRANSFERRED),
+                eq(OrderTransferService.EXTERNAL_EXAM_APPLICATION), eq(appId),
+                eq("AP20261101000001"), isNull());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("检查医嘱转送失败：只置 FAILED，不回滚医嘱")
+    void techTransferFailureMarksFailed() {
+        VisitOrder order = order("EXAM", VisitOrder.PLACED, VisitOrder.TRANSFER_NONE);
+        when(techClient.createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any()))
+                .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "医技服务暂不可用"));
+
+        service.schedule(visit(), List.of(order), "doctor01");
+
+        verify(repo).updateOrderTransfer(eq(orderId), eq(VisitOrder.TRANSFER_FAILED),
+                eq(OrderTransferService.EXTERNAL_EXAM_APPLICATION), isNull(), isNull(),
+                anyString());
+    }
+
+    @Test
+    @DisplayName("撤销联动：检查医嘱调用医技作废")
+    void cancelCallsTechForExamOrder() {
+        VisitOrder order = order("EXAM", VisitOrder.PLACED, VisitOrder.TRANSFERRED);
+        UUID appId = UUID.randomUUID();
+        when(techClient.cancelByOrder(eq(orderId), eq("医嘱撤销"), eq("doctor01")))
+                .thenReturn(new TechOrderClient.CancelRef(appId, "CANCELLED", true));
+
+        service.cancelDownstream(order, "医嘱撤销", "doctor01");
+
+        verify(client, never()).cancelByOrder(any(), any(), any());
+        verify(repo).logChange(eq("doctor01"), eq("ORDER_TRANSFER_CANCEL"), anyString(),
+                anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("重试：非药品/非检查医嘱拒绝（无下游可转送）")
+    void retryRejectsNonTransferableOrder() {
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit()));
         when(repo.findOrder(visitId, orderId)).thenReturn(
-                Optional.of(order("EXAM", VisitOrder.PLACED, VisitOrder.TRANSFER_NONE)));
+                Optional.of(order("TREATMENT", VisitOrder.PLACED, VisitOrder.TRANSFER_NONE)));
 
         assertThatThrownBy(() -> service.retry(visitId, orderId, "doctor01"))
                 .isInstanceOf(BusinessException.class)
@@ -156,9 +208,10 @@ class OrderTransferServiceTest {
     void cancelSkipsUntransferredOrder() {
         VisitOrder order = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFER_FAILED);
 
-        service.cancelPrescription(order, "医嘱撤销", "doctor01");
+        service.cancelDownstream(order, "医嘱撤销", "doctor01");
 
         verify(client, never()).cancelByOrder(any(), any(), any());
+        verify(techClient, never()).cancelByOrder(any(), any(), any());
     }
 
     @Test
@@ -169,7 +222,7 @@ class OrderTransferServiceTest {
         when(client.cancelByOrder(eq(orderId), eq("医嘱撤销"), eq("doctor01")))
                 .thenReturn(new PharmacyOrderClient.CancelRef(rxId, "CANCELLED", true));
 
-        service.cancelPrescription(order, "医嘱撤销", "doctor01");
+        service.cancelDownstream(order, "医嘱撤销", "doctor01");
 
         verify(repo).logChange(eq("doctor01"), eq("ORDER_TRANSFER_CANCEL"), anyString(),
                 anyString(), anyString());
@@ -182,7 +235,7 @@ class OrderTransferServiceTest {
         when(client.cancelByOrder(any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.CONFLICT, "处方已发药，不能作废"));
 
-        assertThatThrownBy(() -> service.cancelPrescription(order, "医嘱撤销", "doctor01"))
+        assertThatThrownBy(() -> service.cancelDownstream(order, "医嘱撤销", "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("已发药");
     }

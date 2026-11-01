@@ -42,7 +42,8 @@ public class TechRepository {
             rs.getString("category"), rs.getString("item_code"), rs.getString("item_name"),
             rs.getString("body_part"), rs.getString("priority"), rs.getString("clinical_diag"),
             rs.getString("specimen_type"), rs.getString("status"), rs.getLong("version"),
-            rs.getTimestamp("created_at").toInstant());
+            rs.getTimestamp("created_at").toInstant(),
+            rs.getObject("source_order_id", UUID.class));
 
     private static final RowMapper<Specimen> SPECIMEN_MAPPER = (rs, i) -> new Specimen(
             rs.getObject("id", UUID.class), rs.getObject("application_id", UUID.class),
@@ -134,12 +135,12 @@ public class TechRepository {
                         INSERT INTO tech_svc.exam_application
                             (id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                              applied_by, category, item_code, item_name, body_part, priority,
-                             clinical_diag, specimen_type, status, version)
+                             clinical_diag, specimen_type, status, version, source_order_id)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid), :appliedBy,
                                 :category, :itemCode, :itemName, CAST(:bodyPart AS text), :priority,
                                 CAST(:clinicalDiag AS text), CAST(:specimenType AS text),
-                                :status, 0)
+                                :status, 0, CAST(:sourceOrderId AS uuid))
                         """)
                 .param("id", a.id()).param("no", a.applicationNo())
                 .param("patientId", a.patientId()).param("patientNo", a.patientNo())
@@ -148,14 +149,50 @@ public class TechRepository {
                 .param("category", a.category()).param("itemCode", a.itemCode())
                 .param("itemName", a.itemName()).param("bodyPart", a.bodyPart())
                 .param("priority", a.priority()).param("clinicalDiag", a.clinicalDiag())
-                .param("specimenType", a.specimenType()).param("status", a.status()).update();
+                .param("specimenType", a.specimenType()).param("status", a.status())
+                .param("sourceOrderId", a.sourceOrderId()).update();
+    }
+
+    /** 按来源医嘱查申请（临床转送幂等键；手工开单返回空）。 */
+    public Optional<Application> findApplicationBySourceOrder(UUID sourceOrderId) {
+        return jdbc.sql("""
+                        SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
+                               applied_by, category, item_code, item_name, body_part, priority,
+                               clinical_diag, specimen_type, status, version, created_at,
+                               source_order_id
+                          FROM tech_svc.exam_application WHERE source_order_id = ?
+                        """).param(sourceOrderId).query(APP_MAPPER).optional();
+    }
+
+    /** 按来源医嘱加行锁查申请；必须在事务内调用（医嘱撤销/停嘱联动作废）。 */
+    public Optional<Application> lockApplicationBySourceOrder(UUID sourceOrderId) {
+        return jdbc.sql("""
+                        SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
+                               applied_by, category, item_code, item_name, body_part, priority,
+                               clinical_diag, specimen_type, status, version, created_at,
+                               source_order_id
+                          FROM tech_svc.exam_application WHERE source_order_id = ? FOR UPDATE
+                        """).param(sourceOrderId).query(APP_MAPPER).optional();
+    }
+
+    /** 作废申请（CAS：版本号一致且仍为 APPLIED——已采集/执行中的申请不能作废）。 */
+    public boolean cancelApplication(UUID id, long expectedVersion, String reason) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.exam_application
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'APPLIED'
+                        """)
+                .param("reason", reason).param("id", id).param("version", expectedVersion)
+                .update() > 0;
     }
 
     public Optional<Application> findApplication(UUID id) {
         return jdbc.sql("""
                         SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                applied_by, category, item_code, item_name, body_part, priority,
-                               clinical_diag, specimen_type, status, version, created_at
+                               clinical_diag, specimen_type, status, version, created_at,
+                               source_order_id
                           FROM tech_svc.exam_application WHERE id = ?
                         """).param(id).query(APP_MAPPER).optional();
     }
@@ -165,7 +202,8 @@ public class TechRepository {
         return jdbc.sql("""
                         SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                applied_by, category, item_code, item_name, body_part, priority,
-                               clinical_diag, specimen_type, status, version, created_at
+                               clinical_diag, specimen_type, status, version, created_at,
+                               source_order_id
                           FROM tech_svc.exam_application WHERE id = ? FOR UPDATE
                         """).param(id).query(APP_MAPPER).optional();
     }
@@ -186,7 +224,8 @@ public class TechRepository {
         return jdbc.sql("""
                         SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                applied_by, category, item_code, item_name, body_part, priority,
-                               clinical_diag, specimen_type, status, version, created_at
+                               clinical_diag, specimen_type, status, version, created_at,
+                               source_order_id
                           FROM tech_svc.exam_application
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
@@ -408,7 +447,8 @@ public class TechRepository {
         return jdbc.sql("""
                         SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                applied_by, category, item_code, item_name, body_part, priority,
-                               clinical_diag, specimen_type, status, version, created_at
+                               clinical_diag, specimen_type, status, version, created_at,
+                               source_order_id
                           FROM tech_svc.exam_application WHERE application_no = ?
                         """).param(applicationNo).query(APP_MAPPER).optional();
     }

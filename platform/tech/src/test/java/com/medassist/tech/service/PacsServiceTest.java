@@ -58,7 +58,7 @@ class PacsServiceTest {
     private Application application(String category, String status) {
         return new Application(appId, accession, UUID.randomUUID(), "P20261031000001",
                 null, null, null, "doctor01", category, examCode, "胸部CT平扫", "胸部",
-                "URGENT", "咳嗽待查", null, status, 0L, Instant.now());
+                "URGENT", "咳嗽待查", null, status, 0L, Instant.now(), null);
     }
 
     private PacsStudy study(String uid, String status) {

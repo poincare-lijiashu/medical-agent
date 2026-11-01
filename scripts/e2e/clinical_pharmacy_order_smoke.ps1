@@ -118,7 +118,9 @@ $examOrder = $orders | Where-Object { $_.itemCode -eq 'EXM-CBC' }
 $drugOrderId = $drugOrder.id
 CheckAmt 'order.drug.amount' $drugOrder.amount 25.00
 Check 'order.drug.transfer.initial' $drugOrder.transferStatus 'PENDING'
-Check 'order.exam.transfer.none' $examOrder.transferStatus 'NONE'
+# EXAM orders are transferred to tech (see clinical_tech_order_smoke); here only check
+# that the two domains are routed independently (the exam order is NOT sent to pharmacy)
+Check 'order.exam.transfer.routed' ($examOrder.transferStatus -ne 'NONE') True
 
 # transfer runs after the local transaction commits: poll until it settles
 $transferStatus = $drugOrder.transferStatus

@@ -3,6 +3,8 @@ tech:
   empi:
     # 与 EMPI application-dev.yml 的 empi.internal-token 保持一致
     internal-token: medassist-dev-internal-token
+  # 入站内部接口令牌（临床医嘱转申请），本地统一放同一个值
+  internal-api-token: medassist-dev-internal-token
 
 logging:
   level:

@@ -23,7 +23,8 @@ public final class TechModel {
                               UUID visitId, String visitNo, UUID deptId, String appliedBy,
                               String category, String itemCode, String itemName, String bodyPart,
                               String priority, String clinicalDiag, String specimenType,
-                              String status, long version, Instant createdAt) {
+                              String status, long version, Instant createdAt,
+                              UUID sourceOrderId) {
 
         public static final String APPLIED = "APPLIED";
         public static final String SPECIMEN_COLLECTED = "SPECIMEN_COLLECTED";

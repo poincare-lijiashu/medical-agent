@@ -77,7 +77,7 @@ public class OrderService {
             created.add(order);
         }
 
-        // 药品医嘱：同一事务内标记 PENDING，提交后转送药房生成待审处方（失败不回滚医嘱）
+        // 药品/检查医嘱：同一事务内标记 PENDING，提交后转送药房/医技（失败不回滚医嘱）
         List<VisitOrder> result = transfer.schedule(visit, created, actor);
 
         audit(actor, "ORDER_PLACE", "VISIT", visitId.toString(), Map.of(
@@ -104,8 +104,8 @@ public class OrderService {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未停止的住院长嘱可以停嘱（临时医嘱请走撤销）");
         }
-        // 停嘱后药房不得再按旧处方发药：取消失败则整体回滚（药房侧幂等，可重试）
-        transfer.cancelPrescription(current, "停嘱：" + why, actor);
+        // 停嘱后下游不得再按旧单据执行：取消失败则整体回滚（下游幂等，可重试）
+        transfer.cancelDownstream(current, "停嘱：" + why, actor);
         audit(actor, "ORDER_STOP", "VISIT", visitId.toString(),
                 Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString(), "reason", why));
         return repo.listOrders(visitId, null).stream()
@@ -139,8 +139,8 @@ public class OrderService {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未计费（PLACED）的医嘱可以撤销");
         }
-        // 撤销后药房不得再按旧处方发药：取消失败则整体回滚（药房侧幂等，可重试）
-        transfer.cancelPrescription(current, "医嘱撤销", actor);
+        // 撤销后下游不得再按旧单据执行：取消失败则整体回滚（下游幂等，可重试）
+        transfer.cancelDownstream(current, "医嘱撤销", actor);
         audit(actor, "ORDER_CANCEL", "VISIT", visitId.toString(),
                 Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString()));
         return repo.listOrders(visitId, null).stream()
