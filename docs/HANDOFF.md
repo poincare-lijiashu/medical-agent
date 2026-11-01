@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0 整改** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0+P1 整改** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
@@ -871,8 +871,29 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      直插 ARCHIVED/同首页入第二批）；`migrate-only` 4 秒 `exit=0`
    - 回归：全量单测 **552 项**全绿；`emr_hqms_export_smoke`、`emr_homepage_smoke`、`emr_smoke`、`platform_smoke` 全过
    - 遗留：ROUND6 的 MF-01~06、MF-12~15（转送/停嘱/退费跨域一致性与首页可重算、读留痕等）
+     → **MF-01/02/03 已在第 60 条收口**
+
+60. **第六轮 P1：转送/停嘱/退费跨域一致性（2026-11-01，R6-MF-01/02/03）**
+   - `clinical V14__order_transfer_task.sql`：补偿任务表（order/visit/channel/reason/attempts/last_error），
+     `UNIQUE (order_id, action) WHERE status='PENDING'` 防重复登记
+   - `OrderTransferService`：
+     - `transferNow` 提交后**先按 orderId 重读**，只处理 `PLACED + stop_date 空 + transfer_status=PENDING`；
+       回写改 `markOrderTransferred`（CAS 带状态守卫）；返回 false 时反向作废刚建的下游单据
+     - `cancelDownstream` 对 **PENDING/FAILED/TRANSFERRED 一并调用**（下游幂等），修掉"本地记 FAILED 后撤销漏作废"
+     - 新增 `cancelDownstreamBestEffort`（不抛异常，失败登记任务）与 `retryTask`（worker 用）
+   - `OrderService.stop/cancel` 改用尽力而为版：**医疗决定必须成功**，下游作废失败进补偿任务
+   - `BillingService.settle`：`FAILED` 的药品/检查医嘱**拒结**（新错误码 `ORDER_TRANSFER_INCOMPLETE`）
+   - `OrderTransferTaskWorker`（60s，`medassist.transfer-task.enabled` 可关）：重试至 DONE，10 次后置 FAILED
+   - 药房：`returnDrug` 整单退回时**自动作废处方**（DISPENSED→CANCELLED），否则补偿任务永远收敛不了
+   - **口径变化**：撤销/停嘱在"下游已执行"时不再 409，而是 200 + 异步作废（E2E 断言已同步更新）
+   - **实测**：全量单测 **560 项**全绿；`clinical_pharmacy_order_smoke`、`clinical_tech_order_smoke`、
+     `pharmacy_billing_smoke`、`platform_smoke` 全 PASS；闭环实测"撤销→任务 PENDING→整单退药→处方 CANCELLED→任务 DONE"
+   - 遗留：R6-MF-04~06、MF-12~15
 
 ### 本机踩坑备忘（下次别再踩）
+- **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
+  UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
+  `url=[]`、列表过滤不到刚创建的记录）。要写注释就用英文
 - **advisory lock 的键不能按业务参数拼**（如 `emr:hqms-export:{from}:{to}`）：参数不同的两个事务
   会拿到不同锁，看似"加了锁"其实完全不互斥；要串行就全局单键，或按 ID 排序逐行锁
 - **新增服务模块必须同时补 `MigrateOnlyRunner`**：`--medassist.migrate-only=true` 是自定义属性，

@@ -392,6 +392,24 @@ public class PharmacyRepository {
                 .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
+    /**
+     * 发药单全部退回后作废处方（DISPENSED → CANCELLED）。
+     *
+     * <p>没有这一步，处方会永远停在 DISPENSED：临床停嘱/撤销的下游作废一直 409，
+     * 补偿 worker 永远收敛不了（第六轮 MF-03）。
+     */
+    public boolean returnPrescription(UUID id, String reason, String actor) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.prescription
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               cancelled_by = :actor, cancelled_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DISPENSED'
+                        """)
+                .param("reason", reason).param("actor", actor).param("id", id)
+                .update() > 0;
+    }
+
     /** 加行锁读取处方；必须在事务内调用（审核/发药/退药）。 */
     public Optional<Prescription> lockPrescription(UUID id) {
         return jdbc.sql("""

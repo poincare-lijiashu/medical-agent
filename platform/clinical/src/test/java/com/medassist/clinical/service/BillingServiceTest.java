@@ -102,6 +102,26 @@ class BillingServiceTest {
     }
 
     @Test
+    @DisplayName("结算：转送失败的检查/药品医嘱拒结，避免出现\"已收费、无单据\"")
+    void settleRejectsFailedTransferOrder() {
+        BigDecimal amt = new BigDecimal("25.00");
+        VisitOrder failed = new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC",
+                "血常规", null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
+                VisitOrder.TEMP, LocalDate.now(), null,
+                VisitOrder.TRANSFER_FAILED, null, null, null, "医技服务暂不可用");
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockPlacedTempOrders(visitId)).thenReturn(List.of(failed));
+
+        assertThatThrownBy(() -> service.settle(visitId, "CASH", "clerk01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.ORDER_TRANSFER_INCOMPLETE);
+                    assertThat(e.getMessage()).contains("O1");
+                });
+        verify(repo, never()).markChargePaid(any(), any(), anyString(), anyLong());
+        verify(repo, never()).insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("结算：待计医嘱 25.00 + 8.00 并入收费单，并置医嘱为已计费")
     void settleAddsPendingOrders() {
         Charge unpaid = new Charge(chargeId, "C1", visitId, new BigDecimal("10.00"),

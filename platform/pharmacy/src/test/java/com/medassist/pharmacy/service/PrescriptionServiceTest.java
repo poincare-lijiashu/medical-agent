@@ -512,6 +512,8 @@ class PrescriptionServiceTest {
         service.returnDrug(dispenseId, new ReturnReq(itemId, 3, "整单退回"), "pharm01");
 
         verify(repo).updateDispenseStatus(eq(dispenseId), eq(Dispense.RETURNED), eq(0L));
+        // 全部退回必须同步作废处方，否则临床停嘱/撤销的下游作废永远 409（第六轮 MF-03）
+        verify(repo).returnPrescription(eq(rxId), anyString(), eq("pharm01"));
     }
 
     // ---------------------------------------------------------------- 发药计费（N2 收尾）

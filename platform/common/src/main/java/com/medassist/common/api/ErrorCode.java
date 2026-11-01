@@ -38,6 +38,7 @@ public enum ErrorCode {
     // ---- 医嘱（44xxx）----
     ORDER_ITEM_NOT_FOUND(44401, "未找到该医嘱项目，或该项目已停用"),
     ORDER_STATUS_INVALID(44410, "当前医嘱状态不允许该操作"),
+    ORDER_TRANSFER_INCOMPLETE(44411, "医嘱的下游单据未生成（转送失败），请先重试转送或由下游补开后再计费"),
 
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),

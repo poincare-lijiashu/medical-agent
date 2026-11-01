@@ -136,7 +136,7 @@ class OrderServiceTest {
         VisitOrder result = service.cancel(visitId, orderId, "doctor01");
 
         assertThat(result.id()).isEqualTo(orderId);
-        verify(transfer).cancelDownstream(eq(order), eq("医嘱撤销"), eq("doctor01"));
+        verify(transfer).cancelDownstreamBestEffort(eq(order), eq("医嘱撤销"), eq("doctor01"));
         verify(repo).logChange(eq("doctor01"), eq("ORDER_CANCEL"), eq("VISIT"), anyString(), anyString());
     }
 

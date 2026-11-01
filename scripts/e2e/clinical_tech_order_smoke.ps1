@@ -153,8 +153,11 @@ $r = Invoke-Api 'POST' "/api/v2/tech/applications/$labAppId/specimen" @{} $token
 Check 'specimen.collect' $r.Status 200
 Check 'specimen.collect.status' (Res $r).application.status 'SPECIMEN_COLLECTED'
 
+# R6-MF-03: cancel succeeds (medical decision); the void of a specimen-collected
+# application is deferred to a retry task, so the application keeps its status for now.
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($labOrder.id)/cancel" @{} $token
-Check 'order.lab.cancel.afterCollect.409' $r.Status 409
+Check 'order.lab.cancel.afterCollect.ok' $r.Status 200
+Check 'order.lab.cancel.afterCollect.status' (Res $r).status 'CANCELLED'
 $r = Invoke-Api 'GET' "/api/v2/tech/applications/$labAppId" $null $token
 Check 'tech.lab.still.collected' (Res $r).application.status 'SPECIMEN_COLLECTED'
 

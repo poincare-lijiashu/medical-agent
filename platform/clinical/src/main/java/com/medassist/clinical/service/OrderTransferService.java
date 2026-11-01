@@ -126,14 +126,17 @@ public class OrderTransferService {
     }
 
     /**
-     * 医嘱撤销/停嘱 → 下游单据作废（在撤销事务内同步执行）。
+     * 医嘱撤销/停嘱 → 下游单据作废（严格模式：失败抛出）。
      *
-     * <p>与转送相反，这里**失败必须抛出**：宁可撤销失败，也不能出现
-     * "医嘱已撤销、下游还能按旧单据执行"的安全缺口。下游作废是幂等的，
-     * 重试一定收敛；已发药/已采集的单据会被下游 409 拒绝（只能人工处理）。
+     * <p>下游作废是幂等的：未建单的 orderId 返回 {@code cancelled=false}，无副作用。
+     * 因此 PENDING / FAILED 也必须调用——下游可能已经建单，只是本地没回写成功
+     * （第六轮 MF-02：本地记 FAILED 后撤销静默跳过，处方仍可发药）。
+     *
+     * <p>严格模式只给补偿 worker 与"必须确保作废"的调用方使用；停嘱/撤销主流程走
+     * {@link #cancelDownstreamBestEffort}，避免处方已发药时把医疗决定一起回滚（MF-03）。
      */
     public void cancelDownstream(VisitOrder order, String reason, String actor) {
-        if (!order.transferred()) {
+        if (VisitOrder.TRANSFER_NONE.equals(order.transferStatus())) {
             return;
         }
         if (order.drug()) {
@@ -157,6 +160,59 @@ public class OrderTransferService {
         }
     }
 
+    /**
+     * 停嘱/撤销后的下游作废（尽力而为，**不抛异常**）。
+     *
+     * <p>医疗决定必须落库：处方已发药/已采集时下游 409，此时把作废登记成补偿任务
+     * 交给 worker 重试（下游退药/退费后即可收敛），而不是让停嘱整体回滚。
+     *
+     * @return true 表示本次已作废或无需作废；false 表示已登记补偿任务待重试
+     */
+    public boolean cancelDownstreamBestEffort(VisitOrder order, String reason, String actor) {
+        if (VisitOrder.TRANSFER_NONE.equals(order.transferStatus())) {
+            return true;
+        }
+        try {
+            cancelDownstream(order, reason, actor);
+            return true;
+        } catch (RuntimeException e) {
+            String error = truncate(e.getMessage() == null ? e.getClass().getSimpleName()
+                    : e.getMessage());
+            log.warn("clinical.order_transfer_cancel_deferred orderId={} err={}", order.id(), error);
+            repo.insertTransferTask(UUID.randomUUID(), order.id(), order.visitId(),
+                    order.drug() ? "PHARMACY" : "TECH", reason, actor);
+            audit(actor, "ORDER_TRANSFER_CANCEL_DEFERRED", order.id().toString(), Map.of(
+                    "orderNo", order.orderNo(), "reason", reason, "error", error));
+            return false;
+        }
+    }
+
+    /**
+     * 重试单条补偿任务（worker 调用）。
+     *
+     * @return true 表示已收敛（DONE 或已记为 FAILED 等待人工）
+     */
+    public boolean retryTask(UUID taskId, UUID orderId, UUID visitId, String channel,
+                             String reason, int maxAttempts) {
+        try {
+            VisitOrder order = repo.findOrderById(orderId).orElse(null);
+            if (order == null) {
+                repo.completeTransferTask(taskId);
+                return true;
+            }
+            cancelDownstream(order, reason, "transfer-worker");
+            repo.completeTransferTask(taskId);
+            return true;
+        } catch (RuntimeException e) {
+            String error = truncate(e.getMessage() == null ? e.getClass().getSimpleName()
+                    : e.getMessage());
+            log.warn("clinical.order_transfer_cancel_retry_failed orderId={} channel={} err={}",
+                    orderId, channel, error);
+            repo.failTransferTask(taskId, error, maxAttempts);
+            return false;
+        }
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /** 需要转送下游的医嘱类型（药品→药房，检查→医技）。 */
@@ -164,7 +220,27 @@ public class OrderTransferService {
         return order.drug() || "EXAM".equals(order.orderType());
     }
 
-    private void transferNow(VisitOrder order, Visit visit, String actor) {
+    /**
+     * 提交后真正调用下游。
+     *
+     * <p>必须先重读医嘱：开嘱事务已提交，visit 行锁释放，撤销/停嘱可能刚好发生。
+     * 若此刻医嘱已撤销/已停嘱，直接放弃转送——否则会给已经停掉的医嘱开出可发药处方
+     * （第六轮 MF-01）。
+     */
+    private void transferNow(VisitOrder stale, Visit visit, String actor) {
+        VisitOrder order = repo.findOrderById(stale.id()).orElse(null);
+        if (order == null) {
+            return;
+        }
+        // 只有"仍待转送"的医嘱才继续：已撤销/已停嘱/已被他人转送（含并发重复投递）一律不动
+        if (!VisitOrder.PLACED.equals(order.status()) || order.stopDate() != null
+                || !VisitOrder.TRANSFER_PENDING.equals(order.transferStatus())) {
+            audit(actor, "ORDER_TRANSFER_SKIPPED", order.id().toString(), Map.of(
+                    "orderNo", order.orderNo(), "status", order.status(),
+                    "stopped", order.stopDate() != null,
+                    "transferStatus", String.valueOf(order.transferStatus())));
+            return;
+        }
         if (order.drug()) {
             transferToPharmacy(order, visit, actor);
         } else if ("EXAM".equals(order.orderType())) {
@@ -173,14 +249,19 @@ public class OrderTransferService {
     }
 
     private void transferToPharmacy(VisitOrder order, Visit visit, String actor) {
+        PharmacyOrderClient.RxRef ref = null;
         try {
-            PharmacyOrderClient.RxRef ref = pharmacyClient.createFromOrder(order.id(),
+            ref = pharmacyClient.createFromOrder(order.id(),
                     visit.patientId(), visit.id(), visit.visitNo(), visit.deptId(),
                     order.orderedBy(),
                     List.of(new PharmacyOrderClient.Line(order.itemCode(), order.quantity(),
                             order.dose(), order.frequency(), null, null, null, null)));
-            repo.updateOrderTransfer(order.id(), VisitOrder.TRANSFERRED,
-                    EXTERNAL_PRESCRIPTION, ref.prescriptionId(), ref.prescriptionNo(), null);
+            if (!repo.markOrderTransferred(order.id(), EXTERNAL_PRESCRIPTION, ref.prescriptionId(),
+                    ref.prescriptionNo())) {
+                // 下游已建单，但本地已不能标记（医嘱在这期间被撤销/停嘱）：必须反向作废
+                compensateAfterStaleTransfer(order, EXTERNAL_PRESCRIPTION, actor);
+                return;
+            }
             audit(actor, "ORDER_TRANSFER", order.id().toString(), Map.of(
                     "orderNo", order.orderNo(), "externalType", EXTERNAL_PRESCRIPTION,
                     "prescriptionId", ref.prescriptionId().toString(),
@@ -196,8 +277,11 @@ public class OrderTransferService {
             TechOrderClient.AppRef ref = techClient.createFromOrder(order.id(), visit.patientId(),
                     visit.id(), visit.visitNo(), visit.deptId(), order.orderedBy(),
                     order.itemCode(), null, "ROUTINE", null);
-            repo.updateOrderTransfer(order.id(), VisitOrder.TRANSFERRED,
-                    EXTERNAL_EXAM_APPLICATION, ref.applicationId(), ref.applicationNo(), null);
+            if (!repo.markOrderTransferred(order.id(), EXTERNAL_EXAM_APPLICATION,
+                    ref.applicationId(), ref.applicationNo())) {
+                compensateAfterStaleTransfer(order, EXTERNAL_EXAM_APPLICATION, actor);
+                return;
+            }
             audit(actor, "ORDER_TRANSFER", order.id().toString(), Map.of(
                     "orderNo", order.orderNo(), "externalType", EXTERNAL_EXAM_APPLICATION,
                     "applicationId", ref.applicationId().toString(),
@@ -207,6 +291,40 @@ public class OrderTransferService {
         } catch (RuntimeException e) {
             markFailed(order, EXTERNAL_EXAM_APPLICATION, e, actor);
         }
+    }
+
+    /**
+     * 下游已建单但本地未能回写（医嘱已被撤销/停嘱）：立即反向作废；
+     * 作废失败则登记补偿任务，绝不留下"医嘱已停、处方可发药"的状态。
+     */
+    private void compensateAfterStaleTransfer(VisitOrder order, String externalType, String actor) {
+        String reason = "医嘱在转送期间已被撤销/停嘱，自动作废";
+        // 并发情况下可能另一事务已成功回写 TRANSFERRED：此时绝不能把别人建好的单据作废
+        VisitOrder latest = repo.findOrderById(order.id()).orElse(null);
+        if (latest == null || VisitOrder.TRANSFERRED.equals(latest.transferStatus())) {
+            return;
+        }
+        log.warn("clinical.order_transfer_stale orderId={} type={}", order.id(), externalType);
+        boolean cancelled = false;
+        try {
+            if (EXTERNAL_PRESCRIPTION.equals(externalType)) {
+                cancelled = pharmacyClient.cancelByOrder(order.id(), reason, actor).cancelled();
+            } else {
+                cancelled = techClient.cancelByOrder(order.id(), reason, actor).cancelled();
+            }
+        } catch (RuntimeException e) {
+            log.warn("clinical.order_transfer_stale_cancel_failed orderId={} err={}",
+                    order.id(), e.getMessage());
+        }
+        if (!cancelled) {
+            repo.insertTransferTask(UUID.randomUUID(), order.id(), order.visitId(),
+                    EXTERNAL_PRESCRIPTION.equals(externalType) ? "PHARMACY" : "TECH", reason, actor);
+        }
+        repo.updateOrderTransfer(order.id(), VisitOrder.TRANSFER_FAILED, externalType, null, null,
+                truncate(reason));
+        audit(actor, "ORDER_TRANSFER_STALE", order.id().toString(), Map.of(
+                "orderNo", order.orderNo(), "externalType", externalType,
+                "cancelConfirmed", cancelled));
     }
 
     private void markFailed(VisitOrder order, String externalType, RuntimeException e, String actor) {

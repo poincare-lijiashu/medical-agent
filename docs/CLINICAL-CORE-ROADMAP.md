@@ -968,8 +968,38 @@ HQMS 上报失败的逐条明细回执、手术操作编码（ICD-9-CM-3）字�
 **回归**：全量单测 **552 项**全绿（上报 +1：唯一冲突转 409）；
 `emr_hqms_export_smoke`（42 项）、`emr_homepage_smoke`、`emr_smoke`、`platform_smoke` 全部 PASS。
 
-**仍未做（ROUND6 剩余 MUST-FIX）**：MF-01~06（转送/停嘱/退费跨域一致性、首页可重算与性别年龄）、
-MF-12~15（首页读留痕、四眼单人可满足等），排期见 `REVIEW-20261101-ROUND6.md` §5。
+**仍未做（ROUND6 剩余 MUST-FIX）**：MF-01~03 已在 §1.41 收口；剩余 MF-04~06（退费口径、首页可重算、
+首页性别/年龄与死亡病例）、MF-12~15（首页读留痕、四眼单人可满足等），排期见 `REVIEW-20261101-ROUND6.md` §5。
+
+---
+
+## 1.41 已完成（2026-11-01，第六轮 P1：转送/停嘱/退费的跨域一致性）
+
+ROUND6 中风险最高的一组（用药安全 + 账实不符），三条互为因果，一起改：
+
+| 编号 | 风险 | 本次落地 |
+|---|---|---|
+| R6-MF-01 | 转送在 afterCommit 执行、不回读医嘱：撤销/停嘱后仍给已停医嘱开处方 | `transferNow` **先按 orderId 重读**，只处理 `PLACED + stop_date 为空 + transfer_status=PENDING`；回写改 `markOrderTransferred`（带状态守卫的 CAS），返回 false 时**反向作废**刚建的下游单据（作废失败进补偿任务） |
+| R6-MF-02 | 本地记 FAILED 后撤销静默跳过 → 处方仍可发药；已收费无单据且无法自愈 | `cancelDownstream` 对 **PENDING/FAILED/TRANSFERRED 一律调用**下游作废（下游按 orderId 幂等）；结算前对 `FAILED` 的药品/检查医嘱**拒结**（`ORDER_TRANSFER_INCOMPLETE`），避免"已收费、无单据" |
+| R6-MF-03 | 处方已发药时停嘱被 409 打死 → 医师无法停嘱；退药后处方仍 DISPENSED | 停嘱/撤销改为"**医疗决定必须成功 + 下游作废尽力而为**"：失败登记 `clinical V14 order_transfer_task`，`OrderTransferTaskWorker`（60s）重试到 DONE；整单退药时处方**自动作废**（DISPENSED→CANCELLED），补偿任务随之收敛 |
+
+**补偿任务模型**：`order_transfer_task`（order_id/visit_id/channel/reason/attempts/last_error），
+`UNIQUE (order_id, action) WHERE status='PENDING'` 防重复登记；重试 10 次仍失败置 `FAILED` 交人工。
+
+**实测（真实库 + 真实服务）**
+- 单元：全量 **560 项**全绿（临床 +8：转送重读/补偿/整单退药作废）
+- E2E：`clinical_pharmacy_order_smoke`（发药后撤销 **200**，处方保持 DISPENSED）、
+  `clinical_tech_order_smoke`（标本采集后撤销 **200**，申请保持 SPECIMEN_COLLECTED）、
+  `pharmacy_billing_smoke`、`platform_smoke` 全部 PASS
+- 闭环实测：撤销已发药医嘱 → 任务 PENDING（attempts 递增、错误"处方已发药，不能作废"）
+  → 整单退药 → 处方自动 `CANCELLED`（原因"发药单 DP… 全部退回，自动作废处方"）→ worker 将任务置 **DONE**
+
+**口径变化（前端/联调需知）**：撤销/停嘱在"下游已执行"时**不再返回 409**，而是 200 + 异步作废；
+若必须知道下游是否已作废，看 `order_transfer_task` 或后续接口。这是刻意的安全取舍：
+不能让"处方已发药"阻断医师的停止医嘱决定。
+
+**仍未做**：MF-04（负向退费明细让医保清单永久 422）、MF-05（首页可重算）、MF-06（首页性别/年龄/死亡病例）、
+MF-12~15（读留痕、四眼单人可满足等）。
 
 ---
 

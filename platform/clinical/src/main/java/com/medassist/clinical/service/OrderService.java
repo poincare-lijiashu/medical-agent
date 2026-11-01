@@ -104,8 +104,8 @@ public class OrderService {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未停止的住院长嘱可以停嘱（临时医嘱请走撤销）");
         }
-        // 停嘱后下游不得再按旧单据执行：取消失败则整体回滚（下游幂等，可重试）
-        transfer.cancelDownstream(current, "停嘱：" + why, actor);
+        // 停嘱是医疗决定，必须成功；下游作废尽力而为，失败进补偿任务（不回滚停嘱）
+        transfer.cancelDownstreamBestEffort(current, "停嘱：" + why, actor);
         audit(actor, "ORDER_STOP", "VISIT", visitId.toString(),
                 Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString(), "reason", why));
         return repo.listOrders(visitId, null).stream()
@@ -139,8 +139,8 @@ public class OrderService {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未计费（PLACED）的医嘱可以撤销");
         }
-        // 撤销后下游不得再按旧单据执行：取消失败则整体回滚（下游幂等，可重试）
-        transfer.cancelDownstream(current, "医嘱撤销", actor);
+        // 撤销同样是医疗决定：下游作废失败只登记补偿任务，不把撤销一起回滚
+        transfer.cancelDownstreamBestEffort(current, "医嘱撤销", actor);
         audit(actor, "ORDER_CANCEL", "VISIT", visitId.toString(),
                 Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString()));
         return repo.listOrders(visitId, null).stream()

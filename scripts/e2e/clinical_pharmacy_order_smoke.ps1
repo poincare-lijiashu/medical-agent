@@ -206,10 +206,15 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$order2Rx/dispense" @{} $
 Check 'order2.dispense' $r.Status 200
 Check 'order2.dispense.status' (Res $r).dispense.status 'DISPENSED'
 
+# R6-MF-03: cancel/stop is a medical decision and must succeed. When the prescription is
+# already dispensed the downstream void is deferred to a retry task (worker drains it).
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$order2Id/cancel" @{} $token
-Check 'order2.cancel.dispensed.409' $r.Status 409
-$r = Invoke-Api 'GET' "/api/v2/pharmacy/prescriptions/$order2Rx" $null $token
-Check 'order2.rx.still.dispensed' (Res $r).prescription.status 'DISPENSED'
+Check 'order2.cancel.dispensed.ok' $r.Status 200
+Check 'order2.cancel.dispensed.status' (Res $r).status 'CANCELLED'
+# until the deferred void completes the prescription stays DISPENSED (drugs already went out)
+$r = Invoke-Api 'GET' "/api/v2/pharmacy/prescriptions?patientId=$patientId" $null $token
+$rx2 = @(Res $r) | Where-Object { $_.id -eq $order2Rx }
+Check 'order2.rx.still.dispensed' $rx2.status 'DISPENSED'
 
 # ---------------------------------------------------------------- 12. internal endpoint rejects unauthenticated calls
 $r = Invoke-Api 'POST' '/internal/prescriptions' @{

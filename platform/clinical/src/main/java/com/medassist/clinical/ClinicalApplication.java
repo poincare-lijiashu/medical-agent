@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 临床核心服务（HIS 业务域第一段）：科室/号源 → 挂号 → 接诊 → 医嘱 → 计费。
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Bean;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan("com.medassist.clinical.config")
+@EnableScheduling
 public class ClinicalApplication {
 
     public static void main(String[] args) {

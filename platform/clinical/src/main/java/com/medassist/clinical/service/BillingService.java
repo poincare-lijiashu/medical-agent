@@ -100,6 +100,17 @@ public class BillingService {
         // 长嘱按日计费（dailyBill），结算只处理临时医嘱，避免与日报重复计费
         List<VisitOrder> pending = repo.lockPlacedTempOrders(visitId);
 
+        // 转送失败的药品/检查医嘱不能直接结算：先收钱后补单会形成"已收费、无单据"，
+        // 且结算后 transfer-retry 会以"已计费"拒绝，永远无法自愈（第六轮 MF-02）
+        for (VisitOrder o : pending) {
+            if (VisitOrder.TRANSFER_FAILED.equals(o.transferStatus())
+                    && (o.drug() || "EXAM".equals(o.orderType()))) {
+                throw new BusinessException(ErrorCode.ORDER_TRANSFER_INCOMPLETE,
+                        "医嘱 " + o.orderNo() + "（" + o.itemName() + "）的下游单据未生成，"
+                                + "请先重试转送或由下游补开后再结算");
+            }
+        }
+
         Charge charge = repo.lockOpenCharge(visitId).orElse(null);
         if (charge == null) {
             Charge latest = repo.findLatestCharge(visitId)

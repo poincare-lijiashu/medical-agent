@@ -379,6 +379,13 @@ public class PrescriptionService {
                 && !repo.updateDispenseStatus(dispenseId, next, dispense.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "发药单状态已变化，请刷新后重试");
         }
+        // 全部退回 = 该处方已无在途药品：同步作废处方，否则临床停嘱/撤销的下游作废永远 409
+        if (allReturned && repo.returnPrescription(dispense.prescriptionId(),
+                "发药单 " + dispense.dispenseNo() + " 全部退回，自动作废处方", actor)) {
+            audit(actor, "RX_CANCEL_ON_FULL_RETURN", "PRESCRIPTION",
+                    dispense.prescriptionId().toString(),
+                    Map.of("dispenseNo", dispense.dispenseNo()));
+        }
 
         audit(actor, "DISPENSE_RETURN", "DISPENSE", dispenseId.toString(), Map.of(
                 "dispenseNo", dispense.dispenseNo(), "batchNo", item.batchNo(),

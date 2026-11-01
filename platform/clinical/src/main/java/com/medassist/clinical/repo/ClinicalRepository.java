@@ -11,6 +11,7 @@ import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
+import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
@@ -305,6 +306,100 @@ public class ClinicalRepository {
                 .param("externalNo", externalNo)
                 .param("error", error)
                 .param("id", orderId).update() > 0;
+    }
+
+    /**
+     * 转送回写（成功）：带"医嘱仍有效"守卫。
+     *
+     * <p>转送在开嘱事务提交后才调用下游，此时 visit 行锁已释放；撤销/停嘱事务可能已把医嘱
+     * 置 CANCELLED 或写入 stop_date。此时不能再回写 TRANSFERRED（否则撤销侧会因
+     * {@code transferred()} 为假而跳过作废，处方仍可发药 —— 第六轮 MF-01）。
+     *
+     * @return false 表示医嘱已撤销/已停嘱/已被他人转送，调用方必须反向作废刚建立的下游单据
+     */
+    public boolean markOrderTransferred(UUID orderId, String externalType, UUID externalId,
+                                        String externalNo) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_order
+                           SET transfer_status = 'TRANSFERRED',
+                               external_type = :externalType,
+                               external_id = :externalId,
+                               external_no = :externalNo,
+                               transfer_error = NULL,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id
+                           AND status = 'PLACED' AND stop_date IS NULL
+                           AND transfer_status = 'PENDING'
+                        """)
+                .param("externalType", externalType).param("externalId", externalId)
+                .param("externalNo", externalNo).param("id", orderId)
+                .update() > 0;
+    }
+
+    /** 按医嘱 ID 重读（转送提交后以库里最新状态为准，旧对象可能已被撤销/停嘱）。 */
+    public Optional<VisitOrder> findOrderById(UUID orderId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.visit_order WHERE id = ?")
+                .param(orderId).query(ORDER_MAPPER).optional();
+    }
+
+    /** 登记转送补偿任务；同一医嘱已有待处理任务时忽略（唯一索引兜底）。 */
+    public void insertTransferTask(UUID id, UUID orderId, UUID visitId, String channel,
+                                   String reason, String actor) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.order_transfer_task
+                            (id, order_id, visit_id, action, channel, reason, actor, status, attempts)
+                        VALUES (:id, :orderId, :visitId, 'CANCEL', :channel, :reason, :actor,
+                                'PENDING', 0)
+                        ON CONFLICT DO NOTHING
+                        """)
+                .param("id", id).param("orderId", orderId).param("visitId", visitId)
+                .param("channel", channel).param("reason", reason).param("actor", actor)
+                .update();
+    }
+
+    private static final RowMapper<TransferTask> TRANSFER_TASK_MAPPER = (rs, i) -> new TransferTask(
+            rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+            rs.getObject("visit_id", UUID.class), rs.getString("action"), rs.getString("channel"),
+            rs.getString("reason"), rs.getString("actor"), rs.getString("status"),
+            rs.getInt("attempts"), rs.getString("last_error"),
+            rs.getTimestamp("created_at") == null ? null : rs.getTimestamp("created_at").toInstant());
+
+    /** 待重试的补偿任务（按创建时间升序，最多 limit 条）。 */
+    public List<TransferTask> listPendingTransferTasks(int limit) {
+        return jdbc.sql("""
+                        SELECT id, order_id, visit_id, action, channel, reason, actor, status,
+                               attempts, last_error, created_at
+                          FROM clinical_svc.order_transfer_task
+                         WHERE status = 'PENDING'
+                         ORDER BY created_at
+                         LIMIT :limit
+                        """)
+                .param("limit", limit).query(TRANSFER_TASK_MAPPER).list();
+    }
+
+    public boolean completeTransferTask(UUID id) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.order_transfer_task
+                           SET status = 'DONE', attempts = attempts + 1, last_error = NULL,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'PENDING'
+                        """)
+                .param("id", id).update() > 0;
+    }
+
+    /** 重试失败：仍留 PENDING 等下一轮；超过上限由 worker 置 FAILED（人工介入）。 */
+    public boolean failTransferTask(UUID id, String error, int maxAttempts) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.order_transfer_task
+                           SET attempts = attempts + 1,
+                               last_error = :error,
+                               status = CASE WHEN attempts + 1 >= :maxAttempts THEN 'FAILED'
+                                             ELSE 'PENDING' END,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'PENDING'
+                        """)
+                .param("error", error).param("maxAttempts", maxAttempts)
+                .param("id", id).update() > 0;
     }
 
     /** 停嘱（CAS）：仅 LONG + PLACED 可停；停嘱日仍计费，次日起不再计费。 */

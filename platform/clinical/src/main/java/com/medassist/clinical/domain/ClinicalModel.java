@@ -125,6 +125,23 @@ public final class ClinicalModel {
         }
     }
 
+    /**
+     * 医嘱转送补偿任务（停嘱/撤销后下游作废失败时登记）。
+     *
+     * <p>医疗决定必须成功、下游作废尽力而为：主事务只落医疗状态，作废失败进本表，
+     * 由 worker 重试（下游按 orderId 幂等）。
+     */
+    public record TransferTask(UUID id, UUID orderId, UUID visitId, String action, String channel,
+                               String reason, String actor, String status, int attempts,
+                               String lastError, Instant createdAt) {
+
+        public static final String CANCEL = "CANCEL";
+
+        public static final String PENDING = "PENDING";
+        public static final String DONE = "DONE";
+        public static final String FAILED = "FAILED";
+    }
+
     /** 收费单。 */
     public record Charge(UUID id, String chargeNo, UUID visitId, BigDecimal totalAmount,
                          String status, String paymentMethod, Instant paidAt, long version) {
