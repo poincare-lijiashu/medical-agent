@@ -3,8 +3,10 @@ package com.medassist.pharmacy.web;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.pharmacy.service.PrescriptionService;
+import com.medassist.pharmacy.web.PharmacyDtos.CancelFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
+import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -44,6 +46,15 @@ public class InternalPrescriptionController {
             @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
         requireToken(provided);
         return service.createFromOrder(req, "clinical");
+    }
+
+    /** 医嘱撤销/停嘱 → 处方作废（幂等；已发药拒绝）。 */
+    @PostMapping("/cancel-by-order")
+    public PrescriptionCancelView cancelByOrder(
+            @Valid @RequestBody CancelFromOrderReq req,
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireToken(provided);
+        return service.cancelFromOrder(req, "clinical");
     }
 
     private void requireToken(String provided) {

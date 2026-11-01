@@ -111,6 +111,25 @@ public class OrderTransferService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该医嘱"));
     }
 
+    /**
+     * 医嘱撤销/停嘱 → 处方作废（在撤销事务内同步执行）。
+     *
+     * <p>与转送相反，这里**失败必须抛出**：宁可撤销失败，也不能出现
+     * "医嘱已撤销、药房还能按旧处方发药"的用药安全缺口。药房侧作废是幂等的，
+     * 重试一定收敛；已发药的处方会被药房 409 拒绝（只能走退药）。
+     */
+    public void cancelPrescription(VisitOrder order, String reason, String actor) {
+        if (!order.drug() || !order.transferred()) {
+            return;
+        }
+        PharmacyOrderClient.CancelRef ref = client.cancelByOrder(order.id(), reason, actor);
+        audit(actor, ref.cancelled() ? "ORDER_TRANSFER_CANCEL" : "ORDER_TRANSFER_CANCEL_SKIPPED",
+                order.id().toString(), Map.of(
+                        "orderNo", order.orderNo(),
+                        "prescriptionId", ref.prescriptionId() == null ? "" : ref.prescriptionId().toString(),
+                        "reason", reason));
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private void transferNow(VisitOrder order, Visit visit, String actor) {

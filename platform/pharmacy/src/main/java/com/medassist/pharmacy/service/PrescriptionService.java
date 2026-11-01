@@ -13,10 +13,12 @@ import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.repo.PharmacyRepository;
+import com.medassist.pharmacy.web.PharmacyDtos.CancelFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreatePrescriptionReq;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
 import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
+import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionLine;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
@@ -108,6 +110,41 @@ public class PrescriptionService {
         Prescription rx = view.prescription();
         return new OrderPrescriptionView(rx.id(), rx.prescriptionNo(), req.orderId(), false,
                 rx.totalAmount(), rx.status());
+    }
+
+    /**
+     * 按医嘱作废处方（医嘱撤销/停嘱联动，内网接口）。
+     *
+     * <p>安全规则：
+     * <ul>
+     *   <li>已发药（DISPENSED）不能作废——药已经在患者手里，只能走退药；</li>
+     *   <li>找不到处方 = 该医嘱从未转送（或转送失败），返回 cancelled=false，不报错；</li>
+     *   <li>已作废幂等返回（临床重试不会报错）。</li>
+     * </ul>
+     */
+    @Transactional
+    public PrescriptionCancelView cancelFromOrder(CancelFromOrderReq req, String actor) {
+        Optional<Prescription> found = repo.lockPrescriptionBySourceOrder(req.orderId());
+        if (found.isEmpty()) {
+            return new PrescriptionCancelView(null, null, null, false);
+        }
+        Prescription rx = found.get();
+        if (Prescription.CANCELLED.equals(rx.status())) {
+            return new PrescriptionCancelView(rx.id(), rx.prescriptionNo(), rx.status(), true);
+        }
+        if (Prescription.DISPENSED.equals(rx.status())) {
+            throw new BusinessException(ErrorCode.PRESCRIPTION_STATUS_INVALID,
+                    "处方 " + rx.prescriptionNo() + " 已发药，不能作废（请走退药流程）");
+        }
+        String who = blankToNull(req.actor()) == null ? actor : blankToNull(req.actor());
+        String why = blankToNull(req.reason()) == null ? "医嘱撤销" : blankToNull(req.reason());
+        if (!repo.cancelPrescription(rx.id(), rx.version(), why, who)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "处方状态已变化，请刷新后重试");
+        }
+        audit(who, "RX_CANCEL_FROM_ORDER", "PRESCRIPTION", rx.id().toString(), Map.of(
+                "prescriptionNo", rx.prescriptionNo(), "orderId", req.orderId().toString(),
+                "reason", why));
+        return new PrescriptionCancelView(rx.id(), rx.prescriptionNo(), Prescription.CANCELLED, true);
     }
 
     private PrescriptionView createInternal(CreatePrescriptionReq req, String actor, UUID sourceOrderId) {

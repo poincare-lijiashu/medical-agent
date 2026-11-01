@@ -21,6 +21,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -52,6 +53,13 @@ class OrderServiceTest {
     private Visit visit(String status) {
         return new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
                 "OUTPATIENT", status, LocalDate.now(), 0L);
+    }
+
+    private VisitOrder order(UUID orderId) {
+        return new VisitOrder(orderId, "O1", visitId, "EXAM", "EXM-CBC", "血常规",
+                null, null, 1, "次", new BigDecimal("25.00"), new BigDecimal("25.00"),
+                VisitOrder.PLACED, "doctor01", 0L, VisitOrder.TEMP, LocalDate.now(), null,
+                VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
 
     @Test
@@ -106,12 +114,30 @@ class OrderServiceTest {
     void rejectCancelChargedOrder() {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         UUID orderId = UUID.randomUUID();
+        when(repo.findOrder(visitId, orderId)).thenReturn(Optional.of(order(orderId)));
         when(repo.cancelOrder(orderId, visitId)).thenReturn(false);
 
         assertThatThrownBy(() -> service.cancel(visitId, orderId, "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.ORDER_STATUS_INVALID);
+    }
+
+    @Test
+    @DisplayName("撤销成功：联动药房作废处方（药房失败会抛出并回滚撤销）")
+    void cancelTriggersPrescriptionCancel() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        UUID orderId = UUID.randomUUID();
+        VisitOrder order = order(orderId);
+        when(repo.findOrder(visitId, orderId)).thenReturn(Optional.of(order));
+        when(repo.cancelOrder(orderId, visitId)).thenReturn(true);
+        when(repo.listOrders(visitId, null)).thenReturn(List.of(order));
+
+        VisitOrder result = service.cancel(visitId, orderId, "doctor01");
+
+        assertThat(result.id()).isEqualTo(orderId);
+        verify(transfer).cancelPrescription(eq(order), eq("医嘱撤销"), eq("doctor01"));
+        verify(repo).logChange(eq("doctor01"), eq("ORDER_CANCEL"), eq("VISIT"), anyString(), anyString());
     }
 
     @Test
@@ -135,6 +161,7 @@ class OrderServiceTest {
     void stopRejectedWhenNotLongOrder() {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
         UUID orderId = UUID.randomUUID();
+        when(repo.findOrder(visitId, orderId)).thenReturn(Optional.of(order(orderId)));
         when(repo.stopLongOrder(eq(orderId), eq(visitId), any(), any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.stop(visitId, orderId, "病情好转", "doctor01"))

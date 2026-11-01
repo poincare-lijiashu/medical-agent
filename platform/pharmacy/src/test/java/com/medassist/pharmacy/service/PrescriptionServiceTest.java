@@ -11,10 +11,12 @@ import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.repo.PharmacyRepository;
+import com.medassist.pharmacy.web.PharmacyDtos.CancelFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreatePrescriptionReq;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
 import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
+import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionLine;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
@@ -219,6 +221,66 @@ class PrescriptionServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("儿童");
         verify(repo, never()).insertPrescription(any());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：从未转送（无处方）返回 cancelled=false，不报错")
+    void cancelFromOrderWithoutPrescription() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockPrescriptionBySourceOrder(orderId)).thenReturn(Optional.empty());
+
+        PrescriptionCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, null, null), "clinical");
+
+        assertThat(view.cancelled()).isFalse();
+        assertThat(view.prescriptionId()).isNull();
+        verify(repo, never()).cancelPrescription(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：APPROVED → CANCELLED，按来源处方的版本号 CAS 并留痕")
+    void cancelFromOrderCancelsApproved() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockPrescriptionBySourceOrder(orderId))
+                .thenReturn(Optional.of(rx(Prescription.APPROVED, new BigDecimal("25.00"), 3L)));
+        when(repo.cancelPrescription(eq(rxId), eq(3L), anyString(), anyString())).thenReturn(true);
+
+        PrescriptionCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, "医嘱撤销", "doctor01"), "clinical");
+
+        assertThat(view.cancelled()).isTrue();
+        assertThat(view.status()).isEqualTo(Prescription.CANCELLED);
+        verify(repo).cancelPrescription(eq(rxId), eq(3L), eq("医嘱撤销"), eq("doctor01"));
+        verify(repo).logChange(eq("doctor01"), eq("RX_CANCEL_FROM_ORDER"), eq("PRESCRIPTION"),
+                anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：已发药处方拒绝（药已在患者手里，只能走退药）")
+    void cancelFromOrderRejectsDispensed() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockPrescriptionBySourceOrder(orderId))
+                .thenReturn(Optional.of(rx(Prescription.DISPENSED, new BigDecimal("25.00"), 4L)));
+
+        assertThatThrownBy(() -> service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, null, null), "clinical"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已发药");
+        verify(repo, never()).cancelPrescription(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱作废：已作废幂等返回，不重复写库")
+    void cancelFromOrderIsIdempotent() {
+        UUID orderId = UUID.randomUUID();
+        when(repo.lockPrescriptionBySourceOrder(orderId))
+                .thenReturn(Optional.of(rx(Prescription.CANCELLED, new BigDecimal("25.00"), 5L)));
+
+        PrescriptionCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, null, null), "clinical");
+
+        assertThat(view.cancelled()).isTrue();
+        verify(repo, never()).cancelPrescription(any(), anyLong(), anyString(), anyString());
     }
 
     // ---------------------------------------------------------------- 审核

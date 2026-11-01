@@ -24,4 +24,15 @@ public interface PharmacyOrderClient {
 
     RxRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo, UUID deptId,
                           String prescriber, List<Line> items);
+
+    /**
+     * 按医嘱作废处方（医嘱撤销/停嘱联动）。
+     *
+     * @return {@code cancelled=false} 表示该医嘱从未生成处方（未转送或转送失败），属正常情况
+     */
+    CancelRef cancelByOrder(UUID orderId, String reason, String actor);
+
+    /** 处方作废结果。 */
+    record CancelRef(UUID prescriptionId, String status, boolean cancelled) {
+    }
 }

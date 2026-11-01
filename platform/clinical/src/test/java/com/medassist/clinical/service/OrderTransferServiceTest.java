@@ -152,6 +152,42 @@ class OrderTransferServiceTest {
     }
 
     @Test
+    @DisplayName("撤销联动：未转送成功的药品医嘱不调用药房作废")
+    void cancelSkipsUntransferredOrder() {
+        VisitOrder order = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFER_FAILED);
+
+        service.cancelPrescription(order, "医嘱撤销", "doctor01");
+
+        verify(client, never()).cancelByOrder(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("撤销联动：已转送 → 调用药房作废并留痕")
+    void cancelCallsPharmacyForTransferredOrder() {
+        VisitOrder order = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFERRED);
+        UUID rxId = UUID.randomUUID();
+        when(client.cancelByOrder(eq(orderId), eq("医嘱撤销"), eq("doctor01")))
+                .thenReturn(new PharmacyOrderClient.CancelRef(rxId, "CANCELLED", true));
+
+        service.cancelPrescription(order, "医嘱撤销", "doctor01");
+
+        verify(repo).logChange(eq("doctor01"), eq("ORDER_TRANSFER_CANCEL"), anyString(),
+                anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("撤销联动：药房拒绝（已发药）必须抛出，让医嘱撤销整体回滚")
+    void cancelPropagatesPharmacyFailure() {
+        VisitOrder order = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFERRED);
+        when(client.cancelByOrder(any(), any(), any()))
+                .thenThrow(new BusinessException(ErrorCode.CONFLICT, "处方已发药，不能作废"));
+
+        assertThatThrownBy(() -> service.cancelPrescription(order, "医嘱撤销", "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已发药");
+    }
+
+    @Test
     @DisplayName("重试：已转送幂等返回，不再调用药房")
     void retryIsIdempotentWhenTransferred() {
         VisitOrder transferred = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFERRED);

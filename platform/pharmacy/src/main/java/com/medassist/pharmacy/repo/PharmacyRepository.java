@@ -368,6 +368,30 @@ public class PharmacyRepository {
                         """).param(sourceOrderId).query(RX_MAPPER).optional();
     }
 
+    /** 按来源医嘱加行锁读取处方；必须在事务内调用（医嘱撤销/停嘱联动作废）。 */
+    public Optional<Prescription> lockPrescriptionBySourceOrder(UUID sourceOrderId) {
+        return jdbc.sql("""
+                        SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
+                               prescriber, status, reviewer, reviewed_at, reject_reason,
+                               total_amount, version, created_at, billing_mode, source_order_id
+                          FROM pharmacy_svc.prescription WHERE source_order_id = ? FOR UPDATE
+                        """).param(sourceOrderId).query(RX_MAPPER).optional();
+    }
+
+    /** 作废处方（CAS：版本号一致且尚未发药）。已作废的走幂等分支，不进这里。 */
+    public boolean cancelPrescription(UUID id, long expectedVersion, String reason, String actor) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.prescription
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               cancelled_by = :actor, cancelled_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                           AND status IN ('PENDING_REVIEW', 'APPROVED', 'REJECTED')
+                        """)
+                .param("reason", reason).param("actor", actor)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
     /** 加行锁读取处方；必须在事务内调用（审核/发药/退药）。 */
     public Optional<Prescription> lockPrescription(UUID id) {
         return jdbc.sql("""

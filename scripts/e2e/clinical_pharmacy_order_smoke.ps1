@@ -10,6 +10,8 @@
 #   * transfer-retry is idempotent for an already transferred order
 #   * the pharmacy internal endpoint rejects calls without a token (403)
 #   * approving the transferred prescription works (pharmacist can act on it)
+#   * cancelling the order cancels the prescription (order cancel -> rx CANCELLED)
+#   * cancelling a DISPENSED order is rejected (409): money/drugs already moved
 #
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
 #
@@ -167,7 +169,47 @@ $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
 Check 'charge.preview' $r.Status 200
 $chargeTotal = [decimal](Res $r).totalAmount
 
-# ---------------------------------------------------------------- 10. internal endpoint rejects unauthenticated calls
+# ---------------------------------------------------------------- 10. cancel order -> prescription cancelled
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$drugOrderId/cancel" @{} $token
+Check 'order.cancel' $r.Status 200
+Check 'order.cancel.status' (Res $r).status 'CANCELLED'
+$r = Invoke-Api 'GET' "/api/v2/pharmacy/prescriptions/$externalId" $null $token
+Check 'rx.cancelled.status' (Res $r).prescription.status 'CANCELLED'
+
+# ---------------------------------------------------------------- 11. dispensed prescription cannot be cancelled
+$r = Invoke-Api 'GET' '/api/v2/pharmacy/drugs?keyword=DRUG-NS-500' $null $token
+$nsId = @(Res $r)[0].drug.id
+$r = Invoke-Api 'POST' "/api/v2/pharmacy/drugs/$nsId/batches" @{
+    batchNo = "B-NS-$suffix"; expireDate = $far; quantity = 5; supplier = 'GuoYao'
+} $token
+Check 'stock.receive.ns' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders" @{
+    items = @(@{ itemCode = 'DRUG-NS-500'; quantity = 1; dose = '500ml'; frequency = 'once' })
+} $token
+Check 'order2.place' $r.Status 200
+$order2Id = (Res $r)[0].id
+$order2Rx = $null
+for ($i = 0; $i -lt 25; $i++) {
+    $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/orders" $null $token
+    $cur2 = @(Res $r) | Where-Object { $_.id -eq $order2Id }
+    if ("$($cur2.transferStatus)" -ne 'PENDING') { break }
+    Start-Sleep -Milliseconds 200
+}
+Check 'order2.transfer' $cur2.transferStatus 'TRANSFERRED'
+$order2Rx = $cur2.externalId
+$r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$order2Rx/review" @{ approve = $true } $token
+Check 'order2.approve' $r.Status 200
+$r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$order2Rx/dispense" @{} $token
+Check 'order2.dispense' $r.Status 200
+Check 'order2.dispense.status' (Res $r).dispense.status 'DISPENSED'
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$order2Id/cancel" @{} $token
+Check 'order2.cancel.dispensed.409' $r.Status 409
+$r = Invoke-Api 'GET' "/api/v2/pharmacy/prescriptions/$order2Rx" $null $token
+Check 'order2.rx.still.dispensed' (Res $r).prescription.status 'DISPENSED'
+
+# ---------------------------------------------------------------- 12. internal endpoint rejects unauthenticated calls
 $r = Invoke-Api 'POST' '/internal/prescriptions' @{
     orderId = $drugOrderId; patientId = $patientId
     items = @(@{ drugCode = 'DRUG-AMOX-025'; quantity = 1 })

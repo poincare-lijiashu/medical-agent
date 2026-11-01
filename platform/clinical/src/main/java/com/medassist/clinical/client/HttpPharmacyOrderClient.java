@@ -91,6 +91,36 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
                 response.totalAmount() == null ? BigDecimal.ZERO : response.totalAmount());
     }
 
+    @Override
+    public CancelRef cancelByOrder(UUID orderId, String reason, String actor) {
+        CancelResponse response;
+        try {
+            response = client.post()
+                    .uri("/internal/prescriptions/cancel-by-order")
+                    .header("X-Internal-Token", token)
+                    .body(new CancelFromOrderRequest(orderId, reason, actor))
+                    .retrieve()
+                    .body(CancelResponse.class);
+        } catch (HttpClientErrorException e) {
+            String message = extractMessage(e);
+            log.warn("clinical.pharmacy_rx_cancel_rejected orderId={} status={} reason={}",
+                    orderId, e.getStatusCode().value(), message);
+            // 409（如已发药）要保持"冲突"语义，医护端提示走退药流程
+            ErrorCode code = e.getStatusCode().value() == 409
+                    ? ErrorCode.CONFLICT : ErrorCode.VALIDATION_FAILED;
+            throw new BusinessException(code, message);
+        } catch (RestClientException e) {
+            log.warn("clinical.pharmacy_unavailable_cancel orderId={} err={}", orderId,
+                    e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "药房服务暂不可用，处方未作废（医嘱撤销已中止）");
+        }
+        if (response == null) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "药房返回为空，处方未作废");
+        }
+        return new CancelRef(response.prescriptionId(), response.status(), response.cancelled());
+    }
+
     /**
      * 提取平台标准错误体里的 message（{@code {"code":42200,"message":"..."}}）。
      *
@@ -119,5 +149,12 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
 
     record RxResponse(UUID prescriptionId, String prescriptionNo, UUID orderId, boolean duplicate,
                       BigDecimal totalAmount, String status) {
+    }
+
+    record CancelFromOrderRequest(UUID orderId, String reason, String actor) {
+    }
+
+    record CancelResponse(UUID prescriptionId, String prescriptionNo, String status,
+                          boolean cancelled) {
     }
 }

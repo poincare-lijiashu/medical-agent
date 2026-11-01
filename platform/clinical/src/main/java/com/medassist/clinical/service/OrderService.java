@@ -98,10 +98,14 @@ public class OrderService {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能停嘱");
         }
         String why = (reason == null || reason.isBlank()) ? "医师停嘱" : reason.trim();
+        VisitOrder current = repo.findOrder(visitId, orderId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该医嘱"));
         if (!repo.stopLongOrder(orderId, visitId, BusinessTime.today(), actor, why)) {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未停止的住院长嘱可以停嘱（临时医嘱请走撤销）");
         }
+        // 停嘱后药房不得再按旧处方发药：取消失败则整体回滚（药房侧幂等，可重试）
+        transfer.cancelPrescription(current, "停嘱：" + why, actor);
         audit(actor, "ORDER_STOP", "VISIT", visitId.toString(),
                 Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString(), "reason", why));
         return repo.listOrders(visitId, null).stream()
@@ -129,10 +133,14 @@ public class OrderService {
         if (!visit.active()) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束或已取消，不能撤销医嘱");
         }
+        VisitOrder current = repo.findOrder(visitId, orderId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该医嘱"));
         if (!repo.cancelOrder(orderId, visitId)) {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未计费（PLACED）的医嘱可以撤销");
         }
+        // 撤销后药房不得再按旧处方发药：取消失败则整体回滚（药房侧幂等，可重试）
+        transfer.cancelPrescription(current, "医嘱撤销", actor);
         audit(actor, "ORDER_CANCEL", "VISIT", visitId.toString(),
                 Map.of("visitNo", visit.visitNo(), "orderId", orderId.toString()));
         return repo.listOrders(visitId, null).stream()

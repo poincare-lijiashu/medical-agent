@@ -142,6 +142,26 @@ public final class PharmacyDtos {
                                         boolean duplicate, BigDecimal totalAmount, String status) {
     }
 
+    /**
+     * 按医嘱作废处方（仅内网接口使用，医嘱撤销/停嘱联动）。
+     *
+     * <p>找不到对应处方视为"该医嘱从未转送"（不报错）；已作废幂等返回。
+     */
+    public record CancelFromOrderReq(
+            @NotNull UUID orderId,
+            @Size(max = 256) String reason,
+            @Size(max = 64) String actor) {
+    }
+
+    /**
+     * 处方作废结果。
+     *
+     * @param cancelled true=本次或此前已作废；false=该医嘱没有处方（未转送过）
+     */
+    public record PrescriptionCancelView(UUID prescriptionId, String prescriptionNo,
+                                         String status, boolean cancelled) {
+    }
+
     /** 审核（approve=false 时 reason 必填）。 */
     public record ReviewReq(
             @NotNull Boolean approve,
