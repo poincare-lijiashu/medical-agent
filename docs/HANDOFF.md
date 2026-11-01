@@ -11,12 +11,13 @@
   `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）、`0995eea`（**第六轮 P1 跨域一致性**）、
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）、`cb68a1e`（**第六轮 P3 读留痕/四眼/报盘诊断**）、
   `cd93cb8`（**手术麻醉域第一批**）、`caff4de`（**知识库域第一批**）、`8fad3d2`（**手术麻醉域第二批**）、
-  `563cbe7`（**手术麻醉域第三批**）、`a1d4db1`（**手术麻醉域第四批：分级审批 + 利用率报表**）
+  `563cbe7`（**手术麻醉域第三批**）、`a1d4db1`（**手术麻醉域第四批：分级审批 + 利用率报表**）、
+  `__CHARGE_BATCH__`（**手术麻醉域第五批：术中收费打包**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **688 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **703 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V31**、`clinical_svc` → **V18**、`emr_svc` → **V14**、
+  本日迁移已在真实库执行：`auth_svc` → **V31**、`clinical_svc` → **V20**、`emr_svc` → **V14**、
   `insurance_svc` → **V12**、`kb_svc` → **V1**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
@@ -24,13 +25,13 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **手术麻醉第五批**：麻醉药品专用处方闭环（五专管理 + 处方权 + 空安瓿回收）、
-     术中收费打包（手术/麻醉/耗材一次计费，与收费单/医保清单对齐）、术前访视与麻醉评估单
+  1. **手术麻醉第六批**：麻醉药品专用处方闭环（五专管理 + 处方权 + 空安瓿回收）、
+     术前访视与麻醉评估单（术前核查清单已就绪，逐项补齐即可）
   2. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
      URL 抓取、带引用的生成式问答（LLM 未配置时继续显式拒绝，不伪造回答）、检索评测集（召回率/忠实度/时延）
   3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
-     DRG / 知识库检索"五页
+     术中收费核对 / 知识库检索"五页
   4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
@@ -1036,6 +1037,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`clinical_svc` → **V18**、`auth_svc` → **V31**
    - 遗留：麻醉药品专用处方闭环（五专/处方权/空安瓿）、术中收费打包、术前访视与麻醉评估单
 
+68. **手术麻醉域第五批：术中收费打包（2026-11-01）**
+   - **`clinical V19`**：`surgery_charge_rule`（术式类别/麻醉方式/耗材 → 收费项目 + 数量）+ 12 条示例规则；
+     同时补充 12 个示例物价项（`SURG-*` 800/2000/1500/600/500/700、`ANES-*` 600/400/200/300、`MAT-OPKIT` 150）
+   - **`clinical V20`**：替换 `check_charge_item_source`，无医嘱明细的 `source_key` 白名单加 `SURGERY:`
+     （V10 只允许 `REG:` / `DISPENSE:`，术后打包明细一开始被触发器直接拒绝）
+   - **规则展开**：术式类别（无规则 → `DEFAULT` 兜底）→ 麻醉方式（`NONE` 跳过）→ 耗材（`ALL` 每台适用）；
+     同一 `itemCode` 只保留一条，金额 = 物价字典价 × 数量（2 位 HALF_UP）
+   - **幂等**：`source_key = SURGERY:{caseId}:{itemCode}` 唯一索引 + 先查已计项；重复调用 200 且 `addedAmount=0`，
+     不会续开空收费单
+   - **前置条件**：仅**已完成**手术可计费；就诊已取消 422；收费单金额增量累加 + 版本 CAS
+   - **接口**：`GET /clinical/surgery-cases/{id}/charge-preview`（`clinical:charge:read`）、
+     `POST /clinical/surgery-cases/{id}/charges`（`clinical:charge:settle`）——不复用 `clinical:surgery:write`
+   - **实测**：全量单测 **703 项**全绿（+15）；新增 `clinical_surgery_charge_smoke.ps1`（44 项断言）PASS
+     （1550 → 重复 0 → 2050 → 850，合计 4450 / 8 条明细，QC 403）；四个既有手术 E2E 回归 PASS；
+     真实库反例：`HACK:1` 无医嘱明细被触发器拒绝、`amount=0` 被 `ck_charge_item_amount` 拒绝；
+     审计 `SURGERY_CHARGE` 7 条 + `SURGERY_CHARGE_IDEMPOTENT` 5 条
+   - 迁移：`clinical_svc` → **V20**
+   - 遗留：物价调整审批、医保支付比例、耗材条码核销、手术收入单独报表口径
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1224,6 +1244,14 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   不能写成比较 `$null`（PowerShell 下 `@($null)` 之类的写法极易误判）
 - **四眼原则要连"重新提交"一起管**：只校验"审批人 ≠ 申请人"是不够的，若允许同级重复提交，
   申请人先把 `applied_by` 改成别人再自批就绕过了；本批对同级 PENDING/APPROVED 一律 409
+- **"E2E 脚本必须纯 ASCII"这条会反复咬人**：本次 3 行中文注释里只有 1 行真的把下一行吞掉
+  （症状是"函数没执行、变量还是上一次的值"，看起来像逻辑错误）。新建 .ps1 后先跑
+  `Get-Content x.ps1 | Where-Object { $_ -match '[^\x00-\x7F]' }` 自检，或干脆注释全写英文
+- **无医嘱的费用明细有数据库白名单**：`charge_item.order_id IS NULL` 时 `source_key` 只能是
+  `REG:` / `DISPENSE:` / `SURGERY:`（V7→V10→V20 三次演进）。新增"无医嘱计费"必须先看这个触发器，
+  否则业务上 200 的接口在库里被拒，前端只看到笼统 409
+- `insertChargeItem` 的 `order_id` 可空，`JdbcClient` 传 null 必须 `CAST(:orderId AS uuid)`：
+  不 CAST 时 PG 推断不出类型直接报错；既有调用都传了真实 orderId，问题只在"无医嘱"路径暴露
 
 ## 交付状态（v1.0 全量修复后）
 - 阶段 1：双线深度审查（后端 20 项 + 前端 17 项）

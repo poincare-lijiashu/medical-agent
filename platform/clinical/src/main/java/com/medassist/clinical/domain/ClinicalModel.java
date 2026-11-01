@@ -306,6 +306,29 @@ public final class ClinicalModel {
                                int turnoverCount) {
     }
 
+    /**
+     * 手术收费打包规则：术式类别 / 麻醉方式 / 耗材 → 收费项目。
+     *
+     * <p>规则只描述"计什么、计几份"，**价格永远取 md_charge_item**，
+     * 避免同一条收费项目在规则表里被写成两个价（物价只有一个真源）。
+     */
+    public record SurgeryChargeRule(UUID id, String ruleType, String matchValue, String itemCode,
+                                    BigDecimal quantity, int sortNo, boolean enabled,
+                                    long version) {
+
+        /** 按术式类别（operation_catalog.category）匹配。 */
+        public static final String OPERATION_CATEGORY = "OPERATION_CATEGORY";
+        /** 按麻醉方式（SurgeryCase.anesthesiaType）匹配。 */
+        public static final String ANESTHESIA_METHOD = "ANESTHESIA_METHOD";
+        /** 每台手术固定耗材。 */
+        public static final String MATERIAL = "MATERIAL";
+
+        /** 术式类别无规则时的兜底匹配值。 */
+        public static final String DEFAULT_MATCH = "DEFAULT";
+        /** 耗材规则的匹配值（所有手术适用）。 */
+        public static final String ALL = "ALL";
+    }
+
     /** 收费单。 */
     public record Charge(UUID id, String chargeNo, UUID visitId, BigDecimal totalAmount,
                          String status, String paymentMethod, Instant paidAt, long version) {

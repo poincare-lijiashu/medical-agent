@@ -19,6 +19,7 @@ import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryChargeRule;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryConsent;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryLevel;
 import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
@@ -828,7 +829,8 @@ public class ClinicalRepository {
         return jdbc.sql("""
                         INSERT INTO clinical_svc.charge_item
                             (id, charge_id, order_id, source_key, item_code, item_name, category, amount)
-                        VALUES (:id, :chargeId, :orderId, :sourceKey, :itemCode, :itemName, :category, :amount)
+                        VALUES (:id, :chargeId, CAST(:orderId AS uuid), :sourceKey, :itemCode,
+                                :itemName, :category, :amount)
                         ON CONFLICT (source_key) DO NOTHING
                         """)
                 .param("id", id).param("chargeId", chargeId).param("orderId", orderId)
@@ -2124,6 +2126,45 @@ public class ClinicalRepository {
                 .param("fromAt", ts(fromAt)).param("toAt", ts(toAtExclusive))
                 .param("openMin", openMinuteOfDay).param("closeMin", closeMinuteOfDay)
                 .param("roomId", roomId).query(ROOM_DAY_USAGE_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 手术收费打包（V19）
+
+    private static final RowMapper<SurgeryChargeRule> SURGERY_CHARGE_RULE_MAPPER =
+            (rs, i) -> new SurgeryChargeRule(
+                    rs.getObject("id", UUID.class), rs.getString("rule_type"),
+                    rs.getString("match_value"), rs.getString("item_code"),
+                    rs.getBigDecimal("quantity"), rs.getInt("sort_no"),
+                    rs.getBoolean("enabled"), rs.getLong("version"));
+
+    /**
+     * 查询启用中的打包规则。
+     *
+     * @param ruleType   规则类型（术式类别 / 麻醉方式 / 耗材）
+     * @param matchValue 匹配值；传 {@code null} 表示该类型全部（耗材用）
+     */
+    public List<SurgeryChargeRule> listSurgeryChargeRules(String ruleType, String matchValue) {
+        return jdbc.sql("""
+                        SELECT id, rule_type, match_value, item_code, quantity, sort_no, enabled,
+                               version
+                          FROM clinical_svc.surgery_charge_rule
+                         WHERE enabled AND rule_type = :ruleType
+                           AND (CAST(:matchValue AS text) IS NULL
+                                OR match_value = CAST(:matchValue AS text))
+                         ORDER BY sort_no, item_code
+                        """)
+                .param("ruleType", ruleType).param("matchValue", matchValue)
+                .query(SURGERY_CHARGE_RULE_MAPPER).list();
+    }
+
+    /** 该手术已计费的收费项目编码（预览时标记"已计费"）。 */
+    public List<String> listChargedSurgeryItemCodes(UUID surgeryCaseId) {
+        return jdbc.sql("""
+                        SELECT item_code FROM clinical_svc.charge_item
+                         WHERE source_key LIKE 'SURGERY:' || :caseId || ':%'
+                        """)
+                .param("caseId", surgeryCaseId.toString())
+                .query(String.class).list();
     }
 
     // ---------------------------------------------------------------- 审计
