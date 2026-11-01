@@ -8,19 +8,21 @@
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
   `e350fad`（**医嘱 → 检查/检验申请**）、`3b88e50`（**结构化诊断 ICD-10**）、
   `55fe6f2`（**医保清单引用诊断**）、`f2c208f`（**病案首页 HQMS**）、`a036535`（**DRG 分组自动取数**）、
-  `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）
+  `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）、`0995eea`（**第六轮 P1 跨域一致性**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **552 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **560 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V28**、`emr_svc` → **V12**、`insurance_svc` → **V12**
+  本日迁移已在真实库执行：`auth_svc` → **V28**、`clinical_svc` → **V14**、`emr_svc` → **V12**、`insurance_svc` → **V12**
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **手术麻醉域 + ICD-9-CM-3 手术编码字典**：首页手术操作目前手工录入，接手术域后可自动生成、
+  1. **ROUND6 剩余 MUST-FIX**（顺序建议）：MF-04 退费口径（负向明细让医保清单永久 422）、
+     MF-05 首页可重算（`POST /homepages/{id}/recalculate` + 费用指纹）、MF-06 首页性别/出生日期/年龄
+     与死亡病例、MF-12~15（读留痕、四眼单人可满足等）
+  2. **手术麻醉域 + ICD-9-CM-3 手术编码字典**：首页手术操作目前手工录入，接手术域后可自动生成、
      联动收费，并让 DRG 分组拿到真实手术编码
-  2. **医嘱项 → 下游编码映射表** + **药品字典批量导入**（多院区的前提）
   3. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
