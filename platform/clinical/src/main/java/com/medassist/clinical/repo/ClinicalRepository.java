@@ -16,6 +16,7 @@ import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
+import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
@@ -1968,6 +1969,89 @@ public class ClinicalRepository {
                         SELECT consent_type FROM clinical_svc.surgery_consent
                          WHERE surgery_case_id = ? AND revoked_at IS NULL
                         """).param(surgeryCaseId).query(String.class).list();
+    }
+
+    // ---------------------------------------------------------------- 术前访视（V21）
+
+    private static final RowMapper<PreopVisit> PREOP_VISIT_MAPPER = (rs, i) -> new PreopVisit(
+            rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+            instantOf(rs, "visited_at"), rs.getString("visited_by"),
+            rs.getString("anesthesia_plan"), rs.getString("asa_grade"),
+            rs.getString("mallampati"), rs.getString("airway_note"), rs.getString("dentition"),
+            rs.getString("anesthesia_history"), rs.getString("allergy_history"),
+            rs.getObject("fasting_solid_hours", Integer.class),
+            rs.getObject("fasting_clear_hours", Integer.class), rs.getString("conclusion"),
+            rs.getString("risk_note"), rs.getString("status"), rs.getString("signed_by"),
+            instantOf(rs, "signed_at"), rs.getString("created_by"), rs.getLong("version"),
+            instantOf(rs, "created_at"));
+
+    public Optional<PreopVisit> findPreopVisit(UUID surgeryCaseId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.preop_visit WHERE surgery_case_id = ?")
+                .param(surgeryCaseId).query(PREOP_VISIT_MAPPER).optional();
+    }
+
+    public void insertPreopVisit(PreopVisit v) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.preop_visit
+                            (id, surgery_case_id, visited_at, visited_by, anesthesia_plan,
+                             asa_grade, mallampati, airway_note, dentition, anesthesia_history,
+                             allergy_history, fasting_solid_hours, fasting_clear_hours,
+                             conclusion, risk_note, status, created_by, version)
+                        VALUES (:id, :caseId, CAST(:visitedAt AS timestamptz), :visitedBy,
+                                :anesthesiaPlan, :asaGrade, :mallampati, :airwayNote, :dentition,
+                                :anesthesiaHistory, :allergyHistory,
+                                CAST(:fastingSolid AS integer), CAST(:fastingClear AS integer),
+                                :conclusion, :riskNote, 'DRAFT', :createdBy, 0)
+                        """)
+                .param("id", v.id()).param("caseId", v.surgeryCaseId())
+                .param("visitedAt", ts(v.visitedAt())).param("visitedBy", v.visitedBy())
+                .param("anesthesiaPlan", v.anesthesiaPlan()).param("asaGrade", v.asaGrade())
+                .param("mallampati", v.mallampati()).param("airwayNote", v.airwayNote())
+                .param("dentition", v.dentition())
+                .param("anesthesiaHistory", v.anesthesiaHistory())
+                .param("allergyHistory", v.allergyHistory())
+                .param("fastingSolid", v.fastingSolidHours())
+                .param("fastingClear", v.fastingClearHours())
+                .param("conclusion", v.conclusion()).param("riskNote", v.riskNote())
+                .param("createdBy", v.createdBy()).update();
+    }
+
+    public boolean updatePreopVisitDraft(PreopVisit v, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.preop_visit
+                           SET visited_at = CAST(:visitedAt AS timestamptz),
+                               visited_by = :visitedBy, anesthesia_plan = :anesthesiaPlan,
+                               asa_grade = :asaGrade, mallampati = :mallampati,
+                               airway_note = :airwayNote, dentition = :dentition,
+                               anesthesia_history = :anesthesiaHistory,
+                               allergy_history = :allergyHistory,
+                               fasting_solid_hours = CAST(:fastingSolid AS integer),
+                               fasting_clear_hours = CAST(:fastingClear AS integer),
+                               conclusion = :conclusion, risk_note = :riskNote,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("visitedAt", ts(v.visitedAt())).param("visitedBy", v.visitedBy())
+                .param("anesthesiaPlan", v.anesthesiaPlan()).param("asaGrade", v.asaGrade())
+                .param("mallampati", v.mallampati()).param("airwayNote", v.airwayNote())
+                .param("dentition", v.dentition())
+                .param("anesthesiaHistory", v.anesthesiaHistory())
+                .param("allergyHistory", v.allergyHistory())
+                .param("fastingSolid", v.fastingSolidHours())
+                .param("fastingClear", v.fastingClearHours())
+                .param("conclusion", v.conclusion()).param("riskNote", v.riskNote())
+                .param("id", v.id()).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean signPreopVisit(UUID id, String signedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.preop_visit
+                           SET status = 'SIGNED', signed_by = :signedBy, signed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
+                .update() > 0;
     }
 
     // ---------------------------------------------------------------- 手术分级（V18）

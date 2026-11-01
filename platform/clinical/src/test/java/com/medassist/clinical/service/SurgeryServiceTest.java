@@ -39,6 +39,7 @@ class SurgeryServiceTest {
 
     private ClinicalRepository repo;
     private SurgeryLevelService levelService;
+    private PreopVisitService preopVisitService;
     private SurgeryService service;
 
     private final UUID visitId = UUID.randomUUID();
@@ -54,7 +55,8 @@ class SurgeryServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         levelService = mock(SurgeryLevelService.class);
-        service = new SurgeryService(repo, levelService);
+        preopVisitService = mock(PreopVisitService.class);
+        service = new SurgeryService(repo, levelService, preopVisitService);
     }
 
     private Visit visit(String visitType) {
@@ -168,6 +170,7 @@ class SurgeryServiceTest {
 
         assertThat(result.status()).isEqualTo(SurgeryCase.IN_PROGRESS);
         verify(levelService).requireStartApproved(caseId);
+        verify(preopVisitService).requireStartCleared(caseId);
         verify(repo).logChange(eq("doctor01"), eq("SURGERY_START"), eq("SURGERY_CASE"),
                 eq(caseId.toString()), anyString());
     }

@@ -296,6 +296,36 @@ public final class ClinicalModel {
     }
 
     /**
+     * 术前访视与麻醉评估（一台手术一份，签署后冻结）。
+     *
+     * <p>与术前讨论的分工：讨论关注"手术怎么做"，访视关注"患者能不能耐受麻醉"。
+     * 结论 {@code UNFIT} 时禁止开台（由 SurgeryService 校验）。
+     */
+    public record PreopVisit(UUID id, UUID surgeryCaseId, Instant visitedAt, String visitedBy,
+                             String anesthesiaPlan, String asaGrade, String mallampati,
+                             String airwayNote, String dentition, String anesthesiaHistory,
+                             String allergyHistory, Integer fastingSolidHours,
+                             Integer fastingClearHours, String conclusion, String riskNote,
+                             String status, String signedBy, Instant signedAt, String createdBy,
+                             long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SIGNED = "SIGNED";
+
+        public static final String FIT = "FIT";
+        public static final String FIT_WITH_CAUTION = "FIT_WITH_CAUTION";
+        public static final String UNFIT = "UNFIT";
+
+        public boolean signed() {
+            return SIGNED.equals(status);
+        }
+
+        public boolean unfit() {
+            return UNFIT.equals(conclusion);
+        }
+    }
+
+    /**
      * 手术间利用率的"每日一行"聚合（仓储层投影，不落表）。
      *
      * @param occupiedMinutes 落在开放时段内的排台占用分钟（已取消排台不计）

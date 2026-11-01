@@ -219,6 +219,19 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseB/sc
 Check 'caseB.schedule' $r.Status 200
 Check 'caseB.schedule.status' (Res $r).status 'SCHEDULED'
 
+# level 3+ surgeries also need a signed anesthesia preop visit (clinical V21)
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseB/start" @{ version = 0 } $token
+Check 'caseB.start.noVisit.422' $r.Status 422
+
+$r = Invoke-Api 'PUT' "/api/v2/clinical/surgery-cases/$caseB/preop-visit" @{
+    visitedBy = 'doctor01'; anesthesiaPlan = 'GENERAL'; asaGrade = 'II'; mallampati = 'I'
+    fastingSolidHours = 8; fastingClearHours = 2; conclusion = 'FIT'
+} $token
+Check 'caseB.visit.save' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseB/preop-visit/sign" @{ version = 0 } $token
+Check 'caseB.visit.sign' $r.Status 200
+
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseB/start" @{ version = 0 } $token
 Check 'caseB.start.approved' $r.Status 200
 Check 'caseB.start.status' (Res $r).status 'IN_PROGRESS'

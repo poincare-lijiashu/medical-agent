@@ -32,10 +32,13 @@ public class SurgeryService {
 
     private final ClinicalRepository repo;
     private final SurgeryLevelService levelService;
+    private final PreopVisitService preopVisitService;
 
-    public SurgeryService(ClinicalRepository repo, SurgeryLevelService levelService) {
+    public SurgeryService(ClinicalRepository repo, SurgeryLevelService levelService,
+                          PreopVisitService preopVisitService) {
         this.repo = repo;
         this.levelService = levelService;
+        this.preopVisitService = preopVisitService;
     }
 
     /** 手术编码搜索（只返回启用项）。 */
@@ -87,6 +90,8 @@ public class SurgeryService {
         SurgeryCase current = requireCase(visitId, caseId);
         // 分级门槛在前：分级决定"这台手术能不能做"，知情同意决定"患者是否授权"
         levelService.requireStartApproved(caseId);
+        // 麻醉评估：三、四级必须有已签署访视；任何级别 UNFIT 一票否决
+        preopVisitService.requireStartCleared(caseId);
         requireConsents(caseId);
         if (!repo.startSurgery(caseId, Instant.now(), version)) {
             throw new BusinessException(ErrorCode.CONFLICT, "手术状态已变化，请刷新后重试");
