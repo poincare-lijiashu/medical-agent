@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一批** / **知识库域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一、二批** / **知识库域第一批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
@@ -12,10 +12,10 @@
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）、`cb68a1e`（**第六轮 P3 读留痕/四眼/报盘诊断**）、
   `cd93cb8`（**手术麻醉域第一批**）、`caff4de`（**知识库域第一批**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **617 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **644 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V30**、`clinical_svc` → **V15**、`emr_svc` → **V14**、
+  本日迁移已在真实库执行：`auth_svc` → **V30**、`clinical_svc` → **V16**、`emr_svc` → **V14**、
   `insurance_svc` → **V12**、`kb_svc` → **V1**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
@@ -23,11 +23,12 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
+  1. **手术麻醉第三批**：术前讨论与知情同意、麻醉药品专用处方闭环、术中收费打包（手术/麻醉/耗材一次计费）、
+     手术间利用率与接台周转报表
+  2. **知识库第二批**：pgvector + HNSW（替换 `real[]` 点积的 O(n) 扫描）、PDF/Word/HTML 解析与
      URL 抓取、带引用的生成式问答（LLM 未配置时继续显式拒绝，不伪造回答）、检索评测集（召回率/忠实度/时延）
-  2. **手术麻醉域第二批**：排台（手术间/台次/接台）、麻醉记录单、术中护理、术前讨论与知情同意
   3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
-     web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / DRG / 知识库检索"四页
+     web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板 / DRG / 知识库检索"五页
   4. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
@@ -978,6 +979,25 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 迁移：`kb_svc` → **V1**、`auth_svc` → **V30**
    - 遗留：pgvector+HNSW、PDF/Word/HTML 解析、带引用的生成式问答、检索评测集
 
+65. **手术麻醉域第二批：手术间 + 排台 + 麻醉记录与术中护理（2026-11-01）**
+   - **`clinical V16`**：`operating_room` / `surgery_schedule` / `anesthesia_record` /
+     `anesthesia_vital` / `intraop_nursing`
+   - **排台规则**：只有 PLANNED 可排；手术间必须 ACTIVE；同房间时段**不得重叠**（半开区间，首尾相接允许接台）；
+     单台 ≤ 24h；同手术仅一条未取消排台（部分唯一索引）；取消必须写原因，取消后可重排
+   - **并发**：排台前 `pg_advisory_xact_lock("clinical:surgery-room:{roomId}")` 再判冲突——
+     两个并发请求不会同时通过"查无冲突"；同房间同开始时间由唯一索引兜底
+   - **看板**：`GET /clinical/operating-rooms/{id}/schedules?date=`（跨零点手术也能看到）
+   - **麻醉**：一台手术一份；签署前必须"起止时间 + ≥1 条生命体征"；签署后触发器冻结（改记录/加体征都拒绝）；
+     更新必须带 version
+   - **生命体征**：按时间点追加（同时间点 409），不得早于麻醉开始，数值域 CHECK 兜底
+   - **术中护理**：洗手/巡回、体位、皮肤准备、止血带、标本数；签署需两名护士齐全；签署后冻结
+   - **状态联动**：手术开始 → 排台 IN_PROGRESS；完成 → COMPLETED；取消 → 同因 CANCELLED
+   - **实测**：全量单测 **644 项**全绿（+27）；新增 `clinical_surgery_theatre_smoke.ps1`
+     53 项断言 PASS；`clinical_surgery_smoke`、`platform_smoke` 回归 PASS；
+     真实库反例：直改已签署麻醉记录 / 签署后直插生命体征 → 触发器拒绝
+   - 迁移：`clinical_svc` → **V16**
+   - 遗留：术前讨论与知情同意、麻醉药品闭环、术中收费打包、手术间利用率报表
+
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
@@ -1068,6 +1088,13 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   `scripts/e2e/fixtures/*.txt`，脚本用 `[IO.File]::ReadAllText(path, UTF8)` 读取，两边都干净
 - `JdbcClient` 绑定可空数值列（如 `topScore`）必须 `CAST(:p AS numeric)`：直接传 null 时
   PG 推断不出类型会报 "could not determine data type"
+- **详情接口不要只查"未取消"记录**：排台取消后若 `GET /schedule` 只回未取消记录会返回 404，
+  界面退化成"从未排台"，把取消事实抹掉（E2E 当场抓到）。正确做法：详情返回**最近一条（含取消）**，
+  只有"重复排台判定 / 冲突检查 / 接台序号"才用未取消集合
+- 按天查询的看板接口 E2E 必须**显式传日期**：服务端默认"业务时区今天"，而 E2E 里用 UTC 计算的
+  "明天 01:00" 在 `Asia/Shanghai` 是明天 09:00，不传日期会查到空列表（本次 board.count=0 即此因）
+- 同一个 Repository 里的 `RowMapper` 常量不要重名：护理执行与术中护理都叫 `NURSING_MAPPER`
+  会编译失败（`已定义变量`），且报错行在后者、根因在前者
 - `mvn -Pprod-package` 排除 dev 配置后，本地 `java -jar` 仍用普通构建（不带 profile），
   两条链路互不影响；Dockerfile 必须固定带 `-Pprod-package`
 - Helm 镜像名是 `{imageRegistry}/{repository}:{tag}` 直接拼接：repository 里不要再带组织前缀，

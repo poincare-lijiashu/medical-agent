@@ -85,6 +85,8 @@ public class SurgeryService {
         if (!repo.startSurgery(caseId, Instant.now(), version)) {
             throw new BusinessException(ErrorCode.CONFLICT, "手术状态已变化，请刷新后重试");
         }
+        // 有排台则一并转"进行中"（未排台的手术允许直接开始，不强制排台）
+        repo.startScheduleByCase(caseId);
         audit(actor, "SURGERY_START", current, Map.of("before", current.status()));
         return requireCase(visitId, caseId);
     }
@@ -97,6 +99,7 @@ public class SurgeryService {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "只有进行中的手术可以完成，或状态已被他人更新，请刷新后重试");
         }
+        repo.completeScheduleByCase(caseId);
         audit(actor, "SURGERY_COMPLETE", current, Map.of("before", current.status(),
                 "operationCode", current.operationCode()));
         return requireCase(visitId, caseId);
@@ -113,6 +116,8 @@ public class SurgeryService {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "已完成/已取消的手术不能取消，或状态已被他人更新，请刷新后重试");
         }
+        // 手术取消 → 排台同因取消（若尚未开始）
+        repo.cancelScheduleByCase(caseId, reason);
         audit(actor, "SURGERY_CANCEL", current, Map.of("before", current.status(),
                 "reason", reason));
         return requireCase(visitId, caseId);

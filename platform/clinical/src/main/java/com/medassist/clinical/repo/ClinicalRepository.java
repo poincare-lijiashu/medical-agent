@@ -1,6 +1,8 @@
 package com.medassist.clinical.repo;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
+import com.medassist.clinical.domain.ClinicalModel.AnesthesiaRecord;
+import com.medassist.clinical.domain.ClinicalModel.AnesthesiaVital;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
@@ -8,11 +10,14 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
+import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
+import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
 import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
@@ -1429,6 +1434,12 @@ public class ClinicalRepository {
                 .param(id).query(SURGERY_MAPPER).optional();
     }
 
+    /** 只读查询手术记录（排台/麻醉/护理的归属校验用）。 */
+    public Optional<SurgeryCase> findSurgeryCase(UUID id) {
+        return jdbc.sql("SELECT * FROM clinical_svc.surgery_case WHERE id = ?")
+                .param(id).query(SURGERY_MAPPER).optional();
+    }
+
     /** 开始手术（CAS：仅 PLANNED）。 */
     public boolean startSurgery(UUID id, java.time.Instant startedAt, long expectedVersion) {
         return jdbc.sql("""
@@ -1464,6 +1475,367 @@ public class ClinicalRepository {
                         """)
                 .param("reason", reason).param("id", id)
                 .param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 手术间/排台/麻醉/术中护理（V16）
+
+    private static final RowMapper<OperatingRoom> ROOM_MAPPER = (rs, i) -> new OperatingRoom(
+            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+            rs.getObject("dept_id", UUID.class), rs.getString("location"), rs.getString("status"),
+            rs.getLong("version"), instantOf(rs, "created_at"));
+
+    private static final RowMapper<SurgerySchedule> SCHEDULE_MAPPER = (rs, i) -> new SurgerySchedule(
+            rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+            rs.getObject("room_id", UUID.class), instantOf(rs, "planned_start"),
+            instantOf(rs, "planned_end"), rs.getInt("sequence"), rs.getString("status"),
+            rs.getString("cancel_reason"), rs.getString("created_by"), rs.getLong("version"),
+            instantOf(rs, "created_at"));
+
+    private static final RowMapper<AnesthesiaRecord> ANESTHESIA_MAPPER =
+            (rs, i) -> new AnesthesiaRecord(
+                    rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+                    rs.getString("method"), rs.getString("asa_grade"),
+                    rs.getString("anesthesiologist"), rs.getString("airway"),
+                    instantOf(rs, "started_at"), instantOf(rs, "ended_at"), rs.getString("notes"),
+                    rs.getString("status"), rs.getString("signed_by"),
+                    instantOf(rs, "signed_at"), rs.getString("created_by"),
+                    rs.getLong("version"), instantOf(rs, "created_at"));
+
+    private static final RowMapper<AnesthesiaVital> VITAL_MAPPER = (rs, i) -> new AnesthesiaVital(
+            rs.getObject("id", UUID.class), rs.getObject("record_id", UUID.class),
+            instantOf(rs, "recorded_at"),
+            rs.getObject("heart_rate", Integer.class), rs.getObject("sbp", Integer.class),
+            rs.getObject("dbp", Integer.class), rs.getObject("spo2", Integer.class),
+            rs.getBigDecimal("etco2"), rs.getBigDecimal("temperature"), rs.getString("note"),
+            instantOf(rs, "created_at"));
+
+    private static final RowMapper<IntraopNursing> INTRAOP_NURSING_MAPPER =
+            (rs, i) -> new IntraopNursing(
+                    rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+                    rs.getString("scrub_nurse"), rs.getString("circulating_nurse"),
+                    rs.getString("patient_position"), rs.getString("skin_prep"),
+                    instantOf(rs, "tourniquet_start"), instantOf(rs, "tourniquet_end"),
+                    rs.getInt("specimen_count"), rs.getString("notes"), rs.getString("status"),
+                    rs.getString("signed_by"), instantOf(rs, "signed_at"),
+                    rs.getString("created_by"), rs.getLong("version"),
+                    instantOf(rs, "created_at"));
+
+    // ---- 手术间
+
+    public void insertOperatingRoom(OperatingRoom room) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.operating_room
+                            (id, code, name, dept_id, location, status, version)
+                        VALUES (:id, :code, :name, CAST(:deptId AS uuid), :location, :status, 0)
+                        """)
+                .param("id", room.id()).param("code", room.code()).param("name", room.name())
+                .param("deptId", room.deptId()).param("location", room.location())
+                .param("status", room.status()).update();
+    }
+
+    public Optional<OperatingRoom> findOperatingRoom(UUID id) {
+        return jdbc.sql("SELECT * FROM clinical_svc.operating_room WHERE id = ?")
+                .param(id).query(ROOM_MAPPER).optional();
+    }
+
+    public Optional<OperatingRoom> findOperatingRoomByCode(String code) {
+        return jdbc.sql("SELECT * FROM clinical_svc.operating_room WHERE code = ?")
+                .param(code).query(ROOM_MAPPER).optional();
+    }
+
+    public List<OperatingRoom> listOperatingRooms(String status, int limit) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.operating_room
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                         ORDER BY code LIMIT :limit
+                        """)
+                .param("status", status).param("limit", limit).query(ROOM_MAPPER).list();
+    }
+
+    public boolean updateOperatingRoomStatus(UUID id, String status, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.operating_room
+                           SET status = :status, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("status", status).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    // ---- 排台
+
+    /**
+     * 同房间排台串行化（事务级 advisory lock）。
+     *
+     * <p>必须"单键按房间"：排台冲突的判定范围就是同一手术间，全局单键会把无关房间一起排队，
+     * 按业务参数随意拼键又会让两个真正冲突的事务拿到不同锁（第六轮踩过）。
+     */
+    public void lockRoomForScheduling(UUID roomId) {
+        jdbc.sql("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))")
+                .param("key", "clinical:surgery-room:" + roomId).query((rs, i) -> 1).list();
+    }
+
+    /** 该手术当前未取消的排台。 */
+    public Optional<SurgerySchedule> findActiveScheduleByCase(UUID surgeryCaseId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_schedule
+                         WHERE surgery_case_id = ? AND status <> 'CANCELLED'
+                         ORDER BY created_at DESC LIMIT 1
+                        """).param(surgeryCaseId).query(SCHEDULE_MAPPER).optional();
+    }
+
+    /** 该手术最近一条排台（含已取消，用于历史展示）。 */
+    public Optional<SurgerySchedule> findLatestScheduleByCase(UUID surgeryCaseId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_schedule
+                         WHERE surgery_case_id = ? ORDER BY created_at DESC LIMIT 1
+                        """).param(surgeryCaseId).query(SCHEDULE_MAPPER).optional();
+    }
+
+    /** 同房间时间重叠的排台数（半开区间：首尾相接不算冲突）。 */
+    public long countOverlappingSchedules(UUID roomId, java.time.Instant start,
+                                          java.time.Instant end, UUID excludeCaseId) {
+        Long count = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.surgery_schedule
+                         WHERE room_id = :roomId AND status <> 'CANCELLED'
+                           AND planned_start < CAST(:endAt AS timestamptz)
+                           AND planned_end > CAST(:startAt AS timestamptz)
+                           AND (CAST(:exclude AS uuid) IS NULL
+                                OR surgery_case_id <> CAST(:exclude AS uuid))
+                        """)
+                .param("roomId", roomId).param("startAt", ts(start))
+                .param("endAt", ts(end)).param("exclude", excludeCaseId)
+                .query(Long.class).single();
+        return count == null ? 0 : count;
+    }
+
+    /** 当天该房间的接台序号（未取消排台的最大序号 + 1）。 */
+    public int nextScheduleSequence(UUID roomId, java.time.Instant dayStart,
+                                    java.time.Instant dayEnd) {
+        Integer max = jdbc.sql("""
+                        SELECT COALESCE(MAX(sequence), 0) FROM clinical_svc.surgery_schedule
+                         WHERE room_id = :roomId AND status <> 'CANCELLED'
+                           AND planned_start >= CAST(:dayStart AS timestamptz)
+                           AND planned_start < CAST(:dayEnd AS timestamptz)
+                        """)
+                .param("roomId", roomId).param("dayStart", ts(dayStart)).param("dayEnd", ts(dayEnd))
+                .query(Integer.class).single();
+        return (max == null ? 0 : max) + 1;
+    }
+
+    public void insertSchedule(SurgerySchedule s) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.surgery_schedule
+                            (id, surgery_case_id, room_id, planned_start, planned_end, sequence,
+                             status, created_by, version)
+                        VALUES (:id, :caseId, :roomId, CAST(:plannedStart AS timestamptz),
+                                CAST(:plannedEnd AS timestamptz), :sequence, :status, :createdBy, 0)
+                        """)
+                .param("id", s.id()).param("caseId", s.surgeryCaseId()).param("roomId", s.roomId())
+                .param("plannedStart", ts(s.plannedStart()))
+                .param("plannedEnd", ts(s.plannedEnd()))
+                .param("sequence", s.sequence()).param("status", s.status())
+                .param("createdBy", s.createdBy()).update();
+    }
+
+    public Optional<SurgerySchedule> lockScheduleByCase(UUID surgeryCaseId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_schedule
+                         WHERE surgery_case_id = ? AND status <> 'CANCELLED' FOR UPDATE
+                        """).param(surgeryCaseId).query(SCHEDULE_MAPPER).optional();
+    }
+
+    public boolean cancelSchedule(UUID id, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.surgery_schedule
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SCHEDULED' AND version = :version
+                        """)
+                .param("reason", reason).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 手术开始 → 排台转进行中（无排台时静默跳过）。 */
+    public void startScheduleByCase(UUID surgeryCaseId) {
+        jdbc.sql("""
+                        UPDATE clinical_svc.surgery_schedule
+                           SET status = 'IN_PROGRESS', version = version + 1, updated_at = now()
+                         WHERE surgery_case_id = :caseId AND status = 'SCHEDULED'
+                        """).param("caseId", surgeryCaseId).update();
+    }
+
+    /** 手术完成 → 排台转已完成。 */
+    public void completeScheduleByCase(UUID surgeryCaseId) {
+        jdbc.sql("""
+                        UPDATE clinical_svc.surgery_schedule
+                           SET status = 'COMPLETED', version = version + 1, updated_at = now()
+                         WHERE surgery_case_id = :caseId AND status IN ('SCHEDULED', 'IN_PROGRESS')
+                        """).param("caseId", surgeryCaseId).update();
+    }
+
+    /** 手术取消 → 排台一并取消（必须留原因，与手术取消同因）。 */
+    public void cancelScheduleByCase(UUID surgeryCaseId, String reason) {
+        jdbc.sql("""
+                        UPDATE clinical_svc.surgery_schedule
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE surgery_case_id = :caseId AND status = 'SCHEDULED'
+                        """)
+                .param("reason", reason).param("caseId", surgeryCaseId).update();
+    }
+
+    /** 手术间看板：某房间某天（含跨零点）的全部排台。 */
+    public List<SurgerySchedule> listSchedulesByRoom(UUID roomId, java.time.Instant dayStart,
+                                                     java.time.Instant dayEnd) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.surgery_schedule
+                         WHERE room_id = :roomId
+                           AND planned_start < CAST(:dayEnd AS timestamptz)
+                           AND planned_end > CAST(:dayStart AS timestamptz)
+                         ORDER BY planned_start
+                        """)
+                .param("roomId", roomId).param("dayStart", ts(dayStart))
+                .param("dayEnd", ts(dayEnd)).query(SCHEDULE_MAPPER).list();
+    }
+
+    // ---- 麻醉记录
+
+    public Optional<AnesthesiaRecord> findAnesthesiaByCase(UUID surgeryCaseId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.anesthesia_record WHERE surgery_case_id = ?")
+                .param(surgeryCaseId).query(ANESTHESIA_MAPPER).optional();
+    }
+
+    public void insertAnesthesia(AnesthesiaRecord r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.anesthesia_record
+                            (id, surgery_case_id, method, asa_grade, anesthesiologist, airway,
+                             started_at, ended_at, notes, status, created_by, version)
+                        VALUES (:id, :caseId, :method, :asaGrade, :anesthesiologist, :airway,
+                                CAST(:startedAt AS timestamptz), CAST(:endedAt AS timestamptz),
+                                :notes, 'DRAFT', :createdBy, 0)
+                        """)
+                .param("id", r.id()).param("caseId", r.surgeryCaseId()).param("method", r.method())
+                .param("asaGrade", r.asaGrade()).param("anesthesiologist", r.anesthesiologist())
+                .param("airway", r.airway()).param("startedAt", ts(r.startedAt()))
+                .param("endedAt", ts(r.endedAt())).param("notes", r.notes())
+                .param("createdBy", r.createdBy()).update();
+    }
+
+    public boolean updateAnesthesiaDraft(AnesthesiaRecord r, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.anesthesia_record
+                           SET method = :method, asa_grade = :asaGrade,
+                               anesthesiologist = :anesthesiologist, airway = :airway,
+                               started_at = CAST(:startedAt AS timestamptz),
+                               ended_at = CAST(:endedAt AS timestamptz), notes = :notes,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("method", r.method()).param("asaGrade", r.asaGrade())
+                .param("anesthesiologist", r.anesthesiologist()).param("airway", r.airway())
+                .param("startedAt", ts(r.startedAt())).param("endedAt", ts(r.endedAt()))
+                .param("notes", r.notes()).param("id", r.id()).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean signAnesthesia(UUID id, String signedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.anesthesia_record
+                           SET status = 'SIGNED', signed_by = :signedBy, signed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public void insertVital(AnesthesiaVital v, String createdBy) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.anesthesia_vital
+                            (id, record_id, recorded_at, heart_rate, sbp, dbp, spo2, etco2,
+                             temperature, note, created_by)
+                        VALUES (:id, :recordId, CAST(:recordedAt AS timestamptz),
+                                CAST(:heartRate AS integer), CAST(:sbp AS integer),
+                                CAST(:dbp AS integer), CAST(:spo2 AS integer),
+                                CAST(:etco2 AS numeric), CAST(:temperature AS numeric),
+                                :note, :createdBy)
+                        """)
+                .param("id", v.id()).param("recordId", v.recordId())
+                .param("recordedAt", ts(v.recordedAt())).param("heartRate", v.heartRate())
+                .param("sbp", v.sbp()).param("dbp", v.dbp()).param("spo2", v.spo2())
+                .param("etco2", v.etco2()).param("temperature", v.temperature())
+                .param("note", v.note()).param("createdBy", createdBy).update();
+    }
+
+    public List<AnesthesiaVital> listVitals(UUID recordId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.anesthesia_vital
+                         WHERE record_id = ? ORDER BY recorded_at
+                        """).param(recordId).query(VITAL_MAPPER).list();
+    }
+
+    public long countVitals(UUID recordId) {
+        Long count = jdbc.sql("SELECT count(*) FROM clinical_svc.anesthesia_vital WHERE record_id = ?")
+                .param(recordId).query(Long.class).single();
+        return count == null ? 0 : count;
+    }
+
+    // ---- 术中护理
+
+    public Optional<IntraopNursing> findNursingByCase(UUID surgeryCaseId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.intraop_nursing WHERE surgery_case_id = ?")
+                .param(surgeryCaseId).query(INTRAOP_NURSING_MAPPER).optional();
+    }
+
+    public void insertNursing(IntraopNursing n) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.intraop_nursing
+                            (id, surgery_case_id, scrub_nurse, circulating_nurse, patient_position,
+                             skin_prep, tourniquet_start, tourniquet_end, specimen_count, notes,
+                             status, created_by, version)
+                        VALUES (:id, :caseId, :scrubNurse, :circulatingNurse, :position,
+                                :skinPrep, CAST(:tourniquetStart AS timestamptz),
+                                CAST(:tourniquetEnd AS timestamptz), :specimenCount, :notes,
+                                'DRAFT', :createdBy, 0)
+                        """)
+                .param("id", n.id()).param("caseId", n.surgeryCaseId())
+                .param("scrubNurse", n.scrubNurse()).param("circulatingNurse", n.circulatingNurse())
+                .param("position", n.patientPosition()).param("skinPrep", n.skinPrep())
+                .param("tourniquetStart", ts(n.tourniquetStart()))
+                .param("tourniquetEnd", ts(n.tourniquetEnd()))
+                .param("specimenCount", n.specimenCount()).param("notes", n.notes())
+                .param("createdBy", n.createdBy()).update();
+    }
+
+    public boolean updateNursingDraft(IntraopNursing n, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.intraop_nursing
+                           SET scrub_nurse = :scrubNurse, circulating_nurse = :circulatingNurse,
+                               patient_position = :position, skin_prep = :skinPrep,
+                               tourniquet_start = CAST(:tourniquetStart AS timestamptz),
+                               tourniquet_end = CAST(:tourniquetEnd AS timestamptz),
+                               specimen_count = :specimenCount, notes = :notes,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("scrubNurse", n.scrubNurse()).param("circulatingNurse", n.circulatingNurse())
+                .param("position", n.patientPosition()).param("skinPrep", n.skinPrep())
+                .param("tourniquetStart", ts(n.tourniquetStart()))
+                .param("tourniquetEnd", ts(n.tourniquetEnd()))
+                .param("specimenCount", n.specimenCount()).param("notes", n.notes())
+                .param("id", n.id()).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean signNursing(UUID id, String signedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.intraop_nursing
+                           SET status = 'SIGNED', signed_by = :signedBy, signed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
+                .update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

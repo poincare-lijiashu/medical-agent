@@ -171,6 +171,63 @@ public final class ClinicalModel {
         }
     }
 
+    /** 手术间（排台资源）。 */
+    public record OperatingRoom(UUID id, String code, String name, UUID deptId, String location,
+                                String status, long version, Instant createdAt) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String MAINTENANCE = "MAINTENANCE";
+        public static final String INACTIVE = "INACTIVE";
+
+        public boolean bookable() {
+            return ACTIVE.equals(status);
+        }
+    }
+
+    /**
+     * 排台：一台手术占用一个手术间的一段时间。
+     *
+     * <p>{@code sequence} 是当天该手术间的接台顺序，用于手术间看板排序。
+     */
+    public record SurgerySchedule(UUID id, UUID surgeryCaseId, UUID roomId, Instant plannedStart,
+                                  Instant plannedEnd, int sequence, String status,
+                                  String cancelReason, String createdBy, long version,
+                                  Instant createdAt) {
+
+        public static final String SCHEDULED = "SCHEDULED";
+        public static final String IN_PROGRESS = "IN_PROGRESS";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String CANCELLED = "CANCELLED";
+    }
+
+    /** 麻醉记录单（一台手术一份，签署后冻结）。 */
+    public record AnesthesiaRecord(UUID id, UUID surgeryCaseId, String method, String asaGrade,
+                                   String anesthesiologist, String airway, Instant startedAt,
+                                   Instant endedAt, String notes, String status, String signedBy,
+                                   Instant signedAt, String createdBy, long version,
+                                   Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SIGNED = "SIGNED";
+    }
+
+    /** 术中生命体征（按时间点追加）。 */
+    public record AnesthesiaVital(UUID id, UUID recordId, Instant recordedAt, Integer heartRate,
+                                  Integer sbp, Integer dbp, Integer spo2, BigDecimal etco2,
+                                  BigDecimal temperature, String note, Instant createdAt) {
+    }
+
+    /** 术中护理记录（签署后冻结）。 */
+    public record IntraopNursing(UUID id, UUID surgeryCaseId, String scrubNurse,
+                                 String circulatingNurse, String patientPosition, String skinPrep,
+                                 Instant tourniquetStart, Instant tourniquetEnd, int specimenCount,
+                                 String notes, String status, String signedBy, Instant signedAt,
+                                 String createdBy, long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SIGNED = "SIGNED";
+    }
+
     /** 收费单。 */
     public record Charge(UUID id, String chargeNo, UUID visitId, BigDecimal totalAmount,
                          String status, String paymentMethod, Instant paidAt, long version) {
