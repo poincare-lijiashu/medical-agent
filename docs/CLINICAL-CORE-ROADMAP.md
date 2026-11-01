@@ -1306,9 +1306,10 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 - 迁移：`kb_svc` → **V2**、`auth_svc` → **V33**
 
 **本批不做（下一批）**
-- **pgvector + HNSW**：本机 PostgreSQL 镜像 `pg_available_extensions` 中**没有 `vector` 扩展**
-  （已实测查询为空），离线环境无法在线安装；当前仍为 `real[]` + 点积的 O(n) 扫描。
-  待换装带 pgvector 的镜像（或构建机编译扩展）后，再做 `vector` 列 + HNSW 索引迁移与本批评测脚本的时延对比。
+- **pgvector + HNSW**：`medagent_pg` 为 `postgres:15-alpine`，`pg_available_extensions` 中**没有 `vector` 扩展**
+  （已实测为空）；**但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev）。
+  下一批可**新建独立 PG17+pgvector 容器**做迁移与 HNSW 验证，再决定是否整体切换（PG15→17 需 dump/restore）。
+  当前仍为 `real[]` + 点积的 O(n) 扫描。
 - **生成式问答**：需要大模型配置、上下文截断、引用约束与忠实度评测；当前明确 `llmUsed=false`，
   不接模型就不假装"AI 回答"。接入时保持 `grounded/refusals/citations` 结构不变。
 - **PDF/Word/图片 OCR**：需离线解析库（PDFBox/POI/Tesseract），属构建机依赖变更，单独评估。

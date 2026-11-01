@@ -4,6 +4,14 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
+> **关机前状态（2026-11-01 深夜）**：代码已全部提交并双备份；9 个 Java 服务已停止；
+> **Docker Desktop 已按用户要求关闭**。
+> 明天开工顺序：
+> 1. 手动启动 Docker Desktop（agent 拉起的 GUI 进程会被回收）；
+> 2. **`docker start medagent_pg`（必须手动：该容器 `restart=no`，不会自动拉起）**；
+> 3. 按下面"启动顺序"逐条后台启动 auth → 业务服务 → gateway（`INTERNAL_API_TOKEN=medassist-dev-internal-token`）。
+> `medagent_loki` / `medagent_promtail` 是 `unless-stopped`，会随 Docker 自动启动。
+
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
   `e350fad`（**医嘱 → 检查/检验申请**）、`3b88e50`（**结构化诊断 ICD-10**）、
@@ -32,9 +40,11 @@
 - **明天第一件事（建议顺序）**：
   1. **评审整改第三批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"）、B3 退药退费与处方驳回联动（红冲单据）、
      E1 `X-Actor` 归因统一；其余 SHOULD-FIX 见意见书"仍未整改"
-  2. **知识库第三批的前置条件**：pgvector 当前不可用（`pg_available_extensions` 实测无 `vector`），
-     需先换装带 pgvector 的 PG 镜像或编译扩展，才能做 `vector` 列 + HNSW 与 `kb_eval.ps1` 时延对比；
-     生成式问答需大模型配置（保持 `grounded/citations/refusal` 结构与拒答语义不变）
+  2. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
+     **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
+     可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
+     不要直接换 `medagent_pg`（PG15→17 大版本升级需 dump/restore）。生成式问答仍需大模型配置
+     （保持 `grounded/citations/refusal` 结构与拒答语义不变）
   3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
      术中收费核对 / 麻精专册 / 术前访视 / 知识库检索与问答（`/kb/spaces/{id}/answer`）"七页
