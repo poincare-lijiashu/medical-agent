@@ -733,8 +733,9 @@ public class InsuranceRepository {
             rs.getString("scheme_code"), rs.getString("group_code"), rs.getBoolean("matched"),
             rs.getString("reason"), rs.getBigDecimal("weight"), rs.getBigDecimal("rate_amount"),
             rs.getBigDecimal("payment_standard"), rs.getString("diagnoses"),
-            rs.getString("procedures"), rs.getString("input_hash"), rs.getString("created_by"),
-            rs.getTimestamp("created_at").toInstant());
+            rs.getString("procedures"), rs.getString("diagnoses_source"),
+            rs.getString("procedures_source"), rs.getString("input_hash"),
+            rs.getString("created_by"), rs.getTimestamp("created_at").toInstant());
 
     public List<PaymentScheme> listSchemes() {
         return jdbc.sql("""
@@ -864,18 +865,20 @@ public class InsuranceRepository {
         jdbc.sql("""
                         INSERT INTO insurance_svc.payment_group_simulation
                             (id, visit_id, scheme_code, group_code, matched, reason, weight,
-                             rate_amount, payment_standard, diagnoses, procedures, input_hash,
-                             created_by)
+                             rate_amount, payment_standard, diagnoses, procedures,
+                             diagnoses_source, procedures_source, input_hash, created_by)
                         VALUES (:id, :visitId, :scheme, :group, :matched, :reason,
                                 CAST(:weight AS numeric), :rate, CAST(:payment AS numeric),
                                 CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb),
-                                :hash, :actor)
+                                :diagnosesSource, :proceduresSource, :hash, :actor)
                         """)
                 .param("id", s.id()).param("visitId", s.visitId()).param("scheme", s.schemeCode())
                 .param("group", s.groupCode()).param("matched", s.matched())
                 .param("reason", s.reason()).param("weight", s.weight())
                 .param("rate", s.rateAmount()).param("payment", s.paymentStandard())
                 .param("diagnoses", s.diagnoses()).param("procedures", s.procedures())
+                .param("diagnosesSource", s.diagnosesSource())
+                .param("proceduresSource", s.proceduresSource())
                 .param("hash", s.inputHash()).param("actor", s.createdBy()).update();
     }
 
@@ -883,7 +886,8 @@ public class InsuranceRepository {
         return jdbc.sql("""
                         SELECT id, visit_id, scheme_code, group_code, matched, reason, weight,
                                rate_amount, payment_standard, diagnoses::text AS diagnoses,
-                               procedures::text AS procedures, input_hash, created_by, created_at
+                               procedures::text AS procedures, diagnoses_source, procedures_source,
+                               input_hash, created_by, created_at
                           FROM insurance_svc.payment_group_simulation
                          WHERE visit_id = ?
                          ORDER BY created_at DESC
@@ -895,7 +899,8 @@ public class InsuranceRepository {
         return jdbc.sql("""
                         SELECT id, visit_id, scheme_code, group_code, matched, reason, weight,
                                rate_amount, payment_standard, diagnoses::text AS diagnoses,
-                               procedures::text AS procedures, input_hash, created_by, created_at
+                               procedures::text AS procedures, diagnoses_source, procedures_source,
+                               input_hash, created_by, created_at
                           FROM insurance_svc.payment_group_simulation
                          WHERE visit_id = :visitId
                          ORDER BY created_at DESC

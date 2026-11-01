@@ -51,6 +51,11 @@ insurance:
     base-url: ${CLINICAL_INTERNAL_URI:http://127.0.0.1:8083}
     internal-token: ${INTERNAL_API_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
     timeout: ${CLINICAL_TIMEOUT:PT3S}
+  # ---- DRG/DIP 模拟分组：读取病案首页手术操作 ----
+  emr:
+    base-url: ${EMR_INTERNAL_URI:http://127.0.0.1:8086}
+    internal-token: ${INTERNAL_API_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
+    timeout: ${EMR_TIMEOUT:PT3S}
 
 management:
   endpoints:

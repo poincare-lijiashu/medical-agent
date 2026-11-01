@@ -95,8 +95,8 @@ class GroupingControllerPermissionTest {
         var req = new SimulateReq(visitId, "DRG-2026", List.of("J18.900"), List.of());
         when(service.simulate(any(), anyString())).thenReturn(new GroupSimulation(UUID.randomUUID(),
                 visitId, "DRG-2026", "GB1", true, "命中", BigDecimal.ONE,
-                new BigDecimal("100.0000"), new BigDecimal("100.00"), "[]", "[]", "hash",
-                "doctor01", Instant.now()));
+                new BigDecimal("100.0000"), new BigDecimal("100.00"), "[]", "[]",
+                "MANUAL", "NONE", "hash", "doctor01", Instant.now()));
 
         var resp = controller.simulate(req, "insurance:settlement:read", "doctor01");
 

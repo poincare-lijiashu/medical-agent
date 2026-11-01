@@ -198,6 +198,10 @@ public final class InsuranceDtos {
      *
      * <p>列表上限 50：正常病案不会更多，且避免用超大数组刷爆 jsonb 与审计表（第四轮 SF-05）。
      * {@code visitId} 仅作留痕键——本接口不跨域校验就诊是否存在（医保域无就诊主数据）。
+     *
+     * <p>诊断与手术均为**可选**：字段缺省（null）时服务端自动取数——诊断取临床域就诊诊断，
+     * 手术取病案首页手术操作（来源随快照落库）；显式传入（含空数组）以请求为准，
+     * 空数组表示"假设无手术/无诊断"，不再回源。
      */
     public record SimulateReq(
             @NotNull UUID visitId,

@@ -2,6 +2,8 @@ package com.medassist.insurance.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.insurance.client.ClinicalClient;
+import com.medassist.insurance.client.EmrClient;
 import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
@@ -45,6 +47,8 @@ import static org.mockito.Mockito.when;
 class PaymentGroupingServiceTest {
 
     private InsuranceRepository repo;
+    private ClinicalClient clinicalClient;
+    private EmrClient emrClient;
     private PaymentGroupingService service;
 
     private final UUID visitId = UUID.randomUUID();
@@ -52,7 +56,14 @@ class PaymentGroupingServiceTest {
     @BeforeEach
     void setUp() {
         repo = mock(InsuranceRepository.class);
-        service = new PaymentGroupingService(repo, JsonMapper.builder().build());
+        clinicalClient = mock(ClinicalClient.class);
+        emrClient = mock(EmrClient.class);
+        service = new PaymentGroupingService(repo, clinicalClient, emrClient,
+                JsonMapper.builder().build());
+        when(clinicalClient.diagnoses(visitId))
+                .thenReturn(new ClinicalClient.DiagnosisSummary(visitId, List.of()));
+        when(emrClient.procedures(visitId))
+                .thenReturn(new EmrClient.HomepageProcedures(visitId, false, null, List.of()));
     }
 
     private PaymentScheme scheme(boolean enabled) {
@@ -299,6 +310,76 @@ class PaymentGroupingServiceTest {
     }
 
     @Test
+    @DisplayName("模拟：未传诊断时自动取临床就诊诊断（来源 CLINICAL）")
+    void simulatePullsDiagnosesFromClinical() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.listRules("DRG-2026", true))
+                .thenReturn(List.of(rule(1, "DIAGNOSIS", "J18", null, "GB1")));
+        when(repo.findGroup("DRG-2026", "GB1"))
+                .thenReturn(Optional.of(group("GB1", "1.5", true)));
+        when(clinicalClient.diagnoses(visitId)).thenReturn(new ClinicalClient.DiagnosisSummary(
+                visitId, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
+
+        GroupSimulation result = service.simulate(
+                new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
+
+        assertThat(result.matched()).isTrue();
+        assertThat(result.groupCode()).isEqualTo("GB1");
+        assertThat(result.diagnosesSource()).isEqualTo(PaymentGroupingService.SOURCE_CLINICAL);
+        assertThat(result.proceduresSource()).isEqualTo(PaymentGroupingService.SOURCE_NONE);
+        assertThat(result.diagnoses()).contains("J18.900");
+        assertThat(result.paymentStandard()).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    @DisplayName("模拟：未传手术时自动取病案首页手术操作（来源 HOMEPAGE）")
+    void simulatePullsProceduresFromHomepage() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.listRules("DRG-2026", true)).thenReturn(List.of(
+                rule(1, "DIAG_AND_PROC", "J18", "88.01", "GB2")));
+        when(repo.findGroup("DRG-2026", "GB2"))
+                .thenReturn(Optional.of(group("GB2", "2.0", true)));
+        when(clinicalClient.diagnoses(visitId)).thenReturn(new ClinicalClient.DiagnosisSummary(
+                visitId, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
+        when(emrClient.procedures(visitId)).thenReturn(new EmrClient.HomepageProcedures(
+                visitId, true, "DRAFT", List.of("88.0100")));
+
+        GroupSimulation result = service.simulate(
+                new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
+
+        assertThat(result.matched()).isTrue();
+        assertThat(result.groupCode()).isEqualTo("GB2");
+        assertThat(result.proceduresSource()).isEqualTo(PaymentGroupingService.SOURCE_HOMEPAGE);
+        assertThat(result.procedures()).contains("88.0100");
+    }
+
+    @Test
+    @DisplayName("模拟：显式传入诊断即覆盖自动取数（来源 MANUAL），不再回源临床")
+    void simulateManualInputOverridesClinical() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.listRules("DRG-2026", true)).thenReturn(List.of());
+
+        GroupSimulation result = service.simulate(simulateReq("k35.900"), "yb01");
+
+        assertThat(result.diagnosesSource()).isEqualTo(PaymentGroupingService.SOURCE_MANUAL);
+        assertThat(result.diagnoses()).contains("K35.900");
+        verify(clinicalClient, never()).diagnoses(any());
+    }
+
+    @Test
+    @DisplayName("模拟：请求未传诊断且临床域无诊断 → 422，不落库")
+    void simulateRejectsWhenNoDiagnosis() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+
+        assertThatThrownBy(() -> service.simulate(
+                new SimulateReq(visitId, "DRG-2026", null, null), "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).insertSimulation(any());
+    }
+
+    @Test
     @DisplayName("查询最近模拟：无记录 404")
     void latestSimulationMissing() {
         when(repo.findLatestSimulation(visitId)).thenReturn(Optional.empty());
@@ -314,7 +395,7 @@ class PaymentGroupingServiceTest {
     void latestSimulationWritesViewAudit() {
         GroupSimulation simulation = new GroupSimulation(UUID.randomUUID(), visitId, "DRG-2026",
                 "GB1", true, "命中", BigDecimal.ONE, new BigDecimal("100.0000"),
-                new BigDecimal("100.00"), "[\"J18.900\"]", "[]", "hash",
+                new BigDecimal("100.00"), "[\"J18.900\"]", "[]", "MANUAL", "NONE", "hash",
                 "yb01", Instant.now());
         when(repo.findLatestSimulation(visitId)).thenReturn(Optional.of(simulation));
 

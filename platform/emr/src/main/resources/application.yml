@@ -46,6 +46,9 @@ emr:
     base-url: ${CLINICAL_INTERNAL_URI:http://127.0.0.1:8083}
     internal-token: ${INTERNAL_API_TOKEN:${EMR_INTERNAL_TOKEN:}}
     timeout: ${CLINICAL_TIMEOUT:PT2S}
+  # ---- 供下游读取首页手术操作（医保 DRG 模拟分组）的内部接口令牌 ----
+  internal:
+    token: ${INTERNAL_API_TOKEN:${EMR_INTERNAL_TOKEN:}}
 
 management:
   endpoints:

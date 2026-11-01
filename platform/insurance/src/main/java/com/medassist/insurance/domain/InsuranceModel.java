@@ -184,11 +184,17 @@ public final class InsuranceModel {
         public static final String DIAG_AND_PROC = "DIAG_AND_PROC";
     }
 
-    /** 分组模拟快照（含未入组原因），用于"当时为什么算出这个支付标准"的追溯。 */
+    /**
+     * 分组模拟快照（含未入组原因），用于"当时为什么算出这个支付标准"的追溯。
+     *
+     * @param diagnosesSource  诊断来源（MANUAL 请求传入 / CLINICAL 临床域 / NONE）
+     * @param proceduresSource 手术来源（MANUAL 请求传入 / HOMEPAGE 病案首页 / NONE）
+     */
     public record GroupSimulation(UUID id, UUID visitId, String schemeCode, String groupCode,
                                   boolean matched, String reason, BigDecimal weight,
                                   BigDecimal rateAmount, BigDecimal paymentStandard,
-                                  String diagnoses, String procedures, String inputHash,
-                                  String createdBy, Instant createdAt) {
+                                  String diagnoses, String procedures,
+                                  String diagnosesSource, String proceduresSource,
+                                  String inputHash, String createdBy, Instant createdAt) {
     }
 }

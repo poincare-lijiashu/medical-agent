@@ -1,26 +1,26 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
   `e350fad`（**医嘱 → 检查/检验申请**）、`3b88e50`（**结构化诊断 ICD-10**）、
-  `55fe6f2`（**医保清单引用诊断**）、`f2c208f`（**病案首页 HQMS**）
+  `55fe6f2`（**医保清单引用诊断**）、`f2c208f`（**病案首页 HQMS**）、**本批**（**DRG 分组自动取数**，哈希见下一条文档提交）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **538 项**全绿
-- 本机环境（2026-11-01 15:12）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
+- 工作区：clean（收工前已确认）；全量单测 **542 项**全绿
+- 本机环境（2026-11-01 15:22）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本批迁移已在真实库执行：`auth_svc` → **V27**、`emr_svc` → **V10**
+  本日迁移已在真实库执行：`auth_svc` → **V27**、`emr_svc` → **V10**、`insurance_svc` → **V12**
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **DRG 模拟分组使用真实诊断与手术操作**：诊断已就绪（§1.35），首页手术操作为现成输入
-     （`record_homepage.procedures`），把 `payment_group_simulation` 从"只按费用"改为按诊断+手术分组
-  2. **HQMS 病案首页上报**：首页数据已齐（§1.37），下一步是导出 XML 与直报/前置机对接
-  3. **医嘱项 → 下游编码映射表** + **药品字典批量导入**（多院区的前提）
+  1. **HQMS 病案首页上报**：首页数据已齐（§1.37），DRG 模拟也已用上真实诊断+手术（§1.38），
+     下一步是首页/结算清单的 XML 导出与省局/前置机对接
+  2. **医嘱项 → 下游编码映射表** + **药品字典批量导入**（多院区的前提）
+  3. **手术麻醉域**：首页手术操作目前手工录入，接了手术域才能自动生成并联动收费
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -812,7 +812,28 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 遗留：手术操作暂无手术域（首页手工录入）；HQMS 费用类别映射与 XML 上报；
      首页诊断只能回临床域修正
 
+57. **DRG 模拟分组使用真实诊断与手术操作（2026-11-01）**
+   - `POST /insurance/grouping/simulate` 的 `diagnoses` / `procedures` 改为可选：
+     字段缺省（null）自动取数——诊断调临床 `GET /internal/visits/{id}/diagnoses`，
+     手术调病历域新增 `GET /internal/homepages/by-visit/{id}/procedures`；
+     显式传入（含空数组）即以请求为准（空数组 = "假设无手术"，不回源）
+   - 两侧都没有诊断 → **422**（不落库）：避免用"未入组"的假结论掩盖病案质控问题
+   - `insurance V12`：`payment_group_simulation` 新增 `diagnoses_source` / `procedures_source`
+     （MANUAL / CLINICAL / HOMEPAGE / NONE），来源同时写入 GROUP_SIMULATE 审计
+   - 新增病历域内部接口（共享令牌、网关 404）：未生成首页返回 `found=false`（正常状态，不报错）；
+     上游不可达 503（不能把"取不到"当作"没有手术"）
+   - `insurance` 新增 `EmrClient`/`HttpEmrClient` 与 `insurance.emr.*` 配置
+   - **实测**：新增 `insurance_drg_smoke.ps1`（43 项断言，经网关）：出院住院 + 主诊断 J18.900
+     + 首页手术 88.0100 → 规则"J18 且 88.01 → GB2"优先于"J18 → GB1" → **不传编码**模拟命中 GB2、
+     支付 200.00、`diagnosesSource=CLINICAL` / `proceduresSource=HOMEPAGE` → 回读一致
+     → 显式 `[J18.900]`+空手术命中 GB1、150.00、MANUAL → K35.900 未命中 → 无诊断 422
+     → 医师可模拟但建方案 403
+   - 回归：全量单测 **542 项**（分组 +4）；`insurance_smoke`、`emr_homepage_smoke`、`platform_smoke` 全过
+   - 遗留：官方 MDC/ADRG 分组器、省局分组接口、首页 XML 上报、DIP 病种目录导入
+
 ### 本机踩坑备忘（下次别再踩）
+- "缺省即自动取数、显式空数组即无"的接口，E2E 里 `@{ procedures = @() }` 会序列化成 `[]`（显式无），
+  不是缺省；要测自动取数就**别放这个键**（本次 DRG 冒烟踩到）
 - 医嘱只能开 `DRUG/TREATMENT/EXAM/MATERIAL` 类收费项目：`REG-*`（CONSULTATION）开医嘱会返回
   **404 ORDER_ITEM_NOT_FOUND**（`OrderService.mapOrderType` 拒绝），E2E 里别拿诊查费当住院医嘱用
 - 病案首页 E2E 若用 `EXM-CBC`（检查类），会触发"医嘱 → 医技申请"转送；tech 未启动时

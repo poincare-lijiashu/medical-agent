@@ -2,6 +2,8 @@ package com.medassist.insurance.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.insurance.client.ClinicalClient;
+import com.medassist.insurance.client.EmrClient;
 import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
@@ -52,11 +54,22 @@ public class PaymentGroupingService {
 
     private static final int MAX_HISTORY = 100;
 
+    /** 输入来源标记（与 `insurance V12` 的 CHECK 约束一致）。 */
+    static final String SOURCE_MANUAL = "MANUAL";
+    static final String SOURCE_CLINICAL = "CLINICAL";
+    static final String SOURCE_HOMEPAGE = "HOMEPAGE";
+    static final String SOURCE_NONE = "NONE";
+
     private final InsuranceRepository repo;
+    private final ClinicalClient clinicalClient;
+    private final EmrClient emrClient;
     private final ObjectMapper objectMapper;
 
-    public PaymentGroupingService(InsuranceRepository repo, ObjectMapper objectMapper) {
+    public PaymentGroupingService(InsuranceRepository repo, ClinicalClient clinicalClient,
+                                  EmrClient emrClient, ObjectMapper objectMapper) {
         this.repo = repo;
+        this.clinicalClient = clinicalClient;
+        this.emrClient = emrClient;
         this.objectMapper = objectMapper;
     }
 
@@ -237,14 +250,44 @@ public class PaymentGroupingService {
     /**
      * 模拟预分组：按优先级取首个命中规则，计算"权重 × 费率"。
      *
-     * <p>未命中或命中的分组已停用时同样落库（matched=false + reason），
+     * <p>输入取值优先级（来源会随快照落库，事后可解释"这次用的是系统数据还是人工录入"）：
+     * <ol>
+     *   <li><b>诊断</b>：字段缺省（null）→ 临床域就诊诊断；显式传入（含空数组）→ 以请求为准。
+     *       两者都为空直接拒绝：没有诊断的分组结果没有参考价值，不能给出"未入组"的假结论；</li>
+     *   <li><b>手术</b>：字段缺省（null）→ 病案首页手术操作；显式传入（含空数组）→ 以请求为准
+     *       （空数组表示"假设无手术"，不再回源，便于测算不同手术组合）。</li>
+     * </ol>
+     * 未命中或命中的分组已停用时同样落库（matched=false + reason），
      * 保证质控能发现"有病案但入不了组"的情况，而不是查不到记录。
      */
     @Transactional
     public GroupSimulation simulate(SimulateReq req, String actor) {
         PaymentScheme scheme = requireEnabledScheme(req.schemeCode());
-        List<String> diagnoses = normalizeCodes(req.diagnoses());
-        List<String> procedures = normalizeCodes(req.procedures());
+
+        List<String> diagnoses;
+        String diagnosesSource;
+        if (req.diagnoses() == null) {
+            diagnoses = normalizeCodes(clinicalClient.diagnoses(req.visitId()).diagnoses().stream()
+                    .map(ClinicalClient.Diagnosis::code).toList());
+            diagnosesSource = diagnoses.isEmpty() ? SOURCE_NONE : SOURCE_CLINICAL;
+        } else {
+            diagnoses = normalizeCodes(req.diagnoses());
+            diagnosesSource = diagnoses.isEmpty() ? SOURCE_NONE : SOURCE_MANUAL;
+        }
+        if (diagnoses.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "该就诊尚未下达诊断，无法模拟分组（请先在临床域录入诊断，或在请求中显式传入）");
+        }
+
+        List<String> procedures;
+        String proceduresSource;
+        if (req.procedures() == null) {
+            procedures = normalizeCodes(emrClient.procedures(req.visitId()).codes());
+            proceduresSource = procedures.isEmpty() ? SOURCE_NONE : SOURCE_HOMEPAGE;
+        } else {
+            procedures = normalizeCodes(req.procedures());
+            proceduresSource = procedures.isEmpty() ? SOURCE_NONE : SOURCE_MANUAL;
+        }
 
         PaymentGroup matched = null;
         String reason = null;
@@ -273,8 +316,8 @@ public class PaymentGroupingService {
         GroupSimulation simulation = new GroupSimulation(UUID.randomUUID(), req.visitId(),
                 scheme.code(), matched == null ? null : matched.groupCode(), matched != null,
                 reason, matched == null ? null : matched.weight(), scheme.rateAmount(), payment,
-                diagnosesJson, proceduresJson, inputHash(scheme.code(), diagnoses, procedures),
-                actor, Instant.now());
+                diagnosesJson, proceduresJson, diagnosesSource, proceduresSource,
+                inputHash(scheme.code(), diagnoses, procedures), actor, Instant.now());
         repo.insertSimulation(simulation);
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("visitId", req.visitId().toString());
@@ -282,6 +325,8 @@ public class PaymentGroupingService {
         detail.put("groupCode", simulation.groupCode());
         detail.put("matched", simulation.matched());
         detail.put("paymentStandard", payment == null ? null : payment.toPlainString());
+        detail.put("diagnosesSource", diagnosesSource);
+        detail.put("proceduresSource", proceduresSource);
         detail.put("inputHash", simulation.inputHash());
         audit(actor, "GROUP_SIMULATE", req.visitId().toString(), detail);
         return simulation;
