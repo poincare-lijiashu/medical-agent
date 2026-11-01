@@ -5,6 +5,7 @@ import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.domain.EmrModel.Template;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -124,5 +125,69 @@ public final class EmrDtos {
     public record RecordSummary(UUID id, String recordNo, UUID patientId, String patientNo,
                                 String docType, String title, String author, String status,
                                 int revision, java.time.Instant createdAt) {
+    }
+
+    // ---------------------------------------------------------------- 病案首页
+
+    /** 生成病案首页：只需就诊号，患者/诊断/费用由服务端从临床域取回。 */
+    public record CreateHomepageReq(@NotNull UUID visitId) {
+    }
+
+    /**
+     * 手术操作（首页录入；当前没有手术域）。
+     */
+    public record HomepageProcedureReq(
+            @NotBlank @Size(max = 32) String code,
+            @NotBlank @Size(max = 128) String name,
+            java.time.LocalDate date,
+            @Size(max = 64) String surgeon,
+            @Size(max = 64) String anesthesia,
+            @Size(max = 16) String incisionLevel) {
+    }
+
+    /**
+     * 补录首页专有信息（PUT 语义）。
+     *
+     * <p>科室/病区/主治医师**不传则保持原值**（来自临床快照，防止漏传被清空）；
+     * 其余表单字段不传即按清空或默认值处理（离院方式空、再住院计划 NONE、抢救 0 次）。
+     * 诊断、费用、出院时间不在本契约内——它们只能由临床域修正后重新生成。
+     *
+     * @param version 必填，草稿乐观锁版本号
+     */
+    public record UpdateHomepageReq(
+            @NotNull Long version,
+            @Size(max = 64) String deptName,
+            @Size(max = 64) String wardName,
+            @Size(max = 32) String bedNo,
+            @Size(max = 64) String attendingDoctor,
+            @Pattern(regexp = "OUTPATIENT|EMERGENCY|TRANSFER", message = "入院途径不合法")
+            String admissionWay,
+            @Pattern(regexp = "BY_DOCTOR|TRANSFER|TRANSFER_HOME|NON_DOCTOR|DEATH|OTHER",
+                    message = "离院方式不合法") String dischargeMode,
+            @Pattern(regexp = "NONE|WITHIN_31_DAYS", message = "再住院计划不合法") String readmitPlan,
+            @Pattern(regexp = "MARRIED|SINGLE|DIVORCED|WIDOWED|UNKNOWN", message = "婚姻状态不合法")
+            String maritalStatus,
+            @Size(max = 64) String occupation,
+            @Size(max = 64) String nation,
+            @Pattern(regexp = "A|B|O|AB|UNKNOWN", message = "血型不合法") String bloodType,
+            @Pattern(regexp = "POSITIVE|NEGATIVE|UNKNOWN", message = "RH 血型不合法") String rhFactor,
+            @Min(0) @Max(99) Integer rescueCount,
+            @Min(0) @Max(99) Integer rescueSuccessCount,
+            Boolean criticalCase,
+            Boolean hospitalInfection,
+            @Size(max = 64) String chiefPhysician,
+            @Size(max = 64) String residentPhysician,
+            @Size(max = 64) String coder,
+            @Size(max = 20, message = "手术操作不得超过 20 条")
+            List<@Valid HomepageProcedureReq> procedures) {
+    }
+
+    /**
+     * 病案首页视图：实体 + 反序列化后的诊断/手术/费用，前端无需二次解析 JSON 字符串。
+     */
+    public record HomepageView(com.medassist.emr.domain.EmrModel.Homepage homepage,
+                               List<Map<String, Object>> diagnoses,
+                               List<Map<String, Object>> procedures,
+                               Map<String, java.math.BigDecimal> feeSummary) {
     }
 }

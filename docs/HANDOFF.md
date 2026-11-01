@@ -1,23 +1,24 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
   `e350fad`（**医嘱 → 检查/检验申请**）、`3b88e50`（**结构化诊断 ICD-10**）、
-  `55fe6f2`（**医保清单引用诊断**）
+  `55fe6f2`（**医保清单引用诊断**）、**本批**（**病案首页 HQMS**，哈希见下一条文档提交）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **525 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **538 项**全绿
 - 本机环境（2026-11-01 13:20）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **病案首页**：诊断与费用已就绪（§1.35/§1.36），首页是 HQMS/DRG 的最后一环
-  2. **DRG 模拟分组使用真实诊断**：`payment_group_simulation` 目前只按费用，接诊断后才有参考价值
+  1. **DRG 模拟分组使用真实诊断与手术操作**：诊断已就绪（§1.35），首页手术操作为现成输入
+     （`record_homepage.procedures`），把 `payment_group_simulation` 从"只按费用"改为按诊断+手术分组
+  2. **HQMS 病案首页上报**：首页数据已齐（§1.37），下一步是导出 XML 与直报/前置机对接
   3. **医嘱项 → 下游编码映射表** + **药品字典批量导入**（多院区的前提）
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
@@ -788,7 +789,33 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 回归：全量单测 **525 项**（医保 +1）；`clinical_diagnosis_smoke`、`platform_smoke` 全过
    - 遗留：清单强制校验主诊断（与病案首页一起上线）、报盘 XML 明细诊断段、DRG 使用真实诊断
 
+56. **病案首页（2026-11-01）**
+   - 临床新增内部接口 `GET /internal/visits/{visitId}/homepage-source`：一次取齐住院信息、
+     科室/病区/床位名称、出院诊断与费用按类别汇总（避免多次调用之间数据漂移）；
+     业务规则（必须已出院）由病历域判定，临床域只做只读快照
+   - `emr V10`：`emr_svc.record_homepage`（一次住院一份，`UNIQUE(visit_id)`）+ 序列 `homepage_no_seq`
+     + 触发器 `guard_homepage`（归档后不可退回/改快照；提交后不可退回草稿/改诊断费用）
+   - 接口：`POST /emr/homepages`（生成）、`PUT /{id}`（补录，CAS）、`POST /{id}/submit`（完整性校验）、
+     `POST /{id}/archive`（四眼：提交人不得归档）、`GET /emr/homepages`、`/{id}`、`/{id}/print`
+   - 快照口径：诊断/费用/出院时间生成时固化，首页侧不可改（要改回临床域修正后重新生成）；
+     费用按 `charge_item.category` 聚合，已退费单据不计入，六个类别缺省补 0.00
+   - `auth V27`：`emr:homepage:read`（DOCTOR/NURSE/REGISTRAR/QC/ADMIN）、
+     `emr:homepage:write` + `emr:homepage:archive`（QC/ADMIN）
+   - **实测**：新增 `emr_homepage_smoke.ps1`（61 项断言，经网关）：未出院生成 409 → 出院后生成
+     （合计 33.00、EXAM 25/TREATMENT 8、其余 0、主诊断 J18.900、科室/病区/床位/患者快照）
+     → 重复生成 409 → 门诊生成 409 → 未补录提交 409 → 补录 → 抢救次数不一致 422 → 陈旧版本 409
+     → 提交 → 提交后修改 409 → 提交人归档 409 → QC 归档 200 → 重复归档 409 → 打印无水印
+     → 医师建首页 403/只读 200
+   - 数据库反例实测：直接 `UPDATE` 已归档首页的 `total_amount` 被触发器拒绝（事后 count=0）
+   - 回归：全量单测 **538 项**（首页 +13）；`emr_smoke`、`insurance_smoke`、`platform_smoke` 全过
+   - 遗留：手术操作暂无手术域（首页手工录入）；HQMS 费用类别映射与 XML 上报；
+     首页诊断只能回临床域修正
+
 ### 本机踩坑备忘（下次别再踩）
+- 医嘱只能开 `DRUG/TREATMENT/EXAM/MATERIAL` 类收费项目：`REG-*`（CONSULTATION）开医嘱会返回
+  **404 ORDER_ITEM_NOT_FOUND**（`OrderService.mapOrderType` 拒绝），E2E 里别拿诊查费当住院医嘱用
+- 病案首页 E2E 若用 `EXM-CBC`（检查类），会触发"医嘱 → 医技申请"转送；tech 未启动时
+  `transferStatus=FAILED` 但医嘱照常有效并计费（这是设计行为，不是失败）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
 - 加新状态时别只改 status 列自己的 CHECK：`ck_bill_confirmed` 这类"按状态组合约束其他列"的规则

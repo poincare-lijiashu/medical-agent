@@ -23,7 +23,9 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -612,6 +614,30 @@ public class ClinicalRepository {
                         rs.getString("item_name"), rs.getString("category"),
                         rs.getBigDecimal("amount"), rs.getString("charge_status")))
                 .list();
+    }
+
+    /**
+     * 病案首页费用汇总：按收费项目类别聚合（已退费单据不计入，与医保清单口径一致）。
+     *
+     * <p>只返回出现过的类别，未出现的类别由调用方补 0；
+     * 金额在数据库内聚合，避免把全部明细拉到应用层再求和。
+     */
+    public Map<String, BigDecimal> sumChargeByCategory(UUID visitId) {
+        List<Map.Entry<String, BigDecimal>> rows = jdbc.sql("""
+                        SELECT ci.category, COALESCE(sum(ci.amount), 0) AS amount
+                          FROM clinical_svc.charge c
+                          JOIN clinical_svc.charge_item ci ON ci.charge_id = c.id
+                         WHERE c.visit_id = :visitId AND c.status <> 'REFUNDED'
+                         GROUP BY ci.category
+                        """)
+                .param("visitId", visitId)
+                .query((rs, i) -> Map.entry(rs.getString("category"), rs.getBigDecimal("amount")))
+                .list();
+        Map<String, BigDecimal> summary = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> row : rows) {
+            summary.put(row.getKey(), row.getValue());
+        }
+        return summary;
     }
 
     public List<Charge> listCharges(UUID visitId) {

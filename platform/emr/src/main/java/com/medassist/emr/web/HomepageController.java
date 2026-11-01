@@ -1,0 +1,123 @@
+package com.medassist.emr.web;
+
+import com.medassist.common.api.ApiResponse;
+import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.Permissions;
+import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.service.HomepageService;
+import com.medassist.emr.web.EmrDtos.CreateHomepageReq;
+import com.medassist.emr.web.EmrDtos.HomepageView;
+import com.medassist.emr.web.EmrDtos.UpdateHomepageReq;
+import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 病案首页 API。
+ *
+ * <p>状态机：DRAFT →（补录+完整性校验）→ SUBMITTED →（四眼归档）→ ARCHIVED。
+ * 生成时从临床域取回诊断/费用/出院时间快照，提交后不可修改。
+ */
+@RestController
+@RequestMapping("/emr/homepages")
+public class HomepageController {
+
+    private static final String READ = "emr:homepage:read";
+    private static final String WRITE = "emr:homepage:write";
+    private static final String ARCHIVE = "emr:homepage:archive";
+
+    private final HomepageService service;
+
+    public HomepageController(HomepageService service) {
+        this.service = service;
+    }
+
+    /** 生成首页（仅已出院住院就诊；同一就诊只能生成一份）。 */
+    @PostMapping
+    public ApiResponse<HomepageView> create(
+            @Valid @RequestBody CreateHomepageReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.create(req, actor));
+    }
+
+    @GetMapping
+    public ApiResponse<List<Homepage>> list(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) UUID patientId,
+            @RequestParam(required = false) UUID deptId,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.list(status, patientId, deptId, limit));
+    }
+
+    @GetMapping("/{id}")
+    public ApiResponse<HomepageView> detail(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.detail(id));
+    }
+
+    /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */
+    @GetMapping(value = "/{id}/print", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> print(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, READ);
+        // 整页 PHI：禁脚本、禁外链、禁缓存
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
+                .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Cache-Control", "no-store, no-cache, must-revalidate, private")
+                .header("Pragma", "no-cache")
+                .body(service.printHtml(id, actor));
+    }
+
+    /** 补录首页专有信息（仅草稿；必须带版本号）。 */
+    @PutMapping("/{id}")
+    public ApiResponse<HomepageView> update(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateHomepageReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.update(id, req, actor));
+    }
+
+    /** 提交（完整性校验不通过返回 409 与缺失项明细）。 */
+    @PostMapping("/{id}/submit")
+    public ApiResponse<HomepageView> submit(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.submit(id, actor));
+    }
+
+    /** 归档（终态；提交人不得归档自己的首页）。 */
+    @PostMapping("/{id}/archive")
+    public ApiResponse<HomepageView> archive(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, ARCHIVE);
+        return ApiResponse.ok(service.archive(id, actor));
+    }
+}

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.format.DateTimeFormatter;
@@ -91,6 +92,65 @@ public class InternalVisitController {
         body.put("visitId", visitId);
         body.put("patientId", visit.patientId());
         body.put("diagnoses", items);
+        return body;
+    }
+
+    /**
+     * 病案首页数据源：一次取齐"住院信息 + 科室/病区/床位名称 + 出院诊断 + 费用汇总"。
+     *
+     * <p>为什么要合并成一个接口：病历域生成首页时要固化一份快照，
+     * 若分多次调用，两次调用之间诊断或费用发生变化会得到自相矛盾的首页。
+     * 本接口只做只读快照，**不判断是否允许生成首页**（必须已出院等业务规则由调用方执行），
+     * 这样临床域不需要知道病案域的流程规则。
+     */
+    @GetMapping("/{visitId}/homepage-source")
+    public Map<String, Object> homepageSource(@PathVariable UUID visitId,
+                                              @RequestHeader(value = "X-Internal-Token", required = false)
+                                              String provided) {
+        requireToken(provided);
+        Visit visit = repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "就诊记录不存在"));
+        Optional<Admission> admission = repo.findLatestAdmissionByVisit(visitId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("visitId", visit.id());
+        body.put("visitNo", visit.visitNo());
+        body.put("visitType", visit.visitType());
+        body.put("visitStatus", visit.status());
+        body.put("visitDate", visit.visitDate() == null ? null : visit.visitDate().toString());
+        body.put("patientId", visit.patientId());
+        body.put("patientNo", visit.patientNo());
+        body.put("deptId", visit.deptId());
+        body.put("deptName", visit.deptId() == null ? null
+                : repo.findDept(visit.deptId()).map(d -> d.name()).orElse(null));
+
+        body.put("admissionId", admission.map(Admission::id).orElse(null));
+        body.put("admissionNo", admission.map(Admission::admissionNo).orElse(null));
+        body.put("admissionStatus", admission.map(Admission::status).orElse(null));
+        body.put("admittedAt", admission.map(Admission::admittedAt).map(ISO::format).orElse(null));
+        body.put("dischargedAt", admission.map(Admission::dischargedAt).map(ISO::format).orElse(null));
+        body.put("wardId", admission.map(Admission::wardId).orElse(null));
+        body.put("wardName", admission.map(Admission::wardId)
+                .map(id -> repo.findWard(id).map(w -> w.name()).orElse(null)).orElse(null));
+        body.put("bedId", admission.map(Admission::bedId).orElse(null));
+        body.put("bedNo", admission.map(Admission::bedId)
+                .map(id -> repo.findBed(id).map(b -> b.bedNo()).orElse(null)).orElse(null));
+        body.put("attendingDoctor", admission.map(Admission::attendingDoctor).orElse(null));
+
+        List<Map<String, Object>> diagnoses = repo.listVisitDiagnoses(visitId).stream()
+                .map(d -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("code", d.code());
+                    row.put("name", d.name());
+                    row.put("primary", d.primaryFlag());
+                    return row;
+                })
+                .toList();
+        body.put("diagnoses", diagnoses);
+
+        Map<String, BigDecimal> feeSummary = repo.sumChargeByCategory(visitId);
+        body.put("feeSummary", feeSummary);
+        body.put("totalAmount", feeSummary.values().stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
         return body;
     }
 

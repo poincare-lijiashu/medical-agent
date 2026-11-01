@@ -68,11 +68,15 @@ public enum ErrorCode {
     EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),
     EMR_RECORD_NOT_FOUND(47402, "未找到该病历文书"),
     EMR_CHANGE_REQUEST_NOT_FOUND(47403, "未找到该病案修改申请"),
+    EMR_HOMEPAGE_NOT_FOUND(47404, "未找到该病案首页"),
     EMR_RECORD_STATUS_INVALID(47410, "当前病历状态不允许该操作"),
     EMR_QC_BLOCKED(47411, "病历质控未通过，存在必须整改的项目"),
     EMR_CHANGE_REQUEST_INVALID(47412, "病案修改申请状态不允许该操作"),
     EMR_SIGN_LEVEL_INVALID(47413, "签名级别不正确：必须按 书写医师→主治→主任 顺序签署"),
     EMR_SIGN_POLICY_INVALID(47414, "签名策略不存在、配置不合法或已被他人修改"),
+    EMR_HOMEPAGE_STATUS_INVALID(47415, "当前病案首页状态不允许该操作"),
+    EMR_HOMEPAGE_INCOMPLETE(47416, "病案首页必填项未完成，不能提交"),
+    EMR_HOMEPAGE_SOURCE_INVALID(47417, "该就诊不满足病案首页生成条件（须为已出院住院就诊）"),
 
     // ---- 医保（48xxx）----
     INSURANCE_ITEM_NOT_FOUND(48401, "未找到该医保目录项目"),

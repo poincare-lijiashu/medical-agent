@@ -1,5 +1,7 @@
 package com.medassist.emr.client;
 
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.InternalCallerSigner;
 import com.medassist.common.security.InternalSignatureClientInterceptor;
 
@@ -12,8 +14,12 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -78,6 +84,66 @@ public class HttpClinicalClient implements ClinicalClient {
         return Optional.of(new VisitRef(uuid(body.get("patientId")), instant(body.get("admittedAt"))));
     }
 
+    @Override
+    @SuppressWarnings("unchecked")
+    public HomepageSource homepageSource(UUID visitId) {
+        if (visitId == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未提供就诊号");
+        }
+        if (token.isBlank()) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "病历服务未配置临床域内部令牌，无法生成病案首页");
+        }
+        Map<?, ?> body;
+        try {
+            body = client.get()
+                    .uri("/internal/visits/{visitId}/homepage-source", visitId)
+                    .header("X-Internal-Token", token)
+                    .retrieve()
+                    .body(Map.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到该就诊记录，无法生成病案首页");
+        } catch (RestClientException e) {
+            log.warn("emr.clinical_homepage_unavailable visitId={} err={}",
+                    visitId, e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "临床服务暂不可用，无法生成病案首页，请稍后重试");
+        }
+        if (body == null) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "临床服务返回空数据，无法生成病案首页");
+        }
+        List<Diagnosis> diagnoses = new ArrayList<>();
+        if (body.get("diagnoses") instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (!(row instanceof Map<?, ?> m)) {
+                    continue;
+                }
+                diagnoses.add(new Diagnosis(str(m.get("code")), str(m.get("name")),
+                        Boolean.TRUE.equals(m.get("primary"))));
+            }
+        }
+        Map<String, BigDecimal> feeSummary = new LinkedHashMap<>();
+        if (body.get("feeSummary") instanceof Map<?, ?> raw) {
+            for (Map.Entry<?, ?> e : raw.entrySet()) {
+                if (e.getKey() != null) {
+                    feeSummary.put(String.valueOf(e.getKey()), decimal(e.getValue()));
+                }
+            }
+        }
+        return new HomepageSource(visitId,
+                str(body.get("visitNo")), str(body.get("visitType")), str(body.get("visitStatus")),
+                uuid(body.get("patientId")), str(body.get("patientNo")),
+                uuid(body.get("deptId")), str(body.get("deptName")),
+                uuid(body.get("admissionId")), str(body.get("admissionNo")),
+                str(body.get("admissionStatus")),
+                instant(body.get("admittedAt")), instant(body.get("dischargedAt")),
+                uuid(body.get("wardId")), str(body.get("wardName")),
+                uuid(body.get("bedId")), str(body.get("bedNo")),
+                str(body.get("attendingDoctor")), diagnoses, feeSummary,
+                decimal(body.get("totalAmount")));
+    }
+
     private static UUID uuid(Object o) {
         if (o == null) {
             return null;
@@ -98,6 +164,21 @@ public class HttpClinicalClient implements ClinicalClient {
         } catch (RuntimeException e) {
             log.warn("emr.clinical_bad_payload admittedAt={}", o);
             return null;
+        }
+    }
+
+    private static String str(Object o) {
+        return o == null ? "" : String.valueOf(o);
+    }
+
+    private static BigDecimal decimal(Object o) {
+        if (o == null) {
+            return BigDecimal.ZERO;
+        }
+        try {
+            return new BigDecimal(String.valueOf(o));
+        } catch (NumberFormatException e) {
+            return BigDecimal.ZERO;
         }
     }
 }

@@ -3,6 +3,7 @@ package com.medassist.emr.repo;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
+import com.medassist.emr.domain.EmrModel.Homepage;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.QcRule;
@@ -87,6 +88,35 @@ public class EmrRepository {
             rs.getString("doc_type"), rs.getString("title"), rs.getString("author"),
             rs.getString("status"), rs.getInt("revision"),
             rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<Homepage> HOMEPAGE_MAPPER = (rs, i) -> new Homepage(
+            rs.getObject("id", UUID.class), rs.getString("homepage_no"),
+            rs.getObject("visit_id", UUID.class), rs.getObject("admission_id", UUID.class),
+            rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+            rs.getString("patient_name"), rs.getString("visit_no"),
+            rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
+            rs.getObject("ward_id", UUID.class), rs.getString("ward_name"), rs.getString("bed_no"),
+            instant(rs, "admitted_at"), instant(rs, "discharged_at"), rs.getInt("stay_days"),
+            rs.getString("attending_doctor"), rs.getString("admission_way"),
+            rs.getString("discharge_mode"), rs.getString("readmit_plan"),
+            rs.getString("marital_status"), rs.getString("occupation"), rs.getString("nation"),
+            rs.getString("blood_type"), rs.getString("rh_factor"),
+            rs.getInt("rescue_count"), rs.getInt("rescue_success_count"),
+            rs.getBoolean("critical_case"), rs.getBoolean("hospital_infection"),
+            rs.getString("chief_physician"), rs.getString("resident_physician"), rs.getString("coder"),
+            rs.getString("diagnoses") == null ? "[]" : rs.getString("diagnoses"),
+            rs.getString("procedures") == null ? "[]" : rs.getString("procedures"),
+            rs.getString("fee_summary") == null ? "{}" : rs.getString("fee_summary"),
+            rs.getBigDecimal("total_amount"), rs.getString("status"),
+            rs.getString("submitted_by"), instant(rs, "submitted_at"),
+            rs.getString("archived_by"), instant(rs, "archived_at"),
+            rs.getLong("version"), instant(rs, "created_at"));
+
+    private static java.time.Instant instant(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
+    }
 
     private final JdbcClient jdbc;
 
@@ -632,6 +662,179 @@ public class EmrRepository {
                 .param("status", status).param("reviewer", reviewer)
                 .param("comment", comment).param("revision", appliedRevision)
                 .param("id", id).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 病案首页
+
+    /** 首页单号 HPYYYYMMDD######（按业务日切分，便于病案室按日交接）。 */
+    public String nextHomepageNo() {
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "emr_svc.homepage_no_seq").query(Long.class).single();
+        return "HP" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq);
+    }
+
+    private static final String HOMEPAGE_COLUMNS = """
+            id, homepage_no, visit_id, admission_id, patient_id, patient_no, patient_name,
+            visit_no, dept_id, dept_name, ward_id, ward_name, bed_no, admitted_at, discharged_at,
+            stay_days, attending_doctor, admission_way, discharge_mode, readmit_plan,
+            marital_status, occupation, nation, blood_type, rh_factor, rescue_count,
+            rescue_success_count, critical_case, hospital_infection, chief_physician,
+            resident_physician, coder, diagnoses::text AS diagnoses,
+            procedures::text AS procedures, fee_summary::text AS fee_summary, total_amount,
+            status, submitted_by, submitted_at, archived_by, archived_at, version, created_at
+            """;
+
+    public void insertHomepage(Homepage h) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.record_homepage
+                            (id, homepage_no, visit_id, admission_id, patient_id, patient_no,
+                             patient_name, visit_no, dept_id, dept_name, ward_id, ward_name,
+                             bed_no, admitted_at, discharged_at, stay_days, attending_doctor,
+                             admission_way, discharge_mode, readmit_plan, marital_status,
+                             occupation, nation, blood_type, rh_factor, rescue_count,
+                             rescue_success_count, critical_case, hospital_infection,
+                             chief_physician, resident_physician, coder, diagnoses, procedures,
+                             fee_summary, total_amount, status, version)
+                        VALUES (:id, :homepageNo, :visitId, CAST(:admissionId AS uuid), :patientId,
+                                :patientNo, :patientName, :visitNo, CAST(:deptId AS uuid), :deptName,
+                                CAST(:wardId AS uuid), :wardName, :bedNo,
+                                CAST(:admittedAt AS timestamptz), CAST(:dischargedAt AS timestamptz),
+                                :stayDays, :attendingDoctor, :admissionWay, :dischargeMode,
+                                :readmitPlan, :maritalStatus, :occupation, :nation, :bloodType,
+                                :rhFactor, :rescueCount, :rescueSuccessCount, :criticalCase,
+                                :hospitalInfection, :chiefPhysician, :residentPhysician, :coder,
+                                CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb),
+                                CAST(:feeSummary AS jsonb), :totalAmount, 'DRAFT', 0)
+                        """)
+                .param("id", h.id()).param("homepageNo", h.homepageNo())
+                .param("visitId", h.visitId()).param("admissionId", h.admissionId())
+                .param("patientId", h.patientId()).param("patientNo", h.patientNo())
+                .param("patientName", h.patientName()).param("visitNo", h.visitNo())
+                .param("deptId", h.deptId()).param("deptName", h.deptName())
+                .param("wardId", h.wardId()).param("wardName", h.wardName())
+                .param("bedNo", h.bedNo())
+                .param("admittedAt", ts(h.admittedAt())).param("dischargedAt", ts(h.dischargedAt()))
+                .param("stayDays", h.stayDays()).param("attendingDoctor", h.attendingDoctor())
+                .param("admissionWay", h.admissionWay()).param("dischargeMode", h.dischargeMode())
+                .param("readmitPlan", h.readmitPlan()).param("maritalStatus", h.maritalStatus())
+                .param("occupation", h.occupation()).param("nation", h.nation())
+                .param("bloodType", h.bloodType()).param("rhFactor", h.rhFactor())
+                .param("rescueCount", h.rescueCount())
+                .param("rescueSuccessCount", h.rescueSuccessCount())
+                .param("criticalCase", h.criticalCase())
+                .param("hospitalInfection", h.hospitalInfection())
+                .param("chiefPhysician", h.chiefPhysician())
+                .param("residentPhysician", h.residentPhysician())
+                .param("coder", h.coder())
+                .param("diagnoses", h.diagnoses()).param("procedures", h.procedures())
+                .param("feeSummary", h.feeSummary()).param("totalAmount", h.totalAmount())
+                .update();
+    }
+
+    private static java.time.OffsetDateTime ts(java.time.Instant i) {
+        return i == null ? null : java.time.OffsetDateTime.ofInstant(i, java.time.ZoneOffset.UTC);
+    }
+
+    public Optional<Homepage> findHomepage(UUID id) {
+        return jdbc.sql("SELECT " + HOMEPAGE_COLUMNS
+                        + " FROM emr_svc.record_homepage WHERE id = ?")
+                .param(id).query(HOMEPAGE_MAPPER).optional();
+    }
+
+    /** 加行锁读取；必须在事务内调用。 */
+    public Optional<Homepage> lockHomepage(UUID id) {
+        return jdbc.sql("SELECT " + HOMEPAGE_COLUMNS
+                        + " FROM emr_svc.record_homepage WHERE id = ? FOR UPDATE")
+                .param(id).query(HOMEPAGE_MAPPER).optional();
+    }
+
+    public Optional<Homepage> findHomepageByVisit(UUID visitId) {
+        return jdbc.sql("SELECT " + HOMEPAGE_COLUMNS
+                        + " FROM emr_svc.record_homepage WHERE visit_id = ?")
+                .param(visitId).query(HOMEPAGE_MAPPER).optional();
+    }
+
+    /**
+     * 保存草稿（仅 DRAFT；CAS 版本号）。
+     *
+     * <p>只允许改"首页专有信息"与科室/病区/床位/主治医师的书写修正；
+     * 诊断、费用、出院时间属于临床快照，任何状态都不在这里更新
+     * （数据库触发器在 SUBMITTED 之后也会拒绝修改）。
+     */
+    public boolean updateHomepageDraft(UUID id, Homepage h, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_homepage
+                           SET dept_name = :deptName, ward_name = :wardName, bed_no = :bedNo,
+                               attending_doctor = :attendingDoctor, admission_way = :admissionWay,
+                               discharge_mode = :dischargeMode, readmit_plan = :readmitPlan,
+                               marital_status = :maritalStatus, occupation = :occupation,
+                               nation = :nation, blood_type = :bloodType, rh_factor = :rhFactor,
+                               rescue_count = :rescueCount,
+                               rescue_success_count = :rescueSuccessCount,
+                               critical_case = :criticalCase,
+                               hospital_infection = :hospitalInfection,
+                               chief_physician = :chiefPhysician,
+                               resident_physician = :residentPhysician, coder = :coder,
+                               procedures = CAST(:procedures AS jsonb),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("deptName", h.deptName()).param("wardName", h.wardName())
+                .param("bedNo", h.bedNo()).param("attendingDoctor", h.attendingDoctor())
+                .param("admissionWay", h.admissionWay()).param("dischargeMode", h.dischargeMode())
+                .param("readmitPlan", h.readmitPlan()).param("maritalStatus", h.maritalStatus())
+                .param("occupation", h.occupation()).param("nation", h.nation())
+                .param("bloodType", h.bloodType()).param("rhFactor", h.rhFactor())
+                .param("rescueCount", h.rescueCount())
+                .param("rescueSuccessCount", h.rescueSuccessCount())
+                .param("criticalCase", h.criticalCase())
+                .param("hospitalInfection", h.hospitalInfection())
+                .param("chiefPhysician", h.chiefPhysician())
+                .param("residentPhysician", h.residentPhysician())
+                .param("coder", h.coder())
+                .param("procedures", h.procedures())
+                .param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 提交（CAS：仅 DRAFT）。 */
+    public boolean submitHomepage(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_homepage
+                           SET status = 'SUBMITTED', submitted_by = :actor, submitted_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("actor", actor).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 归档（CAS：仅 SUBMITTED；终态）。 */
+    public boolean archiveHomepage(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_homepage
+                           SET status = 'ARCHIVED', archived_by = :actor, archived_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("actor", actor).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public List<Homepage> listHomepages(String status, UUID patientId, UUID deptId, int limit) {
+        return jdbc.sql("SELECT " + HOMEPAGE_COLUMNS + """
+                          FROM emr_svc.record_homepage
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:patientId AS uuid) IS NULL
+                                OR patient_id = CAST(:patientId AS uuid))
+                           AND (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("patientId", patientId)
+                .param("deptId", deptId).param("limit", limit)
+                .query(HOMEPAGE_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

@@ -1,6 +1,8 @@
 package com.medassist.emr.domain;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -138,5 +140,49 @@ public final class EmrModel {
     /** 质控结果快照。 */
     public record QcResult(UUID id, UUID recordId, int revision, String ruleCode,
                            String severity, boolean passed, String message) {
+    }
+
+    /**
+     * 病案首页（HQMS / DRG 前置）。
+     *
+     * <p>一次住院一份；诊断、费用汇总、出院时间是生成时从临床域取回的**快照**，
+     * 提交后不可修改（数据库触发器兜底）。首页专有信息（离院方式、血型、手术操作、
+     * 医师签名、编码员）由病案室补录。
+     *
+     * @param diagnoses  JSON 数组 [{code,name,primary}]，来自临床域就诊诊断
+     * @param procedures JSON 数组 [{code,name,date,surgeon,anesthesia,incisionLevel}]
+     * @param feeSummary JSON 对象 {收费类别: 金额}
+     */
+    public record Homepage(UUID id, String homepageNo, UUID visitId, UUID admissionId,
+                           UUID patientId, String patientNo, String patientName, String visitNo,
+                           UUID deptId, String deptName, UUID wardId, String wardName, String bedNo,
+                           Instant admittedAt, Instant dischargedAt, int stayDays,
+                           String attendingDoctor, String admissionWay, String dischargeMode,
+                           String readmitPlan, String maritalStatus, String occupation, String nation,
+                           String bloodType, String rhFactor, int rescueCount, int rescueSuccessCount,
+                           boolean criticalCase, boolean hospitalInfection,
+                           String chiefPhysician, String residentPhysician, String coder,
+                           String diagnoses, String procedures, String feeSummary,
+                           BigDecimal totalAmount, String status,
+                           String submittedBy, Instant submittedAt,
+                           String archivedBy, Instant archivedAt,
+                           long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String ARCHIVED = "ARCHIVED";
+
+        public boolean archived() {
+            return ARCHIVED.equals(status);
+        }
+
+        public boolean editable() {
+            return DRAFT.equals(status);
+        }
+    }
+
+    /** 病案首页手术操作（当前无手术域，由病案室按手术记录录入）。 */
+    public record HomepageProcedure(String code, String name, LocalDate date, String surgeon,
+                                    String anesthesia, String incisionLevel) {
     }
 }
