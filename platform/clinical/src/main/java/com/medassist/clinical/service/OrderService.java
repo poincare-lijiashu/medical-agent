@@ -36,10 +36,13 @@ import java.util.UUID;
 public class OrderService {
 
     private final ClinicalRepository repo;
+    private final OrderTransferService transfer;
     private final ObjectMapper objectMapper;
 
-    public OrderService(ClinicalRepository repo, ObjectMapper objectMapper) {
+    public OrderService(ClinicalRepository repo, OrderTransferService transfer,
+                        ObjectMapper objectMapper) {
         this.repo = repo;
+        this.transfer = transfer;
         this.objectMapper = objectMapper;
     }
 
@@ -68,16 +71,21 @@ public class OrderService {
                     orderType, item.itemCode(), item.name(),
                     blankToNull(line.dose()), blankToNull(line.frequency()),
                     line.quantity(), item.unit(), item.price(), amount,
-                    VisitOrder.PLACED, actor, 0L, mode, today, null);
+                    VisitOrder.PLACED, actor, 0L, mode, today, null,
+                    VisitOrder.TRANSFER_NONE, null, null, null, null);
             repo.insertOrder(order);
             created.add(order);
         }
 
+        // 药品医嘱：同一事务内标记 PENDING，提交后转送药房生成待审处方（失败不回滚医嘱）
+        List<VisitOrder> result = transfer.schedule(visit, created, actor);
+
         audit(actor, "ORDER_PLACE", "VISIT", visitId.toString(), Map.of(
-                "visitNo", visit.visitNo(), "count", created.size(),
-                "orderNos", created.stream().map(VisitOrder::orderNo).toList(),
-                "longCount", created.stream().filter(VisitOrder::longTerm).count()));
-        return created;
+                "visitNo", visit.visitNo(), "count", result.size(),
+                "orderNos", result.stream().map(VisitOrder::orderNo).toList(),
+                "longCount", result.stream().filter(VisitOrder::longTerm).count(),
+                "drugCount", result.stream().filter(VisitOrder::drug).count()));
+        return result;
     }
 
     /** 停嘱：仅住院长嘱可停；停嘱当日仍计费，次日起不再计费。 */

@@ -1,22 +1,25 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-01（MF-07 阶段二 / 药房—收费联动 / 处方前置审方 / **医嘱 → 药房处方主链路** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-- 今日提交：`485246d`（MF-07 阶段二：Ed25519 + 密钥面收敛）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）
-- 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `medical_agent_20261101_mf07p2/n2billing/audit.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **487 项**全绿
-- 本机运行中（明天可直接复用）：gateway 8080（v1 HMAC enforce）、auth 8081、empi 8082（dev profile）、
-  clinical 8083（签名 off）、pharmacy 8084、tech 8085、emr 8086、insurance 8087；PostgreSQL 5433
+- 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
+  `4ae1f0d`（收工文档）、本批（**医嘱 → 药房处方主链路**，哈希见下方第 51 条后的 `git log`）
+- 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
+- 工作区：clean（收工前已确认）；全量单测 **498 项**全绿
+- 本机环境（2026-11-01 13:20）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
+  **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
-  `pharmacy_smoke` 需 `-BaseUrl http://127.0.0.1:8080`）
+  `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
+  `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **医嘱 → 处方/检查申请（HIS 主链路）**：clinical 医嘱 afterCommit 转 pharmacy/tech，回写外部单号与状态；
-     需要一张"医嘱项 → 目标服务/目标编码"映射表（跨域映射不能硬编码）
-  2. **病案首页 / 结构化诊断（ICD-10）**：HQMS、DRG 官方分组、医保清单质量的前置基础
-  3. **药品字典批量导入**（CSV/XML，复用药保目录导入模式）+ **R5-S17**（CI 内跑 E2E）
-- 收工动作：Docker Desktop 已关闭（要构建/验证镜像时先启动 Docker）；如需重启本机服务，按《本机踩坑》用后台命令逐条启动，勿用 `Start-Process`
+  1. **医嘱撤销/停嘱 → 处方作废联动**：`order cancel/stop` 调用 `POST /internal/prescriptions/{id}/cancel`，
+     否则"医嘱已停、药房还在发"（本批遗留的安全缺口）
+  2. **检查/检验医嘱 → 医技申请**：复用 `OrderTransferService` 的转送状态机与幂等设计
+  3. **病案首页 / 结构化诊断（ICD-10）**：HQMS、DRG 官方分组、医保清单质量的前置基础
+- 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
+  Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
 ## 2026-10-30 平台化进度（P0-5 / P1）
 
@@ -701,6 +704,31 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 回归：全量单测 **487 项**；`pharmacy_smoke`、`pharmacy_billing_smoke`、`platform_smoke` 全过
    - 遗留：抗菌药物分级授权（需医师职称/会诊单）、肝肾功能剂量调整（需检验值）、相互作用库、字典批量导入
 
+51. **HIS 主链路第一步（2026-11-01）：医嘱 → 药房处方**
+   - 药品医嘱开立后自动转药房生成**待审处方**（此前主链路是断的：药房看不到医师开的药）
+   - `pharmacy V4`：`prescription.source_order_id` + 部分唯一索引（`WHERE source_order_id IS NOT NULL`）
+     → 一张医嘱最多一张处方；重复转送返回已有处方（`duplicate=true`）
+   - 新增内部接口 `POST /internal/prescriptions`（`X-Internal-Token`，网关对 `/internal/**` 404）：
+     计费模式固定 `ORDER`、`prescriber` 取下医嘱医师、复用同一套前置审方（BLOCK → 422）
+   - `clinical V11`：`visit_order` 新增 `transfer_status`（NONE/PENDING/TRANSFERRED/FAILED）、
+     `external_type`、`external_id`、`external_no`、`transfer_error`；补 DRUG 类收费项目
+     （`DRUG-AMOX-025` / `DRUG-CEF-10` / `DRUG-NS-500`，编码与药房药品字典一致）
+   - 转送编排 `OrderTransferService`：开嘱事务内置 PENDING，`afterCommit` 调药房；
+     **失败只置 FAILED 不回滚医嘱**（医嘱是医疗事实，药房是下游）
+   - 补偿：`POST /clinical/visits/{visitId}/orders/{orderId}/transfer-retry`
+     （权限 `clinical:order:create`；已撤销/已计费拒绝；已转送幂等）
+   - 部署：`deployment-clinical.yaml` 注入 `PHARMACY_INTERNAL_URI`；
+     dev profile 补 `clinical.pharmacy.internal-token` 与 `pharmacy.internal-api-token`
+   - **实测**：新增 `clinical_pharmacy_order_smoke.ps1` **30 项全过**：
+     混合医嘱（药品 PENDING / 检查 NONE）→ `TRANSFERRED` + 处方号回写 → 处方 `billingMode=ORDER`、
+     金额 25.00 与医嘱一致 → 药师审核通过 → 重试幂等（处方只 +1）→ 内部接口无令牌 403/40300
+   - **故障演练**：停掉药房进程 → 开药嘱 → `FAILED` + 中文原因（医嘱仍有效）→ 重启药房 →
+     `transfer-retry` → `TRANSFERRED`，`transferError` 清空
+   - 回归：全量单测 **498 项**（临床 +8、药房 +3）；`platform_smoke`、`pharmacy_smoke`、
+     `pharmacy_billing_smoke`、`pharmacy_audit_smoke` 全过
+   - 遗留：**医嘱撤销/停嘱 → 处方作废联动**（下一批必做）、检查/检验医嘱 → 医技申请、
+     "医嘱项 → 目标服务/目标编码"映射表（当前依赖两域编码一致）
+
 ### 本机踩坑备忘（下次别再踩）
 - 新增业务枚举值（如 `INPATIENT`）时，**必须同步改数据库 CHECK 约束**：V1 的 `visit_type` CHECK
   只允许门诊/急诊，导致住院插入被数据库拒绝（真实联调才暴露）
@@ -717,6 +745,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   （表现为 500 而不是 409）：重复判定要先查后写，catch 分支里不要再发 SQL
 - 自己写的 plpgsql 触发器用 `USING ERRCODE = 'check_violation'` 时，Spring 统一抛
   `DataIntegrityViolationException`（与 CHECK 一致），可按同一套 catch 处理
+- **agent 启动的 GUI 进程会被回收**：`Start-Process "Docker Desktop.exe"` 会在命令结束后被杀掉，
+  `docker desktop start` 也一样；可行做法是 `explorer.exe "<exe>"`（挂到桌面进程下）或请用户手动启动
+- **PowerShell 5.1 调 curl.exe 传 JSON 必须走临时文件**（`--data-binary "@file"`）：
+  直接 `-d '{"a":1}'` 会被 PowerShell 吃掉引号，服务端报"请求体格式不正确"（本次踩到）
+- **给 Java record 加字段会波及所有 `new XXX(...)`**（含单测）：先全仓 grep 再改，否则编译期才暴露
+- 本地 `mvn clean` 前必须先停掉所有 `java -jar` 服务：Windows 锁住 target 下的 jar，clean 会失败
 - `JdbcClient` 绑定 null 参数时 PostgreSQL 无法推断类型（`$5 IS NULL` → 500
   "could not determine data type"）：所有可空参数必须 `CAST(:p AS text/boolean/uuid/integer)`
 - PowerShell 里**不能把函数命名为 `Data`**（`function Data($r)` 会被解析成 `data` 语句块，

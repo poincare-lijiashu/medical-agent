@@ -62,7 +62,7 @@ public class PharmacyRepository {
             rs.getTimestamp("reviewed_at") == null ? null : rs.getTimestamp("reviewed_at").toInstant(),
             rs.getString("reject_reason"), rs.getBigDecimal("total_amount"),
             rs.getLong("version"), rs.getTimestamp("created_at").toInstant(),
-            rs.getString("billing_mode"));
+            rs.getString("billing_mode"), rs.getObject("source_order_id", UUID.class));
 
     private static final RowMapper<PrescriptionItem> RX_ITEM_MAPPER = (rs, i) -> new PrescriptionItem(
             rs.getObject("id", UUID.class), rs.getObject("prescription_id", UUID.class),
@@ -312,17 +312,19 @@ public class PharmacyRepository {
         jdbc.sql("""
                         INSERT INTO pharmacy_svc.prescription
                             (id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
-                             prescriber, status, total_amount, version, billing_mode)
+                             prescriber, status, total_amount, version, billing_mode, source_order_id)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid),
-                                :prescriber, :status, :total, 0, :billingMode)
+                                :prescriber, :status, :total, 0, :billingMode,
+                                CAST(:sourceOrderId AS uuid))
                         """)
                 .param("id", p.id()).param("no", p.prescriptionNo())
                 .param("patientId", p.patientId()).param("patientNo", p.patientNo())
                 .param("visitId", p.visitId()).param("visitNo", p.visitNo())
                 .param("deptId", p.deptId()).param("prescriber", p.prescriber())
                 .param("status", p.status()).param("total", p.totalAmount())
-                .param("billingMode", p.billingMode()).update();
+                .param("billingMode", p.billingMode())
+                .param("sourceOrderId", p.sourceOrderId()).update();
     }
 
     public void insertPrescriptionItem(PrescriptionItem item) {
@@ -351,9 +353,19 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
-                               total_amount, version, created_at, billing_mode
+                               total_amount, version, created_at, billing_mode, source_order_id
                           FROM pharmacy_svc.prescription WHERE id = ?
                         """).param(id).query(RX_MAPPER).optional();
+    }
+
+    /** 按来源医嘱查处方（临床转送幂等键；手工处方返回空）。 */
+    public Optional<Prescription> findPrescriptionBySourceOrder(UUID sourceOrderId) {
+        return jdbc.sql("""
+                        SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
+                               prescriber, status, reviewer, reviewed_at, reject_reason,
+                               total_amount, version, created_at, billing_mode, source_order_id
+                          FROM pharmacy_svc.prescription WHERE source_order_id = ?
+                        """).param(sourceOrderId).query(RX_MAPPER).optional();
     }
 
     /** 加行锁读取处方；必须在事务内调用（审核/发药/退药）。 */
@@ -361,7 +373,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
-                               total_amount, version, created_at, billing_mode
+                               total_amount, version, created_at, billing_mode, source_order_id
                           FROM pharmacy_svc.prescription WHERE id = ? FOR UPDATE
                         """).param(id).query(RX_MAPPER).optional();
     }
@@ -395,7 +407,7 @@ public class PharmacyRepository {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
-                               total_amount, version, created_at, billing_mode
+                               total_amount, version, created_at, billing_mode, source_order_id
                           FROM pharmacy_svc.prescription
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))

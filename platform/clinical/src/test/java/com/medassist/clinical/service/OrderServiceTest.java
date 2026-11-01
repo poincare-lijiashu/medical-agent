@@ -33,6 +33,7 @@ import static org.mockito.Mockito.when;
 class OrderServiceTest {
 
     private ClinicalRepository repo;
+    private OrderTransferService transfer;
     private OrderService service;
 
     private final UUID visitId = UUID.randomUUID();
@@ -41,8 +42,11 @@ class OrderServiceTest {
     @BeforeEach
     void setUp() {
         repo = mock(ClinicalRepository.class);
-        service = new OrderService(repo, JsonMapper.builder().build());
+        transfer = mock(OrderTransferService.class);
+        service = new OrderService(repo, transfer, JsonMapper.builder().build());
         when(repo.nextOrderNo()).thenReturn("O20261031000001");
+        // 转送编排另有 OrderTransferServiceTest 覆盖；此处只验证医嘱本身的规则
+        when(transfer.schedule(any(), any(), any())).thenAnswer(inv -> inv.getArgument(1));
     }
 
     private Visit visit(String status) {

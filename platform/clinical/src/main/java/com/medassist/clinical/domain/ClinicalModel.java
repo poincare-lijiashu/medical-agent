@@ -57,7 +57,9 @@ public final class ClinicalModel {
                              String itemCode, String itemName, String dose, String frequency,
                              int quantity, String unit, BigDecimal unitPrice, BigDecimal amount,
                              String status, String orderedBy, long version,
-                             String orderMode, LocalDate startDate, LocalDate stopDate) {
+                             String orderMode, LocalDate startDate, LocalDate stopDate,
+                             String transferStatus, String externalType, UUID externalId,
+                             String externalNo, String transferError) {
 
         public static final String PLACED = "PLACED";
         public static final String CHARGED = "CHARGED";
@@ -66,8 +68,33 @@ public final class ClinicalModel {
         public static final String TEMP = "TEMP";
         public static final String LONG = "LONG";
 
+        /** 无需转送（非药品医嘱）。 */
+        public static final String TRANSFER_NONE = "NONE";
+        /** 已登记转送，等待下游确认（开嘱事务内即置为该状态）。 */
+        public static final String TRANSFER_PENDING = "PENDING";
+        /** 下游已生成单据（药房处方）。 */
+        public static final String TRANSFERRED = "TRANSFERRED";
+        /** 转送失败，可重试（医嘱本身仍然有效）。 */
+        public static final String TRANSFER_FAILED = "FAILED";
+
         public boolean longTerm() {
             return LONG.equals(orderMode);
+        }
+
+        public boolean drug() {
+            return "DRUG".equals(orderType);
+        }
+
+        public boolean transferred() {
+            return TRANSFERRED.equals(transferStatus);
+        }
+
+        /** 返回仅转送状态不同的副本（开嘱事务内把药品医嘱标记为 PENDING 后回给前端）。 */
+        public VisitOrder withTransferStatus(String nextTransferStatus) {
+            return new VisitOrder(id, orderNo, visitId, orderType, itemCode, itemName, dose, frequency,
+                    quantity, unit, unitPrice, amount, status, orderedBy, version, orderMode,
+                    startDate, stopDate, nextTransferStatus, externalType, externalId, externalNo,
+                    transferError);
         }
 
         /** 某天是否应计费（长嘱在 start~stop 之间有效；停嘱当天仍计费）。 */

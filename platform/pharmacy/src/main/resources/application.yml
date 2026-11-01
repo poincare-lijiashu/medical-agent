@@ -48,6 +48,8 @@ pharmacy:
     base-url: ${CLINICAL_INTERNAL_URI:http://127.0.0.1:8083}
     internal-token: ${INTERNAL_API_TOKEN:${PHARMACY_INTERNAL_TOKEN:}}
     timeout: ${CLINICAL_TIMEOUT:PT3S}
+  # 入站内部接口令牌（临床医嘱转处方）；与出站共用同一令牌，未配置时内部接口不可用
+  internal-api-token: ${INTERNAL_API_TOKEN:${PHARMACY_INTERNAL_TOKEN:}}
   # 近效期阈值：剩余天数 <= 该值时在库存预警中列出（不拦截发药）
   near-expiry-days: ${PHARMACY_NEAR_EXPIRY_DAYS:90}
 

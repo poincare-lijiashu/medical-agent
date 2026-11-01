@@ -70,14 +70,16 @@ class BillingServiceTest {
         BigDecimal amt = new BigDecimal(amount);
         return new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC", "血常规",
                 null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
-                VisitOrder.TEMP, LocalDate.now(), null);
+                VisitOrder.TEMP, LocalDate.now(), null,
+                VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
 
     private VisitOrder longOrderOf(String orderNo, String amount) {
         BigDecimal amt = new BigDecimal(amount);
         return new VisitOrder(UUID.randomUUID(), orderNo, visitId, "TREATMENT", "TRT-IV", "静脉输液",
                 null, "qd", 2, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
-                VisitOrder.LONG, LocalDate.now(), null);
+                VisitOrder.LONG, LocalDate.now(), null,
+                VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
 
     @Test

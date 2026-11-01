@@ -2,6 +2,7 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.service.OrderService;
+import com.medassist.clinical.service.OrderTransferService;
 import com.medassist.clinical.web.ClinicalDtos.PlaceOrdersReq;
 import com.medassist.clinical.web.ClinicalDtos.StopOrderReq;
 import com.medassist.common.api.ApiResponse;
@@ -30,9 +31,11 @@ public class OrderController {
     private static final String VISIT_READ = "clinical:visit:read";
 
     private final OrderService service;
+    private final OrderTransferService transferService;
 
-    public OrderController(OrderService service) {
+    public OrderController(OrderService service, OrderTransferService transferService) {
         this.service = service;
+        this.transferService = transferService;
     }
 
     @PostMapping
@@ -61,6 +64,22 @@ public class OrderController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, ORDER_CREATE);
         return ApiResponse.ok(service.cancel(visitId, orderId, actor));
+    }
+
+    /**
+     * 重试转送药房（药品医嘱）。
+     *
+     * <p>用于药房服务抖动导致 {@code transferStatus=FAILED} 的补偿；已转送幂等返回，
+     * 已撤销/已计费不允许重试。
+     */
+    @PostMapping("/{orderId}/transfer-retry")
+    public ApiResponse<VisitOrder> retryTransfer(
+            @PathVariable UUID visitId,
+            @PathVariable UUID orderId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, ORDER_CREATE);
+        return ApiResponse.ok(transferService.retry(visitId, orderId, actor));
     }
 
     /** 停嘱（住院长嘱）：停嘱当日仍计费，次日起不再计费。 */

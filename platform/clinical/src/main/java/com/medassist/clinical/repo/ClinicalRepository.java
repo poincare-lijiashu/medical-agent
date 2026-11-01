@@ -70,7 +70,10 @@ public class ClinicalRepository {
             rs.getString("status"), rs.getString("ordered_by"), rs.getLong("version"),
             rs.getString("order_mode"),
             rs.getDate("start_date") == null ? null : rs.getDate("start_date").toLocalDate(),
-            rs.getDate("stop_date") == null ? null : rs.getDate("stop_date").toLocalDate());
+            rs.getDate("stop_date") == null ? null : rs.getDate("stop_date").toLocalDate(),
+            rs.getString("transfer_status"), rs.getString("external_type"),
+            rs.getObject("external_id", UUID.class), rs.getString("external_no"),
+            rs.getString("transfer_error"));
 
     private static final RowMapper<Charge> CHARGE_MAPPER = (rs, i) -> new Charge(
             rs.getObject("id", UUID.class), rs.getString("charge_no"),
@@ -246,10 +249,10 @@ public class ClinicalRepository {
                         INSERT INTO clinical_svc.visit_order
                             (id, order_no, visit_id, order_type, item_code, item_name, dose, frequency,
                              quantity, unit, unit_price, amount, status, ordered_by, version,
-                             order_mode, start_date)
+                             order_mode, start_date, transfer_status)
                         VALUES (:id, :orderNo, :visitId, :orderType, :itemCode, :itemName, :dose,
                                 :frequency, :quantity, :unit, :unitPrice, :amount, :status, :orderedBy, 0,
-                                :orderMode, :startDate)
+                                :orderMode, :startDate, :transferStatus)
                         """)
                 .param("id", o.id()).param("orderNo", o.orderNo()).param("visitId", o.visitId())
                 .param("orderType", o.orderType()).param("itemCode", o.itemCode())
@@ -259,7 +262,35 @@ public class ClinicalRepository {
                 .param("amount", o.amount()).param("status", o.status())
                 .param("orderedBy", o.orderedBy())
                 .param("orderMode", o.orderMode())
-                .param("startDate", o.startDate()).update();
+                .param("startDate", o.startDate())
+                .param("transferStatus", o.transferStatus() == null
+                        ? VisitOrder.TRANSFER_NONE : o.transferStatus()).update();
+    }
+
+    /**
+     * 更新下游转送状态（转送成功/失败/重试）。
+     *
+     * <p>不走期望状态 CAS：转送是下游副作用回写，允许覆盖（PENDING → TRANSFERRED/FAILED，
+     * FAILED → PENDING → …）；医嘱本身的医疗状态仍由 status 的 CAS 守护。
+     */
+    public boolean updateOrderTransfer(UUID orderId, String transferStatus, String externalType,
+                                       UUID externalId, String externalNo, String error) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_order
+                           SET transfer_status = :transferStatus,
+                               external_type = CAST(:externalType AS text),
+                               external_id = CAST(:externalId AS uuid),
+                               external_no = CAST(:externalNo AS text),
+                               transfer_error = CAST(:error AS text),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id
+                        """)
+                .param("transferStatus", transferStatus)
+                .param("externalType", externalType)
+                .param("externalId", externalId)
+                .param("externalNo", externalNo)
+                .param("error", error)
+                .param("id", orderId).update() > 0;
     }
 
     /** 停嘱（CAS）：仅 LONG + PLACED 可停；停嘱日仍计费，次日起不再计费。 */

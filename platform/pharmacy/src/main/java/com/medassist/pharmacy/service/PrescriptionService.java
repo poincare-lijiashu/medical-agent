@@ -13,8 +13,10 @@ import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.repo.PharmacyRepository;
+import com.medassist.pharmacy.web.PharmacyDtos.CreateFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreatePrescriptionReq;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
+import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionLine;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
@@ -32,6 +34,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -71,6 +74,43 @@ public class PrescriptionService {
 
     @Transactional
     public PrescriptionView create(CreatePrescriptionReq req, String actor) {
+        return createInternal(req, actor, null);
+    }
+
+    /**
+     * 临床医嘱转处方（内网接口）。
+     *
+     * <p>幂等口径：同一 {@code orderId} 只生成一张处方；已存在时原样返回并标记
+     * {@code duplicate=true}，临床侧重试不会产生重复处方。
+     *
+     * <p>计费口径：固定 {@code billing_mode=ORDER}——费用已在医嘱计价，药房不得再记一次。
+     * 审方规则与手工开方完全一致（BLOCK 级直接拒绝，错误信息回传给临床侧展示）。
+     */
+    @Transactional
+    public OrderPrescriptionView createFromOrder(CreateFromOrderReq req, String actor) {
+        Optional<Prescription> existing = repo.findPrescriptionBySourceOrder(req.orderId());
+        if (existing.isPresent()) {
+            Prescription rx = existing.get();
+            return new OrderPrescriptionView(rx.id(), rx.prescriptionNo(), req.orderId(), true,
+                    rx.totalAmount(), rx.status());
+        }
+        String prescriber = blankToNull(req.prescriber());
+        String effectiveActor = prescriber == null ? actor : prescriber;
+        CreatePrescriptionReq delegated = new CreatePrescriptionReq(req.patientId(), req.visitId(),
+                req.visitNo(), req.deptId(), Prescription.BILLING_ORDER, req.items());
+        PrescriptionView view;
+        try {
+            view = createInternal(delegated, effectiveActor, req.orderId());
+        } catch (DataIntegrityViolationException e) {
+            // 并发转送：唯一索引兜底。此处事务已不可用，明确回 409，临床侧重试即可拿到已有处方
+            throw new BusinessException(ErrorCode.CONFLICT, "该医嘱已生成处方，请刷新后重试");
+        }
+        Prescription rx = view.prescription();
+        return new OrderPrescriptionView(rx.id(), rx.prescriptionNo(), req.orderId(), false,
+                rx.totalAmount(), rx.status());
+    }
+
+    private PrescriptionView createInternal(CreatePrescriptionReq req, String actor, UUID sourceOrderId) {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
         String billingMode = billingModeOf(req.billingMode(), req.visitId());
         Integer ageYears = ageOf(patient);
@@ -115,17 +155,25 @@ public class PrescriptionService {
         Prescription rx = new Prescription(prescriptionId, repo.nextPrescriptionNo(),
                 patient.id(), patient.patientNo(), req.visitId(), blankToNull(req.visitNo()),
                 req.deptId(), actor, Prescription.PENDING_REVIEW, null, null, null,
-                total, 0L, null, billingMode);
+                total, 0L, null, billingMode, sourceOrderId);
         repo.insertPrescription(rx);
         for (PrescriptionItem item : items) {
             repo.insertPrescriptionItem(item);
         }
         auditService.record(prescriptionId, PrescriptionAudit.PHASE_CREATE, findings);
 
-        audit(actor, "RX_CREATE", "PRESCRIPTION", prescriptionId.toString(), Map.of(
-                "prescriptionNo", rx.prescriptionNo(), "patientNo", patient.patientNo(),
-                "itemCount", items.size(), "totalAmount", total, "billingMode", billingMode,
-                "auditFindings", findings.size()));
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("prescriptionNo", rx.prescriptionNo());
+        detail.put("patientNo", patient.patientNo());
+        detail.put("itemCount", items.size());
+        detail.put("totalAmount", total);
+        detail.put("billingMode", billingMode);
+        detail.put("auditFindings", findings.size());
+        if (sourceOrderId != null) {
+            detail.put("sourceOrderId", sourceOrderId.toString());
+        }
+        audit(actor, sourceOrderId == null ? "RX_CREATE" : "RX_CREATE_FROM_ORDER",
+                "PRESCRIPTION", prescriptionId.toString(), detail);
         return new PrescriptionView(repo.findPrescription(prescriptionId).orElseThrow(), items);
     }
 

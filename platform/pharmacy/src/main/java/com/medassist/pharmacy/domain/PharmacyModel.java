@@ -49,7 +49,7 @@ public final class PharmacyModel {
                                UUID visitId, String visitNo, UUID deptId, String prescriber,
                                String status, String reviewer, Instant reviewedAt, String rejectReason,
                                BigDecimal totalAmount, long version, Instant createdAt,
-                               String billingMode) {
+                               String billingMode, UUID sourceOrderId) {
 
         public static final String PENDING_REVIEW = "PENDING_REVIEW";
         public static final String APPROVED = "APPROVED";

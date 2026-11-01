@@ -59,7 +59,8 @@ class NursingServiceTest {
     private VisitOrder order(String mode, String status, LocalDate start, LocalDate stop) {
         return new VisitOrder(orderId, "O1", visitId, "TREATMENT", "TRT-IV", "静脉输液",
                 null, "qd", 1, "次", new BigDecimal("8.00"), new BigDecimal("8.00"),
-                status, "doctor01", 0L, mode, start, stop);
+                status, "doctor01", 0L, mode, start, stop,
+                VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
 
     @Test

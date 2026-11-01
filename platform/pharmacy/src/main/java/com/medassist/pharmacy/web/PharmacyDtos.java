@@ -117,6 +117,31 @@ public final class PharmacyDtos {
             @NotEmpty List<@Valid PrescriptionLine> items) {
     }
 
+    /**
+     * 临床医嘱转处方（仅内网接口使用）。
+     *
+     * <p>与手工开方的差别：必须带 {@code orderId}（幂等键），计费模式固定 ORDER
+     * （费用已在临床医嘱计价），{@code prescriber} 为下医嘱的医师。
+     */
+    public record CreateFromOrderReq(
+            @NotNull UUID orderId,
+            @NotNull UUID patientId,
+            UUID visitId,
+            @Size(max = 64) String visitNo,
+            UUID deptId,
+            @Size(max = 64) String prescriber,
+            @NotEmpty List<@Valid PrescriptionLine> items) {
+    }
+
+    /**
+     * 医嘱转处方结果。
+     *
+     * @param duplicate true=该医嘱此前已生成过处方（幂等返回，未新建）
+     */
+    public record OrderPrescriptionView(UUID prescriptionId, String prescriptionNo, UUID orderId,
+                                        boolean duplicate, BigDecimal totalAmount, String status) {
+    }
+
     /** 审核（approve=false 时 reason 必填）。 */
     public record ReviewReq(
             @NotNull Boolean approve,

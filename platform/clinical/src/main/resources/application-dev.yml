@@ -6,6 +6,9 @@ clinical:
   empi:
     # 与 EMPI application-dev.yml 的 empi.internal-token 保持一致
     internal-token: medassist-dev-internal-token
+  pharmacy:
+    # 医嘱转处方：与 pharmacy application-dev.yml 的 internal-api-token 保持一致
+    internal-token: medassist-dev-internal-token
   # 入站内部接口令牌（emr 读取入院时间用），本地统一放同一个值
   internal-api-token: medassist-dev-internal-token
 
