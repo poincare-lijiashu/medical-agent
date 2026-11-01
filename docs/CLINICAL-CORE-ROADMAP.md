@@ -1018,8 +1018,29 @@ ROUND6 剩余三条"账实不符/合规缺项"：
 - E2E：`emr_homepage_smoke`、`emr_hqms_export_smoke`（报文含新增属性）、`insurance_smoke`、`platform_smoke` 全部 PASS
 - 迁移：`emr_svc` → **V13**、`clinical_svc` → **V14**
 
-**仍未做（ROUND6 剩余）**：MF-12~15（首页 list/detail 读留痕、四眼归档可被单人满足、
-批量 PHI 下发收敛等）。
+**仍未做（ROUND6 剩余）**：MF-12~15 已在 §1.43 收口。
+
+---
+
+## 1.43 已完成（2026-11-01，第六轮 P3：首页读留痕/四眼/内部接口/报盘诊断）
+
+ROUND6 最后四条（数据最小化 + 合规报文）：
+
+| 编号 | 风险 | 本次落地 |
+|---|---|---|
+| R6-MF-12 | 首页 list/detail 零留痕；list 一次下发 200 份完整 PHI | list 改**摘要 DTO**（姓名在 SQL 内掩码、不含诊断/费用/手术），写 `HOMEPAGE_QUERY` 审计（只记条数与筛选）；detail 改 `viewDetail` 写 `HOMEPAGE_VIEW`（只记首页号与状态） |
+| R6-MF-13 | 四眼归档可被单人满足（username 比对、提交人为空放行、X-Actor 缺省 system） | `emr V14` 增 `submitted_by_id`（提交时写入 X-User-Id）；归档按**账号主键**比对，提交人为空/缺 X-User-Id 一律拒绝；`X-Actor` 不再回落 `system`（写操作缺身份直接 409） |
+| R6-MF-14 | 内部首页接口回传整段手术 PHI，且草稿首页也能用于分组 | 接口只投影 `codes`（不含术者/日期/麻醉），且**仅 ARCHIVED** 才返回；医保分组据此在未归档时按"无手术"处理；E2E 先补录→提交→四眼归档再分组 |
+| R6-MF-15 | 医保报盘 XML 未输出主诊断，`diagnoses` 成只写不读的死列 | `SettlementBill` 读出 `diagnoses` 快照；报盘 `<bill>` 增加 `primaryDiagnosisCode/Name`、`diagnosisCount` 与 `<diagnoses>` 明细段；快照损坏时显式失败 |
+
+**实测**
+- 全量单测 **572 项**全绿（首页读留痕/四眼 +5、报盘诊断 +1、分组未归档 +1）
+- E2E：`emr_homepage_smoke`、`emr_hqms_export_smoke`、`insurance_drg_smoke`、`insurance_smoke`、`platform_smoke` 全部 PASS
+- 审计实测：`HOMEPAGE_QUERY` / `HOMEPAGE_VIEW` 已落 `emr_change_log`
+- 直连反例：不带 `X-User-Id` 提交 → `409 缺少操作者身份（X-User-Id）`
+- 迁移：`emr_svc` → **V14**
+
+**至此 ROUND6 的 15 条 MUST-FIX 全部收口**（P0 五条 + P1 三条 + P2 三条 + P3 四条）。
 
 ---
 

@@ -482,7 +482,7 @@ public class InsuranceService {
                     c.total(), c.eligible(), c.deductible(), c.insurance(), c.selfPay(),
                     SettlementBill.DRAFT, detail, actor, null, null,
                     null, null, null, member.reimbursementRatio(), member.cap(), 0L, null,
-                    primaryCode, primaryName, diagnoses.size());
+                    primaryCode, primaryName, diagnoses.size(), diagnosesJson);
             if (!repo.insertBill(created)) {
                 // 并发首插：另一请求已抢先建单（有效清单唯一索引兜底），让对方刷新后重试
                 throw new BusinessException(ErrorCode.CONFLICT,

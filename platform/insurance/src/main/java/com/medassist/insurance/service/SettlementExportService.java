@@ -271,9 +271,23 @@ public class SettlementExportService {
                     .append("\" deductible=\"").append(money(bill.deductible()))
                     .append("\" insuranceAmount=\"").append(money(bill.insuranceAmount()))
                     .append("\" selfPayAmount=\"").append(money(bill.selfPayAmount()))
+                    .append("\" diagnosisCount=\"").append(bill.diagnosisCount())
+                    .append("\" primaryDiagnosisCode=\"")
+                    .append(escape(bill.primaryDiagnosisCode()))
+                    .append("\" primaryDiagnosisName=\"")
+                    .append(escape(bill.primaryDiagnosisName()))
                     .append("\" confirmedBy=\"").append(escape(bill.confirmedBy()))
                     .append("\" confirmedAt=\"").append(bill.confirmedAt())
                     .append("\">\n");
+            // 省局结算清单要求主诊断 + 其他诊断；清单生成时已固化诊断快照（第六轮 MF-15）
+            xml.append("    <diagnoses>");
+            for (Map<String, Object> d : diagnoses(bill)) {
+                xml.append("<diagnosis code=\"").append(escape(str(d.get("code"))))
+                        .append("\" name=\"").append(escape(str(d.get("name"))))
+                        .append("\" primary=\"").append(Boolean.TRUE.equals(d.get("primary")))
+                        .append("\"/>");
+            }
+            xml.append("</diagnoses>\n");
             for (BillLine line : lines(bill)) {
                 xml.append("    <line chargeNo=\"").append(escape(line.chargeNo()))
                         .append("\" itemCode=\"").append(escape(line.itemCode()))
@@ -304,6 +318,26 @@ public class SettlementExportService {
             throw new BusinessException(ErrorCode.INSURANCE_EXPORT_INVALID,
                     "清单明细损坏，无法导出：" + bill.billNo());
         }
+    }
+
+    /** 诊断快照（生成清单时固化）；损坏同样必须显式失败，不能导出缺诊断的报盘。 */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> diagnoses(SettlementBill bill) {
+        String json = bill.diagnoses();
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<Map<String, Object>> rows = objectMapper.readValue(json, List.class);
+            return rows == null ? List.of() : rows;
+        } catch (JacksonException e) {
+            throw new BusinessException(ErrorCode.INSURANCE_EXPORT_INVALID,
+                    "清单诊断快照损坏，无法导出：" + bill.billNo());
+        }
+    }
+
+    private static String str(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private static BigDecimal sum(List<SettlementBill> bills,

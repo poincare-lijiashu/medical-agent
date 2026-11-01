@@ -6,6 +6,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.client.ClinicalClient;
 import com.medassist.emr.client.PatientClient;
 import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.domain.EmrModel.HomepageSummary;
 import com.medassist.emr.repo.EmrRepository;
 import com.medassist.emr.web.EmrDtos.CreateHomepageReq;
 import com.medassist.emr.web.EmrDtos.HomepageView;
@@ -107,7 +108,7 @@ public class HomepageService {
                 blankToNull(src.attendingDoctor()), null, null, null, null, "NONE",
                 null, null, null, null, null, 0, 0, false, false, null, null, null,
                 toJson(diagnoses), "[]", toJson(feeSummary), total, Homepage.DRAFT,
-                null, null, null, null, 0L, null);
+                null, null, null, null, null, 0L, null);
         repo.insertHomepage(homepage);
 
         Map<String, Object> detail = new LinkedHashMap<>();
@@ -205,7 +206,7 @@ public class HomepageService {
                 blankToNull(req.coder()),
                 current.diagnoses(), proceduresJson(req.procedures()),
                 current.feeSummary(), current.totalAmount(), current.status(),
-                current.submittedBy(), current.submittedAt(),
+                current.submittedBy(), current.submittedById(), current.submittedAt(),
                 current.archivedBy(), current.archivedAt(), current.version(), current.createdAt());
 
         if (!repo.updateHomepageDraft(id, updated, req.version())) {
@@ -221,7 +222,13 @@ public class HomepageService {
     // ---------------------------------------------------------------- 提交 / 归档
 
     @Transactional
-    public HomepageView submit(UUID id, String actor) {
+    public HomepageView submit(UUID id, String actor, UUID actorId) {
+        requireRealActor(actor, "提交");
+        if (actorId == null) {
+            // 没有账号主键就无法做四眼校验，宁可拒绝也不能让"提交人=system/空"混过去
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "缺少操作者身份（X-User-Id），不能提交病案首页");
+        }
         Homepage h = repo.lockHomepage(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
         if (!Homepage.DRAFT.equals(h.status())) {
@@ -244,7 +251,7 @@ public class HomepageService {
                             + " / 当前 " + fresh.total().toPlainString()
                             + "），请先重新生成病案首页再提交");
         }
-        if (!repo.submitHomepage(id, actor, h.version())) {
+        if (!repo.submitHomepage(id, actor, actorId, h.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "病案首页已被他人修改，请刷新后重试");
         }
         audit(actor, "HOMEPAGE_SUBMIT", "HOMEPAGE", id.toString(), Map.of(
@@ -256,14 +263,24 @@ public class HomepageService {
      * 归档：提交人与归档人必须不同（四眼原则），归档后不可再改。
      */
     @Transactional
-    public HomepageView archive(UUID id, String actor) {
+    public HomepageView archive(UUID id, String actor, UUID actorId) {
+        requireRealActor(actor, "归档");
         Homepage h = repo.lockHomepage(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
         if (!Homepage.SUBMITTED.equals(h.status())) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
                     "只有已提交的病案首页可以归档，当前：" + h.status());
         }
-        if (h.submittedBy() != null && h.submittedBy().equals(actor)) {
+        // 四眼原则按**账号主键**判定（第六轮 MF-13）：username 可重建/共享，不能作为"不同人"的依据
+        if (h.submittedById() == null) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "该首页缺少提交人身份记录（历史数据），无法校验四眼归档，请重新提交后再归档");
+        }
+        if (actorId == null) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "缺少操作者身份（X-User-Id），不能归档病案首页");
+        }
+        if (h.submittedById().equals(actorId)) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
                     "提交人不得归档自己的病案首页，请由病案质控人员归档");
         }
@@ -284,10 +301,33 @@ public class HomepageService {
                 readJsonMap(h.feeSummary()));
     }
 
-    public List<Homepage> list(String status, UUID patientId, UUID deptId, Integer limit) {
+    /**
+     * 详情查看（带审计）：返回整份 PHI，必须留痕（第六轮 MF-12）。
+     *
+     * <p>审计只记首页号与操作者，不记患者姓名/诊断等 PHI。
+     */
+    public HomepageView viewDetail(UUID id, String actor) {
+        HomepageView view = detail(id);
+        audit(actor, "HOMEPAGE_VIEW", "HOMEPAGE", id.toString(),
+                Map.of("homepageNo", view.homepage().homepageNo(),
+                        "status", view.homepage().status()));
+        return view;
+    }
+
+    /**
+     * 列表（摘要口径 + 查询审计）。
+     *
+     * <p>只返回掩码姓名与金额合计，不返回诊断/费用明细；审计只记条数与筛选条件。
+     */
+    public List<HomepageSummary> list(String status, UUID patientId, UUID deptId, Integer limit,
+                                      String actor) {
         String normalized = blankToNull(status) == null ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listHomepages(normalized, patientId, deptId, size);
+        List<HomepageSummary> rows = repo.listHomepageSummaries(normalized, patientId, deptId, size);
+        audit(actor, "HOMEPAGE_QUERY", "HOMEPAGE", "-", Map.of(
+                "count", rows.size(), "status", String.valueOf(normalized),
+                "patientFilter", patientId != null, "deptFilter", deptId != null, "limit", size));
+        return rows;
     }
 
     /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，并留痕。 */
@@ -302,6 +342,19 @@ public class HomepageService {
     }
 
     // ---------------------------------------------------------------- 内部工具
+
+    /**
+     * 写操作必须带真实操作者。
+     *
+     * <p>{@code X-Actor} 缺省值是 {@code system}，直连服务（绕过网关）时最容易出现；
+     * 一旦落库，四眼归档就变成"提交人=system、归档人=本人"的假合规（MF-13）。
+     */
+    private static void requireRealActor(String actor, String action) {
+        if (actor == null || actor.isBlank() || "system".equalsIgnoreCase(actor)) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "缺少操作者身份（X-Actor），不能" + action + "病案首页");
+        }
+    }
 
     /** 由临床域数据构建的首页快照（生成与重新生成共用同一套口径）。 */
     private record Snapshot(String diagnosesJson, String feeSummaryJson, BigDecimal total,

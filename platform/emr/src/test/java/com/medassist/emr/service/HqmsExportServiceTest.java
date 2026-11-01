@@ -234,7 +234,7 @@ class HqmsExportServiceTest {
                 "chief01", "resident01", "coder01",
                 "[{\"code\":\"J18.900\",\"name\":\"肺炎\",\"primary\":true}]", "[]",
                 "{\"REGISTRATION\":0.00,\"EXAM\":25.00}", new BigDecimal("25.00"),
-                Homepage.ARCHIVED, "admin01", Instant.now(), "qc01", Instant.now(),
+                Homepage.ARCHIVED, "admin01", null, Instant.now(), "qc01", Instant.now(),
                 3L, Instant.now());
     }
 

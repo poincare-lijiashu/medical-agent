@@ -103,7 +103,7 @@ public final class InsuranceModel {
                                  BigDecimal snapshotRatio, BigDecimal snapshotCap,
                                  long version, Instant createdAt,
                                  String primaryDiagnosisCode, String primaryDiagnosisName,
-                                 int diagnosisCount) {
+                                 int diagnosisCount, String diagnoses) {
 
         public static final String DRAFT = "DRAFT";
         public static final String CONFIRMED = "CONFIRMED";

@@ -125,6 +125,29 @@ $r = Invoke-Api 'PUT' "/api/v2/emr/homepages/$homepageId" @{
 Check 'homepage.procedure' $r.Status 200
 Check 'homepage.procedureCount' (@((Res $r).procedures).Count) 1
 
+# R6-MF-14: grouping only reads ARCHIVED homepages, so complete + submit + archive it first.
+$hpVersion = (Res $r).homepage.version
+$r = Invoke-Api 'PUT' "/api/v2/emr/homepages/$homepageId" @{
+    version = $hpVersion; dischargeMode = 'BY_DOCTOR'
+    chiefPhysician = 'chief01'; residentPhysician = 'resident01'; coder = 'coder01'
+    procedures = @(
+        @{ code = '88.0100'; name = 'Lung biopsy'; date = $null
+           surgeon = 'doctor01'; anesthesia = 'LOCAL'; incisionLevel = 'II' }
+    )
+} $token
+Check 'homepage.complete' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/emr/homepages/$homepageId/submit" $null $token
+Check 'homepage.submit' $r.Status 200
+
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = 'qc01'; password = $Password }
+Check 'login.qc' $r.Status 200
+$qcToken = (Res $r).accessToken
+
+$r = Invoke-Api 'POST' "/api/v2/emr/homepages/$homepageId/archive" $null $qcToken
+Check 'homepage.archive' $r.Status 200
+Check 'homepage.archive.status' (Res $r).homepage.status 'ARCHIVED'
+
 # ---------------------------------------------------------------- 4. scheme + groups + rules
 $schemeCode = "DRG-$suffix"
 $r = Invoke-Api 'POST' '/api/v2/insurance/grouping/schemes' @{

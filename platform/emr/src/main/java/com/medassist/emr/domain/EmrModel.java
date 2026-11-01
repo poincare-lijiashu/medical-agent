@@ -167,7 +167,7 @@ public final class EmrModel {
                            String chiefPhysician, String residentPhysician, String coder,
                            String diagnoses, String procedures, String feeSummary,
                            BigDecimal totalAmount, String status,
-                           String submittedBy, Instant submittedAt,
+                           String submittedBy, UUID submittedById, Instant submittedAt,
                            String archivedBy, Instant archivedAt,
                            long version, Instant createdAt) {
 
@@ -187,6 +187,18 @@ public final class EmrModel {
     /** 病案首页手术操作（当前无手术域，由病案室按手术记录录入）。 */
     public record HomepageProcedure(String code, String name, LocalDate date, String surgeon,
                                     String anesthesia, String incisionLevel) {
+    }
+
+    /**
+     * 病案首页列表摘要（第六轮 MF-12）。
+     *
+     * <p>列表只下发"够用来找单"的字段：患者姓名在 SQL 内掩码、不含诊断/费用明细/手术操作，
+     * 避免一次请求（limit ≤200）批量拉走整份 PHI；完整内容只能按 ID 取详情并留痕。
+     */
+    public record HomepageSummary(UUID id, String homepageNo, String visitNo, String patientNo,
+                                  String patientNameMasked, String deptName, String wardName,
+                                  Instant dischargedAt, int stayDays, BigDecimal totalAmount,
+                                  String status, long version) {
     }
 
     /**

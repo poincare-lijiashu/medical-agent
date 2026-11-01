@@ -75,10 +75,11 @@ public class HttpEmrClient implements EmrClient {
             return new HomepageProcedures(visitId, false, null, List.of());
         }
         List<String> codes = new ArrayList<>();
-        if (body.get("procedures") instanceof List<?> rows) {
+        // 病历域只投影编码（不含术者/日期等 PHI）；非归档首页返回空列表
+        if (body.get("codes") instanceof List<?> rows) {
             for (Object row : rows) {
-                if (row instanceof Map<?, ?> m && m.get("code") != null) {
-                    codes.add(String.valueOf(m.get("code")));
+                if (row != null && !String.valueOf(row).isBlank()) {
+                    codes.add(String.valueOf(row));
                 }
             }
         }

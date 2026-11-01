@@ -11,19 +11,18 @@
   `2f26d3b`（**HQMS 上报批次**）、`14379ce`（**第六轮 P0 发布阻断整改**）、`0995eea`（**第六轮 P1 跨域一致性**）、
   `3dc9b68`（**第六轮 P2 退费净额/首页可重算/人群信息**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **568 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **572 项**全绿
 - 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V28**、`clinical_svc` → **V14**、`emr_svc` → **V13**、`insurance_svc` → **V12**
+  本日迁移已在真实库执行：`auth_svc` → **V28**、`clinical_svc` → **V14**、`emr_svc` → **V14**、`insurance_svc` → **V12**
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **ROUND6 最后一组 MUST-FIX**：MF-12~15（首页 list/detail 读留痕与 PHI 收敛、
-     四眼归档可被单人满足、打印下载留痕补全）
-  2. **手术麻醉域 + ICD-9-CM-3 手术编码字典**：首页手术操作目前手工录入，接手术域后可自动生成、
+  1. **手术麻醉域 + ICD-9-CM-3 手术编码字典**：首页手术操作目前手工录入，接手术域后可自动生成、
      联动收费，并让 DRG 分组拿到真实手术编码
-  3. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
+  2. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
+  3. **ROUND6 的 SHOULD-FIX / 建议项**（错误码可读性、索引与时区口径、对账与可观测）
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -909,6 +908,21 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `emr_homepage_smoke`、`emr_hqms_export_smoke`、`insurance_smoke`、`platform_smoke` 全 PASS
    - 迁移：`emr_svc` → **V13**、`clinical_svc` → **V14**
    - 遗留：R6-MF-12~15（首页读留痕、四眼归档单人可满足、批量 PHI 收敛）
+
+62. **第六轮 P3：首页读留痕 / 四眼按账号主键 / 内部接口最小化 / 报盘带诊断（2026-11-01，R6-MF-12~15）**
+   - **MF-12**：`GET /emr/homepages` 改返回 `HomepageSummary`（姓名 SQL 内掩码、不含诊断/费用/手术），
+     写 `HOMEPAGE_QUERY`（条数 + 筛选，不记 PHI）；`GET /{id}` 改 `viewDetail` 写 `HOMEPAGE_VIEW`
+   - **MF-13**：`emr V14` 增 `submitted_by_id`；提交写 X-User-Id，归档按主键比对；
+     提交人为空 / 缺 X-User-Id / `X-Actor=system` 一律拒绝（控制器不再回落 `system`）
+   - **MF-14**：`/internal/homepages/by-visit/{id}/procedures` 只返回 `codes` 且**仅 ARCHIVED**；
+     `insurance_drg_smoke` 改为先补录→提交→QC 归档再分组
+   - **MF-15**：`SettlementBill.diagnoses` 读出；报盘 `<bill>` 增 `primaryDiagnosisCode/Name`、
+     `diagnosisCount` 与 `<diagnoses>` 明细段（快照损坏显式失败）
+   - **实测**：全量单测 **572 项**全绿；`emr_homepage_smoke`、`emr_hqms_export_smoke`、
+     `insurance_drg_smoke`、`insurance_smoke`、`platform_smoke` 全 PASS；
+     `HOMEPAGE_QUERY/HOMEPAGE_VIEW` 已落审计；直连缺 `X-User-Id` 提交 → 409
+   - 迁移：`emr_svc` → **V14**
+   - **ROUND6 的 15 条 MUST-FIX 至此全部收口**
 
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的

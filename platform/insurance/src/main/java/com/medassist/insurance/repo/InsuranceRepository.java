@@ -74,7 +74,8 @@ public class InsuranceRepository {
             rs.getBigDecimal("snapshot_ratio"), rs.getBigDecimal("snapshot_cap"),
             rs.getLong("version"), rs.getTimestamp("created_at").toInstant(),
             rs.getString("primary_diagnosis_code"), rs.getString("primary_diagnosis_name"),
-            rs.getInt("diagnosis_count"));
+            rs.getInt("diagnosis_count"),
+            rs.getString("diagnoses") == null ? "[]" : rs.getString("diagnoses"));
 
     /** 结算清单统一列清单（含作废留痕与待遇快照）。 */
     private static final String BILL_COLUMNS = """
@@ -83,6 +84,7 @@ public class InsuranceRepository {
             status, detail::text AS detail, created_by, confirmed_by, confirmed_at,
             void_reason, voided_by, voided_at, snapshot_ratio, snapshot_cap,
             primary_diagnosis_code, primary_diagnosis_name, diagnosis_count,
+            diagnoses::text AS diagnoses,
             version, created_at
             """;
 

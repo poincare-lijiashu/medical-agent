@@ -237,7 +237,7 @@ class InsuranceServiceTest {
                 null, null, null,
                 snapshotRatio == null ? null : new BigDecimal(snapshotRatio),
                 snapshotCap == null ? null : new BigDecimal(snapshotCap),
-                version, Instant.now(), null, null, 0);
+                version, Instant.now(), null, null, 0, "[]");
     }
 
     private ExportBatch exportBatch(String status) {
@@ -543,7 +543,7 @@ class InsuranceServiceTest {
                         UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                         BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
                         SettlementBill.CONFIRMED, "[]", "cashier01", "cashier01", Instant.now(),
-                        null, null, null, null, null, 3L, Instant.now(), null, null, 0)));
+                        null, null, null, null, null, 3L, Instant.now(), null, null, 0, "[]")));
 
         BillView view = service.confirm(billId, "cashier01");
 
@@ -856,7 +856,7 @@ class InsuranceServiceTest {
                 null, null, null,
                 ratio == null ? null : new BigDecimal(ratio),
                 cap == null ? null : new BigDecimal(cap),
-                2L, Instant.now(), null, null, 0);
+                2L, Instant.now(), null, null, 0, "[]");
     }
 
     @Test

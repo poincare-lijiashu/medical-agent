@@ -3,7 +3,7 @@ package com.medassist.emr.web;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
-import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.domain.EmrModel.HomepageSummary;
 import com.medassist.emr.service.HomepageService;
 import com.medassist.emr.web.EmrDtos.CreateHomepageReq;
 import com.medassist.emr.web.EmrDtos.HomepageView;
@@ -54,23 +54,27 @@ public class HomepageController {
         return ApiResponse.ok(service.create(req, actor));
     }
 
+    /** 列表：只返回摘要（姓名掩码、不含诊断/费用明细），并写 HOMEPAGE_QUERY 审计。 */
     @GetMapping
-    public ApiResponse<List<Homepage>> list(
+    public ApiResponse<List<HomepageSummary>> list(
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) UUID deptId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, deptId, limit));
+        return ApiResponse.ok(service.list(status, patientId, deptId, limit, actor));
     }
 
+    /** 详情：整份 PHI，必须留痕（HOMEPAGE_VIEW）。 */
     @GetMapping("/{id}")
     public ApiResponse<HomepageView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(service.viewDetail(id, actor));
     }
 
     /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */
@@ -116,18 +120,32 @@ public class HomepageController {
     public ApiResponse<HomepageView> submit(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.submit(id, actor));
+        return ApiResponse.ok(service.submit(id, actor, parseUuid(userId)));
     }
 
-    /** 归档（终态；提交人不得归档自己的首页）。 */
+    /** 归档（终态；提交人不得归档自己的首页，按 X-User-Id 判定）。 */
     @PostMapping("/{id}/archive")
     public ApiResponse<HomepageView> archive(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId) {
         Permissions.require(permissions, ARCHIVE);
-        return ApiResponse.ok(service.archive(id, actor));
+        return ApiResponse.ok(service.archive(id, actor, parseUuid(userId)));
+    }
+
+    /** 身份头缺失或非法一律按"没有身份"处理，由服务层 fail-closed 拒绝。 */
+    private static UUID parseUuid(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 }

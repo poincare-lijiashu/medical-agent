@@ -52,6 +52,9 @@ class HomepageServiceTest {
     private final UUID admissionId = UUID.randomUUID();
     private final Instant admittedAt = Instant.parse("2026-11-01T02:00:00Z");
     private final Instant dischargedAt = Instant.parse("2026-11-03T02:00:00Z");
+    /** 四眼校验按账号主键判定（MF-13）：提交人与归档人必须是不同的 subject。 */
+    private static final UUID SUBMITTER_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
+    private static final UUID ARCHIVER_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
     @BeforeEach
     void setUp() {
@@ -142,7 +145,7 @@ class HomepageServiceTest {
         Homepage draft = homepage(Homepage.DRAFT);
         when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(draft));
 
-        assertThatThrownBy(() -> service.submit(draft.id(), "admin01"))
+        assertThatThrownBy(() -> service.submit(draft.id(), "admin01", SUBMITTER_ID))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_INCOMPLETE);
                     assertThat(e.getMessage()).contains("离院方式")
@@ -150,7 +153,7 @@ class HomepageServiceTest {
                             .contains("住院医师签名")
                             .contains("出院诊断");
                 });
-        verify(repo, never()).submitHomepage(any(), anyString(), anyLong());
+        verify(repo, never()).submitHomepage(any(), anyString(), any(), anyLong());
     }
 
     @Test
@@ -168,10 +171,10 @@ class HomepageServiceTest {
                 "[{\"code\":\"J18.900\",\"name\":\"肺炎\",\"primary\":true},"
                         + "{\"code\":\"I10.x00\",\"name\":\"高血压病\",\"primary\":true}]",
                 "[]", "{\"EXAM\":268.00}", new BigDecimal("268.00"), Homepage.DRAFT,
-                null, null, null, null, 0L, null);
+                null, null, null, null, null, 0L, null);
         when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(withTwoPrimaries));
 
-        assertThatThrownBy(() -> service.submit(draft.id(), "admin01"))
+        assertThatThrownBy(() -> service.submit(draft.id(), "admin01", SUBMITTER_ID))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getMessage()).contains("唯一主诊断"));
     }
@@ -181,14 +184,14 @@ class HomepageServiceTest {
     void submitSucceedsWhenComplete() {
         Homepage draft = completeDraft();
         when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(draft));
-        when(repo.submitHomepage(draft.id(), "admin01", draft.version())).thenReturn(true);
+        when(repo.submitHomepage(draft.id(), "admin01", SUBMITTER_ID, draft.version())).thenReturn(true);
         when(repo.findHomepage(draft.id())).thenReturn(Optional.of(draft));
         when(clinicalClient.homepageSource(visitId)).thenReturn(source("INPATIENT", "DISCHARGED",
                 dischargedAt, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
 
-        service.submit(draft.id(), "admin01");
+        service.submit(draft.id(), "admin01", SUBMITTER_ID);
 
-        verify(repo).submitHomepage(draft.id(), "admin01", draft.version());
+        verify(repo).submitHomepage(draft.id(), "admin01", SUBMITTER_ID, draft.version());
         verify(repo).logChange(eq("admin01"), eq("HOMEPAGE_SUBMIT"), eq("HOMEPAGE"),
                 eq(draft.id().toString()), anyString());
     }
@@ -207,10 +210,10 @@ class HomepageServiceTest {
                 Map.of("EXAM", new BigDecimal("300.00")), new BigDecimal("300.00"));
         when(clinicalClient.homepageSource(visitId)).thenReturn(changed);
 
-        assertThatThrownBy(() -> service.submit(draft.id(), "admin01"))
+        assertThatThrownBy(() -> service.submit(draft.id(), "admin01", SUBMITTER_ID))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
-        verify(repo, never()).submitHomepage(any(), anyString(), anyLong());
+        verify(repo, never()).submitHomepage(any(), anyString(), any(), anyLong());
     }
 
     @Test
@@ -246,12 +249,63 @@ class HomepageServiceTest {
     }
 
     @Test
+    @DisplayName("四眼归档：缺少提交人账号主键（历史数据）时拒绝，不能 fail-open")
+    void archiveRejectsMissingSubmitterId() {
+        Homepage legacy = submittedHomepage("admin01");
+        Homepage withoutId = new Homepage(legacy.id(), legacy.homepageNo(), legacy.visitId(),
+                legacy.admissionId(), legacy.patientId(), legacy.patientNo(), legacy.patientName(),
+                legacy.patientSex(), legacy.birthDate(), legacy.admitAge(), legacy.visitNo(),
+                legacy.deptId(), legacy.deptName(), legacy.wardId(), legacy.wardName(),
+                legacy.bedNo(), legacy.admittedAt(), legacy.dischargedAt(), legacy.stayDays(),
+                legacy.attendingDoctor(), legacy.admissionWay(), legacy.dischargeMode(),
+                legacy.deathTime(), legacy.deathCause(), legacy.readmitPlan(),
+                legacy.maritalStatus(), legacy.occupation(), legacy.nation(), legacy.bloodType(),
+                legacy.rhFactor(), legacy.rescueCount(), legacy.rescueSuccessCount(),
+                legacy.criticalCase(), legacy.hospitalInfection(), legacy.chiefPhysician(),
+                legacy.residentPhysician(), legacy.coder(), legacy.diagnoses(),
+                legacy.procedures(), legacy.feeSummary(), legacy.totalAmount(),
+                Homepage.SUBMITTED, "admin01", null, Instant.now(), null, null, 7L, Instant.now());
+        when(repo.lockHomepage(withoutId.id())).thenReturn(Optional.of(withoutId));
+
+        assertThatThrownBy(() -> service.archive(withoutId.id(), "qc01", ARCHIVER_ID))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID);
+                    assertThat(e.getMessage()).contains("提交人身份");
+                });
+        verify(repo, never()).archiveHomepage(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("四眼归档：缺少 X-User-Id 时拒绝归档")
+    void archiveRejectsMissingActorId() {
+        Homepage submitted = submittedHomepage("admin01");
+        when(repo.lockHomepage(submitted.id())).thenReturn(Optional.of(submitted));
+
+        assertThatThrownBy(() -> service.archive(submitted.id(), "qc01", null))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID));
+        verify(repo, never()).archiveHomepage(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("提交：缺少真实操作者（system）时拒绝")
+    void submitRejectsSystemActor() {
+        Homepage draft = completeDraft();
+        when(repo.lockHomepage(draft.id())).thenReturn(Optional.of(draft));
+
+        assertThatThrownBy(() -> service.submit(draft.id(), "system", SUBMITTER_ID))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID));
+        verify(repo, never()).submitHomepage(any(), anyString(), any(), anyLong());
+    }
+
+    @Test
     @DisplayName("四眼归档：提交人不得归档自己的首页")
     void archiveRejectsSubmitter() {
         Homepage submitted = submittedHomepage("admin01");
         when(repo.lockHomepage(submitted.id())).thenReturn(Optional.of(submitted));
 
-        assertThatThrownBy(() -> service.archive(submitted.id(), "admin01"))
+        assertThatThrownBy(() -> service.archive(submitted.id(), "admin01", SUBMITTER_ID))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID));
         verify(repo, never()).archiveHomepage(any(), anyString(), anyLong());
@@ -265,7 +319,7 @@ class HomepageServiceTest {
         when(repo.archiveHomepage(submitted.id(), "qc01", submitted.version())).thenReturn(true);
         when(repo.findHomepage(submitted.id())).thenReturn(Optional.of(submitted));
 
-        service.archive(submitted.id(), "qc01");
+        service.archive(submitted.id(), "qc01", ARCHIVER_ID);
 
         verify(repo).archiveHomepage(submitted.id(), "qc01", submitted.version());
     }
@@ -339,12 +393,12 @@ class HomepageServiceTest {
         Homepage death = deathDraft(null);
         when(repo.lockHomepage(death.id())).thenReturn(Optional.of(death));
 
-        assertThatThrownBy(() -> service.submit(death.id(), "admin01"))
+        assertThatThrownBy(() -> service.submit(death.id(), "admin01", SUBMITTER_ID))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_INCOMPLETE);
                     assertThat(e.getMessage()).contains("死亡时间");
                 });
-        verify(repo, never()).submitHomepage(any(), anyString(), anyLong());
+        verify(repo, never()).submitHomepage(any(), anyString(), any(), anyLong());
     }
 
     @Test
@@ -352,14 +406,14 @@ class HomepageServiceTest {
     void submitDeathCaseWithDeathTime() {
         Homepage death = deathDraft(Instant.parse("2026-11-01T03:00:00Z"));
         when(repo.lockHomepage(death.id())).thenReturn(Optional.of(death));
-        when(repo.submitHomepage(death.id(), "admin01", death.version())).thenReturn(true);
+        when(repo.submitHomepage(death.id(), "admin01", SUBMITTER_ID, death.version())).thenReturn(true);
         when(repo.findHomepage(death.id())).thenReturn(Optional.of(death));
         when(clinicalClient.homepageSource(visitId)).thenReturn(source("INPATIENT", "DISCHARGED",
                 dischargedAt, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
 
-        service.submit(death.id(), "admin01");
+        service.submit(death.id(), "admin01", SUBMITTER_ID);
 
-        verify(repo).submitHomepage(death.id(), "admin01", death.version());
+        verify(repo).submitHomepage(death.id(), "admin01", SUBMITTER_ID, death.version());
     }
 
     @Test
@@ -389,7 +443,7 @@ class HomepageServiceTest {
                 base.rescueCount(), base.rescueSuccessCount(), base.criticalCase(),
                 base.hospitalInfection(), base.chiefPhysician(), base.residentPhysician(),
                 base.coder(), base.diagnoses(), base.procedures(), base.feeSummary(),
-                base.totalAmount(), Homepage.DRAFT, null, null, null, null, 0L, Instant.now());
+                base.totalAmount(), Homepage.DRAFT, null, null, null, null, null, 0L, Instant.now());
     }
 
     private Homepage submittedHomepage(String submittedBy) {
@@ -405,7 +459,7 @@ class HomepageServiceTest {
                 base.rescueCount(), base.rescueSuccessCount(), base.criticalCase(),
                 base.hospitalInfection(), base.chiefPhysician(), base.residentPhysician(),
                 base.coder(), base.diagnoses(), base.procedures(), base.feeSummary(),
-                base.totalAmount(), Homepage.SUBMITTED, submittedBy, Instant.now(),
+                base.totalAmount(), Homepage.SUBMITTED, submittedBy, SUBMITTER_ID, Instant.now(),
                 null, null, 7L, Instant.now());
     }
 
@@ -420,7 +474,7 @@ class HomepageServiceTest {
                 false, false, "chief01", "resident01", "coder01",
                 "[{\"code\":\"J18.900\",\"name\":\"肺炎\",\"primary\":true}]",
                 "[]", "{\"EXAM\":268.00}", new BigDecimal("268.00"), Homepage.DRAFT,
-                null, null, null, null, 0L, Instant.now());
+                null, null, null, null, null, 0L, Instant.now());
     }
 
     private Homepage homepage(String status) {
@@ -430,7 +484,7 @@ class HomepageServiceTest {
                 "一病区", "A1", admittedAt, dischargedAt, 2, "doctor01", null, null, null, null,
                 "NONE", null, null, null, null, null, 0, 0, false, false, null, null, null,
                 "[]", "[]", "{\"EXAM\":268.00}", new BigDecimal("268.00"), status,
-                null, null, null, null, 0L, Instant.now());
+                null, null, null, null, null, 0L, Instant.now());
     }
 
     private ClinicalClient.HomepageSource source(String visitType, String admissionStatus,

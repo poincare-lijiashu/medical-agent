@@ -44,10 +44,16 @@ public class InternalHomepageController {
     }
 
     /**
-     * 按就诊号取首页手术操作。
+     * 按就诊号取首页手术操作**编码**。
      *
-     * <p>未生成首页时返回 200 + {@code found=false}：这是"还没有首页"的正常状态，
-     * 不是错误，调用方据此按"无手术"处理（而不是把它当成上游故障）。
+     * <p>只投影 {@code code}：术者、手术日期、麻醉方式、切口等级属于非必要 PHI，
+     * 医保分组用不到，一律不出域（第六轮 MF-14）。
+     *
+     * <p>只取**已归档**首页：分组结果必须与上报病案首页一致；草稿/已提交首页仍可能被
+     * 病案室修改，用它分组会留下"快照说无手术、首页后来又有手术"的矛盾。
+     *
+     * <p>未生成首页或尚未归档时返回 200 + {@code found=true/false} + 空 codes：
+     * 这是正常状态，调用方据此按"无手术"处理（而不是当成上游故障）。
      */
     @GetMapping("/by-visit/{visitId}/procedures")
     public Map<String, Object> procedures(@PathVariable UUID visitId,
@@ -57,19 +63,30 @@ public class InternalHomepageController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("visitId", visitId);
         Homepage homepage = repo.findHomepageByVisit(visitId).orElse(null);
+        boolean archived = homepage != null && Homepage.ARCHIVED.equals(homepage.status());
         body.put("found", homepage != null);
         body.put("status", homepage == null ? null : homepage.status());
         body.put("homepageNo", homepage == null ? null : homepage.homepageNo());
-        body.put("procedures", homepage == null ? List.of() : parseProcedures(homepage.procedures()));
+        body.put("archived", archived);
+        body.put("codes", archived ? procedureCodes(homepage.procedures()) : List.of());
         return body;
     }
 
-    private List<Map<String, Object>> parseProcedures(String json) {
+    /** 只取手术编码列表（不返回术者/日期等 PHI）。 */
+    private List<String> procedureCodes(String json) {
         if (json == null || json.isBlank()) {
             return List.of();
         }
         try {
-            return objectMapper.readValue(json, List.class);
+            List<Map<String, Object>> rows = objectMapper.readValue(json, List.class);
+            List<String> codes = new java.util.ArrayList<>(rows.size());
+            for (Map<String, Object> row : rows) {
+                Object code = row.get("code");
+                if (code != null && !String.valueOf(code).isBlank()) {
+                    codes.add(String.valueOf(code));
+                }
+            }
+            return codes;
         } catch (JacksonException e) {
             return List.of();
         }

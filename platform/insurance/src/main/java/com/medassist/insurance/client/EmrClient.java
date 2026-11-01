@@ -14,7 +14,10 @@ public interface EmrClient {
     /**
      * 就诊对应的首页手术操作编码。
      *
-     * @param found 是否已生成病案首页（未出院/未生成时 false，手术编码为空属正常）
+     * <p>只含编码：术者/手术日期/麻醉方式属非必要 PHI，不使用也不传输（第六轮 MF-14）。
+     *
+     * @param found  是否已生成病案首页（未出院/未生成时 false，手术编码为空属正常）
+     * @param status 首页状态；只有 ARCHIVED 才会带回编码（草稿/已提交仍可能被修改）
      */
     record HomepageProcedures(UUID visitId, boolean found, String status, List<String> codes) {
     }

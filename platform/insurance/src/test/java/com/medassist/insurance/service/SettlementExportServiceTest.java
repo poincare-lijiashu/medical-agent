@@ -62,7 +62,8 @@ class SettlementExportServiceTest {
                 new BigDecimal("0.00"), new BigDecimal("10.00"), new BigDecimal("0.00"),
                 SettlementBill.CONFIRMED, DETAIL, "admin01", "yb01", Instant.now(),
                 null, null, null, new BigDecimal("1.0"), new BigDecimal("300000"), 1L, Instant.now(),
-                null, null, 0);
+                "J18.900", "肺炎", 1,
+                "[{\"code\":\"J18.900\",\"name\":\"肺炎\",\"primary\":true}]");
     }
 
     private ExportBatch batch(String status, long version) {
@@ -184,7 +185,13 @@ class SettlementExportServiceTest {
 
         ExportBatch batch = result.batch();
         assertThat(batch.payload()).contains("<settlementBatch").contains("A&amp;B")
-                .contains("<line chargeNo=\"CH1\"");
+                .contains("<line chargeNo=\"CH1\"")
+                // MF-15：省局要求主诊断 + 其他诊断，报文必须带出
+                .contains("primaryDiagnosisCode=\"J18.900\"")
+                .contains("primaryDiagnosisName=\"肺炎\"")
+                .contains("diagnosisCount=\"1\"")
+                .contains("<diagnosis code=\"J18.900\"")
+                .contains("primary=\"true\"");
         assertThat(batch.payloadHash()).hasSize(64);
         assertThat(batch.billCount()).isEqualTo(1);
         assertThat(batch.totalAmount()).isEqualByComparingTo("10.00");
@@ -202,7 +209,7 @@ class SettlementExportServiceTest {
                 new BigDecimal("10.00"), new BigDecimal("0.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), SettlementBill.CONFIRMED, "not-json", "admin01", "yb01",
                 Instant.now(), null, null, null, BigDecimal.ONE, new BigDecimal("300000"), 1L,
-                Instant.now(), null, null, 0);
+                Instant.now(), null, null, 0, "[]");
         when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
         when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(broken));
 

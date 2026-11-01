@@ -342,7 +342,7 @@ class PaymentGroupingServiceTest {
         when(clinicalClient.diagnoses(visitId)).thenReturn(new ClinicalClient.DiagnosisSummary(
                 visitId, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
         when(emrClient.procedures(visitId)).thenReturn(new EmrClient.HomepageProcedures(
-                visitId, true, "DRAFT", List.of("88.0100")));
+                visitId, true, "ARCHIVED", List.of("88.0100")));
 
         GroupSimulation result = service.simulate(
                 new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
@@ -351,6 +351,24 @@ class PaymentGroupingServiceTest {
         assertThat(result.groupCode()).isEqualTo("GB2");
         assertThat(result.proceduresSource()).isEqualTo(PaymentGroupingService.SOURCE_HOMEPAGE);
         assertThat(result.procedures()).contains("88.0100");
+    }
+
+    @Test
+    @DisplayName("模拟：首页未归档时按无手术处理（不能用草稿首页分组，MF-14）")
+    void simulateIgnoresUnarchivedHomepageProcedures() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.listRules("DRG-2026", true)).thenReturn(List.of());
+        when(clinicalClient.diagnoses(visitId)).thenReturn(new ClinicalClient.DiagnosisSummary(
+                visitId, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
+        // 病历域对未归档首页只返回状态、不回传编码
+        when(emrClient.procedures(visitId)).thenReturn(new EmrClient.HomepageProcedures(
+                visitId, true, "DRAFT", List.of()));
+
+        GroupSimulation result = service.simulate(
+                new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
+
+        assertThat(result.procedures()).isEqualTo("[]");
+        assertThat(result.proceduresSource()).isEqualTo(PaymentGroupingService.SOURCE_NONE);
     }
 
     @Test

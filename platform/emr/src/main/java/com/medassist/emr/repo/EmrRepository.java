@@ -4,6 +4,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.domain.EmrModel.HomepageSummary;
 import com.medassist.emr.domain.EmrModel.HqmsExportBatch;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
@@ -114,7 +115,8 @@ public class EmrRepository {
             rs.getString("procedures") == null ? "[]" : rs.getString("procedures"),
             rs.getString("fee_summary") == null ? "{}" : rs.getString("fee_summary"),
             rs.getBigDecimal("total_amount"), rs.getString("status"),
-            rs.getString("submitted_by"), instant(rs, "submitted_at"),
+            rs.getString("submitted_by"), rs.getObject("submitted_by_id", UUID.class),
+            instant(rs, "submitted_at"),
             rs.getString("archived_by"), instant(rs, "archived_at"),
             rs.getLong("version"), instant(rs, "created_at"));
 
@@ -690,7 +692,7 @@ public class EmrRepository {
             rescue_success_count, critical_case, hospital_infection, chief_physician,
             resident_physician, coder, diagnoses::text AS diagnoses,
             procedures::text AS procedures, fee_summary::text AS fee_summary, total_amount,
-            status, submitted_by, submitted_at, archived_by, archived_at, version, created_at
+            status, submitted_by, submitted_by_id, submitted_at, archived_by, archived_at, version, created_at
             """;
 
     public void insertHomepage(Homepage h) {
@@ -847,15 +849,21 @@ public class EmrRepository {
                 .update() > 0;
     }
 
-    /** 提交（CAS：仅 DRAFT）。 */
-    public boolean submitHomepage(UUID id, String actor, long expectedVersion) {
+    /**
+     * 提交（CAS：仅 DRAFT）。
+     *
+     * @param actorId 提交人账号主键（X-User-Id）；写入后归档按该主键做四眼校验（MF-13）
+     */
+    public boolean submitHomepage(UUID id, String actor, UUID actorId, long expectedVersion) {
         return jdbc.sql("""
                         UPDATE emr_svc.record_homepage
-                           SET status = 'SUBMITTED', submitted_by = :actor, submitted_at = now(),
+                           SET status = 'SUBMITTED', submitted_by = :actor,
+                               submitted_by_id = :actorId, submitted_at = now(),
                                version = version + 1, updated_at = now()
                          WHERE id = :id AND status = 'DRAFT' AND version = :version
                         """)
-                .param("actor", actor).param("id", id).param("version", expectedVersion)
+                .param("actor", actor).param("actorId", actorId)
+                .param("id", id).param("version", expectedVersion)
                 .update() > 0;
     }
 
@@ -869,6 +877,40 @@ public class EmrRepository {
                         """)
                 .param("actor", actor).param("id", id).param("version", expectedVersion)
                 .update() > 0;
+    }
+
+    /**
+     * 列表摘要（第六轮 MF-12）：患者姓名在 SQL 内掩码，不返回诊断/费用/手术明细。
+     *
+     * <p>一次请求最多 200 条；过去这里直接返回全字段实体，等于一次拉走 200 名患者的
+     * 姓名 + 出院诊断 + 费用，且不写审计。
+     */
+    public List<HomepageSummary> listHomepageSummaries(String status, UUID patientId, UUID deptId,
+                                                       int limit) {
+        return jdbc.sql("""
+                        SELECT id, homepage_no, visit_no, patient_no,
+                               CASE WHEN patient_name IS NULL OR patient_name = '' THEN ''
+                                    ELSE left(patient_name, 1) || '**' END AS patient_name_masked,
+                               dept_name, ward_name, discharged_at, stay_days, total_amount,
+                               status, version
+                          FROM emr_svc.record_homepage
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:patientId AS uuid) IS NULL
+                                OR patient_id = CAST(:patientId AS uuid))
+                           AND (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("patientId", patientId)
+                .param("deptId", deptId).param("limit", limit)
+                .query((rs, i) -> new HomepageSummary(
+                        rs.getObject("id", UUID.class), rs.getString("homepage_no"),
+                        rs.getString("visit_no"), rs.getString("patient_no"),
+                        rs.getString("patient_name_masked"), rs.getString("dept_name"),
+                        rs.getString("ward_name"), instant(rs, "discharged_at"),
+                        rs.getInt("stay_days"), rs.getBigDecimal("total_amount"),
+                        rs.getString("status"), rs.getLong("version")))
+                .list();
     }
 
     public List<Homepage> listHomepages(String status, UUID patientId, UUID deptId, int limit) {
