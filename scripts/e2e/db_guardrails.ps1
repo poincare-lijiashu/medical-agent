@@ -188,6 +188,47 @@ UPDATE pharmacy_svc.prescription_audit SET result = 'PASS'
  WHERE id = (SELECT min(id) FROM pharmacy_svc.prescription_audit);
 "@
 
+# ---------------------------------------------------------------- 5. Side records are append-only (P1-11)
+# These tables record facts (merge / nursing execution / stock ledger / e-signature /
+# amendment history / raw LIS message). The service layer never updates them, and the
+# database must reject direct tampering too. Cases are skipped when the table is empty
+# because UPDATE/DELETE on zero rows never fires the trigger.
+
+Expect-AuditLocked 'empi.patientMergeLog.delete' 'empi_svc.patient_merge_log' @"
+DELETE FROM empi_svc.patient_merge_log
+ WHERE ctid = (SELECT ctid FROM empi_svc.patient_merge_log LIMIT 1);
+"@
+
+Expect-AuditLocked 'clinical.nursingExecution.delete' 'clinical_svc.nursing_execution' @"
+DELETE FROM clinical_svc.nursing_execution
+ WHERE ctid = (SELECT ctid FROM clinical_svc.nursing_execution LIMIT 1);
+"@
+
+Expect-AuditLocked 'clinical.wardStockTxn.delete' 'clinical_svc.ward_stock_txn' @"
+DELETE FROM clinical_svc.ward_stock_txn
+ WHERE ctid = (SELECT ctid FROM clinical_svc.ward_stock_txn LIMIT 1);
+"@
+
+Expect-AuditLocked 'emr.recordAmendment.delete' 'emr_svc.record_amendment' @"
+DELETE FROM emr_svc.record_amendment
+ WHERE ctid = (SELECT ctid FROM emr_svc.record_amendment LIMIT 1);
+"@
+
+Expect-AuditLocked 'emr.recordSignature.delete' 'emr_svc.record_signature' @"
+DELETE FROM emr_svc.record_signature
+ WHERE ctid = (SELECT ctid FROM emr_svc.record_signature LIMIT 1);
+"@
+
+Expect-AuditLocked 'insurance.memberHistory.delete' 'insurance_svc.insurance_member_history' @"
+DELETE FROM insurance_svc.insurance_member_history
+ WHERE ctid = (SELECT ctid FROM insurance_svc.insurance_member_history LIMIT 1);
+"@
+
+Expect-AuditLocked 'tech.lisInboundMessage.delete' 'tech_svc.lis_inbound_message' @"
+DELETE FROM tech_svc.lis_inbound_message
+ WHERE ctid = (SELECT ctid FROM tech_svc.lis_inbound_message LIMIT 1);
+"@
+
 Write-Output "-----"
 Write-Output "GUARDRAILS_PASS=$script:pass FAIL=$script:fail"
 if ($script:fail -gt 0) { Write-Output "RESULT FAIL"; exit 1 }

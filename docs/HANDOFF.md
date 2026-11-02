@@ -33,7 +33,7 @@
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
 > §1.55~§1.60 的 E2E 回归**均已通过**：
 > `platform_smoke` / `empi_patient_smoke` / `clinical_preop_consent_smoke` / `pharmacy_smoke` /
-> `insurance_smoke` / `db_guardrails`(15/15) / `kb_search_smoke` / `emr_homepage_smoke` /
+> `insurance_smoke` / `db_guardrails`(22/22) / `kb_search_smoke` / `emr_homepage_smoke` /
 > `pharmacy_order_refund_smoke`(35 项) / `clinical_long_order_smoke`(36 项) /
 > `clinical_long_dispense_smoke`(87 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 > 本机起服务必须带 `$env:INTERNAL_API_TOKEN='medassist-dev-internal-token'`（auth 的内部接口 fail-closed，
@@ -66,8 +66,8 @@
 - 工作区：clean（收工前已确认）；全量单测 **871 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar；启动必须带 `INTERNAL_API_TOKEN`）；
-  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V28**、
-  `pharmacy_svc` → **V9**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V15**、
+  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V4**、`clinical_svc` → **V29**、
+  `pharmacy_svc` → **V9**、`tech_svc` → **V8**、`emr_svc` → **V16**、`insurance_svc` → **V16**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）

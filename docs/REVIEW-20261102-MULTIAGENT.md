@@ -19,7 +19,7 @@
 | P0-11 | 成立 | `NursingService` 改为 **visit → admission** 顺序加锁，与按日计费一致，消除 ABBA 死锁 | 单测全绿（测试补锁桩） |
 | P0-12 | 成立 | 新增 `ClinicalRepository.lockOrderById`（`FOR UPDATE`），退药冲减与结算同锁 | 单测全绿 |
 | P1-2 | 成立（实锤） | `ORDER_TRANSFER_INCOMPLETE` → 409；新增 `ClinicalExceptionMappingTest`（全枚举遍历 + 高危码精确断言 + 禁 5xx） | 单测 +3 |
-| P1-11（部分） | 成立 | `dispense_return` 补 UPDATE/DELETE 触发器（其余旁证表仍在待办） | 迁移随 V9 生效 |
+| P1-11（完成） | 成立 | `dispense_return` 补 UPDATE/DELETE 触发器（pharmacy V9）；本轮补齐其余旁证表：empi V4 `patient_merge_log`、clinical V29 `nursing_execution`/`ward_stock_txn`、emr V16 `record_amendment`/`record_signature`、insurance V16 `insurance_member_history`、tech V8 `lis_inbound_message`，统一复用各 schema 已有的 `reject_audit_mutation()` | 真实库迁移到 empi V4 / clinical V29 / tech V8 / emr V16 / insurance V16；`db_guardrails.ps1` 新增 7 条 DELETE 反例，**22/22 PASS** |
 | P0-4 | 成立 | `insurance V15`：`settlement_export_item` 在 GENERATED/ACCEPTED 批次内禁止 UPDATE/DELETE（对齐 `emr V12` 的 `guard_hqms_item`）；纠正报盘只能走批次级 `CANCELLED` | 迁移在真实库事务内试跑通过；`db_guardrails.ps1` 新增 `exportItem.updateBlocked` / `exportItem.deleteBlocked` 两条反例 |
 | P0-7 | 成立 | ai-core 改 `strategy: Recreate`（`values.yaml` 可覆盖），开启 PDB（`minAvailable: 0`）；根因是单副本 + RWO 卷，RollingUpdate 的新 Pod 抢不到卷会永久 Pending | `alpine/helm` 渲染 prod/staging：仅 ai-core 为 `Recreate`，PDB `minAvailable: 0` |
 | P0-9 | 成立 | ① `InternalAuthAutoConfiguration`：生产环境 `internal-paths-signature-required=false` **拒绝启动**；② `values-prod`/`values-staging` 置 `true`；③ 修正 `callerKeys` 矩阵（原缺 clinical→pharmacy/tech、pharmacy→clinical），并为 auth/empi/kb 补自身密钥；④ auth 单独豁免 `/internal/revocations`（网关是 WebFlux，无 v1i 签名器；该端点仍由 `X-Internal-Token` fail-closed + NetworkPolicy 守卫） | 新增单测 `rejectsProductionWithoutInternalCallerSignature`；三环境 `helm template` 渲染通过 |
