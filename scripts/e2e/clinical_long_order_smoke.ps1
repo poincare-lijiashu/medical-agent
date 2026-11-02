@@ -181,6 +181,43 @@ Check 'dailyBill.repeat.ok' $r.Status 200
 Check   'dailyBill.repeat.orderCount' (Res $r).orderCount 0
 CheckAmt 'dailyBill.repeat.billedAmount' (Res $r).billedAmount 0
 
+# ---------------------------------------------------------------- 8c. daily charge reversal (P1-1)
+# Nursing later marks the day as refused: the daily charge must be reversible with an
+# explicit reason + confirmation, must be idempotent, and must reduce the charge total.
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
+$beforeTotal = (Res $r).totalAmount
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-bill/reverse" @{
+    orderId = $longIv.id
+    reason = 'patient refused'
+    confirmed = $true
+} $token
+Check 'dailyReverse.ok' $r.Status 200
+Check 'dailyReverse.idempotent' (Res $r).idempotent $false
+$reversed = (Res $r).reversedAmount
+Check 'dailyReverse.positive' ([decimal]$reversed -gt 0) True
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
+$afterTotal = (Res $r).totalAmount
+CheckAmt 'dailyReverse.chargeReduced' ([decimal]$beforeTotal - [decimal]$afterTotal) $reversed
+
+# replay must be idempotent (no second deduction)
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-bill/reverse" @{
+    orderId = $longIv.id
+    reason = 'patient refused'
+    confirmed = $true
+} $token
+Check 'dailyReverse.repeat.ok' $r.Status 200
+Check 'dailyReverse.repeat.idempotent' (Res $r).idempotent $true
+CheckAmt 'dailyReverse.repeat.amount' (Res $r).reversedAmount 0
+
+# a date with no daily charge must be rejected as a business validation error
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-bill/reverse" @{
+    orderId = $longIv.id
+    serviceDate = (Get-Date).AddDays(-1).ToString('yyyy-MM-dd')
+    reason = 'no charge on that day'
+    confirmed = $true
+} $token
+Check 'dailyReverse.notBilled.422' $r.Status 422
+
 # ---------------------------------------------------------------- 8b. long orders cannot be cancelled (P1-7)
 # Daily billing does not flip order status to CHARGED, so a LONG order that already
 # billed several days would still look "PLACED". Cancelling it would silently drop

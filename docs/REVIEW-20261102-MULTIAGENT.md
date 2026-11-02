@@ -33,12 +33,17 @@
 | P1-5 | 成立 | 补"占号 CAS 失败"分支测试：加锁时还有余号、但 `UPDATE ... WHERE booked < total` 时被并发抢空 → 抛 `REGISTRATION_NO_SLOT`，且**不建就诊/收费单/收费明细** | `RegistrationServiceTest` 6 项全绿（+1） |
 | P1-9（部分） | 成立 | 新增**医嘱级退费封顶**：`sumOrderRefundHandled(orderId[, supplyDate])` 统计 `applied+pending+done`，超过医嘱金额（长嘱按当日）直接 422，避免药价与收费项目价漂移时把 `charge.total_amount` 冲成负数（原来只有"单条发药明细"上限）；另加只读巡检脚本 `scripts/price_drift_audit.ps1` 提前发现两价漂移 | 单测 +2（整单封顶/长嘱按日封顶）；巡检脚本实测：人为造 1 元差价 → `DRIFT_ROWS=1` 并列出明细，还原后 `CLEAN`；`pharmacy_order_refund_smoke` 与 `clinical_long_dispense_smoke` 全 PASS（期间修复了 null 参数导致 `CAST(:x AS date)` 报 500 的问题） |
 | P1-3（完成） | 成立 | 为 auth/empi/pharmacy/tech/emr/insurance/kb **7 个域**各补 `ExceptionMappingContractTest`：反射遍历 `ErrorCode.values()` 断言"每个码都有非 null 状态"、"核心码（422/404/403/401/409/429/503）全平台一致"、"业务码不得落 5xx（依赖不可用类如 `*UNAVAILABLE` 除外）"，与 clinical 已有契约测试形成 8 域全覆盖 | 7×3 = **21 项新用例全绿**；过程中发现 kb 的 `KB_EMBEDDING_UNAVAILABLE → 503` 属依赖不可用，按语义加入白名单 |
+| P1-1（部分） | 成立 | ① `clinical V30`：把 `DAILY_RETURN:%` 加入负向明细白名单（此前负金额只允许 `DISPENSE_RETURN` / `ORDER_RETURN`，**没有任何入口能冲回按日计费**）；② 新增 `POST /visits/{id}/daily-bill/reverse`：红冲金额取当日实际入账净额、必须带原因 + `confirmed=true` 二次确认、幂等键 `DAILY_RETURN:{orderId}:{date}`、已结算（PAID）拒绝并要求走退费；③ 与 `dailyBill`/`settle` 同锁（先锁 visit） | 单测 +3（正常红冲 / 幂等重放 / 已结算 409）；真实库迁到 **V30**；E2E `clinical_long_order_smoke` 新增 5 条断言：`chargeReduced=24.00`、重放 `idempotent=true & amount=0`、未计费日期 422、全部 PASS；`db_guardrails` 22/22 仍绿 |
 
-**本轮实测**：全量单测 **901 项**全绿（846 → 857 → 861 → 871 → 876 → 878 → 880 → 901）；真库 SQL 集成测试 3 项（`-Ppostgres-it`）全绿；真实库迁移 `auth V34 / empi V4 / clinical V29 / pharmacy V9 / tech V8 / emr V16 / insurance V16 / kb V3`；`db_guardrails.ps1` **22 项反例全 PASS**；药品价差巡检 `price_drift_audit.ps1` 可运行（当前 `DRIFT_ROWS=0`）；E2E `clinical_long_order_smoke`（含长嘱撤销 409）/ `clinical_long_dispense_smoke` / `pharmacy_narcotic_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
+**本轮实测**：全量单测 **904 项**全绿（846 → 857 → 861 → 871 → 876 → 878 → 880 → 901 → 904）；真库 SQL 集成测试 3 项（`-Ppostgres-it`）全绿；真实库迁移 `auth V34 / empi V4 / clinical V30 / pharmacy V9 / tech V8 / emr V16 / insurance V16 / kb V3`；`db_guardrails.ps1` **22 项反例全 PASS**；药品价差巡检 `price_drift_audit.ps1` 可运行（当前 `DRIFT_ROWS=0`）；E2E `clinical_long_order_smoke`（含长嘱撤销 409 + 按日红冲 5 条断言）/ `clinical_long_dispense_smoke` / `pharmacy_narcotic_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
 
 > 仍待办：**P0-8 的网关通道**（网关 → 业务服务 v1/v2）尚未绑定请求体——网关是 WebFlux，
 > 需要在 `InternalSignatureGlobalFilter` 里复制/缓存 `DataBuffer` 后才能计算摘要，
 > 且必须与业务服务同步升级，留作下一批。当前已覆盖所有**服务→服务**的内部写操作（医嘱、处方、计费、退药）。
+>
+> 另：**P1-1 的"护理执行更正流程"**尚未交付——本批先打通了"按日计费红冲"（资金侧闭环），
+> 护理端把 EXECUTED 改判为 REFUSED 的正规更正记录（独立更正表 + 与红冲联动 + 二次确认）留作下一批；
+> 在此之前，护理仍会提示"请先冲正费用"，操作员可先调用红冲接口再重新记录执行。
 
 ### 加勉（复核后不成立或需降级）
 

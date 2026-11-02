@@ -4,6 +4,8 @@ import com.medassist.clinical.service.BillingService;
 import com.medassist.clinical.web.ClinicalDtos.BillingPreview;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
 import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
+import com.medassist.clinical.web.ClinicalDtos.DailyReversalResult;
+import com.medassist.clinical.web.ClinicalDtos.DailyReverseReq;
 import com.medassist.clinical.web.ClinicalDtos.SettleReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
@@ -79,5 +81,22 @@ public class BillingController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, "inpatient:billing:daily");
         return ApiResponse.ok(service.dailyBill(visitId, date, actor));
+    }
+
+    /**
+     * 按日计费红冲（P1-1）：护理把当日改判为"未执行/患者拒绝"后，把当日费用冲回。
+     *
+     * <p>必须二次确认 + 原因（资金动作，误操作只能靠审计追溯）；同一医嘱同一天幂等。
+     * 已结算的日期不允许直接红冲，需走退费流程。
+     */
+    @PostMapping("/daily-bill/reverse")
+    public ApiResponse<DailyReversalResult> reverseDaily(
+            @PathVariable UUID visitId,
+            @Valid @RequestBody DailyReverseReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, "inpatient:billing:daily");
+        return ApiResponse.ok(service.reverseDaily(visitId, req.orderId(), req.serviceDate(),
+                req.reason(), Boolean.TRUE.equals(req.confirmed()), actor));
     }
 }

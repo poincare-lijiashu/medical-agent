@@ -1492,6 +1492,34 @@ public class ClinicalRepository {
                 .param("DAILY:" + orderId + ":" + supplyDate).query(UUID.class).optional();
     }
 
+    /** 某长嘱某日的按日计费明细（红冲需要原金额与项目信息）。 */
+    public Optional<DailyCharge> findDailyCharge(UUID orderId, LocalDate serviceDate) {
+        return jdbc.sql("""
+                        SELECT charge_id, amount, item_code, item_name, category
+                          FROM clinical_svc.charge_item WHERE source_key = ?
+                        """)
+                .param("DAILY:" + orderId + ":" + serviceDate)
+                .query((rs, rowNum) -> new DailyCharge(
+                        rs.getObject("charge_id", UUID.class), rs.getBigDecimal("amount"),
+                        rs.getString("item_code"), rs.getString("item_name"),
+                        rs.getString("category")))
+                .optional();
+    }
+
+    /** 该日是否已经红冲过（幂等键 {@code DAILY_RETURN:{orderId}:{date}}）。 */
+    public boolean existsDailyReturn(UUID orderId, LocalDate serviceDate) {
+        Long n = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.charge_item WHERE source_key = ?
+                        """).param("DAILY_RETURN:" + orderId + ":" + serviceDate)
+                .query(Long.class).single();
+        return n != null && n > 0;
+    }
+
+    /** 按日计费明细（红冲时按原金额取负）。 */
+    public record DailyCharge(UUID chargeId, BigDecimal amount, String itemCode,
+                              String itemName, String category) {
+    }
+
     /** 该医嘱已生成的费用明细所属收费单（未结算时为空）。 */
     public Optional<UUID> findChargeIdByOrderItem(UUID orderId) {
         return jdbc.sql("SELECT charge_id FROM clinical_svc.charge_item WHERE source_key = ?")

@@ -12,6 +12,7 @@ import com.medassist.clinical.web.ClinicalDtos.BillingPreview;
 import com.medassist.clinical.web.ClinicalDtos.ChargeItemView;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
 import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
+import com.medassist.clinical.web.ClinicalDtos.DailyReversalResult;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.springframework.stereotype.Service;
@@ -278,6 +279,74 @@ public class BillingService {
         Charge charge = currentCharge(visit)
                 .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
         return toView(charge);
+    }
+
+    // ---------------------------------------------------------------- 按日计费红冲（P1-1）
+
+    /**
+     * 按日计费红冲：把某长嘱某日已计入的金额以负向明细冲回。
+     *
+     * <p>为什么必须有这个入口：护理把当日改动为"未执行/患者拒绝"时，钱已经计过了；
+     * 没有红冲就只能"多收"，医保飞检直接扣分。红冲金额一律取**当日实际入账额**
+     * （已扣退药 applied 的净额），不采信客户端传值。
+     *
+     * <p>幂等键 {@code DAILY_RETURN:{orderId}:{date}}：重复调用返回 {@code idempotent=true}，
+     * 不会二次冲减。已结算（PAID）的收费单不允许直接红冲，必须走退费流程——
+     * 否则会出现"已支付但总额被改小"的账实不一致。
+     */
+    @Transactional
+    public DailyReversalResult reverseDaily(UUID visitId, UUID orderId, LocalDate serviceDate,
+                                            String reason, boolean confirmed, String actor) {
+        String why = reason == null ? "" : reason.trim();
+        if (!confirmed) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "红冲需要二次确认（confirmed=true）");
+        }
+        if (why.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "必须填写红冲原因");
+        }
+        LocalDate date = serviceDate == null ? BusinessTime.today() : serviceDate;
+        if (date.isAfter(BusinessTime.today())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能对未来日期红冲");
+        }
+        // 与 dailyBill / settle 同锁：避免"红冲读金额的同时按日计费又入账"
+        Visit visit = repo.lockVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        if (!visit.active()) {
+            throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID, "就诊已结束，不能红冲");
+        }
+        VisitOrder order = repo.findOrder(visitId, orderId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_ITEM_NOT_FOUND,
+                        "医嘱不存在或不属于该就诊"));
+        if (!order.longTerm()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "只有长嘱的按日计费可以红冲");
+        }
+        if (repo.existsDailyReturn(orderId, date)) {
+            return new DailyReversalResult(orderId, date, BigDecimal.ZERO, true, "该日已红冲");
+        }
+        ClinicalRepository.DailyCharge daily = repo.findDailyCharge(orderId, date)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "该医嘱 " + date + " 没有按日计费记录，无需红冲"));
+        Charge charge = repo.lockCharge(daily.chargeId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
+        if (!Charge.UNPAID.equals(charge.status())) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该日费用已结算（" + charge.status() + "），不能直接红冲；请走退费流程");
+        }
+        boolean inserted = repo.insertChargeItem(UUID.randomUUID(), charge.id(), orderId,
+                "DAILY_RETURN:" + orderId + ":" + date, daily.itemCode(),
+                "按日计费红冲 " + daily.itemName(), daily.category(), daily.amount().negate());
+        if (!inserted) {
+            // 并发下另一请求已插入红字明细：按幂等返回，不再重复减总额
+            return new DailyReversalResult(orderId, date, BigDecimal.ZERO, true, "该日已红冲");
+        }
+        if (!repo.addChargeAmount(charge.id(), daily.amount().negate(), charge.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
+        }
+        audit(actor, "DAILY_CHARGE_REVERSE", visitId.toString(), Map.of(
+                "orderNo", order.orderNo(), "serviceDate", date.toString(),
+                "reversedAmount", daily.amount().toPlainString(), "reason", why));
+        return new DailyReversalResult(orderId, date, daily.amount(), false, why);
     }
 
     // ---------------------------------------------------------------- 内部

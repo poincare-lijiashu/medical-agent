@@ -203,6 +203,24 @@ public final class ClinicalDtos {
                                   BigDecimal chargeTotal, List<String> skippedOrderNos) {
     }
 
+    /**
+     * 按日计费红冲请求（P1-1）。
+     *
+     * <p>必须带原因 + 显式二次确认：红冲直接改变患者应收金额，误操作只能靠审计追溯。
+     */
+    public record DailyReverseReq(
+            @NotNull UUID orderId,
+            LocalDate serviceDate,
+            @NotBlank @jakarta.validation.constraints.Size(max = 200, message = "红冲原因不超过 200 字")
+            String reason,
+            @NotNull Boolean confirmed) {
+    }
+
+    /** 按日计费红冲结果；{@code idempotent=true} 表示该日此前已冲过（重复调用安全）。 */
+    public record DailyReversalResult(UUID orderId, LocalDate serviceDate, BigDecimal reversedAmount,
+                                      boolean idempotent, String reason) {
+    }
+
     /** 预交金操作（amount 必须为正；退还时服务端取负）。 */
     public record DepositReq(
             @NotNull @jakarta.validation.constraints.DecimalMin(value = "0.01", message = "金额必须大于 0")

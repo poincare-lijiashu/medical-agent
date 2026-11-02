@@ -472,4 +472,82 @@ class BillingServiceTest {
         assertThat(preview.pendingAmount()).isEqualByComparingTo("6.00");
         assertThat(preview.pendingOrderCount()).isEqualTo(1);
     }
+
+    // ---------------------------------------------------------------- 按日计费红冲（P1-1）
+
+    /** 长嘱：amount 表示"每日金额"，按日计费写 DAILY:{orderId}:{date}。 */
+    private VisitOrder longDailyOrder() {
+        return new VisitOrder(UUID.randomUUID(), "O-LONG", visitId, "TREATMENT", "TRT-IV", "静脉输液",
+                null, "qd", 1, 1, "次", new BigDecimal("10.00"), new BigDecimal("10.00"),
+                VisitOrder.PLACED, "doctor01", 0L, VisitOrder.LONG, LocalDate.now(), null,
+                VisitOrder.TRANSFER_NONE, null, null, null, null);
+    }
+
+    @Test
+    @DisplayName("按日计费红冲：写负向明细并减少收费单总额，金额取当日入账额（P1-1）")
+    void reverseDailyWritesNegativeItemAndReducesCharge() {
+        LocalDate date = LocalDate.now();
+        VisitOrder order = longDailyOrder();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.existsDailyReturn(order.id(), date)).thenReturn(false);
+        when(repo.findDailyCharge(order.id(), date)).thenReturn(Optional.of(
+                new ClinicalRepository.DailyCharge(chargeId, new BigDecimal("10.00"),
+                        "TRT-IV", "静脉输液", "TREATMENT")));
+        when(repo.lockCharge(chargeId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("30.00"), Charge.UNPAID, null, null, 2L)));
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(repo.addChargeAmount(chargeId, new BigDecimal("-10.00"), 2L)).thenReturn(true);
+
+        var result = service.reverseDaily(visitId, order.id(), date, "患者拒绝执行", true, "nurse01");
+
+        assertThat(result.reversedAmount()).isEqualByComparingTo("10.00");
+        assertThat(result.idempotent()).isFalse();
+        verify(repo).insertChargeItem(any(), eq(chargeId), eq(order.id()),
+                eq("DAILY_RETURN:" + order.id() + ":" + date), eq("TRT-IV"),
+                anyString(), eq("TREATMENT"), eq(new BigDecimal("-10.00")));
+        verify(repo).addChargeAmount(chargeId, new BigDecimal("-10.00"), 2L);
+    }
+
+    @Test
+    @DisplayName("按日计费红冲幂等：同日重复调用不再写库，返回 idempotent=true（P1-1）")
+    void reverseDailyIsIdempotent() {
+        LocalDate date = LocalDate.now();
+        VisitOrder order = longDailyOrder();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.existsDailyReturn(order.id(), date)).thenReturn(true);
+
+        var result = service.reverseDaily(visitId, order.id(), date, "患者拒绝执行", true, "nurse01");
+
+        assertThat(result.idempotent()).isTrue();
+        assertThat(result.reversedAmount()).isEqualByComparingTo("0.00");
+        verify(repo, never()).insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(repo, never()).addChargeAmount(any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("已结算的按日费用不允许直接红冲：提示走退费流程（P1-1）")
+    void reverseDailyRejectedWhenChargeSettled() {
+        LocalDate date = LocalDate.now();
+        VisitOrder order = longDailyOrder();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.existsDailyReturn(order.id(), date)).thenReturn(false);
+        when(repo.findDailyCharge(order.id(), date)).thenReturn(Optional.of(
+                new ClinicalRepository.DailyCharge(chargeId, new BigDecimal("10.00"),
+                        "TRT-IV", "静脉输液", "TREATMENT")));
+        when(repo.lockCharge(chargeId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("30.00"), Charge.PAID,
+                "CASH", Instant.now(), 2L)));
+
+        assertThatThrownBy(() -> service.reverseDaily(visitId, order.id(), date,
+                "患者拒绝执行", true, "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+
+        verify(repo, never()).insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any());
+    }
 }
