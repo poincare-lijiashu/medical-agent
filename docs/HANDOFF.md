@@ -25,7 +25,7 @@
   `b28637f`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）、
   `873752a`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）、
   `1a902ea`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）、
-  `HASH_REVIEW3`（**整改第三批：X-Actor 写操作身份守卫**）
+  `bdbaa6c`（**整改第三批：X-Actor 写操作身份守卫**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
 - 工作区：clean（收工前已确认）；全量单测 **790 项**全绿
 - 本机环境（2026-11-02）：**Docker Desktop 未运行**（需人工启动）；`medagent_pg` 容器已停止（`restart=no`）；
