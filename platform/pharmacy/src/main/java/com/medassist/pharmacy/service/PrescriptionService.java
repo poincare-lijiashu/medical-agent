@@ -391,6 +391,22 @@ public class PrescriptionService {
         if (!item.dispenseId().equals(dispenseId)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "该发药明细不属于此发药单");
         }
+
+        // 幂等优先：重试必须回到同一条退药记录。若把幂等判断放在"数量/状态"校验之后，
+        // 第一次已把该明细退满，重试会被误判成"超过可退数量"（422），护士只能人工核对。
+        UUID returnId = req.returnId() == null ? UUID.randomUUID() : req.returnId();
+        var existing = repo.findReturn(returnId);
+        if (existing.isPresent()) {
+            DispenseReturn ret = existing.get();
+            if (!ret.dispenseId().equals(dispenseId)
+                    || !ret.dispenseItemId().equals(req.dispenseItemId())
+                    || ret.quantity() != req.quantity()) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "该退药单号已登记（发药单/明细/数量不同），请核对后刷新");
+            }
+            return dispenseDetail(dispenseId);
+        }
+
         if (req.quantity() > item.returnable()) {
             throw new BusinessException(ErrorCode.DRUG_RETURN_EXCEEDS,
                     "退药数量超过可退数量（已发 " + item.quantity() + "，已退 "
@@ -403,8 +419,14 @@ public class PrescriptionService {
         if (!repo.addBatchQuantity(item.batchId(), req.quantity())) {
             throw new BusinessException(ErrorCode.CONFLICT, "原批次不存在，退药失败");
         }
-        repo.insertReturn(new DispenseReturn(UUID.randomUUID(), dispenseId, item.id(),
-                req.quantity(), req.reason().trim(), actor, null));
+        try {
+            repo.insertReturn(new DispenseReturn(returnId, dispenseId, item.id(),
+                    req.quantity(), req.reason().trim(), actor, null));
+        } catch (DataIntegrityViolationException e) {
+            // 并发双击：另一事务已用同一 returnId 写成功。整笔回滚（含库存回补），
+            // 让调用方按幂等语义重新查询，而不是留下两笔库存流水。
+            throw new BusinessException(ErrorCode.CONFLICT, "该退药单号正在处理中，请刷新后查看");
+        }
 
         List<DispenseItem> all = repo.listDispenseItems(dispenseId);
         boolean allReturned = all.stream().allMatch(i -> i.returnedQuantity() >= i.quantity());
@@ -432,8 +454,9 @@ public class PrescriptionService {
         if (rx != null && rx.chargeOnDispense() && billable(dispense.billingStatus())) {
             billing.scheduleRefund(dispenseId, all, actor);
         } else if (rx != null && rx.sourceOrderId() != null) {
-            // 医嘱计费模式（B3）：钱在临床结算时收，退药必须回冲医嘱金额，否则患者白付钱
-            billing.scheduleOrderRefund(dispenseId, rx.sourceOrderId(), all, actor);
+            // 医嘱计费模式（B3）：钱在临床结算时收，退药必须回冲医嘱金额，否则患者白付钱。
+            // 长嘱必须带上 supplyDate，临床才能定位当日 DAILY:{orderId}:{date} 明细（P0-1）。
+            billing.scheduleOrderRefund(dispenseId, rx.sourceOrderId(), rx.supplyDate(), all, actor);
         }
         return dispenseDetail(dispenseId);
     }

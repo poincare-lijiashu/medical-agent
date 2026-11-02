@@ -592,6 +592,14 @@ public class PharmacyRepository {
                 .param("reason", r.reason()).param("operator", r.operator()).update();
     }
 
+    /** 按退药单号回查（幂等重试用）。 */
+    public java.util.Optional<DispenseReturn> findReturn(UUID returnId) {
+        return jdbc.sql("""
+                        SELECT id, dispense_id, dispense_item_id, quantity, reason, operator, created_at
+                          FROM pharmacy_svc.dispense_return WHERE id = ?
+                        """).param(returnId).query(RETURN_MAPPER).optional();
+    }
+
     public List<DispenseReturn> listReturns(UUID dispenseId) {
         return jdbc.sql("""
                         SELECT id, dispense_id, dispense_item_id, quantity, reason, operator, created_at

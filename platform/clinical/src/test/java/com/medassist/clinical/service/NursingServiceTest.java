@@ -2,6 +2,7 @@ package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
@@ -49,6 +50,14 @@ class NursingServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         service = new NursingService(repo, JsonMapper.builder().build());
+        // record 现在按 visit → admission 的顺序加锁（与按日计费一致，避免 ABBA 死锁）
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(admission(Admission.IN_HOSPITAL)));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit()));
+    }
+
+    private Visit visit() {
+        return new Visit(visitId, "V1", patientId, "P1", wardId, "doctor01", null,
+                "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
     }
 
     private Admission admission(String status) {

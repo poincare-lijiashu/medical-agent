@@ -48,7 +48,7 @@ class OrderRefundServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         service = new OrderRefundService(repo, JsonMapper.builder().build());
-        when(repo.findOrderById(orderId)).thenReturn(Optional.of(order("30.00")));
+        when(repo.lockOrderById(orderId)).thenReturn(Optional.of(order("30.00")));
         when(repo.sumAppliedOrderRefund(orderId)).thenReturn(BigDecimal.ZERO);
     }
 
@@ -60,6 +60,14 @@ class OrderRefundServiceTest {
                 VisitOrder.TRANSFERRED, "PHARMACY", UUID.randomUUID(), "RX1", null);
     }
 
+    /** 长嘱：amount 是"每日金额"，计费走 DAILY:{orderId}:{date}。 */
+    private VisitOrder longOrder(String amount) {
+        return new VisitOrder(orderId, "O2", visitId, "DRUG", "DRG-001", "注射用头孢",
+                "1g", "qd", 1, 2, "支", new BigDecimal("12.50"), new BigDecimal(amount),
+                VisitOrder.PLACED, "doctor01", 0L, VisitOrder.LONG, LocalDate.now(), null,
+                VisitOrder.TRANSFERRED, "PHARMACY", UUID.randomUUID(), "RX2", null);
+    }
+
     private OrderRefund link(BigDecimal applied, BigDecimal pending, BigDecimal done) {
         return new OrderRefund(UUID.randomUUID(), orderId, itemId, visitId,
                 new BigDecimal("30.00"), applied, pending, done);
@@ -67,7 +75,7 @@ class OrderRefundServiceTest {
 
     private OrderRefundReq req(String cumulative) {
         return new OrderRefundReq(orderId, itemId, new BigDecimal("30.00"),
-                new BigDecimal(cumulative), "患者退回", "pharmacist01");
+                new BigDecimal(cumulative), "患者退回", "pharmacist01", null);
     }
 
     @Test
@@ -129,6 +137,46 @@ class OrderRefundServiceTest {
                 eq("ORDER_RETURN:" + itemId + ":10.00"), any(), any(), any(),
                 eq(new BigDecimal("-10.00")));
         verify(repo).addChargeAmount(eq(chargeId), eq(new BigDecimal("-10.00")), eq(2L));
+    }
+
+    @Test
+    @DisplayName("长嘱退药：按供药日期定位当日 DAILY 明细冲减（P0-1 死账修复）")
+    void longTermRefundTargetsDailyChargeItem() {
+        LocalDate supplyDate = LocalDate.now();
+        when(repo.lockOrderById(orderId)).thenReturn(Optional.of(longOrder("25.00")));
+        OrderRefund before = link(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        OrderRefund after = new OrderRefund(UUID.randomUUID(), orderId, itemId, visitId,
+                new BigDecimal("30.00"), new BigDecimal("12.50"), BigDecimal.ZERO, BigDecimal.ZERO);
+        when(repo.lockOrderRefund(itemId)).thenReturn(Optional.of(before), Optional.of(after));
+        when(repo.findChargeIdByDailyItem(orderId, supplyDate)).thenReturn(Optional.of(chargeId));
+        when(repo.lockCharge(chargeId)).thenReturn(Optional.of(new Charge(chargeId, "C1", visitId,
+                new BigDecimal("25.00"), Charge.UNPAID, null, null, 2L)));
+        when(repo.insertChargeItem(any(), any(), any(), anyString(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(repo.addChargeAmount(eq(chargeId), eq(new BigDecimal("-12.50")), eq(2L))).thenReturn(true);
+        when(repo.addOrderRefundApplied(eq(itemId), eq(new BigDecimal("12.50")))).thenReturn(true);
+
+        OrderRefundView view = service.refund(new OrderRefundReq(orderId, itemId,
+                new BigDecimal("30.00"), new BigDecimal("12.50"), "患者拒服", "pharmacist01",
+                supplyDate.toString()));
+
+        assertThat(view.appliedAmount()).isEqualByComparingTo("12.50");
+        verify(repo).findChargeIdByDailyItem(orderId, supplyDate);
+        verify(repo, never()).findChargeIdByOrderItem(orderId);
+        verify(repo).insertChargeItem(any(), any(), eq(orderId),
+                eq("ORDER_RETURN:" + itemId + ":12.50"), any(), any(), any(),
+                eq(new BigDecimal("-12.50")));
+    }
+
+    @Test
+    @DisplayName("长嘱退药：缺供药日期直接 422（不能静默当成未计费）")
+    void longTermRefundWithoutSupplyDateIsRejected() {
+        when(repo.lockOrderById(orderId)).thenReturn(Optional.of(longOrder("25.00")));
+
+        assertThatThrownBy(() -> service.refund(req("10.00")))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).lockOrderRefund(any());
     }
 
     @Test

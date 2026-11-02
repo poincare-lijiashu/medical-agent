@@ -37,7 +37,12 @@ public interface ClinicalChargeClient {
 
     Refunded refund(UUID dispenseItemId, BigDecimal cumulativeRefundAmount, String reason, String actor);
 
-    /** 医嘱计费模式：按"累计已退金额"幂等冲减医嘱（对应 clinical /internal/pharmacy-order-refunds）。 */
+    /**
+     * 医嘱计费模式：按"累计已退金额"幂等冲减医嘱（对应 clinical /internal/pharmacy-order-refunds）。
+     *
+     * @param supplyDate 长嘱的供药日期（ISO yyyy-MM-dd），用于定位当日 DAILY 计费明细；临时医嘱传 null
+     */
     OrderRefunded refundOrder(UUID orderId, UUID dispenseItemId, BigDecimal itemAmount,
-                              BigDecimal cumulativeRefundAmount, String reason, String actor);
+                              BigDecimal cumulativeRefundAmount, String reason, String actor,
+                              String supplyDate);
 }

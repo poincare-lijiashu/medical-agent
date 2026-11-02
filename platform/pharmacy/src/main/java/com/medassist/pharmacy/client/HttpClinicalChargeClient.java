@@ -99,14 +99,15 @@ public class HttpClinicalChargeClient implements ClinicalChargeClient {
 
     @Override
     public OrderRefunded refundOrder(UUID orderId, UUID dispenseItemId, BigDecimal itemAmount,
-                                     BigDecimal cumulativeRefundAmount, String reason, String actor) {
+                                     BigDecimal cumulativeRefundAmount, String reason, String actor,
+                                     String supplyDate) {
         OrderRefundResponse response;
         try {
             response = client.post()
                     .uri("/internal/pharmacy-order-refunds")
                     .header("X-Internal-Token", token)
                     .body(new OrderRefundRequest(orderId, dispenseItemId, itemAmount,
-                            cumulativeRefundAmount, reason, actor))
+                            cumulativeRefundAmount, reason, actor, supplyDate))
                     .retrieve()
                     .body(OrderRefundResponse.class);
         } catch (RestClientException e) {
@@ -141,8 +142,15 @@ public class HttpClinicalChargeClient implements ClinicalChargeClient {
                           BigDecimal doneAmount) {
     }
 
+    /**
+     * 医嘱退药冲减报文。
+     *
+     * <p>{@code supplyDate} 用 ISO 字符串而不是 LocalDate：RestClient 的默认转换器
+     * 会把 LocalDate 序列化成数组，临床侧解析失败（历史踩坑，见 HANDOFF）。
+     */
     record OrderRefundRequest(UUID orderId, UUID dispenseItemId, BigDecimal itemAmount,
-                              BigDecimal cumulativeRefundAmount, String reason, String actor) {
+                              BigDecimal cumulativeRefundAmount, String reason, String actor,
+                              String supplyDate) {
     }
 
     record OrderRefundResponse(UUID dispenseItemId, UUID orderId, UUID visitId, BigDecimal amount,

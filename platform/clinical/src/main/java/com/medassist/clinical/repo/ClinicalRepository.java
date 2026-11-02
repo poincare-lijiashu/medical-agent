@@ -363,6 +363,17 @@ public class ClinicalRepository {
                 .param(orderId).query(ORDER_MAPPER).optional();
     }
 
+    /**
+     * 加行锁读取医嘱；必须在事务内调用。
+     *
+     * <p>退药冲减与结算必须落在同一把行锁上：否则结算按旧净额入账后，
+     * 退药侧再记 applied，医嘱已 CHARGED 不再扣减 → 患者多付且退款记录悬空。
+     */
+    public Optional<VisitOrder> lockOrderById(UUID orderId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.visit_order WHERE id = ? FOR UPDATE")
+                .param(orderId).query(ORDER_MAPPER).optional();
+    }
+
     /** 登记转送补偿任务；同一医嘱已有待处理任务时忽略（唯一索引兜底）。 */
     public void insertTransferTask(UUID id, UUID orderId, UUID visitId, String channel,
                                    String reason, String actor) {
@@ -1396,16 +1407,20 @@ public class ClinicalRepository {
 
     /** 首次退药登记（幂等键 dispense_item_id，并发同一明细只留一条）。 */
     public void insertOrderRefund(UUID id, UUID orderId, UUID dispenseItemId, UUID visitId,
-                                  BigDecimal amount, String reason, String actor) {
+                                  BigDecimal amount, String reason, String actor,
+                                  LocalDate supplyDate) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.order_refund
-                            (id, order_id, dispense_item_id, visit_id, amount, reason, created_by)
-                        VALUES (:id, :orderId, :dispenseItemId, :visitId, :amount, :reason, :actor)
+                            (id, order_id, dispense_item_id, visit_id, amount, reason, created_by,
+                             supply_date)
+                        VALUES (:id, :orderId, :dispenseItemId, :visitId, :amount, :reason, :actor,
+                                :supplyDate)
                         ON CONFLICT (dispense_item_id) DO NOTHING
                         """)
                 .param("id", id).param("orderId", orderId).param("dispenseItemId", dispenseItemId)
                 .param("visitId", visitId).param("amount", amount)
-                .param("reason", reason).param("actor", actor).update();
+                .param("reason", reason).param("actor", actor)
+                .param("supplyDate", supplyDate).update();
     }
 
     /** 未结算已直接冲减的金额合计：结算时从该医嘱金额中扣除。 */
@@ -1416,6 +1431,28 @@ public class ClinicalRepository {
                         """)
                 .param(orderId).query(BigDecimal.class).single();
         return sum == null ? BigDecimal.ZERO : sum;
+    }
+
+    /**
+     * 某长嘱某日已登记但尚未消耗的冲减金额（按日计费时从当日金额里扣除）。
+     *
+     * <p>长嘱退药走的是"先记 applied、当日计费时扣减"这条路径：如果这里漏扣，
+     * applied 就永远没有消费方，退药等于只回库存不退钱（P0-1 的根因）。
+     */
+    public BigDecimal sumAppliedOrderRefund(UUID orderId, LocalDate supplyDate) {
+        BigDecimal sum = jdbc.sql("""
+                        SELECT coalesce(sum(applied_amount), 0)
+                          FROM clinical_svc.order_refund
+                         WHERE order_id = ? AND supply_date = ?
+                        """)
+                .param(orderId).param(supplyDate).query(BigDecimal.class).single();
+        return sum == null ? BigDecimal.ZERO : sum;
+    }
+
+    /** 按按日计费的幂等键定位收费单（长嘱退药冲减用）。 */
+    public Optional<UUID> findChargeIdByDailyItem(UUID orderId, LocalDate supplyDate) {
+        return jdbc.sql("SELECT charge_id FROM clinical_svc.charge_item WHERE source_key = ?")
+                .param("DAILY:" + orderId + ":" + supplyDate).query(UUID.class).optional();
     }
 
     /** 该医嘱已生成的费用明细所属收费单（未结算时为空）。 */
@@ -1588,6 +1625,20 @@ public class ClinicalRepository {
                          WHERE visit_id = ? AND supply_date = ?
                          ORDER BY received_at
                         """).param(visitId).param(supplyDate).query(WARD_RECEIPT_MAPPER).list();
+    }
+
+    /**
+     * 该医嘱当日已累计收药数量。
+     *
+     * <p>收药是按发药单登记的多行记录，上限必须按"当日合计"判断，不能只看单行；
+     * 并发窗口由 V27 触发器（order+date 事务级 advisory lock）兜底。
+     */
+    public int sumWardReceiptQuantity(UUID orderId, LocalDate supplyDate) {
+        Integer sum = jdbc.sql("""
+                        SELECT coalesce(sum(quantity), 0) FROM clinical_svc.ward_med_receipt
+                         WHERE order_id = ? AND supply_date = ?
+                        """).param(orderId).param(supplyDate).query(Integer.class).single();
+        return sum == null ? 0 : sum;
     }
 
     // ---------------------------------------------------------------- 病区二级库存与退药（V26）

@@ -147,12 +147,22 @@ Check 'A.items' (@($a.Items).Count -ge 1) True
 $itemSumA = ($a.Items | Measure-Object -Property amount -Sum).Sum
 CheckAmt 'A.items.amountSum' $itemSumA 25.00
 
+$returnA = [guid]::NewGuid().ToString()
 $r = Invoke-Api 'POST' "/api/v2/pharmacy/dispenses/$($a.DispenseId)/returns" @{
     dispenseItemId = $a.Items[0].id; quantity = 1; reason = 'patient stopped one box'
+    returnId = $returnA
 } $token
 Check 'A.return.ok' $r.Status 200
 Check 'A.return.dispenseStatus' (Res $r).dispense.status 'PARTIAL_RETURNED'
 Check 'A.return.billingStatus' (Res $r).dispense.billingStatus 'NONE'
+
+# same returnId replayed (nurse double-click / network retry): no second stock movement
+$r = Invoke-Api 'POST' "/api/v2/pharmacy/dispenses/$($a.DispenseId)/returns" @{
+    dispenseItemId = $a.Items[0].id; quantity = 1; reason = 'patient stopped one box'
+    returnId = $returnA
+} $token
+Check 'A.return.repeat.ok' $r.Status 200
+Check 'A.return.repeat.oneRecord' (@((Res $r).returns).Count) 1
 
 $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
 $totalBeforeA = [decimal](Res $r).totalAmount

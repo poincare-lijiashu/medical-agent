@@ -29,6 +29,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  REGISTRATION_NO_SLOT, REGISTRATION_DUPLICATED,
                  VISIT_STATUS_INVALID, ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID,
+                 // 转送未完成不是"参数错误"：是流程未走完，语义为业务冲突（结算被拒）
+                 ORDER_TRANSFER_INCOMPLETE,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;

@@ -194,6 +194,13 @@ Check 'receipt.repeat.sameId' (Res $r).id $receiptId
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($orderA.id)/ward-receipts" @{
     dispenseId = $dispAId; supplyDate = $today; quantity = 3
 } $token
+# same dispense slip re-submitted with a different quantity = idempotency conflict
+Check 'receipt.sameDispenseDiffQty.409' $r.Status 409
+
+# a DIFFERENT dispense slip must still respect the daily cumulative quota
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($orderA.id)/ward-receipts" @{
+    dispenseId = [guid]::NewGuid().ToString(); supplyDate = $today; quantity = 1
+} $token
 Check 'receipt.overQuantity.422' $r.Status 422
 
 $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board" $null $token

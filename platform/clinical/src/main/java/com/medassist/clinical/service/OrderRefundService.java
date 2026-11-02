@@ -15,6 +15,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,12 +65,24 @@ public class OrderRefundService {
         if (target.signum() < 0) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "退费金额不能为负");
         }
-        VisitOrder order = repo.findOrderById(req.orderId())
+        // 与结算同锁：结算侧锁 visit/医嘱行后再算净额，这里必须也拿到医嘱行锁，
+        // 否则两边各读各的，会出现"按旧净额收钱 + 退款记在已计费医嘱上"的多收。
+        VisitOrder order = repo.lockOrderById(req.orderId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "医嘱不存在"));
+
+        // 长嘱：退药属于"某一天的药"，必须按当日 DAILY:{orderId}:{date} 明细冲减。
+        // 只按 ORDER:{orderId} 找会永远查不到（长嘱从不产生 ORDER: 明细），
+        // 结果是 applied 只增不减、退药不退钱。
+        LocalDate supplyDate = parseSupplyDate(req.supplyDate());
+        boolean dailyScoped = order.longTerm() && supplyDate != null;
+        if (order.longTerm() && supplyDate == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "长嘱退药必须带供药日期（supplyDate），否则无法定位当日计费明细");
+        }
 
         // 首次退药登记（幂等键 dispense_item_id；并发同明细只留一条）
         repo.insertOrderRefund(UUID.randomUUID(), order.id(), req.dispenseItemId(), order.visitId(),
-                itemAmount, req.reason(), req.actor());
+                itemAmount, req.reason(), req.actor(), supplyDate);
         OrderRefund link = repo.lockOrderRefund(req.dispenseItemId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
                         "退药冲减登记失败，请重试"));
@@ -88,14 +101,14 @@ public class OrderRefundService {
         }
         if (delta.signum() == 0) {
             // 幂等重放：返回当前状态，不再冲账
-            boolean settled = repo.findChargeIdByOrderItem(order.id())
+            boolean settled = locateCharge(order, dailyScoped, supplyDate)
                     .flatMap(repo::findCharge)
                     .map(c -> !Charge.UNPAID.equals(c.status()))
                     .orElse(false);
             return view(link, settled, false);
         }
 
-        Optional<UUID> chargeId = repo.findChargeIdByOrderItem(order.id());
+        Optional<UUID> chargeId = locateCharge(order, dailyScoped, supplyDate);
         boolean settled = false;
         boolean cancelled = false;
         if (chargeId.isPresent()) {
@@ -187,6 +200,26 @@ public class OrderRefundService {
         } catch (JacksonException e) {
             repo.logChange(actor == null || actor.isBlank() ? "pharmacy" : actor, action,
                     "VISIT", visitId, "{\"_detail_serialize_failed\":true}");
+        }
+    }
+
+    /** 定位退药冲减要落到哪张收费单：长嘱按当日 DAILY 明细，临时医嘱按 ORDER: 明细。 */
+    private Optional<UUID> locateCharge(VisitOrder order, boolean dailyScoped, LocalDate supplyDate) {
+        return dailyScoped
+                ? repo.findChargeIdByDailyItem(order.id(), supplyDate)
+                : repo.findChargeIdByOrderItem(order.id());
+    }
+
+    /** 供药日期解析：空串按 null 处理；格式非法直接 422（不能静默当成"未计费"）。 */
+    private static LocalDate parseSupplyDate(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(raw.trim());
+        } catch (RuntimeException e) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "供药日期格式不正确，应为 yyyy-MM-dd：" + raw);
         }
     }
 }

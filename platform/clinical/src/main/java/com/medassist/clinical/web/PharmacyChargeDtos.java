@@ -48,9 +48,13 @@ public final class PharmacyChargeDtos {
      *
      * @param itemAmount             该发药明细金额（可退上限，由药房按发药明细给出）
      * @param cumulativeRefundAmount 该明细累计已退金额（幂等：重复提交同一值不会重复冲账）
+     * @param supplyDate             长嘱的供药日期（ISO yyyy-MM-dd）：用于定位当日 DAILY 明细；
+     *                               临时医嘱传 null。用字符串而不是 LocalDate，是因为跨服务
+     *                               默认转换器会把 LocalDate 序列化成数组（历史踩坑）。
      */
     public record OrderRefundReq(UUID orderId, UUID dispenseItemId, BigDecimal itemAmount,
-                                 BigDecimal cumulativeRefundAmount, String reason, String actor) {
+                                 BigDecimal cumulativeRefundAmount, String reason, String actor,
+                                 String supplyDate) {
     }
 
     /** 医嘱退药冲减视图：applied=未结算直接冲减，pending=已结算待财务退费。 */

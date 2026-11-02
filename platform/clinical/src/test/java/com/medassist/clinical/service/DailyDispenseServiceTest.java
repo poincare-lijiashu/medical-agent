@@ -271,6 +271,46 @@ class DailyDispenseServiceTest {
     }
 
     @Test
+    @DisplayName("收药：换一个发药单也不能突破当日累计请领量（V27 累计上限）")
+    void receiveRejectsCumulativeAboveRequest() {
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.findDailyDispenseRequest(order.id(), LocalDate.now()))
+                .thenReturn(Optional.of(request(2)));
+        when(repo.findWardReceiptByDispense(any())).thenReturn(Optional.empty());
+        // 当日已收 1，本次再收 2 → 合计 3 > 请领 2
+        when(repo.sumWardReceiptQuantity(order.id(), LocalDate.now())).thenReturn(1);
+
+        assertThatThrownBy(() -> service.receive(visitId, order.id(),
+                receiptReq(UUID.randomUUID(), 2), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).insertWardReceipt(any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
+    @DisplayName("收药：已收满当日额度时，同一发药单重试仍幂等返回（不被累计校验误拦）")
+    void receiveReplayStillIdempotentWhenQuotaFull() {
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        UUID dispenseId = UUID.randomUUID();
+        WardMedReceipt existing = new WardMedReceipt(UUID.randomUUID(), request(2).id(), order.id(),
+                visitId, dispenseId, LocalDate.now(), 2, 0, WardMedReceipt.RECEIVED, "nurse01");
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.findDailyDispenseRequest(order.id(), LocalDate.now()))
+                .thenReturn(Optional.of(request(2)));
+        when(repo.findWardReceiptByDispense(dispenseId)).thenReturn(Optional.of(existing));
+
+        var view = service.receive(visitId, order.id(), receiptReq(dispenseId, 2), "nurse01");
+
+        assertThat(view.quantity()).isEqualTo(2);
+        verify(repo, never()).insertWardReceipt(any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
     @DisplayName("收药：临时药品医嘱不适用（只有长嘱按日备药）")
     void receiveRejectsTemporaryOrder() {
         VisitOrder temp = new VisitOrder(UUID.randomUUID(), "O2", visitId, "DRUG",

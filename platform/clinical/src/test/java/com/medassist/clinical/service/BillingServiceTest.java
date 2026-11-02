@@ -56,6 +56,7 @@ class BillingServiceTest {
         when(repo.listCharges(visitId)).thenReturn(List.of());
         // 真实实现无冲减记录时返回 0；mock 默认 null 会让 subtract 抛 NPE
         when(repo.sumAppliedOrderRefund(any())).thenReturn(BigDecimal.ZERO);
+        when(repo.sumAppliedOrderRefund(any(), any())).thenReturn(BigDecimal.ZERO);
     }
 
     private Visit visit(String status) {
@@ -278,6 +279,54 @@ class BillingServiceTest {
         assertThat(second.orderCount()).isZero();
         assertThat(second.billedAmount()).isEqualByComparingTo("0");
         verify(repo, times(1)).addChargeAmount(any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("按日计费：当日退药冲减必须从当日金额里扣掉（否则 applied 永不消费）")
+    void dailyBillDeductsAppliedRefund() {
+        LocalDate today = LocalDate.now();
+        Charge unpaid = new Charge(chargeId, "C1", visitId, BigDecimal.ZERO,
+                Charge.UNPAID, null, null, 1L);
+        VisitOrder longOrder = longOrderOf("O2", "16.00");
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient()));
+        when(repo.lockOpenCharge(visitId)).thenReturn(Optional.of(unpaid));
+        when(repo.lockBillableLongOrders(visitId, today)).thenReturn(List.of(longOrder));
+        when(repo.listNursingExecutions(visitId, today)).thenReturn(List.of());
+        when(repo.sumAppliedOrderRefund(longOrder.id(), today)).thenReturn(new BigDecimal("6.00"));
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(repo.addChargeAmount(eq(chargeId), eq(new BigDecimal("10.00")), eq(1L))).thenReturn(true);
+        when(repo.findCharge(chargeId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("10.00"), Charge.UNPAID, null, null, 2L)));
+
+        DailyBillResult result = service.dailyBill(visitId, today, "clerk01");
+
+        assertThat(result.billedAmount()).isEqualByComparingTo("10.00");
+        verify(repo).insertChargeItem(any(), any(), eq(longOrder.id()),
+                eq("DAILY:" + longOrder.id() + ":" + today), any(), any(), any(),
+                eq(new BigDecimal("10.00")));
+    }
+
+    @Test
+    @DisplayName("按日计费：当日被整单退回（净额 0）时跳过计费")
+    void dailyBillSkipsFullyRefundedOrder() {
+        LocalDate today = LocalDate.now();
+        Charge unpaid = new Charge(chargeId, "C1", visitId, BigDecimal.ZERO,
+                Charge.UNPAID, null, null, 1L);
+        VisitOrder longOrder = longOrderOf("O2", "16.00");
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient()));
+        when(repo.lockOpenCharge(visitId)).thenReturn(Optional.of(unpaid));
+        when(repo.lockBillableLongOrders(visitId, today)).thenReturn(List.of(longOrder));
+        when(repo.listNursingExecutions(visitId, today)).thenReturn(List.of());
+        when(repo.sumAppliedOrderRefund(longOrder.id(), today)).thenReturn(new BigDecimal("16.00"));
+        when(repo.findCharge(chargeId)).thenReturn(Optional.of(unpaid));
+
+        DailyBillResult result = service.dailyBill(visitId, today, "clerk01");
+
+        assertThat(result.orderCount()).isZero();
+        assertThat(result.billedAmount()).isEqualByComparingTo("0");
+        assertThat(result.skippedOrderNos()).containsExactly(longOrder.orderNo());
+        verify(repo, never()).insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

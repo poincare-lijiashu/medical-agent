@@ -47,6 +47,12 @@ public class NursingService {
 
     @Transactional
     public NursingExecutionView record(UUID admissionId, NursingExecutionReq req, String actor) {
+        // 锁顺序必须是 visit → admission（与结算/按日计费一致），否则与 dailyBill 的
+        // visit 锁形成 ABBA 死锁；先无锁读出 visitId，再按统一顺序加锁。
+        Admission snapshot = repo.findAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        repo.lockVisit(snapshot.visitId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "就诊不存在"));
         Admission admission = repo.lockAdmission(admissionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
         if (!admission.active()) {

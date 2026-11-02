@@ -235,10 +235,18 @@ public class BillingService {
         BigDecimal addAmount = BigDecimal.ZERO;
         int billed = 0;
         for (VisitOrder o : billable) {
+            // 退药冲减（P0-1）：长嘱退药先记 applied，必须在这里消费掉，否则
+            // applied 永远不减、退药只回库存不退钱。当日退满则整行跳过不计费。
+            BigDecimal net = o.amount().subtract(repo.sumAppliedOrderRefund(o.id(), billDate))
+                    .setScale(2, RoundingMode.HALF_UP);
+            if (net.signum() <= 0) {
+                skipped.add(o.orderNo());
+                continue;
+            }
             String sourceKey = "DAILY:" + o.id() + ":" + billDate;
             if (repo.insertChargeItem(UUID.randomUUID(), charge.id(), o.id(), sourceKey,
-                    o.itemCode(), o.itemName(), categoryOf(o), o.amount())) {
-                addAmount = addAmount.add(o.amount());
+                    o.itemCode(), o.itemName(), categoryOf(o), net)) {
+                addAmount = addAmount.add(net);
                 billed++;
             }
         }

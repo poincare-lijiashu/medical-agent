@@ -26,6 +26,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.common.time.BusinessTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -160,11 +161,9 @@ public class DailyDispenseService {
                 .filter(r -> r.prescriptionId() != null)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED,
                         "该医嘱当日尚未成功请领，不能收药"));
-        if (req.quantity() > request.quantity()) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "收药数量不能超过当日请领数量（" + request.quantity() + "）");
-        }
 
+        // 幂等优先：同一发药单的重试必须原样返回。若先做数量校验，
+        // 第一次已把当日额度收满时，重试会被误判成"超过请领数量"（422）。
         Optional<WardMedReceipt> existing = repo.findWardReceiptByDispense(req.dispenseId());
         if (existing.isPresent()) {
             WardMedReceipt receipt = existing.get();
@@ -175,8 +174,23 @@ public class DailyDispenseService {
             return toView(receipt);
         }
 
-        repo.insertWardReceipt(UUID.randomUUID(), request.id(), orderId, visitId,
-                req.dispenseId(), req.supplyDate(), req.quantity(), actor);
+        // 累计上限：收药是按发药单登记的多行，上限必须按"当日合计"判断；
+        // 换一个 dispenseId 再登记也必须受同一上限约束（V27 触发器兜底并发）。
+        int received = repo.sumWardReceiptQuantity(orderId, req.supplyDate());
+        if (received + req.quantity() > request.quantity()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "累计收药数量不能超过当日请领数量（请领 " + request.quantity()
+                            + "，已收 " + received + "，本次 " + req.quantity() + "）");
+        }
+
+        try {
+            repo.insertWardReceipt(UUID.randomUUID(), request.id(), orderId, visitId,
+                    req.dispenseId(), req.supplyDate(), req.quantity(), actor);
+        } catch (DataIntegrityViolationException e) {
+            // 并发窗口：另一事务刚收满当日额度（V27 触发器拒绝），或同一发药单被并发登记
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "收药数量已变化（可能已超过当日请领量），请刷新后重试");
+        }
         WardMedReceipt saved = repo.findWardReceiptByDispense(req.dispenseId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
                         "收药登记失败，请重试"));

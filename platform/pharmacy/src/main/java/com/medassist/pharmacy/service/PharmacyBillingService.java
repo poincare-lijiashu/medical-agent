@@ -17,6 +17,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -137,21 +138,22 @@ public class PharmacyBillingService {
      * <p>临床侧按 {@code dispenseItemId} + "累计已退金额"幂等：未计费记 applied（结算时扣减）、
      * 已计费未结算写负向明细、已结算登记待财务退费。
      */
-    public void scheduleOrderRefund(UUID dispenseId, UUID orderId, List<DispenseItem> items,
-                                    String actor) {
+    public void scheduleOrderRefund(UUID dispenseId, UUID orderId, LocalDate supplyDate,
+                                    List<DispenseItem> items, String actor) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            orderRefundNow(dispenseId, orderId, items, actor);
+            orderRefundNow(dispenseId, orderId, supplyDate, items, actor);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                orderRefundNow(dispenseId, orderId, items, actor);
+                orderRefundNow(dispenseId, orderId, supplyDate, items, actor);
             }
         });
     }
 
-    private void orderRefundNow(UUID dispenseId, UUID orderId, List<DispenseItem> items, String actor) {
+    private void orderRefundNow(UUID dispenseId, UUID orderId, LocalDate supplyDate,
+                                List<DispenseItem> items, String actor) {
         boolean pending = false;
         int cancelled = 0;
         try {
@@ -164,7 +166,8 @@ public class PharmacyBillingService {
                         .setScale(2, RoundingMode.HALF_UP);
                 ClinicalChargeClient.OrderRefunded refunded = client.refundOrder(orderId, item.id(),
                         item.amount().setScale(2, RoundingMode.HALF_UP), cumulative,
-                        "退药 " + item.batchNo(), actor);
+                        "退药 " + item.batchNo(), actor,
+                        supplyDate == null ? null : supplyDate.toString());
                 pending = pending || refunded.pendingAmount().signum() > 0;
                 if (refunded.orderCancelled()) {
                     cancelled++;
@@ -207,7 +210,8 @@ public class PharmacyBillingService {
             String billingStatus = dispense.billingStatus();
             if (Dispense.BILLING_REFUND_FAILED.equals(billingStatus)
                     || Dispense.BILLING_REFUND_PENDING.equals(billingStatus)) {
-                orderRefundNow(dispenseId, orderId, repo.listDispenseItems(dispenseId), actor);
+                orderRefundNow(dispenseId, orderId, rx.supplyDate(),
+                        repo.listDispenseItems(dispenseId), actor);
                 return repo.findDispense(dispenseId).orElseThrow();
             }
             return dispense; // NONE：没有待同步的冲减，幂等返回

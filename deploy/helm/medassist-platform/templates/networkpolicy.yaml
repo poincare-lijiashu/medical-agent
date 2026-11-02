@@ -106,6 +106,23 @@ spec:
           podSelector:
             matchLabels:
               {{- include "medassist.selectorLabels" (dict "root" $ "component" "insurance") | nindent 14 }}
+        # 药房回写发药计费/退药冲减（pharmacy → clinical /internal/pharmacy-charges）
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "pharmacy") | nindent 14 }}
+        {{- end }}
+        {{- if or (eq $component "pharmacy") (eq $component "tech") }}
+        # 临床直连药房建处方、直连医技建检查/检验申请（不经网关）。
+        # 漏这一段时 prod 开 NetworkPolicy 后链路只会超时，不会报明确的鉴权错误（P0-6）。
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 14 }}
         {{- end }}
         {{- if eq $component "emr" }}
         # 医保域 DRG 模拟分组读取病案首页手术操作（第六轮 MF-10：prod 开了 NetworkPolicy，缺此段必 403/超时）
