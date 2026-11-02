@@ -89,7 +89,40 @@ description: 为本项目（医院临床信息系统）设计与评审生产级 
 - [ ] 1440 / 1728 两档宽度下不塌；窄屏 inspector 折行有序
 - [ ] `prefers-reduced-motion` 下动画关闭
 
-## 9. 参考来源（只取方法，不复制视觉）
+## 9. 外部规范摘录（2026-11-02 实读 GitHub）
+
+> `raw.githubusercontent.com` 被本机网络策略拦截，`github.com` 页面可读；同时读取了本机已安装的
+> `frontend-design` / `uicraft` / `stark:web-design` 原文（与上游同源）。
+
+**Taste Skill v2.1（Leonxlnx/taste-skill，dashboard 路线）**
+
+- 运营界面用"安静的面板、对齐的数字、把颜色花在数据上"；导航在窄屏折叠。
+- 图表与数据必须诚实：没有数据就不要画趋势，不伪造涨跌。
+- 真实浏览器三种宽度检查；对截图自评，**每轮只修最严重的 3 个问题**，最多 3 轮。
+
+**Impeccable（pbakaus/impeccable，24 命令）**
+
+- 目标要窄：一个 section 的深度评审优于整页泛看。
+- 命令分成四组：steer（bolder/quieter/distill/colorize/typeset/layout/animate）、
+  review（critique/audit）、finish（polish/harden/clarify/adapt/optimize/onboard）、
+  plan（shape/init/document/extract）。
+- 先把现有视觉系统写进 `DESIGN.md`，后续改动才"在品牌内"；重复模式要 extract 成设计系统。
+
+**frontend-design（Anthropic）**
+
+- 先选一个明确方向并执行到底；避免通用 AI 审美（Inter/Roboto/system、紫渐变、模板化版式）。
+- 克制的设计靠间距、字阶与细节精度取胜，不靠堆特效。
+
+**UICraft（Impeccable 衍生）**
+
+- 决策优先级：用户约束 > 既有品牌 > 任务与可访问性 > 审美默认值。
+- 先测量再断言：对比度、性能、键盘可达必须实测。
+
+**stark:web-design**
+
+- 先判表面类型（运营台/编辑器/结账/营销页），运营台以可用密度和状态覆盖为先，不做滚动叙事。
+
+## 10. 参考来源（只取方法，不复制视觉）
 
 - `frontend-design`（Anthropic）：先定方向、拒绝通用 AI 审美。
 - `UICraft`（Impeccable 衍生）：决策优先级、实现→验证→迭代的闭环。
