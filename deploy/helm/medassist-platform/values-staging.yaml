@@ -47,10 +47,13 @@ migration:
 # 直连业务端口伪造 X-User-Id/X-Permissions 即可越权读 PHI。
 # 阶段二（v2/Ed25519）：网关只持私钥、业务服务只持公钥；调用方密钥按组件裁剪。
 # 升级前必须先在 Secret medassist-internal-hmac 中预置：
-#   gateway-private-key / gateway-public-key / clinical / emr / insurance / pharmacy / tech
+#   gateway-private-key / gateway-public-key /
+#   auth / empi / kb / clinical / emr / insurance / pharmacy / tech
 # 切换顺序见 deploy/README.md §4.2.1。
 internalAuth:
   mode: enforce
+  # P0-9：/internal/** 必须由调用方签名；服务端在"生产环境 + false"时拒绝启动
+  internalPathsSignatureRequired: true
   gatewaySigning: ed25519
   acceptEd25519: true
   mountCallerKeys: true

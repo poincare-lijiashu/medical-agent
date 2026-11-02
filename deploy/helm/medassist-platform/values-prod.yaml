@@ -54,10 +54,16 @@ migration:
 # 阶段二（v2/Ed25519）：网关只持私钥（gateway-private-key），业务服务只持公钥
 # （gateway-public-key）——任一业务服务沦陷都无法伪造网关身份（R5-M3）。
 # 升级前必须先在 Secret medassist-internal-hmac 中预置：
-#   gateway-private-key / gateway-public-key / clinical / emr / insurance / pharmacy / tech
+#   gateway-private-key / gateway-public-key /
+#   auth / empi / kb / clinical / emr / insurance / pharmacy / tech
+# （每个服务都需要"自己的"调用方密钥：internalPathsSignatureRequired=true 时启动期校验）
 # 切换顺序与回滚见 deploy/README.md §4.2.1；缺键的表现是 Pod CreateContainerConfigError。
 internalAuth:
   mode: enforce
+  # P0-9：/internal/** 必须由调用方签名（按 caller 分配密钥）。
+  # 只靠 X-Internal-Token 单值令牌时，一处泄露即可冒充任意调用方读 PHI；
+  # 服务端在"生产环境 + 本开关为 false"时直接拒绝启动。
+  internalPathsSignatureRequired: true
   gatewaySigning: ed25519
   acceptEd25519: true
   # 终态：业务服务不再持有对称密钥（从既有 HMAC 部署升级时先保持 true，

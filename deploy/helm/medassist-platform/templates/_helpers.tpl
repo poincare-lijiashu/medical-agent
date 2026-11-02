@@ -184,6 +184,15 @@ Java 服务公共环境变量。
   value: {{ $ia.nonceTtlSeconds | default 180 | quote }}
 - name: MEDASSIST_INTERNALAUTH_INTERNALPATHSSIGNATUREREQUIRED
   value: {{ $ia.internalPathsSignatureRequired | default false | quote }}
+{{- if eq .component "auth" }}
+# 网关→auth 的撤销名单同步（/internal/revocations）只带 X-Internal-Token：
+# 网关是 WebFlux 应用，不装配 servlet 侧的调用方签名器（v1i 为 HMAC），无法签该请求；
+# 该端点只返回已撤销 jti（无 PHI），由 AuthController fail-closed 校验令牌 +
+# NetworkPolicy 限制为仅网关可达。故在 auth 上单独豁免签名（P0-9 收口的前置条件）。
+# 注意：exempt-paths 一旦显式配置会**整体替换**服务端默认值，因此这里必须列全。
+- name: MEDASSIST_INTERNALAUTH_EXEMPTPATHS
+  value: {{ $ia.authExemptPaths | default "/actuator/health/**,/actuator/info,/actuator/prometheus,/internal/revocations" | quote }}
+{{- end }}
 {{- if and $isGateway (eq $signing "ed25519") }}
 - name: MEDASSIST_INTERNALAUTH_GATEWAYSIGNING
   value: "ed25519"

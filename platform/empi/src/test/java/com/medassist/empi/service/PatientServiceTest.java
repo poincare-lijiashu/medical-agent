@@ -12,6 +12,7 @@ import com.medassist.empi.web.dto.UpdatePatientReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
@@ -54,7 +55,8 @@ class PatientServiceTest {
         cipher = new FieldCipher(
                 Base64.getEncoder().encodeToString("0123456789abcdef0123456789abcdef"
                         .getBytes(StandardCharsets.UTF_8)),
-                "unit-test-salt-0123456789");
+                "unit-test-salt-0123456789",
+                new MockEnvironment().withProperty("spring.application.name", "platform-empi"));
         service = new PatientService(repo, cipher, JsonMapper.builder().build());
     }
 

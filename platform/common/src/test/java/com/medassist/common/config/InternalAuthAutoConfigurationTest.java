@@ -23,7 +23,10 @@ class InternalAuthAutoConfigurationTest {
             + "\"},\"internal\":{\"clinical\":\"" + KEY + "\"}}";
 
     private final WebApplicationContextRunner runner = new WebApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(InternalAuthAutoConfiguration.class));
+            .withConfiguration(AutoConfigurations.of(InternalAuthAutoConfiguration.class))
+            // 显式声明非生产：isProduction 现在"无 profile 即按生产处理"（P0-10 ③ 缺省拒绝），
+            // 单元测试必须显式声明 dev，否则每个用例都会命中生产守卫。
+            .withPropertyValues("spring.profiles.active=dev");
 
     @Test
     void registersFilterAndRegistrationBeanWhenKeysConfigured() {
@@ -184,6 +187,21 @@ class InternalAuthAutoConfigurationTest {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasMessageContaining("gateway-signing");
+                });
+    }
+
+    @Test
+    void rejectsProductionWithoutInternalCallerSignature() {
+        // P0-9：生产只靠单值共享令牌时，一处令牌泄露即可冒充任意调用方读 PHI
+        runner.withPropertyValues(
+                        "spring.profiles.active=prod",
+                        "medassist.internal-auth.mode=enforce",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON,
+                        "medassist.internal-auth.internal-paths-signature-required=false")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("internal-paths-signature-required");
                 });
     }
 

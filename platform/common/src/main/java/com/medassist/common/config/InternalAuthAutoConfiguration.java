@@ -113,6 +113,14 @@ public class InternalAuthAutoConfiguration {
             throw new IllegalStateException(
                     "生产/预发布环境不允许关闭服务间签名校验（medassist.internal-auth.mode=off），服务拒绝启动");
         }
+        // P0-9：/internal/** 只靠单值共享令牌时，一处令牌泄露即可冒充任意调用方读 PHI。
+        // 生产必须要求调用方签名（按 caller 分配密钥），与 mode=off 同规格 fail-fast。
+        if (SecurityDefaults.isProduction(environment)
+                && !props.internalPathsSignatureRequiredOrDefault()) {
+            throw new IllegalStateException(
+                    "生产/预发布环境必须开启 /internal/** 调用方签名"
+                            + "（medassist.internal-auth.internal-paths-signature-required=true），服务拒绝启动");
+        }
         if (InternalAuthProperties.LOG.equals(mode) && !keySet.configured() && gatewayPublicKey == null) {
             log.warn("medassist.internal-auth.mode=log 但未配置 keys-json / gateway-public-key："
                     + "所有请求都无法验签，仅记录日志");

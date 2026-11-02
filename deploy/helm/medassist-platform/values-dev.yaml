@@ -29,6 +29,9 @@ secrets:
   internalHmacGatewayPrivateKey: "MC4CAQAwBQYDK2VwBCIEINDcfZdPSmSnEW0FLthFxoudUwEZgBw0QpGr/9h2ck9w"
   internalHmacGatewayPublicKey: "MCowBQYDK2VwAyEAz1qL3EpbsXBMYYM5vxG03IXNAKkJmd4ZVGj3EwjkpOM="
   internalCallerKeys:
+    auth: "bWVkYXNzaXN0LWRldi1hdXRoLS0tLS0tLS0tLS0tLS0="
+    empi: "bWVkYXNzaXN0LWRldi1lbXBpLS0tLS0tLS0tLS0tLS0="
+    kb: "bWVkYXNzaXN0LWRldi1rYi0tLS0tLS0tLS0tLS0tLS0="
     clinical: "bWVkYXNzaXN0LWRldi1jbGluaWNhbC0tLS0tLS0tLS0="
     emr: "bWVkYXNzaXN0LWRldi1lbXItLS0tLS0tLS0tLS0tLS0="
     insurance: "bWVkYXNzaXN0LWRldi1pbnN1cmFuY2UtLS0tLS0tLS0="

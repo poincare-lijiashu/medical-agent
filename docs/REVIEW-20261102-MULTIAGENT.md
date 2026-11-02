@@ -20,16 +20,23 @@
 | P0-12 | 成立 | 新增 `ClinicalRepository.lockOrderById`（`FOR UPDATE`），退药冲减与结算同锁 | 单测全绿 |
 | P1-2 | 成立（实锤） | `ORDER_TRANSFER_INCOMPLETE` → 409；新增 `ClinicalExceptionMappingTest`（全枚举遍历 + 高危码精确断言 + 禁 5xx） | 单测 +3 |
 | P1-11（部分） | 成立 | `dispense_return` 补 UPDATE/DELETE 触发器（其余旁证表仍在待办） | 迁移随 V9 生效 |
+| P0-4 | 成立 | `insurance V15`：`settlement_export_item` 在 GENERATED/ACCEPTED 批次内禁止 UPDATE/DELETE（对齐 `emr V12` 的 `guard_hqms_item`）；纠正报盘只能走批次级 `CANCELLED` | 迁移在真实库事务内试跑通过；`db_guardrails.ps1` 新增 `exportItem.updateBlocked` / `exportItem.deleteBlocked` 两条反例 |
+| P0-7 | 成立 | ai-core 改 `strategy: Recreate`（`values.yaml` 可覆盖），开启 PDB（`minAvailable: 0`）；根因是单副本 + RWO 卷，RollingUpdate 的新 Pod 抢不到卷会永久 Pending | `alpine/helm` 渲染 prod/staging：仅 ai-core 为 `Recreate`，PDB `minAvailable: 0` |
+| P0-9 | 成立 | ① `InternalAuthAutoConfiguration`：生产环境 `internal-paths-signature-required=false` **拒绝启动**；② `values-prod`/`values-staging` 置 `true`；③ 修正 `callerKeys` 矩阵（原缺 clinical→pharmacy/tech、pharmacy→clinical），并为 auth/empi/kb 补自身密钥；④ auth 单独豁免 `/internal/revocations`（网关是 WebFlux，无 v1i 签名器；该端点仍由 `X-Internal-Token` fail-closed + NetworkPolicy 守卫） | 新增单测 `rejectsProductionWithoutInternalCallerSignature`；三环境 `helm template` 渲染通过 |
+| P0-10（②③） | 部分成立 | ① `FieldCipher`：生产环境使用 dev 默认 `EMPI_FIELD_KEY`/`EMPI_HASH_SALT`（按 SHA-256 指纹比对）**拒绝启动**；② `SecurityDefaults` 改为**缺省即生产**：显式 `MEDASSIST_ENV`（dev/local/test/ci/sandbox 之外一律生产）→ 集群内 → prod 类 profile → 无 active profile → 生产；③ dev 令牌改 `.env` 注入未做（镜像已物理排除 `application-dev.yml`，风险低） | 新增 4 个 `SecurityDefaultsTest` 用例（无 profile/null env/MEDASSIST_ENV 优先级） |
 
-**本轮实测**：全量单测 **857 项**全绿（846 → 857）；真实库迁移 `clinical_svc → V28`、`pharmacy_svc → V9`；E2E `clinical_long_dispense_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `platform_smoke` 全 PASS。
+**本轮实测**：全量单测 **861 项**全绿（846 → 857 → 861）；真实库迁移 `clinical_svc → V28`、`pharmacy_svc → V9`、`insurance_svc → V15`；`db_guardrails.ps1` **15 项反例全 PASS**（含新增的报盘明细改/删两条）；E2E `clinical_long_dispense_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
+
+> 仍待办：**P0-8（内部签名不覆盖 body）**——需要在出站侧对请求体做缓冲/预序列化才能把 SHA-256 纳入规范串，
+> 属"改协议"级别，须配灰度开关（先只校验 GET/DELETE）落地，留作下一批。
 
 ### 加勉（复核后不成立或需降级）
 
 | 编号 | 复核结论 |
 |---|---|
-| P0-9 / P0-10（部分） | **部分成立**：JWT 默认密钥确实在仓库，但 `SecurityDefaults.isProduction` 已覆盖 `prod/production/staging/k8s` + K8s 环境变量，且有单测；`Dockerfile` 用 `-Pprod-package` 物理排除 `application-dev.yml`。真实缺口只剩两条：① EMPI 字段密钥无同等级守卫；② 裸机部署且未设 profile 时守卫整体失效。按 P0-10 的"显式 `MEDASSIST_ENV` 必填"收口即可，**不必推倒重来** |
-| P0-7（ai-core RWO） | **未复核**：结论来自子智能体对 Helm 的静态阅读，集群未验证。整改前应先 `helm template` + 集群 dry-run 确认实际卷类型与 Pod 数量 |
-| P0-5（作废 vs 报盘） | **未复核**：需先确认 `InsuranceService.voidBill` 是否已走批次级状态迁移；若已走，则该风险仅存在于直连库路径 |
+| P0-9 / P0-10（部分） | **部分成立（已收口）**：JWT 默认密钥确实在仓库，但 `platform/Dockerfile` 用 `-Pprod-package` 物理排除 `application-dev.yml`，`SecurityDefaults` 已覆盖 prod/staging/k8s + K8s 环境变量。真实缺口是：① EMPI 字段密钥无同等级守卫；② 裸机部署未设 profile 时守卫整体失效；③ `/internal/**` 默认不要求调用方签名。本轮已按"缺省拒绝"收口（见上表 P0-9 / P0-10），**未推倒重来** |
+| P0-7（ai-core RWO） | **已复核并整改**：模板确为单副本 + 两块 `ReadWriteOnce` 卷 + `RollingUpdate`，新 Pod 抢不到卷会永久 Pending。已改 `Recreate` + 开 PDB（见上表） |
+| P0-5（作废 vs 报盘） | **复核后不成立**：`voidBill` 先 `lockBillById`（`FOR UPDATE`），报盘侧 `listConfirmedBills` 带 `FOR SHARE OF b`（第四轮 SF-07 已加）。两者落在同一张 `settlement_bill` 行锁上：报盘先提交则作废能看到批次并拒绝；作废先提交则报盘在 READ COMMITTED 下重判条件、VOIDED 行不再入选。V13 触发器只作为"直连库写入"的兜底，不承担并发正确性 |
 | P2-14（Clock 注入） | **建议保留但不紧急**：381 处 `now()` 是事实，但现有 E2E 未出现跨日 flaky，属"加勉"级别 |
 
 > 其余 P0/P1/P2 项**仍按原意见待办**，未在本轮改动。

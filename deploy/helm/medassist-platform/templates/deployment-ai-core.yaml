@@ -19,11 +19,20 @@ spec:
   replicas: {{ .Values.aiCore.replicaCount }}
   {{- end }}
   revisionHistoryLimit: {{ .Values.aiCore.revisionHistoryLimit }}
+  {{- /*
+    P0-7：ai-core 挂载 ReadWriteOnce 卷（模型 + 运行态数据）且默认单副本。
+    RollingUpdate 会先起新 Pod 再停旧 Pod，新 Pod 永远抢不到同一块 RWO 卷 →
+    永久 Pending，Deployment 卡在 Progressing，发布无法推进也无法回滚。
+    Recreate 用"短暂停机"换"可发布/可回滚"；要恢复零停机必须先多副本化，
+    前提是把 /app/data 的 JSON 状态迁到 PG/Redis、模型走 ReadOnlyMany 共享存储。
+  */}}
   strategy:
-    type: RollingUpdate
+    type: {{ .Values.aiCore.strategy | default "Recreate" }}
+    {{- if eq (.Values.aiCore.strategy | default "Recreate") "RollingUpdate" }}
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+    {{- end }}
   selector:
     matchLabels:
       {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}

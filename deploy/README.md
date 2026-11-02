@@ -162,21 +162,30 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
 | `keys-json` | `{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}` | 网关（`gatewaySigning=hmac`）/ 业务服务（`acceptHmacV1=true`） |
 | `gateway-private-key` | Ed25519 私钥 PKCS#8，base64 | **仅网关** |
 | `gateway-public-key` | Ed25519 公钥 X.509，base64 | 仅业务服务 |
-| `clinical` `emr` `insurance` `pharmacy` `tech` | 每调用方 HMAC 密钥（base64 32B） | 自己的 + 直接调用方的（矩阵见下） |
+| `clinical` `emr` `insurance` `pharmacy` `tech` `auth` `empi` `kb` | 每调用方 HMAC 密钥（base64 32B） | 自己的 + 直接调用方的（矩阵见下） |
+
+> `internalPathsSignatureRequired=true`（staging/prod 强制）时，**每个服务都必须有自己的密钥**：
+> 启动期 `InternalCallerSigner` 会校验"本服务调用方密钥是否存在"，缺失直接拒绝启动。
+> 因此即使 auth/empi/kb 目前不发起内部调用，也要在 Secret 里预置同名键。
 
 调用方密钥矩阵（`internalAuth.callerKeys`，Helm 自动按组件注入）：
 
 | 组件 | 挂载的调用方密钥 | 原因 |
 |---|---|---|
-| gateway | — | 网关不参与 `/internal/**` 调用 |
-| empi | clinical, emr, insurance, pharmacy, tech | 被这 5 个服务调用查患者 |
-| clinical | clinical, emr, insurance | 自己签发；emr / insurance 会调临床内部接口 |
+| gateway | — | 网关不参与 `/internal/**` 调用（例外：同步撤销名单见下方"豁免"） |
+| empi | empi, clinical, emr, insurance, pharmacy, tech | 自己签发；被这 5 个服务调用查患者 |
+| clinical | clinical, emr, insurance, pharmacy | 自己签发；emr / insurance / pharmacy 会调临床内部接口 |
 | emr | emr, insurance | 自己签发；医保域 DRG 模拟分组会调病案首页内部接口 |
-| pharmacy | pharmacy | 自己签发 |
-| tech | tech | 自己签发 |
+| pharmacy | pharmacy, clinical | 自己签发；clinical 建处方/撤销处方会调药房内部接口 |
+| tech | tech, clinical | 自己签发；clinical 建/撤检查检验申请会调医技内部接口 |
 | insurance | insurance | 自己签发 |
-| kb | — | 知识库不调用其它域内部接口（检索与索引都是本地数据） |
-| auth | — | 不调用内部接口 |
+| kb | kb | 知识库不调用其它域内部接口（保留自身条目以满足启动校验） |
+| auth | auth | 不调用内部接口（保留自身条目以满足启动校验） |
+
+**豁免**：`/internal/revocations`（网关 → auth 撤销名单同步）只带 `X-Internal-Token`。
+网关是 WebFlux 应用，不装配 servlet 侧的 `v1i` 调用方签名器，无法签该请求；
+该端点由 `AuthController` fail-closed 校验令牌、并由 NetworkPolicy 限制为仅网关可达，
+因此 Chart 对 **auth** 单独下发 `MEDASSIST_INTERNALAUTH_EXEMPTPATHS`（含 health/info/prometheus + revocations）。
 
 服务间地址与令牌矩阵（新增调用边必须"地址 + 网络策略 + 调用方密钥"三件套齐全）：
 
@@ -187,8 +196,11 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
 | insurance → empi | `EMPI_INTERNAL_URI` | empi 入站放行 insurance | `empi: [..., insurance, ...]` |
 | pharmacy → empi | `EMPI_INTERNAL_URI` | empi 入站放行 pharmacy | `empi: [..., pharmacy, ...]` |
 | tech → empi | `EMPI_INTERNAL_URI` | empi 入站放行 tech | `empi: [..., tech, ...]` |
-| emr → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 emr | `clinical: [clinical, emr, insurance]` |
+| emr → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 emr | `clinical: [clinical, emr, insurance, pharmacy]` |
 | insurance → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 insurance | `clinical: [..., insurance]` |
+| pharmacy → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 pharmacy | `clinical: [..., pharmacy]` |
+| clinical → pharmacy | `PHARMACY_INTERNAL_URI` | pharmacy 入站放行 clinical | `pharmacy: [pharmacy, clinical]` |
+| clinical → tech | `TECH_INTERNAL_URI` | tech 入站放行 clinical | `tech: [tech, clinical]` |
 | insurance → emr | `EMR_INTERNAL_URI` | emr 入站放行 insurance | `emr: [emr, insurance]` |
 
 > 回退地址是 `127.0.0.1:<port>`（本地单机自验用）。**任何新调用边只要漏了上表任一件套，

@@ -135,7 +135,11 @@ internalAuth:
   # /internal/** 的服务→服务调用是否也要求调用方签名（T5）。
   # 默认 false：先确认每个服务已挂载 caller-keys（mountCallerKeys=true）且全部调用方已升级，
   # 再切 true（切换后未配置密钥的调用方会被 403）。
+  # 生产/预发布必须为 true：服务启动时会校验，false 直接拒绝启动（P0-9）。
   internalPathsSignatureRequired: false
+  # auth 组件的签名豁免路径（整体替换服务端默认值，必须列全）。
+  # 网关→auth 的撤销名单同步只带 X-Internal-Token（网关为 WebFlux，无 v1i 签名器）。
+  authExemptPaths: "/actuator/health/**,/actuator/info,/actuator/prometheus,/internal/revocations"
   # 网关签名算法：hmac（v1，过渡期）| ed25519（v2，推荐；私钥只在网关，业务服务只持公钥）
   gatewaySigning: hmac
   gatewayKeyId: gw-v2
@@ -148,14 +152,26 @@ internalAuth:
   # 按组件裁剪调用方密钥（R5-M3）：组件 → 需要的 caller 名，从 Secret 的同名键注入。
   # 每个 Pod 只持有"自己的密钥 + 直接调用方的密钥"，某一服务沦陷不波及全部调用方。
   # 开启前需在 medassist-internal-hmac 中预置这些键（见 deploy/README.md §4.2.1）。
+  #
+  # 矩阵必须与代码里的出站调用一致（P0-9；与 NetworkPolicy 白名单同一份事实）：
+  #   clinical → empi / pharmacy / tech     ⇒ empi, pharmacy, tech 的入站需要 clinical
+  #   emr      → clinical / empi            ⇒ clinical 的入站需要 emr
+  #   pharmacy → clinical / empi            ⇒ clinical 的入站需要 pharmacy
+  #   insurance→ clinical / empi / emr      ⇒ clinical, emr 的入站需要 insurance
+  #   tech     → empi                       ⇒ empi 的入站需要 tech
+  # （每个组件的列表第一项是"自己的密钥"，用于它作为调用方出站签名；
+  #   即使 auth/empi/kb 目前不发起内部调用，也保留自身条目：
+  #   internal-paths-signature-required=true 时每个服务都必须能证明自己的调用方身份）
   mountCallerKeys: false
   callerKeys:
-    empi: [clinical, emr, insurance, pharmacy, tech]
-    clinical: [clinical, emr, insurance]
+    auth: [auth]
+    empi: [empi, clinical, emr, insurance, pharmacy, tech]
+    clinical: [clinical, emr, insurance, pharmacy]
     emr: [emr, insurance]
-    pharmacy: [pharmacy]
-    tech: [tech]
+    pharmacy: [pharmacy, clinical]
+    tech: [tech, clinical]
     insurance: [insurance]
+    kb: [kb]
 
 # ---- 密钥创建（仅本地验证；生产必须用 existingSecret）----
 secrets:
@@ -531,6 +547,10 @@ aiCore:
     pullPolicy: IfNotPresent
   replicaCount: 1
   revisionHistoryLimit: 5
+  # 单副本 + RWO 卷（模型/运行态数据）：必须 Recreate，否则 RollingUpdate 的新 Pod
+  # 抢不到同一块 RWO 卷会永久 Pending，发布卡死且无法回滚（P0-7）。
+  # 多副本化前提：/app/data 状态迁 PG/Redis + 模型改 ReadOnlyMany 共享存储后再改回 RollingUpdate。
+  strategy: Recreate
   # 模型加载与嵌入推理较慢，优雅停机放宽（SSE 长连接需自然收敛）
   terminationGracePeriodSeconds: 60
   service:
@@ -547,8 +567,11 @@ aiCore:
     maxReplicas: 3
     targetCPUUtilizationPercentage: 70
   podDisruptionBudget:
-    enabled: false
-    minAvailable: 1
+    # P0-7：ai-core 承载 Ingress "/"（SPA）与 /api/v1，单副本时节点维护即整站不可用。
+    # 单副本 + RWO 卷下 minAvailable=1 会让节点驱逐永久阻塞，故先落 0（允许驱逐、但不静默）：
+    # 可用性靠多副本化解决（见上方 strategy 注释）。
+    enabled: true
+    minAvailable: 0
   probes:
     # 冷启动要加载 BGE-M3（CPU 环境可达数分钟），startupProbe 给足 10 分钟
     startup: {failureThreshold: 60, periodSeconds: 10}

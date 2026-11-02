@@ -111,6 +111,18 @@ INSERT INTO insurance_svc.settlement_export_item (batch_id, bill_id, bill_no)
 VALUES ('aaaaaaa2-0000-0000-0000-000000000002','$bill','GUARD-BILL');
 "@ ''
 
+    # Pattern matches the PL/pgSQL CONTEXT line (ASCII) so we prove the rejection
+    # came from our trigger, not from an unrelated constraint.
+    Expect-Fail 'insurance.exportItem.updateBlocked' @"
+UPDATE insurance_svc.settlement_export_item SET bill_no = 'TAMPERED'
+ WHERE batch_id = 'aaaaaaa1-0000-0000-0000-000000000001';
+"@ 'guard_export_item_immutable'
+
+    Expect-Fail 'insurance.exportItem.deleteBlocked' @"
+DELETE FROM insurance_svc.settlement_export_item
+ WHERE batch_id = 'aaaaaaa1-0000-0000-0000-000000000001';
+"@ 'guard_export_item_immutable'
+
     # REJECTED batches must not block re-export
     $r2 = Invoke-Sql @"
 UPDATE insurance_svc.settlement_export_batch
@@ -127,7 +139,12 @@ VALUES ('aaaaaaa2-0000-0000-0000-000000000002','$bill','GUARD-BILL');
         $script:fail++
     }
 
+    # Cleanup: active batch must be cancelled first (its items are immutable while active)
     Invoke-Sql @"
+UPDATE insurance_svc.settlement_export_batch
+   SET status = 'CANCELLED', cancelled_at = now()
+ WHERE id = 'aaaaaaa1-0000-0000-0000-000000000001'
+   AND status = 'GENERATED';
 DELETE FROM insurance_svc.settlement_export_item WHERE bill_id = '$bill';
 DELETE FROM insurance_svc.settlement_export_batch
  WHERE batch_no IN ('GUARD-A','GUARD-B');
