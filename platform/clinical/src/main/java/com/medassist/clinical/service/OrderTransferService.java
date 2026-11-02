@@ -7,6 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.time.BusinessTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -140,7 +142,7 @@ public class OrderTransferService {
      * {@link #cancelDownstreamBestEffort}，避免处方已发药时把医疗决定一起回滚（MF-03）。
      */
     public void cancelDownstream(VisitOrder order, String reason, String actor) {
-        if (VisitOrder.TRANSFER_NONE.equals(order.transferStatus())) {
+        if (!hasDownstream(order)) {
             return;
         }
         if (order.drug()) {
@@ -173,7 +175,7 @@ public class OrderTransferService {
      * @return true 表示本次已作废或无需作废；false 表示已登记补偿任务待重试
      */
     public boolean cancelDownstreamBestEffort(VisitOrder order, String reason, String actor) {
-        if (VisitOrder.TRANSFER_NONE.equals(order.transferStatus())) {
+        if (!hasDownstream(order)) {
             return true;
         }
         try {
@@ -220,6 +222,17 @@ public class OrderTransferService {
     // ---------------------------------------------------------------- 内部
 
     /**
+     * 是否可能已有下游单据。
+     *
+     * <p>长嘱药品按日请领会生成多张处方，且不写 {@code transfer_status}（它不是"一次性转送"），
+     * 停嘱时仍必须去药房作废"未发药的那几张"，不能因为状态是 NONE 就跳过。
+     */
+    private static boolean hasDownstream(VisitOrder order) {
+        return !VisitOrder.TRANSFER_NONE.equals(order.transferStatus())
+                || (order.drug() && order.longTerm());
+    }
+
+    /**
      * 需要转送下游的医嘱类型（药品→药房，检查→医技）。
      *
      * <p>长期药品医嘱<b>不自动转药房</b>（B2）：转送一次只能生成一张处方、发一天的量，
@@ -264,9 +277,11 @@ public class OrderTransferService {
     private void transferToPharmacy(VisitOrder order, Visit visit, String actor) {
         PharmacyOrderClient.RxRef ref = null;
         try {
+            // 临时医嘱 = 一次性供药，供药日期取开嘱日（与药房 (orderId, supplyDate) 幂等键配合）
+            LocalDate supplyDate = order.startDate() == null ? BusinessTime.today() : order.startDate();
             ref = pharmacyClient.createFromOrder(order.id(),
                     visit.patientId(), visit.id(), visit.visitNo(), visit.deptId(),
-                    order.orderedBy(),
+                    order.orderedBy(), supplyDate,
                     List.of(new PharmacyOrderClient.Line(order.itemCode(), order.quantity(),
                             order.dose(), order.frequency(), null, null, null, null)));
             if (!repo.markOrderTransferred(order.id(), EXTERNAL_PRESCRIPTION, ref.prescriptionId(),

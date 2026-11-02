@@ -99,7 +99,7 @@ class PrescriptionServiceTest {
     private Prescription rx(String status, BigDecimal total, long version, String billingMode) {
         return new Prescription(rxId, "RX20261031000001", patientId, "P20261031000001",
                 null, null, null, "doctor01", status, null, null, null, total, version, Instant.now(),
-                billingMode, null);
+                billingMode, null, null);
     }
 
     private Dispense dispense(String status) {
@@ -169,11 +169,11 @@ class PrescriptionServiceTest {
     @DisplayName("医嘱转处方：同一医嘱重复转送返回已有处方（幂等，不新建）")
     void createFromOrderIsIdempotent() {
         UUID orderId = UUID.randomUUID();
-        when(repo.findPrescriptionBySourceOrder(orderId))
+        when(repo.findPrescriptionBySourceOrder(orderId, LocalDate.now()))
                 .thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW, new BigDecimal("25.00"), 0L)));
 
         OrderPrescriptionView view = service.createFromOrder(new CreateFromOrderReq(orderId, patientId,
-                UUID.randomUUID(), "V1", null, "doctor01",
+                UUID.randomUUID(), "V1", null, "doctor01", LocalDate.now(),
                 List.of(new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null, null, null, null))),
                 "clinical");
 
@@ -188,11 +188,11 @@ class PrescriptionServiceTest {
     @DisplayName("医嘱转处方：固定计费模式 ORDER 并记录来源医嘱（药房不再重复计费）")
     void createFromOrderUsesOrderBillingMode() {
         UUID orderId = UUID.randomUUID();
-        when(repo.findPrescriptionBySourceOrder(orderId)).thenReturn(Optional.empty());
+        when(repo.findPrescriptionBySourceOrder(orderId, LocalDate.now())).thenReturn(Optional.empty());
         when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
 
         OrderPrescriptionView view = service.createFromOrder(new CreateFromOrderReq(orderId, patientId,
-                UUID.randomUUID(), "V1", null, "doctor01",
+                UUID.randomUUID(), "V1", null, "doctor01", LocalDate.now(),
                 List.of(new PrescriptionLine("DRUG-AMOX-025", 2, "0.5g", "bid", 3, null, null, null))),
                 "clinical");
 
@@ -210,7 +210,7 @@ class PrescriptionServiceTest {
     @DisplayName("医嘱转处方：审方 BLOCK（儿童禁用）直接拒绝，不生成处方")
     void createFromOrderRejectsAuditBlock() {
         UUID orderId = UUID.randomUUID();
-        when(repo.findPrescriptionBySourceOrder(orderId)).thenReturn(Optional.empty());
+        when(repo.findPrescriptionBySourceOrder(orderId, LocalDate.now())).thenReturn(Optional.empty());
         when(patientClient.requireActive(patientId)).thenReturn(new PatientClient.PatientRef(
                 patientId, "P20261031000001", "小明", LocalDate.now().minusYears(5)));
         when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(new Drug(drugId,
@@ -218,7 +218,7 @@ class PrescriptionServiceTest {
                 new BigDecimal("12.50"), null, "A", 0, false, true, 0L, null, true, false)));
 
         assertThatThrownBy(() -> service.createFromOrder(new CreateFromOrderReq(orderId, patientId,
-                UUID.randomUUID(), "V1", null, "doctor01",
+                UUID.randomUUID(), "V1", null, "doctor01", LocalDate.now(),
                 List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null, null, null, null))),
                 "clinical"))
                 .isInstanceOf(BusinessException.class)
@@ -227,10 +227,65 @@ class PrescriptionServiceTest {
     }
 
     @Test
+    @DisplayName("长嘱按日请领：同一医嘱不同供药日期各生成一张处方（幂等键为 orderId+date）")
+    void createFromOrderIsIdempotentPerSupplyDate() {
+        UUID orderId = UUID.randomUUID();
+        LocalDate today = LocalDate.now();
+        when(repo.findPrescriptionBySourceOrder(orderId, today)).thenReturn(Optional.empty());
+        when(repo.findPrescriptionBySourceOrder(orderId, today.plusDays(1)))
+                .thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW, new BigDecimal("25.00"), 0L)));
+        when(repo.findDrugByCode("DRUG-AMOX-025")).thenReturn(Optional.of(amoxicillin));
+
+        OrderPrescriptionView first = service.createFromOrder(new CreateFromOrderReq(orderId, patientId,
+                UUID.randomUUID(), "V1", null, "doctor01", today,
+                List.of(new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null, null, null, null))),
+                "clinical");
+        OrderPrescriptionView nextDay = service.createFromOrder(new CreateFromOrderReq(orderId, patientId,
+                UUID.randomUUID(), "V1", null, "doctor01", today.plusDays(1),
+                List.of(new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null, null, null, null))),
+                "clinical");
+
+        assertThat(first.duplicate()).isFalse();
+        assertThat(nextDay.duplicate()).isTrue();
+        ArgumentCaptor<Prescription> captor = ArgumentCaptor.forClass(Prescription.class);
+        verify(repo).insertPrescription(captor.capture());
+        assertThat(captor.getValue().supplyDate()).isEqualTo(today);
+    }
+
+    @Test
+    @DisplayName("停长嘱：作废所有未发药处方，已发药的留给退药流程")
+    void cancelFromOrderCancelsAllPendingPrescriptions() {
+        UUID orderId = UUID.randomUUID();
+        UUID pendingId = UUID.randomUUID();
+        UUID dispensedId = UUID.randomUUID();
+        UUID approvedId = UUID.randomUUID();
+        Prescription pending = new Prescription(pendingId, "RX-P1", patientId, "P1", null, null, null,
+                "doctor01", Prescription.PENDING_REVIEW, null, null, null, new BigDecimal("25.00"),
+                0L, Instant.now(), Prescription.BILLING_ORDER, orderId, LocalDate.now());
+        Prescription dispensed = new Prescription(dispensedId, "RX-D1", patientId, "P1", null, null, null,
+                "doctor01", Prescription.DISPENSED, null, null, null, new BigDecimal("25.00"),
+                2L, Instant.now(), Prescription.BILLING_ORDER, orderId, LocalDate.now().minusDays(1));
+        Prescription approved = new Prescription(approvedId, "RX-A1", patientId, "P1", null, null, null,
+                "doctor01", Prescription.APPROVED, null, null, null, new BigDecimal("25.00"),
+                0L, Instant.now(), Prescription.BILLING_ORDER, orderId, LocalDate.now().plusDays(1));
+        when(repo.lockPrescriptionsBySourceOrder(orderId))
+                .thenReturn(List.of(dispensed, pending, approved));
+        when(repo.cancelPrescription(any(), anyLong(), anyString(), anyString())).thenReturn(true);
+
+        PrescriptionCancelView view = service.cancelFromOrder(
+                new CancelFromOrderReq(orderId, "停嘱", "doctor01"), "clinical");
+
+        assertThat(view.cancelled()).isTrue();
+        verify(repo).cancelPrescription(eq(pendingId), eq(0L), eq("停嘱"), eq("doctor01"));
+        verify(repo).cancelPrescription(eq(approvedId), eq(0L), eq("停嘱"), eq("doctor01"));
+        verify(repo, never()).cancelPrescription(eq(dispensedId), anyLong(), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("医嘱作废：从未转送（无处方）返回 cancelled=false，不报错")
     void cancelFromOrderWithoutPrescription() {
         UUID orderId = UUID.randomUUID();
-        when(repo.lockPrescriptionBySourceOrder(orderId)).thenReturn(Optional.empty());
+        when(repo.lockPrescriptionsBySourceOrder(orderId)).thenReturn(List.of());
 
         PrescriptionCancelView view = service.cancelFromOrder(
                 new CancelFromOrderReq(orderId, null, null), "clinical");
@@ -244,8 +299,8 @@ class PrescriptionServiceTest {
     @DisplayName("医嘱作废：APPROVED → CANCELLED，按来源处方的版本号 CAS 并留痕")
     void cancelFromOrderCancelsApproved() {
         UUID orderId = UUID.randomUUID();
-        when(repo.lockPrescriptionBySourceOrder(orderId))
-                .thenReturn(Optional.of(rx(Prescription.APPROVED, new BigDecimal("25.00"), 3L)));
+        when(repo.lockPrescriptionsBySourceOrder(orderId))
+                .thenReturn(List.of(rx(Prescription.APPROVED, new BigDecimal("25.00"), 3L)));
         when(repo.cancelPrescription(eq(rxId), eq(3L), anyString(), anyString())).thenReturn(true);
 
         PrescriptionCancelView view = service.cancelFromOrder(
@@ -262,8 +317,8 @@ class PrescriptionServiceTest {
     @DisplayName("医嘱作废：已发药处方拒绝（药已在患者手里，只能走退药）")
     void cancelFromOrderRejectsDispensed() {
         UUID orderId = UUID.randomUUID();
-        when(repo.lockPrescriptionBySourceOrder(orderId))
-                .thenReturn(Optional.of(rx(Prescription.DISPENSED, new BigDecimal("25.00"), 4L)));
+        when(repo.lockPrescriptionsBySourceOrder(orderId))
+                .thenReturn(List.of(rx(Prescription.DISPENSED, new BigDecimal("25.00"), 4L)));
 
         assertThatThrownBy(() -> service.cancelFromOrder(
                 new CancelFromOrderReq(orderId, null, null), "clinical"))
@@ -276,8 +331,8 @@ class PrescriptionServiceTest {
     @DisplayName("医嘱作废：已作废幂等返回，不重复写库")
     void cancelFromOrderIsIdempotent() {
         UUID orderId = UUID.randomUUID();
-        when(repo.lockPrescriptionBySourceOrder(orderId))
-                .thenReturn(Optional.of(rx(Prescription.CANCELLED, new BigDecimal("25.00"), 5L)));
+        when(repo.lockPrescriptionsBySourceOrder(orderId))
+                .thenReturn(List.of(rx(Prescription.CANCELLED, new BigDecimal("25.00"), 5L)));
 
         PrescriptionCancelView view = service.cancelFromOrder(
                 new CancelFromOrderReq(orderId, null, null), "clinical");
@@ -546,7 +601,7 @@ class PrescriptionServiceTest {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
                 "doctor01", Prescription.APPROVED, null, null, null,
-                new BigDecimal("25.00"), 3L, Instant.now(), Prescription.BILLING_DISPENSE, null)));
+                new BigDecimal("25.00"), 3L, Instant.now(), Prescription.BILLING_DISPENSE, null, null)));
         when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
         when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
         when(repo.findDrug(drugId)).thenReturn(Optional.of(amoxicillin));
@@ -579,7 +634,7 @@ class PrescriptionServiceTest {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
                 "doctor01", Prescription.APPROVED, null, null, null,
-                new BigDecimal("12.50"), 3L, Instant.now(), Prescription.BILLING_DISPENSE, null)));
+                new BigDecimal("12.50"), 3L, Instant.now(), Prescription.BILLING_DISPENSE, null, null)));
         when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
         when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
         when(repo.findDrug(drugId)).thenReturn(Optional.of(amoxicillin));
@@ -621,7 +676,7 @@ class PrescriptionServiceTest {
         when(repo.findPrescription(any())).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
                 "doctor01", Prescription.DISPENSED, null, null, null,
-                new BigDecimal("62.50"), 4L, Instant.now(), Prescription.BILLING_DISPENSE, null)));
+                new BigDecimal("62.50"), 4L, Instant.now(), Prescription.BILLING_DISPENSE, null, null)));
         when(chargeClient.refund(any(), any(), anyString(), anyString()))
                 .thenReturn(new ClinicalChargeClient.Refunded(BigDecimal.ZERO));
 
@@ -658,7 +713,7 @@ class PrescriptionServiceTest {
         when(repo.findPrescription(any())).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
                 "doctor01", Prescription.DISPENSED, null, null, null,
-                new BigDecimal("62.50"), 4L, Instant.now(), Prescription.BILLING_ORDER, orderId)));
+                new BigDecimal("62.50"), 4L, Instant.now(), Prescription.BILLING_ORDER, orderId, null)));
         when(chargeClient.refundOrder(any(), any(), any(), any(), anyString(), anyString()))
                 .thenReturn(new ClinicalChargeClient.OrderRefunded(BigDecimal.ZERO,
                         BigDecimal.ZERO, BigDecimal.ZERO, false));
@@ -698,7 +753,7 @@ class PrescriptionServiceTest {
         when(repo.findPrescription(any())).thenReturn(Optional.of(new Prescription(
                 rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
                 "doctor01", Prescription.DISPENSED, null, null, null,
-                new BigDecimal("25.00"), 4L, Instant.now(), Prescription.BILLING_ORDER, orderId)));
+                new BigDecimal("25.00"), 4L, Instant.now(), Prescription.BILLING_ORDER, orderId, null)));
         when(chargeClient.refundOrder(any(), any(), any(), any(), anyString(), anyString()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "收费服务暂不可用"));
 

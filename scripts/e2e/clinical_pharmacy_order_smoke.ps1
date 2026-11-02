@@ -219,6 +219,7 @@ Check 'order2.rx.still.dispensed' $rx2.status 'DISPENSED'
 # ---------------------------------------------------------------- 12. internal endpoint rejects unauthenticated calls
 $r = Invoke-Api 'POST' '/internal/prescriptions' @{
     orderId = $drugOrderId; patientId = $patientId
+    supplyDate = (Get-Date).ToString('yyyy-MM-dd')
     items = @(@{ drugCode = 'DRUG-AMOX-025'; quantity = 1 })
 } $null $PharmacyUrl
 Check 'internal.noToken.403' $r.Status 403

@@ -44,12 +44,17 @@ public final class PharmacyModel {
         }
     }
 
-    /** 处方。 */
+    /**
+     * 处方。
+     *
+     * <p>{@code supplyDate} 只在"医嘱转处方"时有值：与 {@code sourceOrderId} 组成幂等键，
+     * 长期医嘱每天最多一张当日处方（按日请领，B2 后续）。
+     */
     public record Prescription(UUID id, String prescriptionNo, UUID patientId, String patientNo,
                                UUID visitId, String visitNo, UUID deptId, String prescriber,
                                String status, String reviewer, Instant reviewedAt, String rejectReason,
                                BigDecimal totalAmount, long version, Instant createdAt,
-                               String billingMode, UUID sourceOrderId) {
+                               String billingMode, UUID sourceOrderId, LocalDate supplyDate) {
 
         public static final String PENDING_REVIEW = "PENDING_REVIEW";
         public static final String APPROVED = "APPROVED";

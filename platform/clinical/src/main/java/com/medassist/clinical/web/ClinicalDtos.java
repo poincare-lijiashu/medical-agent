@@ -60,6 +60,21 @@ public final class ClinicalDtos {
     public record FrequencyView(String code, String label, int timesPerDay, boolean daily) {
     }
 
+    /** 长嘱按日请领请求：date 可空（默认今天，不允许未来）。 */
+    public record DailyDispenseReq(LocalDate date) {
+    }
+
+    /** 单条医嘱的请领结果（失败不影响其它医嘱，由病区按行处理）。 */
+    public record DailyDispenseItem(UUID orderId, String orderNo, String itemCode, String itemName,
+                                    int quantity, UUID prescriptionId, String prescriptionNo,
+                                    boolean duplicate, String status, String error) {
+    }
+
+    /** 按日请领汇总。 */
+    public record DailyDispenseResult(LocalDate date, int requested, int created, int duplicate,
+                                      int failed, List<DailyDispenseItem> items) {
+    }
+
     /** 停嘱。 */
     public record StopOrderReq(String reason) {
     }

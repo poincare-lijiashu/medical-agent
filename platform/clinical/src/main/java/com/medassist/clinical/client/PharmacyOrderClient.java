@@ -1,6 +1,7 @@
 package com.medassist.clinical.client;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,8 +23,13 @@ public interface PharmacyOrderClient {
                  BigDecimal totalAmount) {
     }
 
+    /**
+     * 医嘱转处方。
+     *
+     * @param supplyDate 供药日期，与 orderId 组成幂等键；长期医嘱按日请领时每天一张
+     */
     RxRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo, UUID deptId,
-                          String prescriber, List<Line> items);
+                          String prescriber, LocalDate supplyDate, List<Line> items);
 
     /**
      * 按医嘱作废处方（医嘱撤销/停嘱联动）。

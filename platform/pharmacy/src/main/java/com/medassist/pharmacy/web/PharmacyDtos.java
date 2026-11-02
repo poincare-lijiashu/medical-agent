@@ -130,6 +130,7 @@ public final class PharmacyDtos {
             @Size(max = 64) String visitNo,
             UUID deptId,
             @Size(max = 64) String prescriber,
+            @NotNull LocalDate supplyDate,
             @NotEmpty List<@Valid PrescriptionLine> items) {
     }
 

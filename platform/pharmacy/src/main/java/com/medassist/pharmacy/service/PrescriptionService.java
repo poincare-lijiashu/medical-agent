@@ -79,7 +79,7 @@ public class PrescriptionService {
 
     @Transactional
     public PrescriptionView create(CreatePrescriptionReq req, String actor) {
-        return createInternal(req, actor, null);
+        return createInternal(req, actor, null, null);
     }
 
     /**
@@ -93,7 +93,9 @@ public class PrescriptionService {
      */
     @Transactional
     public OrderPrescriptionView createFromOrder(CreateFromOrderReq req, String actor) {
-        Optional<Prescription> existing = repo.findPrescriptionBySourceOrder(req.orderId());
+        // 长嘱按日请领：幂等键是 (orderId, supplyDate)，同一天重复请求返回同一张处方
+        Optional<Prescription> existing = repo.findPrescriptionBySourceOrder(req.orderId(),
+                req.supplyDate());
         if (existing.isPresent()) {
             Prescription rx = existing.get();
             return new OrderPrescriptionView(rx.id(), rx.prescriptionNo(), req.orderId(), true,
@@ -105,10 +107,10 @@ public class PrescriptionService {
                 req.visitNo(), req.deptId(), Prescription.BILLING_ORDER, req.items());
         PrescriptionView view;
         try {
-            view = createInternal(delegated, effectiveActor, req.orderId());
+            view = createInternal(delegated, effectiveActor, req.orderId(), req.supplyDate());
         } catch (DataIntegrityViolationException e) {
             // 并发转送：唯一索引兜底。此处事务已不可用，明确回 409，临床侧重试即可拿到已有处方
-            throw new BusinessException(ErrorCode.CONFLICT, "该医嘱已生成处方，请刷新后重试");
+            throw new BusinessException(ErrorCode.CONFLICT, "该医嘱当日处方已生成，请刷新后重试");
         }
         Prescription rx = view.prescription();
         return new OrderPrescriptionView(rx.id(), rx.prescriptionNo(), req.orderId(), false,
@@ -127,30 +129,50 @@ public class PrescriptionService {
      */
     @Transactional
     public PrescriptionCancelView cancelFromOrder(CancelFromOrderReq req, String actor) {
-        Optional<Prescription> found = repo.lockPrescriptionBySourceOrder(req.orderId());
+        List<Prescription> found = repo.lockPrescriptionsBySourceOrder(req.orderId());
         if (found.isEmpty()) {
             return new PrescriptionCancelView(null, null, null, false);
         }
-        Prescription rx = found.get();
-        if (Prescription.CANCELLED.equals(rx.status())) {
-            return new PrescriptionCancelView(rx.id(), rx.prescriptionNo(), rx.status(), true);
-        }
-        if (Prescription.DISPENSED.equals(rx.status())) {
-            throw new BusinessException(ErrorCode.PRESCRIPTION_STATUS_INVALID,
-                    "处方 " + rx.prescriptionNo() + " 已发药，不能作废（请走退药流程）");
-        }
         String who = blankToNull(req.actor()) == null ? actor : blankToNull(req.actor());
         String why = blankToNull(req.reason()) == null ? "医嘱撤销" : blankToNull(req.reason());
-        if (!repo.cancelPrescription(rx.id(), rx.version(), why, who)) {
-            throw new BusinessException(ErrorCode.CONFLICT, "处方状态已变化，请刷新后重试");
+
+        Prescription firstCancelled = null;
+        Prescription dispensed = null;
+        for (Prescription rx : found) {
+            if (Prescription.CANCELLED.equals(rx.status())) {
+                continue;
+            }
+            if (Prescription.DISPENSED.equals(rx.status())) {
+                // 已发药的留给退药流程；长嘱可能有"今天已发、明天未发"的多张处方
+                dispensed = rx;
+                continue;
+            }
+            if (!repo.cancelPrescription(rx.id(), rx.version(), why, who)) {
+                throw new BusinessException(ErrorCode.CONFLICT, "处方状态已变化，请刷新后重试");
+            }
+            if (firstCancelled == null) {
+                firstCancelled = rx;
+            }
         }
-        audit(who, "RX_CANCEL_FROM_ORDER", "PRESCRIPTION", rx.id().toString(), Map.of(
-                "prescriptionNo", rx.prescriptionNo(), "orderId", req.orderId().toString(),
-                "reason", why));
-        return new PrescriptionCancelView(rx.id(), rx.prescriptionNo(), Prescription.CANCELLED, true);
+        if (firstCancelled != null) {
+            audit(who, "RX_CANCEL_FROM_ORDER", "PRESCRIPTION", firstCancelled.id().toString(),
+                    Map.of("prescriptionNo", firstCancelled.prescriptionNo(),
+                            "orderId", req.orderId().toString(), "reason", why,
+                            "prescriptionCount", found.size()));
+            return new PrescriptionCancelView(firstCancelled.id(), firstCancelled.prescriptionNo(),
+                    Prescription.CANCELLED, true);
+        }
+        if (dispensed != null) {
+            throw new BusinessException(ErrorCode.PRESCRIPTION_STATUS_INVALID,
+                    "处方 " + dispensed.prescriptionNo() + " 已发药，不能作废（请走退药流程）");
+        }
+        // 全部已作废：幂等返回
+        Prescription rx = found.get(found.size() - 1);
+        return new PrescriptionCancelView(rx.id(), rx.prescriptionNo(), rx.status(), true);
     }
 
-    private PrescriptionView createInternal(CreatePrescriptionReq req, String actor, UUID sourceOrderId) {
+    private PrescriptionView createInternal(CreatePrescriptionReq req, String actor, UUID sourceOrderId,
+                                            LocalDate supplyDate) {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
         String billingMode = billingModeOf(req.billingMode(), req.visitId());
         Integer ageYears = ageOf(patient);
@@ -198,7 +220,7 @@ public class PrescriptionService {
         Prescription rx = new Prescription(prescriptionId, repo.nextPrescriptionNo(),
                 patient.id(), patient.patientNo(), req.visitId(), blankToNull(req.visitNo()),
                 req.deptId(), actor, Prescription.PENDING_REVIEW, null, null, null,
-                total, 0L, null, billingMode, sourceOrderId);
+                total, 0L, null, billingMode, sourceOrderId, supplyDate);
         repo.insertPrescription(rx);
         for (PrescriptionItem item : items) {
             repo.insertPrescriptionItem(item);
@@ -214,6 +236,7 @@ public class PrescriptionService {
         detail.put("auditFindings", findings.size());
         if (sourceOrderId != null) {
             detail.put("sourceOrderId", sourceOrderId.toString());
+            detail.put("supplyDate", supplyDate == null ? "" : supplyDate.toString());
         }
         audit(actor, sourceOrderId == null ? "RX_CREATE" : "RX_CREATE_FROM_ORDER",
                 "PRESCRIPTION", prescriptionId.toString(), detail);

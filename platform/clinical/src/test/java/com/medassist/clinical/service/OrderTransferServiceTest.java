@@ -78,7 +78,7 @@ class OrderTransferServiceTest {
         when(repo.markOrderTransferred(eq(orderId), eq(OrderTransferService.EXTERNAL_PRESCRIPTION),
                 eq(rxId), eq("RX20261101000001"))).thenReturn(true);
         when(client.createFromOrder(eq(orderId), eq(patientId), eq(visitId), eq("V1"), any(),
-                eq("doctor01"), any()))
+                eq("doctor01"), any(LocalDate.class), any()))
                 .thenReturn(new PharmacyOrderClient.RxRef(rxId, "RX20261101000001", false,
                         new BigDecimal("25.00")));
 
@@ -105,7 +105,7 @@ class OrderTransferServiceTest {
         List<VisitOrder> result = service.schedule(visit(), List.of(longDrug), "doctor01");
 
         assertThat(result.get(0).transferStatus()).isEqualTo(VisitOrder.TRANSFER_NONE);
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
         verify(repo, never()).updateOrderTransfer(any(), any(), any(), any(), any(), any());
     }
 
@@ -119,7 +119,7 @@ class OrderTransferServiceTest {
 
         service.schedule(visit(), List.of(stale), "doctor01");
 
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
         verify(repo).logChange(eq("doctor01"), eq("ORDER_TRANSFER_SKIPPED"), anyString(),
                 anyString(), anyString());
     }
@@ -133,7 +133,7 @@ class OrderTransferServiceTest {
 
         service.schedule(visit(), List.of(stale), "doctor01");
 
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
     }
 
     @Test
@@ -143,7 +143,7 @@ class OrderTransferServiceTest {
         UUID rxId = UUID.randomUUID();
         when(repo.findOrderById(orderId))
                 .thenReturn(Optional.of(order.withTransferStatus(VisitOrder.TRANSFER_PENDING)));
-        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any()))
+        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any()))
                 .thenReturn(new PharmacyOrderClient.RxRef(rxId, "RX20261101000009", false,
                         new BigDecimal("25.00")));
         when(repo.markOrderTransferred(any(), any(), any(), any())).thenReturn(false);
@@ -165,7 +165,7 @@ class OrderTransferServiceTest {
 
         assertThat(result.get(0).transferStatus()).isEqualTo(VisitOrder.TRANSFER_NONE);
         verify(repo, never()).updateOrderTransfer(any(), any(), any(), any(), any(), any());
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
     }
 
     @Test
@@ -174,7 +174,7 @@ class OrderTransferServiceTest {
         VisitOrder order = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFER_NONE);
         when(repo.findOrderById(orderId))
                 .thenReturn(Optional.of(order.withTransferStatus(VisitOrder.TRANSFER_PENDING)));
-        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any()))
+        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any()))
                 .thenThrow(new BusinessException(ErrorCode.VALIDATION_FAILED,
                         "处方存在用药禁忌：阿莫西林胶囊 儿童（<14 岁）禁用"));
 
@@ -198,7 +198,7 @@ class OrderTransferServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.ORDER_STATUS_INVALID);
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
     }
 
     @Test
@@ -235,7 +235,7 @@ class OrderTransferServiceTest {
         verify(repo).markOrderTransferred(eq(orderId),
                 eq(OrderTransferService.EXTERNAL_EXAM_APPLICATION), eq(appId),
                 eq("AP20261101000001"));
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
     }
 
     @Test
@@ -393,7 +393,7 @@ class OrderTransferServiceTest {
         VisitOrder result = service.retry(visitId, orderId, "doctor01");
 
         assertThat(result.transferStatus()).isEqualTo(VisitOrder.TRANSFERRED);
-        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any());
     }
 
     @Test
@@ -409,7 +409,7 @@ class OrderTransferServiceTest {
         when(repo.findOrderById(orderId)).thenReturn(Optional.of(pending));
         when(repo.markOrderTransferred(eq(orderId), eq(OrderTransferService.EXTERNAL_PRESCRIPTION),
                 eq(rxId), eq("RX20261101000002"))).thenReturn(true);
-        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any()))
+        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class), any()))
                 .thenReturn(new PharmacyOrderClient.RxRef(rxId, "RX20261101000002", true,
                         new BigDecimal("25.00")));
 

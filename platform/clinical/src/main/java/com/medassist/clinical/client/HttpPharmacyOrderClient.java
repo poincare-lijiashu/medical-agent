@@ -7,15 +7,18 @@ import com.medassist.common.security.InternalCallerSigner;
 import com.medassist.common.security.InternalSignatureClientInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -63,16 +66,26 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
 
     @Override
     public RxRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo,
-                                 UUID deptId, String prescriber, List<Line> items) {
+                                 UUID deptId, String prescriber, LocalDate supplyDate,
+                                 List<Line> items) {
         RxResponse response;
         try {
+            // 用 Spring 托管的 ObjectMapper 显式序列化：RestClient 默认转换器不保证注册
+            // JavaTimeModule，LocalDate 会被写成数组，药房侧直接 400（真实踩坑）。
+            String payload = objectMapper.writeValueAsString(new CreateFromOrderRequest(
+                    orderId, patientId, visitId, visitNo, deptId, prescriber, supplyDate, items));
             response = client.post()
                     .uri("/internal/prescriptions")
                     .header("X-Internal-Token", token)
-                    .body(new CreateFromOrderRequest(orderId, patientId, visitId, visitNo, deptId,
-                            prescriber, items))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(payload)
                     .retrieve()
                     .body(RxResponse.class);
+        } catch (JacksonException e) {
+            log.warn("clinical.pharmacy_rx_serialize_failed orderId={} err={}", orderId,
+                    e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "处方报文序列化失败，请稍后重试");
         } catch (HttpClientErrorException e) {
             String reason = extractMessage(e);
             log.warn("clinical.pharmacy_rx_rejected orderId={} status={} reason={}",
@@ -144,7 +157,8 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
     // ---------------------------------------------------------------- 报文
 
     record CreateFromOrderRequest(UUID orderId, UUID patientId, UUID visitId, String visitNo,
-                                  UUID deptId, String prescriber, List<Line> items) {
+                                  UUID deptId, String prescriber, LocalDate supplyDate,
+                                  List<Line> items) {
     }
 
     record RxResponse(UUID prescriptionId, String prescriptionNo, UUID orderId, boolean duplicate,
