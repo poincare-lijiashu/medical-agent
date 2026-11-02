@@ -22,14 +22,15 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-> **2026-11-02 续接状态**：第七轮整改第一~七批已交付（含 B3 / B2 / 按日请领 / 病区备药对账）；
+> **2026-11-02 续接状态**：第七轮整改第一~八批已交付（含 B3 / B2 / 按日请领 / 病区备药对账 /
+> 病区二级库存与未执行退药）；
 > 9 个 Java 服务**当前运行中**（本机验证用）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
-> §1.55~§1.59 的 E2E 回归**均已通过**：
+> §1.55~§1.60 的 E2E 回归**均已通过**：
 > `platform_smoke` / `empi_patient_smoke` / `clinical_preop_consent_smoke` / `pharmacy_smoke` /
 > `insurance_smoke` / `db_guardrails`(13/13) / `kb_search_smoke` / `emr_homepage_smoke` /
 > `pharmacy_order_refund_smoke`(35 项) / `clinical_long_order_smoke`(36 项) /
-> `clinical_long_dispense_smoke`(54 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
+> `clinical_long_dispense_smoke`(87 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -48,12 +49,12 @@
   `d9b4df0`（**整改第四批：B3 退药退费与作废联动**）、
   `fa4ff4a`（**整改第五批：B2 长嘱数量口径与频次快照**）、
   `8033aff`（**B2 后续：长嘱药品按日请领**）、
-  `5a9fa5c`（**病区备药与执行对账**）
+  `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **822 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **830 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar）；
-  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V25**、
+  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V26**、
   `pharmacy_svc` → **V8**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
@@ -62,8 +63,7 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **病区库存与未执行退药（对账闭环最后一段）**：现在已有"请领 → 发药 → 收药 → 执行"四段痕迹，
-     还缺"病区二级库存扣减 + 未执行（REFUSED/OMITTED）药品退回药房"的库存动作
+  1. ~~**病区库存与未执行退药（对账闭环最后一段）**~~ ✅ 已交付（§1.60，clinical V26）
   2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）
   3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
@@ -1264,6 +1264,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 实测：全量单测 **822 项**全绿（+5）；`clinical_long_dispense_smoke.ps1` 扩到 **54 项断言 PASS**；
      回归 `platform_smoke` / `clinical_long_order_smoke` / `pharmacy_billing_smoke` 全 PASS；
      真实库 `clinical_svc → V25`
+79. **病区二级库存与未执行退药（2026-11-02）**
+   - 问题：V25 只有收药确认，没有库存台账；患者拒绝/未执行后药留在病区，没有退回动作
+   - 修复：`clinical V26` 新增 `ward_stock_txn`（append-only：收药 `IN` / 退药 `RETURN`，
+     余额=IN-RETURN，上线回填历史收药）与 `ward_med_return`；
+     `POST .../ward-receipts/{receiptId}/returns`：仅 REFUSED/OMITTED 可退、`returnId` 幂等、
+     数量 ≤ 收药-已退、CAS 防并发超退；`GET .../ward-stock` 按药品汇总余额 + 最近 200 条流水；
+     看板增加 `returnedQuantity/stockBalance/returnable/returnHint`
+   - 边界：病区退药只回冲病区二级库存，不回补药房批次库存（药房退药走 `/pharmacy/dispenses/{id}/returns`，
+     两条链路各自幂等，避免一次退药被重复回补）
+   - 实测：全量单测 **830 项**全绿（+8）；`clinical_long_dispense_smoke.ps1` 扩到 **87 项断言 PASS**；
+     回归 `platform_smoke` / 全部 `clinical_*` / 全部 `pharmacy_*` 全 PASS；真实库 `clinical_svc → V26`
 
 ### 本机踩坑备忘（下次别再踩）
 - **台账类 upsert 要写成"重试不降级"**：请领先成功后失败（响应丢了）时，简单覆盖会把处方号抹掉、
@@ -1282,6 +1293,17 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   服务会在 Flyway 之前查询失败。Flyway 在启动时先跑，所以"迁移 + mapper + 插入语句"一起提交即可
 - **受控词表/快照字段永远由服务端解析，客户端不可传**：`frequency_times` 若允许前端传，
   计费天数与护理执行次数会各说各话；这类字段只接受业务意图（频次 code），次数由服务端算
+- **幂等检查必须排在业务校验之前**：退药重复提交时，收药单已经是 `RETURNED`、可退余额为 0；
+  若先校验"未执行/不超退"再查幂等键，重试会被误判成 422。正确顺序是
+  `锁行 → 查幂等键（命中直接返回）→ 业务校验 → CAS 写库`
+- **追加式流水用部分唯一索引挡重复**：收药 `(receipt_id) WHERE txn_type='IN'`、
+  退药 `(return_id) WHERE return_id IS NOT NULL`；`INSERT ... ON CONFLICT DO NOTHING`
+  不需要写冲突目标，重试天然安全，余额也不会被重复累加
+- **Windows 上服务在跑就打包不了 jar**：`spring-boot:repackage` 重命名 `.jar → .jar.original` 会因
+  文件被 JVM 占用直接失败；必须先 `Stop-Process` 停服务（或先停服再 `mvn package`），
+  打包完再用 `run_in_background` 起回来
+- **`platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认打 18080**（旧 gw-test），
+  本机回归要显式 `-BaseUrl http://127.0.0.1:8080`，否则第一行 `login actual=0` 看上去像服务挂了
 - **服务的 dev profile 必须自带内网令牌，否则起不来**：`HttpClinicalChargeClient` 构造时 fail-fast，
   缺 `pharmacy.clinical.internal-token` 直接 `IllegalStateException`。此前靠启动 shell 里的
   `PHARMACY_INTERNAL_TOKEN` 环境变量兜着，换一个干净 shell 就启动失败；已在

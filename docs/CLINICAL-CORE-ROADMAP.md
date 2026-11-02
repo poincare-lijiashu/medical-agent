@@ -1511,6 +1511,32 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.60 已完成（2026-11-02，病区二级库存与未执行退药）
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| 病区二级库存 | V25 只有收药确认，没有库存台账：交接班、盘点、账实核对无据可依 | 新增 `clinical V26` 的 `ward_stock_txn`（append-only：收药记 `IN`、退药记 `RETURN`），余额 = IN - RETURN；上线时回填历史收药的 `IN` 流水 |
+| 未执行退药 | 患者拒绝/未执行后药留在病区，没有退回动作；若直接改数量则无法审计 | 新增 `ward_med_return` + `POST /clinical/visits/{id}/ward-receipts/{receiptId}/returns`：仅 REFUSED/OMITTED 可退、数量 ≤ 收药-已退、`returnId` 幂等、CAS 防并发超退 |
+
+**关键实现**
+- 收药即入库：收药成功后追加 `IN` 流水，`(receipt_id, txn_type='IN')` 部分唯一索引把重复收药挡在数据库层。
+- 退药链路：锁收药行 → `returnId` 幂等检查 → 校验当日护理执行 → 校验可退余额 →
+  CAS 累加 `returned_quantity`（退完置 `RETURNED`）→ 写退药记录 + `RETURN` 流水 + 审计。
+- 看板新增 `returnedQuantity / stockBalance / returnable / returnHint`：
+  只有"REFUSED/OMITTED 且有库存"才提示可退，EXECUTED 明确提示不可退（不强制退药）。
+- `GET /clinical/visits/{id}/ward-stock`：按药品汇总收药/退药/余额 + 最近 200 条流水，供盘点与问题追溯。
+- 边界：病区退药只回冲病区二级库存，不直接回补药房批次库存；
+  药房退药仍走 `/pharmacy/dispenses/{id}/returns`，两条链路各自幂等，避免一次退药被重复回补。
+
+**实测**
+- 全量单测 **830 项**全绿（+8：整单退/部分退/已执行拒绝/无执行拒绝/超退/幂等/串单 409/库存汇总）
+- `clinical_long_dispense_smoke.ps1` 扩展到 **87 项断言全 PASS**：收药 → REFUSED → 退药 → 库存平衡、
+  超退 422、重复退幂等、全退后再退 422、已执行退药 422、库存流水可查
+- 回归：`platform_smoke`、全部 `clinical_*`、全部 `pharmacy_*` 全 PASS
+- 真实库：`clinical_svc` 迁移到 **V26**
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

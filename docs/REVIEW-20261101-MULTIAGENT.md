@@ -196,6 +196,13 @@
 | B2 收尾 | ✅ 已交付 | `clinical V25`：`daily_dispense_request`（请领台账，`order_id+supply_date` 幂等）+ `ward_med_receipt`（收药，`dispense_id` 幂等）；`GET /clinical/visits/{id}/dispense-board` 汇总请领/处方/收药/护理执行；收药校验"当日已成功请领 + 不超请领数量"；请领失败也落台账，重试不抹掉已成功处方 |
 | 验证 | ✅ | 单测 **822 项**全绿（+5）；`clinical_long_dispense_smoke.ps1` 扩到 54 项断言 PASS；`platform_smoke` / `clinical_long_order_smoke` / `pharmacy_billing_smoke` 回归 PASS；真实库 `clinical_svc → V25` |
 
+### 第八批（2026-11-02，病区二级库存与未执行退药）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| B2 库存闭环 | ✅ 已交付 | `clinical V26`：`ward_stock_txn`（append-only 库存流水，收药 IN / 退药 RETURN，余额=IN-RETURN，回填历史收药）+ `ward_med_return`（退药记录）；新增 `POST /clinical/visits/{id}/ward-receipts/{receiptId}/returns`（仅 REFUSED/OMITTED 可退、`returnId` 幂等、CAS 防超退）与 `GET /clinical/visits/{id}/ward-stock`；看板增加 `returnedQuantity/stockBalance/returnable/returnHint` |
+| 验证 | ✅ | 单测 **830 项**全绿（+8）；`clinical_long_dispense_smoke.ps1` 扩到 87 项断言 PASS；`platform_smoke` / 全部 `clinical_*` / 全部 `pharmacy_*` 回归 PASS；真实库 `clinical_svc → V26` |
+
 ---
 
 ## 五、整改优先级建议
