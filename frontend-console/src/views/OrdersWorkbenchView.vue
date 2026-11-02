@@ -1,22 +1,22 @@
 <template>
   <div class="page">
-    <header class="page-head">
-      <div class="page-head-main">
-        <h1 class="page-title">医嘱工作台</h1>
-        <p class="page-desc">
-          以就诊为上下文组织医嘱、转送与费用。金额、状态与可执行动作均由服务端裁决，界面只负责把依据摆在操作旁边。
-        </p>
-      </div>
-      <div class="page-actions">
-        <div class="page-meta">
-          <span>数据源 <b>clinical_svc</b></span>
-          <span>更新 <b>{{ updatedAt || '—' }}</b></span>
-        </div>
-        <button class="btn btn--sm" type="button" :disabled="loading" @click="refreshAll">
+    <PageMasthead
+      index="01"
+      kicker="CLINICAL ORDERS / 临床诊疗"
+      title="医嘱工作台"
+      mandate="以就诊为上下文组织医嘱、转送与费用。金额、状态与可执行动作均由服务端裁决，界面只负责把依据摆在操作旁边。"
+      :facts="[
+        { k: 'SOURCE', v: 'clinical_svc' },
+        { k: 'UPDATED', v: updatedAt || '—' },
+        { k: 'ROLE', v: role },
+      ]"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="loading" @click="refreshAll">
           <AppIcon name="refresh" :size="14" /> 刷新
         </button>
-      </div>
-    </header>
+      </template>
+    </PageMasthead>
 
     <!-- 患者上下文 -->
     <section class="card ctx">
@@ -697,6 +697,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import PageMasthead from '@/components/ui/PageMasthead.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, empiApi } from '@/api'
 import { errorText } from '@/api/http'

@@ -1,11 +1,12 @@
 /*
- * 铭医 MedAssist · 临床仪表台（Clinical Instrument）设计令牌 v2
+ * 铭医 MedAssist · 设计令牌 v3「临床台账 / Clinical Ledger」
  *
- * 设计立场：这不是"后台模板"，而是一台临床仪表。
- *   - 纸白底 + 石墨墨色 + 单一钴蓝强调；层次靠发丝线与留白，不靠阴影堆叠。
- *   - 数字是主角：等宽数字 + 右对齐 + 单位降级，扫读时不被文字干扰。
- *   - 元信息用等宽小字（编码、时间、病案号），与正文形成两种"材料"。
- *   - 状态永远"点 + 文字"，颜色只是辅助；打印与色觉障碍场景都不丢失信息。
+ * 设计立场
+ *   1. 纸感而非塑料：暖白纸底 + 石墨墨色，接近病历纸与印刷品的阅读体验。
+ *   2. 仪表而非后台：深石墨书脊导航 + 等宽读数 + 发丝线，像一台校准过的临床仪器。
+ *   3. 数字是主角：所有关键数字用等宽字体、右对齐、单位降级，扫读不被形容词干扰。
+ *   4. 颜色是证据：只有状态与可操作对象着色，其余一律墨色与纸色。
+ *   5. 不做"AI 味"：没有渐变按钮、玻璃拟态、彩色大色块、装饰性插画。
  */
 
 :root {
@@ -16,7 +17,8 @@
     "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
-  /* 字号：11 用于元信息，13 正文，24+ 只给关键数字 */
+  /* 字阶：9/10 微标签，12 元信息，13 正文，15 强调，20 小标题，32 页标题，44 展示 */
+  --fs-9: 9px;
   --fs-10: 10px;
   --fs-11: 11px;
   --fs-12: 12px;
@@ -27,64 +29,76 @@
   --fs-18: 18px;
   --fs-20: 20px;
   --fs-24: 24px;
-  --fs-30: 30px;
-  --fs-36: 36px;
+  --fs-28: 28px;
+  --fs-32: 32px;
+  --fs-44: 44px;
+  --fs-56: 56px;
 
-  --lh-tight: 1.25;
-  --lh-base: 1.55;
+  --lh-tight: 1.18;
+  --lh-snug: 1.4;
+  --lh-base: 1.58;
 
-  /* ---------- 纸张与墨色 ---------- */
-  --bg: #f2f4f7;
-  --bg-deep: #eaedf2;
-  --panel: #ffffff;
-  --panel-2: #fafbfc;
-  --panel-3: #f5f7fa;
-  --sunken: #eef1f5;
-  --rail: #f7f8fa;
-  --rail-active: #e9eff9;
-  --overlay: rgb(16 21 31 / 46%);
+  /* ---------- 纸张 ---------- */
+  --bg: #efede7;
+  --bg-deep: #e6e3db;
+  --panel: #fbfaf7;
+  --panel-2: #f6f4ee;
+  --panel-3: #f0ede5;
+  --sunken: #e8e5dc;
+  --overlay: rgb(18 20 24 / 52%);
 
-  --line: #e3e8ef;
-  --line-soft: #edf0f4;
-  --line-strong: #cbd3e0;
+  /* ---------- 墨色发丝线 ---------- */
+  --line: #dfdbd1;
+  --line-soft: #ebe8e0;
+  --line-strong: #c8c2b4;
 
-  --ink: #10151f;
-  --ink-2: #445064;
-  --ink-3: #6b7787;
-  --ink-4: #8e99a8;
-  --ink-inverse: #f7f9fc;
+  --ink: #16181c;
+  --ink-2: #454a52;
+  --ink-3: #6a6f77;
+  --ink-4: #92958f;
+  --ink-inverse: #faf8f3;
 
-  /* ---------- 强调与状态 ---------- */
-  --accent: #1d5bd6;
-  --accent-hover: #1648ac;
-  --accent-press: #123c8f;
-  --accent-weak: #edf2fd;
-  --accent-line: #c6d8f7;
-  --accent-ink: #123e94;
+  /* ---------- 书脊（深色导航） ---------- */
+  --rail: #14171c;
+  --rail-2: #1b1f25;
+  --rail-line: #2a2f37;
+  --rail-ink: #d8d9d5;
+  --rail-ink-2: #8c9199;
+  --rail-ink-3: #656b74;
+  --rail-active: #23282f;
 
-  --ok: #0f7a52;
-  --ok-weak: #e9f5ef;
-  --ok-line: #bfe2d2;
+  /* ---------- 强调：印刷群青 ---------- */
+  --accent: #1f4bd8;
+  --accent-hover: #183db5;
+  --accent-press: #143394;
+  --accent-weak: #e8edfb;
+  --accent-line: #c3d0f3;
+  --accent-ink: #16337f;
 
-  --warn: #96590a;
-  --warn-weak: #fdf4e5;
-  --warn-line: #eed7ab;
+  /* ---------- 状态 ---------- */
+  --ok: #1b6b4a;
+  --ok-weak: #e7f2ec;
+  --ok-line: #bcd9cb;
 
-  --danger: #b42318;
-  --danger-weak: #fdeceb;
-  --danger-line: #f2c3bf;
+  --warn: #86590c;
+  --warn-weak: #faf1e0;
+  --warn-line: #e6d1a6;
 
-  --neutral: #556274;
-  --neutral-weak: #eff2f6;
-  --neutral-line: #dbe1e9;
+  --danger: #a32b22;
+  --danger-weak: #fbeceb;
+  --danger-line: #eec2bd;
 
-  /* ---------- 品牌（暗场） ---------- */
-  --brand: #17439c;
-  --brand-deep: #0b1c3c;
-  --brand-mid: #102a57;
-  --brand-tint: #e8eefb;
+  --neutral: #545a63;
+  --neutral-weak: #eeeee9;
+  --neutral-line: #d9d7ce;
 
-  /* ---------- 间距：4pt 栅格 + 2px 光学微调 ---------- */
+  /* ---------- 品牌暗场 ---------- */
+  --brand: #12306b;
+  --brand-deep: #0a1220;
+  --brand-mid: #121e33;
+  --brand-tint: #e7ebf5;
+
+  /* ---------- 间距：4pt 栅格（2 为光学微调） ---------- */
   --s0: 2px;
   --s1: 4px;
   --s2: 8px;
@@ -97,35 +111,36 @@
   --s10: 40px;
   --s12: 48px;
   --s16: 64px;
+  --s20: 80px;
 
-  /* ---------- 圆角：小控件 6，卡片 8，浮层 10 ---------- */
-  --r-xs: 3px;
-  --r-sm: 5px;
-  --r-md: 6px;
-  --r-lg: 8px;
-  --r-xl: 10px;
+  /* ---------- 圆角：印刷品克制的 2–4px ---------- */
+  --r-xs: 2px;
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 5px;
+  --r-xl: 6px;
   --r-pill: 999px;
 
-  /* ---------- 阴影：只用于浮层，卡片靠发丝线 ---------- */
-  --shadow-card: 0 1px 2px rgb(16 21 31 / 4%);
-  --shadow-1: 0 1px 2px rgb(16 21 31 / 6%), 0 1px 3px rgb(16 21 31 / 8%);
-  --shadow-2: 0 4px 10px rgb(16 21 31 / 8%), 0 16px 32px rgb(16 21 31 / 12%);
-  --shadow-3: 0 10px 20px rgb(16 21 31 / 10%), 0 32px 64px rgb(16 21 31 / 18%);
-  --card-highlight: inset 0 1px 0 rgb(255 255 255 / 72%);
+  /* ---------- 阴影：几乎不用；浮层才允许 ---------- */
+  --shadow-card: 0 1px 0 rgb(22 24 28 / 3%);
+  --shadow-1: 0 1px 2px rgb(22 24 28 / 8%);
+  --shadow-2: 0 6px 16px rgb(22 24 28 / 10%), 0 24px 48px rgb(22 24 28 / 12%);
+  --shadow-3: 0 12px 28px rgb(22 24 28 / 14%), 0 48px 96px rgb(22 24 28 / 20%);
+  --card-highlight: inset 0 1px 0 rgb(255 255 255 / 60%);
 
-  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(29 91 214 / 55%);
+  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(31 75 216 / 60%);
 
   /* ---------- 布局 ---------- */
-  --rail-w: 244px;
-  --rail-w-collapsed: 64px;
-  --topbar-h: 52px;
-  --inspector-w: 300px;
+  --rail-w: 236px;
+  --rail-w-collapsed: 62px;
+  --topbar-h: 56px;
+  --inspector-w: 320px;
 
   /* ---------- 动效 ---------- */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --dur-fast: 120ms;
-  --dur: 180ms;
+  --dur-fast: 110ms;
+  --dur: 170ms;
   --dur-slow: 260ms;
 
   /* ---------- 层级 ---------- */
@@ -140,58 +155,61 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0b1017;
-  --bg-deep: #080c12;
-  --panel: #121821;
-  --panel-2: #151c26;
-  --panel-3: #1a222e;
-  --sunken: #0e141c;
-  --rail: #0d131b;
-  --rail-active: #18283f;
-  --overlay: rgb(0 0 0 / 60%);
+  --bg: #0c0e11;
+  --bg-deep: #080a0c;
+  --panel: #13161a;
+  --panel-2: #171a1f;
+  --panel-3: #1c2026;
+  --sunken: #0f1216;
+  --overlay: rgb(0 0 0 / 64%);
 
-  --line: #232d3b;
-  --line-soft: #1b2430;
-  --line-strong: #354255;
+  --line: #262a30;
+  --line-soft: #1e2228;
+  --line-strong: #363c44;
 
-  --ink: #e8eef7;
-  --ink-2: #aab6c7;
-  --ink-3: #8593a6;
-  --ink-4: #6b7889;
-  --ink-inverse: #0b1017;
+  --ink: #eceae4;
+  --ink-2: #b9bbb7;
+  --ink-3: #8d918f;
+  --ink-4: #6c706e;
+  --ink-inverse: #0c0e11;
 
-  --accent: #5b8ef2;
-  --accent-hover: #7ba5f6;
-  --accent-press: #4a7ad8;
-  --accent-weak: #17263e;
-  --accent-line: #2c4670;
-  --accent-ink: #a8c4fb;
+  --rail: #08090b;
+  --rail-2: #0f1114;
+  --rail-line: #21252b;
+  --rail-ink: #e2e1dc;
+  --rail-ink-2: #93979d;
+  --rail-ink-3: #5f646b;
+  --rail-active: #191d22;
 
-  --ok: #46bd8b;
-  --ok-weak: #10291f;
-  --ok-line: #23503c;
+  --accent: #7f9cf7;
+  --accent-hover: #9db4fa;
+  --accent-press: #6a89e8;
+  --accent-weak: #17203a;
+  --accent-line: #2c3d6b;
+  --accent-ink: #b9caf9;
 
-  --warn: #dfa64c;
-  --warn-weak: #2a2012;
-  --warn-line: #4d3a1b;
+  --ok: #4fbf92;
+  --ok-weak: #0f2a20;
+  --ok-line: #235040;
+  --warn: #d9a952;
+  --warn-weak: #2a2113;
+  --warn-line: #4a3a1d;
+  --danger: #eb8b82;
+  --danger-weak: #2d1716;
+  --danger-line: #552b28;
+  --neutral: #b3b6b4;
+  --neutral-weak: #1c2025;
+  --neutral-line: #2e343b;
 
-  --danger: #f28b82;
-  --danger-weak: #2e1717;
-  --danger-line: #5a2b28;
+  --brand: #9db4fa;
+  --brand-deep: #06080c;
+  --brand-mid: #0d1420;
+  --brand-tint: #141c2c;
 
-  --neutral: #aab6c7;
-  --neutral-weak: #1c2531;
-  --neutral-line: #2c3849;
-
-  --brand: #7ba5f6;
-  --brand-deep: #070d18;
-  --brand-mid: #0d1a30;
-  --brand-tint: #16233a;
-
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 30%);
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-2: 0 4px 12px rgb(0 0 0 / 45%);
-  --shadow-3: 0 16px 40px rgb(0 0 0 / 55%);
+  --shadow-card: 0 1px 0 rgb(0 0 0 / 30%);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 44%);
+  --shadow-2: 0 8px 20px rgb(0 0 0 / 48%);
+  --shadow-3: 0 24px 56px rgb(0 0 0 / 60%);
   --card-highlight: inset 0 1px 0 rgb(255 255 255 / 4%);
-  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(91 142 242 / 60%);
+  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(127 156 247 / 60%);
 }

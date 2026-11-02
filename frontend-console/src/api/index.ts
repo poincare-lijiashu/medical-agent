@@ -18,6 +18,7 @@ import type {
   PageResult,
   Patient,
   PreopVisit,
+  RoomUtilization,
   SurgeryCase,
   SurgeryChargePreview,
   SurgeryLevel,
@@ -96,6 +97,10 @@ export const surgeryApi = {
   rooms: (status?: string) => get<OperatingRoom[]>('/clinical/operating-rooms', { status }),
   roomSchedules: (roomId: string, date: string) =>
     get<unknown>(`/clinical/operating-rooms/${roomId}/schedules`, { date }),
+  roomUtilization: (roomId: string, from?: string, to?: string) =>
+    get<RoomUtilization>(`/clinical/operating-rooms/${roomId}/utilization`, { from, to }),
+  hospitalUtilization: (from?: string, to?: string) =>
+    get<RoomUtilization[]>('/clinical/surgery/utilization', { from, to }),
   chargePreview: (caseId: string) =>
     get<SurgeryChargePreview>(`/clinical/surgery-cases/${caseId}/charge-preview`),
   postCharges: (caseId: string) =>

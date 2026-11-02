@@ -2,33 +2,45 @@
   <div class="shell" :class="{ 'is-collapsed': collapsed }">
     <aside class="rail">
       <div class="rail-head">
-        <img src="/brand/mark.svg" width="28" height="28" alt="" class="rail-mark" />
-        <div v-if="!collapsed" class="rail-brand">
-          <span class="rail-brand-cn">铭医</span>
-          <span class="rail-brand-en">MEDASSIST</span>
-        </div>
+        <RouterLink to="/orders" class="rail-brand" aria-label="铭医 MedAssist 首页">
+          <img src="/brand/mark.svg?v=3" width="30" height="30" alt="" class="rail-mark" />
+          <span v-if="!collapsed" class="rail-brand-text">
+            <span class="rail-brand-cn">铭医</span>
+            <span class="rail-brand-en">MEDASSIST</span>
+          </span>
+        </RouterLink>
         <button
           class="rail-collapse"
           type="button"
           :aria-label="collapsed ? '展开导航' : '收起导航'"
           @click="toggleCollapse"
         >
-          <AppIcon :name="collapsed ? 'chevron-right' : 'chevron-left'" :size="14" />
+          <AppIcon :name="collapsed ? 'chevrons-right' : 'chevrons-left'" :size="14" />
         </button>
       </div>
 
       <div v-if="!collapsed" class="rail-context">
-        <span class="eyebrow">CLINICAL CONSOLE</span>
+        <div class="rail-context-top">
+          <span class="rail-context-label">CLINICAL LEDGER</span>
+          <span class="rail-env">{{ isDev ? 'DEV' : 'PROD' }}</span>
+        </div>
         <div class="rail-context-row">
           <span class="env-dot" aria-hidden="true" />
-          <span class="rail-context-text">{{ envLabel }}</span>
+          <span>{{ envLabel }}</span>
+          <span class="rail-context-ver mono">v3</span>
         </div>
       </div>
+      <div v-else class="rail-context-mini"><span class="env-dot" aria-hidden="true" /></div>
 
       <nav class="rail-nav" aria-label="主导航">
-        <div v-for="group in groups" :key="group.name" class="nav-group">
-          <div v-if="!collapsed" class="nav-group-label">{{ group.name }}</div>
-          <div v-else class="nav-group-rule" />
+        <div v-for="(group, gi) in groups" :key="group.name" class="nav-group">
+          <div v-if="!collapsed" class="nav-group-head">
+            <span class="nav-group-no">{{ String(gi + 1).padStart(2, '0') }}</span>
+            <span class="nav-group-label">{{ group.name }}</span>
+            <span class="nav-group-rule" aria-hidden="true" />
+          </div>
+          <div v-else class="nav-group-rule-vert" aria-hidden="true" />
+
           <RouterLink
             v-for="item in group.items"
             :key="item.name"
@@ -37,8 +49,10 @@
             :class="{ active: route.name === item.name }"
             :title="collapsed ? item.title : undefined"
           >
+            <span class="nav-item-mark" aria-hidden="true" />
             <AppIcon :name="item.icon" :size="17" />
             <span v-if="!collapsed" class="nav-label">{{ item.title }}</span>
+            <span v-if="!collapsed && route.name === item.name" class="nav-active-dot" aria-hidden="true" />
           </RouterLink>
         </div>
       </nav>
@@ -46,8 +60,8 @@
       <div class="rail-foot">
         <button v-if="!collapsed" class="rail-cmd" type="button" @click="openPalette">
           <AppIcon name="search" :size="14" />
-          <span>快速跳转</span>
-          <span class="rail-cmd-key">{{ metaKey }} K</span>
+          <span class="rail-cmd-text">跳转 / 命令</span>
+          <span class="rail-cmd-key">{{ metaKey }}K</span>
         </button>
 
         <button class="rail-user" type="button" @click="userMenuOpen = !userMenuOpen">
@@ -63,11 +77,11 @@
           <div v-if="userMenuOpen" class="user-menu" role="menu">
             <div class="user-menu-head">
               <div class="user-menu-name">{{ session.user.value?.displayName }}</div>
-              <div class="user-menu-sub mono">{{ session.user.value?.username }}</div>
+              <div class="user-menu-sub mono">{{ session.user.value?.username }} · {{ session.roleLabel.value }}</div>
             </div>
             <button class="user-menu-item" type="button" role="menuitem" @click="toggleTheme">
               <AppIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="15" />
-              {{ theme === 'dark' ? '浅色主题' : '深色主题' }}
+              {{ theme === 'dark' ? '切换到浅色' : '切换到深色' }}
             </button>
             <button class="user-menu-item is-danger" type="button" role="menuitem" @click="logout">
               <AppIcon name="logout" :size="15" />
@@ -81,15 +95,21 @@
     <div class="main">
       <header class="topbar">
         <div class="crumb">
+          <span class="crumb-index">{{ activeIndex }}</span>
           <span class="crumb-group">{{ activeGroup }}</span>
           <span class="crumb-sep" aria-hidden="true">/</span>
           <span class="crumb-page">{{ activeTitle }}</span>
         </div>
 
+        <span class="topbar-live" title="页面数据来自服务端实时查询">
+          <span class="live-dot" aria-hidden="true" />
+          LIVE
+        </span>
+
         <div class="spacer" />
 
-        <div class="clock" :title="dateText">
-          <span class="clock-time num">{{ clock }}</span>
+        <div class="clock" :title="`${dateText} ${clock}`">
+          <span class="clock-time readout">{{ clock }}</span>
           <span class="clock-date">{{ dateText }}</span>
         </div>
 
@@ -152,7 +172,8 @@ let clockTimer: number | undefined
 
 const metaKey = computed(() => (navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl'))
 
-const envLabel = computed(() => (import.meta.env.DEV ? '开发环境 · 本机网关' : '生产环境'))
+const isDev = import.meta.env.DEV
+const envLabel = computed(() => (isDev ? '开发环境 · 本机网关' : '生产环境'))
 
 function tick() {
   const now = new Date()
@@ -186,6 +207,11 @@ const groups = computed(() =>
 
 const activeTitle = computed(() => (route.name ? findNav(String(route.name))?.title ?? '控制台' : '控制台'))
 const activeGroup = computed(() => (route.name ? findNav(String(route.name))?.group ?? '' : ''))
+const activeIndex = computed(() => {
+  const g = activeGroup.value
+  const i = NAV_GROUPS.indexOf(g)
+  return i >= 0 ? String(i + 1).padStart(2, '0') : '00'
+})
 const initial = computed(() => (session.user.value?.displayName || '医').slice(0, 1))
 
 async function logout() {
@@ -242,14 +268,26 @@ onBeforeUnmount(() => {
   grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
 }
 
-/* ---------------- 左侧导航 ---------------- */
+/* ---------------- 书脊导航 ---------------- */
 
 .rail {
   display: flex;
   flex-direction: column;
   background: var(--rail);
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--rail-line);
   min-height: 0;
+  color: var(--rail-ink);
+  position: relative;
+}
+
+.rail::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--accent), transparent 42%);
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .rail-head {
@@ -258,35 +296,47 @@ onBeforeUnmount(() => {
   gap: 9px;
   height: var(--topbar-h);
   padding: 0 var(--s4);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--rail-line);
   position: relative;
   flex: none;
 }
 
-.rail-mark {
-  border-radius: 7px;
-  box-shadow: 0 1px 2px rgb(16 21 31 / 18%);
-}
-
 .rail-brand {
   display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  color: inherit;
+}
+
+.rail-brand:hover {
+  text-decoration: none;
+}
+
+.rail-mark {
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 40%);
+}
+
+.rail-brand-text {
+  display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
 .rail-brand-cn {
   font-size: var(--fs-14);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--ink);
+  letter-spacing: 0.08em;
+  color: var(--rail-ink);
 }
 
 .rail-brand-en {
   font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.14em;
-  color: var(--ink-4);
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: var(--rail-ink-3);
 }
 
 .rail-collapse {
@@ -297,14 +347,14 @@ onBeforeUnmount(() => {
   place-items: center;
   border: 0;
   background: none;
-  color: var(--ink-4);
-  border-radius: var(--r-sm);
+  color: var(--rail-ink-3);
+  border-radius: 2px;
   cursor: pointer;
 }
 
 .rail-collapse:hover {
-  background: var(--sunken);
-  color: var(--ink);
+  background: var(--rail-2);
+  color: var(--rail-ink);
 }
 
 .is-collapsed .rail-head {
@@ -315,67 +365,122 @@ onBeforeUnmount(() => {
 .is-collapsed .rail-collapse {
   position: absolute;
   right: -11px;
-  top: 15px;
+  top: 17px;
   width: 20px;
   height: 20px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background: var(--rail-2);
+  border: 1px solid var(--rail-line);
   z-index: var(--z-rail);
+  color: var(--rail-ink-2);
 }
 
 .rail-context {
-  margin: 10px 12px 2px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--panel);
+  margin: var(--s3) var(--s3) 2px;
+  padding: var(--s2) 10px;
+  border: 1px solid var(--rail-line);
+  border-radius: 2px;
+  background: var(--rail-2);
+}
+
+.rail-context-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.rail-context-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-9);
+  letter-spacing: 0.16em;
+  color: var(--rail-ink-3);
+}
+
+.rail-env {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  padding: 1px 4px;
+  border: 1px solid var(--rail-line);
+  border-radius: 2px;
+  color: var(--rail-ink-2);
 }
 
 .rail-context-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 5px;
-  font-size: var(--fs-11);
-  color: var(--ink-2);
+  margin-top: 6px;
+  font-size: var(--fs-10);
+  color: var(--rail-ink-2);
 }
 
 .env-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 0 2px var(--ok-weak);
+  background: #58c08c;
+  box-shadow: 0 0 0 3px rgb(88 192 140 / 14%);
+  flex: none;
 }
+
+.rail-context-ver {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--rail-ink-3);
+}
+
+.rail-context-mini {
+  display: flex;
+  justify-content: center;
+  padding: var(--s3) 0 0;
+}
+
+/* 导航 */
 
 .rail-nav {
   flex: 1;
-  overflow-y: auto;
-  padding: var(--s3) var(--s2) var(--s4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s5);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s2) var(--s2) var(--s3);
 }
 
-.nav-group {
+.nav-group + .nav-group {
+  margin-top: var(--s4);
+}
+
+.nav-group-head {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  gap: 7px;
+  padding: var(--s2) var(--s2) 5px;
+}
+
+.nav-group-no {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--rail-ink-3);
 }
 
 .nav-group-label {
-  padding: 0 10px;
-  margin-bottom: 4px;
   font-family: var(--font-mono);
-  font-size: var(--fs-10);
-  letter-spacing: 0.12em;
-  color: var(--ink-4);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--rail-ink-3);
+  white-space: nowrap;
 }
 
 .nav-group-rule {
+  flex: 1;
   height: 1px;
-  background: var(--line);
-  margin: 0 8px 6px;
+  background: var(--rail-line);
+}
+
+.nav-group-rule-vert {
+  height: 1px;
+  background: var(--rail-line);
+  margin: var(--s2) 10px;
 }
 
 .nav-item {
@@ -384,29 +489,35 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 9px;
   height: 32px;
-  padding: 0 10px;
-  border-radius: var(--r-md);
-  color: var(--ink-2);
+  padding: 0 9px;
+  border-radius: 2px;
+  color: var(--rail-ink-2);
   font-size: var(--fs-12);
-  text-decoration: none;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
 .nav-item:hover {
-  background: var(--sunken);
-  color: var(--ink);
+  background: var(--rail-2);
+  color: var(--rail-ink);
   text-decoration: none;
 }
 
 .nav-item.active {
   background: var(--rail-active);
-  color: var(--accent-ink);
-  font-weight: 500;
-  box-shadow: inset 2px 0 0 var(--accent);
+  color: #fff;
 }
 
-.nav-item.active > :first-child {
-  color: var(--accent);
+.nav-item-mark {
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: transparent;
+}
+
+.nav-item.active .nav-item-mark {
+  background: var(--accent);
 }
 
 .nav-label {
@@ -416,145 +527,145 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.nav-active-dot {
+  margin-left: auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .is-collapsed .nav-item {
   justify-content: center;
   padding: 0;
+  height: 36px;
 }
 
-.is-collapsed .nav-item.active {
-  box-shadow: none;
-}
+/* 底部 */
 
 .rail-foot {
-  position: relative;
   flex: none;
-  padding: var(--s3);
-  border-top: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
+  padding: var(--s2) var(--s3) var(--s3);
+  border-top: 1px solid var(--rail-line);
+  position: relative;
 }
 
 .rail-cmd {
   display: flex;
   align-items: center;
   gap: 7px;
+  width: 100%;
   height: 30px;
   padding: 0 8px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  border-radius: var(--r-md);
-  color: var(--ink-3);
+  margin-bottom: var(--s2);
+  background: var(--rail-2);
+  border: 1px solid var(--rail-line);
+  border-radius: 2px;
+  color: var(--rail-ink-2);
   font-size: var(--fs-11);
   cursor: pointer;
 }
 
 .rail-cmd:hover {
-  border-color: var(--line-strong);
-  color: var(--ink-2);
+  border-color: var(--rail-ink-3);
+  color: var(--rail-ink);
+}
+
+.rail-cmd-text {
+  min-width: 0;
 }
 
 .rail-cmd-key {
   margin-left: auto;
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: 0.06em;
-  color: var(--ink-4);
-  border: 1px solid var(--line);
-  border-radius: var(--r-xs);
-  padding: 1px 4px;
+  color: var(--rail-ink-3);
 }
 
 .rail-user {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  padding: 5px 6px;
-  border: 1px solid transparent;
+  padding: 6px;
+  border: 0;
+  border-radius: 2px;
   background: none;
-  border-radius: var(--r-md);
+  color: var(--rail-ink-2);
   cursor: pointer;
   text-align: left;
 }
 
 .rail-user:hover {
-  background: var(--sunken);
-  border-color: var(--line);
+  background: var(--rail-2);
 }
 
 .avatar {
   width: 26px;
   height: 26px;
-  flex: none;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: var(--brand-tint);
-  color: var(--brand);
+  border-radius: 2px;
+  background: linear-gradient(160deg, #2c3542, #1a2029);
+  border: 1px solid var(--rail-line);
+  color: var(--rail-ink);
   font-size: var(--fs-11);
   font-weight: 600;
-}
-
-.is-collapsed .rail-user {
-  justify-content: center;
+  flex: none;
 }
 
 .user-meta {
   display: flex;
   flex-direction: column;
+  gap: 0;
   min-width: 0;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .user-name {
-  font-size: var(--fs-12);
-  color: var(--ink);
+  font-size: var(--fs-11);
+  color: var(--rail-ink);
 }
 
 .user-role {
-  font-size: var(--fs-10);
-  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--rail-ink-3);
+  letter-spacing: 0.04em;
 }
 
 .user-chev {
   margin-left: auto;
-  color: var(--ink-4);
+  color: var(--rail-ink-3);
 }
 
 .user-menu {
   position: absolute;
   left: var(--s3);
   right: var(--s3);
-  bottom: calc(100% - 4px);
-  z-index: var(--z-tooltip);
+  bottom: calc(100% - 6px);
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
   box-shadow: var(--shadow-2);
-  padding: var(--s2);
-}
-
-.is-collapsed .user-menu {
-  left: calc(100% + 8px);
-  right: auto;
-  bottom: 12px;
-  width: 214px;
+  overflow: hidden;
+  z-index: var(--z-rail);
 }
 
 .user-menu-head {
-  padding: 6px 8px 8px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
-  margin-bottom: 4px;
+  background: var(--panel-2);
 }
 
 .user-menu-name {
   font-size: var(--fs-12);
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .user-menu-sub {
-  font-size: var(--fs-10);
+  font-size: 9px;
   color: var(--ink-3);
   margin-top: 2px;
 }
@@ -564,26 +675,27 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 8px;
+  height: 34px;
+  padding: 0 12px;
   border: 0;
   background: none;
-  border-radius: var(--r-sm);
-  font-size: var(--fs-12);
   color: var(--ink-2);
+  font-size: var(--fs-12);
   cursor: pointer;
   text-align: left;
 }
 
 .user-menu-item:hover {
-  background: var(--sunken);
+  background: var(--panel-3);
   color: var(--ink);
 }
 
-.user-menu-item.is-danger {
+.user-menu-item.is-danger:hover {
+  background: var(--danger-weak);
   color: var(--danger);
 }
 
-/* ---------------- 顶栏 ---------------- */
+/* ---------------- 主区 ---------------- */
 
 .main {
   display: flex;
@@ -593,56 +705,89 @@ onBeforeUnmount(() => {
 }
 
 .topbar {
-  height: var(--topbar-h);
-  flex: none;
   display: flex;
   align-items: center;
   gap: var(--s3);
+  height: var(--topbar-h);
   padding: 0 var(--s6);
   background: var(--panel);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-strong);
+  flex: none;
 }
 
 .crumb {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: var(--fs-12);
+  gap: 8px;
   min-width: 0;
+  font-size: var(--fs-12);
+}
+
+.crumb-index {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-weak);
+  padding: 1px 4px;
+  border-radius: 2px;
+  letter-spacing: 0.02em;
 }
 
 .crumb-group {
-  color: var(--ink-4);
+  color: var(--ink-3);
+  font-size: var(--fs-11);
+  white-space: nowrap;
 }
 
 .crumb-sep {
-  color: var(--line-strong);
+  color: var(--ink-4);
   font-family: var(--font-mono);
-  font-size: 10px;
 }
 
 .crumb-page {
   color: var(--ink);
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.topbar-live {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: var(--s2);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: var(--ok);
+}
+
+.live-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 2px var(--ok-weak);
 }
 
 .clock {
   display: flex;
   align-items: baseline;
-  gap: 7px;
+  gap: 9px;
+  white-space: nowrap;
 }
 
 .clock-time {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  font-weight: 500;
-  color: var(--ink-2);
-  letter-spacing: 0.02em;
+  font-size: var(--fs-13);
+  color: var(--ink);
+  letter-spacing: -0.02em;
 }
 
 .clock-date {
-  font-size: var(--fs-10);
+  font-family: var(--font-mono);
+  font-size: var(--fs-9);
   color: var(--ink-4);
+  letter-spacing: 0.02em;
 }
 
 .topbar-sep {
@@ -657,9 +802,9 @@ onBeforeUnmount(() => {
   gap: 7px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
   background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
   color: var(--ink-3);
   font-size: var(--fs-11);
   cursor: pointer;
@@ -667,20 +812,16 @@ onBeforeUnmount(() => {
 
 .topbar-cmd:hover {
   border-color: var(--line-strong);
-  color: var(--ink-2);
-}
-
-.topbar-cmd-text {
-  white-space: nowrap;
+  color: var(--ink);
 }
 
 .topbar-cmd-key {
   font-family: var(--font-mono);
   font-size: 9px;
   color: var(--ink-4);
-  border: 1px solid var(--line);
-  border-radius: var(--r-xs);
-  padding: 1px 4px;
+  border-left: 1px solid var(--line);
+  padding-left: 6px;
+  margin-left: 2px;
 }
 
 .content {
@@ -689,40 +830,42 @@ onBeforeUnmount(() => {
   overflow: auto;
 }
 
-.page-enter-active,
-.page-leave-active {
-  transition: opacity var(--dur-fast) var(--ease);
-}
-
-.page-enter-from,
-.page-leave-to {
-  opacity: 0;
-}
-
-@media (max-width: 1100px) {
-  .clock-date,
-  .topbar-cmd-text {
+@media (max-width: 1180px) {
+  .topbar-cmd-text,
+  .clock-date {
     display: none;
   }
+  .topbar {
+    padding: 0 var(--s4);
+  }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 860px) {
   .shell,
   .shell.is-collapsed {
-    grid-template-columns: 60px minmax(0, 1fr);
+    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
   }
-  .rail-brand,
+  .rail-brand-text,
   .rail-context,
-  .nav-label,
-  .rail-cmd {
+  .rail-cmd,
+  .user-meta,
+  .user-chev {
+    display: none;
+  }
+  .nav-group-head {
     display: none;
   }
   .nav-item {
     justify-content: center;
     padding: 0;
+    height: 36px;
   }
-  .topbar {
-    padding: 0 var(--s4);
+  .rail-head {
+    justify-content: center;
+    padding: 0;
+  }
+  .rail-collapse {
+    display: none;
   }
 }
 </style>

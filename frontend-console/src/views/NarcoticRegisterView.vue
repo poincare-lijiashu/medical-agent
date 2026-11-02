@@ -1,55 +1,79 @@
 <template>
   <div class="page">
-    <header class="page-head">
-      <div>
-        <h1 class="page-title">麻精专册</h1>
-        <p class="page-sub">
-          麻醉药品、第一类精神药品的处方专册。发药即登记，空安瓿回收必须与发药量一致，回收后不可重复操作。
-        </p>
-      </div>
-      <div class="row">
-        <button class="btn btn--sm" type="button" :disabled="loading" @click="load">
-          <AppIcon name="refresh" :size="15" /> 刷新
+    <PageMasthead
+      index="05"
+      kicker="NARCOTIC LEDGER / 手术与收费"
+      title="麻精专册"
+      mandate="麻醉药品、第一类精神药品的处方专册。发药即登记，空安瓿回收必须与发药量一致，回收后不可重复操作。"
+      :facts="[
+        { k: 'RANGE', v: `${from} → ${to}` },
+        { k: 'RECORDS', v: String(rows.length) },
+        { k: 'PENDING', v: String(pendingCount) },
+      ]"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="loading" @click="load">
+          <AppIcon name="refresh" :size="14" /> 刷新
         </button>
-      </div>
-    </header>
+      </template>
+    </PageMasthead>
 
-    <div class="card filters">
-      <label class="field">
-        <span class="label">起始日期</span>
-        <input v-model="from" class="input" type="date" />
-      </label>
-      <label class="field">
-        <span class="label">截止日期</span>
-        <input v-model="to" class="input" type="date" />
-      </label>
-      <label class="field">
-        <span class="label">状态</span>
-        <select v-model="status" class="select">
-          <option value="">全部</option>
-          <option value="PENDING_RETURN">待回收空安瓿</option>
-          <option value="RETURNED">已回收</option>
-        </select>
-      </label>
-      <button class="btn btn--primary" type="button" :disabled="loading" @click="load">查询</button>
-      <span class="spacer" />
-      <div class="summary">
-        <div class="summary-item">
-          <span class="muted">记录</span>
-          <strong class="num">{{ rows.length }}</strong>
-        </div>
-        <div class="summary-item">
-          <span class="muted">待回收</span>
-          <strong class="num danger">{{ pendingCount }}</strong>
-        </div>
+    <div class="kpi-strip">
+      <div class="kpi">
+        <div class="kpi-label"><AppIcon name="clipboard" :size="12" /> 专册记录</div>
+        <div class="kpi-value">{{ rows.length }}<span class="kpi-unit">条</span></div>
+        <div class="kpi-meta">查询区间 {{ from }} 至 {{ to }}</div>
+      </div>
+      <div class="kpi" :class="{ 'is-danger': pendingCount > 0 }">
+        <div class="kpi-label"><AppIcon name="alert" :size="12" /> 待回收空安瓿</div>
+        <div class="kpi-value">{{ pendingCount }}<span class="kpi-unit">条</span></div>
+        <div class="kpi-meta">缺一环，整条药品流向不可闭环</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label"><AppIcon name="check-circle" :size="12" /> 已回收</div>
+        <div class="kpi-value">{{ returnedCount }}<span class="kpi-unit">条</span></div>
+        <div class="kpi-meta">回收人记录在册，不可重复操作</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label"><AppIcon name="pill" :size="12" /> 涉及药品</div>
+        <div class="kpi-value">{{ drugKinds }}<span class="kpi-unit">种</span></div>
+        <div class="kpi-meta">按药品编码去重统计</div>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">专册明细</span>
+    <div class="sheet">
+      <div class="toolbar">
+        <label class="field">
+          <span class="label">起始日期</span>
+          <input v-model="from" class="input" type="date" />
+        </label>
+        <label class="field">
+          <span class="label">截止日期</span>
+          <input v-model="to" class="input" type="date" />
+        </label>
+        <label class="field">
+          <span class="label">状态</span>
+          <select v-model="status" class="select">
+            <option value="">全部</option>
+            <option value="PENDING_RETURN">待回收空安瓿</option>
+            <option value="RETURNED">已回收</option>
+          </select>
+        </label>
+        <button class="btn btn--primary" type="button" :disabled="loading" @click="load">查询</button>
+      </div>
+
+      <div class="sheet-head">
+        <span class="sheet-title">专册明细</span>
+        <span class="badge badge--neutral">{{ rows.length }}</span>
         <span class="spacer" />
         <span class="hint">空安瓿回收是药品流向的最后一环，缺一环整条链路不可闭环</span>
+        <div class="seg" role="tablist" aria-label="快速筛选状态">
+          <button class="seg-btn" :class="{ active: status === '' }" type="button" @click="setStatus('')">全部</button>
+          <button class="seg-btn" :class="{ active: status === 'PENDING_RETURN' }" type="button" @click="setStatus('PENDING_RETURN')">
+            待回收
+          </button>
+          <button class="seg-btn" :class="{ active: status === 'RETURNED' }" type="button" @click="setStatus('RETURNED')">已回收</button>
+        </div>
       </div>
 
       <div v-if="loading" class="loading">
@@ -151,6 +175,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import PageMasthead from '@/components/ui/PageMasthead.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { pharmacyApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -167,6 +192,13 @@ const loading = ref(false)
 const busy = ref(false)
 
 const pendingCount = computed(() => rows.value.filter((r) => r.status === 'PENDING_RETURN').length)
+const returnedCount = computed(() => rows.value.filter((r) => r.status === 'RETURNED').length)
+const drugKinds = computed(() => new Set(rows.value.map((r) => r.drugCode)).size)
+
+function setStatus(v: string) {
+  status.value = v
+  void load()
+}
 
 function shiftDays(days: number) {
   const d = new Date()

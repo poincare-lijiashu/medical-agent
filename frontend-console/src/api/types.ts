@@ -263,7 +263,10 @@ export interface OperatingRoom {
 
 export interface SurgerySchedule {
   id: string
-  caseId: string
+  /** 后端排台实体字段；v3 起以该字段为准。 */
+  surgeryCaseId?: string
+  /** 兼容旧字段（部分聚合接口会平铺为 caseId）。 */
+  caseId?: string
   roomId: string
   roomCode?: string
   roomName?: string
@@ -271,6 +274,8 @@ export interface SurgerySchedule {
   patientNo?: string | null
   operationName?: string | null
   surgeon?: string | null
+  sequence?: number
+  cancelReason?: string | null
   plannedStart: string
   plannedEnd: string
   status: string
@@ -398,4 +403,37 @@ export interface KbAnswerResult {
   degraded: boolean
   degradedReason: string | null
   latencyMs: number
+}
+
+/** 手术间单日利用率。 */
+export interface DailyUtilization {
+  date: string
+  scheduledCount: number
+  completedCount: number
+  cancelledCount: number
+  occupiedMinutes: number
+  availableMinutes: number
+  turnoverMinutes: number
+  turnoverCount: number
+  utilizationRate: number
+}
+
+/** 手术间利用率报表（逐日 + 合计）。 */
+export interface RoomUtilization {
+  roomId: string
+  roomCode: string
+  roomName: string
+  from: string
+  to: string
+  openFrom: string
+  openTo: string
+  days: DailyUtilization[]
+  totalScheduled: number
+  totalCompleted: number
+  totalCancelled: number
+  totalOccupiedMinutes: number
+  totalAvailableMinutes: number
+  totalTurnoverMinutes: number
+  turnoverCount: number
+  utilizationRate: number
 }

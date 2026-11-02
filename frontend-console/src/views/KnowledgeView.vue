@@ -1,24 +1,30 @@
 <template>
   <div class="page">
-    <header class="page-head">
-      <div>
-        <h1 class="page-title">知识库</h1>
-        <p class="page-sub">
-          检索与问答都必须带引用。语义检索不可用时页面会明确降级，不会把关键词命中伪装成"理解"。
-        </p>
-      </div>
-      <div class="row">
-        <button class="btn btn--sm" type="button" :disabled="loadingSpaces" @click="loadSpaces">
-          <AppIcon name="refresh" :size="15" /> 刷新空间
+    <PageMasthead
+      index="07"
+      kicker="EVIDENCE RETRIEVAL / 质量与知识"
+      title="知识库"
+      mandate="检索与问答都必须带引用。语义检索不可用时页面会明确降级，不会把关键词命中伪装成「理解」。"
+      :facts="[
+        { k: 'SPACES', v: String(spaces.length) },
+        { k: 'DOCS', v: String(stats.documents) },
+        { k: 'MODE', v: mode },
+      ]"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="loadingSpaces" @click="loadSpaces">
+          <AppIcon name="refresh" :size="14" /> 刷新空间
         </button>
-      </div>
-    </header>
+      </template>
+    </PageMasthead>
 
     <div class="kb">
-      <aside class="card spaces">
-        <div class="card-head">
-          <span class="card-title">知识空间</span>
+      <aside class="sheet spaces">
+        <div class="sheet-head">
+          <span class="sheet-title">知识空间</span>
           <span class="badge badge--neutral">{{ spaces.length }}</span>
+          <span class="spacer" />
+          <span class="mono muted">权限边界</span>
         </div>
         <div v-if="loadingSpaces" class="loading">
           <div v-for="i in 4" :key="i" class="skeleton" style="height: 44px" />
@@ -30,12 +36,15 @@
           desc="知识空间由管理员创建并分配成员。加入后即可检索指南、规范与院内制度。"
         />
         <ul v-else class="space-list">
-          <li v-for="s in spaces" :key="s.id">
+          <li v-for="(s, i) in spaces" :key="s.id">
             <button class="space-item" :class="{ active: space?.id === s.id }" type="button" @click="selectSpace(s)">
-              <span class="space-name">{{ s.name }}</span>
-              <span class="space-meta">
-                <span class="mono">{{ s.code }}</span>
-                <span class="badge badge--neutral">{{ visibilityLabel(s.visibility) }}</span>
+              <span class="space-no">{{ String(i + 1).padStart(2, '0') }}</span>
+              <span class="space-main">
+                <span class="space-name">{{ s.name }}</span>
+                <span class="space-meta">
+                  <span class="mono">{{ s.code }}</span>
+                  <span class="badge badge--neutral">{{ visibilityLabel(s.visibility) }}</span>
+                </span>
               </span>
             </button>
           </li>
@@ -52,7 +61,7 @@
         </div>
 
         <template v-else>
-          <div class="card space-head">
+          <div class="sheet space-head">
             <div>
               <div class="row" style="gap: 8px">
                 <h2 class="space-title">{{ space.name }}</h2>
@@ -68,8 +77,8 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="card-head">
+          <div class="sheet">
+            <div class="sheet-head">
               <div class="seg" role="tablist" aria-label="知识库模式">
                 <button
                   class="seg-btn"
@@ -124,15 +133,15 @@
             当前为降级检索：{{ degradedText }}。结果仍可追溯，但召回可能不完整。
           </div>
 
-          <div v-if="busy" class="card result-skeleton">
+          <div v-if="busy" class="sheet result-skeleton">
             <div v-for="i in 4" :key="i" class="skeleton" style="height: 54px" />
           </div>
 
           <template v-else-if="tab === 'search' && searchResult">
-            <div class="card">
-              <div class="card-head">
-                <span class="card-title">命中 {{ searchResult.hitCount }} 条</span>
-                <span class="muted" style="font-size: var(--fs-12)">
+            <div class="sheet">
+              <div class="sheet-head">
+                <span class="sheet-title">命中 {{ searchResult.hitCount }} 条</span>
+                <span class="muted" style="font-size: var(--fs-11)">
                   {{ modeLabel(searchResult.mode) }} · {{ searchResult.latencyMs }} ms
                 </span>
               </div>
@@ -161,7 +170,7 @@
           </template>
 
           <template v-else-if="tab === 'answer' && answerResult">
-            <div class="card answer">
+            <div class="sheet answer">
               <div class="answer-head">
                 <span class="badge" :class="answerResult.grounded ? 'badge--ok' : 'badge--warn'">
                   <AppIcon :name="answerResult.grounded ? 'check' : 'warning'" :size="12" />
@@ -190,9 +199,9 @@
             </div>
           </template>
 
-          <div class="card">
-            <div class="card-head">
-              <span class="card-title">空间文档</span>
+          <div class="sheet">
+            <div class="sheet-head">
+              <span class="sheet-title">空间文档</span>
               <span class="badge badge--neutral">{{ documents.length }}</span>
               <span class="spacer" />
               <button class="btn btn--ghost btn--sm" type="button" @click="loadDocuments">
@@ -222,6 +231,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import PageMasthead from '@/components/ui/PageMasthead.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { kbApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -356,28 +366,45 @@ onMounted(loadSpaces)
 
 .space-item {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 9px;
   width: 100%;
   padding: 9px 10px;
   border: 1px solid transparent;
+  border-left: 2px solid transparent;
   background: none;
-  border-radius: var(--r-md);
+  border-radius: 0;
   cursor: pointer;
   text-align: left;
 }
 
 .space-item:hover {
-  background: var(--panel-muted);
+  background: var(--panel-2);
 }
 
 .space-item.active {
   background: var(--accent-weak);
   border-color: var(--accent-line);
+  border-left-color: var(--accent);
+}
+
+.space-no {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--ink-4);
+  padding-top: 3px;
+}
+
+.space-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .space-name {
-  font-size: var(--fs-13);
+  font-size: var(--fs-12);
   font-weight: 500;
   color: var(--ink);
 }

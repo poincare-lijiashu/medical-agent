@@ -156,7 +156,7 @@ function onTab(e: KeyboardEvent) {
   gap: var(--s2);
   padding: var(--s4) var(--s6);
   border-top: 1px solid var(--line);
-  background: var(--panel-muted);
+  background: var(--panel-3);
   border-radius: 0 0 var(--r-lg) var(--r-lg);
 }
 

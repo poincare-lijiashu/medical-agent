@@ -1,13 +1,22 @@
 <template>
   <div class="page">
-    <header class="page-head">
-      <div>
-        <h1 class="page-title">术中收费核对</h1>
-        <p class="page-sub">
-          按手术病例核对收费打包：先看预览，再记账。重复记账由服务端幂等处理（返回 addedAmount = 0）。
-        </p>
-      </div>
-    </header>
+    <PageMasthead
+      index="04"
+      kicker="CHARGE RECONCILIATION / 手术与收费"
+      title="术中收费核对"
+      mandate="按手术病例核对收费打包：先看预览，再记账。重复记账由服务端幂等处理（返回 addedAmount = 0）。"
+      :facts="[
+        { k: 'SOURCE', v: 'clinical_svc' },
+        { k: 'CASE', v: current?.caseNo || '—' },
+        { k: 'STATUS', v: preview?.caseStatus || '—' },
+      ]"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="previewLoading || !current" @click="loadPreview">
+          <AppIcon name="refresh" :size="14" /> 刷新预览
+        </button>
+      </template>
+    </PageMasthead>
 
     <PatientVisitSearch @select="onSelect" />
 
@@ -71,18 +80,26 @@
           </div>
 
           <div v-else-if="preview" class="preview">
-            <div class="preview-sum">
-              <div class="sum-item">
-                <span class="muted">打包总额</span>
-                <strong class="num">{{ money(preview.totalAmount) }}</strong>
+            <div class="kpi-strip preview-kpi">
+              <div class="kpi">
+                <div class="kpi-label"><AppIcon name="receipt" :size="12" /> 打包总额</div>
+                <div class="kpi-value">{{ money(preview.totalAmount) }}</div>
+                <div class="kpi-meta">{{ preview.lines.length }} 个项目 · 服务端计价</div>
               </div>
-              <div class="sum-item">
-                <span class="muted">待记账</span>
-                <strong class="num" :class="{ warn: preview.pendingAmount > 0 }">{{ money(preview.pendingAmount) }}</strong>
+              <div class="kpi" :class="{ 'is-warn': preview.pendingAmount > 0 }">
+                <div class="kpi-label"><AppIcon name="clock" :size="12" /> 待记账</div>
+                <div class="kpi-value">{{ money(preview.pendingAmount) }}</div>
+                <div class="kpi-meta">{{ pendingLines.length }} 个项目尚未记账</div>
               </div>
-              <div class="sum-item">
-                <span class="muted">病例状态</span>
-                <StatusPill :value="preview.caseStatus" />
+              <div class="kpi is-accent">
+                <div class="kpi-label"><AppIcon name="check-circle" :size="12" /> 已记账</div>
+                <div class="kpi-value">{{ money(chargedAmount) }}</div>
+                <div class="kpi-meta">{{ chargedLines.length }} 个项目已写入收费单</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label"><AppIcon name="shield" :size="12" /> 病例状态</div>
+                <div class="kpi-value kpi-value--status"><StatusPill :value="preview.caseStatus" /></div>
+                <div class="kpi-meta">{{ preview.fullyCharged ? '已完成全部记账' : '仍存在待记账项目' }}</div>
               </div>
             </div>
 
@@ -148,6 +165,7 @@ import { computed, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import PageMasthead from '@/components/ui/PageMasthead.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
 import { surgeryApi } from '@/api'
@@ -167,6 +185,11 @@ const busy = ref(false)
 const confirmOpen = ref(false)
 
 const canSettle = computed(() => hasPermission('clinical:charge:settle'))
+
+/** 仅用于界面汇总展示；金额裁决与写入始终在服务端。 */
+const chargedLines = computed(() => (preview.value?.lines ?? []).filter((l) => l.charged))
+const pendingLines = computed(() => (preview.value?.lines ?? []).filter((l) => !l.charged))
+const chargedAmount = computed(() => chargedLines.value.reduce((sum, l) => sum + l.amount, 0))
 
 async function onSelect(payload: { patient: Patient; visit: Visit }) {
   visit.value = payload.visit
@@ -274,6 +297,23 @@ async function submit() {
   flex-wrap: wrap;
 }
 
+.preview-kpi {
+  border-width: 0 0 1px 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.preview-kpi .kpi-value {
+  font-size: var(--fs-20);
+}
+
+.kpi-value--status {
+  height: 28px;
+  align-items: center;
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+}
+
 .sum-item {
   display: flex;
   flex-direction: column;
@@ -300,6 +340,6 @@ async function submit() {
 }
 
 .confirm-amount strong {
-  font-size: var(--fs-22);
+  font-size: var(--fs-20);
 }
 </style>

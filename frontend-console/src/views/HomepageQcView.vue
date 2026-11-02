@@ -1,18 +1,22 @@
 <template>
   <div class="page">
-    <header class="page-head">
-      <div>
-        <h1 class="page-title">病案首页质控</h1>
-        <p class="page-sub">
-          按状态核对首页完整性与费用勾稽。提交后不可随意修改；归档需要与提交不同的操作人（四眼原则）。
-        </p>
-      </div>
-      <div class="row">
-        <button class="btn btn--sm" type="button" :disabled="loading" @click="load">
-          <AppIcon name="refresh" :size="15" /> 刷新
+    <PageMasthead
+      index="06"
+      kicker="MEDICAL RECORD QC / 质量与知识"
+      title="病案首页质控"
+      mandate="按状态核对首页完整性与费用勾稽。提交后不可随意修改；归档需要与提交不同的操作人（四眼原则）。"
+      :facts="[
+        { k: 'RECORDS', v: String(rows.length) },
+        { k: 'FILTER', v: status || 'ALL' },
+        { k: 'SOURCE', v: 'emr_svc' },
+      ]"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="loading" @click="load">
+          <AppIcon name="refresh" :size="14" /> 刷新
         </button>
-      </div>
-    </header>
+      </template>
+    </PageMasthead>
 
     <div class="stats">
       <button
@@ -28,12 +32,12 @@
       </button>
     </div>
 
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">首页列表</span>
+    <div class="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title">首页列表</span>
         <span class="badge badge--neutral">{{ rows.length }} 份</span>
         <span class="spacer" />
-        <span class="hint">点击行查看明细</span>
+        <span class="hint">点击行查看明细 · 提交与归档均需二次确认</span>
       </div>
 
       <div v-if="loading" class="loading">
@@ -169,6 +173,7 @@ import { onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import PageMasthead from '@/components/ui/PageMasthead.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { emrApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -287,39 +292,63 @@ onMounted(load)
 .stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s3);
+  gap: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  overflow: hidden;
 }
 
 .stat {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: var(--s4) var(--s5);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
+  gap: 3px;
+  padding: var(--s3) var(--s4);
+  background: none;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.stat:last-child {
+  border-right: 0;
 }
 
 .stat:hover {
-  border-color: var(--line-strong);
+  background: var(--panel-2);
 }
 
 .stat.active {
-  border-color: var(--accent-line);
   background: var(--accent-weak);
 }
 
+.stat.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+
 .stat-label {
-  font-size: var(--fs-12);
+  font-family: var(--font-mono);
+  font-size: var(--fs-9);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--ink-3);
 }
 
 .stat-value {
-  font-size: var(--fs-22);
-  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: var(--fs-24);
+  font-weight: 500;
+  letter-spacing: -0.05em;
   color: var(--ink);
 }
 

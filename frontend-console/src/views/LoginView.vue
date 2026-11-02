@@ -1,78 +1,82 @@
 <template>
   <div class="login">
-    <section class="panel">
-      <div class="panel-top">
-
+    <section class="auth">
+      <header class="auth-top">
         <div class="brand">
-          <img src="/brand/mark.svg" width="32" height="32" alt="" />
-          <div class="brand-text">
+          <img src="/brand/mark.svg?v=3" width="30" height="30" alt="" />
+          <span class="brand-text">
             <span class="brand-cn">铭医</span>
             <span class="brand-en">MEDASSIST</span>
-          </div>
-          <span class="brand-divider" aria-hidden="true" />
-          <span class="brand-product">临床协同控制台</span>
+          </span>
         </div>
+        <div class="auth-top-meta">
+          <span>CLINICAL LEDGER</span>
+          <span class="auth-top-rule" aria-hidden="true" />
+          <span>ACCESS / 01</span>
+        </div>
+      </header>
 
-        <div class="head">
-          <h1>登录</h1>
-          <p>使用院内统一账号。诊疗、收费与归档操作全程留痕，可按人、按单号追溯。</p>
-        </div>
+      <div class="auth-body">
+        <div class="auth-kicker">IDENTITY VERIFICATION</div>
+        <h1 class="auth-title">进入临床台账。</h1>
+        <p class="auth-desc">
+          用院内账号登录。医嘱、手术、收费与病案共享同一条审计链，界面只呈现服务端允许的操作。
+        </p>
 
         <form class="form" novalidate @submit.prevent="submit">
-          <label class="field">
-            <span class="label">账号</span>
-            <div class="control">
-              <AppIcon name="user" :size="15" class="control-icon" />
+          <label class="control" :class="{ 'is-error': errors.username }">
+            <span class="control-k">账号 / USERNAME</span>
+            <span class="control-row">
+              <AppIcon name="id-card" :size="15" class="control-icon" />
               <input
                 ref="userEl"
                 v-model.trim="username"
-                class="input control-input"
-                :class="{ 'is-error': errors.username }"
+                class="control-input"
                 name="username"
                 autocomplete="username"
-                placeholder="工号 / 账号"
-                :disabled="loading"
-                @input="errors.username = ''"
+                placeholder="工号或院内账号"
+                spellcheck="false"
+                @keyup="onKeyup"
               />
-            </div>
-            <span v-if="errors.username" class="error-text">{{ errors.username }}</span>
+            </span>
+            <span v-if="errors.username" class="control-err">{{ errors.username }}</span>
           </label>
 
-          <label class="field">
-            <span class="label">密码</span>
-            <div class="control">
+          <label class="control" :class="{ 'is-error': errors.password }">
+            <span class="control-k">密码 / PASSWORD</span>
+            <span class="control-row">
               <AppIcon name="lock" :size="15" class="control-icon" />
               <input
                 v-model="password"
-                class="input control-input"
-                :class="{ 'is-error': errors.password }"
-                :type="showPwd ? 'text' : 'password'"
+                class="control-input"
                 name="password"
+                :type="showPwd ? 'text' : 'password'"
                 autocomplete="current-password"
-                placeholder="登录密码"
-                :disabled="loading"
-                @input="errors.password = ''"
+                placeholder="输入登录密码"
                 @keyup="onKeyup"
               />
               <button
+                class="control-eye"
                 type="button"
-                class="control-btn"
                 :aria-label="showPwd ? '隐藏密码' : '显示密码'"
                 @click="showPwd = !showPwd"
               >
                 <AppIcon :name="showPwd ? 'eye-off' : 'eye'" :size="15" />
               </button>
-            </div>
-            <span v-if="capsLock" class="caps">大写锁定已开启</span>
-            <span v-if="errors.password" class="error-text">{{ errors.password }}</span>
+            </span>
+            <span v-if="errors.password" class="control-err">{{ errors.password }}</span>
           </label>
 
           <div class="form-row">
-            <label class="check">
+            <label class="remember">
               <input v-model="remember" type="checkbox" />
               <span>记住账号</span>
             </label>
-            <span class="form-note">登录即视为同意院内信息安全约定</span>
+            <span v-if="capsLock" class="caps">
+              <AppIcon name="warning" :size="13" /> Caps Lock 已开启
+            </span>
+            <span class="spacer" />
+            <span class="form-hint">账号由信息科统一开通</span>
           </div>
 
           <div v-if="formError" class="form-error" role="alert">
@@ -80,72 +84,104 @@
             <span>{{ formError }}</span>
           </div>
 
-          <button class="btn btn--primary btn--lg btn--block submit" type="submit" :disabled="loading">
-            <span v-if="loading" class="spinner" aria-hidden="true" />
-            {{ loading ? '正在验证身份…' : '进入工作台' }}
+          <button class="submit" type="submit" :disabled="loading">
+            <span>{{ loading ? '正在验证…' : '登录控制台' }}</span>
+            <AppIcon :name="loading ? 'refresh' : 'arrow-right'" :size="16" :class="{ spin: loading }" />
           </button>
         </form>
 
-        <div class="hint-block">
-          无法登录或需要开通权限，请联系信息科；账号权限由角色配置下发，前端不做越权兜底。
-        </div>
+        <p v-if="isDev" class="dev-hint">
+          <span class="dev-tag">DEV</span>
+          演示账号 <b class="mono">admin01</b> · 密码 <b class="mono">Med@2026</b>
+        </p>
       </div>
 
-      <footer class="panel-foot">
-        <span class="mono">MEDASSIST CONSOLE · v0.2.0</span>
-        <span class="spacer" />
-        <span class="row" style="gap: 5px"><AppIcon name="shield" :size="12" /> 传输加密</span>
-        <span class="row" style="gap: 5px"><AppIcon name="pulse" :size="12" /> 操作留痕</span>
+      <footer class="auth-foot">
+        <span>铭医 MedAssist · 临床协同控制台</span>
+        <span class="auth-foot-rule" aria-hidden="true" />
+        <span class="mono">BUILD {{ buildTag }}</span>
       </footer>
     </section>
 
-    <aside class="stage" aria-hidden="true">
-      <div class="stage-grid" />
-
-      <div class="stage-head">
-        <span class="stage-code">CLINICAL / 01</span>
-        <span class="stage-code">AUDIT ON</span>
+    <aside class="plate" aria-hidden="true">
+      <div class="plate-top">
+        <span>INSTRUMENT / THEATRE</span>
+        <span class="plate-live"><span class="live-dot" />AUDIT ON</span>
       </div>
 
-      <svg class="stage-art" viewBox="0 0 640 860" preserveAspectRatio="xMidYMid slice">
-        <g fill="none" stroke="currentColor" stroke-opacity="0.14">
-          <circle cx="360" cy="360" r="250" />
-          <circle cx="360" cy="360" r="180" />
-          <circle cx="360" cy="360" r="110" />
-          <path d="M40 360h120M560 360h80M360 120v-60M360 600v60" stroke-opacity="0.22" />
+      <svg class="plate-art" viewBox="0 0 560 760" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+            <path d="M28 0H0v28" fill="none" stroke="currentColor" stroke-opacity="0.07" stroke-width="1" />
+          </pattern>
+        </defs>
+        <rect width="560" height="760" fill="url(#grid)" />
+
+        <!-- 中央刻度盘 -->
+        <g transform="translate(280 300)" fill="none" stroke="currentColor">
+          <circle r="176" stroke-opacity="0.14" />
+          <circle r="140" stroke-opacity="0.08" stroke-dasharray="1 6" />
+          <circle r="86" stroke-opacity="0.16" />
+          <g stroke-opacity="0.3">
+            <path v-for="n in 60" :key="n" :transform="`rotate(${n * 6})`" d="M0 -176V-168" stroke-width="1" />
+          </g>
+          <g stroke-opacity="0.55">
+            <path v-for="n in 12" :key="`h${n}`" :transform="`rotate(${n * 30})`" d="M0 -176V-164" stroke-width="1.4" />
+          </g>
+          <path d="M-240 0H240M0 -240V240" stroke-opacity="0.1" stroke-dasharray="2 6" />
+          <circle r="4" fill="#7f9cf7" stroke="none" />
         </g>
-        <g class="wave">
-          <path
-            d="M40 360h96l26-52 30 104 26-52h52l22-96 34 192 28-96h60l20-44 26 88h120"
-            fill="none"
-            stroke="#7FA6F2"
-            stroke-opacity="0.9"
-            stroke-width="2.2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
+
+        <!-- 手术间时间轴（装饰性示意） -->
+        <g transform="translate(66 520)" font-family="IBM Plex Mono, monospace">
+          <g v-for="(lane, i) in lanes" :key="i" :transform="`translate(0 ${i * 34})`">
+            <text x="0" y="4" fill="currentColor" fill-opacity="0.42" font-size="9" letter-spacing="1.6">
+              {{ lane.label }}
+            </text>
+            <path d="M48 0h440" stroke="currentColor" stroke-opacity="0.12" />
+            <rect
+              v-for="(b, j) in lane.blocks"
+              :key="j"
+              :x="b.x"
+              y="-7"
+              :width="b.w"
+              height="14"
+              :fill="b.accent ? '#7f9cf7' : 'currentColor'"
+              :fill-opacity="b.accent ? 0.85 : 0.16"
+            />
+          </g>
+          <path d="M48 118h440" stroke="currentColor" stroke-opacity="0.22" />
+          <g fill="currentColor" fill-opacity="0.4" font-size="9">
+            <text x="48" y="134">08:00</text>
+            <text x="240" y="134">13:00</text>
+            <text x="462" y="134">18:00</text>
+          </g>
         </g>
-        <g fill="#7FA6F2" fill-opacity="0.4">
-          <rect x="40" y="470" width="2" height="26" />
-          <rect x="56" y="482" width="2" height="14" />
-          <rect x="72" y="476" width="2" height="20" />
-          <rect x="88" y="490" width="2" height="6" />
-          <rect x="104" y="466" width="2" height="30" />
-          <rect x="120" y="480" width="2" height="16" />
-        </g>
+
+        <!-- 脉搏 -->
+        <path
+          class="pulse-line"
+          d="M40 676h74l18-40 22 78 18-38h40l16-70 26 140 20-70h52l14-32 18 64h128"
+          fill="none"
+          stroke="#7f9cf7"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-opacity="0.85"
+        />
       </svg>
 
-      <div class="stage-copy">
-        <span class="stage-eyebrow">CLINICAL INSTRUMENT</span>
+      <div class="plate-copy">
+        <span class="plate-eyebrow">EVIDENCE, NOT DECORATION</span>
         <h2>每一个数字，<br />都要能被追问。</h2>
-        <p>谁开的、什么时候开的、依据是什么——界面把审计线索放在操作旁边，而不是藏在日志里。</p>
+        <p>谁开的、什么时候开的、依据是什么。审计线索与操作并排出现，而不是藏在日志里。</p>
       </div>
 
-      <div class="stage-foot">
-        <div><span class="stage-k">RECORD</span><span class="stage-v">医嘱 · 收费 · 病历同源</span></div>
-        <div><span class="stage-k">CONTROL</span><span class="stage-v">权限点由服务端裁决</span></div>
-        <div><span class="stage-k">TRACE</span><span class="stage-v">关键动作二次确认</span></div>
-      </div>
+      <dl class="plate-foot">
+        <div><dt>RECORD</dt><dd>医嘱 · 收费 · 病历同源</dd></div>
+        <div><dt>CONTROL</dt><dd>权限点由服务端裁决</dd></div>
+        <div><dt>TRACE</dt><dd>关键动作二次确认</dd></div>
+      </dl>
     </aside>
   </div>
 </template>
@@ -170,6 +206,39 @@ const capsLock = ref(false)
 const formError = ref('')
 const errors = reactive({ username: '', password: '' })
 const userEl = ref<HTMLInputElement | null>(null)
+
+const isDev = import.meta.env.DEV
+const buildTag = isDev ? 'DEV / 5174' : 'PROD / 2026.11'
+
+const lanes = [
+  {
+    label: 'OR-01',
+    blocks: [
+      { x: 48, w: 96, accent: false },
+      { x: 160, w: 78, accent: true },
+      { x: 262, w: 110, accent: false },
+      { x: 392, w: 62, accent: false },
+    ],
+  },
+  {
+    label: 'OR-02',
+    blocks: [
+      { x: 64, w: 70, accent: false },
+      { x: 150, w: 128, accent: false },
+      { x: 300, w: 92, accent: true },
+      { x: 410, w: 74, accent: false },
+    ],
+  },
+  {
+    label: 'OR-03',
+    blocks: [
+      { x: 48, w: 132, accent: false },
+      { x: 200, w: 64, accent: false },
+      { x: 286, w: 150, accent: false },
+      { x: 454, w: 30, accent: true },
+    ],
+  },
+]
 
 function onKeyup(e: KeyboardEvent) {
   capsLock.value = typeof e.getModifierState === 'function' && e.getModifierState('CapsLock')
@@ -205,192 +274,339 @@ onMounted(() => {
 .login {
   min-height: 100%;
   display: grid;
-  grid-template-columns: minmax(440px, 1fr) minmax(420px, 46%);
+  grid-template-columns: minmax(430px, 54%) minmax(380px, 46%);
   background: var(--bg);
 }
 
-/* ---------------- 左：表单 ---------------- */
+/* ---------------- 左：身份验证 ---------------- */
 
-.panel {
+.auth {
   display: flex;
   flex-direction: column;
-  background: var(--panel);
-  border-right: 1px solid var(--line);
   min-height: 100%;
+  background: var(--panel);
+  border-right: 1px solid var(--line-strong);
+  position: relative;
 }
 
-.panel-top {
-  flex: 1;
+.auth::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
+  background-image: repeating-linear-gradient(to bottom, var(--line-strong) 0 1px, transparent 1px 14px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.auth-top {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  width: 100%;
-  max-width: 400px;
-  margin: 0 auto;
-  padding: var(--s12) var(--s6) var(--s8);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s5) var(--s8);
+  border-bottom: 1px solid var(--line);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-bottom: var(--s12);
 }
 
 .brand-text {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 7px;
 }
 
 .brand-cn {
-  font-size: var(--fs-15);
+  font-size: var(--fs-14);
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.08em;
 }
 
 .brand-en {
   font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.16em;
+  font-size: 8px;
+  letter-spacing: 0.2em;
   color: var(--ink-4);
 }
 
-.brand-divider {
-  width: 1px;
-  height: 12px;
+.auth-top-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--ink-4);
+}
+
+.auth-top-rule {
+  width: 22px;
+  height: 1px;
   background: var(--line-strong);
 }
 
-.brand-product {
-  font-size: var(--fs-11);
-  color: var(--ink-3);
+.auth-body {
+  flex: 1;
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  padding: var(--s12) var(--s6) var(--s8);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.head h1 {
-  font-size: var(--fs-30);
-  letter-spacing: -0.03em;
+.auth-kicker {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  margin-bottom: var(--s3);
 }
 
-.head p {
-  margin-top: var(--s3);
-  color: var(--ink-3);
+.auth-title {
+  font-size: var(--fs-44);
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.auth-desc {
+  margin-top: var(--s4);
+  max-width: 40ch;
   font-size: var(--fs-12);
-  line-height: 1.7;
-  max-width: 42ch;
+  line-height: 1.75;
+  color: var(--ink-3);
 }
 
 .form {
+  margin-top: var(--s8);
   display: flex;
   flex-direction: column;
-  gap: var(--s4);
-  margin-top: var(--s8);
+  gap: var(--s5);
 }
 
 .control {
-  position: relative;
   display: flex;
-  align-items: center;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
-  background: var(--panel);
+  flex-direction: column;
+  gap: 3px;
+  border-bottom: 1px solid var(--line-strong);
+  padding-bottom: 5px;
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 
 .control:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-color: var(--ink);
+  box-shadow: 0 1px 0 var(--ink);
+}
+
+.control.is-error {
+  border-color: var(--danger);
+}
+
+.control-k {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--ink-4);
+}
+
+.control:focus-within .control-k {
+  color: var(--accent);
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
 }
 
 .control-icon {
-  margin-left: 10px;
   color: var(--ink-4);
-  flex: none;
+}
+
+.control:focus-within .control-icon {
+  color: var(--ink-2);
 }
 
 .control-input {
-  border: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  min-height: 38px;
-  padding-left: 8px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font-size: var(--fs-14);
+  color: var(--ink);
+  letter-spacing: 0.01em;
 }
 
-.control-btn {
-  width: 32px;
-  height: 30px;
-  margin-right: 3px;
+.control-input::placeholder {
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+}
+
+.control-input:focus,
+.control-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.control-eye:focus-visible {
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent-line);
+}
+
+.control-eye {
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   border: 0;
   background: none;
   color: var(--ink-4);
-  border-radius: var(--r-sm);
   cursor: pointer;
+  border-radius: 2px;
 }
 
-.control-btn:hover {
-  background: var(--sunken);
-  color: var(--ink-2);
+.control-eye:hover {
+  color: var(--ink);
+  background: var(--panel-3);
 }
 
-.caps {
-  font-size: var(--fs-11);
-  color: var(--warn);
+.control-err {
+  font-size: var(--fs-10);
+  color: var(--danger);
 }
 
 .form-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--s3);
+  font-size: var(--fs-10);
+  color: var(--ink-3);
   flex-wrap: wrap;
 }
 
-.check {
-  display: inline-flex;
+.remember {
+  display: flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--fs-12);
-  color: var(--ink-2);
   cursor: pointer;
+  user-select: none;
 }
 
-.check input {
-  width: 13px;
-  height: 13px;
+.remember input {
+  width: 12px;
+  height: 12px;
   accent-color: var(--accent);
 }
 
-.form-note {
-  font-size: var(--fs-11);
+.caps {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.form-hint {
+  font-family: var(--font-mono);
+  font-size: 9px;
   color: var(--ink-4);
 }
 
 .form-error {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 9px 11px;
-  border-radius: var(--r-md);
+  gap: 7px;
+  padding: 9px 10px;
   background: var(--danger-weak);
   border: 1px solid var(--danger-line);
+  border-radius: 2px;
   color: var(--danger);
-  font-size: var(--fs-12);
-  line-height: 1.5;
+  font-size: var(--fs-11);
+  line-height: 1.55;
 }
 
 .submit {
-  margin-top: var(--s1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--ink);
+  color: var(--ink-inverse);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 
-.spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgb(255 255 255 / 35%);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+.submit:hover:not(:disabled) {
+  background: #2a2e35;
+}
+
+.submit:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.dev-hint {
+  margin-top: var(--s5);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-10);
+  color: var(--ink-3);
+}
+
+.dev-tag {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  padding: 1px 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  color: var(--ink-4);
+}
+
+.auth-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s4) var(--s8);
+  border-top: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--ink-4);
+}
+
+.auth-foot-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.spin {
+  animation: spin 1.2s linear infinite;
 }
 
 @keyframes spin {
@@ -399,163 +615,165 @@ onMounted(() => {
   }
 }
 
-.hint-block {
-  margin-top: var(--s8);
-  padding-top: var(--s4);
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-11);
-  line-height: 1.7;
-  color: var(--ink-4);
-}
+/* ---------------- 右：仪表板 ---------------- */
 
-.panel-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  padding: var(--s4) var(--s6);
-  border-top: 1px solid var(--line);
-  background: var(--panel-2);
-  font-size: var(--fs-10);
-  color: var(--ink-4);
-}
-
-/* ---------------- 右：仪表台视觉 ---------------- */
-
-.stage {
+.plate {
   position: relative;
-  overflow: hidden;
-  background: linear-gradient(180deg, var(--brand-mid) 0%, var(--brand-deep) 100%);
-  color: #dbe6fb;
   display: flex;
   flex-direction: column;
-  padding: var(--s8) var(--s10) var(--s8);
+  min-height: 100%;
+  padding: var(--s5) var(--s7) var(--s7);
+  background: radial-gradient(120% 80% at 70% 20%, #17202e 0%, #0b1017 58%, #080b10 100%);
+  color: #dfe3e9;
+  overflow: hidden;
 }
 
-[data-theme='dark'] .stage {
-  background: linear-gradient(180deg, #0a1730 0%, #060c18 100%);
-}
-
-.stage-grid {
+/* 底部压暗：让说明文字压在仪表图之上仍然清晰。 */
+.plate::after {
+  content: "";
   position: absolute;
-  inset: 0;
-  background-image: linear-gradient(rgb(255 255 255 / 5%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 5%) 1px, transparent 1px);
-  background-size: 40px 40px;
-  mask-image: radial-gradient(ellipse at 50% 40%, #000 30%, transparent 78%);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52%;
+  background: linear-gradient(to top, #080b10 26%, rgb(8 11 16 / 90%) 52%, transparent 100%);
+  pointer-events: none;
+  z-index: 1;
 }
 
-.stage-art {
+.plate-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: rgb(223 227 233 / 46%);
+  position: relative;
+  z-index: 2;
+}
+
+.plate-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #7f9cf7;
+}
+
+.live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7f9cf7;
+  box-shadow: 0 0 0 3px rgb(127 156 247 / 16%);
+}
+
+.plate-art {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  color: #9db9ef;
+  color: #dfe3e9;
+  opacity: 0.9;
 }
 
-.wave path {
-  stroke-dasharray: 1400;
-  stroke-dashoffset: 0;
-  animation: trace 9s var(--ease-in-out) infinite alternate;
+.pulse-line {
+  animation: pulse 6s ease-in-out infinite;
 }
 
-@keyframes trace {
-  from {
-    stroke-dashoffset: 1400;
-    opacity: 0.35;
+@keyframes pulse {
+  0%,
+  100% {
+    stroke-opacity: 0.55;
   }
-  to {
-    stroke-dashoffset: 0;
-    opacity: 1;
+  50% {
+    stroke-opacity: 1;
   }
 }
 
-.stage-head {
+.plate-copy {
   position: relative;
-  display: flex;
-  justify-content: space-between;
-}
-
-.stage-code {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  color: rgb(219 230 251 / 55%);
-}
-
-.stage-copy {
-  position: relative;
+  z-index: 2;
   margin-top: auto;
-  max-width: 44ch;
+  max-width: 34ch;
 }
 
-.stage-eyebrow {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.24em;
-  color: rgb(219 230 251 / 55%);
-}
-
-.stage-copy h2 {
-  margin-top: var(--s3);
-  font-size: var(--fs-30);
-  line-height: 1.35;
-  letter-spacing: -0.02em;
-  color: #f4f8ff;
-  font-weight: 500;
-}
-
-.stage-copy p {
-  margin-top: var(--s3);
-  font-size: var(--fs-12);
-  line-height: 1.8;
-  color: rgb(219 230 251 / 68%);
-  max-width: 40ch;
-}
-
-.stage-foot {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--s4);
-  margin-top: var(--s8);
-  padding-top: var(--s4);
-  border-top: 1px solid rgb(255 255 255 / 12%);
-}
-
-.stage-foot > div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.stage-k {
+.plate-eyebrow {
   font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 0.18em;
-  color: rgb(219 230 251 / 45%);
+  color: rgb(223 227 233 / 44%);
 }
 
-.stage-v {
+.plate-copy h2 {
+  margin-top: var(--s3);
+  font-size: var(--fs-28);
+  line-height: 1.18;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  color: #f2f0ea;
+}
+
+.plate-copy p {
+  margin-top: var(--s3);
   font-size: var(--fs-11);
-  color: rgb(219 230 251 / 82%);
+  line-height: 1.75;
+  color: rgb(223 227 233 / 58%);
 }
 
-@media (max-width: 1024px) {
+.plate-foot {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s3);
+  margin: var(--s6) 0 0;
+  padding-top: var(--s4);
+  border-top: 1px solid rgb(223 227 233 / 12%);
+}
+
+.plate-foot div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.plate-foot dt {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  color: rgb(223 227 233 / 38%);
+}
+
+.plate-foot dd {
+  margin: 0;
+  font-size: var(--fs-10);
+  color: rgb(223 227 233 / 72%);
+  line-height: 1.5;
+}
+
+@media (max-width: 1020px) {
   .login {
     grid-template-columns: 1fr;
   }
-  .stage {
+  .plate {
     display: none;
   }
-  .panel {
+  .auth {
     border-right: 0;
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .wave path {
-    animation: none;
-    stroke-dashoffset: 0;
+  .auth-top,
+  .auth-foot {
+    padding-left: var(--s5);
+    padding-right: var(--s5);
+  }
+  .auth-body {
+    padding: var(--s8) var(--s5);
+  }
+  .auth-title {
+    font-size: var(--fs-32);
   }
 }
 </style>

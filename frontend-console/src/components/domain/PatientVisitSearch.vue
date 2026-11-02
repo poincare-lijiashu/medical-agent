@@ -214,7 +214,7 @@ onMounted(async () => {
 }
 
 .result:hover {
-  background: var(--panel-muted);
+  background: var(--panel-3);
 }
 
 .result-name {
