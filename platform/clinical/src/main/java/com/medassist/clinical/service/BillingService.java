@@ -20,6 +20,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -112,10 +113,20 @@ public class BillingService {
         }
 
         Charge charge = repo.lockOpenCharge(visitId).orElse(null);
+        // 退药冲减（B3）：未结算前已退的药必须从医嘱金额里扣掉，否则会把退回的药再收一次钱。
+        // 全额退回的医嘱在退药时已作废，这里只保留净额 > 0 的行。
+        List<OrderNet> billable = new ArrayList<>();
+        for (VisitOrder o : pending) {
+            BigDecimal net = o.amount().subtract(repo.sumAppliedOrderRefund(o.id()))
+                    .setScale(2, RoundingMode.HALF_UP);
+            if (net.signum() > 0) {
+                billable.add(new OrderNet(o, net));
+            }
+        }
         if (charge == null) {
             Charge latest = repo.findLatestCharge(visitId)
                     .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
-            if (pending.isEmpty()) {
+            if (billable.isEmpty()) {
                 audit(actor, "CHARGE_SETTLE_IDEMPOTENT", visitId.toString(),
                         Map.of("visitNo", visit.visitNo(), "chargeNo", latest.chargeNo()));
                 return toView(latest);
@@ -125,12 +136,15 @@ public class BillingService {
         }
 
         BigDecimal addAmount = BigDecimal.ZERO;
-        for (VisitOrder o : pending) {
+        List<UUID> chargedOrderIds = new ArrayList<>();
+        for (OrderNet n : billable) {
+            VisitOrder o = n.order();
             boolean inserted = repo.insertChargeItem(UUID.randomUUID(), charge.id(), o.id(),
-                    "ORDER:" + o.id(), o.itemCode(), o.itemName(), categoryOf(o), o.amount());
+                    "ORDER:" + o.id(), o.itemCode(), o.itemName(), categoryOf(o), n.amount());
             if (inserted) {
-                addAmount = addAmount.add(o.amount());
+                addAmount = addAmount.add(n.amount());
             }
+            chargedOrderIds.add(o.id());
         }
 
         BigDecimal payable = charge.totalAmount().add(addAmount);
@@ -155,11 +169,11 @@ public class BillingService {
             // 版本冲突说明另一个窗口刚结算/退费；交给调用方重试，避免"以为失败其实已扣费"
             throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
         }
-        int charged = repo.markOrdersCharged(pending.stream().map(VisitOrder::id).toList());
-        if (charged != pending.size()) {
+        int charged = repo.markOrdersCharged(chargedOrderIds);
+        if (charged != chargedOrderIds.size()) {
             // 有医嘱在结算过程中被改成非 PLACED（例如并发撤销）：整笔回滚，不能"钱收了医嘱还挂着"
             throw new BusinessException(ErrorCode.CONFLICT,
-                    "有 " + (pending.size() - charged) + " 条医嘱状态已变化，本次结算已撤销，请刷新后重试");
+                    "有 " + (chargedOrderIds.size() - charged) + " 条医嘱状态已变化，本次结算已撤销，请刷新后重试");
         }
 
         audit(actor, "CHARGE_SETTLE", visitId.toString(), Map.of(
@@ -253,6 +267,10 @@ public class BillingService {
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /** 结算行：医嘱 + 扣除退药冲减后的净额（&gt; 0 才入账）。 */
+    private record OrderNet(VisitOrder order, BigDecimal amount) {
+    }
 
     /** 当前收费单：优先未结单，否则最近一张。 */
     private java.util.Optional<Charge> currentCharge(Visit visit) {

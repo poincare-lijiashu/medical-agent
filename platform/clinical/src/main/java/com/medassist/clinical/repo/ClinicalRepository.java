@@ -14,6 +14,7 @@ import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
+import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
@@ -1366,6 +1367,110 @@ public class ClinicalRepository {
                         + " FROM clinical_svc.pharmacy_charge"
                         + " WHERE refund_pending_amount > 0 ORDER BY updated_at DESC LIMIT ?")
                 .param(limit).query(PHARMACY_CHARGE_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 医嘱退药冲减（B3 / V23）
+
+    private static final RowMapper<OrderRefund> ORDER_REFUND_MAPPER = (rs, i) -> new OrderRefund(
+            rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+            rs.getObject("dispense_item_id", UUID.class), rs.getObject("visit_id", UUID.class),
+            rs.getBigDecimal("amount"), rs.getBigDecimal("applied_amount"),
+            rs.getBigDecimal("pending_amount"), rs.getBigDecimal("done_amount"));
+
+    private static final String ORDER_REFUND_COLUMNS =
+            "id, order_id, dispense_item_id, visit_id, amount, applied_amount, pending_amount, done_amount";
+
+    /** 加行锁读取退药冲减登记；同一发药明细的并发退药在这里串行。 */
+    public Optional<OrderRefund> lockOrderRefund(UUID dispenseItemId) {
+        return jdbc.sql("SELECT " + ORDER_REFUND_COLUMNS
+                        + " FROM clinical_svc.order_refund WHERE dispense_item_id = ? FOR UPDATE")
+                .param(dispenseItemId).query(ORDER_REFUND_MAPPER).optional();
+    }
+
+    /** 首次退药登记（幂等键 dispense_item_id，并发同一明细只留一条）。 */
+    public void insertOrderRefund(UUID id, UUID orderId, UUID dispenseItemId, UUID visitId,
+                                  BigDecimal amount, String reason, String actor) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.order_refund
+                            (id, order_id, dispense_item_id, visit_id, amount, reason, created_by)
+                        VALUES (:id, :orderId, :dispenseItemId, :visitId, :amount, :reason, :actor)
+                        ON CONFLICT (dispense_item_id) DO NOTHING
+                        """)
+                .param("id", id).param("orderId", orderId).param("dispenseItemId", dispenseItemId)
+                .param("visitId", visitId).param("amount", amount)
+                .param("reason", reason).param("actor", actor).update();
+    }
+
+    /** 未结算已直接冲减的金额合计：结算时从该医嘱金额中扣除。 */
+    public BigDecimal sumAppliedOrderRefund(UUID orderId) {
+        BigDecimal sum = jdbc.sql("""
+                        SELECT coalesce(sum(applied_amount), 0)
+                          FROM clinical_svc.order_refund WHERE order_id = ?
+                        """)
+                .param(orderId).query(BigDecimal.class).single();
+        return sum == null ? BigDecimal.ZERO : sum;
+    }
+
+    /** 该医嘱已生成的费用明细所属收费单（未结算时为空）。 */
+    public Optional<UUID> findChargeIdByOrderItem(UUID orderId) {
+        return jdbc.sql("SELECT charge_id FROM clinical_svc.charge_item WHERE source_key = ?")
+                .param("ORDER:" + orderId).query(UUID.class).optional();
+    }
+
+    /** 未结算：直接冲减（结算时扣减该医嘱金额）。 */
+    public boolean addOrderRefundApplied(UUID dispenseItemId, BigDecimal delta) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.order_refund
+                           SET applied_amount = applied_amount + :delta, updated_at = now()
+                         WHERE dispense_item_id = :id
+                           AND applied_amount + pending_amount + done_amount + :delta <= amount
+                        """)
+                .param("delta", delta).param("id", dispenseItemId).update() > 0;
+    }
+
+    /** 已结算：登记待财务退费（不改账）。 */
+    public boolean addOrderRefundPending(UUID dispenseItemId, BigDecimal delta) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.order_refund
+                           SET pending_amount = pending_amount + :delta, updated_at = now()
+                         WHERE dispense_item_id = :id
+                           AND applied_amount + pending_amount + done_amount + :delta <= amount
+                        """)
+                .param("delta", delta).param("id", dispenseItemId).update() > 0;
+    }
+
+    /** 财务确认退费：待退费 → 已退费。 */
+    public boolean completeOrderRefund(UUID dispenseItemId, BigDecimal amount) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.order_refund
+                           SET pending_amount = pending_amount - :amount,
+                               done_amount = done_amount + :amount,
+                               updated_at = now()
+                         WHERE dispense_item_id = :id AND pending_amount >= :amount
+                        """)
+                .param("amount", amount).param("id", dispenseItemId).update() > 0;
+    }
+
+    /** 待财务退费的医嘱退药（财务工作台）。 */
+    public List<OrderRefund> listPendingOrderRefunds(int limit) {
+        return jdbc.sql("SELECT " + ORDER_REFUND_COLUMNS
+                        + " FROM clinical_svc.order_refund"
+                        + " WHERE pending_amount > 0 ORDER BY updated_at DESC LIMIT ?")
+                .param(limit).query(ORDER_REFUND_MAPPER).list();
+    }
+
+    /**
+     * 全额退药且尚未计费：医嘱直接作废，避免结算时又按原金额收一次。
+     *
+     * <p>只在"没有 ORDER: 费用明细"时调用；已计费的场景走冲减/待退费。
+     */
+    public boolean cancelUnchargedOrder(UUID orderId) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_order
+                           SET status = 'CANCELLED', version = version + 1, updated_at = now()
+                         WHERE id = :orderId AND status = 'PLACED'
+                        """)
+                .param("orderId", orderId).update() > 0;
     }
 
     // ---------------------------------------------------------------- 手术麻醉（V15）

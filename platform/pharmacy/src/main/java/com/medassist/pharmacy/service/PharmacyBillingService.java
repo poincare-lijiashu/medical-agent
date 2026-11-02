@@ -129,6 +129,62 @@ public class PharmacyBillingService {
         }
     }
 
+    // ---------------------------------------------------------------- 医嘱计费模式退药冲减（B3）
+
+    /**
+     * 医嘱计费模式：退药后冲减临床医嘱金额（同样在本地事务提交后执行）。
+     *
+     * <p>临床侧按 {@code dispenseItemId} + "累计已退金额"幂等：未计费记 applied（结算时扣减）、
+     * 已计费未结算写负向明细、已结算登记待财务退费。
+     */
+    public void scheduleOrderRefund(UUID dispenseId, UUID orderId, List<DispenseItem> items,
+                                    String actor) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            orderRefundNow(dispenseId, orderId, items, actor);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                orderRefundNow(dispenseId, orderId, items, actor);
+            }
+        });
+    }
+
+    private void orderRefundNow(UUID dispenseId, UUID orderId, List<DispenseItem> items, String actor) {
+        boolean pending = false;
+        int cancelled = 0;
+        try {
+            for (DispenseItem item : items) {
+                if (item.returnedQuantity() <= 0) {
+                    continue;
+                }
+                BigDecimal cumulative = item.unitPrice()
+                        .multiply(BigDecimal.valueOf(item.returnedQuantity()))
+                        .setScale(2, RoundingMode.HALF_UP);
+                ClinicalChargeClient.OrderRefunded refunded = client.refundOrder(orderId, item.id(),
+                        item.amount().setScale(2, RoundingMode.HALF_UP), cumulative,
+                        "退药 " + item.batchNo(), actor);
+                pending = pending || refunded.pendingAmount().signum() > 0;
+                if (refunded.orderCancelled()) {
+                    cancelled++;
+                }
+            }
+            // 医嘱计费模式下药房不持账：冲减同步成功后回到 NONE（待退费保留 PENDING 供财务查询）
+            repo.updateDispenseBillingStatus(dispenseId,
+                    pending ? Dispense.BILLING_REFUND_PENDING : Dispense.BILLING_NONE);
+            audit(actor, "ORDER_REFUND_SYNCED", dispenseId.toString(), Map.of(
+                    "orderId", orderId.toString(), "refundPending", pending,
+                    "orderCancelled", cancelled));
+        } catch (RuntimeException e) {
+            log.warn("pharmacy.order_refund_failed dispenseId={} orderId={} err={}", dispenseId,
+                    orderId, e.getClass().getSimpleName());
+            repo.updateDispenseBillingStatus(dispenseId, Dispense.BILLING_REFUND_FAILED);
+            audit(actor, "ORDER_REFUND_FAILED", dispenseId.toString(), Map.of(
+                    "orderId", orderId.toString(), "reason", safeMessage(e)));
+        }
+    }
+
     // ---------------------------------------------------------------- 补偿重试
 
     /**
@@ -142,8 +198,19 @@ public class PharmacyBillingService {
         Prescription rx = repo.findPrescription(dispense.prescriptionId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));
         if (!rx.chargeOnDispense()) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "该处方未启用发药计费（billing_mode=ORDER），无需重试");
+            // 医嘱计费模式：只有"退药冲减同步失败/待退费"需要重试，药房本身不记账
+            UUID orderId = rx.sourceOrderId();
+            if (orderId == null) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "该处方是医嘱计费模式且未关联临床医嘱，无需重试计费");
+            }
+            String billingStatus = dispense.billingStatus();
+            if (Dispense.BILLING_REFUND_FAILED.equals(billingStatus)
+                    || Dispense.BILLING_REFUND_PENDING.equals(billingStatus)) {
+                orderRefundNow(dispenseId, orderId, repo.listDispenseItems(dispenseId), actor);
+                return repo.findDispense(dispenseId).orElseThrow();
+            }
+            return dispense; // NONE：没有待同步的冲减，幂等返回
         }
         List<DispenseItem> items = repo.listDispenseItems(dispenseId);
         String status = dispense.billingStatus();

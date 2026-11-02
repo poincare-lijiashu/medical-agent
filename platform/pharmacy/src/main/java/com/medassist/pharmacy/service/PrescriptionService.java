@@ -408,6 +408,9 @@ public class PrescriptionService {
         Prescription rx = repo.findPrescription(dispense.prescriptionId()).orElse(null);
         if (rx != null && rx.chargeOnDispense() && billable(dispense.billingStatus())) {
             billing.scheduleRefund(dispenseId, all, actor);
+        } else if (rx != null && rx.sourceOrderId() != null) {
+            // 医嘱计费模式（B3）：钱在临床结算时收，退药必须回冲医嘱金额，否则患者白付钱
+            billing.scheduleOrderRefund(dispenseId, rx.sourceOrderId(), all, actor);
         }
         return dispenseDetail(dispenseId);
     }

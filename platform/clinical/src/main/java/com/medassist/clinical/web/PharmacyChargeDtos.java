@@ -42,4 +42,21 @@ public final class PharmacyChargeDtos {
                              BigDecimal amount, BigDecimal refundedAmount, BigDecimal pendingAmount,
                              BigDecimal doneAmount, boolean billSettled) {
     }
+
+    /**
+     * 医嘱计费模式的退药冲减请求。
+     *
+     * @param itemAmount             该发药明细金额（可退上限，由药房按发药明细给出）
+     * @param cumulativeRefundAmount 该明细累计已退金额（幂等：重复提交同一值不会重复冲账）
+     */
+    public record OrderRefundReq(UUID orderId, UUID dispenseItemId, BigDecimal itemAmount,
+                                 BigDecimal cumulativeRefundAmount, String reason, String actor) {
+    }
+
+    /** 医嘱退药冲减视图：applied=未结算直接冲减，pending=已结算待财务退费。 */
+    public record OrderRefundView(UUID dispenseItemId, UUID orderId, UUID visitId,
+                                  BigDecimal amount, BigDecimal appliedAmount,
+                                  BigDecimal pendingAmount, BigDecimal doneAmount,
+                                  boolean billSettled, boolean orderCancelled) {
+    }
 }

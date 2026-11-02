@@ -633,6 +633,80 @@ class PrescriptionServiceTest {
         verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_CHARGED));
     }
 
+    @Test
+    @DisplayName("医嘱计费退药（B3）：按累计已退金额冲减临床医嘱，药房不持账")
+    void returnInOrderModeRefundsClinicalOrder() {
+        UUID visitId = UUID.randomUUID();
+        UUID dispenseId = UUID.randomUUID();
+        UUID itemId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        DispenseItem before = new DispenseItem(itemId, dispenseId, UUID.randomUUID(), drugId,
+                batchId, "B-1", LocalDate.now().plusDays(100), 5, 0,
+                amoxicillin.price(), new BigDecimal("62.50"));
+        DispenseItem after = new DispenseItem(itemId, dispenseId, before.prescriptionItemId(), drugId,
+                batchId, "B-1", before.expireDate(), 5, 2, amoxicillin.price(), before.amount());
+
+        when(repo.lockDispense(dispenseId)).thenReturn(Optional.of(dispense(Dispense.DISPENSED,
+                Dispense.BILLING_NONE)));
+        when(repo.findDispenseItem(itemId)).thenReturn(Optional.of(before));
+        when(repo.addReturnedQuantity(itemId, 2)).thenReturn(true);
+        when(repo.addBatchQuantity(batchId, 2)).thenReturn(true);
+        when(repo.listDispenseItems(dispenseId)).thenReturn(List.of(after));
+        when(repo.updateDispenseStatus(eq(dispenseId), eq(Dispense.PARTIAL_RETURNED), eq(0L)))
+                .thenReturn(true);
+        when(repo.findPrescription(any())).thenReturn(Optional.of(new Prescription(
+                rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
+                "doctor01", Prescription.DISPENSED, null, null, null,
+                new BigDecimal("62.50"), 4L, Instant.now(), Prescription.BILLING_ORDER, orderId)));
+        when(chargeClient.refundOrder(any(), any(), any(), any(), anyString(), anyString()))
+                .thenReturn(new ClinicalChargeClient.OrderRefunded(BigDecimal.ZERO,
+                        BigDecimal.ZERO, BigDecimal.ZERO, false));
+
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "患者停药"), "pharm01");
+
+        // 累计已退 = 12.50 × 2 = 25.00；itemAmount = 整条发药明细 62.50
+        verify(chargeClient).refundOrder(eq(orderId), eq(itemId),
+                org.mockito.ArgumentMatchers.eq(new BigDecimal("62.50")),
+                org.mockito.ArgumentMatchers.eq(new BigDecimal("25.00")),
+                anyString(), eq("pharm01"));
+        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_NONE));
+        verify(chargeClient, never()).refund(any(), any(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("医嘱计费退药：冲减失败置 REFUND_FAILED，供 billing-retry 补偿")
+    void orderRefundFailureIsRecordedForRetry() {
+        UUID visitId = UUID.randomUUID();
+        UUID dispenseId = UUID.randomUUID();
+        UUID itemId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        DispenseItem before = new DispenseItem(itemId, dispenseId, UUID.randomUUID(), drugId,
+                batchId, "B-1", LocalDate.now().plusDays(100), 2, 0,
+                amoxicillin.price(), new BigDecimal("25.00"));
+        DispenseItem after = new DispenseItem(itemId, dispenseId, before.prescriptionItemId(), drugId,
+                batchId, "B-1", before.expireDate(), 2, 2, amoxicillin.price(), before.amount());
+
+        when(repo.lockDispense(dispenseId)).thenReturn(Optional.of(dispense(Dispense.DISPENSED,
+                Dispense.BILLING_NONE)));
+        when(repo.findDispenseItem(itemId)).thenReturn(Optional.of(before));
+        when(repo.addReturnedQuantity(itemId, 2)).thenReturn(true);
+        when(repo.addBatchQuantity(batchId, 2)).thenReturn(true);
+        when(repo.listDispenseItems(dispenseId)).thenReturn(List.of(after));
+        when(repo.updateDispenseStatus(eq(dispenseId), eq(Dispense.RETURNED), eq(0L))).thenReturn(true);
+        when(repo.findPrescription(any())).thenReturn(Optional.of(new Prescription(
+                rxId, "RX20261031000001", patientId, "P20261031000001", visitId, null, null,
+                "doctor01", Prescription.DISPENSED, null, null, null,
+                new BigDecimal("25.00"), 4L, Instant.now(), Prescription.BILLING_ORDER, orderId)));
+        when(chargeClient.refundOrder(any(), any(), any(), any(), anyString(), anyString()))
+                .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "收费服务暂不可用"));
+
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "整单退回"), "pharm01");
+
+        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_REFUND_FAILED));
+    }
+
     // ---------------------------------------------------------------- 前置审方（用药安全）
 
     @Test

@@ -455,4 +455,20 @@ public final class ClinicalModel {
             return refundedAmount.add(refundPendingAmount).add(refundDoneAmount);
         }
     }
+
+    /**
+     * 医嘱计费模式的退药冲减（B3）。
+     *
+     * <p>钱是在结算时按医嘱一次性收的，因此退药必须回到"这笔医嘱"上冲减：
+     * {@code applied}（未结算直接冲减，结算时扣减）、{@code pending}（已结算待财务退费）、
+     * {@code done}（财务已退）。三者只增不减，调用方传"累计已退金额"，重试天然幂等。
+     */
+    public record OrderRefund(UUID id, UUID orderId, UUID dispenseItemId, UUID visitId,
+                              BigDecimal amount, BigDecimal appliedAmount,
+                              BigDecimal pendingAmount, BigDecimal doneAmount) {
+
+        public BigDecimal handled() {
+            return appliedAmount.add(pendingAmount).add(doneAmount);
+        }
+    }
 }

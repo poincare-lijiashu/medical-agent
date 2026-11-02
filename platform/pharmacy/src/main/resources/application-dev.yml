@@ -8,6 +8,9 @@ pharmacy:
     internal-token: medassist-dev-internal-token
   # 入站内部接口令牌（临床医嘱转处方），本地统一放同一个值
   internal-api-token: medassist-dev-internal-token
+  # 出站：发药计费/退药冲减调用临床（须与 clinical 的 internal-api-token 一致）
+  clinical:
+    internal-token: medassist-dev-internal-token
 
 logging:
   level:

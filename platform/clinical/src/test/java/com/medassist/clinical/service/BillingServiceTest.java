@@ -54,6 +54,8 @@ class BillingServiceTest {
         when(repo.findCharge(chargeId)).thenReturn(Optional.of(new Charge(
                 chargeId, "C1", visitId, BigDecimal.ZERO, Charge.UNPAID, null, null, 1L)));
         when(repo.listCharges(visitId)).thenReturn(List.of());
+        // 真实实现无冲减记录时返回 0；mock 默认 null 会让 subtract 抛 NPE
+        when(repo.sumAppliedOrderRefund(any())).thenReturn(BigDecimal.ZERO);
     }
 
     private Visit visit(String status) {
@@ -200,6 +202,35 @@ class BillingServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VISIT_STATUS_INVALID);
         verify(repo, never()).markChargePaid(any(), any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("退药冲减：按净额入账；已全额退回的医嘱不再收费、也不再置为已计费")
+    void settleUsesNetAmountAfterRefund() {
+        Charge unpaid = new Charge(chargeId, "C1", visitId, new BigDecimal("10.00"),
+                Charge.UNPAID, null, null, 2L);
+        VisitOrder o1 = order("25.00");
+        VisitOrder o2 = order("8.00");
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockOpenCharge(visitId)).thenReturn(Optional.of(unpaid));
+        when(repo.lockPlacedTempOrders(visitId)).thenReturn(List.of(o1, o2));
+        when(repo.sumAppliedOrderRefund(o1.id())).thenReturn(new BigDecimal("5.00"));
+        when(repo.sumAppliedOrderRefund(o2.id())).thenReturn(new BigDecimal("8.00"));
+        when(repo.insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+        when(repo.markChargePaid(eq(chargeId), eq(new BigDecimal("20.00")), eq("CASH"), eq(2L)))
+                .thenReturn(true);
+        when(repo.markOrdersCharged(List.of(o1.id()))).thenReturn(1);
+        when(repo.findCharge(chargeId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C1", visitId, new BigDecimal("30.00"), Charge.PAID, "CASH",
+                Instant.now(), 3L)));
+
+        service.settle(visitId, "CASH", "clerk01");
+
+        verify(repo).insertChargeItem(any(), any(), eq(o1.id()), eq("ORDER:" + o1.id()),
+                any(), any(), any(), eq(new BigDecimal("20.00")));
+        verify(repo, never()).insertChargeItem(any(), any(), eq(o2.id()), any(),
+                any(), any(), any(), any());
+        verify(repo).markOrdersCharged(List.of(o1.id()));
     }
 
     @Test

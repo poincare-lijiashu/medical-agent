@@ -1,9 +1,13 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
+import com.medassist.clinical.service.OrderRefundService;
 import com.medassist.clinical.service.PharmacyChargeService;
 import com.medassist.clinical.web.PharmacyChargeDtos.ChargeReq;
 import com.medassist.clinical.web.PharmacyChargeDtos.ChargeResult;
 import com.medassist.clinical.web.PharmacyChargeDtos.CompleteRefundReq;
+import com.medassist.clinical.web.PharmacyChargeDtos.OrderRefundReq;
+import com.medassist.clinical.web.PharmacyChargeDtos.OrderRefundView;
 import com.medassist.clinical.web.PharmacyChargeDtos.RefundReq;
 import com.medassist.clinical.web.PharmacyChargeDtos.RefundView;
 import com.medassist.common.api.ErrorCode;
@@ -34,12 +38,15 @@ import java.util.UUID;
 public class InternalPharmacyChargeController {
 
     private final PharmacyChargeService service;
+    private final OrderRefundService orderRefundService;
     private final String token;
 
     public InternalPharmacyChargeController(PharmacyChargeService service,
+                                            OrderRefundService orderRefundService,
                                             @Value("${clinical.internal-api-token:${clinical.internal-token:}}")
                                             String token) {
         this.service = service;
+        this.orderRefundService = orderRefundService;
         this.token = token == null ? "" : token;
     }
 
@@ -74,6 +81,36 @@ public class InternalPharmacyChargeController {
                                @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
         requireToken(provided);
         return service.completeRefund(dispenseItemId, req.amount(), req.actor());
+    }
+
+    // ---------------------------------------------------------------- 医嘱计费模式退药冲减（B3）
+
+    /** 医嘱退药冲减（幂等）：未计费记 applied、未结算写负向明细、已结算登记待退费。 */
+    @PostMapping("/pharmacy-order-refunds")
+    public OrderRefundView refundOrder(@RequestBody OrderRefundReq req,
+                                       @RequestHeader(value = "X-Internal-Token", required = false)
+                                       String provided) {
+        requireToken(provided);
+        return orderRefundService.refund(req);
+    }
+
+    /** 待财务退费的医嘱退药列表。 */
+    @GetMapping("/pharmacy-order-refunds/pending")
+    public List<OrderRefund> pendingOrderRefunds(@RequestParam(required = false) Integer limit,
+                                                 @RequestHeader(value = "X-Internal-Token", required = false)
+                                                 String provided) {
+        requireToken(provided);
+        return orderRefundService.pendingRefunds(limit == null ? 50 : limit);
+    }
+
+    /** 财务确认医嘱退药退费。 */
+    @PostMapping("/pharmacy-order-refunds/{dispenseItemId}/complete")
+    public OrderRefundView completeOrderRefund(@PathVariable UUID dispenseItemId,
+                                               @RequestBody CompleteRefundReq req,
+                                               @RequestHeader(value = "X-Internal-Token", required = false)
+                                               String provided) {
+        requireToken(provided);
+        return orderRefundService.completeRefund(dispenseItemId, req.amount(), req.actor());
     }
 
     private void requireToken(String provided) {

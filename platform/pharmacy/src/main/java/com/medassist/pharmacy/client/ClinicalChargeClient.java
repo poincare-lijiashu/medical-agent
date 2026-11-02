@@ -24,7 +24,20 @@ public interface ClinicalChargeClient {
     record Refunded(BigDecimal pendingAmount) {
     }
 
+    /**
+     * 医嘱计费模式的退药冲减结果。
+     *
+     * @param orderCancelled 该医嘱已全额退回且尚未计费，临床已直接作废医嘱
+     */
+    record OrderRefunded(BigDecimal appliedAmount, BigDecimal pendingAmount,
+                         BigDecimal doneAmount, boolean orderCancelled) {
+    }
+
     Charged charge(UUID visitId, UUID dispenseId, List<Line> lines, String actor);
 
     Refunded refund(UUID dispenseItemId, BigDecimal cumulativeRefundAmount, String reason, String actor);
+
+    /** 医嘱计费模式：按"累计已退金额"幂等冲减医嘱（对应 clinical /internal/pharmacy-order-refunds）。 */
+    OrderRefunded refundOrder(UUID orderId, UUID dispenseItemId, BigDecimal itemAmount,
+                              BigDecimal cumulativeRefundAmount, String reason, String actor);
 }
