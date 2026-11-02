@@ -338,3 +338,39 @@ strategy:
 {{- $map := dict "gateway" "gateway" "auth" "auth" "empi" "empi" "aiCore" "ai-core" -}}
 {{- include "medassist.componentName" (dict "root" .root "component" (get $map .service)) -}}
 {{- end -}}
+
+{{/*
+Pod 调度打散（SHOULD-FIX #16）。
+- 组件显式配置 affinity 时完全以显式配置为准（便于特殊机房/专用节点）；
+- 未配置时给"同组件尽量不同节点"的软反亲和 + 拓扑打散。
+为什么不用 requiredDuringScheduling：小集群/单节点环境会被卡成 Pending；
+preferred + ScheduleAnyway 保证"能调度优先，其次才打散"。
+*/}}
+{{- define "medassist.podScheduling" -}}
+{{- $cfg := index .root.Values .component -}}
+{{- if $cfg.affinity }}
+affinity:
+{{ toYaml $cfg.affinity | nindent 2 }}
+{{- else }}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "medassist.name" .root }}
+              app.kubernetes.io/instance: {{ .root.Release.Name }}
+              app.kubernetes.io/component: {{ .component }}
+{{- end }}
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: {{ include "medassist.name" .root }}
+        app.kubernetes.io/instance: {{ .root.Release.Name }}
+        app.kubernetes.io/component: {{ .component }}
+{{- end -}}

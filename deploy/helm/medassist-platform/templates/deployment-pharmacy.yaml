@@ -121,8 +121,5 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.pharmacy.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "pharmacy") | nindent 6 }}
 {{- end }}

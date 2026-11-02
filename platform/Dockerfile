@@ -29,7 +29,15 @@ COPY pharmacy/pom.xml pharmacy/pom.xml
 COPY tech/pom.xml tech/pom.xml
 COPY emr/pom.xml emr/pom.xml
 COPY insurance/pom.xml insurance/pom.xml
-RUN mvn -B -q -DskipTests dependency:go-offline || true
+COPY kb/pom.xml kb/pom.xml
+# 离线/内网构建机拉不到 Maven Central 时，通过 --build-arg MAVEN_MIRROR=<url> 指定镜像源；
+# 不传则保持默认 Central 行为（开发机与公网 CI 不受影响）。
+ARG MAVEN_MIRROR=
+RUN if [ -n "$MAVEN_MIRROR" ]; then \
+        mkdir -p /root/.m2 && \
+        printf '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"><mirrors><mirror><id>internal</id><mirrorOf>*</mirrorOf><url>%s</url></mirror></mirrors></settings>' "$MAVEN_MIRROR" > /root/.m2/settings.xml; \
+    fi && \
+    mvn -B -q -DskipTests dependency:go-offline || true
 
 COPY . .
 ARG SERVICE
