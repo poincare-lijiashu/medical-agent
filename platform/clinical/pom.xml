@@ -59,6 +59,17 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!--
+      真库 SQL 级集成测试（@Tag("postgres")，默认被 surefire 排除）。
+      运行：mvn -Ppostgres-it -pl clinical test
+      版本显式锁定 1.21.3：Boot 4 BOM 管理的 2.0.5 在当前镜像源尚不可用（实测 aliyun 缺失）。
+    -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>1.21.3</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

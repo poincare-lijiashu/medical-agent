@@ -116,9 +116,46 @@
         </plugin>
       </plugins>
     </pluginManagement>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!--
+            真库集成测试（Testcontainers，@Tag("postgres")）默认不执行：
+            CI/开发机没有 Docker 时不能因此让 `mvn test` 失败。
+            需要时用 `mvn -Ppostgres-it test` 单独运行。
+          -->
+          <excludedGroups>postgres</excludedGroups>
+        </configuration>
+      </plugin>
+    </plugins>
   </build>
 
   <profiles>
+    <!--
+      真库 SQL 级集成测试（意见书 P1-4）：
+        mvn -Ppostgres-it -pl clinical test
+      用 Testcontainers 起一次性 PostgreSQL，跑**真实迁移文件**建 schema，
+      验证 mock 单测覆盖不到的 SQL 语义（CAS、容量守卫、累计上限）。
+      镜像 postgres:15-alpine 需本地已存在（离线环境不拉取）。
+    -->
+    <profile>
+      <id>postgres-it</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <excludedGroups combine.self="override">__none__</excludedGroups>
+              <groups>postgres</groups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!--
       生产打包：物理排除 application-dev.yml。
       背景：dev 配置位于 src/main/resources，默认会被打进 jar；其中内部接口令牌是仓库公开常量，

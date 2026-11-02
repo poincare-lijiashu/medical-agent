@@ -74,6 +74,9 @@
 - E2E 用法：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\<x>.ps1`（默认经网关 8080；
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
+- **真库 SQL 集成测试**（意见书 P1-4）：`mvn -Ppostgres-it -pl clinical -am test "-Dtest=ClinicalRepositoryPostgresIT" "-Dsurefire.failIfNoSpecifiedTests=false"`
+  —— Testcontainers 起一次性 `postgres:15-alpine`，跑真实迁移建库，验证号源 CAS / 收费 CAS / 退药累计三条关键 SQL。
+  默认 `mvn test` 通过 `@Tag("postgres")` 排除（无 Docker 的 CI 不受影响）。
 - **明天第一件事（建议顺序）**：
   1. ~~**病区库存与未执行退药（对账闭环最后一段）**~~ ✅ 已交付（§1.60，clinical V26）
   2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）；
