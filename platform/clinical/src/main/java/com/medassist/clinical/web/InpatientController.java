@@ -14,6 +14,8 @@ import com.medassist.clinical.web.ClinicalDtos.DepositReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
+import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
+import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionView;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
 import com.medassist.common.api.ApiResponse;
@@ -222,6 +224,23 @@ public class InpatientController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, NURSING_EXECUTE);
         return ApiResponse.ok(nursingService.record(id, req, actor));
+    }
+
+    /**
+     * 更正护理执行记录：每条执行记录只允许更正一次。
+     *
+     * <p>「已执行 → 未执行/拒绝」会在同一事务内联动红冲该日按日计费；
+     * 已结算（PAID）无法红冲时整体回滚，提示先走退费流程。
+     */
+    @PostMapping("/inpatient/admissions/{id}/nursing-executions/{executionId}/correction")
+    public ApiResponse<NursingCorrectionView> correctNursing(
+            @PathVariable UUID id,
+            @PathVariable UUID executionId,
+            @Valid @RequestBody NursingCorrectionReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, NURSING_EXECUTE);
+        return ApiResponse.ok(nursingService.correct(id, executionId, req, actor));
     }
 
     /** 护理执行记录列表（date 为空返回全部；属护理文书，限医护与管理员）。 */

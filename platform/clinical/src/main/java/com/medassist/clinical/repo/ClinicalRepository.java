@@ -13,6 +13,7 @@ import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.NursingExecutionCorrection;
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
@@ -491,8 +492,10 @@ public class ClinicalRepository {
                                     AND ci.source_key = 'DAILY:' || o.id::text || ':' || :dateText)
                            AND NOT EXISTS (
                                  SELECT 1 FROM clinical_svc.nursing_execution ne
+                                   LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                          ON nc.execution_id = ne.id
                                   WHERE ne.order_id = o.id AND ne.exec_date = :date
-                                    AND ne.status <> 'EXECUTED')
+                                    AND coalesce(nc.to_status, ne.status) <> 'EXECUTED')
                          ORDER BY o.created_at
                         """)
                 .param("visitId", visitId).param("date", date)
@@ -530,8 +533,10 @@ public class ClinicalRepository {
                                         'DAILY:' || o.id::text || ':' || d.day::date::text)
                            AND NOT EXISTS (
                                  SELECT 1 FROM clinical_svc.nursing_execution ne
+                                   LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                          ON nc.execution_id = ne.id
                                   WHERE ne.order_id = o.id AND ne.exec_date = d.day::date
-                                    AND ne.status <> 'EXECUTED')
+                                    AND coalesce(nc.to_status, ne.status) <> 'EXECUTED')
                         """)
                 .param("visitId", visitId).param("fromDate", from).param("toDate", to)
                 .query(Long.class).single();
@@ -1280,9 +1285,13 @@ public class ClinicalRepository {
 
     public Optional<NursingExecution> findNursingExecution(UUID orderId, LocalDate date) {
         return jdbc.sql("""
-                        SELECT id, admission_id, visit_id, order_id, exec_date, status, executor, note, created_at
-                          FROM clinical_svc.nursing_execution
-                         WHERE order_id = :orderId AND exec_date = :date
+                        SELECT ne.id, ne.admission_id, ne.visit_id, ne.order_id, ne.exec_date,
+                               coalesce(nc.to_status, ne.status) AS status,
+                               ne.executor, ne.note, ne.created_at
+                          FROM clinical_svc.nursing_execution ne
+                          LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                 ON nc.execution_id = ne.id
+                         WHERE ne.order_id = :orderId AND ne.exec_date = :date
                         """)
                 .param("orderId", orderId).param("date", date)
                 .query(NURSING_MAPPER).optional();
@@ -1292,19 +1301,64 @@ public class ClinicalRepository {
     public List<NursingExecution> listNursingExecutions(UUID visitId, LocalDate date) {
         if (date == null) {
             return jdbc.sql("""
-                            SELECT id, admission_id, visit_id, order_id, exec_date, status, executor, note, created_at
-                              FROM clinical_svc.nursing_execution
-                             WHERE visit_id = ? ORDER BY exec_date DESC, created_at DESC
+                            SELECT ne.id, ne.admission_id, ne.visit_id, ne.order_id, ne.exec_date,
+                                   coalesce(nc.to_status, ne.status) AS status,
+                                   ne.executor, ne.note, ne.created_at
+                              FROM clinical_svc.nursing_execution ne
+                              LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                     ON nc.execution_id = ne.id
+                             WHERE ne.visit_id = ? ORDER BY ne.exec_date DESC, ne.created_at DESC
                             """).param(visitId).query(NURSING_MAPPER).list();
         }
         return jdbc.sql("""
-                        SELECT id, admission_id, visit_id, order_id, exec_date, status, executor, note, created_at
-                          FROM clinical_svc.nursing_execution
-                         WHERE visit_id = :visitId AND exec_date = :date
-                         ORDER BY created_at DESC
+                        SELECT ne.id, ne.admission_id, ne.visit_id, ne.order_id, ne.exec_date,
+                               coalesce(nc.to_status, ne.status) AS status,
+                               ne.executor, ne.note, ne.created_at
+                          FROM clinical_svc.nursing_execution ne
+                          LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                 ON nc.execution_id = ne.id
+                         WHERE ne.visit_id = :visitId AND ne.exec_date = :date
+                         ORDER BY ne.created_at DESC
                         """)
                 .param("visitId", visitId).param("date", date)
                 .query(NURSING_MAPPER).list();
+    }
+
+    /** 按主键读执行记录；返回的 status 为"有效状态"（已更正则取更正后状态）。 */
+    public Optional<NursingExecution> findNursingExecutionById(UUID executionId) {
+        return jdbc.sql("""
+                        SELECT ne.id, ne.admission_id, ne.visit_id, ne.order_id, ne.exec_date,
+                               coalesce(nc.to_status, ne.status) AS status,
+                               ne.executor, ne.note, ne.created_at
+                          FROM clinical_svc.nursing_execution ne
+                          LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                 ON nc.execution_id = ne.id
+                         WHERE ne.id = ?
+                        """)
+                .param(executionId).query(NURSING_MAPPER).optional();
+    }
+
+    /** 该执行记录是否已更正过（唯一键 ux_nec_one_correction 的友好前置判断）。 */
+    public boolean existsNursingCorrection(UUID executionId) {
+        Long n = jdbc.sql(
+                        "SELECT count(*) FROM clinical_svc.nursing_execution_correction WHERE execution_id = ?")
+                .param(executionId).query(Long.class).single();
+        return n != null && n > 0;
+    }
+
+    public void insertNursingCorrection(NursingExecutionCorrection c) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_execution_correction
+                            (id, execution_id, admission_id, visit_id, order_id, exec_date,
+                             from_status, to_status, reason, corrected_by)
+                        VALUES (:id, :executionId, :admissionId, :visitId, :orderId, :execDate,
+                                :fromStatus, :toStatus, :reason, :correctedBy)
+                        """)
+                .param("id", c.id()).param("executionId", c.executionId())
+                .param("admissionId", c.admissionId()).param("visitId", c.visitId())
+                .param("orderId", c.orderId()).param("execDate", c.execDate())
+                .param("fromStatus", c.fromStatus()).param("toStatus", c.toStatus())
+                .param("reason", c.reason()).param("correctedBy", c.correctedBy()).update();
     }
 
     // ---------------------------------------------------------------- 药房发药费用（N2 收尾）

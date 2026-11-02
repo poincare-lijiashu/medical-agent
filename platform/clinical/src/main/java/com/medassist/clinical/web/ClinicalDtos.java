@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -276,5 +277,30 @@ public final class ClinicalDtos {
     public record NursingExecutionView(UUID id, UUID admissionId, UUID orderId, String orderNo,
                                        String itemName, LocalDate execDate, String status,
                                        String executor, String note, java.time.Instant createdAt) {
+    }
+
+    /**
+     * 护理执行更正：把已记录的执行状态改为另一种（每条执行记录只允许更正一次）。
+     *
+     * <p>必须二次确认：把"已执行"改成"未执行/患者拒绝"会造成收费减少，
+     * 属不可逆的资金影响，与红冲同口径要求 confirmed=true + 原因。
+     */
+    public record NursingCorrectionReq(
+            @NotBlank String status,
+            @NotBlank @Size(max = 200) String reason,
+            @NotNull Boolean confirmed) {
+    }
+
+    /**
+     * 护理执行更正结果。
+     *
+     * <p>{@code reversedAmount} 为本次联动红冲的金额（0 表示未产生红冲）；
+     * {@code billingHint} 说明计费侧的后续动作，便于前端直接提示护士。
+     */
+    public record NursingCorrectionView(UUID id, UUID executionId, UUID admissionId, UUID orderId,
+                                        String orderNo, String itemName, LocalDate execDate,
+                                        String fromStatus, String toStatus, String reason,
+                                        String correctedBy, java.time.Instant createdAt,
+                                        BigDecimal reversedAmount, String billingHint) {
     }
 }

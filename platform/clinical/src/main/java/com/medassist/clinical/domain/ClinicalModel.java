@@ -440,6 +440,18 @@ public final class ClinicalModel {
     }
 
     /**
+     * 护理执行更正（追加式：一条执行记录只允许更正一次）。
+     *
+     * <p>为什么不覆盖原记录：执行记录是"当日是否收费"的原始依据，改写历史会让
+     * 计费口径无法追溯；更正作为独立事实保留 from/to 与原因、操作人。
+     */
+    public record NursingExecutionCorrection(UUID id, UUID executionId, UUID admissionId,
+                                             UUID visitId, UUID orderId, LocalDate execDate,
+                                             String fromStatus, String toStatus, String reason,
+                                             String correctedBy, Instant createdAt) {
+    }
+
+    /**
      * 费用明细行（只读投影）。
      *
      * <p>供医保域生成结算清单时读取；不在此做任何金额计算，避免两份计费口径。

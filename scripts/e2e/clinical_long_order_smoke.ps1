@@ -10,6 +10,9 @@
 #   * LONG DRUG orders are NOT auto-transferred to pharmacy (one transfer can
 #     only supply one day; ward-based daily dispensing is a later batch), while
 #     TEMP DRUG orders still transfer normally
+#   * daily charges can be reversed with reason + confirmation (idempotent)
+#   * nursing execution records can be corrected once (append-only fact) and the
+#     correction reverses the already billed daily amount in the same transaction
 #
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
 #
@@ -85,6 +88,7 @@ $r = Invoke-Api 'POST' '/api/v2/clinical/inpatient/admissions' @{
     patientId = $patientId; wardId = $wardId; bedId = $bedId; attendingDoctor = 'doctor01'
 } $token
 Check 'admit' $r.Status 200
+$admissionId = (Res $r).id
 $visitId = (Res $r).visitId
 
 # ---------------------------------------------------------------- 3. frequency vocabulary
@@ -217,6 +221,62 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-bill/reverse" @{
     confirmed = $true
 } $token
 Check 'dailyReverse.notBilled.422' $r.Status 422
+
+# ---------------------------------------------------------------- 8d. nursing correction (P1-1b)
+# Nursing records are append-only, so changing "executed" to "refused" must create a
+# correction fact AND reverse the already billed daily amount in the same transaction.
+# The charge list must then read the corrected (effective) status.
+$today = (Get-Date).ToString('yyyy-MM-dd')
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions" @{
+    orderId = $longDrug.id
+    execDate = $today
+    status = 'EXECUTED'
+} $token
+Check 'nursing.executed.ok' $r.Status 200
+$executionId = (Res $r).id
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions" @{
+    orderId = $longDrug.id
+    execDate = $today
+    status = 'EXECUTED'
+} $token
+Check 'nursing.duplicate.409' $r.Status 409
+
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
+$beforeCorrection = (Res $r).totalAmount
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions/$executionId/correction" @{
+    status = 'REFUSED'
+    reason = 'patient refused the infusion'
+    confirmed = $true
+} $token
+Check 'nursing.correction.ok' $r.Status 200
+Check 'nursing.correction.from' (Res $r).fromStatus 'EXECUTED'
+Check 'nursing.correction.to' (Res $r).toStatus 'REFUSED'
+CheckAmt 'nursing.correction.reversed' (Res $r).reversedAmount 25.00
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
+$afterCorrection = (Res $r).totalAmount
+CheckAmt 'nursing.correction.chargeReduced' ([decimal]$beforeCorrection - [decimal]$afterCorrection) 25.00
+
+$r = Invoke-Api 'GET' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions?date=$today" $null $token
+Check 'nursing.correction.listed' $r.Status 200
+$correctedRow = @(Res $r) | Where-Object { $_.id -eq $executionId }
+Check 'nursing.correction.listedStatus' $correctedRow.status 'REFUSED'
+
+# one correction per execution only
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions/$executionId/correction" @{
+    status = 'EXECUTED'
+    reason = 'second attempt'
+    confirmed = $true
+} $token
+Check 'nursing.correction.repeat.409' $r.Status 409
+
+# correction without confirmation must be rejected
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions/$executionId/correction" @{
+    status = 'EXECUTED'
+    reason = 'no confirmation'
+    confirmed = $false
+} $token
+Check 'nursing.correction.unconfirmed.422' $r.Status 422
 
 # ---------------------------------------------------------------- 8b. long orders cannot be cancelled (P1-7)
 # Daily billing does not flip order status to CHARGED, so a LONG order that already

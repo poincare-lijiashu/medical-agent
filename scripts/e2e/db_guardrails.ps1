@@ -204,6 +204,16 @@ DELETE FROM clinical_svc.nursing_execution
  WHERE ctid = (SELECT ctid FROM clinical_svc.nursing_execution LIMIT 1);
 "@
 
+Expect-AuditLocked 'clinical.nursingCorrection.update' 'clinical_svc.nursing_execution_correction' @"
+UPDATE clinical_svc.nursing_execution_correction SET reason = 'TAMPERED'
+ WHERE ctid = (SELECT ctid FROM clinical_svc.nursing_execution_correction LIMIT 1);
+"@
+
+Expect-AuditLocked 'clinical.nursingCorrection.delete' 'clinical_svc.nursing_execution_correction' @"
+DELETE FROM clinical_svc.nursing_execution_correction
+ WHERE ctid = (SELECT ctid FROM clinical_svc.nursing_execution_correction LIMIT 1);
+"@
+
 Expect-AuditLocked 'clinical.wardStockTxn.delete' 'clinical_svc.ward_stock_txn' @"
 DELETE FROM clinical_svc.ward_stock_txn
  WHERE ctid = (SELECT ctid FROM clinical_svc.ward_stock_txn LIMIT 1);

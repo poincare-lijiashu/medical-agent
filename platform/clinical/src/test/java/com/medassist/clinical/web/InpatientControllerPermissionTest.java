@@ -4,6 +4,7 @@ import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
+import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -126,6 +127,19 @@ class InpatientControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(nursingService, never()).record(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("更正护理执行：需要 inpatient:nursing:execute（读权限不能改文书）")
+    void nursingCorrectionRequiresExecutePermission() {
+        var req = new NursingCorrectionReq("REFUSED", "patient refused", true);
+
+        assertThatThrownBy(() -> controller.correctNursing(admissionId, UUID.randomUUID(), req,
+                "inpatient:nursing:read", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(nursingService, never()).correct(any(), any(), any(), anyString());
     }
 
     @Test

@@ -2,9 +2,13 @@ package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.NursingExecutionCorrection;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.common.time.BusinessTime;
+import com.medassist.clinical.web.ClinicalDtos.DailyReversalResult;
+import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
+import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionView;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
 import com.medassist.common.api.ErrorCode;
@@ -15,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -38,10 +43,12 @@ import java.util.stream.Collectors;
 public class NursingService {
 
     private final ClinicalRepository repo;
+    private final BillingService billing;
     private final ObjectMapper objectMapper;
 
-    public NursingService(ClinicalRepository repo, ObjectMapper objectMapper) {
+    public NursingService(ClinicalRepository repo, BillingService billing, ObjectMapper objectMapper) {
         this.repo = repo;
+        this.billing = billing;
         this.objectMapper = objectMapper;
     }
 
@@ -75,11 +82,12 @@ public class NursingService {
         }
         String status = normalizeStatus(req.status());
 
-        // 已按日计费后再补记"未执行/拒绝"会让当日多收，且当前没有红冲流程：
-        // 直接拒绝，提示先走冲正（避免账实不符被医保飞检扣分）。
+        // 已按日计费后再补记"未执行/拒绝"会让当日多收：直接拒绝，提示走更正接口
+        // （更正接口会在同一事务内红冲该日费用，避免账实不符被医保飞检扣分）。
         if (!NursingExecution.EXECUTED.equals(status) && repo.existsDailyCharge(order.id(), execDate)) {
             throw new BusinessException(ErrorCode.CONFLICT,
-                    "该医嘱 " + execDate + " 已计费，不能再记为 " + status + "；请先冲正费用再更正执行记录");
+                    "该医嘱 " + execDate + " 已计费，不能再记为 " + status
+                            + "；请用更正接口（会联动红冲该日费用）或先冲正费用");
         }
 
         // 先查后插：PostgreSQL 语句失败后事务会进入 aborted 状态，
@@ -104,6 +112,99 @@ public class NursingService {
                 "admissionNo", admission.admissionNo(), "orderNo", order.orderNo(),
                 "itemName", order.itemName(), "execDate", execDate.toString(), "status", status));
         return toView(execution, order);
+    }
+
+    /**
+     * 更正护理执行记录（每条执行记录只允许更正一次）。
+     *
+     * <p>三条硬约束：
+     * <ol>
+     *   <li>执行记录本身是追加式（V29 触发器禁止 UPDATE/DELETE），更正写入独立的
+     *       {@code nursing_execution_correction}，原记录与更正都留痕；</li>
+     *   <li>「已执行 → 未执行/拒绝」会让当日已收的钱变成多收，因此必须联动
+     *       {@link BillingService#reverseDaily} 红冲；红冲失败（如该单已结算 PAID）
+     *       则整笔回滚，避免出现"文书改了、钱没退"的账实不符；</li>
+     *   <li>「未执行/拒绝 → 已执行」不自动补收——补收是资金动作，必须由收费人员
+     *       在费用页显式重跑该日按日计费（接口返回 {@code billingHint} 提示）。</li>
+     * </ol>
+     */
+    @Transactional
+    public NursingCorrectionView correct(UUID admissionId, UUID executionId,
+                                         NursingCorrectionReq req, String actor) {
+        // 与 record / dailyBill / reverseDaily 同一锁序：visit → admission
+        Admission snapshot = repo.findAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        repo.lockVisit(snapshot.visitId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "就诊不存在"));
+        Admission admission = repo.lockAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        if (!admission.active()) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该住院登记已出院或已取消，不能更正护理执行记录");
+        }
+        NursingExecution execution = repo.findNursingExecutionById(executionId)
+                .filter(e -> e.admissionId().equals(admissionId))
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND,
+                        "护理执行记录不存在或不属于该住院登记"));
+
+        String from = execution.status();
+        String to = normalizeStatus(req.status());
+        if (from.equals(to)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "执行状态已经是 " + to + "，无需更正");
+        }
+        if (!Boolean.TRUE.equals(req.confirmed())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "更正护理文书需要二次确认（confirmed=true）");
+        }
+        String reason = req.reason() == null ? "" : req.reason().trim();
+        if (reason.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "必须填写更正原因");
+        }
+        // 先查后写：PG 语句失败后事务 aborted，catch 里再查库会二次失败（实测 500）
+        if (repo.existsNursingCorrection(executionId)) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该执行记录已更正过一次（当前有效状态 " + from + "），不得重复更正；"
+                            + "如仍有异议请走护理质控流程");
+        }
+        VisitOrder order = repo.findOrder(execution.visitId(), execution.orderId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_ITEM_NOT_FOUND,
+                        "医嘱不存在或不属于该住院就诊"));
+
+        NursingExecutionCorrection correction = new NursingExecutionCorrection(UUID.randomUUID(),
+                executionId, admission.id(), execution.visitId(), execution.orderId(),
+                execution.execDate(), from, to, reason, actor, Instant.now());
+        try {
+            repo.insertNursingCorrection(correction);
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该执行记录已更正过一次，不得重复更正");
+        }
+
+        BigDecimal reversed = BigDecimal.ZERO;
+        String hint;
+        if (NursingExecution.EXECUTED.equals(from)) {
+            hint = "该日未计费，无需红冲";
+            if (repo.existsDailyCharge(execution.orderId(), execution.execDate())) {
+                DailyReversalResult result = billing.reverseDaily(execution.visitId(),
+                        execution.orderId(), execution.execDate(),
+                        "护理执行更正 " + from + "→" + to + "：" + reason, true, actor);
+                reversed = result.reversedAmount();
+                hint = result.idempotent()
+                        ? "该日费用此前已红冲，本次未重复冲减"
+                        : "已联动红冲该日按日计费";
+            }
+        } else {
+            hint = "该日尚未计费；如需补收，请在费用页对该日期重新执行按日计费";
+        }
+
+        audit(actor, "NURSING_CORRECTION", "ADMISSION", admission.id().toString(), Map.of(
+                "admissionNo", admission.admissionNo(), "orderNo", order.orderNo(),
+                "execDate", execution.execDate().toString(), "from", from, "to", to,
+                "reason", reason, "reversedAmount", reversed.toPlainString()));
+        return new NursingCorrectionView(correction.id(), executionId, admission.id(),
+                execution.orderId(), order.orderNo(), order.itemName(), execution.execDate(),
+                from, to, reason, actor, correction.createdAt(), reversed, hint);
     }
 
     /** 执行记录列表；date 为空返回全部。 */

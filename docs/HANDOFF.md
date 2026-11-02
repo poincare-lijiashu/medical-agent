@@ -29,12 +29,16 @@
 > P0-10 EMPI dev 密钥守卫 + `SecurityDefaults` 缺省即生产；**P0-8 已覆盖服务→服务通道**
 > （签名版本 v1i2：请求体 SHA-256 纳入规范串，开关 `internal-auth.body-hash-required`，
 > prod/staging 终态 true）；**仅剩网关通道（v1/v2）的请求体绑定**（WebFlux 缓存 DataBuffer，下一批）。
+> **P1-1 已全链闭环**：`clinical V30` 按日计费红冲（`POST /visits/{id}/daily-bill/reverse`）+
+> `clinical V31` 护理执行更正（`POST /inpatient/admissions/{id}/nursing-executions/{executionId}/correction`，
+> 追加式更正表、每条执行记录只允许更正一次、「已执行→拒绝」自动联动红冲且同事务回滚保护）。
+> **P1 已全部收口**（P1-9 价格为"封顶 + 巡检"防御式收口）。
 > 9 个 Java 服务**当前运行中**（本机验证用，均以 `--spring.profiles.active=dev` 启动）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
 > §1.55~§1.60 的 E2E 回归**均已通过**：
 > `platform_smoke` / `empi_patient_smoke` / `clinical_preop_consent_smoke` / `pharmacy_smoke` /
-> `insurance_smoke` / `db_guardrails`(22/22) / `kb_search_smoke` / `emr_homepage_smoke` /
-> `pharmacy_order_refund_smoke`(35 项) / `clinical_long_order_smoke`(36 项) /
+> `insurance_smoke` / `db_guardrails`(24/24) / `kb_search_smoke` / `emr_homepage_smoke` /
+> `pharmacy_order_refund_smoke`(35 项) / `clinical_long_order_smoke`(46 项，含按日红冲 + 护理执行更正) /
 > `clinical_long_dispense_smoke`(87 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 > 本机起服务必须带 `$env:INTERNAL_API_TOKEN='medassist-dev-internal-token'`（auth 的内部接口 fail-closed，
 > 网关启动时会阻塞同步撤销名单，缺令牌会直接拒绝启动）。
@@ -63,10 +67,10 @@
   `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
   `2dbd8ab`（**危急值定向查询与网关下游超时**）、`d3daaec`（**权限矩阵单测与部署硬化**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **904 项**全绿（另有 3 项真库集成测试，`-Ppostgres-it`）
+- 工作区：clean（收工前已确认）；全量单测 **916 项**全绿（另有 3 项真库集成测试，`-Ppostgres-it`）
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar；启动必须带 `INTERNAL_API_TOKEN`）；
-  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V4**、`clinical_svc` → **V30**、
+  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V4**、`clinical_svc` → **V31**、
   `pharmacy_svc` → **V9**、`tech_svc` → **V8**、`emr_svc` → **V16**、`insurance_svc` → **V16**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
