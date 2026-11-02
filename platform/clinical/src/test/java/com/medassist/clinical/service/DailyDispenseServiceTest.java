@@ -1,10 +1,16 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.client.PharmacyOrderClient;
+import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
+import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
+import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.DailyDispenseResult;
+import com.medassist.clinical.web.ClinicalDtos.DispenseBoard;
+import com.medassist.clinical.web.ClinicalDtos.DispenseBoardItem;
+import com.medassist.clinical.web.ClinicalDtos.WardReceiptReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -196,5 +203,119 @@ class DailyDispenseServiceTest {
         assertThat(result.requested()).isZero();
         verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(),
                 any(), any());
+    }
+
+    // ---------------------------------------------------------------- 病区收药与看板（V25）
+
+    private DailyDispenseRequest request(int quantity) {
+        return new DailyDispenseRequest(UUID.randomUUID(), longDrug("O1", LocalDate.now()).id(),
+                visitId, LocalDate.now(), quantity, UUID.randomUUID(), "RX1",
+                DailyDispenseRequest.REQUESTED, null);
+    }
+
+    private WardReceiptReq receiptReq(UUID dispenseId, int quantity) {
+        return new WardReceiptReq(dispenseId, LocalDate.now(), quantity);
+    }
+
+    @Test
+    @DisplayName("收药：必须当日已成功请领，否则 422（不能凭空收货）")
+    void receiveRequiresSuccessfulRequest() {
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.findDailyDispenseRequest(order.id(), LocalDate.now())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.receive(visitId, order.id(),
+                receiptReq(UUID.randomUUID(), 1), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).insertWardReceipt(any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
+    @DisplayName("收药：数量不能超过当日请领数量")
+    void receiveRejectsQuantityAboveRequest() {
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.findDailyDispenseRequest(order.id(), LocalDate.now()))
+                .thenReturn(Optional.of(request(2)));
+
+        assertThatThrownBy(() -> service.receive(visitId, order.id(),
+                receiptReq(UUID.randomUUID(), 3), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    @DisplayName("收药：同一发药单重复登记幂等返回，不重复写库")
+    void receiveIsIdempotentByDispense() {
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        UUID dispenseId = UUID.randomUUID();
+        WardMedReceipt existing = new WardMedReceipt(UUID.randomUUID(), request(2).id(), order.id(),
+                visitId, dispenseId, LocalDate.now(), 2, 0, WardMedReceipt.RECEIVED, "nurse01");
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, order.id())).thenReturn(Optional.of(order));
+        when(repo.findDailyDispenseRequest(order.id(), LocalDate.now()))
+                .thenReturn(Optional.of(request(2)));
+        when(repo.findWardReceiptByDispense(dispenseId)).thenReturn(Optional.of(existing));
+
+        var view = service.receive(visitId, order.id(), receiptReq(dispenseId, 2), "nurse01");
+
+        assertThat(view.dispenseId()).isEqualTo(dispenseId);
+        assertThat(view.quantity()).isEqualTo(2);
+        verify(repo, never()).insertWardReceipt(any(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt(), anyString());
+    }
+
+    @Test
+    @DisplayName("收药：临时药品医嘱不适用（只有长嘱按日备药）")
+    void receiveRejectsTemporaryOrder() {
+        VisitOrder temp = new VisitOrder(UUID.randomUUID(), "O2", visitId, "DRUG",
+                "DRUG-AMOX-025", "阿莫西林胶囊", "0.5g", "bid", 1, 1, "盒",
+                new BigDecimal("12.50"), new BigDecimal("12.50"), VisitOrder.PLACED, "doctor01",
+                0L, VisitOrder.TEMP, LocalDate.now(), null, VisitOrder.TRANSFERRED, "PHARMACY",
+                UUID.randomUUID(), "RX1", null);
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.findOrder(visitId, temp.id())).thenReturn(Optional.of(temp));
+
+        assertThatThrownBy(() -> service.receive(visitId, temp.id(),
+                receiptReq(UUID.randomUUID(), 1), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    @DisplayName("看板：一行汇总请领/处方/收药/护理执行，未请领显示 NOT_REQUESTED")
+    void boardAggregatesFourStages() {
+        VisitOrder requestedOrder = longDrug("O1", LocalDate.now());
+        VisitOrder untouchedOrder = longDrug("O2", LocalDate.now());
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of(requestedOrder, untouchedOrder));
+        DailyDispenseRequest request = new DailyDispenseRequest(UUID.randomUUID(),
+                requestedOrder.id(), visitId, LocalDate.now(), 2, UUID.randomUUID(), "RX1",
+                DailyDispenseRequest.REQUESTED, null);
+        when(repo.listDailyDispenseRequests(visitId, LocalDate.now())).thenReturn(List.of(request));
+        when(repo.listWardReceipts(visitId, LocalDate.now())).thenReturn(List.of(
+                new WardMedReceipt(UUID.randomUUID(), request.id(), requestedOrder.id(), visitId,
+                        UUID.randomUUID(), LocalDate.now(), 2, 0, WardMedReceipt.RECEIVED, "nurse01")));
+        when(repo.listNursingExecutions(visitId, LocalDate.now())).thenReturn(List.of(
+                new NursingExecution(UUID.randomUUID(), UUID.randomUUID(), visitId,
+                        requestedOrder.id(), LocalDate.now(), NursingExecution.REFUSED,
+                        "nurse01", "患者拒服", Instant.now())));
+
+        DispenseBoard board = service.board(visitId, null);
+
+        assertThat(board.ordered()).isEqualTo(2);
+        assertThat(board.requested()).isEqualTo(1);
+        assertThat(board.received()).isEqualTo(1);
+        assertThat(board.failed()).isZero();
+        DispenseBoardItem first = board.items().get(0);
+        assertThat(first.requestStatus()).isEqualTo(DailyDispenseRequest.REQUESTED);
+        assertThat(first.prescriptionNo()).isEqualTo("RX1");
+        assertThat(first.receivedQuantity()).isEqualTo(2);
+        assertThat(first.nursingStatus()).isEqualTo(NursingExecution.REFUSED);
+        assertThat(board.items().get(1).requestStatus()).isEqualTo("NOT_REQUESTED");
     }
 }

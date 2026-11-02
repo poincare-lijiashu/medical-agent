@@ -481,4 +481,32 @@ public final class ClinicalModel {
             return appliedAmount.add(pendingAmount).add(doneAmount);
         }
     }
+
+    /**
+     * 长嘱药品按日请领台账（一次请领一行，{@code order_id + supply_date} 幂等）。
+     *
+     * <p>记录药房产出的处方引用或失败原因：药房不可用时也必须留痕，
+     * 病区看板据此区分"已请领 / 请领失败 / 已收货"。
+     */
+    public record DailyDispenseRequest(UUID id, UUID orderId, UUID visitId, LocalDate supplyDate,
+                                       int quantity, UUID prescriptionId, String prescriptionNo,
+                                       String status, String errorMessage) {
+
+        public static final String REQUESTED = "REQUESTED";
+        public static final String FAILED = "FAILED";
+    }
+
+    /**
+     * 病区收药确认（按 {@code dispense_id} 幂等）。
+     *
+     * <p>药房说发了、病区说没收到时，以这张表为准对账；{@code returnedQuantity}
+     * 留给后续"未执行退药"批次使用。
+     */
+    public record WardMedReceipt(UUID id, UUID requestId, UUID orderId, UUID visitId,
+                                 UUID dispenseId, LocalDate supplyDate, int quantity,
+                                 int returnedQuantity, String status, String receivedBy) {
+
+        public static final String RECEIVED = "RECEIVED";
+        public static final String RETURNED = "RETURNED";
+    }
 }

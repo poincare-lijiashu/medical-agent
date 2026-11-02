@@ -7,6 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
+import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
@@ -30,6 +31,7 @@ import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
 import com.medassist.common.time.BusinessTime;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -1473,6 +1475,116 @@ public class ClinicalRepository {
                          WHERE id = :orderId AND status = 'PLACED'
                         """)
                 .param("orderId", orderId).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 病区备药对账（V25）
+
+    private static final RowMapper<DailyDispenseRequest> DISPENSE_REQUEST_MAPPER = (rs, i) ->
+            new DailyDispenseRequest(
+                    rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getDate("supply_date").toLocalDate(),
+                    rs.getInt("quantity"), rs.getObject("prescription_id", UUID.class),
+                    rs.getString("prescription_no"), rs.getString("status"),
+                    rs.getString("error_message"));
+
+    private static final RowMapper<WardMedReceipt> WARD_RECEIPT_MAPPER = (rs, i) ->
+            new WardMedReceipt(
+                    rs.getObject("id", UUID.class), rs.getObject("request_id", UUID.class),
+                    rs.getObject("order_id", UUID.class), rs.getObject("visit_id", UUID.class),
+                    rs.getObject("dispense_id", UUID.class), rs.getDate("supply_date").toLocalDate(),
+                    rs.getInt("quantity"), rs.getInt("returned_quantity"), rs.getString("status"),
+                    rs.getString("received_by"));
+
+    /**
+     * 请领台账 upsert（{@code order_id + supply_date} 幂等）。
+     *
+     * <p>失败重试不能把已成功的处方信息抹掉：若库里已有 prescription_id，
+     * 后续 FAILED 只记录错误、不降级状态（药房其实已经建单，只是本次响应失败）。
+     */
+    public void upsertDailyDispenseRequest(UUID id, UUID orderId, UUID visitId, LocalDate supplyDate,
+                                           int quantity, UUID prescriptionId, String prescriptionNo,
+                                           String status, String error, String actor) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.daily_dispense_request
+                            (id, order_id, visit_id, supply_date, quantity, prescription_id,
+                             prescription_no, status, error_message, created_by)
+                        VALUES (:id, :orderId, :visitId, :supplyDate, :quantity,
+                                CAST(:prescriptionId AS uuid), CAST(:prescriptionNo AS text),
+                                :status, CAST(:error AS text), :actor)
+                        ON CONFLICT (order_id, supply_date) DO UPDATE SET
+                            quantity = EXCLUDED.quantity,
+                            prescription_id = coalesce(EXCLUDED.prescription_id,
+                                                       daily_dispense_request.prescription_id),
+                            prescription_no = coalesce(EXCLUDED.prescription_no,
+                                                       daily_dispense_request.prescription_no),
+                            status = CASE WHEN EXCLUDED.status = 'REQUESTED'
+                                               OR daily_dispense_request.prescription_id IS NOT NULL
+                                          THEN 'REQUESTED' ELSE 'FAILED' END,
+                            error_message = CASE WHEN EXCLUDED.status = 'REQUESTED'
+                                                      OR daily_dispense_request.prescription_id IS NOT NULL
+                                                 THEN NULL ELSE EXCLUDED.error_message END,
+                            updated_at = now()
+                        """)
+                .param("id", id).param("orderId", orderId).param("visitId", visitId)
+                .param("supplyDate", supplyDate).param("quantity", quantity)
+                .param("prescriptionId", prescriptionId).param("prescriptionNo", prescriptionNo)
+                .param("status", status).param("error", error).param("actor", actor)
+                .update();
+    }
+
+    public Optional<DailyDispenseRequest> findDailyDispenseRequest(UUID orderId, LocalDate supplyDate) {
+        return jdbc.sql("""
+                        SELECT id, order_id, visit_id, supply_date, quantity, prescription_id,
+                               prescription_no, status, error_message
+                          FROM clinical_svc.daily_dispense_request
+                         WHERE order_id = ? AND supply_date = ?
+                        """).param(orderId).param(supplyDate).query(DISPENSE_REQUEST_MAPPER).optional();
+    }
+
+    public List<DailyDispenseRequest> listDailyDispenseRequests(UUID visitId, LocalDate supplyDate) {
+        return jdbc.sql("""
+                        SELECT id, order_id, visit_id, supply_date, quantity, prescription_id,
+                               prescription_no, status, error_message
+                          FROM clinical_svc.daily_dispense_request
+                         WHERE visit_id = ? AND supply_date = ?
+                         ORDER BY created_at
+                        """).param(visitId).param(supplyDate).query(DISPENSE_REQUEST_MAPPER).list();
+    }
+
+    /** 病区收药（按 dispense_id 幂等；并发重复提交只留一条）。 */
+    public void insertWardReceipt(UUID id, UUID requestId, UUID orderId, UUID visitId,
+                                  UUID dispenseId, LocalDate supplyDate, int quantity,
+                                  String receivedBy) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.ward_med_receipt
+                            (id, request_id, order_id, visit_id, dispense_id, supply_date,
+                             quantity, received_by)
+                        VALUES (:id, CAST(:requestId AS uuid), :orderId, :visitId, :dispenseId,
+                                :supplyDate, :quantity, :receivedBy)
+                        ON CONFLICT (dispense_id) DO NOTHING
+                        """)
+                .param("id", id).param("requestId", requestId).param("orderId", orderId)
+                .param("visitId", visitId).param("dispenseId", dispenseId)
+                .param("supplyDate", supplyDate).param("quantity", quantity)
+                .param("receivedBy", receivedBy).update();
+    }
+
+    public Optional<WardMedReceipt> findWardReceiptByDispense(UUID dispenseId) {
+        return jdbc.sql("""
+                        SELECT id, request_id, order_id, visit_id, dispense_id, supply_date,
+                               quantity, returned_quantity, status, received_by
+                          FROM clinical_svc.ward_med_receipt WHERE dispense_id = ?
+                        """).param(dispenseId).query(WARD_RECEIPT_MAPPER).optional();
+    }
+
+    public List<WardMedReceipt> listWardReceipts(UUID visitId, LocalDate supplyDate) {
+        return jdbc.sql("""
+                        SELECT id, request_id, order_id, visit_id, dispense_id, supply_date,
+                               quantity, returned_quantity, status, received_by
+                          FROM clinical_svc.ward_med_receipt
+                         WHERE visit_id = ? AND supply_date = ?
+                         ORDER BY received_at
+                        """).param(visitId).param(supplyDate).query(WARD_RECEIPT_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 手术麻醉（V15）

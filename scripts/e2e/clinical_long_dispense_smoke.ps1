@@ -88,6 +88,7 @@ $r = Invoke-Api 'POST' '/api/v2/clinical/inpatient/admissions' @{
     patientId = $patientId; wardId = $wardId; bedId = $bedId; attendingDoctor = 'doctor01'
 } $token
 Check 'admit' $r.Status 200
+$admissionId = (Res $r).id
 $visitId = (Res $r).visitId
 
 # ---------------------------------------------------------------- 3. stock
@@ -144,10 +145,63 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$rxAId/review" @{ approve
 Check 'rx.approve' $r.Status 200
 $r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$rxAId/dispense" @{} $token
 Check 'rx.dispense' $r.Status 200
+$dispAId = (Res $r).dispense.id
 Check 'rx.dispense.status' (Res $r).dispense.status 'DISPENSED'
 Start-Sleep -Milliseconds 500
 $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
 CheckAmt 'charge.noSecondBilling' (Res $r).totalAmount $chargeBefore
+
+# ---------------------------------------------------------------- 8b. ward board before receipt
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board" $null $token
+Check 'board.ok' $r.Status 200
+$board = Res $r
+Check 'board.ordered' $board.ordered 1
+Check 'board.requested' $board.requested 1
+Check 'board.received' $board.received 0
+$rowA = @($board.items) | Where-Object { $_.orderId -eq $orderA.id }
+Check 'board.requestStatus' $rowA.requestStatus 'REQUESTED'
+Check 'board.prescriptionNo' ($rowA.prescriptionNo -ne $null -and $rowA.prescriptionNo -ne '') True
+Check 'board.receivedQty' $rowA.receivedQuantity 0
+Check 'board.nursingStatus' $rowA.nursingStatus 'NOT_EXECUTED'
+
+# ---------------------------------------------------------------- 8c. nursing execution flows into board
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions" @{
+    orderId = $orderA.id; status = 'EXECUTED'
+} $token
+Check 'nursing.execute' $r.Status 200
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board" $null $token
+$rowA = @((Res $r).items) | Where-Object { $_.orderId -eq $orderA.id }
+Check 'board.nursingStatus.afterExec' $rowA.nursingStatus 'EXECUTED'
+
+# ---------------------------------------------------------------- 8d. ward receipt (idempotent)
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($orderA.id)/ward-receipts" @{
+    dispenseId = $dispAId; supplyDate = $today; quantity = 2
+} $token
+Check 'receipt.ok' $r.Status 200
+$receiptId = (Res $r).id
+Check 'receipt.quantity' (Res $r).quantity 2
+Check 'receipt.status' (Res $r).status 'RECEIVED'
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($orderA.id)/ward-receipts" @{
+    dispenseId = $dispAId; supplyDate = $today; quantity = 2
+} $token
+Check 'receipt.repeat.ok' $r.Status 200
+Check 'receipt.repeat.sameId' (Res $r).id $receiptId
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($orderA.id)/ward-receipts" @{
+    dispenseId = $dispAId; supplyDate = $today; quantity = 3
+} $token
+Check 'receipt.overQuantity.422' $r.Status 422
+
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board" $null $token
+$board2 = Res $r
+Check 'board.received.afterReceipt' $board2.received 1
+$rowA2 = @($board2.items) | Where-Object { $_.orderId -eq $orderA.id }
+Check 'board.receivedQty.afterReceipt' $rowA2.receivedQuantity 2
+
+# ---------------------------------------------------------------- 8e. board rejects future date
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board?date=$tomorrow" $null $token
+Check 'board.future.422' $r.Status 422
 
 # ---------------------------------------------------------------- 9. future date rejected
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-dispense-requests" @{ date = $tomorrow } $token

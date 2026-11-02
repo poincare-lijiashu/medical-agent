@@ -75,6 +75,29 @@ public final class ClinicalDtos {
                                       int failed, List<DailyDispenseItem> items) {
     }
 
+    /** 病区收药确认（按 dispenseId 幂等；数量不得超过当日请领数量）。 */
+    public record WardReceiptReq(@NotNull UUID dispenseId, @NotNull LocalDate supplyDate,
+                                 @Min(1) int quantity) {
+    }
+
+    /** 收药记录视图。 */
+    public record WardReceiptView(UUID id, UUID dispenseId, UUID orderId, LocalDate supplyDate,
+                                  int quantity, String status, String receivedBy) {
+    }
+
+    /** 病区备药看板的一行：请领 / 处方 / 收药 / 护理执行四段状态。 */
+    public record DispenseBoardItem(UUID orderId, String orderNo, String itemCode, String itemName,
+                                    int dailyQuantity, String frequency, int frequencyTimes,
+                                    String requestStatus, UUID prescriptionId,
+                                    String prescriptionNo, String requestError,
+                                    int receivedQuantity, String nursingStatus) {
+    }
+
+    /** 病区备药看板（按就诊 + 日期）。 */
+    public record DispenseBoard(LocalDate date, int ordered, int requested, int received,
+                                int failed, List<DispenseBoardItem> items) {
+    }
+
     /** 停嘱。 */
     public record StopOrderReq(String reason) {
     }
