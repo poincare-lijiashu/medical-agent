@@ -45,6 +45,27 @@ npm run build      # 产物 dist/，已被 .gitignore 排除
 麻精专册 7 条（待回收 3）→ 知识库检索（`degraded=EMBEDDING_UNAVAILABLE` 降级条正常）→
 手术排台 19 间 → 术中收费预览 ¥1,550 三项 → 术前访视表单。
 
+### 视觉重构 v2（2026-11-02 晚，临床仪表台）
+
+用户反馈"太简单/太 low/没有设计感"，本轮按"读规范→合并技能→重构视觉"执行：
+
+- 读取本地技能原文：`frontend-design`（Anthropic）、`uicraft`（Impeccable 衍生）、
+  `stark:web-design`；合并为本项目技能 `skills/clinical-console-design/SKILL.md`
+  （决策优先级、表面分类、Clinical Instrument 立场、组件契约、反模板清单、验收清单）
+- 字体升级：自托管 `IBM Plex Sans Variable` + `IBM Plex Mono`（编码/时间/单号），
+  中文回退 PingFang/微软雅黑；**不再使用 Inter/system-ui 作为主字体**
+- 令牌 v2：更深的石墨墨色、四层表面（bg/panel/panel-2/panel-3/sunken）、
+  发丝线层次、卡片仅保留 1px 阴影；字号 10–30 刻度
+- 应用壳 v2：左侧导航（工作区信息 + 分组 + 底部命令入口）、顶栏实时时钟、
+  `Ctrl/⌘+K` 命令面板（只列有权限入口）、路由淡入
+- 医嘱工作台 v2：页头事实条（数据源/更新时间）→ 患者上下文 → **4 个真实 KPI**
+  → 三栏（就诊列表 / 医嘱主区 / 只读检查器：患者、费用构成、转送、审计边界）；
+  医嘱表 8 列收敛、长期/临时标签内联、支持类型筛选与关键字过滤
+- 登录 v2：暗场仪表台视觉（自绘 SVG 波形 + 网格 + 同心圆，无外部图片）、
+  记住账号、大写锁定提示、焦点管理；删除 dev 账号提示（去 demo 化）
+- 新增组件：`CommandPalette` / `KpiCard` / `Sparkline`；`orders-view.css` 独立样式层
+- 会话：缓存 `expiresAt`，启动时临近过期先刷新，消除控制台 401 噪音
+
 **下一步（前端）**：
 1. 病案首页明细的直接编辑（PUT 补录字段）与缺陷定位跳转；
 2. 手术病例创建（术式字典 + 计划时间）与排台提交，目前只读看板；

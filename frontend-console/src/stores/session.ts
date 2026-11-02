@@ -9,6 +9,8 @@ interface SessionState {
   user: Me | null
   accessToken: string | null
   refreshToken: string | null
+  /** 访问令牌到期时间（ISO）；用于启动时判断是否需要先刷新，避免一次必然的 401 */
+  expiresAt: string | null
   /** 启动时是否已完成本地会话恢复（避免路由守卫误跳登录） */
   ready: boolean
 }
@@ -17,6 +19,7 @@ const state = reactive<SessionState>({
   user: null,
   accessToken: null,
   refreshToken: null,
+  expiresAt: null,
   ready: false,
 })
 
@@ -30,6 +33,7 @@ function persist() {
     JSON.stringify({
       accessToken: state.accessToken,
       refreshToken: state.refreshToken,
+      expiresAt: state.expiresAt,
       user: state.user,
     }),
   )
@@ -38,6 +42,7 @@ function persist() {
 function apply(result: LoginResult) {
   state.accessToken = result.accessToken
   state.refreshToken = result.refreshToken
+  state.expiresAt = result.expiresAt
   state.user = result.user
   setTokens(result.accessToken, result.refreshToken)
   persist()
@@ -47,9 +52,10 @@ export function restoreSession() {
   const raw = sessionStorage.getItem(STORAGE_KEY)
   if (raw) {
     try {
-      const saved = JSON.parse(raw) as Omit<LoginResult, 'tokenType' | 'expiresAt' | 'expiresIn' | 'refreshExpiresAt'>
+      const saved = JSON.parse(raw) as Omit<LoginResult, 'tokenType' | 'expiresIn' | 'refreshExpiresAt'>
       state.accessToken = saved.accessToken
       state.refreshToken = saved.refreshToken
+      state.expiresAt = saved.expiresAt ?? null
       state.user = saved.user
       setTokens(saved.accessToken, saved.refreshToken)
     } catch {
@@ -63,6 +69,7 @@ export function clearSession() {
   state.user = null
   state.accessToken = null
   state.refreshToken = null
+  state.expiresAt = null
   setTokens(null, null)
   sessionStorage.removeItem(STORAGE_KEY)
 }
@@ -115,6 +122,12 @@ export const session = {
   },
   async validate() {
     if (!state.accessToken) return false
+    // 令牌临近过期时先刷新，避免启动阶段产生一次必然的 401（控制台噪音）
+    const exp = state.expiresAt ? new Date(state.expiresAt).getTime() : 0
+    if (exp && exp - Date.now() < 60_000) {
+      const ok = await refreshSession()
+      if (!ok) return false
+    }
     try {
       state.user = await authApi.me()
       persist()

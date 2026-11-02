@@ -1,105 +1,134 @@
 /*
- * 铭医 MedAssist 设计令牌
- * 方向：安静 · 可核对 · 高密度但可扫读（见 docs/DESIGN-SYSTEM.md）
- * 约束：单一强调色；状态色必须配文字/图标；不使用渐变、玻璃拟态、装饰性大色块。
+ * 铭医 MedAssist · 临床仪表台（Clinical Instrument）设计令牌 v2
+ *
+ * 设计立场：这不是"后台模板"，而是一台临床仪表。
+ *   - 纸白底 + 石墨墨色 + 单一钴蓝强调；层次靠发丝线与留白，不靠阴影堆叠。
+ *   - 数字是主角：等宽数字 + 右对齐 + 单位降级，扫读时不被文字干扰。
+ *   - 元信息用等宽小字（编码、时间、病案号），与正文形成两种"材料"。
+ *   - 状态永远"点 + 文字"，颜色只是辅助；打印与色觉障碍场景都不丢失信息。
  */
 
 :root {
   color-scheme: light;
 
-  /* ---------- 背景与层次 ---------- */
-  --bg: #fafbfc;
-  --panel: #ffffff;
-  --panel-muted: #f7f9fb;
-  --sunken: #f1f4f8;
-  --rail: #f6f8fb;
-  --rail-active: #eaf0fc;
-  --line: #e3e8ef;
-  --line-strong: #c9d2de;
+  /* ---------- 字体 ---------- */
+  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
-  /* ---------- 文本 ---------- */
-  --ink: #1b2430;
-  --ink-2: #4c5766;
-  --ink-3: #6b7787;
-  --ink-inverse: #f8fafc;
-
-  /* ---------- 强调与状态 ---------- */
-  --accent: #1f5fd0;
-  --accent-hover: #1749a6;
-  --accent-weak: #eaf0fc;
-  --accent-line: #bcd0f4;
-
-  --ok: #1a7a4c;
-  --ok-weak: #e8f5ee;
-  --warn: #8a5a00;
-  --warn-weak: #fdf3e2;
-  --danger: #b3261e;
-  --danger-weak: #fdecea;
-  --info: #1f5fd0;
-  --info-weak: #eaf0fc;
-  --neutral: #4c5766;
-  --neutral-weak: #eef1f5;
-
-  /* ---------- 品牌 ---------- */
-  --brand: #17439c;
-  --brand-deep: #0f2f70;
-  --brand-tint: #e8eefb;
-
-  /* ---------- 字体与字号 ---------- */
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-
+  /* 字号：11 用于元信息，13 正文，24+ 只给关键数字 */
+  --fs-10: 10px;
   --fs-11: 11px;
   --fs-12: 12px;
   --fs-13: 13px;
   --fs-14: 14px;
+  --fs-15: 15px;
   --fs-16: 16px;
   --fs-18: 18px;
-  --fs-22: 22px;
-  --fs-28: 28px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-30: 30px;
+  --fs-36: 36px;
 
-  --lh-tight: 1.3;
+  --lh-tight: 1.25;
   --lh-base: 1.55;
 
-  /* ---------- 间距（4pt 栅格） ---------- */
+  /* ---------- 纸张与墨色 ---------- */
+  --bg: #f2f4f7;
+  --bg-deep: #eaedf2;
+  --panel: #ffffff;
+  --panel-2: #fafbfc;
+  --panel-3: #f5f7fa;
+  --sunken: #eef1f5;
+  --rail: #f7f8fa;
+  --rail-active: #e9eff9;
+  --overlay: rgb(16 21 31 / 46%);
+
+  --line: #e3e8ef;
+  --line-soft: #edf0f4;
+  --line-strong: #cbd3e0;
+
+  --ink: #10151f;
+  --ink-2: #445064;
+  --ink-3: #6b7787;
+  --ink-4: #8e99a8;
+  --ink-inverse: #f7f9fc;
+
+  /* ---------- 强调与状态 ---------- */
+  --accent: #1d5bd6;
+  --accent-hover: #1648ac;
+  --accent-press: #123c8f;
+  --accent-weak: #edf2fd;
+  --accent-line: #c6d8f7;
+  --accent-ink: #123e94;
+
+  --ok: #0f7a52;
+  --ok-weak: #e9f5ef;
+  --ok-line: #bfe2d2;
+
+  --warn: #96590a;
+  --warn-weak: #fdf4e5;
+  --warn-line: #eed7ab;
+
+  --danger: #b42318;
+  --danger-weak: #fdeceb;
+  --danger-line: #f2c3bf;
+
+  --neutral: #556274;
+  --neutral-weak: #eff2f6;
+  --neutral-line: #dbe1e9;
+
+  /* ---------- 品牌（暗场） ---------- */
+  --brand: #17439c;
+  --brand-deep: #0b1c3c;
+  --brand-mid: #102a57;
+  --brand-tint: #e8eefb;
+
+  /* ---------- 间距：4pt 栅格 + 2px 光学微调 ---------- */
+  --s0: 2px;
   --s1: 4px;
   --s2: 8px;
   --s3: 12px;
   --s4: 16px;
   --s5: 20px;
   --s6: 24px;
+  --s7: 28px;
   --s8: 32px;
   --s10: 40px;
   --s12: 48px;
+  --s16: 64px;
 
-  /* ---------- 圆角 ---------- */
+  /* ---------- 圆角：小控件 6，卡片 8，浮层 10 ---------- */
   --r-xs: 3px;
   --r-sm: 5px;
-  --r-md: 7px;
-  --r-lg: 10px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
   --r-pill: 999px;
 
-  /* ---------- 阴影：环境 + 直射两层 ---------- */
-  --shadow-1: 0 1px 2px rgb(16 24 40 / 5%), 0 1px 3px rgb(16 24 40 / 7%);
-  --shadow-2: 0 2px 4px rgb(16 24 40 / 6%), 0 12px 28px rgb(16 24 40 / 12%);
-  --shadow-3: 0 8px 16px rgb(16 24 40 / 8%), 0 24px 48px rgb(16 24 40 / 16%);
+  /* ---------- 阴影：只用于浮层，卡片靠发丝线 ---------- */
+  --shadow-card: 0 1px 2px rgb(16 21 31 / 4%);
+  --shadow-1: 0 1px 2px rgb(16 21 31 / 6%), 0 1px 3px rgb(16 21 31 / 8%);
+  --shadow-2: 0 4px 10px rgb(16 21 31 / 8%), 0 16px 32px rgb(16 21 31 / 12%);
+  --shadow-3: 0 10px 20px rgb(16 21 31 / 10%), 0 32px 64px rgb(16 21 31 / 18%);
+  --card-highlight: inset 0 1px 0 rgb(255 255 255 / 72%);
 
-  /* ---------- 焦点环 ---------- */
-  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(31 95 208 / 55%);
+  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(29 91 214 / 55%);
 
   /* ---------- 布局 ---------- */
-  --rail-w: 236px;
-  --rail-w-collapsed: 68px;
-  --topbar-h: 56px;
-  --context-h: 64px;
+  --rail-w: 244px;
+  --rail-w-collapsed: 64px;
+  --topbar-h: 52px;
+  --inspector-w: 300px;
 
   /* ---------- 动效 ---------- */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --dur-fast: 120ms;
   --dur: 180ms;
+  --dur-slow: 260ms;
 
-  /* ---------- 层级语义刻度 ---------- */
+  /* ---------- 层级 ---------- */
   --z-sticky: 10;
   --z-rail: 20;
   --z-backdrop: 40;
@@ -111,42 +140,58 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0f1420;
-  --panel: #161d2b;
-  --panel-muted: #1a2232;
-  --sunken: #121927;
-  --rail: #131a28;
-  --rail-active: #1d2c47;
-  --line: #263145;
-  --line-strong: #35435c;
+  --bg: #0b1017;
+  --bg-deep: #080c12;
+  --panel: #121821;
+  --panel-2: #151c26;
+  --panel-3: #1a222e;
+  --sunken: #0e141c;
+  --rail: #0d131b;
+  --rail-active: #18283f;
+  --overlay: rgb(0 0 0 / 60%);
 
-  --ink: #e9eef7;
-  --ink-2: #aeb9c9;
-  --ink-3: #8695aa;
-  --ink-inverse: #0f1420;
+  --line: #232d3b;
+  --line-soft: #1b2430;
+  --line-strong: #354255;
 
-  --accent: #5c8ff0;
-  --accent-hover: #7aa6f5;
-  --accent-weak: #1b2942;
-  --accent-line: #2c4470;
+  --ink: #e8eef7;
+  --ink-2: #aab6c7;
+  --ink-3: #8593a6;
+  --ink-4: #6b7889;
+  --ink-inverse: #0b1017;
 
-  --ok: #4ec08a;
-  --ok-weak: #12291f;
-  --warn: #e0a84a;
-  --warn-weak: #2b2113;
-  --danger: #f07a72;
+  --accent: #5b8ef2;
+  --accent-hover: #7ba5f6;
+  --accent-press: #4a7ad8;
+  --accent-weak: #17263e;
+  --accent-line: #2c4670;
+  --accent-ink: #a8c4fb;
+
+  --ok: #46bd8b;
+  --ok-weak: #10291f;
+  --ok-line: #23503c;
+
+  --warn: #dfa64c;
+  --warn-weak: #2a2012;
+  --warn-line: #4d3a1b;
+
+  --danger: #f28b82;
   --danger-weak: #2e1717;
-  --info: #5c8ff0;
-  --info-weak: #1b2942;
-  --neutral: #aeb9c9;
-  --neutral-weak: #1f2938;
+  --danger-line: #5a2b28;
 
-  --brand: #7aa6f5;
-  --brand-deep: #a8c4fb;
+  --neutral: #aab6c7;
+  --neutral-weak: #1c2531;
+  --neutral-line: #2c3849;
+
+  --brand: #7ba5f6;
+  --brand-deep: #070d18;
+  --brand-mid: #0d1a30;
   --brand-tint: #16233a;
 
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 30%);
   --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow-2: 0 4px 12px rgb(0 0 0 / 45%);
   --shadow-3: 0 16px 40px rgb(0 0 0 / 55%);
-  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(92 143 240 / 65%);
+  --card-highlight: inset 0 1px 0 rgb(255 255 255 / 4%);
+  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(91 142 242 / 60%);
 }

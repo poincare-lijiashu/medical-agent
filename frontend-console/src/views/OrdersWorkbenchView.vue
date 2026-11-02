@@ -1,15 +1,19 @@
 <template>
   <div class="page">
     <header class="page-head">
-      <div>
+      <div class="page-head-main">
         <h1 class="page-title">医嘱工作台</h1>
-        <p class="page-sub">
-          以患者就诊为上下文：检索患者 → 选择就诊 → 开立/停撤医嘱 → 核对费用。金额与状态均由服务端计算，前端只负责呈现。
+        <p class="page-desc">
+          以就诊为上下文组织医嘱、转送与费用。金额、状态与可执行动作均由服务端裁决，界面只负责把依据摆在操作旁边。
         </p>
       </div>
-      <div class="row">
+      <div class="page-actions">
+        <div class="page-meta">
+          <span>数据源 <b>clinical_svc</b></span>
+          <span>更新 <b>{{ updatedAt || '—' }}</b></span>
+        </div>
         <button class="btn btn--sm" type="button" :disabled="loading" @click="refreshAll">
-          <AppIcon name="refresh" :size="15" /> 刷新
+          <AppIcon name="refresh" :size="14" /> 刷新
         </button>
       </div>
     </header>
@@ -124,6 +128,39 @@
         </p>
       </div>
     </section>
+
+    <div v-if="selectedPatient && selectedVisit" class="kpi-strip">
+      <KpiCard
+        label="本次就诊医嘱"
+        :value="orders.length"
+        unit="条"
+        :meta="`长期 ${longCount} · 临时 ${tempCount}`"
+        icon="orders"
+      />
+      <KpiCard
+        label="待执行 / 未计费"
+        :value="placedCount"
+        unit="条"
+        :meta="`已计费 ${chargedCount} 条`"
+        icon="clock"
+        :tone="placedCount > 0 ? 'accent' : 'default'"
+      />
+      <KpiCard
+        label="收费单金额"
+        :value="money(charge?.totalAmount ?? 0)"
+        :meta="charge ? `${charge.chargeNo} · ${charge.status === 'PAID' ? '已结算' : '未结算'}` : '尚未生成收费单'"
+        icon="charges"
+        :tone="charge?.status === 'PAID' ? 'ok' : 'warn'"
+      />
+      <KpiCard
+        label="转送异常"
+        :value="transferFailedCount"
+        unit="条"
+        :meta="transferFailedCount > 0 ? '需要人工重试或联系药房/医技' : '药房与医技转送正常'"
+        icon="arrow-right"
+        :tone="transferFailedCount > 0 ? 'danger' : 'default'"
+      />
+    </div>
 
     <div v-if="selectedPatient" class="workbench">
       <!-- 就诊列表 -->
@@ -260,7 +297,7 @@
                 <input v-model.trim="line.dose" class="input" placeholder="如 0.5g、250ml" />
               </label>
 
-              <label class="field">
+              <label class="field entry-freq">
                 <span class="label">频次</span>
                 <select v-model="line.frequency" class="select">
                   <option value="">不指定（临时医嘱）</option>
@@ -291,9 +328,27 @@
 
           <!-- 医嘱列表 -->
           <div class="card">
-            <div class="card-head">
+            <div class="card-head orders-toolbar">
               <span class="card-title">医嘱明细</span>
-              <span class="badge badge--neutral">{{ orders.length }} 条</span>
+              <span class="badge badge--neutral num">{{ visibleOrders.length }} / {{ orders.length }}</span>
+              <div class="seg" role="tablist" aria-label="医嘱类型筛选">
+                <button
+                  v-for="f in orderFilters"
+                  :key="f.value"
+                  class="seg-btn"
+                  :class="{ active: orderFilter === f.value }"
+                  type="button"
+                  role="tab"
+                  :aria-selected="orderFilter === f.value"
+                  @click="orderFilter = f.value"
+                >
+                  {{ f.label }}
+                </button>
+              </div>
+              <div class="orders-search">
+                <AppIcon name="search" :size="14" class="muted" />
+                <input v-model.trim="orderQuery" class="orders-search-input" placeholder="项目 / 单号" aria-label="筛选医嘱" />
+              </div>
               <span class="spacer" />
               <button class="btn btn--ghost btn--sm" type="button" :disabled="ordersLoading" @click="loadOrders">
                 <AppIcon name="refresh" :size="14" /> 刷新
@@ -319,28 +374,31 @@
                     <th>剂量 / 频次</th>
                     <th class="is-num">数量</th>
                     <th class="is-num">金额</th>
-                    <th>类型</th>
                     <th>状态</th>
                     <th>转送</th>
                     <th style="width: 132px">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="o in orders" :key="o.id">
+                  <tr v-for="o in visibleOrders" :key="o.id">
                     <td class="mono">{{ o.orderNo }}</td>
                     <td>
-                      <div class="is-strong">{{ o.itemName }}</div>
-                      <div class="mono muted">{{ o.itemCode }}</div>
+                      <div class="item-line">
+                        <span class="is-strong" :title="o.itemName">{{ o.itemName }}</span>
+                        <span class="mode-tag" :class="{ 'is-long': o.orderMode === 'LONG' }">
+                          {{ o.orderMode === 'LONG' ? '长期' : '临时' }}
+                        </span>
+                      </div>
+                      <div class="mono muted item-code">{{ o.itemCode }}</div>
                     </td>
-                    <td>
+                    <td class="nowrap">
                       <div>{{ o.dose || '—' }}</div>
-                      <div class="muted" style="font-size: var(--fs-12)">
-                        {{ freqLabel(o.frequency) }}
+                      <div class="mono muted" style="font-size: var(--fs-10)" :title="freqLabel(o.frequency)">
+                        {{ (o.frequency || '—').toUpperCase() }}
                       </div>
                     </td>
-                    <td class="is-num">{{ o.quantity }} {{ o.unit }}</td>
-                    <td class="is-num is-strong">{{ money(o.amount) }}</td>
-                    <td>{{ o.orderMode === 'LONG' ? '长期' : '临时' }}</td>
+                    <td class="is-num nowrap">{{ o.quantity }} {{ o.unit }}</td>
+                    <td class="is-num is-strong nowrap">{{ money(o.amount) }}</td>
                     <td><StatusPill :value="o.status" /></td>
                     <td>
                       <span v-if="o.transferStatus === 'FAILED'" class="badge badge--danger" :title="o.transferError || ''">
@@ -421,6 +479,82 @@
           </div>
         </template>
       </section>
+
+      <!-- 右侧检查器：患者、费用构成、转送与审计 -->
+      <aside class="card inspector">
+        <div class="inspector-block">
+          <div class="section-label">患者上下文</div>
+          <div class="inspector-patient">
+            <span class="avatar-lg" aria-hidden="true">{{ selectedPatient.name.slice(0, 1) }}</span>
+            <div class="min-w-0">
+              <div class="inspector-name">{{ selectedPatient.name }}</div>
+              <div class="mono muted" style="font-size: var(--fs-11)">
+                {{ selectedPatient.patientNo }}
+              </div>
+            </div>
+          </div>
+          <dl class="kv-list">
+            <div><dt>性别 / 年龄</dt><dd>{{ genderLabel(selectedPatient.gender) }} · {{ ageOf(selectedPatient.birthDate) }}</dd></div>
+            <div><dt>血型</dt><dd>{{ selectedPatient.bloodType || '—' }}</dd></div>
+            <div>
+              <dt>过敏</dt>
+              <dd :class="{ 'is-danger': Boolean(selectedPatient.allergy) }">{{ selectedPatient.allergy || '未记录' }}</dd>
+            </div>
+            <div><dt>档案状态</dt><dd><StatusPill :value="selectedPatient.status" /></dd></div>
+          </dl>
+          <button v-if="canReveal" class="btn btn--sm btn--block" type="button" @click="revealPatient">
+            <AppIcon name="lock" :size="13" /> 查看敏感信息（留痕）
+          </button>
+        </div>
+
+        <div class="inspector-block">
+          <div class="section-label">费用构成</div>
+          <div v-if="feeGroups.length && !netZero" class="fee-bars">
+            <div v-for="g in feeGroups" :key="g.key" class="fee-bar">
+              <div class="fee-bar-head">
+                <span>{{ g.label }}</span>
+                <span class="num">{{ money(g.amount) }}</span>
+              </div>
+              <div class="fee-bar-track"><span :style="{ width: g.pct + '%' }" /></div>
+            </div>
+          </div>
+          <div v-else-if="netZero" class="hint">
+            本次费用已全额红冲（退费/更正），净额为 0；原始明细仍保留在收费单中可追溯。
+          </div>
+          <div v-else class="hint">暂无计费明细。临时医嘱在结算时计费，长期医嘱按天累计。</div>
+          <div v-if="charge" class="inspector-total">
+            <span class="muted">合计</span>
+            <strong class="num">{{ money(charge.totalAmount) }}</strong>
+          </div>
+          <p v-if="hasReversal" class="hint" style="margin: 0">含红冲记录，以上为净额。</p>
+        </div>
+
+        <div class="inspector-block">
+          <div class="section-label">转送与联动</div>
+          <dl class="kv-list">
+            <div><dt>药房</dt><dd>{{ pharmacyTransfers }} 条</dd></div>
+            <div><dt>医技</dt><dd>{{ techTransfers }} 条</dd></div>
+            <div>
+              <dt>失败待处理</dt>
+              <dd :class="{ 'is-danger': transferFailedCount > 0 }">{{ transferFailedCount }} 条</dd>
+            </div>
+          </dl>
+          <div v-if="recentTransfers.length" class="transfer-list">
+            <div v-for="o in recentTransfers" :key="o.id" class="transfer-row">
+              <span class="mono">{{ o.externalNo }}</span>
+              <span class="truncate">{{ o.itemName }}</span>
+            </div>
+          </div>
+          <div v-else class="hint">本次就诊尚未产生外送单号。</div>
+        </div>
+
+        <div class="inspector-block is-last">
+          <div class="section-label">审计边界</div>
+          <p class="hint" style="line-height: 1.7">
+            撤销、停嘱与结算均写入审计，记录操作人、时间与原因。界面显示的状态以服务端返回为准，不做本地乐观改写。
+          </p>
+        </div>
+      </aside>
     </div>
 
     <!-- 项目选择 -->
@@ -562,6 +696,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import KpiCard from '@/components/ui/KpiCard.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, empiApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -572,6 +707,13 @@ import { ageOf, date, genderLabel, money } from '@/utils/format'
 
 const busy = ref(false)
 const loading = ref(false)
+const updatedAt = ref('')
+
+function stamp() {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  updatedAt.value = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
 
 /* ------------------------------ 患者检索 ------------------------------ */
 
@@ -686,6 +828,74 @@ const orders = ref<VisitOrder[]>([])
 const ordersLoading = ref(false)
 const frequencies = ref<Frequency[]>([])
 
+/* ------------------------------ 派生指标与筛选 ------------------------------ */
+
+const orderFilters: { value: 'ALL' | 'LONG' | 'TEMP'; label: string }[] = [
+  { value: 'ALL', label: '全部' },
+  { value: 'LONG', label: '长期' },
+  { value: 'TEMP', label: '临时' },
+]
+const orderFilter = ref<'ALL' | 'LONG' | 'TEMP'>('ALL')
+const orderQuery = ref('')
+
+const longCount = computed(() => orders.value.filter((o) => o.orderMode === 'LONG').length)
+const tempCount = computed(() => orders.value.filter((o) => o.orderMode !== 'LONG').length)
+const placedCount = computed(() => orders.value.filter((o) => o.status === 'PLACED').length)
+const chargedCount = computed(() => orders.value.filter((o) => o.status === 'CHARGED').length)
+const transferFailedCount = computed(() => orders.value.filter((o) => o.transferStatus === 'FAILED').length)
+
+const visibleOrders = computed(() => {
+  const q = orderQuery.value.toLowerCase()
+  return orders.value.filter((o) => {
+    if (orderFilter.value === 'LONG' && o.orderMode !== 'LONG') return false
+    if (orderFilter.value === 'TEMP' && o.orderMode === 'LONG') return false
+    if (!q) return true
+    return (
+      o.itemName.toLowerCase().includes(q) ||
+      o.itemCode.toLowerCase().includes(q) ||
+      o.orderNo.toLowerCase().includes(q)
+    )
+  })
+})
+
+const CATEGORY_LABEL: Record<string, string> = {
+  DRUG: '药品',
+  TREATMENT: '治疗',
+  EXAM: '检查',
+  MATERIAL: '耗材',
+  REGISTRATION: '挂号',
+  CONSULTATION: '诊查',
+}
+
+const feeGroups = computed(() => {
+  const map = new Map<string, number>()
+  for (const it of charge.value?.items ?? []) {
+    map.set(it.category, (map.get(it.category) ?? 0) + Number(it.amount))
+  }
+  const total = [...map.values()].reduce((a, b) => a + b, 0) || 1
+  return [...map.entries()]
+    .map(([key, amount]) => ({
+      key,
+      label: CATEGORY_LABEL[key] ?? key,
+      amount,
+      pct: Math.max(0, Math.round((amount / total) * 100)),
+    }))
+    .sort((a, b) => b.amount - a.amount)
+})
+
+const hasReversal = computed(() => (charge.value?.items ?? []).some((it) => Number(it.amount) < 0))
+const netZero = computed(() => Boolean(charge.value) && Math.abs(Number(charge.value?.totalAmount ?? 0)) < 0.005)
+
+const pharmacyTransfers = computed(
+  () => orders.value.filter((o) => o.externalType === 'PRESCRIPTION').length,
+)
+const techTransfers = computed(
+  () => orders.value.filter((o) => o.externalType === 'EXAM_APPLICATION').length,
+)
+const recentTransfers = computed(() =>
+  orders.value.filter((o) => Boolean(o.externalNo)).slice(-3).reverse(),
+)
+
 const modes = [
   { value: 'TEMP', label: '临时医嘱' },
   { value: 'LONG', label: '长期医嘱' },
@@ -732,6 +942,7 @@ async function loadOrders() {
   ordersLoading.value = true
   try {
     orders.value = await clinicalApi.orders(selectedVisit.value.id)
+    stamp()
   } catch (e) {
     toast.error('医嘱加载失败', errorText(e))
   } finally {
@@ -1007,604 +1218,5 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<style scoped>
-.ctx {
-  display: flex;
-  align-items: center;
-  gap: var(--s4);
-  padding: var(--s3) var(--s4);
-  flex-wrap: wrap;
-}
 
-.ctx-search {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 380px;
-  max-width: 100%;
-  height: 36px;
-  padding: 0 10px;
-  background: var(--sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-}
-
-.ctx-search:focus-within {
-  border-color: var(--accent);
-  background: var(--panel);
-  box-shadow: var(--focus);
-}
-
-.ctx-search-icon {
-  color: var(--ink-3);
-}
-
-.ctx-input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  box-shadow: none;
-  font-size: var(--fs-13);
-}
-
-.ctx-input:focus,
-.ctx-input:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-/* 未选患者时的引导：把"下一步做什么"讲清楚，而不是留一片空白 */
-.onboarding {
-  display: flex;
-  gap: var(--s8);
-  padding: var(--s8);
-  align-items: flex-start;
-}
-
-.onboarding-art {
-  flex: none;
-  padding: var(--s4);
-  background: var(--panel-muted);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-}
-
-.onboarding-body {
-  min-width: 0;
-  max-width: 720px;
-}
-
-.onboarding-body h2 {
-  font-size: var(--fs-18);
-}
-
-.steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--s5);
-  margin-top: var(--s4);
-}
-
-.steps li {
-  display: flex;
-  gap: var(--s3);
-}
-
-.step-mark {
-  width: 22px;
-  height: 22px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--accent-weak);
-  color: var(--accent);
-  font-size: var(--fs-12);
-  font-weight: 600;
-}
-
-.step-title {
-  font-size: var(--fs-13);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.steps p {
-  margin-top: 3px;
-  font-size: var(--fs-12);
-  color: var(--ink-3);
-  line-height: 1.6;
-}
-
-.onboarding-note {
-  margin-top: var(--s5);
-  padding-top: var(--s3);
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-12);
-  color: var(--ink-3);
-}
-
-.ctx-input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.kbd {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--ink-3);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-xs);
-  padding: 1px 4px;
-  background: var(--panel);
-}
-
-.ctx-placeholder {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: var(--fs-12);
-  color: var(--ink-3);
-}
-
-.patient-chip {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  min-width: 0;
-}
-
-.avatar-lg {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--brand-tint);
-  color: var(--brand);
-  font-weight: 600;
-  flex: none;
-}
-
-.patient-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--fs-14);
-}
-
-.patient-sub {
-  color: var(--ink-3);
-  font-size: var(--fs-12);
-  margin-top: 1px;
-}
-
-.allergy {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border-radius: var(--r-pill);
-  background: var(--danger-weak);
-  color: var(--danger);
-  font-size: var(--fs-12);
-  border: 1px solid color-mix(in srgb, var(--danger) 24%, transparent);
-}
-
-/* ---------------- 检索结果 ---------------- */
-
-.results {
-  padding: var(--s3) var(--s4) var(--s4);
-}
-
-.results-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  padding-bottom: var(--s2);
-}
-
-.results-loading,
-.visit-loading,
-.orders-loading,
-.catalog-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.results-empty,
-.catalog-empty {
-  padding: var(--s5);
-  color: var(--ink-3);
-  font-size: var(--fs-13);
-}
-
-.results-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.result-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  width: 100%;
-  padding: 9px 10px;
-  border: 0;
-  background: none;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  text-align: left;
-  font-size: var(--fs-13);
-}
-
-.result-row:hover {
-  background: var(--panel-muted);
-}
-
-.result-name {
-  font-weight: 500;
-  color: var(--ink);
-  min-width: 72px;
-}
-
-/* ---------------- 工作区 ---------------- */
-
-.workbench {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: var(--s4);
-  align-items: start;
-}
-
-.visit-pane {
-  position: sticky;
-  top: var(--s4);
-  overflow: hidden;
-}
-
-.visit-list {
-  display: flex;
-  flex-direction: column;
-  padding: var(--s2);
-  gap: 2px;
-  max-height: calc(100vh - 260px);
-  overflow: auto;
-}
-
-.visit-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  padding: 9px 10px;
-  border: 1px solid transparent;
-  background: none;
-  border-radius: var(--r-md);
-  cursor: pointer;
-  text-align: left;
-}
-
-.visit-item:hover {
-  background: var(--panel-muted);
-}
-
-.visit-item.active {
-  background: var(--accent-weak);
-  border-color: var(--accent-line);
-}
-
-.visit-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: var(--fs-13);
-  color: var(--ink);
-}
-
-.visit-meta {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--fs-12);
-  color: var(--ink-2);
-  flex-wrap: wrap;
-}
-
-.order-pane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s4);
-  min-width: 0;
-}
-
-.visit-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s4);
-  padding: var(--s4) var(--s5);
-  flex-wrap: wrap;
-}
-
-.visit-no {
-  font-size: var(--fs-14);
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.visit-head-meta {
-  margin-top: 4px;
-  font-size: var(--fs-12);
-  color: var(--ink-3);
-}
-
-.notice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border: 1px solid var(--accent-line);
-  background: var(--accent-weak);
-  color: var(--accent);
-  border-radius: var(--r-md);
-  font-size: var(--fs-13);
-}
-
-/* ---------------- 开立区 ---------------- */
-
-.entry-body {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--s3);
-  padding: var(--s4) var(--s5) var(--s2);
-  flex-wrap: wrap;
-}
-
-.entry-qty {
-  width: 92px;
-  flex: none;
-}
-
-.entry-body > .field {
-  flex: 1;
-  min-width: 140px;
-}
-
-.item-picker {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--r-md);
-  background: var(--panel-muted);
-  cursor: pointer;
-  font-size: var(--fs-13);
-  text-align: left;
-  overflow: hidden;
-}
-
-.item-picker > * {
-  flex: none;
-}
-
-.item-picker > .spacer {
-  flex: 1 1 auto;
-}
-
-.picker-placeholder {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.item-picker:hover {
-  border-color: var(--accent);
-  background: var(--accent-weak);
-}
-
-.item-picker-name {
-  flex: 0 1 auto !important;
-  min-width: 0;
-  font-weight: 500;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.item-picker .num {
-  white-space: nowrap;
-}
-
-.entry-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 var(--s5) var(--s3);
-  font-size: var(--fs-12);
-  color: var(--ink-3);
-}
-
-/* ---------------- 费用 ---------------- */
-
-.charge-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  padding: var(--s4) var(--s5);
-  flex-wrap: wrap;
-}
-
-.charge-total {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  font-size: var(--fs-12);
-  line-height: 1.4;
-}
-
-.charge-total strong {
-  font-size: var(--fs-18);
-  color: var(--ink);
-}
-
-.charge-items {
-  border-top: 1px solid var(--line);
-  padding: var(--s2) var(--s5) var(--s4);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.charge-item {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  padding: 6px 0;
-  font-size: var(--fs-13);
-  color: var(--ink-2);
-  border-bottom: 1px dashed var(--line);
-}
-
-.charge-item:last-child {
-  border-bottom: 0;
-}
-
-.charge-empty {
-  padding: 0 var(--s5) var(--s5);
-  font-size: var(--fs-12);
-  color: var(--ink-3);
-}
-
-/* ---------------- 目录 ---------------- */
-
-.catalog-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
-  height: 36px;
-}
-
-.catalog-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: var(--focus);
-}
-
-.catalog-input {
-  flex: 1;
-  border: 0;
-  outline: none;
-  background: none;
-  font-size: var(--fs-13);
-}
-
-.catalog-filters {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin: var(--s3) 0;
-}
-
-.chip {
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--ink-2);
-  border-radius: var(--r-pill);
-  padding: 3px 10px;
-  font-size: var(--fs-12);
-  cursor: pointer;
-}
-
-.chip:hover {
-  border-color: var(--line-strong);
-}
-
-.chip.active {
-  background: var(--accent-weak);
-  border-color: var(--accent-line);
-  color: var(--accent);
-}
-
-.catalog-list {
-  max-height: 420px;
-  overflow: auto;
-}
-
-.catalog-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  width: 100%;
-  padding: 9px 10px;
-  border: 0;
-  background: none;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  text-align: left;
-  font-size: var(--fs-13);
-}
-
-.catalog-row:hover {
-  background: var(--panel-muted);
-}
-
-.catalog-name {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-/* ---------------- 其它 ---------------- */
-
-.settle-amount {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: var(--s3) var(--s4);
-  background: var(--sunken);
-  border-radius: var(--r-md);
-}
-
-.settle-amount strong {
-  font-size: var(--fs-22);
-}
-
-.reveal-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s4);
-  padding: 9px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: var(--fs-13);
-  color: var(--ink-3);
-}
-
-.reveal-row strong {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-@media (max-width: 1180px) {
-  .workbench {
-    grid-template-columns: 1fr;
-  }
-  .visit-pane {
-    position: static;
-  }
-  .visit-list {
-    max-height: 240px;
-  }
-}
-</style>
+<style scoped src="../styles/orders-view.css"></style>
