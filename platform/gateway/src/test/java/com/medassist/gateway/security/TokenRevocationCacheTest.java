@@ -32,6 +32,17 @@ class TokenRevocationCacheTest {
         assertThat(cache.isRevoked("any-jti")).isFalse();
     }
 
+    @Test
+    void missingJtiIsTreatedAsRevoked() {
+        TokenRevocationCache cache = new TokenRevocationCache(props(false));
+
+        // P2-4：没有 jti 就无法比对撤销名单 → fail-closed（第二道防线，
+        // 第一道在 AuthGlobalFilter 入口直接拒绝此类令牌）
+        assertThat(cache.isRevoked(null)).isTrue();
+        assertThat(cache.isRevoked("")).isTrue();
+        assertThat(cache.isRevoked("   ")).isTrue();
+    }
+
     private static GatewayAuthProperties props(boolean syncEnabled) {
         return new GatewayAuthProperties(true, "medassist-auth",
                 "unit-test-secret-0123456789abcdefghijklmnop",

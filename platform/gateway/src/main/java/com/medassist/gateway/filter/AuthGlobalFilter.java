@@ -116,6 +116,12 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         }
 
         String tokenId = jwt.getId();
+        if (tokenId == null || tokenId.isBlank()) {
+            // 没有 jti 的令牌无法进入撤销名单：登出/改密后它仍然可用，等于撤销机制失效。
+            // 平台自签令牌一律带 jti，缺 jti 说明是外部伪造或旧格式，直接拒绝（P2-4）。
+            log.info("gateway.auth.jti.missing path={} traceId={}", path.value(), traceId);
+            return unauthorized(cleaned, traceId, "未认证：令牌缺少唯一标识，请重新登录");
+        }
         if (revocations.isRevoked(tokenId)) {
             log.info("gateway.auth.revoked path={} traceId={} jti={}", path.value(), traceId, tokenId);
             return unauthorized(cleaned, traceId, "登录已失效，请重新登录");

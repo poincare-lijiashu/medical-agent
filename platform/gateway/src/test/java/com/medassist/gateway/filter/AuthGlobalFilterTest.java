@@ -85,6 +85,23 @@ class AuthGlobalFilterTest {
     }
 
     @Test
+    void tokenWithoutJtiIsRejected() {
+        // P2-4：没有 jti 的令牌进不了撤销名单 → 登出/改密后仍然有效，必须在入口拒绝
+        String token = tokenWithoutJti("doctor01", List.of("empi:patient:read"));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        filter.filter(exchange, chain).block();
+
+        assertThat(chain.called).isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(body(exchange)).contains("令牌缺少唯一标识");
+    }
+
+    @Test
     void forgedIdentityHeadersAreStrippedAndReplacedFromToken() {
         String token = token("doctor01", "DEPT-A", List.of("DOCTOR"),
                 List.of("empi:patient:read", "empi:patient:read_phi"));
@@ -241,6 +258,24 @@ class AuthGlobalFilterTest {
         }
         return encoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).build(), claims.build())).getTokenValue();
+    }
+
+    /** 构造一个没有 jti 的令牌（模拟旧格式/外部伪造）：撤销名单无法覆盖它。 */
+    private static String tokenWithoutJti(String username, List<String> permissions) {
+        SecretKey key = new SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        JwtEncoder encoder = new NimbusJwtEncoder(new ImmutableSecret<>(key));
+        Instant now = Instant.now();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(ISSUER)
+                .subject(UUID.randomUUID().toString())
+                .issuedAt(now)
+                .expiresAt(now.plusSeconds(600))
+                .claim("username", username)
+                .claim("roles", List.of("DOCTOR"))
+                .claim("permissions", permissions)
+                .build();
+        return encoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
     }
 
     private static String body(MockServerWebExchange exchange) {

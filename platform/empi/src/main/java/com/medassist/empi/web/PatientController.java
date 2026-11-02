@@ -1,7 +1,9 @@
 package com.medassist.empi.web;
 
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
 import com.medassist.common.api.PageResult;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import com.medassist.empi.service.PatientService;
@@ -70,10 +72,16 @@ public class PatientController {
             @PathVariable UUID id,
             @RequestParam(defaultValue = "false") boolean reveal,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
         Permissions.require(permissions, READ);
         if (reveal) {
             Permissions.require(permissions, READ_PHI);
+            // PHI 明文读取必须留下真实操作人：ActorGuardFilter 只拦写方法，
+            // 这里若不拦，"system 查看了患者明文"会让审计追责链断裂（P2-6）。
+            if (actor == null || actor.isBlank() || "system".equalsIgnoreCase(actor.trim())) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "查看患者明文信息需要真实的操作人身份（X-Actor），不能使用 system 兜底");
+            }
         }
         return ApiResponse.ok(service.detail(id, reveal, actor));
     }

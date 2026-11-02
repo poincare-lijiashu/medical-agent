@@ -90,7 +90,12 @@ public class TokenRevocationCache implements InitializingBean {
         if (!initialized) {
             return true;
         }
-        if (jti == null || revoked.isEmpty()) {
+        // 没有 jti 的令牌无法与撤销名单比对：按"已撤销"处理（fail-closed）。
+        // 调用方（AuthGlobalFilter）也在入口拒绝缺 jti 的令牌，这里是第二道防线。
+        if (jti == null || jti.isBlank()) {
+            return true;
+        }
+        if (revoked.isEmpty()) {
             return false;
         }
         Instant expiresAt = revoked.get(jti);

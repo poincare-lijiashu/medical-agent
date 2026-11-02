@@ -35,7 +35,7 @@
 | P1-3（完成） | 成立 | 为 auth/empi/pharmacy/tech/emr/insurance/kb **7 个域**各补 `ExceptionMappingContractTest`：反射遍历 `ErrorCode.values()` 断言"每个码都有非 null 状态"、"核心码（422/404/403/401/409/429/503）全平台一致"、"业务码不得落 5xx（依赖不可用类如 `*UNAVAILABLE` 除外）"，与 clinical 已有契约测试形成 8 域全覆盖 | 7×3 = **21 项新用例全绿**；过程中发现 kb 的 `KB_EMBEDDING_UNAVAILABLE → 503` 属依赖不可用，按语义加入白名单 |
 | P1-1（完成） | 成立 | ① `clinical V30`：把 `DAILY_RETURN:%` 加入负向明细白名单（此前负金额只允许 `DISPENSE_RETURN` / `ORDER_RETURN`，**没有任何入口能冲回按日计费**）；② 新增 `POST /visits/{id}/daily-bill/reverse`：红冲金额取当日实际入账净额、必须带原因 + `confirmed=true` 二次确认、幂等键 `DAILY_RETURN:{orderId}:{date}`、已结算（PAID）拒绝并要求走退费；③ 与 `dailyBill`/`settle` 同锁（先锁 visit）；④ `clinical V31` 新增追加式 `nursing_execution_correction`（`execution_id` 唯一 → **每条执行记录只允许更正一次**，`trg_nec_append_only` 复用 `reject_audit_mutation()`）；⑤ 新增 `POST /inpatient/admissions/{id}/nursing-executions/{executionId}/correction`（`inpatient:nursing:execute`，必须 reason + confirmed，锁序 visit→admission）；⑥「已执行→拒绝/未执行」在**同一事务内**联动 `reverseDaily`（已结算 PAID 时整笔回滚并提示先退费），「拒绝/未执行→已执行」不自动补收、返回 `billingHint` 让收费员对该日期重跑按日计费；⑦ 计费与看板统一读"有效状态" `coalesce(nc.to_status, ne.status)`（`lockBillableLongOrders` / `countExecutedButUnbilled` / `findNursingExecution` / `listNursingExecutions`） | 单测 +9（`NursingServiceTest` 8：联动红冲/未计费不冲/反向不自动补收/同状态 422/二次更正 409/未确认 422/跨住院 404/已出院 409；Controller 权限 1）；E2E `clinical_long_order_smoke` 新增 12 条断言（记录→重复 409→更正→`reversedAmount=25.00` 且总额同额下降→列表有效状态 `REFUSED`→二次更正 409→未确认 422），**46 项全 PASS**；真实库 `clinical → V31`；`db_guardrails` **24/24**（新增 correction update/delete 两条反例） |
 
-**本轮实测**：全量单测 **925 项**全绿（846 → 857 → 861 → 871 → 876 → 878 → 880 → 901 → 904 → 916 → 925）；真库 SQL 集成测试 3 项（`-Ppostgres-it`）全绿；真实库迁移 `auth V34 / empi V4 / clinical V31 / pharmacy V9 / tech V8 / emr V16 / insurance V16 / kb V3`；`db_guardrails.ps1` **24 项反例全 PASS**；药品价差巡检 `price_drift_audit.ps1` 可运行（当前 `DRIFT_ROWS=0`）；E2E `clinical_long_order_smoke`（**46 项**，含长嘱撤销 409、按日红冲、护理执行更正联动红冲）/ `clinical_long_dispense_smoke` / `pharmacy_narcotic_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
+**本轮实测**：全量单测 **933 项**全绿（846 → 857 → 861 → 871 → 876 → 878 → 880 → 901 → 904 → 916 → 925 → 933）；真库 SQL 集成测试 3 项（`-Ppostgres-it`）全绿；真实库迁移 `auth V34 / empi V4 / clinical V31 / pharmacy V9 / tech V8 / emr V16 / insurance V16 / kb V3`；`db_guardrails.ps1` **24 项反例全 PASS**；药品价差巡检 `price_drift_audit.ps1` 可运行（当前 `DRIFT_ROWS=0`）；E2E `clinical_long_order_smoke`（**46 项**，含长嘱撤销 409、按日红冲、护理执行更正联动红冲）/ `clinical_long_dispense_smoke` / `pharmacy_narcotic_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `empi_patient_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
 
 > **P0 已全部收口**：P0-8 的两条通道（服务→服务 v1i2、网关→服务 v1b/v2b）都已把请求体摘要纳入签名，
 > 并完成真实联调（网关与 clinical 同时 enforce + 体绑定时 E2E 全 PASS；篡改 body 返回 403）。
@@ -44,6 +44,13 @@
 > **P1 也已全部收口**：P1-1 资金侧（按日计费红冲）+ 业务侧（护理执行更正 + 自动联动红冲）全链闭环；
 > P1-9 价格为"医嘱级封顶 + 价差巡检"的防御式收口。
 > 下一阶段转 **P2 建议优化**（前端七页、分页统一、`HttpPatientClient` 5 份拷贝收敛、Clock 注入等）。
+
+### P2 已修复（本轮）
+
+| 编号 | 结论 | 落地 | 验证 |
+|---|---|---|---|
+| P2-4（jti 缺失绕过撤销） | 成立 | ① `AuthGlobalFilter`：`jwt.getId()` 为空/空白直接 **401**（此类令牌进不了撤销名单，登出/改密后仍可用）；② `TokenRevocationCache.isRevoked(null/空白)` 改 fail-closed 返回 true（第二道防线）；平台自签令牌由 `JwtTokenService` 统一 `id(UUID)`，正常流量零影响 | gateway 单测 +2（无 jti 令牌 401、缓存对 null/空白判已撤销）；真实网关登录/E2E 全 PASS |
+| P2-6（PHI 明文读可用 system 兜底） | 成立 | `PatientController.detail`：`reveal=true` 时除 `read_phi` 权限外，还必须带**真实** `X-Actor`（缺失/空白/`system` 一律 422），保证审计里不出现"system 查看了患者明文"；`reveal=false` 的脱敏读仍不要求 actor | 新增 `PatientControllerPermissionTest` 6 项（缺 actor 422 / system 422 / 无 read_phi 403 / 正常透传 / 脱敏读放行 / 无权限 403）；真实 empi 直连验证：`reveal=true` 无 actor → 422、带 actor → 200、脱敏读 → 200；`empi_patient_smoke` PASS |
 
 ### 加勉（复核后不成立或需降级）
 
