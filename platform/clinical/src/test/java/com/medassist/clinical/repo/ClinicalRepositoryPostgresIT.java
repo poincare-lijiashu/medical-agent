@@ -1,5 +1,6 @@
 package com.medassist.clinical.repo;
 
+import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -231,6 +232,58 @@ class ClinicalRepositoryPostgresIT {
         // 已全部退回后再退：必须失败（不能出现负库存或重复冲减）
         assertThat(repo.addReturnedQuantity(receiptId, 1)).isFalse();
         assertThat(receiptState(receiptId)).containsEntry("returned_quantity", 5);
+    }
+
+    // ---------------------------------------------------------------- 转送任务租约（P2-7）
+
+    @Test
+    @DisplayName("转送任务：抢占后同任务不会被其它 worker 拿到，租约过期自动释放，完成后清空租约")
+    void claimPendingTransferTasksIsExclusiveAndLeaseExpires() {
+        UUID visitId = UUID.randomUUID();
+        insertVisit(visitId, "IT-V-" + visitId.toString().substring(0, 8));
+        for (int i = 0; i < 2; i++) {
+            repo.insertTransferTask(UUID.randomUUID(), UUID.randomUUID(), visitId, "PHARMACY",
+                    "停嘱后作废失败", "it-tester");
+        }
+
+        List<TransferTask> first = repo.claimPendingTransferTasks("worker-1", 10, 60);
+        assertThat(first).hasSize(2);
+        assertThat(first).allSatisfy(t -> assertThat(t.channel()).isEqualTo("PHARMACY"));
+
+        // 租约有效期内其它副本抢不到同一批任务（旧实现会拿到同样两行 → attempts 被放大）
+        assertThat(repo.claimPendingTransferTasks("worker-2", 10, 60)).isEmpty();
+
+        // 模拟实例崩溃：租约到期后任务自动回到可抢占状态
+        jdbc.sql("""
+                        UPDATE clinical_svc.order_transfer_task
+                           SET locked_until = now() - interval '1 second'
+                         WHERE locked_by = 'worker-1'
+                        """).update();
+        List<TransferTask> again = repo.claimPendingTransferTasks("worker-2", 10, 60);
+        assertThat(again).hasSize(2);
+
+        // 完成一条：状态 DONE 且租约清空，剩余一条仍可被下一个 worker 抢占
+        UUID doneId = again.get(0).id();
+        assertThat(repo.completeTransferTask(doneId)).isTrue();
+        Map<String, Object> done = jdbc.sql("""
+                        SELECT status, locked_until, locked_by, attempts
+                          FROM clinical_svc.order_transfer_task WHERE id = ?
+                        """).param(doneId).query().singleRow();
+        assertThat(done.get("status")).isEqualTo("DONE");
+        assertThat(done.get("locked_until")).isNull();
+        assertThat(done.get("locked_by")).isNull();
+        assertThat(((Number) done.get("attempts")).intValue()).isEqualTo(1);
+
+        // 剩余一条仍在 worker-2 的租约内：下一个 worker 抢不到（这正是防重复处理的语义）
+        assertThat(repo.claimPendingTransferTasks("worker-3", 10, 60)).isEmpty();
+
+        // 租约到期后剩余任务才回到可抢占状态
+        jdbc.sql("""
+                        UPDATE clinical_svc.order_transfer_task
+                           SET locked_until = now() - interval '1 second'
+                         WHERE locked_by = 'worker-2'
+                        """).update();
+        assertThat(repo.claimPendingTransferTasks("worker-3", 10, 60)).hasSize(1);
     }
 
     // ---------------------------------------------------------------- 辅助

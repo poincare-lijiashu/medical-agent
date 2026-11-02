@@ -397,24 +397,46 @@ public class ClinicalRepository {
             rs.getInt("attempts"), rs.getString("last_error"),
             rs.getTimestamp("created_at") == null ? null : rs.getTimestamp("created_at").toInstant());
 
-    /** 待重试的补偿任务（按创建时间升序，最多 limit 条）。 */
-    public List<TransferTask> listPendingTransferTasks(int limit) {
+    /**
+     * 抢占待重试的补偿任务（P2-7：`FOR UPDATE SKIP LOCKED` + 租约）。
+     *
+     * <p>为什么必须抢占：旧实现是裸 SELECT，多副本会拿到同一批任务，
+     * N 个副本各失败一次就把 attempts 放大 N 倍，约 3 轮误判 FAILED。
+     * 现在同一行只会被一个实例租到；实例崩溃后租约到期自动回到可抢占状态。
+     *
+     * <p>`attempts` 只在真正失败时由持有租约的实例 +1（见 {@link #failTransferTask}）。
+     */
+    public List<TransferTask> claimPendingTransferTasks(String workerId, int limit,
+                                                        int leaseSeconds) {
         return jdbc.sql("""
-                        SELECT id, order_id, visit_id, action, channel, reason, actor, status,
-                               attempts, last_error, created_at
-                          FROM clinical_svc.order_transfer_task
-                         WHERE status = 'PENDING'
-                         ORDER BY created_at
-                         LIMIT :limit
+                        WITH picked AS (
+                            SELECT id FROM clinical_svc.order_transfer_task
+                             WHERE status = 'PENDING'
+                               AND (locked_until IS NULL OR locked_until < now())
+                             ORDER BY created_at
+                             LIMIT :limit
+                             FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE clinical_svc.order_transfer_task t
+                           SET locked_until = now() + interval '1 second'
+                                              * CAST(:leaseSeconds AS double precision),
+                               locked_by = :worker,
+                               updated_at = now()
+                          FROM picked
+                         WHERE t.id = picked.id
+                        RETURNING t.id, t.order_id, t.visit_id, t.action, t.channel, t.reason,
+                                  t.actor, t.status, t.attempts, t.last_error, t.created_at
                         """)
-                .param("limit", limit).query(TRANSFER_TASK_MAPPER).list();
+                .param("worker", workerId).param("limit", limit)
+                .param("leaseSeconds", leaseSeconds)
+                .query(TRANSFER_TASK_MAPPER).list();
     }
 
     public boolean completeTransferTask(UUID id) {
         return jdbc.sql("""
                         UPDATE clinical_svc.order_transfer_task
                            SET status = 'DONE', attempts = attempts + 1, last_error = NULL,
-                               updated_at = now()
+                               locked_until = NULL, locked_by = NULL, updated_at = now()
                          WHERE id = :id AND status = 'PENDING'
                         """)
                 .param("id", id).update() > 0;
@@ -428,6 +450,8 @@ public class ClinicalRepository {
                                last_error = :error,
                                status = CASE WHEN attempts + 1 >= :maxAttempts THEN 'FAILED'
                                              ELSE 'PENDING' END,
+                               locked_until = NULL,
+                               locked_by = NULL,
                                updated_at = now()
                          WHERE id = :id AND status = 'PENDING'
                         """)
