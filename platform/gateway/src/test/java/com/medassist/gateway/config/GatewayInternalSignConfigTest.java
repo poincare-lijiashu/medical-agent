@@ -23,7 +23,7 @@ class GatewayInternalSignConfigTest {
     private static InternalAuthProperties props(String mode, String signing, String keysJson,
                                                 String privateKey) {
         return new InternalAuthProperties(mode, 60, keysJson, 180, false, null, null,
-                signing, "gw-v2", privateKey, null, null);
+                signing, "gw-v2", privateKey, null, null, null, null);
     }
 
     @Test

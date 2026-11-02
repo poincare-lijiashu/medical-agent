@@ -97,4 +97,40 @@ class InternalSignatureClientInterceptorTest {
         client.get().uri("/internal/patients/p1").retrieve().toBodilessEntity();
         server.verify();
     }
+
+    @Test
+    @DisplayName("内部 POST：签名覆盖请求体（v1i2），body 摘要参与验签")
+    void signsRequestBody() {
+        byte[] body = "{\"orderId\":\"o-1\",\"quantity\":2}".getBytes(StandardCharsets.UTF_8);
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        RestClient client = builder
+                .baseUrl("http://pharmacy:8084")
+                .requestInterceptor(new InternalSignatureClientInterceptor(
+                        InternalCallerSigner.of("clinical", SECRET, true)))
+                .build();
+
+        server.expect(requestTo("http://pharmacy:8084/internal/prescriptions"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(request -> {
+                    var headers = request.getHeaders();
+                    assertThat(headers.getFirst(InternalSignature.HEADER_SIG_VER))
+                            .isEqualTo(InternalSignature.SIG_VERSION_CALLER_BODY);
+                    String canonical = InternalSignature.canonicalCaller(
+                            InternalSignature.SIG_VERSION_CALLER_BODY, "POST",
+                            "/internal/prescriptions", null, "clinical",
+                            Long.parseLong(headers.getFirst(InternalSignature.HEADER_TS)),
+                            headers.getFirst(InternalSignature.HEADER_NONCE),
+                            InternalSignature.bodyHash(body));
+                    assertThat(InternalSignature.verify(SECRET, canonical,
+                            headers.getFirst(InternalSignature.HEADER_SIG))).isTrue();
+                })
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        client.post().uri("/internal/prescriptions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve().toBodilessEntity();
+        server.verify();
+    }
 }

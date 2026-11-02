@@ -36,7 +36,8 @@ class InternalSignatureGlobalFilterTest {
 
     private static InternalSignatureGlobalFilter filter(String mode) {
         return new InternalSignatureGlobalFilter(
-                new InternalAuthProperties(mode, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null),
+                new InternalAuthProperties(mode, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null,
+                        null, null),
                 InternalKeySet.parse(KEYS_JSON, new ObjectMapper()));
     }
 
@@ -124,7 +125,7 @@ class InternalSignatureGlobalFilterTest {
     private static InternalSignatureGlobalFilter ed25519Filter(java.security.PrivateKey key) {
         return new InternalSignatureGlobalFilter(
                 new InternalAuthProperties(InternalAuthProperties.ENFORCE, 60, null, 120, false,
-                        null, null, "ed25519", "gw-v2", null, null, null),
+                        null, null, "ed25519", "gw-v2", null, null, null, null, null),
                 InternalKeySet.empty(), key);
     }
 

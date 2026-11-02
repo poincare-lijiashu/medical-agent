@@ -24,11 +24,13 @@
 | P0-7 | 成立 | ai-core 改 `strategy: Recreate`（`values.yaml` 可覆盖），开启 PDB（`minAvailable: 0`）；根因是单副本 + RWO 卷，RollingUpdate 的新 Pod 抢不到卷会永久 Pending | `alpine/helm` 渲染 prod/staging：仅 ai-core 为 `Recreate`，PDB `minAvailable: 0` |
 | P0-9 | 成立 | ① `InternalAuthAutoConfiguration`：生产环境 `internal-paths-signature-required=false` **拒绝启动**；② `values-prod`/`values-staging` 置 `true`；③ 修正 `callerKeys` 矩阵（原缺 clinical→pharmacy/tech、pharmacy→clinical），并为 auth/empi/kb 补自身密钥；④ auth 单独豁免 `/internal/revocations`（网关是 WebFlux，无 v1i 签名器；该端点仍由 `X-Internal-Token` fail-closed + NetworkPolicy 守卫） | 新增单测 `rejectsProductionWithoutInternalCallerSignature`；三环境 `helm template` 渲染通过 |
 | P0-10（②③） | 部分成立 | ① `FieldCipher`：生产环境使用 dev 默认 `EMPI_FIELD_KEY`/`EMPI_HASH_SALT`（按 SHA-256 指纹比对）**拒绝启动**；② `SecurityDefaults` 改为**缺省即生产**：显式 `MEDASSIST_ENV`（dev/local/test/ci/sandbox 之外一律生产）→ 集群内 → prod 类 profile → 无 active profile → 生产；③ dev 令牌改 `.env` 注入未做（镜像已物理排除 `application-dev.yml`，风险低） | 新增 4 个 `SecurityDefaultsTest` 用例（无 profile/null env/MEDASSIST_ENV 优先级） |
+| P0-8（部分） | 成立 | 服务→服务通道升级为**签名版本 v1i2**：请求体 SHA-256 纳入规范串；出站在 `ClientHttpRequestInterceptor` 里直接拿已序列化的 body 计算摘要（7 个 Http*Client 零改动）；入站先缓存 body（上限 1MB，超限 `body_too_large` 拒绝，**不退化为跳过校验**）再验签；开关 `internal-auth.body-hash-required` 支持三段灰度，生产/预发布终态为 `true` | 单测 +8（篡改 body→`bad_sig`、版本降级→`bad_sig`、旧版 v1i 在开关开启时→`body_hash_required`、灰度期仍接受 v1i、超限→`body_too_large`、body 验签后仍可被业务读取）；**真实服务验证**：正确 v1i2 签名 → 422（业务校验，签名已过），同一签名 + 篡改 body → 403 |
 
-**本轮实测**：全量单测 **861 项**全绿（846 → 857 → 861）；真实库迁移 `clinical_svc → V28`、`pharmacy_svc → V9`、`insurance_svc → V15`；`db_guardrails.ps1` **15 项反例全 PASS**（含新增的报盘明细改/删两条）；E2E `clinical_long_dispense_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
+**本轮实测**：全量单测 **871 项**全绿（846 → 857 → 861 → 871）；真实库迁移 `clinical_svc → V28`、`pharmacy_svc → V9`、`insurance_svc → V15`；`db_guardrails.ps1` **15 项反例全 PASS**（含新增的报盘明细改/删两条）；E2E `clinical_long_dispense_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
 
-> 仍待办：**P0-8（内部签名不覆盖 body）**——需要在出站侧对请求体做缓冲/预序列化才能把 SHA-256 纳入规范串，
-> 属"改协议"级别，须配灰度开关（先只校验 GET/DELETE）落地，留作下一批。
+> 仍待办：**P0-8 的网关通道**（网关 → 业务服务 v1/v2）尚未绑定请求体——网关是 WebFlux，
+> 需要在 `InternalSignatureGlobalFilter` 里复制/缓存 `DataBuffer` 后才能计算摘要，
+> 且必须与业务服务同步升级，留作下一批。当前已覆盖所有**服务→服务**的内部写操作（医嘱、处方、计费、退药）。
 
 ### 加勉（复核后不成立或需降级）
 

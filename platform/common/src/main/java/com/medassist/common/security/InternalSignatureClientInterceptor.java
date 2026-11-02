@@ -14,6 +14,10 @@ import java.util.Map;
  *
  * <p>之所以在客户端统一拦截而不是逐个接口手写：内部调用分散在 7 个 Http*Client 中，
  * 漏掉任何一处都会在"调用方签名强制"开关打开后变成 403，很难在联调前发现。
+ *
+ * <p>P0-8：{@link ClientHttpRequestInterceptor#intercept} 的 {@code body} 参数就是
+ * **已序列化的请求体字节**，因此这里可以零侵入地把 SHA-256 纳入签名（v1i2），
+ * 不需要改任何 Http*Client。
  */
 public final class InternalSignatureClientInterceptor implements ClientHttpRequestInterceptor {
 
@@ -31,7 +35,7 @@ public final class InternalSignatureClientInterceptor implements ClientHttpReque
         if (signer.configured() && path != null
                 && ("/internal".equals(path) || path.startsWith("/internal/"))) {
             Map<String, String> headers = signer.headers(String.valueOf(request.getMethod()),
-                    path, uri.getRawQuery());
+                    path, uri.getRawQuery(), body);
             headers.forEach((name, value) -> request.getHeaders().set(name, value));
         }
         return execution.execute(request, body);

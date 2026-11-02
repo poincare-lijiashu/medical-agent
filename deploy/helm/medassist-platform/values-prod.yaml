@@ -64,6 +64,10 @@ internalAuth:
   # 只靠 X-Internal-Token 单值令牌时，一处泄露即可冒充任意调用方读 PHI；
   # 服务端在"生产环境 + 本开关为 false"时直接拒绝启动。
   internalPathsSignatureRequired: true
+  # P0-8：签名必须覆盖请求体（v1i2），否则内网在途改写医嘱/处方 POST 体不会破坏签名。
+  # 首次从旧版本滚动升级时若存在"新服务端 + 旧调用方"，先置 false 观察一轮再切 true；
+  # 本 Chart 一次性发布全部服务（签名双方同版本），因此默认直接 true。
+  bodyHashRequired: true
   gatewaySigning: ed25519
   acceptEd25519: true
   # 终态：业务服务不再持有对称密钥（从既有 HMAC 部署升级时先保持 true，

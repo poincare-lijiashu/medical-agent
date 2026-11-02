@@ -16,6 +16,8 @@ import java.util.Map;
  *     keys-json: '{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}'
  *     nonce-ttl-seconds: 120    # 必须 ≥ 2×clock-skew+1
  *     internal-paths-signature-required: false
+ *     body-hash-required: false       # true 时按 v1i2 签发并要求对端也是 v1i2（P0-8）
+ *     body-hash-max-bytes: 1048576    # 验签时缓存请求体的上限，超限 413
  *     caller: clinical          # 可省略，默认由 spring.application.name 推导
  *     exempt-paths:
  *       - /actuator/health/**
@@ -47,7 +49,8 @@ public record InternalAuthProperties(String mode, Integer clockSkewSeconds, Stri
                                      List<String> exemptPaths, String caller,
                                      String gatewaySigning, String gatewayKeyId,
                                      String gatewayPrivateKey, String gatewayPublicKey,
-                                     Map<String, String> callerKeys) {
+                                     Map<String, String> callerKeys,
+                                     Boolean bodyHashRequired, Integer bodyHashMaxBytes) {
 
     public static final String OFF = "off";
     public static final String LOG = "log";
@@ -74,6 +77,23 @@ public record InternalAuthProperties(String mode, Integer clockSkewSeconds, Stri
 
     public boolean internalPathsSignatureRequiredOrDefault() {
         return Boolean.TRUE.equals(internalPathsSignatureRequired);
+    }
+
+    /**
+     * 是否要求请求体摘要纳入调用方签名（v1i2，P0-8）。
+     *
+     * <p>开启后：本服务出站一律签 v1i2；入站只接受 v1i2（旧版 v1i 直接 403）。
+     * 灰度顺序：服务端先部署（暂时 false，同时接受两种版本）→ 调用方全部升级 →
+     * 再把服务端与调用方的本开关一起打开。
+     */
+    public boolean bodyHashRequiredOrDefault() {
+        return Boolean.TRUE.equals(bodyHashRequired);
+    }
+
+    /** 验签时缓存请求体的上限（默认 1MB）；过小会把正常 JSON 误杀，过大则失去内存保护意义。 */
+    public int bodyHashMaxBytesOrDefault() {
+        return bodyHashMaxBytes == null || bodyHashMaxBytes <= 0
+                ? 1024 * 1024 : Math.min(bodyHashMaxBytes, 16 * 1024 * 1024);
     }
 
     /**

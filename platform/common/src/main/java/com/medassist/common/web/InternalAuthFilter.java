@@ -110,6 +110,9 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         }
 
         String result;
+        // P0-8：v1i2 的签名覆盖请求体摘要，必须先把 body 缓存下来再验签；
+        // 这里只对"声明了 v1i2"的请求做缓存，旧的 v1i 流量零额外开销。
+        HttpServletRequest effective = request;
         if (isInternalPath(path)) {
             if (!props.internalPathsSignatureRequiredOrDefault()) {
                 // 服务→服务通道：内部令牌仍由各控制器校验；调用方签名开关未打开时不在此拦截
@@ -117,7 +120,26 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 chain.doFilter(request, response);
                 return;
             }
-            result = verifyCaller(request);
+            if (InternalSignature.SIG_VERSION_CALLER_BODY.equals(
+                    request.getHeader(InternalSignature.HEADER_SIG_VER))) {
+                CachedBodyHttpServletRequest cached = null;
+                String wrapFailure = null;
+                try {
+                    cached = CachedBodyHttpServletRequest.wrap(request,
+                            props.bodyHashMaxBytesOrDefault());
+                } catch (IOException e) {
+                    wrapFailure = "body_unreadable";
+                }
+                if (cached != null) {
+                    effective = cached;
+                    result = verifyCaller(effective);
+                } else {
+                    // 超上限/读失败：拒绝而不是"跳过体校验"（否则超大 body 就是绕过签名的后门）
+                    result = wrapFailure == null ? "body_too_large" : wrapFailure;
+                }
+            } else {
+                result = verifyCaller(request);
+            }
         } else {
             result = verifyGateway(request);
         }
@@ -125,7 +147,8 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         count(result);
 
         if ("ok".equals(result)) {
-            chain.doFilter(request, response);
+            // effective 可能是缓存了 body 的包装请求：后续链必须用它，否则控制器读不到参数
+            chain.doFilter(effective, response);
             return;
         }
 
@@ -136,7 +159,7 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             return;
         }
         log.info("internal-auth.log-only path={} method={} result={}", path, request.getMethod(), result);
-        chain.doFilter(request, response);
+        chain.doFilter(effective, response);
     }
 
     // ---------------------------------------------------------------- 校验
@@ -202,9 +225,13 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 服务→服务通道校验（v1i）：按 {@code X-Internal-Caller} 选密钥，caller 参与规范串。
+     * 服务→服务通道校验（v1i / v1i2）：按 {@code X-Internal-Caller} 选密钥，caller 参与规范串。
      *
-     * @return ok / missing / bad_version / unknown_caller / skew / replay / bad_sig
+     * <p>v1i2（P0-8）额外把请求体 SHA-256 纳入规范串；{@code body-hash-required=true} 时
+     * 只接受 v1i2——否则攻击者在途改写 POST 体（医嘱/处方/计费）不会破坏签名。
+     *
+     * @return ok / missing / bad_version / body_hash_required / body_unreadable /
+     *         unknown_caller / skew / replay / bad_sig
      */
     private String verifyCaller(HttpServletRequest request) {
         String version = request.getHeader(InternalSignature.HEADER_SIG_VER);
@@ -216,8 +243,12 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 || isBlank(nonce) || isBlank(signature)) {
             return "missing";
         }
-        if (!InternalSignature.SIG_VERSION_CALLER.equals(version)) {
+        boolean bodyBound = InternalSignature.SIG_VERSION_CALLER_BODY.equals(version);
+        if (!bodyBound && !InternalSignature.SIG_VERSION_CALLER.equals(version)) {
             return "bad_version";
+        }
+        if (props.bodyHashRequiredOrDefault() && !bodyBound) {
+            return "body_hash_required";
         }
         String caller = callerHeader.trim().toLowerCase();
         if (!caller.matches("[a-z0-9-]{1,32}")) {
@@ -239,8 +270,18 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             return "skew";
         }
 
-        String canonical = InternalSignature.canonicalCaller(request.getMethod(), path(request),
-                request.getQueryString(), caller, ts, nonce, InternalSignature.EMPTY_BODY_HASH);
+        String bodyHash;
+        if (bodyBound) {
+            if (!(request instanceof CachedBodyHttpServletRequest cached)) {
+                // 理论上不会发生：doFilterInternal 已按版本头包装；防御性返回拒绝原因
+                return "body_unreadable";
+            }
+            bodyHash = InternalSignature.bodyHash(cached.body());
+        } else {
+            bodyHash = InternalSignature.EMPTY_BODY_HASH;
+        }
+        String canonical = InternalSignature.canonicalCaller(version, request.getMethod(), path(request),
+                request.getQueryString(), caller, ts, nonce, bodyHash);
         if (!InternalSignature.verify(secret, canonical, signature)) {
             return "bad_sig";
         }

@@ -38,16 +38,27 @@ class InternalAuthFilterTest {
 
     private static InternalAuthFilter filter(String mode, boolean internalRequired) {
         InternalAuthProperties props = new InternalAuthProperties(
-                mode, 60, KEYS_JSON, 120, internalRequired, null, null, null, null, null, null, null);
+                mode, 60, KEYS_JSON, 120, internalRequired, null, null, null, null, null, null, null,
+                null, null);
         return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
                 null);
     }
 
     private static InternalAuthFilter filterWithCapacity(int maxNonceEntries) {
         InternalAuthProperties props = new InternalAuthProperties(
-                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null);
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null,
+                null, null);
         return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
                 null, maxNonceEntries);
+    }
+
+    /** P0-8：请求体绑定（v1i2）用例需要自定义开关与 body 上限。 */
+    private static InternalAuthFilter filterWithBodyHash(boolean required, int maxBytes) {
+        InternalAuthProperties props = new InternalAuthProperties(
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, true, null, null, null, null,
+                null, null, null, required, maxBytes);
+        return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
+                null);
     }
 
     private static MockHttpServletRequest request(String method, String uri) {
@@ -360,7 +371,8 @@ class InternalAuthFilterTest {
         io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
                 new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
         InternalAuthProperties props = new InternalAuthProperties(
-                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null);
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null, null, null, null,
+                null, null);
         InternalAuthFilter filter = new InternalAuthFilter(props,
                 InternalKeySet.parse(KEYS_JSON, new ObjectMapper()), registry);
 
@@ -395,7 +407,7 @@ class InternalAuthFilterTest {
     private static InternalAuthFilter filterWithPublicKey(java.security.PublicKey publicKey) {
         InternalAuthProperties props = new InternalAuthProperties(
                 InternalAuthProperties.ENFORCE, 60, null, 120, false, null, null,
-                "ed25519", "gw-v2", null, null, null);
+                "ed25519", "gw-v2", null, null, null, null, null);
         return new InternalAuthFilter(props, InternalKeySet.empty(), null, publicKey);
     }
 
@@ -490,5 +502,133 @@ class InternalAuthFilterTest {
         filter.doFilter(replay, new MockHttpServletResponse(), chain2);
         assertNull(chain2.getRequest());
         assertEquals("replay", replay.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    // ---------------------------------------------------------------- P0-8：请求体绑定（v1i2）
+
+    /** 按 v1i2 规则签名：请求体 SHA-256 纳入规范串。 */
+    private static void signCallerWithBody(MockHttpServletRequest request, String caller, String secret,
+                                           long timestamp, String nonce) {
+        String canonical = InternalSignature.canonicalCaller(
+                InternalSignature.SIG_VERSION_CALLER_BODY, request.getMethod(),
+                request.getRequestURI(), request.getQueryString(), caller, timestamp, nonce,
+                InternalSignature.bodyHash(request.getContentAsByteArray()));
+        request.addHeader(InternalSignature.HEADER_SIG_VER, InternalSignature.SIG_VERSION_CALLER_BODY);
+        request.addHeader(InternalSignature.HEADER_CALLER, caller);
+        request.addHeader(InternalSignature.HEADER_TS, Long.toString(timestamp));
+        request.addHeader(InternalSignature.HEADER_NONCE, nonce);
+        request.addHeader(InternalSignature.HEADER_SIG, InternalSignature.sign(secret, canonical));
+    }
+
+    private static MockHttpServletRequest jsonRequest(String method, String uri, String body) {
+        MockHttpServletRequest request = new MockHttpServletRequest(method, uri);
+        request.setContent(body.getBytes(StandardCharsets.UTF_8));
+        request.setContentType("application/json");
+        return request;
+    }
+
+    @Test
+    void bodyBoundSignatureAcceptedAndBodyRemainsReadable() throws Exception {
+        String json = "{\"orderId\":\"o-1\",\"quantity\":2}";
+        MockHttpServletRequest request = jsonRequest("POST", "/internal/prescriptions", json);
+        signCallerWithBody(request, "clinical", KEY_1, now(), "body-ok");
+
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>();
+        jakarta.servlet.http.HttpServlet servlet = new jakarta.servlet.http.HttpServlet() {
+            @Override
+            protected void service(jakarta.servlet.http.HttpServletRequest req,
+                                   jakarta.servlet.http.HttpServletResponse resp)
+                    throws java.io.IOException {
+                seen.set(req.getReader().lines().collect(java.util.stream.Collectors.joining()));
+            }
+        };
+        MockFilterChain chain = new MockFilterChain(servlet);
+        filterWithBodyHash(true, 1024 * 1024)
+                .doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest(), "v1i2 正确签名必须放行");
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+        // 关键：验签读过 body 后，业务侧仍能读到同一份内容（缓存包装生效）
+        assertEquals(json, seen.get());
+    }
+
+    @Test
+    void bodyBoundSignatureRejectsTamperedBody() throws Exception {
+        MockHttpServletRequest request = jsonRequest("POST", "/internal/prescriptions",
+                "{\"quantity\":2}");
+        signCallerWithBody(request, "clinical", KEY_1, now(), "body-tampered");
+        // 内网攻击者在途改写请求体：签名不变，但摘要不再匹配
+        request.setContent("{\"quantity\":200}".getBytes(StandardCharsets.UTF_8));
+
+        MockFilterChain chain = new MockFilterChain();
+        filterWithBodyHash(true, 1024 * 1024)
+                .doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNull(chain.getRequest(), "篡改请求体必须验签失败");
+        assertEquals("bad_sig", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void bodyBoundSignatureRejectsDowngradeToLegacyVersion() throws Exception {
+        MockHttpServletRequest request = jsonRequest("POST", "/internal/prescriptions",
+                "{\"quantity\":2}");
+        signCallerWithBody(request, "clinical", KEY_1, now(), "body-downgrade");
+        // 试图把版本降级成 v1i 以绕过体校验：版本行参与签名，验签必然失败。
+        // 这里用"未强制体绑定"的过滤器，确保失败原因是签名不符，而不是开关拦截。
+        request.removeHeader(InternalSignature.HEADER_SIG_VER);
+        request.addHeader(InternalSignature.HEADER_SIG_VER, InternalSignature.SIG_VERSION_CALLER);
+
+        MockFilterChain chain = new MockFilterChain();
+        filterWithBodyHash(false, 1024 * 1024)
+                .doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNull(chain.getRequest());
+        assertEquals("bad_sig", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void legacyV1iRejectedWhenBodyHashRequired() throws Exception {
+        MockHttpServletRequest request = jsonRequest("POST", "/internal/prescriptions",
+                "{\"quantity\":2}");
+        signCaller(request, "clinical", KEY_1, now(), "legacy-required");
+
+        MockFilterChain chain = new MockFilterChain();
+        filterWithBodyHash(true, 1024 * 1024)
+                .doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNull(chain.getRequest(), "强制体绑定时旧版 v1i 必须被拒绝");
+        assertEquals("body_hash_required", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void legacyV1iStillAcceptedDuringGradualRollout() throws Exception {
+        MockHttpServletRequest request = jsonRequest("POST", "/internal/prescriptions",
+                "{\"quantity\":2}");
+        signCaller(request, "clinical", KEY_1, now(), "legacy-rollout");
+
+        MockFilterChain chain = new MockFilterChain();
+        // 灰度期：服务端先升级但开关未打开，旧调用方仍可用
+        filterWithBodyHash(false, 1024 * 1024)
+                .doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest(), "灰度期必须同时接受 v1i 与 v1i2");
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void oversizedBodyIsRejectedInsteadOfSkippingBodyCheck() throws Exception {
+        char[] payload = new char[2048];
+        java.util.Arrays.fill(payload, 'x');
+        MockHttpServletRequest request = jsonRequest("POST", "/internal/prescriptions",
+                "{\"note\":\"" + new String(payload) + "\"}");
+        signCallerWithBody(request, "clinical", KEY_1, now(), "body-oversize");
+
+        MockFilterChain chain = new MockFilterChain();
+        // 上限 1KB：必须拒绝，而不是"读不到 body 就跳过校验"
+        filterWithBodyHash(true, 1024)
+                .doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNull(chain.getRequest());
+        assertEquals("body_too_large", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
     }
 }

@@ -26,8 +26,9 @@
 > 病区二级库存与未执行退药）；**多智能体评测意见书（`docs/REVIEW-20261102-MULTIAGENT.md`）已按
 > "有则改之、无则加勉"落地多轮**——最近一批：P0-4 报盘明细不可改删（insurance V15）、
 > P0-7 ai-core 改 Recreate + PDB、P0-9 生产强制 `/internal/**` 调用方签名 + callerKeys 矩阵修正、
-> P0-10 EMPI dev 密钥守卫 + `SecurityDefaults` 缺省即生产；P0-5 复核为"不成立"（作废与报盘已在
-> `settlement_bill` 行锁上串行）。**P0-8（内部签名不覆盖 body）仍待办**。
+> P0-10 EMPI dev 密钥守卫 + `SecurityDefaults` 缺省即生产；**P0-8 已覆盖服务→服务通道**
+> （签名版本 v1i2：请求体 SHA-256 纳入规范串，开关 `internal-auth.body-hash-required`，
+> prod/staging 终态 true）；**仅剩网关通道（v1/v2）的请求体绑定**（WebFlux 缓存 DataBuffer，下一批）。
 > 9 个 Java 服务**当前运行中**（本机验证用，均以 `--spring.profiles.active=dev` 启动）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
 > §1.55~§1.60 的 E2E 回归**均已通过**：
@@ -37,6 +38,10 @@
 > `clinical_long_dispense_smoke`(87 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 > 本机起服务必须带 `$env:INTERNAL_API_TOKEN='medassist-dev-internal-token'`（auth 的内部接口 fail-closed，
 > 网关启动时会阻塞同步撤销名单，缺令牌会直接拒绝启动）。
+> 若要本机验证"签名强制 + 体绑定"目标态：给单个服务加
+> `MEDASSIST_INTERNALAUTH_MODE=enforce`、`..._KEYSJSON={"active":"k1","keys":{"k1":"<base64 32B>"}}`、
+> `..._INTERNALPATHSSIGNATUREREQUIRED=true`、`..._BODYHASHREQUIRED=true`、`..._CALLERKEYS_<SELF>/<CALLER>`；
+> **JSON 值必须用环境变量传**（PowerShell 命令行参数会吃掉双引号导致解析失败）。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -58,7 +63,7 @@
   `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
   `2dbd8ab`（**危急值定向查询与网关下游超时**）、`d3daaec`（**权限矩阵单测与部署硬化**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **861 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **871 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar；启动必须带 `INTERNAL_API_TOKEN`）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V28**、

@@ -78,7 +78,16 @@ public class InternalAuthAutoConfiguration {
                     "medassist.internal-auth.internal-paths-signature-required=true 但本服务调用方 "
                             + caller + " 无密钥（keys-json.internal." + caller + "），服务拒绝启动");
         }
-        return InternalCallerSigner.of(caller, secret);
+        // P0-8：体绑定依赖调用方签名，两者必须同时开启，否则开关形同虚设（配置矛盾直接拒启）
+        if (props.bodyHashRequiredOrDefault() && !required) {
+            throw new IllegalStateException(
+                    "medassist.internal-auth.body-hash-required=true 但 internal-paths-signature-required=false："
+                            + "请求体绑定只对 /internal/** 调用方签名生效，请同时开启，服务拒绝启动");
+        }
+        log.info("internal-auth.caller={} signing={} bodyHash={}",
+                caller, secret != null ? "configured" : "none",
+                props.bodyHashRequiredOrDefault() ? "v1i2" : "v1i");
+        return InternalCallerSigner.of(caller, secret, props.bodyHashRequiredOrDefault());
     }
 
     @Bean

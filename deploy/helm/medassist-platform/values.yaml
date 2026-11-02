@@ -137,6 +137,13 @@ internalAuth:
   # 再切 true（切换后未配置密钥的调用方会被 403）。
   # 生产/预发布必须为 true：服务启动时会校验，false 直接拒绝启动（P0-9）。
   internalPathsSignatureRequired: false
+  # P0-8：是否要求把请求体摘要纳入调用方签名（版本 v1i2）。
+  # false = 出站仍签 v1i、入站同时接受 v1i/v1i2（灰度期）；true = 出站签 v1i2、入站只收 v1i2。
+  # 生产/预发布目标态为 true；切换顺序见 deploy/README.md §4.2.1。
+  bodyHashRequired: false
+  # 验签时缓存请求体的上限（字节）。内部接口只有 JSON 小报文；超限按 413 拒绝，
+  # 不允许退化成"读不到 body 就跳过校验"。
+  bodyHashMaxBytes: 1048576
   # auth 组件的签名豁免路径（整体替换服务端默认值，必须列全）。
   # 网关→auth 的撤销名单同步只带 X-Internal-Token（网关为 WebFlux，无 v1i 签名器）。
   authExemptPaths: "/actuator/health/**,/actuator/info,/actuator/prometheus,/internal/revocations"

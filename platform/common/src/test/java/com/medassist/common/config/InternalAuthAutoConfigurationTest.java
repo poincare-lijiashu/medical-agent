@@ -206,6 +206,21 @@ class InternalAuthAutoConfigurationTest {
     }
 
     @Test
+    void rejectsBodyHashRequiredWithoutCallerSignature() {
+        // P0-8：体绑定只对 /internal/** 调用方签名生效，开关组合矛盾必须拒启（否则形同虚设）
+        runner.withPropertyValues(
+                        "medassist.internal-auth.mode=log",
+                        "medassist.internal-auth.keys-json=" + KEYS_JSON_WITH_INTERNAL,
+                        "medassist.internal-auth.body-hash-required=true",
+                        "medassist.internal-auth.internal-paths-signature-required=false")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("body-hash-required");
+                });
+    }
+
+    @Test
     void callerKeysAreBoundFromPerServiceProperties() {
         // Helm 按组件只注入需要的条目：MEDASSIST_INTERNALAUTH_CALLERKEYS_CLINICAL
         runner.withPropertyValues(

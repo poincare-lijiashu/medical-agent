@@ -184,6 +184,12 @@ Java 服务公共环境变量。
   value: {{ $ia.nonceTtlSeconds | default 180 | quote }}
 - name: MEDASSIST_INTERNALAUTH_INTERNALPATHSSIGNATUREREQUIRED
   value: {{ $ia.internalPathsSignatureRequired | default false | quote }}
+# P0-8：请求体摘要纳入调用方签名（v1i2）。灰度顺序：服务端先部署（false，兼容 v1i）→
+# 调用方全部升级 → 再把服务端与调用方一起置 true（此时 v1i 请求 403）。
+- name: MEDASSIST_INTERNALAUTH_BODYHASHREQUIRED
+  value: {{ $ia.bodyHashRequired | default false | quote }}
+- name: MEDASSIST_INTERNALAUTH_BODYHASHMAXBYTES
+  value: {{ $ia.bodyHashMaxBytes | default 1048576 | quote }}
 {{- if eq .component "auth" }}
 # 网关→auth 的撤销名单同步（/internal/revocations）只带 X-Internal-Token：
 # 网关是 WebFlux 应用，不装配 servlet 侧的调用方签名器（v1i 为 HMAC），无法签该请求；

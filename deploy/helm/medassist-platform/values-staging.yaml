@@ -54,6 +54,8 @@ internalAuth:
   mode: enforce
   # P0-9：/internal/** 必须由调用方签名；服务端在"生产环境 + false"时拒绝启动
   internalPathsSignatureRequired: true
+  # P0-8：签名覆盖请求体（v1i2）；从旧版本升级时先 false 观察一轮再切 true
+  bodyHashRequired: true
   gatewaySigning: ed25519
   acceptEd25519: true
   mountCallerKeys: true

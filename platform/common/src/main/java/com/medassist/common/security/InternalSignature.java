@@ -33,8 +33,8 @@ import java.util.TreeMap;
  * &lt;X-Internal-Ts&gt; / &lt;X-Internal-Nonce&gt; / &lt;body hash&gt;
  * </pre>
  *
- * <p>阶段一限制（已写入设计文档 docs/DESIGN-20261101-MF07-INTERNAL-AUTH.md）：
- * 请求体摘要暂固定为 {@code "-"}（避免过滤器重复读取 body）；体完整性依赖内网/TLS。
+ * <p>阶段一限制：网关通道（v1/v2）的请求体摘要仍固定为 {@code "-"}（WebFlux 侧缓存 body 留待后续）；
+ * 服务→服务通道已升级为 {@link #SIG_VERSION_CALLER_BODY v1i2}，把请求体 SHA-256 纳入规范串（P0-8）。
  * 多副本部署时 nonce 去重需改 Redis，内存实现仅适合单副本或 log 灰度期。
  */
 public final class InternalSignature {
@@ -56,6 +56,16 @@ public final class InternalSignature {
     public static final String SIG_VERSION_GATEWAY_ED25519 = "v2";
     /** 调用方签名版本（规范串结构与网关通道不同：不含身份头，改为绑定 caller）。 */
     public static final String SIG_VERSION_CALLER = "v1i";
+    /**
+     * 调用方签名版本 v1i2：在 v1i 基础上把**请求体 SHA-256** 纳入规范串（P0-8）。
+     *
+     * <p>为什么单独升版本而不是直接改 v1i：签名是双方协议，服务端与调用方不可能同时升级。
+     * 分版本后可以按"先升级服务端（同时接受 v1i/v1i2）→ 再升级各调用方 → 最后强制 v1i2"
+     * 三步灰度，任何一步回滚都不会造成全平台 403。
+     *
+     * <p>规范串前 8 行与 v1i 完全一致，仅版本行与末行 body hash 不同。
+     */
+    public static final String SIG_VERSION_CALLER_BODY = "v1i2";
     /** 网关签名算法选择（medassist.internal-auth.gateway-signing）。 */
     public static final String GATEWAY_SIGNING_HMAC = "hmac";
     public static final String GATEWAY_SIGNING_ED25519 = "ed25519";
@@ -136,8 +146,21 @@ public final class InternalSignature {
      */
     public static String canonicalCaller(String method, String path, String query, String caller,
                                          long timestamp, String nonce, String bodyHash) {
+        return canonicalCaller(SIG_VERSION_CALLER, method, path, query, caller,
+                timestamp, nonce, bodyHash);
+    }
+
+    /**
+     * 指定版本的调用方规范串（v1i / v1i2）。
+     *
+     * <p>版本行参与签名：即便攻击者把 {@code X-Internal-Sig-Ver} 从 v1i2 改成 v1i，
+     * 服务端按 v1i 重算的规范串也不一致，无法把"带体绑定"降级成"不带体绑定"。
+     */
+    public static String canonicalCaller(String version, String method, String path, String query,
+                                         String caller, long timestamp, String nonce,
+                                         String bodyHash) {
         StringBuilder sb = new StringBuilder(160);
-        sb.append(SIG_VERSION_CALLER).append('\n');
+        sb.append(version == null || version.isEmpty() ? SIG_VERSION_CALLER : version).append('\n');
         sb.append(method == null ? "" : method.toUpperCase()).append('\n');
         sb.append(path == null ? "" : path).append('\n');
         sb.append(normalizeQuery(query)).append('\n');
