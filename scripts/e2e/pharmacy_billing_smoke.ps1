@@ -136,11 +136,19 @@ for ($i = 0; $i -lt 20; $i++) {
 Check 'dispense.billingStatus.final' $billingStatus 'CHARGED'
 
 # ---------------------------------------------------------------- 7. charges landed in clinical
-Start-Sleep -Milliseconds 800
-$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
+# The billing callback runs after the pharmacy transaction commits: poll until the
+# amount converges. A fixed sleep would mark "not finished yet" as "not charged"
+# on slow machines (P2-15).
+$chargeAfter = $null
+$totalAfter = $totalBefore
+for ($i = 0; $i -lt 25; $i++) {
+    $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
+    $chargeAfter = Res $r
+    $totalAfter = [decimal]$chargeAfter.totalAmount
+    if (($totalAfter - $totalBefore) -eq 25.00) { break }
+    Start-Sleep -Milliseconds 200
+}
 Check 'charge.after' $r.Status 200
-$chargeAfter = Res $r
-$totalAfter = [decimal]$chargeAfter.totalAmount
 CheckAmt 'charge.delta' ($totalAfter - $totalBefore) 25.00
 $drugItems = @($chargeAfter.items | Where-Object { $_.itemCode -eq 'DRUG-AMOX-025' })
 Check 'charge.drugItemCount' $drugItems.Count 1
@@ -165,6 +173,8 @@ Check 'rx.orderMode.approve' $r.Status 200
 $r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$orderRxId/dispense" @{} $token
 Check 'rx.orderMode.dispense' $r.Status 200
 Check 'rx.orderMode.billingStatus' (Res $r).dispense.billingStatus 'NONE'
+# Negative assertion: an ORDER-mode prescription must NOT touch the charge.
+# Polling cannot prove absence, so keep a bounded observation window (P2-15 note).
 Start-Sleep -Milliseconds 500
 $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token
 CheckAmt 'charge.orderMode.unchanged' (Res $r).totalAmount $totalAfter
@@ -181,9 +191,16 @@ $r = Invoke-Api 'POST' "/api/v2/pharmacy/dispenses/$dispId/returns" @{
 Check 'return.ok' $r.Status 200
 Check 'return.dispenseStatus' (Res $r).dispense.status 'RETURNED'
 
-Start-Sleep -Milliseconds 800
-$r = Invoke-Api 'GET' "/api/v2/pharmacy/dispenses/$dispId" $null $token
-Check 'return.billingStatus' (Res $r).dispense.billingStatus 'REFUND_PENDING'
+# Poll the refund status instead of a fixed sleep (P2-15): the refund callback runs
+# after the return transaction commits and may take a few hundred ms.
+$refundStatus = $null
+for ($i = 0; $i -lt 25; $i++) {
+    $r = Invoke-Api 'GET' "/api/v2/pharmacy/dispenses/$dispId" $null $token
+    $refundStatus = (Res $r).dispense.billingStatus
+    if ("$refundStatus" -eq 'REFUND_PENDING' -or "$refundStatus" -eq 'REFUND_FAILED') { break }
+    Start-Sleep -Milliseconds 200
+}
+Check 'return.billingStatus' $refundStatus 'REFUND_PENDING'
 
 # settled bill is not silently rewritten
 $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/charge" $null $token

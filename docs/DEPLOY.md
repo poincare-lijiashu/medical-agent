@@ -109,7 +109,7 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 
 ### 4. 上线前验证清单
 
-- [ ] `python -m pytest -q` 全绿（基线 602+）；
+- [ ] `python -m pytest -q` 全绿（**AI 中台** pytest 基线 602+；Java 平台用 `mvn test`，基线见 `docs/HANDOFF.md`，两套技术栈不要混算）；
 - [ ] `curl http://127.0.0.1:8001/healthz` 返回正常（容器 HEALTHCHECK 同源）；
 - [ ] 一次真实操作后确认审计落 PG：`audit_log` 表有记录（JSONL 仅为本地兜底真源）；
 - [ ] 备份策略就位：`data/*.json`（auth/users、review 队列等 JSON 真源）+ PG `pg_dump` 定期备份；

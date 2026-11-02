@@ -149,6 +149,8 @@ Check 'longDrug.transferStatus' $longDrug.transferStatus 'NONE'
 CheckAmt 'longDrug.amount.dailyTotal' $longDrug.amount 25.00
 Check 'longDrug.frequencyTimes' $longDrug.frequencyTimes 2
 
+# Negative assertion: a LONG DRUG order must NOT auto-create a prescription.
+# Polling cannot prove absence, so keep a bounded observation window (P2-15 note).
 Start-Sleep -Milliseconds 800
 $r = Invoke-Api 'GET' "/api/v2/pharmacy/prescriptions?patientId=$patientId" $null $token
 Check 'longDrug.noPrescription' @(Res $r).Count $rxBefore
