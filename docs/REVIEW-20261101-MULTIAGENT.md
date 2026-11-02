@@ -144,8 +144,8 @@
 `clinical_surgery_charge_smoke`、`insurance_smoke`、`platform_smoke`、`kb_answer_smoke`；
 真实库迁移 `insurance_svc → V13`；反例：同清单进第二个 GENERATED 批次被触发器拒绝。
 
-**仍未整改（后续批次）**：B2（长嘱 quantity 口径，需业务口径决策）、B3（退药退费/驳回联动，需红冲单据链路）、
-E1（X-Actor 归因统一），以及其余 SHOULD-FIX。D1 已在第二批修复。
+**仍未整改（后续批次）**：B2（长嘱 quantity 口径，需业务口径决策）、E1（已由第三批修复）、B3（已由第四批修复），
+以及其余 SHOULD-FIX。
 
 ### 第二批（2026-11-01 晚，测试与可靠性防线）
 
@@ -163,6 +163,17 @@ E1（X-Actor 归因统一），以及其余 SHOULD-FIX。D1 已在第二批修�
 | 编号 | 状态 | 落地位置与验证 |
 |---|---|---|
 | E1 | ✅ 已修复 | 新增 `common/web/ActorGuardFilter`：所有非 GET 业务请求必须带非空 `X-Actor`（缺失/空白/伪造 `system` → 400），`/internal/**`、`/actuator/**`、登录与刷新豁免；`ActorGuardFilterTest` 8 项；网关侧已核实强制注入非空 `X-Actor` |
+
+### 第四批（2026-11-02，B3 退药退费与作废联动）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| B3 | ✅ 已修复 | 新增 `clinical V23__order_refund.sql`（`order_refund` 表：`applied/pending/done` 三段 + `dispense_item_id` 幂等键 + `applied+pending+done ≤ amount` CHECK；`check_charge_item_source` 白名单增加 `ORDER_RETURN:`）；新增 `OrderRefundService` + 3 个内网接口；`BillingService.settle` 改为按"扣除已冲减后的净额"入账；pharmacy 侧 `ClinicalChargeClient.refundOrder` + `PharmacyBillingService.scheduleOrderRefund`，退药后按累计已退金额回冲医嘱；`billing-retry` 支持 ORDER 模式补偿 |
+| B3 验证 | ✅ | 单测 +12（`OrderRefundServiceTest` 9 项、`BillingServiceTest` 净额 1 项、pharmacy 退药 2 项）；新增 `scripts/e2e/pharmacy_order_refund_smoke.ps1` 35 项断言：未结算退药结算净额减少 12.50、已结算退药登记待退费且**不改已付账单**、未计费全额退回**自动作废医嘱**、无令牌 403；回归 `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke` / `db_guardrails` 全 PASS |
+
+**B3 的业务口径**：钱要跟着药走。未计费 → 结算时少收；已计费未结算 → 写红字明细并减少收费单总额；
+已结算 → 不动历史账，登记 `pending` 由财务确认退费（`done`）。全额退回且尚未计费的医嘱直接 `CANCELLED`，
+避免"药退了、结算又按原金额收一次"。
 
 ---
 

@@ -1,6 +1,6 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~六批** / **知识库域第一~二批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-02（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~六批** / **知识库域第一~二批** / **第七轮评审整改第一~四批（含 B3 退药退费）** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
 ## 开工硬规则（每次新会话第一件事，先照做再谈别的）
 
@@ -22,11 +22,12 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-> **2026-11-02 续接状态**：代码已提交并双备份；9 个 Java 服务**当前运行中**（本机验证用）；
+> **2026-11-02 续接状态**：第七轮整改第一~四批已交付；9 个 Java 服务**当前运行中**（本机验证用）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
-> §1.55（X-Actor 守卫）的 E2E 回归**已补跑并通过**：`platform_smoke` / `empi_patient_smoke` /
-> `clinical_preop_consent_smoke` / `pharmacy_smoke` / `insurance_smoke` / `db_guardrails`(13/13) /
-> `kb_search_smoke` / `emr_homepage_smoke`。
+> §1.55（X-Actor 守卫）与 §1.56（B3 退药退费）的 E2E 回归**均已补跑并通过**：
+> `platform_smoke` / `empi_patient_smoke` / `clinical_preop_consent_smoke` / `pharmacy_smoke` /
+> `insurance_smoke` / `db_guardrails`(13/13) / `kb_search_smoke` / `emr_homepage_smoke` /
+> `pharmacy_order_refund_smoke`(35 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -41,12 +42,13 @@
   `b28637f`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）、
   `873752a`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）、
   `1a902ea`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）、
-  `bdbaa6c`（**整改第三批：X-Actor 写操作身份守卫**）
+  `bdbaa6c`（**整改第三批：X-Actor 写操作身份守卫**）、`9766141`（第三批 E1 修正）、
+  `d9b4df0`（**整改第四批：B3 退药退费与作废联动**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **790 项**全绿
-- 本机环境（2026-11-02）：**Docker Desktop 未运行**（需人工启动）；`medagent_pg` 容器已停止（`restart=no`）；
-  **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V22**、
+- 工作区：clean（收工前已确认）；全量单测 **802 项**全绿
+- 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
+  **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar）；
+  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V23**、
   `pharmacy_svc` → **V7**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
@@ -55,19 +57,17 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **评审整改第四批**：B3 退药退费与处方驳回联动（红冲单据链路，需 DB 联调）、B2 长嘱 `quantity` 口径
-     （先定"日量 vs 总量"）、其余 SHOULD-FIX 见意见书
-  2. **补跑 §1.55 的 E2E 回归**（Docker 起来后的第一件事）：`platform_smoke`、`clinical_*`、`pharmacy_smoke`
-  3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
+  1. **评审整改第五批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"）、其余 SHOULD-FIX 见意见书
+  2. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
      可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
      不要直接换 `medagent_pg`（PG15→17 大版本升级需 dump/restore）。生成式问答仍需大模型配置
      （保持 `grounded/citations/refusal` 结构与拒答语义不变）
-  4. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
+  3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
      术中收费核对 / 麻精专册 / 术前访视 / 知识库检索与问答（`/kb/spaces/{id}/answer`）"七页
-  5. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
-  6. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
+  4. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
+  5. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -1208,8 +1208,29 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 网关侧已核实：`AuthGlobalFilter` 对每个已认证请求强制注入非空 `X-Actor`（username 缺失直接 401），
      因此经网关的现有 E2E 不受影响
    - **待补**：本批 Docker 无法由 agent 启动（GUI 进程被回收），E2E 回归待人工启动 Docker 后补跑
+75. **第七轮多智能体评审整改第四批：B3 退药退费与作废联动（2026-11-02）**
+   - 问题：医嘱计费（`billingMode=ORDER`）下退药只回补库存，**钱不退回、账上也无痕迹**；
+     发药计费（`DISPENSE`）已有冲减路径，两条计费模式账务口径不一致
+   - 修复：`clinical V23__order_refund.sql`（`order_refund`：`dispense_item_id` 幂等键，
+     `applied/pending/done` 三段，`applied+pending+done ≤ amount` CHECK，`touch_updated_at` 触发器；
+     `check_charge_item_source` 负金额白名单增加 `ORDER_RETURN:`）
+     + `OrderRefundService`（三时机分流：未计费→applied、未结算→红字明细、已结算→pending）
+     + `BillingService.settle` 按净额入账 + pharmacy `refundOrder` / `scheduleOrderRefund` / `billing-retry` 扩展
+   - 幂等：调用方只传"累计已退金额"，服务端算 delta，delta=0 直接返回；三层上限（服务层/UPDATE 条件/表 CHECK）
+   - 长嘱不自动作废：`LONG` 走 `DAILY:` 逐日计费，口径属 B2，误作废会打断仍在执行的医嘱
+   - 实测：全量单测 **802 项**全绿（+12）；`pharmacy_order_refund_smoke.ps1` 35 项断言 PASS
+     （未结算退药结算净额 12.50 / 已结算退药 `REFUND_PENDING` 且账单不变 / 全额退回医嘱 `CANCELLED` / 内网 403）；
+     回归 `pharmacy_billing_smoke`、`clinical_pharmacy_order_smoke`、`db_guardrails`(13/13) 全 PASS；
+     真实库 `clinical_svc → V23`
 
 ### 本机踩坑备忘（下次别再踩）
+- **服务的 dev profile 必须自带内网令牌，否则起不来**：`HttpClinicalChargeClient` 构造时 fail-fast，
+  缺 `pharmacy.clinical.internal-token` 直接 `IllegalStateException`。此前靠启动 shell 里的
+  `PHARMACY_INTERNAL_TOKEN` 环境变量兜着，换一个干净 shell 就启动失败；已在
+  `pharmacy/application-dev.yml` 补 `clinical.internal-token`（仅 dev）
+- **启动服务只能用后台命令（`run_in_background`），不能用 `Start-Process`**：本次实测
+  `Start-Process -RedirectStandardOutput` 启动的两个 JVM 在命令结束时被整树回收
+  （日志 0 字节、进程消失、端口不监听）；后台命令会一直挂着，进程才活着
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
   UTF-8 当 ANSI 读，中文注释会让**下一行**的赋值/URL 被吞掉，症状极迷惑（同一 GET 返回上一条 POST 的 body、
   `url=[]`、列表过滤不到刚创建的记录）。要写注释就用英文

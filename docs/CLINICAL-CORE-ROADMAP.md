@@ -1403,6 +1403,35 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.56 已完成（2026-11-02，第七轮评审整改第四批：B3 退药退费与作废联动）
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| B3 | `PrescriptionService.returnDrug` 只对 `billingMode=DISPENSE` 冲减；**医嘱计费（ORDER）模式下退药只回补库存，钱不退回也没有账务痕迹** | 新增 `clinical V23__order_refund.sql` + `OrderRefundService`，按"退药发生的时机"分三条正确路径（见下）；药房退药后经内网 `POST /internal/pharmacy-order-refunds` 按累计已退金额幂等回冲 |
+
+**三条时机，三种正确做法**
+
+1. **尚未计费**（收费单没有 `ORDER:{orderId}` 明细）：登记 `applied`，结算时按 `amount - Σapplied` 入账；
+   若该医嘱已全额退回，直接 `CANCELLED`（否则结算会把退回的药再收一次）。
+2. **已计费未结算**（收费单 `UNPAID`）：写红字明细 `ORDER_RETURN:{dispenseItemId}:{累计值}` 并同步减少收费单总额。
+3. **已结算**（`PAID`/`REFUNDED`）：**不改历史账**，登记 `pending`，由财务确认后转 `done`（`POST /internal/pharmacy-order-refunds/{id}/complete`）。
+
+**关键实现**
+- 幂等键 `dispense_item_id` 唯一；调用方只传"累计已退金额"，服务端算 `delta`，`delta=0` 直接返回当前状态（重放安全）。
+- 金额上限三层兜底：服务层比较发药明细金额 → `UPDATE ... WHERE applied+pending+done+delta <= amount` → 表级 `CHECK`。
+- 负向明细白名单：`check_charge_item_source` 仅允许 `DISPENSE_RETURN:` / `ORDER_RETURN:` 产生负金额，其余来源一律拒绝。
+- 药房侧 `billing-retry` 扩展：ORDER 模式下 `REFUND_FAILED / REFUND_PENDING` 走补冲，`NONE` 幂等返回（药房不持账）。
+- 长嘱（`LONG`）不自动作废：长嘱走 `DAILY:` 逐日计费，"日量 vs 总量"口径属 B2，误作废会打断仍在执行的医嘱。
+
+**实测**
+- 全量单测 **802 项**全绿（+12）
+- `scripts/e2e/pharmacy_order_refund_smoke.ps1` **35 项断言全 PASS**：未结算退药 → 结算净额少收 12.50；
+  已结算退药 → `REFUND_PENDING` 且已付账单金额不变；未计费全额退回 → 医嘱 `CANCELLED`；内网无令牌 → 403
+- 回归：`pharmacy_billing_smoke`、`clinical_pharmacy_order_smoke`、`db_guardrails`（13/13）全 PASS
+- 真实库：`clinical_svc` 迁移到 **V23**，`order_refund` 表与触发器已生效
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |
