@@ -454,4 +454,22 @@ class BillingServiceTest {
         assertThat(preview.pendingAmount()).isEqualByComparingTo("10.00");
         assertThat(preview.pendingOrderCount()).isEqualTo(1);
     }
+
+    @Test
+    @DisplayName("预览：待计金额按 amount − 已冲减 计算，与结算口径一致（P1-8）")
+    void previewDeductsAppliedRefund() {
+        VisitOrder pendingOrder = order("10.00");
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findOpenCharge(visitId)).thenReturn(Optional.of(new Charge(
+                chargeId, "C2", visitId, new BigDecimal("20.00"), Charge.UNPAID, null, null, 1L)));
+        when(repo.listOrders(visitId, VisitOrder.PLACED)).thenReturn(List.of(pendingOrder));
+        // 该医嘱已退药冲减 4.00：预览只能显示 6.00，否则患者会以为要付 10.00
+        when(repo.sumAppliedOrderRefund(pendingOrder.id())).thenReturn(new BigDecimal("4.00"));
+        when(repo.listCharges(visitId)).thenReturn(List.of());
+
+        var preview = service.preview(visitId);
+
+        assertThat(preview.pendingAmount()).isEqualByComparingTo("6.00");
+        assertThat(preview.pendingOrderCount()).isEqualTo(1);
+    }
 }

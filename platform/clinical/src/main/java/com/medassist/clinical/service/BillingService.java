@@ -66,8 +66,14 @@ public class BillingService {
         List<VisitOrder> pending = repo.listOrders(visitId, VisitOrder.PLACED).stream()
                 .filter(o -> !o.longTerm())
                 .toList();
+        // 口径必须与 settle 一致（P1-8）：结算按 amount - 已冲减(applied) 入账，
+        // 预览若按 amount 全额相加，退过药的医嘱会把"要收多少"显示得偏高。
         BigDecimal pendingAmount = pending.stream()
-                .map(VisitOrder::amount)
+                .map(o -> {
+                    BigDecimal applied = repo.sumAppliedOrderRefund(o.id());
+                    BigDecimal net = o.amount().subtract(applied == null ? BigDecimal.ZERO : applied);
+                    return net.signum() < 0 ? BigDecimal.ZERO : net;
+                })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         // 口径与费用看板一致：已计 = 该就诊全部有效收费单之和（中途结算后可能多张；作废单不计）
         BigDecimal billedTotal = repo.listCharges(visitId).stream()

@@ -1,1 +1,2 @@
 com.medassist.common.config.InternalAuthAutoConfiguration
+com.medassist.common.config.HttpBodyLimitAutoConfiguration

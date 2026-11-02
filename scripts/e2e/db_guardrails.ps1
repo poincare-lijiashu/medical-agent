@@ -229,6 +229,24 @@ DELETE FROM tech_svc.lis_inbound_message
  WHERE ctid = (SELECT ctid FROM tech_svc.lis_inbound_message LIMIT 1);
 "@
 
+# ---------------------------------------------------------------- 6. Narcotic ampoule return (P1-10)
+# Ampoule return is all-or-nothing by business rule (service enforces qty == dispensed qty).
+# A partial return must never end up as "PENDING_RETURN with ampoule_returned > 0":
+# the ck_narcotic_return_state constraint has to reject it.
+$pending = & docker exec $Container psql -U $DbUser -d $Database -t -A -c "SELECT count(*) FROM pharmacy_svc.narcotic_register WHERE status = 'PENDING_RETURN' AND quantity > 1" 2>&1 | Out-String
+$n = 0
+[int]::TryParse($pending.Trim(), [ref]$n) | Out-Null
+if ($n -gt 0) {
+    Expect-Fail 'pharmacy.narcoticPartialReturn' @"
+UPDATE pharmacy_svc.narcotic_register
+   SET ampoule_returned = 1, ampoule_returned_at = now(), ampoule_receiver = 'guard'
+ WHERE id = (SELECT id FROM pharmacy_svc.narcotic_register
+              WHERE status = 'PENDING_RETURN' AND quantity > 1 LIMIT 1);
+"@ 'ck_narcotic_return_state'
+} else {
+    Write-Output "SKIP pharmacy.narcoticPartialReturn (no PENDING_RETURN row with quantity > 1)"
+}
+
 Write-Output "-----"
 Write-Output "GUARDRAILS_PASS=$script:pass FAIL=$script:fail"
 if ($script:fail -gt 0) { Write-Output "RESULT FAIL"; exit 1 }

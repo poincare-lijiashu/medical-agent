@@ -788,17 +788,25 @@ public class PharmacyRepository {
         return count == null ? 0 : count;
     }
 
-    /** 登记空安瓿回收（CAS：仅待回收 + 版本一致）。 */
+    /**
+     * 登记空安瓿回收（CAS：仅待回收 + 版本一致 + 数量必须等于发药量）。
+     *
+     * <p>P1-10：原实现用 {@code CASE WHEN :qty = quantity THEN 'RETURNED' ELSE status END}，
+     * 部分回收会写成 "PENDING_RETURN + ampoule_returned>0"，与 V6 的
+     * {@code ck_narcotic_return_state} 直接冲突 → 数据库抛 500（靠服务层预校验掩盖）。
+     * 空安瓿回收的业务口径本来就是"整笔回收"（{@code NarcoticService} 已强制数量相等），
+     * 因此把条件下沉到 WHERE：数量不符时更新 0 行（返回 false），既不写坏状态也不抛 500。
+     */
     public boolean returnNarcoticAmpoule(UUID id, int quantity, String receiver,
                                          long expectedVersion) {
         return jdbc.sql("""
                         UPDATE pharmacy_svc.narcotic_register
                            SET ampoule_returned = :qty, ampoule_returned_at = now(),
                                ampoule_receiver = :receiver,
-                               status = CASE WHEN :qty = quantity THEN 'RETURNED'
-                                             ELSE status END,
+                               status = 'RETURNED',
                                version = version + 1, updated_at = now()
                          WHERE id = :id AND status = 'PENDING_RETURN' AND version = :version
+                           AND :qty = quantity
                         """)
                 .param("qty", quantity).param("receiver", receiver)
                 .param("id", id).param("version", expectedVersion).update() > 0;

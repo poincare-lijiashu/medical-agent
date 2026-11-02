@@ -38,7 +38,8 @@ public final class InsuranceDtos {
     }
 
     /** 目录批量导入（按医保编码 UPSERT）。 */
-    public record ImportItemsReq(@NotEmpty @Valid List<ItemReq> items) {
+    public record ImportItemsReq(@NotEmpty @Size(max = 500, message = "单次最多导入 500 条，请分批或改用文件导入")
+                                 @Valid List<ItemReq> items) {
     }
 
     /** 启停用目录项目。 */
