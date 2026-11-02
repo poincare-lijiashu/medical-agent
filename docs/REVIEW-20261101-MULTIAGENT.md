@@ -158,6 +158,12 @@ E1（X-Actor 归因统一），以及其余 SHOULD-FIX。D1 已在第二批修�
 | SHOULD #23 | ✅ 已修复 | `IngestTaskWorkerTest` 覆盖空轮询/正常处理/失败回写不阻断 |
 | D1 | ✅ 已修复 | 首页重算与医保清单生成：跨服务读取移到行锁之前（首页增加"无锁状态预判 + 取锁后复核"） |
 
+### 第三批（2026-11-02，审计归因统一）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| E1 | ✅ 已修复 | 新增 `common/web/ActorGuardFilter`：所有非 GET 业务请求必须带非空 `X-Actor`（缺失/空白/伪造 `system` → 400），`/internal/**`、`/actuator/**`、登录与刷新豁免；`ActorGuardFilterTest` 8 项；网关侧已核实强制注入非空 `X-Actor` |
+
 ---
 
 ## 五、整改优先级建议

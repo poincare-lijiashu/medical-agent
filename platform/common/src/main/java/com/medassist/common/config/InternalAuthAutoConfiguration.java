@@ -5,6 +5,7 @@ import com.medassist.common.security.InternalAuthProperties;
 import com.medassist.common.security.InternalCallerSigner;
 import com.medassist.common.security.InternalKeySet;
 import com.medassist.common.security.SecurityDefaults;
+import com.medassist.common.web.ActorGuardFilter;
 import com.medassist.common.web.InternalAuthFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -157,6 +158,19 @@ public class InternalAuthAutoConfiguration {
             InternalAuthFilter filter) {
         FilterRegistrationBean<InternalAuthFilter> registration = new FilterRegistrationBean<>(filter);
         registration.setOrder(Integer.MIN_VALUE + 20);
+        registration.addUrlPatterns("/*");
+        return registration;
+    }
+
+    /**
+     * 写操作必须有操作者身份（E1）：在验签过滤器之后执行，
+     * 避免"先要求 X-Actor 再发现请求本身没通过签名"的错误顺序。
+     */
+    @Bean
+    public FilterRegistrationBean<ActorGuardFilter> actorGuardFilterRegistration() {
+        FilterRegistrationBean<ActorGuardFilter> registration =
+                new FilterRegistrationBean<>(new ActorGuardFilter());
+        registration.setOrder(Integer.MIN_VALUE + 30);
         registration.addUrlPatterns("/*");
         return registration;
     }

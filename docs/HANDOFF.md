@@ -4,13 +4,13 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-> **关机前状态（2026-11-01 深夜）**：代码已全部提交并双备份；9 个 Java 服务已停止；
-> **Docker Desktop 已按用户要求关闭**。
-> 明天开工顺序：
-> 1. 手动启动 Docker Desktop（agent 拉起的 GUI 进程会被回收）；
-> 2. **`docker start medagent_pg`（必须手动：该容器 `restart=no`，不会自动拉起）**；
-> 3. 按下面"启动顺序"逐条后台启动 auth → 业务服务 → gateway（`INTERNAL_API_TOKEN=medassist-dev-internal-token`）。
+> **2026-11-02 续接状态**：代码已提交并双备份；9 个 Java 服务已停止；
+> **Docker Desktop 仍未运行**（agent 拉起的 GUI 进程会被回收，`docker desktop start` 也不行），
+> **需要人工双击 Docker Desktop 启动**，然后：
+> 1. `docker start medagent_pg`（必须手动：该容器 `restart=no`，不会自动拉起）；
+> 2. 按下面"启动顺序"逐条后台启动 auth → 业务服务 → gateway（`INTERNAL_API_TOKEN=medassist-dev-internal-token`）。
 > `medagent_loki` / `medagent_promtail` 是 `unless-stopped`，会随 Docker 自动启动。
+> **待补 E2E**：§1.55（X-Actor 守卫）的回归需在 Docker 起来后跑 `platform_smoke` 等。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -24,12 +24,13 @@
   `f82562d`（**手术麻醉域第六批：术前访视与麻醉评估单**）、
   `b28637f`（**知识库域第二批：文档解析 + 抽取式带引用问答 + 检索评测**）、
   `873752a`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）、
-  `1a902ea`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）
+  `1a902ea`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）、
+  `HASH_REVIEW3`（**整改第三批：X-Actor 写操作身份守卫**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **782 项**全绿
-- 本机环境（2026-11-01）：Docker Desktop 运行中、`medagent_pg` 5433 运行中；
+- 工作区：clean（收工前已确认）；全量单测 **790 项**全绿
+- 本机环境（2026-11-02）：**Docker Desktop 未运行**（需人工启动）；`medagent_pg` 容器已停止（`restart=no`）；
   **Java 服务已全部停止**（E2E 跑完后主动停掉，避免锁住 jar）；
-  本日迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V22**、
+  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V22**、
   `pharmacy_svc` → **V7**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
@@ -38,18 +39,19 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **评审整改第三批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"）、B3 退药退费与处方驳回联动（红冲单据）、
-     E1 `X-Actor` 归因统一；其余 SHOULD-FIX 见意见书"仍未整改"
-  2. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
+  1. **评审整改第四批**：B3 退药退费与处方驳回联动（红冲单据链路，需 DB 联调）、B2 长嘱 `quantity` 口径
+     （先定"日量 vs 总量"）、其余 SHOULD-FIX 见意见书
+  2. **补跑 §1.55 的 E2E 回归**（Docker 起来后的第一件事）：`platform_smoke`、`clinical_*`、`pharmacy_smoke`
+  3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
      可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
      不要直接换 `medagent_pg`（PG15→17 大版本升级需 dump/restore）。生成式问答仍需大模型配置
      （保持 `grounded/citations/refusal` 结构与拒答语义不变）
-  3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
+  4. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
      术中收费核对 / 麻精专册 / 术前访视 / 知识库检索与问答（`/kb/spaces/{id}/answer`）"七页
-  4. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
-  5. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
+  5. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
+  6. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -1177,6 +1179,19 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `emr_homepage_smoke` / `insurance_smoke` 全 PASS
    - 迁移：`auth V34`、`empi V3`、`clinical V22`、`pharmacy V7`、`tech V7`、`emr V15`、`insurance V14`、`kb V3`
    - 遗留：B2（长嘱 quantity 口径）、B3（退药退费/驳回联动）、E1（X-Actor 归因）、其余 SHOULD-FIX
+
+74. **第七轮多智能体评审整改第三批（2026-11-02，E1 审计归因统一）**
+   - 问题：80+ 处写接口 `defaultValue = "system"`，直连服务不带头也能改病历/报告/患者，审计出现"system 操作"；
+     另有接口缺头 400，存在两套语义
+   - 修复：新增 `common/web/ActorGuardFilter`（平台级过滤器，不改 80 个方法）：所有非 GET 业务请求必须带
+     非空 `X-Actor`，缺失/空白/伪造 `system` → 400；`/internal/**`、`/actuator/**`、`/auth/login`、
+     `/auth/refresh` 豁免；注册顺序在 `InternalAuthFilter` 之后（先验身份再要求操作者）
+   - 为什么用过滤器：逐改 `@RequestHeader` 易漏且新接口会再次跑偏；下沉后任何新 controller 自动受约束
+   - 实测：全量单测 **790 项**全绿（+8 `ActorGuardFilterTest`）；覆盖缺头/空白/伪造 system/放行、
+     GET、内部通道、登录刷新、contextPath 部署
+   - 网关侧已核实：`AuthGlobalFilter` 对每个已认证请求强制注入非空 `X-Actor`（username 缺失直接 401），
+     因此经网关的现有 E2E 不受影响
+   - **待补**：本批 Docker 无法由 agent 启动（GUI 进程被回收），E2E 回归待人工启动 Docker 后补跑
 
 ### 本机踩坑备忘（下次别再踩）
 - **E2E 的 .ps1 必须是纯 ASCII**（脚本头部写了 `ASCII only on purpose`）：Windows PowerShell 5.1 把无 BOM 的
