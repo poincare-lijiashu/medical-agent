@@ -203,6 +203,15 @@
 | B2 库存闭环 | ✅ 已交付 | `clinical V26`：`ward_stock_txn`（append-only 库存流水，收药 IN / 退药 RETURN，余额=IN-RETURN，回填历史收药）+ `ward_med_return`（退药记录）；新增 `POST /clinical/visits/{id}/ward-receipts/{receiptId}/returns`（仅 REFUSED/OMITTED 可退、`returnId` 幂等、CAS 防超退）与 `GET /clinical/visits/{id}/ward-stock`；看板增加 `returnedQuantity/stockBalance/returnable/returnHint` |
 | 验证 | ✅ | 单测 **830 项**全绿（+8）；`clinical_long_dispense_smoke.ps1` 扩到 87 项断言 PASS；`platform_smoke` / 全部 `clinical_*` / 全部 `pharmacy_*` 回归 PASS；真实库 `clinical_svc → V26` |
 
+### 第九批（2026-11-02，查询截断与网关超时）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| SHOULD #12 | ✅ 已修复 | `TechRepository.listCriticalValuesByReport` + `ReportService.listCriticalsOf` 改为按 `report_id` 定向查询；原先"全库前 200 条再过滤"会让危急值较多的老报告显示成"没有危急值"（等同漏报）。新增单测验证定向查询且不再走全库列表 |
+| SHOULD #15 | ✅ 已修复 | 网关 9 条 `platform-*` 路由补 `metadata.connect-timeout=3000` / `response-timeout=30000`（知识库问答 60000），慢下游不再占满网关连接池；契约测试断言所有平台路由都配了超时 |
+| SHOULD #24（部分） | ✅ 已修复 | `GatewayRouteConfigTest` 补 `platform-kb-v2` 路由断言（此前只覆盖 clinical/pharmacy/tech/emr/insurance）；tech/kb 控制器权限单测仍未补 |
+| 验证 | ✅ | 全量单测 **833 项**全绿（+3）；回归 `platform_smoke` / `tech_smoke` / `tech_lis_smoke` / `kb_answer_smoke` / `clinical_long_dispense_smoke` 全 PASS（网关与 tech 已重建重启） |
+
 ---
 
 ## 五、整改优先级建议

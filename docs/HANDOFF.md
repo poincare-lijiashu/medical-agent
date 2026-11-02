@@ -49,9 +49,10 @@
   `d9b4df0`（**整改第四批：B3 退药退费与作废联动**）、
   `fa4ff4a`（**整改第五批：B2 长嘱数量口径与频次快照**）、
   `8033aff`（**B2 后续：长嘱药品按日请领**）、
-  `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）
+  `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
+  `2dbd8ab`（**危急值定向查询与网关下游超时**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **830 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **833 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V26**、
@@ -64,7 +65,10 @@
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
   1. ~~**病区库存与未执行退药（对账闭环最后一段）**~~ ✅ 已交付（§1.60，clinical V26）
-  2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）
+  2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）；
+     已完成 #12（危急值定向查询）、#15（网关超时）、#24 的 kb 路由部分，
+     剩余优先项：#9 UNFIT 改判复核、#14 空安瓿发药二次校验与退药冲销、#16/#18/#19 部署硬化、
+     #20 statusOf 契约测试、#26 金额/数量边界用例
   3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
      可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
@@ -1275,6 +1279,13 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      两条链路各自幂等，避免一次退药被重复回补）
    - 实测：全量单测 **830 项**全绿（+8）；`clinical_long_dispense_smoke.ps1` 扩到 **87 项断言 PASS**；
      回归 `platform_smoke` / 全部 `clinical_*` / 全部 `pharmacy_*` 全 PASS；真实库 `clinical_svc → V26`
+80. **危急值定向查询与网关下游超时（2026-11-02）**
+   - 问题：报告明细用"全库前 200 条危急值再过滤"，危急值多时老报告会显示成没有危急值；
+     网关路由没有下游超时，慢下游会占满连接池
+   - 修复：`TechRepository.listCriticalValuesByReport` 定向查询；9 条 `platform-*` 路由补
+     `connect-timeout=3s` / `response-timeout=30s`（kb 60s）；契约测试补 kb 路由与超时断言
+   - 实测：全量单测 **833 项**全绿（+3）；回归 `platform_smoke` / `tech_smoke` / `tech_lis_smoke` /
+     `kb_answer_smoke` / `clinical_long_dispense_smoke` 全 PASS
 
 ### 本机踩坑备忘（下次别再踩）
 - **台账类 upsert 要写成"重试不降级"**：请领先成功后失败（响应丢了）时，简单覆盖会把处方号抹掉、
@@ -1304,6 +1315,11 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   打包完再用 `run_in_background` 起回来
 - **`platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认打 18080**（旧 gw-test），
   本机回归要显式 `-BaseUrl http://127.0.0.1:8080`，否则第一行 `login actual=0` 看上去像服务挂了
+- **网关启动必须带 `INTERNAL_API_TOKEN`**：撤销名单同步是 fail-fast，干净 shell 里直接起网关会
+  `tokenRevocationCache` 初始化失败并拒绝启动（不是 auth 挂了）。启动命令前先
+  `$env:INTERNAL_API_TOKEN='medassist-dev-internal-token'`，或把 `REVOCATION_FAIL_FAST` 设 false 仅用于排障
+- **网关路由加 `metadata.response-timeout` 后必须重建网关 JAR 并重启**：改 yml 不会热生效；
+  超时单位是毫秒，写 `30s` 字符串会被当成非法数值
 - **服务的 dev profile 必须自带内网令牌，否则起不来**：`HttpClinicalChargeClient` 构造时 fail-fast，
   缺 `pharmacy.clinical.internal-token` 直接 `IllegalStateException`。此前靠启动 shell 里的
   `PHARMACY_INTERNAL_TOKEN` 环境变量兜着，换一个干净 shell 就启动失败；已在
