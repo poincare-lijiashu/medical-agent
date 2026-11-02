@@ -212,4 +212,21 @@ class ReportServiceTest {
         assertThat(list).hasSize(1);
         assertThat(list.get(0).overdue()).isTrue();
     }
+
+    @Test
+    @DisplayName("报告明细的危急值按 reportId 定向查询（不再全库取 200 条后过滤）")
+    void detailQueriesCriticalsByReport() {
+        when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.DRAFT, 1)));
+        CriticalValue critical = new CriticalValue(UUID.randomUUID(), appId, reportId, "血钾",
+                "7.2", "3.5-5.3", "CRITICAL", CriticalValue.PENDING, null, null, null, null,
+                null, Instant.now());
+        when(repo.listCriticalValuesByReport(reportId)).thenReturn(List.of(critical));
+
+        var view = service.detail(reportId);
+
+        assertThat(view.criticals()).hasSize(1);
+        assertThat(view.criticals().get(0).itemName()).isEqualTo("血钾");
+        verify(repo).listCriticalValuesByReport(reportId);
+        verify(repo, never()).listCriticalValues(any(), any(), anyInt());
+    }
 }

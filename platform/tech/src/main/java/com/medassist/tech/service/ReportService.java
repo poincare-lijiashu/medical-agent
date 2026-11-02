@@ -252,9 +252,7 @@ public class ReportService {
     }
 
     private List<CriticalValue> listCriticalsOf(UUID reportId) {
-        return repo.listCriticalValues(null, null, 200).stream()
-                .filter(c -> c.reportId().equals(reportId))
-                .toList();
+        return repo.listCriticalValuesByReport(reportId);
     }
 
     private String blankToNull(String s) {

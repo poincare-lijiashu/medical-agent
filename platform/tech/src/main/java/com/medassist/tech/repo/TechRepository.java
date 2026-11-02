@@ -402,6 +402,23 @@ public class TechRepository {
                 .query(CRITICAL_MAPPER).list();
     }
 
+    /**
+     * 按报告定向读取危急值明细。
+     *
+     * <p>不能用"全库前 200 条再过滤"：危急值一多，早年报告会被截断成"没有危急值"，
+     * 临床上等同于漏报。
+     */
+    public List<CriticalValue> listCriticalValuesByReport(UUID reportId) {
+        return jdbc.sql("""
+                        SELECT id, application_id, report_id, item_name, result_value, reference_range,
+                               severity, status, notified_to, notified_at, acknowledged_by,
+                               acknowledged_at, note, created_at
+                          FROM tech_svc.critical_value
+                         WHERE report_id = ?
+                         ORDER BY created_at
+                        """).param(reportId).query(CRITICAL_MAPPER).list();
+    }
+
     /** 临床确认（CAS：仅 PENDING）。 */
     public boolean acknowledgeCritical(UUID id, String actor, String note) {
         return jdbc.sql("""

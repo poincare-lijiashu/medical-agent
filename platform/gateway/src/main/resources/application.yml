@@ -38,12 +38,20 @@ spring:
                 - Path=/api/v2/auth/**
               filters:
                 - StripPrefix=3
+              # 下游超时（毫秒）：没有超时时慢下游会一直占着网关连接，
+              # 直到连接池耗尽，表现为"整站卡死"而不是单个接口变慢。
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             - id: platform-empi-v2
               uri: ${PLATFORM_EMPI_URI:http://127.0.0.1:8082}
               predicates:
                 - Path=/api/v2/empi/**
               filters:
                 - StripPrefix=3
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             # 临床核心（挂号/就诊/医嘱/收费）
             # 注意：clinical 服务的控制器自带 /clinical 前缀（BillingController 等），
             # 因此这里只剥掉 /api/v2，剥 3 段会变成 /wards 导致全量 404。
@@ -53,6 +61,9 @@ spring:
                 - Path=/api/v2/clinical/**
               filters:
                 - StripPrefix=2
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             # 药房（药品字典/库存/处方/发药）
             - id: platform-pharmacy-v2
               uri: ${PLATFORM_PHARMACY_URI:http://127.0.0.1:8084}
@@ -60,6 +71,9 @@ spring:
                 - Path=/api/v2/pharmacy/**
               filters:
                 - StripPrefix=2
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             # 医技（检查/检验申请、标本、报告、危急值）
             - id: platform-tech-v2
               uri: ${PLATFORM_TECH_URI:http://127.0.0.1:8085}
@@ -67,6 +81,9 @@ spring:
                 - Path=/api/v2/tech/**
               filters:
                 - StripPrefix=2
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             # 病历（模板/书写/签名/归档/质控）
             - id: platform-emr-v2
               uri: ${PLATFORM_EMR_URI:http://127.0.0.1:8086}
@@ -74,6 +91,9 @@ spring:
                 - Path=/api/v2/emr/**
               filters:
                 - StripPrefix=2
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             # 医保（目录/映射/参保/结算清单）
             - id: platform-insurance-v2
               uri: ${PLATFORM_INSURANCE_URI:http://127.0.0.1:8087}
@@ -81,6 +101,9 @@ spring:
                 - Path=/api/v2/insurance/**
               filters:
                 - StripPrefix=2
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
             # 知识库（知识空间/文档/切片/企业检索）
             - id: platform-kb-v2
               uri: ${PLATFORM_KB_URI:http://127.0.0.1:8088}
@@ -88,6 +111,10 @@ spring:
                 - Path=/api/v2/kb/**
               filters:
                 - StripPrefix=2
+              # 知识库问答比普通 CRUD 慢（解析/检索/引用拼装），单独放宽到 60s
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 60000
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -96,6 +123,9 @@ spring:
                 - Path=/api/v2/audit/**
               filters:
                 - StripPrefix=3
+              metadata:
+                connect-timeout: 3000
+                response-timeout: 30000
 
 management:
   endpoints:

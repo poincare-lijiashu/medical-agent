@@ -43,6 +43,38 @@ class GatewayRouteConfigTest {
                 .orElseThrow(() -> new AssertionError("缺少路由：" + id));
     }
 
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> routes(Map<String, Object> config) {
+        Map<String, Object> spring = (Map<String, Object>) config.get("spring");
+        Map<String, Object> cloud = (Map<String, Object>) spring.get("cloud");
+        Map<String, Object> gateway = (Map<String, Object>) cloud.get("gateway");
+        Map<String, Object> server = (Map<String, Object>) gateway.get("server");
+        Map<String, Object> webflux = (Map<String, Object>) server.get("webflux");
+        return (List<Map<String, Object>>) webflux.get("routes");
+    }
+
+    @Test
+    @DisplayName("所有平台路由都必须配置下游超时（慢下游不能占满网关连接池）")
+    void platformRoutesHaveTimeouts() {
+        List<Map<String, Object>> platformRoutes = routes(loadConfig()).stream()
+                .filter(r -> String.valueOf(r.get("id")).startsWith("platform-"))
+                .toList();
+        assertThat(platformRoutes).hasSize(9);
+
+        for (Map<String, Object> r : platformRoutes) {
+            assertThat(r.get("metadata")).as("路由 %s 缺少 metadata", r.get("id")).isNotNull();
+            Map<String, Object> metadata = (Map<String, Object>) r.get("metadata");
+            assertThat(metadata.get("response-timeout"))
+                    .as("路由 %s 缺少 response-timeout", r.get("id")).isNotNull();
+            assertThat(((Number) metadata.get("response-timeout")).longValue())
+                    .as("路由 %s 的 response-timeout 必须在 1s~120s", r.get("id"))
+                    .isBetween(1_000L, 120_000L);
+            assertThat(((Number) metadata.get("connect-timeout")).longValue())
+                    .as("路由 %s 的 connect-timeout 必须在 0.5s~10s", r.get("id"))
+                    .isBetween(500L, 10_000L);
+        }
+    }
+
     @Test
     @DisplayName("clinical 路由只剥 /api/v2（控制器自带 /clinical 前缀）")
     void clinicalRouteStripsTwoSegments() {
@@ -90,6 +122,16 @@ class GatewayRouteConfigTest {
 
         assertThat((List<String>) route.get("predicates"))
                 .containsExactly("Path=/api/v2/insurance/**");
+        assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
+    }
+
+    @Test
+    @DisplayName("kb 路由只剥 /api/v2（控制器自带 /kb 前缀，知识库接口不能全量 404）")
+    void kbRouteStripsTwoSegments() {
+        Map<String, Object> route = route(loadConfig(), "platform-kb-v2");
+
+        assertThat((List<String>) route.get("predicates"))
+                .containsExactly("Path=/api/v2/kb/**");
         assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
     }
 
