@@ -22,12 +22,13 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-> **2026-11-02 续接状态**：第七轮整改第一~四批已交付；9 个 Java 服务**当前运行中**（本机验证用）；
+> **2026-11-02 续接状态**：第七轮整改第一~五批已交付；9 个 Java 服务**当前运行中**（本机验证用）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
-> §1.55（X-Actor 守卫）与 §1.56（B3 退药退费）的 E2E 回归**均已补跑并通过**：
+> §1.55（X-Actor 守卫）、§1.56（B3 退药退费）、§1.57（B2 长嘱口径）的 E2E 回归**均已补跑并通过**：
 > `platform_smoke` / `empi_patient_smoke` / `clinical_preop_consent_smoke` / `pharmacy_smoke` /
 > `insurance_smoke` / `db_guardrails`(13/13) / `kb_search_smoke` / `emr_homepage_smoke` /
-> `pharmacy_order_refund_smoke`(35 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
+> `pharmacy_order_refund_smoke`(35 项) / `clinical_long_order_smoke`(36 项) /
+> `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -43,12 +44,13 @@
   `873752a`（**第七轮多智能体评审整改第一批：发布链/安全/资金红线/账实**）、
   `1a902ea`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）、
   `bdbaa6c`（**整改第三批：X-Actor 写操作身份守卫**）、`9766141`（第三批 E1 修正）、
-  `d9b4df0`（**整改第四批：B3 退药退费与作废联动**）
+  `d9b4df0`（**整改第四批：B3 退药退费与作废联动**）、
+  `fa4ff4a`（**整改第五批：B2 长嘱数量口径与频次快照**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **802 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **807 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar）；
-  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V23**、
+  迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V24**、
   `pharmacy_svc` → **V7**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
@@ -57,17 +59,20 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **评审整改第五批**：B2 长嘱 `quantity` 口径（先定"日量 vs 总量"）、其余 SHOULD-FIX 见意见书
-  2. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
+  1. **按日摆药/请领（B2 后续）**：长期药品医嘱目前不自动转药房、按日计费；要补"病区按日请领 →
+     药房按日发药"链路（pharmacy 处方需支持 `source_order_id + supply_date` 或新增请领单模型），
+     完成后长嘱药品可恢复自动流转
+  2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）
+  3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
      可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
      不要直接换 `medagent_pg`（PG15→17 大版本升级需 dump/restore）。生成式问答仍需大模型配置
      （保持 `grounded/citations/refusal` 结构与拒答语义不变）
-  3. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
+  4. **临床工作台前端**：按 `docs/FRONTEND-SKILL-GUIDE.md` 选型（frontend-design-direction + shadcn +
      web-design-guidelines + Impeccable），先落"医嘱工作台 / 病案首页质控 / 手术排台看板（含分级审批待办）/
      术中收费核对 / 麻精专册 / 术前访视 / 知识库检索与问答（`/kb/spaces/{id}/answer`）"七页
-  4. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
-  5. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
+  5. **角色细化**：麻醉医师、手术室护士独立角色（访视/护理/收费现有权限点先共用手术写权限，角色一落即可拆分）
+  6. **省局/HQMS 真实接口对接**：上报批次与报文已就绪（§1.38/§1.39），缺对方字段规范与前置机
 - 收工动作：如需重启本机服务，按《本机踩坑》用**后台命令逐条启动**，勿用 `Start-Process`（进程会被回收）；
   Docker Desktop 必须由用户手动启动（agent 启动的 GUI 进程会被回收，本次靠 `explorer.exe` 间接拉起）
 
@@ -1222,8 +1227,27 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      （未结算退药结算净额 12.50 / 已结算退药 `REFUND_PENDING` 且账单不变 / 全额退回医嘱 `CANCELLED` / 内网 403）；
      回归 `pharmacy_billing_smoke`、`clinical_pharmacy_order_smoke`、`db_guardrails`(13/13) 全 PASS；
      真实库 `clinical_svc → V23`
+76. **第七轮多智能体评审整改第五批：B2 长嘱数量口径（2026-11-02）**
+   - 问题：`visit_order.quantity` 没定"单次量 vs 每日/本次总量"，按日计费每天按 `amount` 计一次；
+     同一张长嘱在不同人眼里金额不同，护理执行次数也无依据
+   - 修复：固化口径 **TEMP=本次总量；LONG=每日总量（amount=每日金额）**；
+     `clinical V24` 新增 `frequency_times`（1..24，默认 1，**客户端不可传**）；
+     新增受控词表 `domain/OrderFrequency`（qd/bid/tid/qid/q2h…q12h/hs/qn/st/once/prn/qod/tiw）
+     与 `GET /clinical/frequencies`；长嘱必须给每日频次（缺频次/prn/qod/tiw → 422），
+     服务端落规范化 code（BID→bid）并快照次数
+   - **长期药品医嘱不自动转药房**：一次转送只能发一天量，长嘱要连续多天；按日请领链路未建设，
+     静默只发一天会导致后续无药。现在 `transferStatus=NONE`、`transfer-retry` 明确 422，
+     按日计费照常；临时药品医嘱不受影响。后续批次补"病区按日请领 → 药房按日发药"
+   - 实测：全量单测 **807 项**全绿（+5）；`clinical_long_order_smoke.ps1` **36 项断言 PASS**；
+     回归 `platform_smoke` / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke` /
+     `pharmacy_order_refund_smoke` 全 PASS；真实库 `clinical_svc → V24`
 
 ### 本机踩坑备忘（下次别再踩）
+- **新增表列 + `SELECT *` + `RowMapper` 三件套必须同一批改**：V24 加了 `frequency_times` 后，
+  若只改迁移不改 `ORDER_MAPPER`，运行期会报 `column not found`；反过来先改代码后跑迁移，
+  服务会在 Flyway 之前查询失败。Flyway 在启动时先跑，所以"迁移 + mapper + 插入语句"一起提交即可
+- **受控词表/快照字段永远由服务端解析，客户端不可传**：`frequency_times` 若允许前端传，
+  计费天数与护理执行次数会各说各话；这类字段只接受业务意图（频次 code），次数由服务端算
 - **服务的 dev profile 必须自带内网令牌，否则起不来**：`HttpClinicalChargeClient` 构造时 fail-fast，
   缺 `pharmacy.clinical.internal-token` 直接 `IllegalStateException`。此前靠启动 shell 里的
   `PHARMACY_INTERNAL_TOKEN` 环境变量兜着，换一个干净 shell 就启动失败；已在

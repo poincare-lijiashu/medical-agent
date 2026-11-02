@@ -1432,6 +1432,35 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.57 已完成（2026-11-02，第七轮评审整改第五批：B2 长嘱数量口径）
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| B2 | `visit_order.quantity` 没有明确是"单次量"还是"每日/本次总量"，而按日计费每天按 `amount` 计一次；同一张长嘱在不同人眼里金额不同，护理执行次数也无依据 | 固化口径：**TEMP = 本次总量；LONG = 每日总量（amount = 每日金额）**；新增受控频次词表 `OrderFrequency` 与服务端 `frequency_times` 快照；长嘱必须给"每日执行"的标准频次，`prn/qod/tiw` 一律拒绝 |
+
+**关键实现**
+- `clinical V24__order_frequency.sql`：`visit_order.frequency_times`（1..24，默认 1，**客户端不可传**）+ 列注释固化数量口径。
+- `domain/OrderFrequency.java`：受控词表（qd/bid/tid/qid/q2h…q12h、hs/qn/st/once/prn/qod/tiw），
+  `daily=false` 的频次不允许用于长嘱——隔日/每周用药无法按日计费，只能开临时医嘱。
+- `OrderService`：解析频次并落规范化 code（`BID → bid`），快照 `frequencyTimes`；
+  临时医嘱频次可空（未知文本回落 1，不阻断历史数据）。
+- `GET /clinical/frequencies`：前端下拉与接口说明的**唯一真源**（不在前端硬编码）。
+- **长期药品医嘱不自动转药房**：一次转送只能生成一张处方、发一天量，而长嘱要连续执行多天；
+  按日请领/摆药链路尚未建设，静默只发一天会导致后续几天无药。现在长嘱药品 `transferStatus=NONE`
+  并明确拒绝 `transfer-retry`（提示按日请领或改开临时医嘱）；按日计费仍按天正常计。
+  临时药品医嘱不受影响，仍自动转药房。
+
+**实测**
+- 全量单测 **807 项**全绿（+5：`OrderServiceTest` 3 项、`OrderTransferServiceTest` 1 项、数量口径断言）
+- `scripts/e2e/clinical_long_order_smoke.ps1` **36 项断言全 PASS**：频次词表、长嘱金额=每日总量 24.00、
+  `BID → frequencyTimes=2`、缺频次/`prn`/`qod` 均 422、长嘱药品不生成处方且 retry 422、
+  临时药品仍 `TRANSFERRED`、按日计费 49.00 且重跑为 0
+- 回归：`platform_smoke`、`pharmacy_billing_smoke`、`clinical_pharmacy_order_smoke`、
+  `pharmacy_order_refund_smoke` 全 PASS
+- 真实库：`clinical_svc` 迁移到 **V24**
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

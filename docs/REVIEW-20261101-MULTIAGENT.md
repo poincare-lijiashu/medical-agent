@@ -144,7 +144,7 @@
 `clinical_surgery_charge_smoke`、`insurance_smoke`、`platform_smoke`、`kb_answer_smoke`；
 真实库迁移 `insurance_svc → V13`；反例：同清单进第二个 GENERATED 批次被触发器拒绝。
 
-**仍未整改（后续批次）**：B2（长嘱 quantity 口径，需业务口径决策）、E1（已由第三批修复）、B3（已由第四批修复），
+**仍未整改（后续批次）**：B2（已由第五批修复）、B3（已由第四批修复）、E1（已由第三批修复），
 以及其余 SHOULD-FIX。
 
 ### 第二批（2026-11-01 晚，测试与可靠性防线）
@@ -174,6 +174,13 @@
 **B3 的业务口径**：钱要跟着药走。未计费 → 结算时少收；已计费未结算 → 写红字明细并减少收费单总额；
 已结算 → 不动历史账，登记 `pending` 由财务确认退费（`done`）。全额退回且尚未计费的医嘱直接 `CANCELLED`，
 避免"药退了、结算又按原金额收一次"。
+
+### 第五批（2026-11-02，B2 长嘱数量口径）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| B2 | ✅ 已修复 | 固化口径 **TEMP=本次总量 / LONG=每日总量（amount=每日金额）**；`clinical V24` 增加 `frequency_times`（1..24，客户端不可传）；新增受控词表 `OrderFrequency`（qd/bid/tid…q12h、hs/qn、prn/qod/tiw）与 `GET /clinical/frequencies`；长嘱缺频次或非每日频次（prn/qod/tiw）一律 422；长期药品医嘱不自动转药房（一次转送只能发一天量），`transfer-retry` 明确拒绝 |
+| B2 验证 | ✅ | 单测 **807 项**全绿（+5）；`clinical_long_order_smoke.ps1` 36 项断言 PASS（长嘱金额=每日总量、`BID→2 次/日`、422 反例、长嘱药品无处方、临时药品照常转送、按日计费 49.00 且重跑 0）；`platform_smoke` / `pharmacy_*` 回归 PASS |
 
 ---
 
