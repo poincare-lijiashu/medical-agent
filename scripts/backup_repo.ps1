@@ -48,7 +48,10 @@ Rename-Item $tmpMirror "medical_agent.git"
 # shells -- failure here is a WARNING, not fatal: the verified mirror above is
 # the primary backup. Run from a normal terminal for the bundle copy.
 $bundle = Join-Path $dst "medical_agent_$stamp.bundle"
-git -C $src bundle create $bundle --all --force 2>$null | Out-Null
+# NOTE: `git bundle create` has no --force; an existing file makes it fail.
+# Remove today's file first (older dated bundles stay untouched).
+if (Test-Path $bundle) { Remove-Item -Force $bundle }
+git -C $src bundle create $bundle --all 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Output "WARN: bundle create failed (exit $LASTEXITCODE) -- mirror backup still valid"
 }
