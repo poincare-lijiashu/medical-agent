@@ -8,6 +8,8 @@ import com.medassist.common.security.InternalSignature;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.core.Ordered;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
@@ -20,7 +22,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -157,5 +161,108 @@ class InternalSignatureGlobalFilterTest {
         java.security.KeyPair attacker = ed25519();
         assertTrue(!InternalSignature.verifyEd25519(attacker.getPublic(), canonical,
                 request.getHeaders().getFirst(InternalSignature.HEADER_SIG)));
+    }
+
+    // ---------------------------------------------------------------- P0-8：请求体绑定（v1b/v2b）
+
+    private static InternalSignatureGlobalFilter bodyFilter(int maxBytes) {
+        return new InternalSignatureGlobalFilter(
+                new InternalAuthProperties(InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120,
+                        false, null, null, null, null, null, null, null, true, maxBytes),
+                InternalKeySet.parse(KEYS_JSON, new ObjectMapper()));
+    }
+
+    private static ServerWebExchange runBody(InternalSignatureGlobalFilter filter,
+                                             MockServerWebExchange exchange) {
+        AtomicReference<ServerWebExchange> captured = new AtomicReference<>();
+        GatewayFilterChain chain = current -> {
+            captured.set(current);
+            return Mono.empty();
+        };
+        filter.filter(exchange, chain).block();
+        return captured.get();
+    }
+
+    private static byte[] readBody(ServerHttpRequest request) {
+        return DataBufferUtils.join(request.getBody())
+                .map(buffer -> {
+                    byte[] bytes = new byte[buffer.readableByteCount()];
+                    buffer.read(bytes);
+                    DataBufferUtils.release(buffer);
+                    return bytes;
+                })
+                .block();
+    }
+
+    @Test
+    void bodyBoundSignatureCoversBodyAndKeepsItReadable() {
+        String json = "{\"items\":[{\"itemCode\":\"TRT-IV\",\"quantity\":1}]}";
+        byte[] payload = json.getBytes(StandardCharsets.UTF_8);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.post("http://gateway/api/v2/clinical/visits/1/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(AuthHeaders.ACTOR, "doctor01")
+                        .body(json));
+
+        ServerWebExchange forwarded = runBody(bodyFilter(1024 * 1024), exchange);
+        assertNotNull(forwarded);
+        ServerHttpRequest request = forwarded.getRequest();
+        String version = request.getHeaders().getFirst(InternalSignature.HEADER_SIG_VER);
+        assertEquals(InternalSignature.SIG_VERSION_GATEWAY_BODY, version);
+        assertArrayEquals(payload, readBody(request), "下游读到的必须是同一份字节");
+
+        Map<String, String> identity = new HashMap<>();
+        for (String header : InternalSignature.IDENTITY_HEADERS) {
+            identity.put(header, request.getHeaders().getFirst(header));
+        }
+        String canonical = InternalSignature.canonicalGateway(version, request.getMethod().name(),
+                request.getURI().getRawPath(), request.getURI().getRawQuery(), identity,
+                Long.parseLong(request.getHeaders().getFirst(InternalSignature.HEADER_TS)),
+                request.getHeaders().getFirst(InternalSignature.HEADER_NONCE),
+                InternalSignature.bodyHash(payload));
+        assertTrue(InternalSignature.verify(KEY, canonical,
+                request.getHeaders().getFirst(InternalSignature.HEADER_SIG)),
+                "按真实体摘要重算必须验签通过");
+
+        String withoutBody = InternalSignature.canonicalGateway(version, request.getMethod().name(),
+                request.getURI().getRawPath(), request.getURI().getRawQuery(), identity,
+                Long.parseLong(request.getHeaders().getFirst(InternalSignature.HEADER_TS)),
+                request.getHeaders().getFirst(InternalSignature.HEADER_NONCE),
+                InternalSignature.EMPTY_BODY_HASH);
+        assertFalse(InternalSignature.verify(KEY, withoutBody,
+                        request.getHeaders().getFirst(InternalSignature.HEADER_SIG)),
+                "签名必须绑定请求体，不能退化成阶段一的无体签名");
+    }
+
+    @Test
+    void oversizedBodyIsRejectedWith413() {
+        char[] payload = new char[4096];
+        java.util.Arrays.fill(payload, 'x');
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.post("http://gateway/api/v2/clinical/visits/1/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(new String(payload)));
+
+        AtomicReference<ServerWebExchange> captured = new AtomicReference<>();
+        bodyFilter(1024).filter(exchange, current -> {
+            captured.set(current);
+            return Mono.empty();
+        }).block();
+
+        assertNull(captured.get(), "超限请求不得进入路由");
+        assertEquals(413, exchange.getResponse().getStatusCode().value());
+    }
+
+    @Test
+    void multipartUploadsKeepStreamingAndSkipBodyDigest() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.post("http://gateway/api/v2/kb/spaces/1/documents")
+                        .contentType(MediaType.MULTIPART_FORM_DATA)
+                        .body("------x\r\ncontent\r\n------x--"));
+
+        ServerWebExchange forwarded = runBody(bodyFilter(1024 * 1024), exchange);
+        assertNotNull(forwarded);
+        assertEquals(InternalSignature.SIG_VERSION_GATEWAY_BODY,
+                forwarded.getRequest().getHeaders().getFirst(InternalSignature.HEADER_SIG_VER));
     }
 }

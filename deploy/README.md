@@ -187,28 +187,34 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
 该端点由 `AuthController` fail-closed 校验令牌、并由 NetworkPolicy 限制为仅网关可达，
 因此 Chart 对 **auth** 单独下发 `MEDASSIST_INTERNALAUTH_EXEMPTPATHS`（含 health/info/prometheus + revocations）。
 
-#### 请求体绑定（P0-8，签名版本 v1i2）
+#### 请求体绑定（P0-8，签名版本 v1i2 / v1b / v2b）
 
 服务间签名最初只覆盖"方法 + 路径 + 查询串 + caller + 时间戳 + nonce"，请求体摘要固定为 `-`，
-内网在途改写医嘱/处方/计费 POST 体**不会破坏签名**。现在按版本化协议升级：
+内网在途改写医嘱/处方/计费 POST 体**不会破坏签名**。现在按版本化协议升级，两条通道各自独立：
 
-| 版本 | 规范串 | 谁签发 |
-|---|---|---|
-| `v1i` | 末行为 `-` | `bodyHashRequired=false`（旧行为） |
-| `v1i2` | 末行为请求体 SHA-256（Base64URL，空体为 `-`） | `bodyHashRequired=true` |
+| 通道 | 版本 | 规范串末行 | 谁签发 |
+|---|---|---|---|
+| 服务→服务（`/internal/**`） | `v1i` | `-` | `bodyHashRequired=false`（旧行为） |
+| 服务→服务（`/internal/**`） | `v1i2` | 请求体 SHA-256（Base64URL，空体为 `-`） | `bodyHashRequired=true` |
+| 网关→服务（HMAC） | `v1` / `v1b` | `-` / 请求体 SHA-256 | 网关按 `bodyHashRequired` 自动选择 |
+| 网关→服务（Ed25519） | `v2` / `v2b` | `-` / 请求体 SHA-256 | 同上（生产终态 `gatewaySigning=ed25519` → `v2b`） |
 
-- 入站在**开关关闭**时同时接受 `v1i` 与 `v1i2`（`v1i2` 仍强制校验摘要）；
-- 入站在**开关打开**时只接受 `v1i2`，旧版请求返回 `body_hash_required`（403）；
-- 版本行参与签名，把 `v1i2` 改成 `v1i` 会直接验签失败，无法降级绕过；
+- 入站在**开关关闭**时同时接受带体与不带体版本（带体版本仍强制校验摘要）；
+- 入站在**开关打开**时只接受带体版本，旧版请求返回 `body_hash_required`（403）；
+- 版本行参与签名，把 `v2b` 改成 `v2` / `v1i2` 改成 `v1i` 都会直接验签失败，无法降级绕过；
 - 验签前会缓存请求体（上限 `internalAuth.bodyHashMaxBytes`，默认 1MB），
-  超限按 `body_too_large` 拒绝——**不允许**退化成"读不到 body 就跳过校验"。
+  超限按 `body_too_large`（服务侧）/ **413**（网关侧）拒绝——**不允许**退化成"读不到 body 就跳过校验"；
+- 网关侧（WebFlux）无法"边转发边出签名"，因此先把 body 聚合进内存、摘要入签名后，
+  **用同一份缓存字节**重建下游请求体，保证"下游读到的字节 == 签名覆盖的字节"；
+- **上传类例外**：`multipart/*` 与二进制流两侧约定不摘要（摘要行固定 `-`），
+  避免网关为大文件聚合出内存峰值；文件完整性由上传接口自身的校验/大小限制与 TLS 保证。
 
 **上线顺序（三段）**：① 先发布服务端（`bodyHashRequired=false`，两种版本都收）→
-② 全部调用方升级完成（此时它们已签 `v1i2`）→ ③ 服务端与调用方同时置 `true`。
+② 全部调用方升级完成 → ③ 服务端与网关（及调用方）同时置 `true`。
 `values-prod` / `values-staging` 已是终态 `true`（Chart 一次性发布全部服务，签名双方同版本自洽）。
 
-> 范围说明：本项覆盖 servlet 侧的 `/internal/**` 服务间通道。网关 → 业务服务的通道（`v1`/`v2`）
-> 由网关签名，若要同样绑定请求体需要 WebFlux 侧缓存 `DataBuffer`，留作后续批次。
+> 注意：`bodyHashRequired=true` 与 `internalPathsSignatureRequired=false` 是**合法组合**——
+> 前者只强制网关通道带体签名，后者控制服务→服务通道是否强制；两条通道互不依赖。
 
 服务间地址与令牌矩阵（新增调用边必须"地址 + 网络策略 + 调用方密钥"三件套齐全）：
 

@@ -141,7 +141,28 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 result = verifyCaller(request);
             }
         } else {
-            result = verifyGateway(request);
+            // P0-8：网关通道同样支持"签名覆盖请求体"（v1b/v2b）。只对声明了带体版本、
+            // 且体可摘要（非上传类）的请求做 body 缓存，旧的 v1/v2 流量零额外开销。
+            if (InternalSignature.isGatewayBodyVersion(
+                    request.getHeader(InternalSignature.HEADER_SIG_VER))
+                    && InternalSignature.isBodyHashable(request.getContentType())) {
+                CachedBodyHttpServletRequest cached = null;
+                String wrapFailure = null;
+                try {
+                    cached = CachedBodyHttpServletRequest.wrap(request,
+                            props.bodyHashMaxBytesOrDefault());
+                } catch (IOException e) {
+                    wrapFailure = "body_unreadable";
+                }
+                if (cached != null) {
+                    effective = cached;
+                    result = verifyGateway(effective);
+                } else {
+                    result = wrapFailure == null ? "body_too_large" : wrapFailure;
+                }
+            } else {
+                result = verifyGateway(request);
+            }
         }
         request.setAttribute(ATTR_RESULT, result);
         count(result);
@@ -164,7 +185,8 @@ public class InternalAuthFilter extends OncePerRequestFilter {
 
     // ---------------------------------------------------------------- 校验
 
-    /** @return ok / missing / bad_version / unknown_key / skew / replay / bad_sig */
+    /** @return ok / missing / bad_version / body_hash_required / body_unreadable /
+     *          unknown_key / skew / replay / bad_sig */
     private String verifyGateway(HttpServletRequest request) {
         String version = request.getHeader(InternalSignature.HEADER_SIG_VER);
         String keyId = request.getHeader(InternalSignature.HEADER_KEY_ID);
@@ -175,20 +197,25 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 || isBlank(nonce) || isBlank(signature)) {
             return "missing";
         }
-        // v2（Ed25519）：业务服务只持公钥，无法伪造网关身份（第五轮 R5-M3）；
-        // v1（HMAC）：过渡期继续接受，便于"先升级服务、再切换网关算法"的分步上线。
-        boolean v2 = InternalSignature.SIG_VERSION_GATEWAY_ED25519.equals(version);
+        // v2/v2b（Ed25519）：业务服务只持公钥，无法伪造网关身份（第五轮 R5-M3）；
+        // v1/v1b（HMAC）：过渡期继续接受，便于"先升级服务、再切换网关算法"的分步上线。
+        boolean bodyBound = InternalSignature.isGatewayBodyVersion(version);
+        boolean v2 = InternalSignature.isGatewayEd25519Version(version);
+        if (!bodyBound && !InternalSignature.SIG_VERSION.equals(version)
+                && !InternalSignature.SIG_VERSION_GATEWAY_ED25519.equals(version)) {
+            return "bad_version";
+        }
+        if (props.bodyHashRequiredOrDefault() && !bodyBound) {
+            return "body_hash_required";
+        }
         if (v2) {
             if (gatewayPublicKey == null) {
                 return "unknown_key";
             }
-        } else if (!InternalSignature.SIG_VERSION.equals(version)) {
-            return "bad_version";
-        }
-        String secret = v2 ? null : keySet.secret(keyId);
-        if (!v2 && secret == null) {
+        } else if (keySet.secret(keyId) == null) {
             return "unknown_key";
         }
+        String secret = v2 ? null : keySet.secret(keyId);
 
         long ts;
         try {
@@ -201,13 +228,17 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             return "skew";
         }
 
-        String canonical = v2
-                ? InternalSignature.canonicalGatewayV2(request.getMethod(), path(request),
-                        request.getQueryString(), identityHeaders(request), ts, nonce,
-                        InternalSignature.EMPTY_BODY_HASH)
-                : InternalSignature.canonical(request.getMethod(), path(request),
-                        request.getQueryString(), identityHeaders(request), ts, nonce,
-                        InternalSignature.EMPTY_BODY_HASH);
+        String bodyHash = InternalSignature.EMPTY_BODY_HASH;
+        if (bodyBound && InternalSignature.isBodyHashable(request.getContentType())) {
+            if (!(request instanceof CachedBodyHttpServletRequest cached)) {
+                // 理论上不会发生：doFilterInternal 已按版本头包装；防御性返回拒绝原因
+                return "body_unreadable";
+            }
+            bodyHash = InternalSignature.bodyHash(cached.body());
+        }
+        String canonical = InternalSignature.canonicalGateway(version, request.getMethod(),
+                path(request), request.getQueryString(), identityHeaders(request), ts, nonce,
+                bodyHash);
         boolean valid = v2
                 ? InternalSignature.verifyEd25519(gatewayPublicKey, canonical, signature)
                 : InternalSignature.verify(secret, canonical, signature);

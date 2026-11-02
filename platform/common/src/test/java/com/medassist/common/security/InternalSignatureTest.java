@@ -182,6 +182,38 @@ class InternalSignatureTest {
     }
 
     @Test
+    void gatewayVersionHelpersAndBodyHashability() {
+        assertTrue(InternalSignature.isGatewayBodyVersion(InternalSignature.SIG_VERSION_GATEWAY_BODY));
+        assertTrue(InternalSignature.isGatewayBodyVersion(
+                InternalSignature.SIG_VERSION_GATEWAY_ED25519_BODY));
+        assertFalse(InternalSignature.isGatewayBodyVersion(InternalSignature.SIG_VERSION));
+        assertFalse(InternalSignature.isGatewayBodyVersion(
+                InternalSignature.SIG_VERSION_GATEWAY_ED25519));
+
+        assertTrue(InternalSignature.isGatewayEd25519Version(
+                InternalSignature.SIG_VERSION_GATEWAY_ED25519_BODY));
+        assertFalse(InternalSignature.isGatewayEd25519Version(
+                InternalSignature.SIG_VERSION_GATEWAY_BODY));
+
+        // 体摘要判据必须两侧一致：JSON/表单/文本摘要，上传类不摘要
+        assertTrue(InternalSignature.isBodyHashable("application/json;charset=UTF-8"));
+        assertTrue(InternalSignature.isBodyHashable("application/x-www-form-urlencoded"));
+        assertTrue(InternalSignature.isBodyHashable(null));
+        assertFalse(InternalSignature.isBodyHashable("multipart/form-data; boundary=x"));
+        assertFalse(InternalSignature.isBodyHashable("application/octet-stream"));
+        assertFalse(InternalSignature.isBodyHashable("image/png"));
+
+        // 版本行参与签名：同一份请求换版本号后签名必须不同
+        String v1b = InternalSignature.canonicalGateway(InternalSignature.SIG_VERSION_GATEWAY_BODY,
+                "POST", "/clinical/orders", null, identity(), 1793512800L, "n", "BODYHASH");
+        String v2b = InternalSignature.canonicalGateway(
+                InternalSignature.SIG_VERSION_GATEWAY_ED25519_BODY, "POST", "/clinical/orders",
+                null, identity(), 1793512800L, "n", "BODYHASH");
+        assertEquals(v1b.substring(4), v2b.substring(4));
+        assertTrue(v1b.endsWith("\nBODYHASH"));
+    }
+
+    @Test
     void ed25519SignVerifyRoundTripAndTamperDetection() throws Exception {
         java.security.KeyPair pair = ed25519();
         String canonical = InternalSignature.canonicalGatewayV2("GET", "/clinical/visits", null,

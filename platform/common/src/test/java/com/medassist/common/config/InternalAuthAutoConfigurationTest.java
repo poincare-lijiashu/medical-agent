@@ -206,17 +206,19 @@ class InternalAuthAutoConfigurationTest {
     }
 
     @Test
-    void rejectsBodyHashRequiredWithoutCallerSignature() {
-        // P0-8：体绑定只对 /internal/** 调用方签名生效，开关组合矛盾必须拒启（否则形同虚设）
+    void allowsBodyHashRequiredWithoutCallerSignatureForGatewayChannel() {
+        // P0-8：体绑定对"网关通道（v1b/v2b）"与"调用方通道（v1i2）"各自独立生效，
+        // 只开体绑定、暂不强制 /internal 调用方签名是合法灰度组合（网关流量已必须带体）。
         runner.withPropertyValues(
+                        "spring.application.name=platform-clinical",
                         "medassist.internal-auth.mode=log",
                         "medassist.internal-auth.keys-json=" + KEYS_JSON_WITH_INTERNAL,
                         "medassist.internal-auth.body-hash-required=true",
                         "medassist.internal-auth.internal-paths-signature-required=false")
                 .run(context -> {
-                    assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure())
-                            .hasMessageContaining("body-hash-required");
+                    assertThat(context).hasNotFailed();
+                    InternalCallerSigner signer = context.getBean(InternalCallerSigner.class);
+                    assertThat(signer.configured()).isTrue();
                 });
     }
 

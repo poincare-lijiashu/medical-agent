@@ -28,7 +28,9 @@
 > P0-7 ai-core 改 Recreate + PDB、P0-9 生产强制 `/internal/**` 调用方签名 + callerKeys 矩阵修正、
 > P0-10 EMPI dev 密钥守卫 + `SecurityDefaults` 缺省即生产；**P0-8 已覆盖服务→服务通道**
 > （签名版本 v1i2：请求体 SHA-256 纳入规范串，开关 `internal-auth.body-hash-required`，
-> prod/staging 终态 true）；**仅剩网关通道（v1/v2）的请求体绑定**（WebFlux 缓存 DataBuffer，下一批）。
+> prod/staging 终态 true）；**网关通道 v1b/v2b 也已完成体绑定**（WebFlux 侧聚合 body → 摘要入规范串 →
+> 用同一份字节重建请求体；超 `body-hash-max-bytes` 直接 413；multipart 按约定不摘要）。
+> **P0-8 已全通道收口**。
 > **P1-1 已全链闭环**：`clinical V30` 按日计费红冲（`POST /visits/{id}/daily-bill/reverse`）+
 > `clinical V31` 护理执行更正（`POST /inpatient/admissions/{id}/nursing-executions/{executionId}/correction`，
 > 追加式更正表、每条执行记录只允许更正一次、「已执行→拒绝」自动联动红冲且同事务回滚保护）。
@@ -46,6 +48,9 @@
 > `MEDASSIST_INTERNALAUTH_MODE=enforce`、`..._KEYSJSON={"active":"k1","keys":{"k1":"<base64 32B>"}}`、
 > `..._INTERNALPATHSSIGNATUREREQUIRED=true`、`..._BODYHASHREQUIRED=true`、`..._CALLERKEYS_<SELF>/<CALLER>`；
 > **JSON 值必须用环境变量传**（PowerShell 命令行参数会吃掉双引号导致解析失败）。
+> 本机验证**网关体绑定**（P0-8）：网关与目标服务同时设 `MODE=enforce` + `KEYSJSON` + `BODYHASHREQUIRED=true`
+> （服务侧不必开 `INTERNALPATHSSIGNATUREREQUIRED`——两条通道各自独立生效），跑 `clinical_long_order_smoke`
+> 全 PASS 即为正向证据；负向用直连 clinical 的 v1b 签名（正确体→非 403，篡改体→403 `bad_sig`）。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -67,7 +72,7 @@
   `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
   `2dbd8ab`（**危急值定向查询与网关下游超时**）、`d3daaec`（**权限矩阵单测与部署硬化**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **916 项**全绿（另有 3 项真库集成测试，`-Ppostgres-it`）
+- 工作区：clean（收工前已确认）；全量单测 **925 项**全绿（另有 3 项真库集成测试，`-Ppostgres-it`）
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar；启动必须带 `INTERNAL_API_TOKEN`）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V4**、`clinical_svc` → **V31**、

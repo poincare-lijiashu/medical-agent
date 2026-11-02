@@ -78,11 +78,12 @@ public class InternalAuthAutoConfiguration {
                     "medassist.internal-auth.internal-paths-signature-required=true 但本服务调用方 "
                             + caller + " 无密钥（keys-json.internal." + caller + "），服务拒绝启动");
         }
-        // P0-8：体绑定依赖调用方签名，两者必须同时开启，否则开关形同虚设（配置矛盾直接拒启）
+        // P0-8：体绑定分两条通道各自生效——网关通道（v1b/v2b）与调用方通道（v1i2）。
+        // 因此"只开体绑定、暂不强制 /internal 调用方签名"是合法灰度组合：
+        // 网关流量已必须带体版本，服务→服务方向尚未强制，不是配置矛盾。
         if (props.bodyHashRequiredOrDefault() && !required) {
-            throw new IllegalStateException(
-                    "medassist.internal-auth.body-hash-required=true 但 internal-paths-signature-required=false："
-                            + "请求体绑定只对 /internal/** 调用方签名生效，请同时开启，服务拒绝启动");
+            log.info("internal-auth.body-hash-required=true 但 internal-paths-signature-required=false："
+                    + "仅网关通道强制带体签名（v1b/v2b），调用方通道仍处于灰度（v1i 可接受）");
         }
         log.info("internal-auth.caller={} signing={} bodyHash={}",
                 caller, secret != null ? "configured" : "none",

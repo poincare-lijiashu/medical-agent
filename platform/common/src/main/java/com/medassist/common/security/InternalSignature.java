@@ -33,8 +33,10 @@ import java.util.TreeMap;
  * &lt;X-Internal-Ts&gt; / &lt;X-Internal-Nonce&gt; / &lt;body hash&gt;
  * </pre>
  *
- * <p>阶段一限制：网关通道（v1/v2）的请求体摘要仍固定为 {@code "-"}（WebFlux 侧缓存 body 留待后续）；
- * 服务→服务通道已升级为 {@link #SIG_VERSION_CALLER_BODY v1i2}，把请求体 SHA-256 纳入规范串（P0-8）。
+ * <p>阶段一限制：网关通道（v1/v2）的请求体摘要固定为 {@code "-"}；
+ * 服务→服务通道已升级为 {@link #SIG_VERSION_CALLER_BODY v1i2}，网关通道升级为
+ * {@link #SIG_VERSION_GATEWAY_BODY v1b} / {@link #SIG_VERSION_GATEWAY_ED25519_BODY v2b}，
+ * 均把请求体 SHA-256 纳入规范串（P0-8）。
  * 多副本部署时 nonce 去重需改 Redis，内存实现仅适合单副本或 log 灰度期。
  */
 public final class InternalSignature {
@@ -54,6 +56,16 @@ public final class InternalSignature {
      * 因此同一份"下游视角"的请求在不同算法下签出的覆盖范围相同。
      */
     public static final String SIG_VERSION_GATEWAY_ED25519 = "v2";
+    /**
+     * 网关签名 v1b（P0-8）：在 v1 基础上把**请求体 SHA-256** 纳入规范串。
+     *
+     * <p>与 v1i2 同样的灰度策略：先升级服务端（同时接受 v1/v2/v1b/v2b）→ 再升级网关 →
+     * 最后用 {@code body-hash-required} 强制只收带体版本。分开版本号是为了避免
+     * "网关已升级、业务服务未升级"时全平台 403。
+     */
+    public static final String SIG_VERSION_GATEWAY_BODY = "v1b";
+    /** 网关签名 v2b：Ed25519 + 请求体摘要（生产终态）。 */
+    public static final String SIG_VERSION_GATEWAY_ED25519_BODY = "v2b";
     /** 调用方签名版本（规范串结构与网关通道不同：不含身份头，改为绑定 caller）。 */
     public static final String SIG_VERSION_CALLER = "v1i";
     /**
@@ -111,7 +123,52 @@ public final class InternalSignature {
                 identityHeaders, timestamp, nonce, bodyHash);
     }
 
-    private static String canonicalGateway(String version, String method, String path, String query,
+    /**
+     * 网关通道规范串（v1 / v2 / v1b / v2b）：版本行由调用方指定并参与签名。
+     *
+     * <p>为什么版本行必须进规范串：否则攻击者可以把 {@code X-Internal-Sig-Ver} 从 v2b 改成 v2，
+     * 让校验器按"不绑定请求体"的规则重算，从而把体绑定降级掉。
+     */
+    public static String canonicalGateway(String version, String method, String path, String query,
+                                          Map<String, String> identityHeaders,
+                                          long timestamp, String nonce, String bodyHash) {
+        return canonicalGatewayV1(version, method, path, query, identityHeaders, timestamp, nonce,
+                bodyHash);
+    }
+
+    /** 网关签名版本是否绑定了请求体（v1b / v2b）。 */
+    public static boolean isGatewayBodyVersion(String version) {
+        return SIG_VERSION_GATEWAY_BODY.equals(version)
+                || SIG_VERSION_GATEWAY_ED25519_BODY.equals(version);
+    }
+
+    /** 网关签名版本是否使用 Ed25519（v2 / v2b）。 */
+    public static boolean isGatewayEd25519Version(String version) {
+        return SIG_VERSION_GATEWAY_ED25519.equals(version)
+                || SIG_VERSION_GATEWAY_ED25519_BODY.equals(version);
+    }
+
+    /**
+     * 请求体是否参与签名摘要。
+     *
+     * <p>为什么把上传类排除：网关是 WebFlux，要签请求体就必须先把整个 body 聚合进内存
+     * （WebFlux 无法"边转发边出签名"），大文件上传会直接把网关内存打满。
+     * 因此 {@code multipart/*} 与二进制流按约定**两侧都不摘要**（摘要行固定 {@code "-"}），
+     * 文件完整性由上传接口自身的校验/大小限制与 TLS 保证；JSON 等业务写请求一律摘要。
+     *
+     * <p>两侧必须用同一判据，否则网关签 v2b + "-"、服务端按实际 body 重算 → 全部 403。
+     */
+    public static boolean isBodyHashable(String contentType) {
+        if (contentType == null || contentType.isBlank()) {
+            return true;
+        }
+        String ct = contentType.trim().toLowerCase(java.util.Locale.ROOT);
+        return ct.startsWith("application/json")
+                || ct.startsWith("application/x-www-form-urlencoded")
+                || ct.startsWith("text/");
+    }
+
+    private static String canonicalGatewayV1(String version, String method, String path, String query,
                                            Map<String, String> identityHeaders,
                                            long timestamp, String nonce, String bodyHash) {
         StringBuilder sb = new StringBuilder(256);

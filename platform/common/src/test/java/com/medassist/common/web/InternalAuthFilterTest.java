@@ -631,4 +631,118 @@ class InternalAuthFilterTest {
         assertNull(chain.getRequest());
         assertEquals("body_too_large", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
     }
+
+    // ---------------------------------------------------------------- P0-8：网关通道体绑定（v1b/v2b）
+
+    /** 网关通道：内部路径签名关闭、只开"要求体绑定"。 */
+    private static InternalAuthFilter gatewayBodyFilter(boolean required) {
+        InternalAuthProperties props = new InternalAuthProperties(
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null,
+                null, null, null, required, 1024 * 1024);
+        return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
+                null);
+    }
+
+    /** 按网关 v1b 规则签名：请求体 SHA-256 纳入规范串。 */
+    private static void signGatewayWithBody(MockHttpServletRequest request, String secret,
+                                            String keyId, long timestamp, String nonce,
+                                            String bodyHash, String version) {
+        String canonical = InternalSignature.canonicalGateway(version, request.getMethod(),
+                request.getRequestURI(), request.getQueryString(), identity(request), timestamp,
+                nonce, bodyHash);
+        request.addHeader(InternalSignature.HEADER_SIG_VER, version);
+        request.addHeader(InternalSignature.HEADER_KEY_ID, keyId);
+        request.addHeader(InternalSignature.HEADER_TS, Long.toString(timestamp));
+        request.addHeader(InternalSignature.HEADER_NONCE, nonce);
+        request.addHeader(InternalSignature.HEADER_SIG, InternalSignature.sign(secret, canonical));
+    }
+
+    @Test
+    void gatewayBodyBoundSignatureAcceptedAndBodyRemainsReadable() throws Exception {
+        String json = "{\"items\":[{\"itemCode\":\"TRT-IV\",\"quantity\":1}]}";
+        MockHttpServletRequest request = request("POST", "/clinical/visits/1/orders");
+        request.setContentType("application/json;charset=UTF-8");
+        request.setContent(json.getBytes(StandardCharsets.UTF_8));
+        signGatewayWithBody(request, KEY_2, "k2", now(), "gw-body-ok",
+                InternalSignature.bodyHash(request.getContentAsByteArray()),
+                InternalSignature.SIG_VERSION_GATEWAY_BODY);
+
+        java.util.concurrent.atomic.AtomicReference<String> seen = new java.util.concurrent.atomic.AtomicReference<>();
+        jakarta.servlet.http.HttpServlet servlet = new jakarta.servlet.http.HttpServlet() {
+            @Override
+            protected void service(jakarta.servlet.http.HttpServletRequest req,
+                                   jakarta.servlet.http.HttpServletResponse resp)
+                    throws java.io.IOException {
+                seen.set(req.getReader().lines().collect(java.util.stream.Collectors.joining()));
+            }
+        };
+        MockFilterChain chain = new MockFilterChain(servlet);
+        gatewayBodyFilter(true).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest(), "v1b 正确签名必须放行");
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+        assertEquals(json, seen.get(), "验签后业务侧仍必须读到同一份请求体");
+    }
+
+    @Test
+    void gatewayBodyBoundSignatureRejectsTamperedBody() throws Exception {
+        MockHttpServletRequest request = request("POST", "/clinical/visits/1/orders");
+        request.setContentType("application/json");
+        request.setContent("{\"quantity\":1}".getBytes(StandardCharsets.UTF_8));
+        signGatewayWithBody(request, KEY_2, "k2", now(), "gw-body-tampered",
+                InternalSignature.bodyHash(request.getContentAsByteArray()),
+                InternalSignature.SIG_VERSION_GATEWAY_BODY);
+        // 在途改写医嘱体：签名不变，摘要不再匹配
+        request.setContent("{\"quantity\":99}".getBytes(StandardCharsets.UTF_8));
+
+        MockFilterChain chain = new MockFilterChain();
+        gatewayBodyFilter(true).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNull(chain.getRequest(), "篡改请求体必须验签失败");
+        assertEquals("bad_sig", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void gatewayLegacyV1RejectedWhenBodyHashRequired() throws Exception {
+        MockHttpServletRequest request = request("POST", "/clinical/visits/1/orders");
+        request.setContentType("application/json");
+        request.setContent("{\"quantity\":1}".getBytes(StandardCharsets.UTF_8));
+        sign(request, KEY_2, "k2", now(), "gw-legacy-required");
+
+        MockFilterChain chain = new MockFilterChain();
+        gatewayBodyFilter(true).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNull(chain.getRequest(), "强制体绑定时网关也必须用 v1b/v2b");
+        assertEquals("body_hash_required", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void gatewayLegacyV1StillAcceptedDuringGradualRollout() throws Exception {
+        MockHttpServletRequest request = request("POST", "/clinical/visits/1/orders");
+        request.setContentType("application/json");
+        request.setContent("{\"quantity\":1}".getBytes(StandardCharsets.UTF_8));
+        sign(request, KEY_2, "k2", now(), "gw-legacy-rollout");
+
+        MockFilterChain chain = new MockFilterChain();
+        gatewayBodyFilter(false).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest(), "灰度期必须同时接受 v1 与 v1b");
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void gatewayMultipartUploadsAreSignedWithoutBodyDigest() throws Exception {
+        MockHttpServletRequest request = request("POST", "/kb/spaces/1/documents");
+        request.setContentType("multipart/form-data; boundary=----x");
+        request.setContent("------x\r\ncontent\r\n------x--".getBytes(StandardCharsets.UTF_8));
+        // 上传类两侧都按 EMPTY_BODY_HASH 约定签名（避免网关把大文件聚合进内存）
+        signGatewayWithBody(request, KEY_2, "k2", now(), "gw-upload",
+                InternalSignature.EMPTY_BODY_HASH, InternalSignature.SIG_VERSION_GATEWAY_BODY);
+
+        MockFilterChain chain = new MockFilterChain();
+        gatewayBodyFilter(true).doFilter(request, new MockHttpServletResponse(), chain);
+
+        assertNotNull(chain.getRequest(), "multipart 不能因为强制体绑定而全部 403");
+        assertEquals("ok", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
 }
