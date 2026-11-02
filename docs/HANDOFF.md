@@ -37,9 +37,10 @@
 > **P1 已全部收口**（P1-9 价格为"封顶 + 巡检"防御式收口）。
 > **P2 已开工**：jti 缺失的令牌直接 401（撤销名单无法覆盖 → 登出后仍可用）、
 > `reveal=true` 的 PHI 明文明读必须带真实 `X-Actor`（system 兜底一律 422，审计不再无主责）、
-> 转送补偿任务改 `FOR UPDATE SKIP LOCKED` + 租约抢占（`clinical V32`，多副本不再把 attempts 放大而误判 FAILED）。
-> 剩余 P2 优先项：病区退药未联动药房退药、并发 E2E、前端七页、分页协议统一、
-> `HttpPatientClient` 5 份拷贝收敛、Clock 注入。
+> 转送补偿任务改 `FOR UPDATE SKIP LOCKED` + 租约抢占（`clinical V32`，多副本不再把 attempts 放大而误判 FAILED）、
+> 病区退药联动药房批次退药与医嘱金额回冲（药房新内网接口 `/internal/prescriptions/ward-returns`，
+> 临床在**事务提交后**推送，避免药房回调临床冲减时与 visit 行锁互等）。
+> 剩余 P2 优先项：并发 E2E、前端七页、分页协议统一、`HttpPatientClient` 5 份拷贝收敛、Clock 注入。
 > 9 个 Java 服务**当前运行中**（本机验证用，均以 `--spring.profiles.active=dev` 启动）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
 > §1.55~§1.60 的 E2E 回归**均已通过**：
@@ -77,7 +78,7 @@
   `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
   `2dbd8ab`（**危急值定向查询与网关下游超时**）、`d3daaec`（**权限矩阵单测与部署硬化**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **932 项**全绿（另有 4 项真库集成测试，`-Ppostgres-it`）
+- 工作区：clean（收工前已确认）；全量单测 **935 项**全绿（另有 4 项真库集成测试，`-Ppostgres-it`）
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar；启动必须带 `INTERNAL_API_TOKEN`）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V4**、`clinical_svc` → **V32**、

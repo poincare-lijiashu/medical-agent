@@ -29,6 +29,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -54,6 +55,9 @@ class DailyDispenseServiceTest {
         repo = mock(ClinicalRepository.class);
         pharmacyClient = mock(PharmacyOrderClient.class);
         service = new DailyDispenseService(repo, pharmacyClient, JsonMapper.builder().build());
+        // 病区退药会联动药房退药（P2-1）：默认回执成功，具体参数由各用例断言
+        when(pharmacyClient.returnWardDrug(any(), any(), any(), anyInt(), any(), any(), any()))
+                .thenReturn(new PharmacyOrderClient.WardReturnRef(UUID.randomUUID(), 0, 0));
     }
 
     private Visit visit(String type, String status) {
@@ -403,6 +407,9 @@ class DailyDispenseServiceTest {
         assertThat(view.receiptStatus()).isEqualTo(WardMedReceipt.RETURNED);
         verify(repo).insertWardReturn(any());
         verify(repo).insertWardStockTxn(any());
+        // P2-1：一次退药必须同时回补药房批次库存（按医嘱+供药日+药品编码定位处方）
+        verify(pharmacyClient).returnWardDrug(eq(receipt.orderId()), eq(receipt.supplyDate()),
+                eq(order.itemCode()), eq(2), eq("患者拒服"), any(), eq("nurse01"));
     }
 
     @Test

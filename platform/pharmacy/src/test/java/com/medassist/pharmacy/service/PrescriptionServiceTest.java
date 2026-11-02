@@ -927,4 +927,117 @@ class PrescriptionServiceTest {
                 enabled ? null : "admin01", enabled ? null : Instant.now(),
                 enabled ? null : "离职", enabled, 0L);
     }
+
+    // ---------------------------------------------------------------- 病区退药（P2-1）
+
+    private static UUID subReturnId(UUID returnId, UUID dispenseItemId) {
+        return UUID.nameUUIDFromBytes((returnId + ":" + dispenseItemId)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private PrescriptionItem amoxLine(UUID prescriptionId, int quantity) {
+        return new PrescriptionItem(UUID.randomUUID(), prescriptionId, drugId,
+                "DRUG-AMOX-025", "阿莫西林胶囊", "0.25g*24粒", quantity, "盒", null, null, null,
+                new BigDecimal("12.50"), new BigDecimal("25.00"), null, null, null, null);
+    }
+
+    private DispenseItem batchItem(UUID dispenseId, UUID prescriptionItemId, String batchNo,
+                                   int quantity, int returned) {
+        return new DispenseItem(UUID.randomUUID(), dispenseId, prescriptionItemId, drugId,
+                UUID.randomUUID(), batchNo, LocalDate.now().plusMonths(6), quantity, returned,
+                new BigDecimal("12.50"), new BigDecimal("25.00"));
+    }
+
+    @Test
+    @DisplayName("病区退药：按批次分摊退回，子单号由 returnId+明细派生")
+    void wardReturnAllocatesAcrossBatches() {
+        UUID orderId = UUID.randomUUID();
+        LocalDate day = LocalDate.now();
+        Prescription rx = rx(Prescription.DISPENSED, new BigDecimal("50.00"), 2L);
+        Dispense dispense = dispense(Dispense.DISPENSED);
+        PrescriptionItem line = amoxLine(rx.id(), 4);
+        DispenseItem b1 = batchItem(dispense.id(), line.id(), "B1", 2, 0);
+        DispenseItem b2 = batchItem(dispense.id(), line.id(), "B2", 2, 0);
+        when(repo.findPrescriptionBySourceOrder(orderId, day)).thenReturn(Optional.of(rx));
+        when(repo.findDispenseByPrescription(rx.id())).thenReturn(Optional.of(dispense));
+        when(repo.listPrescriptionItems(rx.id())).thenReturn(List.of(line));
+        when(repo.listDispenseItems(dispense.id())).thenReturn(List.of(b1, b2));
+        when(repo.findReturn(any())).thenReturn(Optional.empty());
+
+        PrescriptionService spy = org.mockito.Mockito.spy(service);
+        org.mockito.Mockito.doReturn(null).when(spy).returnDrug(any(), any(), any());
+        UUID returnId = UUID.randomUUID();
+
+        var view = spy.returnWardDrug(new com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq(
+                orderId, day, "DRUG-AMOX-025", 3, "患者拒服", returnId), "nurse01");
+
+        assertThat(view.returnedQuantity()).isEqualTo(3);
+        verify(spy).returnDrug(eq(dispense.id()), org.mockito.ArgumentMatchers.argThat(
+                r -> r.quantity() == 2 && r.returnId().equals(subReturnId(returnId, b1.id()))),
+                eq("nurse01"));
+        verify(spy).returnDrug(eq(dispense.id()), org.mockito.ArgumentMatchers.argThat(
+                r -> r.quantity() == 1 && r.returnId().equals(subReturnId(returnId, b2.id()))),
+                eq("nurse01"));
+    }
+
+    @Test
+    @DisplayName("病区退药重放：已处理过的批次跳过，只补退剩余数量")
+    void wardReturnReplaySkipsAlreadyReturnedBatches() {
+        UUID orderId = UUID.randomUUID();
+        LocalDate day = LocalDate.now();
+        Prescription rx = rx(Prescription.DISPENSED, new BigDecimal("50.00"), 2L);
+        Dispense dispense = dispense(Dispense.DISPENSED);
+        PrescriptionItem line = amoxLine(rx.id(), 4);
+        DispenseItem b1 = batchItem(dispense.id(), line.id(), "B1", 2, 0);
+        DispenseItem b2 = batchItem(dispense.id(), line.id(), "B2", 2, 0);
+        when(repo.findPrescriptionBySourceOrder(orderId, day)).thenReturn(Optional.of(rx));
+        when(repo.findDispenseByPrescription(rx.id())).thenReturn(Optional.of(dispense));
+        when(repo.listPrescriptionItems(rx.id())).thenReturn(List.of(line));
+        when(repo.listDispenseItems(dispense.id())).thenReturn(List.of(b1, b2));
+        UUID returnId = UUID.randomUUID();
+        // 第一轮已退 b1 的 2 支：重放时必须跳过，不能重复回补批次库存
+        when(repo.findReturn(subReturnId(returnId, b1.id()))).thenReturn(Optional.of(
+                new DispenseReturn(subReturnId(returnId, b1.id()), dispense.id(), b1.id(), 2,
+                        "患者拒服", "nurse01", Instant.now())));
+        when(repo.findReturn(subReturnId(returnId, b2.id()))).thenReturn(Optional.empty());
+
+        PrescriptionService spy = org.mockito.Mockito.spy(service);
+        org.mockito.Mockito.doReturn(null).when(spy).returnDrug(any(), any(), any());
+
+        var view = spy.returnWardDrug(new com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq(
+                orderId, day, "DRUG-AMOX-025", 3, "患者拒服", returnId), "nurse01");
+
+        assertThat(view.returnedQuantity()).isEqualTo(1);
+        verify(spy).returnDrug(eq(dispense.id()), org.mockito.ArgumentMatchers.argThat(
+                r -> r.quantity() == 1 && r.returnId().equals(subReturnId(returnId, b2.id()))),
+                eq("nurse01"));
+        verify(spy, org.mockito.Mockito.never()).returnDrug(eq(dispense.id()),
+                org.mockito.ArgumentMatchers.argThat(
+                        r -> r.returnId().equals(subReturnId(returnId, b1.id()))), any());
+    }
+
+    @Test
+    @DisplayName("病区退药：超过药房可退数量 → 422（不能把批次库存退成负数）")
+    void wardReturnRejectsInsufficientReturnable() {
+        UUID orderId = UUID.randomUUID();
+        LocalDate day = LocalDate.now();
+        Prescription rx = rx(Prescription.DISPENSED, new BigDecimal("25.00"), 2L);
+        Dispense dispense = dispense(Dispense.DISPENSED);
+        PrescriptionItem line = amoxLine(rx.id(), 2);
+        DispenseItem only = batchItem(dispense.id(), line.id(), "B1", 2, 0);
+        when(repo.findPrescriptionBySourceOrder(orderId, day)).thenReturn(Optional.of(rx));
+        when(repo.findDispenseByPrescription(rx.id())).thenReturn(Optional.of(dispense));
+        when(repo.listPrescriptionItems(rx.id())).thenReturn(List.of(line));
+        when(repo.listDispenseItems(dispense.id())).thenReturn(List.of(only));
+        when(repo.findReturn(any())).thenReturn(Optional.empty());
+
+        PrescriptionService spy = org.mockito.Mockito.spy(service);
+        org.mockito.Mockito.doReturn(null).when(spy).returnDrug(any(), any(), any());
+
+        assertThatThrownBy(() -> spy.returnWardDrug(
+                new com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq(orderId, day,
+                        "DRUG-AMOX-025", 3, "患者拒服", UUID.randomUUID()), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.DRUG_RETURN_EXCEEDS));
+    }
 }

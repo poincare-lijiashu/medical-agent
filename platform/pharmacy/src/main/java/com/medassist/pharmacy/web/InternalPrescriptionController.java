@@ -7,6 +7,8 @@ import com.medassist.pharmacy.web.PharmacyDtos.CancelFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
+import com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq;
+import com.medassist.pharmacy.web.PharmacyDtos.WardReturnView;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -55,6 +57,19 @@ public class InternalPrescriptionController {
             @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
         requireToken(provided);
         return service.cancelFromOrder(req, "clinical");
+    }
+
+    /**
+     * 病区退药 → 药房退药（按批次分摊 + 自动回冲医嘱金额）。
+     *
+     * <p>幂等键是 {@code returnId}（与病区退药单号相同）：护士站重试不会重复回补库存。
+     */
+    @PostMapping("/ward-returns")
+    public WardReturnView wardReturn(
+            @Valid @RequestBody WardReturnReq req,
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireToken(provided);
+        return service.returnWardDrug(req, "clinical");
     }
 
     private void requireToken(String provided) {

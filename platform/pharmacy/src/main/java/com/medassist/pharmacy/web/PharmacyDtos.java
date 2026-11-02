@@ -193,6 +193,32 @@ public final class PharmacyDtos {
         }
     }
 
+    /**
+     * 病区退药（临床→药房，内网接口）。
+     *
+     * <p>为什么不让临床自己算发药明细：一张处方可能从多个批次发药，临床只认识
+     * "医嘱 + 药品编码"，批次分摊必须由药房自己完成；{@code returnId} 与病区退药单号
+     * 相同，用它对同一批明细派生子幂等键，重试不会重复回补批次库存。
+     */
+    public record WardReturnReq(
+            @NotNull UUID orderId,
+            @NotNull LocalDate supplyDate,
+            @NotBlank @Size(max = 64) String drugCode,
+            @Min(1) int quantity,
+            @Size(max = 256) String reason,
+            @NotNull UUID returnId) {
+    }
+
+    /**
+     * 病区退药结果。
+     *
+     * @param returnedQuantity    本次实际退回药房的数量（重放时为 0）
+     * @param remainingReturnable 该药品在药房侧仍可退的数量
+     */
+    public record WardReturnView(UUID dispenseId, String drugCode, int returnedQuantity,
+                                 int remainingReturnable) {
+    }
+
     /** 处方视图（含明细）。 */
     public record PrescriptionView(Prescription prescription, List<PrescriptionItem> items) {
     }

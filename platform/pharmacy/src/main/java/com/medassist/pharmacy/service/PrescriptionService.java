@@ -23,6 +23,8 @@ import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionLine;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
+import com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq;
+import com.medassist.pharmacy.web.PharmacyDtos.WardReturnView;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -461,8 +463,84 @@ public class PrescriptionService {
         return dispenseDetail(dispenseId);
     }
 
-    // ---------------------------------------------------------------- 查询
+    /**
+     * 病区退药（临床→药房，内网接口）：把"病区未执行的药"退回药房批次库存。
+     *
+     * <p>为什么必须由药房分摊：一次发药可能跨多个批次（FEFO），临床只认识"医嘱 + 药品编码"，
+     * 只有药房知道该药发在哪些批次、每批还能退多少。
+     *
+     * <p>幂等：子退药单号由 {@code returnId + 发药明细 id} 派生，同一次病区退药重放时，
+     * 已处理过的明细会被跳过、未处理完的继续退——既不会重复回补库存，也不会因为
+     * "上一轮只退了一半"而永久卡住。
+     *
+     * <p>钱：复用 {@link #returnDrug}，因此退药会自动回冲医嘱金额（B3 链路），
+     * 病区不再需要人工再去点一次"医嘱退费"。
+     */
+    @Transactional
+    public WardReturnView returnWardDrug(WardReturnReq req, String actor) {
+        Prescription rx = repo.findPrescriptionBySourceOrder(req.orderId(), req.supplyDate())
+                .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND,
+                        "该医嘱 " + req.supplyDate() + " 没有处方，无法退回药房"));
+        Dispense dispense = repo.findDispenseByPrescription(rx.id())
+                .orElseThrow(() -> new BusinessException(ErrorCode.DISPENSE_NOT_FOUND,
+                        "该处方尚未发药，无需药房退药"));
+        List<DispenseItem> items = repo.listDispenseItems(dispense.id());
+        Set<UUID> drugIds = new HashSet<>();
+        for (PrescriptionItem item : repo.listPrescriptionItems(rx.id())) {
+            if (req.drugCode().equals(item.drugCode())) {
+                drugIds.add(item.drugId());
+            }
+        }
+        if (drugIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "药品 " + req.drugCode() + " 不在该处方中，无法退回药房");
+        }
+        String reason = req.reason() == null || req.reason().isBlank()
+                ? "病区退药" : req.reason().trim();
 
+        int pending = req.quantity();
+        int returned = 0;
+        for (DispenseItem item : items) {
+            if (pending <= 0) {
+                break;
+            }
+            if (!drugIds.contains(item.drugId())) {
+                continue;
+            }
+            UUID subReturnId = subReturnId(req.returnId(), item.id());
+            Optional<DispenseReturn> applied = repo.findReturn(subReturnId);
+            if (applied.isPresent()) {
+                // 上一次调用已处理该批次（可能在其他批次中途失败后重试）
+                pending -= applied.get().quantity();
+                continue;
+            }
+            int take = Math.min(pending, item.returnable());
+            if (take <= 0) {
+                continue;
+            }
+            returnDrug(dispense.id(), new ReturnReq(item.id(), take, reason, subReturnId), actor);
+            pending -= take;
+            returned += take;
+        }
+        if (pending > 0) {
+            throw new BusinessException(ErrorCode.DRUG_RETURN_EXCEEDS,
+                    "药房可退数量不足（还差 " + pending
+                            + "）：该药品可能已使用或已被其他退药单退回，请核对后处理");
+        }
+        int remaining = repo.listDispenseItems(dispense.id()).stream()
+                .filter(i -> drugIds.contains(i.drugId()))
+                .mapToInt(DispenseItem::returnable)
+                .sum();
+        return new WardReturnView(dispense.id(), req.drugCode(), returned, remaining);
+    }
+
+    /** 病区退药 → 子退药单号（稳定派生：同一病区退药单 + 同一发药明细永远得到同一个 id）。 */
+    private static UUID subReturnId(UUID returnId, UUID dispenseItemId) {
+        return UUID.nameUUIDFromBytes((returnId + ":" + dispenseItemId)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    // ---------------------------------------------------------------- 查询
     public PrescriptionView detail(UUID prescriptionId) {
         Prescription rx = repo.findPrescription(prescriptionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));

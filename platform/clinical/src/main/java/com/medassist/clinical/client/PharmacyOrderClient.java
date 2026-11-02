@@ -41,4 +41,17 @@ public interface PharmacyOrderClient {
     /** 处方作废结果。 */
     record CancelRef(UUID prescriptionId, String status, boolean cancelled) {
     }
+
+    /**
+     * 病区退药 → 药房批次库存退回（内网）。
+     *
+     * <p>为什么由药房分摊：一次发药可能跨多个批次，只有药房知道每个批次还能退多少。
+     * 幂等键 {@code returnId} 与病区退药单号一致，重试不会重复回补库存。
+     */
+    WardReturnRef returnWardDrug(UUID orderId, LocalDate supplyDate, String drugCode, int quantity,
+                                 String reason, UUID returnId, String actor);
+
+    /** 药房退药回执。 */
+    record WardReturnRef(UUID dispenseId, int returnedQuantity, int remainingReturnable) {
+    }
 }

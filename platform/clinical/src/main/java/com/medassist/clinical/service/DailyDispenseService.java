@@ -217,8 +217,9 @@ public class DailyDispenseService {
      *   <li>按 {@code returnId} 幂等：重试返回同一条退药记录，参数不一致则 409。</li>
      * </ul>
      *
-     * <p>这里只回冲病区二级库存；药房批次库存的退药走药房自己的退药接口，
-     * 两条链路各自幂等，避免一次退药被重复回补。
+     * <p>一次退药、三处同步：病区二级库存回冲 + 药房批次库存回补 + 医嘱金额回冲（B3）。
+     * 本地写入与本事务同生共死；药房推送到**提交后**执行（药房会回调临床冲减金额，
+     * 事务内调用会因 visit 行锁互相等待），失败只记审计并可由同一 returnId 重试自愈。
      */
     @Transactional
     public WardReturnView returnToPharmacy(UUID visitId, UUID receiptId, WardReturnReq req,
@@ -238,6 +239,13 @@ public class DailyDispenseService {
             if (!ret.receiptId().equals(receiptId) || ret.quantity() != req.quantity()) {
                 throw new BusinessException(ErrorCode.CONFLICT,
                         "该退药单号已登记（收药记录/数量不同），请核对后刷新");
+            }
+            // 上一次可能"本地成功、药房失败"：用同一 returnId 再推一次即可自愈（两侧幂等）
+            VisitOrder replayOrder = repo.findOrder(visitId, receipt.orderId()).orElse(null);
+            if (replayOrder != null) {
+                afterCommit(() -> pushToPharmacy(receipt.orderId(), receipt.supplyDate(),
+                        replayOrder.itemCode(), ret.quantity(), ret.reason(),
+                        ret.id(), actor));
             }
             return toReturnView(ret, receipt);
         }
@@ -269,6 +277,13 @@ public class DailyDispenseService {
         repo.insertWardStockTxn(new WardStockTxn(UUID.randomUUID(), visitId, receipt.orderId(),
                 receiptId, saved.id(), order.itemCode(), order.itemName(), req.quantity(),
                 WardStockTxn.RETURN, receipt.supplyDate(), actorName(actor), Instant.now()));
+
+        // 药房批次库存回补 + 医嘱金额回冲：由药房按其发药批次分摊（临床不掌握批次）。
+        // **必须在本地事务提交后**再调用：药房退药会回调临床做金额冲减，若临床还在事务内
+        // （持有 visit 行锁），回调会等锁直到超时，形成"临床等药房、药房等临床"的环路。
+        // 失败不静默：记 ERROR + 审计，护士用同一 returnId 重试即可自愈（两侧都幂等）。
+        afterCommit(() -> pushToPharmacy(receipt.orderId(), receipt.supplyDate(), order.itemCode(),
+                req.quantity(), blankToNull(req.reason()), req.returnId(), actor));
 
         audit(actor, "WARD_MED_RETURN", visitId.toString(), Map.of(
                 "receiptId", receiptId.toString(), "orderId", receipt.orderId().toString(),
@@ -387,6 +402,47 @@ public class DailyDispenseService {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * 把退药推给药房（批次库存回补 + 医嘱金额回冲）。
+     *
+     * <p>必须在本地事务提交后调用：药房退药会在自己的提交后回调临床冲减金额，
+     * 若此时临床还持有 visit 行锁，回调会等锁到超时（实测表现为退药接口 503）。
+     */
+    private void pushToPharmacy(UUID orderId, LocalDate supplyDate, String drugCode, int quantity,
+                                String reason, UUID returnId, String actor) {
+        try {
+            PharmacyOrderClient.WardReturnRef ref = pharmacyClient.returnWardDrug(orderId,
+                    supplyDate, drugCode, quantity, reason, returnId, actorName(actor));
+            audit(actor, "WARD_MED_RETURN_PHARMACY", orderId.toString(), Map.of(
+                    "returnId", returnId.toString(), "dispenseId", ref.dispenseId().toString(),
+                    "returned", ref.returnedQuantity(), "remaining", ref.remainingReturnable()));
+        } catch (RuntimeException e) {
+            // 不静默：审计记失败，护士用同一 returnId 重试即可自愈（临床/药房两侧都幂等）
+            log.error("clinical.ward_return_pharmacy_failed orderId={} returnId={} err={}",
+                    orderId, returnId, e.getMessage());
+            audit(actor, "WARD_MED_RETURN_PHARMACY_FAILED", orderId.toString(), Map.of(
+                    "returnId", returnId.toString(),
+                    "error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+        }
+    }
+
+    /** 有事务则挂到提交后执行；无事务（单测/直调）立即执行。 */
+    private static void afterCommit(Runnable action) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager
+                .isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                    .registerSynchronization(
+                            new org.springframework.transaction.support.TransactionSynchronization() {
+                                @Override
+                                public void afterCommit() {
+                                    action.run();
+                                }
+                            });
+        } else {
+            action.run();
+        }
     }
 
     private void audit(String actor, String action, String targetId, Map<String, Object> detail) {

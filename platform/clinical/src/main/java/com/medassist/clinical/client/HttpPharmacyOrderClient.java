@@ -134,6 +134,44 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
         return new CancelRef(response.prescriptionId(), response.status(), response.cancelled());
     }
 
+    @Override
+    public WardReturnRef returnWardDrug(UUID orderId, LocalDate supplyDate, String drugCode,
+                                        int quantity, String reason, UUID returnId, String actor) {
+        WardReturnResponse response;
+        try {
+            String payload = objectMapper.writeValueAsString(new WardReturnRequest(orderId,
+                    supplyDate, drugCode, quantity, reason, returnId, actor));
+            response = client.post()
+                    .uri("/internal/prescriptions/ward-returns")
+                    .header("X-Internal-Token", token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(payload)
+                    .retrieve()
+                    .body(WardReturnResponse.class);
+        } catch (JacksonException e) {
+            log.warn("clinical.pharmacy_ward_return_serialize_failed orderId={} err={}", orderId,
+                    e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "退药报文序列化失败，请稍后重试");
+        } catch (HttpClientErrorException e) {
+            String message = extractMessage(e);
+            log.warn("clinical.pharmacy_ward_return_rejected orderId={} status={} reason={}",
+                    orderId, e.getStatusCode().value(), message);
+            // 409 = 并发/状态冲突，其余 4xx = 业务校验（可退数量不足、处方不存在等）
+            throw new BusinessException(e.getStatusCode().value() == 409
+                    ? ErrorCode.CONFLICT : ErrorCode.VALIDATION_FAILED, message);
+        } catch (RestClientException e) {
+            log.warn("clinical.pharmacy_unavailable_ward_return orderId={} err={}", orderId,
+                    e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "药房服务暂不可用，退药未完成（库存与费用均未回冲，可重试）");
+        }
+        if (response == null || response.dispenseId() == null) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "药房返回为空，退药未完成");
+        }
+        return new WardReturnRef(response.dispenseId(), response.returnedQuantity(),
+                response.remainingReturnable());
+    }
+
     /**
      * 提取平台标准错误体里的 message（{@code {"code":42200,"message":"..."}}）。
      *
@@ -170,5 +208,13 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
 
     record CancelResponse(UUID prescriptionId, String prescriptionNo, String status,
                           boolean cancelled) {
+    }
+
+    record WardReturnRequest(UUID orderId, LocalDate supplyDate, String drugCode, int quantity,
+                             String reason, UUID returnId, String actor) {
+    }
+
+    record WardReturnResponse(UUID dispenseId, String drugCode, int returnedQuantity,
+                              int remainingReturnable) {
     }
 }
