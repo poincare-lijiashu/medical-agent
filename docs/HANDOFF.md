@@ -2,6 +2,24 @@
 
 > 更新：2026-11-01（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~六批** / **知识库域第一~二批** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
+## 开工硬规则（每次新会话第一件事，先照做再谈别的）
+
+**Docker 引擎起不来时，禁止由 agent 尝试启动，直接请用户手动双击 Docker Desktop。**
+
+- 判定"引擎未就绪"：`docker version --format "{{.Server.Version}}"` 为空（`docker info` 只剩 Client 段）。
+- 已实测失败的三种 agent 启动方式（2026-11-02，勿再重复）：
+  1. `explorer.exe "…\Docker Desktop.exe"`；
+  2. `docker desktop start`（CLI 报告 ✓，但进程随命令结束被回收）；
+  3. `Register-ScheduledTask` + `Start-ScheduledTask`。
+- 证据（`%LOCALAPPDATA%\Docker\log\host\com.docker.backend.exe.log`）：10:36:55 进程被拉起 →
+  10:37:03 backend 已就绪（dockerengine heartbeat / gvisor 路由 / apiproxy HEAD /_ping 正常）→
+  **日志到此戛然而止**，WSL 引擎未完成启动，`dockerDesktopLinuxEngine` 命名管道未创建，
+  因此 CLI 一直报 `failed to connect to the docker API`。
+- 原因：agent 拉起的进程属于本次命令的进程树/作业对象，命令结束即被整树回收；
+  用户手动启动的父进程是 explorer 用户会话，不会被回收。**这不是 Docker 或 WSL 损坏**
+  （`vmcompute` / `WslService` 均 Running，WSL2 disk 存在）。
+- 用户手动启动后，先确认 `docker version` 有 Server 段，再 `docker start medagent_pg`。
+
 ## 2026-11-01 收工状态（下次开工先读这里）
 
 > **2026-11-02 续接状态**：代码已提交并双备份；9 个 Java 服务已停止；
