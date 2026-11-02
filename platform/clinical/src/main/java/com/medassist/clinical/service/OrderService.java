@@ -1,5 +1,6 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.domain.OrderFrequency;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
@@ -64,12 +65,18 @@ public class OrderService {
                             "医嘱项目不存在或已停用：" + line.itemCode()));
             String orderType = mapOrderType(item);
             String mode = normalizeMode(line.orderMode(), visit);
+            OrderFrequency frequency = resolveFrequency(line.frequency(), mode);
+            int frequencyTimes = frequency == null ? 1 : frequency.timesPerDay();
+            // 计价口径（B2）：临时医嘱 quantity=本次总量；长嘱 quantity=每日总量，
+            // 因此 amount 在长嘱上表示"每日金额"，按日计费每天累加一次（见 BillingService.dailyBill）。
             BigDecimal amount = item.price()
                     .multiply(BigDecimal.valueOf(line.quantity()))
                     .setScale(2, RoundingMode.HALF_UP);
             VisitOrder order = new VisitOrder(UUID.randomUUID(), repo.nextOrderNo(), visitId,
                     orderType, item.itemCode(), item.name(),
-                    blankToNull(line.dose()), blankToNull(line.frequency()),
+                    blankToNull(line.dose()),
+                    frequency == null ? blankToNull(line.frequency()) : frequency.code(),
+                    frequencyTimes,
                     line.quantity(), item.unit(), item.price(), amount,
                     VisitOrder.PLACED, actor, 0L, mode, today, null,
                     VisitOrder.TRANSFER_NONE, null, null, null, null);
@@ -111,6 +118,31 @@ public class OrderService {
         return repo.listOrders(visitId, null).stream()
                 .filter(o -> o.id().equals(orderId)).findFirst()
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+    }
+
+    /**
+     * 频次解析：长嘱必须给"每日执行"的标准频次；临时医嘱可空（默认 1 次）。
+     *
+     * <p>之所以对长嘱强制：按日计费只按天计一次，若频次含糊，护理执行次数与计费口径
+     * 会各说各话（评审 B2）。词表见 {@link OrderFrequency}；能识别时落规范化 code，
+     * 避免 BID/bid 变成两种写法。
+     */
+    private OrderFrequency resolveFrequency(String raw, String mode) {
+        OrderFrequency frequency = OrderFrequency.resolve(raw).orElse(null);
+        if (VisitOrder.TEMP.equals(mode)) {
+            return frequency;
+        }
+        if (frequency == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "长嘱必须填写标准频次（如 qd / bid / tid / q8h），当前："
+                            + (raw == null || raw.isBlank() ? "空" : raw));
+        }
+        if (!frequency.daily()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "长嘱只支持每日执行的频次（" + frequency.code() + "=" + frequency.label()
+                            + " 无法按日计费），隔日/每周用药请开临时医嘱");
+        }
+        return frequency;
     }
 
     /** 医嘱模式：默认临时；长嘱仅限住院。 */

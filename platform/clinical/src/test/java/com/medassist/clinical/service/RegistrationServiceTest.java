@@ -146,7 +146,7 @@ class RegistrationServiceTest {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit));
         when(repo.listOrders(visitId, null)).thenReturn(List.of(
                 new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC", "血常规",
-                        null, null, 1, "次", new BigDecimal("25.00"), new BigDecimal("25.00"),
+                        null, null, 1, 1, "次", new BigDecimal("25.00"), new BigDecimal("25.00"),
                         VisitOrder.PLACED, "doctor01", 0L, VisitOrder.TEMP, LocalDate.now(), null,
                         VisitOrder.TRANSFER_NONE, null, null, null, null)));
 

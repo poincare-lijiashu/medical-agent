@@ -55,9 +55,14 @@ class OrderServiceTest {
                 "OUTPATIENT", status, LocalDate.now(), 0L);
     }
 
+    private Visit inpatient() {
+        return new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptId, "doctor01", null,
+                "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+    }
+
     private VisitOrder order(UUID orderId) {
         return new VisitOrder(orderId, "O1", visitId, "EXAM", "EXM-CBC", "血常规",
-                null, null, 1, "次", new BigDecimal("25.00"), new BigDecimal("25.00"),
+                null, null, 1, 1, "次", new BigDecimal("25.00"), new BigDecimal("25.00"),
                 VisitOrder.PLACED, "doctor01", 0L, VisitOrder.TEMP, LocalDate.now(), null,
                 VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
@@ -154,6 +159,74 @@ class OrderServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
         verify(repo, never()).insertOrder(any());
+    }
+
+    @Test
+    @DisplayName("长嘱：quantity=每日总量，频次快照由服务端解析（bid → 2 次/日）")
+    void longOrderSnapshotsFrequencyTimes() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient()));
+        when(repo.findChargeItem("TRT-IV")).thenReturn(Optional.of(new ChargeItemDef(
+                UUID.randomUUID(), "TRT-IV", "静脉输液", "TREATMENT", "次",
+                new BigDecimal("8.00"), true)));
+
+        List<VisitOrder> orders = service.place(visitId,
+                List.of(new OrderLine("TRT-IV", 3, "0.9%NS 250ml", "BID", "LONG")), "doctor01");
+
+        VisitOrder o = orders.get(0);
+        assertThat(o.longTerm()).isTrue();
+        assertThat(o.frequency()).isEqualTo("bid");
+        assertThat(o.frequencyTimes()).isEqualTo(2);
+        // 每日总量 3 × 8.00 = 24.00（不是 3×2×8=48，长嘱按天计一次）
+        assertThat(o.amount()).isEqualByComparingTo("24.00");
+    }
+
+    @Test
+    @DisplayName("长嘱缺频次：拒绝开立（按日计费必须有执行次数依据）")
+    void longOrderRequiresFrequency() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient()));
+        when(repo.findChargeItem("TRT-IV")).thenReturn(Optional.of(new ChargeItemDef(
+                UUID.randomUUID(), "TRT-IV", "静脉输液", "TREATMENT", "次",
+                new BigDecimal("8.00"), true)));
+
+        assertThatThrownBy(() -> service.place(visitId,
+                List.of(new OrderLine("TRT-IV", 1, null, null, "LONG")), "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+                    assertThat(e.getMessage()).contains("频次");
+                });
+        verify(repo, never()).insertOrder(any());
+    }
+
+    @Test
+    @DisplayName("长嘱不接受非每日频次（prn/隔日/每周无法按日计费）")
+    void longOrderRejectsNonDailyFrequency() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient()));
+        when(repo.findChargeItem("TRT-IV")).thenReturn(Optional.of(new ChargeItemDef(
+                UUID.randomUUID(), "TRT-IV", "静脉输液", "TREATMENT", "次",
+                new BigDecimal("8.00"), true)));
+
+        assertThatThrownBy(() -> service.place(visitId,
+                List.of(new OrderLine("TRT-IV", 1, null, "prn", "LONG")), "doctor01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED);
+                    assertThat(e.getMessage()).contains("每日执行");
+                });
+        verify(repo, never()).insertOrder(any());
+    }
+
+    @Test
+    @DisplayName("临时医嘱：未知频次不阻断（历史数据/自由文本），快照回落 1 次")
+    void tempOrderDefaultsFrequencyTimes() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findChargeItem("TRT-IV")).thenReturn(Optional.of(new ChargeItemDef(
+                UUID.randomUUID(), "TRT-IV", "静脉输液", "TREATMENT", "次",
+                new BigDecimal("8.00"), true)));
+
+        List<VisitOrder> orders = service.place(visitId,
+                List.of(new OrderLine("TRT-IV", 1, null, "每日两次", null)), "doctor01");
+
+        assertThat(orders.get(0).frequencyTimes()).isEqualTo(1);
+        assertThat(orders.get(0).amount()).isEqualByComparingTo("8.00");
     }
 
     @Test

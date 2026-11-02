@@ -71,7 +71,7 @@ class BillingServiceTest {
     private VisitOrder order(String amount) {
         BigDecimal amt = new BigDecimal(amount);
         return new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC", "血常规",
-                null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
+                null, null, 1, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
                 VisitOrder.TEMP, LocalDate.now(), null,
                 VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
@@ -79,7 +79,7 @@ class BillingServiceTest {
     private VisitOrder longOrderOf(String orderNo, String amount) {
         BigDecimal amt = new BigDecimal(amount);
         return new VisitOrder(UUID.randomUUID(), orderNo, visitId, "TREATMENT", "TRT-IV", "静脉输液",
-                null, "qd", 2, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
+                null, "qd", 1, 2, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
                 VisitOrder.LONG, LocalDate.now(), null,
                 VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
@@ -108,7 +108,7 @@ class BillingServiceTest {
     void settleRejectsFailedTransferOrder() {
         BigDecimal amt = new BigDecimal("25.00");
         VisitOrder failed = new VisitOrder(UUID.randomUUID(), "O1", visitId, "EXAM", "EXM-CBC",
-                "血常规", null, null, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
+                "血常规", null, null, 1, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
                 VisitOrder.TEMP, LocalDate.now(), null,
                 VisitOrder.TRANSFER_FAILED, null, null, null, "医技服务暂不可用");
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));

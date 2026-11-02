@@ -84,7 +84,8 @@ public class ClinicalRepository {
             rs.getObject("id", UUID.class), rs.getString("order_no"),
             rs.getObject("visit_id", UUID.class), rs.getString("order_type"),
             rs.getString("item_code"), rs.getString("item_name"), rs.getString("dose"),
-            rs.getString("frequency"), rs.getInt("quantity"), rs.getString("unit"),
+            rs.getString("frequency"), rs.getInt("frequency_times"), rs.getInt("quantity"),
+            rs.getString("unit"),
             rs.getBigDecimal("unit_price"), rs.getBigDecimal("amount"),
             rs.getString("status"), rs.getString("ordered_by"), rs.getLong("version"),
             rs.getString("order_mode"),
@@ -277,16 +278,17 @@ public class ClinicalRepository {
         jdbc.sql("""
                         INSERT INTO clinical_svc.visit_order
                             (id, order_no, visit_id, order_type, item_code, item_name, dose, frequency,
-                             quantity, unit, unit_price, amount, status, ordered_by, version,
-                             order_mode, start_date, transfer_status)
+                             frequency_times, quantity, unit, unit_price, amount, status, ordered_by,
+                             version, order_mode, start_date, transfer_status)
                         VALUES (:id, :orderNo, :visitId, :orderType, :itemCode, :itemName, :dose,
-                                :frequency, :quantity, :unit, :unitPrice, :amount, :status, :orderedBy, 0,
-                                :orderMode, :startDate, :transferStatus)
+                                :frequency, :frequencyTimes, :quantity, :unit, :unitPrice, :amount,
+                                :status, :orderedBy, 0, :orderMode, :startDate, :transferStatus)
                         """)
                 .param("id", o.id()).param("orderNo", o.orderNo()).param("visitId", o.visitId())
                 .param("orderType", o.orderType()).param("itemCode", o.itemCode())
                 .param("itemName", o.itemName()).param("dose", o.dose())
-                .param("frequency", o.frequency()).param("quantity", o.quantity())
+                .param("frequency", o.frequency()).param("frequencyTimes", o.frequencyTimes())
+                .param("quantity", o.quantity())
                 .param("unit", o.unit()).param("unitPrice", o.unitPrice())
                 .param("amount", o.amount()).param("status", o.status())
                 .param("orderedBy", o.orderedBy())

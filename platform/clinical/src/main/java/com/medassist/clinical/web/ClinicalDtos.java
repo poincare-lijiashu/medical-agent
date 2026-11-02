@@ -56,6 +56,10 @@ public final class ClinicalDtos {
     public record PlaceOrdersReq(@NotEmpty List<@Valid OrderLine> items) {
     }
 
+    /** 频次词表项（前端下拉与接口说明用；服务端为唯一真源）。 */
+    public record FrequencyView(String code, String label, int timesPerDay, boolean daily) {
+    }
+
     /** 停嘱。 */
     public record StopOrderReq(String reason) {
     }

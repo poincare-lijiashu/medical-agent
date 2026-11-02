@@ -105,6 +105,10 @@ public class OrderTransferService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         VisitOrder order = repo.findOrder(visitId, orderId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该医嘱"));
+        if (order.drug() && order.longTerm()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "长期药品医嘱不自动转药房（一次转送只能发一天量），请按日请领或改开临时医嘱");
+        }
         if (!transferable(order)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "只有药品/检查类医嘱需要转送下游");
@@ -215,8 +219,17 @@ public class OrderTransferService {
 
     // ---------------------------------------------------------------- 内部
 
-    /** 需要转送下游的医嘱类型（药品→药房，检查→医技）。 */
+    /**
+     * 需要转送下游的医嘱类型（药品→药房，检查→医技）。
+     *
+     * <p>长期药品医嘱<b>不自动转药房</b>（B2）：转送一次只能生成一张处方、发一天的量，
+     * 而长嘱要连续执行多天；按日请领/摆药链路尚未建设，静默只发一天会导致后续几天无药。
+     * 宁可让病区看到"未生成处方"并人工处理，也不要出现账实与用药都错的隐性缺陷。
+     */
     private static boolean transferable(VisitOrder order) {
+        if (order.drug() && order.longTerm()) {
+            return false;
+        }
         return order.drug() || "EXAM".equals(order.orderType());
     }
 

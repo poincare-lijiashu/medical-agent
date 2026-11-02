@@ -63,7 +63,7 @@ class OrderTransferServiceTest {
 
     private VisitOrder order(String type, String status, String transferStatus, LocalDate stopDate) {
         return new VisitOrder(orderId, "O1", visitId, type, "DRUG-AMOX-025", "阿莫西林胶囊",
-                "0.5g", "bid", 2, "盒", new BigDecimal("12.50"), new BigDecimal("25.00"),
+                "0.5g", "bid", 2, 2, "盒", new BigDecimal("12.50"), new BigDecimal("25.00"),
                 status, "doctor01", 0L, VisitOrder.TEMP, LocalDate.now(), stopDate,
                 transferStatus, null, null, null, null);
     }
@@ -92,6 +92,21 @@ class OrderTransferServiceTest {
                 eq(OrderTransferService.EXTERNAL_PRESCRIPTION), eq(rxId),
                 eq("RX20261101000001"));
         verify(repo).logChange(eq("doctor01"), eq("ORDER_TRANSFER"), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("长期药品医嘱不自动转药房：避免只发一天量、后续几天无药")
+    void scheduleSkipsLongDrugOrder() {
+        VisitOrder longDrug = new VisitOrder(orderId, "O2", visitId, "DRUG", "DRUG-AMOX-025",
+                "阿莫西林胶囊", "0.5g", "bid", 2, 2, "盒", new BigDecimal("12.50"),
+                new BigDecimal("25.00"), VisitOrder.PLACED, "doctor01", 0L, VisitOrder.LONG,
+                LocalDate.now(), null, VisitOrder.TRANSFER_NONE, null, null, null, null);
+
+        List<VisitOrder> result = service.schedule(visit(), List.of(longDrug), "doctor01");
+
+        assertThat(result.get(0).transferStatus()).isEqualTo(VisitOrder.TRANSFER_NONE);
+        verify(client, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any());
+        verify(repo, never()).updateOrderTransfer(any(), any(), any(), any(), any(), any());
     }
 
     @Test

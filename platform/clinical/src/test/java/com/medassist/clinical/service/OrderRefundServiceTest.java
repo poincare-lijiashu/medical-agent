@@ -55,7 +55,7 @@ class OrderRefundServiceTest {
     private VisitOrder order(String amount) {
         BigDecimal amt = new BigDecimal(amount);
         return new VisitOrder(orderId, "O1", visitId, "DRUG", "DRG-001", "注射用头孢",
-                "1g", "bid", 3, "支", new BigDecimal("10.00"), amt, VisitOrder.PLACED,
+                "1g", "bid", 2, 3, "支", new BigDecimal("10.00"), amt, VisitOrder.PLACED,
                 "doctor01", 0L, VisitOrder.TEMP, LocalDate.now(), null,
                 VisitOrder.TRANSFERRED, "PHARMACY", UUID.randomUUID(), "RX1", null);
     }

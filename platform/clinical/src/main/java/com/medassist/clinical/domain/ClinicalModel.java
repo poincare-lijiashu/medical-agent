@@ -68,9 +68,19 @@ public final class ClinicalModel {
                                  Instant diagnosedAt, long version) {
     }
 
-    /** 医嘱。 */
+    /**
+     * 医嘱。
+     *
+     * <p>数量口径（B2，必须与 {@link OrderFrequency} / 按日计费保持一致）：
+     * <ul>
+     *   <li>临时医嘱（TEMP）：{@code quantity} = 本次总量，{@code amount} = 本次金额；</li>
+     *   <li>长期医嘱（LONG）：{@code quantity} = <b>每日总量</b>，{@code amount} = 每日金额，
+     *       {@code frequencyTimes} 为每日执行次数快照（护理按次数执行，计费仍按天一次）。</li>
+     * </ul>
+     */
     public record VisitOrder(UUID id, String orderNo, UUID visitId, String orderType,
                              String itemCode, String itemName, String dose, String frequency,
+                             int frequencyTimes,
                              int quantity, String unit, BigDecimal unitPrice, BigDecimal amount,
                              String status, String orderedBy, long version,
                              String orderMode, LocalDate startDate, LocalDate stopDate,
@@ -108,9 +118,9 @@ public final class ClinicalModel {
         /** 返回仅转送状态不同的副本（开嘱事务内把药品医嘱标记为 PENDING 后回给前端）。 */
         public VisitOrder withTransferStatus(String nextTransferStatus) {
             return new VisitOrder(id, orderNo, visitId, orderType, itemCode, itemName, dose, frequency,
-                    quantity, unit, unitPrice, amount, status, orderedBy, version, orderMode,
-                    startDate, stopDate, nextTransferStatus, externalType, externalId, externalNo,
-                    transferError);
+                    frequencyTimes, quantity, unit, unitPrice, amount, status, orderedBy, version,
+                    orderMode, startDate, stopDate, nextTransferStatus, externalType, externalId,
+                    externalNo, transferError);
         }
 
         /** 某天是否应计费（长嘱在 start~stop 之间有效；停嘱当天仍计费）。 */
