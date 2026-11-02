@@ -595,11 +595,19 @@ public class ClinicalRepository {
         return n;
     }
 
+    /**
+     * 撤销临时医嘱（P1-7：长嘱一律拒绝，库级兜底）。
+     *
+     * <p>长嘱按日计费不会把 {@code status} 改成 CHARGED，所以"只看 status='PLACED'"
+     * 会让已计费多日的长嘱也能被撤销。服务层已提前提示改用停嘱，
+     * 这里再补一条 {@code order_mode <> 'LONG'}，防止应用层被绕过。
+     */
     public boolean cancelOrder(UUID orderId, UUID visitId) {
         return jdbc.sql("""
                         UPDATE clinical_svc.visit_order
                            SET status = 'CANCELLED', version = version + 1, updated_at = now()
                          WHERE id = :id AND visit_id = :visitId AND status = 'PLACED'
+                           AND order_mode <> 'LONG'
                         """)
                 .param("id", orderId).param("visitId", visitId).update() > 0;
     }

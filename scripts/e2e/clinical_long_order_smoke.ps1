@@ -181,6 +181,13 @@ Check 'dailyBill.repeat.ok' $r.Status 200
 Check   'dailyBill.repeat.orderCount' (Res $r).orderCount 0
 CheckAmt 'dailyBill.repeat.billedAmount' (Res $r).billedAmount 0
 
+# ---------------------------------------------------------------- 8b. long orders cannot be cancelled (P1-7)
+# Daily billing does not flip order status to CHARGED, so a LONG order that already
+# billed several days would still look "PLACED". Cancelling it would silently drop
+# those billed days - it must be rejected with 409 and point to /stop instead.
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($longIv.id)/cancel" $null $token
+Check 'long.cancel.rejected' $r.Status 409
+
 # ---------------------------------------------------------------- 9. stop is effective for the same day's billing
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($longIv.id)/stop" @{
     reason = 'switch to oral'

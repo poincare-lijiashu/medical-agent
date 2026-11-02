@@ -167,6 +167,13 @@ public class OrderService {
         }
         VisitOrder current = repo.findOrder(visitId, orderId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该医嘱"));
+        // P1-7：长嘱按日计费**不改医嘱状态**（只写 charge_item），因此"已计费多日"的长嘱
+        // 到这里仍是 PLACED，撤销会把它置 CANCELLED，但已收的钱与已执行的天数无法回滚。
+        // 口径统一为：长嘱只能停嘱（当日仍计费、次日起停止），撤销只用于临时医嘱。
+        if (current.longTerm()) {
+            throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
+                    "长嘱不支持撤销（已按日计费的天数无法回滚），请使用停嘱：停嘱当日仍计费，次日起停止");
+        }
         if (!repo.cancelOrder(orderId, visitId)) {
             throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID,
                     "只有未计费（PLACED）的医嘱可以撤销");

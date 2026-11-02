@@ -29,8 +29,10 @@
 | P1-10 | 成立 | `returnNarcoticAmpoule` 去掉不可达的 `CASE WHEN :qty = quantity ... ELSE status`，改为把"数量必须等于发药量"下沉到 `WHERE`，`status` 直接置 `RETURNED`：部分回收时更新 0 行（返回 false），不再写成 `PENDING_RETURN + returned>0` 撞 `ck_narcotic_return_state` 抛 500 | 单测全绿；`db_guardrails` 增加"直接 UPDATE 部分回收必须被 `ck_narcotic_return_state` 拒绝"反例（无待回收数据时自动 SKIP） |
 | P1-6 | 成立 | ① `ImportItemsReq.items` 加 `@Size(max=500)`；② 新增 `JsonBodyLimitFilter` + 自动装配：`application/json` 超过 `medassist.http.max-json-body-bytes`（默认 2MB）直接 **413**，只拦 JSON、不误伤 multipart 上传，chunked 由入口代理兜底 | 新增 4 个单测（超限 413 / 边界放行 / multipart 放行 / 表单放行）；医保服务 52 个单测全绿 |
 | P1-8 | 成立 | 收费预览 `pendingAmount` 改为 `Σ max(0, amount − applied)`，与结算 `amount - sumAppliedOrderRefund` 完全同口径（原实现按 `amount` 全额相加，退过药的医嘱会显示偏高） | 新增单测"待计 10.00、已冲减 4.00 → 预览 6.00"；`BillingServiceTest` 18 项全绿 |
+| P1-7 | 成立 | 撤销接口对**长嘱**直接拒绝（409 并提示改用停嘱）；库级再补 `AND order_mode <> 'LONG'`，防止应用层被绕过。根因：按日计费只写 `charge_item` 不改医嘱状态，已计费多日的长嘱仍是 `PLACED`，撤销会把已收的钱与已执行天数一起"抹掉" | 新增单测（长嘱撤销 → `ORDER_STATUS_INVALID`，且不改状态/不作废下游）；E2E `clinical_long_order_smoke` 新增 `long.cancel.rejected = 409` 断言并 PASS |
+| P1-5 | 成立 | 补"占号 CAS 失败"分支测试：加锁时还有余号、但 `UPDATE ... WHERE booked < total` 时被并发抢空 → 抛 `REGISTRATION_NO_SLOT`，且**不建就诊/收费单/收费明细** | `RegistrationServiceTest` 6 项全绿（+1） |
 
-**本轮实测**：全量单测 **876 项**全绿（846 → 857 → 861 → 871 → 876）；真库 SQL 集成测试 3 项（`-Ppostgres-it`）全绿；真实库迁移 `auth V34 / empi V4 / clinical V29 / pharmacy V9 / tech V8 / emr V16 / insurance V16 / kb V3`；`db_guardrails.ps1` **22 项反例全 PASS**（含报盘明细改删、7 张旁证表删除、空安瓿部分回收）；E2E `clinical_long_dispense_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
+**本轮实测**：全量单测 **878 项**全绿（846 → 857 → 861 → 871 → 876 → 878）；真库 SQL 集成测试 3 项（`-Ppostgres-it`）全绿；真实库迁移 `auth V34 / empi V4 / clinical V29 / pharmacy V9 / tech V8 / emr V16 / insurance V16 / kb V3`；`db_guardrails.ps1` **22 项反例全 PASS**（含报盘明细改删、7 张旁证表删除、空安瓿部分回收）；E2E `clinical_long_order_smoke`（含长嘱撤销 409）/ `clinical_long_dispense_smoke` / `pharmacy_narcotic_smoke` / `pharmacy_order_refund_smoke` / `pharmacy_billing_smoke` / `insurance_smoke` / `platform_smoke` 全 PASS；三套 values（dev/staging/prod）`helm template` 渲染通过。
 
 > 仍待办：**P0-8 的网关通道**（网关 → 业务服务 v1/v2）尚未绑定请求体——网关是 WebFlux，
 > 需要在 `InternalSignatureGlobalFilter` 里复制/缓存 `DataBuffer` 后才能计算摘要，

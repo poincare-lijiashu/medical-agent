@@ -102,6 +102,29 @@ class RegistrationServiceTest {
     }
 
     @Test
+    @DisplayName("占号 CAS 失败（最后一个号被并发抢走）：拒绝挂号且不建就诊/收费单（P1-5）")
+    void occupySlotCasFailureAbortsRegistration() {
+        UUID slotId = UUID.randomUUID();
+        // 加锁时还有 1 个余号（booked=4/total=5），但 UPDATE ... WHERE booked < total 时已被抢空
+        Slot available = new Slot(slotId, deptId, "doctor01", LocalDate.now(), "AM", 5, 4, 0L);
+        when(repo.lockSlot(slotId)).thenReturn(Optional.of(available));
+        when(repo.findActiveVisit(patientId, deptId, LocalDate.now())).thenReturn(Optional.empty());
+        when(repo.occupySlot(slotId, 0L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.register(
+                new RegisterReq(patientId, deptId, "doctor01", slotId, "OUTPATIENT", null), "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.REGISTRATION_NO_SLOT);
+
+        verify(repo).occupySlot(slotId, 0L);
+        // 关键：CAS 失败后绝不能"号没占上却建了就诊和收费单"
+        verify(repo, never()).insertVisit(any());
+        verify(repo, never()).insertCharge(any());
+        verify(repo, never()).insertChargeItemWithoutOrder(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("同日同科室重复挂号：拒绝并给出已有就诊号")
     void duplicateVisitRejected() {
         LocalDate today = LocalDate.now();

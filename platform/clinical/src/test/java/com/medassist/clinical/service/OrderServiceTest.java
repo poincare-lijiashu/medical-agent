@@ -67,6 +67,14 @@ class OrderServiceTest {
                 VisitOrder.TRANSFER_NONE, null, null, null, null);
     }
 
+    /** 长嘱：按日计费不会改状态，撤销必须被拒绝（P1-7）。 */
+    private VisitOrder longOrder(UUID orderId) {
+        return new VisitOrder(orderId, "O2", visitId, "DRUG", "DRG-1", "测试药品",
+                "1片", "qd", 1, 1, "片", new BigDecimal("5.00"), new BigDecimal("5.00"),
+                VisitOrder.PLACED, "doctor01", 0L, VisitOrder.LONG, LocalDate.now(), null,
+                VisitOrder.TRANSFER_NONE, null, null, null, null);
+    }
+
     @Test
     @DisplayName("未接诊（REGISTERED）不能开医嘱")
     void rejectWhenNotInTreatment() {
@@ -143,6 +151,23 @@ class OrderServiceTest {
         assertThat(result.id()).isEqualTo(orderId);
         verify(transfer).cancelDownstreamBestEffort(eq(order), eq("医嘱撤销"), eq("doctor01"));
         verify(repo).logChange(eq("doctor01"), eq("ORDER_CANCEL"), eq("VISIT"), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("长嘱不允许撤销：提示改用停嘱，且不改状态、不作废下游（P1-7）")
+    void cancelRejectsLongOrder() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(inpatient()));
+        UUID orderId = UUID.randomUUID();
+        VisitOrder longOrder = longOrder(orderId);
+        when(repo.findOrder(visitId, orderId)).thenReturn(Optional.of(longOrder));
+
+        assertThatThrownBy(() -> service.cancel(visitId, orderId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.ORDER_STATUS_INVALID);
+
+        verify(repo, never()).cancelOrder(any(), any());
+        verify(transfer, never()).cancelDownstreamBestEffort(any(), any(), any());
     }
 
     @Test
