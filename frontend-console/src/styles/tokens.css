@@ -1,104 +1,138 @@
 /*
- * 铭医 MedAssist · 设计令牌 v3「临床台账 / Clinical Ledger」
+ * 铭医 MedAssist · 令牌 v4「开放平面 / Open Plane」
  *
- * 设计立场
- *   1. 纸感而非塑料：暖白纸底 + 石墨墨色，接近病历纸与印刷品的阅读体验。
- *   2. 仪表而非后台：深石墨书脊导航 + 等宽读数 + 发丝线，像一台校准过的临床仪器。
- *   3. 数字是主角：所有关键数字用等宽字体、右对齐、单位降级，扫读不被形容词干扰。
- *   4. 颜色是证据：只有状态与可操作对象着色，其余一律墨色与纸色。
- *   5. 不做"AI 味"：没有渐变按钮、玻璃拟态、彩色大色块、装饰性插画。
+ * 依据不是“设计风格”，而是两份实测规范：
+ *   taste-skill/references/app-screens.md（23 个真实产品界面）
+ *   taste-skill/references/tells.md（生成式界面的套路清单）
+ *
+ * 结论：
+ *   - 浅色侧边栏、中性灰选中、无顶栏；深色/饱和侧边栏在 17 个浅色产品界面里是 0 个。
+ *   - 颜色只上数据、状态和一个主操作；界面本身是中性灰。
+ *   - 卡片靠 1px 边框或一层色调，不靠阴影；浮层才允许阴影。
+ *   - 数字用等宽/tabular；标签、表头、导航一律正文体、句首大小写。
+ *   - 不出现 01/02/03 编号、眉标、刻度尺、裁切角、mono 小标签。
  */
 
 :root {
   color-scheme: light;
 
-  /* ---------- 字体 ---------- */
+  /* ---------- 字体：一款 grotesk + 一款等宽（只给数字、编码、时间） ---------- */
   --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
-  /* 字阶：9/10 微标签，12 元信息，13 正文，15 强调，20 小标题，32 页标题，44 展示 */
-  --fs-9: 9px;
-  --fs-10: 10px;
-  --fs-11: 11px;
-  --fs-12: 12px;
-  --fs-13: 13px;
+  /* 尺标：11 是下限；12 小字；14 正文；16 分区标题；24 页面标题；28 主数字 */
+  --fs-9: 11px;
+  --fs-10: 12px;
+  --fs-11: 12px;
+  --fs-12: 13px;
+  --fs-13: 14px;
   --fs-14: 14px;
-  --fs-15: 15px;
+  --fs-15: 16px;
   --fs-16: 16px;
   --fs-18: 18px;
   --fs-20: 20px;
   --fs-24: 24px;
   --fs-28: 28px;
   --fs-32: 32px;
-  --fs-44: 44px;
-  --fs-56: 56px;
+  --fs-44: 32px;
+  --fs-56: 32px;
 
-  --lh-tight: 1.18;
+  --fs-title: 24px;
+  --fs-section: 16px;
+  --fs-kpi: 28px;
+  --fs-body: 14px;
+  --fs-small: 12px;
+
+  --lh-tight: 1.2;
   --lh-snug: 1.4;
-  --lh-base: 1.58;
+  --lh-base: 1.5;
 
-  /* ---------- 纸张 ---------- */
-  --bg: #efede7;
-  --bg-deep: #e6e3db;
-  --panel: #fbfaf7;
-  --panel-2: #f6f4ee;
-  --panel-3: #f0ede5;
-  --sunken: #e8e5dc;
-  --overlay: rgb(18 20 24 / 52%);
+  /* ---------- 地面与表面 ---------- */
+  --ground: #f9fafb;
+  --surface: #ffffff;
+  --raised: #f4f5f6;
+  --active: #eeeeee;
+  --border: #e8e8e8;
+  --rule: #f1f2f3;
+  --control: #d1d5db;
 
-  /* ---------- 墨色发丝线 ---------- */
-  --line: #dfdbd1;
-  --line-soft: #ebe8e0;
-  --line-strong: #c8c2b4;
+  --text: #111111;
+  --muted: #5f6368;
+  --faint: #6b6b6b;
 
-  --ink: #16181c;
-  --ink-2: #454a52;
-  --ink-3: #6a6f77;
-  --ink-4: #92958f;
-  --ink-inverse: #faf8f3;
+  /* 旧令牌别名：让尚未迁移的页面继续可读，但语义已换成 v4 */
+  --bg: var(--ground);
+  --bg-deep: #f3f4f6;
+  --panel: var(--surface);
+  --panel-2: #fcfcfc;
+  --panel-3: var(--raised);
+  --sunken: var(--raised);
+  --rail: var(--ground);
+  --rail-2: var(--raised);
+  --rail-line: var(--border);
+  --rail-ink: var(--text);
+  --rail-ink-2: var(--muted);
+  --rail-ink-3: var(--faint);
+  --rail-active: var(--active);
+  --line: var(--border);
+  --line-soft: var(--rule);
+  --line-strong: var(--control);
+  --ink: var(--text);
+  --ink-2: #3d4043;
+  --ink-3: var(--muted);
+  --ink-4: var(--faint);
+  --ink-inverse: #ffffff;
 
-  /* ---------- 书脊（深色导航） ---------- */
-  --rail: #14171c;
-  --rail-2: #1b1f25;
-  --rail-line: #2a2f37;
-  --rail-ink: #d8d9d5;
-  --rail-ink-2: #8c9199;
-  --rail-ink-3: #656b74;
-  --rail-active: #23282f;
-
-  /* ---------- 强调：印刷群青 ---------- */
-  --accent: #1f4bd8;
-  --accent-hover: #183db5;
-  --accent-press: #143394;
-  --accent-weak: #e8edfb;
-  --accent-line: #c3d0f3;
-  --accent-ink: #16337f;
+  /* ---------- 唯一数据色：临床青绿 ---------- */
+  --accent: #1f6f5c;
+  --accent-strong: #175747;
+  --accent-weak: #e6f2ee;
+  --accent-line: #bcd9d0;
+  --accent-ink: #123f34;
 
   /* ---------- 状态 ---------- */
-  --ok: #1b6b4a;
-  --ok-weak: #e7f2ec;
-  --ok-line: #bcd9cb;
+  --positive: #247b50;
+  --positive-bg: #dcfae5;
+  --positive-ink: #04250e;
+  --negative: #c4242a;
+  --negative-bg: #ffedea;
+  --negative-ink: #831c1e;
+  --warning: #92400e;
+  --warning-bg: #fffbeb;
+  --warning-ink: #92400e;
+  --warning-line: #fde68a;
+  --neutral-bg: #eeeeee;
+  --neutral-ink: #3d3d3d;
 
-  --warn: #86590c;
-  --warn-weak: #faf1e0;
-  --warn-line: #e6d1a6;
+  /* 旧状态别名 */
+  --ok: var(--positive);
+  --ok-weak: var(--positive-bg);
+  --ok-line: #b7e4c7;
+  --warn: var(--warning);
+  --warn-weak: var(--warning-bg);
+  --warn-line: var(--warning-line);
+  --danger: var(--negative);
+  --danger-weak: var(--negative-bg);
+  --danger-line: #f3c3bf;
+  --neutral: var(--neutral-ink);
+  --neutral-weak: var(--neutral-bg);
+  --neutral-line: #dddddd;
 
-  --danger: #a32b22;
-  --danger-weak: #fbeceb;
-  --danger-line: #eec2bd;
+  /* ---------- 品牌 ---------- */
+  --brand: #1f6f5c;
+  --brand-deep: #0f2b24;
+  --brand-mid: #17463b;
+  --brand-tint: #e6f2ee;
 
-  --neutral: #545a63;
-  --neutral-weak: #eeeee9;
-  --neutral-line: #d9d7ce;
+  /* ---------- 数据可视化 ---------- */
+  --chart-accent: var(--accent);
+  --chart-muted: #cfd3d6;
+  --chart-grid: #e5e5e5;
+  --axis-ink: var(--muted);
+  --chart-span: 0.06;
 
-  /* ---------- 品牌暗场 ---------- */
-  --brand: #12306b;
-  --brand-deep: #0a1220;
-  --brand-mid: #121e33;
-  --brand-tint: #e7ebf5;
-
-  /* ---------- 间距：4pt 栅格（2 为光学微调） ---------- */
+  /* ---------- 间距：4pt 栅格 ---------- */
   --s0: 2px;
   --s1: 4px;
   --s2: 8px;
@@ -113,37 +147,44 @@
   --s16: 64px;
   --s20: 80px;
 
-  /* ---------- 圆角：印刷品克制的 2–4px ---------- */
-  --r-xs: 2px;
-  --r-sm: 3px;
-  --r-md: 4px;
-  --r-lg: 5px;
-  --r-xl: 6px;
+  /* ---------- 圆角：紧凑型 4–8，控件 6 ---------- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
   --r-pill: 999px;
 
-  /* ---------- 阴影：几乎不用；浮层才允许 ---------- */
-  --shadow-card: 0 1px 0 rgb(22 24 28 / 3%);
-  --shadow-1: 0 1px 2px rgb(22 24 28 / 8%);
-  --shadow-2: 0 6px 16px rgb(22 24 28 / 10%), 0 24px 48px rgb(22 24 28 / 12%);
-  --shadow-3: 0 12px 28px rgb(22 24 28 / 14%), 0 48px 96px rgb(22 24 28 / 20%);
-  --card-highlight: inset 0 1px 0 rgb(255 255 255 / 60%);
+  /* 阴影只给真正漂浮的东西 */
+  --shadow-card: none;
+  --shadow-1: 0 1px 2px rgb(17 17 17 / 6%);
+  --shadow-2: 0 8px 24px rgb(17 17 17 / 10%);
+  --shadow-3: 0 16px 48px rgb(17 17 17 / 14%);
+  --card-highlight: none;
 
-  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(31 75 216 / 60%);
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 2px;
 
   /* ---------- 布局 ---------- */
-  --rail-w: 236px;
-  --rail-w-collapsed: 62px;
-  --topbar-h: 56px;
+  --sidebar-w: 232px;
+  --rail-w: 232px;
+  --rail-w-collapsed: 232px;
+  --canvas-pad: 24px;
+  --gap: 16px;
+  --card-pad: 20px;
+  --control-h: 32px;
+  --row-h: 44px;
+  --nav-row: 32px;
   --inspector-w: 320px;
+  --topbar-h: 0px;
 
-  /* ---------- 动效 ---------- */
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* ---------- 动效：只做反馈，不做入场表演 ---------- */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
-  --dur-fast: 110ms;
-  --dur: 170ms;
-  --dur-slow: 260ms;
+  --dur-fast: 120ms;
+  --dur: 160ms;
+  --dur-slow: 220ms;
 
-  /* ---------- 层级 ---------- */
   --z-sticky: 10;
   --z-rail: 20;
   --z-backdrop: 40;
@@ -155,61 +196,86 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0c0e11;
-  --bg-deep: #080a0c;
-  --panel: #13161a;
-  --panel-2: #171a1f;
-  --panel-3: #1c2026;
-  --sunken: #0f1216;
-  --overlay: rgb(0 0 0 / 64%);
+  --ground: #000000;
+  --surface: #111111;
+  --raised: #222222;
+  --active: #222222;
+  --border: #1a1a1a;
+  --rule: #161616;
+  --control: #444444;
 
-  --line: #262a30;
-  --line-soft: #1e2228;
-  --line-strong: #363c44;
+  --text: #ffffff;
+  --muted: #b4b4b4;
+  --faint: #949494;
 
-  --ink: #eceae4;
-  --ink-2: #b9bbb7;
-  --ink-3: #8d918f;
-  --ink-4: #6c706e;
-  --ink-inverse: #0c0e11;
+  --bg: var(--ground);
+  --bg-deep: #000000;
+  --panel: var(--surface);
+  --panel-2: #151515;
+  --panel-3: var(--raised);
+  --sunken: var(--raised);
+  --rail: var(--ground);
+  --rail-2: var(--raised);
+  --rail-line: var(--border);
+  --rail-ink: var(--text);
+  --rail-ink-2: var(--muted);
+  --rail-ink-3: var(--faint);
+  --rail-active: var(--active);
+  --line: var(--border);
+  --line-soft: var(--rule);
+  --line-strong: var(--control);
+  --ink: var(--text);
+  --ink-2: #d0d0d0;
+  --ink-3: var(--muted);
+  --ink-4: var(--faint);
+  --ink-inverse: #000000;
 
-  --rail: #08090b;
-  --rail-2: #0f1114;
-  --rail-line: #21252b;
-  --rail-ink: #e2e1dc;
-  --rail-ink-2: #93979d;
-  --rail-ink-3: #5f646b;
-  --rail-active: #191d22;
+  --accent: #6fb39f;
+  --accent-strong: #8ac7b5;
+  --accent-weak: #142a24;
+  --accent-line: #295447;
+  --accent-ink: #bfe4d8;
 
-  --accent: #7f9cf7;
-  --accent-hover: #9db4fa;
-  --accent-press: #6a89e8;
-  --accent-weak: #17203a;
-  --accent-line: #2c3d6b;
-  --accent-ink: #b9caf9;
+  --positive: #3fc07a;
+  --positive-bg: #172a1d;
+  --positive-ink: #3fc07a;
+  --negative: #e5566f;
+  --negative-bg: #2c1a20;
+  --negative-ink: #e5566f;
+  --warning: #e5a93b;
+  --warning-bg: #2b2414;
+  --warning-ink: #e5a93b;
+  --warning-line: #4a3a1d;
+  --neutral-bg: #222222;
+  --neutral-ink: #ffffff;
 
-  --ok: #4fbf92;
-  --ok-weak: #0f2a20;
-  --ok-line: #235040;
-  --warn: #d9a952;
-  --warn-weak: #2a2113;
-  --warn-line: #4a3a1d;
-  --danger: #eb8b82;
-  --danger-weak: #2d1716;
+  --ok: var(--positive);
+  --ok-weak: var(--positive-bg);
+  --ok-line: #23503c;
+  --warn: var(--warning);
+  --warn-weak: var(--warning-bg);
+  --warn-line: var(--warning-line);
+  --danger: var(--negative);
+  --danger-weak: var(--negative-bg);
   --danger-line: #552b28;
-  --neutral: #b3b6b4;
-  --neutral-weak: #1c2025;
-  --neutral-line: #2e343b;
+  --neutral: var(--neutral-ink);
+  --neutral-weak: var(--neutral-bg);
+  --neutral-line: #2e2e2e;
 
-  --brand: #9db4fa;
-  --brand-deep: #06080c;
-  --brand-mid: #0d1420;
-  --brand-tint: #141c2c;
+  --brand: #6fb39f;
+  --brand-deep: #000000;
+  --brand-mid: #0d1a17;
+  --brand-tint: #142a24;
 
-  --shadow-card: 0 1px 0 rgb(0 0 0 / 30%);
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 44%);
-  --shadow-2: 0 8px 20px rgb(0 0 0 / 48%);
-  --shadow-3: 0 24px 56px rgb(0 0 0 / 60%);
-  --card-highlight: inset 0 1px 0 rgb(255 255 255 / 4%);
-  --focus: 0 0 0 2px var(--panel), 0 0 0 4px rgb(127 156 247 / 60%);
+  --chart-accent: var(--accent);
+  --chart-muted: #4a4a4a;
+  --chart-grid: #2b2b2b;
+  --axis-ink: var(--muted);
+  --chart-span: 0.12;
+
+  --shadow-card: none;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 48%);
+  --shadow-3: 0 16px 48px rgb(0 0 0 / 60%);
+  --card-highlight: none;
 }

@@ -108,8 +108,7 @@ function onTab(e: KeyboardEvent) {
   position: fixed;
   inset: 0;
   z-index: var(--z-backdrop);
-  background: rgb(16 24 40 / 42%);
-  backdrop-filter: blur(1px);
+  background: rgb(0 0 0 / 32%);
 }
 
 .modal-panel {
@@ -135,13 +134,14 @@ function onTab(e: KeyboardEvent) {
 }
 
 .modal-title {
-  font-size: var(--fs-16);
+  font-size: 18px;
+  line-height: 1.3;
 }
 
 .modal-sub {
   margin-top: 4px;
-  font-size: var(--fs-12);
-  color: var(--ink-3);
+  font-size: var(--fs-body);
+  color: var(--muted);
 }
 
 .modal-body {

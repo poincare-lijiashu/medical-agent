@@ -1,5 +1,6 @@
-<!-- 走势/分布图：纯 SVG，无第三方图表库。
-     设计约束：只画数据需要的刻度；基线、柱形与折线不超过三种墨色；悬停给出精确读数。 -->
+<!-- 走势图 v4：单序列折线，2px 直段，3–5 条横向网格，y 轴刻度在左，x 轴最多 7 个标签。
+     app-screens.md §6：趋势用一条线；不做柱+线双编码；单序列无图例；悬停给精确读数；
+     同时提供隐藏的数据表作为屏幕阅读器替代。 -->
 <template>
   <figure class="trend" role="group" :aria-label="ariaLabel">
     <svg
@@ -10,65 +11,71 @@
       aria-hidden="true"
       @mouseleave="hover = -1"
     >
-      <!-- 水平参考线：0 / 50 / 100%，避免密集网格 -->
+      <!-- y 轴刻度 -->
+      <g class="trend-y">
+        <text
+          v-for="t in yTicks"
+          :key="t.v"
+          :x="PAD.l - 6"
+          :y="t.y + 3"
+          text-anchor="end"
+        >
+          {{ t.label }}
+        </text>
+      </g>
+
+      <!-- 网格线：4 条，低对比，不画 y 轴线 -->
       <g class="trend-grid">
-        <line v-for="g in gridLines" :key="g.v" :x1="PAD.l" :x2="W - PAD.r" :y1="g.y" :y2="g.y" />
+        <line v-for="t in yTicks" :key="`g-${t.v}`" :x1="PAD.l" :x2="W - PAD.r" :y1="t.y" :y2="t.y" />
       </g>
 
-      <!-- 柱：占用分钟；未排台的日子保留极细的基线痕迹，表示"确实为 0" -->
-      <g class="trend-bars">
-        <rect
-          v-for="(p, i) in points"
-          :key="`b-${i}`"
-          :x="barX(i)"
-          :y="barY(p.value)"
-          :width="barW"
-          :height="barH(p.value)"
-          :class="['trend-bar', { 'is-hover': hover === i }]"
-          @mouseenter="hover = i"
-        />
-      </g>
-
-      <!-- 折线：利用率趋势；首尾不封闭，避免误读为面积 -->
+      <!-- 主线：单一颜色，直段 -->
       <polyline class="trend-line" :points="linePoints" />
 
-      <!-- 末点标记 -->
-      <g v-if="points.length">
-        <circle class="trend-dot" :cx="centerX(points.length - 1)" :cy="barY(points[points.length - 1].value)" r="3" />
-      </g>
+      <!-- 末点直接标注 -->
+      <circle
+        v-if="points.length"
+        class="trend-dot"
+        :cx="xOf(points.length - 1)"
+        :cy="yOf(points[points.length - 1].value)"
+        r="3.5"
+      />
 
       <!-- 悬停读数 -->
       <g v-if="hover >= 0 && points[hover]" class="trend-hover">
-        <line
-          :x1="centerX(hover)"
-          :x2="centerX(hover)"
-          :y1="PAD.t"
-          :y2="H - PAD.b"
-        />
-        <rect
-          :x="Math.min(Math.max(centerX(hover) - 46, 2), W - 96)"
-          :y="Math.max(barY(points[hover].value) - 30, 2)"
-          width="92"
-          height="22"
-          rx="2"
-        />
+        <line :x1="xOf(hover)" :x2="xOf(hover)" :y1="PAD.t" :y2="H - PAD.b" />
+        <circle :cx="xOf(hover)" :cy="yOf(points[hover].value)" r="4" />
       </g>
     </svg>
 
-    <!-- 精确读数用 HTML 叠加，保证可复制与可读 -->
-    <div v-if="hover >= 0 && points[hover]" class="trend-tip" :style="tipStyle">
-      <span class="mono">{{ points[hover].label }}</span>
-      <b class="readout">{{ format(points[hover].value) }}</b>
-      <span v-if="points[hover].meta" class="muted">{{ points[hover].meta }}</span>
-    </div>
-
-    <div class="trend-axis" aria-hidden="true">
-      <span v-for="(p, i) in points" :key="`a-${i}`" :class="{ 'is-hover': hover === i }">
+    <!-- x 轴：最多 7 个标签，不旋转 -->
+    <div class="trend-x" aria-hidden="true">
+      <span v-for="(p, i) in points" :key="`x-${i}`" :class="{ 'is-hover': hover === i }">
         {{ p.label }}
       </span>
     </div>
 
+    <div v-if="hover >= 0 && points[hover]" class="trend-tip" :style="tipStyle">
+      <span>{{ points[hover].label }}</span>
+      <b class="readout">{{ format(points[hover].value) }}</b>
+      <span v-if="points[hover].meta" class="muted">{{ points[hover].meta }}</span>
+    </div>
+
     <figcaption v-if="caption" class="trend-caption">{{ caption }}</figcaption>
+
+    <table class="sr-only">
+      <caption>{{ ariaLabel }}</caption>
+      <thead>
+        <tr><th scope="col">时间</th><th scope="col">数值</th><th scope="col">说明</th></tr>
+      </thead>
+      <tbody>
+        <tr v-for="(p, i) in points" :key="`t-${i}`">
+          <td>{{ p.label }}</td>
+          <td>{{ format(p.value) }}</td>
+          <td>{{ p.meta || '—' }}</td>
+        </tr>
+      </tbody>
+    </table>
   </figure>
 </template>
 
@@ -85,72 +92,55 @@ const props = withDefaults(
     ariaLabel?: string
   }>(),
   {
-    height: 132,
+    height: 150,
     max: 0,
     format: (v: number) => `${(v * 100).toFixed(1)}%`,
     caption: '',
-    ariaLabel: '趋势图',
+    ariaLabel: '走势图',
   },
 )
 
 const W = 640
-const H = 160
-const PAD = { l: 6, r: 6, t: 10, b: 8 }
+const H = 150
+const PAD = { l: 34, r: 8, t: 8, b: 8 }
+
 const hover = ref(-1)
 
 const maxValue = computed(() => {
   const dataMax = Math.max(...props.points.map((p) => p.value), 0)
   if (props.max > 0) return props.max
-  // 利用率常见 0–1；为空时使用 0.2 的下限，避免 0 值把轴压扁
-  return Math.max(dataMax * 1.15, 0.2)
+  return Math.max(dataMax * 1.1, 0.2)
 })
 
-const gridLines = computed(() =>
-  [0, 0.5, 1].map((r) => ({ v: r, y: PAD.t + (1 - r) * (H - PAD.t - PAD.b) })),
+const yTicks = computed(() =>
+  [1, 0.75, 0.5, 0.25, 0].map((r) => ({
+    v: r,
+    y: PAD.t + (1 - r) * (H - PAD.t - PAD.b),
+    label: props.format(maxValue.value * r),
+  })),
 )
 
-const slot = computed(() => (W - PAD.l - PAD.r) / Math.max(props.points.length, 1))
-const barW = computed(() => Math.max(Math.min(slot.value * 0.46, 26), 3))
+const xOf = (i: number) =>
+  PAD.l + ((W - PAD.l - PAD.r) / Math.max(props.points.length - 1, 1)) * i
 
-function centerX(i: number) {
-  return PAD.l + slot.value * (i + 0.5)
-}
-
-function barX(i: number) {
-  return centerX(i) - barW.value / 2
-}
-
-function plotH() {
-  return H - PAD.t - PAD.b
-}
-
-function barY(v: number) {
-  return PAD.t + plotH() * (1 - Math.min(v / maxValue.value, 1))
-}
-
-function barH(v: number) {
-  const h = plotH() * (Math.min(v / maxValue.value, 1))
-  return v > 0 ? Math.max(h, 1.5) : 0
-}
+const yOf = (v: number) =>
+  PAD.t + (1 - Math.min(v / maxValue.value, 1)) * (H - PAD.t - PAD.b)
 
 const linePoints = computed(() =>
-  props.points
-    .map((p, i) => `${centerX(i).toFixed(1)},${barY(p.value).toFixed(1)}`)
-    .join(' '),
+  props.points.map((p, i) => `${xOf(i).toFixed(1)},${yOf(p.value).toFixed(1)}`).join(' '),
 )
 
 const tipStyle = computed(() => {
   if (hover.value < 0) return {}
-  const pct = (centerX(hover.value) / W) * 100
-  return { left: `${pct}%` }
+  return { left: `${(xOf(hover.value) / W) * 100}%` }
 })
 </script>
 
 <style scoped>
 .trend {
-  margin: 0;
   position: relative;
   width: 100%;
+  min-width: 0;
 }
 
 .trend-svg {
@@ -159,90 +149,96 @@ const tipStyle = computed(() => {
   overflow: visible;
 }
 
+.trend-y text {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-sans);
+}
+
 .trend-grid line {
-  stroke: var(--line);
+  stroke: var(--chart-grid);
   stroke-width: 1;
-  stroke-dasharray: 1 3;
-}
-
-.trend-bar {
-  fill: var(--accent-line);
-  transition: fill var(--dur-fast) var(--ease);
-}
-
-.trend-bar.is-hover {
-  fill: var(--accent);
 }
 
 .trend-line {
   fill: none;
-  stroke: var(--ink);
-  stroke-width: 1.4;
+  stroke: var(--accent);
+  stroke-width: 2;
   stroke-linejoin: round;
   stroke-linecap: round;
 }
 
 .trend-dot {
   fill: var(--accent);
-  stroke: var(--panel);
-  stroke-width: 1.5;
+  stroke: var(--surface);
+  stroke-width: 2;
 }
 
 .trend-hover line {
-  stroke: var(--ink-3);
+  stroke: var(--muted);
   stroke-width: 1;
   stroke-dasharray: 2 3;
 }
 
-.trend-hover rect {
-  fill: var(--ink);
-  opacity: 0.9;
+.trend-hover circle {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
 }
 
-.trend-axis {
+.trend-x {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
   margin-top: 4px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-9);
-  color: var(--ink-4);
+  padding-left: 34px;
+  font-size: 11px;
+  color: var(--muted);
   text-align: center;
-  letter-spacing: 0.02em;
 }
 
-.trend-axis .is-hover {
-  color: var(--ink);
+.trend-x .is-hover {
+  color: var(--text);
 }
 
 .trend-tip {
   position: absolute;
-  top: -2px;
+  top: 0;
   transform: translate(-50%, -100%);
   display: flex;
   align-items: baseline;
   gap: 6px;
-  padding: 3px 7px;
-  background: var(--ink);
-  color: var(--ink-inverse);
-  border-radius: 2px;
-  font-size: var(--fs-10);
+  padding: 4px 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text);
   white-space: nowrap;
   pointer-events: none;
   z-index: 2;
 }
 
 .trend-tip .readout {
-  font-size: var(--fs-12);
-}
-
-.trend-tip .muted {
-  color: rgb(255 255 255 / 62%);
+  font-size: 12px;
 }
 
 .trend-caption {
   margin-top: 6px;
-  font-size: var(--fs-10);
-  color: var(--ink-3);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 </style>

@@ -1,22 +1,15 @@
 <template>
   <div class="page">
-    <PageMasthead
-      index="07"
-      kicker="EVIDENCE RETRIEVAL / 质量与知识"
+    <PageHeader
       title="知识库"
-      mandate="检索与问答都必须带引用。语义检索不可用时页面会明确降级，不会把关键词命中伪装成「理解」。"
-      :facts="[
-        { k: 'SPACES', v: String(spaces.length) },
-        { k: 'DOCS', v: String(stats.documents) },
-        { k: 'MODE', v: mode },
-      ]"
+      :sub="`检索与问答都必须带引用。语义检索不可用时明确降级，不把关键词命中伪装成理解。当前模式 ${modeLabel(mode)}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loadingSpaces" @click="loadSpaces">
-          <AppIcon name="refresh" :size="14" /> 刷新空间
+          <AppIcon name="refresh" :size="15" /> 刷新空间
         </button>
       </template>
-    </PageMasthead>
+    </PageHeader>
 
     <div class="kb">
       <aside class="sheet spaces">
@@ -36,9 +29,8 @@
           desc="知识空间由管理员创建并分配成员。加入后即可检索指南、规范与院内制度。"
         />
         <ul v-else class="space-list">
-          <li v-for="(s, i) in spaces" :key="s.id">
+          <li v-for="s in spaces" :key="s.id">
             <button class="space-item" :class="{ active: space?.id === s.id }" type="button" @click="selectSpace(s)">
-              <span class="space-no">{{ String(i + 1).padStart(2, '0') }}</span>
               <span class="space-main">
                 <span class="space-name">{{ s.name }}</span>
                 <span class="space-meta">
@@ -231,7 +223,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageMasthead from '@/components/ui/PageMasthead.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { kbApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -383,17 +375,9 @@ onMounted(loadSpaces)
 }
 
 .space-item.active {
-  background: var(--accent-weak);
-  border-color: var(--accent-line);
-  border-left-color: var(--accent);
-}
-
-.space-no {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.04em;
-  color: var(--ink-4);
-  padding-top: 3px;
+  background: var(--active);
+  border-color: transparent;
+  border-left-color: transparent;
 }
 
 .space-main {

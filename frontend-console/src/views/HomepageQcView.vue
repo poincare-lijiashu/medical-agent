@@ -1,22 +1,15 @@
 <template>
   <div class="page">
-    <PageMasthead
-      index="06"
-      kicker="MEDICAL RECORD QC / 质量与知识"
+    <PageHeader
       title="病案首页质控"
-      mandate="按状态核对首页完整性与费用勾稽。提交后不可随意修改；归档需要与提交不同的操作人（四眼原则）。"
-      :facts="[
-        { k: 'RECORDS', v: String(rows.length) },
-        { k: 'FILTER', v: status || 'ALL' },
-        { k: 'SOURCE', v: 'emr_svc' },
-      ]"
+      :sub="`按状态核对首页完整性与费用勾稽。提交后不可随意修改；归档需要与提交不同的操作人。当前筛选 ${status || '全部'} · 共 ${rows.length} 份`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loading" @click="load">
-          <AppIcon name="refresh" :size="14" /> 刷新
+          <AppIcon name="refresh" :size="15" /> 刷新
         </button>
       </template>
-    </PageMasthead>
+    </PageHeader>
 
     <div class="stats">
       <button
@@ -173,7 +166,7 @@ import { onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageMasthead from '@/components/ui/PageMasthead.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { emrApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -303,15 +296,15 @@ onMounted(load)
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   padding: var(--s3) var(--s4);
   background: none;
   border: 0;
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--border);
   border-radius: 0;
   text-align: left;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
+  transition: background-color var(--dur) ease;
 }
 
 .stat:last-child {
@@ -319,37 +312,31 @@ onMounted(load)
 }
 
 .stat:hover {
-  background: var(--panel-2);
+  background: var(--raised);
 }
 
 .stat.active {
-  background: var(--accent-weak);
+  background: var(--active);
 }
 
 .stat.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--accent);
+  display: none;
 }
 
 .stat-label {
-  font-family: var(--font-mono);
-  font-size: var(--fs-9);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-3);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
 }
 
 .stat-value {
-  font-family: var(--font-mono);
-  font-size: var(--fs-24);
+  font-family: var(--font-sans);
+  font-size: 24px;
   font-weight: 500;
-  letter-spacing: -0.05em;
-  color: var(--ink);
+  letter-spacing: -0.01em;
+  color: var(--text);
 }
 
 .loading {

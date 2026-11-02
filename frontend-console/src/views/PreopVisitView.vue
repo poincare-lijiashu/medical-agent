@@ -1,22 +1,15 @@
 <template>
   <div class="page">
-    <PageMasthead
-      index="02"
-      kicker="PRE-ANESTHESIA REVIEW / 临床诊疗"
+    <PageHeader
       title="术前访视"
-      mandate="麻醉评估与风险交代。签署后记录冻结；结论为「不宜手术」时必须由上级复核后才能继续排台。"
-      :facts="[
-        { k: 'CASE', v: current?.caseNo || '—' },
-        { k: 'STATUS', v: record?.status || 'DRAFT' },
-        { k: 'SOURCE', v: 'clinical_svc' },
-      ]"
+      :sub="`麻醉评估与风险交代。签署后记录冻结；结论为「不宜手术」时必须由上级复核。${current?.caseNo ? ` · 当前病例 ${current.caseNo}` : ''}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="recordLoading || !current" @click="reloadRecord">
-          <AppIcon name="refresh" :size="14" /> 重新载入
+          <AppIcon name="refresh" :size="15" /> 重新载入
         </button>
       </template>
-    </PageMasthead>
+    </PageHeader>
 
     <PatientVisitSearch @select="onSelect" />
 
@@ -59,22 +52,22 @@
 
         <div v-if="current" class="kpi-strip">
           <div class="kpi">
-            <div class="kpi-label"><AppIcon name="clipboard" :size="12" /> 访视状态</div>
+            <div class="kpi-label">访视状态</div>
             <div class="kpi-value kpi-value--status"><StatusPill :value="record?.status || 'DRAFT'" /></div>
             <div class="kpi-meta">{{ signed ? '已签署，记录冻结' : '可编辑并提交签署' }}</div>
           </div>
           <div class="kpi">
-            <div class="kpi-label"><AppIcon name="stethoscope" :size="12" /> ASA 分级</div>
+            <div class="kpi-label">ASA 分级</div>
             <div class="kpi-value">{{ form.asaGrade || '—' }}<span class="kpi-unit">级</span></div>
             <div class="kpi-meta">Mallampati {{ form.mallampati || '未评估' }}</div>
           </div>
           <div class="kpi" :class="{ 'is-warn': Number(form.fastingSolidHours) < 6 }">
-            <div class="kpi-label"><AppIcon name="clock" :size="12" /> 禁食时长</div>
+            <div class="kpi-label">禁食时长</div>
             <div class="kpi-value">{{ form.fastingSolidHours ?? 0 }}<span class="kpi-unit">小时</span></div>
             <div class="kpi-meta">清液 {{ form.fastingClearHours ?? 0 }} 小时</div>
           </div>
           <div class="kpi" :class="{ 'is-danger': form.conclusion === 'UNFIT' }">
-            <div class="kpi-label"><AppIcon name="heart" :size="12" /> 麻醉结论</div>
+            <div class="kpi-label">麻醉结论</div>
             <div class="kpi-value kpi-value--status">
               <StatusPill v-if="form.conclusion" :value="form.conclusion" />
               <span v-else class="muted" style="font-size: var(--fs-12)">未下结论</span>
@@ -220,7 +213,7 @@ import { computed, reactive, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageMasthead from '@/components/ui/PageMasthead.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
 import { surgeryApi } from '@/api'

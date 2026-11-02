@@ -1,41 +1,34 @@
 <template>
   <div class="page">
-    <PageMasthead
-      index="05"
-      kicker="NARCOTIC LEDGER / 手术与收费"
+    <PageHeader
       title="麻精专册"
-      mandate="麻醉药品、第一类精神药品的处方专册。发药即登记，空安瓿回收必须与发药量一致，回收后不可重复操作。"
-      :facts="[
-        { k: 'RANGE', v: `${from} → ${to}` },
-        { k: 'RECORDS', v: String(rows.length) },
-        { k: 'PENDING', v: String(pendingCount) },
-      ]"
+      :sub="`麻醉药品与第一类精神药品的处方专册。发药即登记，空安瓿回收必须与发药量一致。查询区间 ${from} 至 ${to}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loading" @click="load">
-          <AppIcon name="refresh" :size="14" /> 刷新
+          <AppIcon name="refresh" :size="15" /> 刷新
         </button>
       </template>
-    </PageMasthead>
+    </PageHeader>
 
     <div class="kpi-strip">
       <div class="kpi">
-        <div class="kpi-label"><AppIcon name="clipboard" :size="12" /> 专册记录</div>
+        <div class="kpi-label">专册记录</div>
         <div class="kpi-value">{{ rows.length }}<span class="kpi-unit">条</span></div>
         <div class="kpi-meta">查询区间 {{ from }} 至 {{ to }}</div>
       </div>
       <div class="kpi" :class="{ 'is-danger': pendingCount > 0 }">
-        <div class="kpi-label"><AppIcon name="alert" :size="12" /> 待回收空安瓿</div>
+        <div class="kpi-label">待回收空安瓿</div>
         <div class="kpi-value">{{ pendingCount }}<span class="kpi-unit">条</span></div>
         <div class="kpi-meta">缺一环，整条药品流向不可闭环</div>
       </div>
       <div class="kpi">
-        <div class="kpi-label"><AppIcon name="check-circle" :size="12" /> 已回收</div>
+        <div class="kpi-label">已回收</div>
         <div class="kpi-value">{{ returnedCount }}<span class="kpi-unit">条</span></div>
         <div class="kpi-meta">回收人记录在册，不可重复操作</div>
       </div>
       <div class="kpi">
-        <div class="kpi-label"><AppIcon name="pill" :size="12" /> 涉及药品</div>
+        <div class="kpi-label">涉及药品</div>
         <div class="kpi-value">{{ drugKinds }}<span class="kpi-unit">种</span></div>
         <div class="kpi-meta">按药品编码去重统计</div>
       </div>
@@ -175,7 +168,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageMasthead from '@/components/ui/PageMasthead.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { pharmacyApi } from '@/api'
 import { errorText } from '@/api/http'

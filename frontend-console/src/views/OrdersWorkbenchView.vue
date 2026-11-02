@@ -1,22 +1,15 @@
 <template>
   <div class="page">
-    <PageMasthead
-      index="01"
-      kicker="CLINICAL ORDERS / 临床诊疗"
+    <PageHeader
       title="医嘱工作台"
-      mandate="以就诊为上下文组织医嘱、转送与费用。金额、状态与可执行动作均由服务端裁决，界面只负责把依据摆在操作旁边。"
-      :facts="[
-        { k: 'SOURCE', v: 'clinical_svc' },
-        { k: 'UPDATED', v: updatedAt || '—' },
-        { k: 'ROLE', v: role },
-      ]"
+      :sub="`以就诊为上下文组织医嘱、转送与费用。数据源 clinical_svc · 更新 ${updatedAt || '—'} · 当前角色 ${role}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loading" @click="refreshAll">
-          <AppIcon name="refresh" :size="14" /> 刷新
+          <AppIcon name="refresh" :size="15" /> 刷新
         </button>
       </template>
-    </PageMasthead>
+    </PageHeader>
 
     <!-- 患者上下文 -->
     <section class="card ctx">
@@ -95,9 +88,6 @@
     </section>
 
     <section v-if="!selectedPatient" class="card onboarding">
-      <div class="onboarding-art">
-        <img src="@/assets/brand/empty-orders.svg" width="150" height="105" alt="" />
-      </div>
       <div class="onboarding-body">
         <h2>从这里开始</h2>
         <ol class="steps">
@@ -697,7 +687,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
-import PageMasthead from '@/components/ui/PageMasthead.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, empiApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -769,7 +759,7 @@ async function searchPatients() {
 async function pickPatient(p: Patient) {
   selectedPatient.value = p
   showResults.value = false
-  keyword.value = p.name + ' · ' + p.patientNo
+  keyword.value = ''
   await loadVisits(p.id)
 }
 

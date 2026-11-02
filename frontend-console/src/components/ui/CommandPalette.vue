@@ -272,10 +272,10 @@ function close() {
 
 .palette-group {
   padding: 8px 8px 4px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-10);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-family: var(--font-sans);
+  font-size: var(--fs-small);
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--ink-4);
 }
 

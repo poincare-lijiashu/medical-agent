@@ -290,12 +290,12 @@
 }
 
 .visit-item:hover {
-  background: var(--panel-3);
+  background: var(--raised);
 }
 
 .visit-item.active {
-  background: var(--accent-weak);
-  border-color: var(--accent-line);
+  background: var(--active);
+  border-color: transparent;
 }
 
 .visit-top {
@@ -348,9 +348,9 @@
   align-items: center;
   gap: 8px;
   padding: 9px 12px;
-  border: 1px solid var(--accent-line);
-  background: var(--accent-weak);
-  color: var(--accent-ink);
+  border: 1px solid var(--border);
+  background: var(--raised);
+  color: var(--muted);
   border-radius: var(--r-md);
   font-size: var(--fs-12);
 }

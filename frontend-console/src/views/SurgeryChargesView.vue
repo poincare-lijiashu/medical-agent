@@ -1,22 +1,15 @@
 <template>
   <div class="page">
-    <PageMasthead
-      index="04"
-      kicker="CHARGE RECONCILIATION / 手术与收费"
+    <PageHeader
       title="术中收费核对"
-      mandate="按手术病例核对收费打包：先看预览，再记账。重复记账由服务端幂等处理（返回 addedAmount = 0）。"
-      :facts="[
-        { k: 'SOURCE', v: 'clinical_svc' },
-        { k: 'CASE', v: current?.caseNo || '—' },
-        { k: 'STATUS', v: preview?.caseStatus || '—' },
-      ]"
+      :sub="`按手术病例核对收费打包：先看预览，再记账。重复记账由服务端幂等处理。${current?.caseNo ? ` · 当前病例 ${current.caseNo}` : ''}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="previewLoading || !current" @click="loadPreview">
-          <AppIcon name="refresh" :size="14" /> 刷新预览
+          <AppIcon name="refresh" :size="15" /> 刷新预览
         </button>
       </template>
-    </PageMasthead>
+    </PageHeader>
 
     <PatientVisitSearch @select="onSelect" />
 
@@ -82,22 +75,22 @@
           <div v-else-if="preview" class="preview">
             <div class="kpi-strip preview-kpi">
               <div class="kpi">
-                <div class="kpi-label"><AppIcon name="receipt" :size="12" /> 打包总额</div>
+                <div class="kpi-label">打包总额</div>
                 <div class="kpi-value">{{ money(preview.totalAmount) }}</div>
                 <div class="kpi-meta">{{ preview.lines.length }} 个项目 · 服务端计价</div>
               </div>
               <div class="kpi" :class="{ 'is-warn': preview.pendingAmount > 0 }">
-                <div class="kpi-label"><AppIcon name="clock" :size="12" /> 待记账</div>
+                <div class="kpi-label">待记账</div>
                 <div class="kpi-value">{{ money(preview.pendingAmount) }}</div>
                 <div class="kpi-meta">{{ pendingLines.length }} 个项目尚未记账</div>
               </div>
               <div class="kpi is-accent">
-                <div class="kpi-label"><AppIcon name="check-circle" :size="12" /> 已记账</div>
+                <div class="kpi-label">已记账</div>
                 <div class="kpi-value">{{ money(chargedAmount) }}</div>
                 <div class="kpi-meta">{{ chargedLines.length }} 个项目已写入收费单</div>
               </div>
               <div class="kpi">
-                <div class="kpi-label"><AppIcon name="shield" :size="12" /> 病例状态</div>
+                <div class="kpi-label">病例状态</div>
                 <div class="kpi-value kpi-value--status"><StatusPill :value="preview.caseStatus" /></div>
                 <div class="kpi-meta">{{ preview.fullyCharged ? '已完成全部记账' : '仍存在待记账项目' }}</div>
               </div>
@@ -165,7 +158,7 @@ import { computed, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageMasthead from '@/components/ui/PageMasthead.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
 import { surgeryApi } from '@/api'
