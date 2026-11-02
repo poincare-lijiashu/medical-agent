@@ -1487,6 +1487,30 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.59 已完成（2026-11-02，病区备药与执行对账）
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| 病区备药 | 按日请领后，临床侧没有留下任何请领/收货痕迹："药房说发了、病区说没收到"无法追溯；护理执行与发药也对照不上 | 新增 `clinical V25`：`daily_dispense_request`（请领台账，`order_id+supply_date` 幂等，记录处方或失败原因）与 `ward_med_receipt`（收药确认，`dispense_id` 幂等）；新增备药看板与收药接口 |
+
+**关键实现**
+- `POST /clinical/visits/{id}/daily-dispense-requests` 现在**先落台账再返回**：成功记处方号，
+  失败记原因；重试不会把已成功的处方信息抹掉（`coalesce` + 状态不降级）。
+- `POST /clinical/visits/{id}/orders/{orderId}/ward-receipts`：只允许对"当日已成功请领"的长嘱药品收货，
+  数量不超过请领数量；同一发药单重复登记幂等返回，医嘱/数量不一致 409。
+- `GET /clinical/visits/{id}/dispense-board?date=`：一行汇总
+  **请领状态 / 处方号 / 收货数量 / 护理执行状态**，含"当日已停嘱但有历史痕迹"的医嘱；未来日期 422。
+- 边界：本批只做可追溯对账，不建病区二级库存（药房发药已扣批次库存），库存模型留待后续。
+
+**实测**
+- 全量单测 **822 项**全绿（+5：收药前置校验/超量/幂等/临时医嘱拒绝/看板四段聚合）
+- `clinical_long_dispense_smoke.ps1` 扩展到 **54 项断言全 PASS**：请领台账、看板四段状态、
+  护理执行回显、收药幂等、收药超量 422、看板未来日期 422
+- 回归：`platform_smoke`、`clinical_long_order_smoke`、`pharmacy_billing_smoke` 全 PASS
+- 真实库：`clinical_svc` 迁移到 **V25**
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

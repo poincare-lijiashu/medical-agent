@@ -189,6 +189,13 @@
 | B2 后续 | ✅ 已交付 | 药房 `V8`：`prescription.supply_date` + 唯一索引 `(source_order_id, supply_date)`；临床新增 `POST /clinical/visits/{id}/daily-dispense-requests`（`DailyDispenseService`）：按日只请领当日有效的长嘱药品，逐条生成当日处方；重复请领幂等；停嘱批量作废未发药处方，已发药走退药 |
 | 验证 | ✅ | 单测 **817 项**全绿（+10）；`clinical_long_dispense_smoke.ps1` 38 项断言 PASS；`clinical_long_order_smoke` / `platform_smoke` / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke` / `pharmacy_order_refund_smoke` 回归 PASS；真实库 `pharmacy_svc → V8` |
 
+### 第七批（2026-11-02，病区备药与执行对账）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| B2 收尾 | ✅ 已交付 | `clinical V25`：`daily_dispense_request`（请领台账，`order_id+supply_date` 幂等）+ `ward_med_receipt`（收药，`dispense_id` 幂等）；`GET /clinical/visits/{id}/dispense-board` 汇总请领/处方/收药/护理执行；收药校验"当日已成功请领 + 不超请领数量"；请领失败也落台账，重试不抹掉已成功处方 |
+| 验证 | ✅ | 单测 **822 项**全绿（+5）；`clinical_long_dispense_smoke.ps1` 扩到 54 项断言 PASS；`platform_smoke` / `clinical_long_order_smoke` / `pharmacy_billing_smoke` 回归 PASS；真实库 `clinical_svc → V25` |
+
 ---
 
 ## 五、整改优先级建议
