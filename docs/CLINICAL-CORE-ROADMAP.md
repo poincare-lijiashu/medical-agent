@@ -1393,13 +1393,13 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 **实测**
 - 全量单测 **790 项**全绿（+8：`ActorGuardFilterTest`）
-- 覆盖矩阵：写操作缺头 400 / 空白 400 / 伪造 `system` 400 / 真实操作者放行；
-  GET 放行；`/internal`、`/actuator`、登录与刷新豁免；带 contextPath 部署同样生效
-- 网关侧已核实：`AuthGlobalFilter` 对每个已认证请求强制注入非空 `X-Actor`（username 缺失直接 401），
-  因此经网关的现有 E2E 不受影响；直连服务且不带头会被拦截（这正是要修的场景）
-
-**待补**：本批环境无法启动 Docker（GUI 需人工启动），E2E 回归待 Docker 起来后补跑
-（`platform_smoke` 等全部经网关，预期不回归）。
+- E2E 回归全 PASS：`platform_smoke`、`empi_patient_smoke`、`clinical_preop_consent_smoke`、
+  `pharmacy_smoke`、`insurance_smoke`、`db_guardrails`（13/13）、`kb_search_smoke`、`emr_homepage_smoke`
+- 直连反例：`POST :8083/clinical/wards` 不带 `X-Actor` → **400**；带 `X-Actor` 但无令牌 → 422（已越过守卫，进入业务校验）
+- **E2E 抓到的真实回归（已修）**：网关对 auth 路由用 `StripPrefix=3`，`/api/v2/auth/login` 到服务内是 **`/login`**，
+  而豁免清单最初只写了 `/auth/login` → 登录被守卫 400。已同时豁免 `/login`、`/refresh`，并补单测。
+  另发现 **Maven jar 插件对"仅依赖变化"不重建服务 jar**（common 已更新但 auth jar 仍是旧包），
+  必须 `clean package` 才能生效——已写入 HANDOFF 踩坑。
 
 ---
 

@@ -92,8 +92,11 @@ class ActorGuardFilterTest {
     }
 
     @Test
-    @DisplayName("登录与刷新不需要 X-Actor（此时还没有身份）")
+    @DisplayName("登录与刷新不需要 X-Actor（网关 StripPrefix=3 后服务内路径是 /login、/refresh）")
     void authEntryPointsAreExempt() throws Exception {
+        assertEquals("true", run("POST", "/login", null).getHeader("X-Chain-Passed"));
+        assertEquals("true", run("POST", "/refresh", null).getHeader("X-Chain-Passed"));
+        // 直连服务（不经网关）时也可能是带前缀的形态
         assertEquals("true", run("POST", "/auth/login", null).getHeader("X-Chain-Passed"));
         assertEquals("true", run("POST", "/auth/refresh", null).getHeader("X-Chain-Passed"));
     }

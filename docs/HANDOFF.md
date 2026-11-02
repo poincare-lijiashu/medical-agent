@@ -22,13 +22,11 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-> **2026-11-02 续接状态**：代码已提交并双备份；9 个 Java 服务已停止；
-> **Docker Desktop 仍未运行**（agent 拉起的 GUI 进程会被回收，`docker desktop start` 也不行），
-> **需要人工双击 Docker Desktop 启动**，然后：
-> 1. `docker start medagent_pg`（必须手动：该容器 `restart=no`，不会自动拉起）；
-> 2. 按下面"启动顺序"逐条后台启动 auth → 业务服务 → gateway（`INTERNAL_API_TOKEN=medassist-dev-internal-token`）。
-> `medagent_loki` / `medagent_promtail` 是 `unless-stopped`，会随 Docker 自动启动。
-> **待补 E2E**：§1.55（X-Actor 守卫）的回归需在 Docker 起来后跑 `platform_smoke` 等。
+> **2026-11-02 续接状态**：代码已提交并双备份；9 个 Java 服务**当前运行中**（本机验证用）；
+> Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
+> §1.55（X-Actor 守卫）的 E2E 回归**已补跑并通过**：`platform_smoke` / `empi_patient_smoke` /
+> `clinical_preop_consent_smoke` / `pharmacy_smoke` / `insurance_smoke` / `db_guardrails`(13/13) /
+> `kb_search_smoke` / `emr_homepage_smoke`。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -1228,6 +1226,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
   按 ANSI 读文件而永远匹配不到；`db_guardrails.ps1` 因此只断言"被拒绝（退出码非 0）"，不断言具体文案
 - **审计表触发器只对"有数据的 UPDATE/DELETE"生效**：空表 UPDATE 影响 0 行不会触发，
   反例脚本必须先查 `count(*)`，为空则 SKIP，否则会误判为"防护失效"
+- **网关 StripPrefix 会改变服务内路径，写豁免清单时必须按"剥完后的路径"想**：auth 路由 `StripPrefix=3`
+  把 `/api/v2/auth/login` 变成 `/login`（不是 `/auth/login`），E1 守卫首版因此把登录拦成 400；
+  新增全局过滤器后必须用"经网关的真实请求"验证一次，别只看单测
+- **Maven 的 jar/spring-boot repackage 对"只有依赖变了"不重建模块 jar**：改了 `platform-common` 后
+  只跑 `package`，服务 jar 仍是旧包（实测 auth jar 时间戳没变），改动等于没生效；
+  跨模块改动必须 `mvn -o clean package -DskipTests`，且先停服务（Windows 会锁 jar）
 - **advisory lock 的键不能按业务参数拼**（如 `emr:hqms-export:{from}:{to}`）：参数不同的两个事务
   会拿到不同锁，看似"加了锁"其实完全不互斥；要串行就全局单键，或按 ID 排序逐行锁
 - **新增服务模块必须同时补 `MigrateOnlyRunner`**：`--medassist.migrate-only=true` 是自定义属性，

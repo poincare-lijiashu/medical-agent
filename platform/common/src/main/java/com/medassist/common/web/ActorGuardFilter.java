@@ -30,9 +30,16 @@ public class ActorGuardFilter extends OncePerRequestFilter {
 
     private static final Set<String> WRITE_METHODS = Set.of("POST", "PUT", "PATCH", "DELETE");
 
-    /** 无需 X-Actor 的路径前缀：内部通道、健康检查、登录与刷新。 */
+    /**
+     * 无需 X-Actor 的路径前缀：内部通道、健康检查、登录与刷新。
+     *
+     * <p>注意网关的 {@code StripPrefix=3} 会把 {@code /api/v2/auth/login} 剥成 {@code /login}
+     * （服务内没有 {@code /auth} 前缀），因此这里必须同时列出带前缀与剥离后的两种形态。
+     */
     private static final String[] EXEMPT_PREFIXES = {
-            "/internal/", "/actuator/", "/auth/login", "/auth/refresh"
+            "/internal/", "/actuator/",
+            "/auth/login", "/auth/refresh",
+            "/login", "/refresh"
     };
 
     /** 历史兜底值：出现即视为"没有真实操作者"。 */
