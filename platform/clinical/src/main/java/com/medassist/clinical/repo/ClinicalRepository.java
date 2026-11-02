@@ -1442,6 +1442,35 @@ public class ClinicalRepository {
     }
 
     /**
+     * 某医嘱（长嘱按供药日期）已处理的退费合计：applied + pending + done。
+     *
+     * <p>P1-9：退费上限此前只按"单条发药明细金额"封顶，同一医嘱多条明细累计仍可能超过
+     * 医嘱计费金额（药品价与收费项目价漂移时会超收退回，最终把 charge.total_amount 冲成负数）。
+     * 这里给出"该医嘱已处理总额"，供服务层做**医嘱级**封顶。
+     *
+     * @param supplyDate 长嘱传供药日期（只统计当天），临时医嘱传 null（统计整单）
+     */
+    public BigDecimal sumOrderRefundHandled(UUID orderId, LocalDate supplyDate) {
+        // 不用 "CAST(:x AS date) IS NULL OR ..." 的单条 SQL：JdbcClient 传 null 时
+        // JDBC 无法推断参数类型（PG 报 "can't infer the SQL type"），会把正常退药打成 500。
+        String sql = supplyDate == null
+                ? """
+                  SELECT coalesce(sum(applied_amount + pending_amount + done_amount), 0)
+                    FROM clinical_svc.order_refund WHERE order_id = ?
+                  """
+                : """
+                  SELECT coalesce(sum(applied_amount + pending_amount + done_amount), 0)
+                    FROM clinical_svc.order_refund WHERE order_id = ? AND supply_date = ?
+                  """;
+        JdbcClient.StatementSpec spec = jdbc.sql(sql).param(orderId);
+        if (supplyDate != null) {
+            spec = spec.param(supplyDate);
+        }
+        BigDecimal sum = spec.query(BigDecimal.class).single();
+        return sum == null ? BigDecimal.ZERO : sum;
+    }
+
+    /**
      * 某长嘱某日已登记但尚未消耗的冲减金额（按日计费时从当日金额里扣除）。
      *
      * <p>长嘱退药走的是"先记 applied、当日计费时扣减"这条路径：如果这里漏扣，

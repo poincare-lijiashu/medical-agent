@@ -63,7 +63,7 @@
   `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
   `2dbd8ab`（**危急值定向查询与网关下游超时**）、`d3daaec`（**权限矩阵单测与部署硬化**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **878 项**全绿（另有 3 项真库集成测试，`-Ppostgres-it`）
+- 工作区：clean（收工前已确认）；全量单测 **880 项**全绿（另有 3 项真库集成测试，`-Ppostgres-it`）
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar；启动必须带 `INTERNAL_API_TOKEN`）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V4**、`clinical_svc` → **V29**、
@@ -77,6 +77,9 @@
 - **真库 SQL 集成测试**（意见书 P1-4）：`mvn -Ppostgres-it -pl clinical -am test "-Dtest=ClinicalRepositoryPostgresIT" "-Dsurefire.failIfNoSpecifiedTests=false"`
   —— Testcontainers 起一次性 `postgres:15-alpine`，跑真实迁移建库，验证号源 CAS / 收费 CAS / 退药累计三条关键 SQL。
   默认 `mvn test` 通过 `@Tag("postgres")` 排除（无 Docker 的 CI 不受影响）。
+- **药品价差巡检**（P1-9 配套，只读）：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\price_drift_audit.ps1`
+  —— 比对 `clinical_svc.md_charge_item.price` 与 `pharmacy_svc.md_drug.price`（同编码），有漂移时列出明细；
+  退费已加医嘱级封顶，价差不会再把收费单冲成负数，但仍应尽快修正主数据。
 - **明天第一件事（建议顺序）**：
   1. ~~**病区库存与未执行退药（对账闭环最后一段）**~~ ✅ 已交付（§1.60，clinical V26）
   2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）；

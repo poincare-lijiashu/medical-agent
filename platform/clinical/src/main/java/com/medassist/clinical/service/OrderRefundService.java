@@ -108,6 +108,19 @@ public class OrderRefundService {
             return view(link, settled, false);
         }
 
+        // P1-9：医嘱级封顶。药品价（md_drug.price）与收费项目价（md_charge_item.price）
+        // 是两个真源；只按"单条发药明细金额"封顶时，同一医嘱多条明细累计仍可能超过
+        // 医嘱计费金额，最终把 charge.total_amount 冲成负数（CHECK 抛 500，患者侧看到多退）。
+        BigDecimal handled = repo.sumOrderRefundHandled(order.id(),
+                dailyScoped ? supplyDate : null);
+        BigDecimal cap = order.amount();
+        if (handled.add(delta).compareTo(cap) > 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "退药冲减累计将超过医嘱计费金额（医嘱 " + cap.toPlainString()
+                            + "，已处理 " + handled.toPlainString() + "，本次 " + delta.toPlainString()
+                            + "）：请先核对药品价与收费项目价是否一致");
+        }
+
         Optional<UUID> chargeId = locateCharge(order, dailyScoped, supplyDate);
         boolean settled = false;
         boolean cancelled = false;

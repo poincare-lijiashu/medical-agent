@@ -50,6 +50,8 @@ class OrderRefundServiceTest {
         service = new OrderRefundService(repo, JsonMapper.builder().build());
         when(repo.lockOrderById(orderId)).thenReturn(Optional.of(order("30.00")));
         when(repo.sumAppliedOrderRefund(orderId)).thenReturn(BigDecimal.ZERO);
+        // P1-9：医嘱级封顶默认"尚无其它明细处理过"
+        when(repo.sumOrderRefundHandled(eq(orderId), any())).thenReturn(BigDecimal.ZERO);
     }
 
     private VisitOrder order(String amount) {
@@ -76,6 +78,48 @@ class OrderRefundServiceTest {
     private OrderRefundReq req(String cumulative) {
         return new OrderRefundReq(orderId, itemId, new BigDecimal("30.00"),
                 new BigDecimal(cumulative), "患者退回", "pharmacist01", null);
+    }
+
+    @Test
+    @DisplayName("医嘱级封顶：多条发药明细累计超过医嘱金额时拒绝（P1-9，防收费单被冲成负数）")
+    void rejectsWhenCumulativeRefundExceedsOrderAmount() {
+        // 本条明细尚未处理；同一医嘱的其它明细已处理 50.00（药品价高于收费项目价时会出现）
+        when(repo.lockOrderRefund(itemId))
+                .thenReturn(Optional.of(link(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO)));
+        when(repo.sumOrderRefundHandled(eq(orderId), any())).thenReturn(new BigDecimal("50.00"));
+
+        // 本次退 30.00 → 累计 80.00 > 医嘱金额 30.00，必须拒绝而不是写负金额
+        assertThatThrownBy(() -> service.refund(req("30.00")))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+
+        verify(repo, never()).addOrderRefundApplied(any(), any());
+        verify(repo, never()).addOrderRefundPending(any(), any());
+    }
+
+    /** 长嘱按日封顶：只统计当日已处理金额，不受其它日期影响。 */
+    private OrderRefundReq dailyReq(String cumulative, LocalDate supplyDate) {
+        return new OrderRefundReq(orderId, itemId, new BigDecimal("30.00"),
+                new BigDecimal(cumulative), "患者退回", "pharmacist01", supplyDate.toString());
+    }
+
+    @Test
+    @DisplayName("长嘱按日封顶：当日累计超过当日金额才拒绝（P1-9）")
+    void rejectsWhenDailyCumulativeExceedsDailyAmount() {
+        LocalDate supplyDate = LocalDate.now();
+        when(repo.lockOrderById(orderId)).thenReturn(Optional.of(longOrder("30.00")));
+        when(repo.lockOrderRefund(itemId))
+                .thenReturn(Optional.of(link(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO)));
+        when(repo.sumOrderRefundHandled(eq(orderId), eq(supplyDate)))
+                .thenReturn(new BigDecimal("28.00"));
+
+        assertThatThrownBy(() -> service.refund(dailyReq("30.00", supplyDate)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+
+        verify(repo, never()).addOrderRefundApplied(any(), any());
     }
 
     @Test
