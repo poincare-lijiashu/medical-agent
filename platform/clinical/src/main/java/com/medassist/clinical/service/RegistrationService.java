@@ -224,6 +224,15 @@ public class RegistrationService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
     }
 
+    /**
+     * 患者最近就诊列表（控制台选择就诊上下文用）。
+     *
+     * <p>只读；不含已退号记录。排序按就诊日期倒序，便于医师直接点选最近一次就诊。
+     */
+    public List<Visit> listByPatient(UUID patientId, int limit) {
+        return repo.listVisitsByPatient(patientId, limit);
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private Dept requireDept(UUID deptId) {

@@ -1,0 +1,23 @@
+{
+  "name": "medassist-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MedAssist 临床控制台（自建设计系统，对接 /api/v2）",
+  "scripts": {
+    "dev": "vite --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --port 5175",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "typescript": "^5.7.3",
+    "vite": "^6.3.0",
+    "vue-tsc": "^2.2.0"
+  }
+}

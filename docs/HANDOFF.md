@@ -2,6 +2,56 @@
 
 > 更新：2026-11-02（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~六批** / **知识库域第一~二批** / **第七轮评审整改第一~四批（含 B3 退药退费）** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
+## 2026-11-02 前端控制台（本轮新增，续接先读这里）
+
+**结论：新建了 `frontend-console/`（Vue 3 + Vite + TypeScript，零 UI 框架），七页全部落地并对接 `/api/v2`。**
+旧 `frontend-vue/` 未改动（仍对接 `/api/v1` AI 中台），两套前端隔离，互不影响。
+
+- 设计系统：`docs/DESIGN-SYSTEM.md`；令牌 `src/styles/tokens.css`；基础层 `src/styles/base.css`
+- 品牌资产：`public/brand/mark.svg`、`src/assets/brand/{login-art,empty-orders,empty-guard,empty-kb}.svg`
+  —— 全部自绘 SVG（平台生图接口本轮返回 1001 未授权，故不依赖外部图片）
+- 自绘图标集：`src/components/ui/AppIcon.vue`（40+ 图标，24×24 / 1.6 描边）
+- 通用组件：`AppModal` / `StatusPill` / `EmptyState` / `ToastHost` / `PatientVisitSearch`
+- 七页：`/orders` 医嘱工作台、`/preop` 术前访视、`/surgery` 手术排台、`/surgery-charges` 术中收费核对、
+  `/narcotic` 麻精专册、`/homepage-qc` 病案首页质控、`/knowledge` 知识库
+- API 客户端：`src/api/http.ts`（Bearer + 401 单次刷新重试 + `ApiResponse` 解包 + 中文错误直出）
+  `src/api/index.ts`（auth / empi / clinical / emr / surgery / pharmacy / kb）
+- 会话：`src/stores/session.ts`（sessionStorage + refreshToken 轮换 + 权限点判定）
+
+**后端为本轮控制台新增 4 个只读接口**（`clinical` 模块，均有权限测试 `ConsoleReadEndpointsPermissionTest` 8 项）：
+
+| 接口 | 权限 | 用途 |
+|---|---|---|
+| `GET /api/v2/clinical/departments` | `clinical:visit:read` | 科室下拉 |
+| `GET /api/v2/clinical/charge-items?q&category&limit` | `clinical:visit:read` | 医嘱项目选择（价格仅展示） |
+| `GET /api/v2/clinical/visits?patientId&limit` | `clinical:visit:read` | 患者最近就诊 |
+| `GET /api/v2/clinical/wards` | `inpatient:read` | 病区列表 |
+
+> 注意：PostgreSQL 对 `:param IS NULL` 无法推断类型，`searchChargeItems` 的 SQL 已显式
+> `CAST(:cat AS text)` / `CAST(:like AS text)`；后续写可选参数 SQL 时照此处理，否则 500。
+
+**本机运行（已验证）**：
+
+```powershell
+cd frontend-console
+npm install
+npm run dev        # http://localhost:5174，/api 代理到 127.0.0.1:8080
+npm run typecheck  # vue-tsc --noEmit = 0 错误
+npm run build      # 产物 dist/，已被 .gitignore 排除
+```
+
+登录 `admin01 / Med@2026`（dev 提示只在 `import.meta.env.DEV` 显示）。浏览器实测已通过：
+登录 → 医嘱工作台检索患者/选就诊/选项目/开立医嘱（列表 3→4、toast 正确）→ 病案首页 34 条 →
+麻精专册 7 条（待回收 3）→ 知识库检索（`degraded=EMBEDDING_UNAVAILABLE` 降级条正常）→
+手术排台 19 间 → 术中收费预览 ¥1,550 三项 → 术前访视表单。
+
+**下一步（前端）**：
+1. 病案首页明细的直接编辑（PUT 补录字段）与缺陷定位跳转；
+2. 手术病例创建（术式字典 + 计划时间）与排台提交，目前只读看板；
+3. 知识库文档导入（POST documents）与空间成员管理；
+4. >50 行表格虚拟化、WCAG AA 对比度专项；
+5. 生产托管：把 `frontend-console/dist` 交给网关同源托管（当前仅 dev server 验收）。
+
 ## 开工硬规则（每次新会话第一件事，先照做再谈别的）
 
 **Docker 引擎起不来时，禁止由 agent 尝试启动，直接请用户手动双击 Docker Desktop。**

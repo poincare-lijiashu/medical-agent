@@ -209,6 +209,16 @@ npx skills add nextlevelbuilder/ui-ux-pro-max-skill
 
 ---
 
+## 3.9 落地状态（2026-11-02 更新）
+
+已按本指南的方向原则落地 **`frontend-console/`**（Vue 3 + Vite + TypeScript，**未引入 shadcn/React**）：
+
+- 设计方向与令牌：`docs/DESIGN-SYSTEM.md`（色板、字号、间距、圆角、阴影、层级、可访问性清单）
+- 组件策略：不引入第三方组件库，自建 `AppIcon`（自绘 SVG 图标）、`AppModal`、`StatusPill`、
+  `EmptyState`、`ToastHost`；用 CSS 变量而非 Tailwind，保证与既有 Vue 工具链一致
+- 验收方式：`npm run typecheck`（strict）+ 生产构建 + Chrome DevTools 逐页实测
+- 未采纳项：`shadcn`（React 生态，迁入成本高于自建 6 个原语）、`ui-ux-pro-max`（当前页面类型不需要 79 套风格库）
+
 ## 4. 一句话结论
 
 **选 `frontend-design-direction` + `frontend-design` 定方向、`shadcn` 定组件、`web-design-guidelines` 定验收、

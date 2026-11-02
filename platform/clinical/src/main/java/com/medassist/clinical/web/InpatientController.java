@@ -77,6 +77,14 @@ public class InpatientController {
         this.nursingService = nursingService;
     }
 
+    /** 启用病区列表（控制台病区选择）。 */
+    @GetMapping("/wards")
+    public ApiResponse<List<Ward>> listWards(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.listWards());
+    }
+
     @PostMapping("/wards")
     public ApiResponse<Ward> createWard(
             @Valid @RequestBody CreateWardReq req,

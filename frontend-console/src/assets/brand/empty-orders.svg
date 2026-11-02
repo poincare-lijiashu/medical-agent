@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 140" width="200" height="140" role="img" aria-label="暂无医嘱">
+  <rect x="42" y="16" width="116" height="108" rx="8" fill="#ffffff" stroke="#c9d2de" stroke-width="1.2"/>
+  <path d="M58 18v-4a4 4 0 0 1 4-4h18a4 4 0 0 1 4 4v4" fill="none" stroke="#c9d2de" stroke-width="1.2"/>
+  <rect x="56" y="36" width="46" height="4" rx="2" fill="#e3e8ef"/>
+  <rect x="56" y="48" width="66" height="4" rx="2" fill="#eef1f5"/>
+  <rect x="56" y="60" width="38" height="4" rx="2" fill="#eef1f5"/>
+  <path d="M56 88h14l6-14 8 24 6-14h16" fill="none" stroke="#1f5fd0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  <rect x="56" y="104" width="88" height="4" rx="2" fill="#eef1f5"/>
+  <circle cx="152" cy="30" r="16" fill="#eaf0fc" stroke="#bcd0f4" stroke-width="1.2"/>
+  <path d="M152 24v12M146 30h12" stroke="#1f5fd0" stroke-width="2" stroke-linecap="round"/>
+</svg>

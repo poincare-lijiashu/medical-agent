@@ -59,6 +59,11 @@ public class InpatientService {
 
     // ---------------------------------------------------------------- 病区 / 床位
 
+    /** 启用病区列表（只读）。 */
+    public List<Ward> listWards() {
+        return repo.listWards();
+    }
+
     @Transactional
     public Ward createWard(CreateWardReq req, String actor) {
         Dept dept = repo.findDept(req.deptId())

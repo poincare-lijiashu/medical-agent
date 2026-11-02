@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
@@ -63,6 +64,20 @@ public class RegistrationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, REG_CREATE);
         return ApiResponse.ok(service.register(req, actor));
+    }
+
+    /**
+     * 患者最近就诊列表（控制台选择就诊上下文）。
+     *
+     * <p>{@code patientId} 必填；只返回非退号记录，按就诊日期倒序。
+     */
+    @GetMapping("/visits")
+    public ApiResponse<java.util.List<Visit>> listByPatient(
+            @RequestParam java.util.UUID patientId,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, VISIT_READ);
+        return ApiResponse.ok(service.listByPatient(patientId, limit));
     }
 
     @GetMapping("/visits/{id}")

@@ -158,6 +158,38 @@ public class ClinicalRepository {
                 .param(deptCode).query(DEPT_MAPPER).optional();
     }
 
+    /** 启用科室列表（控制台下拉用）。 */
+    public List<Dept> listDepartments() {
+        return jdbc.sql("""
+                        SELECT id, dept_code, name, type, enabled FROM clinical_svc.md_dept
+                         WHERE enabled ORDER BY dept_code
+                        """).query(DEPT_MAPPER).list();
+    }
+
+    /**
+     * 收费项目检索（医嘱开立选项目用）。
+     *
+     * <p>只返回启用项，且只允许按编码/名称模糊匹配；价格字段用于前端展示，
+     * 实际计价仍由服务端按 {@code item_code} 重新读取主数据，前端传价格无效。
+     */
+    public List<ChargeItemDef> searchChargeItems(String keyword, String category, int limit) {
+        String like = (keyword == null || keyword.isBlank()) ? null : "%" + keyword.trim() + "%";
+        String cat = (category == null || category.isBlank()) ? null : category.trim().toUpperCase();
+        return jdbc.sql("""
+                        SELECT id, item_code, name, category, unit, price, enabled
+                          FROM clinical_svc.md_charge_item
+                         WHERE enabled
+                           AND (CAST(:cat AS text) IS NULL OR category = CAST(:cat AS text))
+                           AND (CAST(:like AS text) IS NULL
+                                OR item_code ILIKE CAST(:like AS text)
+                                OR name ILIKE CAST(:like AS text))
+                         ORDER BY item_code
+                         LIMIT :limit
+                        """)
+                .param("cat", cat).param("like", like).param("limit", Math.max(1, Math.min(limit, 200)))
+                .query(ITEM_MAPPER).list();
+    }
+
     public Optional<ChargeItemDef> findChargeItem(String itemCode) {
         return jdbc.sql("""
                         SELECT id, item_code, name, category, unit, price, enabled
@@ -237,6 +269,25 @@ public class ClinicalRepository {
                           FROM clinical_svc.visit WHERE id = ?
                         """)
                 .param(id).query(VISIT_MAPPER).optional();
+    }
+
+    /**
+     * 按患者列出最近就诊（控制台"患者上下文"用）。
+     *
+     * <p>只读查询，按就诊日期倒序；不返回已取消记录（CANCELLED 对临床无意义，
+     * 但退号审计仍可在就诊详情/审计流里追溯）。
+     */
+    public List<Visit> listVisitsByPatient(UUID patientId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
+                               visit_type, status, visit_date, version
+                          FROM clinical_svc.visit
+                         WHERE patient_id = :patientId AND status <> 'CANCELLED'
+                         ORDER BY visit_date DESC, registered_at DESC
+                         LIMIT :limit
+                        """)
+                .param("patientId", patientId).param("limit", Math.max(1, Math.min(limit, 100)))
+                .query(VISIT_MAPPER).list();
     }
 
     /** 加行锁读取就诊；必须在事务内调用。 */
@@ -1033,6 +1084,14 @@ public class ClinicalRepository {
     public Optional<Ward> findWardByCode(String code) {
         return jdbc.sql("SELECT id, code, name, dept_id, enabled FROM clinical_svc.ward WHERE code = ?")
                 .param(code).query(WARD_MAPPER).optional();
+    }
+
+    /** 启用病区列表（控制台选择病区用；不做业务判断，仅按编码排序）。 */
+    public List<Ward> listWards() {
+        return jdbc.sql("""
+                        SELECT id, code, name, dept_id, enabled FROM clinical_svc.ward
+                         WHERE enabled ORDER BY code
+                        """).query(WARD_MAPPER).list();
     }
 
     public void insertWard(Ward w) {
