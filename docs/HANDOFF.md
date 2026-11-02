@@ -50,9 +50,9 @@
   `fa4ff4a`（**整改第五批：B2 长嘱数量口径与频次快照**）、
   `8033aff`（**B2 后续：长嘱药品按日请领**）、
   `5a9fa5c`（**病区备药与执行对账**）、`e2648d9`（**病区二级库存与未执行退药**）、
-  `2dbd8ab`（**危急值定向查询与网关下游超时**）
+  `2dbd8ab`（**危急值定向查询与网关下游超时**）、`d3daaec`（**权限矩阵单测与部署硬化**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **833 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **846 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V26**、
@@ -66,9 +66,10 @@
 - **明天第一件事（建议顺序）**：
   1. ~~**病区库存与未执行退药（对账闭环最后一段）**~~ ✅ 已交付（§1.60，clinical V26）
   2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）；
-     已完成 #12（危急值定向查询）、#15（网关超时）、#24 的 kb 路由部分，
-     剩余优先项：#9 UNFIT 改判复核、#14 空安瓿发药二次校验与退药冲销、#16/#18/#19 部署硬化、
-     #20 statusOf 契约测试、#26 金额/数量边界用例
+     已完成 #12（危急值定向查询）、#15（网关超时）、#16（Pod 打散）、#18（staging ServiceMonitor）、
+     #19（Dockerfile 依赖层/镜像源）、#24（kb 路由 + tech/kb 权限单测），
+     剩余优先项：#9 UNFIT 改判复核、#14 空安瓿发药二次校验与退药冲销、#20 statusOf 契约测试、
+     #26 金额/数量边界用例
   3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
      可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
@@ -1286,6 +1287,12 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
      `connect-timeout=3s` / `response-timeout=30s`（kb 60s）；契约测试补 kb 路由与超时断言
    - 实测：全量单测 **833 项**全绿（+3）；回归 `platform_smoke` / `tech_smoke` / `tech_lis_smoke` /
      `kb_answer_smoke` / `clinical_long_dispense_smoke` 全 PASS
+81. **权限矩阵单测与部署硬化（2026-11-02）**
+   - 修复：新增 tech（报告/危急值）与 kb（空间/文档/检索/问答）接口级权限矩阵单测 13 项；
+     Helm 9 个 Java 服务默认软反亲和 + 拓扑打散（显式 affinity 优先）；
+     staging ServiceMonitor 补 release 标签；Dockerfile 补 kb/pom.xml 与 `MAVEN_MIRROR`
+   - 实测：全量单测 **846 项**全绿（+13）；`helm template` 在 dev/staging/prod 三套 values 渲染通过
+     （本地用 `alpine/helm:3.16.3` 镜像验证；显式 affinity 覆盖分支单独验证）
 
 ### 本机踩坑备忘（下次别再踩）
 - **台账类 upsert 要写成"重试不降级"**：请领先成功后失败（响应丢了）时，简单覆盖会把处方号抹掉、

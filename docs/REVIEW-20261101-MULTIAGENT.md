@@ -212,6 +212,16 @@
 | SHOULD #24（部分） | ✅ 已修复 | `GatewayRouteConfigTest` 补 `platform-kb-v2` 路由断言（此前只覆盖 clinical/pharmacy/tech/emr/insurance）；tech/kb 控制器权限单测仍未补 |
 | 验证 | ✅ | 全量单测 **833 项**全绿（+3）；回归 `platform_smoke` / `tech_smoke` / `tech_lis_smoke` / `kb_answer_smoke` / `clinical_long_dispense_smoke` 全 PASS（网关与 tech 已重建重启） |
 
+### 第十批（2026-11-02，权限矩阵与部署硬化）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| SHOULD #16 | ✅ 已修复 | 新增 `medassist.podScheduling` helper：9 个 Java 服务未显式配置 `affinity` 时默认软反亲和 + 拓扑打散（`preferred` + `ScheduleAnyway`，小集群不会被卡 Pending）；显式 affinity 优先 |
+| SHOULD #18 | ✅ 已修复 | `values-staging.yaml` 的 `serviceMonitor.labels` 补 `release: kube-prometheus-stack`（与 prod 一致），staging 指标与 5xx/P99 告警不再静默 |
+| SHOULD #19 | ✅ 已修复 | `platform/Dockerfile` 补 `COPY kb/pom.xml`（依赖层缓存缺 kb 会导致缓存层失效）；新增 `MAVEN_MIRROR` 构建参数生成 settings.xml，内网/离线构建不必改 Dockerfile |
+| SHOULD #24 | ✅ 已修复 | 新增 `ReportControllerPermissionTest`（6 项）与 `KbControllerPermissionTest`（7 项）：报告签发、危急值确认/关闭、检索 vs 问答、文档读写、空间成员等权限点分离，越权时不触达服务层 |
+| 验证 | ✅ | 全量单测 **846 项**全绿（+13）；`helm template` 在 dev / staging / prod（注入不可变 tag）三套 values 全部渲染通过，另验证"显式 affinity 覆盖默认值"分支 |
+
 ---
 
 ## 五、整改优先级建议
