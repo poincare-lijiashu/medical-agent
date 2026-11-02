@@ -4,6 +4,9 @@ import com.medassist.clinical.service.DailyDispenseService;
 import com.medassist.clinical.web.ClinicalDtos.DispenseBoard;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptReq;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptView;
+import com.medassist.clinical.web.ClinicalDtos.WardReturnReq;
+import com.medassist.clinical.web.ClinicalDtos.WardReturnView;
+import com.medassist.clinical.web.ClinicalDtos.WardStockView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
@@ -61,5 +64,30 @@ public class WardMedicationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, ORDER_CREATE);
         return ApiResponse.ok(service.receive(visitId, orderId, req, actor));
+    }
+
+    /**
+     * 病区退药（按 returnId 幂等）。
+     *
+     * <p>只允许退"当日护理执行 REFUSED / OMITTED"的药品；已执行的退药返回 422。
+     */
+    @PostMapping("/ward-receipts/{receiptId}/returns")
+    public ApiResponse<WardReturnView> returnToStock(
+            @PathVariable UUID visitId,
+            @PathVariable UUID receiptId,
+            @Valid @RequestBody WardReturnReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, ORDER_CREATE);
+        return ApiResponse.ok(service.returnToPharmacy(visitId, receiptId, req, actor));
+    }
+
+    /** 病区二级库存：按药品汇总余额 + 最近流水（跨日期累计）。 */
+    @GetMapping("/ward-stock")
+    public ApiResponse<WardStockView> stock(
+            @PathVariable UUID visitId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, VISIT_READ);
+        return ApiResponse.ok(service.stock(visitId));
     }
 }

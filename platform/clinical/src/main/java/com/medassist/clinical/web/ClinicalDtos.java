@@ -85,17 +85,49 @@ public final class ClinicalDtos {
                                   int quantity, String status, String receivedBy) {
     }
 
-    /** 病区备药看板的一行：请领 / 处方 / 收药 / 护理执行四段状态。 */
+    /**
+     * 病区退药请求：{@code returnId} 由调用方生成，作为幂等键。
+     *
+     * <p>为什么不用"数量 + 时间"做幂等：护士站重试/双击必须回到同一条退药记录，
+     * 只有客户端 UUID 能保证"这次退药"的唯一性。
+     */
+    public record WardReturnReq(@NotNull UUID returnId, @Min(1) int quantity, String reason) {
+    }
+
+    /** 退药结果视图（含该收药单的最新可退余额）。 */
+    public record WardReturnView(UUID id, UUID receiptId, UUID orderId, LocalDate supplyDate,
+                                 int quantity, int receiptQuantity, int returnedQuantity,
+                                 int stockBalance, String receiptStatus, String returnedBy) {
+    }
+
+    /** 病区备药看板的一行：请领 / 处方 / 收药 / 护理执行 / 退药五段状态。 */
     public record DispenseBoardItem(UUID orderId, String orderNo, String itemCode, String itemName,
                                     int dailyQuantity, String frequency, int frequencyTimes,
                                     String requestStatus, UUID prescriptionId,
                                     String prescriptionNo, String requestError,
-                                    int receivedQuantity, String nursingStatus) {
+                                    int receivedQuantity, int returnedQuantity, int stockBalance,
+                                    String nursingStatus, boolean returnable, String returnHint) {
     }
 
     /** 病区备药看板（按就诊 + 日期）。 */
     public record DispenseBoard(LocalDate date, int ordered, int requested, int received,
                                 int failed, List<DispenseBoardItem> items) {
+    }
+
+    /** 病区二级库存单行（余额 = 收药 - 退药）。 */
+    public record WardStockItem(String drugCode, String drugName, int receivedQuantity,
+                                int returnedQuantity, int balance) {
+    }
+
+    /** 病区二级库存（按就诊汇总，跨日期累计；余额为 0 的药品不返回）。 */
+    public record WardStockView(UUID visitId, int totalBalance, List<WardStockItem> items,
+                                List<WardStockTxnView> recentTxns) {
+    }
+
+    /** 库存流水视图。 */
+    public record WardStockTxnView(UUID id, String drugCode, String drugName, int quantity,
+                                   String txnType, LocalDate supplyDate, UUID orderId,
+                                   String operator, java.time.Instant createdAt) {
     }
 
     /** 停嘱。 */

@@ -32,6 +32,9 @@ import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
+import com.medassist.clinical.domain.ClinicalModel.WardMedReturn;
+import com.medassist.clinical.domain.ClinicalModel.WardStockBalance;
+import com.medassist.clinical.domain.ClinicalModel.WardStockTxn;
 import com.medassist.common.time.BusinessTime;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -1585,6 +1588,118 @@ public class ClinicalRepository {
                          WHERE visit_id = ? AND supply_date = ?
                          ORDER BY received_at
                         """).param(visitId).param(supplyDate).query(WARD_RECEIPT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 病区二级库存与退药（V26）
+
+    private static final RowMapper<WardMedReturn> WARD_RETURN_MAPPER = (rs, i) ->
+            new WardMedReturn(rs.getObject("id", UUID.class),
+                    rs.getObject("receipt_id", UUID.class), rs.getObject("order_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getDate("supply_date").toLocalDate(),
+                    rs.getInt("quantity"), rs.getString("reason"), rs.getString("returned_by"));
+
+    private static final RowMapper<WardStockTxn> WARD_STOCK_TXN_MAPPER = (rs, i) ->
+            new WardStockTxn(rs.getObject("id", UUID.class), rs.getObject("visit_id", UUID.class),
+                    rs.getObject("order_id", UUID.class), rs.getObject("receipt_id", UUID.class),
+                    rs.getObject("return_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getInt("quantity"), rs.getString("txn_type"),
+                    rs.getDate("supply_date").toLocalDate(), rs.getString("operator"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    /** 加行锁读取收药记录；退药必须在事务内先锁再加，避免并发超退。 */
+    public Optional<WardMedReceipt> lockWardReceipt(UUID receiptId) {
+        return jdbc.sql("""
+                        SELECT id, request_id, order_id, visit_id, dispense_id, supply_date,
+                               quantity, returned_quantity, status, received_by
+                          FROM clinical_svc.ward_med_receipt WHERE id = ? FOR UPDATE
+                        """).param(receiptId).query(WARD_RECEIPT_MAPPER).optional();
+    }
+
+    public Optional<WardMedReturn> findWardReturn(UUID returnId) {
+        return jdbc.sql("""
+                        SELECT id, receipt_id, order_id, visit_id, supply_date, quantity, reason,
+                               returned_by
+                          FROM clinical_svc.ward_med_return WHERE id = ?
+                        """).param(returnId).query(WARD_RETURN_MAPPER).optional();
+    }
+
+    public void insertWardReturn(WardMedReturn ret) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.ward_med_return
+                            (id, receipt_id, order_id, visit_id, supply_date, quantity, reason,
+                             returned_by)
+                        VALUES (:id, :receiptId, :orderId, :visitId, :supplyDate, :quantity,
+                                CAST(:reason AS text), :returnedBy)
+                        """)
+                .param("id", ret.id()).param("receiptId", ret.receiptId())
+                .param("orderId", ret.orderId()).param("visitId", ret.visitId())
+                .param("supplyDate", ret.supplyDate()).param("quantity", ret.quantity())
+                .param("reason", ret.reason()).param("returnedBy", ret.returnedBy()).update();
+    }
+
+    /**
+     * 累加已退数量（CAS）：{@code returned_quantity + q <= quantity} 是数据库级守卫，
+     * 即使应用层校验被并发绕过也不会超退。
+     */
+    public boolean addReturnedQuantity(UUID receiptId, int quantity) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.ward_med_receipt
+                           SET returned_quantity = returned_quantity + :qty,
+                               status = CASE WHEN returned_quantity + :qty >= quantity
+                                             THEN 'RETURNED' ELSE 'RECEIVED' END,
+                               updated_at = now()
+                         WHERE id = :id AND returned_quantity + :qty <= quantity
+                        """)
+                .param("id", receiptId).param("qty", quantity).update() > 0;
+    }
+
+    /** 库存流水（append-only）：同一收药/退药重复写入由唯一索引挡掉。 */
+    public void insertWardStockTxn(WardStockTxn txn) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.ward_stock_txn
+                            (id, visit_id, order_id, receipt_id, return_id, drug_code, drug_name,
+                             quantity, txn_type, supply_date, operator)
+                        VALUES (:id, :visitId, :orderId, CAST(:receiptId AS uuid),
+                                CAST(:returnId AS uuid), :drugCode, :drugName, :quantity,
+                                :txnType, :supplyDate, :operator)
+                        ON CONFLICT DO NOTHING
+                        """)
+                .param("id", txn.id()).param("visitId", txn.visitId())
+                .param("orderId", txn.orderId()).param("receiptId", txn.receiptId())
+                .param("returnId", txn.returnId()).param("drugCode", txn.drugCode())
+                .param("drugName", txn.drugName()).param("quantity", txn.quantity())
+                .param("txnType", txn.txnType()).param("supplyDate", txn.supplyDate())
+                .param("operator", txn.operator()).update();
+    }
+
+    /** 病区二级库存余额（按药品汇总；余额为 0 的药品不返回）。 */
+    public List<WardStockBalance> listWardStockBalances(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT drug_code,
+                               max(drug_name) AS drug_name,
+                               sum(CASE WHEN txn_type = 'IN' THEN quantity ELSE 0 END) AS received,
+                               sum(CASE WHEN txn_type = 'RETURN' THEN quantity ELSE 0 END) AS returned
+                          FROM clinical_svc.ward_stock_txn
+                         WHERE visit_id = ?
+                         GROUP BY drug_code
+                        HAVING sum(CASE WHEN txn_type = 'IN' THEN quantity ELSE 0 END)
+                             - sum(CASE WHEN txn_type = 'RETURN' THEN quantity ELSE 0 END) <> 0
+                         ORDER BY drug_code
+                        """).param(visitId).query((rs, i) -> new WardStockBalance(
+                        rs.getString("drug_code"), rs.getString("drug_name"),
+                        rs.getInt("received"), rs.getInt("returned"))).list();
+    }
+
+    /** 最近的库存流水（默认 200 条），供病区盘点与问题追溯。 */
+    public List<WardStockTxn> listWardStockTxns(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT id, visit_id, order_id, receipt_id, return_id, drug_code, drug_name,
+                               quantity, txn_type, supply_date, operator, created_at
+                          FROM clinical_svc.ward_stock_txn
+                         WHERE visit_id = ?
+                         ORDER BY created_at DESC, id DESC
+                         LIMIT 200
+                        """).param(visitId).query(WARD_STOCK_TXN_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 手术麻醉（V15）

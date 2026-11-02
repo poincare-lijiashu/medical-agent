@@ -11,6 +11,9 @@
 #   * future supply date is rejected (422)
 #   * stopping the order cancels not-yet-dispensed daily prescriptions, while
 #     a dispensed one is left to the return flow
+#   * ward stock (V26): reception adds IN txn, unexecuted (REFUSED) return adds
+#     RETURN txn, over-return is rejected (422), repeat return is idempotent,
+#     executed medication can never be returned (422)
 #
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
 #
@@ -202,6 +205,94 @@ Check 'board.receivedQty.afterReceipt' $rowA2.receivedQuantity 2
 # ---------------------------------------------------------------- 8e. board rejects future date
 $r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board?date=$tomorrow" $null $token
 Check 'board.future.422' $r.Status 422
+
+# ---------------------------------------------------------------- 8f. ward secondary stock + unexecuted return
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders" @{
+    items = @(@{ itemCode = 'DRUG-AMOX-025'; quantity = 2; dose = '0.5g'; frequency = 'qd'; orderMode = 'LONG' })
+} $token
+Check 'longDrugC.place' $r.Status 200
+$orderC = @(Res $r)[0]
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-dispense-requests" @{} $token
+Check 'dispenseRequestC.ok' $r.Status 200
+$rxCId = @((Res $r).items) | Where-Object { $_.orderId -eq $orderC.id } | Select-Object -ExpandProperty prescriptionId
+Check 'dispenseRequestC.created' ($rxCId -ne $null) True
+
+$r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$rxCId/review" @{ approve = $true } $token
+Check 'rxC.approve' $r.Status 200
+$r = Invoke-Api 'POST' "/api/v2/pharmacy/prescriptions/$rxCId/dispense" @{} $token
+Check 'rxC.dispense' $r.Status 200
+$dispCId = (Res $r).dispense.id
+
+# patient refuses the drug -> medication is still in the ward, so it can be returned
+$r = Invoke-Api 'POST' "/api/v2/clinical/inpatient/admissions/$admissionId/nursing-executions" @{
+    orderId = $orderC.id; status = 'REFUSED'; note = 'patient refused'
+} $token
+Check 'nursingC.refused' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/orders/$($orderC.id)/ward-receipts" @{
+    dispenseId = $dispCId; supplyDate = $today; quantity = 2
+} $token
+Check 'receiptC.ok' $r.Status 200
+$receiptCId = (Res $r).id
+Check 'receiptC.status' (Res $r).status 'RECEIVED'
+
+# board hints that the unexecuted medication can be returned
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board" $null $token
+$rowC = @((Res $r).items) | Where-Object { $_.orderId -eq $orderC.id }
+Check 'board.C.returnable' $rowC.returnable True
+Check 'board.C.returnHint' ($rowC.returnHint -ne $null -and $rowC.returnHint -ne '') True
+Check 'board.C.stockBalance' $rowC.stockBalance 2
+
+# ward stock now holds orderA (executed, 2) + orderC (refused, 2) = 4
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/ward-stock" $null $token
+Check 'stock.ok' $r.Status 200
+Check 'stock.totalBeforeReturn' (Res $r).totalBalance 4
+
+$returnId = [guid]::NewGuid().ToString()
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/ward-receipts/$receiptCId/returns" @{
+    returnId = $returnId; quantity = 3; reason = 'patient refused'
+} $token
+Check 'return.overQuantity.422' $r.Status 422
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/ward-receipts/$receiptCId/returns" @{
+    returnId = $returnId; quantity = 2; reason = 'patient refused'
+} $token
+Check 'return.ok' $r.Status 200
+Check 'return.quantity' (Res $r).quantity 2
+Check 'return.receiptStatus' (Res $r).receiptStatus 'RETURNED'
+Check 'return.stockBalance' (Res $r).stockBalance 0
+
+# same returnId replays the same record (no second stock movement)
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/ward-receipts/$receiptCId/returns" @{
+    returnId = $returnId; quantity = 2; reason = 'patient refused'
+} $token
+Check 'return.repeat.ok' $r.Status 200
+Check 'return.repeat.sameId' (Res $r).id $returnId
+Check 'return.repeat.stockBalance' (Res $r).stockBalance 0
+
+# anything beyond the received quantity is rejected
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/ward-receipts/$receiptCId/returns" @{
+    returnId = [guid]::NewGuid().ToString(); quantity = 1
+} $token
+Check 'return.afterFull.422' $r.Status 422
+
+# executed medication can never be returned (orderA was EXECUTED before receipt)
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/ward-receipts/$receiptId/returns" @{
+    returnId = [guid]::NewGuid().ToString(); quantity = 1; reason = 'wrong medicine'
+} $token
+Check 'return.executed.422' $r.Status 422
+
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/ward-stock" $null $token
+Check 'stock.totalAfterReturn' (Res $r).totalBalance 2
+$txns = @((Res $r).recentTxns)
+Check 'stock.hasReturnTxn' (@($txns | Where-Object { $_.txnType -eq 'RETURN' }).Count) 1
+
+$r = Invoke-Api 'GET' "/api/v2/clinical/visits/$visitId/dispense-board" $null $token
+$rowC2 = @((Res $r).items) | Where-Object { $_.orderId -eq $orderC.id }
+Check 'board.C.returnedQty' $rowC2.returnedQuantity 2
+Check 'board.C.stockAfterReturn' $rowC2.stockBalance 0
+Check 'board.C.returnableAfterReturn' $rowC2.returnable False
 
 # ---------------------------------------------------------------- 9. future date rejected
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/daily-dispense-requests" @{ date = $tomorrow } $token

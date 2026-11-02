@@ -508,5 +508,45 @@ public final class ClinicalModel {
 
         public static final String RECEIVED = "RECEIVED";
         public static final String RETURNED = "RETURNED";
+
+        /** 尚未退回的数量（病区实物库存）。 */
+        public int stockBalance() {
+            return quantity - returnedQuantity;
+        }
+    }
+
+    /**
+     * 病区退药记录（按 {@code returnId} 幂等）。
+     *
+     * <p>只允许退"当日护理执行 REFUSED / OMITTED"的药品：药已经吃了就不能再退，
+     * 否则病区库存与药房发药记录会对不上，也会被医保飞检认定为虚记。
+     */
+    public record WardMedReturn(UUID id, UUID receiptId, UUID orderId, UUID visitId,
+                                LocalDate supplyDate, int quantity, String reason,
+                                String returnedBy) {
+    }
+
+    /**
+     * 病区二级库存流水（append-only）。
+     *
+     * <p>{@code IN} 来自收药、{@code RETURN} 来自退药；余额永远由流水汇总得出，
+     * 不允许直接改库存数字（盘点差异也走新增调整流水）。
+     */
+    public record WardStockTxn(UUID id, UUID visitId, UUID orderId, UUID receiptId,
+                               UUID returnId, String drugCode, String drugName, int quantity,
+                               String txnType, LocalDate supplyDate, String operator,
+                               Instant createdAt) {
+
+        public static final String IN = "IN";
+        public static final String RETURN = "RETURN";
+    }
+
+    /** 病区二级库存余额（按药品汇总流水；余额为 0 的药品不返回）。 */
+    public record WardStockBalance(String drugCode, String drugName, int receivedQuantity,
+                                   int returnedQuantity) {
+
+        public int balance() {
+            return receivedQuantity - returnedQuantity;
+        }
     }
 }

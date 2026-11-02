@@ -6,6 +6,9 @@ import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
+import com.medassist.clinical.domain.ClinicalModel.WardMedReturn;
+import com.medassist.clinical.domain.ClinicalModel.WardStockBalance;
+import com.medassist.clinical.domain.ClinicalModel.WardStockTxn;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.DailyDispenseItem;
 import com.medassist.clinical.web.ClinicalDtos.DailyDispenseResult;
@@ -13,6 +16,11 @@ import com.medassist.clinical.web.ClinicalDtos.DispenseBoard;
 import com.medassist.clinical.web.ClinicalDtos.DispenseBoardItem;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptReq;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptView;
+import com.medassist.clinical.web.ClinicalDtos.WardReturnReq;
+import com.medassist.clinical.web.ClinicalDtos.WardReturnView;
+import com.medassist.clinical.web.ClinicalDtos.WardStockItem;
+import com.medassist.clinical.web.ClinicalDtos.WardStockTxnView;
+import com.medassist.clinical.web.ClinicalDtos.WardStockView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.time.BusinessTime;
@@ -23,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -174,10 +183,106 @@ public class DailyDispenseService {
         if (!saved.orderId().equals(orderId)) {
             throw new BusinessException(ErrorCode.CONFLICT, "该发药单已登记到其它医嘱，不能重复收货");
         }
+        // 收药即入库：病区二级库存只认流水，重复收药由 (receipt_id, 'IN') 唯一索引挡掉
+        repo.insertWardStockTxn(new WardStockTxn(UUID.randomUUID(), visitId, orderId, saved.id(),
+                null, order.itemCode(), order.itemName(), saved.quantity(), WardStockTxn.IN,
+                saved.supplyDate(), actorName(actor), Instant.now()));
         audit(actor, "WARD_MED_RECEIPT", visitId.toString(), Map.of(
                 "orderId", orderId.toString(), "dispenseId", req.dispenseId().toString(),
                 "supplyDate", req.supplyDate().toString(), "quantity", req.quantity()));
         return toView(saved);
+    }
+
+    /**
+     * 病区退药（未执行才可退）。
+     *
+     * <p>规则：
+     * <ul>
+     *   <li>只能退"当日护理执行 REFUSED / OMITTED"的药品（EXECUTED 说明药已使用，退药即虚记）；</li>
+     *   <li>累计退药量不得超过收药量，数据库 CAS 兜底防并发超退；</li>
+     *   <li>按 {@code returnId} 幂等：重试返回同一条退药记录，参数不一致则 409。</li>
+     * </ul>
+     *
+     * <p>这里只回冲病区二级库存；药房批次库存的退药走药房自己的退药接口，
+     * 两条链路各自幂等，避免一次退药被重复回补。
+     */
+    @Transactional
+    public WardReturnView returnToPharmacy(UUID visitId, UUID receiptId, WardReturnReq req,
+                                            String actor) {
+        repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        WardMedReceipt receipt = repo.lockWardReceipt(receiptId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该收药记录"));
+        if (!receipt.visitId().equals(visitId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "收药记录不属于该就诊");
+        }
+
+        // 幂等优先：重复提交即使在"已全退"之后也必须原样返回，不能报超退
+        Optional<WardMedReturn> existing = repo.findWardReturn(req.returnId());
+        if (existing.isPresent()) {
+            WardMedReturn ret = existing.get();
+            if (!ret.receiptId().equals(receiptId) || ret.quantity() != req.quantity()) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "该退药单号已登记（收药记录/数量不同），请核对后刷新");
+            }
+            return toReturnView(ret, receipt);
+        }
+
+        VisitOrder order = repo.findOrder(visitId, receipt.orderId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该医嘱"));
+        NursingExecution execution = repo.findNursingExecution(receipt.orderId(),
+                        receipt.supplyDate())
+                .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "该医嘱 " + receipt.supplyDate() + " 尚无护理执行记录，不能退药"));
+        if (NursingExecution.EXECUTED.equals(execution.status())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "护理已执行（EXECUTED），药品已使用，不能退药");
+        }
+
+        int remaining = receipt.stockBalance();
+        if (req.quantity() > remaining) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "退药数量不能超过可退数量（" + remaining + "）");
+        }
+        if (!repo.addReturnedQuantity(receiptId, req.quantity())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "退药数量已变化，请刷新后重试");
+        }
+
+        WardMedReturn saved = new WardMedReturn(req.returnId(), receiptId, receipt.orderId(),
+                visitId, receipt.supplyDate(), req.quantity(), blankToNull(req.reason()),
+                actorName(actor));
+        repo.insertWardReturn(saved);
+        repo.insertWardStockTxn(new WardStockTxn(UUID.randomUUID(), visitId, receipt.orderId(),
+                receiptId, saved.id(), order.itemCode(), order.itemName(), req.quantity(),
+                WardStockTxn.RETURN, receipt.supplyDate(), actorName(actor), Instant.now()));
+
+        audit(actor, "WARD_MED_RETURN", visitId.toString(), Map.of(
+                "receiptId", receiptId.toString(), "orderId", receipt.orderId().toString(),
+                "supplyDate", receipt.supplyDate().toString(), "quantity", req.quantity(),
+                "nursingStatus", execution.status()));
+
+        int returned = receipt.returnedQuantity() + req.quantity();
+        String status = returned >= receipt.quantity()
+                ? WardMedReceipt.RETURNED : WardMedReceipt.RECEIVED;
+        WardMedReceipt updated = new WardMedReceipt(receipt.id(), receipt.requestId(),
+                receipt.orderId(), receipt.visitId(), receipt.dispenseId(), receipt.supplyDate(),
+                receipt.quantity(), returned, status, receipt.receivedBy());
+        return toReturnView(saved, updated);
+    }
+
+    /** 病区二级库存：按药品汇总 + 最近流水（跨日期累计，余额为 0 的药品不返回）。 */
+    public WardStockView stock(UUID visitId) {
+        repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        List<WardStockBalance> balances = repo.listWardStockBalances(visitId);
+        List<WardStockItem> items = balances.stream().map(b -> new WardStockItem(b.drugCode(),
+                b.drugName(), b.receivedQuantity(), b.returnedQuantity(), b.balance())).toList();
+        int total = items.stream().mapToInt(WardStockItem::balance).sum();
+        List<WardStockTxnView> txns = repo.listWardStockTxns(visitId).stream()
+                .map(t -> new WardStockTxnView(t.id(), t.drugCode(), t.drugName(), t.quantity(),
+                        t.txnType(), t.supplyDate(), t.orderId(), t.operator(), t.createdAt()))
+                .toList();
+        return new WardStockView(visitId, total, items, txns);
     }
 
     /**
@@ -208,15 +313,23 @@ public class DailyDispenseService {
                         || receipts.containsKey(o.id()))
                 .map(o -> {
                     DailyDispenseRequest request = requests.get(o.id());
-                    int received = receipts.getOrDefault(o.id(), List.of()).stream()
-                            .mapToInt(WardMedReceipt::quantity).sum();
+                    List<WardMedReceipt> dayReceipts = receipts.getOrDefault(o.id(), List.of());
+                    int received = dayReceipts.stream().mapToInt(WardMedReceipt::quantity).sum();
+                    int returned = dayReceipts.stream()
+                            .mapToInt(WardMedReceipt::returnedQuantity).sum();
+                    int balance = received - returned;
+                    String nursingStatus = nursing.getOrDefault(o.id(), "NOT_EXECUTED");
+                    boolean unexecuted = NursingExecution.REFUSED.equals(nursingStatus)
+                            || NursingExecution.OMITTED.equals(nursingStatus);
+                    boolean returnable = unexecuted && balance > 0;
                     return new DispenseBoardItem(o.id(), o.orderNo(), o.itemCode(), o.itemName(),
                             o.quantity(), o.frequency(), o.frequencyTimes(),
                             request == null ? "NOT_REQUESTED" : request.status(),
                             request == null ? null : request.prescriptionId(),
                             request == null ? null : request.prescriptionNo(),
                             request == null ? null : request.errorMessage(),
-                            received, nursing.getOrDefault(o.id(), "NOT_EXECUTED"));
+                            received, returned, balance, nursingStatus, returnable,
+                            returnHint(nursingStatus, balance));
                 })
                 .toList();
 
@@ -231,6 +344,35 @@ public class DailyDispenseService {
     private WardReceiptView toView(WardMedReceipt receipt) {
         return new WardReceiptView(receipt.id(), receipt.dispenseId(), receipt.orderId(),
                 receipt.supplyDate(), receipt.quantity(), receipt.status(), receipt.receivedBy());
+    }
+
+    private WardReturnView toReturnView(WardMedReturn ret, WardMedReceipt receipt) {
+        return new WardReturnView(ret.id(), ret.receiptId(), ret.orderId(), ret.supplyDate(),
+                ret.quantity(), receipt.quantity(), receipt.returnedQuantity(),
+                receipt.stockBalance(), receipt.status(), ret.returnedBy());
+    }
+
+    /** 看板提示：只有"未执行 + 还有库存"才提示可退，避免护士误退已使用的药。 */
+    private static String returnHint(String nursingStatus, int balance) {
+        if (balance <= 0) {
+            return null;
+        }
+        if (NursingExecution.REFUSED.equals(nursingStatus)
+                || NursingExecution.OMITTED.equals(nursingStatus)) {
+            return "护理未执行，可退回病区库存";
+        }
+        if (NursingExecution.EXECUTED.equals(nursingStatus)) {
+            return "护理已执行，不可退药";
+        }
+        return null;
+    }
+
+    private static String actorName(String actor) {
+        return actor == null || actor.isBlank() ? "ward" : actor;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private void audit(String actor, String action, String targetId, Map<String, Object> detail) {

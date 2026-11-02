@@ -11,6 +11,7 @@ import com.medassist.clinical.web.ClinicalDtos.DailyDispenseResult;
 import com.medassist.clinical.web.ClinicalDtos.DispenseBoard;
 import com.medassist.clinical.web.ClinicalDtos.DispenseBoardItem;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptReq;
+import com.medassist.clinical.web.ClinicalDtos.WardReturnReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
@@ -315,7 +316,200 @@ class DailyDispenseServiceTest {
         assertThat(first.requestStatus()).isEqualTo(DailyDispenseRequest.REQUESTED);
         assertThat(first.prescriptionNo()).isEqualTo("RX1");
         assertThat(first.receivedQuantity()).isEqualTo(2);
+        assertThat(first.returnedQuantity()).isZero();
+        assertThat(first.stockBalance()).isEqualTo(2);
         assertThat(first.nursingStatus()).isEqualTo(NursingExecution.REFUSED);
+        assertThat(first.returnable()).isTrue();
+        assertThat(first.returnHint()).contains("可退回");
         assertThat(board.items().get(1).requestStatus()).isEqualTo("NOT_REQUESTED");
+        assertThat(board.items().get(1).returnable()).isFalse();
+    }
+
+    // ---------------------------------------------------------------- 病区二级库存与退药（V26）
+
+    private WardMedReceipt receipt(int quantity, int returned) {
+        return new WardMedReceipt(UUID.randomUUID(), request(quantity).id(),
+                longDrug("O1", LocalDate.now()).id(), visitId, UUID.randomUUID(), LocalDate.now(),
+                quantity, returned,
+                returned >= quantity ? WardMedReceipt.RETURNED : WardMedReceipt.RECEIVED,
+                "nurse01");
+    }
+
+    private WardReturnReq returnReq(UUID returnId, int quantity) {
+        return new WardReturnReq(returnId, quantity, "患者拒服");
+    }
+
+    @Test
+    @DisplayName("退药：护理 REFUSED 时整单退回，收药单变为 RETURNED 且库存归零")
+    void returnsRefusedMedication() {
+        WardMedReceipt receipt = receipt(2, 0);
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findOrder(visitId, receipt.orderId())).thenReturn(Optional.of(order));
+        when(repo.findNursingExecution(receipt.orderId(), receipt.supplyDate())).thenReturn(
+                Optional.of(new NursingExecution(UUID.randomUUID(), UUID.randomUUID(), visitId,
+                        receipt.orderId(), receipt.supplyDate(), NursingExecution.REFUSED,
+                        "nurse01", null, Instant.now())));
+        when(repo.findWardReturn(any())).thenReturn(Optional.empty());
+        when(repo.addReturnedQuantity(receipt.id(), 2)).thenReturn(true);
+
+        var view = service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(UUID.randomUUID(), 2), "nurse01");
+
+        assertThat(view.quantity()).isEqualTo(2);
+        assertThat(view.returnedQuantity()).isEqualTo(2);
+        assertThat(view.stockBalance()).isZero();
+        assertThat(view.receiptStatus()).isEqualTo(WardMedReceipt.RETURNED);
+        verify(repo).insertWardReturn(any());
+        verify(repo).insertWardStockTxn(any());
+    }
+
+    @Test
+    @DisplayName("退药：护理 OMITTED 允许部分退回，收药单仍是 RECEIVED")
+    void partialReturnKeepsReceiptOpen() {
+        WardMedReceipt receipt = receipt(3, 0);
+        VisitOrder order = longDrug("O1", LocalDate.now());
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findOrder(visitId, receipt.orderId())).thenReturn(Optional.of(order));
+        when(repo.findNursingExecution(receipt.orderId(), receipt.supplyDate())).thenReturn(
+                Optional.of(new NursingExecution(UUID.randomUUID(), UUID.randomUUID(), visitId,
+                        receipt.orderId(), receipt.supplyDate(), NursingExecution.OMITTED,
+                        "nurse01", null, Instant.now())));
+        when(repo.findWardReturn(any())).thenReturn(Optional.empty());
+        when(repo.addReturnedQuantity(receipt.id(), 1)).thenReturn(true);
+
+        var view = service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(UUID.randomUUID(), 1), "nurse01");
+
+        assertThat(view.returnedQuantity()).isEqualTo(1);
+        assertThat(view.stockBalance()).isEqualTo(2);
+        assertThat(view.receiptStatus()).isEqualTo(WardMedReceipt.RECEIVED);
+    }
+
+    @Test
+    @DisplayName("退药：护理已执行（EXECUTED）一律 422，药已使用不能退")
+    void rejectsReturnWhenExecuted() {
+        WardMedReceipt receipt = receipt(2, 0);
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findWardReturn(any())).thenReturn(Optional.empty());
+        when(repo.findOrder(visitId, receipt.orderId()))
+                .thenReturn(Optional.of(longDrug("O1", LocalDate.now())));
+        when(repo.findNursingExecution(receipt.orderId(), receipt.supplyDate())).thenReturn(
+                Optional.of(new NursingExecution(UUID.randomUUID(), UUID.randomUUID(), visitId,
+                        receipt.orderId(), receipt.supplyDate(), NursingExecution.EXECUTED,
+                        "nurse01", null, Instant.now())));
+
+        assertThatThrownBy(() -> service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(UUID.randomUUID(), 2), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).addReturnedQuantity(any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("退药：没有护理执行记录时 422（不能凭收药记录直接退）")
+    void rejectsReturnWithoutExecution() {
+        WardMedReceipt receipt = receipt(2, 0);
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findWardReturn(any())).thenReturn(Optional.empty());
+        when(repo.findOrder(visitId, receipt.orderId()))
+                .thenReturn(Optional.of(longDrug("O1", LocalDate.now())));
+        when(repo.findNursingExecution(receipt.orderId(), receipt.supplyDate()))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(UUID.randomUUID(), 1), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    @DisplayName("退药：累计退回超过收药量 422（已退 1 再退 2）")
+    void rejectsOverReturn() {
+        WardMedReceipt receipt = receipt(2, 1);
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findWardReturn(any())).thenReturn(Optional.empty());
+        when(repo.findOrder(visitId, receipt.orderId()))
+                .thenReturn(Optional.of(longDrug("O1", LocalDate.now())));
+        when(repo.findNursingExecution(receipt.orderId(), receipt.supplyDate())).thenReturn(
+                Optional.of(new NursingExecution(UUID.randomUUID(), UUID.randomUUID(), visitId,
+                        receipt.orderId(), receipt.supplyDate(), NursingExecution.REFUSED,
+                        "nurse01", null, Instant.now())));
+
+        assertThatThrownBy(() -> service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(UUID.randomUUID(), 2), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).addReturnedQuantity(any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("退药：同一 returnId 重复提交幂等返回，不再写库")
+    void returnIsIdempotentByReturnId() {
+        WardMedReceipt receipt = receipt(2, 2);
+        UUID returnId = UUID.randomUUID();
+        com.medassist.clinical.domain.ClinicalModel.WardMedReturn existing =
+                new com.medassist.clinical.domain.ClinicalModel.WardMedReturn(returnId,
+                        receipt.id(), receipt.orderId(), visitId, receipt.supplyDate(), 2,
+                        "患者拒服", "nurse01");
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findWardReturn(returnId)).thenReturn(Optional.of(existing));
+
+        var view = service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(returnId, 2), "nurse01");
+
+        assertThat(view.id()).isEqualTo(returnId);
+        assertThat(view.stockBalance()).isZero();
+        verify(repo, never()).insertWardReturn(any());
+        verify(repo, never()).addReturnedQuantity(any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("退药：returnId 重复但数量不同 409（防止串单）")
+    void returnIdReuseWithDifferentQuantityConflicts() {
+        WardMedReceipt receipt = receipt(2, 2);
+        UUID returnId = UUID.randomUUID();
+        com.medassist.clinical.domain.ClinicalModel.WardMedReturn existing =
+                new com.medassist.clinical.domain.ClinicalModel.WardMedReturn(returnId,
+                        receipt.id(), receipt.orderId(), visitId, receipt.supplyDate(), 1,
+                        null, "nurse01");
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.lockWardReceipt(receipt.id())).thenReturn(Optional.of(receipt));
+        when(repo.findWardReturn(returnId)).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> service.returnToPharmacy(visitId, receipt.id(),
+                returnReq(returnId, 2), "nurse01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
+    }
+
+    @Test
+    @DisplayName("病区库存：按药品汇总收药与退药，余额 = 收 - 退")
+    void stockAggregatesTransactions() {
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
+        when(repo.listWardStockBalances(visitId)).thenReturn(List.of(
+                new com.medassist.clinical.domain.ClinicalModel.WardStockBalance(
+                        "DRUG-AMOX-025", "阿莫西林胶囊", 4, 1)));
+        when(repo.listWardStockTxns(visitId)).thenReturn(List.of(
+                new com.medassist.clinical.domain.ClinicalModel.WardStockTxn(UUID.randomUUID(),
+                        visitId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                        "DRUG-AMOX-025", "阿莫西林胶囊", 1,
+                        com.medassist.clinical.domain.ClinicalModel.WardStockTxn.RETURN,
+                        LocalDate.now(), "nurse01", Instant.now())));
+
+        var view = service.stock(visitId);
+
+        assertThat(view.totalBalance()).isEqualTo(3);
+        assertThat(view.items()).hasSize(1);
+        assertThat(view.items().get(0).balance()).isEqualTo(3);
+        assertThat(view.recentTxns()).hasSize(1);
+        assertThat(view.recentTxns().get(0).txnType())
+                .isEqualTo(com.medassist.clinical.domain.ClinicalModel.WardStockTxn.RETURN);
     }
 }
