@@ -39,8 +39,9 @@
 > `reveal=true` 的 PHI 明文明读必须带真实 `X-Actor`（system 兜底一律 422，审计不再无主责）、
 > 转送补偿任务改 `FOR UPDATE SKIP LOCKED` + 租约抢占（`clinical V32`，多副本不再把 attempts 放大而误判 FAILED）、
 > 病区退药联动药房批次退药与医嘱金额回冲（药房新内网接口 `/internal/prescriptions/ward-returns`，
-> 临床在**事务提交后**推送，避免药房回调临床冲减时与 visit 行锁互等）。
-> 剩余 P2 优先项：并发 E2E、前端七页、分页协议统一、`HttpPatientClient` 5 份拷贝收敛、Clock 注入。
+> 临床在**事务提交后**推送，避免药房回调临床冲减时与 visit 行锁互等）、
+> 并发 E2E `concurrency_smoke.ps1`（抢号仅一胜 / 结算不重复扣费 / 收药不超当日请领）。
+> 剩余 P2 优先项：前端七页、分页协议统一、`HttpPatientClient` 5 份拷贝收敛、Clock 注入。
 > 9 个 Java 服务**当前运行中**（本机验证用，均以 `--spring.profiles.active=dev` 启动）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
 > §1.55~§1.60 的 E2E 回归**均已通过**：
