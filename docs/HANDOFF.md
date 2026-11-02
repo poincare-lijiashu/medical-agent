@@ -22,13 +22,14 @@
 
 ## 2026-11-01 收工状态（下次开工先读这里）
 
-> **2026-11-02 续接状态**：第七轮整改第一~五批已交付；9 个 Java 服务**当前运行中**（本机验证用）；
+> **2026-11-02 续接状态**：第七轮整改第一~六批已交付（含 B3 / B2 / B2 后续按日请领）；
+> 9 个 Java 服务**当前运行中**（本机验证用）；
 > Docker Desktop 由用户手动启动后正常（`server=29.7.2`），`medagent_pg` / `loki` / `promtail` 已起。
-> §1.55（X-Actor 守卫）、§1.56（B3 退药退费）、§1.57（B2 长嘱口径）的 E2E 回归**均已补跑并通过**：
+> §1.55（X-Actor 守卫）、§1.56（B3 退药退费）、§1.57（B2 长嘱口径）、§1.58（长嘱按日请领）的 E2E 回归**均已通过**：
 > `platform_smoke` / `empi_patient_smoke` / `clinical_preop_consent_smoke` / `pharmacy_smoke` /
 > `insurance_smoke` / `db_guardrails`(13/13) / `kb_search_smoke` / `emr_homepage_smoke` /
 > `pharmacy_order_refund_smoke`(35 项) / `clinical_long_order_smoke`(36 项) /
-> `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
+> `clinical_long_dispense_smoke`(38 项) / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke`。
 
 - 今日提交：`485246d`（MF-07 阶段二）、`f0f6221`（药房—收费联动）、`02a2619`（处方前置审方）、
   `4ae1f0d`（收工文档）、`9de7a6e`（**医嘱 → 药房处方**）、`d70b2e8`（**撤销/停嘱 → 处方作废**）、
@@ -45,13 +46,14 @@
   `1a902ea`（**整改第二批：empi 测试/审计只读/索引租约/DB 反例/去锁内 HTTP**）、
   `bdbaa6c`（**整改第三批：X-Actor 写操作身份守卫**）、`9766141`（第三批 E1 修正）、
   `d9b4df0`（**整改第四批：B3 退药退费与作废联动**）、
-  `fa4ff4a`（**整改第五批：B2 长嘱数量口径与频次快照**）
+  `fa4ff4a`（**整改第五批：B2 长嘱数量口径与频次快照**）、
+  `8033aff`（**B2 后续：长嘱药品按日请领**）
 - 双备份：`<backup-dir>\medical_agent.git`（mirror）+ `<backup-dir>\medical_agent_*.bundle`
-- 工作区：clean（收工前已确认）；全量单测 **807 项**全绿
+- 工作区：clean（收工前已确认）；全量单测 **817 项**全绿
 - 本机环境（2026-11-02）：Docker Desktop 已由用户手动启动；`medagent_pg` / `loki` / `promtail` 运行中；
   **9 个 Java 服务运行中**（E2E 跑完后按需停止，避免锁住 jar）；
   迁移已在真实库执行：`auth_svc` → **V34**、`empi_svc` → **V3**、`clinical_svc` → **V24**、
-  `pharmacy_svc` → **V7**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
+  `pharmacy_svc` → **V8**、`tech_svc` → **V7**、`emr_svc` → **V15**、`insurance_svc` → **V14**、
   `kb_svc` → **V3**
 - **服务与端口**：gateway 8080 / auth 8081 / empi 8082 / clinical 8083 / pharmacy 8084 /
   tech 8085 / emr 8086 / insurance 8087 / **kb 8088**（启动顺序：先 auth，再各业务服务，最后 gateway）
@@ -59,9 +61,8 @@
   `platform_smoke` / `pharmacy_smoke` / `tech_smoke` 默认 18080（旧 gw-test 容器），本机要加
   `-BaseUrl http://127.0.0.1:8080`）
 - **明天第一件事（建议顺序）**：
-  1. **按日摆药/请领（B2 后续）**：长期药品医嘱目前不自动转药房、按日计费；要补"病区按日请领 →
-     药房按日发药"链路（pharmacy 处方需支持 `source_order_id + supply_date` 或新增请领单模型），
-     完成后长嘱药品可恢复自动流转
+  1. **病区备药/请领执行闭环（按日请领的下一步）**：现在"按日请领 → 药房发药"已通，
+     还缺"病区收到药 → 执行 → 未执行退回"的库存与执行对账（可与护理执行记录合并模型）
   2. **剩余 SHOULD-FIX**：见意见书（安全 > DB > 业务竞态 > 部署 > 架构）
   3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
      **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
@@ -1241,8 +1242,26 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
    - 实测：全量单测 **807 项**全绿（+5）；`clinical_long_order_smoke.ps1` **36 项断言 PASS**；
      回归 `platform_smoke` / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke` /
      `pharmacy_order_refund_smoke` 全 PASS；真实库 `clinical_svc → V24`
+77. **B2 后续：长嘱药品按日请领（2026-11-02）**
+   - 问题：长嘱 `quantity` 是每日总量，药房一张处方只能供一天；开嘱自动转药房会把一天当整个疗程
+   - 修复：药房 `V8` 增加 `supply_date`，唯一索引升级为 `(source_order_id, supply_date)`（历史按创建日回填）；
+     临床新增 `POST /clinical/visits/{id}/daily-dispense-requests`（`DailyDispenseService`）：
+     只请领当日有效的长嘱药品，逐条生成当日处方；同一天重复请领幂等（duplicate）；
+     部分失败不拖累其它医嘱，全部失败才 503；停嘱批量作废未发药处方（已发药留退药流程），
+     长嘱药品即使 `transfer_status=NONE` 也触发作废（`hasDownstream`）
+   - 计费不变：处方 `billingMode=ORDER`，药房不记费；临床仍 `daily-bill` 按天计
+   - 实测：全量单测 **817 项**全绿（+10）；`clinical_long_dispense_smoke.ps1` **38 项断言 PASS**；
+     回归 `clinical_long_order_smoke` / `platform_smoke` / `pharmacy_billing_smoke` /
+     `clinical_pharmacy_order_smoke` / `pharmacy_order_refund_smoke` 全 PASS；真实库 `pharmacy_svc → V8`
 
 ### 本机踩坑备忘（下次别再踩）
+- **`RestClient.builder()` 的默认转换器不保证注册 JavaTimeModule**：给内网请求体加 `LocalDate` 后，
+  日期被序列化成数组，对方直接 400/422（本次"按日请领全部失败"的真因）。跨服务报文里有日期时，
+  用 Spring 托管的 `ObjectMapper.writeValueAsString(...)` 显式序列化再 `.body(String)`
+- **药房结构化剂量是"三件套"**：`timesPerDay` 必须与 `singleDose`/`doseUnit` 同时提供，否则 422；
+  临床只有自由文本剂量时，宁可都不传，也不要只补一个字段
+- **内部接口的 `@Valid` 在方法体之前执行**：新增必填字段后，"无令牌 403"用例会先变成 422；
+  安全类 E2E（无令牌/错令牌）必须携带一份结构合法的报文，否则断言的是参数校验而不是鉴权
 - **新增表列 + `SELECT *` + `RowMapper` 三件套必须同一批改**：V24 加了 `frequency_times` 后，
   若只改迁移不改 `ORDER_MAPPER`，运行期会报 `column not found`；反过来先改代码后跑迁移，
   服务会在 Flyway 之前查询失败。Flyway 在启动时先跑，所以"迁移 + mapper + 插入语句"一起提交即可

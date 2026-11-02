@@ -1461,6 +1461,32 @@ pgvector/HNSW 索引（当前 `real[]` + 点积为 O(n) 扫描，万级切片后
 
 ---
 
+## 1.58 已完成（2026-11-02，B2 后续：长嘱药品按日请领）
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| 长嘱药品 | 长嘱 `quantity` 是"每日总量"，而药房一张处方只能供一天；开嘱时自动转药房会把一天的量当成整个疗程，后续几天无药 | 改为**病区按日请领**：`POST /clinical/visits/{id}/daily-dispense-requests` 为当日所有有效长嘱药品各生成一张当日处方；药房幂等键升级为 `(source_order_id, supply_date)`；停嘱时作废未发药的当日/后续处方，已发药走退药 |
+
+**关键实现**
+- 药房 `V8__daily_supply.sql`：`prescription.supply_date` + 唯一索引 `(source_order_id, supply_date)`（历史数据按创建日回填）+ `CHECK (source_order_id IS NULL OR supply_date IS NOT NULL)`。
+- 临床 `DailyDispenseService`：只取"当日有效（start ≤ date ≤ stop，PLACED）"的长嘱药品；
+  数量 = 每日总量；逐条调用药房，**批内失败不拖累其它医嘱**，全部失败才返回 503（不能让病区误以为已提交）。
+- 幂等：同一天重复请领返回同一张处方（`duplicate=true`），网络重试安全。
+- 计费不变：处方固定 `billingMode=ORDER`，药房不再记费；临床仍按日计费（`daily-bill`）。
+- 停嘱/撤销：药房 `cancel-by-order` 改为**批量作废**该医嘱所有未发药处方；已发药的保留（退药流程接管），
+  临床侧长嘱药品即使 `transfer_status=NONE` 也会触发作废（新增 `hasDownstream` 判定）。
+
+**实测**
+- 全量单测 **817 项**全绿（+10：`DailyDispenseServiceTest` 8 项、药房按日幂等/批量作废 2 项）
+- `scripts/e2e/clinical_long_dispense_smoke.ps1` **38 项断言全 PASS**：开嘱不自动转药房、
+  当日请领生成处方、重复请领 duplicate、处方带 `supplyDate` 与每日数量、发药不二次计费、
+  未来日期 422、停嘱作废未发药处方且已发药处方保持 DISPENSED、门诊 422
+- 回归：`clinical_long_order_smoke`、`platform_smoke`、`pharmacy_billing_smoke`、
+  `clinical_pharmacy_order_smoke`、`pharmacy_order_refund_smoke` 全 PASS
+- 真实库：`pharmacy_svc` 迁移到 **V8**
+
+---
+
 ## 2. 下一批（按依赖顺序，每项独立可验收）
 
 | 批次 | 模块 | 核心内容 | 验收要点 |

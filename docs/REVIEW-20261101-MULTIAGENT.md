@@ -182,6 +182,13 @@
 | B2 | ✅ 已修复 | 固化口径 **TEMP=本次总量 / LONG=每日总量（amount=每日金额）**；`clinical V24` 增加 `frequency_times`（1..24，客户端不可传）；新增受控词表 `OrderFrequency`（qd/bid/tid…q12h、hs/qn、prn/qod/tiw）与 `GET /clinical/frequencies`；长嘱缺频次或非每日频次（prn/qod/tiw）一律 422；长期药品医嘱不自动转药房（一次转送只能发一天量），`transfer-retry` 明确拒绝 |
 | B2 验证 | ✅ | 单测 **807 项**全绿（+5）；`clinical_long_order_smoke.ps1` 36 项断言 PASS（长嘱金额=每日总量、`BID→2 次/日`、422 反例、长嘱药品无处方、临时药品照常转送、按日计费 49.00 且重跑 0）；`platform_smoke` / `pharmacy_*` 回归 PASS |
 
+### 第六批（2026-11-02，B2 后续：长嘱药品按日请领）
+
+| 编号 | 状态 | 落地位置与验证 |
+|---|---|---|
+| B2 后续 | ✅ 已交付 | 药房 `V8`：`prescription.supply_date` + 唯一索引 `(source_order_id, supply_date)`；临床新增 `POST /clinical/visits/{id}/daily-dispense-requests`（`DailyDispenseService`）：按日只请领当日有效的长嘱药品，逐条生成当日处方；重复请领幂等；停嘱批量作废未发药处方，已发药走退药 |
+| 验证 | ✅ | 单测 **817 项**全绿（+10）；`clinical_long_dispense_smoke.ps1` 38 项断言 PASS；`clinical_long_order_smoke` / `platform_smoke` / `pharmacy_billing_smoke` / `clinical_pharmacy_order_smoke` / `pharmacy_order_refund_smoke` 回归 PASS；真实库 `pharmacy_svc → V8` |
+
 ---
 
 ## 五、整改优先级建议
