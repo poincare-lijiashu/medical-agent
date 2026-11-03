@@ -47,6 +47,9 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   // 麻精专册
   PENDING_RETURN: { label: '待回收空安瓿', tone: 'warn' },
   RETURNED: { label: '已回收', tone: 'ok' },
+  // 会诊
+  REQUESTED: { label: '待受理', tone: 'warn' },
+  ACCEPTED: { label: '会诊中', tone: 'accent' },
   // 知识库
   READY: { label: '已索引', tone: 'ok' },
   INDEXING: { label: '索引中', tone: 'warn' },

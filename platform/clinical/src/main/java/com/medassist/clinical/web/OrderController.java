@@ -62,7 +62,8 @@ public class OrderController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
-        guard.require(scope, visitId);
+        // 只读：本科室，或受邀会诊进行中（会诊意见需要看得到医嘱）
+        guard.requireRead(scope, visitId);
         return ApiResponse.ok(service.list(visitId));
     }
 

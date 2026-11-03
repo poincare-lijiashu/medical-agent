@@ -64,7 +64,8 @@ public class DiagnosisController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        guard.require(scope, visitId);
+        // 只读：本科室，或受邀会诊进行中（会诊需要看主诊科室下的诊断）
+        guard.requireRead(scope, visitId);
         return ApiResponse.ok(service.list(visitId));
     }
 

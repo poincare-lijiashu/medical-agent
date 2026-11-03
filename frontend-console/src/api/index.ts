@@ -3,6 +3,7 @@ import type {
   BillingPreview,
   ChargeItem,
   ChargeView,
+  Consultation,
   Dept,
   Frequency,
   HomepageSummary,
@@ -81,6 +82,19 @@ export const clinicalApi = {
   settle: (visitId: string, paymentMethod: string) =>
     post<ChargeView>(`/clinical/visits/${visitId}/settle`, { paymentMethod }),
   wards: () => get<Ward[]>('/clinical/wards'),
+  consultations: (status?: string, limit = 50) =>
+    get<Consultation[]>('/clinical/consultations', { status, limit }),
+  visitConsultations: (visitId: string) =>
+    get<Consultation[]>(`/clinical/visits/${visitId}/consultations`),
+  requestConsultation: (visitId: string, toDeptId: string, reason: string) =>
+    post<Consultation>(`/clinical/visits/${visitId}/consultations`, { toDeptId, reason }),
+  acceptConsultation: (id: string) => post<Consultation>(`/clinical/consultations/${id}/accept`),
+  rejectConsultation: (id: string, reason: string) =>
+    post<Consultation>(`/clinical/consultations/${id}/reject`, { reason }),
+  completeConsultation: (id: string, conclusion: string, version: number) =>
+    post<Consultation>(`/clinical/consultations/${id}/complete`, { conclusion, version }),
+  cancelConsultation: (id: string, reason: string, version: number) =>
+    post<Consultation>(`/clinical/consultations/${id}/cancel`, { reason, version }),
 }
 
 export const emrApi = {

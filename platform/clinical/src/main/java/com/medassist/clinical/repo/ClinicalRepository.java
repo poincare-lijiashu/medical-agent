@@ -7,6 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
+import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
@@ -3153,6 +3154,171 @@ public class ClinicalRepository {
                         """)
                 .param("caseId", surgeryCaseId.toString())
                 .query(String.class).list();
+    }
+
+    // ---------------------------------------------------------------- 会诊
+
+    private static final String CONSULTATION_COLUMNS = """
+            id, consultation_no, visit_id, patient_id, patient_no, from_dept_id, to_dept_id,
+            reason, status, requested_by, requested_at, responded_by, responded_at,
+            rejected_reason, completed_by, completed_at, conclusion, cancelled_by, cancelled_at,
+            cancelled_reason, version, created_at
+            """;
+
+    private static final RowMapper<Consultation> CONSULTATION_MAPPER = (rs, i) -> new Consultation(
+            rs.getObject("id", UUID.class), rs.getString("consultation_no"),
+            rs.getObject("visit_id", UUID.class), rs.getObject("patient_id", UUID.class),
+            rs.getString("patient_no"), rs.getObject("from_dept_id", UUID.class),
+            rs.getObject("to_dept_id", UUID.class), rs.getString("reason"),
+            rs.getString("status"), rs.getString("requested_by"), instantOf(rs, "requested_at"),
+            rs.getString("responded_by"), instantOf(rs, "responded_at"),
+            rs.getString("rejected_reason"), rs.getString("completed_by"),
+            instantOf(rs, "completed_at"), rs.getString("conclusion"),
+            rs.getString("cancelled_by"), instantOf(rs, "cancelled_at"),
+            rs.getString("cancelled_reason"), rs.getLong("version"), instantOf(rs, "created_at"));
+
+    public String nextConsultationNo() {
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "clinical_svc.consultation_no_seq").query(Long.class).single();
+        return "CS" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq);
+    }
+
+    public void insertConsultation(Consultation c) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.consultation_request
+                            (id, consultation_no, visit_id, patient_id, patient_no, from_dept_id,
+                             to_dept_id, reason, status, requested_by)
+                        VALUES (:id, :no, :visitId, :patientId, :patientNo, :fromDept,
+                                :toDept, :reason, :status, :requestedBy)
+                        """)
+                .param("id", c.id()).param("no", c.consultationNo())
+                .param("visitId", c.visitId()).param("patientId", c.patientId())
+                .param("patientNo", c.patientNo()).param("fromDept", c.fromDeptId())
+                .param("toDept", c.toDeptId()).param("reason", c.reason())
+                .param("status", c.status()).param("requestedBy", c.requestedBy()).update();
+    }
+
+    public Optional<Consultation> findConsultation(UUID id) {
+        return jdbc.sql("SELECT " + CONSULTATION_COLUMNS
+                        + " FROM clinical_svc.consultation_request WHERE id = ?")
+                .param(id).query(CONSULTATION_MAPPER).optional();
+    }
+
+    /** 加行锁读取会诊单；必须在事务内调用（状态迁移用它串行化并发受理/撤回）。 */
+    public Optional<Consultation> lockConsultation(UUID id) {
+        return jdbc.sql("SELECT " + CONSULTATION_COLUMNS
+                        + " FROM clinical_svc.consultation_request WHERE id = ? FOR UPDATE")
+                .param(id).query(CONSULTATION_MAPPER).optional();
+    }
+
+    public List<Consultation> listConsultationsByVisit(UUID visitId, int limit) {
+        return jdbc.sql("SELECT " + CONSULTATION_COLUMNS
+                        + """
+                           FROM clinical_svc.consultation_request
+                          WHERE visit_id = :visitId
+                          ORDER BY requested_at DESC
+                          LIMIT :limit
+                          """)
+                .param("visitId", visitId).param("limit", limit)
+                .query(CONSULTATION_MAPPER).list();
+    }
+
+    /** 全院的会诊列表（仅全院范围角色使用，例如质控查看会诊落实情况）。 */
+    public List<Consultation> listConsultations(String status, int limit) {
+        return jdbc.sql("SELECT " + CONSULTATION_COLUMNS
+                        + """
+                           FROM clinical_svc.consultation_request
+                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                          ORDER BY requested_at DESC
+                          LIMIT :limit
+                          """)
+                .param("status", status).param("limit", limit)
+                .query(CONSULTATION_MAPPER).list();
+    }
+
+    /** 会诊收件箱：受邀科室待处理/进行中的会诊。 */
+    public List<Consultation> listConsultationsInbox(java.util.Collection<UUID> deptIds,
+                                                     String status, int limit) {
+        if (deptIds == null || deptIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("SELECT " + CONSULTATION_COLUMNS
+                        + """
+                           FROM clinical_svc.consultation_request
+                          WHERE to_dept_id IN (:deptIds)
+                            AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                          ORDER BY requested_at DESC
+                          LIMIT :limit
+                          """)
+                .param("deptIds", deptIds).param("status", status).param("limit", limit)
+                .query(CONSULTATION_MAPPER).list();
+    }
+
+    /** 接受：仅 REQUESTED 可受理。 */
+    public boolean acceptConsultation(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.consultation_request
+                           SET status = 'ACCEPTED', responded_by = :actor, responded_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'REQUESTED' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 拒绝：仅 REQUESTED 可拒绝，必须带理由。 */
+    public boolean rejectConsultation(UUID id, String actor, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.consultation_request
+                           SET status = 'REJECTED', responded_by = :actor, responded_at = now(),
+                               rejected_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'REQUESTED' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("reason", reason)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 完成：仅 ACCEPTED 可完成，需填写会诊意见。 */
+    public boolean completeConsultation(UUID id, String actor, String conclusion,
+                                        long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.consultation_request
+                           SET status = 'COMPLETED', completed_by = :actor, completed_at = now(),
+                               conclusion = :conclusion, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACCEPTED' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("conclusion", conclusion)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 撤回：主诊科室可撤销进行中的会诊（REQUESTED / ACCEPTED）。 */
+    public boolean cancelConsultation(UUID id, String actor, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.consultation_request
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancelled_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('REQUESTED', 'ACCEPTED')
+                           AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("reason", reason)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 该就诊是否有仍在进行、且邀请指定科室的会诊（跨科室只读授权的判定依据）。 */
+    public boolean existsActiveConsultation(UUID visitId, java.util.Collection<UUID> deptIds) {
+        if (deptIds == null || deptIds.isEmpty()) {
+            return false;
+        }
+        return jdbc.sql("""
+                        SELECT 1 FROM clinical_svc.consultation_request
+                         WHERE visit_id = :visitId
+                           AND to_dept_id IN (:deptIds)
+                           AND status IN ('REQUESTED', 'ACCEPTED')
+                         LIMIT 1
+                        """)
+                .param("visitId", visitId).param("deptIds", deptIds)
+                .query(Integer.class).optional().isPresent();
     }
 
     // ---------------------------------------------------------------- 审计

@@ -43,6 +43,27 @@ public class VisitAccessGuard {
     }
 
     /**
+     * 只读校验：本科室可见，**或**受邀会诊仍在进行中（跨科室只读授权的唯一来源）。
+     *
+     * <p>与 {@link #require} 的差别只在"多一条会诊授权"，其余不变：
+     * 会诊完成后授权立即失效，因此这里每次都要查一次状态，不做缓存。
+     *
+     * <p>只用在读接口：受邀科室能看会诊所需的就诊/医嘱/诊断，但不能替主诊科室下医嘱、
+     * 收费或改病历——那些写接口仍然走 {@link #require}。
+     */
+    public Visit requireRead(DataScope scope, UUID visitId) {
+        Visit visit = repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        if (scope.canSeeDepartment(visit.deptId())) {
+            return visit;
+        }
+        if (repo.existsActiveConsultation(visitId, scope.deptCodes())) {
+            return visit;
+        }
+        throw new BusinessException(ErrorCode.VISIT_NOT_FOUND);
+    }
+
+    /**
      * 校验住院登记所属就诊在数据范围内（住院处一切按 admissionId 操作时使用）。
      *
      * @throws BusinessException 登记不存在，或存在但科室不可见

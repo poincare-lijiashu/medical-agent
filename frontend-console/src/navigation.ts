@@ -21,6 +21,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:visit:read'],
   },
   {
+    name: 'consultation',
+    path: '/consultation',
+    title: '会诊工作台',
+    hint: '会诊申请与意见 · 受邀科室只读授权随会诊结束收回',
+    icon: 'users',
+    group: '临床诊疗',
+    permissions: ['clinical:consultation:read'],
+  },
+  {
     name: 'preop',
     path: '/preop',
     title: '术前访视',

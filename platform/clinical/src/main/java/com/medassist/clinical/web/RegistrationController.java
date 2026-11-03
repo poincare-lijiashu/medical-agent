@@ -105,7 +105,8 @@ public class RegistrationController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
-        guard.require(scope, id);
+        // 只读：本科室，或受邀会诊进行中（会诊医师需要看到患者当前就诊信息）
+        guard.requireRead(scope, id);
         return ApiResponse.ok(PhiMask.visit(service.detail(id), scope));
     }
 

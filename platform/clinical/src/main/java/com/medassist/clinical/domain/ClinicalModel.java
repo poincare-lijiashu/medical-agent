@@ -604,4 +604,37 @@ public final class ClinicalModel {
             return receivedQuantity - returnedQuantity;
         }
     }
+
+    /**
+     * 会诊申请：跨科室只读授权的业务事实来源。
+     *
+     * <p>{@link #ACTIVE_STATUSES} 内的记录会让受邀科室获得该就诊的**只读**权限；
+     * 一旦拒绝、完成或撤回，授权立即收回——不做"一次会诊永久可见"。
+     */
+    public record Consultation(UUID id, String consultationNo, UUID visitId, UUID patientId,
+                               String patientNo, UUID fromDeptId, UUID toDeptId, String reason,
+                               String status, String requestedBy, Instant requestedAt,
+                               String respondedBy, Instant respondedAt, String rejectedReason,
+                               String completedBy, Instant completedAt, String conclusion,
+                               String cancelledBy, Instant cancelledAt, String cancelledReason,
+                               long version, Instant createdAt) {
+
+        public static final String REQUESTED = "REQUESTED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String REJECTED = "REJECTED";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String CANCELLED = "CANCELLED";
+
+        /** 仍授予只读权限的状态。 */
+        public static final java.util.Set<String> ACTIVE_STATUSES =
+                java.util.Set.of(REQUESTED, ACCEPTED);
+
+        public boolean active() {
+            return ACTIVE_STATUSES.contains(status);
+        }
+
+        public boolean terminal() {
+            return REJECTED.equals(status) || COMPLETED.equals(status) || CANCELLED.equals(status);
+        }
+    }
 }

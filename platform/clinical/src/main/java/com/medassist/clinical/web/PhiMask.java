@@ -1,5 +1,6 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
@@ -59,6 +60,17 @@ final class PhiMask {
                 f.status(), f.admittedAt(), f.billedTotal(), f.settledTotal(), f.unpaidTotal(),
                 f.depositBalance(), f.pendingAmount(), f.pendingOrderCount(), f.dailyLongAmount(),
                 f.dailyLongOrderCount(), f.todayBilledAmount(), f.shortfall(), f.warning());
+    }
+
+    static Consultation consultation(Consultation c, DataScope scope) {
+        if (c == null || scope.phiReadable()) {
+            return c;
+        }
+        return new Consultation(c.id(), c.consultationNo(), c.visitId(), c.patientId(),
+                scope.maskPatientNo(c.patientNo()), c.fromDeptId(), c.toDeptId(), c.reason(),
+                c.status(), c.requestedBy(), c.requestedAt(), c.respondedBy(), c.respondedAt(),
+                c.rejectedReason(), c.completedBy(), c.completedAt(), c.conclusion(),
+                c.cancelledBy(), c.cancelledAt(), c.cancelledReason(), c.version(), c.createdAt());
     }
 
     static SurgeryBoardView board(SurgeryBoardView view, DataScope scope) {

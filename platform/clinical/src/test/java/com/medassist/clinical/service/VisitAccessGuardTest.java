@@ -15,6 +15,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -119,6 +121,37 @@ class VisitAccessGuardTest {
         assertThatThrownBy(() -> guard.requireCase(DataScope.all("admin", true), missing))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
+    // ---------------------------------------------------------------- 只读（会诊授权）
+
+    @Test
+    @DisplayName("只读：本科室放行；跨科室仅在受邀会诊进行中放行；否则 404")
+    void requireReadAllowsActiveConsultation() {
+        UUID visitId = UUID.randomUUID();
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(
+                new Visit(visitId, "V1", UUID.randomUUID(), "P1", deptA, "doctor01",
+                        null, "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L)));
+
+        // 本科室：不查会诊表
+        guard.requireRead(DataScope.ofDepartment("doctor01", deptA, true), visitId);
+        verifyNoInteractionsOnConsultation();
+
+        // 跨科室 + 有进行中的会诊：放行
+        when(repo.existsActiveConsultation(eq(visitId), any())).thenReturn(true);
+        guard.requireRead(DataScope.ofDepartment("doctor02", deptB, true), visitId);
+
+        // 跨科室 + 没有会诊：404
+        when(repo.existsActiveConsultation(eq(visitId), any())).thenReturn(false);
+        assertThatThrownBy(() ->
+                guard.requireRead(DataScope.ofDepartment("doctor02", deptB, true), visitId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VISIT_NOT_FOUND));
+    }
+
+    private void verifyNoInteractionsOnConsultation() {
+        org.mockito.Mockito.verify(repo, org.mockito.Mockito.never())
+                .existsActiveConsultation(any(), any());
     }
 
     // ---------------------------------------------------------------- 按 admissionId / wardId 访问

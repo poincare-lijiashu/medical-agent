@@ -448,6 +448,37 @@ export interface KbAnswerResult {
   latencyMs: number
 }
 
+/**
+ * 会诊申请。
+ *
+ * <p>REQUESTED / ACCEPTED 期间，受邀科室获得该就诊的只读权限；
+ * 拒绝、完成或撤回后授权立即收回。
+ */
+export interface Consultation {
+  id: string
+  consultationNo: string
+  visitId: string
+  patientId: string
+  patientNo: string
+  fromDeptId: string
+  toDeptId: string
+  reason: string
+  status: 'REQUESTED' | 'ACCEPTED' | 'REJECTED' | 'COMPLETED' | 'CANCELLED'
+  requestedBy: string
+  requestedAt: string
+  respondedBy: string | null
+  respondedAt: string | null
+  rejectedReason: string | null
+  completedBy: string | null
+  completedAt: string | null
+  conclusion: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelledReason: string | null
+  version: number
+  createdAt: string
+}
+
 /** 手术间单日利用率。 */
 export interface DailyUtilization {
   date: string

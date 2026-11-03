@@ -13,6 +13,11 @@ const router = createRouter({
         { path: '', redirect: '/orders' },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },
         { path: 'preop', name: 'preop', component: () => import('@/views/PreopVisitView.vue') },
+        {
+          path: 'consultation',
+          name: 'consultation',
+          component: () => import('@/views/ConsultationView.vue'),
+        },
         { path: 'surgery', name: 'surgery', component: () => import('@/views/SurgeryBoardView.vue') },
         {
           path: 'surgery-charges',
