@@ -3,9 +3,11 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.service.DiagnosisService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.AddDiagnosisReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -40,9 +42,11 @@ public class DiagnosisController {
     private static final String WRITE = "clinical:diagnosis:write";
 
     private final DiagnosisService service;
+    private final VisitAccessGuard guard;
 
-    public DiagnosisController(DiagnosisService service) {
+    public DiagnosisController(DiagnosisService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping("/diagnoses")
@@ -57,8 +61,10 @@ public class DiagnosisController {
     @GetMapping("/visits/{visitId}/diagnoses")
     public ApiResponse<List<VisitDiagnosis>> list(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.list(visitId));
     }
 
@@ -67,8 +73,10 @@ public class DiagnosisController {
             @PathVariable UUID visitId,
             @Valid @RequestBody AddDiagnosisReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.add(visitId, req, actor));
     }
 
@@ -78,8 +86,10 @@ public class DiagnosisController {
             @PathVariable UUID visitId,
             @PathVariable UUID diagnosisId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.setPrimary(visitId, diagnosisId, actor));
     }
 
@@ -88,8 +98,10 @@ public class DiagnosisController {
             @PathVariable UUID visitId,
             @PathVariable UUID diagnosisId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.remove(visitId, diagnosisId, actor));
     }
 }

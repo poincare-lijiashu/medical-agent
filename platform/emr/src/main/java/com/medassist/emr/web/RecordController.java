@@ -1,11 +1,15 @@
 package com.medassist.emr.web;
 
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.RecordHit;
+import com.medassist.emr.service.EmrAccessGuard;
 import com.medassist.emr.service.RecordService;
 import com.medassist.emr.web.EmrDtos.AmendReq;
 import com.medassist.emr.web.EmrDtos.ChangeRequestReq;
@@ -55,36 +59,49 @@ public class RecordController {
     private static final String APPROVE = "emr:record:approve";
 
     private final RecordService service;
+    private final EmrAccessGuard guard;
 
-    public RecordController(RecordService service) {
+    public RecordController(RecordService service, EmrAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @PostMapping
     public ApiResponse<RecordView> create(
             @Valid @RequestBody CreateRecordReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CREATE);
+        // 建档科室决定这份病历日后对谁可见，写入前必须落在自己的数据范围内
+        if (req.deptId() != null && !scope.canSeeDepartment(req.deptId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "只能为本科室建立病历");
+        }
         return ApiResponse.ok(service.create(req, actor));
     }
 
+    /** 列表：按建档科室过滤，避免医师用 patientId/visitId 拉取其他科室病历。 */
     @GetMapping
     public ApiResponse<List<MedicalRecord>> list(
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) UUID visitId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, visitId, limit));
+        return ApiResponse.ok(service.list(status, patientId, visitId, limit).stream()
+                .filter(r -> scope.canSeeDepartment(r.deptId()))
+                .toList());
     }
 
     @GetMapping("/{id}")
     public ApiResponse<RecordView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -99,9 +116,13 @@ public class RecordController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Integer limit,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, SEARCH);
-        return ApiResponse.ok(service.search(q, patientId, docType, status, from, to, limit, actor));
+        return ApiResponse.ok(service.search(q, patientId, docType, status, from, to, limit, actor)
+                .stream()
+                .filter(hit -> scope.canSeeDepartment(hit.deptId()))
+                .toList());
     }
 
     /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */
@@ -109,8 +130,10 @@ public class RecordController {
     public ResponseEntity<String> print(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireRecord(scope, id);
         // 整页 PHI：禁脚本、禁外链、禁缓存，避免病历被浏览器/代理留存
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
@@ -127,8 +150,10 @@ public class RecordController {
             @PathVariable UUID id,
             @Valid @RequestBody SaveContentReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CREATE);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.save(id, req, actor));
     }
 
@@ -137,8 +162,10 @@ public class RecordController {
     public ApiResponse<SubmitResult> submit(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, SUBMIT);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.submit(id, actor));
     }
 
@@ -146,8 +173,10 @@ public class RecordController {
     @GetMapping("/{id}/qc")
     public ApiResponse<QcReport> previewQc(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.previewQc(id));
     }
 
@@ -157,8 +186,10 @@ public class RecordController {
             @PathVariable UUID id,
             @Valid @RequestBody(required = false) SignReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, SIGN);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.sign(id, req == null ? null : req.level(), actor));
     }
 
@@ -167,8 +198,10 @@ public class RecordController {
     public ApiResponse<RecordView> archive(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ARCHIVE);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.archive(id, actor));
     }
 
@@ -178,8 +211,10 @@ public class RecordController {
             @PathVariable UUID id,
             @Valid @RequestBody AmendReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, AMEND);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.amend(id, req, actor));
     }
 
@@ -189,16 +224,20 @@ public class RecordController {
             @PathVariable UUID id,
             @Valid @RequestBody ChangeRequestReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, AMEND);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.requestChange(id, req, actor));
     }
 
     @GetMapping("/{id}/change-requests")
     public ApiResponse<List<ChangeRequest>> listChanges(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.listChanges(id));
     }
 
@@ -209,8 +248,10 @@ public class RecordController {
             @PathVariable UUID requestId,
             @RequestBody(required = false) ReviewReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.approveChange(id, requestId, req, actor));
     }
 
@@ -221,8 +262,10 @@ public class RecordController {
             @PathVariable UUID requestId,
             @RequestBody(required = false) ReviewReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.rejectChange(id, requestId, req, actor));
     }
 
@@ -232,8 +275,10 @@ public class RecordController {
             @PathVariable UUID id,
             @PathVariable UUID requestId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, AMEND);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.withdrawChange(id, requestId, actor));
     }
 
@@ -241,8 +286,10 @@ public class RecordController {
     @GetMapping("/{id}/verify")
     public ApiResponse<HashVerify> verify(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireRecord(scope, id);
         return ApiResponse.ok(service.verify(id));
     }
 }

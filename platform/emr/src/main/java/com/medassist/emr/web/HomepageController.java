@@ -1,9 +1,13 @@
 package com.medassist.emr.web;
 
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.emr.domain.EmrModel.HomepageSummary;
+import com.medassist.emr.service.EmrAccessGuard;
 import com.medassist.emr.service.HomepageService;
 import com.medassist.emr.web.EmrDtos.CreateHomepageReq;
 import com.medassist.emr.web.EmrDtos.HomepageView;
@@ -39,9 +43,11 @@ public class HomepageController {
     private static final String ARCHIVE = "emr:homepage:archive";
 
     private final HomepageService service;
+    private final EmrAccessGuard guard;
 
-    public HomepageController(HomepageService service) {
+    public HomepageController(HomepageService service, EmrAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 生成首页（仅已出院住院就诊；同一就诊只能生成一份）。 */
@@ -49,12 +55,18 @@ public class HomepageController {
     public ApiResponse<HomepageView> create(
             @Valid @RequestBody CreateHomepageReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, actor, scope));
     }
 
-    /** 列表：只返回摘要（姓名掩码、不含诊断/费用明细），并写 HOMEPAGE_QUERY 审计。 */
+    /**
+     * 列表：只返回摘要（姓名掩码、不含诊断/费用明细），并写 HOMEPAGE_QUERY 审计。
+     *
+     * <p>数据范围：显式传入的 {@code deptId} 必须可见；未传时按当前账号的科室过滤，
+     * 避免病案室以外的人用"不传 deptId"绕过科室隔离拉全院首页。
+     */
     @GetMapping
     public ApiResponse<List<HomepageSummary>> list(
             @RequestParam(required = false) String status,
@@ -62,9 +74,21 @@ public class HomepageController {
             @RequestParam(required = false) UUID deptId,
             @RequestParam(required = false) Integer limit,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, deptId, limit, actor));
+        UUID filterDept = deptId;
+        if (!scope.allDepartments()) {
+            if (deptId != null && !scope.canSeeDepartment(deptId)) {
+                throw new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND);
+            }
+            if (deptId == null && scope.deptCodes().size() == 1) {
+                filterDept = scope.deptCodes().iterator().next();
+            }
+        }
+        return ApiResponse.ok(service.list(status, patientId, filterDept, limit, actor).stream()
+                .filter(row -> scope.canSeeDepartment(row.deptId()))
+                .toList());
     }
 
     /** 详情：整份 PHI，必须留痕（HOMEPAGE_VIEW）。 */
@@ -72,8 +96,10 @@ public class HomepageController {
     public ApiResponse<HomepageView> detail(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireHomepage(scope, id);
         return ApiResponse.ok(service.viewDetail(id, actor));
     }
 
@@ -82,8 +108,10 @@ public class HomepageController {
     public ResponseEntity<String> print(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireHomepage(scope, id);
         // 整页 PHI：禁脚本、禁外链、禁缓存
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
@@ -100,8 +128,10 @@ public class HomepageController {
             @PathVariable UUID id,
             @Valid @RequestBody UpdateHomepageReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireHomepage(scope, id);
         return ApiResponse.ok(service.update(id, req, actor));
     }
 
@@ -110,8 +140,10 @@ public class HomepageController {
     public ApiResponse<HomepageView> recalculate(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireHomepage(scope, id);
         return ApiResponse.ok(service.recalculate(id, actor));
     }
 
@@ -121,8 +153,10 @@ public class HomepageController {
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
-            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId) {
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireHomepage(scope, id);
         return ApiResponse.ok(service.submit(id, actor, parseUuid(userId)));
     }
 
@@ -132,8 +166,10 @@ public class HomepageController {
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
-            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId) {
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
+            DataScope scope) {
         Permissions.require(permissions, ARCHIVE);
+        guard.requireHomepage(scope, id);
         return ApiResponse.ok(service.archive(id, actor, parseUuid(userId)));
     }
 

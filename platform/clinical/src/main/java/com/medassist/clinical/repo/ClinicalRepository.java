@@ -2132,6 +2132,32 @@ public class ClinicalRepository {
                 .optional();
     }
 
+    /**
+     * 按住院登记查所属就诊的科室（行级权限校验用）。
+     *
+     * <p>住院处的所有操作都以 admissionId 为入口，但科室归属在 visit 上，
+     * 这里一次 JOIN 取到，避免"先查登记再查就诊"两次往返。
+     */
+    public Optional<UUID> findVisitDepartmentByAdmissionId(UUID admissionId) {
+        return jdbc.sql("""
+                        SELECT v.dept_id
+                          FROM clinical_svc.admission a
+                          JOIN clinical_svc.visit v ON v.id = a.visit_id
+                         WHERE a.id = ?
+                        """)
+                .param(admissionId)
+                .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
+    /** 病区所属科室（病区本身就归属某个科室，床位/在院列表按此判定可见性）。 */
+    public Optional<UUID> findWardDepartment(UUID wardId) {
+        return jdbc.sql("SELECT dept_id FROM clinical_svc.ward WHERE id = ?")
+                .param(wardId)
+                .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
     /** 开始手术（CAS：仅 PLANNED）。 */
     public boolean startSurgery(UUID id, java.time.Instant startedAt, long expectedVersion) {
         return jdbc.sql("""

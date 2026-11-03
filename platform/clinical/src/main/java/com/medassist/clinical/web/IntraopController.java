@@ -3,6 +3,7 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaVital;
 import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.service.IntraopService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
 import com.medassist.clinical.web.TheatreDtos.AnesthesiaReq;
 import com.medassist.clinical.web.TheatreDtos.AnesthesiaView;
@@ -10,6 +11,7 @@ import com.medassist.clinical.web.TheatreDtos.NursingReq;
 import com.medassist.clinical.web.TheatreDtos.VitalReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,9 +35,11 @@ public class IntraopController {
     private static final String WRITE = "clinical:surgery:write";
 
     private final IntraopService service;
+    private final VisitAccessGuard guard;
 
-    public IntraopController(IntraopService service) {
+    public IntraopController(IntraopService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     // ---- 麻醉
@@ -43,8 +47,10 @@ public class IntraopController {
     @GetMapping("/{caseId}/anesthesia")
     public ApiResponse<AnesthesiaView> getAnesthesia(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.getAnesthesia(caseId));
     }
 
@@ -52,8 +58,10 @@ public class IntraopController {
     public ApiResponse<AnesthesiaView> saveAnesthesia(
             @PathVariable UUID caseId, @Valid @RequestBody AnesthesiaReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.saveAnesthesia(caseId, req, actor));
     }
 
@@ -61,16 +69,20 @@ public class IntraopController {
     public ApiResponse<AnesthesiaView> signAnesthesia(
             @PathVariable UUID caseId, @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.signAnesthesia(caseId, req.version(), actor));
     }
 
     @GetMapping("/{caseId}/anesthesia/vitals")
     public ApiResponse<List<AnesthesiaVital>> vitals(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.vitals(caseId));
     }
 
@@ -78,8 +90,10 @@ public class IntraopController {
     public ApiResponse<AnesthesiaVital> addVital(
             @PathVariable UUID caseId, @Valid @RequestBody VitalReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.addVital(caseId, req, actor));
     }
 
@@ -88,8 +102,10 @@ public class IntraopController {
     @GetMapping("/{caseId}/nursing")
     public ApiResponse<IntraopNursing> getNursing(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.getNursing(caseId));
     }
 
@@ -97,8 +113,10 @@ public class IntraopController {
     public ApiResponse<IntraopNursing> saveNursing(
             @PathVariable UUID caseId, @Valid @RequestBody NursingReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.saveNursing(caseId, req, actor));
     }
 
@@ -106,8 +124,10 @@ public class IntraopController {
     public ApiResponse<IntraopNursing> signNursing(
             @PathVariable UUID caseId, @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.signNursing(caseId, req.version(), actor));
     }
 }

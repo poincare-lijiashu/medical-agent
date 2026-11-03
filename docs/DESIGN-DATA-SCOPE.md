@@ -115,7 +115,7 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 | 2 | clinical 的 `visit → surgery-case` 列表按科室过滤 | **已完成** |
 | 3 | 医嘱 / 收费按 visit 归属过滤（`VisitAccessGuard` 统一拦截） | **已完成** |
 | 4 | 术前访视（按 caseId，经就诊科室校验） | **已完成** |
-| 5 | 病案首页（emr 服务）/ 住院床位 / 护理执行 | 待做 |
+| 5 | 住院 ADT / 床位 / 护理执行 / 病区备药 / 挂号与诊断 / 麻醉与术中护理 / 术前讨论与知情同意 / 术中收费 / 分级审批 / 病案首页与病历（emr 服务） | **已完成** |
 | 6 | empi 患者检索按科室过滤 | 待做 |
 | 7 | PHI 掩码铺到所有返回患者标识的 DTO | 待做 |
 
@@ -127,8 +127,18 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 | 收费 | `preview`、`charge`、`settle`、`daily-bill`、`daily-bill/reverse` | `require(scope, visitId)` |
 | 手术 | `GET /visits/{id}/surgery-cases` | `require(scope, visitId)` |
 | 术前访视 | `GET/PUT /surgery-cases/{id}/preop-visit`、`/sign` | `requireCase(scope, caseId)`（JOIN 取就诊科室） |
+| 术前管理 | 术前讨论、知情同意、术前核查清单（7 个接口） | `requireCase(scope, caseId)` |
+| 术中记录 | 麻醉记录单 / 生命体征 / 术中护理（8 个接口） | `requireCase(scope, caseId)` |
+| 术中收费 | `charge-preview`、`charges` | `requireCase(scope, caseId)` |
+| 手术分级 | `GET`、`PUT`、`approve`、`reject` | `requireCase(scope, caseId)`（审批仅 ADMIN/QC，均全院范围） |
+| 手术记录写路径 | `plan`、`start`、`complete`、`cancel` | `require(scope, visitId)`（服务层已校验 case∈visit） |
+| 住院 ADT | 在院列表、分床、出院、预交金、费用看板、护理执行（11 个接口） | `requireAdmission(scope, admissionId)`；病区/床位用 `requireWard` |
+| 病区备药 | 备药看板、收药、退药、二级库存（4 个接口） | `require(scope, visitId)` |
+| 挂号与诊断 | 就诊详情/接诊/结束/退号、就诊诊断增删改（7 个接口） | `require(scope, visitId)`；按患者列就诊时按科室过滤 |
+| 病案首页（emr） | 生成、列表、详情、打印、补录、重算、提交、归档（8 个接口） | `EmrAccessGuard.requireHomepage`（记录自身 `dept_id`）；生成时用临床快照的科室判定 |
+| 病历正文（emr） | 建档、列表、详情、检索、打印、保存、提交、质控、签名、归档、修订、修改申请审批（16 个接口） | `EmrAccessGuard.requireRecord`；列表与检索结果按科室过滤 |
 
-未接入（阶段 5+）：病案首页（emr 服务，需跨服务落地）、住院床位、护理执行、empi 检索、PHI 掩码。
+未接入（阶段 6+）：empi 患者检索、PHI 掩码。
 
 **每个接入点都必须有越权用例**：用 B 科室身份请求 A 科室的就诊，必须 404 且不查业务表。
 

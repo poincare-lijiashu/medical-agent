@@ -3,6 +3,7 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.service.SurgeryService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.SurgeryDtos.CancelSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.PlanSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
@@ -37,9 +38,11 @@ public class SurgeryController {
     private static final String WRITE = "clinical:surgery:write";
 
     private final SurgeryService service;
+    private final VisitAccessGuard guard;
 
-    public SurgeryController(SurgeryService service) {
+    public SurgeryController(SurgeryService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 手术编码搜索（供开单/病案选择，只返回启用项）。 */
@@ -66,8 +69,10 @@ public class SurgeryController {
             @PathVariable UUID visitId,
             @Valid @RequestBody PlanSurgeryReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.plan(visitId, req, actor));
     }
 
@@ -76,8 +81,10 @@ public class SurgeryController {
             @PathVariable UUID visitId, @PathVariable UUID id,
             @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.start(visitId, id, req.version(), actor));
     }
 
@@ -86,8 +93,10 @@ public class SurgeryController {
             @PathVariable UUID visitId, @PathVariable UUID id,
             @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.complete(visitId, id, req.version(), actor));
     }
 
@@ -96,8 +105,10 @@ public class SurgeryController {
             @PathVariable UUID visitId, @PathVariable UUID id,
             @Valid @RequestBody CancelSurgeryReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.cancel(visitId, id, req, actor));
     }
 }

@@ -88,6 +88,7 @@ public class EmrRepository {
     private static final RowMapper<RecordHit> HIT_MAPPER = (rs, i) -> new RecordHit(
             rs.getObject("id", UUID.class), rs.getString("record_no"),
             rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+            rs.getObject("dept_id", UUID.class),
             rs.getString("doc_type"), rs.getString("title"), rs.getString("author"),
             rs.getString("status"), rs.getInt("revision"),
             rs.getTimestamp("created_at").toInstant());
@@ -441,6 +442,27 @@ public class EmrRepository {
                 .query(RECORD_MAPPER).list();
     }
 
+    /**
+     * 病历所属科室（行级权限校验用）。
+     *
+     * <p>返回 empty 有两种可能：记录不存在，或建档时未带科室。
+     * 两者对调用方是同一个结论——不可见，因此不区分。
+     */
+    public Optional<UUID> findRecordDepartment(UUID id) {
+        return jdbc.sql("SELECT dept_id FROM emr_svc.medical_record WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
+    /** 病案首页所属科室（行级权限校验用）。 */
+    public Optional<UUID> findHomepageDepartment(UUID id) {
+        return jdbc.sql("SELECT dept_id FROM emr_svc.record_homepage WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
     // ---------------------------------------------------------------- 签名 / 修订
 
     public void insertSignature(RecordSignature s) {
@@ -552,7 +574,7 @@ public class EmrRepository {
     public List<RecordHit> searchRecords(String pattern, String prefix, UUID patientId, String docType,
                                          String status, LocalDate from, LocalDate to, int limit) {
         String sql = pattern == null ? """
-                        SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                        SELECT id, record_no, patient_id, patient_no, dept_id, doc_type, title,
                                author, status, revision, created_at
                           FROM emr_svc.medical_record
                          WHERE 1 = 1
@@ -560,10 +582,10 @@ public class EmrRepository {
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """ : """
-                        SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                        SELECT id, record_no, patient_id, patient_no, dept_id, doc_type, title,
                                author, status, revision, created_at
                           FROM (
-                                (SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                                (SELECT id, record_no, patient_id, patient_no, dept_id, doc_type, title,
                                         author, status, revision, created_at
                                    FROM emr_svc.medical_record
                                   WHERE (title ILIKE CAST(:pattern AS text) ESCAPE '\\'
@@ -572,7 +594,7 @@ public class EmrRepository {
                                   ORDER BY created_at DESC
                                   LIMIT :limit)
                                 UNION
-                                (SELECT id, record_no, patient_id, patient_no, doc_type, title,
+                                (SELECT id, record_no, patient_id, patient_no, dept_id, doc_type, title,
                                         author, status, revision, created_at
                                    FROM emr_svc.medical_record
                                   WHERE (record_no LIKE CAST(:prefix AS text) ESCAPE '\\'
@@ -893,7 +915,7 @@ public class EmrRepository {
                         SELECT id, homepage_no, visit_no, patient_no,
                                CASE WHEN patient_name IS NULL OR patient_name = '' THEN ''
                                     ELSE left(patient_name, 1) || '**' END AS patient_name_masked,
-                               dept_name, ward_name, discharged_at, stay_days, total_amount,
+                               dept_id, dept_name, ward_name, discharged_at, stay_days, total_amount,
                                status, version
                           FROM emr_svc.record_homepage
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
@@ -908,7 +930,8 @@ public class EmrRepository {
                 .query((rs, i) -> new HomepageSummary(
                         rs.getObject("id", UUID.class), rs.getString("homepage_no"),
                         rs.getString("visit_no"), rs.getString("patient_no"),
-                        rs.getString("patient_name_masked"), rs.getString("dept_name"),
+                        rs.getString("patient_name_masked"), rs.getObject("dept_id", UUID.class),
+                        rs.getString("dept_name"),
                         rs.getString("ward_name"), instant(rs, "discharged_at"),
                         rs.getInt("stay_days"), rs.getBigDecimal("total_amount"),
                         rs.getString("status"), rs.getLong("version")))

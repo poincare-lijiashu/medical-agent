@@ -2,6 +2,8 @@ package com.medassist.emr.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
+import com.medassist.emr.service.EmrAccessGuard;
 import com.medassist.emr.service.RecordService;
 import com.medassist.emr.web.EmrDtos.CreateRecordReq;
 import com.medassist.emr.web.EmrDtos.ReviewReq;
@@ -33,11 +35,13 @@ class EmrControllerPermissionTest {
     private RecordController controller;
 
     private final UUID id = UUID.randomUUID();
+    /** 本类只测权限点；科室可见性由 EmrAccessGuard 与其单测覆盖。 */
+    private final DataScope scope = DataScope.all("admin01", true);
 
     @BeforeEach
     void setUp() {
         service = mock(RecordService.class);
-        controller = new RecordController(service);
+        controller = new RecordController(service, mock(EmrAccessGuard.class));
     }
 
     @Test
@@ -45,7 +49,7 @@ class EmrControllerPermissionTest {
     void createRequiresCreatePermission() {
         var req = new CreateRecordReq(id, null, null, null, "TPL-ADMISSION", null, Map.of());
 
-        assertThatThrownBy(() -> controller.create(req, "emr:record:read", "nurse01"))
+        assertThatThrownBy(() -> controller.create(req, "emr:record:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -57,7 +61,7 @@ class EmrControllerPermissionTest {
     void signRequiresSignPermission() {
         var req = new SignReq("AUTHOR");
 
-        assertThatThrownBy(() -> controller.sign(id, req, "emr:record:read", "nurse01"))
+        assertThatThrownBy(() -> controller.sign(id, req, "emr:record:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -67,7 +71,7 @@ class EmrControllerPermissionTest {
     @Test
     @DisplayName("归档：修订权限不等于归档权限")
     void archiveRequiresArchivePermission() {
-        assertThatThrownBy(() -> controller.archive(id, "emr:record:amend", "doctor01"))
+        assertThatThrownBy(() -> controller.archive(id, "emr:record:amend", "doctor01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -80,7 +84,7 @@ class EmrControllerPermissionTest {
         var req = new ReviewReq("同意");
 
         assertThatThrownBy(() -> controller.approveChange(id, id, req,
-                "emr:record:amend", "doctor01"))
+                "emr:record:amend", "doctor01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -92,7 +96,7 @@ class EmrControllerPermissionTest {
     void approveAllowedForQcPermission() {
         var req = new ReviewReq("同意");
 
-        controller.approveChange(id, id, req, "emr:record:approve", "qc01");
+        controller.approveChange(id, id, req, "emr:record:approve", "qc01", scope);
 
         verify(service).approveChange(id, id, req, "qc01");
     }
@@ -100,7 +104,7 @@ class EmrControllerPermissionTest {
     @Test
     @DisplayName("只读查询：emr:record:read 放行")
     void detailAllowedForReadPermission() {
-        controller.detail(id, "emr:record:read");
+        controller.detail(id, "emr:record:read", scope);
 
         verify(service).detail(id);
     }
@@ -109,21 +113,21 @@ class EmrControllerPermissionTest {
     @DisplayName("CDR 检索：只有 emr:record:search 可用，只读权限不够（V17）")
     void searchRequiresSearchPermission() {
         assertThatThrownBy(() -> controller.search("x", null, null, null, null, null, null,
-                "emr:record:read", "nurse01"))
+                "emr:record:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(service, never()).search(any(), any(), any(), any(), any(), any(), any(), anyString());
 
         controller.search("x", null, null, null, null, null, null,
-                "emr:record:search", "doctor01");
+                "emr:record:search", "doctor01", scope);
         verify(service).search("x", null, null, null, null, null, null, "doctor01");
     }
 
     @Test
     @DisplayName("打印：只读权限放行，并把操作人传给服务层留痕")
     void printAllowedForReadPermission() {
-        controller.print(id, "emr:record:read", "nurse01");
+        controller.print(id, "emr:record:read", "nurse01", scope);
 
         verify(service).printHtml(id, "nurse01");
     }
@@ -131,7 +135,7 @@ class EmrControllerPermissionTest {
     @Test
     @DisplayName("权限头缺失：提示重新登录（403）")
     void emptyPermissionsHeader() {
-        assertThatThrownBy(() -> controller.detail(id, null))
+        assertThatThrownBy(() -> controller.detail(id, null, scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);

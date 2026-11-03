@@ -3,6 +3,7 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryConsent;
 import com.medassist.clinical.service.PreopService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.PreopDtos.ConsentReq;
 import com.medassist.clinical.web.PreopDtos.PreopReq;
 import com.medassist.clinical.web.PreopDtos.PreopSummary;
@@ -10,6 +11,7 @@ import com.medassist.clinical.web.PreopDtos.RevokeConsentReq;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,16 +35,20 @@ public class PreopController {
     private static final String WRITE = "clinical:surgery:write";
 
     private final PreopService service;
+    private final VisitAccessGuard guard;
 
-    public PreopController(PreopService service) {
+    public PreopController(PreopService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping("/preop-discussion")
     public ApiResponse<PreopDiscussion> getDiscussion(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.getDiscussion(caseId));
     }
 
@@ -50,8 +56,10 @@ public class PreopController {
     public ApiResponse<PreopDiscussion> saveDiscussion(
             @PathVariable UUID caseId, @Valid @RequestBody PreopReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.saveDiscussion(caseId, req, actor));
     }
 
@@ -59,16 +67,20 @@ public class PreopController {
     public ApiResponse<PreopDiscussion> signDiscussion(
             @PathVariable UUID caseId, @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.signDiscussion(caseId, req.version(), actor));
     }
 
     @GetMapping("/consents")
     public ApiResponse<List<SurgeryConsent>> consents(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.consents(caseId));
     }
 
@@ -76,8 +88,10 @@ public class PreopController {
     public ApiResponse<SurgeryConsent> addConsent(
             @PathVariable UUID caseId, @Valid @RequestBody ConsentReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.addConsent(caseId, req, actor));
     }
 
@@ -86,16 +100,20 @@ public class PreopController {
             @PathVariable UUID caseId, @PathVariable UUID consentId,
             @Valid @RequestBody RevokeConsentReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.revokeConsent(caseId, consentId, req, actor));
     }
 
     @GetMapping("/preop-summary")
     public ApiResponse<PreopSummary> summary(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.summary(caseId));
     }
 }

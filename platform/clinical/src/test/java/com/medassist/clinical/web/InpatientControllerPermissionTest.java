@@ -3,11 +3,13 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,23 +39,27 @@ class InpatientControllerPermissionTest {
     private InpatientService service;
     private InpatientFinanceService financeService;
     private NursingService nursingService;
+    private VisitAccessGuard guard;
     private InpatientController controller;
 
     private final UUID admissionId = UUID.randomUUID();
     private final UUID wardId = UUID.randomUUID();
+    /** 本类只测权限点，数据范围用全院（数据范围本身由 VisitAccessGuardTest 覆盖）。 */
+    private final DataScope scope = DataScope.all("admin01", true);
 
     @BeforeEach
     void setUp() {
         service = mock(InpatientService.class);
         financeService = mock(InpatientFinanceService.class);
         nursingService = mock(NursingService.class);
-        controller = new InpatientController(service, financeService, nursingService);
+        guard = mock(VisitAccessGuard.class);
+        controller = new InpatientController(service, financeService, nursingService, guard);
     }
 
     @Test
     @DisplayName("费用看板：缺少 inpatient:finance:read 时 403，且不触达服务层")
     void financeRequiresPermission() {
-        assertThatThrownBy(() -> controller.finance(admissionId, "inpatient:read", "clerk01"))
+        assertThatThrownBy(() -> controller.finance(admissionId, "inpatient:read", "clerk01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -63,7 +69,7 @@ class InpatientControllerPermissionTest {
     @Test
     @DisplayName("费用看板：有权限时透传操作者（用于审计）")
     void financePassesActor() {
-        controller.finance(admissionId, "inpatient:finance:read", "clerk01");
+        controller.finance(admissionId, "inpatient:finance:read", "clerk01", scope);
 
         verify(financeService).finance(admissionId, "clerk01");
     }
@@ -71,7 +77,7 @@ class InpatientControllerPermissionTest {
     @Test
     @DisplayName("欠费预警：不带 wardId 且无全院权限时 422（防横向枚举全院患者）")
     void alertsWithoutWardRequiresAllScope() {
-        assertThatThrownBy(() -> controller.alerts(null, "inpatient:finance:read", "nurse01"))
+        assertThatThrownBy(() -> controller.alerts(null, "inpatient:finance:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
@@ -85,7 +91,7 @@ class InpatientControllerPermissionTest {
                 .thenReturn(List.of(new InpatientAlert(admissionId, "A1", "P1", null, "01",
                         new BigDecimal("10.00"), BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("10.00"))));
 
-        var resp = controller.alerts(wardId, "inpatient:finance:read", "nurse01");
+        var resp = controller.alerts(wardId, "inpatient:finance:read", "nurse01", scope);
 
         assertThat(resp.data()).hasSize(1);
         verify(financeService).alerts(wardId, "nurse01");
@@ -94,7 +100,7 @@ class InpatientControllerPermissionTest {
     @Test
     @DisplayName("欠费预警：持有全院权限时可不带 wardId")
     void alertsAllScopeAllowed() {
-        controller.alerts(null, "inpatient:finance:read,inpatient:finance:read:all", "admin01");
+        controller.alerts(null, "inpatient:finance:read,inpatient:finance:read:all", "admin01", scope);
 
         verify(financeService).alerts(null, "admin01");
     }
@@ -102,7 +108,7 @@ class InpatientControllerPermissionTest {
     @Test
     @DisplayName("护理执行列表：只有 inpatient:read 不够（属护理文书）")
     void nursingListRequiresNursingRead() {
-        assertThatThrownBy(() -> controller.nursingExecutions(admissionId, null, "inpatient:read"))
+        assertThatThrownBy(() -> controller.nursingExecutions(admissionId, null, "inpatient:read", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -112,7 +118,7 @@ class InpatientControllerPermissionTest {
     @Test
     @DisplayName("护理执行列表：inpatient:nursing:read 放行")
     void nursingListAllowedWithNursingRead() {
-        controller.nursingExecutions(admissionId, null, "inpatient:nursing:read");
+        controller.nursingExecutions(admissionId, null, "inpatient:nursing:read", scope);
 
         verify(nursingService).list(admissionId, null);
     }
@@ -122,7 +128,7 @@ class InpatientControllerPermissionTest {
     void nursingExecuteRequiresPermission() {
         var req = new NursingExecutionReq(UUID.randomUUID(), null, "EXECUTED", null);
 
-        assertThatThrownBy(() -> controller.executeNursing(admissionId, req, "inpatient:nursing:read", "nurse01"))
+        assertThatThrownBy(() -> controller.executeNursing(admissionId, req, "inpatient:nursing:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -135,7 +141,7 @@ class InpatientControllerPermissionTest {
         var req = new NursingCorrectionReq("REFUSED", "patient refused", true);
 
         assertThatThrownBy(() -> controller.correctNursing(admissionId, UUID.randomUUID(), req,
-                "inpatient:nursing:read", "nurse01"))
+                "inpatient:nursing:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -145,7 +151,7 @@ class InpatientControllerPermissionTest {
     @Test
     @DisplayName("权限头为空：提示重新登录（403，不误报 401）")
     void emptyPermissionsHeaderIsForbidden() {
-        assertThatThrownBy(() -> controller.finance(admissionId, null, "clerk01"))
+        assertThatThrownBy(() -> controller.finance(admissionId, null, "clerk01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);

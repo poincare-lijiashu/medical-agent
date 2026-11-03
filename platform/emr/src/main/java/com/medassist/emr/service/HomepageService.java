@@ -2,6 +2,7 @@ package com.medassist.emr.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.client.ClinicalClient;
 import com.medassist.emr.client.PatientClient;
@@ -65,8 +66,12 @@ public class HomepageService {
     // ---------------------------------------------------------------- 生成
 
     @Transactional
-    public HomepageView create(CreateHomepageReq req, String actor) {
+    public HomepageView create(CreateHomepageReq req, String actor, DataScope scope) {
         ClinicalClient.HomepageSource src = clinicalClient.homepageSource(req.visitId());
+        // 科室归属只能从临床域拿到，因此可见性校验放在取回数据源之后、任何落库之前
+        if (!scope.canSeeDepartment(src.deptId())) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID, "未找到该就诊");
+        }
         if (!"INPATIENT".equalsIgnoreCase(src.visitType()) || src.admissionId() == null) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID,
                     "该就诊不是住院就诊，不能生成病案首页");

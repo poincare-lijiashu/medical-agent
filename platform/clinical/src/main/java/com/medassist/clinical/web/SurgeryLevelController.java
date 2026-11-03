@@ -2,11 +2,13 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.SurgeryLevel;
 import com.medassist.clinical.service.SurgeryLevelService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
 import com.medassist.clinical.web.SurgeryLevelDtos.RejectLevelReq;
 import com.medassist.clinical.web.SurgeryLevelDtos.SetLevelReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,16 +45,20 @@ public class SurgeryLevelController {
     private static final String APPROVE = "clinical:surgery:approve";
 
     private final SurgeryLevelService service;
+    private final VisitAccessGuard guard;
 
-    public SurgeryLevelController(SurgeryLevelService service) {
+    public SurgeryLevelController(SurgeryLevelService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping
     public ApiResponse<SurgeryLevel> get(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.get(caseId));
     }
 
@@ -60,17 +66,24 @@ public class SurgeryLevelController {
     public ApiResponse<SurgeryLevel> setLevel(
             @PathVariable UUID caseId, @Valid @RequestBody SetLevelReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.setLevel(caseId, req.level(), req.version(), actor));
     }
 
+    /**
+     * 审批通过（仅 ADMIN / QC，均为全院数据范围，不受科室限制）。
+     */
     @PostMapping("/approve")
     public ApiResponse<SurgeryLevel> approve(
             @PathVariable UUID caseId, @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.approve(caseId, req.version(), actor));
     }
 
@@ -78,8 +91,10 @@ public class SurgeryLevelController {
     public ApiResponse<SurgeryLevel> reject(
             @PathVariable UUID caseId, @Valid @RequestBody RejectLevelReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.reject(caseId, req.version(), req.reason(), actor));
     }
 }

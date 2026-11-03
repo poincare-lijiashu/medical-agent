@@ -3,10 +3,14 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.service.RegistrationService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.CreateSlotReq;
 import com.medassist.clinical.web.ClinicalDtos.RegisterReq;
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,17 +47,23 @@ public class RegistrationController {
     private static final String SLOT_MANAGE = "clinical:slot:manage";
 
     private final RegistrationService service;
+    private final VisitAccessGuard guard;
 
-    public RegistrationController(RegistrationService service) {
+    public RegistrationController(RegistrationService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @PostMapping("/slots")
     public ApiResponse<Slot> createSlot(
             @Valid @RequestBody CreateSlotReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, SLOT_MANAGE);
+        if (!scope.canSeeDepartment(req.deptId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "只能维护本科室的号源");
+        }
         return ApiResponse.ok(service.createSlot(req, actor));
     }
 
@@ -61,8 +71,12 @@ public class RegistrationController {
     public ApiResponse<Visit> register(
             @Valid @RequestBody RegisterReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, REG_CREATE);
+        if (!scope.canSeeDepartment(req.deptId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "只能为本科室挂号");
+        }
         return ApiResponse.ok(service.register(req, actor));
     }
 
@@ -70,21 +84,27 @@ public class RegistrationController {
      * 患者最近就诊列表（控制台选择就诊上下文）。
      *
      * <p>{@code patientId} 必填；只返回非退号记录，按就诊日期倒序。
+     * 同时按数据范围过滤：医师只能看到本科室就诊，避免用 patientId 枚举其他科室的就诊史。
      */
     @GetMapping("/visits")
     public ApiResponse<java.util.List<Visit>> listByPatient(
             @RequestParam java.util.UUID patientId,
             @RequestParam(defaultValue = "20") int limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
-        return ApiResponse.ok(service.listByPatient(patientId, limit));
+        return ApiResponse.ok(service.listByPatient(patientId, limit).stream()
+                .filter(v -> scope.canSeeDepartment(v.deptId()))
+                .toList());
     }
 
     @GetMapping("/visits/{id}")
     public ApiResponse<Visit> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
+        guard.require(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -92,8 +112,10 @@ public class RegistrationController {
     public ApiResponse<Visit> start(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_TREAT);
+        guard.require(scope, id);
         return ApiResponse.ok(service.start(id, actor));
     }
 
@@ -101,8 +123,10 @@ public class RegistrationController {
     public ApiResponse<Visit> finish(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_TREAT);
+        guard.require(scope, id);
         return ApiResponse.ok(service.finish(id, actor));
     }
 
@@ -110,8 +134,10 @@ public class RegistrationController {
     public ApiResponse<Visit> cancel(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, REG_CANCEL);
+        guard.require(scope, id);
         return ApiResponse.ok(service.cancel(id, actor));
     }
 }

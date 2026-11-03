@@ -2,6 +2,7 @@ package com.medassist.emr.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.emr.client.ClinicalClient;
 import com.medassist.emr.client.PatientClient;
 import com.medassist.emr.domain.EmrModel.Homepage;
@@ -76,7 +77,21 @@ class HomepageServiceTest {
         when(clinicalClient.homepageSource(visitId))
                 .thenReturn(source("OUTPATIENT", null, null, List.of()));
 
-        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "admin01"))
+        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "admin01",
+                DataScope.all("admin01", true)))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID));
+        verify(repo, never()).insertHomepage(any());
+    }
+
+    @Test
+    @DisplayName("跨科室生成首页被拒绝（科室不可见与来源非法同一处理）")
+    void createRejectsOtherDepartment() {
+        ClinicalClient.HomepageSource src = source("INPATIENT", "DISCHARGED", dischargedAt, List.of());
+        when(clinicalClient.homepageSource(visitId)).thenReturn(src);
+
+        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "doctor02",
+                DataScope.ofDepartment("doctor02", UUID.randomUUID(), true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID));
         verify(repo, never()).insertHomepage(any());
@@ -88,7 +103,8 @@ class HomepageServiceTest {
         when(clinicalClient.homepageSource(visitId))
                 .thenReturn(source("INPATIENT", "IN_HOSPITAL", null, List.of()));
 
-        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "admin01"))
+        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "admin01",
+                DataScope.all("admin01", true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID));
         verify(repo, never()).insertHomepage(any());
@@ -109,7 +125,7 @@ class HomepageServiceTest {
         }).when(repo).insertHomepage(any());
         when(repo.findHomepage(any())).thenAnswer(inv -> Optional.of(inserted.get()));
 
-        service.create(new CreateHomepageReq(visitId), "admin01");
+        service.create(new CreateHomepageReq(visitId), "admin01", DataScope.all("admin01", true));
 
         Homepage saved = inserted.get();
         assertThat(saved).isNotNull();
@@ -133,7 +149,8 @@ class HomepageServiceTest {
                 .thenReturn(source("INPATIENT", "DISCHARGED", dischargedAt, List.of()));
         when(repo.findHomepageByVisit(visitId)).thenReturn(Optional.of(homepage(Homepage.DRAFT)));
 
-        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "admin01"))
+        assertThatThrownBy(() -> service.create(new CreateHomepageReq(visitId), "admin01",
+                DataScope.all("admin01", true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
         verify(repo, never()).insertHomepage(any());

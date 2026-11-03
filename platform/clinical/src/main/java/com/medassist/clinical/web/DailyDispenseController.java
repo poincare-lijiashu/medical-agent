@@ -1,10 +1,12 @@
 package com.medassist.clinical.web;
 
 import com.medassist.clinical.service.DailyDispenseService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.DailyDispenseReq;
 import com.medassist.clinical.web.ClinicalDtos.DailyDispenseResult;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,9 +30,11 @@ public class DailyDispenseController {
     private static final String ORDER_CREATE = "clinical:order:create";
 
     private final DailyDispenseService service;
+    private final VisitAccessGuard guard;
 
-    public DailyDispenseController(DailyDispenseService service) {
+    public DailyDispenseController(DailyDispenseService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @PostMapping
@@ -38,8 +42,10 @@ public class DailyDispenseController {
             @PathVariable UUID visitId,
             @RequestBody(required = false) DailyDispenseReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.request(visitId, req == null ? null : req.date(), actor));
     }
 }

@@ -107,7 +107,7 @@ public final class EmrModel {
 
     /** CDR 检索命中项（不带正文，避免检索接口返回大对象）。 */
     public record RecordHit(UUID id, String recordNo, UUID patientId, String patientNo,
-                            String docType, String title, String author, String status,
+                            UUID deptId, String docType, String title, String author, String status,
                             int revision, Instant createdAt) {
     }
 
@@ -196,9 +196,9 @@ public final class EmrModel {
      * 避免一次请求（limit ≤200）批量拉走整份 PHI；完整内容只能按 ID 取详情并留痕。
      */
     public record HomepageSummary(UUID id, String homepageNo, String visitNo, String patientNo,
-                                  String patientNameMasked, String deptName, String wardName,
-                                  Instant dischargedAt, int stayDays, BigDecimal totalAmount,
-                                  String status, long version) {
+                                  String patientNameMasked, UUID deptId, String deptName,
+                                  String wardName, Instant dischargedAt, int stayDays,
+                                  BigDecimal totalAmount, String status, long version) {
     }
 
     /**

@@ -43,6 +43,32 @@ public class VisitAccessGuard {
     }
 
     /**
+     * 校验住院登记所属就诊在数据范围内（住院处一切按 admissionId 操作时使用）。
+     *
+     * @throws BusinessException 登记不存在，或存在但科室不可见
+     */
+    public void requireAdmission(DataScope scope, UUID admissionId) {
+        UUID deptId = repo.findVisitDepartmentByAdmissionId(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到住院登记"));
+        if (!scope.canSeeDepartment(deptId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到住院登记");
+        }
+    }
+
+    /**
+     * 校验病区在数据范围内（床位表、在院患者列表按 wardId 访问时使用）。
+     *
+     * <p>病区自身带 {@code dept_id}，不需要绕到就诊；病区不存在与科室不可见同样按不存在处理。
+     */
+    public void requireWard(DataScope scope, UUID wardId) {
+        UUID deptId = repo.findWardDepartment(wardId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该病区"));
+        if (!scope.canSeeDepartment(deptId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到该病区");
+        }
+    }
+
+    /**
      * 校验手术病例所属就诊在数据范围内（术前访视、麻醉、术中护理按 caseId 访问时使用）。
      *
      * <p>用一条 JOIN 取科室，避免 case → visit 两次查询；

@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
@@ -19,7 +20,10 @@ import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionView;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -69,28 +73,37 @@ public class InpatientController {
     private final InpatientService service;
     private final InpatientFinanceService financeService;
     private final NursingService nursingService;
+    private final VisitAccessGuard guard;
 
     public InpatientController(InpatientService service, InpatientFinanceService financeService,
-                               NursingService nursingService) {
+                               NursingService nursingService, VisitAccessGuard guard) {
         this.service = service;
         this.financeService = financeService;
         this.nursingService = nursingService;
+        this.guard = guard;
     }
 
-    /** 启用病区列表（控制台病区选择）。 */
+    /** 启用病区列表（控制台病区选择）：只返回当前账号科室范围内的病区。 */
     @GetMapping("/wards")
     public ApiResponse<List<Ward>> listWards(
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listWards());
+        return ApiResponse.ok(service.listWards().stream()
+                .filter(w -> scope.canSeeDepartment(w.deptId()))
+                .toList());
     }
 
     @PostMapping("/wards")
     public ApiResponse<Ward> createWard(
             @Valid @RequestBody CreateWardReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WARD_MANAGE);
+        if (!scope.canSeeDepartment(req.deptId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "只能维护本科室的病区");
+        }
         return ApiResponse.ok(service.createWard(req, actor));
     }
 
@@ -99,16 +112,20 @@ public class InpatientController {
             @PathVariable UUID wardId,
             @Valid @RequestBody CreateBedsReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WARD_MANAGE);
+        guard.requireWard(scope, wardId);
         return ApiResponse.ok(service.createBeds(wardId, req, actor));
     }
 
     @GetMapping("/wards/{wardId}/beds")
     public ApiResponse<List<Bed>> listBeds(
             @PathVariable UUID wardId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireWard(scope, wardId);
         return ApiResponse.ok(service.listBeds(wardId));
     }
 
@@ -116,8 +133,10 @@ public class InpatientController {
     public ApiResponse<List<AdmissionView>> listAdmissions(
             @PathVariable UUID wardId,
             @RequestParam(required = false) String status,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireWard(scope, wardId);
         return ApiResponse.ok(service.listByWard(wardId, status));
     }
 
@@ -125,16 +144,20 @@ public class InpatientController {
     public ApiResponse<AdmissionView> admit(
             @Valid @RequestBody AdmitReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ADMIT);
+        guard.requireWard(scope, req.wardId());
         return ApiResponse.ok(service.admit(req, actor));
     }
 
     @GetMapping("/inpatient/admissions/{id}")
     public ApiResponse<AdmissionView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -143,8 +166,10 @@ public class InpatientController {
             @PathVariable UUID id,
             @Valid @RequestBody AssignBedReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, BED_ASSIGN);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(service.assignBed(id, req, actor));
     }
 
@@ -152,8 +177,10 @@ public class InpatientController {
     public ApiResponse<AdmissionView> discharge(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, DISCHARGE);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(service.discharge(id, actor));
     }
 
@@ -163,8 +190,10 @@ public class InpatientController {
             @PathVariable UUID id,
             @Valid @RequestBody DepositReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, DEPOSIT_MANAGE);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(service.deposit(id, req.amount(), req.method(), req.remark(), actor));
     }
 
@@ -174,8 +203,10 @@ public class InpatientController {
             @PathVariable UUID id,
             @Valid @RequestBody DepositReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, DEPOSIT_MANAGE);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(service.refund(id, req.amount(), req.method(), req.remark(), actor));
     }
 
@@ -183,8 +214,10 @@ public class InpatientController {
     @GetMapping("/inpatient/admissions/{id}/deposits")
     public ApiResponse<DepositView> deposits(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(service.balance(id));
     }
 
@@ -195,8 +228,10 @@ public class InpatientController {
     public ApiResponse<InpatientFinanceView> finance(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, FINANCE_READ);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(financeService.finance(id, actor));
     }
 
@@ -211,12 +246,15 @@ public class InpatientController {
     public ApiResponse<List<InpatientAlert>> alerts(
             @RequestParam(required = false) UUID wardId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, FINANCE_READ);
         if (wardId == null && !Permissions.has(permissions, FINANCE_READ_ALL)) {
-            throw new com.medassist.common.exception.BusinessException(
-                    com.medassist.common.api.ErrorCode.VALIDATION_FAILED,
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "查询全院欠费预警需要 inpatient:finance:read:all 权限；请指定 wardId 查询本病区");
+        }
+        if (wardId != null) {
+            guard.requireWard(scope, wardId);
         }
         return ApiResponse.ok(financeService.alerts(wardId, actor));
     }
@@ -229,8 +267,10 @@ public class InpatientController {
             @PathVariable UUID id,
             @Valid @RequestBody NursingExecutionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, NURSING_EXECUTE);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(nursingService.record(id, req, actor));
     }
 
@@ -246,8 +286,10 @@ public class InpatientController {
             @PathVariable UUID executionId,
             @Valid @RequestBody NursingCorrectionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, NURSING_EXECUTE);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(nursingService.correct(id, executionId, req, actor));
     }
 
@@ -256,8 +298,10 @@ public class InpatientController {
     public ApiResponse<List<NursingExecutionView>> nursingExecutions(
             @PathVariable UUID id,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, NURSING_READ);
+        guard.requireAdmission(scope, id);
         return ApiResponse.ok(nursingService.list(id, date));
     }
 }

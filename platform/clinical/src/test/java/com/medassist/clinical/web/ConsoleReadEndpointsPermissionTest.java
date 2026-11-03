@@ -9,8 +9,10 @@ import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
 import com.medassist.clinical.service.ReferenceService;
 import com.medassist.clinical.service.RegistrationService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,10 +55,11 @@ class ConsoleReadEndpointsPermissionTest {
         referenceController = new ReferenceController(referenceService);
 
         registrationService = mock(RegistrationService.class);
-        registrationController = new RegistrationController(registrationService);
+        registrationController = new RegistrationController(registrationService, mock(VisitAccessGuard.class));
 
         inpatientController = new InpatientController(
-                mock(InpatientService.class), mock(InpatientFinanceService.class), mock(NursingService.class));
+                mock(InpatientService.class), mock(InpatientFinanceService.class), mock(NursingService.class),
+                mock(VisitAccessGuard.class));
     }
 
     @Test
@@ -107,7 +110,8 @@ class ConsoleReadEndpointsPermissionTest {
     @Test
     @DisplayName("患者就诊列表：缺少权限时 403，且不触达服务层")
     void visitsRequirePermission() {
-        assertThatThrownBy(() -> registrationController.listByPatient(patientId, 20, "inpatient:read"))
+        assertThatThrownBy(() -> registrationController.listByPatient(patientId, 20, "inpatient:read",
+                DataScope.all("admin01", true)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -122,7 +126,8 @@ class ConsoleReadEndpointsPermissionTest {
                 LocalDate.of(2026, 11, 2), 0L);
         when(registrationService.listByPatient(patientId, 20)).thenReturn(List.of(visit));
 
-        var resp = registrationController.listByPatient(patientId, 20, "clinical:visit:read");
+        var resp = registrationController.listByPatient(patientId, 20, "clinical:visit:read",
+                DataScope.all("admin01", true));
 
         assertThat(resp.data()).hasSize(1);
         assertThat(resp.data().get(0).visitNo()).isEqualTo("V20261102001");
@@ -131,7 +136,8 @@ class ConsoleReadEndpointsPermissionTest {
     @Test
     @DisplayName("病区列表：缺少 inpatient:read 时 403")
     void wardsRequirePermission() {
-        assertThatThrownBy(() -> inpatientController.listWards("clinical:visit:read"))
+        assertThatThrownBy(() -> inpatientController.listWards("clinical:visit:read",
+                DataScope.all("admin01", true)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -144,9 +150,10 @@ class ConsoleReadEndpointsPermissionTest {
         when(service.listWards()).thenReturn(List.of(
                 new Ward(UUID.randomUUID(), "W01", "一病区", UUID.randomUUID(), true)));
         InpatientController controller = new InpatientController(
-                service, mock(InpatientFinanceService.class), mock(NursingService.class));
+                service, mock(InpatientFinanceService.class), mock(NursingService.class),
+                mock(VisitAccessGuard.class));
 
-        var resp = controller.listWards("inpatient:read");
+        var resp = controller.listWards("inpatient:read", DataScope.all("admin01", true));
 
         assertThat(resp.data()).hasSize(1);
         assertThat(resp.data().get(0).code()).isEqualTo("W01");

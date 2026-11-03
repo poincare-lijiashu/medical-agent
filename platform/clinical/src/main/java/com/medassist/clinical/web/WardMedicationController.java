@@ -1,6 +1,7 @@
 package com.medassist.clinical.web;
 
 import com.medassist.clinical.service.DailyDispenseService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.DispenseBoard;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptReq;
 import com.medassist.clinical.web.ClinicalDtos.WardReceiptView;
@@ -9,6 +10,7 @@ import com.medassist.clinical.web.ClinicalDtos.WardReturnView;
 import com.medassist.clinical.web.ClinicalDtos.WardStockView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -38,9 +40,11 @@ public class WardMedicationController {
     private static final String ORDER_CREATE = "clinical:order:create";
 
     private final DailyDispenseService service;
+    private final VisitAccessGuard guard;
 
-    public WardMedicationController(DailyDispenseService service) {
+    public WardMedicationController(DailyDispenseService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 备药看板（date 可空=今天）。 */
@@ -49,8 +53,10 @@ public class WardMedicationController {
             @PathVariable UUID visitId,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.board(visitId, date));
     }
 
@@ -61,8 +67,10 @@ public class WardMedicationController {
             @PathVariable UUID orderId,
             @Valid @RequestBody WardReceiptReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.receive(visitId, orderId, req, actor));
     }
 
@@ -77,8 +85,10 @@ public class WardMedicationController {
             @PathVariable UUID receiptId,
             @Valid @RequestBody WardReturnReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.returnToPharmacy(visitId, receiptId, req, actor));
     }
 
@@ -86,8 +96,10 @@ public class WardMedicationController {
     @GetMapping("/ward-stock")
     public ApiResponse<WardStockView> stock(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.stock(visitId));
     }
 }
