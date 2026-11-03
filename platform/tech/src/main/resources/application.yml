@@ -45,6 +45,12 @@ tech:
   internal-api-token: ${INTERNAL_API_TOKEN:${TECH_INTERNAL_TOKEN:}}
   # 危急值超时提醒阈值（分钟）：超过该时长仍未确认，查询接口会标记 overdue
   critical-timeout-minutes: ${TECH_CRITICAL_TIMEOUT_MINUTES:30}
+  # DICOMweb（PACS 调阅）：未配置 base-url 时阅片队列与本地元数据照常可用，影像流返回 503
+  pacs:
+    base-url: ${PACS_BASE_URL:}
+    timeout: ${PACS_TIMEOUT:PT10S}
+    auth-header: ${PACS_AUTH_HEADER:}
+    max-instance-bytes: ${PACS_MAX_INSTANCE_BYTES:67108864}
 
 management:
   endpoints:

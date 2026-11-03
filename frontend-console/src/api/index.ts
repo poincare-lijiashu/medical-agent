@@ -73,6 +73,10 @@ import type {
   SurgerySchedule,
   AuditEvent,
   OrgRef,
+  PacsAccessLog,
+  PacsReadingQueueItem,
+  PacsReadingTask,
+  PacsSeriesResponse,
   RoleRef,
   TechApplication,
   TechApplicationView,
@@ -505,6 +509,42 @@ export const techApi = {
     post<TechCriticalView>(`/tech/criticals/${id}/close`, note ? { note } : {}),
   items: (category?: string, keyword?: string, limit = 200) =>
     get<TechExamItemView[]>('/tech/items', { category, keyword, limit }),
+}
+
+/**
+ * 影像阅片与 DICOMweb 调阅。
+ *
+ * <p>队列默认只返回已完成检查；领取/释放/完成需要 tech:report:write，
+ * 调阅审计需要 tech:pacs:audit。影像流走二进制下载通道（带 Bearer，401 自动刷新）。
+ */
+export const pacsApi = {
+  queue: (params: { state?: string; modality?: string; date?: string; limit?: number }) =>
+    get<PacsReadingQueueItem[]>('/tech/pacs/reading/queue', params),
+  claim: (studyInstanceUid: string) =>
+    post<PacsReadingTask>(`/tech/pacs/reading/${encodeURIComponent(studyInstanceUid)}/claim`),
+  release: (studyInstanceUid: string, note?: string) =>
+    post<PacsReadingTask>(`/tech/pacs/reading/${encodeURIComponent(studyInstanceUid)}/release`, {
+      note,
+    }),
+  complete: (studyInstanceUid: string, note?: string) =>
+    post<PacsReadingTask>(`/tech/pacs/reading/${encodeURIComponent(studyInstanceUid)}/complete`, {
+      note,
+    }),
+  /** 序列列表：PACS 不可用时返回本地缓存（source=CACHED）。 */
+  series: (studyInstanceUid: string) =>
+    get<PacsSeriesResponse>(`/tech/pacs/studies/${encodeURIComponent(studyInstanceUid)}/series`),
+  /** 单张影像（WADO-RS）；浏览器无法直接渲染 DICOM，由调用方交给查看器或保存。 */
+  instance: (studyInstanceUid: string, seriesInstanceUid: string, sopInstanceUid: string) =>
+    download(
+      `/tech/pacs/studies/${encodeURIComponent(studyInstanceUid)}` +
+        `/series/${encodeURIComponent(seriesInstanceUid)}` +
+        `/instances/${encodeURIComponent(sopInstanceUid)}`,
+    ),
+  accessLog: (studyInstanceUid: string, limit = 50) =>
+    get<PacsAccessLog[]>(
+      `/tech/pacs/studies/${encodeURIComponent(studyInstanceUid)}/access-log`,
+      { limit },
+    ),
 }
 
 export const insuranceApi = {

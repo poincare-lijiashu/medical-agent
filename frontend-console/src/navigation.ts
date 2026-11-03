@@ -93,6 +93,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['tech:read'],
   },
   {
+    name: 'pacs',
+    path: '/pacs',
+    title: '影像阅片',
+    hint: '阅片队列 · 领取/释放/完成 · DICOM 序列与调阅审计',
+    icon: 'monitor',
+    group: '医技检查',
+    permissions: ['tech:pacs:read'],
+  },
+  {
     name: 'narcotic',
     path: '/narcotic',
     title: '麻精专册',

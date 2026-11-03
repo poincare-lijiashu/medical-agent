@@ -50,7 +50,7 @@ class ReportServiceTest {
     void setUp() {
         repo = mock(TechRepository.class);
         TechProperties props = new TechProperties(
-                new TechProperties.Empi("http://127.0.0.1:8082", "token", Duration.ofSeconds(2)), 30);
+                new TechProperties.Empi("http://127.0.0.1:8082", "token", Duration.ofSeconds(2)), 30, null);
         service = new ReportService(repo, props, JsonMapper.builder().build());
         when(repo.nextReportNo()).thenReturn("RP20261031000001");
         when(repo.listReports(any())).thenReturn(List.of());

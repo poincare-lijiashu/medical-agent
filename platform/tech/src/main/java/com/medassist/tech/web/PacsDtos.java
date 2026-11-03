@@ -7,6 +7,10 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import com.medassist.tech.domain.TechModel.PacsSeries;
+
+import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -44,5 +48,25 @@ public final class PacsDtos {
             @Min(0) @Max(100000) Integer seriesCount,
             @Min(0) @Max(1000000) Integer imageCount,
             @Size(max = 512) String viewerUrl) {
+    }
+
+    /** 领取/释放/完成阅片的备注（可选）。 */
+    public record ReadingNoteReq(@Size(max = 200) String note) {
+    }
+
+    /** 阅片任务视图（含检查标识，避免前端再查一次）。 */
+    public record ReadingTaskView(UUID id, UUID studyId, String studyInstanceUid,
+                                  String accessionNumber, String assignee, String status,
+                                  Instant claimedAt, Instant releasedAt, Instant completedAt,
+                                  String note, long version) {
+    }
+
+    /**
+     * 序列列表响应。
+     *
+     * @param source PACS 实时返回为 LIVE，远端不可用时回退到缓存为 CACHED
+     * @param notice 回退时给前端的提示（LIVE 时为空）
+     */
+    public record SeriesResponse(List<PacsSeries> series, String source, String notice) {
     }
 }

@@ -47,7 +47,10 @@ class ExceptionMappingContractTest {
             // 其余业务拒绝被映射成 5xx 会让前端误判为系统故障并重试
             String name = code.name();
             if (name.endsWith("UNAVAILABLE") || name.endsWith("TIMEOUT")
-                    || code == ErrorCode.INTERNAL_ERROR) {
+                    || code == ErrorCode.INTERNAL_ERROR
+                    // PACS 未接入 / 远端故障属于依赖不可用，允许 503（前端会提示稍后重试）
+                    || code == ErrorCode.TECH_PACS_NOT_CONFIGURED
+                    || code == ErrorCode.TECH_PACS_UPSTREAM_FAILED) {
                 continue;
             }
             assertThat(handler.statusOf(code).is5xxServerError())

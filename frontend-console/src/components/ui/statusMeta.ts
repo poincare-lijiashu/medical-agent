@@ -89,6 +89,9 @@ const BASE: Record<string, StatusMeta> = {
   ACKNOWLEDGED: { label: '已确认', tone: 'ok' },
   FINAL: { label: '已签发', tone: 'ok' },
   AMENDED: { label: '已修订', tone: 'accent' },
+  // 影像阅片
+  CLAIMED: { label: '阅片中', tone: 'accent' },
+  RELEASED: { label: '已释放', tone: 'neutral' },
   // 医保
   CONFIRMED: { label: '已确认', tone: 'ok' },
   VOIDED: { label: '已作废', tone: 'neutral' },

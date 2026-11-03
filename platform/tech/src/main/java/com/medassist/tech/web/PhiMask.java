@@ -2,6 +2,7 @@ package com.medassist.tech.web;
 
 import com.medassist.common.security.DataScope;
 import com.medassist.tech.domain.TechModel.Application;
+import com.medassist.tech.domain.TechModel.ReadingQueueItem;
 import com.medassist.tech.domain.TechModel.WorklistItem;
 
 import java.util.List;
@@ -53,5 +54,24 @@ final class PhiMask {
             return list;
         }
         return list.stream().map(w -> worklist(w, scope)).toList();
+    }
+
+    static ReadingQueueItem readingQueue(ReadingQueueItem q, DataScope scope) {
+        if (q == null || scope.phiReadable()) {
+            return q;
+        }
+        return new ReadingQueueItem(q.studyId(), q.studyInstanceUid(), q.accessionNumber(),
+                q.modality(), q.bodyPart(), q.seriesCount(), q.imageCount(), q.completedAt(),
+                q.viewerUrl(), q.applicationId(), q.applicationNo(),
+                scope.maskPatientNo(q.patientNo()), q.itemName(), q.priority(), q.deptId(),
+                q.reportStatus(), q.readingTaskId(), q.assignee(), q.readingStatus(), q.claimedAt(),
+                q.readCompletedAt());
+    }
+
+    static List<ReadingQueueItem> readingQueue(List<ReadingQueueItem> list, DataScope scope) {
+        if (scope.phiReadable()) {
+            return list;
+        }
+        return list.stream().map(q -> readingQueue(q, scope)).toList();
     }
 }

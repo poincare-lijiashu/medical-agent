@@ -133,4 +133,50 @@ public final class TechModel {
                                UUID studyId, String studyInstanceUid, String studyStatus,
                                Integer seriesCount, Integer imageCount, String viewerUrl) {
     }
+
+    /** 影像序列元数据（PACS QIDO-RS 缓存；不含像素）。 */
+    public record PacsSeries(UUID id, UUID studyId, String seriesInstanceUid, Integer seriesNumber,
+                             String modality, String bodyPart, String description, int instanceCount,
+                             Instant syncedAt) {
+    }
+
+    /**
+     * 阅片任务（领取/释放/完成）。
+     *
+     * <p>同一检查同时只允许一条 CLAIMED（库级部分唯一索引）；释放与完成后保留历史，
+     * 再次领取生成新记录，保证"谁在什么时候看过/退回"可追溯。
+     */
+    public record ReadingTask(UUID id, UUID studyId, String assignee, String status,
+                              Instant claimedAt, Instant releasedAt, Instant completedAt,
+                              String note, long version) {
+
+        public static final String CLAIMED = "CLAIMED";
+        public static final String RELEASED = "RELEASED";
+        public static final String COMPLETED = "COMPLETED";
+    }
+
+    /**
+     * 阅片队列行（读模型）。
+     *
+     * <p>reportStatus 用于前端提示"未写报告/已签发"；readingStatus 为空表示尚未领取。
+     */
+    public record ReadingQueueItem(UUID studyId, String studyInstanceUid, String accessionNumber,
+                                   String modality, String bodyPart, int seriesCount, int imageCount,
+                                   Instant completedAt, String viewerUrl,
+                                   UUID applicationId, String applicationNo, String patientNo,
+                                   String itemName, String priority, UUID deptId,
+                                   String reportStatus, UUID readingTaskId, String assignee,
+                                   String readingStatus, Instant claimedAt, Instant readCompletedAt) {
+    }
+
+    /** 影像调阅审计行（追加式）。 */
+    public record PacsAccessLog(UUID id, UUID studyId, String studyInstanceUid,
+                                String accessionNumber, String actor, String action,
+                                String seriesInstanceUid, String sopInstanceUid, String detail,
+                                Instant createdAt) {
+
+        public static final String VIEW_STUDY = "VIEW_STUDY";
+        public static final String VIEW_SERIES = "VIEW_SERIES";
+        public static final String FETCH_IMAGE = "FETCH_IMAGE";
+    }
 }

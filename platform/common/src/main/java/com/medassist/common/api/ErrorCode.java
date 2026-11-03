@@ -106,6 +106,16 @@ public enum ErrorCode {
     TECH_CRITICAL_STATUS_INVALID(46412, "当前危急值状态不允许该操作"),
     TECH_PACS_STATUS_INVALID(46413, "当前影像检查状态不允许该操作"),
 
+    // ---- 影像调阅（46xxx 续，G5）----
+    TECH_PACS_NOT_CONFIGURED(46407, "影像服务（PACS）未配置，暂不能调阅影像"),
+    TECH_PACS_UPSTREAM_FAILED(46408, "影像服务（PACS）响应异常，请稍后重试"),
+    TECH_PACS_REMOTE_NOT_FOUND(46409, "影像服务未返回该序列或影像"),
+    TECH_READING_TASK_NOT_FOUND(46420, "未找到该阅片任务"),
+    TECH_READING_STATUS_INVALID(46421, "当前阅片任务状态不允许该操作"),
+    TECH_READING_NOT_ASSIGNEE(46422, "该阅片任务不属于当前医师，不能释放或完成"),
+    TECH_READING_STUDY_NOT_READY(46423, "影像检查尚未完成，不能领取阅片"),
+    TECH_READING_REPORT_NOT_FINAL(46424, "报告尚未签发，不能完成阅片"),
+
     // ---- 病历（47xxx）----
     EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),
     EMR_RECORD_NOT_FOUND(47402, "未找到该病历文书"),

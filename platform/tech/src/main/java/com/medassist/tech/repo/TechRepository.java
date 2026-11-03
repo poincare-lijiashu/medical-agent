@@ -5,7 +5,11 @@ import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.CriticalValue;
 import com.medassist.tech.domain.TechModel.ExamItem;
 import com.medassist.tech.domain.TechModel.LisInboundMessage;
+import com.medassist.tech.domain.TechModel.PacsAccessLog;
+import com.medassist.tech.domain.TechModel.PacsSeries;
 import com.medassist.tech.domain.TechModel.PacsStudy;
+import com.medassist.tech.domain.TechModel.ReadingQueueItem;
+import com.medassist.tech.domain.TechModel.ReadingTask;
 import com.medassist.tech.domain.TechModel.Report;
 import com.medassist.tech.domain.TechModel.Specimen;
 import com.medassist.tech.domain.TechModel.WorklistItem;
@@ -687,6 +691,225 @@ public class TechRepository {
                 .param("modality", modality).param("fromTs", fromTs).param("toTs", toTs)
                 .param("limit", limit)
                 .query(WORKLIST_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 阅片与调阅（G5）
+
+    private static final RowMapper<ReadingTask> READING_TASK_MAPPER =
+            (rs, i) -> new ReadingTask(
+                    rs.getObject("id", UUID.class), rs.getObject("study_id", UUID.class),
+                    rs.getString("assignee"), rs.getString("status"),
+                    rs.getTimestamp("claimed_at").toInstant(),
+                    rs.getTimestamp("released_at") == null ? null : rs.getTimestamp("released_at").toInstant(),
+                    rs.getTimestamp("completed_at") == null ? null : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getString("note"), rs.getLong("version"));
+
+    private static final RowMapper<ReadingQueueItem> READING_QUEUE_MAPPER =
+            (rs, i) -> new ReadingQueueItem(
+                    rs.getObject("study_id", UUID.class), rs.getString("study_instance_uid"),
+                    rs.getString("accession_number"), rs.getString("modality"),
+                    rs.getString("body_part"), rs.getInt("series_count"), rs.getInt("image_count"),
+                    rs.getTimestamp("completed_at") == null ? null : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getString("viewer_url"),
+                    rs.getObject("application_id", UUID.class), rs.getString("application_no"),
+                    rs.getString("patient_no"), rs.getString("item_name"), rs.getString("priority"),
+                    rs.getObject("dept_id", UUID.class), rs.getString("report_status"),
+                    rs.getObject("reading_task_id", UUID.class), rs.getString("assignee"),
+                    rs.getString("reading_status"),
+                    rs.getTimestamp("claimed_at") == null ? null : rs.getTimestamp("claimed_at").toInstant(),
+                    rs.getTimestamp("read_completed_at") == null ? null
+                            : rs.getTimestamp("read_completed_at").toInstant());
+
+    private static final RowMapper<PacsSeries> PACS_SERIES_MAPPER =
+            (rs, i) -> new PacsSeries(
+                    rs.getObject("id", UUID.class), rs.getObject("study_id", UUID.class),
+                    rs.getString("series_instance_uid"), (Integer) rs.getObject("series_number"),
+                    rs.getString("modality"), rs.getString("body_part"), rs.getString("description"),
+                    rs.getInt("instance_count"), rs.getTimestamp("synced_at").toInstant());
+
+    private static final RowMapper<PacsAccessLog> PACS_ACCESS_MAPPER =
+            (rs, i) -> new PacsAccessLog(
+                    rs.getObject("id", UUID.class), rs.getObject("study_id", UUID.class),
+                    rs.getString("study_instance_uid"), rs.getString("accession_number"),
+                    rs.getString("actor"), rs.getString("action"),
+                    rs.getString("series_instance_uid"), rs.getString("sop_instance_uid"),
+                    rs.getString("detail"), rs.getTimestamp("created_at").toInstant());
+
+    /**
+     * 阅片队列：已完成（COMPLETED）的影像检查。
+     *
+     * <p>state 过滤（大小写不敏感）：UNCLAIMED 未领取且未完成过、CLAIMED 有人正在写、
+     * MINE 我领取的、DONE 已完成过；为空返回全部。日期按检查完成时刻归日。
+     */
+    public List<ReadingQueueItem> listReadingQueue(String modality, String state, String assignee,
+                                                   OffsetDateTime fromTs, OffsetDateTime toTs,
+                                                   int limit) {
+        return jdbc.sql("""
+                        SELECT s.id AS study_id, s.study_instance_uid, s.accession_number,
+                               s.modality, s.body_part, s.series_count, s.image_count,
+                               s.completed_at, s.viewer_url,
+                               a.id AS application_id, a.application_no, a.patient_no,
+                               a.item_name, a.priority, a.dept_id,
+                               r.status AS report_status,
+                               t.id AS reading_task_id, t.assignee, t.status AS reading_status,
+                               t.claimed_at,
+                               (SELECT max(d.completed_at) FROM tech_svc.pacs_reading_task d
+                                 WHERE d.study_id = s.id AND d.status = 'COMPLETED')
+                                   AS read_completed_at
+                          FROM tech_svc.pacs_study s
+                          JOIN tech_svc.exam_application a ON a.id = s.application_id
+                          LEFT JOIN tech_svc.exam_report r
+                                 ON r.application_id = a.id AND r.is_current
+                          LEFT JOIN tech_svc.pacs_reading_task t
+                                 ON t.study_id = s.id AND t.status = 'CLAIMED'
+                         WHERE s.status = 'COMPLETED'
+                           AND (CAST(:modality AS text) IS NULL
+                                OR s.modality = CAST(:modality AS text))
+                           AND (CAST(:fromTs AS timestamptz) IS NULL
+                                OR s.completed_at >= CAST(:fromTs AS timestamptz))
+                           AND (CAST(:toTs AS timestamptz) IS NULL
+                                OR s.completed_at < CAST(:toTs AS timestamptz))
+                           AND (CAST(:state AS text) IS NULL
+                                OR (CAST(:state AS text) = 'UNCLAIMED' AND t.id IS NULL
+                                    AND NOT EXISTS (SELECT 1 FROM tech_svc.pacs_reading_task d
+                                                     WHERE d.study_id = s.id
+                                                       AND d.status = 'COMPLETED'))
+                                OR (CAST(:state AS text) = 'CLAIMED' AND t.id IS NOT NULL)
+                                OR (CAST(:state AS text) = 'MINE'
+                                    AND t.assignee = CAST(:assignee AS text))
+                                OR (CAST(:state AS text) = 'DONE'
+                                    AND EXISTS (SELECT 1 FROM tech_svc.pacs_reading_task d
+                                                 WHERE d.study_id = s.id
+                                                   AND d.status = 'COMPLETED')))
+                         ORDER BY CASE a.priority WHEN 'STAT' THEN 0
+                                                  WHEN 'URGENT' THEN 1 ELSE 2 END,
+                                  s.completed_at
+                         LIMIT :limit
+                        """)
+                .param("modality", modality).param("state", state).param("assignee", assignee)
+                .param("fromTs", fromTs).param("toTs", toTs).param("limit", limit)
+                .query(READING_QUEUE_MAPPER).list();
+    }
+
+    public Optional<ReadingTask> findReadingTask(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, study_id, assignee, status, claimed_at, released_at,
+                               completed_at, note, version
+                          FROM tech_svc.pacs_reading_task WHERE id = ?
+                        """).param(id).query(READING_TASK_MAPPER).optional();
+    }
+
+    /** 当前持有的阅片任务（CLAIMED）；释放/完成后返回空。 */
+    public Optional<ReadingTask> findActiveReadingTask(UUID studyId) {
+        return jdbc.sql("""
+                        SELECT id, study_id, assignee, status, claimed_at, released_at,
+                               completed_at, note, version
+                          FROM tech_svc.pacs_reading_task
+                         WHERE study_id = ? AND status = 'CLAIMED'
+                        """).param(studyId).query(READING_TASK_MAPPER).optional();
+    }
+
+    public void insertReadingTask(ReadingTask t) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.pacs_reading_task
+                            (id, study_id, assignee, status, claimed_at, note, version)
+                        VALUES (:id, :studyId, :assignee, :status, now(), CAST(:note AS text), 0)
+                        """)
+                .param("id", t.id()).param("studyId", t.studyId()).param("assignee", t.assignee())
+                .param("status", t.status()).param("note", t.note()).update();
+    }
+
+    /**
+     * 关闭阅片任务（释放/完成）：CAS 校验"期望状态 + 版本号 + 持有人"。
+     *
+     * <p>持有人条件写在 SQL 里而不是只在服务层判断——即便服务层被绕过，
+     * 也无法由他人代释放/代完成。
+     */
+    public boolean closeReadingTask(UUID id, String expectedStatus, String next, String actor,
+                                    String note, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.pacs_reading_task
+                           SET status = :next,
+                               released_at = CASE WHEN :next = 'RELEASED' THEN now()
+                                                  ELSE released_at END,
+                               completed_at = CASE WHEN :next = 'COMPLETED' THEN now()
+                                                   ELSE completed_at END,
+                               note = COALESCE(CAST(:note AS text), note),
+                               version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = :expected AND version = :version
+                           AND assignee = :actor
+                        """)
+                .param("next", next).param("id", id).param("expected", expectedStatus)
+                .param("version", expectedVersion).param("actor", actor).param("note", note)
+                .update() > 0;
+    }
+
+    public List<PacsSeries> listPacsSeries(UUID studyId) {
+        return jdbc.sql("""
+                        SELECT id, study_id, series_instance_uid, series_number, modality,
+                               body_part, description, instance_count, synced_at
+                          FROM tech_svc.pacs_series
+                         WHERE study_id = ?
+                         ORDER BY COALESCE(series_number, 2147483647), series_instance_uid
+                        """).param(studyId).query(PACS_SERIES_MAPPER).list();
+    }
+
+    /** 删除已从 PACS 消失的序列（按主键，保留仍在的序列 ID 与同步历史）。 */
+    public void deletePacsSeriesById(UUID id) {
+        jdbc.sql("DELETE FROM tech_svc.pacs_series WHERE id = ?").param(id).update();
+    }
+
+    public void insertPacsSeries(PacsSeries s) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.pacs_series
+                            (id, study_id, series_instance_uid, series_number, modality,
+                             body_part, description, instance_count, synced_at)
+                        VALUES (:id, :studyId, :uid, :number, :modality, CAST(:bodyPart AS text),
+                                CAST(:description AS text), :count, now())
+                        ON CONFLICT (series_instance_uid) DO UPDATE
+                           SET series_number = EXCLUDED.series_number,
+                               modality = EXCLUDED.modality,
+                               body_part = EXCLUDED.body_part,
+                               description = EXCLUDED.description,
+                               instance_count = EXCLUDED.instance_count,
+                               synced_at = now(),
+                               updated_at = now()
+                         WHERE tech_svc.pacs_series.study_id = EXCLUDED.study_id
+                        """)
+                .param("id", s.id()).param("studyId", s.studyId())
+                .param("uid", s.seriesInstanceUid()).param("number", s.seriesNumber())
+                .param("modality", s.modality()).param("bodyPart", s.bodyPart())
+                .param("description", s.description()).param("count", s.instanceCount()).update();
+    }
+
+    public void insertPacsAccess(PacsAccessLog log) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.pacs_access_log
+                            (id, study_id, study_instance_uid, accession_number, actor, action,
+                             series_instance_uid, sop_instance_uid, detail)
+                        VALUES (:id, :studyId, :studyUid, :accession, :actor, :action,
+                                CAST(:seriesUid AS text), CAST(:sopUid AS text),
+                                CAST(:detail AS text))
+                        """)
+                .param("id", log.id()).param("studyId", log.studyId())
+                .param("studyUid", log.studyInstanceUid()).param("accession", log.accessionNumber())
+                .param("actor", log.actor()).param("action", log.action())
+                .param("seriesUid", log.seriesInstanceUid()).param("sopUid", log.sopInstanceUid())
+                .param("detail", log.detail()).update();
+    }
+
+    public List<PacsAccessLog> listPacsAccess(UUID studyId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, study_id, study_instance_uid, accession_number, actor, action,
+                               series_instance_uid, sop_instance_uid, detail, created_at
+                          FROM tech_svc.pacs_access_log
+                         WHERE study_id = :studyId
+                         ORDER BY created_at DESC, id
+                         LIMIT :limit
+                        """)
+                .param("studyId", studyId).param("limit", limit)
+                .query(PACS_ACCESS_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

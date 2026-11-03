@@ -2,14 +2,25 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
+import com.medassist.tech.domain.TechModel.PacsAccessLog;
 import com.medassist.tech.domain.TechModel.PacsStudy;
+import com.medassist.tech.domain.TechModel.ReadingQueueItem;
 import com.medassist.tech.domain.TechModel.WorklistItem;
+import com.medassist.tech.service.PacsDicomService;
+import com.medassist.tech.service.PacsReadingService;
 import com.medassist.tech.service.PacsService;
+import com.medassist.tech.web.PacsDtos.ReadingNoteReq;
+import com.medassist.tech.web.PacsDtos.ReadingTaskView;
 import com.medassist.tech.web.PacsDtos.RegisterStudyReq;
+import com.medassist.tech.web.PacsDtos.SeriesResponse;
 import com.medassist.tech.web.PacsDtos.UpdateStudyStatusReq;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,12 +35,17 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 影像（PACS）集成 API。
+ * 影像（PACS）集成 API：登记回传（设备侧） + 阅片队列（医师侧） + DICOMweb 调阅。
  *
- * <p>权限：查询 {@code tech:pacs:read}（技师/医师/管理员）；登记与状态回传
- * {@code tech:pacs:write}（技师/管理员，PACS 对接账号使用 TECHNICIAN）。
+ * <p>权限：
+ * <ul>
+ *   <li>{@code tech:pacs:read} —— 查询检查/队列/序列、取影像（技师/医师/管理员）；</li>
+ *   <li>{@code tech:pacs:write} —— 登记与状态回传（PACS 对接账号使用 TECHNICIAN）；</li>
+ *   <li>{@code tech:report:write} —— 领取/释放/完成阅片（写报告的医师本人）；</li>
+ *   <li>{@code tech:pacs:audit} —— 查看调阅审计（合规岗位）。</li>
+ * </ul>
  *
- * <p>写操作要求 {@code X-Actor} 必填（网关漏注入直接 400），保证登记/回传都能追责。
+ * <p>写操作要求 {@code X-Actor} 必填（网关漏注入直接 400），保证登记/回传/阅片都能追责。
  */
 @RestController
 @RequestMapping("/tech/pacs")
@@ -37,11 +53,18 @@ public class PacsController {
 
     private static final String READ = "tech:pacs:read";
     private static final String WRITE = "tech:pacs:write";
+    private static final String READING = "tech:report:write";
+    private static final String AUDIT = "tech:pacs:audit";
 
     private final PacsService service;
+    private final PacsReadingService readingService;
+    private final PacsDicomService dicomService;
 
-    public PacsController(PacsService service) {
+    public PacsController(PacsService service, PacsReadingService readingService,
+                          PacsDicomService dicomService) {
         this.service = service;
+        this.readingService = readingService;
+        this.dicomService = dicomService;
     }
 
     /** 设备 Worklist：默认当天、全部设备类型；按优先级（STAT→URGENT→ROUTINE）排序。 */
@@ -51,7 +74,7 @@ public class PacsController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestParam(required = false) Integer limit,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            com.medassist.common.security.DataScope scope) {
+            DataScope scope) {
         Permissions.require(permissions, READ);
         // 设备调度也需要患者号对账：设备技术账号应授 phi:read；低权账号按 P0-S2 掩码
         return ApiResponse.ok(PhiMask.worklist(service.worklist(modality, date, limit), scope));
@@ -90,5 +113,90 @@ public class PacsController {
             @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, WRITE);
         return ApiResponse.ok(service.updateStatus(studyInstanceUid, req, actor));
+    }
+
+    // ---------------------------------------------------------------- 阅片（医师侧）
+
+    /** 阅片队列：默认全部已完成检查；state=MINE 只看自己领取的。 */
+    @GetMapping("/reading/queue")
+    public ApiResponse<List<ReadingQueueItem>> readingQueue(
+            @RequestParam(required = false) String modality,
+            @RequestParam(required = false) String state,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(PhiMask.readingQueue(
+                readingService.queue(modality, state, date, limit, actor), scope));
+    }
+
+    @PostMapping("/reading/{studyInstanceUid}/claim")
+    public ApiResponse<ReadingTaskView> claim(
+            @PathVariable String studyInstanceUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, READING);
+        return ApiResponse.ok(readingService.claim(studyInstanceUid, actor));
+    }
+
+    @PostMapping("/reading/{studyInstanceUid}/release")
+    public ApiResponse<ReadingTaskView> release(
+            @PathVariable String studyInstanceUid,
+            @RequestBody(required = false) ReadingNoteReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, READING);
+        return ApiResponse.ok(readingService.release(studyInstanceUid, req, actor));
+    }
+
+    @PostMapping("/reading/{studyInstanceUid}/complete")
+    public ApiResponse<ReadingTaskView> complete(
+            @PathVariable String studyInstanceUid,
+            @RequestBody(required = false) ReadingNoteReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, READING);
+        return ApiResponse.ok(readingService.complete(studyInstanceUid, req, actor));
+    }
+
+    // ---------------------------------------------------------------- DICOMweb 调阅
+
+    /** 序列列表：PACS 实时（QIDO-RS），不可用时回退本地缓存并标注 CACHED。 */
+    @GetMapping("/studies/{studyInstanceUid}/series")
+    public ApiResponse<SeriesResponse> series(
+            @PathVariable String studyInstanceUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dicomService.listSeries(studyInstanceUid, actor));
+    }
+
+    /** 取单张影像（WADO-RS）：返回 application/dicom 字节流；未配置 PACS 时 503。 */
+    @GetMapping("/studies/{studyInstanceUid}/series/{seriesInstanceUid}/instances/{sopInstanceUid}")
+    public ResponseEntity<byte[]> instance(
+            @PathVariable String studyInstanceUid,
+            @PathVariable String seriesInstanceUid,
+            @PathVariable String sopInstanceUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        PacsDicomService.InstancePayload payload =
+                dicomService.fetchInstance(studyInstanceUid, seriesInstanceUid, sopInstanceUid, actor);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(payload.contentType()))
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(payload.bytes());
+    }
+
+    /** 调阅审计：谁在何时看过该检查的序列/影像。 */
+    @GetMapping("/studies/{studyInstanceUid}/access-log")
+    public ApiResponse<List<PacsAccessLog>> accessLog(
+            @PathVariable String studyInstanceUid,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, AUDIT);
+        return ApiResponse.ok(readingService.accessLog(studyInstanceUid, limit));
     }
 }

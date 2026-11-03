@@ -1250,6 +1250,83 @@ export interface TechExamItemView {
   item: TechExamItem
 }
 
+// ---------------------------------------------------------------- 影像阅片（PACS）
+
+/** 阅片队列行（已完成检查 + 当前阅片任务 + 当前报告状态）。 */
+export interface PacsReadingQueueItem {
+  studyId: string
+  studyInstanceUid: string
+  accessionNumber: string
+  modality: string
+  bodyPart: string | null
+  seriesCount: number
+  imageCount: number
+  completedAt: string | null
+  viewerUrl: string | null
+  applicationId: string
+  applicationNo: string
+  patientNo: string
+  itemName: string
+  priority: string
+  deptId: string | null
+  reportStatus: 'DRAFT' | 'FINAL' | 'AMENDED' | null
+  readingTaskId: string | null
+  assignee: string | null
+  readingStatus: 'CLAIMED' | 'RELEASED' | 'COMPLETED' | null
+  claimedAt: string | null
+  /** 最近一次完成阅片的时刻；为空表示尚未完成过。 */
+  readCompletedAt: string | null
+}
+
+/** 阅片任务（领取/释放/完成后的返回）。 */
+export interface PacsReadingTask {
+  id: string
+  studyId: string
+  studyInstanceUid: string
+  accessionNumber: string
+  assignee: string
+  status: 'CLAIMED' | 'RELEASED' | 'COMPLETED'
+  claimedAt: string
+  releasedAt: string | null
+  completedAt: string | null
+  note: string | null
+  version: number
+}
+
+/** DICOM 序列元数据（PACS 实时同步或本地缓存）。 */
+export interface PacsSeries {
+  id: string
+  studyId: string
+  seriesInstanceUid: string
+  seriesNumber: number | null
+  modality: string
+  bodyPart: string | null
+  description: string | null
+  instanceCount: number
+  syncedAt: string
+}
+
+export interface PacsSeriesResponse {
+  series: PacsSeries[]
+  /** LIVE = PACS 实时返回；CACHED = 远端不可用时的本地缓存。 */
+  source: 'LIVE' | 'CACHED'
+  notice: string | null
+}
+
+/** 影像调阅审计行。 */
+export interface PacsAccessLog {
+  id: string
+  studyId: string
+  studyInstanceUid: string
+  accessionNumber: string
+  actor: string
+  action: 'VIEW_STUDY' | 'VIEW_SERIES' | 'FETCH_IMAGE'
+  seriesInstanceUid: string | null
+  sopInstanceUid: string | null
+  detail: string | null
+  createdAt: string
+}
+
 // ---------------------------------------------------------------- 医保
 
 /** 参保登记（本地快照，按 patientId 唯一）。 */
