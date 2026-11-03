@@ -622,3 +622,168 @@ export interface RoomUtilization {
   turnoverCount: number
   utilizationRate: number
 }
+
+// ---------------------------------------------------------------- 药房
+
+/** 药品字典（totalStock 为全部批次合计量，药房窗口判断可发量用）。 */
+export interface DrugView {
+  drug: Drug
+  totalStock: number
+}
+
+export interface Drug {
+  id: string
+  drugCode: string
+  name: string
+  tradeName: string | null
+  spec: string
+  dosageForm: string
+  unit: string
+  packageUnit: string | null
+  packageSize: number | null
+  price: number
+  insuranceCode: string | null
+  insuranceCategory: 'A' | 'B' | 'C' | 'NONE' | null
+  antibioticLevel: number
+  /** 麻醉/精神类：发药必须双人核对，并登记专册。 */
+  narcotic: boolean
+  enabled: boolean
+  version: number
+  maxDailyDose: number | null
+  pediatricContraindicated: boolean
+  elderlyCaution: boolean
+}
+
+export interface DrugBatch {
+  id: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  supplier: string | null
+  version: number
+}
+
+/** 近效期/已过期批次预警（expired=true 表示已过业务日，禁止发出）。 */
+export interface StockWarning {
+  drugCode: string
+  drugName: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  expired: boolean
+}
+
+/** 处方主体（金额为价格快照，不受后续调价影响）。 */
+export interface Prescription {
+  id: string
+  prescriptionNo: string
+  patientId: string
+  /** 无 phi:read 时由服务端掩码。 */
+  patientNo: string
+  visitId: string | null
+  visitNo: string | null
+  deptId: string | null
+  prescriber: string
+  status: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED' | 'DISPENSED' | 'CANCELLED'
+  reviewer: string | null
+  reviewedAt: string | null
+  rejectReason: string | null
+  totalAmount: number
+  version: number
+  createdAt: string
+  /** ORDER=费用已由临床医嘱计价；DISPENSE=发药时计价。 */
+  billingMode: 'ORDER' | 'DISPENSE'
+  sourceOrderId: string | null
+  supplyDate: string | null
+}
+
+export interface PrescriptionItem {
+  id: string
+  prescriptionId: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string | null
+  quantity: number
+  unit: string
+  dosage: string | null
+  frequency: string | null
+  days: number | null
+  unitPrice: number
+  amount: number
+  singleDose: number | null
+  doseUnit: string | null
+  timesPerDay: number | null
+  dailyDose: number | null
+}
+
+export interface PrescriptionView {
+  prescription: Prescription
+  items: PrescriptionItem[]
+}
+
+/** 审方记录（追加式）：CREATE=开方评估，REVIEW=审核复评。 */
+export interface PrescriptionAudit {
+  id: string
+  prescriptionId: string
+  phase: 'CREATE' | 'REVIEW'
+  level: 'BLOCK' | 'WARN' | 'INFO'
+  ruleCode: string
+  message: string
+  createdAt: string
+}
+
+/** blocked=true 时审核不可通过（必须驳回让医师改方）。 */
+export interface PrescriptionAuditView {
+  prescriptionId: string
+  audits: PrescriptionAudit[]
+  blocked: boolean
+  warned: boolean
+}
+
+export interface Dispense {
+  id: string
+  dispenseNo: string
+  prescriptionId: string
+  operator: string
+  checker: string | null
+  status: 'DISPENSED' | 'PARTIAL_RETURNED' | 'RETURNED'
+  totalAmount: number
+  dispensedAt: string | null
+  version: number
+  /** NONE=不发药计费；PENDING/CHARGE_FAILED/REFUND_FAILED 为需干预的异常。 */
+  billingStatus: string
+}
+
+export interface DispenseItem {
+  id: string
+  dispenseId: string
+  prescriptionItemId: string
+  drugId: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  returnedQuantity: number
+  unitPrice: number
+  amount: number
+}
+
+export interface DispenseReturn {
+  id: string
+  dispenseId: string
+  dispenseItemId: string
+  quantity: number
+  reason: string
+  operator: string
+  createdAt: string
+}
+
+export interface DispenseView {
+  dispense: Dispense
+  items: DispenseItem[]
+  returns: DispenseReturn[]
+}

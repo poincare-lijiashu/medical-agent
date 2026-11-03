@@ -35,6 +35,7 @@ const router = createRouter({
           component: () => import('@/views/SurgeryChargesView.vue'),
         },
         { path: 'narcotic', name: 'narcotic', component: () => import('@/views/NarcoticRegisterView.vue') },
+        { path: 'pharmacy', name: 'pharmacy', component: () => import('@/views/PharmacyView.vue') },
         {
           path: 'homepage-qc',
           name: 'homepage-qc',

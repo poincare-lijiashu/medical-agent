@@ -80,7 +80,16 @@ export const NAV_ITEMS: NavItem[] = [
     title: '麻精专册',
     hint: '麻醉药品处方专册与空安瓿回收闭环',
     icon: 'narcotic',
-    group: '手术与收费',
+    group: '药事管理',
+    permissions: ['pharmacy:read'],
+  },
+  {
+    name: 'pharmacy',
+    path: '/pharmacy',
+    title: '药房工作台',
+    hint: '处方审核 · 调配发药 · 退药回补 · 药品目录与库存预警',
+    icon: 'pill',
+    group: '药事管理',
     permissions: ['pharmacy:read'],
   },
   {
@@ -103,7 +112,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-export const NAV_GROUPS = ['临床诊疗', '住院管理', '手术与收费', '质量与知识']
+export const NAV_GROUPS = ['临床诊疗', '住院管理', '药事管理', '手术与收费', '质量与知识']
 
 export function findNav(name: string): NavItem | undefined {
   return NAV_ITEMS.find((n) => n.name === name)

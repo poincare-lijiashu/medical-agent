@@ -20,6 +20,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * 药房接口权限矩阵（直接驱动 Controller，不启动 Spring 上下文）。
@@ -131,6 +133,26 @@ class PharmacyControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(prescriptionService, never()).returnDrug(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("按处方查发药单：缺 pharmacy:read 时 403")
+    void dispenseOfRequiresReadPermission() {
+        assertThatThrownBy(() -> prescriptionController.dispenseOf(id, "pharmacy:prescription:review"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(prescriptionService, never()).dispenseByPrescription(any());
+    }
+
+    @Test
+    @DisplayName("按处方查发药单：未发药返回空数据（不是错误）")
+    void dispenseOfReturnsNullWhenNotDispensed() {
+        when(prescriptionService.dispenseByPrescription(id)).thenReturn(null);
+
+        var resp = prescriptionController.dispenseOf(id, "pharmacy:read");
+
+        assertThat(resp.data()).isNull();
     }
 
     @Test

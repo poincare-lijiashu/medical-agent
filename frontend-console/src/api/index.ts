@@ -8,6 +8,9 @@ import type {
   Consultation,
   DepositView,
   Dept,
+  DispenseView,
+  DrugBatch,
+  DrugView,
   Frequency,
   HomepageSummary,
   HomepageView,
@@ -26,7 +29,11 @@ import type {
   PageResult,
   Patient,
   PreopVisit,
+  Prescription,
+  PrescriptionAuditView,
+  PrescriptionView,
   RoomUtilization,
+  StockWarning,
   SurgeryBoardView,
   SurgeryCase,
   SurgeryChargePreview,
@@ -200,6 +207,35 @@ export const surgeryApi = {
 }
 
 export const pharmacyApi = {
+  /** 处方队列：status 为空返回全部（服务端最多 200 条，按开方时间倒序）。 */
+  prescriptions: (status?: string, limit = 100) =>
+    get<Prescription[]>('/pharmacy/prescriptions', { status, limit }),
+  prescription: (id: string) => get<PrescriptionView>(`/pharmacy/prescriptions/${id}`),
+  prescriptionAudit: (id: string) =>
+    get<PrescriptionAuditView>(`/pharmacy/prescriptions/${id}/audit`),
+  reviewPrescription: (id: string, approve: boolean, reason?: string) =>
+    post<PrescriptionView>(`/pharmacy/prescriptions/${id}/review`, { approve, reason }),
+  /** 发药：麻醉/精神类必须传核对人（且不能与当前操作人相同）。 */
+  dispensePrescription: (id: string, checker?: string) =>
+    post<DispenseView>(`/pharmacy/prescriptions/${id}/dispense`, checker ? { checker } : {}),
+  /** 按处方取发药单；未发药时 data 为空。 */
+  dispenseOfPrescription: (id: string) =>
+    get<DispenseView | null>(`/pharmacy/prescriptions/${id}/dispense`),
+  /** 退药：returnId 为幂等键，重试/双击必须复用同一个值。 */
+  returnDrug: (
+    dispenseId: string,
+    body: { dispenseItemId: string; quantity: number; reason: string; returnId: string },
+  ) => post<DispenseView>(`/pharmacy/dispenses/${dispenseId}/returns`, body),
+  retryBilling: (dispenseId: string) =>
+    post<DispenseView>(`/pharmacy/dispenses/${dispenseId}/billing-retry`),
+  drugs: (keyword?: string, enabled?: boolean, limit = 100) =>
+    get<DrugView[]>('/pharmacy/drugs', { keyword, enabled, limit }),
+  batches: (drugId: string) => get<DrugBatch[]>(`/pharmacy/drugs/${drugId}/batches`),
+  receiveStock: (
+    drugId: string,
+    body: { batchNo: string; expireDate: string; quantity: number; supplier?: string },
+  ) => post<DrugBatch>(`/pharmacy/drugs/${drugId}/batches`, body),
+  stockWarnings: () => get<StockWarning[]>('/pharmacy/stock-warnings'),
   narcoticRegister: (from?: string, to?: string, status?: string, limit = 100) =>
     get<NarcoticRegister[]>('/pharmacy/narcotic/register', { from, to, status, limit }),
   ampouleReturn: (id: string, quantity: number, receiver: string) =>

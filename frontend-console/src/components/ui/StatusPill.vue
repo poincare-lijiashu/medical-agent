@@ -62,6 +62,12 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   READY: { label: '已索引', tone: 'ok' },
   INDEXING: { label: '索引中', tone: 'warn' },
   FAILED: { label: '索引失败', tone: 'danger' },
+  // 药房
+  PENDING_REVIEW: { label: '待审核', tone: 'warn' },
+  DISPENSED: { label: '已发药', tone: 'ok' },
+  PARTIAL_RETURNED: { label: '部分退回', tone: 'warn' },
+  EXPIRED: { label: '已过期', tone: 'danger' },
+  NEAR_EXPIRY: { label: '近效期', tone: 'warn' },
   // 通用
   SIGNED: { label: '已签署', tone: 'ok' },
   FIT: { label: '可耐受', tone: 'ok' },
@@ -73,7 +79,7 @@ const meta = computed(() => {
   const key = (props.value ?? '').toUpperCase()
   return MAP[key] ?? { label: props.label ?? props.value ?? '—', tone: 'neutral' as Tone }
 })
-const label = computed(() => (props.label && !MAP[(props.value ?? '').toUpperCase()] ? props.label : meta.value.label))
+const label = computed(() => props.label ?? meta.value.label)
 const tone = computed(() => meta.value.tone)
 </script>
 

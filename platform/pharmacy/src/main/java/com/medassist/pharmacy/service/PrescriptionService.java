@@ -553,6 +553,18 @@ public class PrescriptionService {
         return new DispenseView(dispense, repo.listDispenseItems(dispenseId), repo.listReturns(dispenseId));
     }
 
+    /**
+     * 按处方查发药单：药房窗口刷新后仍能对已发药处方做退药/核对，不需要另行记住发药单号。
+     *
+     * <p>未发药返回 {@code null}（不是错误）——处方列表里大量处方尚未发药，
+     * 前端据此展示"尚未发药"而非报错。
+     */
+    public DispenseView dispenseByPrescription(UUID prescriptionId) {
+        return repo.findDispenseByPrescription(prescriptionId)
+                .map(d -> dispenseDetail(d.id()))
+                .orElse(null);
+    }
+
     public List<Prescription> list(String status, UUID patientId, Integer limit) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);

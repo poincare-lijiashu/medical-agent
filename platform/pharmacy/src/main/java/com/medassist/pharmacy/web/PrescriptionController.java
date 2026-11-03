@@ -118,4 +118,18 @@ public class PrescriptionController {
         Permissions.require(permissions, DISPENSE);
         return ApiResponse.ok(service.dispense(id, req == null ? null : req.checker(), actor));
     }
+
+    /**
+     * 按处方查发药单（含批次明细与退药记录）。
+     *
+     * <p>未发药返回空数据；已发药时前端据此展示退药入口，
+     * 不需要调用方自行保存发药单号。
+     */
+    @GetMapping("/{id}/dispense")
+    public ApiResponse<DispenseView> dispenseOf(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.dispenseByPrescription(id));
+    }
 }
