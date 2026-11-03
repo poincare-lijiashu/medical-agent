@@ -34,6 +34,7 @@ import com.medassist.clinical.domain.ClinicalModel.TransferTask;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
+import com.medassist.clinical.domain.ClinicalModel.VisitTransfer;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReturn;
@@ -330,6 +331,22 @@ public class ClinicalRepository {
                         """)
                 .param("newStatus", newStatus).param("id", id)
                 .param("expectedStatus", expectedStatus).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /**
+     * 变更主诊科室（CAS）。
+     *
+     * <p>只改 {@code dept_id}：医嘱、诊断、收费都挂在 visit 上，不随科室变更拆分；
+     * 原科室的访问权由这次更新立即收回，历史归属留在 {@code visit_transfer}。
+     */
+    public boolean updateVisitDepartment(UUID id, UUID deptId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit
+                           SET dept_id = :deptId, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("deptId", deptId).param("id", id).param("version", expectedVersion)
                 .update() > 0;
     }
 
@@ -1294,6 +1311,25 @@ public class ClinicalRepository {
                          WHERE id = :id AND version = :version AND status IN ('ADMITTED', 'IN_HOSPITAL')
                         """)
                 .param("bedId", bedId).param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /**
+     * 转科同时换床：病区与床位一起更新（CAS）。
+     *
+     * <p>只改 bed_id 会让 ADT 视图继续显示原病区，护理站按 ward_id 取在院列表时
+     * 会把患者留在旧病区；转科必须整条搬过去。
+     */
+    public boolean updateAdmissionWardAndBed(UUID id, UUID wardId, UUID bedId,
+                                             long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.admission
+                           SET ward_id = :wardId, bed_id = :bedId,
+                               status = CASE WHEN status = 'ADMITTED' THEN 'IN_HOSPITAL' ELSE status END,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """)
+                .param("wardId", wardId).param("bedId", bedId)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     /** 住院状态迁移（CAS）。 */
@@ -3319,6 +3355,58 @@ public class ClinicalRepository {
                         """)
                 .param("visitId", visitId).param("deptIds", deptIds)
                 .query(Integer.class).optional().isPresent();
+    }
+
+    /**
+     * 转科时批量撤回该就诊的全部进行中会诊，返回撤回条数。
+     *
+     * <p>授权来源是"旧主诊科室发起的会诊"，转科后这个前提不存在：
+     * 不撤回的话，受邀科室会继续持有该就诊的只读权限，而新主诊科室却不知情。
+     */
+    public int cancelActiveConsultationsForVisit(UUID visitId, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.consultation_request
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancelled_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE visit_id = :visitId AND status IN ('REQUESTED', 'ACCEPTED')
+                        """)
+                .param("visitId", visitId).param("actor", actor).param("reason", reason)
+                .update();
+    }
+
+    // ---------------------------------------------------------------- 转科
+
+    private static final String VISIT_TRANSFER_COLUMNS = """
+            id, visit_id, from_dept_id, to_dept_id, reason, transferred_by, transferred_at, version
+            """;
+
+    private static final RowMapper<VisitTransfer> VISIT_TRANSFER_MAPPER = (rs, i) -> new VisitTransfer(
+            rs.getObject("id", UUID.class), rs.getObject("visit_id", UUID.class),
+            rs.getObject("from_dept_id", UUID.class), rs.getObject("to_dept_id", UUID.class),
+            rs.getString("reason"), rs.getString("transferred_by"),
+            instantOf(rs, "transferred_at"), rs.getLong("version"));
+
+    public void insertVisitTransfer(VisitTransfer t) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.visit_transfer
+                            (id, visit_id, from_dept_id, to_dept_id, reason, transferred_by)
+                        VALUES (:id, :visitId, :fromDept, :toDept, :reason, :by)
+                        """)
+                .param("id", t.id()).param("visitId", t.visitId())
+                .param("fromDept", t.fromDeptId()).param("toDept", t.toDeptId())
+                .param("reason", t.reason()).param("by", t.transferredBy()).update();
+    }
+
+    public List<VisitTransfer> listTransfersByVisit(UUID visitId, int limit) {
+        return jdbc.sql("SELECT " + VISIT_TRANSFER_COLUMNS
+                        + """
+                           FROM clinical_svc.visit_transfer
+                          WHERE visit_id = :visitId
+                          ORDER BY transferred_at DESC
+                          LIMIT :limit
+                          """)
+                .param("visitId", visitId).param("limit", limit)
+                .query(VISIT_TRANSFER_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

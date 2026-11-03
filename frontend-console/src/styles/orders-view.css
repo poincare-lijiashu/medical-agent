@@ -645,6 +645,25 @@
   color: var(--ink-4);
 }
 
+/* 转科记录：一行一次科室变更，原因允许换行 */
+.transfer-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.transfer-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-11);
+  color: var(--ink-3);
+}
+
+.transfer-history-row .hint {
+  line-height: 1.5;
+}
+
 /* ---------------- 费用卡 ---------------- */
 
 .charge-head {

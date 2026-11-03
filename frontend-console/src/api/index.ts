@@ -1,5 +1,6 @@
 import { get, post, put, request } from './http'
 import type {
+  Bed,
   BillingPreview,
   ChargeItem,
   ChargeView,
@@ -27,6 +28,7 @@ import type {
   SurgerySchedule,
   Visit,
   VisitOrder,
+  VisitTransfer,
   Ward,
 } from './types'
 
@@ -82,6 +84,11 @@ export const clinicalApi = {
   settle: (visitId: string, paymentMethod: string) =>
     post<ChargeView>(`/clinical/visits/${visitId}/settle`, { paymentMethod }),
   wards: () => get<Ward[]>('/clinical/wards'),
+  beds: (wardId: string) => get<Bed[]>(`/clinical/wards/${wardId}/beds`),
+  visitTransfers: (visitId: string) =>
+    get<VisitTransfer[]>(`/clinical/visits/${visitId}/transfers`),
+  transferVisit: (visitId: string, body: { toDeptId: string; bedId?: string; reason: string }) =>
+    post<VisitTransfer>(`/clinical/visits/${visitId}/transfers`, body),
   consultations: (status?: string, limit = 50) =>
     get<Consultation[]>('/clinical/consultations', { status, limit }),
   visitConsultations: (visitId: string) =>

@@ -637,4 +637,15 @@ public final class ClinicalModel {
             return REJECTED.equals(status) || COMPLETED.equals(status) || CANCELLED.equals(status);
         }
     }
+
+    /**
+     * 转科记录：一次主诊科室变更。
+     *
+     * <p>表是 append-only 的，{@code version} 只为与其它记录保持同构，永远为 0。
+     * 当前主诊科室以 {@code visit.dept_id} 为准，本表负责"从哪来、为什么来"。
+     */
+    public record VisitTransfer(UUID id, UUID visitId, UUID fromDeptId, UUID toDeptId,
+                                String reason, String transferredBy, Instant transferredAt,
+                                long version) {
+    }
 }

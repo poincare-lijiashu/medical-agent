@@ -51,7 +51,18 @@
 已接入 `requireRead` 的读接口：就诊详情、医嘱列表、就诊诊断列表、手术病例列表、收费预览与收费单明细。
 结算、按日计费、护理执行等**写**接口仍走 `require`（只认主诊科室）。
 
-转科（患者主诊科室变更）目前仍需走住院 ADT 的出院/再入院或数据维护，不在会诊范围内。
+转科（主诊科室变更）是独立动作，不走"出院再入院"：
+
+- **前提**：就诊为住院且 `IN_TREATMENT`，并且确有在院登记（`ADMITTED` / `IN_HOSPITAL`）。
+- **目标**：必须是启用中的住院科室（`INPATIENT` / `BOTH`），且不能是当前主诊科室。
+- **换床**：已分床的患者必须同时指定目标科室病区的空床；系统在同一事务内完成
+  "占新床 → 改登记病区/床位 → 释放原床 → 改 `visit.dept_id`"，任一 CAS 失败整体回滚。
+- **会诊联动**：原主诊科室发起的进行中会诊随转科自动撤回（`cancelled_reason` 记录转科去向），
+  避免受邀科室在授权前提消失后继续持有只读权限。
+- **留痕**：每次转科向 `visit_transfer` 追加一行（append-only，UPDATE/DELETE 被触发器拒绝），
+  审计写 `VISIT_TRANSFER`（含原/新科室、床位、撤回会诊条数）。
+- **权限**：发起需要 `clinical:visit:treat` 且必须是当前主诊科室；查询转科记录需要
+  `clinical:visit:read`（新主诊科室或会诊期只读科室可见）；越权一律 404。
 
 ### 2.3 失败方向：fail-closed
 
@@ -154,6 +165,7 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 | 6 | empi 患者检索：**不按科室过滤**（见 §2.4），改为强制检索条件 + 默认掩码 + 检索审计 | **已完成** |
 | 7 | PHI 掩码铺到所有返回患者标识的 DTO | **已完成**：`phi:read`（auth V35）；已掩码 clinical（就诊/住院/欠费/费用/排台）与 pharmacy（处方、麻醉药品专册）。emr / tech / insurance 按 §7 的暴露面分类，不做用户级掩码 |
 | 8 | 会诊申请与会诊期只读授权（`consultation_request`，含受理/拒绝/完成/撤回状态机） | **已完成**：见 §2.2；授权随会诊结束立即收回 |
+| 9 | 转科（变更主诊科室，含换床与进行中会诊自动撤回） | **已完成**：`visit_transfer`（append-only）+ `POST/GET /clinical/visits/{id}/transfers`；住院科室主数据由 clinical V37 补齐 |
 
 ### 1.1 `VisitAccessGuard` 的职责边界
 
@@ -171,10 +183,11 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 | 住院 ADT | 在院列表、分床、出院、预交金、费用看板、护理执行（11 个接口） | `requireAdmission(scope, admissionId)`；病区/床位用 `requireWard` |
 | 病区备药 | 备药看板、收药、退药、二级库存（4 个接口） | `require(scope, visitId)` |
 | 挂号与诊断 | 就诊详情/接诊/结束/退号、就诊诊断增删改（7 个接口） | `require(scope, visitId)`；按患者列就诊时按科室过滤 |
+| 转科 | `POST /visits/{id}/transfers`、`GET /visits/{id}/transfers` | 写：`lockVisit` + `canSeeDepartment`（只认当前主诊科室）；读：`requireRead` |
 | 病案首页（emr） | 生成、列表、详情、打印、补录、重算、提交、归档（8 个接口） | `EmrAccessGuard.requireHomepage`（记录自身 `dept_id`）；生成时用临床快照的科室判定 |
 | 病历正文（emr） | 建档、列表、详情、检索、打印、保存、提交、质控、签名、归档、修订、修改申请审批（16 个接口） | `EmrAccessGuard.requireRecord`；列表与检索结果按科室过滤 |
 
-阶段 1–7 已全部落地；empi 与 PHI 掩码的处理方式见 §2.4 与 §3.4。
+阶段 1–9 已全部落地；empi 与 PHI 掩码的处理方式见 §2.4 与 §3.4。
 
 **每个接入点都必须有越权用例**：用 B 科室身份请求 A 科室的就诊，必须 404 且不查业务表。
 
@@ -195,7 +208,8 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 
 ## 7. 已知边界
 
-- **转科（变更主诊科室）未实现**：会诊只授予只读，不改变 `visit.dept_id`。
+- **转科只覆盖住院**：门诊/急诊就诊不能转科；跨病区换床必须走转科（ADT 的 `assignBed` 仍限定在原病区内，避免绕过科室校验）。
+- **转科不改医嘱/收费归属**：医嘱、诊断、费用继续挂在原 `visit` 上，只改主诊科室；由新科室承接后续诊疗。
 - **`X-Org` 目前只有一个值**，多院区/多科室兼职的医生需要"科室多选"token，属于 auth 服务的后续改动。
 - **PHI 掩码只覆盖 `patient_no` / `patient_name`**；身份证、电话、住址尚未纳入。
 

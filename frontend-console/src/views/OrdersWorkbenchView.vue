@@ -189,7 +189,7 @@
                 <span class="muted">·</span>
                 <span>{{ date(v.visitDate) }}</span>
                 <span class="muted">·</span>
-                <span>{{ v.visitType === 'EMERGENCY' ? '急诊' : '门诊' }}</span>
+                <span>{{ visitTypeLabel(v.visitType) }}</span>
               </span>
             </button>
           </li>
@@ -218,6 +218,15 @@
               </div>
             </div>
             <span class="spacer" />
+            <button
+              v-if="canTransfer"
+              class="btn btn--sm"
+              type="button"
+              :disabled="busy"
+              @click="openTransfer"
+            >
+              <AppIcon name="arrow-right" :size="13" /> 转科
+            </button>
             <button
               v-if="selectedVisit.status === 'REGISTERED' && canTreat"
               class="btn btn--primary btn--sm"
@@ -534,6 +543,17 @@
           <div v-else class="hint">本次就诊尚未产生外送单号。</div>
         </div>
 
+        <div v-if="transfers.length" class="inspector-block">
+          <div class="section-label">转科记录</div>
+          <div class="transfer-history">
+            <div v-for="t in transfers" :key="t.id" class="transfer-history-row">
+              <span class="mono muted">{{ dateTime(t.transferredAt) }}</span>
+              <span>{{ deptName(t.fromDeptId) }} → {{ deptName(t.toDeptId) }}</span>
+              <span class="hint">{{ t.reason }}</span>
+            </div>
+          </div>
+        </div>
+
         <div class="inspector-block is-last">
           <div class="section-label">审计边界</div>
           <p class="hint" style="line-height: 1.7">
@@ -616,6 +636,66 @@
       </template>
     </AppModal>
 
+    <!-- 转科 -->
+    <AppModal
+      v-model="transferOpen"
+      title="转科（变更主诊科室）"
+      subtitle="转科后本科室不再可见该就诊，原床位自动释放"
+      width="560px"
+    >
+      <div class="stack">
+        <label class="field">
+          <span class="label">目标科室 <span class="req">*</span></span>
+          <select v-model="transferForm.toDeptId" class="select">
+            <option value="" disabled>请选择住院科室</option>
+            <option v-for="d in transferDepts" :key="d.id" :value="d.id">
+              {{ d.name }}（{{ d.deptCode }}）
+            </option>
+          </select>
+        </label>
+        <label v-if="transferForm.toDeptId" class="field">
+          <span class="label">目标病区 <span class="req">*</span></span>
+          <select v-model="transferForm.wardId" class="select" :disabled="transferWards.length === 0">
+            <option value="" disabled>
+              {{ transferWards.length ? '请选择病区' : '该科室暂无启用病区' }}
+            </option>
+            <option v-for="w in transferWards" :key="w.id" :value="w.id">
+              {{ w.name }}（{{ w.code }}）
+            </option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="label">目标床位 <span class="req">*</span></span>
+          <select
+            v-model="transferForm.bedId"
+            class="select"
+            :disabled="bedsLoading || !transferForm.wardId"
+          >
+            <option value="" disabled>{{ transferBedHint }}</option>
+            <option v-for="b in freeBeds" :key="b.id" :value="b.id">{{ b.bedNo }}</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="label">转科原因 <span class="req">*</span></span>
+          <input v-model.trim="transferForm.reason" class="input" placeholder="将写入转科记录与审计" />
+        </label>
+        <p class="hint">
+          转科会同时撤回本科室发起的进行中会诊，并释放原床位；医嘱与费用继续保留在本次就诊下。
+        </p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="transferOpen = false">取消</button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          :disabled="busy || !transferForm.toDeptId || !transferForm.bedId || !transferForm.reason"
+          @click="submitTransfer"
+        >
+          确认转科
+        </button>
+      </template>
+    </AppModal>
+
     <!-- 危险动作确认 -->
     <AppModal
       v-model="confirmOpen"
@@ -678,7 +758,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -687,10 +767,21 @@ import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, empiApi } from '@/api'
 import { errorText } from '@/api/http'
-import type { ChargeItem, ChargeView, Dept, Frequency, Patient, Visit, VisitOrder } from '@/api/types'
+import type {
+  Bed,
+  ChargeItem,
+  ChargeView,
+  Dept,
+  Frequency,
+  Patient,
+  Visit,
+  VisitOrder,
+  VisitTransfer,
+  Ward,
+} from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
-import { ageOf, date, genderLabel, money } from '@/utils/format'
+import { ageOf, date, dateTime, genderLabel, money } from '@/utils/format'
 
 const busy = ref(false)
 const loading = ref(false)
@@ -787,11 +878,17 @@ function deptName(id: string) {
   return departments.value.find((d) => d.id === id)?.name ?? id.slice(0, 8)
 }
 
+function visitTypeLabel(type: string) {
+  if (type === 'INPATIENT') return '住院'
+  return type === 'EMERGENCY' ? '急诊' : '门诊'
+}
+
 async function loadVisits(patientId: string) {
   visitsLoading.value = true
   selectedVisit.value = null
   orders.value = []
   charge.value = null
+  transfers.value = []
   try {
     visits.value = await clinicalApi.visits(patientId)
     const active = visits.value.find((v) => v.status === 'IN_TREATMENT') ?? visits.value[0]
@@ -810,8 +907,134 @@ async function pickVisit(v: Visit) {
   orders.value = []
   charge.value = null
   chargeError.value = ''
+  transfers.value = []
   pendingOrderKey = null
-  await Promise.all([loadOrders(), loadCharge()])
+  await Promise.all([loadOrders(), loadCharge(), loadTransfers()])
+}
+
+/* ------------------------------ 转科 ------------------------------ */
+
+const canTransfer = computed(
+  () =>
+    canTreat.value &&
+    selectedVisit.value?.visitType === 'INPATIENT' &&
+    selectedVisit.value?.status === 'IN_TREATMENT',
+)
+
+const transfers = ref<VisitTransfer[]>([])
+const transferOpen = ref(false)
+const transferForm = reactive({ toDeptId: '', wardId: '', bedId: '', reason: '' })
+const wards = ref<Ward[]>([])
+const transferBeds = ref<Bed[]>([])
+const bedsLoading = ref(false)
+
+/** 目标科室只能是启用中的住院科室，且不能是当前主诊科室。 */
+const transferDepts = computed(() =>
+  departments.value.filter(
+    (d) =>
+      (d.type === 'INPATIENT' || d.type === 'BOTH') && d.id !== selectedVisit.value?.deptId,
+  ),
+)
+
+const transferWards = computed(() =>
+  wards.value.filter((w) => w.deptId === transferForm.toDeptId),
+)
+
+const freeBeds = computed(() => transferBeds.value.filter((b) => b.status === 'FREE'))
+
+const transferBedHint = computed(() => {
+  if (bedsLoading.value) return '加载中…'
+  if (!transferForm.wardId) return '请先选择病区'
+  return freeBeds.value.length ? '请选择床位' : '该病区暂无空床'
+})
+
+async function loadTransfers() {
+  const visit = selectedVisit.value
+  if (!visit) return
+  try {
+    const list = await clinicalApi.visitTransfers(visit.id)
+    if (selectedVisit.value?.id === visit.id) transfers.value = list
+  } catch {
+    // 非住院就诊或权限不足时不影响工作台主流程
+    transfers.value = []
+  }
+}
+
+async function openTransfer() {
+  if (!selectedVisit.value) return
+  transferForm.toDeptId = ''
+  transferForm.wardId = ''
+  transferForm.bedId = ''
+  transferForm.reason = ''
+  transferBeds.value = []
+  transferOpen.value = true
+  if (wards.value.length === 0) {
+    try {
+      wards.value = await clinicalApi.wards()
+    } catch (e) {
+      toast.error('病区加载失败', errorText(e))
+    }
+  }
+}
+
+watch(
+  () => transferForm.toDeptId,
+  () => {
+    transferForm.bedId = ''
+    transferBeds.value = []
+    const list = transferWards.value
+    transferForm.wardId = list.length === 1 ? list[0].id : ''
+    if (list.length <= 1) void loadTransferBeds()
+  },
+)
+
+watch(
+  () => transferForm.wardId,
+  () => {
+    transferForm.bedId = ''
+    void loadTransferBeds()
+  },
+)
+
+async function loadTransferBeds() {
+  if (!transferForm.wardId) {
+    transferBeds.value = []
+    return
+  }
+  bedsLoading.value = true
+  try {
+    transferBeds.value = await clinicalApi.beds(transferForm.wardId)
+  } catch (e) {
+    transferBeds.value = []
+    toast.error('床位加载失败', errorText(e))
+  } finally {
+    bedsLoading.value = false
+  }
+}
+
+async function submitTransfer() {
+  if (!selectedVisit.value) return
+  if (!transferForm.toDeptId || !transferForm.bedId || !transferForm.reason) {
+    toast.warn('请填写完整', '目标科室、床位与转科原因必填')
+    return
+  }
+  busy.value = true
+  try {
+    const t = await clinicalApi.transferVisit(selectedVisit.value.id, {
+      toDeptId: transferForm.toDeptId,
+      bedId: transferForm.bedId,
+      reason: transferForm.reason,
+    })
+    transferOpen.value = false
+    toast.ok('转科完成', `${deptName(t.fromDeptId)} → ${deptName(t.toDeptId)}`)
+    // 转科后本科室已失去该就诊的访问权：重新按科室加载，不在本地保留旧就诊。
+    selectedVisit.value = null
+    if (selectedPatient.value) await loadVisits(selectedPatient.value.id)
+  } catch (e) {
+    toast.error('转科失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
 }
 
 /* ------------------------------ 医嘱 ------------------------------ */

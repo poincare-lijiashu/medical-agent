@@ -105,6 +105,27 @@ export interface Ward {
   enabled: boolean
 }
 
+/** 病区床位（转科选床用；只有 FREE 状态可被占用）。 */
+export interface Bed {
+  id: string
+  wardId: string
+  bedNo: string
+  status: 'FREE' | 'OCCUPIED' | 'RESERVED' | 'DISABLED'
+  version: number
+}
+
+/** 转科记录（append-only）：一次主诊科室变更。 */
+export interface VisitTransfer {
+  id: string
+  visitId: string
+  fromDeptId: string
+  toDeptId: string
+  reason: string
+  transferredBy: string
+  transferredAt: string
+  version: number
+}
+
 export interface AdmissionView {
   id: string
   admissionNo: string

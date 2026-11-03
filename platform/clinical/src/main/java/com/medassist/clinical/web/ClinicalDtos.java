@@ -192,6 +192,18 @@ public final class ClinicalDtos {
             String reason) {
     }
 
+    /**
+     * 转科：目标科室 + 目标床位 + 理由。
+     *
+     * <p>{@code bedId} 在患者当前已占床时必填：转科必须同时落到目标科室的病区床位，
+     * 否则原床位释放后患者无处可去，新科室也无法按病区收治。未分床的患者可不传。
+     */
+    public record TransferVisitReq(
+            @NotNull UUID toDeptId,
+            UUID bedId,
+            @NotBlank @Size(max = 500) String reason) {
+    }
+
     /** 住院登记视图（含就诊号，便于与医嘱/收费对照）。 */
     public record AdmissionView(UUID id, String admissionNo, UUID visitId, String visitNo,
                                 UUID patientId, String patientNo, UUID wardId, String wardName,
