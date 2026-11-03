@@ -66,6 +66,18 @@ public class SurgeryService {
         return repo.listSurgeryCases(visitId);
     }
 
+    /**
+     * 会诊场景读取该就诊全部手术记录。
+     *
+     * <p>调用方必须先经 {@code VisitAccessGuard.requireRead} 校验：受邀科室在会诊进行中
+     * 可以读这位患者的手术史，但方法本身不再重复做科室过滤——否则会把刚授权的数据又挡回去。
+     */
+    public List<SurgeryCase> listForVisit(UUID visitId) {
+        repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        return repo.listSurgeryCases(visitId);
+    }
+
     /** 就诊是否在当前账号的数据范围内；不在则按"不存在"处理。 */
     static void requireVisible(DataScope scope, Visit visit) {
         if (!scope.canSeeDepartment(visit.deptId())) {

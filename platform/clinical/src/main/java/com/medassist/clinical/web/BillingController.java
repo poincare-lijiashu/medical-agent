@@ -52,7 +52,8 @@ public class BillingController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, CHARGE_READ);
-        guard.require(scope, visitId);
+        // 只读：会诊医师需要看费用摘要来给意见，但结算仍按主诊科室权限
+        guard.requireRead(scope, visitId);
         return ApiResponse.ok(service.preview(visitId));
     }
 
@@ -62,7 +63,8 @@ public class BillingController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, CHARGE_READ);
-        guard.require(scope, visitId);
+        // 只读：会诊医师可看收费单明细，不可结算
+        guard.requireRead(scope, visitId);
         return ApiResponse.ok(service.chargeOf(visitId));
     }
 

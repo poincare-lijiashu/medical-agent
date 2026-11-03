@@ -337,4 +337,15 @@ class SurgeryServiceTest {
         // 药师/质控等全院角色不受科室限制
         assertThat(service.list(visitId, DataScope.all("pharm01", false))).hasSize(1);
     }
+
+    @Test
+    @DisplayName("会诊读取：listForVisit 不再做科室过滤（可见性由 requireRead 统一判定）")
+    void listForVisitSkipsDepartmentFilter() {
+        UUID deptA = UUID.randomUUID();
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visitOf(deptA)));
+        when(repo.listSurgeryCases(visitId)).thenReturn(List.of(surgeryCase(SurgeryCase.PLANNED)));
+
+        assertThat(service.listForVisit(visitId)).hasSize(1);
+        verify(repo).listSurgeryCases(visitId);
+    }
 }

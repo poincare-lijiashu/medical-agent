@@ -61,7 +61,9 @@ public class SurgeryController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(visitId, scope));
+        // 只读：本科室或受邀会诊进行中（会诊医师需要看患者手术史）
+        guard.requireRead(scope, visitId);
+        return ApiResponse.ok(service.listForVisit(visitId));
     }
 
     @PostMapping("/visits/{visitId}/surgery-cases")
