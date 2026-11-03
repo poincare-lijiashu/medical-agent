@@ -85,7 +85,8 @@ class InsuranceControllerPermissionTest {
         var req = new MemberReq(id, "EMPLOYEE", "LOCAL", null,
                 BigDecimal.ZERO, new BigDecimal("0.8"), new BigDecimal("300000"), null, null, null);
 
-        assertThatThrownBy(() -> memberController.register(req, "insurance:settlement:read", "doctor01"))
+        assertThatThrownBy(() -> memberController.register(req, "insurance:settlement:read", "doctor01",
+                com.medassist.common.security.DataScope.all("doctor01", false)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -135,7 +136,8 @@ class InsuranceControllerPermissionTest {
     @Test
     @DisplayName("结算查询：只读权限放行")
     void detailAllowedForReadPermission() {
-        settlementController.detail(id, "insurance:settlement:read");
+        settlementController.detail(id, "insurance:settlement:read",
+                com.medassist.common.security.DataScope.all("doctor01", true));
 
         verify(service).detail(id);
     }
@@ -143,7 +145,8 @@ class InsuranceControllerPermissionTest {
     @Test
     @DisplayName("权限头缺失：提示重新登录（403）")
     void emptyPermissionsHeader() {
-        assertThatThrownBy(() -> settlementController.detail(id, null))
+        assertThatThrownBy(() -> settlementController.detail(id, null,
+                com.medassist.common.security.DataScope.all("doctor01", true)))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);

@@ -50,9 +50,11 @@ public class PacsController {
             @RequestParam(required = false) String modality,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.worklist(modality, date, limit));
+        // 设备调度也需要患者号对账：设备技术账号应授 phi:read；低权账号按 P0-S2 掩码
+        return ApiResponse.ok(PhiMask.worklist(service.worklist(modality, date, limit), scope));
     }
 
     @GetMapping("/studies/{studyInstanceUid}")

@@ -38,17 +38,19 @@ public class MemberController {
     public ApiResponse<Member> register(
             @Valid @RequestBody MemberReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, MANAGE);
-        return ApiResponse.ok(service.registerMember(req, actor));
+        return ApiResponse.ok(PhiMask.member(service.registerMember(req, actor), scope));
     }
 
     @GetMapping("/{patientId}")
     public ApiResponse<Member> detail(
             @PathVariable UUID patientId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.member(patientId));
+        return ApiResponse.ok(PhiMask.member(service.member(patientId), scope));
     }
 
     /** 参保变更历史（追加式，最新在前）：待遇参数与启停状态逐条可追溯。 */
@@ -56,8 +58,9 @@ public class MemberController {
     public ApiResponse<List<MemberHistory>> history(
             @PathVariable UUID patientId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.memberHistory(patientId, limit));
+        return ApiResponse.ok(PhiMask.memberHistory(service.memberHistory(patientId, limit), scope));
     }
 }

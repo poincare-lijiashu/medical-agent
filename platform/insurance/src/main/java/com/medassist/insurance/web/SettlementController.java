@@ -57,17 +57,19 @@ public class SettlementController {
     @GetMapping("/{id}")
     public ApiResponse<BillView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(maskBill(service.detail(id), scope));
     }
 
     @GetMapping("/by-visit/{visitId}")
     public ApiResponse<BillView> byVisit(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.byVisit(visitId));
+        return ApiResponse.ok(maskBill(service.byVisit(visitId), scope));
     }
 
     @PostMapping("/{id}/confirm")
@@ -104,8 +106,18 @@ public class SettlementController {
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(patientId, status, limit));
+        return ApiResponse.ok(PhiMask.bills(service.list(patientId, status, limit), scope));
+    }
+
+    /** BillView 里的清单抬头含患者号，按 phi:read 决定掩码（P0-S2）。 */
+    private static BillView maskBill(BillView view, com.medassist.common.security.DataScope scope) {
+        if (view == null || scope.phiReadable()) {
+            return view;
+        }
+        return new BillView(PhiMask.bill(view.bill(), scope), view.lines(),
+                view.capUsed(), view.capRemaining());
     }
 }

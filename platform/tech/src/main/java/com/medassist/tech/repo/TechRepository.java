@@ -221,6 +221,16 @@ public class TechRepository {
     }
 
     public List<Application> listApplications(String status, UUID patientId, int limit) {
+        return listApplications(status, patientId, null, limit);
+    }
+
+    /**
+     * 申请列表（P0-S3 行级范围）：{@code deptIds} 非空时只返回这些科室的申请。
+     *
+     * <p>tech 表一直有 dept_id，此前未用于过滤——跨科室读单让科室隔离形同虚设。
+     */
+    public List<Application> listApplications(String status, UUID patientId,
+                                              java.util.Collection<UUID> deptIds, int limit) {
         return jdbc.sql("""
                         SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                applied_by, category, item_code, item_name, body_part, priority,
@@ -229,10 +239,13 @@ public class TechRepository {
                           FROM tech_svc.exam_application
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
+                           AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY (CAST(:deptIds AS uuid[])))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
-                .param("status", status).param("patientId", patientId).param("limit", limit)
+                .param("status", status).param("patientId", patientId)
+                .param("deptIds", deptIds == null || deptIds.isEmpty() ? null : deptIds.toArray(UUID[]::new))
+                .param("limit", limit)
                 .query(APP_MAPPER).list();
     }
 

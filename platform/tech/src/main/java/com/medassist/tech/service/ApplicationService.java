@@ -155,9 +155,18 @@ public class ApplicationService {
     }
 
     public List<Application> list(String status, UUID patientId, Integer limit) {
+        return list(status, patientId, null, limit);
+    }
+
+    /**
+     * 申请列表（P0-S3）：{@code deptIds} 非空时按科室集合过滤，
+     * 与 {@code DataScope} 配合实现行级隔离（全科室角色传 null 即不过滤）。
+     */
+    public List<Application> list(String status, UUID patientId,
+                                  java.util.Collection<UUID> deptIds, Integer limit) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listApplications(normalized, patientId, size);
+        return repo.listApplications(normalized, patientId, deptIds, size);
     }
 
     /** 取消申请：仅未采集/未执行的申请可取消。 */

@@ -2,6 +2,7 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.service.ApplicationService;
@@ -60,17 +61,30 @@ public class ApplicationController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, limit));
+        // P0-S3 行级范围：全科室角色不过滤，其余按科室集合过滤
+        List<Application> apps = service.list(status, patientId,
+                scope.allDepartments() ? null : scope.deptCodes(), limit);
+        return ApiResponse.ok(PhiMask.applications(apps, scope));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<ApplicationView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        ApplicationView view = service.detail(id);
+        if (!scope.allDepartments() && view.application().deptId() != null
+                && !scope.canSeeDepartment(view.application().deptId())) {
+            // 跨科室读单拒绝：越权与不存在同为 404，避免泄露"该申请存在但你看不到"
+            throw new com.medassist.common.exception.BusinessException(
+                    com.medassist.common.api.ErrorCode.TECH_APPLICATION_NOT_FOUND);
+        }
+        return ApiResponse.ok(new ApplicationView(
+                PhiMask.application(view.application(), scope), view.specimen()));
     }
 
     @PostMapping("/{id}/cancel")
