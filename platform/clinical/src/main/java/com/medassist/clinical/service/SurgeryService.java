@@ -8,6 +8,7 @@ import com.medassist.clinical.web.SurgeryDtos.CancelSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.PlanSurgeryReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,9 +53,24 @@ public class SurgeryService {
         return repo.searchOperationCatalog(keyword, size);
     }
 
-    public List<SurgeryCase> list(UUID visitId) {
-        repo.findVisit(visitId).orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+    /**
+     * 某就诊的手术列表（受行级数据范围约束）。
+     *
+     * <p>越权时抛 404 而不是 403：403 等于告诉调用方"这个就诊存在，只是你不能看"，
+     * 可以被用来枚举科室患者。医疗系统的常规做法是把不可见一律伪装成不存在。
+     */
+    public List<SurgeryCase> list(UUID visitId, DataScope scope) {
+        Visit visit = repo.findVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        requireVisible(scope, visit);
         return repo.listSurgeryCases(visitId);
+    }
+
+    /** 就诊是否在当前账号的数据范围内；不在则按"不存在"处理。 */
+    static void requireVisible(DataScope scope, Visit visit) {
+        if (!scope.canSeeDepartment(visit.deptId())) {
+            throw new BusinessException(ErrorCode.VISIT_NOT_FOUND);
+        }
     }
 
     /** 计划手术：必须住院就诊、字典启用、同一就诊同一手术不得重复（未取消）。 */

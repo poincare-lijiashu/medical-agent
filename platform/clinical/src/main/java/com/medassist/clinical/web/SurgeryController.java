@@ -8,6 +8,7 @@ import com.medassist.clinical.web.SurgeryDtos.PlanSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -54,9 +55,10 @@ public class SurgeryController {
     @GetMapping("/visits/{visitId}/surgery-cases")
     public ApiResponse<List<SurgeryCase>> list(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(visitId));
+        return ApiResponse.ok(service.list(visitId, scope));
     }
 
     @PostMapping("/visits/{visitId}/surgery-cases")

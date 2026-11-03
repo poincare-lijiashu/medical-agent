@@ -9,6 +9,7 @@ import com.medassist.clinical.web.SurgeryDtos.CancelSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.PlanSurgeryReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -300,5 +301,40 @@ class SurgeryServiceTest {
         assertThat(service.catalog(null, 500)).hasSize(1);
         verify(repo).searchOperationCatalog("阑尾", 20);
         verify(repo).searchOperationCatalog(null, 100);
+    }
+
+    // ---------------------------------------------------------------- 行级数据范围
+
+    private Visit visitOf(UUID deptId) {
+        return new Visit(visitId, "V1", patientId, "P1", deptId, "doctor01",
+                null, "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+    }
+
+    @Test
+    @DisplayName("数据范围：跨科室读手术列表 → 404（伪装成不存在，防枚举科室患者）")
+    void listRejectsOtherDepartment() {
+        UUID deptA = UUID.randomUUID();
+        UUID deptB = UUID.randomUUID();
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visitOf(deptA)));
+
+        DataScope otherDept = DataScope.ofDepartment("doctor02", deptB, true);
+
+        assertThatThrownBy(() -> service.list(visitId, otherDept))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VISIT_NOT_FOUND));
+        verify(repo, never()).listSurgeryCases(any());
+    }
+
+    @Test
+    @DisplayName("数据范围：同科室可读、全院角色可读")
+    void listAllowsOwnDepartmentAndAllScope() {
+        UUID deptA = UUID.randomUUID();
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visitOf(deptA)));
+        when(repo.listSurgeryCases(visitId)).thenReturn(List.of(surgeryCase(SurgeryCase.PLANNED)));
+
+        assertThat(service.list(visitId, DataScope.ofDepartment("doctor01", deptA, true)))
+                .hasSize(1);
+        // 药师/质控等全院角色不受科室限制
+        assertThat(service.list(visitId, DataScope.all("pharm01", false))).hasSize(1);
     }
 }
