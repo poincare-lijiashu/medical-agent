@@ -100,6 +100,7 @@
 - 权限点 `phi:read` 由 auth `V35__phi_read_permission.sql` 下发：ADMIN / DOCTOR / NURSE / PHARMACIST；QC / REGISTRAR 只拿掩码。
 - 网关把 JWT 里的 permissions 原样放进 `X-Permissions`，`DataScopeResolver` 解析成 `phiReadable`。
 - clinical 在 Controller 出口用 `PhiMask` 统一改写：就诊、住院登记、欠费预警、费用看板、手术排台看板。
+- pharmacy 同样在出口改写：处方列表/详情/审核结果、麻醉药品专册（含空安瓿回收返回）。
 - 领域对象是不可变 `record`，掩码生成新实例——"库里的值"和"返回给客户端的值"是两条明确边界。
 
 ---
@@ -143,7 +144,7 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 | 4 | 术前访视（按 caseId，经就诊科室校验） | **已完成** |
 | 5 | 住院 ADT / 床位 / 护理执行 / 病区备药 / 挂号与诊断 / 麻醉与术中护理 / 术前讨论与知情同意 / 术中收费 / 分级审批 / 病案首页与病历（emr 服务） | **已完成** |
 | 6 | empi 患者检索：**不按科室过滤**（见 §2.4），改为强制检索条件 + 默认掩码 + 检索审计 | **已完成** |
-| 7 | PHI 掩码铺到所有返回患者标识的 DTO | **进行中**：已下发 `phi:read`（auth V35），clinical 的就诊/住院登记/欠费预警/费用看板/排台看板已掩码；pharmacy / tech / insurance 待做 |
+| 7 | PHI 掩码铺到所有返回患者标识的 DTO | **进行中**：已下发 `phi:read`（auth V35）；clinical（就诊/住院/欠费/费用/排台）与 pharmacy（处方列表与详情、麻醉药品专册）已掩码；tech / insurance 待做 |
 
 ### 1.1 `VisitAccessGuard` 的职责边界
 

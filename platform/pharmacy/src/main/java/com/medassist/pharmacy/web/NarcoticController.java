@@ -2,6 +2,7 @@ package com.medassist.pharmacy.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
@@ -80,17 +81,21 @@ public class NarcoticController {
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.registers(from, to, patientId, status, limit));
+        return ApiResponse.ok(service.registers(from, to, patientId, status, limit).stream()
+                .map(r -> PhiMask.narcotic(r, scope))
+                .toList());
     }
 
     @PostMapping("/register/{registerId}/ampoule-return")
     public ApiResponse<NarcoticRegister> returnAmpoule(
             @PathVariable UUID registerId, @Valid @RequestBody AmpouleReturnReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, MANAGE);
-        return ApiResponse.ok(service.returnAmpoule(registerId, req, actor));
+        return ApiResponse.ok(PhiMask.narcotic(service.returnAmpoule(registerId, req, actor), scope));
     }
 }

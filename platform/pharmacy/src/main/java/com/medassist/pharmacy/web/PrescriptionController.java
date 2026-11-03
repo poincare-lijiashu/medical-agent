@@ -2,6 +2,7 @@ package com.medassist.pharmacy.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.service.PrescriptionService;
@@ -58,9 +59,10 @@ public class PrescriptionController {
     public ApiResponse<PrescriptionView> create(
             @Valid @RequestBody CreatePrescriptionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CREATE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(PhiMask.view(service.create(req, actor), scope));
     }
 
     @GetMapping
@@ -68,17 +70,21 @@ public class PrescriptionController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, limit));
+        return ApiResponse.ok(service.list(status, patientId, limit).stream()
+                .map(p -> PhiMask.prescription(p, scope))
+                .toList());
     }
 
     @GetMapping("/{id}")
     public ApiResponse<PrescriptionView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(PhiMask.view(service.detail(id), scope));
     }
 
     /** 审核：approve=true 通过；false 驳回（必须写理由）。存在 BLOCK 级审方问题时不能通过。 */
@@ -87,9 +93,10 @@ public class PrescriptionController {
             @PathVariable UUID id,
             @Valid @RequestBody ReviewReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, REVIEW);
-        return ApiResponse.ok(service.review(id, req.approve(), req.reason(), actor));
+        return ApiResponse.ok(PhiMask.view(service.review(id, req.approve(), req.reason(), actor), scope));
     }
 
     /** 审方记录（开方/审核两次评估的规则命中，供药师端展示与追溯）。 */

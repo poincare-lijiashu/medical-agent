@@ -2,6 +2,7 @@ package com.medassist.pharmacy.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.pharmacy.service.DrugCatalogService;
 import com.medassist.pharmacy.service.PharmacyBillingService;
 import com.medassist.pharmacy.service.PrescriptionService;
@@ -44,6 +45,8 @@ class PharmacyControllerPermissionTest {
     private DispenseController dispenseController;
 
     private final UUID id = UUID.randomUUID();
+    /** 本类只测权限点；PHI 掩码由各服务的 PhiMask 单测覆盖。 */
+    private final DataScope scope = DataScope.all("pharm01", true);
 
     @BeforeEach
     void setUp() {
@@ -88,7 +91,7 @@ class PharmacyControllerPermissionTest {
         var req = new CreatePrescriptionReq(id, null, null, null, null,
                 List.of(new PrescriptionLine("D1", 1, null, null, null, null, null, null)));
 
-        prescriptionController.create(req, "pharmacy:prescription:create", "doctor01");
+        prescriptionController.create(req, "pharmacy:prescription:create", "doctor01", scope);
 
         verify(prescriptionService).create(any(), anyString());
     }
@@ -99,7 +102,7 @@ class PharmacyControllerPermissionTest {
         var req = new ReviewReq(true, null);
 
         assertThatThrownBy(() -> prescriptionController.review(id, req,
-                "pharmacy:prescription:create", "doctor01"))
+                "pharmacy:prescription:create", "doctor01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -133,7 +136,7 @@ class PharmacyControllerPermissionTest {
     @Test
     @DisplayName("权限头为空：提示重新登录（403）")
     void emptyPermissionsHeader() {
-        assertThatThrownBy(() -> prescriptionController.detail(id, null))
+        assertThatThrownBy(() -> prescriptionController.detail(id, null, scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
