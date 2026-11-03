@@ -1141,3 +1141,62 @@ export interface InsuranceExportBatch {
   excludedAlreadyExported: number
   remainingPending: number
 }
+
+// ---------------------------------------------------------------- DRG/DIP 分组
+
+/** 支付方案：DRG 按权重×费率，DIP 按分值×点值。 */
+export interface PaymentScheme {
+  code: string
+  name: string
+  type: 'DRG' | 'DIP'
+  rateAmount: number
+  rateEffectiveFrom: string
+  enabled: boolean
+  version: number
+  updatedBy: string | null
+  updatedAt: string | null
+}
+
+/** 方案下的分组：weight 在 DRG 下是权重，在 DIP 下是分值。 */
+export interface PaymentGroup {
+  schemeCode: string
+  groupCode: string
+  groupName: string
+  weight: number
+  enabled: boolean
+  version: number
+  updatedAt: string | null
+}
+
+/** 入组规则：按 priority 升序取首个命中项。 */
+export interface PaymentGroupRule {
+  id: string
+  schemeCode: string
+  priority: number
+  matchType: 'DIAGNOSIS' | 'PROCEDURE' | 'DIAG_AND_PROC'
+  diagPrefix: string | null
+  procPrefix: string | null
+  groupCode: string
+  enabled: boolean
+  createdAt: string | null
+}
+
+/** 模拟预分组快照：matched=false 时 reason 说明未入组原因。 */
+export interface GroupSimulation {
+  id: string
+  visitId: string
+  schemeCode: string
+  groupCode: string | null
+  matched: boolean
+  reason: string
+  weight: number | null
+  rateAmount: number
+  paymentStandard: number | null
+  diagnoses: string
+  procedures: string
+  diagnosesSource: string
+  proceduresSource: string
+  inputHash: string
+  createdBy: string
+  createdAt: string
+}

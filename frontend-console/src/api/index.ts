@@ -25,6 +25,7 @@ import type {
   InsuranceMemberHistory,
   InsuranceReconcile,
   ChargeMapping,
+  GroupSimulation,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -37,6 +38,9 @@ import type {
   OperatingRoom,
   PageResult,
   Patient,
+  PaymentGroup,
+  PaymentGroupRule,
+  PaymentScheme,
   PreopVisit,
   Prescription,
   PrescriptionAuditView,
@@ -381,6 +385,66 @@ export const insuranceOpsApi = {
   /** 报盘 XML 原样下载（含批量 PHI，需 insurance:export:download）。 */
   downloadExportPayload: (id: string) =>
     download(`/insurance/export-batches/${id}/payload`),
+}
+
+export const insuranceGroupingApi = {
+  schemes: () => get<PaymentScheme[]>('/insurance/grouping/schemes'),
+  createScheme: (body: {
+    code: string
+    name: string
+    type: string
+    rateAmount: number
+    rateEffectiveFrom: string
+    enabled?: boolean
+  }) => post<PaymentScheme>('/insurance/grouping/schemes', body),
+  updateScheme: (
+    code: string,
+    body: {
+      name: string
+      rateAmount: number
+      rateEffectiveFrom: string
+      enabled?: boolean
+      version: number
+    },
+  ) => put<PaymentScheme>(`/insurance/grouping/schemes/${encodeURIComponent(code)}`, body),
+  groups: (code: string, enabled?: boolean) =>
+    get<PaymentGroup[]>(`/insurance/grouping/schemes/${encodeURIComponent(code)}/groups`, { enabled }),
+  importGroups: (
+    code: string,
+    groups: { groupCode: string; groupName: string; weight: number; enabled?: boolean }[],
+  ) =>
+    post<{ total: number; created: number; updated: number; unchanged: number }>(
+      `/insurance/grouping/schemes/${encodeURIComponent(code)}/groups/import`,
+      { groups },
+    ),
+  rules: (code: string, enabled?: boolean) =>
+    get<PaymentGroupRule[]>(`/insurance/grouping/schemes/${encodeURIComponent(code)}/rules`, { enabled }),
+  importRules: (
+    code: string,
+    rules: {
+      priority: number
+      matchType: string
+      diagPrefix?: string
+      procPrefix?: string
+      groupCode: string
+      enabled?: boolean
+    }[],
+  ) =>
+    post<{ total: number; created: number; updated: number; unchanged: number }>(
+      `/insurance/grouping/schemes/${encodeURIComponent(code)}/rules/import`,
+      { rules },
+    ),
+  /** 模拟预分组（落可追溯快照）；诊断/手术传 null 表示由服务端回源取数。 */
+  simulate: (body: {
+    visitId: string
+    schemeCode: string
+    diagnoses?: string[]
+    procedures?: string[]
+  }) => post<GroupSimulation>('/insurance/grouping/simulate', body),
+  latestSimulation: (visitId: string) =>
+    get<GroupSimulation>(`/insurance/grouping/by-visit/${visitId}`),
+  simulationHistory: (visitId: string, limit = 20) =>
+    get<GroupSimulation[]>(`/insurance/grouping/by-visit/${visitId}/history`, { limit }),
 }
 
 export const systemApi = {
