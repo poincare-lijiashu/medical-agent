@@ -102,7 +102,7 @@
               <td class="is-num" data-label="统筹">{{ money(b.insuranceAmount) }}</td>
               <td class="is-num" data-label="自付">{{ money(b.selfPayAmount) }}</td>
               <td data-label="状态">
-                <span class="badge" :class="statusClass(b.status)">{{ statusLabel(b.status) }}</span>
+                <StatusPill :value="b.status" domain="insurance-export" />
               </td>
               <td data-label="回执">
                 <div v-if="b.receiptNo" class="mono">{{ b.receiptNo }}</div>
@@ -227,6 +227,8 @@ import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
+import StatusPill from '@/components/ui/StatusPill.vue'
+import { statusLabel } from '@/components/ui/statusMeta'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { insuranceOpsApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -339,7 +341,7 @@ async function submitReceipt() {
       message: receiptForm.message.trim() || undefined,
     })
     receiptOpen.value = false
-    toast.ok('回执已登记', `${updated.batchNo} · ${statusLabel(updated.status)}`)
+    toast.ok('回执已登记', `${updated.batchNo} · ${statusLabel('insurance-export', updated.status)}`)
     await loadBatches()
   } catch (e) {
     toast.error('登记回执失败', errorText(e))
@@ -399,22 +401,8 @@ async function downloadPayload(b: InsuranceExportBatch) {
 
 // ---------------------------------------------------------------- 展示映射
 
-function statusLabel(status: string): string {
-  const map: Record<string, string> = {
-    GENERATED: '待回执',
-    ACCEPTED: '已受理',
-    REJECTED: '已退回',
-    CANCELLED: '已撤销',
-  }
-  return map[status] ?? status
-}
-
-function statusClass(status: string): string {
-  if (status === 'ACCEPTED') return 'badge--ok'
-  if (status === 'REJECTED') return 'badge--danger'
-  if (status === 'CANCELLED') return 'badge--neutral'
-  return 'badge--warn'
-}
+// 状态文案/色调统一走 statusMeta（P1-F6）：报盘的 ACCEPTED 是「已受理」，
+// 与会诊的「会诊中」同码不同义，按域分层后不再需要组件内自建映射。
 
 onMounted(loadBatches)
 </script>

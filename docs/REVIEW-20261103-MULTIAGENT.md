@@ -34,7 +34,7 @@
 |---|---|---|
 | insurance 行级范围 | 降级为设计取舍 | 临床快照不返回科室、`settlement_bill` 无 dept 列；医保窗口本就是全院职能岗，按科室隔离会阻碍跨科补结算。若后续强制要求，需 `clinical` 内部接口补 `deptId` + Flyway 补列，成本较高，暂记录不改 |
 | P1-F2 | 待办 | `<KpiRow>` + `useStatusCounts` 抽取：属纯重构，需同时改 4 个视图的 KPI 计算口径，风险高于收益，排在前端下一轮 |
-| P1-F4 / F6 | 待办 | 状态枚举收敛到 `api/types.ts` 联合类型、StatusPill 按域拆分：`ACCEPTED` 等跨域同名状态需先统一业务命名，避免改错文案，单独一轮处理 |
+| P1-F4 | 部分完成 | 状态元数据已集中到 `components/ui/statusMeta.ts`（BASE + 按域覆盖，F6 一并落地）；剩余是把各视图里仍在硬编码的 `xxStatusLabel()` 全量替换为该模块，属机械替换，单独一轮做 |
 
 ### 已修复（2026-11-03 第六批，P1-S4 / P1-S6）
 
@@ -43,6 +43,7 @@
 | P1-S4 | 成立 | 新增 `common/security/Masks`（与 `DataScope` 共用同一掩码算法，避免响应与审计口径分裂）；7 处审计明细不再写明文患者号/姓名：empi（建档/查 PHI/改档）、tech 开单、emr 建病历、insurance 参保、clinical 挂号与入院、pharmacy 开方；`PATIENT_UPDATE` 审计补 `before/after`（性别/生日/血型/过敏史）+ `fromVersion/toVersion`，身份类字段不落明文（`target_id` 已可定位） | 全模块 999 项测试全绿（审计内容为字符串，无断言冲突）；empi/tech/emr/insurance/clinical/pharmacy 编译通过 |
 | P1-S6（v1 鉴权） | 成立 | 网关 `protected-paths` 增加 `/api/v1/**`（可用 `GATEWAY_V1_PROTECTED=` 显式退出过渡态）；此前 v1 兼容层只靠 Python 自证，忘配即整段裸奔 | 网关测试改写为两条：无令牌 401、带令牌放行且伪造头仍被剥离 |
 | P1-S6（备份） | 成立 | 新增 `deploy/backup/pg-backup-cronjob.yaml`：每日 02:00 `pg_dump -Fc` + 立即 `pg_restore --list` 校验 + sha256 + 14 天保留；`deploy/README.md` §10 给出部署、策略表（RPO 24h / RTO 小时级）、恢复到新库的演练步骤与「未演练的备份不算备份」要求 | 表名已按真实库核对（`clinical_svc.visit` / `pharmacy_svc.prescription` / `emr_svc.medical_record` / `insurance_svc.settlement_bill`） |
+| P1-F6 | 成立 | 状态元数据从 `StatusPill.vue` 抽出为 `components/ui/statusMeta.ts`：全局语义放 `BASE`、同名不同义只放 `DOMAIN_OVERRIDES`（报盘 `ACCEPTED`=已受理 vs 会诊=会诊中）；`StatusPill` 新增 `domain` 属性，`InsuranceExportPanel` 删除自建映射改用它 | typecheck + build 全绿；报盘状态文案与色调保持原样（回归等价） |
 
 **第六批实测**：后端全模块 `mvn -o test` 999 项全绿（含 gateway）。
 
