@@ -69,9 +69,7 @@
         </div>
       </div>
 
-      <div v-if="loading" class="loading">
-        <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="loading" :rows="5" />
 
       <LoadError
         v-else-if="loadError"
@@ -181,9 +179,7 @@
         </div>
       </div>
 
-      <div v-if="stockLoading && stockTab === 'drugs'" class="loading">
-        <div v-for="i in 4" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="stockLoading && stockTab === 'drugs'" :rows="4" />
 
       <EmptyState
         v-else-if="stockTab === 'drugs' && drugs.length === 0"
@@ -277,9 +273,7 @@
       :subtitle="detail?.prescription.prescriptionNo"
       width="920px"
     >
-      <div v-if="detailLoading" class="loading">
-        <div v-for="i in 6" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="detailLoading" :rows="6" />
 
       <div v-else-if="detail" class="detail">
         <div class="detail-bar">
@@ -581,9 +575,7 @@
       :subtitle="currentDrug ? `${currentDrug.drug.name} · ${currentDrug.drug.spec}` : ''"
       width="760px"
     >
-      <div v-if="batchesLoading" class="loading">
-        <div v-for="i in 4" :key="i" class="skeleton" style="height: 40px" />
-      </div>
+      <TableSkeleton v-if="batchesLoading" :rows="4" height="40px" />
       <div v-else-if="currentDrug" class="detail">
         <div class="detail-bar">
           <span class="badge badge--neutral">
@@ -661,6 +653,7 @@ import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { pharmacyApi } from '@/api'
 import { errorText } from '@/api/http'
 import type {
@@ -1126,13 +1119,6 @@ onMounted(() => {
 
 .billing-bad {
   color: var(--danger);
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 
 .clickable {

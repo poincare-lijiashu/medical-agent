@@ -63,7 +63,8 @@ public class InsuranceRepository {
     private static final RowMapper<SettlementBill> BILL_MAPPER = (rs, i) -> new SettlementBill(
             rs.getObject("id", UUID.class), rs.getString("bill_no"),
             rs.getObject("visit_id", UUID.class), rs.getObject("patient_id", UUID.class),
-            rs.getString("patient_no"), rs.getObject("member_id", UUID.class),
+            rs.getString("patient_no"), rs.getDate("service_date").toLocalDate(),
+            rs.getObject("member_id", UUID.class),
             rs.getBigDecimal("total_amount"), rs.getBigDecimal("eligible_amount"),
             rs.getBigDecimal("deductible"), rs.getBigDecimal("insurance_amount"),
             rs.getBigDecimal("self_pay_amount"), rs.getString("status"),
@@ -79,7 +80,7 @@ public class InsuranceRepository {
 
     /** 结算清单统一列清单（含作废留痕与待遇快照）。 */
     private static final String BILL_COLUMNS = """
-            id, bill_no, visit_id, patient_id, patient_no, member_id,
+            id, bill_no, visit_id, patient_id, patient_no, service_date, member_id,
             total_amount, eligible_amount, deductible, insurance_amount, self_pay_amount,
             status, detail::text AS detail, created_by, confirmed_by, confirmed_at,
             void_reason, voided_by, voided_at, snapshot_ratio, snapshot_cap,
@@ -363,30 +364,29 @@ public class InsuranceRepository {
     }
 
     /**
-     * 年度已用统筹额度：同一参保人、同一自然年内已确认（CONFIRMED）清单的统筹支付合计。
+     * 年度已用统筹额度：同一参保人、同一业务年度内已确认（CONFIRMED）清单的统筹支付合计。
      *
-     * <p>口径说明：按**确认时间**归属年度（基金实际支付年度），作废单与草稿不计入，
-     * 重算/对账时通过 {@code excludeBillId} 排除当前清单自身，保证"生成时 = 复核时 = 对账时"。
+     * <p>口径（P1-D2）：按清单的**就诊业务日期** {@code service_date} 归年，不按确认时刻。
+     * 按确认时刻归年时，12/31 生成的草稿在用"今天"估算额度、1/1 确认时"今天"已经跨年，
+     * 两侧年度桶不同 → 重算金额必然不一致 → 清单永久 409，只能作废重出。
+     * 落库的业务日期在生成时固化，生成/复核/对账读同一个值，口径才自洽。
      *
-     * <p>年度边界必须用 {@link BusinessTime#zone()} 显式换算成绝对时刻再比较：
-     * 直接 `confirmed_at >= CAST(date AS timestamptz)` 会按**数据库会话时区**解释，
-     * 会话为 UTC 时北京时间 1 月 1 日 00:00–08:00 确认的清单会被算进上一年度（第四轮 SF-06）。
+     * <p>作废单与草稿不计入；重算/对账时通过 {@code excludeBillId} 排除当前清单自身。
      */
-    public BigDecimal insuranceUsedInYear(UUID patientId, LocalDate day, UUID excludeBillId) {
-        LocalDate yearStart = LocalDate.of(day.getYear(), 1, 1);
+    public BigDecimal insuranceUsedInYear(UUID patientId, LocalDate serviceDate, UUID excludeBillId) {
+        LocalDate yearStart = LocalDate.of(serviceDate.getYear(), 1, 1);
         return jdbc.sql("""
                         SELECT COALESCE(SUM(insurance_amount), 0)
                           FROM insurance_svc.settlement_bill
                          WHERE patient_id = :patientId
                            AND status = 'CONFIRMED'
-                           AND confirmed_at >= :fromTs
-                           AND confirmed_at < :toTs
+                           AND service_date >= :fromDate
+                           AND service_date < :toDate
                            AND (CAST(:excludeId AS uuid) IS NULL OR id <> CAST(:excludeId AS uuid))
                         """)
                 .param("patientId", patientId)
-                .param("fromTs", yearStart.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
-                .param("toTs", yearStart.plusYears(1).atStartOfDay(BusinessTime.zone())
-                        .toOffsetDateTime())
+                .param("fromDate", yearStart)
+                .param("toDate", yearStart.plusYears(1))
                 .param("excludeId", excludeBillId)
                 .query(BigDecimal.class).single();
     }
@@ -412,18 +412,19 @@ public class InsuranceRepository {
     public boolean insertBill(SettlementBill b) {
         return jdbc.sql("""
                         INSERT INTO insurance_svc.settlement_bill
-                            (id, bill_no, visit_id, patient_id, patient_no, member_id,
+                            (id, bill_no, visit_id, patient_id, patient_no, service_date, member_id,
                              total_amount, eligible_amount, deductible, insurance_amount,
                              self_pay_amount, status, detail, created_by,
                              snapshot_ratio, snapshot_cap)
-                        VALUES (:id, :billNo, :visitId, :patientId, :patientNo, :memberId,
+                        VALUES (:id, :billNo, :visitId, :patientId, :patientNo, :serviceDate, :memberId,
                                 :total, :eligible, :deductible, :insurance, :selfPay, 'DRAFT',
                                 CAST(:detail AS jsonb), :createdBy, :snapshotRatio, :snapshotCap)
                         ON CONFLICT DO NOTHING
                         """)
                 .param("id", b.id()).param("billNo", b.billNo())
                 .param("visitId", b.visitId()).param("patientId", b.patientId())
-                .param("patientNo", b.patientNo()).param("memberId", b.memberId())
+                .param("patientNo", b.patientNo()).param("serviceDate", b.serviceDate())
+                .param("memberId", b.memberId())
                 .param("total", b.totalAmount()).param("eligible", b.eligibleAmount())
                 .param("deductible", b.deductible()).param("insurance", b.insuranceAmount())
                 .param("selfPay", b.selfPayAmount()).param("detail", b.detail())

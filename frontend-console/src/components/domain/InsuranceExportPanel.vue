@@ -62,9 +62,7 @@
         </div>
       </div>
 
-      <div v-if="loading" class="loading">
-        <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="loading" :rows="5" />
 
       <LoadError
         v-else-if="loadError"
@@ -229,6 +227,7 @@ import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { insuranceOpsApi } from '@/api'
 import { errorText } from '@/api/http'
 import type { InsuranceExportBatch } from '@/api/types'
@@ -472,12 +471,5 @@ onMounted(loadBatches)
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 </style>

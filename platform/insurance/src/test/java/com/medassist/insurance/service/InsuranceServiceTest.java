@@ -231,7 +231,7 @@ class InsuranceServiceTest {
 
     private SettlementBill bill(String status, long version, String snapshotRatio, String snapshotCap) {
         return new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
-                UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
+                java.time.LocalDate.now(), UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                 BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
                 status, "[]", "cashier01", null, null,
                 null, null, null,
@@ -543,7 +543,7 @@ class InsuranceServiceTest {
                 .thenReturn(Optional.of(bill(SettlementBill.DRAFT, 2L)))
                 .thenReturn(Optional.of(
                         new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
-                                UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
+                                java.time.LocalDate.now(), UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                                 BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
                                 SettlementBill.CONFIRMED, "[]", "cashier01", "cashier01", Instant.now(),
                                 null, null, null, null, null, 3L, Instant.now(), null, null, 0, "[]")));
@@ -853,7 +853,7 @@ class InsuranceServiceTest {
     private SettlementBill billWithAmounts(String status, String total, String insurance,
                                            String ratio, String cap) {
         return new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
-                UUID.randomUUID(), new BigDecimal(total), new BigDecimal(total),
+                java.time.LocalDate.now(), UUID.randomUUID(), new BigDecimal(total), new BigDecimal(total),
                 BigDecimal.ZERO, new BigDecimal(insurance),
                 new BigDecimal(total).subtract(new BigDecimal(insurance)),
                 status, "[]", "cashier01", null, null,

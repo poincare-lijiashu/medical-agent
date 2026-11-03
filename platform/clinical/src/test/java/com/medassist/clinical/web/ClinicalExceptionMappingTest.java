@@ -41,6 +41,7 @@ class ClinicalExceptionMappingTest {
         assertThat(handler.statusOf(ErrorCode.UNAUTHORIZED)).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(handler.statusOf(ErrorCode.TOO_MANY_REQUESTS)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(handler.statusOf(ErrorCode.UPSTREAM_UNAVAILABLE)).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(handler.statusOf(ErrorCode.GATEWAY_TIMEOUT)).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
     }
 
     @Test
@@ -48,7 +49,8 @@ class ClinicalExceptionMappingTest {
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {
             // 这两个本身就是"上游/系统不可用"，应为 5xx；其余业务拒绝不应触发客户端重试
-            if (code == ErrorCode.UPSTREAM_UNAVAILABLE || code == ErrorCode.INTERNAL_ERROR) {
+            if (code == ErrorCode.UPSTREAM_UNAVAILABLE || code == ErrorCode.GATEWAY_TIMEOUT
+                    || code == ErrorCode.INTERNAL_ERROR) {
                 continue;
             }
             HttpStatus status = handler.statusOf(code);

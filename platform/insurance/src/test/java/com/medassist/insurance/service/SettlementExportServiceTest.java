@@ -58,7 +58,7 @@ class SettlementExportServiceTest {
 
     private SettlementBill bill() {
         return new SettlementBill(billId, "SB001", UUID.randomUUID(), UUID.randomUUID(), "P001",
-                UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
+                LocalDate.now(), UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), new BigDecimal("10.00"), new BigDecimal("0.00"),
                 SettlementBill.CONFIRMED, DETAIL, "admin01", "yb01", Instant.now(),
                 null, null, null, new BigDecimal("1.0"), new BigDecimal("300000"), 1L, Instant.now(),
@@ -223,7 +223,7 @@ class SettlementExportServiceTest {
     @DisplayName("明细 JSON 损坏：显式失败，不导出残缺报文")
     void createRejectsCorruptDetail() {
         SettlementBill broken = new SettlementBill(billId, "SB002", UUID.randomUUID(),
-                UUID.randomUUID(), "P002", UUID.randomUUID(), new BigDecimal("10.00"),
+                UUID.randomUUID(), "P002", LocalDate.now(), UUID.randomUUID(), new BigDecimal("10.00"),
                 new BigDecimal("10.00"), new BigDecimal("0.00"), new BigDecimal("10.00"),
                 new BigDecimal("0.00"), SettlementBill.CONFIRMED, "not-json", "admin01", "yb01",
                 Instant.now(), null, null, null, BigDecimal.ONE, new BigDecimal("300000"), 1L,

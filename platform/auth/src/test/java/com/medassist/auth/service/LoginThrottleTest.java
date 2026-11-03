@@ -31,7 +31,8 @@ class LoginThrottleTest {
     @Test
     void passesWhenBelowThresholds() {
         TokenRepository tokens = mock(TokenRepository.class);
-        when(tokens.countRecentFailuresForUser(anyString(), any(Instant.class))).thenReturn(4L);
+        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
+                .thenReturn(4L);
         when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(29L);
 
         assertThatCode(() -> new LoginThrottle(tokens, PROPS).check("doctor01", "10.0.0.1"))
@@ -41,7 +42,8 @@ class LoginThrottleTest {
     @Test
     void accountThresholdReturns429() {
         TokenRepository tokens = mock(TokenRepository.class);
-        when(tokens.countRecentFailuresForUser(anyString(), any(Instant.class))).thenReturn(5L);
+        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
+                .thenReturn(5L);
         when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(0L);
 
         assertThatThrownBy(() -> new LoginThrottle(tokens, PROPS).check("doctor01", "10.0.0.1"))
@@ -55,12 +57,26 @@ class LoginThrottleTest {
     void ipThresholdIsHigherThanAccountThreshold() {
         TokenRepository tokens = mock(TokenRepository.class);
         // 账号未超限，但同 IP 已达 30 次
-        when(tokens.countRecentFailuresForUser(anyString(), any(Instant.class))).thenReturn(0L);
+        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
+                .thenReturn(0L);
         when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(30L);
 
         assertThatThrownBy(() -> new LoginThrottle(tokens, PROPS).check("nurse99", "10.0.0.1"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("网络");
+    }
+
+    @Test
+    void attackerFromAnotherIpCannotLockVictimAccount() {
+        // P1-S3：账号维度按"账号 + IP"计数；攻击者在别的 IP 上把账号打满，
+        // 不应影响受害者自己 IP 的登录（否则就是零成本账号锁定攻击）。
+        TokenRepository tokens = mock(TokenRepository.class);
+        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
+                .thenReturn(0L);
+        when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(0L);
+
+        assertThatCode(() -> new LoginThrottle(tokens, PROPS).check("doctor01", "10.9.9.9"))
+                .doesNotThrowAnyException();
     }
 
     @Test

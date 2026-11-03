@@ -241,7 +241,7 @@ public class AuthService {
      */
     public void revokeSession(UUID userId, UUID sessionId, String actor) {
         if (!tokens.revokeSession(userId, sessionId)) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "会话不存在或已失效");
+            throw new BusinessException(ErrorCode.SESSION_NOT_FOUND, "会话不存在或已失效");
         }
         audit(actor, "SESSION_REVOKE", userId.toString(),
                 Map.of("sessionId", sessionId.toString()));

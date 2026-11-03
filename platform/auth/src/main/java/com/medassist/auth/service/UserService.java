@@ -41,6 +41,12 @@ public class UserService {
 
     private static final String ADMIN_ROLE = "ADMIN";
 
+    /** 常见弱口令（小写）；只收真正高频、且满足"8 位 + 字母数字"因而能绕过组合规则的。 */
+    private static final Set<String> WEAK_PASSWORDS = Set.of(
+            "12345678", "123456789", "1234567890", "password", "password1", "passw0rd1",
+            "abc12345", "a1234567", "qwerty12", "admin123", "administrator", "11111111",
+            "88888888", "00000000", "hospital1", "doctor123", "nurse123", "medassist1");
+
     /** 单账号最多绑定的临床科室数（防止把"全院"用科室列表拼出来）。 */
     private static final int MAX_DEPTS_PER_USER = 20;
 
@@ -66,7 +72,7 @@ public class UserService {
     public UserResp create(CreateUserReq req, String actor) {
         String username = req.username().trim();
         if (users.existsByUsername(username)) {
-            throw new BusinessException(ErrorCode.CONFLICT, "用户名已存在：" + username);
+            throw new BusinessException(ErrorCode.USER_DUPLICATE, "用户名已存在：" + username);
         }
         validatePassword(req.password(), username);
 
@@ -75,7 +81,7 @@ public class UserService {
         requireDeptBinding(roles, deptIds);
         String orgCode = blankToNull(req.orgCode());
         if (orgCode != null && !rbac.orgExists(orgCode)) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "科室不存在或已停用：" + orgCode);
+            throw new BusinessException(ErrorCode.ORG_NOT_FOUND, "科室不存在或已停用：" + orgCode);
         }
 
         UUID id = UUID.randomUUID();
@@ -103,18 +109,18 @@ public class UserService {
 
     public UserResp detail(UUID id) {
         UserAccount u = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         return toResp(u);
     }
 
     @Transactional
     public UserResp update(UUID id, UpdateUserReq req, String actor) {
         UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
 
         String orgCode = blankToNull(req.orgCode());
         if (orgCode != null && !rbac.orgExists(orgCode)) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "科室不存在或已停用：" + orgCode);
+            throw new BusinessException(ErrorCode.ORG_NOT_FOUND, "科室不存在或已停用：" + orgCode);
         }
         // null 表示"本次不改科室绑定"；空数组表示清空（临床角色会在下面被拒绝）
         List<UUID> deptIds = req.deptIds() == null ? null : normalizeDeptIds(req.deptIds());
@@ -140,14 +146,14 @@ public class UserService {
     @Transactional
     public UserResp disable(UUID id, String actor) {
         UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         if (!current.active()) {
             return toResp(current);  // 幂等：已停用直接返回
         }
         // 保护规则：不能停用最后一个启用状态的 ADMIN
         List<String> roles = users.rolesOf(id);
         if (roles.contains(ADMIN_ROLE) && countActiveAdmins() <= 1) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "不能停用系统中最后一个启用的管理员账号");
+            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED, "不能停用系统中最后一个启用的管理员账号");
         }
         if (!users.updateStatus(id, UserAccount.STATUS_DISABLED, current.version())) {
             throw new BusinessException(ErrorCode.CONFLICT);
@@ -162,7 +168,7 @@ public class UserService {
     @Transactional
     public UserResp enable(UUID id, String actor) {
         UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         if (current.active()) {
             return toResp(current);
         }
@@ -176,13 +182,13 @@ public class UserService {
     @Transactional
     public UserResp assignRoles(UUID id, List<String> roleCodes, String actor) {
         UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         Set<String> roles = normalizeRoles(roleCodes);
 
         // 保护规则：移除最后一个 ADMIN 的管理员角色同样会锁死系统
         List<String> before = users.rolesOf(id);
         if (before.contains(ADMIN_ROLE) && !roles.contains(ADMIN_ROLE) && countActiveAdmins() <= 1) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "不能移除系统中最后一个管理员的角色");
+            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED, "不能移除系统中最后一个管理员的角色");
         }
         users.replaceRoles(id, roles);
         audit(actor, "USER_ASSIGN_ROLES", id.toString(), Map.of(
@@ -193,7 +199,7 @@ public class UserService {
     @Transactional
     public void resetPassword(UUID id, String newPassword, String actor) {
         UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         validatePassword(newPassword, current.username());
         users.updatePassword(id, hasher.encode(newPassword));
         // 改密必须踢掉既有会话：否则被盗的 refresh token 仍能在有效期内换新令牌，等于改密无效。
@@ -215,7 +221,7 @@ public class UserService {
 
     // ---------------------------------------------------------------- 内部方法
 
-    /** 密码强度校验：≥8 位、同时含字母与数字、不得与用户名相同。 */
+    /** 密码强度校验：≥8 位、同时含字母与数字、不得与用户名相同、不得是常见弱口令。 */
     private void validatePassword(String password, String username) {
         if (password == null || password.length() < 8) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码长度不能少于 8 位");
@@ -227,6 +233,15 @@ public class UserService {
         }
         if (password.equalsIgnoreCase(username)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码不能与用户名相同");
+        }
+        // P1-S2：长度 + 字母数字的组合规则拦不住"Password1""hospital1"这类默认口令，
+        // 医院现场恰恰最常见；这里用小而准的黑名单兜底（不引入额外依赖）。
+        if (WEAK_PASSWORDS.contains(password.toLowerCase(java.util.Locale.ROOT))) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "密码过于常见（如 Password1、admin123），请更换为不易猜测的组合");
+        }
+        if (password.chars().distinct().count() == 1) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码不能是单一字符的重复");
         }
     }
 
@@ -242,7 +257,7 @@ public class UserService {
             }
             String code = raw.trim().toUpperCase();
             if (rbac.findRole(code).isEmpty()) {
-                throw new BusinessException(ErrorCode.VALIDATION_FAILED, "角色不存在：" + raw);
+                throw new BusinessException(ErrorCode.ROLE_NOT_FOUND, "角色不存在：" + raw);
             }
             normalized.add(code);
         }

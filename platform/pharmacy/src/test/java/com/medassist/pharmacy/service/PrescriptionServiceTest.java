@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -667,7 +668,7 @@ class PrescriptionServiceTest {
         verify(repo).insertDispense(org.mockito.ArgumentMatchers.argThat(
                 d -> Dispense.BILLING_PENDING.equals(d.billingStatus())));
         verify(chargeClient).charge(eq(visitId), any(UUID.class), any(), eq("pharm01"));
-        verify(repo).updateDispenseBillingStatus(any(UUID.class), eq(Dispense.BILLING_CHARGED));
+        verify(repo).updateDispenseBillingStatus(any(UUID.class), eq(Dispense.BILLING_CHARGED), anyList());
     }
 
     @Test
@@ -695,7 +696,7 @@ class PrescriptionServiceTest {
 
         service.dispense(rxId, null, "pharm01");
 
-        verify(repo).updateDispenseBillingStatus(any(UUID.class), eq(Dispense.BILLING_CHARGE_FAILED));
+        verify(repo).updateDispenseBillingStatus(any(UUID.class), eq(Dispense.BILLING_CHARGE_FAILED), anyList());
         verify(repo).logChange(eq("pharm01"), eq("DISPENSE_CHARGE_FAILED"), eq("DISPENSE"),
                 anyString(), anyString());
     }
@@ -733,7 +734,7 @@ class PrescriptionServiceTest {
         // 累计已退 = 单价 12.50 × 已退 2 = 25.00
         verify(chargeClient).refund(eq(itemId), org.mockito.ArgumentMatchers.eq(new BigDecimal("25.00")),
                 anyString(), eq("pharm01"));
-        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_CHARGED));
+        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_CHARGED), anyList());
     }
 
     @Test
@@ -773,7 +774,7 @@ class PrescriptionServiceTest {
                 org.mockito.ArgumentMatchers.eq(new BigDecimal("62.50")),
                 org.mockito.ArgumentMatchers.eq(new BigDecimal("25.00")),
                 anyString(), eq("pharm01"), any());
-        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_NONE));
+        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_NONE), anyList());
         verify(chargeClient, never()).refund(any(), any(), anyString(), anyString());
     }
 
@@ -807,7 +808,7 @@ class PrescriptionServiceTest {
 
         service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "整单退回", UUID.randomUUID()), "pharm01");
 
-        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_REFUND_FAILED));
+        verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_REFUND_FAILED), anyList());
     }
 
     // ---------------------------------------------------------------- 前置审方（用药安全）

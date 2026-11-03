@@ -70,9 +70,7 @@
         </div>
       </div>
 
-      <div v-if="loading" class="loading">
-        <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="loading" :rows="5" />
 
       <LoadError
         v-else-if="loadError"
@@ -251,9 +249,7 @@
       :subtitle="detail?.application.applicationNo"
       width="940px"
     >
-      <div v-if="detailLoading" class="loading">
-        <div v-for="i in 6" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="detailLoading" :rows="6" />
 
       <div v-else-if="detail && app" class="detail">
         <div class="detail-bar">
@@ -607,6 +603,7 @@ import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { techApi } from '@/api'
 import { ApiError, errorText } from '@/api/http'
 import type {
@@ -1095,13 +1092,6 @@ onMounted(load)
 
 .overdue-tag {
   margin-left: 6px;
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 
 .clickable {

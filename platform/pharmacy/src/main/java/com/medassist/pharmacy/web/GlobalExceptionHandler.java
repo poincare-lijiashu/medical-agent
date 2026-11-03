@@ -29,13 +29,16 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
-                 PRESCRIPTION_STATUS_INVALID, DRUG_RETURN_EXCEEDS,
+                 PRESCRIPTION_STATUS_INVALID,
                  NARCOTIC_PRESCRIBER_STATE_INVALID,
                  ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED, NARCOTIC_PRESCRIBER_REQUIRED, NARCOTIC_AMPOULE_OUTSTANDING,
-                 NARCOTIC_AMPOULE_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 NARCOTIC_AMPOULE_INVALID,
+                 // P1-D8：退药数量超过已发数量是"请求内容不合法"，不是状态冲突（422）
+                 DRUG_RETURN_EXCEEDS -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

@@ -94,7 +94,8 @@ public final class InsuranceModel {
      * 确认复核与对账都按快照重算，避免参保参数中途调整导致误判。
      */
     public record SettlementBill(UUID id, String billNo, UUID visitId, UUID patientId,
-                                 String patientNo, UUID memberId, BigDecimal totalAmount,
+                                 String patientNo, java.time.LocalDate serviceDate,
+                                 UUID memberId, BigDecimal totalAmount,
                                  BigDecimal eligibleAmount, BigDecimal deductible,
                                  BigDecimal insuranceAmount, BigDecimal selfPayAmount,
                                  String status, String detail, String createdBy,

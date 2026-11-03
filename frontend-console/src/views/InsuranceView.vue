@@ -56,9 +56,7 @@
           </button>
         </div>
 
-        <div v-if="memberLoading" class="loading">
-          <div v-for="i in 2" :key="i" class="skeleton" style="height: 40px" />
-        </div>
+        <TableSkeleton v-if="memberLoading" :rows="2" height="40px" />
 
         <div v-else-if="!member" class="member-empty">
           <span class="muted">该患者尚未登记参保信息；无有效参保时无法生成医保结算清单。</span>
@@ -117,9 +115,7 @@
           </button>
         </div>
 
-        <div v-if="billLoading" class="loading">
-          <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-        </div>
+        <TableSkeleton v-if="billLoading" :rows="5" />
 
         <LoadError
           v-else-if="billError"
@@ -175,9 +171,7 @@
         </div>
       </div>
 
-      <div v-if="listLoading" class="loading">
-        <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="listLoading" :rows="5" />
 
       <EmptyState
         v-else-if="filteredBills.length === 0"
@@ -413,9 +407,7 @@
       :subtitle="ledgerBill?.bill.billNo"
       width="940px"
     >
-      <div v-if="ledgerLoading" class="loading">
-        <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="ledgerLoading" :rows="5" />
       <div v-else-if="ledgerBill" class="detail">
         <div class="detail-bar">
           <StatusPill :value="ledgerBill.bill.status" />
@@ -469,6 +461,7 @@ import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import InsuranceBillDetail from '@/components/domain/InsuranceBillDetail.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
 import { insuranceApi } from '@/api'
@@ -886,13 +879,6 @@ onMounted(loadBills)
   gap: var(--s3);
   flex-wrap: wrap;
   font-size: var(--fs-12);
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 
 .reconcile {

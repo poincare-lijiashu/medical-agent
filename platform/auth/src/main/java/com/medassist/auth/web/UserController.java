@@ -41,6 +41,8 @@ public class UserController {
     private static final String UPDATE = "auth:user:update";
     private static final String DISABLE = "auth:user:disable";
     private static final String ASSIGN_ROLE = "auth:role:assign";
+    /** 改密是独立权限点（P1-S1）：账号维护权不应隐含"替他人设置密码"。 */
+    private static final String RESET_PASSWORD = "auth:user:reset_password";
 
     private final UserService service;
 
@@ -120,7 +122,7 @@ public class UserController {
             @Valid @RequestBody ResetPasswordReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
-        Permissions.require(permissions, UPDATE);
+        Permissions.require(permissions, RESET_PASSWORD);
         service.resetPassword(id, req.newPassword(), actor);
         return ApiResponse.ok(null);
     }

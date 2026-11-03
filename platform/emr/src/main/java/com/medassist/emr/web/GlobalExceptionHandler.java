@@ -31,6 +31,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case VALIDATION_FAILED, EMR_SIGN_POLICY_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

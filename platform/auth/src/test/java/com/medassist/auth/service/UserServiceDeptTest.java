@@ -67,7 +67,8 @@ class UserServiceDeptTest {
     }
 
     private CreateUserReq req(List<String> roles, List<UUID> deptIds) {
-        return new CreateUserReq("doctor01", "Abc12345", "张医生", "E1001", null,
+        // 口令需避开 P1-S2 的弱口令黑名单（Abc12345 已被列为常见口令）
+        return new CreateUserReq("doctor01", "Zx7Kp2Qm", "张医生", "E1001", null,
                 deptIds, roles);
     }
 

@@ -35,7 +35,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 
 const props = withDefaults(
@@ -62,10 +62,40 @@ function onBackdrop() {
 }
 
 // 打开时把焦点移进对话框（可访问性：键盘用户不被困在背景）
+// P1-F7：关闭时归还焦点并解锁 body 滚动；此前关闭后焦点留在已卸载节点上，
+// 键盘用户会掉回文档开头，背景同时仍可滚动。
+let openCount = 0
+let savedBodyOverflow = ''
+let previousFocus: HTMLElement | null = null
+
+function lockScroll() {
+  if (openCount === 0) {
+    savedBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+  }
+  openCount += 1
+}
+
+function unlockScroll() {
+  openCount = Math.max(0, openCount - 1)
+  if (openCount === 0) {
+    document.body.style.overflow = savedBodyOverflow
+  }
+}
+
 watch(
   () => props.modelValue,
   async (open) => {
-    if (!open) return
+    if (!open) {
+      unlockScroll()
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus()
+      }
+      previousFocus = null
+      return
+    }
+    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    lockScroll()
     await nextTick()
     const target = panel.value?.querySelector<HTMLElement>(
       'input, select, textarea, button, [href], [tabindex]:not([tabindex="-1"])',
@@ -73,6 +103,13 @@ watch(
     target?.focus()
   },
 )
+
+// 组件在打开状态被卸载（路由切换/父级 v-if）时同样要解锁，否则 body 永久不可滚动
+onBeforeUnmount(() => {
+  if (props.modelValue) {
+    unlockScroll()
+  }
+})
 
 // 简易焦点陷阱：Tab 到末尾回到首个可聚焦元素
 function onTab(e: KeyboardEvent) {

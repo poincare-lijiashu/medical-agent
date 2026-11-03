@@ -36,6 +36,7 @@ class ExceptionMappingContractTest {
         assertThat(handler.statusOf(ErrorCode.CONFLICT)).isEqualTo(HttpStatus.CONFLICT);
         assertThat(handler.statusOf(ErrorCode.TOO_MANY_REQUESTS)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(handler.statusOf(ErrorCode.UPSTREAM_UNAVAILABLE)).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(handler.statusOf(ErrorCode.GATEWAY_TIMEOUT)).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
     }
 
     @Test
@@ -45,7 +46,8 @@ class ExceptionMappingContractTest {
             // 依赖/系统不可用类允许 5xx（UPSTREAM_UNAVAILABLE / KB_EMBEDDING_UNAVAILABLE 等），
             // 其余业务拒绝被映射成 5xx 会让前端误判为系统故障并重试
             String name = code.name();
-            if (name.endsWith("UNAVAILABLE") || code == ErrorCode.INTERNAL_ERROR) {
+            if (name.endsWith("UNAVAILABLE") || name.endsWith("TIMEOUT")
+                    || code == ErrorCode.INTERNAL_ERROR) {
                 continue;
             }
             assertThat(handler.statusOf(code).is5xxServerError())

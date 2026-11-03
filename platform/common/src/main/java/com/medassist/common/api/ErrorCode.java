@@ -24,6 +24,16 @@ public enum ErrorCode {
     /** 网关 response-timeout 到期，或下游在超时预算内未返回。 */
     GATEWAY_TIMEOUT(50400, "服务响应超时，请稍后重试；若持续出现请联系信息科"),
 
+    // ---- 账号与权限（40xxx）----
+    // P1-D6：此前账号/角色/科室/会话不存在统一落到通用 40400，客户端无法按码分支；
+    // 与各域 41xxx–49xxx 的专属码惯例对齐后，前端可稳定区分"账号不存在"与"会话过期"。
+    USER_NOT_FOUND(40401, "未找到该账号"),
+    ROLE_NOT_FOUND(40402, "未找到该角色，或该角色已停用"),
+    ORG_NOT_FOUND(40403, "未找到该科室，或该科室已停用"),
+    SESSION_NOT_FOUND(40404, "会话不存在或已失效"),
+    USER_DUPLICATE(40409, "该用户名已存在"),
+    LAST_ADMIN_PROTECTED(40410, "不能停用或降级系统中最后一个启用的管理员账号"),
+
     // ---- EMPI 患者主索引（41xxx）----
     PATIENT_NOT_FOUND(41401, "未找到该患者"),
     PATIENT_DUPLICATE(41409, "该患者已存在，请核对证件号后使用已有档案"),

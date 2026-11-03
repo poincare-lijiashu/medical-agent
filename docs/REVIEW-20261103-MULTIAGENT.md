@@ -33,6 +33,33 @@
 | 编号 | 状态 | 说明 |
 |---|---|---|
 | insurance 行级范围 | 降级为设计取舍 | 临床快照不返回科室、`settlement_bill` 无 dept 列；医保窗口本就是全院职能岗，按科室隔离会阻碍跨科补结算。若后续强制要求，需 `clinical` 内部接口补 `deptId` + Flyway 补列，成本较高，暂记录不改 |
+| P1-S4 | 待办 | 审计明细脱敏 + 更新类 before/after 摘要：涉及 empi/tech/emr/insurance 四域写审计的调用点，需先定义统一脱敏工具与快照口径，排下一批 |
+| P1-S6 | 待办 | `/api/v1/**` 双栈收敛（依赖 Python 兼容层下线排期）+ PG 备份方案（pg_dump/Velero 属部署交付物，需与运维确认 RPO/RTO 后落 `deploy/`） |
+| P1-F2 | 待办 | `<KpiRow>` + `useStatusCounts` 抽取：属纯重构，需同时改 4 个视图的 KPI 计算口径，风险高于收益，排在前端下一轮 |
+| P1-F4 / F6 | 待办 | 状态枚举收敛到 `api/types.ts` 联合类型、StatusPill 按域拆分：`ACCEPTED` 等跨域同名状态需先统一业务命名，避免改错文案，单独一轮处理 |
+
+### 已修复（2026-11-03 第五批，P1 共 15 条）
+
+| 编号 | 复核结论 | 落地 | 验证 |
+|---|---|---|---|
+| P1-D1 | 成立 | `InsuranceService.assertChargesUnchanged` 由"只比总额+统筹"改为全口径：总额/纳入额/起付线/统筹/自付 + 明细行指纹（项目编码+金额+类别排序）；历史空明细跳过行级比对 | insurance 142 全绿 |
+| P1-D2 | 成立 | `settlement_bill` 新增 `service_date`（Flyway V18，按 `created_at` 业务时区回填并置 NOT NULL）；生成时固化就诊业务日期，确认/对账都读同一值，年度封顶累计改按 `service_date` 归年 | 迁移实跑成功；insurance 142 全绿 |
+| P1-D3 | 成立 | `updateDispenseBillingStatus` 增加"允许来源状态"CAS（`billing_status = ANY(...)`）；服务层按 `CHARGEABLE_FROM` / `REFUNDABLE_FROM` / `ORDER_REFUNDABLE_FROM` 三组来源回写，CAS 未命中只告警不改写 | pharmacy 93 全绿（7 处 mock 适配） |
+| P1-D4 | 成立 | 新增 `V11__billing_check_constraints.sql`：用幂等 DO 块把 V2 的内联 CHECK 重命名为稳定约束名，缺约束时显式补 `ADD CONSTRAINT`（V2 已应用不可改，改的是"缺失兜底"） | 迁移实跑成功 |
+| P1-D5 | 成立 | 新增 `tech V10`：`ix_critical_report ON critical_value(report_id)`，覆盖 `listCriticalValuesByReport` 定向查询 | 编译 + tech 68 全绿 |
+| P1-D6 | 成立 | `ErrorCode` 新增 40xxx 段（USER_NOT_FOUND/ROLE_NOT_FOUND/ORG_NOT_FOUND/SESSION_NOT_FOUND/USER_DUPLICATE/LAST_ADMIN_PROTECTED）；auth 服务改用专属码、HTTP 语义保持不变 | auth 43 全绿 + 契约测试补 6 条断言 |
+| P1-D7 | 成立 | 8 个域 `statusOf` 补 `GATEWAY_TIMEOUT → 504`（此前落 `default → 400`）；契约测试的"业务码不得落 5xx"豁免项同步加 TIMEOUT | 8 域契约测试全绿 |
+| P1-D8 | 成立 | `DRUG_RETURN_EXCEEDS` 由 409 改 422（请求内容不合法，非状态冲突），契约测试加断言 | pharmacy 93 全绿 |
+| P1-S1 | 成立 | 改密改用独立权限点 `auth:user:reset_password`；新增 auth V39 迁移建权限并把"已持有 auth:user:update 的角色"一并授予（升级后不出现"突然不能改密"） | auth 43 全绿 |
+| P1-S2 | 成立 | BCrypt 强度 10→12；`needsUpgrade` 同时识别"低于当前强度"的旧哈希（登录成功后在线重写）；密码策略补常见弱口令黑名单 + 单一字符重复拒绝 | auth 43 全绿（1 处测试口令替换） |
+| P1-S3 | 成立 | 登录限流账号维度改为"账号 + 来源 IP"（新增 `countRecentFailuresForUserAndIp`），移除纯 username 全局计数——攻击者无法再靠连错 5 次锁死他人账号；IP 维度阈值不变 | 回归 +1（`attackerFromAnotherIpCannotLockVictimAccount`），auth 43 全绿 |
+| P1-S5 | 成立 | 新增 `DevCredentialGuardAutoConfiguration`：生产/预发布仍用 `PG_PASSWORD=medagent123`（或启用 Nacos 且口令为 `nacos`）时**拒绝启动**，非生产仅告警 | 全模块编译 + 单测全绿 |
+| P1-F1 | 成立 | 新增 `components/ui/TableSkeleton.vue`（`rows`/`height` 可配），替换 7 个视图共 17 处骨架块 | typecheck + build 全绿 |
+| P1-F3 | 成立 | `.loading` 样式上提 `styles/base.css`，删除 7 个视图的重复 scoped 规则 | typecheck + build 全绿 |
+| P1-F5 | 成立 | `types.ts`：`UserAccount.status` 补 `'LOCKED'`；`InsuranceMemberHistory` 的 `insuranceType`/`status` 收敛为联合类型 | typecheck 全绿 |
+| P1-F7 | 成立 | `AppModal` 记录打开前焦点、关闭时归还；打开锁 `body` 滚动（引用计数支持嵌套）、卸载时兜底解锁 | typecheck + build 全绿 |
+
+**第五批实测**：后端 `common 104 / auth 43 / clinical 325 / empi 44 / pharmacy 93 / tech 68 / emr 117 / insurance 142 / kb 63 = 999 项全绿`；前端 `typecheck` + `build` 全绿。
 
 ### 已修复（2026-11-03 第四批，P0-S5）
 

@@ -38,10 +38,17 @@ public class PasswordHasher {
      * 同时把单次校验的 CPU 上限压到毫秒级——否则攻击者可借伪造哈希把登录接口变成 CPU 放大器（S3）。
      */
     private static final int MAX_ITERATIONS = 1_000_000;
+    /**
+     * BCrypt 强度（P1-S2）：默认 10 在现代 GPU 上已偏弱，提到 12（单次校验约 250ms）。
+     *
+     * <p>只影响**新编码**；旧哈希按其自身 cost 校验，登录成功后由 {@link #needsUpgrade}
+     * 触发在线重写，无需强制全量重置密码。
+     */
+    private static final int BCRYPT_STRENGTH = 12;
 
-    private final BCryptPasswordEncoder bcrypt = new BCryptPasswordEncoder();
+    private final BCryptPasswordEncoder bcrypt = new BCryptPasswordEncoder(BCRYPT_STRENGTH);
 
-    /** 新密码哈希（BCrypt，强度 10，随机盐）。 */
+    /** 新密码哈希（BCrypt，强度 12，随机盐）。 */
     public String encode(String raw) {
         return bcrypt.encode(raw);
     }
@@ -60,9 +67,32 @@ public class PasswordHasher {
         return false;
     }
 
-    /** 是否为需要升级的旧格式哈希（登录成功后应重写为 BCrypt）。 */
+    /**
+     * 是否为需要升级的哈希：非 BCrypt（历史 PBKDF2），或 BCrypt 强度低于当前标准。
+     *
+     * <p>登录成功后按此重写，旧账号在无感的前提下逐步收敛到强度 12。
+     */
     public boolean needsUpgrade(String stored) {
-        return stored != null && !stored.startsWith(BCrypt_PREFIX);
+        if (stored == null || stored.isBlank()) {
+            return false;
+        }
+        if (!stored.startsWith(BCrypt_PREFIX)) {
+            return true;
+        }
+        return bcryptCost(stored) < BCRYPT_STRENGTH;
+    }
+
+    /** 从 {@code $2a$12$...} 解析强度；无法解析时按 0 处理（视为需要升级）。 */
+    private static int bcryptCost(String stored) {
+        String[] parts = stored.split("\\$");
+        if (parts.length < 3) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(parts[2]);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private boolean verifyPbkdf2(String raw, String stored) {

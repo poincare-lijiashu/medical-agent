@@ -185,17 +185,24 @@ public class TokenRepository {
                 .update();
     }
 
-    /** 窗口内同一账号的失败次数。 */
-    public long countRecentFailuresForUser(String username, Instant since) {
+    /**
+     * 窗口内"同一账号 + 同一来源 IP"的失败次数（P1-S3）。
+     *
+     * <p>账号维度必须与 IP 组合：只按 username 全局计数时，任何人从任意地址
+     * 连错 5 次就能把别人的账号锁死（5 分钟内无法登录），是低成本拒绝服务。
+     */
+    public long countRecentFailuresForUserAndIp(String username, String clientIp, Instant since) {
         return jdbc.sql("""
                         SELECT count(*)
                           FROM auth_svc.login_attempt
                          WHERE ts >= :since
                            AND success = false
                            AND lower(username) = lower(:username)
+                           AND client_ip = :ip
                         """)
                 .param("since", java.sql.Timestamp.from(since))
                 .param("username", username)
+                .param("ip", clientIp)
                 .query(Long.class)
                 .single();
     }

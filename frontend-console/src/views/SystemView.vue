@@ -78,9 +78,7 @@
           </button>
         </div>
 
-        <div v-if="usersLoading" class="loading">
-          <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-        </div>
+        <TableSkeleton v-if="usersLoading" :rows="5" />
 
         <LoadError
           v-else-if="usersError"
@@ -205,9 +203,7 @@
           <button class="btn" type="button" :disabled="auditLoading" @click="clearAudit">清空条件</button>
         </div>
 
-        <div v-if="auditLoading" class="loading">
-          <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-        </div>
+        <TableSkeleton v-if="auditLoading" :rows="5" />
 
         <LoadError
           v-else-if="auditError"
@@ -452,6 +448,7 @@ import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { clinicalApi, systemApi } from '@/api'
 import { errorText } from '@/api/http'
 import type { AuditEvent, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
@@ -878,13 +875,6 @@ onMounted(() => {
   padding: var(--s3) var(--card-pad);
   border-top: 1px solid var(--line);
   font-size: var(--fs-12);
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 
 .form-grid {

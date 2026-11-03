@@ -1,3 +1,4 @@
 com.medassist.common.config.InternalAuthAutoConfiguration
 com.medassist.common.config.JdbcNonceStoreAutoConfiguration
+com.medassist.common.config.DevCredentialGuardAutoConfiguration
 com.medassist.common.config.HttpBodyLimitAutoConfiguration

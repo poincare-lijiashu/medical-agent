@@ -63,9 +63,7 @@
             <AppIcon name="upload" :size="13" /> 导入分组
           </button>
         </div>
-        <div v-if="loading" class="loading">
-          <div v-for="i in 3" :key="i" class="skeleton" style="height: 38px" />
-        </div>
+        <TableSkeleton v-if="loading" :rows="3" height="38px" />
         <EmptyState
           v-else-if="groups.length === 0"
           art="orders"
@@ -108,9 +106,7 @@
             <AppIcon name="upload" :size="13" /> 导入规则
           </button>
         </div>
-        <div v-if="loading" class="loading">
-          <div v-for="i in 3" :key="i" class="skeleton" style="height: 38px" />
-        </div>
+        <TableSkeleton v-if="loading" :rows="3" height="38px" />
         <EmptyState
           v-else-if="rules.length === 0"
           art="orders"
@@ -354,6 +350,7 @@ import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
 import { insuranceGroupingApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -859,13 +856,6 @@ onMounted(() => {
 
 .clickable {
   cursor: pointer;
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 
 .empty-inline {

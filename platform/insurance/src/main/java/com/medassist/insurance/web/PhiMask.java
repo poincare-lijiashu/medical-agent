@@ -23,7 +23,7 @@ final class PhiMask {
             return b;
         }
         return new SettlementBill(b.id(), b.billNo(), b.visitId(), b.patientId(),
-                scope.maskPatientNo(b.patientNo()), b.memberId(), b.totalAmount(),
+                scope.maskPatientNo(b.patientNo()), b.serviceDate(), b.memberId(), b.totalAmount(),
                 b.eligibleAmount(), b.deductible(), b.insuranceAmount(), b.selfPayAmount(),
                 b.status(), b.detail(), b.createdBy(), b.confirmedBy(), b.confirmedAt(),
                 b.voidReason(), b.voidedBy(), b.voidedAt(), b.snapshotRatio(), b.snapshotCap(),

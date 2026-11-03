@@ -1088,6 +1088,17 @@ samp {
   animation: none;
 }
 
+/*
+ * 加载骨架容器（P1-F3）：此规则此前在每个视图 scoped 样式里逐字重复 7 次，
+ * 上提后各视图只需渲染 .loading + .skeleton，不再各自维护。
+ */
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s4);
+}
+
 .empty {
   display: grid;
   place-items: center;

@@ -446,7 +446,8 @@ public class InsuranceService {
                 ? List.of() : diagnosisSummary.diagnoses();
 
         Optional<SettlementBill> existing = repo.lockBillByVisit(visitId);
-        BigDecimal capUsed = repo.insuranceUsedInYear(summary.patientId(), BusinessTime.today(),
+        // P1-D2：封顶归年按就诊业务日期，而不是"今天"（跨年生成/确认才不会被判成费用变化）
+        BigDecimal capUsed = repo.insuranceUsedInYear(summary.patientId(), serviceDate,
                 existing.map(SettlementBill::id).orElse(null));
         Computation c = calculate(summary.lines(), resolver(), member, capUsed);
         if (c.lines().isEmpty()) {
@@ -481,7 +482,7 @@ public class InsuranceService {
                     .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
         } else {
             SettlementBill created = new SettlementBill(UUID.randomUUID(), repo.nextBillNo(),
-                    visitId, summary.patientId(), summary.patientNo(), member.id(),
+                    visitId, summary.patientId(), summary.patientNo(), serviceDate, member.id(),
                     c.total(), c.eligible(), c.deductible(), c.insurance(), c.selfPay(),
                     SettlementBill.DRAFT, detail, actor, null, null,
                     null, null, null, member.reimbursementRatio(), member.cap(), 0L, null,
@@ -601,7 +602,7 @@ public class InsuranceService {
      */
     private Computation recompute(SettlementBill bill, Member member) {
         return calculate(clinicalClient.charges(bill.visitId()).lines(), resolver(), member,
-                repo.insuranceUsedInYear(bill.patientId(), BusinessTime.today(), bill.id()));
+                repo.insuranceUsedInYear(bill.patientId(), bill.serviceDate(), bill.id()));
     }
 
     /**
@@ -622,14 +623,45 @@ public class InsuranceService {
             // 历史清单 + 参保已删除：无法复核，不阻断（但要靠对账接口人工核对）
             return;
         }
-        boolean changed = fresh.total().compareTo(bill.totalAmount()) != 0
-                || fresh.insurance().compareTo(bill.insuranceAmount()) != 0;
-        if (changed) {
+        // P1-D1：此前只比总额与统筹，纳入额/起付线/自付与明细行分布变化都能"带病确认"，
+        // 报盘快照与临床实际收费不一致时省局回执才发现。这里按全口径比对。
+        java.util.List<String> mismatch = new java.util.ArrayList<>();
+        if (fresh.total().compareTo(bill.totalAmount()) != 0) {
+            mismatch.add("总额");
+        }
+        if (fresh.eligible().compareTo(bill.eligibleAmount()) != 0) {
+            mismatch.add("纳入额");
+        }
+        if (fresh.deductible().compareTo(bill.deductible()) != 0) {
+            mismatch.add("起付线");
+        }
+        if (fresh.insurance().compareTo(bill.insuranceAmount()) != 0) {
+            mismatch.add("统筹支付");
+        }
+        if (fresh.selfPay().compareTo(bill.selfPayAmount()) != 0) {
+            mismatch.add("个人自付");
+        }
+        List<BillLine> stored = parse(bill.detail());
+        // 历史清单明细为空（早期只存金额）时不做行级比对，避免把存量草稿全部卡死
+        if (!stored.isEmpty() && !lineKeys(stored).equals(lineKeys(fresh.lines()))) {
+            mismatch.add("收费明细行");
+        }
+        if (!mismatch.isEmpty()) {
             throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
-                    "费用或参保待遇已变化（清单实收 " + bill.totalAmount().toPlainString()
+                    "费用或参保待遇已变化（" + String.join("、", mismatch)
+                            + "；清单实收 " + bill.totalAmount().toPlainString()
                             + " / 当前 " + fresh.total().toPlainString()
                             + "，含年度封顶累计），请作废后重新生成清单");
         }
+    }
+
+    /** 明细行指纹：按项目编码 + 金额 + 类别排序，用于识别"总额不变但明细被换"的情况。 */
+    private static List<String> lineKeys(List<BillLine> lines) {
+        return lines.stream()
+                .map(l -> l.itemCode() + "|" + l.amount().stripTrailingZeros().toPlainString()
+                        + "|" + l.category())
+                .sorted()
+                .toList();
     }
 
     /** 清单生成时的待遇快照；缺快照时退回当前参保（历史数据兼容）。 */

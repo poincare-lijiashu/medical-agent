@@ -937,7 +937,7 @@ export interface InsuranceMemberHistory {
   memberId: string
   patientId: string
   patientNo: string
-  insuranceType: string
+  insuranceType: 'EMPLOYEE' | 'RESIDENT' | 'RETIRED' | 'OTHER'
   region: string
   personCategory: string | null
   deductible: number
@@ -945,7 +945,7 @@ export interface InsuranceMemberHistory {
   cap: number
   effectiveFrom: string | null
   effectiveTo: string | null
-  status: string
+  status: 'ACTIVE' | 'DISABLED'
   version: number
   changeType: 'CREATE' | 'UPDATE' | 'DISABLE' | 'ENABLE'
   changedBy: string
@@ -1035,7 +1035,7 @@ export interface UserAccount {
   orgCode: string | null
   /** 多科室执业绑定的临床科室 ID。 */
   deptIds: string[]
-  status: 'ACTIVE' | 'DISABLED'
+  status: 'ACTIVE' | 'DISABLED' | 'LOCKED'
   roles: string[]
   version: number
   lastLoginAt: string | null

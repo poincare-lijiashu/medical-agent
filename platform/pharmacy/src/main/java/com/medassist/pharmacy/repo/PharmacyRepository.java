@@ -514,14 +514,24 @@ public class PharmacyRepository {
                 .param("billingStatus", d.billingStatus()).update();
     }
 
-    /** 更新发药计费状态（补偿重试/afterCommit 回写用；不走版本号，状态机由服务层约束）。 */
-    public boolean updateDispenseBillingStatus(UUID id, String billingStatus) {
+    /**
+     * 更新发药计费状态（补偿重试 / afterCommit 回写用）。
+     *
+     * <p>P1-D3：必须带"允许的来源状态"。此前只按 id 更新，回写顺序不确定时
+     * 会互相覆盖（例如已 CHARGED 的单被一次迟到的 REFUND_PENDING 覆盖，
+     * 财务侧看到"待退费"但实际已退）。来源状态不匹配时影响 0 行，由调用方决定是否告警。
+     */
+    public boolean updateDispenseBillingStatus(UUID id, String billingStatus, List<String> expectedFrom) {
         return jdbc.sql("""
                         UPDATE pharmacy_svc.dispense
                            SET billing_status = :status, updated_at = now()
                          WHERE id = :id
+                           AND billing_status = ANY (CAST(:expected AS text[]))
                         """)
-                .param("status", billingStatus).param("id", id).update() > 0;
+                .param("status", billingStatus)
+                .param("id", id)
+                .param("expected", expectedFrom.toArray(String[]::new))
+                .update() > 0;
     }
 
     public void insertDispenseItem(DispenseItem item) {

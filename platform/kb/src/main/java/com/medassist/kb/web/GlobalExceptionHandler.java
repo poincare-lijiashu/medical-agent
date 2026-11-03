@@ -25,6 +25,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case VALIDATION_FAILED, KB_QUERY_INVALID, KB_PARSE_UNSUPPORTED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE, KB_EMBEDDING_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

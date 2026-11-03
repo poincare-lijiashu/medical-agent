@@ -18,7 +18,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -81,7 +83,8 @@ class BillingCompensationWorkerTest {
         when(repo.listDispenseItems(good)).thenReturn(List.of());
         when(client.charge(any(), any(), any(), anyString()))
                 .thenReturn(new ClinicalChargeClient.Charged("C001", new BigDecimal("10.00")));
-        when(repo.updateDispenseBillingStatus(good, Dispense.BILLING_CHARGED)).thenReturn(true);
+        when(repo.updateDispenseBillingStatus(eq(good), eq(Dispense.BILLING_CHARGED), anyList()))
+                .thenReturn(true);
 
         int recovered = billing.retryAbandoned(50, "worker");
 
@@ -98,7 +101,7 @@ class BillingCompensationWorkerTest {
 
         assertThat(recovered).isZero();
         verify(client, never()).charge(any(), any(), any(), anyString());
-        verify(repo, never()).updateDispenseBillingStatus(any(), anyString());
+        verify(repo, never()).updateDispenseBillingStatus(any(), anyString(), anyList());
     }
 
     @Test

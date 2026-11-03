@@ -40,6 +40,17 @@ public class PharmacyBillingService {
 
     private static final Logger log = LoggerFactory.getLogger(PharmacyBillingService.class);
 
+    /** 允许"计费成功 / 计费失败"回写的来源状态（P1-D3）：只能从待收费或计费失败向前推进。 */
+    private static final List<String> CHARGEABLE_FROM =
+            List.of(Dispense.BILLING_PENDING, Dispense.BILLING_CHARGE_FAILED);
+    /** 发药计费模式的退药冲减：必须已计费，或处于退费异常态（重试）。 */
+    private static final List<String> REFUNDABLE_FROM = List.of(
+            Dispense.BILLING_CHARGED, Dispense.BILLING_REFUND_PENDING, Dispense.BILLING_REFUND_FAILED);
+    /** 医嘱计费模式药房不持账：NONE 是常态，另有已计费与退费异常态。 */
+    private static final List<String> ORDER_REFUNDABLE_FROM = List.of(
+            Dispense.BILLING_NONE, Dispense.BILLING_CHARGED,
+            Dispense.BILLING_REFUND_PENDING, Dispense.BILLING_REFUND_FAILED);
+
     private final PharmacyRepository repo;
     private final ClinicalChargeClient client;
     private final ObjectMapper objectMapper;
@@ -52,6 +63,18 @@ public class PharmacyBillingService {
     }
 
     // ---------------------------------------------------------------- 发药计费
+
+    /**
+     * 回写计费状态（P1-D3）：带来源状态 CAS，来源不匹配时只告警不改写。
+     *
+     * <p>不抛异常是有意的——计费副作用（收费/退费）已经发生，把整条补偿链打断只会
+     * 让状态更难收敛；CAS 未命中说明另一条回写先落地，最终态以先落地者为准。
+     */
+    private void markBilling(UUID dispenseId, String target, List<String> from) {
+        if (!repo.updateDispenseBillingStatus(dispenseId, target, from)) {
+            log.warn("pharmacy.dispense_billing_cas_missed dispenseId={} target={}", dispenseId, target);
+        }
+    }
 
     /** 在发药事务内登记：提交成功后计费。 */
     public void scheduleCharge(Dispense dispense, UUID visitId, List<DispenseItem> items, String actor) {
@@ -74,14 +97,14 @@ public class PharmacyBillingService {
                             .map(i -> new ClinicalChargeClient.Line(i.id(), drugCodeOf(i), drugNameOf(i), i.amount()))
                             .toList(),
                     actor);
-            repo.updateDispenseBillingStatus(dispense.id(), Dispense.BILLING_CHARGED);
+            markBilling(dispense.id(), Dispense.BILLING_CHARGED, CHARGEABLE_FROM);
             audit(actor, "DISPENSE_CHARGED", dispense.id().toString(), Map.of(
                     "dispenseNo", dispense.dispenseNo(), "chargeNo", charged.chargeNo(),
                     "chargeTotal", charged.chargeTotal()));
         } catch (RuntimeException e) {
             log.warn("pharmacy.dispense_charge_failed dispenseId={} err={}", dispense.id(),
                     e.getClass().getSimpleName());
-            repo.updateDispenseBillingStatus(dispense.id(), Dispense.BILLING_CHARGE_FAILED);
+            markBilling(dispense.id(), Dispense.BILLING_CHARGE_FAILED, CHARGEABLE_FROM);
             audit(actor, "DISPENSE_CHARGE_FAILED", dispense.id().toString(), Map.of(
                     "dispenseNo", dispense.dispenseNo(), "reason", safeMessage(e)));
         }
@@ -117,14 +140,15 @@ public class PharmacyBillingService {
                         "退药 " + item.batchNo(), actor);
                 pending = pending || refunded.pendingAmount().signum() > 0;
             }
-            repo.updateDispenseBillingStatus(dispenseId,
-                    pending ? Dispense.BILLING_REFUND_PENDING : Dispense.BILLING_CHARGED);
+            markBilling(dispenseId,
+                    pending ? Dispense.BILLING_REFUND_PENDING : Dispense.BILLING_CHARGED,
+                    REFUNDABLE_FROM);
             audit(actor, "DISPENSE_REFUND_SYNCED", dispenseId.toString(), Map.of(
                     "refundPending", pending));
         } catch (RuntimeException e) {
             log.warn("pharmacy.dispense_refund_failed dispenseId={} err={}", dispenseId,
                     e.getClass().getSimpleName());
-            repo.updateDispenseBillingStatus(dispenseId, Dispense.BILLING_REFUND_FAILED);
+            markBilling(dispenseId, Dispense.BILLING_REFUND_FAILED, REFUNDABLE_FROM);
             audit(actor, "DISPENSE_REFUND_FAILED", dispenseId.toString(), Map.of(
                     "reason", safeMessage(e)));
         }
@@ -174,15 +198,16 @@ public class PharmacyBillingService {
                 }
             }
             // 医嘱计费模式下药房不持账：冲减同步成功后回到 NONE（待退费保留 PENDING 供财务查询）
-            repo.updateDispenseBillingStatus(dispenseId,
-                    pending ? Dispense.BILLING_REFUND_PENDING : Dispense.BILLING_NONE);
+            markBilling(dispenseId,
+                    pending ? Dispense.BILLING_REFUND_PENDING : Dispense.BILLING_NONE,
+                    ORDER_REFUNDABLE_FROM);
             audit(actor, "ORDER_REFUND_SYNCED", dispenseId.toString(), Map.of(
                     "orderId", orderId.toString(), "refundPending", pending,
                     "orderCancelled", cancelled));
         } catch (RuntimeException e) {
             log.warn("pharmacy.order_refund_failed dispenseId={} orderId={} err={}", dispenseId,
                     orderId, e.getClass().getSimpleName());
-            repo.updateDispenseBillingStatus(dispenseId, Dispense.BILLING_REFUND_FAILED);
+            markBilling(dispenseId, Dispense.BILLING_REFUND_FAILED, ORDER_REFUNDABLE_FROM);
             audit(actor, "ORDER_REFUND_FAILED", dispenseId.toString(), Map.of(
                     "orderId", orderId.toString(), "reason", safeMessage(e)));
         }

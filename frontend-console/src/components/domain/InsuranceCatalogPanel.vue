@@ -48,9 +48,7 @@
         </button>
       </div>
 
-      <div v-if="itemsLoading" class="loading">
-        <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="itemsLoading" :rows="5" />
 
       <LoadError
         v-else-if="itemsError"
@@ -134,9 +132,7 @@
         </button>
       </div>
 
-      <div v-if="mappingsLoading" class="loading">
-        <div v-for="i in 3" :key="i" class="skeleton" style="height: 42px" />
-      </div>
+      <TableSkeleton v-if="mappingsLoading" :rows="3" />
 
       <LoadError
         v-else-if="mappingsError"
@@ -365,6 +361,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { insuranceOpsApi } from '@/api'
 import { errorText } from '@/api/http'
 import type {
@@ -621,13 +618,6 @@ onMounted(() => {
 
 .f-q {
   width: 200px;
-}
-
-.loading {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--s4);
 }
 
 .truncate-hint {
