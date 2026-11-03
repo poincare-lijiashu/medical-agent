@@ -110,6 +110,12 @@ const DOMAIN_OVERRIDES: Partial<Record<StatusDomain, Record<string, StatusMeta>>
     REJECTED: { label: '已退回', tone: 'danger' },
     CANCELLED: { label: '已撤销', tone: 'neutral' },
   },
+  // 药房采购：RECEIVED 指"采购明细全部到货"，不是"标本已接收"
+  pharmacy: {
+    PARTIAL: { label: '部分到货', tone: 'warn' },
+    RECEIVED: { label: '已到齐', tone: 'ok' },
+    SUSPENDED: { label: '已停用', tone: 'danger' },
+  },
 }
 
 const FALLBACK: StatusMeta = { label: '—', tone: 'neutral' }

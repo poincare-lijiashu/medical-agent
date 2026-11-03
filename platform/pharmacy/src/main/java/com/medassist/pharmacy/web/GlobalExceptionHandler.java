@@ -24,18 +24,24 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
         return switch (code) {
             case NOT_FOUND, PATIENT_NOT_FOUND, DRUG_NOT_FOUND, PRESCRIPTION_NOT_FOUND,
                  DISPENSE_NOT_FOUND, NARCOTIC_REGISTER_NOT_FOUND,
-                 NARCOTIC_PRESCRIBER_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 NARCOTIC_PRESCRIBER_NOT_FOUND,
+                 SUPPLIER_NOT_FOUND, PURCHASE_ORDER_NOT_FOUND, PURCHASE_ITEM_NOT_FOUND,
+                 GOODS_RECEIPT_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
                  PRESCRIPTION_STATUS_INVALID,
                  NARCOTIC_PRESCRIBER_STATE_INVALID,
-                 ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID -> HttpStatus.CONFLICT;
+                 ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID,
+                 SUPPLIER_INACTIVE, SUPPLIER_LICENSE_EXPIRED,
+                 PURCHASE_ORDER_STATUS_INVALID -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED, NARCOTIC_PRESCRIBER_REQUIRED, NARCOTIC_AMPOULE_OUTSTANDING,
                  NARCOTIC_AMPOULE_INVALID,
                  // P1-D8：退药数量超过已发数量是"请求内容不合法"，不是状态冲突（422）
-                 DRUG_RETURN_EXCEEDS -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 DRUG_RETURN_EXCEEDS,
+                 // 验收超量/明细重复同属请求内容不合法（422），客户端应改单而不是重试
+                 PURCHASE_RECEIPT_EXCEEDS, PURCHASE_RECEIPT_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

@@ -46,6 +46,11 @@ import type {
   Prescription,
   PrescriptionAuditView,
   PrescriptionView,
+  ProcurementSummary,
+  PurchaseOrderSummary,
+  PurchaseOrderView,
+  GoodsReceiptView,
+  SupplierView,
   RegSlot,
   RoomUtilization,
   StockWarning,
@@ -284,6 +289,49 @@ export const pharmacyApi = {
     get<NarcoticRegister[]>('/pharmacy/narcotic/register', { from, to, status, limit }),
   ampouleReturn: (id: string, quantity: number, receiver: string) =>
     post<NarcoticRegister>(`/pharmacy/narcotic/register/${id}/ampoule-return`, { quantity, receiver }),
+
+  // ---- 采购（G2）----
+  suppliers: (keyword?: string, status?: string, limit = 100) =>
+    get<SupplierView[]>('/pharmacy/suppliers', { keyword, status, limit }),
+  createSupplier: (body: {
+    code: string
+    name: string
+    contact?: string
+    phone?: string
+    licenseNo: string
+    licenseExpireDate: string
+    remark?: string
+  }) => post<SupplierView>('/pharmacy/suppliers', body),
+  updateSupplierStatus: (id: string, status: 'ACTIVE' | 'SUSPENDED', version: number) =>
+    put<SupplierView>(`/pharmacy/suppliers/${id}/status`, { status, version }),
+  purchaseOrders: (params?: { status?: string; supplierId?: string; keyword?: string; limit?: number }) =>
+    get<PurchaseOrderSummary[]>('/pharmacy/purchase-orders', params),
+  /** 采购看板：各状态单量 + 在途金额（聚合口径，不受列表条数上限影响）。 */
+  procurementSummary: () => get<ProcurementSummary>('/pharmacy/purchase-orders/summary'),
+  purchaseOrder: (id: string) => get<PurchaseOrderView>(`/pharmacy/purchase-orders/${id}`),
+  createPurchaseOrder: (body: {
+    supplierId: string
+    expectedDate?: string
+    remark?: string
+    items: { drugId: string; quantity: number }[]
+  }) => post<PurchaseOrderView>('/pharmacy/purchase-orders', body),
+  submitPurchaseOrder: (id: string, version: number) =>
+    post<PurchaseOrderView>(`/pharmacy/purchase-orders/${id}/submit`, { version }),
+  cancelPurchaseOrder: (id: string, reason: string, version: number) =>
+    post<PurchaseOrderView>(`/pharmacy/purchase-orders/${id}/cancel`, { reason, version }),
+  /** 到货验收：requestId 为幂等键，重试必须复用同一个值，否则会重复入库。 */
+  receivePurchaseOrder: (
+    id: string,
+    body: {
+      requestId: string
+      deliveryNo?: string
+      courier?: string
+      remark?: string
+      items: { poItemId: string; batchNo: string; expireDate: string; quantity: number }[]
+    },
+  ) => post<GoodsReceiptView>(`/pharmacy/purchase-orders/${id}/receipts`, body),
+  purchaseReceipts: (id: string) =>
+    get<GoodsReceiptView[]>(`/pharmacy/purchase-orders/${id}/receipts`),
 }
 
 export const techApi = {

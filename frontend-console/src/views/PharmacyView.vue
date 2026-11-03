@@ -267,6 +267,8 @@
       </div>
     </div>
 
+    <ProcurementPanel />
+
     <AppModal
       v-model="detailOpen"
       title="处方明细"
@@ -654,6 +656,7 @@ import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
+import ProcurementPanel from '@/components/domain/ProcurementPanel.vue'
 import { pharmacyApi } from '@/api'
 import { errorText } from '@/api/http'
 import type {

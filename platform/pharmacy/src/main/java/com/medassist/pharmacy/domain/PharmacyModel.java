@@ -176,4 +176,86 @@ public final class PharmacyModel {
             return quantity - ampouleReturned;
         }
     }
+
+    /**
+     * 供应商（GSP 资质台账）。
+     *
+     * <p>{@code licenseExpireDate} 不是展示字段：证照过期后不允许新开采购单，
+     * 但已提交的采购单仍可继续收货（货已备好，拒收只会造成院内断药）。
+     */
+    public record Supplier(UUID id, String code, String name, String contact, String phone,
+                           String licenseNo, LocalDate licenseExpireDate, String status,
+                           String remark, long version, Instant createdAt) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String SUSPENDED = "SUSPENDED";
+
+        public boolean active() {
+            return ACTIVE.equals(status);
+        }
+
+        /** 许可证在业务日是否仍在有效期内（当天到期视为有效）。 */
+        public boolean licensedOn(LocalDate today) {
+            return !licenseExpireDate.isBefore(today);
+        }
+    }
+
+    /**
+     * 采购单。
+     *
+     * <p>状态机：{@code DRAFT → SUBMITTED → PARTIAL / RECEIVED}；
+     * {@code DRAFT / SUBMITTED → CANCELLED}。PARTIAL / RECEIVED 不允许取消——
+     * 库存已入账，只能用退货/报损冲销，否则"取消"会抹掉入库痕迹。
+     */
+    public record PurchaseOrder(UUID id, String orderNo, UUID supplierId, String status,
+                                LocalDate expectedDate, BigDecimal totalAmount, String remark,
+                                String createdBy, String submittedBy, Instant submittedAt,
+                                String cancelReason, String cancelledBy, Instant cancelledAt,
+                                long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String PARTIAL = "PARTIAL";
+        public static final String RECEIVED = "RECEIVED";
+        public static final String CANCELLED = "CANCELLED";
+
+        /** 可提交（审批）的状态。 */
+        public boolean submittable() {
+            return DRAFT.equals(status);
+        }
+
+        /** 可取消的状态。 */
+        public boolean cancellable() {
+            return DRAFT.equals(status) || SUBMITTED.equals(status);
+        }
+
+        /** 可继续到货验收的状态。 */
+        public boolean receivable() {
+            return SUBMITTED.equals(status) || PARTIAL.equals(status);
+        }
+    }
+
+    /** 采购明细（价格快照）。 */
+    public record PurchaseOrderItem(UUID id, UUID purchaseOrderId, UUID drugId, String drugCode,
+                                    String drugName, String spec, String unit, int quantity,
+                                    int receivedQuantity, BigDecimal unitPrice, BigDecimal amount) {
+
+        /** 未到货数量。 */
+        public int outstanding() {
+            return quantity - receivedQuantity;
+        }
+    }
+
+    /** 到货验收单（一次提交即完成入库）。 */
+    public record GoodsReceipt(UUID id, String receiptNo, UUID purchaseOrderId, UUID supplierId,
+                               String requestId, String deliveryNo, String courier,
+                               Instant deliveredAt, String receivedBy, String remark,
+                               BigDecimal totalAmount, Instant createdAt) {
+    }
+
+    /** 验收明细（一行 = 一个批次的入库）。 */
+    public record GoodsReceiptItem(UUID id, UUID receiptId, UUID poItemId, UUID drugId,
+                                   UUID batchId, String batchNo, LocalDate expireDate,
+                                   int quantity, BigDecimal unitPrice, BigDecimal amount) {
+    }
 }

@@ -699,6 +699,116 @@ export interface StockWarning {
   expired: boolean
 }
 
+// ---------------------------------------------------------------- 药品采购（G2）
+
+/** 供应商（GSP 资质台账）：许可证过期只影响新开采购单，在途单据仍可验收。 */
+export interface Supplier {
+  id: string
+  code: string
+  name: string
+  contact: string | null
+  phone: string | null
+  licenseNo: string
+  licenseExpireDate: string
+  status: 'ACTIVE' | 'SUSPENDED'
+  remark: string | null
+  version: number
+  createdAt: string
+}
+
+export interface SupplierView {
+  supplier: Supplier
+  /** 服务端按业务日计算的证照过期标记，前端不再自行比较日期。 */
+  licenseExpired: boolean
+}
+
+/** 采购明细（单价为建单时的药品字典快照）。 */
+export interface PurchaseOrderItem {
+  id: string
+  purchaseOrderId: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string
+  unit: string
+  quantity: number
+  receivedQuantity: number
+  unitPrice: number
+  amount: number
+}
+
+export type PurchaseOrderStatus = 'DRAFT' | 'SUBMITTED' | 'PARTIAL' | 'RECEIVED' | 'CANCELLED'
+
+export interface PurchaseOrder {
+  id: string
+  orderNo: string
+  supplierId: string
+  status: PurchaseOrderStatus
+  expectedDate: string | null
+  totalAmount: number
+  remark: string | null
+  createdBy: string
+  submittedBy: string | null
+  submittedAt: string | null
+  cancelReason: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  version: number
+  createdAt: string
+}
+
+export interface PurchaseOrderSummary {
+  order: PurchaseOrder
+  supplierName: string
+}
+
+export interface PurchaseOrderView {
+  order: PurchaseOrder
+  supplierName: string
+  items: PurchaseOrderItem[]
+}
+
+export interface GoodsReceiptItem {
+  id: string
+  receiptId: string
+  poItemId: string
+  drugId: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  unitPrice: number
+  amount: number
+}
+
+/** 到货验收单：一次提交即完成入库，requestId 为幂等键。 */
+export interface GoodsReceipt {
+  id: string
+  receiptNo: string
+  purchaseOrderId: string
+  supplierId: string
+  requestId: string | null
+  deliveryNo: string | null
+  courier: string | null
+  deliveredAt: string | null
+  receivedBy: string
+  remark: string | null
+  totalAmount: number
+  createdAt: string
+}
+
+export interface GoodsReceiptView {
+  receipt: GoodsReceipt
+  items: GoodsReceiptItem[]
+}
+
+export interface ProcurementSummary {
+  orderCounts: Record<string, number>
+  outstandingAmount: number
+  pendingReceiptOrders: number
+}
+
+
 /** 处方主体（金额为价格快照，不受后续调价影响）。 */
 export interface Prescription {
   id: string

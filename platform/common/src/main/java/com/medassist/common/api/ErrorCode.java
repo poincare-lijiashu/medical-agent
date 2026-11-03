@@ -65,6 +65,17 @@ public enum ErrorCode {
     PRESCRIPTION_STATUS_INVALID(43410, "当前处方状态不允许该操作"),
     DRUG_RETURN_EXCEEDS(43411, "退药数量超过已发数量"),
 
+    // ---- 药品采购（43xxx 续，G2）----
+    SUPPLIER_NOT_FOUND(43430, "未找到该供应商"),
+    SUPPLIER_INACTIVE(43431, "该供应商已停用，不能新开采购单"),
+    SUPPLIER_LICENSE_EXPIRED(43432, "该供应商的药品经营许可证已过期，不能新开采购单"),
+    PURCHASE_ORDER_NOT_FOUND(43433, "未找到该采购单"),
+    PURCHASE_ORDER_STATUS_INVALID(43434, "当前采购单状态不允许该操作"),
+    PURCHASE_ITEM_NOT_FOUND(43435, "采购明细不属于该采购单"),
+    PURCHASE_RECEIPT_EXCEEDS(43436, "验收数量超过采购未到数量"),
+    PURCHASE_RECEIPT_INVALID(43437, "验收内容不合法（重复明细或数量超限）"),
+    GOODS_RECEIPT_NOT_FOUND(43438, "未找到该到货验收单"),
+
     // ---- 麻醉药品（43xxx 续）----
     NARCOTIC_REGISTER_NOT_FOUND(43407, "未找到该麻醉药品专册登记"),
     NARCOTIC_PRESCRIBER_NOT_FOUND(43408, "未找到该医师的麻醉药品处方权记录"),

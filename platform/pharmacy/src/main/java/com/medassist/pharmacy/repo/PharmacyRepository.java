@@ -235,6 +235,18 @@ public class PharmacyRepository {
                         """).param(id).query(BATCH_MAPPER).optional();
     }
 
+    /** 按药品 + 批号定位批次：到货验收时判断是新建批次还是补录数量。 */
+    public Optional<DrugBatch> findBatchByDrugAndBatchNo(UUID drugId, String batchNo) {
+        return jdbc.sql("""
+                        SELECT b.id, b.drug_id, d.drug_code, d.name AS drug_name, b.batch_no,
+                               b.expire_date, b.quantity, b.supplier, b.version
+                          FROM pharmacy_svc.drug_batch b
+                          JOIN pharmacy_svc.md_drug d ON d.id = b.drug_id
+                         WHERE b.drug_id = :drugId AND b.batch_no = :batchNo
+                        """).param("drugId", drugId).param("batchNo", batchNo)
+                .query(BATCH_MAPPER).optional();
+    }
+
     /** 加行锁读取批次；必须在事务内调用（发药/退药前重新校验效期与数量）。 */
     public Optional<DrugBatch> lockBatch(UUID id) {
         return jdbc.sql("""
