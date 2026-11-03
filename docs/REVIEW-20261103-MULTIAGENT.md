@@ -33,8 +33,13 @@
 | 编号 | 状态 | 说明 |
 |---|---|---|
 | P0-S5 | 待办 | nonce 落 Redis（多副本防重放）——需引入 RedisTemplate 依赖与降级策略，排下一批 |
-| P0-F4 | 待办 | 药房/医技按状态分片拉取改服务端聚合接口——涉及新接口契约，排下一批 |
-| insurance 行级范围 | 待办 | insurance 表无 dept 列，行级过滤需 Flyway 补列（如 `settlement_bill.dept_id`）后接入 |
+| insurance 行级范围 | 降级为设计取舍 | 临床快照不返回科室、`settlement_bill` 无 dept 列；医保窗口本就是全院职能岗，按科室隔离会阻碍跨科补结算。若后续强制要求，需 `clinical` 内部接口补 `deptId` + Flyway 补列，成本较高，暂记录不改 |
+
+### 已修复（2026-11-03 第三批，commit `2f726e3`）
+
+| 编号 | 复核结论 | 落地 | 验证 |
+|---|---|---|---|
+| P0-F4 | 成立 | 新增 `GET /pharmacy/prescriptions/summary` 与 `GET /tech/applications/summary`（各一条 GROUP BY）；医技返回 `PENDING_COLLECT` 合成键（APPLIED+LAB）并与列表共用科室范围；前端 KPI 改读聚合、切页签改服务端过滤 | 真实链路：药房待审核 22=22、待发药 10=10；医技待采集 76=76（APPLIED 80 中 LAB 76）；浏览器实测 KPI 与页签行数一致、控制台 0 error；请求数 6/8 → 2 |
 
 ### 已修复（2026-11-03 第二批，commit `b087f7f` / `61de7c2` / `76046b7`）
 
