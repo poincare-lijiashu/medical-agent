@@ -13,6 +13,7 @@ import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -95,6 +96,42 @@ public class RegistrationController {
         Permissions.require(permissions, VISIT_READ);
         return ApiResponse.ok(service.listByPatient(patientId, limit).stream()
                 .filter(v -> scope.canSeeDepartment(v.deptId()))
+                .map(v -> PhiMask.visit(v, scope))
+                .toList());
+    }
+
+    /**
+     * 号源列表（挂号工作台）。
+     *
+     * <p>只返回本科室范围内的号源：跨科室排班属于排班室职责，挂号窗口没有必要看到。
+     */
+    @GetMapping("/slots")
+    public ApiResponse<java.util.List<Slot>> listSlots(
+            @RequestParam UUID deptId,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate date,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, REG_CREATE);
+        if (!scope.canSeeDepartment(deptId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "无权查看其他科室的号源");
+        }
+        return ApiResponse.ok(service.listSlots(deptId, date));
+    }
+
+    /** 当日就诊列表（挂号工作台左/右栏），按挂号先后排序。 */
+    @GetMapping("/registrations/daily")
+    public ApiResponse<java.util.List<Visit>> dailyVisits(
+            @RequestParam UUID deptId,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) java.time.LocalDate date,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, VISIT_READ);
+        if (!scope.canSeeDepartment(deptId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "无权查看其他科室的就诊");
+        }
+        return ApiResponse.ok(service.listDailyVisits(deptId, date).stream()
                 .map(v -> PhiMask.visit(v, scope))
                 .toList());
     }

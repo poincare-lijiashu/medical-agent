@@ -11,6 +11,11 @@ const router = createRouter({
       component: () => import('@/layouts/AppShell.vue'),
       children: [
         { path: '', redirect: '/orders' },
+        {
+          path: 'registration',
+          name: 'registration',
+          component: () => import('@/views/RegistrationWorkbenchView.vue'),
+        },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },
         { path: 'preop', name: 'preop', component: () => import('@/views/PreopVisitView.vue') },
         {

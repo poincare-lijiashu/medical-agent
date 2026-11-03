@@ -36,6 +36,7 @@ import type {
   NursingCorrectionView,
   NursingExecutionView,
   OperatingRoom,
+  OutpatientDaily,
   PageResult,
   Patient,
   PaymentGroup,
@@ -45,6 +46,7 @@ import type {
   Prescription,
   PrescriptionAuditView,
   PrescriptionView,
+  RegSlot,
   RoomUtilization,
   StockWarning,
   SurgeryBoardView,
@@ -95,8 +97,25 @@ export const clinicalApi = {
   visits: (patientId: string, limit = 20) =>
     get<Visit[]>('/clinical/visits', { patientId, limit }),
   visit: (id: string) => get<Visit>(`/clinical/visits/${id}`),
-  register: (body: { patientId: string; deptId: string; doctorId: string; visitType?: string }) =>
-    post<Visit>('/clinical/registrations', body),
+  register: (body: {
+    patientId: string
+    deptId: string
+    doctorId: string
+    visitType?: string
+    slotId?: string
+    visitDate?: string
+  }) => post<Visit>('/clinical/registrations', body),
+  /** 号源列表（挂号工作台）；date 缺省为当天。 */
+  slots: (deptId: string, date?: string) => get<RegSlot[]>('/clinical/slots', { deptId, date }),
+  /** 当日就诊列表（挂号工作台）。 */
+  dailyRegistrations: (deptId: string, date?: string) =>
+    get<Visit[]>('/clinical/registrations/daily', { deptId, date }),
+  cancelVisit: (id: string) => post<Visit>(`/clinical/visits/${id}/cancel`),
+  rescheduleVisit: (id: string, slotId: string) =>
+    post<Visit>(`/clinical/visits/${id}/reschedule`, { slotId }),
+  /** 门诊分账日结（全院口径，需 clinical:charge:daily）。 */
+  outpatientDaily: (date?: string) =>
+    get<OutpatientDaily>('/clinical/finance/outpatient-daily', { date }),
   startVisit: (id: string) => post<Visit>(`/clinical/visits/${id}/start`),
   orders: (visitId: string) => get<VisitOrder[]>(`/clinical/visits/${visitId}/orders`),
   placeOrders: (

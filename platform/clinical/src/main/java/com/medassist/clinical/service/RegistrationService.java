@@ -311,6 +311,16 @@ public class RegistrationService {
         return repo.listVisitsByPatient(patientId, limit);
     }
 
+    /** 号源列表（挂号工作台）：日期缺省为当天。 */
+    public List<Slot> listSlots(UUID deptId, LocalDate date) {
+        return repo.listSlots(deptId, date == null ? BusinessTime.today() : date);
+    }
+
+    /** 当日就诊列表（挂号工作台）：日期缺省为当天，按挂号先后排序。 */
+    public List<Visit> listDailyVisits(UUID deptId, LocalDate date) {
+        return repo.listVisitsByDeptAndDate(deptId, date == null ? BusinessTime.today() : date);
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private Dept requireDept(UUID deptId) {

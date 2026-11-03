@@ -299,6 +299,31 @@ public class ClinicalRepository {
                 .query(VISIT_MAPPER).list();
     }
 
+    /** 按科室 + 日期列号源（挂号工作台选号用；空日期不查，避免全表扫描）。 */
+    public List<Slot> listSlots(UUID deptId, LocalDate workDate) {
+        return jdbc.sql("""
+                        SELECT id, dept_id, doctor_id, work_date, period, total, booked, version
+                          FROM clinical_svc.reg_slot
+                         WHERE dept_id = :deptId AND work_date = :workDate
+                         ORDER BY period, doctor_id
+                        """)
+                .param("deptId", deptId).param("workDate", workDate)
+                .query(SLOT_MAPPER).list();
+    }
+
+    /** 当日该科室的就诊列表（挂号工作台与日结核对用），按挂号先后排序。 */
+    public List<Visit> listVisitsByDeptAndDate(UUID deptId, LocalDate visitDate) {
+        return jdbc.sql("""
+                        SELECT id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
+                               visit_type, status, visit_date, version
+                          FROM clinical_svc.visit
+                         WHERE dept_id = :deptId AND visit_date = :visitDate
+                         ORDER BY registered_at, visit_no
+                        """)
+                .param("deptId", deptId).param("visitDate", visitDate)
+                .query(VISIT_MAPPER).list();
+    }
+
     /** 加行锁读取就诊；必须在事务内调用。 */
     public Optional<Visit> lockVisit(UUID id) {
         return jdbc.sql("""

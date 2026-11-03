@@ -97,6 +97,29 @@ export interface Visit {
   version: number
 }
 
+/** 号源（排班容量）：booked 由服务端 CAS 维护，前端只读。 */
+export interface RegSlot {
+  id: string
+  deptId: string
+  doctorId: string
+  workDate: string
+  period: 'AM' | 'PM' | 'NIGHT'
+  total: number
+  booked: number
+  version: number
+}
+
+/** 门诊日结（按科室/支付方式分账）。 */
+export interface OutpatientDaily {
+  date: string
+  visitCount: number
+  paidChargeCount: number
+  totalPaid: number
+  refundedAmount: number
+  byDept: { deptId: string; deptCode: string; deptName: string; visitCount: number; amount: number }[]
+  byPaymentMethod: { paymentMethod: string; chargeCount: number; amount: number }[]
+}
+
 export interface Ward {
   id: string
   code: string

@@ -12,6 +12,15 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   {
+    name: 'registration',
+    path: '/registration',
+    title: '挂号收费',
+    hint: '号源与挂号 · 退号改约 · 门诊分账日结',
+    icon: 'calendar',
+    group: '门诊管理',
+    permissions: ['clinical:registration:create', 'clinical:charge:daily'],
+  },
+  {
     name: 'orders',
     path: '/orders',
     title: '医嘱工作台',
