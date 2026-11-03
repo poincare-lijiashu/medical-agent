@@ -128,6 +128,15 @@ export const NAV_ITEMS: NavItem[] = [
     group: '质量与知识',
     permissions: ['kb:space:read'],
   },
+  {
+    name: 'system',
+    path: '/system',
+    title: '系统管理',
+    hint: '账号与角色 · 机构与科室绑定 · 跨域审计日志',
+    icon: 'settings',
+    group: '系统管理',
+    permissions: ['auth:user:read', 'audit:log:read'],
+  },
 ]
 
 export const NAV_GROUPS = [
@@ -138,6 +147,7 @@ export const NAV_GROUPS = [
   '手术与收费',
   '医保结算',
   '质量与知识',
+  '系统管理',
 ]
 
 export function findNav(name: string): NavItem | undefined {

@@ -44,6 +44,7 @@ const router = createRouter({
           component: () => import('@/views/HomepageQcView.vue'),
         },
         { path: 'knowledge', name: 'knowledge', component: () => import('@/views/KnowledgeView.vue') },
+        { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },

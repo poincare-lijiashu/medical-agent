@@ -44,12 +44,16 @@ import type {
   SurgeryChargePreview,
   SurgeryLevel,
   SurgerySchedule,
+  AuditEvent,
+  OrgRef,
+  RoleRef,
   TechApplication,
   TechApplicationView,
   TechCriticalLine,
   TechCriticalView,
   TechExamItemView,
   TechReportView,
+  UserAccount,
   Visit,
   VisitOrder,
   VisitTransfer,
@@ -329,6 +333,50 @@ export const insuranceApi = {
     effectiveTo?: string
     status?: string
   }) => post<InsuranceMember>('/insurance/members', body),
+}
+
+export const systemApi = {
+  /** 账号分页（orgCode/status 可空；size 上限由服务端兜底）。 */
+  users: (params: { orgCode?: string; status?: string; page?: number; size?: number }) =>
+    get<PageResult<UserAccount>>('/auth/users', params),
+  user: (id: string) => get<UserAccount>(`/auth/users/${id}`),
+  createUser: (body: {
+    username: string
+    password: string
+    displayName: string
+    employeeNo?: string
+    orgCode?: string
+    deptIds?: string[]
+    roles: string[]
+  }) => post<UserAccount>('/auth/users', body),
+  updateUser: (
+    id: string,
+    body: {
+      displayName: string
+      employeeNo?: string
+      orgCode?: string
+      deptIds?: string[]
+      version: number
+    },
+  ) => put<UserAccount>(`/auth/users/${id}`, body),
+  disableUser: (id: string) => post<UserAccount>(`/auth/users/${id}/disable`),
+  enableUser: (id: string) => post<UserAccount>(`/auth/users/${id}/enable`),
+  assignRoles: (id: string, roles: string[]) =>
+    put<UserAccount>(`/auth/users/${id}/roles`, { roles }),
+  resetPassword: (id: string, newPassword: string) =>
+    post<void>(`/auth/users/${id}/reset-password`, { newPassword }),
+  roles: () => get<RoleRef[]>('/auth/rbac/roles'),
+  orgs: () => get<OrgRef[]>('/auth/rbac/orgs'),
+  /** 跨域审计（gateway: /api/v2/audit/events → auth /events）。 */
+  auditEvents: (params: {
+    actor?: string
+    action?: string
+    targetType?: string
+    from?: string
+    to?: string
+    page?: number
+    size?: number
+  }) => get<PageResult<AuditEvent>>('/audit/events', params),
 }
 
 export const kbApi = {

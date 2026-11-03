@@ -1023,3 +1023,51 @@ export interface InsuranceReconcile {
   billLineCount: number
   chargeLineCount: number
 }
+
+// ---------------------------------------------------------------- 系统管理
+
+/** 账号视图（绝不含密码哈希）。 */
+export interface UserAccount {
+  id: string
+  username: string
+  displayName: string
+  employeeNo: string | null
+  orgCode: string | null
+  /** 多科室执业绑定的临床科室 ID。 */
+  deptIds: string[]
+  status: 'ACTIVE' | 'DISABLED'
+  roles: string[]
+  version: number
+  lastLoginAt: string | null
+  createdAt: string
+}
+
+/** 角色参考数据（授权矩阵维护，只读）。 */
+export interface RoleRef {
+  code: string
+  name: string
+  description: string | null
+  builtin: boolean
+}
+
+/** 机构节点（医院/科室/病区）。 */
+export interface OrgRef {
+  code: string
+  name: string
+  parentCode: string | null
+  type: string
+  status: string
+  sortNo: number
+}
+
+/** 跨域审计事件（detail 为原始 jsonb 文本）。 */
+export interface AuditEvent {
+  source: string
+  id: number
+  ts: string
+  actor: string
+  action: string
+  targetType: string | null
+  targetId: string | null
+  detail: string | null
+}
