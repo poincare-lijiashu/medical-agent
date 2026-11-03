@@ -933,6 +933,86 @@ export interface MaterialSummary {
   tracesToday: number
 }
 
+// ---------------------------------------------------------------- 病案编码（G4）
+
+export interface IcdDiagnosis {
+  code: string
+  name: string
+  chapter: string | null
+  category: string | null
+  enabled: boolean
+  version: number
+}
+
+export interface IcdProcedure {
+  code: string
+  name: string
+  category: string | null
+  enabled: boolean
+  version: number
+}
+
+export type CodingStatus = 'PENDING' | 'CODING' | 'CODED'
+
+/** 待编码队列行：姓名已由服务端掩码；患者号按 phi:read 掩码。 */
+export interface CodingQueueItem {
+  homepageId: string
+  homepageNo: string
+  patientNo: string
+  patientNameMasked: string
+  deptName: string | null
+  dischargedAt: string | null
+  stayDays: number
+  codingStatus: CodingStatus
+  coder: string | null
+  codedAt: string | null
+  homepageVersion: number
+  codingVersion: number
+}
+
+export interface CodingDiagnosisRow {
+  code: string
+  name: string
+  primary?: boolean
+}
+
+export interface CodingProcedureRow {
+  code: string
+  name: string
+  date?: string
+  surgeon?: string
+  anesthesia?: string
+  incisionLevel?: string
+}
+
+export interface CodingView {
+  homepageId: string
+  homepageNo: string
+  patientNo: string
+  patientNameMasked: string
+  deptName: string | null
+  dischargedAt: string | null
+  stayDays: number
+  homepageStatus: string
+  codingStatus: CodingStatus
+  coder: string | null
+  codedAt: string | null
+  note: string | null
+  diagnoses: CodingDiagnosisRow[]
+  procedures: CodingProcedureRow[]
+  /** 临床首页原始诊断快照（只读参考）。 */
+  clinicalDiagnoses: CodingDiagnosisRow[]
+  homepageVersion: number
+  codingVersion: number
+}
+
+export interface CodingSummary {
+  pendingCount: number
+  codedCount: number
+  icdDiagnosisCount: number
+  icdProcedureCount: number
+}
+
 
 
 /** 处方主体（金额为价格快照，不受后续调价影响）。 */

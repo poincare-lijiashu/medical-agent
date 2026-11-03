@@ -224,4 +224,70 @@ public final class EmrDtos {
                                          long version, java.time.Instant createdAt,
                                          int excludedAlreadyExported, int remainingPending) {
     }
+
+    // ---------------------------------------------------------------- ICD 字典与病案编码（G4）
+
+    public record IcdDiagnosisReq(
+            @NotBlank @Size(max = 32) String code,
+            @NotBlank @Size(max = 256) String name,
+            @Size(max = 128) String chapter,
+            @Size(max = 32) String category) {
+    }
+
+    public record IcdProcedureReq(
+            @NotBlank @Size(max = 32) String code,
+            @NotBlank @Size(max = 256) String name,
+            @Size(max = 128) String category) {
+    }
+
+    public record IcdToggleReq(
+            @NotNull Boolean enabled,
+            @NotNull @Min(0) Long version) {
+    }
+
+    /** 编码诊断行：只传编码与是否主诊断，名称由服务端按字典回填（不接受客户端伪造名称）。 */
+    public record CodingDiagnosisReq(
+            @NotBlank @Size(max = 32) String code,
+            boolean primary) {
+    }
+
+    public record CodingProcedureReq(
+            @NotBlank @Size(max = 32) String code,
+            java.time.LocalDate date,
+            @Size(max = 64) String surgeon,
+            @Size(max = 64) String anesthesia,
+            @Size(max = 16) String incisionLevel) {
+    }
+
+    /**
+     * 保存编码草稿。
+     *
+     * @param version 编码记录版本号：首次保存传 0；后续必须与当前版本一致（CAS）
+     */
+    public record SaveCodingReq(
+            @NotNull @Size(min = 1, max = 50) List<@Valid CodingDiagnosisReq> diagnoses,
+            @Size(max = 50) List<@Valid CodingProcedureReq> procedures,
+            @Size(max = 512) String note,
+            @NotNull @Min(0) Long version) {
+    }
+
+    /**
+     * 编码详情：工作台一次加载首页上下文与当前编码。
+     *
+     * @param clinicalDiagnoses 临床首页原始诊断快照（只读参考，便于编码员对照）
+     */
+    public record CodingView(UUID homepageId, String homepageNo, String patientNo,
+                             String patientNameMasked, String deptName, Instant dischargedAt,
+                             int stayDays, String homepageStatus, String codingStatus,
+                             String coder, Instant codedAt, String note,
+                             List<Map<String, Object>> diagnoses,
+                             List<Map<String, Object>> procedures,
+                             List<Map<String, Object>> clinicalDiagnoses,
+                             long homepageVersion, long codingVersion) {
+    }
+
+    /** 编码看板：待编码/已编码 + 字典规模。 */
+    public record CodingSummary(long pendingCount, long codedCount,
+                                long icdDiagnosisCount, long icdProcedureCount) {
+    }
 }

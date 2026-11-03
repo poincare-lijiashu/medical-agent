@@ -3,9 +3,13 @@ package com.medassist.emr.repo;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
+import com.medassist.emr.domain.EmrModel.CodingQueueItem;
 import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.domain.EmrModel.HomepageCoding;
 import com.medassist.emr.domain.EmrModel.HomepageSummary;
 import com.medassist.emr.domain.EmrModel.HqmsExportBatch;
+import com.medassist.emr.domain.EmrModel.IcdDiagnosis;
+import com.medassist.emr.domain.EmrModel.IcdProcedure;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.QcResult;
 import com.medassist.emr.domain.EmrModel.QcRule;
@@ -1126,6 +1130,260 @@ public class EmrRepository {
                         """)
                 .param("reason", reason).param("id", id).param("version", expectedVersion)
                 .update() > 0;
+    }
+
+    // ---------------------------------------------------------------- ICD 字典（G4）
+
+    private static final RowMapper<IcdDiagnosis> ICD_DX_MAPPER = (rs, i) -> new IcdDiagnosis(
+            rs.getString("code"), rs.getString("name"), rs.getString("chapter"),
+            rs.getString("category"), rs.getBoolean("enabled"), rs.getLong("version"));
+
+    private static final RowMapper<IcdProcedure> ICD_OP_MAPPER = (rs, i) -> new IcdProcedure(
+            rs.getString("code"), rs.getString("name"), rs.getString("category"),
+            rs.getBoolean("enabled"), rs.getLong("version"));
+
+    public List<IcdDiagnosis> listIcdDiagnoses(String keyword, Boolean enabled, int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT code, name, chapter, category, enabled, version
+                          FROM emr_svc.icd_diagnosis
+                         WHERE (CAST(:pattern AS text) IS NULL OR code ILIKE CAST(:pattern AS text)
+                                OR name ILIKE CAST(:pattern AS text))
+                           AND (CAST(:enabled AS boolean) IS NULL
+                                OR enabled = CAST(:enabled AS boolean))
+                         ORDER BY code
+                         LIMIT :limit
+                        """)
+                .param("pattern", pattern).param("enabled", enabled).param("limit", limit)
+                .query(ICD_DX_MAPPER).list();
+    }
+
+    public Optional<IcdDiagnosis> findIcdDiagnosis(String code) {
+        return jdbc.sql("""
+                        SELECT code, name, chapter, category, enabled, version
+                          FROM emr_svc.icd_diagnosis WHERE code = ?
+                        """).param(code).query(ICD_DX_MAPPER).optional();
+    }
+
+    public List<IcdDiagnosis> findIcdDiagnoses(java.util.Collection<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                        SELECT code, name, chapter, category, enabled, version
+                          FROM emr_svc.icd_diagnosis WHERE code IN (:codes)
+                        """).param("codes", codes).query(ICD_DX_MAPPER).list();
+    }
+
+    public void insertIcdDiagnosis(IcdDiagnosis d) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.icd_diagnosis (code, name, chapter, category, enabled)
+                        VALUES (:code, :name, CAST(:chapter AS text), CAST(:category AS text), true)
+                        """)
+                .param("code", d.code()).param("name", d.name())
+                .param("chapter", d.chapter()).param("category", d.category()).update();
+    }
+
+    public boolean setIcdDiagnosisEnabled(String code, boolean enabled, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.icd_diagnosis
+                           SET enabled = :enabled, version = version + 1, updated_at = now()
+                         WHERE code = :code AND version = :version
+                        """).param("enabled", enabled).param("code", code)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public List<IcdProcedure> listIcdProcedures(String keyword, Boolean enabled, int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT code, name, category, enabled, version
+                          FROM emr_svc.icd_procedure
+                         WHERE (CAST(:pattern AS text) IS NULL OR code ILIKE CAST(:pattern AS text)
+                                OR name ILIKE CAST(:pattern AS text))
+                           AND (CAST(:enabled AS boolean) IS NULL
+                                OR enabled = CAST(:enabled AS boolean))
+                         ORDER BY code
+                         LIMIT :limit
+                        """)
+                .param("pattern", pattern).param("enabled", enabled).param("limit", limit)
+                .query(ICD_OP_MAPPER).list();
+    }
+
+    public Optional<IcdProcedure> findIcdProcedure(String code) {
+        return jdbc.sql("""
+                        SELECT code, name, category, enabled, version
+                          FROM emr_svc.icd_procedure WHERE code = ?
+                        """).param(code).query(ICD_OP_MAPPER).optional();
+    }
+
+    public List<IcdProcedure> findIcdProcedures(java.util.Collection<String> codes) {
+        if (codes == null || codes.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                        SELECT code, name, category, enabled, version
+                          FROM emr_svc.icd_procedure WHERE code IN (:codes)
+                        """).param("codes", codes).query(ICD_OP_MAPPER).list();
+    }
+
+    public void insertIcdProcedure(IcdProcedure p) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.icd_procedure (code, name, category, enabled)
+                        VALUES (:code, :name, CAST(:category AS text), true)
+                        """)
+                .param("code", p.code()).param("name", p.name())
+                .param("category", p.category()).update();
+    }
+
+    public boolean setIcdProcedureEnabled(String code, boolean enabled, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.icd_procedure
+                           SET enabled = :enabled, version = version + 1, updated_at = now()
+                         WHERE code = :code AND version = :version
+                        """).param("enabled", enabled).param("code", code)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public long countIcdDiagnoses() {
+        Long count = jdbc.sql("SELECT count(*) FROM emr_svc.icd_diagnosis")
+                .query(Long.class).single();
+        return count == null ? 0 : count;
+    }
+
+    public long countIcdProcedures() {
+        Long count = jdbc.sql("SELECT count(*) FROM emr_svc.icd_procedure")
+                .query(Long.class).single();
+        return count == null ? 0 : count;
+    }
+
+    // ---------------------------------------------------------------- 病案编码（G4）
+
+    private static final RowMapper<HomepageCoding> CODING_MAPPER = (rs, i) -> new HomepageCoding(
+            rs.getObject("id", UUID.class), rs.getObject("homepage_id", UUID.class),
+            rs.getString("status"), rs.getString("coder"), instant(rs, "coded_at"),
+            rs.getString("note"), rs.getString("diagnoses"), rs.getString("procedures"),
+            rs.getLong("version"), instant(rs, "created_at"), instant(rs, "updated_at"));
+
+    public Optional<HomepageCoding> findCoding(UUID homepageId) {
+        return jdbc.sql("""
+                        SELECT id, homepage_id, status, coder, coded_at, note, diagnoses, procedures,
+                               version, created_at, updated_at
+                          FROM emr_svc.homepage_coding WHERE homepage_id = ?
+                        """).param(homepageId).query(CODING_MAPPER).optional();
+    }
+
+    public void insertCoding(HomepageCoding c) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.homepage_coding
+                            (id, homepage_id, status, coder, note, diagnoses, procedures, version)
+                        VALUES (:id, :homepageId, :status, :coder, CAST(:note AS text),
+                                CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb), 0)
+                        """)
+                .param("id", c.id()).param("homepageId", c.homepageId())
+                .param("status", c.status()).param("coder", c.coder()).param("note", c.note())
+                .param("diagnoses", c.diagnoses()).param("procedures", c.procedures()).update();
+    }
+
+    /** 保存编码草稿（仅 CODING 态；CAS 版本号）。 */
+    public boolean updateCodingDraft(UUID homepageId, String diagnoses, String procedures,
+                                     String note, String coder, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.homepage_coding
+                           SET diagnoses = CAST(:diagnoses AS jsonb),
+                               procedures = CAST(:procedures AS jsonb),
+                               note = CAST(:note AS text), coder = :coder,
+                               version = version + 1, updated_at = now()
+                         WHERE homepage_id = :homepageId AND status = 'CODING' AND version = :version
+                        """)
+                .param("diagnoses", diagnoses).param("procedures", procedures)
+                .param("note", note).param("coder", coder).param("homepageId", homepageId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 编码提交：CODING → CODED（CAS）。 */
+    public boolean markCoded(UUID homepageId, String coder, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.homepage_coding
+                           SET status = 'CODED', coder = :coder, coded_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE homepage_id = :homepageId AND status = 'CODING' AND version = :version
+                        """).param("coder", coder).param("homepageId", homepageId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /**
+     * 编码结果回写首页（诊断/手术快照）。
+     *
+     * <p>触发器会校验 homepage_coding 已为 CODED；这里再用 status='SUBMITTED' + version 兜一层，
+     * 避免对草稿或已归档首页写入。
+     */
+    public boolean applyCodedSnapshot(UUID homepageId, String diagnoses, String procedures,
+                                      String coder, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.record_homepage
+                           SET diagnoses = CAST(:diagnoses AS jsonb),
+                               procedures = CAST(:procedures AS jsonb),
+                               coder = :coder, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("diagnoses", diagnoses).param("procedures", procedures)
+                .param("coder", coder).param("id", homepageId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 待编码队列：已提交且编码未完成（无编码记录或仍为 CODING）。 */
+    public List<CodingQueueItem> listCodingQueue(String keyword, int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT h.id, h.homepage_no, h.patient_no,
+                               CASE WHEN h.patient_name IS NULL OR h.patient_name = '' THEN ''
+                                    ELSE left(h.patient_name, 1) || '**' END AS patient_name_masked,
+                               h.dept_name, h.discharged_at, h.stay_days,
+                               COALESCE(c.status, 'PENDING') AS coding_status,
+                               c.coder, c.coded_at,
+                               h.version AS homepage_version,
+                               COALESCE(c.version, 0) AS coding_version
+                          FROM emr_svc.record_homepage h
+                          LEFT JOIN emr_svc.homepage_coding c ON c.homepage_id = h.id
+                         WHERE h.status = 'SUBMITTED'
+                           AND (c.status IS NULL OR c.status <> 'CODED')
+                           AND (CAST(:pattern AS text) IS NULL
+                                OR h.homepage_no ILIKE CAST(:pattern AS text)
+                                OR h.patient_no ILIKE CAST(:pattern AS text))
+                         ORDER BY h.discharged_at NULLS LAST, h.homepage_no
+                         LIMIT :limit
+                        """).param("pattern", pattern).param("limit", limit)
+                .query((rs, i) -> new CodingQueueItem(
+                        rs.getObject("id", UUID.class), rs.getString("homepage_no"),
+                        rs.getString("patient_no"), rs.getString("patient_name_masked"),
+                        rs.getString("dept_name"), instant(rs, "discharged_at"),
+                        rs.getInt("stay_days"), rs.getString("coding_status"),
+                        rs.getString("coder"), instant(rs, "coded_at"),
+                        rs.getLong("homepage_version"), rs.getLong("coding_version")))
+                .list();
+    }
+
+    /** 待编码首页数（已提交且未 CODED）。 */
+    public long countPendingCoding() {
+        Long count = jdbc.sql("""
+                        SELECT count(*)
+                          FROM emr_svc.record_homepage h
+                          LEFT JOIN emr_svc.homepage_coding c ON c.homepage_id = h.id
+                         WHERE h.status = 'SUBMITTED'
+                           AND (c.status IS NULL OR c.status <> 'CODED')
+                        """).query(Long.class).single();
+        return count == null ? 0 : count;
+    }
+
+    /** 已编码首页数（SUBMITTED + CODED，等待归档）。 */
+    public long countCodedHomepages() {
+        Long count = jdbc.sql("""
+                        SELECT count(*)
+                          FROM emr_svc.record_homepage h
+                          JOIN emr_svc.homepage_coding c ON c.homepage_id = h.id
+                         WHERE h.status = 'SUBMITTED' AND c.status = 'CODED'
+                        """).query(Long.class).single();
+        return count == null ? 0 : count;
     }
 
     // ---------------------------------------------------------------- 审计

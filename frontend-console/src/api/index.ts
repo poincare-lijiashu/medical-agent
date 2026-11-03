@@ -58,6 +58,11 @@ import type {
   ConsumableRecall,
   MaterialStockWarning,
   MaterialSummary,
+  CodingQueueItem,
+  CodingSummary,
+  CodingView,
+  IcdDiagnosis,
+  IcdProcedure,
   RegSlot,
   RoomUtilization,
   StockWarning,
@@ -405,6 +410,56 @@ export const materialApi = {
   }) => post<{ trace: ConsumableTrace }>('/material/traces', body),
   recall: (batchNo: string) =>
     get<ConsumableRecall>('/material/traces/recall', { batchNo }),
+}
+
+// ---------------------------------------------------------------- 病案编码（G4）
+
+export const codingApi = {
+  summary: () => get<CodingSummary>('/emr/coding/summary'),
+  /** 待编码队列：已提交且编码未完成的病案首页。 */
+  queue: (keyword?: string, limit = 100) =>
+    get<CodingQueueItem[]>('/emr/coding/queue', { keyword, limit }),
+  detail: (homepageId: string) => get<CodingView>(`/emr/coding/${homepageId}`),
+  /** 保存编码草稿：首次 version=0，后续必须与当前版本一致。 */
+  save: (
+    homepageId: string,
+    body: {
+      diagnoses: { code: string; primary: boolean }[]
+      procedures: {
+        code: string
+        date?: string
+        surgeon?: string
+        anesthesia?: string
+        incisionLevel?: string
+      }[]
+      note?: string
+      version: number
+    },
+  ) => put<CodingView>(`/emr/coding/${homepageId}`, body),
+  /** 提交编码：主诊断必须唯一；成功后回写首页诊断/手术。 */
+  submit: (homepageId: string) => post<CodingView>(`/emr/coding/${homepageId}/submit`),
+  icdDiagnoses: (keyword?: string, enabled?: boolean, limit = 100) =>
+    get<IcdDiagnosis[]>('/emr/icd/diagnoses', { keyword, enabled, limit }),
+  icdProcedures: (keyword?: string, enabled?: boolean, limit = 100) =>
+    get<IcdProcedure[]>('/emr/icd/procedures', { keyword, enabled, limit }),
+  createIcdDiagnosis: (body: {
+    code: string
+    name: string
+    chapter?: string
+    category?: string
+  }) => post<IcdDiagnosis>('/emr/icd/diagnoses', body),
+  createIcdProcedure: (body: { code: string; name: string; category?: string }) =>
+    post<IcdProcedure>('/emr/icd/procedures', body),
+  toggleIcdDiagnosis: (code: string, enabled: boolean, version: number) =>
+    put<IcdDiagnosis>(`/emr/icd/diagnoses/${encodeURIComponent(code)}/enabled`, {
+      enabled,
+      version,
+    }),
+  toggleIcdProcedure: (code: string, enabled: boolean, version: number) =>
+    put<IcdProcedure>(`/emr/icd/procedures/${encodeURIComponent(code)}/enabled`, {
+      enabled,
+      version,
+    }),
 }
 
 export const techApi = {

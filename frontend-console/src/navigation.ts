@@ -147,6 +147,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['emr:homepage:read'],
   },
   {
+    name: 'coding',
+    path: '/coding',
+    title: '病案编码工作台',
+    hint: 'ICD-10 / ICD-9-CM-3 编码 · 待编码队列 · 字典维护 · 编码后归档',
+    icon: 'clipboard',
+    group: '质量与知识',
+    permissions: ['emr:coding:read'],
+  },
+  {
     name: 'knowledge',
     path: '/knowledge',
     title: '知识库',

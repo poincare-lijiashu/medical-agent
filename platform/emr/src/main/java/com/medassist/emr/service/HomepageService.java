@@ -7,6 +7,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.client.ClinicalClient;
 import com.medassist.emr.client.PatientClient;
 import com.medassist.emr.domain.EmrModel.Homepage;
+import com.medassist.emr.domain.EmrModel.HomepageCoding;
 import com.medassist.emr.domain.EmrModel.HomepageSummary;
 import com.medassist.emr.repo.EmrRepository;
 import com.medassist.emr.web.EmrDtos.CreateHomepageReq;
@@ -300,6 +301,12 @@ public class HomepageService {
         if (h.submittedById().equals(actorId)) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
                     "提交人不得归档自己的病案首页，请由病案质控人员归档");
+        }
+        // 归档门槛（G4）：必须先完成 ICD 编码。数据库触发器同样校验，这里给出可读原因
+        HomepageCoding coding = repo.findCoding(id).orElse(null);
+        if (coding == null || !coding.coded()) {
+            throw new BusinessException(ErrorCode.HOMEPAGE_NOT_CODED,
+                    "病案首页尚未完成病案编码，不能归档");
         }
         if (!repo.archiveHomepage(id, actor, h.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "病案首页已被他人修改，请刷新后重试");

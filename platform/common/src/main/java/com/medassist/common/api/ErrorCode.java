@@ -123,6 +123,13 @@ public enum ErrorCode {
     EMR_HQMS_EXPORT_INVALID(47418, "当前上报批次状态不允许该操作"),
     EMR_HQMS_EXPORT_EMPTY(47419, "该期间没有待上报的已归档病案首页"),
 
+    // ---- 病案编码（47xxx 续，G4）----
+    ICD_ITEM_NOT_FOUND(47430, "未找到该 ICD 编码，或该编码已停用"),
+    CODING_NOT_FOUND(47431, "未找到该病案编码记录"),
+    CODING_INVALID(47432, "编码内容不合法（主诊断必须且只能有一个、编码须存在于字典）"),
+    HOMEPAGE_NOT_CODED(47433, "病案首页尚未完成编码，不能归档"),
+    CODING_STATUS_INVALID(47434, "当前编码状态不允许该操作"),
+
     // ---- 医保（48xxx）----
     INSURANCE_ITEM_NOT_FOUND(48401, "未找到该医保目录项目"),
     INSURANCE_MEMBER_NOT_FOUND(48402, "未找到该患者的参保登记"),

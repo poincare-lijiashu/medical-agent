@@ -226,4 +226,45 @@ public final class EmrModel {
             return ACCEPTED.equals(status) || REJECTED.equals(status);
         }
     }
+
+    /** ICD-10 诊断字典项（病案编码的唯一编码真源）。 */
+    public record IcdDiagnosis(String code, String name, String chapter, String category,
+                               boolean enabled, long version) {
+    }
+
+    /** ICD-9-CM-3 手术操作字典项。 */
+    public record IcdProcedure(String code, String name, String category, boolean enabled,
+                               long version) {
+    }
+
+    /**
+     * 病案编码记录（一次住院一份）。
+     *
+     * <p>{@code CODING} 是草稿态（可反复保存），{@code CODED} 表示编码完成：
+     * 此后才允许回写首页诊断/手术，并作为归档前置条件。
+     */
+    public record HomepageCoding(UUID id, UUID homepageId, String status, String coder,
+                                 Instant codedAt, String note, String diagnoses,
+                                 String procedures, long version, Instant createdAt,
+                                 Instant updatedAt) {
+
+        public static final String CODING = "CODING";
+        public static final String CODED = "CODED";
+
+        public boolean coded() {
+            return CODED.equals(status);
+        }
+    }
+
+    /**
+     * 编码工作台队列行。
+     *
+     * <p>姓名在 SQL 内掩码，队列不批量下发 PHI；{@code codingStatus} 为 {@code PENDING}
+     * 表示尚未建立编码记录（纯待编码）。
+     */
+    public record CodingQueueItem(UUID homepageId, String homepageNo, String patientNo,
+                                  String patientNameMasked, String deptName, Instant dischargedAt,
+                                  int stayDays, String codingStatus, String coder,
+                                  Instant codedAt, long homepageVersion, long codingVersion) {
+    }
 }

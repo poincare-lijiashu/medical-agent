@@ -19,7 +19,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
         return switch (code) {
             case NOT_FOUND, PATIENT_NOT_FOUND, EMR_TEMPLATE_NOT_FOUND,
                  EMR_RECORD_NOT_FOUND, EMR_CHANGE_REQUEST_NOT_FOUND,
-                 EMR_HOMEPAGE_NOT_FOUND, EMR_HQMS_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 EMR_HOMEPAGE_NOT_FOUND, EMR_HQMS_NOT_FOUND,
+                 ICD_ITEM_NOT_FOUND, CODING_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
@@ -27,8 +28,10 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  EMR_SIGN_LEVEL_INVALID, EMR_CHANGE_REQUEST_INVALID,
                  EMR_HOMEPAGE_STATUS_INVALID, EMR_HOMEPAGE_INCOMPLETE,
                  EMR_HOMEPAGE_SOURCE_INVALID, EMR_HQMS_EXPORT_INVALID,
-                 EMR_HQMS_EXPORT_EMPTY -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED, EMR_SIGN_POLICY_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 EMR_HQMS_EXPORT_EMPTY, HOMEPAGE_NOT_CODED,
+                 CODING_STATUS_INVALID -> HttpStatus.CONFLICT;
+            case VALIDATION_FAILED, EMR_SIGN_POLICY_INVALID,
+                 CODING_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

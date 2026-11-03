@@ -40,6 +40,17 @@ class ExceptionMappingContractTest {
     }
 
     @Test
+    @DisplayName("病案编码错误码：未编码归档/状态冲突 409，编码内容不合法 422")
+    void codingCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.HOMEPAGE_NOT_CODED)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CODING_STATUS_INVALID)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CODING_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.ICD_ITEM_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CODING_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
     @DisplayName("业务错误码不得落到 5xx（否则前端会把业务拒绝当系统故障重试）")
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {

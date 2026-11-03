@@ -366,16 +366,35 @@ class HomepageServiceTest {
     }
 
     @Test
-    @DisplayName("他人归档成功")
+    @DisplayName("他人归档成功（须已完成编码）")
     void archiveSucceedsByDifferentActor() {
         Homepage submitted = submittedHomepage("admin01");
         when(repo.lockHomepage(submitted.id())).thenReturn(Optional.of(submitted));
+        when(repo.findCoding(submitted.id())).thenReturn(Optional.of(new com.medassist.emr.domain
+                .EmrModel.HomepageCoding(java.util.UUID.randomUUID(), submitted.id(),
+                com.medassist.emr.domain.EmrModel.HomepageCoding.CODED, "coder01",
+                java.time.Instant.now(), null, "[]", "[]", 1L, java.time.Instant.now(),
+                java.time.Instant.now())));
         when(repo.archiveHomepage(submitted.id(), "qc01", submitted.version())).thenReturn(true);
         when(repo.findHomepage(submitted.id())).thenReturn(Optional.of(submitted));
 
         service.archive(submitted.id(), "qc01", ARCHIVER_ID);
 
         verify(repo).archiveHomepage(submitted.id(), "qc01", submitted.version());
+    }
+
+    @Test
+    @DisplayName("归档门槛：未完成病案编码不得归档")
+    void archiveRejectsUncodedHomepage() {
+        Homepage submitted = submittedHomepage("admin01");
+        when(repo.lockHomepage(submitted.id())).thenReturn(Optional.of(submitted));
+        when(repo.findCoding(submitted.id())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.archive(submitted.id(), "qc01", ARCHIVER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.HOMEPAGE_NOT_CODED);
+        verify(repo, never()).archiveHomepage(any(), anyString(), anyLong());
     }
 
     @Test
