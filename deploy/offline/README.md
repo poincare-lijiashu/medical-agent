@@ -28,6 +28,7 @@ docker build --build-arg SERVICE=auth      -t medassist/platform-auth:1.0.0     
 docker build --build-arg SERVICE=empi      -t medassist/platform-empi:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=clinical  -t medassist/platform-clinical:1.0.0 -f platform/Dockerfile platform
 docker build --build-arg SERVICE=pharmacy  -t medassist/platform-pharmacy:1.0.0 -f platform/Dockerfile platform
+docker build --build-arg SERVICE=material  -t medassist/platform-material:1.0.0 -f platform/Dockerfile platform
 docker build --build-arg SERVICE=tech      -t medassist/platform-tech:1.0.0     -f platform/Dockerfile platform
 docker build --build-arg SERVICE=emr       -t medassist/platform-emr:1.0.0      -f platform/Dockerfile platform
 docker build --build-arg SERVICE=insurance -t medassist/platform-insurance:1.0.0 -f platform/Dockerfile platform
@@ -146,6 +147,7 @@ helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \
   -f values-prod.yaml \
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 \
   --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 \
+  --set material.image.tag=1.0.0 \
   --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 \
   --set aiCore.image.tag=1.0.0 \
   --set gateway.env[0].name=GATEWAY_TRUSTED_PROXIES --set gateway.env[0].value=<集群内网段>
@@ -153,7 +155,7 @@ helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \
 
 > `imageRegistry` 已在 `values-prod.yaml` 固定为 `harbor.hospital.local/medassist`，**不需要**再 `--set`
 > （重复叠加会拼成 `.../medassist/medassist` 三层，镜像必然拉不到）。
-> **clinical / pharmacy / tech / emr / insurance 五个后续服务的 tag 必须显式给出**：
+> **clinical / pharmacy / material / tech / emr / insurance 六个后续服务的 tag 必须显式给出**：
 > values 默认 `0.1.0-SNAPSHOT`，production 环境会直接渲染失败。
 
 > **SkyWalking agent 也必须指向院内 Harbor**（否则纯内网集群 initContainer 会 ImagePullBackOff）：

@@ -42,6 +42,7 @@ const router = createRouter({
         { path: 'tech', name: 'tech', component: () => import('@/views/TechView.vue') },
         { path: 'narcotic', name: 'narcotic', component: () => import('@/views/NarcoticRegisterView.vue') },
         { path: 'pharmacy', name: 'pharmacy', component: () => import('@/views/PharmacyView.vue') },
+        { path: 'material', name: 'material', component: () => import('@/views/MaterialView.vue') },
         { path: 'insurance', name: 'insurance', component: () => import('@/views/InsuranceView.vue') },
         {
           path: 'insurance-ops',

@@ -32,6 +32,9 @@ spec:
           value: "1.0.0"
         - name: pharmacy.image.tag
           value: "1.0.0"
+        # material 新增于 G3，默认 tag 为 SNAPSHOT，生产必须显式覆盖
+        - name: material.image.tag
+          value: "1.0.0"
         - name: tech.image.tag
           value: "1.0.0"
         - name: emr.image.tag

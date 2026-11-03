@@ -111,6 +111,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    name: 'material',
+    path: '/material',
+    title: '物资耗材',
+    hint: '耗材目录 · 批次效期 · 科室/手术出库 · 高值植入追溯与批次召回',
+    icon: 'layers',
+    group: '药事管理',
+    permissions: ['material:read'],
+  },
+  {
     name: 'insurance',
     path: '/insurance',
     title: '医保结算',

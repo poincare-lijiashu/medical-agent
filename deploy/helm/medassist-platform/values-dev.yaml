@@ -102,6 +102,14 @@ pharmacy:
     requests: {cpu: 100m, memory: 384Mi}
     limits: {cpu: 500m, memory: 768Mi}
 
+material:
+  replicaCount: 1
+  autoscaling: {enabled: false}
+  podDisruptionBudget: {enabled: false}
+  resources:
+    requests: {cpu: 100m, memory: 384Mi}
+    limits: {cpu: 500m, memory: 768Mi}
+
 tech:
   replicaCount: 1
   autoscaling: {enabled: false}

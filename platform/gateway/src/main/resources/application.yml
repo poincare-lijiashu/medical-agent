@@ -93,6 +93,16 @@ spring:
               metadata:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
+            # 物资耗材（目录/批次库存/出库/高值追溯与召回）
+            - id: platform-material-v2
+              uri: ${PLATFORM_MATERIAL_URI:http://127.0.0.1:8089}
+              predicates:
+                - Path=/api/v2/material/**
+              filters:
+                - StripPrefix=2
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 医技（检查/检验申请、标本、报告、危急值）
             - id: platform-tech-v2
               uri: ${PLATFORM_TECH_URI:http://127.0.0.1:8085}

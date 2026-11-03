@@ -51,6 +51,13 @@ import type {
   PurchaseOrderView,
   GoodsReceiptView,
   SupplierView,
+  ConsumableView,
+  ConsumableBatch,
+  ConsumableIssueView,
+  ConsumableTrace,
+  ConsumableRecall,
+  MaterialStockWarning,
+  MaterialSummary,
   RegSlot,
   RoomUtilization,
   StockWarning,
@@ -332,6 +339,72 @@ export const pharmacyApi = {
   ) => post<GoodsReceiptView>(`/pharmacy/purchase-orders/${id}/receipts`, body),
   purchaseReceipts: (id: string) =>
     get<GoodsReceiptView[]>(`/pharmacy/purchase-orders/${id}/receipts`),
+}
+
+// ---------------------------------------------------------------- 物资耗材（G3）
+
+export const materialApi = {
+  summary: () => get<MaterialSummary>('/material/summary'),
+  consumables: (keyword?: string, category?: string, enabled?: boolean, limit = 200) =>
+    get<ConsumableView[]>('/material/consumables', { keyword, category, enabled, limit }),
+  consumable: (id: string) => get<ConsumableView>(`/material/consumables/${id}`),
+  createConsumable: (body: {
+    code: string
+    name: string
+    spec: string
+    unit: string
+    category: string
+    price: number
+    manufacturer?: string
+    registrationNo?: string
+  }) => post<ConsumableView>('/material/consumables', body),
+  adjustConsumablePrice: (id: string, price: number, version: number) =>
+    put<ConsumableView>(`/material/consumables/${id}/price`, { price, version }),
+  toggleConsumable: (id: string, enabled: boolean, version: number) =>
+    put<ConsumableView>(`/material/consumables/${id}/enabled`, { enabled, version }),
+  batches: (consumableId: string) =>
+    get<ConsumableBatch[]>(`/material/consumables/${consumableId}/batches`),
+  receiveBatch: (
+    consumableId: string,
+    body: {
+      batchNo: string
+      expireDate?: string
+      quantity: number
+      supplier?: string
+      unitPrice?: number
+    },
+  ) => post<ConsumableBatch>(`/material/consumables/${consumableId}/batches`, body),
+  stockWarnings: () => get<MaterialStockWarning[]>('/material/stock-warnings'),
+  issues: (deptId?: string, limit = 100) =>
+    get<ConsumableIssueView[]>('/material/issues', { deptId, limit }),
+  issue: (id: string) => get<ConsumableIssueView>(`/material/issues/${id}`),
+  /** 出库：requestId 为幂等键，重试必须复用同一个值，否则会重复扣库存。 */
+  createIssue: (body: {
+    deptId: string
+    deptName?: string
+    purpose: string
+    requestId: string
+    remark?: string
+    items: { consumableId: string; quantity: number }[]
+  }) => post<ConsumableIssueView>('/material/issues', body),
+  traces: (params?: {
+    batchNo?: string
+    patientNo?: string
+    consumableId?: string
+    limit?: number
+  }) => get<ConsumableTrace[]>('/material/traces', params),
+  /** 使用登记：耗材与批次由出库明细回填，数量不得超过未追溯数量。 */
+  registerTrace: (body: {
+    issueItemId: string
+    quantity: number
+    patientId: string
+    patientNo: string
+    visitId?: string
+    surgeryId?: string
+    remark?: string
+  }) => post<{ trace: ConsumableTrace }>('/material/traces', body),
+  recall: (batchNo: string) =>
+    get<ConsumableRecall>('/material/traces/recall', { batchNo }),
 }
 
 export const techApi = {

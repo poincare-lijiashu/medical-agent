@@ -76,6 +76,16 @@ public enum ErrorCode {
     PURCHASE_RECEIPT_INVALID(43437, "验收内容不合法（重复明细或数量超限）"),
     GOODS_RECEIPT_NOT_FOUND(43438, "未找到该到货验收单"),
 
+    // ---- 物资耗材（43xxx 续，G3；与药械同属物资供应，编码段相邻）----
+    CONSUMABLE_NOT_FOUND(43450, "未找到该耗材，或该耗材已停用"),
+    CONSUMABLE_BATCH_NOT_FOUND(43451, "未找到该耗材批次"),
+    CONSUMABLE_ISSUE_NOT_FOUND(43452, "未找到该出库单"),
+    CONSUMABLE_STOCK_INSUFFICIENT(43453, "耗材库存不足"),
+    CONSUMABLE_BATCH_EXPIRED(43454, "所选批次已过期，禁止出库或用于患者"),
+    CONSUMABLE_TRACE_EXCEEDS(43455, "追溯数量超过已出库未追溯数量"),
+    CONSUMABLE_ISSUE_INVALID(43456, "出库内容不合法（重复明细或数量异常）"),
+    CONSUMABLE_ISSUE_ITEM_NOT_FOUND(43457, "未找到该出库明细"),
+
     // ---- 麻醉药品（43xxx 续）----
     NARCOTIC_REGISTER_NOT_FOUND(43407, "未找到该麻醉药品专册登记"),
     NARCOTIC_PRESCRIBER_NOT_FOUND(43408, "未找到该医师的麻醉药品处方权记录"),

@@ -40,6 +40,7 @@
     <module>empi</module>
     <module>clinical</module>
     <module>pharmacy</module>
+    <module>material</module>
     <module>tech</module>
     <module>emr</module>
     <module>insurance</module>

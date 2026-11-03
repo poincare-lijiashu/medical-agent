@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 # ---------------------------------------------------------------------------
-# MedAssist Java 微服务通用镜像（gateway / auth / empi / clinical / pharmacy / tech / emr / insurance 共用）
+# MedAssist Java 微服务通用镜像（gateway / auth / empi / clinical / pharmacy / material / tech / emr / insurance / kb 共用）
 #
-# 构建（在仓库根目录执行，SERVICE 取 gateway|auth|empi|clinical|pharmacy|tech|emr|insurance）：
+# 构建（在仓库根目录执行，SERVICE 取 gateway|auth|empi|clinical|pharmacy|material|tech|emr|insurance|kb）：
 #   docker build --build-arg SERVICE=auth -f platform/Dockerfile platform
 #
 # 设计要点：
@@ -26,6 +26,7 @@ COPY auth/pom.xml auth/pom.xml
 COPY empi/pom.xml empi/pom.xml
 COPY clinical/pom.xml clinical/pom.xml
 COPY pharmacy/pom.xml pharmacy/pom.xml
+COPY material/pom.xml material/pom.xml
 COPY tech/pom.xml tech/pom.xml
 COPY emr/pom.xml emr/pom.xml
 COPY insurance/pom.xml insurance/pom.xml

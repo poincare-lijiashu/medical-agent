@@ -58,8 +58,8 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 ## 3. 前置条件（平台组准备，业务 Chart 不代管）
 
 1. **命名空间**：`medassist-dev` / `medassist-staging` / `medassist-prod`（Argo CD 会自动创建）
-2. **PostgreSQL**：库 `medagent`，账号具备以下 **8 个业务 schema** 的建表权限：
-   `auth_svc` / `empi_svc` / `clinical_svc` / `pharmacy_svc` / `tech_svc` / `emr_svc` / `insurance_svc` / `kb_svc`
+2. **PostgreSQL**：库 `medagent`，账号具备以下 **9 个业务 schema** 的建表权限：
+   `auth_svc` / `empi_svc` / `clinical_svc` / `pharmacy_svc` / `material_svc` / `tech_svc` / `emr_svc` / `insurance_svc` / `kb_svc`
    （另需 `public`）。缺任一 schema 权限会导致对应服务的迁移 Hook Job 失败，
    `helm upgrade` 卡在 `pre-upgrade` 且不继续发布——排障时先看迁移 Job 日志里的
    `permission denied for schema xxx_svc`。
@@ -123,11 +123,12 @@ helm upgrade --install medassist deploy/helm/medassist-platform `
   -n medassist-dev --create-namespace -f deploy/helm/medassist-platform/values-dev.yaml
 
 # 生产（外部 Secret + APM + 网络策略 + PreSync 迁移）
-# 注意：staging/prod 的 values 不允许 SNAPSHOT 镜像，必须由 CI 注入不可变 tag（9 个组件一个都不能少）
+# 注意：staging/prod 的 values 不允许 SNAPSHOT 镜像，必须由 CI 注入不可变 tag（10 个组件一个都不能少）
 helm upgrade --install medassist deploy/helm/medassist-platform `
   -n medassist-prod --create-namespace -f deploy/helm/medassist-platform/values-prod.yaml `
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
   --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
+  --set material.image.tag=1.0.0 `
   --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
   --set kb.image.tag=1.0.0 `
   --set aiCore.image.tag=1.0.0
@@ -145,6 +146,7 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
   -f deploy/helm/medassist-platform/values-prod.yaml `
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 `
   --set empi.image.tag=1.0.0 --set clinical.image.tag=1.0.0 --set pharmacy.image.tag=1.0.0 `
+  --set material.image.tag=1.0.0 `
   --set tech.image.tag=1.0.0 --set emr.image.tag=1.0.0 --set insurance.image.tag=1.0.0 `
   --set kb.image.tag=1.0.0 `
   --set aiCore.image.tag=1.0.0

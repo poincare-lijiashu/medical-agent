@@ -1,0 +1,110 @@
+{{- if .Values.material.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "material") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "material") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "material") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "material") | nindent 4 }}
+spec:
+  {{- if not .Values.material.autoscaling.enabled }}
+  replicas: {{ .Values.material.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.material.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "material") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "material") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "material") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.material.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: material
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.material.image) }}
+          imagePullPolicy: {{ .Values.material.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.material.service.port }}
+              protocol: TCP
+          env:
+            # 物资域是叶子服务：只依赖本域数据库，不直连其他业务服务
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "material" "jwt" false "empi" false) | nindent 12 }}
+            {{- with .Values.material.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.material.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.material.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.material.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.material.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.material.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.material.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.material.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.material.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.material.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.material.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.material.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.material.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.material.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "material") | nindent 6 }}
+{{- end }}

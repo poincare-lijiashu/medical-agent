@@ -808,6 +808,132 @@ export interface ProcurementSummary {
   pendingReceiptOrders: number
 }
 
+// ---------------------------------------------------------------- 物资耗材（G3）
+
+export type ConsumableCategory = 'GENERAL' | 'HIGH_VALUE' | 'IMPLANT'
+
+export interface Consumable {
+  id: string
+  code: string
+  name: string
+  spec: string
+  unit: string
+  /** 高值/植入类必须登记注册证、有效期，并在使用后追溯到患者。 */
+  category: ConsumableCategory
+  price: number
+  manufacturer: string | null
+  registrationNo: string | null
+  enabled: boolean
+  version: number
+  createdAt: string
+}
+
+export interface ConsumableView {
+  consumable: Consumable
+  totalStock: number
+}
+
+/** 批次库存：一般耗材可为 null 效期，高值/植入类必有。 */
+export interface ConsumableBatch {
+  id: string
+  consumableId: string
+  consumableCode: string
+  consumableName: string
+  batchNo: string
+  expireDate: string | null
+  quantity: number
+  supplier: string | null
+  unitPrice: number
+  version: number
+}
+
+/** 耗材近效期/过期预警（与药品 StockWarning 区分命名）。 */
+export interface MaterialStockWarning {
+  consumableCode: string
+  consumableName: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  expired: boolean
+}
+
+export type IssuePurpose = 'DEPT_STOCK' | 'SURGERY' | 'CLINIC'
+
+export interface ConsumableIssue {
+  id: string
+  issueNo: string
+  deptId: string
+  deptName: string | null
+  purpose: IssuePurpose
+  requestId: string
+  operator: string
+  remark: string | null
+  totalAmount: number
+  createdAt: string
+}
+
+export interface ConsumableIssueItem {
+  id: string
+  issueId: string
+  consumableId: string
+  consumableCode: string
+  consumableName: string
+  batchId: string
+  batchNo: string
+  expireDate: string | null
+  quantity: number
+  /** 已登记用于患者的数量；不得超过 quantity。 */
+  tracedQuantity: number
+  unitPrice: number
+  amount: number
+}
+
+export interface ConsumableIssueView {
+  issue: ConsumableIssue
+  items: ConsumableIssueItem[]
+}
+
+/** 使用追溯：一条 = 某批次耗材用于某位患者（可关联手术）。 */
+export interface ConsumableTrace {
+  id: string
+  issueItemId: string
+  consumableId: string
+  consumableCode: string
+  consumableName: string
+  batchNo: string
+  expireDate: string | null
+  quantity: number
+  patientId: string
+  /** 无 phi:read 时为服务端掩码。 */
+  patientNo: string
+  visitId: string | null
+  surgeryId: string | null
+  operator: string
+  usedAt: string
+  remark: string | null
+  createdAt: string
+}
+
+export interface ConsumableRecall {
+  batchNo: string
+  traceCount: number
+  totalQuantity: number
+  patientCount: number
+  surgeryCount: number
+  traces: ConsumableTrace[]
+}
+
+export interface MaterialSummary {
+  consumableCount: number
+  totalStock: number
+  stockValue: number
+  nearExpiryBatches: number
+  expiredBatches: number
+  issuesToday: number
+  tracesToday: number
+}
+
+
 
 /** 处方主体（金额为价格快照，不受后续调价影响）。 */
 export interface Prescription {

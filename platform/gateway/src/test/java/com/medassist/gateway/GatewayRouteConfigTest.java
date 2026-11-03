@@ -63,7 +63,7 @@ class GatewayRouteConfigTest {
         List<Map<String, Object>> platformRoutes = routes(loadConfig()).stream()
                 .filter(r -> String.valueOf(r.get("id")).startsWith("platform-"))
                 .toList();
-        assertThat(platformRoutes).hasSize(9);
+        assertThat(platformRoutes).hasSize(10);
 
         for (Map<String, Object> r : platformRoutes) {
             assertThat(r.get("metadata")).as("路由 %s 缺少 metadata", r.get("id")).isNotNull();
@@ -142,6 +142,16 @@ class GatewayRouteConfigTest {
 
         assertThat((List<String>) route.get("predicates"))
                 .containsExactly("Path=/api/v2/insurance/**");
+        assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
+    }
+
+    @Test
+    @DisplayName("material 路由只剥 /api/v2（控制器自带 /material 前缀）")
+    void materialRouteStripsTwoSegments() {
+        Map<String, Object> route = route(loadConfig(), "platform-material-v2");
+
+        assertThat((List<String>) route.get("predicates"))
+                .containsExactly("Path=/api/v2/material/**");
         assertThat((List<String>) route.get("filters")).contains("StripPrefix=2");
     }
 
