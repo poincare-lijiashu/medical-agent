@@ -237,6 +237,34 @@ public class PharmacyBillingService {
         return repo.findDispense(dispenseId).orElseThrow();
     }
 
+    // ---------------------------------------------------------------- 补偿扫描
+
+    /**
+     * 扫描计费异常态发药单并逐条重试（定时 worker 调用，P0-D3）。
+     *
+     * <p>此前只有人工 {@code billing-retry} 入口，操作员必须先知道 dispenseId；
+     * 异常单实际处于无人回收状态。补偿调用与人工重试同一条 {@link #retry} 路径，
+     * 临床侧按发药明细 id / 累计金额幂等，重复调用一定收敛。
+     *
+     * <p>每条独立 try/catch：一条失败（如已退药不可整单重试）不阻断其余补偿。
+     *
+     * @return 本轮成功收敛的条数
+     */
+    public int retryAbandoned(int limit, String actor) {
+        List<Dispense> abnormal = repo.listAbnormalBillingDisps(limit);
+        int recovered = 0;
+        for (Dispense d : abnormal) {
+            try {
+                retry(d.id(), actor);
+                recovered++;
+            } catch (RuntimeException e) {
+                log.warn("pharmacy.billing_compensation_skipped dispenseId={} billingStatus={} err={}",
+                        d.id(), d.billingStatus(), e.getClass().getSimpleName());
+            }
+        }
+        return recovered;
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /** 发药明细只带 drugId；药品编码/名称从处方明细或药品字典取（此处用字典，保持唯一真源）。 */

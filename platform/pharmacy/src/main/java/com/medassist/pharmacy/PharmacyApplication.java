@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 药房服务（HIS 业务域第二段）：药品字典 → 入库批次 → 处方审核 → 发药/退药。
@@ -21,6 +22,7 @@ import org.springframework.context.annotation.Bean;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan("com.medassist.pharmacy.config")
+@EnableScheduling
 public class PharmacyApplication {
 
     public static void main(String[] args) {

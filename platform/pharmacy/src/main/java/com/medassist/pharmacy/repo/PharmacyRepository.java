@@ -536,6 +536,23 @@ public class PharmacyRepository {
                         """).param(prescriptionId).query(DISPENSE_MAPPER).optional();
     }
 
+    /**
+     * 补偿扫描：取计费异常态的发药单（走 {@code ix_dispense_billing_abnormal} 部分索引）。
+     *
+     * <p>按发生时间升序：最早的异常最先补偿，避免老单饿死。PENDING 也在列——
+     * afterCommit 回调进程崩溃时会永久停在 PENDING，必须由扫描器收敛。
+     */
+    public List<Dispense> listAbnormalBillingDisps(int limit) {
+        return jdbc.sql("""
+                        SELECT id, dispense_no, prescription_id, operator, checker, status,
+                               total_amount, dispensed_at, version, billing_status
+                          FROM pharmacy_svc.dispense
+                         WHERE billing_status IN ('PENDING', 'CHARGE_FAILED', 'REFUND_FAILED')
+                         ORDER BY dispensed_at
+                         LIMIT :limit
+                        """).param("limit", limit).query(DISPENSE_MAPPER).list();
+    }
+
     public Optional<Dispense> lockDispense(UUID id) {
         return jdbc.sql("""
                         SELECT id, dispense_no, prescription_id, operator, checker, status,
