@@ -68,6 +68,16 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   PARTIAL_RETURNED: { label: '部分退回', tone: 'warn' },
   EXPIRED: { label: '已过期', tone: 'danger' },
   NEAR_EXPIRY: { label: '近效期', tone: 'warn' },
+  // 医技
+  APPLIED: { label: '已开立', tone: 'warn' },
+  COLLECTED: { label: '已采集', tone: 'accent' },
+  SPECIMEN_COLLECTED: { label: '已采集', tone: 'accent' },
+  RECEIVED: { label: '已接收', tone: 'accent' },
+  REPORTED: { label: '已出报告', tone: 'ok' },
+  CLOSED: { label: '已关闭', tone: 'neutral' },
+  ACKNOWLEDGED: { label: '已确认', tone: 'ok' },
+  FINAL: { label: '已签发', tone: 'ok' },
+  AMENDED: { label: '已修订', tone: 'accent' },
   // 通用
   SIGNED: { label: '已签署', tone: 'ok' },
   FIT: { label: '可耐受', tone: 'ok' },

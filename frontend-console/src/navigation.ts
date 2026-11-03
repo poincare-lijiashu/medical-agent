@@ -75,6 +75,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:charge:read'],
   },
   {
+    name: 'tech',
+    path: '/tech',
+    title: '医技工作台',
+    hint: '检查检验申请 · 标本采集接收 · 报告签发 · 危急值闭环',
+    icon: 'monitor',
+    group: '医技检查',
+    permissions: ['tech:read'],
+  },
+  {
     name: 'narcotic',
     path: '/narcotic',
     title: '麻精专册',
@@ -112,7 +121,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-export const NAV_GROUPS = ['临床诊疗', '住院管理', '药事管理', '手术与收费', '质量与知识']
+export const NAV_GROUPS = ['临床诊疗', '住院管理', '医技检查', '药事管理', '手术与收费', '质量与知识']
 
 export function findNav(name: string): NavItem | undefined {
   return NAV_ITEMS.find((n) => n.name === name)

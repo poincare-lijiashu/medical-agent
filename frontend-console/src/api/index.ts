@@ -39,6 +39,12 @@ import type {
   SurgeryChargePreview,
   SurgeryLevel,
   SurgerySchedule,
+  TechApplication,
+  TechApplicationView,
+  TechCriticalLine,
+  TechCriticalView,
+  TechExamItemView,
+  TechReportView,
   Visit,
   VisitOrder,
   VisitTransfer,
@@ -240,6 +246,49 @@ export const pharmacyApi = {
     get<NarcoticRegister[]>('/pharmacy/narcotic/register', { from, to, status, limit }),
   ampouleReturn: (id: string, quantity: number, receiver: string) =>
     post<NarcoticRegister>(`/pharmacy/narcotic/register/${id}/ampoule-return`, { quantity, receiver }),
+}
+
+export const techApi = {
+  /** 申请队列：status 为空返回全部（服务端每类最多 200 条，按开单时间倒序）。 */
+  applications: (status?: string, limit = 100) =>
+    get<TechApplication[]>('/tech/applications', { status, limit }),
+  application: (id: string) => get<TechApplicationView>(`/tech/applications/${id}`),
+  cancelApplication: (id: string) =>
+    post<TechApplicationView>(`/tech/applications/${id}/cancel`),
+  /** 检验采集：生成唯一条码；specimenType 省略时按项目字典带出的标本类型。 */
+  collectSpecimen: (id: string, specimenType?: string) =>
+    post<TechApplicationView>(`/tech/applications/${id}/specimen`, specimenType ? { specimenType } : {}),
+  /** 接收/拒收标本；拒收会作废本次申请（需重新开单）。 */
+  receiveSpecimen: (id: string, accept: boolean, reason?: string) =>
+    post<TechApplicationView>(`/tech/applications/${id}/specimen/receive`, { accept, reason }),
+  /** 开始执行：检查类从 APPLIED、检验类从 RECEIVED。 */
+  startApplication: (id: string) => post<TechApplicationView>(`/tech/applications/${id}/start`),
+  /** 关闭申请：必须已出报告且危急值全部闭环。 */
+  closeApplication: (id: string) => post<TechApplicationView>(`/tech/applications/${id}/close`),
+  /** 当前报告；申请尚无报告时返回 404，由调用方转为空态。 */
+  currentReport: (applicationId: string) =>
+    get<TechReportView>(`/tech/applications/${applicationId}/reports/current`),
+  writeReport: (
+    applicationId: string,
+    body: { findings: string; conclusion: string; criticalLines?: TechCriticalLine[] },
+  ) => post<TechReportView>(`/tech/applications/${applicationId}/reports`, body),
+  rewriteReport: (
+    reportId: string,
+    body: { findings: string; conclusion: string; criticalLines?: TechCriticalLine[] },
+  ) => post<TechReportView>(`/tech/reports/${reportId}/rewrite`, body),
+  reviewReport: (reportId: string, approve: boolean, reason?: string) =>
+    post<TechReportView>(`/tech/reports/${reportId}/review`, { approve, reason }),
+  /** 修订：追加新版本，历史版本保留。 */
+  amendReport: (reportId: string, body: { findings: string; conclusion: string; reason: string }) =>
+    post<TechReportView>(`/tech/reports/${reportId}/amend`, body),
+  criticals: (status?: string, applicationId?: string, limit = 100) =>
+    get<TechCriticalView[]>('/tech/criticals', { status, applicationId, limit }),
+  acknowledgeCritical: (id: string, note?: string) =>
+    post<TechCriticalView>(`/tech/criticals/${id}/acknowledge`, note ? { note } : {}),
+  closeCritical: (id: string, note?: string) =>
+    post<TechCriticalView>(`/tech/criticals/${id}/close`, note ? { note } : {}),
+  items: (category?: string, keyword?: string, limit = 200) =>
+    get<TechExamItemView[]>('/tech/items', { category, keyword, limit }),
 }
 
 export const kbApi = {

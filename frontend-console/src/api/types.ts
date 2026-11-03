@@ -787,3 +787,126 @@ export interface DispenseView {
   items: DispenseItem[]
   returns: DispenseReturn[]
 }
+
+// ---------------------------------------------------------------- 医技
+
+/** 检查/检验申请。 */
+export interface TechApplication {
+  id: string
+  applicationNo: string
+  patientId: string
+  patientNo: string
+  visitId: string | null
+  visitNo: string | null
+  deptId: string | null
+  appliedBy: string
+  /** LAB=检验（需标本流转）；EXAM=检查（直接开始执行）。 */
+  category: 'LAB' | 'EXAM'
+  itemCode: string
+  itemName: string
+  bodyPart: string | null
+  priority: 'ROUTINE' | 'URGENT' | 'STAT'
+  clinicalDiag: string | null
+  specimenType: string | null
+  status:
+    | 'APPLIED'
+    | 'SPECIMEN_COLLECTED'
+    | 'RECEIVED'
+    | 'IN_PROGRESS'
+    | 'REPORTED'
+    | 'CLOSED'
+    | 'CANCELLED'
+  version: number
+  createdAt: string
+  sourceOrderId: string | null
+}
+
+/** 标本（条码由采集时生成，拒收会作废本次申请）。 */
+export interface TechSpecimen {
+  id: string
+  applicationId: string
+  barcode: string
+  specimenType: string
+  status: 'COLLECTED' | 'RECEIVED' | 'REJECTED'
+  collectedBy: string
+  collectedAt: string | null
+  receivedBy: string | null
+  receivedAt: string | null
+  rejectReason: string | null
+  version: number
+}
+
+export interface TechApplicationView {
+  application: TechApplication
+  specimen: TechSpecimen | null
+}
+
+/** 报告版本：同号多版本，current=true 为当前版本，历史版本保留追溯。 */
+export interface TechReport {
+  id: string
+  reportNo: string
+  applicationId: string
+  revision: number
+  current: boolean
+  findings: string
+  conclusion: string
+  reporter: string
+  reviewer: string | null
+  reviewedAt: string | null
+  status: 'DRAFT' | 'FINAL' | 'AMENDED'
+  criticalFlag: boolean
+  createdAt: string
+}
+
+/** 危急值：PENDING→ACKNOWLEDGED→CLOSED，不允许跳过确认。 */
+export interface TechCritical {
+  id: string
+  applicationId: string
+  reportId: string
+  itemName: string
+  resultValue: string
+  referenceRange: string | null
+  severity: 'LOW' | 'HIGH' | 'CRITICAL'
+  status: 'PENDING' | 'ACKNOWLEDGED' | 'CLOSED'
+  notifiedTo: string | null
+  notifiedAt: string | null
+  acknowledgedBy: string | null
+  acknowledgedAt: string | null
+  note: string | null
+  createdAt: string
+}
+
+export interface TechReportView {
+  report: TechReport
+  criticals: TechCritical[]
+  history: TechReport[]
+}
+
+/** 书写报告时的危急值行（非空即创建 PENDING 危急值）。 */
+export interface TechCriticalLine {
+  itemName: string
+  resultValue: string
+  referenceRange?: string
+  severity?: 'LOW' | 'HIGH' | 'CRITICAL'
+  notifiedTo?: string
+}
+
+/** overdue=超过确认时限仍待确认（服务端按配置阈值判定）。 */
+export interface TechCriticalView {
+  critical: TechCritical
+  overdue: boolean
+}
+
+export interface TechExamItem {
+  id: string
+  itemCode: string
+  name: string
+  category: 'LAB' | 'EXAM'
+  specimenType: string | null
+  enabled: boolean
+  version: number
+}
+
+export interface TechExamItemView {
+  item: TechExamItem
+}
