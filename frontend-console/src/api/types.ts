@@ -910,3 +910,116 @@ export interface TechExamItem {
 export interface TechExamItemView {
   item: TechExamItem
 }
+
+// ---------------------------------------------------------------- 医保
+
+/** 参保登记（本地快照，按 patientId 唯一）。 */
+export interface InsuranceMember {
+  id: string
+  patientId: string
+  patientNo: string
+  insuranceType: 'EMPLOYEE' | 'RESIDENT' | 'RETIRED' | 'OTHER'
+  region: string
+  personCategory: string | null
+  deductible: number
+  /** 报销比例 0–1。 */
+  reimbursementRatio: number
+  cap: number
+  effectiveFrom: string | null
+  effectiveTo: string | null
+  status: 'ACTIVE' | 'DISABLED'
+  version: number
+}
+
+/** 参保变更历史（追加式，最新在前）。 */
+export interface InsuranceMemberHistory {
+  id: string
+  memberId: string
+  patientId: string
+  patientNo: string
+  insuranceType: string
+  region: string
+  personCategory: string | null
+  deductible: number
+  reimbursementRatio: number
+  cap: number
+  effectiveFrom: string | null
+  effectiveTo: string | null
+  status: string
+  version: number
+  changeType: 'CREATE' | 'UPDATE' | 'DISABLE' | 'ENABLE'
+  changedBy: string
+  changedAt: string
+  note: string | null
+}
+
+/** 结算清单明细行：含未映射与超限价标记，便于对账追溯。 */
+export interface InsuranceBillLine {
+  chargeNo: string
+  itemCode: string
+  itemName: string
+  category: string
+  chargeStatus: string
+  amount: number
+  insuranceCode: string | null
+  payCategory: 'A' | 'B' | 'C' | null
+  selfPayRatio: number | null
+  overLimitAmount: number
+  eligibleAmount: number
+  unmapped: boolean
+}
+
+/** 医保结算清单：DRAFT → CONFIRMED → VOIDED（作废单向不可逆）。 */
+export interface InsuranceBill {
+  id: string
+  billNo: string
+  visitId: string
+  patientId: string
+  patientNo: string
+  memberId: string | null
+  totalAmount: number
+  eligibleAmount: number
+  deductible: number
+  insuranceAmount: number
+  selfPayAmount: number
+  status: 'DRAFT' | 'CONFIRMED' | 'VOIDED'
+  detail: string
+  createdBy: string
+  confirmedBy: string | null
+  confirmedAt: string | null
+  voidReason: string | null
+  voidedBy: string | null
+  voidedAt: string | null
+  snapshotRatio: number | null
+  snapshotCap: number | null
+  version: number
+  createdAt: string
+  primaryDiagnosisCode: string | null
+  primaryDiagnosisName: string | null
+  diagnosisCount: number
+  diagnoses: string | null
+}
+
+export interface InsuranceBillView {
+  bill: InsuranceBill
+  lines: InsuranceBillLine[]
+  /** 仅生成/重算时返回；读历史清单为 null。 */
+  capUsed: number | null
+  capRemaining: number | null
+}
+
+/** 按就诊对账：清单金额 vs 当前收费重算。matched=false 需作废后重生成。 */
+export interface InsuranceReconcile {
+  visitId: string
+  billNo: string
+  billStatus: string
+  matched: boolean
+  billTotal: number
+  chargeTotal: number | null
+  billInsurance: number
+  chargeInsurance: number | null
+  billSelfPay: number
+  chargeSelfPay: number | null
+  billLineCount: number
+  chargeLineCount: number
+}

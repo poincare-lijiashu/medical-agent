@@ -16,6 +16,11 @@ import type {
   HomepageView,
   InpatientAlert,
   InpatientFinanceView,
+  InsuranceBill,
+  InsuranceBillView,
+  InsuranceMember,
+  InsuranceMemberHistory,
+  InsuranceReconcile,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -289,6 +294,41 @@ export const techApi = {
     post<TechCriticalView>(`/tech/criticals/${id}/close`, note ? { note } : {}),
   items: (category?: string, keyword?: string, limit = 200) =>
     get<TechExamItemView[]>('/tech/items', { category, keyword, limit }),
+}
+
+export const insuranceApi = {
+  bills: (status?: string, patientId?: string, limit = 200) =>
+    get<InsuranceBill[]>('/insurance/settlements', { status, patientId, limit }),
+  bill: (id: string) => get<InsuranceBillView>(`/insurance/settlements/${id}`),
+  /** 按就诊查清单；尚未生成时返回 404，由调用方转为空态。 */
+  billByVisit: (visitId: string) =>
+    get<InsuranceBillView>(`/insurance/settlements/by-visit/${visitId}`),
+  /** 生成/重算草稿（需 insurance:settlement:write）。 */
+  generateBill: (visitId: string) =>
+    post<InsuranceBillView>('/insurance/settlements', { visitId }),
+  /** 确认入档（需 insurance:settlement:confirm，与生成分开授权）。 */
+  confirmBill: (id: string) => post<InsuranceBillView>(`/insurance/settlements/${id}/confirm`),
+  /** 作废（红冲）：单向不可逆，必须写原因。 */
+  voidBill: (id: string, reason: string) =>
+    post<InsuranceBillView>(`/insurance/settlements/${id}/void`, { reason }),
+  reconcile: (visitId: string) =>
+    get<InsuranceReconcile>(`/insurance/settlements/reconcile/${visitId}`),
+  /** 参保信息；未登记返回 404。 */
+  member: (patientId: string) => get<InsuranceMember>(`/insurance/members/${patientId}`),
+  memberHistory: (patientId: string, limit = 50) =>
+    get<InsuranceMemberHistory[]>(`/insurance/members/${patientId}/history`, { limit }),
+  registerMember: (body: {
+    patientId: string
+    insuranceType: string
+    region: string
+    personCategory?: string
+    deductible?: number
+    reimbursementRatio?: number
+    cap?: number
+    effectiveFrom?: string
+    effectiveTo?: string
+    status?: string
+  }) => post<InsuranceMember>('/insurance/members', body),
 }
 
 export const kbApi = {

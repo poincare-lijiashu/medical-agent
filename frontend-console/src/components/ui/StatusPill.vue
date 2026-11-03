@@ -78,6 +78,11 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   ACKNOWLEDGED: { label: '已确认', tone: 'ok' },
   FINAL: { label: '已签发', tone: 'ok' },
   AMENDED: { label: '已修订', tone: 'accent' },
+  // 医保
+  CONFIRMED: { label: '已确认', tone: 'ok' },
+  VOIDED: { label: '已作废', tone: 'neutral' },
+  DISABLED: { label: '已停用', tone: 'neutral' },
+  REFUNDED: { label: '已退费', tone: 'neutral' },
   // 通用
   SIGNED: { label: '已签署', tone: 'ok' },
   FIT: { label: '可耐受', tone: 'ok' },

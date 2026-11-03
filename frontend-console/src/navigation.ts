@@ -102,6 +102,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    name: 'insurance',
+    path: '/insurance',
+    title: '医保结算',
+    hint: '参保登记 · 结算清单生成/确认/作废 · 按就诊对账',
+    icon: 'wallet',
+    group: '医保结算',
+    permissions: ['insurance:settlement:read'],
+  },
+  {
     name: 'homepage-qc',
     path: '/homepage-qc',
     title: '病案首页质控',
@@ -121,7 +130,15 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-export const NAV_GROUPS = ['临床诊疗', '住院管理', '医技检查', '药事管理', '手术与收费', '质量与知识']
+export const NAV_GROUPS = [
+  '临床诊疗',
+  '住院管理',
+  '医技检查',
+  '药事管理',
+  '手术与收费',
+  '医保结算',
+  '质量与知识',
+]
 
 export function findNav(name: string): NavItem | undefined {
   return NAV_ITEMS.find((n) => n.name === name)
