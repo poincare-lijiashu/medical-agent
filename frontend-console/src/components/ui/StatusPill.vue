@@ -51,6 +51,10 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   // 麻精专册
   PENDING_RETURN: { label: '待回收空安瓿', tone: 'warn' },
   RETURNED: { label: '已回收', tone: 'ok' },
+  // 护理执行
+  EXECUTED: { label: '已执行', tone: 'ok' },
+  REFUSED: { label: '患者拒绝', tone: 'warn' },
+  OMITTED: { label: '未执行', tone: 'danger' },
   // 会诊
   REQUESTED: { label: '待受理', tone: 'warn' },
   ACCEPTED: { label: '会诊中', tone: 'accent' },

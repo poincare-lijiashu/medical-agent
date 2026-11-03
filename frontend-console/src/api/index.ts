@@ -20,6 +20,8 @@ import type {
   LoginResult,
   Me,
   NarcoticRegister,
+  NursingCorrectionView,
+  NursingExecutionView,
   OperatingRoom,
   PageResult,
   Patient,
@@ -117,6 +119,27 @@ export const clinicalApi = {
     get<InpatientFinanceView>(`/clinical/inpatient/admissions/${admissionId}/finance`),
   inpatientAlerts: (wardId?: string) =>
     get<InpatientAlert[]>('/clinical/inpatient/alerts', { wardId }),
+  nursingExecutions: (admissionId: string, date?: string) =>
+    get<NursingExecutionView[]>(`/clinical/inpatient/admissions/${admissionId}/nursing-executions`, {
+      date,
+    }),
+  recordNursing: (
+    admissionId: string,
+    body: { orderId: string; execDate?: string; status: string; note?: string },
+  ) =>
+    post<NursingExecutionView>(
+      `/clinical/inpatient/admissions/${admissionId}/nursing-executions`,
+      body,
+    ),
+  correctNursing: (
+    admissionId: string,
+    executionId: string,
+    body: { status: string; reason: string; confirmed: boolean },
+  ) =>
+    post<NursingCorrectionView>(
+      `/clinical/inpatient/admissions/${admissionId}/nursing-executions/${executionId}/correction`,
+      body,
+    ),
   visitTransfers: (visitId: string) =>
     get<VisitTransfer[]>(`/clinical/visits/${visitId}/transfers`),
   transferVisit: (visitId: string, body: { toDeptId: string; bedId?: string; reason: string }) =>

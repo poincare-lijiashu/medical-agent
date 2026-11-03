@@ -39,6 +39,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:read'],
   },
   {
+    name: 'nursing',
+    path: '/nursing',
+    title: '护理执行',
+    hint: '长嘱逐日执行 · 拒绝/未执行当日不计费 · 更正联动红冲',
+    icon: 'clipboard',
+    group: '住院管理',
+    permissions: ['inpatient:nursing:read'],
+  },
+  {
     name: 'preop',
     path: '/preop',
     title: '术前访视',

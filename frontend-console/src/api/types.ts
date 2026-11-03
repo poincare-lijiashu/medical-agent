@@ -199,6 +199,38 @@ export interface InpatientAlert {
   shortfall: number
 }
 
+/** 护理执行记录（长嘱逐日执行，追加式）。 */
+export interface NursingExecutionView {
+  id: string
+  admissionId: string
+  orderId: string
+  orderNo: string
+  itemName: string
+  execDate: string
+  status: 'EXECUTED' | 'REFUSED' | 'OMITTED'
+  executor: string
+  note: string | null
+  createdAt: string
+}
+
+/** 护理执行更正结果（reversedAmount > 0 表示已联动红冲当日费用）。 */
+export interface NursingCorrectionView {
+  id: string
+  executionId: string
+  admissionId: string
+  orderId: string
+  orderNo: string
+  itemName: string
+  execDate: string
+  fromStatus: string
+  toStatus: string
+  reason: string
+  correctedBy: string
+  createdAt: string
+  reversedAmount: number
+  billingHint: string
+}
+
 export interface VisitOrder {
   id: string
   orderNo: string
