@@ -7,6 +7,48 @@
 
 ---
 
+## 零点五、整改状态（有则改之 / 无则加勉）
+
+### 已修复（2026-11-03 第一批，commit `922215f`）
+
+| 编号 | 复核结论 | 落地 | 验证 |
+|---|---|---|---|
+| P0-D1 | 成立 | `ReportService.rewrite` 改用 `listCriticalValuesByReport(reportId)` 全量比对，去重依据改为"已存在任何危急值（含 CLOSED）"，不再复活已闭环危急值 | 回归 +2（`rewriteDoesNotResurrectClosedCriticals` / `rewriteInsertsOnlyWhenNoneExist`）；ReportServiceTest 12 全绿 |
+| P0-D2 | 成立 | `InsuranceService.confirm` 改为"无锁读 → 锁外取临床快照 → 加行锁 → 用快照比对"（`fetchFreshComputation` / `assertChargesUnchanged`），不再在行锁内发起跨服务 HTTP | 修 5 个 mock 桩适配新锁序；InsuranceServiceTest 52 全绿 |
+| P0-D4 | 成立 | `ReturnReq.returnId` 改 `@NotNull`、删除三参兼容构造器；服务层兜底拒绝 null（422） | 回归 +1（`returnRejectsMissingIdempotencyKey`）；PrescriptionServiceTest 44 全绿 |
+| P0-D5 | 成立 | `dispenseByPrescription` 先校验处方存在（404 `PRESCRIPTION_NOT_FOUND`），未发药仍返回 null | 回归 +2（404 / 空两分支） |
+| P0-D6 | 成立 | `AbstractApiExceptionHandler.handleIntegrity` 按 SQLState 分流：23505/23503/23P01 → 409 可重试；CHECK/NOT NULL 违反 → 500 + 告警（不变量破坏不能伪装成可重试冲突） | common 99 / 8 域 `ExceptionMappingContractTest` 全绿 |
+| P0-S1 | 成立 | `UserService` 注入 `TokenRepository`；改密/停用事务内 `revokeAllForUser` 撤销全部刷新令牌并记审计 | 新增 `UserServiceTokenRevocationTest` 2 项全绿 |
+| P0-S4 | 成立 | `InternalAuthAutoConfiguration` 新增守卫：生产/预发布 `internal-auth.mode=log` 拒绝启动（与 off 同规格 fail-fast） | common `InternalAuthAutoConfigurationTest` 17 全绿 |
+| P0-F1 | 成立（已确证） | `http.ts` 抽出 `rawWithAuth()` 统一通道，`upload()/download()` 复用 once 的 401 刷新重试与登出链，补 503/504 文案 | typecheck + build 全绿 |
+| P0-F2 | 成立 | 新增 `components/ui/LoadError.vue` 错误态组件（带重试按钮），接入 6 处（PharmacyView / TechView / SystemView / InsuranceView / InsuranceCatalogPanel / InsuranceExportPanel），失败不再渲染成空态 | typecheck + build 全绿 |
+| P0-F3 | 成立 | `InsuranceBillDetail` 诊断快照按 JSON 解析渲染（code + name + 主诊断标记），历史非 JSON 文本兜底 | typecheck + build 全绿 |
+| P0-F5 | 成立 | `InsuranceCatalogPanel` 命中 200 条上限时显式提示"已显示前 N 条" | typecheck + build 全绿 |
+
+**第一批实测**：后端 `common 99 / auth 42 / pharmacy 90 / tech 68 / insurance 142 = 441 项全绿`；新增回归 7 项；前端 `typecheck` + `build` 全绿。
+**附带修复**：PowerShell 5.1 `Set-Content -Encoding UTF8` 写入 BOM 导致 Java 编译失败（`非法字符 '\ufeff'`）——已清除 2 个测试文件 BOM 并全仓扫描；教训：批量改 Java 源文件禁用 PS 的 `-Encoding UTF8`，改用 `WriteAllBytes` 或 Edit 工具。
+
+### 未修复（继续推进中）
+
+| 编号 | 状态 | 说明 |
+|---|---|---|
+| P0-S5 | 待办 | nonce 落 Redis（多副本防重放）——需引入 RedisTemplate 依赖与降级策略，排下一批 |
+| P0-F4 | 待办 | 药房/医技按状态分片拉取改服务端聚合接口——涉及新接口契约，排下一批 |
+| insurance 行级范围 | 待办 | insurance 表无 dept 列，行级过滤需 Flyway 补列（如 `settlement_bill.dept_id`）后接入 |
+
+### 已修复（2026-11-03 第二批，commit `b087f7f` / `61de7c2` / `76046b7`）
+
+| 编号 | 复核结论 | 落地 | 验证 |
+|---|---|---|---|
+| P0-D3 | 成立 | 新增 `BillingCompensationWorker` 定时扫 `ix_dispense_billing_abnormal`（PENDING/CHARGE_FAILED/REFUND_FAILED），走既有 `retry` 路径批量补偿（临床侧幂等收敛）；批量/间隔/开关可配，单条失败不阻断其余 | 回归 +3；pharmacy 93 全绿 |
+| P0-S2 | 成立 | tech（申请/Worklist）、insurance（清单/参保/变更史）、emr（病历/首页/CDR 检索）三域接入 PhiMask，无 `phi:read` 时患者号（首页含姓名）掩码返回 | tech 68 / insurance 142 / emr 117 全绿 |
+| P0-S2（empi） | 部分不改 | empi 的 idNo/phone/address 已有三字段脱敏 + reveal 门控 + `PATIENT_VIEW_PHI` 审计；patientNo 是检索键（掩码破坏按号检索），属既有设计取舍，维持现状 | — |
+| P0-S3 | 成立 | tech 注册 `DataScopeArgumentResolver`，申请列表按科室集合过滤、详情跨科室读单 404（越权与不存在同码）；insurance 注册 resolver（支撑掩码），行级过滤待 schema 补列 | tech 68 / insurance 142 全绿 |
+
+**第二批实测**：`common 99 / auth 42 / pharmacy 93 / tech 68 / insurance 142 / emr 117 = 561 项全绿`。
+
+---
+
 ## 零、总体结论
 
 | 维度 | 结论 | 一句话判断 |
