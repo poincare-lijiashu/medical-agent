@@ -93,10 +93,9 @@ public class ReportService {
         }
         List<CriticalValue> criticals = new ArrayList<>();
         if (hasCritical) {
-            // 已有未关闭危急值时不重复插入（避免同一指标被记多次）
-            List<CriticalValue> existing = repo.listCriticalValues(null, report.applicationId(), 100).stream()
-                    .filter(c -> c.reportId().equals(reportId) && c.open())
-                    .toList();
+            // 按 report_id 定向全量比对：只要本报告已登记过危急值（含已 CLOSED）就不再新增。
+            // 若按"未关闭"过滤，重写会把已闭环的危急值重新插成 PENDING，导致申请永远无法关闭。
+            List<CriticalValue> existing = repo.listCriticalValuesByReport(reportId);
             if (existing.isEmpty()) {
                 criticals = insertCriticals(report, req.criticalLines());
             } else {

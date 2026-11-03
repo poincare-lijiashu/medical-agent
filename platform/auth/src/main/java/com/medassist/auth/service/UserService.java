@@ -2,6 +2,7 @@ package com.medassist.auth.service;
 
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
+import com.medassist.auth.repo.TokenRepository;
 import com.medassist.auth.repo.UserRepository;
 import com.medassist.auth.security.PasswordHasher;
 import com.medassist.auth.web.dto.CreateUserReq;
@@ -50,13 +51,15 @@ public class UserService {
     private final RbacRepository rbac;
     private final ObjectMapper objectMapper;
     private final PasswordHasher hasher;
+    private final TokenRepository tokens;
 
     public UserService(UserRepository users, RbacRepository rbac, ObjectMapper objectMapper,
-                       PasswordHasher hasher) {
+                       PasswordHasher hasher, TokenRepository tokens) {
         this.users = users;
         this.rbac = rbac;
         this.objectMapper = objectMapper;
         this.hasher = hasher;
+        this.tokens = tokens;
     }
 
     @Transactional
@@ -149,7 +152,10 @@ public class UserService {
         if (!users.updateStatus(id, UserAccount.STATUS_DISABLED, current.version())) {
             throw new BusinessException(ErrorCode.CONFLICT);
         }
-        audit(actor, "USER_DISABLE", id.toString(), Map.of("username", current.username()));
+        // 停用必须同时踢掉会话：否则被停用账号仍能用既有 refresh token 继续换令牌
+        int revoked = revokeAllSessions(id);
+        audit(actor, "USER_DISABLE", id.toString(),
+                Map.of("username", current.username(), "revokedSessions", revoked));
         return detail(id);
     }
 
@@ -190,8 +196,21 @@ public class UserService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "账号不存在"));
         validatePassword(newPassword, current.username());
         users.updatePassword(id, hasher.encode(newPassword));
+        // 改密必须踢掉既有会话：否则被盗的 refresh token 仍能在有效期内换新令牌，等于改密无效。
+        int revoked = revokeAllSessions(id);
         // 审计不记录密码本身，只记录发生重置
-        audit(actor, "USER_RESET_PASSWORD", id.toString(), Map.of("username", current.username()));
+        audit(actor, "USER_RESET_PASSWORD", id.toString(),
+                Map.of("username", current.username(), "revokedSessions", revoked));
+    }
+
+    /**
+     * 撤销该账号全部刷新令牌。
+     *
+     * <p>已签发的 access token 无法逐条作废（JWT 无状态、不落库），但生命周期很短；
+     * 真正会被长期利用的是 refresh token，这里必须同步撤销。
+     */
+    private int revokeAllSessions(UUID userId) {
+        return tokens.revokeAllForUser(userId);
     }
 
     // ---------------------------------------------------------------- 内部方法

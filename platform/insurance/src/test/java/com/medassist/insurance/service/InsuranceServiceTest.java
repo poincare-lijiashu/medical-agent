@@ -538,12 +538,15 @@ class InsuranceServiceTest {
     void confirmDraftOnly() {
         when(repo.lockBillById(billId)).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 2L)));
         when(repo.confirmBill(eq(billId), eq("cashier01"), eq(2L))).thenReturn(true);
-        when(repo.findBillById(billId)).thenReturn(Optional.of(
-                new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
-                        UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
-                        BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
-                        SettlementBill.CONFIRMED, "[]", "cashier01", "cashier01", Instant.now(),
-                        null, null, null, null, null, 3L, Instant.now(), null, null, 0, "[]")));
+        // 锁序（P0-D2）：先无锁预读 → DRAFT，确认后 view() 再读 → CONFIRMED
+        when(repo.findBillById(billId))
+                .thenReturn(Optional.of(bill(SettlementBill.DRAFT, 2L)))
+                .thenReturn(Optional.of(
+                        new SettlementBill(billId, "SB20261031000001", visitId, patientId, "P0001",
+                                UUID.randomUUID(), new BigDecimal("10.00"), new BigDecimal("10.00"),
+                                BigDecimal.ZERO, new BigDecimal("8.00"), new BigDecimal("2.00"),
+                                SettlementBill.CONFIRMED, "[]", "cashier01", "cashier01", Instant.now(),
+                                null, null, null, null, null, 3L, Instant.now(), null, null, 0, "[]")));
 
         BillView view = service.confirm(billId, "cashier01");
 
@@ -554,7 +557,7 @@ class InsuranceServiceTest {
     @Test
     @DisplayName("确认：非 DRAFT 拒绝")
     void confirmRejectsNonDraft() {
-        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+        when(repo.findBillById(billId)).thenReturn(Optional.of(
                 bill(SettlementBill.CONFIRMED, 3L)));
 
         assertThatThrownBy(() -> service.confirm(billId, "cashier01"))
@@ -567,6 +570,7 @@ class InsuranceServiceTest {
     @Test
     @DisplayName("确认：CAS 冲突返回 409（并发双确认）")
     void confirmCasConflict() {
+        when(repo.findBillById(billId)).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 2L)));
         when(repo.lockBillById(billId)).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 2L)));
         when(repo.confirmBill(eq(billId), eq("cashier01"), eq(2L))).thenReturn(false);
 
@@ -863,6 +867,8 @@ class InsuranceServiceTest {
     @DisplayName("确认：费用已变化时拒绝（提示作废后重新生成）")
     void confirmRejectsWhenChargesChanged() {
         // 清单按 8.00 统筹入档，但当前收费重算应为 10.00（比例 100%）
+        when(repo.findBillById(billId)).thenReturn(Optional.of(
+                billWithAmounts(SettlementBill.DRAFT, "10.00", "8.00", "1.0000", "300000.00")));
         when(repo.lockBillById(billId)).thenReturn(Optional.of(
                 billWithAmounts(SettlementBill.DRAFT, "10.00", "8.00", "1.0000", "300000.00")));
         when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
@@ -879,6 +885,12 @@ class InsuranceServiceTest {
     @Test
     @DisplayName("确认：费用一致时放行")
     void confirmPassesWhenChargesMatch() {
+        // 锁序（P0-D2）：无锁预读 → DRAFT；确认成功后 view() 再读 → CONFIRMED
+        when(repo.findBillById(billId))
+                .thenReturn(Optional.of(
+                        billWithAmounts(SettlementBill.DRAFT, "10.00", "10.00", "1.0000", "300000.00")))
+                .thenReturn(Optional.of(
+                        billWithAmounts(SettlementBill.CONFIRMED, "10.00", "10.00", "1.0000", "300000.00")));
         when(repo.lockBillById(billId)).thenReturn(Optional.of(
                 billWithAmounts(SettlementBill.DRAFT, "10.00", "10.00", "1.0000", "300000.00")));
         when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
@@ -886,8 +898,6 @@ class InsuranceServiceTest {
                 new ChargeMapping(UUID.randomUUID(), "REG-GENERAL", "I-REG", true, 0L)));
         when(repo.findItemByCode("I-REG")).thenReturn(Optional.of(item("I-REG", "A", "0")));
         when(repo.confirmBill(eq(billId), eq("cashier01"), eq(2L))).thenReturn(true);
-        when(repo.findBillById(billId)).thenReturn(Optional.of(
-                billWithAmounts(SettlementBill.CONFIRMED, "10.00", "10.00", "1.0000", "300000.00")));
 
         service.confirm(billId, "cashier01");
 

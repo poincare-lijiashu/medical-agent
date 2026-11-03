@@ -73,6 +73,13 @@
         <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
       </div>
 
+      <LoadError
+        v-else-if="loadError"
+        :message="loadError"
+        :retrying="loading"
+        @retry="reloadAll"
+      />
+
       <EmptyState
         v-else-if="filtered.length === 0"
         art="orders"
@@ -651,6 +658,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { pharmacyApi } from '@/api'
@@ -685,6 +693,8 @@ const canManageStock = computed(() => hasPermission('pharmacy:stock:manage'))
 
 const loading = ref(false)
 const busy = ref(false)
+/** 加载失败文案：非空时展示错误态而非空态，避免把故障误报为"没有数据"。 */
+const loadError = ref('')
 const rows = ref<Prescription[]>([])
 const keyword = ref('')
 const status = ref('PENDING_REVIEW')
@@ -732,10 +742,13 @@ async function load() {
     }
     rows.value = [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     warnings.value = warn
+    loadError.value = ''
   } catch (e) {
     toast.error('药房数据加载失败', errorText(e))
     rows.value = []
     warnings.value = []
+    // 失败必须与"没有数据"区分：空态会让药师误判为无待办
+    loadError.value = errorText(e)
   } finally {
     loading.value = false
   }

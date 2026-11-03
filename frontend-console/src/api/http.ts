@@ -168,48 +168,57 @@ export function request<T>(path: string, opts: RequestOptions = {}): Promise<T> 
   return once<T>(path, opts)
 }
 
-/** multipart 上传：浏览器自动带 boundary，不手工设置 Content-Type。 */
+/**
+ * multipart 上传：浏览器自动带 boundary，不手工设置 Content-Type。
+ *
+ * <p>与 once() 共用同一套 401 语义：先尝试刷新令牌并重试一次，失败则统一登出，
+ * 避免"同页其它请求自动续期、上传却直接失败"的割裂表现。
+ */
 export async function upload<T>(path: string, form: FormData): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
-
-  let res: Response
-  try {
-    res = await fetch(BASE + path, { method: 'POST', headers, body: form })
-  } catch {
-    throw new ApiError('网络异常，请检查与服务器的连接后重试', -1, 0)
-  }
-  const text = await res.text()
-  let env: ApiEnvelope<T> | null = null
-  if (text) {
-    try {
-      env = JSON.parse(text) as ApiEnvelope<T>
-    } catch {
-      env = null
-    }
-  }
-  if (!res.ok || !env || env.code !== 0) {
-    throw new ApiError(
-      env?.message || `请求失败（HTTP ${res.status}）`,
-      env?.code ?? res.status,
-      res.status,
-      env?.traceId,
-    )
-  }
-  return env.data
+  return rawWithAuth<T>(buildUrl(path), { method: 'POST', body: form }, {
+    accept: 'application/json',
+    json: true,
+  })
 }
 
-/** 二进制下载（报盘 XML 等非 JSON 响应）：返回 Blob，由调用方触发保存。 */
+/**
+ * 二进制下载（报盘 XML 等非 JSON 响应）：返回 Blob，由调用方触发保存。
+ *
+ * <p>同样走 401 刷新重试；错误响应体是 JSON 信封时取出后端中文文案。
+ */
 export async function download(path: string, query?: RequestOptions['query']): Promise<Blob> {
-  const headers: Record<string, string> = {}
+  const result = await rawWithAuth<Blob>(buildUrl(path, query), { method: 'GET' }, { json: false })
+  return result
+}
+
+/** upload/download 共用的带鉴权重试通道（语义对齐 once 的 401 分支）。 */
+async function rawWithAuth<T>(
+  url: string,
+  init: RequestInit,
+  opts: { accept?: string; json: boolean },
+  retried = false,
+): Promise<T> {
+  const headers: Record<string, string> = { ...(init.headers as Record<string, string>) }
+  if (opts.accept) headers.Accept = opts.accept
   if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
 
   let res: Response
   try {
-    res = await fetch(buildUrl(path, query), { headers })
-  } catch {
+    res = await fetch(url, { ...init, headers })
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'AbortError') throw err
     throw new ApiError('网络异常，请检查与服务器的连接后重试', -1, 0)
   }
+
+  if (res.status === 401) {
+    if (!retried && (await doRefresh())) {
+      return rawWithAuth<T>(url, init, opts, true)
+    }
+    onSessionExpired?.()
+    throw new ApiError('登录状态已失效，请重新登录', 401, 401)
+  }
+
   if (!res.ok) {
     const text = await res.text()
     let env: ApiEnvelope<unknown> | null = null
@@ -220,14 +229,38 @@ export async function download(path: string, query?: RequestOptions['query']): P
         env = null
       }
     }
+    if (res.status === 504 || res.status === 503) {
+      throw new ApiError(
+        '服务响应超时或暂不可用，请稍后重试；若持续出现请联系信息科',
+        env?.code ?? 50400,
+        res.status,
+        env?.traceId,
+      )
+    }
     throw new ApiError(
-      env?.message || `下载失败（HTTP ${res.status}）`,
+      env?.message || `请求失败（HTTP ${res.status}）`,
       env?.code ?? res.status,
       res.status,
       env?.traceId,
     )
   }
-  return res.blob()
+
+  if (!opts.json) {
+    return (await res.blob()) as T
+  }
+  const text = await res.text()
+  let env: ApiEnvelope<T> | null = null
+  if (text) {
+    try {
+      env = JSON.parse(text) as ApiEnvelope<T>
+    } catch {
+      env = null
+    }
+  }
+  if (!env || env.code !== 0) {
+    throw new ApiError(env?.message || '请求失败：响应格式不正确', env?.code ?? 0, res.status, env?.traceId)
+  }
+  return env.data
 }
 
 export function get<T>(path: string, query?: RequestOptions['query'], signal?: AbortSignal) {

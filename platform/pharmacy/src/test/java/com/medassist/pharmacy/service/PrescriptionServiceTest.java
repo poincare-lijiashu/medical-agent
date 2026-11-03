@@ -511,7 +511,7 @@ class PrescriptionServiceTest {
         when(repo.findDispenseItem(itemId)).thenReturn(Optional.of(item));
 
         assertThatThrownBy(() -> service.returnDrug(dispenseId,
-                new ReturnReq(itemId, 4, "患者停药"), "pharm01"))
+                new ReturnReq(itemId, 4, "患者停药", UUID.randomUUID()), "pharm01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.DRUG_RETURN_EXCEEDS);
@@ -539,7 +539,7 @@ class PrescriptionServiceTest {
                 .thenReturn(true);
 
         DispenseView view = service.returnDrug(dispenseId,
-                new ReturnReq(itemId, 2, "患者停药"), "pharm01");
+                new ReturnReq(itemId, 2, "患者停药", UUID.randomUUID()), "pharm01");
 
         assertThat(view.dispense()).isNotNull();
         verify(repo).addBatchQuantity(batchId, 2);
@@ -568,7 +568,7 @@ class PrescriptionServiceTest {
         when(repo.listDispenseItems(dispenseId)).thenReturn(List.of(after));
         when(repo.updateDispenseStatus(eq(dispenseId), eq(Dispense.RETURNED), eq(0L))).thenReturn(true);
 
-        service.returnDrug(dispenseId, new ReturnReq(itemId, 3, "整单退回"), "pharm01");
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 3, "整单退回", UUID.randomUUID()), "pharm01");
 
         verify(repo).updateDispenseStatus(eq(dispenseId), eq(Dispense.RETURNED), eq(0L));
         // 全部退回必须同步作废处方，否则临床停嘱/撤销的下游作废永远 409（第六轮 MF-03）
@@ -728,7 +728,7 @@ class PrescriptionServiceTest {
         when(chargeClient.refund(any(), any(), anyString(), anyString()))
                 .thenReturn(new ClinicalChargeClient.Refunded(BigDecimal.ZERO));
 
-        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "患者停药"), "pharm01");
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "患者停药", UUID.randomUUID()), "pharm01");
 
         // 累计已退 = 单价 12.50 × 已退 2 = 25.00
         verify(chargeClient).refund(eq(itemId), org.mockito.ArgumentMatchers.eq(new BigDecimal("25.00")),
@@ -766,7 +766,7 @@ class PrescriptionServiceTest {
                 .thenReturn(new ClinicalChargeClient.OrderRefunded(BigDecimal.ZERO,
                         BigDecimal.ZERO, BigDecimal.ZERO, false));
 
-        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "患者停药"), "pharm01");
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "患者停药", UUID.randomUUID()), "pharm01");
 
         // 累计已退 = 12.50 × 2 = 25.00；itemAmount = 整条发药明细 62.50
         verify(chargeClient).refundOrder(eq(orderId), eq(itemId),
@@ -805,7 +805,7 @@ class PrescriptionServiceTest {
         when(chargeClient.refundOrder(any(), any(), any(), any(), anyString(), anyString(), any()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "收费服务暂不可用"));
 
-        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "整单退回"), "pharm01");
+        service.returnDrug(dispenseId, new ReturnReq(itemId, 2, "整单退回", UUID.randomUUID()), "pharm01");
 
         verify(repo).updateDispenseBillingStatus(eq(dispenseId), eq(Dispense.BILLING_REFUND_FAILED));
     }
@@ -1039,5 +1039,45 @@ class PrescriptionServiceTest {
                         "DRUG-AMOX-025", 3, "患者拒服", UUID.randomUUID()), "nurse01"))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.DRUG_RETURN_EXCEEDS));
+    }
+
+    @Test
+    @DisplayName("退药：未携带幂等键 returnId 直接拒绝（P0-D4 回归，防重试双倍回补）")
+    void returnRejectsMissingIdempotencyKey() {
+        Dispense dispense = dispense(Dispense.DISPENSED);
+        PrescriptionItem line = amoxLine(dispense.prescriptionId(), 2);
+        DispenseItem item = batchItem(dispense.id(), line.id(), "B1", 2, 0);
+        when(repo.lockDispense(dispense.id())).thenReturn(Optional.of(dispense));
+        when(repo.findDispenseItem(item.id())).thenReturn(Optional.of(item));
+
+        // 旧契约允许 returnId 为 null（服务端代生成），两次重试会双倍回补批次库存
+        assertThatThrownBy(() -> service.returnDrug(dispense.id(),
+                new ReturnReq(item.id(), 1, "患者停药", null), "pharm01"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).findReturn(any());
+        verify(repo, never()).addReturnedQuantity(any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("按处方查发药单：处方不存在返回 404（P0-D5 回归，与『未发药』区分）")
+    void dispenseByPrescriptionThrowsWhenMissing() {
+        UUID unknownId = UUID.randomUUID();
+        when(repo.findPrescription(unknownId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.dispenseByPrescription(unknownId))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.PRESCRIPTION_NOT_FOUND));
+        verify(repo, never()).findDispenseByPrescription(any());
+    }
+
+    @Test
+    @DisplayName("按处方查发药单：处方存在但未发药返回空（非 404）")
+    void dispenseByPrescriptionReturnsEmptyWhenNotDispensed() {
+        Prescription rx = rx(Prescription.APPROVED, new BigDecimal("10.00"), 2L);
+        when(repo.findPrescription(rx.id())).thenReturn(Optional.of(rx));
+        when(repo.findDispenseByPrescription(rx.id())).thenReturn(Optional.empty());
+
+        assertThat(service.dispenseByPrescription(rx.id())).isNull();
     }
 }

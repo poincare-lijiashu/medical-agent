@@ -106,12 +106,51 @@ public abstract class AbstractApiExceptionHandler {
                 .body(ApiResponse.fail(ErrorCode.BAD_REQUEST, "缺少必填参数：" + e.getParameterName()));
     }
 
-    /** 数据库唯一/外键约束冲突（并发建档撞唯一索引等）→ 409，而不是 500。 */
+    /**
+     * 数据库约束冲突分流。
+     *
+     * <p>只有"唯一 / 外键 / 排他"冲突才是可重试的并发结果（409）；
+     * CHECK / NOT NULL 违反意味着业务逻辑写出了账实不符的数据，属于服务端缺陷，
+     * 必须 500 + 告警，否则集成方会把它当成可重试冲突无限重试，并掩盖真实问题。
+     */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ApiResponse<Void>> handleIntegrity(DataIntegrityViolationException e) {
-        log.warn("data.integrity.violation", e);
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ApiResponse.fail(ErrorCode.CONFLICT));
+        String raw = e.getMostSpecificCause() == null ? "" : e.getMostSpecificCause().getMessage();
+        String sqlState = sqlStateOf(e);
+        boolean retryable = isRetryableConflict(sqlState, raw);
+        if (retryable) {
+            log.warn("data.integrity.conflict sqlState={} reason={}", sqlState, raw);
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.fail(ErrorCode.CONFLICT));
+        }
+        log.error("data.integrity.invariant_violated sqlState={} reason={}", sqlState, raw, e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.fail(ErrorCode.INTERNAL_ERROR));
+    }
+
+    /** PostgreSQL SQLState：23505 唯一、23503 外键、23P01 排他。 */
+    private static boolean isRetryableConflict(String sqlState, String message) {
+        if (sqlState != null) {
+            return switch (sqlState) {
+                case "23505", "23503", "23P01" -> true;
+                // 23514 CHECK / 23502 NOT NULL / 23514 等属不变量被破坏，不作 409
+                default -> false;
+            };
+        }
+        // 拿不到 SQLState 时退回消息特征（兼容非 PG 或包装异常）
+        String lower = message == null ? "" : message.toLowerCase();
+        return lower.contains("duplicate key")
+                || lower.contains("unique constraint")
+                || lower.contains("foreign key");
+    }
+
+    private static String sqlStateOf(DataIntegrityViolationException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLException sql && sql.getSQLState() != null) {
+                return sql.getSQLState();
+            }
+        }
+        return null;
     }
 
     @ExceptionHandler(Exception.class)

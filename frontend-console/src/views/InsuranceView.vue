@@ -121,6 +121,13 @@
           <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
         </div>
 
+        <LoadError
+          v-else-if="billError"
+          :message="billError"
+          :retrying="billLoading"
+          @retry="reloadBill"
+        />
+
         <EmptyState
           v-else-if="!bill"
           art="orders"
@@ -459,6 +466,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import InsuranceBillDetail from '@/components/domain/InsuranceBillDetail.vue'
@@ -499,6 +507,8 @@ const memberLoading = ref(false)
 
 const bill = ref<InsuranceBillView | null>(null)
 const billLoading = ref(false)
+/** 清单加载失败文案：非空即错误态，避免与"尚未生成清单"混淆。 */
+const billError = ref('')
 const capUsed = ref<number | null>(null)
 const capRemaining = ref<number | null>(null)
 
@@ -533,6 +543,7 @@ async function loadBill(visitId: string) {
   bill.value = null
   capUsed.value = null
   capRemaining.value = null
+  billError.value = ''
   try {
     bill.value = await insuranceApi.billByVisit(visitId)
   } catch (e) {
@@ -540,10 +551,16 @@ async function loadBill(visitId: string) {
       bill.value = null
     } else {
       toast.error('结算清单加载失败', errorText(e))
+      // 失败不能退化成"该就诊尚无清单"，否则收费员会重复生成
+      billError.value = errorText(e)
     }
   } finally {
     billLoading.value = false
   }
+}
+
+function reloadBill() {
+  if (visit.value) void loadBill(visit.value.id)
 }
 
 async function loadMember(patientId: string) {

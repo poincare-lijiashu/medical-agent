@@ -508,14 +508,24 @@ public class InsuranceService {
 
     @Transactional
     public BillView confirm(UUID billId, String actor) {
+        // 锁序（与 generate 一致）：无锁读 → 锁外取临床快照 → 加行锁 → 用快照比对。
+        // 锁内调下游会把行锁持到 HTTP 超时，同一就诊的确认/重算/作废会全部排队。
+        SettlementBill snapshotBill = repo.findBillById(billId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
+        if (!SettlementBill.DRAFT.equals(snapshotBill.status())) {
+            throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
+                    "只有草稿状态的结算清单可以确认，当前：" + snapshotBill.status());
+        }
+        // 锁外重算：确认前复核费用闭合（清单生成后临床仍可能继续计费或退费）
+        Computation fresh = fetchFreshComputation(snapshotBill);
+
         SettlementBill bill = repo.lockBillById(billId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND));
         if (!SettlementBill.DRAFT.equals(bill.status())) {
             throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
                     "只有草稿状态的结算清单可以确认，当前：" + bill.status());
         }
-        // 确认前复核费用闭合：清单生成后临床仍可能继续计费或退费，金额不一致不得入档
-        verifyChargesUnchanged(bill);
+        assertChargesUnchanged(bill, fresh);
         if (!repo.confirmBill(billId, actor, bill.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "结算清单状态已变化，请刷新后重试");
         }
@@ -594,14 +604,24 @@ public class InsuranceService {
                 repo.insuranceUsedInYear(bill.patientId(), BusinessTime.today(), bill.id()));
     }
 
-    /** 确认前复核：按生成时的待遇快照重算，费用或口径变了就拒绝确认。 */
-    private void verifyChargesUnchanged(SettlementBill bill) {
-        Optional<Member> snapshot = snapshotMember(bill);
-        if (snapshot.isEmpty()) {
+    /**
+     * 锁外取临床快照并重算（供 confirm 使用）。
+     *
+     * <p>必须在加行锁之前调用：该方法会发起跨服务 HTTP，若在锁内调用会把清单行锁持到下游超时。
+     * 参保快照缺失（历史清单 + 参保已删除）时返回 null，表示无法复核、不阻断。
+     */
+    private Computation fetchFreshComputation(SettlementBill bill) {
+        return snapshotMember(bill)
+                .map(m -> recompute(bill, m))
+                .orElse(null);
+    }
+
+    /** 用锁外取到的重算结果比对；fresh 为 null 表示无法复核，按历史兼容放行。 */
+    private void assertChargesUnchanged(SettlementBill bill, Computation fresh) {
+        if (fresh == null) {
             // 历史清单 + 参保已删除：无法复核，不阻断（但要靠对账接口人工核对）
             return;
         }
-        Computation fresh = recompute(bill, snapshot.get());
         boolean changed = fresh.total().compareTo(bill.totalAmount()) != 0
                 || fresh.insurance().compareTo(bill.insuranceAmount()) != 0;
         if (changed) {

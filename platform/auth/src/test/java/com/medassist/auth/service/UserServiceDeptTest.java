@@ -3,6 +3,7 @@ package com.medassist.auth.service;
 import com.medassist.auth.domain.Role;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
+import com.medassist.auth.repo.TokenRepository;
 import com.medassist.auth.repo.UserRepository;
 import com.medassist.auth.security.PasswordHasher;
 import com.medassist.auth.web.dto.CreateUserReq;
@@ -48,7 +49,8 @@ class UserServiceDeptTest {
         users = mock(UserRepository.class);
         rbac = mock(RbacRepository.class);
         PasswordHasher hasher = mock(PasswordHasher.class);
-        service = new UserService(users, rbac, JsonMapper.builder().build(), hasher);
+        service = new UserService(users, rbac, JsonMapper.builder().build(), hasher,
+                mock(TokenRepository.class));
 
         when(users.existsByUsername(anyString())).thenReturn(false);
         when(hasher.encode(anyString())).thenReturn("$2a$10$mock");

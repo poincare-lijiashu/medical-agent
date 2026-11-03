@@ -40,9 +40,13 @@
       </div>
     </div>
 
-    <div v-if="view.bill.diagnoses" class="diagnoses">
-      <span class="muted">诊断快照</span>
-      <p>{{ view.bill.diagnoses }}</p>
+    <div v-if="diagnosisList.length > 0" class="diagnoses">
+      <span class="muted">诊断快照（{{ diagnosisList.length }}）</span>
+      <div v-for="(d, i) in diagnosisList" :key="`${d.code}-${i}`" class="diagnosis-line">
+        <span class="mono">{{ d.code }}</span>
+        <span>{{ d.name || '—' }}</span>
+        <span v-if="d.primary" class="badge badge--accent">主诊断</span>
+      </div>
     </div>
 
     <div v-if="view.bill.voidReason" class="notice">
@@ -111,6 +115,27 @@ const primaryDiagnosis = computed(() => {
   const b = props.view.bill
   if (!b.primaryDiagnosisCode) return '—'
   return `${b.primaryDiagnosisCode} ${b.primaryDiagnosisName || ''}`.trim()
+})
+
+/** 后端 diagnoses 是 JSON 数组文本（[{code,name,primary}]），必须解析后再渲染。 */
+const diagnosisList = computed(() => {
+  const raw = props.view.bill.diagnoses
+  if (!raw) return [] as { code: string; name: string | null; primary: boolean }[]
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((it): it is Record<string, unknown> => typeof it === 'object' && it !== null)
+      .map((it) => ({
+        code: String(it.code ?? ''),
+        name: it.name === undefined || it.name === null ? null : String(it.name),
+        primary: Boolean(it.primary),
+      }))
+      .filter((it) => it.code)
+  } catch {
+    // 历史数据可能是纯文本（非 JSON）：按一行文本兜底，至少不丢信息
+    return [{ code: raw, name: null, primary: false }]
+  }
 })
 
 function pct(value: number | null | undefined): string {
@@ -203,17 +228,20 @@ function payCategoryLabel(category: string | null): string {
 }
 
 .diagnoses {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: var(--s3) var(--s4);
   background: var(--sunken);
   border-radius: var(--r-md);
   font-size: var(--fs-12);
 }
 
-.diagnoses p {
-  margin-top: 3px;
-  white-space: pre-wrap;
+.diagnosis-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
   color: var(--ink-2);
-  line-height: 1.6;
 }
 
 .notice {

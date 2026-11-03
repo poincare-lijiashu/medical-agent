@@ -52,6 +52,13 @@
         <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
       </div>
 
+      <LoadError
+        v-else-if="itemsError"
+        :message="itemsError"
+        :retrying="itemsLoading"
+        @retry="loadItems"
+      />
+
       <EmptyState
         v-else-if="items.length === 0"
         art="orders"
@@ -59,7 +66,11 @@
         desc="可调整类别/状态或清空检索词；省局目录可通过 CSV/XML 文件导入。"
       />
 
-      <div v-else class="table-wrap">
+      <template v-else>
+        <div v-if="itemsTruncated" class="truncate-hint">
+          已显示前 {{ items.length }} 条，更多请用检索词缩小范围（服务端单次上限 200）
+        </div>
+        <div class="table-wrap">
         <table class="table table--stack">
           <thead>
             <tr>
@@ -99,7 +110,8 @@
             </tr>
           </tbody>
         </table>
-      </div>
+        </div>
+      </template>
     </div>
 
     <div class="sheet">
@@ -125,6 +137,13 @@
       <div v-if="mappingsLoading" class="loading">
         <div v-for="i in 3" :key="i" class="skeleton" style="height: 42px" />
       </div>
+
+      <LoadError
+        v-else-if="mappingsError"
+        :message="mappingsError"
+        :retrying="mappingsLoading"
+        @retry="loadMappings"
+      />
 
       <EmptyState
         v-else-if="mappings.length === 0"
@@ -344,6 +363,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { insuranceOpsApi } from '@/api'
 import { errorText } from '@/api/http'
@@ -363,11 +383,16 @@ const busy = ref(false)
 
 const items = ref<InsuranceItem[]>([])
 const itemsLoading = ref(false)
+/** 目录 / 映射两条链路的失败文案：非空即错误态，不能退化成空态。 */
+const itemsError = ref('')
+const mappingsError = ref('')
 const filterCategory = ref('')
 const filterEnabled = ref('')
 const keyword = ref('')
 
 const enabledCount = computed(() => items.value.filter((i) => i.enabled).length)
+/** 命中服务端单次上限：必须显式提示，否则用户会以为"目录只有这些"。 */
+const itemsTruncated = computed(() => items.value.length >= 200)
 
 async function loadItems() {
   itemsLoading.value = true
@@ -378,9 +403,11 @@ async function loadItems() {
       q: keyword.value || undefined,
       limit: 200,
     })
+    itemsError.value = ''
   } catch (e) {
     toast.error('医保目录加载失败', errorText(e))
     items.value = []
+    itemsError.value = errorText(e)
   } finally {
     itemsLoading.value = false
   }
@@ -500,9 +527,11 @@ async function loadMappings() {
   mappingsLoading.value = true
   try {
     mappings.value = await insuranceOpsApi.mappings(mappingQ.value || undefined, 200)
+    mappingsError.value = ''
   } catch (e) {
     toast.error('院内映射加载失败', errorText(e))
     mappings.value = []
+    mappingsError.value = errorText(e)
   } finally {
     mappingsLoading.value = false
   }
@@ -599,6 +628,13 @@ onMounted(() => {
   flex-direction: column;
   gap: 6px;
   padding: var(--s4);
+}
+
+.truncate-hint {
+  padding: var(--s2) var(--card-pad);
+  font-size: var(--fs-12);
+  color: var(--warning-ink);
+  background: var(--warn-weak);
 }
 
 .form-grid {

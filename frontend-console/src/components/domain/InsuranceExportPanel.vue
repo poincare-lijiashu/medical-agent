@@ -66,6 +66,13 @@
         <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
       </div>
 
+      <LoadError
+        v-else-if="loadError"
+        :message="loadError"
+        :retrying="loading"
+        @retry="loadBatches"
+      />
+
       <EmptyState
         v-else-if="filtered.length === 0"
         art="orders"
@@ -221,6 +228,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import { insuranceOpsApi } from '@/api'
 import { errorText } from '@/api/http'
 import type { InsuranceExportBatch } from '@/api/types'
@@ -241,6 +249,8 @@ const canDownload = computed(() => hasPermission('insurance:export:download'))
 
 const batches = ref<InsuranceExportBatch[]>([])
 const loading = ref(false)
+/** 加载失败文案：非空即错误态，避免把故障误报为"没有批次"。 */
+const loadError = ref('')
 const busy = ref(false)
 const statusFilter = ref('')
 const lastCreate = ref<InsuranceExportBatch | null>(null)
@@ -271,9 +281,11 @@ async function loadBatches() {
   loading.value = true
   try {
     batches.value = await insuranceOpsApi.exportBatches(100)
+    loadError.value = ''
   } catch (e) {
     toast.error('报盘批次加载失败', errorText(e))
     batches.value = []
+    loadError.value = errorText(e)
   } finally {
     loading.value = false
   }

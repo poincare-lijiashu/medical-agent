@@ -396,7 +396,12 @@ public class PrescriptionService {
 
         // 幂等优先：重试必须回到同一条退药记录。若把幂等判断放在"数量/状态"校验之后，
         // 第一次已把该明细退满，重试会被误判成"超过可退数量"（422），护士只能人工核对。
-        UUID returnId = req.returnId() == null ? UUID.randomUUID() : req.returnId();
+        UUID returnId = req.returnId();
+        if (returnId == null) {
+            // 契约层已 @NotNull；这里保留服务层兜底，避免直接调用方绕过校验后失去幂等
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "退药必须携带幂等键 returnId（重试要回到同一条退药记录）");
+        }
         var existing = repo.findReturn(returnId);
         if (existing.isPresent()) {
             DispenseReturn ret = existing.get();
@@ -556,10 +561,13 @@ public class PrescriptionService {
     /**
      * 按处方查发药单：药房窗口刷新后仍能对已发药处方做退药/核对，不需要另行记住发药单号。
      *
-     * <p>未发药返回 {@code null}（不是错误）——处方列表里大量处方尚未发药，
-     * 前端据此展示"尚未发药"而非报错。
+     * <p>处方不存在时抛 404（与其它处方接口一致）；处方存在但尚未发药时返回 {@code null}，
+     * 前端据此展示"尚未发药"而非报错。两者语义必须区分，否则客户端拼错 ID 会静默显示为空。
      */
     public DispenseView dispenseByPrescription(UUID prescriptionId) {
+        if (repo.findPrescription(prescriptionId).isEmpty()) {
+            throw new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND);
+        }
         return repo.findDispenseByPrescription(prescriptionId)
                 .map(d -> dispenseDetail(d.id()))
                 .orElse(null);

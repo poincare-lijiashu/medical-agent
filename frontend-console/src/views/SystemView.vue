@@ -82,6 +82,13 @@
           <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
         </div>
 
+        <LoadError
+          v-else-if="usersError"
+          :message="usersError"
+          :retrying="usersLoading"
+          @retry="loadUsers"
+        />
+
         <EmptyState
           v-else-if="users.length === 0"
           art="orders"
@@ -201,6 +208,13 @@
         <div v-if="auditLoading" class="loading">
           <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
         </div>
+
+        <LoadError
+          v-else-if="auditError"
+          :message="auditError"
+          :retrying="auditLoading"
+          @retry="loadAudit"
+        />
 
         <EmptyState
           v-else-if="auditRows.length === 0"
@@ -435,6 +449,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, systemApi } from '@/api'
@@ -469,6 +484,9 @@ const userPage = ref(1)
 const userStatus = ref('')
 const userOrg = ref('')
 const usersLoading = ref(false)
+/** 账号 / 审计两条链路的失败文案：非空即展示错误态，不能退化成空态。 */
+const usersError = ref('')
+const auditError = ref('')
 
 const userPages = computed(() => Math.max(1, Math.ceil(usersTotal.value / USERS_PAGE_SIZE)))
 const enabledCount = computed(() => users.value.filter((u) => u.status === 'ACTIVE').length)
@@ -486,10 +504,12 @@ async function loadUsers() {
     })
     users.value = page.items
     usersTotal.value = page.total
+    usersError.value = ''
   } catch (e) {
     toast.error('账号列表加载失败', errorText(e))
     users.value = []
     usersTotal.value = 0
+    usersError.value = errorText(e)
   } finally {
     usersLoading.value = false
   }
@@ -736,10 +756,12 @@ async function loadAudit() {
     })
     auditRows.value = page.items
     auditTotal.value = page.total
+    auditError.value = ''
   } catch (e) {
     toast.error('审计日志加载失败', errorText(e))
     auditRows.value = []
     auditTotal.value = 0
+    auditError.value = errorText(e)
   } finally {
     auditLoading.value = false
   }

@@ -123,6 +123,13 @@ public class InternalAuthAutoConfiguration {
             throw new IllegalStateException(
                     "生产/预发布环境不允许关闭服务间签名校验（medassist.internal-auth.mode=off），服务拒绝启动");
         }
+        // log 模式校验失败仍放行，等价于"签名形同虚设"：绕过网关直连业务端口即可伪造 X-Actor 读 PHI。
+        // 生产/预发布只允许 enforce；灰度请在非生产环境完成。
+        if (InternalAuthProperties.LOG.equals(mode) && SecurityDefaults.isProduction(environment)) {
+            throw new IllegalStateException(
+                    "生产/预发布环境不允许使用 log 模式（medassist.internal-auth.mode=log），"
+                            + "请改为 enforce 后再启动");
+        }
         // P0-9：/internal/** 只靠单值共享令牌时，一处令牌泄露即可冒充任意调用方读 PHI。
         // 生产必须要求调用方签名（按 caller 分配密钥），与 mode=off 同规格 fail-fast。
         if (SecurityDefaults.isProduction(environment)

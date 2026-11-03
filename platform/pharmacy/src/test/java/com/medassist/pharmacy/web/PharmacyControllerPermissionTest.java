@@ -125,7 +125,7 @@ class PharmacyControllerPermissionTest {
     @Test
     @DisplayName("退药：需要 pharmacy:dispense:return")
     void returnRequiresReturnPermission() {
-        var req = new PharmacyDtos.ReturnReq(UUID.randomUUID(), 1, "停药");
+        var req = new PharmacyDtos.ReturnReq(UUID.randomUUID(), 1, "停药", UUID.randomUUID());
 
         assertThatThrownBy(() -> dispenseController.returnDrug(id, req,
                 "pharmacy:dispense:execute", "pharm01"))

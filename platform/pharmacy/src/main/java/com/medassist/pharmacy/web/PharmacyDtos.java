@@ -177,20 +177,15 @@ public final class PharmacyDtos {
     /**
      * 退药请求。
      *
-     * <p>{@code returnId} 是调用方生成的幂等键：护士站重试/双击必须回到同一条退药记录，
-     * 否则批次库存会被重复回补（见 pharmacy V9）。不传时由服务端生成，行为与旧版一致，
-     * 但不再保证"重试不双扣"——新客户端应始终传。
+     * <p>{@code returnId} 是调用方生成的幂等键，**必填**：护士站重试/双击必须回到同一条退药记录，
+     * 否则批次库存会被重复回补（见 pharmacy V9）。服务端不再代为生成——
+     * 代生成等于放弃幂等，"两次都合法的退药"无法与"一次退药的两次重试"区分。
      */
     public record ReturnReq(
             @NotNull UUID dispenseItemId,
             @Min(1) int quantity,
             @NotBlank @Size(max = 256) String reason,
-            UUID returnId) {
-
-        /** 兼容旧调用方（无幂等键）。 */
-        public ReturnReq(UUID dispenseItemId, int quantity, String reason) {
-            this(dispenseItemId, quantity, reason, null);
-        }
+            @NotNull UUID returnId) {
     }
 
     /**

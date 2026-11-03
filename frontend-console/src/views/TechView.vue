@@ -74,6 +74,13 @@
         <div v-for="i in 5" :key="i" class="skeleton" style="height: 42px" />
       </div>
 
+      <LoadError
+        v-else-if="loadError"
+        :message="loadError"
+        :retrying="loading"
+        @retry="reloadAll"
+      />
+
       <EmptyState
         v-else-if="filteredApps.length === 0"
         art="orders"
@@ -597,6 +604,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { techApi } from '@/api'
@@ -632,6 +640,8 @@ const canClose = computed(() => hasPermission('tech:application:close'))
 const canAck = computed(() => hasPermission('tech:critical:acknowledge'))
 
 const loading = ref(false)
+/** 加载失败文案：非空时展示错误态而非空态，避免把故障误报为"没有数据"。 */
+const loadError = ref('')
 const busy = ref(false)
 const applications = ref<TechApplication[]>([])
 const criticals = ref<TechCriticalView[]>([])
@@ -700,10 +710,12 @@ async function load() {
     for (const list of lists) for (const a of list) merged.set(a.id, a)
     applications.value = [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     criticals.value = allCriticals
+    loadError.value = ''
   } catch (e) {
     toast.error('医技数据加载失败', errorText(e))
     applications.value = []
     criticals.value = []
+    loadError.value = errorText(e)
   } finally {
     loading.value = false
   }

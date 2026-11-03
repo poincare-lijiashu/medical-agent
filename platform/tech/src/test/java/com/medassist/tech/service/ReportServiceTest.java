@@ -229,4 +229,41 @@ class ReportServiceTest {
         verify(repo).listCriticalValuesByReport(reportId);
         verify(repo, never()).listCriticalValues(any(), any(), anyInt());
     }
+
+    @Test
+    @DisplayName("重写草稿：已闭环的危急值不得复活成 PENDING（P0-D1 回归）")
+    void rewriteDoesNotResurrectClosedCriticals() {
+        when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.DRAFT, 1)));
+        when(repo.updateDraftReport(eq(reportId), anyString(), anyString(), eq(true))).thenReturn(true);
+        // 本报告已有危急值（已 CLOSED）：重写不得再插入 PENDING，否则申请永远无法关闭
+        CriticalValue closed = new CriticalValue(UUID.randomUUID(), appId, reportId, "血钾",
+                "7.2", "3.5-5.3", "CRITICAL", CriticalValue.CLOSED, null, Instant.now(),
+                "nurse01", Instant.now(), "已处理", Instant.now());
+        when(repo.listCriticalValuesByReport(reportId)).thenReturn(List.of(closed));
+
+        var view = service.rewrite(reportId, writeReq(List.of(
+                new CriticalLine("血钾", "7.2 mmol/L", "3.5-5.3", "CRITICAL", "护士站"))), "tech01");
+
+        verify(repo, never()).insertCriticalValue(any());
+        assertThat(view.criticals()).hasSize(1);
+        assertThat(view.criticals().get(0).status()).isEqualTo(CriticalValue.CLOSED);
+    }
+
+    @Test
+    @DisplayName("重写草稿：本报告无危急值时才新增")
+    void rewriteInsertsOnlyWhenNoneExist() {
+        when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.DRAFT, 1)));
+        when(repo.updateDraftReport(eq(reportId), anyString(), anyString(), eq(true))).thenReturn(true);
+        when(repo.listCriticalValuesByReport(reportId)).thenReturn(List.of());
+        when(repo.findCriticalValue(any())).thenAnswer(inv -> Optional.of(
+                new CriticalValue(inv.getArgument(0), appId, reportId, "血钾", "7.2 mmol/L",
+                        "3.5-5.3", "CRITICAL", CriticalValue.PENDING, "护士站", Instant.now(),
+                        null, null, null, Instant.now())));
+
+        service.rewrite(reportId, writeReq(List.of(
+                new CriticalLine("血钾", "7.2 mmol/L", "3.5-5.3", "CRITICAL", "护士站"))), "tech01");
+
+        verify(repo).insertCriticalValue(any());
+        verify(repo).listCriticalValuesByReport(reportId);
+    }
 }
