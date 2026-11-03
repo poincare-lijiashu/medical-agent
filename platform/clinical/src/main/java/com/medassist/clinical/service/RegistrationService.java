@@ -147,7 +147,9 @@ public class RegistrationService {
                 fee.name(), fee.category(), fee.price());
 
         audit(actor, "REGISTER", "VISIT", visit.id().toString(), Map.of(
-                "visitNo", visit.visitNo(), "patientNo", patient.patientNo(),
+                "visitNo", visit.visitNo(),
+                // P1-S4：审计明细不留明文患者号
+                "patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()),
                 "deptCode", dept.deptCode(), "doctorId", visit.doctorId(),
                 "visitType", visitType, "slotId", String.valueOf(visit.slotId()),
                 "chargeNo", charge.chargeNo(), "fee", fee.price()));

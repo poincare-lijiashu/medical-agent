@@ -3,6 +3,7 @@ package com.medassist.empi.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.api.PageResult;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.Masks;
 import com.medassist.empi.crypto.FieldCipher;
 import com.medassist.empi.domain.Patient;
 import com.medassist.empi.repo.PatientRepository;
@@ -76,7 +77,9 @@ public class PatientService {
                 0L, null, null);
         repo.insert(p);
         audit(actor, "PATIENT_CREATE", id.toString(), Map.of(
-                "patientNo", p.patientNo(), "name", p.name()));
+                // P1-S4：审计明细不留明文患者号/姓名（target_id 已是患者 UUID，足够定位）
+                "patientNo", Masks.patientNo(p.patientNo()),
+                "name", Masks.patientName(p.name())));
         // 建档响应同样默认脱敏（最小暴露原则）：调用方需要明文必须显式 reveal 并留审计
         return detail(id, false, actor);
     }
@@ -93,7 +96,8 @@ public class PatientService {
                                 ? "该档案已归档，敏感信息不可查看"
                                 : "该档案已合并，请查看目标档案的敏感信息");
             }
-            audit(actor, "PATIENT_VIEW_PHI", id.toString(), Map.of("patientNo", p.patientNo()));
+            audit(actor, "PATIENT_VIEW_PHI", id.toString(),
+                    Map.of("patientNo", Masks.patientNo(p.patientNo())));
         }
         return toResp(p, reveal);
     }
@@ -163,8 +167,23 @@ public class PatientService {
         if (!ok) {
             throw new BusinessException(ErrorCode.CONFLICT);
         }
+        // P1-S4：审计不再只记 fromVersion——补 before/after 的关键业务字段，
+        // 才能在事后回答"这次到底改了什么"；身份类字段（姓名/证件/电话/住址）不落明文。
+        java.util.Map<String, Object> before = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Object> after = new java.util.LinkedHashMap<>();
+        before.put("gender", current.gender());
+        before.put("birthDate", current.birthDate() == null ? "" : current.birthDate().toString());
+        before.put("bloodType", current.bloodType() == null ? "" : current.bloodType());
+        before.put("allergy", current.allergy() == null ? "" : current.allergy());
+        after.put("gender", req.gender() == null ? current.gender() : req.gender());
+        after.put("birthDate", req.birthDate() == null ? "" : req.birthDate().toString());
+        after.put("bloodType", blankToNull(req.bloodType()) == null ? "" : req.bloodType());
+        after.put("allergy", blankToNull(req.allergy()) == null ? "" : req.allergy());
         audit(actor, "PATIENT_UPDATE", id.toString(), Map.of(
-                "patientNo", current.patientNo(), "fromVersion", current.version()));
+                "patientNo", Masks.patientNo(current.patientNo()),
+                "fromVersion", current.version(),
+                "toVersion", req.version() + 1,
+                "before", before, "after", after));
         return detail(id, false, actor);
     }
 

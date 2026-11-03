@@ -142,7 +142,9 @@ public class ApplicationService {
                 Application.APPLIED, 0L, null, sourceOrderId);
         repo.insertApplication(app);
         audit(actor, "APP_CREATE", "APPLICATION", app.id().toString(), Map.of(
-                "applicationNo", app.applicationNo(), "patientNo", patient.patientNo(),
+                "applicationNo", app.applicationNo(),
+                // P1-S4：审计明细不留明文患者号
+                "patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()),
                 "itemCode", item.itemCode(), "category", item.category(),
                 "priority", app.priority()));
         return new ApplicationView(repo.findApplication(app.id()).orElseThrow(), null);

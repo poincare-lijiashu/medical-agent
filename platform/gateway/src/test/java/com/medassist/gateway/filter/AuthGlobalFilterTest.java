@@ -180,9 +180,24 @@ class AuthGlobalFilterTest {
     }
 
     @Test
-    void legacyV1PassesThroughButForgeIsStillStripped() {
+    void legacyV1RequiresTokenByDefault() {
+        // P1-S6：v1 兼容层不再"默认放行靠 Python 自证"，未带令牌一律 401
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v1/medical/config").build());
+        CapturingChain chain = new CapturingChain();
+
+        filter.filter(exchange, chain).block();
+
+        assertThat(chain.called).isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void legacyV1PassesWithTokenButForgeIsStillStripped() {
+        String token = token("doctor01", "DEPT-A", "DOCTOR");
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v1/medical/config")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .header(AuthHeaders.ACTOR, "hacker")
                         .header(AuthHeaders.ROLES, "ADMIN")
                         .build());
@@ -192,8 +207,8 @@ class AuthGlobalFilterTest {
 
         assertThat(chain.called).isTrue();
         HttpHeaders downstream = chain.exchange.getRequest().getHeaders();
-        assertThat(downstream.getFirst(AuthHeaders.ACTOR)).isNull();
-        assertThat(downstream.getFirst(AuthHeaders.ROLES)).isNull();
+        assertThat(downstream.getFirst(AuthHeaders.ACTOR)).isEqualTo("doctor01");
+        assertThat(downstream.getFirst(AuthHeaders.ROLES)).isEqualTo("DOCTOR");
         assertThat(downstream.getFirst(AuthHeaders.TRACE_ID)).isNotBlank();
     }
 
@@ -228,7 +243,7 @@ class AuthGlobalFilterTest {
         return new GatewayAuthProperties(enabled, ISSUER, SECRET,
                 List.of("/api/v2/auth/login", "/api/v2/auth/refresh",
                         "/actuator/health/**", "/actuator/prometheus"),
-                List.of("/api/v2/**"),
+                List.of("/api/v2/**", "/api/v1/**"),
                 List.of("/api/v2/*/internal/**"),
                 "http://127.0.0.1:8081",
                 "unit-test-internal-token",

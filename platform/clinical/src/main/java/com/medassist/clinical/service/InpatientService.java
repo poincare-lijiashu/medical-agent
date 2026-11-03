@@ -159,7 +159,9 @@ public class InpatientService {
 
         audit(actor, "ADMIT", "ADMISSION", admission.id().toString(), Map.of(
                 "admissionNo", admission.admissionNo(), "visitNo", visit.visitNo(),
-                "patientNo", patient.patientNo(), "wardCode", ward.code(),
+                // P1-S4：审计明细不留明文患者号
+                "patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()),
+                "wardCode", ward.code(),
                 "bedNo", bed == null ? "" : bed.bedNo(),
                 "chargeNo", charge.chargeNo()));
         return toView(repo.findAdmission(admission.id()).orElseThrow());

@@ -162,7 +162,8 @@ management:
 # ---- 统一鉴权（P0-4）----
 # 受保护前缀内必须携带有效 Bearer JWT；失败统一 401 壳。
 # 白名单只放行登录与健康检查；/api/v2/*/internal/** 直接 404，内部端点不经网关外泄。
-# v1 兼容层（/api/v1/**）由 Python 服务自行鉴权，P1 迁移完成后收敛到网关。
+# v1 兼容层（/api/v1/**）自 2026-11 起默认并入受保护前缀（P1-S6），
+# 仅在迁移期需要"Python 自证"时用 GATEWAY_V1_PROTECTED= 显式退出。
 medassist:
   gateway:
     auth:
@@ -193,6 +194,10 @@ medassist:
         - /actuator/prometheus
       protected-paths:
         - /api/v2/**
+        # P1-S6：v1 兼容层默认同样必须过网关鉴权（此前只靠 Python 自行鉴权，
+        # 忘配就是整段裸奔）。确需保留"Python 自证"的过渡态时，
+        # 显式设置 GATEWAY_V1_PROTECTED=（空串）把它从受保护前缀中移除。
+        - ${GATEWAY_V1_PROTECTED:/api/v1/**}
       deny-paths:
         - /api/v2/*/internal/**
     # 入口限流（Sentinel 核心 API，路径前缀维度）。登录失败的账号维度限速在 auth 服务内实现。

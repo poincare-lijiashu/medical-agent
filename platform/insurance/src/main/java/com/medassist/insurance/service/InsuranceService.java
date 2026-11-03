@@ -355,7 +355,9 @@ public class InsuranceService {
                 saved.effectiveFrom(), saved.effectiveTo(), saved.status(), saved.version(),
                 changeType, actor, null, null));
         audit(actor, "MEMBER_UPSERT", "MEMBER", patient.id().toString(), Map.of(
-                "patientNo", patient.patientNo(), "changeType", changeType,
+                // P1-S4：审计明细不留明文患者号（before/after 只放待遇参数，不含身份信息）
+                "patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()),
+                "changeType", changeType,
                 "before", existing.map(InsuranceService::memberSnapshot)
                         .map(snapshot -> (Object) snapshot).orElse("NEW"),
                 "after", memberSnapshot(saved)));

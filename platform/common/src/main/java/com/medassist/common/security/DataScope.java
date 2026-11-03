@@ -85,30 +85,15 @@ public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartment
      * 患者号掩码：保留前 3 后 2，中间用 {@code *} 补足。
      *
      * <p>长度不足 6 的一律全掩码——短编号保留前后位等于直接暴露。
+     * 实现委托 {@link Masks}，与审计明细共用同一口径（P1-S4）。
      */
     public String maskPatientNo(String patientNo) {
-        if (patientNo == null || patientNo.isBlank()) {
-            return patientNo;
-        }
-        String value = patientNo.trim();
-        if (value.length() < 6) {
-            return "*".repeat(value.length());
-        }
-        return value.substring(0, 3)
-                + "*".repeat(Math.max(2, value.length() - 5))
-                + value.substring(value.length() - 2);
+        return Masks.patientNo(patientNo);
     }
 
     /** 姓名掩码：只留首字，其余用 {@code *}。单字姓名整体掩码。 */
     public String maskPatientName(String patientName) {
-        if (patientName == null || patientName.isBlank()) {
-            return patientName;
-        }
-        String value = patientName.trim();
-        if (value.length() <= 1) {
-            return "*";
-        }
-        return value.charAt(0) + "*".repeat(value.length() - 1);
+        return Masks.patientName(patientName);
     }
 
     /** 按权限决定返回明文还是掩码。 */

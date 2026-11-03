@@ -609,3 +609,57 @@ Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagen
 - **GPU 推理**：`aiCore.env.EMBED_DEVICE=cuda` + nodeSelector/tolerations 按院区 GPU 节点配置
 - **院内信息化与医保对接**：网络分区、医保专线/前置机、接口规范要点与落地路线见
   [`docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md`](../docs/HOSPITAL-IT-INTEGRATION-RESEARCH.md)
+
+---
+
+## 10. 数据库备份与恢复（P1-S6）
+
+清单：[`deploy/backup/pg-backup-cronjob.yaml`](backup/pg-backup-cronjob.yaml)。此前 `deploy/` 没有任何备份
+交付物，数据库卷损坏只能重建 schema、业务数据全失；本节把"备份 + 可恢复"固化为可部署对象。
+
+**部署**
+
+```bash
+# 1) 备份口令（与业务库同一账号即可；建议单独建只读备份账号，需 REPLICATION 或 pg_read_all_data）
+kubectl -n medassist create secret generic medassist-pg-backup \
+  --from-literal=password="$PG_PASSWORD"
+
+# 2) 备份盘：把 PVC 的 storageClassName 换成院内支持快照的存储类
+kubectl apply -f deploy/backup/pg-backup-cronjob.yaml
+```
+
+**策略与指标**
+
+| 项 | 取值 | 说明 |
+|---|---|---|
+| 频率 | 每日 02:00（低峰） | `concurrencyPolicy: Forbid` 防叠加 |
+| 形式 | `pg_dump -Fc` 全量 | 写完立即 `pg_restore --list` 校验 + sha256 |
+| 保留 | 14 天 | 按文件 `mtime` 清理，只匹配 `medagent-*.dump*` |
+| RPO | 24 小时（仅本方案） | 需要分钟级请叠加 WAL 归档（pgBackRest / wal-g） |
+| RTO | 小时级 | 见下方恢复步骤；实际值须在演练中测量并记录 |
+
+**恢复步骤（必须演练，未演练的备份不算备份）**
+
+```bash
+# 1) 取最近一次备份并核对校验和
+kubectl -n medassist exec -it <backup-pod> -- ls -lh /backup
+kubectl -n medassist exec -it <backup-pod> -- sha256sum -c /backup/medagent-<ts>.dump.sha256
+
+# 2) 恢复到新库（绝不直接覆盖生产库）：先建空库 medagent_restore
+kubectl -n medassist exec -it <pg-pod> -- createdb -U medagent medagent_restore
+kubectl -n medassist cp <backup-pod>:/backup/medagent-<ts>.dump /tmp/medagent.dump
+kubectl -n medassist cp /tmp/medagent.dump <pg-pod>:/tmp/medagent.dump
+kubectl -n medassist exec -it <pg-pod> -- \
+  pg_restore -U medagent -d medagent_restore --no-owner --no-privileges -j 4 /tmp/medagent.dump
+
+# 3) 抽样核对各域数据量（schema 均已建好，直接比行数）
+kubectl -n medassist exec -it <pg-pod> -- psql -U medagent -d medagent_restore -c "
+  SELECT 'clinical.visit', count(*) FROM clinical_svc.visit
+  UNION ALL SELECT 'pharmacy.prescription', count(*) FROM pharmacy_svc.prescription
+  UNION ALL SELECT 'emr.record', count(*) FROM emr_svc.medical_record
+  UNION ALL SELECT 'insurance.bill', count(*) FROM insurance_svc.settlement_bill;"
+```
+
+**演练要求**：每季度在 staging 做一次完整恢复并记录 RTO；把结果（日期、备份文件、耗时、核对行数）
+写入运维台账。备份任务连续失败需告警——建议对 `kube_job_status_failed` 加 Prometheus 规则。
+

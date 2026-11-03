@@ -1,0 +1,112 @@
+# ============================================================================
+# P1-S6：PostgreSQL 逻辑备份（每日全量 pg_dump -Fc + 14 天保留）
+#
+# 为什么需要：`deploy/` 此前没有任何备份交付物——数据库卷一旦误删/损坏，
+# 只能重建 schema，业务数据（病历、收费、发药）全部丢失。等保与院内评审
+# 都会直接查"备份策略 + 恢复演练记录"。
+#
+# 使用前提：
+#   1) 已存在 Secret `medassist-pg-backup`，内含 key `password`（PG 口令）；
+#   2) 已存在 PVC `medassist-pg-backup`（建议 ≥ 数据量 × 15，或改为挂 NFS/S3 CSI）；
+#   3) 生产建议同时开启 WAL 归档（pgBackRest / wal-g）把 RPO 从 24h 压到分钟级，
+#      本 CronJob 只解决"每日可恢复"的底线，不能替代 PITR。
+# ============================================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: medassist-pg-backup
+  labels:
+    app.kubernetes.io/part-of: medassist-platform
+    app.kubernetes.io/component: backup
+spec:
+  # 每天 02:00（业务低峰）；时区由集群节点决定，跨时区部署请显式设 timeZone
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 1800
+  jobTemplate:
+    spec:
+      # 备份失败不应无限重试把磁盘写满
+      backoffLimit: 1
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: medassist-pg-backup
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+          containers:
+            - name: pg-dump
+              image: postgres:15.19-alpine
+              env:
+                - name: PGHOST
+                  value: medassist-pg
+                - name: PGPORT
+                  value: "5432"
+                - name: PGDATABASE
+                  value: medagent
+                - name: PGUSER
+                  value: medagent
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: medassist-pg-backup
+                      key: password
+                - name: BACKUP_DIR
+                  value: /backup
+                - name: RETENTION_DAYS
+                  value: "14"
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  ts="$(date +%Y%m%d-%H%M%S)"
+                  file="${BACKUP_DIR}/medagent-${ts}.dump"
+
+                  # -Fc：自定义格式，支持 pg_restore 选择性恢复与并行恢复
+                  pg_dump -Fc --no-owner --no-privileges -f "${file}"
+
+                  # 立即校验：能列出目录表说明归档完整（防止"写了半个文件也算成功"）
+                  pg_restore --list "${file}" > /dev/null
+
+                  # 记录校验和，恢复前可比对
+                  sha256sum "${file}" > "${file}.sha256"
+
+                  echo "backup ok: ${file} ($(du -h "${file}" | cut -f1))"
+
+                  # 清理过期备份（只删本目录下匹配命名的文件，避免误删）
+                  find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'medagent-*.dump*' \
+                       -mtime "+${RETENTION_DAYS}" -print -delete
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: medassist-pg-backup
+---
+# 备份盘（生产请替换为支持快照/NFS 的 StorageClass；单节点 hostPath 仅适合自建验证）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: medassist-pg-backup
+  labels:
+    app.kubernetes.io/part-of: medassist-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi

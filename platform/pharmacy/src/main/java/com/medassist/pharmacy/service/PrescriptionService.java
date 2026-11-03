@@ -231,7 +231,7 @@ public class PrescriptionService {
 
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("prescriptionNo", rx.prescriptionNo());
-        detail.put("patientNo", patient.patientNo());
+        detail.put("patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()));
         detail.put("itemCount", items.size());
         detail.put("totalAmount", total);
         detail.put("billingMode", billingMode);

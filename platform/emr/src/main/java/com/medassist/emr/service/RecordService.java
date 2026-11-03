@@ -108,7 +108,9 @@ public class RecordService {
                 null, null, null, null, 0L, null);
         repo.insertRecord(record, visitStartedAt);
         audit(actor, "RECORD_CREATE", "RECORD", record.id().toString(), Map.of(
-                "recordNo", record.recordNo(), "patientNo", patient.patientNo(),
+                "recordNo", record.recordNo(),
+                // P1-S4：审计明细不留明文患者号
+                "patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()),
                 "docType", record.docType(), "templateCode", record.templateCode()));
         return detail(record.id());
     }
