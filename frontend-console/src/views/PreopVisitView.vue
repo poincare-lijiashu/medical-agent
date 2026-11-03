@@ -306,18 +306,25 @@ async function onSelect(payload: { patient: Patient; visit: Visit }) {
   }
 }
 
+/** 请求代次：切换病例时旧响应必须被丢弃，否则 A 的 ASA/禁食会填进 B。 */
+let recordSeq = 0
+
 async function selectCase(c: SurgeryCase) {
+  const seq = ++recordSeq
   current.value = c
   recordLoading.value = true
   try {
-    record.value = await surgeryApi.preopVisit(c.id)
-    fillForm(record.value)
+    const next = await surgeryApi.preopVisit(c.id)
+    if (seq !== recordSeq || current.value?.id !== c.id) return
+    record.value = next
+    fillForm(next)
   } catch (e) {
+    if (seq !== recordSeq) return
     toast.error('访视单加载失败', errorText(e))
     record.value = null
     fillForm(null)
   } finally {
-    recordLoading.value = false
+    if (seq === recordSeq) recordLoading.value = false
   }
 }
 
@@ -359,11 +366,18 @@ async function save() {
 
 async function sign() {
   if (!current.value) return
+  // 兜底：表单里的数据必须属于当前病例，否则拒绝签署。
+  if (record.value && record.value.caseId !== current.value.id) {
+    toast.error('签署已取消', '表单与当前病例不一致，请刷新后重试。')
+    return
+  }
+  const caseId = current.value.id
   busy.value = true
   try {
     // 先落草稿拿到最新版本号，再签署：避免"表单已改但版本号是旧的"导致 409
-    const saved = await surgeryApi.savePreopVisit(current.value.id, payload())
-    record.value = await surgeryApi.signPreopVisit(current.value.id, saved.version)
+    const saved = await surgeryApi.savePreopVisit(caseId, payload())
+    if (current.value?.id !== caseId) return
+    record.value = await surgeryApi.signPreopVisit(caseId, saved.version)
     confirmSign.value = false
     toast.ok('访视单已签署')
   } catch (e) {

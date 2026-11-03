@@ -125,29 +125,25 @@
         :value="orders.length"
         unit="条"
         :meta="`长期 ${longCount} · 临时 ${tempCount}`"
-        icon="orders"
       />
       <KpiCard
         label="待执行 / 未计费"
         :value="placedCount"
         unit="条"
         :meta="`已计费 ${chargedCount} 条`"
-        icon="clock"
         :tone="placedCount > 0 ? 'accent' : 'default'"
       />
       <KpiCard
         label="收费单金额"
-        :value="money(charge?.totalAmount ?? 0)"
-        :meta="charge ? `${charge.chargeNo} · ${charge.status === 'PAID' ? '已结算' : '未结算'}` : '尚未生成收费单'"
-        icon="charges"
-        :tone="charge?.status === 'PAID' ? 'ok' : 'warn'"
+        :value="chargeValue"
+        :meta="chargeMeta"
+        :tone="chargeError ? 'danger' : charge?.status === 'PAID' ? 'ok' : 'warn'"
       />
       <KpiCard
         label="转送异常"
         :value="transferFailedCount"
         unit="条"
         :meta="transferFailedCount > 0 ? '需要人工重试或联系药房/医技' : '药房与医技转送正常'"
-        icon="arrow-right"
         :tone="transferFailedCount > 0 ? 'danger' : 'default'"
       />
     </div>
@@ -356,7 +352,7 @@
             />
 
             <div v-else class="table-wrap">
-              <table class="table table--compact">
+              <table class="table table--compact table--stack">
                 <thead>
                   <tr>
                     <th>单号</th>
@@ -371,8 +367,8 @@
                 </thead>
                 <tbody>
                   <tr v-for="o in visibleOrders" :key="o.id">
-                    <td class="mono">{{ o.orderNo }}</td>
-                    <td>
+                    <td class="mono" data-primary>{{ o.orderNo }}</td>
+                    <td data-label="项目">
                       <div class="item-line">
                         <span class="is-strong" :title="o.itemName">{{ o.itemName }}</span>
                         <span class="mode-tag" :class="{ 'is-long': o.orderMode === 'LONG' }">
@@ -381,23 +377,23 @@
                       </div>
                       <div class="mono muted item-code">{{ o.itemCode }}</div>
                     </td>
-                    <td class="nowrap">
+                    <td class="nowrap" data-label="剂量 / 频次">
                       <div>{{ o.dose || '—' }}</div>
                       <div class="mono muted" style="font-size: var(--fs-10)" :title="freqLabel(o.frequency)">
                         {{ (o.frequency || '—').toUpperCase() }}
                       </div>
                     </td>
-                    <td class="is-num nowrap">{{ o.quantity }} {{ o.unit }}</td>
-                    <td class="is-num is-strong nowrap">{{ money(o.amount) }}</td>
-                    <td><StatusPill :value="o.status" /></td>
-                    <td>
+                    <td class="is-num nowrap" data-label="数量">{{ o.quantity }} {{ o.unit }}</td>
+                    <td class="is-num is-strong nowrap" data-label="金额">{{ money(o.amount) }}</td>
+                    <td data-label="状态"><StatusPill :value="o.status" /></td>
+                    <td data-label="转送">
                       <span v-if="o.transferStatus === 'FAILED'" class="badge badge--danger" :title="o.transferError || ''">
                         转送失败
                       </span>
                       <span v-else-if="o.externalNo" class="mono muted">{{ o.externalNo }}</span>
                       <span v-else class="muted">—</span>
                     </td>
-                    <td>
+                    <td data-label="操作">
                       <div class="row" style="gap: 4px">
                         <button
                           v-if="o.orderMode !== 'LONG' && o.status === 'PLACED'"
@@ -810,10 +806,31 @@ async function loadVisits(patientId: string) {
 
 async function pickVisit(v: Visit) {
   selectedVisit.value = v
+  // 换就诊先清空，避免上一个患者的医嘱与收费单短暂留在界面上。
+  orders.value = []
+  charge.value = null
+  chargeError.value = ''
+  pendingOrderKey = null
   await Promise.all([loadOrders(), loadCharge()])
 }
 
 /* ------------------------------ 医嘱 ------------------------------ */
+
+/**
+ * 开立医嘱的幂等键：同一次提交失败重试时复用同一个键，成功后清空。
+ * 弱网下重复点击不会重复开单（后端按 visit + actor + key 去重）。
+ */
+let pendingOrderKey: string | null = null
+
+function ensureOrderKey(): string {
+  if (!pendingOrderKey) {
+    pendingOrderKey =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+  }
+  return pendingOrderKey
+}
 
 const orders = ref<VisitOrder[]>([])
 const ordersLoading = ref(false)
@@ -929,15 +946,20 @@ function freqLabel(code: string | null) {
 }
 
 async function loadOrders() {
-  if (!selectedVisit.value) return
+  const visit = selectedVisit.value
+  if (!visit) return
   ordersLoading.value = true
   try {
-    orders.value = await clinicalApi.orders(selectedVisit.value.id)
+    const list = await clinicalApi.orders(visit.id)
+    // 期间切换了就诊：丢弃旧就诊的医嘱，避免写进新表头。
+    if (selectedVisit.value?.id !== visit.id) return
+    orders.value = list
     stamp()
   } catch (e) {
+    if (selectedVisit.value?.id !== visit.id) return
     toast.error('医嘱加载失败', errorText(e))
   } finally {
-    ordersLoading.value = false
+    if (selectedVisit.value?.id === visit.id) ordersLoading.value = false
   }
 }
 
@@ -949,15 +971,20 @@ async function submitOrder() {
   }
   busy.value = true
   try {
-    await clinicalApi.placeOrders(selectedVisit.value.id, [
-      {
-        itemCode: line.itemCode,
-        quantity: Math.floor(line.quantity),
-        dose: line.dose || undefined,
-        frequency: line.frequency || undefined,
-        orderMode: line.orderMode,
-      },
-    ])
+    await clinicalApi.placeOrders(
+      selectedVisit.value.id,
+      [
+        {
+          itemCode: line.itemCode,
+          quantity: Math.floor(line.quantity),
+          dose: line.dose || undefined,
+          frequency: line.frequency || undefined,
+          orderMode: line.orderMode,
+        },
+      ],
+      ensureOrderKey(),
+    )
+    pendingOrderKey = null
     toast.ok('医嘱已开立', `${line.itemName} · ${line.quantity}${line.unit}`)
     line.itemCode = ''
     line.itemName = ''
@@ -967,6 +994,7 @@ async function submitOrder() {
     line.dose = ''
     await Promise.all([loadOrders(), loadCharge()])
   } catch (e) {
+    // 保留 pendingOrderKey：用户重试时仍是同一个键，不会重复开单
     toast.error('开立失败', errorText(e))
   } finally {
     busy.value = false
@@ -1043,12 +1071,41 @@ const charge = ref<ChargeView | null>(null)
 const settleOpen = ref(false)
 const paymentMethod = ref('INSURANCE')
 
+/** 收费单读取失败时保留上一次成功值，不把失败伪装成 0 元。 */
+const chargeError = ref('')
+const chargeUpdatedAt = ref('')
+
+const chargeValue = computed(() => {
+  if (chargeError.value) return '—'
+  return charge.value ? money(charge.value.totalAmount) : '—'
+})
+
+const chargeMeta = computed(() => {
+  if (chargeError.value) {
+    return chargeUpdatedAt.value
+      ? `收费单读取失败 · 上次成功 ${chargeUpdatedAt.value}`
+      : '收费单读取失败'
+  }
+  if (!charge.value) return '尚未生成收费单'
+  return `${charge.value.chargeNo} · ${charge.value.status === 'PAID' ? '已结算' : '未结算'}`
+})
+
 async function loadCharge() {
-  if (!selectedVisit.value) return
+  const visit = selectedVisit.value
+  if (!visit) return
   try {
-    charge.value = await clinicalApi.charge(selectedVisit.value.id)
-  } catch {
-    charge.value = null
+    const next = await clinicalApi.charge(visit.id)
+    if (selectedVisit.value?.id !== visit.id) return
+    charge.value = next
+    chargeError.value = ''
+    chargeUpdatedAt.value = new Date().toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+  } catch (e) {
+    if (selectedVisit.value?.id !== visit.id) return
+    chargeError.value = errorText(e)
   }
 }
 

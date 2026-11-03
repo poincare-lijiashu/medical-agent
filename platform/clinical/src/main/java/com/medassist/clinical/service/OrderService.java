@@ -9,6 +9,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.clinical.web.ClinicalDtos.OrderLine;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -18,9 +19,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -49,6 +52,32 @@ public class OrderService {
 
     @Transactional
     public List<VisitOrder> place(UUID visitId, List<OrderLine> lines, String actor) {
+        return place(visitId, lines, actor, null);
+    }
+
+    /**
+     * 开立医嘱（支持幂等键）。
+     *
+     * <p>弱网与网关超时下用户会重复点击「开立」。前端每次提交带同一个
+     * {@code Idempotency-Key}，这里据此去重：命中则直接返回首次结果，
+     * 不会再落一遍医嘱，也不会重复触发药房/医技转送。
+     *
+     * <p>并发重放由唯一约束兜底：两个请求同时插入时，后者抛
+     * {@code DataIntegrityViolationException}，捕获后改读首次结果。
+     *
+     * @param idempotencyKey 可空；格式不合法的键视为未提供（不阻断业务）
+     */
+    @Transactional
+    public List<VisitOrder> place(UUID visitId, List<OrderLine> lines, String actor,
+                                  String idempotencyKey) {
+        String key = normalizeIdempotencyKey(idempotencyKey);
+        if (key != null) {
+            List<VisitOrder> replay = replayIfPresent(visitId, actor, key);
+            if (replay != null) {
+                return replay;
+            }
+        }
+
         Visit visit = repo.lockVisit(visitId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         if (!Visit.IN_TREATMENT.equals(visit.status())) {
@@ -92,7 +121,60 @@ public class OrderService {
                 "orderNos", result.stream().map(VisitOrder::orderNo).toList(),
                 "longCount", result.stream().filter(VisitOrder::longTerm).count(),
                 "drugCount", result.stream().filter(VisitOrder::drug).count()));
+
+        if (key != null) {
+            List<UUID> ids = result.stream().map(VisitOrder::id).toList();
+            try {
+                repo.insertIdempotency(visitId, actor, key, ids);
+            } catch (DataIntegrityViolationException e) {
+                // 并发重放：另一个请求已经写入同一幂等键，返回它记录的结果
+                List<VisitOrder> concurrent = replayIfPresent(visitId, actor, key);
+                if (concurrent != null) {
+                    return concurrent;
+                }
+            }
+        }
         return result;
+    }
+
+    /**
+     * 幂等键只接受 8~128 位的字母/数字/下划线/中划线。
+     *
+     * <p>不合法的键当作「未提供」而不是报错：幂等是防重复的保护措施，
+     * 不应该因为客户端传了个怪值就把正常开立挡下来。
+     */
+    private static String normalizeIdempotencyKey(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String key = raw.trim();
+        if (key.length() < 8 || key.length() > 128) {
+            return null;
+        }
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '-' || c == '_';
+            if (!ok) {
+                return null;
+            }
+        }
+        return key;
+    }
+
+    /**
+     * 命中幂等键时返回首次开立的结果；未命中返回 {@code null}
+     * （用 null 而不是空列表区分「没命中」与「命中但医嘱已被撤销」）。
+     */
+    private List<VisitOrder> replayIfPresent(UUID visitId, String actor, String key) {
+        var ids = repo.findIdempotentOrderIds(visitId, actor, key);
+        if (ids.isEmpty()) {
+            return null;
+        }
+        Set<UUID> wanted = new HashSet<>(ids.get());
+        return repo.listOrders(visitId, null).stream()
+                .filter(o -> wanted.contains(o.id()))
+                .toList();
     }
 
     /** 停嘱：仅住院长嘱可停；停嘱当日仍计费，次日起不再计费。 */

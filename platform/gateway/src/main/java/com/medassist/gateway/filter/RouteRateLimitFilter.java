@@ -5,6 +5,7 @@ import com.alibaba.csp.sentinel.EntryType;
 import com.alibaba.csp.sentinel.ResourceTypeConstants;
 import com.alibaba.csp.sentinel.SphU;
 import com.alibaba.csp.sentinel.slots.block.BlockException;
+import com.alibaba.csp.sentinel.slots.block.degrade.DegradeException;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.gateway.config.GatewayFlowRuleProperties;
@@ -62,10 +63,21 @@ public class RouteRateLimitFilter implements GlobalFilter, Ordered {
         try {
             entry = SphU.entry(resource, ResourceTypeConstants.COMMON_API_GATEWAY, EntryType.IN);
         } catch (BlockException e) {
+            String traceId = exchange.getRequest().getHeaders().getFirst(AuthHeaders.TRACE_ID);
+            // 熔断与限流是两种不同的用户语义：
+            //   限流 = 你太快了，退避后重试（429）
+            //   熔断 = 下游太慢，我们主动快速失败（503），避免排队把整条路由族一起拖成 504
+            if (e instanceof DegradeException) {
+                log.warn("gateway.circuit_open resource={} path={}", resource, path);
+                meterRegistry.counter("medassist.gateway.circuit_open", "resource", resource)
+                        .increment();
+                return GatewayResponses.reject(exchange, HttpStatus.SERVICE_UNAVAILABLE,
+                        ErrorCode.UPSTREAM_UNAVAILABLE,
+                        "该服务响应过慢，已暂时熔断保护，请稍后重试", traceId);
+            }
             log.warn("gateway.rate_limited resource={} path={}", resource, path);
             // 指标：Prometheus 规则 GatewayRateLimited 依赖该计数（按接口族区分，避免单条高基数标签）
             meterRegistry.counter("medassist.gateway.rate_limited", "resource", resource).increment();
-            String traceId = exchange.getRequest().getHeaders().getFirst(AuthHeaders.TRACE_ID);
             return GatewayResponses.reject(exchange, HttpStatus.TOO_MANY_REQUESTS,
                     ErrorCode.TOO_MANY_REQUESTS, "请求过于频繁，请稍后重试", traceId);
         }

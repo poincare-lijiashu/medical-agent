@@ -134,7 +134,7 @@ samp {
   z-index: var(--z-tooltip);
   padding: 8px 12px;
   background: var(--surface);
-  border: 1px solid var(--control);
+  border: 1px solid var(--control-strong);
   border-radius: 6px;
   color: var(--text);
   font-size: var(--fs-small);
@@ -593,6 +593,42 @@ samp {
   letter-spacing: 0;
 }
 
+/* KPI 的临床警示：禁食不足、不宜手术、待回收空安瓿。
+   颜色不是唯一信息，所以标签后同时补文字标记。 */
+.kpi.is-accent .kpi-value {
+  color: var(--accent);
+}
+
+.kpi.is-ok .kpi-value {
+  color: var(--positive);
+}
+
+.kpi.is-warn .kpi-value {
+  color: var(--warning);
+}
+
+.kpi.is-danger .kpi-value {
+  color: var(--negative);
+}
+
+.kpi.is-warn .kpi-label::after,
+.kpi.is-danger .kpi-label::after {
+  margin-left: 6px;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.kpi.is-warn .kpi-label::after {
+  content: '需注意';
+  color: var(--warning);
+}
+
+.kpi.is-danger .kpi-label::after {
+  content: '异常';
+  color: var(--negative);
+}
+
 /* ------------------------------------------------------------------ 表格 */
 
 .table-wrap {
@@ -682,6 +718,78 @@ samp {
   line-height: 18px;
 }
 
+/* ------------------------------------------------------------------ 表格 → 列表（≤640px）
+ * 设计系统 §1 第 5 条：640px 以下表格变列表，页面绝不横向滚动。
+ * 用法：给 <table> 加 class="table--stack"，给每个 <td> 加 data-label="字段名"，
+ * 主标识列加 data-primary（不显示标签、字号放大）。
+ */
+@media (max-width: 640px) {
+  .table--stack,
+  .table--stack tbody,
+  .table--stack tr,
+  .table--stack td {
+    display: block;
+    width: auto;
+  }
+
+  .table--stack thead {
+    display: none;
+  }
+
+  .table--stack tr {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .table--stack tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table--stack td,
+  .table--stack td:first-child,
+  .table--stack td:last-child {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s3);
+    padding: 3px 0;
+    border-bottom: 0;
+    border-left: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .table--stack td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-family: var(--font-sans);
+    font-size: var(--fs-small);
+    font-weight: 400;
+  }
+
+  .table--stack td:not([data-label])::before {
+    content: none;
+  }
+
+  .table--stack td[data-primary] {
+    font-size: var(--fs-body);
+    font-weight: 500;
+  }
+
+  .table--stack td[data-primary]::before {
+    content: none;
+  }
+
+  .table--stack td.is-num {
+    text-align: right;
+  }
+
+  .table--stack tbody tr:hover td {
+    background: transparent;
+  }
+}
+
 /* ------------------------------------------------------------------ 表单 */
 
 .field {
@@ -721,7 +829,7 @@ samp {
   min-height: var(--control-h);
   padding: 5px 10px;
   background: var(--surface);
-  border: 1px solid var(--control);
+  border: 1px solid var(--control-strong);
   border-radius: var(--r-sm);
   color: var(--text);
   font-size: var(--fs-body);
@@ -781,7 +889,7 @@ samp {
 .btn {
   --btn-bg: var(--surface);
   --btn-fg: var(--text);
-  --btn-line: var(--control);
+  --btn-line: var(--control-strong);
   display: inline-flex;
   align-items: center;
   justify-content: center;

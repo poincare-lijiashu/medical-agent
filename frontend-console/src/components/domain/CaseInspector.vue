@@ -13,6 +13,18 @@
           <div><dt>时间</dt><dd class="mono">{{ hhmm(selected.plannedStart) }}–{{ hhmm(selected.plannedEnd) }}</dd></div>
           <div><dt>手术间</dt><dd>{{ roomName || '—' }}</dd></div>
           <div><dt>台次</dt><dd class="mono">第{{ selected.sequence ?? '—' }}台</dd></div>
+          <div v-if="selected.operationName">
+            <dt>术式</dt>
+            <dd>{{ selected.operationName }}</dd>
+          </div>
+          <div v-if="selected.surgeon">
+            <dt>术者</dt>
+            <dd>{{ selected.surgeon }}</dd>
+          </div>
+          <div v-if="selected.patientNo">
+            <dt>患者号</dt>
+            <dd class="mono">{{ selected.patientNo }}</dd>
+          </div>
           <div>
             <dt>病例</dt>
             <dd class="case-id">

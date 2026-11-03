@@ -11,9 +11,11 @@ import com.medassist.common.exception.BusinessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,6 +35,9 @@ public class SurgeryService {
     private final ClinicalRepository repo;
     private final SurgeryLevelService levelService;
     private final PreopVisitService preopVisitService;
+
+    /** 审计明细序列化：与其余服务一致，用 Jackson 而不是手工拼串。 */
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     public SurgeryService(ClinicalRepository repo, SurgeryLevelService levelService,
                           PreopVisitService preopVisitService) {
@@ -168,20 +173,24 @@ public class SurgeryService {
                 toJson(detail, c));
     }
 
+    /**
+     * 审计明细落库为 JSONB。
+     *
+     * <p>以前用字符串拼接：取消原因里出现引号、反斜杠或换行就会生成非法 JSON，
+     * log_change 写入失败后整个业务事务一起回滚，用户看到「操作失败」且重试仍然失败。
+     * 这里改用 Jackson 序列化，保证任意文本都能正确转义。
+     */
     private String toJson(Map<String, Object> detail, SurgeryCase c) {
-        StringBuilder sb = new StringBuilder("{");
-        sb.append("\"caseNo\":\"").append(c.caseNo()).append("\",");
-        sb.append("\"visitId\":\"").append(c.visitId()).append("\",");
-        boolean first = true;
-        for (Map.Entry<String, Object> e : detail.entrySet()) {
-            if (!first) {
-                sb.append(',');
-            }
-            first = false;
-            sb.append('"').append(e.getKey()).append("\":\"")
-                    .append(e.getValue() == null ? "" : e.getValue()).append('"');
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("caseNo", c.caseNo());
+        payload.put("visitId", c.visitId() == null ? null : c.visitId().toString());
+        payload.putAll(detail);
+        try {
+            return JSON.writeValueAsString(payload);
+        } catch (RuntimeException e) {
+            // 序列化不应失败；退回最小合法 JSON，审计写入不能阻断业务
+            return "{\"caseNo\":\"\"}";
         }
-        return sb.append('}').toString();
     }
 
     private static String upper(String value) {

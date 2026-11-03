@@ -2,6 +2,7 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaRecord;
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaVital;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -117,5 +118,15 @@ public final class TheatreDtos {
                                   long totalOccupiedMinutes, long totalAvailableMinutes,
                                   long totalTurnoverMinutes, int turnoverCount,
                                   BigDecimal utilizationRate) {
+    }
+
+    /**
+     * 排台看板响应：某天全部房间的排台 + 房间清单。
+     *
+     * <p>一次请求替代前端的 2N 次并发（N 个房间各查排台 + 各查利用率），
+     * 既减少 504 放大，也避免把网关的限流桶吃满。
+     */
+    public record SurgeryBoardView(LocalDate date, int roomCount, int truncated,
+                                   List<SurgeryBoardRow> rows) {
     }
 }

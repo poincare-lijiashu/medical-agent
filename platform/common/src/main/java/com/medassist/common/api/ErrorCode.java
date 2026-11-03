@@ -21,6 +21,8 @@ public enum ErrorCode {
     TOO_MANY_REQUESTS(42900, "操作过于频繁，请稍后再试"),
     INTERNAL_ERROR(50000, "系统处理异常，已记录日志，请联系管理员"),
     UPSTREAM_UNAVAILABLE(50300, "依赖服务暂不可用，请稍后重试"),
+    /** 网关 response-timeout 到期，或下游在超时预算内未返回。 */
+    GATEWAY_TIMEOUT(50400, "服务响应超时，请稍后重试；若持续出现请联系信息科"),
 
     // ---- EMPI 患者主索引（41xxx）----
     PATIENT_NOT_FOUND(41401, "未找到该患者"),

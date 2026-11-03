@@ -74,7 +74,7 @@
       </div>
 
       <div class="table-wrap">
-        <table class="table">
+        <table class="table table--stack">
           <thead>
             <tr>
               <th scope="col" :aria-sort="ariaSort('time')">
@@ -89,8 +89,8 @@
                   <AppIcon v-if="sortKey === 'room'" :name="sortDir === 'asc' ? 'arrow-up' : 'arrow-down'" :size="12" />
                 </button>
               </th>
-              <th scope="col">台次 / 病例</th>
-              <th v-if="hasOperationName" scope="col">术式</th>
+              <th scope="col">台次 / 病例 · 患者</th>
+              <th v-if="hasOperationName" scope="col">术式 · 术者</th>
               <th scope="col" :aria-sort="ariaSort('status')">
                 <button class="sort" type="button" @click="toggleSort('status')">
                   状态
@@ -111,16 +111,20 @@
               @click="selectRow(r)"
               @keydown.enter="selectRow(r)"
             >
-              <td class="mono">{{ hhmm(r.plannedStart) }}–{{ hhmm(r.plannedEnd) }}</td>
-              <td>{{ r.roomName }}</td>
-              <td>
+              <td class="mono" data-label="时间">{{ hhmm(r.plannedStart) }}–{{ hhmm(r.plannedEnd) }}</td>
+              <td data-label="手术间">{{ r.roomName }}</td>
+              <td data-label="台次 / 病例">
                 <span class="is-strong">第{{ r.sequence ?? '—' }}台</span>
                 <span class="mono muted"> · {{ shortId(caseIdOf(r)) }}</span>
+                <span v-if="r.patientNo" class="mono muted"> · {{ r.patientNo }}</span>
               </td>
-              <td v-if="hasOperationName">{{ r.operationName || '—' }}</td>
-              <td><StatusPill :value="r.status" /></td>
-              <td class="is-num">{{ levelText(caseIdOf(r)) }}</td>
-              <td>
+              <td v-if="hasOperationName" data-label="术式">
+                {{ r.operationName || '—' }}
+                <span v-if="r.surgeon" class="muted"> · {{ r.surgeon }}</span>
+              </td>
+              <td data-label="状态"><StatusPill :value="r.status" /></td>
+              <td class="is-num" data-label="分级">{{ levelText(caseIdOf(r)) }}</td>
+              <td data-label="操作">
                 <button class="btn btn--sm" type="button" @click.stop="openLevel(r)">分级审批</button>
               </td>
             </tr>
@@ -145,7 +149,7 @@
         <dl class="level-state">
           <div><dt>当前分级</dt><dd>{{ level?.level ? `${level.level} 级` : '未分级' }}</dd></div>
           <div><dt>审批状态</dt><dd>{{ approvalText(level?.approvalStatus) }}</dd></div>
-          <div><dt>申请人 / 审批人</dt><dd>{{ level?.requestedBy || '—' }} / {{ level?.approvedBy || '—' }}</dd></div>
+          <div><dt>申请人 / 审批人</dt><dd>{{ level?.appliedBy || '—' }} / {{ level?.reviewedBy || '—' }}</dd></div>
         </dl>
 
         <label class="field">
@@ -209,6 +213,7 @@ import type {
   DailyUtilization,
   OperatingRoom,
   RoomUtilization,
+  SurgeryBoardRow,
   SurgeryLevel,
   SurgerySchedule,
 } from '@/api/types'
@@ -347,44 +352,73 @@ async function loadAll() {
   }
 }
 
+/** 请求代次：切日期时旧响应必须被丢弃，否则会覆盖新日期的排台。 */
+let daySeq = 0
+
+/** 看板聚合行 → 组件使用的排台形状（组件按 SurgerySchedule 渲染）。 */
+function toSchedule(r: SurgeryBoardRow): SurgerySchedule {
+  return {
+    id: r.scheduleId,
+    surgeryCaseId: r.surgeryCaseId,
+    caseId: r.surgeryCaseId,
+    roomId: r.roomId,
+    roomCode: r.roomCode ?? undefined,
+    roomName: r.roomName ?? undefined,
+    visitId: r.visitId,
+    patientNo: r.patientNo,
+    operationName: r.operationName,
+    surgeon: r.surgeon,
+    sequence: r.sequence ?? undefined,
+    cancelReason: r.cancelReason,
+    plannedStart: r.plannedStart,
+    plannedEnd: r.plannedEnd,
+    status: r.scheduleStatus,
+    version: r.scheduleVersion,
+  }
+}
+
+/**
+ * 一次请求取回全部房间的排台（替代按房间并发 N 次），
+ * 利用率同理由后端一条 SQL 聚合。
+ */
 async function loadDay() {
   const active = rooms.value.filter((r) => r.status === 'ACTIVE')
   if (!active.length) return
 
-  const utilPromise = surgeryApi.hospitalUtilization(day.value, day.value).catch(() => null)
-  const schedulePromises = active.map((room) =>
-    surgeryApi
-      .roomSchedules(room.id, day.value)
-      .then((raw) => ({ roomId: room.id, list: normalizeSchedules(raw) }))
-      .catch(() => ({ roomId: room.id, list: null })),
-  )
+  const seq = ++daySeq
+  const requestedDay = day.value
 
-  const [util, ...scheduleResults] = await Promise.all([utilPromise, ...schedulePromises])
+  const [util, board] = await Promise.all([
+    surgeryApi.hospitalUtilization(requestedDay, requestedDay).catch(() => null),
+    surgeryApi.board(requestedDay).catch(() => null),
+  ])
+
+  // 期间用户改了日期或又发起了一次加载：丢弃这次结果。
+  if (seq !== daySeq || requestedDay !== day.value) return
 
   if (util) {
     roomUtilizations.value = util
     const map: Record<string, DailyUtilization | undefined> = {}
-    for (const u of util) map[u.roomId] = u.days.find((d) => d.date === day.value)
+    for (const u of util) map[u.roomId] = u.days.find((d) => d.date === requestedDay)
     utilByRoom.value = map
   } else {
     loadError.value = '利用率暂时不可用，排台仍可查看。'
   }
 
-  const next: Record<string, SurgerySchedule[]> = {}
-  let failed = 0
-  for (const r of scheduleResults) {
-    if (r.list) next[r.roomId] = r.list
-    else {
-      failed += 1
-      if (schedulesByRoom.value[r.roomId]) next[r.roomId] = schedulesByRoom.value[r.roomId]
+  if (board) {
+    const next: Record<string, SurgerySchedule[]> = {}
+    for (const room of active) next[room.id] = []
+    for (const row of board.rows) {
+      const list = next[row.roomId] ?? (next[row.roomId] = [])
+      list.push(toSchedule(row))
     }
-  }
-  if (Object.keys(next).length) schedulesByRoom.value = next
-
-  if (failed === active.length) {
-    loadError.value = '排台加载失败。已保留上一次数据。'
-  } else if (failed > 0) {
-    loadError.value = `${failed} 间手术间的排台暂时不可用，其余台次正常展示。`
+    schedulesByRoom.value = next
+    if (board.truncated > 0) {
+      loadError.value = `当日排台过多，仅显示前 ${board.rows.length} 条（另有 ${board.truncated} 条未显示）。`
+    }
+  } else {
+    // 失败时保留上一次数据，并明确告诉用户这是旧数据。
+    loadError.value = '排台加载失败，已保留上一次数据。'
   }
 
   lastUpdated.value = hhmm(new Date().toISOString())
@@ -445,17 +479,6 @@ async function loadRoomUtil(roomId: string) {
   } catch {
     roomUtil.value = null
   }
-}
-
-function normalizeSchedules(raw: unknown): SurgerySchedule[] {
-  if (Array.isArray(raw)) return raw as SurgerySchedule[]
-  if (raw && typeof raw === 'object') {
-    const obj = raw as Record<string, unknown>
-    for (const key of ['schedules', 'items', 'slots']) {
-      if (Array.isArray(obj[key])) return obj[key] as SurgerySchedule[]
-    }
-  }
-  return []
 }
 
 /* ---------------------------------- 日期 ---------------------------------- */
@@ -842,7 +865,8 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 640px) {
-  .detail-panel {
+  /* 手机上不隐藏明细：改为卡片列表，保留分级与审批入口。 */
+  .detail-panel .panel-head .hint {
     display: none;
   }
 }

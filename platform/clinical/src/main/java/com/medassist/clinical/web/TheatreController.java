@@ -8,6 +8,7 @@ import com.medassist.clinical.web.TheatreDtos.CreateRoomReq;
 import com.medassist.clinical.web.TheatreDtos.RoomStatusReq;
 import com.medassist.clinical.web.TheatreDtos.RoomUtilization;
 import com.medassist.clinical.web.TheatreDtos.ScheduleReq;
+import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
@@ -82,6 +83,21 @@ public class TheatreController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.board(roomId, date));
+    }
+
+    /**
+     * 排台看板（全部 ACTIVE 手术间，一次请求）。
+     *
+     * <p>替代前端「按房间并发 N 次」的扇出。返回排台 + 术式 + 术者 + 患者号 + 分级审批，
+     * 看板一次渲染完整信息；超过 500 行时 {@code truncated} 给出被裁剪条数。
+     */
+    @GetMapping("/surgery/board")
+    public ApiResponse<SurgeryBoardView> boardAll(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate date,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.boardAll(date));
     }
 
     @GetMapping("/visits/{visitId}/surgery-cases/{caseId}/schedule")

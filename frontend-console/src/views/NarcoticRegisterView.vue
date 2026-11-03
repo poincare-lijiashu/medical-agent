@@ -81,7 +81,7 @@
       />
 
       <div v-else class="table-wrap">
-        <table class="table">
+        <table class="table table--stack">
           <thead>
             <tr>
               <th>处方号</th>
@@ -98,19 +98,19 @@
           </thead>
           <tbody>
             <tr v-for="r in rows" :key="r.id">
-              <td class="mono">{{ r.prescriptionNo }}</td>
-              <td class="mono">{{ r.patientNo }}</td>
-              <td>
+              <td class="mono" data-primary>{{ r.prescriptionNo }}</td>
+              <td class="mono" data-label="患者">{{ r.patientNo }}</td>
+              <td data-label="药品">
                 <div class="is-strong">{{ r.drugName }}</div>
                 <div class="mono muted">{{ r.drugCode }}</div>
               </td>
-              <td>{{ r.spec || '—' }}</td>
-              <td class="is-num">{{ r.quantity }} {{ r.unit }}</td>
-              <td class="mono">{{ r.batchNo || '—' }}</td>
-              <td>{{ r.prescriber }}</td>
-              <td>{{ dateTime(r.dispensedAt) }}</td>
-              <td><StatusPill :value="r.status" /></td>
-              <td>
+              <td data-label="规格">{{ r.spec || '—' }}</td>
+              <td class="is-num" data-label="数量">{{ r.quantity }} {{ r.unit }}</td>
+              <td class="mono" data-label="批号">{{ r.batchNo || '—' }}</td>
+              <td data-label="处方医师">{{ r.prescriber }}</td>
+              <td data-label="发药时间">{{ dateTime(r.dispensedAt) }}</td>
+              <td data-label="状态"><StatusPill :value="r.status" /></td>
+              <td data-label="操作">
                 <button
                   v-if="r.status === 'PENDING_RETURN'"
                   class="btn btn--sm"

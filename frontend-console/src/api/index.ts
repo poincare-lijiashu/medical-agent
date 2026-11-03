@@ -19,6 +19,7 @@ import type {
   Patient,
   PreopVisit,
   RoomUtilization,
+  SurgeryBoardView,
   SurgeryCase,
   SurgeryChargePreview,
   SurgeryLevel,
@@ -62,7 +63,13 @@ export const clinicalApi = {
   placeOrders: (
     visitId: string,
     items: { itemCode: string; quantity: number; dose?: string; frequency?: string; orderMode?: string }[],
-  ) => post<VisitOrder[]>(`/clinical/visits/${visitId}/orders`, { items }),
+    idempotencyKey?: string,
+  ) =>
+    post<VisitOrder[]>(
+      `/clinical/visits/${visitId}/orders`,
+      { items },
+      { headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined },
+    ),
   cancelOrder: (visitId: string, orderId: string) =>
     post<VisitOrder>(`/clinical/visits/${visitId}/orders/${orderId}/cancel`),
   stopOrder: (visitId: string, orderId: string, reason?: string) =>
@@ -95,6 +102,8 @@ export const surgeryApi = {
   rejectLevel: (caseId: string, version: number, reason: string) =>
     post<SurgeryLevel>(`/clinical/surgery-cases/${caseId}/level/reject`, { version, reason }),
   rooms: (status?: string) => get<OperatingRoom[]>('/clinical/operating-rooms', { status }),
+  /** 排台看板：一次取回全部 ACTIVE 手术间的排台（含术式/术者/患者号/分级）。 */
+  board: (date?: string) => get<SurgeryBoardView>('/clinical/surgery/board', { date }),
   roomSchedules: (roomId: string, date: string) =>
     get<unknown>(`/clinical/operating-rooms/${roomId}/schedules`, { date }),
   roomUtilization: (roomId: string, from?: string, to?: string) =>

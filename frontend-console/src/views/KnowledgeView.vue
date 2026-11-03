@@ -285,48 +285,68 @@ async function loadSpaces() {
   }
 }
 
+/** 请求代次：切换空间后旧空间的检索结果必须丢弃，否则会越权展示。 */
+let runSeq = 0
+
 async function selectSpace(s: KbSpace) {
   space.value = s
   searchResult.value = null
   answerResult.value = null
   query.value = ''
+  runSeq += 1
+  busy.value = false
   await Promise.all([loadDocuments(), loadStats()])
 }
 
 async function loadDocuments() {
-  if (!space.value) return
+  const current = space.value
+  if (!current) return
   try {
-    documents.value = await kbApi.documents(space.value.id, undefined, 100)
+    const list = await kbApi.documents(current.id, undefined, 100)
+    if (space.value?.id !== current.id) return
+    documents.value = list
   } catch (e) {
+    if (space.value?.id !== current.id) return
     toast.error('文档加载失败', errorText(e))
   }
 }
 
 async function loadStats() {
-  if (!space.value) return
+  const current = space.value
+  if (!current) return
   try {
-    const raw = await kbApi.stats(space.value.id)
+    const raw = await kbApi.stats(current.id)
+    if (space.value?.id !== current.id) return
     stats.value = { documents: raw.documents, readyDocuments: raw.readyDocuments, chunks: raw.chunks }
   } catch {
+    if (space.value?.id !== current.id) return
     stats.value = { documents: documents.value.length, readyDocuments: 0, chunks: 0 }
   }
 }
 
 async function run() {
-  if (!space.value || !query.value) return
+  const current = space.value
+  if (!current || !query.value) return
+  const seq = ++runSeq
+  const mode_ = tab.value
   busy.value = true
   searchResult.value = null
   answerResult.value = null
   try {
-    if (tab.value === 'search') {
-      searchResult.value = await kbApi.search(space.value.id, query.value, 8, mode.value)
+    if (mode_ === 'search') {
+      const res = await kbApi.search(current.id, query.value, 8, mode.value)
+      if (seq !== runSeq || space.value?.id !== current.id) return
+      searchResult.value = res
     } else {
-      answerResult.value = await kbApi.answer(space.value.id, query.value, 6)
+      const res = await kbApi.answer(current.id, query.value, 6)
+      if (seq !== runSeq || space.value?.id !== current.id) return
+      answerResult.value = res
     }
   } catch (e) {
-    toast.error(tab.value === 'search' ? '检索失败' : '问答失败', errorText(e))
+    if (seq !== runSeq) return
+    toast.error(mode_ === 'search' ? '检索失败' : '问答失败', errorText(e))
   } finally {
-    busy.value = false
+    if (seq === runSeq) busy.value = false
   }
 }
 

@@ -97,7 +97,7 @@
             </div>
 
             <div class="table-wrap">
-              <table class="table">
+              <table class="table table--stack">
                 <thead>
                   <tr>
                     <th>项目编码</th>
@@ -111,13 +111,13 @@
                 </thead>
                 <tbody>
                   <tr v-for="l in preview.lines" :key="l.itemCode">
-                    <td class="mono">{{ l.itemCode }}</td>
-                    <td class="is-strong">{{ l.itemName }}</td>
-                    <td>{{ l.category }}</td>
-                    <td class="is-num">{{ l.quantity }}</td>
-                    <td class="is-num">{{ money(l.unitPrice) }}</td>
-                    <td class="is-num is-strong">{{ money(l.amount) }}</td>
-                    <td>
+                    <td class="mono" data-primary>{{ l.itemCode }}</td>
+                    <td class="is-strong" data-label="项目">{{ l.itemName }}</td>
+                    <td data-label="类别">{{ l.category }}</td>
+                    <td class="is-num" data-label="数量">{{ l.quantity }}</td>
+                    <td class="is-num" data-label="单价">{{ money(l.unitPrice) }}</td>
+                    <td class="is-num is-strong" data-label="金额">{{ money(l.amount) }}</td>
+                    <td data-label="记账">
                       <span class="badge" :class="l.charged ? 'badge--ok' : 'badge--warn'">
                         {{ l.charged ? '已记账' : '待记账' }}
                       </span>

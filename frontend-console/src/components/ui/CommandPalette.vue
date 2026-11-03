@@ -213,7 +213,6 @@ function close() {
   inset: 0;
   z-index: var(--z-backdrop);
   background: var(--overlay);
-  backdrop-filter: blur(2px);
 }
 
 .palette {

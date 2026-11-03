@@ -52,7 +52,7 @@ public class SurgeryLevelService {
      */
     @Transactional
     public SurgeryLevel setLevel(UUID caseId, Integer level, Long version, String actor) {
-        SurgeryCase surgery = requireCase(caseId);
+        SurgeryCase surgery = lockCase(caseId);
         if (!SurgeryCase.PLANNED.equals(surgery.status())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "手术分级只能在手术开始前确定，当前状态：" + surgery.status());
@@ -103,7 +103,7 @@ public class SurgeryLevelService {
     /** 审批通过：只有待审批的三/四级分级可以审批，且审批人不得是申请人。 */
     @Transactional
     public SurgeryLevel approve(UUID caseId, long version, String actor) {
-        SurgeryCase surgery = requireCase(caseId);
+        SurgeryCase surgery = lockCase(caseId);
         SurgeryLevel record = requireLevel(caseId);
         if (record.level() < SurgeryLevel.APPROVAL_THRESHOLD) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
@@ -123,7 +123,7 @@ public class SurgeryLevelService {
     /** 驳回：必须写原因，同样受四眼原则约束。 */
     @Transactional
     public SurgeryLevel reject(UUID caseId, long version, String reason, String actor) {
-        SurgeryCase surgery = requireCase(caseId);
+        SurgeryCase surgery = lockCase(caseId);
         SurgeryLevel record = requireLevel(caseId);
         String text = reason == null ? "" : reason.trim();
         if (text.isEmpty()) {
@@ -176,6 +176,20 @@ public class SurgeryLevelService {
 
     private SurgeryCase requireCase(UUID caseId) {
         return repo.findSurgeryCase(caseId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术记录"));
+    }
+
+    /**
+     * 写路径的归属校验：必须与开台（{@code SurgeryService.start}）持同一把行锁。
+     *
+     * <p>为什么不能只做只读校验：开台事务先读"已审批通过"再落状态，
+     * 如果改分级的事务不加锁，它可以在两者之间把分级改回待审批并提交，
+     * 开台仍然成功——审批门槛被静默绕过，而审计里两条记录都"合规"。
+     *
+     * <p>锁顺序与开台一致（都是先锁 surgery_case，再动 surgery_level），不会死锁。
+     */
+    private SurgeryCase lockCase(UUID caseId) {
+        return repo.lockSurgeryCase(caseId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术记录"));
     }
 

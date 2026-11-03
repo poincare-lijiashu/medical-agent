@@ -2,6 +2,8 @@ package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
+import com.medassist.clinical.domain.ClinicalModel.RoomDayUsageRow;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.domain.ClinicalModel.SurgerySchedule;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -11,6 +13,7 @@ import com.medassist.clinical.web.TheatreDtos.DailyUtilization;
 import com.medassist.clinical.web.TheatreDtos.RoomStatusReq;
 import com.medassist.clinical.web.TheatreDtos.RoomUtilization;
 import com.medassist.clinical.web.TheatreDtos.ScheduleReq;
+import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.time.BusinessTime;
@@ -27,6 +30,7 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -173,6 +177,33 @@ public class TheatreService {
                 day.plusDays(1).atStartOfDay(BusinessTime.zone()).toInstant());
     }
 
+    /** 单次看板允许返回的最大排台行数；超出时显式返回 truncated，绝不静默截断。 */
+    private static final int BOARD_MAX_ROWS = 500;
+
+    /**
+     * 排台看板：某天全部 ACTIVE 手术间的排台，一次请求返回。
+     *
+     * <p>替换前端「按房间并发 N 次 roomSchedules」的扇出：
+     * 一次查询带回术式、术者、患者号与分级审批，看板不再只显示「第 N 台 + 病例号」。
+     * 数据量超过 {@link #BOARD_MAX_ROWS} 时返回 {@code truncated}，让调用方知道被裁剪。
+     */
+    public SurgeryBoardView boardAll(LocalDate date) {
+        LocalDate day = date == null ? BusinessTime.today() : date;
+        List<OperatingRoom> rooms = repo.listOperatingRooms(OperatingRoom.ACTIVE, 200);
+        if (rooms.isEmpty()) {
+            return new SurgeryBoardView(day, 0, 0, List.of());
+        }
+        List<UUID> roomIds = rooms.stream().map(OperatingRoom::id).toList();
+        ZoneId zone = BusinessTime.zone();
+        List<SurgeryBoardRow> all = repo.listBoardRows(
+                day.atStartOfDay(zone).toInstant(),
+                day.plusDays(1).atStartOfDay(zone).toInstant(),
+                roomIds);
+        int truncated = Math.max(0, all.size() - BOARD_MAX_ROWS);
+        List<SurgeryBoardRow> rows = truncated == 0 ? all : all.subList(0, BOARD_MAX_ROWS);
+        return new SurgeryBoardView(day, rooms.size(), truncated, List.copyOf(rows));
+    }
+
     // ---------------------------------------------------------------- 利用率报表
 
     /** 默认开放时段：08:00–18:00（可用 {@code openFrom/openTo} 覆盖，报表现算不落表）。 */
@@ -199,21 +230,50 @@ public class TheatreService {
     public List<RoomUtilization> hospitalUtilization(LocalDate from, LocalDate to,
                                                      LocalTime openFrom, LocalTime openTo) {
         Window window = resolveWindow(from, to, openFrom, openTo);
-        List<RoomUtilization> result = new ArrayList<>();
-        for (OperatingRoom room : repo.listOperatingRooms(OperatingRoom.ACTIVE, 200)) {
-            result.add(computeUtilization(room, window));
+        List<OperatingRoom> rooms = repo.listOperatingRooms(OperatingRoom.ACTIVE, 200);
+        if (rooms.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> roomIds = rooms.stream().map(OperatingRoom::id).toList();
+        Map<UUID, List<RoomDayUsage>> usageByRoom = new HashMap<>();
+        for (RoomDayUsageRow row : repo.listRoomDayUsageBatch(roomIds,
+                usageFrom(window), usageTo(window), openMinute(window), closeMinute(window))) {
+            usageByRoom.computeIfAbsent(row.roomId(), k -> new ArrayList<>()).add(row.usage());
+        }
+        List<RoomUtilization> result = new ArrayList<>(rooms.size());
+        for (OperatingRoom room : rooms) {
+            result.add(buildUtilization(room, window,
+                    usageByRoom.getOrDefault(room.id(), List.of())));
         }
         return result;
     }
 
+    private static java.time.Instant usageFrom(Window window) {
+        return window.from().atStartOfDay(BusinessTime.zone()).toInstant();
+    }
+
+    private static java.time.Instant usageTo(Window window) {
+        return window.to().plusDays(1).atStartOfDay(BusinessTime.zone()).toInstant();
+    }
+
+    private static int openMinute(Window window) {
+        return (int) (window.openFrom().toSecondOfDay() / 60);
+    }
+
+    private static int closeMinute(Window window) {
+        return (int) (window.openTo().toSecondOfDay() / 60);
+    }
+
     private RoomUtilization computeUtilization(OperatingRoom room, Window window) {
+        return buildUtilization(room, window, repo.listRoomDayUsage(room.id(),
+                usageFrom(window), usageTo(window), openMinute(window), closeMinute(window)));
+    }
+
+    /** 把「某房间某区间的逐日聚合」组装成报表视图（取数与组装分离，便于批量复用）。 */
+    private RoomUtilization buildUtilization(OperatingRoom room, Window window,
+                                             List<RoomDayUsage> rows) {
         ZoneId zone = BusinessTime.zone();
         long availablePerDay = Duration.between(window.openFrom(), window.openTo()).toMinutes();
-        List<RoomDayUsage> rows = repo.listRoomDayUsage(room.id(),
-                window.from().atStartOfDay(zone).toInstant(),
-                window.to().plusDays(1).atStartOfDay(zone).toInstant(),
-                (int) (window.openFrom().toSecondOfDay() / 60),
-                (int) (window.openTo().toSecondOfDay() / 60));
         List<DailyUtilization> days = new ArrayList<>(rows.size());
         int scheduled = 0;
         int completed = 0;

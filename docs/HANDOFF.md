@@ -1,16 +1,59 @@
 # 任务交接（HANDOFF）— MedAssist 会话续接
 
-> 更新：2026-11-02（MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~六批** / **知识库域第一~二批** / **第七轮评审整改第一~四批（含 B3 退药退费）** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
+> 更新：2026-11-03（新增**前端视觉重构 v3 → v4「开放平面」**与五路评审结论；后端 MF-07 / 药房联动 / 前置审方 / **医嘱 → 药房** / **撤销联动作废** / **医嘱 → 医技** / **结构化诊断** / **医保清单引用诊断** / **病案首页** / **DRG 分组自动取数** / **HQMS 上报** / **第六轮 P0~P3 整改** / **手术麻醉域第一~六批** / **知识库域第一~二批** / **第七轮评审整改第一~四批（含 B3 退药退费）** 已交付）。用途：因模型限流需开新会话时，新会话读本文件接续。
 
-## 2026-11-02 前端控制台（本轮新增，续接先读这里）
+## 2026-11-03 视觉重构 v3 → v4（**最新，续接先读这里**）
+
+用户对 v2「临床仪表台」的反馈是"太简单 / 太 demo / AI 味重 / 千篇一律"，随后两轮重做：
+
+| 版本 | commit | 做法 | 结果 |
+|---|---|---|---|
+| v3「临床台账」 | `8a15d46` | 加更多"设计感"：深石墨侧边栏、四张带图标 KPI 卡、页头 01–07 编号、等宽小标签、刻度尺与裁切角、奶油纸底、巨大空态插画、shimmer 骨架 | **被否决**：当时只读了 20 个技能的 `SKILL.md` 入口，没读 `references/` 正文，做出来的是"技能外观"而非产品界面 |
+| v4「开放平面」 | `33a966f` | 先补读技能正文（10 个技能 / 43 个文件 / 742,477 字节，落盘 `docs/skills-audit/full/`），再按 `app-screens.md`（23 个真实产品界面）与 `tells.md`（banned 清单）逐条重做 | **当前版本** |
+
+v4 具体删了什么、为什么删：见 `docs/skills-audit/FULL-READ.md` 第 2 节「读完以后，v3 被判定为『生成式套路』的地方」。
+设计契约是 `docs/DESIGN-SYSTEM.md`，已知边界在它的第 13 节。
+
+### v4 现状（2026-11-03 核对）
+
+- 页面：8 个业务页 + 登录 + 无权页（`/forbidden`），全部对接 `/api/v2`
+- 设计：浅色同地面侧边栏（232px）、无顶栏、24px 标题行、12px 灰色表头、mono 只给编码/时间/数字
+- 手术排台：全房间 × 07:00–20:00 横向时间轴 + 320px 检查器 + 当日明细表（可排序）
+- 响应式：860px 折叠为 52px 顶栏 + 全屏导航 sheet；390px 排台页变「房间 → 当日台次」列表
+- 已知未做：
+  - 390px 下医嘱 / 术前访视 / 术中收费 / 麻精专册 / 病案首页 5 张表仍是横向滚动的桌面表格
+  - 排台接口不含术式 / 术者 / 患者号（前端已预留列，见 `DESIGN-SYSTEM.md` §13）
+  - 自动化对比度审计与四档截图尚未接入 CI
+
+### v4 验收命令
+
+```powershell
+cd frontend-console
+npm run typecheck   # vue-tsc --noEmit，必须 0 错误
+npm run build
+npm run dev         # http://localhost:5174
+```
+
+登录 `admin01 / Med@2026`。
+
+### 2026-11-03 五路评审结论
+
+`docs/reviews/20261103-V4-综合意见书.md` 汇总了 A/B/C/D/E 五路只读评审
+（设计规范 / 工程质量 / 后端契约 / 文档证据链 / 运行时可靠性）：
+P0 必须修改 20 条、P1 45 条、P2 30 条。**接续工作时先读它，不要重复已完成项。**
+
+---
+
+## 2026-11-02 前端控制台（v2 基线，历史记录）
 
 **结论：新建了 `frontend-console/`（Vue 3 + Vite + TypeScript，零 UI 框架），七页全部落地并对接 `/api/v2`。**
 旧 `frontend-vue/` 未改动（仍对接 `/api/v1` AI 中台），两套前端隔离，互不影响。
 
 - 设计系统：`docs/DESIGN-SYSTEM.md`；令牌 `src/styles/tokens.css`；基础层 `src/styles/base.css`
-- 品牌资产：`public/brand/mark.svg`、`src/assets/brand/{login-art,empty-orders,empty-guard,empty-kb}.svg`
-  —— 全部自绘 SVG（平台生图接口本轮返回 1001 未授权，故不依赖外部图片）
-- 自绘图标集：`src/components/ui/AppIcon.vue`（40+ 图标，24×24 / 1.6 描边）
+- 品牌资产：仅 `public/brand/mark.svg`（深石墨圆角方块 + 白色脉搏 + 青绿端点）。
+  v4（`33a966f`）已删除 `login-art` / `empty-orders` / `empty-guard` / `empty-kb` 四个装饰 SVG
+  —— 依据 `08-taste-skill/references/app-screens.md`：真实产品界面的空态不用装饰插图，改用 96px 虚线框。
+- 自绘图标集：`src/components/ui/AppIcon.vue`（**88 个图标**，24×24 / **1.5px 描边**，圆角端点）
 - 通用组件：`AppModal` / `StatusPill` / `EmptyState` / `ToastHost` / `PatientVisitSearch`
 - 七页：`/orders` 医嘱工作台、`/preop` 术前访视、`/surgery` 手术排台、`/surgery-charges` 术中收费核对、
   `/narcotic` 麻精专册、`/homepage-qc` 病案首页质控、`/knowledge` 知识库
@@ -63,14 +106,15 @@ npm run build      # 产物 dist/，已被 .gitignore 排除
   医嘱表 8 列收敛、长期/临时标签内联、支持类型筛选与关键字过滤
 - 登录 v2：暗场仪表台视觉（自绘 SVG 波形 + 网格 + 同心圆，无外部图片）、
   记住账号、大写锁定提示、焦点管理；删除 dev 账号提示（去 demo 化）
-- 新增组件：`CommandPalette` / `KpiCard` / `Sparkline`；`orders-view.css` 独立样式层
+- 新增组件：`CommandPalette` / `KpiCard`；`orders-view.css` 独立样式层
+  （`Sparkline` 在 v4 已删除：`app-screens.md` 记录真实界面的 KPI sparkline 为 0/23）
 - 会话：缓存 `expiresAt`，启动时临近过期先刷新，消除控制台 401 噪音
 
-**下一步（前端）**：
+**下一步（前端，v2 时点记录；v4 的实际状态见本文顶部）**：
 1. 病案首页明细的直接编辑（PUT 补录字段）与缺陷定位跳转；
-2. 手术病例创建（术式字典 + 计划时间）与排台提交，目前只读看板；
+2. 手术病例创建（术式字典 + 计划时间）与排台提交 —— v4 已补分级审批写入，创建仍未做；
 3. 知识库文档导入（POST documents）与空间成员管理；
-4. >50 行表格虚拟化、WCAG AA 对比度专项；
+4. >50 行表格虚拟化、WCAG AA 对比度专项 —— v4 已手工核对令牌，自动化审计仍未接入；
 5. 生产托管：把 `frontend-console/dist` 交给网关同源托管（当前仅 dev server 验收）。
 
 ## 开工硬规则（每次新会话第一件事，先照做再谈别的）

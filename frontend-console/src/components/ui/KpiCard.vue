@@ -1,5 +1,5 @@
 <template>
-  <div class="kpi">
+  <div class="kpi" :class="tone !== 'default' ? `is-${tone}` : undefined">
     <div class="kpi-label">{{ label }}</div>
     <div class="kpi-value">
       {{ value }}
@@ -16,11 +16,11 @@ withDefaults(
     value: string | number
     unit?: string
     meta?: string
-    /** 兼容旧调用；v4 不在 KPI 上放图标。 */
-    icon?: string
+    /**
+     * 只影响数值颜色，不放图标、不画 sparkline。
+     * warn / danger 会同时加文字标记（颜色不是唯一信息）。
+     */
     tone?: 'default' | 'accent' | 'ok' | 'warn' | 'danger'
-    /** 兼容旧调用；走势属于独立图表，不在 KPI 里画 sparkline。 */
-    spark?: number[]
   }>(),
   { tone: 'default' },
 )

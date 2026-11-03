@@ -21,7 +21,9 @@ import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
+import com.medassist.clinical.domain.ClinicalModel.RoomDayUsageRow;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
+import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryChargeRule;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryConsent;
@@ -44,6 +46,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -353,6 +356,50 @@ public class ClinicalRepository {
                 .param("startDate", o.startDate())
                 .param("transferStatus", o.transferStatus() == null
                         ? VisitOrder.TRANSFER_NONE : o.transferStatus()).update();
+    }
+
+    // ---- 医嘱开立幂等（V33）
+
+    /** 查幂等键首次落库时生成的医嘱 ID 列表；未命中返回 empty。 */
+    public Optional<List<UUID>> findIdempotentOrderIds(UUID visitId, String actor,
+                                                       String idempotencyKey) {
+        return jdbc.sql("""
+                        SELECT order_ids FROM clinical_svc.order_idempotency
+                         WHERE visit_id = :visitId AND actor = :actor
+                           AND idempotency_key = :key
+                        """)
+                .param("visitId", visitId).param("actor", actor).param("key", idempotencyKey)
+                .query((rs, i) -> {
+                    java.sql.Array array = rs.getArray("order_ids");
+                    if (array == null) {
+                        return List.<UUID>of();
+                    }
+                    Object[] raw = (Object[]) array.getArray();
+                    List<UUID> ids = new ArrayList<>(raw.length);
+                    for (Object o : raw) {
+                        ids.add(o instanceof UUID u ? u : UUID.fromString(String.valueOf(o)));
+                    }
+                    return ids;
+                })
+                .optional();
+    }
+
+    /**
+     * 记录幂等键 → 医嘱 ID 的结果快照。
+     *
+     * <p>并发重放时由唯一约束兜底：第二个请求插入失败会抛
+     * {@code DataIntegrityViolationException}，服务层捕获后改读首次结果。
+     */
+    public void insertIdempotency(UUID visitId, String actor, String idempotencyKey,
+                                  List<UUID> orderIds) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.order_idempotency
+                            (id, visit_id, actor, idempotency_key, order_ids)
+                        VALUES (:id, :visitId, :actor, :key, CAST(:orderIds AS uuid[]))
+                        """)
+                .param("id", UUID.randomUUID()).param("visitId", visitId)
+                .param("actor", actor).param("key", idempotencyKey)
+                .param("orderIds", uuidArrayLiteral(orderIds)).update();
     }
 
     /**
@@ -2326,6 +2373,105 @@ public class ClinicalRepository {
                 .param("dayEnd", ts(dayEnd)).query(SCHEDULE_MAPPER).list();
     }
 
+    // ---------------------------------------------------------------- 排台看板聚合（V4 评审）
+
+    private static final RowMapper<SurgeryBoardRow> BOARD_ROW_MAPPER = (rs, i) -> new SurgeryBoardRow(
+            rs.getObject("schedule_id", UUID.class),
+            rs.getObject("room_id", UUID.class),
+            rs.getString("room_code"),
+            rs.getString("room_name"),
+            rs.getString("room_location"),
+            rs.getObject("surgery_case_id", UUID.class),
+            rs.getString("case_no"),
+            rs.getObject("visit_id", UUID.class),
+            rs.getString("visit_no"),
+            rs.getString("patient_no"),
+            rs.getString("operation_code"),
+            rs.getString("operation_name"),
+            rs.getString("surgeon"),
+            rs.getString("assistant"),
+            rs.getString("anesthesia_type"),
+            rs.getString("asa_grade"),
+            rs.getString("incision_level"),
+            rs.getString("case_status"),
+            rs.getString("schedule_status"),
+            rs.getObject("sequence", Integer.class),
+            instantOf(rs, "planned_start"),
+            instantOf(rs, "planned_end"),
+            rs.getString("cancel_reason"),
+            rs.getLong("schedule_version"),
+            rs.getObject("surgery_level", Integer.class),
+            rs.getString("level_approval_status"));
+
+    /**
+     * 某天全部房间的排台聚合（一条 SQL）。
+     *
+     * <p>看板要回答「哪间空着、下一台是什么、谁做、几级」——这些字段分散在
+     * schedule / case / visit / room / level 五张表里，以前只回 {@code surgeryCaseId}，
+     * 前端只能显示「第 N 台 + 病例号」。这里一次 JOIN 取全，前端按 roomId 分组即可。
+     *
+     * <p>排序在服务端固定：房间编码 → 计划开始 → 台次 → id，保证多端一致、可复现。
+     */
+    public List<SurgeryBoardRow> listBoardRows(java.time.Instant dayStart,
+                                               java.time.Instant dayEnd,
+                                               List<UUID> roomIds) {
+        if (roomIds == null || roomIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                        SELECT s.id              AS schedule_id,
+                               s.room_id         AS room_id,
+                               r.code            AS room_code,
+                               r.name            AS room_name,
+                               r.location        AS room_location,
+                               s.surgery_case_id AS surgery_case_id,
+                               c.case_no         AS case_no,
+                               c.visit_id        AS visit_id,
+                               v.visit_no        AS visit_no,
+                               v.patient_no      AS patient_no,
+                               c.operation_code  AS operation_code,
+                               c.operation_name  AS operation_name,
+                               c.surgeon         AS surgeon,
+                               c.assistant       AS assistant,
+                               c.anesthesia_type AS anesthesia_type,
+                               c.asa_grade       AS asa_grade,
+                               c.incision_level  AS incision_level,
+                               c.status          AS case_status,
+                               s.status          AS schedule_status,
+                               s.sequence        AS sequence,
+                               s.planned_start   AS planned_start,
+                               s.planned_end     AS planned_end,
+                               s.cancel_reason   AS cancel_reason,
+                               s.version         AS schedule_version,
+                               lv.level          AS surgery_level,
+                               lv.approval_status AS level_approval_status
+                          FROM clinical_svc.surgery_schedule s
+                          JOIN clinical_svc.surgery_case c ON c.id = s.surgery_case_id
+                          JOIN clinical_svc.visit v ON v.id = c.visit_id
+                          LEFT JOIN clinical_svc.operating_room r ON r.id = s.room_id
+                          LEFT JOIN clinical_svc.surgery_level lv ON lv.surgery_case_id = c.id
+                         WHERE s.planned_start < CAST(:dayEnd AS timestamptz)
+                           AND s.planned_end > CAST(:dayStart AS timestamptz)
+                           AND s.room_id = ANY(CAST(:roomIds AS uuid[]))
+                         ORDER BY r.code, s.planned_start, s.sequence, s.id
+                        """)
+                .param("dayStart", ts(dayStart)).param("dayEnd", ts(dayEnd))
+                .param("roomIds", uuidArrayLiteral(roomIds))
+                .query(BOARD_ROW_MAPPER).list();
+    }
+
+    /** Postgres uuid[] 字面量：{a,b,c}。用于 ANY(CAST(:ids AS uuid[]))，空集合由调用方拦住。 */
+    private static String uuidArrayLiteral(List<UUID> ids) {
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(ids.get(i));
+        }
+        return sb.append('}').toString();
+    }
+
     // ---- 麻醉记录
 
     public Optional<AnesthesiaRecord> findAnesthesiaByCase(UUID surgeryCaseId) {
@@ -2830,6 +2976,100 @@ public class ClinicalRepository {
                 .param("fromAt", ts(fromAt)).param("toAt", ts(toAtExclusive))
                 .param("openMin", openMinuteOfDay).param("closeMin", closeMinuteOfDay)
                 .param("roomId", roomId).query(ROOM_DAY_USAGE_MAPPER).list();
+    }
+
+    private static final RowMapper<RoomDayUsageRow> ROOM_DAY_USAGE_ROW_MAPPER = (rs, i) ->
+            new RoomDayUsageRow(rs.getObject("room_id", UUID.class),
+                    new RoomDayUsage(instantOf(rs, "day_start"),
+                            rs.getInt("scheduled_count"), rs.getInt("completed_count"),
+                            rs.getInt("cancelled_count"), rs.getLong("occupied_minutes"),
+                            rs.getLong("turnover_minutes"), rs.getInt("turnover_count")));
+
+    /**
+     * 多手术间利用率（一条 SQL 覆盖全部房间 × 全部日期）。
+     *
+     * <p>替代「按房间循环调用 {@link #listRoomDayUsage}」的 N+1：
+     * 原实现 12 个房间会串行跑 12 次 CTE，房间多的院区直接撞上网关 30s 超时。
+     * 口径与单房间版本完全一致（同一段 SQL，只是多了 room 维度），
+     * 因此日报表与看板不会出现两个算法。
+     */
+    public List<RoomDayUsageRow> listRoomDayUsageBatch(List<UUID> roomIds,
+                                                       java.time.Instant fromAt,
+                                                       java.time.Instant toAtExclusive,
+                                                       int openMinuteOfDay, int closeMinuteOfDay) {
+        if (roomIds == null || roomIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                        WITH rooms AS (
+                            SELECT unnest(CAST(:roomIds AS uuid[])) AS room_id
+                        ),
+                        days AS (
+                            SELECT generate_series(CAST(:fromAt AS timestamptz),
+                                                   CAST(:toAt AS timestamptz) - interval '1 day',
+                                                   interval '1 day') AS day_start
+                        ),
+                        grid AS (
+                            SELECT r.room_id, d.day_start FROM rooms r CROSS JOIN days d
+                        ),
+                        windows AS (
+                            SELECT room_id, day_start,
+                                   day_start + make_interval(mins => CAST(:openMin AS int))
+                                       AS win_start,
+                                   day_start + make_interval(mins => CAST(:closeMin AS int))
+                                       AS win_end
+                              FROM grid
+                        ),
+                        joined AS (
+                            SELECT w.room_id, w.day_start, s.id, s.status,
+                                   s.planned_start, s.planned_end, w.win_start, w.win_end
+                              FROM windows w
+                              LEFT JOIN clinical_svc.surgery_schedule s
+                                ON s.room_id = w.room_id
+                               AND s.planned_start < w.win_end
+                               AND s.planned_end > w.win_start
+                        ),
+                        gaps AS (
+                            SELECT room_id, day_start,
+                                   EXTRACT(EPOCH FROM (
+                                       planned_start - lag(planned_end) OVER (
+                                           PARTITION BY room_id, day_start
+                                           ORDER BY planned_start)
+                                   )) / 60 AS gap_minutes
+                              FROM joined
+                             WHERE status IS NOT NULL AND status <> 'CANCELLED'
+                        )
+                        SELECT j.room_id,
+                               j.day_start,
+                               count(j.id) FILTER (WHERE j.status <> 'CANCELLED')
+                                   AS scheduled_count,
+                               count(j.id) FILTER (WHERE j.status = 'COMPLETED')
+                                   AS completed_count,
+                               count(j.id) FILTER (WHERE j.status = 'CANCELLED')
+                                   AS cancelled_count,
+                               COALESCE(sum(
+                                   GREATEST(0, EXTRACT(EPOCH FROM (
+                                       LEAST(j.planned_end, j.win_end)
+                                       - GREATEST(j.planned_start, j.win_start))) / 60)
+                               ) FILTER (WHERE j.status <> 'CANCELLED'), 0) AS occupied_minutes,
+                               COALESCE((SELECT sum(GREATEST(0, g.gap_minutes))
+                                           FROM gaps g
+                                          WHERE g.room_id = j.room_id
+                                            AND g.day_start = j.day_start), 0)
+                                   AS turnover_minutes,
+                               COALESCE((SELECT count(*) FROM gaps g
+                                          WHERE g.room_id = j.room_id
+                                            AND g.day_start = j.day_start
+                                            AND g.gap_minutes IS NOT NULL), 0)
+                                   AS turnover_count
+                          FROM joined j
+                         GROUP BY j.room_id, j.day_start
+                         ORDER BY j.room_id, j.day_start
+                        """)
+                .param("roomIds", uuidArrayLiteral(roomIds))
+                .param("fromAt", ts(fromAt)).param("toAt", ts(toAtExclusive))
+                .param("openMin", openMinuteOfDay).param("closeMin", closeMinuteOfDay)
+                .query(ROOM_DAY_USAGE_ROW_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 手术收费打包（V19）

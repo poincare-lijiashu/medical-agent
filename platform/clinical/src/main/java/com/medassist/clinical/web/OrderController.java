@@ -43,9 +43,10 @@ public class OrderController {
             @PathVariable UUID visitId,
             @Valid @RequestBody PlaceOrdersReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         Permissions.require(permissions, ORDER_CREATE);
-        return ApiResponse.ok(service.place(visitId, req.items(), actor));
+        return ApiResponse.ok(service.place(visitId, req.items(), actor, idempotencyKey));
     }
 
     @GetMapping

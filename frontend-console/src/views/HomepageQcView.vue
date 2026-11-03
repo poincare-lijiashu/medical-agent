@@ -45,7 +45,7 @@
       />
 
       <div v-else class="table-wrap">
-        <table class="table">
+        <table class="table table--stack">
           <thead>
             <tr>
               <th>首页号</th>
@@ -59,19 +59,19 @@
           </thead>
           <tbody>
             <tr v-for="h in rows" :key="h.id" class="clickable" tabindex="0" @click="open(h)" @keydown.enter="open(h)">
-              <td class="mono">{{ h.homepageNo }}</td>
-              <td>
+              <td class="mono" data-primary>{{ h.homepageNo }}</td>
+              <td data-label="患者">
                 <div class="is-strong">{{ h.patientNameMasked }}</div>
                 <div class="mono muted">{{ h.patientNo }}</div>
               </td>
-              <td>
+              <td data-label="科室 / 病区">
                 <div>{{ h.deptName || '—' }}</div>
                 <div class="muted" style="font-size: var(--fs-12)">{{ h.wardName || '—' }}</div>
               </td>
-              <td>{{ dateTime(h.dischargedAt) }}</td>
-              <td class="is-num">{{ h.stayDays ?? '—' }}</td>
-              <td class="is-num is-strong">{{ money(h.totalAmount) }}</td>
-              <td><StatusPill :value="h.status" /></td>
+              <td data-label="出院时间">{{ dateTime(h.dischargedAt) }}</td>
+              <td class="is-num" data-label="住院天数">{{ h.stayDays ?? '—' }}</td>
+              <td class="is-num is-strong" data-label="总费用">{{ money(h.totalAmount) }}</td>
+              <td data-label="状态"><StatusPill :value="h.status" /></td>
             </tr>
           </tbody>
         </table>
@@ -186,19 +186,47 @@ const rows = ref<HomepageSummary[]>([])
 const loading = ref(false)
 const busy = ref(false)
 
+/** 各状态的数量单独统计：rows 只含当前筛选状态，不能直接拿它算其他页签。 */
+const counts = ref<Record<string, number>>({})
+const totalCount = ref(0)
+
 const detailOpen = ref(false)
 const detailLoading = ref(false)
 const detail = ref<HomepageView | null>(null)
 
 function countOf(value: string) {
-  if (!value) return rows.value.length
-  return rows.value.filter((r) => r.status === value).length
+  if (!value) return totalCount.value
+  return counts.value[value] ?? 0
+}
+
+/**
+ * 拉一次未筛选的列表来统计各状态数量。
+ *
+ * <p>不能用 rows 统计：rows 已被 status 过滤，切换页签后其他状态会恒为 0。
+ * 这里受后端 limit（100）约束，超过时计数是下限——所以界面不展示"共 N 条"这类断言。
+ */
+async function loadCounts() {
+  try {
+    const all = await emrApi.homepages(undefined, 100)
+    const map: Record<string, number> = {}
+    for (const r of all) {
+      map[r.status] = (map[r.status] ?? 0) + 1
+    }
+    counts.value = map
+    totalCount.value = all.length
+  } catch {
+    // 计数失败不影响列表可用性
+  }
 }
 
 async function load() {
   loading.value = true
   try {
-    rows.value = await emrApi.homepages(status.value || undefined, 100)
+    const [list] = await Promise.all([
+      emrApi.homepages(status.value || undefined, 100),
+      loadCounts(),
+    ])
+    rows.value = list
   } catch (e) {
     toast.error('首页列表加载失败', errorText(e))
     rows.value = []

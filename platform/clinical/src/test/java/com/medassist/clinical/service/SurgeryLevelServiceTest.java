@@ -43,6 +43,10 @@ class SurgeryLevelServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         service = new SurgeryLevelService(repo);
+        // 写路径（setLevel/approve/reject）现在用 lockSurgeryCase 与开台共用一把行锁；
+        // 测试里让它与只读查询返回同一份数据，避免 19 处 stub 重复写两遍。
+        when(repo.lockSurgeryCase(any())).thenAnswer(inv ->
+                repo.findSurgeryCase(inv.getArgument(0)));
     }
 
     private SurgeryCase surgery(String status) {
@@ -374,5 +378,35 @@ class SurgeryLevelServiceTest {
 
         assertThatCode(() -> service.requireStartApproved(caseId)).doesNotThrowAnyException();
         assertThatCode(() -> service.requireStartApproved(caseId)).doesNotThrowAnyException();
+    }
+
+    // ---------------------------------------------------------------- 并发护栏
+
+    @Test
+    @DisplayName("并发护栏：改分级必须持手术行锁（与开台同一锁域，防 TOCTOU）")
+    void setLevelTakesRowLock() {
+        when(repo.findSurgeryCase(caseId)).thenReturn(Optional.of(surgery(SurgeryCase.PLANNED)));
+        when(repo.findSurgeryLevel(caseId))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(level(1, SurgeryLevel.NOT_REQUIRED, "doctor01", 0L)));
+
+        service.setLevel(caseId, 1, null, "doctor01");
+
+        // 没有这把锁，"开台读分级 → 改分级提交 → 开台落状态" 之间会漏过审批门槛
+        verify(repo).lockSurgeryCase(caseId);
+    }
+
+    @Test
+    @DisplayName("并发护栏：审批也必须持手术行锁")
+    void approveTakesRowLock() {
+        when(repo.findSurgeryCase(caseId)).thenReturn(Optional.of(surgery(SurgeryCase.PLANNED)));
+        when(repo.findSurgeryLevel(caseId))
+                .thenReturn(Optional.of(level(3, SurgeryLevel.PENDING, "doctor01", 0L)))
+                .thenReturn(Optional.of(level(3, SurgeryLevel.APPROVED, "doctor01", 1L)));
+        when(repo.approveSurgeryLevel(caseId, "qc01", 0L)).thenReturn(true);
+
+        service.approve(caseId, 0L, "qc01");
+
+        verify(repo).lockSurgeryCase(caseId);
     }
 }

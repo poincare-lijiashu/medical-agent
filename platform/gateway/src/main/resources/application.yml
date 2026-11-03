@@ -27,11 +27,30 @@ spring:
     gateway:
       server:
         webflux:
+          # ---- 下游 HTTP 客户端（504 防线）----
+          # 1) 全局兜底：任何路由漏配 metadata 时也不至于无限等待。
+          # 2) 连接池必须显式配置：SCG 默认 ELASTIC 池上限约 max(cpu,8)*2（≈16 条），
+          #    且 acquire-timeout 默认 45s——比 30s 的 response-timeout 还长。
+          #    结果是一个慢下游占满连接后，后续请求排队 45s，整条路由族集体 504。
+          #    这里把 acquire-timeout 压到 2s，让"拿不到连接"快速 503，而不是排队到 504。
+          httpclient:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
+            pool:
+              type: fixed
+              max-connections: ${GATEWAY_POOL_MAX_CONNECTIONS:256}
+              acquire-timeout: ${GATEWAY_POOL_ACQUIRE_TIMEOUT_MS:2000}
+              max-idle-time: 30s
+              max-life-time: 5m
           routes:
             - id: ai-core-v1
               uri: ${AI_CORE_URI:http://127.0.0.1:8001}
               predicates:
                 - Path=/api/v1/**
+              # v1 兼容层此前没有任何超时元数据，慢下游会一直占着网关连接。
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             - id: platform-auth-v2
               uri: ${PLATFORM_AUTH_URI:http://127.0.0.1:8081}
               predicates:
@@ -41,8 +60,8 @@ spring:
               # 下游超时（毫秒）：没有超时时慢下游会一直占着网关连接，
               # 直到连接池耗尽，表现为"整站卡死"而不是单个接口变慢。
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             - id: platform-empi-v2
               uri: ${PLATFORM_EMPI_URI:http://127.0.0.1:8082}
               predicates:
@@ -50,8 +69,8 @@ spring:
               filters:
                 - StripPrefix=3
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 临床核心（挂号/就诊/医嘱/收费）
             # 注意：clinical 服务的控制器自带 /clinical 前缀（BillingController 等），
             # 因此这里只剥掉 /api/v2，剥 3 段会变成 /wards 导致全量 404。
@@ -62,8 +81,8 @@ spring:
               filters:
                 - StripPrefix=2
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 药房（药品字典/库存/处方/发药）
             - id: platform-pharmacy-v2
               uri: ${PLATFORM_PHARMACY_URI:http://127.0.0.1:8084}
@@ -72,8 +91,8 @@ spring:
               filters:
                 - StripPrefix=2
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 医技（检查/检验申请、标本、报告、危急值）
             - id: platform-tech-v2
               uri: ${PLATFORM_TECH_URI:http://127.0.0.1:8085}
@@ -82,8 +101,8 @@ spring:
               filters:
                 - StripPrefix=2
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 病历（模板/书写/签名/归档/质控）
             - id: platform-emr-v2
               uri: ${PLATFORM_EMR_URI:http://127.0.0.1:8086}
@@ -92,8 +111,8 @@ spring:
               filters:
                 - StripPrefix=2
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 医保（目录/映射/参保/结算清单）
             - id: platform-insurance-v2
               uri: ${PLATFORM_INSURANCE_URI:http://127.0.0.1:8087}
@@ -102,8 +121,8 @@ spring:
               filters:
                 - StripPrefix=2
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 知识库（知识空间/文档/切片/企业检索）
             - id: platform-kb-v2
               uri: ${PLATFORM_KB_URI:http://127.0.0.1:8088}
@@ -113,8 +132,8 @@ spring:
                 - StripPrefix=2
               # 知识库问答比普通 CRUD 慢（解析/检索/引用拼装），单独放宽到 60s
               metadata:
-                connect-timeout: 3000
-                response-timeout: 60000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_KB_RESPONSE_TIMEOUT_MS:60000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -124,8 +143,8 @@ spring:
               filters:
                 - StripPrefix=3
               metadata:
-                connect-timeout: 3000
-                response-timeout: 30000
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
 
 management:
   endpoints:
@@ -208,6 +227,40 @@ medassist:
           qps: ${SENTINEL_QPS_KB:60}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
+      # 熔断规则（慢调用比例）：慢下游不要靠排队硬扛，直接快速失败并给下游恢复窗口。
+      # slow-rt-ms 必须明显小于网关 response-timeout（30s），否则永远等不到熔断就 504 了。
+      degrade-rules:
+        - path: /api/v2/clinical
+          slow-rt-ms: ${SENTINEL_DEGRADE_CLINICAL_RT_MS:8000}
+          slow-ratio: 0.5
+          min-request-amount: 10
+          stat-interval-ms: 10000
+          time-window-sec: 15
+        - path: /api/v2/clinical/inpatient
+          slow-rt-ms: ${SENTINEL_DEGRADE_INPATIENT_RT_MS:6000}
+          slow-ratio: 0.5
+          min-request-amount: 5
+          stat-interval-ms: 10000
+          time-window-sec: 15
+        - path: /api/v2/empi
+          slow-rt-ms: ${SENTINEL_DEGRADE_EMPI_RT_MS:5000}
+          slow-ratio: 0.5
+          min-request-amount: 10
+          stat-interval-ms: 10000
+          time-window-sec: 10
+        # 知识库问答本身慢（解析/检索/引用拼装），阈值放宽，但仍有上限
+        - path: /api/v2/kb
+          slow-rt-ms: ${SENTINEL_DEGRADE_KB_RT_MS:15000}
+          slow-ratio: 0.6
+          min-request-amount: 5
+          stat-interval-ms: 10000
+          time-window-sec: 20
+        - path: /api/v1
+          slow-rt-ms: ${SENTINEL_DEGRADE_V1_RT_MS:10000}
+          slow-ratio: 0.5
+          min-request-amount: 10
+          stat-interval-ms: 10000
+          time-window-sec: 15
 
 logging:
   level:

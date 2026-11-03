@@ -37,6 +37,7 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   SUBMITTED: { label: '已提交', tone: 'accent' },
   ARCHIVED: { label: '已归档', tone: 'ok' },
   // 手术
+  SCHEDULED: { label: '已排台', tone: 'accent' },
   PLANNED: { label: '已计划', tone: 'warn' },
   IN_PROGRESS: { label: '进行中', tone: 'accent' },
   COMPLETED: { label: '已完成', tone: 'ok' },

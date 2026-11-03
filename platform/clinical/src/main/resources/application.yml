@@ -8,15 +8,21 @@ spring:
     name: platform-clinical
 
   datasource:
-    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    # socketTimeout=30s / statementTimeout=25s：让数据库先超时并释放连接，
+    # 而不是让请求在网关 30s 的 response-timeout 上变成 504。
+    # statementTimeout 略小于 socketTimeout，保证服务端先中断慢查询。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?socketTimeout=30&connectTimeout=5&tcpKeepAlive=true"
     username: ${PG_USER:medagent}
     password: ${PG_PASSWORD:medagent123}
     hikari:
       pool-name: clinical-pool
-      maximum-pool-size: 10
-      minimum-idle: 2
-      connection-timeout: 5000
+      # 10 → 24：排台页按房间并发取数，池太小会把等待时间算进接口耗时
+      maximum-pool-size: ${CLINICAL_POOL_MAX:24}
+      minimum-idle: 4
+      connection-timeout: 3000
+      validation-timeout: 2000
       max-lifetime: 1800000
+      connection-init-sql: SET statement_timeout = 25000
 
   flyway:
     enabled: true

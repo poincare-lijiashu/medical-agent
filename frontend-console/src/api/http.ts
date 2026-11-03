@@ -53,6 +53,8 @@ export interface RequestOptions {
   /** 登录等公开端点：401 不触发刷新与登出。 */
   publicRequest?: boolean
   signal?: AbortSignal
+  /** 额外请求头（如 Idempotency-Key）。 */
+  headers?: Record<string, string>
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']) {
@@ -77,25 +79,56 @@ async function doRefresh(): Promise<boolean> {
   return refreshing
 }
 
-async function once<T>(path: string, opts: RequestOptions): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
+/** 略长于网关 30s，让网关的 504 先到；前端再兜底防永久挂起。 */
+const DEFAULT_TIMEOUT_MS = 35_000
+
+async function fetchText(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<{ res: Response; text: string }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs)
+  const external = init.signal
+  const onExternalAbort = () => controller.abort()
+  if (external) {
+    if (external.aborted) controller.abort()
+    else external.addEventListener('abort', onExternalAbort, { once: true })
+  }
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal })
+    return { res, text: await res.text() }
+  } finally {
+    clearTimeout(timer)
+    external?.removeEventListener('abort', onExternalAbort)
+  }
+}
+
+async function once<T>(path: string, opts: RequestOptions, retried = false): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json', ...opts.headers }
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
   if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
 
   let res: Response
+  let text: string
   try {
-    res = await fetch(buildUrl(path, opts.query), {
+    const payload = await fetchText(buildUrl(path, opts.query), {
       method: opts.method ?? 'GET',
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: opts.signal,
     })
+    res = payload.res
+    text = payload.text
   } catch (e) {
-    if ((e as Error).name === 'AbortError') throw e
+    const err = e as Error
+    if (err.name === 'AbortError') throw err
+    if (err.name === 'TimeoutError') {
+      throw new ApiError('请求超时（35 秒），服务可能繁忙，请稍后重试', -2, 0)
+    }
     throw new ApiError('网络异常，请检查与服务器的连接后重试', -1, 0)
   }
 
-  const text = await res.text()
   let env: ApiEnvelope<T> | null = null
   if (text) {
     try {
@@ -106,14 +139,23 @@ async function once<T>(path: string, opts: RequestOptions): Promise<T> {
   }
 
   if (res.status === 401) {
-    if (!opts.publicRequest && (await doRefresh())) {
-      return once<T>(path, opts)
+    // 只允许刷新后重试一次，避免刷新无效时无限递归。
+    if (!opts.publicRequest && !retried && (await doRefresh())) {
+      return once<T>(path, opts, true)
     }
     if (!opts.publicRequest) onSessionExpired?.()
     throw new ApiError(env?.message || '登录状态已失效，请重新登录', env?.code ?? 401, 401, env?.traceId)
   }
 
   if (!res.ok || !env || env.code !== 0) {
+    if (res.status === 504 || res.status === 503) {
+      throw new ApiError(
+        '服务响应超时或暂不可用，请稍后重试；若持续出现请联系信息科',
+        env?.code ?? 50400,
+        res.status,
+        env?.traceId,
+      )
+    }
     const message = env?.message || `请求失败（HTTP ${res.status}）`
     throw new ApiError(message, env?.code ?? res.status, res.status, env?.traceId)
   }

@@ -346,6 +346,49 @@ public final class ClinicalModel {
                                int turnoverCount) {
     }
 
+    /** 批量利用率的一行：房间 + 该房间某天的聚合（一次 SQL 取全部房间，避免逐房间查询）。 */
+    public record RoomDayUsageRow(UUID roomId, RoomDayUsage usage) {
+    }
+
+    /**
+     * 排台看板的一行：排台 + 手术病例 + 就诊 + 分级审批，一次 JOIN 取全。
+     *
+     * <p>替代「只返回 surgeryCaseId、前端再逐条补全」的旧契约：
+     * 看板要回答「哪间空着、下一台是什么、谁做、几级」，这些字段必须一次带回来，
+     * 否则前端只能显示「第 N 台 + 病例号」，护士还得点进去才知道是什么手术。
+     *
+     * <p>字段来源：{@code surgery_schedule} / {@code surgery_case} / {@code visit} /
+     * {@code operating_room} / {@code surgery_level}（LEFT JOIN，未分级时为 null）。
+     */
+    public record SurgeryBoardRow(
+            UUID scheduleId,
+            UUID roomId,
+            String roomCode,
+            String roomName,
+            String roomLocation,
+            UUID surgeryCaseId,
+            String caseNo,
+            UUID visitId,
+            String visitNo,
+            String patientNo,
+            String operationCode,
+            String operationName,
+            String surgeon,
+            String assistant,
+            String anesthesiaType,
+            String asaGrade,
+            String incisionLevel,
+            String caseStatus,
+            String scheduleStatus,
+            Integer sequence,
+            Instant plannedStart,
+            Instant plannedEnd,
+            String cancelReason,
+            long scheduleVersion,
+            Integer surgeryLevel,
+            String levelApprovalStatus) {
+    }
+
     /**
      * 手术收费打包规则：术式类别 / 麻醉方式 / 耗材 → 收费项目。
      *

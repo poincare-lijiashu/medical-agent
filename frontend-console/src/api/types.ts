@@ -241,14 +241,57 @@ export interface SurgeryCase {
   version: number
 }
 
+/** 排台看板的一行：排台 + 术式 + 术者 + 患者号 + 分级审批（后端一次 JOIN 取全）。 */
+export interface SurgeryBoardRow {
+  scheduleId: string
+  roomId: string
+  roomCode: string | null
+  roomName: string | null
+  roomLocation: string | null
+  surgeryCaseId: string
+  caseNo: string
+  visitId: string
+  visitNo: string | null
+  patientNo: string | null
+  operationCode: string
+  operationName: string
+  surgeon: string | null
+  assistant: string | null
+  anesthesiaType: string | null
+  asaGrade: string | null
+  incisionLevel: string | null
+  caseStatus: string
+  scheduleStatus: string
+  sequence: number | null
+  plannedStart: string
+  plannedEnd: string
+  cancelReason: string | null
+  scheduleVersion: number
+  surgeryLevel: number | null
+  levelApprovalStatus: string | null
+}
+
+/** 排台看板响应：某天全部房间的排台。truncated > 0 表示服务端裁剪了多余行。 */
+export interface SurgeryBoardView {
+  date: string
+  roomCount: number
+  truncated: number
+  rows: SurgeryBoardRow[]
+}
+
 export interface SurgeryLevel {
-  caseId: string
+  id: string
+  surgeryCaseId: string
   level: number
   approvalStatus: string
-  requestedBy: string | null
-  approvedBy: string | null
+  appliedBy: string | null
+  appliedAt: string | null
+  reviewedBy: string | null
+  reviewedAt: string | null
   rejectReason: string | null
+  createdBy: string | null
   version: number
+  createdAt: string | null
 }
 
 export interface OperatingRoom {

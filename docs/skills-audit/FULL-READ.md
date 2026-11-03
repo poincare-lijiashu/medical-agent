@@ -2,8 +2,12 @@
 
 > 这份文件回答一个问题：v3 的前端为什么“像技能，而不像产品”。
 > 原因很简单：v3 只读了 20 个技能的 `SKILL.md` 入口，没有读它们引用的 `references/` 正文。
-> v4 之前补读了 **16 个唯一技能（4 个重复项）的 43 个正文文件，共 742,477 字节**，
-> 全部落盘在 `docs/skills-audit/full/`，可逐字复核。
+>
+> **实际补读量（2026-11-03 核对，`Get-ChildItem -Recurse | Measure-Object`）**：
+> `docs/skills-audit/full/` 下是 **10 个技能目录、43 个文件、742,477 字节**。
+> 其中 34 个是 `references/` 正文，9 个是 `SKILL.md` 入口。
+> 下表 16 行中 **5 个技能没有落盘任何正文**（标「未补读」）——它们的结论来自 `SKILL.md` 入口与公开文档，
+> 不是逐字核验。这 5 个技能的规范没有进入 v4 的设计依据。
 
 ---
 
@@ -12,7 +16,7 @@
 | 技能 | 仓库 | 补读的正文文件 |
 |---|---|---|
 | frontend-design-direction | affaan-m/ECC | `scripts/check-evidence.js` |
-| frontend-design | anthropics/skills | `LICENSE.txt`（无额外 reference） |
+| frontend-design | anthropics/skills | **未补读**（入口即全文，无额外 reference） |
 | UI/UX Pro Max | nextlevelbuilder/ui-ux-pro-max-skill | `references/quick-reference.md`、`references/pro-rules.md`、`data/ux-guidelines.csv`、`colors.csv`、`typography.csv`、`motion.csv`、`charts.csv` |
 | design-review | aictrl-dev/skills | `reference/rubric.md` |
 | shadcn | shadcn-ui/ui | `design-system.md`、`rules/styling.md`、`composition.md`、`forms.md`、`base-vs-radix.md`、`icons.md` |
@@ -20,12 +24,12 @@
 | reference-design-contract | nexu-io/open-design | `references/checklist.md` |
 | Taste Skill | Leonxlnx/taste-skill | `references/layout.md`、`type.md`、`colour.md`、`motion.md`、`critique.md`、`tells.md`、`copy.md`、`imagery.md`、`app-screens.md`、`research.md`、`assets/app.css`、`assets/base.css`、`README.md` |
 | Impeccable | pbakaus/impeccable | `reference/craft-floor.md`、`new-work.md`、`polish.md`、`typeset.md`、`layout.md`、`animate.md`、`component-review.md`、`audit.md`、`harden.md`、`critique.md` |
-| emil-design-eng | emilkowalski/skills | 入口即全文（27,509 B） |
+| emil-design-eng | emilkowalski/skills | **未补读**（入口即全文 27,509 B，未落盘副本） |
 | prototype | mattpocock/skills | `LOGIC.md`、`UI.md` |
-| codebase-design | mattpocock/skills | `DEEPENING.md`、`DESIGN-IT-TWICE.md` |
-| design-mobile-apps | sleekdotdesign/agent-skills | `designing.md`、`implementing.md`、`endpoints.md` |
+| codebase-design | mattpocock/skills | **未补读**（`DEEPENING.md`、`DESIGN-IT-TWICE.md` 全仓不存在，`fetch-full.ps1` 未下载） |
+| design-mobile-apps | sleekdotdesign/agent-skills | **未补读**（`designing.md`、`implementing.md`、`endpoints.md` 全仓不存在） |
 | web-design-guidelines | vercel-labs/agent-skills | 入口指向的 `vercel-labs/web-interface-guidelines/command.md` 全文 |
-| high-end-visual-design | Leonxlnx/taste-skill-classics | `soft-skill` 入口全文 |
+| high-end-visual-design | Leonxlnx/taste-skill-classics | **未补读**（`soft-skill` 入口全文未落盘） |
 | 重复项 | — | `#11` = `#2`、`#18` = `#8`、`#20` = `#3`、`#16` = `#13` |
 
 > 说明：`SKILL.md` 只是目录和触发语；真正的规则在 `references/` 与 `assets/` 里。

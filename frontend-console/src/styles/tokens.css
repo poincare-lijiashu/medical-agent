@@ -55,7 +55,10 @@
   --active: #eeeeee;
   --border: #e8e8e8;
   --rule: #f1f2f3;
+  /* 分隔线用 --control；可交互控件的边框用 --control-strong（≥3:1） */
   --control: #d1d5db;
+  --control-strong: #8e8e8e;
+  --overlay: rgb(0 0 0 / 32%);
 
   --text: #111111;
   --muted: #5f6368;
@@ -114,7 +117,7 @@
   --warn-line: var(--warning-line);
   --danger: var(--negative);
   --danger-weak: var(--negative-bg);
-  --danger-line: #f3c3bf;
+  --danger-line: #c4242a;
   --neutral: var(--neutral-ink);
   --neutral-weak: var(--neutral-bg);
   --neutral-line: #dddddd;
@@ -203,6 +206,8 @@
   --border: #1a1a1a;
   --rule: #161616;
   --control: #444444;
+  --control-strong: #6e6e6e;
+  --overlay: rgb(0 0 0 / 56%);
 
   --text: #ffffff;
   --muted: #b4b4b4;
@@ -257,7 +262,7 @@
   --warn-line: var(--warning-line);
   --danger: var(--negative);
   --danger-weak: var(--negative-bg);
-  --danger-line: #552b28;
+  --danger-line: #e5566f;
   --neutral: var(--neutral-ink);
   --neutral-weak: var(--neutral-bg);
   --neutral-line: #2e2e2e;
