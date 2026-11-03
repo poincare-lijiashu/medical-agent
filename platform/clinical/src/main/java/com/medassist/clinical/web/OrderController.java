@@ -3,10 +3,12 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.service.OrderService;
 import com.medassist.clinical.service.OrderTransferService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.PlaceOrdersReq;
 import com.medassist.clinical.web.ClinicalDtos.StopOrderReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,10 +34,13 @@ public class OrderController {
 
     private final OrderService service;
     private final OrderTransferService transferService;
+    private final VisitAccessGuard guard;
 
-    public OrderController(OrderService service, OrderTransferService transferService) {
+    public OrderController(OrderService service, OrderTransferService transferService,
+                           VisitAccessGuard guard) {
         this.service = service;
         this.transferService = transferService;
+        this.guard = guard;
     }
 
     @PostMapping
@@ -44,16 +49,20 @@ public class OrderController {
             @Valid @RequestBody PlaceOrdersReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.place(visitId, req.items(), actor, idempotencyKey));
     }
 
     @GetMapping
     public ApiResponse<List<VisitOrder>> list(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.list(visitId));
     }
 
@@ -62,8 +71,10 @@ public class OrderController {
             @PathVariable UUID visitId,
             @PathVariable UUID orderId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.cancel(visitId, orderId, actor));
     }
 
@@ -78,8 +89,10 @@ public class OrderController {
             @PathVariable UUID visitId,
             @PathVariable UUID orderId,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(transferService.retry(visitId, orderId, actor));
     }
 
@@ -90,8 +103,10 @@ public class OrderController {
             @PathVariable UUID orderId,
             @RequestBody(required = false) StopOrderReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ORDER_CREATE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.stop(visitId, orderId, req == null ? null : req.reason(), actor));
     }
 }

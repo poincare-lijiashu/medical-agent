@@ -1,6 +1,7 @@
 package com.medassist.clinical.web;
 
 import com.medassist.clinical.service.BillingService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.ClinicalDtos.BillingPreview;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
 import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
@@ -9,6 +10,7 @@ import com.medassist.clinical.web.ClinicalDtos.DailyReverseReq;
 import com.medassist.clinical.web.ClinicalDtos.SettleReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -37,24 +39,30 @@ public class BillingController {
     private static final String CHARGE_SETTLE = "clinical:charge:settle";
 
     private final BillingService service;
+    private final VisitAccessGuard guard;
 
-    public BillingController(BillingService service) {
+    public BillingController(BillingService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping("/billing/preview")
     public ApiResponse<BillingPreview> preview(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, CHARGE_READ);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.preview(visitId));
     }
 
     @GetMapping("/charge")
     public ApiResponse<ChargeView> charge(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, CHARGE_READ);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.chargeOf(visitId));
     }
 
@@ -63,8 +71,10 @@ public class BillingController {
             @PathVariable UUID visitId,
             @Valid @RequestBody SettleReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CHARGE_SETTLE);
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.settle(visitId, req.paymentMethod(), actor));
     }
 
@@ -78,8 +88,10 @@ public class BillingController {
             @PathVariable UUID visitId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, "inpatient:billing:daily");
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.dailyBill(visitId, date, actor));
     }
 
@@ -94,8 +106,10 @@ public class BillingController {
             @PathVariable UUID visitId,
             @Valid @RequestBody DailyReverseReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, "inpatient:billing:daily");
+        guard.require(scope, visitId);
         return ApiResponse.ok(service.reverseDaily(visitId, req.orderId(), req.serviceDate(),
                 req.reason(), Boolean.TRUE.equals(req.confirmed()), actor));
     }

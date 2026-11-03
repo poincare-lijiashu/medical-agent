@@ -111,11 +111,26 @@ ThreadLocal 在 WebFlux / 线程池场景下容易泄漏，测试里还要手工
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 1 | `DataScope` + `DataScopeResolver` + 单测（不改业务行为） | 已完成 |
-| 2 | clinical 的 `visit` / `surgery-case` 详情与列表按科室过滤 | 本阶段 |
-| 3 | 医嘱 / 收费 / 病案首页按 visit 归属过滤 | 待做 |
-| 4 | empi 患者检索按科室过滤 | 待做 |
-| 5 | PHI 掩码铺到所有返回患者标识的 DTO | 待做 |
+| 1 | `DataScope` + `DataScopeResolver` + `DataScopeArgumentResolver` + 单测（不改业务行为） | **已完成** |
+| 2 | clinical 的 `visit → surgery-case` 列表按科室过滤 | **已完成** |
+| 3 | 医嘱 / 收费按 visit 归属过滤（`VisitAccessGuard` 统一拦截） | **已完成** |
+| 4 | 病案首页按 visit 归属过滤 | 待做 |
+| 5 | empi 患者检索按科室过滤 | 待做 |
+| 6 | PHI 掩码铺到所有返回患者标识的 DTO | 待做 |
+
+### 1.1 `VisitAccessGuard` 的职责边界
+
+所有以 `/visits/{visitId}/...` 为前缀的接口共用同一个 Guard：
+
+| 已接入 | 接口 |
+|---|---|
+| 医嘱 | `POST/GET /visits/{id}/orders`、`cancel`、`stop`、`transfer-retry` |
+| 收费 | `preview`、`charge`、`settle`、`daily-bill`、`daily-bill/reverse` |
+| 手术 | `GET /visits/{id}/surgery-cases` |
+
+未接入（阶段 4 及以后）：病案首页、术前访视、住院床位、护理执行。
+
+**每个接入点都必须有越权用例**：用 B 科室身份请求 A 科室的就诊，必须 404 且不查业务表。
 
 **每个阶段都必须有"越权用例"测试**：用 B 科室身份请求 A 科室数据，必须 403/404。
 没有这条测试的改动，不算完成。
