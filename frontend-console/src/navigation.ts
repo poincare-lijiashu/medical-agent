@@ -30,6 +30,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:consultation:read'],
   },
   {
+    name: 'inpatient',
+    path: '/inpatient',
+    title: '住院工作台',
+    hint: '病区床位 · 入出院 · 分床转床 · 预交金与欠费预警',
+    icon: 'bed',
+    group: '住院管理',
+    permissions: ['inpatient:read'],
+  },
+  {
     name: 'preop',
     path: '/preop',
     title: '术前访视',
@@ -85,7 +94,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-export const NAV_GROUPS = ['临床诊疗', '手术与收费', '质量与知识']
+export const NAV_GROUPS = ['临床诊疗', '住院管理', '手术与收费', '质量与知识']
 
 export function findNav(name: string): NavItem | undefined {
   return NAV_ITEMS.find((n) => n.name === name)

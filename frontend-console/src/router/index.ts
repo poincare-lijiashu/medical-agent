@@ -18,6 +18,11 @@ const router = createRouter({
           name: 'consultation',
           component: () => import('@/views/ConsultationView.vue'),
         },
+        {
+          path: 'inpatient',
+          name: 'inpatient',
+          component: () => import('@/views/InpatientView.vue'),
+        },
         { path: 'surgery', name: 'surgery', component: () => import('@/views/SurgeryBoardView.vue') },
         {
           path: 'surgery-charges',

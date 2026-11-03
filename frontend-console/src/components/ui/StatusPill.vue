@@ -19,6 +19,10 @@ const MAP: Record<string, { label: string; tone: Tone }> = {
   IN_TREATMENT: { label: '接诊中', tone: 'accent' },
   FINISHED: { label: '已结束', tone: 'ok' },
   CANCELLED: { label: '已取消', tone: 'neutral' },
+  // 住院
+  ADMITTED: { label: '待入科', tone: 'warn' },
+  IN_HOSPITAL: { label: '在院', tone: 'accent' },
+  DISCHARGED: { label: '已出院', tone: 'neutral' },
   PATIENT_ACTIVE: { label: '有效档案', tone: 'ok' },
   ACTIVE: { label: '启用', tone: 'ok' },
   MAINTENANCE: { label: '维护中', tone: 'warn' },

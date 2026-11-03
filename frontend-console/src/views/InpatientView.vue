@@ -1,0 +1,1081 @@
+<template>
+  <div class="page">
+    <PageHeader
+      title="住院工作台"
+      :sub="`病区床位与在院患者 · 入出院 / 分床转床 / 预交金 / 欠费预警 · 当前角色 ${role}`"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="loading" @click="reloadWard">
+          <AppIcon name="refresh" :size="15" /> 刷新
+        </button>
+      </template>
+    </PageHeader>
+
+    <div class="kpi-strip">
+      <KpiCard label="在院患者" :value="activeCount" unit="人" :meta="`含待入科 ${pendingAdmitCount} 人`" />
+      <KpiCard
+        label="空闲床位"
+        :value="freeBeds.length"
+        unit="张"
+        :meta="`病区床位 ${beds.length} 张`"
+        :tone="freeBeds.length === 0 && beds.length > 0 ? 'warn' : 'default'"
+      />
+      <KpiCard
+        label="待分床"
+        :value="unassignedCount"
+        unit="人"
+        :meta="unassignedCount > 0 ? '未分床患者无法按床护理与计费核对' : '全部患者已分床'"
+        :tone="unassignedCount > 0 ? 'warn' : 'default'"
+      />
+      <KpiCard
+        label="欠费预警"
+        :value="alerts.length"
+        unit="人"
+        :meta="alerts.length > 0 ? '预交金不足以覆盖未结与待计费用' : '本日无欠费缺口'"
+        :tone="alerts.length > 0 ? 'danger' : 'default'"
+      />
+    </div>
+
+    <div class="card ward-bar">
+      <label class="field ward-pick">
+        <span class="label">病区</span>
+        <select v-model="selectedWardId" class="select" :disabled="wards.length === 0" @change="reloadWard">
+          <option value="" disabled>选择病区</option>
+          <option v-for="w in wards" :key="w.id" :value="w.id">{{ w.name }}（{{ w.code }}）</option>
+        </select>
+      </label>
+      <span class="hint">{{ deptName(currentWard?.deptId) }}</span>
+      <span class="spacer" />
+      <button v-if="canManageWard && selectedWardId" class="btn btn--sm" type="button" @click="openBeds">
+        <AppIcon name="plus" :size="13" /> 批量建床
+      </button>
+      <button
+        v-if="canAdmit && selectedWardId"
+        class="btn btn--sm btn--primary"
+        type="button"
+        :disabled="busy"
+        @click="openAdmit()"
+      >
+        <AppIcon name="plus" :size="13" /> 入院登记
+      </button>
+    </div>
+
+    <div v-if="!wards.length && !loading" class="card">
+      <EmptyState
+        title="当前账号没有可管理的病区"
+        desc="住院数据按科室范围隔离。请让管理员在账号上绑定临床科室，或为该科室建立病区与床位。"
+      />
+    </div>
+
+    <template v-else-if="selectedWardId">
+      <div v-if="alerts.length" class="card alert-card">
+        <div class="alert-head">
+          <AppIcon name="warning" :size="15" />
+          <strong>欠费预警 {{ alerts.length }} 人</strong>
+          <span class="muted">按缺口倒序，仅显示缺口大于 0 的在院患者</span>
+        </div>
+        <div class="alert-list">
+          <span v-for="a in alerts.slice(0, 4)" :key="a.admissionId" class="alert-chip">
+            <span class="mono">{{ a.bedNo || '未分床' }}</span>
+            <span class="mono">{{ a.patientNo }}</span>
+            <span class="is-danger num">缺 {{ money(a.shortfall) }}</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="ward-grid">
+        <section class="card bed-board">
+          <div class="card-head">
+            <span class="card-title">床位看板</span>
+            <span class="badge badge--neutral num">{{ freeBeds.length }} 空 / {{ beds.length }} 总</span>
+            <span class="spacer" />
+            <span class="hint">点击空床直接入院；点击在床患者可转床</span>
+          </div>
+          <div v-if="beds.length === 0" class="hint pad">
+            该病区还没有床位。拥有 inpatient:ward:manage 权限的账号可批量建床后再入院。
+          </div>
+          <div v-else class="bed-grid">
+            <button
+              v-for="b in beds"
+              :key="b.id"
+              class="bed"
+              :class="bedClass(b)"
+              type="button"
+              @click="onBedClick(b)"
+            >
+              <span class="bed-no mono">{{ b.bedNo }}</span>
+              <span class="bed-state">{{ bedLabel(b) }}</span>
+              <span v-if="patientOfBed(b.id)" class="bed-patient mono">
+                {{ patientOfBed(b.id)?.patientNo }}
+              </span>
+            </button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <span class="card-title">在院患者</span>
+            <span class="badge badge--neutral num">{{ admissions.length }}</span>
+            <span class="spacer" />
+            <span v-if="!canFinance" class="hint">费用与欠费需 inpatient:finance:read</span>
+          </div>
+
+          <div v-if="loading" class="loading">
+            <div v-for="i in 4" :key="i" class="skeleton" style="height: 40px" />
+          </div>
+
+          <EmptyState
+            v-else-if="admissions.length === 0"
+            title="该病区暂无在院患者"
+            desc="通过右上角“入院登记”办理入科；已有登记但未分床的患者会显示为“待入科”。"
+          />
+
+          <div v-else class="table-wrap">
+            <table class="table table--compact table--stack">
+              <thead>
+                <tr>
+                  <th>住院号</th>
+                  <th>患者</th>
+                  <th>床位</th>
+                  <th>主治</th>
+                  <th>入科时间</th>
+                  <th>状态</th>
+                  <th style="width: 236px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in admissions" :key="a.id">
+                  <td class="mono" data-primary>{{ a.admissionNo }}</td>
+                  <td class="mono" data-label="患者">{{ a.patientNo }}</td>
+                  <td data-label="床位">
+                    <span v-if="a.bedNo" class="mono">{{ a.bedNo }}</span>
+                    <span v-else class="badge badge--warn">未分床</span>
+                  </td>
+                  <td data-label="主治">{{ a.attendingDoctor }}</td>
+                  <td data-label="入科时间">{{ dateTime(a.admittedAt) }}</td>
+                  <td data-label="状态"><StatusPill :value="a.status" /></td>
+                  <td data-label="操作">
+                    <div class="row-actions">
+                      <button
+                        v-if="canAssignBed"
+                        class="btn btn--sm"
+                        type="button"
+                        :disabled="busy"
+                        @click="openAssign(a)"
+                      >
+                        {{ a.bedId ? '转床' : '分床' }}
+                      </button>
+                      <button
+                        v-if="canDeposit"
+                        class="btn btn--sm"
+                        type="button"
+                        :disabled="busy"
+                        @click="openMoney(a)"
+                      >
+                        预交金
+                      </button>
+                      <button
+                        v-if="canFinance"
+                        class="btn btn--sm"
+                        type="button"
+                        :disabled="busy"
+                        @click="openFinance(a)"
+                      >
+                        费用
+                      </button>
+                      <button
+                        v-if="canDischarge && (a.status === 'IN_HOSPITAL' || a.status === 'ADMITTED')"
+                        class="btn btn--sm btn--danger"
+                        type="button"
+                        :disabled="busy"
+                        @click="openDischarge(a)"
+                      >
+                        出院
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <!-- 入院登记 -->
+    <AppModal v-model="admitOpen" title="入院登记" subtitle="登记后生成住院就诊；可先登记后分床" width="620px">
+      <div class="stack">
+        <div class="search-row">
+          <input
+            v-model.trim="patientKeyword"
+            class="input"
+            placeholder="姓名或病案号，回车检索"
+            @keydown.enter="searchPatients"
+          />
+          <button class="btn" type="button" :disabled="patientSearching" @click="searchPatients">检索</button>
+        </div>
+        <div v-if="patientResults.length" class="patient-results">
+          <button
+            v-for="p in patientResults"
+            :key="p.id"
+            class="patient-row"
+            type="button"
+            @click="choosePatient(p)"
+          >
+            <span class="is-strong">{{ p.name }}</span>
+            <span class="muted">{{ genderLabel(p.gender) }} · {{ ageOf(p.birthDate) }}</span>
+            <span class="mono muted">{{ p.patientNo }}</span>
+            <span class="spacer" />
+            <AppIcon name="chevron-right" :size="14" class="muted" />
+          </button>
+        </div>
+        <div v-if="admitPatient" class="picked-patient">
+          <span class="is-strong">{{ admitPatient.name }}</span>
+          <span class="mono muted">{{ admitPatient.patientNo }}</span>
+          <span class="muted">{{ genderLabel(admitPatient.gender) }} · {{ ageOf(admitPatient.birthDate) }}</span>
+        </div>
+        <div class="form-grid">
+          <label class="field">
+            <span class="label">病区</span>
+            <input class="input" :value="currentWard?.name ?? '—'" disabled />
+          </label>
+          <label class="field">
+            <span class="label">床位</span>
+            <select v-model="admitForm.bedId" class="select">
+              <option value="">先不分床</option>
+              <option v-for="b in freeBeds" :key="b.id" :value="b.id">{{ b.bedNo }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">主治医师工号 <span class="req">*</span></span>
+            <input v-model.trim="admitForm.attendingDoctor" class="input" placeholder="如 D0001" />
+          </label>
+        </div>
+        <p class="hint">入院后就诊状态为接诊中，可直接在医嘱工作台开立长期医嘱并按日计费。</p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="admitOpen = false">取消</button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          :disabled="busy || !admitPatient || !admitForm.attendingDoctor"
+          @click="submitAdmit"
+        >
+          确认入院
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 分床 / 转床 -->
+    <AppModal
+      v-model="assignOpen"
+      :title="assignTarget?.bedId ? '转床' : '分床'"
+      :subtitle="assignTarget ? `${assignTarget.admissionNo} · ${assignTarget.patientNo}` : ''"
+      width="480px"
+    >
+      <div class="stack">
+        <label class="field">
+          <span class="label">目标床位 <span class="req">*</span></span>
+          <select v-model="assignBedId" class="select">
+            <option value="" disabled>选择空床</option>
+            <option v-for="b in freeBeds" :key="b.id" :value="b.id">{{ b.bedNo }}</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="label">原因</span>
+          <input v-model.trim="assignReason" class="input" placeholder="如：病情需要靠近护士站" />
+        </label>
+        <p class="hint">转床会在同一事务内释放原床位；床位不属于本病区时服务端会拒绝。</p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="assignOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || !assignBedId" @click="submitAssign">
+          确认
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 预交金 -->
+    <AppModal
+      v-model="moneyOpen"
+      title="预交金"
+      :subtitle="moneyTarget ? `${moneyTarget.admissionNo} · 余额 ${money(deposit?.balance ?? 0)}` : ''"
+      width="560px"
+    >
+      <div class="stack">
+        <div class="seg" role="tablist" aria-label="预交金操作">
+          <button
+            class="seg-btn"
+            :class="{ active: moneyKind === 'DEPOSIT' }"
+            type="button"
+            @click="moneyKind = 'DEPOSIT'"
+          >
+            缴纳
+          </button>
+          <button
+            class="seg-btn"
+            :class="{ active: moneyKind === 'REFUND' }"
+            type="button"
+            @click="moneyKind = 'REFUND'"
+          >
+            退还
+          </button>
+        </div>
+        <div class="form-grid">
+          <label class="field">
+            <span class="label">金额（元） <span class="req">*</span></span>
+            <input v-model.number="moneyForm.amount" class="input num" type="number" min="0.01" step="0.01" />
+          </label>
+          <label class="field">
+            <span class="label">方式 <span class="req">*</span></span>
+            <select v-model="moneyForm.method" class="select">
+              <option value="CASH">现金</option>
+              <option value="BANK_CARD">银行卡</option>
+              <option value="MOBILE">移动支付</option>
+              <option value="INSURANCE">医保</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">备注</span>
+            <input v-model.trim="moneyForm.remark" class="input" placeholder="可写入审计" />
+          </label>
+        </div>
+        <div v-if="deposit" class="flow-list">
+          <div class="section-label">最近流水</div>
+          <div v-for="d in deposit.items.slice(0, 5)" :key="d.id" class="flow-row">
+            <span class="mono muted">{{ dateTime(d.createdAt) }}</span>
+            <span>{{ depositKindLabel(d.kind) }}</span>
+            <span class="mono muted">{{ d.method }}</span>
+            <span class="spacer" />
+            <span class="num" :class="{ 'is-danger': d.amount < 0 }">{{ money(d.amount) }}</span>
+          </div>
+          <div v-if="deposit.items.length === 0" class="hint">暂无预交金流水。</div>
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="moneyOpen = false">取消</button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          :disabled="busy || !moneyForm.amount || moneyForm.amount <= 0"
+          @click="submitMoney"
+        >
+          {{ moneyKind === 'DEPOSIT' ? '确认收取' : '确认退还' }}
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 费用看板 -->
+    <AppModal
+      v-model="financeOpen"
+      title="住院费用看板"
+      :subtitle="finance ? `${finance.admissionNo} · ${finance.wardName} ${finance.bedNo ?? '未分床'}` : ''"
+      width="640px"
+    >
+      <div v-if="financeLoading" class="loading">
+        <div v-for="i in 4" :key="i" class="skeleton" style="height: 40px" />
+      </div>
+      <div v-else-if="finance" class="stack">
+        <div class="finance-grid">
+          <div class="finance-cell">
+            <span class="muted">累计计费</span>
+            <strong class="num">{{ money(finance.billedTotal) }}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="muted">已结算</span>
+            <strong class="num">{{ money(finance.settledTotal) }}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="muted">未结算</span>
+            <strong class="num">{{ money(finance.unpaidTotal) }}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="muted">待计（{{ finance.pendingOrderCount }} 单）</span>
+            <strong class="num">{{ money(finance.pendingAmount) }}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="muted">今日未计长嘱（{{ finance.dailyLongOrderCount }} 条）</span>
+            <strong class="num">{{ money(finance.dailyLongAmount) }}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="muted">预交金余额</span>
+            <strong class="num">{{ money(finance.depositBalance) }}</strong>
+          </div>
+          <div class="finance-cell">
+            <span class="muted">今日已计</span>
+            <strong class="num">{{ money(finance.todayBilledAmount) }}</strong>
+          </div>
+          <div class="finance-cell" :class="{ 'is-danger': finance.warning }">
+            <span class="muted">欠费缺口</span>
+            <strong class="num">{{ money(finance.shortfall) }}</strong>
+          </div>
+        </div>
+        <p class="hint">
+          缺口 = 未结算 + 待计 + 当日未计长嘱 − 预交金余额；大于 0 即提示补交预交金，避免出院结算被卡住。
+        </p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="financeOpen = false">关闭</button>
+      </template>
+    </AppModal>
+
+    <!-- 出院 -->
+    <AppModal
+      v-model="dischargeOpen"
+      title="办理出院"
+      :subtitle="dischargeTarget ? `${dischargeTarget.admissionNo} · ${dischargeTarget.patientNo}` : ''"
+      width="480px"
+    >
+      <div class="stack">
+        <p class="hint" style="line-height: 1.7">
+          出院前必须结清费用并完成按日计费；未结清时服务端会拒绝并给出待处理条数。
+          出院会释放床位并把就诊状态置为已结束。
+        </p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="dischargeOpen = false">取消</button>
+        <button class="btn btn--danger" type="button" :disabled="busy" @click="submitDischarge">
+          确认出院
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 批量建床 -->
+    <AppModal v-model="bedsOpen" title="批量建床" :subtitle="currentWard?.name ?? ''" width="480px">
+      <div class="stack">
+        <label class="field">
+          <span class="label">床位号 <span class="req">*</span></span>
+          <textarea
+            v-model.trim="bedNosText"
+            class="input"
+            rows="3"
+            placeholder="用逗号或换行分隔，如：01,02,03"
+          />
+          <span class="hint">床位号在同一病区内唯一；创建后状态为空床。</span>
+        </label>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="bedsOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || !bedNosText" @click="submitBeds">
+          创建
+        </button>
+      </template>
+    </AppModal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import AppIcon from '@/components/ui/AppIcon.vue'
+import AppModal from '@/components/ui/AppModal.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import KpiCard from '@/components/ui/KpiCard.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import StatusPill from '@/components/ui/StatusPill.vue'
+import { clinicalApi, empiApi } from '@/api'
+import { errorText } from '@/api/http'
+import type {
+  AdmissionView,
+  Bed,
+  DepositView,
+  Dept,
+  InpatientAlert,
+  InpatientFinanceView,
+  Patient,
+  Ward,
+} from '@/api/types'
+import { hasPermission, session } from '@/stores/session'
+import { toast } from '@/stores/toast'
+import { ageOf, dateTime, genderLabel, money } from '@/utils/format'
+
+const role = computed(() => session.roleLabel.value)
+const loading = ref(false)
+const busy = ref(false)
+
+const canAdmit = computed(() => hasPermission('inpatient:admission:create'))
+const canAssignBed = computed(() => hasPermission('inpatient:bed:assign'))
+const canDischarge = computed(() => hasPermission('inpatient:admission:discharge'))
+const canDeposit = computed(() => hasPermission('inpatient:deposit:manage'))
+const canFinance = computed(() => hasPermission('inpatient:finance:read'))
+const canManageWard = computed(() => hasPermission('inpatient:ward:manage'))
+
+const wards = ref<Ward[]>([])
+const departments = ref<Dept[]>([])
+const selectedWardId = ref('')
+const beds = ref<Bed[]>([])
+const admissions = ref<AdmissionView[]>([])
+const alerts = ref<InpatientAlert[]>([])
+
+const currentWard = computed(() => wards.value.find((w) => w.id === selectedWardId.value))
+const freeBeds = computed(() => beds.value.filter((b) => b.status === 'FREE'))
+const activeCount = computed(() => admissions.value.length)
+const pendingAdmitCount = computed(() => admissions.value.filter((a) => a.status === 'ADMITTED').length)
+const unassignedCount = computed(() => admissions.value.filter((a) => !a.bedId).length)
+
+function deptName(id?: string) {
+  if (!id) return ''
+  return departments.value.find((d) => d.id === id)?.name ?? id.slice(0, 8)
+}
+
+function bedLabel(b: Bed) {
+  if (b.status === 'FREE') return '空床'
+  if (b.status === 'OCCUPIED') return '在床'
+  if (b.status === 'RESERVED') return '预留'
+  return '停用'
+}
+
+function bedClass(b: Bed) {
+  return {
+    'is-free': b.status === 'FREE',
+    'is-occupied': b.status === 'OCCUPIED',
+    'is-reserved': b.status === 'RESERVED',
+    'is-disabled': b.status === 'DISABLED',
+  }
+}
+
+function patientOfBed(bedId: string) {
+  return admissions.value.find((a) => a.bedId === bedId)
+}
+
+/* ------------------------------ 加载 ------------------------------ */
+
+async function loadWards() {
+  try {
+    wards.value = await clinicalApi.wards()
+    if (!selectedWardId.value || !wards.value.some((w) => w.id === selectedWardId.value)) {
+      selectedWardId.value = wards.value[0]?.id ?? ''
+    }
+  } catch (e) {
+    toast.error('病区加载失败', errorText(e))
+    wards.value = []
+  }
+}
+
+async function reloadWard() {
+  if (!selectedWardId.value) return
+  const wardId = selectedWardId.value
+  loading.value = true
+  try {
+    const [bedList, inHospital, admitted] = await Promise.all([
+      clinicalApi.beds(wardId),
+      clinicalApi.admissions(wardId, 'IN_HOSPITAL'),
+      clinicalApi.admissions(wardId, 'ADMITTED'),
+    ])
+    if (selectedWardId.value !== wardId) return
+    beds.value = bedList
+    admissions.value = [...admitted, ...inHospital].sort((a, b) =>
+      (a.bedNo ?? '~').localeCompare(b.bedNo ?? '~'),
+    )
+    if (canFinance.value) {
+      try {
+        alerts.value = await clinicalApi.inpatientAlerts(wardId)
+      } catch {
+        // 欠费预警失败不影响床位与在院列表
+        alerts.value = []
+      }
+    } else {
+      alerts.value = []
+    }
+  } catch (e) {
+    if (selectedWardId.value !== wardId) return
+    toast.error('住院数据加载失败', errorText(e))
+    beds.value = []
+    admissions.value = []
+  } finally {
+    if (selectedWardId.value === wardId) loading.value = false
+  }
+}
+
+/* ------------------------------ 入院登记 ------------------------------ */
+
+const admitOpen = ref(false)
+const admitPatient = ref<Patient | null>(null)
+const patientKeyword = ref('')
+const patientResults = ref<Patient[]>([])
+const patientSearching = ref(false)
+const admitForm = reactive({ bedId: '', attendingDoctor: '' })
+
+function openAdmit(bedId?: string) {
+  admitPatient.value = null
+  patientKeyword.value = ''
+  patientResults.value = []
+  admitForm.bedId = bedId ?? ''
+  admitForm.attendingDoctor = ''
+  admitOpen.value = true
+}
+
+async function searchPatients() {
+  const kw = patientKeyword.value.trim()
+  if (!kw) return
+  patientSearching.value = true
+  try {
+    const looksLikeNo = /^[A-Za-z]{1,4}\d{2,}$/.test(kw)
+    const res = looksLikeNo ? await empiApi.searchByNo(kw) : await empiApi.searchByName(kw)
+    patientResults.value = res.items
+    if (res.items.length === 0) toast.info('未找到患者', '请核对姓名或用完整病案号检索')
+  } catch (e) {
+    toast.error('患者检索失败', errorText(e))
+  } finally {
+    patientSearching.value = false
+  }
+}
+
+function choosePatient(p: Patient) {
+  admitPatient.value = p
+  patientKeyword.value = `${p.name} · ${p.patientNo}`
+  patientResults.value = []
+}
+
+async function submitAdmit() {
+  if (!admitPatient.value || !selectedWardId.value) return
+  busy.value = true
+  try {
+    const created = await clinicalApi.admit({
+      patientId: admitPatient.value.id,
+      wardId: selectedWardId.value,
+      bedId: admitForm.bedId || undefined,
+      attendingDoctor: admitForm.attendingDoctor,
+    })
+    admitOpen.value = false
+    toast.ok('入院已登记', `${created.admissionNo} · ${created.bedNo || '待分床'}`)
+    await reloadWard()
+  } catch (e) {
+    toast.error('入院登记失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+/* ------------------------------ 分床 / 转床 ------------------------------ */
+
+const assignOpen = ref(false)
+const assignTarget = ref<AdmissionView | null>(null)
+const assignBedId = ref('')
+const assignReason = ref('')
+
+function openAssign(a: AdmissionView) {
+  assignTarget.value = a
+  assignBedId.value = ''
+  assignReason.value = ''
+  assignOpen.value = true
+}
+
+async function submitAssign() {
+  if (!assignTarget.value || !assignBedId.value) return
+  busy.value = true
+  try {
+    const updated = await clinicalApi.assignAdmissionBed(
+      assignTarget.value.id,
+      assignBedId.value,
+      assignReason.value || undefined,
+    )
+    assignOpen.value = false
+    toast.ok(assignTarget.value.bedId ? '转床完成' : '分床完成', updated.bedNo ?? '')
+    await reloadWard()
+  } catch (e) {
+    toast.error('床位操作失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+/* ------------------------------ 预交金 ------------------------------ */
+
+const moneyOpen = ref(false)
+const moneyTarget = ref<AdmissionView | null>(null)
+const moneyKind = ref<'DEPOSIT' | 'REFUND'>('DEPOSIT')
+const deposit = ref<DepositView | null>(null)
+const moneyForm = reactive({ amount: 0, method: 'CASH', remark: '' })
+
+function depositKindLabel(kind: string) {
+  if (kind === 'DEPOSIT') return '缴纳'
+  if (kind === 'REFUND') return '退还'
+  return '结算抵扣'
+}
+
+async function openMoney(a: AdmissionView) {
+  moneyTarget.value = a
+  moneyKind.value = 'DEPOSIT'
+  moneyForm.amount = 0
+  moneyForm.method = 'CASH'
+  moneyForm.remark = ''
+  moneyOpen.value = true
+  try {
+    deposit.value = await clinicalApi.deposits(a.id)
+  } catch (e) {
+    deposit.value = null
+    toast.error('预交金读取失败', errorText(e))
+  }
+}
+
+async function submitMoney() {
+  if (!moneyTarget.value || !moneyForm.amount || moneyForm.amount <= 0) return
+  busy.value = true
+  try {
+    deposit.value =
+      moneyKind.value === 'DEPOSIT'
+        ? await clinicalApi.payDeposit(
+            moneyTarget.value.id,
+            moneyForm.amount,
+            moneyForm.method,
+            moneyForm.remark || undefined,
+          )
+        : await clinicalApi.refundDeposit(
+            moneyTarget.value.id,
+            moneyForm.amount,
+            moneyForm.method,
+            moneyForm.remark || undefined,
+          )
+    moneyForm.amount = 0
+    moneyForm.remark = ''
+    toast.ok(moneyKind.value === 'DEPOSIT' ? '预交金已收取' : '预交金已退还')
+  } catch (e) {
+    toast.error('预交金操作失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+/* ------------------------------ 费用看板 ------------------------------ */
+
+const financeOpen = ref(false)
+const financeLoading = ref(false)
+const finance = ref<InpatientFinanceView | null>(null)
+
+async function openFinance(a: AdmissionView) {
+  finance.value = null
+  financeOpen.value = true
+  financeLoading.value = true
+  try {
+    finance.value = await clinicalApi.inpatientFinance(a.id)
+  } catch (e) {
+    toast.error('费用看板加载失败', errorText(e))
+  } finally {
+    financeLoading.value = false
+  }
+}
+
+/* ------------------------------ 出院 ------------------------------ */
+
+const dischargeOpen = ref(false)
+const dischargeTarget = ref<AdmissionView | null>(null)
+
+function openDischarge(a: AdmissionView) {
+  dischargeTarget.value = a
+  dischargeOpen.value = true
+}
+
+async function submitDischarge() {
+  if (!dischargeTarget.value) return
+  busy.value = true
+  try {
+    const updated = await clinicalApi.dischargeAdmission(dischargeTarget.value.id)
+    dischargeOpen.value = false
+    toast.ok('出院已办理', `${updated.admissionNo} · 床位已释放`)
+    await reloadWard()
+  } catch (e) {
+    toast.error('出院失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+/* ------------------------------ 批量建床 ------------------------------ */
+
+const bedsOpen = ref(false)
+const bedNosText = ref('')
+
+function openBeds() {
+  bedNosText.value = ''
+  bedsOpen.value = true
+}
+
+async function submitBeds() {
+  if (!selectedWardId.value || !bedNosText.value) return
+  const bedNos = bedNosText.value
+    .split(/[\s,，;；]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (bedNos.length === 0) {
+    toast.warn('请填写床位号')
+    return
+  }
+  busy.value = true
+  try {
+    await clinicalApi.createBeds(selectedWardId.value, bedNos)
+    bedsOpen.value = false
+    toast.ok('床位已创建', `${bedNos.length} 张`)
+    await reloadWard()
+  } catch (e) {
+    toast.error('建床失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+/* ------------------------------ 床位点击 ------------------------------ */
+
+function onBedClick(b: Bed) {
+  if (b.status === 'OCCUPIED') {
+    const admission = patientOfBed(b.id)
+    if (admission && canAssignBed.value) openAssign(admission)
+    return
+  }
+  if (b.status === 'FREE' && canAdmit.value) {
+    openAdmit(b.id)
+  }
+}
+
+onMounted(async () => {
+  try {
+    departments.value = await clinicalApi.departments()
+  } catch {
+    /* 科室名失败不影响住院主流程 */
+  }
+  await loadWards()
+  await reloadWard()
+})
+</script>
+
+<style scoped>
+.ward-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  flex-wrap: wrap;
+}
+
+.ward-pick {
+  width: 260px;
+}
+
+.ward-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 2fr) minmax(420px, 3fr);
+  gap: var(--s4);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .ward-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.bed-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s4);
+}
+
+.bed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 9px;
+  min-height: 66px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bed:hover {
+  border-color: var(--line-strong);
+}
+
+.bed-no {
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.bed-state {
+  font-size: var(--fs-10);
+  color: var(--ink-3);
+}
+
+.bed-patient {
+  font-size: var(--fs-10);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bed.is-free {
+  border-style: dashed;
+  background: var(--sunken);
+}
+
+.bed.is-occupied {
+  border-color: var(--accent-line);
+  background: var(--accent-weak);
+}
+
+.bed.is-reserved {
+  border-color: var(--warn-line, var(--line-strong));
+  background: var(--warn-weak, var(--panel-3));
+}
+
+.bed.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pad {
+  padding: var(--s4);
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s4);
+}
+
+.alert-card {
+  padding: var(--s3) var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border-left: 3px solid var(--danger, #b42318);
+}
+
+.alert-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger, #b42318);
+  font-size: var(--fs-13);
+}
+
+.alert-head .muted {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.alert-list {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.alert-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-11);
+  background: var(--panel);
+}
+
+.search-row {
+  display: flex;
+  gap: var(--s2);
+}
+
+.search-row .input {
+  flex: 1;
+}
+
+.patient-results {
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.patient-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--fs-13);
+}
+
+.patient-row:hover {
+  background: var(--panel-3);
+}
+
+.picked-patient {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--accent-weak);
+  border: 1px solid var(--accent-line);
+  font-size: var(--fs-13);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s3);
+}
+
+.flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: var(--s3);
+}
+
+.flow-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+
+.finance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s2);
+}
+
+.finance-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  font-size: var(--fs-12);
+}
+
+.finance-cell strong {
+  font-size: var(--fs-15);
+}
+
+.finance-cell.is-danger {
+  border-color: var(--danger-line, var(--line-strong));
+  color: var(--danger, #b42318);
+  background: var(--danger-weak, var(--panel-3));
+}
+
+.is-danger {
+  color: var(--danger, #b42318);
+}
+</style>

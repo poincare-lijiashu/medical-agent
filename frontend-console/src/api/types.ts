@@ -135,10 +135,68 @@ export interface AdmissionView {
   wardId: string
   bedId: string | null
   bedNo: string | null
+  attendingDoctor: string
   status: string
   admittedAt: string | null
   dischargedAt: string | null
   version: number
+}
+
+/** 预交金流水（DEPOSIT 正数 / REFUND 负数 / SETTLE 抵扣）。 */
+export interface Deposit {
+  id: string
+  admissionId: string
+  amount: number
+  kind: 'DEPOSIT' | 'REFUND' | 'SETTLE'
+  method: string
+  operator: string
+  remark: string | null
+  createdAt: string
+}
+
+/** 预交金余额与流水。 */
+export interface DepositView {
+  balance: number
+  items: Deposit[]
+}
+
+/** 住院费用看板（欠费缺口 shortfall > 0 即预警）。 */
+export interface InpatientFinanceView {
+  admissionId: string
+  admissionNo: string
+  visitId: string
+  visitNo: string
+  patientNo: string
+  wardId: string
+  wardName: string
+  bedId: string | null
+  bedNo: string | null
+  status: string
+  admittedAt: string | null
+  billedTotal: number
+  settledTotal: number
+  unpaidTotal: number
+  depositBalance: number
+  pendingAmount: number
+  pendingOrderCount: number
+  dailyLongAmount: number
+  dailyLongOrderCount: number
+  todayBilledAmount: number
+  shortfall: number
+  warning: boolean
+}
+
+/** 欠费预警条目（仅返回 shortfall > 0 的在院患者）。 */
+export interface InpatientAlert {
+  admissionId: string
+  admissionNo: string
+  patientNo: string
+  bedId: string | null
+  bedNo: string | null
+  unpaidTotal: number
+  pendingAmount: number
+  depositBalance: number
+  shortfall: number
 }
 
 export interface VisitOrder {

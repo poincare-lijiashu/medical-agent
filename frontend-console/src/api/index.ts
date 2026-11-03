@@ -1,14 +1,18 @@
 import { get, post, put, request } from './http'
 import type {
+  AdmissionView,
   Bed,
   BillingPreview,
   ChargeItem,
   ChargeView,
   Consultation,
+  DepositView,
   Dept,
   Frequency,
   HomepageSummary,
   HomepageView,
+  InpatientAlert,
+  InpatientFinanceView,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -85,6 +89,34 @@ export const clinicalApi = {
     post<ChargeView>(`/clinical/visits/${visitId}/settle`, { paymentMethod }),
   wards: () => get<Ward[]>('/clinical/wards'),
   beds: (wardId: string) => get<Bed[]>(`/clinical/wards/${wardId}/beds`),
+  createBeds: (wardId: string, bedNos: string[]) =>
+    post<Bed[]>(`/clinical/wards/${wardId}/beds`, { bedNos }),
+  admissions: (wardId: string, status?: string) =>
+    get<AdmissionView[]>(`/clinical/wards/${wardId}/admissions`, { status }),
+  admit: (body: { patientId: string; wardId: string; bedId?: string; attendingDoctor: string }) =>
+    post<AdmissionView>('/clinical/inpatient/admissions', body),
+  assignAdmissionBed: (admissionId: string, bedId: string, reason?: string) =>
+    post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/bed`, { bedId, reason }),
+  dischargeAdmission: (admissionId: string) =>
+    post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/discharge`),
+  deposits: (admissionId: string) =>
+    get<DepositView>(`/clinical/inpatient/admissions/${admissionId}/deposits`),
+  payDeposit: (admissionId: string, amount: number, method: string, remark?: string) =>
+    post<DepositView>(`/clinical/inpatient/admissions/${admissionId}/deposits`, {
+      amount,
+      method,
+      remark,
+    }),
+  refundDeposit: (admissionId: string, amount: number, method: string, remark?: string) =>
+    post<DepositView>(`/clinical/inpatient/admissions/${admissionId}/refunds`, {
+      amount,
+      method,
+      remark,
+    }),
+  inpatientFinance: (admissionId: string) =>
+    get<InpatientFinanceView>(`/clinical/inpatient/admissions/${admissionId}/finance`),
+  inpatientAlerts: (wardId?: string) =>
+    get<InpatientAlert[]>('/clinical/inpatient/alerts', { wardId }),
   visitTransfers: (visitId: string) =>
     get<VisitTransfer[]>(`/clinical/visits/${visitId}/transfers`),
   transferVisit: (visitId: string, body: { toDeptId: string; bedId?: string; reason: string }) =>
