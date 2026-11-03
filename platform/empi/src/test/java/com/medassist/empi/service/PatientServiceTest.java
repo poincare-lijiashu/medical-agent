@@ -26,6 +26,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -72,6 +73,33 @@ class PatientServiceTest {
     private CreatePatientReq createReq(String idType, String idNo) {
         return new CreatePatientReq("张三", "MALE", LocalDate.of(1990, 1, 1),
                 idType, idNo, "13800001111", "北京市东城区某街道 1 号", "A", null);
+    }
+
+    // ---------------------------------------------------------------- 检索
+
+    @Test
+    @DisplayName("检索：不给患者号也不给姓名 → 422，且不查库（禁止无条件翻全院名册）")
+    void searchRequiresCriterion() {
+        assertThatThrownBy(() -> service.search(null, "  ", 1, 20, "clerk01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(repo, never()).search(any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("检索：有患者号时返回脱敏结果并写 PATIENT_SEARCH 审计")
+    void searchMasksAndAudits() {
+        when(repo.search("P20260101000001", null, 20, 0))
+                .thenReturn(List.of(patient("ACTIVE", null, 0L)));
+        when(repo.count("P20260101000001", null)).thenReturn(1L);
+        when(repo.listCrosswalk(patientId)).thenReturn(List.of());
+
+        var result = service.search("P20260101000001", null, 1, 20, "clerk01");
+
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).phiMasked()).isTrue();
+        assertThat(result.items().get(0).idNo()).contains("****");
+        verify(repo).logChange(eq("clerk01"), eq("PATIENT_SEARCH"), eq("-"), anyString());
     }
 
     // ---------------------------------------------------------------- 建档

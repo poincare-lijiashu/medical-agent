@@ -56,15 +56,22 @@ public class PatientController {
         this.service = service;
     }
 
+    /**
+     * 患者检索：必须带患者号或姓名，默认脱敏，每次检索留审计。
+     *
+     * <p>主索引不按科室隔离（跨科室找同一患者是挂号/住院/药房的刚需），
+     * 科室隔离落在临床数据侧，见 {@code docs/DESIGN-DATA-SCOPE.md} §2.4。
+     */
     @GetMapping
     public ApiResponse<PageResult<PatientResp>> search(
             @RequestParam(required = false) String patientNo,
             @RequestParam(required = false) String name,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.search(patientNo, name, page, size));
+        return ApiResponse.ok(service.search(patientNo, name, page, size, actor));
     }
 
     @GetMapping("/{id}")

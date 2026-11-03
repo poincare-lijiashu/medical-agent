@@ -98,13 +98,32 @@ public class PatientService {
         return toResp(p, reveal);
     }
 
-    public PageResult<PatientResp> search(String patientNo, String nameKeyword, int page, int size) {
+    /**
+     * 患者检索（默认脱敏）。
+     *
+     * <p>患者主索引是全院共享的身份目录，不按科室隔离：门诊挂号、住院处、药房都要能
+     * 找到在其他科室就诊过的患者，按科室过滤会把"同一个人"拆成看不见的两半。
+     * 真正需要隔离的是临床数据（就诊、医嘱、病历），那部分已由 DataScope 收口。
+     *
+     * <p>这里守住两条底线：① 必须给出患者号或姓名，不允许无条件翻全院名册；
+     * ② 每次检索都写审计（含是否命中、命中多少条），批量枚举可追溯。
+     */
+    public PageResult<PatientResp> search(String patientNo, String nameKeyword, int page, int size,
+                                          String actor) {
+        String no = blankToNull(patientNo);
+        String name = blankToNull(nameKeyword);
+        if (no == null && name == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "请至少提供患者号或姓名后再检索");
+        }
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), PageResult.MAX_PAGE_SIZE);
-        List<PatientResp> items = repo.search(blankToNull(patientNo), blankToNull(nameKeyword),
-                        safeSize, (safePage - 1) * safeSize)
+        List<PatientResp> items = repo.search(no, name, safeSize, (safePage - 1) * safeSize)
                 .stream().map(p -> toResp(p, false)).toList();
-        long total = repo.count(blankToNull(patientNo), blankToNull(nameKeyword));
+        long total = repo.count(no, name);
+        audit(actor, "PATIENT_SEARCH", "-", Map.of(
+                "byPatientNo", no != null, "byName", name != null,
+                "page", safePage, "size", safeSize, "total", total));
         return PageResult.of(safePage, safeSize, total, items);
     }
 
