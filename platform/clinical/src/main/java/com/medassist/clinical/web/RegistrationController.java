@@ -142,4 +142,22 @@ public class RegistrationController {
         guard.require(scope, id);
         return ApiResponse.ok(PhiMask.visit(service.cancel(id, actor), scope));
     }
+
+    /**
+     * 改约（G1）：把未接诊的就诊换到另一个号源（同科室）。
+     *
+     * <p>权限点用 {@code clinical:registration:create}：改约本质是"重新选号"，
+     * 与挂号窗口同岗；跨科室改约不支持，需先退号（{@code registration:cancel}）。
+     */
+    @PostMapping("/visits/{id}/reschedule")
+    public ApiResponse<Visit> reschedule(
+            @PathVariable UUID id,
+            @Valid @RequestBody ClinicalDtos.RescheduleReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, REG_CREATE);
+        guard.require(scope, id);
+        return ApiResponse.ok(PhiMask.visit(service.reschedule(id, req.slotId(), actor), scope));
+    }
 }

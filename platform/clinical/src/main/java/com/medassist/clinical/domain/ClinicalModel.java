@@ -421,6 +421,22 @@ public final class ClinicalModel {
         public static final String REFUNDED = "REFUNDED";
     }
 
+    // ---------------------------------------------------------------- 门诊日结（G1）
+
+    /** 门诊日结：科室维度（已收金额）。 */
+    public record DeptPaidTotal(UUID deptId, String deptCode, String deptName,
+                                int visitCount, BigDecimal amount) {
+    }
+
+    /** 门诊日结：支付方式维度（分账用）。 */
+    public record MethodPaidTotal(String paymentMethod, int chargeCount, BigDecimal amount) {
+    }
+
+    /** 门诊日结：合计（笔数/金额/当日退费额）。 */
+    public record OutpatientPaidSummary(int visitCount, int paidChargeCount,
+                                        BigDecimal totalPaid, BigDecimal refundedAmount) {
+    }
+
     /** 病区。 */
     public record Ward(UUID id, String code, String name, UUID deptId, boolean enabled) {
     }

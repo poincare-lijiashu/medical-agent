@@ -10,14 +10,17 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
+import com.medassist.clinical.domain.ClinicalModel.DeptPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
+import com.medassist.clinical.domain.ClinicalModel.MethodPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecutionCorrection;
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
+import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
@@ -47,6 +50,7 @@ import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -1013,6 +1017,96 @@ public class ClinicalRepository {
                            SET status = 'REFUNDED', version = version + 1, updated_at = now()
                          WHERE visit_id = :visitId AND status = 'UNPAID'
                         """).param("visitId", visitId).update();
+    }
+
+    /**
+     * 改约（G1）：换号源，同时更新医生与就诊日期。
+     *
+     * <p>CAS 三重条件：只允许 REGISTERED、版本未变；日期/医生由号源决定，
+     * 因此客户端无法传入"号源 A + 医生 B"这类矛盾组合。
+     */
+    public boolean updateVisitSlot(UUID id, UUID slotId, String doctorId, LocalDate visitDate,
+                                   long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit
+                           SET slot_id = :slotId, doctor_id = :doctorId, visit_date = :visitDate,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'REGISTERED' AND version = :version
+                        """)
+                .param("slotId", slotId).param("doctorId", doctorId).param("visitDate", visitDate)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 门诊日结（G1）
+
+    /**
+     * 门诊日结合计：当日已收笔数/金额，以及当日退费额。
+     *
+     * <p>统计口径按**收款时刻**（{@code paid_at}）落在业务日窗口内，与财务"当日实收"一致；
+     * 退费额按 {@code status='REFUNDED'} 且 {@code updated_at} 落在窗口内估算，
+     * 用于日结时提示"当班发生过退费"，不与实收相抵（相抵会掩盖资金流水）。
+     */
+    public OutpatientPaidSummary outpatientPaidSummary(OffsetDateTime from, OffsetDateTime to) {
+        return jdbc.sql("""
+                        SELECT count(DISTINCT v.id) FILTER (WHERE c.status = 'PAID') AS visits,
+                               count(*) FILTER (WHERE c.status = 'PAID')            AS paid_charges,
+                               COALESCE(sum(c.total_amount) FILTER (WHERE c.status = 'PAID'), 0) AS paid_amount,
+                               COALESCE(sum(c.total_amount) FILTER (WHERE c.status = 'REFUNDED'), 0) AS refunded_amount
+                          FROM clinical_svc.charge c
+                          JOIN clinical_svc.visit v ON v.id = c.visit_id
+                         WHERE v.visit_type = 'OUTPATIENT'
+                           AND (
+                                (c.status = 'PAID' AND c.paid_at >= :fromTs AND c.paid_at < :toTs)
+                             OR (c.status = 'REFUNDED' AND c.updated_at >= :fromTs AND c.updated_at < :toTs)
+                           )
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .query((rs, i) -> new OutpatientPaidSummary(
+                        rs.getInt("visits"), rs.getInt("paid_charges"),
+                        rs.getBigDecimal("paid_amount"), rs.getBigDecimal("refunded_amount")))
+                .single();
+    }
+
+    /** 门诊日结：按科室分账（当日已收）。 */
+    public List<DeptPaidTotal> outpatientPaidByDept(OffsetDateTime from, OffsetDateTime to) {
+        return jdbc.sql("""
+                        SELECT d.id AS dept_id, d.dept_code, d.name AS dept_name,
+                               count(DISTINCT v.id) AS visits,
+                               COALESCE(sum(c.total_amount), 0) AS amount
+                          FROM clinical_svc.charge c
+                          JOIN clinical_svc.visit v ON v.id = c.visit_id
+                          JOIN clinical_svc.md_dept d ON d.id = v.dept_id
+                         WHERE v.visit_type = 'OUTPATIENT'
+                           AND c.status = 'PAID'
+                           AND c.paid_at >= :fromTs AND c.paid_at < :toTs
+                         GROUP BY d.id, d.dept_code, d.name
+                         ORDER BY amount DESC, d.dept_code
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .query((rs, i) -> new DeptPaidTotal(
+                        rs.getObject("dept_id", UUID.class), rs.getString("dept_code"),
+                        rs.getString("dept_name"), rs.getInt("visits"), rs.getBigDecimal("amount")))
+                .list();
+    }
+
+    /** 门诊日结：按支付方式分账（当日已收）。 */
+    public List<MethodPaidTotal> outpatientPaidByMethod(OffsetDateTime from, OffsetDateTime to) {
+        return jdbc.sql("""
+                        SELECT COALESCE(c.payment_method, 'UNKNOWN') AS method,
+                               count(*) AS charges,
+                               COALESCE(sum(c.total_amount), 0) AS amount
+                          FROM clinical_svc.charge c
+                          JOIN clinical_svc.visit v ON v.id = c.visit_id
+                         WHERE v.visit_type = 'OUTPATIENT'
+                           AND c.status = 'PAID'
+                           AND c.paid_at >= :fromTs AND c.paid_at < :toTs
+                         GROUP BY 1
+                         ORDER BY amount DESC
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .query((rs, i) -> new MethodPaidTotal(
+                        rs.getString("method"), rs.getInt("charges"), rs.getBigDecimal("amount")))
+                .list();
     }
 
     public void insertCharge(Charge c) {

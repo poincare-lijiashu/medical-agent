@@ -227,6 +227,82 @@ public class RegistrationService {
     }
 
     /**
+     * 改约（G1）：把未接诊的就诊换到另一个号源。
+     *
+     * <p>为什么不能简单地"改 visit_date"：号源容量、医生排班、当日唯一就诊约束
+     * 三者都挂在号源上，直接改日期会凭空多出一个占号或漏掉释放。这里走
+     * "占新号（CAS）→ 改就诊（CAS）→ 释放旧号"的顺序，任一步失败整体回滚。
+     *
+     * <p>边界：
+     * <ul>
+     *   <li>只有 REGISTERED 可改约——已接诊/已结束要走退号重挂；</li>
+     *   <li>已开医嘱不允许改约：医嘱按就诊挂账，跨日改约会打乱执行与计费口径；</li>
+     *   <li>已收费不允许改约：需先退费（资金动作必须留下独立流水）；</li>
+     *   <li>不支持跨科室：挂号费与科室主数据绑定，跨科等于退号重挂。</li>
+     * </ul>
+     */
+    @Transactional
+    public Visit reschedule(UUID visitId, UUID newSlotId, String actor) {
+        Visit v = repo.lockVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        if (!Visit.REGISTERED.equals(v.status())) {
+            throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID,
+                    "只有未接诊（REGISTERED）的就诊可以改约，当前：" + v.status());
+        }
+        if (!repo.listOrders(visitId, null).isEmpty()) {
+            throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID,
+                    "该就诊已开立医嘱，请先退号再重新挂号");
+        }
+        if (repo.listCharges(visitId).stream().anyMatch(c -> Charge.PAID.equals(c.status()))) {
+            throw new BusinessException(ErrorCode.CHARGE_STATUS_INVALID,
+                    "该就诊已收费，请先退费再改约");
+        }
+
+        Slot target = repo.lockSlot(newSlotId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.REGISTRATION_NO_SLOT,
+                        "目标号源不存在或已撤销"));
+        if (!target.deptId().equals(v.deptId())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "不支持跨科室改约（挂号费与科室绑定），请先退号再重新挂号");
+        }
+        if (target.workDate().isBefore(BusinessTime.today())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能改约到过去的号源");
+        }
+        if (target.full()) {
+            throw new BusinessException(ErrorCode.REGISTRATION_NO_SLOT);
+        }
+        if (target.id().equals(v.slotId())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "目标号源与当前号源相同，无需改约");
+        }
+        // 目标日期不同才需要查"该日该科室是否已有在途就诊"；同日同科室就是本就诊自身
+        if (!target.workDate().equals(v.visitDate())) {
+            repo.findActiveVisit(v.patientId(), v.deptId(), target.workDate()).ifPresent(other -> {
+                if (!other.id().equals(v.id())) {
+                    throw new BusinessException(ErrorCode.REGISTRATION_DUPLICATED,
+                            "该患者目标日期该科室已有在途就诊：" + other.visitNo());
+                }
+            });
+        }
+
+        if (!repo.occupySlot(target.id(), target.version())) {
+            throw new BusinessException(ErrorCode.REGISTRATION_NO_SLOT);
+        }
+        if (!repo.updateVisitSlot(v.id(), target.id(), target.doctorId(), target.workDate(), v.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "就诊已被他人修改，请刷新后重试");
+        }
+        if (v.slotId() != null) {
+            repo.releaseSlot(v.slotId());
+        }
+        audit(actor, "VISIT_RESCHEDULE", "VISIT", visitId.toString(), Map.of(
+                "visitNo", v.visitNo(),
+                "fromSlot", v.slotId() == null ? "" : v.slotId().toString(),
+                "fromDoctor", v.doctorId(), "fromDate", v.visitDate().toString(),
+                "toSlot", target.id().toString(), "toDoctor", target.doctorId(),
+                "toDate", target.workDate().toString()));
+        return repo.findVisit(visitId).orElseThrow();
+    }
+
+    /**
      * 患者最近就诊列表（控制台选择就诊上下文用）。
      *
      * <p>只读；不含已退号记录。排序按就诊日期倒序，便于医师直接点选最近一次就诊。

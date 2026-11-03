@@ -179,4 +179,157 @@ class RegistrationServiceTest {
                 .isEqualTo(ErrorCode.VISIT_STATUS_INVALID);
         verify(repo, never()).updateVisitStatus(any(), any(), any(), any(Long.class));
     }
+
+    // ---------------------------------------------------------------- 改约（G1）
+
+    private Visit registeredVisit(UUID visitId, UUID slotId, String doctorId, LocalDate date) {
+        return new Visit(visitId, "V1", patientId, "P1", deptId, doctorId, slotId,
+                "OUTPATIENT", Visit.REGISTERED, date, 0L);
+    }
+
+    private Slot slot(UUID slotId, String doctorId, LocalDate date, int total, int booked) {
+        return new Slot(slotId, deptId, doctorId, date, "AM", total, booked, 0L);
+    }
+
+    @Test
+    @DisplayName("改约：占新号 → 改就诊 → 释放旧号")
+    void rescheduleMovesVisitAndReleasesOldSlot() {
+        UUID visitId = UUID.randomUUID();
+        UUID oldSlotId = UUID.randomUUID();
+        UUID newSlotId = UUID.randomUUID();
+        LocalDate from = LocalDate.now();
+        LocalDate to = from.plusDays(1);
+        Visit visit = registeredVisit(visitId, oldSlotId, "doctor01", from);
+        Slot target = slot(newSlotId, "doctor02", to, 10, 3);
+
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of());
+        when(repo.listCharges(visitId)).thenReturn(List.of());
+        when(repo.lockSlot(newSlotId)).thenReturn(Optional.of(target));
+        when(repo.findActiveVisit(patientId, deptId, to)).thenReturn(Optional.empty());
+        when(repo.occupySlot(newSlotId, 0L)).thenReturn(true);
+        when(repo.updateVisitSlot(visitId, newSlotId, "doctor02", to, 0L)).thenReturn(true);
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(
+                registeredVisit(visitId, newSlotId, "doctor02", to)));
+
+        Visit updated = service.reschedule(visitId, newSlotId, "clerk01");
+
+        assertThat(updated.slotId()).isEqualTo(newSlotId);
+        assertThat(updated.doctorId()).isEqualTo("doctor02");
+        assertThat(updated.visitDate()).isEqualTo(to);
+        verify(repo).occupySlot(newSlotId, 0L);
+        verify(repo).updateVisitSlot(visitId, newSlotId, "doctor02", to, 0L);
+        verify(repo).releaseSlot(oldSlotId);
+    }
+
+    @Test
+    @DisplayName("改约：已接诊拒绝")
+    void rescheduleRejectedWhenVisitStarted() {
+        UUID visitId = UUID.randomUUID();
+        Visit visit = new Visit(visitId, "V1", patientId, "P1", deptId, "doctor01",
+                UUID.randomUUID(), "OUTPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 0L);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit));
+
+        assertThatThrownBy(() -> service.reschedule(visitId, UUID.randomUUID(), "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VISIT_STATUS_INVALID);
+        verify(repo, never()).occupySlot(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("改约：已收费拒绝（必须先退费）")
+    void rescheduleRejectedWhenChargePaid() {
+        UUID visitId = UUID.randomUUID();
+        UUID newSlotId = UUID.randomUUID();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                registeredVisit(visitId, UUID.randomUUID(), "doctor01", LocalDate.now())));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of());
+        when(repo.listCharges(visitId)).thenReturn(List.of(new Charge(UUID.randomUUID(), "C1",
+                visitId, new BigDecimal("10.00"), Charge.PAID, "CASH", java.time.Instant.now(), 0L)));
+
+        assertThatThrownBy(() -> service.reschedule(visitId, newSlotId, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CHARGE_STATUS_INVALID);
+        verify(repo, never()).lockSlot(any());
+    }
+
+    @Test
+    @DisplayName("改约：跨科室拒绝")
+    void rescheduleRejectedAcrossDept() {
+        UUID visitId = UUID.randomUUID();
+        UUID newSlotId = UUID.randomUUID();
+        Slot otherDeptSlot = new Slot(newSlotId, UUID.randomUUID(), "doctor02",
+                LocalDate.now().plusDays(1), "AM", 10, 0, 0L);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                registeredVisit(visitId, UUID.randomUUID(), "doctor01", LocalDate.now())));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of());
+        when(repo.listCharges(visitId)).thenReturn(List.of());
+        when(repo.lockSlot(newSlotId)).thenReturn(Optional.of(otherDeptSlot));
+
+        assertThatThrownBy(() -> service.reschedule(visitId, newSlotId, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).occupySlot(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("改约：目标号源已满拒绝")
+    void rescheduleRejectedWhenTargetFull() {
+        UUID visitId = UUID.randomUUID();
+        UUID newSlotId = UUID.randomUUID();
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                registeredVisit(visitId, UUID.randomUUID(), "doctor01", LocalDate.now())));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of());
+        when(repo.listCharges(visitId)).thenReturn(List.of());
+        when(repo.lockSlot(newSlotId)).thenReturn(Optional.of(
+                slot(newSlotId, "doctor02", LocalDate.now().plusDays(1), 10, 10)));
+
+        assertThatThrownBy(() -> service.reschedule(visitId, newSlotId, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.REGISTRATION_NO_SLOT);
+        verify(repo, never()).occupySlot(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("改约：目标号源与当前相同 → 422（避免无意义写库）")
+    void rescheduleRejectedWhenSameSlot() {
+        UUID visitId = UUID.randomUUID();
+        UUID slotId = UUID.randomUUID();
+        LocalDate tomorrow = LocalDate.now().plusDays(1);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                registeredVisit(visitId, slotId, "doctor01", tomorrow)));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of());
+        when(repo.listCharges(visitId)).thenReturn(List.of());
+        when(repo.lockSlot(slotId)).thenReturn(Optional.of(slot(slotId, "doctor01", tomorrow, 10, 1)));
+
+        assertThatThrownBy(() -> service.reschedule(visitId, slotId, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("改约：目标日期该科室已有其他在途就诊 → 409")
+    void rescheduleRejectedWhenTargetDateAlreadyActive() {
+        UUID visitId = UUID.randomUUID();
+        UUID newSlotId = UUID.randomUUID();
+        LocalDate to = LocalDate.now().plusDays(1);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                registeredVisit(visitId, UUID.randomUUID(), "doctor01", LocalDate.now())));
+        when(repo.listOrders(visitId, null)).thenReturn(List.of());
+        when(repo.listCharges(visitId)).thenReturn(List.of());
+        when(repo.lockSlot(newSlotId)).thenReturn(Optional.of(slot(newSlotId, "doctor02", to, 10, 0)));
+        when(repo.findActiveVisit(patientId, deptId, to)).thenReturn(Optional.of(
+                registeredVisit(UUID.randomUUID(), UUID.randomUUID(), "doctor03", to)));
+
+        assertThatThrownBy(() -> service.reschedule(visitId, newSlotId, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.REGISTRATION_DUPLICATED);
+        verify(repo, never()).occupySlot(any(), anyLong());
+    }
 }

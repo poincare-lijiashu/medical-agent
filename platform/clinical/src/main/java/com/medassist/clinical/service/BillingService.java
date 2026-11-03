@@ -13,6 +13,7 @@ import com.medassist.clinical.web.ClinicalDtos.ChargeItemView;
 import com.medassist.clinical.web.ClinicalDtos.ChargeView;
 import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
 import com.medassist.clinical.web.ClinicalDtos.DailyReversalResult;
+import com.medassist.clinical.web.ClinicalDtos.OutpatientDailyView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.springframework.stereotype.Service;
@@ -347,6 +348,38 @@ public class BillingService {
                 "orderNo", order.orderNo(), "serviceDate", date.toString(),
                 "reversedAmount", daily.amount().toPlainString(), "reason", why));
         return new DailyReversalResult(orderId, date, daily.amount(), false, why);
+    }
+
+    // ---------------------------------------------------------------- 门诊日结（G1）
+
+    /**
+     * 门诊日结（分账）：当日已收笔数/金额，按科室与支付方式拆开。
+     *
+     * <p>口径（与财务对账一致）：按**收款时刻**归日，不按就诊日期——
+     * 昨天挂号、今天补缴的费用属于今天的现金流水。退费额单独列出、不与实收相抵，
+     * 否则"收了 100 又退 100"会显示为 0，掩盖当班发生过的资金动作。
+     *
+     * <p>只统计 {@code OUTPATIENT} 就诊：住院费用走预交金与中途结算，不进门诊日报。
+     */
+    public OutpatientDailyView outpatientDaily(LocalDate date) {
+        LocalDate day = date == null ? BusinessTime.today() : date;
+        if (day.isAfter(BusinessTime.today())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能对未来日期做日结");
+        }
+        var from = day.atStartOfDay(BusinessTime.zone()).toOffsetDateTime();
+        var to = day.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime();
+
+        var summary = repo.outpatientPaidSummary(from, to);
+        List<OutpatientDailyView.DeptTotal> byDept = repo.outpatientPaidByDept(from, to).stream()
+                .map(d -> new OutpatientDailyView.DeptTotal(d.deptId(), d.deptCode(), d.deptName(),
+                        d.visitCount(), d.amount()))
+                .toList();
+        List<OutpatientDailyView.MethodTotal> byMethod = repo.outpatientPaidByMethod(from, to).stream()
+                .map(m -> new OutpatientDailyView.MethodTotal(m.paymentMethod(), m.chargeCount(),
+                        m.amount()))
+                .toList();
+        return new OutpatientDailyView(day, summary.visitCount(), summary.paidChargeCount(),
+                summary.totalPaid(), summary.refundedAmount(), byDept, byMethod);
     }
 
     // ---------------------------------------------------------------- 内部

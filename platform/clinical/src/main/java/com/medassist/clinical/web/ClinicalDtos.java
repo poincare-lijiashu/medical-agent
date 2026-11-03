@@ -315,4 +315,33 @@ public final class ClinicalDtos {
                                         String correctedBy, java.time.Instant createdAt,
                                         BigDecimal reversedAmount, String billingHint) {
     }
+
+    // ---------------------------------------------------------------- 门诊改约 / 日结（G1）
+
+    /**
+     * 门诊改约：换到另一号源。
+     *
+     * <p>只接受目标号源 id：日期/医生/科室由号源决定，避免客户端传入互相矛盾的组合。
+     * 跨科室改约不支持（挂号费与科室主数据绑定），需要先退号再重新挂号。
+     */
+    public record RescheduleReq(@NotNull UUID slotId) {
+    }
+
+    /** 门诊日结（按科室/支付方式分账）。 */
+    public record OutpatientDailyView(
+            LocalDate date,
+            int visitCount,
+            int paidChargeCount,
+            BigDecimal totalPaid,
+            BigDecimal refundedAmount,
+            List<DeptTotal> byDept,
+            List<MethodTotal> byPaymentMethod) {
+
+        public record DeptTotal(UUID deptId, String deptCode, String deptName,
+                                int visitCount, BigDecimal amount) {
+        }
+
+        public record MethodTotal(String paymentMethod, int chargeCount, BigDecimal amount) {
+        }
+    }
 }
