@@ -11,6 +11,7 @@ import com.medassist.clinical.web.TheatreDtos.ScheduleReq;
 import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -95,9 +96,10 @@ public class TheatreController {
     public ApiResponse<SurgeryBoardView> boardAll(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate date,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.boardAll(date));
+        return ApiResponse.ok(PhiMask.board(service.boardAll(date), scope));
     }
 
     @GetMapping("/visits/{visitId}/surgery-cases/{caseId}/schedule")

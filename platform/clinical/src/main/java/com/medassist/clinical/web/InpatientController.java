@@ -137,7 +137,9 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         guard.requireWard(scope, wardId);
-        return ApiResponse.ok(service.listByWard(wardId, status));
+        return ApiResponse.ok(service.listByWard(wardId, status).stream()
+                .map(a -> PhiMask.admission(a, scope))
+                .toList());
     }
 
     @PostMapping("/inpatient/admissions")
@@ -148,7 +150,7 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, ADMIT);
         guard.requireWard(scope, req.wardId());
-        return ApiResponse.ok(service.admit(req, actor));
+        return ApiResponse.ok(PhiMask.admission(service.admit(req, actor), scope));
     }
 
     @GetMapping("/inpatient/admissions/{id}")
@@ -158,7 +160,7 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         guard.requireAdmission(scope, id);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(PhiMask.admission(service.detail(id), scope));
     }
 
     @PostMapping("/inpatient/admissions/{id}/bed")
@@ -170,7 +172,7 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, BED_ASSIGN);
         guard.requireAdmission(scope, id);
-        return ApiResponse.ok(service.assignBed(id, req, actor));
+        return ApiResponse.ok(PhiMask.admission(service.assignBed(id, req, actor), scope));
     }
 
     @PostMapping("/inpatient/admissions/{id}/discharge")
@@ -181,7 +183,7 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, DISCHARGE);
         guard.requireAdmission(scope, id);
-        return ApiResponse.ok(service.discharge(id, actor));
+        return ApiResponse.ok(PhiMask.admission(service.discharge(id, actor), scope));
     }
 
     /** 缴纳预交金。 */
@@ -232,7 +234,7 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, FINANCE_READ);
         guard.requireAdmission(scope, id);
-        return ApiResponse.ok(financeService.finance(id, actor));
+        return ApiResponse.ok(PhiMask.finance(financeService.finance(id, actor), scope));
     }
 
     /**
@@ -256,7 +258,9 @@ public class InpatientController {
         if (wardId != null) {
             guard.requireWard(scope, wardId);
         }
-        return ApiResponse.ok(financeService.alerts(wardId, actor));
+        return ApiResponse.ok(financeService.alerts(wardId, actor).stream()
+                .map(a -> PhiMask.alert(a, scope))
+                .toList());
     }
 
     // ---------------------------------------------------------------- 护理执行记录

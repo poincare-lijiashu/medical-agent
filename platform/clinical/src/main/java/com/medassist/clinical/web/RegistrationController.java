@@ -77,7 +77,7 @@ public class RegistrationController {
         if (!scope.canSeeDepartment(req.deptId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "只能为本科室挂号");
         }
-        return ApiResponse.ok(service.register(req, actor));
+        return ApiResponse.ok(PhiMask.visit(service.register(req, actor), scope));
     }
 
     /**
@@ -95,6 +95,7 @@ public class RegistrationController {
         Permissions.require(permissions, VISIT_READ);
         return ApiResponse.ok(service.listByPatient(patientId, limit).stream()
                 .filter(v -> scope.canSeeDepartment(v.deptId()))
+                .map(v -> PhiMask.visit(v, scope))
                 .toList());
     }
 
@@ -105,7 +106,7 @@ public class RegistrationController {
             DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
         guard.require(scope, id);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(PhiMask.visit(service.detail(id), scope));
     }
 
     @PostMapping("/visits/{id}/start")
@@ -116,7 +117,7 @@ public class RegistrationController {
             DataScope scope) {
         Permissions.require(permissions, VISIT_TREAT);
         guard.require(scope, id);
-        return ApiResponse.ok(service.start(id, actor));
+        return ApiResponse.ok(PhiMask.visit(service.start(id, actor), scope));
     }
 
     @PostMapping("/visits/{id}/finish")
@@ -127,7 +128,7 @@ public class RegistrationController {
             DataScope scope) {
         Permissions.require(permissions, VISIT_TREAT);
         guard.require(scope, id);
-        return ApiResponse.ok(service.finish(id, actor));
+        return ApiResponse.ok(PhiMask.visit(service.finish(id, actor), scope));
     }
 
     @PostMapping("/visits/{id}/cancel")
@@ -138,6 +139,6 @@ public class RegistrationController {
             DataScope scope) {
         Permissions.require(permissions, REG_CANCEL);
         guard.require(scope, id);
-        return ApiResponse.ok(service.cancel(id, actor));
+        return ApiResponse.ok(PhiMask.visit(service.cancel(id, actor), scope));
     }
 }
