@@ -1071,3 +1071,73 @@ export interface AuditEvent {
   targetId: string | null
   detail: string | null
 }
+
+// ---------------------------------------------------------------- 医保目录与报盘
+
+/** 医保目录项：A 甲类 / B 乙类（先自付 selfPayRatio）/ C 丙类（全自费）。 */
+export interface InsuranceItem {
+  id: string
+  insuranceCode: string
+  name: string
+  category: 'DRUG' | 'SERVICE' | 'MATERIAL' | 'DIAGNOSIS'
+  payCategory: 'A' | 'B' | 'C'
+  selfPayRatio: number | null
+  priceLimit: number | null
+  enabled: boolean
+  version: number
+}
+
+/** 院内收费项目 → 医保目录映射。 */
+export interface ChargeMapping {
+  id: string
+  chargeItemCode: string
+  insuranceCode: string
+  enabled: boolean
+  version: number
+}
+
+/** 目录文件导入的单条变更。 */
+export interface InsuranceCatalogChange {
+  insuranceCode: string
+  action: 'CREATE' | 'UPDATE'
+  fields: string[]
+}
+
+/** 目录文件导入结果（preview 与 apply 共用）。 */
+export interface InsuranceCatalogImportResult {
+  mode: string
+  fileName: string | null
+  sha256: string
+  total: number
+  created: number
+  updated: number
+  unchanged: number
+  missingInFile: number
+  changesTruncated: boolean
+  changes: InsuranceCatalogChange[]
+  warnings: string[]
+}
+
+/** 报盘批次摘要（不含 XML 报文本身）。 */
+export interface InsuranceExportBatch {
+  id: string
+  batchNo: string
+  periodFrom: string
+  periodTo: string
+  billCount: number
+  totalAmount: number
+  insuranceAmount: number
+  selfPayAmount: number
+  payloadHash: string
+  status: 'GENERATED' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED'
+  receiptNo: string | null
+  receiptAt: string | null
+  receiptMessage: string | null
+  cancelledReason: string | null
+  cancelledAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+  excludedAlreadyExported: number
+  remainingPending: number
+}

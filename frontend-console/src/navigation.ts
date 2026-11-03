@@ -111,6 +111,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['insurance:settlement:read'],
   },
   {
+    name: 'insurance-ops',
+    path: '/insurance-ops',
+    title: '医保目录与报盘',
+    hint: '医保目录与院内映射 · 报盘批次/回执/撤销/报文下载',
+    icon: 'archive',
+    group: '医保结算',
+    permissions: ['insurance:settlement:read'],
+  },
+  {
     name: 'homepage-qc',
     path: '/homepage-qc',
     title: '病案首页质控',

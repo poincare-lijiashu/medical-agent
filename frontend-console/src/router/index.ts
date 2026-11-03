@@ -39,6 +39,11 @@ const router = createRouter({
         { path: 'pharmacy', name: 'pharmacy', component: () => import('@/views/PharmacyView.vue') },
         { path: 'insurance', name: 'insurance', component: () => import('@/views/InsuranceView.vue') },
         {
+          path: 'insurance-ops',
+          name: 'insurance-ops',
+          component: () => import('@/views/InsuranceOpsView.vue'),
+        },
+        {
           path: 'homepage-qc',
           name: 'homepage-qc',
           component: () => import('@/views/HomepageQcView.vue'),

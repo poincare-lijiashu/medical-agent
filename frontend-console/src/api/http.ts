@@ -168,6 +168,68 @@ export function request<T>(path: string, opts: RequestOptions = {}): Promise<T> 
   return once<T>(path, opts)
 }
 
+/** multipart 上传：浏览器自动带 boundary，不手工设置 Content-Type。 */
+export async function upload<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
+
+  let res: Response
+  try {
+    res = await fetch(BASE + path, { method: 'POST', headers, body: form })
+  } catch {
+    throw new ApiError('网络异常，请检查与服务器的连接后重试', -1, 0)
+  }
+  const text = await res.text()
+  let env: ApiEnvelope<T> | null = null
+  if (text) {
+    try {
+      env = JSON.parse(text) as ApiEnvelope<T>
+    } catch {
+      env = null
+    }
+  }
+  if (!res.ok || !env || env.code !== 0) {
+    throw new ApiError(
+      env?.message || `请求失败（HTTP ${res.status}）`,
+      env?.code ?? res.status,
+      res.status,
+      env?.traceId,
+    )
+  }
+  return env.data
+}
+
+/** 二进制下载（报盘 XML 等非 JSON 响应）：返回 Blob，由调用方触发保存。 */
+export async function download(path: string, query?: RequestOptions['query']): Promise<Blob> {
+  const headers: Record<string, string> = {}
+  if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
+
+  let res: Response
+  try {
+    res = await fetch(buildUrl(path, query), { headers })
+  } catch {
+    throw new ApiError('网络异常，请检查与服务器的连接后重试', -1, 0)
+  }
+  if (!res.ok) {
+    const text = await res.text()
+    let env: ApiEnvelope<unknown> | null = null
+    if (text) {
+      try {
+        env = JSON.parse(text) as ApiEnvelope<unknown>
+      } catch {
+        env = null
+      }
+    }
+    throw new ApiError(
+      env?.message || `下载失败（HTTP ${res.status}）`,
+      env?.code ?? res.status,
+      res.status,
+      env?.traceId,
+    )
+  }
+  return res.blob()
+}
+
 export function get<T>(path: string, query?: RequestOptions['query'], signal?: AbortSignal) {
   return request<T>(path, { query, signal })
 }

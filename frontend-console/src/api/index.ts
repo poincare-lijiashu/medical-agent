@@ -1,4 +1,4 @@
-import { get, post, put, request } from './http'
+import { download, get, post, put, request, upload } from './http'
 import type {
   AdmissionView,
   Bed,
@@ -18,9 +18,13 @@ import type {
   InpatientFinanceView,
   InsuranceBill,
   InsuranceBillView,
+  InsuranceCatalogImportResult,
+  InsuranceExportBatch,
+  InsuranceItem,
   InsuranceMember,
   InsuranceMemberHistory,
   InsuranceReconcile,
+  ChargeMapping,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -333,6 +337,50 @@ export const insuranceApi = {
     effectiveTo?: string
     status?: string
   }) => post<InsuranceMember>('/insurance/members', body),
+}
+
+export const insuranceOpsApi = {
+  items: (params: { category?: string; enabled?: boolean; q?: string; limit?: number }) =>
+    get<InsuranceItem[]>('/insurance/items', params),
+  createItem: (body: {
+    insuranceCode: string
+    name: string
+    category: string
+    payCategory: string
+    selfPayRatio?: number
+    priceLimit?: number
+    enabled?: boolean
+  }) => post<InsuranceItem>('/insurance/items', body),
+  toggleItem: (id: string, enabled: boolean, version: number) =>
+    put<InsuranceItem>(`/insurance/items/${id}/enabled`, { enabled, version }),
+  /** 目录文件导入：preview 只比对，apply 落库。 */
+  importCatalogFile: (file: File, mode: 'preview' | 'apply') => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('mode', mode)
+    return upload<InsuranceCatalogImportResult>('/insurance/items/import-file', form)
+  },
+  mappings: (q?: string, limit = 200) =>
+    get<ChargeMapping[]>('/insurance/mappings', { q, limit }),
+  upsertMapping: (chargeItemCode: string, body: { insuranceCode: string; enabled?: boolean }) =>
+    put<ChargeMapping>(`/insurance/mappings/${encodeURIComponent(chargeItemCode)}`, body),
+  exportBatches: (limit = 100) =>
+    get<InsuranceExportBatch[]>('/insurance/export-batches', { limit }),
+  /** 生成报盘批次（期间内尚未报盘的已确认清单）。 */
+  createExportBatch: (from: string, to: string) =>
+    request<InsuranceExportBatch>('/insurance/export-batches', {
+      method: 'POST',
+      query: { from, to },
+    }),
+  registerExportReceipt: (
+    id: string,
+    body: { status: 'ACCEPTED' | 'REJECTED'; receiptNo: string; message?: string },
+  ) => post<InsuranceExportBatch>(`/insurance/export-batches/${id}/receipt`, body),
+  cancelExportBatch: (id: string, reason: string) =>
+    post<InsuranceExportBatch>(`/insurance/export-batches/${id}/cancel`, { reason }),
+  /** 报盘 XML 原样下载（含批量 PHI，需 insurance:export:download）。 */
+  downloadExportPayload: (id: string) =>
+    download(`/insurance/export-batches/${id}/payload`),
 }
 
 export const systemApi = {
