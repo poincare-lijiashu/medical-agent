@@ -88,8 +88,20 @@ public class JwtTokenService {
         this.decoder = nimbus;
     }
 
-    /** 为账号签发访问令牌（roles/permissions 为签发时刻快照，网关按此注入身份头）。 */
+    /** 为账号签发访问令牌（roles/permissions/depts 为签发时刻快照，网关按此注入身份头）。 */
     public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions) {
+        return issue(user, roles, permissions, List.of());
+    }
+
+    /**
+     * 为账号签发访问令牌，并携带多科室执业范围。
+     *
+     * <p>{@code depts} 是临床科室 UUID 列表：网关把它拼成逗号分隔的 {@code X-Org}，
+     * 下游 {@code DataScopeResolver} 解析成科室集合。没有绑定时不下发该声明，
+     * 由网关回退到主科室编码（旧令牌/旧账号保持原行为）。
+     */
+    public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
+                             List<UUID> deptIds) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = now.plus(props.ttl());
         String tokenId = UUID.randomUUID().toString();
@@ -104,6 +116,9 @@ public class JwtTokenService {
                 .claim("name", user.displayName())
                 .claim("roles", roles)
                 .claim("permissions", permissions);
+        if (deptIds != null && !deptIds.isEmpty()) {
+            claims.claim("depts", deptIds.stream().map(UUID::toString).toList());
+        }
         if (user.orgCode() != null && !user.orgCode().isBlank()) {
             claims.claim("org", user.orgCode());
         }
@@ -127,12 +142,14 @@ public class JwtTokenService {
             Jwt jwt = decoder.decode(token);
             List<String> roles = jwt.getClaimAsStringList("roles");
             List<String> permissions = jwt.getClaimAsStringList("permissions");
+            List<String> deptIds = jwt.getClaimAsStringList("depts");
             return Optional.of(new TokenClaims(
                     jwt.getSubject(),
                     jwt.getClaimAsString("username"),
                     jwt.getClaimAsString("name"),
                     roles == null ? List.of() : roles,
                     permissions == null ? List.of() : permissions,
+                    deptIds == null ? List.of() : deptIds,
                     jwt.getClaimAsString("org"),
                     jwt.getIssuedAt(),
                     jwt.getExpiresAt(),
@@ -154,7 +171,7 @@ public class JwtTokenService {
 
     /** 校验结果（令牌声明快照）。 */
     public record TokenClaims(String userId, String username, String displayName, List<String> roles,
-                              List<String> permissions, String orgCode, Instant issuedAt,
-                              Instant expiresAt, String tokenId) {
+                              List<String> permissions, List<String> deptIds, String orgCode,
+                              Instant issuedAt, Instant expiresAt, String tokenId) {
     }
 }

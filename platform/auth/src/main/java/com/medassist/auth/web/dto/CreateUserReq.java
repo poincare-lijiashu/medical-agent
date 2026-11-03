@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
+import java.util.UUID;
 
 /** 新建账号请求。 */
 public record CreateUserReq(
@@ -24,6 +25,10 @@ public record CreateUserReq(
 
         @Size(max = 32, message = "科室编码长度不能超过 32")
         String orgCode,
+
+        /** 临床科室 UUID 列表（多科室执业）；医师/护士至少绑定一个。 */
+        @Size(max = 20, message = "一个账号最多绑定 20 个科室")
+        List<UUID> deptIds,
 
         List<String> roles
 ) {

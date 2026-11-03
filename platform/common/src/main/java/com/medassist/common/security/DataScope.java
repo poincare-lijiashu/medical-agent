@@ -54,6 +54,16 @@ public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartment
         return new DataScope(actor, Set.of(deptId), false, phiReadable);
     }
 
+    /**
+     * 多科室可见（多科室执业）。
+     *
+     * <p>科室集合为空时由构造器按 fail-closed 拒绝：宁可让配置缺陷暴露成一次 403，
+     * 也不能把它退化成"全院可见"。
+     */
+    public static DataScope ofDepartments(String actor, Set<UUID> deptIds, boolean phiReadable) {
+        return new DataScope(actor, deptIds, false, phiReadable);
+    }
+
     /** 角色是否属于"必须跨科室"的一类。 */
     public static boolean isAllDepartmentRole(String role) {
         return role != null && ALL_DEPARTMENT_ROLES.contains(role.trim().toUpperCase());

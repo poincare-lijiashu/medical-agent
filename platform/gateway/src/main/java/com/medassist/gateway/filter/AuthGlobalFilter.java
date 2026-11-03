@@ -136,7 +136,12 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
 
         List<String> roles = jwt.getClaimAsStringList("roles");
         List<String> permissions = jwt.getClaimAsStringList("permissions");
-        String org = jwt.getClaimAsString("org");
+        // 多科室执业：depts 是临床科室 UUID 列表，拼成逗号分隔的 X-Org（下游按集合解析）。
+        // 没有 depts 声明的旧令牌回退到 org 声明，保持"单科室"的原行为。
+        List<String> depts = jwt.getClaimAsStringList("depts");
+        String org = (depts != null && !depts.isEmpty())
+                ? String.join(",", depts)
+                : jwt.getClaimAsString("org");
         ServerHttpRequest withIdentity = cleaned.getRequest().mutate()
                 .header(AuthHeaders.ACTOR, actor)
                 .header(AuthHeaders.USER_ID, subject)

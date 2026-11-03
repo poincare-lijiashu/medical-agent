@@ -19,6 +19,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class GatewayRouteConfigTest {
 
+    /** {@code ${ENV:30000}} 形态的占位符：取冒号后的默认值参与校验。 */
+    private static final java.util.regex.Pattern PLACEHOLDER =
+            java.util.regex.Pattern.compile("\\$\\{[^:}]+:(\\d+)}");
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> loadConfig() {
         try (InputStream in = getClass().getResourceAsStream("/application.yml")) {
@@ -66,13 +70,29 @@ class GatewayRouteConfigTest {
             Map<String, Object> metadata = (Map<String, Object>) r.get("metadata");
             assertThat(metadata.get("response-timeout"))
                     .as("路由 %s 缺少 response-timeout", r.get("id")).isNotNull();
-            assertThat(((Number) metadata.get("response-timeout")).longValue())
+            assertThat(asMillis(metadata.get("response-timeout")))
                     .as("路由 %s 的 response-timeout 必须在 1s~120s", r.get("id"))
                     .isBetween(1_000L, 120_000L);
-            assertThat(((Number) metadata.get("connect-timeout")).longValue())
+            assertThat(asMillis(metadata.get("connect-timeout")))
                     .as("路由 %s 的 connect-timeout 必须在 0.5s~10s", r.get("id"))
                     .isBetween(500L, 10_000L);
         }
+    }
+
+    /**
+     * 配置里的超时可能是 {@code ${ENV:30000}} 占位符（YAML 层是 String，Spring 绑定后才变 Integer）。
+     * 测试直接强转 Number 会 ClassCastException，因此要同时支持字面量与占位符默认值。
+     */
+    private static long asMillis(Object raw) {
+        if (raw instanceof Number number) {
+            return number.longValue();
+        }
+        String text = String.valueOf(raw).trim();
+        java.util.regex.Matcher matcher = PLACEHOLDER.matcher(text);
+        if (matcher.matches()) {
+            text = matcher.group(1);
+        }
+        return Long.parseLong(text);
     }
 
     @Test

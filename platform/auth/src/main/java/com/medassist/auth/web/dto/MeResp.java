@@ -16,6 +16,7 @@ public record MeResp(
         String displayName,
         String employeeNo,
         String orgCode,
+        List<UUID> deptIds,
         List<String> roles,
         List<String> permissions,
         Instant lastLoginAt

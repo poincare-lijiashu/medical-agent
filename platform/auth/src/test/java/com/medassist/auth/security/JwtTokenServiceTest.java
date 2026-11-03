@@ -28,8 +28,12 @@ class JwtTokenServiceTest {
     @Test
     void issueAndVerifyRoundTrip() {
         JwtTokenService service = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
+        List<UUID> depts = List.of(
+                UUID.fromString("aaaaaaaa-1111-2222-3333-444444444444"),
+                UUID.fromString("bbbbbbbb-1111-2222-3333-444444444444"));
 
-        JwtTokenService.IssuedToken issued = service.issue(USER, List.of("DOCTOR", "NURSE"), PERMISSIONS);
+        JwtTokenService.IssuedToken issued = service.issue(
+                USER, List.of("DOCTOR", "NURSE"), PERMISSIONS, depts);
 
         assertThat(issued.token()).isNotBlank();
         assertThat(issued.expiresInSeconds()).isBetween(8 * 3600 - 5L, 8 * 3600L);
@@ -40,8 +44,20 @@ class JwtTokenServiceTest {
         assertThat(claims.displayName()).isEqualTo("张三");
         assertThat(claims.roles()).containsExactly("DOCTOR", "NURSE");
         assertThat(claims.permissions()).containsExactlyElementsOf(PERMISSIONS);
+        assertThat(claims.deptIds()).containsExactlyElementsOf(
+                depts.stream().map(UUID::toString).toList());
         assertThat(claims.orgCode()).isEqualTo("DEPT-01");
         assertThat(claims.tokenId()).isEqualTo(issued.tokenId());
+    }
+
+    @Test
+    void issueWithoutDepartmentsOmitsClaim() {
+        JwtTokenService service = new JwtTokenService(props(ISSUER, SECRET, Duration.ofHours(8)));
+
+        // 旧调用路径（无科室列表）不能凭空产生 depts 声明：
+        // 网关要靠"没有 depts"判断是否回退到单科室 org 声明。
+        String token = service.issue(USER, List.of("ADMIN"), PERMISSIONS).token();
+        assertThat(service.verify(token).orElseThrow().deptIds()).isEmpty();
     }
 
     @Test

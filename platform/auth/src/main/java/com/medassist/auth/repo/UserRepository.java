@@ -192,6 +192,32 @@ public class UserRepository {
                 .update();
     }
 
+    /**
+     * 账号绑定的临床科室（多科室执业）。
+     *
+     * <p>按绑定时间排序：签发令牌时第一个作为"主科室"用于兼容只认单值的旧服务。
+     */
+    public List<UUID> deptIdsOf(UUID userId) {
+        return jdbc.sql("""
+                        SELECT dept_id FROM auth_svc.user_dept
+                         WHERE user_id = ? ORDER BY created_at, dept_id
+                        """)
+                .param(userId)
+                .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .list();
+    }
+
+    /** 全量替换科室绑定（先删后插，单事务由调用方保证）。 */
+    public void replaceDepts(UUID userId, Collection<UUID> deptIds) {
+        jdbc.sql("DELETE FROM auth_svc.user_dept WHERE user_id = ?").param(userId).update();
+        for (UUID deptId : deptIds) {
+            jdbc.sql("INSERT INTO auth_svc.user_dept (user_id, dept_id) VALUES (?, ?)")
+                    .param(userId)
+                    .param(deptId)
+                    .update();
+        }
+    }
+
     public List<String> rolesOf(UUID userId) {
         return jdbc.sql("""
                         SELECT role_code FROM auth_svc.user_role

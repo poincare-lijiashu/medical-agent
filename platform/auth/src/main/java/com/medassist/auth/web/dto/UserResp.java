@@ -11,6 +11,7 @@ public record UserResp(
         String displayName,
         String employeeNo,
         String orgCode,
+        List<UUID> deptIds,
         String status,
         List<String> roles,
         long version,

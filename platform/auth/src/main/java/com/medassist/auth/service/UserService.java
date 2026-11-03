@@ -40,6 +40,12 @@ public class UserService {
 
     private static final String ADMIN_ROLE = "ADMIN";
 
+    /** 单账号最多绑定的临床科室数（防止把"全院"用科室列表拼出来）。 */
+    private static final int MAX_DEPTS_PER_USER = 20;
+
+    /** 必须绑定科室才能工作的临床角色：它们的行级权限完全由科室集合决定。 */
+    private static final Set<String> CLINICAL_ROLES = Set.of("DOCTOR", "NURSE");
+
     private final UserRepository users;
     private final RbacRepository rbac;
     private final ObjectMapper objectMapper;
@@ -62,6 +68,8 @@ public class UserService {
         validatePassword(req.password(), username);
 
         Set<String> roles = normalizeRoles(req.roles());
+        List<UUID> deptIds = normalizeDeptIds(req.deptIds());
+        requireDeptBinding(roles, deptIds);
         String orgCode = blankToNull(req.orgCode());
         if (orgCode != null && !rbac.orgExists(orgCode)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "科室不存在或已停用：" + orgCode);
@@ -72,9 +80,11 @@ public class UserService {
                 req.displayName().trim(), blankToNull(req.employeeNo()), orgCode,
                 UserAccount.STATUS_ACTIVE, 0L, null, null, null));
         users.replaceRoles(id, roles);
+        users.replaceDepts(id, deptIds);
 
         audit(actor, "USER_CREATE", id.toString(), Map.of(
-                "username", username, "roles", roles, "orgCode", orgCode == null ? "" : orgCode));
+                "username", username, "roles", roles, "deptIds", deptIds,
+                "orgCode", orgCode == null ? "" : orgCode));
         return detail(id);
     }
 
@@ -103,14 +113,23 @@ public class UserService {
         if (orgCode != null && !rbac.orgExists(orgCode)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "科室不存在或已停用：" + orgCode);
         }
+        // null 表示"本次不改科室绑定"；空数组表示清空（临床角色会在下面被拒绝）
+        List<UUID> deptIds = req.deptIds() == null ? null : normalizeDeptIds(req.deptIds());
+        if (deptIds != null) {
+            requireDeptBinding(new LinkedHashSet<>(users.rolesOf(id)), deptIds);
+        }
         boolean ok = users.updateProfile(id, req.displayName().trim(),
                 blankToNull(req.employeeNo()), orgCode, req.version());
         if (!ok) {
             throw new BusinessException(ErrorCode.CONFLICT);
         }
+        if (deptIds != null) {
+            users.replaceDepts(id, deptIds);
+        }
         audit(actor, "USER_UPDATE", id.toString(), Map.of(
                 "username", current.username(),
                 "fromVersion", current.version(),
+                "deptIds", deptIds == null ? "(unchanged)" : deptIds,
                 "orgCode", orgCode == null ? "" : orgCode));
         return detail(id);
     }
@@ -219,9 +238,41 @@ public class UserService {
         return users.countActiveByRole(ADMIN_ROLE);
     }
 
+    /** 科室列表归一化：去空、去重保序、限制上限。 */
+    private List<UUID> normalizeDeptIds(List<UUID> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> unique = new LinkedHashSet<>();
+        for (UUID id : raw) {
+            if (id != null) {
+                unique.add(id);
+            }
+        }
+        if (unique.size() > MAX_DEPTS_PER_USER) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "一个账号最多绑定 " + MAX_DEPTS_PER_USER + " 个科室");
+        }
+        return List.copyOf(unique);
+    }
+
+    /**
+     * 临床角色必须绑定科室。
+     *
+     * <p>医师/护士的行级权限完全由科室集合决定：不绑定科室登录后每个请求都会 403。
+     * 在开户/改资料时拦住，比让人登录后处处报错更容易排查。
+     */
+    private void requireDeptBinding(Set<String> roles, List<UUID> deptIds) {
+        boolean clinical = roles.stream().anyMatch(CLINICAL_ROLES::contains);
+        if (clinical && deptIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "医师/护士账号至少需要绑定一个临床科室");
+        }
+    }
+
     private UserResp toResp(UserAccount u) {
         return new UserResp(u.id(), u.username(), u.displayName(), u.employeeNo(),
-                u.orgCode(), u.status(), users.rolesOf(u.id()), u.version(),
+                u.orgCode(), users.deptIdsOf(u.id()), u.status(), users.rolesOf(u.id()), u.version(),
                 u.lastLoginAt(), u.createdAt());
     }
 

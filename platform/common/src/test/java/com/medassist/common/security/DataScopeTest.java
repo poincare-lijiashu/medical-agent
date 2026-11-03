@@ -64,6 +64,38 @@ class DataScopeTest {
     }
 
     @Test
+    @DisplayName("多科室执业：绑定的科室都可见，未绑定的不可见")
+    void doctorSeesAllBoundDepartments() {
+        UUID deptC = UUID.randomUUID();
+        DataScope scope = DataScopeResolver.resolve("doctor01", "DOCTOR",
+                "clinical:visit:read", deptA + "," + deptB);
+
+        assertThat(scope.deptCodes()).containsExactlyInAnyOrder(deptA, deptB);
+        assertThat(scope.canSeeDepartment(deptA)).isTrue();
+        assertThat(scope.canSeeDepartment(deptB)).isTrue();
+        assertThat(scope.canSeeDepartment(deptC)).isFalse();
+        assertThat(scope.allDepartments()).isFalse();
+    }
+
+    @Test
+    @DisplayName("科室列表含非法值 → 整体 403（不部分放行）")
+    void departmentListWithInvalidValueIsRejected() {
+        assertThatThrownBy(() ->
+                DataScopeResolver.resolve("doctor01", "DOCTOR", "", deptA + ",D013"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+    }
+
+    @Test
+    @DisplayName("科室列表只有分隔符/空白 → 403")
+    void departmentListWithOnlySeparatorsIsRejected() {
+        assertThatThrownBy(() ->
+                DataScopeResolver.resolve("doctor01", "DOCTOR", "", " , "))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.FORBIDDEN));
+    }
+
+    @Test
     @DisplayName("旧令牌无角色声明 → 403 并提示重新登录")
     void missingRolesIsRejected() {
         assertThatThrownBy(() ->

@@ -129,19 +129,20 @@ public class AuthService {
         }
 
         List<String> permissions = rbac.permissionsOfUser(user.id());
+        List<UUID> deptIds = users.deptIdsOf(user.id());
         // 历史 PBKDF2 哈希在线升级为 BCrypt：登录成功后一次性重写，失败不影响本次登录
         upgradeLegacyHash(user, req.password());
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions);
+        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds);
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
         users.touchLogin(user.id());
         throttle.record(username, clientIp, true);
         countLogin("success", "none");
         audit(user.username(), "LOGIN_SUCCESS", user.id().toString(),
-                Map.of("roles", roles, "tokenId", access.tokenId(), "ip", clientIp));
+                Map.of("roles", roles, "deptIds", deptIds, "tokenId", access.tokenId(), "ip", clientIp));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), roles, permissions, user.lastLoginAt());
+                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -174,13 +175,13 @@ public class AuthService {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "刷新令牌已失效，请重新登录");
         }
 
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions);
+        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, users.deptIdsOf(user.id()));
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, record.id());
         audit(user.username(), "REFRESH_SUCCESS", user.id().toString(),
                 Map.of("tokenId", access.tokenId(), "rotatedFrom", record.id().toString()));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), roles, permissions, user.lastLoginAt());
+                user.orgCode(), users.deptIdsOf(user.id()), roles, permissions, user.lastLoginAt());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -215,8 +216,8 @@ public class AuthService {
             throw new BusinessException(ErrorCode.FORBIDDEN, "账号已停用或锁定，请联系管理员");
         }
         return new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), users.rolesOf(user.id()), rbac.permissionsOfUser(user.id()),
-                user.lastLoginAt());
+                user.orgCode(), users.deptIdsOf(user.id()), users.rolesOf(user.id()),
+                rbac.permissionsOfUser(user.id()), user.lastLoginAt());
     }
 
     /**
@@ -250,7 +251,7 @@ public class AuthService {
     public VerifyResp verify(String token) {
         return jwt.verify(token)
                 .map(c -> new VerifyResp(true, c.userId(), c.username(), c.roles(), c.permissions(),
-                        c.orgCode(), c.issuedAt(), c.expiresAt()))
+                        c.deptIds(), c.orgCode(), c.issuedAt(), c.expiresAt()))
                 .orElseGet(VerifyResp::invalid);
     }
 

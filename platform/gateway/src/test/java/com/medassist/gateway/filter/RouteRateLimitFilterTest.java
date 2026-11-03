@@ -37,7 +37,8 @@ class RouteRateLimitFilterTest {
     private static GatewayFlowRuleProperties props() {
         return new GatewayFlowRuleProperties(true, List.of(
                 new GatewayFlowRuleProperties.FlowRuleSpec("/api/v2/auth", 0),
-                new GatewayFlowRuleProperties.FlowRuleSpec("/api/v2/empi", 1000)));
+                new GatewayFlowRuleProperties.FlowRuleSpec("/api/v2/empi", 1000)),
+                List.of());
     }
 
     private static void loadRules() {
