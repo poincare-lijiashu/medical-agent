@@ -881,6 +881,48 @@ export interface StockTakeDetail {
   summary: StockTakeSummary
 }
 
+// ---------------------------------------------------------------- 药品报损（G7）
+
+export type StockLossStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED'
+export type StockLossReason = 'EXPIRED' | 'BROKEN' | 'RECALL' | 'OTHER'
+
+/** 报损单（提交即锁定明细，审批人 ≠ 申请人）。 */
+export interface StockLoss {
+  id: string
+  lossNo: string
+  status: StockLossStatus
+  reasonCategory: StockLossReason
+  note: string | null
+  createdBy: string
+  reviewedBy: string | null
+  reviewedAt: string | null
+  reviewNote: string | null
+  version: number
+  createdAt: string
+}
+
+/** 报损明细（一行 = 一个批次）。 */
+export interface StockLossItem {
+  id: string
+  lossId: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  reason: string | null
+}
+
+export interface StockLossView {
+  loss: StockLoss
+  items: StockLossItem[]
+  adjustments: StockAdjustment[]
+}
+
 // ---------------------------------------------------------------- 物资耗材（G3）
 
 export type ConsumableCategory = 'GENERAL' | 'HIGH_VALUE' | 'IMPLANT'

@@ -27,9 +27,11 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  NARCOTIC_PRESCRIBER_NOT_FOUND,
                  SUPPLIER_NOT_FOUND, PURCHASE_ORDER_NOT_FOUND, PURCHASE_ITEM_NOT_FOUND,
                  GOODS_RECEIPT_NOT_FOUND, STOCK_TAKE_NOT_FOUND,
-                 STOCK_TAKE_ITEM_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 STOCK_TAKE_ITEM_NOT_FOUND, STOCK_LOSS_NOT_FOUND,
+                 STOCK_LOSS_BATCH_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
-            case FORBIDDEN, STOCK_TAKE_SELF_APPROVAL -> HttpStatus.FORBIDDEN;
+            case FORBIDDEN, STOCK_TAKE_SELF_APPROVAL,
+                 STOCK_LOSS_SELF_REVIEW -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
                  PRESCRIPTION_STATUS_INVALID,
@@ -38,7 +40,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  SUPPLIER_INACTIVE, SUPPLIER_LICENSE_EXPIRED,
                  PURCHASE_ORDER_STATUS_INVALID,
                  STOCK_TAKE_STATUS_INVALID, STOCK_TAKE_ACTIVE_EXISTS,
-                 STOCK_TAKE_STOCK_DRIFT -> HttpStatus.CONFLICT;
+                 STOCK_TAKE_STOCK_DRIFT,
+                 STOCK_LOSS_STATUS_INVALID, STOCK_LOSS_STOCK_INSUFFICIENT -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED, NARCOTIC_PRESCRIBER_REQUIRED, NARCOTIC_AMPOULE_OUTSTANDING,
                  NARCOTIC_AMPOULE_INVALID,
                  // P1-D8：退药数量超过已发数量是"请求内容不合法"，不是状态冲突（422）
@@ -46,7 +49,9 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  // 验收超量/明细重复同属请求内容不合法（422），客户端应改单而不是重试
                  PURCHASE_RECEIPT_EXCEEDS, PURCHASE_RECEIPT_INVALID,
                  STOCK_TAKE_INCOMPLETE, STOCK_TAKE_EMPTY,
-                 STOCK_TAKE_VARIANCE_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 STOCK_TAKE_VARIANCE_REASON_REQUIRED,
+                 STOCK_LOSS_ITEM_INVALID, STOCK_LOSS_EXCEEDS,
+                 STOCK_LOSS_REJECT_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

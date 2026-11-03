@@ -129,6 +129,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    name: 'stock-loss',
+    path: '/stock-loss',
+    title: '药品报损',
+    hint: '破损 · 过期报废 · 召回销毁 · 审批后扣减批次库存',
+    icon: 'trash',
+    group: '药事管理',
+    permissions: ['pharmacy:read'],
+  },
+  {
     name: 'material',
     path: '/material',
     title: '物资耗材',

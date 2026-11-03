@@ -44,6 +44,12 @@ class ExceptionMappingContractTest {
         assertThat(handler.statusOf(ErrorCode.STOCK_TAKE_STOCK_DRIFT)).isEqualTo(HttpStatus.CONFLICT);
         assertThat(handler.statusOf(ErrorCode.STOCK_TAKE_INCOMPLETE))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // G7：报损自审是越权（403），审批余量不足是并发冲突（409），超量提交是请求内容问题（422）
+        assertThat(handler.statusOf(ErrorCode.STOCK_LOSS_SELF_REVIEW)).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(handler.statusOf(ErrorCode.STOCK_LOSS_STOCK_INSUFFICIENT))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.STOCK_LOSS_EXCEEDS))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

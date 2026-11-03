@@ -12,6 +12,8 @@ import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.domain.PharmacyModel.StockAdjustment;
+import com.medassist.pharmacy.domain.PharmacyModel.StockLoss;
+import com.medassist.pharmacy.domain.PharmacyModel.StockLossItem;
 import com.medassist.pharmacy.domain.PharmacyModel.StockTake;
 import com.medassist.pharmacy.domain.PharmacyModel.StockTakeItem;
 import com.medassist.pharmacy.domain.PharmacyModel.StockTakeSource;
@@ -1127,6 +1129,140 @@ public class PharmacyRepository {
                          WHERE a.take_id = :takeId
                          ORDER BY a.created_at, b.batch_no
                         """).param("takeId", takeId).query(STOCK_ADJUSTMENT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 药品报损（G7）
+
+    private static final RowMapper<StockLoss> STOCK_LOSS_MAPPER =
+            (rs, i) -> new StockLoss(
+                    rs.getObject("id", UUID.class), rs.getString("loss_no"),
+                    rs.getString("status"), rs.getString("reason_category"), rs.getString("note"),
+                    rs.getString("created_by"), rs.getString("reviewed_by"),
+                    rs.getTimestamp("reviewed_at") == null ? null
+                            : rs.getTimestamp("reviewed_at").toInstant(),
+                    rs.getString("review_note"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<StockLossItem> STOCK_LOSS_ITEM_MAPPER =
+            (rs, i) -> new StockLossItem(
+                    rs.getObject("id", UUID.class), rs.getObject("loss_id", UUID.class),
+                    rs.getObject("drug_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date").toLocalDate(), rs.getInt("quantity"),
+                    rs.getString("reason"));
+
+    public String nextStockLossNo() {
+        return nextNo("pharmacy_svc.stock_loss_no_seq", "LS");
+    }
+
+    public void insertStockLoss(StockLoss l) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_loss
+                            (id, loss_no, status, reason_category, note, created_by, version)
+                        VALUES (:id, :no, :status, :category, CAST(:note AS text), :createdBy, 0)
+                        """)
+                .param("id", l.id()).param("no", l.lossNo()).param("status", l.status())
+                .param("category", l.reasonCategory()).param("note", l.note())
+                .param("createdBy", l.createdBy()).update();
+    }
+
+    public Optional<StockLoss> findStockLoss(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, loss_no, status, reason_category, note, created_by,
+                               reviewed_by, reviewed_at, review_note, version, created_at
+                          FROM pharmacy_svc.stock_loss WHERE id = ?
+                        """).param(id).query(STOCK_LOSS_MAPPER).optional();
+    }
+
+    /** 加行锁读取报损单；审批扣减前必须调用（防止同一单被重复审批）。 */
+    public Optional<StockLoss> lockStockLoss(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, loss_no, status, reason_category, note, created_by,
+                               reviewed_by, reviewed_at, review_note, version, created_at
+                          FROM pharmacy_svc.stock_loss WHERE id = ? FOR UPDATE
+                        """).param(id).query(STOCK_LOSS_MAPPER).optional();
+    }
+
+    public List<StockLoss> listStockLosses(String status, int limit) {
+        return jdbc.sql("""
+                        SELECT id, loss_no, status, reason_category, note, created_by,
+                               reviewed_by, reviewed_at, review_note, version, created_at
+                          FROM pharmacy_svc.stock_loss
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("limit", limit)
+                .query(STOCK_LOSS_MAPPER).list();
+    }
+
+    public void insertStockLossItem(UUID id, UUID lossId, UUID drugId, UUID batchId, int quantity,
+                                    String reason) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_loss_item
+                            (id, loss_id, drug_id, batch_id, quantity, reason)
+                        VALUES (:id, :lossId, :drugId, :batchId, :qty, CAST(:reason AS text))
+                        """)
+                .param("id", id).param("lossId", lossId).param("drugId", drugId)
+                .param("batchId", batchId).param("qty", quantity).param("reason", reason).update();
+    }
+
+    public List<StockLossItem> listStockLossItems(UUID lossId) {
+        return jdbc.sql("""
+                        SELECT i.id, i.loss_id, i.drug_id, d.drug_code, d.name AS drug_name,
+                               d.spec, d.unit, i.batch_id, b.batch_no, b.expire_date,
+                               i.quantity, i.reason
+                          FROM pharmacy_svc.stock_loss_item i
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                          JOIN pharmacy_svc.drug_batch b ON b.id = i.batch_id
+                         WHERE i.loss_id = :lossId
+                         ORDER BY d.drug_code, b.expire_date, b.batch_no
+                        """).param("lossId", lossId).query(STOCK_LOSS_ITEM_MAPPER).list();
+    }
+
+    /** 审批/驳回（CAS：期望状态 + 版本号）。 */
+    public boolean reviewStockLoss(UUID id, long expectedVersion, boolean approve, String actor,
+                                   String note) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.stock_loss
+                           SET status = :status, reviewed_by = :actor, reviewed_at = now(),
+                               review_note = CAST(:note AS text),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("status", approve ? StockLoss.APPROVED : StockLoss.REJECTED)
+                .param("actor", actor).param("note", note)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 报损审批产生的库存调整流水（与盘点共用 stock_adjustment）。 */
+    public void insertStockLossAdjustment(UUID lossId, UUID drugId, UUID batchId, int beforeQuantity,
+                                          int afterQuantity, int delta, String reason,
+                                          String actor) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_adjustment
+                            (id, loss_id, drug_id, batch_id, before_quantity, after_quantity,
+                             delta, reason, actor)
+                        VALUES (:id, :lossId, :drugId, :batchId, :before, :after, :delta,
+                                CAST(:reason AS text), :actor)
+                        """)
+                .param("id", UUID.randomUUID()).param("lossId", lossId).param("drugId", drugId)
+                .param("batchId", batchId).param("before", beforeQuantity)
+                .param("after", afterQuantity).param("delta", delta)
+                .param("reason", reason).param("actor", actor).update();
+    }
+
+    public List<StockAdjustment> listStockLossAdjustments(UUID lossId) {
+        return jdbc.sql("""
+                        SELECT a.id, a.take_id, a.drug_id, a.batch_id, b.batch_no,
+                               a.before_quantity, a.after_quantity, a.delta, a.reason,
+                               a.actor, a.created_at
+                          FROM pharmacy_svc.stock_adjustment a
+                          JOIN pharmacy_svc.drug_batch b ON b.id = a.batch_id
+                         WHERE a.loss_id = :lossId
+                         ORDER BY a.created_at, b.batch_no
+                        """).param("lossId", lossId).query(STOCK_ADJUSTMENT_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

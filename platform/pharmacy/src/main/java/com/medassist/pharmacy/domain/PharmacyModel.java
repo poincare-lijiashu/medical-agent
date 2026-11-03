@@ -326,4 +326,33 @@ public final class PharmacyModel {
                                   String unit, UUID batchId, String batchNo, LocalDate expireDate,
                                   int quantity) {
     }
+
+    /**
+     * 药品报损单（破损 / 过期报废 / 召回销毁）。
+     *
+     * <p>提交即锁定明细；审批扣减库存并写 {@link StockAdjustment}，审批人 ≠ 申请人。
+     */
+    public record StockLoss(UUID id, String lossNo, String status, String reasonCategory,
+                            String note, String createdBy, String reviewedBy, Instant reviewedAt,
+                            String reviewNote, long version, Instant createdAt) {
+
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+
+        public static final String EXPIRED = "EXPIRED";
+        public static final String BROKEN = "BROKEN";
+        public static final String RECALL = "RECALL";
+        public static final String OTHER = "OTHER";
+
+        public boolean reviewable() {
+            return SUBMITTED.equals(status);
+        }
+    }
+
+    /** 报损明细（一行 = 一个批次）。 */
+    public record StockLossItem(UUID id, UUID lossId, UUID drugId, String drugCode, String drugName,
+                                String spec, String unit, UUID batchId, String batchNo,
+                                LocalDate expireDate, int quantity, String reason) {
+    }
 }

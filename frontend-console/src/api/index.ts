@@ -53,6 +53,9 @@ import type {
   StockTake,
   StockTakeDetail,
   StockTakeItem,
+  StockLoss,
+  StockLossReason,
+  StockLossView,
   SupplierView,
   ConsumableView,
   ConsumableBatch,
@@ -369,6 +372,19 @@ export const pharmacyApi = {
   approveStockTake: (id: string) => post<StockTakeDetail>(`/pharmacy/stock-takes/${id}/approve`),
   cancelStockTake: (id: string, reason: string) =>
     post<StockTakeDetail>(`/pharmacy/stock-takes/${id}/cancel`, { reason }),
+
+  // ---- 报损（G7）----
+  stockLosses: (status?: string, limit = 50) =>
+    get<StockLoss[]>('/pharmacy/stock-losses', { status, limit }),
+  stockLoss: (id: string) => get<StockLossView>(`/pharmacy/stock-losses/${id}`),
+  createStockLoss: (body: {
+    reasonCategory: StockLossReason
+    note?: string
+    items: { batchId: string; quantity: number; reason?: string }[]
+  }) => post<StockLossView>('/pharmacy/stock-losses', body),
+  /** 审批：approve=false 为驳回，必须带原因。 */
+  reviewStockLoss: (id: string, approve: boolean, note?: string) =>
+    post<StockLossView>(`/pharmacy/stock-losses/${id}/review`, { approve, note }),
 }
 
 // ---------------------------------------------------------------- 物资耗材（G3）

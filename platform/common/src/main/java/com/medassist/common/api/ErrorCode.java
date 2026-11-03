@@ -87,6 +87,16 @@ public enum ErrorCode {
     STOCK_TAKE_EMPTY(43467, "当前没有可盘点的库存批次"),
     STOCK_TAKE_VARIANCE_REASON_REQUIRED(43468, "实盘数量与账面不一致时必须填写差异原因"),
 
+    // ---- 药品报损（43xxx 续，G7）----
+    STOCK_LOSS_NOT_FOUND(43470, "未找到该报损单"),
+    STOCK_LOSS_ITEM_INVALID(43471, "报损明细不合法（空明细或同一批次重复）"),
+    STOCK_LOSS_STATUS_INVALID(43472, "当前报损单状态不允许该操作"),
+    STOCK_LOSS_EXCEEDS(43473, "报损数量超过该批次当前余量"),
+    STOCK_LOSS_STOCK_INSUFFICIENT(43474, "审批时批次余量不足，请核对后重新提交"),
+    STOCK_LOSS_SELF_REVIEW(43475, "不能审批自己提交的报损单"),
+    STOCK_LOSS_BATCH_NOT_FOUND(43476, "报损明细中的批次不存在"),
+    STOCK_LOSS_REJECT_REASON_REQUIRED(43477, "驳回报损必须填写原因"),
+
     // ---- 物资耗材（43xxx 续，G3；与药械同属物资供应，编码段相邻）----
     CONSUMABLE_NOT_FOUND(43450, "未找到该耗材，或该耗材已停用"),
     CONSUMABLE_BATCH_NOT_FOUND(43451, "未找到该耗材批次"),
