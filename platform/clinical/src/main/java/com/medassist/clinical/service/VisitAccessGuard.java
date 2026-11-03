@@ -41,4 +41,18 @@ public class VisitAccessGuard {
         }
         return visit;
     }
+
+    /**
+     * 校验手术病例所属就诊在数据范围内（术前访视、麻醉、术中护理按 caseId 访问时使用）。
+     *
+     * <p>用一条 JOIN 取科室，避免 case → visit 两次查询；
+     * 病例不存在与科室为空都按"不存在"处理——两者对调用方是同一个结论：不可见。
+     */
+    public void requireCase(DataScope scope, UUID caseId) {
+        UUID deptId = repo.findVisitDepartmentByCaseId(caseId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术记录"));
+        if (!scope.canSeeDepartment(deptId)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术记录");
+        }
+    }
 }

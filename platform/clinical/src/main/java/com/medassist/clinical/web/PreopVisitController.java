@@ -2,10 +2,12 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
 import com.medassist.clinical.service.PreopVisitService;
+import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.PreopVisitDtos.PreopVisitReq;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,16 +37,20 @@ public class PreopVisitController {
     private static final String WRITE = "clinical:surgery:write";
 
     private final PreopVisitService service;
+    private final VisitAccessGuard guard;
 
-    public PreopVisitController(PreopVisitService service) {
+    public PreopVisitController(PreopVisitService service, VisitAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping
     public ApiResponse<PreopVisit> get(
             @PathVariable UUID caseId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.get(caseId));
     }
 
@@ -52,8 +58,10 @@ public class PreopVisitController {
     public ApiResponse<PreopVisit> save(
             @PathVariable UUID caseId, @Valid @RequestBody PreopVisitReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.save(caseId, req, actor));
     }
 
@@ -61,8 +69,10 @@ public class PreopVisitController {
     public ApiResponse<PreopVisit> sign(
             @PathVariable UUID caseId, @Valid @RequestBody SurgeryVersionReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireCase(scope, caseId);
         return ApiResponse.ok(service.sign(caseId, req.version(), actor));
     }
 }

@@ -2114,6 +2114,24 @@ public class ClinicalRepository {
                 .param(id).query(SURGERY_MAPPER).optional();
     }
 
+    /**
+     * 按手术病例查所属就诊的科室（行级权限校验用）。
+     *
+     * <p>返回 empty 有两种可能：病例不存在，或病例所属就诊没有科室。
+     * 两者对调用方是同一个结论——不可见，因此不区分。
+     */
+    public Optional<UUID> findVisitDepartmentByCaseId(UUID caseId) {
+        return jdbc.sql("""
+                        SELECT v.dept_id
+                          FROM clinical_svc.surgery_case c
+                          JOIN clinical_svc.visit v ON v.id = c.visit_id
+                         WHERE c.id = ?
+                        """)
+                .param(caseId)
+                .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
     /** 开始手术（CAS：仅 PLANNED）。 */
     public boolean startSurgery(UUID id, java.time.Instant startedAt, long expectedVersion) {
         return jdbc.sql("""

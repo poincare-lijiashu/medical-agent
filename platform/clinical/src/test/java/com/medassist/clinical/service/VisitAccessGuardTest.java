@@ -98,4 +98,26 @@ class VisitAccessGuardTest {
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.VISIT_NOT_FOUND));
     }
+
+    // ---------------------------------------------------------------- 按 caseId 访问
+
+    @Test
+    @DisplayName("手术病例：同科室放行 / 跨科室 404 / 不存在 404")
+    void requireCaseScopesByVisitDepartment() {
+        UUID caseId = UUID.randomUUID();
+        when(repo.findVisitDepartmentByCaseId(caseId)).thenReturn(Optional.of(deptA));
+
+        guard.requireCase(DataScope.ofDepartment("doctor01", deptA, true), caseId);
+
+        assertThatThrownBy(() ->
+                guard.requireCase(DataScope.ofDepartment("doctor02", deptB, true), caseId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+
+        UUID missing = UUID.randomUUID();
+        when(repo.findVisitDepartmentByCaseId(missing)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> guard.requireCase(DataScope.all("admin", true), missing))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
 }
