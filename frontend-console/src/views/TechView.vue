@@ -63,7 +63,7 @@
             class="seg-btn"
             :class="{ active: status === t.value }"
             type="button"
-            @click="status = t.value"
+            @click="setStatus(t.value)"
           >
             {{ t.label }}
           </button>
@@ -644,6 +644,8 @@ const loading = ref(false)
 const loadError = ref('')
 const busy = ref(false)
 const applications = ref<TechApplication[]>([])
+/** 服务端聚合的各状态计数（含 PENDING_COLLECT 合成键，不受列表上限影响）。 */
+const counts = ref<Record<string, number>>({})
 const criticals = ref<TechCriticalView[]>([])
 const keyword = ref('')
 const status = ref('PENDING_COLLECT')
@@ -656,12 +658,10 @@ const appById = computed(() => {
 })
 
 function countOf(value: string): number {
-  return applications.value.filter((a) => a.status === value).length
+  return counts.value[value] ?? 0
 }
 
-const pendingCollectCount = computed(
-  () => applications.value.filter((a) => a.status === 'APPLIED' && a.category === 'LAB').length,
-)
+const pendingCollectCount = computed(() => countOf('PENDING_COLLECT'))
 
 const openCriticalCount = computed(
   () => criticals.value.filter((c) => c.critical.status !== 'CLOSED').length,
@@ -671,18 +671,19 @@ const overdueCount = computed(() => criticals.value.filter((c) => c.overdue).len
 
 const filteredApps = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return applications.value.filter((a) => {
-    if (status.value === 'PENDING_COLLECT') {
-      if (a.status !== 'APPLIED' || a.category !== 'LAB') return false
-    } else if (status.value && a.status !== status.value) {
-      return false
-    }
-    if (!kw) return true
-    return [a.applicationNo, a.patientNo, a.visitNo, a.itemName, a.appliedBy].some((v) =>
+  if (!kw) return applications.value
+  return applications.value.filter((a) =>
+    [a.applicationNo, a.patientNo, a.visitNo, a.itemName, a.appliedBy].some((v) =>
       (v ?? '').toLowerCase().includes(kw),
-    )
-  })
+    ),
+  )
 })
+
+/** 切换状态页签：列表由服务端按状态过滤，需重新加载。 */
+function setStatus(value: string) {
+  status.value = value
+  void load()
+}
 
 const filteredCriticals = computed(() =>
   criticals.value.filter(
@@ -693,28 +694,24 @@ const filteredCriticals = computed(() =>
 async function load() {
   loading.value = true
   try {
-    const statuses = [
-      'APPLIED',
-      'SPECIMEN_COLLECTED',
-      'RECEIVED',
-      'IN_PROGRESS',
-      'REPORTED',
-      'CLOSED',
-      'CANCELLED',
-    ]
-    const [lists, allCriticals] = await Promise.all([
-      Promise.all(statuses.map((s) => techApi.applications(s, 200))),
+    // 计数走服务端聚合（准确、不受 200 条上限影响）；列表只取当前状态页签。
+    // 待采集是合成队列（APPLIED + LAB），服务端没有对应状态值，按 APPLIED 取后本地筛检验类。
+    const listStatus = status.value === 'PENDING_COLLECT' ? 'APPLIED' : status.value || undefined
+    const [summary, list, allCriticals] = await Promise.all([
+      techApi.applicationSummary(),
+      techApi.applications(listStatus, 200),
       techApi.criticals(undefined, undefined, 200),
     ])
-    const merged = new Map<string, TechApplication>()
-    for (const list of lists) for (const a of list) merged.set(a.id, a)
-    applications.value = [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    counts.value = summary
+    applications.value =
+      status.value === 'PENDING_COLLECT' ? list.filter((a) => a.category === 'LAB') : list
     criticals.value = allCriticals
     loadError.value = ''
   } catch (e) {
     toast.error('医技数据加载失败', errorText(e))
     applications.value = []
     criticals.value = []
+    counts.value = {}
     loadError.value = errorText(e)
   } finally {
     loading.value = false

@@ -30,7 +30,7 @@
         label="已发药"
         :value="countOf('DISPENSED')"
         unit="张"
-        meta="按各状态最近 200 张统计"
+        meta="服务端聚合计数，全量准确"
       />
       <KpiCard
         label="库存预警"
@@ -62,7 +62,7 @@
             class="seg-btn"
             :class="{ active: status === t.value }"
             type="button"
-            @click="status = t.value"
+            @click="setStatus(t.value)"
           >
             {{ t.label }}
           </button>
@@ -696,6 +696,8 @@ const busy = ref(false)
 /** 加载失败文案：非空时展示错误态而非空态，避免把故障误报为"没有数据"。 */
 const loadError = ref('')
 const rows = ref<Prescription[]>([])
+/** 服务端聚合的各状态计数（不受列表 200 条上限影响）。 */
+const counts = ref<Record<string, number>>({})
 const keyword = ref('')
 const status = ref('PENDING_REVIEW')
 
@@ -709,44 +711,43 @@ const expiredCount = computed(() => warnings.value.filter((w) => w.expired).leng
 const nearExpiryCount = computed(() => warnings.value.length - expiredCount.value)
 
 function countOf(value: string): number {
-  return rows.value.filter((r) => r.status === value).length
+  return counts.value[value] ?? 0
 }
 
 const filtered = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return rows.value.filter((r) => {
-    if (status.value && r.status !== status.value) return false
-    if (!kw) return true
-    return [r.prescriptionNo, r.patientNo, r.visitNo, r.prescriber].some((v) =>
+  if (!kw) return rows.value
+  return rows.value.filter((r) =>
+    [r.prescriptionNo, r.patientNo, r.visitNo, r.prescriber].some((v) =>
       (v ?? '').toLowerCase().includes(kw),
-    )
-  })
+    ),
+  )
 })
+
+/** 切换状态页签：列表由服务端按状态过滤，需重新加载。 */
+function setStatus(value: string) {
+  status.value = value
+  void load()
+}
 
 async function load() {
   loading.value = true
   try {
-    // 按状态分别取（服务端每类最多 200 条）：KPI 与各页签都基于完整状态集合，
-    // 不用“取最近 200 条再本地分组”，避免历史处方挤掉待办导致计数偏小。
-    const [pending, approved, dispensed, rejected, cancelled, warn] = await Promise.all([
-      pharmacyApi.prescriptions('PENDING_REVIEW', 200),
-      pharmacyApi.prescriptions('APPROVED', 200),
-      pharmacyApi.prescriptions('DISPENSED', 200),
-      pharmacyApi.prescriptions('REJECTED', 200),
-      pharmacyApi.prescriptions('CANCELLED', 200),
+    // 计数走服务端聚合（准确、不受 200 条上限影响）；列表只取当前状态页签。
+    const [summary, list, warn] = await Promise.all([
+      pharmacyApi.prescriptionSummary(),
+      pharmacyApi.prescriptions(status.value || undefined, 200),
       pharmacyApi.stockWarnings(),
     ])
-    const merged = new Map<string, Prescription>()
-    for (const r of [...pending, ...approved, ...dispensed, ...rejected, ...cancelled]) {
-      merged.set(r.id, r)
-    }
-    rows.value = [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    counts.value = summary
+    rows.value = list
     warnings.value = warn
     loadError.value = ''
   } catch (e) {
     toast.error('药房数据加载失败', errorText(e))
     rows.value = []
     warnings.value = []
+    counts.value = {}
     // 失败必须与"没有数据"区分：空态会让药师误判为无待办
     loadError.value = errorText(e)
   } finally {

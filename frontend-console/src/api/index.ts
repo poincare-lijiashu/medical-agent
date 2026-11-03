@@ -233,6 +233,8 @@ export const pharmacyApi = {
   /** 处方队列：status 为空返回全部（服务端最多 200 条，按开方时间倒序）。 */
   prescriptions: (status?: string, limit = 100) =>
     get<Prescription[]>('/pharmacy/prescriptions', { status, limit }),
+  /** 各状态处方数量（KPI 用；列表会被 200 条截断，计数必须走聚合）。 */
+  prescriptionSummary: () => get<Record<string, number>>('/pharmacy/prescriptions/summary'),
   prescription: (id: string) => get<PrescriptionView>(`/pharmacy/prescriptions/${id}`),
   prescriptionAudit: (id: string) =>
     get<PrescriptionAuditView>(`/pharmacy/prescriptions/${id}/audit`),
@@ -269,6 +271,8 @@ export const techApi = {
   /** 申请队列：status 为空返回全部（服务端每类最多 200 条，按开单时间倒序）。 */
   applications: (status?: string, limit = 100) =>
     get<TechApplication[]>('/tech/applications', { status, limit }),
+  /** 各状态申请数量（KPI 用；与列表同科室范围）。 */
+  applicationSummary: () => get<Record<string, number>>('/tech/applications/summary'),
   application: (id: string) => get<TechApplicationView>(`/tech/applications/${id}`),
   cancelApplication: (id: string) =>
     post<TechApplicationView>(`/tech/applications/${id}/cancel`),

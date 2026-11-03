@@ -249,8 +249,40 @@ public class TechRepository {
                 .query(APP_MAPPER).list();
     }
 
-    // ---------------------------------------------------------------- 标本
+    /**
+     * 各状态申请数量（P0-F4）：一条 GROUP BY 拿到准确待办数。
+     *
+     * <p>{@code deptIds} 非空时只统计这些科室（与列表的行级范围保持一致，
+     * 否则 KPI 会显示"看不到的待办"）。
+     */
+    public java.util.Map<String, Integer> countApplicationsByStatus(
+            java.util.Collection<UUID> deptIds) {
+        java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+        UUID[] deptArray = deptIds == null || deptIds.isEmpty() ? null : deptIds.toArray(UUID[]::new);
+        jdbc.sql("""
+                        SELECT status, count(*) AS n
+                          FROM tech_svc.exam_application
+                         WHERE (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY (CAST(:deptIds AS uuid[])))
+                         GROUP BY status
+                        """)
+                .param("deptIds", deptArray)
+                .query((rs, i) -> java.util.Map.entry(rs.getString("status"), rs.getInt("n")))
+                .list()
+                .forEach(e -> counts.put(e.getKey(), e.getValue()));
+        // 合成键：待采集 = 已开立的检验申请（检查类不需要标本，不进此队列）
+        Integer pendingCollect = jdbc.sql("""
+                        SELECT count(*)
+                          FROM tech_svc.exam_application
+                         WHERE status = 'APPLIED' AND category = 'LAB'
+                           AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY (CAST(:deptIds AS uuid[])))
+                        """)
+                .param("deptIds", deptArray)
+                .query(Integer.class).single();
+        counts.put("PENDING_COLLECT", pendingCollect == null ? 0 : pendingCollect);
+        return counts;
+    }
 
+    // ---------------------------------------------------------------- 标本
     public void insertSpecimen(UUID id, UUID applicationId, String barcode, String specimenType,
                                String collectedBy) {
         jdbc.sql("""

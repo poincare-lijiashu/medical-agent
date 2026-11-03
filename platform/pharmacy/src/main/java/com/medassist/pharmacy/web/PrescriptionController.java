@@ -78,6 +78,19 @@ public class PrescriptionController {
                 .toList());
     }
 
+    /**
+     * 各状态处方数量（P0-F4 工作台 KPI）。
+     *
+     * <p>与列表分开：列表按状态分页取（可能被 200 条上限截断），
+     * 计数必须走聚合才能准确；前端由此只需「1 次计数 + 1 次当前页签」两次请求。
+     */
+    @GetMapping("/summary")
+    public ApiResponse<java.util.Map<String, Integer>> summary(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.statusCounts());
+    }
+
     @GetMapping("/{id}")
     public ApiResponse<PrescriptionView> detail(
             @PathVariable UUID id,

@@ -478,6 +478,25 @@ public class PharmacyRepository {
                 .query(RX_MAPPER).list();
     }
 
+    /**
+     * 各状态处方数量（P0-F4）：一条 GROUP BY 拿到准确待办数。
+     *
+     * <p>此前前端按状态分 5 次拉取再本地计数，每片被服务端封顶 200，
+     * 待办被历史数据挤掉时 KPI 会偏小；分片请求数还随状态线性增长。
+     */
+    public java.util.Map<String, Integer> countPrescriptionsByStatus() {
+        java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+        jdbc.sql("""
+                        SELECT status, count(*) AS n
+                          FROM pharmacy_svc.prescription
+                         GROUP BY status
+                        """)
+                .query((rs, i) -> java.util.Map.entry(rs.getString("status"), rs.getInt("n")))
+                .list()
+                .forEach(e -> counts.put(e.getKey(), e.getValue()));
+        return counts;
+    }
+
     // ---------------------------------------------------------------- 发药
 
     public void insertDispense(Dispense d) {

@@ -579,6 +579,11 @@ public class PrescriptionService {
         return repo.listPrescriptions(normalized, patientId, size);
     }
 
+    /** 各状态处方数量（P0-F4）：供工作台 KPI 用，避免前端分片拉取导致计数偏小。 */
+    public java.util.Map<String, Integer> statusCounts() {
+        return repo.countPrescriptionsByStatus();
+    }
+
     // ---------------------------------------------------------------- 内部
 
     /**

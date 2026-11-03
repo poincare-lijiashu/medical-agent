@@ -70,6 +70,21 @@ public class ApplicationController {
         return ApiResponse.ok(PhiMask.applications(apps, scope));
     }
 
+    /**
+     * 各状态申请数量（P0-F4 工作台 KPI）。
+     *
+     * <p>与列表同一科室范围；列表被 200 条上限截断时计数仍准确，
+     * 前端只需「1 次计数 + 1 次当前页签」。
+     */
+    @GetMapping("/summary")
+    public ApiResponse<java.util.Map<String, Integer>> summary(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.statusCounts(
+                scope.allDepartments() ? null : scope.deptCodes()));
+    }
+
     @GetMapping("/{id}")
     public ApiResponse<ApplicationView> detail(
             @PathVariable UUID id,

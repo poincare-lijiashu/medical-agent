@@ -169,6 +169,11 @@ public class ApplicationService {
         return repo.listApplications(normalized, patientId, deptIds, size);
     }
 
+    /** 各状态申请数量（P0-F4）：与列表同一科室范围，避免 KPI 显示看不到的待办。 */
+    public java.util.Map<String, Integer> statusCounts(java.util.Collection<UUID> deptIds) {
+        return repo.countApplicationsByStatus(deptIds);
+    }
+
     /** 取消申请：仅未采集/未执行的申请可取消。 */
     @Transactional
     public ApplicationView cancel(UUID id, String actor) {
