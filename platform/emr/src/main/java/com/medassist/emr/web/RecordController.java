@@ -90,9 +90,9 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, visitId, limit).stream()
+        return ApiResponse.ok(PhiMask.records(service.list(status, patientId, visitId, limit).stream()
                 .filter(r -> scope.canSeeDepartment(r.deptId()))
-                .toList());
+                .toList(), scope));
     }
 
     @GetMapping("/{id}")
@@ -102,7 +102,9 @@ public class RecordController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         guard.requireRecord(scope, id);
-        return ApiResponse.ok(service.detail(id));
+        RecordView view = service.detail(id);
+        return ApiResponse.ok(new RecordView(PhiMask.record(view.record(), scope),
+                view.signatures(), view.amendments(), view.qcResults()));
     }
 
     /** CDR 检索：关键词 + 患者/文书类型/状态/建档日期组合过滤；检索行为留痕。 */
@@ -119,10 +121,10 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, SEARCH);
-        return ApiResponse.ok(service.search(q, patientId, docType, status, from, to, limit, actor)
+        return ApiResponse.ok(PhiMask.hits(service.search(q, patientId, docType, status, from, to, limit, actor)
                 .stream()
                 .filter(hit -> scope.canSeeDepartment(hit.deptId()))
-                .toList());
+                .toList(), scope));
     }
 
     /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */

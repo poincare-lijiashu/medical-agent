@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -21,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * 病历接口权限矩阵（直接驱动 Controller，不启动 Spring 上下文）。
@@ -104,6 +106,15 @@ class EmrControllerPermissionTest {
     @Test
     @DisplayName("只读查询：emr:record:read 放行")
     void detailAllowedForReadPermission() {
+        // P0-S2：detail 现在对记录做 PHI 掩码，桩需返回非空视图
+        var record = new com.medassist.emr.domain.EmrModel.MedicalRecord(id, "MR0001",
+                UUID.randomUUID(), "P0001", UUID.randomUUID(), "V0001", UUID.randomUUID(),
+                "NOTE", "TPL", "标题", "内容", "内容", "doctor01",
+                com.medassist.emr.domain.EmrModel.MedicalRecord.DRAFT, 1,
+                null, null, null, null, 0L, java.time.Instant.now());
+        when(service.detail(id)).thenReturn(new com.medassist.emr.web.EmrDtos.RecordView(
+                record, List.of(), List.of(), List.of()));
+
         controller.detail(id, "emr:record:read", scope);
 
         verify(service).detail(id);

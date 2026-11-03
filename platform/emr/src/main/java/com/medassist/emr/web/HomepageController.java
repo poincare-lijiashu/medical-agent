@@ -86,9 +86,9 @@ public class HomepageController {
                 filterDept = scope.deptCodes().iterator().next();
             }
         }
-        return ApiResponse.ok(service.list(status, patientId, filterDept, limit, actor).stream()
+        return ApiResponse.ok(PhiMask.summaries(service.list(status, patientId, filterDept, limit, actor).stream()
                 .filter(row -> scope.canSeeDepartment(row.deptId()))
-                .toList());
+                .toList(), scope));
     }
 
     /** 详情：整份 PHI，必须留痕（HOMEPAGE_VIEW）。 */
@@ -100,7 +100,9 @@ public class HomepageController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         guard.requireHomepage(scope, id);
-        return ApiResponse.ok(service.viewDetail(id, actor));
+        HomepageView view = service.viewDetail(id, actor);
+        return ApiResponse.ok(new HomepageView(PhiMask.homepage(view.homepage(), scope),
+                view.diagnoses(), view.procedures(), view.feeSummary()));
     }
 
     /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */
