@@ -43,6 +43,7 @@ const router = createRouter({
         { path: 'pacs', name: 'pacs', component: () => import('@/views/PacsWorkbenchView.vue') },
         { path: 'narcotic', name: 'narcotic', component: () => import('@/views/NarcoticRegisterView.vue') },
         { path: 'pharmacy', name: 'pharmacy', component: () => import('@/views/PharmacyView.vue') },
+        { path: 'stock-take', name: 'stock-take', component: () => import('@/views/StockTakeView.vue') },
         { path: 'material', name: 'material', component: () => import('@/views/MaterialView.vue') },
         {
           path: 'coding',

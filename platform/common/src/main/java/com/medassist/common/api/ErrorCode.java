@@ -76,6 +76,17 @@ public enum ErrorCode {
     PURCHASE_RECEIPT_INVALID(43437, "验收内容不合法（重复明细或数量超限）"),
     GOODS_RECEIPT_NOT_FOUND(43438, "未找到该到货验收单"),
 
+    // ---- 药品盘点（43xxx 续，G6）----
+    STOCK_TAKE_NOT_FOUND(43460, "未找到该盘点单"),
+    STOCK_TAKE_ITEM_NOT_FOUND(43461, "未找到该盘点明细"),
+    STOCK_TAKE_STATUS_INVALID(43462, "当前盘点单状态不允许该操作"),
+    STOCK_TAKE_ACTIVE_EXISTS(43463, "已有一张进行中的盘点单，请先提交并审批或取消"),
+    STOCK_TAKE_INCOMPLETE(43464, "仍有批次未录入实盘数量，不能提交"),
+    STOCK_TAKE_STOCK_DRIFT(43465, "盘点期间库存已发生变化，请取消后重新盘点"),
+    STOCK_TAKE_SELF_APPROVAL(43466, "不能审批自己创建的盘点单"),
+    STOCK_TAKE_EMPTY(43467, "当前没有可盘点的库存批次"),
+    STOCK_TAKE_VARIANCE_REASON_REQUIRED(43468, "实盘数量与账面不一致时必须填写差异原因"),
+
     // ---- 物资耗材（43xxx 续，G3；与药械同属物资供应，编码段相邻）----
     CONSUMABLE_NOT_FOUND(43450, "未找到该耗材，或该耗材已停用"),
     CONSUMABLE_BATCH_NOT_FOUND(43451, "未找到该耗材批次"),

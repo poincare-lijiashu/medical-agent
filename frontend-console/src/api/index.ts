@@ -50,6 +50,9 @@ import type {
   PurchaseOrderSummary,
   PurchaseOrderView,
   GoodsReceiptView,
+  StockTake,
+  StockTakeDetail,
+  StockTakeItem,
   SupplierView,
   ConsumableView,
   ConsumableBatch,
@@ -348,6 +351,24 @@ export const pharmacyApi = {
   ) => post<GoodsReceiptView>(`/pharmacy/purchase-orders/${id}/receipts`, body),
   purchaseReceipts: (id: string) =>
     get<GoodsReceiptView[]>(`/pharmacy/purchase-orders/${id}/receipts`),
+
+  // ---- 盘点（G6）----
+  stockTakes: (status?: string, limit = 50) =>
+    get<StockTake[]>('/pharmacy/stock-takes', { status, limit }),
+  stockTake: (id: string) => get<StockTakeDetail>(`/pharmacy/stock-takes/${id}`),
+  createStockTake: (body: { keyword?: string; note?: string }) =>
+    post<StockTakeDetail>('/pharmacy/stock-takes', body),
+  /** 实盘录入：version 为明细版本号，并发修改时后到者收到 409。 */
+  countStockTakeItem: (
+    id: string,
+    itemId: string,
+    body: { actualQuantity: number; reason?: string; version: number },
+  ) => put<StockTakeItem>(`/pharmacy/stock-takes/${id}/items/${itemId}`, body),
+  submitStockTake: (id: string) => post<StockTakeDetail>(`/pharmacy/stock-takes/${id}/submit`),
+  /** 审批：按差异校准库存；审批人不能是建单人。 */
+  approveStockTake: (id: string) => post<StockTakeDetail>(`/pharmacy/stock-takes/${id}/approve`),
+  cancelStockTake: (id: string, reason: string) =>
+    post<StockTakeDetail>(`/pharmacy/stock-takes/${id}/cancel`, { reason }),
 }
 
 // ---------------------------------------------------------------- 物资耗材（G3）

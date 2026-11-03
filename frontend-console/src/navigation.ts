@@ -120,6 +120,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    name: 'stock-take',
+    path: '/stock-take',
+    title: '药品盘点',
+    hint: '账面快照 · 实盘录入 · 差异审批与库存校准',
+    icon: 'clipboard',
+    group: '药事管理',
+    permissions: ['pharmacy:read'],
+  },
+  {
     name: 'material',
     path: '/material',
     title: '物资耗材',

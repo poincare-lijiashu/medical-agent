@@ -258,4 +258,72 @@ public final class PharmacyModel {
                                    UUID batchId, String batchNo, LocalDate expireDate,
                                    int quantity, BigDecimal unitPrice, BigDecimal amount) {
     }
+
+    /**
+     * 药品盘点单。
+     *
+     * <p>状态机：{@code COUNTING → SUBMITTED → APPROVED}，{@code COUNTING/SUBMITTED → CANCELLED}。
+     * 审批即按差异校准批次库存并写入追加式调整流水；审批人与建单人必须是不同账号（四眼原则）。
+     */
+    public record StockTake(UUID id, String takeNo, String status, String scopeLabel, String note,
+                            String createdBy, String submittedBy, Instant submittedAt,
+                            String approvedBy, Instant approvedAt, String cancelledBy,
+                            Instant cancelledAt, String cancelReason, long version,
+                            Instant createdAt) {
+
+        public static final String COUNTING = "COUNTING";
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String APPROVED = "APPROVED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean countable() {
+            return COUNTING.equals(status);
+        }
+
+        public boolean active() {
+            return COUNTING.equals(status) || SUBMITTED.equals(status);
+        }
+
+        public boolean approvable() {
+            return SUBMITTED.equals(status);
+        }
+
+        public boolean cancellable() {
+            return COUNTING.equals(status) || SUBMITTED.equals(status);
+        }
+    }
+
+    /**
+     * 盘点明细（一行 = 一个库存批次）。
+     *
+     * <p>{@code bookQuantity} 是建单时的账面快照；审批时若批次当前数量与快照不同，
+     * 整单拒绝（盘点期间又发生了发药/入库，差异不能重复计算）。
+     */
+    public record StockTakeItem(UUID id, UUID takeId, UUID drugId, String drugCode,
+                                String drugName, String spec, String unit, UUID batchId,
+                                String batchNo, LocalDate expireDate, int bookQuantity,
+                                Integer actualQuantity, String reason, String countedBy,
+                                Instant countedAt, long version) {
+
+        /** 差异（未录入按 0 处理，仅用于展示预估值）。 */
+        public int variance() {
+            return actualQuantity == null ? 0 : actualQuantity - bookQuantity;
+        }
+
+        public boolean counted() {
+            return actualQuantity != null;
+        }
+    }
+
+    /** 盘点审批产生的库存校准流水（追加式）。 */
+    public record StockAdjustment(UUID id, UUID takeId, UUID drugId, UUID batchId, String batchNo,
+                                  int beforeQuantity, int afterQuantity, int delta, String reason,
+                                  String actor, Instant createdAt) {
+    }
+
+    /** 盘点快照来源行（建单时从批次库存读取，不落库）。 */
+    public record StockTakeSource(UUID drugId, String drugCode, String drugName, String spec,
+                                  String unit, UUID batchId, String batchNo, LocalDate expireDate,
+                                  int quantity) {
+    }
 }

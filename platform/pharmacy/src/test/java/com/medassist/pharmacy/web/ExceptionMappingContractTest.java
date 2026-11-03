@@ -39,6 +39,11 @@ class ExceptionMappingContractTest {
         assertThat(handler.statusOf(ErrorCode.GATEWAY_TIMEOUT)).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
         // P1-D8：退药超量属请求内容不合法（422），不是状态冲突（409）
         assertThat(handler.statusOf(ErrorCode.DRUG_RETURN_EXCEEDS)).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // G6：自审是越权（403），库存漂移是并发冲突（409），未录完/缺原因是请求内容问题（422）
+        assertThat(handler.statusOf(ErrorCode.STOCK_TAKE_SELF_APPROVAL)).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(handler.statusOf(ErrorCode.STOCK_TAKE_STOCK_DRIFT)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.STOCK_TAKE_INCOMPLETE))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

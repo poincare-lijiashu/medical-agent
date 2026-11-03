@@ -11,11 +11,16 @@ import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
+import com.medassist.pharmacy.domain.PharmacyModel.StockAdjustment;
+import com.medassist.pharmacy.domain.PharmacyModel.StockTake;
+import com.medassist.pharmacy.domain.PharmacyModel.StockTakeItem;
+import com.medassist.pharmacy.domain.PharmacyModel.StockTakeSource;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -868,6 +873,260 @@ public class PharmacyRepository {
                         """)
                 .param("qty", quantity).param("receiver", receiver)
                 .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 药品盘点（G6）
+
+    private static final RowMapper<StockTake> STOCK_TAKE_MAPPER =
+            (rs, i) -> new StockTake(
+                    rs.getObject("id", UUID.class), rs.getString("take_no"), rs.getString("status"),
+                    rs.getString("scope_label"), rs.getString("note"), rs.getString("created_by"),
+                    rs.getString("submitted_by"),
+                    rs.getTimestamp("submitted_at") == null ? null
+                            : rs.getTimestamp("submitted_at").toInstant(),
+                    rs.getString("approved_by"),
+                    rs.getTimestamp("approved_at") == null ? null
+                            : rs.getTimestamp("approved_at").toInstant(),
+                    rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null ? null
+                            : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("cancel_reason"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<StockTakeItem> STOCK_TAKE_ITEM_MAPPER =
+            (rs, i) -> new StockTakeItem(
+                    rs.getObject("id", UUID.class), rs.getObject("take_id", UUID.class),
+                    rs.getObject("drug_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date").toLocalDate(), rs.getInt("book_quantity"),
+                    (Integer) rs.getObject("actual_quantity"), rs.getString("reason"),
+                    rs.getString("counted_by"),
+                    rs.getTimestamp("counted_at") == null ? null
+                            : rs.getTimestamp("counted_at").toInstant(),
+                    rs.getLong("version"));
+
+    private static final RowMapper<StockTakeSource> STOCK_TAKE_SOURCE_MAPPER =
+            (rs, i) -> new StockTakeSource(
+                    rs.getObject("drug_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date").toLocalDate(), rs.getInt("quantity"));
+
+    private static final RowMapper<StockAdjustment> STOCK_ADJUSTMENT_MAPPER =
+            (rs, i) -> new StockAdjustment(
+                    rs.getObject("id", UUID.class), rs.getObject("take_id", UUID.class),
+                    rs.getObject("drug_id", UUID.class), rs.getObject("batch_id", UUID.class),
+                    rs.getString("batch_no"), rs.getInt("before_quantity"),
+                    rs.getInt("after_quantity"), rs.getInt("delta"), rs.getString("reason"),
+                    rs.getString("actor"), rs.getTimestamp("created_at").toInstant());
+
+    public String nextStockTakeNo() {
+        return nextNo("pharmacy_svc.stock_take_no_seq", "ST");
+    }
+
+    public void insertStockTake(StockTake t) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_take
+                            (id, take_no, status, scope_label, note, created_by, version)
+                        VALUES (:id, :no, :status, CAST(:scope AS text), CAST(:note AS text),
+                                :createdBy, 0)
+                        """)
+                .param("id", t.id()).param("no", t.takeNo()).param("status", t.status())
+                .param("scope", t.scopeLabel()).param("note", t.note())
+                .param("createdBy", t.createdBy()).update();
+    }
+
+    public Optional<StockTake> findStockTake(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, take_no, status, scope_label, note, created_by, submitted_by,
+                               submitted_at, approved_by, approved_at, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.stock_take WHERE id = ?
+                        """).param(id).query(STOCK_TAKE_MAPPER).optional();
+    }
+
+    /** 当前进行中的盘点单（COUNTING/SUBMITTED）；库级唯一索引保证最多一条。 */
+    public Optional<StockTake> findActiveStockTake() {
+        return jdbc.sql("""
+                        SELECT id, take_no, status, scope_label, note, created_by, submitted_by,
+                               submitted_at, approved_by, approved_at, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.stock_take
+                         WHERE status IN ('COUNTING', 'SUBMITTED')
+                         ORDER BY created_at DESC
+                         LIMIT 1
+                        """).query(STOCK_TAKE_MAPPER).optional();
+    }
+
+    /** 加行锁读取盘点单；必须在事务内调用（提交/审批/取消的 CAS 基准）。 */
+    public Optional<StockTake> lockStockTake(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, take_no, status, scope_label, note, created_by, submitted_by,
+                               submitted_at, approved_by, approved_at, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.stock_take WHERE id = ? FOR UPDATE
+                        """).param(id).query(STOCK_TAKE_MAPPER).optional();
+    }
+
+    public List<StockTake> listStockTakes(String status, int limit) {
+        return jdbc.sql("""
+                        SELECT id, take_no, status, scope_label, note, created_by, submitted_by,
+                               submitted_at, approved_by, approved_at, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.stock_take
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("limit", limit)
+                .query(STOCK_TAKE_MAPPER).list();
+    }
+
+    /** 建单快照来源：有余量的批次，可按药品编码/名称/批号缩小范围。 */
+    public List<StockTakeSource> listStockTakeSources(String keyword) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT d.id AS drug_id, d.drug_code, d.name AS drug_name, d.spec, d.unit,
+                               b.id AS batch_id, b.batch_no, b.expire_date, b.quantity
+                          FROM pharmacy_svc.drug_batch b
+                          JOIN pharmacy_svc.md_drug d ON d.id = b.drug_id
+                         WHERE b.quantity > 0
+                           AND (CAST(:pattern AS text) IS NULL
+                                OR d.name ILIKE CAST(:pattern AS text)
+                                OR d.drug_code ILIKE CAST(:pattern AS text)
+                                OR b.batch_no ILIKE CAST(:pattern AS text))
+                         ORDER BY d.drug_code, b.expire_date, b.batch_no
+                        """)
+                .param("pattern", pattern).query(STOCK_TAKE_SOURCE_MAPPER).list();
+    }
+
+    public void insertStockTakeItem(UUID id, UUID takeId, UUID drugId, UUID batchId,
+                                    int bookQuantity) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_take_item
+                            (id, take_id, drug_id, batch_id, book_quantity, version)
+                        VALUES (:id, :takeId, :drugId, :batchId, :book, 0)
+                        """)
+                .param("id", id).param("takeId", takeId).param("drugId", drugId)
+                .param("batchId", batchId).param("book", bookQuantity).update();
+    }
+
+    public List<StockTakeItem> listStockTakeItems(UUID takeId) {
+        return jdbc.sql("""
+                        SELECT i.id, i.take_id, i.drug_id, d.drug_code, d.name AS drug_name,
+                               d.spec, d.unit, i.batch_id, b.batch_no, b.expire_date,
+                               i.book_quantity, i.actual_quantity, i.reason, i.counted_by,
+                               i.counted_at, i.version
+                          FROM pharmacy_svc.stock_take_item i
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                          JOIN pharmacy_svc.drug_batch b ON b.id = i.batch_id
+                         WHERE i.take_id = :takeId
+                         ORDER BY d.drug_code, b.expire_date, b.batch_no
+                        """).param("takeId", takeId).query(STOCK_TAKE_ITEM_MAPPER).list();
+    }
+
+    /** 录入实盘（CAS：明细版本号）；返回 false 表示已被他人修改。 */
+    public boolean countStockTakeItem(UUID itemId, UUID takeId, int actualQuantity, String reason,
+                                      String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.stock_take_item
+                           SET actual_quantity = :actual,
+                               reason = CAST(:reason AS text),
+                               counted_by = :actor,
+                               counted_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND take_id = :takeId AND version = :version
+                        """)
+                .param("actual", actualQuantity).param("reason", reason).param("actor", actor)
+                .param("id", itemId).param("takeId", takeId).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public int countUncountedItems(UUID takeId) {
+        Integer count = jdbc.sql("""
+                        SELECT count(*) FROM pharmacy_svc.stock_take_item
+                         WHERE take_id = ? AND actual_quantity IS NULL
+                        """).param(takeId).query(Integer.class).single();
+        return count == null ? 0 : count;
+    }
+
+    public boolean submitStockTake(UUID id, long expectedVersion, String actor) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.stock_take
+                           SET status = 'SUBMITTED', submitted_by = :actor, submitted_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'COUNTING' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .update() > 0;
+    }
+
+    public boolean approveStockTake(UUID id, long expectedVersion, String actor) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.stock_take
+                           SET status = 'APPROVED', approved_by = :actor, approved_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .update() > 0;
+    }
+
+    public boolean cancelStockTake(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.stock_take
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancel_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('COUNTING', 'SUBMITTED')
+                           AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .param("reason", reason).update() > 0;
+    }
+
+    /**
+     * 按快照校准批次库存（CAS：当前数量必须等于账面快照且版本一致）。
+     *
+     * <p>条件里带 quantity 而不是只带 version：即便版本恰好被别的路径推进，
+     * 也要保证"改之前确实是盘点时的数量"，否则拒绝整单。
+     */
+    public boolean calibrateBatchQuantity(UUID batchId, int expectedQuantity, int afterQuantity,
+                                          long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.drug_batch
+                           SET quantity = :after, version = version + 1, updated_at = now()
+                         WHERE id = :id AND quantity = :expected AND version = :version
+                        """)
+                .param("after", afterQuantity).param("id", batchId)
+                .param("expected", expectedQuantity).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public void insertStockAdjustment(StockAdjustment a) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_adjustment
+                            (id, take_id, drug_id, batch_id, before_quantity, after_quantity,
+                             delta, reason, actor)
+                        VALUES (:id, :takeId, :drugId, :batchId, :before, :after, :delta,
+                                CAST(:reason AS text), :actor)
+                        """)
+                .param("id", a.id()).param("takeId", a.takeId()).param("drugId", a.drugId())
+                .param("batchId", a.batchId()).param("before", a.beforeQuantity())
+                .param("after", a.afterQuantity()).param("delta", a.delta())
+                .param("reason", a.reason()).param("actor", a.actor()).update();
+    }
+
+    public List<StockAdjustment> listStockAdjustments(UUID takeId) {
+        return jdbc.sql("""
+                        SELECT a.id, a.take_id, a.drug_id, a.batch_id, b.batch_no,
+                               a.before_quantity, a.after_quantity, a.delta, a.reason,
+                               a.actor, a.created_at
+                          FROM pharmacy_svc.stock_adjustment a
+                          JOIN pharmacy_svc.drug_batch b ON b.id = a.batch_id
+                         WHERE a.take_id = :takeId
+                         ORDER BY a.created_at, b.batch_no
+                        """).param("takeId", takeId).query(STOCK_ADJUSTMENT_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

@@ -808,6 +808,79 @@ export interface ProcurementSummary {
   pendingReceiptOrders: number
 }
 
+// ---------------------------------------------------------------- 药品盘点（G6）
+
+export type StockTakeStatus = 'COUNTING' | 'SUBMITTED' | 'APPROVED' | 'CANCELLED'
+
+/** 盘点单（全库同一时刻仅一张进行中）。 */
+export interface StockTake {
+  id: string
+  takeNo: string
+  status: StockTakeStatus
+  scopeLabel: string | null
+  note: string | null
+  createdBy: string
+  submittedBy: string | null
+  submittedAt: string | null
+  approvedBy: string | null
+  approvedAt: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  version: number
+  createdAt: string
+}
+
+/** 盘点明细：账面数量为建单快照，实盘未录入时 actualQuantity 为 null。 */
+export interface StockTakeItem {
+  id: string
+  takeId: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  bookQuantity: number
+  actualQuantity: number | null
+  reason: string | null
+  countedBy: string | null
+  countedAt: string | null
+  version: number
+}
+
+/** 盘点审批产生的库存校准流水（追加式）。 */
+export interface StockAdjustment {
+  id: string
+  takeId: string
+  drugId: string
+  batchId: string
+  batchNo: string
+  beforeQuantity: number
+  afterQuantity: number
+  delta: number
+  reason: string | null
+  actor: string
+  createdAt: string
+}
+
+export interface StockTakeSummary {
+  itemCount: number
+  countedCount: number
+  varianceCount: number
+  increaseQuantity: number
+  decreaseQuantity: number
+}
+
+export interface StockTakeDetail {
+  take: StockTake
+  items: StockTakeItem[]
+  adjustments: StockAdjustment[]
+  summary: StockTakeSummary
+}
+
 // ---------------------------------------------------------------- 物资耗材（G3）
 
 export type ConsumableCategory = 'GENERAL' | 'HIGH_VALUE' | 'IMPLANT'
