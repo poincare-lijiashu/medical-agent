@@ -44,8 +44,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * （调用方签名作为 T5 单独上线，避免切换 enforce 时中断服务间调用）。
  *
  * <p>已知边界（写入 docs/DESIGN-20261101-MF07-INTERNAL-AUTH.md）：
- * nonce 去重为进程内实现，仅对单副本严格有效；多副本窗口内重放依赖 60 秒时间窗收敛，
- * 阶段二切换 Redis 后消除。
+ * nonce 去重默认是进程内实现，仅对单副本严格有效；**多副本部署必须**把
+ * {@code medassist.internal-auth.nonce-store} 设为 {@code jdbc}，由
+ * {@link JdbcNonceStore} 用共享表做跨副本去重（P0-S5）。
  */
 public class InternalAuthFilter extends OncePerRequestFilter {
 
@@ -67,7 +68,7 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     /** v2（Ed25519）验签公钥；未配置时为 null，v2 请求按 unknown_key 拒绝。 */
     private final java.security.PublicKey gatewayPublicKey;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
-    private final NonceCache nonces;
+    private final NonceStore nonces;
 
     public InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
                               MeterRegistry meterRegistry) {
@@ -88,11 +89,31 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
                        MeterRegistry meterRegistry, java.security.PublicKey gatewayPublicKey,
                        int maxNonceEntries) {
+        this(props, keySet, meterRegistry, gatewayPublicKey, null, maxNonceEntries);
+    }
+
+    /**
+     * 带外部 nonce 存储的构造器（P0-S5）：{@code store} 为 null 时退回进程内去重。
+     *
+     * <p>多副本部署必须注入共享存储（{@link JdbcNonceStore}），否则同一 nonce
+     * 打到另一个副本会被判为新鲜，时间窗内可重放。
+     */
+    public InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
+                              MeterRegistry meterRegistry, java.security.PublicKey gatewayPublicKey,
+                              NonceStore store) {
+        this(props, keySet, meterRegistry, gatewayPublicKey, store, MAX_NONCE_ENTRIES);
+    }
+
+    private InternalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
+                               MeterRegistry meterRegistry, java.security.PublicKey gatewayPublicKey,
+                               NonceStore store, int maxNonceEntries) {
         this.props = props;
         this.keySet = keySet;
         this.meterRegistry = meterRegistry;
         this.gatewayPublicKey = gatewayPublicKey;
-        this.nonces = new NonceCache(props.nonceTtlSecondsOrDefault() * 1000L, maxNonceEntries);
+        this.nonces = store != null
+                ? store
+                : new NonceCache(props.nonceTtlSecondsOrDefault() * 1000L, maxNonceEntries);
     }
 
     @Override
@@ -326,9 +347,17 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         return "ok";
     }
 
-    /** @return null 表示首次出现（放行）；否则返回拒绝原因 replay / saturated */
+    /** @return null 表示首次出现（放行）；否则返回拒绝原因 replay / saturated / nonce_store_error */
     private String registerNonce(String key) {
-        return switch (nonces.register(key)) {
+        final NonceStore.Outcome outcome;
+        try {
+            outcome = nonces.register(key);
+        } catch (RuntimeException e) {
+            // 共享存储不可用时 fail-closed：拒绝比"当成新鲜"安全（后者等于关闭防重放）
+            log.warn("internal-auth.nonce_store_error type={}", e.getClass().getSimpleName());
+            return "nonce_store_error";
+        }
+        return switch (outcome) {
             case FRESH -> null;
             case REPLAY -> "replay";
             case SATURATED -> "saturated";
@@ -415,9 +444,7 @@ public class InternalAuthFilter extends OncePerRequestFilter {
      * 由调用方按 403 处理），绝不整体清空——清空等于主动把已用过的 nonce 全部放回可用状态，
      * 在 TTL 窗口内重新打开重放（第五轮 R5-M1）。
      */
-    private static final class NonceCache {
-
-        enum Outcome { FRESH, REPLAY, SATURATED }
+    private static final class NonceCache implements NonceStore {
 
         private static final int PURGE_BUDGET = 2000;
 
@@ -431,7 +458,8 @@ public class InternalAuthFilter extends OncePerRequestFilter {
             this.maxEntries = maxEntries;
         }
 
-        Outcome register(String key) {
+        @Override
+        public Outcome register(String key) {
             long now = System.currentTimeMillis();
             if (seen.size() >= maxEntries && !purgeExpired(now)) {
                 return Outcome.SATURATED;

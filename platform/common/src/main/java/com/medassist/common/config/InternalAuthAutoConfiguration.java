@@ -7,6 +7,7 @@ import com.medassist.common.security.InternalKeySet;
 import com.medassist.common.security.SecurityDefaults;
 import com.medassist.common.web.ActorGuardFilter;
 import com.medassist.common.web.InternalAuthFilter;
+import com.medassist.common.web.NonceStore;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,7 +96,8 @@ public class InternalAuthAutoConfiguration {
     @ConditionalOnMissingBean
     public InternalAuthFilter internalAuthFilter(InternalAuthProperties props, InternalKeySet keySet,
                                                  Environment environment,
-                                                 ObjectProvider<MeterRegistry> registryProvider) {
+                                                 ObjectProvider<MeterRegistry> registryProvider,
+                                                 ObjectProvider<NonceStore> nonceStoreProvider) {
         String mode = props.modeOrDefault();
         if (!InternalAuthProperties.OFF.equals(mode)
                 && !InternalAuthProperties.LOG.equals(mode)
@@ -151,13 +153,17 @@ public class InternalAuthAutoConfiguration {
                             + skew + ")+1，否则时间窗内可用 nonce 会提前失效并允许重放，服务拒绝启动");
         }
 
+        // P0-S5：多副本部署注入共享 nonce 存储（nonce-store=jdbc）；未配置时为 null → 进程内去重
+        NonceStore nonceStore = nonceStoreProvider.getIfAvailable();
         log.info("internal-auth.mode={} keys={} gatewayPublicKey={} clockSkew={}s "
-                        + "internalPathsRequired={} internalKeys={}",
+                        + "internalPathsRequired={} internalKeys={} nonceStore={}",
                 mode, keySet.configured() ? "configured" : "none",
                 gatewayPublicKey != null ? "configured" : "none",
                 props.clockSkewSecondsOrDefault(), props.internalPathsSignatureRequiredOrDefault(),
-                keySet.callerConfigured() ? "configured" : "none");
-        return new InternalAuthFilter(props, keySet, registryProvider.getIfAvailable(), gatewayPublicKey);
+                keySet.callerConfigured() ? "configured" : "none",
+                nonceStore != null ? "shared" : "in-memory");
+        return new InternalAuthFilter(props, keySet, registryProvider.getIfAvailable(),
+                gatewayPublicKey, nonceStore);
     }
 
     /** platform-clinical → clinical；medassist-gateway → gateway；其它原样小写。 */

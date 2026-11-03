@@ -158,7 +158,7 @@ spec:
       rules:
         # 灰度（log）期看"是否存在绕过网关的直连流量"；切 enforce 后看是否被大范围误伤。
         # 指标来自 common 的 InternalAuthFilter：result=ok|missing|bad_sig|skew|replay|
-        # unknown_key|unknown_caller|bad_version|saturated
+        # unknown_key|unknown_caller|bad_version|saturated|nonce_store_error
         - alert: MedassistInternalAuthRejectSpike
           expr: sum(rate(medassist_internal_auth_total{result!="ok"}[5m])) > 0.5
           for: 10m
@@ -168,6 +168,18 @@ spec:
             summary: "服务间签名校验拒绝速率异常（> 0.5 次/秒）"
             description: "按 result 区分：missing/bad_sig 多为网关与下游密钥不一致或存在绕过网关的直连调用；
                           replay 需排查重放；saturated 说明 nonce 表被打满（疑似攻击或配置异常）。"
+
+        # P0-S5：共享 nonce 存储（nonce-store=jdbc）不可用时过滤器 fail-closed，
+        # 影响是"内部调用全部 403"——必须当故障告警，而不是当作安全事件。
+        - alert: MedassistInternalAuthNonceStoreError
+          expr: sum(rate(medassist_internal_auth_total{result="nonce_store_error"}[5m])) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "共享 nonce 存储不可用，内部调用正在被 fail-closed 拒绝"
+            description: "检查该服务 schema 下 internal_nonce 表是否存在（Flyway 迁移是否成功）与数据库连通性；
+                          fail-closed 是预期行为，不要为此关闭校验。"
 
         - alert: MedassistInternalAuthRejectAllTraffic
           expr: |

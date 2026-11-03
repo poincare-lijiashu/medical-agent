@@ -59,6 +59,8 @@ internalAuth:
   gatewaySigning: ed25519
   acceptEd25519: true
   mountCallerKeys: true
+  # P0-S5：多副本部署，nonce 必须跨副本去重（表 internal_nonce 随各服务迁移发布）
+  nonceStore: jdbc
 
 gateway:
   replicaCount: 2

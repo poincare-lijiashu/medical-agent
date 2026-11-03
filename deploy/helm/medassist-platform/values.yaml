@@ -132,6 +132,10 @@ internalAuth:
   clockSkewSeconds: 60
   # nonce 必须比时间窗活得久（≥2×clockSkew+1），否则窗内时间戳 + 已过期 nonce 可重放
   nonceTtlSeconds: 180
+  # P0-S5：nonce 去重存储。memory = 进程内（仅单副本严格有效）；
+  # jdbc = 各服务自己的 schema 内 internal_nonce 表（跨副本共享，多副本部署必须开启）。
+  # 表由各服务 Flyway 迁移随版本发布，无需额外建表步骤；网关无 servlet 过滤器，不注入。
+  nonceStore: memory
   # /internal/** 的服务→服务调用是否也要求调用方签名（T5）。
   # 默认 false：先确认每个服务已挂载 caller-keys（mountCallerKeys=true）且全部调用方已升级，
   # 再切 true（切换后未配置密钥的调用方会被 403）。

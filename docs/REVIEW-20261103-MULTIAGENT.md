@@ -32,8 +32,15 @@
 
 | 编号 | 状态 | 说明 |
 |---|---|---|
-| P0-S5 | 待办 | nonce 落 Redis（多副本防重放）——需引入 RedisTemplate 依赖与降级策略，排下一批 |
 | insurance 行级范围 | 降级为设计取舍 | 临床快照不返回科室、`settlement_bill` 无 dept 列；医保窗口本就是全院职能岗，按科室隔离会阻碍跨科补结算。若后续强制要求，需 `clinical` 内部接口补 `deptId` + Flyway 补列，成本较高，暂记录不改 |
+
+### 已修复（2026-11-03 第四批，P0-S5）
+
+| 编号 | 复核结论 | 落地 | 验证 |
+|---|---|---|---|
+| P0-S5 | 成立 | 抽出 `NonceStore` 接口（`FRESH / REPLAY / SATURATED`）；新增 `JdbcNonceStore` 用共享表 `internal_nonce` 做跨副本去重（`INSERT ... ON CONFLICT DO UPDATE ... WHERE expires_at <= now()`：影响 1 行=新鲜、0 行=重放，过期行可被抢占复用）；`JdbcNonceStoreAutoConfiguration` 按 `medassist.internal-auth.nonce-store=jdbc` 装配（类上加 `@ConditionalOnClass(name=...)`，无 JDBC 的服务如网关不会加载）；共享存储异常时过滤器 **fail-closed** 转 403（`nonce_store_error`）；8 个 DB 服务各加一条 `internal_nonce` 迁移（各自 schema，不跨域建表） | 单测 +5（`JdbcNonceStoreTest` 3：新鲜/重放、异常外抛、schema 白名单；`InternalAuthFilterTest` 2：共享存储 replay 拒绝、存储故障 fail-closed）；common 104 全绿；真实 PostgreSQL 验证 upsert 语义（1→1/0/1）；pharmacy 实启 `nonce-store=jdbc`：Flyway V10 应用成功、表与索引就绪、`/actuator/health=UP` |
+
+**取舍说明**：意见书建议落 Redis，实际改落 PostgreSQL——prod 虽有 Redis，但引入 `spring-data-redis` 会新增一套连接/降级/序列化面；PostgreSQL 本就是每个服务的硬依赖，且唯一键 + `expires_at` 能同时表达"新鲜/重放/过期复用"三种状态，故不新增中间件。默认值仍是 `memory`（单副本/开发），多副本部署必须在 values 里显式打开 `jdbc`。
 
 ### 已修复（2026-11-03 第三批，commit `2f726e3`）
 
@@ -93,7 +100,7 @@
 - 风险：绕过网关直连业务端口即可伪造 `X-Actor` 读 PHI。
 - 建议：生产守卫仅允许 `enforce`（与既有 JWT / EMPI 字段密钥的"生产拒绝启动"做法保持一致）。
 
-**P0-S5　nonce 去重为进程内，多副本可跨副本重放**　`待复核`
+**P0-S5　nonce 去重为进程内，多副本可跨副本重放**　`已修复`
 - 事实：`platform/common/.../web/InternalAuthFilter.java:418-475`（文件内已自记边界）；prod 每服务 2–3 副本（`deploy/helm/medassist-platform/values-prod.yaml:102-170`）。
 - 建议：nonce 落 Redis（prod 已启用 Redis，`values-prod.yaml:44-46`），或签入带服务端时间戳的一次性令牌。
 

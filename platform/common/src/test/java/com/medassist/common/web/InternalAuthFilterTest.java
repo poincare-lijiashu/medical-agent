@@ -52,6 +52,15 @@ class InternalAuthFilterTest {
                 null, maxNonceEntries);
     }
 
+    /** P0-S5：注入外部 nonce 存储，验证共享存储的返回值/异常如何映射为放行或拒绝。 */
+    private static InternalAuthFilter filterWithStore(NonceStore store) {
+        InternalAuthProperties props = new InternalAuthProperties(
+                InternalAuthProperties.ENFORCE, 60, KEYS_JSON, 120, false, null, null, null, null,
+                null, null, null, null, null);
+        return new InternalAuthFilter(props, InternalKeySet.parse(KEYS_JSON, new ObjectMapper()),
+                null, null, store);
+    }
+
     /** P0-8：请求体绑定（v1i2）用例需要自定义开关与 body 上限。 */
     private static InternalAuthFilter filterWithBodyHash(boolean required, int maxBytes) {
         InternalAuthProperties props = new InternalAuthProperties(
@@ -364,6 +373,34 @@ class InternalAuthFilterTest {
         filter.doFilter(overflow, new MockHttpServletResponse(), chain);
         assertNull(chain.getRequest(), "容量满时必须 fail-closed，不能整体清空（R5-M1）");
         assertEquals("saturated", overflow.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void sharedNonceStoreReplayRejectsRequest() throws Exception {
+        InternalAuthFilter filter = filterWithStore(key -> NonceStore.Outcome.REPLAY);
+        MockHttpServletRequest request = request("GET", "/clinical/visits");
+        sign(request, KEY_2, "k2", now(), "shared-replay");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+        filter.doFilter(request, response, chain);
+        assertNull(chain.getRequest());
+        assertEquals(403, response.getStatus());
+        assertEquals("replay", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
+    }
+
+    @Test
+    void sharedNonceStoreFailureFailsClosed() throws Exception {
+        InternalAuthFilter filter = filterWithStore(key -> {
+            throw new IllegalStateException("db down");
+        });
+        MockHttpServletRequest request = request("GET", "/clinical/visits");
+        sign(request, KEY_2, "k2", now(), "shared-error");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+        filter.doFilter(request, response, chain);
+        assertNull(chain.getRequest(), "nonce 存储不可用必须 fail-closed，不能当成新鲜放行");
+        assertEquals(403, response.getStatus());
+        assertEquals("nonce_store_error", request.getAttribute(InternalAuthFilter.ATTR_RESULT));
     }
 
     @Test

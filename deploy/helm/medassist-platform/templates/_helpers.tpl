@@ -182,6 +182,12 @@ Java 服务公共环境变量。
   value: {{ $ia.clockSkewSeconds | default 60 | quote }}
 - name: MEDASSIST_INTERNALAUTH_NONCETTLSECONDS
   value: {{ $ia.nonceTtlSeconds | default 180 | quote }}
+# P0-S5：多副本 nonce 去重。jdbc = 各服务自有 schema 的 internal_nonce 表；
+# 网关（WebFlux）不装配 servlet 过滤器，无需该变量。
+{{- if and (not $isGateway) (eq (toString ($ia.nonceStore | default "memory")) "jdbc") }}
+- name: MEDASSIST_INTERNALAUTH_NONCESTORE
+  value: "jdbc"
+{{- end }}
 - name: MEDASSIST_INTERNALAUTH_INTERNALPATHSSIGNATUREREQUIRED
   value: {{ $ia.internalPathsSignatureRequired | default false | quote }}
 # P0-8：请求体摘要纳入调用方签名（v1i2）。灰度顺序：服务端先部署（false，兼容 v1i）→
