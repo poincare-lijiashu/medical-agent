@@ -1,5 +1,6 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.domain.ClinicalModel;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.PathwayInstance;
 import com.medassist.clinical.domain.ClinicalModel.PathwayNode;
@@ -7,6 +8,7 @@ import com.medassist.clinical.domain.ClinicalModel.PathwayTask;
 import com.medassist.clinical.domain.ClinicalModel.PathwayTemplate;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalPathwayDtos;
 import com.medassist.clinical.web.ClinicalPathwayDtos.CreateTemplateReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.EnrollReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.ExitReq;
@@ -19,6 +21,7 @@ import com.medassist.common.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
@@ -70,7 +73,7 @@ class ClinicalPathwayServiceTest {
 
     private PathwayTemplate template(String status, long version) {
         return new PathwayTemplate(templateId, "CP-TEST", "测试路径", "J18.900", null, null,
-                3, status, "doctor01", "doctor01",
+                3, 1, templateId, status, "doctor01", "doctor01",
                 PathwayTemplate.PUBLISHED.equals(status) ? Instant.now() : null,
                 version, Instant.now());
     }
@@ -394,5 +397,100 @@ class ClinicalPathwayServiceTest {
     void taskRequiresActor() {
         assertCode(() -> service.updateTask(instanceId, taskId,
                 new UpdateTaskReq("DONE", null), " "), ErrorCode.VALIDATION_FAILED);
+    }
+
+    // ---------------------------------------------------------------- 版本与统计（G32）
+
+    @Test
+    @DisplayName("克隆：原模板不存在 → 404")
+    void cloneRequiresSource() {
+        when(repo.findPathwayTemplate(templateId)).thenReturn(Optional.empty());
+
+        assertCode(() -> service.cloneTemplate(templateId,
+                new ClinicalPathwayDtos.CloneTemplateReq("CP-TEST-V2"), "doctor01"),
+                ErrorCode.PATHWAY_TEMPLATE_NOT_FOUND);
+        verify(repo, never()).insertPathwayTemplate(any());
+    }
+
+    @Test
+    @DisplayName("克隆：新编码已存在 → 409")
+    void cloneRejectsDuplicateCode() {
+        when(repo.findPathwayTemplate(templateId))
+                .thenReturn(Optional.of(template("PUBLISHED", 1L)));
+        when(repo.pathwayTemplateCodeExists("CP-TEST-V2")).thenReturn(true);
+
+        assertCode(() -> service.cloneTemplate(templateId,
+                new ClinicalPathwayDtos.CloneTemplateReq("CP-TEST-V2"), "doctor01"),
+                ErrorCode.PATHWAY_TEMPLATE_DUPLICATE);
+        verify(repo, never()).insertPathwayTemplate(any());
+    }
+
+    @Test
+    @DisplayName("克隆：版本号家族递增、节点全部复制并写审计")
+    void cloneCopiesNodesAndVersion() {
+        when(repo.findPathwayTemplate(templateId))
+                .thenReturn(Optional.of(template("PUBLISHED", 3L)));
+        when(repo.pathwayTemplateCodeExists("CP-TEST-V2")).thenReturn(false);
+        when(repo.listPathwayNodes(templateId)).thenReturn(List.of(
+                node(1, 1, "ASSESSMENT", true), node(2, 1, "ORDER", true)));
+        when(repo.nextPathwayTemplateVersionNo(templateId)).thenReturn(2);
+        when(repo.findPathwayTemplate(any()))
+                .thenReturn(Optional.of(template("DRAFT", 0L)));
+
+        service.cloneTemplate(templateId, new ClinicalPathwayDtos.CloneTemplateReq("CP-TEST-V2"),
+                "doctor01");
+
+        ArgumentCaptor<PathwayTemplate> captor = ArgumentCaptor.forClass(PathwayTemplate.class);
+        verify(repo).insertPathwayTemplate(captor.capture());
+        assertThat(captor.getValue().versionNo()).isEqualTo(2);
+        assertThat(captor.getValue().originId()).isEqualTo(templateId);
+        assertThat(captor.getValue().status()).isEqualTo(PathwayTemplate.DRAFT);
+        verify(repo, times(2)).insertPathwayNode(any());
+        verify(repo).logChange(eq("doctor01"), eq("PATHWAY_TEMPLATE_CLONE"), eq("PATHWAY"),
+                anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("统计：按模板合并任务变异并计算比率/总计，科室下钻原样返回")
+    void statsAggregates() {
+        UUID template2 = UUID.randomUUID();
+        when(repo.pathwayInstanceStats(any(LocalDate.class), any(LocalDate.class), any(), any()))
+                .thenReturn(List.of(
+                        new ClinicalModel.PathwayInstanceStatRow(templateId, "CP-A", "路径A", 2,
+                                10, 6, 2, 2, 4.5),
+                        new ClinicalModel.PathwayInstanceStatRow(template2, "CP-B", "路径B", 1,
+                                4, 0, 4, 0, null)));
+        when(repo.pathwayTaskStats(any(LocalDate.class), any(LocalDate.class), any(), any()))
+                .thenReturn(List.of(
+                        new ClinicalModel.PathwayTaskStatRow(templateId, 50, 5),
+                        new ClinicalModel.PathwayTaskStatRow(template2, 20, 20)));
+        when(repo.pathwayDeptStats(any(LocalDate.class), any(LocalDate.class), any()))
+                .thenReturn(List.of(
+                        new ClinicalModel.PathwayDeptStatRow(deptId, "内科", 14, 6, 6, 2)));
+
+        var view = service.stats(LocalDate.now().minusDays(29), LocalDate.now(), null, null);
+
+        assertThat(view.totals().enrolled()).isEqualTo(14);
+        assertThat(view.totals().completed()).isEqualTo(6);
+        assertThat(view.totals().exited()).isEqualTo(6);
+        assertThat(view.totals().tasks()).isEqualTo(70);
+        assertThat(view.totals().skipped()).isEqualTo(25);
+        assertThat(view.totals().completionRate()).isEqualTo(0.4286);
+        assertThat(view.totals().variationRate()).isEqualTo(0.3571);
+        assertThat(view.totals().avgDays()).isEqualTo(4.5);
+        assertThat(view.templates()).hasSize(2);
+        assertThat(view.templates().get(1).variationRate()).isEqualTo(1.0);
+        assertThat(view.depts()).hasSize(1);
+        assertThat(view.depts().get(0).deptName()).isEqualTo("内科");
+    }
+
+    @Test
+    @DisplayName("统计：区间倒置或超过 366 天 → 422")
+    void statsRejectsBadRange() {
+        LocalDate today = LocalDate.now();
+        assertCode(() -> service.stats(today, today.minusDays(1), null, null),
+                ErrorCode.VALIDATION_FAILED);
+        assertCode(() -> service.stats(today.minusDays(400), today, null, null),
+                ErrorCode.VALIDATION_FAILED);
     }
 }

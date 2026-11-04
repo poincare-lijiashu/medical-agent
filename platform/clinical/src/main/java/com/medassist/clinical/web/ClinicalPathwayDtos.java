@@ -13,6 +13,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -74,5 +75,34 @@ public final class ClinicalPathwayDtos {
     }
 
     public record ExitReq(@NotBlank @Size(max = 200) String reason) {
+    }
+
+    /** 克隆新版本：编码必须与原模板不同，节点按原模板复制。 */
+    public record CloneTemplateReq(
+            @NotBlank @Size(max = 32)
+            @Pattern(regexp = "[A-Za-z0-9_-]+", message = "路径编码只能包含字母、数字、下划线与短横线")
+            String code) {
+    }
+
+    /** 按模板统计行（比率 0–1）。 */
+    public record PathwayTemplateStat(UUID templateId, String code, String name, int versionNo,
+                                      long enrolled, long completed, long exited, long active,
+                                      long tasks, long skipped, double completionRate,
+                                      double exitRate, double variationRate, Double avgDays) {
+    }
+
+    public record PathwayDeptStat(UUID deptId, String deptName, long enrolled, long completed,
+                                  long exited, long active) {
+    }
+
+    public record PathwayStatsTotals(long enrolled, long completed, long exited, long active,
+                                     long tasks, long skipped, double completionRate,
+                                     double exitRate, double variationRate, Double avgDays) {
+    }
+
+    /** 路径运营统计（G32）：按入径日过滤，默认最近 30 天。 */
+    public record PathwayStatsView(LocalDate from, LocalDate to, PathwayStatsTotals totals,
+                                   List<PathwayTemplateStat> templates,
+                                   List<PathwayDeptStat> depts) {
     }
 }

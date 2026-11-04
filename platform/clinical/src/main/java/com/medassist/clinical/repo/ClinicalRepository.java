@@ -32,9 +32,12 @@ import com.medassist.clinical.domain.ClinicalModel.NursingSchedule;
 import com.medassist.clinical.domain.ClinicalModel.NursingShift;
 import com.medassist.clinical.domain.ClinicalModel.NursingWorkloadRow;
 import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
+import com.medassist.clinical.domain.ClinicalModel.PathwayDeptStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayInstance;
+import com.medassist.clinical.domain.ClinicalModel.PathwayInstanceStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayNode;
 import com.medassist.clinical.domain.ClinicalModel.PathwayTask;
+import com.medassist.clinical.domain.ClinicalModel.PathwayTaskStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayTemplate;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
@@ -4404,7 +4407,8 @@ public class ClinicalRepository {
             new PathwayTemplate(
                     rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
                     rs.getString("diagnosis_code"), rs.getObject("dept_id", UUID.class),
-                    rs.getString("dept_name"), rs.getInt("day_count"), rs.getString("status"),
+                    rs.getString("dept_name"), rs.getInt("day_count"), rs.getInt("version_no"),
+                    rs.getObject("origin_id", UUID.class), rs.getString("status"),
                     rs.getString("created_by"), rs.getString("published_by"),
                     rs.getTimestamp("published_at") == null
                             ? null : rs.getTimestamp("published_at").toInstant(),
@@ -4453,8 +4457,8 @@ public class ClinicalRepository {
 
     private static final String PATHWAY_TEMPLATE_SELECT = """
             SELECT t.id, t.code, t.name, t.diagnosis_code, t.dept_id, d.name AS dept_name,
-                   t.day_count, t.status, t.created_by, t.published_by, t.published_at,
-                   t.version, t.created_at
+                   t.day_count, t.version_no, t.origin_id, t.status, t.created_by, t.published_by,
+                   t.published_at, t.version, t.created_at
               FROM clinical_svc.pathway_template t
               LEFT JOIN clinical_svc.md_dept d ON d.id = t.dept_id
             """;
@@ -4473,14 +4477,26 @@ public class ClinicalRepository {
     public void insertPathwayTemplate(PathwayTemplate t) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.pathway_template
-                            (id, code, name, diagnosis_code, dept_id, day_count, status, created_by)
-                        VALUES (:id, :code, :name, :diagnosisCode, :deptId, :dayCount, :status,
-                                :createdBy)
+                            (id, code, name, diagnosis_code, dept_id, day_count, version_no,
+                             origin_id, status, created_by)
+                        VALUES (:id, :code, :name, :diagnosisCode, :deptId, :dayCount,
+                                :versionNo, :originId, :status, :createdBy)
                         """)
                 .param("id", t.id()).param("code", t.code()).param("name", t.name())
                 .param("diagnosisCode", t.diagnosisCode()).param("deptId", t.deptId())
-                .param("dayCount", t.dayCount()).param("status", t.status())
+                .param("dayCount", t.dayCount()).param("versionNo", t.versionNo())
+                .param("originId", t.originId()).param("status", t.status())
                 .param("createdBy", t.createdBy()).update();
+    }
+
+    /** 同一路径家族的下一个版本号（首次创建为 1）。 */
+    public int nextPathwayTemplateVersionNo(UUID originId) {
+        Integer max = jdbc.sql("""
+                        SELECT COALESCE(MAX(version_no), 0)
+                          FROM clinical_svc.pathway_template WHERE origin_id = ?
+                        """)
+                .param(originId).query(Integer.class).single();
+        return (max == null ? 0 : max) + 1;
     }
 
     public void insertPathwayNode(PathwayNode n) {
@@ -4855,6 +4871,93 @@ public class ClinicalRepository {
                         """)
                 .param("id", id).param("actor", actor).param("reason", reason)
                 .param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 路径统计（G32）
+
+    /** 按模板统计入径/完成/退出/在径与完成平均天数（按入径日过滤）。 */
+    public List<PathwayInstanceStatRow> pathwayInstanceStats(LocalDate fromDate, LocalDate toDate,
+                                                             UUID templateId, UUID deptId) {
+        return jdbc.sql("""
+                        SELECT i.template_id, t.code AS template_code, t.name AS template_name,
+                               t.version_no,
+                               count(*) AS enrolled,
+                               count(*) FILTER (WHERE i.status = 'COMPLETED') AS completed,
+                               count(*) FILTER (WHERE i.status = 'EXITED') AS exited,
+                               count(*) FILTER (WHERE i.status = 'ACTIVE') AS active,
+                               avg(i.end_date - i.start_date)
+                                   FILTER (WHERE i.status = 'COMPLETED'
+                                           AND i.end_date IS NOT NULL) AS avg_days
+                          FROM clinical_svc.pathway_instance i
+                          JOIN clinical_svc.pathway_template t ON t.id = i.template_id
+                         WHERE i.start_date BETWEEN :fromDate AND :toDate
+                           AND (CAST(:templateId AS uuid) IS NULL
+                                OR i.template_id = CAST(:templateId AS uuid))
+                           AND (CAST(:deptId AS uuid) IS NULL
+                                OR i.dept_id = CAST(:deptId AS uuid))
+                         GROUP BY i.template_id, t.code, t.name, t.version_no
+                         ORDER BY enrolled DESC, t.code
+                        """)
+                .param("fromDate", fromDate).param("toDate", toDate)
+                .param("templateId", templateId).param("deptId", deptId)
+                .query((rs, i) -> new PathwayInstanceStatRow(
+                        rs.getObject("template_id", UUID.class), rs.getString("template_code"),
+                        rs.getString("template_name"), rs.getInt("version_no"),
+                        rs.getLong("enrolled"), rs.getLong("completed"), rs.getLong("exited"),
+                        rs.getLong("active"),
+                        rs.getObject("avg_days") == null ? null : rs.getDouble("avg_days")))
+                .list();
+    }
+
+    /** 按模板统计任务总数与跳过数（变异率 = skipped / tasks）。 */
+    public List<PathwayTaskStatRow> pathwayTaskStats(LocalDate fromDate, LocalDate toDate,
+                                                     UUID templateId, UUID deptId) {
+        return jdbc.sql("""
+                        SELECT i.template_id,
+                               count(*) AS tasks,
+                               count(*) FILTER (WHERE tk.status = 'SKIPPED') AS skipped
+                          FROM clinical_svc.pathway_task tk
+                          JOIN clinical_svc.pathway_instance i ON i.id = tk.instance_id
+                         WHERE i.start_date BETWEEN :fromDate AND :toDate
+                           AND (CAST(:templateId AS uuid) IS NULL
+                                OR i.template_id = CAST(:templateId AS uuid))
+                           AND (CAST(:deptId AS uuid) IS NULL
+                                OR i.dept_id = CAST(:deptId AS uuid))
+                         GROUP BY i.template_id
+                        """)
+                .param("fromDate", fromDate).param("toDate", toDate)
+                .param("templateId", templateId).param("deptId", deptId)
+                .query((rs, i) -> new PathwayTaskStatRow(
+                        rs.getObject("template_id", UUID.class), rs.getLong("tasks"),
+                        rs.getLong("skipped")))
+                .list();
+    }
+
+    /** 按科室统计入径与完成/退出（最多 50 行，避免异常数据把页面撑爆）。 */
+    public List<PathwayDeptStatRow> pathwayDeptStats(LocalDate fromDate, LocalDate toDate,
+                                                     UUID templateId) {
+        return jdbc.sql("""
+                        SELECT i.dept_id, COALESCE(d.name, '未分配科室') AS dept_name,
+                               count(*) AS enrolled,
+                               count(*) FILTER (WHERE i.status = 'COMPLETED') AS completed,
+                               count(*) FILTER (WHERE i.status = 'EXITED') AS exited,
+                               count(*) FILTER (WHERE i.status = 'ACTIVE') AS active
+                          FROM clinical_svc.pathway_instance i
+                          LEFT JOIN clinical_svc.md_dept d ON d.id = i.dept_id
+                         WHERE i.start_date BETWEEN :fromDate AND :toDate
+                           AND (CAST(:templateId AS uuid) IS NULL
+                                OR i.template_id = CAST(:templateId AS uuid))
+                         GROUP BY i.dept_id, d.name
+                         ORDER BY enrolled DESC, dept_name
+                         LIMIT 50
+                        """)
+                .param("fromDate", fromDate).param("toDate", toDate)
+                .param("templateId", templateId)
+                .query((rs, i) -> new PathwayDeptStatRow(
+                        rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
+                        rs.getLong("enrolled"), rs.getLong("completed"), rs.getLong("exited"),
+                        rs.getLong("active")))
+                .list();
     }
 
     // ---------------------------------------------------------------- 审计

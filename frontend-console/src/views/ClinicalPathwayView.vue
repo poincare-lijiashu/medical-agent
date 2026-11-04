@@ -106,10 +106,11 @@
               <th>编码</th>
               <th>名称</th>
               <th>诊断编码</th>
+              <th class="is-num">版本</th>
               <th class="is-num">天数</th>
               <th>状态</th>
               <th>发布人</th>
-              <th style="width: 220px">操作</th>
+              <th style="width: 300px">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -117,6 +118,7 @@
               <td class="mono" data-primary>{{ t.code }}</td>
               <td data-label="名称">{{ t.name }}</td>
               <td data-label="诊断编码">{{ t.diagnosisCode || '—' }}</td>
+              <td class="is-num" data-label="版本">V{{ t.versionNo }}</td>
               <td class="is-num" data-label="天数">{{ t.dayCount }}</td>
               <td data-label="状态">
                 <StatusPill :value="t.status" :label="templateStatusLabel(t.status)" domain="clinical" />
@@ -142,11 +144,112 @@
                 >
                   停用
                 </button>
+                <button
+                  v-if="t.status !== 'DRAFT' && canManage"
+                  class="btn btn--sm"
+                  type="button"
+                  :disabled="busy"
+                  @click="openClone(t)"
+                >
+                  复制新版本
+                </button>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+    </div>
+
+    <div class="sheet">
+      <div class="sheet-head">
+        <span class="sheet-title">路径统计</span>
+        <span v-if="stats" class="badge badge--neutral">{{ stats.from }} ~ {{ stats.to }}</span>
+        <span class="spacer" />
+        <label class="field f-q">
+          <span class="label">起始</span>
+          <input v-model="statsFrom" type="date" class="input" @change="loadStats" />
+        </label>
+        <label class="field f-q">
+          <span class="label">截止</span>
+          <input v-model="statsTo" type="date" class="input" @change="loadStats" />
+        </label>
+        <button class="btn btn--sm" type="button" :disabled="statsLoading" @click="loadStats">
+          <AppIcon name="refresh" :size="13" /> 刷新
+        </button>
+      </div>
+
+      <TableSkeleton v-if="statsLoading" :rows="3" />
+      <LoadError v-else-if="statsError" :message="statsError" :retrying="statsLoading" @retry="loadStats" />
+      <template v-else-if="stats">
+        <div class="stat-strip">
+          <span>入径 <strong>{{ stats.totals.enrolled }}</strong></span>
+          <span>完成率 <strong>{{ pct(stats.totals.completionRate) }}</strong></span>
+          <span>退出率 <strong>{{ pct(stats.totals.exitRate) }}</strong></span>
+          <span>变异率 <strong>{{ pct(stats.totals.variationRate) }}</strong></span>
+          <span>平均完成天数 <strong>{{ stats.totals.avgDays ?? '—' }}</strong></span>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>模板</th>
+                <th class="is-num">版本</th>
+                <th class="is-num">入径</th>
+                <th class="is-num">在径</th>
+                <th class="is-num">完成</th>
+                <th class="is-num">退出</th>
+                <th class="is-num">完成率</th>
+                <th class="is-num">退出率</th>
+                <th class="is-num">变异率</th>
+                <th class="is-num">平均天数</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in stats.templates" :key="s.templateId">
+                <td data-primary>
+                  <div class="is-strong">{{ s.name }}</div>
+                  <div class="mono muted small">{{ s.code }}</div>
+                </td>
+                <td class="is-num" data-label="版本">V{{ s.versionNo }}</td>
+                <td class="is-num" data-label="入径">{{ s.enrolled }}</td>
+                <td class="is-num" data-label="在径">{{ s.active }}</td>
+                <td class="is-num" data-label="完成">{{ s.completed }}</td>
+                <td class="is-num" data-label="退出">{{ s.exited }}</td>
+                <td class="is-num" data-label="完成率">{{ pct(s.completionRate) }}</td>
+                <td class="is-num" data-label="退出率">{{ pct(s.exitRate) }}</td>
+                <td class="is-num" data-label="变异率">{{ pct(s.variationRate) }}</td>
+                <td class="is-num" data-label="平均天数">{{ s.avgDays ?? '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="section-title">科室下钻（{{ stats.depts.length }}）</h3>
+        <EmptyState v-if="stats.depts.length === 0" title="本期没有入径数据" desc="调整日期区间或先完成入径。" />
+        <div v-else class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>科室</th>
+                <th class="is-num">入径</th>
+                <th class="is-num">在径</th>
+                <th class="is-num">完成</th>
+                <th class="is-num">退出</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="d in stats.depts" :key="d.deptId ?? d.deptName">
+                <td data-primary>{{ d.deptName }}</td>
+                <td class="is-num" data-label="入径">{{ d.enrolled }}</td>
+                <td class="is-num" data-label="在径">{{ d.active }}</td>
+                <td class="is-num" data-label="完成">{{ d.completed }}</td>
+                <td class="is-num" data-label="退出">{{ d.exited }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
     </div>
 
     <AppModal
@@ -338,6 +441,21 @@
       </template>
     </AppModal>
 
+    <AppModal v-model="cloneOpen" title="复制为新版本" subtitle="复制全部节点，版本号自动递增，保存为草稿；需重新发布" width="520px">
+      <label class="field">
+        <span class="label">原模板</span>
+        <input :value="cloneSource ? `${cloneSource.code} · V${cloneSource.versionNo}` : ''" class="input" disabled />
+      </label>
+      <label class="field">
+        <span class="label">新版本编码</span>
+        <input v-model.trim="cloneCode" class="input" maxlength="32" placeholder="例如 CP-PNEUMONIA-V2" />
+      </label>
+      <template #footer>
+        <button class="btn" type="button" @click="cloneOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy" @click="submitClone">确认复制</button>
+      </template>
+    </AppModal>
+
     <AppModal v-model="skipOpen" title="跳过任务（变异）" subtitle="跳过必须记录原因，进入路径变异统计" width="480px">
       <label class="field">
         <span class="label">变异原因</span>
@@ -390,6 +508,7 @@ import type {
   PathwayInstance,
   PathwayInstanceStatus,
   PathwayInstanceView,
+  PathwayStatsView,
   PathwayTask,
   PathwayTaskStatus,
   PathwayTemplate,
@@ -466,7 +585,29 @@ const exitReason = ref('')
 const completeOpen = ref(false)
 const completeNote = ref('')
 
-onMounted(loadAll)
+const cloneOpen = ref(false)
+const cloneCode = ref('')
+const cloneSource = ref<PathwayTemplate | null>(null)
+
+const stats = ref<PathwayStatsView | null>(null)
+const statsLoading = ref(false)
+const statsError = ref('')
+const statsTo = ref(isoDate(new Date()))
+const statsFrom = ref(isoDate(new Date(Date.now() - 29 * 86400000)))
+
+onMounted(async () => {
+  await loadAll()
+  await loadStats()
+})
+
+function isoDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function pct(value: number): string {
+  return `${(value * 100).toFixed(1)}%`
+}
 
 function templateStatusLabel(status: PathwayTemplateStatus): string {
   return { DRAFT: '草稿', PUBLISHED: '已发布', DISABLED: '已停用' }[status]
@@ -671,6 +812,48 @@ async function disableTemplate(t: PathwayTemplate) {
   }
 }
 
+function openClone(t: PathwayTemplate) {
+  cloneSource.value = t
+  cloneCode.value = `${t.code}-V${t.versionNo + 1}`
+  cloneOpen.value = true
+}
+
+async function submitClone() {
+  if (busy.value || !cloneSource.value) return
+  if (!cloneCode.value) {
+    toast.error('请填写新版本编码')
+    return
+  }
+  busy.value = true
+  try {
+    const created = await clinicalApi.clonePathwayTemplate(cloneSource.value.id, cloneCode.value)
+    cloneOpen.value = false
+    toast.ok(`新版本 ${created.template.code}（V${created.template.versionNo}）已保存为草稿`)
+    await loadTemplates()
+    await loadStats()
+  } catch (e) {
+    toast.error(errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function loadStats() {
+  statsLoading.value = true
+  statsError.value = ''
+  try {
+    stats.value = await clinicalApi.pathwayStats({
+      from: statsFrom.value || undefined,
+      to: statsTo.value || undefined,
+    })
+  } catch (e) {
+    statsError.value = errorText(e)
+    stats.value = null
+  } finally {
+    statsLoading.value = false
+  }
+}
+
 async function completeTask(t: PathwayTask) {
   if (busy.value || !detail.value) return
   busy.value = true
@@ -815,6 +998,20 @@ async function submitComplete() {
 
 .small {
   font-size: var(--fs-small);
+}
+
+.stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3) var(--s5);
+  padding: var(--s3) 0;
+  margin-bottom: var(--s3);
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.stat-strip strong {
+  color: var(--text);
 }
 
 .ok {

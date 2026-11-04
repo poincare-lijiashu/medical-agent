@@ -2305,6 +2305,8 @@ export interface PathwayTemplate {
   deptId: string | null
   deptName: string | null
   dayCount: number
+  versionNo: number
+  originId: string
   status: PathwayTemplateStatus
   createdBy: string
   publishedBy: string | null
@@ -2377,6 +2379,54 @@ export interface PathwayInstanceView {
   instance: PathwayInstance
   tasks: PathwayTask[]
   progress: PathwayProgress
+}
+
+/** 路径统计（G32）：比率为 0–1，avgDays 无已完成实例时为 null。 */
+export interface PathwayTemplateStat {
+  templateId: string
+  code: string
+  name: string
+  versionNo: number
+  enrolled: number
+  completed: number
+  exited: number
+  active: number
+  tasks: number
+  skipped: number
+  completionRate: number
+  exitRate: number
+  variationRate: number
+  avgDays: number | null
+}
+
+export interface PathwayDeptStat {
+  deptId: string | null
+  deptName: string
+  enrolled: number
+  completed: number
+  exited: number
+  active: number
+}
+
+export interface PathwayStatsTotals {
+  enrolled: number
+  completed: number
+  exited: number
+  active: number
+  tasks: number
+  skipped: number
+  completionRate: number
+  exitRate: number
+  variationRate: number
+  avgDays: number | null
+}
+
+export interface PathwayStatsView {
+  from: string
+  to: string
+  totals: PathwayStatsTotals
+  templates: PathwayTemplateStat[]
+  depts: PathwayDeptStat[]
 }
 
 // ---------------------------------------------------------------- 出院带药（G30）

@@ -113,6 +113,24 @@ class ClinicalPathwayControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("版本克隆/统计：克隆需 manage，统计需 read")
+    void cloneAndStatsPermissions() {
+        ClinicalPathwayDtos.CloneTemplateReq clone =
+                new ClinicalPathwayDtos.CloneTemplateReq("CP-TEST-V2");
+        assertForbidden(() -> controller.clone(templateId, clone, "inpatient:pathway:read",
+                "doctor01"));
+        verify(service, never()).cloneTemplate(any(), any(), any());
+
+        controller.clone(templateId, clone, "inpatient:pathway:manage", "doctor01");
+        verify(service).cloneTemplate(templateId, clone, "doctor01");
+
+        assertForbidden(() -> controller.stats(null, null, null, null,
+                "inpatient:pathway:manage"));
+        controller.stats(null, null, null, null, "inpatient:pathway:read");
+        verify(service).stats(null, null, null, null);
+    }
+
+    @Test
     @DisplayName("权限头为空：403 且不触达服务层")
     void emptyPermissionsForbidden() {
         assertForbidden(() -> controller.instance(instanceId, null));

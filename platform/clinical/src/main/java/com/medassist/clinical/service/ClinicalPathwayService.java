@@ -1,17 +1,25 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
+import com.medassist.clinical.domain.ClinicalModel.PathwayDeptStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayInstance;
+import com.medassist.clinical.domain.ClinicalModel.PathwayInstanceStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayNode;
 import com.medassist.clinical.domain.ClinicalModel.PathwayTask;
+import com.medassist.clinical.domain.ClinicalModel.PathwayTaskStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayTemplate;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalPathwayDtos.CloneTemplateReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.CreateTemplateReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.EnrollReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.ExitReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.InstanceView;
 import com.medassist.clinical.web.ClinicalPathwayDtos.NodeReq;
+import com.medassist.clinical.web.ClinicalPathwayDtos.PathwayDeptStat;
+import com.medassist.clinical.web.ClinicalPathwayDtos.PathwayStatsTotals;
+import com.medassist.clinical.web.ClinicalPathwayDtos.PathwayStatsView;
+import com.medassist.clinical.web.ClinicalPathwayDtos.PathwayTemplateStat;
 import com.medassist.clinical.web.ClinicalPathwayDtos.ProgressView;
 import com.medassist.clinical.web.ClinicalPathwayDtos.TemplateView;
 import com.medassist.clinical.web.ClinicalPathwayDtos.UpdateTaskReq;
@@ -26,6 +34,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -108,9 +117,11 @@ public class ClinicalPathwayService {
             }
             dayCount = Math.max(dayCount, node.dayNo());
         }
-        PathwayTemplate template = new PathwayTemplate(UUID.randomUUID(), code,
+        UUID templateId = UUID.randomUUID();
+        PathwayTemplate template = new PathwayTemplate(templateId, code,
                 req.name().trim(), blankToNull(req.diagnosisCode()), req.deptId(), null,
-                dayCount, PathwayTemplate.DRAFT, operator, null, null, 0L, Instant.now());
+                dayCount, 1, templateId, PathwayTemplate.DRAFT, operator, null, null, 0L,
+                Instant.now());
         repo.insertPathwayTemplate(template);
         for (NodeReq node : nodes) {
             repo.insertPathwayNode(new PathwayNode(UUID.randomUUID(), template.id(),
@@ -162,6 +173,111 @@ public class ClinicalPathwayService {
         audit(operator, "PATHWAY_TEMPLATE_DISABLE", id.toString(), Map.of(
                 "code", template.code(), "name", template.name()));
         return templateDetail(id);
+    }
+
+    // ---------------------------------------------------------------- 版本与统计（G32）
+
+    /**
+     * 克隆为新版本：复制原模板全部节点，版本号在家族内递增，状态为 DRAFT。
+     *
+     * <p>已入径患者按任务快照执行，因此克隆不会影响在途路径；克隆出的版本需重新发布才能入径。
+     */
+    @Transactional
+    public TemplateView cloneTemplate(UUID id, CloneTemplateReq req, String actor) {
+        String operator = requireActor(actor);
+        PathwayTemplate source = repo.findPathwayTemplate(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.PATHWAY_TEMPLATE_NOT_FOUND));
+        String code = req.code().trim().toUpperCase();
+        if (repo.pathwayTemplateCodeExists(code)) {
+            throw new BusinessException(ErrorCode.PATHWAY_TEMPLATE_DUPLICATE);
+        }
+        List<PathwayNode> nodes = repo.listPathwayNodes(id);
+        if (nodes.isEmpty()) {
+            throw new BusinessException(ErrorCode.PATHWAY_TEMPLATE_INVALID,
+                    "原模板没有节点，不能克隆");
+        }
+        int versionNo = repo.nextPathwayTemplateVersionNo(source.originId());
+        UUID newId = UUID.randomUUID();
+        PathwayTemplate copy = new PathwayTemplate(newId, code, source.name(),
+                source.diagnosisCode(), source.deptId(), null, source.dayCount(), versionNo,
+                source.originId(), PathwayTemplate.DRAFT, operator, null, null, 0L,
+                Instant.now());
+        repo.insertPathwayTemplate(copy);
+        for (PathwayNode node : nodes) {
+            repo.insertPathwayNode(new PathwayNode(UUID.randomUUID(), newId, node.dayNo(),
+                    node.seq(), node.name(), node.category(), node.required(),
+                    node.description()));
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("fromCode", source.code());
+        detail.put("toCode", code);
+        detail.put("versionNo", versionNo);
+        detail.put("nodes", nodes.size());
+        audit(operator, "PATHWAY_TEMPLATE_CLONE", newId.toString(), detail);
+        return templateDetail(newId);
+    }
+
+    /**
+     * 路径统计：按入径日过滤（默认最近 30 天，最长 366 天）。
+     *
+     * <p>完成率 = 已完成 / 入径；退出率 = 已退出 / 入径；变异率 = 跳过任务 / 任务总数；
+     * 平均天数只统计已完成实例（按完成数加权）。
+     */
+    public PathwayStatsView stats(LocalDate from, LocalDate to, UUID templateId, UUID deptId) {
+        LocalDate today = BusinessTime.today();
+        LocalDate end = to == null ? today : to;
+        LocalDate start = from == null ? end.minusDays(29) : from;
+        if (start.isAfter(end)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "起始日期不能晚于截止日期");
+        }
+        if (start.plusDays(366).isBefore(end)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "统计区间不得超过 366 天");
+        }
+        List<PathwayInstanceStatRow> instances =
+                repo.pathwayInstanceStats(start, end, templateId, deptId);
+        Map<UUID, PathwayTaskStatRow> tasks = new HashMap<>();
+        for (PathwayTaskStatRow row : repo.pathwayTaskStats(start, end, templateId, deptId)) {
+            tasks.put(row.templateId(), row);
+        }
+        List<PathwayTemplateStat> templateStats = instances.stream()
+                .map(row -> {
+                    PathwayTaskStatRow task = tasks.get(row.templateId());
+                    long taskCount = task == null ? 0 : task.tasks();
+                    long skipped = task == null ? 0 : task.skipped();
+                    return new PathwayTemplateStat(row.templateId(), row.templateCode(),
+                            row.templateName(), row.versionNo(), row.enrolled(), row.completed(),
+                            row.exited(), row.active(), taskCount, skipped,
+                            rate(row.completed(), row.enrolled()), rate(row.exited(), row.enrolled()),
+                            rate(skipped, taskCount), row.avgDays());
+                })
+                .toList();
+        long enrolled = templateStats.stream().mapToLong(PathwayTemplateStat::enrolled).sum();
+        long completed = templateStats.stream().mapToLong(PathwayTemplateStat::completed).sum();
+        long exited = templateStats.stream().mapToLong(PathwayTemplateStat::exited).sum();
+        long active = templateStats.stream().mapToLong(PathwayTemplateStat::active).sum();
+        long taskCount = templateStats.stream().mapToLong(PathwayTemplateStat::tasks).sum();
+        long skipped = templateStats.stream().mapToLong(PathwayTemplateStat::skipped).sum();
+        double totalDays = templateStats.stream()
+                .filter(s -> s.avgDays() != null)
+                .mapToDouble(s -> s.avgDays() * s.completed())
+                .sum();
+        Double avgDays = completed == 0 ? null : round(totalDays / completed);
+        PathwayStatsTotals totals = new PathwayStatsTotals(enrolled, completed, exited, active,
+                taskCount, skipped, rate(completed, enrolled), rate(exited, enrolled),
+                rate(skipped, taskCount), avgDays);
+        List<PathwayDeptStat> depts = repo.pathwayDeptStats(start, end, templateId).stream()
+                .map(d -> new PathwayDeptStat(d.deptId(), d.deptName(), d.enrolled(), d.completed(),
+                        d.exited(), d.active()))
+                .toList();
+        return new PathwayStatsView(start, end, totals, templateStats, depts);
+    }
+
+    private static double rate(long numerator, long denominator) {
+        return denominator == 0 ? 0.0 : round((double) numerator / denominator);
+    }
+
+    private static double round(double value) {
+        return Math.round(value * 10000.0) / 10000.0;
     }
 
     // ---------------------------------------------------------------- 入径

@@ -3,16 +3,19 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.PathwayInstance;
 import com.medassist.clinical.domain.ClinicalModel.PathwayTemplate;
 import com.medassist.clinical.service.ClinicalPathwayService;
+import com.medassist.clinical.web.ClinicalPathwayDtos.CloneTemplateReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.CreateTemplateReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.EnrollReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.ExitReq;
 import com.medassist.clinical.web.ClinicalPathwayDtos.InstanceView;
+import com.medassist.clinical.web.ClinicalPathwayDtos.PathwayStatsView;
 import com.medassist.clinical.web.ClinicalPathwayDtos.TemplateView;
 import com.medassist.clinical.web.ClinicalPathwayDtos.UpdateTaskReq;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -88,6 +92,31 @@ public class ClinicalPathwayController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.disableTemplate(id, actor));
+    }
+
+    /** 克隆为新版本（DRAFT，节点复制；需重新发布才能入径）。 */
+    @PostMapping("/templates/{id}/clone")
+    public ApiResponse<TemplateView> clone(
+            @PathVariable UUID id,
+            @Valid @RequestBody CloneTemplateReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(service.cloneTemplate(id, req, actor));
+    }
+
+    /** 路径统计：按入径日过滤（默认最近 30 天，最长 366 天）。 */
+    @GetMapping("/stats")
+    public ApiResponse<PathwayStatsView> stats(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate to,
+            @RequestParam(required = false) UUID templateId,
+            @RequestParam(required = false) UUID deptId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.stats(from, to, templateId, deptId));
     }
 
     @GetMapping("/instances")

@@ -61,6 +61,7 @@ import type {
   PathwayInstanceView,
   PathwayTemplate,
   PathwayTemplateView,
+  PathwayStatsView,
   Patient,
   PaymentGroup,
   PaymentGroupRule,
@@ -366,6 +367,12 @@ export const clinicalApi = {
     post<PathwayTemplateView>(`/clinical/pathways/templates/${id}/publish`),
   disablePathwayTemplate: (id: string) =>
     post<PathwayTemplateView>(`/clinical/pathways/templates/${id}/disable`),
+  /** 克隆为新版本（DRAFT，节点复制）。 */
+  clonePathwayTemplate: (id: string, code: string) =>
+    post<PathwayTemplateView>(`/clinical/pathways/templates/${id}/clone`, { code }),
+  /** 路径统计：按入径日过滤，默认最近 30 天。 */
+  pathwayStats: (params: { from?: string; to?: string; templateId?: string; deptId?: string }) =>
+    get<PathwayStatsView>('/clinical/pathways/stats', params),
   pathwayInstances: (params: { status?: string; deptId?: string; limit?: number }) =>
     get<PathwayInstance[]>('/clinical/pathways/instances', params),
   pathwayInstance: (id: string) =>

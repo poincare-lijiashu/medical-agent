@@ -809,9 +809,10 @@ public final class ClinicalModel {
      * 已入径患者的任务按快照执行；要调整只能停用后新建版本。
      */
     public record PathwayTemplate(UUID id, String code, String name, String diagnosisCode,
-                                  UUID deptId, String deptName, int dayCount, String status,
-                                  String createdBy, String publishedBy, Instant publishedAt,
-                                  long version, Instant createdAt) {
+                                  UUID deptId, String deptName, int dayCount, int versionNo,
+                                  UUID originId, String status, String createdBy,
+                                  String publishedBy, Instant publishedAt, long version,
+                                  Instant createdAt) {
 
         public static final String DRAFT = "DRAFT";
         public static final String PUBLISHED = "PUBLISHED";
@@ -906,5 +907,20 @@ public final class ClinicalModel {
     public record DischargeMedicationItem(UUID id, UUID medicationId, int seq, String drugCode,
                                           String drugName, String spec, String unit, int quantity,
                                           String dosage, String frequency, Integer days) {
+    }
+
+    /** 路径入径统计行（按模板聚合，G32）。 */
+    public record PathwayInstanceStatRow(UUID templateId, String templateCode, String templateName,
+                                         int versionNo, long enrolled, long completed,
+                                         long exited, long active, Double avgDays) {
+    }
+
+    /** 路径任务变异统计行（按模板聚合，G32）。 */
+    public record PathwayTaskStatRow(UUID templateId, long tasks, long skipped) {
+    }
+
+    /** 路径科室统计行（G32）。 */
+    public record PathwayDeptStatRow(UUID deptId, String deptName, long enrolled, long completed,
+                                     long exited, long active) {
     }
 }
