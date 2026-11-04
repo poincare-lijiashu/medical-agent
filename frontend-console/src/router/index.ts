@@ -31,6 +31,7 @@ const router = createRouter({
           name: 'receipts',
           component: () => import('@/views/ReceiptView.vue'),
         },
+        { path: 'emergency', name: 'emergency', component: () => import('@/views/EmergencyView.vue') },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },
         { path: 'preop', name: 'preop', component: () => import('@/views/PreopVisitView.vue') },
         {

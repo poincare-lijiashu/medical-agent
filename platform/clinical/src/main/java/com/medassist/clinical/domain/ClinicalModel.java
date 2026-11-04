@@ -923,4 +923,82 @@ public final class ClinicalModel {
     public record PathwayDeptStatRow(UUID deptId, String deptName, long enrolled, long completed,
                                      long exited, long active) {
     }
+
+    /**
+     * 急诊预检分诊记录（G36）。
+     *
+     * <p>状态机：{@code WAITING → REGISTERED → OBSERVING → CLOSED}；
+     * WAITING 可因患者未挂号自行离院 → {@code LEFT}（必须写原因）。
+     * 1–2 级自动置绿色通道。
+     */
+    public record EmergencyTriage(UUID id, String triageNo, UUID patientId, String patientNo,
+                                  String patientName, UUID deptId, String deptName, int triageLevel,
+                                  String chiefComplaint, BigDecimal temperature, Integer pulse,
+                                  Integer respiration, Integer systolic, Integer diastolic,
+                                  Integer spo2, boolean greenChannel, String status, UUID visitId,
+                                  String visitNo, String triagedBy, Instant arrivalAt,
+                                  Instant triagedAt, String leaveReason, long version,
+                                  Instant createdAt, Instant updatedAt) {
+
+        public static final String WAITING = "WAITING";
+        public static final String REGISTERED = "REGISTERED";
+        public static final String OBSERVING = "OBSERVING";
+        public static final String CLOSED = "CLOSED";
+        public static final String LEFT = "LEFT";
+
+        public boolean waiting() {
+            return WAITING.equals(status);
+        }
+
+        public boolean registered() {
+            return REGISTERED.equals(status);
+        }
+
+        public boolean observing() {
+            return OBSERVING.equals(status);
+        }
+
+        /** 已完成挂号（含留观中与已结束）。 */
+        public boolean hasVisit() {
+            return REGISTERED.equals(status) || OBSERVING.equals(status)
+                    || CLOSED.equals(status);
+        }
+    }
+
+    /** 急诊留观/抢救床位（G36）：FREE ↔ OCCUPIED。 */
+    public record EmergencyBed(UUID id, String bedNo, UUID deptId, String deptName, String area,
+                               String status, UUID currentObservationId, boolean enabled,
+                               long version) {
+
+        public static final String FREE = "FREE";
+        public static final String OCCUPIED = "OCCUPIED";
+
+        public boolean free() {
+            return FREE.equals(status);
+        }
+    }
+
+    /** 急诊留观记录（G36）：OBSERVING → CLOSED，转归四选一。 */
+    public record EmergencyObservation(UUID id, String observationNo, UUID triageId,
+                                       String triageNo, UUID visitId, String visitNo,
+                                       UUID patientId, String patientNo, String patientName,
+                                       UUID deptId, String deptName, UUID bedId, String bedNo,
+                                       String status, Instant startAt, Instant endAt,
+                                       String outcome, String outcomeNote, String createdBy,
+                                       String closedBy, long version, Instant createdAt) {
+
+        public static final String OBSERVING = "OBSERVING";
+        public static final String CLOSED = "CLOSED";
+
+        public boolean observing() {
+            return OBSERVING.equals(status);
+        }
+    }
+
+    /** 急诊看板聚合行（G36）：当日分诊/留观与当前床位占用。 */
+    public record EmergencyBoardRow(long waiting, long level1, long level2, long level3,
+                                    long level4, long registered, long observing, long closedToday,
+                                    long leftToday, long totalToday, long freeBeds,
+                                    long occupiedBeds) {
+    }
 }

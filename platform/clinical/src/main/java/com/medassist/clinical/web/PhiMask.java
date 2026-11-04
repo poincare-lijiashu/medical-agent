@@ -6,6 +6,8 @@ import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
+import com.medassist.clinical.web.EmergencyDtos.ObservationView;
+import com.medassist.clinical.web.EmergencyDtos.TriageView;
 import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
 import com.medassist.common.security.DataScope;
 
@@ -71,6 +73,29 @@ final class PhiMask {
                 c.status(), c.requestedBy(), c.requestedAt(), c.respondedBy(), c.respondedAt(),
                 c.rejectedReason(), c.completedBy(), c.completedAt(), c.conclusion(),
                 c.cancelledBy(), c.cancelledAt(), c.cancelledReason(), c.version(), c.createdAt());
+    }
+
+    static TriageView triage(TriageView t, DataScope scope) {
+        if (t == null || scope.phiReadable()) {
+            return t;
+        }
+        return new TriageView(t.id(), t.triageNo(), t.patientId(),
+                scope.maskPatientNo(t.patientNo()), scope.maskPatientName(t.patientName()),
+                t.deptId(), t.deptName(), t.triageLevel(), t.chiefComplaint(), t.temperature(),
+                t.pulse(), t.respiration(), t.systolic(), t.diastolic(), t.spo2(),
+                t.greenChannel(), t.status(), t.visitId(), t.visitNo(), t.triagedBy(),
+                t.arrivalAt(), t.triagedAt(), t.leaveReason(), t.version(), t.createdAt());
+    }
+
+    static ObservationView observation(ObservationView o, DataScope scope) {
+        if (o == null || scope.phiReadable()) {
+            return o;
+        }
+        return new ObservationView(o.id(), o.observationNo(), o.triageId(), o.triageNo(),
+                o.visitId(), o.visitNo(), o.patientId(), scope.maskPatientNo(o.patientNo()),
+                scope.maskPatientName(o.patientName()), o.deptId(), o.deptName(), o.bedId(),
+                o.bedNo(), o.status(), o.startAt(), o.endAt(), o.outcome(), o.outcomeNote(),
+                o.createdBy(), o.closedBy(), o.version(), o.createdAt());
     }
 
     static SurgeryBoardView board(SurgeryBoardView view, DataScope scope) {

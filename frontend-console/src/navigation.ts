@@ -47,6 +47,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:charge:read'],
   },
   {
+    name: 'emergency',
+    path: '/emergency',
+    title: '急诊分诊',
+    hint: '预检分级 · 绿色通道 · 急诊挂号 · 留观床位与转归',
+    icon: 'activity',
+    group: '临床诊疗',
+    permissions: ['emergency:triage:read'],
+  },
+  {
     name: 'orders',
     path: '/orders',
     title: '医嘱工作台',

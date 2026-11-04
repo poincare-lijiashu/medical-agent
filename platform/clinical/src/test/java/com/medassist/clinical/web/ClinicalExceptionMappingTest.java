@@ -65,6 +65,31 @@ class ClinicalExceptionMappingTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(handler.statusOf(ErrorCode.DISCHARGE_MED_CANCEL_REASON_REQUIRED))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // 急诊分诊与留观（G36）：找不到 404、状态/床位冲突 409、内容缺失 422
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_TRIAGE_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_BED_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_OBSERVATION_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_TRIAGE_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_TRIAGE_NOT_REGISTERED))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_BED_UNAVAILABLE))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_OBSERVATION_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_TRIAGE_LEVEL_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_TRIAGE_VITALS_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_OUTCOME_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_OUTCOME_NOTE_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.EMERGENCY_LEAVE_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

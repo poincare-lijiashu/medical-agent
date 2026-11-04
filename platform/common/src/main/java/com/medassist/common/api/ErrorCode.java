@@ -76,6 +76,20 @@ public enum ErrorCode {
     DISCHARGE_MED_CANCEL_REASON_REQUIRED(44445, "取消出院带药必须填写原因"),
     DISCHARGE_MED_PRESCRIPTION_MISSING(44446, "出院带药尚未生成药房处方，不能同步或取消已提交单据"),
 
+    // ---- 急诊分诊与留观（44xxx 续，G36）----
+    EMERGENCY_TRIAGE_NOT_FOUND(44460, "未找到该急诊分诊记录"),
+    EMERGENCY_TRIAGE_STATUS_INVALID(44461, "当前分诊状态不允许该操作"),
+    EMERGENCY_TRIAGE_LEVEL_INVALID(44462, "预检分级只能是 1–4 级"),
+    EMERGENCY_TRIAGE_VITALS_INVALID(44463, "生命体征超出合理范围，请核对后重试"),
+    EMERGENCY_TRIAGE_NOT_REGISTERED(44464, "该分诊记录尚未挂号，不能进入留观"),
+    EMERGENCY_BED_NOT_FOUND(44465, "未找到该急诊床位"),
+    EMERGENCY_BED_UNAVAILABLE(44466, "没有可用的留观床位，或床位已被他人占用"),
+    EMERGENCY_OBSERVATION_NOT_FOUND(44467, "未找到该留观记录"),
+    EMERGENCY_OBSERVATION_STATUS_INVALID(44468, "当前留观状态不允许该操作"),
+    EMERGENCY_OUTCOME_INVALID(44469, "留观转归只能是 DISCHARGED / ADMITTED / TRANSFERRED / LEFT"),
+    EMERGENCY_OUTCOME_NOTE_REQUIRED(44470, "自动离院或转院必须填写转归说明"),
+    EMERGENCY_LEAVE_REASON_REQUIRED(44471, "离院必须填写原因"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

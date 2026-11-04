@@ -20,6 +20,10 @@ import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedication;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedicationItem;
+import com.medassist.clinical.domain.ClinicalModel.EmergencyBed;
+import com.medassist.clinical.domain.ClinicalModel.EmergencyBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.EmergencyObservation;
+import com.medassist.clinical.domain.ClinicalModel.EmergencyTriage;
 import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.domain.ClinicalModel.MethodPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
@@ -4958,6 +4962,343 @@ public class ClinicalRepository {
                         rs.getLong("enrolled"), rs.getLong("completed"), rs.getLong("exited"),
                         rs.getLong("active")))
                 .list();
+    }
+
+    // ---------------------------------------------------------------- 急诊分诊与留观（G36）
+
+    private static final RowMapper<EmergencyTriage> EMERGENCY_TRIAGE_MAPPER = (rs, i) ->
+            new EmergencyTriage(
+                    rs.getObject("id", UUID.class), rs.getString("triage_no"),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getString("patient_name"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getInt("triage_level"),
+                    rs.getString("chief_complaint"), rs.getBigDecimal("temperature"),
+                    rs.getObject("pulse", Integer.class), rs.getObject("respiration", Integer.class),
+                    rs.getObject("systolic", Integer.class), rs.getObject("diastolic", Integer.class),
+                    rs.getObject("spo2", Integer.class), rs.getBoolean("green_channel"),
+                    rs.getString("status"), rs.getObject("visit_id", UUID.class),
+                    rs.getString("visit_no"), rs.getString("triaged_by"),
+                    rs.getTimestamp("arrival_at").toInstant(),
+                    rs.getTimestamp("triaged_at").toInstant(), rs.getString("leave_reason"),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<EmergencyBed> EMERGENCY_BED_MAPPER = (rs, i) ->
+            new EmergencyBed(
+                    rs.getObject("id", UUID.class), rs.getString("bed_no"),
+                    rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
+                    rs.getString("area"), rs.getString("status"),
+                    rs.getObject("current_observation_id", UUID.class), rs.getBoolean("enabled"),
+                    rs.getLong("version"));
+
+    private static final RowMapper<EmergencyObservation> EMERGENCY_OBSERVATION_MAPPER = (rs, i) ->
+            new EmergencyObservation(
+                    rs.getObject("id", UUID.class), rs.getString("observation_no"),
+                    rs.getObject("triage_id", UUID.class), rs.getString("triage_no"),
+                    rs.getObject("visit_id", UUID.class), rs.getString("visit_no"),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getString("patient_name"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getObject("bed_id", UUID.class),
+                    rs.getString("bed_no"), rs.getString("status"),
+                    rs.getTimestamp("start_at").toInstant(),
+                    rs.getTimestamp("end_at") == null ? null
+                            : rs.getTimestamp("end_at").toInstant(),
+                    rs.getString("outcome"), rs.getString("outcome_note"),
+                    rs.getString("created_by"), rs.getString("closed_by"),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final String EMERGENCY_TRIAGE_SELECT = """
+            SELECT t.id, t.triage_no, t.patient_id, t.patient_no, t.patient_name, t.dept_id,
+                   d.name AS dept_name, t.triage_level, t.chief_complaint, t.temperature,
+                   t.pulse, t.respiration, t.systolic, t.diastolic, t.spo2, t.green_channel,
+                   t.status, t.visit_id, v.visit_no, t.triaged_by, t.arrival_at, t.triaged_at,
+                   t.leave_reason, t.version, t.created_at, t.updated_at
+              FROM clinical_svc.emergency_triage t
+              JOIN clinical_svc.md_dept d ON d.id = t.dept_id
+              LEFT JOIN clinical_svc.visit v ON v.id = t.visit_id
+            """;
+
+    private static final String EMERGENCY_BED_SELECT = """
+            SELECT b.id, b.bed_no, b.dept_id, d.name AS dept_name, b.area, b.status,
+                   b.current_observation_id, b.enabled, b.version
+              FROM clinical_svc.emergency_bed b
+              JOIN clinical_svc.md_dept d ON d.id = b.dept_id
+            """;
+
+    private static final String EMERGENCY_OBSERVATION_SELECT = """
+            SELECT o.id, o.observation_no, o.triage_id, t.triage_no, o.visit_id, v.visit_no,
+                   o.patient_id, o.patient_no, o.patient_name, o.dept_id, d.name AS dept_name,
+                   o.bed_id, b.bed_no, o.status, o.start_at, o.end_at, o.outcome, o.outcome_note,
+                   o.created_by, o.closed_by, o.version, o.created_at
+              FROM clinical_svc.emergency_observation o
+              JOIN clinical_svc.emergency_triage t ON t.id = o.triage_id
+              JOIN clinical_svc.visit v ON v.id = o.visit_id
+              JOIN clinical_svc.md_dept d ON d.id = o.dept_id
+              JOIN clinical_svc.emergency_bed b ON b.id = o.bed_id
+            """;
+
+    public String nextEmergencyTriageNo() {
+        return nextNo("clinical_svc.emergency_triage_no_seq", "ET");
+    }
+
+    public String nextEmergencyObservationNo() {
+        return nextNo("clinical_svc.emergency_observation_no_seq", "EO");
+    }
+
+    public void insertEmergencyTriage(EmergencyTriage t) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.emergency_triage
+                            (id, triage_no, patient_id, patient_no, patient_name, dept_id,
+                             triage_level, chief_complaint, temperature, pulse, respiration,
+                             systolic, diastolic, spo2, green_channel, status, triaged_by,
+                             arrival_at, triaged_at)
+                        VALUES (:id, :triageNo, :patientId, :patientNo, :patientName, :deptId,
+                                :triageLevel, :chiefComplaint, :temperature, :pulse, :respiration,
+                                :systolic, :diastolic, :spo2, :greenChannel, :status, :triagedBy,
+                                :arrivalAt, :triagedAt)
+                        """)
+                .param("id", t.id()).param("triageNo", t.triageNo())
+                .param("patientId", t.patientId()).param("patientNo", t.patientNo())
+                .param("patientName", t.patientName()).param("deptId", t.deptId())
+                .param("triageLevel", t.triageLevel())
+                .param("chiefComplaint", t.chiefComplaint())
+                .param("temperature", t.temperature()).param("pulse", t.pulse())
+                .param("respiration", t.respiration()).param("systolic", t.systolic())
+                .param("diastolic", t.diastolic()).param("spo2", t.spo2())
+                .param("greenChannel", t.greenChannel()).param("status", t.status())
+                .param("triagedBy", t.triagedBy()).param("arrivalAt", ts(t.arrivalAt()))
+                .param("triagedAt", ts(t.triagedAt())).update();
+    }
+
+    public Optional<EmergencyTriage> findEmergencyTriage(UUID id) {
+        return jdbc.sql(EMERGENCY_TRIAGE_SELECT + " WHERE t.id = ?")
+                .param(id).query(EMERGENCY_TRIAGE_MAPPER).optional();
+    }
+
+    public Optional<EmergencyTriage> lockEmergencyTriage(UUID id) {
+        return jdbc.sql(EMERGENCY_TRIAGE_SELECT + " WHERE t.id = ? FOR UPDATE OF t")
+                .param(id).query(EMERGENCY_TRIAGE_MAPPER).optional();
+    }
+
+    /** 分诊队列：待就诊优先、级别优先、到达时间升序；历史记录按到达时间倒序。 */
+    public List<EmergencyTriage> listEmergencyTriages(UUID deptId, String status,
+                                                      OffsetDateTime fromTs,
+                                                      OffsetDateTime toTs, int limit) {
+        return jdbc.sql(EMERGENCY_TRIAGE_SELECT + """
+                         WHERE (CAST(:deptId AS uuid) IS NULL
+                                OR t.dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:status AS text) IS NULL OR t.status = CAST(:status AS text))
+                           AND t.arrival_at >= :fromTs AND t.arrival_at < :toTs
+                         ORDER BY CASE t.status
+                                      WHEN 'WAITING' THEN 0 WHEN 'REGISTERED' THEN 1
+                                      WHEN 'OBSERVING' THEN 2 ELSE 3 END,
+                                  t.triage_level,
+                                  CASE WHEN t.status IN ('WAITING', 'REGISTERED')
+                                       THEN t.arrival_at END ASC NULLS LAST,
+                                  t.arrival_at DESC
+                         LIMIT :limit
+                        """)
+                .param("deptId", deptId).param("status", status)
+                .param("fromTs", fromTs).param("toTs", toTs).param("limit", limit)
+                .query(EMERGENCY_TRIAGE_MAPPER).list();
+    }
+
+    /** 挂号：WAITING → REGISTERED，并绑定就诊（CAS）。 */
+    public boolean registerEmergencyTriage(UUID id, UUID visitId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_triage
+                           SET status = 'REGISTERED', visit_id = :visitId,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'WAITING' AND version = :version
+                        """)
+                .param("id", id).param("visitId", visitId).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 入留观：REGISTERED → OBSERVING（CAS）。 */
+    public boolean observeEmergencyTriage(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_triage
+                           SET status = 'OBSERVING', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'REGISTERED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 留观结束：OBSERVING → CLOSED（CAS）。 */
+    public boolean closeEmergencyTriage(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_triage
+                           SET status = 'CLOSED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'OBSERVING' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 未挂号自行离院：WAITING → LEFT。 */
+    public boolean leaveEmergencyTriage(UUID id, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_triage
+                           SET status = 'LEFT', leave_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'WAITING' AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public List<EmergencyBed> listEmergencyBeds(UUID deptId) {
+        return jdbc.sql(EMERGENCY_BED_SELECT + """
+                         WHERE (CAST(:deptId AS uuid) IS NULL
+                                OR b.dept_id = CAST(:deptId AS uuid))
+                         ORDER BY b.area DESC, b.bed_no
+                        """)
+                .param("deptId", deptId).query(EMERGENCY_BED_MAPPER).list();
+    }
+
+    public Optional<EmergencyBed> findEmergencyBed(UUID id) {
+        return jdbc.sql(EMERGENCY_BED_SELECT + " WHERE b.id = ?")
+                .param(id).query(EMERGENCY_BED_MAPPER).optional();
+    }
+
+    public Optional<EmergencyBed> lockEmergencyBed(UUID id) {
+        return jdbc.sql(EMERGENCY_BED_SELECT + " WHERE b.id = ? FOR UPDATE OF b")
+                .param(id).query(EMERGENCY_BED_MAPPER).optional();
+    }
+
+    /** 自动选床：优先抢救区，再按床号升序取第一张启用空床。 */
+    public Optional<EmergencyBed> findFirstFreeEmergencyBed(UUID deptId) {
+        return jdbc.sql(EMERGENCY_BED_SELECT + """
+                         WHERE b.dept_id = :deptId AND b.enabled AND b.status = 'FREE'
+                         ORDER BY CASE b.area WHEN 'RESUS' THEN 0 ELSE 1 END, b.bed_no
+                         LIMIT 1
+                        """)
+                .param("deptId", deptId).query(EMERGENCY_BED_MAPPER).optional();
+    }
+
+    /** 占床（CAS：空闲且版本一致）。 */
+    public boolean occupyEmergencyBed(UUID id, UUID observationId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_bed
+                           SET status = 'OCCUPIED', current_observation_id = :observationId,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'FREE' AND version = :version
+                        """)
+                .param("id", id).param("observationId", observationId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 释放床位：只有占用来源匹配时才释放，避免误放他人床位。 */
+    public boolean releaseEmergencyBed(UUID id, UUID observationId) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_bed
+                           SET status = 'FREE', current_observation_id = NULL,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'OCCUPIED'
+                           AND current_observation_id = :observationId
+                        """)
+                .param("id", id).param("observationId", observationId).update() > 0;
+    }
+
+    public void insertEmergencyObservation(EmergencyObservation o) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.emergency_observation
+                            (id, observation_no, triage_id, visit_id, patient_id, patient_no,
+                             patient_name, dept_id, bed_id, status, start_at, created_by)
+                        VALUES (:id, :observationNo, :triageId, :visitId, :patientId, :patientNo,
+                                :patientName, :deptId, :bedId, :status, :startAt, :createdBy)
+                        """)
+                .param("id", o.id()).param("observationNo", o.observationNo())
+                .param("triageId", o.triageId()).param("visitId", o.visitId())
+                .param("patientId", o.patientId()).param("patientNo", o.patientNo())
+                .param("patientName", o.patientName()).param("deptId", o.deptId())
+                .param("bedId", o.bedId()).param("status", o.status())
+                .param("startAt", ts(o.startAt())).param("createdBy", o.createdBy()).update();
+    }
+
+    public Optional<EmergencyObservation> findEmergencyObservation(UUID id) {
+        return jdbc.sql(EMERGENCY_OBSERVATION_SELECT + " WHERE o.id = ?")
+                .param(id).query(EMERGENCY_OBSERVATION_MAPPER).optional();
+    }
+
+    public Optional<EmergencyObservation> lockEmergencyObservation(UUID id) {
+        return jdbc.sql(EMERGENCY_OBSERVATION_SELECT + " WHERE o.id = ? FOR UPDATE OF o")
+                .param(id).query(EMERGENCY_OBSERVATION_MAPPER).optional();
+    }
+
+    public Optional<EmergencyObservation> findActiveEmergencyObservationByTriage(UUID triageId) {
+        return jdbc.sql(EMERGENCY_OBSERVATION_SELECT
+                        + " WHERE o.triage_id = ? AND o.status = 'OBSERVING'")
+                .param(triageId).query(EMERGENCY_OBSERVATION_MAPPER).optional();
+    }
+
+    public List<EmergencyObservation> listEmergencyObservations(UUID deptId, String status,
+                                                               OffsetDateTime fromTs,
+                                                               OffsetDateTime toTs, int limit) {
+        return jdbc.sql(EMERGENCY_OBSERVATION_SELECT + """
+                         WHERE (CAST(:deptId AS uuid) IS NULL
+                                OR o.dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:status AS text) IS NULL OR o.status = CAST(:status AS text))
+                           AND o.start_at >= :fromTs AND o.start_at < :toTs
+                         ORDER BY CASE o.status WHEN 'OBSERVING' THEN 0 ELSE 1 END,
+                                  o.start_at DESC
+                         LIMIT :limit
+                        """)
+                .param("deptId", deptId).param("status", status)
+                .param("fromTs", fromTs).param("toTs", toTs).param("limit", limit)
+                .query(EMERGENCY_OBSERVATION_MAPPER).list();
+    }
+
+    /** 留观结束（CAS）：写入转归、说明、结束人与时间。 */
+    public boolean completeEmergencyObservation(UUID id, String outcome, String note, String actor,
+                                                long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.emergency_observation
+                           SET status = 'CLOSED', outcome = :outcome, outcome_note = :note,
+                               closed_by = :actor, end_at = now(), version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'OBSERVING' AND version = :version
+                        """)
+                .param("id", id).param("outcome", outcome).param("note", note)
+                .param("actor", actor).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 急诊看板：当日分诊状态/分级 + 当前床位占用（科室可空）。 */
+    public EmergencyBoardRow emergencyBoard(UUID deptId, OffsetDateTime fromTs,
+                                            OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT
+                            count(*) FILTER (WHERE t.status = 'WAITING') AS waiting,
+                            count(*) FILTER (WHERE t.triage_level = 1) AS level1,
+                            count(*) FILTER (WHERE t.triage_level = 2) AS level2,
+                            count(*) FILTER (WHERE t.triage_level = 3) AS level3,
+                            count(*) FILTER (WHERE t.triage_level = 4) AS level4,
+                            count(*) FILTER (WHERE t.status = 'REGISTERED') AS registered,
+                            count(*) FILTER (WHERE t.status = 'OBSERVING') AS observing,
+                            count(*) FILTER (WHERE t.status = 'CLOSED') AS closed_today,
+                            count(*) FILTER (WHERE t.status = 'LEFT') AS left_today,
+                            count(*) AS total_today,
+                            (SELECT count(*) FROM clinical_svc.emergency_bed b
+                              WHERE (CAST(:deptId AS uuid) IS NULL
+                                     OR b.dept_id = CAST(:deptId AS uuid))
+                                AND b.enabled AND b.status = 'FREE') AS free_beds,
+                            (SELECT count(*) FROM clinical_svc.emergency_bed b
+                              WHERE (CAST(:deptId AS uuid) IS NULL
+                                     OR b.dept_id = CAST(:deptId AS uuid))
+                                AND b.enabled AND b.status = 'OCCUPIED') AS occupied_beds
+                          FROM clinical_svc.emergency_triage t
+                         WHERE (CAST(:deptId AS uuid) IS NULL
+                                OR t.dept_id = CAST(:deptId AS uuid))
+                           AND t.arrival_at >= :fromTs AND t.arrival_at < :toTs
+                        """)
+                .param("deptId", deptId).param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new EmergencyBoardRow(
+                        rs.getLong("waiting"), rs.getLong("level1"), rs.getLong("level2"),
+                        rs.getLong("level3"), rs.getLong("level4"), rs.getLong("registered"),
+                        rs.getLong("observing"), rs.getLong("closed_today"),
+                        rs.getLong("left_today"), rs.getLong("total_today"),
+                        rs.getLong("free_beds"), rs.getLong("occupied_beds")))
+                .single();
     }
 
     // ---------------------------------------------------------------- 审计

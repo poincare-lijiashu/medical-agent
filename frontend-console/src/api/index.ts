@@ -12,6 +12,11 @@ import type {
   DischargeMedication,
   DischargeMedicationView,
   DispenseView,
+  EmergencyBed,
+  EmergencyBoard,
+  EmergencyObservation,
+  EmergencyOutcome,
+  EmergencyTriage,
   DrugBatch,
   DrugView,
   Frequency,
@@ -442,6 +447,48 @@ export const clinicalApi = {
     post<Consultation>(`/clinical/consultations/${id}/complete`, { conclusion, version }),
   cancelConsultation: (id: string, reason: string, version: number) =>
     post<Consultation>(`/clinical/consultations/${id}/cancel`, { reason, version }),
+  /** 急诊分诊与留观（G36）。 */
+  emergencyBoard: (params: { deptId?: string; from?: string; to?: string }) =>
+    get<EmergencyBoard>('/clinical/emergency/board', params),
+  emergencyTriages: (params: {
+    deptId?: string
+    status?: string
+    from?: string
+    to?: string
+  }) => get<EmergencyTriage[]>('/clinical/emergency/triage', params),
+  createEmergencyTriage: (body: {
+    patientId: string
+    deptId: string
+    triageLevel: number
+    chiefComplaint: string
+    temperature?: number
+    pulse?: number
+    respiration?: number
+    systolic?: number
+    diastolic?: number
+    spo2?: number
+    greenChannel?: boolean
+    arrivalAt?: string
+  }) => post<EmergencyTriage>('/clinical/emergency/triage', body),
+  registerEmergencyTriage: (id: string, doctorId: string) =>
+    post<EmergencyTriage>(`/clinical/emergency/triage/${id}/register`, { doctorId }),
+  leaveEmergencyTriage: (id: string, reason: string) =>
+    post<EmergencyTriage>(`/clinical/emergency/triage/${id}/leave`, { reason }),
+  emergencyBeds: (deptId?: string) =>
+    get<EmergencyBed[]>('/clinical/emergency/beds', { deptId }),
+  emergencyObservations: (params: {
+    deptId?: string
+    status?: string
+    from?: string
+    to?: string
+  }) => get<EmergencyObservation[]>('/clinical/emergency/observations', params),
+  startEmergencyObservation: (triageId: string, bedId?: string) =>
+    post<EmergencyObservation>(`/clinical/emergency/triage/${triageId}/observe`, { bedId }),
+  completeEmergencyObservation: (
+    id: string,
+    outcome: EmergencyOutcome,
+    note?: string,
+  ) => post<EmergencyObservation>(`/clinical/emergency/observations/${id}/outcome`, { outcome, note }),
 }
 
 export const emrApi = {

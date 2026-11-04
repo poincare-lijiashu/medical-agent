@@ -2719,3 +2719,94 @@ export interface DischargeMedicationView {
   medication: DischargeMedication
   items: DischargeMedicationItem[]
 }
+
+// ---------------------------------------------------------------- 急诊分诊与留观（G36）
+
+export type EmergencyTriageStatus = 'WAITING' | 'REGISTERED' | 'OBSERVING' | 'CLOSED' | 'LEFT'
+
+/** 预检分诊：1–4 级，1–2 级自动绿色通道。 */
+export interface EmergencyTriage {
+  id: string
+  triageNo: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  deptId: string
+  deptName: string
+  triageLevel: 1 | 2 | 3 | 4
+  chiefComplaint: string
+  temperature: number | null
+  pulse: number | null
+  respiration: number | null
+  systolic: number | null
+  diastolic: number | null
+  spo2: number | null
+  greenChannel: boolean
+  status: EmergencyTriageStatus
+  visitId: string | null
+  visitNo: string | null
+  triagedBy: string
+  arrivalAt: string
+  triagedAt: string
+  leaveReason: string | null
+  version: number
+  createdAt: string
+}
+
+/** 急诊留观/抢救床位。 */
+export interface EmergencyBed {
+  id: string
+  bedNo: string
+  deptId: string
+  deptName: string
+  area: 'RESUS' | 'OBSERVE'
+  status: 'FREE' | 'OCCUPIED'
+  currentObservationId: string | null
+  enabled: boolean
+  version: number
+}
+
+export type EmergencyObservationStatus = 'OBSERVING' | 'CLOSED'
+export type EmergencyOutcome = 'DISCHARGED' | 'ADMITTED' | 'TRANSFERRED' | 'LEFT'
+
+/** 留观记录：OBSERVING → CLOSED。 */
+export interface EmergencyObservation {
+  id: string
+  observationNo: string
+  triageId: string
+  triageNo: string
+  visitId: string
+  visitNo: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  deptId: string
+  deptName: string
+  bedId: string
+  bedNo: string
+  status: EmergencyObservationStatus
+  startAt: string
+  endAt: string | null
+  outcome: EmergencyOutcome | null
+  outcomeNote: string | null
+  createdBy: string
+  closedBy: string | null
+  version: number
+  createdAt: string
+}
+
+/** 急诊看板：当日分诊状态/分级与当前床位占用。 */
+export interface EmergencyBoard {
+  waiting: number
+  level1: number
+  level2: number
+  level3: number
+  level4: number
+  registered: number
+  observing: number
+  closedToday: number
+  leftToday: number
+  totalToday: number
+  freeBeds: number
+  occupiedBeds: number
+}
