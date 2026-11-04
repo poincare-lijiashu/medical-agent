@@ -20,7 +20,7 @@
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
 - **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。
-- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G36，代码 HEAD=`ac0c41b`）。
+- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G37，代码 HEAD=`71ab271`）。
 
 ### 1. 功能完成度（按业务域）
 
