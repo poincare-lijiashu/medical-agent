@@ -58,6 +58,11 @@ const router = createRouter({
           name: 'clinical-pathways',
           component: () => import('@/views/ClinicalPathwayView.vue'),
         },
+        {
+          path: 'discharge-medications',
+          name: 'discharge-medications',
+          component: () => import('@/views/DischargeMedicationView.vue'),
+        },
         { path: 'surgery', name: 'surgery', component: () => import('@/views/SurgeryBoardView.vue') },
         {
           path: 'surgery-charges',

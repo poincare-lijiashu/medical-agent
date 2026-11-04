@@ -56,6 +56,15 @@ class ClinicalExceptionMappingTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(handler.statusOf(ErrorCode.PATHWAY_EXIT_REASON_REQUIRED))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // 出院带药（G30）
+        assertThat(handler.statusOf(ErrorCode.DISCHARGE_MED_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.DISCHARGE_MED_EXISTS)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.DISCHARGE_MED_VISIT_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.DISCHARGE_MED_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.DISCHARGE_MED_CANCEL_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

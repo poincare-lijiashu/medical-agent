@@ -68,12 +68,22 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
     public RxRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo,
                                  UUID deptId, String prescriber, LocalDate supplyDate,
                                  List<Line> items) {
+        return createFromOrderWithBilling(orderId, patientId, visitId, visitNo, deptId,
+                prescriber, supplyDate, "ORDER", items);
+    }
+
+    @Override
+    public RxRef createFromOrderWithBilling(UUID orderId, UUID patientId, UUID visitId,
+                                            String visitNo, UUID deptId, String prescriber,
+                                            LocalDate supplyDate, String billingMode,
+                                            List<Line> items) {
         RxResponse response;
         try {
             // 用 Spring 托管的 ObjectMapper 显式序列化：RestClient 默认转换器不保证注册
             // JavaTimeModule，LocalDate 会被写成数组，药房侧直接 400（真实踩坑）。
             String payload = objectMapper.writeValueAsString(new CreateFromOrderRequest(
-                    orderId, patientId, visitId, visitNo, deptId, prescriber, supplyDate, items));
+                    orderId, patientId, visitId, visitNo, deptId, prescriber, supplyDate,
+                    billingMode, items));
             response = client.post()
                     .uri("/internal/prescriptions")
                     .header("X-Internal-Token", token)
@@ -132,6 +142,31 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
             throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "药房返回为空，处方未作废");
         }
         return new CancelRef(response.prescriptionId(), response.status(), response.cancelled());
+    }
+
+    @Override
+    public PrescriptionStatus prescriptionStatus(UUID prescriptionId) {
+        StatusResponse response;
+        try {
+            response = client.get()
+                    .uri("/internal/prescriptions/{id}", prescriptionId)
+                    .header("X-Internal-Token", token)
+                    .retrieve()
+                    .body(StatusResponse.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "药房未找到该处方");
+        } catch (RestClientException e) {
+            log.warn("clinical.pharmacy_status_unavailable prescriptionId={} err={}",
+                    prescriptionId, e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "药房服务暂不可用，无法同步发药状态");
+        }
+        if (response == null || response.prescriptionId() == null) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "药房返回为空");
+        }
+        return new PrescriptionStatus(response.prescriptionId(), response.prescriptionNo(),
+                response.status(), response.billingMode(),
+                response.totalAmount() == null ? BigDecimal.ZERO : response.totalAmount());
     }
 
     @Override
@@ -196,7 +231,11 @@ public class HttpPharmacyOrderClient implements PharmacyOrderClient {
 
     record CreateFromOrderRequest(UUID orderId, UUID patientId, UUID visitId, String visitNo,
                                   UUID deptId, String prescriber, LocalDate supplyDate,
-                                  List<Line> items) {
+                                  String billingMode, List<Line> items) {
+    }
+
+    record StatusResponse(UUID prescriptionId, String prescriptionNo, String status,
+                          String billingMode, BigDecimal totalAmount) {
     }
 
     record RxResponse(UUID prescriptionId, String prescriptionNo, UUID orderId, boolean duplicate,

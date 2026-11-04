@@ -18,6 +18,8 @@ import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.DeptPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
+import com.medassist.clinical.domain.ClinicalModel.DischargeMedication;
+import com.medassist.clinical.domain.ClinicalModel.DischargeMedicationItem;
 import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.domain.ClinicalModel.MethodPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
@@ -4687,6 +4689,171 @@ public class ClinicalRepository {
                          WHERE id = :id AND status = 'ACTIVE' AND version = :version
                         """)
                 .param("id", id).param("reason", reason).param("endDate", endDate)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 出院带药（G30）
+
+    private static final RowMapper<DischargeMedication> DISCHARGE_MED_MAPPER = (rs, i) ->
+            new DischargeMedication(
+                    rs.getObject("id", UUID.class), rs.getString("medication_no"),
+                    rs.getObject("admission_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getString("visit_no"),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
+                    rs.getString("status"), rs.getString("note"),
+                    rs.getObject("prescription_id", UUID.class),
+                    rs.getString("prescription_no"), rs.getBigDecimal("total_amount"),
+                    rs.getTimestamp("submitted_at") == null
+                            ? null : rs.getTimestamp("submitted_at").toInstant(),
+                    rs.getTimestamp("dispensed_at") == null
+                            ? null : rs.getTimestamp("dispensed_at").toInstant(),
+                    rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null
+                            ? null : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("cancel_reason"), rs.getString("created_by"),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<DischargeMedicationItem> DISCHARGE_MED_ITEM_MAPPER = (rs, i) ->
+            new DischargeMedicationItem(
+                    rs.getObject("id", UUID.class), rs.getObject("medication_id", UUID.class),
+                    rs.getInt("seq"), rs.getString("drug_code"), rs.getString("drug_name"),
+                    rs.getString("spec"), rs.getString("unit"), rs.getInt("quantity"),
+                    rs.getString("dosage"), rs.getString("frequency"),
+                    rs.getObject("days") == null ? null : rs.getInt("days"));
+
+    private static final String DISCHARGE_MED_SELECT = """
+            SELECT m.id, m.medication_no, m.admission_id, m.visit_id, v.visit_no,
+                   m.patient_id, m.patient_no, m.dept_id, d.name AS dept_name, m.status,
+                   m.note, m.prescription_id, m.prescription_no, m.total_amount,
+                   m.submitted_at, m.dispensed_at, m.cancelled_by, m.cancelled_at,
+                   m.cancel_reason, m.created_by, m.version, m.created_at
+              FROM clinical_svc.discharge_medication m
+              JOIN clinical_svc.visit v ON v.id = m.visit_id
+              LEFT JOIN clinical_svc.md_dept d ON d.id = m.dept_id
+            """;
+
+    public String nextDischargeMedicationNo() {
+        return nextNo("clinical_svc.discharge_medication_no_seq", "DM");
+    }
+
+    public void insertDischargeMedication(DischargeMedication m) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.discharge_medication
+                            (id, medication_no, admission_id, visit_id, patient_id, patient_no,
+                             dept_id, status, note, created_by)
+                        VALUES (:id, :no, :admissionId, :visitId, :patientId, :patientNo,
+                                :deptId, :status, :note, :createdBy)
+                        """)
+                .param("id", m.id()).param("no", m.medicationNo())
+                .param("admissionId", m.admissionId()).param("visitId", m.visitId())
+                .param("patientId", m.patientId()).param("patientNo", m.patientNo())
+                .param("deptId", m.deptId()).param("status", m.status())
+                .param("note", m.note()).param("createdBy", m.createdBy()).update();
+    }
+
+    public void insertDischargeMedicationItem(DischargeMedicationItem item) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.discharge_medication_item
+                            (id, medication_id, seq, drug_code, drug_name, spec, unit, quantity,
+                             dosage, frequency, days)
+                        VALUES (:id, :medicationId, :seq, :drugCode, :drugName, :spec, :unit,
+                                :quantity, :dosage, :frequency, :days)
+                        """)
+                .param("id", item.id()).param("medicationId", item.medicationId())
+                .param("seq", item.seq()).param("drugCode", item.drugCode())
+                .param("drugName", item.drugName()).param("spec", item.spec())
+                .param("unit", item.unit()).param("quantity", item.quantity())
+                .param("dosage", item.dosage()).param("frequency", item.frequency())
+                .param("days", item.days()).update();
+    }
+
+    public Optional<DischargeMedication> findDischargeMedication(UUID id) {
+        return jdbc.sql(DISCHARGE_MED_SELECT + " WHERE m.id = ?")
+                .param(id).query(DISCHARGE_MED_MAPPER).optional();
+    }
+
+    public Optional<DischargeMedication> lockDischargeMedication(UUID id) {
+        return jdbc.sql(DISCHARGE_MED_SELECT + " WHERE m.id = ? FOR UPDATE OF m")
+                .param(id).query(DISCHARGE_MED_MAPPER).optional();
+    }
+
+    public Optional<DischargeMedication> findActiveDischargeMedication(UUID admissionId) {
+        return jdbc.sql(DISCHARGE_MED_SELECT
+                        + " WHERE m.admission_id = ? AND m.status IN ('DRAFT', 'SUBMITTED')")
+                .param(admissionId).query(DISCHARGE_MED_MAPPER).optional();
+    }
+
+    public List<DischargeMedication> listDischargeMedications(String status, UUID deptId,
+                                                              int limit) {
+        return jdbc.sql(DISCHARGE_MED_SELECT + """
+                         WHERE (CAST(:status AS text) IS NULL OR m.status = CAST(:status AS text))
+                           AND (CAST(:deptId AS uuid) IS NULL OR m.dept_id = CAST(:deptId AS uuid))
+                         ORDER BY CASE m.status WHEN 'SUBMITTED' THEN 0 WHEN 'DRAFT' THEN 1
+                                                ELSE 2 END,
+                                  m.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("deptId", deptId).param("limit", limit)
+                .query(DISCHARGE_MED_MAPPER).list();
+    }
+
+    /** 已提交且已有处方的单据（同步发药结果用）。 */
+    public List<DischargeMedication> listSubmittedDischargeMedications(int limit) {
+        return jdbc.sql(DISCHARGE_MED_SELECT + """
+                         WHERE m.status = 'SUBMITTED' AND m.prescription_id IS NOT NULL
+                         ORDER BY m.submitted_at
+                         LIMIT :limit
+                        """)
+                .param("limit", limit).query(DISCHARGE_MED_MAPPER).list();
+    }
+
+    public List<DischargeMedicationItem> listDischargeMedicationItems(UUID medicationId) {
+        return jdbc.sql("""
+                        SELECT id, medication_id, seq, drug_code, drug_name, spec, unit, quantity,
+                               dosage, frequency, days
+                          FROM clinical_svc.discharge_medication_item
+                         WHERE medication_id = ?
+                         ORDER BY seq
+                        """)
+                .param(medicationId).query(DISCHARGE_MED_ITEM_MAPPER).list();
+    }
+
+    public boolean markDischargeMedicationSubmitted(UUID id, UUID prescriptionId,
+                                                    String prescriptionNo,
+                                                    BigDecimal totalAmount, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.discharge_medication
+                           SET status = 'SUBMITTED', prescription_id = :prescriptionId,
+                               prescription_no = :prescriptionNo, total_amount = :totalAmount,
+                               submitted_at = now(), version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("prescriptionId", prescriptionId)
+                .param("prescriptionNo", prescriptionNo).param("totalAmount", totalAmount)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean markDischargeMedicationDispensed(UUID id) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.discharge_medication
+                           SET status = 'DISPENSED', dispensed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = ? AND status = 'SUBMITTED'
+                        """)
+                .param(id).update() > 0;
+    }
+
+    public boolean cancelDischargeMedication(UUID id, String actor, String reason,
+                                             long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.discharge_medication
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancel_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('DRAFT', 'SUBMITTED')
+                           AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("reason", reason)
                 .param("version", expectedVersion).update() > 0;
     }
 

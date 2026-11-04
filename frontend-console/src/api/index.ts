@@ -9,6 +9,8 @@ import type {
   Consultation,
   DepositView,
   Dept,
+  DischargeMedication,
+  DischargeMedicationView,
   DispenseView,
   DrugBatch,
   DrugView,
@@ -377,6 +379,32 @@ export const clinicalApi = {
     post<PathwayInstanceView>(`/clinical/pathways/instances/${id}/complete`, { note }),
   exitPathway: (id: string, reason: string) =>
     post<PathwayInstanceView>(`/clinical/pathways/instances/${id}/exit`, { reason }),
+  /** 出院带药（G30）：提交药房生成发药时计价处方，发药后同步。 */
+  dischargeMedications: (params: { status?: string; deptId?: string; limit?: number }) =>
+    get<DischargeMedication[]>('/clinical/discharge-medications', params),
+  dischargeMedication: (id: string) =>
+    get<DischargeMedicationView>(`/clinical/discharge-medications/${id}`),
+  createDischargeMedication: (body: {
+    visitNo?: string
+    visitId?: string
+    note?: string
+    items: {
+      drugCode: string
+      drugName: string
+      spec?: string
+      unit?: string
+      quantity: number
+      dosage?: string
+      frequency?: string
+      days?: number
+    }[]
+  }) => post<DischargeMedicationView>('/clinical/discharge-medications', body),
+  submitDischargeMedication: (id: string) =>
+    post<DischargeMedicationView>(`/clinical/discharge-medications/${id}/submit`),
+  syncDischargeMedication: (id: string) =>
+    post<DischargeMedicationView>(`/clinical/discharge-medications/${id}/sync`),
+  cancelDischargeMedication: (id: string, reason: string) =>
+    post<DischargeMedicationView>(`/clinical/discharge-medications/${id}/cancel`, { reason }),
   visitTransfers: (visitId: string) =>
     get<VisitTransfer[]>(`/clinical/visits/${visitId}/transfers`),
   transferVisit: (visitId: string, body: { toDeptId: string; bedId?: string; reason: string }) =>

@@ -32,6 +32,27 @@ public interface PharmacyOrderClient {
                           String prescriber, LocalDate supplyDate, List<Line> items);
 
     /**
+     * 指定计费模式的转处方（G30 出院带药使用）。
+     *
+     * <p>{@code ORDER} = 临床已计价（默认，保持旧调用方行为）；{@code DISPENSE} = 发药时计价。
+     */
+    default RxRef createFromOrderWithBilling(UUID orderId, UUID patientId, UUID visitId,
+                                             String visitNo, UUID deptId, String prescriber,
+                                             LocalDate supplyDate, String billingMode,
+                                             List<Line> items) {
+        return createFromOrder(orderId, patientId, visitId, visitNo, deptId, prescriber,
+                supplyDate, items);
+    }
+
+    /** 查询处方当前状态（出院带药同步发药/作废结果）。 */
+    PrescriptionStatus prescriptionStatus(UUID prescriptionId);
+
+    /** 处方状态快照。 */
+    record PrescriptionStatus(UUID prescriptionId, String prescriptionNo, String status,
+                              String billingMode, BigDecimal totalAmount) {
+    }
+
+    /**
      * 按医嘱作废处方（医嘱撤销/停嘱联动）。
      *
      * @return {@code cancelled=false} 表示该医嘱从未生成处方（未转送或转送失败），属正常情况

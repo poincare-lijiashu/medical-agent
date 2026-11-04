@@ -21,6 +21,7 @@ import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
 import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionLine;
+import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionStatusView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
 import com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq;
@@ -106,7 +107,7 @@ public class PrescriptionService {
         String prescriber = blankToNull(req.prescriber());
         String effectiveActor = prescriber == null ? actor : prescriber;
         CreatePrescriptionReq delegated = new CreatePrescriptionReq(req.patientId(), req.visitId(),
-                req.visitNo(), req.deptId(), Prescription.BILLING_ORDER, req.items());
+                req.visitNo(), req.deptId(), req.effectiveBillingMode(), req.items());
         PrescriptionView view;
         try {
             view = createInternal(delegated, effectiveActor, req.orderId(), req.supplyDate());
@@ -550,6 +551,14 @@ public class PrescriptionService {
         Prescription rx = repo.findPrescription(prescriptionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));
         return new PrescriptionView(rx, repo.listPrescriptionItems(prescriptionId));
+    }
+
+    /** 内网状态查询（临床出院带药同步发药结果）。 */
+    public PrescriptionStatusView status(UUID prescriptionId) {
+        Prescription rx = repo.findPrescription(prescriptionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));
+        return new PrescriptionStatusView(rx.id(), rx.prescriptionNo(), rx.status(),
+                rx.billingMode(), rx.totalAmount());
     }
 
     public DispenseView dispenseDetail(UUID dispenseId) {

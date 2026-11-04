@@ -7,10 +7,13 @@ import com.medassist.pharmacy.web.PharmacyDtos.CancelFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateFromOrderReq;
 import com.medassist.pharmacy.web.PharmacyDtos.OrderPrescriptionView;
 import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionCancelView;
+import com.medassist.pharmacy.web.PharmacyDtos.PrescriptionStatusView;
 import com.medassist.pharmacy.web.PharmacyDtos.WardReturnReq;
 import com.medassist.pharmacy.web.PharmacyDtos.WardReturnView;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -19,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.UUID;
 
 /**
  * 临床医嘱转处方（内网接口，仅临床域直连调用，不经网关）。
@@ -48,6 +52,15 @@ public class InternalPrescriptionController {
             @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
         requireToken(provided);
         return service.createFromOrder(req, "clinical");
+    }
+
+    /** 处方状态（内网）：临床出院带药据此同步「已发药/已作废」。 */
+    @GetMapping("/{id}")
+    public PrescriptionStatusView status(
+            @PathVariable UUID id,
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireToken(provided);
+        return service.status(id);
     }
 
     /** 医嘱撤销/停嘱 → 处方作废（幂等；已发药拒绝）。 */

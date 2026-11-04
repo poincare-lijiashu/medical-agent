@@ -131,7 +131,27 @@ public final class PharmacyDtos {
             UUID deptId,
             @Size(max = 64) String prescriber,
             @NotNull LocalDate supplyDate,
+            @Pattern(regexp = "ORDER|DISPENSE", message = "计费模式只能是 ORDER/DISPENSE")
+            String billingMode,
             @NotEmpty List<@Valid PrescriptionLine> items) {
+
+        /** 兼容旧调用方：不传计费模式时等同于 ORDER（临床已计价）。 */
+        public CreateFromOrderReq(UUID orderId, UUID patientId, UUID visitId, String visitNo,
+                                  UUID deptId, String prescriber, LocalDate supplyDate,
+                                  List<PrescriptionLine> items) {
+            this(orderId, patientId, visitId, visitNo, deptId, prescriber, supplyDate, null,
+                    items);
+        }
+
+        /** 未指定时沿用医嘱计价（临床已计费），保持旧调用方行为不变。 */
+        public String effectiveBillingMode() {
+            return billingMode == null || billingMode.isBlank() ? "ORDER" : billingMode;
+        }
+    }
+
+    /** 处方状态查询（内网，供临床出院带药同步发药结果）。 */
+    public record PrescriptionStatusView(UUID prescriptionId, String prescriptionNo, String status,
+                                         String billingMode, BigDecimal totalAmount) {
     }
 
     /**

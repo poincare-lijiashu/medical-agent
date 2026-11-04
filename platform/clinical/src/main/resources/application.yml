@@ -88,6 +88,10 @@ medassist:
     vendor: ${RECEIPT_PUSH_VENDOR:FINANCE}
     template-version: ${RECEIPT_PUSH_TEMPLATE_VERSION:1.0}
     hospital-code: ${RECEIPT_PUSH_HOSPITAL_CODE:}
+  # 出院带药发药结果同步（G30）：每 5 分钟向药房查询已提交单据
+  discharge-med:
+    sync-enabled: ${DISCHARGE_MED_SYNC_ENABLED:true}
+    sync-cron: ${DISCHARGE_MED_SYNC_CRON:0 */5 * * * *}
 
 management:
   endpoints:

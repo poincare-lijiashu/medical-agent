@@ -67,6 +67,15 @@ public enum ErrorCode {
     PATHWAY_EXIT_REASON_REQUIRED(44431, "退出临床路径必须填写原因"),
     PATHWAY_VISIT_INVALID(44432, "只有住院且在院就诊才能入径"),
 
+    // ---- 出院带药（44xxx 续，G30）----
+    DISCHARGE_MED_NOT_FOUND(44440, "未找到该出院带药单"),
+    DISCHARGE_MED_STATUS_INVALID(44441, "当前出院带药状态不允许该操作"),
+    DISCHARGE_MED_EXISTS(44442, "该住院登记已有进行中的出院带药单"),
+    DISCHARGE_MED_INVALID(44443, "出院带药内容不合法（空明细、药品重复或数量异常）"),
+    DISCHARGE_MED_VISIT_INVALID(44444, "只有在院患者才能开立出院带药"),
+    DISCHARGE_MED_CANCEL_REASON_REQUIRED(44445, "取消出院带药必须填写原因"),
+    DISCHARGE_MED_PRESCRIPTION_MISSING(44446, "出院带药尚未生成药房处方，不能同步或取消已提交单据"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

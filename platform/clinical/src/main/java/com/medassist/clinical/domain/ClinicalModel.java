@@ -868,4 +868,43 @@ public final class ClinicalModel {
             return PENDING.equals(status);
         }
     }
+
+    /**
+     * 出院带药单（G30）。
+     *
+     * <p>状态机 {@code DRAFT → SUBMITTED → DISPENSED}，DRAFT/SUBMITTED 可取消；
+     * 提交时调用药房内网接口生成「发药时计价」处方，发药结果由同步接口/定时任务回写。
+     */
+    public record DischargeMedication(UUID id, String medicationNo, UUID admissionId, UUID visitId,
+                                      String visitNo, UUID patientId, String patientNo, UUID deptId,
+                                      String deptName, String status, String note,
+                                      UUID prescriptionId, String prescriptionNo,
+                                      BigDecimal totalAmount, Instant submittedAt,
+                                      Instant dispensedAt, String cancelledBy,
+                                      Instant cancelledAt, String cancelReason, String createdBy,
+                                      long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String DISPENSED = "DISPENSED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean draft() {
+            return DRAFT.equals(status);
+        }
+
+        public boolean submitted() {
+            return SUBMITTED.equals(status);
+        }
+
+        public boolean active() {
+            return DRAFT.equals(status) || SUBMITTED.equals(status);
+        }
+    }
+
+    /** 出院带药明细快照（药品主数据在药房域，本表只存编码与名称）。 */
+    public record DischargeMedicationItem(UUID id, UUID medicationId, int seq, String drugCode,
+                                          String drugName, String spec, String unit, int quantity,
+                                          String dosage, String frequency, Integer days) {
+    }
 }

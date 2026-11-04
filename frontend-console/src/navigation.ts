@@ -101,6 +101,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:pathway:read'],
   },
   {
+    name: 'discharge-medications',
+    path: '/discharge-medications',
+    title: '出院带药',
+    hint: '带药开立 · 提交药房生成处方 · 发药状态同步 · 取消留原因',
+    icon: 'pill',
+    group: '住院管理',
+    permissions: ['inpatient:discharge-med:read'],
+  },
+  {
     name: 'preop',
     path: '/preop',
     title: '术前访视',

@@ -2352,3 +2352,52 @@ export interface PathwayInstanceView {
   tasks: PathwayTask[]
   progress: PathwayProgress
 }
+
+// ---------------------------------------------------------------- 出院带药（G30）
+
+export type DischargeMedicationStatus = 'DRAFT' | 'SUBMITTED' | 'DISPENSED' | 'CANCELLED'
+
+/** 出院带药单：提交药房生成「发药时计价」处方，发药后同步 DISPENSED。 */
+export interface DischargeMedication {
+  id: string
+  medicationNo: string
+  admissionId: string
+  visitId: string
+  visitNo: string
+  patientId: string
+  patientNo: string | null
+  deptId: string | null
+  deptName: string | null
+  status: DischargeMedicationStatus
+  note: string | null
+  prescriptionId: string | null
+  prescriptionNo: string | null
+  totalAmount: number
+  submittedAt: string | null
+  dispensedAt: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+}
+
+export interface DischargeMedicationItem {
+  id: string
+  medicationId: string
+  seq: number
+  drugCode: string
+  drugName: string
+  spec: string | null
+  unit: string | null
+  quantity: number
+  dosage: string | null
+  frequency: string | null
+  days: number | null
+}
+
+export interface DischargeMedicationView {
+  medication: DischargeMedication
+  items: DischargeMedicationItem[]
+}
