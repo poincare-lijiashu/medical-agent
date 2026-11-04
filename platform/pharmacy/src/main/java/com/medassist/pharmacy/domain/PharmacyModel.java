@@ -456,4 +456,52 @@ public final class PharmacyModel {
     public record ReportSnapshot(LocalDate snapshotDate, String metric, BigDecimal value,
                                  String detail, String source, Instant updatedAt) {
     }
+
+    /**
+     * 静配单（G34）：已审核处方 → 配置（扣批次）→ 复核（生成成品标签号）。
+     *
+     * <p>状态机：{@code PENDING → PREPARED → CHECKED}；{@code PENDING / PREPARED → REJECTED}。
+     * 复核人不得与配置人相同（库级 CHECK 兜底）。
+     */
+    public record PivasOrder(UUID id, String orderNo, UUID prescriptionId, String prescriptionNo,
+                             UUID patientId, String patientNo, UUID visitId, String visitNo,
+                             UUID deptId, String priority, String status, String solvent,
+                             Integer solventVolumeMl, String drugSummary, String planBatch,
+                             Instant plannedAt, String preparedBy, Instant preparedAt,
+                             String checkedBy, Instant checkedAt, String bagNo,
+                             String rejectReason, String createdBy, long version,
+                             Instant createdAt) {
+
+        public static final String PENDING = "PENDING";
+        public static final String PREPARED = "PREPARED";
+        public static final String CHECKED = "CHECKED";
+        public static final String REJECTED = "REJECTED";
+
+        public static final String PRIORITY_NORMAL = "NORMAL";
+        public static final String PRIORITY_URGENT = "URGENT";
+
+        public boolean pending() {
+            return PENDING.equals(status);
+        }
+
+        public boolean prepared() {
+            return PREPARED.equals(status);
+        }
+    }
+
+    /** 静配药品明细（处方明细快照）。 */
+    public record PivasItem(UUID id, UUID pivasOrderId, int seq, UUID drugId, String drugCode,
+                            String drugName, String spec, int quantity, String unit,
+                            String dosage, String frequency) {
+    }
+
+    /** 成品输液批次耗用（追加式，追溯凭证）。 */
+    public record PivasItemBatch(UUID id, UUID pivasItemId, UUID drugId, UUID batchId,
+                                 String batchNo, LocalDate expireDate, int quantity,
+                                 Instant createdAt) {
+    }
+
+    /** 静配状态计数。 */
+    public record PivasStatusCount(String status, int count) {
+    }
 }

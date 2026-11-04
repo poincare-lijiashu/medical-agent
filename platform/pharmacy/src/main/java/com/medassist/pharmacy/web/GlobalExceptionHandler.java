@@ -29,15 +29,17 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  GOODS_RECEIPT_NOT_FOUND, STOCK_TAKE_NOT_FOUND,
                  STOCK_TAKE_ITEM_NOT_FOUND, STOCK_LOSS_NOT_FOUND,
                  STOCK_LOSS_BATCH_NOT_FOUND, DRUG_TRANSFER_NOT_FOUND,
-                 DRUG_TRANSFER_BATCH_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 DRUG_TRANSFER_BATCH_NOT_FOUND, PIVAS_ORDER_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN, STOCK_TAKE_SELF_APPROVAL,
-                 STOCK_LOSS_SELF_REVIEW -> HttpStatus.FORBIDDEN;
+                 STOCK_LOSS_SELF_REVIEW, PIVAS_SELF_CHECK -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
                  PRESCRIPTION_STATUS_INVALID,
                  // G33：特殊使用级抗菌药物未获审批（或审批人=开方医师）→ 409，调用方应走审批而不是重试
                  ANTIBIOTIC_APPROVAL_REQUIRED, ANTIBIOTIC_SELF_APPROVAL,
+                 // G34：静配单重复建单 / 状态冲突 / 配置时批次不足 → 409
+                 PIVAS_ORDER_EXISTS, PIVAS_STATUS_INVALID, PIVAS_STOCK_INSUFFICIENT,
                  NARCOTIC_PRESCRIBER_STATE_INVALID,
                  ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID,
                  SUPPLIER_INACTIVE, SUPPLIER_LICENSE_EXPIRED,
@@ -60,7 +62,10 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  DRUG_TRANSFER_REJECT_REASON_REQUIRED,
                  DRUG_TRANSFER_CANCEL_REASON_REQUIRED,
                  // G33：该处方不含特殊使用级抗菌药物，无需专项审批
-                 ANTIBIOTIC_APPROVAL_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 ANTIBIOTIC_APPROVAL_INVALID,
+                 // G34：处方状态不满足静配条件 / 驳回未写原因 → 422
+                 PIVAS_PRESCRIPTION_INVALID, PIVAS_REJECT_REASON_REQUIRED ->
+                    HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

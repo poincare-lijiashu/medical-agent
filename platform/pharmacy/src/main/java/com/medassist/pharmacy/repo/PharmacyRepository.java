@@ -16,6 +16,10 @@ import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.ExpiredBatchRow;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
+import com.medassist.pharmacy.domain.PharmacyModel.PivasItem;
+import com.medassist.pharmacy.domain.PharmacyModel.PivasItemBatch;
+import com.medassist.pharmacy.domain.PharmacyModel.PivasOrder;
+import com.medassist.pharmacy.domain.PharmacyModel.PivasStatusCount;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.DeptDrugStock;
@@ -1782,6 +1786,218 @@ public class PharmacyRepository {
                         """)
                 .query(Integer.class).single();
         return count == null ? 0 : count;
+    }
+
+    // ---------------------------------------------------------------- 静配中心（G34）
+
+    private static final RowMapper<PivasOrder> PIVAS_ORDER_MAPPER = (rs, i) -> new PivasOrder(
+            rs.getObject("id", UUID.class), rs.getString("order_no"),
+            rs.getObject("prescription_id", UUID.class), rs.getString("prescription_no"),
+            rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+            rs.getObject("visit_id", UUID.class), rs.getString("visit_no"),
+            rs.getObject("dept_id", UUID.class), rs.getString("priority"), rs.getString("status"),
+            rs.getString("solvent"),
+            rs.getObject("solvent_volume_ml") == null ? null : rs.getInt("solvent_volume_ml"),
+            rs.getString("drug_summary"), rs.getString("plan_batch"),
+            rs.getTimestamp("planned_at") == null ? null : rs.getTimestamp("planned_at").toInstant(),
+            rs.getString("prepared_by"),
+            rs.getTimestamp("prepared_at") == null ? null : rs.getTimestamp("prepared_at").toInstant(),
+            rs.getString("checked_by"),
+            rs.getTimestamp("checked_at") == null ? null : rs.getTimestamp("checked_at").toInstant(),
+            rs.getString("bag_no"), rs.getString("reject_reason"), rs.getString("created_by"),
+            rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final String PIVAS_ORDER_COLUMNS = """
+            id, order_no, prescription_id, prescription_no, patient_id, patient_no,
+            visit_id, visit_no, dept_id, priority, status, solvent, solvent_volume_ml,
+            drug_summary, plan_batch, planned_at, prepared_by, prepared_at, checked_by,
+            checked_at, bag_no, reject_reason, created_by, version, created_at
+            """;
+
+    public String nextPivasOrderNo() {
+        return nextNo("pharmacy_svc.pivas_order_no_seq", "PV");
+    }
+
+    public String nextPivasBagNo() {
+        return nextNo("pharmacy_svc.pivas_bag_no_seq", "BAG");
+    }
+
+    public void insertPivasOrder(PivasOrder o) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.pivas_order
+                            (id, order_no, prescription_id, prescription_no, patient_id, patient_no,
+                             visit_id, visit_no, dept_id, priority, status, solvent,
+                             solvent_volume_ml, drug_summary, plan_batch, planned_at, created_by)
+                        VALUES (:id, :orderNo, :prescriptionId, :prescriptionNo, :patientId,
+                                CAST(:patientNo AS text), CAST(:visitId AS uuid),
+                                CAST(:visitNo AS text), CAST(:deptId AS uuid), :priority,
+                                :status, CAST(:solvent AS text), :solventVolumeMl, :drugSummary,
+                                CAST(:planBatch AS text),
+                                CAST(:plannedAt AS timestamptz), :createdBy)
+                        """)
+                .param("id", o.id()).param("orderNo", o.orderNo())
+                .param("prescriptionId", o.prescriptionId())
+                .param("prescriptionNo", o.prescriptionNo())
+                .param("patientId", o.patientId()).param("patientNo", o.patientNo())
+                .param("visitId", o.visitId()).param("visitNo", o.visitNo())
+                .param("deptId", o.deptId()).param("priority", o.priority())
+                .param("status", o.status()).param("solvent", o.solvent())
+                .param("solventVolumeMl", o.solventVolumeMl())
+                .param("drugSummary", o.drugSummary()).param("planBatch", o.planBatch())
+                .param("plannedAt", o.plannedAt() == null ? null
+                        : o.plannedAt().atZone(BusinessTime.zone()).toOffsetDateTime())
+                .param("createdBy", o.createdBy()).update();
+    }
+
+    public void insertPivasItem(PivasItem item) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.pivas_item
+                            (id, pivas_order_id, seq, drug_id, drug_code, drug_name, spec,
+                             quantity, unit, dosage, frequency)
+                        VALUES (:id, :orderId, :seq, :drugId, :drugCode, :drugName,
+                                CAST(:spec AS text), :quantity, CAST(:unit AS text),
+                                CAST(:dosage AS text), CAST(:frequency AS text))
+                        """)
+                .param("id", item.id()).param("orderId", item.pivasOrderId())
+                .param("seq", item.seq()).param("drugId", item.drugId())
+                .param("drugCode", item.drugCode()).param("drugName", item.drugName())
+                .param("spec", item.spec()).param("quantity", item.quantity())
+                .param("unit", item.unit()).param("dosage", item.dosage())
+                .param("frequency", item.frequency()).update();
+    }
+
+    public void insertPivasItemBatch(PivasItemBatch b) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.pivas_item_batch
+                            (id, pivas_item_id, drug_id, batch_id, batch_no, expire_date, quantity)
+                        VALUES (:id, :itemId, :drugId, :batchId, :batchNo, :expireDate, :quantity)
+                        """)
+                .param("id", b.id()).param("itemId", b.pivasItemId())
+                .param("drugId", b.drugId()).param("batchId", b.batchId())
+                .param("batchNo", b.batchNo()).param("expireDate", b.expireDate())
+                .param("quantity", b.quantity()).update();
+    }
+
+    public Optional<PivasOrder> findPivasOrder(UUID id) {
+        return jdbc.sql("SELECT " + PIVAS_ORDER_COLUMNS
+                        + " FROM pharmacy_svc.pivas_order WHERE id = ?")
+                .param(id).query(PIVAS_ORDER_MAPPER).optional();
+    }
+
+    /** 行锁：配置/复核/驳回必须在同一事务内串行化。 */
+    public Optional<PivasOrder> lockPivasOrder(UUID id) {
+        return jdbc.sql("SELECT " + PIVAS_ORDER_COLUMNS
+                        + " FROM pharmacy_svc.pivas_order WHERE id = ? FOR UPDATE")
+                .param(id).query(PIVAS_ORDER_MAPPER).optional();
+    }
+
+    public Optional<PivasOrder> findPivasOrderByPrescription(UUID prescriptionId) {
+        return jdbc.sql("SELECT " + PIVAS_ORDER_COLUMNS
+                        + " FROM pharmacy_svc.pivas_order WHERE prescription_id = ?")
+                .param(prescriptionId).query(PIVAS_ORDER_MAPPER).optional();
+    }
+
+    /** 成品输液追溯入口：按标签号反查静配单全链路。 */
+    public Optional<PivasOrder> findPivasOrderByBagNo(String bagNo) {
+        return jdbc.sql("SELECT " + PIVAS_ORDER_COLUMNS
+                        + " FROM pharmacy_svc.pivas_order WHERE bag_no = ?")
+                .param(bagNo).query(PIVAS_ORDER_MAPPER).optional();
+    }
+
+    public List<PivasOrder> listPivasOrders(String status, int limit) {
+        return jdbc.sql("""
+                        SELECT id, order_no, prescription_id, prescription_no, patient_id,
+                               patient_no, visit_id, visit_no, dept_id, priority, status,
+                               solvent, solvent_volume_ml, drug_summary, plan_batch, planned_at,
+                               prepared_by, prepared_at, checked_by, checked_at, bag_no,
+                               reject_reason, created_by, version, created_at
+                          FROM pharmacy_svc.pivas_order
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                         ORDER BY CASE priority WHEN 'URGENT' THEN 0 ELSE 1 END,
+                                  created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("limit", limit)
+                .query(PIVAS_ORDER_MAPPER).list();
+    }
+
+    public List<PivasItem> listPivasItems(UUID orderId) {
+        return jdbc.sql("""
+                        SELECT id, pivas_order_id, seq, drug_id, drug_code, drug_name, spec,
+                               quantity, unit, dosage, frequency
+                          FROM pharmacy_svc.pivas_item
+                         WHERE pivas_order_id = ?
+                         ORDER BY seq
+                        """)
+                .param(orderId)
+                .query((rs, i) -> new PivasItem(
+                        rs.getObject("id", UUID.class), rs.getObject("pivas_order_id", UUID.class),
+                        rs.getInt("seq"), rs.getObject("drug_id", UUID.class),
+                        rs.getString("drug_code"), rs.getString("drug_name"),
+                        rs.getString("spec"), rs.getInt("quantity"), rs.getString("unit"),
+                        rs.getString("dosage"), rs.getString("frequency"))).list();
+    }
+
+    public List<PivasItemBatch> listPivasItemBatches(UUID orderId) {
+        return jdbc.sql("""
+                        SELECT b.id, b.pivas_item_id, b.drug_id, b.batch_id, b.batch_no,
+                               b.expire_date, b.quantity, b.created_at
+                          FROM pharmacy_svc.pivas_item_batch b
+                          JOIN pharmacy_svc.pivas_item i ON i.id = b.pivas_item_id
+                         WHERE i.pivas_order_id = ?
+                         ORDER BY i.seq, b.expire_date, b.batch_no
+                        """)
+                .param(orderId)
+                .query((rs, i) -> new PivasItemBatch(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("pivas_item_id", UUID.class),
+                        rs.getObject("drug_id", UUID.class), rs.getObject("batch_id", UUID.class),
+                        rs.getString("batch_no"), rs.getDate("expire_date").toLocalDate(),
+                        rs.getInt("quantity"), rs.getTimestamp("created_at").toInstant())).list();
+    }
+
+    public boolean markPivasPrepared(UUID id, long expectedVersion, String preparedBy) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.pivas_order
+                           SET status = 'PREPARED', prepared_by = :by, prepared_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'PENDING' AND version = :version
+                        """)
+                .param("by", preparedBy).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean markPivasChecked(UUID id, long expectedVersion, String checkedBy,
+                                    String bagNo) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.pivas_order
+                           SET status = 'CHECKED', checked_by = :by, checked_at = now(),
+                               bag_no = :bagNo, version = version + 1
+                         WHERE id = :id AND status = 'PREPARED' AND version = :version
+                        """)
+                .param("by", checkedBy).param("bagNo", bagNo)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean markPivasRejected(UUID id, long expectedVersion, String reason) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.pivas_order
+                           SET status = 'REJECTED', reject_reason = :reason, version = version + 1
+                         WHERE id = :id AND status IN ('PENDING', 'PREPARED')
+                           AND version = :version
+                        """)
+                .param("reason", reason).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public List<PivasStatusCount> pivasStatusCounts() {
+        return jdbc.sql("""
+                        SELECT status, count(*) AS cnt
+                          FROM pharmacy_svc.pivas_order
+                         GROUP BY status
+                        """)
+                .query((rs, i) -> new PivasStatusCount(rs.getString("status"),
+                        rs.getInt("cnt"))).list();
     }
 
     // ---------------------------------------------------------------- 审计

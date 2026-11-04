@@ -1310,6 +1310,81 @@ export interface AntibioticStats {
   overLimit: AntibioticOverLimit[]
 }
 
+// ---------------------------------------------------------------- 静配中心（G34）
+
+export type PivasStatus = 'PENDING' | 'PREPARED' | 'CHECKED' | 'REJECTED'
+export type PivasPriority = 'NORMAL' | 'URGENT'
+
+/** 静配单：已审核处方 → 配置（扣批次）→ 双人复核（生成成品标签号）。 */
+export interface PivasOrder {
+  id: string
+  orderNo: string
+  prescriptionId: string
+  prescriptionNo: string
+  patientId: string
+  patientNo: string | null
+  visitId: string | null
+  visitNo: string | null
+  deptId: string | null
+  priority: PivasPriority
+  status: PivasStatus
+  solvent: string | null
+  solventVolumeMl: number | null
+  drugSummary: string
+  planBatch: string | null
+  plannedAt: string | null
+  preparedBy: string | null
+  preparedAt: string | null
+  checkedBy: string | null
+  checkedAt: string | null
+  /** 成品输液标签号：仅 CHECKED 后存在，是批次追溯入口。 */
+  bagNo: string | null
+  rejectReason: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+}
+
+export interface PivasItem {
+  id: string
+  pivasOrderId: string
+  seq: number
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string | null
+  quantity: number
+  unit: string | null
+  dosage: string | null
+  frequency: string | null
+}
+
+/** 成品输液批次耗用（追溯凭证）。 */
+export interface PivasItemBatch {
+  id: string
+  pivasItemId: string
+  drugId: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  createdAt: string
+}
+
+export interface PivasView {
+  order: PivasOrder
+  items: PivasItem[]
+  batches: PivasItemBatch[]
+}
+
+export interface PivasSummary {
+  pending: number
+  prepared: number
+  checked: number
+  rejected: number
+  total: number
+}
+
 // ---------------------------------------------------------------- 药品科室调拨（G8）
 
 export type DrugTransferStatus =

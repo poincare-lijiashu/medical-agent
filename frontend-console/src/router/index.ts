@@ -80,6 +80,7 @@ const router = createRouter({
           name: 'antibiotics',
           component: () => import('@/views/AntibioticView.vue'),
         },
+        { path: 'pivas', name: 'pivas', component: () => import('@/views/PivasView.vue') },
         { path: 'drug-transfer', name: 'drug-transfer', component: () => import('@/views/DrugTransferView.vue') },
         { path: 'material', name: 'material', component: () => import('@/views/MaterialView.vue') },
         {

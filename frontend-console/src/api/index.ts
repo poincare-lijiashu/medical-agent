@@ -86,6 +86,9 @@ import type {
   AntibioticApprovalView,
   AntibioticPendingRow,
   AntibioticStats,
+  PivasOrder,
+  PivasSummary,
+  PivasView,
   SupplierView,
   ConsumableView,
   ConsumableBatch,
@@ -615,6 +618,28 @@ export const pharmacyApi = {
       `/pharmacy/antibiotics/prescriptions/${prescriptionId}/approval`,
       body,
     ),
+
+  // ---- 静配中心（G34）----
+  pivasOrders: (status?: string, limit = 50) =>
+    get<PivasOrder[]>('/pharmacy/pivas/orders', { status, limit }),
+  pivasOrder: (id: string) => get<PivasView>(`/pharmacy/pivas/orders/${id}`),
+  /** 成品输液追溯：按标签号反查批次/效期/配置与复核人。 */
+  pivasTrace: (bagNo: string) => get<PivasView>('/pharmacy/pivas/trace', { bagNo }),
+  pivasSummary: () => get<PivasSummary>('/pharmacy/pivas/summary'),
+  createPivasOrder: (body: {
+    prescriptionId: string
+    priority?: string
+    solvent?: string
+    solventVolumeMl?: number
+    planBatch?: string
+    plannedAt?: string
+  }) => post<PivasView>('/pharmacy/pivas/orders', body),
+  preparePivas: (id: string) => post<PivasView>(`/pharmacy/pivas/orders/${id}/prepare`),
+  /** 复核：approve=false 必须写 note（驳回并回补批次库存）。 */
+  checkPivas: (id: string, approve: boolean, note?: string) =>
+    post<PivasView>(`/pharmacy/pivas/orders/${id}/check`, { approve, note }),
+  rejectPivas: (id: string, reason: string) =>
+    post<PivasView>(`/pharmacy/pivas/orders/${id}/reject`, { reason }),
 
   // ---- 科室调拨（G8）----
   drugTransfers: (status?: string, toDeptId?: string, limit = 50) =>

@@ -143,6 +143,15 @@ public enum ErrorCode {
     ANTIBIOTIC_APPROVAL_INVALID(43441, "该处方不含特殊使用级抗菌药物，无需专项审批"),
     ANTIBIOTIC_SELF_APPROVAL(43442, "不能审批自己开具的抗菌药物处方"),
 
+    // ---- 静配中心（43xxx 续，G34）----
+    PIVAS_ORDER_NOT_FOUND(43520, "未找到该静配单或成品输液标签"),
+    PIVAS_ORDER_EXISTS(43521, "该处方已生成静配单，不能重复建单"),
+    PIVAS_STATUS_INVALID(43522, "当前静配单状态不允许该操作"),
+    PIVAS_PRESCRIPTION_INVALID(43523, "只有已审核通过的处方可以进入静配中心"),
+    PIVAS_SELF_CHECK(43524, "复核人不能与配置人相同"),
+    PIVAS_REJECT_REASON_REQUIRED(43525, "驳回静配单必须填写原因"),
+    PIVAS_STOCK_INSUFFICIENT(43526, "静配药品批次余量不足，无法完成配置"),
+
     // ---- 物资耗材（43xxx 续，G3；与药械同属物资供应，编码段相邻）----
     CONSUMABLE_NOT_FOUND(43450, "未找到该耗材，或该耗材已停用"),
     CONSUMABLE_BATCH_NOT_FOUND(43451, "未找到该耗材批次"),

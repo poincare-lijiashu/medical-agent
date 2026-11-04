@@ -200,6 +200,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:antibiotic:read'],
   },
   {
+    name: 'pivas',
+    path: '/pivas',
+    title: '静配中心',
+    hint: '处方建单 · FEFO 配置扣批次 · 双人复核成品标签 · 输液批次追溯',
+    icon: 'pill',
+    group: '药事管理',
+    permissions: ['pharmacy:pivas:read'],
+  },
+  {
     name: 'drug-transfer',
     path: '/drug-transfer',
     title: '药品调拨',
