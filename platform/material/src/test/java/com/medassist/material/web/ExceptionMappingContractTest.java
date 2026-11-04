@@ -49,6 +49,16 @@ class ExceptionMappingContractTest {
                 .isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(handler.statusOf(ErrorCode.CONSUMABLE_RETURN_ITEM_INVALID))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.DEPT_TRANSFER_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.DEPT_TRANSFER_STOCK_INSUFFICIENT))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.DEPT_TRANSFER_SELF_ACCEPT))
+                .isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(handler.statusOf(ErrorCode.DEPT_TRANSFER_SAME_DEPT))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.DEPT_TRANSFER_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
     }
 
     @Test

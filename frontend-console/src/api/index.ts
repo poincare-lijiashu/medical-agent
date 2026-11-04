@@ -68,6 +68,8 @@ import type {
   ConsumableTrace,
   ConsumableRecall,
   DeptConsumableStockView,
+  DeptTransfer,
+  DeptTransferView,
   MaterialStockWarning,
   MaterialSummary,
   CodingQueueItem,
@@ -498,6 +500,24 @@ export const materialApi = {
     post<ConsumableReturnView>(`/material/returns/${id}/cancel`, { reason }),
   deptConsumableStock: (deptId: string, keyword?: string, limit = 100) =>
     get<DeptConsumableStockView>('/material/dept-stocks', { deptId, keyword, limit }),
+
+  // ---- 跨科室调拨（G12）----
+  deptTransfers: (status?: string, deptId?: string, limit = 50) =>
+    get<DeptTransfer[]>('/material/dept-transfers', { status, deptId, limit }),
+  deptTransfer: (id: string) => get<DeptTransferView>(`/material/dept-transfers/${id}`),
+  createDeptTransfer: (body: {
+    fromDeptId: string
+    toDeptId: string
+    reason: string
+    note?: string
+    items: { batchId: string; quantity: number }[]
+  }) => post<DeptTransferView>('/material/dept-transfers', body),
+  acceptDeptTransfer: (id: string) =>
+    post<DeptTransferView>(`/material/dept-transfers/${id}/accept`),
+  rejectDeptTransfer: (id: string, reason: string) =>
+    post<DeptTransferView>(`/material/dept-transfers/${id}/reject`, { reason }),
+  cancelDeptTransfer: (id: string, reason: string) =>
+    post<DeptTransferView>(`/material/dept-transfers/${id}/cancel`, { reason }),
 }
 
 // ---------------------------------------------------------------- 病案编码（G4）

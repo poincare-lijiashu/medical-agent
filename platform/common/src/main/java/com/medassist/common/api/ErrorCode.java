@@ -127,6 +127,17 @@ public enum ErrorCode {
     CONSUMABLE_RETURN_BATCH_NOT_FOUND(43506, "退回明细中的批次不存在"),
     CONSUMABLE_RETURN_SELF_REVIEW(43507, "不能审批自己提交的退回单"),
 
+    // ---- 耗材跨科室调拨（43xxx 续，G12）----
+    DEPT_TRANSFER_NOT_FOUND(43510, "未找到该耗材调拨单"),
+    DEPT_TRANSFER_ITEM_INVALID(43511, "调拨明细不合法（同一批次重复）"),
+    DEPT_TRANSFER_STATUS_INVALID(43512, "当前调拨单状态不允许该操作"),
+    DEPT_TRANSFER_STOCK_INSUFFICIENT(43513, "调出科室二级库余量不足，无法调拨"),
+    DEPT_TRANSFER_REJECT_REASON_REQUIRED(43514, "拒收调拨必须填写原因"),
+    DEPT_TRANSFER_CANCEL_REASON_REQUIRED(43515, "撤回调拨必须填写原因"),
+    DEPT_TRANSFER_SAME_DEPT(43516, "调出科室与调入科室不能相同"),
+    DEPT_TRANSFER_BATCH_NOT_FOUND(43517, "调拨明细中的批次不存在"),
+    DEPT_TRANSFER_SELF_ACCEPT(43518, "不能接收或拒收自己提交的调拨单"),
+
     // ---- 麻醉药品（43xxx 续）----
     NARCOTIC_REGISTER_NOT_FOUND(43407, "未找到该麻醉药品专册登记"),
     NARCOTIC_PRESCRIBER_NOT_FOUND(43408, "未找到该医师的麻醉药品处方权记录"),

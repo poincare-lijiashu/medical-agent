@@ -58,6 +58,11 @@ const router = createRouter({
           component: () => import('@/views/ConsumableReturnView.vue'),
         },
         {
+          path: 'consumable-transfer',
+          name: 'consumable-transfer',
+          component: () => import('@/views/ConsumableTransferView.vue'),
+        },
+        {
           path: 'coding',
           name: 'coding',
           component: () => import('@/views/CodingWorkbenchView.vue'),

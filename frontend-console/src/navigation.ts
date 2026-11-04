@@ -173,6 +173,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['material:read'],
   },
   {
+    name: 'consumable-transfer',
+    path: '/consumable-transfer',
+    title: '耗材调拨',
+    hint: '科室二级库互调 · 调入科室接收才搬库 · 拒收/撤回不动库存',
+    icon: 'arrow-right',
+    group: '药事管理',
+    permissions: ['material:read'],
+  },
+  {
     name: 'insurance',
     path: '/insurance',
     title: '医保结算',

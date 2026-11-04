@@ -1181,6 +1181,51 @@ export interface DeptConsumableStockView {
   items: DeptConsumableStock[]
 }
 
+// ---------------------------------------------------------------- 耗材跨科室调拨（G12）
+
+export type DeptTransferStatus = 'SUBMITTED' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED'
+
+/** 跨科室调拨单：接收时同一事务扣调出科室库、加调入科室库。 */
+export interface DeptTransfer {
+  id: string
+  transferNo: string
+  status: DeptTransferStatus
+  fromDeptId: string
+  toDeptId: string
+  reason: string
+  note: string | null
+  createdBy: string
+  acceptedBy: string | null
+  acceptedAt: string | null
+  rejectedBy: string | null
+  rejectedAt: string | null
+  rejectReason: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  version: number
+  createdAt: string
+}
+
+export interface DeptTransferItem {
+  id: string
+  transferId: string
+  consumableId: string
+  consumableCode: string
+  consumableName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string | null
+  quantity: number
+}
+
+export interface DeptTransferView {
+  deptTransfer: DeptTransfer
+  items: DeptTransferItem[]
+}
+
 // ---------------------------------------------------------------- 病案编码（G4）
 
 export interface IcdDiagnosis {

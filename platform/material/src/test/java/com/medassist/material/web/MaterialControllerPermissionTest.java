@@ -8,6 +8,7 @@ import com.medassist.material.service.ConsumableIssueService;
 import com.medassist.material.service.ConsumableReturnService;
 import com.medassist.material.service.ConsumableStockService;
 import com.medassist.material.service.ConsumableTraceService;
+import com.medassist.material.service.DeptTransferService;
 import com.medassist.material.web.MaterialDtos.CreateConsumableReq;
 import com.medassist.material.web.MaterialDtos.CreateIssueReq;
 import com.medassist.material.web.MaterialDtos.CreateTraceReq;
@@ -17,6 +18,9 @@ import com.medassist.material.web.MaterialDtos.UpdatePriceReq;
 import com.medassist.material.web.MaterialReturnDtos.CreateReturnReq;
 import com.medassist.material.web.MaterialReturnDtos.ReturnLine;
 import com.medassist.material.web.MaterialReturnDtos.ReturnReasonReq;
+import com.medassist.material.web.MaterialTransferDtos.CreateDeptTransferReq;
+import com.medassist.material.web.MaterialTransferDtos.TransferLine;
+import com.medassist.material.web.MaterialTransferDtos.TransferReasonReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,12 +48,14 @@ class MaterialControllerPermissionTest {
     private ConsumableIssueService issueService;
     private ConsumableTraceService traceService;
     private ConsumableReturnService returnService;
+    private DeptTransferService deptTransferService;
 
     private MaterialCatalogController catalogController;
     private MaterialStockController stockController;
     private MaterialIssueController issueController;
     private MaterialTraceController traceController;
     private MaterialReturnController returnController;
+    private MaterialTransferController transferController;
 
     private final UUID id = UUID.randomUUID();
     private final DataScope scope = DataScope.all("mat01", true);
@@ -61,11 +67,13 @@ class MaterialControllerPermissionTest {
         issueService = mock(ConsumableIssueService.class);
         traceService = mock(ConsumableTraceService.class);
         returnService = mock(ConsumableReturnService.class);
+        deptTransferService = mock(DeptTransferService.class);
         catalogController = new MaterialCatalogController(catalogService);
         stockController = new MaterialStockController(stockService);
         issueController = new MaterialIssueController(issueService);
         traceController = new MaterialTraceController(traceService);
         returnController = new MaterialReturnController(returnService);
+        transferController = new MaterialTransferController(deptTransferService);
     }
 
     @Test
@@ -198,5 +206,50 @@ class MaterialControllerPermissionTest {
         returnController.deptStock(id, null, null, "material:read");
 
         verify(returnService).deptStock(id, null, null);
+    }
+
+    @Test
+    @DisplayName("跨科室调拨建单：需要 material:transfer:write")
+    void transferCreateRequiresWrite() {
+        var req = new CreateDeptTransferReq(id, UUID.randomUUID(), "术间借用", null,
+                List.of(new TransferLine(UUID.randomUUID(), 1)));
+
+        assertThatThrownBy(() -> transferController.create(req, "material:issue:write", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(deptTransferService, never()).create(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("跨科室调拨接收：需要 material:transfer:accept")
+    void transferAcceptRequiresAccept() {
+        assertThatThrownBy(() -> transferController.accept(id, "material:transfer:write", "nurse02"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(deptTransferService, never()).accept(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("跨科室调拨拒收：需要 material:transfer:accept")
+    void transferRejectRequiresAccept() {
+        assertThatThrownBy(() -> transferController.reject(id, new TransferReasonReq("包装破损"),
+                "material:transfer:write", "nurse02"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(deptTransferService, never()).reject(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("跨科室调拨撤回：需要 material:transfer:write")
+    void transferCancelRequiresWrite() {
+        assertThatThrownBy(() -> transferController.cancel(id, new TransferReasonReq("重复建单"),
+                "material:transfer:accept", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(deptTransferService, never()).cancel(any(), any(), anyString());
     }
 }

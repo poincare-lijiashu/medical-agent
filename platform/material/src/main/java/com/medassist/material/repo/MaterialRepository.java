@@ -9,11 +9,14 @@ import com.medassist.material.domain.MaterialModel.ConsumableReturn;
 import com.medassist.material.domain.MaterialModel.ConsumableReturnItem;
 import com.medassist.material.domain.MaterialModel.ConsumableTrace;
 import com.medassist.material.domain.MaterialModel.DeptConsumableStock;
+import com.medassist.material.domain.MaterialModel.DeptTransfer;
+import com.medassist.material.domain.MaterialModel.DeptTransferItem;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.sql.ResultSet;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -109,6 +112,28 @@ public class MaterialRepository {
                             : rs.getDate("expire_date").toLocalDate(),
                     rs.getInt("quantity"));
 
+    private static final RowMapper<DeptTransfer> DEPT_TRANSFER_MAPPER =
+            (rs, i) -> new DeptTransfer(
+                    rs.getObject("id", UUID.class), rs.getString("transfer_no"),
+                    rs.getString("status"), rs.getObject("from_dept_id", UUID.class),
+                    rs.getObject("to_dept_id", UUID.class), rs.getString("reason"),
+                    rs.getString("note"), rs.getString("created_by"),
+                    rs.getString("accepted_by"), instant(rs, "accepted_at"),
+                    rs.getString("rejected_by"), instant(rs, "rejected_at"),
+                    rs.getString("reject_reason"), rs.getString("cancelled_by"),
+                    instant(rs, "cancelled_at"), rs.getString("cancel_reason"),
+                    rs.getLong("version"), instant(rs, "created_at"));
+
+    private static final RowMapper<DeptTransferItem> DEPT_TRANSFER_ITEM_MAPPER =
+            (rs, i) -> new DeptTransferItem(
+                    rs.getObject("id", UUID.class), rs.getObject("transfer_id", UUID.class),
+                    rs.getObject("consumable_id", UUID.class), rs.getString("consumable_code"),
+                    rs.getString("consumable_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date") == null ? null
+                            : rs.getDate("expire_date").toLocalDate(),
+                    rs.getInt("quantity"));
+
     private final JdbcClient jdbc;
 
     public MaterialRepository(JdbcClient jdbc) {
@@ -128,6 +153,13 @@ public class MaterialRepository {
         Long seq = jdbc.sql("SELECT nextval('material_svc.consumable_return_no_seq'::regclass)")
                 .query(Long.class).single();
         return "MR" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq == null ? 0 : seq);
+    }
+
+    public String nextDeptTransferNo() {
+        Long seq = jdbc.sql("SELECT nextval('material_svc.dept_transfer_no_seq'::regclass)")
+                .query(Long.class).single();
+        return "DT" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
                 + String.format("%06d", seq == null ? 0 : seq);
     }
 
@@ -699,6 +731,119 @@ public class MaterialRepository {
                 .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
+    // ---------------------------------------------------------------- 跨科室调拨（G12）
+
+    public void insertDeptTransfer(DeptTransfer t) {
+        jdbc.sql("""
+                        INSERT INTO material_svc.dept_transfer
+                            (id, transfer_no, status, from_dept_id, to_dept_id, reason, note,
+                             created_by, version)
+                        VALUES (:id, :no, :status, :fromDeptId, :toDeptId, :reason,
+                                CAST(:note AS text), :createdBy, 0)
+                        """)
+                .param("id", t.id()).param("no", t.transferNo()).param("status", t.status())
+                .param("fromDeptId", t.fromDeptId()).param("toDeptId", t.toDeptId())
+                .param("reason", t.reason()).param("note", t.note())
+                .param("createdBy", t.createdBy()).update();
+    }
+
+    public Optional<DeptTransfer> findDeptTransfer(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, transfer_no, status, from_dept_id, to_dept_id, reason, note,
+                               created_by, accepted_by, accepted_at, rejected_by, rejected_at,
+                               reject_reason, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM material_svc.dept_transfer WHERE id = ?
+                        """).param(id).query(DEPT_TRANSFER_MAPPER).optional();
+    }
+
+    /** 加行锁读取调拨单；接收/拒收/撤回前必须调用。 */
+    public Optional<DeptTransfer> lockDeptTransfer(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, transfer_no, status, from_dept_id, to_dept_id, reason, note,
+                               created_by, accepted_by, accepted_at, rejected_by, rejected_at,
+                               reject_reason, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM material_svc.dept_transfer WHERE id = ? FOR UPDATE
+                        """).param(id).query(DEPT_TRANSFER_MAPPER).optional();
+    }
+
+    public List<DeptTransfer> listDeptTransfers(String status, UUID deptId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, transfer_no, status, from_dept_id, to_dept_id, reason, note,
+                               created_by, accepted_by, accepted_at, rejected_by, rejected_at,
+                               reject_reason, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM material_svc.dept_transfer
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:deptId AS uuid) IS NULL
+                                OR from_dept_id = CAST(:deptId AS uuid)
+                                OR to_dept_id = CAST(:deptId AS uuid))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("deptId", deptId).param("limit", limit)
+                .query(DEPT_TRANSFER_MAPPER).list();
+    }
+
+    public void insertDeptTransferItem(DeptTransferItem item) {
+        jdbc.sql("""
+                        INSERT INTO material_svc.dept_transfer_item
+                            (id, transfer_id, consumable_id, batch_id, quantity)
+                        VALUES (:id, :transferId, :consumableId, :batchId, :qty)
+                        """)
+                .param("id", item.id()).param("transferId", item.transferId())
+                .param("consumableId", item.consumableId()).param("batchId", item.batchId())
+                .param("qty", item.quantity()).update();
+    }
+
+    public List<DeptTransferItem> listDeptTransferItems(UUID transferId) {
+        return jdbc.sql("""
+                        SELECT i.id, i.transfer_id, i.consumable_id, c.code AS consumable_code,
+                               c.name AS consumable_name, c.spec, c.unit, i.batch_id,
+                               b.batch_no, b.expire_date, i.quantity
+                          FROM material_svc.dept_transfer_item i
+                          JOIN material_svc.md_consumable c ON c.id = i.consumable_id
+                          JOIN material_svc.consumable_batch b ON b.id = i.batch_id
+                         WHERE i.transfer_id = ?
+                         ORDER BY c.code, b.batch_no
+                        """).param(transferId).query(DEPT_TRANSFER_ITEM_MAPPER).list();
+    }
+
+    /** 接收 CAS：仅 SUBMITTED 可流转。 */
+    public boolean acceptDeptTransfer(UUID id, long expectedVersion, String actor) {
+        return jdbc.sql("""
+                        UPDATE material_svc.dept_transfer
+                           SET status = 'ACCEPTED', accepted_by = :actor, accepted_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("actor", actor).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean rejectDeptTransfer(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE material_svc.dept_transfer
+                           SET status = 'REJECTED', rejected_by = :actor, rejected_at = now(),
+                               reject_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("actor", actor).param("reason", reason)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean cancelDeptTransfer(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE material_svc.dept_transfer
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancel_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("actor", actor).param("reason", reason)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
     // ---------------------------------------------------------------- 汇总
 
     public BigDecimal stockValue() {
@@ -747,6 +892,11 @@ public class MaterialRepository {
 
     private static java.sql.Timestamp timestamp(Instant instant) {
         return instant == null ? null : java.sql.Timestamp.from(instant);
+    }
+
+    private static Instant instant(ResultSet rs, String column) throws java.sql.SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
     }
 
     private String blankToNull(String s) {

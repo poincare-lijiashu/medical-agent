@@ -144,4 +144,38 @@ public final class MaterialModel {
                                        String unit, UUID batchId, String batchNo,
                                        LocalDate expireDate, int quantity) {
     }
+
+    /**
+     * 跨科室调拨单（科室二级库 → 科室二级库）。
+     *
+     * <p>状态机：SUBMITTED → ACCEPTED / REJECTED；SUBMITTED 可撤回。
+     * 接收时同一事务扣调出科室库、加调入科室库；拒收/撤回不动库存。
+     */
+    public record DeptTransfer(UUID id, String transferNo, String status, UUID fromDeptId,
+                               UUID toDeptId, String reason, String note, String createdBy,
+                               String acceptedBy, Instant acceptedAt, String rejectedBy,
+                               Instant rejectedAt, String rejectReason, String cancelledBy,
+                               Instant cancelledAt, String cancelReason, long version,
+                               Instant createdAt) {
+
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String REJECTED = "REJECTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean receivable() {
+            return SUBMITTED.equals(status);
+        }
+
+        public boolean cancellable() {
+            return SUBMITTED.equals(status);
+        }
+    }
+
+    /** 跨科室调拨明细（一行 = 一个批次）。 */
+    public record DeptTransferItem(UUID id, UUID transferId, UUID consumableId,
+                                   String consumableCode, String consumableName, String spec,
+                                   String unit, UUID batchId, String batchNo,
+                                   LocalDate expireDate, int quantity) {
+    }
 }
