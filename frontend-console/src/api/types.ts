@@ -229,6 +229,18 @@ export interface ReportSubscriptionInput {
   version?: number | null
 }
 
+/** 电子票据推送记录（G21）。 */
+export interface ReceiptPush {
+  id: string
+  receiptId: string
+  platform: string
+  status: 'PENDING' | 'SENT' | 'FAILED'
+  attempts: number
+  externalNo: string | null
+  lastError: string | null
+  pushedAt: string | null
+}
+
 export interface Ward {
   id: string
   code: string

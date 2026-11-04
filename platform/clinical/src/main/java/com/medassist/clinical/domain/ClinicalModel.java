@@ -473,6 +473,12 @@ public final class ClinicalModel {
                                  Instant sentAt) {
     }
 
+    /** 电子票据推送记录（G21）：同一票据同一平台唯一。 */
+    public record ReceiptPush(UUID id, UUID receiptId, String platform, String status,
+                              int attempts, String externalNo, String lastError,
+                              Instant pushedAt) {
+    }
+
     /**
      * 收费票据（G14）。
      *

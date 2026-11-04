@@ -155,6 +155,9 @@
                     <button class="btn btn--sm" type="button" :disabled="busy || !canIssue" @click="reprint(r)">
                       重打
                     </button>
+                    <button class="btn btn--sm" type="button" :disabled="busy || !canPush" @click="pushElectronic(r)">
+                      推送电子票
+                    </button>
                     <button class="btn btn--sm btn--ghost" type="button" :disabled="busy || !canVoid" @click="openVoid(r)">
                       作废
                     </button>
@@ -202,6 +205,7 @@ import { dateTime, money, todayIso } from '@/utils/format'
 const role = session.roleLabel
 const canIssue = computed(() => hasPermission('clinical:receipt:issue'))
 const canVoid = computed(() => hasPermission('clinical:receipt:void'))
+const canPush = computed(() => hasPermission('clinical:receipt:push'))
 
 const departments = ref<Dept[]>([])
 const deptId = ref('')
@@ -288,6 +292,23 @@ async function issue() {
     printReceipt(created)
   } catch (e) {
     toast.error('开票失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function pushElectronic(r: ChargeReceipt) {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const push = await clinicalApi.pushReceipt(r.id)
+    if (push.status === 'SENT') {
+      toast.ok('电子票据已推送', push.externalNo ? `平台票据号 ${push.externalNo}` : '平台已受理')
+    } else {
+      toast.error('推送失败', push.lastError ?? '平台未返回原因')
+    }
+  } catch (e) {
+    toast.error('推送失败', errorText(e))
   } finally {
     busy.value = false
   }

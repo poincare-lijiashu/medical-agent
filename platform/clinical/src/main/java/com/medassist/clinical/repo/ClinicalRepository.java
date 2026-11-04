@@ -29,6 +29,7 @@ import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
+import com.medassist.clinical.domain.ClinicalModel.ReceiptPush;
 import com.medassist.clinical.domain.ClinicalModel.ReportDelivery;
 import com.medassist.clinical.domain.ClinicalModel.ReportSnapshot;
 import com.medassist.clinical.domain.ClinicalModel.ReportSubscription;
@@ -1529,6 +1530,72 @@ public class ClinicalRepository {
     /** 读取已固化的投递内容（重试时必须复用首次生成的正文，避免口径漂移）。 */
     public String reportDeliveryPayload(UUID id) {
         return jdbc.sql("SELECT payload::text FROM clinical_svc.report_delivery WHERE id = ?")
+                .param(id).query(String.class).optional().orElse(null);
+    }
+
+    // ---------------------------------------------------------------- 电子票据推送（G21）
+
+    private static final RowMapper<ReceiptPush> RECEIPT_PUSH_MAPPER = (rs, i) ->
+            new ReceiptPush(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("receipt_id", UUID.class),
+                    rs.getString("platform"), rs.getString("status"),
+                    rs.getInt("attempts"), rs.getString("external_no"),
+                    rs.getString("last_error"),
+                    rs.getTimestamp("pushed_at") == null ? null
+                            : rs.getTimestamp("pushed_at").toInstant());
+
+    /** 推送占位：同一票据同一平台唯一，返回 false 表示已存在（幂等）。 */
+    public boolean insertReceiptPushIfAbsent(UUID id, UUID receiptId, String platform,
+                                             String payload) {
+        return jdbc.sql("""
+                        INSERT INTO clinical_svc.receipt_push
+                            (id, receipt_id, platform, status, payload)
+                        VALUES (:id, :receiptId, :platform, 'PENDING', CAST(:payload AS jsonb))
+                        ON CONFLICT (receipt_id, platform) DO NOTHING
+                        """)
+                .param("id", id).param("receiptId", receiptId).param("platform", platform)
+                .param("payload", payload)
+                .update() > 0;
+    }
+
+    public Optional<ReceiptPush> findReceiptPush(UUID receiptId, String platform) {
+        return jdbc.sql("""
+                        SELECT id, receipt_id, platform, status, attempts, external_no,
+                               last_error, pushed_at
+                          FROM clinical_svc.receipt_push
+                         WHERE receipt_id = :receiptId AND platform = :platform
+                        """)
+                .param("receiptId", receiptId).param("platform", platform)
+                .query(RECEIPT_PUSH_MAPPER).optional();
+    }
+
+    public List<ReceiptPush> listReceiptPushes(UUID receiptId) {
+        return jdbc.sql("""
+                        SELECT id, receipt_id, platform, status, attempts, external_no,
+                               last_error, pushed_at
+                          FROM clinical_svc.receipt_push
+                         WHERE receipt_id = ?
+                         ORDER BY created_at DESC
+                        """).param(receiptId).query(RECEIPT_PUSH_MAPPER).list();
+    }
+
+    public void markReceiptPush(UUID id, String status, int attempts, String externalNo,
+                                String lastError) {
+        jdbc.sql("""
+                        UPDATE clinical_svc.receipt_push
+                           SET status = :status, attempts = :attempts,
+                               external_no = :externalNo, last_error = :error,
+                               pushed_at = CASE WHEN :status = 'SENT' THEN now() ELSE pushed_at END,
+                               updated_at = now()
+                         WHERE id = :id
+                        """)
+                .param("id", id).param("status", status).param("attempts", attempts)
+                .param("externalNo", externalNo).param("error", lastError).update();
+    }
+
+    public String receiptPushPayload(UUID id) {
+        return jdbc.sql("SELECT payload::text FROM clinical_svc.receipt_push WHERE id = ?")
                 .param(id).query(String.class).optional().orElse(null);
     }
 

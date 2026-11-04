@@ -31,6 +31,7 @@ import type {
   ReportDelivery,
   ReportSubscription,
   ReportSubscriptionInput,
+  ReceiptPush,
   SnapshotCapture,
   SnapshotList,
   KbAnswerResult,
@@ -196,6 +197,9 @@ export const clinicalApi = {
   reprintReceipt: (id: string) => post<ChargeReceipt>(`/clinical/receipts/${id}/reprint`),
   voidReceipt: (id: string, reason: string) =>
     post<ChargeReceipt>(`/clinical/receipts/${id}/void`, { reason }),
+  /** 电子票据推送（G21）：已成功幂等返回，失败可重试。 */
+  pushReceipt: (id: string) => post<ReceiptPush>(`/clinical/receipts/${id}/push`),
+  receiptPushes: (id: string) => get<ReceiptPush[]>(`/clinical/receipts/${id}/pushes`),
   startVisit: (id: string) => post<Visit>(`/clinical/visits/${id}/start`),
   orders: (visitId: string) => get<VisitOrder[]>(`/clinical/visits/${visitId}/orders`),
   placeOrders: (
