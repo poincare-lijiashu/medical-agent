@@ -9,6 +9,7 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
+import com.medassist.clinical.domain.ClinicalModel.DailyPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.DeptPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
@@ -1090,6 +1091,55 @@ public class ClinicalRepository {
                         rs.getInt("visits"), rs.getInt("paid_charges"),
                         rs.getBigDecimal("paid_amount"), rs.getBigDecimal("refunded_amount")))
                 .single();
+    }
+
+    /**
+     * 门诊实收趋势（G13）：按收款日聚合，退费按退费日聚合；缺日由服务层补 0。
+     *
+     * <p>{@code zone} 由服务层传入业务时区，保证与日结的"归日"口径一致。
+     */
+    public List<DailyPaidTotal> outpatientPaidTrend(OffsetDateTime from, OffsetDateTime to,
+                                                    String zone) {
+        return jdbc.sql("""
+                        SELECT day,
+                               sum(visits)::int AS visits,
+                               sum(paid_charges)::int AS paid_charges,
+                               COALESCE(sum(paid_amount), 0) AS paid_amount,
+                               COALESCE(sum(refunded_amount), 0) AS refunded_amount
+                          FROM (
+                                SELECT (c.paid_at AT TIME ZONE CAST(:zone AS text))::date AS day,
+                                       count(DISTINCT v.id) AS visits,
+                                       count(*) AS paid_charges,
+                                       sum(c.total_amount) AS paid_amount,
+                                       0::numeric AS refunded_amount
+                                  FROM clinical_svc.charge c
+                                  JOIN clinical_svc.visit v ON v.id = c.visit_id
+                                 WHERE v.visit_type = 'OUTPATIENT'
+                                   AND c.status = 'PAID'
+                                   AND c.paid_at >= :fromTs AND c.paid_at < :toTs
+                                 GROUP BY 1
+                                UNION ALL
+                                SELECT (c.updated_at AT TIME ZONE CAST(:zone AS text))::date AS day,
+                                       0 AS visits,
+                                       0 AS paid_charges,
+                                       0::numeric AS paid_amount,
+                                       sum(c.total_amount) AS refunded_amount
+                                  FROM clinical_svc.charge c
+                                  JOIN clinical_svc.visit v ON v.id = c.visit_id
+                                 WHERE v.visit_type = 'OUTPATIENT'
+                                   AND c.status = 'REFUNDED'
+                                   AND c.updated_at >= :fromTs AND c.updated_at < :toTs
+                                 GROUP BY 1
+                          ) t
+                         GROUP BY day
+                         ORDER BY day
+                        """)
+                .param("fromTs", from).param("toTs", to).param("zone", zone)
+                .query((rs, i) -> new DailyPaidTotal(
+                        rs.getDate("day").toLocalDate(), rs.getInt("visits"),
+                        rs.getInt("paid_charges"), rs.getBigDecimal("paid_amount"),
+                        rs.getBigDecimal("refunded_amount")))
+                .list();
     }
 
     /** 门诊日结：按科室分账（当日已收）。 */

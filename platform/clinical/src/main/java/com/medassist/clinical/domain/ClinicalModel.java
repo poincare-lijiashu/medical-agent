@@ -437,6 +437,11 @@ public final class ClinicalModel {
                                         BigDecimal totalPaid, BigDecimal refundedAmount) {
     }
 
+    /** 门诊趋势：单日聚合（G13；退费按退费时刻归日）。 */
+    public record DailyPaidTotal(LocalDate day, int visitCount, int paidChargeCount,
+                                 BigDecimal totalPaid, BigDecimal refundedAmount) {
+    }
+
     /** 病区。 */
     public record Ward(UUID id, String code, String name, UUID deptId, boolean enabled) {
     }

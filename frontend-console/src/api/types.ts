@@ -120,6 +120,29 @@ export interface OutpatientDaily {
   byPaymentMethod: { paymentMethod: string; chargeCount: number; amount: number }[]
 }
 
+// ---------------------------------------------------------------- 门诊趋势（G13）
+
+export interface OutpatientTrendPoint {
+  date: string
+  visitCount: number
+  paidChargeCount: number
+  totalPaid: number
+  refundedAmount: number
+}
+
+/** 门诊实收趋势：缺日补 0；prevTotal* 为上一等长周期的环比基数。 */
+export interface OutpatientTrendView {
+  from: string
+  to: string
+  points: OutpatientTrendPoint[]
+  totalVisits: number
+  totalPaidCharges: number
+  totalPaid: number
+  totalRefunded: number
+  prevTotalVisits: number
+  prevTotalPaid: number
+}
+
 export interface Ward {
   id: string
   code: string

@@ -2,6 +2,7 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.service.BillingService;
 import com.medassist.clinical.web.ClinicalDtos.OutpatientDailyView;
+import com.medassist.clinical.web.ClinicalDtos.OutpatientTrendView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
@@ -44,5 +45,20 @@ public class OutpatientFinanceController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, DAILY_READ);
         return ApiResponse.ok(service.outpatientDaily(date));
+    }
+
+    /**
+     * 门诊实收趋势：按收款日聚合，缺日补 0；返回上一等长周期合计用于环比。
+     *
+     * @param from 起始日期（含），缺省为 to 前 13 天
+     * @param to   结束日期（含），缺省为当天
+     */
+    @GetMapping("/outpatient-trend")
+    public ApiResponse<OutpatientTrendView> outpatientTrend(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, DAILY_READ);
+        return ApiResponse.ok(service.outpatientTrend(from, to));
     }
 }

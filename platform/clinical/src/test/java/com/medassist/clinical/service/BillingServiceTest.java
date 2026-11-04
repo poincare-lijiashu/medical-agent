@@ -2,7 +2,9 @@ package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
+import com.medassist.clinical.domain.ClinicalModel.DailyPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
+import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -10,6 +12,7 @@ import com.medassist.clinical.web.ClinicalDtos.ChargeView;
 import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.time.BusinessTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -549,5 +552,65 @@ class BillingServiceTest {
                 .isEqualTo(ErrorCode.CONFLICT);
 
         verify(repo, never()).insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ---------------------------------------------------------------- 门诊趋势（G13）
+
+    @Test
+    @DisplayName("趋势：未来结束日 → 422")
+    void trendRejectsFutureEnd() {
+        LocalDate today = BusinessTime.today();
+
+        assertThatThrownBy(() -> service.outpatientTrend(today.minusDays(6), today.plusDays(1)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("趋势：开始晚于结束 → 422")
+    void trendRejectsInvertedRange() {
+        LocalDate today = BusinessTime.today();
+
+        assertThatThrownBy(() -> service.outpatientTrend(today, today.minusDays(3)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("趋势：超过 92 天 → 422")
+    void trendRejectsTooLongRange() {
+        LocalDate today = BusinessTime.today();
+
+        assertThatThrownBy(() -> service.outpatientTrend(today.minusDays(92), today))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("趋势：缺日补 0，合计与上一周期环比取聚合值")
+    void trendFillsMissingDaysAndComputesTotals() {
+        LocalDate today = BusinessTime.today();
+        LocalDate start = today.minusDays(2);
+        when(repo.outpatientPaidTrend(any(), any(), anyString())).thenReturn(List.of(
+                new DailyPaidTotal(start, 5, 2, new BigDecimal("100.00"), new BigDecimal("10.00")),
+                new DailyPaidTotal(today, 1, 1, new BigDecimal("20.00"), BigDecimal.ZERO)));
+        when(repo.outpatientPaidSummary(any(), any())).thenReturn(
+                new OutpatientPaidSummary(4, 3, new BigDecimal("80.00"), BigDecimal.ZERO));
+
+        var view = service.outpatientTrend(start, today);
+
+        assertThat(view.points()).hasSize(3);
+        assertThat(view.points().get(1).date()).isEqualTo(start.plusDays(1));
+        assertThat(view.points().get(1).visitCount()).isZero();
+        assertThat(view.points().get(1).totalPaid()).isEqualByComparingTo("0");
+        assertThat(view.totalVisits()).isEqualTo(6);
+        assertThat(view.totalPaidCharges()).isEqualTo(3);
+        assertThat(view.totalPaid()).isEqualByComparingTo("120.00");
+        assertThat(view.totalRefunded()).isEqualByComparingTo("10.00");
+        assertThat(view.prevTotalVisits()).isEqualTo(4);
+        assertThat(view.prevTotalPaid()).isEqualByComparingTo("80.00");
     }
 }

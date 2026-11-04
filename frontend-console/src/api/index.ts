@@ -37,6 +37,7 @@ import type {
   NursingExecutionView,
   OperatingRoom,
   OutpatientDaily,
+  OutpatientTrendView,
   PageResult,
   Patient,
   PaymentGroup,
@@ -152,6 +153,9 @@ export const clinicalApi = {
   /** 门诊分账日结（全院口径，需 clinical:charge:daily）。 */
   outpatientDaily: (date?: string) =>
     get<OutpatientDaily>('/clinical/finance/outpatient-daily', { date }),
+  /** 门诊实收趋势（按收款日聚合，缺日补 0；最多 92 天）。 */
+  outpatientTrend: (from?: string, to?: string) =>
+    get<OutpatientTrendView>('/clinical/finance/outpatient-trend', { from, to }),
   startVisit: (id: string) => post<Visit>(`/clinical/visits/${id}/start`),
   orders: (visitId: string) => get<VisitOrder[]>(`/clinical/visits/${visitId}/orders`),
   placeOrders: (

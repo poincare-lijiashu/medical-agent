@@ -2,6 +2,7 @@ package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
+import com.medassist.clinical.domain.ClinicalModel.DailyPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
@@ -14,6 +15,8 @@ import com.medassist.clinical.web.ClinicalDtos.ChargeView;
 import com.medassist.clinical.web.ClinicalDtos.DailyBillResult;
 import com.medassist.clinical.web.ClinicalDtos.DailyReversalResult;
 import com.medassist.clinical.web.ClinicalDtos.OutpatientDailyView;
+import com.medassist.clinical.web.ClinicalDtos.OutpatientTrendPoint;
+import com.medassist.clinical.web.ClinicalDtos.OutpatientTrendView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.springframework.stereotype.Service;
@@ -24,6 +27,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -380,6 +385,63 @@ public class BillingService {
                 .toList();
         return new OutpatientDailyView(day, summary.visitCount(), summary.paidChargeCount(),
                 summary.totalPaid(), summary.refundedAmount(), byDept, byMethod);
+    }
+
+    /**
+     * 门诊实收趋势（G13）：按收款日聚合，缺日补 0，并给出上一等长周期的合计用于环比。
+     *
+     * <p>默认最近 14 天（含今天）；单次最多 92 天，避免一次查询拖垮库。
+     * 未来日期直接拒绝——报表不能出现"还没发生"的现金流。
+     */
+    public OutpatientTrendView outpatientTrend(LocalDate from, LocalDate to) {
+        LocalDate today = BusinessTime.today();
+        LocalDate end = to == null ? today : to;
+        LocalDate start = from == null ? end.minusDays(13) : from;
+        if (end.isAfter(today)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能查询未来日期的趋势");
+        }
+        if (start.isAfter(end)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始日期不能晚于结束日期");
+        }
+        long days = ChronoUnit.DAYS.between(start, end) + 1;
+        if (days > 92) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "单次趋势查询最多 92 天，请缩短区间后重试");
+        }
+        var zone = BusinessTime.zone();
+        OffsetDateTime fromTs = start.atStartOfDay(zone).toOffsetDateTime();
+        OffsetDateTime toTs = end.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
+        Map<LocalDate, DailyPaidTotal> byDay = repo.outpatientPaidTrend(fromTs, toTs, zone.getId())
+                .stream()
+                .collect(Collectors.toMap(DailyPaidTotal::day, Function.identity(),
+                        (a, b) -> a));
+
+        List<OutpatientTrendPoint> points = new ArrayList<>((int) days);
+        long totalVisits = 0;
+        int totalPaidCharges = 0;
+        BigDecimal totalPaid = BigDecimal.ZERO;
+        BigDecimal totalRefunded = BigDecimal.ZERO;
+        for (LocalDate day = start; !day.isAfter(end); day = day.plusDays(1)) {
+            DailyPaidTotal row = byDay.get(day);
+            int visits = row == null ? 0 : row.visitCount();
+            int charges = row == null ? 0 : row.paidChargeCount();
+            BigDecimal paid = row == null ? BigDecimal.ZERO : row.totalPaid();
+            BigDecimal refunded = row == null ? BigDecimal.ZERO : row.refundedAmount();
+            points.add(new OutpatientTrendPoint(day, visits, charges, paid, refunded));
+            totalVisits += visits;
+            totalPaidCharges += charges;
+            totalPaid = totalPaid.add(paid);
+            totalRefunded = totalRefunded.add(refunded);
+        }
+
+        // 环比：紧邻当前区间之前、等长的上一周期
+        LocalDate prevEnd = start.minusDays(1);
+        LocalDate prevStart = prevEnd.minusDays(days - 1);
+        var prev = repo.outpatientPaidSummary(
+                prevStart.atStartOfDay(zone).toOffsetDateTime(),
+                start.atStartOfDay(zone).toOffsetDateTime());
+        return new OutpatientTrendView(start, end, points, totalVisits, totalPaidCharges,
+                totalPaid, totalRefunded, prev.visitCount(), prev.totalPaid());
     }
 
     // ---------------------------------------------------------------- 内部

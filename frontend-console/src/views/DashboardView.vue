@@ -54,6 +54,54 @@
 
     <div class="sheet">
       <div class="sheet-head">
+        <span class="sheet-title">门诊实收趋势</span>
+        <span v-if="trend" class="badge badge--neutral">{{ trend.from }} ~ {{ trend.to }}</span>
+        <span class="spacer" />
+        <div class="seg" role="tablist" aria-label="趋势区间">
+          <button
+            v-for="d in [7, 14, 30]"
+            :key="d"
+            class="seg-btn"
+            :class="{ active: trendDays === d }"
+            type="button"
+            @click="switchTrendDays(d)"
+          >
+            近 {{ d }} 天
+          </button>
+        </div>
+        <button class="btn btn--sm" type="button" :disabled="!trend || trendLoading" @click="exportTrend">
+          导出 CSV
+        </button>
+      </div>
+      <p v-if="sectionError.trend" class="section-error">{{ sectionError.trend }}</p>
+      <TableSkeleton v-if="trendLoading && !trend" :rows="3" />
+      <template v-else-if="trend">
+        <div class="trend-kpis">
+          <span>区间实收 <strong>{{ money(trend.totalPaid) }}</strong></span>
+          <span>退费 <strong>{{ money(trend.totalRefunded) }}</strong></span>
+          <span>挂号 <strong>{{ trend.totalVisits }}</strong> 人次</span>
+          <span :class="deltaClass">环比 <strong>{{ deltaLabel }}</strong></span>
+        </div>
+        <div class="chart-wrap">
+          <svg viewBox="0 0 720 190" role="img" aria-label="门诊每日实收趋势柱状图">
+            <line x1="8" y1="170" x2="712" y2="170" class="chart-axis" />
+            <g v-for="b in chartBars" :key="b.date">
+              <rect :x="b.x" :y="b.y" :width="b.width" :height="b.height" rx="2" class="chart-bar">
+                <title>{{ b.date }}：{{ money(b.paid) }}（挂号 {{ b.visits }}）</title>
+              </rect>
+            </g>
+            <text x="8" y="186" class="chart-label">{{ trend.points[0]?.date }}</text>
+            <text x="712" y="186" text-anchor="end" class="chart-label">
+              {{ trend.points[trend.points.length - 1]?.date }}
+            </text>
+            <text x="712" y="14" text-anchor="end" class="chart-label">峰值 {{ money(chartMax) }}</text>
+          </svg>
+        </div>
+      </template>
+    </div>
+
+    <div class="sheet">
+      <div class="sheet-head">
         <span class="sheet-title">门诊分账</span>
         <span class="badge badge--neutral">{{ date }}</span>
         <span class="spacer" />
@@ -204,6 +252,7 @@ import type {
   CodingSummary,
   MaterialSummary,
   OutpatientDaily,
+  OutpatientTrendView,
   StockWarning,
 } from '@/api/types'
 import { session } from '@/stores/session'
@@ -215,6 +264,9 @@ const loading = ref(false)
 const loadError = ref('')
 
 const outpatient = ref<OutpatientDaily | null>(null)
+const trend = ref<OutpatientTrendView | null>(null)
+const trendDays = ref(14)
+const trendLoading = ref(false)
 const stockWarnings = ref<StockWarning[]>([])
 const material = ref<MaterialSummary | null>(null)
 const coding = ref<CodingSummary | null>(null)
@@ -254,6 +306,102 @@ const techPending = computed(() => techCount('PENDING_COLLECT') + techCount('APP
 
 function techCount(key: string): number {
   return techSummary.value[key] ?? 0
+}
+
+// ---------------------------------------------------------------- 门诊趋势（G13）
+
+const chartMax = computed(() =>
+  Math.max(1, ...(trend.value?.points ?? []).map((p) => p.totalPaid)),
+)
+
+const chartBars = computed(() => {
+  const points = trend.value?.points ?? []
+  const slot = 704 / Math.max(points.length, 1)
+  return points.map((p, i) => {
+    const ratio = p.totalPaid / chartMax.value
+    const height = ratio * 150
+    return {
+      date: p.date,
+      paid: p.totalPaid,
+      visits: p.visitCount,
+      x: 8 + i * slot + slot * 0.15,
+      width: Math.max(slot * 0.7, 1),
+      y: 170 - height,
+      height,
+    }
+  })
+})
+
+const deltaPct = computed(() => {
+  const t = trend.value
+  if (!t || t.prevTotalPaid === 0) return null
+  return ((t.totalPaid - t.prevTotalPaid) / t.prevTotalPaid) * 100
+})
+
+const deltaLabel = computed(() => {
+  if (!trend.value) return '—'
+  if (deltaPct.value === null) {
+    return trend.value.totalPaid > 0 ? '上期无实收' : '—'
+  }
+  const sign = deltaPct.value >= 0 ? '+' : ''
+  return `${sign}${deltaPct.value.toFixed(1)}%`
+})
+
+const deltaClass = computed(() => {
+  if (deltaPct.value === null) return ''
+  return deltaPct.value >= 0 ? 'trend-up' : 'trend-down'
+})
+
+function isoDaysAgo(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+async function loadTrend() {
+  sectionError.trend = ''
+  trendLoading.value = true
+  try {
+    trend.value = await clinicalApi.outpatientTrend(isoDaysAgo(trendDays.value - 1), todayIso())
+  } catch (e) {
+    trend.value = null
+    sectionError.trend = `门诊趋势加载失败：${errorText(e)}`
+  } finally {
+    trendLoading.value = false
+  }
+}
+
+function switchTrendDays(days: number) {
+  if (trendDays.value === days) return
+  trendDays.value = days
+  void loadTrend()
+}
+
+/** 导出与图表同源的聚合结果，避免"导出数"和"屏幕数"两套口径。 */
+function exportTrend() {
+  const t = trend.value
+  if (!t) return
+  const header = ['日期', '挂号量', '收费笔数', '实收金额', '退费金额']
+  const rows = t.points.map((p) => [
+    p.date,
+    p.visitCount,
+    p.paidChargeCount,
+    p.totalPaid.toFixed(2),
+    p.refundedAmount.toFixed(2),
+  ])
+  const csv = [header, ...rows]
+    .map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\r\n')
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `门诊趋势_${t.from}_${t.to}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 async function loadOutpatient() {
@@ -343,6 +491,7 @@ async function loadAll() {
   loading.value = true
   loadError.value = ''
   await Promise.all([
+    loadTrend(),
     loadOutpatient(),
     loadInpatient(),
     loadPharmacy(),
@@ -351,7 +500,7 @@ async function loadAll() {
     loadCoding(),
   ])
   const failures = Object.values(sectionError).filter((m) => m)
-  if (failures.length >= 6) {
+  if (failures.length >= 7) {
     loadError.value = '各业务域数据均加载失败，请检查网关与后端服务是否正常'
   }
   loading.value = false
@@ -382,6 +531,57 @@ onMounted(() => {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: var(--s3);
   padding: var(--s4);
+}
+
+.trend-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  padding: var(--s3) var(--s4) 0;
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.trend-kpis strong {
+  color: var(--ink);
+}
+
+.trend-up strong {
+  color: var(--ok);
+}
+
+.trend-down strong {
+  color: var(--danger);
+}
+
+.chart-wrap {
+  padding: var(--s2) var(--s4) var(--s3);
+  overflow-x: auto;
+}
+
+.chart-wrap svg {
+  width: 100%;
+  min-width: 520px;
+  height: auto;
+}
+
+.chart-axis {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-bar {
+  fill: var(--accent);
+  opacity: 0.85;
+}
+
+.chart-bar:hover {
+  opacity: 1;
+}
+
+.chart-label {
+  fill: var(--muted);
+  font-size: 11px;
 }
 
 .domain-card {

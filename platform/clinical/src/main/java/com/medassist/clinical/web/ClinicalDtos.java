@@ -344,4 +344,25 @@ public final class ClinicalDtos {
         public record MethodTotal(String paymentMethod, int chargeCount, BigDecimal amount) {
         }
     }
+
+    /**
+     * 门诊实收趋势（G13）：按收款日聚合，缺日补 0；并返回上一等长周期的合计用于环比。
+     *
+     * <p>口径与日结一致：按收款时刻归日，退费单独列出、不与实收相抵。
+     */
+    public record OutpatientTrendView(
+            LocalDate from,
+            LocalDate to,
+            List<OutpatientTrendPoint> points,
+            long totalVisits,
+            int totalPaidCharges,
+            BigDecimal totalPaid,
+            BigDecimal totalRefunded,
+            long prevTotalVisits,
+            BigDecimal prevTotalPaid) {
+    }
+
+    public record OutpatientTrendPoint(LocalDate date, int visitCount, int paidChargeCount,
+                                       BigDecimal totalPaid, BigDecimal refundedAmount) {
+    }
 }
