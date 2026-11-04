@@ -1192,7 +1192,7 @@ export interface StockTakeDetail {
 
 // ---------------------------------------------------------------- 药品报损（G7）
 
-export type StockLossStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED'
+export type StockLossStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED'
 export type StockLossReason = 'EXPIRED' | 'BROKEN' | 'RECALL' | 'OTHER'
 
 /** 报损单（提交即锁定明细，审批人 ≠ 申请人）。 */

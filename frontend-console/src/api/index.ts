@@ -513,6 +513,11 @@ export const pharmacyApi = {
   /** 审批：approve=false 为驳回，必须带原因。 */
   reviewStockLoss: (id: string, approve: boolean, note?: string) =>
     post<StockLossView>(`/pharmacy/stock-losses/${id}/review`, { approve, note }),
+  /** 提交草稿（DRAFT → SUBMITTED）；服务端会再次校验批次余量。 */
+  submitStockLoss: (id: string) => post<StockLossView>(`/pharmacy/stock-losses/${id}/submit`),
+  /** 效期自动报废（G28）：只为到期批次生成 DRAFT 草稿，不扣库存。 */
+  autoDraftExpiredStockLosses: () =>
+    post<{ losses: number; items: number }>('/pharmacy/stock-losses/auto-draft'),
 
   // ---- 科室调拨（G8）----
   drugTransfers: (status?: string, toDeptId?: string, limit = 50) =>

@@ -7,6 +7,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.DailyDispenseTotal;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
+import com.medassist.pharmacy.domain.PharmacyModel.ExpiredBatchRow;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
@@ -1171,6 +1172,63 @@ public class PharmacyRepository {
                 .param("id", l.id()).param("no", l.lossNo()).param("status", l.status())
                 .param("category", l.reasonCategory()).param("note", l.note())
                 .param("createdBy", l.createdBy()).update();
+    }
+
+    /** 到期自动草稿：DRAFT + 来源 AUTO_EXPIRY（不扣库存，等待人工提交/审批）。 */
+    public void insertAutoDraftLoss(UUID id, String lossNo, String note, String actor) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.stock_loss
+                            (id, loss_no, status, reason_category, note, created_by, source, version)
+                        VALUES (:id, :no, 'DRAFT', 'EXPIRED', CAST(:note AS text), :actor,
+                                'AUTO_EXPIRY', 0)
+                        """)
+                .param("id", id).param("no", lossNo).param("note", note)
+                .param("actor", actor).update();
+    }
+
+    /** 已过期且仍有库存、且未在任何有效报损单中的批次（G28）。 */
+    public List<ExpiredBatchRow> findExpiredBatchesForLoss(java.time.LocalDate today, int limit) {
+        return jdbc.sql("""
+                        SELECT b.id AS batch_id, b.drug_id, d.drug_code,
+                               d.name AS drug_name, b.batch_no, b.expire_date, b.quantity
+                          FROM pharmacy_svc.drug_batch b
+                          JOIN pharmacy_svc.md_drug d ON d.id = b.drug_id
+                         WHERE b.expire_date < :today
+                           AND b.quantity > 0
+                           AND d.enabled
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM pharmacy_svc.stock_loss_item i
+                                 JOIN pharmacy_svc.stock_loss l ON l.id = i.loss_id
+                                WHERE i.batch_id = b.id
+                                  AND l.status IN ('DRAFT', 'SUBMITTED', 'APPROVED'))
+                         ORDER BY b.expire_date, b.batch_no
+                         LIMIT :limit
+                        """)
+                .param("today", today).param("limit", limit)
+                .query((rs, i) -> new ExpiredBatchRow(
+                        rs.getObject("batch_id", UUID.class),
+                        rs.getObject("drug_id", UUID.class),
+                        rs.getString("drug_code"), rs.getString("drug_name"),
+                        rs.getString("batch_no"), rs.getDate("expire_date").toLocalDate(),
+                        rs.getInt("quantity"))).list();
+    }
+
+    /**
+     * 草稿提交审批（CAS：仅 DRAFT）。
+     *
+     * <p>同时把 created_by 改为提交人：自动草稿的创建人是 scheduler，若不改写，
+     * 提交人就能审批"自己"提交的单，四眼原则形同虚设。
+     */
+    public boolean submitStockLoss(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.stock_loss
+                           SET status = 'SUBMITTED', created_by = :actor,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
     }
 
     public Optional<StockLoss> findStockLoss(UUID id) {

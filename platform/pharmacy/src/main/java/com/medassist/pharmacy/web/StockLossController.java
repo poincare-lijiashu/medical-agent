@@ -5,6 +5,7 @@ import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import com.medassist.pharmacy.domain.PharmacyModel.StockLoss;
 import com.medassist.pharmacy.service.StockLossService;
+import com.medassist.pharmacy.web.StockLossDtos.AutoDraftResult;
 import com.medassist.pharmacy.web.StockLossDtos.CreateStockLossReq;
 import com.medassist.pharmacy.web.StockLossDtos.ReviewStockLossReq;
 import com.medassist.pharmacy.web.StockLossDtos.StockLossView;
@@ -76,5 +77,24 @@ public class StockLossController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, APPROVE);
         return ApiResponse.ok(service.review(id, req, actor));
+    }
+
+    /** 提交草稿（DRAFT → SUBMITTED），提交前再次校验批次余量。 */
+    @PostMapping("/{id}/submit")
+    public ApiResponse<StockLossView> submit(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.submit(id, actor));
+    }
+
+    /** 手动触发效期自动草稿（定时任务同样调用；只生成 DRAFT，不扣库存）。 */
+    @PostMapping("/auto-draft")
+    public ApiResponse<AutoDraftResult> autoDraft(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(service.autoDraftExpired(actor));
     }
 }

@@ -48,4 +48,8 @@ public final class StockLossDtos {
     public record StockLossView(StockLoss loss, List<StockLossItem> items,
                                 List<StockAdjustment> adjustments) {
     }
+
+    /** 效期自动草稿结果（G28）：单据数与明细批次总数。 */
+    public record AutoDraftResult(int losses, int items) {
+    }
 }

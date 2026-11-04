@@ -80,6 +80,23 @@ class StockLossControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("草稿提交 / 自动草稿：必须 pharmacy:loss:write，读权限与审批权限都不够")
+    void submitAndAutoDraftRequireWrite() {
+        assertForbidden(() -> controller.submit(id, "pharmacy:read", "pharm01"));
+        assertForbidden(() -> controller.submit(id, "pharmacy:loss:approve", "pharm01"));
+        verify(service, never()).submit(any(), any());
+
+        controller.submit(id, "pharmacy:loss:write", "pharm01");
+        verify(service).submit(id, "pharm01");
+
+        assertForbidden(() -> controller.autoDraft("pharmacy:read", "pharm01"));
+        verify(service, never()).autoDraftExpired(any());
+
+        controller.autoDraft("pharmacy:loss:write", "pharm01");
+        verify(service).autoDraftExpired("pharm01");
+    }
+
+    @Test
     @DisplayName("权限头为空：403 且不触达服务层")
     void emptyPermissionsForbidden() {
         assertForbidden(() -> controller.detail(id, null));

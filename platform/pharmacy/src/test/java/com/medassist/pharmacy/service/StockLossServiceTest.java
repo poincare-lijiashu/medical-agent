@@ -3,9 +3,11 @@ package com.medassist.pharmacy.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
+import com.medassist.pharmacy.domain.PharmacyModel.ExpiredBatchRow;
 import com.medassist.pharmacy.domain.PharmacyModel.StockLoss;
 import com.medassist.pharmacy.domain.PharmacyModel.StockLossItem;
 import com.medassist.pharmacy.repo.PharmacyRepository;
+import com.medassist.pharmacy.web.StockLossDtos.AutoDraftResult;
 import com.medassist.pharmacy.web.StockLossDtos.CreateStockLossReq;
 import com.medassist.pharmacy.web.StockLossDtos.LossLine;
 import com.medassist.pharmacy.web.StockLossDtos.ReviewStockLossReq;
@@ -240,6 +242,117 @@ class StockLossServiceTest {
 
         assertCode(() -> service.review(lossId, new ReviewStockLossReq(true, null), "pharm02"),
                 ErrorCode.CONFLICT);
+    }
+
+    // ---------------------------------------------------------------- 效期自动草稿（G28）
+
+    private ExpiredBatchRow expired(UUID batch, UUID drug, String batchNo, int quantity) {
+        return new ExpiredBatchRow(batch, drug, drug.equals(drugId) ? "D001" : "D002",
+                drug.equals(drugId) ? "阿莫西林胶囊" : "布洛芬缓释胶囊", batchNo,
+                LocalDate.now().minusDays(3), quantity);
+    }
+
+    @Test
+    @DisplayName("效期草稿：无过期批次 → 0 单 0 项，不建单")
+    void autoDraftNoExpiredBatches() {
+        when(repo.findExpiredBatchesForLoss(any(LocalDate.class), anyInt())).thenReturn(List.of());
+
+        AutoDraftResult result = service.autoDraftExpired("scheduler");
+
+        assertThat(result.losses()).isZero();
+        assertThat(result.items()).isZero();
+        verify(repo, never()).insertAutoDraftLoss(any(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("效期草稿：按药品聚合成多张 DRAFT，明细为到期批次数量，不扣库存")
+    void autoDraftGroupsByDrug() {
+        UUID drug2 = UUID.randomUUID();
+        UUID batch3 = UUID.randomUUID();
+        when(repo.findExpiredBatchesForLoss(any(LocalDate.class), anyInt())).thenReturn(List.of(
+                expired(batchId, drugId, "B2026A", 5),
+                expired(batch2, drugId, "B2026B", 2),
+                expired(batch3, drug2, "B2026C", 4)));
+        when(repo.nextStockLossNo()).thenReturn("LS20261104000001", "LS20261104000002");
+
+        AutoDraftResult result = service.autoDraftExpired("scheduler");
+
+        assertThat(result.losses()).isEqualTo(2);
+        assertThat(result.items()).isEqualTo(3);
+        verify(repo, org.mockito.Mockito.times(2))
+                .insertAutoDraftLoss(any(), anyString(), anyString(), eq("scheduler"));
+        verify(repo).insertStockLossItem(any(), any(), eq(drugId), eq(batchId), eq(5), anyString());
+        verify(repo).insertStockLossItem(any(), any(), eq(drugId), eq(batch2), eq(2), anyString());
+        verify(repo).insertStockLossItem(any(), any(), eq(drug2), eq(batch3), eq(4), anyString());
+        // 只生成草稿，绝不在此阶段扣库存
+        verify(repo, never()).deductBatch(any(), anyInt());
+        verify(repo).logChange(eq("scheduler"), eq("STOCK_LOSS_AUTO_DRAFT"), eq("STOCK_LOSS"),
+                eq("batch"), anyString());
+    }
+
+    // ---------------------------------------------------------------- 草稿提交（G28）
+
+    private StockLoss draft() {
+        return new StockLoss(lossId, "LS20261104000001", StockLoss.DRAFT, StockLoss.EXPIRED,
+                "系统自动生成", "scheduler", null, null, null, 0L, Instant.now());
+    }
+
+    @Test
+    @DisplayName("提交草稿：DRAFT → SUBMITTED，写审计")
+    void submitDraftSucceeds() {
+        when(repo.lockStockLoss(lossId)).thenReturn(Optional.of(draft()));
+        when(repo.listStockLossItems(lossId)).thenReturn(List.of(item(batchId, 2)));
+        when(repo.findBatch(batchId)).thenReturn(Optional.of(batch(batchId, 10)));
+        when(repo.submitStockLoss(lossId, "pharm01", 0L)).thenReturn(true);
+
+        StockLossView view = service.submit(lossId, "pharm01");
+
+        assertThat(view.loss().status()).isEqualTo(StockLoss.SUBMITTED);
+        verify(repo).submitStockLoss(lossId, "pharm01", 0L);
+        verify(repo).logChange(eq("pharm01"), eq("STOCK_LOSS_SUBMIT"), eq("STOCK_LOSS"),
+                eq(lossId.toString()), anyString());
+        verify(repo, never()).deductBatch(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("提交草稿：已提交的幂等返回，不重复 CAS")
+    void submitIsIdempotent() {
+        when(repo.lockStockLoss(lossId)).thenReturn(Optional.of(loss(StockLoss.SUBMITTED, 1L, "pharm01")));
+
+        StockLossView view = service.submit(lossId, "pharm01");
+
+        assertThat(view.loss().status()).isEqualTo(StockLoss.SUBMITTED);
+        verify(repo, never()).submitStockLoss(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("提交草稿：已通过/驳回 → 409")
+    void submitRejectsClosedLoss() {
+        when(repo.lockStockLoss(lossId)).thenReturn(Optional.of(loss(StockLoss.APPROVED, 3L, "pharm01")));
+
+        assertCode(() -> service.submit(lossId, "pharm01"), ErrorCode.STOCK_LOSS_STATUS_INVALID);
+        verify(repo, never()).submitStockLoss(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("提交草稿：扫描后药已发出、余量不足 → 409，不落状态")
+    void submitRejectsInsufficientStock() {
+        when(repo.lockStockLoss(lossId)).thenReturn(Optional.of(draft()));
+        when(repo.listStockLossItems(lossId)).thenReturn(List.of(item(batchId, 5)));
+        when(repo.findBatch(batchId)).thenReturn(Optional.of(batch(batchId, 3)));
+
+        assertCode(() -> service.submit(lossId, "pharm01"), ErrorCode.STOCK_LOSS_EXCEEDS);
+        verify(repo, never()).submitStockLoss(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("提交草稿：CAS 冲突（并发提交）→ 409")
+    void submitCasConflict() {
+        when(repo.lockStockLoss(lossId)).thenReturn(Optional.of(draft()));
+        when(repo.listStockLossItems(lossId)).thenReturn(List.of());
+        when(repo.submitStockLoss(lossId, "pharm01", 0L)).thenReturn(false);
+
+        assertCode(() -> service.submit(lossId, "pharm01"), ErrorCode.CONFLICT);
     }
 
     // ---------------------------------------------------------------- 列表

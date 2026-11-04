@@ -5,6 +5,16 @@
       :sub="`破损、过期报废与召回销毁：提交 → 另一位药剂师审批 → 扣减批次库存。当前角色 ${role}`"
     >
       <template #actions>
+        <button
+          v-if="canWrite"
+          class="btn"
+          type="button"
+          :disabled="busy"
+          title="扫描已过期批次，按药品生成报损草稿（不扣库存，仍需提交与他审）"
+          @click="runAutoDraft"
+        >
+          <AppIcon name="refresh" :size="15" /> 生成到期草稿
+        </button>
         <button class="btn" type="button" :disabled="loading" @click="loadList">
           <AppIcon name="refresh" :size="15" /> 刷新
         </button>
@@ -13,6 +23,13 @@
 
     <div class="kpi-strip">
       <KpiCard label="报损单" :value="losses.length" unit="张" meta="按当前筛选" />
+      <KpiCard
+        label="待提交草稿"
+        :value="counts.draft"
+        unit="张"
+        :tone="counts.draft > 0 ? 'warn' : 'default'"
+        meta="系统自动生成"
+      />
       <KpiCard
         label="待审批"
         :value="counts.submitted"
@@ -33,6 +50,7 @@
           <span class="label">状态</span>
           <select v-model="statusFilter" class="select" aria-label="按报损状态筛选" @change="loadList">
             <option value="">全部</option>
+            <option value="DRAFT">待提交</option>
             <option value="SUBMITTED">待审批</option>
             <option value="APPROVED">已通过</option>
             <option value="REJECTED">已驳回</option>
@@ -75,6 +93,15 @@
               <td data-label="审批人">{{ l.reviewedBy || '—' }}</td>
               <td data-label="操作">
                 <button class="btn btn--sm" type="button" @click.stop="openDetail(l.id)">查看</button>
+                <button
+                  v-if="l.status === 'DRAFT' && canWrite"
+                  class="btn btn--sm btn--primary"
+                  type="button"
+                  :disabled="busy"
+                  @click.stop="submitLoss(l.id)"
+                >
+                  提交审批
+                </button>
               </td>
             </tr>
           </tbody>
@@ -158,6 +185,16 @@
 
       <template #footer>
         <button class="btn" type="button" @click="detailOpen = false">关闭</button>
+        <button
+          v-if="detail?.loss.status === 'DRAFT' && canWrite"
+          class="btn btn--primary"
+          type="button"
+          :disabled="busy"
+          title="提交后进入待审批，仍需另一位药剂师审批才会扣减库存"
+          @click="submitLoss(detail.loss.id)"
+        >
+          提交审批
+        </button>
         <template v-if="detail?.loss.status === 'SUBMITTED' && canApprove">
           <button class="btn" type="button" :disabled="busy" @click="openReview(false)">驳回</button>
           <button
@@ -332,6 +369,7 @@ const losses = ref<StockLoss[]>([])
 const statusFilter = ref('')
 
 const counts = computed(() => ({
+  draft: losses.value.filter((l) => l.status === 'DRAFT').length,
   submitted: losses.value.filter((l) => l.status === 'SUBMITTED').length,
   approved: losses.value.filter((l) => l.status === 'APPROVED').length,
   rejected: losses.value.filter((l) => l.status === 'REJECTED').length,
@@ -373,7 +411,7 @@ const reviewTargetId = ref('')
 onMounted(loadList)
 
 function statusLabel(status: StockLossStatus): string {
-  return { SUBMITTED: '待审批', APPROVED: '已通过', REJECTED: '已驳回' }[status]
+  return { DRAFT: '待提交', SUBMITTED: '待审批', APPROVED: '已通过', REJECTED: '已驳回' }[status]
 }
 
 function reasonLabel(reason: StockLossReason): string {
@@ -546,6 +584,41 @@ async function submitReview() {
     )
     reviewOpen.value = false
     toast.ok(reviewApprove.value ? '审批通过，库存已按明细扣减' : '已驳回报损单')
+    await loadList()
+  } catch (e) {
+    toast.error(errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function submitLoss(id: string) {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const submitted = await pharmacyApi.submitStockLoss(id)
+    toast.ok(`报损单 ${submitted.loss.lossNo} 已提交，等待另一位药剂师审批`)
+    if (detailOpen.value && detail.value?.loss.id === id) {
+      detail.value = submitted
+    }
+    await loadList()
+  } catch (e) {
+    toast.error(errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function runAutoDraft() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const result = await pharmacyApi.autoDraftExpiredStockLosses()
+    if (result.losses === 0) {
+      toast.ok('没有需要自动报废的到期批次')
+    } else {
+      toast.ok(`已生成 ${result.losses} 张报损草稿（${result.items} 个批次），待提交审批`)
+    }
     await loadList()
   } catch (e) {
     toast.error(errorText(e))

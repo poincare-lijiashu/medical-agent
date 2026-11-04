@@ -336,6 +336,7 @@ public final class PharmacyModel {
                             String note, String createdBy, String reviewedBy, Instant reviewedAt,
                             String reviewNote, long version, Instant createdAt) {
 
+        public static final String DRAFT = "DRAFT";
         public static final String SUBMITTED = "SUBMITTED";
         public static final String APPROVED = "APPROVED";
         public static final String REJECTED = "REJECTED";
@@ -348,6 +349,15 @@ public final class PharmacyModel {
         public boolean reviewable() {
             return SUBMITTED.equals(status);
         }
+
+        public boolean submittable() {
+            return DRAFT.equals(status);
+        }
+    }
+
+    /** 到期批次行（G28）：自动生成报损草稿的输入。 */
+    public record ExpiredBatchRow(UUID batchId, UUID drugId, String drugCode, String drugName,
+                                  String batchNo, java.time.LocalDate expireDate, int quantity) {
     }
 
     /** 报损明细（一行 = 一个批次）。 */
