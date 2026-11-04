@@ -19,7 +19,7 @@
 - **数据库**：auth V60、pharmacy V17、tech V11、emr V20、insurance V19、material V4、clinical V49（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。
 - **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。
-- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G29，代码 HEAD=`d7ac37c`）。
+- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G30，代码 HEAD=`1b05ea4`）。
 
 ### 1. 功能完成度（按业务域）
 
