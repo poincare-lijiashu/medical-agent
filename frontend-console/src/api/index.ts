@@ -83,6 +83,9 @@ import type {
   StockLoss,
   StockLossReason,
   StockLossView,
+  AntibioticApprovalView,
+  AntibioticPendingRow,
+  AntibioticStats,
   SupplierView,
   ConsumableView,
   ConsumableBatch,
@@ -596,6 +599,22 @@ export const pharmacyApi = {
   /** 效期自动报废（G28）：只为到期批次生成 DRAFT 草稿，不扣库存。 */
   autoDraftExpiredStockLosses: () =>
     post<{ losses: number; items: number }>('/pharmacy/stock-losses/auto-draft'),
+
+  // ---- 抗菌药物专项（G33）----
+  /** 分级统计 + 超疗程提醒，按开方时间过滤（默认最近 30 天，最长 366 天）。 */
+  antibioticStats: (params?: { from?: string; to?: string }) =>
+    get<AntibioticStats>('/pharmacy/antibiotics/stats', params),
+  /** 待专项审批：含特殊使用级、尚未获批的处方。 */
+  antibioticPending: (limit = 50) =>
+    get<AntibioticPendingRow[]>('/pharmacy/antibiotics/pending', { limit }),
+  antibioticApproval: (prescriptionId: string) =>
+    get<AntibioticApprovalView>(`/pharmacy/antibiotics/prescriptions/${prescriptionId}/approval`),
+  /** 专项审批：approve=false 必须写理由；审批人不得为开方医师。 */
+  approveAntibiotic: (prescriptionId: string, body: { approve: boolean; note?: string }) =>
+    post<AntibioticApprovalView>(
+      `/pharmacy/antibiotics/prescriptions/${prescriptionId}/approval`,
+      body,
+    ),
 
   // ---- 科室调拨（G8）----
   drugTransfers: (status?: string, toDeptId?: string, limit = 50) =>

@@ -360,6 +360,44 @@ public final class PharmacyModel {
                                   String batchNo, java.time.LocalDate expireDate, int quantity) {
     }
 
+    /** 特殊使用级抗菌药物审批（G33，一张处方一条）。 */
+    public record AntibioticApproval(UUID id, UUID prescriptionId, int maxLevel, String status,
+                                     String note, String requestedBy, Instant requestedAt,
+                                     String reviewedBy, Instant reviewedAt, long version) {
+
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+
+        public boolean approved() {
+            return APPROVED.equals(status);
+        }
+    }
+
+    /** 按分级统计（G33）。 */
+    public record AntibioticLevelStatRow(int level, long rxCount, long quantity) {
+    }
+
+    /** 按开方医师统计（G33）。 */
+    public record AntibioticDoctorStatRow(String prescriber, long rxCount, long quantity) {
+    }
+
+    /** 按药品统计（G33）。 */
+    public record AntibioticDrugStatRow(String drugCode, String drugName, int level, long rxCount,
+                                        long quantity) {
+    }
+
+    /** 超疗程提醒行（G33）：days 超过配置阈值。 */
+    public record AntibioticOverLimitRow(UUID prescriptionId, String prescriptionNo,
+                                         String patientNo, String prescriber, String drugName,
+                                         Integer maxDays, Instant createdAt) {
+    }
+
+    /** 待专项审批的特殊使用级处方（G33）。 */
+    public record AntibioticPendingRow(UUID prescriptionId, String prescriptionNo,
+                                       String patientNo, String prescriber, String status,
+                                       String drugSummary, Instant createdAt) {
+    }
+
     /** 报损明细（一行 = 一个批次）。 */
     public record StockLossItem(UUID id, UUID lossId, UUID drugId, String drugCode, String drugName,
                                 String spec, String unit, UUID batchId, String batchNo,

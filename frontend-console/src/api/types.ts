@@ -1232,6 +1232,84 @@ export interface StockLossView {
   adjustments: StockAdjustment[]
 }
 
+// ---------------------------------------------------------------- 抗菌药物专项（G33）
+
+/** 特殊使用级审批结论；审批人不得为开方医师。 */
+export type AntibioticApprovalStatus = 'APPROVED' | 'REJECTED'
+
+export interface AntibioticApproval {
+  id: string
+  prescriptionId: string
+  maxLevel: number
+  status: AntibioticApprovalStatus
+  note: string | null
+  requestedBy: string | null
+  requestedAt: string
+  reviewedBy: string
+  reviewedAt: string
+  version: number
+}
+
+/** requiredLevel=0 表示处方不含抗菌药物，无需专项审批。 */
+export interface AntibioticApprovalView {
+  requiredLevel: number
+  approval: AntibioticApproval | null
+}
+
+export interface AntibioticLevelStat {
+  level: number
+  rxCount: number
+  quantity: number
+}
+
+export interface AntibioticDoctorStat {
+  prescriber: string
+  rxCount: number
+  quantity: number
+}
+
+export interface AntibioticDrugStat {
+  drugCode: string
+  drugName: string
+  level: number
+  rxCount: number
+  quantity: number
+}
+
+/** 超疗程提醒：days 超过预防用药阈值。 */
+export interface AntibioticOverLimit {
+  prescriptionId: string
+  prescriptionNo: string
+  patientNo: string | null
+  prescriber: string
+  drugName: string
+  maxDays: number | null
+  createdAt: string
+}
+
+export interface AntibioticPendingRow {
+  prescriptionId: string
+  prescriptionNo: string
+  patientNo: string | null
+  prescriber: string
+  status: string
+  drugSummary: string
+  createdAt: string
+}
+
+export interface AntibioticStats {
+  from: string
+  to: string
+  prophylaxisDays: number
+  rxCount: number
+  specialRxCount: number
+  pendingCount: number
+  levels: AntibioticLevelStat[]
+  doctors: AntibioticDoctorStat[]
+  drugs: AntibioticDrugStat[]
+  overLimit: AntibioticOverLimit[]
+}
+
 // ---------------------------------------------------------------- 药品科室调拨（G8）
 
 export type DrugTransferStatus =

@@ -268,6 +268,9 @@ public class PrescriptionService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "处方存在严重用药禁忌，不能通过审核，请驳回并让医师修改后重开：" + blockMessages(findings));
         }
+        if (approve) {
+            requireAntibioticApproval(rx);
+        }
         String rejectReason = null;
         String next;
         if (approve) {
@@ -302,6 +305,7 @@ public class PrescriptionService {
         if (repo.findDispenseByPrescription(prescriptionId).isPresent()) {
             throw new BusinessException(ErrorCode.CONFLICT, "该处方已发过药，不能重复发药");
         }
+        requireAntibioticApproval(rx);
 
         List<PrescriptionItem> items = repo.listPrescriptionItems(prescriptionId);
         if (items.isEmpty()) {
@@ -739,6 +743,24 @@ public class PrescriptionService {
         return Dispense.BILLING_CHARGED.equals(billingStatus)
                 || Dispense.BILLING_REFUND_PENDING.equals(billingStatus)
                 || Dispense.BILLING_REFUND_FAILED.equals(billingStatus);
+    }
+
+    /**
+     * 特殊使用级抗菌药物硬门槛（G33）：必须有已通过的专项审批，且审批人 ≠ 开方医师。
+     *
+     * <p>审核通过与发药各校验一次：审批可能在审核后才补录，也可能在两者之间被撤销。
+     */
+    private void requireAntibioticApproval(Prescription rx) {
+        if (repo.maxAntibioticLevel(rx.id()) < 3) {
+            return;
+        }
+        var approval = repo.findAntibioticApproval(rx.id()).orElse(null);
+        if (approval == null || !approval.approved()) {
+            throw new BusinessException(ErrorCode.ANTIBIOTIC_APPROVAL_REQUIRED);
+        }
+        if (rx.prescriber() != null && rx.prescriber().equalsIgnoreCase(approval.reviewedBy())) {
+            throw new BusinessException(ErrorCode.ANTIBIOTIC_SELF_APPROVAL);
+        }
     }
 
     private void audit(String actor, String action, String targetType, String targetId,

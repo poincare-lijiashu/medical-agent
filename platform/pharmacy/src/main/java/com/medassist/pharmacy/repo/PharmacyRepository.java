@@ -1,6 +1,12 @@
 package com.medassist.pharmacy.repo;
 
 import com.medassist.common.time.BusinessTime;
+import com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval;
+import com.medassist.pharmacy.domain.PharmacyModel.AntibioticDoctorStatRow;
+import com.medassist.pharmacy.domain.PharmacyModel.AntibioticDrugStatRow;
+import com.medassist.pharmacy.domain.PharmacyModel.AntibioticLevelStatRow;
+import com.medassist.pharmacy.domain.PharmacyModel.AntibioticOverLimitRow;
+import com.medassist.pharmacy.domain.PharmacyModel.AntibioticPendingRow;
 import com.medassist.pharmacy.domain.PharmacyModel.Dispense;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseItem;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
@@ -1583,6 +1589,199 @@ public class PharmacyRepository {
                         rs.getBigDecimal("value"), rs.getString("detail"),
                         rs.getString("source"), instantOf(rs, "updated_at")))
                 .list();
+    }
+
+    // ---------------------------------------------------------------- 抗菌药物专项（G33）
+
+    private static final RowMapper<AntibioticApproval> ANTIBIOTIC_APPROVAL_MAPPER = (rs, i) ->
+            new AntibioticApproval(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("prescription_id", UUID.class), rs.getInt("max_level"),
+                    rs.getString("status"), rs.getString("note"), rs.getString("requested_by"),
+                    rs.getTimestamp("requested_at").toInstant(), rs.getString("reviewed_by"),
+                    rs.getTimestamp("reviewed_at").toInstant(), rs.getLong("version"));
+
+    /** 处方内最高抗菌药物分级（0=不含抗菌药物）。 */
+    public int maxAntibioticLevel(UUID prescriptionId) {
+        Integer level = jdbc.sql("""
+                        SELECT COALESCE(MAX(d.antibiotic_level), 0)
+                          FROM pharmacy_svc.prescription_item i
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE i.prescription_id = ?
+                        """)
+                .param(prescriptionId).query(Integer.class).single();
+        return level == null ? 0 : level;
+    }
+
+    public Optional<AntibioticApproval> findAntibioticApproval(UUID prescriptionId) {
+        return jdbc.sql("""
+                        SELECT id, prescription_id, max_level, status, note, requested_by,
+                               requested_at, reviewed_by, reviewed_at, version
+                          FROM pharmacy_svc.antibiotic_approval WHERE prescription_id = ?
+                        """)
+                .param(prescriptionId).query(ANTIBIOTIC_APPROVAL_MAPPER).optional();
+    }
+
+    /** 审批写入/覆盖（同一处方一条；重新审批保留原申请人，更新审批人与状态）。 */
+    public void upsertAntibioticApproval(AntibioticApproval a) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.antibiotic_approval
+                            (id, prescription_id, max_level, status, note, requested_by,
+                             requested_at, reviewed_by, reviewed_at)
+                        VALUES (:id, :prescriptionId, :maxLevel, :status, :note, :requestedBy,
+                                :requestedAt, :reviewedBy, :reviewedAt)
+                        ON CONFLICT (prescription_id) DO UPDATE
+                           SET status = EXCLUDED.status,
+                               note = EXCLUDED.note,
+                               reviewed_by = EXCLUDED.reviewed_by,
+                               reviewed_at = EXCLUDED.reviewed_at,
+                               version = pharmacy_svc.antibiotic_approval.version + 1
+                        """)
+                .param("id", a.id()).param("prescriptionId", a.prescriptionId())
+                .param("maxLevel", a.maxLevel()).param("status", a.status())
+                .param("note", a.note()).param("requestedBy", a.requestedBy())
+                // Instant 无法被 PostgreSQL 驱动推断类型，写入前显式转 OffsetDateTime（实测 500）
+                .param("requestedAt", a.requestedAt().atZone(BusinessTime.zone()).toOffsetDateTime())
+                .param("reviewedBy", a.reviewedBy())
+                .param("reviewedAt", a.reviewedAt().atZone(BusinessTime.zone()).toOffsetDateTime())
+                .update();
+    }
+
+    public List<AntibioticLevelStatRow> antibioticLevelStats(OffsetDateTime fromTs,
+                                                             OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT d.antibiotic_level AS level, count(DISTINCT p.id) AS rx_count,
+                               COALESCE(SUM(i.quantity), 0) AS quantity
+                          FROM pharmacy_svc.prescription p
+                          JOIN pharmacy_svc.prescription_item i ON i.prescription_id = p.id
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE d.antibiotic_level > 0
+                           AND p.created_at >= :fromTs AND p.created_at < :toTs
+                           AND p.status <> 'CANCELLED'
+                         GROUP BY d.antibiotic_level
+                         ORDER BY d.antibiotic_level
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new AntibioticLevelStatRow(rs.getInt("level"),
+                        rs.getLong("rx_count"), rs.getLong("quantity"))).list();
+    }
+
+    public List<AntibioticDoctorStatRow> antibioticDoctorStats(OffsetDateTime fromTs,
+                                                               OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT p.prescriber, count(DISTINCT p.id) AS rx_count,
+                               COALESCE(SUM(i.quantity), 0) AS quantity
+                          FROM pharmacy_svc.prescription p
+                          JOIN pharmacy_svc.prescription_item i ON i.prescription_id = p.id
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE d.antibiotic_level > 0
+                           AND p.created_at >= :fromTs AND p.created_at < :toTs
+                           AND p.status <> 'CANCELLED'
+                         GROUP BY p.prescriber
+                         ORDER BY rx_count DESC, quantity DESC
+                         LIMIT 20
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new AntibioticDoctorStatRow(rs.getString("prescriber"),
+                        rs.getLong("rx_count"), rs.getLong("quantity"))).list();
+    }
+
+    public List<AntibioticDrugStatRow> antibioticDrugStats(OffsetDateTime fromTs,
+                                                           OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT d.drug_code, d.name AS drug_name, d.antibiotic_level AS level,
+                               count(DISTINCT p.id) AS rx_count,
+                               COALESCE(SUM(i.quantity), 0) AS quantity
+                          FROM pharmacy_svc.prescription p
+                          JOIN pharmacy_svc.prescription_item i ON i.prescription_id = p.id
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE d.antibiotic_level > 0
+                           AND p.created_at >= :fromTs AND p.created_at < :toTs
+                           AND p.status <> 'CANCELLED'
+                         GROUP BY d.drug_code, d.name, d.antibiotic_level
+                         ORDER BY quantity DESC, rx_count DESC
+                         LIMIT 20
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new AntibioticDrugStatRow(rs.getString("drug_code"),
+                        rs.getString("drug_name"), rs.getInt("level"), rs.getLong("rx_count"),
+                        rs.getLong("quantity"))).list();
+    }
+
+    /** 超疗程提醒：抗菌药物 days 超过阈值（排除已取消/驳回）。 */
+    public List<AntibioticOverLimitRow> antibioticOverLimit(OffsetDateTime fromTs,
+                                                            OffsetDateTime toTs,
+                                                            int thresholdDays, int limit) {
+        return jdbc.sql("""
+                        SELECT p.id AS prescription_id, p.prescription_no, p.patient_no,
+                               p.prescriber, d.name AS drug_name, MAX(i.days) AS max_days,
+                               p.created_at
+                          FROM pharmacy_svc.prescription p
+                          JOIN pharmacy_svc.prescription_item i ON i.prescription_id = p.id
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE d.antibiotic_level > 0 AND i.days IS NOT NULL
+                           AND i.days > :threshold
+                           AND p.created_at >= :fromTs AND p.created_at < :toTs
+                           AND p.status NOT IN ('CANCELLED', 'REJECTED')
+                         GROUP BY p.id, p.prescription_no, p.patient_no, p.prescriber,
+                                  d.name, p.created_at
+                         ORDER BY max_days DESC, p.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .param("threshold", thresholdDays).param("limit", limit)
+                .query((rs, i) -> new AntibioticOverLimitRow(
+                        rs.getObject("prescription_id", UUID.class),
+                        rs.getString("prescription_no"), rs.getString("patient_no"),
+                        rs.getString("prescriber"), rs.getString("drug_name"),
+                        rs.getObject("max_days") == null ? null : rs.getInt("max_days"),
+                        rs.getTimestamp("created_at").toInstant())).list();
+    }
+
+    /** 待专项审批：含三级抗菌药物、待审核/已审核但尚无 APPROVED 专项审批的处方。 */
+    public List<AntibioticPendingRow> antibioticPending(int limit) {
+        return jdbc.sql("""
+                        SELECT p.id AS prescription_id, p.prescription_no, p.patient_no,
+                               p.prescriber, p.status,
+                               string_agg(DISTINCT d.name || '×' || i.quantity, '；')
+                                   AS drug_summary,
+                               p.created_at
+                          FROM pharmacy_svc.prescription p
+                          JOIN pharmacy_svc.prescription_item i ON i.prescription_id = p.id
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE d.antibiotic_level = 3
+                           AND p.status IN ('PENDING_REVIEW', 'APPROVED')
+                           AND NOT EXISTS (
+                               SELECT 1 FROM pharmacy_svc.antibiotic_approval a
+                                WHERE a.prescription_id = p.id AND a.status = 'APPROVED')
+                         GROUP BY p.id, p.prescription_no, p.patient_no, p.prescriber,
+                                  p.status, p.created_at
+                         ORDER BY p.created_at
+                         LIMIT :limit
+                        """)
+                .param("limit", limit)
+                .query((rs, i) -> new AntibioticPendingRow(
+                        rs.getObject("prescription_id", UUID.class),
+                        rs.getString("prescription_no"), rs.getString("patient_no"),
+                        rs.getString("prescriber"), rs.getString("status"),
+                        rs.getString("drug_summary"),
+                        rs.getTimestamp("created_at").toInstant())).list();
+    }
+
+    public int countAntibioticPending() {
+        Integer count = jdbc.sql("""
+                        SELECT count(DISTINCT p.id)
+                          FROM pharmacy_svc.prescription p
+                          JOIN pharmacy_svc.prescription_item i ON i.prescription_id = p.id
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                         WHERE d.antibiotic_level = 3
+                           AND p.status IN ('PENDING_REVIEW', 'APPROVED')
+                           AND NOT EXISTS (
+                               SELECT 1 FROM pharmacy_svc.antibiotic_approval a
+                                WHERE a.prescription_id = p.id AND a.status = 'APPROVED')
+                        """)
+                .query(Integer.class).single();
+        return count == null ? 0 : count;
     }
 
     // ---------------------------------------------------------------- 审计

@@ -138,6 +138,11 @@ public enum ErrorCode {
     DRUG_TRANSFER_BATCH_NOT_FOUND(43486, "调拨明细中的批次不存在"),
     DRUG_TRANSFER_EXCEEDS(43487, "调拨数量超过该批次当前余量"),
 
+    // ---- 抗菌药物专项（43xxx 续，G33）----
+    ANTIBIOTIC_APPROVAL_REQUIRED(43440, "该处方含特殊使用级抗菌药物，须先完成专项审批"),
+    ANTIBIOTIC_APPROVAL_INVALID(43441, "该处方不含特殊使用级抗菌药物，无需专项审批"),
+    ANTIBIOTIC_SELF_APPROVAL(43442, "不能审批自己开具的抗菌药物处方"),
+
     // ---- 物资耗材（43xxx 续，G3；与药械同属物资供应，编码段相邻）----
     CONSUMABLE_NOT_FOUND(43450, "未找到该耗材，或该耗材已停用"),
     CONSUMABLE_BATCH_NOT_FOUND(43451, "未找到该耗材批次"),

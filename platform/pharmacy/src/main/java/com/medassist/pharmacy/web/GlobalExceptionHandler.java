@@ -36,6 +36,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
                  PRESCRIPTION_STATUS_INVALID,
+                 // G33：特殊使用级抗菌药物未获审批（或审批人=开方医师）→ 409，调用方应走审批而不是重试
+                 ANTIBIOTIC_APPROVAL_REQUIRED, ANTIBIOTIC_SELF_APPROVAL,
                  NARCOTIC_PRESCRIBER_STATE_INVALID,
                  ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID,
                  SUPPLIER_INACTIVE, SUPPLIER_LICENSE_EXPIRED,
@@ -56,7 +58,9 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  STOCK_LOSS_REJECT_REASON_REQUIRED,
                  DRUG_TRANSFER_ITEM_INVALID, DRUG_TRANSFER_EXCEEDS,
                  DRUG_TRANSFER_REJECT_REASON_REQUIRED,
-                 DRUG_TRANSFER_CANCEL_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 DRUG_TRANSFER_CANCEL_REASON_REQUIRED,
+                 // G33：该处方不含特殊使用级抗菌药物，无需专项审批
+                 ANTIBIOTIC_APPROVAL_INVALID -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

@@ -385,6 +385,81 @@ class PrescriptionServiceTest {
                 .isEqualTo(ErrorCode.PRESCRIPTION_STATUS_INVALID);
     }
 
+    // ------------------------------------------------ 特殊使用级抗菌药物（G33）
+
+    private com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval antibioticApproval(
+            String status, String reviewedBy) {
+        return new com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval(
+                UUID.randomUUID(), rxId, 3, status, null, "doctor01", Instant.now(),
+                reviewedBy, Instant.now(), 0L);
+    }
+
+    @Test
+    @DisplayName("特殊使用级：未获专项审批时审核通过 → 409")
+    void reviewBlocksSpecialAntibioticWithoutApproval() {
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW,
+                new BigDecimal("100.00"), 2L)));
+        when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
+        when(repo.findAntibioticApproval(rxId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.review(rxId, true, null, "pharm01"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.ANTIBIOTIC_APPROVAL_REQUIRED));
+        verify(repo, never()).updatePrescriptionStatus(any(), any(), any(), anyLong(), any(), any());
+    }
+
+    @Test
+    @DisplayName("特殊使用级：审批人=开方医师时审核通过 → 409")
+    void reviewBlocksSelfApprovedAntibiotic() {
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW,
+                new BigDecimal("100.00"), 2L)));
+        when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
+        when(repo.findAntibioticApproval(rxId)).thenReturn(Optional.of(
+                antibioticApproval(
+                        com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval.APPROVED,
+                        "doctor01")));
+
+        assertThatThrownBy(() -> service.review(rxId, true, null, "pharm01"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.ANTIBIOTIC_SELF_APPROVAL));
+        verify(repo, never()).updatePrescriptionStatus(any(), any(), any(), anyLong(), any(), any());
+    }
+
+    @Test
+    @DisplayName("特殊使用级：他审通过后可以审核通过")
+    void reviewAllowsSpecialAntibioticWithApproval() {
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW,
+                new BigDecimal("100.00"), 2L)));
+        when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
+        when(repo.findAntibioticApproval(rxId)).thenReturn(Optional.of(
+                antibioticApproval(
+                        com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval.APPROVED,
+                        "pharm02")));
+        when(repo.updatePrescriptionStatus(eq(rxId), eq(Prescription.PENDING_REVIEW),
+                eq(Prescription.APPROVED), eq(2L), eq("pharm01"), eq(null))).thenReturn(true);
+        when(repo.findPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
+                new BigDecimal("100.00"), 3L)));
+
+        PrescriptionView view = service.review(rxId, true, null, "pharm01");
+
+        assertThat(view.prescription().status()).isEqualTo(Prescription.APPROVED);
+    }
+
+    @Test
+    @DisplayName("特殊使用级：发药前必须已获专项审批 → 409")
+    void dispenseBlocksSpecialAntibioticWithoutApproval() {
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
+                new BigDecimal("100.00"), 3L)));
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
+        when(repo.findAntibioticApproval(rxId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.dispense(rxId, null, "pharm01"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.errorCode()).isEqualTo(ErrorCode.ANTIBIOTIC_APPROVAL_REQUIRED));
+        verify(repo, never()).insertDispense(any());
+    }
+
     // ---------------------------------------------------------------- 发药
 
     @Test

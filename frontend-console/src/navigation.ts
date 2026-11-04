@@ -191,6 +191,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    name: 'antibiotics',
+    path: '/antibiotics',
+    title: '抗菌药物专项',
+    hint: '分级使用统计 · 特殊使用级专项审批 · 围手术期预防用药超疗程提醒',
+    icon: 'pill',
+    group: '药事管理',
+    permissions: ['pharmacy:antibiotic:read'],
+  },
+  {
     name: 'drug-transfer',
     path: '/drug-transfer',
     title: '药品调拨',

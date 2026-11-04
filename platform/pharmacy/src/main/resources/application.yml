@@ -54,6 +54,9 @@ pharmacy:
   internal-api-token: ${INTERNAL_API_TOKEN:${PHARMACY_INTERNAL_TOKEN:}}
   # 近效期阈值：剩余天数 <= 该值时在库存预警中列出（不拦截发药）
   near-expiry-days: ${PHARMACY_NEAR_EXPIRY_DAYS:90}
+  # G33 抗菌药物专项：围手术期预防用药最长疗程（天），超出即进入"超疗程"提醒列表
+  antibiotic:
+    prophylaxis-days: ${PHARMACY_ANTIBIOTIC_PROPHYLAXIS_DAYS:3}
 
 # ---- 效期自动报废（G28）：每天 01:10 扫描过期批次，生成报损草稿，仍需人工提交+他审 ----
 medassist:
