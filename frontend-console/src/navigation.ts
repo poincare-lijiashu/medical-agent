@@ -74,6 +74,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:nursing:read'],
   },
   {
+    name: 'nursing-schedule',
+    path: '/nursing-schedule',
+    title: '护理排班',
+    hint: '班次字典 · 科室排班 · 发布/取消 · 工作量与覆盖',
+    icon: 'calendar',
+    group: '住院管理',
+    permissions: ['inpatient:nursing:read'],
+  },
+  {
     name: 'preop',
     path: '/preop',
     title: '术前访视',

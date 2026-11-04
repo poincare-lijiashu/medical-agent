@@ -433,6 +433,42 @@ export interface NursingCorrectionView {
   billingHint: string
 }
 
+/** 护理班次字典（G26）。 */
+export interface NursingShift {
+  id: string
+  code: string
+  name: string
+  startTime: string
+  endTime: string
+  crossMidnight: boolean
+  enabled: boolean
+}
+
+/** 护理排班明细（G26）：DRAFT → PUBLISHED → CANCELLED。 */
+export interface NursingSchedule {
+  id: string
+  deptId: string
+  deptName: string
+  shiftCode: string
+  shiftName: string
+  workDate: string
+  nurseName: string
+  nurseNo: string | null
+  status: 'DRAFT' | 'PUBLISHED' | 'CANCELLED'
+  note: string | null
+  createdBy: string
+  createdAt: string
+  cancelReason: string | null
+  cancelledAt: string | null
+  version: number
+}
+
+/** 护士工作量与每日覆盖（G26）。 */
+export interface NursingWorkload {
+  nurses: { nurseName: string; nurseNo: string | null; shifts: number; nightShifts: number }[]
+  coverage: { workDate: string; shiftCode: string; count: number }[]
+}
+
 export interface VisitOrder {
   id: string
   orderNo: string

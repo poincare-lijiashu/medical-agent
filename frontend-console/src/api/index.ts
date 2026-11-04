@@ -46,6 +46,9 @@ import type {
   Me,
   NarcoticRegister,
   NursingCorrectionView,
+  NursingSchedule,
+  NursingShift,
+  NursingWorkload,
   NursingExecutionView,
   OperatingRoom,
   OutpatientDaily,
@@ -307,6 +310,28 @@ export const clinicalApi = {
       `/clinical/inpatient/admissions/${admissionId}/nursing-executions/${executionId}/correction`,
       body,
     ),
+  /** 护理排班（G26）：查询用 inpatient:nursing:read，维护用 inpatient:nursing:schedule。 */
+  nursingShifts: () => get<NursingShift[]>('/clinical/nursing/shifts'),
+  nursingSchedules: (params: { deptId?: string; from?: string; to?: string }) =>
+    get<NursingSchedule[]>('/clinical/nursing/schedules', params),
+  createNursingSchedules: (
+    items: {
+      deptId: string
+      shiftCode: string
+      workDate: string
+      nurseName: string
+      nurseNo?: string
+      note?: string
+    }[],
+  ) => post<{ created: number; skipped: number }>('/clinical/nursing/schedules', { items }),
+  cancelNursingSchedule: (id: string, reason: string) =>
+    post<NursingSchedule>(`/clinical/nursing/schedules/${id}/cancel`, { reason }),
+  publishNursingSchedules: (deptId: string, date: string) =>
+    post<{ published: number }>('/clinical/nursing/schedules/publish', undefined, {
+      query: { deptId, date },
+    }),
+  nursingWorkload: (params: { deptId?: string; from?: string; to?: string }) =>
+    get<NursingWorkload>('/clinical/nursing/workload', params),
   visitTransfers: (visitId: string) =>
     get<VisitTransfer[]>(`/clinical/visits/${visitId}/transfers`),
   transferVisit: (visitId: string, body: { toDeptId: string; bedId?: string; reason: string }) =>

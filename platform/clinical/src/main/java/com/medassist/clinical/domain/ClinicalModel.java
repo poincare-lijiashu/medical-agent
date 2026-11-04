@@ -546,6 +546,33 @@ public final class ClinicalModel {
     public record Ward(UUID id, String code, String name, UUID deptId, boolean enabled) {
     }
 
+    /** 护理班次字典（G26）。 */
+    public record NursingShift(UUID id, String code, String name,
+                               java.time.LocalTime startTime, java.time.LocalTime endTime,
+                               boolean crossMidnight, boolean enabled, long version) {
+    }
+
+    /** 护理排班明细（G26）：DRAFT → PUBLISHED → CANCELLED。 */
+    public record NursingSchedule(UUID id, UUID deptId, String deptName, String shiftCode,
+                                  String shiftName, LocalDate workDate, String nurseName,
+                                  String nurseNo, String status, String note, String createdBy,
+                                  Instant createdAt, String cancelledBy, Instant cancelledAt,
+                                  String cancelReason, long version) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String CANCELLED = "CANCELLED";
+    }
+
+    /** 护士工作量（G26）：统计周期内班次数与夜班数。 */
+    public record NursingWorkloadRow(String nurseName, String nurseNo, long shifts,
+                                     long nightShifts) {
+    }
+
+    /** 每日每班次覆盖人数（G26）。 */
+    public record NursingCoverageRow(LocalDate workDate, String shiftCode, long count) {
+    }
+
     /** 床位。 */
     public record Bed(UUID id, UUID wardId, String bedNo, String status, long version) {
 

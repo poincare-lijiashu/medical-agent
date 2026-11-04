@@ -25,6 +25,10 @@ import com.medassist.clinical.domain.ClinicalModel.NursingExecutionCorrection;
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
+import com.medassist.clinical.domain.ClinicalModel.NursingCoverageRow;
+import com.medassist.clinical.domain.ClinicalModel.NursingSchedule;
+import com.medassist.clinical.domain.ClinicalModel.NursingShift;
+import com.medassist.clinical.domain.ClinicalModel.NursingWorkloadRow;
 import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
@@ -4215,6 +4219,147 @@ public class ClinicalRepository {
                           """)
                 .param("visitId", visitId).param("limit", limit)
                 .query(VISIT_TRANSFER_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 护理排班（G26）
+
+    private static final RowMapper<NursingShift> NURSING_SHIFT_MAPPER = (rs, i) ->
+            new NursingShift(rs.getObject("id", UUID.class), rs.getString("code"),
+                    rs.getString("name"), rs.getTime("start_time").toLocalTime(),
+                    rs.getTime("end_time").toLocalTime(), rs.getBoolean("cross_midnight"),
+                    rs.getBoolean("enabled"), rs.getLong("version"));
+
+    private static final RowMapper<NursingSchedule> NURSING_SCHEDULE_MAPPER = (rs, i) ->
+            new NursingSchedule(rs.getObject("id", UUID.class),
+                    rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
+                    rs.getString("shift_code"), rs.getString("shift_name"),
+                    rs.getDate("work_date").toLocalDate(), rs.getString("nurse_name"),
+                    rs.getString("nurse_no"), rs.getString("status"), rs.getString("note"),
+                    rs.getString("created_by"), rs.getTimestamp("created_at").toInstant(),
+                    rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null ? null
+                            : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("cancel_reason"), rs.getLong("version"));
+
+    private static final String NURSING_SCHEDULE_COLUMNS = """
+            s.id, s.dept_id, d.name AS dept_name, s.shift_code, sh.name AS shift_name,
+            s.work_date, s.nurse_name, s.nurse_no, s.status, s.note, s.created_by,
+            s.created_at, s.cancelled_by, s.cancelled_at, s.cancel_reason, s.version
+            """;
+
+    public List<NursingShift> listNursingShifts() {
+        return jdbc.sql("""
+                        SELECT id, code, name, start_time, end_time, cross_midnight, enabled, version
+                          FROM clinical_svc.nursing_shift
+                         WHERE enabled
+                         ORDER BY start_time, code
+                        """).query(NURSING_SHIFT_MAPPER).list();
+    }
+
+    public Optional<NursingShift> findNursingShift(String code) {
+        return jdbc.sql("""
+                        SELECT id, code, name, start_time, end_time, cross_midnight, enabled, version
+                          FROM clinical_svc.nursing_shift WHERE code = ?
+                        """).param(code).query(NURSING_SHIFT_MAPPER).optional();
+    }
+
+    /** 插入排班；同科室同班次同护士或同护士同日已存在时返回 false（跳过）。 */
+    public boolean insertNursingSchedule(UUID id, UUID deptId, String shiftCode,
+                                         LocalDate workDate, String nurseName, String nurseNo,
+                                         String note, String actor) {
+        return jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_schedule
+                            (id, dept_id, shift_code, work_date, nurse_name, nurse_no, note,
+                             created_by)
+                        VALUES (:id, :deptId, :shiftCode, :workDate, :nurseName,
+                                CAST(:nurseNo AS text), CAST(:note AS text), :actor)
+                        ON CONFLICT DO NOTHING
+                        """)
+                .param("id", id).param("deptId", deptId).param("shiftCode", shiftCode)
+                .param("workDate", workDate).param("nurseName", nurseName)
+                .param("nurseNo", nurseNo).param("note", note).param("actor", actor)
+                .update() > 0;
+    }
+
+    public List<NursingSchedule> listNursingSchedules(UUID deptId, LocalDate from,
+                                                      LocalDate to) {
+        return jdbc.sql("SELECT " + NURSING_SCHEDULE_COLUMNS + """
+                          FROM clinical_svc.nursing_schedule s
+                          JOIN clinical_svc.md_dept d ON d.id = s.dept_id
+                          JOIN clinical_svc.nursing_shift sh ON sh.code = s.shift_code
+                         WHERE (CAST(:deptId AS uuid) IS NULL OR s.dept_id = CAST(:deptId AS uuid))
+                           AND s.work_date >= :fromDate AND s.work_date <= :toDate
+                         ORDER BY s.work_date, sh.start_time, s.nurse_name
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query(NURSING_SCHEDULE_MAPPER).list();
+    }
+
+    public Optional<NursingSchedule> findNursingSchedule(UUID id) {
+        return jdbc.sql("SELECT " + NURSING_SCHEDULE_COLUMNS + """
+                          FROM clinical_svc.nursing_schedule s
+                          JOIN clinical_svc.md_dept d ON d.id = s.dept_id
+                          JOIN clinical_svc.nursing_shift sh ON sh.code = s.shift_code
+                         WHERE s.id = ?
+                        """).param(id).query(NURSING_SCHEDULE_MAPPER).optional();
+    }
+
+    /** 取消排班（CAS：版本一致且未取消）。 */
+    public boolean cancelNursingSchedule(UUID id, String reason, String actor, long version) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_schedule
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               cancelled_by = :actor, cancelled_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status <> 'CANCELLED' AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor)
+                .param("version", version).update() > 0;
+    }
+
+    /** 发布某科室某日全部草稿排班，返回发布条数。 */
+    public int publishNursingSchedules(UUID deptId, LocalDate day) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_schedule
+                           SET status = 'PUBLISHED', version = version + 1, updated_at = now()
+                         WHERE dept_id = :deptId AND work_date = :day AND status = 'DRAFT'
+                        """)
+                .param("deptId", deptId).param("day", day).update();
+    }
+
+    /** 护士工作量：统计周期内未取消排班的班次数与夜班数。 */
+    public List<NursingWorkloadRow> nursingWorkload(UUID deptId, LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT nurse_name, nurse_no, count(*) AS shifts,
+                               count(*) FILTER (WHERE shift_code = 'NIGHT') AS night_shifts
+                          FROM clinical_svc.nursing_schedule
+                         WHERE (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                           AND work_date >= :fromDate AND work_date <= :toDate
+                           AND status <> 'CANCELLED'
+                         GROUP BY nurse_name, nurse_no
+                         ORDER BY shifts DESC, nurse_name
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query((rs, i) -> new NursingWorkloadRow(rs.getString("nurse_name"),
+                        rs.getString("nurse_no"), rs.getLong("shifts"),
+                        rs.getLong("night_shifts"))).list();
+    }
+
+    /** 每日每班次覆盖人数（未取消排班）。 */
+    public List<NursingCoverageRow> nursingCoverage(UUID deptId, LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT work_date, shift_code, count(*) AS cnt
+                          FROM clinical_svc.nursing_schedule
+                         WHERE (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                           AND work_date >= :fromDate AND work_date <= :toDate
+                           AND status <> 'CANCELLED'
+                         GROUP BY work_date, shift_code
+                         ORDER BY work_date, shift_code
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query((rs, i) -> new NursingCoverageRow(
+                        rs.getDate("work_date").toLocalDate(), rs.getString("shift_code"),
+                        rs.getLong("cnt"))).list();
     }
 
     // ---------------------------------------------------------------- 审计

@@ -43,6 +43,11 @@ const router = createRouter({
           name: 'nursing',
           component: () => import('@/views/NursingView.vue'),
         },
+        {
+          path: 'nursing-schedule',
+          name: 'nursing-schedule',
+          component: () => import('@/views/NursingScheduleView.vue'),
+        },
         { path: 'surgery', name: 'surgery', component: () => import('@/views/SurgeryBoardView.vue') },
         {
           path: 'surgery-charges',
