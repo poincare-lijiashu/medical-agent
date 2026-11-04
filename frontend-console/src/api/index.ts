@@ -50,6 +50,7 @@ import type {
   NursingShift,
   NursingWorkload,
   NursingExecutionView,
+  OpsInsight,
   OperatingRoom,
   OutpatientDaily,
   OutpatientTrendView,
@@ -310,6 +311,9 @@ export const clinicalApi = {
       `/clinical/inpatient/admissions/${admissionId}/nursing-executions/${executionId}/correction`,
       body,
     ),
+  /** 运营洞察（G27）：同比与科室/病区下钻，默认最近 14 天。 */
+  opsInsights: (params: { from?: string; to?: string }) =>
+    get<OpsInsight>('/clinical/reports/ops-insights', params),
   /** 护理排班（G26）：查询用 inpatient:nursing:read，维护用 inpatient:nursing:schedule。 */
   nursingShifts: () => get<NursingShift[]>('/clinical/nursing/shifts'),
   nursingSchedules: (params: { deptId?: string; from?: string; to?: string }) =>

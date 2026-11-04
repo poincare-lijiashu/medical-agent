@@ -20,6 +20,15 @@ export const NAV_ITEMS: NavItem[] = [
     group: '总览',
   },
   {
+    name: 'ops-insights',
+    path: '/ops-insights',
+    title: '运营洞察',
+    hint: '同比 · 科室实收下钻 · 病区入出院下钻',
+    icon: 'activity',
+    group: '总览',
+    permissions: ['clinical:report:read'],
+  },
+  {
     name: 'registration',
     path: '/registration',
     title: '挂号收费',

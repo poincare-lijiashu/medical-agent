@@ -469,6 +469,45 @@ export interface NursingWorkload {
   coverage: { workDate: string; shiftCode: string; count: number }[]
 }
 
+/** 运营洞察（G27）：同比与科室/病区下钻。yoyPercent 为 null 表示去年同期无基数。 */
+export interface OpsInsight {
+  from: string
+  to: string
+  lastYearFrom: string
+  lastYearTo: string
+  outpatient: {
+    visits: number
+    paidAmount: number
+    lastYearVisits: number
+    lastYearPaidAmount: number
+    paidYoyPercent: number | null
+    byDept: {
+      deptCode: string
+      deptName: string
+      visits: number
+      paidAmount: number
+      lastYearPaidAmount: number
+      yoyPercent: number | null
+    }[]
+  }
+  inpatient: {
+    admitted: number
+    discharged: number
+    lastYearAdmitted: number
+    lastYearDischarged: number
+    admittedYoyPercent: number | null
+    byWard: {
+      wardCode: string
+      wardName: string
+      deptName: string
+      admitted: number
+      discharged: number
+      lastYearAdmitted: number
+      yoyPercent: number | null
+    }[]
+  }
+}
+
 export interface VisitOrder {
   id: string
   orderNo: string

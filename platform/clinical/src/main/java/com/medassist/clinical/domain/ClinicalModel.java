@@ -573,6 +573,11 @@ public final class ClinicalModel {
     public record NursingCoverageRow(LocalDate workDate, String shiftCode, long count) {
     }
 
+    /** 病区入出量（G27）：按病区+科室聚合，用于同比与下钻。 */
+    public record WardAdmissionRow(String wardCode, String wardName, String deptName,
+                                   long admitted, long discharged) {
+    }
+
     /** 床位。 */
     public record Bed(UUID id, UUID wardId, String bedNo, String status, long version) {
 

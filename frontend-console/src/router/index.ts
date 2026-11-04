@@ -17,6 +17,11 @@ const router = createRouter({
           component: () => import('@/views/DashboardView.vue'),
         },
         {
+          path: 'ops-insights',
+          name: 'ops-insights',
+          component: () => import('@/views/OpsInsightView.vue'),
+        },
+        {
           path: 'registration',
           name: 'registration',
           component: () => import('@/views/RegistrationWorkbenchView.vue'),

@@ -56,6 +56,7 @@ import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.VisitTransfer;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.domain.ClinicalModel.WardAdmissionRow;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReturn;
 import com.medassist.clinical.domain.ClinicalModel.WardStockBalance;
@@ -4360,6 +4361,35 @@ public class ClinicalRepository {
                 .query((rs, i) -> new NursingCoverageRow(
                         rs.getDate("work_date").toLocalDate(), rs.getString("shift_code"),
                         rs.getLong("cnt"))).list();
+    }
+
+    // ---------------------------------------------------------------- 运营洞察（G27）
+
+    /**
+     * 病区入出量：只统计本期有入院或出院事件的病区，按病区聚合。
+     *
+     * <p>用于「科室/病区下钻」与同比：同一方法对本期与去年同期各调用一次。
+     */
+    public List<WardAdmissionRow> admissionByWard(OffsetDateTime from, OffsetDateTime to) {
+        return jdbc.sql("""
+                        SELECT w.code AS ward_code, w.name AS ward_name, d.name AS dept_name,
+                               count(*) FILTER (WHERE a.admitted_at >= :fromTs
+                                                 AND a.admitted_at < :toTs) AS admitted,
+                               count(*) FILTER (WHERE a.discharged_at >= :fromTs
+                                                 AND a.discharged_at < :toTs) AS discharged
+                          FROM clinical_svc.admission a
+                          JOIN clinical_svc.ward w ON w.id = a.ward_id
+                          JOIN clinical_svc.md_dept d ON d.id = w.dept_id
+                         WHERE (a.admitted_at >= :fromTs AND a.admitted_at < :toTs)
+                            OR (a.discharged_at >= :fromTs AND a.discharged_at < :toTs)
+                         GROUP BY w.code, w.name, d.name
+                         ORDER BY admitted DESC, w.code
+                         LIMIT 50
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .query((rs, i) -> new WardAdmissionRow(rs.getString("ward_code"),
+                        rs.getString("ward_name"), rs.getString("dept_name"),
+                        rs.getLong("admitted"), rs.getLong("discharged"))).list();
     }
 
     // ---------------------------------------------------------------- 审计
