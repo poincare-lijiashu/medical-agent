@@ -13,7 +13,7 @@
       aria-label="主导航"
     >
       <div class="sidebar-head">
-        <RouterLink to="/orders" class="brand" aria-label="铭医 MedAssist 首页">
+        <RouterLink to="/dashboard" class="brand" aria-label="铭医 MedAssist 首页">
           <img src="/brand/mark.svg?v=4" width="28" height="28" alt="" class="brand-mark" />
           <span class="brand-text">
             <span class="brand-name">铭医</span>

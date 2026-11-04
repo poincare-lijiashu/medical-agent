@@ -12,6 +12,14 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   {
+    name: 'dashboard',
+    path: '/dashboard',
+    title: '运营驾驶舱',
+    hint: '门诊 · 住院 · 药事 · 医技 · 耗材 · 病案一屏总览',
+    icon: 'monitor',
+    group: '总览',
+  },
+  {
     name: 'registration',
     path: '/registration',
     title: '挂号收费',

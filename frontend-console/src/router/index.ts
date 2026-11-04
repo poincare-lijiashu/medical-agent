@@ -10,7 +10,12 @@ const router = createRouter({
       path: '/',
       component: () => import('@/layouts/AppShell.vue'),
       children: [
-        { path: '', redirect: '/orders' },
+        { path: '', redirect: '/dashboard' },
+        {
+          path: 'dashboard',
+          name: 'dashboard',
+          component: () => import('@/views/DashboardView.vue'),
+        },
         {
           path: 'registration',
           name: 'registration',
@@ -73,13 +78,13 @@ const router = createRouter({
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },
-    { path: '/:pathMatch(.*)*', redirect: '/orders' },
+    { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
 })
 
 router.beforeEach((to) => {
   if (to.name === 'login') {
-    return session.isLoggedIn.value ? { path: '/orders' } : true
+    return session.isLoggedIn.value ? { path: '/dashboard' } : true
   }
   if (!session.isLoggedIn.value) {
     return { name: 'login', query: { redirect: to.fullPath } }

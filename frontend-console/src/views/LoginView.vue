@@ -138,8 +138,8 @@ async function submit() {
     await session.login(username.value, password.value)
     if (remember.value) localStorage.setItem(REMEMBER_KEY, username.value)
     else localStorage.removeItem(REMEMBER_KEY)
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/orders'
-    await router.replace(redirect.startsWith('/') ? redirect : '/orders')
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
+    await router.replace(redirect.startsWith('/') ? redirect : '/dashboard')
   } catch (e) {
     formError.value = errorText(e)
   } finally {
