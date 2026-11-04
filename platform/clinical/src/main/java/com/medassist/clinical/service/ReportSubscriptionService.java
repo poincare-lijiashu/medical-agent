@@ -19,12 +19,16 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -60,25 +64,47 @@ public class ReportSubscriptionService {
     private static final Set<String> HTTP_CHANNELS =
             new LinkedHashSet<>(List.of("WEBHOOK", "DINGTALK", "WECOM", "FEISHU"));
     private static final Set<String> ALL_CHANNELS =
-            new LinkedHashSet<>(List.of("LOG", "WEBHOOK", "DINGTALK", "WECOM", "FEISHU"));
+            new LinkedHashSet<>(List.of("LOG", "WEBHOOK", "DINGTALK", "WECOM", "FEISHU", "EMAIL"));
+
+    /** 邮件收件人上限：超过后单封邮件容易被网关判为群发垃圾邮件。 */
+    private static final int MAX_EMAIL_RECIPIENTS = 10;
+
+    private static final java.util.regex.Pattern EMAIL_PATTERN = java.util.regex.Pattern.compile(
+            "^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$");
+
+    /** 指标中文名：邮件正文与 CSV 附件用，未知指标回退编码本身。 */
+    private static final Map<String, String> METRIC_LABELS = Map.ofEntries(
+            Map.entry("OUTPATIENT_PAID_AMOUNT", "门诊实收（元）"),
+            Map.entry("OUTPATIENT_VISIT_COUNT", "门诊人次"),
+            Map.entry("INPATIENT_ADMITTED_COUNT", "入院人数"),
+            Map.entry("INPATIENT_DISCHARGED_COUNT", "出院人数"),
+            Map.entry("INPATIENT_IN_HOSPITAL_COUNT", "在院人数"),
+            Map.entry("BED_OCCUPANCY_PERCENT", "床位使用率（%）"),
+            Map.entry("DISPENSE_COUNT", "发药笔数"),
+            Map.entry("DISPENSE_AMOUNT", "发药金额（元）"),
+            Map.entry("ISSUE_COUNT", "出库单数"),
+            Map.entry("ISSUE_ITEM_QUANTITY", "出库件数"),
+            Map.entry("ISSUE_AMOUNT", "出库金额（元）"));
 
     private static final int DEFAULT_DELIVERY_LIMIT = 100;
     private static final int MAX_DELIVERY_LIMIT = 200;
 
     private final ClinicalRepository repo;
     private final ReportSnapshotService snapshotService;
+    private final ReportEmailSender emailSender;
     private final ObjectMapper objectMapper;
     private final Set<String> allowedHosts;
     private final RestClient webhookClient;
 
     public ReportSubscriptionService(ClinicalRepository repo, ReportSnapshotService snapshotService,
-                                     ObjectMapper objectMapper,
+                                     ReportEmailSender emailSender, ObjectMapper objectMapper,
                                      @Value("${medassist.report-delivery.allowed-hosts:}")
                                      String allowedHosts,
                                      @Value("${medassist.report-delivery.timeout-ms:3000}")
                                      int timeoutMs) {
         this.repo = repo;
         this.snapshotService = snapshotService;
+        this.emailSender = emailSender;
         this.objectMapper = objectMapper;
         this.allowedHosts = parseHosts(allowedHosts);
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -97,6 +123,7 @@ public class ReportSubscriptionService {
         String name = requireName(req.name());
         String channel = requireChannel(req.channel());
         String target = validateTarget(channel, req.target());
+        ensureChannelReady(channel);
         boolean enabled = req.enabled() == null || req.enabled();
         UUID id = UUID.randomUUID();
         try {
@@ -120,6 +147,7 @@ public class ReportSubscriptionService {
         String name = requireName(req.name());
         String channel = requireChannel(req.channel());
         String target = validateTarget(channel, req.target());
+        ensureChannelReady(channel);
         boolean enabled = req.enabled() == null ? existing.enabled() : req.enabled();
         boolean ok;
         try {
@@ -207,7 +235,12 @@ public class ReportSubscriptionService {
         String payload = repo.reportDeliveryPayload(delivery.id());
         LocalDate day = delivery.reportDate();
         try {
-            if (HTTP_CHANNELS.contains(sub.channel())) {
+            if ("EMAIL".equals(sub.channel())) {
+                String raw = payload == null ? buildPayload(day) : payload;
+                emailSender.send(sub.target(), buildEmailSubject(day),
+                        buildEmailHtml(day, raw), emailAttachmentName(day),
+                        buildEmailCsv(day, raw));
+            } else if (HTTP_CHANNELS.contains(sub.channel())) {
                 postChannel(sub.channel(), sub.target(),
                         payload == null ? buildPayload(day) : payload, day);
             } else {
@@ -405,12 +438,23 @@ public class ReportSubscriptionService {
         String channel = raw.trim().toUpperCase(Locale.ROOT);
         if (!ALL_CHANNELS.contains(channel)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "渠道只支持 LOG / WEBHOOK / DINGTALK / WECOM / FEISHU");
+                    "渠道只支持 LOG / WEBHOOK / DINGTALK / WECOM / FEISHU / EMAIL");
         }
         return channel;
     }
 
+    /** 渠道前置条件：EMAIL 必须先配置 SMTP，否则订阅建了也发不出去。 */
+    private void ensureChannelReady(String channel) {
+        if ("EMAIL".equals(channel) && !emailSender.configured()) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "未配置邮件服务器（medassist.report-email.host/from），暂不能创建 EMAIL 订阅");
+        }
+    }
+
     private String validateTarget(String channel, String rawTarget) {
+        if ("EMAIL".equals(channel)) {
+            return validateEmailTarget(rawTarget);
+        }
         if (!HTTP_CHANNELS.contains(channel)) {
             return null;
         }
@@ -440,6 +484,171 @@ public class ReportSubscriptionService {
                     "推送域名不在允许列表内：" + host);
         }
         return uri.toString();
+    }
+
+    /** 校验并规范化邮件收件人（逗号/分号分隔，最多 10 个）。 */
+    private static String validateEmailTarget(String rawTarget) {
+        if (rawTarget == null || rawTarget.isBlank()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "EMAIL 渠道必须填写收件人地址");
+        }
+        LinkedHashSet<String> recipients = new LinkedHashSet<>();
+        for (String part : rawTarget.split("[;,]")) {
+            String email = part.trim();
+            if (email.isEmpty()) {
+                continue;
+            }
+            if (email.length() > 254 || !EMAIL_PATTERN.matcher(email).matches()) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "收件人邮箱格式不正确：" + email);
+            }
+            recipients.add(email);
+        }
+        if (recipients.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "EMAIL 渠道必须填写收件人地址");
+        }
+        if (recipients.size() > MAX_EMAIL_RECIPIENTS) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "单封邮件收件人不得超过 " + MAX_EMAIL_RECIPIENTS + " 个");
+        }
+        String joined = String.join(",", recipients);
+        if (joined.length() > 512) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "收件人地址总长度不得超过 512 字符");
+        }
+        return joined;
+    }
+
+    String buildEmailSubject(LocalDate day) {
+        return "运营日报 " + day;
+    }
+
+    String emailAttachmentName(LocalDate day) {
+        return "daily-ops-" + day + ".csv";
+    }
+
+    /** 邮件 HTML 正文：指标表格，缺失的域不写 0（与 IM 正文口径一致）。 */
+    String buildEmailHtml(LocalDate day, String rawPayload) {
+        List<MetricRow> rows = metricRows(rawPayload);
+        StringBuilder html = new StringBuilder(1024);
+        html.append("<!doctype html><html><head><meta charset=\"utf-8\"></head>")
+                .append("<body style=\"margin:0;padding:24px;background:#f7f8fa;")
+                .append("font-family:Arial,'Microsoft YaHei',sans-serif;color:#1f2937\">")
+                .append("<div style=\"max-width:820px;margin:0 auto;background:#fff;")
+                .append("border:1px solid #e5e7eb;border-radius:8px;padding:24px\">")
+                .append("<h2 style=\"margin:0 0 8px;font-size:20px\">运营日报 ")
+                .append(escapeHtml(day.toString())).append("</h2>")
+                .append("<p style=\"margin:0 0 16px;color:#6b7280;font-size:13px\">共 ")
+                .append(rows.size())
+                .append(" 项指标；未采集到的业务域不会写成 0。附件为同口径 CSV。</p>")
+                .append("<table style=\"border-collapse:collapse;width:100%;font-size:13px\">")
+                .append("<thead><tr style=\"background:#f3f4f6\">")
+                .append("<th style=\"text-align:left;padding:8px;border:1px solid #e5e7eb\">指标</th>")
+                .append("<th style=\"text-align:right;padding:8px;border:1px solid #e5e7eb\">数值</th>")
+                .append("<th style=\"text-align:left;padding:8px;border:1px solid #e5e7eb\">明细</th>")
+                .append("</tr></thead><tbody>");
+        for (MetricRow row : rows) {
+            html.append("<tr>")
+                    .append("<td style=\"padding:8px;border:1px solid #e5e7eb\">")
+                    .append(escapeHtml(row.label()))
+                    .append("<div style=\"color:#9ca3af;font-size:11px\">")
+                    .append(escapeHtml(row.code())).append("</div></td>")
+                    .append("<td style=\"padding:8px;border:1px solid #e5e7eb;text-align:right;")
+                    .append("font-family:Consolas,monospace\">")
+                    .append(escapeHtml(row.value())).append("</td>")
+                    .append("<td style=\"padding:8px;border:1px solid #e5e7eb;color:#6b7280\">")
+                    .append(escapeHtml(row.detail())).append("</td></tr>");
+        }
+        html.append("</tbody></table>")
+                .append("<p style=\"margin:16px 0 0;color:#9ca3af;font-size:12px\">")
+                .append("本邮件由 MedAssist 运营日报自动投递；如需调整订阅请联系系统管理员。</p>")
+                .append("</div></body></html>");
+        return html.toString();
+    }
+
+    /** 邮件附件 CSV：UTF-8 BOM + 逗号分隔，Excel 可直接打开。 */
+    byte[] buildEmailCsv(LocalDate day, String rawPayload) {
+        List<MetricRow> rows = metricRows(rawPayload);
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        csv.append("日期,指标编码,指标名称,数值,明细\r\n");
+        for (MetricRow row : rows) {
+            csv.append(csvField(day.toString())).append(',')
+                    .append(csvField(row.code())).append(',')
+                    .append(csvField(row.label())).append(',')
+                    .append(csvField(row.value())).append(',')
+                    .append(csvField(row.detail())).append("\r\n");
+        }
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private record MetricRow(String code, String label, String value, String detail) {
+    }
+
+    private List<MetricRow> metricRows(String rawPayload) {
+        Map<String, Object> body;
+        try {
+            body = objectMapper.readValue(rawPayload, new TypeReference<Map<String, Object>>() {
+            });
+        } catch (JacksonException e) {
+            throw new IllegalStateException("日报内容解析失败");
+        }
+        Object rawMetrics = body.get("metrics");
+        if (!(rawMetrics instanceof Map<?, ?> metrics)) {
+            return List.of();
+        }
+        List<MetricRow> rows = new ArrayList<>();
+        for (Map.Entry<?, ?> entry : metrics.entrySet()) {
+            String code = String.valueOf(entry.getKey());
+            Object value = entry.getValue();
+            String number;
+            String detail = "";
+            if (value instanceof Map<?, ?> obj) {
+                number = scalar(obj.get("value"));
+                if (obj.get("detail") != null) {
+                    detail = writeJson(obj.get("detail"));
+                }
+            } else {
+                number = scalar(value);
+            }
+            rows.add(new MetricRow(code, METRIC_LABELS.getOrDefault(code, code), number, detail));
+        }
+        return rows;
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JacksonException e) {
+            return String.valueOf(value);
+        }
+    }
+
+    private static String scalar(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Number number) {
+            try {
+                return new BigDecimal(number.toString()).stripTrailingZeros().toPlainString();
+            } catch (NumberFormatException e) {
+                return number.toString();
+            }
+        }
+        return String.valueOf(value);
+    }
+
+    private static String escapeHtml(String raw) {
+        return raw == null ? "" : raw.replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    private static String csvField(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        if (raw.contains(",") || raw.contains("\"") || raw.contains("\n") || raw.contains("\r")) {
+            return "\"" + raw.replace("\"", "\"\"") + "\"";
+        }
+        return raw;
     }
 
     private static Set<String> parseHosts(String raw) {

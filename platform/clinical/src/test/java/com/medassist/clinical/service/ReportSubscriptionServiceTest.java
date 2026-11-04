@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -25,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -38,14 +40,22 @@ class ReportSubscriptionServiceTest {
 
     private ClinicalRepository repo;
     private ReportSnapshotService snapshotService;
+    private ReportEmailSender emailSender;
     private ReportSubscriptionService service;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final String EMAIL_PAYLOAD = """
+            {"report":"DAILY_OPS","date":"2026-11-03","metrics":{
+              "OUTPATIENT_PAID_AMOUNT":{"value":10.00,"detail":{"visits":2}},
+              "BED_OCCUPANCY_PERCENT":46.8}}
+            """;
 
     @BeforeEach
     void setUp() {
         repo = mock(ClinicalRepository.class);
         snapshotService = mock(ReportSnapshotService.class);
-        service = new ReportSubscriptionService(repo, snapshotService, objectMapper, "", 1000);
+        emailSender = mock(ReportEmailSender.class);
+        service = new ReportSubscriptionService(repo, snapshotService, emailSender, objectMapper, "", 1000);
         when(repo.listReportSnapshots(any(), any(), any())).thenReturn(List.of(
                 new ReportSnapshot(BusinessTime.today().minusDays(1), "OUTPATIENT_PAID_AMOUNT",
                         new BigDecimal("10.00"), null, "SCHEDULED", Instant.now())));
@@ -76,7 +86,7 @@ class ReportSubscriptionServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
 
-        var allow = new ReportSubscriptionService(repo, snapshotService, objectMapper,
+        var allow = new ReportSubscriptionService(repo, snapshotService, emailSender, objectMapper,
                 "hooks.example.com", 1000);
         when(repo.findReportSubscription(any())).thenReturn(Optional.of(
                 new ReportSubscription(UUID.randomUUID(), "h2", "DAILY_OPS", "WEBHOOK",
@@ -233,7 +243,7 @@ class ReportSubscriptionServiceTest {
     @Test
     @DisplayName("IM 渠道：命中白名单时可通过校验")
     void acceptsImChannelWithAllowedHost() {
-        var allow = new ReportSubscriptionService(repo, snapshotService, objectMapper,
+        var allow = new ReportSubscriptionService(repo, snapshotService, emailSender, objectMapper,
                 "qyapi.weixin.qq.com", 1000);
         UUID id = UUID.randomUUID();
         when(repo.findReportSubscription(any())).thenReturn(Optional.of(
@@ -246,5 +256,94 @@ class ReportSubscriptionServiceTest {
 
         assertThat(view.channel()).isEqualTo("WECOM");
         assertThat(view.target()).contains("qyapi.weixin.qq.com");
+    }
+
+    @Test
+    @DisplayName("EMAIL：未配置 SMTP → 503；配置后可创建并规范化收件人")
+    void createsEmailSubscription() {
+        when(emailSender.configured()).thenReturn(false);
+        assertThatThrownBy(() -> service.create(new SaveSubscriptionReq("邮件日报", "EMAIL",
+                "ops@example.com", true, null), "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.UPSTREAM_UNAVAILABLE);
+
+        when(emailSender.configured()).thenReturn(true);
+        var emailService = new ReportSubscriptionService(repo, snapshotService, emailSender,
+                objectMapper, "", 1000);
+        when(repo.findReportSubscription(any())).thenReturn(Optional.of(
+                new ReportSubscription(UUID.randomUUID(), "邮件日报", "DAILY_OPS", "EMAIL",
+                        "ops@example.com,director@example.com", true, 0, "admin01", Instant.now())));
+
+        var view = emailService.create(new SaveSubscriptionReq("邮件日报", "email",
+                " ops@example.com ; director@example.com ", true, null), "admin01");
+
+        assertThat(view.channel()).isEqualTo("EMAIL");
+        assertThat(view.target()).isEqualTo("ops@example.com,director@example.com");
+    }
+
+    @Test
+    @DisplayName("EMAIL：收件人非法或超过 10 个 → 422")
+    void rejectsInvalidEmailTargets() {
+        when(emailSender.configured()).thenReturn(true);
+        var emailService = new ReportSubscriptionService(repo, snapshotService, emailSender,
+                objectMapper, "", 1000);
+
+        assertThatThrownBy(() -> emailService.create(new SaveSubscriptionReq("bad", "EMAIL",
+                "not-an-email", true, null), "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+
+        StringBuilder many = new StringBuilder();
+        for (int i = 0; i < 11; i++) {
+            many.append("u").append(i).append("@example.com,");
+        }
+        assertThatThrownBy(() -> emailService.create(new SaveSubscriptionReq("many", "EMAIL",
+                many.toString(), true, null), "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("邮件正文与 CSV：中文指标名、明细保留、CSV 带 BOM")
+    void buildsEmailContent() {
+        LocalDate day = LocalDate.of(2026, 11, 3);
+
+        String html = service.buildEmailHtml(day, EMAIL_PAYLOAD);
+        String csv = new String(service.buildEmailCsv(day, EMAIL_PAYLOAD), StandardCharsets.UTF_8);
+
+        assertThat(html).contains("运营日报 2026-11-03")
+                .contains("门诊实收（元）").contains("床位使用率（%）")
+                .contains("46.8").contains("visits");
+        assertThat(csv).startsWith("\uFEFF")
+                .contains("日期,指标编码,指标名称,数值,明细")
+                .contains("门诊实收（元）").contains("46.8");
+    }
+
+    @Test
+    @DisplayName("EMAIL 投递成功：调用 SMTP 并落 SENT")
+    void deliversByEmail() {
+        when(emailSender.configured()).thenReturn(true);
+        UUID subId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        LocalDate day = LocalDate.of(2026, 11, 3);
+        when(repo.findReportSubscription(subId)).thenReturn(Optional.of(
+                new ReportSubscription(subId, "邮件日报", "DAILY_OPS", "EMAIL",
+                        "ops@example.com", true, 0, "admin01", Instant.now())));
+        when(repo.reportDeliveryPayload(any())).thenReturn(EMAIL_PAYLOAD);
+        when(repo.findReportDelivery(any(), any(), any())).thenReturn(
+                Optional.of(new ReportDelivery(deliveryId, subId, "邮件日报", "DAILY_OPS", day,
+                        "PENDING", 0, null, Instant.now(), null)),
+                Optional.of(new ReportDelivery(deliveryId, subId, "邮件日报", "DAILY_OPS", day,
+                        "SENT", 1, null, Instant.now(), Instant.now())));
+
+        var view = service.send(subId, day, "admin01");
+
+        assertThat(view.status()).isEqualTo("SENT");
+        verify(emailSender).send(eq("ops@example.com"), contains("2026-11-03"),
+                contains("门诊实收"), eq("daily-ops-2026-11-03.csv"), any(byte[].class));
+        verify(repo).markReportDelivery(eq(deliveryId), eq("SENT"), eq(1), isNull());
     }
 }

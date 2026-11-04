@@ -63,6 +63,23 @@ clinical:
   # 入站内部接口令牌（病历域读取入院时间、医保域拉取收费明细）；与出站共用同一令牌
   internal-api-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
 
+# ---- 报表订阅投递（G19–G23）----
+medassist:
+  report-delivery:
+    # 出站 WEBHOOK / IM 域名白名单（逗号分隔），未配置时禁止创建此类订阅
+    allowed-hosts: ${REPORT_DELIVERY_ALLOWED_HOSTS:}
+    timeout-ms: ${REPORT_DELIVERY_TIMEOUT_MS:3000}
+  # EMAIL 渠道：host 与 from 均非空才视为可用，否则创建订阅会被拒绝
+  report-email:
+    host: ${REPORT_EMAIL_HOST:}
+    port: ${REPORT_EMAIL_PORT:25}
+    username: ${REPORT_EMAIL_USERNAME:}
+    password: ${REPORT_EMAIL_PASSWORD:}
+    from: ${REPORT_EMAIL_FROM:}
+    starttls: ${REPORT_EMAIL_STARTTLS:false}
+    ssl: ${REPORT_EMAIL_SSL:false}
+    timeout-ms: ${REPORT_EMAIL_TIMEOUT_MS:5000}
+
 management:
   endpoints:
     web:

@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="报表订阅"
-      :sub="`运营日报（门诊实收 / 住院周转）定时推送：LOG 写服务日志，WEBHOOK/钉钉/企微/飞书需目标域名在白名单内。当前角色 ${role}`"
+      :sub="`运营日报（门诊实收 / 住院周转）定时推送：LOG 写服务日志，WEBHOOK/钉钉/企微/飞书需目标域名在白名单内，EMAIL 走部署配置的 SMTP（HTML 正文 + CSV 附件）。当前角色 ${role}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loading" @click="loadAll">
@@ -164,7 +164,7 @@
     <AppModal
       v-model="editorOpen"
       :title="editing ? '编辑报表订阅' : '新建报表订阅'"
-      subtitle="LOG：写服务日志；WEBHOOK：POST 日报 JSON 到目标地址（域名需在白名单）"
+      subtitle="LOG：写服务日志；WEBHOOK：POST 日报 JSON（域名需在白名单）；EMAIL：SMTP 发 HTML + CSV 附件"
       width="640px"
     >
       <label class="field">
@@ -179,17 +179,26 @@
           <option value="DINGTALK">钉钉机器人（Markdown）</option>
           <option value="WECOM">企业微信机器人（Markdown）</option>
           <option value="FEISHU">飞书机器人（文本）</option>
+          <option value="EMAIL">EMAIL（SMTP 邮件）</option>
         </select>
       </label>
       <label v-if="form.channel !== 'LOG'" class="field">
-        <span class="label">目标地址</span>
+        <span class="label">{{ form.channel === 'EMAIL' ? '收件人' : '目标地址' }}</span>
         <input
           v-model.trim="form.target"
           class="input mono"
-          placeholder="https://hooks.example.com/medassist/daily"
+          :placeholder="
+            form.channel === 'EMAIL'
+              ? 'ops@example.com; director@example.com'
+              : 'https://hooks.example.com/medassist/daily'
+          "
         />
         <span class="muted small">
-          仅 http/https，且域名必须命中 medassist.report-delivery.allowed-hosts。
+          {{
+            form.channel === 'EMAIL'
+              ? '逗号或分号分隔，最多 10 个；服务端需配置 medassist.report-email.host/from。'
+              : '仅 http/https，且域名必须命中 medassist.report-delivery.allowed-hosts。'
+          }}
         </span>
       </label>
       <label class="check-row">
@@ -373,6 +382,7 @@ function channelLabel(channel: string): string {
   if (channel === 'DINGTALK') return '钉钉'
   if (channel === 'WECOM') return '企业微信'
   if (channel === 'FEISHU') return '飞书'
+  if (channel === 'EMAIL') return '邮件'
   return channel
 }
 

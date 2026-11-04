@@ -194,7 +194,7 @@ export interface SnapshotCapture {
 
 // ---------------------------------------------------------------- 报表订阅（G19）
 
-export type ReportChannel = 'LOG' | 'WEBHOOK' | 'DINGTALK' | 'WECOM' | 'FEISHU'
+export type ReportChannel = 'LOG' | 'WEBHOOK' | 'DINGTALK' | 'WECOM' | 'FEISHU' | 'EMAIL'
 
 export interface ReportSubscription {
   id: string
