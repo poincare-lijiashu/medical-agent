@@ -15,6 +15,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DeptDrugStock;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugTransfer;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugTransferItem;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
+import com.medassist.pharmacy.domain.PharmacyModel.ReportSnapshot;
 import com.medassist.pharmacy.domain.PharmacyModel.StockAdjustment;
 import com.medassist.pharmacy.domain.PharmacyModel.StockLoss;
 import com.medassist.pharmacy.domain.PharmacyModel.StockLossItem;
@@ -1484,6 +1485,45 @@ public class PharmacyRepository {
                 .query((rs, i) -> new DailyDispenseTotal(
                         rs.getDate("day").toLocalDate(), rs.getInt("dispense_count"),
                         rs.getBigDecimal("amount")))
+                .list();
+    }
+
+    // ---------------------------------------------------------------- 日快照（G18）
+
+    /** 写入/覆盖单日单指标快照；唯一键 (snapshot_date, metric) 保证幂等。 */
+    public void upsertReportSnapshot(UUID id, LocalDate day, String metric, BigDecimal value,
+                                     String detail, String source) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.report_snapshot
+                            (id, snapshot_date, metric, value, detail, source)
+                        VALUES (:id, :day, :metric, :value, CAST(:detail AS jsonb), :source)
+                        ON CONFLICT (snapshot_date, metric) DO UPDATE
+                           SET value = EXCLUDED.value,
+                               detail = EXCLUDED.detail,
+                               source = EXCLUDED.source,
+                               updated_at = now()
+                        """)
+                .param("id", id).param("day", day).param("metric", metric)
+                .param("value", value).param("detail", detail).param("source", source)
+                .update();
+    }
+
+    /** 快照查询：metric 为空返回全部；按日期倒序、指标正序。 */
+    public List<ReportSnapshot> listReportSnapshots(LocalDate from, LocalDate to, String metric) {
+        String metricKey = (metric == null || metric.isBlank()) ? null : metric.trim();
+        return jdbc.sql("""
+                        SELECT snapshot_date, metric, value, detail::text AS detail,
+                               source, updated_at
+                          FROM pharmacy_svc.report_snapshot
+                         WHERE snapshot_date >= :from AND snapshot_date <= :to
+                           AND (CAST(:metric AS text) IS NULL OR metric = CAST(:metric AS text))
+                         ORDER BY snapshot_date DESC, metric
+                        """)
+                .param("from", from).param("to", to).param("metric", metricKey)
+                .query((rs, i) -> new ReportSnapshot(
+                        rs.getDate("snapshot_date").toLocalDate(), rs.getString("metric"),
+                        rs.getBigDecimal("value"), rs.getString("detail"),
+                        rs.getString("source"), instantOf(rs, "updated_at")))
                 .list();
     }
 

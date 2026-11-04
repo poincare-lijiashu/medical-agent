@@ -403,4 +403,9 @@ public final class PharmacyModel {
     /** 发药日趋势（G15）：单日发药笔数与金额。 */
     public record DailyDispenseTotal(LocalDate day, int dispenseCount, BigDecimal amount) {
     }
+
+    /** 药事日快照（G18）：单日单指标。 */
+    public record ReportSnapshot(LocalDate snapshotDate, String metric, BigDecimal value,
+                                 String detail, String source, Instant updatedAt) {
+    }
 }

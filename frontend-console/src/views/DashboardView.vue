@@ -194,7 +194,7 @@
       </div>
       <p v-if="sectionError.snapshot" class="section-error">{{ sectionError.snapshot }}</p>
       <p class="muted small snapshot-hint">
-        每天 00:10 自动采集前一日指标；同一天重复补采只覆盖，不产生重复数据。
+        每天 00:10–00:12 自动采集前一日指标（临床/药事/物资）；同一天重复补采只覆盖，不产生重复数据。
       </p>
       <TableSkeleton v-if="snapshotLoading && !snapshotList" :rows="3" />
       <EmptyState
@@ -208,11 +208,14 @@
             <tr>
               <th>日期</th>
               <th class="is-num">门诊实收</th>
-              <th class="is-num">挂号</th>
               <th class="is-num">入院</th>
               <th class="is-num">出院</th>
               <th class="is-num">在院</th>
               <th class="is-num">床位使用率</th>
+              <th class="is-num">发药笔数</th>
+              <th class="is-num">发药金额</th>
+              <th class="is-num">出库单数</th>
+              <th class="is-num">出库金额</th>
               <th>来源</th>
             </tr>
           </thead>
@@ -220,11 +223,14 @@
             <tr v-for="row in snapshotRows" :key="row.date">
               <td data-primary class="mono">{{ row.date }}</td>
               <td class="is-num" data-label="门诊实收">{{ money(row.paidAmount) }}</td>
-              <td class="is-num" data-label="挂号">{{ row.visits }}</td>
               <td class="is-num" data-label="入院">{{ row.admitted }}</td>
               <td class="is-num" data-label="出院">{{ row.discharged }}</td>
               <td class="is-num" data-label="在院">{{ row.inHospital }}</td>
               <td class="is-num" data-label="床位使用率">{{ row.occupancy.toFixed(1) }}%</td>
+              <td class="is-num" data-label="发药笔数">{{ row.dispenseCount }}</td>
+              <td class="is-num" data-label="发药金额">{{ money(row.dispenseAmount) }}</td>
+              <td class="is-num" data-label="出库单数">{{ row.issueCount }}</td>
+              <td class="is-num" data-label="出库金额">{{ money(row.issueAmount) }}</td>
               <td data-label="来源">
                 <StatusPill :status="row.source" />
               </td>
@@ -743,6 +749,8 @@ function exportInpatientTrend() {
 // ---------------------------------------------------------------- 运营日快照（G17）
 
 const snapshotList = ref<SnapshotList | null>(null)
+const snapshotPharmacy = ref<SnapshotList | null>(null)
+const snapshotMaterial = ref<SnapshotList | null>(null)
 const snapshotLoading = ref(false)
 const canCaptureSnapshot = session.hasPermission('clinical:report:snapshot:write')
 
@@ -750,35 +758,43 @@ interface SnapshotRow {
   date: string
   source: string
   paidAmount: number
-  visits: number
   admitted: number
   discharged: number
   inHospital: number
   occupancy: number
+  dispenseCount: number
+  dispenseAmount: number
+  issueCount: number
+  issueAmount: number
 }
 
-/** 把"按指标返回"的快照透视成"按日期一行"，与页面表格同源。 */
+/** 把三个域"按指标返回"的快照透视成"按日期一行"，与页面表格同源。 */
 const snapshotRows = computed<SnapshotRow[]>(() => {
   const byDate = new Map<string, SnapshotRow>()
+  const pick = (date: string, source: string): SnapshotRow => {
+    const hit = byDate.get(date)
+    if (hit) return hit
+    const row: SnapshotRow = {
+      date,
+      source,
+      paidAmount: 0,
+      admitted: 0,
+      discharged: 0,
+      inHospital: 0,
+      occupancy: 0,
+      dispenseCount: 0,
+      dispenseAmount: 0,
+      issueCount: 0,
+      issueAmount: 0,
+    }
+    byDate.set(date, row)
+    return row
+  }
   for (const s of snapshotList.value?.snapshots ?? []) {
-    const row =
-      byDate.get(s.date) ??
-      ({
-        date: s.date,
-        source: s.source,
-        paidAmount: 0,
-        visits: 0,
-        admitted: 0,
-        discharged: 0,
-        inHospital: 0,
-        occupancy: 0,
-      } satisfies SnapshotRow)
+    const row = pick(s.date, s.source)
     switch (s.metric) {
       case 'OUTPATIENT_PAID_AMOUNT':
         row.paidAmount = s.value
-        break
-      case 'OUTPATIENT_VISIT_COUNT':
-        row.visits = s.value
         break
       case 'INPATIENT_ADMITTED_COUNT':
         row.admitted = s.value
@@ -791,10 +807,18 @@ const snapshotRows = computed<SnapshotRow[]>(() => {
         break
       case 'BED_OCCUPANCY_PERCENT':
         row.occupancy = s.value
-        row.source = s.source
         break
     }
-    byDate.set(s.date, row)
+  }
+  for (const s of snapshotPharmacy.value?.snapshots ?? []) {
+    const row = pick(s.date, s.source)
+    if (s.metric === 'DISPENSE_COUNT') row.dispenseCount = s.value
+    if (s.metric === 'DISPENSE_AMOUNT') row.dispenseAmount = s.value
+  }
+  for (const s of snapshotMaterial.value?.snapshots ?? []) {
+    const row = pick(s.date, s.source)
+    if (s.metric === 'ISSUE_COUNT') row.issueCount = s.value
+    if (s.metric === 'ISSUE_AMOUNT') row.issueAmount = s.value
   }
   return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date))
 })
@@ -802,28 +826,40 @@ const snapshotRows = computed<SnapshotRow[]>(() => {
 async function loadSnapshots() {
   sectionError.snapshot = ''
   snapshotLoading.value = true
-  try {
-    snapshotList.value = await clinicalApi.reportSnapshots(isoDaysAgo(6), todayIso())
-  } catch (e) {
-    snapshotList.value = null
-    sectionError.snapshot = `日快照加载失败：${errorText(e)}（可能缺少 clinical:report:snapshot:read 权限）`
-  } finally {
-    snapshotLoading.value = false
+  const from = isoDaysAgo(6)
+  const to = todayIso()
+  const [clinical, pharmacy, material] = await Promise.allSettled([
+    clinicalApi.reportSnapshots(from, to),
+    pharmacyApi.reportSnapshots(from, to),
+    materialApi.reportSnapshots(from, to),
+  ])
+  const failed: string[] = []
+  snapshotList.value = clinical.status === 'fulfilled' ? clinical.value : null
+  if (clinical.status !== 'fulfilled') failed.push('clin')
+  snapshotPharmacy.value = pharmacy.status === 'fulfilled' ? pharmacy.value : null
+  if (pharmacy.status !== 'fulfilled') failed.push('pharm')
+  snapshotMaterial.value = material.status === 'fulfilled' ? material.value : null
+  if (material.status !== 'fulfilled') failed.push('material')
+  if (failed.length > 0) {
+    sectionError.snapshot = `日快照部分加载失败（${failed.join('/')}），请检查对应服务与报表权限`
   }
+  snapshotLoading.value = false
 }
 
 async function captureYesterday() {
   if (!canCaptureSnapshot) return
   snapshotLoading.value = true
-  try {
-    const result = await clinicalApi.captureSnapshot()
-    toast.ok(`已补采 ${result.date} 的 ${result.metrics} 个指标`)
-    await loadSnapshots()
-  } catch (e) {
-    toast.error(errorText(e))
-  } finally {
-    snapshotLoading.value = false
-  }
+  const results = await Promise.allSettled([
+    clinicalApi.captureSnapshot(),
+    pharmacyApi.captureSnapshot(),
+    materialApi.captureSnapshot(),
+  ])
+  const ok = results.filter((r) => r.status === 'fulfilled').length
+  const failed = results.length - ok
+  if (ok > 0) toast.ok(`已补采 ${ok} 个域的昨日快照`)
+  if (failed > 0) toast.warn(`${failed} 个域补采失败，可在对应服务日志中查看原因`)
+  await loadSnapshots()
+  snapshotLoading.value = false
 }
 
 function exportSnapshots() {
@@ -831,15 +867,19 @@ function exportSnapshots() {
   if (rows.length === 0) return
   downloadCsv(
     `运营日快照_${snapshotList.value?.from ?? ''}_${snapshotList.value?.to ?? ''}.csv`,
-    ['日期', '门诊实收', '挂号量', '入院人次', '出院人次', '在院人数', '床位使用率', '来源'],
+    ['日期', '门诊实收', '入院人次', '出院人次', '在院人数', '床位使用率',
+      '发药笔数', '发药金额', '出库单数', '出库金额', '来源'],
     rows.map((r) => [
       r.date,
       r.paidAmount.toFixed(2),
-      r.visits,
       r.admitted,
       r.discharged,
       r.inHospital,
       r.occupancy.toFixed(1),
+      r.dispenseCount,
+      r.dispenseAmount.toFixed(2),
+      r.issueCount,
+      r.issueAmount.toFixed(2),
       r.source,
     ]),
   )

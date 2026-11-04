@@ -322,6 +322,11 @@ export const pharmacyApi = {
   /** 发药日趋势（G15）：默认最近 14 天，最多 92 天。 */
   dispenseTrend: (from?: string, to?: string) =>
     get<DispenseTrendView>('/pharmacy/reports/dispense-trend', { from, to }),
+  /** 药事日快照（G18）。 */
+  reportSnapshots: (from?: string, to?: string, metric?: string) =>
+    get<SnapshotList>('/pharmacy/reports/snapshots', { from, to, metric }),
+  captureSnapshot: (date?: string) =>
+    post<SnapshotCapture>('/pharmacy/reports/snapshots', undefined, { query: { date } }),
   prescription: (id: string) => get<PrescriptionView>(`/pharmacy/prescriptions/${id}`),
   prescriptionAudit: (id: string) =>
     get<PrescriptionAuditView>(`/pharmacy/prescriptions/${id}/audit`),
@@ -553,6 +558,11 @@ export const materialApi = {
   /** 出库日趋势（G15）：默认最近 14 天，最多 92 天。 */
   issueTrend: (from?: string, to?: string) =>
     get<IssueTrendView>('/material/reports/issue-trend', { from, to }),
+  /** 物资日快照（G18）。 */
+  reportSnapshots: (from?: string, to?: string, metric?: string) =>
+    get<SnapshotList>('/material/reports/snapshots', { from, to, metric }),
+  captureSnapshot: (date?: string) =>
+    post<SnapshotCapture>('/material/reports/snapshots', undefined, { query: { date } }),
 }
 
 // ---------------------------------------------------------------- 病案编码（G4）

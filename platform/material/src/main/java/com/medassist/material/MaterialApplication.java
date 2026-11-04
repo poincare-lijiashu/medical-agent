@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 物资耗材服务（G3）：耗材目录 → 批次效期库存 → 科室/手术出库 → 使用追溯与批次召回。
@@ -21,6 +22,7 @@ import org.springframework.context.annotation.Bean;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan("com.medassist.material.config")
+@EnableScheduling
 public class MaterialApplication {
 
     public static void main(String[] args) {

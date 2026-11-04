@@ -183,4 +183,9 @@ public final class MaterialModel {
     public record DailyIssueTotal(LocalDate day, int issueCount, int itemQuantity,
                                   BigDecimal totalAmount) {
     }
+
+    /** 物资日快照（G18）：单日单指标。 */
+    public record ReportSnapshot(LocalDate snapshotDate, String metric, BigDecimal value,
+                                 String detail, String source, Instant updatedAt) {
+    }
 }
