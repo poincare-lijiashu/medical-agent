@@ -339,6 +339,24 @@ Java 微服务矩阵（`platform/`）与 Python AI 中台的集群形态已交�
 
 完整步骤、values 说明与本机实测记录见 [`deploy/README.md`](../deploy/README.md)。
 
+## 发布门禁、压测与容灾演练（G43）
+
+三道可重复执行的门禁脚本（全部 ASCII，Windows PowerShell 5.1 可直接跑）：
+
+| 用途 | 命令 | 通过标准 |
+| --- | --- | --- |
+| 发布后冒烟门禁 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\release_gate.ps1` | 网关健康 + 登录 + EMPI/临床/病案/输血/医技读接口 200，未带令牌仍 401 |
+| 容量基线 | `... scripts\perf\platform_loadtest.ps1 -Concurrency 8 -DurationSeconds 20 -PaceMs 50` | p95 ≤ 800ms、错误率 ≤ 1%、429 ≤ 1%（超过说明压测节奏高于限流阈值） |
+| 备份恢复演练 | `... scripts\dr\pg_restore_drill.ps1` | dump 可恢复，5 张核心表行数一致，自动清理演练库 |
+
+**本机实测（2026-11-04，单机 + Docker PG）**
+
+- 容量：2535 请求 / 0 错误 / 0 限流，126.8 rps；p50 5.4ms、p95 12.7ms、p99 17.1ms、max 33.8ms。
+- 容灾：dump 3.83MB，恢复 + 校验 **11.2s**，演练总耗时 12.4s；`app_user` 99、`patient` 576、`admission` 172、`medical_record` 122、`prescription` 212 行数全部一致。
+- CI 门禁：后端 `mvn package`（170 个测试类 / 1606 用例）、前端 `npm ci + typecheck + build`、Helm lint + dev/staging/prod 三套 template 渲染。
+
+**回滚顺序**：`helm rollback` / Argo CD 回退到上一 Revision → 等 readiness 通过 → 重跑 `release_gate.ps1`；数据库迁移只前进不回滚，回退前确认本次迁移向后兼容（新增表/列/索引，不删不改旧列）。
+
 ## 高并发部署
 
 ### uvicorn workers（经验公式）

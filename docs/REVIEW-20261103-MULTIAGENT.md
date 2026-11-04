@@ -13,7 +13,7 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G42 统一身份 SSO）。
+- **HEAD**：以 `git log -1` 为准（本轮 G43 生产运维加固）。
 - **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），426 个主代码 Java 文件、170 个测试类、**1606 项测试全绿**。
 - **前端**：43 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
 - **数据库**：auth V70、tech V12、pharmacy V19、emr V21、insurance V19、material V4、clinical V55（各服务独立 schema）。
@@ -46,15 +46,15 @@
 | 输血 | 可用 | 85% | 输血申请、配血（可多次换袋/一次申请一条相合）、发血、双人核对输注、输注记录、不良反应分级上报、看板 | 血液库存与效期预警、退血/报废、输血相容性规则引擎 |
 | CA 电子签名 | 可用 | 80% | 医生/护士签名适配层（Mock HMAC + 厂商 HTTP 双模式）、病历签名 `caSign=true` 同步取签、签名台账、验签留痕、撤销（原因必填、幂等）、看板 | 知情同意书签名、签名时间戳/证书链校验、厂商正式联调、无纸化归档包 |
 | 未建业务线 | 未开始 | 0–5% | — | 患者移动端 |
-| 部署与运维 | 部分 | 65% | Helm/ArgoCD、备份 CronJob、Loki/Prometheus 局部接入 | 压测、容灾演练、CI 门禁、灰度发布 |
+| 部署与运维 | 可用 | 82% | Helm/ArgoCD（滚动 maxUnavailable=0 + PDB）、备份 CronJob、Loki/Prometheus 局部接入、发布后冒烟门禁、容量基线（p95 12.7ms / 0 错误）、备份恢复演练（3.83MB / 11.2s / 行数一致）、CI 前后端 + Helm 三环境门禁 | 多院区发布策略、混沌工程、跨机房容灾 |
 
 **加权结论**：
 
 - **核心 HIS 业务闭环（门诊 / 急诊 / 住院 / 药事 / 医技 / 病案 / 医保 / 物资）≈ 97%**：都有从开单到闭环的状态机与审计，主要缺报表与少量尾项。
 - **完整商业版（含报表、未建业务线、运维加固）≈ 84–88%**：差距主要在"业务面宽度"和"生产运维"，不是已实现流程的深度。
-- **可交付状态**：单院区核心 HIS 可演示/试运行；距正式生产还差医保实时接口省局联调、票据厂商正式联调、压测与容灾。
+- **可交付状态**：单院区核心 HIS 可演示/试运行；距正式生产还差医保实时接口省局联调、票据厂商正式联调、多院区/多租户隔离。
 
-### 2. 已完成的关键增量（G1–G42，均有真实链路验证）
+### 2. 已完成的关键增量（G1–G43，均有真实链路验证）
 
 | 编号 | 内容 | 关键点 |
 |---|---|---|
@@ -100,6 +100,7 @@
 | G40 | 输血闭环 | clinical V55：`blood_product`（4 种血液成分种子）+ `transfusion_request`（REQUESTED→CROSSMATCHED→ISSUED→TRANSFUSING→COMPLETED，可取消）+ `blood_crossmatch`（血袋号全局唯一、一次申请最多一条 COMPATIBLE、不合可换袋重配）+ `transfusion_record`（双人核对 CHECK checker_a<>checker_b）+ `transfusion_reaction`（一次输注一份，分级/症状/处理）；`/clinical/transfusion` 提供成分字典、申请、配血、发血、双人核对开始、完成、不良反应、看板；auth V68 新增 5 个权限点与 `BLOOD_BANK` 角色；新增「输血管理」页（申请/配血/发血/开始/完成/反应/详情） |
 | G41 | CA 电子签名与无纸化 | emr V21 `ca_signature`（签名记录唯一、VALID/REVOKED、撤销必须写原因/人/时间 CHECK、验签次数与最近结果留痕）+ auth V69 四个权限点（read/sign/verify/manage）；CA 适配层 `CaSignatureProvider` 支持 mock（HMAC-SHA256，签名时间截断到微秒以匹配 timestamptz 精度）与 vendor（POST /sign、/verify，密钥仅从部署配置注入）；`/emr/ca` 提供模式、台账、验签、撤销、看板；病历签名接口新增 `caSign=true`，CA 失败回滚整笔病历签名；新增「CA 电子签名」页（KPI、台账筛选、验签、撤销、详情）；错误码 44550–44556 与 404/409/422/503 契约测试固化 |
 | G42 | 统一身份 SSO（OIDC） | auth V70 `sso_login_state`（一次性 state、PKCE verifier、nonce、5 分钟过期，`UPDATE ... RETURNING` 原子消费）+ `sso_identity`（provider+subject 唯一、provider+user 唯一，防换号接管）；`OidcClient` 负责发现文档/JWKS 缓存、授权码换 token、RS256 验签与 iss 校验（发现文档 issuer 不一致直接拒绝）；`/auth/sso/config`、`/oidc/authorize`、`/oidc/callback` 登录前接口，校验 aud/nonce 后映射本地账号或按配置自动开户，复用本地令牌签发与 `SSO_LOGIN` 审计；网关白名单与 `ActorGuardFilter` 同步放行；登录页新增统一身份入口与回调页；错误码 40110–40112/40310–40311/50310 |
+| G43 | 生产运维加固 | CI 增加前端门禁（`npm ci` + `vue-tsc` + `vite build`），与既有后端 `mvn package`、Helm lint/三环境渲染并列；新增 `scripts/release/release_gate.ps1`（网关健康 + 登录 + 五域读探针 + 未认证 401，失败即退出 1）；新增 `scripts/perf/platform_loadtest.ps1`（固定并发 + 主动限速，统计 p50/p95/p99/错误/限流并按阈值门禁）；新增 `scripts/dr/pg_restore_drill.ps1`（pg_dump → 临时库恢复 → 5 张核心表行数比对 → 自动清理）；实测 2535 请求 0 错误 p95 12.7ms、dump 3.83MB 恢复 11.2s 行数一致 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
@@ -108,13 +109,13 @@
 **P0（下一轮直接做）**
 
 1. **多院区 / 多租户**：租户与院区边界、机构切换、数据范围收敛（auth 组织模型 + 各域数据归属 + 网关租户上下文）。
-2. **生产运维加固**：压测基线、容灾演练、CI 质量门禁、灰度发布与回滚预案。
 
 **P1**
 
-3. LDAP/AD 绑定与 SSO 账号生命周期（离职禁用、身份解绑、管理员手工绑定界面）。
-4. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
-5. CA 厂商正式联调、知情同意书签名与无纸化归档包。
+2. LDAP/AD 绑定与 SSO 账号生命周期（离职禁用、身份解绑、管理员手工绑定界面）。
+3. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
+4. CA 厂商正式联调、知情同意书签名与无纸化归档包。
+5. 混沌工程与跨机房容灾（在现有单机恢复演练基础上扩展）。
 
 **P2**
 
