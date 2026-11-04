@@ -2,7 +2,7 @@
   <div class="page">
     <PageHeader
       title="报表订阅"
-      :sub="`运营日报（门诊实收 / 住院周转）定时推送：LOG 渠道写服务日志，WEBHOOK 需目标域名在白名单内。当前角色 ${role}`"
+      :sub="`运营日报（门诊实收 / 住院周转）定时推送：LOG 写服务日志，WEBHOOK/钉钉/企微/飞书需目标域名在白名单内。当前角色 ${role}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loading" @click="loadAll">
@@ -74,7 +74,7 @@
                 <div class="mono muted small">{{ s.reportCode }}</div>
               </td>
               <td data-label="渠道">
-                <StatusPill :value="s.channel" :label="s.channel === 'LOG' ? '服务日志' : 'Webhook'" />
+                <StatusPill :value="s.channel" :label="channelLabel(s.channel)" />
               </td>
               <td data-label="目标" class="mono small">{{ s.target ?? '—' }}</td>
               <td data-label="状态">
@@ -175,10 +175,13 @@
         <span class="label">渠道</span>
         <select v-model="form.channel" class="select">
           <option value="LOG">LOG（服务日志）</option>
-          <option value="WEBHOOK">WEBHOOK（HTTP 回调）</option>
+          <option value="WEBHOOK">WEBHOOK（原始 JSON）</option>
+          <option value="DINGTALK">钉钉机器人（Markdown）</option>
+          <option value="WECOM">企业微信机器人（Markdown）</option>
+          <option value="FEISHU">飞书机器人（文本）</option>
         </select>
       </label>
-      <label v-if="form.channel === 'WEBHOOK'" class="field">
+      <label v-if="form.channel !== 'LOG'" class="field">
         <span class="label">目标地址</span>
         <input
           v-model.trim="form.target"
@@ -362,6 +365,15 @@ async function send(s: ReportSubscription) {
 
 function dt(value: string): string {
   return value ? value.replace('T', ' ').slice(0, 19) : '—'
+}
+
+function channelLabel(channel: string): string {
+  if (channel === 'LOG') return '服务日志'
+  if (channel === 'WEBHOOK') return 'Webhook'
+  if (channel === 'DINGTALK') return '钉钉'
+  if (channel === 'WECOM') return '企业微信'
+  if (channel === 'FEISHU') return '飞书'
+  return channel
 }
 
 function deliveryLabel(status: string): string {

@@ -176,4 +176,75 @@ class ReportSubscriptionServiceTest {
         service.listDeliveries(" - ", 0);
         verify(repo).listReportDeliveries(eq(" - "), eq(1));
     }
+
+    @Test
+    @DisplayName("IM 渠道：钉钉/企微/飞书消息体与可读正文")
+    void buildsImChannelBodies() {
+        LocalDate day = LocalDate.of(2026, 11, 3);
+        String raw = """
+                {"report":"DAILY_OPS","date":"2026-11-03","metrics":{
+                  "OUTPATIENT_PAID_AMOUNT":12.5,
+                  "OUTPATIENT_VISIT_COUNT":3,
+                  "INPATIENT_ADMITTED_COUNT":4,
+                  "INPATIENT_DISCHARGED_COUNT":1,
+                  "INPATIENT_IN_HOSPITAL_COUNT":95,
+                  "BED_OCCUPANCY_PERCENT":{"value":46.8,"detail":{"usableBeds":203}},
+                  "DISPENSE_COUNT":6,
+                  "DISPENSE_AMOUNT":88.0,
+                  "ISSUE_COUNT":2,
+                  "ISSUE_ITEM_QUANTITY":5,
+                  "ISSUE_AMOUNT":24000.0
+                }}
+                """;
+
+        String text = service.buildMessageText(day, raw);
+        assertThat(text).contains("运营日报 2026-11-03")
+                .contains("入院 4").contains("在院 95").contains("床位使用率 46.8%")
+                .contains("发药 6 笔").contains("出库 2 单");
+
+        assertThat(service.buildChannelBody("DINGTALK", day, raw))
+                .contains("\"msgtype\":\"markdown\"")
+                .contains("\"title\":\"运营日报 2026-11-03\"");
+        assertThat(service.buildChannelBody("WECOM", day, raw))
+                .contains("\"msgtype\":\"markdown\"")
+                .contains("\"content\"");
+        assertThat(service.buildChannelBody("FEISHU", day, raw))
+                .contains("\"msg_type\":\"text\"")
+                .contains("\"content\"");
+        assertThat(service.buildChannelBody("WEBHOOK", day, raw)).isEqualTo(raw);
+    }
+
+    @Test
+    @DisplayName("IM 正文：缺失的域不写 0，避免把未采集误报为业务量为 0")
+    void omitsMissingMetricSections() {
+        String raw = """
+                {"report":"DAILY_OPS","metrics":{
+                  "OUTPATIENT_PAID_AMOUNT":0,
+                  "INPATIENT_ADMITTED_COUNT":4
+                }}
+                """;
+
+        String text = service.buildMessageText(LocalDate.of(2026, 11, 3), raw);
+
+        assertThat(text).contains("门诊实收").contains("入院 4")
+                .doesNotContain("药事").doesNotContain("物资");
+    }
+
+    @Test
+    @DisplayName("IM 渠道：命中白名单时可通过校验")
+    void acceptsImChannelWithAllowedHost() {
+        var allow = new ReportSubscriptionService(repo, snapshotService, objectMapper,
+                "qyapi.weixin.qq.com", 1000);
+        UUID id = UUID.randomUUID();
+        when(repo.findReportSubscription(any())).thenReturn(Optional.of(
+                new ReportSubscription(id, "企微日报", "DAILY_OPS", "WECOM",
+                        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x", true, 0,
+                        "admin01", Instant.now())));
+
+        var view = allow.create(new SaveSubscriptionReq("企微日报", "wecom",
+                "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x", true, null), "admin01");
+
+        assertThat(view.channel()).isEqualTo("WECOM");
+        assertThat(view.target()).contains("qyapi.weixin.qq.com");
+    }
 }

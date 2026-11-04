@@ -194,11 +194,13 @@ export interface SnapshotCapture {
 
 // ---------------------------------------------------------------- 报表订阅（G19）
 
+export type ReportChannel = 'LOG' | 'WEBHOOK' | 'DINGTALK' | 'WECOM' | 'FEISHU'
+
 export interface ReportSubscription {
   id: string
   name: string
   reportCode: string
-  channel: 'LOG' | 'WEBHOOK'
+  channel: ReportChannel
   target: string | null
   enabled: boolean
   version: number
@@ -221,7 +223,7 @@ export interface ReportDelivery {
 
 export interface ReportSubscriptionInput {
   name: string
-  channel: 'LOG' | 'WEBHOOK'
+  channel: ReportChannel
   target?: string | null
   enabled?: boolean
   version?: number | null

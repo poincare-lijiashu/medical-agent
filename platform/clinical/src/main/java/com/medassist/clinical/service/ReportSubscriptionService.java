@@ -19,6 +19,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
@@ -54,6 +55,12 @@ public class ReportSubscriptionService {
 
     public static final String REPORT_CODE = "DAILY_OPS";
     public static final int MAX_ATTEMPTS = 3;
+
+    /** 需要 HTTP 目标地址的渠道：WEBHOOK 发原始 JSON，其余发对应机器人消息格式。 */
+    private static final Set<String> HTTP_CHANNELS =
+            new LinkedHashSet<>(List.of("WEBHOOK", "DINGTALK", "WECOM", "FEISHU"));
+    private static final Set<String> ALL_CHANNELS =
+            new LinkedHashSet<>(List.of("LOG", "WEBHOOK", "DINGTALK", "WECOM", "FEISHU"));
 
     private static final int DEFAULT_DELIVERY_LIMIT = 100;
     private static final int MAX_DELIVERY_LIMIT = 200;
@@ -198,34 +205,141 @@ public class ReportSubscriptionService {
     private ReportDelivery deliver(ReportSubscription sub, ReportDelivery delivery) {
         int attempts = delivery.attempts() + 1;
         String payload = repo.reportDeliveryPayload(delivery.id());
+        LocalDate day = delivery.reportDate();
         try {
-            if ("WEBHOOK".equals(sub.channel())) {
-                postWebhook(sub.target(), payload == null ? buildPayload(delivery.reportDate()) : payload);
+            if (HTTP_CHANNELS.contains(sub.channel())) {
+                postChannel(sub.channel(), sub.target(),
+                        payload == null ? buildPayload(day) : payload, day);
             } else {
                 log.info("report.delivery.log subscription={} date={} payload={}",
-                        sub.name(), delivery.reportDate(), payload);
+                        sub.name(), day, payload);
             }
             repo.markReportDelivery(delivery.id(), "SENT", attempts, null);
         } catch (RuntimeException e) {
             repo.markReportDelivery(delivery.id(), "FAILED", attempts, truncate(e.getMessage()));
             log.warn("report.delivery.failed subscription={} date={} attempts={} reason={}",
-                    sub.name(), delivery.reportDate(), attempts, e.getMessage());
+                    sub.name(), day, attempts, e.getMessage());
         }
         return repo.findReportDelivery(delivery.subscriptionId(), delivery.reportCode(),
                         delivery.reportDate())
                 .orElse(delivery);
     }
 
-    private void postWebhook(String target, String payload) {
+    private void postChannel(String channel, String target, String rawPayload, LocalDate day) {
         if (target == null || target.isBlank()) {
-            throw new IllegalStateException("WEBHOOK 订阅缺少目标地址");
+            throw new IllegalStateException("该渠道缺少目标地址");
         }
-        webhookClient.post()
+        String body = buildChannelBody(channel, day, rawPayload);
+        String response = webhookClient.post()
                 .uri(target)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(payload)
+                .body(body)
                 .retrieve()
-                .toBodilessEntity();
+                .body(String.class);
+        validateChannelResponse(channel, response);
+    }
+
+    /** 按渠道生成请求体：WEBHOOK 透传日报 JSON，IM 转成机器人消息格式。 */
+    String buildChannelBody(String channel, LocalDate day, String rawPayload) {
+        if ("WEBHOOK".equals(channel)) {
+            return rawPayload;
+        }
+        String text = buildMessageText(day, rawPayload);
+        Map<String, Object> body = new LinkedHashMap<>();
+        switch (channel) {
+            case "DINGTALK" -> {
+                body.put("msgtype", "markdown");
+                body.put("markdown", Map.of("title", "运营日报 " + day, "text", text));
+            }
+            case "WECOM" -> {
+                body.put("msgtype", "markdown");
+                body.put("markdown", Map.of("content", text));
+            }
+            case "FEISHU" -> {
+                body.put("msg_type", "text");
+                body.put("content", Map.of("text", text));
+            }
+            default -> throw new IllegalStateException("未知渠道：" + channel);
+        }
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (JacksonException e) {
+            throw new IllegalStateException("机器人消息序列化失败");
+        }
+    }
+
+    /** 人可读日报正文（企业 IM 不支持表格，用分行要点）。 */
+    String buildMessageText(LocalDate day, String rawPayload) {
+        JsonNode metrics;
+        try {
+            metrics = objectMapper.readTree(rawPayload).path("metrics");
+        } catch (JacksonException e) {
+            throw new IllegalStateException("日报内容解析失败");
+        }
+        StringBuilder text = new StringBuilder("### 运营日报 ").append(day);
+        if (hasMetric(metrics, "OUTPATIENT_PAID_AMOUNT")) {
+            text.append("\n- 门诊实收：¥").append(metricText(metrics, "OUTPATIENT_PAID_AMOUNT", "0"))
+                    .append("（挂号 ").append(metricText(metrics, "OUTPATIENT_VISIT_COUNT", "0"))
+                    .append(" 人次）");
+        }
+        if (hasMetric(metrics, "INPATIENT_ADMITTED_COUNT")) {
+            text.append("\n- 住院：入院 ").append(metricText(metrics, "INPATIENT_ADMITTED_COUNT", "0"))
+                    .append(" / 出院 ").append(metricText(metrics, "INPATIENT_DISCHARGED_COUNT", "0"))
+                    .append(" / 在院 ").append(metricText(metrics, "INPATIENT_IN_HOSPITAL_COUNT", "0"))
+                    .append(" 人（床位使用率 ")
+                    .append(metricText(metrics, "BED_OCCUPANCY_PERCENT", "0")).append("%）");
+        }
+        if (hasMetric(metrics, "DISPENSE_COUNT")) {
+            text.append("\n- 药事：发药 ").append(metricText(metrics, "DISPENSE_COUNT", "0"))
+                    .append(" 笔 / ¥").append(metricText(metrics, "DISPENSE_AMOUNT", "0"));
+        }
+        if (hasMetric(metrics, "ISSUE_COUNT")) {
+            text.append("\n- 物资：出库 ").append(metricText(metrics, "ISSUE_COUNT", "0"))
+                    .append(" 单 / ").append(metricText(metrics, "ISSUE_ITEM_QUANTITY", "0"))
+                    .append(" 件 / ¥").append(metricText(metrics, "ISSUE_AMOUNT", "0"));
+        }
+        return text.append("\n").toString();
+    }
+
+    /** 指标是否存在：缺失的域不写"0"，避免把"没采集"误报成"业务量为 0"。 */
+    private static boolean hasMetric(JsonNode metrics, String key) {
+        JsonNode node = metrics.path(key);
+        return !node.isMissingNode() && !node.isNull();
+    }
+
+    private static String metricText(JsonNode metrics, String key, String fallback) {
+        JsonNode node = metrics.path(key);
+        if (node.isObject()) {
+            node = node.path("value");
+        }
+        if (node.isMissingNode() || node.isNull()) {
+            return fallback;
+        }
+        // 快照金额/比例以 numeric 存储，去掉 4.00 → 4、0.00 → 0，IM 正文更易读
+        return node.isNumber() ? node.decimalValue().stripTrailingZeros().toPlainString()
+                : node.asText();
+    }
+
+    /** IM 机器人 HTTP 200 仍可能业务失败：解析 errcode/code 并转成投递失败。 */
+    private void validateChannelResponse(String channel, String response) {
+        if (!HTTP_CHANNELS.contains(channel) || "WEBHOOK".equals(channel)) {
+            return;
+        }
+        if (response == null || response.isBlank()) {
+            throw new IllegalStateException("IM 返回空响应");
+        }
+        JsonNode node;
+        try {
+            node = objectMapper.readTree(response);
+        } catch (JacksonException e) {
+            throw new IllegalStateException("IM 响应不是合法 JSON");
+        }
+        String codeField = "FEISHU".equals(channel) ? "code" : "errcode";
+        int code = node.path(codeField).asInt(-1);
+        if (code != 0) {
+            String message = node.path("errmsg").asText(node.path("msg").asText("未知错误"));
+            throw new IllegalStateException("IM 返回错误 " + code + "：" + message);
+        }
     }
 
     private void ensureSnapshot(LocalDate day, String actor) {
@@ -289,18 +403,19 @@ public class ReportSubscriptionService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "渠道不能为空");
         }
         String channel = raw.trim().toUpperCase(Locale.ROOT);
-        if (!"LOG".equals(channel) && !"WEBHOOK".equals(channel)) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "渠道只支持 LOG 或 WEBHOOK");
+        if (!ALL_CHANNELS.contains(channel)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "渠道只支持 LOG / WEBHOOK / DINGTALK / WECOM / FEISHU");
         }
         return channel;
     }
 
     private String validateTarget(String channel, String rawTarget) {
-        if ("LOG".equals(channel)) {
+        if (!HTTP_CHANNELS.contains(channel)) {
             return null;
         }
         if (rawTarget == null || rawTarget.isBlank()) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "WEBHOOK 渠道必须填写目标地址");
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "该渠道必须填写目标地址");
         }
         URI uri;
         try {
@@ -318,7 +433,7 @@ public class ReportSubscriptionService {
         }
         if (allowedHosts.isEmpty()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "未配置允许的推送域名（medassist.report-delivery.allowed-hosts），暂不能创建 WEBHOOK 订阅");
+                    "未配置允许的推送域名（medassist.report-delivery.allowed-hosts），暂不能创建 WEBHOOK/IM 订阅");
         }
         if (!allowedHosts.contains(host.toLowerCase(Locale.ROOT))) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
