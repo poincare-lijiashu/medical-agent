@@ -168,6 +168,30 @@ export interface InpatientTrendView {
   prevDischarged: number
 }
 
+// ---------------------------------------------------------------- 运营日快照（G17）
+
+export interface ReportSnapshot {
+  date: string
+  metric: string
+  value: number
+  /** 指标上下文 JSON 文本（如床位使用率的可用床位/在院人数），无上下文为 null。 */
+  detail: string | null
+  source: 'SCHEDULED' | 'MANUAL'
+  updatedAt: string
+}
+
+export interface SnapshotList {
+  from: string
+  to: string
+  snapshots: ReportSnapshot[]
+}
+
+export interface SnapshotCapture {
+  date: string
+  metrics: number
+  source: string
+}
+
 export interface Ward {
   id: string
   code: string

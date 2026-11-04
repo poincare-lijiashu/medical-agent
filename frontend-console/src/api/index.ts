@@ -28,6 +28,8 @@ import type {
   ChargeMapping,
   GroupSimulation,
   InpatientTrendView,
+  SnapshotCapture,
+  SnapshotList,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -163,6 +165,12 @@ export const clinicalApi = {
   /** 住院周转趋势（入院/出院/在院/平均住院日；最多 92 天）。 */
   inpatientTrend: (from?: string, to?: string) =>
     get<InpatientTrendView>('/clinical/reports/inpatient-trend', { from, to }),
+  /** 运营日快照（G17）：默认最近 7 天；metric 为空返回全部指标。 */
+  reportSnapshots: (from?: string, to?: string, metric?: string) =>
+    get<SnapshotList>('/clinical/reports/snapshots', { from, to, metric }),
+  /** 手动补采指定日期（缺省昨天）的快照，幂等覆盖。 */
+  captureSnapshot: (date?: string) =>
+    post<SnapshotCapture>('/clinical/reports/snapshots', undefined, { query: { date } }),
 
   // ---- 收费票据（G14）----
   receipts: (visitId: string, limit = 50) =>

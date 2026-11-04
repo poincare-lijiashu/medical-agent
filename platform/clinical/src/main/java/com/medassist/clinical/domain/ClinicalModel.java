@@ -455,6 +455,11 @@ public final class ClinicalModel {
     public record AdmissionPeriodSummary(int admittedCount, int dischargedCount) {
     }
 
+    /** 运营日快照（G17）：单日单指标。 */
+    public record ReportSnapshot(LocalDate snapshotDate, String metric, BigDecimal value,
+                                 String detail, String source, Instant updatedAt) {
+    }
+
     /**
      * 收费票据（G14）。
      *

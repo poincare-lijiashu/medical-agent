@@ -389,4 +389,20 @@ public final class ClinicalDtos {
     public record InpatientTrendPoint(LocalDate date, int admittedCount, int dischargedCount,
                                       int inHospitalCount, BigDecimal avgStayDays) {
     }
+
+    /**
+     * 运营日快照（G17）：单日单指标。
+     *
+     * <p>{@code detail} 是 JSON 文本（如床位使用率的可用床位/在院人数），无上下文时为 null；
+     * {@code source} 为 SCHEDULED（定时）或 MANUAL（手动补采）。
+     */
+    public record SnapshotView(LocalDate date, String metric, BigDecimal value, String detail,
+                               String source, Instant updatedAt) {
+    }
+
+    public record SnapshotListView(LocalDate from, LocalDate to, List<SnapshotView> snapshots) {
+    }
+
+    public record SnapshotCaptureView(LocalDate date, int metrics, String source) {
+    }
 }
