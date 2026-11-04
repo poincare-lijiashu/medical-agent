@@ -27,6 +27,7 @@ import type {
   InsuranceReconcile,
   ChargeMapping,
   GroupSimulation,
+  InpatientTrendView,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -159,6 +160,9 @@ export const clinicalApi = {
   /** 门诊实收趋势（按收款日聚合，缺日补 0；最多 92 天）。 */
   outpatientTrend: (from?: string, to?: string) =>
     get<OutpatientTrendView>('/clinical/finance/outpatient-trend', { from, to }),
+  /** 住院周转趋势（入院/出院/在院/平均住院日；最多 92 天）。 */
+  inpatientTrend: (from?: string, to?: string) =>
+    get<InpatientTrendView>('/clinical/reports/inpatient-trend', { from, to }),
 
   // ---- 收费票据（G14）----
   receipts: (visitId: string, limit = 50) =>

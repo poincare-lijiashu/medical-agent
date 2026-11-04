@@ -102,6 +102,73 @@
 
     <div class="sheet">
       <div class="sheet-head">
+        <span class="sheet-title">住院周转趋势</span>
+        <span v-if="inpatientTrend" class="badge badge--neutral">
+          {{ inpatientTrend.from }} ~ {{ inpatientTrend.to }}
+        </span>
+        <span class="spacer" />
+        <div class="seg" role="tablist" aria-label="住院周转趋势区间">
+          <button
+            v-for="d in [7, 14, 30]"
+            :key="`inp-${d}`"
+            class="seg-btn"
+            :class="{ active: inpatientDays === d }"
+            type="button"
+            @click="switchInpatientDays(d)"
+          >
+            近 {{ d }} 天
+          </button>
+        </div>
+        <button
+          class="btn btn--sm"
+          type="button"
+          :disabled="!inpatientTrend || inpatientLoading"
+          @click="exportInpatientTrend"
+        >
+          导出 CSV
+        </button>
+      </div>
+      <p v-if="sectionError.inpatientTrend" class="section-error">{{ sectionError.inpatientTrend }}</p>
+      <TableSkeleton v-if="inpatientLoading && !inpatientTrend" :rows="3" />
+      <template v-else-if="inpatientTrend">
+        <div class="trend-kpis">
+          <span>入院 <strong>{{ inpatientTrend.totalAdmitted }}</strong> 人次</span>
+          <span>出院 <strong>{{ inpatientTrend.totalDischarged }}</strong> 人次</span>
+          <span>在院 <strong>{{ inpatientTrend.currentInHospital }}</strong> 人</span>
+          <span>
+            床位使用率
+            <strong>{{ inpatientTrend.bedOccupancyPercent.toFixed(1) }}%</strong>
+            <span class="muted small">（{{ inpatientTrend.usableBeds }} 张可用床）</span>
+          </span>
+          <span>平均住院日 <strong>{{ inpatientTrend.avgStayDays.toFixed(1) }}</strong> 天</span>
+          <span :class="admittedDeltaClass">入院环比 <strong>{{ admittedDeltaLabel }}</strong></span>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-legend">
+            <span><i class="dot dot--accent" />入院</span>
+            <span><i class="dot dot--ok" />出院</span>
+          </div>
+          <svg viewBox="0 0 720 190" role="img" aria-label="住院每日入出院趋势柱状图">
+            <line x1="8" y1="170" x2="712" y2="170" class="chart-axis" />
+            <g v-for="b in inpatientBars" :key="b.key">
+              <rect :x="b.x" :y="b.y" :width="b.width" :height="b.height" rx="2" :class="b.cls">
+                <title>{{ b.tip }}</title>
+              </rect>
+            </g>
+            <text x="8" y="186" class="chart-label">{{ inpatientTrend.points[0]?.date }}</text>
+            <text x="712" y="186" text-anchor="end" class="chart-label">
+              {{ inpatientTrend.points[inpatientTrend.points.length - 1]?.date }}
+            </text>
+            <text x="712" y="14" text-anchor="end" class="chart-label">
+              峰值 {{ inpatientMax }}
+            </text>
+          </svg>
+        </div>
+      </template>
+    </div>
+
+    <div class="sheet">
+      <div class="sheet-head">
         <span class="sheet-title">药事与物资趋势</span>
         <span class="spacer" />
         <div class="seg" role="tablist" aria-label="药事物资趋势区间">
@@ -335,6 +402,7 @@ import { errorText } from '@/api/http'
 import type {
   CodingSummary,
   DispenseTrendView,
+  InpatientTrendView,
   IssueTrendView,
   MaterialSummary,
   OutpatientDaily,
@@ -483,6 +551,123 @@ function exportTrend() {
     p.refundedAmount.toFixed(2),
   ])
   downloadCsv(`门诊趋势_${t.from}_${t.to}.csv`, header, rows)
+}
+
+// ---------------------------------------------------------------- 住院周转趋势（G16）
+
+const inpatientTrend = ref<InpatientTrendView | null>(null)
+const inpatientDays = ref(14)
+const inpatientLoading = ref(false)
+
+const inpatientMax = computed(() =>
+  Math.max(
+    1,
+    ...(inpatientTrend.value?.points ?? []).map((p) =>
+      Math.max(p.admittedCount, p.dischargedCount),
+    ),
+  ),
+)
+
+interface InpatientBar {
+  key: string
+  x: number
+  y: number
+  width: number
+  height: number
+  cls: string
+  tip: string
+}
+
+const inpatientBars = computed<InpatientBar[]>(() => {
+  const points = inpatientTrend.value?.points ?? []
+  const slot = 704 / Math.max(points.length, 1)
+  const bars: InpatientBar[] = []
+  points.forEach((p, i) => {
+    const base = 8 + i * slot + slot * 0.15
+    const width = Math.max(slot * 0.32, 1)
+    const admittedHeight = (p.admittedCount / inpatientMax.value) * 150
+    const dischargedHeight = (p.dischargedCount / inpatientMax.value) * 150
+    bars.push({
+      key: `in-${p.date}`,
+      x: base,
+      y: 170 - admittedHeight,
+      width,
+      height: admittedHeight,
+      cls: 'chart-bar',
+      tip: `${p.date}：入院 ${p.admittedCount} 人，在院 ${p.inHospitalCount} 人`,
+    })
+    bars.push({
+      key: `out-${p.date}`,
+      x: base + width + Math.max(slot * 0.04, 1),
+      y: 170 - dischargedHeight,
+      width,
+      height: dischargedHeight,
+      cls: 'chart-bar chart-bar--alt',
+      tip: `${p.date}：出院 ${p.dischargedCount} 人，出院者平均住院 ${p.avgStayDays.toFixed(1)} 天`,
+    })
+  })
+  return bars
+})
+
+const admittedDeltaPct = computed(() => {
+  const t = inpatientTrend.value
+  if (!t || t.prevAdmitted === 0) return null
+  return ((t.totalAdmitted - t.prevAdmitted) / t.prevAdmitted) * 100
+})
+
+const admittedDeltaLabel = computed(() => {
+  if (!inpatientTrend.value) return '—'
+  if (admittedDeltaPct.value === null) {
+    return inpatientTrend.value.totalAdmitted > 0 ? '上期无入院' : '—'
+  }
+  const sign = admittedDeltaPct.value >= 0 ? '+' : ''
+  return `${sign}${admittedDeltaPct.value.toFixed(1)}%`
+})
+
+const admittedDeltaClass = computed(() => {
+  if (admittedDeltaPct.value === null) return ''
+  return admittedDeltaPct.value >= 0 ? 'trend-up' : 'trend-down'
+})
+
+async function loadInpatientTrend() {
+  sectionError.inpatientTrend = ''
+  inpatientLoading.value = true
+  try {
+    inpatientTrend.value = await clinicalApi.inpatientTrend(
+      isoDaysAgo(inpatientDays.value - 1),
+      todayIso(),
+    )
+  } catch (e) {
+    inpatientTrend.value = null
+    sectionError.inpatientTrend = `住院趋势加载失败：${errorText(e)}（可能缺少 inpatient:report:read 权限）`
+  } finally {
+    inpatientLoading.value = false
+  }
+}
+
+function switchInpatientDays(days: number) {
+  if (inpatientDays.value === days) return
+  inpatientDays.value = days
+  void loadInpatientTrend()
+}
+
+function exportInpatientTrend() {
+  const t = inpatientTrend.value
+  if (!t) return
+  const rows = t.points.map((p) => [
+    p.date,
+    p.admittedCount,
+    p.dischargedCount,
+    p.inHospitalCount,
+    p.avgStayDays.toFixed(2),
+  ])
+  downloadCsv(`住院周转趋势_${t.from}_${t.to}.csv`, [
+    '日期',
+    '入院人次',
+    '出院人次',
+    '在院人数',
+    '出院者平均住院日',
+  ], rows)
 }
 
 // ---------------------------------------------------------------- 药事/物资趋势（G15）
@@ -691,6 +876,7 @@ async function loadAll() {
   loadError.value = ''
   await Promise.all([
     loadTrend(),
+    loadInpatientTrend(),
     loadOpsTrends(),
     loadOutpatient(),
     loadInpatient(),
@@ -777,6 +963,39 @@ onMounted(() => {
 
 .chart-bar:hover {
   opacity: 1;
+}
+
+.chart-bar--alt {
+  fill: var(--ok);
+}
+
+.chart-legend {
+  display: flex;
+  gap: var(--s3);
+  padding: 0 var(--s4);
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot--accent {
+  background: var(--accent);
+}
+
+.dot--ok {
+  background: var(--ok);
 }
 
 .chart-label {

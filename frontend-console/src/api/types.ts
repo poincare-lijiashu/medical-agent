@@ -143,6 +143,31 @@ export interface OutpatientTrendView {
   prevTotalPaid: number
 }
 
+// ---------------------------------------------------------------- 住院周转趋势（G16）
+
+export interface InpatientTrendPoint {
+  date: string
+  admittedCount: number
+  dischargedCount: number
+  inHospitalCount: number
+  avgStayDays: number
+}
+
+/** 住院周转趋势：入院/出院按日归日，在院人数取当日结束时刻；prev* 为上一等长周期。 */
+export interface InpatientTrendView {
+  from: string
+  to: string
+  points: InpatientTrendPoint[]
+  totalAdmitted: number
+  totalDischarged: number
+  currentInHospital: number
+  usableBeds: number
+  bedOccupancyPercent: number
+  avgStayDays: number
+  prevAdmitted: number
+  prevDischarged: number
+}
+
 export interface Ward {
   id: string
   code: string

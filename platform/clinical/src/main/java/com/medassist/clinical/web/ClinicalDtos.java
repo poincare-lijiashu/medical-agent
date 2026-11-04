@@ -365,4 +365,28 @@ public final class ClinicalDtos {
     public record OutpatientTrendPoint(LocalDate date, int visitCount, int paidChargeCount,
                                        BigDecimal totalPaid, BigDecimal refundedAmount) {
     }
+
+    /**
+     * 住院周转趋势（G16）：按业务日聚合入/出院、在院人数与出院者平均住院日。
+     *
+     * <p>{@code currentInHospital} 取区间最后一天结束时刻的在院人数；
+     * {@code bedOccupancyPercent} = 在院人数 / 可用床位数，保留 1 位小数。
+     */
+    public record InpatientTrendView(
+            LocalDate from,
+            LocalDate to,
+            List<InpatientTrendPoint> points,
+            int totalAdmitted,
+            int totalDischarged,
+            int currentInHospital,
+            int usableBeds,
+            BigDecimal bedOccupancyPercent,
+            BigDecimal avgStayDays,
+            int prevAdmitted,
+            int prevDischarged) {
+    }
+
+    public record InpatientTrendPoint(LocalDate date, int admittedCount, int dischargedCount,
+                                      int inHospitalCount, BigDecimal avgStayDays) {
+    }
 }

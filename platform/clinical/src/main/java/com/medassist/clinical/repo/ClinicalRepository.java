@@ -1,6 +1,7 @@
 package com.medassist.clinical.repo;
 
 import com.medassist.clinical.domain.ClinicalModel.Admission;
+import com.medassist.clinical.domain.ClinicalModel.AdmissionPeriodSummary;
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaRecord;
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaVital;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
@@ -9,7 +10,9 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.ChargeReceipt;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
+import com.medassist.clinical.domain.ClinicalModel.DailyAdmissionTotal;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
+import com.medassist.clinical.domain.ClinicalModel.DailyInHospitalTotal;
 import com.medassist.clinical.domain.ClinicalModel.DailyPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.DeptPaidTotal;
@@ -1237,6 +1240,103 @@ public class ClinicalRepository {
                         rs.getInt("paid_charges"), rs.getBigDecimal("paid_amount"),
                         rs.getBigDecimal("refunded_amount")))
                 .list();
+    }
+
+    // ---------------------------------------------------------------- 住院周转趋势（G16）
+
+    /**
+     * 住院周转趋势：按业务日聚合入院数、出院数与出院者平均住院日。
+     *
+     * <p>入/出院分开归日（入院按 {@code admitted_at}、出院按 {@code discharged_at}），
+     * 因此同一天可能既有入也有出；平均住院日只对当日出院者计算，单位为天。
+     */
+    public List<DailyAdmissionTotal> dailyAdmissionTrend(OffsetDateTime from, OffsetDateTime to,
+                                                         String zone) {
+        return jdbc.sql("""
+                        SELECT day,
+                               sum(admitted_count)::int AS admitted_count,
+                               sum(discharged_count)::int AS discharged_count,
+                               CASE WHEN sum(discharged_count) = 0 THEN 0
+                                    ELSE sum(avg_stay_days * discharged_count) / sum(discharged_count)
+                                END AS avg_stay_days
+                          FROM (
+                                SELECT (a.admitted_at AT TIME ZONE CAST(:zone AS text))::date AS day,
+                                       count(*)::int AS admitted_count,
+                                       0 AS discharged_count,
+                                       0::numeric AS avg_stay_days
+                                  FROM clinical_svc.admission a
+                                 WHERE a.admitted_at >= :fromTs AND a.admitted_at < :toTs
+                                 GROUP BY 1
+                                UNION ALL
+                                SELECT (a.discharged_at AT TIME ZONE CAST(:zone AS text))::date AS day,
+                                       0 AS admitted_count,
+                                       count(*)::int AS discharged_count,
+                                       avg(EXTRACT(EPOCH FROM (a.discharged_at - a.admitted_at)) / 86400.0)
+                                           AS avg_stay_days
+                                  FROM clinical_svc.admission a
+                                 WHERE a.status = 'DISCHARGED'
+                                   AND a.discharged_at >= :fromTs AND a.discharged_at < :toTs
+                                 GROUP BY 1
+                          ) t
+                         GROUP BY day
+                         ORDER BY day
+                        """)
+                .param("fromTs", from).param("toTs", to).param("zone", zone)
+                .query((rs, i) -> new DailyAdmissionTotal(
+                        rs.getDate("day").toLocalDate(), rs.getInt("admitted_count"),
+                        rs.getInt("discharged_count"), rs.getBigDecimal("avg_stay_days")))
+                .list();
+    }
+
+    /**
+     * 住院周转趋势：每个业务日结束时刻的在院人数。
+     *
+     * <p>在院口径 = 入院时刻早于次日零点，且未出院或出院时刻不早于次日零点；
+     * 用 generate_series 展开区间内每一天，避免按天循环查库。
+     */
+    public List<DailyInHospitalTotal> dailyInHospitalTrend(OffsetDateTime from, OffsetDateTime to,
+                                                           String zone) {
+        return jdbc.sql("""
+                        SELECT (gs AT TIME ZONE CAST(:zone AS text))::date AS day,
+                               (SELECT count(*)
+                                  FROM clinical_svc.admission a
+                                 WHERE a.admitted_at < gs + interval '1 day'
+                                   AND (a.discharged_at IS NULL
+                                        OR a.discharged_at >= gs + interval '1 day'))::int
+                                   AS in_hospital_count
+                          FROM generate_series(CAST(:fromTs AS timestamptz),
+                                               CAST(:toTs AS timestamptz) - interval '1 day',
+                                               interval '1 day') gs
+                         ORDER BY 1
+                        """)
+                .param("fromTs", from).param("toTs", to).param("zone", zone)
+                .query((rs, i) -> new DailyInHospitalTotal(
+                        rs.getDate("day").toLocalDate(), rs.getInt("in_hospital_count")))
+                .list();
+    }
+
+    /** 住院周转趋势：区间入院/出院合计（用于上一等长周期环比）。 */
+    public AdmissionPeriodSummary admissionPeriodSummary(OffsetDateTime from, OffsetDateTime to) {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE admitted_at >= :fromTs AND admitted_at < :toTs)::int
+                                   AS admitted_count,
+                               count(*) FILTER (WHERE status = 'DISCHARGED'
+                                                  AND discharged_at >= :fromTs
+                                                  AND discharged_at < :toTs)::int
+                                   AS discharged_count
+                          FROM clinical_svc.admission
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .query((rs, i) -> new AdmissionPeriodSummary(
+                        rs.getInt("admitted_count"), rs.getInt("discharged_count")))
+                .single();
+    }
+
+    /** 可用床位数（不含停用床），用于计算床位使用率。 */
+    public int countUsableBeds() {
+        Long n = jdbc.sql("SELECT count(*) FROM clinical_svc.bed WHERE status <> 'DISABLED'")
+                .query(Long.class).single();
+        return n == null ? 0 : n.intValue();
     }
 
     /** 门诊日结：按科室分账（当日已收）。 */

@@ -442,6 +442,19 @@ public final class ClinicalModel {
                                  BigDecimal totalPaid, BigDecimal refundedAmount) {
     }
 
+    /** 住院周转趋势：单日入/出院与出院者平均住院日（G16）。 */
+    public record DailyAdmissionTotal(LocalDate day, int admittedCount, int dischargedCount,
+                                      BigDecimal avgStayDays) {
+    }
+
+    /** 住院周转趋势：单日在院人数（G16；按业务日结束时刻统计）。 */
+    public record DailyInHospitalTotal(LocalDate day, int inHospitalCount) {
+    }
+
+    /** 住院周转趋势：区间合计（G16；用于上一周期环比）。 */
+    public record AdmissionPeriodSummary(int admittedCount, int dischargedCount) {
+    }
+
     /**
      * 收费票据（G14）。
      *
