@@ -20,7 +20,7 @@
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
 - **演示账号**：`admin01 / Med@2026`（ADMIN，主院区+东院区），`doctor01`（DOCTOR，主院区）、`pharm01`、`pharm02`（PHARMACIST）、`qc01`（主院区+东院区）同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。院区冒烟脚本每次会创建 `east*` / `eastadm*`（口令 `East@2026x`，仅东院区）用于隔离验证。
-- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261105.bundle`（已含 G47，代码 HEAD=`4618011`）。
+- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261105.bundle`（已含 G48，代码 HEAD=`f4ec1c5`）。
 
 ### 1. 功能完成度（按业务域）
 
