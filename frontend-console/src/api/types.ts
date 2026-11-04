@@ -346,6 +346,38 @@ export interface ChargeReceipt {
   createdAt: string
 }
 
+// ---------------------------------------------------------------- 药事/物资趋势（G15）
+
+export interface DispenseTrendPoint {
+  date: string
+  dispenseCount: number
+  amount: number
+}
+
+export interface DispenseTrendView {
+  from: string
+  to: string
+  points: DispenseTrendPoint[]
+  totalCount: number
+  totalAmount: number
+}
+
+export interface IssueTrendPoint {
+  date: string
+  issueCount: number
+  itemQuantity: number
+  totalAmount: number
+}
+
+export interface IssueTrendView {
+  from: string
+  to: string
+  points: IssueTrendPoint[]
+  totalIssueCount: number
+  totalItemQuantity: number
+  totalAmount: number
+}
+
 export interface BillingPreview {
   chargedTotal: number
   pendingAmount: number

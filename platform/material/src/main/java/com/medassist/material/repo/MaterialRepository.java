@@ -8,6 +8,7 @@ import com.medassist.material.domain.MaterialModel.ConsumableIssueItem;
 import com.medassist.material.domain.MaterialModel.ConsumableReturn;
 import com.medassist.material.domain.MaterialModel.ConsumableReturnItem;
 import com.medassist.material.domain.MaterialModel.ConsumableTrace;
+import com.medassist.material.domain.MaterialModel.DailyIssueTotal;
 import com.medassist.material.domain.MaterialModel.DeptConsumableStock;
 import com.medassist.material.domain.MaterialModel.DeptTransfer;
 import com.medassist.material.domain.MaterialModel.DeptTransferItem;
@@ -19,6 +20,7 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
@@ -842,6 +844,34 @@ public class MaterialRepository {
                         """)
                 .param("actor", actor).param("reason", reason)
                 .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 出库趋势（G15）
+
+    /** 出库日趋势：按出库时刻归日，件数取明细数量合计。 */
+    public List<DailyIssueTotal> dailyIssueTotals(OffsetDateTime from, OffsetDateTime to,
+                                                  String zone) {
+        return jdbc.sql("""
+                        WITH issue_qty AS (
+                            SELECT issue_id, sum(quantity) AS qty
+                              FROM material_svc.consumable_issue_item
+                             GROUP BY issue_id
+                        )
+                        SELECT (i.created_at AT TIME ZONE CAST(:zone AS text))::date AS day,
+                               count(*) AS issue_count,
+                               COALESCE(sum(q.qty), 0)::int AS item_quantity,
+                               COALESCE(sum(i.total_amount), 0) AS total_amount
+                          FROM material_svc.consumable_issue i
+                          LEFT JOIN issue_qty q ON q.issue_id = i.id
+                         WHERE i.created_at >= :fromTs AND i.created_at < :toTs
+                         GROUP BY 1
+                         ORDER BY 1
+                        """)
+                .param("fromTs", from).param("toTs", to).param("zone", zone)
+                .query((rs, i) -> new DailyIssueTotal(
+                        rs.getDate("day").toLocalDate(), rs.getInt("issue_count"),
+                        rs.getInt("item_quantity"), rs.getBigDecimal("total_amount")))
+                .list();
     }
 
     // ---------------------------------------------------------------- 汇总

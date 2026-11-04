@@ -72,6 +72,8 @@ import type {
   DeptConsumableStockView,
   DeptTransfer,
   DeptTransferView,
+  DispenseTrendView,
+  IssueTrendView,
   MaterialStockWarning,
   MaterialSummary,
   CodingQueueItem,
@@ -305,6 +307,9 @@ export const pharmacyApi = {
     get<Prescription[]>('/pharmacy/prescriptions', { status, limit }),
   /** 各状态处方数量（KPI 用；列表会被 200 条截断，计数必须走聚合）。 */
   prescriptionSummary: () => get<Record<string, number>>('/pharmacy/prescriptions/summary'),
+  /** 发药日趋势（G15）：默认最近 14 天，最多 92 天。 */
+  dispenseTrend: (from?: string, to?: string) =>
+    get<DispenseTrendView>('/pharmacy/reports/dispense-trend', { from, to }),
   prescription: (id: string) => get<PrescriptionView>(`/pharmacy/prescriptions/${id}`),
   prescriptionAudit: (id: string) =>
     get<PrescriptionAuditView>(`/pharmacy/prescriptions/${id}/audit`),
@@ -533,6 +538,9 @@ export const materialApi = {
     post<DeptTransferView>(`/material/dept-transfers/${id}/reject`, { reason }),
   cancelDeptTransfer: (id: string, reason: string) =>
     post<DeptTransferView>(`/material/dept-transfers/${id}/cancel`, { reason }),
+  /** 出库日趋势（G15）：默认最近 14 天，最多 92 天。 */
+  issueTrend: (from?: string, to?: string) =>
+    get<IssueTrendView>('/material/reports/issue-trend', { from, to }),
 }
 
 // ---------------------------------------------------------------- 病案编码（G4）

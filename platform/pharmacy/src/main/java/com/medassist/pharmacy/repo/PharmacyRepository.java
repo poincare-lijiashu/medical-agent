@@ -4,6 +4,7 @@ import com.medassist.common.time.BusinessTime;
 import com.medassist.pharmacy.domain.PharmacyModel.Dispense;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseItem;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
+import com.medassist.pharmacy.domain.PharmacyModel.DailyDispenseTotal;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber;
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
@@ -1461,6 +1463,28 @@ public class PharmacyRepository {
                         """)
                 .param("deptId", deptId).param("pattern", pattern).param("limit", limit)
                 .query(DEPT_DRUG_STOCK_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 发药趋势（G15）
+
+    /** 发药日趋势：按发药时刻归日；只统计已发药（含部分退回）的发药单。 */
+    public List<DailyDispenseTotal> dailyDispenseTotals(OffsetDateTime from, OffsetDateTime to,
+                                                        String zone) {
+        return jdbc.sql("""
+                        SELECT (dispensed_at AT TIME ZONE CAST(:zone AS text))::date AS day,
+                               count(*) AS dispense_count,
+                               COALESCE(sum(total_amount), 0) AS amount
+                          FROM pharmacy_svc.dispense
+                         WHERE status IN ('DISPENSED', 'PARTIAL_RETURNED')
+                           AND dispensed_at >= :fromTs AND dispensed_at < :toTs
+                         GROUP BY 1
+                         ORDER BY 1
+                        """)
+                .param("fromTs", from).param("toTs", to).param("zone", zone)
+                .query((rs, i) -> new DailyDispenseTotal(
+                        rs.getDate("day").toLocalDate(), rs.getInt("dispense_count"),
+                        rs.getBigDecimal("amount")))
+                .list();
     }
 
     // ---------------------------------------------------------------- 审计

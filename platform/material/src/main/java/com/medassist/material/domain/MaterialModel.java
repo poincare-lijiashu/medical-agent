@@ -178,4 +178,9 @@ public final class MaterialModel {
                                    String unit, UUID batchId, String batchNo,
                                    LocalDate expireDate, int quantity) {
     }
+
+    /** 出库日趋势（G15）：单日出库单数、件数、金额。 */
+    public record DailyIssueTotal(LocalDate day, int issueCount, int itemQuantity,
+                                  BigDecimal totalAmount) {
+    }
 }

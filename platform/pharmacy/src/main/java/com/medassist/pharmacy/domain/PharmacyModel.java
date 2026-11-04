@@ -399,4 +399,8 @@ public final class PharmacyModel {
                                 String spec, String unit, UUID batchId, String batchNo,
                                 LocalDate expireDate, int quantity, long version) {
     }
+
+    /** 发药日趋势（G15）：单日发药笔数与金额。 */
+    public record DailyDispenseTotal(LocalDate day, int dispenseCount, BigDecimal amount) {
+    }
 }

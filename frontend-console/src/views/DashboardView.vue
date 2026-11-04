@@ -102,6 +102,90 @@
 
     <div class="sheet">
       <div class="sheet-head">
+        <span class="sheet-title">药事与物资趋势</span>
+        <span class="spacer" />
+        <div class="seg" role="tablist" aria-label="药事物资趋势区间">
+          <button
+            v-for="d in [7, 14, 30]"
+            :key="`ops-${d}`"
+            class="seg-btn"
+            :class="{ active: opsDays === d }"
+            type="button"
+            @click="switchOpsDays(d)"
+          >
+            近 {{ d }} 天
+          </button>
+        </div>
+        <button class="btn btn--sm" type="button" :disabled="!dispenseTrend && !issueTrend" @click="exportOps">
+          导出 CSV
+        </button>
+      </div>
+      <p v-if="sectionError.ops" class="section-error">{{ sectionError.ops }}</p>
+      <TableSkeleton v-if="opsLoading && !dispenseTrend && !issueTrend" :rows="3" />
+      <div v-else class="ops-grid">
+        <div class="ops-card">
+          <div class="ops-head">
+            <span>药房发药</span>
+            <span class="muted small">
+              {{ dispenseTrend?.totalCount ?? 0 }} 笔 · {{ money(dispenseTrend?.totalAmount ?? 0) }}
+            </span>
+          </div>
+          <svg v-if="dispenseBars.length" viewBox="0 0 720 170" role="img" aria-label="药房每日发药趋势">
+            <line x1="8" y1="150" x2="712" y2="150" class="chart-axis" />
+            <rect
+              v-for="b in dispenseBars"
+              :key="`d-${b.date}`"
+              :x="b.x"
+              :y="b.y"
+              :width="b.width"
+              :height="b.height"
+              rx="2"
+              class="chart-bar"
+            >
+              <title>{{ b.tip }}</title>
+            </rect>
+            <text x="8" y="166" class="chart-label">{{ dispenseTrend?.points[0]?.date }}</text>
+            <text x="712" y="166" text-anchor="end" class="chart-label">
+              {{ dispenseTrend?.points[dispenseTrend.points.length - 1]?.date }}
+            </text>
+          </svg>
+          <div v-else class="muted small">该区间暂无发药数据</div>
+        </div>
+
+        <div class="ops-card">
+          <div class="ops-head">
+            <span>物资出库</span>
+            <span class="muted small">
+              {{ issueTrend?.totalIssueCount ?? 0 }} 单 · {{ issueTrend?.totalItemQuantity ?? 0 }} 件 ·
+              {{ money(issueTrend?.totalAmount ?? 0) }}
+            </span>
+          </div>
+          <svg v-if="issueBars.length" viewBox="0 0 720 170" role="img" aria-label="物资每日出库趋势">
+            <line x1="8" y1="150" x2="712" y2="150" class="chart-axis" />
+            <rect
+              v-for="b in issueBars"
+              :key="`i-${b.date}`"
+              :x="b.x"
+              :y="b.y"
+              :width="b.width"
+              :height="b.height"
+              rx="2"
+              class="chart-bar"
+            >
+              <title>{{ b.tip }}</title>
+            </rect>
+            <text x="8" y="166" class="chart-label">{{ issueTrend?.points[0]?.date }}</text>
+            <text x="712" y="166" text-anchor="end" class="chart-label">
+              {{ issueTrend?.points[issueTrend.points.length - 1]?.date }}
+            </text>
+          </svg>
+          <div v-else class="muted small">该区间暂无出库数据</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet">
+      <div class="sheet-head">
         <span class="sheet-title">门诊分账</span>
         <span class="badge badge--neutral">{{ date }}</span>
         <span class="spacer" />
@@ -250,6 +334,8 @@ import { clinicalApi, codingApi, materialApi, pharmacyApi, techApi } from '@/api
 import { errorText } from '@/api/http'
 import type {
   CodingSummary,
+  DispenseTrendView,
+  IssueTrendView,
   MaterialSummary,
   OutpatientDaily,
   OutpatientTrendView,
@@ -267,6 +353,10 @@ const outpatient = ref<OutpatientDaily | null>(null)
 const trend = ref<OutpatientTrendView | null>(null)
 const trendDays = ref(14)
 const trendLoading = ref(false)
+const dispenseTrend = ref<DispenseTrendView | null>(null)
+const issueTrend = ref<IssueTrendView | null>(null)
+const opsDays = ref(14)
+const opsLoading = ref(false)
 const stockWarnings = ref<StockWarning[]>([])
 const material = ref<MaterialSummary | null>(null)
 const coding = ref<CodingSummary | null>(null)
@@ -392,6 +482,115 @@ function exportTrend() {
     p.totalPaid.toFixed(2),
     p.refundedAmount.toFixed(2),
   ])
+  downloadCsv(`门诊趋势_${t.from}_${t.to}.csv`, header, rows)
+}
+
+// ---------------------------------------------------------------- 药事/物资趋势（G15）
+
+function buildBars<T extends { date: string }>(
+  points: T[],
+  value: (p: T) => number,
+  tip: (p: T) => string,
+  maxValue: number,
+) {
+  const slot = 704 / Math.max(points.length, 1)
+  return points.map((p, i) => {
+    const height = (value(p) / Math.max(maxValue, 1)) * 130
+    return {
+      date: p.date,
+      x: 8 + i * slot + slot * 0.15,
+      width: Math.max(slot * 0.7, 1),
+      y: 150 - height,
+      height,
+      tip: tip(p),
+    }
+  })
+}
+
+const dispenseMax = computed(() =>
+  Math.max(1, ...(dispenseTrend.value?.points ?? []).map((p) => p.amount)),
+)
+const issueMax = computed(() =>
+  Math.max(1, ...(issueTrend.value?.points ?? []).map((p) => p.totalAmount)),
+)
+
+const dispenseBars = computed(() =>
+  buildBars(
+    dispenseTrend.value?.points ?? [],
+    (p) => p.amount,
+    (p) => `${p.date}：${money(p.amount)}（${p.dispenseCount} 笔）`,
+    dispenseMax.value,
+  ),
+)
+const issueBars = computed(() =>
+  buildBars(
+    issueTrend.value?.points ?? [],
+    (p) => p.totalAmount,
+    (p) => `${p.date}：${money(p.totalAmount)}（${p.issueCount} 单 / ${p.itemQuantity} 件）`,
+    issueMax.value,
+  ),
+)
+
+async function loadOpsTrends() {
+  sectionError.ops = ''
+  opsLoading.value = true
+  const from = isoDaysAgo(opsDays.value - 1)
+  const to = todayIso()
+  const [dispense, issue] = await Promise.allSettled([
+    pharmacyApi.dispenseTrend(from, to),
+    materialApi.issueTrend(from, to),
+  ])
+  if (dispense.status === 'fulfilled') {
+    dispenseTrend.value = dispense.value
+  } else {
+    dispenseTrend.value = null
+    sectionError.ops = `药事趋势加载失败：${errorText(dispense.reason)}`
+  }
+  if (issue.status === 'fulfilled') {
+    issueTrend.value = issue.value
+  } else {
+    issueTrend.value = null
+    sectionError.ops = `${sectionError.ops ? sectionError.ops + '；' : ''}物资趋势加载失败：${errorText(issue.reason)}`
+  }
+  opsLoading.value = false
+}
+
+function switchOpsDays(days: number) {
+  if (opsDays.value === days) return
+  opsDays.value = days
+  void loadOpsTrends()
+}
+
+/** 药事/物资趋势合并导出：按日期对齐，缺侧补 0。 */
+function exportOps() {
+  const d = dispenseTrend.value
+  const i = issueTrend.value
+  if (!d && !i) return
+  const dates = Array.from(
+    new Set([...(d?.points ?? []).map((p) => p.date), ...(i?.points ?? []).map((p) => p.date)]),
+  ).sort()
+  const dispenseMap = new Map((d?.points ?? []).map((p) => [p.date, p]))
+  const issueMap = new Map((i?.points ?? []).map((p) => [p.date, p]))
+  const rows = dates.map((date) => {
+    const dp = dispenseMap.get(date)
+    const ip = issueMap.get(date)
+    return [
+      date,
+      dp?.dispenseCount ?? 0,
+      (dp?.amount ?? 0).toFixed(2),
+      ip?.issueCount ?? 0,
+      ip?.itemQuantity ?? 0,
+      (ip?.totalAmount ?? 0).toFixed(2),
+    ]
+  })
+  downloadCsv(
+    `药事物资趋势_${d?.from ?? i?.from ?? ''}_${d?.to ?? i?.to ?? ''}.csv`,
+    ['日期', '发药笔数', '发药金额', '出库单数', '出库件数', '出库金额'],
+    rows,
+  )
+}
+
+function downloadCsv(filename: string, header: string[], rows: (string | number)[][]) {
   const csv = [header, ...rows]
     .map((line) => line.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
     .join('\r\n')
@@ -399,7 +598,7 @@ function exportTrend() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `门诊趋势_${t.from}_${t.to}.csv`
+  a.download = filename
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -492,6 +691,7 @@ async function loadAll() {
   loadError.value = ''
   await Promise.all([
     loadTrend(),
+    loadOpsTrends(),
     loadOutpatient(),
     loadInpatient(),
     loadPharmacy(),
@@ -500,7 +700,7 @@ async function loadAll() {
     loadCoding(),
   ])
   const failures = Object.values(sectionError).filter((m) => m)
-  if (failures.length >= 7) {
+  if (failures.length >= 8) {
     loadError.value = '各业务域数据均加载失败，请检查网关与后端服务是否正常'
   }
   loading.value = false
@@ -582,6 +782,34 @@ onMounted(() => {
 .chart-label {
   fill: var(--muted);
   font-size: 11px;
+}
+
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--s3);
+  padding: var(--s4);
+}
+
+.ops-card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel-3);
+  padding: var(--s3);
+}
+
+.ops-card svg {
+  width: 100%;
+  height: auto;
+}
+
+.ops-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  font-weight: 600;
 }
 
 .domain-card {
