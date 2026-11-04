@@ -1,6 +1,7 @@
 package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamRegistration;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
@@ -8,6 +9,8 @@ import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
 import com.medassist.clinical.web.EmergencyDtos.ObservationView;
 import com.medassist.clinical.web.EmergencyDtos.TriageView;
+import com.medassist.clinical.web.HealthExamDtos.RegistrationSummaryView;
+import com.medassist.clinical.web.HealthExamDtos.RegistrationView;
 import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
 import com.medassist.common.security.DataScope;
 
@@ -96,6 +99,30 @@ final class PhiMask {
                 scope.maskPatientName(o.patientName()), o.deptId(), o.deptName(), o.bedId(),
                 o.bedNo(), o.status(), o.startAt(), o.endAt(), o.outcome(), o.outcomeNote(),
                 o.createdBy(), o.closedBy(), o.version(), o.createdAt());
+    }
+
+    static RegistrationSummaryView healthSummary(RegistrationSummaryView s, DataScope scope) {
+        if (s == null || scope.phiReadable()) {
+            return s;
+        }
+        return new RegistrationSummaryView(s.id(), s.examNo(), s.packageName(), s.patientId(),
+                scope.maskPatientNo(s.patientNo()), scope.maskPatientName(s.patientName()),
+                s.gender(), s.birthDate(), s.status(), s.itemTotal(), s.itemCompleted(),
+                s.abnormalCount(), s.reportStatus(), s.createdAt());
+    }
+
+    static RegistrationView healthRegistration(RegistrationView view, DataScope scope) {
+        if (view == null || scope.phiReadable()) {
+            return view;
+        }
+        HealthExamRegistration r = view.registration();
+        HealthExamRegistration masked = new HealthExamRegistration(r.id(), r.examNo(),
+                r.packageId(), r.packageName(), r.packagePrice(), r.patientId(),
+                scope.maskPatientNo(r.patientNo()), scope.maskPatientName(r.patientName()),
+                r.gender(), r.birthDate(), r.status(), r.note(), r.cancelReason(),
+                r.cancelledBy(), r.cancelledAt(), r.createdBy(), r.version(), r.createdAt(),
+                r.updatedAt());
+        return new RegistrationView(masked, view.items(), view.report());
     }
 
     static SurgeryBoardView board(SurgeryBoardView view, DataScope scope) {

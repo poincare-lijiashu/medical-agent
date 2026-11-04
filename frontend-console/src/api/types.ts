@@ -2810,3 +2810,144 @@ export interface EmergencyBoard {
   freeBeds: number
   occupiedBeds: number
 }
+
+// ---------------------------------------------------------------- 体检中心（G37）
+
+export type HealthExamPackageStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED'
+
+/** 体检套餐：发布后内容不可改，已登记体检按项目快照执行。 */
+export interface HealthExamPackage {
+  id: string
+  packageCode: string
+  name: string
+  description: string | null
+  totalPrice: number
+  status: HealthExamPackageStatus
+  itemCount: number
+  createdBy: string
+  publishedBy: string | null
+  publishedAt: string | null
+  version: number
+  createdAt: string
+}
+
+export interface HealthExamPackageItem {
+  id: string
+  packageId: string
+  seq: number
+  itemCode: string
+  itemName: string
+  itemCategory: string
+  deptId: string | null
+  deptName: string | null
+  price: number
+}
+
+export interface HealthExamPackageView {
+  pkg: HealthExamPackage
+  items: HealthExamPackageItem[]
+}
+
+export type HealthExamRegistrationStatus =
+  | 'REGISTERED'
+  | 'IN_PROGRESS'
+  | 'EXAM_DONE'
+  | 'REPORTED'
+  | 'CANCELLED'
+
+/** 体检登记：REGISTERED → IN_PROGRESS → EXAM_DONE → REPORTED。 */
+export interface HealthExamRegistration {
+  id: string
+  examNo: string
+  packageId: string
+  packageName: string
+  packagePrice: number
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  gender: string | null
+  birthDate: string | null
+  status: HealthExamRegistrationStatus
+  note: string | null
+  cancelReason: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type HealthExamItemStatus = 'PENDING' | 'COMPLETED' | 'SKIPPED'
+
+/** 体检项目快照：PENDING → COMPLETED / SKIPPED。 */
+export interface HealthExamItem {
+  id: string
+  registrationId: string
+  seq: number
+  itemCode: string
+  itemName: string
+  itemCategory: string
+  deptId: string | null
+  deptName: string | null
+  price: number
+  status: HealthExamItemStatus
+  resultSummary: string | null
+  resultNote: string | null
+  abnormal: boolean
+  completedBy: string | null
+  completedAt: string | null
+  version: number
+}
+
+export type HealthExamReportStatus = 'DRAFT' | 'FINAL'
+
+/** 总检报告：一次登记一份，FINAL 后不可修改。 */
+export interface HealthExamReport {
+  id: string
+  reportNo: string
+  registrationId: string
+  conclusion: string
+  suggestion: string | null
+  abnormalCount: number
+  status: HealthExamReportStatus
+  createdBy: string
+  finalizedBy: string | null
+  finalizedAt: string | null
+  version: number
+  createdAt: string
+}
+
+export interface HealthExamRegistrationSummary {
+  id: string
+  examNo: string
+  packageName: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  gender: string | null
+  birthDate: string | null
+  status: HealthExamRegistrationStatus
+  itemTotal: number
+  itemCompleted: number
+  abnormalCount: number
+  reportStatus: HealthExamReportStatus | null
+  createdAt: string
+}
+
+export interface HealthExamRegistrationView {
+  registration: HealthExamRegistration
+  items: HealthExamItem[]
+  report: HealthExamReport | null
+}
+
+/** 体检看板：当日登记/检查进度/报告与异常项目。 */
+export interface HealthExamBoard {
+  registered: number
+  inProgress: number
+  examDone: number
+  reported: number
+  cancelled: number
+  abnormalItems: number
+  totalToday: number
+}

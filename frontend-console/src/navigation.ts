@@ -47,6 +47,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:charge:read'],
   },
   {
+    name: 'health-exam',
+    path: '/health-exam',
+    title: '体检中心',
+    hint: '套餐维护 · 体检登记 · 分科检查 · 总检报告',
+    icon: 'clipboard',
+    group: '临床诊疗',
+    permissions: ['health:registration:read', 'health:package:read'],
+  },
+  {
     name: 'emergency',
     path: '/emergency',
     title: '急诊分诊',

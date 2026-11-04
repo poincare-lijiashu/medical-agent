@@ -90,6 +90,22 @@ public enum ErrorCode {
     EMERGENCY_OUTCOME_NOTE_REQUIRED(44470, "自动离院或转院必须填写转归说明"),
     EMERGENCY_LEAVE_REASON_REQUIRED(44471, "离院必须填写原因"),
 
+    // ---- 体检中心（44xxx 续，G37）----
+    HEALTH_PACKAGE_NOT_FOUND(44480, "未找到该体检套餐"),
+    HEALTH_PACKAGE_DUPLICATE(44481, "套餐编码已存在，请换一个编码"),
+    HEALTH_PACKAGE_STATUS_INVALID(44482, "当前套餐状态不允许该操作"),
+    HEALTH_PACKAGE_INVALID(44483, "套餐内容不合法（项目为空、重复或收费项目已停用）"),
+    HEALTH_REGISTRATION_NOT_FOUND(44484, "未找到该体检登记"),
+    HEALTH_REGISTRATION_STATUS_INVALID(44485, "当前体检登记状态不允许该操作"),
+    HEALTH_REGISTRATION_CANCEL_REASON_REQUIRED(44486, "取消体检登记必须填写原因"),
+    HEALTH_ITEM_NOT_FOUND(44487, "未找到该体检项目"),
+    HEALTH_ITEM_STATUS_INVALID(44488, "当前体检项目状态不允许该操作"),
+    HEALTH_ITEM_RESULT_INVALID(44489, "体检结果不合法（完成需填结论，未检需填原因）"),
+    HEALTH_REPORT_NOT_FOUND(44490, "未找到该体检报告"),
+    HEALTH_REPORT_STATUS_INVALID(44491, "当前体检报告状态不允许该操作"),
+    HEALTH_REPORT_INCOMPLETE(44492, "仍有未完成的体检项目，不能出具总检报告"),
+    HEALTH_REPORT_INVALID(44493, "总检报告结论不能为空，或内容不合法"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

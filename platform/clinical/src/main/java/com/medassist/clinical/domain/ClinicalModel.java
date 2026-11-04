@@ -1001,4 +1001,116 @@ public final class ClinicalModel {
                                     long leftToday, long totalToday, long freeBeds,
                                     long occupiedBeds) {
     }
+
+    /**
+     * 体检套餐（G37）：DRAFT → PUBLISHED → DISABLED。
+     * 发布后内容不可改，已登记体检按项目快照执行。
+     */
+    public record HealthExamPackage(UUID id, String packageCode, String name, String description,
+                                    BigDecimal totalPrice, String status, int itemCount,
+                                    String createdBy, String publishedBy, Instant publishedAt,
+                                    long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String DISABLED = "DISABLED";
+
+        public boolean draft() {
+            return DRAFT.equals(status);
+        }
+
+        public boolean published() {
+            return PUBLISHED.equals(status);
+        }
+    }
+
+    /** 体检套餐项目：收费项目编码 + 名称/类别/价格快照 + 可选执行科室。 */
+    public record HealthExamPackageItem(UUID id, UUID packageId, int seq, String itemCode,
+                                        String itemName, String itemCategory, UUID deptId,
+                                        String deptName, BigDecimal price) {
+    }
+
+    /**
+     * 体检登记（G37）：REGISTERED → IN_PROGRESS → EXAM_DONE → REPORTED；
+     * REGISTERED/IN_PROGRESS 可取消 → CANCELLED（必须写原因）。
+     */
+    public record HealthExamRegistration(UUID id, String examNo, UUID packageId, String packageName,
+                                         BigDecimal packagePrice, UUID patientId, String patientNo,
+                                         String patientName, String gender, LocalDate birthDate,
+                                         String status, String note, String cancelReason,
+                                         String cancelledBy, Instant cancelledAt, String createdBy,
+                                         long version, Instant createdAt, Instant updatedAt) {
+
+        public static final String REGISTERED = "REGISTERED";
+        public static final String IN_PROGRESS = "IN_PROGRESS";
+        public static final String EXAM_DONE = "EXAM_DONE";
+        public static final String REPORTED = "REPORTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean cancelled() {
+            return CANCELLED.equals(status);
+        }
+
+        public boolean examDone() {
+            return EXAM_DONE.equals(status);
+        }
+
+        public boolean reported() {
+            return REPORTED.equals(status);
+        }
+
+        /** 仍可录入检查结果的状态。 */
+        public boolean examinable() {
+            return REGISTERED.equals(status) || IN_PROGRESS.equals(status);
+        }
+    }
+
+    /** 体检项目快照：PENDING → COMPLETED / SKIPPED；未检必须写原因。 */
+    public record HealthExamItem(UUID id, UUID registrationId, int seq, String itemCode,
+                                 String itemName, String itemCategory, UUID deptId, String deptName,
+                                 BigDecimal price, String status, String resultSummary,
+                                 String resultNote, boolean abnormal, String completedBy,
+                                 Instant completedAt, long version) {
+
+        public static final String PENDING = "PENDING";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String SKIPPED = "SKIPPED";
+
+        public boolean pending() {
+            return PENDING.equals(status);
+        }
+    }
+
+    /** 总检报告：一次登记一份，DRAFT → FINAL；FINAL 后不可修改。 */
+    public record HealthExamReport(UUID id, String reportNo, UUID registrationId, String conclusion,
+                                   String suggestion, int abnormalCount, String status,
+                                   String createdBy, String finalizedBy, Instant finalizedAt,
+                                   long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String FINAL = "FINAL";
+
+        public boolean finalReport() {
+            return FINAL.equals(status);
+        }
+    }
+
+    /** 体检项目数量聚合（判断是否可总检）。 */
+    public record HealthExamItemCountRow(int total, int pending, int completed, int skipped,
+                                         int abnormal) {
+    }
+
+    /** 体检登记列表行（含项目进度与报告状态）。 */
+    public record HealthExamRegistrationSummary(UUID id, String examNo, String packageName,
+                                                UUID patientId, String patientNo,
+                                                String patientName, String gender,
+                                                LocalDate birthDate, String status, int itemTotal,
+                                                int itemCompleted, int abnormalCount,
+                                                String reportStatus, Instant createdAt) {
+    }
+
+    /** 体检看板聚合行（G37）：当日登记/检查进度/报告与异常项目。 */
+    public record HealthExamBoardRow(long registered, long inProgress, long examDone, long reported,
+                                     long cancelled, long abnormalItems, long totalToday) {
+    }
 }

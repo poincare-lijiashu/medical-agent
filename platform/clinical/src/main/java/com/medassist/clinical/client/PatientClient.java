@@ -1,5 +1,6 @@
 package com.medassist.clinical.client;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -18,5 +19,16 @@ public interface PatientClient {
     record PatientRef(UUID id, String patientNo, String name) {
     }
 
+    /** 体检/病案所需的患者人口学快照（性别与出生日期，不含证件号与联系方式）。 */
+    record PatientProfile(UUID id, String patientNo, String name, String gender,
+                          LocalDate birthDate) {
+    }
+
     PatientRef requireActive(UUID patientId);
+
+    /** 默认实现保持旧客户端兼容；EMPI 客户端会返回真实性别与出生日期。 */
+    default PatientProfile requireProfile(UUID patientId) {
+        PatientRef ref = requireActive(patientId);
+        return new PatientProfile(ref.id(), ref.patientNo(), ref.name(), null, null);
+    }
 }

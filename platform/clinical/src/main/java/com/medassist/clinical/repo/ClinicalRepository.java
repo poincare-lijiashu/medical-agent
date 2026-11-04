@@ -24,6 +24,14 @@ import com.medassist.clinical.domain.ClinicalModel.EmergencyBed;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyObservation;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyTriage;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamItem;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamItemCountRow;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamPackage;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamPackageItem;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamRegistration;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamRegistrationSummary;
+import com.medassist.clinical.domain.ClinicalModel.HealthExamReport;
 import com.medassist.clinical.domain.ClinicalModel.IntraopNursing;
 import com.medassist.clinical.domain.ClinicalModel.MethodPaidTotal;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
@@ -5298,6 +5306,459 @@ public class ClinicalRepository {
                         rs.getLong("observing"), rs.getLong("closed_today"),
                         rs.getLong("left_today"), rs.getLong("total_today"),
                         rs.getLong("free_beds"), rs.getLong("occupied_beds")))
+                .single();
+    }
+
+    // ---------------------------------------------------------------- 体检中心（G37）
+
+    private static final RowMapper<HealthExamPackage> HEALTH_PACKAGE_MAPPER = (rs, i) ->
+            new HealthExamPackage(
+                    rs.getObject("id", UUID.class), rs.getString("package_code"),
+                    rs.getString("name"), rs.getString("description"),
+                    rs.getBigDecimal("total_price"), rs.getString("status"),
+                    rs.getInt("item_count"), rs.getString("created_by"),
+                    rs.getString("published_by"),
+                    rs.getTimestamp("published_at") == null ? null
+                            : rs.getTimestamp("published_at").toInstant(),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<HealthExamPackageItem> HEALTH_PACKAGE_ITEM_MAPPER = (rs, i) ->
+            new HealthExamPackageItem(
+                    rs.getObject("id", UUID.class), rs.getObject("package_id", UUID.class),
+                    rs.getInt("seq"), rs.getString("item_code"), rs.getString("item_name"),
+                    rs.getString("item_category"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getBigDecimal("price"));
+
+    private static final RowMapper<HealthExamRegistration> HEALTH_REGISTRATION_MAPPER = (rs, i) ->
+            new HealthExamRegistration(
+                    rs.getObject("id", UUID.class), rs.getString("exam_no"),
+                    rs.getObject("package_id", UUID.class), rs.getString("package_name"),
+                    rs.getBigDecimal("package_price"), rs.getObject("patient_id", UUID.class),
+                    rs.getString("patient_no"), rs.getString("patient_name"),
+                    rs.getString("gender"),
+                    rs.getDate("birth_date") == null ? null
+                            : rs.getDate("birth_date").toLocalDate(),
+                    rs.getString("status"), rs.getString("note"), rs.getString("cancel_reason"),
+                    rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null ? null
+                            : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("created_by"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<HealthExamItem> HEALTH_EXAM_ITEM_MAPPER = (rs, i) ->
+            new HealthExamItem(
+                    rs.getObject("id", UUID.class), rs.getObject("registration_id", UUID.class),
+                    rs.getInt("seq"), rs.getString("item_code"), rs.getString("item_name"),
+                    rs.getString("item_category"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getBigDecimal("price"), rs.getString("status"),
+                    rs.getString("result_summary"), rs.getString("result_note"),
+                    rs.getBoolean("abnormal"), rs.getString("completed_by"),
+                    rs.getTimestamp("completed_at") == null ? null
+                            : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getLong("version"));
+
+    private static final RowMapper<HealthExamReport> HEALTH_REPORT_MAPPER = (rs, i) ->
+            new HealthExamReport(
+                    rs.getObject("id", UUID.class), rs.getString("report_no"),
+                    rs.getObject("registration_id", UUID.class), rs.getString("conclusion"),
+                    rs.getString("suggestion"), rs.getInt("abnormal_count"),
+                    rs.getString("status"), rs.getString("created_by"),
+                    rs.getString("finalized_by"),
+                    rs.getTimestamp("finalized_at") == null ? null
+                            : rs.getTimestamp("finalized_at").toInstant(),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final String HEALTH_PACKAGE_SELECT = """
+            SELECT p.id, p.package_code, p.name, p.description, p.total_price, p.status,
+                   (SELECT count(*) FROM clinical_svc.health_exam_package_item i
+                     WHERE i.package_id = p.id) AS item_count,
+                   p.created_by, p.published_by, p.published_at, p.version, p.created_at
+              FROM clinical_svc.health_exam_package p
+            """;
+
+    private static final String HEALTH_PACKAGE_ITEM_SELECT = """
+            SELECT i.id, i.package_id, i.seq, i.item_code, i.item_name, i.item_category,
+                   i.dept_id, d.name AS dept_name, i.price
+              FROM clinical_svc.health_exam_package_item i
+              LEFT JOIN clinical_svc.md_dept d ON d.id = i.dept_id
+            """;
+
+    private static final String HEALTH_REGISTRATION_SELECT = """
+            SELECT r.id, r.exam_no, r.package_id, r.package_name, r.package_price, r.patient_id,
+                   r.patient_no, r.patient_name, r.gender, r.birth_date, r.status, r.note,
+                   r.cancel_reason, r.cancelled_by, r.cancelled_at, r.created_by, r.version,
+                   r.created_at, r.updated_at
+              FROM clinical_svc.health_exam_registration r
+            """;
+
+    private static final String HEALTH_EXAM_ITEM_SELECT = """
+            SELECT i.id, i.registration_id, i.seq, i.item_code, i.item_name, i.item_category,
+                   i.dept_id, i.dept_name, i.price, i.status, i.result_summary, i.result_note,
+                   i.abnormal, i.completed_by, i.completed_at, i.version
+              FROM clinical_svc.health_exam_item i
+            """;
+
+    private static final String HEALTH_REPORT_SELECT = """
+            SELECT rp.id, rp.report_no, rp.registration_id, rp.conclusion, rp.suggestion,
+                   rp.abnormal_count, rp.status, rp.created_by, rp.finalized_by,
+                   rp.finalized_at, rp.version, rp.created_at
+              FROM clinical_svc.health_exam_report rp
+            """;
+
+    public String nextHealthExamNo() {
+        return nextNo("clinical_svc.health_exam_no_seq", "HE");
+    }
+
+    public String nextHealthReportNo() {
+        return nextNo("clinical_svc.health_report_no_seq", "HR");
+    }
+
+    public boolean healthPackageCodeExists(String code) {
+        return jdbc.sql("""
+                        SELECT EXISTS (SELECT 1 FROM clinical_svc.health_exam_package
+                                        WHERE package_code = ?)
+                        """).param(code).query(Boolean.class).single();
+    }
+
+    public void insertHealthPackage(HealthExamPackage p) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.health_exam_package
+                            (id, package_code, name, description, total_price, status, created_by)
+                        VALUES (:id, :code, :name, :description, :totalPrice, :status, :createdBy)
+                        """)
+                .param("id", p.id()).param("code", p.packageCode()).param("name", p.name())
+                .param("description", p.description()).param("totalPrice", p.totalPrice())
+                .param("status", p.status()).param("createdBy", p.createdBy()).update();
+    }
+
+    public void insertHealthPackageItem(HealthExamPackageItem item) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.health_exam_package_item
+                            (id, package_id, seq, item_code, item_name, item_category, dept_id,
+                             dept_name, price)
+                        VALUES (:id, :packageId, :seq, :itemCode, :itemName, :itemCategory,
+                                :deptId, :deptName, :price)
+                        """)
+                .param("id", item.id()).param("packageId", item.packageId())
+                .param("seq", item.seq()).param("itemCode", item.itemCode())
+                .param("itemName", item.itemName()).param("itemCategory", item.itemCategory())
+                .param("deptId", item.deptId()).param("deptName", item.deptName())
+                .param("price", item.price()).update();
+    }
+
+    public Optional<HealthExamPackage> findHealthPackage(UUID id) {
+        return jdbc.sql(HEALTH_PACKAGE_SELECT + " WHERE p.id = ?")
+                .param(id).query(HEALTH_PACKAGE_MAPPER).optional();
+    }
+
+    public Optional<HealthExamPackage> lockHealthPackage(UUID id) {
+        return jdbc.sql(HEALTH_PACKAGE_SELECT + " WHERE p.id = ? FOR UPDATE OF p")
+                .param(id).query(HEALTH_PACKAGE_MAPPER).optional();
+    }
+
+    public List<HealthExamPackage> listHealthPackages(String status, String keyword, int limit) {
+        return jdbc.sql(HEALTH_PACKAGE_SELECT + """
+                         WHERE (CAST(:status AS text) IS NULL
+                                OR p.status = CAST(:status AS text))
+                           AND (CAST(:keyword AS text) IS NULL
+                                OR p.package_code ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR p.name ILIKE '%' || CAST(:keyword AS text) || '%')
+                         ORDER BY CASE p.status WHEN 'PUBLISHED' THEN 0
+                                                WHEN 'DRAFT' THEN 1 ELSE 2 END,
+                                  p.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("keyword", keyword).param("limit", limit)
+                .query(HEALTH_PACKAGE_MAPPER).list();
+    }
+
+    public List<HealthExamPackageItem> listHealthPackageItems(UUID packageId) {
+        return jdbc.sql(HEALTH_PACKAGE_ITEM_SELECT
+                        + " WHERE i.package_id = ? ORDER BY i.seq")
+                .param(packageId).query(HEALTH_PACKAGE_ITEM_MAPPER).list();
+    }
+
+    /** 仅草稿可改：更新名称/说明/总价（CAS）。 */
+    public boolean updateHealthPackageDraft(UUID id, String name, String description,
+                                            BigDecimal totalPrice, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_package
+                           SET name = :name, description = :description, total_price = :totalPrice,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("name", name).param("description", description)
+                .param("totalPrice", totalPrice).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 草稿更新项目前先删旧明细；非 DRAFT 由服务层拦截。 */
+    public void deleteHealthPackageItems(UUID packageId) {
+        jdbc.sql("DELETE FROM clinical_svc.health_exam_package_item WHERE package_id = ?")
+                .param(packageId).update();
+    }
+
+    public boolean publishHealthPackage(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_package
+                           SET status = 'PUBLISHED', published_by = :actor, published_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean disableHealthPackage(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_package
+                           SET status = 'DISABLED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'PUBLISHED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertHealthRegistration(HealthExamRegistration r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.health_exam_registration
+                            (id, exam_no, package_id, package_name, package_price, patient_id,
+                             patient_no, patient_name, gender, birth_date, status, note, created_by)
+                        VALUES (:id, :examNo, :packageId, :packageName, :packagePrice, :patientId,
+                                :patientNo, :patientName, :gender, :birthDate, :status, :note,
+                                :createdBy)
+                        """)
+                .param("id", r.id()).param("examNo", r.examNo()).param("packageId", r.packageId())
+                .param("packageName", r.packageName()).param("packagePrice", r.packagePrice())
+                .param("patientId", r.patientId()).param("patientNo", r.patientNo())
+                .param("patientName", r.patientName()).param("gender", r.gender())
+                .param("birthDate", r.birthDate()).param("status", r.status())
+                .param("note", r.note()).param("createdBy", r.createdBy()).update();
+    }
+
+    public void insertHealthExamItem(HealthExamItem item) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.health_exam_item
+                            (id, registration_id, seq, item_code, item_name, item_category,
+                             dept_id, dept_name, price, status)
+                        VALUES (:id, :registrationId, :seq, :itemCode, :itemName, :itemCategory,
+                                :deptId, :deptName, :price, :status)
+                        """)
+                .param("id", item.id()).param("registrationId", item.registrationId())
+                .param("seq", item.seq()).param("itemCode", item.itemCode())
+                .param("itemName", item.itemName()).param("itemCategory", item.itemCategory())
+                .param("deptId", item.deptId()).param("deptName", item.deptName())
+                .param("price", item.price()).param("status", item.status()).update();
+    }
+
+    public Optional<HealthExamRegistration> findHealthRegistration(UUID id) {
+        return jdbc.sql(HEALTH_REGISTRATION_SELECT + " WHERE r.id = ?")
+                .param(id).query(HEALTH_REGISTRATION_MAPPER).optional();
+    }
+
+    public Optional<HealthExamRegistration> lockHealthRegistration(UUID id) {
+        return jdbc.sql(HEALTH_REGISTRATION_SELECT + " WHERE r.id = ? FOR UPDATE OF r")
+                .param(id).query(HEALTH_REGISTRATION_MAPPER).optional();
+    }
+
+    /** 登记列表：默认当天，带项目进度、异常数与报告状态。 */
+    public List<HealthExamRegistrationSummary> listHealthRegistrations(String status,
+                                                                       OffsetDateTime fromTs,
+                                                                       OffsetDateTime toTs,
+                                                                       int limit) {
+        return jdbc.sql("""
+                        SELECT r.id, r.exam_no, r.package_name, r.patient_id, r.patient_no,
+                               r.patient_name, r.gender, r.birth_date, r.status, r.created_at,
+                               count(i.id) AS item_total,
+                               count(i.id) FILTER (WHERE i.status IN ('COMPLETED', 'SKIPPED'))
+                                   AS item_completed,
+                               count(i.id) FILTER (WHERE i.abnormal) AS abnormal_count,
+                               (SELECT rp.status FROM clinical_svc.health_exam_report rp
+                                 WHERE rp.registration_id = r.id) AS report_status
+                          FROM clinical_svc.health_exam_registration r
+                          LEFT JOIN clinical_svc.health_exam_item i
+                                 ON i.registration_id = r.id
+                         WHERE (CAST(:status AS text) IS NULL
+                                OR r.status = CAST(:status AS text))
+                           AND r.created_at >= :fromTs AND r.created_at < :toTs
+                         GROUP BY r.id, r.exam_no, r.package_name, r.patient_id, r.patient_no,
+                                  r.patient_name, r.gender, r.birth_date, r.status, r.created_at
+                         ORDER BY r.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("fromTs", fromTs).param("toTs", toTs)
+                .param("limit", limit)
+                .query((rs, i) -> new HealthExamRegistrationSummary(
+                        rs.getObject("id", UUID.class), rs.getString("exam_no"),
+                        rs.getString("package_name"), rs.getObject("patient_id", UUID.class),
+                        rs.getString("patient_no"), rs.getString("patient_name"),
+                        rs.getString("gender"),
+                        rs.getDate("birth_date") == null ? null
+                                : rs.getDate("birth_date").toLocalDate(),
+                        rs.getString("status"), rs.getInt("item_total"),
+                        rs.getInt("item_completed"), rs.getInt("abnormal_count"),
+                        rs.getString("report_status"),
+                        rs.getTimestamp("created_at").toInstant()))
+                .list();
+    }
+
+    public List<HealthExamItem> listHealthExamItems(UUID registrationId) {
+        return jdbc.sql(HEALTH_EXAM_ITEM_SELECT
+                        + " WHERE i.registration_id = ? ORDER BY i.seq")
+                .param(registrationId).query(HEALTH_EXAM_ITEM_MAPPER).list();
+    }
+
+    public Optional<HealthExamItem> findHealthExamItem(UUID id) {
+        return jdbc.sql(HEALTH_EXAM_ITEM_SELECT + " WHERE i.id = ?")
+                .param(id).query(HEALTH_EXAM_ITEM_MAPPER).optional();
+    }
+
+    /** 录入项目结果（CAS：仅 PENDING 且版本一致）。 */
+    public boolean updateHealthExamItemResult(UUID id, String status, String summary, String note,
+                                              boolean abnormal, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_item
+                           SET status = :status, result_summary = :summary, result_note = :note,
+                               abnormal = :abnormal, completed_by = :actor, completed_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'PENDING' AND version = :version
+                        """)
+                .param("id", id).param("status", status).param("summary", summary)
+                .param("note", note).param("abnormal", abnormal).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public HealthExamItemCountRow countHealthExamItems(UUID registrationId) {
+        return jdbc.sql("""
+                        SELECT count(*) AS total,
+                               count(*) FILTER (WHERE status = 'PENDING') AS pending,
+                               count(*) FILTER (WHERE status = 'COMPLETED') AS completed,
+                               count(*) FILTER (WHERE status = 'SKIPPED') AS skipped,
+                               count(*) FILTER (WHERE abnormal) AS abnormal
+                          FROM clinical_svc.health_exam_item
+                         WHERE registration_id = ?
+                        """)
+                .param(registrationId)
+                .query((rs, i) -> new HealthExamItemCountRow(rs.getInt("total"),
+                        rs.getInt("pending"), rs.getInt("completed"), rs.getInt("skipped"),
+                        rs.getInt("abnormal")))
+                .single();
+    }
+
+    public boolean startHealthRegistration(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_registration
+                           SET status = 'IN_PROGRESS', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'REGISTERED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean finishHealthExam(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_registration
+                           SET status = 'EXAM_DONE', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('REGISTERED', 'IN_PROGRESS')
+                           AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean markHealthReported(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_registration
+                           SET status = 'REPORTED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'EXAM_DONE' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean cancelHealthRegistration(UUID id, String reason, String actor,
+                                            long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_registration
+                           SET status = 'CANCELLED', cancel_reason = :reason, cancelled_by = :actor,
+                               cancelled_at = now(), version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('REGISTERED', 'IN_PROGRESS')
+                           AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertHealthReport(HealthExamReport r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.health_exam_report
+                            (id, report_no, registration_id, conclusion, suggestion,
+                             abnormal_count, status, created_by)
+                        VALUES (:id, :reportNo, :registrationId, :conclusion, :suggestion,
+                                :abnormalCount, :status, :createdBy)
+                        """)
+                .param("id", r.id()).param("reportNo", r.reportNo())
+                .param("registrationId", r.registrationId()).param("conclusion", r.conclusion())
+                .param("suggestion", r.suggestion()).param("abnormalCount", r.abnormalCount())
+                .param("status", r.status()).param("createdBy", r.createdBy()).update();
+    }
+
+    public Optional<HealthExamReport> findHealthReportByRegistration(UUID registrationId) {
+        return jdbc.sql(HEALTH_REPORT_SELECT + " WHERE rp.registration_id = ?")
+                .param(registrationId).query(HEALTH_REPORT_MAPPER).optional();
+    }
+
+    public Optional<HealthExamReport> lockHealthReportByRegistration(UUID registrationId) {
+        return jdbc.sql(HEALTH_REPORT_SELECT
+                        + " WHERE rp.registration_id = ? FOR UPDATE OF rp")
+                .param(registrationId).query(HEALTH_REPORT_MAPPER).optional();
+    }
+
+    public boolean updateHealthReportDraft(UUID id, String conclusion, String suggestion,
+                                           int abnormalCount, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_report
+                           SET conclusion = :conclusion, suggestion = :suggestion,
+                               abnormal_count = :abnormalCount, version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("conclusion", conclusion).param("suggestion", suggestion)
+                .param("abnormalCount", abnormalCount).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean finalizeHealthReport(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.health_exam_report
+                           SET status = 'FINAL', finalized_by = :actor, finalized_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 体检看板：当日登记状态、报告与异常项目。 */
+    public HealthExamBoardRow healthExamBoard(OffsetDateTime fromTs, OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE r.status = 'REGISTERED') AS registered,
+                               count(*) FILTER (WHERE r.status = 'IN_PROGRESS') AS in_progress,
+                               count(*) FILTER (WHERE r.status = 'EXAM_DONE') AS exam_done,
+                               count(*) FILTER (WHERE r.status = 'REPORTED') AS reported,
+                               count(*) FILTER (WHERE r.status = 'CANCELLED') AS cancelled,
+                               (SELECT count(*) FROM clinical_svc.health_exam_item i
+                                  JOIN clinical_svc.health_exam_registration r2
+                                    ON r2.id = i.registration_id
+                                 WHERE i.abnormal
+                                   AND r2.created_at >= :fromTs AND r2.created_at < :toTs)
+                                   AS abnormal_items,
+                               count(*) AS total_today
+                          FROM clinical_svc.health_exam_registration r
+                         WHERE r.created_at >= :fromTs AND r.created_at < :toTs
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new HealthExamBoardRow(rs.getLong("registered"),
+                        rs.getLong("in_progress"), rs.getLong("exam_done"),
+                        rs.getLong("reported"), rs.getLong("cancelled"),
+                        rs.getLong("abnormal_items"), rs.getLong("total_today")))
                 .single();
     }
 

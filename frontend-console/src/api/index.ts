@@ -17,6 +17,11 @@ import type {
   EmergencyObservation,
   EmergencyOutcome,
   EmergencyTriage,
+  HealthExamBoard,
+  HealthExamPackage,
+  HealthExamPackageView,
+  HealthExamRegistrationSummary,
+  HealthExamRegistrationView,
   DrugBatch,
   DrugView,
   Frequency,
@@ -489,6 +494,62 @@ export const clinicalApi = {
     outcome: EmergencyOutcome,
     note?: string,
   ) => post<EmergencyObservation>(`/clinical/emergency/observations/${id}/outcome`, { outcome, note }),
+  /** 体检中心（G37）。 */
+  healthExamPackages: (params: { status?: string; keyword?: string; limit?: number }) =>
+    get<HealthExamPackage[]>('/clinical/health/packages', params),
+  healthExamPackage: (id: string) =>
+    get<HealthExamPackageView>(`/clinical/health/packages/${id}`),
+  createHealthExamPackage: (body: {
+    packageCode: string
+    name: string
+    description?: string
+    items: { itemCode: string; deptId?: string }[]
+  }) => post<HealthExamPackageView>('/clinical/health/packages', body),
+  updateHealthExamPackage: (
+    id: string,
+    body: {
+      name: string
+      description?: string
+      items: { itemCode: string; deptId?: string }[]
+    },
+  ) => put<HealthExamPackageView>(`/clinical/health/packages/${id}`, body),
+  publishHealthExamPackage: (id: string) =>
+    post<HealthExamPackageView>(`/clinical/health/packages/${id}/publish`),
+  disableHealthExamPackage: (id: string) =>
+    post<HealthExamPackageView>(`/clinical/health/packages/${id}/disable`),
+  healthExamBoard: (params: { from?: string; to?: string }) =>
+    get<HealthExamBoard>('/clinical/health/board', params),
+  healthExamRegistrations: (params: {
+    status?: string
+    from?: string
+    to?: string
+    limit?: number
+  }) => get<HealthExamRegistrationSummary[]>('/clinical/health/registrations', params),
+  healthExamRegistration: (id: string) =>
+    get<HealthExamRegistrationView>(`/clinical/health/registrations/${id}`),
+  createHealthExamRegistration: (body: {
+    packageId: string
+    patientId: string
+    note?: string
+  }) => post<HealthExamRegistrationView>('/clinical/health/registrations', body),
+  cancelHealthExamRegistration: (id: string, reason: string) =>
+    post<HealthExamRegistrationView>(`/clinical/health/registrations/${id}/cancel`, { reason }),
+  recordHealthExamItem: (
+    id: string,
+    itemId: string,
+    body: { status: 'COMPLETED' | 'SKIPPED'; resultSummary?: string; resultNote?: string; abnormal?: boolean },
+  ) =>
+    post<HealthExamRegistrationView>(
+      `/clinical/health/registrations/${id}/items/${itemId}/result`,
+      body,
+    ),
+  saveHealthExamReportDraft: (id: string, body: { conclusion: string; suggestion?: string }) =>
+    post<HealthExamRegistrationView>(
+      `/clinical/health/registrations/${id}/report/draft`,
+      body,
+    ),
+  finalizeHealthExamReport: (id: string) =>
+    post<HealthExamRegistrationView>(`/clinical/health/registrations/${id}/report/finalize`),
 }
 
 export const emrApi = {

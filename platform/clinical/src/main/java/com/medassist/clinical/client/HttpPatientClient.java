@@ -15,6 +15,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -30,7 +31,8 @@ public class HttpPatientClient implements PatientClient {
     private static final Logger log = LoggerFactory.getLogger(HttpPatientClient.class);
 
     /** EMPI 内部接口返回的最小投影（不含 PHI 明文）。 */
-    public record InternalPatient(UUID id, String patientNo, String name, String status) {
+    public record InternalPatient(UUID id, String patientNo, String name, String status,
+                                  String gender, LocalDate birthDate) {
     }
 
     private final RestClient client;
@@ -57,6 +59,17 @@ public class HttpPatientClient implements PatientClient {
 
     @Override
     public PatientRef requireActive(UUID patientId) {
+        InternalPatient p = requireActiveInternal(patientId);
+        return new PatientRef(p.id(), p.patientNo(), p.name());
+    }
+
+    @Override
+    public PatientProfile requireProfile(UUID patientId) {
+        InternalPatient p = requireActiveInternal(patientId);
+        return new PatientProfile(p.id(), p.patientNo(), p.name(), p.gender(), p.birthDate());
+    }
+
+    private InternalPatient requireActiveInternal(UUID patientId) {
         InternalPatient p;
         try {
             p = client.get()
@@ -78,6 +91,6 @@ public class HttpPatientClient implements PatientClient {
             throw new BusinessException(ErrorCode.PATIENT_MERGE_CONFLICT,
                     "该患者档案状态为 " + p.status() + "，不能挂号（请使用主档案）");
         }
-        return new PatientRef(p.id(), p.patientNo(), p.name());
+        return p;
     }
 }
