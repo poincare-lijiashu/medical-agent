@@ -19,7 +19,7 @@
 - **数据库**：auth V57、pharmacy V16、tech V11、emr V20、insurance V19、material V4、clinical V46（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089；EMPI 8082 未启动。
 - **演示账号**：`admin01 / Med@2026`（ADMIN），`pharm01`、`qc01` 同口令。
-- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G24，代码 HEAD=`ffdc385`）。
+- **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G25，代码 HEAD=`451ac1d`）。
 
 ### 1. 功能完成度（按业务域）
 
