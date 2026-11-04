@@ -139,10 +139,16 @@ public class RealtimeSettlementService {
     }
 
     public List<RealtimeSettlementView> list(UUID billId, String status, Integer limit) {
+        return list(billId, status, limit, java.util.Set.of());
+    }
+
+    /** 交易列表（G48 按清单院区收敛；空集合表示不限院区）。 */
+    public List<RealtimeSettlementView> list(UUID billId, String status, Integer limit,
+                                             java.util.Set<UUID> campusIds) {
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
         String normalized = (status == null || status.isBlank())
                 ? null : status.trim().toUpperCase(Locale.ROOT);
-        return repo.listRealtime(billId, normalized, size).stream()
+        return repo.listRealtime(billId, normalized, size, InsuranceService.campusCsv(campusIds)).stream()
                 .map(r -> toView(r, false)).toList();
     }
 

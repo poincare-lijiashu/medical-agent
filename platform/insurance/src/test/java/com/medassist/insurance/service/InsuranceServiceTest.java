@@ -68,7 +68,7 @@ class InsuranceServiceTest {
         service = new InsuranceService(repo, patientClient, clinicalClient,
                 JsonMapper.builder().build());
         // 默认首插成功；并发首插用例单独覆盖为 false
-        when(repo.insertBill(any())).thenReturn(true);
+        when(repo.insertBill(any(), any())).thenReturn(true);
     }
 
     // ---------------------------------------------------------------- 计算引擎
@@ -270,7 +270,7 @@ class InsuranceServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NOT_ENROLLED);
-        verify(repo, never()).insertBill(any());
+        verify(repo, never()).insertBill(any(), any());
     }
 
     @Test
@@ -289,7 +289,7 @@ class InsuranceServiceTest {
         BillView view = service.generate(visitId, "cashier01");
 
         assertThat(view.bill().status()).isEqualTo(SettlementBill.DRAFT);
-        verify(repo).insertBill(any(SettlementBill.class));
+        verify(repo).insertBill(any(SettlementBill.class), any());
         verify(repo).logChange(eq("cashier01"), eq("BILL_GENERATE"), eq("SETTLEMENT_BILL"),
                 anyString(), anyString());
     }
@@ -361,7 +361,7 @@ class InsuranceServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NOT_ENROLLED);
-        verify(repo, never()).insertBill(any());
+        verify(repo, never()).insertBill(any(), any());
     }
 
     @Test
@@ -376,7 +376,7 @@ class InsuranceServiceTest {
         BillView view = service.generate(visitId, "cashier01");
 
         ArgumentCaptor<SettlementBill> captor = ArgumentCaptor.forClass(SettlementBill.class);
-        verify(repo).insertBill(captor.capture());
+        verify(repo).insertBill(captor.capture(), any());
         assertThat(captor.getValue().insuranceAmount()).isEqualByComparingTo("5.00");
         assertThat(captor.getValue().selfPayAmount()).isEqualByComparingTo("5.00");
         assertThat(view.capUsed()).isEqualByComparingTo("10.00");
@@ -390,7 +390,7 @@ class InsuranceServiceTest {
         when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
                 member("0", "1.0000", "300000.00")));
         stubChargeResolution();
-        when(repo.insertBill(any())).thenReturn(false);
+        when(repo.insertBill(any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
                 .isInstanceOf(BusinessException.class)
@@ -744,7 +744,7 @@ class InsuranceServiceTest {
         assertThat(view.bill().version()).isEqualTo(8L);
         verify(repo).updateDraftBill(eq(billId), any(), any(), any(), any(), any(),
                 anyString(), any(), any(), eq(7L));
-        verify(repo, never()).insertBill(any());
+        verify(repo, never()).insertBill(any(), any());
     }
 
     @Test
@@ -780,7 +780,7 @@ class InsuranceServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NO_CHARGE);
-        verify(repo, never()).insertBill(any());
+        verify(repo, never()).insertBill(any(), any());
     }
 
     // ---------------------------------------------------------------- 参保登记（MF-14）

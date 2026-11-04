@@ -55,6 +55,9 @@ public class InternalChargeController {
         body.put("patientNo", visit.patientNo());
         // 业务日期：医保按"费用发生/出院日期"校验参保与年度封顶，不能按请求时刻的今天
         body.put("serviceDate", serviceDate(visit));
+        // G48：医保清单按就诊院区归属，避免主院区医保对账看到东院区清单
+        body.put("campusId", repo.findVisitCampus(visit.id())
+                .orElse(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID));
         body.put("lines", lines);
         return body;
     }

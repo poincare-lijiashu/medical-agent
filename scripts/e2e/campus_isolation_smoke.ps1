@@ -249,5 +249,34 @@ if ($sumMain.code -eq 200) { foreach ($p in $sumMain.body.data.PSObject.Properti
 if ($sumAdmin.code -eq 200) { foreach ($p in $sumAdmin.body.data.PSObject.Properties) { $totalAdmin += [int]$p.Value } }
 Check "summary counts exclude other campus" (($sumMain.code -eq 200) -and ($sumAdmin.code -eq 200) -and ($totalAdmin -gt $totalMain)) ("main=" + $totalMain + " admin=" + $totalAdmin)
 
+# ---------------------------------------------------------------- 8) insurance campus (G48)
+$mainBillId = SqlOne "select id from insurance_svc.settlement_bill where campus_id='a0000000-0000-0000-0000-000000000001' order by created_at desc limit 1;"
+$mainBillVisit = SqlOne ("select visit_id from insurance_svc.settlement_bill where id='" + $mainBillId + "';")
+Check "main-campus bill found" ($mainBillId.Length -gt 0) "none"
+
+$billMainDetail = Call "GET" ("/insurance/settlements/" + $mainBillId) $eastAdminToken $null
+Check "EAST-only account cannot open MAIN bill (404)" ($billMainDetail.code -eq 404) $billMainDetail.raw
+$billAdminDetail = Call "GET" ("/insurance/settlements/" + $mainBillId) $adminToken $null
+Check "cross-campus admin opens MAIN bill" ($billAdminDetail.code -eq 200) $billAdminDetail.raw
+
+$billListEast = Call "GET" "/insurance/settlements?limit=200" $eastAdminToken $null
+$billSeenEast = $false
+if ($billListEast.code -eq 200) { $billSeenEast = (@($billListEast.body.data) | Where-Object { $_.id -eq $mainBillId } | Measure-Object).Count -gt 0 }
+Check "EAST bill list excludes MAIN bill" (($billListEast.code -eq 200) -and (-not $billSeenEast)) $billListEast.raw
+
+$billByVisitEast = Call "GET" ("/insurance/settlements/by-visit/" + $mainBillVisit) $eastAdminToken $null
+Check "EAST by-visit blocked for MAIN visit" ($billByVisitEast.code -eq 404) $billByVisitEast.raw
+
+$realtimeId = SqlOne "select r.id from insurance_svc.realtime_settlement r join insurance_svc.settlement_bill b on b.id=r.bill_id where b.campus_id='a0000000-0000-0000-0000-000000000001' limit 1;"
+if ($realtimeId.Length -gt 0) {
+    $rtEast = Call "GET" ("/insurance/realtime-settlements/" + $realtimeId) $eastAdminToken $null
+    $rtBlocked = ($rtEast.code -eq 404) -or ($rtEast.body -ne $null -and $rtEast.body.code -eq 48416)
+    Check "EAST cannot open MAIN realtime settlement (404/48416)" $rtBlocked $rtEast.raw
+    $rtAdmin = Call "GET" ("/insurance/realtime-settlements/" + $realtimeId) $adminToken $null
+    Check "cross-campus admin opens MAIN realtime settlement" ($rtAdmin.code -eq 200) $rtAdmin.raw
+} else {
+    Check "realtime settlement sample exists" $false "no realtime rows"
+}
+
 Write-Output ("RESULT pass=" + $script:pass + " fail=" + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

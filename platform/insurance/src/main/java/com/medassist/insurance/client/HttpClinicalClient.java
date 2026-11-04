@@ -86,6 +86,7 @@ public class HttpClinicalClient implements ClinicalClient {
         UUID patientId = uuid(body.get("patientId"));
         String patientNo = str(body.get("patientNo"));
         LocalDate serviceDate = date(body.get("serviceDate"));
+        UUID campusId = uuid(body.get("campusId"));
         List<ChargeLine> lines = new ArrayList<>();
         Object rawLines = body.get("lines");
         if (rawLines instanceof List<?> rows) {
@@ -102,7 +103,7 @@ public class HttpClinicalClient implements ClinicalClient {
                         str(m.get("chargeStatus"))));
             }
         }
-        return new ChargeSummary(visitId, patientId, patientNo, serviceDate, lines);
+        return new ChargeSummary(visitId, patientId, patientNo, serviceDate, campusId, lines);
     }
 
     @Override

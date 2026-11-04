@@ -33,9 +33,12 @@ public class RealtimeSettlementController {
     private static final String READ = "insurance:realtime:read";
 
     private final RealtimeSettlementService service;
+    private final com.medassist.insurance.service.SettlementAccessGuard guard;
 
-    public RealtimeSettlementController(RealtimeSettlementService service) {
+    public RealtimeSettlementController(RealtimeSettlementService service,
+                                        com.medassist.insurance.service.SettlementAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 提交实时结算（同一清单同一请求号幂等）。 */
@@ -44,8 +47,10 @@ public class RealtimeSettlementController {
             @PathVariable UUID billId,
             @Valid @RequestBody RealtimeSubmitReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireBill(scope, billId);
         return ApiResponse.ok(service.submit(billId, req.requestId(), req.bizType(), actor));
     }
 
@@ -54,16 +59,20 @@ public class RealtimeSettlementController {
     public ApiResponse<RealtimeSettlementView> retry(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireRealtime(scope, id);
         return ApiResponse.ok(service.retry(id, actor));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<RealtimeSettlementView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireRealtime(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -72,8 +81,9 @@ public class RealtimeSettlementController {
             @RequestParam(required = false) UUID billId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(billId, status, limit));
+        return ApiResponse.ok(service.list(billId, status, limit, scope.campusFilter()));
     }
 }

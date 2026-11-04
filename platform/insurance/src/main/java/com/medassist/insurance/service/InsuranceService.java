@@ -489,7 +489,9 @@ public class InsuranceService {
                     SettlementBill.DRAFT, detail, actor, null, null,
                     null, null, null, member.reimbursementRatio(), member.cap(), 0L, null,
                     primaryCode, primaryName, diagnoses.size(), diagnosesJson);
-            if (!repo.insertBill(created)) {
+            if (!repo.insertBill(created, summary.campusId() == null
+                    ? com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID
+                    : summary.campusId())) {
                 // 并发首插：另一请求已抢先建单（有效清单唯一索引兜底），让对方刷新后重试
                 throw new BusinessException(ErrorCode.CONFLICT,
                         "该就诊正在被其他终端生成结算清单，请刷新后重试");
@@ -691,8 +693,24 @@ public class InsuranceService {
     }
 
     public List<SettlementBill> list(UUID patientId, String status, Integer limit) {
+        return list(patientId, status, limit, java.util.Set.of());
+    }
+
+    /** 结算清单列表（G48 按院区收敛；空集合表示不限院区）。 */
+    public List<SettlementBill> list(UUID patientId, String status, Integer limit,
+                                     java.util.Set<UUID> campusIds) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
-        return repo.listBills(patientId, normalized, limit == null || limit <= 0 ? 50 : Math.min(limit, 200));
+        return repo.listBills(patientId, normalized,
+                limit == null || limit <= 0 ? 50 : Math.min(limit, 200), campusCsv(campusIds));
+    }
+
+    /** 院区集合转 SQL 过滤串；空集合（跨院区角色）返回空串表示不限院区。 */
+    static String campusCsv(java.util.Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     private BillView view(UUID billId) {

@@ -20,10 +20,16 @@ public interface ClinicalClient {
      * 与年度封顶归属；旧版临床接口不返回时为空，调用方回退到业务"今天"。
      */
     record ChargeSummary(UUID visitId, UUID patientId, String patientNo, LocalDate serviceDate,
-                         List<ChargeLine> lines) {
+                         UUID campusId, List<ChargeLine> lines) {
 
         public ChargeSummary(UUID visitId, UUID patientId, String patientNo, List<ChargeLine> lines) {
-            this(visitId, patientId, patientNo, null, lines);
+            this(visitId, patientId, patientNo, null, null, lines);
+        }
+
+        /** 兼容旧调用（未取院区的直接构造）：院区为空时调用方回退主院区。 */
+        public ChargeSummary(UUID visitId, UUID patientId, String patientNo, LocalDate serviceDate,
+                             List<ChargeLine> lines) {
+            this(visitId, patientId, patientNo, serviceDate, null, lines);
         }
     }
 

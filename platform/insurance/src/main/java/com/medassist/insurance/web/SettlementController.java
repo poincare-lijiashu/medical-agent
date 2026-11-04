@@ -39,9 +39,12 @@ public class SettlementController {
     private static final String READ = "insurance:settlement:read";
 
     private final InsuranceService service;
+    private final com.medassist.insurance.service.SettlementAccessGuard guard;
 
-    public SettlementController(InsuranceService service) {
+    public SettlementController(InsuranceService service,
+                                com.medassist.insurance.service.SettlementAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 生成或重算（DRAFT 可重算，CONFIRMED 拒绝）。 */
@@ -49,8 +52,10 @@ public class SettlementController {
     public ApiResponse<BillView> generate(
             @Valid @RequestBody GenerateBillReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireVisit(scope, req.visitId());
         return ApiResponse.ok(service.generate(req.visitId(), actor));
     }
 
@@ -60,6 +65,7 @@ public class SettlementController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireBill(scope, id);
         return ApiResponse.ok(maskBill(service.detail(id), scope));
     }
 
@@ -69,6 +75,7 @@ public class SettlementController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireVisit(scope, visitId);
         return ApiResponse.ok(maskBill(service.byVisit(visitId), scope));
     }
 
@@ -76,8 +83,10 @@ public class SettlementController {
     public ApiResponse<BillView> confirm(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, CONFIRM);
+        guard.requireBill(scope, id);
         return ApiResponse.ok(service.confirm(id, actor));
     }
 
@@ -87,8 +96,10 @@ public class SettlementController {
             @PathVariable UUID id,
             @Valid @RequestBody VoidReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, CONFIRM);
+        guard.requireBill(scope, id);
         return ApiResponse.ok(service.voidBill(id, req.reason(), actor));
     }
 
@@ -96,8 +107,10 @@ public class SettlementController {
     @GetMapping("/reconcile/{visitId}")
     public ApiResponse<ReconcileView> reconcile(
             @PathVariable UUID visitId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireVisit(scope, visitId);
         return ApiResponse.ok(service.reconcile(visitId));
     }
 
@@ -109,7 +122,8 @@ public class SettlementController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(PhiMask.bills(service.list(patientId, status, limit), scope));
+        return ApiResponse.ok(PhiMask.bills(
+                service.list(patientId, status, limit, scope.campusFilter()), scope));
     }
 
     /** BillView 里的清单抬头含患者号，按 phi:read 决定掩码（P0-S2）。 */

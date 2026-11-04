@@ -40,13 +40,17 @@ class InsuranceControllerPermissionTest {
     private SettlementController settlementController;
 
     private final UUID id = UUID.randomUUID();
+    /** 本类只测权限点；院区隔离由 SettlementAccessGuard 与其单测覆盖。 */
+    private final com.medassist.common.security.DataScope scope =
+            com.medassist.common.security.DataScope.all("yb01", true);
 
     @BeforeEach
     void setUp() {
         service = mock(InsuranceService.class);
         catalogController = new CatalogController(service, mock(InsuranceMetrics.class));
         memberController = new MemberController(service);
-        settlementController = new SettlementController(service);
+        settlementController = new SettlementController(service,
+                mock(com.medassist.insurance.service.SettlementAccessGuard.class));
     }
 
     @Test
@@ -99,7 +103,7 @@ class InsuranceControllerPermissionTest {
         var req = new GenerateBillReq(id);
 
         assertThatThrownBy(() -> settlementController.generate(req,
-                "insurance:settlement:read", "doctor01"))
+                "insurance:settlement:read", "doctor01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -112,12 +116,12 @@ class InsuranceControllerPermissionTest {
         var voidReq = new VoidReq("test");
 
         assertThatThrownBy(() -> settlementController.confirm(id,
-                "insurance:settlement:read,insurance:settlement:write", "cashier01"))
+                "insurance:settlement:read,insurance:settlement:write", "cashier01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         assertThatThrownBy(() -> settlementController.voidBill(id, voidReq,
-                "insurance:settlement:write", "cashier01"))
+                "insurance:settlement:write", "cashier01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -128,7 +132,7 @@ class InsuranceControllerPermissionTest {
     @Test
     @DisplayName("结算确认：持有 confirm 权限放行")
     void confirmAllowedWithConfirmPermission() {
-        settlementController.confirm(id, "insurance:settlement:confirm", "yb01");
+        settlementController.confirm(id, "insurance:settlement:confirm", "yb01", scope);
 
         verify(service).confirm(id, "yb01");
     }

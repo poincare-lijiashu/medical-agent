@@ -411,15 +411,21 @@ public class InsuranceRepository {
      * @return false 表示已被并发请求抢先插入（唯一索引冲突被 ON CONFLICT 吞掉），调用方应返回 409
      */
     public boolean insertBill(SettlementBill b) {
+        return insertBill(b, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 插入草稿清单并固化院区（G48）；并发冲突语义同 {@link #insertBill(SettlementBill)}。 */
+    public boolean insertBill(SettlementBill b, UUID campusId) {
         return jdbc.sql("""
                         INSERT INTO insurance_svc.settlement_bill
                             (id, bill_no, visit_id, patient_id, patient_no, service_date, member_id,
                              total_amount, eligible_amount, deductible, insurance_amount,
                              self_pay_amount, status, detail, created_by,
-                             snapshot_ratio, snapshot_cap)
+                             snapshot_ratio, snapshot_cap, campus_id)
                         VALUES (:id, :billNo, :visitId, :patientId, :patientNo, :serviceDate, :memberId,
                                 :total, :eligible, :deductible, :insurance, :selfPay, 'DRAFT',
-                                CAST(:detail AS jsonb), :createdBy, :snapshotRatio, :snapshotCap)
+                                CAST(:detail AS jsonb), :createdBy, :snapshotRatio, :snapshotCap,
+                                :campusId)
                         ON CONFLICT DO NOTHING
                         """)
                 .param("id", b.id()).param("billNo", b.billNo())
@@ -431,7 +437,29 @@ public class InsuranceRepository {
                 .param("selfPay", b.selfPayAmount()).param("detail", b.detail())
                 .param("createdBy", b.createdBy())
                 .param("snapshotRatio", b.snapshotRatio()).param("snapshotCap", b.snapshotCap())
+                .param("campusId", campusId)
                 .update() > 0;
+    }
+
+    /** 清单所属院区（行级权限校验用；empty 表示清单不存在）。 */
+    public Optional<UUID> findBillCampus(UUID id) {
+        return jdbc.sql("SELECT campus_id FROM insurance_svc.settlement_bill WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
+    }
+
+    /** 实时结算交易所属院区（经清单间接归属，G48）。 */
+    public Optional<UUID> findRealtimeBillCampus(UUID id) {
+        return jdbc.sql("""
+                        SELECT b.campus_id
+                          FROM insurance_svc.realtime_settlement r
+                          JOIN insurance_svc.settlement_bill b ON b.id = r.bill_id
+                         WHERE r.id = ?
+                        """)
+                .param(id)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
     }
 
     /** 重算草稿（CAS：仅 DRAFT）；待遇参数可能已调整，快照同步刷新。 */
@@ -502,14 +530,22 @@ public class InsuranceRepository {
     }
 
     public List<SettlementBill> listBills(UUID patientId, String status, int limit) {
+        return listBills(patientId, status, limit, "");
+    }
+
+    /** 结算清单列表（G48 按院区收敛；空 CSV 表示不限院区）。 */
+    public List<SettlementBill> listBills(UUID patientId, String status, int limit, String campusCsv) {
         return jdbc.sql("SELECT " + BILL_COLUMNS + """
                          FROM insurance_svc.settlement_bill
                          WHERE (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
                            AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("patientId", patientId).param("status", status).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(BILL_MAPPER).list();
     }
 
@@ -531,6 +567,14 @@ public class InsuranceRepository {
             id, bill_id, visit_id, request_id, biz_type, platform, status, attempts,
             external_no, last_error, request_payload::text AS request_payload,
             response_payload::text AS response_payload, created_by, created_at, settled_at, version
+            """;
+
+    /** JOIN 清单时所有列必须带别名：status/created_at 在两张表同名，裸列会歧义。 */
+    private static final String REALTIME_COLUMNS_JOINED = """
+            r.id, r.bill_id, r.visit_id, r.request_id, r.biz_type, r.platform, r.status, r.attempts,
+            r.external_no, r.last_error, r.request_payload::text AS request_payload,
+            r.response_payload::text AS response_payload, r.created_by, r.created_at, r.settled_at,
+            r.version
             """;
 
     /** 插入交易占位；同一清单同一请求号已存在时不插入（幂等由唯一索引兜底）。 */
@@ -583,14 +627,24 @@ public class InsuranceRepository {
     }
 
     public List<RealtimeSettlement> listRealtime(UUID billId, String status, int limit) {
-        return jdbc.sql("SELECT " + REALTIME_COLUMNS + """
-                         FROM insurance_svc.realtime_settlement
-                         WHERE (CAST(:billId AS uuid) IS NULL OR bill_id = CAST(:billId AS uuid))
-                           AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
-                         ORDER BY created_at DESC
+        return listRealtime(billId, status, limit, "");
+    }
+
+    /** 实时结算交易列表（G48 经清单院区收敛；空 CSV 表示不限院区）。 */
+    public List<RealtimeSettlement> listRealtime(UUID billId, String status, int limit,
+                                                 String campusCsv) {
+        return jdbc.sql("SELECT " + REALTIME_COLUMNS_JOINED + """
+                         FROM insurance_svc.realtime_settlement r
+                         JOIN insurance_svc.settlement_bill b ON b.id = r.bill_id
+                         WHERE (CAST(:billId AS uuid) IS NULL OR r.bill_id = CAST(:billId AS uuid))
+                           AND (CAST(:status AS text) IS NULL OR r.status = CAST(:status AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR b.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                         ORDER BY r.created_at DESC
                          LIMIT :limit
                         """)
                 .param("billId", billId).param("status", status).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(REALTIME_MAPPER).list();
     }
 
