@@ -69,6 +69,38 @@ class PacsDicomJsonTest {
     }
 
     @Test
+    @DisplayName("解析影像：SOP UID/序号/SOP Class 取到；缺 SOP 的行跳过")
+    void parsesInstances() {
+        String json = """
+                [{"00080018":{"vr":"UI","Value":["1.2.3.4.1"]},
+                  "00200013":{"vr":"IS","Value":[7]},
+                  "00080016":{"vr":"UI","Value":["1.2.840.10008.5.1.4.1.1.2"]}},
+                 {"00200013":{"vr":"IS","Value":[8]}},
+                 {"00080018":{"vr":"UI","Value":["1.2.3.4.2"]}}]
+                """;
+
+        List<PacsDicomGateway.InstanceMeta> instances =
+                PacsDicomJson.parseInstances(json, mapper);
+
+        assertThat(instances).hasSize(2);
+        assertThat(instances.get(0).sopInstanceUid()).isEqualTo("1.2.3.4.1");
+        assertThat(instances.get(0).instanceNumber()).isEqualTo(7);
+        assertThat(instances.get(0).sopClassUid()).isEqualTo("1.2.840.10008.5.1.4.1.1.2");
+        // 缺序号的行保留（仍可调阅），不编造序号
+        assertThat(instances.get(1).instanceNumber()).isNull();
+    }
+
+    @Test
+    @DisplayName("影像列表：空响应 → 空列表；非 JSON → 46408")
+    void rejectsMalformedInstances() {
+        assertThat(PacsDicomJson.parseInstances("", mapper)).isEmpty();
+        assertThatThrownBy(() -> PacsDicomJson.parseInstances("not-json", mapper))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TECH_PACS_UPSTREAM_FAILED);
+    }
+
+    @Test
     @DisplayName("空响应 → 空列表；非 JSON / 非数组 → 46408")
     void rejectsMalformedPayload() {
         assertThat(PacsDicomJson.parseSeries("", mapper)).isEmpty();

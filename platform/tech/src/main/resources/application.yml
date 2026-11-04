@@ -1,4 +1,6 @@
 server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
   port: 8085
   shutdown: graceful
 
@@ -51,6 +53,8 @@ tech:
     timeout: ${PACS_TIMEOUT:PT10S}
     auth-header: ${PACS_AUTH_HEADER:}
     max-instance-bytes: ${PACS_MAX_INSTANCE_BYTES:67108864}
+    # OHIF 等查看器根地址（如 http://ohif.local/viewer）；为空时回退到 PACS 登记回传的 viewerUrl
+    viewer-url: ${PACS_VIEWER_URL:}
 
 management:
   endpoints:

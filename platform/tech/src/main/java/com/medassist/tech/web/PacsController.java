@@ -11,11 +11,13 @@ import com.medassist.tech.domain.TechModel.WorklistItem;
 import com.medassist.tech.service.PacsDicomService;
 import com.medassist.tech.service.PacsReadingService;
 import com.medassist.tech.service.PacsService;
+import com.medassist.tech.web.PacsDtos.InstancePage;
 import com.medassist.tech.web.PacsDtos.ReadingNoteReq;
 import com.medassist.tech.web.PacsDtos.ReadingTaskView;
 import com.medassist.tech.web.PacsDtos.RegisterStudyReq;
 import com.medassist.tech.web.PacsDtos.SeriesResponse;
 import com.medassist.tech.web.PacsDtos.UpdateStudyStatusReq;
+import com.medassist.tech.web.PacsDtos.ViewerLink;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
@@ -163,6 +165,65 @@ public class PacsController {
 
     // ---------------------------------------------------------------- DICOMweb 调阅
 
+    /**
+     * 查询参数版 DICOMweb 入口（G31）：Study/Series UID 含点号，部分网关对
+     * 点号路径段返回 400，因此为前端提供不带点号路径段的别名；语义与原路径接口一致。
+     */
+    @GetMapping("/dicom/series")
+    public ApiResponse<SeriesResponse> seriesByQuery(
+            @RequestParam String studyUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dicomService.listSeries(studyUid, actor));
+    }
+
+    @GetMapping("/dicom/instances")
+    public ApiResponse<InstancePage> instancesByQuery(
+            @RequestParam String studyUid,
+            @RequestParam String seriesUid,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dicomService.listInstances(studyUid, seriesUid, page, size, actor));
+    }
+
+    @GetMapping("/dicom/rendered")
+    public ResponseEntity<byte[]> renderedByQuery(
+            @RequestParam String studyUid,
+            @RequestParam String seriesUid,
+            @RequestParam String sopUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        PacsDicomService.InstancePayload payload =
+                dicomService.fetchRendered(studyUid, seriesUid, sopUid, actor);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(payload.contentType()))
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(payload.bytes());
+    }
+
+    @GetMapping("/dicom/viewer")
+    public ApiResponse<ViewerLink> viewerByQuery(
+            @RequestParam String studyUid,
+            @RequestParam(required = false) String seriesUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dicomService.viewerLink(studyUid, seriesUid));
+    }
+
+    @GetMapping("/dicom/access-log")
+    public ApiResponse<List<PacsAccessLog>> accessLogByQuery(
+            @RequestParam String studyUid,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, AUDIT);
+        return ApiResponse.ok(readingService.accessLog(studyUid, limit));
+    }
+
     /** 序列列表：PACS 实时（QIDO-RS），不可用时回退本地缓存并标注 CACHED。 */
     @GetMapping("/studies/{studyInstanceUid}/series")
     public ApiResponse<SeriesResponse> series(
@@ -171,6 +232,47 @@ public class PacsController {
             @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(dicomService.listSeries(studyInstanceUid, actor));
+    }
+
+    /** 序列内影像分页（QIDO-RS limit/offset）；序列必须已在本检查的缓存中。 */
+    @GetMapping("/studies/{studyInstanceUid}/series/{seriesInstanceUid}/instances")
+    public ApiResponse<InstancePage> instances(
+            @PathVariable String studyInstanceUid,
+            @PathVariable String seriesInstanceUid,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dicomService.listInstances(studyInstanceUid, seriesInstanceUid,
+                page, size, actor));
+    }
+
+    /** 浏览器预览图（WADO-RS rendered，image/jpeg）；不支持 rendered 的 PACS 返回 404。 */
+    @GetMapping("/studies/{studyInstanceUid}/series/{seriesInstanceUid}/instances/{sopInstanceUid}/rendered")
+    public ResponseEntity<byte[]> rendered(
+            @PathVariable String studyInstanceUid,
+            @PathVariable String seriesInstanceUid,
+            @PathVariable String sopInstanceUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+        Permissions.require(permissions, READ);
+        PacsDicomService.InstancePayload payload = dicomService.fetchRendered(
+                studyInstanceUid, seriesInstanceUid, sopInstanceUid, actor);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(payload.contentType()))
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(payload.bytes());
+    }
+
+    /** 查看器深链（OHIF 等）：未配置时 configured=false，前端隐藏入口。 */
+    @GetMapping("/studies/{studyInstanceUid}/viewer")
+    public ApiResponse<ViewerLink> viewer(
+            @PathVariable String studyInstanceUid,
+            @RequestParam(required = false) String seriesUid,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dicomService.viewerLink(studyInstanceUid, seriesUid));
     }
 
     /** 取单张影像（WADO-RS）：返回 application/dicom 字节流；未配置 PACS 时 503。 */

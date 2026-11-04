@@ -855,6 +855,18 @@ public class TechRepository {
                         """).param(studyId).query(PACS_SERIES_MAPPER).list();
     }
 
+    /** 按检查 + 序列 UID 定位缓存序列（影像分页前校验序列确实属于该检查）。 */
+    public Optional<PacsSeries> findPacsSeries(UUID studyId, String seriesInstanceUid) {
+        return jdbc.sql("""
+                        SELECT id, study_id, series_instance_uid, series_number, modality,
+                               body_part, description, instance_count, synced_at
+                          FROM tech_svc.pacs_series
+                         WHERE study_id = ? AND series_instance_uid = ?
+                        """)
+                .param(studyId).param(seriesInstanceUid)
+                .query(PACS_SERIES_MAPPER).optional();
+    }
+
     /** 删除已从 PACS 消失的序列（按主键，保留仍在的序列 ID 与同步历史）。 */
     public void deletePacsSeriesById(UUID id) {
         jdbc.sql("DELETE FROM tech_svc.pacs_series WHERE id = ?").param(id).update();

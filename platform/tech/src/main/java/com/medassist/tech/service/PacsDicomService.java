@@ -7,12 +7,18 @@ import com.medassist.tech.domain.TechModel.PacsAccessLog;
 import com.medassist.tech.domain.TechModel.PacsSeries;
 import com.medassist.tech.domain.TechModel.PacsStudy;
 import com.medassist.tech.repo.TechRepository;
+import com.medassist.tech.web.PacsDtos.InstanceItem;
+import com.medassist.tech.web.PacsDtos.InstancePage;
 import com.medassist.tech.web.PacsDtos.SeriesResponse;
+import com.medassist.tech.web.PacsDtos.ViewerLink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -43,6 +49,10 @@ public class PacsDicomService {
 
     private final TechRepository repo;
     private final PacsDicomGateway gateway;
+
+    /** OHIF 等查看器根地址；为空时回退到检查登记时 PACS 回传的 viewerUrl。 */
+    @Value("${tech.pacs.viewer-url:}")
+    private String viewerBaseUrl = "";
 
     public PacsDicomService(TechRepository repo, PacsDicomGateway gateway) {
         this.repo = repo;
@@ -93,6 +103,94 @@ public class PacsDicomService {
         audit(study, operator, PacsAccessLog.FETCH_IMAGE, series, sop,
                 "{\"bytes\":" + bytes.length + "}");
         return new InstancePayload(bytes, "application/dicom");
+    }
+
+    /**
+     * 序列内影像分页（QIDO-RS limit/offset）。
+     *
+     * <p>必须先有本地序列缓存：它证明该序列属于当前检查，避免把服务变成"任意 UID 探测器"。
+     * {@code total} 来自序列元数据的 instanceCount，PACS 未给出时为 null（前端只显示本页条数）。
+     */
+    @Transactional
+    public InstancePage listInstances(String studyInstanceUid, String seriesInstanceUid,
+                                      Integer page, Integer size, String actor) {
+        PacsStudy study = requireStudy(studyInstanceUid);
+        String operator = requireActor(actor);
+        String series = requireUid(seriesInstanceUid, "SeriesInstanceUID");
+        PacsSeries cached = repo.findPacsSeries(study.id(), series)
+                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_PACS_REMOTE_NOT_FOUND,
+                        "该序列不在当前检查下，请先刷新序列列表"));
+        if (!gateway.configured()) {
+            throw new BusinessException(ErrorCode.TECH_PACS_NOT_CONFIGURED);
+        }
+        int currentPage = page == null || page <= 0 ? 1 : page;
+        int pageSize = size == null || size <= 0 ? 24 : Math.min(size, 200);
+        long offsetLong = (long) (currentPage - 1) * pageSize;
+        if (offsetLong > 100_000L) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "页码过大，请缩小范围后重试");
+        }
+        List<PacsDicomGateway.InstanceMeta> remote = gateway.listInstances(
+                study.studyInstanceUid(), series, pageSize, (int) offsetLong);
+        List<InstanceItem> items = remote.stream()
+                .map(m -> new InstanceItem(m.sopInstanceUid(), m.instanceNumber(), m.sopClassUid()))
+                .toList();
+        Integer total = cached.instanceCount() > 0 ? cached.instanceCount() : null;
+        audit(study, operator, PacsAccessLog.VIEW_SERIES, series, null,
+                "{\"page\":" + currentPage + ",\"size\":" + pageSize
+                        + ",\"instances\":" + items.size() + "}");
+        return new InstancePage(series, currentPage, pageSize, total, items);
+    }
+
+    /** 取浏览器可显示的预览图（WADO rendered）；每次调阅写 FETCH_IMAGE 审计。 */
+    @Transactional
+    public InstancePayload fetchRendered(String studyInstanceUid, String seriesInstanceUid,
+                                         String sopInstanceUid, String actor) {
+        PacsStudy study = requireStudy(studyInstanceUid);
+        String operator = requireActor(actor);
+        String series = requireUid(seriesInstanceUid, "SeriesInstanceUID");
+        String sop = requireUid(sopInstanceUid, "SOPInstanceUID");
+        if (!gateway.configured()) {
+            throw new BusinessException(ErrorCode.TECH_PACS_NOT_CONFIGURED);
+        }
+        byte[] bytes = gateway.fetchRendered(study.studyInstanceUid(), series, sop);
+        audit(study, operator, PacsAccessLog.FETCH_IMAGE, series, sop,
+                "{\"rendered\":true,\"bytes\":" + bytes.length + "}");
+        return new InstancePayload(bytes, imageContentType(bytes));
+    }
+
+    /** 按文件头判定预览图类型：部分 PACS 对 Accept: image/jpeg 仍返回 PNG。 */
+    private static String imageContentType(byte[] bytes) {
+        if (bytes.length >= 4 && (bytes[0] & 0xFF) == 0x89 && bytes[1] == 'P'
+                && bytes[2] == 'N' && bytes[3] == 'G') {
+            return "image/png";
+        }
+        return "image/jpeg";
+    }
+
+    /**
+     * 查看器深链：优先使用配置的 OHIF 根地址（携带 Study/Series），
+     * 未配置时回退到检查登记时 PACS 回传的 viewerUrl；都没有则 configured=false。
+     */
+    public ViewerLink viewerLink(String studyInstanceUid, String seriesInstanceUid) {
+        PacsStudy study = requireStudy(studyInstanceUid);
+        String series = seriesInstanceUid == null || seriesInstanceUid.isBlank()
+                ? null : requireUid(seriesInstanceUid, "SeriesInstanceUID");
+        String base = viewerBaseUrl == null ? "" : viewerBaseUrl.trim();
+        if (!base.isEmpty()) {
+            StringBuilder url = new StringBuilder(base)
+                    .append(base.contains("?") ? '&' : '?')
+                    .append("StudyInstanceUIDs=")
+                    .append(URLEncoder.encode(study.studyInstanceUid(), StandardCharsets.UTF_8));
+            if (series != null) {
+                url.append("&SeriesInstanceUIDs=")
+                        .append(URLEncoder.encode(series, StandardCharsets.UTF_8));
+            }
+            return new ViewerLink(true, url.toString(), study.studyInstanceUid(), series);
+        }
+        if (study.viewerUrl() != null && !study.viewerUrl().isBlank()) {
+            return new ViewerLink(true, study.viewerUrl().trim(), study.studyInstanceUid(), series);
+        }
+        return new ViewerLink(false, null, study.studyInstanceUid(), series);
     }
 
     // ---------------------------------------------------------------- 内部

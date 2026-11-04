@@ -1954,6 +1954,32 @@ export interface PacsAccessLog {
   createdAt: string
 }
 
+// ---------------------------------------------------------------- 影像分页与查看器（G31）
+
+/** 序列内单张影像（QIDO-RS）。 */
+export interface PacsInstanceItem {
+  sopInstanceUid: string
+  instanceNumber: number | null
+  sopClassUid: string | null
+}
+
+/** 序列内影像分页；total 为 null 表示 PACS 未返回总数。 */
+export interface PacsInstancePage {
+  seriesInstanceUid: string
+  page: number
+  size: number
+  total: number | null
+  items: PacsInstanceItem[]
+}
+
+/** 查看器深链；configured=false 表示未配置 OHIF，仅能使用内置分页预览。 */
+export interface PacsViewerLink {
+  configured: boolean
+  viewerUrl: string | null
+  studyInstanceUid: string
+  seriesInstanceUid: string | null
+}
+
 // ---------------------------------------------------------------- 医保
 
 /** 参保登记（本地快照，按 patientId 唯一）。 */

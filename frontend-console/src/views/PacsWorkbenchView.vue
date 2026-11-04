@@ -197,6 +197,7 @@
                 <th>描述</th>
                 <th class="is-num">图像数</th>
                 <th>同步时间</th>
+                <th style="width: 90px">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -207,6 +208,11 @@
                 <td>{{ s.description || '—' }}</td>
                 <td class="is-num">{{ s.instanceCount }}</td>
                 <td>{{ dateTime(s.syncedAt) }}</td>
+                <td>
+                  <button class="btn btn--sm" type="button" @click="openInstances(s)">
+                    <AppIcon name="eye" :size="13" /> 影像
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -256,6 +262,101 @@
     </AppModal>
 
     <AppModal
+      v-model="instancesOpen"
+      title="影像分页"
+      :subtitle="instanceSubtitle"
+      width="880px"
+    >
+      <div class="pager">
+        <button class="btn btn--sm" type="button" :disabled="instanceLoading || instancePage <= 1" @click="changePage(-1)">
+          上一页
+        </button>
+        <span class="muted">
+          第 {{ instancePage }} 页
+          <template v-if="instanceTotal != null"> · 共 {{ instanceTotal }} 张</template>
+          <template v-else> · 本页 {{ instanceItems.length }} 张</template>
+        </span>
+        <button
+          class="btn btn--sm"
+          type="button"
+          :disabled="instanceLoading || !hasNextPage"
+          @click="changePage(1)"
+        >
+          下一页
+        </button>
+        <button class="btn btn--sm" type="button" :disabled="instanceLoading" @click="loadInstances">
+          <AppIcon name="refresh" :size="13" /> 刷新
+        </button>
+      </div>
+
+      <TableSkeleton v-if="instanceLoading" :rows="4" />
+      <LoadError
+        v-else-if="instanceError"
+        :message="instanceError"
+        :retrying="instanceLoading"
+        @retry="loadInstances"
+      />
+      <template v-else>
+        <EmptyState
+          v-if="instanceItems.length === 0"
+          title="本页没有影像"
+          desc="PACS 未返回该序列的影像；若序列图像数为 0，请让影像科确认检查是否实际完成。"
+        />
+        <div v-else class="instance-layout">
+          <div class="instance-table">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th class="is-num">序号</th>
+                  <th>SOPInstanceUID</th>
+                  <th style="width: 80px">预览</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in instanceItems" :key="item.sopInstanceUid">
+                  <td class="is-num" data-primary>{{ item.instanceNumber ?? '—' }}</td>
+                  <td class="mono small">{{ item.sopInstanceUid }}</td>
+                  <td>
+                    <button class="btn btn--sm" type="button" @click="previewInstance(item)">
+                      预览
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="preview-pane">
+            <div v-if="previewLoading" class="preview-hint">正在调阅影像…</div>
+            <img
+              v-else-if="previewUrl"
+              :src="previewUrl"
+              class="preview-image"
+              alt="影像预览"
+            />
+            <div v-else class="preview-hint">
+              {{ previewError || '点击左侧「预览」调阅影像；浏览器预览依赖 PACS 的 rendered 能力，专业诊断请使用 OHIF 查看器。' }}
+            </div>
+            <div v-if="previewSop" class="mono small muted">SOP：{{ previewSop }}</div>
+          </div>
+        </div>
+      </template>
+
+      <template #footer>
+        <button class="btn" type="button" @click="instancesOpen = false">关闭</button>
+        <a
+          v-if="viewerLink?.configured && viewerLink.viewerUrl"
+          class="btn btn--primary"
+          :href="viewerLink.viewerUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <AppIcon name="external" :size="14" /> 打开查看器
+        </a>
+        <span v-else class="muted small">未配置 OHIF 查看器</span>
+      </template>
+    </AppModal>
+
+    <AppModal
       v-model="actionOpen"
       :title="actionMode === 'release' ? '释放阅片' : '完成阅片'"
       :subtitle="actionSubtitle"
@@ -282,7 +383,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -293,7 +394,13 @@ import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { pacsApi } from '@/api'
 import { errorText } from '@/api/http'
-import type { PacsAccessLog, PacsReadingQueueItem, PacsSeries } from '@/api/types'
+import type {
+  PacsAccessLog,
+  PacsInstanceItem,
+  PacsReadingQueueItem,
+  PacsSeries,
+  PacsViewerLink,
+} from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -336,6 +443,32 @@ const seriesNotice = ref('')
 const seriesLoading = ref(false)
 const seriesError = ref('')
 const accessLog = ref<PacsAccessLog[]>([])
+
+const instancesOpen = ref(false)
+const instanceSeries = ref<PacsSeries | null>(null)
+const instanceItems = ref<PacsInstanceItem[]>([])
+const instancePage = ref(1)
+const instanceSize = 24
+const instanceTotal = ref<number | null>(null)
+const instanceLoading = ref(false)
+const instanceError = ref('')
+const viewerLink = ref<PacsViewerLink | null>(null)
+const previewUrl = ref('')
+const previewSop = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
+
+const hasNextPage = computed(() =>
+  instanceTotal.value != null
+    ? instancePage.value * instanceSize < instanceTotal.value
+    : instanceItems.value.length === instanceSize,
+)
+
+const instanceSubtitle = computed(() =>
+  selected.value && instanceSeries.value
+    ? `${selected.value.accessionNumber} · 序列 ${instanceSeries.value.seriesNumber ?? '—'} · ${instanceSeries.value.modality}`
+    : '',
+)
 
 const actionOpen = ref(false)
 const actionMode = ref<'release' | 'complete'>('release')
@@ -461,6 +594,88 @@ async function loadSeries() {
   }
 }
 
+async function openInstances(s: PacsSeries) {
+  instanceSeries.value = s
+  instanceItems.value = []
+  instanceTotal.value = null
+  instancePage.value = 1
+  instanceError.value = ''
+  clearPreview()
+  instancesOpen.value = true
+  if (selected.value) {
+    try {
+      viewerLink.value = await pacsApi.viewer(selected.value.studyInstanceUid, s.seriesInstanceUid)
+    } catch {
+      // 查看器链接失败不影响内置分页预览
+      viewerLink.value = null
+    }
+  }
+  await loadInstances()
+}
+
+async function loadInstances() {
+  const row = selected.value
+  const s = instanceSeries.value
+  if (!row || !s) return
+  instanceLoading.value = true
+  instanceError.value = ''
+  try {
+    const page = await pacsApi.instances(row.studyInstanceUid, s.seriesInstanceUid,
+      instancePage.value, instanceSize)
+    instanceItems.value = page.items
+    instanceTotal.value = page.total
+  } catch (e) {
+    instanceError.value = errorText(e)
+    instanceItems.value = []
+  } finally {
+    instanceLoading.value = false
+  }
+}
+
+async function changePage(delta: number) {
+  if (instanceLoading.value) return
+  const next = instancePage.value + delta
+  if (next < 1) return
+  instancePage.value = next
+  clearPreview()
+  await loadInstances()
+}
+
+async function previewInstance(item: PacsInstanceItem) {
+  const row = selected.value
+  const s = instanceSeries.value
+  if (!row || !s) return
+  clearPreview()
+  previewLoading.value = true
+  previewSop.value = item.sopInstanceUid
+  try {
+    const blob = await pacsApi.rendered(row.studyInstanceUid, s.seriesInstanceUid,
+      item.sopInstanceUid)
+    previewUrl.value = URL.createObjectURL(blob)
+  } catch (e) {
+    previewError.value = `${errorText(e)}；请改用 OHIF 查看器阅读原始影像。`
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+function clearPreview() {
+  if (previewUrl.value) {
+    URL.revokeObjectURL(previewUrl.value)
+    previewUrl.value = ''
+  }
+  previewSop.value = ''
+  previewError.value = ''
+}
+
+watch(instancesOpen, (open) => {
+  if (!open) {
+    clearPreview()
+  }
+})
+
+onUnmounted(clearPreview)
+
 async function loadAudit(studyInstanceUid: string) {
   try {
     accessLog.value = await pacsApi.accessLog(studyInstanceUid, 50)
@@ -515,5 +730,56 @@ function actionLabel(action: PacsAccessLog['action']): string {
 
 .small {
   font-size: var(--fs-small);
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) 0 var(--s3);
+}
+
+.instance-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(280px, 1fr);
+  gap: var(--s4);
+  align-items: start;
+}
+
+.instance-table {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.preview-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel-3);
+}
+
+.preview-image {
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  background: #000;
+  border-radius: var(--r-sm);
+}
+
+.preview-hint {
+  padding: var(--s4);
+  color: var(--muted);
+  font-size: var(--fs-small);
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .instance-layout {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

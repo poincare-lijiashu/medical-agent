@@ -199,4 +199,122 @@ class PacsDicomServiceTest {
                 ErrorCode.TECH_PACS_STUDY_NOT_FOUND);
         verify(gateway, never()).fetchInstance(anyString(), anyString(), anyString());
     }
+
+    // ---------------------------------------------------------------- 影像分页（G31）
+
+    @Test
+    @DisplayName("影像分页：序列不在当前检查缓存 → 404，不触达 PACS")
+    void instancesRequireCachedSeries() {
+        when(repo.findPacsSeries(studyId, SERIES_UID)).thenReturn(Optional.empty());
+
+        assertCode(() -> service.listInstances(STUDY_UID, SERIES_UID, 1, 24, "doc01"),
+                ErrorCode.TECH_PACS_REMOTE_NOT_FOUND);
+        verify(gateway, never()).listInstances(anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("影像分页：按页计算 offset，total 取序列元数据并写审计")
+    void instancesPageAndAudit() {
+        when(repo.findPacsSeries(studyId, SERIES_UID)).thenReturn(Optional.of(cachedSeries()));
+        when(gateway.listInstances(STUDY_UID, SERIES_UID, 10, 10)).thenReturn(List.of(
+                new PacsDicomGateway.InstanceMeta(SOP_UID + ".11", 11, "1.2.840.10008.5.1.4.1.1.2"),
+                new PacsDicomGateway.InstanceMeta(SOP_UID + ".12", 12, null)));
+
+        var page = service.listInstances(STUDY_UID, SERIES_UID, 2, 10, "doc01");
+
+        assertThat(page.page()).isEqualTo(2);
+        assertThat(page.size()).isEqualTo(10);
+        assertThat(page.total()).isEqualTo(120);
+        assertThat(page.items()).hasSize(2);
+        assertThat(page.items().get(0).instanceNumber()).isEqualTo(11);
+        verify(repo).insertPacsAccess(any(PacsAccessLog.class));
+    }
+
+    @Test
+    @DisplayName("影像分页：size 上限 200，缺省 24")
+    void instancesCapSize() {
+        when(repo.findPacsSeries(studyId, SERIES_UID)).thenReturn(Optional.of(cachedSeries()));
+        when(gateway.listInstances(STUDY_UID, SERIES_UID, 200, 0)).thenReturn(List.of());
+
+        var page = service.listInstances(STUDY_UID, SERIES_UID, null, 9999, "doc01");
+
+        assertThat(page.page()).isEqualTo(1);
+        assertThat(page.size()).isEqualTo(200);
+        assertThat(page.items()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("影像分页：缺少调阅人 → 422")
+    void instancesRequireActor() {
+        assertCode(() -> service.listInstances(STUDY_UID, SERIES_UID, 1, 24, " "),
+                ErrorCode.VALIDATION_FAILED);
+        verify(gateway, never()).listInstances(anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("预览图：成功返回 image/jpeg 并写 FETCH_IMAGE 审计")
+    void renderedFetchesAndAudits() {
+        when(gateway.fetchRendered(STUDY_UID, SERIES_UID, SOP_UID))
+                .thenReturn(new byte[]{(byte) 0xFF, (byte) 0xD8, 1, 2});
+
+        PacsDicomService.InstancePayload payload =
+                service.fetchRendered(STUDY_UID, SERIES_UID, SOP_UID, "doc01");
+
+        assertThat(payload.contentType()).isEqualTo("image/jpeg");
+        assertThat(payload.bytes()).hasSize(4);
+        verify(repo).insertPacsAccess(any(PacsAccessLog.class));
+    }
+
+    @Test
+    @DisplayName("预览图：远端不支持 rendered → 404")
+    void renderedRemoteNotSupported() {
+        when(gateway.fetchRendered(STUDY_UID, SERIES_UID, SOP_UID))
+                .thenThrow(new BusinessException(ErrorCode.TECH_PACS_REMOTE_NOT_FOUND));
+
+        assertCode(() -> service.fetchRendered(STUDY_UID, SERIES_UID, SOP_UID, "doc01"),
+                ErrorCode.TECH_PACS_REMOTE_NOT_FOUND);
+        verify(repo, never()).insertPacsAccess(any(PacsAccessLog.class));
+    }
+
+    // ---------------------------------------------------------------- 查看器深链（G31）
+
+    @Test
+    @DisplayName("查看器：配置 OHIF 根地址时拼 Study/Series 深链")
+    void viewerUsesConfiguredBase() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "viewerBaseUrl",
+                "http://ohif.local/viewer");
+
+        var link = service.viewerLink(STUDY_UID, SERIES_UID);
+
+        assertThat(link.configured()).isTrue();
+        assertThat(link.viewerUrl()).startsWith("http://ohif.local/viewer?StudyInstanceUIDs=");
+        assertThat(link.viewerUrl()).contains("&SeriesInstanceUIDs=");
+        assertThat(link.seriesInstanceUid()).isEqualTo(SERIES_UID);
+    }
+
+    @Test
+    @DisplayName("查看器：未配置 OHIF 时回退检查登记回传的 viewerUrl")
+    void viewerFallsBackToStudyUrl() {
+        PacsStudy withViewer = new PacsStudy(studyId, UUID.randomUUID(), STUDY_UID, ACCESSION,
+                "CT", "胸部", PacsStudy.COMPLETED, 2, 240,
+                "http://vendor/viewer?study=1.2.3", Instant.now(), Instant.now(), 2L, Instant.now());
+        when(repo.findPacsStudyByUid(STUDY_UID)).thenReturn(Optional.of(withViewer));
+
+        var link = service.viewerLink(STUDY_UID, null);
+
+        assertThat(link.configured()).isTrue();
+        assertThat(link.viewerUrl()).isEqualTo("http://vendor/viewer?study=1.2.3");
+        assertThat(link.seriesInstanceUid()).isNull();
+    }
+
+    @Test
+    @DisplayName("查看器：都未配置时 configured=false，不编造链接")
+    void viewerNotConfigured() {
+        var link = service.viewerLink(STUDY_UID, null);
+
+        assertThat(link.configured()).isFalse();
+        assertThat(link.viewerUrl()).isNull();
+    }
 }

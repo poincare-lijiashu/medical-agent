@@ -75,6 +75,21 @@ public class HttpPacsDicomClient implements PacsDicomGateway {
     }
 
     @Override
+    public List<InstanceMeta> listInstances(String studyInstanceUid, String seriesInstanceUid,
+                                            int limit, int offset) {
+        String body = exchange(() -> client.get()
+                .uri("/studies/{study}/series/{series}/instances"
+                                + "?limit={limit}&offset={offset}&orderby=00200013"
+                                + "&includefield=00080018,00200013,00080016",
+                        studyInstanceUid, seriesInstanceUid, limit, offset)
+                .accept(DICOM_JSON)
+                .headers(this::applyAuth)
+                .retrieve()
+                .body(String.class), "QIDO 查询影像");
+        return PacsDicomJson.parseInstances(body, objectMapper);
+    }
+
+    @Override
     public byte[] fetchInstance(String studyInstanceUid, String seriesInstanceUid, String sopInstanceUid) {
         byte[] bytes = exchange(() -> client.get()
                 .uri("/studies/{study}/series/{series}/instances/{instance}",
@@ -83,14 +98,33 @@ public class HttpPacsDicomClient implements PacsDicomGateway {
                 .headers(this::applyAuth)
                 .retrieve()
                 .body(byte[].class), "WADO 取影像");
+        return requireBytes(bytes, "影像服务未返回该影像内容", studyInstanceUid, seriesInstanceUid,
+                sopInstanceUid);
+    }
+
+    @Override
+    public byte[] fetchRendered(String studyInstanceUid, String seriesInstanceUid,
+                                String sopInstanceUid) {
+        byte[] bytes = exchange(() -> client.get()
+                .uri("/studies/{study}/series/{series}/instances/{instance}/rendered",
+                        studyInstanceUid, seriesInstanceUid, sopInstanceUid)
+                .accept(MediaType.IMAGE_JPEG, MediaType.IMAGE_PNG)
+                .headers(this::applyAuth)
+                .retrieve()
+                .body(byte[].class), "WADO 取预览图");
+        return requireBytes(bytes, "影像服务未返回该影像的预览图（该设备可能不支持 rendered）",
+                studyInstanceUid, seriesInstanceUid, sopInstanceUid);
+    }
+
+    private byte[] requireBytes(byte[] bytes, String emptyMessage, String studyUid,
+                                String seriesUid, String sopUid) {
         if (bytes == null || bytes.length == 0) {
-            throw new BusinessException(ErrorCode.TECH_PACS_REMOTE_NOT_FOUND,
-                    "影像服务未返回该影像内容");
+            throw new BusinessException(ErrorCode.TECH_PACS_REMOTE_NOT_FOUND, emptyMessage);
         }
         long max = config.maxInstanceBytesOrDefault();
         if (bytes.length > max) {
             log.warn("tech.pacs.instance_too_large study={} series={} sop={} bytes={} limit={}",
-                    studyInstanceUid, seriesInstanceUid, sopInstanceUid, bytes.length, max);
+                    studyUid, seriesUid, sopUid, bytes.length, max);
             throw new BusinessException(ErrorCode.TECH_PACS_UPSTREAM_FAILED,
                     "影像文件超过服务允许的大小上限（" + max + " 字节），请联系影像科");
         }

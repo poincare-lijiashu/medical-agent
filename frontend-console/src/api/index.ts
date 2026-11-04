@@ -114,9 +114,11 @@ import type {
   AuditEvent,
   OrgRef,
   PacsAccessLog,
+  PacsInstancePage,
   PacsReadingQueueItem,
   PacsReadingTask,
   PacsSeriesResponse,
+  PacsViewerLink,
   RoleRef,
   TechApplication,
   TechApplicationView,
@@ -861,9 +863,9 @@ export const pacsApi = {
     post<PacsReadingTask>(`/tech/pacs/reading/${encodeURIComponent(studyInstanceUid)}/complete`, {
       note,
     }),
-  /** 序列列表：PACS 不可用时返回本地缓存（source=CACHED）。 */
+  /** 序列列表：PACS 不可用时返回本地缓存（source=CACHED）。UID 走查询参数以避开网关点号路径限制。 */
   series: (studyInstanceUid: string) =>
-    get<PacsSeriesResponse>(`/tech/pacs/studies/${encodeURIComponent(studyInstanceUid)}/series`),
+    get<PacsSeriesResponse>('/tech/pacs/dicom/series', { studyUid: studyInstanceUid }),
   /** 单张影像（WADO-RS）；浏览器无法直接渲染 DICOM，由调用方交给查看器或保存。 */
   instance: (studyInstanceUid: string, seriesInstanceUid: string, sopInstanceUid: string) =>
     download(
@@ -871,11 +873,32 @@ export const pacsApi = {
         `/series/${encodeURIComponent(seriesInstanceUid)}` +
         `/instances/${encodeURIComponent(sopInstanceUid)}`,
     ),
+  /** 序列内影像分页（QIDO limit/offset）；total 可能为 null。 */
+  instances: (studyInstanceUid: string, seriesInstanceUid: string, page = 1, size = 24) =>
+    get<PacsInstancePage>('/tech/pacs/dicom/instances', {
+      studyUid: studyInstanceUid,
+      seriesUid: seriesInstanceUid,
+      page,
+      size,
+    }),
+  /** 浏览器预览图（WADO rendered）；不支持 rendered 的 PACS 返回 404。 */
+  rendered: (studyInstanceUid: string, seriesInstanceUid: string, sopInstanceUid: string) =>
+    download('/tech/pacs/dicom/rendered', {
+      studyUid: studyInstanceUid,
+      seriesUid: seriesInstanceUid,
+      sopUid: sopInstanceUid,
+    }),
+  /** 查看器深链（OHIF）；configured=false 表示未配置。 */
+  viewer: (studyInstanceUid: string, seriesUid?: string) =>
+    get<PacsViewerLink>('/tech/pacs/dicom/viewer', {
+      studyUid: studyInstanceUid,
+      seriesUid,
+    }),
   accessLog: (studyInstanceUid: string, limit = 50) =>
-    get<PacsAccessLog[]>(
-      `/tech/pacs/studies/${encodeURIComponent(studyInstanceUid)}/access-log`,
-      { limit },
-    ),
+    get<PacsAccessLog[]>('/tech/pacs/dicom/access-log', {
+      studyUid: studyInstanceUid,
+      limit,
+    }),
 }
 
 export const insuranceApi = {

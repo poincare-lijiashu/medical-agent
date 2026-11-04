@@ -28,6 +28,9 @@ final class PacsDicomJson {
     static final String TAG_BODY_PART = "00180015";
     static final String TAG_DESCRIPTION = "0008103E";
     static final String TAG_INSTANCE_COUNT = "00201209";
+    static final String TAG_SOP_UID = "00080018";
+    static final String TAG_INSTANCE_NUMBER = "00200013";
+    static final String TAG_SOP_CLASS_UID = "00080016";
 
     private PacsDicomJson() {
     }
@@ -62,6 +65,34 @@ final class PacsDicomJson {
                     text(item, TAG_BODY_PART),
                     text(item, TAG_DESCRIPTION),
                     integer(item, TAG_INSTANCE_COUNT)));
+        }
+        return result;
+    }
+
+    /** 解析 QIDO-RS 影像列表：没有 SOPInstanceUID 的行跳过，缺序号按空处理。 */
+    static List<PacsDicomGateway.InstanceMeta> parseInstances(String json, ObjectMapper mapper) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        JsonNode root;
+        try {
+            root = mapper.readTree(json);
+        } catch (RuntimeException e) {
+            throw new BusinessException(ErrorCode.TECH_PACS_UPSTREAM_FAILED,
+                    "影像服务返回的影像元数据不是合法 JSON");
+        }
+        if (root == null || !root.isArray()) {
+            throw new BusinessException(ErrorCode.TECH_PACS_UPSTREAM_FAILED,
+                    "影像服务返回的影像元数据格式不正确");
+        }
+        List<PacsDicomGateway.InstanceMeta> result = new ArrayList<>();
+        for (JsonNode item : root) {
+            String sop = text(item, TAG_SOP_UID);
+            if (sop == null) {
+                continue;
+            }
+            result.add(new PacsDicomGateway.InstanceMeta(sop, integer(item, TAG_INSTANCE_NUMBER),
+                    text(item, TAG_SOP_CLASS_UID)));
         }
         return result;
     }

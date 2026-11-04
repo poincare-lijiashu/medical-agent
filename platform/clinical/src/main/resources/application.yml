@@ -1,4 +1,6 @@
 server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
   port: 8083
   # 优雅停机：在途收费/挂号请求处理完再退出
   shutdown: graceful

@@ -69,4 +69,22 @@ public final class PacsDtos {
      */
     public record SeriesResponse(List<PacsSeries> series, String source, String notice) {
     }
+
+    /** 影像分页项（QIDO-RS）。 */
+    public record InstanceItem(String sopInstanceUid, Integer instanceNumber, String sopClassUid) {
+    }
+
+    /**
+     * 序列内影像分页。
+     *
+     * @param total 该序列已知的影像总数（来自序列元数据）；PACS 未返回时为 null
+     */
+    public record InstancePage(String seriesInstanceUid, int page, int size, Integer total,
+                               List<InstanceItem> items) {
+    }
+
+    /** 查看器深链：configured=false 表示未配置 OHIF（前端隐藏按钮，仍可用内置分页预览）。 */
+    public record ViewerLink(boolean configured, String viewerUrl, String studyInstanceUid,
+                             String seriesInstanceUid) {
+    }
 }
