@@ -114,6 +114,11 @@ public class ConsumableIssueService {
         }
 
         items.forEach(repo::insertIssueItem);
+        // 出库即进入科室二级库：科室后续可登记使用追溯，也可把未使用部分退回库房
+        for (ConsumableIssueItem item : items) {
+            repo.upsertDeptConsumableStock(req.deptId(), item.consumableId(), item.batchId(),
+                    item.quantity());
+        }
         repo.updateIssueTotal(issueId, total);
 
         audit(actor, "CONSUMABLE_ISSUE", issueId.toString(), detail()

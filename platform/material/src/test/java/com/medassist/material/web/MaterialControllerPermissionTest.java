@@ -5,6 +5,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
 import com.medassist.material.service.ConsumableCatalogService;
 import com.medassist.material.service.ConsumableIssueService;
+import com.medassist.material.service.ConsumableReturnService;
 import com.medassist.material.service.ConsumableStockService;
 import com.medassist.material.service.ConsumableTraceService;
 import com.medassist.material.web.MaterialDtos.CreateConsumableReq;
@@ -13,6 +14,9 @@ import com.medassist.material.web.MaterialDtos.CreateTraceReq;
 import com.medassist.material.web.MaterialDtos.IssueLine;
 import com.medassist.material.web.MaterialDtos.ReceiveBatchReq;
 import com.medassist.material.web.MaterialDtos.UpdatePriceReq;
+import com.medassist.material.web.MaterialReturnDtos.CreateReturnReq;
+import com.medassist.material.web.MaterialReturnDtos.ReturnLine;
+import com.medassist.material.web.MaterialReturnDtos.ReturnReasonReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,11 +43,13 @@ class MaterialControllerPermissionTest {
     private ConsumableStockService stockService;
     private ConsumableIssueService issueService;
     private ConsumableTraceService traceService;
+    private ConsumableReturnService returnService;
 
     private MaterialCatalogController catalogController;
     private MaterialStockController stockController;
     private MaterialIssueController issueController;
     private MaterialTraceController traceController;
+    private MaterialReturnController returnController;
 
     private final UUID id = UUID.randomUUID();
     private final DataScope scope = DataScope.all("mat01", true);
@@ -54,10 +60,12 @@ class MaterialControllerPermissionTest {
         stockService = mock(ConsumableStockService.class);
         issueService = mock(ConsumableIssueService.class);
         traceService = mock(ConsumableTraceService.class);
+        returnService = mock(ConsumableReturnService.class);
         catalogController = new MaterialCatalogController(catalogService);
         stockController = new MaterialStockController(stockService);
         issueController = new MaterialIssueController(issueService);
         traceController = new MaterialTraceController(traceService);
+        returnController = new MaterialReturnController(returnService);
     }
 
     @Test
@@ -137,5 +145,58 @@ class MaterialControllerPermissionTest {
         catalogController.list(null, null, null, null, "material:read");
 
         verify(catalogService).list(null, null, null, null);
+    }
+
+    @Test
+    @DisplayName("耗材退回建单：需要 material:return:write")
+    void returnCreateRequiresReturnWrite() {
+        var req = new CreateReturnReq(id, "术后剩余",
+                List.of(new ReturnLine(UUID.randomUUID(), 1)));
+
+        assertThatThrownBy(() -> returnController.create(req, "material:issue:write", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(returnService, never()).create(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("耗材退回审批：需要 material:return:approve")
+    void returnApproveRequiresReturnApprove() {
+        assertThatThrownBy(() -> returnController.approve(id, null, "material:return:write", "head01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(returnService, never()).approve(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("耗材退回驳回：需要 material:return:approve")
+    void returnRejectRequiresReturnApprove() {
+        assertThatThrownBy(() -> returnController.reject(id, new ReturnReasonReq("不合格"),
+                "material:return:write", "head01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(returnService, never()).reject(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("耗材退回撤回：需要 material:return:write")
+    void returnCancelRequiresReturnWrite() {
+        assertThatThrownBy(() -> returnController.cancel(id, new ReturnReasonReq("重复建单"),
+                "material:return:approve", "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(returnService, never()).cancel(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("科室二级库查询：material:read 放行")
+    void deptStockAllowsRead() {
+        returnController.deptStock(id, null, null, "material:read");
+
+        verify(returnService).deptStock(id, null, null);
     }
 }

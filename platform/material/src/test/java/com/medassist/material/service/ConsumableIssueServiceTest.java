@@ -80,6 +80,20 @@ class ConsumableIssueServiceTest {
     }
 
     @Test
+    @DisplayName("出库：成功后按批次累加科室二级库（科室可在退回时扣减）")
+    void issueAddsToDeptStock() {
+        when(repo.listAvailableBatches(eq(consumableId), any(LocalDate.class)))
+                .thenReturn(List.of(nearExpiry, later));
+        when(repo.deductBatch(nearExpiry.id(), 3)).thenReturn(true);
+        when(repo.deductBatch(later.id(), 2)).thenReturn(true);
+
+        service.issue(request("req-1", consumableId, 5), "nurse01");
+
+        verify(repo).upsertDeptConsumableStock(deptId, consumableId, nearExpiry.id(), 3);
+        verify(repo).upsertDeptConsumableStock(deptId, consumableId, later.id(), 2);
+    }
+
+    @Test
     @DisplayName("出库：库存不足整单失败（已扣批次随事务回滚）")
     void issueRejectsWhenStockInsufficient() {
         when(repo.listAvailableBatches(eq(consumableId), any(LocalDate.class)))

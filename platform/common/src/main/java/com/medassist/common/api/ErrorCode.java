@@ -117,6 +117,16 @@ public enum ErrorCode {
     CONSUMABLE_ISSUE_INVALID(43456, "出库内容不合法（重复明细或数量异常）"),
     CONSUMABLE_ISSUE_ITEM_NOT_FOUND(43457, "未找到该出库明细"),
 
+    // ---- 耗材未使用退回（43xxx 续，G9）----
+    CONSUMABLE_RETURN_NOT_FOUND(43500, "未找到该耗材退回单"),
+    CONSUMABLE_RETURN_ITEM_INVALID(43501, "退回明细不合法（同一批次重复）"),
+    CONSUMABLE_RETURN_STATUS_INVALID(43502, "当前退回单状态不允许该操作"),
+    CONSUMABLE_DEPT_STOCK_INSUFFICIENT(43503, "科室二级库余量不足，无法退回"),
+    CONSUMABLE_RETURN_REJECT_REASON_REQUIRED(43504, "驳回退回必须填写原因"),
+    CONSUMABLE_RETURN_CANCEL_REASON_REQUIRED(43505, "撤回退回必须填写原因"),
+    CONSUMABLE_RETURN_BATCH_NOT_FOUND(43506, "退回明细中的批次不存在"),
+    CONSUMABLE_RETURN_SELF_REVIEW(43507, "不能审批自己提交的退回单"),
+
     // ---- 麻醉药品（43xxx 续）----
     NARCOTIC_REGISTER_NOT_FOUND(43407, "未找到该麻醉药品专册登记"),
     NARCOTIC_PRESCRIBER_NOT_FOUND(43408, "未找到该医师的麻醉药品处方权记录"),

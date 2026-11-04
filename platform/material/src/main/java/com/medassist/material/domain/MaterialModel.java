@@ -99,4 +99,49 @@ public final class MaterialModel {
                                   String patientNo, UUID visitId, UUID surgeryId, String operator,
                                   Instant usedAt, String remark, Instant createdAt) {
     }
+
+    /**
+     * 科室二级库余额（科室 + 耗材 + 批次）。
+     *
+     * <p>出库时累加，退回审批通过时扣减。这条余额回答"科室手上还剩什么"，
+     * 与中心批次库存相互独立：同一件耗材在任一时点只属于其中一侧。
+     */
+    public record DeptConsumableStock(UUID id, UUID deptId, UUID consumableId,
+                                      String consumableCode, String consumableName, String spec,
+                                      String unit, UUID batchId, String batchNo,
+                                      LocalDate expireDate, int quantity, long version) {
+    }
+
+    /**
+     * 未使用耗材退回单（科室 → 中心库房）。
+     *
+     * <p>状态机：SUBMITTED → APPROVED / REJECTED；SUBMITTED 可撤回。
+     * 审批通过才扣科室库并回冲中心批次，提交/驳回/撤回都不动库存。
+     */
+    public record ConsumableReturn(UUID id, String returnNo, String status, UUID deptId,
+                                   String reason, String createdBy, String reviewedBy,
+                                   Instant reviewedAt, String reviewNote, String cancelledBy,
+                                   Instant cancelledAt, String cancelReason, long version,
+                                   Instant createdAt) {
+
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean reviewable() {
+            return SUBMITTED.equals(status);
+        }
+
+        public boolean cancellable() {
+            return SUBMITTED.equals(status);
+        }
+    }
+
+    /** 退回明细（一行 = 一个批次）。 */
+    public record ConsumableReturnItem(UUID id, UUID returnId, UUID consumableId,
+                                       String consumableCode, String consumableName, String spec,
+                                       String unit, UUID batchId, String batchNo,
+                                       LocalDate expireDate, int quantity) {
+    }
 }

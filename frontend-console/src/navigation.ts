@@ -156,6 +156,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['material:read'],
   },
   {
+    name: 'consumable-return',
+    path: '/consumable-return',
+    title: '耗材退回',
+    hint: '科室二级库未使用退回 · 审批扣科室库 · 回冲中心批次',
+    icon: 'arrow-left',
+    group: '药事管理',
+    permissions: ['material:read'],
+  },
+  {
     name: 'insurance',
     path: '/insurance',
     title: '医保结算',

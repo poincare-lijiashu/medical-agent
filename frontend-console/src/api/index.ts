@@ -63,8 +63,11 @@ import type {
   ConsumableView,
   ConsumableBatch,
   ConsumableIssueView,
+  ConsumableReturn,
+  ConsumableReturnView,
   ConsumableTrace,
   ConsumableRecall,
+  DeptConsumableStockView,
   MaterialStockWarning,
   MaterialSummary,
   CodingQueueItem,
@@ -474,6 +477,26 @@ export const materialApi = {
   }) => post<{ trace: ConsumableTrace }>('/material/traces', body),
   recall: (batchNo: string) =>
     get<ConsumableRecall>('/material/traces/recall', { batchNo }),
+
+  // ---- 未使用退回（G9）----
+  returns: (status?: string, deptId?: string, limit = 50) =>
+    get<ConsumableReturn[]>('/material/returns', { status, deptId, limit }),
+  consumableReturn: (id: string) =>
+    get<ConsumableReturnView>(`/material/returns/${id}`),
+  createConsumableReturn: (body: {
+    deptId: string
+    reason: string
+    items: { batchId: string; quantity: number }[]
+  }) => post<ConsumableReturnView>('/material/returns', body),
+  /** 审批通过：扣科室二级库并回冲中心批次。 */
+  approveConsumableReturn: (id: string, note?: string) =>
+    post<ConsumableReturnView>(`/material/returns/${id}/approve`, { note }),
+  rejectConsumableReturn: (id: string, reason: string) =>
+    post<ConsumableReturnView>(`/material/returns/${id}/reject`, { reason }),
+  cancelConsumableReturn: (id: string, reason: string) =>
+    post<ConsumableReturnView>(`/material/returns/${id}/cancel`, { reason }),
+  deptConsumableStock: (deptId: string, keyword?: string, limit = 100) =>
+    get<DeptConsumableStockView>('/material/dept-stocks', { deptId, keyword, limit }),
 }
 
 // ---------------------------------------------------------------- 病案编码（G4）

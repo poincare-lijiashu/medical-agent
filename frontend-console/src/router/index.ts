@@ -48,6 +48,11 @@ const router = createRouter({
         { path: 'drug-transfer', name: 'drug-transfer', component: () => import('@/views/DrugTransferView.vue') },
         { path: 'material', name: 'material', component: () => import('@/views/MaterialView.vue') },
         {
+          path: 'consumable-return',
+          name: 'consumable-return',
+          component: () => import('@/views/ConsumableReturnView.vue'),
+        },
+        {
           path: 'coding',
           name: 'coding',
           component: () => import('@/views/CodingWorkbenchView.vue'),

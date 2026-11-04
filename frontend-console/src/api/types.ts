@@ -1119,6 +1119,68 @@ export interface MaterialSummary {
   tracesToday: number
 }
 
+// ---------------------------------------------------------------- 耗材退回（G9）
+
+export type ConsumableReturnStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+
+/** 未使用耗材退回单（科室二级库 → 中心库房；审批通过才扣科室库并回冲中心批次）。 */
+export interface ConsumableReturn {
+  id: string
+  returnNo: string
+  status: ConsumableReturnStatus
+  deptId: string
+  reason: string
+  createdBy: string
+  reviewedBy: string | null
+  reviewedAt: string | null
+  reviewNote: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  version: number
+  createdAt: string
+}
+
+export interface ConsumableReturnItem {
+  id: string
+  returnId: string
+  consumableId: string
+  consumableCode: string
+  consumableName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string | null
+  quantity: number
+}
+
+export interface ConsumableReturnView {
+  consumableReturn: ConsumableReturn
+  items: ConsumableReturnItem[]
+}
+
+/** 科室二级库余额（科室 + 耗材 + 批次）。 */
+export interface DeptConsumableStock {
+  id: string
+  deptId: string
+  consumableId: string
+  consumableCode: string
+  consumableName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string | null
+  quantity: number
+  version: number
+}
+
+export interface DeptConsumableStockView {
+  deptId: string
+  items: DeptConsumableStock[]
+}
+
 // ---------------------------------------------------------------- 病案编码（G4）
 
 export interface IcdDiagnosis {

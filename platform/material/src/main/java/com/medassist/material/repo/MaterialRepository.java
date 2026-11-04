@@ -5,7 +5,10 @@ import com.medassist.material.domain.MaterialModel.Consumable;
 import com.medassist.material.domain.MaterialModel.ConsumableBatch;
 import com.medassist.material.domain.MaterialModel.ConsumableIssue;
 import com.medassist.material.domain.MaterialModel.ConsumableIssueItem;
+import com.medassist.material.domain.MaterialModel.ConsumableReturn;
+import com.medassist.material.domain.MaterialModel.ConsumableReturnItem;
 import com.medassist.material.domain.MaterialModel.ConsumableTrace;
+import com.medassist.material.domain.MaterialModel.DeptConsumableStock;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -74,6 +77,38 @@ public class MaterialRepository {
             rs.getTimestamp("used_at").toInstant(), rs.getString("remark"),
             rs.getTimestamp("created_at").toInstant());
 
+    private static final RowMapper<DeptConsumableStock> DEPT_STOCK_MAPPER =
+            (rs, i) -> new DeptConsumableStock(
+                    rs.getObject("id", UUID.class), rs.getObject("dept_id", UUID.class),
+                    rs.getObject("consumable_id", UUID.class), rs.getString("consumable_code"),
+                    rs.getString("consumable_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date") == null ? null
+                            : rs.getDate("expire_date").toLocalDate(),
+                    rs.getInt("quantity"), rs.getLong("version"));
+
+    private static final RowMapper<ConsumableReturn> RETURN_MAPPER = (rs, i) -> new ConsumableReturn(
+            rs.getObject("id", UUID.class), rs.getString("return_no"), rs.getString("status"),
+            rs.getObject("dept_id", UUID.class), rs.getString("reason"),
+            rs.getString("created_by"), rs.getString("reviewed_by"),
+            rs.getTimestamp("reviewed_at") == null ? null
+                    : rs.getTimestamp("reviewed_at").toInstant(),
+            rs.getString("review_note"), rs.getString("cancelled_by"),
+            rs.getTimestamp("cancelled_at") == null ? null
+                    : rs.getTimestamp("cancelled_at").toInstant(),
+            rs.getString("cancel_reason"), rs.getLong("version"),
+            rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<ConsumableReturnItem> RETURN_ITEM_MAPPER =
+            (rs, i) -> new ConsumableReturnItem(
+                    rs.getObject("id", UUID.class), rs.getObject("return_id", UUID.class),
+                    rs.getObject("consumable_id", UUID.class), rs.getString("consumable_code"),
+                    rs.getString("consumable_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date") == null ? null
+                            : rs.getDate("expire_date").toLocalDate(),
+                    rs.getInt("quantity"));
+
     private final JdbcClient jdbc;
 
     public MaterialRepository(JdbcClient jdbc) {
@@ -86,6 +121,13 @@ public class MaterialRepository {
         Long seq = jdbc.sql("SELECT nextval('material_svc.consumable_issue_no_seq'::regclass)")
                 .query(Long.class).single();
         return "MI" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq == null ? 0 : seq);
+    }
+
+    public String nextReturnNo() {
+        Long seq = jdbc.sql("SELECT nextval('material_svc.consumable_return_no_seq'::regclass)")
+                .query(Long.class).single();
+        return "MR" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
                 + String.format("%06d", seq == null ? 0 : seq);
     }
 
@@ -275,6 +317,15 @@ public class MaterialRepository {
                         UPDATE material_svc.consumable_batch
                            SET quantity = quantity - :qty, version = version + 1, updated_at = now()
                          WHERE id = :id AND quantity >= :qty
+                        """).param("qty", quantity).param("id", batchId).update() > 0;
+    }
+
+    /** 中心批次回冲（退回审批通过 / 拒收退回时使用）。 */
+    public boolean addBatchQuantity(UUID batchId, int quantity) {
+        return jdbc.sql("""
+                        UPDATE material_svc.consumable_batch
+                           SET quantity = quantity + :qty, version = version + 1, updated_at = now()
+                         WHERE id = :id
                         """).param("qty", quantity).param("id", batchId).update() > 0;
     }
 
@@ -475,6 +526,177 @@ public class MaterialRepository {
                 .query((rs, i) -> new RecallStats(rs.getLong("trace_count"),
                         rs.getInt("total_quantity"), rs.getLong("patient_count"),
                         rs.getLong("surgery_count"))).single();
+    }
+
+    // ---------------------------------------------------------------- 科室二级库
+
+    /** 科室二级库累加（同科室 + 耗材 + 批次 upsert）。出库成功时调用。 */
+    public void upsertDeptConsumableStock(UUID deptId, UUID consumableId, UUID batchId,
+                                          int quantity) {
+        jdbc.sql("""
+                        INSERT INTO material_svc.dept_consumable_stock
+                            (id, dept_id, consumable_id, batch_id, quantity, version)
+                        VALUES (:id, :deptId, :consumableId, :batchId, :qty, 0)
+                        ON CONFLICT (dept_id, consumable_id, batch_id) DO UPDATE
+                           SET quantity = material_svc.dept_consumable_stock.quantity
+                                          + EXCLUDED.quantity,
+                               version = material_svc.dept_consumable_stock.version + 1,
+                               updated_at = now()
+                        """)
+                .param("id", UUID.randomUUID()).param("deptId", deptId)
+                .param("consumableId", consumableId).param("batchId", batchId)
+                .param("qty", quantity).update();
+    }
+
+    /** 科室二级库原子扣减（余量不足返回 false，不产生负库存）。 */
+    public boolean deductDeptConsumableStock(UUID deptId, UUID consumableId, UUID batchId,
+                                             int quantity) {
+        return jdbc.sql("""
+                        UPDATE material_svc.dept_consumable_stock
+                           SET quantity = quantity - :qty, version = version + 1, updated_at = now()
+                         WHERE dept_id = :deptId AND consumable_id = :consumableId
+                           AND batch_id = :batchId AND quantity >= :qty
+                        """)
+                .param("deptId", deptId).param("consumableId", consumableId)
+                .param("batchId", batchId).param("qty", quantity).update() > 0;
+    }
+
+    public Optional<DeptConsumableStock> findDeptConsumableStock(UUID deptId, UUID consumableId,
+                                                                 UUID batchId) {
+        return jdbc.sql("""
+                        SELECT s.id, s.dept_id, s.consumable_id, c.code AS consumable_code,
+                               c.name AS consumable_name, c.spec, c.unit, s.batch_id,
+                               b.batch_no, b.expire_date, s.quantity, s.version
+                          FROM material_svc.dept_consumable_stock s
+                          JOIN material_svc.md_consumable c ON c.id = s.consumable_id
+                          JOIN material_svc.consumable_batch b ON b.id = s.batch_id
+                         WHERE s.dept_id = :deptId AND s.consumable_id = :consumableId
+                           AND s.batch_id = :batchId
+                        """)
+                .param("deptId", deptId).param("consumableId", consumableId)
+                .param("batchId", batchId).query(DEPT_STOCK_MAPPER).optional();
+    }
+
+    /** 科室二级库列表：只列有余量的批次。 */
+    public List<DeptConsumableStock> listDeptConsumableStock(UUID deptId, String keyword,
+                                                             int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT s.id, s.dept_id, s.consumable_id, c.code AS consumable_code,
+                               c.name AS consumable_name, c.spec, c.unit, s.batch_id,
+                               b.batch_no, b.expire_date, s.quantity, s.version
+                          FROM material_svc.dept_consumable_stock s
+                          JOIN material_svc.md_consumable c ON c.id = s.consumable_id
+                          JOIN material_svc.consumable_batch b ON b.id = s.batch_id
+                         WHERE s.dept_id = :deptId
+                           AND s.quantity > 0
+                           AND (CAST(:pattern AS text) IS NULL
+                                OR c.name ILIKE CAST(:pattern AS text)
+                                OR c.code ILIKE CAST(:pattern AS text)
+                                OR b.batch_no ILIKE CAST(:pattern AS text))
+                         ORDER BY c.code, b.expire_date NULLS LAST, b.batch_no
+                         LIMIT :limit
+                        """)
+                .param("deptId", deptId).param("pattern", pattern).param("limit", limit)
+                .query(DEPT_STOCK_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 未使用退回
+
+    public void insertReturn(ConsumableReturn r) {
+        jdbc.sql("""
+                        INSERT INTO material_svc.consumable_return
+                            (id, return_no, status, dept_id, reason, created_by, version)
+                        VALUES (:id, :no, :status, :deptId, :reason, :createdBy, 0)
+                        """)
+                .param("id", r.id()).param("no", r.returnNo()).param("status", r.status())
+                .param("deptId", r.deptId()).param("reason", r.reason())
+                .param("createdBy", r.createdBy()).update();
+    }
+
+    public Optional<ConsumableReturn> findReturn(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, return_no, status, dept_id, reason, created_by, reviewed_by,
+                               reviewed_at, review_note, cancelled_by, cancelled_at,
+                               cancel_reason, version, created_at
+                          FROM material_svc.consumable_return WHERE id = ?
+                        """).param(id).query(RETURN_MAPPER).optional();
+    }
+
+    /** 加行锁读取退回单；审批/驳回/撤回前必须调用。 */
+    public Optional<ConsumableReturn> lockReturn(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, return_no, status, dept_id, reason, created_by, reviewed_by,
+                               reviewed_at, review_note, cancelled_by, cancelled_at,
+                               cancel_reason, version, created_at
+                          FROM material_svc.consumable_return WHERE id = ? FOR UPDATE
+                        """).param(id).query(RETURN_MAPPER).optional();
+    }
+
+    public List<ConsumableReturn> listReturns(String status, UUID deptId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, return_no, status, dept_id, reason, created_by, reviewed_by,
+                               reviewed_at, review_note, cancelled_by, cancelled_at,
+                               cancel_reason, version, created_at
+                          FROM material_svc.consumable_return
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("deptId", deptId).param("limit", limit)
+                .query(RETURN_MAPPER).list();
+    }
+
+    public void insertReturnItem(ConsumableReturnItem item) {
+        jdbc.sql("""
+                        INSERT INTO material_svc.consumable_return_item
+                            (id, return_id, consumable_id, batch_id, quantity)
+                        VALUES (:id, :returnId, :consumableId, :batchId, :qty)
+                        """)
+                .param("id", item.id()).param("returnId", item.returnId())
+                .param("consumableId", item.consumableId()).param("batchId", item.batchId())
+                .param("qty", item.quantity()).update();
+    }
+
+    public List<ConsumableReturnItem> listReturnItems(UUID returnId) {
+        return jdbc.sql("""
+                        SELECT i.id, i.return_id, i.consumable_id, c.code AS consumable_code,
+                               c.name AS consumable_name, c.spec, c.unit, i.batch_id,
+                               b.batch_no, b.expire_date, i.quantity
+                          FROM material_svc.consumable_return_item i
+                          JOIN material_svc.md_consumable c ON c.id = i.consumable_id
+                          JOIN material_svc.consumable_batch b ON b.id = i.batch_id
+                         WHERE i.return_id = ?
+                         ORDER BY c.code, b.batch_no
+                        """).param(returnId).query(RETURN_ITEM_MAPPER).list();
+    }
+
+    /** 审批 CAS：仅 SUBMITTED 可流转。 */
+    public boolean reviewReturn(UUID id, long expectedVersion, String actor, boolean approved,
+                                String note) {
+        return jdbc.sql("""
+                        UPDATE material_svc.consumable_return
+                           SET status = :status, reviewed_by = :actor, reviewed_at = now(),
+                               review_note = CAST(:note AS text), version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("status", approved ? ConsumableReturn.APPROVED
+                        : ConsumableReturn.REJECTED)
+                .param("actor", actor).param("note", note)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean cancelReturn(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE material_svc.consumable_return
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancel_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("actor", actor).param("reason", reason)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 汇总
