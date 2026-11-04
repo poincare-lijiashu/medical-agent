@@ -68,7 +68,7 @@ class LisInboundServiceTest {
 
     private Report report(String status) {
         return new Report(reportId, "RP001", appId, 1, true, "所见", "结论",
-                "lis", null, null, status, false, Instant.now());
+                "lis", null, null, status, false, Instant.now(), null, null);
     }
 
     @Test

@@ -65,7 +65,7 @@ class ReportControllerPermissionTest {
     @Test
     @DisplayName("书写报告：需要 tech:report:write，审方权限不能越权书写")
     void writeRequiresWrite() {
-        WriteReportReq req = new WriteReportReq("所见", "结论", List.of());
+        WriteReportReq req = new WriteReportReq("所见", "结论", List.of(), null, null);
         assertForbidden(() -> controller.write(applicationId, req, "tech:report:review", "tech01"));
         verify(service, never()).write(any(), any(), anyString());
 

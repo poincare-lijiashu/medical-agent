@@ -70,6 +70,11 @@ const router = createRouter({
           component: () => import('@/views/SurgeryChargesView.vue'),
         },
         { path: 'tech', name: 'tech', component: () => import('@/views/TechView.vue') },
+        {
+          path: 'device-qc',
+          name: 'device-qc',
+          component: () => import('@/views/DeviceQcView.vue'),
+        },
         { path: 'pacs', name: 'pacs', component: () => import('@/views/PacsWorkbenchView.vue') },
         { path: 'narcotic', name: 'narcotic', component: () => import('@/views/NarcoticRegisterView.vue') },
         { path: 'pharmacy', name: 'pharmacy', component: () => import('@/views/PharmacyView.vue') },

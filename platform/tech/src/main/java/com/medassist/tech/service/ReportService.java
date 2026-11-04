@@ -6,6 +6,7 @@ import com.medassist.tech.config.TechProperties;
 import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.CriticalValue;
 import com.medassist.tech.domain.TechModel.Report;
+import com.medassist.tech.domain.TechModel.ReportTemplate;
 import com.medassist.tech.repo.TechRepository;
 import com.medassist.tech.web.TechDtos.AmendReportReq;
 import com.medassist.tech.web.TechDtos.CriticalLine;
@@ -15,14 +16,17 @@ import com.medassist.tech.web.TechDtos.WriteReportReq;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -65,9 +69,11 @@ public class ReportService {
                     "该申请已有报告，请在原报告上重写草稿或走修订流程");
         }
         boolean hasCritical = req.criticalLines() != null && !req.criticalLines().isEmpty();
+        Structured structured = structured(req.templateId(), req.structured());
         Report report = new Report(UUID.randomUUID(), repo.nextReportNo(), applicationId,
                 repo.nextReportRevision(applicationId), true, req.findings().trim(),
-                req.conclusion().trim(), actor, null, null, Report.DRAFT, hasCritical, null);
+                req.conclusion().trim(), actor, null, null, Report.DRAFT, hasCritical, null,
+                structured.templateId(), structured.json());
         repo.insertReport(report);
         List<CriticalValue> criticals = insertCriticals(report, req.criticalLines());
 
@@ -88,7 +94,9 @@ public class ReportService {
                     "只有草稿可以重写；已签发报告请走修订（amend）");
         }
         boolean hasCritical = req.criticalLines() != null && !req.criticalLines().isEmpty();
-        if (!repo.updateDraftReport(reportId, req.findings().trim(), req.conclusion().trim(), hasCritical)) {
+        Structured structured = structured(req.templateId(), req.structured());
+        if (!repo.updateDraftReport(reportId, req.findings().trim(), req.conclusion().trim(),
+                hasCritical, structured.templateId(), structured.json())) {
             throw new BusinessException(ErrorCode.CONFLICT, "报告状态已变化，请刷新后重试");
         }
         List<CriticalValue> criticals = new ArrayList<>();
@@ -156,9 +164,11 @@ public class ReportService {
         }
         repo.clearCurrentReport(old.applicationId());
         int revision = repo.nextReportRevision(old.applicationId());
+        Structured structured = structured(req.templateId(), req.structured());
         Report amended = new Report(UUID.randomUUID(), old.reportNo(), old.applicationId(),
                 revision, true, req.findings().trim(), req.conclusion().trim(), actor,
-                actor, Instant.now(), Report.AMENDED, old.criticalFlag(), null);
+                actor, Instant.now(), Report.AMENDED, old.criticalFlag(), null,
+                structured.templateId(), structured.json());
         repo.insertReport(amended);
         audit(actor, "REPORT_AMEND", "REPORT", amended.id().toString(), Map.of(
                 "reportNo", old.reportNo(), "fromRevision", old.revision(),
@@ -228,6 +238,66 @@ public class ReportService {
         audit(actor, "CRITICAL_CLOSE", "CRITICAL", criticalId.toString(), Map.of(
                 "itemName", critical.itemName()));
         return new CriticalView(repo.findCriticalValue(criticalId).orElseThrow(), false);
+    }
+
+    // ---------------------------------------------------------------- 结构化内容
+
+    private record Structured(UUID templateId, String json) {
+    }
+
+    /**
+     * 校验并序列化结构化内容。
+     *
+     * <p>未选模板时内容必须为空；选了模板必须是 PUBLISHED，且必填字段齐全、不得出现模板外字段。
+     */
+    private Structured structured(UUID templateId, Map<String, Object> values) {
+        if (templateId == null) {
+            if (values != null && !values.isEmpty()) {
+                throw new BusinessException(ErrorCode.TECH_REPORT_STRUCTURED_INVALID,
+                        "填写了结构化内容但未选择报告模板");
+            }
+            return new Structured(null, null);
+        }
+        ReportTemplate template = repo.findReportTemplate(templateId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_REPORT_TEMPLATE_NOT_FOUND));
+        if (!template.published()) {
+            throw new BusinessException(ErrorCode.TECH_REPORT_STRUCTURED_INVALID,
+                    "模板 " + template.code() + " 尚未发布，不能用于报告");
+        }
+        try {
+            JsonNode schema = objectMapper.readTree(template.schemaJson());
+            JsonNode fields = schema == null ? null : schema.get("fields");
+            Set<String> allowed = new HashSet<>();
+            if (fields != null) {
+                for (JsonNode field : fields) {
+                    String key = field.path("key").asText("");
+                    if (!key.isBlank()) {
+                        allowed.add(key);
+                    }
+                    boolean required = field.path("required").asBoolean(false);
+                    Object value = values == null ? null : values.get(key);
+                    if (required && (value == null || String.valueOf(value).isBlank())) {
+                        String label = field.path("label").asText(key);
+                        throw new BusinessException(ErrorCode.TECH_REPORT_STRUCTURED_INVALID,
+                                "模板必填字段「" + label + "」不能为空");
+                    }
+                }
+            }
+            if (values != null) {
+                for (String key : values.keySet()) {
+                    if (!allowed.contains(key)) {
+                        throw new BusinessException(ErrorCode.TECH_REPORT_STRUCTURED_INVALID,
+                                "模板中不存在字段：" + key);
+                    }
+                }
+            }
+            String json = values == null || values.isEmpty() ? "{}"
+                    : objectMapper.writeValueAsString(values);
+            return new Structured(templateId, json);
+        } catch (JacksonException e) {
+            throw new BusinessException(ErrorCode.TECH_REPORT_STRUCTURED_INVALID,
+                    "结构化内容无法序列化");
+        }
     }
 
     // ---------------------------------------------------------------- 内部

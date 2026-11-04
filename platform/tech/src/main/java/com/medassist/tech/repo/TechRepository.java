@@ -3,6 +3,9 @@ package com.medassist.tech.repo;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.tech.domain.TechModel.Application;
 import com.medassist.tech.domain.TechModel.CriticalValue;
+import com.medassist.tech.domain.TechModel.Device;
+import com.medassist.tech.domain.TechModel.DeviceQc;
+import com.medassist.tech.domain.TechModel.DeviceStatusCount;
 import com.medassist.tech.domain.TechModel.ExamItem;
 import com.medassist.tech.domain.TechModel.LisInboundMessage;
 import com.medassist.tech.domain.TechModel.PacsAccessLog;
@@ -11,6 +14,7 @@ import com.medassist.tech.domain.TechModel.PacsStudy;
 import com.medassist.tech.domain.TechModel.ReadingQueueItem;
 import com.medassist.tech.domain.TechModel.ReadingTask;
 import com.medassist.tech.domain.TechModel.Report;
+import com.medassist.tech.domain.TechModel.ReportTemplate;
 import com.medassist.tech.domain.TechModel.Specimen;
 import com.medassist.tech.domain.TechModel.WorklistItem;
 import org.springframework.jdbc.core.RowMapper;
@@ -64,7 +68,8 @@ public class TechRepository {
             rs.getString("reporter"), rs.getString("reviewer"),
             rs.getTimestamp("reviewed_at") == null ? null : rs.getTimestamp("reviewed_at").toInstant(),
             rs.getString("status"), rs.getBoolean("critical_flag"),
-            rs.getTimestamp("created_at").toInstant());
+            rs.getTimestamp("created_at").toInstant(),
+            rs.getObject("template_id", UUID.class), rs.getString("structured_json"));
 
     private static final RowMapper<CriticalValue> CRITICAL_MAPPER = (rs, i) -> new CriticalValue(
             rs.getObject("id", UUID.class), rs.getObject("application_id", UUID.class),
@@ -333,18 +338,22 @@ public class TechRepository {
         jdbc.sql("""
                         INSERT INTO tech_svc.exam_report
                             (id, report_no, application_id, revision, is_current, findings,
-                             conclusion, reporter, reviewer, reviewed_at, status, critical_flag)
+                             conclusion, reporter, reviewer, reviewed_at, status, critical_flag,
+                             template_id, structured_json)
                         VALUES (:id, :no, :appId, :revision, :current, :findings, :conclusion,
                                 :reporter, CAST(:reviewer AS text),
                                 CASE WHEN CAST(:reviewer AS text) IS NULL THEN NULL ELSE now() END,
-                                :status, :criticalFlag)
+                                :status, :criticalFlag, CAST(:templateId AS uuid),
+                                CAST(:structured AS jsonb))
                         """)
                 .param("id", r.id()).param("no", r.reportNo())
                 .param("appId", r.applicationId()).param("revision", r.revision())
                 .param("current", r.current()).param("findings", r.findings())
                 .param("conclusion", r.conclusion()).param("reporter", r.reporter())
                 .param("reviewer", r.reviewer()).param("status", r.status())
-                .param("criticalFlag", r.criticalFlag()).update();
+                .param("criticalFlag", r.criticalFlag())
+                .param("templateId", r.templateId()).param("structured", r.structuredJson())
+                .update();
     }
 
     /** 把该申请当前报告标记为非当前（修订时调用，须在同一事务内）。 */
@@ -358,7 +367,8 @@ public class TechRepository {
     public Optional<Report> findReport(UUID id) {
         return jdbc.sql("""
                         SELECT id, report_no, application_id, revision, is_current, findings,
-                               conclusion, reporter, reviewer, reviewed_at, status, critical_flag, created_at
+                               conclusion, reporter, reviewer, reviewed_at, status, critical_flag,
+                               created_at, template_id, structured_json
                           FROM tech_svc.exam_report WHERE id = ?
                         """).param(id).query(REPORT_MAPPER).optional();
     }
@@ -366,7 +376,8 @@ public class TechRepository {
     public Optional<Report> findCurrentReport(UUID applicationId) {
         return jdbc.sql("""
                         SELECT id, report_no, application_id, revision, is_current, findings,
-                               conclusion, reporter, reviewer, reviewed_at, status, critical_flag, created_at
+                               conclusion, reporter, reviewer, reviewed_at, status, critical_flag,
+                               created_at, template_id, structured_json
                           FROM tech_svc.exam_report
                          WHERE application_id = :appId AND is_current
                         """).param("appId", applicationId).query(REPORT_MAPPER).optional();
@@ -375,22 +386,29 @@ public class TechRepository {
     public List<Report> listReports(UUID applicationId) {
         return jdbc.sql("""
                         SELECT id, report_no, application_id, revision, is_current, findings,
-                               conclusion, reporter, reviewer, reviewed_at, status, critical_flag, created_at
+                               conclusion, reporter, reviewer, reviewed_at, status, critical_flag,
+                               created_at, template_id, structured_json
                           FROM tech_svc.exam_report
                          WHERE application_id = :appId ORDER BY revision
                         """).param("appId", applicationId).query(REPORT_MAPPER).list();
     }
 
     /** 重写草稿（仅 DRAFT）：技师改错别字/补充所见，不产生新版本。 */
-    public boolean updateDraftReport(UUID id, String findings, String conclusion, boolean criticalFlag) {
+    public boolean updateDraftReport(UUID id, String findings, String conclusion,
+                                     boolean criticalFlag, UUID templateId,
+                                     String structuredJson) {
         return jdbc.sql("""
                         UPDATE tech_svc.exam_report
                            SET findings = :findings, conclusion = :conclusion,
-                               critical_flag = :criticalFlag
+                               critical_flag = :criticalFlag,
+                               template_id = CAST(:templateId AS uuid),
+                               structured_json = CAST(:structured AS jsonb)
                          WHERE id = :id AND status = 'DRAFT'
                         """)
                 .param("findings", findings).param("conclusion", conclusion)
-                .param("criticalFlag", criticalFlag).param("id", id).update() > 0;
+                .param("criticalFlag", criticalFlag)
+                .param("templateId", templateId).param("structured", structuredJson)
+                .param("id", id).update() > 0;
     }
 
     /** 审核签发（CAS：仅 DRAFT 可迁移到 FINAL）。 */
@@ -922,6 +940,234 @@ public class TechRepository {
                         """)
                 .param("studyId", studyId).param("limit", limit)
                 .query(PACS_ACCESS_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 设备与质控（G35）
+
+    private static final RowMapper<Device> DEVICE_MAPPER = (rs, i) -> new Device(
+            rs.getObject("id", UUID.class), rs.getString("device_no"), rs.getString("name"),
+            rs.getString("modality"), rs.getObject("dept_id", UUID.class),
+            rs.getString("location"), rs.getString("manufacturer"), rs.getString("model"),
+            rs.getString("serial_no"), rs.getString("status"),
+            rs.getDate("installed_at") == null ? null : rs.getDate("installed_at").toLocalDate(),
+            rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<DeviceQc> DEVICE_QC_MAPPER = (rs, i) -> new DeviceQc(
+            rs.getObject("id", UUID.class), rs.getObject("device_id", UUID.class),
+            rs.getString("device_no"), rs.getString("device_name"), rs.getString("qc_type"),
+            rs.getString("result"), rs.getString("item_name"), rs.getString("expected_value"),
+            rs.getString("actual_value"), rs.getString("unit"), rs.getString("performed_by"),
+            rs.getTimestamp("performed_at").toInstant(), rs.getString("note"),
+            rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<ReportTemplate> TEMPLATE_MAPPER = (rs, i) -> new ReportTemplate(
+            rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+            rs.getString("modality"), rs.getString("schema_json"), rs.getString("status"),
+            rs.getString("created_by"), rs.getTimestamp("created_at").toInstant(),
+            rs.getString("published_by"),
+            rs.getTimestamp("published_at") == null ? null : rs.getTimestamp("published_at").toInstant(),
+            rs.getLong("version"));
+
+    public String nextDeviceNo() {
+        return nextNo("tech_svc.device_no_seq", "DEV");
+    }
+
+    public void insertDevice(Device d) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.device
+                            (id, device_no, name, modality, dept_id, location, manufacturer,
+                             model, serial_no, status, installed_at)
+                        VALUES (:id, :no, :name, :modality, CAST(:deptId AS uuid),
+                                CAST(:location AS text), CAST(:manufacturer AS text),
+                                CAST(:model AS text), CAST(:serialNo AS text), :status,
+                                CAST(:installedAt AS date))
+                        """)
+                .param("id", d.id()).param("no", d.deviceNo()).param("name", d.name())
+                .param("modality", d.modality()).param("deptId", d.deptId())
+                .param("location", d.location()).param("manufacturer", d.manufacturer())
+                .param("model", d.model()).param("serialNo", d.serialNo())
+                .param("status", d.status()).param("installedAt", d.installedAt()).update();
+    }
+
+    public Optional<Device> findDevice(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, device_no, name, modality, dept_id, location, manufacturer,
+                               model, serial_no, status, installed_at, version, created_at
+                          FROM tech_svc.device WHERE id = ?
+                        """).param(id).query(DEVICE_MAPPER).optional();
+    }
+
+    public Optional<Device> lockDevice(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, device_no, name, modality, dept_id, location, manufacturer,
+                               model, serial_no, status, installed_at, version, created_at
+                          FROM tech_svc.device WHERE id = ? FOR UPDATE
+                        """).param(id).query(DEVICE_MAPPER).optional();
+    }
+
+    public List<Device> listDevices(String keyword, String modality, String status, int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT id, device_no, name, modality, dept_id, location, manufacturer,
+                               model, serial_no, status, installed_at, version, created_at
+                          FROM tech_svc.device
+                         WHERE (CAST(:pattern AS text) IS NULL OR name ILIKE CAST(:pattern AS text)
+                                OR device_no ILIKE CAST(:pattern AS text)
+                                OR COALESCE(serial_no, '') ILIKE CAST(:pattern AS text))
+                           AND (CAST(:modality AS text) IS NULL
+                                OR modality = CAST(:modality AS text))
+                           AND (CAST(:status AS text) IS NULL
+                                OR status = CAST(:status AS text))
+                         ORDER BY modality, device_no
+                         LIMIT :limit
+                        """)
+                .param("pattern", pattern).param("modality", modality).param("status", status)
+                .param("limit", limit).query(DEVICE_MAPPER).list();
+    }
+
+    public boolean updateDeviceStatus(UUID id, String status, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device
+                           SET status = :status, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("status", status).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public void insertDeviceQc(DeviceQc qc) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.device_qc
+                            (id, device_id, qc_type, result, item_name, expected_value,
+                             actual_value, unit, performed_by, performed_at, note)
+                        VALUES (:id, :deviceId, :qcType, :result, :itemName,
+                                CAST(:expected AS text), CAST(:actual AS text), CAST(:unit AS text),
+                                :performedBy,
+                                COALESCE(CAST(:performedAt AS timestamptz), now()),
+                                CAST(:note AS text))
+                        """)
+                .param("id", qc.id()).param("deviceId", qc.deviceId())
+                .param("qcType", qc.qcType()).param("result", qc.result())
+                .param("itemName", qc.itemName()).param("expected", qc.expectedValue())
+                .param("actual", qc.actualValue()).param("unit", qc.unit())
+                .param("performedBy", qc.performedBy())
+                .param("performedAt", qc.performedAt() == null ? null
+                        : qc.performedAt().atZone(BusinessTime.zone()).toOffsetDateTime())
+                .param("note", qc.note()).update();
+    }
+
+    public List<DeviceQc> listDeviceQc(UUID deviceId, int limit) {
+        return jdbc.sql("""
+                        SELECT q.id, q.device_id, d.device_no, d.name AS device_name, q.qc_type,
+                               q.result, q.item_name, q.expected_value, q.actual_value, q.unit,
+                               q.performed_by, q.performed_at, q.note, q.created_at
+                          FROM tech_svc.device_qc q
+                          JOIN tech_svc.device d ON d.id = q.device_id
+                         WHERE q.device_id = :deviceId
+                         ORDER BY q.performed_at DESC, q.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("deviceId", deviceId).param("limit", limit)
+                .query(DEVICE_QC_MAPPER).list();
+    }
+
+    /** 最近一次质控结果（无记录返回空），用于设备列表 FAIL 提示。 */
+    public Optional<String> latestDeviceQcResult(UUID deviceId) {
+        return jdbc.sql("""
+                        SELECT result FROM tech_svc.device_qc
+                         WHERE device_id = ?
+                         ORDER BY performed_at DESC, created_at DESC
+                         LIMIT 1
+                        """).param(deviceId).query(String.class).optional();
+    }
+
+    public List<DeviceStatusCount> deviceStatusCounts() {
+        return jdbc.sql("""
+                        SELECT status, count(*) AS cnt FROM tech_svc.device GROUP BY status
+                        """)
+                .query((rs, i) -> new DeviceStatusCount(rs.getString("status"),
+                        rs.getInt("cnt"))).list();
+    }
+
+    public int countDeviceQcFailSince(OffsetDateTime from) {
+        Integer count = jdbc.sql("""
+                        SELECT count(*) FROM tech_svc.device_qc
+                         WHERE result = 'FAIL' AND performed_at >= :fromTs
+                        """).param("fromTs", from).query(Integer.class).single();
+        return count == null ? 0 : count;
+    }
+
+    // ---------------------------------------------------------------- 结构化报告模板（G35）
+
+    public void insertReportTemplate(ReportTemplate t) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.report_template
+                            (id, code, name, modality, schema_json, status, created_by)
+                        VALUES (:id, :code, :name, :modality, CAST(:schema AS jsonb), :status,
+                                :createdBy)
+                        """)
+                .param("id", t.id()).param("code", t.code()).param("name", t.name())
+                .param("modality", t.modality()).param("schema", t.schemaJson())
+                .param("status", t.status()).param("createdBy", t.createdBy()).update();
+    }
+
+    public Optional<ReportTemplate> findReportTemplate(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, code, name, modality, schema_json, status, created_by,
+                               created_at, published_by, published_at, version
+                          FROM tech_svc.report_template WHERE id = ?
+                        """).param(id).query(TEMPLATE_MAPPER).optional();
+    }
+
+    public Optional<ReportTemplate> findReportTemplateByCode(String code) {
+        return jdbc.sql("""
+                        SELECT id, code, name, modality, schema_json, status, created_by,
+                               created_at, published_by, published_at, version
+                          FROM tech_svc.report_template WHERE code = ?
+                        """).param(code).query(TEMPLATE_MAPPER).optional();
+    }
+
+    public Optional<ReportTemplate> lockReportTemplate(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, code, name, modality, schema_json, status, created_by,
+                               created_at, published_by, published_at, version
+                          FROM tech_svc.report_template WHERE id = ? FOR UPDATE
+                        """).param(id).query(TEMPLATE_MAPPER).optional();
+    }
+
+    public List<ReportTemplate> listReportTemplates(String status, String modality, int limit) {
+        return jdbc.sql("""
+                        SELECT id, code, name, modality, schema_json, status, created_by,
+                               created_at, published_by, published_at, version
+                          FROM tech_svc.report_template
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:modality AS text) IS NULL
+                                OR modality = CAST(:modality AS text))
+                         ORDER BY modality, code
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("modality", modality).param("limit", limit)
+                .query(TEMPLATE_MAPPER).list();
+    }
+
+    public boolean publishReportTemplate(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.report_template
+                           SET status = 'PUBLISHED', published_by = :actor, published_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("actor", actor).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean disableReportTemplate(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.report_template
+                           SET status = 'DISABLED', version = version + 1
+                         WHERE id = :id AND status = 'PUBLISHED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

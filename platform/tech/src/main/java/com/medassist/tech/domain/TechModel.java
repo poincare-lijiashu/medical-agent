@@ -1,6 +1,7 @@
 package com.medassist.tech.domain;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -49,11 +50,17 @@ public final class TechModel {
         public static final String REJECTED = "REJECTED";
     }
 
-    /** 报告（同号多版本）。 */
+    /**
+     * 报告（同号多版本）。
+     *
+     * <p>G35 起可选结构化内容：{@code templateId} 指向发布的结构化模板，
+     * {@code structuredJson} 是该版本的结构化字段快照（JSON 文本），历史版本不受修订影响。
+     */
     public record Report(UUID id, String reportNo, UUID applicationId, int revision,
                          boolean current, String findings, String conclusion, String reporter,
                          String reviewer, Instant reviewedAt, String status,
-                         boolean criticalFlag, Instant createdAt) {
+                         boolean criticalFlag, Instant createdAt, UUID templateId,
+                         String structuredJson) {
 
         public static final String DRAFT = "DRAFT";
         public static final String FINAL = "FINAL";
@@ -178,5 +185,62 @@ public final class TechModel {
         public static final String VIEW_STUDY = "VIEW_STUDY";
         public static final String VIEW_SERIES = "VIEW_SERIES";
         public static final String FETCH_IMAGE = "FETCH_IMAGE";
+    }
+
+    /**
+     * 医技设备档案（G35）。
+     *
+     * <p>停用（RETIRED）后不允许再登记质控；MAINTENANCE 允许登记维修后的校准记录。
+     */
+    public record Device(UUID id, String deviceNo, String name, String modality, UUID deptId,
+                         String location, String manufacturer, String model, String serialNo,
+                         String status, LocalDate installedAt, long version, Instant createdAt) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String MAINTENANCE = "MAINTENANCE";
+        public static final String RETIRED = "RETIRED";
+
+        public boolean retired() {
+            return RETIRED.equals(status);
+        }
+    }
+
+    /** 设备质控记录（追加式）。 */
+    public record DeviceQc(UUID id, UUID deviceId, String deviceNo, String deviceName,
+                           String qcType, String result, String itemName, String expectedValue,
+                           String actualValue, String unit, String performedBy,
+                           Instant performedAt, String note, Instant createdAt) {
+
+        public static final String PASS = "PASS";
+        public static final String FAIL = "FAIL";
+
+        public static final String DAILY = "DAILY";
+        public static final String WEEKLY = "WEEKLY";
+        public static final String MONTHLY = "MONTHLY";
+        public static final String CALIBRATION = "CALIBRATION";
+    }
+
+    /** 设备状态计数（看板）。 */
+    public record DeviceStatusCount(String status, int count) {
+    }
+
+    /**
+     * 结构化报告模板（G35）。
+     *
+     * <p>{@code schemaJson} 形如 {@code {"fields":[{"key","label","type","required",...}]}}；
+     * 发布后不可改，只能停用后新建版本（与临床路径模板一致）。
+     */
+    public record ReportTemplate(UUID id, String code, String name, String modality,
+                                 String schemaJson, String status, String createdBy,
+                                 Instant createdAt, String publishedBy, Instant publishedAt,
+                                 long version) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String DISABLED = "DISABLED";
+
+        public boolean published() {
+            return PUBLISHED.equals(status);
+        }
     }
 }

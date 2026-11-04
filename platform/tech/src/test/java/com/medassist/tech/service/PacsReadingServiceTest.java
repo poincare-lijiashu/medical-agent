@@ -72,7 +72,8 @@ class PacsReadingServiceTest {
 
     private Report report(String status) {
         return new Report(UUID.randomUUID(), "RP20261103000001", applicationId, 1, true,
-                "未见异常", "正常胸片", "doc01", "chief01", Instant.now(), status, false, Instant.now());
+                "未见异常", "正常胸片", "doc01", "chief01", Instant.now(), status, false,
+                Instant.now(), null, null);
     }
 
     private ReadingQueueItem queueItem() {

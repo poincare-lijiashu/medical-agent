@@ -103,11 +103,18 @@ public final class TechDtos {
             @Size(max = 64) String notifiedTo) {
     }
 
-    /** 书写报告（DRAFT）；criticalLines 非空时自动创建危急值（PENDING）。 */
+    /**
+     * 书写报告（DRAFT）；criticalLines 非空时自动创建危急值（PENDING）。
+     *
+     * <p>G35：可选结构化内容——templateId 必须是已发布模板，structured 以字段 key 为键；
+     * 模板必填字段缺失时拒绝保存。
+     */
     public record WriteReportReq(
             @NotBlank @Size(max = 4000) String findings,
             @NotBlank @Size(max = 4000) String conclusion,
-            List<@Valid CriticalLine> criticalLines) {
+            List<@Valid CriticalLine> criticalLines,
+            java.util.UUID templateId,
+            java.util.Map<String, Object> structured) {
     }
 
     /** 审核签发。 */
@@ -116,11 +123,13 @@ public final class TechDtos {
             @Size(max = 256) String reason) {
     }
 
-    /** 修订报告（追加版本）。 */
+    /** 修订报告（追加版本）；结构化内容随新版本保存，旧版本不受影响。 */
     public record AmendReportReq(
             @NotBlank @Size(max = 4000) String findings,
             @NotBlank @Size(max = 4000) String conclusion,
-            @Size(max = 256) String reason) {
+            @Size(max = 256) String reason,
+            java.util.UUID templateId,
+            java.util.Map<String, Object> structured) {
     }
 
     /** 危急值确认。 */

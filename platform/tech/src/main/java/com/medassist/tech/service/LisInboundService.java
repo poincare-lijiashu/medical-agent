@@ -174,7 +174,7 @@ public class LisInboundService {
                 ? "结果已在所见中列明，未见明显异常"
                 : "异常项：" + String.join("、", abnormal);
         return new WriteReportReq(trim(findings.toString().trim(), 4000),
-                trim(conclusion, 4000), criticals);
+                trim(conclusion, 4000), criticals, null, null);
     }
 
     private static String nvl(String s) {

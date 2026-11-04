@@ -1975,6 +1975,9 @@ export interface TechReport {
   status: 'DRAFT' | 'FINAL' | 'AMENDED'
   criticalFlag: boolean
   createdAt: string
+  /** G35：结构化模板与内容快照（JSON 文本；未使用结构化时为 null）。 */
+  templateId: string | null
+  structuredJson: string | null
 }
 
 /** 危急值：PENDING→ACKNOWLEDGED→CLOSED，不允许跳过确认。 */
@@ -2028,6 +2031,92 @@ export interface TechExamItem {
 
 export interface TechExamItemView {
   item: TechExamItem
+}
+
+// ---------------------------------------------------------------- 设备质控与结构化报告（G35）
+
+export type TechModality = 'CT' | 'MR' | 'US' | 'DR' | 'CR' | 'LIS' | 'ECG' | 'OTHER'
+export type TechDeviceStatus = 'ACTIVE' | 'MAINTENANCE' | 'RETIRED'
+
+/** 医技设备档案；停用（RETIRED）后不可恢复。 */
+export interface TechDevice {
+  id: string
+  deviceNo: string
+  name: string
+  modality: TechModality
+  deptId: string | null
+  location: string | null
+  manufacturer: string | null
+  model: string | null
+  serialNo: string | null
+  status: TechDeviceStatus
+  installedAt: string | null
+  version: number
+  createdAt: string
+}
+
+export type TechQcType = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'CALIBRATION'
+export type TechQcResult = 'PASS' | 'FAIL'
+
+export interface TechDeviceQc {
+  id: string
+  deviceId: string
+  deviceNo: string
+  deviceName: string
+  qcType: TechQcType
+  result: TechQcResult
+  itemName: string
+  expectedValue: string | null
+  actualValue: string | null
+  unit: string | null
+  performedBy: string
+  performedAt: string
+  note: string | null
+  createdAt: string
+}
+
+export interface TechDeviceView {
+  device: TechDevice
+  latestQcResult: TechQcResult | null
+  qcHistory: TechDeviceQc[]
+}
+
+export interface TechDeviceSummary {
+  total: number
+  active: number
+  maintenance: number
+  retired: number
+  qcFail30d: number
+}
+
+export interface TechTemplateField {
+  key: string
+  label: string
+  type: 'TEXT' | 'NUMBER' | 'SELECT'
+  required: boolean
+  options: string[] | null
+  unit: string | null
+}
+
+export type TechTemplateStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED'
+
+export interface TechReportTemplate {
+  id: string
+  code: string
+  name: string
+  modality: TechModality
+  /** JSON 文本：{"fields":[...]}，前端解析后渲染。 */
+  schemaJson: string
+  status: TechTemplateStatus
+  createdBy: string
+  createdAt: string
+  publishedBy: string | null
+  publishedAt: string | null
+  version: number
+}
+
+export interface TechTemplateView {
+  template: TechReportTemplate
 }
 
 // ---------------------------------------------------------------- 影像阅片（PACS）

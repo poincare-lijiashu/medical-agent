@@ -131,8 +131,13 @@ import type {
   TechApplicationView,
   TechCriticalLine,
   TechCriticalView,
+  TechDevice,
+  TechDeviceSummary,
+  TechDeviceView,
   TechExamItemView,
+  TechReportTemplate,
   TechReportView,
+  TechTemplateView,
   UserAccount,
   Visit,
   VisitOrder,
@@ -874,17 +879,37 @@ export const techApi = {
     get<TechReportView>(`/tech/applications/${applicationId}/reports/current`),
   writeReport: (
     applicationId: string,
-    body: { findings: string; conclusion: string; criticalLines?: TechCriticalLine[] },
+    body: {
+      findings: string
+      conclusion: string
+      criticalLines?: TechCriticalLine[]
+      templateId?: string
+      structured?: Record<string, string>
+    },
   ) => post<TechReportView>(`/tech/applications/${applicationId}/reports`, body),
   rewriteReport: (
     reportId: string,
-    body: { findings: string; conclusion: string; criticalLines?: TechCriticalLine[] },
+    body: {
+      findings: string
+      conclusion: string
+      criticalLines?: TechCriticalLine[]
+      templateId?: string
+      structured?: Record<string, string>
+    },
   ) => post<TechReportView>(`/tech/reports/${reportId}/rewrite`, body),
   reviewReport: (reportId: string, approve: boolean, reason?: string) =>
     post<TechReportView>(`/tech/reports/${reportId}/review`, { approve, reason }),
-  /** 修订：追加新版本，历史版本保留。 */
-  amendReport: (reportId: string, body: { findings: string; conclusion: string; reason: string }) =>
-    post<TechReportView>(`/tech/reports/${reportId}/amend`, body),
+  /** 修订：追加新版本，历史版本保留；结构化内容随新版本保存。 */
+  amendReport: (
+    reportId: string,
+    body: {
+      findings: string
+      conclusion: string
+      reason: string
+      templateId?: string
+      structured?: Record<string, string>
+    },
+  ) => post<TechReportView>(`/tech/reports/${reportId}/amend`, body),
   criticals: (status?: string, applicationId?: string, limit = 100) =>
     get<TechCriticalView[]>('/tech/criticals', { status, applicationId, limit }),
   acknowledgeCritical: (id: string, note?: string) =>
@@ -893,6 +918,59 @@ export const techApi = {
     post<TechCriticalView>(`/tech/criticals/${id}/close`, note ? { note } : {}),
   items: (category?: string, keyword?: string, limit = 200) =>
     get<TechExamItemView[]>('/tech/items', { category, keyword, limit }),
+
+  // ---- 设备质控与结构化报告（G35）----
+  devices: (params?: { keyword?: string; modality?: string; status?: string; limit?: number }) =>
+    get<TechDevice[]>('/tech/devices', params),
+  deviceSummary: () => get<TechDeviceSummary>('/tech/devices/summary'),
+  device: (id: string) => get<TechDeviceView>(`/tech/devices/${id}`),
+  createDevice: (body: {
+    name: string
+    modality: string
+    deptId?: string
+    location?: string
+    manufacturer?: string
+    model?: string
+    serialNo?: string
+    installedAt?: string
+  }) => post<TechDeviceView>('/tech/devices', body),
+  updateDeviceStatus: (id: string, status: string, version: number) =>
+    post<TechDeviceView>(`/tech/devices/${id}/status`, { status, version }),
+  recordDeviceQc: (
+    id: string,
+    body: {
+      qcType: string
+      result: string
+      itemName: string
+      expectedValue?: string
+      actualValue?: string
+      unit?: string
+      performedAt?: string
+      note?: string
+    },
+  ) => post<TechDeviceView>(`/tech/devices/${id}/qc`, body),
+  reportTemplates: (params?: { status?: string; modality?: string; limit?: number }) =>
+    get<TechReportTemplate[]>('/tech/report-templates', params),
+  publishedReportTemplates: (modality?: string) =>
+    get<TechReportTemplate[]>('/tech/report-templates/published', { modality }),
+  reportTemplate: (id: string) => get<TechTemplateView>(`/tech/report-templates/${id}`),
+  createReportTemplate: (body: {
+    code: string
+    name: string
+    modality: string
+    fields: {
+      key: string
+      label: string
+      type: string
+      required: boolean
+      options?: string[]
+      unit?: string
+    }[]
+  }) => post<TechTemplateView>('/tech/report-templates', body),
+  publishReportTemplate: (id: string) =>
+    post<TechTemplateView>(`/tech/report-templates/${id}/publish`),
+  disableReportTemplate: (id: string) =>
+    post<TechTemplateView>(`/tech/report-templates/${id}/disable`),
 }
 
 /**

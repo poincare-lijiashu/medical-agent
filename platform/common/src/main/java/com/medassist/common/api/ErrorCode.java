@@ -213,6 +213,17 @@ public enum ErrorCode {
     TECH_READING_STUDY_NOT_READY(46423, "影像检查尚未完成，不能领取阅片"),
     TECH_READING_REPORT_NOT_FINAL(46424, "报告尚未签发，不能完成阅片"),
 
+    // ---- 设备质控与结构化报告（46xxx 续，G35）----
+    TECH_DEVICE_NOT_FOUND(46430, "未找到该设备"),
+    TECH_DEVICE_DUPLICATE(46431, "设备编号已存在，不能重复建档"),
+    TECH_DEVICE_STATUS_INVALID(46432, "当前设备状态不允许该操作"),
+    TECH_DEVICE_QC_INVALID(46433, "质控记录内容不合法（类型/结论/指标）"),
+    TECH_REPORT_TEMPLATE_NOT_FOUND(46440, "未找到该结构化报告模板"),
+    TECH_REPORT_TEMPLATE_DUPLICATE(46441, "模板编码已存在，不能重复创建"),
+    TECH_REPORT_TEMPLATE_STATUS_INVALID(46442, "当前模板状态不允许该操作"),
+    TECH_REPORT_TEMPLATE_INVALID(46443, "模板字段定义不合法（必须至少一个字段且 key 唯一）"),
+    TECH_REPORT_STRUCTURED_INVALID(46444, "结构化报告内容不合法（模板未发布或必填字段缺失）"),
+
     // ---- 病历（47xxx）----
     EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),
     EMR_RECORD_NOT_FOUND(47402, "未找到该病历文书"),

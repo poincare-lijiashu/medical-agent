@@ -146,6 +146,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['tech:read'],
   },
   {
+    name: 'device-qc',
+    path: '/device-qc',
+    title: '设备质控',
+    hint: '设备档案 · 日常/周/月质控与校准 · 结构化报告模板',
+    icon: 'monitor',
+    group: '医技检查',
+    permissions: ['tech:device:read'],
+  },
+  {
     name: 'pacs',
     path: '/pacs',
     title: '影像阅片',

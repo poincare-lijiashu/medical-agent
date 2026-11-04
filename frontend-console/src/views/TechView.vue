@@ -331,6 +331,25 @@
               <div class="report-label">结论</div>
               <p class="report-text">{{ currentReport.conclusion }}</p>
             </div>
+            <div v-if="structuredEntries.length > 0" class="report-block">
+              <div class="report-label">结构化字段</div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>字段</th>
+                      <th>值</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="f in structuredEntries" :key="f.key">
+                      <td data-primary>{{ f.label }}</td>
+                      <td data-label="值">{{ f.value }} {{ f.unit }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
             <div v-if="report && report.history.length > 1" class="history">
               <div class="report-label">版本历史</div>
@@ -530,6 +549,35 @@
     >
       <div class="stack">
         <label class="field">
+          <span class="label">结构化模板（可选）</span>
+          <select v-model="editorForm.templateId" class="select" @change="onTemplateChange">
+            <option value="">不使用结构化模板</option>
+            <option v-for="t in allTemplates" :key="t.id" :value="t.id">
+              {{ t.name }}（{{ t.code }} · {{ t.modality }}）
+            </option>
+          </select>
+          <span class="hint">模板由医技在「设备质控」页维护并发布；必填字段未填写不能保存。</span>
+        </label>
+        <div v-if="editorFields.length > 0" class="form-row">
+          <label v-for="f in editorFields" :key="f.key" class="field f-grow">
+            <span class="label">
+              {{ f.label }}<span v-if="f.required" class="req"> *</span>
+              <span v-if="f.unit" class="muted small">（{{ f.unit }}）</span>
+            </span>
+            <select v-if="f.type === 'SELECT'" v-model="editorForm.structured[f.key]" class="select">
+              <option value="">请选择…</option>
+              <option v-for="o in f.options ?? []" :key="o" :value="o">{{ o }}</option>
+            </select>
+            <input
+              v-else
+              v-model.trim="editorForm.structured[f.key]"
+              class="input"
+              :type="f.type === 'NUMBER' ? 'number' : 'text'"
+              :placeholder="f.label"
+            />
+          </label>
+        </div>
+        <label class="field">
           <span class="label">检查所见 <span class="req">*</span></span>
           <textarea
             v-model.trim="editorForm.findings"
@@ -611,7 +659,9 @@ import type {
   TechApplicationView,
   TechCriticalLine,
   TechCriticalView,
+  TechReportTemplate,
   TechReportView,
+  TechTemplateField,
 } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -933,7 +983,56 @@ const editorForm = reactive({
   conclusion: '',
   reason: '',
   criticals: [] as TechCriticalLine[],
+  templateId: '',
+  structured: {} as Record<string, string>,
 })
+
+const allTemplates = ref<TechReportTemplate[]>([])
+
+function templateFieldsOf(template: TechReportTemplate): TechTemplateField[] {
+  try {
+    const parsed = JSON.parse(template.schemaJson) as { fields?: TechTemplateField[] }
+    return parsed.fields ?? []
+  } catch {
+    return []
+  }
+}
+
+const editorTemplate = computed(
+  () => allTemplates.value.find((t) => t.id === editorForm.templateId) ?? null,
+)
+const editorFields = computed(() => (editorTemplate.value ? templateFieldsOf(editorTemplate.value) : []))
+
+/** 当前报告的结构化字段（key → 标签/单位）用于只读展示。 */
+const structuredEntries = computed(() => {
+  const report = currentReport.value
+  if (!report?.structuredJson) return []
+  let values: Record<string, string> = {}
+  try {
+    values = JSON.parse(report.structuredJson) as Record<string, string>
+  } catch {
+    return []
+  }
+  const template = allTemplates.value.find((t) => t.id === report.templateId)
+  const fields = template ? templateFieldsOf(template) : []
+  return Object.entries(values).map(([key, value]) => {
+    const field = fields.find((f) => f.key === key)
+    return {
+      key,
+      label: field?.label ?? key,
+      value: value ?? '',
+      unit: field?.unit ?? '',
+    }
+  })
+})
+
+async function loadTemplates() {
+  try {
+    allTemplates.value = await techApi.publishedReportTemplates()
+  } catch {
+    allTemplates.value = []
+  }
+}
 
 const editorTitle = computed(() => {
   if (editorMode.value === 'amend') return '修订报告'
@@ -944,16 +1043,49 @@ const editorTitle = computed(() => {
 const editorValid = computed(() => {
   if (!editorForm.findings.trim() || !editorForm.conclusion.trim()) return false
   if (editorMode.value === 'amend' && !editorForm.reason.trim()) return false
+  for (const field of editorFields.value) {
+    if (field.required && !(editorForm.structured[field.key] ?? '').trim()) return false
+  }
   return true
 })
 
-function openEditor(mode: EditorMode) {
+async function openEditor(mode: EditorMode) {
   editorMode.value = mode
   editorForm.findings = currentReport.value?.findings ?? ''
   editorForm.conclusion = currentReport.value?.conclusion ?? ''
   editorForm.reason = ''
   editorForm.criticals = []
+  editorForm.templateId = currentReport.value?.templateId ?? ''
+  try {
+    editorForm.structured = currentReport.value?.structuredJson
+      ? (JSON.parse(currentReport.value.structuredJson) as Record<string, string>)
+      : {}
+  } catch {
+    editorForm.structured = {}
+  }
   editorOpen.value = true
+  if (allTemplates.value.length === 0) {
+    await loadTemplates()
+  }
+  // 历史模板可能已停用：仅保留已发布列表中的选择
+  if (editorForm.templateId && !allTemplates.value.some((t) => t.id === editorForm.templateId)) {
+    editorForm.templateId = ''
+    editorForm.structured = {}
+  }
+}
+
+function onTemplateChange() {
+  if (!editorForm.templateId) {
+    editorForm.structured = {}
+    return
+  }
+  const template = allTemplates.value.find((t) => t.id === editorForm.templateId)
+  const keys = template ? templateFieldsOf(template).map((f) => f.key) : []
+  const next: Record<string, string> = {}
+  for (const key of keys) {
+    next[key] = editorForm.structured[key] ?? ''
+  }
+  editorForm.structured = next
 }
 
 function addCriticalLine() {
@@ -991,6 +1123,8 @@ async function submitEditor() {
       findings: editorForm.findings.trim(),
       conclusion: editorForm.conclusion.trim(),
       criticalLines: validCriticalLines(),
+      templateId: editorForm.templateId || undefined,
+      structured: editorForm.templateId ? { ...editorForm.structured } : undefined,
     }
     if (editorMode.value === 'write') {
       await techApi.writeReport(app.value.id, body)
@@ -1003,6 +1137,8 @@ async function submitEditor() {
         findings: body.findings,
         conclusion: body.conclusion,
         reason: editorForm.reason.trim(),
+        templateId: body.templateId,
+        structured: body.structured,
       })
       toast.ok('修订已提交', '新版本已生成，历史版本保留')
     }
@@ -1082,7 +1218,10 @@ function severityTone(severity: string): string {
   return 'badge--warn'
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadTemplates()
+})
 </script>
 
 <style scoped>
