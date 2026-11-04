@@ -80,7 +80,21 @@ class ConsumableReturnServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONSUMABLE_RETURN_ITEM_INVALID);
-        verify(repo, never()).insertReturn(any());
+        verify(repo, never()).insertReturn(any(), any());
+    }
+
+    @Test
+    @DisplayName("建单：院区由调用方固化（G50）")
+    void createStoresCampus() {
+        UUID campusId = UUID.randomUUID();
+        when(repo.findDeptConsumableStock(deptId, consumableId, batchId))
+                .thenReturn(Optional.of(stock(10)));
+        when(repo.findReturn(any())).thenReturn(Optional.of(submitted));
+        when(repo.listReturnItems(any())).thenReturn(List.of());
+
+        service.create(request(1), campusId, "nurse01");
+
+        verify(repo).insertReturn(any(ConsumableReturn.class), eq(campusId));
     }
 
     @Test
@@ -93,7 +107,7 @@ class ConsumableReturnServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONSUMABLE_DEPT_STOCK_INSUFFICIENT);
-        verify(repo, never()).insertReturn(any());
+        verify(repo, never()).insertReturn(any(), any());
     }
 
     @Test
@@ -118,7 +132,7 @@ class ConsumableReturnServiceTest {
         var view = service.create(request(5), "nurse01");
 
         assertThat(view.consumableReturn().status()).isEqualTo(ConsumableReturn.SUBMITTED);
-        verify(repo).insertReturn(any());
+        verify(repo).insertReturn(any(), any());
         verify(repo).insertReturnItem(any());
         verify(repo, never()).deductDeptConsumableStock(any(), any(), any(), anyInt());
         verify(repo, never()).addBatchQuantity(any(), anyInt());

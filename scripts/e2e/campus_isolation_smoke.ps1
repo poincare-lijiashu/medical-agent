@@ -319,5 +319,92 @@ Check "MAIN admin cannot open EAST tech application (404)" ($appDetailMain.code 
 $appDetailAdmin = Call "GET" ("/tech/applications/" + $appId) $adminToken $null
 Check "cross-campus admin opens EAST tech application" ($appDetailAdmin.code -eq 200) $appDetailAdmin.raw
 
+# ---------------------------------------------------------------- 10) material campus (G50)
+$matCode = "SMK" + $stamp
+$mc = Call "POST" "/material/consumables" $adminToken @{
+    code = $matCode; name = "Campus Smoke Consumable"; spec = "1pc"; unit = "pc";
+    category = "GENERAL"; price = 1.00; manufacturer = $null; registrationNo = $null
+}
+Check "create smoke consumable" ($mc.code -eq 200) $mc.raw
+$matConsumable = ""
+if ($mc.code -eq 200) { $matConsumable = $mc.body.data.consumable.id }
+Check "stocked consumable found" ($matConsumable.Length -gt 0) "none"
+
+$mb = Call "POST" ("/material/consumables/" + $matConsumable + "/batches") $adminToken @{
+    batchNo = ("B-" + $stamp); expireDate = $null; quantity = 4; supplier = $null; unitPrice = 1.00
+}
+Check "receive smoke batch" ($mb.code -eq 200) $mb.raw
+
+$mi = Call "POST" "/material/issues" $eastAdminToken @{
+    deptId = $DEPT_WARD; deptName = "East Ward"; purpose = "DEPT_STOCK";
+    requestId = ("mat-" + $stamp); remark = "campus smoke";
+    items = @(@{ consumableId = $matConsumable; quantity = 2 })
+}
+Check "east admin creates material issue" ($mi.code -eq 200) $mi.raw
+$miId = ""
+$miBatch = ""
+if ($mi.code -eq 200) {
+    $miId = $mi.body.data.issue.id
+    $miBatch = $mi.body.data.items[0].batchId
+}
+$miCampus = ""
+if ($miId.Length -gt 0) { $miCampus = SqlOne ("select campus_id from material_svc.consumable_issue where id='" + $miId + "';") }
+Check "material issue campus persisted EAST" ($miCampus -eq $EAST) ($miCampus + " " + $mi.raw)
+
+$miListEast = Call "GET" "/material/issues?limit=200" $eastAdminToken $null
+$miSeenEast = $false
+if ($miListEast.code -eq 200) { $miSeenEast = (@($miListEast.body.data) | Where-Object { $_.issue.id -eq $miId } | Measure-Object).Count -gt 0 }
+Check "EAST list contains own material issue" (($miListEast.code -eq 200) -and $miSeenEast) $miListEast.raw
+
+$miListMain = Call "GET" "/material/issues?limit=200" $techMainToken $null
+$miSeenMain = $false
+if ($miListMain.code -eq 200) { $miSeenMain = (@($miListMain.body.data) | Where-Object { $_.issue.id -eq $miId } | Measure-Object).Count -gt 0 }
+Check "MAIN list excludes EAST material issue" (($miListMain.code -eq 200) -and (-not $miSeenMain)) $miListMain.raw
+
+$miDetailMain = Call "GET" ("/material/issues/" + $miId) $techMainToken $null
+Check "MAIN admin cannot open EAST material issue (404)" ($miDetailMain.code -eq 404) $miDetailMain.raw
+$miDetailAdmin = Call "GET" ("/material/issues/" + $miId) $adminToken $null
+Check "cross-campus admin opens EAST material issue" ($miDetailAdmin.code -eq 200) $miDetailAdmin.raw
+
+$mr = Call "POST" "/material/returns" $eastAdminToken @{
+    deptId = $DEPT_WARD; reason = "campus smoke";
+    items = @(@{ batchId = $miBatch; quantity = 1 })
+}
+Check "east admin creates material return" ($mr.code -eq 200) $mr.raw
+$mrId = ""
+if ($mr.code -eq 200) { $mrId = $mr.body.data.consumableReturn.id }
+$mrCampus = ""
+if ($mrId.Length -gt 0) { $mrCampus = SqlOne ("select campus_id from material_svc.consumable_return where id='" + $mrId + "';") }
+Check "material return campus persisted EAST" ($mrCampus -eq $EAST) ($mrCampus + " " + $mr.raw)
+
+$mrListMain = Call "GET" "/material/returns?limit=200" $techMainToken $null
+$mrSeenMain = $false
+if ($mrListMain.code -eq 200) { $mrSeenMain = (@($mrListMain.body.data) | Where-Object { $_.id -eq $mrId } | Measure-Object).Count -gt 0 }
+Check "MAIN list excludes EAST material return" (($mrListMain.code -eq 200) -and (-not $mrSeenMain)) $mrListMain.raw
+$mrDetailMain = Call "GET" ("/material/returns/" + $mrId) $techMainToken $null
+Check "MAIN admin cannot open EAST material return (404)" ($mrDetailMain.code -eq 404) $mrDetailMain.raw
+$mrDetailAdmin = Call "GET" ("/material/returns/" + $mrId) $adminToken $null
+Check "cross-campus admin opens EAST material return" ($mrDetailAdmin.code -eq 200) $mrDetailAdmin.raw
+
+$mt = Call "POST" "/material/dept-transfers" $eastAdminToken @{
+    fromDeptId = $DEPT_WARD; toDeptId = $DEPT_CLINIC; reason = "campus smoke"; note = $null;
+    items = @(@{ batchId = $miBatch; quantity = 1 })
+}
+Check "east admin creates material transfer" ($mt.code -eq 200) $mt.raw
+$mtId = ""
+if ($mt.code -eq 200) { $mtId = $mt.body.data.deptTransfer.id }
+$mtCampus = ""
+if ($mtId.Length -gt 0) { $mtCampus = SqlOne ("select campus_id from material_svc.dept_transfer where id='" + $mtId + "';") }
+Check "material transfer campus persisted EAST" ($mtCampus -eq $EAST) ($mtCampus + " " + $mt.raw)
+
+$mtListMain = Call "GET" "/material/dept-transfers?limit=200" $techMainToken $null
+$mtSeenMain = $false
+if ($mtListMain.code -eq 200) { $mtSeenMain = (@($mtListMain.body.data) | Where-Object { $_.id -eq $mtId } | Measure-Object).Count -gt 0 }
+Check "MAIN list excludes EAST material transfer" (($mtListMain.code -eq 200) -and (-not $mtSeenMain)) $mtListMain.raw
+$mtDetailMain = Call "GET" ("/material/dept-transfers/" + $mtId) $techMainToken $null
+Check "MAIN admin cannot open EAST material transfer (404)" ($mtDetailMain.code -eq 404) $mtDetailMain.raw
+$mtDetailAdmin = Call "GET" ("/material/dept-transfers/" + $mtId) $adminToken $null
+Check "cross-campus admin opens EAST material transfer" ($mtDetailAdmin.code -eq 200) $mtDetailAdmin.raw
+
 Write-Output ("RESULT pass=" + $script:pass + " fail=" + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

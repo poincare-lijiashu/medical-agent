@@ -2,6 +2,8 @@ package com.medassist.material.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.material.domain.MaterialModel.ConsumableBatch;
 import com.medassist.material.domain.MaterialModel.DeptConsumableStock;
 import com.medassist.material.domain.MaterialModel.DeptTransfer;
@@ -57,6 +59,12 @@ public class DeptTransferService {
     /** 建单（SUBMITTED）：按调出科室余额预校验，不扣库存。 */
     @Transactional
     public DeptTransferView create(CreateDeptTransferReq req, String actor) {
+        return create(req, DataScope.DEFAULT_CAMPUS_ID, actor);
+    }
+
+    /** 建单（G50）：{@code campusId} 由调用方取发起账号的写入院区并固化。 */
+    @Transactional
+    public DeptTransferView create(CreateDeptTransferReq req, UUID campusId, String actor) {
         String operator = requireActor(actor);
         if (req.fromDeptId().equals(req.toDeptId())) {
             throw new BusinessException(ErrorCode.DEPT_TRANSFER_SAME_DEPT);
@@ -87,7 +95,8 @@ public class DeptTransferService {
                 DeptTransfer.SUBMITTED, req.fromDeptId(), req.toDeptId(), req.reason().trim(),
                 blankToNull(req.note()), operator, null, null, null, null, null, null, null,
                 null, 0L, Instant.now());
-        repo.insertDeptTransfer(header);
+        UUID effectiveCampus = campusId == null ? DataScope.DEFAULT_CAMPUS_ID : campusId;
+        repo.insertDeptTransfer(header, effectiveCampus);
         for (TransferLine line : req.items()) {
             ConsumableBatch batch = repo.findBatch(line.batchId()).orElseThrow();
             repo.insertDeptTransferItem(new DeptTransferItem(UUID.randomUUID(), header.id(),
@@ -98,14 +107,20 @@ public class DeptTransferService {
                 "transferNo", header.transferNo(),
                 "fromDeptId", header.fromDeptId().toString(),
                 "toDeptId", header.toDeptId().toString(),
+                "campusId", effectiveCampus.toString(),
                 "items", req.items().size()));
         return view(header.id());
     }
 
     public List<DeptTransfer> list(String status, UUID deptId, Integer limit) {
+        return list(status, deptId, Set.of(), limit);
+    }
+
+    /** 调拨单列表（G50）：{@code campusIds} 空集合表示跨院区角色，不限院区。 */
+    public List<DeptTransfer> list(String status, UUID deptId, Set<UUID> campusIds, Integer limit) {
         String normalized = normalizeStatus(status);
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listDeptTransfers(normalized, deptId, size);
+        return repo.listDeptTransfers(normalized, deptId, CampusFilters.csv(campusIds), size);
     }
 
     public DeptTransferView detail(UUID id) {

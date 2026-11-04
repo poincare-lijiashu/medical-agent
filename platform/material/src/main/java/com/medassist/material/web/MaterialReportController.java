@@ -2,6 +2,7 @@ package com.medassist.material.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.material.service.MaterialReportService;
 import com.medassist.material.web.MaterialReportDtos.IssueTrendView;
@@ -29,13 +30,14 @@ public class MaterialReportController {
         this.service = service;
     }
 
-    /** 出库日趋势：默认最近 14 天，最多 92 天；缺日补 0。 */
+    /** 出库日趋势：默认最近 14 天，最多 92 天；缺日补 0；按院区收敛（G50）。 */
     @GetMapping("/issue-trend")
     public ApiResponse<IssueTrendView> issueTrend(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.issueTrend(from, to));
+        return ApiResponse.ok(service.issueTrend(from, to, scope.campusFilter()));
     }
 }

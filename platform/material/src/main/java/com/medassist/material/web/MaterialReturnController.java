@@ -2,10 +2,12 @@ package com.medassist.material.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.material.domain.MaterialModel.ConsumableReturn;
 import com.medassist.material.domain.MaterialModel.DeptConsumableStock;
 import com.medassist.material.service.ConsumableReturnService;
+import com.medassist.material.service.MaterialAccessGuard;
 import com.medassist.material.web.MaterialReturnDtos.ConsumableReturnView;
 import com.medassist.material.web.MaterialReturnDtos.CreateReturnReq;
 import com.medassist.material.web.MaterialReturnDtos.DeptConsumableStockView;
@@ -39,9 +41,11 @@ public class MaterialReturnController {
     private static final String APPROVE = "material:return:approve";
 
     private final ConsumableReturnService service;
+    private final MaterialAccessGuard guard;
 
-    public MaterialReturnController(ConsumableReturnService service) {
+    public MaterialReturnController(ConsumableReturnService service, MaterialAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping("/returns")
@@ -49,16 +53,19 @@ public class MaterialReturnController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID deptId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, deptId, limit));
+        return ApiResponse.ok(service.list(status, deptId, scope.campusFilter(), limit));
     }
 
     @GetMapping("/returns/{id}")
     public ApiResponse<ConsumableReturnView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireReturn(id, scope);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -67,9 +74,10 @@ public class MaterialReturnController {
     public ApiResponse<ConsumableReturnView> create(
             @Valid @RequestBody CreateReturnReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, scope.campusForWrite(), actor));
     }
 
     /** 审批通过：扣科室二级库并回冲中心批次。 */
@@ -78,8 +86,10 @@ public class MaterialReturnController {
             @PathVariable UUID id,
             @RequestBody(required = false) ReviewReturnReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
+        guard.requireReturn(id, scope);
         return ApiResponse.ok(service.approve(id, req, actor));
     }
 
@@ -89,8 +99,10 @@ public class MaterialReturnController {
             @PathVariable UUID id,
             @Valid @RequestBody ReturnReasonReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
+        guard.requireReturn(id, scope);
         return ApiResponse.ok(service.reject(id, req, actor));
     }
 
@@ -100,8 +112,10 @@ public class MaterialReturnController {
             @PathVariable UUID id,
             @Valid @RequestBody ReturnReasonReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireReturn(id, scope);
         return ApiResponse.ok(service.cancel(id, req, actor));
     }
 

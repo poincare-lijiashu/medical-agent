@@ -55,7 +55,8 @@ public class MaterialReportSnapshotService {
         var zone = BusinessTime.zone();
         OffsetDateTime fromTs = target.atStartOfDay(zone).toOffsetDateTime();
         OffsetDateTime toTs = target.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
-        DailyIssueTotal row = repo.dailyIssueTotals(fromTs, toTs, zone.getId())
+        // 日快照是集团/全院口径（表按 snapshot_date + metric 唯一），不按院区分片
+        DailyIssueTotal row = repo.dailyIssueTotals(fromTs, toTs, zone.getId(), "")
                 .stream().findFirst().orElse(null);
         int count = row == null ? 0 : row.issueCount();
         int quantity = row == null ? 0 : row.itemQuantity();

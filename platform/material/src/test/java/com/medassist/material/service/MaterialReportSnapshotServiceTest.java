@@ -37,7 +37,7 @@ class MaterialReportSnapshotServiceTest {
     void setUp() {
         repo = mock(MaterialRepository.class);
         service = new MaterialReportSnapshotService(repo, new ObjectMapper());
-        when(repo.dailyIssueTotals(any(), any(), anyString())).thenReturn(List.of(
+        when(repo.dailyIssueTotals(any(), any(), anyString(), anyString())).thenReturn(List.of(
                 new DailyIssueTotal(BusinessTime.today(), 2, 5, new BigDecimal("43200.00"))));
     }
 

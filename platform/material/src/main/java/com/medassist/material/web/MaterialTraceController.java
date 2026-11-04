@@ -6,6 +6,7 @@ import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.material.domain.MaterialModel.ConsumableTrace;
 import com.medassist.material.service.ConsumableTraceService;
+import com.medassist.material.service.MaterialAccessGuard;
 import com.medassist.material.web.MaterialDtos.CreateTraceReq;
 import com.medassist.material.web.MaterialDtos.RecallView;
 import com.medassist.material.web.MaterialDtos.TraceView;
@@ -41,9 +42,11 @@ public class MaterialTraceController {
     private static final String READ = "material:trace:read";
 
     private final ConsumableTraceService service;
+    private final MaterialAccessGuard guard;
 
-    public MaterialTraceController(ConsumableTraceService service) {
+    public MaterialTraceController(ConsumableTraceService service, MaterialAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 使用登记：耗材与批次由出库明细回填，登记数量不得超过未追溯数量。 */
@@ -54,6 +57,7 @@ public class MaterialTraceController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireIssueItem(req.issueItemId(), scope);
         ConsumableTrace trace = service.register(req, actor).trace();
         return ApiResponse.ok(new TraceView(PhiMask.trace(trace, scope)));
     }
@@ -69,7 +73,8 @@ public class MaterialTraceController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(batchNo, patientNo, consumableId, from, to, limit)
+        return ApiResponse.ok(service.list(batchNo, patientNo, consumableId, from, to,
+                        scope.campusFilter(), limit)
                 .stream().map(t -> PhiMask.trace(t, scope)).toList());
     }
 
@@ -80,7 +85,7 @@ public class MaterialTraceController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        RecallView view = service.recall(batchNo);
+        RecallView view = service.recall(batchNo, scope.campusFilter());
         return ApiResponse.ok(new RecallView(view.batchNo(), view.traceCount(),
                 view.totalQuantity(), view.patientCount(), view.surgeryCount(),
                 view.traces().stream().map(t -> PhiMask.trace(t, scope)).toList()));

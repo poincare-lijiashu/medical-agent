@@ -2,6 +2,8 @@ package com.medassist.material.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.material.domain.MaterialModel.ConsumableBatch;
 import com.medassist.material.domain.MaterialModel.ConsumableReturn;
 import com.medassist.material.domain.MaterialModel.ConsumableReturnItem;
@@ -58,6 +60,12 @@ public class ConsumableReturnService {
     /** 建单（SUBMITTED）：按科室二级库余额预校验，不扣库存。 */
     @Transactional
     public ConsumableReturnView create(CreateReturnReq req, String actor) {
+        return create(req, DataScope.DEFAULT_CAMPUS_ID, actor);
+    }
+
+    /** 建单（G50）：{@code campusId} 由调用方取提交账号的写入院区并固化。 */
+    @Transactional
+    public ConsumableReturnView create(CreateReturnReq req, UUID campusId, String actor) {
         String operator = requireActor(actor);
         Set<UUID> seen = new HashSet<>();
         for (ReturnLine line : req.items()) {
@@ -84,7 +92,8 @@ public class ConsumableReturnService {
         ConsumableReturn header = new ConsumableReturn(UUID.randomUUID(), repo.nextReturnNo(),
                 ConsumableReturn.SUBMITTED, req.deptId(), req.reason().trim(), operator,
                 null, null, null, null, null, null, 0L, Instant.now());
-        repo.insertReturn(header);
+        UUID effectiveCampus = campusId == null ? DataScope.DEFAULT_CAMPUS_ID : campusId;
+        repo.insertReturn(header, effectiveCampus);
         for (ReturnLine line : req.items()) {
             ConsumableBatch batch = repo.findBatch(line.batchId()).orElseThrow();
             repo.insertReturnItem(new ConsumableReturnItem(UUID.randomUUID(), header.id(),
@@ -94,14 +103,21 @@ public class ConsumableReturnService {
         audit(operator, "CONSUMABLE_RETURN_CREATE", header.id().toString(), Map.of(
                 "returnNo", header.returnNo(),
                 "deptId", header.deptId().toString(),
+                "campusId", effectiveCampus.toString(),
                 "items", req.items().size()));
         return view(header.id());
     }
 
     public List<ConsumableReturn> list(String status, UUID deptId, Integer limit) {
+        return list(status, deptId, Set.of(), limit);
+    }
+
+    /** 退回单列表（G50）：{@code campusIds} 空集合表示跨院区角色，不限院区。 */
+    public List<ConsumableReturn> list(String status, UUID deptId, Set<UUID> campusIds,
+                                       Integer limit) {
         String normalized = normalizeStatus(status);
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listReturns(normalized, deptId, size);
+        return repo.listReturns(normalized, deptId, CampusFilters.csv(campusIds), size);
     }
 
     public ConsumableReturnView detail(UUID id) {

@@ -126,9 +126,9 @@ class ConsumableTraceServiceTest {
                 "CONS-STENT-001", "冠状动脉支架系统", "B-1", LocalDate.now().plusDays(100), 1,
                 patientId, "P000001", null, UUID.randomUUID(), "nurse01", Instant.now(), null,
                 Instant.now());
-        when(repo.recallStats("B-1")).thenReturn(
+        when(repo.recallStats(eq("B-1"), anyString())).thenReturn(
                 new MaterialRepository.RecallStats(1, 1, 1, 1));
-        when(repo.listTraces(eq("B-1"), any(), any(), any(), any(), anyInt()))
+        when(repo.listTraces(eq("B-1"), any(), any(), any(), any(), anyString(), anyInt()))
                 .thenReturn(List.of(t));
 
         var recall = service.recall("B-1");

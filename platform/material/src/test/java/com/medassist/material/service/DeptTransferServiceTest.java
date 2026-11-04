@@ -80,7 +80,21 @@ class DeptTransferServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.DEPT_TRANSFER_SAME_DEPT);
-        verify(repo, never()).insertDeptTransfer(any());
+        verify(repo, never()).insertDeptTransfer(any(), any());
+    }
+
+    @Test
+    @DisplayName("建单：院区由调用方固化（G50）")
+    void createStoresCampus() {
+        UUID campusId = UUID.randomUUID();
+        when(repo.findDeptConsumableStock(fromDeptId, consumableId, batchId))
+                .thenReturn(Optional.of(stock(fromDeptId, 10)));
+        when(repo.findDeptTransfer(any())).thenReturn(Optional.of(submitted));
+        when(repo.listDeptTransferItems(any())).thenReturn(List.of());
+
+        service.create(request(1), campusId, "nurse01");
+
+        verify(repo).insertDeptTransfer(any(DeptTransfer.class), eq(campusId));
     }
 
     @Test
@@ -106,7 +120,7 @@ class DeptTransferServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.DEPT_TRANSFER_STOCK_INSUFFICIENT);
-        verify(repo, never()).insertDeptTransfer(any());
+        verify(repo, never()).insertDeptTransfer(any(), any());
     }
 
     @Test
@@ -131,7 +145,7 @@ class DeptTransferServiceTest {
         var view = service.create(request(4), "nurse01");
 
         assertThat(view.deptTransfer().status()).isEqualTo(DeptTransfer.SUBMITTED);
-        verify(repo).insertDeptTransfer(any());
+        verify(repo).insertDeptTransfer(any(), any());
         verify(repo).insertDeptTransferItem(any());
         verify(repo, never()).deductDeptConsumableStock(any(), any(), any(), anyInt());
         verify(repo, never()).upsertDeptConsumableStock(any(), any(), any(), anyInt());

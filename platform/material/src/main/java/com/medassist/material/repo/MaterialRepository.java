@@ -388,20 +388,37 @@ public class MaterialRepository {
      * 唯一键冲突不会把整个 PostgreSQL 事务置为 aborted（捕获 DataIntegrityViolationException
      * 后再执行 SQL 会报 25P02），这里返回 0 行由调用方转幂等返回。
      */
-    public boolean insertIssue(ConsumableIssue issue) {
+    public boolean insertIssue(ConsumableIssue issue, UUID campusId) {
         return jdbc.sql("""
                         INSERT INTO material_svc.consumable_issue
                             (id, issue_no, dept_id, dept_name, purpose, request_id, operator, remark,
-                             total_amount)
+                             total_amount, campus_id)
                         VALUES (:id, :no, :deptId, CAST(:deptName AS text), :purpose, :requestId,
-                                :operator, CAST(:remark AS text), :total)
+                                :operator, CAST(:remark AS text), :total, :campusId)
                         ON CONFLICT (dept_id, request_id) DO NOTHING
                         """)
                 .param("id", issue.id()).param("no", issue.issueNo())
                 .param("deptId", issue.deptId()).param("deptName", issue.deptName())
                 .param("purpose", issue.purpose()).param("requestId", issue.requestId())
                 .param("operator", issue.operator()).param("remark", issue.remark())
-                .param("total", issue.totalAmount()).update() > 0;
+                .param("total", issue.totalAmount()).param("campusId", campusId).update() > 0;
+    }
+
+    /** 出库单所属院区；用于院区级越权判定（不存在返回空）。 */
+    public Optional<UUID> findIssueCampus(UUID issueId) {
+        return jdbc.sql("""
+                        SELECT campus_id FROM material_svc.consumable_issue WHERE id = ?
+                        """).param(issueId).query(UUID.class).optional();
+    }
+
+    /** 出库明细所属院区（经出库单回溯）；用于追溯登记前的院区校验。 */
+    public Optional<UUID> findIssueItemCampus(UUID issueItemId) {
+        return jdbc.sql("""
+                        SELECT i.campus_id
+                          FROM material_svc.consumable_issue_item it
+                          JOIN material_svc.consumable_issue i ON i.id = it.issue_id
+                         WHERE it.id = ?
+                        """).param(issueItemId).query(UUID.class).optional();
     }
 
     public void insertIssueItem(ConsumableIssueItem item) {
@@ -446,7 +463,9 @@ public class MaterialRepository {
                         """).param("total", total).param("id", issueId).update();
     }
 
-    public List<ConsumableIssue> listIssues(UUID deptId, Instant from, Instant to, int limit) {
+    /** 出库单列表（G50）：{@code campusCsv} 为空串表示跨院区角色不过滤。 */
+    public List<ConsumableIssue> listIssues(UUID deptId, Instant from, Instant to,
+                                            String campusCsv, int limit) {
         return jdbc.sql("""
                         SELECT id, issue_no, dept_id, dept_name, purpose, request_id, operator,
                                remark, total_amount, created_at
@@ -456,11 +475,15 @@ public class MaterialRepository {
                                 OR created_at >= CAST(:from AS timestamptz))
                            AND (CAST(:to AS timestamptz) IS NULL
                                 OR created_at < CAST(:to AS timestamptz))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("deptId", deptId).param("from", timestamp(from))
-                .param("to", timestamp(to)).param("limit", limit)
+                .param("to", timestamp(to))
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit)
                 .query(ISSUE_MAPPER).list();
     }
 
@@ -520,44 +543,57 @@ public class MaterialRepository {
                 .update();
     }
 
+    /** 追溯列表（G50）：经出库明细回溯出库单院区。 */
     public List<ConsumableTrace> listTraces(String batchNo, String patientNo, UUID consumableId,
-                                             Instant from, Instant to, int limit) {
+                                             Instant from, Instant to, String campusCsv, int limit) {
         String patientPattern = patientNo == null || patientNo.isBlank()
                 ? null : "%" + patientNo.trim() + "%";
         return jdbc.sql("""
-                        SELECT id, issue_item_id, consumable_id, consumable_code, consumable_name,
-                               batch_no, expire_date, quantity, patient_id, patient_no, visit_id,
-                               surgery_id, operator, used_at, remark, created_at
-                          FROM material_svc.consumable_trace
+                        SELECT t.id, t.issue_item_id, t.consumable_id, t.consumable_code,
+                               t.consumable_name, t.batch_no, t.expire_date, t.quantity,
+                               t.patient_id, t.patient_no, t.visit_id, t.surgery_id, t.operator,
+                               t.used_at, t.remark, t.created_at
+                          FROM material_svc.consumable_trace t
+                          JOIN material_svc.consumable_issue_item it ON it.id = t.issue_item_id
+                          JOIN material_svc.consumable_issue i ON i.id = it.issue_id
                          WHERE (CAST(:batchNo AS text) IS NULL
-                                OR batch_no = CAST(:batchNo AS text))
+                                OR t.batch_no = CAST(:batchNo AS text))
                            AND (CAST(:patientPattern AS text) IS NULL
-                                OR patient_no ILIKE CAST(:patientPattern AS text))
+                                OR t.patient_no ILIKE CAST(:patientPattern AS text))
                            AND (CAST(:consumableId AS uuid) IS NULL
-                                OR consumable_id = CAST(:consumableId AS uuid))
+                                OR t.consumable_id = CAST(:consumableId AS uuid))
                            AND (CAST(:from AS timestamptz) IS NULL
-                                OR used_at >= CAST(:from AS timestamptz))
+                                OR t.used_at >= CAST(:from AS timestamptz))
                            AND (CAST(:to AS timestamptz) IS NULL
-                                OR used_at < CAST(:to AS timestamptz))
-                         ORDER BY used_at DESC
+                                OR t.used_at < CAST(:to AS timestamptz))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR i.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                         ORDER BY t.used_at DESC
                          LIMIT :limit
                         """)
                 .param("batchNo", blankToNull(batchNo)).param("patientPattern", patientPattern)
                 .param("consumableId", consumableId).param("from", timestamp(from))
-                .param("to", timestamp(to)).param("limit", limit)
+                .param("to", timestamp(to))
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit)
                 .query(TRACE_MAPPER).list();
     }
 
-    /** 批次召回统计：一片耗材批次影响多少患者/手术，是召回决策的第一口径。 */
-    public RecallStats recallStats(String batchNo) {
+    /** 批次召回统计（G50）：只统计当前账号可见院区的使用记录。 */
+    public RecallStats recallStats(String batchNo, String campusCsv) {
         return jdbc.sql("""
                         SELECT count(*) AS trace_count,
-                               COALESCE(sum(quantity), 0) AS total_quantity,
-                               count(DISTINCT patient_id) AS patient_count,
-                               count(DISTINCT surgery_id) AS surgery_count
-                          FROM material_svc.consumable_trace
-                         WHERE batch_no = :batchNo
+                               COALESCE(sum(t.quantity), 0) AS total_quantity,
+                               count(DISTINCT t.patient_id) AS patient_count,
+                               count(DISTINCT t.surgery_id) AS surgery_count
+                          FROM material_svc.consumable_trace t
+                          JOIN material_svc.consumable_issue_item it ON it.id = t.issue_item_id
+                          JOIN material_svc.consumable_issue i ON i.id = it.issue_id
+                         WHERE t.batch_no = :batchNo
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR i.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                         """).param("batchNo", batchNo)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new RecallStats(rs.getLong("trace_count"),
                         rs.getInt("total_quantity"), rs.getLong("patient_count"),
                         rs.getLong("surgery_count"))).single();
@@ -638,15 +674,22 @@ public class MaterialRepository {
 
     // ---------------------------------------------------------------- 未使用退回
 
-    public void insertReturn(ConsumableReturn r) {
+    public void insertReturn(ConsumableReturn r, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO material_svc.consumable_return
-                            (id, return_no, status, dept_id, reason, created_by, version)
-                        VALUES (:id, :no, :status, :deptId, :reason, :createdBy, 0)
+                            (id, return_no, status, dept_id, reason, created_by, version, campus_id)
+                        VALUES (:id, :no, :status, :deptId, :reason, :createdBy, 0, :campusId)
                         """)
                 .param("id", r.id()).param("no", r.returnNo()).param("status", r.status())
                 .param("deptId", r.deptId()).param("reason", r.reason())
-                .param("createdBy", r.createdBy()).update();
+                .param("createdBy", r.createdBy()).param("campusId", campusId).update();
+    }
+
+    /** 退回单所属院区；用于院区级越权判定（不存在返回空）。 */
+    public Optional<UUID> findReturnCampus(UUID returnId) {
+        return jdbc.sql("""
+                        SELECT campus_id FROM material_svc.consumable_return WHERE id = ?
+                        """).param(returnId).query(UUID.class).optional();
     }
 
     public Optional<ConsumableReturn> findReturn(UUID id) {
@@ -668,7 +711,9 @@ public class MaterialRepository {
                         """).param(id).query(RETURN_MAPPER).optional();
     }
 
-    public List<ConsumableReturn> listReturns(String status, UUID deptId, int limit) {
+    /** 退回单列表（G50）：{@code campusCsv} 为空串表示跨院区角色不过滤。 */
+    public List<ConsumableReturn> listReturns(String status, UUID deptId, String campusCsv,
+                                              int limit) {
         return jdbc.sql("""
                         SELECT id, return_no, status, dept_id, reason, created_by, reviewed_by,
                                reviewed_at, review_note, cancelled_by, cancelled_at,
@@ -676,10 +721,14 @@ public class MaterialRepository {
                           FROM material_svc.consumable_return
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
-                .param("status", status).param("deptId", deptId).param("limit", limit)
+                .param("status", status).param("deptId", deptId)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit)
                 .query(RETURN_MAPPER).list();
     }
 
@@ -736,18 +785,25 @@ public class MaterialRepository {
 
     // ---------------------------------------------------------------- 跨科室调拨（G12）
 
-    public void insertDeptTransfer(DeptTransfer t) {
+    public void insertDeptTransfer(DeptTransfer t, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO material_svc.dept_transfer
                             (id, transfer_no, status, from_dept_id, to_dept_id, reason, note,
-                             created_by, version)
+                             created_by, version, campus_id)
                         VALUES (:id, :no, :status, :fromDeptId, :toDeptId, :reason,
-                                CAST(:note AS text), :createdBy, 0)
+                                CAST(:note AS text), :createdBy, 0, :campusId)
                         """)
                 .param("id", t.id()).param("no", t.transferNo()).param("status", t.status())
                 .param("fromDeptId", t.fromDeptId()).param("toDeptId", t.toDeptId())
                 .param("reason", t.reason()).param("note", t.note())
-                .param("createdBy", t.createdBy()).update();
+                .param("createdBy", t.createdBy()).param("campusId", campusId).update();
+    }
+
+    /** 调拨单所属院区；用于院区级越权判定（不存在返回空）。 */
+    public Optional<UUID> findDeptTransferCampus(UUID transferId) {
+        return jdbc.sql("""
+                        SELECT campus_id FROM material_svc.dept_transfer WHERE id = ?
+                        """).param(transferId).query(UUID.class).optional();
     }
 
     public Optional<DeptTransfer> findDeptTransfer(UUID id) {
@@ -771,7 +827,9 @@ public class MaterialRepository {
                         """).param(id).query(DEPT_TRANSFER_MAPPER).optional();
     }
 
-    public List<DeptTransfer> listDeptTransfers(String status, UUID deptId, int limit) {
+    /** 调拨单列表（G50）：{@code campusCsv} 为空串表示跨院区角色不过滤。 */
+    public List<DeptTransfer> listDeptTransfers(String status, UUID deptId, String campusCsv,
+                                                int limit) {
         return jdbc.sql("""
                         SELECT id, transfer_no, status, from_dept_id, to_dept_id, reason, note,
                                created_by, accepted_by, accepted_at, rejected_by, rejected_at,
@@ -782,10 +840,14 @@ public class MaterialRepository {
                            AND (CAST(:deptId AS uuid) IS NULL
                                 OR from_dept_id = CAST(:deptId AS uuid)
                                 OR to_dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
-                .param("status", status).param("deptId", deptId).param("limit", limit)
+                .param("status", status).param("deptId", deptId)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit)
                 .query(DEPT_TRANSFER_MAPPER).list();
     }
 
@@ -849,9 +911,9 @@ public class MaterialRepository {
 
     // ---------------------------------------------------------------- 出库趋势（G15）
 
-    /** 出库日趋势：按出库时刻归日，件数取明细数量合计。 */
+    /** 出库日趋势（G50）：按院区收敛后再按出库时刻归日。 */
     public List<DailyIssueTotal> dailyIssueTotals(OffsetDateTime from, OffsetDateTime to,
-                                                  String zone) {
+                                                  String zone, String campusCsv) {
         return jdbc.sql("""
                         WITH issue_qty AS (
                             SELECT issue_id, sum(quantity) AS qty
@@ -865,10 +927,13 @@ public class MaterialRepository {
                           FROM material_svc.consumable_issue i
                           LEFT JOIN issue_qty q ON q.issue_id = i.id
                          WHERE i.created_at >= :fromTs AND i.created_at < :toTs
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR i.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY 1
                          ORDER BY 1
                         """)
                 .param("fromTs", from).param("toTs", to).param("zone", zone)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new DailyIssueTotal(
                         rs.getDate("day").toLocalDate(), rs.getInt("issue_count"),
                         rs.getInt("item_quantity"), rs.getBigDecimal("total_amount")))

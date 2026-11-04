@@ -2,9 +2,11 @@ package com.medassist.material.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.material.domain.MaterialModel.DeptTransfer;
 import com.medassist.material.service.DeptTransferService;
+import com.medassist.material.service.MaterialAccessGuard;
 import com.medassist.material.web.MaterialTransferDtos.CreateDeptTransferReq;
 import com.medassist.material.web.MaterialTransferDtos.DeptTransferView;
 import com.medassist.material.web.MaterialTransferDtos.TransferReasonReq;
@@ -36,9 +38,11 @@ public class MaterialTransferController {
     private static final String ACCEPT = "material:transfer:accept";
 
     private final DeptTransferService service;
+    private final MaterialAccessGuard guard;
 
-    public MaterialTransferController(DeptTransferService service) {
+    public MaterialTransferController(DeptTransferService service, MaterialAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping
@@ -46,16 +50,19 @@ public class MaterialTransferController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID deptId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, deptId, limit));
+        return ApiResponse.ok(service.list(status, deptId, scope.campusFilter(), limit));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<DeptTransferView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireTransfer(id, scope);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -64,9 +71,10 @@ public class MaterialTransferController {
     public ApiResponse<DeptTransferView> create(
             @Valid @RequestBody CreateDeptTransferReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, scope.campusForWrite(), actor));
     }
 
     /** 接收：扣调出科室库并加调入科室库。 */
@@ -74,8 +82,10 @@ public class MaterialTransferController {
     public ApiResponse<DeptTransferView> accept(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ACCEPT);
+        guard.requireTransfer(id, scope);
         return ApiResponse.ok(service.accept(id, actor));
     }
 
@@ -85,8 +95,10 @@ public class MaterialTransferController {
             @PathVariable UUID id,
             @Valid @RequestBody TransferReasonReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ACCEPT);
+        guard.requireTransfer(id, scope);
         return ApiResponse.ok(service.reject(id, req, actor));
     }
 
@@ -96,8 +108,10 @@ public class MaterialTransferController {
             @PathVariable UUID id,
             @Valid @RequestBody TransferReasonReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireTransfer(id, scope);
         return ApiResponse.ok(service.cancel(id, req, actor));
     }
 }

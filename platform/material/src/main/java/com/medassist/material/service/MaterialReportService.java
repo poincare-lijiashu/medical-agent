@@ -2,6 +2,7 @@ package com.medassist.material.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.material.domain.MaterialModel.DailyIssueTotal;
 import com.medassist.material.repo.MaterialRepository;
@@ -35,6 +36,12 @@ public class MaterialReportService {
     }
 
     public IssueTrendView issueTrend(LocalDate from, LocalDate to) {
+        return issueTrend(from, to, java.util.Set.of());
+    }
+
+    /** 出库日趋势（G50）：按院区收敛，空集合表示跨院区角色。 */
+    public IssueTrendView issueTrend(LocalDate from, LocalDate to,
+                                     java.util.Set<java.util.UUID> campusIds) {
         LocalDate today = BusinessTime.today();
         LocalDate end = to == null ? today : to;
         LocalDate start = from == null ? end.minusDays(13) : from;
@@ -52,7 +59,8 @@ public class MaterialReportService {
         var zone = BusinessTime.zone();
         OffsetDateTime fromTs = start.atStartOfDay(zone).toOffsetDateTime();
         OffsetDateTime toTs = end.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
-        Map<LocalDate, DailyIssueTotal> byDay = repo.dailyIssueTotals(fromTs, toTs, zone.getId())
+        Map<LocalDate, DailyIssueTotal> byDay = repo.dailyIssueTotals(fromTs, toTs, zone.getId(),
+                        CampusFilters.csv(campusIds))
                 .stream()
                 .collect(Collectors.toMap(DailyIssueTotal::day, Function.identity(),
                         (a, b) -> a));

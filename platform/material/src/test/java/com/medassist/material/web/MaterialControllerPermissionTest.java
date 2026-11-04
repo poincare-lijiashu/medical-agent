@@ -9,6 +9,7 @@ import com.medassist.material.service.ConsumableReturnService;
 import com.medassist.material.service.ConsumableStockService;
 import com.medassist.material.service.ConsumableTraceService;
 import com.medassist.material.service.DeptTransferService;
+import com.medassist.material.service.MaterialAccessGuard;
 import com.medassist.material.web.MaterialDtos.CreateConsumableReq;
 import com.medassist.material.web.MaterialDtos.CreateIssueReq;
 import com.medassist.material.web.MaterialDtos.CreateTraceReq;
@@ -68,12 +69,13 @@ class MaterialControllerPermissionTest {
         traceService = mock(ConsumableTraceService.class);
         returnService = mock(ConsumableReturnService.class);
         deptTransferService = mock(DeptTransferService.class);
+        MaterialAccessGuard guard = mock(MaterialAccessGuard.class);
         catalogController = new MaterialCatalogController(catalogService);
         stockController = new MaterialStockController(stockService);
-        issueController = new MaterialIssueController(issueService);
-        traceController = new MaterialTraceController(traceService);
-        returnController = new MaterialReturnController(returnService);
-        transferController = new MaterialTransferController(deptTransferService);
+        issueController = new MaterialIssueController(issueService, guard);
+        traceController = new MaterialTraceController(traceService, guard);
+        returnController = new MaterialReturnController(returnService, guard);
+        transferController = new MaterialTransferController(deptTransferService, guard);
     }
 
     @Test
@@ -117,11 +119,12 @@ class MaterialControllerPermissionTest {
         var req = new CreateIssueReq(id, "手术室", "SURGERY", "req-1", null,
                 List.of(new IssueLine(UUID.randomUUID(), 1)));
 
-        assertThatThrownBy(() -> issueController.issue(req, "material:trace:write", "nurse01"))
+        assertThatThrownBy(() -> issueController.issue(req, "material:trace:write", "nurse01",
+                scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(issueService, never()).issue(any(), anyString());
+        verify(issueService, never()).issue(any(), any(), anyString());
     }
 
     @Test
@@ -144,7 +147,7 @@ class MaterialControllerPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(traceService, never()).recall(anyString());
+        verify(traceService, never()).recall(anyString(), any());
     }
 
     @Test
@@ -161,17 +164,19 @@ class MaterialControllerPermissionTest {
         var req = new CreateReturnReq(id, "术后剩余",
                 List.of(new ReturnLine(UUID.randomUUID(), 1)));
 
-        assertThatThrownBy(() -> returnController.create(req, "material:issue:write", "nurse01"))
+        assertThatThrownBy(() -> returnController.create(req, "material:issue:write", "nurse01",
+                scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(returnService, never()).create(any(), anyString());
+        verify(returnService, never()).create(any(), any(), anyString());
     }
 
     @Test
     @DisplayName("耗材退回审批：需要 material:return:approve")
     void returnApproveRequiresReturnApprove() {
-        assertThatThrownBy(() -> returnController.approve(id, null, "material:return:write", "head01"))
+        assertThatThrownBy(() -> returnController.approve(id, null, "material:return:write",
+                "head01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -182,7 +187,7 @@ class MaterialControllerPermissionTest {
     @DisplayName("耗材退回驳回：需要 material:return:approve")
     void returnRejectRequiresReturnApprove() {
         assertThatThrownBy(() -> returnController.reject(id, new ReturnReasonReq("不合格"),
-                "material:return:write", "head01"))
+                "material:return:write", "head01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -193,7 +198,7 @@ class MaterialControllerPermissionTest {
     @DisplayName("耗材退回撤回：需要 material:return:write")
     void returnCancelRequiresReturnWrite() {
         assertThatThrownBy(() -> returnController.cancel(id, new ReturnReasonReq("重复建单"),
-                "material:return:approve", "nurse01"))
+                "material:return:approve", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -214,17 +219,19 @@ class MaterialControllerPermissionTest {
         var req = new CreateDeptTransferReq(id, UUID.randomUUID(), "术间借用", null,
                 List.of(new TransferLine(UUID.randomUUID(), 1)));
 
-        assertThatThrownBy(() -> transferController.create(req, "material:issue:write", "nurse01"))
+        assertThatThrownBy(() -> transferController.create(req, "material:issue:write", "nurse01",
+                scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(deptTransferService, never()).create(any(), anyString());
+        verify(deptTransferService, never()).create(any(), any(), anyString());
     }
 
     @Test
     @DisplayName("跨科室调拨接收：需要 material:transfer:accept")
     void transferAcceptRequiresAccept() {
-        assertThatThrownBy(() -> transferController.accept(id, "material:transfer:write", "nurse02"))
+        assertThatThrownBy(() -> transferController.accept(id, "material:transfer:write",
+                "nurse02", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -235,7 +242,7 @@ class MaterialControllerPermissionTest {
     @DisplayName("跨科室调拨拒收：需要 material:transfer:accept")
     void transferRejectRequiresAccept() {
         assertThatThrownBy(() -> transferController.reject(id, new TransferReasonReq("包装破损"),
-                "material:transfer:write", "nurse02"))
+                "material:transfer:write", "nurse02", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -246,7 +253,7 @@ class MaterialControllerPermissionTest {
     @DisplayName("跨科室调拨撤回：需要 material:transfer:write")
     void transferCancelRequiresWrite() {
         assertThatThrownBy(() -> transferController.cancel(id, new TransferReasonReq("重复建单"),
-                "material:transfer:accept", "nurse01"))
+                "material:transfer:accept", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);

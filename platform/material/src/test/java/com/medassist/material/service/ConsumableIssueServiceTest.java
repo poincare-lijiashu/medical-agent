@@ -57,7 +57,7 @@ class ConsumableIssueServiceTest {
         repo = mock(MaterialRepository.class);
         service = new ConsumableIssueService(repo, JsonMapper.builder().build());
         when(repo.nextIssueNo()).thenReturn("MI20261103000001");
-        when(repo.insertIssue(any())).thenReturn(true);
+        when(repo.insertIssue(any(), any())).thenReturn(true);
         when(repo.findConsumable(consumableId)).thenReturn(Optional.of(consumable));
     }
 
@@ -77,6 +77,19 @@ class ConsumableIssueServiceTest {
         assertThat(view.items().get(1).quantity()).isEqualTo(2);
         assertThat(view.issue().totalAmount()).isEqualByComparingTo("4.00");
         verify(repo).updateIssueTotal(any(), any());
+    }
+
+    @Test
+    @DisplayName("出库：院区由调用方固化（G50）")
+    void issueStoresCampus() {
+        UUID campusId = UUID.randomUUID();
+        when(repo.listAvailableBatches(eq(consumableId), any(LocalDate.class)))
+                .thenReturn(List.of(later));
+        when(repo.deductBatch(later.id(), 1)).thenReturn(true);
+
+        service.issue(request("req-campus", consumableId, 1), campusId, "nurse01");
+
+        verify(repo).insertIssue(any(ConsumableIssue.class), eq(campusId));
     }
 
     @Test
@@ -119,7 +132,7 @@ class ConsumableIssueServiceTest {
 
         assertThat(view.issue().issueNo()).isEqualTo("MI20261103000009");
         verify(repo, never()).deductBatch(any(), anyInt());
-        verify(repo, never()).insertIssue(any());
+        verify(repo, never()).insertIssue(any(), any());
     }
 
     @Test

@@ -2,8 +2,10 @@ package com.medassist.material.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.material.service.ConsumableIssueService;
+import com.medassist.material.service.MaterialAccessGuard;
 import com.medassist.material.web.MaterialDtos.CreateIssueReq;
 import com.medassist.material.web.MaterialDtos.IssueView;
 import jakarta.validation.Valid;
@@ -35,9 +37,11 @@ public class MaterialIssueController {
     private static final String READ = "material:read";
 
     private final ConsumableIssueService service;
+    private final MaterialAccessGuard guard;
 
-    public MaterialIssueController(ConsumableIssueService service) {
+    public MaterialIssueController(ConsumableIssueService service, MaterialAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     /** 出库：requestId 为幂等键，重试不会重复扣库存。 */
@@ -45,9 +49,10 @@ public class MaterialIssueController {
     public ApiResponse<IssueView> issue(
             @Valid @RequestBody CreateIssueReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.issue(req, actor));
+        return ApiResponse.ok(service.issue(req, scope.campusForWrite(), actor));
     }
 
     @GetMapping
@@ -56,16 +61,19 @@ public class MaterialIssueController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(deptId, from, to, limit));
+        return ApiResponse.ok(service.list(deptId, from, to, scope.campusFilter(), limit));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<IssueView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireIssue(id, scope);
         return ApiResponse.ok(service.detail(id));
     }
 }

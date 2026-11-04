@@ -39,7 +39,7 @@ class MaterialReportServiceTest {
     void fillsMissingDays() {
         LocalDate today = BusinessTime.today();
         LocalDate start = today.minusDays(2);
-        when(repo.dailyIssueTotals(any(), any(), anyString())).thenReturn(List.of(
+        when(repo.dailyIssueTotals(any(), any(), anyString(), anyString())).thenReturn(List.of(
                 new DailyIssueTotal(start, 1, 4, new BigDecimal("320.00")),
                 new DailyIssueTotal(today, 2, 5, new BigDecimal("40.00"))));
 

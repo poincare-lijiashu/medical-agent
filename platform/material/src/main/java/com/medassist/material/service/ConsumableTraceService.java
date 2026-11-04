@@ -2,6 +2,7 @@ package com.medassist.material.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
 import com.medassist.common.security.Masks;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.material.domain.MaterialModel.ConsumableIssueItem;
@@ -20,6 +21,7 @@ import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -86,19 +88,33 @@ public class ConsumableTraceService {
 
     public List<ConsumableTrace> list(String batchNo, String patientNo, UUID consumableId,
                                        Instant from, Instant to, Integer limit) {
+        return list(batchNo, patientNo, consumableId, from, to, Set.of(), limit);
+    }
+
+    /** 追溯列表（G50）：按出库单院区收敛，空集合表示跨院区角色。 */
+    public List<ConsumableTrace> list(String batchNo, String patientNo, UUID consumableId,
+                                       Instant from, Instant to,
+                                       java.util.Set<UUID> campusIds, Integer limit) {
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 500);
-        return repo.listTraces(batchNo, patientNo, consumableId, from, to, size);
+        return repo.listTraces(batchNo, patientNo, consumableId, from, to,
+                CampusFilters.csv(campusIds), size);
     }
 
     /** 批次召回：统计影响面并给出明细（最多 500 条，更多请按时间窗分段）。 */
     public RecallView recall(String batchNo) {
+        return recall(batchNo, Set.of());
+    }
+
+    /** 批次召回（G50）：只统计当前账号可见院区的使用记录。 */
+    public RecallView recall(String batchNo, java.util.Set<UUID> campusIds) {
         String normalized = batchNo == null ? "" : batchNo.trim();
         if (normalized.isEmpty()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "召回必须指定批号");
         }
-        MaterialRepository.RecallStats stats = repo.recallStats(normalized);
+        String campusCsv = CampusFilters.csv(campusIds);
+        MaterialRepository.RecallStats stats = repo.recallStats(normalized, campusCsv);
         List<ConsumableTrace> traces = repo.listTraces(normalized, null, null, null, null,
-                RECALL_TRACE_LIMIT);
+                campusCsv, RECALL_TRACE_LIMIT);
         return new RecallView(normalized, stats.traceCount(), stats.totalQuantity(),
                 stats.patientCount(), stats.surgeryCount(), traces);
     }

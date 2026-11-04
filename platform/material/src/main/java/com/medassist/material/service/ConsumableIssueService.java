@@ -2,6 +2,8 @@ package com.medassist.material.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.material.domain.MaterialModel.Consumable;
 import com.medassist.material.domain.MaterialModel.ConsumableBatch;
@@ -50,6 +52,12 @@ public class ConsumableIssueService {
 
     @Transactional
     public IssueView issue(CreateIssueReq req, String actor) {
+        return issue(req, DataScope.DEFAULT_CAMPUS_ID, actor);
+    }
+
+    /** 出库（G50）：{@code campusId} 由调用方取当前账号写入院区并固化。 */
+    @Transactional
+    public IssueView issue(CreateIssueReq req, UUID campusId, String actor) {
         String requestId = req.requestId().trim();
         Optional<ConsumableIssue> existing = repo.findIssueByRequestId(req.deptId(), requestId);
         if (existing.isPresent()) {
@@ -68,7 +76,8 @@ public class ConsumableIssueService {
         ConsumableIssue header = new ConsumableIssue(issueId, repo.nextIssueNo(), req.deptId(),
                 blankToNull(req.deptName()), req.purpose(), requestId, actor,
                 blankToNull(req.remark()), BigDecimal.ZERO, Instant.now());
-        if (!repo.insertIssue(header)) {
+        UUID effectiveCampus = campusId == null ? DataScope.DEFAULT_CAMPUS_ID : campusId;
+        if (!repo.insertIssue(header, effectiveCampus)) {
             // 并发下另一个请求先落库：幂等返回已存在的出库单，不重复扣库存
             ConsumableIssue raced = repo.findIssueByRequestId(req.deptId(), requestId)
                     .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
@@ -126,6 +135,7 @@ public class ConsumableIssueService {
                 .put("deptId", req.deptId().toString())
                 .put("deptName", header.deptName())
                 .put("purpose", header.purpose())
+                .put("campusId", effectiveCampus.toString())
                 .put("lines", items.size())
                 .put("totalAmount", total.toPlainString())
                 .build());
@@ -135,8 +145,15 @@ public class ConsumableIssueService {
     }
 
     public List<IssueView> list(UUID deptId, Instant from, Instant to, Integer limit) {
+        return list(deptId, from, to, Set.of(), limit);
+    }
+
+    /** 出库单列表（G50）：{@code campusIds} 空集合表示跨院区角色，不限院区。 */
+    public List<IssueView> list(UUID deptId, Instant from, Instant to,
+                                Set<UUID> campusIds, Integer limit) {
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
-        return repo.listIssues(deptId, from, to, size).stream().map(this::view).toList();
+        return repo.listIssues(deptId, from, to, CampusFilters.csv(campusIds), size)
+                .stream().map(this::view).toList();
     }
 
     public IssueView detail(UUID issueId) {
