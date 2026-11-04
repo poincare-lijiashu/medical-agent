@@ -2,11 +2,14 @@
   <div class="page">
     <PageHeader
       title="报表订阅"
-      :sub="`运营日报（门诊实收 / 住院周转）定时推送：LOG 写服务日志，WEBHOOK/钉钉/企微/飞书需目标域名在白名单内，EMAIL 走部署配置的 SMTP（HTML 正文 + CSV 附件）。当前角色 ${role}`"
+      :sub="`运营日报（门诊实收 / 住院周转）按订阅发送时段推送：LOG 写服务日志，WEBHOOK/钉钉/企微/飞书需目标域名在白名单内，EMAIL 走 SMTP（HTML + CSV 附件，可直接填收件人或引用收件人分组）。当前角色 ${role}`"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="loading" @click="loadAll">
           <AppIcon name="refresh" :size="15" /> 刷新
+        </button>
+        <button v-if="canManage" class="btn" type="button" @click="openGroups">
+          <AppIcon name="users" :size="14" /> 收件人分组
         </button>
         <button v-if="canManage" class="btn btn--primary" type="button" @click="openCreate">
           <AppIcon name="plus" :size="14" /> 新建订阅
@@ -21,7 +24,7 @@
         :value="enabledCount"
         unit="个"
         tone="ok"
-        meta="每天 00:30 自动投递前一日"
+        meta="按各自发送时段投递前一日"
       />
       <KpiCard
         label="投递成功"
@@ -52,7 +55,7 @@
       <EmptyState
         v-else-if="subscriptions.length === 0"
         title="还没有报表订阅"
-        desc="新建订阅后，系统每天 00:30 自动投递前一日运营日报；管理员可随时手动补发。"
+        desc="新建订阅后，系统按每份订阅的发送时段投递前一日运营日报；管理员可随时手动补发。"
       />
       <div v-else class="table-wrap">
         <table class="table table--stack">
@@ -60,7 +63,8 @@
             <tr>
               <th>名称</th>
               <th>渠道</th>
-              <th>目标</th>
+              <th>目标 / 收件人</th>
+              <th>发送时段</th>
               <th>状态</th>
               <th class="is-num">版本</th>
               <th>更新时间</th>
@@ -76,7 +80,8 @@
               <td data-label="渠道">
                 <StatusPill :value="s.channel" :label="channelLabel(s.channel)" />
               </td>
-              <td data-label="目标" class="mono small">{{ s.target ?? '—' }}</td>
+              <td data-label="目标 / 收件人" class="mono small">{{ targetLabel(s) }}</td>
+              <td data-label="发送时段" class="mono">{{ s.sendTime }}</td>
               <td data-label="状态">
                 <StatusPill :value="s.enabled ? 'ACTIVE' : 'INACTIVE'" />
               </td>
@@ -183,7 +188,7 @@
         </select>
       </label>
       <label v-if="form.channel !== 'LOG'" class="field">
-        <span class="label">{{ form.channel === 'EMAIL' ? '收件人' : '目标地址' }}</span>
+        <span class="label">{{ form.channel === 'EMAIL' ? '直接收件人（可选）' : '目标地址' }}</span>
         <input
           v-model.trim="form.target"
           class="input mono"
@@ -196,20 +201,124 @@
         <span class="muted small">
           {{
             form.channel === 'EMAIL'
-              ? '逗号或分号分隔，最多 10 个；服务端需配置 medassist.report-email.host/from。'
+              ? '逗号或分号分隔，最多 10 个；与下方分组取并集去重。'
               : '仅 http/https，且域名必须命中 medassist.report-delivery.allowed-hosts。'
           }}
         </span>
       </label>
+      <label v-if="form.channel === 'EMAIL'" class="field">
+        <span class="label">收件人分组</span>
+        <select v-model="form.recipientGroupId" class="select">
+          <option :value="null">不使用分组</option>
+          <option v-for="g in groups" :key="g.id" :value="g.id">
+            {{ g.name }}（{{ g.members.filter((m) => m.enabled).length }} 人）
+          </option>
+        </select>
+        <span class="muted small">分组内新增/停用成员在下一次投递自动生效。</span>
+      </label>
+      <label class="field">
+        <span class="label">发送时段</span>
+        <input v-model="form.sendTime" class="input" type="time" />
+        <span class="muted small">每天此时投递前一日报表；应用晚启动会补发当天已过时点的订阅。</span>
+      </label>
       <label class="check-row">
         <input v-model="form.enabled" type="checkbox" />
-        <span>启用（每天 00:30 自动投递前一日日报）</span>
+        <span>启用（按上方发送时段自动投递前一日日报）</span>
       </label>
 
       <template #footer>
         <button class="btn" type="button" @click="editorOpen = false">取消</button>
-        <button class="btn btn--primary" type="button" :disabled="busy || !form.name" @click="save">
+        <button class="btn btn--primary" type="button" :disabled="busy || !formValid" @click="save">
           {{ busy ? '保存中…' : '保存' }}
+        </button>
+      </template>
+    </AppModal>
+
+    <AppModal v-model="groupListOpen" title="收件人分组" subtitle="按科室/岗位维护一组邮箱，订阅引用后成员变更自动生效" width="820px">
+      <TableSkeleton v-if="groupsLoading" :rows="3" />
+      <EmptyState
+        v-else-if="groups.length === 0"
+        title="还没有收件人分组"
+        desc="新建分组并加入成员后，EMAIL 订阅可直接引用分组。"
+      />
+      <div v-else class="table-wrap">
+        <table class="table table--stack table--compact">
+          <thead>
+            <tr>
+              <th>编码</th>
+              <th>名称</th>
+              <th class="is-num">成员</th>
+              <th>状态</th>
+              <th>更新时间</th>
+              <th style="width: 90px">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="g in groups" :key="g.id">
+              <td class="mono" data-primary>{{ g.code }}</td>
+              <td data-label="名称">{{ g.name }}</td>
+              <td class="is-num" data-label="成员">{{ g.members.filter((m) => m.enabled).length }}</td>
+              <td data-label="状态"><StatusPill :value="g.enabled ? 'ACTIVE' : 'INACTIVE'" /></td>
+              <td class="mono small" data-label="更新时间">{{ dt(g.updatedAt) }}</td>
+              <td data-label="操作">
+                <button class="btn btn--sm" type="button" :disabled="busy" @click="openGroupEdit(g)">
+                  编辑
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="groupListOpen = false">关闭</button>
+        <button class="btn btn--primary" type="button" @click="openGroupCreate">新建分组</button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      v-model="groupEditorOpen"
+      :title="groupEditing ? '编辑收件人分组' : '新建收件人分组'"
+      :subtitle="groupEditing?.code"
+      width="620px"
+    >
+      <div class="stack">
+        <label class="field">
+          <span class="label">分组编码 <span class="req">*</span></span>
+          <input
+            v-model.trim="groupForm.code"
+            class="input mono"
+            maxlength="32"
+            :disabled="!!groupEditing"
+            placeholder="如 DEPT_OPS"
+          />
+        </label>
+        <label class="field">
+          <span class="label">分组名称 <span class="req">*</span></span>
+          <input v-model.trim="groupForm.name" class="input" maxlength="64" placeholder="如 院办运营组" />
+        </label>
+        <label class="field">
+          <span class="label">说明</span>
+          <input v-model.trim="groupForm.description" class="input" maxlength="200" />
+        </label>
+        <label class="field">
+          <span class="label">成员（每行一个）</span>
+          <textarea
+            v-model="groupForm.membersText"
+            class="input mono"
+            rows="5"
+            placeholder="ops@example.com&#10;director@example.com,院长"
+          />
+          <span class="muted small">格式：邮箱或「邮箱,姓名」；最多 10 个，重复邮箱自动去重。</span>
+        </label>
+        <label class="check-row">
+          <input v-model="groupForm.enabled" type="checkbox" />
+          <span>启用分组</span>
+        </label>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="groupEditorOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || !groupFormValid" @click="saveGroup">
+          保存
         </button>
       </template>
     </AppModal>
@@ -230,6 +339,7 @@ import { clinicalApi } from '@/api'
 import { errorText } from '@/api/http'
 import type {
   ReportDelivery,
+  ReportRecipientGroup,
   ReportSubscription,
   ReportSubscriptionInput,
 } from '@/api/types'
@@ -264,9 +374,126 @@ const form = reactive<ReportSubscriptionInput>({
   name: '',
   channel: 'LOG',
   target: '',
+  sendTime: '00:30',
+  recipientGroupId: null,
   enabled: true,
   version: null,
 })
+
+const formValid = computed(() => {
+  if (!form.name.trim()) return false
+  if (form.channel === 'EMAIL') {
+    return Boolean(form.target?.trim() || form.recipientGroupId)
+  }
+  return true
+})
+
+const groups = ref<ReportRecipientGroup[]>([])
+const groupsLoading = ref(false)
+const groupListOpen = ref(false)
+const groupEditorOpen = ref(false)
+const groupEditing = ref<ReportRecipientGroup | null>(null)
+const groupForm = reactive({
+  code: '',
+  name: '',
+  description: '',
+  enabled: true,
+  membersText: '',
+})
+
+const groupFormValid = computed(
+  () => /^[A-Za-z0-9_-]{2,32}$/.test(groupForm.code.trim()) && Boolean(groupForm.name.trim()),
+)
+
+async function loadGroups() {
+  groupsLoading.value = true
+  try {
+    groups.value = await clinicalApi.reportRecipientGroups()
+  } catch (e) {
+    groups.value = []
+    toast.error('收件人分组加载失败', errorText(e))
+  } finally {
+    groupsLoading.value = false
+  }
+}
+
+function openGroups() {
+  groupListOpen.value = true
+  void loadGroups()
+}
+
+function openGroupCreate() {
+  groupEditing.value = null
+  groupForm.code = ''
+  groupForm.name = ''
+  groupForm.description = ''
+  groupForm.enabled = true
+  groupForm.membersText = ''
+  groupEditorOpen.value = true
+}
+
+function openGroupEdit(g: ReportRecipientGroup) {
+  groupEditing.value = g
+  groupForm.code = g.code
+  groupForm.name = g.name
+  groupForm.description = g.description ?? ''
+  groupForm.enabled = g.enabled
+  groupForm.membersText = g.members
+    .map((m) => (m.displayName ? `${m.email},${m.displayName}` : m.email))
+    .join('\n')
+  groupEditorOpen.value = true
+}
+
+async function saveGroup() {
+  if (!groupFormValid.value) return
+  const members = groupForm.membersText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [email, name] = line.split(',')
+      return { email: email.trim(), displayName: name?.trim() || undefined }
+    })
+  if (members.length > 10) {
+    toast.error('分组成员最多 10 个')
+    return
+  }
+  busy.value = true
+  try {
+    const saved = groupEditing.value
+      ? await clinicalApi.updateReportRecipientGroup(groupEditing.value.id, {
+          code: groupForm.code,
+          name: groupForm.name,
+          description: groupForm.description || undefined,
+          enabled: groupForm.enabled,
+          version: groupEditing.value.version,
+        })
+      : await clinicalApi.createReportRecipientGroup({
+          code: groupForm.code,
+          name: groupForm.name,
+          description: groupForm.description || undefined,
+          enabled: groupForm.enabled,
+        })
+    await clinicalApi.saveReportRecipientGroupMembers(saved.id, members)
+    toast.ok('分组已保存', `${saved.name} · ${members.length} 位成员`)
+    groupEditorOpen.value = false
+    groupListOpen.value = true
+    await Promise.all([loadGroups(), loadAll()])
+  } catch (e) {
+    toast.error('分组保存失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+function targetLabel(s: ReportSubscription): string {
+  if (s.channel === 'LOG') return '—'
+  const group = s.recipientGroupId
+    ? groups.value.find((g) => g.id === s.recipientGroupId)
+    : null
+  const parts = [s.target || '', group ? `分组：${group.name}` : ''].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : '—'
+}
 
 async function loadAll() {
   loading.value = true
@@ -301,6 +528,8 @@ function openCreate() {
   form.name = ''
   form.channel = 'LOG'
   form.target = ''
+  form.sendTime = '00:30'
+  form.recipientGroupId = null
   form.enabled = true
   form.version = null
   editorOpen.value = true
@@ -311,6 +540,8 @@ function openEdit(s: ReportSubscription) {
   form.name = s.name
   form.channel = s.channel
   form.target = s.target ?? ''
+  form.sendTime = s.sendTime ?? '00:30'
+  form.recipientGroupId = s.recipientGroupId
   form.enabled = s.enabled
   form.version = s.version
   editorOpen.value = true
@@ -394,6 +625,7 @@ function deliveryLabel(status: string): string {
 }
 
 onMounted(() => {
+  void loadGroups()
   void loadAll()
 })
 </script>

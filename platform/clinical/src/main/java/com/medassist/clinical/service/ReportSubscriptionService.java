@@ -1,10 +1,17 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.ReportDelivery;
+import com.medassist.clinical.domain.ClinicalModel.ReportRecipientGroup;
+import com.medassist.clinical.domain.ClinicalModel.ReportRecipientGroupMember;
 import com.medassist.clinical.domain.ClinicalModel.ReportSnapshot;
 import com.medassist.clinical.domain.ClinicalModel.ReportSubscription;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ReportSubscriptionDtos.DeliveryView;
+import com.medassist.clinical.web.ReportSubscriptionDtos.GroupMemberReq;
+import com.medassist.clinical.web.ReportSubscriptionDtos.GroupMemberView;
+import com.medassist.clinical.web.ReportSubscriptionDtos.RecipientGroupView;
+import com.medassist.clinical.web.ReportSubscriptionDtos.SaveGroupMembersReq;
+import com.medassist.clinical.web.ReportSubscriptionDtos.SaveRecipientGroupReq;
 import com.medassist.clinical.web.ReportSubscriptionDtos.SaveSubscriptionReq;
 import com.medassist.clinical.web.ReportSubscriptionDtos.SubscriptionView;
 import com.medassist.common.api.ErrorCode;
@@ -17,6 +24,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
@@ -28,6 +36,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -88,6 +98,8 @@ public class ReportSubscriptionService {
 
     private static final int DEFAULT_DELIVERY_LIMIT = 100;
     private static final int MAX_DELIVERY_LIMIT = 200;
+    private static final LocalTime DEFAULT_SEND_TIME = LocalTime.of(0, 30);
+    private static final DateTimeFormatter SEND_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
 
     private final ClinicalRepository repo;
     private final ReportSnapshotService snapshotService;
@@ -122,18 +134,20 @@ public class ReportSubscriptionService {
     public SubscriptionView create(SaveSubscriptionReq req, String actor) {
         String name = requireName(req.name());
         String channel = requireChannel(req.channel());
-        String target = validateTarget(channel, req.target());
+        LocalTime sendTime = parseSendTime(req.sendTime());
+        String target = validateTarget(channel, req.target(), req.recipientGroupId());
+        UUID groupId = "EMAIL".equals(channel) ? req.recipientGroupId() : null;
         ensureChannelReady(channel);
         boolean enabled = req.enabled() == null || req.enabled();
         UUID id = UUID.randomUUID();
         try {
             repo.insertReportSubscription(new ReportSubscription(id, name, REPORT_CODE, channel,
-                    target, enabled, 0L, actor, Instant.now()));
+                    target, sendTime, groupId, enabled, 0L, actor, Instant.now()));
         } catch (DataIntegrityViolationException e) {
             throw new BusinessException(ErrorCode.CONFLICT, "订阅名称已存在，请换一个名称");
         }
         audit(actor, "REPORT_SUBSCRIPTION_CREATE", id.toString(), Map.of(
-                "name", name, "channel", channel));
+                "name", name, "channel", channel, "sendTime", sendTime.format(SEND_TIME_FORMAT)));
         return repo.findReportSubscription(id).map(this::toView)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "订阅创建后读取失败"));
     }
@@ -146,12 +160,15 @@ public class ReportSubscriptionService {
         }
         String name = requireName(req.name());
         String channel = requireChannel(req.channel());
-        String target = validateTarget(channel, req.target());
+        LocalTime sendTime = parseSendTime(req.sendTime());
+        String target = validateTarget(channel, req.target(), req.recipientGroupId());
+        UUID groupId = "EMAIL".equals(channel) ? req.recipientGroupId() : null;
         ensureChannelReady(channel);
         boolean enabled = req.enabled() == null ? existing.enabled() : req.enabled();
         boolean ok;
         try {
-            ok = repo.updateReportSubscription(id, name, channel, target, enabled, req.version());
+            ok = repo.updateReportSubscription(id, name, channel, target, sendTime, groupId,
+                    enabled, req.version());
         } catch (DataIntegrityViolationException e) {
             throw new BusinessException(ErrorCode.CONFLICT, "订阅名称已存在，请换一个名称");
         }
@@ -159,9 +176,75 @@ public class ReportSubscriptionService {
             throw new BusinessException(ErrorCode.CONFLICT, "订阅已被他人修改，请刷新后重试");
         }
         audit(actor, "REPORT_SUBSCRIPTION_UPDATE", id.toString(), Map.of(
-                "name", name, "channel", channel, "enabled", enabled));
+                "name", name, "channel", channel, "enabled", enabled,
+                "sendTime", sendTime.format(SEND_TIME_FORMAT)));
         return repo.findReportSubscription(id).map(this::toView)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "订阅更新后读取失败"));
+    }
+
+    // ---------------------------------------------------------------- 收件人分组（G25）
+
+    public List<RecipientGroupView> listRecipientGroups() {
+        return repo.listReportRecipientGroups().stream().map(this::toGroupView).toList();
+    }
+
+    public RecipientGroupView createRecipientGroup(SaveRecipientGroupReq req, String actor) {
+        String code = requireGroupCode(req.code());
+        String name = requireGroupName(req.name());
+        boolean enabled = req.enabled() == null || req.enabled();
+        UUID id = UUID.randomUUID();
+        try {
+            repo.insertReportRecipientGroup(new ReportRecipientGroup(id, code, name,
+                    trimToNull(req.description()), enabled, 0L, actor, Instant.now()));
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(ErrorCode.CONFLICT, "分组编码已存在，请换一个编码");
+        }
+        audit(actor, "REPORT_GROUP_CREATE", id.toString(), Map.of("code", code, "name", name));
+        return repo.findReportRecipientGroup(id).map(this::toGroupView)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "分组创建后读取失败"));
+    }
+
+    public RecipientGroupView updateRecipientGroup(UUID id, SaveRecipientGroupReq req,
+                                                   String actor) {
+        ReportRecipientGroup existing = repo.findReportRecipientGroup(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该收件人分组"));
+        if (req.version() == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "更新分组必须携带 version");
+        }
+        requireGroupCode(req.code());
+        String name = requireGroupName(req.name());
+        boolean enabled = req.enabled() == null ? existing.enabled() : req.enabled();
+        if (!repo.updateReportRecipientGroup(id, name, trimToNull(req.description()), enabled,
+                req.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "分组已被他人修改，请刷新后重试");
+        }
+        audit(actor, "REPORT_GROUP_UPDATE", id.toString(), Map.of("name", name, "enabled", enabled));
+        return repo.findReportRecipientGroup(id).map(this::toGroupView)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "分组更新后读取失败"));
+    }
+
+    /** 整组替换成员：事务内删旧插新，任一邮箱非法整体拒绝。 */
+    @Transactional
+    public RecipientGroupView replaceRecipientGroupMembers(UUID id, SaveGroupMembersReq req,
+                                                           String actor) {
+        repo.findReportRecipientGroup(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该收件人分组"));
+        List<GroupMemberReq> members = req.members() == null ? List.of() : req.members();
+        LinkedHashMap<String, GroupMemberReq> unique = new LinkedHashMap<>();
+        for (GroupMemberReq member : members) {
+            String email = requireEmail(member.email());
+            unique.putIfAbsent(email.toLowerCase(Locale.ROOT), member);
+        }
+        repo.deleteReportRecipientGroupMembers(id);
+        for (GroupMemberReq member : unique.values()) {
+            String email = member.email().trim();
+            repo.insertReportRecipientGroupMember(new ReportRecipientGroupMember(
+                    UUID.randomUUID(), id, email, trimToNull(member.displayName()),
+                    member.enabled() == null || member.enabled(), Instant.now()));
+        }
+        audit(actor, "REPORT_GROUP_MEMBERS", id.toString(), Map.of("count", unique.size()));
+        return repo.findReportRecipientGroup(id).map(this::toGroupView)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "分组读取失败"));
     }
 
     // ---------------------------------------------------------------- 投递
@@ -188,13 +271,21 @@ public class ReportSubscriptionService {
         return toView(deliver(sub, delivery));
     }
 
-    /** 定时任务：为所有启用订阅生成当天投递占位（幂等），返回新建数量。 */
-    public int enqueueDaily(LocalDate day, String actor) {
+    /**
+     * 定时任务：为"发送时段已到"的启用订阅生成投递占位（幂等），返回新建数量。
+     *
+     * <p>按分钟检查：sendTime ≤ now 且当天尚无投递记录的订阅都会入队，
+     * 因此应用在发送时点之后启动也能补发当天应发的报表。
+     */
+    public int enqueueDue(LocalDate day, LocalTime now, String actor) {
         ensureSnapshot(day, actor);
         String payload = buildPayload(day);
         int created = 0;
         for (ReportSubscription sub : repo.listReportSubscriptions()) {
             if (!sub.enabled()) {
+                continue;
+            }
+            if (sub.sendTime() != null && sub.sendTime().isAfter(now)) {
                 continue;
             }
             if (repo.insertReportDeliveryIfAbsent(UUID.randomUUID(), sub.id(), sub.reportCode(),
@@ -237,9 +328,9 @@ public class ReportSubscriptionService {
         try {
             if ("EMAIL".equals(sub.channel())) {
                 String raw = payload == null ? buildPayload(day) : payload;
-                emailSender.send(sub.target(), buildEmailSubject(day),
-                        buildEmailHtml(day, raw), emailAttachmentName(day),
-                        buildEmailCsv(day, raw));
+                emailSender.send(String.join(",", resolveEmailRecipients(sub)),
+                        buildEmailSubject(day), buildEmailHtml(day, raw),
+                        emailAttachmentName(day), buildEmailCsv(day, raw));
             } else if (HTTP_CHANNELS.contains(sub.channel())) {
                 postChannel(sub.channel(), sub.target(),
                         payload == null ? buildPayload(day) : payload, day);
@@ -416,12 +507,40 @@ public class ReportSubscriptionService {
 
     private SubscriptionView toView(ReportSubscription s) {
         return new SubscriptionView(s.id(), s.name(), s.reportCode(), s.channel(), s.target(),
-                s.enabled(), s.version(), s.createdBy(), s.updatedAt());
+                s.sendTime() == null ? null : s.sendTime().format(SEND_TIME_FORMAT),
+                s.recipientGroupId(), s.enabled(), s.version(), s.createdBy(), s.updatedAt());
     }
 
-    private DeliveryView toView(ReportDelivery d) {
-        return new DeliveryView(d.id(), d.subscriptionId(), d.subscriptionName(), d.reportCode(),
-                d.reportDate(), d.status(), d.attempts(), d.lastError(), d.createdAt(), d.sentAt());
+    private RecipientGroupView toGroupView(ReportRecipientGroup g) {
+        List<GroupMemberView> members = repo.listReportRecipientGroupMembers(g.id()).stream()
+                .map(m -> new GroupMemberView(m.id(), m.email(), m.displayName(), m.enabled()))
+                .toList();
+        return new RecipientGroupView(g.id(), g.code(), g.name(), g.description(), g.enabled(),
+                g.version(), g.createdBy(), g.updatedAt(), members);
+    }
+
+    /** 邮件收件人 = 直接收件人 + 分组成员，去重后不超过 10 个。 */
+    private List<String> resolveEmailRecipients(ReportSubscription sub) {
+        LinkedHashSet<String> emails = new LinkedHashSet<>();
+        if (sub.target() != null && !sub.target().isBlank()) {
+            for (String part : sub.target().split("[;,]")) {
+                String email = part.trim();
+                if (!email.isEmpty()) {
+                    emails.add(email);
+                }
+            }
+        }
+        if (sub.recipientGroupId() != null) {
+            emails.addAll(repo.listEnabledReportRecipientEmails(sub.recipientGroupId()));
+        }
+        if (emails.isEmpty()) {
+            throw new IllegalStateException("EMAIL 订阅没有有效收件人");
+        }
+        if (emails.size() > MAX_EMAIL_RECIPIENTS) {
+            throw new IllegalStateException(
+                    "邮件收件人超过 " + MAX_EMAIL_RECIPIENTS + " 个，请缩小组或直接收件人");
+        }
+        return new ArrayList<>(emails);
     }
 
     private static String requireName(String raw) {
@@ -429,6 +548,55 @@ public class ReportSubscriptionService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "订阅名称不能为空");
         }
         return raw.trim();
+    }
+
+    private static String requireGroupCode(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "分组编码不能为空");
+        }
+        String code = raw.trim();
+        if (!code.matches("[A-Za-z0-9_-]{2,32}")) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "分组编码只允许字母、数字、下划线和中划线（2–32 位）");
+        }
+        return code;
+    }
+
+    private static String requireGroupName(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "分组名称不能为空");
+        }
+        return raw.trim();
+    }
+
+    private static String requireEmail(String raw) {
+        String email = raw == null ? "" : raw.trim();
+        if (email.isEmpty() || email.length() > 254
+                || !EMAIL_PATTERN.matcher(email).matches()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "收件人邮箱格式不正确：" + email);
+        }
+        return email;
+    }
+
+    private static String trimToNull(String raw) {
+        return raw == null || raw.isBlank() ? null : raw.trim();
+    }
+
+    private static LocalTime parseSendTime(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_SEND_TIME;
+        }
+        try {
+            return LocalTime.parse(raw.trim(), SEND_TIME_FORMAT);
+        } catch (RuntimeException e) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "发送时段格式为 HH:mm");
+        }
+    }
+
+    private DeliveryView toView(ReportDelivery d) {
+        return new DeliveryView(d.id(), d.subscriptionId(), d.subscriptionName(), d.reportCode(),
+                d.reportDate(), d.status(), d.attempts(), d.lastError(), d.createdAt(), d.sentAt());
     }
 
     private static String requireChannel(String raw) {
@@ -451,9 +619,28 @@ public class ReportSubscriptionService {
         }
     }
 
-    private String validateTarget(String channel, String rawTarget) {
+    private String validateTarget(String channel, String rawTarget, UUID recipientGroupId) {
         if ("EMAIL".equals(channel)) {
-            return validateEmailTarget(rawTarget);
+            String target = (rawTarget == null || rawTarget.isBlank())
+                    ? null : validateEmailTarget(rawTarget);
+            if (target == null && recipientGroupId == null) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "EMAIL 渠道需要填写收件人或选择收件人分组");
+            }
+            if (recipientGroupId != null) {
+                ReportRecipientGroup group = repo.findReportRecipientGroup(recipientGroupId)
+                        .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND,
+                                "未找到该收件人分组"));
+                if (!group.enabled()) {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                            "收件人分组已停用：" + group.name());
+                }
+            }
+            return target;
+        }
+        if (recipientGroupId != null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "只有 EMAIL 渠道可以绑定收件人分组");
         }
         if (!HTTP_CHANNELS.contains(channel)) {
             return null;

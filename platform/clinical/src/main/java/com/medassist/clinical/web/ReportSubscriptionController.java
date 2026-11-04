@@ -3,6 +3,9 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.service.ReportSubscriptionService;
 import com.medassist.clinical.web.ReportSubscriptionDtos.DeliveryListView;
 import com.medassist.clinical.web.ReportSubscriptionDtos.DeliveryView;
+import com.medassist.clinical.web.ReportSubscriptionDtos.RecipientGroupView;
+import com.medassist.clinical.web.ReportSubscriptionDtos.SaveGroupMembersReq;
+import com.medassist.clinical.web.ReportSubscriptionDtos.SaveRecipientGroupReq;
 import com.medassist.clinical.web.ReportSubscriptionDtos.SaveSubscriptionReq;
 import com.medassist.clinical.web.ReportSubscriptionDtos.SubscriptionView;
 import com.medassist.common.api.ApiResponse;
@@ -86,5 +89,44 @@ public class ReportSubscriptionController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(new DeliveryListView(service.listDeliveries(status, limit)));
+    }
+
+    // ---------------------------------------------------------------- 收件人分组（G25）
+
+    @GetMapping("/recipient-groups")
+    public ApiResponse<List<RecipientGroupView>> listRecipientGroups(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.listRecipientGroups());
+    }
+
+    @PostMapping("/recipient-groups")
+    public ApiResponse<RecipientGroupView> createRecipientGroup(
+            @Valid @RequestBody SaveRecipientGroupReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(service.createRecipientGroup(req, actor));
+    }
+
+    @PutMapping("/recipient-groups/{id}")
+    public ApiResponse<RecipientGroupView> updateRecipientGroup(
+            @PathVariable UUID id,
+            @Valid @RequestBody SaveRecipientGroupReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(service.updateRecipientGroup(id, req, actor));
+    }
+
+    /** 整组替换成员（事务内删旧插新）。 */
+    @PutMapping("/recipient-groups/{id}/members")
+    public ApiResponse<RecipientGroupView> replaceRecipientGroupMembers(
+            @PathVariable UUID id,
+            @Valid @RequestBody SaveGroupMembersReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(service.replaceRecipientGroupMembers(id, req, actor));
     }
 }

@@ -202,10 +202,34 @@ export interface ReportSubscription {
   reportCode: string
   channel: ReportChannel
   target: string | null
+  /** HH:mm；默认 00:30。 */
+  sendTime: string
+  recipientGroupId: string | null
   enabled: boolean
   version: number
   createdBy: string
   updatedAt: string
+}
+
+/** 报表收件人分组成员（G25）。 */
+export interface ReportRecipientGroupMember {
+  id: string
+  email: string
+  displayName: string | null
+  enabled: boolean
+}
+
+/** 报表收件人分组：按科室/岗位维护一组邮箱。 */
+export interface ReportRecipientGroup {
+  id: string
+  code: string
+  name: string
+  description: string | null
+  enabled: boolean
+  version: number
+  createdBy: string
+  updatedAt: string
+  members: ReportRecipientGroupMember[]
 }
 
 export interface ReportDelivery {
@@ -225,6 +249,8 @@ export interface ReportSubscriptionInput {
   name: string
   channel: ReportChannel
   target?: string | null
+  sendTime?: string | null
+  recipientGroupId?: string | null
   enabled?: boolean
   version?: number | null
 }

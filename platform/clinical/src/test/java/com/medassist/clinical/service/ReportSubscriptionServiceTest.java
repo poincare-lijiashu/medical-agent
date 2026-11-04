@@ -1,6 +1,7 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.ClinicalModel.ReportDelivery;
+import com.medassist.clinical.domain.ClinicalModel.ReportRecipientGroup;
 import com.medassist.clinical.domain.ClinicalModel.ReportSnapshot;
 import com.medassist.clinical.domain.ClinicalModel.ReportSubscription;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -17,6 +18,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -109,8 +111,8 @@ class ReportSubscriptionServiceTest {
         when(repo.findReportSubscription(any())).thenReturn(Optional.of(
                 new ReportSubscription(UUID.randomUUID(), "运营日报", "DAILY_OPS", "LOG", null,
                         true, 3, "admin01", Instant.now())));
-        when(repo.updateReportSubscription(any(), anyString(), anyString(), any(), eq(true), eq(3L)))
-                .thenReturn(false);
+        when(repo.updateReportSubscription(any(), anyString(), anyString(), any(),
+                any(LocalTime.class), any(), eq(true), eq(3L))).thenReturn(false);
 
         assertThatThrownBy(() -> service.update(UUID.randomUUID(),
                 new SaveSubscriptionReq("运营日报", "LOG", null, true, 3L), "admin01"))
@@ -171,7 +173,7 @@ class ReportSubscriptionServiceTest {
         when(repo.insertReportDeliveryIfAbsent(any(), eq(enabled.id()), anyString(), eq(day), any()))
                 .thenReturn(true);
 
-        int created = service.enqueueDaily(day, "scheduler");
+        int created = service.enqueueDue(day, LocalTime.of(23, 59), "scheduler");
 
         assertThat(created).isEqualTo(1);
         verify(repo, org.mockito.Mockito.never())
@@ -345,5 +347,99 @@ class ReportSubscriptionServiceTest {
         verify(emailSender).send(eq("ops@example.com"), contains("2026-11-03"),
                 contains("门诊实收"), eq("daily-ops-2026-11-03.csv"), any(byte[].class));
         verify(repo).markReportDelivery(eq(deliveryId), eq("SENT"), eq(1), isNull());
+    }
+
+    @Test
+    @DisplayName("EMAIL 分组 + 发送时段：允许只选分组")
+    void createsEmailSubscriptionWithGroupAndSendTime() {
+        when(emailSender.configured()).thenReturn(true);
+        UUID groupId = UUID.randomUUID();
+        when(repo.findReportRecipientGroup(groupId)).thenReturn(Optional.of(
+                new ReportRecipientGroup(groupId, "DEPT_OPS", "运营组", null, true, 0,
+                        "admin01", Instant.now())));
+        when(repo.findReportSubscription(any())).thenReturn(Optional.of(
+                new ReportSubscription(UUID.randomUUID(), "分组邮件", "DAILY_OPS", "EMAIL", null,
+                        LocalTime.of(9, 15), groupId, true, 0, "admin01", Instant.now())));
+
+        var view = service.create(new SaveSubscriptionReq("分组邮件", "EMAIL", null, "09:15",
+                groupId, true, null), "admin01");
+
+        assertThat(view.sendTime()).isEqualTo("09:15");
+        assertThat(view.recipientGroupId()).isEqualTo(groupId);
+        assertThat(view.target()).isNull();
+        verify(repo).insertReportSubscription(any());
+    }
+
+    @Test
+    @DisplayName("EMAIL 无收件人/分组 → 422；非 EMAIL 绑定分组 → 422；非法时段 → 422")
+    void validatesGroupAndSendTime() {
+        when(emailSender.configured()).thenReturn(true);
+
+        assertThatThrownBy(() -> service.create(new SaveSubscriptionReq("空邮件", "EMAIL", null,
+                "09:15", null, true, null), "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+
+        assertThatThrownBy(() -> service.create(new SaveSubscriptionReq("webhook", "WEBHOOK",
+                "https://hooks.example.com/x", "09:15", UUID.randomUUID(), true, null), "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+
+        assertThatThrownBy(() -> service.create(new SaveSubscriptionReq("坏时段", "LOG", null,
+                "9:5", null, true, null), "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("定时入队：只处理发送时段已到的启用订阅")
+    void enqueueDueHonorsSendTime() {
+        LocalDate day = BusinessTime.today().minusDays(1);
+        var due = new ReportSubscription(UUID.randomUUID(), "早班", "DAILY_OPS", "LOG", null,
+                LocalTime.of(9, 0), null, true, 0, "admin01", Instant.now());
+        var future = new ReportSubscription(UUID.randomUUID(), "晚班", "DAILY_OPS", "LOG", null,
+                LocalTime.of(10, 0), null, true, 0, "admin01", Instant.now());
+        when(repo.listReportSubscriptions()).thenReturn(List.of(due, future));
+        when(repo.insertReportDeliveryIfAbsent(any(), eq(due.id()), anyString(), eq(day), any()))
+                .thenReturn(true);
+
+        int created = service.enqueueDue(day, LocalTime.of(9, 30), "scheduler");
+
+        assertThat(created).isEqualTo(1);
+        verify(repo, org.mockito.Mockito.never())
+                .insertReportDeliveryIfAbsent(any(), eq(future.id()), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("EMAIL 投递：直接收件人与分组成员合并去重")
+    void mergesGroupMembersWhenDelivering() {
+        when(emailSender.configured()).thenReturn(true);
+        UUID subId = UUID.randomUUID();
+        UUID groupId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        LocalDate day = LocalDate.of(2026, 11, 3);
+        when(repo.findReportSubscription(subId)).thenReturn(Optional.of(
+                new ReportSubscription(subId, "分组邮件", "DAILY_OPS", "EMAIL",
+                        "ops@example.com,director@example.com", LocalTime.of(9, 15), groupId,
+                        true, 0, "admin01", Instant.now())));
+        when(repo.listEnabledReportRecipientEmails(groupId))
+                .thenReturn(List.of("ops@example.com", "board@example.com"));
+        when(repo.reportDeliveryPayload(any())).thenReturn(EMAIL_PAYLOAD);
+        when(repo.findReportDelivery(any(), any(), any())).thenReturn(
+                Optional.of(new ReportDelivery(deliveryId, subId, "分组邮件", "DAILY_OPS", day,
+                        "PENDING", 0, null, Instant.now(), null)),
+                Optional.of(new ReportDelivery(deliveryId, subId, "分组邮件", "DAILY_OPS", day,
+                        "SENT", 1, null, Instant.now(), Instant.now())));
+
+        var view = service.send(subId, day, "admin01");
+
+        assertThat(view.status()).isEqualTo("SENT");
+        verify(emailSender).send(
+                eq("ops@example.com,director@example.com,board@example.com"),
+                contains("2026-11-03"), contains("门诊实收"),
+                eq("daily-ops-2026-11-03.csv"), any(byte[].class));
     }
 }

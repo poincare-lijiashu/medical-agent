@@ -7,10 +7,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalTime;
+
 /**
- * 报表投递定时任务（G19）：默认每天 00:30 生成前一日投递并重试失败项。
+ * 报表投递定时任务（G19 / G25）：每分钟检查一次。
  *
- * <p>生成按 (订阅, 日期, 报表) 幂等，重试最多 3 次；失败只记日志，管理员可手动补发。
+ * <p>发送时段由每份订阅的 {@code send_time} 决定：到点（或应用晚启动时已过点）才生成
+ * 前一日投递占位；生成按 (订阅, 日期, 报表) 幂等，重启不会重复投递。
+ * 失败重试最多 3 次；异常只记日志，管理员可手动补发。
  */
 @Component
 @ConditionalOnProperty(prefix = "medassist.report-delivery", name = "enabled",
@@ -27,10 +31,11 @@ public class ReportSubscriptionWorker {
         this.service = service;
     }
 
-    @Scheduled(cron = "${medassist.report-delivery.cron:0 30 0 * * *}")
+    @Scheduled(cron = "${medassist.report-delivery.cron:0 * * * * *}")
     public void deliverDaily() {
         try {
-            int created = service.enqueueDaily(BusinessTime.today().minusDays(1), ACTOR);
+            LocalTime now = LocalTime.now(BusinessTime.zone());
+            int created = service.enqueueDue(BusinessTime.today().minusDays(1), now, ACTOR);
             int sent = service.retryPending(RETRY_BATCH);
             log.info("clinical.report_delivery.done enqueued={} sent={}", created, sent);
         } catch (RuntimeException e) {

@@ -33,6 +33,8 @@ import com.medassist.clinical.domain.ClinicalModel.ReceiptPush;
 import com.medassist.clinical.domain.ClinicalModel.ReceiptPushLedger;
 import com.medassist.clinical.domain.ClinicalModel.ReceiptPushSummary;
 import com.medassist.clinical.domain.ClinicalModel.ReportDelivery;
+import com.medassist.clinical.domain.ClinicalModel.ReportRecipientGroup;
+import com.medassist.clinical.domain.ClinicalModel.ReportRecipientGroupMember;
 import com.medassist.clinical.domain.ClinicalModel.ReportSnapshot;
 import com.medassist.clinical.domain.ClinicalModel.ReportSubscription;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
@@ -1395,9 +1397,16 @@ public class ClinicalRepository {
             new ReportSubscription(
                     rs.getObject("id", UUID.class), rs.getString("name"),
                     rs.getString("report_code"), rs.getString("channel"),
-                    rs.getString("target"), rs.getBoolean("enabled"), rs.getLong("version"),
+                    rs.getString("target"), rs.getTime("send_time").toLocalTime(),
+                    rs.getObject("recipient_group_id", UUID.class),
+                    rs.getBoolean("enabled"), rs.getLong("version"),
                     rs.getString("created_by"),
                     rs.getTimestamp("updated_at").toInstant());
+
+    private static final String SUBSCRIPTION_COLUMNS = """
+            id, name, report_code, channel, target, send_time, recipient_group_id,
+            enabled, version, created_by, updated_at
+            """;
 
     private static final RowMapper<ReportDelivery> DELIVERY_MAPPER = (rs, i) ->
             new ReportDelivery(
@@ -1411,46 +1420,136 @@ public class ClinicalRepository {
                     rs.getTimestamp("sent_at") == null ? null : rs.getTimestamp("sent_at").toInstant());
 
     public List<ReportSubscription> listReportSubscriptions() {
-        return jdbc.sql("""
-                        SELECT id, name, report_code, channel, target, enabled, version,
-                               created_by, updated_at
+        return jdbc.sql("SELECT " + SUBSCRIPTION_COLUMNS + """
                           FROM clinical_svc.report_subscription
-                         ORDER BY enabled DESC, name
+                         ORDER BY enabled DESC, send_time, name
                         """).query(SUBSCRIPTION_MAPPER).list();
     }
 
     public Optional<ReportSubscription> findReportSubscription(UUID id) {
-        return jdbc.sql("""
-                        SELECT id, name, report_code, channel, target, enabled, version,
-                               created_by, updated_at
-                          FROM clinical_svc.report_subscription WHERE id = ?
-                        """).param(id).query(SUBSCRIPTION_MAPPER).optional();
+        return jdbc.sql("SELECT " + SUBSCRIPTION_COLUMNS
+                        + " FROM clinical_svc.report_subscription WHERE id = ?")
+                .param(id).query(SUBSCRIPTION_MAPPER).optional();
     }
 
     public void insertReportSubscription(ReportSubscription s) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.report_subscription
-                            (id, name, report_code, channel, target, enabled, created_by)
-                        VALUES (:id, :name, :code, :channel, :target, :enabled, :actor)
+                            (id, name, report_code, channel, target, send_time,
+                             recipient_group_id, enabled, created_by)
+                        VALUES (:id, :name, :code, :channel, :target, :sendTime,
+                                CAST(:groupId AS uuid), :enabled, :actor)
                         """)
                 .param("id", s.id()).param("name", s.name()).param("code", s.reportCode())
                 .param("channel", s.channel()).param("target", s.target())
+                .param("sendTime", s.sendTime()).param("groupId", s.recipientGroupId())
                 .param("enabled", s.enabled()).param("actor", s.createdBy())
                 .update();
     }
 
     /** 更新订阅；返回 false 表示版本已被他人修改（CAS 失败）。 */
     public boolean updateReportSubscription(UUID id, String name, String channel, String target,
+                                            java.time.LocalTime sendTime, UUID recipientGroupId,
                                             boolean enabled, long version) {
         return jdbc.sql("""
                         UPDATE clinical_svc.report_subscription
                            SET name = :name, channel = :channel, target = :target,
+                               send_time = :sendTime, recipient_group_id = CAST(:groupId AS uuid),
                                enabled = :enabled, version = version + 1, updated_at = now()
                          WHERE id = :id AND version = :version
                         """)
                 .param("id", id).param("name", name).param("channel", channel)
-                .param("target", target).param("enabled", enabled).param("version", version)
+                .param("target", target).param("sendTime", sendTime)
+                .param("groupId", recipientGroupId)
+                .param("enabled", enabled).param("version", version)
                 .update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 收件人分组（G25）
+
+    private static final RowMapper<ReportRecipientGroup> GROUP_MAPPER = (rs, i) ->
+            new ReportRecipientGroup(
+                    rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+                    rs.getString("description"), rs.getBoolean("enabled"), rs.getLong("version"),
+                    rs.getString("created_by"), rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<ReportRecipientGroupMember> GROUP_MEMBER_MAPPER = (rs, i) ->
+            new ReportRecipientGroupMember(
+                    rs.getObject("id", UUID.class), rs.getObject("group_id", UUID.class),
+                    rs.getString("email"), rs.getString("display_name"),
+                    rs.getBoolean("enabled"), rs.getTimestamp("created_at").toInstant());
+
+    public List<ReportRecipientGroup> listReportRecipientGroups() {
+        return jdbc.sql("""
+                        SELECT id, code, name, description, enabled, version, created_by, updated_at
+                          FROM clinical_svc.report_recipient_group
+                         ORDER BY enabled DESC, code
+                        """).query(GROUP_MAPPER).list();
+    }
+
+    public Optional<ReportRecipientGroup> findReportRecipientGroup(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, code, name, description, enabled, version, created_by, updated_at
+                          FROM clinical_svc.report_recipient_group WHERE id = ?
+                        """).param(id).query(GROUP_MAPPER).optional();
+    }
+
+    public void insertReportRecipientGroup(ReportRecipientGroup g) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.report_recipient_group
+                            (id, code, name, description, enabled, created_by)
+                        VALUES (:id, :code, :name, :description, :enabled, :actor)
+                        """)
+                .param("id", g.id()).param("code", g.code()).param("name", g.name())
+                .param("description", g.description()).param("enabled", g.enabled())
+                .param("actor", g.createdBy()).update();
+    }
+
+    public boolean updateReportRecipientGroup(UUID id, String name, String description,
+                                              boolean enabled, long version) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.report_recipient_group
+                           SET name = :name, description = :description, enabled = :enabled,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("id", id).param("name", name).param("description", description)
+                .param("enabled", enabled).param("version", version).update() > 0;
+    }
+
+    public List<ReportRecipientGroupMember> listReportRecipientGroupMembers(UUID groupId) {
+        return jdbc.sql("""
+                        SELECT id, group_id, email, display_name, enabled, created_at
+                          FROM clinical_svc.report_recipient_group_member
+                         WHERE group_id = ?
+                         ORDER BY enabled DESC, email
+                        """).param(groupId).query(GROUP_MEMBER_MAPPER).list();
+    }
+
+    /** 有效成员邮箱（投递时实时解析，新增/停用成员下一次投递自动生效）。 */
+    public List<String> listEnabledReportRecipientEmails(UUID groupId) {
+        return jdbc.sql("""
+                        SELECT email
+                          FROM clinical_svc.report_recipient_group_member
+                         WHERE group_id = ? AND enabled
+                         ORDER BY email
+                        """).param(groupId).query(String.class).list();
+    }
+
+    public void deleteReportRecipientGroupMembers(UUID groupId) {
+        jdbc.sql("DELETE FROM clinical_svc.report_recipient_group_member WHERE group_id = ?")
+                .param(groupId).update();
+    }
+
+    public void insertReportRecipientGroupMember(ReportRecipientGroupMember m) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.report_recipient_group_member
+                            (id, group_id, email, display_name, enabled)
+                        VALUES (:id, :groupId, :email, :displayName, :enabled)
+                        """)
+                .param("id", m.id()).param("groupId", m.groupId()).param("email", m.email())
+                .param("displayName", m.displayName()).param("enabled", m.enabled())
+                .update();
     }
 
     /** 投递占位：同一订阅同一天唯一，返回 false 表示已存在（幂等）。 */

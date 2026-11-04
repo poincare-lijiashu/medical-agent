@@ -30,6 +30,7 @@ import type {
   GroupSimulation,
   InpatientTrendView,
   ReportDelivery,
+  ReportRecipientGroup,
   ReportSubscription,
   ReportSubscriptionInput,
   ReceiptPush,
@@ -190,6 +191,23 @@ export const clinicalApi = {
     }),
   reportDeliveries: (status?: string, limit = 100) =>
     get<{ deliveries: ReportDelivery[] }>('/clinical/reports/deliveries', { status, limit }),
+  /** 报表收件人分组（G25）。 */
+  reportRecipientGroups: () =>
+    get<ReportRecipientGroup[]>('/clinical/reports/recipient-groups'),
+  createReportRecipientGroup: (body: {
+    code: string
+    name: string
+    description?: string
+    enabled?: boolean
+  }) => post<ReportRecipientGroup>('/clinical/reports/recipient-groups', body),
+  updateReportRecipientGroup: (
+    id: string,
+    body: { code: string; name: string; description?: string; enabled?: boolean; version: number },
+  ) => put<ReportRecipientGroup>(`/clinical/reports/recipient-groups/${id}`, body),
+  saveReportRecipientGroupMembers: (
+    id: string,
+    members: { email: string; displayName?: string; enabled?: boolean }[],
+  ) => put<ReportRecipientGroup>(`/clinical/reports/recipient-groups/${id}/members`, { members }),
 
   // ---- 收费票据（G14）----
   receipts: (visitId: string, limit = 50) =>

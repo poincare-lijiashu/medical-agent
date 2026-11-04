@@ -460,10 +460,31 @@ public final class ClinicalModel {
                                  String detail, String source, Instant updatedAt) {
     }
 
-    /** 报表订阅（G19）：LOG / WEBHOOK 两种渠道。 */
+    /** 报表订阅（G19 / G25）：多渠道；发送时段与收件人分组可选。 */
     public record ReportSubscription(UUID id, String name, String reportCode, String channel,
-                                     String target, boolean enabled, long version,
+                                     String target, java.time.LocalTime sendTime,
+                                     UUID recipientGroupId, boolean enabled, long version,
                                      String createdBy, Instant updatedAt) {
+
+        /** 默认发送时段 00:30、不绑定分组（历史调用与测试用）。 */
+        public ReportSubscription(UUID id, String name, String reportCode, String channel,
+                                  String target, boolean enabled, long version,
+                                  String createdBy, Instant updatedAt) {
+            this(id, name, reportCode, channel, target, java.time.LocalTime.of(0, 30), null,
+                    enabled, version, createdBy, updatedAt);
+        }
+    }
+
+    /** 报表收件人分组（G25）：按科室/岗位维护一组邮箱。 */
+    public record ReportRecipientGroup(UUID id, String code, String name, String description,
+                                       boolean enabled, long version, String createdBy,
+                                       Instant updatedAt) {
+    }
+
+    /** 分组成员；email 在组内唯一。 */
+    public record ReportRecipientGroupMember(UUID id, UUID groupId, String email,
+                                             String displayName, boolean enabled,
+                                             Instant createdAt) {
     }
 
     /** 报表投递记录（G19）：同一订阅同一天唯一。 */
