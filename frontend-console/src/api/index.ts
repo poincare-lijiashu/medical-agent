@@ -28,6 +28,9 @@ import type {
   ChargeMapping,
   GroupSimulation,
   InpatientTrendView,
+  ReportDelivery,
+  ReportSubscription,
+  ReportSubscriptionInput,
   SnapshotCapture,
   SnapshotList,
   KbAnswerResult,
@@ -171,6 +174,18 @@ export const clinicalApi = {
   /** 手动补采指定日期（缺省昨天）的快照，幂等覆盖。 */
   captureSnapshot: (date?: string) =>
     post<SnapshotCapture>('/clinical/reports/snapshots', undefined, { query: { date } }),
+  /** 报表订阅（G19）。 */
+  reportSubscriptions: () => get<ReportSubscription[]>('/clinical/reports/subscriptions'),
+  createReportSubscription: (body: ReportSubscriptionInput) =>
+    post<ReportSubscription>('/clinical/reports/subscriptions', body),
+  updateReportSubscription: (id: string, body: ReportSubscriptionInput) =>
+    put<ReportSubscription>(`/clinical/reports/subscriptions/${id}`, body),
+  sendReportSubscription: (id: string, date?: string) =>
+    post<ReportDelivery>(`/clinical/reports/subscriptions/${id}/send`, undefined, {
+      query: { date },
+    }),
+  reportDeliveries: (status?: string, limit = 100) =>
+    get<{ deliveries: ReportDelivery[] }>('/clinical/reports/deliveries', { status, limit }),
 
   // ---- 收费票据（G14）----
   receipts: (visitId: string, limit = 50) =>

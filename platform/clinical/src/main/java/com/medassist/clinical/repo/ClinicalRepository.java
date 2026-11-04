@@ -29,7 +29,9 @@ import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
+import com.medassist.clinical.domain.ClinicalModel.ReportDelivery;
 import com.medassist.clinical.domain.ClinicalModel.ReportSnapshot;
+import com.medassist.clinical.domain.ClinicalModel.ReportSubscription;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsage;
 import com.medassist.clinical.domain.ClinicalModel.RoomDayUsageRow;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
@@ -1382,6 +1384,152 @@ public class ClinicalRepository {
                         rs.getBigDecimal("value"), rs.getString("detail"),
                         rs.getString("source"), rs.getTimestamp("updated_at").toInstant()))
                 .list();
+    }
+
+    // ---------------------------------------------------------------- 报表订阅与投递（G19）
+
+    private static final RowMapper<ReportSubscription> SUBSCRIPTION_MAPPER = (rs, i) ->
+            new ReportSubscription(
+                    rs.getObject("id", UUID.class), rs.getString("name"),
+                    rs.getString("report_code"), rs.getString("channel"),
+                    rs.getString("target"), rs.getBoolean("enabled"), rs.getLong("version"),
+                    rs.getString("created_by"),
+                    rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<ReportDelivery> DELIVERY_MAPPER = (rs, i) ->
+            new ReportDelivery(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("subscription_id", UUID.class),
+                    rs.getString("subscription_name"),
+                    rs.getString("report_code"),
+                    rs.getDate("report_date").toLocalDate(), rs.getString("status"),
+                    rs.getInt("attempts"), rs.getString("last_error"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("sent_at") == null ? null : rs.getTimestamp("sent_at").toInstant());
+
+    public List<ReportSubscription> listReportSubscriptions() {
+        return jdbc.sql("""
+                        SELECT id, name, report_code, channel, target, enabled, version,
+                               created_by, updated_at
+                          FROM clinical_svc.report_subscription
+                         ORDER BY enabled DESC, name
+                        """).query(SUBSCRIPTION_MAPPER).list();
+    }
+
+    public Optional<ReportSubscription> findReportSubscription(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, name, report_code, channel, target, enabled, version,
+                               created_by, updated_at
+                          FROM clinical_svc.report_subscription WHERE id = ?
+                        """).param(id).query(SUBSCRIPTION_MAPPER).optional();
+    }
+
+    public void insertReportSubscription(ReportSubscription s) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.report_subscription
+                            (id, name, report_code, channel, target, enabled, created_by)
+                        VALUES (:id, :name, :code, :channel, :target, :enabled, :actor)
+                        """)
+                .param("id", s.id()).param("name", s.name()).param("code", s.reportCode())
+                .param("channel", s.channel()).param("target", s.target())
+                .param("enabled", s.enabled()).param("actor", s.createdBy())
+                .update();
+    }
+
+    /** 更新订阅；返回 false 表示版本已被他人修改（CAS 失败）。 */
+    public boolean updateReportSubscription(UUID id, String name, String channel, String target,
+                                            boolean enabled, long version) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.report_subscription
+                           SET name = :name, channel = :channel, target = :target,
+                               enabled = :enabled, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("id", id).param("name", name).param("channel", channel)
+                .param("target", target).param("enabled", enabled).param("version", version)
+                .update() > 0;
+    }
+
+    /** 投递占位：同一订阅同一天唯一，返回 false 表示已存在（幂等）。 */
+    public boolean insertReportDeliveryIfAbsent(UUID id, UUID subscriptionId, String reportCode,
+                                                LocalDate reportDate, String payload) {
+        return jdbc.sql("""
+                        INSERT INTO clinical_svc.report_delivery
+                            (id, subscription_id, report_code, report_date, status, payload)
+                        VALUES (:id, :subId, :code, :day, 'PENDING', CAST(:payload AS jsonb))
+                        ON CONFLICT (subscription_id, report_date, report_code) DO NOTHING
+                        """)
+                .param("id", id).param("subId", subscriptionId).param("code", reportCode)
+                .param("day", reportDate).param("payload", payload)
+                .update() > 0;
+    }
+
+    public Optional<ReportDelivery> findReportDelivery(UUID subscriptionId, String reportCode,
+                                                       LocalDate reportDate) {
+        return jdbc.sql("""
+                        SELECT d.id, d.subscription_id, s.name AS subscription_name,
+                               d.report_code, d.report_date, d.status, d.attempts,
+                               d.last_error, d.created_at, d.sent_at
+                          FROM clinical_svc.report_delivery d
+                          JOIN clinical_svc.report_subscription s ON s.id = d.subscription_id
+                         WHERE d.subscription_id = :subId AND d.report_code = :code
+                           AND d.report_date = :day
+                        """)
+                .param("subId", subscriptionId).param("code", reportCode).param("day", reportDate)
+                .query(DELIVERY_MAPPER).optional();
+    }
+
+    /** 待投递/失败可重试的投递（attempts 小于上限），按创建时间升序。 */
+    public List<ReportDelivery> listRetryableReportDeliveries(int maxAttempts, int limit) {
+        return jdbc.sql("""
+                        SELECT d.id, d.subscription_id, s.name AS subscription_name,
+                               d.report_code, d.report_date, d.status, d.attempts,
+                               d.last_error, d.created_at, d.sent_at
+                          FROM clinical_svc.report_delivery d
+                          JOIN clinical_svc.report_subscription s ON s.id = d.subscription_id
+                         WHERE d.status IN ('PENDING', 'FAILED')
+                           AND d.attempts < :maxAttempts
+                           AND s.enabled
+                         ORDER BY d.created_at
+                         LIMIT :limit
+                        """)
+                .param("maxAttempts", maxAttempts).param("limit", limit)
+                .query(DELIVERY_MAPPER).list();
+    }
+
+    public List<ReportDelivery> listReportDeliveries(String status, int limit) {
+        String statusKey = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
+        return jdbc.sql("""
+                        SELECT d.id, d.subscription_id, s.name AS subscription_name,
+                               d.report_code, d.report_date, d.status, d.attempts,
+                               d.last_error, d.created_at, d.sent_at
+                          FROM clinical_svc.report_delivery d
+                          JOIN clinical_svc.report_subscription s ON s.id = d.subscription_id
+                         WHERE (CAST(:status AS text) IS NULL OR d.status = CAST(:status AS text))
+                         ORDER BY d.report_date DESC, d.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", statusKey).param("limit", limit)
+                .query(DELIVERY_MAPPER).list();
+    }
+
+    /** 回写投递结果：成功置 SENT 并记录 sent_at；失败累加 attempts 与错误。 */
+    public void markReportDelivery(UUID id, String status, int attempts, String lastError) {
+        jdbc.sql("""
+                        UPDATE clinical_svc.report_delivery
+                           SET status = :status, attempts = :attempts, last_error = :error,
+                               sent_at = CASE WHEN :status = 'SENT' THEN now() ELSE sent_at END,
+                               updated_at = now()
+                         WHERE id = :id
+                        """)
+                .param("id", id).param("status", status).param("attempts", attempts)
+                .param("error", lastError).update();
+    }
+
+    /** 读取已固化的投递内容（重试时必须复用首次生成的正文，避免口径漂移）。 */
+    public String reportDeliveryPayload(UUID id) {
+        return jdbc.sql("SELECT payload::text FROM clinical_svc.report_delivery WHERE id = ?")
+                .param(id).query(String.class).optional().orElse(null);
     }
 
     /** 门诊日结：按科室分账（当日已收）。 */

@@ -236,6 +236,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['kb:space:read'],
   },
   {
+    name: 'report-subscriptions',
+    path: '/report-subscriptions',
+    title: '报表订阅',
+    hint: '运营日报定时投递 · LOG/WEBHOOK 渠道 · 投递记录与手动补发',
+    icon: 'archive',
+    group: '报表与通知',
+    permissions: ['clinical:report:subscription:read'],
+  },
+  {
     name: 'system',
     path: '/system',
     title: '系统管理',
@@ -254,6 +263,7 @@ export const NAV_GROUPS = [
   '手术与收费',
   '医保结算',
   '质量与知识',
+  '报表与通知',
   '系统管理',
 ]
 

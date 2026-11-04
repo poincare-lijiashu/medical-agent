@@ -460,6 +460,19 @@ public final class ClinicalModel {
                                  String detail, String source, Instant updatedAt) {
     }
 
+    /** 报表订阅（G19）：LOG / WEBHOOK 两种渠道。 */
+    public record ReportSubscription(UUID id, String name, String reportCode, String channel,
+                                     String target, boolean enabled, long version,
+                                     String createdBy, Instant updatedAt) {
+    }
+
+    /** 报表投递记录（G19）：同一订阅同一天唯一。 */
+    public record ReportDelivery(UUID id, UUID subscriptionId, String subscriptionName,
+                                 String reportCode, LocalDate reportDate, String status,
+                                 int attempts, String lastError, Instant createdAt,
+                                 Instant sentAt) {
+    }
+
     /**
      * 收费票据（G14）。
      *

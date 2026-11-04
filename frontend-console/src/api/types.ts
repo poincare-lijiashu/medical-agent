@@ -192,6 +192,41 @@ export interface SnapshotCapture {
   source: string
 }
 
+// ---------------------------------------------------------------- 报表订阅（G19）
+
+export interface ReportSubscription {
+  id: string
+  name: string
+  reportCode: string
+  channel: 'LOG' | 'WEBHOOK'
+  target: string | null
+  enabled: boolean
+  version: number
+  createdBy: string
+  updatedAt: string
+}
+
+export interface ReportDelivery {
+  id: string
+  subscriptionId: string
+  subscriptionName: string
+  reportCode: string
+  reportDate: string
+  status: 'PENDING' | 'SENT' | 'FAILED'
+  attempts: number
+  lastError: string | null
+  createdAt: string
+  sentAt: string | null
+}
+
+export interface ReportSubscriptionInput {
+  name: string
+  channel: 'LOG' | 'WEBHOOK'
+  target?: string | null
+  enabled?: boolean
+  version?: number | null
+}
+
 export interface Ward {
   id: string
   code: string

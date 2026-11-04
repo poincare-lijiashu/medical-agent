@@ -232,7 +232,10 @@
               <td class="is-num" data-label="出库单数">{{ row.issueCount }}</td>
               <td class="is-num" data-label="出库金额">{{ money(row.issueAmount) }}</td>
               <td data-label="来源">
-                <StatusPill :status="row.source" />
+                <StatusPill
+                  :value="row.source"
+                  :label="row.source === 'SCHEDULED' ? '定时' : '手动'"
+                />
               </td>
             </tr>
           </tbody>
