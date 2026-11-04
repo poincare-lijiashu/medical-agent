@@ -257,6 +257,32 @@ public final class EmrModel {
     }
 
     /**
+     * 病案编码更正申请（G10）。
+     *
+     * <p>状态机：SUBMITTED → APPROVED / REJECTED；SUBMITTED 可撤回。
+     * 审批通过才回写首页快照；原 {@link HomepageCoding} 保持不可变，变更历史全部留在本表。
+     */
+    public record CodingCorrection(UUID id, String correctionNo, UUID homepageId, String status,
+                                   String reason, String diagnoses, String procedures, String note,
+                                   String createdBy, String reviewedBy, Instant reviewedAt,
+                                   String reviewNote, String cancelledBy, Instant cancelledAt,
+                                   String cancelReason, long version, Instant createdAt) {
+
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String APPROVED = "APPROVED";
+        public static final String REJECTED = "REJECTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean reviewable() {
+            return SUBMITTED.equals(status);
+        }
+
+        public boolean cancellable() {
+            return SUBMITTED.equals(status);
+        }
+    }
+
+    /**
      * 编码工作台队列行。
      *
      * <p>姓名在 SQL 内掩码，队列不批量下发 PHI；{@code codingStatus} 为 {@code PENDING}

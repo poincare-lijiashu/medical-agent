@@ -6,6 +6,8 @@ import com.medassist.common.security.DataScope;
 import com.medassist.emr.service.HomepageCodingService;
 import com.medassist.emr.service.IcdDictionaryService;
 import com.medassist.emr.web.EmrDtos.CodingDiagnosisReq;
+import com.medassist.emr.web.EmrDtos.CorrectionReasonReq;
+import com.medassist.emr.web.EmrDtos.CreateCorrectionReq;
 import com.medassist.emr.web.EmrDtos.IcdDiagnosisReq;
 import com.medassist.emr.web.EmrDtos.IcdToggleReq;
 import com.medassist.emr.web.EmrDtos.SaveCodingReq;
@@ -97,5 +99,52 @@ class CodingControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(codingService, never()).submit(any(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("编码更正申请：需要 emr:coding:correct")
+    void correctionSubmitRequiresCorrect() {
+        CreateCorrectionReq req = new CreateCorrectionReq("主诊断选错",
+                List.of(new CodingDiagnosisReq("I10.x00", true)), List.of(), null);
+
+        assertThatThrownBy(() -> codingController.submitCorrection(homepageId, req,
+                "emr:coding:write", "coder01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(codingService, never()).submitCorrection(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("编码更正审批：需要 emr:coding:approve（提交权不等于审批权）")
+    void correctionApproveRequiresApprove() {
+        assertThatThrownBy(() -> codingController.approveCorrection(homepageId, null,
+                "emr:coding:correct", "qc02"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(codingService, never()).approveCorrection(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("编码更正驳回：需要 emr:coding:approve")
+    void correctionRejectRequiresApprove() {
+        assertThatThrownBy(() -> codingController.rejectCorrection(homepageId,
+                new CorrectionReasonReq("依据不足"), "emr:coding:correct", "qc02"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(codingService, never()).rejectCorrection(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("编码更正撤回：需要 emr:coding:correct")
+    void correctionCancelRequiresCorrect() {
+        assertThatThrownBy(() -> codingController.cancelCorrection(homepageId,
+                new CorrectionReasonReq("重复提交"), "emr:coding:approve", "coder01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(codingService, never()).cancelCorrection(any(), any(), anyString());
     }
 }

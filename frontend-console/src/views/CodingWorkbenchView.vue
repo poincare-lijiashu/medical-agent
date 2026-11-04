@@ -374,6 +374,64 @@
           <span class="label">编码备注</span>
           <textarea v-model.trim="note" class="input" rows="2" maxlength="512" :disabled="!canWriteCoding" />
         </label>
+
+        <div v-if="coding.codingStatus === 'CODED'" class="detail-section">
+          <div class="detail-section-title">编码更正（四眼审批）</div>
+          <p class="muted correction-hint">
+            编码已完成不可直接改写：在上方调整诊断/手术后点「申请更正」，写明原因；另一名病案人员审批通过后才会回写首页。
+          </p>
+          <EmptyState
+            v-if="corrections.length === 0"
+            title="没有更正记录"
+            desc="编码提交后如需调整，走更正申请并留痕，不覆盖原编码记录。"
+          />
+          <div v-else class="table-wrap">
+            <table class="table table--stack table--compact">
+              <thead>
+                <tr>
+                  <th>单号</th>
+                  <th>状态</th>
+                  <th>申请</th>
+                  <th>审批</th>
+                  <th style="width: 180px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in corrections" :key="c.id">
+                  <td class="mono" data-primary>{{ c.correctionNo }}</td>
+                  <td data-label="状态">
+                    <span class="badge" :class="correctionTone(c.status)">{{ correctionLabel(c.status) }}</span>
+                  </td>
+                  <td data-label="申请">
+                    <div>{{ c.createdBy }} · {{ dateTime(c.createdAt) }}</div>
+                    <div class="muted small">{{ c.reason }}</div>
+                  </td>
+                  <td data-label="审批">
+                    <div>{{ c.reviewedBy || c.cancelledBy || '—' }}</div>
+                    <div v-if="c.reviewNote" class="muted small">{{ c.reviewNote }}</div>
+                    <div v-if="c.cancelReason" class="danger small">撤回：{{ c.cancelReason }}</div>
+                  </td>
+                  <td data-label="操作">
+                    <template v-if="c.status === 'SUBMITTED'">
+                      <template v-if="canApproveCorrection && !isSelfCorrection(c)">
+                        <button class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="openReview(c, 'approve')">
+                          通过
+                        </button>
+                        <button class="btn btn--sm" type="button" :disabled="busy" @click="openReview(c, 'reject')">
+                          驳回
+                        </button>
+                      </template>
+                      <button v-if="canCorrectCoding" class="btn btn--sm btn--ghost" type="button" :disabled="busy" @click="openCorrectionCancel(c)">
+                        撤回
+                      </button>
+                    </template>
+                    <span v-else class="muted">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <template #footer>
@@ -397,6 +455,16 @@
           @click="submitCoding"
         >
           提交编码
+        </button>
+        <button
+          v-if="canRequestCorrection"
+          class="btn btn--primary"
+          type="button"
+          :disabled="busy || !canSubmit || pendingCorrection !== undefined"
+          :title="pendingCorrection ? '已有待审批的更正申请' : ''"
+          @click="openCorrection"
+        >
+          {{ pendingCorrection ? '已有待审批更正' : '申请更正' }}
         </button>
       </template>
     </AppModal>
@@ -440,6 +508,63 @@
         </button>
       </template>
     </AppModal>
+
+    <!-- 申请编码更正 -->
+    <AppModal v-model="correctionOpen" title="申请编码更正" :subtitle="coding?.homepageNo" width="520px">
+      <p class="muted correction-hint">
+        将以上方当前的诊断/手术编码作为更正后内容提交；审批通过前不影响首页快照，原编码记录保持不变。
+      </p>
+      <div class="correction-summary">
+        <span class="badge badge--neutral">诊断 {{ diagnoses.length }} 条</span>
+        <span class="badge badge--neutral">手术 {{ procedures.length }} 条</span>
+      </div>
+      <label class="field">
+        <span class="label">更正原因（必填）</span>
+        <input v-model.trim="correctionReason" class="input" maxlength="200" placeholder="例如：主诊断与病历依据不符" />
+      </label>
+      <template #footer>
+        <button class="btn" type="button" @click="correctionOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || !correctionReason" @click="submitCorrection">
+          提交更正申请
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 审批 / 驳回更正 -->
+    <AppModal
+      v-model="reviewOpen"
+      :title="reviewMode === 'approve' ? '审批更正申请' : '驳回更正申请'"
+      :subtitle="reviewTarget?.correctionNo"
+      width="480px"
+    >
+      <p class="muted correction-hint">
+        {{ reviewMode === 'approve' ? '通过后会把更正内容回写首页快照，操作不可撤销。' : '驳回后不回写首页，库存与编码内容均不变。' }}
+      </p>
+      <label class="field">
+        <span class="label">{{ reviewMode === 'approve' ? '审批意见（可选）' : '驳回原因（必填）' }}</span>
+        <input v-model.trim="reviewText" class="input" maxlength="200" placeholder="例如：依据充分 / 编码依据不足" />
+      </label>
+      <template #footer>
+        <button class="btn" type="button" @click="reviewOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || (reviewMode === 'reject' && !reviewText)" @click="submitReview">
+          {{ reviewMode === 'approve' ? '确认通过并回写首页' : '确认驳回' }}
+        </button>
+      </template>
+    </AppModal>
+
+    <!-- 撤回更正 -->
+    <AppModal v-model="correctionCancelOpen" title="撤回更正申请" :subtitle="reviewTarget?.correctionNo" width="480px">
+      <label class="field">
+        <span class="label">撤回原因（必填）</span>
+        <input v-model.trim="reviewText" class="input" maxlength="200" placeholder="例如：重复提交 / 已线下沟通" />
+      </label>
+      <template #footer>
+        <button class="btn" type="button" @click="correctionCancelOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || !reviewText" @click="submitCorrectionCancel">
+          确认撤回
+        </button>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -456,6 +581,8 @@ import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { codingApi } from '@/api'
 import { errorText } from '@/api/http'
 import type {
+  CodingCorrection,
+  CodingCorrectionStatus,
   CodingDiagnosisRow,
   CodingProcedureRow,
   CodingQueueItem,
@@ -473,6 +600,8 @@ const role = session.roleLabel
 const canWriteCoding = computed(() => hasPermission('emr:coding:write'))
 const canSubmitCoding = computed(() => hasPermission('emr:coding:submit'))
 const canManageIcd = computed(() => hasPermission('emr:icd:manage'))
+const canCorrectCoding = computed(() => hasPermission('emr:coding:correct'))
+const canApproveCorrection = computed(() => hasPermission('emr:coding:approve'))
 
 type Tab = 'queue' | 'icd'
 const tab = ref<Tab>('queue')
@@ -588,6 +717,45 @@ const opKeyword = ref('')
 const dxResults = ref<IcdDiagnosis[]>([])
 const opResults = ref<IcdProcedure[]>([])
 
+// ---- 编码更正（G10）----
+const corrections = ref<CodingCorrection[]>([])
+const correctionOpen = ref(false)
+const correctionReason = ref('')
+const reviewOpen = ref(false)
+const reviewMode = ref<'approve' | 'reject'>('approve')
+const reviewTarget = ref<CodingCorrection | null>(null)
+const reviewText = ref('')
+const correctionCancelOpen = ref(false)
+
+const pendingCorrection = computed(() =>
+  corrections.value.find((c) => c.status === 'SUBMITTED'),
+)
+const canRequestCorrection = computed(
+  () =>
+    canCorrectCoding.value &&
+    coding.value?.codingStatus === 'CODED' &&
+    coding.value?.homepageStatus === 'SUBMITTED',
+)
+
+function correctionLabel(status: CodingCorrectionStatus): string {
+  return { SUBMITTED: '待审批', APPROVED: '已通过', REJECTED: '已驳回', CANCELLED: '已撤回' }[status]
+}
+
+function correctionTone(status: CodingCorrectionStatus): string {
+  return status === 'APPROVED'
+    ? 'badge--ok'
+    : status === 'REJECTED'
+      ? 'badge--danger'
+      : status === 'SUBMITTED'
+        ? 'badge--warn'
+        : 'badge--neutral'
+}
+
+/** 四眼：审批人不能是申请人（服务端仍强校验）。 */
+function isSelfCorrection(c: CodingCorrection): boolean {
+  return c.createdBy === session.user.value?.username
+}
+
 const canSave = computed(() => diagnoses.value.length > 0 && !!coding.value)
 const canSubmit = computed(
   () => diagnoses.value.length > 0 && diagnoses.value.filter((d) => d.primary).length === 1,
@@ -607,10 +775,130 @@ async function openCoding(homepageId: string) {
     diagnoses.value = view.diagnoses.map((d) => ({ code: d.code, name: d.name, primary: !!d.primary }))
     procedures.value = view.procedures.map((p) => ({ ...p }))
     note.value = view.note ?? ''
+    await loadCorrections(homepageId)
   } catch (e) {
     toast.error('编码详情加载失败', errorText(e))
   } finally {
     codingLoading.value = false
+  }
+}
+
+async function loadCorrections(homepageId: string) {
+  try {
+    corrections.value = await codingApi.corrections(homepageId, 20)
+  } catch (e) {
+    corrections.value = []
+    toast.error('更正记录加载失败', errorText(e))
+  }
+}
+
+/** 更正审批/提交后刷新：详情内容以最新的已通过更正为准。 */
+async function refreshCoding() {
+  const homepageId = coding.value?.homepageId
+  if (!homepageId) return
+  const view = await codingApi.detail(homepageId)
+  coding.value = view
+  diagnoses.value = view.diagnoses.map((d) => ({ code: d.code, name: d.name, primary: !!d.primary }))
+  procedures.value = view.procedures.map((p) => ({ ...p }))
+  note.value = view.note ?? ''
+  await loadCorrections(homepageId)
+}
+
+function openCorrection() {
+  correctionReason.value = ''
+  correctionOpen.value = true
+}
+
+async function submitCorrection() {
+  if (!coding.value || busy.value) return
+  if (!correctionReason.value) {
+    toast.error('请填写更正原因')
+    return
+  }
+  if (diagnoses.value.filter((d) => d.primary).length !== 1) {
+    toast.error('主诊断必须且只能有一个')
+    return
+  }
+  busy.value = true
+  try {
+    await codingApi.createCorrection(coding.value.homepageId, {
+      reason: correctionReason.value,
+      diagnoses: diagnoses.value.map((d) => ({ code: d.code, primary: !!d.primary })),
+      procedures: procedures.value.map((p) => ({
+        code: p.code,
+        date: p.date || undefined,
+        surgeon: p.surgeon || undefined,
+        anesthesia: p.anesthesia || undefined,
+        incisionLevel: p.incisionLevel || undefined,
+      })),
+      note: note.value || undefined,
+    })
+    correctionOpen.value = false
+    toast.ok('更正申请已提交', '等待另一名病案人员审批')
+    await refreshCoding()
+  } catch (e) {
+    toast.error('提交更正失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+function openReview(c: CodingCorrection, mode: 'approve' | 'reject') {
+  reviewTarget.value = c
+  reviewMode.value = mode
+  reviewText.value = ''
+  reviewOpen.value = true
+}
+
+async function submitReview() {
+  const target = reviewTarget.value
+  if (!target || busy.value) return
+  if (reviewMode.value === 'reject' && !reviewText.value) {
+    toast.error('驳回必须填写原因')
+    return
+  }
+  busy.value = true
+  try {
+    if (reviewMode.value === 'approve') {
+      await codingApi.approveCorrection(target.id, reviewText.value || undefined)
+      toast.ok('更正已通过', '首页诊断/手术快照已回写')
+    } else {
+      await codingApi.rejectCorrection(target.id, reviewText.value)
+      toast.ok('更正已驳回', '首页内容未变动')
+    }
+    reviewOpen.value = false
+    await refreshCoding()
+    await Promise.all([loadSummary(), loadQueue()])
+  } catch (e) {
+    toast.error(reviewMode.value === 'approve' ? '审批失败' : '驳回失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+function openCorrectionCancel(c: CodingCorrection) {
+  reviewTarget.value = c
+  reviewText.value = ''
+  correctionCancelOpen.value = true
+}
+
+async function submitCorrectionCancel() {
+  const target = reviewTarget.value
+  if (!target || busy.value) return
+  if (!reviewText.value) {
+    toast.error('撤回必须填写原因')
+    return
+  }
+  busy.value = true
+  try {
+    await codingApi.cancelCorrection(target.id, reviewText.value)
+    correctionCancelOpen.value = false
+    toast.ok('更正申请已撤回')
+    await refreshCoding()
+  } catch (e) {
+    toast.error('撤回失败', errorText(e))
+  } finally {
+    busy.value = false
   }
 }
 
@@ -839,5 +1127,20 @@ async function toggleIcdProcedure(item: IcdProcedure) {
   align-items: center;
   gap: 6px;
   cursor: pointer;
+}
+.correction-hint {
+  margin: 0 0 var(--s2);
+  font-size: var(--fs-small);
+}
+.correction-summary {
+  display: flex;
+  gap: var(--s2);
+  margin-bottom: var(--s3);
+}
+.small {
+  font-size: var(--fs-small);
+}
+.danger {
+  color: var(--danger);
 }
 </style>

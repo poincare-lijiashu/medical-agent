@@ -290,4 +290,32 @@ public final class EmrDtos {
     public record CodingSummary(long pendingCount, long codedCount,
                                 long icdDiagnosisCount, long icdProcedureCount) {
     }
+
+    // ---------------------------------------------------------------- 编码更正（G10）
+
+    /** 提交编码更正：写明原因与拟更正后的完整编码内容。 */
+    public record CreateCorrectionReq(
+            @NotBlank @Size(max = 200) String reason,
+            @NotNull @Size(min = 1, max = 50) List<@Valid CodingDiagnosisReq> diagnoses,
+            @Size(max = 50) List<@Valid CodingProcedureReq> procedures,
+            @Size(max = 512) String note) {
+    }
+
+    /** 驳回 / 撤回原因。 */
+    public record CorrectionReasonReq(@NotBlank @Size(max = 200) String reason) {
+    }
+
+    /** 审批意见（可选）。 */
+    public record ReviewCorrectionReq(@Size(max = 200) String note) {
+    }
+
+    /** 更正申请视图：带拟更正的诊断/手术内容，便于审批人对照。 */
+    public record CodingCorrectionView(
+            java.util.UUID id, String correctionNo, java.util.UUID homepageId, String status,
+            String reason, String createdBy, java.time.Instant createdAt,
+            String reviewedBy, java.time.Instant reviewedAt, String reviewNote,
+            String cancelledBy, java.time.Instant cancelledAt, String cancelReason,
+            List<Map<String, Object>> diagnoses, List<Map<String, Object>> procedures,
+            String note, long version) {
+    }
 }

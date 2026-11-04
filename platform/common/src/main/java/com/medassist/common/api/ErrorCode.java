@@ -181,6 +181,15 @@ public enum ErrorCode {
     HOMEPAGE_NOT_CODED(47433, "病案首页尚未完成编码，不能归档"),
     CODING_STATUS_INVALID(47434, "当前编码状态不允许该操作"),
 
+    // ---- 病案编码更正（47xxx 续，G10）----
+    CODING_CORRECTION_NOT_FOUND(47440, "未找到该编码更正申请"),
+    CODING_CORRECTION_INVALID(47441, "编码更正内容不合法，或该病案已有待审批的更正申请"),
+    CODING_CORRECTION_STATUS_INVALID(47442, "当前更正申请状态不允许该操作"),
+    CODING_CORRECTION_SELF_REVIEW(47443, "不能审批自己提交的编码更正申请"),
+    CODING_CORRECTION_REASON_REQUIRED(47444, "驳回编码更正必须填写原因"),
+    CODING_CORRECTION_CANCEL_REASON_REQUIRED(47445, "撤回编码更正必须填写原因"),
+    CODING_CORRECTION_NOT_CODED(47446, "病案尚未完成编码，不能申请更正"),
+
     // ---- 医保（48xxx）----
     INSURANCE_ITEM_NOT_FOUND(48401, "未找到该医保目录项目"),
     INSURANCE_MEMBER_NOT_FOUND(48402, "未找到该患者的参保登记"),

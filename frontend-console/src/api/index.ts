@@ -73,6 +73,7 @@ import type {
   CodingQueueItem,
   CodingSummary,
   CodingView,
+  CodingCorrection,
   IcdDiagnosis,
   IcdProcedure,
   RegSlot,
@@ -525,6 +526,32 @@ export const codingApi = {
   ) => put<CodingView>(`/emr/coding/${homepageId}`, body),
   /** 提交编码：主诊断必须唯一；成功后回写首页诊断/手术。 */
   submit: (homepageId: string) => post<CodingView>(`/emr/coding/${homepageId}/submit`),
+
+  // ---- 编码更正（G10）----
+  corrections: (homepageId: string, limit = 20) =>
+    get<CodingCorrection[]>(`/emr/coding/${homepageId}/corrections`, { limit }),
+  createCorrection: (
+    homepageId: string,
+    body: {
+      reason: string
+      diagnoses: { code: string; primary: boolean }[]
+      procedures: {
+        code: string
+        date?: string
+        surgeon?: string
+        anesthesia?: string
+        incisionLevel?: string
+      }[]
+      note?: string
+    },
+  ) => post<CodingCorrection>(`/emr/coding/${homepageId}/corrections`, body),
+  /** 审批通过：回写首页快照（四眼由服务端强制）。 */
+  approveCorrection: (id: string, note?: string) =>
+    post<CodingCorrection>(`/emr/coding/corrections/${id}/approve`, { note }),
+  rejectCorrection: (id: string, reason: string) =>
+    post<CodingCorrection>(`/emr/coding/corrections/${id}/reject`, { reason }),
+  cancelCorrection: (id: string, reason: string) =>
+    post<CodingCorrection>(`/emr/coding/corrections/${id}/cancel`, { reason }),
   icdDiagnoses: (keyword?: string, enabled?: boolean, limit = 100) =>
     get<IcdDiagnosis[]>('/emr/icd/diagnoses', { keyword, enabled, limit }),
   icdProcedures: (keyword?: string, enabled?: boolean, limit = 100) =>

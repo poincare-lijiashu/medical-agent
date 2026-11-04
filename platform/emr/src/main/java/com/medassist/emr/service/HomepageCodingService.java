@@ -3,6 +3,7 @@ package com.medassist.emr.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
+import com.medassist.emr.domain.EmrModel.CodingCorrection;
 import com.medassist.emr.domain.EmrModel.CodingQueueItem;
 import com.medassist.emr.domain.EmrModel.Homepage;
 import com.medassist.emr.domain.EmrModel.HomepageCoding;
@@ -13,6 +14,10 @@ import com.medassist.emr.web.EmrDtos.CodingDiagnosisReq;
 import com.medassist.emr.web.EmrDtos.CodingProcedureReq;
 import com.medassist.emr.web.EmrDtos.CodingSummary;
 import com.medassist.emr.web.EmrDtos.CodingView;
+import com.medassist.emr.web.EmrDtos.CorrectionReasonReq;
+import com.medassist.emr.web.EmrDtos.CreateCorrectionReq;
+import com.medassist.emr.web.EmrDtos.ReviewCorrectionReq;
+import com.medassist.emr.web.EmrDtos.CodingCorrectionView;
 import com.medassist.emr.web.EmrDtos.SaveCodingReq;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -77,8 +82,12 @@ public class HomepageCodingService {
         Homepage homepage = repo.findHomepage(homepageId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
         Optional<HomepageCoding> coding = repo.findCoding(homepageId);
-        String diagnosesJson = coding.map(HomepageCoding::diagnoses).orElse(homepage.diagnoses());
-        String proceduresJson = coding.map(HomepageCoding::procedures).orElse(homepage.procedures());
+        // 已审批的更正优先生效：homepage_coding 不可变，更正历史独立留痕
+        Optional<CodingCorrection> approved = repo.findLatestApprovedCorrection(homepageId);
+        String diagnosesJson = approved.map(CodingCorrection::diagnoses)
+                .orElse(coding.map(HomepageCoding::diagnoses).orElse(homepage.diagnoses()));
+        String proceduresJson = approved.map(CodingCorrection::procedures)
+                .orElse(coding.map(HomepageCoding::procedures).orElse(homepage.procedures()));
         return new CodingView(homepage.id(), homepage.homepageNo(),
                 scope.maskPatientNo(homepage.patientNo()), maskName(homepage.patientName()),
                 homepage.deptName(), homepage.dischargedAt(), homepage.stayDays(),
@@ -173,7 +182,165 @@ public class HomepageCodingService {
         return detail(homepageId, scope);
     }
 
+    // ---------------------------------------------------------------- 编码更正（G10）
+
+    /** 提交编码更正申请：编码已完成后才能申请；同一首页同时只能有一张待审批申请。 */
+    @Transactional
+    public CodingCorrectionView submitCorrection(UUID homepageId, CreateCorrectionReq req,
+                                                 String actor) {
+        String operator = requireActor(actor);
+        Homepage homepage = repo.findHomepage(homepageId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+        if (!Homepage.SUBMITTED.equals(homepage.status())) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "只有已提交且未归档的病案首页可以申请编码更正，当前：" + homepage.status());
+        }
+        HomepageCoding coding = repo.findCoding(homepageId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CODING_CORRECTION_NOT_CODED));
+        if (!coding.coded()) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_NOT_CODED);
+        }
+        Built built = build(new SaveCodingReq(req.diagnoses(), req.procedures(),
+                blankToNull(req.note()), 0L));
+        CodingCorrection correction = new CodingCorrection(UUID.randomUUID(),
+                repo.nextCorrectionNo(), homepageId, CodingCorrection.SUBMITTED,
+                req.reason().trim(), built.diagnosesJson(), built.proceduresJson(),
+                blankToNull(req.note()), operator, null, null, null, null, null, null, 0L,
+                Instant.now());
+        if (!repo.insertCorrection(correction)) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_INVALID,
+                    "该病案已有待审批的更正申请，请等待审批或先撤回");
+        }
+        audit(operator, "CODING_CORRECTION_SUBMIT", homepageId.toString(), detail()
+                .put("homepageNo", homepage.homepageNo())
+                .put("correctionNo", correction.correctionNo())
+                .put("reason", correction.reason())
+                .put("diagnoses", built.diagnosisCount())
+                .put("procedures", built.procedureCount())
+                .build());
+        return correctionView(correction.id());
+    }
+
+    /** 更正申请列表（含历史）；已审批内容由 {@link #detail} 优先生效。 */
+    public List<CodingCorrectionView> corrections(UUID homepageId, Integer limit) {
+        repo.findHomepage(homepageId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+        int size = limit == null || limit <= 0 ? 20 : Math.min(limit, 100);
+        return repo.listCorrections(homepageId, size).stream().map(this::toView).toList();
+    }
+
+    /** 审批通过：把拟更正内容回写首页快照（首页必须仍为 SUBMITTED，已归档不可改）。 */
+    @Transactional
+    public CodingCorrectionView approveCorrection(UUID id, ReviewCorrectionReq req, String actor) {
+        String operator = requireActor(actor);
+        CodingCorrection correction = lockCorrection(id);
+        requireCorrectionReviewable(correction);
+        requireFourEyes(correction, operator);
+        Homepage homepage = repo.lockHomepage(correction.homepageId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+        if (!Homepage.SUBMITTED.equals(homepage.status())) {
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
+                    "病案首页当前状态为 " + homepage.status() + "，不能回写更正内容");
+        }
+        if (!repo.applyCodedSnapshot(homepage.id(), correction.diagnoses(),
+                correction.procedures(), homepage.coder(), homepage.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "病案首页已被他人修改（可能已归档），更正内容未能回写");
+        }
+        String note = req == null ? null : blankToNull(req.note());
+        if (!repo.reviewCorrection(id, correction.version(), operator, true, note)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "更正申请已变化，请刷新后重试");
+        }
+        audit(operator, "CODING_CORRECTION_APPROVE", correction.homepageId().toString(), detail()
+                .put("homepageNo", homepage.homepageNo())
+                .put("correctionNo", correction.correctionNo())
+                .put("reason", correction.reason())
+                .build());
+        return correctionView(id);
+    }
+
+    /** 驳回：必须写原因，不回写首页。 */
+    @Transactional
+    public CodingCorrectionView rejectCorrection(UUID id, CorrectionReasonReq req, String actor) {
+        String operator = requireActor(actor);
+        String reason = req == null ? null : blankToNull(req.reason());
+        if (reason == null) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_REASON_REQUIRED);
+        }
+        CodingCorrection correction = lockCorrection(id);
+        requireCorrectionReviewable(correction);
+        requireFourEyes(correction, operator);
+        if (!repo.reviewCorrection(id, correction.version(), operator, false, reason)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "更正申请已变化，请刷新后重试");
+        }
+        audit(operator, "CODING_CORRECTION_REJECT", correction.homepageId().toString(), detail()
+                .put("correctionNo", correction.correctionNo())
+                .put("reason", reason)
+                .build());
+        return correctionView(id);
+    }
+
+    /** 撤回：仅 SUBMITTED，必须写原因，不回写首页。 */
+    @Transactional
+    public CodingCorrectionView cancelCorrection(UUID id, CorrectionReasonReq req, String actor) {
+        String operator = requireActor(actor);
+        String reason = req == null ? null : blankToNull(req.reason());
+        if (reason == null) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_CANCEL_REASON_REQUIRED);
+        }
+        CodingCorrection correction = lockCorrection(id);
+        if (!correction.cancellable()) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_STATUS_INVALID,
+                    "更正申请当前状态为 " + correction.status() + "，不能撤回");
+        }
+        if (!repo.cancelCorrection(id, correction.version(), operator, reason)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "更正申请已变化，请刷新后重试");
+        }
+        audit(operator, "CODING_CORRECTION_CANCEL", correction.homepageId().toString(), detail()
+                .put("correctionNo", correction.correctionNo())
+                .put("reason", reason)
+                .build());
+        return correctionView(id);
+    }
+
     // ---------------------------------------------------------------- 内部
+
+    private CodingCorrection lockCorrection(UUID id) {
+        return repo.lockCorrection(id).orElseThrow(
+                () -> new BusinessException(ErrorCode.CODING_CORRECTION_NOT_FOUND));
+    }
+
+    private CodingCorrectionView correctionView(UUID id) {
+        return toView(repo.findCorrection(id).orElseThrow(
+                () -> new BusinessException(ErrorCode.CODING_CORRECTION_NOT_FOUND)));
+    }
+
+    private CodingCorrectionView toView(CodingCorrection c) {
+        return new CodingCorrectionView(c.id(), c.correctionNo(), c.homepageId(), c.status(),
+                c.reason(), c.createdBy(), c.createdAt(), c.reviewedBy(), c.reviewedAt(),
+                c.reviewNote(), c.cancelledBy(), c.cancelledAt(), c.cancelReason(),
+                readJsonList(c.diagnoses()), readJsonList(c.procedures()), c.note(), c.version());
+    }
+
+    private static void requireCorrectionReviewable(CodingCorrection correction) {
+        if (!correction.reviewable()) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_STATUS_INVALID,
+                    "更正申请当前状态为 " + correction.status() + "，不能审批");
+        }
+    }
+
+    private static void requireFourEyes(CodingCorrection correction, String operator) {
+        if (operator.equals(correction.createdBy())) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_SELF_REVIEW);
+        }
+    }
+
+    private static String requireActor(String actor) {
+        if (actor == null || actor.isBlank()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "缺少操作人，不能执行编码更正操作");
+        }
+        return actor.trim();
+    }
 
     private Built build(SaveCodingReq req) {
         if (req.diagnoses() == null || req.diagnoses().isEmpty()) {

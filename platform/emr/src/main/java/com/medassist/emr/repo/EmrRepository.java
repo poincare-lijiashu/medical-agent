@@ -3,6 +3,7 @@ package com.medassist.emr.repo;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
+import com.medassist.emr.domain.EmrModel.CodingCorrection;
 import com.medassist.emr.domain.EmrModel.CodingQueueItem;
 import com.medassist.emr.domain.EmrModel.Homepage;
 import com.medassist.emr.domain.EmrModel.HomepageCoding;
@@ -1329,6 +1330,123 @@ public class EmrRepository {
                 .param("diagnoses", diagnoses).param("procedures", procedures)
                 .param("coder", coder).param("id", homepageId)
                 .param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 编码更正（G10）
+
+    private static final RowMapper<CodingCorrection> CORRECTION_MAPPER =
+            (rs, i) -> new CodingCorrection(
+                    rs.getObject("id", UUID.class), rs.getString("correction_no"),
+                    rs.getObject("homepage_id", UUID.class), rs.getString("status"),
+                    rs.getString("reason"), rs.getString("diagnoses"),
+                    rs.getString("procedures"), rs.getString("note"),
+                    rs.getString("created_by"), rs.getString("reviewed_by"),
+                    instant(rs, "reviewed_at"), rs.getString("review_note"),
+                    rs.getString("cancelled_by"), instant(rs, "cancelled_at"),
+                    rs.getString("cancel_reason"), rs.getLong("version"),
+                    instant(rs, "created_at"));
+
+    public String nextCorrectionNo() {
+        Long seq = jdbc.sql("SELECT nextval(CAST(:seq AS regclass))")
+                .param("seq", "emr_svc.coding_correction_no_seq").query(Long.class).single();
+        return "CC" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq == null ? 0 : seq);
+    }
+
+    /**
+     * 插入更正申请；同一首页已有待审批申请时返回 false（部分唯一索引兜底并发）。
+     */
+    public boolean insertCorrection(CodingCorrection c) {
+        return jdbc.sql("""
+                        INSERT INTO emr_svc.coding_correction
+                            (id, correction_no, homepage_id, status, reason, diagnoses,
+                             procedures, note, created_by, version)
+                        VALUES (:id, :no, :homepageId, :status, :reason,
+                                CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb),
+                                CAST(:note AS text), :createdBy, 0)
+                        ON CONFLICT (homepage_id) WHERE status = 'SUBMITTED' DO NOTHING
+                        """)
+                .param("id", c.id()).param("no", c.correctionNo())
+                .param("homepageId", c.homepageId()).param("status", c.status())
+                .param("reason", c.reason()).param("diagnoses", c.diagnoses())
+                .param("procedures", c.procedures()).param("note", c.note())
+                .param("createdBy", c.createdBy()).update() > 0;
+    }
+
+    public Optional<CodingCorrection> findCorrection(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, correction_no, homepage_id, status, reason, diagnoses,
+                               procedures, note, created_by, reviewed_by, reviewed_at,
+                               review_note, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM emr_svc.coding_correction WHERE id = ?
+                        """).param(id).query(CORRECTION_MAPPER).optional();
+    }
+
+    /** 加行锁读取更正申请；审批/驳回/撤回前必须调用。 */
+    public Optional<CodingCorrection> lockCorrection(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, correction_no, homepage_id, status, reason, diagnoses,
+                               procedures, note, created_by, reviewed_by, reviewed_at,
+                               review_note, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM emr_svc.coding_correction WHERE id = ? FOR UPDATE
+                        """).param(id).query(CORRECTION_MAPPER).optional();
+    }
+
+    public List<CodingCorrection> listCorrections(UUID homepageId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, correction_no, homepage_id, status, reason, diagnoses,
+                               procedures, note, created_by, reviewed_by, reviewed_at,
+                               review_note, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM emr_svc.coding_correction
+                         WHERE homepage_id = :homepageId
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """).param("homepageId", homepageId).param("limit", limit)
+                .query(CORRECTION_MAPPER).list();
+    }
+
+    /** 最近一次审批通过的更正内容：编码详情以此为准（原编码记录保持不可变）。 */
+    public Optional<CodingCorrection> findLatestApprovedCorrection(UUID homepageId) {
+        return jdbc.sql("""
+                        SELECT id, correction_no, homepage_id, status, reason, diagnoses,
+                               procedures, note, created_by, reviewed_by, reviewed_at,
+                               review_note, cancelled_by, cancelled_at, cancel_reason,
+                               version, created_at
+                          FROM emr_svc.coding_correction
+                         WHERE homepage_id = ? AND status = 'APPROVED'
+                         ORDER BY reviewed_at DESC NULLS LAST, created_at DESC
+                         LIMIT 1
+                        """).param(homepageId).query(CORRECTION_MAPPER).optional();
+    }
+
+    /** 审批 CAS：仅 SUBMITTED 可流转。 */
+    public boolean reviewCorrection(UUID id, long expectedVersion, String actor, boolean approved,
+                                    String note) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.coding_correction
+                           SET status = :status, reviewed_by = :actor, reviewed_at = now(),
+                               review_note = CAST(:note AS text), version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("status", approved ? CodingCorrection.APPROVED
+                        : CodingCorrection.REJECTED)
+                .param("actor", actor).param("note", note)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean cancelCorrection(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.coding_correction
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancel_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("actor", actor).param("reason", reason)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     /** 待编码队列：已提交且编码未完成（无编码记录或仍为 CODING）。 */

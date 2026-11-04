@@ -6,8 +6,12 @@ import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.emr.domain.EmrModel.CodingQueueItem;
 import com.medassist.emr.service.HomepageCodingService;
+import com.medassist.emr.web.EmrDtos.CodingCorrectionView;
 import com.medassist.emr.web.EmrDtos.CodingSummary;
 import com.medassist.emr.web.EmrDtos.CodingView;
+import com.medassist.emr.web.EmrDtos.CorrectionReasonReq;
+import com.medassist.emr.web.EmrDtos.CreateCorrectionReq;
+import com.medassist.emr.web.EmrDtos.ReviewCorrectionReq;
 import com.medassist.emr.web.EmrDtos.SaveCodingReq;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -41,6 +45,8 @@ public class CodingController {
     private static final String READ = "emr:coding:read";
     private static final String WRITE = "emr:coding:write";
     private static final String SUBMIT = "emr:coding:submit";
+    private static final String CORRECT = "emr:coding:correct";
+    private static final String APPROVE = "emr:coding:approve";
 
     private final HomepageCodingService service;
 
@@ -97,5 +103,61 @@ public class CodingController {
             DataScope scope) {
         Permissions.require(permissions, SUBMIT);
         return ApiResponse.ok(service.submit(homepageId, actor, scope));
+    }
+
+    // ---------------------------------------------------------------- 编码更正（G10）
+
+    /** 更正申请列表：含历史与审批意见。 */
+    @GetMapping("/{homepageId}/corrections")
+    public ApiResponse<List<CodingCorrectionView>> corrections(
+            @PathVariable UUID homepageId,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.corrections(homepageId, limit));
+    }
+
+    /** 提交更正申请：编码完成后才可申请；同一首页同时只能有一张待审批申请。 */
+    @PostMapping("/{homepageId}/corrections")
+    public ApiResponse<CodingCorrectionView> submitCorrection(
+            @PathVariable UUID homepageId,
+            @Valid @RequestBody CreateCorrectionReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, CORRECT);
+        return ApiResponse.ok(service.submitCorrection(homepageId, req, actor));
+    }
+
+    /** 审批通过：回写首页快照（四眼由服务层强制）。 */
+    @PostMapping("/corrections/{id}/approve")
+    public ApiResponse<CodingCorrectionView> approveCorrection(
+            @PathVariable UUID id,
+            @RequestBody(required = false) ReviewCorrectionReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, APPROVE);
+        return ApiResponse.ok(service.approveCorrection(id, req, actor));
+    }
+
+    /** 驳回：必须写原因，不回写首页。 */
+    @PostMapping("/corrections/{id}/reject")
+    public ApiResponse<CodingCorrectionView> rejectCorrection(
+            @PathVariable UUID id,
+            @Valid @RequestBody CorrectionReasonReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, APPROVE);
+        return ApiResponse.ok(service.rejectCorrection(id, req, actor));
+    }
+
+    /** 撤回：仅待审批可撤回，必须写原因。 */
+    @PostMapping("/corrections/{id}/cancel")
+    public ApiResponse<CodingCorrectionView> cancelCorrection(
+            @PathVariable UUID id,
+            @Valid @RequestBody CorrectionReasonReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, CORRECT);
+        return ApiResponse.ok(service.cancelCorrection(id, req, actor));
     }
 }

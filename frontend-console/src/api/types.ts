@@ -1261,6 +1261,31 @@ export interface CodingSummary {
   icdProcedureCount: number
 }
 
+// ---------------------------------------------------------------- 编码更正（G10）
+
+export type CodingCorrectionStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED'
+
+/** 编码更正申请：审批通过后内容回写首页快照，原编码记录保持不可变。 */
+export interface CodingCorrection {
+  id: string
+  correctionNo: string
+  homepageId: string
+  status: CodingCorrectionStatus
+  reason: string
+  createdBy: string
+  createdAt: string
+  reviewedBy: string | null
+  reviewedAt: string | null
+  reviewNote: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  diagnoses: CodingDiagnosisRow[]
+  procedures: CodingProcedureRow[]
+  note: string | null
+  version: number
+}
+
 
 
 /** 处方主体（金额为价格快照，不受后续调价影响）。 */

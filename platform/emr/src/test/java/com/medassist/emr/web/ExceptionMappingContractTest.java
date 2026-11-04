@@ -48,6 +48,16 @@ class ExceptionMappingContractTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(handler.statusOf(ErrorCode.ICD_ITEM_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(handler.statusOf(ErrorCode.CODING_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CODING_CORRECTION_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CODING_CORRECTION_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CODING_CORRECTION_NOT_CODED))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CODING_CORRECTION_SELF_REVIEW))
+                .isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(handler.statusOf(ErrorCode.CODING_CORRECTION_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test
