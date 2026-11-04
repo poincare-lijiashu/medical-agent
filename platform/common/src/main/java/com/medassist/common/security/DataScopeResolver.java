@@ -30,15 +30,25 @@ public final class DataScopeResolver {
     }
 
     /**
+     * 解析数据范围（兼容旧调用：无院区头时视为不限制院区）。
+     */
+    public static DataScope resolve(String actorHeader, String rolesHeader,
+                                    String permissionsHeader, String orgHeader) {
+        return resolve(actorHeader, rolesHeader, permissionsHeader, orgHeader, null);
+    }
+
+    /**
      * 解析数据范围。
      *
      * @param actorHeader        {@code X-Actor}
      * @param rolesHeader        {@code X-Roles}（英文逗号分隔）
      * @param permissionsHeader  {@code X-Permissions}（英文逗号分隔）
      * @param orgHeader          {@code X-Org}（科室 UUID，多科室执业时英文逗号分隔）
+     * @param campusHeader       {@code X-Campus}（院区 UUID，多院区执业时英文逗号分隔）
      */
     public static DataScope resolve(String actorHeader, String rolesHeader,
-                                    String permissionsHeader, String orgHeader) {
+                                    String permissionsHeader, String orgHeader,
+                                    String campusHeader) {
         Set<String> roles = splitToUpperSet(rolesHeader);
         if (roles.isEmpty()) {
             throw new BusinessException(ErrorCode.FORBIDDEN,
@@ -47,14 +57,20 @@ public final class DataScopeResolver {
         boolean phiReadable = Permissions.has(permissionsHeader, DataScope.PHI_READ);
         boolean allDepartments = roles.stream().anyMatch(DataScope::isAllDepartmentRole);
 
+        Set<UUID> campuses = parseIds(campusHeader, "院区");
+        // 没有院区头（旧令牌/直连调用）时不限制院区，保持既有行为；
+        // 网关在新令牌上始终下发 X-Campus，生产路径自然启用隔离。
+        boolean allCampuses = campusHeader == null || campusHeader.isBlank() || allDepartments;
+
         if (allDepartments) {
-            return DataScope.all(actorHeader, phiReadable);
+            return DataScope.of(actorHeader, Set.of(), true, campuses, true, phiReadable);
         }
-        return DataScope.ofDepartments(actorHeader, parseDepartments(orgHeader), phiReadable);
+        return DataScope.of(actorHeader, parseIds(orgHeader, "科室"), false,
+                campuses, allCampuses, phiReadable);
     }
 
     /**
-     * 科室头解析（支持多科室）。
+     * 科室/院区头解析（支持多值）。
      *
      * <p>只接受标准 UUID：科室编码是历史遗留（如 {@code D013}），
      * 拿编码去比 UUID 列永远匹配不上，会静默返回空列表——比报错更难排查。
@@ -62,29 +78,28 @@ public final class DataScopeResolver {
      * <p>列表里任意一个值非法就整体拒绝：部分放行等于猜测调用者意图，
      * 而"猜错"的代价是看到不该看的患者。
      */
-    private static Set<UUID> parseDepartments(String orgHeader) {
-        if (orgHeader == null || orgHeader.isBlank()) {
-            throw new BusinessException(ErrorCode.FORBIDDEN,
-                    "当前账号未绑定科室，无法确定数据范围，请联系管理员配置后重新登录");
+    private static Set<UUID> parseIds(String header, String label) {
+        if (header == null || header.isBlank()) {
+            return Set.of();
         }
-        Set<UUID> deptIds = new LinkedHashSet<>();
-        for (String raw : orgHeader.split(SEPARATOR)) {
+        Set<UUID> ids = new LinkedHashSet<>();
+        for (String raw : header.split(SEPARATOR)) {
             String value = raw.trim();
             if (value.isEmpty()) {
                 continue;
             }
             try {
-                deptIds.add(UUID.fromString(value));
+                ids.add(UUID.fromString(value));
             } catch (IllegalArgumentException e) {
                 throw new BusinessException(ErrorCode.FORBIDDEN,
-                        "科室标识格式不合法，无法确定数据范围，请联系管理员");
+                        label + "标识格式不合法，无法确定数据范围，请联系管理员");
             }
         }
-        if (deptIds.isEmpty()) {
+        if (ids.isEmpty()) {
             throw new BusinessException(ErrorCode.FORBIDDEN,
-                    "当前账号未绑定科室，无法确定数据范围，请联系管理员配置后重新登录");
+                    "当前账号未绑定" + label + "，无法确定数据范围，请联系管理员配置后重新登录");
         }
-        return Set.copyOf(deptIds);
+        return Set.copyOf(ids);
     }
 
     private static Set<String> splitToUpperSet(String header) {

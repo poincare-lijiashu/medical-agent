@@ -197,15 +197,22 @@ public class EmrRepository {
      * 供书写时限质控使用。
      */
     public void insertRecord(MedicalRecord r, java.time.Instant visitStartedAt) {
+        insertRecord(r, visitStartedAt,
+                com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 创建病历并固化院区归属（G45）。 */
+    public void insertRecord(MedicalRecord r, java.time.Instant visitStartedAt, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO emr_svc.medical_record
                             (id, record_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                              doc_type, template_code, title, content, content_text, author,
-                             status, revision, version, visit_started_at)
+                             status, revision, version, visit_started_at, campus_id)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid), :docType,
                                 :templateCode, :title, CAST(:content AS jsonb), :contentText,
-                                :author, :status, 1, 0, CAST(:visitStartedAt AS timestamptz))
+                                :author, :status, 1, 0, CAST(:visitStartedAt AS timestamptz),
+                                :campusId)
                         """)
                 .param("id", r.id()).param("no", r.recordNo())
                 .param("patientId", r.patientId()).param("patientNo", r.patientNo())
@@ -216,6 +223,8 @@ public class EmrRepository {
                 .param("author", r.author()).param("status", r.status())
                 .param("visitStartedAt", visitStartedAt == null ? null
                         : java.time.OffsetDateTime.ofInstant(visitStartedAt, java.time.ZoneOffset.UTC))
+                .param("campusId", campusId == null
+                        ? com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID : campusId)
                 .update();
     }
 
@@ -431,6 +440,12 @@ public class EmrRepository {
     }
 
     public List<MedicalRecord> listRecords(String status, UUID patientId, UUID visitId, int limit) {
+        return listRecords(status, patientId, visitId, limit, "");
+    }
+
+    /** 列表：campusCsv 为空表示不限制院区；否则只返回可见院区（G45）。 */
+    public List<MedicalRecord> listRecords(String status, UUID patientId, UUID visitId, int limit,
+                                           String campusCsv) {
         return jdbc.sql("""
                         SELECT id, record_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                doc_type, template_code, title, content::text AS content, content_text,
@@ -440,11 +455,14 @@ public class EmrRepository {
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
                            AND (CAST(:visitId AS uuid) IS NULL OR visit_id = CAST(:visitId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("patientId", patientId)
-                .param("visitId", visitId).param("limit", limit)
+                .param("visitId", visitId).param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit)
                 .query(RECORD_MAPPER).list();
     }
 
@@ -458,6 +476,14 @@ public class EmrRepository {
         return jdbc.sql("SELECT dept_id FROM emr_svc.medical_record WHERE id = ?")
                 .param(id)
                 .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
+    /** 病历所属院区（G45 行级权限校验）。 */
+    public Optional<UUID> findRecordCampus(UUID id) {
+        return jdbc.sql("SELECT campus_id FROM emr_svc.medical_record WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
                 .optional();
     }
 
@@ -696,6 +722,13 @@ public class EmrRepository {
      */
     public List<RecordHit> searchRecords(String pattern, String prefix, UUID patientId, String docType,
                                          String status, LocalDate from, LocalDate to, int limit) {
+        return searchRecords(pattern, prefix, patientId, docType, status, from, to, limit, "");
+    }
+
+    /** 检索：campusCsv 为空表示不限制院区；否则只返回可见院区（G45）。 */
+    public List<RecordHit> searchRecords(String pattern, String prefix, UUID patientId, String docType,
+                                         String status, LocalDate from, LocalDate to, int limit,
+                                         String campusCsv) {
         String sql = pattern == null ? """
                         SELECT id, record_no, patient_id, patient_no, dept_id, doc_type, title,
                                author, status, revision, created_at
@@ -732,7 +765,8 @@ public class EmrRepository {
 
         JdbcClient.StatementSpec spec = jdbc.sql(sql)
                 .param("patientId", patientId).param("docType", docType).param("status", status)
-                .param("fromDate", from).param("toDate", to).param("limit", limit);
+                .param("fromDate", from).param("toDate", to).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv);
         if (pattern != null) {
             spec = spec.param("pattern", pattern).param("prefix", prefix);
         }
@@ -747,6 +781,8 @@ public class EmrRepository {
               AND (CAST(:fromDate AS date) IS NULL OR created_at >= CAST(:fromDate AS date))
               AND (CAST(:toDate AS date) IS NULL
                    OR created_at < CAST(:toDate AS date) + INTERVAL '1 day')
+              AND (CAST(:campusCsv AS text) = ''
+                   OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
             """;
 
     // ---------------------------------------------------------------- 归档后修改申请

@@ -77,7 +77,7 @@ public class RecordController {
         if (req.deptId() != null && !scope.canSeeDepartment(req.deptId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "只能为本科室建立病历");
         }
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, actor, scope.campusForWrite()));
     }
 
     /** 列表：按建档科室过滤，避免医师用 patientId/visitId 拉取其他科室病历。 */
@@ -90,7 +90,8 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(PhiMask.records(service.list(status, patientId, visitId, limit).stream()
+        return ApiResponse.ok(PhiMask.records(service.list(status, patientId, visitId, limit,
+                        scope.campusFilter()).stream()
                 .filter(r -> scope.canSeeDepartment(r.deptId()))
                 .toList(), scope));
     }
@@ -121,7 +122,8 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, SEARCH);
-        return ApiResponse.ok(PhiMask.hits(service.search(q, patientId, docType, status, from, to, limit, actor)
+        return ApiResponse.ok(PhiMask.hits(service.search(q, patientId, docType, status, from, to,
+                        limit, actor, scope.campusFilter())
                 .stream()
                 .filter(hit -> scope.canSeeDepartment(hit.deptId()))
                 .toList(), scope));

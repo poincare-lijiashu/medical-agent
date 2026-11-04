@@ -142,6 +142,11 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         String org = (depts != null && !depts.isEmpty())
                 ? String.join(",", depts)
                 : jwt.getClaimAsString("org");
+        // 多院区（G45）：campuses 是院区 UUID 列表，拼成逗号分隔的 X-Campus。
+        List<String> campuses = jwt.getClaimAsStringList("campuses");
+        String campus = (campuses == null || campuses.isEmpty())
+                ? null
+                : String.join(",", campuses);
         ServerHttpRequest withIdentity = cleaned.getRequest().mutate()
                 .header(AuthHeaders.ACTOR, actor)
                 .header(AuthHeaders.USER_ID, subject)
@@ -151,6 +156,9 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
                 .headers(h -> {
                     if (org != null && !org.isBlank()) {
                         h.set(AuthHeaders.ORG, org);
+                    }
+                    if (campus != null && !campus.isBlank()) {
+                        h.set(AuthHeaders.CAMPUS, campus);
                     }
                 })
                 .build();

@@ -146,7 +146,7 @@ class ConsentServiceTest {
         org.mockito.Mockito.doAnswer(inv -> {
             saved.set(inv.getArgument(0));
             return null;
-        }).when(repo).insertConsent(any(ConsentRecord.class));
+        }).when(repo).insertConsent(any(ConsentRecord.class), any());
         when(repo.findConsent(any())).thenAnswer(inv -> Optional.of(saved.get()));
 
         ConsentView view = service.create(new CreateConsentReq(patientId, visitId,

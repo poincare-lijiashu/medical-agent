@@ -156,14 +156,20 @@ public class ConsentRepository {
     // ---------------------------------------------------------------- consents
 
     public void insertConsent(ConsentRecord consent) {
+        insertConsent(consent, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 创建同意书并固化院区归属（G45）。 */
+    public void insertConsent(ConsentRecord consent, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO emr_svc.consent_record
                             (id, consent_no, template_id, template_code, template_version, template_name,
                              patient_id, patient_no, patient_name, visit_id, procedure_name,
-                             content_text, content_hash, status, doctor_name, created_by)
+                             content_text, content_hash, status, doctor_name, created_by, campus_id)
                         VALUES (:id, :no, :templateId, :templateCode, :templateVersion, :templateName,
                                 :patientId, :patientNo, :patientName, :visitId, :procedureName,
-                                :contentText, :contentHash, :status, :doctorName, :createdBy)
+                                :contentText, :contentHash, :status, :doctorName, :createdBy,
+                                :campusId)
                         """)
                 .param("id", consent.id())
                 .param("no", consent.consentNo())
@@ -181,7 +187,17 @@ public class ConsentRepository {
                 .param("status", consent.status())
                 .param("doctorName", consent.doctorName())
                 .param("createdBy", consent.createdBy())
+                .param("campusId", campusId == null
+                        ? com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID : campusId)
                 .update();
+    }
+
+    /** 同意书所属院区（G45 行级权限校验）。 */
+    public Optional<UUID> findConsentCampus(UUID id) {
+        return jdbc.sql("SELECT campus_id FROM emr_svc.consent_record WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
     }
 
     public String nextConsentNo() {
@@ -209,6 +225,12 @@ public class ConsentRepository {
     }
 
     public List<ConsentRecord> listConsents(UUID patientId, String status, int limit) {
+        return listConsents(patientId, status, limit, "");
+    }
+
+    /** 列表：campusCsv 为空表示不限制院区；否则只返回可见院区（G45）。 */
+    public List<ConsentRecord> listConsents(UUID patientId, String status, int limit,
+                                            String campusCsv) {
         StringBuilder sql = new StringBuilder("SELECT " + CONSENT_COLS
                 + " FROM emr_svc.consent_record WHERE 1=1");
         if (patientId != null) {
@@ -217,6 +239,8 @@ public class ConsentRepository {
         if (status != null) {
             sql.append(" AND status = :status");
         }
+        sql.append(" AND (CAST(:campusCsv AS text) = ''"
+                + " OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))");
         sql.append(" ORDER BY created_at DESC LIMIT :limit");
         JdbcClient.StatementSpec spec = jdbc.sql(sql.toString());
         if (patientId != null) {
@@ -225,7 +249,8 @@ public class ConsentRepository {
         if (status != null) {
             spec = spec.param("status", status);
         }
-        return spec.param("limit", limit).query(CONSENT_MAPPER).list();
+        return spec.param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit).query(CONSENT_MAPPER).list();
     }
 
     public boolean signConsent(UUID id, long expectedVersion, String patientSigner,

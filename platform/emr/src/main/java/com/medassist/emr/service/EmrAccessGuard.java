@@ -28,7 +28,10 @@ public class EmrAccessGuard {
     public void requireRecord(DataScope scope, UUID recordId) {
         UUID deptId = repo.findRecordDepartment(recordId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        if (!scope.canSeeDepartment(deptId)) {
+        // G45：院区与科室同时校验；缺院区的历史数据按不可见处理（fail-closed）
+        UUID campusId = repo.findRecordCampus(recordId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
+        if (!scope.canSeeDepartment(deptId) || !scope.canSeeCampus(campusId)) {
             throw new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND);
         }
     }

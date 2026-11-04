@@ -128,11 +128,13 @@ class EmrControllerPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(service, never()).search(any(), any(), any(), any(), any(), any(), any(), anyString());
+        verify(service, never()).search(any(), any(), any(), any(), any(), any(), any(),
+                anyString(), any());
 
         controller.search("x", null, null, null, null, null, null,
                 "emr:record:search", "doctor01", scope);
-        verify(service).search("x", null, null, null, null, null, null, "doctor01");
+        verify(service).search("x", null, null, null, null, null, null, "doctor01",
+                scope.campusFilter());
     }
 
     @Test

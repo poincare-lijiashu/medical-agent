@@ -34,6 +34,7 @@ public class DataScopeArgumentResolver implements HandlerMethodArgumentResolver 
                 request.getHeader(AuthHeaders.ACTOR),
                 request.getHeader(AuthHeaders.ROLES),
                 request.getHeader(AuthHeaders.PERMISSIONS),
-                request.getHeader(AuthHeaders.ORG));
+                request.getHeader(AuthHeaders.ORG),
+                request.getHeader(AuthHeaders.CAMPUS));
     }
 }

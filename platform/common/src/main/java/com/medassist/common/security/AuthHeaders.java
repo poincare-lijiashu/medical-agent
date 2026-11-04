@@ -37,6 +37,9 @@ public final class AuthHeaders {
     /** 所属科室编码（未绑定科室时网关不下发该头）。 */
     public static final String ORG = "X-Org";
 
+    /** 可见院区 UUID 列表（英文逗号分隔；未绑定院区时网关不下发该头）。 */
+    public static final String CAMPUS = "X-Campus";
+
     /**
      * 可信客户端 IP（网关按 {@code trusted-proxies} 规则解析后重写，客户端提交值一律丢弃）。
      *
@@ -61,7 +64,7 @@ public final class AuthHeaders {
      * 客户端经网关提交的同名头没有任何合法用途（第五轮 R5-S1）。
      */
     public static final List<String> CLIENT_SUPPLIED = List.of(
-            ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CLIENT_IP, TRACE_ID,
+            ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CAMPUS, CLIENT_IP, TRACE_ID,
             INTERNAL_TOKEN, InternalSignature.HEADER_SIG, InternalSignature.HEADER_TS,
             InternalSignature.HEADER_NONCE, InternalSignature.HEADER_KEY_ID,
             InternalSignature.HEADER_SIG_VER, InternalSignature.HEADER_CALLER);

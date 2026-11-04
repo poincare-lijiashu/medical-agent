@@ -2,6 +2,8 @@ package com.medassist.emr.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
+import com.medassist.emr.service.ConsentAccessGuard;
 import com.medassist.emr.service.ConsentService;
 import com.medassist.emr.web.ConsentDtos.ConsentView;
 import com.medassist.emr.web.ConsentDtos.CreateConsentReq;
@@ -33,13 +35,16 @@ import static org.mockito.Mockito.when;
 class ConsentControllerPermissionTest {
 
     private ConsentService service;
+    private ConsentAccessGuard guard;
     private ConsentController controller;
     private final UUID id = UUID.randomUUID();
+    private final DataScope scope = DataScope.all("admin01", true);
 
     @BeforeEach
     void setUp() {
         service = mock(ConsentService.class);
-        controller = new ConsentController(service);
+        guard = mock(ConsentAccessGuard.class);
+        controller = new ConsentController(service, guard);
     }
 
     private void assertForbidden(Runnable call) {
@@ -78,23 +83,23 @@ class ConsentControllerPermissionTest {
     void consentPermissions() {
         CreateConsentReq req = new CreateConsentReq(UUID.randomUUID(), UUID.randomUUID(),
                 "CONSENT-SURGERY", "阑尾切除术");
-        when(service.create(any(), anyString())).thenReturn(consentView());
-        assertForbidden(() -> controller.create(req, "emr:consent:read", "doctor01"));
-        controller.create(req, "emr:consent:write", "doctor01");
+        when(service.create(any(), anyString(), any())).thenReturn(consentView());
+        assertForbidden(() -> controller.create(req, "emr:consent:read", "doctor01", scope));
+        controller.create(req, "emr:consent:write", "doctor01", scope);
 
         SignReq sign = new SignReq("李四", "配偶", null, "doctor01", false, 0L);
         when(service.sign(eq(id), any(), anyString())).thenReturn(consentView());
-        assertForbidden(() -> controller.sign(id, sign, "emr:consent:write", "doctor01"));
-        controller.sign(id, sign, "emr:consent:sign", "doctor01");
+        assertForbidden(() -> controller.sign(id, sign, "emr:consent:write", "doctor01", scope));
+        controller.sign(id, sign, "emr:consent:sign", "doctor01", scope);
 
         RevokeReq revoke = new RevokeReq("患者反悔", 1L);
         when(service.revoke(eq(id), any(), anyString())).thenReturn(consentView());
-        assertForbidden(() -> controller.revoke(id, revoke, "emr:consent:sign", "doctor01"));
-        controller.revoke(id, revoke, "emr:consent:revoke", "admin01");
+        assertForbidden(() -> controller.revoke(id, revoke, "emr:consent:sign", "doctor01", scope));
+        controller.revoke(id, revoke, "emr:consent:revoke", "admin01", scope);
 
         when(service.detail(id)).thenReturn(consentView());
-        assertForbidden(() -> controller.detail(id, "emr:consent:write"));
-        controller.detail(id, "emr:consent:read");
+        assertForbidden(() -> controller.detail(id, "emr:consent:write", scope));
+        controller.detail(id, "emr:consent:read", scope);
 
         when(service.board()).thenReturn(new com.medassist.emr.repo.ConsentRepository.ConsentBoard(
                 2, 3, 1));

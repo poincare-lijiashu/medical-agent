@@ -143,7 +143,8 @@ class RecordServiceTest {
         assertThat(view.record().status()).isEqualTo(MedicalRecord.DRAFT);
         assertThat(view.record().revision()).isEqualTo(1);
         assertThat(view.record().docType()).isEqualTo("ADMISSION_NOTE");
-        verify(repo).insertRecord(any(MedicalRecord.class), org.mockito.ArgumentMatchers.isNull());
+        verify(repo).insertRecord(any(MedicalRecord.class), org.mockito.ArgumentMatchers.isNull(),
+                eq(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID));
         verify(repo).logChange(eq("doctor01"), eq("RECORD_CREATE"), eq("RECORD"),
                 anyString(), anyString());
     }
@@ -660,7 +661,7 @@ class RecordServiceTest {
         service.search(" MR2026_01 ", null, null, "signed", null, null, 0, "doctor01");
 
         verify(repo).searchRecords("%MR2026\\_01%", "MR2026\\_01%", null, null, "SIGNED",
-                null, null, 50);
+                null, null, 50, "");
         verify(repo).logChange(eq("doctor01"), eq("RECORD_SEARCH"), eq("MEDICAL_RECORD"),
                 eq("search"), anyString());
     }
@@ -670,7 +671,7 @@ class RecordServiceTest {
     void searchWithoutKeyword() {
         service.search("   ", null, null, null, null, null, 500, "doctor01");
 
-        verify(repo).searchRecords(null, null, null, null, null, null, null, 200);
+        verify(repo).searchRecords(null, null, null, null, null, null, null, 200, "");
     }
 
     @Test
@@ -692,7 +693,7 @@ class RecordServiceTest {
         service.search("x", null, " admission_note ", null, null, null, 10, "doctor01");
 
         verify(repo).searchRecords(anyString(), anyString(), any(), eq("ADMISSION_NOTE"),
-                any(), any(), any(), eq(10));
+                any(), any(), any(), eq(10), eq(""));
     }
 
     @Test
@@ -704,7 +705,7 @@ class RecordServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
-        verify(repo, never()).searchRecords(any(), any(), any(), any(), any(), any(), any(), anyInt());
+        verify(repo, never()).searchRecords(any(), any(), any(), any(), any(), any(), any(), anyInt(), any());
         verify(repo, never()).logChange(anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
@@ -716,7 +717,7 @@ class RecordServiceTest {
         service.search(atLimit, null, null, null, null, null, 50, "doctor01");
 
         verify(repo).searchRecords("%" + atLimit + "%", atLimit + "%", null, null, null,
-                null, null, 50);
+                null, null, 50, "");
     }
 
     @Test
@@ -815,7 +816,7 @@ class RecordServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
-        verify(repo, never()).insertRecord(any(), any());
+        verify(repo, never()).insertRecord(any(), any(), any());
     }
 
     @Test

@@ -23,10 +23,16 @@ import java.util.UUID;
  * @param actor           操作者登录名（审计用）
  * @param deptCodes       可见科室；{@code allDepartments=true} 时为空集
  * @param allDepartments  是否全院可见
+ * @param campusIds       可见院区（G45）；{@code allCampuses=true} 时可为空集
+ * @param allCampuses     是否可跨院区
  * @param phiReadable     是否可读完整患者标识（否则按掩码返回）
  */
 public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartments,
-                        boolean phiReadable) {
+                        Set<UUID> campusIds, boolean allCampuses, boolean phiReadable) {
+
+    /** 平台默认院区（主院区）；存量数据与未绑定院区的账号回退使用。 */
+    public static final UUID DEFAULT_CAMPUS_ID =
+            UUID.fromString("a0000000-0000-0000-0000-000000000001");
 
     /** 业务上必须跨科室的角色：药师审方、麻醉访视、手术室排台、质控抽样、住院处办理、管理员。 */
     private static final Set<String> ALL_DEPARTMENT_ROLES = Set.of(
@@ -37,21 +43,26 @@ public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartment
 
     public DataScope {
         deptCodes = deptCodes == null ? Set.of() : Set.copyOf(deptCodes);
+        campusIds = campusIds == null ? Set.of() : Set.copyOf(campusIds);
         // 单科室范围却没给科室 = 权限配置错误，必须拒绝而不是退化成全院
         if (!allDepartments && deptCodes.isEmpty()) {
             throw new BusinessException(ErrorCode.FORBIDDEN,
                     "当前账号未绑定科室，无法确定数据范围，请联系管理员配置后重新登录");
         }
+        if (!allCampuses && campusIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN,
+                    "当前账号未绑定院区，无法确定数据范围，请联系管理员配置后重新登录");
+        }
     }
 
-    /** 全院可见（无科室限制）。 */
+    /** 全院可见（无科室/院区限制）。 */
     public static DataScope all(String actor, boolean phiReadable) {
-        return new DataScope(actor, Set.of(), true, phiReadable);
+        return new DataScope(actor, Set.of(), true, Set.of(), true, phiReadable);
     }
 
-    /** 单科室可见。 */
+    /** 单科室可见（院区不限，兼容旧调用）。 */
     public static DataScope ofDepartment(String actor, UUID deptId, boolean phiReadable) {
-        return new DataScope(actor, Set.of(deptId), false, phiReadable);
+        return new DataScope(actor, Set.of(deptId), false, Set.of(), true, phiReadable);
     }
 
     /**
@@ -61,7 +72,13 @@ public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartment
      * 也不能把它退化成"全院可见"。
      */
     public static DataScope ofDepartments(String actor, Set<UUID> deptIds, boolean phiReadable) {
-        return new DataScope(actor, deptIds, false, phiReadable);
+        return new DataScope(actor, deptIds, false, Set.of(), true, phiReadable);
+    }
+
+    /** 完整范围（G45）：科室 + 院区同时生效。 */
+    public static DataScope of(String actor, Set<UUID> deptIds, boolean allDepartments,
+                               Set<UUID> campusIds, boolean allCampuses, boolean phiReadable) {
+        return new DataScope(actor, deptIds, allDepartments, campusIds, allCampuses, phiReadable);
     }
 
     /** 角色是否属于"必须跨科室"的一类。 */
@@ -79,6 +96,29 @@ public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartment
             return true;
         }
         return deptId != null && deptCodes.contains(deptId);
+    }
+
+    /** 是否可以看到某个院区的数据；院区为空且未放开跨院区时一律不可见。 */
+    public boolean canSeeCampus(UUID campusId) {
+        if (allCampuses) {
+            return true;
+        }
+        return campusId != null && campusIds.contains(campusId);
+    }
+
+    /**
+     * 写入时使用的院区：优先显式院区，其次账号可见的第一个院区，最后回退主院区。
+     *
+     * <p>跨院区角色（管理员/质控）通常绑定多个院区，第一个作为默认写入院区；
+     * 历史令牌没有 campuses 声明时回退主院区，避免写入 NULL 后变成"谁都看不到"。
+     */
+    public UUID campusForWrite() {
+        return campusIds.stream().findFirst().orElse(DEFAULT_CAMPUS_ID);
+    }
+
+    /** 用于 SQL 过滤的院区集合；跨院区角色返回空集，调用方不加过滤。 */
+    public Set<UUID> campusFilter() {
+        return allCampuses ? Set.of() : campusIds;
     }
 
     /**

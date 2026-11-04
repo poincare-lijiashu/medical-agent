@@ -97,6 +97,21 @@ public class UserService {
         return detail(id);
     }
 
+    /** 全量替换账号可见院区（G45）；至少保留一个院区。 */
+    @Transactional
+    public UserResp assignCampuses(UUID id, List<UUID> campusIds, String actor) {
+        users.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        List<UUID> ids = campusIds == null ? List.of()
+                : campusIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "至少绑定一个院区");
+        }
+        users.replaceCampuses(id, ids);
+        audit(actor, "USER_CAMPUS_ASSIGN", id.toString(), Map.of("campusIds", ids));
+        return detail(id);
+    }
+
     public PageResult<UserResp> list(String orgCode, String status, int page, int size) {
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), PageResult.MAX_PAGE_SIZE);

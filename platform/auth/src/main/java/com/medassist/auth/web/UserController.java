@@ -1,6 +1,7 @@
 package com.medassist.auth.web;
 
 import com.medassist.auth.service.UserService;
+import com.medassist.auth.web.dto.AssignCampusesReq;
 import com.medassist.auth.web.dto.AssignRolesReq;
 import com.medassist.auth.web.dto.CreateUserReq;
 import com.medassist.auth.web.dto.ResetPasswordReq;
@@ -114,6 +115,17 @@ public class UserController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, ASSIGN_ROLE);
         return ApiResponse.ok(service.assignRoles(id, req.roles(), actor));
+    }
+
+    /** 分配账号可见院区（G45）。 */
+    @PutMapping("/{id}/campuses")
+    public ApiResponse<UserResp> assignCampuses(
+            @PathVariable UUID id,
+            @Valid @RequestBody AssignCampusesReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, UPDATE);
+        return ApiResponse.ok(service.assignCampuses(id, req.campusIds(), actor));
     }
 
     @PostMapping("/{id}/reset-password")

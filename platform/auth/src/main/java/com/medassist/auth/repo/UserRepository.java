@@ -207,6 +207,25 @@ public class UserRepository {
                 .list();
     }
 
+    /**
+     * 账号可访问院区（多院区执业，G45）。
+     *
+     * <p>未绑定院区的历史账号回退主院区，保证令牌始终带 campuses 声明，
+     * 下游不会因为缺头而退化成"跨院区可见"。
+     */
+    public List<UUID> campusIdsOf(UUID userId) {
+        List<UUID> ids = jdbc.sql("""
+                        SELECT campus_id FROM auth_svc.user_campus
+                         WHERE user_id = ? ORDER BY created_at, campus_id
+                        """)
+                .param(userId)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .list();
+        return ids.isEmpty()
+                ? List.of(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID)
+                : ids;
+    }
+
     /** 全量替换科室绑定（先删后插，单事务由调用方保证）。 */
     public void replaceDepts(UUID userId, Collection<UUID> deptIds) {
         jdbc.sql("DELETE FROM auth_svc.user_dept WHERE user_id = ?").param(userId).update();
@@ -214,6 +233,17 @@ public class UserRepository {
             jdbc.sql("INSERT INTO auth_svc.user_dept (user_id, dept_id) VALUES (?, ?)")
                     .param(userId)
                     .param(deptId)
+                    .update();
+        }
+    }
+
+    /** 全量替换院区绑定（多院区执业，单事务由调用方保证）。 */
+    public void replaceCampuses(UUID userId, Collection<UUID> campusIds) {
+        jdbc.sql("DELETE FROM auth_svc.user_campus WHERE user_id = ?").param(userId).update();
+        for (UUID campusId : campusIds) {
+            jdbc.sql("INSERT INTO auth_svc.user_campus (user_id, campus_id) VALUES (?, ?)")
+                    .param(userId)
+                    .param(campusId)
                     .update();
         }
     }

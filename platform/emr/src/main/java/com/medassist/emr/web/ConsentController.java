@@ -2,7 +2,9 @@ package com.medassist.emr.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
+import com.medassist.emr.service.ConsentAccessGuard;
 import com.medassist.emr.service.ConsentService;
 import com.medassist.emr.web.ConsentDtos.BoardView;
 import com.medassist.emr.web.ConsentDtos.ConsentView;
@@ -44,9 +46,11 @@ public class ConsentController {
     private static final String MANAGE = "emr:consent:manage";
 
     private final ConsentService service;
+    private final ConsentAccessGuard guard;
 
-    public ConsentController(ConsentService service) {
+    public ConsentController(ConsentService service, ConsentAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     // ---------------------------------------------------------------- templates
@@ -94,33 +98,39 @@ public class ConsentController {
             @RequestParam(required = false) UUID patientId,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "100") int limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(patientId, status, limit));
+        return ApiResponse.ok(service.list(patientId, status, limit, scope.campusFilter()));
     }
 
     @PostMapping
     public ApiResponse<ConsentView> create(
             @Valid @RequestBody CreateConsentReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, actor, scope.campusForWrite()));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<ConsentView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
     @GetMapping("/{id}/verify")
     public ApiResponse<VerifyView> verify(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, id);
         return ApiResponse.ok(service.verify(id));
     }
 
@@ -128,8 +138,10 @@ public class ConsentController {
     public ApiResponse<ConsentView> sign(
             @PathVariable UUID id, @Valid @RequestBody SignReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, SIGN);
+        guard.require(scope, id);
         return ApiResponse.ok(service.sign(id, req, actor));
     }
 
@@ -137,8 +149,10 @@ public class ConsentController {
     public ApiResponse<ConsentView> revoke(
             @PathVariable UUID id, @Valid @RequestBody RevokeReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, REVOKE);
+        guard.require(scope, id);
         return ApiResponse.ok(service.revoke(id, req, actor));
     }
 
@@ -155,8 +169,10 @@ public class ConsentController {
     public ResponseEntity<String> print(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, id);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/html; charset=UTF-8"))
                 .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")

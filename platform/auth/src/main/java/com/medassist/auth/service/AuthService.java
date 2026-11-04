@@ -130,9 +130,10 @@ public class AuthService {
 
         List<String> permissions = rbac.permissionsOfUser(user.id());
         List<UUID> deptIds = users.deptIdsOf(user.id());
+        List<UUID> campusIds = users.campusIdsOf(user.id());
         // 历史 PBKDF2 哈希在线升级为 BCrypt：登录成功后一次性重写，失败不影响本次登录
         upgradeLegacyHash(user, req.password());
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds);
+        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds, campusIds);
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
         users.touchLogin(user.id());
@@ -168,7 +169,8 @@ public class AuthService {
         }
         List<String> permissions = rbac.permissionsOfUser(user.id());
         List<UUID> deptIds = users.deptIdsOf(user.id());
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds);
+        List<UUID> campusIds = users.campusIdsOf(user.id());
+        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds, campusIds);
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
         users.touchLogin(user.id());
@@ -211,7 +213,8 @@ public class AuthService {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "刷新令牌已失效，请重新登录");
         }
 
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, users.deptIdsOf(user.id()));
+        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions,
+                users.deptIdsOf(user.id()), users.campusIdsOf(user.id()));
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, record.id());
         audit(user.username(), "REFRESH_SUCCESS", user.id().toString(),
                 Map.of("tokenId", access.tokenId(), "rotatedFrom", record.id().toString()));

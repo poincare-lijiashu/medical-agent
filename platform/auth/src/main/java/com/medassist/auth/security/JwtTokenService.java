@@ -102,6 +102,18 @@ public class JwtTokenService {
      */
     public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
                              List<UUID> deptIds) {
+        return issue(user, roles, permissions, deptIds, List.of());
+    }
+
+    /**
+     * 为账号签发访问令牌，并携带科室与院区范围（G45）。
+     *
+     * <p>{@code campuses} 是院区 UUID 列表：网关把它拼成逗号分隔的 {@code X-Campus}，
+     * 下游 {@code DataScopeResolver} 解析成院区集合。历史令牌没有该声明时，
+     * 下游按"不限制院区"兼容处理。
+     */
+    public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
+                             List<UUID> deptIds, List<UUID> campusIds) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = now.plus(props.ttl());
         String tokenId = UUID.randomUUID().toString();
@@ -118,6 +130,9 @@ public class JwtTokenService {
                 .claim("permissions", permissions);
         if (deptIds != null && !deptIds.isEmpty()) {
             claims.claim("depts", deptIds.stream().map(UUID::toString).toList());
+        }
+        if (campusIds != null && !campusIds.isEmpty()) {
+            claims.claim("campuses", campusIds.stream().map(UUID::toString).toList());
         }
         if (user.orgCode() != null && !user.orgCode().isBlank()) {
             claims.claim("org", user.orgCode());

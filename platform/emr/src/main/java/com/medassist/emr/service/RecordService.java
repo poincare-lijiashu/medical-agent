@@ -83,6 +83,12 @@ public class RecordService {
 
     @Transactional
     public RecordView create(CreateRecordReq req, String actor) {
+        return create(req, actor, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 创建病历并固化院区归属（G45）；campusId 由 Controller 从 DataScope 推导。 */
+    @Transactional
+    public RecordView create(CreateRecordReq req, String actor, UUID campusId) {
         Template template = repo.findTemplateByCode(req.templateCode().trim())
                 .filter(Template::enabled)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_TEMPLATE_NOT_FOUND,
@@ -109,7 +115,7 @@ public class RecordService {
                         ? template.name() + " " + patient.name() : req.title().trim(),
                 toJson(content), contentText, actor, MedicalRecord.DRAFT, 1,
                 null, null, null, null, 0L, null);
-        repo.insertRecord(record, visitStartedAt);
+        repo.insertRecord(record, visitStartedAt, campusId);
         audit(actor, "RECORD_CREATE", "RECORD", record.id().toString(), Map.of(
                 "recordNo", record.recordNo(),
                 // P1-S4：审计明细不留明文患者号
@@ -564,6 +570,13 @@ public class RecordService {
      */
     public List<RecordHit> search(String q, UUID patientId, String docType, String status,
                                   LocalDate from, LocalDate to, Integer limit, String actor) {
+        return search(q, patientId, docType, status, from, to, limit, actor, Set.of());
+    }
+
+    /** CDR 检索（G45）：campusIds 非空时只返回可见院区。 */
+    public List<RecordHit> search(String q, UUID patientId, String docType, String status,
+                                  LocalDate from, LocalDate to, Integer limit, String actor,
+                                  Set<UUID> campusIds) {
         String keyword = (q == null || q.isBlank()) ? null : q.trim();
         // 超长关键词既无检索意义，又会放大 ILIKE/trgm 的计算量：明确拒绝而不是静默截断
         if (keyword != null && keyword.length() > MAX_KEYWORD_LENGTH) {
@@ -579,7 +592,7 @@ public class RecordService {
                 ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
         List<RecordHit> hits = repo.searchRecords(pattern, prefix, patientId, normalizedDocType,
-                normalizedStatus, from, to, size);
+                normalizedStatus, from, to, size, campusCsv(campusIds));
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("keyword", keyword == null ? "" : keyword);
         detail.put("patientId", patientId == null ? "" : patientId.toString());
@@ -615,9 +628,23 @@ public class RecordService {
     }
 
     public List<MedicalRecord> list(String status, UUID patientId, UUID visitId, Integer limit) {
+        return list(status, patientId, visitId, limit, Set.of());
+    }
+
+    /** 列表（G45）：campusIds 非空时只返回可见院区。 */
+    public List<MedicalRecord> list(String status, UUID patientId, UUID visitId, Integer limit,
+                                    Set<UUID> campusIds) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listRecords(normalized, patientId, visitId, size);
+        return repo.listRecords(normalized, patientId, visitId, size, campusCsv(campusIds));
+    }
+
+    private static String campusCsv(Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString).sorted()
+                .reduce((a, b) -> a + "," + b).orElse("");
     }
 
     /** 校验内容哈希：重新计算正文哈希，并核对当前版本各级签名保存的哈希是否一致。 */

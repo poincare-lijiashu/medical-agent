@@ -126,6 +126,12 @@ public class ConsentService {
 
     @Transactional
     public ConsentView create(CreateConsentReq req, String actor) {
+        return create(req, actor, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 创建同意书并固化院区归属（G45）。 */
+    @Transactional
+    public ConsentView create(CreateConsentReq req, String actor, UUID campusId) {
         ConsentTemplate template = repo.findTemplateByCode(req.templateCode().trim())
                 .orElseThrow(() -> new BusinessException(ErrorCode.CONSENT_TEMPLATE_NOT_FOUND));
         if (!template.published()) {
@@ -149,7 +155,7 @@ public class ConsentService {
                 patient.id(), patient.patientNo(), patient.name(), req.visitId(), procedure,
                 contentText, hash, ConsentRecord.DRAFT, null, null, null, actor,
                 null, null, null, null, null, null, null, null, actor, null, null, 0L);
-        repo.insertConsent(consent);
+        repo.insertConsent(consent, campusId);
         audit(actor, "CONSENT_CREATE", "CONSENT", consent.id().toString(), Map.of(
                 "consentNo", consent.consentNo(), "patientNo",
                 com.medassist.common.security.Masks.patientNo(patient.patientNo()),
@@ -230,10 +236,23 @@ public class ConsentService {
     }
 
     public List<ConsentView> list(UUID patientId, String status, int limit) {
+        return list(patientId, status, limit, Set.of());
+    }
+
+    /** 列表（G45）：campusIds 非空时只返回可见院区。 */
+    public List<ConsentView> list(UUID patientId, String status, int limit, Set<UUID> campusIds) {
         String normalized = normalizeStatus(status, CONSENT_STATUSES);
         int size = limit <= 0 ? 100 : Math.min(limit, LIST_LIMIT);
-        return repo.listConsents(patientId, normalized, size).stream()
+        return repo.listConsents(patientId, normalized, size, campusCsv(campusIds)).stream()
                 .map(ConsentService::view).toList();
+    }
+
+    private static String campusCsv(Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString).sorted()
+                .reduce((a, b) -> a + "," + b).orElse("");
     }
 
     /** 验签：正文哈希必须一致；CA 签名再验签名值。 */
