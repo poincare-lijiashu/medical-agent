@@ -195,11 +195,18 @@ public class ReportService {
 
     /** 危急值列表；overdue = 超过确认时限仍处于 PENDING。 */
     public List<CriticalView> criticals(String status, UUID applicationId, Integer limit) {
+        return criticals(status, applicationId, java.util.Set.of(), limit);
+    }
+
+    /** 危急值列表（G49）：按申请院区收敛，空集合表示跨院区角色不限院区。 */
+    public List<CriticalView> criticals(String status, UUID applicationId,
+                                        java.util.Set<UUID> campusIds, Integer limit) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
         Duration timeout = Duration.ofMinutes(props.criticalTimeoutMinutesOrDefault());
         Instant deadline = Instant.now().minus(timeout);
-        return repo.listCriticalValues(normalized, applicationId, size).stream()
+        return repo.listCriticalValues(normalized, applicationId,
+                        ApplicationService.campusCsv(campusIds), size).stream()
                 .map(c -> new CriticalView(c,
                         CriticalValue.PENDING.equals(c.status())
                                 && c.createdAt().isBefore(deadline)))

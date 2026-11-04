@@ -278,5 +278,46 @@ if ($realtimeId.Length -gt 0) {
     Check "realtime settlement sample exists" $false "no realtime rows"
 }
 
+# ---------------------------------------------------------------- 9) tech campus (G49)
+$techMainUser = "techmain" + $stamp
+$u3 = Call "POST" "/auth/users" $adminToken @{
+    username = $techMainUser; password = $pwd; displayName = "Tech Main Admin";
+    deptIds = @($DEPT_WARD); roles = @("ADMIN")
+}
+Check "create MAIN-only admin" ($u3.code -eq 200) $u3.raw
+$c3 = Call "PUT" ("/auth/users/" + $u3.body.data.id + "/campuses") $adminToken @{ campusIds = @($MAIN) }
+Check "assign MAIN campus to admin" ($c3.code -eq 200) $c3.raw
+$techMainToken = Login $techMainUser $pwd
+
+$techItem = SqlOne "select item_code from tech_svc.md_exam_item where enabled order by item_code limit 1;"
+Check "enabled tech item found" ($techItem.Length -gt 0) "none"
+
+$app = Call "POST" "/tech/applications" $eastAdminToken @{
+    patientId = $patientId; visitId = $visitId; visitNo = $null; deptId = $DEPT_WARD;
+    itemCode = $techItem; bodyPart = $null; priority = "ROUTINE"; clinicalDiag = "campus smoke"
+}
+Check "east admin creates tech application" ($app.code -eq 200) $app.raw
+$appId = ""
+if ($app.code -eq 200) { $appId = $app.body.data.application.id }
+$appCampus = ""
+if ($appId.Length -gt 0) { $appCampus = SqlOne ("select campus_id from tech_svc.exam_application where id='" + $appId + "';") }
+Check "tech application campus persisted EAST" ($appCampus -eq $EAST) ($appCampus + " " + $app.raw)
+
+$appListEast = Call "GET" "/tech/applications?limit=200" $eastAdminToken $null
+$appSeenEast = $false
+if ($appListEast.code -eq 200) { $appSeenEast = (@($appListEast.body.data) | Where-Object { $_.id -eq $appId } | Measure-Object).Count -gt 0 }
+Check "EAST list contains own tech application" (($appListEast.code -eq 200) -and $appSeenEast) $appListEast.raw
+
+$appListMain = Call "GET" "/tech/applications?limit=200" $techMainToken $null
+$appSeenMain = $false
+if ($appListMain.code -eq 200) { $appSeenMain = (@($appListMain.body.data) | Where-Object { $_.id -eq $appId } | Measure-Object).Count -gt 0 }
+Check "MAIN list excludes EAST tech application" (($appListMain.code -eq 200) -and (-not $appSeenMain)) $appListMain.raw
+
+$appDetailMain = Call "GET" ("/tech/applications/" + $appId) $techMainToken $null
+Check "MAIN admin cannot open EAST tech application (404)" ($appDetailMain.code -eq 404) $appDetailMain.raw
+
+$appDetailAdmin = Call "GET" ("/tech/applications/" + $appId) $adminToken $null
+Check "cross-campus admin opens EAST tech application" ($appDetailAdmin.code -eq 200) $appDetailAdmin.raw
+
 Write-Output ("RESULT pass=" + $script:pass + " fail=" + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

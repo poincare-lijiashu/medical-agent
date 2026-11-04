@@ -55,7 +55,14 @@ public class ApplicationService {
 
     @Transactional
     public ApplicationView create(CreateApplicationReq req, String actor) {
-        return createInternal(req, actor, null);
+        return create(req, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID, actor);
+    }
+
+    /** 手工开单（G49）：{@code campusId} 由调用方取当前账号的写入院区并固化。 */
+    @Transactional
+    public ApplicationView create(CreateApplicationReq req, UUID campusId, String actor) {
+        return createInternal(req, actor, null,
+                campusId == null ? com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID : campusId);
     }
 
     /**
@@ -80,7 +87,10 @@ public class ApplicationService {
                 req.clinicalDiag());
         ApplicationView view;
         try {
-            view = createInternal(delegated, effectiveActor, req.orderId());
+            view = createInternal(delegated, effectiveActor, req.orderId(),
+                    req.campusId() == null
+                            ? com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID
+                            : req.campusId());
         } catch (DataIntegrityViolationException e) {
             throw new BusinessException(ErrorCode.CONFLICT, "该医嘱已生成申请，请刷新后重试");
         }
@@ -121,7 +131,8 @@ public class ApplicationService {
         return new ApplicationCancelView(app.id(), app.applicationNo(), Application.CANCELLED, true);
     }
 
-    private ApplicationView createInternal(CreateApplicationReq req, String actor, UUID sourceOrderId) {
+    private ApplicationView createInternal(CreateApplicationReq req, String actor,
+                                           UUID sourceOrderId, UUID campusId) {
         ExamItem item = repo.findExamItemByCode(req.itemCode().trim())
                 .filter(ExamItem::enabled)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_EXAM_ITEM_NOT_FOUND,
@@ -140,13 +151,13 @@ public class ApplicationService {
                 req.priority() == null || req.priority().isBlank() ? "ROUTINE" : req.priority(),
                 blankToNull(req.clinicalDiag()), item.specimenType(),
                 Application.APPLIED, 0L, null, sourceOrderId);
-        repo.insertApplication(app);
+        repo.insertApplication(app, campusId);
         audit(actor, "APP_CREATE", "APPLICATION", app.id().toString(), Map.of(
                 "applicationNo", app.applicationNo(),
                 // P1-S4：审计明细不留明文患者号
                 "patientNo", com.medassist.common.security.Masks.patientNo(patient.patientNo()),
                 "itemCode", item.itemCode(), "category", item.category(),
-                "priority", app.priority()));
+                "priority", app.priority(), "campusId", campusId.toString()));
         return new ApplicationView(repo.findApplication(app.id()).orElseThrow(), null);
     }
 
@@ -166,14 +177,36 @@ public class ApplicationService {
      */
     public List<Application> list(String status, UUID patientId,
                                   java.util.Collection<UUID> deptIds, Integer limit) {
+        return list(status, patientId, deptIds, java.util.Set.of(), limit);
+    }
+
+    /** 申请列表（G49）：{@code campusIds} 空集合表示跨院区角色，不限院区。 */
+    public List<Application> list(String status, UUID patientId,
+                                  java.util.Collection<UUID> deptIds,
+                                  java.util.Set<UUID> campusIds, Integer limit) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listApplications(normalized, patientId, deptIds, size);
+        return repo.listApplications(normalized, patientId, deptIds, campusCsv(campusIds), size);
     }
 
     /** 各状态申请数量（P0-F4）：与列表同一科室范围，避免 KPI 显示看不到的待办。 */
     public java.util.Map<String, Integer> statusCounts(java.util.Collection<UUID> deptIds) {
-        return repo.countApplicationsByStatus(deptIds);
+        return statusCounts(deptIds, java.util.Set.of());
+    }
+
+    /** 各状态申请数量（G49）：待办 KPI 不能混算跨院区申请。 */
+    public java.util.Map<String, Integer> statusCounts(java.util.Collection<UUID> deptIds,
+                                                       java.util.Set<UUID> campusIds) {
+        return repo.countApplicationsByStatus(deptIds, campusCsv(campusIds));
+    }
+
+    /** 院区集合转 SQL 过滤串；空集合（跨院区角色）返回空串表示不限院区。 */
+    static String campusCsv(java.util.Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     /** 取消申请：仅未采集/未执行的申请可取消。 */

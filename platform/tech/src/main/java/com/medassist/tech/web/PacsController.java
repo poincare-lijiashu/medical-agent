@@ -11,6 +11,7 @@ import com.medassist.tech.domain.TechModel.WorklistItem;
 import com.medassist.tech.service.PacsDicomService;
 import com.medassist.tech.service.PacsReadingService;
 import com.medassist.tech.service.PacsService;
+import com.medassist.tech.service.TechAccessGuard;
 import com.medassist.tech.web.PacsDtos.InstancePage;
 import com.medassist.tech.web.PacsDtos.ReadingNoteReq;
 import com.medassist.tech.web.PacsDtos.ReadingTaskView;
@@ -61,12 +62,14 @@ public class PacsController {
     private final PacsService service;
     private final PacsReadingService readingService;
     private final PacsDicomService dicomService;
+    private final TechAccessGuard guard;
 
     public PacsController(PacsService service, PacsReadingService readingService,
-                          PacsDicomService dicomService) {
+                          PacsDicomService dicomService, TechAccessGuard guard) {
         this.service = service;
         this.readingService = readingService;
         this.dicomService = dicomService;
+        this.guard = guard;
     }
 
     /** 设备 Worklist：默认当天、全部设备类型；按优先级（STAT→URGENT→ROUTINE）排序。 */
@@ -79,22 +82,27 @@ public class PacsController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         // 设备调度也需要患者号对账：设备技术账号应授 phi:read；低权账号按 P0-S2 掩码
-        return ApiResponse.ok(PhiMask.worklist(service.worklist(modality, date, limit), scope));
+        return ApiResponse.ok(PhiMask.worklist(
+                service.worklist(modality, date, limit, scope.campusFilter()), scope));
     }
 
     @GetMapping("/studies/{studyInstanceUid}")
     public ApiResponse<PacsStudy> byUid(
             @PathVariable String studyInstanceUid,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(service.byUid(studyInstanceUid));
     }
 
     @GetMapping("/applications/{applicationId}")
     public ApiResponse<PacsStudy> byApplication(
             @PathVariable UUID applicationId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireApplication(applicationId, scope);
         return ApiResponse.ok(service.byApplication(applicationId));
     }
 
@@ -102,8 +110,10 @@ public class PacsController {
     public ApiResponse<PacsStudy> register(
             @Valid @RequestBody RegisterStudyReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireApplication(req.applicationId(), scope);
         return ApiResponse.ok(service.register(req, actor));
     }
 
@@ -112,8 +122,10 @@ public class PacsController {
             @PathVariable String studyInstanceUid,
             @Valid @RequestBody UpdateStudyStatusReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(service.updateStatus(studyInstanceUid, req, actor));
     }
 
@@ -131,15 +143,18 @@ public class PacsController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(PhiMask.readingQueue(
-                readingService.queue(modality, state, date, limit, actor), scope));
+                readingService.queue(modality, state, date, limit, actor, scope.campusFilter()),
+                scope));
     }
 
     @PostMapping("/reading/{studyInstanceUid}/claim")
     public ApiResponse<ReadingTaskView> claim(
             @PathVariable String studyInstanceUid,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READING);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(readingService.claim(studyInstanceUid, actor));
     }
 
@@ -148,8 +163,10 @@ public class PacsController {
             @PathVariable String studyInstanceUid,
             @RequestBody(required = false) ReadingNoteReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READING);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(readingService.release(studyInstanceUid, req, actor));
     }
 
@@ -158,8 +175,10 @@ public class PacsController {
             @PathVariable String studyInstanceUid,
             @RequestBody(required = false) ReadingNoteReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READING);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(readingService.complete(studyInstanceUid, req, actor));
     }
 
@@ -173,8 +192,10 @@ public class PacsController {
     public ApiResponse<SeriesResponse> seriesByQuery(
             @RequestParam String studyUid,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyUid, scope);
         return ApiResponse.ok(dicomService.listSeries(studyUid, actor));
     }
 
@@ -185,8 +206,10 @@ public class PacsController {
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyUid, scope);
         return ApiResponse.ok(dicomService.listInstances(studyUid, seriesUid, page, size, actor));
     }
 
@@ -196,8 +219,10 @@ public class PacsController {
             @RequestParam String seriesUid,
             @RequestParam String sopUid,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyUid, scope);
         PacsDicomService.InstancePayload payload =
                 dicomService.fetchRendered(studyUid, seriesUid, sopUid, actor);
         return ResponseEntity.ok()
@@ -210,8 +235,10 @@ public class PacsController {
     public ApiResponse<ViewerLink> viewerByQuery(
             @RequestParam String studyUid,
             @RequestParam(required = false) String seriesUid,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyUid, scope);
         return ApiResponse.ok(dicomService.viewerLink(studyUid, seriesUid));
     }
 
@@ -219,8 +246,10 @@ public class PacsController {
     public ApiResponse<List<PacsAccessLog>> accessLogByQuery(
             @RequestParam String studyUid,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, AUDIT);
+        guard.requireStudy(studyUid, scope);
         return ApiResponse.ok(readingService.accessLog(studyUid, limit));
     }
 
@@ -229,8 +258,10 @@ public class PacsController {
     public ApiResponse<SeriesResponse> series(
             @PathVariable String studyInstanceUid,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(dicomService.listSeries(studyInstanceUid, actor));
     }
 
@@ -242,8 +273,10 @@ public class PacsController {
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(dicomService.listInstances(studyInstanceUid, seriesInstanceUid,
                 page, size, actor));
     }
@@ -255,8 +288,10 @@ public class PacsController {
             @PathVariable String seriesInstanceUid,
             @PathVariable String sopInstanceUid,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyInstanceUid, scope);
         PacsDicomService.InstancePayload payload = dicomService.fetchRendered(
                 studyInstanceUid, seriesInstanceUid, sopInstanceUid, actor);
         return ResponseEntity.ok()
@@ -270,8 +305,10 @@ public class PacsController {
     public ApiResponse<ViewerLink> viewer(
             @PathVariable String studyInstanceUid,
             @RequestParam(required = false) String seriesUid,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(dicomService.viewerLink(studyInstanceUid, seriesUid));
     }
 
@@ -282,8 +319,10 @@ public class PacsController {
             @PathVariable String seriesInstanceUid,
             @PathVariable String sopInstanceUid,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireStudy(studyInstanceUid, scope);
         PacsDicomService.InstancePayload payload =
                 dicomService.fetchInstance(studyInstanceUid, seriesInstanceUid, sopInstanceUid, actor);
         return ResponseEntity.ok()
@@ -297,8 +336,10 @@ public class PacsController {
     public ApiResponse<List<PacsAccessLog>> accessLog(
             @PathVariable String studyInstanceUid,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, AUDIT);
+        guard.requireStudy(studyInstanceUid, scope);
         return ApiResponse.ok(readingService.accessLog(studyInstanceUid, limit));
     }
 }

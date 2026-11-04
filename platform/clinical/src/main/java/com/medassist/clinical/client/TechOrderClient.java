@@ -21,7 +21,7 @@ public interface TechOrderClient {
 
     AppRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo, UUID deptId,
                            String appliedBy, String itemCode, String bodyPart, String priority,
-                           String clinicalDiag);
+                           String clinicalDiag, UUID campusId);
 
     CancelRef cancelByOrder(UUID orderId, String reason, String actor);
 }

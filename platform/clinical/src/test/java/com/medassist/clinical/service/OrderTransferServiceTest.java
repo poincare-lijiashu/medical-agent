@@ -225,7 +225,7 @@ class OrderTransferServiceTest {
                 eq(OrderTransferService.EXTERNAL_EXAM_APPLICATION), eq(appId),
                 eq("AP20261101000001"))).thenReturn(true);
         when(techClient.createFromOrder(eq(orderId), eq(patientId), eq(visitId), eq("V1"), any(),
-                eq("doctor01"), eq("DRUG-AMOX-025"), isNull(), eq("ROUTINE"), isNull()))
+                eq("doctor01"), eq("DRUG-AMOX-025"), isNull(), eq("ROUTINE"), isNull(), any()))
                 .thenReturn(new TechOrderClient.AppRef(appId, "AP20261101000001", false,
                         "LAB", "阿莫西林胶囊"));
 
@@ -245,7 +245,7 @@ class OrderTransferServiceTest {
         when(repo.findOrderById(orderId))
                 .thenReturn(Optional.of(order.withTransferStatus(VisitOrder.TRANSFER_PENDING)));
         when(techClient.createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(),
-                any(), any()))
+                any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "医技服务暂不可用"));
 
         service.schedule(visit(), List.of(order), "doctor01");

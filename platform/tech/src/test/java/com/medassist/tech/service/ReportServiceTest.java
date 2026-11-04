@@ -58,7 +58,7 @@ class ReportServiceTest {
         service = new ReportService(repo, props, JsonMapper.builder().build());
         when(repo.nextReportNo()).thenReturn("RP20261031000001");
         when(repo.listReports(any())).thenReturn(List.of());
-        when(repo.listCriticalValues(any(), any(), anyInt())).thenReturn(List.of());
+        when(repo.listCriticalValues(any(), any(), any(), anyInt())).thenReturn(List.of());
     }
 
     private Application app(String status, long version) {
@@ -224,7 +224,7 @@ class ReportServiceTest {
         CriticalValue old = new CriticalValue(criticalId, appId, reportId, "血钾", "7.2",
                 "3.5-5.3", "CRITICAL", CriticalValue.PENDING, null, null, null, null, null,
                 Instant.now().minus(Duration.ofMinutes(90)));
-        when(repo.listCriticalValues(any(), any(), anyInt())).thenReturn(List.of(old));
+        when(repo.listCriticalValues(any(), any(), any(), anyInt())).thenReturn(List.of(old));
 
         List<CriticalView> list = service.criticals(null, null, 10);
 
@@ -246,7 +246,7 @@ class ReportServiceTest {
         assertThat(view.criticals()).hasSize(1);
         assertThat(view.criticals().get(0).itemName()).isEqualTo("血钾");
         verify(repo).listCriticalValuesByReport(reportId);
-        verify(repo, never()).listCriticalValues(any(), any(), anyInt());
+        verify(repo, never()).listCriticalValues(any(), any(), any(), anyInt());
     }
 
     @Test

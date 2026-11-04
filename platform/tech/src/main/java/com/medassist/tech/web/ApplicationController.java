@@ -42,18 +42,22 @@ public class ApplicationController {
     private static final String READ = "tech:read";
 
     private final ApplicationService service;
+    private final com.medassist.tech.service.TechAccessGuard guard;
 
-    public ApplicationController(ApplicationService service) {
+    public ApplicationController(ApplicationService service,
+                                 com.medassist.tech.service.TechAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @PostMapping
     public ApiResponse<ApplicationView> create(
             @Valid @RequestBody CreateApplicationReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CREATE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, scope.campusForWrite(), actor));
     }
 
     @GetMapping
@@ -64,9 +68,9 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        // P0-S3 行级范围：全科室角色不过滤，其余按科室集合过滤
+        // P0-S3 行级范围：全科室角色不过滤，其余按科室集合过滤；G49 追加院区收敛
         List<Application> apps = service.list(status, patientId,
-                scope.allDepartments() ? null : scope.deptCodes(), limit);
+                scope.allDepartments() ? null : scope.deptCodes(), scope.campusFilter(), limit);
         return ApiResponse.ok(PhiMask.applications(apps, scope));
     }
 
@@ -82,7 +86,7 @@ public class ApplicationController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.statusCounts(
-                scope.allDepartments() ? null : scope.deptCodes()));
+                scope.allDepartments() ? null : scope.deptCodes(), scope.campusFilter()));
     }
 
     @GetMapping("/{id}")
@@ -91,6 +95,7 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireApplication(id, scope);
         ApplicationView view = service.detail(id);
         if (!scope.allDepartments() && view.application().deptId() != null
                 && !scope.canSeeDepartment(view.application().deptId())) {
@@ -106,8 +111,10 @@ public class ApplicationController {
     public ApiResponse<ApplicationView> cancel(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CANCEL);
+        guard.requireApplication(id, scope);
         return ApiResponse.ok(service.cancel(id, actor));
     }
 
@@ -117,8 +124,10 @@ public class ApplicationController {
             @PathVariable UUID id,
             @Valid @RequestBody(required = false) CollectSpecimenReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, COLLECT);
+        guard.requireApplication(id, scope);
         return ApiResponse.ok(service.collectSpecimen(id, req, actor));
     }
 
@@ -128,8 +137,10 @@ public class ApplicationController {
             @PathVariable UUID id,
             @Valid @RequestBody ReceiveSpecimenReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, RECEIVE);
+        guard.requireApplication(id, scope);
         return ApiResponse.ok(service.receiveSpecimen(id, req.accept(), req.reason(), actor));
     }
 
@@ -138,8 +149,10 @@ public class ApplicationController {
     public ApiResponse<ApplicationView> start(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, EXECUTE);
+        guard.requireApplication(id, scope);
         return ApiResponse.ok(service.start(id, actor));
     }
 
@@ -148,8 +161,10 @@ public class ApplicationController {
     public ApiResponse<ApplicationView> close(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, CLOSE);
+        guard.requireApplication(id, scope);
         return ApiResponse.ok(service.close(id, actor));
     }
 }

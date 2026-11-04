@@ -6,11 +6,13 @@ import com.medassist.common.security.DataScope;
 import com.medassist.tech.service.PacsDicomService;
 import com.medassist.tech.service.PacsReadingService;
 import com.medassist.tech.service.PacsService;
+import com.medassist.tech.service.TechAccessGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -38,7 +40,8 @@ class PacsControllerPermissionTest {
         service = mock(PacsService.class);
         readingService = mock(PacsReadingService.class);
         dicomService = mock(PacsDicomService.class);
-        controller = new PacsController(service, readingService, dicomService);
+        controller = new PacsController(service, readingService, dicomService,
+                mock(TechAccessGuard.class));
     }
 
     private void assertForbidden(Runnable call) {
@@ -56,51 +59,57 @@ class PacsControllerPermissionTest {
 
         controller.readingQueue(null, "MINE", null, 10, "tech:pacs:read", "doc01",
                 DataScope.all("doc01", true));
-        verify(readingService).queue(null, "MINE", null, 10, "doc01");
+        verify(readingService).queue(null, "MINE", null, 10, "doc01", Set.of());
     }
 
     @Test
     @DisplayName("领取阅片：必须 tech:report:write，普通影像读权限不能领取")
     void claimRequiresReportWrite() {
-        assertForbidden(() -> controller.claim(UID, "tech:pacs:read", "doc01"));
+        assertForbidden(() -> controller.claim(UID, "tech:pacs:read", "doc01",
+                DataScope.all("doc01", true)));
         verify(readingService, never()).claim(any(), any());
 
-        controller.claim(UID, "tech:report:write", "doc01");
+        controller.claim(UID, "tech:report:write", "doc01", DataScope.all("doc01", true));
         verify(readingService).claim(UID, "doc01");
     }
 
     @Test
     @DisplayName("释放/完成阅片：必须 tech:report:write")
     void releaseAndCompleteRequireReportWrite() {
-        assertForbidden(() -> controller.release(UID, null, "tech:pacs:write", "doc01"));
+        assertForbidden(() -> controller.release(UID, null, "tech:pacs:write", "doc01",
+                DataScope.all("doc01", true)));
         verify(readingService, never()).release(any(), any(), any());
 
-        controller.release(UID, null, "tech:report:write", "doc01");
+        controller.release(UID, null, "tech:report:write", "doc01", DataScope.all("doc01", true));
         verify(readingService).release(UID, null, "doc01");
 
-        assertForbidden(() -> controller.complete(UID, null, "tech:pacs:write", "doc01"));
-        controller.complete(UID, null, "tech:report:write", "doc01");
+        assertForbidden(() -> controller.complete(UID, null, "tech:pacs:write", "doc01",
+                DataScope.all("doc01", true)));
+        controller.complete(UID, null, "tech:report:write", "doc01", DataScope.all("doc01", true));
         verify(readingService).complete(UID, null, "doc01");
     }
 
     @Test
     @DisplayName("序列/影像调阅：tech:pacs:read 放行")
     void seriesAndInstanceRequireRead() {
-        assertForbidden(() -> controller.series(UID, "tech:pacs:audit", "doc01"));
-        controller.series(UID, "tech:pacs:read", "doc01");
+        assertForbidden(() -> controller.series(UID, "tech:pacs:audit", "doc01",
+                DataScope.all("doc01", true)));
+        controller.series(UID, "tech:pacs:read", "doc01", DataScope.all("doc01", true));
         verify(dicomService).listSeries(UID, "doc01");
 
-        assertForbidden(() -> controller.instance(UID, "1.2.3", "1.2.3.4", "tech:pacs:write", "doc01"));
+        assertForbidden(() -> controller.instance(UID, "1.2.3", "1.2.3.4", "tech:pacs:write",
+                "doc01", DataScope.all("doc01", true)));
         verify(dicomService, never()).fetchInstance(any(), any(), any(), any());
     }
 
     @Test
     @DisplayName("调阅审计：必须 tech:pacs:audit，影像读权限不能看他人调阅轨迹")
     void accessLogRequiresAudit() {
-        assertForbidden(() -> controller.accessLog(UID, 10, "tech:pacs:read"));
+        assertForbidden(() -> controller.accessLog(UID, 10, "tech:pacs:read",
+                DataScope.all("doc01", true)));
         verify(readingService, never()).accessLog(any(), any());
 
-        controller.accessLog(UID, 10, "tech:pacs:audit");
+        controller.accessLog(UID, 10, "tech:pacs:audit", DataScope.all("doc01", true));
         verify(readingService).accessLog(UID, 10);
     }
 
@@ -109,6 +118,6 @@ class PacsControllerPermissionTest {
     void emptyPermissionsForbidden() {
         assertForbidden(() -> controller.readingQueue(null, null, null, 10, null, "doc01",
                 DataScope.all("doc01", true)));
-        verify(readingService, never()).queue(any(), any(), any(), any(), any());
+        verify(readingService, never()).queue(any(), any(), any(), any(), any(), any());
     }
 }

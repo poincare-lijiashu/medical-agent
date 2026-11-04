@@ -2,8 +2,10 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.tech.service.ReportService;
+import com.medassist.tech.service.TechAccessGuard;
 import com.medassist.tech.web.TechDtos.AckCriticalReq;
 import com.medassist.tech.web.TechDtos.AmendReportReq;
 import com.medassist.tech.web.TechDtos.CloseCriticalReq;
@@ -40,9 +42,11 @@ public class ReportController {
     private static final String READ = "tech:read";
 
     private final ReportService service;
+    private final TechAccessGuard guard;
 
-    public ReportController(ReportService service) {
+    public ReportController(ReportService service, TechAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     // ---------------------------------------------------------------- 报告
@@ -52,24 +56,30 @@ public class ReportController {
             @PathVariable UUID applicationId,
             @Valid @RequestBody WriteReportReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireApplication(applicationId, scope);
         return ApiResponse.ok(service.write(applicationId, req, actor));
     }
 
     @GetMapping("/applications/{applicationId}/reports/current")
     public ApiResponse<ReportView> current(
             @PathVariable UUID applicationId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireApplication(applicationId, scope);
         return ApiResponse.ok(service.currentOf(applicationId));
     }
 
     @GetMapping("/reports/{id}")
     public ApiResponse<ReportView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireReport(id, scope);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -79,8 +89,10 @@ public class ReportController {
             @PathVariable UUID id,
             @Valid @RequestBody WriteReportReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
+        guard.requireReport(id, scope);
         return ApiResponse.ok(service.rewrite(id, req, actor));
     }
 
@@ -90,8 +102,10 @@ public class ReportController {
             @PathVariable UUID id,
             @Valid @RequestBody ReviewReportReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, REVIEW);
+        guard.requireReport(id, scope);
         return ApiResponse.ok(service.review(id, req.approve(), req.reason(), actor));
     }
 
@@ -101,8 +115,10 @@ public class ReportController {
             @PathVariable UUID id,
             @Valid @RequestBody AmendReportReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, REVIEW);
+        guard.requireReport(id, scope);
         return ApiResponse.ok(service.amend(id, req, actor));
     }
 
@@ -113,9 +129,11 @@ public class ReportController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID applicationId,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.criticals(status, applicationId, limit));
+        return ApiResponse.ok(service.criticals(status, applicationId,
+                scope.campusFilter(), limit));
     }
 
     /** 临床确认危急值（护士/医师）。 */
@@ -124,8 +142,10 @@ public class ReportController {
             @PathVariable UUID id,
             @Valid @RequestBody(required = false) AckCriticalReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ACK);
+        guard.requireCritical(id, scope);
         return ApiResponse.ok(service.acknowledge(id, req == null ? null : req.note(), actor));
     }
 
@@ -135,8 +155,10 @@ public class ReportController {
             @PathVariable UUID id,
             @Valid @RequestBody(required = false) CloseCriticalReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ACK);
+        guard.requireCritical(id, scope);
         return ApiResponse.ok(service.closeCritical(id, req == null ? null : req.note(), actor));
     }
 }

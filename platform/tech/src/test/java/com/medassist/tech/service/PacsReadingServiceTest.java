@@ -94,13 +94,14 @@ class PacsReadingServiceTest {
     @Test
     @DisplayName("队列：状态与设备类型规范化，limit 上限 200")
     void queueNormalizesAndClamps() {
-        when(repo.listReadingQueue(eq("CT"), eq("MINE"), eq("doc01"), isNull(), isNull(), eq(200)))
+        when(repo.listReadingQueue(eq("CT"), eq("MINE"), eq("doc01"), isNull(), isNull(),
+                eq(""), eq(200)))
                 .thenReturn(List.of(queueItem()));
 
         List<ReadingQueueItem> result = service.queue("ct", "mine", null, 1000, "doc01");
 
         assertThat(result).hasSize(1);
-        verify(repo).listReadingQueue("CT", "MINE", "doc01", null, null, 200);
+        verify(repo).listReadingQueue("CT", "MINE", "doc01", null, null, "", 200);
     }
 
     @Test
@@ -110,12 +111,13 @@ class PacsReadingServiceTest {
         ZoneId zone = BusinessTime.zone();
         OffsetDateTime fromTs = day.atStartOfDay(zone).toOffsetDateTime();
         OffsetDateTime toTs = day.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
-        when(repo.listReadingQueue(eq("CT"), isNull(), isNull(), eq(fromTs), eq(toTs), eq(20)))
+        when(repo.listReadingQueue(eq("CT"), isNull(), isNull(), eq(fromTs), eq(toTs),
+                eq(""), eq(20)))
                 .thenReturn(List.of());
 
         service.queue("ct", null, day, 20, null);
 
-        verify(repo).listReadingQueue("CT", null, null, fromTs, toTs, 20);
+        verify(repo).listReadingQueue("CT", null, null, fromTs, toTs, "", 20);
     }
 
     @Test

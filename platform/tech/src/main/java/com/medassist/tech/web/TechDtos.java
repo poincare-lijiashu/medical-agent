@@ -54,7 +54,9 @@ public final class TechDtos {
             @Size(max = 64) String bodyPart,
             @Pattern(regexp = "ROUTINE|URGENT|STAT", message = "优先级只能是 ROUTINE/URGENT/STAT")
             String priority,
-            @Size(max = 256) String clinicalDiag) {
+            @Size(max = 256) String clinicalDiag,
+            /** 开单院区（G49）：临床按就诊院区下发；为空时回退主院区。 */
+            UUID campusId) {
     }
 
     /**

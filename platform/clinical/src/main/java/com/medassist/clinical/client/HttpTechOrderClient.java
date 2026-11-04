@@ -60,14 +60,14 @@ public class HttpTechOrderClient implements TechOrderClient {
     @Override
     public AppRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo,
                                   UUID deptId, String appliedBy, String itemCode, String bodyPart,
-                                  String priority, String clinicalDiag) {
+                                  String priority, String clinicalDiag, UUID campusId) {
         AppResponse response;
         try {
             response = client.post()
                     .uri("/internal/applications")
                     .header("X-Internal-Token", token)
                     .body(new CreateFromOrderRequest(orderId, patientId, visitId, visitNo, deptId,
-                            appliedBy, itemCode, bodyPart, priority, clinicalDiag))
+                            appliedBy, itemCode, bodyPart, priority, clinicalDiag, campusId))
                     .retrieve()
                     .body(AppResponse.class);
         } catch (HttpClientErrorException e) {
@@ -137,7 +137,7 @@ public class HttpTechOrderClient implements TechOrderClient {
 
     record CreateFromOrderRequest(UUID orderId, UUID patientId, UUID visitId, String visitNo,
                                   UUID deptId, String appliedBy, String itemCode, String bodyPart,
-                                  String priority, String clinicalDiag) {
+                                  String priority, String clinicalDiag, UUID campusId) {
     }
 
     record AppResponse(UUID applicationId, String applicationNo, UUID orderId, boolean duplicate,

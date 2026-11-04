@@ -176,11 +176,11 @@ class PacsServiceTest {
     void worklistNormalizesAndClamps() {
         ZoneId zone = BusinessTime.zone();
         OffsetDateTime toTs = BusinessTime.today().plusDays(1).atStartOfDay(zone).toOffsetDateTime();
-        when(repo.listWorklist(MODALITY, null, toTs, 200)).thenReturn(List.of());
+        when(repo.listWorklist(MODALITY, null, toTs, "", 200)).thenReturn(List.of());
 
         service.worklist("ct", null, 1000);
 
-        verify(repo).listWorklist(MODALITY, null, toTs, 200);
+        verify(repo).listWorklist(MODALITY, null, toTs, "", 200);
     }
 
     @Test
@@ -190,11 +190,12 @@ class PacsServiceTest {
         ZoneId zone = BusinessTime.zone();
         OffsetDateTime fromTs = day.atStartOfDay(zone).toOffsetDateTime();
         OffsetDateTime toTs = day.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
-        when(repo.listWorklist(eq(MODALITY), eq(fromTs), eq(toTs), anyInt())).thenReturn(List.of());
+        when(repo.listWorklist(eq(MODALITY), eq(fromTs), eq(toTs), anyString(), anyInt()))
+                .thenReturn(List.of());
 
         service.worklist(MODALITY, day, 10);
 
-        verify(repo).listWorklist(MODALITY, fromTs, toTs, 10);
+        verify(repo).listWorklist(MODALITY, fromTs, toTs, "", 10);
     }
 
     @Test

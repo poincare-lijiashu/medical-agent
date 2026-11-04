@@ -310,7 +310,7 @@ public class OrderTransferService {
         try {
             TechOrderClient.AppRef ref = techClient.createFromOrder(order.id(), visit.patientId(),
                     visit.id(), visit.visitNo(), visit.deptId(), order.orderedBy(),
-                    order.itemCode(), null, "ROUTINE", null);
+                    order.itemCode(), null, "ROUTINE", null, visitCampus(visit.id()));
             if (!repo.markOrderTransferred(order.id(), EXTERNAL_EXAM_APPLICATION,
                     ref.applicationId(), ref.applicationNo())) {
                 compensateAfterStaleTransfer(order, EXTERNAL_EXAM_APPLICATION, actor);

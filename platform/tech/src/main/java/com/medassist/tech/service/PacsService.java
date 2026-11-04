@@ -73,13 +73,20 @@ public class PacsService {
      * 该接口由设备高频轮询，明细请按申请号查询。
      */
     public List<WorklistItem> worklist(String modality, LocalDate date, Integer limit) {
+        return worklist(modality, date, limit, java.util.Set.of());
+    }
+
+    /** 影像 Worklist（G49）：按申请院区收敛，空集合表示跨院区角色不限院区。 */
+    public List<WorklistItem> worklist(String modality, LocalDate date, Integer limit,
+                                       java.util.Set<UUID> campusIds) {
         String normalized = normalizeModality(modality);
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
         ZoneId zone = BusinessTime.zone();
         OffsetDateTime fromTs = date == null ? null : date.atStartOfDay(zone).toOffsetDateTime();
         OffsetDateTime toTs = (date == null ? BusinessTime.today() : date)
                 .plusDays(1).atStartOfDay(zone).toOffsetDateTime();
-        return repo.listWorklist(normalized, fromTs, toTs, size);
+        return repo.listWorklist(normalized, fromTs, toTs,
+                ApplicationService.campusCsv(campusIds), size);
     }
 
     /** 登记影像检查；同一申请 + 同一 UID 幂等返回，不同 UID 冲突。 */

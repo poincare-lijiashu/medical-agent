@@ -139,17 +139,18 @@ public class TechRepository {
 
     // ---------------------------------------------------------------- 申请
 
-    public void insertApplication(Application a) {
+    /** 开立申请；{@code campusId} 为开单院区（G49，写入时固化，不接受空值）。 */
+    public void insertApplication(Application a, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO tech_svc.exam_application
                             (id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                              applied_by, category, item_code, item_name, body_part, priority,
-                             clinical_diag, specimen_type, status, version, source_order_id)
+                             clinical_diag, specimen_type, status, version, source_order_id, campus_id)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid), :appliedBy,
                                 :category, :itemCode, :itemName, CAST(:bodyPart AS text), :priority,
                                 CAST(:clinicalDiag AS text), CAST(:specimenType AS text),
-                                :status, 0, CAST(:sourceOrderId AS uuid))
+                                :status, 0, CAST(:sourceOrderId AS uuid), :campusId)
                         """)
                 .param("id", a.id()).param("no", a.applicationNo())
                 .param("patientId", a.patientId()).param("patientNo", a.patientNo())
@@ -159,7 +160,14 @@ public class TechRepository {
                 .param("itemName", a.itemName()).param("bodyPart", a.bodyPart())
                 .param("priority", a.priority()).param("clinicalDiag", a.clinicalDiag())
                 .param("specimenType", a.specimenType()).param("status", a.status())
-                .param("sourceOrderId", a.sourceOrderId()).update();
+                .param("sourceOrderId", a.sourceOrderId()).param("campusId", campusId).update();
+    }
+
+    /** 申请所属院区；用于院区级越权判定（不存在返回空）。 */
+    public Optional<UUID> findApplicationCampus(UUID applicationId) {
+        return jdbc.sql("""
+                        SELECT campus_id FROM tech_svc.exam_application WHERE id = ?
+                        """).param(applicationId).query(UUID.class).optional();
     }
 
     /** 按来源医嘱查申请（临床转送幂等键；手工开单返回空）。 */
@@ -229,17 +237,15 @@ public class TechRepository {
                 .update() > 0;
     }
 
-    public List<Application> listApplications(String status, UUID patientId, int limit) {
-        return listApplications(status, patientId, null, limit);
-    }
-
     /**
-     * 申请列表（P0-S3 行级范围）：{@code deptIds} 非空时只返回这些科室的申请。
+     * 申请列表（P0-S3 行级范围 + G49 院区隔离）。
      *
-     * <p>tech 表一直有 dept_id，此前未用于过滤——跨科室读单让科室隔离形同虚设。
+     * <p>{@code deptIds} 非空时只返回这些科室；{@code campusCsv} 非空时只返回这些院区
+     * （逗号分隔 UUID，来自 {@code DataScope.campusFilter()}；空串表示跨院区角色不过滤）。
      */
     public List<Application> listApplications(String status, UUID patientId,
-                                              java.util.Collection<UUID> deptIds, int limit) {
+                                              java.util.Collection<UUID> deptIds, String campusCsv,
+                                              int limit) {
         return jdbc.sql("""
                         SELECT id, application_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                applied_by, category, item_code, item_name, body_part, priority,
@@ -249,11 +255,14 @@ public class TechRepository {
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
                            AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY (CAST(:deptIds AS uuid[])))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("patientId", patientId)
                 .param("deptIds", deptIds == null || deptIds.isEmpty() ? null : deptIds.toArray(UUID[]::new))
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .param("limit", limit)
                 .query(APP_MAPPER).list();
     }
@@ -261,20 +270,23 @@ public class TechRepository {
     /**
      * 各状态申请数量（P0-F4）：一条 GROUP BY 拿到准确待办数。
      *
-     * <p>{@code deptIds} 非空时只统计这些科室（与列表的行级范围保持一致，
-     * 否则 KPI 会显示"看不到的待办"）。
+     * <p>{@code deptIds} / {@code campusCsv} 与列表的行级范围保持一致，
+     * 否则 KPI 会显示"看不到的待办"。
      */
     public java.util.Map<String, Integer> countApplicationsByStatus(
-            java.util.Collection<UUID> deptIds) {
+            java.util.Collection<UUID> deptIds, String campusCsv) {
         java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
         UUID[] deptArray = deptIds == null || deptIds.isEmpty() ? null : deptIds.toArray(UUID[]::new);
+        String campus = campusCsv == null ? "" : campusCsv;
         jdbc.sql("""
                         SELECT status, count(*) AS n
                           FROM tech_svc.exam_application
                          WHERE (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY (CAST(:deptIds AS uuid[])))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY status
                         """)
-                .param("deptIds", deptArray)
+                .param("deptIds", deptArray).param("campusCsv", campus)
                 .query((rs, i) -> java.util.Map.entry(rs.getString("status"), rs.getInt("n")))
                 .list()
                 .forEach(e -> counts.put(e.getKey(), e.getValue()));
@@ -284,8 +296,10 @@ public class TechRepository {
                           FROM tech_svc.exam_application
                          WHERE status = 'APPLIED' AND category = 'LAB'
                            AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY (CAST(:deptIds AS uuid[])))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                         """)
-                .param("deptIds", deptArray)
+                .param("deptIds", deptArray).param("campusCsv", campus)
                 .query(Integer.class).single();
         counts.put("PENDING_COLLECT", pendingCollect == null ? 0 : pendingCollect);
         return counts;
@@ -454,18 +468,24 @@ public class TechRepository {
                         """).param(id).query(CRITICAL_MAPPER).optional();
     }
 
-    public List<CriticalValue> listCriticalValues(String status, UUID applicationId, int limit) {
+    /** 危急值列表（G49）：按申请院区收敛，{@code campusCsv} 为空串表示跨院区角色不过滤。 */
+    public List<CriticalValue> listCriticalValues(String status, UUID applicationId,
+                                                  String campusCsv, int limit) {
         return jdbc.sql("""
-                        SELECT id, application_id, report_id, item_name, result_value, reference_range,
-                               severity, status, notified_to, notified_at, acknowledged_by,
-                               acknowledged_at, note, created_at
-                          FROM tech_svc.critical_value
-                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
-                           AND (CAST(:appId AS uuid) IS NULL OR application_id = CAST(:appId AS uuid))
-                         ORDER BY created_at DESC
+                        SELECT c.id, c.application_id, c.report_id, c.item_name, c.result_value,
+                               c.reference_range, c.severity, c.status, c.notified_to, c.notified_at,
+                               c.acknowledged_by, c.acknowledged_at, c.note, c.created_at
+                          FROM tech_svc.critical_value c
+                          JOIN tech_svc.exam_application a ON a.id = c.application_id
+                         WHERE (CAST(:status AS text) IS NULL OR c.status = CAST(:status AS text))
+                           AND (CAST(:appId AS uuid) IS NULL OR c.application_id = CAST(:appId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR a.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                         ORDER BY c.created_at DESC
                          LIMIT :limit
                         """)
-                .param("status", status).param("appId", applicationId).param("limit", limit)
+                .param("status", status).param("appId", applicationId)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv).param("limit", limit)
                 .query(CRITICAL_MAPPER).list();
     }
 
@@ -681,7 +701,7 @@ public class TechRepository {
      * </ul>
      */
     public List<WorklistItem> listWorklist(String modality, OffsetDateTime fromTs, OffsetDateTime toTs,
-                                           int limit) {
+                                           String campusCsv, int limit) {
         return jdbc.sql("""
                         SELECT a.id AS application_id, a.application_no, a.patient_no,
                                a.item_code, a.item_name, a.body_part, a.priority,
@@ -698,6 +718,8 @@ public class TechRepository {
                            AND (s.status IS NULL OR s.status IN ('SCHEDULED', 'ARRIVED', 'IN_PROGRESS'))
                            AND (CAST(:modality AS text) IS NULL
                                 OR COALESCE(i.modality, 'OT') = CAST(:modality AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR a.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND (CAST(:fromTs AS timestamptz) IS NULL
                                 OR a.created_at >= CAST(:fromTs AS timestamptz))
                            AND (CAST(:toTs AS timestamptz) IS NULL
@@ -707,6 +729,7 @@ public class TechRepository {
                          LIMIT :limit
                         """)
                 .param("modality", modality).param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .param("limit", limit)
                 .query(WORKLIST_MAPPER).list();
     }
@@ -761,7 +784,7 @@ public class TechRepository {
      */
     public List<ReadingQueueItem> listReadingQueue(String modality, String state, String assignee,
                                                    OffsetDateTime fromTs, OffsetDateTime toTs,
-                                                   int limit) {
+                                                   String campusCsv, int limit) {
         return jdbc.sql("""
                         SELECT s.id AS study_id, s.study_instance_uid, s.accession_number,
                                s.modality, s.body_part, s.series_count, s.image_count,
@@ -783,6 +806,8 @@ public class TechRepository {
                          WHERE s.status = 'COMPLETED'
                            AND (CAST(:modality AS text) IS NULL
                                 OR s.modality = CAST(:modality AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR a.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND (CAST(:fromTs AS timestamptz) IS NULL
                                 OR s.completed_at >= CAST(:fromTs AS timestamptz))
                            AND (CAST(:toTs AS timestamptz) IS NULL
@@ -805,7 +830,8 @@ public class TechRepository {
                          LIMIT :limit
                         """)
                 .param("modality", modality).param("state", state).param("assignee", assignee)
-                .param("fromTs", fromTs).param("toTs", toTs).param("limit", limit)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv).param("limit", limit)
                 .query(READING_QUEUE_MAPPER).list();
     }
 

@@ -61,6 +61,13 @@ public class PacsReadingService {
      */
     public List<ReadingQueueItem> queue(String modality, String state, LocalDate date,
                                         Integer limit, String actor) {
+        return queue(modality, state, date, limit, actor, java.util.Set.of());
+    }
+
+    /** 阅片队列（G49）：按申请院区收敛，空集合表示跨院区角色不限院区。 */
+    public List<ReadingQueueItem> queue(String modality, String state, LocalDate date,
+                                        Integer limit, String actor,
+                                        java.util.Set<UUID> campusIds) {
         String normalizedModality = normalizeModality(modality);
         String normalizedState = normalizeState(state);
         if ("MINE".equals(normalizedState) && isBlank(actor)) {
@@ -70,7 +77,8 @@ public class PacsReadingService {
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
         OffsetDateTime[] window = dayWindow(date);
         return repo.listReadingQueue(normalizedModality, normalizedState,
-                isBlank(actor) ? null : actor.trim(), window[0], window[1], size);
+                isBlank(actor) ? null : actor.trim(), window[0], window[1],
+                ApplicationService.campusCsv(campusIds), size);
     }
 
     /** 领取阅片：同一医师重复领取幂等返回，他人已领取则 409。 */

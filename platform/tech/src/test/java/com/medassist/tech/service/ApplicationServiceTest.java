@@ -89,9 +89,20 @@ class ApplicationServiceTest {
         assertThat(view.application().specimenType()).isEqualTo("全血");
         assertThat(view.application().priority()).isEqualTo("URGENT");
         assertThat(view.application().clinicalDiag()).isEqualTo("发热待查");
-        verify(repo).insertApplication(any(Application.class));
+        verify(repo).insertApplication(any(Application.class), any());
         verify(repo).logChange(eq("doctor01"), eq("APP_CREATE"), eq("APPLICATION"),
                 anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("开单：院区由调用方固化（G49），不写空值")
+    void createStoresCampus() {
+        UUID campusId = UUID.randomUUID();
+        when(repo.findExamItemByCode(labCode)).thenReturn(Optional.of(labItem));
+
+        service.create(labReq(), campusId, "doctor01");
+
+        verify(repo).insertApplication(any(Application.class), eq(campusId));
     }
 
     @Test
@@ -104,7 +115,7 @@ class ApplicationServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.TECH_EXAM_ITEM_NOT_FOUND);
-        verify(repo, never()).insertApplication(any());
+        verify(repo, never()).insertApplication(any(), any());
     }
 
     @Test
@@ -222,7 +233,7 @@ class ApplicationServiceTest {
 
     private CreateFromOrderReq fromOrder(UUID orderId, String itemCode) {
         return new CreateFromOrderReq(orderId, patientId, null, null, null, "doctor01",
-                itemCode, null, "ROUTINE", null);
+                itemCode, null, "ROUTINE", null, null);
     }
 
     @Test
@@ -236,7 +247,7 @@ class ApplicationServiceTest {
 
         assertThat(view.duplicate()).isTrue();
         assertThat(view.applicationId()).isEqualTo(appId);
-        verify(repo, never()).insertApplication(any());
+        verify(repo, never()).insertApplication(any(), any());
     }
 
     @Test
@@ -249,7 +260,7 @@ class ApplicationServiceTest {
         service.createFromOrder(fromOrder(orderId, examCode), "clinical");
 
         ArgumentCaptor<Application> captor = ArgumentCaptor.forClass(Application.class);
-        verify(repo).insertApplication(captor.capture());
+        verify(repo).insertApplication(captor.capture(), any());
         assertThat(captor.getValue().category()).isEqualTo("EXAM");
         assertThat(captor.getValue().sourceOrderId()).isEqualTo(orderId);
         assertThat(captor.getValue().appliedBy()).isEqualTo("doctor01");
