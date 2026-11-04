@@ -30,9 +30,15 @@ import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupPlan;
 import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupTask;
 import com.medassist.clinical.domain.ClinicalModel.ChronicRecord;
 import com.medassist.clinical.domain.ClinicalModel.ChronicRecordSummary;
+import com.medassist.clinical.domain.ClinicalModel.BloodCrossmatch;
+import com.medassist.clinical.domain.ClinicalModel.BloodProduct;
 import com.medassist.clinical.domain.ClinicalModel.MobileBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.MobileNursingTask;
 import com.medassist.clinical.domain.ClinicalModel.MobileScanEvent;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionReaction;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionRecord;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionRequest;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyTriage;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamItem;
@@ -6373,6 +6379,408 @@ public class ClinicalRepository {
                 .query((rs, i) -> new MobileBoardRow(rs.getLong("pending"),
                         rs.getLong("verified_today"), rs.getLong("exceptions_today"),
                         rs.getLong("total_today")))
+                .single();
+    }
+
+    // ---------------------------------------------------------------- 输血闭环（G40）
+
+    private static final RowMapper<BloodProduct> BLOOD_PRODUCT_MAPPER = (rs, i) ->
+            new BloodProduct(rs.getObject("id", UUID.class), rs.getString("code"),
+                    rs.getString("name"), rs.getString("unit"), rs.getBoolean("enabled"));
+
+    private static final RowMapper<TransfusionRequest> TRANSFUSION_REQUEST_MAPPER = (rs, i) ->
+            new TransfusionRequest(
+                    rs.getObject("id", UUID.class), rs.getString("request_no"),
+                    rs.getObject("admission_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getObject("patient_id", UUID.class),
+                    rs.getString("patient_no"), rs.getString("patient_name"),
+                    rs.getString("gender"),
+                    rs.getDate("birth_date") == null ? null
+                            : rs.getDate("birth_date").toLocalDate(),
+                    rs.getObject("ward_id", UUID.class), rs.getString("ward_name"),
+                    rs.getString("bed_no"), rs.getObject("component_id", UUID.class),
+                    rs.getString("component_code"), rs.getString("component_name"),
+                    rs.getBigDecimal("quantity"), rs.getString("unit"),
+                    rs.getString("blood_type"), rs.getString("rh"),
+                    rs.getBigDecimal("hemoglobin"), rs.getObject("platelet", Integer.class),
+                    rs.getString("urgency"), rs.getString("indication"), rs.getString("status"),
+                    rs.getObject("crossmatch_id", UUID.class), rs.getString("bag_no"),
+                    rs.getDate("bag_expire_at") == null ? null
+                            : rs.getDate("bag_expire_at").toLocalDate(),
+                    rs.getString("requested_by"),
+                    rs.getTimestamp("requested_at").toInstant(), rs.getString("issued_by"),
+                    rs.getTimestamp("issued_at") == null ? null
+                            : rs.getTimestamp("issued_at").toInstant(),
+                    rs.getString("started_by"),
+                    rs.getTimestamp("started_at") == null ? null
+                            : rs.getTimestamp("started_at").toInstant(),
+                    rs.getString("completed_by"),
+                    rs.getTimestamp("completed_at") == null ? null
+                            : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getString("cancel_reason"), rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null ? null
+                            : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("created_by"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<BloodCrossmatch> CROSSMATCH_MAPPER = (rs, i) ->
+            new BloodCrossmatch(
+                    rs.getObject("id", UUID.class), rs.getString("crossmatch_no"),
+                    rs.getObject("request_id", UUID.class), rs.getString("bag_no"),
+                    rs.getString("donor_blood_type"), rs.getString("donor_rh"),
+                    rs.getString("crossmatch_result"), rs.getString("method"),
+                    rs.getDate("bag_expire_at").toLocalDate(), rs.getString("note"),
+                    rs.getString("tested_by"), rs.getTimestamp("tested_at").toInstant(),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<TransfusionRecord> TRANSFUSION_RECORD_MAPPER = (rs, i) ->
+            new TransfusionRecord(
+                    rs.getObject("id", UUID.class), rs.getString("record_no"),
+                    rs.getObject("request_id", UUID.class), rs.getString("bag_no"),
+                    rs.getString("status"), rs.getTimestamp("start_at").toInstant(),
+                    rs.getTimestamp("end_at") == null ? null
+                            : rs.getTimestamp("end_at").toInstant(),
+                    rs.getBigDecimal("volume_ml"), rs.getBigDecimal("start_temperature"),
+                    rs.getObject("start_pulse", Integer.class),
+                    rs.getObject("start_systolic", Integer.class),
+                    rs.getObject("start_diastolic", Integer.class),
+                    rs.getBigDecimal("end_temperature"),
+                    rs.getObject("end_pulse", Integer.class),
+                    rs.getObject("end_systolic", Integer.class),
+                    rs.getObject("end_diastolic", Integer.class), rs.getBoolean("reaction"),
+                    rs.getString("checker_a"), rs.getString("checker_b"),
+                    rs.getTimestamp("checked_at").toInstant(), rs.getString("started_by"),
+                    rs.getString("completed_by"),
+                    rs.getTimestamp("completed_at") == null ? null
+                            : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<TransfusionReaction> REACTION_MAPPER = (rs, i) ->
+            new TransfusionReaction(
+                    rs.getObject("id", UUID.class), rs.getString("reaction_no"),
+                    rs.getObject("record_id", UUID.class), rs.getObject("request_id", UUID.class),
+                    rs.getString("severity"), rs.getString("symptoms"),
+                    rs.getString("action_taken"), rs.getString("reported_by"),
+                    rs.getTimestamp("reported_at").toInstant(),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final String TRANSFUSION_REQUEST_SELECT = """
+            SELECT id, request_no, admission_id, visit_id, patient_id, patient_no, patient_name,
+                   gender, birth_date, ward_id, ward_name, bed_no, component_id, component_code,
+                   component_name, quantity, unit, blood_type, rh, hemoglobin, platelet,
+                   urgency, indication, status, crossmatch_id, bag_no, bag_expire_at,
+                   requested_by, requested_at, issued_by, issued_at, started_by, started_at,
+                   completed_by, completed_at, cancel_reason, cancelled_by, cancelled_at,
+                   created_by, version, created_at, updated_at
+              FROM clinical_svc.transfusion_request
+            """;
+
+    private static final String CROSSMATCH_SELECT = """
+            SELECT id, crossmatch_no, request_id, bag_no, donor_blood_type, donor_rh,
+                   crossmatch_result, method, bag_expire_at, note, tested_by, tested_at,
+                   version, created_at
+              FROM clinical_svc.blood_crossmatch
+            """;
+
+    private static final String TRANSFUSION_RECORD_SELECT = """
+            SELECT id, record_no, request_id, bag_no, status, start_at, end_at, volume_ml,
+                   start_temperature, start_pulse, start_systolic, start_diastolic,
+                   end_temperature, end_pulse, end_systolic, end_diastolic, reaction,
+                   checker_a, checker_b, checked_at, started_by, completed_by, completed_at,
+                   version, created_at
+              FROM clinical_svc.transfusion_record
+            """;
+
+    private static final String REACTION_SELECT = """
+            SELECT id, reaction_no, record_id, request_id, severity, symptoms, action_taken,
+                   reported_by, reported_at, created_at
+              FROM clinical_svc.transfusion_reaction
+            """;
+
+    public String nextTransfusionRequestNo() {
+        return nextNo("clinical_svc.transfusion_request_no_seq", "TR");
+    }
+
+    public String nextCrossmatchNo() {
+        return nextNo("clinical_svc.crossmatch_no_seq", "TXM");
+    }
+
+    public String nextTransfusionRecordNo() {
+        return nextNo("clinical_svc.transfusion_record_no_seq", "TRN");
+    }
+
+    public String nextReactionNo() {
+        return nextNo("clinical_svc.transfusion_reaction_no_seq", "TRR");
+    }
+
+    public List<BloodProduct> listBloodProducts() {
+        return jdbc.sql("""
+                        SELECT id, code, name, unit, enabled FROM clinical_svc.blood_product
+                         WHERE enabled ORDER BY code
+                        """).query(BLOOD_PRODUCT_MAPPER).list();
+    }
+
+    public Optional<BloodProduct> findBloodProduct(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, code, name, unit, enabled FROM clinical_svc.blood_product
+                         WHERE id = ?
+                        """).param(id).query(BLOOD_PRODUCT_MAPPER).optional();
+    }
+
+    public void insertTransfusionRequest(TransfusionRequest r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.transfusion_request
+                            (id, request_no, admission_id, visit_id, patient_id, patient_no,
+                             patient_name, gender, birth_date, ward_id, ward_name, bed_no,
+                             component_id, component_code, component_name, quantity, unit,
+                             blood_type, rh, hemoglobin, platelet, urgency, indication, status,
+                             requested_by, created_by)
+                        VALUES (:id, :requestNo, :admissionId, :visitId, :patientId, :patientNo,
+                                :patientName, :gender, :birthDate, :wardId, :wardName, :bedNo,
+                                :componentId, :componentCode, :componentName, :quantity, :unit,
+                                :bloodType, :rh, :hemoglobin, :platelet, :urgency, :indication,
+                                :status, :requestedBy, :createdBy)
+                        """)
+                .param("id", r.id()).param("requestNo", r.requestNo())
+                .param("admissionId", r.admissionId()).param("visitId", r.visitId())
+                .param("patientId", r.patientId()).param("patientNo", r.patientNo())
+                .param("patientName", r.patientName()).param("gender", r.gender())
+                .param("birthDate", r.birthDate()).param("wardId", r.wardId())
+                .param("wardName", r.wardName()).param("bedNo", r.bedNo())
+                .param("componentId", r.componentId()).param("componentCode", r.componentCode())
+                .param("componentName", r.componentName()).param("quantity", r.quantity())
+                .param("unit", r.unit()).param("bloodType", r.bloodType()).param("rh", r.rh())
+                .param("hemoglobin", r.hemoglobin()).param("platelet", r.platelet())
+                .param("urgency", r.urgency()).param("indication", r.indication())
+                .param("status", r.status()).param("requestedBy", r.requestedBy())
+                .param("createdBy", r.createdBy()).update();
+    }
+
+    public Optional<TransfusionRequest> findTransfusionRequest(UUID id) {
+        return jdbc.sql(TRANSFUSION_REQUEST_SELECT + " WHERE id = ?")
+                .param(id).query(TRANSFUSION_REQUEST_MAPPER).optional();
+    }
+
+    public Optional<TransfusionRequest> lockTransfusionRequest(UUID id) {
+        return jdbc.sql(TRANSFUSION_REQUEST_SELECT + " WHERE id = ? FOR UPDATE")
+                .param(id).query(TRANSFUSION_REQUEST_MAPPER).optional();
+    }
+
+    public List<TransfusionRequest> listTransfusionRequests(String status, OffsetDateTime fromTs,
+                                                            OffsetDateTime toTs, int limit) {
+        return jdbc.sql(TRANSFUSION_REQUEST_SELECT + """
+                         WHERE (CAST(:status AS text) IS NULL
+                                OR status = CAST(:status AS text))
+                           AND created_at >= :fromTs AND created_at < :toTs
+                         ORDER BY CASE urgency WHEN 'EMERGENCY' THEN 0
+                                               WHEN 'URGENT' THEN 1 ELSE 2 END,
+                                  created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("fromTs", fromTs).param("toTs", toTs)
+                .param("limit", limit).query(TRANSFUSION_REQUEST_MAPPER).list();
+    }
+
+    public boolean markTransfusionCrossmatched(UUID id, UUID crossmatchId, String bagNo,
+                                                LocalDate bagExpireAt, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_request
+                           SET status = 'CROSSMATCHED', crossmatch_id = :crossmatchId,
+                               bag_no = :bagNo, bag_expire_at = :bagExpireAt,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'REQUESTED' AND version = :version
+                        """)
+                .param("id", id).param("crossmatchId", crossmatchId).param("bagNo", bagNo)
+                .param("bagExpireAt", bagExpireAt).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean markTransfusionIssued(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_request
+                           SET status = 'ISSUED', issued_by = :actor, issued_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'CROSSMATCHED' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean markTransfusionStarted(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_request
+                           SET status = 'TRANSFUSING', started_by = :actor, started_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ISSUED' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean markTransfusionCompleted(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_request
+                           SET status = 'COMPLETED', completed_by = :actor, completed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'TRANSFUSING' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean cancelTransfusionRequest(UUID id, String reason, String actor,
+                                            long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_request
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               cancelled_by = :actor, cancelled_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('REQUESTED', 'CROSSMATCHED')
+                           AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertCrossmatch(BloodCrossmatch c) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.blood_crossmatch
+                            (id, crossmatch_no, request_id, bag_no, donor_blood_type, donor_rh,
+                             crossmatch_result, method, bag_expire_at, note, tested_by)
+                        VALUES (:id, :crossmatchNo, :requestId, :bagNo, :donorBloodType,
+                                :donorRh, :result, :method, :bagExpireAt, :note, :testedBy)
+                        """)
+                .param("id", c.id()).param("crossmatchNo", c.crossmatchNo())
+                .param("requestId", c.requestId()).param("bagNo", c.bagNo())
+                .param("donorBloodType", c.donorBloodType()).param("donorRh", c.donorRh())
+                .param("result", c.result()).param("method", c.method())
+                .param("bagExpireAt", c.bagExpireAt()).param("note", c.note())
+                .param("testedBy", c.testedBy()).update();
+    }
+
+    public Optional<BloodCrossmatch> findCrossmatch(UUID id) {
+        return jdbc.sql(CROSSMATCH_SELECT + " WHERE id = ?")
+                .param(id).query(CROSSMATCH_MAPPER).optional();
+    }
+
+    public Optional<BloodCrossmatch> findCrossmatchByBagNo(String bagNo) {
+        return jdbc.sql(CROSSMATCH_SELECT + " WHERE bag_no = ?")
+                .param(bagNo).query(CROSSMATCH_MAPPER).optional();
+    }
+
+    public Optional<BloodCrossmatch> findCompatibleCrossmatchByRequest(UUID requestId) {
+        return jdbc.sql(CROSSMATCH_SELECT
+                        + " WHERE request_id = ? AND crossmatch_result = 'COMPATIBLE'")
+                .param(requestId).query(CROSSMATCH_MAPPER).optional();
+    }
+
+    public List<BloodCrossmatch> listCrossmatchesByRequest(UUID requestId) {
+        return jdbc.sql(CROSSMATCH_SELECT
+                        + " WHERE request_id = ? ORDER BY tested_at DESC")
+                .param(requestId).query(CROSSMATCH_MAPPER).list();
+    }
+
+    public void insertTransfusionRecord(TransfusionRecord r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.transfusion_record
+                            (id, record_no, request_id, bag_no, status, start_at,
+                             start_temperature, start_pulse, start_systolic, start_diastolic,
+                             checker_a, checker_b, started_by)
+                        VALUES (:id, :recordNo, :requestId, :bagNo, :status, :startAt,
+                                :startTemperature, :startPulse, :startSystolic, :startDiastolic,
+                                :checkerA, :checkerB, :startedBy)
+                        """)
+                .param("id", r.id()).param("recordNo", r.recordNo())
+                .param("requestId", r.requestId()).param("bagNo", r.bagNo())
+                .param("status", r.status()).param("startAt", ts(r.startAt()))
+                .param("startTemperature", r.startTemperature()).param("startPulse", r.startPulse())
+                .param("startSystolic", r.startSystolic())
+                .param("startDiastolic", r.startDiastolic())
+                .param("checkerA", r.checkerA()).param("checkerB", r.checkerB())
+                .param("startedBy", r.startedBy()).update();
+    }
+
+    public Optional<TransfusionRecord> findTransfusionRecordByRequest(UUID requestId) {
+        return jdbc.sql(TRANSFUSION_RECORD_SELECT + " WHERE request_id = ?")
+                .param(requestId).query(TRANSFUSION_RECORD_MAPPER).optional();
+    }
+
+    public Optional<TransfusionRecord> lockTransfusionRecord(UUID id) {
+        return jdbc.sql(TRANSFUSION_RECORD_SELECT + " WHERE id = ? FOR UPDATE")
+                .param(id).query(TRANSFUSION_RECORD_MAPPER).optional();
+    }
+
+    public boolean completeTransfusionRecord(UUID id, BigDecimal volumeMl,
+                                             BigDecimal endTemperature, Integer endPulse,
+                                             Integer endSystolic, Integer endDiastolic,
+                                             String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_record
+                           SET status = 'COMPLETED', end_at = now(), volume_ml = :volumeMl,
+                               end_temperature = :endTemperature, end_pulse = :endPulse,
+                               end_systolic = :endSystolic, end_diastolic = :endDiastolic,
+                               completed_by = :actor, completed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'TRANSFUSING' AND version = :version
+                        """)
+                .param("id", id).param("volumeMl", volumeMl)
+                .param("endTemperature", endTemperature).param("endPulse", endPulse)
+                .param("endSystolic", endSystolic).param("endDiastolic", endDiastolic)
+                .param("actor", actor).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean markRecordReaction(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.transfusion_record
+                           SET reaction = true, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertTransfusionReaction(TransfusionReaction r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.transfusion_reaction
+                            (id, reaction_no, record_id, request_id, severity, symptoms,
+                             action_taken, reported_by)
+                        VALUES (:id, :reactionNo, :recordId, :requestId, :severity, :symptoms,
+                                :actionTaken, :reportedBy)
+                        """)
+                .param("id", r.id()).param("reactionNo", r.reactionNo())
+                .param("recordId", r.recordId()).param("requestId", r.requestId())
+                .param("severity", r.severity()).param("symptoms", r.symptoms())
+                .param("actionTaken", r.actionTaken()).param("reportedBy", r.reportedBy())
+                .update();
+    }
+
+    public Optional<TransfusionReaction> findReactionByRecord(UUID recordId) {
+        return jdbc.sql(REACTION_SELECT + " WHERE record_id = ?")
+                .param(recordId).query(REACTION_MAPPER).optional();
+    }
+
+    /** 输血看板：各状态数量与当日完成/不良反应。 */
+    public TransfusionBoardRow transfusionBoard(OffsetDateTime fromTs, OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE status = 'REQUESTED') AS requested,
+                               count(*) FILTER (WHERE status = 'CROSSMATCHED') AS crossmatched,
+                               count(*) FILTER (WHERE status = 'ISSUED') AS issued,
+                               count(*) FILTER (WHERE status = 'TRANSFUSING') AS transfusing,
+                               count(*) FILTER (WHERE status = 'COMPLETED'
+                                                AND completed_at >= :fromTs
+                                                AND completed_at < :toTs) AS completed_today,
+                               (SELECT count(*) FROM clinical_svc.transfusion_reaction rp
+                                 WHERE rp.reported_at >= :fromTs
+                                   AND rp.reported_at < :toTs) AS reactions_today,
+                               count(*) AS total_today
+                          FROM clinical_svc.transfusion_request
+                         WHERE created_at >= :fromTs AND created_at < :toTs
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new TransfusionBoardRow(rs.getLong("requested"),
+                        rs.getLong("crossmatched"), rs.getLong("issued"),
+                        rs.getLong("transfusing"), rs.getLong("completed_today"),
+                        rs.getLong("reactions_today"), rs.getLong("total_today")))
                 .single();
     }
 

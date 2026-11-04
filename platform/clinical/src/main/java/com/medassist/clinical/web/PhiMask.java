@@ -6,6 +6,7 @@ import com.medassist.clinical.domain.ClinicalModel.ChronicRecord;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamRegistration;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionRequest;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.web.ChronicDtos.FollowupView;
 import com.medassist.clinical.web.ChronicDtos.RecordSummaryView;
@@ -19,6 +20,8 @@ import com.medassist.clinical.web.EmergencyDtos.TriageView;
 import com.medassist.clinical.web.HealthExamDtos.RegistrationSummaryView;
 import com.medassist.clinical.web.HealthExamDtos.RegistrationView;
 import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
+import com.medassist.clinical.web.TransfusionDtos.RequestSummaryView;
+import com.medassist.clinical.web.TransfusionDtos.RequestView;
 import com.medassist.common.security.DataScope;
 
 import java.util.List;
@@ -196,6 +199,35 @@ final class PhiMask {
                 f.followupDate(), f.method(), f.systolic(), f.diastolic(), f.fastingGlucose(),
                 f.weight(), f.symptoms(), f.medicationAdherence(), f.advice(), f.createdBy(),
                 f.createdAt());
+    }
+
+    static RequestSummaryView transfusionSummary(RequestSummaryView s, DataScope scope) {
+        if (s == null || scope.phiReadable()) {
+            return s;
+        }
+        return new RequestSummaryView(s.id(), s.requestNo(), s.patientId(),
+                scope.maskPatientNo(s.patientNo()), scope.maskPatientName(s.patientName()),
+                s.wardName(), s.bedNo(), s.componentName(), s.quantity(), s.unit(),
+                s.bloodType(), s.rh(), s.urgency(), s.status(), s.requestedBy(), s.requestedAt(),
+                s.completedBy(), s.completedAt());
+    }
+
+    static RequestView transfusionRequest(RequestView view, DataScope scope) {
+        if (view == null || scope.phiReadable()) {
+            return view;
+        }
+        TransfusionRequest r = view.request();
+        TransfusionRequest masked = new TransfusionRequest(r.id(), r.requestNo(),
+                r.admissionId(), r.visitId(), r.patientId(),
+                scope.maskPatientNo(r.patientNo()), scope.maskPatientName(r.patientName()),
+                r.gender(), r.birthDate(), r.wardId(), r.wardName(), r.bedNo(), r.componentId(),
+                r.componentCode(), r.componentName(), r.quantity(), r.unit(), r.bloodType(),
+                r.rh(), r.hemoglobin(), r.platelet(), r.urgency(), r.indication(), r.status(),
+                r.crossmatchId(), r.bagNo(), r.bagExpireAt(), r.requestedBy(), r.requestedAt(),
+                r.issuedBy(), r.issuedAt(), r.startedBy(), r.startedAt(), r.completedBy(),
+                r.completedAt(), r.cancelReason(), r.cancelledBy(), r.cancelledAt(), r.createdBy(),
+                r.version(), r.createdAt(), r.updatedAt());
+        return new RequestView(masked, view.crossmatches(), view.record(), view.reaction());
     }
 
     static SurgeryBoardView board(SurgeryBoardView view, DataScope scope) {

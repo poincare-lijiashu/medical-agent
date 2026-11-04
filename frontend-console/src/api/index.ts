@@ -33,6 +33,10 @@ import type {
   MobileNursingTask,
   MobileScanEvent,
   MobileVerificationResult,
+  BloodProduct,
+  TransfusionBoard,
+  TransfusionRequestSummary,
+  TransfusionRequestView,
   DrugBatch,
   DrugView,
   Frequency,
@@ -637,6 +641,70 @@ export const clinicalApi = {
     post<MobileNursingTask>(`/clinical/mobile/tasks/${id}/exception`, { reason }),
   mobileTaskScans: (id: string) =>
     get<MobileScanEvent[]>(`/clinical/mobile/tasks/${id}/scans`),
+  /** 输血闭环（G40）。 */
+  transfusionProducts: () => get<BloodProduct[]>('/clinical/transfusion/products'),
+  transfusionBoard: () => get<TransfusionBoard>('/clinical/transfusion/board'),
+  transfusionRequests: (params: {
+    status?: string
+    from?: string
+    to?: string
+    limit?: number
+  }) => get<TransfusionRequestSummary[]>('/clinical/transfusion/requests', params),
+  transfusionRequest: (id: string) =>
+    get<TransfusionRequestView>(`/clinical/transfusion/requests/${id}`),
+  createTransfusionRequest: (body: {
+    admissionId?: string
+    admissionNo?: string
+    componentId: string
+    quantity: number
+    bloodType: string
+    rh: string
+    hemoglobin?: number
+    platelet?: number
+    urgency?: string
+    indication: string
+  }) => post<TransfusionRequestView>('/clinical/transfusion/requests', body),
+  crossmatchTransfusion: (
+    id: string,
+    body: {
+      bagNo: string
+      donorBloodType: string
+      donorRh: string
+      result: string
+      method: string
+      bagExpireAt: string
+      note?: string
+    },
+  ) => post<TransfusionRequestView>(`/clinical/transfusion/requests/${id}/crossmatch`, body),
+  issueTransfusion: (id: string) =>
+    post<TransfusionRequestView>(`/clinical/transfusion/requests/${id}/issue`),
+  startTransfusion: (
+    id: string,
+    body: {
+      checkerA: string
+      checkerB: string
+      startTemperature?: number
+      startPulse?: number
+      startSystolic?: number
+      startDiastolic?: number
+    },
+  ) => post<TransfusionRequestView>(`/clinical/transfusion/requests/${id}/start`, body),
+  completeTransfusion: (
+    recordId: string,
+    body: {
+      volumeMl?: number
+      endTemperature?: number
+      endPulse?: number
+      endSystolic?: number
+      endDiastolic?: number
+    },
+  ) => post<TransfusionRequestView>(`/clinical/transfusion/records/${recordId}/complete`, body),
+  reportTransfusionReaction: (
+    recordId: string,
+    body: { severity: string; symptoms: string; actionTaken?: string },
+  ) => post<TransfusionRequestView>(`/clinical/transfusion/records/${recordId}/reaction`, body),
+  cancelTransfusion: (id: string, reason: string) =>
+    post<TransfusionRequestView>(`/clinical/transfusion/requests/${id}/cancel`, { reason }),
 }
 
 export const emrApi = {

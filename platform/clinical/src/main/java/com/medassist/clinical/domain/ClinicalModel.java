@@ -1236,4 +1236,101 @@ public final class ClinicalModel {
     public record MobileBoardRow(long pending, long verifiedToday, long exceptionsToday,
                                  long totalToday) {
     }
+
+    /** 血液成分字典（G40）。 */
+    public record BloodProduct(UUID id, String code, String name, String unit, boolean enabled) {
+    }
+
+    /**
+     * 输血申请（G40）：REQUESTED → CROSSMATCHED → ISSUED → TRANSFUSING → COMPLETED；
+     * REQUESTED / CROSSMATCHED 可取消 → CANCELLED。
+     */
+    public record TransfusionRequest(UUID id, String requestNo, UUID admissionId, UUID visitId,
+                                     UUID patientId, String patientNo, String patientName,
+                                     String gender, LocalDate birthDate, UUID wardId,
+                                     String wardName, String bedNo, UUID componentId,
+                                     String componentCode, String componentName,
+                                     BigDecimal quantity, String unit, String bloodType,
+                                     String rh, BigDecimal hemoglobin, Integer platelet,
+                                     String urgency, String indication, String status,
+                                     UUID crossmatchId, String bagNo, LocalDate bagExpireAt,
+                                     String requestedBy, Instant requestedAt, String issuedBy,
+                                     Instant issuedAt, String startedBy, Instant startedAt,
+                                     String completedBy, Instant completedAt, String cancelReason,
+                                     String cancelledBy, Instant cancelledAt, String createdBy,
+                                     long version, Instant createdAt, Instant updatedAt) {
+
+        public static final String REQUESTED = "REQUESTED";
+        public static final String CROSSMATCHED = "CROSSMATCHED";
+        public static final String ISSUED = "ISSUED";
+        public static final String TRANSFUSING = "TRANSFUSING";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean requested() {
+            return REQUESTED.equals(status);
+        }
+
+        public boolean crossmatched() {
+            return CROSSMATCHED.equals(status);
+        }
+
+        public boolean issued() {
+            return ISSUED.equals(status);
+        }
+
+        public boolean transfusing() {
+            return TRANSFUSING.equals(status);
+        }
+
+        public boolean cancellable() {
+            return REQUESTED.equals(status) || CROSSMATCHED.equals(status);
+        }
+    }
+
+    /** 配血记录：一次申请最多一条 COMPATIBLE，不合可换袋重配。 */
+    public record BloodCrossmatch(UUID id, String crossmatchNo, UUID requestId, String bagNo,
+                                  String donorBloodType, String donorRh, String result,
+                                  String method, LocalDate bagExpireAt, String note,
+                                  String testedBy, Instant testedAt, long version,
+                                  Instant createdAt) {
+
+        public static final String COMPATIBLE = "COMPATIBLE";
+        public static final String INCOMPATIBLE = "INCOMPATIBLE";
+
+        public boolean compatible() {
+            return COMPATIBLE.equals(result);
+        }
+    }
+
+    /** 输注记录：双人核对（checker_a<>checker_b）后开始。 */
+    public record TransfusionRecord(UUID id, String recordNo, UUID requestId, String bagNo,
+                                    String status, Instant startAt, Instant endAt,
+                                    BigDecimal volumeMl, BigDecimal startTemperature,
+                                    Integer startPulse, Integer startSystolic,
+                                    Integer startDiastolic, BigDecimal endTemperature,
+                                    Integer endPulse, Integer endSystolic, Integer endDiastolic,
+                                    boolean reaction, String checkerA, String checkerB,
+                                    Instant checkedAt, String startedBy, String completedBy,
+                                    Instant completedAt, long version, Instant createdAt) {
+
+        public static final String TRANSFUSING = "TRANSFUSING";
+        public static final String COMPLETED = "COMPLETED";
+
+        public boolean transfusing() {
+            return TRANSFUSING.equals(status);
+        }
+    }
+
+    /** 输血不良反应（一次输注一份）。 */
+    public record TransfusionReaction(UUID id, String reactionNo, UUID recordId, UUID requestId,
+                                      String severity, String symptoms, String actionTaken,
+                                      String reportedBy, Instant reportedAt, Instant createdAt) {
+    }
+
+    /** 输血看板：各状态数量与当日完成/不良反应。 */
+    public record TransfusionBoardRow(long requested, long crossmatched, long issued,
+                                      long transfusing, long completedToday,
+                                      long reactionsToday, long totalToday) {
+    }
 }

@@ -3169,3 +3169,162 @@ export interface MobileNursingBoard {
   exceptionsToday: number
   totalToday: number
 }
+
+// ---------------------------------------------------------------- 输血闭环（G40）
+
+export interface BloodProduct {
+  id: string
+  code: string
+  name: string
+  unit: string
+  enabled: boolean
+}
+
+export type TransfusionStatus =
+  | 'REQUESTED'
+  | 'CROSSMATCHED'
+  | 'ISSUED'
+  | 'TRANSFUSING'
+  | 'COMPLETED'
+  | 'CANCELLED'
+
+export interface TransfusionRequestSummary {
+  id: string
+  requestNo: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  wardName: string | null
+  bedNo: string | null
+  componentName: string
+  quantity: number
+  unit: string
+  bloodType: string
+  rh: string
+  urgency: 'ROUTINE' | 'URGENT' | 'EMERGENCY'
+  status: TransfusionStatus
+  requestedBy: string
+  requestedAt: string
+  completedBy: string | null
+  completedAt: string | null
+}
+
+export interface TransfusionRequest {
+  id: string
+  requestNo: string
+  admissionId: string
+  visitId: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  gender: string | null
+  birthDate: string | null
+  wardId: string | null
+  wardName: string | null
+  bedNo: string | null
+  componentId: string
+  componentCode: string
+  componentName: string
+  quantity: number
+  unit: string
+  bloodType: string
+  rh: string
+  hemoglobin: number | null
+  platelet: number | null
+  urgency: 'ROUTINE' | 'URGENT' | 'EMERGENCY'
+  indication: string
+  status: TransfusionStatus
+  crossmatchId: string | null
+  bagNo: string | null
+  bagExpireAt: string | null
+  requestedBy: string
+  requestedAt: string
+  issuedBy: string | null
+  issuedAt: string | null
+  startedBy: string | null
+  startedAt: string | null
+  completedBy: string | null
+  completedAt: string | null
+  cancelReason: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BloodCrossmatch {
+  id: string
+  crossmatchNo: string
+  requestId: string
+  bagNo: string
+  donorBloodType: string
+  donorRh: string
+  result: 'COMPATIBLE' | 'INCOMPATIBLE'
+  method: string
+  bagExpireAt: string
+  note: string | null
+  testedBy: string
+  testedAt: string
+  version: number
+  createdAt: string
+}
+
+export interface TransfusionRecord {
+  id: string
+  recordNo: string
+  requestId: string
+  bagNo: string
+  status: 'TRANSFUSING' | 'COMPLETED'
+  startAt: string
+  endAt: string | null
+  volumeMl: number | null
+  startTemperature: number | null
+  startPulse: number | null
+  startSystolic: number | null
+  startDiastolic: number | null
+  endTemperature: number | null
+  endPulse: number | null
+  endSystolic: number | null
+  endDiastolic: number | null
+  reaction: boolean
+  checkerA: string
+  checkerB: string
+  checkedAt: string
+  startedBy: string
+  completedBy: string | null
+  completedAt: string | null
+  version: number
+  createdAt: string
+}
+
+export interface TransfusionReaction {
+  id: string
+  reactionNo: string
+  recordId: string
+  requestId: string
+  severity: 'MILD' | 'MODERATE' | 'SEVERE'
+  symptoms: string
+  actionTaken: string | null
+  reportedBy: string
+  reportedAt: string
+  createdAt: string
+}
+
+export interface TransfusionRequestView {
+  request: TransfusionRequest
+  crossmatches: BloodCrossmatch[]
+  record: TransfusionRecord | null
+  reaction: TransfusionReaction | null
+}
+
+export interface TransfusionBoard {
+  requested: number
+  crossmatched: number
+  issued: number
+  transfusing: number
+  completedToday: number
+  reactionsToday: number
+  totalToday: number
+}

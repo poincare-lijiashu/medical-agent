@@ -101,6 +101,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:read'],
   },
   {
+    name: 'transfusion',
+    path: '/transfusion',
+    title: '输血管理',
+    hint: '申请 · 配血 · 发血 · 双人核对输注 · 不良反应',
+    icon: 'activity',
+    group: '住院管理',
+    permissions: ['transfusion:request:read'],
+  },
+  {
     name: 'mobile-nursing',
     path: '/mobile-nursing',
     title: '移动护理',

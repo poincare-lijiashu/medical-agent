@@ -161,6 +161,31 @@ class ClinicalExceptionMappingTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(handler.statusOf(ErrorCode.MOBILE_SCAN_INVALID))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // 输血闭环（G40）
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_REQUEST_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_CROSSMATCH_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_RECORD_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_CROSSMATCH_INCOMPATIBLE))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_NOT_CROSSMATCHED))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_REACTION_EXISTS))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_REQUEST_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_CROSSMATCH_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_DOUBLE_CHECK_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_REACTION_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_CANCEL_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

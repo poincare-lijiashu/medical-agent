@@ -130,6 +130,20 @@ public enum ErrorCode {
     MOBILE_EXCEPTION_REASON_REQUIRED(44524, "登记扫码异常必须填写原因"),
     MOBILE_SCAN_INVALID(44525, "扫码内容为空，请重新扫描腕带/药品/标本条码"),
 
+    // ---- 输血闭环（44xxx 续，G40）----
+    TRANSFUSION_REQUEST_NOT_FOUND(44530, "未找到该输血申请"),
+    TRANSFUSION_STATUS_INVALID(44531, "当前输血状态不允许该操作"),
+    TRANSFUSION_REQUEST_INVALID(44532, "输血申请内容不合法（血型/成分/数量/适应症）"),
+    TRANSFUSION_CROSSMATCH_NOT_FOUND(44533, "未找到该配血记录"),
+    TRANSFUSION_CROSSMATCH_INVALID(44534, "配血记录不合法（血袋号/血型/结果/有效期）"),
+    TRANSFUSION_CROSSMATCH_INCOMPATIBLE(44535, "配血不合，不能发血"),
+    TRANSFUSION_NOT_CROSSMATCHED(44536, "该申请尚无配血相合的记录，不能发血或输注"),
+    TRANSFUSION_DOUBLE_CHECK_REQUIRED(44537, "输注前双人核对必须由两名不同人员完成"),
+    TRANSFUSION_RECORD_NOT_FOUND(44538, "未找到该输注记录"),
+    TRANSFUSION_REACTION_INVALID(44539, "输血不良反应内容不合法（分级/症状）"),
+    TRANSFUSION_CANCEL_REASON_REQUIRED(44540, "取消输血申请必须填写原因"),
+    TRANSFUSION_REACTION_EXISTS(44541, "该输注记录已上报不良反应，请勿重复上报"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),
