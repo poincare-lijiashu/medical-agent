@@ -161,6 +161,15 @@ public enum ErrorCode {
     CA_SIGNATURE_EXISTS(44555, "该病历签名行已有 CA 签名，请勿重复签署"),
     CA_REVOKE_REASON_REQUIRED(44556, "撤销 CA 签名必须填写原因"),
 
+    // ---- 知情同意书（47xxx 续，G44）----
+    CONSENT_NOT_FOUND(47420, "未找到该知情同意书"),
+    CONSENT_TEMPLATE_NOT_FOUND(47421, "未找到该同意书模板，或模板未发布"),
+    CONSENT_TEMPLATE_STATUS_INVALID(47422, "当前模板状态不允许该操作"),
+    CONSENT_STATUS_INVALID(47423, "当前同意书状态不允许该操作"),
+    CONSENT_SIGNER_REQUIRED(47424, "签署同意书必须填写患者/家属签署人及与患者关系"),
+    CONSENT_REVOKE_REASON_REQUIRED(47425, "撤销知情同意书必须填写原因"),
+    CONSENT_SIGNATURE_INVALID(47426, "知情同意书签名或内容校验失败"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

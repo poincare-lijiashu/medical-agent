@@ -80,6 +80,24 @@ class ExceptionMappingContractTest {
     }
 
     @Test
+    @DisplayName("知情同意书：不存在 404、状态冲突 409、签署/撤销/验签不合法 422")
+    void consentCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.CONSENT_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CONSENT_TEMPLATE_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CONSENT_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CONSENT_TEMPLATE_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CONSENT_SIGNER_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CONSENT_REVOKE_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CONSENT_SIGNATURE_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    @Test
     @DisplayName("业务错误码不得落到 5xx（否则前端会把业务拒绝当系统故障重试）")
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {

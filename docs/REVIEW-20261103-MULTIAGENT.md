@@ -13,10 +13,10 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G43 生产运维加固）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），426 个主代码 Java 文件、170 个测试类、**1606 项测试全绿**。
-- **前端**：43 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V70、tech V12、pharmacy V19、emr V21、insurance V19、material V4、clinical V55（各服务独立 schema）。
+- **HEAD**：以 `git log -1` 为准（本轮 G44 电子知情同意书）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），430 个主代码 Java 文件、172 个测试类、**1622 项测试全绿**。
+- **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
+- **数据库**：auth V71、tech V12、pharmacy V19、emr V22、insurance V19、material V4、clinical V55（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
 - **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。
@@ -44,7 +44,8 @@
 | 随访与慢病 | 可用 | 85% | 慢病病种字典、建档与风险分级、随访计划（7–365 天）、待随访任务与逾期标记、随访记录（血压/血糖/体重/症状/依从性）、完成随访自动生成下一周期任务、结案停计划、看板 | 随访提醒推送、批量随访、慢病质控指标 |
 | 移动护理与条码 | 可用 | 80% | 从长期药品医嘱生成给药核对任务、手工标本任务、腕带+药品/标本双码核对、不匹配保留待核对并留扫码事件、异常原因关闭、追加式扫码审计、看板 | 输血核对、PDA 离线缓存、真实药品包装条码对接 |
 | 输血 | 可用 | 85% | 输血申请、配血（可多次换袋/一次申请一条相合）、发血、双人核对输注、输注记录、不良反应分级上报、看板 | 血液库存与效期预警、退血/报废、输血相容性规则引擎 |
-| CA 电子签名 | 可用 | 80% | 医生/护士签名适配层（Mock HMAC + 厂商 HTTP 双模式）、病历签名 `caSign=true` 同步取签、签名台账、验签留痕、撤销（原因必填、幂等）、看板 | 知情同意书签名、签名时间戳/证书链校验、厂商正式联调、无纸化归档包 |
+| CA 电子签名 | 可用 | 85% | 医生/护士签名适配层（Mock HMAC + 厂商 HTTP 双模式）、病历签名 `caSign=true` 同步取签、签名台账、验签留痕、撤销（原因必填、幂等）、看板 | 签名时间戳/证书链校验、厂商正式联调、无纸化归档包 |
+| 知情同意书 | 可用 | 85% | 模板维护/发布/停用、按模板固化正文与 SHA-256、患者/家属签署（纸笔或 CA）、验签、撤销留原因、打印、看板 | 电子签名厂商正式证书链、批量/套餐同意书、患者端签署 |
 | 未建业务线 | 未开始 | 0–5% | — | 患者移动端 |
 | 部署与运维 | 可用 | 82% | Helm/ArgoCD（滚动 maxUnavailable=0 + PDB）、备份 CronJob、Loki/Prometheus 局部接入、发布后冒烟门禁、容量基线（p95 12.7ms / 0 错误）、备份恢复演练（3.83MB / 11.2s / 行数一致）、CI 前后端 + Helm 三环境门禁 | 多院区发布策略、混沌工程、跨机房容灾 |
 
@@ -54,7 +55,7 @@
 - **完整商业版（含报表、未建业务线、运维加固）≈ 84–88%**：差距主要在"业务面宽度"和"生产运维"，不是已实现流程的深度。
 - **可交付状态**：单院区核心 HIS 可演示/试运行；距正式生产还差医保实时接口省局联调、票据厂商正式联调、多院区/多租户隔离。
 
-### 2. 已完成的关键增量（G1–G43，均有真实链路验证）
+### 2. 已完成的关键增量（G1–G44，均有真实链路验证）
 
 | 编号 | 内容 | 关键点 |
 |---|---|---|
@@ -101,6 +102,7 @@
 | G41 | CA 电子签名与无纸化 | emr V21 `ca_signature`（签名记录唯一、VALID/REVOKED、撤销必须写原因/人/时间 CHECK、验签次数与最近结果留痕）+ auth V69 四个权限点（read/sign/verify/manage）；CA 适配层 `CaSignatureProvider` 支持 mock（HMAC-SHA256，签名时间截断到微秒以匹配 timestamptz 精度）与 vendor（POST /sign、/verify，密钥仅从部署配置注入）；`/emr/ca` 提供模式、台账、验签、撤销、看板；病历签名接口新增 `caSign=true`，CA 失败回滚整笔病历签名；新增「CA 电子签名」页（KPI、台账筛选、验签、撤销、详情）；错误码 44550–44556 与 404/409/422/503 契约测试固化 |
 | G42 | 统一身份 SSO（OIDC） | auth V70 `sso_login_state`（一次性 state、PKCE verifier、nonce、5 分钟过期，`UPDATE ... RETURNING` 原子消费）+ `sso_identity`（provider+subject 唯一、provider+user 唯一，防换号接管）；`OidcClient` 负责发现文档/JWKS 缓存、授权码换 token、RS256 验签与 iss 校验（发现文档 issuer 不一致直接拒绝）；`/auth/sso/config`、`/oidc/authorize`、`/oidc/callback` 登录前接口，校验 aud/nonce 后映射本地账号或按配置自动开户，复用本地令牌签发与 `SSO_LOGIN` 审计；网关白名单与 `ActorGuardFilter` 同步放行；登录页新增统一身份入口与回调页；错误码 40110–40112/40310–40311/50310 |
 | G43 | 生产运维加固 | CI 增加前端门禁（`npm ci` + `vue-tsc` + `vite build`），与既有后端 `mvn package`、Helm lint/三环境渲染并列；新增 `scripts/release/release_gate.ps1`（网关健康 + 登录 + 五域读探针 + 未认证 401，失败即退出 1）；新增 `scripts/perf/platform_loadtest.ps1`（固定并发 + 主动限速，统计 p50/p95/p99/错误/限流并按阈值门禁）；新增 `scripts/dr/pg_restore_drill.ps1`（pg_dump → 临时库恢复 → 5 张核心表行数比对 → 自动清理）；实测 2535 请求 0 错误 p95 12.7ms、dump 3.83MB 恢复 11.2s 行数一致 |
+| G44 | 电子知情同意书 | emr V22 `consent_template`（DRAFT→PUBLISHED→DISABLED，发布后内容不可改）+ `consent_record`（模板名/版本/正文快照 + SHA-256；DRAFT→SIGNED→REVOKED，库级 CHECK 强制签署人/时间与撤销原因/人/时间；CA 模式强制证书/签名/算法齐全）+ auth V71 read/write/sign/revoke/manage 五个权限点；`/emr/consents` 提供模板维护/发布/停用、按患者+就诊创建、纸笔或 CA 签署、验签、撤销、打印与看板；CA 复用 G41 适配层并新增原始内容验签；新增「知情同意书」页（KPI、模板管理、患者/就诊检索创建、签署/撤销/详情/验签/打印）；错误码 47420–47426 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
@@ -114,7 +116,7 @@
 
 2. LDAP/AD 绑定与 SSO 账号生命周期（离职禁用、身份解绑、管理员手工绑定界面）。
 3. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
-4. CA 厂商正式联调、知情同意书签名与无纸化归档包。
+4. CA 厂商正式联调、证书链/时间戳校验与无纸化归档包。
 5. 混沌工程与跨机房容灾（在现有单机恢复演练基础上扩展）。
 
 **P2**

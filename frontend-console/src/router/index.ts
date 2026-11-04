@@ -39,6 +39,7 @@ const router = createRouter({
         { path: 'chronic', name: 'chronic', component: () => import('@/views/ChronicView.vue') },
         { path: 'health-exam', name: 'health-exam', component: () => import('@/views/HealthExamView.vue') },
         { path: 'emergency', name: 'emergency', component: () => import('@/views/EmergencyView.vue') },
+        { path: 'consents', name: 'consents', component: () => import('@/views/ConsentsView.vue') },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },
         { path: 'preop', name: 'preop', component: () => import('@/views/PreopVisitView.vue') },
         {

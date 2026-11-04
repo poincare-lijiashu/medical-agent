@@ -3375,3 +3375,64 @@ export interface SsoAuthorize {
   authorizeUrl: string
   state: string
 }
+
+/** 知情同意书模板（G44）。 */
+export interface ConsentTemplate {
+  id: string
+  templateCode: string
+  name: string
+  procedureType: string
+  content: string
+  templateVersion: number
+  status: 'DRAFT' | 'PUBLISHED' | 'DISABLED'
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  version: number
+}
+
+/** 知情同意书（G44）。 */
+export interface ConsentRecord {
+  id: string
+  consentNo: string
+  templateId: string
+  templateCode: string
+  templateVersion: number
+  templateName: string
+  patientId: string
+  patientNo: string
+  patientName: string
+  visitId: string
+  procedureName: string
+  contentText: string
+  contentHash: string | null
+  status: 'DRAFT' | 'SIGNED' | 'REVOKED'
+  patientSigner: string | null
+  patientRelation: string | null
+  witnessName: string | null
+  doctorName: string
+  signedAt: string | null
+  signMethod: 'PAPER' | 'CA' | null
+  certificateSerial: string | null
+  signatureValue: string | null
+  algorithm: string | null
+  revokeReason: string | null
+  revokedBy: string | null
+  revokedAt: string | null
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  version: number
+}
+
+export interface ConsentBoard {
+  drafts: number
+  signedToday: number
+  revokedTotal: number
+}
+
+export interface ConsentVerify {
+  hashValid: boolean
+  signatureValid: boolean | null
+  status: string
+}

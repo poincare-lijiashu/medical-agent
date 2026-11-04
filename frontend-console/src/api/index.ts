@@ -5,6 +5,10 @@ import type {
   BillingPreview,
   CaBoard,
   CaSignature,
+  ConsentBoard,
+  ConsentRecord,
+  ConsentTemplate,
+  ConsentVerify,
   ChargeItem,
   ChargeView,
   ChargeReceipt,
@@ -734,6 +738,41 @@ export const emrApi = {
   caVerify: (id: string) => post<CaSignature>(`/emr/ca/signatures/${id}/verify`),
   caRevoke: (id: string, reason: string) =>
     post<CaSignature>(`/emr/ca/signatures/${id}/revoke`, { reason }),
+
+  /** 知情同意书（G44）。 */
+  consentTemplates: (status?: string, limit = 100) =>
+    get<ConsentTemplate[]>('/emr/consents/templates', { status, limit }),
+  createConsentTemplate: (body: {
+    templateCode: string
+    name: string
+    procedureType: string
+    content: string
+  }) => post<ConsentTemplate>('/emr/consents/templates', body),
+  publishConsentTemplate: (id: string, version: number) =>
+    post<ConsentTemplate>(`/emr/consents/templates/${id}/publish`, { version }),
+  disableConsentTemplate: (id: string, version: number) =>
+    post<ConsentTemplate>(`/emr/consents/templates/${id}/disable`, { version }),
+  consents: (params?: { patientId?: string; status?: string; limit?: number }) =>
+    get<ConsentRecord[]>('/emr/consents', params),
+  consent: (id: string) => get<ConsentRecord>(`/emr/consents/${id}`),
+  createConsent: (body: {
+    patientId: string
+    visitId: string
+    templateCode: string
+    procedureName: string
+  }) => post<ConsentRecord>('/emr/consents', body),
+  signConsent: (id: string, body: {
+    patientSigner: string
+    patientRelation: string
+    witnessName?: string
+    doctorName?: string
+    caSign?: boolean
+    version: number
+  }) => post<ConsentRecord>(`/emr/consents/${id}/sign`, body),
+  revokeConsent: (id: string, reason: string, version: number) =>
+    post<ConsentRecord>(`/emr/consents/${id}/revoke`, { reason, version }),
+  verifyConsent: (id: string) => get<ConsentVerify>(`/emr/consents/${id}/verify`),
+  consentBoard: () => get<ConsentBoard>('/emr/consents/board'),
 }
 
 export const surgeryApi = {

@@ -315,4 +315,56 @@ public final class EmrModel {
             return VALID.equals(status);
         }
     }
+
+    /**
+     * 知情同意书模板（G44）：DRAFT → PUBLISHED → DISABLED。
+     *
+     * <p>发布后内容不可改；要改内容必须新建模板编码或新版本，避免已签文书被追溯篡改。
+     */
+    public record ConsentTemplate(UUID id, String templateCode, String name, String procedureType,
+                                  String content, int templateVersion, String status,
+                                  String createdBy, Instant createdAt, Instant updatedAt,
+                                  long version) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String DISABLED = "DISABLED";
+
+        public boolean published() {
+            return PUBLISHED.equals(status);
+        }
+    }
+
+    /**
+     * 知情同意书（G44）。
+     *
+     * <p>创建时固化模板内容与哈希；DRAFT → SIGNED → REVOKED。
+     * 签署支持 PAPER（纸笔登记）与 CA（证书签名，保存证书序列号/算法/签名值）。
+     */
+    public record ConsentRecord(UUID id, String consentNo, UUID templateId, String templateCode,
+                                int templateVersion, String templateName,
+                                UUID patientId, String patientNo, String patientName, UUID visitId,
+                                String procedureName, String contentText, String contentHash,
+                                String status, String patientSigner, String patientRelation,
+                                String witnessName, String doctorName, Instant signedAt,
+                                String signMethod, String certificateSerial, String signatureValue,
+                                String algorithm, String revokeReason, String revokedBy,
+                                Instant revokedAt, String createdBy, Instant createdAt,
+                                Instant updatedAt, long version) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SIGNED = "SIGNED";
+        public static final String REVOKED = "REVOKED";
+
+        public static final String SIGN_PAPER = "PAPER";
+        public static final String SIGN_CA = "CA";
+
+        public boolean draft() {
+            return DRAFT.equals(status);
+        }
+
+        public boolean signed() {
+            return SIGNED.equals(status);
+        }
+    }
 }

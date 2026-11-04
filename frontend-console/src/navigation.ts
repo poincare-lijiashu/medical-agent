@@ -74,6 +74,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['emergency:triage:read'],
   },
   {
+    name: 'consents',
+    path: '/consents',
+    title: '知情同意书',
+    hint: '模板发布 · 创建 · 患者/家属签署 · CA 签名 · 验签与撤销',
+    icon: 'clipboard',
+    group: '临床诊疗',
+    permissions: ['emr:consent:read'],
+  },
+  {
     name: 'orders',
     path: '/orders',
     title: '医嘱工作台',

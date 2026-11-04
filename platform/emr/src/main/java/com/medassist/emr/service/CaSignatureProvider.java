@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * CA 签名适配层（G41）。
@@ -50,6 +51,27 @@ public class CaSignatureProvider {
             return mockVerify(signature);
         }
         return vendorVerify(signature);
+    }
+
+    /**
+     * 对"非病历签名"的任意内容验签（G44 知情同意书）。
+     *
+     * <p>mock 模式直接按同样 payload 重算 HMAC；vendor 模式用最小签名画像调用厂商 /verify。
+     */
+    public boolean verify(String contentHash, String signer, String signType, Instant signedAt,
+                          String algorithm, String signatureValue) {
+        if (isMock()) {
+            if (!"HMAC-SHA256".equalsIgnoreCase(algorithm)) {
+                return false;
+            }
+            String expected = hmac(payload(contentHash, signer, signType, signedAt));
+            return constantTimeEquals(expected, signatureValue);
+        }
+        CaSignature synthetic = new CaSignature(UUID.randomUUID(), UUID.randomUUID(),
+                UUID.randomUUID(), 0, signer, signType, contentHash, mode(), "", algorithm,
+                signatureValue, signedAt, CaSignature.VALID, 0, null, null,
+                null, null, null, signedAt);
+        return vendorVerify(synthetic);
     }
 
     // ---------------------------------------------------------------- mock
