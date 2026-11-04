@@ -23,6 +23,13 @@ import com.medassist.clinical.domain.ClinicalModel.DischargeMedicationItem;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBed;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyObservation;
+import com.medassist.clinical.domain.ClinicalModel.ChronicBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.ChronicDisease;
+import com.medassist.clinical.domain.ClinicalModel.ChronicFollowup;
+import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupPlan;
+import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupTask;
+import com.medassist.clinical.domain.ClinicalModel.ChronicRecord;
+import com.medassist.clinical.domain.ClinicalModel.ChronicRecordSummary;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyTriage;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamItem;
@@ -5759,6 +5766,418 @@ public class ClinicalRepository {
                         rs.getLong("in_progress"), rs.getLong("exam_done"),
                         rs.getLong("reported"), rs.getLong("cancelled"),
                         rs.getLong("abnormal_items"), rs.getLong("total_today")))
+                .single();
+    }
+
+    // ---------------------------------------------------------------- 随访与慢病（G38）
+
+    private static final RowMapper<ChronicDisease> CHRONIC_DISEASE_MAPPER = (rs, i) ->
+            new ChronicDisease(rs.getObject("id", UUID.class), rs.getString("code"),
+                    rs.getString("name"), rs.getBoolean("enabled"));
+
+    private static final RowMapper<ChronicRecord> CHRONIC_RECORD_MAPPER = (rs, i) ->
+            new ChronicRecord(
+                    rs.getObject("id", UUID.class), rs.getString("record_no"),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getString("patient_name"), rs.getString("gender"),
+                    rs.getDate("birth_date") == null ? null
+                            : rs.getDate("birth_date").toLocalDate(),
+                    rs.getObject("disease_id", UUID.class), rs.getString("disease_code"),
+                    rs.getString("disease_name"),
+                    rs.getDate("diagnosis_date").toLocalDate(), rs.getString("risk_level"),
+                    rs.getString("status"), rs.getObject("managing_dept_id", UUID.class),
+                    rs.getString("managing_dept_name"), rs.getString("manager"),
+                    rs.getString("note"), rs.getString("close_reason"), rs.getString("closed_by"),
+                    rs.getTimestamp("closed_at") == null ? null
+                            : rs.getTimestamp("closed_at").toInstant(),
+                    rs.getString("created_by"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant());
+
+    private static final RowMapper<ChronicFollowupPlan> CHRONIC_PLAN_MAPPER = (rs, i) ->
+            new ChronicFollowupPlan(
+                    rs.getObject("id", UUID.class), rs.getString("plan_no"),
+                    rs.getObject("chronic_id", UUID.class), rs.getInt("interval_days"),
+                    rs.getDate("next_date").toLocalDate(), rs.getString("status"),
+                    rs.getString("stop_reason"), rs.getString("stopped_by"),
+                    rs.getTimestamp("stopped_at") == null ? null
+                            : rs.getTimestamp("stopped_at").toInstant(),
+                    rs.getString("created_by"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<ChronicFollowupTask> CHRONIC_TASK_MAPPER = (rs, i) ->
+            new ChronicFollowupTask(
+                    rs.getObject("id", UUID.class), rs.getString("task_no"),
+                    rs.getObject("plan_id", UUID.class), rs.getObject("chronic_id", UUID.class),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getString("patient_name"), rs.getString("disease_name"),
+                    rs.getDate("due_date").toLocalDate(), rs.getString("status"),
+                    rs.getTimestamp("completed_at") == null ? null
+                            : rs.getTimestamp("completed_at").toInstant(),
+                    rs.getObject("followup_id", UUID.class), rs.getString("cancel_reason"),
+                    rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null ? null
+                            : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getTimestamp("created_at").toInstant(), rs.getLong("version"));
+
+    private static final RowMapper<ChronicFollowup> CHRONIC_FOLLOWUP_MAPPER = (rs, i) ->
+            new ChronicFollowup(
+                    rs.getObject("id", UUID.class), rs.getString("followup_no"),
+                    rs.getObject("task_id", UUID.class), rs.getObject("chronic_id", UUID.class),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getString("patient_name"),
+                    rs.getDate("followup_date").toLocalDate(), rs.getString("method"),
+                    rs.getObject("systolic", Integer.class), rs.getObject("diastolic", Integer.class),
+                    rs.getBigDecimal("fasting_glucose"), rs.getBigDecimal("weight"),
+                    rs.getString("symptoms"), rs.getString("medication_adherence"),
+                    rs.getString("advice"), rs.getString("created_by"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final String CHRONIC_RECORD_SELECT = """
+            SELECT r.id, r.record_no, r.patient_id, r.patient_no, r.patient_name, r.gender,
+                   r.birth_date, r.disease_id, r.disease_code, r.disease_name, r.diagnosis_date,
+                   r.risk_level, r.status, r.managing_dept_id, d.name AS managing_dept_name,
+                   r.manager, r.note, r.close_reason, r.closed_by, r.closed_at, r.created_by,
+                   r.version, r.created_at, r.updated_at
+              FROM clinical_svc.chronic_record r
+              LEFT JOIN clinical_svc.md_dept d ON d.id = r.managing_dept_id
+            """;
+
+    private static final String CHRONIC_PLAN_SELECT = """
+            SELECT id, plan_no, chronic_id, interval_days, next_date, status, stop_reason,
+                   stopped_by, stopped_at, created_by, version, created_at
+              FROM clinical_svc.chronic_followup_plan
+            """;
+
+    private static final String CHRONIC_TASK_SELECT = """
+            SELECT id, task_no, plan_id, chronic_id, patient_id, patient_no, patient_name,
+                   disease_name, due_date, status, completed_at, followup_id, cancel_reason,
+                   cancelled_by, cancelled_at, created_at, version
+              FROM clinical_svc.chronic_followup_task
+            """;
+
+    private static final String CHRONIC_FOLLOWUP_SELECT = """
+            SELECT id, followup_no, task_id, chronic_id, patient_id, patient_no, patient_name,
+                   followup_date, method, systolic, diastolic, fasting_glucose, weight, symptoms,
+                   medication_adherence, advice, created_by, created_at
+              FROM clinical_svc.chronic_followup
+            """;
+
+    public String nextChronicRecordNo() {
+        return nextNo("clinical_svc.chronic_record_no_seq", "CR");
+    }
+
+    public String nextChronicPlanNo() {
+        return nextNo("clinical_svc.chronic_plan_no_seq", "CFP");
+    }
+
+    public String nextChronicTaskNo() {
+        return nextNo("clinical_svc.chronic_task_no_seq", "CFT");
+    }
+
+    public String nextChronicFollowupNo() {
+        return nextNo("clinical_svc.chronic_followup_no_seq", "CFF");
+    }
+
+    public List<ChronicDisease> listChronicDiseases() {
+        return jdbc.sql("""
+                        SELECT id, code, name, enabled FROM clinical_svc.chronic_disease
+                         WHERE enabled ORDER BY code
+                        """).query(CHRONIC_DISEASE_MAPPER).list();
+    }
+
+    public Optional<ChronicDisease> findChronicDisease(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, code, name, enabled FROM clinical_svc.chronic_disease
+                         WHERE id = ?
+                        """).param(id).query(CHRONIC_DISEASE_MAPPER).optional();
+    }
+
+    public Optional<ChronicRecord> findActiveChronicRecord(UUID patientId, UUID diseaseId) {
+        return jdbc.sql(CHRONIC_RECORD_SELECT
+                        + " WHERE r.patient_id = ? AND r.disease_id = ? AND r.status = 'ACTIVE'")
+                .param(patientId).param(diseaseId).query(CHRONIC_RECORD_MAPPER).optional();
+    }
+
+    public void insertChronicRecord(ChronicRecord r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.chronic_record
+                            (id, record_no, patient_id, patient_no, patient_name, gender,
+                             birth_date, disease_id, disease_code, disease_name, diagnosis_date,
+                             risk_level, status, managing_dept_id, manager, note, created_by)
+                        VALUES (:id, :recordNo, :patientId, :patientNo, :patientName, :gender,
+                                :birthDate, :diseaseId, :diseaseCode, :diseaseName, :diagnosisDate,
+                                :riskLevel, :status, :deptId, :manager, :note, :createdBy)
+                        """)
+                .param("id", r.id()).param("recordNo", r.recordNo())
+                .param("patientId", r.patientId()).param("patientNo", r.patientNo())
+                .param("patientName", r.patientName()).param("gender", r.gender())
+                .param("birthDate", r.birthDate()).param("diseaseId", r.diseaseId())
+                .param("diseaseCode", r.diseaseCode()).param("diseaseName", r.diseaseName())
+                .param("diagnosisDate", r.diagnosisDate()).param("riskLevel", r.riskLevel())
+                .param("status", r.status()).param("deptId", r.managingDeptId())
+                .param("manager", r.manager()).param("note", r.note())
+                .param("createdBy", r.createdBy()).update();
+    }
+
+    public Optional<ChronicRecord> findChronicRecord(UUID id) {
+        return jdbc.sql(CHRONIC_RECORD_SELECT + " WHERE r.id = ?")
+                .param(id).query(CHRONIC_RECORD_MAPPER).optional();
+    }
+
+    public Optional<ChronicRecord> lockChronicRecord(UUID id) {
+        return jdbc.sql(CHRONIC_RECORD_SELECT + " WHERE r.id = ? FOR UPDATE OF r")
+                .param(id).query(CHRONIC_RECORD_MAPPER).optional();
+    }
+
+    /** 慢病档案列表：高风险优先，带最近随访与下次随访日期。 */
+    public List<ChronicRecordSummary> listChronicRecords(String status, UUID diseaseId,
+                                                         String keyword, int limit) {
+        return jdbc.sql("""
+                        SELECT r.id, r.record_no, r.patient_id, r.patient_no, r.patient_name,
+                               r.gender, r.birth_date, r.disease_code, r.disease_name,
+                               r.risk_level, r.status, r.manager, r.created_at,
+                               (SELECT max(f.followup_date) FROM clinical_svc.chronic_followup f
+                                 WHERE f.chronic_id = r.id) AS last_followup_date,
+                               (SELECT count(*) FROM clinical_svc.chronic_followup f
+                                 WHERE f.chronic_id = r.id) AS followup_count,
+                               (SELECT min(t.due_date) FROM clinical_svc.chronic_followup_task t
+                                 WHERE t.chronic_id = r.id AND t.status = 'PENDING')
+                                   AS next_due_date
+                          FROM clinical_svc.chronic_record r
+                         WHERE (CAST(:status AS text) IS NULL
+                                OR r.status = CAST(:status AS text))
+                           AND (CAST(:diseaseId AS uuid) IS NULL
+                                OR r.disease_id = CAST(:diseaseId AS uuid))
+                           AND (CAST(:keyword AS text) IS NULL
+                                OR r.record_no ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR r.patient_no ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR r.patient_name ILIKE '%' || CAST(:keyword AS text) || '%')
+                         ORDER BY CASE r.risk_level WHEN 'HIGH' THEN 0
+                                                    WHEN 'MEDIUM' THEN 1 ELSE 2 END,
+                                  r.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("diseaseId", diseaseId)
+                .param("keyword", keyword).param("limit", limit)
+                .query((rs, i) -> new ChronicRecordSummary(
+                        rs.getObject("id", UUID.class), rs.getString("record_no"),
+                        rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                        rs.getString("patient_name"), rs.getString("gender"),
+                        rs.getDate("birth_date") == null ? null
+                                : rs.getDate("birth_date").toLocalDate(),
+                        rs.getString("disease_code"), rs.getString("disease_name"),
+                        rs.getString("risk_level"), rs.getString("status"),
+                        rs.getString("manager"), rs.getTimestamp("created_at").toInstant(),
+                        rs.getDate("last_followup_date") == null ? null
+                                : rs.getDate("last_followup_date").toLocalDate(),
+                        rs.getInt("followup_count"),
+                        rs.getDate("next_due_date") == null ? null
+                                : rs.getDate("next_due_date").toLocalDate()))
+                .list();
+    }
+
+    public boolean updateChronicRisk(UUID id, String riskLevel, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.chronic_record
+                           SET risk_level = :riskLevel, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND version = :version
+                        """)
+                .param("id", id).param("riskLevel", riskLevel)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean closeChronicRecord(UUID id, String reason, String actor,
+                                      long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.chronic_record
+                           SET status = 'CLOSED', close_reason = :reason, closed_by = :actor,
+                               closed_at = now(), version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertChronicPlan(ChronicFollowupPlan p) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.chronic_followup_plan
+                            (id, plan_no, chronic_id, interval_days, next_date, status, created_by)
+                        VALUES (:id, :planNo, :chronicId, :intervalDays, :nextDate, :status,
+                                :createdBy)
+                        """)
+                .param("id", p.id()).param("planNo", p.planNo())
+                .param("chronicId", p.chronicId()).param("intervalDays", p.intervalDays())
+                .param("nextDate", p.nextDate()).param("status", p.status())
+                .param("createdBy", p.createdBy()).update();
+    }
+
+    public Optional<ChronicFollowupPlan> findActivePlanByChronic(UUID chronicId) {
+        return jdbc.sql(CHRONIC_PLAN_SELECT
+                        + " WHERE chronic_id = ? AND status = 'ACTIVE'")
+                .param(chronicId).query(CHRONIC_PLAN_MAPPER).optional();
+    }
+
+    /** 最近一次计划（含已停止），用于档案详情保留随访计划历史。 */
+    public Optional<ChronicFollowupPlan> findLatestPlanByChronic(UUID chronicId) {
+        return jdbc.sql(CHRONIC_PLAN_SELECT
+                        + " WHERE chronic_id = ? ORDER BY created_at DESC LIMIT 1")
+                .param(chronicId).query(CHRONIC_PLAN_MAPPER).optional();
+    }
+
+    public Optional<ChronicFollowupPlan> lockChronicPlan(UUID id) {
+        return jdbc.sql(CHRONIC_PLAN_SELECT + " WHERE id = ? FOR UPDATE")
+                .param(id).query(CHRONIC_PLAN_MAPPER).optional();
+    }
+
+    public boolean stopChronicPlan(UUID id, String reason, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.chronic_followup_plan
+                           SET status = 'STOPPED', stop_reason = :reason, stopped_by = :actor,
+                               stopped_at = now(), version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean updateChronicPlanNextDate(UUID id, LocalDate nextDate, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.chronic_followup_plan
+                           SET next_date = :nextDate, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND version = :version
+                        """)
+                .param("id", id).param("nextDate", nextDate)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertChronicTask(ChronicFollowupTask t) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.chronic_followup_task
+                            (id, task_no, plan_id, chronic_id, patient_id, patient_no,
+                             patient_name, disease_name, due_date, status)
+                        VALUES (:id, :taskNo, :planId, :chronicId, :patientId, :patientNo,
+                                :patientName, :diseaseName, :dueDate, :status)
+                        """)
+                .param("id", t.id()).param("taskNo", t.taskNo())
+                .param("planId", t.planId()).param("chronicId", t.chronicId())
+                .param("patientId", t.patientId()).param("patientNo", t.patientNo())
+                .param("patientName", t.patientName()).param("diseaseName", t.diseaseName())
+                .param("dueDate", t.dueDate()).param("status", t.status()).update();
+    }
+
+    public Optional<ChronicFollowupTask> findChronicTask(UUID id) {
+        return jdbc.sql(CHRONIC_TASK_SELECT + " WHERE id = ?")
+                .param(id).query(CHRONIC_TASK_MAPPER).optional();
+    }
+
+    public Optional<ChronicFollowupTask> findPendingChronicTask(UUID chronicId) {
+        return jdbc.sql(CHRONIC_TASK_SELECT
+                        + " WHERE chronic_id = ? AND status = 'PENDING'")
+                .param(chronicId).query(CHRONIC_TASK_MAPPER).optional();
+    }
+
+    public Optional<ChronicFollowupTask> lockChronicTask(UUID id) {
+        return jdbc.sql(CHRONIC_TASK_SELECT + " WHERE id = ? FOR UPDATE")
+                .param(id).query(CHRONIC_TASK_MAPPER).optional();
+    }
+
+    public List<ChronicFollowupTask> listChronicTasks(String status, LocalDate dueBefore,
+                                                      int limit) {
+        return jdbc.sql(CHRONIC_TASK_SELECT + """
+                         WHERE (CAST(:status AS text) IS NULL
+                                OR status = CAST(:status AS text))
+                           AND (CAST(:dueBefore AS date) IS NULL
+                                OR due_date <= CAST(:dueBefore AS date))
+                         ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END,
+                                  due_date, created_at
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("dueBefore", dueBefore).param("limit", limit)
+                .query(CHRONIC_TASK_MAPPER).list();
+    }
+
+    public boolean completeChronicTask(UUID id, UUID followupId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.chronic_followup_task
+                           SET status = 'DONE', completed_at = now(), followup_id = :followupId,
+                               version = version + 1
+                         WHERE id = :id AND status = 'PENDING' AND version = :version
+                        """)
+                .param("id", id).param("followupId", followupId)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public int cancelPendingChronicTasks(UUID planId, String reason, String actor) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.chronic_followup_task
+                           SET status = 'CANCELLED', cancel_reason = :reason, cancelled_by = :actor,
+                               cancelled_at = now(), version = version + 1
+                         WHERE plan_id = :planId AND status = 'PENDING'
+                        """)
+                .param("planId", planId).param("reason", reason).param("actor", actor).update();
+    }
+
+    public void insertChronicFollowup(ChronicFollowup f) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.chronic_followup
+                            (id, followup_no, task_id, chronic_id, patient_id, patient_no,
+                             patient_name, followup_date, method, systolic, diastolic,
+                             fasting_glucose, weight, symptoms, medication_adherence, advice,
+                             created_by)
+                        VALUES (:id, :followupNo, :taskId, :chronicId, :patientId, :patientNo,
+                                :patientName, :followupDate, :method, :systolic, :diastolic,
+                                :fastingGlucose, :weight, :symptoms, :adherence, :advice,
+                                :createdBy)
+                        """)
+                .param("id", f.id()).param("followupNo", f.followupNo())
+                .param("taskId", f.taskId()).param("chronicId", f.chronicId())
+                .param("patientId", f.patientId()).param("patientNo", f.patientNo())
+                .param("patientName", f.patientName()).param("followupDate", f.followupDate())
+                .param("method", f.method()).param("systolic", f.systolic())
+                .param("diastolic", f.diastolic()).param("fastingGlucose", f.fastingGlucose())
+                .param("weight", f.weight()).param("symptoms", f.symptoms())
+                .param("adherence", f.medicationAdherence()).param("advice", f.advice())
+                .param("createdBy", f.createdBy()).update();
+    }
+
+    public Optional<ChronicFollowup> findChronicFollowup(UUID id) {
+        return jdbc.sql(CHRONIC_FOLLOWUP_SELECT + " WHERE id = ?")
+                .param(id).query(CHRONIC_FOLLOWUP_MAPPER).optional();
+    }
+
+    public List<ChronicFollowup> listChronicFollowups(UUID chronicId, int limit) {
+        return jdbc.sql(CHRONIC_FOLLOWUP_SELECT + """
+                         WHERE chronic_id = :chronicId
+                         ORDER BY followup_date DESC, created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("chronicId", chronicId).param("limit", limit)
+                .query(CHRONIC_FOLLOWUP_MAPPER).list();
+    }
+
+    /** 慢病看板：在管/高风险/待随访/逾期/今日与本月随访。 */
+    public ChronicBoardRow chronicBoard(LocalDate today, LocalDate monthStart) {
+        return jdbc.sql("""
+                        SELECT
+                            (SELECT count(*) FROM clinical_svc.chronic_record
+                              WHERE status = 'ACTIVE') AS active_records,
+                            (SELECT count(*) FROM clinical_svc.chronic_record
+                              WHERE status = 'ACTIVE' AND risk_level = 'HIGH') AS high_risk,
+                            (SELECT count(*) FROM clinical_svc.chronic_followup_task
+                              WHERE status = 'PENDING') AS pending_tasks,
+                            (SELECT count(*) FROM clinical_svc.chronic_followup_task
+                              WHERE status = 'PENDING' AND due_date < :today) AS overdue_tasks,
+                            (SELECT count(*) FROM clinical_svc.chronic_followup
+                              WHERE followup_date = :today) AS completed_today,
+                            (SELECT count(*) FROM clinical_svc.chronic_followup
+                              WHERE followup_date >= :monthStart) AS completed_this_month
+                        """)
+                .param("today", today).param("monthStart", monthStart)
+                .query((rs, i) -> new ChronicBoardRow(rs.getLong("active_records"),
+                        rs.getLong("high_risk"), rs.getLong("pending_tasks"),
+                        rs.getLong("overdue_tasks"), rs.getLong("completed_today"),
+                        rs.getLong("completed_this_month")))
                 .single();
     }
 

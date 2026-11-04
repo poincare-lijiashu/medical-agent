@@ -106,6 +106,22 @@ public enum ErrorCode {
     HEALTH_REPORT_INCOMPLETE(44492, "仍有未完成的体检项目，不能出具总检报告"),
     HEALTH_REPORT_INVALID(44493, "总检报告结论不能为空，或内容不合法"),
 
+    // ---- 随访与慢病（44xxx 续，G38）----
+    CHRONIC_DISEASE_NOT_FOUND(44500, "未找到该慢病病种，或病种已停用"),
+    CHRONIC_RECORD_NOT_FOUND(44501, "未找到该慢病档案"),
+    CHRONIC_RECORD_DUPLICATE(44502, "该患者该病种已有进行中的慢病档案"),
+    CHRONIC_RECORD_STATUS_INVALID(44503, "当前慢病档案状态不允许该操作"),
+    CHRONIC_PLAN_NOT_FOUND(44504, "未找到该随访计划"),
+    CHRONIC_PLAN_EXISTS(44505, "该慢病档案已有进行中的随访计划"),
+    CHRONIC_PLAN_STATUS_INVALID(44506, "当前随访计划状态不允许该操作"),
+    CHRONIC_PLAN_INVALID(44507, "随访计划不合法（间隔 7–365 天，下次日期不能早于今天）"),
+    CHRONIC_TASK_NOT_FOUND(44508, "未找到该随访任务"),
+    CHRONIC_TASK_STATUS_INVALID(44509, "当前随访任务状态不允许该操作"),
+    CHRONIC_FOLLOWUP_INVALID(44510, "随访记录不合法（日期/血压/血糖/体重超出范围或缺少必要信息）"),
+    CHRONIC_FOLLOWUP_NOT_FOUND(44511, "未找到该随访记录"),
+    CHRONIC_CLOSE_REASON_REQUIRED(44512, "结案必须填写原因"),
+    CHRONIC_STOP_REASON_REQUIRED(44513, "停止随访计划必须填写原因"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

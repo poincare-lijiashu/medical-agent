@@ -1,9 +1,16 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.domain.ClinicalModel.ChronicFollowup;
+import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupTask;
+import com.medassist.clinical.domain.ClinicalModel.ChronicRecord;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamRegistration;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
+import com.medassist.clinical.web.ChronicDtos.FollowupView;
+import com.medassist.clinical.web.ChronicDtos.RecordSummaryView;
+import com.medassist.clinical.web.ChronicDtos.RecordView;
+import com.medassist.clinical.web.ChronicDtos.TaskView;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
@@ -13,6 +20,8 @@ import com.medassist.clinical.web.HealthExamDtos.RegistrationSummaryView;
 import com.medassist.clinical.web.HealthExamDtos.RegistrationView;
 import com.medassist.clinical.web.TheatreDtos.SurgeryBoardView;
 import com.medassist.common.security.DataScope;
+
+import java.util.List;
 
 /**
  * 患者标识（PHI）掩码：没有 {@code phi:read} 时，把患者号替换成掩码后再返回。
@@ -123,6 +132,70 @@ final class PhiMask {
                 r.cancelledBy(), r.cancelledAt(), r.createdBy(), r.version(), r.createdAt(),
                 r.updatedAt());
         return new RegistrationView(masked, view.items(), view.report());
+    }
+
+    static RecordSummaryView chronicSummary(RecordSummaryView s, DataScope scope) {
+        if (s == null || scope.phiReadable()) {
+            return s;
+        }
+        return new RecordSummaryView(s.id(), s.recordNo(), s.patientId(),
+                scope.maskPatientNo(s.patientNo()), scope.maskPatientName(s.patientName()),
+                s.gender(), s.birthDate(), s.diseaseCode(), s.diseaseName(), s.riskLevel(),
+                s.status(), s.manager(), s.createdAt(), s.lastFollowupDate(), s.followupCount(),
+                s.nextDueDate());
+    }
+
+    static RecordView chronicRecord(RecordView view, DataScope scope) {
+        if (view == null || scope.phiReadable()) {
+            return view;
+        }
+        ChronicRecord r = view.record();
+        ChronicRecord maskedRecord = new ChronicRecord(r.id(), r.recordNo(), r.patientId(),
+                scope.maskPatientNo(r.patientNo()), scope.maskPatientName(r.patientName()),
+                r.gender(), r.birthDate(), r.diseaseId(), r.diseaseCode(), r.diseaseName(),
+                r.diagnosisDate(), r.riskLevel(), r.status(), r.managingDeptId(),
+                r.managingDeptName(), r.manager(), r.note(), r.closeReason(), r.closedBy(),
+                r.closedAt(), r.createdBy(), r.version(), r.createdAt(), r.updatedAt());
+        ChronicFollowupTask maskedTask = view.pendingTask() == null ? null
+                : new ChronicFollowupTask(view.pendingTask().id(), view.pendingTask().taskNo(),
+                        view.pendingTask().planId(), view.pendingTask().chronicId(),
+                        view.pendingTask().patientId(),
+                        scope.maskPatientNo(view.pendingTask().patientNo()),
+                        scope.maskPatientName(view.pendingTask().patientName()),
+                        view.pendingTask().diseaseName(), view.pendingTask().dueDate(),
+                        view.pendingTask().status(), view.pendingTask().completedAt(),
+                        view.pendingTask().followupId(), view.pendingTask().cancelReason(),
+                        view.pendingTask().cancelledBy(), view.pendingTask().cancelledAt(),
+                        view.pendingTask().createdAt(), view.pendingTask().version());
+        List<ChronicFollowup> maskedFollowups = view.followups() == null ? List.of()
+                : view.followups().stream().map(f -> new ChronicFollowup(f.id(),
+                        f.followupNo(), f.taskId(), f.chronicId(), f.patientId(),
+                        scope.maskPatientNo(f.patientNo()),
+                        scope.maskPatientName(f.patientName()), f.followupDate(), f.method(),
+                        f.systolic(), f.diastolic(), f.fastingGlucose(), f.weight(), f.symptoms(),
+                        f.medicationAdherence(), f.advice(), f.createdBy(), f.createdAt())).toList();
+        return new RecordView(maskedRecord, view.plan(), maskedTask, maskedFollowups);
+    }
+
+    static TaskView chronicTask(TaskView t, DataScope scope) {
+        if (t == null || scope.phiReadable()) {
+            return t;
+        }
+        return new TaskView(t.id(), t.taskNo(), t.chronicId(), t.patientId(),
+                scope.maskPatientNo(t.patientNo()), scope.maskPatientName(t.patientName()),
+                t.diseaseName(), t.dueDate(), t.status(), t.overdue(), t.completedAt(),
+                t.createdAt(), t.version());
+    }
+
+    static FollowupView chronicFollowup(FollowupView f, DataScope scope) {
+        if (f == null || scope.phiReadable()) {
+            return f;
+        }
+        return new FollowupView(f.id(), f.followupNo(), f.taskId(), f.chronicId(), f.patientId(),
+                scope.maskPatientNo(f.patientNo()), scope.maskPatientName(f.patientName()),
+                f.followupDate(), f.method(), f.systolic(), f.diastolic(), f.fastingGlucose(),
+                f.weight(), f.symptoms(), f.medicationAdherence(), f.advice(), f.createdBy(),
+                f.createdAt());
     }
 
     static SurgeryBoardView board(SurgeryBoardView view, DataScope scope) {

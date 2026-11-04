@@ -47,6 +47,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:charge:read'],
   },
   {
+    name: 'chronic',
+    path: '/chronic',
+    title: '慢病随访',
+    hint: '慢病档案 · 随访计划 · 待随访任务 · 血压/血糖趋势',
+    icon: 'activity',
+    group: '临床诊疗',
+    permissions: ['chronic:record:read'],
+  },
+  {
     name: 'health-exam',
     path: '/health-exam',
     title: '体检中心',

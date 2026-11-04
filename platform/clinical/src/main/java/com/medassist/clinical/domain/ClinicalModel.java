@@ -1113,4 +1113,88 @@ public final class ClinicalModel {
     public record HealthExamBoardRow(long registered, long inProgress, long examDone, long reported,
                                      long cancelled, long abnormalItems, long totalToday) {
     }
+
+    /** 慢病病种字典（G38）。 */
+    public record ChronicDisease(UUID id, String code, String name, boolean enabled) {
+    }
+
+    /**
+     * 慢病档案（G38）：ACTIVE → CLOSED；
+     * 同一患者同一病种同时只允许一份 ACTIVE 档案。
+     */
+    public record ChronicRecord(UUID id, String recordNo, UUID patientId, String patientNo,
+                                String patientName, String gender, LocalDate birthDate,
+                                UUID diseaseId, String diseaseCode, String diseaseName,
+                                LocalDate diagnosisDate, String riskLevel, String status,
+                                UUID managingDeptId, String managingDeptName, String manager,
+                                String note, String closeReason, String closedBy, Instant closedAt,
+                                String createdBy, long version, Instant createdAt,
+                                Instant updatedAt) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String CLOSED = "CLOSED";
+
+        public static final String RISK_LOW = "LOW";
+        public static final String RISK_MEDIUM = "MEDIUM";
+        public static final String RISK_HIGH = "HIGH";
+
+        public boolean active() {
+            return ACTIVE.equals(status);
+        }
+    }
+
+    /** 慢病档案列表行：带最近随访、随访次数与下次随访日期。 */
+    public record ChronicRecordSummary(UUID id, String recordNo, UUID patientId, String patientNo,
+                                       String patientName, String gender, LocalDate birthDate,
+                                       String diseaseCode, String diseaseName, String riskLevel,
+                                       String status, String manager, Instant createdAt,
+                                       LocalDate lastFollowupDate, int followupCount,
+                                       LocalDate nextDueDate) {
+    }
+
+    /** 随访计划：一份档案同时只允许一个 ACTIVE 计划。 */
+    public record ChronicFollowupPlan(UUID id, String planNo, UUID chronicId, int intervalDays,
+                                      LocalDate nextDate, String status, String stopReason,
+                                      String stoppedBy, Instant stoppedAt, String createdBy,
+                                      long version, Instant createdAt) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String STOPPED = "STOPPED";
+
+        public boolean active() {
+            return ACTIVE.equals(status);
+        }
+    }
+
+    /** 随访任务：一个计划同时只允许一条 PENDING。 */
+    public record ChronicFollowupTask(UUID id, String taskNo, UUID planId, UUID chronicId,
+                                      UUID patientId, String patientNo, String patientName,
+                                      String diseaseName, LocalDate dueDate, String status,
+                                      Instant completedAt, UUID followupId, String cancelReason,
+                                      String cancelledBy, Instant cancelledAt, Instant createdAt,
+                                      long version) {
+
+        public static final String PENDING = "PENDING";
+        public static final String DONE = "DONE";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean pending() {
+            return PENDING.equals(status);
+        }
+    }
+
+    /** 随访记录（追加式）：血压/血糖/体重/症状/用药依从性。 */
+    public record ChronicFollowup(UUID id, String followupNo, UUID taskId, UUID chronicId,
+                                  UUID patientId, String patientNo, String patientName,
+                                  LocalDate followupDate, String method, Integer systolic,
+                                  Integer diastolic, BigDecimal fastingGlucose, BigDecimal weight,
+                                  String symptoms, String medicationAdherence, String advice,
+                                  String createdBy, Instant createdAt) {
+    }
+
+    /** 慢病看板聚合行：在管/高风险/待随访/逾期/今日与本月随访。 */
+    public record ChronicBoardRow(long activeRecords, long highRisk, long pendingTasks,
+                                  long overdueTasks, long completedToday,
+                                  long completedThisMonth) {
+    }
 }

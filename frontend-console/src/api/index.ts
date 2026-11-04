@@ -22,6 +22,12 @@ import type {
   HealthExamPackageView,
   HealthExamRegistrationSummary,
   HealthExamRegistrationView,
+  ChronicBoard,
+  ChronicDisease,
+  ChronicRecordSummary,
+  ChronicRecordView,
+  ChronicTaskView,
+  ChronicFollowup,
   DrugBatch,
   DrugView,
   Frequency,
@@ -550,6 +556,52 @@ export const clinicalApi = {
     ),
   finalizeHealthExamReport: (id: string) =>
     post<HealthExamRegistrationView>(`/clinical/health/registrations/${id}/report/finalize`),
+  /** 随访与慢病（G38）。 */
+  chronicDiseases: () => get<ChronicDisease[]>('/clinical/chronic/diseases'),
+  chronicBoard: () => get<ChronicBoard>('/clinical/chronic/board'),
+  chronicRecords: (params: {
+    status?: string
+    diseaseId?: string
+    keyword?: string
+    limit?: number
+  }) => get<ChronicRecordSummary[]>('/clinical/chronic/records', params),
+  chronicRecord: (id: string) =>
+    get<ChronicRecordView>(`/clinical/chronic/records/${id}`),
+  createChronicRecord: (body: {
+    patientId: string
+    diseaseId: string
+    diagnosisDate: string
+    riskLevel?: string
+    managingDeptId?: string
+    manager?: string
+    note?: string
+  }) => post<ChronicRecordView>('/clinical/chronic/records', body),
+  updateChronicRisk: (id: string, riskLevel: string) =>
+    post<ChronicRecordView>(`/clinical/chronic/records/${id}/risk`, { riskLevel }),
+  closeChronicRecord: (id: string, reason: string) =>
+    post<ChronicRecordView>(`/clinical/chronic/records/${id}/close`, { reason }),
+  createChronicPlan: (id: string, intervalDays: number, nextDate?: string) =>
+    post<ChronicRecordView>(`/clinical/chronic/records/${id}/plan`, { intervalDays, nextDate }),
+  stopChronicPlan: (planId: string, reason: string) =>
+    post<ChronicRecordView>(`/clinical/chronic/plans/${planId}/stop`, { reason }),
+  chronicTasks: (params: { status?: string; dueBefore?: string; limit?: number }) =>
+    get<ChronicTaskView[]>('/clinical/chronic/tasks', params),
+  completeChronicTask: (
+    taskId: string,
+    body: {
+      followupDate?: string
+      method: string
+      systolic?: number
+      diastolic?: number
+      fastingGlucose?: number
+      weight?: number
+      symptoms?: string
+      medicationAdherence?: string
+      advice?: string
+    },
+  ) => post<ChronicRecordView>(`/clinical/chronic/tasks/${taskId}/complete`, body),
+  chronicFollowups: (id: string, params: { from?: string; to?: string }) =>
+    get<ChronicFollowup[]>(`/clinical/chronic/records/${id}/followups`, params),
 }
 
 export const emrApi = {

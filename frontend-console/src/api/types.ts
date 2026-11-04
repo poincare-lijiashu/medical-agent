@@ -2951,3 +2951,156 @@ export interface HealthExamBoard {
   abnormalItems: number
   totalToday: number
 }
+
+// ---------------------------------------------------------------- 随访与慢病（G38）
+
+export interface ChronicDisease {
+  id: string
+  code: string
+  name: string
+  enabled: boolean
+}
+
+export type ChronicRiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
+export type ChronicRecordStatus = 'ACTIVE' | 'CLOSED'
+
+/** 慢病档案：同一患者同一病种同时只允许一份 ACTIVE。 */
+export interface ChronicRecord {
+  id: string
+  recordNo: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  gender: string | null
+  birthDate: string | null
+  diseaseId: string
+  diseaseCode: string
+  diseaseName: string
+  diagnosisDate: string
+  riskLevel: ChronicRiskLevel
+  status: ChronicRecordStatus
+  managingDeptId: string | null
+  managingDeptName: string | null
+  manager: string | null
+  note: string | null
+  closeReason: string | null
+  closedBy: string | null
+  closedAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChronicRecordSummary {
+  id: string
+  recordNo: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  gender: string | null
+  birthDate: string | null
+  diseaseCode: string
+  diseaseName: string
+  riskLevel: ChronicRiskLevel
+  status: ChronicRecordStatus
+  manager: string | null
+  createdAt: string
+  lastFollowupDate: string | null
+  followupCount: number
+  nextDueDate: string | null
+}
+
+export interface ChronicFollowupPlan {
+  id: string
+  planNo: string
+  chronicId: string
+  intervalDays: number
+  nextDate: string
+  status: 'ACTIVE' | 'STOPPED'
+  stopReason: string | null
+  stoppedBy: string | null
+  stoppedAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+}
+
+export type ChronicTaskStatus = 'PENDING' | 'DONE' | 'CANCELLED'
+
+export interface ChronicFollowupTask {
+  id: string
+  taskNo: string
+  planId: string
+  chronicId: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  diseaseName: string
+  dueDate: string
+  status: ChronicTaskStatus
+  completedAt: string | null
+  followupId: string | null
+  cancelReason: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  createdAt: string
+  version: number
+}
+
+/** 随访任务列表行（含逾期标记）。 */
+export interface ChronicTaskView {
+  id: string
+  taskNo: string
+  chronicId: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  diseaseName: string
+  dueDate: string
+  status: ChronicTaskStatus
+  overdue: boolean
+  completedAt: string | null
+  createdAt: string
+  version: number
+}
+
+export type ChronicFollowupMethod = 'PHONE' | 'OUTPATIENT' | 'HOME' | 'ONLINE'
+export type MedicationAdherence = 'GOOD' | 'PARTIAL' | 'POOR'
+
+export interface ChronicFollowup {
+  id: string
+  followupNo: string
+  taskId: string
+  chronicId: string
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  followupDate: string
+  method: ChronicFollowupMethod
+  systolic: number | null
+  diastolic: number | null
+  fastingGlucose: number | null
+  weight: number | null
+  symptoms: string | null
+  medicationAdherence: MedicationAdherence | null
+  advice: string | null
+  createdBy: string
+  createdAt: string
+}
+
+export interface ChronicRecordView {
+  record: ChronicRecord
+  plan: ChronicFollowupPlan | null
+  pendingTask: ChronicFollowupTask | null
+  followups: ChronicFollowup[]
+}
+
+export interface ChronicBoard {
+  activeRecords: number
+  highRisk: number
+  pendingTasks: number
+  overdueTasks: number
+  completedToday: number
+  completedThisMonth: number
+}

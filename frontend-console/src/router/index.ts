@@ -31,6 +31,7 @@ const router = createRouter({
           name: 'receipts',
           component: () => import('@/views/ReceiptView.vue'),
         },
+        { path: 'chronic', name: 'chronic', component: () => import('@/views/ChronicView.vue') },
         { path: 'health-exam', name: 'health-exam', component: () => import('@/views/HealthExamView.vue') },
         { path: 'emergency', name: 'emergency', component: () => import('@/views/EmergencyView.vue') },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },

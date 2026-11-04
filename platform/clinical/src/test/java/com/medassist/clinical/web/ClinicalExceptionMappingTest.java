@@ -119,6 +119,35 @@ class ClinicalExceptionMappingTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(handler.statusOf(ErrorCode.HEALTH_REPORT_INVALID))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // 随访与慢病（G38）
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_DISEASE_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_RECORD_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_PLAN_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_TASK_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_FOLLOWUP_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_RECORD_DUPLICATE))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_RECORD_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_PLAN_EXISTS))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_PLAN_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_TASK_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_PLAN_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_FOLLOWUP_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_CLOSE_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CHRONIC_STOP_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test
