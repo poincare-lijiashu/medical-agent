@@ -117,6 +117,26 @@ public final class InsuranceModel {
     }
 
     /**
+     * 医保实时结算交易（对外适配层）。
+     *
+     * <p>状态机：PENDING →（平台受理）→ SETTLED，或 →（平台拒绝/网络失败）→ FAILED。
+     * 同一清单 + 同一请求号唯一，重复提交幂等；失败可重试，成功不可重试。
+     */
+    public record RealtimeSettlement(UUID id, UUID billId, UUID visitId, String requestId,
+                                     String bizType, String platform, String status, int attempts,
+                                     String externalNo, String lastError, String requestPayload,
+                                     String responsePayload, String createdBy, Instant createdAt,
+                                     Instant settledAt, long version) {
+
+        public static final String PRE_SETTLE = "PRE_SETTLE";
+        public static final String SETTLE = "SETTLE";
+
+        public static final String PENDING = "PENDING";
+        public static final String SETTLED = "SETTLED";
+        public static final String FAILED = "FAILED";
+    }
+
+    /**
      * 结算清单导出批次（报省局用）。
      *
      * <p>payload 固化生成时的 XML 全文，payload_hash 为 SHA-256：

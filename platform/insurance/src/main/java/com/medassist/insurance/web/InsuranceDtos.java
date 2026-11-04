@@ -216,4 +216,22 @@ public final class InsuranceDtos {
 
     public record RuleImportResult(int total, int created, int updated, int unchanged) {
     }
+
+    /** 提交医保实时结算（requestId 由院内生成，作为幂等键，必须稳定可追溯）。 */
+    public record RealtimeSubmitReq(
+            @NotBlank @Size(max = 64)
+            @Pattern(regexp = "[A-Za-z0-9._:-]+",
+                    message = "请求号只允许字母、数字与 . _ : -")
+            String requestId,
+            @Pattern(regexp = "PRE_SETTLE|SETTLE", message = "业务类型只支持 PRE_SETTLE 或 SETTLE")
+            String bizType) {
+    }
+
+    /** 实时结算交易视图（报文原文按需返回，列表接口不展示大字段）。 */
+    public record RealtimeSettlementView(UUID id, UUID billId, UUID visitId, String requestId,
+                                         String bizType, String platform, String status,
+                                         int attempts, String externalNo, String lastError,
+                                         String responsePayload, String createdBy,
+                                         Instant createdAt, Instant settledAt, long version) {
+    }
 }

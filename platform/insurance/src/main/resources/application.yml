@@ -56,6 +56,12 @@ insurance:
     base-url: ${EMR_INTERNAL_URI:http://127.0.0.1:8086}
     internal-token: ${INTERNAL_API_TOKEN:${INSURANCE_INTERNAL_TOKEN:}}
     timeout: ${EMR_TIMEOUT:PT3S}
+  # ---- 医保实时结算接口骨架（G22）：地址与密钥由部署注入，域名必须命中白名单 ----
+  realtime:
+    base-url: ${INSURANCE_REALTIME_BASE_URL:}
+    secret: ${INSURANCE_REALTIME_SECRET:}
+    allowed-hosts: ${INSURANCE_REALTIME_ALLOWED_HOSTS:}
+    timeout-ms: ${INSURANCE_REALTIME_TIMEOUT_MS:3000}
 
 management:
   endpoints:

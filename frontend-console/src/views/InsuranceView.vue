@@ -110,6 +110,15 @@
           >
             作废红冲
           </button>
+          <button
+            v-if="canRealtime && bill?.bill.status === 'CONFIRMED'"
+            class="btn btn--sm"
+            type="button"
+            :disabled="busy"
+            @click="submitRealtime"
+          >
+            提交实时结算
+          </button>
           <button v-if="bill" class="btn btn--sm" type="button" :disabled="busy" @click="loadReconcile">
             按就诊对账
           </button>
@@ -464,13 +473,14 @@ import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import InsuranceBillDetail from '@/components/domain/InsuranceBillDetail.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
-import { insuranceApi } from '@/api'
+import { insuranceApi, insuranceOpsApi } from '@/api'
 import { ApiError, errorText } from '@/api/http'
 import type {
   InsuranceBill,
   InsuranceBillView,
   InsuranceMember,
   InsuranceMemberHistory,
+  InsuranceRealtimeSettlement,
   InsuranceReconcile,
   Patient,
   Visit,
@@ -489,6 +499,7 @@ const BILL_TABS = [
 const role = session.roleLabel
 const canWrite = computed(() => hasPermission('insurance:settlement:write'))
 const canConfirm = computed(() => hasPermission('insurance:settlement:confirm'))
+const canRealtime = computed(() => hasPermission('insurance:realtime:write'))
 const canManageMember = computed(() => hasPermission('insurance:member:manage'))
 
 const patient = ref<Patient | null>(null)
@@ -614,6 +625,50 @@ async function confirmBill() {
     await loadBills()
   } catch (e) {
     toast.error('确认失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+/**
+ * 提交医保实时结算。
+ *
+ * <p>请求号是幂等键：同一清单已有交易时不再新建，成功直接提示、失败沿用原交易重试，
+ * 避免"点两次按钮 → 两条请求号 → 省局重复出账"。
+ */
+async function submitRealtime() {
+  if (!bill.value || !canRealtime.value) return
+  const billId = bill.value.bill.id
+  busy.value = true
+  try {
+    const existing = await insuranceOpsApi.realtimeSettlements({ billId, limit: 1 })
+    let outcome: InsuranceRealtimeSettlement
+    if (existing.length > 0) {
+      const latest = existing[0]
+      if (latest.status === 'SETTLED') {
+        toast.ok('实时结算已完成', latest.externalNo ? `省局交易号 ${latest.externalNo}` : '平台已受理')
+        return
+      }
+      if (latest.status === 'PENDING') {
+        toast.ok('实时结算受理中', '请稍后在医保运维页查看交易结果')
+        return
+      }
+      outcome = await insuranceOpsApi.retryRealtimeSettlement(latest.id)
+    } else {
+      const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
+      const requestId = `RS${stamp}${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+      outcome = await insuranceOpsApi.submitRealtimeSettlement(billId, {
+        requestId,
+        bizType: 'SETTLE',
+      })
+    }
+    if (outcome.status === 'SETTLED') {
+      toast.ok('实时结算已成功', outcome.externalNo ? `省局交易号 ${outcome.externalNo}` : '平台已受理')
+    } else {
+      toast.error('实时结算失败', outcome.lastError ?? '请到医保运维页查看报文后重试')
+    }
+  } catch (e) {
+    toast.error('提交实时结算失败', errorText(e))
   } finally {
     busy.value = false
   }

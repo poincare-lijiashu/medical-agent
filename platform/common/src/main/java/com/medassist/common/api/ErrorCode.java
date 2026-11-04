@@ -221,6 +221,7 @@ public enum ErrorCode {
     INSURANCE_EXPORT_EMPTY(48413, "该期间没有已确认的医保结算清单，无法导出"),
     INSURANCE_EXPORT_INVALID(48414, "当前导出批次状态不允许该操作"),
     INSURANCE_SCHEME_INVALID(48415, "支付方案配置不合法或已被他人修改"),
+    INSURANCE_REALTIME_NOT_FOUND(48416, "未找到该实时结算交易"),
 
     // ---- 知识库（49xxx）----
     KB_SPACE_NOT_FOUND(49401, "未找到该知识空间"),

@@ -17,6 +17,7 @@ export type StatusDomain =
   | 'emr'
   | 'insurance'
   | 'insurance-export'
+  | 'insurance-realtime'
 
 export interface StatusMeta {
   label: string
@@ -112,6 +113,12 @@ const DOMAIN_OVERRIDES: Partial<Record<StatusDomain, Record<string, StatusMeta>>
     ACCEPTED: { label: '已受理', tone: 'ok' },
     REJECTED: { label: '已退回', tone: 'danger' },
     CANCELLED: { label: '已撤销', tone: 'neutral' },
+  },
+  // 医保实时结算：PENDING 是「平台处理中」，不是审批待办
+  'insurance-realtime': {
+    PENDING: { label: '待受理', tone: 'warn' },
+    SETTLED: { label: '已结算', tone: 'ok' },
+    FAILED: { label: '结算失败', tone: 'danger' },
   },
   // 药房采购：RECEIVED 指"采购明细全部到货"，不是"标本已接收"
   pharmacy: {

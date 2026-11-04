@@ -1934,6 +1934,25 @@ export interface InsuranceReconcile {
   chargeLineCount: number
 }
 
+/** 医保实时结算交易：PENDING → SETTLED / FAILED；同清单同请求号幂等。 */
+export interface InsuranceRealtimeSettlement {
+  id: string
+  billId: string
+  visitId: string
+  requestId: string
+  bizType: 'PRE_SETTLE' | 'SETTLE'
+  platform: string
+  status: 'PENDING' | 'SETTLED' | 'FAILED'
+  attempts: number
+  externalNo: string | null
+  lastError: string | null
+  responsePayload: string | null
+  createdBy: string
+  createdAt: string
+  settledAt: string | null
+  version: number
+}
+
 // ---------------------------------------------------------------- 系统管理
 
 /** 账号视图（绝不含密码哈希）。 */

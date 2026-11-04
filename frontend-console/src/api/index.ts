@@ -25,6 +25,7 @@ import type {
   InsuranceMember,
   InsuranceMemberHistory,
   InsuranceReconcile,
+  InsuranceRealtimeSettlement,
   ChargeMapping,
   GroupSimulation,
   InpatientTrendView,
@@ -818,6 +819,18 @@ export const insuranceOpsApi = {
   /** 报盘 XML 原样下载（含批量 PHI，需 insurance:export:download）。 */
   downloadExportPayload: (id: string) =>
     download(`/insurance/export-batches/${id}/payload`),
+  /** 实时结算交易台账（需 insurance:realtime:read）。 */
+  realtimeSettlements: (params: { billId?: string; status?: string; limit?: number }) =>
+    get<InsuranceRealtimeSettlement[]>('/insurance/realtime-settlements', params),
+  /** 单笔交易详情（含省局响应报文原文）。 */
+  realtimeSettlement: (id: string) =>
+    get<InsuranceRealtimeSettlement>(`/insurance/realtime-settlements/${id}`),
+  /** 提交实时结算：同清单同请求号幂等（需 insurance:realtime:write）。 */
+  submitRealtimeSettlement: (billId: string, body: { requestId: string; bizType?: string }) =>
+    post<InsuranceRealtimeSettlement>(`/insurance/realtime-settlements/bill/${billId}`, body),
+  /** 失败交易手动重试；已成功幂等返回。 */
+  retryRealtimeSettlement: (id: string) =>
+    post<InsuranceRealtimeSettlement>(`/insurance/realtime-settlements/${id}/retry`),
 }
 
 export const insuranceGroupingApi = {

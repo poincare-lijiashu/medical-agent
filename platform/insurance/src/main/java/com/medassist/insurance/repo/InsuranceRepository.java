@@ -10,6 +10,7 @@ import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
 import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
+import com.medassist.insurance.domain.InsuranceModel.RealtimeSettlement;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -510,6 +511,87 @@ public class InsuranceRepository {
                         """)
                 .param("patientId", patientId).param("status", status).param("limit", limit)
                 .query(BILL_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 实时结算交易（G22）
+
+    private static final RowMapper<RealtimeSettlement> REALTIME_MAPPER =
+            (rs, i) -> new RealtimeSettlement(
+                    rs.getObject("id", UUID.class), rs.getObject("bill_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getString("request_id"),
+                    rs.getString("biz_type"), rs.getString("platform"), rs.getString("status"),
+                    rs.getInt("attempts"), rs.getString("external_no"), rs.getString("last_error"),
+                    rs.getString("request_payload"), rs.getString("response_payload"),
+                    rs.getString("created_by"), rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("settled_at") == null
+                            ? null : rs.getTimestamp("settled_at").toInstant(),
+                    rs.getLong("version"));
+
+    private static final String REALTIME_COLUMNS = """
+            id, bill_id, visit_id, request_id, biz_type, platform, status, attempts,
+            external_no, last_error, request_payload::text AS request_payload,
+            response_payload::text AS response_payload, created_by, created_at, settled_at, version
+            """;
+
+    /** 插入交易占位；同一清单同一请求号已存在时不插入（幂等由唯一索引兜底）。 */
+    public boolean insertRealtime(RealtimeSettlement r) {
+        return jdbc.sql("""
+                        INSERT INTO insurance_svc.realtime_settlement
+                            (id, bill_id, visit_id, request_id, biz_type, platform, status,
+                             request_payload, created_by)
+                        VALUES (:id, :billId, :visitId, :requestId, :bizType, :platform, 'PENDING',
+                                CAST(:requestPayload AS jsonb), :createdBy)
+                        ON CONFLICT (bill_id, request_id) DO NOTHING
+                        """)
+                .param("id", r.id()).param("billId", r.billId())
+                .param("visitId", r.visitId()).param("requestId", r.requestId())
+                .param("bizType", r.bizType()).param("platform", r.platform())
+                .param("requestPayload", r.requestPayload()).param("createdBy", r.createdBy())
+                .update() > 0;
+    }
+
+    public Optional<RealtimeSettlement> findRealtimeById(UUID id) {
+        return jdbc.sql("SELECT " + REALTIME_COLUMNS
+                        + " FROM insurance_svc.realtime_settlement WHERE id = ?")
+                .param(id).query(REALTIME_MAPPER).optional();
+    }
+
+    public Optional<RealtimeSettlement> findRealtimeByBillAndRequest(UUID billId, String requestId) {
+        return jdbc.sql("SELECT " + REALTIME_COLUMNS
+                        + " FROM insurance_svc.realtime_settlement"
+                        + " WHERE bill_id = ? AND request_id = ?")
+                .param(billId).param(requestId).query(REALTIME_MAPPER).optional();
+    }
+
+    /** 交易结果回写（CAS：版本一致才更新，避免并发重试覆盖彼此结果）。 */
+    public boolean markRealtime(UUID id, String status, int attempts, String externalNo,
+                                String lastError, String responsePayload, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.realtime_settlement
+                           SET status = :status, attempts = :attempts,
+                               external_no = CAST(:externalNo AS text),
+                               last_error = CAST(:lastError AS text),
+                               response_payload = CAST(:responsePayload AS jsonb),
+                               settled_at = CASE WHEN :status = 'SETTLED' THEN now() ELSE settled_at END,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                        """)
+                .param("status", status).param("attempts", attempts)
+                .param("externalNo", externalNo).param("lastError", lastError)
+                .param("responsePayload", responsePayload)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    public List<RealtimeSettlement> listRealtime(UUID billId, String status, int limit) {
+        return jdbc.sql("SELECT " + REALTIME_COLUMNS + """
+                         FROM insurance_svc.realtime_settlement
+                         WHERE (CAST(:billId AS uuid) IS NULL OR bill_id = CAST(:billId AS uuid))
+                           AND (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("billId", billId).param("status", status).param("limit", limit)
+                .query(REALTIME_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 导出批次（N5 第二批 B）
