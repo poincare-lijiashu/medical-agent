@@ -122,6 +122,14 @@ public enum ErrorCode {
     CHRONIC_CLOSE_REASON_REQUIRED(44512, "结案必须填写原因"),
     CHRONIC_STOP_REASON_REQUIRED(44513, "停止随访计划必须填写原因"),
 
+    // ---- 移动护理与条码（44xxx 续，G39）----
+    MOBILE_TASK_NOT_FOUND(44520, "未找到该移动护理任务"),
+    MOBILE_TASK_STATUS_INVALID(44521, "当前移动护理任务状态不允许该操作"),
+    MOBILE_TASK_INVALID(44522, "移动护理任务内容不合法（类型/项目/条码缺失）"),
+    MOBILE_ADMISSION_INVALID(44523, "住院登记不存在、已出院或未分床，不能生成移动护理任务"),
+    MOBILE_EXCEPTION_REASON_REQUIRED(44524, "登记扫码异常必须填写原因"),
+    MOBILE_SCAN_INVALID(44525, "扫码内容为空，请重新扫描腕带/药品/标本条码"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

@@ -101,6 +101,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:read'],
   },
   {
+    name: 'mobile-nursing',
+    path: '/mobile-nursing',
+    title: '移动护理',
+    hint: '扫腕带/药品/标本 · 给药与采集核对 · 不匹配留痕 · 异常关闭',
+    icon: 'clipboard',
+    group: '住院管理',
+    permissions: ['mobile:nursing:read'],
+  },
+  {
     name: 'nursing',
     path: '/nursing',
     title: '护理执行',

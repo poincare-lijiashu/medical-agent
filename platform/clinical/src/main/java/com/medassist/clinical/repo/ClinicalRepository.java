@@ -30,6 +30,9 @@ import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupPlan;
 import com.medassist.clinical.domain.ClinicalModel.ChronicFollowupTask;
 import com.medassist.clinical.domain.ClinicalModel.ChronicRecord;
 import com.medassist.clinical.domain.ClinicalModel.ChronicRecordSummary;
+import com.medassist.clinical.domain.ClinicalModel.MobileBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.MobileNursingTask;
+import com.medassist.clinical.domain.ClinicalModel.MobileScanEvent;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyTriage;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.HealthExamItem;
@@ -2072,6 +2075,14 @@ public class ClinicalRepository {
                 .param("patientNo", a.patientNo()).param("wardId", a.wardId())
                 .param("bedId", a.bedId()).param("doctor", a.attendingDoctor())
                 .param("status", a.status()).update();
+    }
+
+    public Optional<Admission> findAdmissionByNo(String admissionNo) {
+        return jdbc.sql("""
+                        SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
+                               attending_doctor, status, admitted_at, discharged_at, version
+                          FROM clinical_svc.admission WHERE admission_no = ?
+                        """).param(admissionNo).query(ADMISSION_MAPPER).optional();
     }
 
     public Optional<Admission> findAdmission(UUID id) {
@@ -6178,6 +6189,190 @@ public class ClinicalRepository {
                         rs.getLong("high_risk"), rs.getLong("pending_tasks"),
                         rs.getLong("overdue_tasks"), rs.getLong("completed_today"),
                         rs.getLong("completed_this_month")))
+                .single();
+    }
+
+    // ---------------------------------------------------------------- 移动护理与条码（G39）
+
+    private static final RowMapper<MobileNursingTask> MOBILE_TASK_MAPPER = (rs, i) ->
+            new MobileNursingTask(
+                    rs.getObject("id", UUID.class), rs.getString("task_no"),
+                    rs.getDate("task_date").toLocalDate(), rs.getString("task_type"),
+                    rs.getObject("admission_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getObject("patient_id", UUID.class),
+                    rs.getString("patient_no"), rs.getString("patient_name"),
+                    rs.getObject("ward_id", UUID.class), rs.getString("ward_name"),
+                    rs.getString("bed_no"), rs.getString("source_type"),
+                    rs.getString("source_ref"), rs.getObject("order_id", UUID.class),
+                    rs.getString("item_code"), rs.getString("item_name"),
+                    rs.getString("expected_patient_barcode"),
+                    rs.getString("expected_item_barcode"), rs.getString("status"),
+                    rs.getInt("attempts"),
+                    rs.getTimestamp("last_scanned_at") == null ? null
+                            : rs.getTimestamp("last_scanned_at").toInstant(),
+                    rs.getString("verified_by"),
+                    rs.getTimestamp("verified_at") == null ? null
+                            : rs.getTimestamp("verified_at").toInstant(),
+                    rs.getString("exception_reason"), rs.getString("exception_by"),
+                    rs.getTimestamp("exception_at") == null ? null
+                            : rs.getTimestamp("exception_at").toInstant(),
+                    rs.getString("note"), rs.getString("created_by"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<MobileScanEvent> MOBILE_SCAN_MAPPER = (rs, i) ->
+            new MobileScanEvent(
+                    rs.getObject("id", UUID.class), rs.getObject("task_id", UUID.class),
+                    rs.getString("scan_type"), rs.getString("scanned_value"),
+                    rs.getBoolean("matched"), rs.getString("scanned_by"),
+                    rs.getTimestamp("scanned_at").toInstant(), rs.getString("note"));
+
+    private static final String MOBILE_TASK_SELECT = """
+            SELECT id, task_no, task_date, task_type, admission_id, visit_id, patient_id,
+                   patient_no, patient_name, ward_id, ward_name, bed_no, source_type, source_ref,
+                   order_id, item_code, item_name, expected_patient_barcode,
+                   expected_item_barcode, status, attempts, last_scanned_at, verified_by,
+                   verified_at, exception_reason, exception_by, exception_at, note, created_by,
+                   version, created_at
+              FROM clinical_svc.nursing_mobile_task
+            """;
+
+    public String nextMobileTaskNo() {
+        return nextNo("clinical_svc.mobile_task_no_seq", "MN");
+    }
+
+    public void insertMobileTask(MobileNursingTask t) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_mobile_task
+                            (id, task_no, task_date, task_type, admission_id, visit_id, patient_id,
+                             patient_no, patient_name, ward_id, ward_name, bed_no, source_type,
+                             source_ref, order_id, item_code, item_name,
+                             expected_patient_barcode, expected_item_barcode, status, note,
+                             created_by)
+                        VALUES (:id, :taskNo, :taskDate, :taskType, :admissionId, :visitId,
+                                :patientId, :patientNo, :patientName, :wardId, :wardName,
+                                :bedNo, :sourceType, :sourceRef, :orderId, :itemCode, :itemName,
+                                :expectedPatientBarcode, :expectedItemBarcode, :status, :note,
+                                :createdBy)
+                        """)
+                .param("id", t.id()).param("taskNo", t.taskNo())
+                .param("taskDate", t.taskDate()).param("taskType", t.taskType())
+                .param("admissionId", t.admissionId()).param("visitId", t.visitId())
+                .param("patientId", t.patientId()).param("patientNo", t.patientNo())
+                .param("patientName", t.patientName()).param("wardId", t.wardId())
+                .param("wardName", t.wardName()).param("bedNo", t.bedNo())
+                .param("sourceType", t.sourceType()).param("sourceRef", t.sourceRef())
+                .param("orderId", t.orderId()).param("itemCode", t.itemCode())
+                .param("itemName", t.itemName())
+                .param("expectedPatientBarcode", t.expectedPatientBarcode())
+                .param("expectedItemBarcode", t.expectedItemBarcode())
+                .param("status", t.status()).param("note", t.note())
+                .param("createdBy", t.createdBy()).update();
+    }
+
+    public Optional<MobileNursingTask> findMobileTask(UUID id) {
+        return jdbc.sql(MOBILE_TASK_SELECT + " WHERE id = ?")
+                .param(id).query(MOBILE_TASK_MAPPER).optional();
+    }
+
+    public Optional<MobileNursingTask> lockMobileTask(UUID id) {
+        return jdbc.sql(MOBILE_TASK_SELECT + " WHERE id = ? FOR UPDATE")
+                .param(id).query(MOBILE_TASK_MAPPER).optional();
+    }
+
+    public Optional<MobileNursingTask> findMobileTaskByOrder(UUID orderId, LocalDate taskDate) {
+        return jdbc.sql(MOBILE_TASK_SELECT
+                        + " WHERE order_id = ? AND task_date = ?")
+                .param(orderId).param(taskDate).query(MOBILE_TASK_MAPPER).optional();
+    }
+
+    public List<MobileNursingTask> listMobileTasks(LocalDate taskDate, String status,
+                                                    String taskType, UUID wardId, int limit) {
+        return jdbc.sql(MOBILE_TASK_SELECT + """
+                         WHERE (CAST(:taskDate AS date) IS NULL
+                                OR task_date = CAST(:taskDate AS date))
+                           AND (CAST(:status AS text) IS NULL
+                                OR status = CAST(:status AS text))
+                           AND (CAST(:taskType AS text) IS NULL
+                                OR task_type = CAST(:taskType AS text))
+                           AND (CAST(:wardId AS uuid) IS NULL
+                                OR ward_id = CAST(:wardId AS uuid))
+                         ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END,
+                                  task_type, patient_no, item_name
+                         LIMIT :limit
+                        """)
+                .param("taskDate", taskDate).param("status", status)
+                .param("taskType", taskType).param("wardId", wardId).param("limit", limit)
+                .query(MOBILE_TASK_MAPPER).list();
+    }
+
+    /** 扫码尝试：匹配时置 VERIFIED，不匹配仅累计次数与最后扫码时间。 */
+    public boolean updateMobileTaskScan(UUID id, boolean verified, String actor,
+                                        long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_mobile_task
+                           SET attempts = attempts + 1, last_scanned_at = now(),
+                               status = CASE WHEN :verified THEN 'VERIFIED' ELSE status END,
+                               verified_by = CASE WHEN :verified THEN :actor
+                                                  ELSE verified_by END,
+                               verified_at = CASE WHEN :verified THEN now()
+                                                  ELSE verified_at END,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'PENDING' AND version = :version
+                        """)
+                .param("id", id).param("verified", verified).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean markMobileTaskException(UUID id, String reason, String actor,
+                                           long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_mobile_task
+                           SET status = 'EXCEPTION', exception_reason = :reason,
+                               exception_by = :actor, exception_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'PENDING' AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertMobileScanEvent(MobileScanEvent e) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_scan_event
+                            (id, task_id, scan_type, scanned_value, matched, scanned_by, note)
+                        VALUES (:id, :taskId, :scanType, :scannedValue, :matched, :scannedBy,
+                                :note)
+                        """)
+                .param("id", e.id()).param("taskId", e.taskId())
+                .param("scanType", e.scanType()).param("scannedValue", e.scannedValue())
+                .param("matched", e.matched()).param("scannedBy", e.scannedBy())
+                .param("note", e.note()).update();
+    }
+
+    public List<MobileScanEvent> listMobileScanEvents(UUID taskId) {
+        return jdbc.sql("""
+                        SELECT id, task_id, scan_type, scanned_value, matched, scanned_by,
+                               scanned_at, note
+                          FROM clinical_svc.nursing_scan_event
+                         WHERE task_id = ?
+                         ORDER BY scanned_at DESC
+                        """).param(taskId).query(MOBILE_SCAN_MAPPER).list();
+    }
+
+    /** 移动护理看板：当日待核对/已核对/异常/总任务。 */
+    public MobileBoardRow mobileBoard(LocalDate today) {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE status = 'PENDING') AS pending,
+                               count(*) FILTER (WHERE status = 'VERIFIED') AS verified_today,
+                               count(*) FILTER (WHERE status = 'EXCEPTION') AS exceptions_today,
+                               count(*) AS total_today
+                          FROM clinical_svc.nursing_mobile_task
+                         WHERE task_date = :today
+                        """)
+                .param("today", today)
+                .query((rs, i) -> new MobileBoardRow(rs.getLong("pending"),
+                        rs.getLong("verified_today"), rs.getLong("exceptions_today"),
+                        rs.getLong("total_today")))
                 .single();
     }
 

@@ -52,6 +52,11 @@ const router = createRouter({
           component: () => import('@/views/NursingView.vue'),
         },
         {
+          path: 'mobile-nursing',
+          name: 'mobile-nursing',
+          component: () => import('@/views/MobileNursingView.vue'),
+        },
+        {
           path: 'nursing-schedule',
           name: 'nursing-schedule',
           component: () => import('@/views/NursingScheduleView.vue'),

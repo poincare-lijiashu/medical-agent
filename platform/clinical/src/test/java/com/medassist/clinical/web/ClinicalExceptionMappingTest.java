@@ -148,6 +148,19 @@ class ClinicalExceptionMappingTest {
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(handler.statusOf(ErrorCode.CHRONIC_STOP_REASON_REQUIRED))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // 移动护理与条码（G39）
+        assertThat(handler.statusOf(ErrorCode.MOBILE_TASK_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.MOBILE_TASK_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.MOBILE_ADMISSION_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.MOBILE_TASK_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.MOBILE_EXCEPTION_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.MOBILE_SCAN_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

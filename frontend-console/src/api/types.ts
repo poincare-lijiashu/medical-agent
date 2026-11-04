@@ -3104,3 +3104,68 @@ export interface ChronicBoard {
   completedToday: number
   completedThisMonth: number
 }
+
+// ---------------------------------------------------------------- 移动护理与条码（G39）
+
+export type MobileTaskType = 'MEDICATION' | 'SPECIMEN'
+export type MobileTaskStatus = 'PENDING' | 'VERIFIED' | 'EXCEPTION' | 'CANCELLED'
+
+/** 移动护理核对任务（不返回期望条码）。 */
+export interface MobileNursingTask {
+  id: string
+  taskNo: string
+  taskDate: string
+  taskType: MobileTaskType
+  patientId: string
+  patientNo: string | null
+  patientName: string | null
+  wardName: string | null
+  bedNo: string | null
+  itemCode: string
+  itemName: string
+  sourceType: 'ORDER' | 'MANUAL'
+  sourceRef: string | null
+  status: MobileTaskStatus
+  attempts: number
+  lastScannedAt: string | null
+  verifiedBy: string | null
+  verifiedAt: string | null
+  exceptionReason: string | null
+  exceptionBy: string | null
+  exceptionAt: string | null
+  note: string | null
+  createdAt: string
+  version: number
+}
+
+export interface MobileVerificationResult {
+  matched: boolean
+  patientMatched: boolean
+  itemMatched: boolean
+  message: string
+  task: MobileNursingTask
+}
+
+export interface MobileScanEvent {
+  id: string
+  taskId: string
+  scanType: 'PATIENT' | 'ITEM'
+  scannedValue: string
+  matched: boolean
+  scannedBy: string
+  scannedAt: string
+  note: string | null
+}
+
+export interface MobileGenerateResult {
+  created: number
+  skipped: number
+  tasks: MobileNursingTask[]
+}
+
+export interface MobileNursingBoard {
+  pending: number
+  verifiedToday: number
+  exceptionsToday: number
+  totalToday: number
+}

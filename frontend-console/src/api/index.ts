@@ -28,6 +28,11 @@ import type {
   ChronicRecordView,
   ChronicTaskView,
   ChronicFollowup,
+  MobileGenerateResult,
+  MobileNursingBoard,
+  MobileNursingTask,
+  MobileScanEvent,
+  MobileVerificationResult,
   DrugBatch,
   DrugView,
   Frequency,
@@ -602,6 +607,36 @@ export const clinicalApi = {
   ) => post<ChronicRecordView>(`/clinical/chronic/tasks/${taskId}/complete`, body),
   chronicFollowups: (id: string, params: { from?: string; to?: string }) =>
     get<ChronicFollowup[]>(`/clinical/chronic/records/${id}/followups`, params),
+  /** 移动护理与条码（G39）。 */
+  mobileBoard: () => get<MobileNursingBoard>('/clinical/mobile/board'),
+  mobileTasks: (params: {
+    date?: string
+    status?: string
+    taskType?: string
+    wardId?: string
+    limit?: number
+  }) => get<MobileNursingTask[]>('/clinical/mobile/tasks', params),
+  generateMobileTasks: (body: {
+    admissionId?: string
+    admissionNo?: string
+    taskDate?: string
+  }) => post<MobileGenerateResult>('/clinical/mobile/tasks/from-orders', body),
+  createMobileTask: (body: {
+    admissionId?: string
+    admissionNo?: string
+    taskType: string
+    itemCode: string
+    itemName: string
+    expectedItemBarcode: string
+    sourceRef?: string
+    note?: string
+  }) => post<MobileNursingTask>('/clinical/mobile/tasks', body),
+  verifyMobileTask: (id: string, body: { patientBarcode: string; itemBarcode: string }) =>
+    post<MobileVerificationResult>(`/clinical/mobile/tasks/${id}/verify`, body),
+  markMobileTaskException: (id: string, reason: string) =>
+    post<MobileNursingTask>(`/clinical/mobile/tasks/${id}/exception`, { reason }),
+  mobileTaskScans: (id: string) =>
+    get<MobileScanEvent[]>(`/clinical/mobile/tasks/${id}/scans`),
 }
 
 export const emrApi = {

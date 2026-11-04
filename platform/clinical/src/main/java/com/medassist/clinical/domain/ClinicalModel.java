@@ -1197,4 +1197,43 @@ public final class ClinicalModel {
                                   long overdueTasks, long completedToday,
                                   long completedThisMonth) {
     }
+
+    /**
+     * 移动护理核对任务（G39）：PENDING → VERIFIED / EXCEPTION。
+     * 给药与标本采集共用一张任务表，以 task_type 区分。
+     */
+    public record MobileNursingTask(UUID id, String taskNo, LocalDate taskDate, String taskType,
+                                    UUID admissionId, UUID visitId, UUID patientId,
+                                    String patientNo, String patientName, UUID wardId,
+                                    String wardName, String bedNo, String sourceType,
+                                    String sourceRef, UUID orderId, String itemCode,
+                                    String itemName, String expectedPatientBarcode,
+                                    String expectedItemBarcode, String status, int attempts,
+                                    Instant lastScannedAt, String verifiedBy, Instant verifiedAt,
+                                    String exceptionReason, String exceptionBy,
+                                    Instant exceptionAt, String note, String createdBy,
+                                    long version, Instant createdAt) {
+
+        public static final String MEDICATION = "MEDICATION";
+        public static final String SPECIMEN = "SPECIMEN";
+        public static final String PENDING = "PENDING";
+        public static final String VERIFIED = "VERIFIED";
+        public static final String EXCEPTION = "EXCEPTION";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean pending() {
+            return PENDING.equals(status);
+        }
+    }
+
+    /** 扫码事件（追加式）：每次核对保留患者/项目两条记录。 */
+    public record MobileScanEvent(UUID id, UUID taskId, String scanType, String scannedValue,
+                                  boolean matched, String scannedBy, Instant scannedAt,
+                                  String note) {
+    }
+
+    /** 移动护理看板：当日待核对/已核对/异常/总任务。 */
+    public record MobileBoardRow(long pending, long verifiedToday, long exceptionsToday,
+                                 long totalToday) {
+    }
 }
