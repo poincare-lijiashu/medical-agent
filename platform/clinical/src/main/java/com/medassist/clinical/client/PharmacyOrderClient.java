@@ -27,9 +27,10 @@ public interface PharmacyOrderClient {
      * 医嘱转处方。
      *
      * @param supplyDate 供药日期，与 orderId 组成幂等键；长期医嘱按日请领时每天一张
+     * @param campusId   就诊院区（G47）：药房据此固化处方归属，避免跨院区串单
      */
     RxRef createFromOrder(UUID orderId, UUID patientId, UUID visitId, String visitNo, UUID deptId,
-                          String prescriber, LocalDate supplyDate, List<Line> items);
+                          String prescriber, LocalDate supplyDate, UUID campusId, List<Line> items);
 
     /**
      * 指定计费模式的转处方（G30 出院带药使用）。
@@ -39,9 +40,9 @@ public interface PharmacyOrderClient {
     default RxRef createFromOrderWithBilling(UUID orderId, UUID patientId, UUID visitId,
                                              String visitNo, UUID deptId, String prescriber,
                                              LocalDate supplyDate, String billingMode,
-                                             List<Line> items) {
+                                             UUID campusId, List<Line> items) {
         return createFromOrder(orderId, patientId, visitId, visitNo, deptId, prescriber,
-                supplyDate, items);
+                supplyDate, campusId, items);
     }
 
     /** 查询处方当前状态（出院带药同步发药/作废结果）。 */

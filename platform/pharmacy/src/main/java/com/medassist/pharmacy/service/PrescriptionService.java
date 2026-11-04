@@ -82,7 +82,13 @@ public class PrescriptionService {
 
     @Transactional
     public PrescriptionView create(CreatePrescriptionReq req, String actor) {
-        return createInternal(req, actor, null, null);
+        return create(req, actor, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 手工开方并固化院区（G47）：院区来自当前账号的写入院区。 */
+    @Transactional
+    public PrescriptionView create(CreatePrescriptionReq req, String actor, UUID campusId) {
+        return createInternal(req, actor, null, null, campusId);
     }
 
     /**
@@ -108,9 +114,12 @@ public class PrescriptionService {
         String effectiveActor = prescriber == null ? actor : prescriber;
         CreatePrescriptionReq delegated = new CreatePrescriptionReq(req.patientId(), req.visitId(),
                 req.visitNo(), req.deptId(), req.effectiveBillingMode(), req.items());
+        // G47：院区由临床随请求下发（临床侧按就诊院区填充）；旧版临床未带时回退主院区
+        UUID campusId = req.campusId() == null
+                ? com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID : req.campusId();
         PrescriptionView view;
         try {
-            view = createInternal(delegated, effectiveActor, req.orderId(), req.supplyDate());
+            view = createInternal(delegated, effectiveActor, req.orderId(), req.supplyDate(), campusId);
         } catch (DataIntegrityViolationException e) {
             // 并发转送：唯一索引兜底。此处事务已不可用，明确回 409，临床侧重试即可拿到已有处方
             throw new BusinessException(ErrorCode.CONFLICT, "该医嘱当日处方已生成，请刷新后重试");
@@ -175,7 +184,7 @@ public class PrescriptionService {
     }
 
     private PrescriptionView createInternal(CreatePrescriptionReq req, String actor, UUID sourceOrderId,
-                                            LocalDate supplyDate) {
+                                            LocalDate supplyDate, UUID campusId) {
         PatientClient.PatientRef patient = patientClient.requireActive(req.patientId());
         String billingMode = billingModeOf(req.billingMode(), req.visitId());
         Integer ageYears = ageOf(patient);
@@ -224,7 +233,7 @@ public class PrescriptionService {
                 patient.id(), patient.patientNo(), req.visitId(), blankToNull(req.visitNo()),
                 req.deptId(), actor, Prescription.PENDING_REVIEW, null, null, null,
                 total, 0L, null, billingMode, sourceOrderId, supplyDate);
-        repo.insertPrescription(rx);
+        repo.insertPrescription(rx, campusId);
         for (PrescriptionItem item : items) {
             repo.insertPrescriptionItem(item);
         }
@@ -587,14 +596,34 @@ public class PrescriptionService {
     }
 
     public List<Prescription> list(String status, UUID patientId, Integer limit) {
+        return list(status, patientId, limit, java.util.Set.of());
+    }
+
+    /** 处方列表（G47 按院区收敛；空集合表示不限院区）。 */
+    public List<Prescription> list(String status, UUID patientId, Integer limit,
+                                   java.util.Set<UUID> campusIds) {
         String normalized = (status == null || status.isBlank()) ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listPrescriptions(normalized, patientId, size);
+        return repo.listPrescriptions(normalized, patientId, size, campusCsv(campusIds));
     }
 
     /** 各状态处方数量（P0-F4）：供工作台 KPI 用，避免前端分片拉取导致计数偏小。 */
     public java.util.Map<String, Integer> statusCounts() {
-        return repo.countPrescriptionsByStatus();
+        return statusCounts(java.util.Set.of());
+    }
+
+    /** 各状态处方数量（G47 按院区收敛；待办 KPI 不能混算跨院区处方）。 */
+    public java.util.Map<String, Integer> statusCounts(java.util.Set<UUID> campusIds) {
+        return repo.countPrescriptionsByStatus(campusCsv(campusIds));
+    }
+
+    /** 院区集合转 SQL 过滤串；空集合（跨院区角色）返回空串表示不限院区。 */
+    static String campusCsv(java.util.Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     // ---------------------------------------------------------------- 内部

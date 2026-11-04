@@ -35,6 +35,26 @@ class DataScopeTest {
     }
 
     @Test
+    @DisplayName("药师（G47）：全院科室但院区仍受限——东院区处方不对主院区药师可见")
+    void pharmacistIsStillCampusScoped() {
+        UUID campusMain = DataScope.DEFAULT_CAMPUS_ID;
+        UUID campusEast = UUID.fromString("a0000000-0000-0000-0000-000000000002");
+        DataScope scope = DataScopeResolver.resolve("pharm01", "PHARMACIST", "pharmacy:read",
+                deptA.toString(), campusMain.toString());
+
+        assertThat(scope.allDepartments()).isTrue();
+        assertThat(scope.allCampuses()).isFalse();
+        assertThat(scope.canSeeCampus(campusMain)).isTrue();
+        assertThat(scope.canSeeCampus(campusEast)).isFalse();
+        assertThat(scope.campusFilter()).containsExactly(campusMain);
+
+        // 旧令牌没有院区头：保持不限制院区（升级前签发的令牌不会突然 403）
+        DataScope legacy = DataScopeResolver.resolve("pharm01", "PHARMACIST", "pharmacy:read",
+                deptA.toString(), null);
+        assertThat(legacy.allCampuses()).isTrue();
+    }
+
+    @Test
     @DisplayName("医师：只看本科室，跨科室不可见")
     void doctorSeesOwnDepartmentOnly() {
         DataScope scope = DataScopeResolver.resolve("doctor01", "DOCTOR",

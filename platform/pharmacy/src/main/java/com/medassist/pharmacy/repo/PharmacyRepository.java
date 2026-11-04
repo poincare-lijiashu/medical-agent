@@ -348,15 +348,20 @@ public class PharmacyRepository {
     // ---------------------------------------------------------------- 处方
 
     public void insertPrescription(Prescription p) {
+        insertPrescription(p, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 写入处方并固化院区（G47）。 */
+    public void insertPrescription(Prescription p, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO pharmacy_svc.prescription
                             (id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                              prescriber, status, total_amount, version, billing_mode, source_order_id,
-                             supply_date)
+                             supply_date, campus_id)
                         VALUES (:id, :no, :patientId, :patientNo, CAST(:visitId AS uuid),
                                 CAST(:visitNo AS text), CAST(:deptId AS uuid),
                                 :prescriber, :status, :total, 0, :billingMode,
-                                CAST(:sourceOrderId AS uuid), CAST(:supplyDate AS date))
+                                CAST(:sourceOrderId AS uuid), CAST(:supplyDate AS date), :campusId)
                         """)
                 .param("id", p.id()).param("no", p.prescriptionNo())
                 .param("patientId", p.patientId()).param("patientNo", p.patientNo())
@@ -365,7 +370,16 @@ public class PharmacyRepository {
                 .param("status", p.status()).param("total", p.totalAmount())
                 .param("billingMode", p.billingMode())
                 .param("sourceOrderId", p.sourceOrderId())
-                .param("supplyDate", p.supplyDate()).update();
+                .param("supplyDate", p.supplyDate())
+                .param("campusId", campusId).update();
+    }
+
+    /** 处方所属院区（行级权限校验用；empty 表示处方不存在）。 */
+    public Optional<UUID> findPrescriptionCampus(UUID id) {
+        return jdbc.sql("SELECT campus_id FROM pharmacy_svc.prescription WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
     }
 
     public void insertPrescriptionItem(PrescriptionItem item) {
@@ -500,6 +514,11 @@ public class PharmacyRepository {
     }
 
     public List<Prescription> listPrescriptions(String status, UUID patientId, int limit) {
+        return listPrescriptions(status, patientId, limit, "");
+    }
+
+    /** 处方列表（G47 按院区收敛；空 CSV 表示不限院区）。 */
+    public List<Prescription> listPrescriptions(String status, UUID patientId, int limit, String campusCsv) {
         return jdbc.sql("""
                         SELECT id, prescription_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                prescriber, status, reviewer, reviewed_at, reject_reason,
@@ -507,10 +526,13 @@ public class PharmacyRepository {
                           FROM pharmacy_svc.prescription
                          WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
                            AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("patientId", patientId).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(RX_MAPPER).list();
     }
 
@@ -521,12 +543,20 @@ public class PharmacyRepository {
      * 待办被历史数据挤掉时 KPI 会偏小；分片请求数还随状态线性增长。
      */
     public java.util.Map<String, Integer> countPrescriptionsByStatus() {
+        return countPrescriptionsByStatus("");
+    }
+
+    /** 各状态处方数量（G47 按院区收敛；待办数不能跨院区混算）。 */
+    public java.util.Map<String, Integer> countPrescriptionsByStatus(String campusCsv) {
         java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
         jdbc.sql("""
                         SELECT status, count(*) AS n
                           FROM pharmacy_svc.prescription
+                         WHERE (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY status
                         """)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> java.util.Map.entry(rs.getString("status"), rs.getInt("n")))
                 .list()
                 .forEach(e -> counts.put(e.getKey(), e.getValue()));

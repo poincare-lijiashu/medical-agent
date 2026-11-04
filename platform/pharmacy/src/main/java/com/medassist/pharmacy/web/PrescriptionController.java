@@ -50,9 +50,12 @@ public class PrescriptionController {
     private static final String READ = "pharmacy:read";
 
     private final PrescriptionService service;
+    private final com.medassist.pharmacy.service.PrescriptionAccessGuard guard;
 
-    public PrescriptionController(PrescriptionService service) {
+    public PrescriptionController(PrescriptionService service,
+                                  com.medassist.pharmacy.service.PrescriptionAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @PostMapping
@@ -62,7 +65,7 @@ public class PrescriptionController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, CREATE);
-        return ApiResponse.ok(PhiMask.view(service.create(req, actor), scope));
+        return ApiResponse.ok(PhiMask.view(service.create(req, actor, scope.campusForWrite()), scope));
     }
 
     @GetMapping
@@ -73,7 +76,7 @@ public class PrescriptionController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(status, patientId, limit).stream()
+        return ApiResponse.ok(service.list(status, patientId, limit, scope.campusFilter()).stream()
                 .map(p -> PhiMask.prescription(p, scope))
                 .toList());
     }
@@ -86,9 +89,10 @@ public class PrescriptionController {
      */
     @GetMapping("/summary")
     public ApiResponse<java.util.Map<String, Integer>> summary(
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.statusCounts());
+        return ApiResponse.ok(service.statusCounts(scope.campusFilter()));
     }
 
     @GetMapping("/{id}")
@@ -97,6 +101,7 @@ public class PrescriptionController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, id);
         return ApiResponse.ok(PhiMask.view(service.detail(id), scope));
     }
 
@@ -109,6 +114,7 @@ public class PrescriptionController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, REVIEW);
+        guard.require(scope, id);
         return ApiResponse.ok(PhiMask.view(service.review(id, req.approve(), req.reason(), actor), scope));
     }
 
@@ -116,8 +122,10 @@ public class PrescriptionController {
     @GetMapping("/{id}/audit")
     public ApiResponse<PrescriptionAuditView> audit(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, id);
         return ApiResponse.ok(service.auditView(id));
     }
 
@@ -127,8 +135,10 @@ public class PrescriptionController {
             @PathVariable UUID id,
             @Valid @RequestBody(required = false) DispenseReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, DISPENSE);
+        guard.require(scope, id);
         return ApiResponse.ok(service.dispense(id, req == null ? null : req.checker(), actor));
     }
 
@@ -141,8 +151,10 @@ public class PrescriptionController {
     @GetMapping("/{id}/dispense")
     public ApiResponse<DispenseView> dispenseOf(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.require(scope, id);
         return ApiResponse.ok(service.dispenseByPrescription(id));
     }
 }

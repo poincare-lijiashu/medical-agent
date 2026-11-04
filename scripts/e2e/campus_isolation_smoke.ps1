@@ -213,5 +213,41 @@ Check "campus audit events recorded" ([int]$audit -ge 3) $audit
 $visitByCampus = SqlOne "select campus_id::text || ':' || count(*) from clinical_svc.visit group by campus_id order by 1;"
 Write-Output ("INFO visit by campus -> " + ($visitByCampus -replace "`n", " | "))
 
+# ---------------------------------------------------------------- 7) pharmacy campus (G47)
+$pharmToken = Login "pharm01" "Med@2026"
+$drugCode = SqlOne "select d.drug_code from pharmacy_svc.md_drug d join pharmacy_svc.drug_batch b on b.drug_id=d.id where d.enabled and b.quantity > 0 group by d.drug_code order by d.drug_code limit 1;"
+Check "stocked drug found" ($drugCode.Length -gt 0) "none"
+
+$rx = Call "POST" "/pharmacy/prescriptions" $eastAdminToken @{
+    patientId = $patientId; visitId = $visitId; visitNo = $null; deptId = $DEPT_WARD;
+    billingMode = "ORDER";
+    items = @(@{ drugCode = $drugCode; quantity = 1; dosage = "1 tab"; frequency = "qd"; days = 1; singleDose = $null; doseUnit = $null; timesPerDay = $null })
+}
+Check "east admin creates prescription" ($rx.code -eq 200) $rx.raw
+$rxId = ""
+if ($rx.code -eq 200) { $rxId = $rx.body.data.prescription.id }
+$rxCampus = ""
+if ($rxId.Length -gt 0) { $rxCampus = SqlOne ("select campus_id from pharmacy_svc.prescription where id='" + $rxId + "';") }
+Check "prescription campus persisted EAST" ($rxCampus -eq $EAST) ($rxCampus + " " + $rx.raw)
+
+$rxListMain = Call "GET" "/pharmacy/prescriptions?limit=200" $pharmToken $null
+$rxSeenMain = $false
+if ($rxListMain.code -eq 200) { $rxSeenMain = (@($rxListMain.body.data) | Where-Object { $_.id -eq $rxId } | Measure-Object).Count -gt 0 }
+Check "MAIN pharmacist list excludes EAST prescription" (($rxListMain.code -eq 200) -and (-not $rxSeenMain)) $rxListMain.raw
+
+$rxDetailMain = Call "GET" ("/pharmacy/prescriptions/" + $rxId) $pharmToken $null
+Check "MAIN pharmacist cannot open EAST prescription (404)" ($rxDetailMain.code -eq 404) $rxDetailMain.raw
+
+$rxDetailAdmin = Call "GET" ("/pharmacy/prescriptions/" + $rxId) $adminToken $null
+Check "cross-campus admin opens EAST prescription" ($rxDetailAdmin.code -eq 200) $rxDetailAdmin.raw
+
+$sumMain = Call "GET" "/pharmacy/prescriptions/summary" $pharmToken $null
+$sumAdmin = Call "GET" "/pharmacy/prescriptions/summary" $adminToken $null
+$totalMain = 0
+$totalAdmin = 0
+if ($sumMain.code -eq 200) { foreach ($p in $sumMain.body.data.PSObject.Properties) { $totalMain += [int]$p.Value } }
+if ($sumAdmin.code -eq 200) { foreach ($p in $sumAdmin.body.data.PSObject.Properties) { $totalAdmin += [int]$p.Value } }
+Check "summary counts exclude other campus" (($sumMain.code -eq 200) -and ($sumAdmin.code -eq 200) -and ($totalAdmin -gt $totalMain)) ("main=" + $totalMain + " admin=" + $totalAdmin)
+
 Write-Output ("RESULT pass=" + $script:pass + " fail=" + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

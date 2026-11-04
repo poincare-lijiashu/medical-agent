@@ -60,10 +60,13 @@ public final class DataScopeResolver {
         Set<UUID> campuses = parseIds(campusHeader, "院区");
         // 没有院区头（旧令牌/直连调用）时不限制院区，保持既有行为；
         // 网关在新令牌上始终下发 X-Campus，生产路径自然启用隔离。
-        boolean allCampuses = campusHeader == null || campusHeader.isBlank() || allDepartments;
+        //
+        // G47：全院科室角色不再自动等于"跨院区"。药师/麻醉/手术室/质控可以看所有科室，
+        // 但只能在本人绑定院区内可见——否则东院区处方会被主院区药师看到。
+        boolean allCampuses = campusHeader == null || campusHeader.isBlank();
 
         if (allDepartments) {
-            return DataScope.of(actorHeader, Set.of(), true, campuses, true, phiReadable);
+            return DataScope.of(actorHeader, Set.of(), true, campuses, allCampuses, phiReadable);
         }
         return DataScope.of(actorHeader, parseIds(orgHeader, "科室"), false,
                 campuses, allCampuses, phiReadable);

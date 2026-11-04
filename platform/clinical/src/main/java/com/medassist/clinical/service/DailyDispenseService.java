@@ -99,7 +99,7 @@ public class DailyDispenseService {
             try {
                 PharmacyOrderClient.RxRef ref = pharmacyClient.createFromOrder(order.id(),
                         visit.patientId(), visit.id(), visit.visitNo(), visit.deptId(),
-                        order.orderedBy(), day,
+                        order.orderedBy(), day, visitCampus(visit.id()),
                         // 结构化剂量（单次剂量/单位/每日次数）要求三者同时提供；临床长嘱只有
                         // 自由文本剂量，这里不做伪结构化，只传每日总量 + 频次文本。
                         List.of(new PharmacyOrderClient.Line(order.itemCode(), order.quantity(),
@@ -478,5 +478,11 @@ public class DailyDispenseService {
 
     private static String truncate(String message) {
         return message.length() <= 200 ? message : message.substring(0, 200);
+    }
+
+    /** 就诊院区（G47）：查不到时回退主院区，保证处方始终有明确归属。 */
+    private UUID visitCampus(UUID visitId) {
+        return repo.findVisitCampus(visitId)
+                .orElse(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
     }
 }

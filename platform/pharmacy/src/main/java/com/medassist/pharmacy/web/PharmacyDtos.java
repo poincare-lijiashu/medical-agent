@@ -133,13 +133,15 @@ public final class PharmacyDtos {
             @NotNull LocalDate supplyDate,
             @Pattern(regexp = "ORDER|DISPENSE", message = "计费模式只能是 ORDER/DISPENSE")
             String billingMode,
+            /** 就诊院区（G47）：临床转送时按就诊院区填充；旧版临床不传时回退主院区。 */
+            UUID campusId,
             @NotEmpty List<@Valid PrescriptionLine> items) {
 
         /** 兼容旧调用方：不传计费模式时等同于 ORDER（临床已计价）。 */
         public CreateFromOrderReq(UUID orderId, UUID patientId, UUID visitId, String visitNo,
                                   UUID deptId, String prescriber, LocalDate supplyDate,
                                   List<PrescriptionLine> items) {
-            this(orderId, patientId, visitId, visitNo, deptId, prescriber, supplyDate, null,
+            this(orderId, patientId, visitId, visitNo, deptId, prescriber, supplyDate, null, null,
                     items);
         }
 

@@ -88,7 +88,7 @@ class DailyDispenseServiceTest {
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
         when(repo.listOrders(visitId, null)).thenReturn(List.of(longDrug, tempDrug, longTreatment));
         when(pharmacyClient.createFromOrder(any(), any(), any(), any(), any(), any(),
-                eq(LocalDate.now()), any()))
+                eq(LocalDate.now()), any(), any()))
                 .thenReturn(new PharmacyOrderClient.RxRef(UUID.randomUUID(), "RX-DAY1", false,
                         new BigDecimal("25.00")));
 
@@ -100,7 +100,7 @@ class DailyDispenseServiceTest {
         assertThat(result.items().get(0).orderId()).isEqualTo(longDrug.id());
         assertThat(result.items().get(0).quantity()).isEqualTo(2);
         verify(pharmacyClient).createFromOrder(eq(longDrug.id()), eq(patientId), eq(visitId),
-                eq("V1"), eq(deptId), eq("doctor01"), eq(LocalDate.now()), any());
+                eq("V1"), eq(deptId), eq("doctor01"), eq(LocalDate.now()), any(), any());
     }
 
     @Test
@@ -109,7 +109,7 @@ class DailyDispenseServiceTest {
         VisitOrder longDrug = longDrug("O1", LocalDate.now());
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
         when(repo.listOrders(visitId, null)).thenReturn(List.of(longDrug));
-        when(pharmacyClient.createFromOrder(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(pharmacyClient.createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PharmacyOrderClient.RxRef(UUID.randomUUID(), "RX-DAY1", true,
                         new BigDecimal("25.00")));
 
@@ -127,10 +127,10 @@ class DailyDispenseServiceTest {
         VisitOrder b = longDrug("O2", LocalDate.now());
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
         when(repo.listOrders(visitId, null)).thenReturn(List.of(a, b));
-        when(pharmacyClient.createFromOrder(eq(a.id()), any(), any(), any(), any(), any(), any(), any()))
+        when(pharmacyClient.createFromOrder(eq(a.id()), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PharmacyOrderClient.RxRef(UUID.randomUUID(), "RX-DAY1", false,
                         new BigDecimal("25.00")));
-        when(pharmacyClient.createFromOrder(eq(b.id()), any(), any(), any(), any(), any(), any(), any()))
+        when(pharmacyClient.createFromOrder(eq(b.id()), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.VALIDATION_FAILED, "药品已停用"));
 
         DailyDispenseResult result = service.request(visitId, null, "nurse01");
@@ -145,7 +145,7 @@ class DailyDispenseServiceTest {
     void allFailedThrowsUpstreamUnavailable() {
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT", Visit.IN_TREATMENT)));
         when(repo.listOrders(visitId, null)).thenReturn(List.of(longDrug("O1", LocalDate.now())));
-        when(pharmacyClient.createFromOrder(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(pharmacyClient.createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "药房不可用"));
 
         assertThatThrownBy(() -> service.request(visitId, null, "nurse01"))
@@ -165,8 +165,7 @@ class DailyDispenseServiceTest {
         assertThatThrownBy(() -> service.request(visitId, LocalDate.now().plusDays(1), "nurse01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
-        verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(),
-                any(), any());
+        verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -188,8 +187,7 @@ class DailyDispenseServiceTest {
 
         assertThat(result.requested()).isZero();
         assertThat(result.items()).isEmpty();
-        verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(),
-                any(), any());
+        verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -206,8 +204,7 @@ class DailyDispenseServiceTest {
         DailyDispenseResult result = service.request(visitId, null, "nurse01");
 
         assertThat(result.requested()).isZero();
-        verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(),
-                any(), any());
+        verify(pharmacyClient, never()).createFromOrder(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     // ---------------------------------------------------------------- 病区收药与看板（V25）

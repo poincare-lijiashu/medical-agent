@@ -150,7 +150,10 @@ public class DischargeMedicationService {
                 item.dosage(), item.frequency(), item.days(), null, null, null)).toList();
         RxRef ref = pharmacyClient.createFromOrderWithBilling(id, medication.patientId(),
                 medication.visitId(), medication.visitNo(), medication.deptId(), operator,
-                BusinessTime.today(), "DISPENSE", lines);
+                BusinessTime.today(), "DISPENSE",
+                repo.findVisitCampus(medication.visitId())
+                        .orElse(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID),
+                lines);
         if (!repo.markDischargeMedicationSubmitted(id, ref.prescriptionId(),
                 ref.prescriptionNo(), ref.totalAmount(), medication.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "出院带药已被他人修改，请刷新后重试");

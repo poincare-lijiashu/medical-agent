@@ -274,6 +274,12 @@ public class OrderTransferService {
         }
     }
 
+    /** 就诊院区（G47）：查不到时回退主院区，保证处方始终有明确归属。 */
+    private UUID visitCampus(UUID visitId) {
+        return repo.findVisitCampus(visitId)
+                .orElse(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
     private void transferToPharmacy(VisitOrder order, Visit visit, String actor) {
         PharmacyOrderClient.RxRef ref = null;
         try {
@@ -281,7 +287,7 @@ public class OrderTransferService {
             LocalDate supplyDate = order.startDate() == null ? BusinessTime.today() : order.startDate();
             ref = pharmacyClient.createFromOrder(order.id(),
                     visit.patientId(), visit.id(), visit.visitNo(), visit.deptId(),
-                    order.orderedBy(), supplyDate,
+                    order.orderedBy(), supplyDate, visitCampus(visit.id()),
                     List.of(new PharmacyOrderClient.Line(order.itemCode(), order.quantity(),
                             order.dose(), order.frequency(), null, null, null, null)));
             if (!repo.markOrderTransferred(order.id(), EXTERNAL_PRESCRIPTION, ref.prescriptionId(),

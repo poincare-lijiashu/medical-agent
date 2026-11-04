@@ -134,7 +134,7 @@ class PrescriptionServiceTest {
         assertThat(view.items().get(0).unitPrice()).isEqualByComparingTo("12.50");
         assertThat(view.items().get(0).amount()).isEqualByComparingTo("25.00");
         assertThat(view.items().get(0).drugName()).isEqualTo("阿莫西林胶囊");
-        verify(repo).insertPrescription(any(Prescription.class));
+        verify(repo).insertPrescription(any(Prescription.class), any());
         // 处方主键在服务内生成，审计目标是该主键
         verify(repo).logChange(eq("doctor01"), eq("RX_CREATE"), eq("PRESCRIPTION"),
                 anyString(), anyString());
@@ -150,7 +150,7 @@ class PrescriptionServiceTest {
                         new PrescriptionLine("DRUG-AMOX-025", 2, null, null, null, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("重复开立");
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
     }
 
     @Test
@@ -182,7 +182,7 @@ class PrescriptionServiceTest {
         assertThat(view.duplicate()).isTrue();
         assertThat(view.prescriptionId()).isEqualTo(rxId);
         assertThat(view.totalAmount()).isEqualByComparingTo("25.00");
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
         verify(repo, never()).insertPrescriptionItem(any());
     }
 
@@ -200,7 +200,7 @@ class PrescriptionServiceTest {
 
         assertThat(view.duplicate()).isFalse();
         ArgumentCaptor<Prescription> captor = ArgumentCaptor.forClass(Prescription.class);
-        verify(repo).insertPrescription(captor.capture());
+        verify(repo).insertPrescription(captor.capture(), any());
         assertThat(captor.getValue().billingMode()).isEqualTo(Prescription.BILLING_ORDER);
         assertThat(captor.getValue().sourceOrderId()).isEqualTo(orderId);
         assertThat(captor.getValue().prescriber()).isEqualTo("doctor01");
@@ -225,7 +225,7 @@ class PrescriptionServiceTest {
                 "clinical"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("儿童");
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
     }
 
     @Test
@@ -250,7 +250,7 @@ class PrescriptionServiceTest {
         assertThat(first.duplicate()).isFalse();
         assertThat(nextDay.duplicate()).isTrue();
         ArgumentCaptor<Prescription> captor = ArgumentCaptor.forClass(Prescription.class);
-        verify(repo).insertPrescription(captor.capture());
+        verify(repo).insertPrescription(captor.capture(), any());
         assertThat(captor.getValue().supplyDate()).isEqualTo(today);
     }
 
@@ -710,7 +710,7 @@ class PrescriptionServiceTest {
                 List.of(new PrescriptionLine("DRUG-AMOX-025", 1, null, null, null, null, null, null))), "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("visitId");
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
     }
 
     @Test
@@ -903,7 +903,7 @@ class PrescriptionServiceTest {
                 "doctor01"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("用药禁忌");
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
     }
 
     @Test
@@ -919,7 +919,7 @@ class PrescriptionServiceTest {
                 "doctor01");
 
         verify(repo).insertAudit(any());
-        verify(repo).insertPrescription(any(Prescription.class));
+        verify(repo).insertPrescription(any(Prescription.class), any());
     }
 
     // ---------------------------------------------------------------- 麻醉药品（V6 五专）
@@ -935,7 +935,7 @@ class PrescriptionServiceTest {
                         null, null, null))), "doctor01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.NARCOTIC_PRESCRIBER_REQUIRED));
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
     }
 
     @Test
@@ -951,7 +951,7 @@ class PrescriptionServiceTest {
                         null, null, null))), "doctor01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.NARCOTIC_AMPOULE_OUTSTANDING));
-        verify(repo, never()).insertPrescription(any());
+        verify(repo, never()).insertPrescription(any(), any());
     }
 
     @Test
@@ -966,7 +966,7 @@ class PrescriptionServiceTest {
                 List.of(new PrescriptionLine(morphine.drugCode(), 1, null, null, null, null, null,
                         null))), "doctor01");
 
-        verify(repo).insertPrescription(any(Prescription.class));
+        verify(repo).insertPrescription(any(Prescription.class), any());
     }
 
     @Test

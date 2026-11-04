@@ -5,6 +5,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
 import com.medassist.pharmacy.service.DrugCatalogService;
 import com.medassist.pharmacy.service.PharmacyBillingService;
+import com.medassist.pharmacy.service.PrescriptionAccessGuard;
 import com.medassist.pharmacy.service.PrescriptionService;
 import com.medassist.pharmacy.service.StockService;
 import com.medassist.pharmacy.web.PharmacyDtos.CreateDrugReq;
@@ -57,7 +58,8 @@ class PharmacyControllerPermissionTest {
         prescriptionService = mock(PrescriptionService.class);
         drugController = new DrugController(drugService);
         stockController = new StockController(stockService);
-        prescriptionController = new PrescriptionController(prescriptionService);
+        prescriptionController = new PrescriptionController(prescriptionService,
+                mock(PrescriptionAccessGuard.class));
         dispenseController = new DispenseController(prescriptionService,
                 mock(PharmacyBillingService.class));
     }
@@ -95,7 +97,7 @@ class PharmacyControllerPermissionTest {
 
         prescriptionController.create(req, "pharmacy:prescription:create", "doctor01", scope);
 
-        verify(prescriptionService).create(any(), anyString());
+        verify(prescriptionService).create(any(), anyString(), any());
     }
 
     @Test
@@ -115,7 +117,7 @@ class PharmacyControllerPermissionTest {
     @DisplayName("发药：需要 pharmacy:dispense:execute")
     void dispenseRequiresExecutePermission() {
         assertThatThrownBy(() -> prescriptionController.dispense(id, null,
-                "pharmacy:prescription:review", "pharm01"))
+                "pharmacy:prescription:review", "pharm01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -138,7 +140,8 @@ class PharmacyControllerPermissionTest {
     @Test
     @DisplayName("按处方查发药单：缺 pharmacy:read 时 403")
     void dispenseOfRequiresReadPermission() {
-        assertThatThrownBy(() -> prescriptionController.dispenseOf(id, "pharmacy:prescription:review"))
+        assertThatThrownBy(() -> prescriptionController.dispenseOf(id,
+                "pharmacy:prescription:review", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
@@ -150,7 +153,7 @@ class PharmacyControllerPermissionTest {
     void dispenseOfReturnsNullWhenNotDispensed() {
         when(prescriptionService.dispenseByPrescription(id)).thenReturn(null);
 
-        var resp = prescriptionController.dispenseOf(id, "pharmacy:read");
+        var resp = prescriptionController.dispenseOf(id, "pharmacy:read", scope);
 
         assertThat(resp.data()).isNull();
     }

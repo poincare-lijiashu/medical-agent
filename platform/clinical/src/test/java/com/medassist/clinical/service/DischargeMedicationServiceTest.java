@@ -189,8 +189,7 @@ class DischargeMedicationServiceTest {
 
         assertCode(() -> service.submit(medicationId, "doctor01"),
                 ErrorCode.DISCHARGE_MED_STATUS_INVALID);
-        verify(client, never()).createFromOrderWithBilling(any(), any(), any(), any(), any(),
-                any(), any(), anyString(), any());
+        verify(client, never()).createFromOrderWithBilling(any(), any(), any(), any(), any(), any(), any(), anyString(), any(), any());
     }
 
     @Test
@@ -202,8 +201,7 @@ class DischargeMedicationServiceTest {
 
         assertCode(() -> service.submit(medicationId, "doctor01"),
                 ErrorCode.DISCHARGE_MED_VISIT_INVALID);
-        verify(client, never()).createFromOrderWithBilling(any(), any(), any(), any(), any(),
-                any(), any(), anyString(), any());
+        verify(client, never()).createFromOrderWithBilling(any(), any(), any(), any(), any(), any(), any(), anyString(), any(), any());
     }
 
     @Test
@@ -214,8 +212,7 @@ class DischargeMedicationServiceTest {
         when(repo.findAdmission(admissionId)).thenReturn(Optional.of(admission("IN_HOSPITAL")));
         when(repo.listDischargeMedicationItems(medicationId))
                 .thenReturn(List.of(item(1, "DRUG-AMOX-025", 2)));
-        when(client.createFromOrderWithBilling(any(), any(), any(), any(), any(), any(), any(),
-                anyString(), any())).thenReturn(new RxRef(prescriptionId, "RX20261104000001",
+        when(client.createFromOrderWithBilling(any(), any(), any(), any(), any(), any(), any(), anyString(), any(), any())).thenReturn(new RxRef(prescriptionId, "RX20261104000001",
                 false, new BigDecimal("24.00")));
         when(repo.markDischargeMedicationSubmitted(eq(medicationId), eq(prescriptionId),
                 eq("RX20261104000001"), any(), eq(0L))).thenReturn(true);
@@ -229,8 +226,7 @@ class DischargeMedicationServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Line>> lines = ArgumentCaptor.forClass(List.class);
         verify(client).createFromOrderWithBilling(eq(medicationId), eq(patientId), eq(visitId),
-                eq("V20261104000001"), eq(deptId), eq("doctor01"), any(LocalDate.class),
-                eq("DISPENSE"), lines.capture());
+                eq("V20261104000001"), eq(deptId), eq("doctor01"), any(LocalDate.class), eq("DISPENSE"), any(), lines.capture());
         assertThat(lines.getValue()).hasSize(1);
         assertThat(lines.getValue().get(0).drugCode()).isEqualTo("DRUG-AMOX-025");
         verify(repo).logChange(eq("doctor01"), eq("DISCHARGE_MED_SUBMIT"),
@@ -245,8 +241,7 @@ class DischargeMedicationServiceTest {
         when(repo.findAdmission(admissionId)).thenReturn(Optional.of(admission("IN_HOSPITAL")));
         when(repo.listDischargeMedicationItems(medicationId))
                 .thenReturn(List.of(item(1, "DRUG-AMOX-025", 2)));
-        when(client.createFromOrderWithBilling(any(), any(), any(), any(), any(), any(), any(),
-                anyString(), any())).thenReturn(new RxRef(prescriptionId, "RX1", true,
+        when(client.createFromOrderWithBilling(any(), any(), any(), any(), any(), any(), any(), anyString(), any(), any())).thenReturn(new RxRef(prescriptionId, "RX1", true,
                 BigDecimal.TEN));
         when(repo.markDischargeMedicationSubmitted(any(), any(), any(), any(), anyLong()))
                 .thenReturn(false);
