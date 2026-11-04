@@ -148,6 +148,42 @@ public class AuthService {
     }
 
     /**
+     * 外部统一身份登录签发（G42）。
+     *
+     * <p>与密码登录的区别：不校验密码、不做限速（IdP 已认证）、不升级哈希；
+     * 角色/权限/科室仍以本地实时配置为准，避免 IdP 声明越权。
+     */
+    public LoginResp loginExternal(UserAccount user, String provider, String subject,
+                                   String clientIp, String userAgent) {
+        if (!user.active()) {
+            audit(user.username(), "LOGIN_FAILED", user.id().toString(),
+                    Map.of("reason", "ACCOUNT_" + user.status(), "provider", provider));
+            throw new BusinessException(ErrorCode.FORBIDDEN, "账号已停用或锁定，请联系管理员");
+        }
+        List<String> roles = users.rolesOf(user.id());
+        if (roles.isEmpty()) {
+            audit(user.username(), "LOGIN_FAILED", user.id().toString(),
+                    Map.of("reason", "NO_ROLE", "provider", provider));
+            throw new BusinessException(ErrorCode.FORBIDDEN, "账号未分配角色，请联系管理员");
+        }
+        List<String> permissions = rbac.permissionsOfUser(user.id());
+        List<UUID> deptIds = users.deptIdsOf(user.id());
+        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds);
+        IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
+
+        users.touchLogin(user.id());
+        countLogin("success", "sso");
+        audit(user.username(), "SSO_LOGIN", user.id().toString(), Map.of(
+                "provider", provider, "subject", subject,
+                "tokenId", access.tokenId(), "ip", clientIp));
+
+        MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
+                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt());
+        return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
+                refresh.token(), refresh.expiresAt(), me);
+    }
+
+    /**
      * 刷新：校验刷新令牌 → 立即轮换 → 重新签发访问令牌（角色/权限取当前值）。
      *
      * <p>加事务：撤销旧令牌与写入新令牌必须同生共死。原实现无事务，

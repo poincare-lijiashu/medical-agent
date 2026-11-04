@@ -120,6 +120,10 @@ export const session = {
     apply(result)
     return result
   },
+  /** SSO 回调换到的平台令牌：与密码登录共用同一套本地会话状态。 */
+  applyLogin(result: LoginResult) {
+    apply(result)
+  },
   async validate() {
     if (!state.accessToken) return false
     // 令牌临近过期时先刷新，避免启动阶段产生一次必然的 401（控制台噪音）

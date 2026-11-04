@@ -48,6 +48,19 @@ class ExceptionMappingContractTest {
     }
 
     @Test
+    @DisplayName("SSO 错误码：状态/令牌 401、未绑定 403、开户失败 422、IdP 不可用 503")
+    void ssoCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.SSO_DISABLED)).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(handler.statusOf(ErrorCode.SSO_STATE_INVALID)).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(handler.statusOf(ErrorCode.SSO_TOKEN_INVALID)).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(handler.statusOf(ErrorCode.SSO_IDENTITY_NOT_LINKED)).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(handler.statusOf(ErrorCode.SSO_PROVISION_FAILED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.SSO_PROVIDER_UNAVAILABLE))
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
     @DisplayName("业务错误码不得落到 5xx（否则前端会把业务拒绝当系统故障重试）")
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {

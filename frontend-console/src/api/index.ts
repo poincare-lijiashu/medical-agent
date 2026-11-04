@@ -67,6 +67,8 @@ import type {
   ReceiptPushSummary,
   SnapshotCapture,
   SnapshotList,
+  SsoAuthorize,
+  SsoConfig,
   KbAnswerResult,
   KbDocument,
   KbSearchResult,
@@ -179,6 +181,13 @@ export const authApi = {
     post<LoginResult>('/auth/refresh', { refreshToken }, { publicRequest: true }),
   me: () => get<Me>('/auth/me'),
   logout: () => post<void>('/auth/logout'),
+
+  /** 统一身份 SSO（G42）：登录前接口，无令牌。 */
+  ssoConfig: () => request<SsoConfig>('/auth/sso/config', { publicRequest: true }),
+  ssoAuthorize: (redirectUri?: string) =>
+    post<SsoAuthorize>('/auth/sso/oidc/authorize', { redirectUri }, { publicRequest: true }),
+  ssoCallback: (code: string, state: string) =>
+    post<LoginResult>('/auth/sso/oidc/callback', { code, state }, { publicRequest: true }),
 }
 
 export const empiApi = {

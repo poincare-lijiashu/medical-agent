@@ -69,6 +69,20 @@ class AuthGlobalFilterTest {
     }
 
     @Test
+    void whitelistedSsoEndpointsPassWithoutToken() {
+        for (String path : List.of("/api/v2/auth/sso/config",
+                "/api/v2/auth/sso/oidc/authorize", "/api/v2/auth/sso/oidc/callback")) {
+            MockServerWebExchange exchange = MockServerWebExchange.from(
+                    MockServerHttpRequest.post(path).build());
+            CapturingChain chain = new CapturingChain();
+
+            filter.filter(exchange, chain).block();
+
+            assertThat(chain.called).as("SSO 登录前接口应免令牌：%s", path).isTrue();
+        }
+    }
+
+    @Test
     void protectedPathWithoutTokenReturns401() {
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v2/empi/patients").build());
@@ -242,6 +256,9 @@ class AuthGlobalFilterTest {
     private static GatewayAuthProperties props(boolean enabled) {
         return new GatewayAuthProperties(enabled, ISSUER, SECRET,
                 List.of("/api/v2/auth/login", "/api/v2/auth/refresh",
+                        "/api/v2/auth/sso/config",
+                        "/api/v2/auth/sso/oidc/authorize",
+                        "/api/v2/auth/sso/oidc/callback",
                         "/actuator/health/**", "/actuator/prometheus"),
                 List.of("/api/v2/**", "/api/v1/**"),
                 List.of("/api/v2/*/internal/**"),

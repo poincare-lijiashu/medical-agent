@@ -7,6 +7,11 @@ const router = createRouter({
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
     {
+      path: '/sso/callback',
+      name: 'sso-callback',
+      component: () => import('@/views/SsoCallbackView.vue'),
+    },
+    {
       path: '/',
       component: () => import('@/layouts/AppShell.vue'),
       children: [
@@ -147,6 +152,10 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  // SSO 回调承担"换取令牌"职责，必须在未登录时也能进入
+  if (to.name === 'sso-callback') {
+    return true
+  }
   if (to.name === 'login') {
     return session.isLoggedIn.value ? { path: '/dashboard' } : true
   }

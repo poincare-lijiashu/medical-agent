@@ -197,6 +197,10 @@ medassist:
       whitelist:
         - /api/v2/auth/login
         - /api/v2/auth/refresh
+        # 统一身份 SSO（G42）：登录前调用，必须免令牌；安全由一次性 state + PKCE + nonce 保证。
+        - /api/v2/auth/sso/config
+        - /api/v2/auth/sso/oidc/authorize
+        - /api/v2/auth/sso/oidc/callback
         # K8s 探针路径为 /actuator/health/liveness|readiness，必须放行，否则探针会拿到 401；
         # 但**不再放行 /actuator/** 整段**（那会把路由表、指标、bean 信息一并裸奔），
         # 只精确白名单健康检查与 Prometheus 抓取（后者由 NetworkPolicy 限制来源）。

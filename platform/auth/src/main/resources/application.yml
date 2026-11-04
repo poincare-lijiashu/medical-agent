@@ -61,6 +61,23 @@ medassist:
       # IP 维度阈值必须远高于账号维度（医院内网共享 NAT 出口，低阈值会连坐整层楼）
       max-ip-failures: ${LOGIN_THROTTLE_MAX_IP_FAILURES:30}
       window: ${LOGIN_THROTTLE_WINDOW:PT5M}
+    # 统一身份 SSO（G42）：OIDC 授权码 + PKCE；默认关闭，不影响本地账号密码登录。
+    # 生产必须通过 Secret 注入 client-secret，禁止写入仓库。
+    sso:
+      enabled: ${SSO_ENABLED:false}
+      provider: ${SSO_PROVIDER:OIDC}
+      issuer: ${SSO_ISSUER:}
+      client-id: ${SSO_CLIENT_ID:}
+      client-secret: ${SSO_CLIENT_SECRET:}
+      redirect-uri: ${SSO_REDIRECT_URI:}
+      scopes: ${SSO_SCOPES:openid,profile,email}
+      timeout: ${SSO_TIMEOUT:PT3S}
+      username-claim: ${SSO_USERNAME_CLAIM:preferred_username}
+      email-claim: ${SSO_EMAIL_CLAIM:email}
+      name-claim: ${SSO_NAME_CLAIM:name}
+      auto-provision: ${SSO_AUTO_PROVISION:false}
+      default-roles: ${SSO_DEFAULT_ROLES:DOCTOR}
+      default-org-code: ${SSO_DEFAULT_ORG_CODE:}
 
 management:
   endpoints:

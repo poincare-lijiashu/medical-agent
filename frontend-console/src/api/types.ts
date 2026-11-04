@@ -3360,3 +3360,18 @@ export interface CaBoard {
   verifyFailuresToday: number
   providerMode: string
 }
+
+/** 统一身份 SSO（G42）：登录页只读取非敏感客户端配置。 */
+export interface SsoConfig {
+  enabled: boolean
+  provider: string
+  issuer: string
+  clientId: string
+  redirectUri: string
+  scopes: string[]
+}
+
+export interface SsoAuthorize {
+  authorizeUrl: string
+  state: string
+}

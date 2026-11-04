@@ -13,20 +13,20 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G41 CA 电子签名与无纸化）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），418 个主代码 Java 文件、168 个测试类、**1590 项测试全绿**。
-- **前端**：42 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V69、tech V12、pharmacy V19、emr V21、insurance V19、material V4、clinical V55（各服务独立 schema）。
+- **HEAD**：以 `git log -1` 为准（本轮 G42 统一身份 SSO）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），426 个主代码 Java 文件、170 个测试类、**1606 项测试全绿**。
+- **前端**：43 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
+- **数据库**：auth V70、tech V12、pharmacy V19、emr V21、insurance V19、material V4、clinical V55（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
-- **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。
+- **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。
 - **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G41，代码 HEAD=`69a2073`）。
 
 ### 1. 功能完成度（按业务域）
 
 | 业务域 | 状态 | 完成度 | 已具备 | 主要缺口 |
 |---|---|---|---|---|
-| 基础平台（common / gateway / auth） | 可用 | 90% | 网关注入与鉴权、内部调用签名、登录限流、令牌撤销、RBAC、跨域审计、幂等与 CAS 约定 | SSO/LDAP、多院区多租户、更细的数据权限 |
+| 基础平台（common / gateway / auth） | 可用 | 92% | 网关注入与鉴权、内部调用签名、登录限流、令牌撤销、RBAC、跨域审计、幂等与 CAS 约定、OIDC 单点登录（PKCE + JWKS 验签 + 一次性 state/nonce、身份绑定与可选自动开户） | LDAP/AD 绑定、多院区多租户、更细的数据权限 |
 | EMPI 患者主索引 | 可用 | 85% | 建档、查重合并、PHI 掩码、变更历史 | 区域平台互联、患者门户 |
 | 门诊 | 可用 | 98% | 号源、挂号/退号/改约、接诊、医嘱、收费、收费票据（开票/重打/作废/换开）、电子票据厂商报文（开具/红冲/按期间对账）、日结与分账 | 预约平台、厂商正式联调 |
 | 住院 | 可用 | 98% | 入院/床位/转床、护理执行、护理排班、临床路径（模板/入径/任务与变异/完成与退出/版本克隆）、路径统计（完成率/退出率/变异率/平均天数/科室下钻）、出院带药（开立→提交药房发药时计价→发药同步/取消）、预交金、日结、欠费预警、入出转与床位使用率趋势 | 路径节点与医嘱/收费自动联动 |
@@ -54,7 +54,7 @@
 - **完整商业版（含报表、未建业务线、运维加固）≈ 84–88%**：差距主要在"业务面宽度"和"生产运维"，不是已实现流程的深度。
 - **可交付状态**：单院区核心 HIS 可演示/试运行；距正式生产还差医保实时接口省局联调、票据厂商正式联调、压测与容灾。
 
-### 2. 已完成的关键增量（G1–G41，均有真实链路验证）
+### 2. 已完成的关键增量（G1–G42，均有真实链路验证）
 
 | 编号 | 内容 | 关键点 |
 |---|---|---|
@@ -99,6 +99,7 @@
 | G39 | 移动护理与条码闭环 | clinical V54：`nursing_mobile_task`（给药/标本，ORDER/MANUAL，PENDING→VERIFIED/EXCEPTION，同一医嘱同日唯一，任务视图不下发期望条码）+ `nursing_scan_event`（追加式，触发器禁止 UPDATE/DELETE）；从长期药品医嘱生成当日任务（幂等）、手工建单、腕带+项目双码服务端比对、不匹配保留 PENDING 并保留两条扫码事件、异常原因关闭、扫码记录与看板；auth V67 新增 `mobile:nursing:read/execute/manage`；新增「移动护理」页（任务列表、扫码弹窗、异常登记、扫码记录） |
 | G40 | 输血闭环 | clinical V55：`blood_product`（4 种血液成分种子）+ `transfusion_request`（REQUESTED→CROSSMATCHED→ISSUED→TRANSFUSING→COMPLETED，可取消）+ `blood_crossmatch`（血袋号全局唯一、一次申请最多一条 COMPATIBLE、不合可换袋重配）+ `transfusion_record`（双人核对 CHECK checker_a<>checker_b）+ `transfusion_reaction`（一次输注一份，分级/症状/处理）；`/clinical/transfusion` 提供成分字典、申请、配血、发血、双人核对开始、完成、不良反应、看板；auth V68 新增 5 个权限点与 `BLOOD_BANK` 角色；新增「输血管理」页（申请/配血/发血/开始/完成/反应/详情） |
 | G41 | CA 电子签名与无纸化 | emr V21 `ca_signature`（签名记录唯一、VALID/REVOKED、撤销必须写原因/人/时间 CHECK、验签次数与最近结果留痕）+ auth V69 四个权限点（read/sign/verify/manage）；CA 适配层 `CaSignatureProvider` 支持 mock（HMAC-SHA256，签名时间截断到微秒以匹配 timestamptz 精度）与 vendor（POST /sign、/verify，密钥仅从部署配置注入）；`/emr/ca` 提供模式、台账、验签、撤销、看板；病历签名接口新增 `caSign=true`，CA 失败回滚整笔病历签名；新增「CA 电子签名」页（KPI、台账筛选、验签、撤销、详情）；错误码 44550–44556 与 404/409/422/503 契约测试固化 |
+| G42 | 统一身份 SSO（OIDC） | auth V70 `sso_login_state`（一次性 state、PKCE verifier、nonce、5 分钟过期，`UPDATE ... RETURNING` 原子消费）+ `sso_identity`（provider+subject 唯一、provider+user 唯一，防换号接管）；`OidcClient` 负责发现文档/JWKS 缓存、授权码换 token、RS256 验签与 iss 校验（发现文档 issuer 不一致直接拒绝）；`/auth/sso/config`、`/oidc/authorize`、`/oidc/callback` 登录前接口，校验 aud/nonce 后映射本地账号或按配置自动开户，复用本地令牌签发与 `SSO_LOGIN` 审计；网关白名单与 `ActorGuardFilter` 同步放行；登录页新增统一身份入口与回调页；错误码 40110–40112/40310–40311/50310 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
@@ -106,17 +107,18 @@
 
 **P0（下一轮直接做）**
 
-1. **SSO / 多院区 / 多租户**：统一身份源（OIDC/LDAP）、租户与院区边界、机构切换与数据范围收敛。
+1. **多院区 / 多租户**：租户与院区边界、机构切换、数据范围收敛（auth 组织模型 + 各域数据归属 + 网关租户上下文）。
 2. **生产运维加固**：压测基线、容灾演练、CI 质量门禁、灰度发布与回滚预案。
 
 **P1**
 
-3. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
-4. CA 厂商正式联调、知情同意书签名与无纸化归档包。
+3. LDAP/AD 绑定与 SSO 账号生命周期（离职禁用、身份解绑、管理员手工绑定界面）。
+4. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
+5. CA 厂商正式联调、知情同意书签名与无纸化归档包。
 
 **P2**
 
-5. 患者移动端（预约、报告查询、随访提醒）与区域平台互联。
+6. 患者移动端（预约、报告查询、随访提醒）与区域平台互联。
 
 ### 4. 明日恢复步骤
 

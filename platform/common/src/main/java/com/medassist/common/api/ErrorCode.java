@@ -34,6 +34,14 @@ public enum ErrorCode {
     USER_DUPLICATE(40409, "该用户名已存在"),
     LAST_ADMIN_PROTECTED(40410, "不能停用或降级系统中最后一个启用的管理员账号"),
 
+    // ---- 统一身份 SSO（40xxx 续，G42）----
+    SSO_DISABLED(40110, "未启用统一身份登录，请使用院内账号密码登录"),
+    SSO_STATE_INVALID(40111, "统一身份登录状态已失效，请重新发起登录"),
+    SSO_TOKEN_INVALID(40112, "统一身份返回的身份令牌校验失败，请重新登录"),
+    SSO_IDENTITY_NOT_LINKED(40310, "统一身份未关联本地账号，请联系管理员开通或绑定"),
+    SSO_PROVISION_FAILED(40311, "统一身份自动开户失败：缺少有效的账号、角色或科室配置"),
+    SSO_PROVIDER_UNAVAILABLE(50310, "统一身份服务暂不可用，请稍后重试或使用院内账号登录"),
+
     // ---- EMPI 患者主索引（41xxx）----
     PATIENT_NOT_FOUND(41401, "未找到该患者"),
     PATIENT_DUPLICATE(41409, "该患者已存在，请核对证件号后使用已有档案"),

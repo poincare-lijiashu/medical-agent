@@ -102,6 +102,15 @@ class ActorGuardFilterTest {
     }
 
     @Test
+    @DisplayName("SSO 登录前接口不需要 X-Actor（state+PKCE 自证）")
+    void ssoEntryPointsAreExempt() throws Exception {
+        assertEquals("true", run("POST", "/sso/oidc/authorize", null).getHeader("X-Chain-Passed"));
+        assertEquals("true", run("POST", "/sso/oidc/callback", null).getHeader("X-Chain-Passed"));
+        assertEquals("true", run("POST", "/auth/sso/oidc/authorize", null).getHeader("X-Chain-Passed"));
+        assertEquals("true", run("POST", "/auth/sso/oidc/callback", null).getHeader("X-Chain-Passed"));
+    }
+
+    @Test
     @DisplayName("上下文路径被剔除后再判定（部署在 /medassist 下同样生效）")
     void contextPathIsStripped() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/medassist/clinical/orders");

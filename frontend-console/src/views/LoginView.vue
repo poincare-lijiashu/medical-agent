@@ -79,6 +79,15 @@
           </button>
         </form>
 
+        <template v-if="ssoEnabled">
+          <div class="divider"><span>或</span></div>
+          <button class="btn sso-btn" type="button" :disabled="ssoLoading" @click="ssoLogin">
+            <AppIcon v-if="ssoLoading" name="refresh" :size="16" class="spin" />
+            <AppIcon v-else name="users" :size="16" />
+            {{ ssoLoading ? '正在跳转统一身份…' : '使用院内统一身份登录' }}
+          </button>
+        </template>
+
         <p v-if="isDev" class="dev-hint">
           演示账号 admin01 · 密码 Med@2026
         </p>
@@ -96,6 +105,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
+import { authApi } from '@/api'
 import { errorText } from '@/api/http'
 import { session } from '@/stores/session'
 
@@ -113,6 +123,8 @@ const formError = ref('')
 const errors = reactive({ username: '', password: '' })
 const userEl = ref<HTMLInputElement | null>(null)
 const pwdEl = ref<HTMLInputElement | null>(null)
+const ssoEnabled = ref(false)
+const ssoLoading = ref(false)
 
 const isDev = import.meta.env.DEV
 
@@ -147,9 +159,27 @@ async function submit() {
   }
 }
 
-onMounted(() => {
+async function ssoLogin() {
+  formError.value = ''
+  ssoLoading.value = true
+  try {
+    const result = await authApi.ssoAuthorize()
+    window.location.assign(result.authorizeUrl)
+  } catch (e) {
+    formError.value = errorText(e)
+    ssoLoading.value = false
+  }
+}
+
+onMounted(async () => {
   if (!username.value) userEl.value?.focus()
   else pwdEl.value?.focus()
+  try {
+    ssoEnabled.value = (await authApi.ssoConfig()).enabled
+  } catch {
+    // SSO 是可选登录方式：配置不可用时静默回退到账号密码，不影响登录页
+    ssoEnabled.value = false
+  }
 })
 </script>
 
@@ -299,6 +329,33 @@ onMounted(() => {
 .login-submit {
   height: 40px;
   font-size: 14px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 12px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.sso-btn {
+  width: 100%;
+  height: 40px;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .spin {
