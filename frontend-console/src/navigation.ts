@@ -335,6 +335,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['emr:coding:read'],
   },
   {
+    name: 'ca-signatures',
+    path: '/ca-signatures',
+    title: 'CA 电子签名',
+    hint: '签名台账 · 验签留痕 · 撤销 · Mock/厂商双模式',
+    icon: 'qc',
+    group: '质量与知识',
+    permissions: ['emr:ca:read'],
+  },
+  {
     name: 'knowledge',
     path: '/knowledge',
     title: '知识库',

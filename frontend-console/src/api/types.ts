@@ -3328,3 +3328,35 @@ export interface TransfusionBoard {
   reactionsToday: number
   totalToday: number
 }
+
+/** CA 电子签名（G41）：病历签名时可选同步获取厂商/Mock 证书签名。 */
+export interface CaSignature {
+  id: string
+  signatureId: string
+  recordId: string
+  revision: number
+  signer: string
+  signType: string
+  contentHash: string
+  provider: 'MOCK' | 'VENDOR'
+  certificateSerial: string
+  algorithm: string
+  signatureValue: string
+  signedAt: string
+  status: 'VALID' | 'REVOKED'
+  verifyCount: number
+  lastVerifiedAt: string | null
+  lastVerifyResult: boolean | null
+  revokeReason: string | null
+  revokedBy: string | null
+  revokedAt: string | null
+  createdAt: string
+}
+
+export interface CaBoard {
+  signedToday: number
+  validTotal: number
+  revokedTotal: number
+  verifyFailuresToday: number
+  providerMode: string
+}

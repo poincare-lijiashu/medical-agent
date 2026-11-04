@@ -293,4 +293,26 @@ public final class EmrModel {
                                   int stayDays, String codingStatus, String coder,
                                   Instant codedAt, long homepageVersion, long codingVersion) {
     }
+
+    /**
+     * CA 电子签名（G41）：绑定一条病历签名行。
+     *
+     * <p>VALID → REVOKED（必须写原因）；验签只更新计数与结果，不修改签名值。
+     * 签名值由 CA 适配层生成，库内不保存证书私钥。
+     */
+    public record CaSignature(UUID id, UUID signatureId, UUID recordId, int revision,
+                              String signer, String signType, String contentHash, String provider,
+                              String certificateSerial, String algorithm, String signatureValue,
+                              Instant signedAt, String status, int verifyCount,
+                              Instant lastVerifiedAt, Boolean lastVerifyResult,
+                              String revokeReason, String revokedBy, Instant revokedAt,
+                              Instant createdAt) {
+
+        public static final String VALID = "VALID";
+        public static final String REVOKED = "REVOKED";
+
+        public boolean valid() {
+            return VALID.equals(status);
+        }
+    }
 }

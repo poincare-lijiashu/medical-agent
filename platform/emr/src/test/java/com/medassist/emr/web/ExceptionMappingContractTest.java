@@ -61,6 +61,25 @@ class ExceptionMappingContractTest {
     }
 
     @Test
+    @DisplayName("CA 电子签名错误码：未找到 404、状态/验签冲突 409、证书不合法 422、厂商不可用 503")
+    void caSignatureCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.CA_SIGNATURE_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.CA_SIGNATURE_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CA_VERIFY_FAILED))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CA_SIGNATURE_EXISTS))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.CA_SIGNATURE_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CA_REVOKE_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.CA_PROVIDER_UNAVAILABLE))
+                .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    @Test
     @DisplayName("业务错误码不得落到 5xx（否则前端会把业务拒绝当系统故障重试）")
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {

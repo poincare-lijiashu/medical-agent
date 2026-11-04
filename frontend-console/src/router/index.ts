@@ -127,6 +127,11 @@ const router = createRouter({
           name: 'homepage-qc',
           component: () => import('@/views/HomepageQcView.vue'),
         },
+        {
+          path: 'ca-signatures',
+          name: 'ca-signatures',
+          component: () => import('@/views/CaSignatureView.vue'),
+        },
         { path: 'knowledge', name: 'knowledge', component: () => import('@/views/KnowledgeView.vue') },
         {
           path: 'report-subscriptions',

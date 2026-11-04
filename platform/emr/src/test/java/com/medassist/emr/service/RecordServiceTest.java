@@ -53,6 +53,7 @@ class RecordServiceTest {
     private EmrRepository repo;
     private PatientClient patientClient;
     private ClinicalClient clinicalClient;
+    private CaSignatureService caSignatureService;
     private RecordService service;
 
     private final UUID recordId = UUID.randomUUID();
@@ -69,7 +70,9 @@ class RecordServiceTest {
         repo = mock(EmrRepository.class);
         patientClient = mock(PatientClient.class);
         clinicalClient = mock(ClinicalClient.class);
-        service = new RecordService(repo, patientClient, clinicalClient, JsonMapper.builder().build());
+        caSignatureService = mock(CaSignatureService.class);
+        service = new RecordService(repo, patientClient, clinicalClient, caSignatureService,
+                JsonMapper.builder().build());
         when(patientClient.requireActive(patientId)).thenReturn(new PatientClient.PatientRef(
                 patientId, "P20261031000001", "张三", "MALE", java.time.LocalDate.of(1980, 5, 20)));
         when(repo.nextRecordNo()).thenReturn("MR20261031000001");

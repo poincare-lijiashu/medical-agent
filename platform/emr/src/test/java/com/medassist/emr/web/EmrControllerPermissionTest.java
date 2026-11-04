@@ -61,7 +61,7 @@ class EmrControllerPermissionTest {
     @Test
     @DisplayName("签名：只读权限不能签名")
     void signRequiresSignPermission() {
-        var req = new SignReq("AUTHOR");
+        var req = new SignReq("AUTHOR", null);
 
         assertThatThrownBy(() -> controller.sign(id, req, "emr:record:read", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)

@@ -60,6 +60,7 @@ public class RecordService {
     private final EmrRepository repo;
     private final PatientClient patientClient;
     private final ClinicalClient clinicalClient;
+    private final CaSignatureService caSignatureService;
     private final ObjectMapper objectMapper;
 
     /** 时限类规则拿不到入院时间时的"未评估"结果后缀（与真实超时区分，便于统计）。 */
@@ -69,10 +70,12 @@ public class RecordService {
     static final int MAX_KEYWORD_LENGTH = 200;
 
     public RecordService(EmrRepository repo, PatientClient patientClient,
-                         ClinicalClient clinicalClient, ObjectMapper objectMapper) {
+                         ClinicalClient clinicalClient, CaSignatureService caSignatureService,
+                         ObjectMapper objectMapper) {
         this.repo = repo;
         this.patientClient = patientClient;
         this.clinicalClient = clinicalClient;
+        this.caSignatureService = caSignatureService;
         this.objectMapper = objectMapper;
     }
 
@@ -200,7 +203,7 @@ public class RecordService {
      */
     @Transactional
     public RecordView sign(UUID id, String actor) {
-        return sign(id, RecordSignature.AUTHOR, actor);
+        return sign(id, RecordSignature.AUTHOR, actor, false);
     }
 
     /**
@@ -211,6 +214,17 @@ public class RecordService {
      */
     @Transactional
     public RecordView sign(UUID id, String level, String actor) {
+        return sign(id, level, actor, false);
+    }
+
+    /**
+     * 签名并可选获取 CA 电子签名。
+     *
+     * <p>{@code caSign=true} 时 CA 适配层在同一事务内签署当前内容哈希；
+     * CA 服务失败会抛出异常并回滚病历签名，避免出现"无 CA 证书的已签病历"。
+     */
+    @Transactional
+    public RecordView sign(UUID id, String level, String actor, boolean caSign) {
         String signType = (level == null || level.isBlank())
                 ? RecordSignature.AUTHOR : level.trim().toUpperCase();
         int targetLevel = RecordSignature.levelOf(signType);
@@ -248,11 +262,20 @@ public class RecordService {
                 throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
             }
         }
-        repo.insertSignature(new RecordSignature(UUID.randomUUID(), id, record.revision(),
-                actor, signType, null, hash));
-        audit(actor, "RECORD_SIGN", "RECORD", id.toString(), Map.of(
-                "recordNo", record.recordNo(), "revision", record.revision(),
-                "level", targetLevel, "signType", signType, "hash", hash));
+        RecordSignature signature = new RecordSignature(UUID.randomUUID(), id,
+                record.revision(), actor, signType, null, hash);
+        repo.insertSignature(signature);
+        if (caSign) {
+            caSignatureService.sign(record, signature, actor);
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("recordNo", record.recordNo());
+        detail.put("revision", record.revision());
+        detail.put("level", targetLevel);
+        detail.put("signType", signType);
+        detail.put("hash", hash);
+        detail.put("caSign", caSign);
+        audit(actor, "RECORD_SIGN", "RECORD", id.toString(), detail);
         return detail(id);
     }
 

@@ -79,7 +79,9 @@ public final class EmrDtos {
 
     /** 签名请求：level 缺省为书写医师；上级签名按 AUTHOR→ATTENDING→CHIEF 顺序。 */
     public record SignReq(
-            @Pattern(regexp = "AUTHOR|ATTENDING|CHIEF", message = "签名级别不合法") String level) {
+            @Pattern(regexp = "AUTHOR|ATTENDING|CHIEF", message = "签名级别不合法") String level,
+            /** true 时同时获取 CA 电子签名；CA 失败则整笔签名回滚。 */
+            Boolean caSign) {
     }
 
     /** 病案修改申请（{@code resubmitOf} 仅在重新申请时指向被驳回/撤回的上一条）。 */

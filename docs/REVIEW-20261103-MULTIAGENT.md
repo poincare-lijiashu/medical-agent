@@ -7,16 +7,16 @@
 
 ---
 
-## 进度快照与明日计划（2026-11-03 收尾）
+## 进度快照与明日计划（2026-11-04 收尾）
 
 > 用途：给下一次继续开发留一份"不用翻聊天记录"的接手说明。**代码以 git HEAD 为准**，本节的完成度是业务视角估算，不是代码行数占比。
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G40 输血闭环）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），414 个主代码 Java 文件、165 个测试类、**1579 项测试全绿**。
-- **前端**：41 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V68、tech V12、pharmacy V19、emr V20、insurance V19、material V4、clinical V55（各服务独立 schema）。
+- **HEAD**：以 `git log -1` 为准（本轮 G41 CA 电子签名与无纸化）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），418 个主代码 Java 文件、168 个测试类、**1590 项测试全绿**。
+- **前端**：42 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
+- **数据库**：auth V69、tech V12、pharmacy V19、emr V21、insurance V19、material V4、clinical V55（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
 - **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。
@@ -44,7 +44,8 @@
 | 随访与慢病 | 可用 | 85% | 慢病病种字典、建档与风险分级、随访计划（7–365 天）、待随访任务与逾期标记、随访记录（血压/血糖/体重/症状/依从性）、完成随访自动生成下一周期任务、结案停计划、看板 | 随访提醒推送、批量随访、慢病质控指标 |
 | 移动护理与条码 | 可用 | 80% | 从长期药品医嘱生成给药核对任务、手工标本任务、腕带+药品/标本双码核对、不匹配保留待核对并留扫码事件、异常原因关闭、追加式扫码审计、看板 | 输血核对、PDA 离线缓存、真实药品包装条码对接 |
 | 输血 | 可用 | 85% | 输血申请、配血（可多次换袋/一次申请一条相合）、发血、双人核对输注、输注记录、不良反应分级上报、看板 | 血液库存与效期预警、退血/报废、输血相容性规则引擎 |
-| 未建业务线 | 未开始 | 0–5% | — | CA 电子签名、患者移动端 |
+| CA 电子签名 | 可用 | 80% | 医生/护士签名适配层（Mock HMAC + 厂商 HTTP 双模式）、病历签名 `caSign=true` 同步取签、签名台账、验签留痕、撤销（原因必填、幂等）、看板 | 知情同意书签名、签名时间戳/证书链校验、厂商正式联调、无纸化归档包 |
+| 未建业务线 | 未开始 | 0–5% | — | 患者移动端 |
 | 部署与运维 | 部分 | 65% | Helm/ArgoCD、备份 CronJob、Loki/Prometheus 局部接入 | 压测、容灾演练、CI 门禁、灰度发布 |
 
 **加权结论**：
@@ -53,7 +54,7 @@
 - **完整商业版（含报表、未建业务线、运维加固）≈ 84–88%**：差距主要在"业务面宽度"和"生产运维"，不是已实现流程的深度。
 - **可交付状态**：单院区核心 HIS 可演示/试运行；距正式生产还差医保实时接口省局联调、票据厂商正式联调、压测与容灾。
 
-### 2. 已完成的关键增量（G1–G40，均有真实链路验证）
+### 2. 已完成的关键增量（G1–G41，均有真实链路验证）
 
 | 编号 | 内容 | 关键点 |
 |---|---|---|
@@ -97,6 +98,7 @@
 | G38 | 随访与慢病管理闭环 | clinical V53：`chronic_disease`（5 个病种种子）+ `chronic_record`（同一患者同一病种仅一份 ACTIVE，风险 LOW/MEDIUM/HIGH，ACTIVE→CLOSED）+ `chronic_followup_plan`（一份档案一个 ACTIVE，间隔 7–365 天）+ `chronic_followup_task`（一个计划仅一条 PENDING，PENDING→DONE/CANCELLED）+ `chronic_followup`（追加式，任务唯一，血压/血糖/体重/症状/用药依从性）；`/clinical/chronic` 提供病种、档案、风险分级、结案、计划创建/停止、任务列表、完成随访、随访记录与看板；完成随访同一事务写记录、任务 DONE、计划前移并生成下一周期任务；auth V66 新增 5 个权限点与 `CHRONIC_CARE` 角色；新增「慢病随访」页（KPI、档案、待随访任务、计划与随访记录） |
 | G39 | 移动护理与条码闭环 | clinical V54：`nursing_mobile_task`（给药/标本，ORDER/MANUAL，PENDING→VERIFIED/EXCEPTION，同一医嘱同日唯一，任务视图不下发期望条码）+ `nursing_scan_event`（追加式，触发器禁止 UPDATE/DELETE）；从长期药品医嘱生成当日任务（幂等）、手工建单、腕带+项目双码服务端比对、不匹配保留 PENDING 并保留两条扫码事件、异常原因关闭、扫码记录与看板；auth V67 新增 `mobile:nursing:read/execute/manage`；新增「移动护理」页（任务列表、扫码弹窗、异常登记、扫码记录） |
 | G40 | 输血闭环 | clinical V55：`blood_product`（4 种血液成分种子）+ `transfusion_request`（REQUESTED→CROSSMATCHED→ISSUED→TRANSFUSING→COMPLETED，可取消）+ `blood_crossmatch`（血袋号全局唯一、一次申请最多一条 COMPATIBLE、不合可换袋重配）+ `transfusion_record`（双人核对 CHECK checker_a<>checker_b）+ `transfusion_reaction`（一次输注一份，分级/症状/处理）；`/clinical/transfusion` 提供成分字典、申请、配血、发血、双人核对开始、完成、不良反应、看板；auth V68 新增 5 个权限点与 `BLOOD_BANK` 角色；新增「输血管理」页（申请/配血/发血/开始/完成/反应/详情） |
+| G41 | CA 电子签名与无纸化 | emr V21 `ca_signature`（签名记录唯一、VALID/REVOKED、撤销必须写原因/人/时间 CHECK、验签次数与最近结果留痕）+ auth V69 四个权限点（read/sign/verify/manage）；CA 适配层 `CaSignatureProvider` 支持 mock（HMAC-SHA256，签名时间截断到微秒以匹配 timestamptz 精度）与 vendor（POST /sign、/verify，密钥仅从部署配置注入）；`/emr/ca` 提供模式、台账、验签、撤销、看板；病历签名接口新增 `caSign=true`，CA 失败回滚整笔病历签名；新增「CA 电子签名」页（KPI、台账筛选、验签、撤销、详情）；错误码 44550–44556 与 404/409/422/503 契约测试固化 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
@@ -104,16 +106,17 @@
 
 **P0（下一轮直接做）**
 
-1. **CA 电子签名与无纸化**：医生/护士签名适配层（本地 Mock + 厂商接口）、病历/知情同意签名、签名验证与留痕。
+1. **SSO / 多院区 / 多租户**：统一身份源（OIDC/LDAP）、租户与院区边界、机构切换与数据范围收敛。
+2. **生产运维加固**：压测基线、容灾演练、CI 质量门禁、灰度发布与回滚预案。
 
 **P1**
 
-2. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
+3. 医保实时结算省局联调与票据厂商正式报文联调（需外部环境）。
+4. CA 厂商正式联调、知情同意书签名与无纸化归档包。
 
 **P2**
 
-3. SSO、多院区/多租户。
-4. 压测、容灾演练、CI 质量门禁、灰度发布。
+5. 患者移动端（预约、报告查询、随访提醒）与区域平台互联。
 
 ### 4. 明日恢复步骤
 

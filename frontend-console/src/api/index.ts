@@ -3,6 +3,8 @@ import type {
   AdmissionView,
   Bed,
   BillingPreview,
+  CaBoard,
+  CaSignature,
   ChargeItem,
   ChargeView,
   ChargeReceipt,
@@ -714,6 +716,15 @@ export const emrApi = {
   recalculate: (id: string) => post<HomepageView>(`/emr/homepages/${id}/recalculate`),
   submit: (id: string) => post<HomepageView>(`/emr/homepages/${id}/submit`),
   archive: (id: string) => post<HomepageView>(`/emr/homepages/${id}/archive`),
+
+  /** CA 电子签名台账（G41）。 */
+  caMode: () => get<{ mode: string }>('/emr/ca/mode'),
+  caBoard: () => get<CaBoard>('/emr/ca/board'),
+  caSignatures: (params?: { recordId?: string; status?: string; signer?: string; limit?: number }) =>
+    get<CaSignature[]>('/emr/ca/signatures', params),
+  caVerify: (id: string) => post<CaSignature>(`/emr/ca/signatures/${id}/verify`),
+  caRevoke: (id: string, reason: string) =>
+    post<CaSignature>(`/emr/ca/signatures/${id}/revoke`, { reason }),
 }
 
 export const surgeryApi = {

@@ -2,6 +2,7 @@ package com.medassist.emr.repo;
 
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.Amendment;
+import com.medassist.emr.domain.EmrModel.CaSignature;
 import com.medassist.emr.domain.EmrModel.ChangeRequest;
 import com.medassist.emr.domain.EmrModel.CodingCorrection;
 import com.medassist.emr.domain.EmrModel.CodingQueueItem;
@@ -479,6 +480,123 @@ public class EmrRepository {
                 .param("id", s.id()).param("recordId", s.recordId())
                 .param("revision", s.revision()).param("signer", s.signer())
                 .param("signType", s.signType()).param("hash", s.contentHash()).update();
+    }
+
+    // ---------------------------------------------------------------- CA 电子签名（G41）
+
+    private static final RowMapper<CaSignature> CA_SIGNATURE_MAPPER = (rs, i) ->
+            new CaSignature(
+                    rs.getObject("id", UUID.class), rs.getObject("signature_id", UUID.class),
+                    rs.getObject("record_id", UUID.class), rs.getInt("revision"),
+                    rs.getString("signer"), rs.getString("sign_type"),
+                    rs.getString("content_hash"), rs.getString("provider"),
+                    rs.getString("certificate_serial"), rs.getString("algorithm"),
+                    rs.getString("signature_value"), rs.getTimestamp("signed_at").toInstant(),
+                    rs.getString("status"), rs.getInt("verify_count"),
+                    rs.getTimestamp("last_verified_at") == null ? null
+                            : rs.getTimestamp("last_verified_at").toInstant(),
+                    rs.getObject("last_verify_result", Boolean.class),
+                    rs.getString("revoke_reason"), rs.getString("revoked_by"),
+                    rs.getTimestamp("revoked_at") == null ? null
+                            : rs.getTimestamp("revoked_at").toInstant(),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final String CA_SIGNATURE_SELECT = """
+            SELECT id, signature_id, record_id, revision, signer, sign_type, content_hash,
+                   provider, certificate_serial, algorithm, signature_value, signed_at, status,
+                   verify_count, last_verified_at, last_verify_result, revoke_reason, revoked_by,
+                   revoked_at, created_at
+              FROM emr_svc.ca_signature
+            """;
+
+    public void insertCaSignature(CaSignature s) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.ca_signature
+                            (id, signature_id, record_id, revision, signer, sign_type,
+                             content_hash, provider, certificate_serial, algorithm,
+                             signature_value, signed_at, status)
+                        VALUES (:id, :signatureId, :recordId, :revision, :signer, :signType,
+                                :contentHash, :provider, :certificateSerial, :algorithm,
+                                :signatureValue, :signedAt, :status)
+                        """)
+                .param("id", s.id()).param("signatureId", s.signatureId())
+                .param("recordId", s.recordId()).param("revision", s.revision())
+                .param("signer", s.signer()).param("signType", s.signType())
+                .param("contentHash", s.contentHash()).param("provider", s.provider())
+                .param("certificateSerial", s.certificateSerial())
+                .param("algorithm", s.algorithm())
+                .param("signatureValue", s.signatureValue())
+                .param("signedAt", ts(s.signedAt())).param("status", s.status()).update();
+    }
+
+    public Optional<CaSignature> findCaSignature(UUID id) {
+        return jdbc.sql(CA_SIGNATURE_SELECT + " WHERE id = ?")
+                .param(id).query(CA_SIGNATURE_MAPPER).optional();
+    }
+
+    public Optional<CaSignature> findCaSignatureBySignature(UUID signatureId) {
+        return jdbc.sql(CA_SIGNATURE_SELECT + " WHERE signature_id = ?")
+                .param(signatureId).query(CA_SIGNATURE_MAPPER).optional();
+    }
+
+    public List<CaSignature> listCaSignatures(UUID recordId, String status, String signer,
+                                              int limit) {
+        return jdbc.sql(CA_SIGNATURE_SELECT + """
+                         WHERE (CAST(:recordId AS uuid) IS NULL
+                                OR record_id = CAST(:recordId AS uuid))
+                           AND (CAST(:status AS text) IS NULL
+                                OR status = CAST(:status AS text))
+                           AND (CAST(:signer AS text) IS NULL
+                                OR signer = CAST(:signer AS text))
+                         ORDER BY signed_at DESC
+                         LIMIT :limit
+                        """)
+                .param("recordId", recordId).param("status", status).param("signer", signer)
+                .param("limit", limit).query(CA_SIGNATURE_MAPPER).list();
+    }
+
+    public boolean recordCaVerify(UUID id, boolean valid) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.ca_signature
+                           SET verify_count = verify_count + 1, last_verified_at = now(),
+                               last_verify_result = :valid
+                         WHERE id = :id AND status = 'VALID'
+                        """)
+                .param("id", id).param("valid", valid).update() > 0;
+    }
+
+    public boolean revokeCaSignature(UUID id, String reason, String actor) {
+        return jdbc.sql("""
+                        UPDATE emr_svc.ca_signature
+                           SET status = 'REVOKED', revoke_reason = :reason, revoked_by = :actor,
+                               revoked_at = now()
+                         WHERE id = :id AND status = 'VALID'
+                        """)
+                .param("id", id).param("reason", reason).param("actor", actor).update() > 0;
+    }
+
+    /** CA 台账：今日签名/有效/撤销/今日验签失败。 */
+    public CaBoardRow caBoard(java.time.OffsetDateTime fromTs, java.time.OffsetDateTime toTs) {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE signed_at >= :fromTs
+                                                AND signed_at < :toTs) AS signed_today,
+                               count(*) FILTER (WHERE status = 'VALID') AS valid_total,
+                               count(*) FILTER (WHERE status = 'REVOKED') AS revoked_total,
+                               count(*) FILTER (WHERE last_verify_result = false
+                                                AND last_verified_at >= :fromTs
+                                                AND last_verified_at < :toTs)
+                                   AS verify_failures_today
+                          FROM emr_svc.ca_signature
+                        """)
+                .param("fromTs", fromTs).param("toTs", toTs)
+                .query((rs, i) -> new CaBoardRow(rs.getLong("signed_today"),
+                        rs.getLong("valid_total"), rs.getLong("revoked_total"),
+                        rs.getLong("verify_failures_today")))
+                .single();
+    }
+
+    public record CaBoardRow(long signedToday, long validTotal, long revokedTotal,
+                             long verifyFailuresToday) {
     }
 
     public List<RecordSignature> listSignatures(UUID recordId) {

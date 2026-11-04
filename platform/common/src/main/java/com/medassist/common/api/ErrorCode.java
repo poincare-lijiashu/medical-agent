@@ -144,6 +144,15 @@ public enum ErrorCode {
     TRANSFUSION_CANCEL_REASON_REQUIRED(44540, "取消输血申请必须填写原因"),
     TRANSFUSION_REACTION_EXISTS(44541, "该输注记录已上报不良反应，请勿重复上报"),
 
+    // ---- CA 电子签名（44xxx 续，G41）----
+    CA_SIGNATURE_NOT_FOUND(44550, "未找到该 CA 电子签名"),
+    CA_SIGNATURE_INVALID(44551, "CA 电子签名内容不合法"),
+    CA_SIGNATURE_STATUS_INVALID(44552, "当前 CA 签名状态不允许该操作"),
+    CA_PROVIDER_UNAVAILABLE(44553, "CA 签名服务暂不可用，请稍后重试"),
+    CA_VERIFY_FAILED(44554, "CA 签名验签失败，签名值或内容可能已被篡改"),
+    CA_SIGNATURE_EXISTS(44555, "该病历签名行已有 CA 签名，请勿重复签署"),
+    CA_REVOKE_REASON_REQUIRED(44556, "撤销 CA 签名必须填写原因"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

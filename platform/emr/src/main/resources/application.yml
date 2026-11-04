@@ -51,6 +51,13 @@ emr:
   # ---- 供下游读取首页手术操作（医保 DRG 模拟分组）的内部接口令牌 ----
   internal:
     token: ${INTERNAL_API_TOKEN:${EMR_INTERNAL_TOKEN:}}
+  # ---- CA 电子签名适配层：mock 本地 HMAC；vendor 调用厂商 HTTP ----
+  ca:
+    mode: ${CA_MODE:mock}
+    base-url: ${CA_BASE_URL:http://127.0.0.1:9098}
+    api-key: ${CA_API_KEY:}
+    secret: ${CA_SECRET:medassist-dev-ca-secret}
+    timeout: ${CA_TIMEOUT:PT2S}
 
 management:
   endpoints:

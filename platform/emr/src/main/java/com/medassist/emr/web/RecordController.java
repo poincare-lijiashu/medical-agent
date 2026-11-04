@@ -192,7 +192,8 @@ public class RecordController {
             DataScope scope) {
         Permissions.require(permissions, SIGN);
         guard.requireRecord(scope, id);
-        return ApiResponse.ok(service.sign(id, req == null ? null : req.level(), actor));
+        return ApiResponse.ok(service.sign(id, req == null ? null : req.level(), actor,
+                req != null && Boolean.TRUE.equals(req.caSign())));
     }
 
     /** 归档（终态）。 */
