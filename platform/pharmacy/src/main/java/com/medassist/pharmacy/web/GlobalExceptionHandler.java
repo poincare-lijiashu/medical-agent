@@ -28,7 +28,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  SUPPLIER_NOT_FOUND, PURCHASE_ORDER_NOT_FOUND, PURCHASE_ITEM_NOT_FOUND,
                  GOODS_RECEIPT_NOT_FOUND, STOCK_TAKE_NOT_FOUND,
                  STOCK_TAKE_ITEM_NOT_FOUND, STOCK_LOSS_NOT_FOUND,
-                 STOCK_LOSS_BATCH_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 STOCK_LOSS_BATCH_NOT_FOUND, DRUG_TRANSFER_NOT_FOUND,
+                 DRUG_TRANSFER_BATCH_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN, STOCK_TAKE_SELF_APPROVAL,
                  STOCK_LOSS_SELF_REVIEW -> HttpStatus.FORBIDDEN;
@@ -41,7 +42,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  PURCHASE_ORDER_STATUS_INVALID,
                  STOCK_TAKE_STATUS_INVALID, STOCK_TAKE_ACTIVE_EXISTS,
                  STOCK_TAKE_STOCK_DRIFT,
-                 STOCK_LOSS_STATUS_INVALID, STOCK_LOSS_STOCK_INSUFFICIENT -> HttpStatus.CONFLICT;
+                 STOCK_LOSS_STATUS_INVALID, STOCK_LOSS_STOCK_INSUFFICIENT,
+                 DRUG_TRANSFER_STATUS_INVALID, DRUG_TRANSFER_STOCK_INSUFFICIENT -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED, NARCOTIC_PRESCRIBER_REQUIRED, NARCOTIC_AMPOULE_OUTSTANDING,
                  NARCOTIC_AMPOULE_INVALID,
                  // P1-D8：退药数量超过已发数量是"请求内容不合法"，不是状态冲突（422）
@@ -51,7 +53,10 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  STOCK_TAKE_INCOMPLETE, STOCK_TAKE_EMPTY,
                  STOCK_TAKE_VARIANCE_REASON_REQUIRED,
                  STOCK_LOSS_ITEM_INVALID, STOCK_LOSS_EXCEEDS,
-                 STOCK_LOSS_REJECT_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 STOCK_LOSS_REJECT_REASON_REQUIRED,
+                 DRUG_TRANSFER_ITEM_INVALID, DRUG_TRANSFER_EXCEEDS,
+                 DRUG_TRANSFER_REJECT_REASON_REQUIRED,
+                 DRUG_TRANSFER_CANCEL_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

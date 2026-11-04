@@ -923,6 +923,77 @@ export interface StockLossView {
   adjustments: StockAdjustment[]
 }
 
+// ---------------------------------------------------------------- 药品科室调拨（G8）
+
+export type DrugTransferStatus =
+  | 'SUBMITTED'
+  | 'DISPATCHED'
+  | 'ACCEPTED'
+  | 'REJECTED'
+  | 'CANCELLED'
+
+/** 调拨单（药房→科室二级库；发出扣库、接收入库、拒收退回）。 */
+export interface DrugTransfer {
+  id: string
+  transferNo: string
+  status: DrugTransferStatus
+  toDeptId: string
+  note: string | null
+  createdBy: string
+  dispatchedBy: string | null
+  dispatchedAt: string | null
+  acceptedBy: string | null
+  acceptedAt: string | null
+  rejectedBy: string | null
+  rejectedAt: string | null
+  rejectReason: string | null
+  cancelledBy: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  version: number
+  createdAt: string
+}
+
+export interface DrugTransferItem {
+  id: string
+  transferId: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+}
+
+export interface DrugTransferView {
+  transfer: DrugTransfer
+  items: DrugTransferItem[]
+}
+
+/** 科室二级库余额（科室 + 药品 + 批次）。 */
+export interface DeptDrugStock {
+  id: string
+  deptId: string
+  drugId: string
+  drugCode: string
+  drugName: string
+  spec: string
+  unit: string
+  batchId: string
+  batchNo: string
+  expireDate: string
+  quantity: number
+  version: number
+}
+
+export interface DeptStockView {
+  deptId: string
+  items: DeptDrugStock[]
+}
+
 // ---------------------------------------------------------------- 物资耗材（G3）
 
 export type ConsumableCategory = 'GENERAL' | 'HIGH_VALUE' | 'IMPLANT'

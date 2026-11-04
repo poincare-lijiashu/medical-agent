@@ -97,6 +97,16 @@ public enum ErrorCode {
     STOCK_LOSS_BATCH_NOT_FOUND(43476, "报损明细中的批次不存在"),
     STOCK_LOSS_REJECT_REASON_REQUIRED(43477, "驳回报损必须填写原因"),
 
+    // ---- 药品科室调拨（43xxx 续，G8）----
+    DRUG_TRANSFER_NOT_FOUND(43480, "未找到该调拨单"),
+    DRUG_TRANSFER_ITEM_INVALID(43481, "调拨明细不合法（空明细或同一批次重复）"),
+    DRUG_TRANSFER_STATUS_INVALID(43482, "当前调拨单状态不允许该操作"),
+    DRUG_TRANSFER_STOCK_INSUFFICIENT(43483, "中心药房批次余量不足，请核对后重新提交"),
+    DRUG_TRANSFER_REJECT_REASON_REQUIRED(43484, "拒收调拨必须填写原因"),
+    DRUG_TRANSFER_CANCEL_REASON_REQUIRED(43485, "撤回调拨必须填写原因"),
+    DRUG_TRANSFER_BATCH_NOT_FOUND(43486, "调拨明细中的批次不存在"),
+    DRUG_TRANSFER_EXCEEDS(43487, "调拨数量超过该批次当前余量"),
+
     // ---- 物资耗材（43xxx 续，G3；与药械同属物资供应，编码段相邻）----
     CONSUMABLE_NOT_FOUND(43450, "未找到该耗材，或该耗材已停用"),
     CONSUMABLE_BATCH_NOT_FOUND(43451, "未找到该耗材批次"),

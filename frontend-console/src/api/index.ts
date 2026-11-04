@@ -50,6 +50,9 @@ import type {
   PurchaseOrderSummary,
   PurchaseOrderView,
   GoodsReceiptView,
+  DeptStockView,
+  DrugTransfer,
+  DrugTransferView,
   StockTake,
   StockTakeDetail,
   StockTakeItem,
@@ -385,6 +388,26 @@ export const pharmacyApi = {
   /** 审批：approve=false 为驳回，必须带原因。 */
   reviewStockLoss: (id: string, approve: boolean, note?: string) =>
     post<StockLossView>(`/pharmacy/stock-losses/${id}/review`, { approve, note }),
+
+  // ---- 科室调拨（G8）----
+  drugTransfers: (status?: string, toDeptId?: string, limit = 50) =>
+    get<DrugTransfer[]>('/pharmacy/drug-transfers', { status, toDeptId, limit }),
+  drugTransfer: (id: string) => get<DrugTransferView>(`/pharmacy/drug-transfers/${id}`),
+  createDrugTransfer: (body: {
+    toDeptId: string
+    note?: string
+    items: { batchId: string; quantity: number }[]
+  }) => post<DrugTransferView>('/pharmacy/drug-transfers', body),
+  dispatchDrugTransfer: (id: string) =>
+    post<DrugTransferView>(`/pharmacy/drug-transfers/${id}/dispatch`),
+  acceptDrugTransfer: (id: string) =>
+    post<DrugTransferView>(`/pharmacy/drug-transfers/${id}/accept`),
+  rejectDrugTransfer: (id: string, reason: string) =>
+    post<DrugTransferView>(`/pharmacy/drug-transfers/${id}/reject`, { reason }),
+  cancelDrugTransfer: (id: string, reason: string) =>
+    post<DrugTransferView>(`/pharmacy/drug-transfers/${id}/cancel`, { reason }),
+  deptDrugStock: (deptId: string, keyword?: string, limit = 100) =>
+    get<DeptStockView>('/pharmacy/dept-stocks', { deptId, keyword, limit }),
 }
 
 // ---------------------------------------------------------------- 物资耗材（G3）

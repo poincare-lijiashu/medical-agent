@@ -50,6 +50,13 @@ class ExceptionMappingContractTest {
                 .isEqualTo(HttpStatus.CONFLICT);
         assertThat(handler.statusOf(ErrorCode.STOCK_LOSS_EXCEEDS))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        // G8：调拨余量不足是并发冲突（409），明细重复/超量提交是请求内容问题（422）
+        assertThat(handler.statusOf(ErrorCode.DRUG_TRANSFER_STOCK_INSUFFICIENT))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.DRUG_TRANSFER_ITEM_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.DRUG_TRANSFER_EXCEEDS))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

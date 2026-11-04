@@ -138,6 +138,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    name: 'drug-transfer',
+    path: '/drug-transfer',
+    title: '药品调拨',
+    hint: '中心药房 → 科室二级库 · 发出扣库 · 接收 / 拒收',
+    icon: 'truck',
+    group: '药事管理',
+    permissions: ['pharmacy:read'],
+  },
+  {
     name: 'material',
     path: '/material',
     title: '物资耗材',

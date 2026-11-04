@@ -355,4 +355,48 @@ public final class PharmacyModel {
                                 String spec, String unit, UUID batchId, String batchNo,
                                 LocalDate expireDate, int quantity, String reason) {
     }
+
+    /**
+     * 药品科室调拨单（中心药房 → 科室二级库）。
+     *
+     * <p>状态机：SUBMITTED → DISPATCHED → ACCEPTED / REJECTED；SUBMITTED 可撤回。
+     * 发出即扣中心批次库存，接收入科室库存，拒收原路退回。
+     */
+    public record DrugTransfer(UUID id, String transferNo, String status, UUID toDeptId, String note,
+                               String createdBy, String dispatchedBy, Instant dispatchedAt,
+                               String acceptedBy, Instant acceptedAt, String rejectedBy,
+                               Instant rejectedAt, String rejectReason, String cancelledBy,
+                               Instant cancelledAt, String cancelReason, long version,
+                               Instant createdAt) {
+
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String DISPATCHED = "DISPATCHED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String REJECTED = "REJECTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        public boolean dispatchable() {
+            return SUBMITTED.equals(status);
+        }
+
+        public boolean receivable() {
+            return DISPATCHED.equals(status);
+        }
+
+        public boolean cancellable() {
+            return SUBMITTED.equals(status);
+        }
+    }
+
+    /** 调拨明细（一行 = 一个批次）。 */
+    public record DrugTransferItem(UUID id, UUID transferId, UUID drugId, String drugCode,
+                                   String drugName, String spec, String unit, UUID batchId,
+                                   String batchNo, LocalDate expireDate, int quantity) {
+    }
+
+    /** 科室二级库余额（科室 + 药品 + 批次）。 */
+    public record DeptDrugStock(UUID id, UUID deptId, UUID drugId, String drugCode, String drugName,
+                                String spec, String unit, UUID batchId, String batchNo,
+                                LocalDate expireDate, int quantity, long version) {
+    }
 }

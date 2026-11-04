@@ -10,6 +10,9 @@ import com.medassist.pharmacy.domain.PharmacyModel.NarcoticPrescriber;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
+import com.medassist.pharmacy.domain.PharmacyModel.DeptDrugStock;
+import com.medassist.pharmacy.domain.PharmacyModel.DrugTransfer;
+import com.medassist.pharmacy.domain.PharmacyModel.DrugTransferItem;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.domain.PharmacyModel.StockAdjustment;
 import com.medassist.pharmacy.domain.PharmacyModel.StockLoss;
@@ -1263,6 +1266,201 @@ public class PharmacyRepository {
                          WHERE a.loss_id = :lossId
                          ORDER BY a.created_at, b.batch_no
                         """).param("lossId", lossId).query(STOCK_ADJUSTMENT_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 药品科室调拨（G8）
+
+    private static final RowMapper<DrugTransfer> DRUG_TRANSFER_MAPPER =
+            (rs, i) -> new DrugTransfer(
+                    rs.getObject("id", UUID.class), rs.getString("transfer_no"),
+                    rs.getString("status"), rs.getObject("to_dept_id", UUID.class),
+                    rs.getString("note"), rs.getString("created_by"), rs.getString("dispatched_by"),
+                    rs.getTimestamp("dispatched_at") == null ? null
+                            : rs.getTimestamp("dispatched_at").toInstant(),
+                    rs.getString("accepted_by"),
+                    rs.getTimestamp("accepted_at") == null ? null
+                            : rs.getTimestamp("accepted_at").toInstant(),
+                    rs.getString("rejected_by"),
+                    rs.getTimestamp("rejected_at") == null ? null
+                            : rs.getTimestamp("rejected_at").toInstant(),
+                    rs.getString("reject_reason"), rs.getString("cancelled_by"),
+                    rs.getTimestamp("cancelled_at") == null ? null
+                            : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("cancel_reason"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<DrugTransferItem> DRUG_TRANSFER_ITEM_MAPPER =
+            (rs, i) -> new DrugTransferItem(
+                    rs.getObject("id", UUID.class), rs.getObject("transfer_id", UUID.class),
+                    rs.getObject("drug_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date").toLocalDate(), rs.getInt("quantity"));
+
+    private static final RowMapper<DeptDrugStock> DEPT_DRUG_STOCK_MAPPER =
+            (rs, i) -> new DeptDrugStock(
+                    rs.getObject("id", UUID.class), rs.getObject("dept_id", UUID.class),
+                    rs.getObject("drug_id", UUID.class), rs.getString("drug_code"),
+                    rs.getString("drug_name"), rs.getString("spec"), rs.getString("unit"),
+                    rs.getObject("batch_id", UUID.class), rs.getString("batch_no"),
+                    rs.getDate("expire_date").toLocalDate(), rs.getInt("quantity"),
+                    rs.getLong("version"));
+
+    public String nextDrugTransferNo() {
+        return nextNo("pharmacy_svc.drug_transfer_no_seq", "TR");
+    }
+
+    public void insertDrugTransfer(DrugTransfer t) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.drug_transfer
+                            (id, transfer_no, status, to_dept_id, note, created_by, version)
+                        VALUES (:id, :no, :status, :deptId, CAST(:note AS text), :createdBy, 0)
+                        """)
+                .param("id", t.id()).param("no", t.transferNo()).param("status", t.status())
+                .param("deptId", t.toDeptId()).param("note", t.note())
+                .param("createdBy", t.createdBy()).update();
+    }
+
+    public Optional<DrugTransfer> findDrugTransfer(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, transfer_no, status, to_dept_id, note, created_by,
+                               dispatched_by, dispatched_at, accepted_by, accepted_at,
+                               rejected_by, rejected_at, reject_reason, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.drug_transfer WHERE id = ?
+                        """).param(id).query(DRUG_TRANSFER_MAPPER).optional();
+    }
+
+    /** 加行锁读取调拨单；发出/接收/拒收/撤回前必须调用。 */
+    public Optional<DrugTransfer> lockDrugTransfer(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, transfer_no, status, to_dept_id, note, created_by,
+                               dispatched_by, dispatched_at, accepted_by, accepted_at,
+                               rejected_by, rejected_at, reject_reason, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.drug_transfer WHERE id = ? FOR UPDATE
+                        """).param(id).query(DRUG_TRANSFER_MAPPER).optional();
+    }
+
+    public List<DrugTransfer> listDrugTransfers(String status, UUID toDeptId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, transfer_no, status, to_dept_id, note, created_by,
+                               dispatched_by, dispatched_at, accepted_by, accepted_at,
+                               rejected_by, rejected_at, reject_reason, cancelled_by,
+                               cancelled_at, cancel_reason, version, created_at
+                          FROM pharmacy_svc.drug_transfer
+                         WHERE (CAST(:status AS text) IS NULL OR status = CAST(:status AS text))
+                           AND (CAST(:deptId AS uuid) IS NULL OR to_dept_id = CAST(:deptId AS uuid))
+                         ORDER BY created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("deptId", toDeptId).param("limit", limit)
+                .query(DRUG_TRANSFER_MAPPER).list();
+    }
+
+    public void insertDrugTransferItem(UUID id, UUID transferId, UUID drugId, UUID batchId,
+                                       int quantity) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.drug_transfer_item
+                            (id, transfer_id, drug_id, batch_id, quantity)
+                        VALUES (:id, :transferId, :drugId, :batchId, :qty)
+                        """)
+                .param("id", id).param("transferId", transferId).param("drugId", drugId)
+                .param("batchId", batchId).param("qty", quantity).update();
+    }
+
+    public List<DrugTransferItem> listDrugTransferItems(UUID transferId) {
+        return jdbc.sql("""
+                        SELECT i.id, i.transfer_id, i.drug_id, d.drug_code, d.name AS drug_name,
+                               d.spec, d.unit, i.batch_id, b.batch_no, b.expire_date, i.quantity
+                          FROM pharmacy_svc.drug_transfer_item i
+                          JOIN pharmacy_svc.md_drug d ON d.id = i.drug_id
+                          JOIN pharmacy_svc.drug_batch b ON b.id = i.batch_id
+                         WHERE i.transfer_id = :transferId
+                         ORDER BY d.drug_code, b.expire_date, b.batch_no
+                        """).param("transferId", transferId).query(DRUG_TRANSFER_ITEM_MAPPER).list();
+    }
+
+    public boolean dispatchDrugTransfer(UUID id, long expectedVersion, String actor) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.drug_transfer
+                           SET status = 'DISPATCHED', dispatched_by = :actor, dispatched_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .update() > 0;
+    }
+
+    public boolean acceptDrugTransfer(UUID id, long expectedVersion, String actor) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.drug_transfer
+                           SET status = 'ACCEPTED', accepted_by = :actor, accepted_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DISPATCHED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .update() > 0;
+    }
+
+    public boolean rejectDrugTransfer(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.drug_transfer
+                           SET status = 'REJECTED', rejected_by = :actor, rejected_at = now(),
+                               reject_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DISPATCHED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .param("reason", reason).update() > 0;
+    }
+
+    public boolean cancelDrugTransfer(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE pharmacy_svc.drug_transfer
+                           SET status = 'CANCELLED', cancelled_by = :actor, cancelled_at = now(),
+                               cancel_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'SUBMITTED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).param("actor", actor)
+                .param("reason", reason).update() > 0;
+    }
+
+    /** 科室二级库累加（同科室+药品+批次 upsert）。 */
+    public void upsertDeptDrugStock(UUID deptId, UUID drugId, UUID batchId, int quantity) {
+        jdbc.sql("""
+                        INSERT INTO pharmacy_svc.dept_drug_stock
+                            (id, dept_id, drug_id, batch_id, quantity, version)
+                        VALUES (:id, :deptId, :drugId, :batchId, :qty, 0)
+                        ON CONFLICT (dept_id, drug_id, batch_id) DO UPDATE
+                           SET quantity = pharmacy_svc.dept_drug_stock.quantity
+                                          + EXCLUDED.quantity,
+                               version = pharmacy_svc.dept_drug_stock.version + 1,
+                               updated_at = now()
+                        """)
+                .param("id", UUID.randomUUID()).param("deptId", deptId).param("drugId", drugId)
+                .param("batchId", batchId).param("qty", quantity).update();
+    }
+
+    public List<DeptDrugStock> listDeptDrugStock(UUID deptId, String keyword, int limit) {
+        String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT s.id, s.dept_id, s.drug_id, d.drug_code, d.name AS drug_name,
+                               d.spec, d.unit, s.batch_id, b.batch_no, b.expire_date,
+                               s.quantity, s.version
+                          FROM pharmacy_svc.dept_drug_stock s
+                          JOIN pharmacy_svc.md_drug d ON d.id = s.drug_id
+                          JOIN pharmacy_svc.drug_batch b ON b.id = s.batch_id
+                         WHERE s.dept_id = :deptId
+                           AND s.quantity > 0
+                           AND (CAST(:pattern AS text) IS NULL
+                                OR d.name ILIKE CAST(:pattern AS text)
+                                OR d.drug_code ILIKE CAST(:pattern AS text)
+                                OR b.batch_no ILIKE CAST(:pattern AS text))
+                         ORDER BY d.drug_code, b.expire_date, b.batch_no
+                         LIMIT :limit
+                        """)
+                .param("deptId", deptId).param("pattern", pattern).param("limit", limit)
+                .query(DEPT_DRUG_STOCK_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计
