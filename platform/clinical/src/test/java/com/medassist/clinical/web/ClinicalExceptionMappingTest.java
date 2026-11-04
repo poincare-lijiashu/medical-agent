@@ -42,6 +42,20 @@ class ClinicalExceptionMappingTest {
         assertThat(handler.statusOf(ErrorCode.TOO_MANY_REQUESTS)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(handler.statusOf(ErrorCode.UPSTREAM_UNAVAILABLE)).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(handler.statusOf(ErrorCode.GATEWAY_TIMEOUT)).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+        // 临床路径（G29）：找不到 404、状态冲突 409、内容/原因缺失 422
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_TEMPLATE_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_INSTANCE_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_TASK_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_TEMPLATE_DUPLICATE)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_INSTANCE_EXISTS)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_INSTANCE_INCOMPLETE)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_VISIT_INVALID)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_TEMPLATE_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_TASK_SKIP_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.PATHWAY_EXIT_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test

@@ -53,6 +53,11 @@ const router = createRouter({
           name: 'nursing-schedule',
           component: () => import('@/views/NursingScheduleView.vue'),
         },
+        {
+          path: 'clinical-pathways',
+          name: 'clinical-pathways',
+          component: () => import('@/views/ClinicalPathwayView.vue'),
+        },
         { path: 'surgery', name: 'surgery', component: () => import('@/views/SurgeryBoardView.vue') },
         {
           path: 'surgery-charges',

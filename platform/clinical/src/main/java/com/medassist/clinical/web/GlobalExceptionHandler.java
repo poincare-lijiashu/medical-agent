@@ -23,7 +23,9 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
     protected HttpStatus statusOf(ErrorCode code) {
         return switch (code) {
             case NOT_FOUND, VISIT_NOT_FOUND, PATIENT_NOT_FOUND, ORDER_ITEM_NOT_FOUND,
-                 CHARGE_NOT_FOUND, CHARGE_RECEIPT_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 CHARGE_NOT_FOUND, CHARGE_RECEIPT_NOT_FOUND,
+                 PATHWAY_TEMPLATE_NOT_FOUND, PATHWAY_INSTANCE_NOT_FOUND,
+                 PATHWAY_TASK_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
@@ -33,8 +35,14 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  CHARGE_RECEIPT_CHARGE_NOT_PAID,
                  // 转送未完成不是"参数错误"：是流程未走完，语义为业务冲突（结算被拒）
                  ORDER_TRANSFER_INCOMPLETE,
-                 DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED, CHARGE_RECEIPT_VOID_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
+                 DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED,
+                 PATHWAY_TEMPLATE_DUPLICATE, PATHWAY_TEMPLATE_STATUS_INVALID,
+                 PATHWAY_INSTANCE_EXISTS, PATHWAY_INSTANCE_STATUS_INVALID,
+                 PATHWAY_TASK_STATUS_INVALID, PATHWAY_VISIT_INVALID,
+                 PATHWAY_INSTANCE_INCOMPLETE -> HttpStatus.CONFLICT;
+            case VALIDATION_FAILED, CHARGE_RECEIPT_VOID_REASON_REQUIRED,
+                 PATHWAY_TEMPLATE_INVALID, PATHWAY_TASK_SKIP_REASON_REQUIRED,
+                 PATHWAY_EXIT_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;

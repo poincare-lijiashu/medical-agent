@@ -801,4 +801,71 @@ public final class ClinicalModel {
                                 String reason, String transferredBy, Instant transferredAt,
                                 long version) {
     }
+
+    /**
+     * 临床路径模板（G29）。
+     *
+     * <p>状态机 {@code DRAFT → PUBLISHED → DISABLED}：发布后节点不可修改，
+     * 已入径患者的任务按快照执行；要调整只能停用后新建版本。
+     */
+    public record PathwayTemplate(UUID id, String code, String name, String diagnosisCode,
+                                  UUID deptId, String deptName, int dayCount, String status,
+                                  String createdBy, String publishedBy, Instant publishedAt,
+                                  long version, Instant createdAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String DISABLED = "DISABLED";
+
+        public boolean publishable() {
+            return DRAFT.equals(status);
+        }
+
+        public boolean enrollable() {
+            return PUBLISHED.equals(status);
+        }
+    }
+
+    /** 路径节点模板（第 dayNo 天第 seq 项）。 */
+    public record PathwayNode(UUID id, UUID templateId, int dayNo, int seq, String name,
+                              String category, boolean required, String description) {
+
+        public static final java.util.Set<String> CATEGORIES = java.util.Set.of(
+                "ASSESSMENT", "ORDER", "NURSING", "EXAM", "SURGERY", "OTHER");
+    }
+
+    /**
+     * 入径实例。
+     *
+     * <p>同一住院就诊只允许一条 {@code ACTIVE} 实例；结束或退出后写 {@code endDate}，
+     * 退出必须留原因（路径变异）。
+     */
+    public record PathwayInstance(UUID id, String instanceNo, UUID templateId, String templateName,
+                                  UUID visitId, String visitNo, UUID patientId, String patientNo,
+                                  UUID deptId, String deptName, String status, int currentDay,
+                                  LocalDate startDate, LocalDate endDate, String exitReason,
+                                  String createdBy, long version, Instant createdAt) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String COMPLETED = "COMPLETED";
+        public static final String EXITED = "EXITED";
+
+        public boolean active() {
+            return ACTIVE.equals(status);
+        }
+    }
+
+    /** 路径任务快照：入径时从节点复制，模板后续变更不影响在途患者。 */
+    public record PathwayTask(UUID id, UUID instanceId, UUID nodeId, int dayNo, int seq,
+                              String name, String category, boolean required, String status,
+                              String doneBy, Instant doneAt, String note) {
+
+        public static final String PENDING = "PENDING";
+        public static final String DONE = "DONE";
+        public static final String SKIPPED = "SKIPPED";
+
+        public boolean pending() {
+            return PENDING.equals(status);
+        }
+    }
 }

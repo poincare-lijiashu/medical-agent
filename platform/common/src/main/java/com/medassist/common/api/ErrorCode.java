@@ -52,6 +52,21 @@ public enum ErrorCode {
     ORDER_STATUS_INVALID(44410, "当前医嘱状态不允许该操作"),
     ORDER_TRANSFER_INCOMPLETE(44411, "医嘱的下游单据未生成（转送失败），请先重试转送或由下游补开后再计费"),
 
+    // ---- 临床路径（44xxx 续，G29）----
+    PATHWAY_TEMPLATE_NOT_FOUND(44420, "未找到该临床路径模板"),
+    PATHWAY_TEMPLATE_STATUS_INVALID(44421, "当前路径模板状态不允许该操作"),
+    PATHWAY_TEMPLATE_DUPLICATE(44422, "路径编码已存在，请换一个编码"),
+    PATHWAY_TEMPLATE_INVALID(44423, "路径模板内容不合法（节点为空、天序号重复或分类错误）"),
+    PATHWAY_INSTANCE_NOT_FOUND(44424, "未找到该路径实例"),
+    PATHWAY_INSTANCE_STATUS_INVALID(44425, "当前路径状态不允许该操作"),
+    PATHWAY_INSTANCE_EXISTS(44426, "该住院就诊已有进行中的临床路径"),
+    PATHWAY_TASK_NOT_FOUND(44427, "未找到该路径任务"),
+    PATHWAY_TASK_STATUS_INVALID(44428, "当前路径任务已完成或跳过，不能重复处理"),
+    PATHWAY_TASK_SKIP_REASON_REQUIRED(44429, "跳过路径任务必须填写原因（变异记录）"),
+    PATHWAY_INSTANCE_INCOMPLETE(44430, "仍有未完成的路径任务，不能结束路径"),
+    PATHWAY_EXIT_REASON_REQUIRED(44431, "退出临床路径必须填写原因"),
+    PATHWAY_VISIT_INVALID(44432, "只有住院且在院就诊才能入径"),
+
     // ---- 收费（45xxx）----
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),

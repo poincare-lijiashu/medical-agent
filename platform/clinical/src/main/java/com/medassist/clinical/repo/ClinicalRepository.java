@@ -30,6 +30,10 @@ import com.medassist.clinical.domain.ClinicalModel.NursingSchedule;
 import com.medassist.clinical.domain.ClinicalModel.NursingShift;
 import com.medassist.clinical.domain.ClinicalModel.NursingWorkloadRow;
 import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
+import com.medassist.clinical.domain.ClinicalModel.PathwayInstance;
+import com.medassist.clinical.domain.ClinicalModel.PathwayNode;
+import com.medassist.clinical.domain.ClinicalModel.PathwayTask;
+import com.medassist.clinical.domain.ClinicalModel.PathwayTemplate;
 import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
@@ -4390,6 +4394,300 @@ public class ClinicalRepository {
                 .query((rs, i) -> new WardAdmissionRow(rs.getString("ward_code"),
                         rs.getString("ward_name"), rs.getString("dept_name"),
                         rs.getLong("admitted"), rs.getLong("discharged"))).list();
+    }
+
+    // ---------------------------------------------------------------- 临床路径（G29）
+
+    private static final RowMapper<PathwayTemplate> PATHWAY_TEMPLATE_MAPPER = (rs, i) ->
+            new PathwayTemplate(
+                    rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+                    rs.getString("diagnosis_code"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getInt("day_count"), rs.getString("status"),
+                    rs.getString("created_by"), rs.getString("published_by"),
+                    rs.getTimestamp("published_at") == null
+                            ? null : rs.getTimestamp("published_at").toInstant(),
+                    rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<PathwayNode> PATHWAY_NODE_MAPPER = (rs, i) ->
+            new PathwayNode(
+                    rs.getObject("id", UUID.class), rs.getObject("template_id", UUID.class),
+                    rs.getInt("day_no"), rs.getInt("seq"), rs.getString("name"),
+                    rs.getString("category"), rs.getBoolean("required"),
+                    rs.getString("description"));
+
+    private static final RowMapper<PathwayInstance> PATHWAY_INSTANCE_MAPPER = (rs, i) ->
+            new PathwayInstance(
+                    rs.getObject("id", UUID.class), rs.getString("instance_no"),
+                    rs.getObject("template_id", UUID.class), rs.getString("template_name"),
+                    rs.getObject("visit_id", UUID.class), rs.getString("visit_no"),
+                    rs.getObject("patient_id", UUID.class), rs.getString("patient_no"),
+                    rs.getObject("dept_id", UUID.class), rs.getString("dept_name"),
+                    rs.getString("status"), rs.getInt("current_day"),
+                    rs.getDate("start_date").toLocalDate(),
+                    rs.getDate("end_date") == null ? null : rs.getDate("end_date").toLocalDate(),
+                    rs.getString("exit_reason"), rs.getString("created_by"), rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<PathwayTask> PATHWAY_TASK_MAPPER = (rs, i) ->
+            new PathwayTask(
+                    rs.getObject("id", UUID.class), rs.getObject("instance_id", UUID.class),
+                    rs.getObject("node_id", UUID.class), rs.getInt("day_no"), rs.getInt("seq"),
+                    rs.getString("name"), rs.getString("category"), rs.getBoolean("required"),
+                    rs.getString("status"), rs.getString("done_by"),
+                    rs.getTimestamp("done_at") == null
+                            ? null : rs.getTimestamp("done_at").toInstant(),
+                    rs.getString("note"));
+
+    private static final String PATHWAY_INSTANCE_SELECT = """
+            SELECT i.id, i.instance_no, i.template_id, t.name AS template_name,
+                   i.visit_id, v.visit_no, i.patient_id, i.patient_no, i.dept_id,
+                   d.name AS dept_name, i.status, i.current_day, i.start_date, i.end_date,
+                   i.exit_reason, i.created_by, i.version, i.created_at
+              FROM clinical_svc.pathway_instance i
+              JOIN clinical_svc.pathway_template t ON t.id = i.template_id
+              JOIN clinical_svc.visit v ON v.id = i.visit_id
+              LEFT JOIN clinical_svc.md_dept d ON d.id = i.dept_id
+            """;
+
+    private static final String PATHWAY_TEMPLATE_SELECT = """
+            SELECT t.id, t.code, t.name, t.diagnosis_code, t.dept_id, d.name AS dept_name,
+                   t.day_count, t.status, t.created_by, t.published_by, t.published_at,
+                   t.version, t.created_at
+              FROM clinical_svc.pathway_template t
+              LEFT JOIN clinical_svc.md_dept d ON d.id = t.dept_id
+            """;
+
+    public String nextPathwayInstanceNo() {
+        return nextNo("clinical_svc.pathway_instance_no_seq", "CP");
+    }
+
+    public boolean pathwayTemplateCodeExists(String code) {
+        return jdbc.sql("""
+                        SELECT EXISTS (SELECT 1 FROM clinical_svc.pathway_template WHERE code = ?)
+                        """)
+                .param(code).query(Boolean.class).single();
+    }
+
+    public void insertPathwayTemplate(PathwayTemplate t) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pathway_template
+                            (id, code, name, diagnosis_code, dept_id, day_count, status, created_by)
+                        VALUES (:id, :code, :name, :diagnosisCode, :deptId, :dayCount, :status,
+                                :createdBy)
+                        """)
+                .param("id", t.id()).param("code", t.code()).param("name", t.name())
+                .param("diagnosisCode", t.diagnosisCode()).param("deptId", t.deptId())
+                .param("dayCount", t.dayCount()).param("status", t.status())
+                .param("createdBy", t.createdBy()).update();
+    }
+
+    public void insertPathwayNode(PathwayNode n) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pathway_node
+                            (id, template_id, day_no, seq, name, category, required, description)
+                        VALUES (:id, :templateId, :dayNo, :seq, :name, :category, :required,
+                                :description)
+                        """)
+                .param("id", n.id()).param("templateId", n.templateId())
+                .param("dayNo", n.dayNo()).param("seq", n.seq()).param("name", n.name())
+                .param("category", n.category()).param("required", n.required())
+                .param("description", n.description()).update();
+    }
+
+    public Optional<PathwayTemplate> findPathwayTemplate(UUID id) {
+        return jdbc.sql(PATHWAY_TEMPLATE_SELECT + " WHERE t.id = ?")
+                .param(id).query(PATHWAY_TEMPLATE_MAPPER).optional();
+    }
+
+    public Optional<PathwayTemplate> lockPathwayTemplate(UUID id) {
+        return jdbc.sql(PATHWAY_TEMPLATE_SELECT + " WHERE t.id = ? FOR UPDATE OF t")
+                .param(id).query(PATHWAY_TEMPLATE_MAPPER).optional();
+    }
+
+    /** 模板列表：不传状态时返回全部，按状态权重 + 创建时间倒序。 */
+    public List<PathwayTemplate> listPathwayTemplates(String status, String keyword, int limit) {
+        return jdbc.sql(PATHWAY_TEMPLATE_SELECT + """
+                         WHERE (CAST(:status AS text) IS NULL OR t.status = CAST(:status AS text))
+                           AND (CAST(:keyword AS text) IS NULL
+                                OR t.code ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR t.name ILIKE '%' || CAST(:keyword AS text) || '%')
+                         ORDER BY CASE t.status WHEN 'PUBLISHED' THEN 0 WHEN 'DRAFT' THEN 1
+                                               ELSE 2 END,
+                                  t.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("keyword", keyword)
+                .param("limit", limit).query(PATHWAY_TEMPLATE_MAPPER).list();
+    }
+
+    public List<PathwayNode> listPathwayNodes(UUID templateId) {
+        return jdbc.sql("""
+                        SELECT id, template_id, day_no, seq, name, category, required, description
+                          FROM clinical_svc.pathway_node
+                         WHERE template_id = ?
+                         ORDER BY day_no, seq
+                        """)
+                .param(templateId).query(PATHWAY_NODE_MAPPER).list();
+    }
+
+    public boolean publishPathwayTemplate(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pathway_template
+                           SET status = 'PUBLISHED', published_by = :actor, published_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DRAFT' AND version = :version
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean disablePathwayTemplate(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pathway_template
+                           SET status = 'DISABLED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'PUBLISHED' AND version = :version
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 按就诊号定位就诊（入径时允许直接输入住院号）。 */
+    public Optional<Visit> findVisitByNo(String visitNo) {
+        return jdbc.sql("""
+                        SELECT id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
+                               visit_type, status, visit_date, version
+                          FROM clinical_svc.visit WHERE visit_no = ?
+                        """)
+                .param(visitNo).query(VISIT_MAPPER).optional();
+    }
+
+    public Optional<PathwayInstance> findPathwayInstance(UUID id) {
+        return jdbc.sql(PATHWAY_INSTANCE_SELECT + " WHERE i.id = ?")
+                .param(id).query(PATHWAY_INSTANCE_MAPPER).optional();
+    }
+
+    public Optional<PathwayInstance> lockPathwayInstance(UUID id) {
+        return jdbc.sql(PATHWAY_INSTANCE_SELECT + " WHERE i.id = ? FOR UPDATE OF i")
+                .param(id).query(PATHWAY_INSTANCE_MAPPER).optional();
+    }
+
+    public Optional<PathwayInstance> findActivePathwayInstanceByVisit(UUID visitId) {
+        return jdbc.sql(PATHWAY_INSTANCE_SELECT
+                        + " WHERE i.visit_id = ? AND i.status = 'ACTIVE'")
+                .param(visitId).query(PATHWAY_INSTANCE_MAPPER).optional();
+    }
+
+    public List<PathwayInstance> listPathwayInstances(String status, UUID deptId, int limit) {
+        return jdbc.sql(PATHWAY_INSTANCE_SELECT + """
+                         WHERE (CAST(:status AS text) IS NULL OR i.status = CAST(:status AS text))
+                           AND (CAST(:deptId AS uuid) IS NULL OR i.dept_id = CAST(:deptId AS uuid))
+                         ORDER BY CASE i.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
+                                  i.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("deptId", deptId).param("limit", limit)
+                .query(PATHWAY_INSTANCE_MAPPER).list();
+    }
+
+    public void insertPathwayInstance(PathwayInstance i) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pathway_instance
+                            (id, instance_no, template_id, visit_id, patient_id, patient_no,
+                             dept_id, status, current_day, start_date, created_by)
+                        VALUES (:id, :no, :templateId, :visitId, :patientId, :patientNo,
+                                :deptId, :status, :currentDay, :startDate, :createdBy)
+                        """)
+                .param("id", i.id()).param("no", i.instanceNo())
+                .param("templateId", i.templateId()).param("visitId", i.visitId())
+                .param("patientId", i.patientId()).param("patientNo", i.patientNo())
+                .param("deptId", i.deptId()).param("status", i.status())
+                .param("currentDay", i.currentDay()).param("startDate", i.startDate())
+                .param("createdBy", i.createdBy()).update();
+    }
+
+    public void insertPathwayTask(PathwayTask t) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pathway_task
+                            (id, instance_id, node_id, day_no, seq, name, category, required, status)
+                        VALUES (:id, :instanceId, :nodeId, :dayNo, :seq, :name, :category,
+                                :required, :status)
+                        """)
+                .param("id", t.id()).param("instanceId", t.instanceId())
+                .param("nodeId", t.nodeId()).param("dayNo", t.dayNo()).param("seq", t.seq())
+                .param("name", t.name()).param("category", t.category())
+                .param("required", t.required()).param("status", t.status()).update();
+    }
+
+    public List<PathwayTask> listPathwayTasks(UUID instanceId) {
+        return jdbc.sql("""
+                        SELECT id, instance_id, node_id, day_no, seq, name, category, required,
+                               status, done_by, done_at, note
+                          FROM clinical_svc.pathway_task
+                         WHERE instance_id = ?
+                         ORDER BY day_no, seq
+                        """)
+                .param(instanceId).query(PATHWAY_TASK_MAPPER).list();
+    }
+
+    public Optional<PathwayTask> findPathwayTask(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, instance_id, node_id, day_no, seq, name, category, required,
+                               status, done_by, done_at, note
+                          FROM clinical_svc.pathway_task WHERE id = ?
+                        """)
+                .param(id).query(PATHWAY_TASK_MAPPER).optional();
+    }
+
+    /** 任务流转（CAS：仅 PENDING 可流转，防重复点击）。 */
+    public boolean updatePathwayTask(UUID id, UUID instanceId, String status,
+                                     String actor, String note) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pathway_task
+                           SET status = :status, done_by = :actor, done_at = now(), note = :note
+                         WHERE id = :id AND instance_id = :instanceId AND status = 'PENDING'
+                        """)
+                .param("id", id).param("instanceId", instanceId).param("status", status)
+                .param("actor", actor).param("note", note).update() > 0;
+    }
+
+    /** 推进当前天：只前进不后退，避免漏做任务被"回拨"掩盖。 */
+    public boolean advancePathwayInstance(UUID id, int currentDay) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pathway_instance
+                           SET current_day = :currentDay, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND current_day < :currentDay
+                        """)
+                .param("id", id).param("currentDay", currentDay).update() > 0;
+    }
+
+    public int countPendingPathwayTasks(UUID instanceId) {
+        return jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.pathway_task
+                         WHERE instance_id = ? AND status = 'PENDING'
+                        """)
+                .param(instanceId).query(Integer.class).single();
+    }
+
+    public boolean completePathwayInstance(UUID id, LocalDate endDate, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pathway_instance
+                           SET status = 'COMPLETED', end_date = :endDate,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND version = :version
+                        """)
+                .param("id", id).param("endDate", endDate).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public boolean exitPathwayInstance(UUID id, String reason, LocalDate endDate,
+                                       long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pathway_instance
+                           SET status = 'EXITED', exit_reason = :reason, end_date = :endDate,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE' AND version = :version
+                        """)
+                .param("id", id).param("reason", reason).param("endDate", endDate)
+                .param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

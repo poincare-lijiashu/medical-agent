@@ -13,12 +13,12 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G28 效期自动报废）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），380 个主代码 Java 文件、144 个测试类、**1383 项测试全绿**。
-- **前端**：31 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V58、pharmacy V17、tech V11、emr V20、insurance V19、material V4、clinical V47（各服务独立 schema）。
+- **HEAD**：以 `git log -1` 为准（本轮 G29 临床路径）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），380 个主代码 Java 文件、146 个测试类、**1409 项测试全绿**。
+- **前端**：32 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
+- **数据库**：auth V59、pharmacy V17、tech V11、emr V20、insurance V19、material V4、clinical V48（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089；EMPI 8082 未启动。
-- **演示账号**：`admin01 / Med@2026`（ADMIN），`pharm01`、`pharm02`（均为 PHARMACIST，用于报损四眼）、`qc01` 同口令。
+- **演示账号**：`admin01 / Med@2026`（ADMIN），`doctor01`（DOCTOR）、`pharm01`、`pharm02`（PHARMACIST，用于报损四眼）、`qc01` 同口令。
 - **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261104.bundle`（已含 G28，代码 HEAD=`fdd1098`）。
 
 ### 1. 功能完成度（按业务域）
@@ -28,7 +28,7 @@
 | 基础平台（common / gateway / auth） | 可用 | 90% | 网关注入与鉴权、内部调用签名、登录限流、令牌撤销、RBAC、跨域审计、幂等与 CAS 约定 | SSO/LDAP、多院区多租户、更细的数据权限 |
 | EMPI 患者主索引 | 可用 | 85% | 建档、查重合并、PHI 掩码、变更历史 | 区域平台互联、患者门户 |
 | 门诊 | 可用 | 98% | 号源、挂号/退号/改约、接诊、医嘱、收费、收费票据（开票/重打/作废/换开）、电子票据厂商报文（开具/红冲/按期间对账）、日结与分账 | 预约平台、厂商正式联调 |
-| 住院 | 可用 | 88% | 入院/床位/转床、护理执行、护理排班（班次字典/发布/取消/工作量与覆盖）、预交金、日结、欠费预警、入出转与床位使用率趋势 | 临床路径、出院带药闭环 |
+| 住院 | 可用 | 92% | 入院/床位/转床、护理执行、护理排班（班次字典/发布/取消/工作量与覆盖）、临床路径（模板/入径/任务与变异/完成与退出）、预交金、日结、欠费预警、入出转与床位使用率趋势 | 出院带药闭环 |
 | 手术与麻醉 | 部分 | 75% | 排台、分级审批、术前访视、术中收费核对 | 麻醉记录单、复苏、手术分级目录维护 |
 | 药事 | 可用 | 97% | 处方审核、发药/退药、麻精专册、采购验收、盘点、报损、效期自动报废草稿（定时扫描+人工提交他审）、科室调拨、效期预警、发药日趋势与日快照 | 静配中心、抗菌药物专项、调拨在途报表 |
 | 物资耗材 | 可用 | 96% | 目录、批次效期、出库、科室二级库、未使用退回、跨科室调拨、高值植入追溯、批次召回、出库日趋势与日快照 | 供应商履约报表、调拨分析 |
@@ -47,7 +47,7 @@
 - **完整商业版（含报表、未建业务线、运维加固）≈ 68–73%**：差距主要在"业务面宽度"和"生产运维"，不是已实现流程的深度。
 - **可交付状态**：单院区核心 HIS 可演示/试运行；距正式生产还差医保实时接口省局联调、票据厂商正式联调、压测与容灾。
 
-### 2. 已完成的关键增量（G1–G28，均有真实链路验证）
+### 2. 已完成的关键增量（G1–G29，均有真实链路验证）
 
 | 编号 | 内容 | 关键点 |
 |---|---|---|
@@ -79,6 +79,7 @@
 | G26 | 护理排班 | clinical V47 `nursing_shift`（夜/白/中班种子）+ `nursing_schedule`（科室+日期+班次+护士唯一，护士工号同日唯一）；批量录入重复跳过、草稿按科室+日期发布、取消留原因与 CAS；工作量按护士统计班次/夜班、覆盖按日期+班次统计；新增「护理排班」页与 `inpatient:nursing:schedule`（auth V58，含护士长角色） |
 | G27 | 同比与科室/病区下钻 | 新增 `/clinical/reports/ops-insights`：门诊按科室实收与人次、住院按病区入出院下钻，均带去年同期与同比百分比（去年无基数返回 null）；新建「运营洞察」页（区间筛选、4 张同比 KPI、科室/病区明细）；病区明细最多 50 行，区间默认 14 天/最长 92 天/未来拒绝 |
 | G28 | 效期自动报废 | pharmacy V17：`stock_loss` 增加 DRAFT 状态与 `source`（MANUAL/AUTO_EXPIRY），放宽 reviewed 约束并加来源索引；新增 `ExpiryLossWorker`（每日 01:10，可 `EXPIRY_LOSS_ENABLED` 关闭）扫描已过期、有库存且不在有效报损单中的批次，按药品聚合生成 DRAFT 草稿（不扣库存、重复扫描不重复生成）；`POST /stock-losses/auto-draft` 支持手动触发，`POST /{id}/submit` 提交草稿（CAS + 提交前复查余量，并把 created_by 改为提交人以保证四眼）；报损页新增 DRAFT 筛选/KPI、「生成到期草稿」与「提交审批」 |
+| G29 | 临床路径 | clinical V48：`pathway_template`（DRAFT→PUBLISHED→DISABLED，发布后不可改）+ `pathway_node` + `pathway_instance`（同一住院就诊仅一条 ACTIVE）+ `pathway_task`（入径时任务快照）；`/clinical/pathways` 提供模板维护/发布/停用、按住院号入径（校验在院与重复入径）、任务完成/跳过（跳过=变异必须写原因）、结束（无待办）与退出（必须写原因）；当前天只前进不后退；auth V59 新增 read/manage/execute 三个权限点；新增「临床路径」页（在径/历史、模板维护与节点编辑、路径执行与变异记录） |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
@@ -86,7 +87,7 @@
 
 **P0（下一轮直接做）**
 
-1. **临床路径与出院带药闭环**：住院域剩余主要缺口（路径模板、执行节点、出院带药处方与发药联动）。
+1. **出院带药闭环**：住院医嘱 → 出院带药处方 → 药房发药与费用联动（临床路径已由 G29 完成）。
 
 **P1**
 
@@ -136,8 +137,8 @@ mvn -o test
 cd ..\frontend-console; npm run typecheck; npm run build
 ```
 
-- 开发库中保留了本轮验证数据：盘点单 `ST20261103000001`（APPROVED）、报损单 `LS…0001`（APPROVED）/`LS…0002`（REJECTED），批次 `B-AUD-B-1771/3332` 已按流水扣减；G9 退回单 `MR20261104000001`（APPROVED）与批次 `G9-B1`（中心 2、科室 2）；G10 更正单 `CC20261104000001`（APPROVED）/`…0002`（REJECTED）/`…0004`（CANCELLED），首页 `SMOKE-HP-2` 已回写更正后诊断；G11 驾驶舱 7 个只读接口实测 200；G12 调拨单 `DT20261104000001`（ACCEPTED，内科门诊→外科门诊 2 件）与 `…0002`（REJECTED）/`…0003`（CANCELLED）；G13 趋势接口实测默认 14 天、7 天区间、今日合计与日结一致、异常区间 422、无权限 403；G14 票据 `RP20261104000001`（VOID，重打 1 次）/`RP20261104000002`（ISSUED，换开）挂在收费单 `C20261102000588`；G15 趋势接口实测 pharmacy 默认 14 天合计 108 笔/¥2172.10、material 14 天合计 2 单/¥43200.00，7 天均返回 7 点、未来区间 422、qc01 访问 pharmacy 403 而 material 200；G16 住院趋势实测默认 14 点、入院 172/出院 77/在院 95、可用床 203、使用率 46.8%、7 天 7 点、未来 422、qc01 403，与库内聚合一致（演示患者的出院时刻=入院时刻，故平均住院日为 0）；G17 快照实测未传日期默认 `2026-11-03`、两次补采均为 10 个指标且库里只有 10 行（幂等）、按指标过滤 1 行、未来日期 422、qc01 读 200 写 403，快照值（入院 4 / 在院 95 / 使用率 46.8 / 门诊实收 0）与库内明细聚合一致；G18 药事/物资快照实测各两次补采返回 2 / 3 个指标且库内各 2 / 3 行、未来 422、qc01 读 200 写 403，快照值（发药 0 笔 / 出库 1 单 5 件 ¥24000）与明细聚合一致；G19 订阅 `Daily Ops Report v2`（LOG，启用，v2）实测手动补发 `2026-11-03` 首次即 SENT/attempts=1，重复补发仍 SENT/attempts=1（幂等），投递记录 1 条；WEBHOOK 未配白名单 422、版本冲突 409、qc01 读 200 写 403；库内 payload 指标 `INPATIENT_ADMITTED_COUNT=4.00` 与快照一致，审计含 CREATE/UPDATE/SEND 三类动作；G20 本地模拟机器人网关（allowlist=127.0.0.1）实测钉钉/企微/飞书三条消息均 SENT，正文含「入院 4 / 在院 95 / 床位使用率 46.8%」且缺失域不输出 0；飞书业务码失败（99991663）落 FAILED 并保留原因；G21 本地模拟财政票据平台实测有效票据推送 SENT（externalNo=FIN-2026-0001，attempts=1），重复推送幂等仍 attempts=1，作废票 422、qc01 403；请求头含 `X-Signature: sha256=...`，正文为票据号/金额/支付方式/开票人快照，库内 receipt_push 与审计各 1 条，均属预期演示数据；G22 本地模拟省局平台（allowlist=127.0.0.1）实测确认清单 `SB20261102000169` 提交 `G22-DEMO-1` 落 SETTLED（externalNo=PROV-2026-0001，attempts=1，响应报文留档），同请求号重复提交幂等仍 attempts=1 且模拟平台只收到 1 次请求；草稿单提交返回 409/48411、qc01 提交与查询均 403；停掉模拟平台后 `G22-FAIL-1` 落 FAILED（attempts=1，lastError=Connection refused），重启平台后按交易 ID 重试成功（attempts=2、SETTLED）；库内 `realtime_settlement` 2 行、审计 3 条（SETTLED / FAILED / 重试 SETTLED），均属预期演示数据；G23 本地模拟 SMTP（127.0.0.1:2525，无认证/无 TLS）实测创建 EMAIL 订阅 `G23 邮件日报`（收件人 `ops@example.com;director@example.com` 规范化为逗号分隔）并投递 `2026-11-03` 落 SENT/attempts=1，SMTP 收到 1 封：Subject 为 UTF-8 编码的「运营日报 2026-11-03」、To 为两个收件人、正文为 HTML 指标表、附件 `daily-ops-2026-11-03.csv`（text/csv;charset=UTF-8）；重复投递仍 SENT/attempts=1 且 SMTP 仍只有 1 封（幂等）；停掉 SMTP 后投递 `2026-11-02` 落 FAILED（attempts=1，lastError=Connection refused），重启后重投成功（attempts=2、SENT）；非法邮箱 `not-an-email` 返回 422；库内订阅 1 条、投递 2 条，均属预期演示数据；G24 本地模拟票据厂商平台（allowlist=127.0.0.1，vendor=HIS_VENDOR，template=2.0，hospitalCode=H11000000001）实测新开票 `RP20261104000003` 开具报文 SENT（externalNo=FIN-2026-0001，报文含 vendor/templateVersion/messageType/hospitalCode 与票面快照），作废后红冲 SENT（externalNo=RED-2026-0001，originalPushId 指向原开具），重复红冲幂等仍 attempts=1；未作废票据红冲 422、无成功原开具报文的作废票红冲 422；对账台账 3 条（2 开具 + 1 红冲），汇总 total=3 / sent=3 / redFlush=1 / sentAmount=43.00（只统计开具成功，红冲不计入），库内 3 行报文与 3 条审计一致，均属预期演示数据；G25 实测创建收件人分组 `G25_OPS`（2 名成员：ops/director）并创建仅引用分组的 EMAIL 订阅 `G25分组日报`（sendTime=当时前 1 分钟，target 为空），一分钟内定时任务自动入队并投递成功（SENT/attempts=1），SMTP 只收到 1 封且 To 为两名分组成员；EMAIL 无收件人/分组 422、非法时段 `9:5` 422；库内分组 1 条、成员 2 条、订阅 send_time 与 recipient_group_id 落库正确，审计含 GROUP_CREATE / GROUP_MEMBERS / SUBSCRIPTION_CREATE，均属预期演示数据；G26 实测班次字典 3 条（NIGHT/DAY/EVENING），内科门诊明日批量录入 3 条（张三 DAY + 张三 EVENING + 李四 NIGHT）返回 created=2 / skipped=1（同护士同日拦截），按科室+日期发布 2 条，取消李四夜班（原因「临时请假」）后工作量仅剩张三 1 班/夜 0，覆盖仅 DAY=1；未来 91 天排班 422；库内 2 条排班（1 PUBLISHED + 1 CANCELLED）与 3 条审计一致，护士长角色 `NURSE_MANAGER` 已建，均属预期演示数据；G27 运营洞察实测 `2026-11-01..2026-11-03`：门诊 27 人次 / ¥1093.00（与库内收费按科室聚合完全一致），住院入院 139 / 出院 69（与库内 admission 聚合一致），去年同期 2025-11-01..2025-11-03 无数据故同比返回 null；病区下钻 50 行（受上限保护），默认区间 2026-10-22..2026-11-04；未来日期 / 倒置 / 超 92 天均 422，均属预期演示数据；G28 实测造过期批次 `B-EXP-G28-01`（余 3）后手动触发 auto-draft 生成 `LS20261104000003`（DRAFT，source=AUTO_EXPIRY，明细 1 批次 3 盒），pharm01 提交转 SUBMITTED 且 created_by 改写为 pharm01，pharm01 自审被 403 拦截，pharm02 审批后转 APPROVED、批次扣减为 0 并写 1 条 -3 调整流水与 3 条审计（AUTO_DRAFT / SUBMIT / APPROVE）；另造 `B-EXP-G28-02`（余 2）连续两次 auto-draft：首次 1 单 1 项、第二次 0/0（草稿仍在，不重复生成），该草稿保留为「待提交」演示数据。
-- 若继续 G29（临床路径与出院带药 / 影像查看器 / 省局与厂商正式联调），沿用现有边界：趋势与快照聚合下沉到各服务只读接口（不跨 schema 直连）；新增表时沿用"状态机 + CAS + 审计 + 库级触发器"的既有模式，不绕过库存/金额的原子守卫；定时任务必须幂等且异常只记日志；所有出站 HTTP（Webhook / IM / 票据平台 / 医保实时 / SMTP）必须过白名单或使用部署注入的凭据，密码与密钥禁止写入库表或审计。
+- 开发库中保留了本轮验证数据：盘点单 `ST20261103000001`（APPROVED）、报损单 `LS…0001`（APPROVED）/`LS…0002`（REJECTED），批次 `B-AUD-B-1771/3332` 已按流水扣减；G9 退回单 `MR20261104000001`（APPROVED）与批次 `G9-B1`（中心 2、科室 2）；G10 更正单 `CC20261104000001`（APPROVED）/`…0002`（REJECTED）/`…0004`（CANCELLED），首页 `SMOKE-HP-2` 已回写更正后诊断；G11 驾驶舱 7 个只读接口实测 200；G12 调拨单 `DT20261104000001`（ACCEPTED，内科门诊→外科门诊 2 件）与 `…0002`（REJECTED）/`…0003`（CANCELLED）；G13 趋势接口实测默认 14 天、7 天区间、今日合计与日结一致、异常区间 422、无权限 403；G14 票据 `RP20261104000001`（VOID，重打 1 次）/`RP20261104000002`（ISSUED，换开）挂在收费单 `C20261102000588`；G15 趋势接口实测 pharmacy 默认 14 天合计 108 笔/¥2172.10、material 14 天合计 2 单/¥43200.00，7 天均返回 7 点、未来区间 422、qc01 访问 pharmacy 403 而 material 200；G16 住院趋势实测默认 14 点、入院 172/出院 77/在院 95、可用床 203、使用率 46.8%、7 天 7 点、未来 422、qc01 403，与库内聚合一致（演示患者的出院时刻=入院时刻，故平均住院日为 0）；G17 快照实测未传日期默认 `2026-11-03`、两次补采均为 10 个指标且库里只有 10 行（幂等）、按指标过滤 1 行、未来日期 422、qc01 读 200 写 403，快照值（入院 4 / 在院 95 / 使用率 46.8 / 门诊实收 0）与库内明细聚合一致；G18 药事/物资快照实测各两次补采返回 2 / 3 个指标且库内各 2 / 3 行、未来 422、qc01 读 200 写 403，快照值（发药 0 笔 / 出库 1 单 5 件 ¥24000）与明细聚合一致；G19 订阅 `Daily Ops Report v2`（LOG，启用，v2）实测手动补发 `2026-11-03` 首次即 SENT/attempts=1，重复补发仍 SENT/attempts=1（幂等），投递记录 1 条；WEBHOOK 未配白名单 422、版本冲突 409、qc01 读 200 写 403；库内 payload 指标 `INPATIENT_ADMITTED_COUNT=4.00` 与快照一致，审计含 CREATE/UPDATE/SEND 三类动作；G20 本地模拟机器人网关（allowlist=127.0.0.1）实测钉钉/企微/飞书三条消息均 SENT，正文含「入院 4 / 在院 95 / 床位使用率 46.8%」且缺失域不输出 0；飞书业务码失败（99991663）落 FAILED 并保留原因；G21 本地模拟财政票据平台实测有效票据推送 SENT（externalNo=FIN-2026-0001，attempts=1），重复推送幂等仍 attempts=1，作废票 422、qc01 403；请求头含 `X-Signature: sha256=...`，正文为票据号/金额/支付方式/开票人快照，库内 receipt_push 与审计各 1 条，均属预期演示数据；G22 本地模拟省局平台（allowlist=127.0.0.1）实测确认清单 `SB20261102000169` 提交 `G22-DEMO-1` 落 SETTLED（externalNo=PROV-2026-0001，attempts=1，响应报文留档），同请求号重复提交幂等仍 attempts=1 且模拟平台只收到 1 次请求；草稿单提交返回 409/48411、qc01 提交与查询均 403；停掉模拟平台后 `G22-FAIL-1` 落 FAILED（attempts=1，lastError=Connection refused），重启平台后按交易 ID 重试成功（attempts=2、SETTLED）；库内 `realtime_settlement` 2 行、审计 3 条（SETTLED / FAILED / 重试 SETTLED），均属预期演示数据；G23 本地模拟 SMTP（127.0.0.1:2525，无认证/无 TLS）实测创建 EMAIL 订阅 `G23 邮件日报`（收件人 `ops@example.com;director@example.com` 规范化为逗号分隔）并投递 `2026-11-03` 落 SENT/attempts=1，SMTP 收到 1 封：Subject 为 UTF-8 编码的「运营日报 2026-11-03」、To 为两个收件人、正文为 HTML 指标表、附件 `daily-ops-2026-11-03.csv`（text/csv;charset=UTF-8）；重复投递仍 SENT/attempts=1 且 SMTP 仍只有 1 封（幂等）；停掉 SMTP 后投递 `2026-11-02` 落 FAILED（attempts=1，lastError=Connection refused），重启后重投成功（attempts=2、SENT）；非法邮箱 `not-an-email` 返回 422；库内订阅 1 条、投递 2 条，均属预期演示数据；G24 本地模拟票据厂商平台（allowlist=127.0.0.1，vendor=HIS_VENDOR，template=2.0，hospitalCode=H11000000001）实测新开票 `RP20261104000003` 开具报文 SENT（externalNo=FIN-2026-0001，报文含 vendor/templateVersion/messageType/hospitalCode 与票面快照），作废后红冲 SENT（externalNo=RED-2026-0001，originalPushId 指向原开具），重复红冲幂等仍 attempts=1；未作废票据红冲 422、无成功原开具报文的作废票红冲 422；对账台账 3 条（2 开具 + 1 红冲），汇总 total=3 / sent=3 / redFlush=1 / sentAmount=43.00（只统计开具成功，红冲不计入），库内 3 行报文与 3 条审计一致，均属预期演示数据；G25 实测创建收件人分组 `G25_OPS`（2 名成员：ops/director）并创建仅引用分组的 EMAIL 订阅 `G25分组日报`（sendTime=当时前 1 分钟，target 为空），一分钟内定时任务自动入队并投递成功（SENT/attempts=1），SMTP 只收到 1 封且 To 为两名分组成员；EMAIL 无收件人/分组 422、非法时段 `9:5` 422；库内分组 1 条、成员 2 条、订阅 send_time 与 recipient_group_id 落库正确，审计含 GROUP_CREATE / GROUP_MEMBERS / SUBSCRIPTION_CREATE，均属预期演示数据；G26 实测班次字典 3 条（NIGHT/DAY/EVENING），内科门诊明日批量录入 3 条（张三 DAY + 张三 EVENING + 李四 NIGHT）返回 created=2 / skipped=1（同护士同日拦截），按科室+日期发布 2 条，取消李四夜班（原因「临时请假」）后工作量仅剩张三 1 班/夜 0，覆盖仅 DAY=1；未来 91 天排班 422；库内 2 条排班（1 PUBLISHED + 1 CANCELLED）与 3 条审计一致，护士长角色 `NURSE_MANAGER` 已建，均属预期演示数据；G27 运营洞察实测 `2026-11-01..2026-11-03`：门诊 27 人次 / ¥1093.00（与库内收费按科室聚合完全一致），住院入院 139 / 出院 69（与库内 admission 聚合一致），去年同期 2025-11-01..2025-11-03 无数据故同比返回 null；病区下钻 50 行（受上限保护），默认区间 2026-10-22..2026-11-04；未来日期 / 倒置 / 超 92 天均 422，均属预期演示数据；G28 实测造过期批次 `B-EXP-G28-01`（余 3）后手动触发 auto-draft 生成 `LS20261104000003`（DRAFT，source=AUTO_EXPIRY，明细 1 批次 3 盒），pharm01 提交转 SUBMITTED 且 created_by 改写为 pharm01，pharm01 自审被 403 拦截，pharm02 审批后转 APPROVED、批次扣减为 0 并写 1 条 -3 调整流水与 3 条审计（AUTO_DRAFT / SUBMIT / APPROVE）；另造 `B-EXP-G28-02`（余 2）连续两次 auto-draft：首次 1 单 1 项、第二次 0/0（草稿仍在，不重复生成），该草稿保留为「待提交」演示数据；G29 实测种子模板 `CP-PNEUMONIA`（7 天 13 节点）对住院号 `V20261103000580` 入径生成 `CP20261104000001`（13 项任务、当前天 1），重复入径 409、qc01 入径 403 / 读 200；逐日完成任务后当前天自动推进 1→2→…→7，全部 13 项完成后结束路径落 COMPLETED；新建模板 `CP-APPENDICITIS`（3 节点）发布前入径 409、发布后入径 `CP20261104000002`，跳过首项任务（原因「患者拒绝术前检查」，进度 skipped=1），随后退出路径落 EXITED 并保留「病情变化转外科手术」；库内审计含 TEMPLATE_CREATE/PUBLISH、ENROLL、TASK_DONE/TASK_SKIP、COMPLETE/EXIT，均属预期演示数据。
+- 若继续 G30（出院带药 / 影像查看器 / 省局与厂商正式联调），沿用现有边界：趋势与快照聚合下沉到各服务只读接口（不跨 schema 直连）；新增表时沿用"状态机 + CAS + 审计 + 库级触发器"的既有模式，不绕过库存/金额的原子守卫；定时任务必须幂等且异常只记日志；所有出站 HTTP（Webhook / IM / 票据平台 / 医保实时 / SMTP）必须过白名单或使用部署注入的凭据，密码与密钥禁止写入库表或审计。
 
 ---
 

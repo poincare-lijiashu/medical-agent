@@ -55,6 +55,10 @@ import type {
   OutpatientDaily,
   OutpatientTrendView,
   PageResult,
+  PathwayInstance,
+  PathwayInstanceView,
+  PathwayTemplate,
+  PathwayTemplateView,
   Patient,
   PaymentGroup,
   PaymentGroupRule,
@@ -336,6 +340,43 @@ export const clinicalApi = {
     }),
   nursingWorkload: (params: { deptId?: string; from?: string; to?: string }) =>
     get<NursingWorkload>('/clinical/nursing/workload', params),
+  /** 临床路径（G29）：查看 / 维护 / 执行三权分立。 */
+  pathwayTemplates: (params: { status?: string; keyword?: string; limit?: number }) =>
+    get<PathwayTemplate[]>('/clinical/pathways/templates', params),
+  pathwayTemplate: (id: string) => get<PathwayTemplateView>(`/clinical/pathways/templates/${id}`),
+  createPathwayTemplate: (body: {
+    code: string
+    name: string
+    diagnosisCode?: string
+    deptId?: string
+    nodes: {
+      dayNo: number
+      seq: number
+      name: string
+      category: string
+      required?: boolean
+      description?: string
+    }[]
+  }) => post<PathwayTemplateView>('/clinical/pathways/templates', body),
+  publishPathwayTemplate: (id: string) =>
+    post<PathwayTemplateView>(`/clinical/pathways/templates/${id}/publish`),
+  disablePathwayTemplate: (id: string) =>
+    post<PathwayTemplateView>(`/clinical/pathways/templates/${id}/disable`),
+  pathwayInstances: (params: { status?: string; deptId?: string; limit?: number }) =>
+    get<PathwayInstance[]>('/clinical/pathways/instances', params),
+  pathwayInstance: (id: string) =>
+    get<PathwayInstanceView>(`/clinical/pathways/instances/${id}`),
+  enrollPathway: (body: { visitNo?: string; visitId?: string; templateId: string }) =>
+    post<PathwayInstanceView>('/clinical/pathways/instances', body),
+  updatePathwayTask: (instanceId: string, taskId: string, status: 'DONE' | 'SKIPPED', note?: string) =>
+    post<PathwayInstanceView>(
+      `/clinical/pathways/instances/${instanceId}/tasks/${taskId}/status`,
+      { status, note },
+    ),
+  completePathway: (id: string, note?: string) =>
+    post<PathwayInstanceView>(`/clinical/pathways/instances/${id}/complete`, { note }),
+  exitPathway: (id: string, reason: string) =>
+    post<PathwayInstanceView>(`/clinical/pathways/instances/${id}/exit`, { reason }),
   visitTransfers: (visitId: string) =>
     get<VisitTransfer[]>(`/clinical/visits/${visitId}/transfers`),
   transferVisit: (visitId: string, body: { toDeptId: string; bedId?: string; reason: string }) =>

@@ -92,6 +92,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:nursing:read'],
   },
   {
+    name: 'clinical-pathways',
+    path: '/clinical-pathways',
+    title: '临床路径',
+    hint: '路径模板 · 入径与任务快照 · 变异留痕 · 完成/退出',
+    icon: 'clipboard',
+    group: '住院管理',
+    permissions: ['inpatient:pathway:read'],
+  },
+  {
     name: 'preop',
     path: '/preop',
     title: '术前访视',

@@ -2262,3 +2262,93 @@ export interface GroupSimulation {
   createdBy: string
   createdAt: string
 }
+
+// ---------------------------------------------------------------- 临床路径（G29）
+
+export type PathwayTemplateStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED'
+export type PathwayInstanceStatus = 'ACTIVE' | 'COMPLETED' | 'EXITED'
+export type PathwayTaskStatus = 'PENDING' | 'DONE' | 'SKIPPED'
+export type PathwayCategory = 'ASSESSMENT' | 'ORDER' | 'NURSING' | 'EXAM' | 'SURGERY' | 'OTHER'
+
+/** 路径模板：发布后内容不可改，只能停用后新建版本。 */
+export interface PathwayTemplate {
+  id: string
+  code: string
+  name: string
+  diagnosisCode: string | null
+  deptId: string | null
+  deptName: string | null
+  dayCount: number
+  status: PathwayTemplateStatus
+  createdBy: string
+  publishedBy: string | null
+  publishedAt: string | null
+  version: number
+  createdAt: string
+}
+
+export interface PathwayNode {
+  id: string
+  templateId: string
+  dayNo: number
+  seq: number
+  name: string
+  category: PathwayCategory
+  required: boolean
+  description: string | null
+}
+
+export interface PathwayTemplateView {
+  template: PathwayTemplate
+  nodes: PathwayNode[]
+}
+
+/** 入径实例：同一住院就诊只允许一条 ACTIVE 实例。 */
+export interface PathwayInstance {
+  id: string
+  instanceNo: string
+  templateId: string
+  templateName: string
+  visitId: string
+  visitNo: string
+  patientId: string
+  patientNo: string | null
+  deptId: string | null
+  deptName: string | null
+  status: PathwayInstanceStatus
+  currentDay: number
+  startDate: string
+  endDate: string | null
+  exitReason: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+}
+
+export interface PathwayTask {
+  id: string
+  instanceId: string
+  nodeId: string | null
+  dayNo: number
+  seq: number
+  name: string
+  category: PathwayCategory
+  required: boolean
+  status: PathwayTaskStatus
+  doneBy: string | null
+  doneAt: string | null
+  note: string | null
+}
+
+export interface PathwayProgress {
+  total: number
+  done: number
+  skipped: number
+  pending: number
+}
+
+export interface PathwayInstanceView {
+  instance: PathwayInstance
+  tasks: PathwayTask[]
+  progress: PathwayProgress
+}
