@@ -115,7 +115,7 @@ class ConsoleReadEndpointsPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(registrationService, never()).listByPatient(patientId, 20);
+        verify(registrationService, never()).listByPatient(patientId, 20, java.util.Set.of());
     }
 
     @Test
@@ -124,7 +124,7 @@ class ConsoleReadEndpointsPermissionTest {
         Visit visit = new Visit(UUID.randomUUID(), "V20261102001", patientId, "P0001",
                 UUID.randomUUID(), "D0001", null, "OUTPATIENT", "IN_TREATMENT",
                 LocalDate.of(2026, 11, 2), 0L);
-        when(registrationService.listByPatient(patientId, 20)).thenReturn(List.of(visit));
+        when(registrationService.listByPatient(patientId, 20, java.util.Set.of())).thenReturn(List.of(visit));
 
         var resp = registrationController.listByPatient(patientId, 20, "clinical:visit:read",
                 DataScope.all("admin01", true));
@@ -147,7 +147,7 @@ class ConsoleReadEndpointsPermissionTest {
     @DisplayName("病区列表：有权限时返回病区")
     void wardsPassThrough() {
         InpatientService service = mock(InpatientService.class);
-        when(service.listWards()).thenReturn(List.of(
+        when(service.listWards(java.util.Set.of())).thenReturn(List.of(
                 new Ward(UUID.randomUUID(), "W01", "一病区", UUID.randomUUID(), true)));
         InpatientController controller = new InpatientController(
                 service, mock(InpatientFinanceService.class), mock(NursingService.class),

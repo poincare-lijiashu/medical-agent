@@ -84,6 +84,17 @@ public class RegistrationService {
 
     @Transactional
     public Visit register(RegisterReq req, String actor) {
+        return register(req, actor, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /**
+     * 挂号并固化院区（G46）。
+     *
+     * <p>院区来自当前账号的写入院区（{@code DataScope#campusForWrite}）：
+     * 跨院区账号默认落在主院区，避免同一窗口在两个院区之间漂移。
+     */
+    @Transactional
+    public Visit register(RegisterReq req, String actor, UUID campusId) {
         Dept dept = requireDept(req.deptId());
         String visitType = req.visitType() == null || req.visitType().isBlank()
                 ? "OUTPATIENT" : req.visitType().trim().toUpperCase();
@@ -129,7 +140,7 @@ public class RegistrationService {
                 dept.id(), req.doctorId().trim(), slot == null ? null : slot.id(), visitType,
                 Visit.REGISTERED, visitDate, 0L);
         try {
-            repo.insertVisit(visit);
+            repo.insertVisit(visit, campusId);
         } catch (DataIntegrityViolationException e) {
             // 并发下"查询未命中但插入撞唯一索引"：给出与预检一致的语义，而不是泛化 409
             throw new BusinessException(ErrorCode.REGISTRATION_DUPLICATED,
@@ -308,7 +319,12 @@ public class RegistrationService {
      * <p>只读；不含已退号记录。排序按就诊日期倒序，便于医师直接点选最近一次就诊。
      */
     public List<Visit> listByPatient(UUID patientId, int limit) {
-        return repo.listVisitsByPatient(patientId, limit);
+        return listByPatient(patientId, limit, java.util.Set.of());
+    }
+
+    /** 患者最近就诊列表（按院区收敛，G46；空集合表示不限院区）。 */
+    public List<Visit> listByPatient(UUID patientId, int limit, java.util.Set<UUID> campusIds) {
+        return repo.listVisitsByPatient(patientId, limit, campusCsv(campusIds));
     }
 
     /** 号源列表（挂号工作台）：日期缺省为当天。 */
@@ -318,10 +334,25 @@ public class RegistrationService {
 
     /** 当日就诊列表（挂号工作台）：日期缺省为当天，按挂号先后排序。 */
     public List<Visit> listDailyVisits(UUID deptId, LocalDate date) {
-        return repo.listVisitsByDeptAndDate(deptId, date == null ? BusinessTime.today() : date);
+        return listDailyVisits(deptId, date, java.util.Set.of());
+    }
+
+    /** 当日就诊列表（按院区收敛，G46）。 */
+    public List<Visit> listDailyVisits(UUID deptId, LocalDate date, java.util.Set<UUID> campusIds) {
+        return repo.listVisitsByDeptAndDate(deptId, date == null ? BusinessTime.today() : date,
+                campusCsv(campusIds));
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /** 院区集合转 SQL 过滤串；空集合（全院角色）返回空串表示不限院区。 */
+    static String campusCsv(java.util.Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
 
     private Dept requireDept(UUID deptId) {
         Dept dept = repo.findDept(deptId)

@@ -321,8 +321,8 @@ public class UserService {
 
     private UserResp toResp(UserAccount u) {
         return new UserResp(u.id(), u.username(), u.displayName(), u.employeeNo(),
-                u.orgCode(), users.deptIdsOf(u.id()), u.status(), users.rolesOf(u.id()), u.version(),
-                u.lastLoginAt(), u.createdAt());
+                u.orgCode(), users.deptIdsOf(u.id()), users.campusIdsOf(u.id()), u.status(),
+                users.rolesOf(u.id()), u.version(), u.lastLoginAt(), u.createdAt());
     }
 
     private String blankToNull(String s) {

@@ -89,7 +89,7 @@ public class InpatientController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listWards().stream()
+        return ApiResponse.ok(service.listWards(scope.campusFilter()).stream()
                 .filter(w -> scope.canSeeDepartment(w.deptId()))
                 .toList());
     }
@@ -104,7 +104,7 @@ public class InpatientController {
         if (!scope.canSeeDepartment(req.deptId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "只能维护本科室的病区");
         }
-        return ApiResponse.ok(service.createWard(req, actor));
+        return ApiResponse.ok(service.createWard(req, actor, scope.campusForWrite()));
     }
 
     @PostMapping("/wards/{wardId}/beds")

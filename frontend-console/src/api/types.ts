@@ -2365,11 +2365,23 @@ export interface UserAccount {
   orgCode: string | null
   /** 多科室执业绑定的临床科室 ID。 */
   deptIds: string[]
+  /** 可访问院区 ID（G45/G46；登录令牌下发 campuses 声明）。 */
+  campusIds: string[]
   status: 'ACTIVE' | 'DISABLED' | 'LOCKED'
   roles: string[]
   version: number
   lastLoginAt: string | null
   createdAt: string
+}
+
+/** 院区字典（多院区数据归属边界）。 */
+export interface Campus {
+  id: string
+  code: string
+  name: string
+  status: 'ACTIVE' | 'DISABLED'
+  sortNo: number
+  version: number
 }
 
 /** 角色参考数据（授权矩阵维护，只读）。 */

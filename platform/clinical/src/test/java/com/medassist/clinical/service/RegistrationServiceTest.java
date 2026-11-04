@@ -74,7 +74,7 @@ class RegistrationServiceTest {
         assertThat(visit.status()).isEqualTo(Visit.REGISTERED);
         assertThat(visit.patientNo()).isEqualTo("P20261031000001");
         assertThat(visit.visitDate()).isEqualTo(today);
-        verify(repo).insertVisit(any(Visit.class));
+        verify(repo).insertVisit(any(Visit.class), any());
 
         ArgumentCaptor<Charge> charge = ArgumentCaptor.forClass(Charge.class);
         verify(repo).insertCharge(charge.capture());
@@ -97,7 +97,7 @@ class RegistrationServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.REGISTRATION_NO_SLOT);
 
-        verify(repo, never()).insertVisit(any());
+        verify(repo, never()).insertVisit(any(Visit.class), any());
         verify(repo, never()).occupySlot(any(), anyLong());
     }
 
@@ -119,7 +119,7 @@ class RegistrationServiceTest {
 
         verify(repo).occupySlot(slotId, 0L);
         // 关键：CAS 失败后绝不能"号没占上却建了就诊和收费单"
-        verify(repo, never()).insertVisit(any());
+        verify(repo, never()).insertVisit(any(Visit.class), any());
         verify(repo, never()).insertCharge(any());
         verify(repo, never()).insertChargeItemWithoutOrder(any(), any(), any(), any(), any(), any());
     }

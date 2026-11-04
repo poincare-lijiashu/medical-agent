@@ -12,6 +12,7 @@ public record UserResp(
         String employeeNo,
         String orgCode,
         List<UUID> deptIds,
+        List<UUID> campusIds,
         String status,
         List<String> roles,
         long version,

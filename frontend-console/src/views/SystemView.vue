@@ -2,14 +2,14 @@
   <div class="page">
     <PageHeader
       title="系统管理"
-      :sub="`账号与授权矩阵 · 机构与多科室绑定 · 跨域审计检索。账号启停、角色分配与密码重置均留痕，最后一个管理员不可停用。当前角色 ${role}`"
+      :sub="`账号与授权矩阵 · 机构与多科室绑定 · 院区字典与账号院区分配 · 跨域审计检索。账号启停、角色分配、院区变更与密码重置均留痕，最后一个管理员不可停用。当前角色 ${role}`"
     >
       <template #actions>
         <button
           class="btn"
           type="button"
-          :disabled="tab === 'users' ? usersLoading : auditLoading"
-          @click="tab === 'users' ? loadUsers() : loadAudit()"
+          :disabled="tab === 'users' ? usersLoading : tab === 'campus' ? campusLoading : auditLoading"
+          @click="reloadCurrent"
         >
           <AppIcon name="refresh" :size="15" /> 刷新
         </button>
@@ -28,6 +28,15 @@
           账号管理
         </button>
         <button
+          v-if="canReadCampus"
+          class="seg-btn"
+          :class="{ active: tab === 'campus' }"
+          type="button"
+          @click="switchTab('campus')"
+        >
+          院区管理
+        </button>
+        <button
           v-if="canReadAudit"
           class="seg-btn"
           :class="{ active: tab === 'audit' }"
@@ -39,7 +48,11 @@
       </div>
       <span class="spacer" />
       <span class="hint">
-        {{ tab === 'users' ? '角色决定权限点；科室绑定决定数据范围' : '审计只读，查询审计本身不产生新事件' }}
+        {{ tab === 'users'
+          ? '角色决定权限点；科室与院区绑定决定数据范围'
+          : tab === 'campus'
+            ? '院区是数据归属边界：停用后不再接收新数据，历史数据保持原归属'
+            : '审计只读，查询审计本身不产生新事件' }}
       </span>
     </div>
 
@@ -102,6 +115,7 @@
                 <th>姓名 / 工号</th>
                 <th>机构</th>
                 <th class="is-num">科室</th>
+                <th>院区</th>
                 <th>角色</th>
                 <th>状态</th>
                 <th>最后登录</th>
@@ -120,6 +134,7 @@
                   <div class="mono muted" style="font-size: var(--fs-small)">{{ u.orgCode || '—' }}</div>
                 </td>
                 <td class="is-num" data-label="科室">{{ u.deptIds.length }}</td>
+                <td data-label="院区">{{ campusNames(u.campusIds) }}</td>
                 <td data-label="角色">
                   <span v-for="r in u.roles" :key="r" class="badge badge--neutral role-badge">
                     {{ roleName(r) }}
@@ -131,6 +146,7 @@
                   <div class="row-actions">
                     <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openEdit(u)">编辑</button>
                     <button v-if="canAssign" class="btn btn--sm" type="button" @click="openRoles(u)">角色</button>
+                    <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openCampuses(u)">院区</button>
                     <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openReset(u)">重置密码</button>
                     <button
                       v-if="canDisable"
@@ -163,6 +179,89 @@
           >
             下一页
           </button>
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="tab === 'campus'">
+      <div class="kpi-strip">
+        <KpiCard label="院区总数" :value="campuses.length" unit="个" />
+        <KpiCard label="启用院区" :value="activeCampusCount" unit="个" />
+        <KpiCard
+          label="停用院区"
+          :value="disabledCampusCount"
+          unit="个"
+          :tone="disabledCampusCount > 0 ? 'warn' : 'default'"
+        />
+        <KpiCard label="账号总数" :value="usersTotal" unit="个" meta="来自账号管理" />
+      </div>
+
+      <div class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">院区</span>
+          <span class="badge badge--neutral">{{ campuses.length }}</span>
+          <span class="spacer" />
+          <span class="hint">编码创建后不可修改；至少保留一个启用院区</span>
+          <button v-if="canManageCampus" class="btn btn--sm btn--primary" type="button" @click="openCampusCreate">
+            <AppIcon name="plus" :size="13" /> 新建院区
+          </button>
+        </div>
+
+        <TableSkeleton v-if="campusLoading" :rows="3" />
+
+        <LoadError
+          v-else-if="campusError"
+          :message="campusError"
+          :retrying="campusLoading"
+          @retry="loadCampuses"
+        />
+
+        <EmptyState
+          v-else-if="campuses.length === 0"
+          art="orders"
+          title="尚未配置院区"
+          desc="至少需要配置一个院区，业务数据才能确定归属；请联系管理员初始化。"
+        />
+
+        <div v-else class="table-wrap">
+          <table class="table table--stack">
+            <thead>
+              <tr>
+                <th>编码</th>
+                <th>名称</th>
+                <th class="is-num">排序</th>
+                <th>状态</th>
+                <th class="is-num">本页账号</th>
+                <th style="width: 180px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in campuses" :key="c.id">
+                <td class="mono" data-primary>{{ c.code }}</td>
+                <td data-label="名称">{{ c.name }}</td>
+                <td class="is-num" data-label="排序">{{ c.sortNo }}</td>
+                <td data-label="状态"><StatusPill :value="c.status" /></td>
+                <td class="is-num" data-label="本页账号">{{ campusUserCount(c.id) }}</td>
+                <td data-label="操作">
+                  <div class="row-actions">
+                    <button v-if="canManageCampus" class="btn btn--sm" type="button" @click="openCampusEdit(c)">
+                      编辑
+                    </button>
+                    <button
+                      v-if="canManageCampus"
+                      class="btn btn--sm"
+                      :class="{ 'btn--danger': c.status === 'ACTIVE' }"
+                      type="button"
+                      :disabled="busy"
+                      @click="toggleCampus(c)"
+                    >
+                      {{ c.status === 'ACTIVE' ? '停用' : '启用' }}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </template>
@@ -413,6 +512,71 @@
     </AppModal>
 
     <AppModal
+      v-model="campusModalOpen"
+      :title="campusMode === 'create' ? '新建院区' : '编辑院区'"
+      :subtitle="campusMode === 'edit' ? editingCampus?.code : ''"
+      width="520px"
+    >
+      <div class="stack">
+        <label class="field">
+          <span class="label">院区编码 <span class="req">*</span></span>
+          <input v-model.trim="campusForm.code" class="input" maxlength="32" :disabled="campusMode === 'edit'" />
+          <span class="hint">字母/数字/下划线/短横线，2-32 位；创建后不可修改。</span>
+        </label>
+        <label class="field">
+          <span class="label">名称 <span class="req">*</span></span>
+          <input v-model.trim="campusForm.name" class="input" maxlength="64" />
+        </label>
+        <label class="field">
+          <span class="label">排序号</span>
+          <input v-model.number="campusForm.sortNo" class="input" type="number" min="0" max="9999" />
+          <span class="hint">越小越靠前，默认 100。</span>
+        </label>
+        <div v-if="campusMode === 'edit'" class="notice notice--warn">
+          停用后该院区不再接收新数据，历史数据仍按原院区可见；至少保留一个启用院区。
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="campusModalOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="busy || !campusFormValid" @click="submitCampus">
+          保存
+        </button>
+      </template>
+    </AppModal>
+
+    <AppModal
+      v-model="campusAssignOpen"
+      title="分配院区"
+      :subtitle="campusTarget ? `${campusTarget.displayName} · ${campusTarget.username}` : ''"
+      width="560px"
+    >
+      <div class="stack">
+        <div class="notice notice--warn">
+          院区是全量替换且至少保留一个；保存后需重新登录才下发新的 campuses 声明。
+        </div>
+        <div v-if="campuses.length > 0" class="check-grid">
+          <label v-for="c in campuses" :key="c.id" class="check">
+            <input v-model="campusSelection" type="checkbox" :value="c.id" />
+            <span>{{ c.name }}</span>
+            <span class="mono muted">{{ c.code }}</span>
+          </label>
+        </div>
+        <div v-else class="hint">尚未加载院区字典，请确认当前账号具备 auth:campus:read 权限。</div>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="campusAssignOpen = false">取消</button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          :disabled="busy || campusSelection.length === 0"
+          @click="submitCampuses"
+        >
+          保存院区
+        </button>
+      </template>
+    </AppModal>
+
+    <AppModal
       v-model="auditDetailOpen"
       title="审计详情"
       :subtitle="auditDetail ? `${auditDetail.action} · ${auditDetail.actor}` : ''"
@@ -451,7 +615,7 @@ import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { clinicalApi, systemApi } from '@/api'
 import { errorText } from '@/api/http'
-import type { AuditEvent, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
+import type { AuditEvent, Campus, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -463,8 +627,13 @@ const canCreate = computed(() => hasPermission('auth:user:create'))
 const canUpdate = computed(() => hasPermission('auth:user:update'))
 const canDisable = computed(() => hasPermission('auth:user:disable'))
 const canAssign = computed(() => hasPermission('auth:role:assign'))
+const canReadCampus = computed(() => hasPermission('auth:campus:read'))
+const canManageCampus = computed(() => hasPermission('auth:campus:manage'))
 
-const tab = ref<'users' | 'audit'>(canReadUsers.value ? 'users' : 'audit')
+type Tab = 'users' | 'campus' | 'audit'
+const tab = ref<Tab>(
+  canReadUsers.value ? 'users' : canReadCampus.value ? 'campus' : 'audit',
+)
 const busy = ref(false)
 
 const roles = ref<RoleRef[]>([])
@@ -522,6 +691,7 @@ async function loadRefs() {
   if (roleRes.status === 'fulfilled') roles.value = roleRes.value
   if (orgRes.status === 'fulfilled') orgs.value = orgRes.value
   if (deptRes.status === 'fulfilled') departments.value = deptRes.value.filter((d) => d.enabled)
+  if (canReadCampus.value && campuses.value.length === 0) void loadCampuses()
 }
 
 function resetUserPage() {
@@ -721,6 +891,153 @@ async function submitReset() {
   }
 }
 
+// ---------------------------------------------------------------- 院区（G46）
+
+const campuses = ref<Campus[]>([])
+const campusLoading = ref(false)
+const campusError = ref('')
+
+const activeCampusCount = computed(() => campuses.value.filter((c) => c.status === 'ACTIVE').length)
+const disabledCampusCount = computed(() => campuses.value.filter((c) => c.status === 'DISABLED').length)
+
+async function loadCampuses() {
+  if (!canReadCampus.value) return
+  campusLoading.value = true
+  try {
+    campuses.value = await systemApi.campuses()
+    campusError.value = ''
+  } catch (e) {
+    toast.error('院区列表加载失败', errorText(e))
+    campuses.value = []
+    campusError.value = errorText(e)
+  } finally {
+    campusLoading.value = false
+  }
+}
+
+function campusName(id: string): string {
+  return campuses.value.find((c) => c.id === id)?.name ?? id.slice(0, 8)
+}
+
+function campusNames(ids: string[] | null | undefined): string {
+  if (!ids || ids.length === 0) return '—'
+  return ids.map(campusName).join('、')
+}
+
+function campusUserCount(id: string): number {
+  return users.value.filter((u) => u.campusIds?.includes(id)).length
+}
+
+const campusModalOpen = ref(false)
+const campusMode = ref<'create' | 'edit'>('create')
+const editingCampus = ref<Campus | null>(null)
+const campusForm = reactive({ code: '', name: '', sortNo: 100 })
+
+const campusFormValid = computed(() => {
+  if (!campusForm.name.trim()) return false
+  if (campusMode.value === 'create') return /^[A-Za-z0-9_-]{2,32}$/.test(campusForm.code.trim())
+  return true
+})
+
+function openCampusCreate() {
+  campusMode.value = 'create'
+  editingCampus.value = null
+  campusForm.code = ''
+  campusForm.name = ''
+  campusForm.sortNo = 100
+  campusModalOpen.value = true
+}
+
+function openCampusEdit(c: Campus) {
+  campusMode.value = 'edit'
+  editingCampus.value = c
+  campusForm.code = c.code
+  campusForm.name = c.name
+  campusForm.sortNo = c.sortNo
+  campusModalOpen.value = true
+}
+
+function sortCampuses(list: Campus[]): Campus[] {
+  return [...list].sort((a, b) => a.sortNo - b.sortNo || a.code.localeCompare(b.code))
+}
+
+async function submitCampus() {
+  if (!campusFormValid.value) return
+  busy.value = true
+  try {
+    if (campusMode.value === 'create') {
+      const created = await systemApi.createCampus({
+        code: campusForm.code.trim().toUpperCase(),
+        name: campusForm.name.trim(),
+        sortNo: campusForm.sortNo,
+      })
+      campuses.value = sortCampuses([...campuses.value, created])
+      toast.ok('院区已创建', `${created.name}（${created.code}）`)
+    } else if (editingCampus.value) {
+      const updated = await systemApi.updateCampus(editingCampus.value.id, {
+        name: campusForm.name.trim(),
+        status: editingCampus.value.status,
+        sortNo: campusForm.sortNo,
+        version: editingCampus.value.version,
+      })
+      campuses.value = sortCampuses(campuses.value.map((c) => (c.id === updated.id ? updated : c)))
+      toast.ok('院区已更新', `${updated.name}（${updated.code}）`)
+    }
+    campusModalOpen.value = false
+  } catch (e) {
+    toast.error('保存院区失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function toggleCampus(c: Campus) {
+  busy.value = true
+  try {
+    const nextStatus: Campus['status'] = c.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'
+    const updated = await systemApi.updateCampus(c.id, {
+      name: c.name,
+      status: nextStatus,
+      sortNo: c.sortNo,
+      version: c.version,
+    })
+    campuses.value = sortCampuses(campuses.value.map((x) => (x.id === updated.id ? updated : x)))
+    toast.ok(nextStatus === 'ACTIVE' ? '院区已启用' : '院区已停用', `${updated.name}（${updated.code}）`)
+  } catch (e) {
+    toast.error('院区状态变更失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
+// ---------------------------------------------------------------- 账号院区分配
+
+const campusAssignOpen = ref(false)
+const campusTarget = ref<UserAccount | null>(null)
+const campusSelection = ref<string[]>([])
+
+function openCampuses(u: UserAccount) {
+  campusTarget.value = u
+  campusSelection.value = [...u.campusIds]
+  if (campuses.value.length === 0) void loadCampuses()
+  campusAssignOpen.value = true
+}
+
+async function submitCampuses() {
+  if (!campusTarget.value || campusSelection.value.length === 0) return
+  busy.value = true
+  try {
+    const updated = await systemApi.assignCampuses(campusTarget.value.id, campusSelection.value)
+    replaceUser(updated)
+    campusAssignOpen.value = false
+    toast.ok('院区已更新', `${updated.displayName} 需重新登录后生效`)
+  } catch (e) {
+    toast.error('院区分配失败', errorText(e))
+  } finally {
+    busy.value = false
+  }
+}
+
 // ---------------------------------------------------------------- 审计
 
 const AUDIT_PAGE_SIZE = 20
@@ -809,10 +1126,18 @@ function prettyDetail(detail: string | null): string {
 
 // ---------------------------------------------------------------- 展示映射
 
-function switchTab(next: 'users' | 'audit') {
+function switchTab(next: Tab) {
   tab.value = next
   if (next === 'users' && users.value.length === 0) void loadUsers()
+  if (next === 'campus' && campuses.value.length === 0) void loadCampuses()
   if (next === 'audit' && auditRows.value.length === 0) void loadAudit()
+}
+
+/** 顶栏刷新：按当前分区重新拉取，避免"刷新按钮在院区页却去刷账号"。 */
+function reloadCurrent() {
+  if (tab.value === 'users') void loadUsers()
+  else if (tab.value === 'campus') void loadCampuses()
+  else void loadAudit()
 }
 
 function roleName(code: string): string {
@@ -837,6 +1162,7 @@ onMounted(() => {
     void loadRefs()
     void loadUsers()
   }
+  if (canReadCampus.value) void loadCampuses()
   if (tab.value === 'audit') void loadAudit()
 })
 </script>

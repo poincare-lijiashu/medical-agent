@@ -101,6 +101,46 @@ class VisitAccessGuardTest {
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.VISIT_NOT_FOUND));
     }
 
+    // ---------------------------------------------------------------- 院区隔离（G46）
+
+    @Test
+    @DisplayName("院区隔离：同科室同院区放行，同科室跨院区 404")
+    void rejectsOtherCampus() {
+        UUID campusMain = DataScope.DEFAULT_CAMPUS_ID;
+        UUID campusEast = UUID.fromString("a0000000-0000-0000-0000-000000000002");
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visitOf(deptA)));
+        when(repo.findVisitCampus(visitId)).thenReturn(Optional.of(campusMain));
+
+        DataScope mainScope = DataScope.of("doctor01", java.util.Set.of(deptA), false,
+                java.util.Set.of(campusMain), false, true);
+        assertThat(guard.require(mainScope, visitId).id()).isEqualTo(visitId);
+
+        DataScope eastScope = DataScope.of("doctor02", java.util.Set.of(deptA), false,
+                java.util.Set.of(campusEast), false, true);
+        assertThatThrownBy(() -> guard.require(eastScope, visitId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VISIT_NOT_FOUND));
+
+        // 跨院区角色（管理员/质控）不受院区限制
+        assertThat(guard.require(DataScope.all("admin01", true), visitId).id()).isEqualTo(visitId);
+    }
+
+    @Test
+    @DisplayName("院区隔离：病区归属其他院区时 404")
+    void rejectsWardInOtherCampus() {
+        UUID wardId = UUID.randomUUID();
+        UUID campusEast = UUID.fromString("a0000000-0000-0000-0000-000000000002");
+        when(repo.findWardDepartment(wardId)).thenReturn(Optional.of(deptA));
+        when(repo.findWardCampus(wardId)).thenReturn(Optional.of(campusEast));
+
+        DataScope mainScope = DataScope.of("nurse01", java.util.Set.of(deptA), false,
+                java.util.Set.of(DataScope.DEFAULT_CAMPUS_ID), false, true);
+
+        assertThatThrownBy(() -> guard.requireWard(mainScope, wardId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+    }
+
     // ---------------------------------------------------------------- 按 caseId 访问
 
     @Test

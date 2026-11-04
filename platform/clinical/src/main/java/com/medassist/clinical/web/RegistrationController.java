@@ -78,7 +78,7 @@ public class RegistrationController {
         if (!scope.canSeeDepartment(req.deptId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "只能为本科室挂号");
         }
-        return ApiResponse.ok(PhiMask.visit(service.register(req, actor), scope));
+        return ApiResponse.ok(PhiMask.visit(service.register(req, actor, scope.campusForWrite()), scope));
     }
 
     /**
@@ -94,7 +94,7 @@ public class RegistrationController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
-        return ApiResponse.ok(service.listByPatient(patientId, limit).stream()
+        return ApiResponse.ok(service.listByPatient(patientId, limit, scope.campusFilter()).stream()
                 .filter(v -> scope.canSeeDepartment(v.deptId()))
                 .map(v -> PhiMask.visit(v, scope))
                 .toList());
@@ -131,7 +131,7 @@ public class RegistrationController {
         if (!scope.canSeeDepartment(deptId)) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "无权查看其他科室的就诊");
         }
-        return ApiResponse.ok(service.listDailyVisits(deptId, date).stream()
+        return ApiResponse.ok(service.listDailyVisits(deptId, date, scope.campusFilter()).stream()
                 .map(v -> PhiMask.visit(v, scope))
                 .toList());
     }

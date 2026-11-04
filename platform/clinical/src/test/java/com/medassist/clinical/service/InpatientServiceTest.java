@@ -82,7 +82,7 @@ class InpatientServiceTest {
         AdmissionView v = service.admit(new AdmitReq(patientId, wardId, null, "doctor01"), "clerk01");
 
         assertThat(v.status()).isEqualTo(Admission.ADMITTED);
-        verify(repo).insertVisit(any(Visit.class));
+        verify(repo).insertVisit(any(Visit.class), any());
         verify(repo).insertCharge(any(Charge.class));
         verify(repo).insertAdmission(any(Admission.class));
         verify(repo, never()).occupyBed(any(), anyLong());

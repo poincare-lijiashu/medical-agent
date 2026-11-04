@@ -346,15 +346,28 @@ public class ClinicalRepository {
      * 但退号审计仍可在就诊详情/审计流里追溯）。
      */
     public List<Visit> listVisitsByPatient(UUID patientId, int limit) {
+        return listVisitsByPatient(patientId, limit, "");
+    }
+
+    /**
+     * 按患者列出最近就诊，并按院区收敛（G46）。
+     *
+     * <p>{@code campusCsv} 为空表示不限院区（全院角色）；否则只返回这些院区的就诊，
+     * 防止用 patientId 枚举其他院区的就诊史。
+     */
+    public List<Visit> listVisitsByPatient(UUID patientId, int limit, String campusCsv) {
         return jdbc.sql("""
                         SELECT id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
                                visit_type, status, visit_date, version
                           FROM clinical_svc.visit
                          WHERE patient_id = :patientId AND status <> 'CANCELLED'
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY visit_date DESC, registered_at DESC
                          LIMIT :limit
                         """)
                 .param("patientId", patientId).param("limit", Math.max(1, Math.min(limit, 100)))
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(VISIT_MAPPER).list();
     }
 
@@ -372,15 +385,31 @@ public class ClinicalRepository {
 
     /** 当日该科室的就诊列表（挂号工作台与日结核对用），按挂号先后排序。 */
     public List<Visit> listVisitsByDeptAndDate(UUID deptId, LocalDate visitDate) {
+        return listVisitsByDeptAndDate(deptId, visitDate, "");
+    }
+
+    /** 当日该科室的就诊列表（按院区收敛，G46）。 */
+    public List<Visit> listVisitsByDeptAndDate(UUID deptId, LocalDate visitDate, String campusCsv) {
         return jdbc.sql("""
                         SELECT id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
                                visit_type, status, visit_date, version
                           FROM clinical_svc.visit
                          WHERE dept_id = :deptId AND visit_date = :visitDate
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY registered_at, visit_no
                         """)
                 .param("deptId", deptId).param("visitDate", visitDate)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(VISIT_MAPPER).list();
+    }
+
+    /** 就诊所属院区（行级权限校验用；empty 表示就诊不存在）。 */
+    public Optional<UUID> findVisitCampus(UUID visitId) {
+        return jdbc.sql("SELECT campus_id FROM clinical_svc.visit WHERE id = ?")
+                .param(visitId)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
     }
 
     /** 加行锁读取就诊；必须在事务内调用。 */
@@ -394,18 +423,24 @@ public class ClinicalRepository {
     }
 
     public void insertVisit(Visit v) {
+        insertVisit(v, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 写入就诊并固化院区（G46）；院区在挂号/入院时确定，后续不再随科室变更漂移。 */
+    public void insertVisit(Visit v, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.visit
                             (id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
-                             visit_type, status, visit_date, version)
+                             visit_type, status, visit_date, campus_id, version)
                         VALUES (:id, :visitNo, :patientId, :patientNo, :deptId, :doctorId, :slotId,
-                                :visitType, :status, :visitDate, 0)
+                                :visitType, :status, :visitDate, :campusId, 0)
                         """)
                 .param("id", v.id()).param("visitNo", v.visitNo())
                 .param("patientId", v.patientId()).param("patientNo", v.patientNo())
                 .param("deptId", v.deptId()).param("doctorId", v.doctorId())
                 .param("slotId", v.slotId()).param("visitType", v.visitType())
-                .param("status", v.status()).param("visitDate", v.visitDate()).update();
+                .param("status", v.status()).param("visitDate", v.visitDate())
+                .param("campusId", campusId).update();
     }
 
     /** 状态迁移（CAS）：只允许从 expectedStatus 迁移，防止并发下"取消后又被开始接诊"。 */
@@ -2003,19 +2038,35 @@ public class ClinicalRepository {
 
     /** 启用病区列表（控制台选择病区用；不做业务判断，仅按编码排序）。 */
     public List<Ward> listWards() {
+        return listWards("");
+    }
+
+    /** 启用病区列表，按院区收敛（G46；空 CSV 表示不限院区）。 */
+    public List<Ward> listWards(String campusCsv) {
         return jdbc.sql("""
                         SELECT id, code, name, dept_id, enabled FROM clinical_svc.ward
-                         WHERE enabled ORDER BY code
-                        """).query(WARD_MAPPER).list();
+                         WHERE enabled
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                         ORDER BY code
+                        """)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .query(WARD_MAPPER).list();
     }
 
     public void insertWard(Ward w) {
+        insertWard(w, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 新建病区并固化院区（G46）：病区不跨院区，床位与入院都以病区院区为准。 */
+    public void insertWard(Ward w, UUID campusId) {
         jdbc.sql("""
-                        INSERT INTO clinical_svc.ward (id, code, name, dept_id, enabled, version)
-                        VALUES (:id, :code, :name, :deptId, true, 0)
+                        INSERT INTO clinical_svc.ward (id, code, name, dept_id, campus_id, enabled, version)
+                        VALUES (:id, :code, :name, :deptId, :campusId, true, 0)
                         """)
                 .param("id", w.id()).param("code", w.code())
-                .param("name", w.name()).param("deptId", w.deptId()).update();
+                .param("name", w.name()).param("deptId", w.deptId())
+                .param("campusId", campusId).update();
     }
 
     public void insertBed(UUID id, UUID wardId, String bedNo) {
@@ -3050,6 +3101,40 @@ public class ClinicalRepository {
         return jdbc.sql("SELECT dept_id FROM clinical_svc.ward WHERE id = ?")
                 .param(wardId)
                 .query((rs, i) -> rs.getObject("dept_id", UUID.class))
+                .optional();
+    }
+
+    /** 病区所属院区（G46 入院/床位校验用）。 */
+    public Optional<UUID> findWardCampus(UUID wardId) {
+        return jdbc.sql("SELECT campus_id FROM clinical_svc.ward WHERE id = ?")
+                .param(wardId)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
+    }
+
+    /** 按住院登记查所属就诊的院区（行级权限校验用，G46）。 */
+    public Optional<UUID> findVisitCampusByAdmissionId(UUID admissionId) {
+        return jdbc.sql("""
+                        SELECT v.campus_id
+                          FROM clinical_svc.admission a
+                          JOIN clinical_svc.visit v ON v.id = a.visit_id
+                         WHERE a.id = ?
+                        """)
+                .param(admissionId)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
+    }
+
+    /** 按手术病例查所属就诊的院区（行级权限校验用，G46）。 */
+    public Optional<UUID> findVisitCampusByCaseId(UUID caseId) {
+        return jdbc.sql("""
+                        SELECT v.campus_id
+                          FROM clinical_svc.surgery_case c
+                          JOIN clinical_svc.visit v ON v.id = c.visit_id
+                         WHERE c.id = ?
+                        """)
+                .param(caseId)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
                 .optional();
     }
 

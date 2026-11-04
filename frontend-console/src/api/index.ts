@@ -5,6 +5,7 @@ import type {
   BillingPreview,
   CaBoard,
   CaSignature,
+  Campus,
   ConsentBoard,
   ConsentRecord,
   ConsentTemplate,
@@ -1535,6 +1536,17 @@ export const systemApi = {
     post<void>(`/auth/users/${id}/reset-password`, { newPassword }),
   roles: () => get<RoleRef[]>('/auth/rbac/roles'),
   orgs: () => get<OrgRef[]>('/auth/rbac/orgs'),
+  /** 院区字典（G46）：账号院区分配与院区维护共用。 */
+  campuses: () => get<Campus[]>('/auth/campuses'),
+  createCampus: (body: { code: string; name: string; sortNo?: number }) =>
+    post<Campus>('/auth/campuses', body),
+  updateCampus: (
+    id: string,
+    body: { name: string; status: 'ACTIVE' | 'DISABLED'; sortNo?: number; version: number },
+  ) => put<Campus>(`/auth/campuses/${id}`, body),
+  /** 全量替换账号可见院区（至少一个）。 */
+  assignCampuses: (id: string, campusIds: string[]) =>
+    put<UserAccount>(`/auth/users/${id}/campuses`, { campusIds }),
   /** 跨域审计（gateway: /api/v2/audit/events → auth /events）。 */
   auditEvents: (params: {
     actor?: string

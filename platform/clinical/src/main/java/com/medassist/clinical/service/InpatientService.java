@@ -61,11 +61,22 @@ public class InpatientService {
 
     /** 启用病区列表（只读）。 */
     public List<Ward> listWards() {
-        return repo.listWards();
+        return listWards(java.util.Set.of());
+    }
+
+    /** 启用病区列表，按院区收敛（G46；空集合表示不限院区）。 */
+    public List<Ward> listWards(java.util.Set<UUID> campusIds) {
+        return repo.listWards(campusCsv(campusIds));
     }
 
     @Transactional
     public Ward createWard(CreateWardReq req, String actor) {
+        return createWard(req, actor, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
+    }
+
+    /** 新建病区并固化院区（G46）：病区不跨院区，入院与床位都以病区院区为准。 */
+    @Transactional
+    public Ward createWard(CreateWardReq req, String actor, UUID campusId) {
         Dept dept = repo.findDept(req.deptId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "科室不存在"));
         if (!dept.enabled()) {
@@ -73,12 +84,13 @@ public class InpatientService {
         }
         Ward ward = new Ward(UUID.randomUUID(), req.code().trim(), req.name().trim(), dept.id(), true);
         try {
-            repo.insertWard(ward);
+            repo.insertWard(ward, campusId);
         } catch (DataIntegrityViolationException e) {
             throw new BusinessException(ErrorCode.CONFLICT, "病区编码已存在：" + req.code());
         }
         audit(actor, "WARD_CREATE", "WARD", ward.id().toString(),
-                Map.of("code", ward.code(), "name", ward.name(), "deptCode", dept.deptCode()));
+                Map.of("code", ward.code(), "name", ward.name(), "deptCode", dept.deptCode(),
+                        "campusId", campusId.toString()));
         return ward;
     }
 
@@ -127,11 +139,14 @@ public class InpatientService {
         }
 
         // 住院就诊：状态直接 IN_TREATMENT（入院即可开医嘱），复用门诊的就诊/医嘱/收费模型
+        // G46：就诊院区随病区固化，保证住院患者与病区在同一院区
+        UUID campusId = repo.findWardCampus(ward.id())
+                .orElse(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
         Visit visit = new Visit(UUID.randomUUID(), repo.nextVisitNo(), patient.id(), patient.patientNo(),
                 ward.deptId(), req.attendingDoctor().trim(), null, "INPATIENT",
                 Visit.IN_TREATMENT, BusinessTime.today(), 0L);
         try {
-            repo.insertVisit(visit);
+            repo.insertVisit(visit, campusId);
         } catch (DataIntegrityViolationException e) {
             // 唯一索引兜底：同日同科室已有在途门诊就诊（住院重复入院由 admission 唯一索引拦截）
             throw new BusinessException(ErrorCode.CONFLICT,
@@ -355,6 +370,15 @@ public class InpatientService {
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /** 院区集合转 SQL 过滤串；空集合（全院角色）返回空串表示不限院区。 */
+    private static String campusCsv(java.util.Set<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return "";
+        }
+        return campusIds.stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
 
     private Ward requireWard(UUID wardId) {
         Ward ward = repo.findWard(wardId)
