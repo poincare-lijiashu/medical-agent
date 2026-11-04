@@ -56,6 +56,13 @@ public enum ErrorCode {
     CHARGE_NOT_FOUND(45401, "未找到该就诊的收费单"),
     CHARGE_STATUS_INVALID(45410, "当前收费单状态不允许该操作"),
 
+    // ---- 收费票据（45xxx 续，G14）----
+    CHARGE_RECEIPT_NOT_FOUND(45420, "未找到该收费票据"),
+    CHARGE_RECEIPT_EXISTS(45421, "该收费单已有有效票据，请勿重复开票"),
+    CHARGE_RECEIPT_STATUS_INVALID(45422, "当前票据状态不允许该操作（作废后不可重打）"),
+    CHARGE_RECEIPT_VOID_REASON_REQUIRED(45423, "作废票据必须填写原因"),
+    CHARGE_RECEIPT_CHARGE_NOT_PAID(45424, "只有已结算的收费单才能开票"),
+
     // ---- 药房（43xxx）----
     DRUG_STOCK_INSUFFICIENT(43401, "药品库存不足"),
     DRUG_BATCH_EXPIRED(43402, "所选批次已过期，禁止发药"),

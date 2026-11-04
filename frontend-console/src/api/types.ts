@@ -323,6 +323,29 @@ export interface ChargeView {
   items: ChargeItemView[]
 }
 
+// ---------------------------------------------------------------- 收费票据（G14）
+
+export type ChargeReceiptStatus = 'ISSUED' | 'VOID'
+
+/** 收费票据：金额/支付方式为开票快照；重打累计次数，作废留原因。 */
+export interface ChargeReceipt {
+  id: string
+  receiptNo: string
+  chargeId: string
+  visitId: string
+  amount: number
+  paymentMethod: string | null
+  status: ChargeReceiptStatus
+  issuedBy: string
+  issuedAt: string
+  voidedBy: string | null
+  voidedAt: string | null
+  voidReason: string | null
+  reprintCount: number
+  version: number
+  createdAt: string
+}
+
 export interface BillingPreview {
   chargedTotal: number
   pendingAmount: number

@@ -29,6 +29,15 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:registration:create', 'clinical:charge:daily'],
   },
   {
+    name: 'receipts',
+    path: '/receipts',
+    title: '收费票据',
+    hint: '已结算开票 · 重打记次 · 作废留痕 · 换开',
+    icon: 'charges',
+    group: '门诊管理',
+    permissions: ['clinical:charge:read'],
+  },
+  {
     name: 'orders',
     path: '/orders',
     title: '医嘱工作台',

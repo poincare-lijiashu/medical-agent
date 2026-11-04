@@ -5,6 +5,7 @@ import type {
   BillingPreview,
   ChargeItem,
   ChargeView,
+  ChargeReceipt,
   Consultation,
   DepositView,
   Dept,
@@ -156,6 +157,16 @@ export const clinicalApi = {
   /** 门诊实收趋势（按收款日聚合，缺日补 0；最多 92 天）。 */
   outpatientTrend: (from?: string, to?: string) =>
     get<OutpatientTrendView>('/clinical/finance/outpatient-trend', { from, to }),
+
+  // ---- 收费票据（G14）----
+  receipts: (visitId: string, limit = 50) =>
+    get<ChargeReceipt[]>('/clinical/receipts', { visitId, limit }),
+  receipt: (id: string) => get<ChargeReceipt>(`/clinical/receipts/${id}`),
+  issueReceipt: (chargeId: string) =>
+    post<ChargeReceipt>('/clinical/receipts', { chargeId }),
+  reprintReceipt: (id: string) => post<ChargeReceipt>(`/clinical/receipts/${id}/reprint`),
+  voidReceipt: (id: string, reason: string) =>
+    post<ChargeReceipt>(`/clinical/receipts/${id}/void`, { reason }),
   startVisit: (id: string) => post<Visit>(`/clinical/visits/${id}/start`),
   orders: (visitId: string) => get<VisitOrder[]>(`/clinical/visits/${visitId}/orders`),
   placeOrders: (

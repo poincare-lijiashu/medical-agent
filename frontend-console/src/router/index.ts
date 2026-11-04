@@ -21,6 +21,11 @@ const router = createRouter({
           name: 'registration',
           component: () => import('@/views/RegistrationWorkbenchView.vue'),
         },
+        {
+          path: 'receipts',
+          name: 'receipts',
+          component: () => import('@/views/ReceiptView.vue'),
+        },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },
         { path: 'preop', name: 'preop', component: () => import('@/views/PreopVisitView.vue') },
         {

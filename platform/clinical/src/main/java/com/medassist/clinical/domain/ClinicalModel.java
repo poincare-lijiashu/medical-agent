@@ -442,6 +442,26 @@ public final class ClinicalModel {
                                  BigDecimal totalPaid, BigDecimal refundedAmount) {
     }
 
+    /**
+     * 收费票据（G14）。
+     *
+     * <p>金额/支付方式为开票快照；重打只累加 {@code reprintCount}；
+     * 作废必须写原因，作废后可为同一收费单换开新票。
+     */
+    public record ChargeReceipt(UUID id, String receiptNo, UUID chargeId, UUID visitId,
+                                BigDecimal amount, String paymentMethod, String status,
+                                String issuedBy, Instant issuedAt, String voidedBy,
+                                Instant voidedAt, String voidReason, int reprintCount,
+                                long version, Instant createdAt) {
+
+        public static final String ISSUED = "ISSUED";
+        public static final String VOID = "VOID";
+
+        public boolean active() {
+            return ISSUED.equals(status);
+        }
+    }
+
     /** 病区。 */
     public record Ward(UUID id, String code, String name, UUID deptId, boolean enabled) {
     }

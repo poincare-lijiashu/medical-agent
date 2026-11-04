@@ -7,6 +7,7 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
+import com.medassist.clinical.domain.ClinicalModel.ChargeReceipt;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
 import com.medassist.clinical.domain.ClinicalModel.DailyPaidTotal;
@@ -146,6 +147,10 @@ public class ClinicalRepository {
 
     public String nextChargeNo() {
         return nextNo("clinical_svc.charge_no_seq", "C");
+    }
+
+    public String nextReceiptNo() {
+        return nextNo("clinical_svc.charge_receipt_no_seq", "RP");
     }
 
     private String nextNo(String sequence, String prefix) {
@@ -1043,6 +1048,98 @@ public class ClinicalRepository {
                            SET status = 'REFUNDED', version = version + 1, updated_at = now()
                          WHERE visit_id = :visitId AND status = 'UNPAID'
                         """).param("visitId", visitId).update();
+    }
+
+    // ---------------------------------------------------------------- 收费票据（G14）
+
+    private static final RowMapper<ChargeReceipt> RECEIPT_MAPPER = (rs, i) -> new ChargeReceipt(
+            rs.getObject("id", UUID.class), rs.getString("receipt_no"),
+            rs.getObject("charge_id", UUID.class), rs.getObject("visit_id", UUID.class),
+            rs.getBigDecimal("amount"), rs.getString("payment_method"), rs.getString("status"),
+            rs.getString("issued_by"), rs.getTimestamp("issued_at").toInstant(),
+            rs.getString("voided_by"),
+            rs.getTimestamp("voided_at") == null ? null : rs.getTimestamp("voided_at").toInstant(),
+            rs.getString("void_reason"),
+            rs.getInt("reprint_count"), rs.getLong("version"),
+            rs.getTimestamp("created_at").toInstant());
+
+    public void insertReceipt(ChargeReceipt r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.charge_receipt
+                            (id, receipt_no, charge_id, visit_id, amount, payment_method, status,
+                             issued_by, version)
+                        VALUES (:id, :no, :chargeId, :visitId, :amount,
+                                CAST(:method AS text), :status, :issuedBy, 0)
+                        """)
+                .param("id", r.id()).param("no", r.receiptNo()).param("chargeId", r.chargeId())
+                .param("visitId", r.visitId()).param("amount", r.amount())
+                .param("method", r.paymentMethod()).param("status", r.status())
+                .param("issuedBy", r.issuedBy()).update();
+    }
+
+    public Optional<ChargeReceipt> findReceipt(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, receipt_no, charge_id, visit_id, amount, payment_method, status,
+                               issued_by, issued_at, voided_by, voided_at, void_reason,
+                               reprint_count, version, created_at
+                          FROM clinical_svc.charge_receipt WHERE id = ?
+                        """).param(id).query(RECEIPT_MAPPER).optional();
+    }
+
+    /** 加行锁读取票据；重打/作废前必须调用。 */
+    public Optional<ChargeReceipt> lockReceipt(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, receipt_no, charge_id, visit_id, amount, payment_method, status,
+                               issued_by, issued_at, voided_by, voided_at, void_reason,
+                               reprint_count, version, created_at
+                          FROM clinical_svc.charge_receipt WHERE id = ? FOR UPDATE
+                        """).param(id).query(RECEIPT_MAPPER).optional();
+    }
+
+    /** 收费单当前有效票据（部分唯一索引保证最多一张）。 */
+    public Optional<ChargeReceipt> findActiveReceiptByCharge(UUID chargeId) {
+        return jdbc.sql("""
+                        SELECT id, receipt_no, charge_id, visit_id, amount, payment_method, status,
+                               issued_by, issued_at, voided_by, voided_at, void_reason,
+                               reprint_count, version, created_at
+                          FROM clinical_svc.charge_receipt
+                         WHERE charge_id = ? AND status = 'ISSUED'
+                        """).param(chargeId).query(RECEIPT_MAPPER).optional();
+    }
+
+    public List<ChargeReceipt> listReceipts(UUID visitId, int limit) {
+        return jdbc.sql("""
+                        SELECT id, receipt_no, charge_id, visit_id, amount, payment_method, status,
+                               issued_by, issued_at, voided_by, voided_at, void_reason,
+                               reprint_count, version, created_at
+                          FROM clinical_svc.charge_receipt
+                         WHERE visit_id = :visitId
+                         ORDER BY issued_at DESC, receipt_no DESC
+                         LIMIT :limit
+                        """).param("visitId", visitId).param("limit", limit)
+                .query(RECEIPT_MAPPER).list();
+    }
+
+    /** 重打：只累加次数（CAS 版本号，作废后不可重打）。 */
+    public boolean countReprint(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.charge_receipt
+                           SET reprint_count = reprint_count + 1, version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'ISSUED' AND version = :version
+                        """).param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 作废：必须写原因；作废后可为同一收费单换开新票。 */
+    public boolean voidReceipt(UUID id, long expectedVersion, String actor, String reason) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.charge_receipt
+                           SET status = 'VOID', voided_by = :actor, voided_at = now(),
+                               void_reason = :reason, version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ISSUED' AND version = :version
+                        """)
+                .param("actor", actor).param("reason", reason)
+                .param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     /**

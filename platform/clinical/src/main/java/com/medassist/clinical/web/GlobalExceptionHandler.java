@@ -23,16 +23,18 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
     protected HttpStatus statusOf(ErrorCode code) {
         return switch (code) {
             case NOT_FOUND, VISIT_NOT_FOUND, PATIENT_NOT_FOUND, ORDER_ITEM_NOT_FOUND,
-                 CHARGE_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 CHARGE_NOT_FOUND, CHARGE_RECEIPT_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
                  REGISTRATION_NO_SLOT, REGISTRATION_DUPLICATED,
                  VISIT_STATUS_INVALID, ORDER_STATUS_INVALID, CHARGE_STATUS_INVALID,
+                 CHARGE_RECEIPT_EXISTS, CHARGE_RECEIPT_STATUS_INVALID,
+                 CHARGE_RECEIPT_CHARGE_NOT_PAID,
                  // 转送未完成不是"参数错误"：是流程未走完，语义为业务冲突（结算被拒）
                  ORDER_TRANSFER_INCOMPLETE,
                  DRUG_STOCK_INSUFFICIENT, DRUG_BATCH_EXPIRED -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED -> HttpStatus.UNPROCESSABLE_ENTITY;
+            case VALIDATION_FAILED, CHARGE_RECEIPT_VOID_REASON_REQUIRED -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
