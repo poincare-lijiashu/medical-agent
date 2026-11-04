@@ -30,6 +30,8 @@ import com.medassist.clinical.domain.ClinicalModel.PharmacyChargeLink;
 import com.medassist.clinical.domain.ClinicalModel.PreopDiscussion;
 import com.medassist.clinical.domain.ClinicalModel.PreopVisit;
 import com.medassist.clinical.domain.ClinicalModel.ReceiptPush;
+import com.medassist.clinical.domain.ClinicalModel.ReceiptPushLedger;
+import com.medassist.clinical.domain.ClinicalModel.ReceiptPushSummary;
 import com.medassist.clinical.domain.ClinicalModel.ReportDelivery;
 import com.medassist.clinical.domain.ClinicalModel.ReportSnapshot;
 import com.medassist.clinical.domain.ClinicalModel.ReportSubscription;
@@ -1533,51 +1535,132 @@ public class ClinicalRepository {
                 .param(id).query(String.class).optional().orElse(null);
     }
 
-    // ---------------------------------------------------------------- 电子票据推送（G21）
+    // ---------------------------------------------------------------- 电子票据推送（G21 / G24）
 
     private static final RowMapper<ReceiptPush> RECEIPT_PUSH_MAPPER = (rs, i) ->
             new ReceiptPush(
                     rs.getObject("id", UUID.class),
                     rs.getObject("receipt_id", UUID.class),
-                    rs.getString("platform"), rs.getString("status"),
-                    rs.getInt("attempts"), rs.getString("external_no"),
-                    rs.getString("last_error"),
+                    rs.getString("platform"), rs.getString("vendor"),
+                    rs.getString("message_type"), rs.getString("template_version"),
+                    rs.getObject("original_push_id", UUID.class),
+                    rs.getString("status"), rs.getInt("attempts"),
+                    rs.getString("external_no"), rs.getString("last_error"),
                     rs.getTimestamp("pushed_at") == null ? null
                             : rs.getTimestamp("pushed_at").toInstant());
 
-    /** 推送占位：同一票据同一平台唯一，返回 false 表示已存在（幂等）。 */
+    private static final RowMapper<ReceiptPushLedger> RECEIPT_PUSH_LEDGER_MAPPER = (rs, i) ->
+            new ReceiptPushLedger(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("receipt_id", UUID.class),
+                    rs.getString("receipt_no"), rs.getBigDecimal("amount"),
+                    rs.getString("platform"), rs.getString("vendor"),
+                    rs.getString("message_type"), rs.getString("template_version"),
+                    rs.getString("status"), rs.getInt("attempts"),
+                    rs.getString("external_no"), rs.getString("last_error"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("pushed_at") == null ? null
+                            : rs.getTimestamp("pushed_at").toInstant());
+
+    private static final String RECEIPT_PUSH_COLUMNS = """
+            id, receipt_id, platform, vendor, message_type, template_version, original_push_id,
+            status, attempts, external_no, last_error, pushed_at
+            """;
+
+    /** 推送占位：同一票据 + 平台 + 报文类型唯一，返回 false 表示已存在（幂等）。 */
     public boolean insertReceiptPushIfAbsent(UUID id, UUID receiptId, String platform,
+                                             String vendor, String messageType,
+                                             String templateVersion, UUID originalPushId,
                                              String payload) {
         return jdbc.sql("""
                         INSERT INTO clinical_svc.receipt_push
-                            (id, receipt_id, platform, status, payload)
-                        VALUES (:id, :receiptId, :platform, 'PENDING', CAST(:payload AS jsonb))
-                        ON CONFLICT (receipt_id, platform) DO NOTHING
+                            (id, receipt_id, platform, vendor, message_type, template_version,
+                             original_push_id, status, payload)
+                        VALUES (:id, :receiptId, :platform, :vendor, :messageType, :templateVersion,
+                                CAST(:originalPushId AS uuid), 'PENDING', CAST(:payload AS jsonb))
+                        ON CONFLICT (receipt_id, platform, message_type) DO NOTHING
                         """)
                 .param("id", id).param("receiptId", receiptId).param("platform", platform)
+                .param("vendor", vendor).param("messageType", messageType)
+                .param("templateVersion", templateVersion).param("originalPushId", originalPushId)
                 .param("payload", payload)
                 .update() > 0;
     }
 
+    /** 默认查开具报文（历史调用方无需感知红冲）。 */
     public Optional<ReceiptPush> findReceiptPush(UUID receiptId, String platform) {
-        return jdbc.sql("""
-                        SELECT id, receipt_id, platform, status, attempts, external_no,
-                               last_error, pushed_at
+        return findReceiptPush(receiptId, platform, ReceiptPush.ISSUE);
+    }
+
+    public Optional<ReceiptPush> findReceiptPush(UUID receiptId, String platform,
+                                                 String messageType) {
+        return jdbc.sql("SELECT " + RECEIPT_PUSH_COLUMNS + """
                           FROM clinical_svc.receipt_push
                          WHERE receipt_id = :receiptId AND platform = :platform
+                           AND message_type = :messageType
                         """)
                 .param("receiptId", receiptId).param("platform", platform)
+                .param("messageType", messageType)
                 .query(RECEIPT_PUSH_MAPPER).optional();
     }
 
     public List<ReceiptPush> listReceiptPushes(UUID receiptId) {
-        return jdbc.sql("""
-                        SELECT id, receipt_id, platform, status, attempts, external_no,
-                               last_error, pushed_at
+        return jdbc.sql("SELECT " + RECEIPT_PUSH_COLUMNS + """
                           FROM clinical_svc.receipt_push
                          WHERE receipt_id = ?
                          ORDER BY created_at DESC
                         """).param(receiptId).query(RECEIPT_PUSH_MAPPER).list();
+    }
+
+    /**
+     * 对账台账：按推送时间区间 + 状态/报文类型/厂商筛选。
+     *
+     * <p>JOIN 票据表取票号与金额快照：推送记录本身只存报文，财务对账需要票面信息。
+     */
+    public List<ReceiptPushLedger> listReceiptPushLedger(OffsetDateTime from, OffsetDateTime to,
+                                                         String status, String messageType,
+                                                         String vendor, int limit) {
+        return jdbc.sql("""
+                        SELECT p.id, p.receipt_id, r.receipt_no, r.amount, p.platform, p.vendor,
+                               p.message_type, p.template_version, p.status, p.attempts,
+                               p.external_no, p.last_error, p.created_at, p.pushed_at
+                          FROM clinical_svc.receipt_push p
+                          JOIN clinical_svc.charge_receipt r ON r.id = p.receipt_id
+                         WHERE p.created_at >= :fromTs AND p.created_at < :toTs
+                           AND (CAST(:status AS text) IS NULL OR p.status = CAST(:status AS text))
+                           AND (CAST(:messageType AS text) IS NULL
+                                OR p.message_type = CAST(:messageType AS text))
+                           AND (CAST(:vendor AS text) IS NULL OR p.vendor = CAST(:vendor AS text))
+                         ORDER BY p.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .param("status", status).param("messageType", messageType)
+                .param("vendor", vendor).param("limit", limit)
+                .query(RECEIPT_PUSH_LEDGER_MAPPER).list();
+    }
+
+    /** 期间汇总：按状态计数；金额只统计开具且成功的报文，红冲不计入实收。 */
+    public ReceiptPushSummary summarizeReceiptPushes(OffsetDateTime from, OffsetDateTime to) {
+        return jdbc.sql("""
+                        SELECT count(*) AS total,
+                               count(*) FILTER (WHERE p.status = 'SENT') AS sent,
+                               count(*) FILTER (WHERE p.status = 'FAILED') AS failed,
+                               count(*) FILTER (WHERE p.status = 'PENDING') AS pending,
+                               count(*) FILTER (WHERE p.message_type = 'RED_FLUSH')
+                                   AS red_flush_count,
+                               COALESCE(sum(r.amount) FILTER (
+                                   WHERE p.message_type = 'ISSUE' AND p.status = 'SENT'), 0)
+                                   AS sent_amount
+                          FROM clinical_svc.receipt_push p
+                          JOIN clinical_svc.charge_receipt r ON r.id = p.receipt_id
+                         WHERE p.created_at >= :fromTs AND p.created_at < :toTs
+                        """)
+                .param("fromTs", from).param("toTs", to)
+                .query((rs, i) -> new ReceiptPushSummary(
+                        rs.getLong("total"), rs.getLong("sent"), rs.getLong("failed"),
+                        rs.getLong("pending"), rs.getLong("red_flush_count"),
+                        rs.getBigDecimal("sent_amount"))).single();
     }
 
     public void markReceiptPush(UUID id, String status, int attempts, String externalNo,

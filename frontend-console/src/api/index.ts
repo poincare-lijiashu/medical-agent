@@ -33,6 +33,8 @@ import type {
   ReportSubscription,
   ReportSubscriptionInput,
   ReceiptPush,
+  ReceiptPushLedger,
+  ReceiptPushSummary,
   SnapshotCapture,
   SnapshotList,
   KbAnswerResult,
@@ -200,7 +202,20 @@ export const clinicalApi = {
     post<ChargeReceipt>(`/clinical/receipts/${id}/void`, { reason }),
   /** 电子票据推送（G21）：已成功幂等返回，失败可重试。 */
   pushReceipt: (id: string) => post<ReceiptPush>(`/clinical/receipts/${id}/push`),
+  redFlushReceipt: (id: string, reason: string) =>
+    post<ReceiptPush>(`/clinical/receipts/${id}/red-flush`, { reason }),
   receiptPushes: (id: string) => get<ReceiptPush[]>(`/clinical/receipts/${id}/pushes`),
+  /** 电子票据对账台账与汇总（G24）：默认最近 7 天，最长 92 天。 */
+  receiptPushLedger: (params: {
+    from?: string
+    to?: string
+    status?: string
+    messageType?: string
+    vendor?: string
+    limit?: number
+  }) => get<ReceiptPushLedger[]>('/clinical/receipts/pushes', params),
+  receiptPushSummary: (params: { from?: string; to?: string }) =>
+    get<ReceiptPushSummary>('/clinical/receipts/pushes/summary', params),
   startVisit: (id: string) => post<Visit>(`/clinical/visits/${id}/start`),
   orders: (visitId: string) => get<VisitOrder[]>(`/clinical/visits/${visitId}/orders`),
   placeOrders: (

@@ -24,9 +24,19 @@ public final class ReceiptDtos {
     public record VoidReceiptReq(@NotBlank @Size(max = 200) String reason) {
     }
 
-    /** 电子票据推送结果（G21）。 */
-    public record ReceiptPushView(UUID id, UUID receiptId, String platform, String status,
-                                  int attempts, String externalNo, String lastError,
-                                  Instant pushedAt) {
+    /** 电子票据推送结果（G21 / G24）。 */
+    public record ReceiptPushView(UUID id, UUID receiptId, String platform, String vendor,
+                                  String messageType, String templateVersion,
+                                  UUID originalPushId, String status, int attempts,
+                                  String externalNo, String lastError, Instant pushedAt) {
+    }
+
+    /** 红冲电子票据：必须写明原因，红冲报文会携带原平台票据号。 */
+    public record RedFlushReq(@NotBlank @Size(max = 200) String reason) {
+    }
+
+    /** 电子票据推送期间汇总（G24）。 */
+    public record ReceiptPushSummaryView(long total, long sent, long failed, long pending,
+                                         long redFlushCount, java.math.BigDecimal sentAmount) {
     }
 }

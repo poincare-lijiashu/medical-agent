@@ -229,16 +229,48 @@ export interface ReportSubscriptionInput {
   version?: number | null
 }
 
-/** 电子票据推送记录（G21）。 */
+/** 电子票据推送记录（G21 / G24）：开具与红冲是两条独立报文。 */
 export interface ReceiptPush {
   id: string
   receiptId: string
   platform: string
+  vendor: string
+  messageType: 'ISSUE' | 'RED_FLUSH'
+  templateVersion: string
+  originalPushId: string | null
   status: 'PENDING' | 'SENT' | 'FAILED'
   attempts: number
   externalNo: string | null
   lastError: string | null
   pushedAt: string | null
+}
+
+/** 电子票据对账行：带票号与金额快照。 */
+export interface ReceiptPushLedger {
+  id: string
+  receiptId: string
+  receiptNo: string
+  amount: number
+  platform: string
+  vendor: string
+  messageType: 'ISSUE' | 'RED_FLUSH'
+  templateVersion: string
+  status: 'PENDING' | 'SENT' | 'FAILED'
+  attempts: number
+  externalNo: string | null
+  lastError: string | null
+  createdAt: string
+  pushedAt: string | null
+}
+
+/** 电子票据推送期间汇总（金额只统计开具成功报文）。 */
+export interface ReceiptPushSummary {
+  total: number
+  sent: number
+  failed: number
+  pending: number
+  redFlushCount: number
+  sentAmount: number
 }
 
 export interface Ward {

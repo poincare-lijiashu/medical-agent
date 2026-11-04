@@ -79,6 +79,15 @@ medassist:
     starttls: ${REPORT_EMAIL_STARTTLS:false}
     ssl: ${REPORT_EMAIL_SSL:false}
     timeout-ms: ${REPORT_EMAIL_TIMEOUT_MS:5000}
+  # 电子票据厂商报文（G21/G24）：开具与红冲共用同一平台与密钥
+  receipt-push:
+    base-url: ${RECEIPT_PUSH_BASE_URL:}
+    secret: ${RECEIPT_PUSH_SECRET:}
+    allowed-hosts: ${RECEIPT_PUSH_ALLOWED_HOSTS:}
+    timeout-ms: ${RECEIPT_PUSH_TIMEOUT_MS:3000}
+    vendor: ${RECEIPT_PUSH_VENDOR:FINANCE}
+    template-version: ${RECEIPT_PUSH_TEMPLATE_VERSION:1.0}
+    hospital-code: ${RECEIPT_PUSH_HOSPITAL_CODE:}
 
 management:
   endpoints:

@@ -473,10 +473,32 @@ public final class ClinicalModel {
                                  Instant sentAt) {
     }
 
-    /** 电子票据推送记录（G21）：同一票据同一平台唯一。 */
-    public record ReceiptPush(UUID id, UUID receiptId, String platform, String status,
-                              int attempts, String externalNo, String lastError,
+    /**
+     * 电子票据推送记录（G21 / G24）。
+     *
+     * <p>同一票据同一平台同一报文类型唯一：开具与红冲是两条独立报文。
+     * 红冲通过 {@code originalPushId} 指向原开具记录，并携带原平台票据号。
+     */
+    public record ReceiptPush(UUID id, UUID receiptId, String platform, String vendor,
+                              String messageType, String templateVersion, UUID originalPushId,
+                              String status, int attempts, String externalNo, String lastError,
                               Instant pushedAt) {
+
+        public static final String ISSUE = "ISSUE";
+        public static final String RED_FLUSH = "RED_FLUSH";
+    }
+
+    /** 电子票据推送对账行（G24）：带票据号与金额，供财务按日期对账。 */
+    public record ReceiptPushLedger(UUID id, UUID receiptId, String receiptNo, BigDecimal amount,
+                                    String platform, String vendor, String messageType,
+                                    String templateVersion, String status, int attempts,
+                                    String externalNo, String lastError, Instant createdAt,
+                                    Instant pushedAt) {
+    }
+
+    /** 电子票据推送汇总（G24）：按期间统计，金额只统计开具成功报文。 */
+    public record ReceiptPushSummary(long total, long sent, long failed, long pending,
+                                     long redFlushCount, BigDecimal sentAmount) {
     }
 
     /**
