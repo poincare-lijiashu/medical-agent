@@ -1,4 +1,4 @@
-# MedAssist 多智能体全面评测意见书（2026-11-03）
+﻿# MedAssist 多智能体全面评测意见书（2026-11-03）
 
 > **范围**：本项目历史全部交付任务，重点覆盖 2026-11-02 至 2026-11-03 新落地的六项能力：药房工作台、医技工作台、医保结算工作台、医保目录与报盘、DRG/DIP 分组、系统管理（账号授权 + 审计）；并回溯其依赖的 auth / common / clinical 既有实现。
 > **方式**：4 个子智能体分维度深读源码（单并发依次派发，避免网关 504），主控汇总去重、按"必须改 / 应改 / 上线必需 / 可延后 / 门禁"五级归档。
@@ -13,11 +13,11 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G55 编码更正四眼同口径）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1672 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
+- **HEAD**：以 `git log -1` 为准（本轮 G62 刷新拒绝可落库 + 登录限流原子化）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1691 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
 - **多院区口径（G51）**：`X-Campus` 缺失不再放开全院区，一律收敛主院区；`*` 是唯一的跨院区标记（网关对 ADMIN/QC 在无 campuses 声明时下发）；写入院区固定为主院区优先、否则 UUID 字典序最小。
 - **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V73、tech V13、pharmacy V20、emr V25、insurance V20、material V5、clinical V56（各服务独立 schema）。
+- **数据库**：auth V74、tech V13、pharmacy V20、emr V26、insurance V21、material V5、clinical V56（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
 - **演示账号**：`admin01 / Med@2026`（ADMIN，主院区+东院区），`doctor01`（DOCTOR，主院区）、`pharm01`、`pharm02`（PHARMACIST）、`qc01`（主院区+东院区）同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。院区冒烟脚本每次会创建 `east*` / `eastadm*`（口令 `East@2026x`，仅东院区）用于隔离验证。
@@ -116,6 +116,13 @@
 | G53 | CA 生产防退化与报盘院区收敛 | CA 适配层加构造期守卫：`prod`/`production` profile 下 mode 非 vendor、或 `CA_SECRET`/`CA_API_KEY` 为空 → 拒绝启动（原先漏配一行即静默用对称 HMAC 冒充 CA 签名）；`secret()` 不再回退源码硬编码常量，缺密钥时拒绝签名；医保报盘 `listConfirmedBills` 与两个计数查询接受 `campusCsv`，生成批次只纳入调用方可见院区清单，报文下载校验批次内清单院区（越权按批次不存在 48403 同码）。新增 3 项单测，全量 179 类 / 1670 项通过，院区冒烟 73 项复跑全过 |
 | G54 | 四眼改按账号主键判定 | emr V24 为 `record_change_request` 增加 `requester_id` / `reviewer_id` 与索引；建申请时由 `X-User-Id` 写入申请人主键；审批通过/驳回按主键判定——缺 `requester_id`（V24 前历史数据）直接拒绝审批（fail-closed），主键相同即自审自批。原先比较用户名，账号重建或同名账号即可绕过。记录审批人主键列已预留。新增 1 项单测（缺主键拒绝），全量 179 类 / 1671 项通过，院区冒烟 73 项复跑全过 |
 | G55 | 编码更正四眼同口径 | emr V25 为 `coding_correction` 增加 `requester_id` / `reviewer_id` 与索引；提交更正时由 `X-User-Id` 写入申请人主键；审批通过/驳回按主键判定，缺主键（V25 前历史数据）fail-closed 拒绝。编码更正决定 DRG 入组与首页上报内容，原先的用户名比较同样可被账号重建绕过。至此 §4.6 两处四眼（文书修改 + 编码更正）全部改为主键判定。新增 1 项单测，全量 179 类 / 1672 项通过，院区冒烟 73 项复跑全过 |
+| G56 | 实时结算"一单一次 SETTLE"与投递抢占 | insurance V21：状态机加 `DELIVERING`，并建部分唯一索引 `ux_realtime_settle_once`（同一清单最多一笔 PENDING/DELIVERING/SETTLED 的 SETTLE），历史重复交易收敛为失败并留原因。服务层 `submit` 对 SETTLE 先按清单查既有交易：已成功幂等返回、换请求号一律 409 要求对原交易重试（原先换 requestId 即可二次出账、并绕过尝试上限）；`deliver` 改为"先 CAS 抢占 PENDING/FAILED → DELIVERING 再外呼"，并发 submit/retry 只有一个线程真正打省局接口，抢占失败按库内最新状态返回；回写带"仍在投递态 + 版本一致"双条件，`markRealtime` 返回值不再被忽略——写回冲突显式 409，不再出现"省局已出账、本地 FAILED"。新增 4 项单测，全量 179 类 / 1681 项通过，院区冒烟 73 项复跑全过 |
+| G57 | 静配与窗口发药互斥 + 发药单院区校验 | `PrescriptionService.dispense` 在处方行锁内检查静配单（非 REJECTED 即拒绝窗口发药），`PivasService.create` 反向检查是否已窗口发药——堵住"建静配单 → 窗口发药 → 静配配置"两条 FEFO 各自扣库存、患者双份拿药；`DispenseController` 的 detail/returnDrug/billing-retry 全部接 `DataScope` 并过新增的 `PrescriptionAccessGuard.requireDispense`（先反查所属处方再比院区，越权与不存在同码 43405）。新增 5 项单测，全量 179 类 / 1681 项通过，院区冒烟 73 项复跑全过 |
+| G58 | 耗材退回按"未追溯"封顶 + 出库幂等比对内容 | `deptReturnableQuantity` 定义可退上限 = 出库未追溯量 + 调拨调入 − 调拨调出 − 已退回/在审退回（已追溯＝已用到患者或植入，不得回流中心库）；建单预校验、审批在行锁内按 `excludeReturnId` 复核（排除本单自身占用，防两张退回单分别审批同一批未追溯耗材）。出库幂等重放改为按耗材汇总比对明细，内容不一致 409，不再把旧出库单静默当本次结果返回。新增 3 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
+| G59 | 抗菌药物按院区收敛 + PHI 掩码 | 抗菌药物分级统计、医师/药品排行、超疗程、待审列表与计数全部按处方院区过滤（SQL 层 `campus_id`）；`pending`/`stats` 的 `patientNo` 走 `DataScope.maskPatientNo`（原先明文）；`approval`/`approve` 接 `DataScope` 并过 `PrescriptionAccessGuard`，跨院区与不存在同码 404（原先主院区药师可审批东院区处方）。新增 2 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
+| G60 | 病案首页补院区归属 | emr V26 为 `record_homepage` 增加 `campus_id`（存量按同 schema 的 `medical_record.visit_id` 回溯院区，回溯不到落主院区；不依赖 clinical schema，避免迁移顺序耦合），NOT NULL + 索引；生成首页按 `scope.campusForWrite()` 固化；`EmrAccessGuard.requireHomepage` 改为 dept + campus 双条件（与 `requireRecord` 同口径，缺院区 fail-closed）；列表 SQL 按院区收敛。原先同科室即可跨院区读取首页姓名/诊断/费用/手术。新增 3 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
+| G61 | 移动护理院区/病区归属校验 | 生成任务、手工建单、扫码核对、异常登记、扫码记录五个入口统一经 `VisitAccessGuard.requireAdmission`（任务所属就诊的科室 + 院区，越权与不存在同码）；任务列表与看板把科室（`deptCodes`）与院区条件下推 SQL，过滤发生在 `LIMIT` 之前，不再"先截断再内存过滤"。原先他病区护士可为任意患者生成给药任务并扫码核对。新增 2 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
+| G62 | 刷新拒绝可落库 + 登录限流原子化 | `AuthService.refresh` 改为 `@Transactional(noRollbackFor = BusinessException)`：账号停用分支的"撤销全部刷新令牌 + REFRESH_DENIED 审计"、重放分支的 REFRESH_REPLAY 审计不再随异常回滚（原先"停用即全端下线"与盗用留痕都被抹掉），数据库异常仍回滚。登录限流从"先查计数 → bcrypt → 后记失败"改为 auth V74 `login_throttle` 桶表原子占位：`INSERT ... ON CONFLICT DO UPDATE` 单语句自增（行锁串行化），登录成功退还占位，窗口过期自动重置，并发请求无法在 record 落库前穿透阈值。新增 6 项限流单测（改写），全量 179 类 / 1691 项通过，院区冒烟 73 项复跑全过 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 

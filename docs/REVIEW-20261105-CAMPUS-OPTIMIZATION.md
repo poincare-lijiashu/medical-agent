@@ -50,9 +50,55 @@
 |---|---|---|
 | §4.6（编码更正部分） | `coding_correction` 四眼仍比较用户名，账号重建即可自审自批；编码更正决定 DRG 入组与首页上报内容 | emr V25 加 `requester_id`/`reviewer_id`；提交写主键；审批缺主键 fail-closed 拒绝。**至此 §4.6 两处四眼全部闭环** |
 
+### G56 批次已关闭（代码 commit `2f2117e`，insurance V21 已执行）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §4.1 | 同一 CONFIRMED 清单换 `requestId` 即可新建 PENDING 再次出账，库级唯一形同虚设 | V21 建部分唯一索引 `ux_realtime_settle_once`（同一清单最多一笔 PENDING/DELIVERING/SETTLED 的 SETTLE），历史重复收敛为 FAILED 并留原因；`submit` 先按清单查既有交易：已成功幂等返回，换号一律 409 要求对原交易重试（同时堵住换号绕过尝试上限） |
+| §4.2 | deliver 无边锁/抢占，并发 submit/retry 双投递；`markRealtime` 返回值被忽略，写回冲突静默丢成功结果 | deliver 改为先 CAS 抢占 `PENDING/FAILED → DELIVERING` 再外呼（崩溃遗留的 DELIVERING 超 10 分钟可被重试接管），抢占失败按库内最新状态返回；回写加"仍在投递态 + 版本一致"双条件，失败显式 409，不再出现"省局已出账、本地 FAILED" |
+
+### G57 批次已关闭（代码 commit `7d36db6`）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §3.1 | 静配与窗口发药双出口无互斥，"建静配单 → 窗口发药 → prepare"两条 FEFO 各自扣库存 | `dispense` 在处方行锁内检查静配单（非 REJECTED 即拒绝），`PivasService.create` 反向检查是否已窗口发药；静配单被驳回后仍可窗口发药 |
+| §3.2 | `DispenseController` 三接口无 guard，可跨院区查发药明细、退药、触发计费重试 | 三接口接 `DataScope` + 新增 `PrescriptionAccessGuard.requireDispense`（先反查所属处方再比院区，越权与不存在同码 `DISPENSE_NOT_FOUND`） |
+
+### G58 批次已关闭（代码 commit `d7e7f69`）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §3.3 | 耗材退回只校验科室余额，已追溯（已用/植入）耗材可全额回流中心库、库存虚增 | 可退上限 = 出库未追溯量 + 调拨调入 − 调拨调出 − 已退回/在审退回；建单预校验、审批行锁内按 `excludeReturnId` 复核（排除本单占用） |
+| §3.4 | 出库幂等命中只回放旧单，不比对内容，不同请求被静默当成功 | 重放时按耗材汇总比对明细数量，不一致 409 要求换请求号 |
+
+### G59 批次已关闭（代码 commit `da5fc02`）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.4 | 抗菌药物统计/待审 SQL 无院区条件，主院区药师可见并可审批东院区处方；`patientNo` 明文 | 五个统计/待审查询与计数按处方 `campus_id` 收敛；`patientNo` 走 `maskPatientNo`；`approval`/`approve` 过 `PrescriptionAccessGuard` |
+
+### G60 批次已关闭（代码 commit `e038f84`，emr V26 已执行）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.10 | `record_homepage` 无 `campus_id`，`requireHomepage` 只校科室，同科室即可跨院区读首页 PHI | V26 补 `campus_id`（存量按同 schema `medical_record.visit_id` 回溯，避免跨服务迁移顺序耦合），生成时按写入院区固化；guard 改 dept + campus 双条件（缺院区 fail-closed）；列表 SQL 按院区收敛 |
+
+### G61 批次已关闭（代码 commit `b36f7f3`）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §2.9 | 移动护理只做权限点 + 掩码，他病区护士可为任意患者生成给药任务并"扫码核对" | 五个写/读入口统一过 `VisitAccessGuard.requireAdmission`；列表与看板把 `deptCodes` + 院区条件下推 SQL（LIMIT 之前生效） |
+
+### G62 批次已关闭（代码 commit `36d1283`，auth V74 已执行）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §1.1 | `refresh()` 标 `@Transactional`，停用账号的"撤销全部刷新令牌"与 REFRESH_REPLAY 审计随异常回滚 | 改 `@Transactional(noRollbackFor = BusinessException.class)`：业务拒绝分支先落库再抛，数据库异常仍回滚 |
+| §1.4 | 登录限流是"check 计数 → bcrypt（~100ms）→ record"两步，并发可穿透 | auth V74 `login_throttle` 桶表：`INSERT ... ON CONFLICT DO UPDATE` 原子占位（行锁串行化），超限即 429，登录成功退还占位，窗口过期自动重置。`login_attempt` 降级为纯审计明细 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项共 32 条，按 §7.2 第 1–4 批推进；其中**真库集成测试门禁**应最先补——当前 1672 项为 mock 级，修完无法验证。
+其余 [必须] 项共 21 条，按 §7.2 第 1–4 批推进；其中**真库集成测试门禁**应最先补——当前 1691 项为 mock 级，修完无法验证。
 
 ---
 
