@@ -1,5 +1,6 @@
 package com.medassist.empi.repo;
 
+import com.medassist.common.time.BusinessTime;
 import com.medassist.empi.domain.Patient;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -51,10 +52,16 @@ public class PatientRepository {
         this.jdbc = jdbc;
     }
 
-    /** 生成院内患者号：P + 日期 + 6 位序列（sequence 全局单调，便于人工核对）。 */
+    /**
+     * 生成院内患者号：P + 日期 + 6 位序列（sequence 全局单调，便于人工核对）。
+     *
+     * <p>日期取业务时区（{@link BusinessTime#today()}），与就诊号/病历号/结算单号同口径。
+     * 原来用 {@code LocalDate.now()}（JVM 默认时区）：容器按 UTC 运行时，本地 00:00–08:00
+     * 建的患者号会带前一天的日期，与同日其他业务单号口径不一致（G76）。
+     */
     public String nextPatientNo() {
         Long seq = jdbc.sql("SELECT nextval('empi_svc.patient_no_seq')").query(Long.class).single();
-        return "P" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+        return "P" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
                 + String.format("%06d", seq);
     }
 

@@ -363,12 +363,18 @@ public class ConsentService {
                 t.updatedAt(), t.version());
     }
 
+    /**
+     * 渲染同意书正文。
+     *
+     * <p>{@code {{date}}} 取业务时区（G76）：这是患者签署时看到的日期，
+     * 也是日后举证"哪天签的"的依据，不能随容器默认时区漂移。
+     */
     private static String render(String template, String patientName, String procedure,
                                  String doctorName) {
         return template.replace("{{patientName}}", patientName)
                 .replace("{{procedureName}}", procedure)
                 .replace("{{doctorName}}", doctorName == null ? "" : doctorName)
-                .replace("{{date}}", LocalDate.now().toString());
+                .replace("{{date}}", BusinessTime.today().toString());
     }
 
     private static String normalizeStatus(String status, Set<String> allowed) {

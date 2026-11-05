@@ -189,9 +189,16 @@
 |---|---|---|
 | §4 建议 9（锁内调下游 HTTP） | `RecordService.sign(caSign=true)` 先 `lockRecord` 再在同一事务里调 CA 厂商，`ConsentService.sign(caSign=true)` 同样先 `lockConsent` 再外呼：厂商慢几秒，这份病历/同意书的行锁就占几秒，同单据的签名/修订/归档/撤销全部排队，数据库连接也被一并占住。这与 insurance deliver 已修的"锁内 HTTP"是同一反模式 | 改为「**无锁快照 → 锁外调 CA → 短事务复核并落库**」：`CaSignatureService` 拆成 `preSign`（只外呼，不落库）与 `persist`（落台账 + 审计，调用方已持锁）。`RecordService` 不再对 CA 路径标注 `@Transactional`，改用 `TransactionTemplate` 显式划分三个阶段；锁内用同一 `planSignature` 复核级别推进/签署人/状态，并比对内容哈希与预签时一致，不一致 409 要求重签（绝不把"签的是旧内容"的证书落到新版本）。`ConsentService` 同理：正文与哈希创建时固化，锁内只复核草稿状态与 version CAS。事务边界从注解改为显式模板后，原先 `sign(id, actor)` / `sign(id, level, actor)` 因自调用**实际未开事务**的隐患一并消除。**反证**：单测断言 CA 抛错时 `lockRecord`/`lockConsent` 与任何写操作都未被调用；锁内哈希漂移返回 409 且不写签名与 CA 台账。真实链路：病历 `caSign=true` 签发 → 台账 1 条（`MOCK-*` / HMAC-SHA256 / AUTHOR）→ 验签 VALID；同意书 CA 签署 → `signMethod=CA`、证书序列号 `MOCK-*`、`:verify` 哈希与签名双 True。冒烟 `emr_smoke`、`emr_homepage_smoke`、`campus_isolation`(77) 全 PASS |
 
+### G76 批次已关闭（时间口径统一到业务时区 + 审计不再"伪装成正常记录"，mock 182 类 / 1727 项全绿）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| 时间口径漂移（§7.2 第 5 批） | 业务日期的取法三套并存：①`PatientRepository.nextPatientNo` 用 `LocalDate.now()`（JVM 默认时区，容器通常 UTC）；②`ConsentRepository.nextConsentNo` 用 SQL `to_char(now())`（数据库会话时区）；③`ConsentService` 渲染同意书 `{{date}}` 用 `LocalDate.now()`。而就诊号/病历号/首页号/结算单号/入库出库单号全部走 `BusinessTime.today()`。后果：UTC 容器下每天 00:00–08:00 建的患者号带前一天日期；同意书号与病历号跨零点可能不同日；**患者签署页上印的日期本身会错**，而这是日后举证的依据 | 三处全部统一到 `BusinessTime.today()`（会话时区依赖也从 SQL 里移除）。**反证（真实链路）**：把 empi/emr 以 `BUSINESS_ZONE=Pacific/Honolulu` 启动（业务日 2026-11-04，JVM 本地日 2026-11-05）→ 新建患者 `P20261104000656`、同意书 `IC20261104000007`、正文渲染 `Signed on 2026-11-04`；恢复默认时区后冒烟全绿。静态不变量：`src/main` 下再无 `LocalDate.now()`/`to_char(now())` 的业务用法（仅剩 `BusinessTime` 自身与显式带时区的 `LocalDate.now(BusinessTime.zone())`）。冒烟 `empi_patient_smoke`、`emr_smoke`、`emr_homepage_smoke`、`campus_isolation`(77)、`platform_smoke` 全 PASS |
+| 解析吞错（审计部分） | `ConsultationService.audit` 在序列化失败时写入 `{"consultationNo":""}`——这条审计看起来就是"一次会诊号为空但流程正常"的会诊，与真实故障无法区分；其余 8 处同类兜底都写 `_detail_serialize_failed` 标记 | 统一为 `{"_detail_serialize_failed":true}`，与本仓审计口径一致 |
+
 ### 未处理（下一批）
 
-§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、解析吞错、时间口径漂移、worker 多实例假设。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、解析吞错（其余域）、worker 多实例假设。
 
 ---
 

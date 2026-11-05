@@ -189,7 +189,9 @@ public class ConsultationService {
         try {
             json = JSON.writeValueAsString(payload);
         } catch (RuntimeException e) {
-            json = "{\"consultationNo\":\"\"}";
+            // 序列化失败不能让审计看起来像"会诊号为空的一次正常会诊"（G76），
+            // 统一用显式标记，与其他域的审计口径一致
+            json = "{\"_detail_serialize_failed\":true}";
         }
         repo.logChange(actor, action, "CONSULTATION", c.id().toString(), json);
     }

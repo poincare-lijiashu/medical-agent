@@ -1,5 +1,6 @@
 package com.medassist.emr.repo;
 
+import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.ConsentRecord;
 import com.medassist.emr.domain.EmrModel.ConsentTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Repository;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -200,13 +202,18 @@ public class ConsentRepository {
                 .optional();
     }
 
+    /**
+     * 生成同意书号：IC + 日期 + 6 位序列。
+     *
+     * <p>原实现用 SQL 的 {@code to_char(now())}，日期取决于数据库会话时区——
+     * 与病历号/首页号/结算单号的业务时区口径不一致，跨零点前后两份文书可能落在不同日期（G76）。
+     * 现在统一在 Java 侧取 {@link BusinessTime#today()}。
+     */
     public String nextConsentNo() {
-        return jdbc.sql("""
-                        SELECT 'IC' || to_char(now(), 'YYYYMMDD')
-                               || lpad(nextval('emr_svc.consent_no_seq')::text, 6, '0')
-                        """)
-                .query(String.class)
-                .single();
+        Long seq = jdbc.sql("SELECT nextval('emr_svc.consent_no_seq')")
+                .query(Long.class).single();
+        return "IC" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq == null ? 0 : seq);
     }
 
     public Optional<ConsentRecord> findConsent(UUID id) {
