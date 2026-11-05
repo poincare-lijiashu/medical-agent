@@ -10,6 +10,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
 import com.medassist.pharmacy.domain.PharmacyModel.NarcoticRegister;
+import com.medassist.pharmacy.domain.PharmacyModel.PivasOrder;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionAudit;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
@@ -314,6 +315,14 @@ public class PrescriptionService {
         if (repo.findDispenseByPrescription(prescriptionId).isPresent()) {
             throw new BusinessException(ErrorCode.CONFLICT, "该处方已发过药，不能重复发药");
         }
+        // 出口互斥（G57）：持有处方行锁时判定静配单，堵住"建静配单→窗口发药→静配配置"双扣库存
+        repo.findPivasOrderByPrescription(prescriptionId).ifPresent(order -> {
+            if (!PivasOrder.REJECTED.equals(order.status())) {
+                throw new BusinessException(ErrorCode.PRESCRIPTION_STATUS_INVALID,
+                        "该处方已进入静配中心（静配单 " + order.orderNo() + "，状态 "
+                                + order.status() + "），不能窗口发药");
+            }
+        });
         requireAntibioticApproval(rx);
 
         List<PrescriptionItem> items = repo.listPrescriptionItems(prescriptionId);

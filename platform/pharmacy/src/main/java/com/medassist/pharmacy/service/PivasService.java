@@ -69,6 +69,11 @@ public class PivasService {
         if (repo.findPivasOrderByPrescription(rx.id()).isPresent()) {
             throw new BusinessException(ErrorCode.PIVAS_ORDER_EXISTS);
         }
+        // 出口互斥（G57）：持有处方行锁时判定是否已窗口发药，防止静配与窗口各扣一次库存
+        if (repo.findDispenseByPrescription(rx.id()).isPresent()) {
+            throw new BusinessException(ErrorCode.PIVAS_PRESCRIPTION_INVALID,
+                    "该处方已在药房窗口发药，不能再进入静配中心");
+        }
         List<PrescriptionItem> rxItems = repo.listPrescriptionItems(rx.id());
         if (rxItems.isEmpty()) {
             throw new BusinessException(ErrorCode.PIVAS_PRESCRIPTION_INVALID, "处方没有明细，不能进入静配中心");

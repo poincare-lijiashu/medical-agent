@@ -131,6 +131,23 @@ class PivasServiceTest {
     }
 
     @Test
+    @DisplayName("G57 出口互斥：处方已窗口发药 → 不能再进静配中心")
+    void createRejectsDispensedPrescription() {
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED)));
+        when(repo.findPivasOrderByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.of(
+                new com.medassist.pharmacy.domain.PharmacyModel.Dispense(UUID.randomUUID(),
+                        "DP20261104000001", rxId, "pharm01", null,
+                        com.medassist.pharmacy.domain.PharmacyModel.Dispense.DISPENSED,
+                        new java.math.BigDecimal("10.00"), java.time.Instant.now(), 0L,
+                        com.medassist.pharmacy.domain.PharmacyModel.Dispense.BILLING_NONE)));
+
+        assertCode(() -> service.create(new CreatePivasOrderReq(rxId, null, null, null, null, null),
+                "pharm01"), ErrorCode.PIVAS_PRESCRIPTION_INVALID);
+        verify(repo, never()).insertPivasOrder(any());
+    }
+
+    @Test
     @DisplayName("建单：优先级非法 → 422")
     void createRejectsInvalidPriority() {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED)));

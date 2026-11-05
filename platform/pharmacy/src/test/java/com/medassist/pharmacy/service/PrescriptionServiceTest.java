@@ -9,6 +9,7 @@ import com.medassist.pharmacy.domain.PharmacyModel.DispenseItem;
 import com.medassist.pharmacy.domain.PharmacyModel.DispenseReturn;
 import com.medassist.pharmacy.domain.PharmacyModel.Drug;
 import com.medassist.pharmacy.domain.PharmacyModel.DrugBatch;
+import com.medassist.pharmacy.domain.PharmacyModel.PivasOrder;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
 import com.medassist.pharmacy.domain.PharmacyModel.PrescriptionItem;
 import com.medassist.pharmacy.repo.PharmacyRepository;
@@ -500,6 +501,57 @@ class PrescriptionServiceTest {
         verify(repo).deductBatch(far.id(), 2);
         // 跨两个批次 → 两条发药明细
         verify(repo, times(2)).insertDispenseItem(any(DispenseItem.class));
+    }
+
+    @Test
+    @DisplayName("G57 出口互斥：处方已在静配中心（未驳回）→ 拒绝窗口发药，且不扣库存")
+    void dispenseRejectsWhenPivasOrderActive() {
+        PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
+                amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 5, "盒",
+                null, null, null, amoxicillin.price(), new BigDecimal("62.50"), null, null, null, null);
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
+                new BigDecimal("62.50"), 3L)));
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.findPivasOrderByPrescription(rxId)).thenReturn(Optional.of(pivasOrder(
+                PivasOrder.PREPARED)));
+        when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
+
+        assertThatThrownBy(() -> service.dispense(rxId, null, "pharm01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.PRESCRIPTION_STATUS_INVALID);
+        verify(repo, never()).deductBatch(any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("G57 出口互斥：静配单已驳回 → 允许窗口发药")
+    void dispenseAllowsAfterPivasRejected() {
+        DrugBatch only = batch("B-1", 10, 30);
+        PrescriptionItem item = new PrescriptionItem(UUID.randomUUID(), rxId, drugId,
+                amoxicillin.drugCode(), amoxicillin.name(), amoxicillin.spec(), 5, "盒",
+                null, null, null, amoxicillin.price(), new BigDecimal("62.50"), null, null, null, null);
+        when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.APPROVED,
+                new BigDecimal("62.50"), 3L)));
+        when(repo.findDispenseByPrescription(rxId)).thenReturn(Optional.empty());
+        when(repo.findPivasOrderByPrescription(rxId)).thenReturn(Optional.of(pivasOrder(
+                PivasOrder.REJECTED)));
+        when(repo.listPrescriptionItems(rxId)).thenReturn(List.of(item));
+        when(repo.findDrug(drugId)).thenReturn(Optional.of(amoxicillin));
+        when(repo.listAvailableBatches(eq(drugId), any(LocalDate.class))).thenReturn(List.of(only));
+        when(repo.deductBatch(any(), anyInt())).thenReturn(true);
+        when(repo.updatePrescriptionStatus(eq(rxId), eq(Prescription.APPROVED),
+                eq(Prescription.DISPENSED), eq(3L), eq(null), eq(null))).thenReturn(true);
+
+        DispenseView view = service.dispense(rxId, null, "pharm01");
+
+        assertThat(view.dispense().dispenseNo()).isEqualTo("DP20261031000001");
+    }
+
+    private PivasOrder pivasOrder(String status) {
+        return new PivasOrder(UUID.randomUUID(), "PIV20261031000001", rxId, "RX20261031000001",
+                patientId, "P20261031000001", null, null, null, PivasOrder.PRIORITY_NORMAL, status,
+                null, null, "阿莫西林×5盒", null, null, null, null, null, null, null, null,
+                "pharm01", 0L, Instant.now());
     }
 
     @Test

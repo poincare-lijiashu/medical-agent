@@ -37,4 +37,24 @@ public class PrescriptionAccessGuard {
             throw new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND);
         }
     }
+
+    /**
+     * 发药单级校验（G57）：先反查所属处方再比院区。
+     *
+     * <p>越权与不存在统一 {@code DISPENSE_NOT_FOUND}：404 不确认发药单是否存在，
+     * 避免通过发药单号枚举其他院区的发药明细。
+     */
+    public void requireDispense(DataScope scope, UUID dispenseId) {
+        if (scope.allCampuses()) {
+            return;
+        }
+        UUID prescriptionId = repo.findDispensePrescriptionId(dispenseId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.DISPENSE_NOT_FOUND));
+        boolean visible = repo.findPrescriptionCampus(prescriptionId)
+                .map(scope::canSeeCampus)
+                .orElse(false);
+        if (!visible) {
+            throw new BusinessException(ErrorCode.DISPENSE_NOT_FOUND);
+        }
+    }
 }

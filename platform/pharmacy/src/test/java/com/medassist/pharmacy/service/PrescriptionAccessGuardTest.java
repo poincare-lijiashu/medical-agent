@@ -76,4 +76,36 @@ class PrescriptionAccessGuardTest {
                                 .isEqualTo(ErrorCode.PRESCRIPTION_NOT_FOUND));
         verify(repo).findPrescriptionCampus(rxId);
     }
+
+    @Test
+    @DisplayName("G57 发药单：跨院区按发药单 404，不泄露处方是否存在")
+    void rejectsOtherCampusDispense() {
+        UUID dispenseId = UUID.randomUUID();
+        when(repo.findDispensePrescriptionId(dispenseId)).thenReturn(Optional.of(rxId));
+        when(repo.findPrescriptionCampus(rxId)).thenReturn(Optional.of(campusMain));
+
+        assertThatThrownBy(() -> guard.requireDispense(
+                DataScope.of("pharm02", Set.of(), true, Set.of(campusEast), false, true), dispenseId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        org.assertj.core.api.Assertions.assertThat(e.errorCode())
+                                .isEqualTo(ErrorCode.DISPENSE_NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("G57 发药单：同院区放行；发药单不存在同码 404")
+    void allowsSameCampusDispenseAndRejectsMissing() {
+        UUID dispenseId = UUID.randomUUID();
+        DataScope sameCampus = DataScope.of("pharm01", Set.of(), true, Set.of(campusMain), false, true);
+        when(repo.findDispensePrescriptionId(dispenseId)).thenReturn(Optional.of(rxId));
+        when(repo.findPrescriptionCampus(rxId)).thenReturn(Optional.of(campusMain));
+
+        guard.requireDispense(sameCampus, dispenseId);
+
+        UUID missing = UUID.randomUUID();
+        when(repo.findDispensePrescriptionId(missing)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> guard.requireDispense(sameCampus, missing))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        org.assertj.core.api.Assertions.assertThat(e.errorCode())
+                                .isEqualTo(ErrorCode.DISPENSE_NOT_FOUND));
+    }
 }

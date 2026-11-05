@@ -2,8 +2,10 @@ package com.medassist.pharmacy.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.pharmacy.service.PharmacyBillingService;
+import com.medassist.pharmacy.service.PrescriptionAccessGuard;
 import com.medassist.pharmacy.service.PrescriptionService;
 import com.medassist.pharmacy.web.PharmacyDtos.DispenseView;
 import com.medassist.pharmacy.web.PharmacyDtos.ReturnReq;
@@ -22,6 +24,8 @@ import java.util.UUID;
  * 发药单查询与退药 API。
  *
  * <p>权限：查询 {@code pharmacy:read}；退药 {@code pharmacy:dispense:return}。
+ * 三个接口统一过 {@link PrescriptionAccessGuard#requireDispense}：
+ * 发药单是就诊级财务数据，跨科可见（药师岗位）但**不跨院区**。
  */
 @RestController
 @RequestMapping("/pharmacy/dispenses")
@@ -33,17 +37,22 @@ public class DispenseController {
 
     private final PrescriptionService service;
     private final PharmacyBillingService billing;
+    private final PrescriptionAccessGuard guard;
 
-    public DispenseController(PrescriptionService service, PharmacyBillingService billing) {
+    public DispenseController(PrescriptionService service, PharmacyBillingService billing,
+                              PrescriptionAccessGuard guard) {
         this.service = service;
         this.billing = billing;
+        this.guard = guard;
     }
 
     @GetMapping("/{id}")
     public ApiResponse<DispenseView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        guard.requireDispense(scope, id);
         return ApiResponse.ok(service.dispenseDetail(id));
     }
 
@@ -53,8 +62,10 @@ public class DispenseController {
             @PathVariable UUID id,
             @Valid @RequestBody ReturnReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, RETURN);
+        guard.requireDispense(scope, id);
         return ApiResponse.ok(service.returnDrug(id, req, actor));
     }
 
@@ -68,8 +79,10 @@ public class DispenseController {
     public ApiResponse<DispenseView> retryBilling(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, EXECUTE);
+        guard.requireDispense(scope, id);
         billing.retry(id, actor);
         return ApiResponse.ok(service.dispenseDetail(id));
     }

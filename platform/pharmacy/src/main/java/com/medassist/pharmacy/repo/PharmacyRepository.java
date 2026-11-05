@@ -382,6 +382,14 @@ public class PharmacyRepository {
                 .optional();
     }
 
+    /** 发药单所属处方（G57：发药单级院区校验用；empty 表示发药单不存在）。 */
+    public Optional<UUID> findDispensePrescriptionId(UUID dispenseId) {
+        return jdbc.sql("SELECT prescription_id FROM pharmacy_svc.dispense WHERE id = ?")
+                .param(dispenseId)
+                .query((rs, i) -> rs.getObject("prescription_id", UUID.class))
+                .optional();
+    }
+
     public void insertPrescriptionItem(PrescriptionItem item) {
         jdbc.sql("""
                         INSERT INTO pharmacy_svc.prescription_item

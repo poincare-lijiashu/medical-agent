@@ -61,7 +61,7 @@ class PharmacyControllerPermissionTest {
         prescriptionController = new PrescriptionController(prescriptionService,
                 mock(PrescriptionAccessGuard.class));
         dispenseController = new DispenseController(prescriptionService,
-                mock(PharmacyBillingService.class));
+                mock(PharmacyBillingService.class), mock(PrescriptionAccessGuard.class));
     }
 
     @Test
@@ -130,7 +130,7 @@ class PharmacyControllerPermissionTest {
         var req = new PharmacyDtos.ReturnReq(UUID.randomUUID(), 1, "停药", UUID.randomUUID());
 
         assertThatThrownBy(() -> dispenseController.returnDrug(id, req,
-                "pharmacy:dispense:execute", "pharm01"))
+                "pharmacy:dispense:execute", "pharm01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
