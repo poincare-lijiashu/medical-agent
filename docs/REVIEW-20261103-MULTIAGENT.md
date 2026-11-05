@@ -13,8 +13,8 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G51 安全与错账收口）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1663 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
+- **HEAD**：以 `git log -1` 为准（本轮 G52 票据与 CA 归属校验）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1667 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
 - **多院区口径（G51）**：`X-Campus` 缺失不再放开全院区，一律收敛主院区；`*` 是唯一的跨院区标记（网关对 ADMIN/QC 在无 campuses 声明时下发）；写入院区固定为主院区优先、否则 UUID 字典序最小。
 - **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
 - **数据库**：auth V73、tech V13、pharmacy V20、emr V23、insurance V20、material V5、clinical V56（各服务独立 schema）。
@@ -112,6 +112,7 @@
 | G49 | 医技院区隔离 | tech V13 为 `exam_application` 增加 `campus_id`（存量按临床就诊院区回填，否则主院区，NOT NULL + 索引）；手工开单取写入院区、医嘱转申请由临床随请求下发就诊院区（`CreateFromOrderReq.campusId`）；申请列表/状态计数/危急值列表/PACS Worklist/阅片队列按院区过滤；申请详情与取消/采集/接收/开始/关闭、报告书写/重写/审核/修订/详情、危急值确认/关闭、影像登记/状态回传/详情/DICOM 调阅/查看器/调阅审计统一 `TechAccessGuard` 回溯申请院区（越权与不存在同码 46402/46404/46405/46406）；冒烟脚本扩展到 54 项全过（主院区管理员看不到东院区医技申请、东院区账号可见、管理员跨院区可见） |
 | G50 | 物资院区隔离 | material V5 为 `consumable_issue` / `consumable_return` / `dept_transfer` 增加 `campus_id`（存量回填主院区，NOT NULL + 索引）；出库/退回/调拨创建时取账号写入院区；三类单据列表、追溯列表与批次召回统计、出库日趋势按院区过滤；详情与退回审批/驳回/撤回、调拨接收/拒收/撤回、追溯登记统一 `MaterialAccessGuard` 回溯单据院区（越权与不存在同码 43452/43457/43500/43510）；新增公共 `CampusFilters` 统一院区集合转 SQL 过滤串；冒烟脚本扩展到 73 项全过（主院区账号看不到东院区出库/退回/调拨，管理员跨院区可见） |
 | G51 | 安全与错账收口（按优化意见书 P0） | `X-Campus` 缺失由"放开全院区"改为收敛主院区，`*` 为唯一跨院区标记（网关对无 campuses 声明的 ADMIN/QC 下发）；`campusForWrite()` 改为确定性（主院区优先、否则 UUID 字典序最小），不再受 `Set.copyOf` 随机器哈希序影响；`Masks.patientNo` 输出长度恒等于输入、<8 位全掩；预交金存/退在服务层拒绝非正数（原先负数退款会经 `negate()` 变成正向入账）；结算门禁从 `TRANSFER_FAILED` 扩到 `TRANSFER_PENDING`（崩溃残留态不再放行收费）；药房计费全量幂等重放返回既有收费单（原先 NPE 500）；医嘱开立幂等检查移到就诊行锁之后、并在唯一键冲突时不再于 aborted 事务内回查；`.gitignore` 整目录排除运行期日志与滚动归档。新增 9 项单测，全量 179 类 / 1663 项通过，院区冒烟 73 项复跑全过 |
+| G52 | 票据与 CA 归属校验 | 收费票据 list/detail/issue/reprint/void 全部先反查所属就诊并过 `VisitAccessGuard`（科室 + 院区）——原先只校验全局权限串，持开票权的账号可对他科/他院区开票、重打、作废；CA 签名台账不传 recordId 时只有跨院区角色可查（单院区账号必须指定病历），验签/撤销先按 `recordIdOf` 过 `EmrAccessGuard.requireRecord`。新增 4 项单测，全量 179 类 / 1667 项通过，院区冒烟 73 项复跑全过 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
