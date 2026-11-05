@@ -71,15 +71,17 @@ public class OrderService {
     public List<VisitOrder> place(UUID visitId, List<OrderLine> lines, String actor,
                                   String idempotencyKey) {
         String key = normalizeIdempotencyKey(idempotencyKey);
+
+        Visit visit = repo.lockVisit(visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
+        // G51：幂等检查必须在持锁之后。放在锁前时，两个并发请求会同时查不到、
+        // 同时进入临界区，A 提交后 B 仍会再开一遍医嘱并再次触发转送。
         if (key != null) {
             List<VisitOrder> replay = replayIfPresent(visitId, actor, key);
             if (replay != null) {
                 return replay;
             }
         }
-
-        Visit visit = repo.lockVisit(visitId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.VISIT_NOT_FOUND));
         if (!Visit.IN_TREATMENT.equals(visit.status())) {
             throw new BusinessException(ErrorCode.VISIT_STATUS_INVALID,
                     "只有接诊中的就诊可以开立医嘱，当前状态：" + visit.status() + "（请先开始接诊）");
@@ -127,11 +129,13 @@ public class OrderService {
             try {
                 repo.insertIdempotency(visitId, actor, key, ids);
             } catch (DataIntegrityViolationException e) {
-                // 并发重放：另一个请求已经写入同一幂等键，返回它记录的结果
-                List<VisitOrder> concurrent = replayIfPresent(visitId, actor, key);
-                if (concurrent != null) {
-                    return concurrent;
-                }
+                // 并发重放：唯一键冲突说明另一请求已写入同一幂等键。
+                //
+                // 不能在这里回查结果：PostgreSQL 中语句失败后事务进入 aborted 态，
+                // 后续 SELECT 必抛 25P02（同仓库 NursingService.record 已记录过这个坑）。
+                // 让客户端用同一幂等键重试即可——那时会命中上面的持锁查询，拿到首次结果。
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "该请求正在处理中，请使用同一幂等键重试");
             }
         }
         return result;

@@ -90,6 +90,16 @@ public class PharmacyChargeService {
             added = added.add(line.amount());
             created++;
         }
+        if (charge == null) {
+            // 全部明细都已计费（幂等重放/并发重试）：charge 从未被创建，直接返回既有收费单。
+            // 原实现会继续走到 findCharge(null.id()) 抛 NPE，把"可安全重放"变成 500，
+            // 而药房侧的网络重试恰恰最容易命中这条路径。
+            Charge existing = repo.findLatestCharge(visitId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
+                            "该就诊暂无收费单，无法返回药房补记结果"));
+            return new ChargeResult(existing.id(), existing.chargeNo(), 0, BigDecimal.ZERO,
+                    existing.totalAmount());
+        }
         if (added.signum() > 0 && !repo.addChargeAmount(charge.id(), added, charge.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "收费单状态已变化，请刷新后重试");
         }

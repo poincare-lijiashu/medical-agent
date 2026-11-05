@@ -301,7 +301,7 @@ public class InpatientService {
     public DepositView deposit(UUID admissionId, BigDecimal amount, String method,
                                String remark, String actor) {
         Admission a = requireActiveAdmission(admissionId);
-        BigDecimal amt = amount.setScale(2, java.math.RoundingMode.HALF_UP);
+        BigDecimal amt = requirePositive(amount);
         repo.insertDeposit(UUID.randomUUID(), a.id(), amt, Deposit.DEPOSIT,
                 method.trim(), actor, blankToNull(remark));
         audit(actor, "DEPOSIT", "ADMISSION", a.id().toString(), Map.of(
@@ -315,7 +315,10 @@ public class InpatientService {
     public DepositView refund(UUID admissionId, BigDecimal amount, String method,
                               String remark, String actor) {
         Admission a = requireActiveAdmission(admissionId);
-        BigDecimal amt = amount.setScale(2, java.math.RoundingMode.HALF_UP);
+        // G51：退款金额必须是正数。原实现只做余额比较，负数金额会通过
+        // `balance.compareTo(amt) < 0`（负数恒小于余额），随后 `amt.negate()`
+        // 变成正向入账——"退款 -100"实际给患者加了 100 元预交金。
+        BigDecimal amt = requirePositive(amount);
         BigDecimal balance = repo.depositBalance(a.id());
         if (balance.compareTo(amt) < 0) {
             throw new BusinessException(ErrorCode.CONFLICT,
@@ -333,6 +336,19 @@ public class InpatientService {
         Admission a = repo.findAdmission(admissionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
         return new DepositView(repo.depositBalance(a.id()), repo.listDeposits(a.id()));
+    }
+
+    /**
+     * 预交金金额校验（G51）：必须是正数，统一保留 2 位。
+     *
+     * <p>放在服务层而不是只靠 DTO 的 {@code @DecimalMin}：服务会被内部接口、
+     * 定时任务、补偿流程直接复用，HTTP 边界的校验在那里不存在。
+     */
+    private static BigDecimal requirePositive(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "预交金金额必须大于 0");
+        }
+        return amount.setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     /**

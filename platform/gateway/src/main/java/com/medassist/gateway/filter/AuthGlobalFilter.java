@@ -2,6 +2,8 @@ package com.medassist.gateway.filter;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
+import com.medassist.common.security.DataScopeResolver;
 import com.medassist.gateway.config.GatewayAuthProperties;
 import com.medassist.gateway.security.ClientIpResolver;
 import com.medassist.gateway.security.TokenRevocationCache;
@@ -143,10 +145,21 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
                 ? String.join(",", depts)
                 : jwt.getClaimAsString("org");
         // 多院区（G45）：campuses 是院区 UUID 列表，拼成逗号分隔的 X-Campus。
+        //
+        // G51：下游已改为 fail-closed（缺头 = 只看主院区），因此这里必须补齐默认值，
+        // 否则"没有 campuses 声明"的令牌会导致管理员看不到任何非主院区数据：
+        //   有 campuses 声明            → 原样下发；
+        //   无声明且角色含 ADMIN/QC     → 下发 "*"（显式全院区）；
+        //   其余（旧令牌/普通账号）      → 下发主院区。
         List<String> campuses = jwt.getClaimAsStringList("campuses");
-        String campus = (campuses == null || campuses.isEmpty())
-                ? null
-                : String.join(",", campuses);
+        String campus;
+        if (campuses != null && !campuses.isEmpty()) {
+            campus = String.join(",", campuses);
+        } else if (hasCampusAllRole(roles)) {
+            campus = DataScopeResolver.CAMPUS_ALL;
+        } else {
+            campus = DataScope.DEFAULT_CAMPUS_ID.toString();
+        }
         ServerHttpRequest withIdentity = cleaned.getRequest().mutate()
                 .header(AuthHeaders.ACTOR, actor)
                 .header(AuthHeaders.USER_ID, subject)
@@ -171,6 +184,22 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     }
 
     // ---------------------------------------------------------------- 内部方法
+
+    /**
+     * 是否属于"必须跨全部院区"的角色（G51）。
+     *
+     * <p>只在令牌<em>没有</em> campuses 声明时兜底：管理员/质控需要看到全部院区（含
+     * 上线后新建的院区），其余账号一律收敛到主院区，避免 fail-closed 之后集体 403 或空列表。
+     */
+    private static boolean hasCampusAllRole(List<String> roles) {
+        if (roles == null || roles.isEmpty()) {
+            return false;
+        }
+        return roles.stream()
+                .filter(r -> r != null && !r.isBlank())
+                .map(r -> r.trim().toUpperCase())
+                .anyMatch(r -> r.equals("ADMIN") || r.equals("QC"));
+    }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange, String traceId, String message) {
         return GatewayResponses.reject(exchange, HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHORIZED,

@@ -55,4 +55,11 @@ platform/**/target/
 !frontend-vue/dist/
 !frontend-vue/dist/**
 *.log
+# G51：运行期日志目录整目录排除。
+# 仅 `*.log` 挡不住滚动归档（svc_emr.log.2026-11-04.0.gz）与 *_try.out.log，
+# 而日志里含明文演示口令（auth.seed.demo_password 等），一旦被 `git add -A` 归档
+# 就等于把凭据写进版本历史。
+logs/
+*.log.*
+*.log.gz
 .DS_Store

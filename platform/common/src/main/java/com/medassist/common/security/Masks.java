@@ -17,21 +17,23 @@ public final class Masks {
     }
 
     /**
-     * 患者号掩码：保留前 3 后 2，中间用 {@code *} 补足。
+     * 患者号掩码：保留前 3 后 2，中间用 {@code *} 补足，<b>输出长度恒等于输入长度</b>。
      *
-     * <p>长度不足 6 的一律全掩码——短编号保留前后位等于直接暴露。
+     * <p>G51 修正两处：① 原实现中间位数取 {@code max(2, len-5)}，长度 6 的编号会输出
+     * 7 个字符（{@code 123456 → 123**56}），掩码后比原文更长，下游按长度校验或做等值
+     * 比对时出现莫名不一致；② 阈值由 6 提到 8，长度 <8 一律全掩——6~7 位编号保留
+     * 前 3 后 2 等于只遮 1~2 位，穷举成本极低。
      */
     public static String patientNo(String patientNo) {
         if (patientNo == null || patientNo.isBlank()) {
             return patientNo;
         }
         String value = patientNo.trim();
-        if (value.length() < 6) {
+        if (value.length() < 8) {
             return "*".repeat(value.length());
         }
-        return value.substring(0, 3)
-                + "*".repeat(Math.max(2, value.length() - 5))
-                + value.substring(value.length() - 2);
+        int masked = value.length() - 5;
+        return value.substring(0, 3) + "*".repeat(masked) + value.substring(value.length() - 2);
     }
 
     /** 姓名掩码：只留首字，其余用 {@code *}。单字姓名整体掩码。 */

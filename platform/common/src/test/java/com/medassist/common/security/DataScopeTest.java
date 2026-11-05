@@ -48,10 +48,37 @@ class DataScopeTest {
         assertThat(scope.canSeeCampus(campusEast)).isFalse();
         assertThat(scope.campusFilter()).containsExactly(campusMain);
 
-        // 旧令牌没有院区头：保持不限制院区（升级前签发的令牌不会突然 403）
+        // G51：旧令牌没有院区头不再放开全院区，一律收敛到主院区（fail-closed）
         DataScope legacy = DataScopeResolver.resolve("pharm01", "PHARMACIST", "pharmacy:read",
                 deptA.toString(), null);
-        assertThat(legacy.allCampuses()).isTrue();
+        assertThat(legacy.allCampuses()).isFalse();
+        assertThat(legacy.campusFilter()).containsExactly(DataScope.DEFAULT_CAMPUS_ID);
+        assertThat(legacy.canSeeCampus(campusEast)).isFalse();
+
+        // 显式 "*" 才是全院区（网关对 ADMIN/QC 下发）
+        DataScope all = DataScopeResolver.resolve("admin01", "ADMIN", "", deptA.toString(), "*");
+        assertThat(all.allCampuses()).isTrue();
+        assertThat(all.campusFilter()).isEmpty();
+        assertThat(all.canSeeCampus(campusEast)).isTrue();
+    }
+
+    @Test
+    @DisplayName("写入院区确定：绑定主院区时恒为主院区，不随 Set 迭代序漂移")
+    void campusForWriteIsDeterministic() {
+        UUID campusMain = DataScope.DEFAULT_CAMPUS_ID;
+        UUID campusEast = UUID.fromString("a0000000-0000-0000-0000-000000000002");
+        UUID campusWest = UUID.fromString("a0000000-0000-0000-0000-000000000003");
+
+        DataScope multi = DataScopeResolver.resolve("admin01", "ADMIN", "",
+                deptA.toString(), campusWest + "," + campusEast + "," + campusMain);
+        for (int i = 0; i < 20; i++) {
+            assertThat(multi.campusForWrite()).isEqualTo(campusMain);
+        }
+
+        // 未绑主院区：取字典序最小，仍然稳定
+        DataScope noMain = DataScopeResolver.resolve("qc01", "QC", "",
+                deptA.toString(), campusWest + "," + campusEast);
+        assertThat(noMain.campusForWrite()).isEqualTo(campusEast);
     }
 
     @Test

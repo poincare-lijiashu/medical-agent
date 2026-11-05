@@ -114,11 +114,16 @@ public class BillingService {
         // 长嘱按日计费（dailyBill），结算只处理临时医嘱，避免与日报重复计费
         List<VisitOrder> pending = repo.lockPlacedTempOrders(visitId);
 
-        // 转送失败的药品/检查医嘱不能直接结算：先收钱后补单会形成"已收费、无单据"，
+        // 转送失败/未完成的药品检查医嘱不能直接结算：先收钱后补单会形成"已收费、无单据"，
         // 且结算后 transfer-retry 会以"已计费"拒绝，永远无法自愈（第六轮 MF-02）
+        //
+        // G51：门禁从 FAILED 扩到 PENDING。PENDING 是 afterCommit 转送在进程崩溃/重启时的
+        // 残留态（没有任何 worker 自动重推，retry 是手工接口），原实现把它当"正常在途"放行，
+        // 结果就是结算成功、下游单据永远不会生成。
         for (VisitOrder o : pending) {
-            if (VisitOrder.TRANSFER_FAILED.equals(o.transferStatus())
-                    && (o.drug() || "EXAM".equals(o.orderType()))) {
+            boolean notTransferred = VisitOrder.TRANSFER_FAILED.equals(o.transferStatus())
+                    || VisitOrder.TRANSFER_PENDING.equals(o.transferStatus());
+            if (notTransferred && (o.drug() || "EXAM".equals(o.orderType()))) {
                 throw new BusinessException(ErrorCode.ORDER_TRANSFER_INCOMPLETE,
                         "医嘱 " + o.orderNo() + "（" + o.itemName() + "）的下游单据未生成，"
                                 + "请先重试转送或由下游补开后再结算");

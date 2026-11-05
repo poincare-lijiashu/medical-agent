@@ -102,6 +102,25 @@ class PharmacyChargeServiceTest {
     }
 
     @Test
+    @DisplayName("G51：全部明细已计费（幂等重放）返回既有收费单，不抛 NPE")
+    void chargeReplayReturnsExistingCharge() {
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockOpenCharge(visitId)).thenReturn(Optional.empty());
+        when(repo.findPharmacyCharge(itemId)).thenReturn(Optional.of(link("25.00", "25.00", "0", "0")));
+        when(repo.findLatestCharge(visitId))
+                .thenReturn(Optional.of(charge(Charge.PAID, "125.00", 5L)));
+
+        ChargeResult result = service.charge(visitId, dispenseId,
+                List.of(line(itemId, "25.00")), "pharmacy");
+
+        assertThat(result.createdItems()).isZero();
+        assertThat(result.addedAmount()).isEqualByComparingTo("0");
+        assertThat(result.chargeTotal()).isEqualByComparingTo("125.00");
+        verify(repo, never()).insertChargeItem(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(repo, never()).addChargeAmount(any(), any(), anyLong());
+    }
+
+    @Test
     @DisplayName("发药计费：已结束/已取消就诊拒绝补记")
     void chargeRejectsFinishedVisit() {
         when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.FINISHED)));

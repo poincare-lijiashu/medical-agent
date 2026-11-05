@@ -223,6 +223,39 @@ class InpatientServiceTest {
     }
 
     @Test
+    @DisplayName("G51：负数退款拒绝——不得变成正向入账")
+    void refundRejectsNegativeAmount() {
+        UUID admissionId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(a.visitId())).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+
+        assertThatThrownBy(() -> service.refund(admissionId, new BigDecimal("-100"), "CASH", null,
+                "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("必须大于 0");
+        verify(repo, never()).insertDeposit(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("G51：0 或负数预交金拒绝（服务层兜底，不依赖 HTTP 校验）")
+    void depositRejectsNonPositiveAmount() {
+        UUID admissionId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 1L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(a.visitId())).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+
+        assertThatThrownBy(() -> service.deposit(admissionId, BigDecimal.ZERO, "CASH", null, "clerk01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("必须大于 0");
+        verify(repo, never()).insertDeposit(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("出院：置 DISCHARGED、腾床、结束就诊")
     void dischargeFreesBedAndFinishesVisit() {
         UUID admissionId = UUID.randomUUID();

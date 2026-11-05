@@ -108,6 +108,22 @@ class BillingServiceTest {
     }
 
     @Test
+    @DisplayName("G51：转送 PENDING（崩溃残留）的检查/药品医嘱同样拒结")
+    void settleRejectsPendingTransferOrder() {
+        BigDecimal amt = new BigDecimal("25.00");
+        VisitOrder pending = new VisitOrder(UUID.randomUUID(), "O2", visitId, "EXAM", "EXM-CBC",
+                "血常规", null, null, 1, 1, "次", amt, amt, VisitOrder.PLACED, "doctor01", 0L,
+                VisitOrder.TEMP, LocalDate.now(), null,
+                VisitOrder.TRANSFER_PENDING, null, null, null, null);
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.lockPlacedTempOrders(visitId)).thenReturn(List.of(pending));
+
+        assertThatThrownBy(() -> service.settle(visitId, "CASH", "clerk01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.ORDER_TRANSFER_INCOMPLETE));
+    }
+
+    @Test
     @DisplayName("结算：转送失败的检查/药品医嘱拒结，避免出现\"已收费、无单据\"")
     void settleRejectsFailedTransferOrder() {
         BigDecimal amt = new BigDecimal("25.00");

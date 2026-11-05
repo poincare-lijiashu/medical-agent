@@ -26,6 +26,9 @@ public final class DataScopeResolver {
 
     private static final String SEPARATOR = ",";
 
+    /** {@code X-Campus} 的显式"全部院区"标记（仅网关对管理员/质控下发）。 */
+    public static final String CAMPUS_ALL = "*";
+
     private DataScopeResolver() {
     }
 
@@ -57,13 +60,25 @@ public final class DataScopeResolver {
         boolean phiReadable = Permissions.has(permissionsHeader, DataScope.PHI_READ);
         boolean allDepartments = roles.stream().anyMatch(DataScope::isAllDepartmentRole);
 
-        Set<UUID> campuses = parseIds(campusHeader, "院区");
-        // 没有院区头（旧令牌/直连调用）时不限制院区，保持既有行为；
-        // 网关在新令牌上始终下发 X-Campus，生产路径自然启用隔离。
+        // G51：院区口径改为 fail-closed，与科室口径对齐。
         //
-        // G47：全院科室角色不再自动等于"跨院区"。药师/麻醉/手术室/质控可以看所有科室，
-        // 但只能在本人绑定院区内可见——否则东院区处方会被主院区药师看到。
-        boolean allCampuses = campusHeader == null || campusHeader.isBlank();
+        // 旧实现"缺 X-Campus 即不限制院区"是 6 个业务域唯一的兜底路径：旧令牌（升级前
+        // 签发，TTL 窗口内）、以及任何不经网关的服务直连（内网可达即带 X-Org/X-Roles）
+        // 都会落进 allCampuses=true，一条请求同时穿透临床/药房/医保/医技/物资/病案。
+        //
+        // 现在三种输入：
+        //   * 缺失/空白 → 仅主院区（DEFAULT_CAMPUS_ID），绝不放开；
+        //   * "*"      → 显式全院区（网关对管理员/质控下发，见 AuthGlobalFilter）；
+        //   * UUID 列表 → 按列表收敛，非法值整体拒绝。
+        boolean allCampuses = CAMPUS_ALL.equals(campusHeader == null ? null : campusHeader.trim());
+        Set<UUID> campuses;
+        if (allCampuses) {
+            campuses = Set.of();
+        } else if (campusHeader == null || campusHeader.isBlank()) {
+            campuses = Set.of(DataScope.DEFAULT_CAMPUS_ID);
+        } else {
+            campuses = parseIds(campusHeader, "院区");
+        }
 
         if (allDepartments) {
             return DataScope.of(actorHeader, Set.of(), true, campuses, allCampuses, phiReadable);

@@ -107,13 +107,26 @@ public record DataScope(String actor, Set<UUID> deptCodes, boolean allDepartment
     }
 
     /**
-     * 写入时使用的院区：优先显式院区，其次账号可见的第一个院区，最后回退主院区。
+     * 写入时使用的院区（G51 起结果确定）。
      *
-     * <p>跨院区角色（管理员/质控）通常绑定多个院区，第一个作为默认写入院区；
-     * 历史令牌没有 campuses 声明时回退主院区，避免写入 NULL 后变成"谁都看不到"。
+     * <p>原实现用 {@code campusIds.stream().findFirst()}，但 {@code Set.copyOf} 对
+     * 3 个以上元素是哈希序且随 JVM 启动随机化——同一多院区账号两次开单可能落到不同
+     * 院区，且与前端展示无对应关系。这里改为明确的优先级：
+     * <ol>
+     *   <li>绑定主院区 → 主院区（多院区账号的默认写入地）；</li>
+     *   <li>未绑主院区但有其他院区 → 取 UUID 字典序最小（固定、可解释）；</li>
+     *   <li>跨院区角色或未绑定院区 → 主院区。</li>
+     * </ol>
      */
     public UUID campusForWrite() {
-        return campusIds.stream().findFirst().orElse(DEFAULT_CAMPUS_ID);
+        if (campusIds.isEmpty()) {
+            return DEFAULT_CAMPUS_ID;
+        }
+        if (campusIds.contains(DEFAULT_CAMPUS_ID)) {
+            return DEFAULT_CAMPUS_ID;
+        }
+        return campusIds.stream().min(java.util.Comparator.comparing(UUID::toString))
+                .orElse(DEFAULT_CAMPUS_ID);
     }
 
     /** 用于 SQL 过滤的院区集合；跨院区角色返回空集，调用方不加过滤。 */
