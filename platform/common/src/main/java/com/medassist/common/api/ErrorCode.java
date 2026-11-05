@@ -417,6 +417,8 @@ public enum ErrorCode {
     INSURANCE_EXPORT_INVALID(48414, "当前导出批次状态不允许该操作"),
     INSURANCE_SCHEME_INVALID(48415, "支付方案配置不合法或已被他人修改"),
     INSURANCE_REALTIME_NOT_FOUND(48416, "未找到该实时结算交易"),
+    INSURANCE_SCHEME_RATE_DUPLICATE(48417, "该生效日期已有费率记录，请直接修改方案或换一个日期"),
+    INSURANCE_SCHEME_RATE_MISSING(48418, "所选日期没有生效的费率，请先配置该日期的费率"),
 
     // ---- 知识库（49xxx）----
     KB_SPACE_NOT_FOUND(49401, "未找到该知识空间"),

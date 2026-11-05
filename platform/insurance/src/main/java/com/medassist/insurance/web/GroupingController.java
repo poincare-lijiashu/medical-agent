@@ -7,7 +7,9 @@ import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
 import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
+import com.medassist.insurance.domain.InsuranceModel.SchemeRate;
 import com.medassist.insurance.service.PaymentGroupingService;
+import com.medassist.insurance.web.InsuranceDtos.AddSchemeRateReq;
 import com.medassist.insurance.web.InsuranceDtos.CreateSchemeReq;
 import com.medassist.insurance.web.InsuranceDtos.GroupImportResult;
 import com.medassist.insurance.web.InsuranceDtos.ImportGroupsReq;
@@ -74,6 +76,25 @@ public class GroupingController {
             @RequestHeader(AuthHeaders.ACTOR) String actor) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(service.updateScheme(code, req, actor));
+    }
+
+    @GetMapping("/schemes/{code}/rates")
+    public ApiResponse<List<SchemeRate>> rates(
+            @PathVariable String code,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.listRates(code));
+    }
+
+    /** 新增一档费率生效期（G84）；同日期更正请走 PUT /schemes/{code}。 */
+    @PostMapping("/schemes/{code}/rates")
+    public ApiResponse<SchemeRate> addRate(
+            @PathVariable String code,
+            @Valid @RequestBody AddSchemeRateReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(service.addRate(code, req, actor));
     }
 
     @GetMapping("/schemes/{code}/groups")

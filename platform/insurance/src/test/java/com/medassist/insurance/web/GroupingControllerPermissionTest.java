@@ -92,7 +92,7 @@ class GroupingControllerPermissionTest {
     @Test
     @DisplayName("模拟测算：只读权限放行并透传操作人")
     void simulateAllowedForRead() {
-        var req = new SimulateReq(visitId, "DRG-2026", List.of("J18.900"), List.of());
+        var req = new SimulateReq(visitId, "DRG-2026", List.of("J18.900"), List.of(), null);
         when(service.simulate(any(), anyString())).thenReturn(new GroupSimulation(UUID.randomUUID(),
                 visitId, "DRG-2026", "GB1", true, "命中", BigDecimal.ONE,
                 new BigDecimal("100.0000"), new BigDecimal("100.00"), "[]", "[]",
@@ -129,7 +129,7 @@ class GroupingControllerPermissionTest {
     @Test
     @DisplayName("模拟测算：无权限头 403")
     void simulateRequiresPermission() {
-        var req = new SimulateReq(visitId, "DRG-2026", List.of("J18.900"), List.of());
+        var req = new SimulateReq(visitId, "DRG-2026", List.of("J18.900"), List.of(), null);
 
         assertThatThrownBy(() -> controller.simulate(req, null, "anonymous"))
                 .isInstanceOf(BusinessException.class)

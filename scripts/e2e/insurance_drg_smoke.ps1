@@ -118,7 +118,7 @@ $hpVersion = (Res $r).homepage.version
 $r = Invoke-Api 'PUT' "/api/v2/emr/homepages/$homepageId" @{
     version = $hpVersion
     procedures = @(
-        @{ code = '88.0100'; name = 'Lung biopsy'; date = $null
+        @{ code = '88.5601'; name = 'Coronary angiography'; date = $null
            surgeon = 'doctor01'; anesthesia = 'LOCAL'; incisionLevel = 'II' }
     )
 } $token
@@ -131,7 +131,7 @@ $r = Invoke-Api 'PUT' "/api/v2/emr/homepages/$homepageId" @{
     version = $hpVersion; dischargeMode = 'BY_DOCTOR'
     chiefPhysician = 'chief01'; residentPhysician = 'resident01'; coder = 'coder01'
     procedures = @(
-        @{ code = '88.0100'; name = 'Lung biopsy'; date = $null
+        @{ code = '88.5601'; name = 'Coronary angiography'; date = $null
            surgeon = 'doctor01'; anesthesia = 'LOCAL'; incisionLevel = 'II' }
     )
 } $token
@@ -143,6 +143,18 @@ Check 'homepage.submit' $r.Status 200
 $r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = 'qc01'; password = $Password }
 Check 'login.qc' $r.Status 200
 $qcToken = (Res $r).accessToken
+
+# archive requires ICD coding (G4): save a primary diagnosis + the same procedure and submit.
+# The coding result is written back to the homepage, so the procedure must be part of it.
+$r = Invoke-Api 'PUT' "/api/v2/emr/coding/$homepageId" @{
+    diagnoses = @(@{ code = 'A09.900'; primary = $true })
+    procedures = @(@{ code = '88.5601'; surgeon = 'doctor01'; anesthesia = 'LOCAL'
+                      incisionLevel = 'II' })
+    version = 0
+} $qcToken
+Check 'coding.save' $r.Status 200
+$r = Invoke-Api 'POST' "/api/v2/emr/coding/$homepageId/submit" $null $qcToken
+Check 'coding.submit' $r.Status 200
 
 $r = Invoke-Api 'POST' "/api/v2/emr/homepages/$homepageId/archive" $null $qcToken
 Check 'homepage.archive' $r.Status 200
@@ -168,7 +180,7 @@ Check 'groups.created' (Res $r).created 2
 # priority 1 needs BOTH diagnosis and procedure -> proves the homepage procedure was used
 $r = Invoke-Api 'POST' "/api/v2/insurance/grouping/schemes/$schemeCode/rules/import" @{
     rules = @(
-        @{ priority = 1; matchType = 'DIAG_AND_PROC'; diagPrefix = 'J18'; procPrefix = '88.01'; groupCode = 'GB2' },
+        @{ priority = 1; matchType = 'DIAG_AND_PROC'; diagPrefix = 'J18'; procPrefix = '88.56'; groupCode = 'GB2' },
         @{ priority = 2; matchType = 'DIAGNOSIS'; diagPrefix = 'J18'; groupCode = 'GB1' }
     )
 } $token
@@ -187,7 +199,7 @@ CheckNum 'simulate.auto.payment' $sim.paymentStandard 200.00
 Check 'simulate.auto.diagSource' $sim.diagnosesSource 'CLINICAL'
 Check 'simulate.auto.procSource' $sim.proceduresSource 'HOMEPAGE'
 Check 'simulate.auto.diagCode' ($sim.diagnoses -match 'J18.900') 'True'
-Check 'simulate.auto.procCode' ($sim.procedures -match '88.0100') 'True'
+Check 'simulate.auto.procCode' ($sim.procedures -match '88.5601') 'True'
 Check 'simulate.auto.hash' $sim.inputHash.Length 64
 
 $r = Invoke-Api 'GET' "/api/v2/insurance/grouping/by-visit/$visitId" $null $token

@@ -208,7 +208,15 @@ public final class InsuranceDtos {
             @NotNull UUID visitId,
             @NotBlank @Size(max = 32) String schemeCode,
             @Size(max = 50) List<@Size(max = 32) String> diagnoses,
-            @Size(max = 50) List<@Size(max = 32) String> procedures) {
+            @Size(max = 50) List<@Size(max = 32) String> procedures,
+            /** 结算/出院日期（缺省取业务今天）；按该日期取当时生效的费率。 */
+            LocalDate serviceDate) {
+    }
+
+    /** 新增费率生效期（G84）：同一生效日只允许一档，更正请走修改方案。 */
+    public record AddSchemeRateReq(
+            @NotNull LocalDate effectiveFrom,
+            @NotNull @DecimalMin("0") BigDecimal rateAmount) {
     }
 
     public record GroupImportResult(int total, int created, int updated, int unchanged) {

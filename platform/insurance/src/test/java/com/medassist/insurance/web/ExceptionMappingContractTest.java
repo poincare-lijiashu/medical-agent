@@ -40,6 +40,17 @@ class ExceptionMappingContractTest {
     }
 
     @Test
+    @DisplayName("费率生效期码（G84）与实时结算码：不存在 404、同日期重复 409、缺费率 422")
+    void schemeRateCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.INSURANCE_REALTIME_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.INSURANCE_SCHEME_RATE_DUPLICATE))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.INSURANCE_SCHEME_RATE_MISSING))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    @Test
     @DisplayName("业务错误码不得落到 5xx（否则前端会把业务拒绝当系统故障重试）")
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {

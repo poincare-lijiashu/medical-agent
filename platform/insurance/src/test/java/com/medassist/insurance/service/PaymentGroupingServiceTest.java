@@ -8,7 +8,9 @@ import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
 import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
+import com.medassist.insurance.domain.InsuranceModel.SchemeRate;
 import com.medassist.insurance.repo.InsuranceRepository;
+import com.medassist.insurance.web.InsuranceDtos.AddSchemeRateReq;
 import com.medassist.insurance.web.InsuranceDtos.CreateSchemeReq;
 import com.medassist.insurance.web.InsuranceDtos.GroupImportResult;
 import com.medassist.insurance.web.InsuranceDtos.GroupReq;
@@ -64,6 +66,10 @@ class PaymentGroupingServiceTest {
                 .thenReturn(new ClinicalClient.DiagnosisSummary(visitId, List.of()));
         when(emrClient.procedures(visitId))
                 .thenReturn(new EmrClient.HomepageProcedures(visitId, false, null, List.of()));
+        // G84：模拟按日期取费率；默认给当天一档 100 的费率，保持既有断言口径
+        when(repo.findRateEffectiveOn(any(), any())).thenReturn(Optional.of(new SchemeRate(
+                "DRG-2026", LocalDate.of(2026, 1, 1), new BigDecimal("100.0000"), "yb01",
+                Instant.now())));
     }
 
     private PaymentScheme scheme(boolean enabled) {
@@ -84,7 +90,7 @@ class PaymentGroupingServiceTest {
     }
 
     private SimulateReq simulateReq(String... diagnoses) {
-        return new SimulateReq(visitId, "DRG-2026", List.of(diagnoses), List.of());
+        return new SimulateReq(visitId, "DRG-2026", List.of(diagnoses), List.of(), null);
     }
 
     // ---------------------------------------------------------------- 方案
@@ -239,9 +245,9 @@ class PaymentGroupingServiceTest {
                 .thenReturn(Optional.of(group("GB3", "3.0", true)));
 
         GroupSimulation withoutProc = service.simulate(
-                new SimulateReq(visitId, "DRG-2026", List.of("I50.900"), List.of()), "yb01");
+                new SimulateReq(visitId, "DRG-2026", List.of("I50.900"), List.of(), null), "yb01");
         GroupSimulation withProc = service.simulate(new SimulateReq(visitId, "DRG-2026",
-                List.of("I50.900"), List.of("93.90")), "yb01");
+                List.of("I50.900"), List.of("93.90"), null), "yb01");
 
         assertThat(withoutProc.matched()).isFalse();
         assertThat(withoutProc.reason()).contains("未命中");
@@ -291,9 +297,9 @@ class PaymentGroupingServiceTest {
         when(repo.listRules("DRG-2026", true)).thenReturn(List.of());
 
         GroupSimulation first = service.simulate(new SimulateReq(visitId, "DRG-2026",
-                List.of("j18.900", "E11.900"), List.of("93.90")), "yb01");
+                List.of("j18.900", "E11.900"), List.of("93.90"), null), "yb01");
         GroupSimulation second = service.simulate(new SimulateReq(visitId, "DRG-2026",
-                List.of("E11.900 ", "J18.900"), List.of("93.90")), "yb01");
+                List.of("E11.900 ", "J18.900"), List.of("93.90"), null), "yb01");
 
         assertThat(first.inputHash()).isEqualTo(second.inputHash());
     }
@@ -321,7 +327,7 @@ class PaymentGroupingServiceTest {
                 visitId, List.of(new ClinicalClient.Diagnosis("J18.900", "肺炎", true))));
 
         GroupSimulation result = service.simulate(
-                new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
+                new SimulateReq(visitId, "DRG-2026", null, null, null), "yb01");
 
         assertThat(result.matched()).isTrue();
         assertThat(result.groupCode()).isEqualTo("GB1");
@@ -345,7 +351,7 @@ class PaymentGroupingServiceTest {
                 visitId, true, "ARCHIVED", List.of("88.0100")));
 
         GroupSimulation result = service.simulate(
-                new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
+                new SimulateReq(visitId, "DRG-2026", null, null, null), "yb01");
 
         assertThat(result.matched()).isTrue();
         assertThat(result.groupCode()).isEqualTo("GB2");
@@ -365,7 +371,7 @@ class PaymentGroupingServiceTest {
                 visitId, true, "DRAFT", List.of()));
 
         GroupSimulation result = service.simulate(
-                new SimulateReq(visitId, "DRG-2026", null, null), "yb01");
+                new SimulateReq(visitId, "DRG-2026", null, null, null), "yb01");
 
         assertThat(result.procedures()).isEqualTo("[]");
         assertThat(result.proceduresSource()).isEqualTo(PaymentGroupingService.SOURCE_NONE);
@@ -390,7 +396,7 @@ class PaymentGroupingServiceTest {
         when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
 
         assertThatThrownBy(() -> service.simulate(
-                new SimulateReq(visitId, "DRG-2026", null, null), "yb01"))
+                new SimulateReq(visitId, "DRG-2026", null, null, null), "yb01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
@@ -422,5 +428,80 @@ class PaymentGroupingServiceTest {
         assertThat(result.groupCode()).isEqualTo("GB1");
         verify(repo).logChange(eq("doctor01"), eq("GROUP_SIM_VIEW"), eq("PAYMENT_GROUPING"),
                 eq(visitId.toString()), anyString());
+    }
+
+    // ---------------------------------------------------------------- 费率生效期（G84）
+
+    @Test
+    @DisplayName("费率：同一生效日重复新增 → 409（同日期更正请走修改方案）")
+    void addRateRejectsDuplicateDate() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.existsSchemeRate("DRG-2026", LocalDate.of(2026, 1, 1))).thenReturn(true);
+
+        assertThatThrownBy(() -> service.addRate("DRG-2026",
+                new AddSchemeRateReq(LocalDate.of(2026, 1, 1), new BigDecimal("120")), "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_SCHEME_RATE_DUPLICATE);
+        verify(repo, never()).insertSchemeRate(any());
+    }
+
+    @Test
+    @DisplayName("费率：新增更晚的生效日会同步方案当前费率；更早的不动")
+    void addRateSyncsCurrentOnlyWhenNewest() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.existsSchemeRate(any(), any())).thenReturn(false);
+
+        service.addRate("DRG-2026",
+                new AddSchemeRateReq(LocalDate.of(2025, 7, 1), new BigDecimal("130")), "yb01");
+        verify(repo, never()).syncSchemeCurrentRate(anyString(), any(), any(), anyString());
+
+        service.addRate("DRG-2026",
+                new AddSchemeRateReq(LocalDate.of(2027, 1, 1), new BigDecimal("140")), "yb01");
+        verify(repo).syncSchemeCurrentRate("DRG-2026", new BigDecimal("140.0000"),
+                LocalDate.of(2027, 1, 1), "yb01");
+    }
+
+    @Test
+    @DisplayName("模拟：按 serviceDate 取当时费率，而不是方案上的当前费率")
+    void simulateUsesRateEffectiveOnServiceDate() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.listRules("DRG-2026", true))
+                .thenReturn(List.of(rule(1, "DIAGNOSIS", "J18", null, "GB1")));
+        when(repo.findGroup("DRG-2026", "GB1"))
+                .thenReturn(Optional.of(group("GB1", "2.0", true)));
+        when(repo.findRateEffectiveOn("DRG-2026", LocalDate.of(2025, 12, 31)))
+                .thenReturn(Optional.of(new SchemeRate("DRG-2026", LocalDate.of(2025, 1, 1),
+                        new BigDecimal("80.0000"), "yb01", Instant.now())));
+
+        GroupSimulation result = service.simulate(new SimulateReq(visitId, "DRG-2026",
+                List.of("J18.900"), List.of(), LocalDate.of(2025, 12, 31)), "yb01");
+
+        assertThat(result.rateAmount()).isEqualByComparingTo("80.0000");
+        assertThat(result.paymentStandard()).isEqualByComparingTo("160.00");
+    }
+
+    @Test
+    @DisplayName("模拟：所选日期没有生效费率 → 422，不静默回落到当前费率")
+    void simulateRejectsMissingRateForDate() {
+        when(repo.findScheme("DRG-2026")).thenReturn(Optional.of(scheme(true)));
+        when(repo.findRateEffectiveOn(any(), any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.simulate(simulateReq("J18.900"), "yb01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_SCHEME_RATE_MISSING);
+        verify(repo, never()).insertSimulation(any());
+    }
+
+    @Test
+    @DisplayName("费率历史：按方案查询（方案不存在 404）")
+    void listRatesRequiresScheme() {
+        when(repo.findScheme("NOPE")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.listRates("NOPE"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_SCHEME_NOT_FOUND);
     }
 }

@@ -2,13 +2,16 @@ package com.medassist.insurance.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.time.BusinessTime;
 import com.medassist.insurance.client.ClinicalClient;
 import com.medassist.insurance.client.EmrClient;
 import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
 import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
+import com.medassist.insurance.domain.InsuranceModel.SchemeRate;
 import com.medassist.insurance.repo.InsuranceRepository;
+import com.medassist.insurance.web.InsuranceDtos.AddSchemeRateReq;
 import com.medassist.insurance.web.InsuranceDtos.CreateSchemeReq;
 import com.medassist.insurance.web.InsuranceDtos.GroupImportResult;
 import com.medassist.insurance.web.InsuranceDtos.GroupReq;
@@ -27,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -90,6 +94,9 @@ public class PaymentGroupingService {
                 rate, req.rateEffectiveFrom(), req.enabled() == null || req.enabled(),
                 0L, actor, Instant.now());
         repo.insertScheme(scheme);
+        // G84：费率落生效期，模拟按日期取当时费率，改费率不再覆盖历史
+        repo.insertSchemeRate(new SchemeRate(code, req.rateEffectiveFrom(), rate, actor,
+                Instant.now()));
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("code", code);
         detail.put("type", scheme.type());
@@ -109,6 +116,8 @@ public class PaymentGroupingService {
                 enabled, req.version(), actor)) {
             throw new BusinessException(ErrorCode.CONFLICT, "支付方案已被他人修改，请刷新后重试");
         }
+        // 同一生效日视为对该日费率的更正；新日期则新增一档生效期
+        repo.upsertSchemeRate(before.code(), req.rateEffectiveFrom(), rate, actor);
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("code", before.code());
         detail.put("before", schemeSnapshot(before));
@@ -118,6 +127,40 @@ public class PaymentGroupingService {
         audit(actor, "SCHEME_UPDATE", before.code(), detail);
         return repo.findScheme(before.code())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_SCHEME_NOT_FOUND));
+    }
+
+    // ---------------------------------------------------------------- 费率生效期（G84）
+
+    /** 费率历史（生效日倒序），供医保办核对"某年某日起执行多少"。 */
+    public List<SchemeRate> listRates(String schemeCode) {
+        return repo.listSchemeRates(requireScheme(schemeCode).code());
+    }
+
+    /**
+     * 新增一档费率生效期。
+     *
+     * <p>同一生效日只允许一档：更正已有日期的费率请走"修改方案"（同日期即更正），
+     * 避免同一生效日并存两个口径。新费率晚于当前生效日时同步方案上的展示值。
+     */
+    @Transactional
+    public SchemeRate addRate(String schemeCode, AddSchemeRateReq req, String actor) {
+        PaymentScheme scheme = requireScheme(schemeCode);
+        LocalDate effectiveFrom = req.effectiveFrom();
+        BigDecimal rate = req.rateAmount().setScale(4, RoundingMode.HALF_UP);
+        if (repo.existsSchemeRate(scheme.code(), effectiveFrom)) {
+            throw new BusinessException(ErrorCode.INSURANCE_SCHEME_RATE_DUPLICATE);
+        }
+        SchemeRate created = new SchemeRate(scheme.code(), effectiveFrom, rate, actor, Instant.now());
+        repo.insertSchemeRate(created);
+        if (!effectiveFrom.isBefore(scheme.rateEffectiveFrom())) {
+            repo.syncSchemeCurrentRate(scheme.code(), rate, effectiveFrom, actor);
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("schemeCode", scheme.code());
+        detail.put("effectiveFrom", effectiveFrom.toString());
+        detail.put("rateAmount", rate.toPlainString());
+        audit(actor, "SCHEME_RATE_ADD", scheme.code(), detail);
+        return created;
     }
 
     // ---------------------------------------------------------------- 分组
@@ -263,6 +306,12 @@ public class PaymentGroupingService {
     @Transactional
     public GroupSimulation simulate(SimulateReq req, String actor) {
         PaymentScheme scheme = requireEnabledScheme(req.schemeCode());
+        // G84：按业务日期取当时生效的费率；没有配置就显式失败，不回落到"当前费率"
+        LocalDate serviceDate = req.serviceDate() == null ? BusinessTime.today() : req.serviceDate();
+        BigDecimal rateAmount = repo.findRateEffectiveOn(scheme.code(), serviceDate)
+                .map(SchemeRate::rateAmount)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INSURANCE_SCHEME_RATE_MISSING,
+                        "所选日期 " + serviceDate + " 没有生效的费率，请先配置"));
 
         List<String> diagnoses;
         String diagnosesSource;
@@ -310,18 +359,20 @@ public class PaymentGroupingService {
             reason = "未命中任何入组规则";
         }
         BigDecimal payment = matched == null ? null
-                : matched.weight().multiply(scheme.rateAmount()).setScale(2, RoundingMode.HALF_UP);
+                : matched.weight().multiply(rateAmount).setScale(2, RoundingMode.HALF_UP);
         String diagnosesJson = toJson(diagnoses);
         String proceduresJson = toJson(procedures);
         GroupSimulation simulation = new GroupSimulation(UUID.randomUUID(), req.visitId(),
                 scheme.code(), matched == null ? null : matched.groupCode(), matched != null,
-                reason, matched == null ? null : matched.weight(), scheme.rateAmount(), payment,
+                reason, matched == null ? null : matched.weight(), rateAmount, payment,
                 diagnosesJson, proceduresJson, diagnosesSource, proceduresSource,
                 inputHash(scheme.code(), diagnoses, procedures), actor, Instant.now());
         repo.insertSimulation(simulation);
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("visitId", req.visitId().toString());
         detail.put("schemeCode", scheme.code());
+        detail.put("serviceDate", serviceDate.toString());
+        detail.put("rateAmount", rateAmount.toPlainString());
         detail.put("groupCode", simulation.groupCode());
         detail.put("matched", simulation.matched());
         detail.put("paymentStandard", payment == null ? null : payment.toPlainString());

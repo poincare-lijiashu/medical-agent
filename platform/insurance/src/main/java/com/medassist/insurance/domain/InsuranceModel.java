@@ -189,6 +189,16 @@ public final class InsuranceModel {
         }
     }
 
+    /**
+     * 费率生效期（G84）：同一方案在不同生效日可以有不同的费率/点值。
+     *
+     * <p>按出院/结算日期取 {@code effective_from <= 该日} 的最近一条；
+     * 同一生效日只有一档费率（唯一键），修改即更正该日费率，不产生第二档。
+     */
+    public record SchemeRate(String schemeCode, LocalDate effectiveFrom, BigDecimal rateAmount,
+                             String createdBy, Instant createdAt) {
+    }
+
     /** 方案下的分组：weight 在 DRG 下是权重、在 DIP 下是分值。 */
     public record PaymentGroup(String schemeCode, String groupCode, String groupName,
                                BigDecimal weight, boolean enabled, long version, Instant updatedAt) {

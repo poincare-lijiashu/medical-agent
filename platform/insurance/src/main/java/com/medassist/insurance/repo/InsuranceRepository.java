@@ -11,6 +11,7 @@ import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
 import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
 import com.medassist.insurance.domain.InsuranceModel.RealtimeSettlement;
+import com.medassist.insurance.domain.InsuranceModel.SchemeRate;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -1002,6 +1003,94 @@ public class InsuranceRepository {
                 .param("name", name).param("rate", rateAmount).param("eff", rateEffectiveFrom)
                 .param("enabled", enabled).param("code", code).param("version", expectedVersion)
                 .param("actor", actor).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 费率生效期（G84）
+
+    private static final RowMapper<SchemeRate> SCHEME_RATE_MAPPER = (rs, i) -> new SchemeRate(
+            rs.getString("scheme_code"), rs.getDate("effective_from").toLocalDate(),
+            rs.getBigDecimal("rate_amount"), rs.getString("created_by"),
+            rs.getTimestamp("created_at").toInstant());
+
+    public List<SchemeRate> listSchemeRates(String schemeCode) {
+        return jdbc.sql("""
+                        SELECT scheme_code, effective_from, rate_amount, created_by, created_at
+                          FROM insurance_svc.payment_scheme_rate
+                         WHERE scheme_code = ? ORDER BY effective_from DESC
+                        """).param(schemeCode).query(SCHEME_RATE_MAPPER).list();
+    }
+
+    /**
+     * 取某日期适用的费率：{@code effective_from <= date} 的最近一条。
+     *
+     * <p>没有记录时返回空——调用方必须显式报"该日期没有生效费率"，
+     * 不能回落到"当前费率"（那正是重新引入"历史被覆盖"的问题）。
+     */
+    public Optional<SchemeRate> findRateEffectiveOn(String schemeCode, LocalDate date) {
+        return jdbc.sql("""
+                        SELECT scheme_code, effective_from, rate_amount, created_by, created_at
+                          FROM insurance_svc.payment_scheme_rate
+                         WHERE scheme_code = :code AND effective_from <= :date
+                         ORDER BY effective_from DESC LIMIT 1
+                        """)
+                .param("code", schemeCode).param("date", date)
+                .query(SCHEME_RATE_MAPPER).optional();
+    }
+
+    /** 同一 (方案, 生效日) 只有一档费率；重复新增由唯一键拒绝。 */
+    public void insertSchemeRate(SchemeRate r) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.payment_scheme_rate
+                            (scheme_code, effective_from, rate_amount, created_by)
+                        VALUES (:code, :eff, :rate, :actor)
+                        """)
+                .param("code", r.schemeCode()).param("eff", r.effectiveFrom())
+                .param("rate", r.rateAmount()).param("actor", r.createdBy()).update();
+    }
+
+    /** 修改方案时同步该生效日的费率：同一日期即更正，不产生第二档。 */
+    public void upsertSchemeRate(String schemeCode, LocalDate effectiveFrom,
+                                 BigDecimal rateAmount, String actor) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.payment_scheme_rate
+                            (scheme_code, effective_from, rate_amount, created_by)
+                        VALUES (:code, :eff, :rate, :actor)
+                        ON CONFLICT (scheme_code, effective_from)
+                        DO UPDATE SET rate_amount = EXCLUDED.rate_amount,
+                                      created_by = EXCLUDED.created_by,
+                                      created_at = now()
+                        """)
+                .param("code", schemeCode).param("eff", effectiveFrom)
+                .param("rate", rateAmount).param("actor", actor).update();
+    }
+
+    /** 方案是否已存在某生效日的费率（新增接口用于给出 409，而不是撞唯一键）。 */
+    public boolean existsSchemeRate(String schemeCode, LocalDate effectiveFrom) {
+        Boolean exists = jdbc.sql("""
+                        SELECT EXISTS (SELECT 1 FROM insurance_svc.payment_scheme_rate
+                                        WHERE scheme_code = :code AND effective_from = :eff)
+                        """)
+                .param("code", schemeCode).param("eff", effectiveFrom)
+                .query(Boolean.class).single();
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * 同步方案上的"当前费率"展示值（权威值在 payment_scheme_rate）。
+     *
+     * <p>任何费率/生效日变化都升版本：并发保存的旧版本应当 409 并刷新，
+     * 而不是用旧口径静默覆盖。
+     */
+    public void syncSchemeCurrentRate(String schemeCode, BigDecimal rateAmount,
+                                      LocalDate effectiveFrom, String actor) {
+        jdbc.sql("""
+                        UPDATE insurance_svc.payment_scheme
+                           SET rate_amount = :rate, rate_effective_from = :eff,
+                               updated_by = :actor, version = version + 1, updated_at = now()
+                         WHERE code = :code
+                        """)
+                .param("rate", rateAmount).param("eff", effectiveFrom)
+                .param("actor", actor).param("code", schemeCode).update();
     }
 
     public List<PaymentGroup> listGroups(String schemeCode, Boolean enabled) {

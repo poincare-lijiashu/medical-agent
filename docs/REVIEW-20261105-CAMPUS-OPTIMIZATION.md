@@ -264,6 +264,16 @@
 
 **验证**：新冒烟 `tech_device_campus_smoke` 25 项全 PASS（东院区管理员建设备→院区固化为 EAST；`keyword` 查主院区设备返回 0 条；主院区设备详情与报修均 404/46430；工单列表不含他院区工单；看板 total 与本院区设备列表条数一致）；`tech_device_work_order_smoke`、`tech_smoke`、`tech_lis_smoke`、`tech_pacs_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过。
 
+### G84 批次（医保费率生效期版本化，mock 190 类 / 1812 项全绿）
+
+| 关注点 | 处置 |
+|---|---|
+| 院区口径 | 费率/点值是**全院制度配置**（不含患者数据），与 G81 分级目录同理不做院区隔离；模拟快照保留 `visitId` 与当时费率，跨院区复核按就诊守卫读 |
+| LIMIT 前收敛 | 本批无列表接口；费率历史按 `(方案, 生效日)` 唯一键读取，天然有序 |
+| 时间口径（G76 同口径） | `serviceDate` 缺省取 `BusinessTime.today()`；"该日期适用哪档费率"由 `effective_from <= serviceDate` 的最近一条决定，不依赖数据库会话时区 |
+
+**验证**：`insurance_rate_version_smoke` 30 项全 PASS（差量费率 100→120 下，旧日期 200 元、新日期 240 元、早于首档 422；同日期重复新增 409、修改方案同日期只更正不新增行、医生改费率 403）；`insurance_smoke`、`insurance_drg_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过。
+
 ### 评审意见书（2026-11-05）状态：**全部条目已关闭**
 
 [必须] 条目在 G51–G70 全部闭环；[建议] 条目在 G51–G79 逐条闭环（§6.12 院区串收敛、§6.13 守卫签名与错误码、§6.14 列表下推、§6.15 迁移锁风险、锁内调下游 HTTP、时间口径、worker 多实例、解析吞错）。后续新增发现按同一节奏（复现 → 修复 → 反证 → 冒烟 → 文档 → 提交 → 备份）单独开批次。
