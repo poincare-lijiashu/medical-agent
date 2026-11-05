@@ -225,7 +225,7 @@ public class ReportService {
         Duration timeout = Duration.ofMinutes(props.criticalTimeoutMinutesOrDefault());
         Instant deadline = Instant.now().minus(timeout);
         return repo.listCriticalValues(normalized, applicationId,
-                        ApplicationService.campusCsv(campusIds), size).stream()
+                        com.medassist.common.security.CampusFilters.csv(campusIds), size).stream()
                 .map(c -> new CriticalView(c,
                         CriticalValue.PENDING.equals(c.status())
                                 && c.createdAt().isBefore(deadline)))

@@ -626,13 +626,9 @@ public class PrescriptionService {
         return repo.countPrescriptionsByStatus(campusCsv(campusIds));
     }
 
-    /** 院区集合转 SQL 过滤串；空集合（跨院区角色）返回空串表示不限院区。 */
+    /** 院区集合转 SQL 过滤串；空集合（跨院区角色）返回空串表示不限院区（G71 统一走 CampusFilters）。 */
     static String campusCsv(java.util.Set<UUID> campusIds) {
-        if (campusIds == null || campusIds.isEmpty()) {
-            return "";
-        }
-        return campusIds.stream().map(UUID::toString)
-                .collect(java.util.stream.Collectors.joining(","));
+        return com.medassist.common.security.CampusFilters.csv(campusIds);
     }
 
     // ---------------------------------------------------------------- 内部

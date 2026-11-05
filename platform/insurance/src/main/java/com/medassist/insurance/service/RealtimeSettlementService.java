@@ -140,7 +140,8 @@ public class RealtimeSettlementService {
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
         String normalized = (status == null || status.isBlank())
                 ? null : status.trim().toUpperCase(Locale.ROOT);
-        return repo.listRealtime(billId, normalized, size, InsuranceService.campusCsv(campusIds)).stream()
+        return repo.listRealtime(billId, normalized, size,
+                com.medassist.common.security.CampusFilters.csv(campusIds)).stream()
                 .map(r -> toView(r, false)).toList();
     }
 

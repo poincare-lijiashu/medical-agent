@@ -345,13 +345,9 @@ public class RegistrationService {
 
     // ---------------------------------------------------------------- 内部
 
-    /** 院区集合转 SQL 过滤串；空集合（全院角色）返回空串表示不限院区。 */
+    /** 院区集合转 SQL 过滤串；空集合（全院角色）返回空串表示不限院区（G71 统一走 CampusFilters）。 */
     static String campusCsv(java.util.Set<UUID> campusIds) {
-        if (campusIds == null || campusIds.isEmpty()) {
-            return "";
-        }
-        return campusIds.stream().map(UUID::toString)
-                .collect(java.util.stream.Collectors.joining(","));
+        return com.medassist.common.security.CampusFilters.csv(campusIds);
     }
 
     private Dept requireDept(UUID deptId) {

@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # MedAssist EMR smoke test, through the gateway.
 #
 # Covers: template -> draft -> QC (fatal blocks submit) -> submit -> sign
@@ -81,7 +81,7 @@ Check 'template.code' $templates[0].templateCode 'TPL-ADMISSION'
 
 # ---------------------------------------------------------------- 4. draft
 $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
-    patientId = $patientId
+    patientId = $patientId; deptId = '33333333-3333-3333-3333-333333333333'
     templateCode = 'TPL-ADMISSION'
     title = 'Admission Note'
     content = @{ physicalExam = 'pharynx red' }
@@ -241,7 +241,8 @@ Check 'change.verify.invalidUntilResign' (Res $r).valid 'False'
 
 # ---------------------------------------------------------------- 8. second record: amend keeps history
 $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
-    patientId = $patientId; templateCode = 'TPL-ADMISSION'; title = 'Admission Note 2'; content = $full
+    patientId = $patientId; deptId = '33333333-3333-3333-3333-333333333333'
+    templateCode = 'TPL-ADMISSION'; title = 'Admission Note 2'; content = $full
 } $token
 Check 'record2.create' $r.Status 200
 $record2Id = (Res $r).record.id
@@ -336,7 +337,8 @@ $visitId = (Res $r).visitId
 Check 'admission.visitIdPresent' ("$visitId".Length -gt 0) 'True'
 
 $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
-    patientId = $patientId; visitId = $visitId; templateCode = 'TPL-ADMISSION'
+    patientId = $patientId; visitId = $visitId; deptId = '33333333-3333-3333-3333-333333333333'
+    templateCode = 'TPL-ADMISSION'
     title = 'Admission Note Timeliness'; content = $full
 } $token
 Check 'timeliness.record.create' $r.Status 200
@@ -357,7 +359,8 @@ $r = Invoke-Api 'POST' '/api/v2/emr/templates' @{
 Check 'tpl.first.manage' $r.Status 200
 
 $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
-    patientId = $patientId; visitId = $visitId; templateCode = "TPL-FC-$suffix"
+    patientId = $patientId; visitId = $visitId; deptId = '33333333-3333-3333-3333-333333333333'
+    templateCode = "TPL-FC-$suffix"
     title = 'First Course Note'; content = @{ course = 'admitted, plan ordered' }
 } $token
 Check 'first.record.create' $r.Status 200
@@ -372,9 +375,14 @@ Check 'first.qc.rulePassed' $fcRules[0].passed 'True'
 # ---------------------------------------------------------------- 12. three-level signing + archive (S-28)
 $r = Invoke-Api 'POST' '/api/v2/auth/users' @{
     username = "chief$suffix"; password = 'Med@2026'; displayName = 'Chief Physician'
-    roles = @('DOCTOR')
+    deptIds = @('33333333-3333-3333-3333-333333333333'); roles = @('DOCTOR')
 } $token
 Check 'chief.user.create' $r.Status 200
+# fail-closed scope: an account without a campus cannot operate, so bind the main campus
+$r = Invoke-Api 'PUT' ("/api/v2/auth/users/" + (Res $r).id + "/campuses") @{
+    campusIds = @('a0000000-0000-0000-0000-000000000001')
+} $token
+Check 'chief.user.campus' $r.Status 200
 
 $r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = "chief$suffix"; password = 'Med@2026' }
 Check 'login.chief' $r.Status 200
@@ -388,7 +396,8 @@ $r = Invoke-Api 'POST' '/api/v2/emr/templates' @{
 Check 'tpl.discharge.manage' $r.Status 200
 
 $r = Invoke-Api 'POST' '/api/v2/emr/records' @{
-    patientId = $patientId; visitId = $visitId; templateCode = "TPL-DIS-$suffix"
+    patientId = $patientId; visitId = $visitId; deptId = '33333333-3333-3333-3333-333333333333'
+    templateCode = "TPL-DIS-$suffix"
     title = 'Discharge Summary'; content = @{ course = 'treated and improved' }
 } $token
 Check 'dis.record.create' $r.Status 200

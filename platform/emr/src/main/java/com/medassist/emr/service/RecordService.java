@@ -672,12 +672,9 @@ public class RecordService {
         return repo.listRecords(normalized, patientId, visitId, size, campusCsv(campusIds));
     }
 
+    /** 院区集合转 SQL 过滤串（G71 统一走 CampusFilters）。 */
     private static String campusCsv(Set<UUID> campusIds) {
-        if (campusIds == null || campusIds.isEmpty()) {
-            return "";
-        }
-        return campusIds.stream().map(UUID::toString).sorted()
-                .reduce((a, b) -> a + "," + b).orElse("");
+        return com.medassist.common.security.CampusFilters.csv(campusIds);
     }
 
     /** 校验内容哈希：重新计算正文哈希，并核对当前版本各级签名保存的哈希是否一致。 */

@@ -835,10 +835,11 @@ public class EmrRepository {
         if (actorId == null) {
             return false;
         }
+        // G71：JdbcClient 不允许命名参数与位置参数混用（旧写法 `:actorId` + `?` 直接 500）
         return jdbc.sql("""
                         SELECT COALESCE(requester_id = CAST(:actorId AS uuid), false)
-                          FROM emr_svc.record_change_request WHERE id = ?
-                        """).param("actorId", actorId.toString()).param(requestId)
+                          FROM emr_svc.record_change_request WHERE id = :requestId
+                        """).param("actorId", actorId.toString()).param("requestId", requestId)
                 .query(Boolean.class).optional().orElse(false);
     }
 

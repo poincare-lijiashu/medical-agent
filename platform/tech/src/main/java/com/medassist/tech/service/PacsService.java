@@ -86,7 +86,7 @@ public class PacsService {
         OffsetDateTime toTs = (date == null ? BusinessTime.today() : date)
                 .plusDays(1).atStartOfDay(zone).toOffsetDateTime();
         return repo.listWorklist(normalized, fromTs, toTs,
-                ApplicationService.campusCsv(campusIds), size);
+                com.medassist.common.security.CampusFilters.csv(campusIds), size);
     }
 
     /** 登记影像检查；同一申请 + 同一 UID 幂等返回，不同 UID 冲突。 */

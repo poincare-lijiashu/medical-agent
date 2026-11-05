@@ -247,12 +247,9 @@ public class ConsentService {
                 .map(ConsentService::view).toList();
     }
 
+    /** 院区集合转 SQL 过滤串（G71 统一走 CampusFilters）。 */
     private static String campusCsv(Set<UUID> campusIds) {
-        if (campusIds == null || campusIds.isEmpty()) {
-            return "";
-        }
-        return campusIds.stream().map(UUID::toString).sorted()
-                .reduce((a, b) -> a + "," + b).orElse("");
+        return com.medassist.common.security.CampusFilters.csv(campusIds);
     }
 
     /** 验签：正文哈希必须一致；CA 签名再验签名值。 */

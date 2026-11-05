@@ -78,7 +78,7 @@ public class PacsReadingService {
         OffsetDateTime[] window = dayWindow(date);
         return repo.listReadingQueue(normalizedModality, normalizedState,
                 isBlank(actor) ? null : actor.trim(), window[0], window[1],
-                ApplicationService.campusCsv(campusIds), size);
+                com.medassist.common.security.CampusFilters.csv(campusIds), size);
     }
 
     /** 领取阅片：同一医师重复领取幂等返回，他人已领取则 409。 */

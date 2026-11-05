@@ -26,12 +26,16 @@ public class EmrAccessGuard {
 
     /** 校验病历在数据范围内（详情、打印、保存、提交、签名、归档、修订、修改申请）。 */
     public void requireRecord(DataScope scope, UUID recordId) {
-        UUID deptId = repo.findRecordDepartment(recordId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        // G45：院区与科室同时校验；缺院区的历史数据按不可见处理（fail-closed）
+        // G71：记录不存在时两个查询都为空；dept 允许为空（未挂就诊的建档），
+        // 此时只有全院科室角色可读——否则"建档即无人可见"，连建单人自己都打不开。
+        UUID deptId = repo.findRecordDepartment(recordId).orElse(null);
         UUID campusId = repo.findRecordCampus(recordId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        if (!scope.canSeeDepartment(deptId) || !scope.canSeeCampus(campusId)) {
+        if (!scope.allDepartments() && (deptId == null || !scope.canSeeDepartment(deptId))) {
+            throw new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND);
+        }
+        // G45：院区仍严格校验；缺院区的历史数据 fail-closed
+        if (!scope.canSeeCampus(campusId)) {
             throw new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND);
         }
     }
