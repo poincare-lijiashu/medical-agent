@@ -86,6 +86,72 @@
         <div v-if="!skillList.length" class="src">暂无技能卡；技能卡必须经非创建人审核后才会生效。</div>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-bots">
+        <template #header>
+          <div class="card-head">
+            <b>Bot 实体（身份 + 模型绑定 + 记忆）</b>
+            <el-button type="primary" size="small" @click="openBotCreate">新建 Bot</el-button>
+          </div>
+        </template>
+        <el-table :data="botList" size="small" style="width: 100%">
+          <el-table-column prop="code" label="编码" width="140" />
+          <el-table-column prop="name" label="名称" width="160" />
+          <el-table-column prop="agentId" label="能力域" width="100" />
+          <el-table-column prop="modelProvider" label="模型" width="130" />
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="版本" width="60">
+            <template #default="{ row }">v{{ row.version }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="310">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'"
+                         size="small" @click="submitBot(row)">送审</el-button>
+              <template v-if="row.status === 'IN_REVIEW' && row.createdBy !== username">
+                <el-button size="small" type="success" @click="reviewBot(row, true)">通过</el-button>
+                <el-button size="small" type="danger" @click="reviewBot(row, false)">驳回</el-button>
+              </template>
+              <el-button v-if="row.status === 'PUBLISHED'" size="small" @click="disableBot(row)">停用</el-button>
+              <el-button size="small" @click="openMemory(row)">记忆</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="!botList.length" class="src">暂无 Bot；Bot 是"有身份、有模型、有记忆"的持续实体，须经非创建人审核后生效。</div>
+      </el-card>
+
+      <el-card shadow="never" data-testid="agent-teams">
+        <template #header>
+          <div class="card-head">
+            <b>Bot 团队（多模型协作）</b>
+            <el-button type="primary" size="small" @click="openTeamCreate">新建团队</el-button>
+          </div>
+        </template>
+        <el-table :data="teamList" size="small" style="width: 100%">
+          <el-table-column prop="code" label="编码" width="150" />
+          <el-table-column prop="name" label="名称" width="180" />
+          <el-table-column label="成员" width="260">
+            <template #default="{ row }">{{ (row.botCodes || []).join('、') }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.status === 'ACTIVE' ? 'success' : 'info'">
+                {{ row.status === 'ACTIVE' ? '启用' : '停用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="170">
+            <template #default="{ row }">
+              <el-button size="small" type="primary" @click="openCollaborate(row)">协作</el-button>
+              <el-button v-if="row.status === 'ACTIVE'" size="small" @click="disableTeam(row)">停用</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="!teamList.length" class="src">暂无团队；2–4 个已发布 Bot 可组成一个协作小组。</div>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-tools">
         <template #header><b>工具注册表</b></template>
         <el-table :data="tools" size="small" style="width: 100%">
@@ -148,6 +214,115 @@
         <el-button type="primary" size="small" :loading="skillBusy" @click="createSkill">创建草稿</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="botOn" title="新建 Bot" width="680px">
+      <div class="skill-form">
+        <label>编码<input v-model="botForm.code" class="inp" placeholder="如 deepseek-bot" /></label>
+        <label>名称<input v-model="botForm.name" class="inp" /></label>
+        <label>能力域
+          <el-select v-model="botForm.agentId" size="small" style="width: 100%">
+            <el-option v-for="a in agents" :key="a.id" :label="a.name + '（' + a.id + '）'" :value="a.id" />
+          </el-select>
+        </label>
+        <label>模型 provider
+          <input v-model="botForm.modelProvider" class="inp" placeholder="default 或管理端 provider id" />
+        </label>
+        <label>模型 ID（可选）<input v-model="botForm.modelId" class="inp" placeholder="如 deepseek-v4-pro" /></label>
+        <label>记忆范围
+          <el-select v-model="botForm.memoryScope" size="small" style="width: 100%">
+            <el-option label="Bot 私有" value="bot" />
+            <el-option label="团队共享" value="team" />
+          </el-select>
+        </label>
+        <label style="grid-column: 1 / -1">职责 / 人格（不少于 20 字）
+          <textarea v-model="botForm.persona" class="inp" rows="3" />
+        </label>
+        <label style="grid-column: 1 / -1">技能卡（仅该能力域已发布）
+          <el-select v-model="botForm.skillCodes" multiple size="small" style="width: 100%">
+            <el-option v-for="s in botSkillOptions" :key="s.code"
+                       :label="s.name + '（' + s.code + '）'" :value="s.code" />
+          </el-select>
+        </label>
+        <label style="grid-column: 1 / -1">工具白名单
+          <el-checkbox-group v-model="botForm.toolAllowlist">
+            <el-checkbox v-for="t in botToolOptions" :key="t.name" :label="t.name">{{ t.title }}</el-checkbox>
+          </el-checkbox-group>
+        </label>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="botOn = false">取消</el-button>
+        <el-button type="primary" size="small" :loading="botBusy" @click="createBot">创建草稿</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="teamOn" title="新建 Bot 团队" width="560px">
+      <div class="skill-form">
+        <label>编码<input v-model="teamForm.code" class="inp" placeholder="如 consult-team" /></label>
+        <label>名称<input v-model="teamForm.name" class="inp" /></label>
+        <label style="grid-column: 1 / -1">说明<input v-model="teamForm.description" class="inp" /></label>
+        <label style="grid-column: 1 / -1">成员（2–4 个已发布 Bot）
+          <el-select v-model="teamForm.botCodes" multiple size="small" style="width: 100%">
+            <el-option v-for="b in publishedBots" :key="b.code"
+                       :label="b.name + '（' + b.code + '）'" :value="b.code" />
+          </el-select>
+        </label>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="teamOn = false">取消</el-button>
+        <el-button type="primary" size="small" :loading="teamBusy" @click="createTeam">创建团队</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="collabOn" :title="'团队协作 · ' + (collabTeam ? collabTeam.name : '')" width="720px">
+      <el-input v-model="collabQuestion" type="textarea" :rows="3" maxlength="2000" show-word-limit
+                placeholder="输入一个临床问题，团队内各 Bot 并行作答" />
+      <div style="padding-top: 8px">
+        <el-button type="primary" size="small" :loading="collabBusy" @click="runCollaborate">发起协作</el-button>
+        <span class="src" style="margin-left: 8px">意见并列展示，不合成共识；需执业人员复核。</span>
+      </div>
+      <div v-if="collabResult" class="route-box" data-testid="agent-collab-result">
+        <div v-for="o in collabResult.opinions" :key="o.botCode" style="padding: 6px 0; border-bottom: 1px dashed var(--line)">
+          <b>{{ o.name }}</b>
+          <el-tag size="small" style="margin-left: 6px">{{ o.modelProvider }}</el-tag>
+          <el-tag v-if="o.status !== 'OK'" size="small" type="danger" style="margin-left: 6px">失败</el-tag>
+          <div class="src" v-if="o.status !== 'OK'">错误类型：{{ o.error }}</div>
+          <div v-else style="white-space: pre-wrap">{{ o.answer }}</div>
+        </div>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="memOn" :title="'长期记忆 · ' + (memBot ? memBot.name : '')" width="720px">
+      <el-table :data="memList" size="small" style="width: 100%">
+        <el-table-column prop="key" label="键" width="130" />
+        <el-table-column prop="value" label="内容" />
+        <el-table-column prop="source" label="来源" width="140" />
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.status === 'CONFIRMED' ? 'success' : 'warning'">
+              {{ row.status === 'CONFIRMED' ? '已确认' : '待确认' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="130">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'CANDIDATE'" size="small" type="success"
+                       @click="confirmMemory(row)">确认</el-button>
+            <el-button size="small" type="danger" @click="deleteMemory(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div class="skill-form" style="margin-top: 12px">
+        <label>键<input v-model="memForm.key" class="inp" placeholder="如 dept.preference" /></label>
+        <label>来源<input v-model="memForm.source" class="inp" placeholder="如 呼吸科共识会" /></label>
+        <label style="grid-column: 1 / -1">内容（不得含手机号/身份证/邮箱）
+          <textarea v-model="memForm.value" class="inp" rows="2" />
+        </label>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="memOn = false">关闭</el-button>
+        <el-button type="primary" size="small" :loading="memBusy" @click="addMemory">新增记忆（待确认）</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -173,6 +348,42 @@ const routing = ref(false)
 const skillOn = ref(false)
 const skillBusy = ref(false)
 const skillForm = ref(emptySkill())
+const botList = ref([])
+const teamList = ref([])
+const botOn = ref(false)
+const botBusy = ref(false)
+const botForm = ref(emptyBot())
+const teamOn = ref(false)
+const teamBusy = ref(false)
+const teamForm = ref(emptyTeam())
+const collabOn = ref(false)
+const collabTeam = ref(null)
+const collabQuestion = ref('')
+const collabResult = ref(null)
+const collabBusy = ref(false)
+const memOn = ref(false)
+const memBot = ref(null)
+const memList = ref([])
+const memBusy = ref(false)
+const memForm = ref({ key: '', value: '', source: '' })
+
+function emptyBot() {
+  return {
+    code: '',
+    name: '',
+    agentId: 'literature',
+    persona: '',
+    modelProvider: 'default',
+    modelId: '',
+    skillCodes: [],
+    toolAllowlist: [],
+    memoryScope: 'bot',
+  }
+}
+
+function emptyTeam() {
+  return { code: '', name: '', description: '', botCodes: [] }
+}
 
 function emptySkill() {
   return {
@@ -194,6 +405,19 @@ const createTools = computed(() => {
   return tools.value.filter((t) => allowed.has(t.name))
 })
 
+// Bot：技能卡只能选同能力域且已发布；工具同理
+const botSkillOptions = computed(() => skillList.value.filter(
+  (s) => s.status === 'PUBLISHED' && s.agentId === botForm.value.agentId))
+
+const botToolOptions = computed(() => {
+  const agent = agents.value.find((a) => a.id === botForm.value.agentId)
+  if (!agent) return []
+  const allowed = new Set(agent.tools || [])
+  return tools.value.filter((t) => allowed.has(t.name))
+})
+
+const publishedBots = computed(() => botList.value.filter((b) => b.status === 'PUBLISHED'))
+
 const STATUS_TEXT = {
   DRAFT: '草稿',
   IN_REVIEW: '待审核',
@@ -214,15 +438,19 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s] = await Promise.all([
+  const [f, c, s, b, t] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
+    http.get('/agent/bots'),
+    http.get('/agent/bot-teams'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
   tools.value = (c.data && c.data.tools) || []
   skillList.value = (s.data && s.data.skills) || []
+  botList.value = (b.data && b.data.bots) || []
+  teamList.value = (t.data && t.data.teams) || []
 }
 
 async function toggle(flag, value) {
@@ -321,6 +549,174 @@ async function disableSkill(row) {
   ElMessage.success('已停用')
 }
 
+// ---------------------------------------------------------------- Bot / 团队 / 记忆
+
+function openBotCreate() {
+  botForm.value = emptyBot()
+  botOn.value = true
+}
+
+async function createBot() {
+  botBusy.value = true
+  try {
+    await http.post('/agent/bots', {
+      code: botForm.value.code.trim(),
+      name: botForm.value.name.trim(),
+      agentId: botForm.value.agentId,
+      persona: botForm.value.persona.trim(),
+      modelProvider: botForm.value.modelProvider.trim() || 'default',
+      modelId: botForm.value.modelId.trim() || null,
+      skillCodes: botForm.value.skillCodes,
+      toolAllowlist: botForm.value.toolAllowlist,
+      memoryScope: botForm.value.memoryScope,
+    })
+    botOn.value = false
+    await loadAll()
+    ElMessage.success('已创建 Bot 草稿，需另一名管理员/质控审核后生效')
+  } finally {
+    botBusy.value = false
+  }
+}
+
+async function submitBot(row) {
+  await http.post(`/agent/bots/${row.code}/submit`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已提交审核')
+}
+
+async function reviewBot(row, approve) {
+  let note = null
+  try {
+    if (approve) {
+      await ElMessageBox.confirm('通过后 Bot 立即可被团队使用，确认继续？', '审核 Bot',
+        { type: 'warning' })
+    } else {
+      const r = await ElMessageBox.prompt('请填写驳回原因', '驳回 Bot',
+        { inputValidator: (v) => !!(v && v.trim()) || '必须填写原因' })
+      note = r.value
+    }
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/bots/${row.code}/review`,
+    { approve, note, rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success(approve ? '已发布' : '已驳回')
+}
+
+async function disableBot(row) {
+  try {
+    await ElMessageBox.confirm('停用后该 Bot 不再可被团队使用（记忆保留）。', '停用 Bot',
+      { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/bots/${row.code}/disable`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已停用')
+}
+
+function openTeamCreate() {
+  teamForm.value = emptyTeam()
+  teamOn.value = true
+}
+
+async function createTeam() {
+  teamBusy.value = true
+  try {
+    await http.post('/agent/bot-teams', {
+      code: teamForm.value.code.trim(),
+      name: teamForm.value.name.trim(),
+      description: teamForm.value.description.trim(),
+      botCodes: teamForm.value.botCodes,
+    })
+    teamOn.value = false
+    await loadAll()
+    ElMessage.success('团队已创建')
+  } finally {
+    teamBusy.value = false
+  }
+}
+
+async function disableTeam(row) {
+  try {
+    await ElMessageBox.confirm('停用后团队不再可发起协作。', '停用团队', { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/bot-teams/${row.code}/disable`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已停用')
+}
+
+function openCollaborate(row) {
+  collabTeam.value = row
+  collabQuestion.value = ''
+  collabResult.value = null
+  collabOn.value = true
+}
+
+async function runCollaborate() {
+  if (!collabQuestion.value.trim()) {
+    ElMessage.warning('请先输入问题')
+    return
+  }
+  collabBusy.value = true
+  try {
+    const r = await http.post(`/agent/bot-teams/${collabTeam.value.code}/collaborate`,
+      { question: collabQuestion.value.trim() })
+    collabResult.value = r.data
+  } finally {
+    collabBusy.value = false
+  }
+}
+
+async function openMemory(row) {
+  memBot.value = row
+  memForm.value = { key: '', value: '', source: '' }
+  memOn.value = true
+  await loadMemories()
+}
+
+async function loadMemories() {
+  const r = await http.get(`/agent/bots/${memBot.value.code}/memories`)
+  memList.value = (r.data && r.data.memories) || []
+}
+
+async function addMemory() {
+  memBusy.value = true
+  try {
+    await http.post(`/agent/bots/${memBot.value.code}/memories`, {
+      key: memForm.value.key.trim(),
+      value: memForm.value.value.trim(),
+      source: memForm.value.source.trim(),
+    })
+    memForm.value = { key: '', value: '', source: '' }
+    await loadMemories()
+    ElMessage.success('已新增记忆（待确认后才会注入提示）')
+  } finally {
+    memBusy.value = false
+  }
+}
+
+async function confirmMemory(row) {
+  await http.post(`/agent/bot-memories/${row.id}/confirm`)
+  await loadMemories()
+  ElMessage.success('已确认')
+}
+
+async function deleteMemory(row) {
+  try {
+    await ElMessageBox.confirm('删除后该记忆不再注入提示（保留软删除记录）。', '删除记忆',
+      { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  await http.delete(`/agent/bot-memories/${row.id}`)
+  await loadMemories()
+  ElMessage.success('已删除')
+}
+
 function openCard() {
   window.open('/api/v1/agent/card', '_blank', 'noopener')
 }
@@ -341,6 +737,7 @@ onMounted(loadAll)
   background: var(--rail, #f8fafc); line-height: 1.9; font-size: 13px;
 }
 .src { color: var(--ink-3, #64748b); font-size: 12px }
+.card-head { display: flex; align-items: center; justify-content: space-between }
 .skill-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px }
 .skill-form label { display: flex; flex-direction: column; gap: 4px }
 .skill-form .inp {

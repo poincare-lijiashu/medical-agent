@@ -245,6 +245,7 @@ def deactivate(kind: str) -> None:
 
 
 def active_provider(kind: str) -> dict | None:
+
     """当前激活的 provider（含 api_key 原文，仅服务端内部使用）；无则 None。"""
     cfg = load_config()
     if kind not in _KINDS:
@@ -252,6 +253,20 @@ def active_provider(kind: str) -> dict | None:
     aid = cfg[kind]["active"]
     for p in cfg[kind]["providers"]:
         if p.get("id") == aid:
+            return p
+    return None
+
+
+def find_provider(kind: str, pid: str) -> dict | None:
+    """按 id 取指定 provider（含 api_key 原文，仅服务端内部使用）。
+
+    G88：Bot 需要"每个 Bot 绑定自己的模型"——DeepSeek Bot 与 Grok Bot 可同时存在，
+    不能只靠全局唯一 active provider。
+    """
+    if kind not in _KINDS:
+        return None
+    for p in load_config()[kind]["providers"]:
+        if p.get("id") == pid:
             return p
     return None
 

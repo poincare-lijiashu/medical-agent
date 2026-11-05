@@ -58,6 +58,7 @@ class LLMFactory:
     """
 
     _instances: dict[str, BaseChatModel] = {}   # 类变量：模型实例缓存（缓存键 → 模型），全类共享
+    _provider_instances: dict[str, BaseChatModel] = {}  # G88：按 provider 绑定的模型缓存
 
     @classmethod
     def _get_settings(cls):
@@ -233,9 +234,24 @@ class LLMFactory:
         return llm.with_structured_output(output_schema, method="function_calling")
 
     @classmethod
+    def get_llm_for_provider(cls, provider: dict, temperature: float = 0) -> BaseChatModel:
+        """G88：按**指定 provider** 构建模型（Bot 级模型绑定）。
+
+        DeepSeek Bot 与 Grok Bot 可绑定不同 provider 同时存在，不再依赖全局唯一 active。
+        仅服务端内部使用；provider 含 api_key 原文，禁止回传前端。
+        """
+        key = f"{provider.get('id')}_{provider.get('model_id')}_{temperature}"
+        if key not in cls._provider_instances:
+            kwargs = cls._provider_kwargs(provider)
+            kwargs["temperature"] = temperature
+            cls._provider_instances[key] = init_chat_model(**kwargs)
+        return cls._provider_instances[key]
+
+    @classmethod
     def clear_cache(cls) -> None:
         """清空模型实例缓存（测试时用）。"""
         cls._instances.clear()
+        cls._provider_instances.clear()
         logger.info("llm_factory.cache_cleared")
 
     @classmethod

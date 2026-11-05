@@ -1,0 +1,317 @@
+"""G88 Bot 实体（Bot as a first-class identity，而不是"模型别名"）。
+
+2026 的 "Bot" 与"调用某个模型"不是一回事：Bot 有**自己的身份**（名字/职责/人格）、
+**自己的模型绑定**（DeepSeek Bot 与 Grok Bot 可同时存在）、**自己的技能与工具**、
+**自己的长期记忆**，还能被拉进团队协作。本模块只负责 Bot 的身份与发布治理：
+
+- 模型绑定：``modelProvider`` 指向管理端配置的 chat provider（或 ``default``=当前激活），
+  这样不同 Bot 可以跑在不同厂商上，而无需切换全局 active；
+- 技能绑定：只能引用**已发布**且属于同一智能体的技能卡（G87），避免"技能张冠李戴"；
+- 工具白名单：必须是该智能体已声明的工具子集；
+- 发布治理：DRAFT → IN_REVIEW → PUBLISHED / REJECTED → DISABLED；四眼审核、CAS、
+  发布后不可改（与技能卡同纪律）。
+
+运行时（提示词拼装、团队协作、记忆注入）在 ``bot_runtime``；长期记忆在 ``bot_memory``。
+"""
+from __future__ import annotations
+
+import os
+import re
+import threading
+from datetime import datetime, timezone
+
+from backend.agents import catalog, skills
+from backend.core import agent_tools, llm_config, pg_store
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BOTS_FILE = os.path.join(BASE_DIR, "data", "agent_bots.json")
+
+STATUSES = ("DRAFT", "IN_REVIEW", "PUBLISHED", "REJECTED", "DISABLED")
+EDITABLE = ("DRAFT", "REJECTED")
+MAX_SKILLS = 6
+MAX_TOOLS = 8
+MAX_PERSONA = 2000
+MIN_PERSONA = 20
+MEMORY_SCOPES = ("bot", "team")
+
+_CODE = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
+
+_lock = threading.RLock()
+
+
+class BotError(RuntimeError):
+    code = "BOT_ERROR"
+
+
+class BotNotFound(BotError):
+    code = "BOT_NOT_FOUND"
+
+
+class BotInvalid(BotError):
+    code = "BOT_INVALID"
+
+
+class BotConflict(BotError):
+    code = "BOT_CONFLICT"
+
+
+class BotForbidden(BotError):
+    code = "BOT_FORBIDDEN"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _load_json() -> list:
+    import json
+    if not os.path.isfile(BOTS_FILE):
+        return []
+    try:
+        with open(BOTS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _load() -> list:
+    try:
+        return pg_store.load_json_list("agent_bots", BOTS_FILE, _load_json)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save(items: list) -> None:
+    pg_store.save_json_list("agent_bots", BOTS_FILE, items)
+
+
+def _find(items: list, code: str) -> dict | None:
+    for item in items:
+        if item.get("code") == code:
+            return item
+    return None
+
+
+def _clean(values, limit: int, field: str) -> list[str]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise BotInvalid(f"{field} 必须是数组")
+    out = []
+    for v in values:
+        text = str(v or "").strip()
+        if not text:
+            continue
+        if len(text) > 200:
+            raise BotInvalid(f"{field} 单项不得超过 200 字")
+        if text not in out:
+            out.append(text)
+    if len(out) > limit:
+        raise BotInvalid(f"{field} 最多 {limit} 项")
+    return out
+
+
+def _validate(payload: dict, current: dict | None = None) -> dict:
+    code = str(payload.get("code") or (current or {}).get("code") or "").strip()
+    if not _CODE.match(code):
+        raise BotInvalid("Bot 编码需为 3-64 位小写字母/数字/短横线，且以字母开头")
+
+    agent_id = str(payload.get("agentId") or (current or {}).get("agentId") or "").strip()
+    agent = catalog.get_agent(agent_id)
+    if agent is None:
+        raise BotInvalid(f"未找到智能体：{agent_id}")
+
+    name = str(payload.get("name") or "").strip()
+    if not (2 <= len(name) <= 80):
+        raise BotInvalid("Bot 名称需 2-80 字")
+
+    persona = str(payload.get("persona") or "").strip()
+    if not (MIN_PERSONA <= len(persona) <= MAX_PERSONA):
+        raise BotInvalid(f"人格/职责说明需 {MIN_PERSONA}-{MAX_PERSONA} 字")
+
+    provider = str(payload.get("modelProvider") or (current or {}).get("modelProvider")
+                   or "default").strip()
+    if provider != "default" and llm_config.find_provider("chat", provider) is None:
+        raise BotInvalid(f"未找到模型提供方：{provider}")
+    model_id = str(payload.get("modelId") or "").strip()
+    if len(model_id) > 128:
+        raise BotInvalid("模型 ID 不得超过 128 字")
+
+    skill_codes = _clean(payload.get("skillCodes"), MAX_SKILLS, "技能卡")
+    for sc in skill_codes:
+        card = skills.get_skill(sc, "admin")
+        if card.get("status") != "PUBLISHED":
+            raise BotInvalid(f"技能卡未生效：{sc}")
+        if card.get("agentId") != agent_id:
+            raise BotInvalid(f"技能卡 {sc} 属于智能体 {card.get('agentId')}，与 Bot 不匹配")
+
+    tools = _clean(payload.get("toolAllowlist"), MAX_TOOLS, "工具白名单")
+    for tool in tools:
+        if tool not in agent_tools.TOOLS:
+            raise BotInvalid(f"未注册的工具：{tool}")
+        if tool not in agent.tools:
+            raise BotInvalid(f"智能体 {agent_id} 未声明工具 {tool}")
+
+    scope = str(payload.get("memoryScope") or (current or {}).get("memoryScope") or "bot")
+    if scope not in MEMORY_SCOPES:
+        raise BotInvalid(f"记忆范围只支持 {MEMORY_SCOPES}")
+
+    return {
+        "code": code,
+        "name": name,
+        "agentId": agent_id,
+        "persona": persona,
+        "modelProvider": provider,
+        "modelId": model_id or None,
+        "skillCodes": skill_codes,
+        "toolAllowlist": tools,
+        "memoryScope": scope,
+    }
+
+
+def list_bots(role: str, status: str | None = None) -> list[dict]:
+    items = _load()
+    privileged = role in ("admin", "qc")
+    if not privileged:
+        status = "PUBLISHED"
+    out = [i for i in items if not status or i.get("status") == status]
+    out.sort(key=lambda i: (i.get("status") != "PUBLISHED", i.get("code")))
+    return out
+
+
+def get_bot(code: str, role: str) -> dict:
+    item = _find(_load(), (code or "").strip())
+    if item is None:
+        raise BotNotFound(f"未找到 Bot：{code}")
+    if role not in ("admin", "qc") and item.get("status") != "PUBLISHED":
+        raise BotNotFound(f"未找到 Bot：{code}")
+    return item
+
+
+def create_bot(payload: dict, actor: str) -> dict:
+    data = _validate(payload)
+    with _lock:
+        items = _load()
+        if _find(items, data["code"]) is not None:
+            raise BotConflict(f"Bot 编码已存在：{data['code']}")
+        now = _now()
+        item = {
+            **data,
+            "status": "DRAFT",
+            "version": 0,
+            "createdBy": actor,
+            "createdAt": now,
+            "updatedBy": actor,
+            "updatedAt": now,
+            "submittedBy": None,
+            "submittedAt": None,
+            "reviewedBy": None,
+            "reviewedAt": None,
+            "reviewNote": None,
+            "rowVersion": 0,
+        }
+        items.append(item)
+        _save(items)
+        return item
+
+
+def update_bot(code: str, payload: dict, row_version: int, actor: str) -> dict:
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise BotNotFound(f"未找到 Bot：{code}")
+        if item.get("status") not in EDITABLE:
+            raise BotConflict(f"当前状态不可修改：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise BotConflict("Bot 已被他人修改，请刷新后重试")
+        data = _validate(payload, current=item)
+        if data["code"] != item["code"]:
+            raise BotInvalid("Bot 编码不可修改")
+        item.update(data)
+        item.update({"updatedBy": actor, "updatedAt": _now(),
+                     "rowVersion": int(item["rowVersion"]) + 1})
+        _save(items)
+        return item
+
+
+def submit_bot(code: str, row_version: int, actor: str) -> dict:
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise BotNotFound(f"未找到 Bot：{code}")
+        if item.get("status") not in EDITABLE:
+            raise BotConflict(f"当前状态不可提交审核：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise BotConflict("Bot 已被他人修改，请刷新后重试")
+        _validate(item)
+        item.update({"status": "IN_REVIEW", "submittedBy": actor, "submittedAt": _now(),
+                     "updatedBy": actor, "updatedAt": _now(),
+                     "rowVersion": int(item["rowVersion"]) + 1})
+        _save(items)
+        return item
+
+
+def review_bot(code: str, approve: bool, note: str | None, row_version: int,
+               actor: str) -> dict:
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise BotNotFound(f"未找到 Bot：{code}")
+        if item.get("status") != "IN_REVIEW":
+            raise BotConflict(f"当前状态不可审核：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise BotConflict("Bot 已被他人修改，请刷新后重试")
+        if actor == item.get("createdBy"):
+            raise BotForbidden("不能审核自己创建的 Bot（四眼原则）")
+        text = (note or "").strip()
+        if not approve and not text:
+            raise BotInvalid("驳回必须填写原因")
+        now = _now()
+        if approve:
+            _validate(item)
+            item.update({"status": "PUBLISHED",
+                         "version": int(item.get("version", 0)) + 1})
+        else:
+            item["status"] = "REJECTED"
+        item.update({"reviewedBy": actor, "reviewedAt": now,
+                     "reviewNote": text or None, "updatedBy": actor,
+                     "updatedAt": now, "rowVersion": int(item["rowVersion"]) + 1})
+        _save(items)
+        return item
+
+
+def disable_bot(code: str, row_version: int, actor: str) -> dict:
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise BotNotFound(f"未找到 Bot：{code}")
+        if item.get("status") != "PUBLISHED":
+            raise BotConflict(f"仅生效中的 Bot 可停用：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise BotConflict("Bot 已被他人修改，请刷新后重试")
+        item.update({"status": "DISABLED", "updatedBy": actor, "updatedAt": _now(),
+                     "rowVersion": int(item["rowVersion"]) + 1})
+        _save(items)
+        return item
+
+
+def published_bots() -> list[dict]:
+    return [i for i in _load() if i.get("status") == "PUBLISHED"]
+
+
+def bot_skill_cards(bot: dict) -> list[dict]:
+    """运行时取 Bot 绑定的、当前仍生效的技能卡（发布后技能被停用则自动失效）。"""
+    out = []
+    for code in bot.get("skillCodes") or []:
+        try:
+            card = skills.get_skill(code, "admin")
+        except skills.SkillError:
+            continue
+        if card.get("status") == "PUBLISHED":
+            out.append(card)
+    return out

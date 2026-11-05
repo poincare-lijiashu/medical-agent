@@ -193,6 +193,13 @@ async def _init_impl() -> bool:
             await c.execute("""CREATE TABLE IF NOT EXISTS agent_skills(
                 code text primary key, data jsonb NOT NULL, status text NOT NULL,
                 updated_at timestamptz default now())""")
+            # G88：Bot / Bot 团队 / Bot 长期记忆（同一形态：主键 + JSON + 状态）
+            for table, key in (("agent_bots", "code"), ("agent_bot_teams", "code"),
+                               ("agent_bot_memories", "id")):
+                await c.execute(
+                    f"""CREATE TABLE IF NOT EXISTS {table}(
+                        {key} text primary key, data jsonb NOT NULL, status text NOT NULL,
+                        updated_at timestamptz default now())""")
     except Exception:
         try:
             await pool.close()
@@ -1209,6 +1216,66 @@ def load_skills(path: str, json_loader=None) -> list:
 
 def save_skills(items: list, path: str) -> None:
     _json_then_pg(_pg_save_skills, path, items)
+
+
+# ---- G88：Bot / Bot 团队 / Bot 记忆（通用 JSON 列表域，表名与主键走白名单） ----
+
+_JSON_LIST_KEYS = {
+    "agent_bots": "code",
+    "agent_bot_teams": "code",
+    "agent_bot_memories": "id",
+}
+
+
+async def _pg_load_json_list(table: str, key: str) -> list | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch(f"SELECT data FROM {table} ORDER BY updated_at DESC")
+    if not rows:
+        return None  # 空表 → 回落 JSON（与其它域同纪律）
+    out = []
+    for r in rows:
+        try:
+            out.append(json.loads(r["data"]) if isinstance(r["data"], str) else r["data"])
+        except Exception:  # noqa: BLE001 —— 单行损坏跳过
+            continue
+    return out
+
+
+async def _pg_save_json_list(table: str, key: str, items: list) -> None:
+    rows = [(str(i.get(key)), json.dumps(i, ensure_ascii=False), str(i.get("status") or ""))
+            for i in (items or []) if isinstance(i, dict) and str(i.get(key) or "").strip()]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                await c.execute(f"DELETE FROM {table} WHERE NOT ({key} = ANY($1))",
+                                [r[0] for r in rows])
+            else:
+                await c.execute(f"DELETE FROM {table}")
+            await c.executemany(
+                f"""INSERT INTO {table}({key},data,status,updated_at)
+                    VALUES($1,$2::jsonb,$3,now())
+                    ON CONFLICT({key}) DO UPDATE
+                    SET data=EXCLUDED.data, status=EXCLUDED.status, updated_at=now()""",
+                rows)
+
+
+def load_json_list(table: str, path: str, json_loader=None) -> list:
+    """通用 JSON 列表域读：PG 真源 → JSON 兜底（表名/主键白名单，非法表名直接报错）。"""
+    key = _JSON_LIST_KEYS[table]
+
+    async def _load() -> list | None:
+        return await _pg_load_json_list(table, key)
+
+    return _pg_or_json(_load, json_loader, path, [])
+
+
+def save_json_list(table: str, path: str, items: list) -> None:
+    key = _JSON_LIST_KEYS[table]
+
+    async def _save(data: list) -> None:
+        await _pg_save_json_list(table, key, data)
+
+    _json_then_pg(_save, path, items)
 
 
 async def _seed_drug_tables_impl(dict_items: list, rule_items: list) -> dict:

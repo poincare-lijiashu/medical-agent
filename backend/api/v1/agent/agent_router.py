@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
 from backend.agents import catalog, skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -60,6 +61,44 @@ class SkillVersionReq(BaseModel):
 class SkillReviewReq(SkillVersionReq):
     approve: bool
     note: str | None = Field(default=None, max_length=2000)
+
+
+class BotPayload(BaseModel):
+    code: str = Field(min_length=3, max_length=64)
+    name: str = Field(min_length=2, max_length=80)
+    agentId: str = Field(min_length=2, max_length=32)
+    persona: str = Field(min_length=20, max_length=2000)
+    modelProvider: str = Field(default="default", max_length=64)
+    modelId: str | None = Field(default=None, max_length=128)
+    skillCodes: list[str] = Field(default_factory=list, max_length=6)
+    toolAllowlist: list[str] = Field(default_factory=list, max_length=8)
+    memoryScope: str = Field(default="bot", max_length=16)
+
+
+class BotUpdateReq(BotPayload):
+    rowVersion: int = Field(ge=0)
+
+
+class MemoryPayload(BaseModel):
+    key: str = Field(min_length=2, max_length=64)
+    value: str = Field(min_length=2, max_length=500)
+    source: str = Field(min_length=2, max_length=200)
+    expiresAt: str | None = Field(default=None, max_length=10)
+
+
+class TeamPayload(BaseModel):
+    code: str = Field(min_length=3, max_length=64)
+    name: str = Field(min_length=2, max_length=80)
+    description: str = Field(default="", max_length=300)
+    botCodes: list[str] = Field(default_factory=list, max_length=4)
+
+
+class TeamUpdateReq(TeamPayload):
+    rowVersion: int = Field(ge=0)
+
+
+class CollaborateReq(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
 
 
 def _base_url(request: Request) -> str:
@@ -239,6 +278,222 @@ async def disable_skill(code: str, req: SkillVersionReq,
         raise _skill_http(e)
     await _audit_agent(user, "skill_disable", {"code": code})
     return item
+
+
+# ---------------------------------------------------------------- Bot / 团队 / 记忆（G88）
+
+def _bot_http(e: bot_registry.BotError) -> HTTPException:
+    if isinstance(e, bot_registry.BotNotFound):
+        return HTTPException(404, str(e))
+    if isinstance(e, bot_registry.BotForbidden):
+        return HTTPException(403, str(e))
+    if isinstance(e, bot_registry.BotConflict):
+        return HTTPException(409, str(e))
+    return HTTPException(422, str(e))
+
+
+def _team_http(e: bot_teams.TeamError) -> HTTPException:
+    if isinstance(e, bot_teams.TeamNotFound):
+        return HTTPException(404, str(e))
+    if isinstance(e, bot_teams.TeamConflict):
+        return HTTPException(409, str(e))
+    return HTTPException(422, str(e))
+
+
+def _mem_http(e: bot_memory.MemoryError_) -> HTTPException:
+    if isinstance(e, bot_memory.MemoryNotFound):
+        return HTTPException(404, str(e))
+    if isinstance(e, bot_memory.MemoryForbidden):
+        return HTTPException(403, str(e))
+    if isinstance(e, bot_memory.MemoryConflict):
+        return HTTPException(409, str(e))
+    return HTTPException(422, str(e))
+
+
+@router.get("/bots")
+async def list_bots(status: str | None = None, user: dict = Depends(require_user)):
+    return {"bots": bot_registry.list_bots(user.get("role", ""), status)}
+
+
+@router.get("/bots/{code}")
+async def get_bot(code: str, user: dict = Depends(require_user)):
+    try:
+        return bot_registry.get_bot(code, user.get("role", ""))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+
+
+@router.post("/bots")
+async def create_bot(req: BotPayload, user: dict = Depends(require_role("admin"))):
+    """新建 Bot（DRAFT）：身份 + 模型绑定 + 技能/工具白名单；须另一人审核后生效。"""
+    try:
+        item = bot_registry.create_bot(req.model_dump(), user.get("username", "admin"))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "bot_create",
+                       {"code": item["code"], "agentId": item["agentId"],
+                        "modelProvider": item["modelProvider"]})
+    return item
+
+
+@router.put("/bots/{code}")
+async def update_bot(code: str, req: BotUpdateReq,
+                     user: dict = Depends(require_role("admin"))):
+    payload = req.model_dump()
+    row_version = payload.pop("rowVersion")
+    try:
+        item = bot_registry.update_bot(code, payload, row_version,
+                                       user.get("username", "admin"))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "bot_update", {"code": code, "rowVersion": item["rowVersion"]})
+    return item
+
+
+@router.post("/bots/{code}/submit")
+async def submit_bot(code: str, req: SkillVersionReq,
+                     user: dict = Depends(require_role("admin"))):
+    try:
+        item = bot_registry.submit_bot(code, req.rowVersion, user.get("username", "admin"))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "bot_submit", {"code": code})
+    return item
+
+
+@router.post("/bots/{code}/review")
+async def review_bot(code: str, req: SkillReviewReq,
+                     user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = bot_registry.review_bot(code, req.approve, req.note, req.rowVersion,
+                                       user.get("username", "qc"))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "bot_review",
+                       {"code": code, "approve": req.approve, "version": item["version"]})
+    return item
+
+
+@router.post("/bots/{code}/disable")
+async def disable_bot(code: str, req: SkillVersionReq,
+                      user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = bot_registry.disable_bot(code, req.rowVersion, user.get("username", "qc"))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "bot_disable", {"code": code})
+    return item
+
+
+@router.get("/bots/{code}/memories")
+async def list_bot_memories(code: str, user: dict = Depends(require_user)):
+    """Bot 长期记忆：普通角色只看已确认；admin/qc 可见候选。"""
+    try:
+        bot_registry.get_bot(code, user.get("role", ""))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    return {"memories": bot_memory.list_memories(code, user.get("role", ""))}
+
+
+@router.post("/bots/{code}/memories")
+async def create_bot_memory(code: str, req: MemoryPayload, user: dict = Depends(require_user)):
+    payload = req.model_dump()
+    payload["botCode"] = code
+    try:
+        item = bot_memory.create_memory(payload, user.get("username", "anonymous"))
+    except bot_memory.MemoryError_ as e:
+        raise _mem_http(e)
+    await _audit_agent(user, "bot_memory_create", {"bot": code, "key": item["key"]})
+    return item
+
+
+@router.post("/bot-memories/{mem_id}/confirm")
+async def confirm_bot_memory(mem_id: str, user: dict = Depends(require_user)):
+    try:
+        item = bot_memory.confirm_memory(mem_id, user.get("username", "anonymous"),
+                                         user.get("role", ""))
+    except bot_memory.MemoryError_ as e:
+        raise _mem_http(e)
+    await _audit_agent(user, "bot_memory_confirm",
+                       {"bot": item["botCode"], "key": item["key"]})
+    return item
+
+
+@router.delete("/bot-memories/{mem_id}")
+async def delete_bot_memory(mem_id: str, user: dict = Depends(require_user)):
+    try:
+        item = bot_memory.delete_memory(mem_id, user.get("username", "anonymous"),
+                                        user.get("role", ""))
+    except bot_memory.MemoryError_ as e:
+        raise _mem_http(e)
+    await _audit_agent(user, "bot_memory_delete",
+                       {"bot": item["botCode"], "key": item["key"]})
+    return item
+
+
+@router.get("/bot-teams")
+async def list_bot_teams(status: str | None = None, user: dict = Depends(require_user)):
+    return {"teams": bot_teams.list_teams(user.get("role", ""), status)}
+
+
+@router.get("/bot-teams/{code}")
+async def get_bot_team(code: str, user: dict = Depends(require_user)):
+    try:
+        return bot_teams.get_team(code, user.get("role", ""))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+
+
+@router.post("/bot-teams")
+async def create_bot_team(req: TeamPayload, user: dict = Depends(require_role("admin"))):
+    try:
+        item = bot_teams.create_team(req.model_dump(), user.get("username", "admin"))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    await _audit_agent(user, "bot_team_create",
+                       {"code": item["code"], "bots": item["botCodes"]})
+    return item
+
+
+@router.put("/bot-teams/{code}")
+async def update_bot_team(code: str, req: TeamUpdateReq,
+                          user: dict = Depends(require_role("admin"))):
+    payload = req.model_dump()
+    row_version = payload.pop("rowVersion")
+    try:
+        item = bot_teams.update_team(code, payload, row_version,
+                                     user.get("username", "admin"))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    await _audit_agent(user, "bot_team_update", {"code": code})
+    return item
+
+
+@router.post("/bot-teams/{code}/disable")
+async def disable_bot_team(code: str, req: SkillVersionReq,
+                           user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = bot_teams.disable_team(code, req.rowVersion, user.get("username", "admin"))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    await _audit_agent(user, "bot_team_disable", {"code": code})
+    return item
+
+
+@router.post("/bot-teams/{code}/collaborate")
+async def collaborate(code: str, req: CollaborateReq, user: dict = Depends(require_user)):
+    """团队协作：各 Bot 并行作答、失败隔离；结果并列展示，需人工复核。"""
+    try:
+        team = bot_teams.get_team(code, user.get("role", ""))
+        result = await bot_runtime.collaborate(team, req.question)
+    except bot_runtime.BotUnavailable as e:
+        raise HTTPException(503, str(e))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    await _audit_agent(user, "bot_collaborate",
+                       {"team": code, "opinions": len(result["opinions"]),
+                        "failed": result["failed"]})
+    return result
 
 
 # ---------------------------------------------------------------- A2A（最小互操作）
