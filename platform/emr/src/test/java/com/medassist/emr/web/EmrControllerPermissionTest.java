@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -129,12 +130,27 @@ class EmrControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(service, never()).search(any(), any(), any(), any(), any(), any(), any(),
-                anyString(), any());
+                anyString(), any(), any());
 
         controller.search("x", null, null, null, null, null, null,
                 "emr:record:search", "doctor01", scope);
+        // G74：科室条件下推 SQL；本 scope 是全院科室角色，故 deptIds 传 null
         verify(service).search("x", null, null, null, null, null, null, "doctor01",
-                scope.campusFilter());
+                scope.campusFilter(), null);
+    }
+
+    @Test
+    @DisplayName("病历列表：单科室账号把科室集合下推服务层（G74）")
+    void listPushesDeptFilterDown() {
+        UUID deptId = UUID.randomUUID();
+        DataScope scoped = DataScope.ofDepartments("doctor01", java.util.Set.of(deptId), false);
+        when(service.list(null, null, null, 10, java.util.Set.of(), java.util.Set.of(deptId)))
+                .thenReturn(List.of());
+
+        var resp = controller.list(null, null, null, 10, "emr:record:read", scoped);
+
+        assertThat(resp.data()).isEmpty();
+        verify(service).list(null, null, null, 10, java.util.Set.of(), java.util.Set.of(deptId));
     }
 
     @Test

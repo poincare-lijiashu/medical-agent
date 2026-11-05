@@ -324,7 +324,13 @@ public class RegistrationService {
 
     /** 患者最近就诊列表（按院区收敛，G46；空集合表示不限院区）。 */
     public List<Visit> listByPatient(UUID patientId, int limit, java.util.Set<UUID> campusIds) {
-        return repo.listVisitsByPatient(patientId, limit, campusCsv(campusIds));
+        return listByPatient(patientId, limit, campusIds, null);
+    }
+
+    /** 患者最近就诊列表：院区 + 科室都在 SQL 层收敛（G74；null 表示全院科室角色）。 */
+    public List<Visit> listByPatient(UUID patientId, int limit, java.util.Set<UUID> campusIds,
+                                     java.util.Collection<UUID> deptIds) {
+        return repo.listVisitsByPatient(patientId, limit, campusCsv(campusIds), deptIds);
     }
 
     /** 号源列表（挂号工作台）：日期缺省为当天。 */

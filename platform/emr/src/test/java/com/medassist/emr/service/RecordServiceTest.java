@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -678,7 +679,7 @@ class RecordServiceTest {
         service.search(" MR2026_01 ", null, null, "signed", null, null, 0, "doctor01");
 
         verify(repo).searchRecords("%MR2026\\_01%", "MR2026\\_01%", null, null, "SIGNED",
-                null, null, 50, "");
+                null, null, 50, "", null);
         verify(repo).logChange(eq("doctor01"), eq("RECORD_SEARCH"), eq("MEDICAL_RECORD"),
                 eq("search"), anyString());
     }
@@ -688,7 +689,7 @@ class RecordServiceTest {
     void searchWithoutKeyword() {
         service.search("   ", null, null, null, null, null, 500, "doctor01");
 
-        verify(repo).searchRecords(null, null, null, null, null, null, null, 200, "");
+        verify(repo).searchRecords(null, null, null, null, null, null, null, 200, "", null);
     }
 
     @Test
@@ -710,7 +711,7 @@ class RecordServiceTest {
         service.search("x", null, " admission_note ", null, null, null, 10, "doctor01");
 
         verify(repo).searchRecords(anyString(), anyString(), any(), eq("ADMISSION_NOTE"),
-                any(), any(), any(), eq(10), eq(""));
+                any(), any(), any(), eq(10), eq(""), isNull());
     }
 
     @Test
@@ -722,7 +723,8 @@ class RecordServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
-        verify(repo, never()).searchRecords(any(), any(), any(), any(), any(), any(), any(), anyInt(), any());
+        verify(repo, never()).searchRecords(any(), any(), any(), any(), any(), any(), any(),
+                anyInt(), any(), any());
         verify(repo, never()).logChange(anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
@@ -734,7 +736,7 @@ class RecordServiceTest {
         service.search(atLimit, null, null, null, null, null, 50, "doctor01");
 
         verify(repo).searchRecords("%" + atLimit + "%", atLimit + "%", null, null, null,
-                null, null, 50, "");
+                null, null, 50, "", null);
     }
 
     @Test

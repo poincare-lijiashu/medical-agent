@@ -86,10 +86,10 @@ public class HomepageController {
                 filterDept = scope.deptCodes().iterator().next();
             }
         }
+        // 科室集合作为 SQL 谓词下推（G74），不在内存里补过滤：limit 之后的过滤会截断可见行
         return ApiResponse.ok(PhiMask.summaries(service.list(status, patientId, filterDept, limit,
-                scope.campusFilter(), actor).stream()
-                .filter(row -> scope.canSeeDepartment(row.deptId()))
-                .toList(), scope));
+                scope.campusFilter(), actor,
+                scope.allDepartments() ? null : scope.deptCodes()), scope));
     }
 
     /** 详情：整份 PHI，必须留痕（HOMEPAGE_VIEW）。 */

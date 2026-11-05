@@ -86,6 +86,8 @@ public class RegistrationController {
      *
      * <p>{@code patientId} 必填；只返回非退号记录，按就诊日期倒序。
      * 同时按数据范围过滤：医师只能看到本科室就诊，避免用 patientId 枚举其他科室的就诊史。
+     * 科室条件作为 SQL 谓词下推（G74）：LIMIT 之后再做内存过滤会让不可见的他科就诊
+     * 占掉 limit 额度，本科室更早的就诊被静默丢弃。
      */
     @GetMapping("/visits")
     public ApiResponse<java.util.List<Visit>> listByPatient(
@@ -94,8 +96,8 @@ public class RegistrationController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, VISIT_READ);
-        return ApiResponse.ok(service.listByPatient(patientId, limit, scope.campusFilter()).stream()
-                .filter(v -> scope.canSeeDepartment(v.deptId()))
+        return ApiResponse.ok(service.listByPatient(patientId, limit, scope.campusFilter(),
+                        scope.allDepartments() ? null : scope.deptCodes()).stream()
                 .map(v -> PhiMask.visit(v, scope))
                 .toList());
     }

@@ -80,7 +80,12 @@ public class RecordController {
         return ApiResponse.ok(service.create(req, actor, scope.campusForWrite()));
     }
 
-    /** 列表：按建档科室过滤，避免医师用 patientId/visitId 拉取其他科室病历。 */
+    /**
+     * 列表：按建档科室过滤，避免医师用 patientId/visitId 拉取其他科室病历。
+     *
+     * <p>科室条件作为 SQL 谓词下推（G74）：先取 limit 条再内存过滤会让他科病历
+     * 占掉额度，本科室更早的病历被静默截断。
+     */
     @GetMapping
     public ApiResponse<List<MedicalRecord>> list(
             @RequestParam(required = false) String status,
@@ -91,9 +96,7 @@ public class RecordController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(PhiMask.records(service.list(status, patientId, visitId, limit,
-                        scope.campusFilter()).stream()
-                .filter(r -> scope.canSeeDepartment(r.deptId()))
-                .toList(), scope));
+                scope.campusFilter(), scope.allDepartments() ? null : scope.deptCodes()), scope));
     }
 
     @GetMapping("/{id}")
@@ -122,11 +125,10 @@ public class RecordController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, SEARCH);
+        // 科室条件下推 SQL（G74），检索留痕里的命中数与实际返回一致
         return ApiResponse.ok(PhiMask.hits(service.search(q, patientId, docType, status, from, to,
-                        limit, actor, scope.campusFilter())
-                .stream()
-                .filter(hit -> scope.canSeeDepartment(hit.deptId()))
-                .toList(), scope));
+                limit, actor, scope.campusFilter(),
+                scope.allDepartments() ? null : scope.deptCodes()), scope));
     }
 
     /** 打印视图（HTML，浏览器打印 → 另存为 PDF）；未归档带水印，打印行为留痕。 */

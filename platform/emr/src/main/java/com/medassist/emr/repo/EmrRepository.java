@@ -26,6 +26,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -446,6 +447,18 @@ public class EmrRepository {
     /** 列表：campusCsv 为空表示不限制院区；否则只返回可见院区（G45）。 */
     public List<MedicalRecord> listRecords(String status, UUID patientId, UUID visitId, int limit,
                                            String campusCsv) {
+        return listRecords(status, patientId, visitId, limit, campusCsv, null);
+    }
+
+    /**
+     * 列表：院区 + 科室同时下推到 SQL（G74）。
+     *
+     * <p>科室条件必须在 {@code LIMIT} 之前生效。原实现先按院区取 N 条再在 Controller
+     * 内存里按科室过滤，他科病历会占掉额度，本科室更早的病历被静默截断且无法翻页。
+     * {@code deptIds} 为 {@code null} 表示全院科室角色，不加科室条件。
+     */
+    public List<MedicalRecord> listRecords(String status, UUID patientId, UUID visitId, int limit,
+                                           String campusCsv, Collection<UUID> deptIds) {
         return jdbc.sql("""
                         SELECT id, record_no, patient_id, patient_no, visit_id, visit_no, dept_id,
                                doc_type, template_code, title, content::text AS content, content_text,
@@ -457,11 +470,14 @@ public class EmrRepository {
                            AND (CAST(:visitId AS uuid) IS NULL OR visit_id = CAST(:visitId AS uuid))
                            AND (CAST(:campusCsv AS text) = ''
                                 OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                           AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[])))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("patientId", patientId)
                 .param("visitId", visitId).param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("deptIds", deptIds == null || deptIds.isEmpty()
+                        ? null : deptIds.toArray(UUID[]::new))
                 .param("limit", limit)
                 .query(RECORD_MAPPER).list();
     }
@@ -737,6 +753,19 @@ public class EmrRepository {
     public List<RecordHit> searchRecords(String pattern, String prefix, UUID patientId, String docType,
                                          String status, LocalDate from, LocalDate to, int limit,
                                          String campusCsv) {
+        return searchRecords(pattern, prefix, patientId, docType, status, from, to, limit,
+                campusCsv, null);
+    }
+
+    /**
+     * 检索：院区 + 科室同时下推到 SQL（G74）。
+     *
+     * <p>两路分支各自的 {@code LIMIT} 之前就要收敛科室，否则他科命中会占满额度，
+     * 本科室命中既进不了结果也不可翻页。{@code deptIds} 为 {@code null} 表示全院科室角色。
+     */
+    public List<RecordHit> searchRecords(String pattern, String prefix, UUID patientId, String docType,
+                                         String status, LocalDate from, LocalDate to, int limit,
+                                         String campusCsv, Collection<UUID> deptIds) {
         String sql = pattern == null ? """
                         SELECT id, record_no, patient_id, patient_no, dept_id, doc_type, title,
                                author, status, revision, created_at
@@ -774,14 +803,16 @@ public class EmrRepository {
         JdbcClient.StatementSpec spec = jdbc.sql(sql)
                 .param("patientId", patientId).param("docType", docType).param("status", status)
                 .param("fromDate", from).param("toDate", to).param("limit", limit)
-                .param("campusCsv", campusCsv == null ? "" : campusCsv);
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("deptIds", deptIds == null || deptIds.isEmpty()
+                        ? null : deptIds.toArray(UUID[]::new));
         if (pattern != null) {
             spec = spec.param("pattern", pattern).param("prefix", prefix);
         }
         return spec.query(HIT_MAPPER).list();
     }
 
-    /** 检索公共过滤条件：患者 / 文书类型 / 状态 / 建档日期，均为可选。 */
+    /** 检索公共过滤条件：患者 / 文书类型 / 状态 / 建档日期 / 院区 / 科室，均为可选。 */
     private static final String SEARCH_FILTERS = """
               AND (CAST(:patientId AS uuid) IS NULL OR patient_id = CAST(:patientId AS uuid))
               AND (CAST(:docType AS text) IS NULL OR doc_type = CAST(:docType AS text))
@@ -791,6 +822,7 @@ public class EmrRepository {
                    OR created_at < CAST(:toDate AS date) + INTERVAL '1 day')
               AND (CAST(:campusCsv AS text) = ''
                    OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+              AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[])))
             """;
 
     // ---------------------------------------------------------------- 归档后修改申请
@@ -1113,6 +1145,18 @@ public class EmrRepository {
      */
     public List<HomepageSummary> listHomepageSummaries(String status, UUID patientId, UUID deptId,
                                                        String campusCsv, int limit) {
+        return listHomepageSummaries(status, patientId, deptId, campusCsv, limit, null);
+    }
+
+    /**
+     * 列表摘要：科室集合同样下推到 SQL（G74），{@code deptId} 为单个科室的精确筛选。
+     *
+     * <p>只在 {@code deptId} 上过滤不够：多科室账号不传 deptId 时原先按 limit 取全院，
+     * 再在 Controller 内存过滤，其他科室的行会占掉额度。
+     */
+    public List<HomepageSummary> listHomepageSummaries(String status, UUID patientId, UUID deptId,
+                                                       String campusCsv, int limit,
+                                                       Collection<UUID> deptIds) {
         return jdbc.sql("""
                         SELECT id, homepage_no, visit_no, patient_no,
                                CASE WHEN patient_name IS NULL OR patient_name = '' THEN ''
@@ -1126,12 +1170,15 @@ public class EmrRepository {
                            AND (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
                            AND (CAST(:campusCsv AS text) = ''
                                 OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                           AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[])))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("patientId", patientId)
                 .param("deptId", deptId).param("limit", limit)
                 .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("deptIds", deptIds == null || deptIds.isEmpty()
+                        ? null : deptIds.toArray(UUID[]::new))
                 .query((rs, i) -> new HomepageSummary(
                         rs.getObject("id", UUID.class), rs.getString("homepage_no"),
                         rs.getString("visit_no"), rs.getString("patient_no"),

@@ -347,10 +347,22 @@ public class HomepageService {
      */
     public List<HomepageSummary> list(String status, UUID patientId, UUID deptId, Integer limit,
                                       java.util.Set<UUID> campusIds, String actor) {
+        return list(status, patientId, deptId, limit, campusIds, actor, null);
+    }
+
+    /**
+     * 列表（G74）：科室集合下推 SQL。
+     *
+     * <p>{@code deptIds} 为 {@code null} 表示全院科室角色；非空时与 {@code deptId}
+     * 共同生效，过滤发生在 {@code LIMIT} 之前，不会因内存过滤造成可见行数被截断。
+     */
+    public List<HomepageSummary> list(String status, UUID patientId, UUID deptId, Integer limit,
+                                      java.util.Set<UUID> campusIds, String actor,
+                                      java.util.Collection<UUID> deptIds) {
         String normalized = blankToNull(status) == null ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
         List<HomepageSummary> rows = repo.listHomepageSummaries(normalized, patientId, deptId,
-                CampusFilters.csv(campusIds), size);
+                CampusFilters.csv(campusIds), size, deptIds);
         audit(actor, "HOMEPAGE_QUERY", "HOMEPAGE", "-", Map.of(
                 "count", rows.size(), "status", String.valueOf(normalized),
                 "patientFilter", patientId != null, "deptFilter", deptId != null, "limit", size));

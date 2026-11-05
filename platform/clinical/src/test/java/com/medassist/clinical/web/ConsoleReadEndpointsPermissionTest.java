@@ -115,7 +115,7 @@ class ConsoleReadEndpointsPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(registrationService, never()).listByPatient(patientId, 20, java.util.Set.of());
+        verify(registrationService, never()).listByPatient(patientId, 20, java.util.Set.of(), null);
     }
 
     @Test
@@ -124,13 +124,29 @@ class ConsoleReadEndpointsPermissionTest {
         Visit visit = new Visit(UUID.randomUUID(), "V20261102001", patientId, "P0001",
                 UUID.randomUUID(), "D0001", null, "OUTPATIENT", "IN_TREATMENT",
                 LocalDate.of(2026, 11, 2), 0L);
-        when(registrationService.listByPatient(patientId, 20, java.util.Set.of())).thenReturn(List.of(visit));
+        when(registrationService.listByPatient(patientId, 20, java.util.Set.of(), null))
+                .thenReturn(List.of(visit));
 
         var resp = registrationController.listByPatient(patientId, 20, "clinical:visit:read",
                 DataScope.all("admin01", true));
 
         assertThat(resp.data()).hasSize(1);
         assertThat(resp.data().get(0).visitNo()).isEqualTo("V20261102001");
+    }
+
+    @Test
+    @DisplayName("患者就诊列表：单科室账号把科室集合下推服务层（G74）")
+    void visitsPushDeptFilterDown() {
+        UUID deptId = UUID.randomUUID();
+        DataScope scope = DataScope.ofDepartments("doctor01", java.util.Set.of(deptId), false);
+        when(registrationService.listByPatient(patientId, 20, java.util.Set.of(),
+                java.util.Set.of(deptId))).thenReturn(List.of());
+
+        var resp = registrationController.listByPatient(patientId, 20, "clinical:visit:read", scope);
+
+        assertThat(resp.data()).isEmpty();
+        verify(registrationService).listByPatient(patientId, 20, java.util.Set.of(),
+                java.util.Set.of(deptId));
     }
 
     @Test
@@ -147,7 +163,7 @@ class ConsoleReadEndpointsPermissionTest {
     @DisplayName("病区列表：有权限时返回病区")
     void wardsPassThrough() {
         InpatientService service = mock(InpatientService.class);
-        when(service.listWards(java.util.Set.of())).thenReturn(List.of(
+        when(service.listWards(java.util.Set.of(), null)).thenReturn(List.of(
                 new Ward(UUID.randomUUID(), "W01", "一病区", UUID.randomUUID(), true)));
         InpatientController controller = new InpatientController(
                 service, mock(InpatientFinanceService.class), mock(NursingService.class),
@@ -157,5 +173,22 @@ class ConsoleReadEndpointsPermissionTest {
 
         assertThat(resp.data()).hasSize(1);
         assertThat(resp.data().get(0).code()).isEqualTo("W01");
+    }
+
+    @Test
+    @DisplayName("病区列表：单科室账号把科室集合下推服务层（G74）")
+    void wardsPushDeptFilterDown() {
+        UUID deptId = UUID.randomUUID();
+        DataScope scope = DataScope.ofDepartments("doctor01", java.util.Set.of(deptId), false);
+        InpatientService service = mock(InpatientService.class);
+        when(service.listWards(java.util.Set.of(), java.util.Set.of(deptId))).thenReturn(List.of());
+        InpatientController controller = new InpatientController(
+                service, mock(InpatientFinanceService.class), mock(NursingService.class),
+                mock(VisitAccessGuard.class));
+
+        var resp = controller.listWards("inpatient:read", scope);
+
+        assertThat(resp.data()).isEmpty();
+        verify(service).listWards(java.util.Set.of(), java.util.Set.of(deptId));
     }
 }

@@ -66,7 +66,12 @@ public class InpatientService {
 
     /** 启用病区列表，按院区收敛（G46；空集合表示不限院区）。 */
     public List<Ward> listWards(java.util.Set<UUID> campusIds) {
-        return repo.listWards(campusCsv(campusIds));
+        return listWards(campusIds, null);
+    }
+
+    /** 启用病区列表：院区 + 科室都在 SQL 层收敛（G74；null 表示全院科室角色）。 */
+    public List<Ward> listWards(java.util.Set<UUID> campusIds, java.util.Collection<UUID> deptIds) {
+        return repo.listWards(campusCsv(campusIds), deptIds);
     }
 
     @Transactional

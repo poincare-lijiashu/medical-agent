@@ -83,15 +83,18 @@ public class InpatientController {
         this.guard = guard;
     }
 
-    /** 启用病区列表（控制台病区选择）：只返回当前账号科室范围内的病区。 */
+    /**
+     * 启用病区列表（控制台病区选择）：只返回当前账号科室范围内的病区。
+     *
+     * <p>科室条件在 SQL 层收敛（G74），不在内存里补过滤。
+     */
     @GetMapping("/wards")
     public ApiResponse<List<Ward>> listWards(
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listWards(scope.campusFilter()).stream()
-                .filter(w -> scope.canSeeDepartment(w.deptId()))
-                .toList());
+        return ApiResponse.ok(service.listWards(scope.campusFilter(),
+                scope.allDepartments() ? null : scope.deptCodes()));
     }
 
     @PostMapping("/wards")

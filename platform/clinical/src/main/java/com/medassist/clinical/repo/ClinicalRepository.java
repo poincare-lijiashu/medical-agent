@@ -108,6 +108,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -356,6 +357,19 @@ public class ClinicalRepository {
      * 防止用 patientId 枚举其他院区的就诊史。
      */
     public List<Visit> listVisitsByPatient(UUID patientId, int limit, String campusCsv) {
+        return listVisitsByPatient(patientId, limit, campusCsv, null);
+    }
+
+    /**
+     * 按患者列出最近就诊，院区与科室同时下推到 SQL（G74）。
+     *
+     * <p>科室条件必须在 {@code LIMIT} 之前生效：先取 N 行再在内存按科室过滤，
+     * 会让不可见行占掉额度——同一位患者有他科的近期就诊时，本科室的历史就诊
+     * 直接被截断，列表看不到也不可翻页。{@code deptIds} 为 {@code null} 表示
+     * 全院科室角色，不加科室条件。
+     */
+    public List<Visit> listVisitsByPatient(UUID patientId, int limit, String campusCsv,
+                                           Collection<UUID> deptIds) {
         return jdbc.sql("""
                         SELECT id, visit_no, patient_id, patient_no, dept_id, doctor_id, slot_id,
                                visit_type, status, visit_date, version
@@ -363,11 +377,14 @@ public class ClinicalRepository {
                          WHERE patient_id = :patientId AND status <> 'CANCELLED'
                            AND (CAST(:campusCsv AS text) = ''
                                 OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                           AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[])))
                          ORDER BY visit_date DESC, registered_at DESC
                          LIMIT :limit
                         """)
                 .param("patientId", patientId).param("limit", Math.max(1, Math.min(limit, 100)))
                 .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("deptIds", deptIds == null || deptIds.isEmpty()
+                        ? null : deptIds.toArray(UUID[]::new))
                 .query(VISIT_MAPPER).list();
     }
 
@@ -2064,14 +2081,26 @@ public class ClinicalRepository {
 
     /** 启用病区列表，按院区收敛（G46；空 CSV 表示不限院区）。 */
     public List<Ward> listWards(String campusCsv) {
+        return listWards(campusCsv, null);
+    }
+
+    /**
+     * 启用病区列表，院区与科室同时下推到 SQL（G74）。
+     *
+     * <p>{@code deptIds} 为 {@code null} 表示全院科室角色，不加科室条件。
+     */
+    public List<Ward> listWards(String campusCsv, Collection<UUID> deptIds) {
         return jdbc.sql("""
                         SELECT id, code, name, dept_id, enabled FROM clinical_svc.ward
                          WHERE enabled
                            AND (CAST(:campusCsv AS text) = ''
                                 OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                           AND (CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[])))
                          ORDER BY code
                         """)
                 .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("deptIds", deptIds == null || deptIds.isEmpty()
+                        ? null : deptIds.toArray(UUID[]::new))
                 .query(WARD_MAPPER).list();
     }
 

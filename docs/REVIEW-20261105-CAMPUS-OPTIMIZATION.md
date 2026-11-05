@@ -177,9 +177,15 @@
 |---|---|---|
 | §6.15 | 大表 `SET NOT NULL` / 无默认值 `ADD COLUMN NOT NULL` 会取 ACCESS EXCLUSIVE 锁并全表扫描，部署期即停服；评审要求"大表 NOT NULL 锁风险与不可逆回填"有明确口径 | 新增 `scripts/migration_safety_lint.ps1`：扫描 `platform/*/db/migration/**/*.sql`（排除 `target/`），命中 **SET_NOT_NULL** 与 **ADD_COLUMN_NOT_NULL**（带常量 DEFAULT 的 `ADD COLUMN` 在 PG11+ 是元数据操作，不报）即失败；存量 10 份已执行迁移登记在 `scripts/migration_safety_baseline.txt`，只拦**新**迁移。脚本头写明安全写法：`ADD CONSTRAINT ... CHECK (...) NOT VALID` → `VALIDATE CONSTRAINT` → `SET NOT NULL` → 删检查。CI 增 `migration-lint` job（pwsh）。**反证**：临时放一份含 `ADD COLUMN NOT NULL` + `SET NOT NULL` 的迁移 → 输出两条 RISK、退出码 1；删除后恢复 PASS |
 
+### G74 批次已关闭（列表科室过滤下推 SQL，mock 182 类 / 1723 项全绿）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.14 | 5 处列表是"SQL 只按院区收敛 + `LIMIT`，再在 Controller 内存按科室过滤"：`RegistrationController.listByPatient`、`InpatientController.listWards`、`RecordController.list`/`search`、`HomepageController.list`（评审列了前 4 处，第 5 处同形态一并收口）。他科行先占掉 limit 额度 → 本科室更早的数据被静默截断且不可翻页；CDR 检索留痕里的 `hits` 还是过滤前的数，与实际返回不一致 | 科室集合改为 SQL 谓词下推（`CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[]))`，与 tech 域既有写法一致）：`ClinicalRepository.listVisitsByPatient`/`listWards`、`EmrRepository.listRecords`/`searchRecords`/`listHomepageSummaries` 各加 `deptIds` 重载，旧签名保留并委托 `null`；Controller 删除内存过滤，只传 `scope.allDepartments() ? null : scope.deptCodes()`。**反证（真实链路）**：同一患者先在 A 科挂号、再在 B 科挂号（B 更新），只绑 A 科的医生请求 `limit=1` → 返回的是 A 科那条（旧实现 SQL 取到 B 后被内存滤掉，结果必为空）；病历列表同法验证（返回 A 科草稿）。冒烟 `clinical_multi_dept_smoke`、`campus_isolation`(77)、`emr_smoke`、`emr_homepage_smoke`、`platform_smoke`、`clinical_pharmacy_order_smoke` 全 PASS |
+
 ### 未处理（下一批）
 
-§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、列表 LIMIT 后内存过滤、锁内调下游 HTTP、解析吞错、时间口径漂移、worker 多实例假设。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、锁内调下游 HTTP、解析吞错、时间口径漂移、worker 多实例假设。
 
 ---
 
@@ -519,7 +525,7 @@ emr/insurance 的**合规红线集中在签名与四眼**：CA mock 可伪造可
 
 **13. 6 域 guard 签名顺序、命名与错误码区间三处漂移**——`VisitAccessGuard.require(scope,id)`/`EmrAccessGuard.requireRecord(scope,id)`/`PrescriptionAccessGuard.require(scope,id)`/`SettlementAccessGuard.requireBill(scope,id)` vs `TechAccessGuard.requireApplication(id,scope)`/`MaterialAccessGuard.requireIssue(id,scope)` 参数顺序两种并存，语义相反易写错；material 与 pharmacy 共用 43xxx 且区间交错（43452/43457/43500/43510 插在 43430–43487/43520–43526 之间），后续新增码可能撞号；VisitAccessGuard 内部 require 用 42404 而 requireAdmission/Ward/Case 用通用 40400。建议统一签名 `(scope,id)` 与命名，material 单独预留错误码段，VisitAccessGuard 三个 require 统一用 42xxx 专属码。
 
-**14. 列表"SQL 过滤院区 + LIMIT，再内存过滤科室"造成分页截断**——`RegistrationController.listByPatient` L90–101、`RecordController.list` L84–97 / `search` L112–130、`InpatientController.listWards` L86–95 先 SQL 收敛并 LIMIT 再 Java `.filter(scope.canSeeDepartment(...))`；过滤发生在 LIMIT 之后 → 可见行数被上限截断，后续页数据被前页占用额度不可达，列表总数与实际可见数不一致（tech 域把 deptIds 下推 SQL 才是正确形态）。建议统一把 deptCodes 作为 SQL 条件传入，删除 Controller 内内存过滤。
+**14. 列表"SQL 过滤院区 + LIMIT，再内存过滤科室"造成分页截断（G74 已关闭）**——`RegistrationController.listByPatient` L90–101、`RecordController.list` L84–97 / `search` L112–130、`InpatientController.listWards` L86–95 先 SQL 收敛并 LIMIT 再 Java `.filter(scope.canSeeDepartment(...))`；过滤发生在 LIMIT 之后 → 可见行数被上限截断，后续页数据被前页占用额度不可达，列表总数与实际可见数不一致（tech 域把 deptIds 下推 SQL 才是正确形态）。建议统一把 deptCodes 作为 SQL 条件传入，删除 Controller 内内存过滤。
 
 **15. 六份院区迁移的 NOT NULL 收紧与大表锁风险，回填不可逆无溯源**——六处统一 `ADD COLUMN IF NOT EXISTS` → `UPDATE 全表` → `ALTER SET NOT NULL`：前两步在大表产生全表行版本（表膨胀+WAL 尖峰），第三步全表扫描持 ACCESS EXCLUSIVE 锁期间读写全阻塞（PG12+ 可用 NOT VALID CHECK + VALIDATE + SET NOT NULL 规避，脚本未采用）；**回填不可逆**：emr V23 与 material V5 把历史行一律绑主院区且不保留归属来源，一旦判定错误无法用 SQL 还原。建议大表按主键分批回填（每批 COMMIT）+ NOT VALID CHECK → VALIDATE → SET NOT NULL；保留 campus_source（DEFAULT/VISIT/WARD）列以便订正，并补"从备份按源关系重算"的订正脚本。
 
