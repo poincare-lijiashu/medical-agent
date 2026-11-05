@@ -22,7 +22,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
     @Override
     protected HttpStatus statusOf(ErrorCode code) {
         return switch (code) {
-            case NOT_FOUND, VISIT_NOT_FOUND, PATIENT_NOT_FOUND, ORDER_ITEM_NOT_FOUND,
+            case NOT_FOUND, VISIT_NOT_FOUND, ADMISSION_NOT_FOUND, WARD_NOT_FOUND,
+                 SURGERY_CASE_NOT_FOUND, PATIENT_NOT_FOUND, ORDER_ITEM_NOT_FOUND,
                  CHARGE_NOT_FOUND, CHARGE_RECEIPT_NOT_FOUND,
                  PATHWAY_TEMPLATE_NOT_FOUND, PATHWAY_INSTANCE_NOT_FOUND,
                  PATHWAY_TASK_NOT_FOUND, DISCHARGE_MED_NOT_FOUND,

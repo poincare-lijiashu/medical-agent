@@ -60,7 +60,7 @@ class LisInboundControllerPermissionTest {
     void replayChecksApplicationCampus() {
         when(service.applicationIdOf(messageId)).thenReturn(applicationId);
         org.mockito.Mockito.doThrow(new BusinessException(ErrorCode.TECH_APPLICATION_NOT_FOUND))
-                .when(guard).requireApplication(applicationId, scope);
+                .when(guard).requireApplication(scope, applicationId);
 
         assertThatThrownBy(() -> controller.replay(messageId, "tech:lis:write", "tech01", scope))
                 .isInstanceOf(BusinessException.class)
@@ -79,7 +79,7 @@ class LisInboundControllerPermissionTest {
 
         controller.replay(messageId, "tech:lis:write", "tech01", scope);
 
-        verify(guard, never()).requireApplication(any(), eq(scope));
+        verify(guard, never()).requireApplication(eq(scope), any());
         verify(service).replay(messageId, "tech01");
     }
 }

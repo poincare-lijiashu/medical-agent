@@ -138,7 +138,7 @@ class VisitAccessGuardTest {
 
         assertThatThrownBy(() -> guard.requireWard(mainScope, wardId))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.WARD_NOT_FOUND));
     }
 
     // ---------------------------------------------------------------- 按 caseId 访问
@@ -154,13 +154,13 @@ class VisitAccessGuardTest {
         assertThatThrownBy(() ->
                 guard.requireCase(DataScope.ofDepartment("doctor02", deptB, true), caseId))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.SURGERY_CASE_NOT_FOUND));
 
         UUID missing = UUID.randomUUID();
         when(repo.findVisitDepartmentByCaseId(missing)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> guard.requireCase(DataScope.all("admin", true), missing))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.SURGERY_CASE_NOT_FOUND));
     }
 
     // ---------------------------------------------------------------- 只读（会诊授权）
@@ -207,13 +207,13 @@ class VisitAccessGuardTest {
         assertThatThrownBy(() ->
                 guard.requireAdmission(DataScope.ofDepartment("nurse02", deptB, true), admissionId))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.ADMISSION_NOT_FOUND));
 
         UUID missing = UUID.randomUUID();
         when(repo.findVisitDepartmentByAdmissionId(missing)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> guard.requireAdmission(DataScope.all("admin", true), missing))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.ADMISSION_NOT_FOUND));
     }
 
     @Test
@@ -227,12 +227,12 @@ class VisitAccessGuardTest {
         assertThatThrownBy(() ->
                 guard.requireWard(DataScope.ofDepartment("nurse02", deptB, true), wardId))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.WARD_NOT_FOUND));
 
         UUID missing = UUID.randomUUID();
         when(repo.findWardDepartment(missing)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> guard.requireWard(DataScope.all("admin", true), missing))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.errorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.WARD_NOT_FOUND));
     }
 }

@@ -96,7 +96,7 @@ public class ApplicationController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         // G68：科室判定已收进 guard（与院区同为 dept+campus 双条件），这里不再二次过滤
-        guard.requireApplication(id, scope);
+        guard.requireApplication(scope, id);
         ApplicationView view = service.detail(id);
         return ApiResponse.ok(new ApplicationView(
                 PhiMask.application(view.application(), scope), view.specimen()));
@@ -109,7 +109,7 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, CANCEL);
-        guard.requireApplication(id, scope);
+        guard.requireApplication(scope, id);
         return ApiResponse.ok(service.cancel(id, actor));
     }
 
@@ -122,7 +122,7 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, COLLECT);
-        guard.requireApplication(id, scope);
+        guard.requireApplication(scope, id);
         return ApiResponse.ok(service.collectSpecimen(id, req, actor));
     }
 
@@ -135,7 +135,7 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, RECEIVE);
-        guard.requireApplication(id, scope);
+        guard.requireApplication(scope, id);
         return ApiResponse.ok(service.receiveSpecimen(id, req.accept(), req.reason(), actor));
     }
 
@@ -147,7 +147,7 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, EXECUTE);
-        guard.requireApplication(id, scope);
+        guard.requireApplication(scope, id);
         return ApiResponse.ok(service.start(id, actor));
     }
 
@@ -159,7 +159,7 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, CLOSE);
-        guard.requireApplication(id, scope);
+        guard.requireApplication(scope, id);
         return ApiResponse.ok(service.close(id, actor));
     }
 }

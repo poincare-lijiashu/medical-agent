@@ -65,7 +65,7 @@ class TechAccessGuardTest {
     void allScopeSkipsLookup() {
         DataScope all = DataScope.all("admin", true);
 
-        assertThatCode(() -> guard.requireApplication(applicationId, all))
+        assertThatCode(() -> guard.requireApplication(all, applicationId))
                 .doesNotThrowAnyException();
         verify(repo, never()).findApplicationScope(any());
     }
@@ -75,18 +75,18 @@ class TechAccessGuardTest {
     void applicationCampusIsolation() {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusA, deptA)));
-        assertThatCode(() -> guard.requireApplication(applicationId, onlyCampusA))
+        assertThatCode(() -> guard.requireApplication(onlyCampusA, applicationId))
                 .doesNotThrowAnyException();
 
         UUID other = UUID.randomUUID();
         when(repo.findApplicationScope(other))
                 .thenReturn(Optional.of(new ApplicationScope(campusB, deptA)));
-        assertNotFound(() -> guard.requireApplication(other, onlyCampusA),
+        assertNotFound(() -> guard.requireApplication(onlyCampusA, other),
                 ErrorCode.TECH_APPLICATION_NOT_FOUND);
 
         UUID missing = UUID.randomUUID();
         when(repo.findApplicationScope(missing)).thenReturn(Optional.empty());
-        assertNotFound(() -> guard.requireApplication(missing, onlyCampusA),
+        assertNotFound(() -> guard.requireApplication(onlyCampusA, missing),
                 ErrorCode.TECH_APPLICATION_NOT_FOUND);
     }
 
@@ -95,13 +95,13 @@ class TechAccessGuardTest {
     void applicationDepartmentIsolation() {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusB, deptA)));
-        assertThatCode(() -> guard.requireApplication(applicationId, onlyDeptA))
+        assertThatCode(() -> guard.requireApplication(onlyDeptA, applicationId))
                 .doesNotThrowAnyException();
 
         UUID other = UUID.randomUUID();
         when(repo.findApplicationScope(other))
                 .thenReturn(Optional.of(new ApplicationScope(campusA, deptB)));
-        assertNotFound(() -> guard.requireApplication(other, onlyDeptA),
+        assertNotFound(() -> guard.requireApplication(onlyDeptA, other),
                 ErrorCode.TECH_APPLICATION_NOT_FOUND);
     }
 
@@ -111,9 +111,9 @@ class TechAccessGuardTest {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusA, null)));
 
-        assertNotFound(() -> guard.requireApplication(applicationId, onlyDeptA),
+        assertNotFound(() -> guard.requireApplication(onlyDeptA, applicationId),
                 ErrorCode.TECH_APPLICATION_NOT_FOUND);
-        assertThatCode(() -> guard.requireApplication(applicationId, onlyCampusA))
+        assertThatCode(() -> guard.requireApplication(onlyCampusA, applicationId))
                 .doesNotThrowAnyException();
     }
 
@@ -127,7 +127,7 @@ class TechAccessGuardTest {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusB, deptA)));
 
-        assertNotFound(() -> guard.requireReport(reportId, onlyCampusA),
+        assertNotFound(() -> guard.requireReport(onlyCampusA, reportId),
                 ErrorCode.TECH_REPORT_NOT_FOUND);
     }
 
@@ -141,7 +141,7 @@ class TechAccessGuardTest {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusA, deptB)));
 
-        assertNotFound(() -> guard.requireReport(reportId, onlyDeptA),
+        assertNotFound(() -> guard.requireReport(onlyDeptA, reportId),
                 ErrorCode.TECH_REPORT_NOT_FOUND);
     }
 
@@ -156,7 +156,7 @@ class TechAccessGuardTest {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusB, deptA)));
 
-        assertNotFound(() -> guard.requireCritical(criticalId, onlyCampusA),
+        assertNotFound(() -> guard.requireCritical(onlyCampusA, criticalId),
                 ErrorCode.TECH_CRITICAL_NOT_FOUND);
     }
 
@@ -171,7 +171,7 @@ class TechAccessGuardTest {
         when(repo.findApplicationScope(applicationId))
                 .thenReturn(Optional.of(new ApplicationScope(campusB, deptA)));
 
-        assertNotFound(() -> guard.requireStudy(uid, onlyCampusA),
+        assertNotFound(() -> guard.requireStudy(onlyCampusA, uid),
                 ErrorCode.TECH_PACS_STUDY_NOT_FOUND);
     }
 }

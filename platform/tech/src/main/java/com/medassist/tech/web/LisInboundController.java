@@ -61,7 +61,7 @@ public class LisInboundController {
         Permissions.require(permissions, WRITE);
         UUID applicationId = service.applicationIdOf(id);
         if (applicationId != null) {
-            guard.requireApplication(applicationId, scope);
+            guard.requireApplication(scope, applicationId);
         }
         return ApiResponse.ok(service.replay(id, actor));
     }

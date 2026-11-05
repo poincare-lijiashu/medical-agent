@@ -62,7 +62,7 @@ public class MaterialTransferController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        guard.requireTransfer(id, scope);
+        guard.requireTransfer(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -85,7 +85,7 @@ public class MaterialTransferController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, ACCEPT);
-        guard.requireTransfer(id, scope);
+        guard.requireTransfer(scope, id);
         return ApiResponse.ok(service.accept(id, actor));
     }
 
@@ -98,7 +98,7 @@ public class MaterialTransferController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, ACCEPT);
-        guard.requireTransfer(id, scope);
+        guard.requireTransfer(scope, id);
         return ApiResponse.ok(service.reject(id, req, actor));
     }
 
@@ -111,7 +111,7 @@ public class MaterialTransferController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, WRITE);
-        guard.requireTransfer(id, scope);
+        guard.requireTransfer(scope, id);
         return ApiResponse.ok(service.cancel(id, req, actor));
     }
 }

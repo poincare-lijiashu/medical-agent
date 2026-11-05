@@ -202,9 +202,20 @@
 |---|---|---|
 | worker 多实例假设（§7.2 第 5 批） | 全部 11 个 `@Scheduled` 里，8 个本身幂等（日快照 `ON CONFLICT DO UPDATE`、投递占位 `INSERT ... ON CONFLICT DO NOTHING`、转送任务 `claim` + workerId、计费补偿 CAS、入库 claim + lease、过期令牌清理），但两个不是：①`ReportSubscriptionService.retryPending` 先列出 PENDING/FAILED 再**直接外发**（邮件/Webhook/IM），两个副本同一分钟各发一次，同一份运营日报发两遍且 attempts 虚增；②`StockLossService.autoDraftExpired` 先扫描到期批次再插 DRAFT 报损单，两个副本都读到同一批批次（谁都没提交），各自生成一张草稿，人工还得分辨该提交哪张 | ①投递改为**先抢占再外发**：`claimReportDelivery` 用 `attempts` 作 CAS 版本（`UPDATE ... WHERE id=? AND attempts=? AND status IN ('PENDING','FAILED')`），抢不到直接跳过；手动补发抢不到返回 409。崩溃留在 PENDING 下轮照常重试，不需要新状态列、不改表结构。②效期草稿扫描加事务级 advisory lock（`pg_try_advisory_xact_lock`，键 `"PHAR"<<16\|1`）：拿到锁的实例扫描生成，另一个本轮跳过并记 `auto_draft_skipped reason=lock_held`，事务结束自动释放。**反证**：两个真正并发的补发请求 → 恰好 `200` + `409`，投递记录只有 1 行、`attempts=1`；advisory lock 三会话实测：持有方 `t` → 并发第二会话 `f` → 释放后 `t`；`POST /pharmacy/stock-losses/auto-draft` 真实链路 200（SQL 与参数绑定生效）。单测补 3 项（抢不到不外发、抢不到不扫描不建单） |
 
+### G78 批次已关闭（守卫签名与错误码口径收敛，mock 184 类 / 1735 项全绿）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.13（签名与命名） | 7 个行级守卫里两种参数顺序并存：`VisitAccessGuard.require(scope,id)` / `EmrAccessGuard.requireRecord(scope,id)` / `PrescriptionAccessGuard.require(scope,id)` / `SettlementAccessGuard.requireBill(scope,id)` 是 `(scope,id)`，而 `TechAccessGuard.requireApplication(id,scope)` 与 `MaterialAccessGuard.requireIssue(id,scope)` 是 `(id,scope)`——同一套机制读代码要先看签名 | Tech / Material 两个守卫统一为 `(scope, id)`，`requireIssue/IssueItem/Return/Transfer`、`requireApplication/Report/Critical/Study` 全部改签名；4 个 tech 控制器（约 35 处调用）+ 4 个 material 控制器（9 处）+ 3 个测试同步更新，旧的 `(id, scope)` 不留兼容重载（留着等于两种顺序继续存在） |
+| §6.13（错误码漂移） | `VisitAccessGuard` 内四个 require 的码不一致：就诊用 `42404`，住院登记/病区/手术记录退回通用 `40400`——同一类"越权或不存在"，不同入口给不同码，日志与排障只能靠中文文案区分 | 新增 `ADMISSION_NOT_FOUND(42405)` / `WARD_NOT_FOUND(42406)` / `SURGERY_CASE_NOT_FOUND(42407)` 并落到 42xxx 段，HTTP 状态仍是 404（"越权与不存在同码"的约定不变）。**已发布的码一律不重新编号**：material 与 pharmacy 的 43xxx 交错是历史遗留，但改号是客户端可观测的破坏性变更、且不带来任何运行期收益，改为在 `ErrorCode` javadoc 里写明码段分配（含"新增物资码从 4355x 起"）并把唯一性做成构建期门禁 |
+| §6.13（防回归门禁） | 错误码靠人工记住哪些号用过；且各服务 `statusOf` 是显式 switch，新增码漏登记会静默落到 `default -> BAD_REQUEST`（404 变 400） | 新增 `ErrorCodeTest`（common）：号唯一 / 号段合法 / 文案面向医护且不透出英文异常类型；新增 `ClinicalErrorMappingContractTest`：四个守卫专属码必须映射 404，并抽样锁定 403/409/422/503 的语义 |
+| 顺带发现（真实链路试出来） | 请求一个不存在的路径返回 **500「系统处理异常」**：Spring 6.1+ 的 `NoResourceFoundException` 没有任何处理器接，落进兜底 `Exception` 分支 | `AbstractApiExceptionHandler` 增 `@ExceptionHandler(NoResourceFoundException)` → 404 + `40400`，调用方地址拼错不再被误导成服务端故障 |
+
+**验证**：真实链路逐个验码——`/clinical/wards/{随机}` → 404/`42406`/"未找到该病区"；`/clinical/inpatient/admissions/{随机}` → 404/`42405`；`/clinical/visits/{随机}` → 404/`42404`（未变）；不存在的路径 → 404/`40400`（原为 500）；tech 申请与 material 出库守卫在换序后仍 404。冒烟 `tech_smoke`、`tech_lis_smoke`、`campus_isolation`(77)、`platform_smoke`、`clinical_pharmacy_order_smoke` 全 PASS。
+
 ### 未处理（下一批）
 
-§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移（§6.13，纯一致性重构）、解析吞错（其余域）。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.13、§6.14、§6.15 已关闭。剩余仅一项 [建议]：解析吞错（药房/医技等域个别 `catch` 仍以空值继续，未区分"瞬时故障"与"数据本身不合法"）。
 
 ---
 

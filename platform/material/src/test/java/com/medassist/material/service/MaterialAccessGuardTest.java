@@ -52,7 +52,7 @@ class MaterialAccessGuardTest {
     void allCampusesSkipsLookup() {
         UUID id = UUID.randomUUID();
 
-        assertThatCode(() -> guard.requireIssue(id, DataScope.all("admin", true)))
+        assertThatCode(() -> guard.requireIssue(DataScope.all("admin", true), id))
                 .doesNotThrowAnyException();
         verify(repo, never()).findIssueCampus(id);
     }
@@ -62,15 +62,15 @@ class MaterialAccessGuardTest {
     void issueCampusIsolation() {
         UUID own = UUID.randomUUID();
         when(repo.findIssueCampus(own)).thenReturn(Optional.of(campusA));
-        assertThatCode(() -> guard.requireIssue(own, onlyA)).doesNotThrowAnyException();
+        assertThatCode(() -> guard.requireIssue(onlyA, own)).doesNotThrowAnyException();
 
         UUID other = UUID.randomUUID();
         when(repo.findIssueCampus(other)).thenReturn(Optional.of(campusB));
-        assertNotFound(() -> guard.requireIssue(other, onlyA), ErrorCode.CONSUMABLE_ISSUE_NOT_FOUND);
+        assertNotFound(() -> guard.requireIssue(onlyA, other), ErrorCode.CONSUMABLE_ISSUE_NOT_FOUND);
 
         UUID missing = UUID.randomUUID();
         when(repo.findIssueCampus(missing)).thenReturn(Optional.empty());
-        assertNotFound(() -> guard.requireIssue(missing, onlyA),
+        assertNotFound(() -> guard.requireIssue(onlyA, missing),
                 ErrorCode.CONSUMABLE_ISSUE_NOT_FOUND);
     }
 
@@ -80,7 +80,7 @@ class MaterialAccessGuardTest {
         UUID itemId = UUID.randomUUID();
         when(repo.findIssueItemCampus(itemId)).thenReturn(Optional.of(campusB));
 
-        assertNotFound(() -> guard.requireIssueItem(itemId, onlyA),
+        assertNotFound(() -> guard.requireIssueItem(onlyA, itemId),
                 ErrorCode.CONSUMABLE_ISSUE_ITEM_NOT_FOUND);
     }
 
@@ -90,7 +90,7 @@ class MaterialAccessGuardTest {
         UUID id = UUID.randomUUID();
         when(repo.findReturnCampus(id)).thenReturn(Optional.of(campusB));
 
-        assertNotFound(() -> guard.requireReturn(id, onlyA),
+        assertNotFound(() -> guard.requireReturn(onlyA, id),
                 ErrorCode.CONSUMABLE_RETURN_NOT_FOUND);
     }
 
@@ -100,7 +100,7 @@ class MaterialAccessGuardTest {
         UUID id = UUID.randomUUID();
         when(repo.findDeptTransferCampus(id)).thenReturn(Optional.of(campusB));
 
-        assertNotFound(() -> guard.requireTransfer(id, onlyA),
+        assertNotFound(() -> guard.requireTransfer(onlyA, id),
                 ErrorCode.DEPT_TRANSFER_NOT_FOUND);
     }
 }

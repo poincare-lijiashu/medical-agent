@@ -57,7 +57,7 @@ public class MaterialTraceController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, WRITE);
-        guard.requireIssueItem(req.issueItemId(), scope);
+        guard.requireIssueItem(scope, req.issueItemId());
         ConsumableTrace trace = service.register(req, actor).trace();
         return ApiResponse.ok(new TraceView(PhiMask.trace(trace, scope)));
     }

@@ -15,6 +15,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
 
@@ -151,6 +152,20 @@ public abstract class AbstractApiExceptionHandler {
             }
         }
         return null;
+    }
+
+    /**
+     * 路径不存在 → 404（G78）。
+     *
+     * <p>Spring 6.1 起未匹配的请求会抛 {@link NoResourceFoundException}（走静态资源兜底），
+     * 之前没有任何处理器接它，于是落进下面的兜底变成 <b>500「系统处理异常」</b>——
+     * 调用方把地址拼错会以为是服务端故障，集成排查方向被带偏。语义上它明确是 404。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException e) {
+        log.debug("no.resource path={}", e.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.fail(ErrorCode.NOT_FOUND));
     }
 
     @ExceptionHandler(Exception.class)

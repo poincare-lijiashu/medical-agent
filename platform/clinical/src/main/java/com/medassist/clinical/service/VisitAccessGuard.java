@@ -78,10 +78,10 @@ public class VisitAccessGuard {
      */
     public void requireAdmission(DataScope scope, UUID admissionId) {
         UUID deptId = repo.findVisitDepartmentByAdmissionId(admissionId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到住院登记"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.ADMISSION_NOT_FOUND));
         boolean campusOk = campusOk(scope, () -> repo.findVisitCampusByAdmissionId(admissionId));
         if (!scope.canSeeDepartment(deptId) || !campusOk) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到住院登记");
+            throw new BusinessException(ErrorCode.ADMISSION_NOT_FOUND);
         }
     }
 
@@ -93,10 +93,10 @@ public class VisitAccessGuard {
      */
     public void requireWard(DataScope scope, UUID wardId) {
         UUID deptId = repo.findWardDepartment(wardId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该病区"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.WARD_NOT_FOUND));
         boolean campusOk = campusOk(scope, () -> repo.findWardCampus(wardId));
         if (!scope.canSeeDepartment(deptId) || !campusOk) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到该病区");
+            throw new BusinessException(ErrorCode.WARD_NOT_FOUND);
         }
     }
 
@@ -108,10 +108,10 @@ public class VisitAccessGuard {
      */
     public void requireCase(DataScope scope, UUID caseId) {
         UUID deptId = repo.findVisitDepartmentByCaseId(caseId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术记录"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.SURGERY_CASE_NOT_FOUND));
         boolean campusOk = campusOk(scope, () -> repo.findVisitCampusByCaseId(caseId));
         if (!scope.canSeeDepartment(deptId) || !campusOk) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "未找到该手术记录");
+            throw new BusinessException(ErrorCode.SURGERY_CASE_NOT_FOUND);
         }
     }
 

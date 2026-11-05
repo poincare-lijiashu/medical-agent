@@ -59,7 +59,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, WRITE);
-        guard.requireApplication(applicationId, scope);
+        guard.requireApplication(scope, applicationId);
         return ApiResponse.ok(service.write(applicationId, req, actor));
     }
 
@@ -69,7 +69,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        guard.requireApplication(applicationId, scope);
+        guard.requireApplication(scope, applicationId);
         return ApiResponse.ok(service.currentOf(applicationId));
     }
 
@@ -79,7 +79,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        guard.requireReport(id, scope);
+        guard.requireReport(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -92,7 +92,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, WRITE);
-        guard.requireReport(id, scope);
+        guard.requireReport(scope, id);
         return ApiResponse.ok(service.rewrite(id, req, actor));
     }
 
@@ -105,7 +105,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, REVIEW);
-        guard.requireReport(id, scope);
+        guard.requireReport(scope, id);
         return ApiResponse.ok(service.review(id, req.approve(), req.reason(), actor));
     }
 
@@ -118,7 +118,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, REVIEW);
-        guard.requireReport(id, scope);
+        guard.requireReport(scope, id);
         return ApiResponse.ok(service.amend(id, req, actor));
     }
 
@@ -145,7 +145,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, ACK);
-        guard.requireCritical(id, scope);
+        guard.requireCritical(scope, id);
         return ApiResponse.ok(service.acknowledge(id, req == null ? null : req.note(), actor));
     }
 
@@ -158,7 +158,7 @@ public class ReportController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, ACK);
-        guard.requireCritical(id, scope);
+        guard.requireCritical(scope, id);
         return ApiResponse.ok(service.closeCritical(id, req == null ? null : req.note(), actor));
     }
 }

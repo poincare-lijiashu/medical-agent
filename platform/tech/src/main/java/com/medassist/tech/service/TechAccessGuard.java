@@ -21,6 +21,11 @@ import java.util.UUID;
  * 详情却能从 {@code /tech/reports/{id}} 读到同申请的全文报告与危急值。现在两条路径同口径。
  *
  * <p>越权与不存在返回同一个错误码：不能让调用方通过错误码差异探测"该单存在但你看不到"。
+ *
+ * <p>G78：参数顺序统一为 {@code (scope, id)}，与 {@code VisitAccessGuard}、
+ * {@code EmrAccessGuard}、{@code PrescriptionAccessGuard} 等其余 5 个守卫一致——
+ * 此前本 guard 与 {@code MaterialAccessGuard} 用 {@code (id, scope)}，两种顺序并存，
+ * 读代码时要先看签名才知道哪个是范围、哪个是单据。
  */
 @Component
 public class TechAccessGuard {
@@ -32,12 +37,12 @@ public class TechAccessGuard {
     }
 
     /** 检查/检验申请。 */
-    public void requireApplication(UUID applicationId, DataScope scope) {
+    public void requireApplication(DataScope scope, UUID applicationId) {
         require(applicationId, scope, ErrorCode.TECH_APPLICATION_NOT_FOUND);
     }
 
     /** 报告（回溯到所属申请）。 */
-    public void requireReport(UUID reportId, DataScope scope) {
+    public void requireReport(DataScope scope, UUID reportId) {
         if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }
@@ -47,7 +52,7 @@ public class TechAccessGuard {
     }
 
     /** 危急值（回溯到所属申请）。 */
-    public void requireCritical(UUID criticalId, DataScope scope) {
+    public void requireCritical(DataScope scope, UUID criticalId) {
         if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }
@@ -57,7 +62,7 @@ public class TechAccessGuard {
     }
 
     /** 影像检查登记（回溯到所属申请）。 */
-    public void requireStudy(String studyInstanceUid, DataScope scope) {
+    public void requireStudy(DataScope scope, String studyInstanceUid) {
         if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }

@@ -65,7 +65,7 @@ public class MaterialReturnController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        guard.requireReturn(id, scope);
+        guard.requireReturn(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 
@@ -89,7 +89,7 @@ public class MaterialReturnController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, APPROVE);
-        guard.requireReturn(id, scope);
+        guard.requireReturn(scope, id);
         return ApiResponse.ok(service.approve(id, req, actor));
     }
 
@@ -102,7 +102,7 @@ public class MaterialReturnController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, APPROVE);
-        guard.requireReturn(id, scope);
+        guard.requireReturn(scope, id);
         return ApiResponse.ok(service.reject(id, req, actor));
     }
 
@@ -115,7 +115,7 @@ public class MaterialReturnController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, WRITE);
-        guard.requireReturn(id, scope);
+        guard.requireReturn(scope, id);
         return ApiResponse.ok(service.cancel(id, req, actor));
     }
 

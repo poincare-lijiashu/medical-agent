@@ -73,7 +73,7 @@ public class MaterialIssueController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        guard.requireIssue(id, scope);
+        guard.requireIssue(scope, id);
         return ApiResponse.ok(service.detail(id));
     }
 }
