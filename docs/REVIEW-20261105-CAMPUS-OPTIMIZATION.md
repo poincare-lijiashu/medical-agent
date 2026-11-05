@@ -171,9 +171,15 @@
 |---|---|---|
 | G71 遗留：`emr_homepage_smoke` 归档 409 | 脚本从未完成"归档前必须 ICD 编码"（G4 起的既有门槛），归档步骤必然 409，后续详情/打印/列表断言连锁失败 | 归档前补 `PUT /emr/coding/{id}`（单主诊断，取字典里的 `A09.900`）+ `POST /emr/coding/{id}/submit`；同时把首页所属病区科室改为 `doctor01` 绑定的病区（3333），否则"只读医师可读"断言会被 dept+campus 守卫**正确地**判 404。脚本整体 RESULT PASS，EMR 两个冒烟（记录 / 首页）至此全绿 |
 
+### G73 批次已关闭（迁移安全门禁，无产品代码变更）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.15 | 大表 `SET NOT NULL` / 无默认值 `ADD COLUMN NOT NULL` 会取 ACCESS EXCLUSIVE 锁并全表扫描，部署期即停服；评审要求"大表 NOT NULL 锁风险与不可逆回填"有明确口径 | 新增 `scripts/migration_safety_lint.ps1`：扫描 `platform/*/db/migration/**/*.sql`（排除 `target/`），命中 **SET_NOT_NULL** 与 **ADD_COLUMN_NOT_NULL**（带常量 DEFAULT 的 `ADD COLUMN` 在 PG11+ 是元数据操作，不报）即失败；存量 10 份已执行迁移登记在 `scripts/migration_safety_baseline.txt`，只拦**新**迁移。脚本头写明安全写法：`ADD CONSTRAINT ... CHECK (...) NOT VALID` → `VALIDATE CONSTRAINT` → `SET NOT NULL` → 删检查。CI 增 `migration-lint` job（pwsh）。**反证**：临时放一份含 `ADD COLUMN NOT NULL` + `SET NOT NULL` 的迁移 → 输出两条 RISK、退出码 1；删除后恢复 PASS |
+
 ### 未处理（下一批）
 
-§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12 已关闭。剩余为 [建议] 级：**§6.15**（大表 NOT NULL 锁风险与不可逆回填——已分析：存量迁移均已执行、新库为空表，真正需要的是"未来迁移"的安全口径与 lint 门禁）、guard 签名/错误码漂移、列表 LIMIT 后内存过滤、锁内调下游 HTTP、解析吞错、时间口径漂移、worker 多实例假设。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、列表 LIMIT 后内存过滤、锁内调下游 HTTP、解析吞错、时间口径漂移、worker 多实例假设。
 
 ---
 

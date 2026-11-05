@@ -1,0 +1,23 @@
+# Already-applied migrations that enforce NOT NULL directly.
+#
+# These shipped before the gate existed and are recorded only so the lint can
+# focus on new work; they are NOT an endorsement of the pattern. On an empty
+# database (fresh install) they are harmless, which is why no rewrite is
+# scheduled. Any NEW migration must use the safe pattern documented in
+# migration_safety_lint.ps1:
+#   ADD CONSTRAINT ... CHECK (col IS NOT NULL) NOT VALID;
+#   VALIDATE CONSTRAINT ...;
+#   ALTER COLUMN ... SET NOT NULL;
+#   DROP CONSTRAINT ...
+#
+# One path per line, relative to the repository root, no comments after paths.
+platform/clinical/src/main/resources/db/migration/clinical/V50__pathway_template_version.sql
+platform/clinical/src/main/resources/db/migration/clinical/V56__campus.sql
+platform/clinical/src/main/resources/db/migration/clinical/V57__subtable_campus.sql
+platform/emr/src/main/resources/db/migration/emr/V23__campus.sql
+platform/emr/src/main/resources/db/migration/emr/V26__homepage_campus.sql
+platform/insurance/src/main/resources/db/migration/insurance/V18__settlement_bill_service_date.sql
+platform/insurance/src/main/resources/db/migration/insurance/V20__settlement_campus.sql
+platform/material/src/main/resources/db/migration/material/V5__document_campus.sql
+platform/pharmacy/src/main/resources/db/migration/pharmacy/V20__prescription_campus.sql
+platform/tech/src/main/resources/db/migration/tech/V13__application_campus.sql

@@ -10,6 +10,7 @@
 # - platform：Java 微服务矩阵（Spring Boot 4）编译 + 单元测试（P0-4 鉴权、P0-5 迁移入口）。
 # - postgres-it：真库 SQL 门禁（Testcontainers）——CAS、部分唯一索引、行锁并发语义，
 #   mock 单测无法证明（G63）。
+# - migration-lint：迁移安全门禁——拦截新迁移里的阻塞式 NOT NULL（G73，评审 §6.15）。
 # - helm：部署清单静态校验（helm lint + 三环境 template + compose 叠加层 config），
 #   不依赖集群，几十秒内可拦住 95% 的清单错误。
 
@@ -89,6 +90,18 @@ jobs:
         run: docker pull postgres:15-alpine
       - name: Real-DB integration tests (clinical / auth / insurance)
         run: mvn -B -f platform/pom.xml -Ppostgres-it -pl clinical,auth,insurance -am test
+
+  # G73：迁移安全门禁（评审 §6.15）——新迁移若直接 SET NOT NULL / 无默认值
+  # ADD COLUMN NOT NULL，会在存量表上取 ACCESS EXCLUSIVE 锁并全表扫描；
+  # 已执行的存量迁移记录在 scripts/migration_safety_baseline.txt 里。
+  migration-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Migration safety lint
+        shell: pwsh
+        run: ./scripts/migration_safety_lint.ps1
 
   platform:
     # Java 微服务矩阵：编译 + 单测（不连数据库：JWT 与网关过滤器均为纯单元测试）
