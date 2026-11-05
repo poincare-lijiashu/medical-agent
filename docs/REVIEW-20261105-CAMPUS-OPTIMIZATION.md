@@ -129,7 +129,7 @@
 |---|---|---|
 | §6.1（五张子表） | `charge` / `charge_receipt` / `emergency_triage` / `transfusion_request` / `nursing_execution` 均无 `campus_id`；分诊建单不写院区，分诊队列、急诊看板、输血申请列表只按科室过滤，主院区账号能看东院区资金与执行数据 | **V57**：五表补 `campus_id`。可回溯就诊的四张按同 schema `clinical_svc.visit` 回填、无就诊的分诊落主院区，随后 `SET NOT NULL` + 索引。`nursing_execution` 是追加式审计表（V29 触发器拒绝 UPDATE），回填在迁移事务内 `DISABLE TRIGGER` → 回填 → `ENABLE TRIGGER`，触发器定义与业务侧"禁止改历史"语义不变。**写侧**：收费/票据/输血/护理执行的 INSERT 统一用 `(SELECT campus_id FROM clinical_svc.visit)` 取就诊院区；分诊建单（尚无就诊）改由 `scope.campusForWrite()` 固化，并先校验科室可见。**读侧**：分诊队列、急诊看板、输血申请列表接 `DataScope.campusFilter()` 下推 SQL。院区冒烟新增 4 项（分诊落 EAST、EAST 队列可见、MAIN 队列不可见），73 → 77 全过 |
 
-### G67 批次已关闭（tech V14/V15 已执行，mock 182 类 / 1715 项全绿，LIS 冒烟含重放全过）
+### G67 批次已关闭（代码 commit `3237f7c`，tech V14/V15 已执行，mock 182 类 / 1715 项全绿，LIS 冒烟含重放全过）
 
 | 条目 | 原问题 | 处置 |
 |---|---|---|
