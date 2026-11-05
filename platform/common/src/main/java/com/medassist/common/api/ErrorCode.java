@@ -419,6 +419,12 @@ public enum ErrorCode {
     INSURANCE_REALTIME_NOT_FOUND(48416, "未找到该实时结算交易"),
     INSURANCE_SCHEME_RATE_DUPLICATE(48417, "该生效日期已有费率记录，请直接修改方案或换一个日期"),
     INSURANCE_SCHEME_RATE_MISSING(48418, "所选日期没有生效的费率，请先配置该日期的费率"),
+    INSURANCE_TEMPLATE_NOT_FOUND(48419, "未找到该报盘报文模板"),
+    INSURANCE_TEMPLATE_DUPLICATE(48420, "报文模板编码已存在"),
+    INSURANCE_TEMPLATE_PUBLISH_CONFLICT(48421, "已有生效中的报文模板，请先停用后再发布"),
+    INSURANCE_TEMPLATE_INVALID(48422, "报文模板配置不合法（字段映射或必填口径有误）"),
+    INSURANCE_TEMPLATE_REQUIRED_MISSING(48423, "报文模板必填字段在清单中取不到值，无法生成报盘"),
+    INSURANCE_TEMPLATE_STATUS_INVALID(48424, "当前报文模板状态不允许该操作"),
 
     // ---- 知识库（49xxx）----
     KB_SPACE_NOT_FOUND(49401, "未找到该知识空间"),

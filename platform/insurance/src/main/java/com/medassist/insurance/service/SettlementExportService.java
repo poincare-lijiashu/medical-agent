@@ -5,7 +5,9 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.insurance.domain.InsuranceModel.BillLine;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
+import com.medassist.insurance.domain.InsuranceModel.ExportMessageTemplate;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
+import com.medassist.insurance.domain.InsuranceModel.TemplateField;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.ExportBatchSummary;
 import com.medassist.insurance.web.InsuranceDtos.ExportReceiptReq;
@@ -116,15 +118,29 @@ public class SettlementExportService {
         }
         int remaining = (int) Math.max(0, pending - bills.size());
 
+        // G85：已发布的报文模板决定报盘元素名与必填口径；无模板时回落内置 BUILTIN。
+        // 模板在生成批次前解析并校验，避免"批次已生成、报文却缺字段"。
+        ExportMessageTemplate template = repo.findPublishedExportTemplate().orElse(null);
+        List<TemplateField> templateFields = null;
+        if (template != null) {
+            templateFields = ExportTemplateService.parseFields(objectMapper, template.fields());
+            ExportTemplateService.validateFields(templateFields);
+            validateTemplateRequired(templateFields, bills);
+        }
+
         String batchNo = repo.nextExportBatchNo();
-        String payload = buildPayload(batchNo, from, to, bills);
+        String payload = buildPayload(batchNo, from, to, bills, template, templateFields);
         BigDecimal total = sum(bills, SettlementBill::totalAmount);
         BigDecimal insurance = sum(bills, SettlementBill::insuranceAmount);
         BigDecimal selfPay = sum(bills, SettlementBill::selfPayAmount);
 
+        String templateCode = template == null
+                ? ExportBatch.BUILTIN_TEMPLATE : template.code();
+        int templateVersion = template == null ? 1 : template.version();
         ExportBatch batch = new ExportBatch(UUID.randomUUID(), batchNo, from, to, bills.size(),
-                total, insurance, selfPay, payload, sha256(payload), ExportBatch.GENERATED,
-                null, null, null, null, null, null, actor, 0L, Instant.now());
+                total, insurance, selfPay, payload, sha256(payload), templateCode,
+                templateVersion, ExportBatch.GENERATED, null, null, null, null, null, null,
+                actor, 0L, Instant.now());
         repo.insertExportBatch(batch);
         try {
             for (SettlementBill bill : bills) {
@@ -146,6 +162,8 @@ public class SettlementExportService {
         detail.put("totalAmount", total.toPlainString());
         detail.put("insuranceAmount", insurance.toPlainString());
         detail.put("payloadHash", batch.payloadHash());
+        detail.put("templateCode", templateCode);
+        detail.put("templateVersion", templateVersion);
         audit(actor, "EXPORT_BATCH_CREATE", batchNo, detail);
         return new ExportCreateResult(repo.findExportBatch(batch.id()).orElse(batch),
                 (int) excluded, remaining);
@@ -237,7 +255,8 @@ public class SettlementExportService {
                 batch.insuranceAmount(), batch.selfPayAmount(), batch.payloadHash(),
                 batch.status(), batch.receiptNo(), batch.receiptAt(), batch.receiptMessage(),
                 batch.cancelledReason(), batch.cancelledAt(), batch.createdBy(),
-                batch.version(), batch.createdAt(), excludedAlreadyExported, remainingPending);
+                batch.version(), batch.createdAt(), excludedAlreadyExported, remainingPending,
+                batch.templateCode(), batch.templateVersion());
     }
 
     /**
@@ -285,16 +304,21 @@ public class SettlementExportService {
     // ---------------------------------------------------------------- 报文
 
     private String buildPayload(String batchNo, LocalDate from, LocalDate to,
-                                List<SettlementBill> bills) {
+                                List<SettlementBill> bills, ExportMessageTemplate template,
+                                List<TemplateField> templateFields) {
         BigDecimal total = sum(bills, SettlementBill::totalAmount);
         BigDecimal insurance = sum(bills, SettlementBill::insuranceAmount);
         BigDecimal selfPay = sum(bills, SettlementBill::selfPayAmount);
+        String templateCode = template == null ? ExportBatch.BUILTIN_TEMPLATE : template.code();
+        int templateVersion = template == null ? 1 : template.version();
         StringBuilder xml = new StringBuilder(4096);
         xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.append("<settlementBatch version=\"1\" batchNo=\"").append(escape(batchNo))
                 .append("\" periodFrom=\"").append(from)
                 .append("\" periodTo=\"").append(to)
                 .append("\" generatedAt=\"").append(Instant.now())
+                .append("\" templateCode=\"").append(escape(templateCode))
+                .append("\" templateVersion=\"").append(templateVersion)
                 .append("\">\n");
         xml.append("  <summary billCount=\"").append(bills.size())
                 .append("\" totalAmount=\"").append(money(total))
@@ -302,22 +326,17 @@ public class SettlementExportService {
                 .append("\" selfPayAmount=\"").append(money(selfPay))
                 .append("\"/>\n");
         for (SettlementBill bill : bills) {
-            xml.append("  <bill billNo=\"").append(escape(bill.billNo()))
-                    .append("\" visitId=\"").append(bill.visitId())
-                    .append("\" patientNo=\"").append(escape(bill.patientNo()))
-                    .append("\" totalAmount=\"").append(money(bill.totalAmount()))
-                    .append("\" eligibleAmount=\"").append(money(bill.eligibleAmount()))
-                    .append("\" deductible=\"").append(money(bill.deductible()))
-                    .append("\" insuranceAmount=\"").append(money(bill.insuranceAmount()))
-                    .append("\" selfPayAmount=\"").append(money(bill.selfPayAmount()))
-                    .append("\" diagnosisCount=\"").append(bill.diagnosisCount())
-                    .append("\" primaryDiagnosisCode=\"")
-                    .append(escape(bill.primaryDiagnosisCode()))
-                    .append("\" primaryDiagnosisName=\"")
-                    .append(escape(bill.primaryDiagnosisName()))
-                    .append("\" confirmedBy=\"").append(escape(bill.confirmedBy()))
-                    .append("\" confirmedAt=\"").append(bill.confirmedAt())
-                    .append("\">\n");
+            xml.append("  <bill");
+            if (templateFields == null) {
+                appendBuiltinBillAttributes(xml, bill);
+            } else {
+                // 模板驱动：元素名与顺序以已发布模板为准（字段名已在导出前校验过）
+                for (TemplateField field : templateFields) {
+                    xml.append(" ").append(field.element()).append("=\"")
+                            .append(escape(sourceValue(bill, field.source()))).append("\"");
+                }
+            }
+            xml.append(">\n");
             // 省局结算清单要求主诊断 + 其他诊断；清单生成时已固化诊断快照（第六轮 MF-15）
             xml.append("    <diagnoses>");
             for (Map<String, Object> d : diagnoses(bill)) {
@@ -346,6 +365,68 @@ public class SettlementExportService {
         }
         xml.append("</settlementBatch>\n");
         return xml.toString();
+    }
+
+    /** 内置布局（未配置/已停用模板时的默认报盘字段，保持历史报文兼容）。 */
+    private static void appendBuiltinBillAttributes(StringBuilder xml, SettlementBill bill) {
+        xml.append(" billNo=\"").append(escape(bill.billNo()))
+                .append("\" visitId=\"").append(bill.visitId())
+                .append("\" patientNo=\"").append(escape(bill.patientNo()))
+                .append("\" totalAmount=\"").append(money(bill.totalAmount()))
+                .append("\" eligibleAmount=\"").append(money(bill.eligibleAmount()))
+                .append("\" deductible=\"").append(money(bill.deductible()))
+                .append("\" insuranceAmount=\"").append(money(bill.insuranceAmount()))
+                .append("\" selfPayAmount=\"").append(money(bill.selfPayAmount()))
+                .append("\" diagnosisCount=\"").append(bill.diagnosisCount())
+                .append("\" primaryDiagnosisCode=\"")
+                .append(escape(bill.primaryDiagnosisCode()))
+                .append("\" primaryDiagnosisName=\"")
+                .append(escape(bill.primaryDiagnosisName()))
+                .append("\" confirmedBy=\"").append(escape(bill.confirmedBy()))
+                .append("\" confirmedAt=\"").append(bill.confirmedAt())
+                .append("\"");
+    }
+
+    /**
+     * 模板必填项取不到值：生成批次前显式失败（422），不能报出一份省局必然退回的报文。
+     *
+     * <p>典型场景：省局要求主诊断必填，而某张清单未编码诊断（历史数据）。
+     */
+    private static void validateTemplateRequired(List<TemplateField> fields,
+                                                 List<SettlementBill> bills) {
+        for (SettlementBill bill : bills) {
+            for (TemplateField field : fields) {
+                if (!field.isRequired()) {
+                    continue;
+                }
+                String value = sourceValue(bill, field.source());
+                if (value == null || value.isBlank()) {
+                    throw new BusinessException(ErrorCode.INSURANCE_TEMPLATE_REQUIRED_MISSING,
+                            "模板必填字段 " + field.element() + "（来源 " + field.source()
+                                    + "）在清单 " + bill.billNo() + " 中无值，无法报盘");
+                }
+            }
+        }
+    }
+
+    /** 院内字段取值（未格式化，null 表示该清单没有这个值）。 */
+    private static String sourceValue(SettlementBill bill, String source) {
+        return switch (source) {
+            case "billNo" -> bill.billNo();
+            case "visitId" -> bill.visitId() == null ? null : bill.visitId().toString();
+            case "patientNo" -> bill.patientNo();
+            case "totalAmount" -> money(bill.totalAmount());
+            case "eligibleAmount" -> money(bill.eligibleAmount());
+            case "deductible" -> money(bill.deductible());
+            case "insuranceAmount" -> money(bill.insuranceAmount());
+            case "selfPayAmount" -> money(bill.selfPayAmount());
+            case "diagnosisCount" -> String.valueOf(bill.diagnosisCount());
+            case "primaryDiagnosisCode" -> bill.primaryDiagnosisCode();
+            case "primaryDiagnosisName" -> bill.primaryDiagnosisName();
+            case "confirmedBy" -> bill.confirmedBy();
+            case "confirmedAt" -> bill.confirmedAt() == null ? null : bill.confirmedAt().toString();
+            default -> null;
+        };
     }
 
     /** 明细是生成时固化的 JSON 快照；解析失败说明数据损坏，必须显式失败而不是导出残缺报文。 */

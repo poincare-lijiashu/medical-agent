@@ -3,6 +3,7 @@ package com.medassist.insurance.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
+import com.medassist.insurance.domain.InsuranceModel.ExportMessageTemplate;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.ExportReceiptReq;
@@ -69,7 +70,7 @@ class SettlementExportServiceTest {
     private ExportBatch batch(String status, long version) {
         return new ExportBatch(UUID.randomUUID(), "EB2026110100001", LocalDate.now(),
                 LocalDate.now(), 1, new BigDecimal("10.00"), new BigDecimal("10.00"),
-                new BigDecimal("0.00"), "<x/>", "hash", status, null, null, null,
+                new BigDecimal("0.00"), "<x/>", "hash", "BUILTIN", 1, status, null, null, null,
                 null, null, null, "yb01", version, Instant.now());
     }
 
@@ -217,6 +218,90 @@ class SettlementExportServiceTest {
         verify(repo).insertExportBatch(captor.capture());
         assertThat(captor.getValue().status()).isEqualTo(ExportBatch.GENERATED);
         verify(repo).insertExportItem(captor.getValue().id(), billId, "SB001");
+    }
+
+    // ---------------------------------------------------------------- 报文模板（G85）
+
+    private ExportMessageTemplate template(String fieldsJson) {
+        return new ExportMessageTemplate(UUID.randomUUID(), "PROV_V2", "prov v2", 3,
+                ExportMessageTemplate.PUBLISHED, fieldsJson, "yb01", "yb01", "yb01",
+                Instant.now(), 2L, Instant.now(), Instant.now());
+    }
+
+    private static final String TEMPLATE_JSON = """
+            [{"element":"settleNo","source":"billNo","required":true},
+             {"element":"patientNo","source":"patientNo","required":true},
+             {"element":"totalAmount","source":"totalAmount","required":true},
+             {"element":"insuranceAmount","source":"insuranceAmount","required":true},
+             {"element":"patientNoCopy","source":"patientNo","required":false}]
+            """;
+
+    @Test
+    @DisplayName("生成批次：使用已发布模板的元素名，并快照 templateCode/Version")
+    void createUsesPublishedTemplate() {
+        when(repo.findPublishedExportTemplate()).thenReturn(Optional.of(template(TEMPLATE_JSON)));
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
+
+        ExportBatch batch = service.create(LocalDate.now(), LocalDate.now(), "yb01").batch();
+
+        assertThat(batch.templateCode()).isEqualTo("PROV_V2");
+        assertThat(batch.templateVersion()).isEqualTo(3);
+        assertThat(batch.payload())
+                .contains("templateCode=\"PROV_V2\"")
+                .contains("templateVersion=\"3\"")
+                .contains("<bill settleNo=\"SB001\"")
+                .contains("patientNoCopy=\"P001\"")
+                // 内置属性名不再出现，证明报文布局确实由模板驱动
+                .doesNotContain("billNo=\"SB001\"");
+    }
+
+    @Test
+    @DisplayName("已发布模板要求必填但清单取不到值：422，且不落批次")
+    void createRejectsWhenTemplateRequiredMissing() {
+        String fields = """
+                [{"element":"billNo","source":"billNo","required":true},
+                 {"element":"patientNo","source":"patientNo","required":true},
+                 {"element":"totalAmount","source":"totalAmount","required":true},
+                 {"element":"insuranceAmount","source":"insuranceAmount","required":true},
+                 {"element":"diagnosisCode","source":"primaryDiagnosisCode","required":true}]
+                """;
+        SettlementBill noDiagnosis = new SettlementBill(billId, "SB003", UUID.randomUUID(),
+                UUID.randomUUID(), "P003", LocalDate.now(), UUID.randomUUID(),
+                new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("0.00"),
+                new BigDecimal("10.00"), new BigDecimal("0.00"), SettlementBill.CONFIRMED, DETAIL,
+                "admin01", "yb01", Instant.now(), null, null, null, BigDecimal.ONE,
+                new BigDecimal("300000"), 1L, Instant.now(), null, null, 0, "[]");
+        when(repo.findPublishedExportTemplate()).thenReturn(Optional.of(template(fields)));
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt()))
+                .thenReturn(List.of(noDiagnosis));
+
+        assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.errorCode())
+                            .isEqualTo(ErrorCode.INSURANCE_TEMPLATE_REQUIRED_MISSING);
+                    assertThat(e.getMessage()).contains("diagnosisCode").contains("SB003");
+                });
+        verify(repo, never()).insertExportBatch(any());
+    }
+
+    @Test
+    @DisplayName("未发布模板：回落内置 BUILTIN 布局并写入批次快照")
+    void createFallsBackToBuiltinTemplate() {
+        when(repo.findPublishedExportTemplate()).thenReturn(Optional.empty());
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
+
+        ExportBatch batch = service.create(LocalDate.now(), LocalDate.now(), "yb01").batch();
+
+        assertThat(batch.templateCode()).isEqualTo(ExportBatch.BUILTIN_TEMPLATE);
+        assertThat(batch.templateVersion()).isEqualTo(1);
+        assertThat(batch.payload())
+                .contains("templateCode=\"BUILTIN\"")
+                .contains("<bill billNo=\"SB001\"");
     }
 
     @Test

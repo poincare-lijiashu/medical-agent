@@ -264,6 +264,20 @@
 
 **验证**：新冒烟 `tech_device_campus_smoke` 25 项全 PASS（东院区管理员建设备→院区固化为 EAST；`keyword` 查主院区设备返回 0 条；主院区设备详情与报修均 404/46430；工单列表不含他院区工单；看板 total 与本院区设备列表条数一致）；`tech_device_work_order_smoke`、`tech_smoke`、`tech_lis_smoke`、`tech_pacs_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过。
 
+### G85 批次（省局医保报文模板，mock 192 类 / 1832 项全绿）
+
+| 关注点 | 处置 |
+|---|---|
+| 院区口径 | 模板是**全院报文口径配置**（不含患者数据），与 G81 分级目录同理不做院区隔离；报盘批次仍按调用方 `campusFilter()` 收敛清单，模板只决定字段名/必填，不改变"报哪些清单" |
+| 写权限 | 读写分离 `insurance:export:template:read` / `insurance:export:template:manage`（auth V77，仅 ADMIN/医保办）；模板误改会影响全部批次，普通只读角色只能核对不能发布 |
+| 唯一生效模板 | 数据库部分唯一索引 `WHERE status='PUBLISHED'` 保证全局至多一版生效，导出侧无需"选模板"参数，也不存在两套口径并存；并发发布由唯一索引兜底转 409 |
+| 配置校验 | 字段来源限定导出层真实可取的 13 个院内列；元素名合法且唯一；`billNo/patientNo/totalAmount/insuranceAmount` 必须声明必填。保存、发布、导出三处同校验，避免"发布时通过、导出时缺字段" |
+| 批次可追溯 | `settlement_export_batch` 快照 `template_code/template_version`；无生效模板（首启/停用期间）回落内置 `BUILTIN` 布局，报文与批次仍可区分来源，不静默换口径 |
+| 状态机 | DRAFT（可改）→ PUBLISHED（不可改）→ DISABLED；修改/发布/停用全部用 `row_version` CAS，两个窗口并发只有一个生效 |
+| 残留边界 | 模板只覆盖结算清单的标量字段；诊断/明细子元素仍按固定结构输出（省局若要求改子元素层级，需要下一步扩展模板 schema 的节点类型） |
+
+**验证**：新冒烟 `insurance_export_template_smoke` 29 项全 PASS（非法来源 422、编码重复 409、过期 rowVersion 409、重复发布/二次发布 409、已发布不可改 409、医生只读 403、停用后再停用 409）；`insurance_smoke` 内新增端到端断言（发布模板 → 批次快照 `SMOKE-*`/v1 → 报文含 `templateCode` 与模板额外元素 `patientNoCopy` → 停用后新批次回落 `BUILTIN`）；`insurance_drg_smoke`、`insurance_rate_version_smoke`、`campus_isolation`(77)、`platform_smoke`(59) 复跑全过。
+
 ### G84 批次（医保费率生效期版本化，mock 190 类 / 1812 项全绿）
 
 | 关注点 | 处置 |

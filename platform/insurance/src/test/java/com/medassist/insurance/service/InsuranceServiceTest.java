@@ -247,7 +247,7 @@ class InsuranceServiceTest {
         return new ExportBatch(UUID.randomUUID(), "EB20261101000001",
                 java.time.LocalDate.now(), java.time.LocalDate.now(), 1,
                 new BigDecimal("10.00"), new BigDecimal("8.00"), new BigDecimal("2.00"),
-                "<settlementBatch/>", "hash", status, null, null, null,
+                "<settlementBatch/>", "hash", "BUILTIN", 1, status, null, null, null,
                 null, null, null, "yb01", 0L, Instant.now());
     }
 

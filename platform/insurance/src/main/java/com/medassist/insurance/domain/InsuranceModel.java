@@ -151,6 +151,7 @@ public final class InsuranceModel {
     public record ExportBatch(UUID id, String batchNo, LocalDate periodFrom, LocalDate periodTo,
                               int billCount, BigDecimal totalAmount, BigDecimal insuranceAmount,
                               BigDecimal selfPayAmount, String payload, String payloadHash,
+                              String templateCode, int templateVersion,
                               String status, String receiptNo, Instant receiptAt,
                               String receiptMessage, String cancelledReason, String cancelledBy,
                               Instant cancelledAt, String createdBy, long version,
@@ -161,6 +162,8 @@ public final class InsuranceModel {
         public static final String REJECTED = "REJECTED";
         /** 撤销（仅 GENERATED 可撤销）：批次作废，清单可重新报盘。 */
         public static final String CANCELLED = "CANCELLED";
+        /** 未配置（或已停用）报文模板时使用的内置布局。 */
+        public static final String BUILTIN_TEMPLATE = "BUILTIN";
 
         public boolean receipted() {
             return !GENERATED.equals(status) && !CANCELLED.equals(status);
@@ -168,6 +171,31 @@ public final class InsuranceModel {
 
         public boolean cancelled() {
             return CANCELLED.equals(status);
+        }
+    }
+
+    /**
+     * 省局报盘报文模板（G85）。
+     *
+     * <p>fields 为 JSON 数组（[{element,source,required,label}]），由服务层解析与校验；
+     * 全局最多一个 PUBLISHED（数据库部分唯一索引），导出时无需再选模板。
+     * 批次生成时把 code/version 快照落到 settlement_export_batch，事后可追溯口径。
+     */
+    public record ExportMessageTemplate(UUID id, String code, String name, int version,
+                                        String status, String fields, String createdBy,
+                                        String updatedBy, String publishedBy, Instant publishedAt,
+                                        long rowVersion, Instant createdAt, Instant updatedAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String DISABLED = "DISABLED";
+    }
+
+    /** 模板字段映射：省局报文元素 ← 院内报盘字段；required 表示省局必填。 */
+    public record TemplateField(String element, String source, Boolean required, String label) {
+
+        public boolean isRequired() {
+            return Boolean.TRUE.equals(required);
         }
     }
 

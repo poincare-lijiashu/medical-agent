@@ -350,6 +350,34 @@ Remove-Item $csvPath, $xlsxPath, $xmlPath -Force
 
 # ---------------------------------------------------------------- 6.2 settlement export batch + receipt
 $today = (Get-Date).ToString('yyyy-MM-dd')
+
+# G85: publish a message template first, so the export payload is template-driven.
+# Disable any leftover ACTIVE template from a previous failed run (publish would 409).
+$r = Invoke-Api 'GET' '/api/v2/insurance/export/templates?limit=100' $null $token
+Check 'template.prelist' $r.Status 200
+foreach ($t in @(Res $r)) {
+    if ($t.status -eq 'PUBLISHED') {
+        $r2 = Invoke-Api 'POST' "/api/v2/insurance/export/templates/$($t.id)/disable" $null $token
+        Check "template.preDisable.$($t.code)" $r2.Status 200
+    }
+}
+$tplCode = "SMOKE-$suffix"
+$r = Invoke-Api 'POST' '/api/v2/insurance/export/templates' @{
+    code = $tplCode; name = 'smoke message template'
+    fields = @(
+        @{ element = 'billNo'; source = 'billNo'; required = $true }
+        @{ element = 'patientNo'; source = 'patientNo'; required = $true }
+        @{ element = 'totalAmount'; source = 'totalAmount'; required = $true }
+        @{ element = 'insuranceAmount'; source = 'insuranceAmount'; required = $true }
+        @{ element = 'patientNoCopy'; source = 'patientNo'; required = $false }
+    )
+} $token
+Check 'template.create' $r.Status 200
+$tplId = (Res $r).id
+$r = Invoke-Api 'POST' "/api/v2/insurance/export/templates/$tplId/publish" $null $token
+Check 'template.publish' $r.Status 200
+Check 'template.publish.status' (Res $r).status 'PUBLISHED'
+
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
 Check 'export.create' $r.Status 200
 $exportId = (Res $r).id
@@ -360,16 +388,27 @@ Check 'export.status' (Res $r).status 'GENERATED'
 Check 'export.hash' $exportHash.Length 64
 $exportCount = [int]((Res $r).billCount)
 Check 'export.hasBills' ($exportCount -ge 1) 'True'
+# G85: the batch snapshots the template version used for this payload
+Check 'export.templateCode' (Res $r).templateCode $tplCode
+Check 'export.templateVersion' (Res $r).templateVersion 1
 
 $r = Invoke-Api 'GET' "/api/v2/insurance/export-batches/$exportId/payload" $null $token
 Check 'export.payload' $r.Status 200
 Check 'export.payload.xml' ($r.Body -match '<settlementBatch') 'True'
 Check 'export.payload.bills' ($r.Body -match '<bill billNo=') 'True'
 Check 'export.payload.summary' ($r.Body -match '<summary billCount=') 'True'
+# G85: template name/extra mapping really drive the XML, not just the db snapshot
+Check 'export.payload.template' ($r.Body -match 'templateCode="SMOKE-') 'True'
+Check 'export.payload.templateAttr' ($r.Body -match 'patientNoCopy="') 'True'
 
 # batch payload carries batch PHI: needs insurance:export:download (MF-02)
 $r = Invoke-Api 'GET' "/api/v2/insurance/export-batches/$exportId/payload" $null $doctorToken
 Check 'export.payload.doctor.403' $r.Status 403
+
+# G85: disable the template; later batches fall back to the built-in layout
+$r = Invoke-Api 'POST' "/api/v2/insurance/export/templates/$tplId/disable" $null $token
+Check 'template.disable' $r.Status 200
+Check 'template.disable.status' (Res $r).status 'DISABLED'
 
 # the same confirmed bill must not be exported twice (MF-01)
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" $null $token
@@ -398,6 +437,8 @@ $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches?from=$today&to=$today" 
 Check 'export.reCreateAfterCancel' $r.Status 200
 $exportId = (Res $r).id
 $exportBatchNo = (Res $r).batchNo
+# G85: template disabled -> the batch falls back to the built-in layout
+Check 'export.fallback.builtin' (Res $r).templateCode 'BUILTIN'
 
 # REJECTED with a reason reaches the terminal state (and releases the bills for re-export)
 $r = Invoke-Api 'POST' "/api/v2/insurance/export-batches/$exportId/receipt" @{

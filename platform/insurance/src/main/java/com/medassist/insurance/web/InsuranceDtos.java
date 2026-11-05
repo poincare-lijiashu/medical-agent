@@ -2,6 +2,7 @@ package com.medassist.insurance.web;
 
 import com.medassist.insurance.domain.InsuranceModel.BillLine;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
+import com.medassist.insurance.domain.InsuranceModel.TemplateField;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
@@ -131,6 +132,39 @@ public final class InsuranceDtos {
     public record CancelExportReq(@NotBlank @Size(max = 256) String reason) {
     }
 
+    /** 模板字段映射请求：省局元素名 ← 院内导出字段。 */
+    public record TemplateFieldReq(
+            @NotBlank @Size(max = 32) String element,
+            @NotBlank @Size(max = 32) String source,
+            Boolean required,
+            @Size(max = 64) String label) {
+    }
+
+    /** 新建报文模板（初始为 DRAFT，字段映射服务端校验）。 */
+    public record CreateExportTemplateReq(
+            @NotBlank @Size(max = 32)
+            @Pattern(regexp = "[A-Za-z0-9_-]{2,32}",
+                    message = "模板编码只能包含字母、数字、下划线与短横线")
+            String code,
+            @NotBlank @Size(max = 128) String name,
+            @NotEmpty @Size(max = 60) List<@Valid TemplateFieldReq> fields) {
+    }
+
+    /** 修改模板（仅 DRAFT；rowVersion 为列表/详情返回的乐观锁版本）。 */
+    public record UpdateExportTemplateReq(
+            @NotBlank @Size(max = 128) String name,
+            @NotEmpty @Size(max = 60) List<@Valid TemplateFieldReq> fields,
+            @NotNull @DecimalMin("0") Long rowVersion) {
+    }
+
+    /** 模板视图：fields 已解析为结构化数组，便于前端做字段对照。 */
+    public record ExportTemplateView(UUID id, String code, String name, int version,
+                                     String status, List<TemplateField> fields,
+                                     String createdBy, String updatedBy, String publishedBy,
+                                     Instant publishedAt, long rowVersion,
+                                     Instant createdAt, Instant updatedAt) {
+    }
+
     /**
      * 导出批次摘要（不含 XML 报文，报文走 /payload 下载）。
      *
@@ -144,7 +178,8 @@ public final class InsuranceDtos {
                                      Instant receiptAt, String receiptMessage,
                                      String cancelledReason, Instant cancelledAt,
                                      String createdBy, long version, Instant createdAt,
-                                     int excludedAlreadyExported, int remainingPending) {
+                                     int excludedAlreadyExported, int remainingPending,
+                                     String templateCode, int templateVersion) {
     }
 
     /** 新建支付方案（DRG 费率 / DIP 点值由省局下发，院内只做配置与模拟）。 */

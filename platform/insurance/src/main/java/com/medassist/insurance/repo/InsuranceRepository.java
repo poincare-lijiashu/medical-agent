@@ -3,6 +3,7 @@ package com.medassist.insurance.repo;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
+import com.medassist.insurance.domain.InsuranceModel.ExportMessageTemplate;
 import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
@@ -698,7 +699,8 @@ public class InsuranceRepository {
             rs.getDate("period_from").toLocalDate(), rs.getDate("period_to").toLocalDate(),
             rs.getInt("bill_count"), rs.getBigDecimal("total_amount"),
             rs.getBigDecimal("insurance_amount"), rs.getBigDecimal("self_pay_amount"),
-            rs.getString("payload"), rs.getString("payload_hash"), rs.getString("status"),
+            rs.getString("payload"), rs.getString("payload_hash"),
+            rs.getString("template_code"), rs.getInt("template_version"), rs.getString("status"),
             rs.getString("receipt_no"),
             rs.getTimestamp("receipt_at") == null ? null : rs.getTimestamp("receipt_at").toInstant(),
             rs.getString("receipt_message"), rs.getString("cancelled_reason"),
@@ -709,9 +711,9 @@ public class InsuranceRepository {
 
     private static final String EXPORT_COLUMNS = """
             id, batch_no, period_from, period_to, bill_count, total_amount, insurance_amount,
-            self_pay_amount, payload, payload_hash, status, receipt_no, receipt_at,
-            receipt_message, cancelled_reason, cancelled_by, cancelled_at, created_by,
-            version, created_at
+            self_pay_amount, payload, payload_hash, template_code, template_version, status,
+            receipt_no, receipt_at, receipt_message, cancelled_reason, cancelled_by,
+            cancelled_at, created_by, version, created_at
             """;
 
     public String nextExportBatchNo() {
@@ -872,16 +874,19 @@ public class InsuranceRepository {
         jdbc.sql("""
                         INSERT INTO insurance_svc.settlement_export_batch
                             (id, batch_no, period_from, period_to, bill_count, total_amount,
-                             insurance_amount, self_pay_amount, payload, payload_hash, status,
-                             created_by, version)
+                             insurance_amount, self_pay_amount, payload, payload_hash,
+                             template_code, template_version, status, created_by, version)
                         VALUES (:id, :no, :from, :to, :count, :total, :insurance, :selfPay,
-                                :payload, :hash, 'GENERATED', :actor, 0)
+                                :payload, :hash, :templateCode, :templateVersion, 'GENERATED',
+                                :actor, 0)
                         """)
                 .param("id", b.id()).param("no", b.batchNo())
                 .param("from", b.periodFrom()).param("to", b.periodTo())
                 .param("count", b.billCount()).param("total", b.totalAmount())
                 .param("insurance", b.insuranceAmount()).param("selfPay", b.selfPayAmount())
                 .param("payload", b.payload()).param("hash", b.payloadHash())
+                .param("templateCode", b.templateCode())
+                .param("templateVersion", b.templateVersion())
                 .param("actor", b.createdBy()).update();
     }
 
@@ -931,6 +936,111 @@ public class InsuranceRepository {
                         """)
                 .param("reason", reason).param("actor", actor)
                 .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 报文模板（G85）
+
+    private static final RowMapper<ExportMessageTemplate> TEMPLATE_MAPPER =
+            (rs, i) -> new ExportMessageTemplate(
+                    rs.getObject("id", UUID.class), rs.getString("code"), rs.getString("name"),
+                    rs.getInt("version"), rs.getString("status"), rs.getString("fields"),
+                    rs.getString("created_by"), rs.getString("updated_by"),
+                    rs.getString("published_by"),
+                    rs.getTimestamp("published_at") == null
+                            ? null : rs.getTimestamp("published_at").toInstant(),
+                    rs.getLong("row_version"), rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant());
+
+    private static final String TEMPLATE_COLUMNS = """
+            id, code, name, version, status, fields::text AS fields,
+            created_by, updated_by, published_by, published_at,
+            row_version, created_at, updated_at
+            """;
+
+    /** 当前生效模板（数据库部分唯一索引保证至多一条）。 */
+    public Optional<ExportMessageTemplate> findPublishedExportTemplate() {
+        return jdbc.sql("SELECT " + TEMPLATE_COLUMNS + """
+                        FROM insurance_svc.export_message_template
+                        WHERE status = 'PUBLISHED'
+                        """).query(TEMPLATE_MAPPER).optional();
+    }
+
+    public Optional<ExportMessageTemplate> findExportTemplate(UUID id) {
+        return jdbc.sql("SELECT " + TEMPLATE_COLUMNS + """
+                        FROM insurance_svc.export_message_template WHERE id = ?
+                        """).param(id).query(TEMPLATE_MAPPER).optional();
+    }
+
+    public Optional<ExportMessageTemplate> findExportTemplateByCode(String code) {
+        return jdbc.sql("SELECT " + TEMPLATE_COLUMNS + """
+                        FROM insurance_svc.export_message_template WHERE code = ?
+                        """).param(code).query(TEMPLATE_MAPPER).optional();
+    }
+
+    public List<ExportMessageTemplate> listExportTemplates(int limit) {
+        return jdbc.sql("SELECT " + TEMPLATE_COLUMNS + """
+                        FROM insurance_svc.export_message_template
+                        ORDER BY updated_at DESC
+                        LIMIT :limit
+                        """).param("limit", limit).query(TEMPLATE_MAPPER).list();
+    }
+
+    public void insertExportTemplate(ExportMessageTemplate t) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.export_message_template
+                            (id, code, name, version, status, fields,
+                             created_by, updated_by, row_version)
+                        VALUES (:id, :code, :name, :version, :status, CAST(:fields AS jsonb),
+                                :actor, :actor, 0)
+                        """)
+                .param("id", t.id()).param("code", t.code()).param("name", t.name())
+                .param("version", t.version()).param("status", t.status())
+                .param("fields", t.fields()).param("actor", t.createdBy()).update();
+    }
+
+    /** 修改草稿（仅 DRAFT），CAS。 */
+    public boolean updateExportTemplate(UUID id, String name, String fieldsJson, String actor,
+                                        long expectedRowVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.export_message_template
+                           SET name = :name, fields = CAST(:fields AS jsonb),
+                               updated_by = :actor, updated_at = now(),
+                               row_version = row_version + 1
+                         WHERE id = :id AND status = 'DRAFT' AND row_version = :rowVersion
+                        """)
+                .param("name", name).param("fields", fieldsJson).param("actor", actor)
+                .param("id", id).param("rowVersion", expectedRowVersion).update() > 0;
+    }
+
+    /**
+     * 发布草稿：version+1（报文口径版本），CAS。
+     *
+     * <p>并发发布由 `ux_export_template_single_published` 唯一索引兜底，
+     * 服务层捕获唯一冲突并转 409（不能让两个模板同时"生效"）。
+     */
+    public boolean publishExportTemplate(UUID id, String actor, long expectedRowVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.export_message_template
+                           SET status = 'PUBLISHED', version = version + 1,
+                               published_by = :actor, published_at = now(),
+                               updated_by = :actor, updated_at = now(),
+                               row_version = row_version + 1
+                         WHERE id = :id AND status = 'DRAFT' AND row_version = :rowVersion
+                        """)
+                .param("actor", actor).param("id", id)
+                .param("rowVersion", expectedRowVersion).update() > 0;
+    }
+
+    /** 停用生效模板（PUBLISHED → DISABLED），CAS；停用后导出回落内置布局。 */
+    public boolean disableExportTemplate(UUID id, String actor, long expectedRowVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.export_message_template
+                           SET status = 'DISABLED', updated_by = :actor, updated_at = now(),
+                               row_version = row_version + 1
+                         WHERE id = :id AND status = 'PUBLISHED' AND row_version = :rowVersion
+                        """)
+                .param("actor", actor).param("id", id)
+                .param("rowVersion", expectedRowVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- DRG/DIP 分组（N5 第二批 C）

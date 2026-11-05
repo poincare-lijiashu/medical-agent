@@ -50,14 +50,15 @@ class ExportControllerPermissionTest {
     private ExportBatch batch() {
         return new ExportBatch(id, "EB2026110100001", LocalDate.now(), LocalDate.now(), 1,
                 new BigDecimal("10.00"), new BigDecimal("10.00"), BigDecimal.ZERO,
-                "<settlementBatch/>", "hash", ExportBatch.GENERATED, null, null, null,
-                null, null, null, "yb01", 0L, Instant.now());
+                "<settlementBatch/>", "hash", "BUILTIN", 1, ExportBatch.GENERATED, null, null,
+                null, null, null, null, "yb01", 0L, Instant.now());
     }
 
     private ExportBatchSummary summary() {
         return new ExportBatchSummary(id, "EB2026110100001", LocalDate.now(), LocalDate.now(), 1,
                 new BigDecimal("10.00"), new BigDecimal("10.00"), BigDecimal.ZERO, "hash",
-                ExportBatch.GENERATED, null, null, null, null, null, "yb01", 0L, Instant.now(), 0, 0);
+                ExportBatch.GENERATED, null, null, null, null, null, "yb01", 0L, Instant.now(), 0, 0,
+                "BUILTIN", 1);
     }
 
     @Test
