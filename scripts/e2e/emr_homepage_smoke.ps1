@@ -82,7 +82,9 @@ $r = Invoke-Api 'POST' '/api/v2/empi/patients' @{
 Check 'patient.create' $r.Status 200
 $patientId = (Res $r).id
 
-$deptId = '11111111-1111-1111-1111-111111111111'
+# ward dept must be one doctor01 is bound to, otherwise the dept+campus guard
+# (correctly) hides the homepage from the read-only doctor check at the end.
+$deptId = '33333333-3333-3333-3333-333333333333'
 $r = Invoke-Api 'POST' '/api/v2/clinical/wards' @{
     code = "WARD-HP$suffix"; name = "Homepage Ward $suffix"; deptId = $deptId
 } $token
@@ -228,6 +230,16 @@ $r = Invoke-Api 'PUT' "/api/v2/emr/homepages/$homepageId" @{
     version = (Res $r).homepage.version; dischargeMode = 'DEATH'
 } $token
 Check 'update.afterSubmit.409' $r.Status 409
+
+# archive requires ICD coding (G4): save a single primary diagnosis and submit it
+$r = Invoke-Api 'PUT' "/api/v2/emr/coding/$homepageId" @{
+    diagnoses = @(@{ code = 'A09.900'; primary = $true })
+    procedures = @()
+    version = 0
+} $qcToken
+Check 'coding.save' $r.Status 200
+$r = Invoke-Api 'POST' "/api/v2/emr/coding/$homepageId/submit" $null $qcToken
+Check 'coding.submit' $r.Status 200
 
 # the submitter cannot archive his own homepage (four-eyes)
 $r = Invoke-Api 'POST' "/api/v2/emr/homepages/$homepageId/archive" $null $token
