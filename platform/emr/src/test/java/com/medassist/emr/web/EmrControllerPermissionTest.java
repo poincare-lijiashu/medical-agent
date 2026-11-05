@@ -86,11 +86,11 @@ class EmrControllerPermissionTest {
         var req = new ReviewReq("同意");
 
         assertThatThrownBy(() -> controller.approveChange(id, id, req,
-                "emr:record:amend", "doctor01", scope))
+                "emr:record:amend", "doctor01", null, scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(service, never()).approveChange(any(), any(), any(), anyString());
+        verify(service, never()).approveChange(any(), any(), any(), anyString(), any());
     }
 
     @Test
@@ -98,9 +98,9 @@ class EmrControllerPermissionTest {
     void approveAllowedForQcPermission() {
         var req = new ReviewReq("同意");
 
-        controller.approveChange(id, id, req, "emr:record:approve", "qc01", scope);
+        controller.approveChange(id, id, req, "emr:record:approve", "qc01", null, scope);
 
-        verify(service).approveChange(id, id, req, "qc01");
+        verify(service).approveChange(id, id, req, "qc01", null);
     }
 
     @Test

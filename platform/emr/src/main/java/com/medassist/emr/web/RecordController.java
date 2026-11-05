@@ -230,10 +230,26 @@ public class RecordController {
             @Valid @RequestBody ChangeRequestReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
             DataScope scope) {
         Permissions.require(permissions, AMEND);
         guard.requireRecord(scope, id);
-        return ApiResponse.ok(service.requestChange(id, req, actor));
+        return ApiResponse.ok(service.requestChange(id, req, actor, parseActorId(userId)));
+    }
+
+    /**
+     * 账号主键解析（G54）：网关注入 {@code X-User-Id}，非 UUID 时按缺失处理，
+     * 由服务层 fail-closed 拒绝审批，而不是退化成用户名比较。
+     */
+    private static UUID parseActorId(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @GetMapping("/{id}/change-requests")
@@ -254,10 +270,12 @@ public class RecordController {
             @RequestBody(required = false) ReviewReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
             DataScope scope) {
         Permissions.require(permissions, APPROVE);
         guard.requireRecord(scope, id);
-        return ApiResponse.ok(service.approveChange(id, requestId, req, actor));
+        return ApiResponse.ok(service.approveChange(id, requestId, req, actor,
+                parseActorId(userId)));
     }
 
     /** 审批驳回：病历保持归档不变。 */
@@ -268,10 +286,12 @@ public class RecordController {
             @RequestBody(required = false) ReviewReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
             DataScope scope) {
         Permissions.require(permissions, APPROVE);
         guard.requireRecord(scope, id);
-        return ApiResponse.ok(service.rejectChange(id, requestId, req, actor));
+        return ApiResponse.ok(service.rejectChange(id, requestId, req, actor,
+                parseActorId(userId)));
     }
 
     /** 申请人撤回待审批申请（仅本人、仅 PENDING），撤回后可重新申请。 */

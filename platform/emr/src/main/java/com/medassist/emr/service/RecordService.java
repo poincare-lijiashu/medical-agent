@@ -408,6 +408,13 @@ public class RecordService {
      */
     @Transactional
     public ChangeRequest requestChange(UUID recordId, ChangeRequestReq req, String actor) {
+        return requestChange(recordId, req, actor, null);
+    }
+
+    /** 建修改申请（G54）：{@code actorId} 是申请人账号主键，审批时据此做四眼判定。 */
+    @Transactional
+    public ChangeRequest requestChange(UUID recordId, ChangeRequestReq req, String actor,
+                                       UUID actorId) {
         MedicalRecord record = repo.lockRecord(recordId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
         if (!record.archived()) {
@@ -425,7 +432,7 @@ public class RecordService {
         ChangeRequest request = new ChangeRequest(UUID.randomUUID(), recordId, record.recordNo(),
                 req.reason().trim(), toJson(req.content()), text, ChangeRequest.PENDING,
                 actor, null, null, null, null, null, resubmitOf);
-        repo.insertChangeRequest(request);
+        repo.insertChangeRequest(request, actorId);
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("recordNo", record.recordNo());
         detail.put("revision", record.revision());
@@ -489,8 +496,14 @@ public class RecordService {
     /** 审批通过：旧版本留档、应用新内容、revision+1 并回到 SUBMITTED（需重新签名与归档）。 */
     @Transactional
     public RecordView approveChange(UUID recordId, UUID requestId, ReviewReq req, String actor) {
+        return approveChange(recordId, requestId, req, actor, null);
+    }
+
+    @Transactional
+    public RecordView approveChange(UUID recordId, UUID requestId, ReviewReq req, String actor,
+                                    UUID actorId) {
         ChangeRequest request = lockRequestOfRecord(recordId, requestId);
-        ensureDifferentReviewer(request, actor);
+        ensureDifferentReviewer(request, actorId);
         MedicalRecord record = repo.lockRecord(recordId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
         if (!record.archived()) {
@@ -520,8 +533,14 @@ public class RecordService {
     /** 审批驳回：只改申请状态，病历保持归档不变。 */
     @Transactional
     public ChangeRequest rejectChange(UUID recordId, UUID requestId, ReviewReq req, String actor) {
+        return rejectChange(recordId, requestId, req, actor, null);
+    }
+
+    @Transactional
+    public ChangeRequest rejectChange(UUID recordId, UUID requestId, ReviewReq req, String actor,
+                                      UUID actorId) {
         ChangeRequest request = lockRequestOfRecord(recordId, requestId);
-        ensureDifferentReviewer(request, actor);
+        ensureDifferentReviewer(request, actorId);
         if (!repo.reviewChangeRequest(requestId, ChangeRequest.REJECTED, actor,
                 blankToNull(req == null ? null : req.comment()), null)) {
             throw new BusinessException(ErrorCode.CONFLICT, "该申请已被处理，请刷新后重试");
@@ -552,9 +571,23 @@ public class RecordService {
         return request;
     }
 
-    /** 四眼原则：申请人不得审批自己的申请。 */
-    private void ensureDifferentReviewer(ChangeRequest request, String actor) {
-        if (request.requester().equals(actor)) {
+    /**
+     * 四眼原则（G54）：按账号主键判定申请人不得审批自己的申请。
+     *
+     * <p>原实现比较用户名——账号重建、共享账号、同名账号都能让同一自然人
+     * 以两个用户名出现，绕过互斥。现在：
+     * <ul>
+     *   <li>申请缺少 {@code requester_id}（V24 前的历史数据）→ 拒绝审批；</li>
+     *   <li>审批人账号主键与申请人相同 → 拒绝。</li>
+     * </ul>
+     * 与首页归档的 {@code submitted_by_id} 口径保持一致。
+     */
+    private void ensureDifferentReviewer(ChangeRequest request, UUID actorId) {
+        if (repo.isChangeRequesterIdMissing(request.id())) {
+            throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
+                    "该申请未记录申请人账号，无法判定四眼，请联系管理员核对后重新提交");
+        }
+        if (actorId != null && repo.isChangeRequestedBy(request.id(), actorId)) {
             throw new BusinessException(ErrorCode.EMR_CHANGE_REQUEST_INVALID,
                     "申请人不得审批自己提交的病案修改申请，请由病案质控人员审批");
         }

@@ -788,17 +788,50 @@ public class EmrRepository {
     // ---------------------------------------------------------------- 归档后修改申请
 
     public void insertChangeRequest(ChangeRequest c) {
+        insertChangeRequest(c, null);
+    }
+
+    /**
+     * 建修改申请（G54）：{@code requesterId} 是申请人账号主键，用于四眼判定。
+     */
+    public void insertChangeRequest(ChangeRequest c, java.util.UUID requesterId) {
         jdbc.sql("""
                         INSERT INTO emr_svc.record_change_request
                             (id, record_id, record_no, reason, proposed_content, proposed_text,
-                             status, requester, resubmit_of)
+                             status, requester, resubmit_of, requester_id)
                         VALUES (:id, :recordId, :recordNo, :reason, CAST(:content AS jsonb),
-                                :text, 'PENDING', :requester, :resubmitOf)
+                                :text, 'PENDING', :requester, :resubmitOf, :requesterId)
                         """)
                 .param("id", c.id()).param("recordId", c.recordId())
                 .param("recordNo", c.recordNo()).param("reason", c.reason())
                 .param("content", c.proposedContent()).param("text", c.proposedText())
-                .param("requester", c.requester()).param("resubmitOf", c.resubmitOf()).update();
+                .param("requester", c.requester()).param("resubmitOf", c.resubmitOf())
+                .param("requesterId", requesterId).update();
+    }
+
+    /**
+     * 申请人账号主键是否缺失（G54）。
+     *
+     * <p>V24 之前的历史申请没有 requester_id，无法判断"是否同一自然人"，
+     * 审批按 fail-closed 拒绝，而不是退化成用户名比较。
+     */
+    public boolean isChangeRequesterIdMissing(UUID requestId) {
+        return jdbc.sql("""
+                        SELECT COALESCE(requester_id IS NULL, true)
+                          FROM emr_svc.record_change_request WHERE id = ?
+                        """).param(requestId).query(Boolean.class).optional().orElse(true);
+    }
+
+    /** 申请人是否就是该账号（G54 四眼互斥）。 */
+    public boolean isChangeRequestedBy(UUID requestId, UUID actorId) {
+        if (actorId == null) {
+            return false;
+        }
+        return jdbc.sql("""
+                        SELECT COALESCE(requester_id = CAST(:actorId AS uuid), false)
+                          FROM emr_svc.record_change_request WHERE id = ?
+                        """).param("actorId", actorId.toString()).param(requestId)
+                .query(Boolean.class).optional().orElse(false);
     }
 
     public boolean hasPendingChangeRequest(UUID recordId) {

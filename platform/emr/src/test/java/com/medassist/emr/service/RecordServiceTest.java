@@ -497,12 +497,29 @@ class RecordServiceTest {
     }
 
     @Test
-    @DisplayName("病案修改申请：申请人不得审批自己的申请（四眼原则）")
+    @DisplayName("病案修改申请：申请人不得审批自己的申请（G54 按账号主键判定）")
     void approveRejectsSelfReview() {
+        UUID requesterId = UUID.randomUUID();
         when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")));
+        when(repo.isChangeRequesterIdMissing(reqId)).thenReturn(false);
+        when(repo.isChangeRequestedBy(reqId, requesterId)).thenReturn(true);
 
         assertThatThrownBy(() -> service.approveChange(recordId, reqId,
-                new ReviewReq("同意"), "doctor01"))
+                new ReviewReq("同意"), "doctor01-rebuilt", requesterId))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
+        verify(repo, never()).applyAmendment(any(), anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("G54：历史申请缺 requester_id 时拒绝审批（fail-closed，不退化用户名比较）")
+    void approveRejectsMissingRequesterId() {
+        when(repo.lockChangeRequest(reqId)).thenReturn(Optional.of(pendingRequest("doctor01")));
+        when(repo.isChangeRequesterIdMissing(reqId)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.approveChange(recordId, reqId,
+                new ReviewReq("同意"), "qc01", UUID.randomUUID()))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.EMR_CHANGE_REQUEST_INVALID);
