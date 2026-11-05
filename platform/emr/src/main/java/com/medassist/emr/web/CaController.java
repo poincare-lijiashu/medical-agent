@@ -1,10 +1,14 @@
 package com.medassist.emr.web;
 
 import com.medassist.common.api.ApiResponse;
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.emr.domain.EmrModel.CaSignature;
 import com.medassist.emr.service.CaSignatureService;
+import com.medassist.emr.service.EmrAccessGuard;
 import com.medassist.emr.web.CaDtos.BoardView;
 import com.medassist.emr.web.CaDtos.CaSignatureView;
 import com.medassist.emr.web.CaDtos.ModeView;
@@ -37,9 +41,11 @@ public class CaController {
     private static final String MANAGE = "emr:ca:manage";
 
     private final CaSignatureService service;
+    private final EmrAccessGuard guard;
 
-    public CaController(CaSignatureService service) {
+    public CaController(CaSignatureService service, EmrAccessGuard guard) {
         this.service = service;
+        this.guard = guard;
     }
 
     @GetMapping("/mode")
@@ -49,14 +55,28 @@ public class CaController {
         return ApiResponse.ok(new ModeView(service.mode()));
     }
 
+    /**
+     * 签名台账（G51）。
+     *
+     * <p>原实现无任何归属校验：不传 recordId 即返回全院签名台账（含 signatureValue
+     * 与 contentHash）。现在按病历收敛——传 recordId 走病历归属校验；不传时只有
+     * 跨院区角色可以查，单院区账号必须指定病历。
+     */
     @GetMapping("/signatures")
     public ApiResponse<List<CaSignatureView>> signatures(
             @RequestParam(required = false) UUID recordId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String signer,
             @RequestParam(defaultValue = "100") int limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
+        if (recordId != null) {
+            guard.requireRecord(scope, recordId);
+        } else if (!scope.allCampuses()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN,
+                    "查询 CA 签名台账必须指定病历（recordId）");
+        }
         return ApiResponse.ok(service.list(recordId, status, signer, limit).stream()
                 .map(CaController::view).toList());
     }
@@ -65,8 +85,10 @@ public class CaController {
     public ApiResponse<CaSignatureView> verify(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, VERIFY);
+        guard.requireRecord(scope, service.recordIdOf(id));
         return ApiResponse.ok(view(service.verify(id, actor)));
     }
 
@@ -75,8 +97,10 @@ public class CaController {
             @PathVariable UUID id,
             @Valid @RequestBody RevokeReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, MANAGE);
+        guard.requireRecord(scope, service.recordIdOf(id));
         return ApiResponse.ok(view(service.revoke(id, req.reason(), actor)));
     }
 

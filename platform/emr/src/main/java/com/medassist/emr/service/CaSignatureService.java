@@ -120,6 +120,15 @@ public class CaSignatureService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.CA_SIGNATURE_NOT_FOUND));
     }
 
+    /**
+     * 签名所属病历（G51）：验签/撤销前先做病历归属校验，越权与不存在同码。
+     */
+    public UUID recordIdOf(UUID signatureId) {
+        return repo.findCaSignature(signatureId)
+                .map(CaSignature::recordId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CA_SIGNATURE_NOT_FOUND));
+    }
+
     public List<CaSignature> list(UUID recordId, String status, String signer, int limit) {
         String normalized = status == null || status.isBlank() ? null : status.trim().toUpperCase();
         if (normalized != null && !STATUSES.contains(normalized)) {

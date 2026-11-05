@@ -67,6 +67,25 @@ public class ChargeReceiptService {
         return view(receipt.id());
     }
 
+    /**
+     * 票据所属就诊（G51）。
+     *
+     * <p>票据是 visit 级财务数据，接口必须先拿到 visitId 再做
+     * {@link VisitAccessGuard} 校验；不存在时仍按"票据不存在"抛错，不泄露存在性。
+     */
+    public UUID visitIdOfReceipt(UUID receiptId) {
+        return repo.findReceipt(receiptId)
+                .map(ChargeReceipt::visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_RECEIPT_NOT_FOUND));
+    }
+
+    /** 收费单所属就诊；开票前先校验归属（G51）。 */
+    public UUID visitIdOfCharge(UUID chargeId) {
+        return repo.findCharge(chargeId)
+                .map(Charge::visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CHARGE_NOT_FOUND));
+    }
+
     public List<ChargeReceipt> list(UUID visitId, Integer limit) {
         if (visitId == null) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "查询票据必须指定就诊");
