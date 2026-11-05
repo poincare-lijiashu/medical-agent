@@ -68,6 +68,8 @@ class ConsumableReturnServiceTest {
         when(repo.findBatch(batchId)).thenReturn(Optional.of(batch));
         when(repo.findReturn(returnId)).thenReturn(Optional.of(submitted));
         when(repo.listReturnItems(returnId)).thenReturn(List.of(item));
+        // 默认科室可退额度充足；个别用例覆盖为不足
+        when(repo.deptReturnableQuantity(any(), any(), any(), any())).thenReturn(100);
     }
 
     @Test
@@ -98,16 +100,46 @@ class ConsumableReturnServiceTest {
     }
 
     @Test
-    @DisplayName("建单：超过科室二级库余量 → 409")
-    void createRejectsWhenDeptStockInsufficient() {
+    @DisplayName("建单：科室无该批次库存 → 可退为 0，409")
+    void createRejectsWhenNoStock() {
         when(repo.findDeptConsumableStock(deptId, consumableId, batchId))
-                .thenReturn(Optional.of(stock(2)));
+                .thenReturn(Optional.of(stock(0)));
+        when(repo.deptReturnableQuantity(deptId, consumableId, batchId, null)).thenReturn(0);
 
         assertThatThrownBy(() -> service.create(request(3), "nurse01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONSUMABLE_DEPT_STOCK_INSUFFICIENT);
         verify(repo, never()).insertReturn(any(), any());
+    }
+
+    @Test
+    @DisplayName("G58 建单：已追溯耗材占用额度，可退数量不足 → 409")
+    void createRejectsWhenReturnableInsufficient() {
+        // 科室二级库还有 10，但 6 支已追溯、2 支在审退回 → 可退仅 2
+        when(repo.findDeptConsumableStock(deptId, consumableId, batchId))
+                .thenReturn(Optional.of(stock(10)));
+        when(repo.deptReturnableQuantity(deptId, consumableId, batchId, null)).thenReturn(2);
+
+        assertThatThrownBy(() -> service.create(request(3), "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONSUMABLE_DEPT_STOCK_INSUFFICIENT);
+        verify(repo, never()).insertReturn(any(), any());
+    }
+
+    @Test
+    @DisplayName("G58 审批：额度被追溯占用 → 409，不扣库不回冲")
+    void approveRejectsWhenReturnableLostRace() {
+        when(repo.lockReturn(returnId)).thenReturn(Optional.of(submitted));
+        when(repo.deptReturnableQuantity(deptId, consumableId, batchId, returnId)).thenReturn(2);
+
+        assertThatThrownBy(() -> service.approve(returnId, null, "head01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONSUMABLE_DEPT_STOCK_INSUFFICIENT);
+        verify(repo, never()).deductDeptConsumableStock(any(), any(), any(), anyInt());
+        verify(repo, never()).addBatchQuantity(any(), anyInt());
     }
 
     @Test

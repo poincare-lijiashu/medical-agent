@@ -37,7 +37,8 @@ import java.util.UUID;
  * <p>出库是库存唯一的扣减入口：追溯登记不再扣库存，只校验"已出库未追溯数量"，
  * 这样"批次 → 出库 → 患者"三者的数量始终能对上。
  *
- * <p>幂等：同一科室同一 {@code requestId} 只生成一张出库单，且不会重复扣库存。
+ * <p>幂等：同一科室同一 {@code requestId} 只生成一张出库单，且不会重复扣库存；
+ * 重放时比对明细（按耗材汇总数量），内容不一致直接 409，不把旧单据当成本次结果返回。
  */
 @Service
 public class ConsumableIssueService {
@@ -61,7 +62,7 @@ public class ConsumableIssueService {
         String requestId = req.requestId().trim();
         Optional<ConsumableIssue> existing = repo.findIssueByRequestId(req.deptId(), requestId);
         if (existing.isPresent()) {
-            return view(existing.get());
+            return replay(existing.get(), req);
         }
 
         Set<UUID> seen = new HashSet<>();
@@ -82,7 +83,7 @@ public class ConsumableIssueService {
             ConsumableIssue raced = repo.findIssueByRequestId(req.deptId(), requestId)
                     .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
                             "出库单写入冲突，请刷新后重试"));
-            return view(raced);
+            return replay(raced, req);
         }
 
         LocalDate today = BusinessTime.today();
@@ -164,6 +165,42 @@ public class ConsumableIssueService {
 
     private IssueView view(ConsumableIssue issue) {
         return new IssueView(issue, repo.listIssueItems(issue.id()));
+    }
+
+    /**
+     * 幂等重放（G58）：同一请求号必须对应同一份明细，内容不同则 409。
+     *
+     * <p>旧实现只回放旧单据：调用方以为自己的新请求生效，实际拿到的是另一份出库单，
+     * 后续追溯/结算全部挂在错误单据上；出库按批次拆分，比较时按耗材汇总数量。
+     */
+    private IssueView replay(ConsumableIssue issue, CreateIssueReq req) {
+        IssueView view = view(issue);
+        if (!sameContent(view, req)) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "请求号 " + issue.requestId() + " 已用于内容不同的出库单（" + issue.issueNo()
+                            + "），请使用新的请求号后重试");
+        }
+        return view;
+    }
+
+    private static boolean sameContent(IssueView view, CreateIssueReq req) {
+        return aggregateByConsumable(view.items()).equals(aggregateRequest(req.items()));
+    }
+
+    private static Map<UUID, Integer> aggregateByConsumable(List<ConsumableIssueItem> items) {
+        Map<UUID, Integer> totals = new java.util.HashMap<>();
+        for (ConsumableIssueItem item : items) {
+            totals.merge(item.consumableId(), item.quantity(), Integer::sum);
+        }
+        return totals;
+    }
+
+    private static Map<UUID, Integer> aggregateRequest(List<IssueLine> lines) {
+        Map<UUID, Integer> totals = new java.util.HashMap<>();
+        for (IssueLine line : lines) {
+            totals.merge(line.consumableId(), line.quantity(), Integer::sum);
+        }
+        return totals;
     }
 
     private String blankToNull(String s) {

@@ -632,6 +632,56 @@ public class MaterialRepository {
                 .param("batchId", batchId).param("qty", quantity).update() > 0;
     }
 
+    /**
+     * 科室某批次"可退回"数量（G58）：出库未追溯量 + 调入量 − 调出量 − 已退回/在审退回落差。
+     *
+     * <p>已追溯的耗材已用到患者身上，不能再回流中心库；在审退回先占用额度，
+     * 避免同一批未追溯耗材被两张退回单分别审批通过。{@code excludeReturnId}
+     * 用于审批时排除本单自身（本单仍处于 SUBMITTED，会占用自己的额度）。
+     *
+     * <p>跨科室调拨增减二级库但不产生出库明细，必须计入，否则调拨入库的耗材永远"不可退"。
+     */
+    public int deptReturnableQuantity(UUID deptId, UUID consumableId, UUID batchId,
+                                       UUID excludeReturnId) {
+        Integer value = jdbc.sql("""
+                        SELECT CAST(
+                                 COALESCE((SELECT SUM(i.quantity - i.traced_quantity)
+                                             FROM material_svc.consumable_issue_item i
+                                             JOIN material_svc.consumable_issue s ON s.id = i.issue_id
+                                            WHERE s.dept_id = :deptId
+                                              AND i.consumable_id = :consumableId
+                                              AND i.batch_id = :batchId), 0)
+                               + COALESCE((SELECT SUM(ti.quantity)
+                                             FROM material_svc.dept_transfer_item ti
+                                             JOIN material_svc.dept_transfer t ON t.id = ti.transfer_id
+                                            WHERE t.status = 'ACCEPTED'
+                                              AND t.to_dept_id = :deptId
+                                              AND ti.consumable_id = :consumableId
+                                              AND ti.batch_id = :batchId), 0)
+                               - COALESCE((SELECT SUM(ti.quantity)
+                                             FROM material_svc.dept_transfer_item ti
+                                             JOIN material_svc.dept_transfer t ON t.id = ti.transfer_id
+                                            WHERE t.status = 'ACCEPTED'
+                                              AND t.from_dept_id = :deptId
+                                              AND ti.consumable_id = :consumableId
+                                              AND ti.batch_id = :batchId), 0)
+                               - COALESCE((SELECT SUM(ri.quantity)
+                                             FROM material_svc.consumable_return_item ri
+                                             JOIN material_svc.consumable_return r ON r.id = ri.return_id
+                                            WHERE r.dept_id = :deptId
+                                              AND ri.consumable_id = :consumableId
+                                              AND ri.batch_id = :batchId
+                                              AND r.status IN ('SUBMITTED', 'APPROVED')
+                                              AND (CAST(:excludeReturnId AS uuid) IS NULL
+                                                   OR r.id <> CAST(:excludeReturnId AS uuid))), 0)
+                               AS int)
+                        """)
+                .param("deptId", deptId).param("consumableId", consumableId)
+                .param("batchId", batchId).param("excludeReturnId", excludeReturnId)
+                .query(Integer.class).single();
+        return value == null ? 0 : value;
+    }
+
     public Optional<DeptConsumableStock> findDeptConsumableStock(UUID deptId, UUID consumableId,
                                                                  UUID batchId) {
         return jdbc.sql("""

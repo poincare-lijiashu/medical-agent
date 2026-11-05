@@ -24,7 +24,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -37,7 +36,8 @@ import java.util.UUID;
  * <p>硬约束：
  * <ul>
  *   <li>同一退回单同一批次只能出现一次；</li>
- *   <li>建单时按科室二级库余额预校验，审批时再用原子 UPDATE 扣减（quantity >= qty）；</li>
+ *   <li>可退上限 = 出库未追溯 + 调入 − 调出 − 已退回/在审退回（G58）：已追溯耗材不得回流中心库；</li>
+ *   <li>建单时预校验，审批时在行锁内按 {@code excludeReturnId} 复核（排除本单占用）；</li>
  *   <li>状态机 CAS：SUBMITTED → APPROVED / REJECTED，SUBMITTED 可撤回；</li>
  *   <li>审批人不得是申请人（四眼），驳回/撤回必须写原因；关闭后明细库级禁止修改。</li>
  * </ul>
@@ -80,13 +80,15 @@ public class ConsumableReturnService {
                     .orElseThrow(() -> new BusinessException(
                             ErrorCode.CONSUMABLE_RETURN_BATCH_NOT_FOUND,
                             "批次 " + line.batchId() + " 不存在"));
-            Optional<DeptConsumableStock> stock = repo.findDeptConsumableStock(req.deptId(),
-                    batch.consumableId(), batch.id());
-            int available = stock.map(DeptConsumableStock::quantity).orElse(0);
-            if (line.quantity() > available) {
+            // G58：可退上限 = 出库未追溯 + 调入 − 调出 − 已退回/在审退回；
+            // 已追溯（用到患者身上或已植入）的耗材不得回流中心库
+            int returnable = repo.deptReturnableQuantity(req.deptId(), batch.consumableId(),
+                    batch.id(), null);
+            if (line.quantity() > returnable) {
                 throw new BusinessException(ErrorCode.CONSUMABLE_DEPT_STOCK_INSUFFICIENT,
                         "耗材 " + batch.consumableName() + " 批号 " + batch.batchNo()
-                                + " 科室余量 " + available + "，退回 " + line.quantity() + " 超出");
+                                + " 可退数量 " + returnable + "（已扣除已追溯与在审退回），本次退回 "
+                                + line.quantity() + " 超出");
             }
         }
         ConsumableReturn header = new ConsumableReturn(UUID.randomUUID(), repo.nextReturnNo(),
@@ -133,6 +135,17 @@ public class ConsumableReturnService {
         requireFourEyes(header, operator);
 
         List<ConsumableReturnItem> items = repo.listReturnItems(id);
+        // G58 审批时复核：期间可能有追溯登记占用额度，或另一张退回单先被审批
+        for (ConsumableReturnItem item : items) {
+            int returnable = repo.deptReturnableQuantity(header.deptId(), item.consumableId(),
+                    item.batchId(), id);
+            if (item.quantity() > returnable) {
+                throw new BusinessException(ErrorCode.CONSUMABLE_DEPT_STOCK_INSUFFICIENT,
+                        "耗材 " + item.consumableName() + " 批号 " + item.batchNo()
+                                + " 审批时可退数量仅 " + returnable + "（需 " + item.quantity()
+                                + "，可能已被追溯使用或由其他退回单占用），请驳回后重新建单");
+            }
+        }
         for (ConsumableReturnItem item : items) {
             if (!repo.deductDeptConsumableStock(header.deptId(), item.consumableId(),
                     item.batchId(), item.quantity())) {

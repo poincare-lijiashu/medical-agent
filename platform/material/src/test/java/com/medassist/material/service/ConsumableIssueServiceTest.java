@@ -5,6 +5,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.material.domain.MaterialModel.Consumable;
 import com.medassist.material.domain.MaterialModel.ConsumableBatch;
 import com.medassist.material.domain.MaterialModel.ConsumableIssue;
+import com.medassist.material.domain.MaterialModel.ConsumableIssueItem;
 import com.medassist.material.repo.MaterialRepository;
 import com.medassist.material.web.MaterialDtos.CreateIssueReq;
 import com.medassist.material.web.MaterialDtos.IssueLine;
@@ -127,12 +128,36 @@ class ConsumableIssueServiceTest {
                 "手术室", ConsumableIssue.SURGERY, "req-1", "nurse01", null,
                 new BigDecimal("4.00"), Instant.now());
         when(repo.findIssueByRequestId(deptId, "req-1")).thenReturn(Optional.of(existing));
+        when(repo.listIssueItems(existing.id())).thenReturn(List.of(issueItem(existing.id(), 100)));
 
         var view = service.issue(request("req-1", consumableId, 100), "nurse01");
 
         assertThat(view.issue().issueNo()).isEqualTo("MI20261103000009");
         verify(repo, never()).deductBatch(any(), anyInt());
         verify(repo, never()).insertIssue(any(), any());
+    }
+
+    @Test
+    @DisplayName("G58：同一请求号但明细数量不同 → 409，不把旧单当成功返回")
+    void issueRejectsIdempotentReplayWithDifferentContent() {
+        ConsumableIssue existing = new ConsumableIssue(UUID.randomUUID(), "MI20261103000009", deptId,
+                "手术室", ConsumableIssue.SURGERY, "req-1", "nurse01", null,
+                new BigDecimal("4.00"), Instant.now());
+        when(repo.findIssueByRequestId(deptId, "req-1")).thenReturn(Optional.of(existing));
+        when(repo.listIssueItems(existing.id())).thenReturn(List.of(issueItem(existing.id(), 5)));
+
+        assertThatThrownBy(() -> service.issue(request("req-1", consumableId, 8), "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).deductBatch(any(), anyInt());
+    }
+
+    private ConsumableIssueItem issueItem(UUID issueId, int quantity) {
+        return new ConsumableIssueItem(UUID.randomUUID(), issueId, consumableId,
+                consumable.code(), consumable.name(), later.id(), later.batchNo(),
+                later.expireDate(), quantity, 0, consumable.price(),
+                consumable.price().multiply(BigDecimal.valueOf(quantity)));
     }
 
     @Test
