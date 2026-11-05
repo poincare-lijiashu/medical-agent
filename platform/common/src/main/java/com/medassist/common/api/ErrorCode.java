@@ -355,6 +355,12 @@ public enum ErrorCode {
     EMR_HOMEPAGE_STATUS_INVALID(47415, "当前病案首页状态不允许该操作"),
     EMR_HOMEPAGE_INCOMPLETE(47416, "病案首页必填项未完成，不能提交"),
     EMR_HOMEPAGE_SOURCE_INVALID(47417, "该就诊不满足病案首页生成条件（须为已出院住院就诊）"),
+    /*
+     * G79：首页快照里的诊断/手术/费用是 JSON。解析失败原先静默返回空集合，
+     * 打印出来就是"这份首页没有诊断"，与真实数据损坏无法区分（同一份数据在
+     * HQMS 上报路径是会显式报错的）。改为明确报错，提示核对来源数据。
+     */
+    EMR_HOMEPAGE_SNAPSHOT_INVALID(47406, "病案首页快照损坏，无法读取诊断/手术/费用明细，请核对来源数据"),
     EMR_HQMS_EXPORT_INVALID(47418, "当前上报批次状态不允许该操作"),
     EMR_HQMS_EXPORT_EMPTY(47419, "该期间没有待上报的已归档病案首页"),
 

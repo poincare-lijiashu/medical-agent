@@ -594,6 +594,13 @@ public class HomepageService {
         return toJson(rows);
     }
 
+    /**
+     * 读取首页快照里的列表字段（诊断 / 手术）。
+     *
+     * <p>G79：空串或 NULL 表示"确实没有"，返回空集合；但**解析失败必须报错**——
+     * 静默返回空集合会让打印/详情看起来是"这份首页没有诊断"，而同一份数据在
+     * HQMS 上报路径是会显式失败的。数据损坏不能伪装成空。
+     */
     private List<Map<String, Object>> readJsonList(String json) {
         if (json == null || json.isBlank()) {
             return List.of();
@@ -601,10 +608,11 @@ public class HomepageService {
         try {
             return objectMapper.readValue(json, List.class);
         } catch (JacksonException e) {
-            return List.of();
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SNAPSHOT_INVALID);
         }
     }
 
+    /** 读取费用明细快照；解析失败或金额不是数字同样按数据损坏处理（G79）。 */
     private Map<String, BigDecimal> readJsonMap(String json) {
         if (json == null || json.isBlank()) {
             return Map.of();
@@ -616,7 +624,7 @@ public class HomepageService {
                     : new BigDecimal(String.valueOf(v)).setScale(2, RoundingMode.HALF_UP)));
             return result;
         } catch (JacksonException | NumberFormatException e) {
-            return Map.of();
+            throw new BusinessException(ErrorCode.EMR_HOMEPAGE_SNAPSHOT_INVALID);
         }
     }
 

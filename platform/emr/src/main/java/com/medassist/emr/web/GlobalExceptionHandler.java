@@ -36,7 +36,10 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  CA_SIGNATURE_STATUS_INVALID, CA_VERIFY_FAILED, CA_SIGNATURE_EXISTS,
                  CONSENT_STATUS_INVALID, CONSENT_TEMPLATE_STATUS_INVALID
                  -> HttpStatus.CONFLICT;
-            case VALIDATION_FAILED, EMR_SIGN_POLICY_INVALID,
+            // 快照损坏属"这份数据不可用"（G79），必须 4xx：5xx 会让客户端当成系统故障重试。
+            // 具体原因由异常文案说明（"请核对来源数据"），便于病案室定位。
+            case EMR_HOMEPAGE_SNAPSHOT_INVALID,
+                 VALIDATION_FAILED, EMR_SIGN_POLICY_INVALID,
                  CODING_INVALID, CODING_CORRECTION_INVALID,
                  CODING_CORRECTION_REASON_REQUIRED,
                  CODING_CORRECTION_CANCEL_REASON_REQUIRED,

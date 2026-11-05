@@ -576,6 +576,40 @@ class HomepageServiceTest {
                 null, null, null, null, null, 0L, Instant.now());
     }
 
+    @Test
+    @DisplayName("详情：诊断快照不是合法 JSON 时明确报错，不再静默显示「无诊断」（G79）")
+    void detailRejectsCorruptDiagnosesSnapshot() {
+        Homepage broken = homepageWithSnapshot("{not-json", "{\"EXAM\":268.00}");
+        when(repo.findHomepage(broken.id())).thenReturn(Optional.of(broken));
+
+        assertThatThrownBy(() -> service.detail(broken.id()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_HOMEPAGE_SNAPSHOT_INVALID);
+    }
+
+    @Test
+    @DisplayName("详情：费用明细金额不是数字时同样按快照损坏报错（G79）")
+    void detailRejectsNonNumericFeeSnapshot() {
+        Homepage broken = homepageWithSnapshot("[]", "{\"EXAM\":\"abc\"}");
+        when(repo.findHomepage(broken.id())).thenReturn(Optional.of(broken));
+
+        assertThatThrownBy(() -> service.detail(broken.id()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.EMR_HOMEPAGE_SNAPSHOT_INVALID);
+    }
+
+    private Homepage homepageWithSnapshot(String diagnoses, String feeSummary) {
+        return new Homepage(UUID.randomUUID(), "HP20261101000001", visitId, admissionId, patientId,
+                "P20261101000001", "张三", "MALE", LocalDate.of(1980, 5, 20), 45,
+                "V001", UUID.randomUUID(), "内科", UUID.randomUUID(),
+                "一病区", "A1", admittedAt, dischargedAt, 2, "doctor01", null, null, null, null,
+                "NONE", null, null, null, null, null, 0, 0, false, false, null, null, null,
+                diagnoses, "[]", feeSummary, new BigDecimal("268.00"), Homepage.DRAFT,
+                null, null, null, null, null, 0L, Instant.now());
+    }
+
     private ClinicalClient.HomepageSource sourceWithProcedures(
             List<ClinicalClient.Procedure> procedures) {
         ClinicalClient.HomepageSource base = source("INPATIENT", "DISCHARGED", dischargedAt,
