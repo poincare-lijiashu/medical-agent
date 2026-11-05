@@ -2,6 +2,7 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.tech.domain.TechModel.DeviceWorkOrder;
 import com.medassist.tech.service.DeviceWorkOrderService;
 import com.medassist.tech.web.DeviceWorkOrderDtos.AcceptWorkOrderReq;
@@ -33,6 +34,7 @@ class DeviceWorkOrderControllerPermissionTest {
 
     private final UUID orderId = UUID.randomUUID();
     private final UUID deviceId = UUID.randomUUID();
+    private final DataScope scope = DataScope.all("tech01", true);
 
     @BeforeEach
     void setUp() {
@@ -57,16 +59,16 @@ class DeviceWorkOrderControllerPermissionTest {
     @Test
     @DisplayName("列表/详情：必须 tech:device:read")
     void readsRequireDeviceRead() {
-        when(service.list(null, null, null, null)).thenReturn(List.of());
-        when(service.detail(orderId)).thenReturn(order());
+        when(service.list(null, null, null, null, scope)).thenReturn(List.of());
+        when(service.detail(orderId, scope)).thenReturn(order());
 
-        assertForbidden(() -> controller.list(null, null, null, null, "tech:device:write"));
-        assertForbidden(() -> controller.detail(orderId, "tech:device:write"));
-        controller.list(null, null, null, null, "tech:device:read");
-        controller.detail(orderId, "tech:device:read");
+        assertForbidden(() -> controller.list(null, null, null, null, "tech:device:write", scope));
+        assertForbidden(() -> controller.detail(orderId, "tech:device:write", scope));
+        controller.list(null, null, null, null, "tech:device:read", scope);
+        controller.detail(orderId, "tech:device:read", scope);
 
-        verify(service).list(null, null, null, null);
-        verify(service).detail(orderId);
+        verify(service).list(null, null, null, null, scope);
+        verify(service).detail(orderId, scope);
     }
 
     @Test
@@ -75,18 +77,20 @@ class DeviceWorkOrderControllerPermissionTest {
         CreateWorkOrderReq create = new CreateWorkOrderReq("CORRECTIVE", null, "球管异响",
                 null, null, null);
 
-        assertForbidden(() -> controller.create(deviceId, create, "tech:device:read", "tech01"));
+        assertForbidden(() -> controller.create(deviceId, create, "tech:device:read", "tech01",
+                scope));
         assertForbidden(() -> controller.start(orderId, new StartWorkOrderReq(0L),
-                "tech:device:read", "tech01"));
+                "tech:device:read", "tech01", scope));
         assertForbidden(() -> controller.finish(orderId,
-                new FinishWorkOrderReq(0L, null, "更换球管", null), "tech:device:read", "tech01"));
+                new FinishWorkOrderReq(0L, null, "更换球管", null), "tech:device:read", "tech01",
+                scope));
         assertForbidden(() -> controller.cancel(orderId, new CancelWorkOrderReq(0L, "重复报修"),
-                "tech:device:read", "tech01"));
+                "tech:device:read", "tech01", scope));
 
-        verify(service, never()).create(any(), any(), any());
-        verify(service, never()).start(any(), anyLong(), any());
-        verify(service, never()).finish(any(), any(), any());
-        verify(service, never()).cancel(any(), any(), any());
+        verify(service, never()).create(any(), any(), any(), any());
+        verify(service, never()).start(any(), anyLong(), any(), any());
+        verify(service, never()).finish(any(), any(), any(), any());
+        verify(service, never()).cancel(any(), any(), any(), any());
     }
 
     @Test
@@ -94,9 +98,9 @@ class DeviceWorkOrderControllerPermissionTest {
     void acceptRequiresDedicatedPermission() {
         AcceptWorkOrderReq req = new AcceptWorkOrderReq(0L, "验收合格");
 
-        assertForbidden(() -> controller.accept(orderId, req, "tech:device:write", "tech02"));
-        controller.accept(orderId, req, "tech:device:accept", "qc01");
+        assertForbidden(() -> controller.accept(orderId, req, "tech:device:write", "tech02", scope));
+        controller.accept(orderId, req, "tech:device:accept", "qc01", scope);
 
-        verify(service).accept(orderId, req, "qc01");
+        verify(service).accept(orderId, req, "qc01", scope);
     }
 }

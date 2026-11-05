@@ -2,6 +2,7 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.tech.service.DeviceQcService;
 import com.medassist.tech.service.ReportTemplateService;
 import com.medassist.tech.web.DeviceDtos.CreateDeviceReq;
@@ -34,6 +35,7 @@ class DeviceTemplateControllerPermissionTest {
     private ReportTemplateController templateController;
 
     private final UUID id = UUID.randomUUID();
+    private final DataScope scope = DataScope.all("tech01", true);
 
     @BeforeEach
     void setUp() {
@@ -53,37 +55,37 @@ class DeviceTemplateControllerPermissionTest {
     @Test
     @DisplayName("设备查询：必须 tech:device:read，写权限不能替代读")
     void deviceReadRequiresRead() {
-        assertForbidden(() -> deviceController.list(null, null, null, 10, "tech:device:write"));
-        deviceController.list("CT", "CT", "ACTIVE", 10, "tech:device:read");
-        verify(deviceService).list("CT", "CT", "ACTIVE", 10);
+        assertForbidden(() -> deviceController.list(null, null, null, 10, "tech:device:write", scope));
+        deviceController.list("CT", "CT", "ACTIVE", 10, "tech:device:read", scope);
+        verify(deviceService).list("CT", "CT", "ACTIVE", 10, scope);
 
-        assertForbidden(() -> deviceController.summary("tech:read"));
-        deviceController.summary("tech:device:read");
-        verify(deviceService).summary();
+        assertForbidden(() -> deviceController.summary("tech:read", scope));
+        deviceController.summary("tech:device:read", scope);
+        verify(deviceService).summary(scope);
 
-        assertForbidden(() -> deviceController.detail(id, null));
-        deviceController.detail(id, "tech:device:read");
-        verify(deviceService).detail(id);
+        assertForbidden(() -> deviceController.detail(id, null, scope));
+        deviceController.detail(id, "tech:device:read", scope);
+        verify(deviceService).detail(id, scope);
     }
 
     @Test
     @DisplayName("设备写操作：必须 tech:device:write")
     void deviceWriteRequiresWrite() {
         CreateDeviceReq create = new CreateDeviceReq("CT-1", "CT", null, null, null, null, null, null);
-        assertForbidden(() -> deviceController.create(create, "tech:device:read", "tech01"));
-        verify(deviceService, never()).create(any(), anyString());
-        deviceController.create(create, "tech:device:write", "tech01");
-        verify(deviceService).create(create, "tech01");
+        assertForbidden(() -> deviceController.create(create, "tech:device:read", "tech01", scope));
+        verify(deviceService, never()).create(any(), anyString(), any());
+        deviceController.create(create, "tech:device:write", "tech01", scope);
+        verify(deviceService).create(create, "tech01", scope);
 
         UpdateDeviceStatusReq status = new UpdateDeviceStatusReq("MAINTENANCE", 0L);
-        assertForbidden(() -> deviceController.updateStatus(id, status, "tech:read", "tech01"));
-        deviceController.updateStatus(id, status, "tech:device:write", "tech01");
-        verify(deviceService).updateStatus(id, status, "tech01");
+        assertForbidden(() -> deviceController.updateStatus(id, status, "tech:read", "tech01", scope));
+        deviceController.updateStatus(id, status, "tech:device:write", "tech01", scope);
+        verify(deviceService).updateStatus(id, status, "tech01", scope);
 
         RecordQcReq qc = new RecordQcReq("DAILY", "PASS", "球管预热", null, null, null, null, null);
-        assertForbidden(() -> deviceController.recordQc(id, qc, null, "tech01"));
-        deviceController.recordQc(id, qc, "tech:device:write", "tech01");
-        verify(deviceService).recordQc(id, qc, "tech01");
+        assertForbidden(() -> deviceController.recordQc(id, qc, null, "tech01", scope));
+        deviceController.recordQc(id, qc, "tech:device:write", "tech01", scope);
+        verify(deviceService).recordQc(id, qc, "tech01", scope);
     }
 
     @Test

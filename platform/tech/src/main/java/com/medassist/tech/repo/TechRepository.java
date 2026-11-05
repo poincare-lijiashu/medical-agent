@@ -1050,6 +1050,7 @@ public class TechRepository {
             rs.getString("location"), rs.getString("manufacturer"), rs.getString("model"),
             rs.getString("serial_no"), rs.getString("status"),
             rs.getDate("installed_at") == null ? null : rs.getDate("installed_at").toLocalDate(),
+            rs.getObject("campus_id", UUID.class), rs.getString("campus_source"),
             rs.getLong("version"), rs.getTimestamp("created_at").toInstant());
 
     private static final RowMapper<DeviceQc> DEVICE_QC_MAPPER = (rs, i) -> new DeviceQc(
@@ -1076,23 +1077,27 @@ public class TechRepository {
         jdbc.sql("""
                         INSERT INTO tech_svc.device
                             (id, device_no, name, modality, dept_id, location, manufacturer,
-                             model, serial_no, status, installed_at)
+                             model, serial_no, status, installed_at, campus_id, campus_source)
                         VALUES (:id, :no, :name, :modality, CAST(:deptId AS uuid),
                                 CAST(:location AS text), CAST(:manufacturer AS text),
                                 CAST(:model AS text), CAST(:serialNo AS text), :status,
-                                CAST(:installedAt AS date))
+                                CAST(:installedAt AS date), CAST(:campusId AS uuid),
+                                :campusSource)
                         """)
                 .param("id", d.id()).param("no", d.deviceNo()).param("name", d.name())
                 .param("modality", d.modality()).param("deptId", d.deptId())
                 .param("location", d.location()).param("manufacturer", d.manufacturer())
                 .param("model", d.model()).param("serialNo", d.serialNo())
-                .param("status", d.status()).param("installedAt", d.installedAt()).update();
+                .param("status", d.status()).param("installedAt", d.installedAt())
+                .param("campusId", d.campusId()).param("campusSource", d.campusSource())
+                .update();
     }
 
     public Optional<Device> findDevice(UUID id) {
         return jdbc.sql("""
                         SELECT id, device_no, name, modality, dept_id, location, manufacturer,
-                               model, serial_no, status, installed_at, version, created_at
+                               model, serial_no, status, installed_at, campus_id, campus_source,
+                               version, created_at
                           FROM tech_svc.device WHERE id = ?
                         """).param(id).query(DEVICE_MAPPER).optional();
     }
@@ -1100,16 +1105,25 @@ public class TechRepository {
     public Optional<Device> lockDevice(UUID id) {
         return jdbc.sql("""
                         SELECT id, device_no, name, modality, dept_id, location, manufacturer,
-                               model, serial_no, status, installed_at, version, created_at
+                               model, serial_no, status, installed_at, campus_id, campus_source,
+                               version, created_at
                           FROM tech_svc.device WHERE id = ? FOR UPDATE
                         """).param(id).query(DEVICE_MAPPER).optional();
     }
 
-    public List<Device> listDevices(String keyword, String modality, String status, int limit) {
+    /**
+     * 设备列表：关键字/类型/状态/院区都在 SQL 层收敛（{@code LIMIT} 之前）。
+     *
+     * <p>{@code campusCsv} 为空串表示跨院区角色（不加条件），由调用方按
+     * {@code DataScope.campusFilter()} 计算（G46/G51 口径）。
+     */
+    public List<Device> listDevices(String keyword, String modality, String status,
+                                    String campusCsv, int limit) {
         String pattern = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
         return jdbc.sql("""
                         SELECT id, device_no, name, modality, dept_id, location, manufacturer,
-                               model, serial_no, status, installed_at, version, created_at
+                               model, serial_no, status, installed_at, campus_id, campus_source,
+                               version, created_at
                           FROM tech_svc.device
                          WHERE (CAST(:pattern AS text) IS NULL OR name ILIKE CAST(:pattern AS text)
                                 OR device_no ILIKE CAST(:pattern AS text)
@@ -1118,10 +1132,14 @@ public class TechRepository {
                                 OR modality = CAST(:modality AS text))
                            AND (CAST(:status AS text) IS NULL
                                 OR status = CAST(:status AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY modality, device_no
                          LIMIT :limit
                         """)
                 .param("pattern", pattern).param("modality", modality).param("status", status)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .param("limit", limit).query(DEVICE_MAPPER).list();
     }
 
@@ -1181,19 +1199,32 @@ public class TechRepository {
                         """).param(deviceId).query(String.class).optional();
     }
 
-    public List<DeviceStatusCount> deviceStatusCounts() {
+    public List<DeviceStatusCount> deviceStatusCounts(String campusCsv) {
         return jdbc.sql("""
-                        SELECT status, count(*) AS cnt FROM tech_svc.device GROUP BY status
+                        SELECT status, count(*) AS cnt FROM tech_svc.device
+                         WHERE (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                         GROUP BY status
                         """)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new DeviceStatusCount(rs.getString("status"),
                         rs.getInt("cnt"))).list();
     }
 
-    public int countDeviceQcFailSince(OffsetDateTime from) {
+    public int countDeviceQcFailSince(OffsetDateTime from, String campusCsv) {
         Integer count = jdbc.sql("""
-                        SELECT count(*) FROM tech_svc.device_qc
-                         WHERE result = 'FAIL' AND performed_at >= :fromTs
-                        """).param("fromTs", from).query(Integer.class).single();
+                        SELECT count(*)
+                          FROM tech_svc.device_qc q
+                          JOIN tech_svc.device d ON d.id = q.device_id
+                         WHERE q.result = 'FAIL' AND q.performed_at >= :fromTs
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR d.campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                        """)
+                .param("fromTs", from)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .query(Integer.class).single();
         return count == null ? 0 : count;
     }
 
@@ -1264,7 +1295,7 @@ public class TechRepository {
      * <p>默认按上报时间倒序；未完结工单不特殊排序——设备科按设备维度查看，时间序更直观。
      */
     public List<DeviceWorkOrder> listWorkOrders(UUID deviceId, String status, String orderType,
-                                                int limit) {
+                                                String campusCsv, int limit) {
         return jdbc.sql(WORK_ORDER_SELECT + """
                          WHERE (CAST(:deviceId AS uuid) IS NULL
                                 OR w.device_id = CAST(:deviceId AS uuid))
@@ -1272,11 +1303,15 @@ public class TechRepository {
                                 OR w.status = CAST(:status AS text))
                            AND (CAST(:orderType AS text) IS NULL
                                 OR w.order_type = CAST(:orderType AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR d.campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY w.reported_at DESC, w.created_at DESC
                          LIMIT :limit
                         """)
                 .param("deviceId", deviceId).param("status", status)
                 .param("orderType", orderType).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(WORK_ORDER_MAPPER).list();
     }
 

@@ -3,6 +3,7 @@ package com.medassist.tech.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
+import com.medassist.tech.domain.TechModel.Device;
 import com.medassist.tech.domain.TechModel.Report;
 import com.medassist.tech.repo.TechRepository;
 import org.springframework.stereotype.Component;
@@ -69,6 +70,21 @@ public class TechAccessGuard {
         require(repo.findPacsStudyByUid(studyInstanceUid)
                         .map(s -> s.applicationId()).orElse(null),
                 scope, ErrorCode.TECH_PACS_STUDY_NOT_FOUND);
+    }
+
+    /**
+     * 设备档案（G83）。
+     *
+     * <p>设备是资产而非就诊数据：只有院区口径，没有科室口径（设备科要能看全院设备）。
+     * 返回设备记录，避免调用方再查一次；不存在与院区不可见同码。
+     */
+    public Device requireDevice(DataScope scope, UUID deviceId) {
+        Device device = repo.findDevice(deviceId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND));
+        if (!scope.allCampuses() && !scope.canSeeCampus(device.campusId())) {
+            throw new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND);
+        }
+        return device;
     }
 
     private void require(UUID applicationId, DataScope scope, ErrorCode notFound) {

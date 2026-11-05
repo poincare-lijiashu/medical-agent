@@ -2,6 +2,7 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.tech.domain.TechModel.DeviceWorkOrder;
 import com.medassist.tech.service.DeviceWorkOrderService;
@@ -55,17 +56,19 @@ public class DeviceWorkOrderController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String orderType,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(deviceId, status, orderType, limit));
+        return ApiResponse.ok(service.list(deviceId, status, orderType, limit, scope));
     }
 
     @GetMapping("/device-work-orders/{id}")
     public ApiResponse<DeviceWorkOrder> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(service.detail(id, scope));
     }
 
     /** 报修/建单：挂在设备下，保证工单一定能追溯到设备档案。 */
@@ -73,44 +76,49 @@ public class DeviceWorkOrderController {
     public ApiResponse<DeviceWorkOrder> create(
             @PathVariable UUID deviceId, @Valid @RequestBody CreateWorkOrderReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.create(deviceId, req, actor));
+        return ApiResponse.ok(service.create(deviceId, req, actor, scope));
     }
 
     @PostMapping("/device-work-orders/{id}/start")
     public ApiResponse<DeviceWorkOrder> start(
             @PathVariable UUID id, @Valid @RequestBody StartWorkOrderReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.start(id, req.version(), actor));
+        return ApiResponse.ok(service.start(id, req.version(), actor, scope));
     }
 
     @PostMapping("/device-work-orders/{id}/finish")
     public ApiResponse<DeviceWorkOrder> finish(
             @PathVariable UUID id, @Valid @RequestBody FinishWorkOrderReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.finish(id, req, actor));
+        return ApiResponse.ok(service.finish(id, req, actor, scope));
     }
 
     @PostMapping("/device-work-orders/{id}/accept")
     public ApiResponse<DeviceWorkOrder> accept(
             @PathVariable UUID id, @Valid @RequestBody AcceptWorkOrderReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, ACCEPT);
-        return ApiResponse.ok(service.accept(id, req, actor));
+        return ApiResponse.ok(service.accept(id, req, actor, scope));
     }
 
     @PostMapping("/device-work-orders/{id}/cancel")
     public ApiResponse<DeviceWorkOrder> cancel(
             @PathVariable UUID id, @Valid @RequestBody CancelWorkOrderReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.cancel(id, req, actor));
+        return ApiResponse.ok(service.cancel(id, req, actor, scope));
     }
 }

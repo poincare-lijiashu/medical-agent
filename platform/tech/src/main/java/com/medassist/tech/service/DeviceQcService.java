@@ -2,6 +2,8 @@ package com.medassist.tech.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.tech.domain.TechModel.Device;
 import com.medassist.tech.domain.TechModel.DeviceQc;
@@ -45,14 +47,16 @@ public class DeviceQcService {
 
     private final TechRepository repo;
     private final ObjectMapper objectMapper;
+    private final TechAccessGuard guard;
 
-    public DeviceQcService(TechRepository repo, ObjectMapper objectMapper) {
+    public DeviceQcService(TechRepository repo, ObjectMapper objectMapper, TechAccessGuard guard) {
         this.repo = repo;
         this.objectMapper = objectMapper;
+        this.guard = guard;
     }
 
     @Transactional
-    public DeviceView create(CreateDeviceReq req, String actor) {
+    public DeviceView create(CreateDeviceReq req, String actor, DataScope scope) {
         String operator = requireActor(actor);
         if (req.installedAt() != null && req.installedAt().isAfter(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "装机日期不能晚于今天");
@@ -60,32 +64,37 @@ public class DeviceQcService {
         Device device = new Device(UUID.randomUUID(), repo.nextDeviceNo(), req.name().trim(),
                 req.modality(), req.deptId(), blankToNull(req.location()),
                 blankToNull(req.manufacturer()), blankToNull(req.model()),
-                blankToNull(req.serialNo()), Device.ACTIVE, req.installedAt(), 0L, Instant.now());
+                blankToNull(req.serialNo()), Device.ACTIVE, req.installedAt(),
+                scope.campusForWrite(), Device.CAMPUS_RUNTIME, 0L, Instant.now());
         repo.insertDevice(device);
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("deviceNo", device.deviceNo());
         detail.put("modality", device.modality());
+        detail.put("campusId", device.campusId());
         audit(operator, "DEVICE_CREATE", device.id().toString(), detail);
         return new DeviceView(device, null, List.of());
     }
 
-    public List<Device> list(String keyword, String modality, String status, Integer limit) {
+    public List<Device> list(String keyword, String modality, String status, Integer limit,
+                             DataScope scope) {
         String normalizedModality = normalizeModality(modality, true);
         String normalizedStatus = normalizeStatus(status, true);
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 200);
-        return repo.listDevices(keyword, normalizedModality, normalizedStatus, size);
+        return repo.listDevices(keyword, normalizedModality, normalizedStatus,
+                CampusFilters.csv(scope.campusFilter()), size);
     }
 
-    public DeviceView detail(UUID id) {
-        Device device = repo.findDevice(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND));
+    public DeviceView detail(UUID id, DataScope scope) {
+        Device device = guard.requireDevice(scope, id);
         return new DeviceView(device, repo.latestDeviceQcResult(id).orElse(null),
                 repo.listDeviceQc(id, 50));
     }
 
     @Transactional
-    public DeviceView updateStatus(UUID id, UpdateDeviceStatusReq req, String actor) {
+    public DeviceView updateStatus(UUID id, UpdateDeviceStatusReq req, String actor,
+                                   DataScope scope) {
         String operator = requireActor(actor);
+        guard.requireDevice(scope, id);
         Device device = repo.lockDevice(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND));
         String target = req.status().trim().toUpperCase();
@@ -108,8 +117,9 @@ public class DeviceQcService {
     }
 
     @Transactional
-    public DeviceView recordQc(UUID id, RecordQcReq req, String actor) {
+    public DeviceView recordQc(UUID id, RecordQcReq req, String actor, DataScope scope) {
         String operator = requireActor(actor);
+        guard.requireDevice(scope, id);
         Device device = repo.lockDevice(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND));
         if (device.retired()) {
@@ -131,11 +141,12 @@ public class DeviceQcService {
         return new DeviceView(device, qc.result(), repo.listDeviceQc(id, 50));
     }
 
-    public DeviceSummary summary() {
+    public DeviceSummary summary(DataScope scope) {
+        String campusCsv = CampusFilters.csv(scope.campusFilter());
         int active = 0;
         int maintenance = 0;
         int retired = 0;
-        for (DeviceStatusCount row : repo.deviceStatusCounts()) {
+        for (DeviceStatusCount row : repo.deviceStatusCounts(campusCsv)) {
             switch (row.status()) {
                 case Device.ACTIVE -> active = row.count();
                 case Device.MAINTENANCE -> maintenance = row.count();
@@ -147,7 +158,7 @@ public class DeviceQcService {
         OffsetDateTime from = java.time.LocalDate.now(BusinessTime.zone()).minusDays(29)
                 .atStartOfDay(BusinessTime.zone()).toOffsetDateTime();
         return new DeviceSummary(active + maintenance + retired, active, maintenance, retired,
-                repo.countDeviceQcFailSince(from));
+                repo.countDeviceQcFailSince(from, campusCsv));
     }
 
     private static String normalizeModality(String modality, boolean allowNull) {

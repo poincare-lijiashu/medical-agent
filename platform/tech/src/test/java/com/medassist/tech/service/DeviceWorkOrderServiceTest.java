@@ -2,6 +2,7 @@ package com.medassist.tech.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.tech.domain.TechModel.Device;
 import com.medassist.tech.domain.TechModel.DeviceWorkOrder;
 import com.medassist.tech.repo.TechRepository;
@@ -37,23 +38,26 @@ import static org.mockito.Mockito.when;
 class DeviceWorkOrderServiceTest {
 
     private TechRepository repo;
+    private TechAccessGuard guard;
     private DeviceWorkOrderService service;
 
     private final UUID deviceId = UUID.randomUUID();
     private final UUID orderId = UUID.randomUUID();
     private final Instant reportedAt = Instant.parse("2026-11-05T01:00:00Z");
     private final Instant startedAt = Instant.parse("2026-11-05T02:00:00Z");
+    private final DataScope scope = DataScope.all("tech01", true);
 
     @BeforeEach
     void setUp() {
         repo = mock(TechRepository.class);
-        service = new DeviceWorkOrderService(repo);
+        guard = mock(TechAccessGuard.class);
+        service = new DeviceWorkOrderService(repo, guard);
     }
 
     private Device device(String status) {
         return new Device(deviceId, "DEV20261105000001", "CT-1", "CT", UUID.randomUUID(),
-                "3F", "GE", "Revolution", "SN1", status, LocalDate.now().minusYears(1), 0L,
-                Instant.now());
+                "3F", "GE", "Revolution", "SN1", status, LocalDate.now().minusYears(1),
+                DataScope.DEFAULT_CAMPUS_ID, Device.CAMPUS_RUNTIME, 0L, Instant.now());
     }
 
     private DeviceWorkOrder order(String status, String type, String createdBy) {
@@ -72,9 +76,9 @@ class DeviceWorkOrderServiceTest {
     @Test
     @DisplayName("建单：停用设备不能报修 → 409")
     void createRejectsRetiredDevice() {
-        when(repo.findDevice(deviceId)).thenReturn(Optional.of(device(Device.RETIRED)));
+        when(guard.requireDevice(scope, deviceId)).thenReturn(device(Device.RETIRED));
 
-        assertThatThrownBy(() -> service.create(deviceId, createReq("CORRECTIVE"), "tech01"))
+        assertThatThrownBy(() -> service.create(deviceId, createReq("CORRECTIVE"), "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_DEVICE_STATUS_INVALID));
         verify(repo, never()).insertWorkOrder(any());
@@ -83,12 +87,12 @@ class DeviceWorkOrderServiceTest {
     @Test
     @DisplayName("建单：归一化类型/优先级，落 OPEN 并留审计")
     void createNormalizesAndPersists() {
-        when(repo.findDevice(deviceId)).thenReturn(Optional.of(device(Device.ACTIVE)));
+        when(guard.requireDevice(scope, deviceId)).thenReturn(device(Device.ACTIVE));
         when(repo.nextWorkOrderNo()).thenReturn("WO20261105000001");
         when(repo.findWorkOrder(any())).thenReturn(Optional.of(
                 order(DeviceWorkOrder.OPEN, DeviceWorkOrder.CORRECTIVE, "tech01")));
 
-        service.create(deviceId, createReq("corrective"), "tech01");
+        service.create(deviceId, createReq("corrective"), "tech01", scope);
 
         ArgumentCaptor<DeviceWorkOrder> captor = ArgumentCaptor.forClass(DeviceWorkOrder.class);
         verify(repo).insertWorkOrder(captor.capture());
@@ -104,9 +108,9 @@ class DeviceWorkOrderServiceTest {
     @Test
     @DisplayName("建单：未知类型 → 422")
     void createRejectsUnknownType() {
-        when(repo.findDevice(deviceId)).thenReturn(Optional.of(device(Device.ACTIVE)));
+        when(guard.requireDevice(scope, deviceId)).thenReturn(device(Device.ACTIVE));
 
-        assertThatThrownBy(() -> service.create(deviceId, createReq("UNKNOWN"), "tech01"))
+        assertThatThrownBy(() -> service.create(deviceId, createReq("UNKNOWN"), "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_INVALID));
     }
@@ -114,11 +118,11 @@ class DeviceWorkOrderServiceTest {
     @Test
     @DisplayName("建单：上报时间晚于当前一天以上 → 422（防脏时间进时间线）")
     void createRejectsFarFutureReportedAt() {
-        when(repo.findDevice(deviceId)).thenReturn(Optional.of(device(Device.ACTIVE)));
+        when(guard.requireDevice(scope, deviceId)).thenReturn(device(Device.ACTIVE));
 
         assertThatThrownBy(() -> service.create(deviceId,
                 new CreateWorkOrderReq("CORRECTIVE", null, "球管异响", null,
-                        Instant.now().plusSeconds(3 * 86400L), null), "tech01"))
+                        Instant.now().plusSeconds(3 * 86400L), null), "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_INVALID));
     }
@@ -132,7 +136,7 @@ class DeviceWorkOrderServiceTest {
                 .thenReturn(Optional.of(order(DeviceWorkOrder.DONE, DeviceWorkOrder.CORRECTIVE,
                         "tech01")));
 
-        assertThatThrownBy(() -> service.start(orderId, 0L, "tech01"))
+        assertThatThrownBy(() -> service.start(orderId, 0L, "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID));
         verify(repo, never()).startWorkOrder(any(), any(), anyLong());
@@ -146,7 +150,7 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
         when(repo.startWorkOrder(eq(orderId), any(), eq(0L))).thenReturn(true);
 
-        service.start(orderId, 0L, "tech02");
+        service.start(orderId, 0L, "tech02", scope);
 
         verify(repo).markDeviceMaintenanceIfActive(deviceId);
     }
@@ -159,7 +163,7 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
         when(repo.startWorkOrder(eq(orderId), any(), eq(0L))).thenReturn(true);
 
-        service.start(orderId, 0L, "tech02");
+        service.start(orderId, 0L, "tech02", scope);
 
         verify(repo, never()).markDeviceMaintenanceIfActive(any());
     }
@@ -172,7 +176,7 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
         when(repo.startWorkOrder(eq(orderId), any(), eq(9L))).thenReturn(false);
 
-        assertThatThrownBy(() -> service.start(orderId, 9L, "tech02"))
+        assertThatThrownBy(() -> service.start(orderId, 9L, "tech02", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
     }
@@ -187,7 +191,8 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
 
         assertThatThrownBy(() -> service.finish(orderId,
-                new FinishWorkOrderReq(0L, null, "更换球管", new BigDecimal("1200.00")), "tech02"))
+                new FinishWorkOrderReq(0L, null, "更换球管", new BigDecimal("1200.00")), "tech02",
+                scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID));
     }
@@ -200,7 +205,7 @@ class DeviceWorkOrderServiceTest {
                         DeviceWorkOrder.CORRECTIVE, "tech01")));
 
         assertThatThrownBy(() -> service.finish(orderId,
-                new FinishWorkOrderReq(0L, null, "   ", null), "tech02"))
+                new FinishWorkOrderReq(0L, null, "   ", null), "tech02", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_INVALID));
     }
@@ -213,7 +218,8 @@ class DeviceWorkOrderServiceTest {
                         DeviceWorkOrder.CORRECTIVE, "tech01")));
 
         assertThatThrownBy(() -> service.finish(orderId,
-                new FinishWorkOrderReq(0L, startedAt.minusSeconds(60), "更换球管", null), "tech02"))
+                new FinishWorkOrderReq(0L, startedAt.minusSeconds(60), "更换球管", null), "tech02",
+                scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_INVALID));
         verify(repo, never()).finishWorkOrder(any(), any(), anyString(), any(), anyLong());
@@ -230,7 +236,7 @@ class DeviceWorkOrderServiceTest {
 
         service.finish(orderId,
                 new FinishWorkOrderReq(1L, startedAt.plusSeconds(3600), "更换球管",
-                        new BigDecimal("1200.00")), "tech02");
+                        new BigDecimal("1200.00")), "tech02", scope);
 
         verify(repo).finishWorkOrder(orderId, startedAt.plusSeconds(3600), "更换球管",
                 new BigDecimal("1200.00"), 1L);
@@ -246,7 +252,7 @@ class DeviceWorkOrderServiceTest {
                         DeviceWorkOrder.CORRECTIVE, "tech01")));
 
         assertThatThrownBy(() -> service.accept(orderId, new AcceptWorkOrderReq(0L, null),
-                "qc01"))
+                "qc01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID));
     }
@@ -259,7 +265,7 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
 
         assertThatThrownBy(() -> service.accept(orderId, new AcceptWorkOrderReq(0L, null),
-                "tech01"))
+                "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_SELF_ACCEPT));
         verify(repo, never()).acceptWorkOrder(any(), anyString(), any(), anyLong());
@@ -273,7 +279,7 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
         when(repo.acceptWorkOrder(eq(orderId), eq("qc01"), any(), eq(2L))).thenReturn(true);
 
-        service.accept(orderId, new AcceptWorkOrderReq(2L, "验收合格"), "qc01");
+        service.accept(orderId, new AcceptWorkOrderReq(2L, "验收合格"), "qc01", scope);
 
         verify(repo).restoreDeviceActiveIfIdle(deviceId, orderId);
         verify(repo).logChange(eq("qc01"), eq("DEVICE_WORK_ORDER_ACCEPT"),
@@ -290,7 +296,7 @@ class DeviceWorkOrderServiceTest {
                         DeviceWorkOrder.CORRECTIVE, "tech01")));
 
         assertThatThrownBy(() -> service.cancel(orderId,
-                new CancelWorkOrderReq(0L, "重复报修"), "tech01"))
+                new CancelWorkOrderReq(0L, "重复报修"), "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID));
     }
@@ -303,7 +309,7 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
 
         assertThatThrownBy(() -> service.cancel(orderId, new CancelWorkOrderReq(0L, "  "),
-                "tech01"))
+                "tech01", scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode())
                                 .isEqualTo(ErrorCode.TECH_WORK_ORDER_CANCEL_REASON_REQUIRED));
@@ -317,25 +323,47 @@ class DeviceWorkOrderServiceTest {
                         "tech01")));
         when(repo.cancelWorkOrder(orderId, "重复报修", 0L)).thenReturn(true);
 
-        service.cancel(orderId, new CancelWorkOrderReq(0L, "重复报修"), "tech01");
+        service.cancel(orderId, new CancelWorkOrderReq(0L, "重复报修"), "tech01", scope);
 
         verify(repo).cancelWorkOrder(orderId, "重复报修", 0L);
         verify(repo).restoreDeviceActiveIfIdle(deviceId, orderId);
     }
 
+    @Test
+    @DisplayName("跨院区：工单所属设备不可见 → 404（越权与不存在同码）")
+    void mutationsHideOtherCampusOrder() {
+        when(repo.findWorkOrder(orderId))
+                .thenReturn(Optional.of(order(DeviceWorkOrder.OPEN, DeviceWorkOrder.CORRECTIVE,
+                        "tech01")));
+        when(guard.requireDevice(scope, deviceId)).thenThrow(
+                new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND));
+
+        assertThatThrownBy(() -> service.start(orderId, 0L, "tech02", scope))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_DEVICE_NOT_FOUND));
+        verify(repo, never()).startWorkOrder(any(), any(), anyLong());
+    }
+
     // ---------------------------------------------------------------- 列表
 
     @Test
-    @DisplayName("列表：状态非法 → 422；合法时归一化并收敛 limit")
+    @DisplayName("列表：状态非法 → 422；合法时归一化、收敛 limit 并下推院区")
     void listNormalizesAndClamps() {
-        when(repo.listWorkOrders(any(), any(), any(), anyInt())).thenReturn(List.of());
+        when(repo.listWorkOrders(any(), any(), any(), anyString(), anyInt()))
+                .thenReturn(List.of());
 
-        assertThatThrownBy(() -> service.list(null, "UNKNOWN", null, 10))
+        assertThatThrownBy(() -> service.list(null, "UNKNOWN", null, 10, scope))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TECH_WORK_ORDER_INVALID));
 
-        service.list(deviceId, "in_progress", "corrective", 500);
+        service.list(deviceId, "in_progress", "corrective", 500, scope);
         verify(repo).listWorkOrders(eq(deviceId), eq("IN_PROGRESS"),
-                eq("CORRECTIVE"), eq(200));
+                eq("CORRECTIVE"), eq(""), eq(200));
+
+        UUID east = UUID.randomUUID();
+        DataScope eastOnly = DataScope.of("eastadm01", java.util.Set.of(), true,
+                java.util.Set.of(east), false, true);
+        service.list(null, null, null, 10, eastOnly);
+        verify(repo).listWorkOrders(eq(null), eq(null), eq(null), eq(east.toString()), eq(10));
     }
 }

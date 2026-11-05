@@ -190,17 +190,26 @@ public final class TechModel {
     }
 
     /**
-     * 医技设备档案（G35）。
+     * 设备档案（G35；G83 补院区归属）。
      *
      * <p>停用（RETIRED）后不允许再登记质控；MAINTENANCE 允许登记维修后的校准记录。
+     *
+     * <p>{@code campusId} 是院区归属：建档时按提交账号固化，设备列表/看板/维保工单
+     * 一律按院区收敛；{@code campusSource} 标记来源，存量回填为 {@code MAIN_FALLBACK}，
+     * 可由设备科订正后置 {@code RUNTIME}。
      */
     public record Device(UUID id, String deviceNo, String name, String modality, UUID deptId,
                          String location, String manufacturer, String model, String serialNo,
-                         String status, LocalDate installedAt, long version, Instant createdAt) {
+                         String status, LocalDate installedAt, UUID campusId, String campusSource,
+                         long version, Instant createdAt) {
 
         public static final String ACTIVE = "ACTIVE";
         public static final String MAINTENANCE = "MAINTENANCE";
         public static final String RETIRED = "RETIRED";
+
+        /** 院区来源：建档写入 / 存量回填。 */
+        public static final String CAMPUS_RUNTIME = "RUNTIME";
+        public static final String CAMPUS_MAIN_FALLBACK = "MAIN_FALLBACK";
 
         public boolean retired() {
             return RETIRED.equals(status);

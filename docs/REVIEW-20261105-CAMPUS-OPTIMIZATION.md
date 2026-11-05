@@ -247,11 +247,22 @@
 
 | 关注点 | 处置 |
 |---|---|
-| 院区口径（已知缺口，如实记录） | `device` 自 V12 起只有 `dept_id`、没有 `campus_id`，本次维保工单沿用设备档案的全局口径（工单无院区列、不做院区隔离）。这**不是**本次引入的越权：设备档案列表本就未按院区收敛；补齐需要给 `device` 加 `campus_id` 并按科室/库房回溯回填，属独立批次，已列入功能缺口表 |
+| 院区口径（已于 G83 关闭） | `device` 自 V12 起只有 `dept_id`、没有 `campus_id`，G82 当时沿用设备档案的全局口径（工单无院区列、不做院区隔离）。这一缺口已由 G83 关闭：设备表补院区列、设备列表/看板/工单全部按院区收敛（见下节） |
 | 权限收口 | 新增 `tech:device:accept`（auth V76，仅 ADMIN/QC）：验收与"报修/维修"分开权限面；服务层另有"建单人不得自验"的四眼校验 |
 | 数据边界 | 工单只含设备与维修信息，不含患者数据；工单冻结（触发器）保证验收/取消后不可回改，费用与停机事实可追溯 |
 
 **验证**：`tech_device_work_order_smoke` 35 项全 PASS（含 doctor 无权限 403、自验 409、qc 验收 200、停用设备报修 409、设备随工单在 MAINTENANCE/ACTIVE 之间联动）；`tech_smoke`、`tech_lis_smoke`、`tech_pacs_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过。
+
+### G83 批次（设备档案院区归属，mock 190 类 / 1806 项全绿）
+
+| 关注点 | 处置 |
+|---|---|
+| 补列方式（§6.15 同口径） | `ADD COLUMN campus_id uuid NOT NULL DEFAULT 主院区`：PG11+ 常量 DEFAULT 是元数据操作，不重写全表、不持长锁；存量设备标 `campus_source=MAIN_FALLBACK`，可由设备科按库房订正（订正后 `RUNTIME`），不猜测归属 |
+| 写侧 | 建档按 `scope.campusForWrite()` 固化院区（与收费/票据/处方同口径），不再依赖数据库默认值 |
+| 读侧 | 设备列表、设备看板（状态计数 + 近 30 天质控失败数）、维保工单列表全部把 `campusFilter()` 作为 SQL 谓词下推，过滤发生在 `LIMIT` 之前；详情与工单动作走新增的 `TechAccessGuard.requireDevice`（只校院区，不校科室——设备科要能看全院设备），跨院区与不存在同码 `46430` |
+| 残留边界 | 设备没有"库房/房间"级位置主数据，`location` 仍是自由文本；设备列表不按科室过滤（刻意的） |
+
+**验证**：新冒烟 `tech_device_campus_smoke` 25 项全 PASS（东院区管理员建设备→院区固化为 EAST；`keyword` 查主院区设备返回 0 条；主院区设备详情与报修均 404/46430；工单列表不含他院区工单；看板 total 与本院区设备列表条数一致）；`tech_device_work_order_smoke`、`tech_smoke`、`tech_lis_smoke`、`tech_pacs_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过。
 
 ### 评审意见书（2026-11-05）状态：**全部条目已关闭**
 

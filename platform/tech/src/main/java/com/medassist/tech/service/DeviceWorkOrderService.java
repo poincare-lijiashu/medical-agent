@@ -2,6 +2,8 @@ package com.medassist.tech.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.tech.domain.TechModel.Device;
 import com.medassist.tech.domain.TechModel.DeviceWorkOrder;
 import com.medassist.tech.repo.TechRepository;
@@ -42,29 +44,36 @@ public class DeviceWorkOrderService {
     private static final long REPORT_SKEW_SECONDS = 86_400L;
 
     private final TechRepository repo;
+    private final TechAccessGuard guard;
 
-    public DeviceWorkOrderService(TechRepository repo) {
+    public DeviceWorkOrderService(TechRepository repo, TechAccessGuard guard) {
         this.repo = repo;
+        this.guard = guard;
     }
 
     public List<DeviceWorkOrder> list(UUID deviceId, String status, String orderType,
-                                      Integer limit) {
+                                      Integer limit, DataScope scope) {
         String normalizedStatus = normalizeStatus(status);
         String normalizedType = normalizeType(orderType);
+        if (deviceId != null) {
+            guard.requireDevice(scope, deviceId);
+        }
         int size = limit == null || limit <= 0 ? LIST_LIMIT : Math.min(limit, LIST_LIMIT);
-        return repo.listWorkOrders(deviceId, normalizedStatus, normalizedType, size);
+        return repo.listWorkOrders(deviceId, normalizedStatus, normalizedType,
+                CampusFilters.csv(scope.campusFilter()), size);
     }
 
-    public DeviceWorkOrder detail(UUID id) {
-        return repo.findWorkOrder(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_WORK_ORDER_NOT_FOUND));
+    public DeviceWorkOrder detail(UUID id, DataScope scope) {
+        DeviceWorkOrder order = requireOrder(id);
+        guard.requireDevice(scope, order.deviceId());
+        return order;
     }
 
     @Transactional
-    public DeviceWorkOrder create(UUID deviceId, CreateWorkOrderReq req, String actor) {
+    public DeviceWorkOrder create(UUID deviceId, CreateWorkOrderReq req, String actor,
+                                  DataScope scope) {
         String operator = requireActor(actor);
-        Device device = repo.findDevice(deviceId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_DEVICE_NOT_FOUND));
+        Device device = guard.requireDevice(scope, deviceId);
         if (device.retired()) {
             throw new BusinessException(ErrorCode.TECH_DEVICE_STATUS_INVALID,
                     "设备已停用，不能新建维保工单");
@@ -91,14 +100,15 @@ public class DeviceWorkOrderService {
         repo.insertWorkOrder(created);
         audit(operator, "DEVICE_WORK_ORDER_CREATE", created.id(),
                 "orderNo=" + created.orderNo() + " type=" + type);
-        return detail(created.id());
+        return requireOrder(created.id());
     }
 
     /** 开始维修；故障维修同时把设备置为 MAINTENANCE（仅当设备仍 ACTIVE）。 */
     @Transactional
-    public DeviceWorkOrder start(UUID id, long version, String actor) {
+    public DeviceWorkOrder start(UUID id, long version, String actor, DataScope scope) {
         String operator = requireActor(actor);
-        DeviceWorkOrder order = detail(id);
+        DeviceWorkOrder order = requireOrder(id);
+        guard.requireDevice(scope, order.deviceId());
         if (!DeviceWorkOrder.OPEN.equals(order.status())) {
             throw new BusinessException(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID,
                     "只有待处理的工单可以开始维修，当前：" + order.status());
@@ -110,14 +120,15 @@ public class DeviceWorkOrderService {
             repo.markDeviceMaintenanceIfActive(order.deviceId());
         }
         audit(operator, "DEVICE_WORK_ORDER_START", id, "orderNo=" + order.orderNo());
-        return detail(id);
+        return requireOrder(id);
     }
 
     /** 完工：必须写处理措施；完工时间不得早于开始时间。 */
     @Transactional
-    public DeviceWorkOrder finish(UUID id, FinishWorkOrderReq req, String actor) {
+    public DeviceWorkOrder finish(UUID id, FinishWorkOrderReq req, String actor, DataScope scope) {
         String operator = requireActor(actor);
-        DeviceWorkOrder order = detail(id);
+        DeviceWorkOrder order = requireOrder(id);
+        guard.requireDevice(scope, order.deviceId());
         if (!DeviceWorkOrder.IN_PROGRESS.equals(order.status())) {
             throw new BusinessException(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID,
                     "只有维修中的工单可以完工，当前：" + order.status());
@@ -136,14 +147,15 @@ public class DeviceWorkOrderService {
         }
         audit(operator, "DEVICE_WORK_ORDER_FINISH", id,
                 "orderNo=" + order.orderNo() + " cost=" + req.costAmount());
-        return detail(id);
+        return requireOrder(id);
     }
 
     /** 验收：四眼——建单人不能验收自己的工单；验收后设备若已无未完结工单则恢复 ACTIVE。 */
     @Transactional
-    public DeviceWorkOrder accept(UUID id, AcceptWorkOrderReq req, String actor) {
+    public DeviceWorkOrder accept(UUID id, AcceptWorkOrderReq req, String actor, DataScope scope) {
         String operator = requireActor(actor);
-        DeviceWorkOrder order = detail(id);
+        DeviceWorkOrder order = requireOrder(id);
+        guard.requireDevice(scope, order.deviceId());
         if (!DeviceWorkOrder.DONE.equals(order.status())) {
             throw new BusinessException(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID,
                     "只有已完工的工单可以验收，当前：" + order.status());
@@ -156,14 +168,15 @@ public class DeviceWorkOrderService {
         }
         repo.restoreDeviceActiveIfIdle(order.deviceId(), id);
         audit(operator, "DEVICE_WORK_ORDER_ACCEPT", id, "orderNo=" + order.orderNo());
-        return detail(id);
+        return requireOrder(id);
     }
 
     /** 取消：必须写原因；取消后同样按"无其他未完结工单"恢复设备状态。 */
     @Transactional
-    public DeviceWorkOrder cancel(UUID id, CancelWorkOrderReq req, String actor) {
+    public DeviceWorkOrder cancel(UUID id, CancelWorkOrderReq req, String actor, DataScope scope) {
         String operator = requireActor(actor);
-        DeviceWorkOrder order = detail(id);
+        DeviceWorkOrder order = requireOrder(id);
+        guard.requireDevice(scope, order.deviceId());
         if (order.terminal()) {
             throw new BusinessException(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID,
                     "工单已" + (DeviceWorkOrder.ACCEPTED.equals(order.status()) ? "验收" : "取消")
@@ -179,10 +192,15 @@ public class DeviceWorkOrderService {
         repo.restoreDeviceActiveIfIdle(order.deviceId(), id);
         audit(operator, "DEVICE_WORK_ORDER_CANCEL", id,
                 "orderNo=" + order.orderNo() + " reason=" + reason);
-        return detail(id);
+        return requireOrder(id);
     }
 
     // ---------------------------------------------------------------- 内部
+
+    private DeviceWorkOrder requireOrder(UUID id) {
+        return repo.findWorkOrder(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_WORK_ORDER_NOT_FOUND));
+    }
 
     private static String normalizeType(String value) {
         if (value == null || value.isBlank()) {

@@ -2,6 +2,7 @@ package com.medassist.tech.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.tech.domain.TechModel.Device;
 import com.medassist.tech.service.DeviceQcService;
@@ -47,33 +48,37 @@ public class DeviceController {
             @RequestParam(required = false) String modality,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(keyword, modality, status, limit));
+        return ApiResponse.ok(service.list(keyword, modality, status, limit, scope));
     }
 
     @GetMapping("/summary")
     public ApiResponse<DeviceSummary> summary(
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.summary());
+        return ApiResponse.ok(service.summary(scope));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<DeviceView> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(service.detail(id, scope));
     }
 
     @PostMapping
     public ApiResponse<DeviceView> create(
             @Valid @RequestBody CreateDeviceReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, actor, scope));
     }
 
     /** 状态变更（CAS）：ACTIVE / MAINTENANCE / RETIRED，停用不可恢复。 */
@@ -82,9 +87,10 @@ public class DeviceController {
             @PathVariable UUID id,
             @Valid @RequestBody UpdateDeviceStatusReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.updateStatus(id, req, actor));
+        return ApiResponse.ok(service.updateStatus(id, req, actor, scope));
     }
 
     /** 质控登记：结论 PASS/FAIL，记录只追加不可改。 */
@@ -93,8 +99,9 @@ public class DeviceController {
             @PathVariable UUID id,
             @Valid @RequestBody RecordQcReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, WRITE);
-        return ApiResponse.ok(service.recordQc(id, req, actor));
+        return ApiResponse.ok(service.recordQc(id, req, actor, scope));
     }
 }
