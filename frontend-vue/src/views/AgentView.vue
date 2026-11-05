@@ -270,6 +270,14 @@
             未被引用的生效技能 {{ metrics.skillCards.unusedPublished.length }}
           </el-tag>
         </div>
+        <div class="policy-row">
+          <el-button size="small" @click="takeSnapshot">记录今日快照</el-button>
+          <span class="src">{{ trends ? trends.note : '' }}</span>
+        </div>
+        <el-alert v-for="a in activeAlerts" :key="a.code" :title="a.message" :closable="false"
+                  :type="a.level === 'high' ? 'error' : (a.level === 'medium' ? 'warning' : 'info')"
+                  style="margin: 4px 0" show-icon />
+        <div v-if="metrics && !activeAlerts.length" class="src">当前无运营告警。</div>
         <el-table :data="experiences" size="small" style="width: 100%; margin-top: 6px">
           <el-table-column prop="agentId" label="能力域" width="100" />
           <el-table-column prop="pattern" label="问题模式" width="220" />
@@ -642,6 +650,8 @@ const expForm = ref(emptyExperience())
 const metrics = ref(null)
 const impactOn = ref(false)
 const impactData = ref(null)
+const trends = ref(null)
+const activeAlerts = ref([])
 
 function emptyBot() {
   return {
@@ -735,7 +745,7 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt] = await Promise.all([
+  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt, tr, al] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
@@ -747,6 +757,8 @@ async function loadAll() {
     http.get('/agent/skill-experiences'),
     http.get('/agent/skill-proposals'),
     http.get('/agent/skill-library/metrics'),
+    http.get('/agent/skill-library/trends?days=30'),
+    http.get('/agent/skill-library/alerts'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -760,6 +772,14 @@ async function loadAll() {
   experiences.value = (ex.data && ex.data.experiences) || []
   proposals.value = (pr.data && pr.data.proposals) || []
   metrics.value = mt.data || null
+  trends.value = tr.data || null
+  activeAlerts.value = (al.data && al.data.alerts) || []
+}
+
+async function takeSnapshot() {
+  const r = await http.post('/agent/skill-library/snapshot', {})
+  await loadAll()
+  ElMessage.success(`已记录 ${r.data.date} 指标快照`)
 }
 
 function pct(rate) {

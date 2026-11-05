@@ -145,6 +145,7 @@ export function humanizeAudit(e) {
     skill_distill: () => `提炼技能候选（当前 ${p.proposals ?? 0} 个）`,
     skill_adopt: () => `采纳技能候选 ${p.proposalId || '—'}（${p.status || ''}${p.replay ? ' · 回放通过' : ''}）`,
     skill_proposal_reject: () => `拒绝技能候选 ${p.proposalId || '—'}（${p.note || '—'}）`,
+    skill_metrics_snapshot: () => `记录技能库指标快照 ${p.date || '—'}`,
     user_created: () => `创建了用户 ${p.user || '—'}（${p.role || '—'}）`,
     user_deleted: () => `删除了用户 ${p.user || '—'}`,
     department_added: () => `新增了科室 ${p.name || '—'}`,

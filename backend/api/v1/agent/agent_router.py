@@ -15,6 +15,7 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
 from backend.agents import catalog, model_policy, second_opinion, skill_library, skill_ops
-from backend.agents import sleep_memory, tool_loop
+from backend.agents import skill_trends, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -130,6 +131,10 @@ class ExperiencePayload(BaseModel):
 
 class ProposalRejectReq(BaseModel):
     note: str = Field(min_length=1, max_length=500)
+
+
+class SnapshotReq(BaseModel):
+    date: str | None = Field(default=None, max_length=10)
 
 
 def _base_url(request: Request) -> str:
@@ -641,6 +646,35 @@ async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
 async def skill_library_metrics(user: dict = Depends(require_role("admin", "qc"))):
     """只读运营指标：经验覆盖、候选转化、回放通过率、技能审核通过率、Bot 引用。"""
     return skill_ops.metrics()
+
+
+@router.post("/skill-library/snapshot")
+async def skill_library_snapshot(req: SnapshotReq,
+                                 user: dict = Depends(require_role("admin", "qc"))):
+    """记录某业务日的指标快照（同一天幂等覆盖）。"""
+    day = None
+    if req.date:
+        try:
+            day = date.fromisoformat(req.date)
+        except ValueError:
+            raise HTTPException(422, "date 需为 YYYY-MM-DD")
+    item = await asyncio.to_thread(skill_trends.snapshot,
+                                   user.get("username", "qc"), day)
+    await _audit_agent(user, "skill_metrics_snapshot", {"date": item["date"]})
+    return item
+
+
+@router.get("/skill-library/trends")
+async def skill_library_trends(days: int = 30,
+                               user: dict = Depends(require_role("admin", "qc"))):
+    """趋势：历史不足 2 天时显式 insufficient，不插值、不推测。"""
+    return skill_trends.trends(days)
+
+
+@router.get("/skill-library/alerts")
+async def skill_library_alerts(user: dict = Depends(require_role("admin", "qc"))):
+    """阈值告警：仅提示，不自动处置。"""
+    return skill_trends.alerts()
 
 
 @router.get("/skills/{code}/impact")
