@@ -52,5 +52,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 ## 交付前硬门禁（见计划 Phase 6）
 全量 pytest + `run_eval`（hit_rate≥0.8、引用精确率达标）+ 前端 a11y/截图 + `open-code-review` + `security-scan`；改环境后刷新机器基线（`refresh_baseline.ps1` → `check_docs.ps1` = `CONSISTENCY_OK`）。
 
+## Agent 上线前联调自检
+```powershell
+# 只查仓库产物，不连服务（改代码后先跑这个）
+python scripts\agent_go_live_check.py --dry-run
+
+# 真实环境联调（口令也可用 AGENT_PASSWORD 注入，避免进 shell 历史）
+python scripts\agent_go_live_check.py --base-url http://127.0.0.1:8001 --username admin01
+```
+- 检查项：登录 → 模型合规（仅 local/domestic，出现 foreign 即失败）→ 联网白名单（须含 nhc.gov.cn / nmpa.gov.cn / pubmed.ncbi.nlm.nih.gov）→ 技能库指标 → Prometheus 文本 → 睡眠扫描（只读）→ 运营建议列表。
+- 退出码：`0` 全部通过；`1` 有失败项（逐条打印原因）；`2` 无法执行（缺口令/登录失败/服务不可达）。
+- 脚本只读，不切换开关、不写技能、不执行建议；不打印口令、令牌、密钥。
+- 任一项失败不得上线；通过也只代表**技术联调就绪**，临床验收与签字仍需人工完成。
+
 ## 合规边界
 辅助决策工具，非医疗器械；不得替代诊断/处方；输出须执业医师/药师复核；不处理未脱敏 PHI 于外部；日志与快照本地留存、不外发密钥。
