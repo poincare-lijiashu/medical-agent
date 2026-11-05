@@ -118,6 +118,12 @@ export function humanizeAudit(e) {
     /* G86 Agent 控制面：工具调用与能力开关（event_type=agent） */
     tool_invoke: () => `调用了工具 ${p.tool || '—'}（${p.ok ? '成功' : '失败'}${p.ms !== undefined ? ' · ' + p.ms + 'ms' : ''}）`,
     flag_update: () => `切换了 Agent 开关 ${p.key || '—'}（${p.value ? '开' : '关'}）`,
+    /* G87 临床技能卡：创建/修改/送审/审核/停用 */
+    skill_create: () => `新建了技能卡 ${p.code || '—'}（智能体 ${p.agentId || '—'}）`,
+    skill_update: () => `修改了技能卡 ${p.code || '—'}（rowVersion ${p.rowVersion ?? '—'}）`,
+    skill_submit: () => `提交技能卡审核 ${p.code || '—'}`,
+    skill_review: () => `${p.approve ? '通过' : '驳回'}了技能卡 ${p.code || '—'}（v${p.version ?? '—'}）`,
+    skill_disable: () => `停用了技能卡 ${p.code || '—'}`,
     user_created: () => `创建了用户 ${p.user || '—'}（${p.role || '—'}）`,
     user_deleted: () => `删除了用户 ${p.user || '—'}`,
     department_added: () => `新增了科室 ${p.name || '—'}`,

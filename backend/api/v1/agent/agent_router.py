@@ -20,7 +20,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.agents import catalog, router as router_agent
+from backend.agents import catalog, skills as skill_cards
+from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
 from backend.core import agent_flags, agent_tools
 
@@ -35,6 +36,30 @@ class RouteReq(BaseModel):
 class FlagReq(BaseModel):
     key: str = Field(max_length=64)
     value: bool
+
+
+class SkillPayload(BaseModel):
+    code: str = Field(min_length=3, max_length=64)
+    name: str = Field(min_length=2, max_length=80)
+    description: str = Field(min_length=10, max_length=500)
+    agentId: str = Field(min_length=2, max_length=32)
+    promptTemplate: str = Field(min_length=20, max_length=4000)
+    toolAllowlist: list[str] = Field(default_factory=list, max_length=8)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=10)
+    guardrails: dict = Field(default_factory=dict)
+
+
+class SkillUpdateReq(SkillPayload):
+    rowVersion: int = Field(ge=0)
+
+
+class SkillVersionReq(BaseModel):
+    rowVersion: int = Field(ge=0)
+
+
+class SkillReviewReq(SkillVersionReq):
+    approve: bool
+    note: str | None = Field(default=None, max_length=2000)
 
 
 def _base_url(request: Request) -> str:
@@ -116,6 +141,104 @@ async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
         payload={"key": req.key, "value": value},
     )
     return {"ok": True, "key": req.key, "value": value}
+
+
+# ---------------------------------------------------------------- 临床技能卡（G87）
+
+def _skill_http(e: skill_cards.SkillError) -> HTTPException:
+    if isinstance(e, skill_cards.SkillNotFound):
+        return HTTPException(404, str(e))
+    if isinstance(e, skill_cards.SkillForbidden):
+        return HTTPException(403, str(e))
+    if isinstance(e, skill_cards.SkillConflict):
+        return HTTPException(409, str(e))
+    return HTTPException(422, str(e))
+
+
+async def _audit_agent(user: dict, action: str, payload: dict) -> None:
+    from backend.api.v1.medical import shared as _shared
+    await asyncio.to_thread(
+        _shared.get_audit_logger().write,
+        event_type="agent", action=action,
+        actor=user.get("username", "anonymous"), payload=payload,
+    )
+
+
+@router.get("/skills")
+async def list_skills(status: str | None = None, agentId: str | None = None,
+                      user: dict = Depends(require_user)):
+    """技能卡列表：普通角色仅见 PUBLISHED；admin/qc 可见全部并按状态/智能体过滤。"""
+    return {"skills": skill_cards.list_skills(user.get("role", ""), status, agentId)}
+
+
+@router.get("/skills/{code}")
+async def get_skill(code: str, user: dict = Depends(require_user)):
+    try:
+        return skill_cards.get_skill(code, user.get("role", ""))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+
+
+@router.post("/skills")
+async def create_skill(req: SkillPayload, user: dict = Depends(require_role("admin"))):
+    """新建技能卡（DRAFT）；须由另一名 admin/qc 审核后才生效。"""
+    try:
+        item = skill_cards.create_skill(req.model_dump(), user.get("username", "admin"))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+    await _audit_agent(user, "skill_create",
+                       {"code": item["code"], "agentId": item["agentId"]})
+    return item
+
+
+@router.put("/skills/{code}")
+async def update_skill(code: str, req: SkillUpdateReq,
+                       user: dict = Depends(require_role("admin"))):
+    payload = req.model_dump()
+    row_version = payload.pop("rowVersion")
+    try:
+        item = skill_cards.update_skill(code, payload, row_version,
+                                        user.get("username", "admin"))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+    await _audit_agent(user, "skill_update", {"code": code, "rowVersion": item["rowVersion"]})
+    return item
+
+
+@router.post("/skills/{code}/submit")
+async def submit_skill(code: str, req: SkillVersionReq,
+                       user: dict = Depends(require_role("admin"))):
+    try:
+        item = skill_cards.submit_skill(code, req.rowVersion, user.get("username", "admin"))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+    await _audit_agent(user, "skill_submit", {"code": code})
+    return item
+
+
+@router.post("/skills/{code}/review")
+async def review_skill(code: str, req: SkillReviewReq,
+                       user: dict = Depends(require_role("admin", "qc"))):
+    """审核：通过 → PUBLISHED（version+1）；驳回必须写原因。四眼由服务层强制。"""
+    try:
+        item = skill_cards.review_skill(code, req.approve, req.note, req.rowVersion,
+                                        user.get("username", "qc"))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+    await _audit_agent(user, "skill_review",
+                       {"code": code, "approve": req.approve, "version": item["version"]})
+    return item
+
+
+@router.post("/skills/{code}/disable")
+async def disable_skill(code: str, req: SkillVersionReq,
+                        user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = skill_cards.disable_skill(code, req.rowVersion, user.get("username", "qc"))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+    await _audit_agent(user, "skill_disable", {"code": code})
+    return item
 
 
 # ---------------------------------------------------------------- A2A（最小互操作）

@@ -189,6 +189,10 @@ async def _init_impl() -> bool:
             # 双写 PG 真源（JSON 兜底保留，见 load_runtime_flags/save_runtime_flags）
             await c.execute("""CREATE TABLE IF NOT EXISTS runtime_flags(
                 key text primary key, value jsonb, updated_at timestamptz default now())""")
+            # G87：临床技能卡（code 主键 + 全量 JSON + 状态冗余列，便于按状态筛选/运维排查）
+            await c.execute("""CREATE TABLE IF NOT EXISTS agent_skills(
+                code text primary key, data jsonb NOT NULL, status text NOT NULL,
+                updated_at timestamptz default now())""")
     except Exception:
         try:
             await pool.close()
@@ -1162,6 +1166,49 @@ def load_runtime_flags(json_loader=None, path: str = "runtime_flags.json") -> di
 def save_runtime_flags(d: dict, path: str) -> None:
     """运行时开关写：JSON 原子写兜底 + PG 全量同步（不在键集的一并清除）。"""
     _json_then_pg(_pg_save_runtime_flags, path, d)
+
+
+# ---- G87：临床技能卡（PG 真源 + JSON 兜底，语义同 runtime_flags） ----
+
+_SKILLS_UPSERT = """INSERT INTO agent_skills(code,data,status,updated_at)
+   VALUES($1,$2::jsonb,$3,now())
+   ON CONFLICT(code) DO UPDATE SET data=EXCLUDED.data, status=EXCLUDED.status, updated_at=now()"""
+
+
+async def _pg_load_skills() -> list | None:
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT data FROM agent_skills ORDER BY code")
+    if not rows:
+        return None  # 空表 → 回落 JSON（新库/未迁移），与其它域同纪律
+    out = []
+    for r in rows:
+        try:
+            out.append(json.loads(r["data"]) if isinstance(r["data"], str) else r["data"])
+        except Exception:  # noqa: BLE001 —— 单行损坏跳过，不拖垮整个列表
+            continue
+    return out
+
+
+async def _pg_save_skills(items: list) -> None:
+    rows = [(i.get("code"), json.dumps(i, ensure_ascii=False), i.get("status", "DRAFT"))
+            for i in (items or []) if isinstance(i, dict) and str(i.get("code") or "").strip()]
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            if rows:
+                await c.execute("DELETE FROM agent_skills WHERE NOT (code = ANY($1))",
+                                [r[0] for r in rows])
+            else:
+                await c.execute("DELETE FROM agent_skills")
+            await c.executemany(_SKILLS_UPSERT, rows)
+
+
+def load_skills(path: str, json_loader=None) -> list:
+    """技能卡读：PG 可用→PG 真源；不可用/异常/空表→JSON（调用方 json_loader）。"""
+    return _pg_or_json(_pg_load_skills, json_loader, path, [])
+
+
+def save_skills(items: list, path: str) -> None:
+    _json_then_pg(_pg_save_skills, path, items)
 
 
 async def _seed_drug_tables_impl(dict_items: list, rule_items: list) -> dict:

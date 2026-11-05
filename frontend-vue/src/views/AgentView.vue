@@ -51,6 +51,41 @@
         </div>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-skills">
+        <template #header>
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <b>临床技能卡（受控）</b>
+            <el-button type="primary" size="small" @click="openSkillCreate">新建技能卡</el-button>
+          </div>
+        </template>
+        <el-table :data="skillList" size="small" style="width: 100%">
+          <el-table-column prop="code" label="编码" width="150" />
+          <el-table-column prop="name" label="名称" width="180" />
+          <el-table-column prop="agentId" label="智能体" width="110" />
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="版本" width="70">
+            <template #default="{ row }">v{{ row.version }}</template>
+          </el-table-column>
+          <el-table-column prop="createdBy" label="创建人" width="100" />
+          <el-table-column label="操作" width="230">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'"
+                         size="small" @click="submitSkill(row)">送审</el-button>
+              <template v-if="row.status === 'IN_REVIEW' && row.createdBy !== username">
+                <el-button size="small" type="success" @click="reviewSkill(row, true)">通过</el-button>
+                <el-button size="small" type="danger" @click="reviewSkill(row, false)">驳回</el-button>
+              </template>
+              <el-button v-if="row.status === 'PUBLISHED'" size="small" @click="disableSkill(row)">停用</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="!skillList.length" class="src">暂无技能卡；技能卡必须经非创建人审核后才会生效。</div>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-tools">
         <template #header><b>工具注册表</b></template>
         <el-table :data="tools" size="small" style="width: 100%">
@@ -85,29 +120,109 @@
         </el-table>
       </el-card>
     </div>
+
+    <el-dialog v-model="skillOn" title="新建临床技能卡" width="640px">
+      <div class="skill-form">
+        <label>编码<input v-model="skillForm.code" class="inp" placeholder="如 sepsis-bundle" /></label>
+        <label>名称<input v-model="skillForm.name" class="inp" /></label>
+        <label>智能体
+          <el-select v-model="skillForm.agentId" size="small" style="width: 100%">
+            <el-option v-for="a in agents" :key="a.id" :label="a.name + '（' + a.id + '）'" :value="a.id" />
+          </el-select>
+        </label>
+        <label style="grid-column: 1 / -1">说明<input v-model="skillForm.description" class="inp" /></label>
+        <label style="grid-column: 1 / -1">提示模板
+          <textarea v-model="skillForm.promptTemplate" class="inp" rows="4" />
+        </label>
+        <label style="grid-column: 1 / -1">证据引用（每行一条）
+          <textarea v-model="skillForm.evidence" class="inp" rows="2" placeholder="如：Surviving Sepsis Campaign 2021" />
+        </label>
+        <label style="grid-column: 1 / -1">工具白名单
+          <el-checkbox-group v-model="skillForm.tools">
+            <el-checkbox v-for="t in createTools" :key="t.name" :label="t.name">{{ t.title }}</el-checkbox>
+          </el-checkbox-group>
+        </label>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="skillOn = false">取消</el-button>
+        <el-button type="primary" size="small" :loading="skillBusy" @click="createSkill">创建草稿</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { defineOptions, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, defineOptions, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
+import { useAuthStore } from '../stores/auth'
 
 defineOptions({ name: 'AgentView' })
+
+const auth = useAuthStore()
+const username = computed(() => auth.username)
 
 const flags = ref([])
 const agents = ref([])
 const tools = ref([])
+const skillList = ref([])
 const question = ref('')
 const route = ref(null)
 const saving = ref('')
 const routing = ref(false)
+const skillOn = ref(false)
+const skillBusy = ref(false)
+const skillForm = ref(emptySkill())
+
+function emptySkill() {
+  return {
+    code: '',
+    name: '',
+    agentId: 'literature',
+    description: '',
+    promptTemplate: '',
+    evidence: '',
+    tools: [],
+  }
+}
+
+// 新建技能卡时只能勾选该智能体已声明的工具（后端同样强制，前端提前收敛）
+const createTools = computed(() => {
+  const agent = agents.value.find((a) => a.id === skillForm.value.agentId)
+  if (!agent) return []
+  const allowed = new Set(agent.tools || [])
+  return tools.value.filter((t) => allowed.has(t.name))
+})
+
+const STATUS_TEXT = {
+  DRAFT: '草稿',
+  IN_REVIEW: '待审核',
+  PUBLISHED: '已生效',
+  REJECTED: '已驳回',
+  DISABLED: '已停用',
+}
+
+function statusText(s) {
+  return STATUS_TEXT[s] || s
+}
+
+function statusType(s) {
+  if (s === 'PUBLISHED') return 'success'
+  if (s === 'IN_REVIEW') return 'warning'
+  if (s === 'REJECTED') return 'danger'
+  return 'info'
+}
 
 async function loadAll() {
-  const [f, c] = await Promise.all([http.get('/agent/flags'), http.get('/agent/catalog')])
+  const [f, c, s] = await Promise.all([
+    http.get('/agent/flags'),
+    http.get('/agent/catalog'),
+    http.get('/agent/skills'),
+  ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
   tools.value = (c.data && c.data.tools) || []
+  skillList.value = (s.data && s.data.skills) || []
 }
 
 async function toggle(flag, value) {
@@ -142,6 +257,70 @@ async function preview() {
   }
 }
 
+function openSkillCreate() {
+  skillForm.value = emptySkill()
+  skillOn.value = true
+}
+
+async function createSkill() {
+  skillBusy.value = true
+  try {
+    await http.post('/agent/skills', {
+      code: skillForm.value.code.trim(),
+      name: skillForm.value.name.trim(),
+      description: skillForm.value.description.trim(),
+      agentId: skillForm.value.agentId,
+      promptTemplate: skillForm.value.promptTemplate.trim(),
+      toolAllowlist: skillForm.value.tools,
+      evidenceRefs: skillForm.value.evidence.split('\n').map((s) => s.trim()).filter(Boolean),
+      guardrails: { hitl: true, requireEvidence: true, maxInputChars: 2000 },
+    })
+    skillOn.value = false
+    await loadAll()
+    ElMessage.success('已创建草稿，需另一名管理员/质控审核后生效')
+  } finally {
+    skillBusy.value = false
+  }
+}
+
+async function submitSkill(row) {
+  await http.post(`/agent/skills/${row.code}/submit`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已提交审核')
+}
+
+async function reviewSkill(row, approve) {
+  let note = null
+  try {
+    if (approve) {
+      await ElMessageBox.confirm('通过后技能卡立即生效，确认继续？', '审核技能卡',
+        { type: 'warning' })
+    } else {
+      const r = await ElMessageBox.prompt('请填写驳回原因', '驳回技能卡',
+        { inputValidator: (v) => !!(v && v.trim()) || '必须填写原因' })
+      note = r.value
+    }
+  } catch (e) {
+    return // 用户取消
+  }
+  await http.post(`/agent/skills/${row.code}/review`,
+    { approve, note, rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success(approve ? '已发布' : '已驳回')
+}
+
+async function disableSkill(row) {
+  try {
+    await ElMessageBox.confirm('停用后该技能卡不再生效（历史版本保留）。', '停用技能卡',
+      { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/skills/${row.code}/disable`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已停用')
+}
+
 function openCard() {
   window.open('/api/v1/agent/card', '_blank', 'noopener')
 }
@@ -162,4 +341,10 @@ onMounted(loadAll)
   background: var(--rail, #f8fafc); line-height: 1.9; font-size: 13px;
 }
 .src { color: var(--ink-3, #64748b); font-size: 12px }
+.skill-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px }
+.skill-form label { display: flex; flex-direction: column; gap: 4px }
+.skill-form .inp {
+  border: 1px solid var(--line, #e5e7eb); border-radius: 6px;
+  padding: 6px 8px; font-size: 13px; font-family: inherit;
+}
 </style>
