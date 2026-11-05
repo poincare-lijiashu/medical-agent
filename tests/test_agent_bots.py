@@ -22,8 +22,8 @@ def _isolate(tmp_path, monkeypatch):
     # 运行时测试不碰真实 provider/网络
     monkeypatch.setattr(bot_runtime.llm_config, "active_provider",
                         lambda kind: {"id": "fake", "api_format": "openai",
-                                      "base_url": "http://fake", "model_id": "fake-model",
-                                      "api_key": "k"})
+                                      "base_url": "http://127.0.0.1:8001/v1",
+                                      "model_id": "fake-model", "api_key": "k"})
     yield
 
 

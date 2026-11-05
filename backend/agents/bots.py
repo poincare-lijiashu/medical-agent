@@ -20,7 +20,7 @@ import re
 import threading
 from datetime import datetime, timezone
 
-from backend.agents import catalog, skills
+from backend.agents import catalog, model_policy, skills
 from backend.core import agent_tools, llm_config, pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -132,8 +132,14 @@ def _validate(payload: dict, current: dict | None = None) -> dict:
 
     provider = str(payload.get("modelProvider") or (current or {}).get("modelProvider")
                    or "default").strip()
-    if provider != "default" and llm_config.find_provider("chat", provider) is None:
-        raise BotInvalid(f"未找到模型提供方：{provider}")
+    if provider != "default":
+        found = llm_config.find_provider("chat", provider)
+        if found is None:
+            raise BotInvalid(f"未找到模型提供方：{provider}")
+        if not model_policy.is_allowed(found):
+            raise BotInvalid(
+                f"模型提供方 {provider} 不允许用于临床辅助"
+                f"（分类={model_policy.classify(found)}；仅允许本地部署或国产模型）")
     model_id = str(payload.get("modelId") or "").strip()
     if len(model_id) > 128:
         raise BotInvalid("模型 ID 不得超过 128 字")

@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import httpx
 
 from backend.config import settings
+from backend.core import web_sources
 
 _DEFAULT_BASE_URL = "https://api.tavily.com"
 _MAX_RESULTS = 10
@@ -43,8 +44,7 @@ def redact_query(text: str) -> str:
 
 
 def _allowed_domains() -> tuple[str, ...]:
-    raw = (getattr(settings, "web_search_allowed_domains", "") or "").strip()
-    return tuple(d.strip().lower() for d in raw.split(",") if d.strip())
+    return web_sources.allowed_domains()
 
 
 def _domain_allowed(url: str) -> bool:
@@ -81,7 +81,9 @@ def search(query: str, top_k: int = 5) -> dict:
     if provider == "tavily":
         payload = {"api_key": api_key, "query": q, "max_results": k,
                    "search_depth": "basic", "include_answer": False,
-                   "include_raw_content": False}
+                   "include_raw_content": False,
+                   # 服务端也限制来源域，避免先拉全网再本地过滤
+                   "include_domains": list(_allowed_domains())}
     else:
         raise WebSearchUnavailable(f"不支持的联网搜索提供方：{provider}")
 

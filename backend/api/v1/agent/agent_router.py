@@ -21,10 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, skills as skill_cards
+from backend.agents import catalog, model_policy, second_opinion, skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
-from backend.core import agent_flags, agent_tools
+from backend.core import agent_flags, agent_tools, web_sources
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 
@@ -99,6 +99,11 @@ class TeamUpdateReq(TeamPayload):
 
 class CollaborateReq(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
+
+
+class SecondOpinionReq(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
+    providerIds: list[str] | None = Field(default=None, max_length=2)
 
 
 def _base_url(request: Request) -> str:
@@ -493,6 +498,37 @@ async def collaborate(code: str, req: CollaborateReq, user: dict = Depends(requi
     await _audit_agent(user, "bot_collaborate",
                        {"team": code, "opinions": len(result["opinions"]),
                         "failed": result["failed"]})
+    return result
+
+
+# ---------------------------------------------------------------- 模型合规 / 白名单联网 / 第二意见（G89）
+
+@router.get("/model-policy")
+async def model_policy_snapshot(user: dict = Depends(require_user)):
+    """模型合规快照：只展示 provider 分类与主机，**不含 api_key**。"""
+    return model_policy.policy_snapshot()
+
+
+@router.get("/web-policy")
+async def web_policy(user: dict = Depends(require_user)):
+    """联网来源白名单 + 当前开关（开关仍由 admin 控制，默认关闭）。"""
+    return {"enabled": agent_flags.get_flag("agent_web_search"), **web_sources.describe()}
+
+
+@router.post("/second-opinion")
+async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require_user)):
+    """双模型第二意见：仅国产/本地模型；意见并列 + 启发式差异信号。"""
+    try:
+        result = await second_opinion.run(req.question, req.providerIds)
+    except model_policy.ModelPolicyViolation as e:
+        raise HTTPException(422, str(e))
+    except second_opinion.SecondOpinionUnavailable as e:
+        raise HTTPException(503, str(e))
+    await _audit_agent(user, "second_opinion", {
+        "providers": [o.get("id") for o in result["opinions"]],
+        "failed": result["failed"],
+        "divergence": (result.get("divergence") or {}).get("level"),
+    })
     return result
 
 

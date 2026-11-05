@@ -152,6 +152,66 @@
         <div v-if="!teamList.length" class="src">暂无团队；2–4 个已发布 Bot 可组成一个协作小组。</div>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-model-policy">
+        <template #header><b>模型合规 · 白名单联网 · 双模型第二意见</b></template>
+        <div class="src">仅允许本地部署或国产模型；境外厂商与未知域名默认拒绝。第二意见并列展示，不构成共识。</div>
+        <div class="policy-row">
+          <span class="src">可用模型：</span>
+          <el-tag v-for="p in policy.allowed" :key="p.id" size="small" type="success" style="margin: 2px">
+            {{ p.displayName || p.id }} · {{ p.class }}
+          </el-tag>
+          <span v-if="!policy.allowed.length" class="src">暂无合规 provider</span>
+        </div>
+        <div class="policy-row" v-if="policy.blocked.length">
+          <span class="src">已拒绝：</span>
+          <el-tag v-for="p in policy.blocked" :key="p.id" size="small" type="danger" style="margin: 2px">
+            {{ p.id }} · {{ p.class }}
+          </el-tag>
+        </div>
+        <div class="policy-row">
+          <span class="src">联网来源：</span>
+          <el-tag size="small" :type="webPolicy.enabled ? 'success' : 'info'">
+            {{ webPolicy.enabled ? '已开启（仅白名单）' : '默认关闭' }}
+          </el-tag>
+          <el-tag v-for="d in webPolicy.allowedDomains" :key="d" size="small" style="margin: 2px">
+            {{ d }}
+          </el-tag>
+        </div>
+        <div class="skill-form" style="margin-top: 10px">
+          <label style="grid-column: 1 / -1">第二意见模型（恰好两个）
+            <el-select v-model="opinionForm.providerIds" multiple :multiple-limit="2"
+                       size="small" style="width: 100%">
+              <el-option v-for="p in policy.allowed" :key="p.id"
+                         :label="(p.displayName || p.id) + ' · ' + p.class" :value="p.id" />
+            </el-select>
+          </label>
+          <label style="grid-column: 1 / -1">临床问题
+            <textarea v-model="opinionForm.question" class="inp" rows="2"
+                      placeholder="例如：成人社区获得性肺炎的经验性抗菌方案如何选择" />
+          </label>
+        </div>
+        <div style="padding-top: 8px">
+          <el-button type="primary" size="small" :loading="opinionBusy" @click="runOpinion">
+            生成第二意见
+          </el-button>
+        </div>
+        <div v-if="opinionResult" class="route-box" data-testid="agent-second-opinion">
+          <div v-for="o in opinionResult.opinions" :key="o.id" style="padding: 6px 0; border-bottom: 1px dashed var(--line)">
+            <b>{{ o.displayName || o.id }}</b>
+            <el-tag size="small" style="margin-left: 6px">{{ o.class }}</el-tag>
+            <el-tag v-if="o.status !== 'OK'" size="small" type="danger" style="margin-left: 6px">失败</el-tag>
+            <div class="src" v-if="o.status !== 'OK'">错误类型：{{ o.error }}</div>
+            <div v-else style="white-space: pre-wrap">{{ o.answer }}</div>
+          </div>
+          <div v-if="opinionResult.divergence" class="src" style="padding-top: 6px">
+            差异信号：{{ opinionResult.divergence.level }} · 词面重合
+            {{ opinionResult.divergence.lexicalOverlap }} · 数字差异
+            {{ (opinionResult.divergence.numericConflicts || []).join('、') || '无' }}
+            （仅为复核提示，不代表临床一致性）
+          </div>
+        </div>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-tools">
         <template #header><b>工具注册表</b></template>
         <el-table :data="tools" size="small" style="width: 100%">
@@ -366,6 +426,11 @@ const memBot = ref(null)
 const memList = ref([])
 const memBusy = ref(false)
 const memForm = ref({ key: '', value: '', source: '' })
+const policy = ref({ allowed: [], blocked: [] })
+const webPolicy = ref({ enabled: false, allowedDomains: [] })
+const opinionForm = ref({ providerIds: [], question: '' })
+const opinionResult = ref(null)
+const opinionBusy = ref(false)
 
 function emptyBot() {
   return {
@@ -438,12 +503,14 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t] = await Promise.all([
+  const [f, c, s, b, t, mp, wp] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
     http.get('/agent/bots'),
     http.get('/agent/bot-teams'),
+    http.get('/agent/model-policy'),
+    http.get('/agent/web-policy'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -451,6 +518,8 @@ async function loadAll() {
   skillList.value = (s.data && s.data.skills) || []
   botList.value = (b.data && b.data.bots) || []
   teamList.value = (t.data && t.data.teams) || []
+  policy.value = { allowed: mp.data.allowed || [], blocked: mp.data.blocked || [] }
+  webPolicy.value = wp.data || { enabled: false, allowedDomains: [] }
 }
 
 async function toggle(flag, value) {
@@ -717,6 +786,27 @@ async function deleteMemory(row) {
   ElMessage.success('已删除')
 }
 
+async function runOpinion() {
+  if (!opinionForm.value.question.trim()) {
+    ElMessage.warning('请先输入临床问题')
+    return
+  }
+  if (opinionForm.value.providerIds.length !== 2) {
+    ElMessage.warning('请恰好选择两个合规模型')
+    return
+  }
+  opinionBusy.value = true
+  try {
+    const r = await http.post('/agent/second-opinion', {
+      question: opinionForm.value.question.trim(),
+      providerIds: opinionForm.value.providerIds,
+    })
+    opinionResult.value = r.data
+  } finally {
+    opinionBusy.value = false
+  }
+}
+
 function openCard() {
   window.open('/api/v1/agent/card', '_blank', 'noopener')
 }
@@ -738,6 +828,7 @@ onMounted(loadAll)
 }
 .src { color: var(--ink-3, #64748b); font-size: 12px }
 .card-head { display: flex; align-items: center; justify-content: space-between }
+.policy-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 0 }
 .skill-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px }
 .skill-form label { display: flex; flex-direction: column; gap: 4px }
 .skill-form .inp {

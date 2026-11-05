@@ -137,6 +137,7 @@ export function humanizeAudit(e) {
     bot_team_update: () => `修改了 Bot 团队 ${p.code || '—'}`,
     bot_team_disable: () => `停用了 Bot 团队 ${p.code || '—'}`,
     bot_collaborate: () => `发起 Bot 团队协作 ${p.team || '—'}（${p.opinions ?? 0} 份意见，失败 ${p.failed ?? 0}）`,
+    second_opinion: () => `发起双模型第二意见（${(p.providers || []).join(' / ') || '—'}；差异 ${p.divergence || '—'}）`,
     user_created: () => `创建了用户 ${p.user || '—'}（${p.role || '—'}）`,
     user_deleted: () => `删除了用户 ${p.user || '—'}`,
     department_added: () => `新增了科室 ${p.name || '—'}`,

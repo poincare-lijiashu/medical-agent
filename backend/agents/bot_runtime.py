@@ -21,7 +21,7 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.agents import bot_memory, bot_teams, bots
+from backend.agents import bot_memory, bot_teams, bots, model_policy
 from backend.core import agent_tools, llm_config
 from backend.core.llm_factory import LLMFactory
 
@@ -47,6 +47,10 @@ def resolve_provider(bot: dict) -> dict:
     if not provider:
         raise BotUnavailable(
             "Bot 未绑定可用模型：请在管理端配置 chat provider 或为 Bot 指定 modelProvider")
+    try:
+        model_policy.assert_allowed(provider)
+    except model_policy.ModelPolicyViolation as e:
+        raise BotUnavailable(str(e)) from e
     if bot.get("modelId"):
         provider = {**provider, "model_id": bot["modelId"]}
     return provider

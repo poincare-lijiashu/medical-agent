@@ -59,6 +59,36 @@ def _isolate_runtime_flags(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_agent_stores(tmp_path, monkeypatch):
+    """G86–G89：Agent 域（技能卡/Bot/团队/记忆）在测试中强制 JSON 存储。
+
+    背景：这些域是 PG 真源 + JSON 兜底；若前序测试初始化过 PG 池，后续测试会读到
+    ``medagent_test`` 里残留的行，导致"单跑通过、全量跑冲突"。这里把域存储锁定到
+    tmp_path 的 JSON 文件，杜绝跨测试污染。
+    """
+    from backend.agents import bot_memory, bot_teams, bots, skills
+    from backend.core import pg_store
+
+    monkeypatch.setattr(skills, "SKILLS_FILE", str(tmp_path / "agent_skills.json"))
+    monkeypatch.setattr(bots, "BOTS_FILE", str(tmp_path / "agent_bots.json"))
+    monkeypatch.setattr(bot_teams, "TEAMS_FILE", str(tmp_path / "bot_teams.json"))
+    monkeypatch.setattr(bot_memory, "MEMORY_FILE", str(tmp_path / "bot_memories.json"))
+
+    def _json_only(json_loader, default):
+        return json_loader() if json_loader else default
+
+    monkeypatch.setattr(pg_store, "load_skills",
+                        lambda path, json_loader=None: _json_only(json_loader, []))
+    monkeypatch.setattr(pg_store, "save_skills",
+                        lambda items, path: pg_store._write_json_atomic(path, items))
+    monkeypatch.setattr(pg_store, "load_json_list",
+                        lambda table, path, json_loader=None: _json_only(json_loader, []))
+    monkeypatch.setattr(pg_store, "save_json_list",
+                        lambda table, path, items: pg_store._write_json_atomic(path, items))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_case_archive(tmp_path, monkeypatch):
     """阶段4：每个测试独立的病例归档文件——qc approve 挂点在既有路由测试中触发归档时，
     绝不读写真实 data/case_archive.json（防测试数据污染真源）。文件默认不存在 → 空库。"""
