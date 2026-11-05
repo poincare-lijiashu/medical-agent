@@ -1544,20 +1544,46 @@ public class EmrRepository {
      * 插入更正申请；同一首页已有待审批申请时返回 false（部分唯一索引兜底并发）。
      */
     public boolean insertCorrection(CodingCorrection c) {
+        return insertCorrection(c, null);
+    }
+
+    /** 建编码更正申请（G55）：{@code requesterId} 是申请人账号主键，用于四眼判定。 */
+    public boolean insertCorrection(CodingCorrection c, UUID requesterId) {
         return jdbc.sql("""
                         INSERT INTO emr_svc.coding_correction
                             (id, correction_no, homepage_id, status, reason, diagnoses,
-                             procedures, note, created_by, version)
+                             procedures, note, created_by, version, requester_id)
                         VALUES (:id, :no, :homepageId, :status, :reason,
                                 CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb),
-                                CAST(:note AS text), :createdBy, 0)
+                                CAST(:note AS text), :createdBy, 0, :requesterId)
                         ON CONFLICT (homepage_id) WHERE status = 'SUBMITTED' DO NOTHING
                         """)
                 .param("id", c.id()).param("no", c.correctionNo())
                 .param("homepageId", c.homepageId()).param("status", c.status())
                 .param("reason", c.reason()).param("diagnoses", c.diagnoses())
                 .param("procedures", c.procedures()).param("note", c.note())
-                .param("createdBy", c.createdBy()).update() > 0;
+                .param("createdBy", c.createdBy()).param("requesterId", requesterId)
+                .update() > 0;
+    }
+
+    /** 更正申请是否缺少申请人主键（G55）；缺失时审批 fail-closed 拒绝。 */
+    public boolean isCorrectionRequesterIdMissing(UUID correctionId) {
+        return jdbc.sql("""
+                        SELECT COALESCE(requester_id IS NULL, true)
+                          FROM emr_svc.coding_correction WHERE id = ?
+                        """).param(correctionId).query(Boolean.class).optional().orElse(true);
+    }
+
+    /** 更正申请是否由该账号提交（G55 四眼互斥）。 */
+    public boolean isCorrectionRequestedBy(UUID correctionId, UUID actorId) {
+        if (actorId == null) {
+            return false;
+        }
+        return jdbc.sql("""
+                        SELECT COALESCE(requester_id = CAST(:actorId AS uuid), false)
+                          FROM emr_svc.coding_correction WHERE id = ?
+                        """).param("actorId", actorId.toString()).param(correctionId)
+                .query(Boolean.class).optional().orElse(false);
     }
 
     public Optional<CodingCorrection> findCorrection(UUID id) {

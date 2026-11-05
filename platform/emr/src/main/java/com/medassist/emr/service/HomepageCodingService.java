@@ -188,6 +188,13 @@ public class HomepageCodingService {
     @Transactional
     public CodingCorrectionView submitCorrection(UUID homepageId, CreateCorrectionReq req,
                                                  String actor) {
+        return submitCorrection(homepageId, req, actor, null);
+    }
+
+    /** 提交编码更正（G55）：{@code actorId} 是申请人账号主键，审批时据此做四眼判定。 */
+    @Transactional
+    public CodingCorrectionView submitCorrection(UUID homepageId, CreateCorrectionReq req,
+                                                 String actor, UUID actorId) {
         String operator = requireActor(actor);
         Homepage homepage = repo.findHomepage(homepageId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
@@ -207,7 +214,7 @@ public class HomepageCodingService {
                 req.reason().trim(), built.diagnosesJson(), built.proceduresJson(),
                 blankToNull(req.note()), operator, null, null, null, null, null, null, 0L,
                 Instant.now());
-        if (!repo.insertCorrection(correction)) {
+        if (!repo.insertCorrection(correction, actorId)) {
             throw new BusinessException(ErrorCode.CODING_CORRECTION_INVALID,
                     "该病案已有待审批的更正申请，请等待审批或先撤回");
         }
@@ -232,10 +239,16 @@ public class HomepageCodingService {
     /** 审批通过：把拟更正内容回写首页快照（首页必须仍为 SUBMITTED，已归档不可改）。 */
     @Transactional
     public CodingCorrectionView approveCorrection(UUID id, ReviewCorrectionReq req, String actor) {
+        return approveCorrection(id, req, actor, null);
+    }
+
+    @Transactional
+    public CodingCorrectionView approveCorrection(UUID id, ReviewCorrectionReq req, String actor,
+                                                  UUID actorId) {
         String operator = requireActor(actor);
         CodingCorrection correction = lockCorrection(id);
         requireCorrectionReviewable(correction);
-        requireFourEyes(correction, operator);
+        requireFourEyes(correction, actorId);
         Homepage homepage = repo.lockHomepage(correction.homepageId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
         if (!Homepage.SUBMITTED.equals(homepage.status())) {
@@ -262,6 +275,12 @@ public class HomepageCodingService {
     /** 驳回：必须写原因，不回写首页。 */
     @Transactional
     public CodingCorrectionView rejectCorrection(UUID id, CorrectionReasonReq req, String actor) {
+        return rejectCorrection(id, req, actor, null);
+    }
+
+    @Transactional
+    public CodingCorrectionView rejectCorrection(UUID id, CorrectionReasonReq req, String actor,
+                                                 UUID actorId) {
         String operator = requireActor(actor);
         String reason = req == null ? null : blankToNull(req.reason());
         if (reason == null) {
@@ -269,7 +288,7 @@ public class HomepageCodingService {
         }
         CodingCorrection correction = lockCorrection(id);
         requireCorrectionReviewable(correction);
-        requireFourEyes(correction, operator);
+        requireFourEyes(correction, actorId);
         if (!repo.reviewCorrection(id, correction.version(), operator, false, reason)) {
             throw new BusinessException(ErrorCode.CONFLICT, "更正申请已变化，请刷新后重试");
         }
@@ -329,8 +348,19 @@ public class HomepageCodingService {
         }
     }
 
-    private static void requireFourEyes(CodingCorrection correction, String operator) {
-        if (operator.equals(correction.createdBy())) {
+    /**
+     * 四眼原则（G55）：按账号主键判定，不再比较用户名。
+     *
+     * <p>编码更正直接决定 DRG 入组与首页上报内容，自审自批的经济影响比文书修改更大。
+     * 原实现 {@code operator.equals(correction.createdBy())} 可被"账号重建/同名账号"绕过。
+     * 现在：申请缺 {@code requester_id}（V25 前历史数据）→ 拒绝审批；主键相同 → 拒绝。
+     */
+    private void requireFourEyes(CodingCorrection correction, UUID actorId) {
+        if (repo.isCorrectionRequesterIdMissing(correction.id())) {
+            throw new BusinessException(ErrorCode.CODING_CORRECTION_SELF_REVIEW,
+                    "该申请未记录申请人账号，无法判定四眼，请联系管理员核对后重新提交");
+        }
+        if (actorId != null && repo.isCorrectionRequestedBy(correction.id(), actorId)) {
             throw new BusinessException(ErrorCode.CODING_CORRECTION_SELF_REVIEW);
         }
     }

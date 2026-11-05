@@ -54,6 +54,21 @@ public class CodingController {
         this.service = service;
     }
 
+    /**
+     * 账号主键解析（G55）：网关注入 {@code X-User-Id}，非 UUID 时按缺失处理，
+     * 由服务层 fail-closed 拒绝审批，而不是退化成用户名比较。
+     */
+    private static UUID parseActorId(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
     /** 待编码队列：已提交且编码未完成的病案首页。 */
     @GetMapping("/queue")
     public ApiResponse<List<CodingQueueItem>> queue(

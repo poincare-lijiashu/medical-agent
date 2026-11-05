@@ -63,7 +63,7 @@ class CodingCorrectionServiceTest {
         when(repo.findIcdDiagnoses(any())).thenReturn(List.of(dx));
         when(repo.findIcdProcedures(any())).thenReturn(List.of());
         when(repo.nextCorrectionNo()).thenReturn("CC20261104000001");
-        when(repo.insertCorrection(any())).thenReturn(true);
+        when(repo.insertCorrection(any(), any())).thenReturn(true);
         when(repo.findCorrection(correctionId)).thenReturn(Optional.of(submitted));
     }
 
@@ -78,7 +78,7 @@ class CodingCorrectionServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CODING_CORRECTION_NOT_CODED);
-        verify(repo, never()).insertCorrection(any());
+        verify(repo, never()).insertCorrection(any(), any());
     }
 
     @Test
@@ -97,7 +97,7 @@ class CodingCorrectionServiceTest {
     void submitRejectsDuplicatePending() {
         when(repo.findHomepage(homepageId)).thenReturn(Optional.of(homepage(Homepage.SUBMITTED, 0)));
         when(repo.findCoding(homepageId)).thenReturn(Optional.of(coding(HomepageCoding.CODED)));
-        when(repo.insertCorrection(any())).thenReturn(false);
+        when(repo.insertCorrection(any(), any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.submitCorrection(homepageId, request(), "coder01"))
                 .isInstanceOf(BusinessException.class)
@@ -117,15 +117,33 @@ class CodingCorrectionServiceTest {
         assertThat(view.status()).isEqualTo(CodingCorrection.SUBMITTED);
         assertThat(view.diagnoses()).hasSize(1);
         assertThat(view.diagnoses().get(0).get("name")).isEqualTo("原发性高血压");
-        verify(repo).insertCorrection(any());
+        verify(repo).insertCorrection(any(), any());
     }
 
     @Test
     @DisplayName("审批更正：申请人自审 → 403")
     void approveRejectsSelfReview() {
+        UUID requesterId = UUID.randomUUID();
         when(repo.lockCorrection(correctionId)).thenReturn(Optional.of(submitted));
+        when(repo.isCorrectionRequesterIdMissing(correctionId)).thenReturn(false);
+        when(repo.isCorrectionRequestedBy(correctionId, requesterId)).thenReturn(true);
 
-        assertThatThrownBy(() -> service.approveCorrection(correctionId, null, "coder01"))
+        assertThatThrownBy(() -> service.approveCorrection(correctionId, null, "coder01-rebuilt",
+                requesterId))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CODING_CORRECTION_SELF_REVIEW);
+        verify(repo, never()).applyCodedSnapshot(any(), any(), any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("G55：历史更正申请缺 requester_id 时拒绝审批（fail-closed）")
+    void approveRejectsMissingRequesterId() {
+        when(repo.lockCorrection(correctionId)).thenReturn(Optional.of(submitted));
+        when(repo.isCorrectionRequesterIdMissing(correctionId)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.approveCorrection(correctionId, null, "qc01",
+                UUID.randomUUID()))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CODING_CORRECTION_SELF_REVIEW);
