@@ -106,7 +106,7 @@
           <el-table-column label="版本" width="60">
             <template #default="{ row }">v{{ row.version }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="310">
+          <el-table-column label="操作" width="390">
             <template #default="{ row }">
               <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'"
                          size="small" @click="submitBot(row)">送审</el-button>
@@ -116,6 +116,7 @@
               </template>
               <el-button v-if="row.status === 'PUBLISHED'" size="small" @click="disableBot(row)">停用</el-button>
               <el-button size="small" @click="openMemory(row)">记忆</el-button>
+              <el-button size="small" type="primary" @click="openToolLoop(row)">工具循环</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -417,6 +418,33 @@
         <el-button type="primary" size="small" :loading="memBusy" @click="addMemory">新增记忆（待确认）</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="loopOn" :title="'工具循环 · ' + (loopBot ? loopBot.name : '')" width="720px">
+      <el-input v-model="loopQuestion" type="textarea" :rows="3" maxlength="2000" show-word-limit
+                placeholder="输入临床问题，Bot 将在硬边界内自主调用白名单工具" />
+      <div style="padding-top: 8px">
+        <el-button type="primary" size="small" :loading="loopBusy" @click="runToolLoop">
+          执行（≤3 步 / ≤3 次调用 / ≤60s）
+        </el-button>
+        <span class="src" style="margin-left: 8px">每步审计；越权工具不执行；不生成最终答案时显式标记。</span>
+      </div>
+      <div v-if="loopResult" class="route-box" data-testid="agent-tool-loop-result">
+        <div v-if="loopResult.truncated" class="src" style="padding-bottom: 4px">
+          已达到工具循环边界，未生成最终答案；请人工复核。
+        </div>
+        <div style="white-space: pre-wrap">{{ loopResult.answer || '—' }}</div>
+        <el-table :data="loopResult.steps" size="small" style="width: 100%; margin-top: 6px">
+          <el-table-column prop="step" label="步" width="50" />
+          <el-table-column prop="type" label="类型" width="90" />
+          <el-table-column prop="tool" label="工具" width="130" />
+          <el-table-column prop="status" label="状态" width="90" />
+          <el-table-column prop="ms" label="耗时(ms)" width="90" />
+          <el-table-column label="参数键">
+            <template #default="{ row }">{{ (row.argKeys || []).join('、') }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -467,6 +495,11 @@ const opinionResult = ref(null)
 const opinionBusy = ref(false)
 const sleepReport = ref(null)
 const sleepBusy = ref(false)
+const loopOn = ref(false)
+const loopBot = ref(null)
+const loopQuestion = ref('')
+const loopResult = ref(null)
+const loopBusy = ref(false)
 
 function emptyBot() {
   return {
@@ -853,6 +886,28 @@ async function runSleepScan() {
     ElMessage.success(`扫描完成，生成 ${r.data.summary.findings} 条建议`)
   } finally {
     sleepBusy.value = false
+  }
+}
+
+function openToolLoop(row) {
+  loopBot.value = row
+  loopQuestion.value = ''
+  loopResult.value = null
+  loopOn.value = true
+}
+
+async function runToolLoop() {
+  if (!loopQuestion.value.trim()) {
+    ElMessage.warning('请先输入问题')
+    return
+  }
+  loopBusy.value = true
+  try {
+    const r = await http.post(`/agent/bots/${loopBot.value.code}/tool-loop`,
+      { question: loopQuestion.value.trim() })
+    loopResult.value = r.data
+  } finally {
+    loopBusy.value = false
   }
 }
 

@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, model_policy, second_opinion, sleep_memory
+from backend.agents import catalog, model_policy, second_opinion, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -109,6 +109,10 @@ class SecondOpinionReq(BaseModel):
 
 class SleepScanReq(BaseModel):
     botCodes: list[str] | None = Field(default=None, max_length=50)
+
+
+class ToolLoopReq(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
 
 
 def _base_url(request: Request) -> str:
@@ -533,6 +537,32 @@ async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require
         "providers": [o.get("id") for o in result["opinions"]],
         "failed": result["failed"],
         "divergence": (result.get("divergence") or {}).get("level"),
+    })
+    return result
+
+
+# ---------------------------------------------------------------- 有界工具循环（G91）
+
+@router.post("/bots/{code}/tool-loop")
+async def bot_tool_loop(code: str, req: ToolLoopReq, user: dict = Depends(require_user)):
+    """Bot 在硬边界内多步调用工具：≤3 步、≤3 次调用、≤60s，每步审计。"""
+    role = user.get("role", "")
+    try:
+        bot = bot_registry.get_bot(code, role)
+        agent = catalog.get_agent(bot.get("agentId") or "")
+        if agent is None or role not in agent.roles:
+            raise HTTPException(403, "当前角色无权使用该 Bot")
+        async def _audit_step(ev: dict) -> None:
+            await _audit_agent(user, "tool_loop_step",
+                               {"bot": code, **ev})
+        result = await tool_loop.run(req.question, bot, role, audit=_audit_step)
+    except tool_loop.ToolLoopUnavailable as e:
+        raise HTTPException(503, str(e))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "tool_loop", {
+        "bot": code, "toolCalls": result["toolCalls"],
+        "truncated": result["truncated"], "steps": len(result["steps"]),
     })
     return result
 
