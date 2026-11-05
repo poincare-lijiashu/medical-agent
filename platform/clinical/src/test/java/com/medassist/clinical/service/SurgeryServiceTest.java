@@ -107,6 +107,19 @@ class SurgeryServiceTest {
     }
 
     @Test
+    @DisplayName("计划手术：按术种带出默认分级（目录维护与计划流程联动）")
+    void planAppliesCatalogDefaultLevel() {
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("INPATIENT")));
+        when(repo.findOperation(code)).thenReturn(Optional.of(operation));
+        when(repo.findLatestAdmissionByVisit(visitId)).thenReturn(Optional.of(admission()));
+        when(repo.nextSurgeryCaseNo()).thenReturn("OP20261101000001");
+
+        SurgeryCase created = service.plan(visitId, req(), "doctor01");
+
+        verify(levelService).applyCatalogDefault(created.id(), code, "doctor01");
+    }
+
+    @Test
     @DisplayName("计划手术：门诊就诊不能排手术 → 422")
     void planRejectsOutpatient() {
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit("OUTPATIENT")));

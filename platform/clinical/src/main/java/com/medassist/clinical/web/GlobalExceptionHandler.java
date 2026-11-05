@@ -36,7 +36,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  MOBILE_TASK_NOT_FOUND,
                  TRANSFUSION_REQUEST_NOT_FOUND, TRANSFUSION_CROSSMATCH_NOT_FOUND,
                  TRANSFUSION_RECORD_NOT_FOUND,
-                 PACU_STAY_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                 PACU_STAY_NOT_FOUND, OPERATION_LEVEL_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT,
@@ -64,7 +64,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  TRANSFUSION_STATUS_INVALID, TRANSFUSION_CROSSMATCH_INCOMPATIBLE,
                  TRANSFUSION_NOT_CROSSMATCHED, TRANSFUSION_REACTION_EXISTS,
                  PACU_STAY_EXISTS, PACU_STAY_STATUS_INVALID, PACU_OBSERVATION_DUPLICATED,
-                 PACU_SELF_SIGN
+                 PACU_SELF_SIGN, OPERATION_LEVEL_CONFLICT
                  -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED, CHARGE_RECEIPT_VOID_REASON_REQUIRED,
                  PATHWAY_TEMPLATE_INVALID, PATHWAY_TASK_SKIP_REASON_REQUIRED,
@@ -82,7 +82,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  TRANSFUSION_DOUBLE_CHECK_REQUIRED, TRANSFUSION_REACTION_INVALID,
                  TRANSFUSION_CANCEL_REASON_REQUIRED,
                  PACU_CASE_NOT_ELIGIBLE, PACU_OBSERVATION_TIME_INVALID,
-                 PACU_DISCHARGE_NOT_READY, PACU_DESTINATION_INVALID
+                 PACU_DISCHARGE_NOT_READY, PACU_DESTINATION_INVALID,
+                 OPERATION_LEVEL_INVALID
                  -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;

@@ -409,4 +409,60 @@ class SurgeryLevelServiceTest {
 
         verify(repo).lockSurgeryCase(caseId);
     }
+
+    // ---------------------------------------------------------------- 分级目录带出（G81）
+
+    @Test
+    @DisplayName("目录带出：三级手术落 PENDING（带默认值不等于替代审批）")
+    void catalogDefaultCreatesPendingForHighLevel() {
+        when(repo.findOperationDefaultLevel("47.0901")).thenReturn(Optional.of(3));
+        when(repo.findSurgeryLevel(caseId)).thenReturn(Optional.empty());
+
+        SurgeryLevel created = service.applyCatalogDefault(caseId, "47.0901", "doctor01");
+
+        ArgumentCaptor<SurgeryLevel> captor = ArgumentCaptor.forClass(SurgeryLevel.class);
+        verify(repo).insertSurgeryLevel(captor.capture());
+        assertThat(captor.getValue().level()).isEqualTo(3);
+        assertThat(captor.getValue().approvalStatus()).isEqualTo(SurgeryLevel.PENDING);
+        assertThat(captor.getValue().appliedBy()).isEqualTo("doctor01");
+        assertThat(created.approvalStatus()).isEqualTo(SurgeryLevel.PENDING);
+        verify(repo).logChange(eq("doctor01"), eq("SURGERY_LEVEL_CATALOG_APPLY"),
+                eq("SURGERY_LEVEL"), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("目录带出：一级手术落 NOT_REQUIRED（不影响开台）")
+    void catalogDefaultCreatesNotRequiredForLowLevel() {
+        when(repo.findOperationDefaultLevel("47.0901")).thenReturn(Optional.of(1));
+        when(repo.findSurgeryLevel(caseId)).thenReturn(Optional.empty());
+
+        service.applyCatalogDefault(caseId, "47.0901", "doctor01");
+
+        ArgumentCaptor<SurgeryLevel> captor = ArgumentCaptor.forClass(SurgeryLevel.class);
+        verify(repo).insertSurgeryLevel(captor.capture());
+        assertThat(captor.getValue().approvalStatus()).isEqualTo(SurgeryLevel.NOT_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("目录带出：目录未配置 → 什么也不做")
+    void catalogDefaultSkipsWhenNotConfigured() {
+        when(repo.findOperationDefaultLevel("47.0901")).thenReturn(Optional.empty());
+
+        assertThat(service.applyCatalogDefault(caseId, "47.0901", "doctor01")).isNull();
+        verify(repo, never()).insertSurgeryLevel(any());
+    }
+
+    @Test
+    @DisplayName("手工提交：已由目录带出一级后再提交相同分级是幂等操作（不是 422）")
+    void setLevelIsIdempotentForSameNotRequiredLevel() {
+        when(repo.findSurgeryCase(caseId)).thenReturn(Optional.of(surgery(SurgeryCase.PLANNED)));
+        when(repo.findSurgeryLevel(caseId))
+                .thenReturn(Optional.of(level(1, SurgeryLevel.NOT_REQUIRED, "doctor01", 0L)));
+
+        SurgeryLevel result = service.setLevel(caseId, 1, null, "doctor01");
+
+        assertThat(result.level()).isEqualTo(1);
+        verify(repo, never()).resetSurgeryLevel(any(), anyInt(), anyString(), anyString(),
+                anyLong());
+    }
 }

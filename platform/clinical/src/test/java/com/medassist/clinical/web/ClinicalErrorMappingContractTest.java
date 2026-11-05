@@ -61,4 +61,15 @@ class ClinicalErrorMappingContractTest {
         assertThat(handler.statusOf(ErrorCode.PACU_DESTINATION_INVALID))
                 .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
+
+    @Test
+    @DisplayName("分级目录码（G81）：未配置→404、版本冲突→409、内容不合法→422")
+    void operationLevelCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.OPERATION_LEVEL_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.OPERATION_LEVEL_CONFLICT))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.OPERATION_LEVEL_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+    }
 }

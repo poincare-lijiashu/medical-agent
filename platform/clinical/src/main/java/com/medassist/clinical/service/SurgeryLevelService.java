@@ -45,6 +45,45 @@ public class SurgeryLevelService {
     }
 
     /**
+     * 计划手术时按术种带出默认分级（G81）。
+     *
+     * <p>只是把目录里的默认值落成一条分级记录：
+     * <ul>
+     *   <li>1~2 级 → {@code NOT_REQUIRED}，开台不受影响；</li>
+     *   <li>3~4 级 → {@code PENDING}，仍需另一人审批才能开台——带出默认值不等于替代审批。</li>
+     * </ul>
+     *
+     * <p>目录未配置时什么也不做（返回 {@code null}），术者像以前一样手工提交分级。
+     *
+     * @return 新创建的分级记录；无默认值或已有记录时返回 {@code null}
+     */
+    @Transactional
+    public SurgeryLevel applyCatalogDefault(UUID caseId, String operationCode, String actor) {
+        if (operationCode == null || operationCode.isBlank()) {
+            return null;
+        }
+        Integer level = repo.findOperationDefaultLevel(operationCode.trim()).orElse(null);
+        if (level == null || repo.findSurgeryLevel(caseId).isPresent()) {
+            return null;
+        }
+        String status = SurgeryLevel.initialStatus(level);
+        SurgeryLevel created = new SurgeryLevel(UUID.randomUUID(), caseId, level, status,
+                requireActorValue(actor), Instant.now(), null, null, null,
+                requireActorValue(actor), 0L, Instant.now());
+        try {
+            repo.insertSurgeryLevel(created);
+        } catch (DataIntegrityViolationException e) {
+            // ux_surgery_level_case：并发已有一条分级记录，保留已有记录即可
+            return null;
+        }
+        repo.logChange(requireActorValue(actor), "SURGERY_LEVEL_CATALOG_APPLY", "SURGERY_LEVEL",
+                created.id().toString(),
+                "{\"operationCode\":\"" + operationCode.trim() + "\",\"level\":" + level
+                        + ",\"status\":\"" + status + "\"}");
+        return created;
+    }
+
+    /**
      * 提交/调整分级。
      *
      * <p>1~2 级自动免审批；3~4 级置为待审批。已审批通过的同一分级不允许重复提交，
@@ -85,6 +124,12 @@ public class SurgeryLevelService {
             if (SurgeryLevel.PENDING.equals(existing.approvalStatus())) {
                 throw new BusinessException(ErrorCode.CONFLICT,
                         "该分级申请正在审批中，请等待审批结果或调整分级后再提交");
+            }
+            // NOT_REQUIRED（一、二级）：同一分级重复提交是幂等操作。
+            // 目录自动带出默认分级后，客户端再提交一次相同分级不应变成 422。
+            // REJECTED 不在此列：被驳回后按原分级重新申请必须重新走审批。
+            if (SurgeryLevel.NOT_REQUIRED.equals(existing.approvalStatus())) {
+                return existing;
             }
         }
         if (version == null) {
@@ -220,5 +265,9 @@ public class SurgeryLevelService {
 
     private static String escape(String value) {
         return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String requireActorValue(String actor) {
+        return actor == null || actor.isBlank() ? "system" : actor.trim();
     }
 }

@@ -194,6 +194,11 @@ public enum ErrorCode {
     PACU_DESTINATION_INVALID(44567, "出室去向只能是 WARD / ICU / DISCHARGE"),
     PACU_SELF_SIGN(44568, "复苏记录不能由记录人自己签名，请由另一名医护人员复核"),
 
+    // ---- 手术分级目录（44xxx 续，G81）----
+    OPERATION_LEVEL_NOT_FOUND(44570, "该手术编码尚未配置默认分级"),
+    OPERATION_LEVEL_INVALID(44571, "默认分级只能是 1~4 级，且手术编码必须存在并处于启用状态"),
+    OPERATION_LEVEL_CONFLICT(44572, "默认分级已被他人修改，请刷新后重试"),
+
     // ---- 知情同意书（47xxx 续，G44）----
     CONSENT_NOT_FOUND(47420, "未找到该知情同意书"),
     CONSENT_TEMPLATE_NOT_FOUND(47421, "未找到该同意书模板，或模板未发布"),

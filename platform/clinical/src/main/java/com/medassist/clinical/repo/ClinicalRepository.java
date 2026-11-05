@@ -54,6 +54,8 @@ import com.medassist.clinical.domain.ClinicalModel.NursingExecution;
 import com.medassist.clinical.domain.ClinicalModel.NursingExecutionCorrection;
 import com.medassist.clinical.domain.ClinicalModel.OperatingRoom;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
+import com.medassist.clinical.domain.ClinicalModel.OperationLevel;
+import com.medassist.clinical.domain.ClinicalModel.OperationLevelRow;
 import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
 import com.medassist.clinical.domain.ClinicalModel.NursingCoverageRow;
 import com.medassist.clinical.domain.ClinicalModel.NursingSchedule;
@@ -3078,6 +3080,83 @@ public class ClinicalRepository {
                         SELECT code, name, category, enabled, version
                           FROM clinical_svc.operation_catalog WHERE code = ?
                         """).param(code).query(OPERATION_MAPPER).optional();
+    }
+
+    // ---- 手术分级目录（V59）
+
+    private static final RowMapper<OperationLevel> OPERATION_LEVEL_MAPPER =
+            (rs, i) -> new OperationLevel(
+                    rs.getString("operation_code"), rs.getInt("level"), rs.getString("note"),
+                    rs.getString("updated_by"), rs.getLong("version"),
+                    instantOf(rs, "created_at"), instantOf(rs, "updated_at"));
+
+    /**
+     * 分级目录列表：按编码/名称模糊匹配，一次 JOIN 带出字典名称与启用状态。
+     *
+     * <p>{@code limit} 在 SQL 层生效（G74 口径），不在内存截断。
+     */
+    public List<OperationLevelRow> listOperationLevels(String keyword, int limit) {
+        String like = keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
+        return jdbc.sql("""
+                        SELECT l.operation_code, c.name AS operation_name, c.category,
+                               c.enabled AS catalog_enabled, l.level, l.note, l.updated_by,
+                               l.version, l.updated_at
+                          FROM clinical_svc.operation_level l
+                          JOIN clinical_svc.operation_catalog c ON c.code = l.operation_code
+                         WHERE (CAST(:like AS text) IS NULL
+                                OR l.operation_code ILIKE CAST(:like AS text)
+                                OR c.name ILIKE CAST(:like AS text))
+                         ORDER BY l.operation_code
+                         LIMIT :limit
+                        """)
+                .param("like", like).param("limit", limit)
+                .query((rs, i) -> new OperationLevelRow(
+                        rs.getString("operation_code"), rs.getString("operation_name"),
+                        rs.getString("category"), rs.getBoolean("catalog_enabled"),
+                        rs.getInt("level"), rs.getString("note"), rs.getString("updated_by"),
+                        rs.getLong("version"), instantOf(rs, "updated_at")))
+                .list();
+    }
+
+    public Optional<OperationLevel> findOperationLevel(String code) {
+        return jdbc.sql("SELECT * FROM clinical_svc.operation_level WHERE operation_code = ?")
+                .param(code).query(OPERATION_LEVEL_MAPPER).optional();
+    }
+
+    /** 计划手术时只取默认分级值（少读几列，避免把整行搬进事务）。 */
+    public Optional<Integer> findOperationDefaultLevel(String code) {
+        return jdbc.sql("SELECT level FROM clinical_svc.operation_level WHERE operation_code = ?")
+                .param(code).query(Integer.class).optional();
+    }
+
+    public void insertOperationLevel(OperationLevel l) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.operation_level
+                            (operation_code, level, note, updated_by, version)
+                        VALUES (:code, :level, :note, :updatedBy, 0)
+                        """)
+                .param("code", l.operationCode()).param("level", l.level())
+                .param("note", l.note()).param("updatedBy", l.updatedBy()).update();
+    }
+
+    public boolean updateOperationLevel(String code, int level, String note, String updatedBy,
+                                        long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.operation_level
+                           SET level = :level, note = :note, updated_by = :updatedBy,
+                               version = version + 1, updated_at = now()
+                         WHERE operation_code = :code AND version = :version
+                        """)
+                .param("level", level).param("note", note).param("updatedBy", updatedBy)
+                .param("code", code).param("version", expectedVersion).update() > 0;
+    }
+
+    public boolean deleteOperationLevel(String code, long expectedVersion) {
+        return jdbc.sql("""
+                        DELETE FROM clinical_svc.operation_level
+                         WHERE operation_code = :code AND version = :version
+                        """)
+                .param("code", code).param("version", expectedVersion).update() > 0;
     }
 
     /** 手术号 OPYYYYMMDD######。 */

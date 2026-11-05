@@ -27,4 +27,15 @@ public final class SurgeryLevelDtos {
             @NotNull Long version,
             @NotBlank @Size(max = 256) String reason) {
     }
+
+    /**
+     * 维护术种默认分级（G81）。
+     *
+     * <p>{@code version} 首次新增可不传；修改已有目录项必须传（乐观锁）。
+     */
+    public record UpsertOperationLevelReq(
+            @NotNull @Min(1) @Max(4) Integer level,
+            @Size(max = 256) String note,
+            Long version) {
+    }
 }

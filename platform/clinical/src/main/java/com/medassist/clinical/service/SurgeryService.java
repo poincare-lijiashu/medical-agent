@@ -113,6 +113,8 @@ public class SurgeryService {
             throw new BusinessException(ErrorCode.CONFLICT,
                     "该就诊已存在同一手术的未取消记录，请勿重复录入");
         }
+        // G81：按术种带出默认分级；3/4 级落 PENDING，仍需另一人审批才能开台
+        levelService.applyCatalogDefault(created.id(), operation.code(), actor);
         audit(actor, "SURGERY_PLAN", created, Map.of("operationCode", operation.code(),
                 "operationName", operation.name()));
         return created;

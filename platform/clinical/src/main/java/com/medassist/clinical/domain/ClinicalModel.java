@@ -158,6 +158,21 @@ public final class ClinicalModel {
     }
 
     /**
+     * 手术分级目录项：术种 → 默认分级（1~4 级）。
+     *
+     * <p>只是默认值，不是审批结论：计划手术时带出，术者仍可在开台前调整。
+     */
+    public record OperationLevel(String operationCode, int level, String note, String updatedBy,
+                                 long version, Instant createdAt, Instant updatedAt) {
+    }
+
+    /** 分级目录列表行：目录项 + 编码字典名称/状态（一次 JOIN 取全，避免 N+1）。 */
+    public record OperationLevelRow(String operationCode, String operationName, String category,
+                                    boolean catalogEnabled, int level, String note,
+                                    String updatedBy, long version, Instant updatedAt) {
+    }
+
+    /**
      * 手术记录（手术麻醉域第一批）。
      *
      * <p>状态机：{@code PLANNED → IN_PROGRESS → COMPLETED}，任一非终态可 {@code CANCELLED}。

@@ -233,6 +233,16 @@
 
 **验证**：新冒烟 `clinical_pacu_smoke` 44 项全 PASS（含医生账号只看本科室看板、qc 只读可看看板但写 403、跨人签名四眼、出室后/签名后追加被拒），`campus_isolation`(77)、`platform_smoke`、`clinical_surgery_smoke`、`clinical_surgery_theatre_smoke` 复跑全过。
 
+### G81 批次（手术分级目录，mock 188 类 / 1781 项全绿）
+
+| 关注点 | 处置 |
+|---|---|
+| 院区口径 | 分级目录是**全院制度配置**（术种 → 默认分级），不含任何患者数据，因此刻意不做院区隔离；单台手术的实际分级仍落在 `surgery_level` 上，受就诊的科室/院区守卫保护 |
+| 权限收口 | 新增独立权限点 `clinical:surgery:catalog:write`（auth V75，仅 ADMIN）：能录手术（`clinical:surgery:write`）不等于能改全院默认分级；审批单台分级（`clinical:surgery:approve`）同样不能改目录 |
+| 与审批的关系 | 计划手术自动带出 3~4 级只落 `PENDING`，开台门槛仍要求另一人审批（四眼），不存在"目录一配就自动放行" |
+
+**验证**：`clinical_operation_level_smoke` 36 项全 PASS（含 doctor01 改目录 403、自审 422、qc 审批 200、删除后新手术不再带出分级）；`campus_isolation`(77)、`platform_smoke`、`clinical_surgery_level_smoke` 复跑全过。
+
 ### 评审意见书（2026-11-05）状态：**全部条目已关闭**
 
 [必须] 条目在 G51–G70 全部闭环；[建议] 条目在 G51–G79 逐条闭环（§6.12 院区串收敛、§6.13 守卫签名与错误码、§6.14 列表下推、§6.15 迁移锁风险、锁内调下游 HTTP、时间口径、worker 多实例、解析吞错）。后续新增发现按同一节奏（复现 → 修复 → 反证 → 冒烟 → 文档 → 提交 → 备份）单独开批次。
