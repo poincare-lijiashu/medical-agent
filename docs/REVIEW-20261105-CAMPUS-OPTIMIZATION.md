@@ -149,9 +149,17 @@
 |---|---|---|
 | §6.8 | pharmacy V20、tech V13、insurance V20 三份迁移都执行 `UPDATE ... FROM clinical_svc.visit v`，硬依赖 `clinical_svc.visit.campus_id` 已存在；谁先启动谁先迁移，本域先于 clinical 时直接因缺列阻断启动（`validate-on-migrate` 让服务起不来，且错误不提示顺序问题） | 三份脚本改为 `DO $$` 守卫：仅当 `clinical_svc.visit.campus_id` 存在时才按就诊回填，否则跳过并让存量落主院区；新增 `campus_source`（`RUNTIME` / `VISIT` / `MAIN_FALLBACK`）让"引导顺序导致的兜底"可被精确识别与修复，而不是无从分辨。已应用环境用 Flyway `repair()` 重算校验和（本地三 schema 已执行），并按同一口径补齐 `campus_source` 列与标记。**反证**：在独立临时库中，守卫块在缺列时静默跳过并回落 `MAIN_FALLBACK`，旧语句则报 `column v.campus_id does not exist`。另修两处冒烟漂移：`pharmacy_smoke` 补必填 `returnId` 幂等键、超量退药按契约断言 422；`insurance_smoke` 给值班分离账号补科室与主院区（fail-closed 范围要求） |
 
+### G70 批次已关闭（代码 commit `c102837`，mock 182 类 / 1720 项全绿，转送/药房/医技/院区冒烟全过）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §2.5 | 转送成功后的审计写在同一 try 内：审计失败落进兜底 catch → `markFailed` 把已成功的 `TRANSFERRED` 覆写成 `FAILED` 并清空 `external_id`，下游处方真实存在、本地丢单号 | 只有"建下游单据"失败才判转送失败；成功回写后审计走独立 `auditQuietly`（写不进去只记日志）；新增 `markOrderFailed` 回写守卫 `WHERE transfer_status IN ('PENDING','FAILED')`，成功转送永远不会被失败回写覆盖；过期补偿也改用该守卫，避免读后判断竞态 |
+| §3.7 | 重写草稿时"已有任何危急值就整组沿用"，本次请求带入的新增危急值被静默丢弃 | 改为按 `(itemName, resultValue)` 求差集：已存在的（含 CLOSED）不重复插，新增项补插；同批重复行只算一次。既保住"已闭环不复活"的回归，又不再漏报新增项 |
+| §3.9 | 补偿 worker 扫描取固定头部，"PENDING 且已退药"的单在 `retry` 必被拒（不能重复收费），永久占满每批名额、饿死后继异常单 | 扫描 SQL 在库层排除"PENDING/CHARGE_FAILED + 已有退药明细"的行（交收费处人工处理），`REFUND_FAILED` 照常扫描；用事务内探针复现：同一毒丸行旧扫描命中、新扫描 0 条 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项：**§2.5**（转送审计写失败覆写已成功 TRANSFERRED）、**§3.7**（rewrite 丢弃新增危急值）、**§3.9**（计费补偿毒丸饿死后续异常单）。另 §6.12（campusCsv 7 份私有实现收敛）、§6.15（大表 NOT NULL 锁风险）为 [建议] 级收敛项。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目。剩余为 [建议] 级收敛项：**§6.12**（campusCsv 7 份私有实现收敛到 `CampusFilters`）、**§6.15**（大表 NOT NULL 锁风险与不可逆回填），以及第 5 批判定的技术债（guard 签名/错误码漂移、列表 LIMIT 后内存过滤、锁内调下游 HTTP、解析吞错、时间口径漂移、worker 多实例假设）。
 
 ---
 
