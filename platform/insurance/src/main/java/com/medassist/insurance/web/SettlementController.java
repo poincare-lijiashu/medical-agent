@@ -55,8 +55,8 @@ public class SettlementController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             com.medassist.common.security.DataScope scope) {
         Permissions.require(permissions, WRITE);
-        guard.requireVisit(scope, req.visitId());
-        return ApiResponse.ok(service.generate(req.visitId(), actor));
+        // G64：生成/重算的院区判定收进服务层（无清单时按就诊院区，不再静默放行）
+        return ApiResponse.ok(service.generate(req.visitId(), actor, scope));
     }
 
     @GetMapping("/{id}")

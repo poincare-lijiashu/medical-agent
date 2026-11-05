@@ -59,6 +59,9 @@ class InsuranceServiceTest {
     private final UUID visitId = UUID.randomUUID();
     private final UUID patientId = UUID.randomUUID();
     private final UUID billId = UUID.randomUUID();
+    /** 跨院区范围：既有用例只关心账务口径，不关心院区。 */
+    private final com.medassist.common.security.DataScope SCOPE =
+            com.medassist.common.security.DataScope.all("cashier01", true);
 
     @BeforeEach
     void setUp() {
@@ -254,7 +257,7 @@ class InsuranceServiceTest {
         when(clinicalClient.charges(visitId)).thenReturn(
                 new ClinicalClient.ChargeSummary(visitId, patientId, "P0001", List.of()));
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NO_CHARGE);
@@ -266,7 +269,7 @@ class InsuranceServiceTest {
         when(clinicalClient.charges(visitId)).thenReturn(summary("10.00"));
         when(repo.findMemberByPatient(patientId)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NOT_ENROLLED);
@@ -286,12 +289,34 @@ class InsuranceServiceTest {
         when(repo.nextBillNo()).thenReturn("SB20261031000001");
         when(repo.findBillById(any())).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 0L)));
 
-        BillView view = service.generate(visitId, "cashier01");
+        BillView view = service.generate(visitId, "cashier01", SCOPE);
 
         assertThat(view.bill().status()).isEqualTo(SettlementBill.DRAFT);
         verify(repo).insertBill(any(SettlementBill.class), any());
         verify(repo).logChange(eq("cashier01"), eq("BILL_GENERATE"), eq("SETTLEMENT_BILL"),
                 anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("G64：无清单时按就诊院区判定，主院区账号不能为东院区就诊建单")
+    void generateRejectsOtherCampusVisitWithoutBill() {
+        UUID east = UUID.fromString("a0000000-0000-0000-0000-000000000002");
+        when(clinicalClient.charges(visitId)).thenReturn(new ClinicalClient.ChargeSummary(
+                visitId, patientId, "P0001", null, east, List.of(line("REG-GENERAL", "10.00"))));
+        when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
+                member("0", "1.0000", "300000.00")));
+        when(repo.lockBillByVisit(visitId)).thenReturn(Optional.empty());
+        com.medassist.common.security.DataScope mainOnly =
+                com.medassist.common.security.DataScope.of("cashier01", java.util.Set.of(),
+                        true, java.util.Set.of(
+                                com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID),
+                        false, true);
+
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", mainOnly))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_BILL_NOT_FOUND);
+        verify(repo, never()).insertBill(any(SettlementBill.class), any());
     }
 
     @Test
@@ -305,7 +330,7 @@ class InsuranceServiceTest {
                 member("0", "1.0000", "300000.00")));
         stubChargeResolution();
 
-        service.generate(visitId, "cashier01");
+        service.generate(visitId, "cashier01", SCOPE);
 
         verify(repo).updateBillDiagnoses(any(), eq("J06.900"), eq("URTI"), eq(2),
                 contains("I10.x00"));
@@ -343,7 +368,7 @@ class InsuranceServiceTest {
                 memberWith(serviceDate.minusDays(60), serviceDate.plusDays(1), "300000.00")));
         stubChargeResolution();
 
-        BillView view = service.generate(visitId, "cashier01");
+        BillView view = service.generate(visitId, "cashier01", SCOPE);
 
         assertThat(view.bill().status()).isEqualTo(SettlementBill.DRAFT);
     }
@@ -357,7 +382,7 @@ class InsuranceServiceTest {
         when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
                 memberWith(LocalDate.now().minusDays(5), null, "300000.00")));
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NOT_ENROLLED);
@@ -373,7 +398,7 @@ class InsuranceServiceTest {
         when(repo.insuranceUsedInYear(eq(patientId), any(), any())).thenReturn(new BigDecimal("10.00"));
         stubChargeResolution();
 
-        BillView view = service.generate(visitId, "cashier01");
+        BillView view = service.generate(visitId, "cashier01", SCOPE);
 
         ArgumentCaptor<SettlementBill> captor = ArgumentCaptor.forClass(SettlementBill.class);
         verify(repo).insertBill(captor.capture(), any());
@@ -392,7 +417,7 @@ class InsuranceServiceTest {
         stubChargeResolution();
         when(repo.insertBill(any(), any())).thenReturn(false);
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONFLICT);
@@ -525,7 +550,7 @@ class InsuranceServiceTest {
         when(repo.lockBillByVisit(visitId)).thenReturn(Optional.of(
                 bill(SettlementBill.CONFIRMED, 3L)));
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_BILL_STATUS_INVALID);
@@ -691,7 +716,7 @@ class InsuranceServiceTest {
         when(repo.nextBillNo()).thenReturn("SB20261031000001");
         when(repo.findBillById(any())).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 0L)));
 
-        BillView view = service.generate(visitId, "cashier01");
+        BillView view = service.generate(visitId, "cashier01", SCOPE);
 
         assertThat(view.lines()).hasSize(1);
         assertThat(view.lines().get(0).unmapped()).isTrue();
@@ -714,7 +739,7 @@ class InsuranceServiceTest {
         when(repo.nextBillNo()).thenReturn("SB20261031000001");
         when(repo.findBillById(any())).thenReturn(Optional.of(bill(SettlementBill.DRAFT, 0L)));
 
-        BillView view = service.generate(visitId, "cashier01");
+        BillView view = service.generate(visitId, "cashier01", SCOPE);
 
         assertThat(view.lines().get(0).unmapped()).isTrue();
         assertThat(view.lines().get(0).payCategory()).isEqualTo("C");
@@ -739,7 +764,7 @@ class InsuranceServiceTest {
         when(repo.findBillById(billId)).thenReturn(Optional.of(
                 bill(SettlementBill.DRAFT, 8L)));
 
-        BillView view = service.generate(visitId, "cashier01");
+        BillView view = service.generate(visitId, "cashier01", SCOPE);
 
         assertThat(view.bill().version()).isEqualTo(8L);
         verify(repo).updateDraftBill(eq(billId), any(), any(), any(), any(), any(),
@@ -762,7 +787,7 @@ class InsuranceServiceTest {
                 any(), any(), anyLong()))
                 .thenReturn(false);
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONFLICT);
@@ -776,7 +801,7 @@ class InsuranceServiceTest {
         when(repo.findMemberByPatient(patientId)).thenReturn(Optional.of(
                 member("0", "1.0000", "300000.00")));
 
-        assertThatThrownBy(() -> service.generate(visitId, "cashier01"))
+        assertThatThrownBy(() -> service.generate(visitId, "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.INSURANCE_NO_CHARGE);

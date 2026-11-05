@@ -215,8 +215,10 @@ public class UserRepository {
      */
     public List<UUID> campusIdsOf(UUID userId) {
         List<UUID> ids = jdbc.sql("""
-                        SELECT campus_id FROM auth_svc.user_campus
-                         WHERE user_id = ? ORDER BY created_at, campus_id
+                        SELECT uc.campus_id FROM auth_svc.user_campus uc
+                          JOIN auth_svc.campus c ON c.id = uc.campus_id
+                         WHERE uc.user_id = ? AND c.status = 'ACTIVE'
+                         ORDER BY uc.created_at, uc.campus_id
                         """)
                 .param(userId)
                 .query((rs, i) -> rs.getObject("campus_id", UUID.class))
@@ -224,6 +226,27 @@ public class UserRepository {
         return ids.isEmpty()
                 ? List.of(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID)
                 : ids;
+    }
+
+    /**
+     * 绑定的院区是否全部存在且为 ACTIVE（G64 / 评审 §6.9）。
+     *
+     * <p>停用院区的语义是"不再分配新业务数据"，因此不能再把账号绑过去。
+     */
+    public boolean allCampusesActive(java.util.Collection<UUID> campusIds) {
+        if (campusIds == null || campusIds.isEmpty()) {
+            return true;
+        }
+        String csv = campusIds.stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+        Long active = jdbc.sql("""
+                        SELECT count(*) FROM auth_svc.campus
+                         WHERE id = ANY(string_to_array(:ids, ',')::uuid[])
+                           AND status = 'ACTIVE'
+                        """)
+                .param("ids", csv)
+                .query(Long.class).single();
+        return active != null && active == campusIds.size();
     }
 
     /** 全量替换科室绑定（先删后插，单事务由调用方保证）。 */

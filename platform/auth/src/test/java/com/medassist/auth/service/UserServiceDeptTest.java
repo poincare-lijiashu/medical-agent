@@ -64,6 +64,19 @@ class UserServiceDeptTest {
         });
         when(users.rolesOf(any())).thenReturn(List.of("DOCTOR"));
         when(users.deptIdsOf(any())).thenReturn(List.of(deptA, deptB));
+        when(users.allCampusesActive(any())).thenReturn(true);
+    }
+
+    @Test
+    @DisplayName("G64 分配院区：含已停用院区 → 422（停用院区不再分配，否则令牌仍带该院区）")
+    void assignCampusesRejectsDisabledCampus() {
+        when(users.allCampusesActive(any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.assignCampuses(UUID.randomUUID(),
+                List.of(deptA), "admin01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
+        verify(users, never()).replaceCampuses(any(), any());
     }
 
     private CreateUserReq req(List<String> roles, List<UUID> deptIds) {

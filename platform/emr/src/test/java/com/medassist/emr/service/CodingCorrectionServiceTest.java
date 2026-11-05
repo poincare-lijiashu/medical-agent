@@ -121,6 +121,38 @@ class CodingCorrectionServiceTest {
     }
 
     @Test
+    @DisplayName("G64 申请更正：0 主诊断 → 422，不落单")
+    void submitRejectsZeroPrimary() {
+        when(repo.findHomepage(homepageId)).thenReturn(Optional.of(homepage(Homepage.SUBMITTED, 0)));
+        when(repo.findCoding(homepageId)).thenReturn(Optional.of(coding(HomepageCoding.CODED)));
+        CreateCorrectionReq noPrimary = new CreateCorrectionReq("改用次要诊断",
+                List.of(new CodingDiagnosisReq("I10.x00", false)), List.of(), null);
+
+        assertThatThrownBy(() -> service.submitCorrection(homepageId, noPrimary, "coder01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CODING_INVALID);
+        verify(repo, never()).insertCorrection(any(), any());
+    }
+
+    @Test
+    @DisplayName("G64 审批更正：存储快照 0 主诊断 → 422，不回写首页")
+    void approveRejectsZeroPrimarySnapshot() {
+        CodingCorrection broken = new CodingCorrection(correctionId, submitted.correctionNo(),
+                homepageId, CodingCorrection.SUBMITTED, submitted.reason(),
+                "[{\"code\":\"I10.x00\",\"name\":\"原发性高血压\",\"primary\":false}]",
+                "[]", null, "coder01", null, null, null, null, null, null, 0L, submitted.createdAt());
+        when(repo.lockCorrection(correctionId)).thenReturn(Optional.of(broken));
+        when(repo.lockHomepage(homepageId)).thenReturn(Optional.of(homepage(Homepage.SUBMITTED, 3)));
+
+        assertThatThrownBy(() -> service.approveCorrection(correctionId, null, "qc02"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CODING_INVALID);
+        verify(repo, never()).applyCodedSnapshot(any(), any(), any(), any(), anyLong());
+    }
+
+    @Test
     @DisplayName("审批更正：申请人自审 → 403")
     void approveRejectsSelfReview() {
         UUID requesterId = UUID.randomUUID();

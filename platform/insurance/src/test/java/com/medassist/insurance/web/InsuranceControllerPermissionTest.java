@@ -107,7 +107,7 @@ class InsuranceControllerPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(service, never()).generate(any(), anyString());
+        verify(service, never()).generate(any(), anyString(), any());
     }
 
     @Test

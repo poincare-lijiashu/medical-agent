@@ -428,7 +428,7 @@ public class InsuranceService {
      * （已确认清单的统筹合计），单次测算只是年度额度里的一段。
      */
     @Transactional
-    public BillView generate(UUID visitId, String actor) {
+    public BillView generate(UUID visitId, String actor, com.medassist.common.security.DataScope scope) {
         ClinicalClient.ChargeSummary summary = clinicalClient.charges(visitId);
         if (summary.lines().isEmpty()) {
             throw new BusinessException(ErrorCode.INSURANCE_NO_CHARGE);
@@ -448,6 +448,16 @@ public class InsuranceService {
                 ? List.of() : diagnosisSummary.diagnoses();
 
         Optional<SettlementBill> existing = repo.lockBillByVisit(visitId);
+        // G64（评审 §6.2）：无清单时 guard 曾静默放行，主院区账号可为东院区就诊建单，
+        // 形成"归属东院区、由无权账号发起"的错归属单据。这里用就诊院区（来自临床收费汇总）
+        // 兜底判定：有清单按清单院区（权威），无清单按就诊院区；两者都取不到即拒绝（fail-closed）。
+        if (!scope.allCampuses()) {
+            java.util.UUID billCampus = existing.flatMap(b -> repo.findBillCampus(b.id())).orElse(null);
+            java.util.UUID effectiveCampus = billCampus == null ? summary.campusId() : billCampus;
+            if (effectiveCampus == null || !scope.canSeeCampus(effectiveCampus)) {
+                throw new BusinessException(ErrorCode.INSURANCE_BILL_NOT_FOUND);
+            }
+        }
         // P1-D2：封顶归年按就诊业务日期，而不是"今天"（跨年生成/确认才不会被判成费用变化）
         BigDecimal capUsed = repo.insuranceUsedInYear(summary.patientId(), serviceDate,
                 existing.map(SettlementBill::id).orElse(null));

@@ -107,6 +107,11 @@ public class UserService {
         if (ids.isEmpty()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "至少绑定一个院区");
         }
+        // G64（评审 §6.9）：停用院区不再分配——否则账号仍会拿到该院区的 X-Campus
+        if (!users.allCampusesActive(ids)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "存在已停用或不存在的院区，不能分配给账号");
+        }
         users.replaceCampuses(id, ids);
         audit(actor, "USER_CAMPUS_ASSIGN", id.toString(), Map.of("campusIds", ids));
         return detail(id);

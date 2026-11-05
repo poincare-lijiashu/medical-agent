@@ -9,6 +9,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -107,12 +108,26 @@ class InternalSignatureTest {
     }
 
     @Test
-    void queryNormalizationKeepsFirstValueAndToleratesMissingEquals() {
+    void queryNormalizationKeepsAllValuesAndToleratesMissingEquals() {
         assertEquals("a=1&b=3", InternalSignature.normalizeQuery("b=3&a=1"));
-        assertEquals("a=1", InternalSignature.normalizeQuery("a=1&a=2"));
         assertEquals("flag=&x=1", InternalSignature.normalizeQuery("flag&x=1"));
         assertEquals("", InternalSignature.normalizeQuery(""));
         assertEquals("", InternalSignature.normalizeQuery(null));
+        // G64：重复 key 的全部值都参与规范串，追加参数不再"不破坏签名"
+        assertEquals("a=1&a=2", InternalSignature.normalizeQuery("a=1&a=2"));
+        assertEquals("a=1&a=2&b=3", InternalSignature.normalizeQuery("b=3&a=1&a=2"));
+        assertNotEquals(InternalSignature.normalizeQuery("dept=1"),
+                InternalSignature.normalizeQuery("dept=1&dept=2"),
+                "追加重复参数必须改变规范串，否则可在途篡改查询语义");
+    }
+
+    @Test
+    void duplicateQueryParamBreaksSignatureVerification() {
+        String canonicalSingle = InternalSignature.canonical("GET", "/clinical/visits",
+                "dept=1", Map.of(), 1L, "n1", "-");
+        String tampered = InternalSignature.canonical("GET", "/clinical/visits",
+                "dept=1&dept=2", Map.of(), 1L, "n1", "-");
+        assertNotEquals(canonicalSingle, tampered);
     }
 
     @Test

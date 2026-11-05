@@ -163,8 +163,7 @@ public class HomepageCodingService {
             throw new BusinessException(ErrorCode.CODING_INVALID, "至少需要一条诊断编码");
         }
         if (primary != 1) {
-            throw new BusinessException(ErrorCode.CODING_INVALID,
-                    "主诊断必须且只能有一个，当前 " + primary + " 个");
+            requireSinglePrimary(primary, "");
         }
         if (!repo.markCoded(homepageId, actor, coding.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "编码已被他人修改，请刷新后重试");
@@ -209,6 +208,9 @@ public class HomepageCodingService {
         }
         Built built = build(new SaveCodingReq(req.diagnoses(), req.procedures(),
                 blankToNull(req.note()), 0L));
+        // G64（评审 §4.3）：更正路径此前漏检"恰好一个主诊断"，0 主诊断可经四眼审批落库，
+        // 破坏"主诊断是 DRG 入组与 HQMS 上报锚点"的不变量；与提交编码同口径校验。
+        requireSinglePrimary(built.primaryCount(), "更正申请：");
         CodingCorrection correction = new CodingCorrection(UUID.randomUUID(),
                 repo.nextCorrectionNo(), homepageId, CodingCorrection.SUBMITTED,
                 req.reason().trim(), built.diagnosesJson(), built.proceduresJson(),
@@ -255,6 +257,11 @@ public class HomepageCodingService {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_STATUS_INVALID,
                     "病案首页当前状态为 " + homepage.status() + "，不能回写更正内容");
         }
+        // G64：审批时再校验一次快照（防手工改库/历史数据绕过申请侧校验）
+        long correctedPrimary = readJsonList(correction.diagnoses()).stream()
+                .filter(row -> Boolean.TRUE.equals(row.get("primary")))
+                .count();
+        requireSinglePrimary(correctedPrimary, "更正快照：");
         if (!repo.applyCodedSnapshot(homepage.id(), correction.diagnoses(),
                 correction.procedures(), homepage.coder(), homepage.version())) {
             throw new BusinessException(ErrorCode.CONFLICT,
@@ -438,6 +445,14 @@ public class HomepageCodingService {
         }
         return new Built(writeJson(diagnoses), writeJson(procedures), diagnoses.size(),
                 procedures.size(), primaryCount);
+    }
+
+    /** 主诊断唯一性（G64）：提交编码、更正申请、更正审批三处共用同一口径。 */
+    private static void requireSinglePrimary(long primary, String prefix) {
+        if (primary != 1) {
+            throw new BusinessException(ErrorCode.CODING_INVALID,
+                    prefix + "主诊断必须且只能有一个，当前 " + primary + " 个");
+        }
     }
 
     @SuppressWarnings("unchecked")

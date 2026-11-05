@@ -356,13 +356,23 @@ public final class InternalSignature {
         }
     }
 
-    /** 查询串归一化：按 key 排序后原样拼接（不重新编码参数值）。 */
+    /**
+     * 查询串归一化：按 key 排序，重复 key 保留**全部值**（顺序不变）。
+     *
+     * <p>G64（评审 §1.3）：旧实现用 {@code putIfAbsent} 只保留首次值，
+     * {@code ?dept=1} 与 {@code ?dept=1&dept=2} 生成同一规范串——在途追加重复参数
+     * 不破坏签名，而 Spring {@code getParameterValues} 会取到注入值，"防在途篡改"
+     * 对查询串存在缺口。现在重复 key 的全部值都参与签名。
+     *
+     * <p>兼容性：不含重复 key 的查询串输出与旧实现逐字节一致（键排序 + 单值拼接），
+     * 因此正常请求在滚动升级期间不会因两侧版本不同而 403；只有带重复参数的请求
+     * 会签名不一致——那正是需要拦住的形态。
+     */
     static String normalizeQuery(String query) {
         if (query == null || query.isEmpty()) {
             return "";
         }
-        TreeMap<String, String> sorted = new TreeMap<>();
-        // 同 key 多次出现时保留首次值即可：网关与下游看到的是同一原始串，排序只为消除顺序差异
+        TreeMap<String, java.util.List<String>> sorted = new TreeMap<>();
         for (String pair : query.split("&")) {
             if (pair.isEmpty()) {
                 continue;
@@ -370,14 +380,16 @@ public final class InternalSignature {
             int idx = pair.indexOf('=');
             String key = idx < 0 ? pair : pair.substring(0, idx);
             String value = idx < 0 ? "" : pair.substring(idx + 1);
-            sorted.putIfAbsent(key, value);
+            sorted.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(value);
         }
         StringBuilder sb = new StringBuilder(query.length());
-        sorted.forEach((k, v) -> {
-            if (sb.length() > 0) {
-                sb.append('&');
+        sorted.forEach((k, values) -> {
+            for (String v : values) {
+                if (sb.length() > 0) {
+                    sb.append('&');
+                }
+                sb.append(k).append('=').append(v);
             }
-            sb.append(k).append('=').append(v);
         });
         return sb.toString();
     }
