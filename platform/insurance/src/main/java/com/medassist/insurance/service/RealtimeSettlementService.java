@@ -36,7 +36,10 @@ import java.util.UUID;
  * <p>在已确认结算清单之上建立对外实时交易适配层：
  * <ul>
  *   <li>只允许 {@code CONFIRMED} 清单提交（草稿/作废单不出账）；</li>
- *   <li>同一清单 + 同一请求号唯一，重复提交幂等返回，不会向省局重复出账；</li>
+ *   <li>同一清单最多一笔在途/成功的 {@code SETTLE}：换请求号也不能重复出账，
+ *       失败只能复用原交易重试（{@code ux_realtime_settle_once} + 服务层前置校验）；</li>
+ *   <li>投递先抢占（{@code PENDING/FAILED → DELIVERING}）再外呼省局，并发 submit/retry
+ *       只有一个线程真正出账；结果回写失败显式报冲突，不静默丢弃；</li>
  *   <li>请求体 HMAC-SHA256 签名（{@code X-Signature: sha256=hex}），密钥由部署配置注入；</li>
  *   <li>平台地址域名必须命中 {@code insurance.realtime.allowed-hosts}，避免 SSRF；</li>
  *   <li>平台 HTTP 200 仍解析业务码，非 0 记 FAILED 并保留原因，可手动重试；</li>
@@ -79,7 +82,7 @@ public class RealtimeSettlementService {
         this.client = RestClient.builder().requestFactory(factory).build();
     }
 
-    /** 提交（或幂等重提）实时结算；同一清单同一请求号只出账一次。 */
+    /** 提交（或幂等重提）实时结算；同一清单只允许一笔 SETTLE，换请求号也不能重复出账。 */
     public RealtimeSettlementView submit(UUID billId, String requestId, String bizType, String actor) {
         String normalizedRequestId = requestId == null ? "" : requestId.trim();
         if (normalizedRequestId.isEmpty()) {
@@ -92,20 +95,9 @@ public class RealtimeSettlementService {
                     "只有已确认的结算清单可以提交实时结算，当前：" + bill.status());
         }
         String normalizedBiz = normalizeBizType(bizType);
-        RealtimeSettlement settlement = repo
-                .findRealtimeByBillAndRequest(bill.id(), normalizedRequestId)
-                .orElseGet(() -> {
-                    String endpoint = requireEndpoint();
-                    requireSecret();
-                    repo.insertRealtime(new RealtimeSettlement(UUID.randomUUID(), bill.id(),
-                            bill.visitId(), normalizedRequestId, normalizedBiz, PLATFORM,
-                            RealtimeSettlement.PENDING, 0, null, null,
-                            buildPayload(bill, normalizedRequestId, normalizedBiz), null, actor,
-                            java.time.Instant.now(), null, 0L));
-                    return repo.findRealtimeByBillAndRequest(bill.id(), normalizedRequestId)
-                            .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
-                                    "实时结算交易创建失败"));
-                });
+        RealtimeSettlement settlement = RealtimeSettlement.SETTLE.equals(normalizedBiz)
+                ? resolveSettleTransaction(bill, normalizedRequestId, actor)
+                : resolveTransaction(bill, normalizedRequestId, normalizedBiz, actor);
         if (RealtimeSettlement.SETTLED.equals(settlement.status())) {
             return toView(settlement, false);
         }
@@ -155,46 +147,125 @@ public class RealtimeSettlementService {
     // ---------------------------------------------------------------- 内部
 
     /**
+     * 解析（或创建）SETTLE 交易：同一清单最多一笔，换请求号也不新建。
+     *
+     * <p>已成功 → 幂等返回该笔；在途/失败且请求号不同 → 409，要求对原交易重试
+     * （否则换号即可绕过 {@link #MAX_ATTEMPTS} 并二次出账）。
+     */
+    private RealtimeSettlement resolveSettleTransaction(SettlementBill bill, String requestId,
+                                                        String actor) {
+        var existing = repo.findSettleByBill(bill.id());
+        if (existing.isPresent()) {
+            RealtimeSettlement current = existing.get();
+            if (current.requestId().equals(requestId)) {
+                return current;
+            }
+            if (RealtimeSettlement.SETTLED.equals(current.status())) {
+                return current;
+            }
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该清单已有实时结算交易（请求号 " + current.requestId() + "，状态 "
+                            + current.status() + "），同一清单只能有一笔 SETTLE，请对该交易执行重试");
+        }
+        return createTransaction(bill, requestId, RealtimeSettlement.SETTLE, actor);
+    }
+
+    /** 预结算等非 SETTLE 交易：同一清单 + 同一请求号幂等。 */
+    private RealtimeSettlement resolveTransaction(SettlementBill bill, String requestId,
+                                                  String bizType, String actor) {
+        return repo.findRealtimeByBillAndRequest(bill.id(), requestId)
+                .orElseGet(() -> createTransaction(bill, requestId, bizType, actor));
+    }
+
+    private RealtimeSettlement createTransaction(SettlementBill bill, String requestId,
+                                                 String bizType, String actor) {
+        String endpoint = requireEndpoint();
+        requireSecret();
+        RealtimeSettlement candidate = new RealtimeSettlement(UUID.randomUUID(), bill.id(),
+                bill.visitId(), requestId, bizType, PLATFORM, RealtimeSettlement.PENDING, 0,
+                null, null, buildPayload(bill, requestId, bizType), null, actor,
+                java.time.Instant.now(), null, 0L);
+        if (repo.insertRealtime(candidate)) {
+            return repo.findRealtimeById(candidate.id()).orElse(candidate);
+        }
+        // 并发：同清单同请求号，或同清单已有一笔在途/成功的 SETTLE
+        RealtimeSettlement current = RealtimeSettlement.SETTLE.equals(bizType)
+                ? repo.findSettleByBill(bill.id()).orElse(null)
+                : repo.findRealtimeByBillAndRequest(bill.id(), requestId).orElse(null);
+        if (current == null) {
+            throw new BusinessException(ErrorCode.CONFLICT, "实时结算交易创建失败");
+        }
+        if (!current.requestId().equals(requestId)
+                && !RealtimeSettlement.SETTLED.equals(current.status())) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该清单已有实时结算交易（请求号 " + current.requestId() + "，状态 "
+                            + current.status() + "），同一清单只能有一笔 SETTLE，请对该交易执行重试");
+        }
+        return current;
+    }
+
+    /**
      * 投递一次并回写结果。
+     *
+     * <p>先抢占（PENDING/FAILED → DELIVERING）再外呼：并发 submit/retry 只有一个线程
+     * 真正打省局接口，其余按库内最新状态返回；回写带"仍在投递态 + 版本一致"双重条件，
+     * 写回失败必须显式暴露为冲突，不能把"省局已出账、本地失败"静默吞掉。
      *
      * <p>平台调用失败不抛业务异常：交易落 FAILED 并保留原因，由前端提示人工重试；
      * 只有配置错误（未配地址/域名越权/签名密钥缺失）才直接拒绝提交。
      */
     private RealtimeSettlement deliver(RealtimeSettlement settlement, String endpoint, String actor) {
-        if (settlement.attempts() >= MAX_ATTEMPTS) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "实时结算已尝试 " + settlement.attempts() + " 次，超过上限，请人工核对后再处理");
+        RealtimeSettlement current = repo.findRealtimeById(settlement.id()).orElse(settlement);
+        if (RealtimeSettlement.SETTLED.equals(current.status())) {
+            return current;
         }
-        int attempts = settlement.attempts() + 1;
+        if (current.attempts() >= MAX_ATTEMPTS) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "实时结算已尝试 " + current.attempts() + " 次，超过上限，请人工核对后再处理");
+        }
+        if (!repo.claimRealtime(current.id(), current.version())) {
+            // 另一线程正在投递，或已写入结果：不重复外呼，按库内最新状态返回
+            log.info("insurance.realtime.claim_skipped billId={} requestId={} status={}",
+                    current.billId(), current.requestId(), current.status());
+            return repo.findRealtimeById(current.id()).orElse(current);
+        }
+        // 抢占成功：attempts 已在库内 +1，本次回写用抢占后的版本号
+        int attempts = current.attempts() + 1;
+        long claimedVersion = current.version() + 1;
         String status;
         String externalNo = null;
         String error = null;
         String responsePayload = null;
         try {
-            String signature = sign(settlement.requestPayload());
+            String signature = sign(current.requestPayload());
             String response = client.post()
                     .uri(endpoint)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("X-Signature", "sha256=" + signature)
-                    .body(settlement.requestPayload())
+                    .body(current.requestPayload())
                     .retrieve()
                     .body(String.class);
             responsePayload = truncate(response, MAX_RESPONSE_BYTES);
             externalNo = validateResponse(response);
             status = RealtimeSettlement.SETTLED;
             log.info("insurance.realtime.settled billId={} requestId={} externalNo={}",
-                    settlement.billId(), settlement.requestId(), externalNo);
+                    current.billId(), current.requestId(), externalNo);
         } catch (RuntimeException e) {
             status = RealtimeSettlement.FAILED;
             error = truncate(e.getMessage(), 500);
             log.warn("insurance.realtime.failed billId={} requestId={} attempts={} reason={}",
-                    settlement.billId(), settlement.requestId(), attempts, e.getMessage());
+                    current.billId(), current.requestId(), attempts, e.getMessage());
         }
-        repo.markRealtime(settlement.id(), status, attempts, externalNo, error,
-                responsePayload, settlement.version());
-        audit(settlement, actor, status, externalNo, attempts);
-        // 并发重试可能已写入结果：统一以库内最新状态为准，不覆盖对方结果
-        return repo.findRealtimeById(settlement.id()).orElse(settlement);
+        boolean written = repo.markRealtime(current.id(), status, attempts, externalNo, error,
+                responsePayload, claimedVersion);
+        audit(current, actor, status, externalNo, attempts);
+        RealtimeSettlement latest = repo.findRealtimeById(current.id()).orElse(current);
+        if (!written && !RealtimeSettlement.SETTLED.equals(latest.status())) {
+            // 抢占被超时接管、结果已被他人覆盖：省局可能已出账，必须让人工看到冲突
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "实时结算结果回写冲突，请刷新后按库内最新状态处理，切勿直接重复提交");
+        }
+        return latest;
     }
 
     private String buildPayload(SettlementBill bill, String requestId, String bizType) {

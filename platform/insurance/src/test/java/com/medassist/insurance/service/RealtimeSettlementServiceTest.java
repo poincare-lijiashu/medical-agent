@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,6 +26,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -45,31 +48,54 @@ class RealtimeSettlementServiceTest {
                 1L, Instant.now(), null, null, 0, "[]");
     }
 
-    /** 用内存状态模拟仓储，验证服务层的状态流转。 */
+    /** 用内存状态模拟仓储，验证服务层的状态流转（含抢占与回写 CAS）。 */
     private static InsuranceRepository statefulRepo(AtomicReference<RealtimeSettlement> state) {
         InsuranceRepository repo = mock(InsuranceRepository.class);
         when(repo.insertRealtime(any())).thenAnswer(inv -> {
+            if (state.get() != null) {
+                return false;
+            }
             state.set(inv.getArgument(0));
             return true;
         });
         when(repo.findRealtimeByBillAndRequest(any(), any()))
                 .thenAnswer(inv -> Optional.ofNullable(state.get()));
+        when(repo.findSettleByBill(any()))
+                .thenAnswer(inv -> Optional.ofNullable(state.get()));
         when(repo.findRealtimeById(any())).thenAnswer(inv -> Optional.ofNullable(state.get()));
+        when(repo.claimRealtime(any(), anyLong())).thenAnswer(inv -> {
+            RealtimeSettlement current = state.get();
+            long expected = inv.getArgument(1);
+            if (current == null || current.version() != expected) {
+                return false;
+            }
+            state.set(copy(current, RealtimeSettlement.DELIVERING, current.attempts() + 1,
+                    current.externalNo(), current.lastError(), current.responsePayload(),
+                    current.version() + 1));
+            return true;
+        });
         when(repo.markRealtime(any(), any(), anyInt(), any(), any(), any(), anyLong()))
                 .thenAnswer(inv -> {
                     RealtimeSettlement current = state.get();
-                    String status = inv.getArgument(1);
-                    int attempts = inv.getArgument(2);
-                    state.set(new RealtimeSettlement(current.id(), current.billId(),
-                            current.visitId(), current.requestId(), current.bizType(),
-                            current.platform(), status, attempts, inv.getArgument(3),
-                            inv.getArgument(4), current.requestPayload(), inv.getArgument(5),
-                            current.createdBy(), current.createdAt(),
-                            RealtimeSettlement.SETTLED.equals(status) ? Instant.now() : null,
+                    long expected = inv.getArgument(6);
+                    if (current == null || current.version() != expected) {
+                        return false;
+                    }
+                    state.set(copy(current, inv.getArgument(1), inv.getArgument(2),
+                            inv.getArgument(3), inv.getArgument(4), inv.getArgument(5),
                             current.version() + 1));
                     return true;
                 });
         return repo;
+    }
+
+    private static RealtimeSettlement copy(RealtimeSettlement c, String status, int attempts,
+                                           String externalNo, String lastError,
+                                           String responsePayload, long version) {
+        return new RealtimeSettlement(c.id(), c.billId(), c.visitId(), c.requestId(), c.bizType(),
+                c.platform(), status, attempts, externalNo, lastError, c.requestPayload(),
+                responsePayload, c.createdBy(), c.createdAt(),
+                RealtimeSettlement.SETTLED.equals(status) ? Instant.now() : null, version);
     }
 
     private RealtimeSettlementService service(InsuranceRepository repo, String baseUrl,
@@ -207,6 +233,111 @@ class RealtimeSettlementServiceTest {
             assertThat(view.status()).isEqualTo(RealtimeSettlement.SETTLED);
             assertThat(view.externalNo()).isEqualTo("PROV-2026-0001");
             assertThat(signature.get()).startsWith("sha256=");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("G56：同一清单换请求号重复提交 → 409，不新建出账交易")
+    void rejectsSecondSettleWithDifferentRequestId() {
+        AtomicReference<RealtimeSettlement> state = new AtomicReference<>();
+        InsuranceRepository repo = statefulRepo(state);
+        SettlementBill b = bill(SettlementBill.CONFIRMED);
+        when(repo.findBillById(any())).thenReturn(Optional.of(b));
+        state.set(new RealtimeSettlement(UUID.randomUUID(), b.id(), b.visitId(), "REQ-1",
+                RealtimeSettlement.SETTLE, "PROVINCE", RealtimeSettlement.FAILED, 1,
+                null, "网络超时", "{}", null, "admin01", Instant.now(), null, 2L));
+
+        assertThatThrownBy(() -> service(repo, "http://127.0.0.1:9099/settle",
+                "secret", "127.0.0.1").submit(b.id(), "REQ-2", "SETTLE", "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).insertRealtime(any());
+    }
+
+    @Test
+    @DisplayName("G56：已结算清单换请求号提交 → 幂等返回原交易")
+    void settledSettleIsIdempotentForAnyRequestId() {
+        AtomicReference<RealtimeSettlement> state = new AtomicReference<>();
+        InsuranceRepository repo = statefulRepo(state);
+        SettlementBill b = bill(SettlementBill.CONFIRMED);
+        when(repo.findBillById(any())).thenReturn(Optional.of(b));
+        state.set(new RealtimeSettlement(UUID.randomUUID(), b.id(), b.visitId(), "REQ-1",
+                RealtimeSettlement.SETTLE, "PROVINCE", RealtimeSettlement.SETTLED, 1,
+                "EXT-001", null, "{}", "{}", "admin01", Instant.now(), Instant.now(), 2L));
+
+        var view = service(repo, "http://127.0.0.1:9099/settle", "secret", "127.0.0.1")
+                .submit(b.id(), "REQ-OTHER", "SETTLE", "admin01");
+
+        assertThat(view.status()).isEqualTo(RealtimeSettlement.SETTLED);
+        assertThat(view.requestId()).isEqualTo("REQ-1");
+        assertThat(view.externalNo()).isEqualTo("EXT-001");
+    }
+
+    @Test
+    @DisplayName("G56：抢占失败（他线程在途）→ 不重复外呼省局，按库内最新状态返回")
+    void skipsDeliveryWhenClaimLost() throws Exception {
+        AtomicInteger hits = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/settle", exchange -> {
+            hits.incrementAndGet();
+            byte[] body = "{\"code\":0,\"success\":true,\"externalNo\":\"PROV-1\"}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            AtomicReference<RealtimeSettlement> state = new AtomicReference<>();
+            InsuranceRepository repo = statefulRepo(state);
+            SettlementBill b = bill(SettlementBill.CONFIRMED);
+            when(repo.findBillById(any())).thenReturn(Optional.of(b));
+            when(repo.claimRealtime(any(), anyLong())).thenReturn(false);
+            state.set(new RealtimeSettlement(UUID.randomUUID(), b.id(), b.visitId(), "REQ-1",
+                    RealtimeSettlement.SETTLE, "PROVINCE", RealtimeSettlement.DELIVERING, 1,
+                    null, null, "{}", null, "admin01", Instant.now(), null, 1L));
+
+            var view = service(repo, "http://127.0.0.1:" + server.getAddress().getPort() + "/settle",
+                    "secret", "127.0.0.1").submit(b.id(), "REQ-1", "SETTLE", "admin01");
+
+            assertThat(hits.get()).isZero();
+            assertThat(view.status()).isEqualTo(RealtimeSettlement.DELIVERING);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    @DisplayName("G56：结果回写冲突且库内非成功 → 409，不静默吞掉")
+    void surfacesWritebackConflict() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/settle", exchange -> {
+            byte[] body = "{\"code\":0,\"success\":true,\"externalNo\":\"PROV-2\"}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            AtomicReference<RealtimeSettlement> state = new AtomicReference<>();
+            InsuranceRepository repo = statefulRepo(state);
+            SettlementBill b = bill(SettlementBill.CONFIRMED);
+            when(repo.findBillById(any())).thenReturn(Optional.of(b));
+            when(repo.markRealtime(any(), any(), anyInt(), any(), any(), any(), anyLong()))
+                    .thenReturn(false);
+
+            assertThatThrownBy(() -> service(repo,
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/settle",
+                    "secret", "127.0.0.1").submit(b.id(), "REQ-1", "SETTLE", "admin01"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).errorCode())
+                    .isEqualTo(ErrorCode.CONFLICT);
         } finally {
             server.stop(0);
         }

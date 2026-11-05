@@ -119,8 +119,11 @@ public final class InsuranceModel {
     /**
      * 医保实时结算交易（对外适配层）。
      *
-     * <p>状态机：PENDING →（平台受理）→ SETTLED，或 →（平台拒绝/网络失败）→ FAILED。
-     * 同一清单 + 同一请求号唯一，重复提交幂等；失败可重试，成功不可重试。
+     * <p>状态机：PENDING →（抢占）→ DELIVERING →（平台受理）→ SETTLED，
+     * 或 →（平台拒绝/网络失败）→ FAILED；失败可重试，成功不可重试。
+     *
+     * <p>同一清单最多一笔在途/成功的 {@code SETTLE}（V21 部分唯一索引），
+     * 换请求号也不能重复出账；{@code DELIVERING} 为投递抢占态，防止并发双投递。
      */
     public record RealtimeSettlement(UUID id, UUID billId, UUID visitId, String requestId,
                                      String bizType, String platform, String status, int attempts,
@@ -132,6 +135,7 @@ public final class InsuranceModel {
         public static final String SETTLE = "SETTLE";
 
         public static final String PENDING = "PENDING";
+        public static final String DELIVERING = "DELIVERING";
         public static final String SETTLED = "SETTLED";
         public static final String FAILED = "FAILED";
     }

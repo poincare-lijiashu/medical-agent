@@ -577,7 +577,13 @@ public class InsuranceRepository {
             r.version
             """;
 
-    /** 插入交易占位；同一清单同一请求号已存在时不插入（幂等由唯一索引兜底）。 */
+    /**
+     * 插入交易占位；同一清单同一请求号、或同一清单已有在途/成功的 SETTLE 时不插入。
+     *
+     * <p>{@code ON CONFLICT DO NOTHING} 不指定目标：既要吸收
+     * {@code ux_realtime_settlement (bill_id, request_id)}，也要吸收 V21 的
+     * {@code ux_realtime_settle_once}（一单一次 SETTLE）；调用方据返回值回查既有交易。
+     */
     public boolean insertRealtime(RealtimeSettlement r) {
         return jdbc.sql("""
                         INSERT INTO insurance_svc.realtime_settlement
@@ -585,7 +591,7 @@ public class InsuranceRepository {
                              request_payload, created_by)
                         VALUES (:id, :billId, :visitId, :requestId, :bizType, :platform, 'PENDING',
                                 CAST(:requestPayload AS jsonb), :createdBy)
-                        ON CONFLICT (bill_id, request_id) DO NOTHING
+                        ON CONFLICT DO NOTHING
                         """)
                 .param("id", r.id()).param("billId", r.billId())
                 .param("visitId", r.visitId()).param("requestId", r.requestId())
@@ -607,7 +613,43 @@ public class InsuranceRepository {
                 .param(billId).param(requestId).query(REALTIME_MAPPER).optional();
     }
 
-    /** 交易结果回写（CAS：版本一致才更新，避免并发重试覆盖彼此结果）。 */
+    /**
+     * 该清单已存在的 SETTLE 交易（任意状态，按创建时间取最早）。
+     *
+     * <p>用于"一单一次 SETTLE"判定：同一清单即使换请求号，也不能再开一笔新的出账交易；
+     * 失败交易只能走 {@code retry} 复用原交易号与尝试次数。
+     */
+    public Optional<RealtimeSettlement> findSettleByBill(UUID billId) {
+        return jdbc.sql("SELECT " + REALTIME_COLUMNS
+                        + " FROM insurance_svc.realtime_settlement"
+                        + " WHERE bill_id = ? AND biz_type = 'SETTLE'"
+                        + " ORDER BY created_at, id LIMIT 1")
+                .param(billId).query(REALTIME_MAPPER).optional();
+    }
+
+    /**
+     * 投递抢占：PENDING/FAILED → DELIVERING（CAS 版本号）。
+     *
+     * <p>并发投递只允许一个线程成功抢到，抢不到的按库内最新状态返回，不再外呼省局；
+     * 进程崩溃遗留的 DELIVERING 超过 10 分钟可由下一次重试重新抢占。
+     * {@code attempts} 在抢占时自增：即使后续进程崩溃，也算作一次尝试，避免无限重投。
+     */
+    public boolean claimRealtime(UUID id, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.realtime_settlement
+                           SET status = 'DELIVERING',
+                               attempts = attempts + 1,
+                               version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND version = :version
+                           AND (status IN ('PENDING', 'FAILED')
+                                OR (status = 'DELIVERING'
+                                    AND updated_at < now() - interval '10 minutes'))
+                        """)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 交易结果回写（CAS：版本一致且仍处于投递抢占态才更新，避免并发覆盖彼此结果）。 */
     public boolean markRealtime(UUID id, String status, int attempts, String externalNo,
                                 String lastError, String responsePayload, long expectedVersion) {
         return jdbc.sql("""
@@ -618,7 +660,7 @@ public class InsuranceRepository {
                                response_payload = CAST(:responsePayload AS jsonb),
                                settled_at = CASE WHEN :status = 'SETTLED' THEN now() ELSE settled_at END,
                                version = version + 1, updated_at = now()
-                         WHERE id = :id AND version = :version
+                         WHERE id = :id AND version = :version AND status = 'DELIVERING'
                         """)
                 .param("status", status).param("attempts", attempts)
                 .param("externalNo", externalNo).param("lastError", lastError)
