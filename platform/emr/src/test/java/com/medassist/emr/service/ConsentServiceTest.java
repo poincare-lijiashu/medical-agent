@@ -62,7 +62,8 @@ class ConsentServiceTest {
         clinicalClient = mock(ClinicalClient.class);
         caProvider = mock(CaSignatureProvider.class);
         service = new ConsentService(repo, patientClient, clinicalClient, caProvider,
-                JsonMapper.builder().build());
+                JsonMapper.builder().build(),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
         when(patientClient.requireActive(patientId)).thenReturn(new PatientClient.PatientRef(
                 patientId, "P20261104000001", "张三", "MALE", LocalDate.of(1980, 5, 20)));
         when(clinicalClient.visit(visitId)).thenReturn(Optional.of(
@@ -180,6 +181,7 @@ class ConsentServiceTest {
     @DisplayName("签署：非草稿 → 409")
     void signRejectsNonDraft() {
         ConsentRecord signed = consent(ConsentRecord.SIGNED);
+        when(repo.findConsent(consentId)).thenReturn(Optional.of(signed));
         when(repo.lockConsent(consentId)).thenReturn(Optional.of(signed));
 
         assertThatThrownBy(() -> service.sign(consentId,
@@ -196,7 +198,9 @@ class ConsentServiceTest {
         when(repo.signConsent(eq(consentId), eq(0L), eq("李四"), eq("配偶"), eq("王五"),
                 eq("doctor01"), any(Instant.class), eq(ConsentRecord.SIGN_PAPER),
                 isNull(), isNull(), isNull())).thenReturn(true);
-        when(repo.findConsent(consentId)).thenReturn(Optional.of(consent(ConsentRecord.SIGNED)));
+        // 第一次是无锁快照（草稿），第二次是落库后的视图
+        when(repo.findConsent(consentId)).thenReturn(Optional.of(draft()),
+                Optional.of(consent(ConsentRecord.SIGNED)));
 
         ConsentView view = service.sign(consentId,
                 new SignReq("李四", "配偶", "王五", "doctor01", false, 0L), "doctor01");
@@ -215,7 +219,8 @@ class ConsentServiceTest {
         when(repo.signConsent(eq(consentId), eq(0L), eq("李四"), eq("配偶"), isNull(),
                 eq("doctor01"), eq(signedAt), eq(ConsentRecord.SIGN_CA), eq("MOCK-李四"),
                 eq("SIG"), eq("HMAC-SHA256"))).thenReturn(true);
-        when(repo.findConsent(consentId)).thenReturn(Optional.of(consent(ConsentRecord.SIGNED)));
+        when(repo.findConsent(consentId)).thenReturn(Optional.of(draft()),
+                Optional.of(consent(ConsentRecord.SIGNED)));
 
         service.sign(consentId,
                 new SignReq("李四", "配偶", null, "doctor01", true, 0L), "doctor01");
@@ -224,8 +229,25 @@ class ConsentServiceTest {
     }
 
     @Test
+    @DisplayName("签署：CA 在取行锁之前外呼，厂商失败时不加锁也不落库（G75）")
+    void caSignCallsProviderBeforeLock() {
+        when(repo.findConsent(consentId)).thenReturn(Optional.of(draft()));
+        when(caProvider.sign(any()))
+                .thenThrow(new BusinessException(ErrorCode.CA_PROVIDER_UNAVAILABLE));
+
+        assertThatThrownBy(() -> service.sign(consentId,
+                new SignReq("李四", "配偶", null, "doctor01", true, 0L), "doctor01"))
+                .isInstanceOf(BusinessException.class);
+
+        verify(repo, never()).lockConsent(any());
+        verify(repo, never()).signConsent(any(), anyLong(), anyString(), anyString(), any(),
+                anyString(), any(), anyString(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("签署：CAS 未命中 → 409")
     void signCasConflict() {
+        when(repo.findConsent(consentId)).thenReturn(Optional.of(draft()));
         when(repo.lockConsent(consentId)).thenReturn(Optional.of(draft()));
         when(repo.signConsent(any(), anyLong(), anyString(), anyString(), any(), anyString(),
                 any(), anyString(), any(), any(), any())).thenReturn(false);

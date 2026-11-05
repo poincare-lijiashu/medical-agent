@@ -13,6 +13,7 @@ import com.medassist.emr.domain.EmrModel.RecordHit;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.domain.EmrModel.Template;
 import com.medassist.emr.repo.EmrRepository;
+import com.medassist.emr.service.CaSignatureProvider.CaSignResult;
 import com.medassist.emr.web.EmrDtos.AmendReq;
 import com.medassist.emr.web.EmrDtos.ChangeRequestReq;
 import com.medassist.emr.web.EmrDtos.CreateRecordReq;
@@ -24,6 +25,7 @@ import com.medassist.emr.web.EmrDtos.SaveContentReq;
 import com.medassist.emr.web.EmrDtos.SubmitResult;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -62,6 +64,8 @@ public class RecordService {
     private final ClinicalClient clinicalClient;
     private final CaSignatureService caSignatureService;
     private final ObjectMapper objectMapper;
+    /** CA 签名要控制"锁外外呼、锁内落库"的边界，必须显式管理事务（G75）。 */
+    private final TransactionTemplate tx;
 
     /** 时限类规则拿不到入院时间时的"未评估"结果后缀（与真实超时区分，便于统计）。 */
     static final String NOT_EVALUATED_SUFFIX = ":NOT_EVALUATED";
@@ -71,12 +75,14 @@ public class RecordService {
 
     public RecordService(EmrRepository repo, PatientClient patientClient,
                          ClinicalClient clinicalClient, CaSignatureService caSignatureService,
-                         ObjectMapper objectMapper) {
+                         ObjectMapper objectMapper,
+                         org.springframework.transaction.PlatformTransactionManager txManager) {
         this.repo = repo;
         this.patientClient = patientClient;
         this.clinicalClient = clinicalClient;
         this.caSignatureService = caSignatureService;
         this.objectMapper = objectMapper;
+        this.tx = new TransactionTemplate(txManager);
     }
 
     // ---------------------------------------------------------------- 书写
@@ -207,7 +213,6 @@ public class RecordService {
     /**
      * 签名（默认书写医师级别，兼容旧调用）。
      */
-    @Transactional
     public RecordView sign(UUID id, String actor) {
         return sign(id, RecordSignature.AUTHOR, actor, false);
     }
@@ -218,7 +223,6 @@ public class RecordService {
      * <p>上级签名不改正文，因此沿用当前 revision 已落库的内容哈希；
      * 若正文被修订（revision+1）签名记录随之作废，必须从书写医师重新签起。
      */
-    @Transactional
     public RecordView sign(UUID id, String level, String actor) {
         return sign(id, level, actor, false);
     }
@@ -226,10 +230,15 @@ public class RecordService {
     /**
      * 签名并可选获取 CA 电子签名。
      *
-     * <p>{@code caSign=true} 时 CA 适配层在同一事务内签署当前内容哈希；
-     * CA 服务失败会抛出异常并回滚病历签名，避免出现"无 CA 证书的已签病历"。
+     * <p>G75 起 CA 签名的执行顺序是「无锁快照 → 锁外调 CA → 短事务复核并落库」。
+     * 原实现先 {@code lockRecord} 再在同一个事务里调 CA 厂商 HTTP：厂商慢几秒，
+     * 这份病历的行锁就占几秒，同病历的签名/修订/归档全部排队，数据库连接也被占着。
+     * 现在 CA 失败根本不会产生任何写操作，"无 CA 证书的已签病历"依然不可能出现，
+     * 但不再需要靠回滚半个签名来保证。
+     *
+     * <p>代价是极端并发下可能白调一次 CA：锁内会复核 revision 与内容哈希，
+     * 不一致直接 409 要求重新签发，绝不把"签的是旧内容"的证书落到新版本上。
      */
-    @Transactional
     public RecordView sign(UUID id, String level, String actor, boolean caSign) {
         String signType = (level == null || level.isBlank())
                 ? RecordSignature.AUTHOR : level.trim().toUpperCase();
@@ -238,41 +247,47 @@ public class RecordService {
             throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
                     "签名级别不合法：" + level);
         }
+        if (!caSign) {
+            return tx.execute(status -> signInTransaction(id, signType, targetLevel, actor, null));
+        }
+        // ① 无锁快照：只读，校验级别推进与签署人身份，算出待签哈希
+        MedicalRecord snapshot = repo.findRecord(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
+        SignPlan plan = planSignature(snapshot, signType, targetLevel, actor);
+        // ② 锁外外呼 CA：不持行锁、不在事务内
+        CaSignResult caResult = caSignatureService.preSign(snapshot, actor, signType, plan.hash());
+        // ③ 短事务：重新加锁复核 revision/哈希后落库
+        return tx.execute(status -> signInTransaction(id, signType, targetLevel, actor,
+                new PendingCa(plan.hash(), caResult)));
+    }
+
+    /**
+     * 签名落库（调用方负责事务边界；方法内先取病历行锁）。
+     *
+     * @param pendingCa CA 已在锁外签好的结果；null 表示本次不取 CA 签名
+     */
+    private RecordView signInTransaction(UUID id, String signType, int targetLevel, String actor,
+                                         PendingCa pendingCa) {
         MedicalRecord record = repo.lockRecord(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_RECORD_NOT_FOUND));
-        int currentLevel = repo.currentSignLevel(id, record.revision());
-        if (targetLevel != currentLevel + 1) {
-            throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
-                    "当前已签到「" + RecordSignature.levelName(currentLevel) + "」，"
-                            + "下一步应签「" + RecordSignature.levelName(currentLevel + 1) + "」");
+        SignPlan plan = planSignature(record, signType, targetLevel, actor);
+        String hash = plan.hash();
+        if (pendingCa != null && !pendingCa.hash().equals(hash)) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "病历在签发过程中被修订或内容已变化，请刷新后重新签");
         }
-        ensureSignerIdentity(record, targetLevel, currentLevel, actor);
-
-        String hash;
         if (targetLevel == 1) {
-            if (!MedicalRecord.SUBMITTED.equals(record.status())) {
-                throw new BusinessException(ErrorCode.EMR_RECORD_STATUS_INVALID,
-                        "只有已提交的病历可以签名，当前：" + record.status());
-            }
-            hash = sha256(record.contentText());
             if (!repo.signRecord(id, actor, hash, record.version())) {
                 throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
             }
-        } else {
-            if (!MedicalRecord.SIGNED.equals(record.status())) {
-                throw new BusinessException(ErrorCode.EMR_RECORD_STATUS_INVALID,
-                        "上级签名前必须先完成下级签名，当前：" + record.status());
-            }
-            hash = record.contentHash() == null ? sha256(record.contentText()) : record.contentHash();
-            if (!repo.countersign(id, actor, hash, record.version())) {
-                throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
-            }
+        } else if (!repo.countersign(id, actor, hash, record.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "病历状态已变化，请刷新后重试");
         }
         RecordSignature signature = new RecordSignature(UUID.randomUUID(), id,
                 record.revision(), actor, signType, null, hash);
         repo.insertSignature(signature);
-        if (caSign) {
-            caSignatureService.sign(record, signature, actor);
+        if (pendingCa != null) {
+            caSignatureService.persist(record, signature, pendingCa.result(), actor);
         }
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("recordNo", record.recordNo());
@@ -280,9 +295,44 @@ public class RecordService {
         detail.put("level", targetLevel);
         detail.put("signType", signType);
         detail.put("hash", hash);
-        detail.put("caSign", caSign);
+        detail.put("caSign", pendingCa != null);
         audit(actor, "RECORD_SIGN", "RECORD", id.toString(), detail);
         return detail(id);
+    }
+
+    /**
+     * 签名前置校验与待签哈希（G75 抽出，供无锁快照与锁内复核共用同一口径）。
+     */
+    private SignPlan planSignature(MedicalRecord record, String signType, int targetLevel,
+                                   String actor) {
+        int currentLevel = repo.currentSignLevel(record.id(), record.revision());
+        if (targetLevel != currentLevel + 1) {
+            throw new BusinessException(ErrorCode.EMR_SIGN_LEVEL_INVALID,
+                    "当前已签到「" + RecordSignature.levelName(currentLevel) + "」，"
+                            + "下一步应签「" + RecordSignature.levelName(currentLevel + 1) + "」");
+        }
+        ensureSignerIdentity(record, targetLevel, currentLevel, actor);
+        if (targetLevel == 1) {
+            if (!MedicalRecord.SUBMITTED.equals(record.status())) {
+                throw new BusinessException(ErrorCode.EMR_RECORD_STATUS_INVALID,
+                        "只有已提交的病历可以签名，当前：" + record.status());
+            }
+            return new SignPlan(sha256(record.contentText()));
+        }
+        if (!MedicalRecord.SIGNED.equals(record.status())) {
+            throw new BusinessException(ErrorCode.EMR_RECORD_STATUS_INVALID,
+                    "上级签名前必须先完成下级签名，当前：" + record.status());
+        }
+        return new SignPlan(record.contentHash() == null
+                ? sha256(record.contentText()) : record.contentHash());
+    }
+
+    /** 待签哈希。 */
+    private record SignPlan(String hash) {
+    }
+
+    /** 锁外已拿到的 CA 结果，连同它签的那份哈希。 */
+    private record PendingCa(String hash, CaSignResult result) {
     }
 
     /**

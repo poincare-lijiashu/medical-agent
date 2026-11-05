@@ -50,17 +50,31 @@ public class CaSignatureService {
         return provider.mode();
     }
 
-    /** 在病历签名事务内调用：CA 失败会抛出并回滚签名。 */
-    @Transactional
-    public CaSignature sign(MedicalRecord record, RecordSignature signature, String actor) {
-        if (signature.contentHash() == null || signature.contentHash().isBlank()) {
+    /**
+     * 锁外预签（G75）：只外呼 CA 厂商，不写库、不占行锁。
+     *
+     * <p>调用方必须先持有"无锁读取的病历快照"，拿到结果后在自己的短事务里
+     * 复核哈希/版本一致再落库。这样 CA 厂商抖动时阻塞的是本请求，而不是
+     * 该病历的整行（原先锁内调 CA，厂商慢 2 秒=同一病历 2 秒内所有写操作排队）。
+     */
+    public CaSignResult preSign(MedicalRecord record, String signer, String signType,
+                                String contentHash) {
+        if (contentHash == null || contentHash.isBlank()) {
             throw new BusinessException(ErrorCode.CA_SIGNATURE_INVALID, "病历签名缺少内容哈希");
         }
+        return provider.sign(new CaSignCommand(record.recordNo(), contentHash, signer, signType));
+    }
+
+    /**
+     * 锁内落库（G75）：把 {@link #preSign} 的结果与病历签名写在同一事务。
+     *
+     * <p>调用方必须已持有该病历行锁，并已复核内容哈希与预签时一致。
+     */
+    public CaSignature persist(MedicalRecord record, RecordSignature signature,
+                               CaSignResult result, String actor) {
         if (repo.findCaSignatureBySignature(signature.id()).isPresent()) {
             throw new BusinessException(ErrorCode.CA_SIGNATURE_EXISTS);
         }
-        CaSignResult result = provider.sign(new CaSignCommand(record.recordNo(),
-                signature.contentHash(), signature.signer(), signature.signType()));
         CaSignature ca = new CaSignature(UUID.randomUUID(), signature.id(), record.id(),
                 signature.revision(), signature.signer(), signature.signType(),
                 signature.contentHash(), provider.mode(), result.certificateSerial(),
@@ -72,6 +86,19 @@ public class CaSignatureService {
                 "signType", signature.signType(), "certificateSerial",
                 result.certificateSerial(), "algorithm", result.algorithm()));
         return ca;
+    }
+
+    /**
+     * 兼容入口：预签 + 落库合并在一个事务里。
+     *
+     * <p>只保留给"调用方已经不需要控制锁边界"的场景；病历签名必须走
+     * {@link #preSign} + {@link #persist}，否则会退化成锁内调下游 HTTP（G75）。
+     */
+    @Transactional
+    public CaSignature sign(MedicalRecord record, RecordSignature signature, String actor) {
+        CaSignResult result = preSign(record, signature.signer(), signature.signType(),
+                signature.contentHash());
+        return persist(record, signature, result, actor);
     }
 
     /**

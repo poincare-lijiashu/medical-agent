@@ -183,9 +183,15 @@
 |---|---|---|
 | §6.14 | 5 处列表是"SQL 只按院区收敛 + `LIMIT`，再在 Controller 内存按科室过滤"：`RegistrationController.listByPatient`、`InpatientController.listWards`、`RecordController.list`/`search`、`HomepageController.list`（评审列了前 4 处，第 5 处同形态一并收口）。他科行先占掉 limit 额度 → 本科室更早的数据被静默截断且不可翻页；CDR 检索留痕里的 `hits` 还是过滤前的数，与实际返回不一致 | 科室集合改为 SQL 谓词下推（`CAST(:deptIds AS uuid[]) IS NULL OR dept_id = ANY(CAST(:deptIds AS uuid[]))`，与 tech 域既有写法一致）：`ClinicalRepository.listVisitsByPatient`/`listWards`、`EmrRepository.listRecords`/`searchRecords`/`listHomepageSummaries` 各加 `deptIds` 重载，旧签名保留并委托 `null`；Controller 删除内存过滤，只传 `scope.allDepartments() ? null : scope.deptCodes()`。**反证（真实链路）**：同一患者先在 A 科挂号、再在 B 科挂号（B 更新），只绑 A 科的医生请求 `limit=1` → 返回的是 A 科那条（旧实现 SQL 取到 B 后被内存滤掉，结果必为空）；病历列表同法验证（返回 A 科草稿）。冒烟 `clinical_multi_dept_smoke`、`campus_isolation`(77)、`emr_smoke`、`emr_homepage_smoke`、`platform_smoke`、`clinical_pharmacy_order_smoke` 全 PASS |
 
+### G75 批次已关闭（病历/同意书签名不再锁内调下游 CA，mock 182 类 / 1727 项全绿）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §4 建议 9（锁内调下游 HTTP） | `RecordService.sign(caSign=true)` 先 `lockRecord` 再在同一事务里调 CA 厂商，`ConsentService.sign(caSign=true)` 同样先 `lockConsent` 再外呼：厂商慢几秒，这份病历/同意书的行锁就占几秒，同单据的签名/修订/归档/撤销全部排队，数据库连接也被一并占住。这与 insurance deliver 已修的"锁内 HTTP"是同一反模式 | 改为「**无锁快照 → 锁外调 CA → 短事务复核并落库**」：`CaSignatureService` 拆成 `preSign`（只外呼，不落库）与 `persist`（落台账 + 审计，调用方已持锁）。`RecordService` 不再对 CA 路径标注 `@Transactional`，改用 `TransactionTemplate` 显式划分三个阶段；锁内用同一 `planSignature` 复核级别推进/签署人/状态，并比对内容哈希与预签时一致，不一致 409 要求重签（绝不把"签的是旧内容"的证书落到新版本）。`ConsentService` 同理：正文与哈希创建时固化，锁内只复核草稿状态与 version CAS。事务边界从注解改为显式模板后，原先 `sign(id, actor)` / `sign(id, level, actor)` 因自调用**实际未开事务**的隐患一并消除。**反证**：单测断言 CA 抛错时 `lockRecord`/`lockConsent` 与任何写操作都未被调用；锁内哈希漂移返回 409 且不写签名与 CA 台账。真实链路：病历 `caSign=true` 签发 → 台账 1 条（`MOCK-*` / HMAC-SHA256 / AUTHOR）→ 验签 VALID；同意书 CA 签署 → `signMethod=CA`、证书序列号 `MOCK-*`、`:verify` 哈希与签名双 True。冒烟 `emr_smoke`、`emr_homepage_smoke`、`campus_isolation`(77) 全 PASS |
+
 ### 未处理（下一批）
 
-§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、锁内调下游 HTTP、解析吞错、时间口径漂移、worker 多实例假设。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、解析吞错、时间口径漂移、worker 多实例假设。
 
 ---
 

@@ -73,7 +73,8 @@ class RecordServiceTest {
         clinicalClient = mock(ClinicalClient.class);
         caSignatureService = mock(CaSignatureService.class);
         service = new RecordService(repo, patientClient, clinicalClient, caSignatureService,
-                JsonMapper.builder().build());
+                JsonMapper.builder().build(),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
         when(patientClient.requireActive(patientId)).thenReturn(new PatientClient.PatientRef(
                 patientId, "P20261031000001", "张三", "MALE", java.time.LocalDate.of(1980, 5, 20)));
         when(repo.nextRecordNo()).thenReturn("MR20261031000001");
@@ -89,10 +90,16 @@ class RecordServiceTest {
     }
 
     private MedicalRecord record(String status, int revision, long version, String contentJson) {
+        return record(status, revision, version, contentJson,
+                "主诉：发热\n体格检查：咽红\n初步诊断：急性上呼吸道感染\n");
+    }
+
+    private MedicalRecord record(String status, int revision, long version, String contentJson,
+                                 String contentText) {
         return new MedicalRecord(recordId, "MR20261031000001", patientId, "P20261031000001",
                 null, null, null, "ADMISSION_NOTE", "TPL-ADMISSION", "入院记录",
-                contentJson, "主诉：发热\n体格检查：咽红\n初步诊断：急性上呼吸道感染\n",
-                "doctor01", status, revision, null, null, null, null, version, Instant.now());
+                contentJson, contentText, "doctor01", status, revision, null, null, null, null,
+                version, Instant.now());
     }
 
     private List<QcRule> rules() {
@@ -322,6 +329,63 @@ class RecordServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.EMR_RECORD_STATUS_INVALID);
+    }
+
+    @Test
+    @DisplayName("签名（CA）：先无锁快照再外呼 CA，厂商失败时一行都不写（G75）")
+    void caSignCallsProviderBeforeLock() {
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 3L, "{}")));
+        when(caSignatureService.preSign(any(), anyString(), anyString(), anyString()))
+                .thenThrow(new BusinessException(ErrorCode.CA_PROVIDER_UNAVAILABLE));
+
+        assertThatThrownBy(() -> service.sign(recordId, "AUTHOR", "doctor01", true))
+                .isInstanceOf(BusinessException.class);
+
+        // 关键断言：CA 外呼发生在取行锁之前，失败时既没加锁也没落任何记录
+        verify(repo, never()).lockRecord(any());
+        verify(repo, never()).insertSignature(any());
+        verify(caSignatureService, never()).persist(any(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("签名（CA）：锁内发现正文已变化 → 409，CA 结果作废不落库（G75）")
+    void caSignRejectsChangedContentInsideLock() {
+        when(repo.findRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 3L, "{}")));
+        when(caSignatureService.preSign(any(), anyString(), anyString(), anyString()))
+                .thenReturn(new CaSignatureProvider.CaSignResult("MOCK-doctor01", "SIG",
+                        "HMAC-SHA256", Instant.now()));
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 3L, "{}", "主诉：已在签发过程中被修订\n")));
+
+        assertThatThrownBy(() -> service.sign(recordId, "AUTHOR", "doctor01", true))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+
+        verify(repo, never()).insertSignature(any());
+        verify(caSignatureService, never()).persist(any(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("签名（CA）：锁外预签、锁内落库，CA 台账与签名同事务写入（G75）")
+    void caSignPersistsAfterLock() {
+        when(repo.findRecord(recordId)).thenReturn(
+                Optional.of(record(MedicalRecord.SUBMITTED, 1, 3L, "{}")),
+                Optional.of(record(MedicalRecord.SIGNED, 1, 4L, "{}")));
+        when(repo.lockRecord(recordId)).thenReturn(Optional.of(
+                record(MedicalRecord.SUBMITTED, 1, 3L, "{}")));
+        when(repo.signRecord(eq(recordId), eq("doctor01"), anyString(), eq(3L))).thenReturn(true);
+        when(caSignatureService.preSign(any(), anyString(), anyString(), anyString()))
+                .thenReturn(new CaSignatureProvider.CaSignResult("MOCK-doctor01", "SIG",
+                        "HMAC-SHA256", Instant.now()));
+
+        service.sign(recordId, "AUTHOR", "doctor01", true);
+
+        verify(caSignatureService).preSign(any(), eq("doctor01"), eq("AUTHOR"), anyString());
+        verify(repo).insertSignature(any());
+        verify(caSignatureService).persist(any(), any(), any(), eq("doctor01"));
     }
 
     @Test

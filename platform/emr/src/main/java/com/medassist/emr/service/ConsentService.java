@@ -19,6 +19,7 @@ import com.medassist.emr.web.ConsentDtos.TemplateView;
 import com.medassist.emr.web.ConsentDtos.VerifyView;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.util.HtmlUtils;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -56,15 +57,19 @@ public class ConsentService {
     private final ClinicalClient clinicalClient;
     private final CaSignatureProvider caProvider;
     private final ObjectMapper objectMapper;
+    /** CA 签署要"锁外外呼、锁内落库"，必须显式管理事务（G75）。 */
+    private final TransactionTemplate tx;
 
     public ConsentService(ConsentRepository repo, PatientClient patientClient,
                           ClinicalClient clinicalClient, CaSignatureProvider caProvider,
-                          ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper,
+                          org.springframework.transaction.PlatformTransactionManager txManager) {
         this.repo = repo;
         this.patientClient = patientClient;
         this.clinicalClient = clinicalClient;
         this.caProvider = caProvider;
         this.objectMapper = objectMapper;
+        this.tx = new TransactionTemplate(txManager);
     }
 
     // ---------------------------------------------------------------- templates
@@ -163,40 +168,58 @@ public class ConsentService {
         return view(repo.findConsent(consent.id()).orElseThrow());
     }
 
-    @Transactional
+    /**
+     * 签署（CA 模式）。
+     *
+     * <p>G75 起 CA 外呼放在行锁之外：原实现先 {@code lockConsent} 再在事务里调厂商
+     * HTTP，厂商慢几秒这份同意书的行锁就占几秒，同单据的撤销/重签全部排队。
+     * 同意书正文与内容哈希在创建时固化、签署不改正文，因此"锁外按快照签、锁内复核
+     * 状态与版本再落库"不会产生哈希漂移；CA 失败也不再生任何写操作。
+     */
     public ConsentView sign(UUID id, SignReq req, String actor) {
         long expectedVersion = requireVersion(req.version());
+        String signer = trimToNull(req.patientSigner());
+        String relation = trimToNull(req.patientRelation());
+        if (signer == null || relation == null) {
+            throw new BusinessException(ErrorCode.CONSENT_SIGNER_REQUIRED);
+        }
+        // ① 无锁快照：状态与内容哈希只读校验
+        ConsentRecord snapshot = repo.findConsent(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CONSENT_NOT_FOUND));
+        if (!snapshot.draft()) {
+            throw new BusinessException(ErrorCode.CONSENT_STATUS_INVALID,
+                    "只有草稿同意书可以签署，当前：" + snapshot.status());
+        }
+        // ② 锁外外呼 CA
+        boolean caSign = Boolean.TRUE.equals(req.caSign());
+        CaSignResult caResult = caSign
+                ? caProvider.sign(new CaSignCommand(snapshot.consentNo(),
+                        snapshot.contentHash(), signer, "CONSENT"))
+                : null;
+        // ③ 短事务：加锁复核状态与版本后落库
+        return tx.execute(status -> signInTransaction(id, req, actor, expectedVersion,
+                signer, relation, caResult));
+    }
+
+    /** 签署落库（调用方负责事务边界；方法内先取同意书行锁）。 */
+    private ConsentView signInTransaction(UUID id, SignReq req, String actor, long expectedVersion,
+                                          String signer, String relation, CaSignResult caResult) {
         ConsentRecord consent = repo.lockConsent(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.CONSENT_NOT_FOUND));
         if (!consent.draft()) {
             throw new BusinessException(ErrorCode.CONSENT_STATUS_INVALID,
                     "只有草稿同意书可以签署，当前：" + consent.status());
         }
-        String signer = trimToNull(req.patientSigner());
-        String relation = trimToNull(req.patientRelation());
-        if (signer == null || relation == null) {
-            throw new BusinessException(ErrorCode.CONSENT_SIGNER_REQUIRED);
-        }
         String doctor = trimToNull(req.doctorName());
         if (doctor == null) {
             doctor = consent.doctorName();
         }
 
-        boolean caSign = Boolean.TRUE.equals(req.caSign());
-        String method = ConsentRecord.SIGN_PAPER;
-        String certificateSerial = null;
-        String signatureValue = null;
-        String algorithm = null;
-        Instant signedAt = Instant.now();
-        if (caSign) {
-            CaSignResult result = caProvider.sign(new CaSignCommand(consent.consentNo(),
-                    consent.contentHash(), signer, "CONSENT"));
-            method = ConsentRecord.SIGN_CA;
-            certificateSerial = result.certificateSerial();
-            signatureValue = result.signatureValue();
-            algorithm = result.algorithm();
-            signedAt = result.signedAt();
-        }
+        String method = caResult == null ? ConsentRecord.SIGN_PAPER : ConsentRecord.SIGN_CA;
+        String certificateSerial = caResult == null ? null : caResult.certificateSerial();
+        String signatureValue = caResult == null ? null : caResult.signatureValue();
+        String algorithm = caResult == null ? null : caResult.algorithm();
+        Instant signedAt = caResult == null ? Instant.now() : caResult.signedAt();
 
         if (!repo.signConsent(id, expectedVersion, signer, relation, trimToNull(req.witnessName()),
                 doctor, signedAt, method, certificateSerial, signatureValue, algorithm)) {
