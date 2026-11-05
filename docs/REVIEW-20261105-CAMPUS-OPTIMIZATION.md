@@ -137,9 +137,15 @@
 | §3.6 | FAILED/IGNORED 被唯一键永久缓存，全仓无重放入口，瞬时故障的 ORU 永久丢失 | 新增 `POST /tech/lis/messages/{id}/replay`（`tech:lis:write`，已关联申请的过 `TechAccessGuard.requireApplication` 院区校验）：CAS 把 FAILED/IGNORED 抢成 `PROCESSING` 再重新处理，并发重放只有一个能继续；另允许接管"卡死超 10 分钟仍 PROCESSING"的崩溃残留。已 PROCESSED 的消息直接返回原结果，不重复写报告 |
 | §3.8 | 报告 amend 直接落 `AMENDED` 且 `reviewer=actor`，绕过书写/审核分权；`critical_value.report_id` 仍指旧 revision，修订后界面显示"无危急值" | amend 改落 `DRAFT`（reviewer 为空），必须走 `review` 签发；签发时 `revision>1` 落 `AMENDED`，并拒绝"同一书写人自审自签"（403）。危急值读取改按**申请维度**（新增 `listCriticalValuesByApplication`），修订版与历史版共享同一组危急值；`rewrite` 的危急值去重也改按申请维度，避免修订后再插一遍。签发时只在申请仍为 `IN_PROGRESS` 时推进到 `REPORTED`，修订签发不再因此 409 |
 
+### G68 批次已关闭（代码 commit `037e46c`，mock 182 类 / 1718 项全绿，tech 冒烟含四眼修订全过）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.3 | `TechAccessGuard` 四个 require 只回溯申请院区，科室判定散落在 `ApplicationController.detail` 的内存过滤里：申请列表/详情按科室收敛，但 `GET /tech/reports/{id}` 与 `/tech/criticals` 对同申请可读全文与危急值——列表不可见、详情可达 | 新增 `findApplicationScope`（一条 SQL 取 `campus_id + dept_id`），guard 改为 **dept + campus 双条件**（任一为空即 fail-closed），申请/报告/危急值/影像登记四个入口同口径；Controller 删除 guard 之外的二次过滤。真实链路实测：同为主院区，`doctor01`（病区科室）对病区申请 200、对门诊科室申请 404，`admin01` 两者均 200 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项：**§2.5**（转送审计写失败覆写已成功 TRANSFERRED）、**§3.7**（rewrite 丢弃新增危急值）、**§3.9**（计费补偿毒丸饿死后续异常单）、**§6.3**（tech 详情只校院区不校科室）、**§6.8**（三域迁移跨 schema 回填顺序耦合）。另 §6.12（campusCsv 7 份私有实现收敛）、§6.15（大表 NOT NULL 锁风险）为 [建议] 级收敛项。
+其余 [必须] 项：**§2.5**（转送审计写失败覆写已成功 TRANSFERRED）、**§3.7**（rewrite 丢弃新增危急值）、**§3.9**（计费补偿毒丸饿死后续异常单）、**§6.8**（三域迁移跨 schema 回填顺序耦合）。另 §6.12（campusCsv 7 份私有实现收敛）、§6.15（大表 NOT NULL 锁风险）为 [建议] 级收敛项。
 
 ---
 
