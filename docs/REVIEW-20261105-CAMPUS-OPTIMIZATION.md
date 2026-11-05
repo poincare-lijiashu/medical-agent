@@ -123,7 +123,7 @@
 | §2.8（§6.1 硬证据部分） | `EmergencyService.register` 走两参重载，院区写死 `DEFAULT_CAMPUS_ID`，东院区急诊患者被登记到主院区（处方/检查/结算清单随之全错） | `register` 接 `DataScope`：先校验分诊科室可见，再以 `scope.campusForWrite()` 落就诊院区；单测断言必须走三参重载且院区来自账号 |
 | §6.1（出院带药部分） | 出院带药 6 个接口无 `DataScope`/guard，列表不过院区 | 列表按就诊院区下推 SQL（`CampusFilters.csv`）；详情/提交/同步/取消先反查所属就诊过 `VisitAccessGuard`（越权与不存在同码）；开立校验 `visitId` 归属 |
 
-### G66 批次已关闭（clinical V57 已执行，mock 181 类 / 1705 项全绿，院区冒烟 77/77）
+### G66 批次已关闭（代码 commit `ba05355`，clinical V57 已执行，mock 181 类 / 1705 项全绿，院区冒烟 77/77）
 
 | 条目 | 原问题 | 处置 |
 |---|---|---|
