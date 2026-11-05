@@ -39,7 +39,7 @@
       <main class="content">
         <!-- KeepAlive：轮2/3 视图状态跨路由保留（切视图不丢会话历史/表单，等价 legacy 内存态） -->
         <RouterView v-slot="{ Component }">
-          <KeepAlive include="LiteratureView,ImagingView,CaseView,ConsultView,RxView,ReviewCenterView,QcView,KbView,DataView">
+          <KeepAlive include="AskView,LiteratureView,ImagingView,CaseView,ConsultView,RxView,ReviewCenterView,QcView,KbView,DataView">
             <component :is="Component" />
           </KeepAlive>
         </RouterView>

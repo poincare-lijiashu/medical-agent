@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import AppShell from '../layouts/AppShell.vue'
 import LoginView from '../views/LoginView.vue'
 import OverviewView from '../views/OverviewView.vue'
+import AskView from '../views/AskView.vue'
 import LiteratureView from '../views/LiteratureView.vue'
 import ImagingView from '../views/ImagingView.vue'
 import CaseView from '../views/CaseView.vue'
@@ -27,6 +28,8 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: OverviewView },
+        // G100：医生端统一问答（规则路由 + 已发布技能卡生效 + 合规模型）
+        { path: 'ask', name: 'ask', component: AskView },
         // 轮2 真实视图：literature 文献助手 / imaging 影像阅片 / rx 开药工作台；
         // mdt 与 myconsults 共用 ConsultView（内部按路由名切换会诊发起与我的会诊双屏）
         { path: 'literature', name: 'literature', component: LiteratureView },

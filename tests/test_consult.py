@@ -239,6 +239,30 @@ def test_consult_requires_auth(monkeypatch, tmp_path):
     assert c.post("/api/v1/agent/consult", json={"question": "药物相互作用"}).status_code == 401
 
 
+def test_doctor_page_bootstrap_contract(monkeypatch, tmp_path):
+    """G100 医生端页面引导数据：目录按角色过滤 + 只暴露已发布技能卡。"""
+    _publish(agent_id="drug", code="drug-check", name="药物相互作用核对")
+    skills.create_skill({
+        "code": "drug-draft", "name": "未发布技能",
+        "description": "医生端不得看到尚未审核通过的技能卡。",
+        "agentId": "drug",
+        "promptTemplate": "这是一段尚未审核的提示模板，不应出现在医生端技能列表。",
+        "toolAllowlist": ["drug_check"], "evidenceRefs": ["指南 2026"],
+        "guardrails": {"hitl": True, "requireEvidence": True, "maxInputChars": 1000},
+    }, "admin01")
+    c, _ = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+
+    catalog = c.get("/api/v1/agent/catalog", headers=h).json()
+    ids = {a["id"] for a in catalog["agents"]}
+    assert {"drug", "literature", "imaging"} <= ids
+    assert any(a["skills"] and a["skills"][0]["examples"] for a in catalog["agents"])
+
+    cards = c.get("/api/v1/agent/skills", headers=h).json()["skills"]
+    assert all(x["status"] == "PUBLISHED" for x in cards)
+    assert "drug-draft" not in {x["code"] for x in cards}
+
+
 def test_consult_endpoint_and_audit(monkeypatch, tmp_path):
     c, audit = _client(monkeypatch, tmp_path)
     token = _login(c, "doctor01")
