@@ -6,6 +6,7 @@ import com.medassist.tech.domain.TechModel.CriticalValue;
 import com.medassist.tech.domain.TechModel.Device;
 import com.medassist.tech.domain.TechModel.DeviceQc;
 import com.medassist.tech.domain.TechModel.DeviceStatusCount;
+import com.medassist.tech.domain.TechModel.DeviceWorkOrder;
 import com.medassist.tech.domain.TechModel.ExamItem;
 import com.medassist.tech.domain.TechModel.LisInboundMessage;
 import com.medassist.tech.domain.TechModel.PacsAccessLog;
@@ -21,6 +22,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -1193,6 +1195,177 @@ public class TechRepository {
                          WHERE result = 'FAIL' AND performed_at >= :fromTs
                         """).param("fromTs", from).query(Integer.class).single();
         return count == null ? 0 : count;
+    }
+
+    // ---------------------------------------------------------------- 设备维保工单（G82）
+
+    private static final RowMapper<DeviceWorkOrder> WORK_ORDER_MAPPER =
+            (rs, i) -> new DeviceWorkOrder(
+                    rs.getObject("id", UUID.class), rs.getString("order_no"),
+                    rs.getObject("device_id", UUID.class), rs.getString("device_no"),
+                    rs.getString("device_name"), rs.getString("order_type"),
+                    rs.getString("priority"), rs.getString("title"), rs.getString("description"),
+                    rs.getString("reported_by"), instantOrNull(rs, "reported_at"),
+                    rs.getString("vendor"), rs.getString("status"),
+                    instantOrNull(rs, "started_at"), instantOrNull(rs, "finished_at"),
+                    rs.getString("resolution"), rs.getBigDecimal("cost_amount"),
+                    rs.getString("accepted_by"), instantOrNull(rs, "accepted_at"),
+                    rs.getString("accept_note"), rs.getString("cancel_reason"),
+                    rs.getString("created_by"), rs.getLong("version"),
+                    instantOrNull(rs, "created_at"));
+
+    private static final String WORK_ORDER_SELECT = """
+            SELECT w.id, w.order_no, w.device_id, d.device_no, d.name AS device_name,
+                   w.order_type, w.priority, w.title, w.description, w.reported_by, w.reported_at,
+                   w.vendor, w.status, w.started_at, w.finished_at, w.resolution, w.cost_amount,
+                   w.accepted_by, w.accepted_at, w.accept_note, w.cancel_reason, w.created_by,
+                   w.version, w.created_at
+              FROM tech_svc.device_work_order w
+              JOIN tech_svc.device d ON d.id = w.device_id
+            """;
+
+    private static java.time.Instant instantOrNull(java.sql.ResultSet rs, String column)
+            throws java.sql.SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
+    }
+
+    public String nextWorkOrderNo() {
+        return nextNo("tech_svc.device_work_order_no_seq", "WO");
+    }
+
+    public void insertWorkOrder(DeviceWorkOrder w) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.device_work_order
+                            (id, order_no, device_id, order_type, priority, title, description,
+                             reported_by, reported_at, vendor, status, created_by)
+                        VALUES (:id, :orderNo, :deviceId, :orderType, :priority, :title,
+                                CAST(:description AS text), :reportedBy,
+                                COALESCE(CAST(:reportedAt AS timestamptz), now()),
+                                CAST(:vendor AS text), :status, :createdBy)
+                        """)
+                .param("id", w.id()).param("orderNo", w.orderNo())
+                .param("deviceId", w.deviceId()).param("orderType", w.orderType())
+                .param("priority", w.priority()).param("title", w.title())
+                .param("description", w.description()).param("reportedBy", w.reportedBy())
+                .param("reportedAt", toOffset(w.reportedAt()))
+                .param("vendor", w.vendor()).param("status", w.status())
+                .param("createdBy", w.createdBy()).update();
+    }
+
+    public Optional<DeviceWorkOrder> findWorkOrder(UUID id) {
+        return jdbc.sql(WORK_ORDER_SELECT + " WHERE w.id = ?")
+                .param(id).query(WORK_ORDER_MAPPER).optional();
+    }
+
+    /**
+     * 工单列表：设备、状态、类型三个条件都在 SQL 层生效（{@code LIMIT} 之前）。
+     *
+     * <p>默认按上报时间倒序；未完结工单不特殊排序——设备科按设备维度查看，时间序更直观。
+     */
+    public List<DeviceWorkOrder> listWorkOrders(UUID deviceId, String status, String orderType,
+                                                int limit) {
+        return jdbc.sql(WORK_ORDER_SELECT + """
+                         WHERE (CAST(:deviceId AS uuid) IS NULL
+                                OR w.device_id = CAST(:deviceId AS uuid))
+                           AND (CAST(:status AS text) IS NULL
+                                OR w.status = CAST(:status AS text))
+                           AND (CAST(:orderType AS text) IS NULL
+                                OR w.order_type = CAST(:orderType AS text))
+                         ORDER BY w.reported_at DESC, w.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("deviceId", deviceId).param("status", status)
+                .param("orderType", orderType).param("limit", limit)
+                .query(WORK_ORDER_MAPPER).list();
+    }
+
+    /** 开始维修（CAS：仅 OPEN）。 */
+    public boolean startWorkOrder(UUID id, Instant startedAt, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device_work_order
+                           SET status = 'IN_PROGRESS', started_at = CAST(:startedAt AS timestamptz),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'OPEN' AND version = :version
+                        """)
+                .param("startedAt", toOffset(startedAt)).param("id", id)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 完工（CAS：仅 IN_PROGRESS；完工时间与处理措施必填由 CHECK 兜底）。 */
+    public boolean finishWorkOrder(UUID id, Instant finishedAt, String resolution,
+                                   java.math.BigDecimal costAmount, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device_work_order
+                           SET status = 'DONE', finished_at = CAST(:finishedAt AS timestamptz),
+                               resolution = :resolution, cost_amount = :costAmount,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'IN_PROGRESS' AND version = :version
+                        """)
+                .param("finishedAt", toOffset(finishedAt)).param("resolution", resolution)
+                .param("costAmount", costAmount).param("id", id)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 验收（CAS：仅 DONE）。 */
+    public boolean acceptWorkOrder(UUID id, String acceptedBy, String acceptNote,
+                                   long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device_work_order
+                           SET status = 'ACCEPTED', accepted_by = :acceptedBy, accepted_at = now(),
+                               accept_note = CAST(:acceptNote AS text),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'DONE' AND version = :version
+                        """)
+                .param("acceptedBy", acceptedBy).param("acceptNote", acceptNote)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 取消（CAS：OPEN / IN_PROGRESS / DONE；原因必填由 CHECK 兜底）。 */
+    public boolean cancelWorkOrder(UUID id, String reason, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device_work_order
+                           SET status = 'CANCELLED', cancel_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status IN ('OPEN', 'IN_PROGRESS', 'DONE')
+                           AND version = :version
+                        """)
+                .param("reason", reason).param("id", id)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    /** 故障维修开始 → 设备转为 MAINTENANCE（仅当原状态 ACTIVE，避免覆盖停用/手工维护）。 */
+    public boolean markDeviceMaintenanceIfActive(UUID deviceId) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device
+                           SET status = 'MAINTENANCE', version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'ACTIVE'
+                        """)
+                .param("id", deviceId).update() > 0;
+    }
+
+    /**
+     * 工单关闭后恢复设备可用：仅在该设备已无其他未完结工单、且当前仍为 MAINTENANCE 时生效。
+     *
+     * <p>不恢复 RETIRED：停用是终态，不能因为一张工单关闭就自动复活。
+     */
+    public boolean restoreDeviceActiveIfIdle(UUID deviceId, UUID closingOrderId) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.device d
+                           SET status = 'ACTIVE', version = d.version + 1, updated_at = now()
+                         WHERE d.id = :deviceId AND d.status = 'MAINTENANCE'
+                           AND NOT EXISTS (
+                               SELECT 1 FROM tech_svc.device_work_order w
+                                WHERE w.device_id = d.id
+                                  AND w.id <> CAST(:closingOrderId AS uuid)
+                                  AND w.status IN ('OPEN', 'IN_PROGRESS', 'DONE'))
+                        """)
+                .param("deviceId", deviceId).param("closingOrderId", closingOrderId)
+                .update() > 0;
+    }
+
+    private static java.time.OffsetDateTime toOffset(Instant instant) {
+        return instant == null ? null : instant.atZone(BusinessTime.zone()).toOffsetDateTime();
     }
 
     // ---------------------------------------------------------------- 结构化报告模板（G35）

@@ -243,6 +243,16 @@
 
 **验证**：`clinical_operation_level_smoke` 36 项全 PASS（含 doctor01 改目录 403、自审 422、qc 审批 200、删除后新手术不再带出分级）；`campus_isolation`(77)、`platform_smoke`、`clinical_surgery_level_smoke` 复跑全过。
 
+### G82 批次（设备维保工单，mock 190 类 / 1804 项全绿）
+
+| 关注点 | 处置 |
+|---|---|
+| 院区口径（已知缺口，如实记录） | `device` 自 V12 起只有 `dept_id`、没有 `campus_id`，本次维保工单沿用设备档案的全局口径（工单无院区列、不做院区隔离）。这**不是**本次引入的越权：设备档案列表本就未按院区收敛；补齐需要给 `device` 加 `campus_id` 并按科室/库房回溯回填，属独立批次，已列入功能缺口表 |
+| 权限收口 | 新增 `tech:device:accept`（auth V76，仅 ADMIN/QC）：验收与"报修/维修"分开权限面；服务层另有"建单人不得自验"的四眼校验 |
+| 数据边界 | 工单只含设备与维修信息，不含患者数据；工单冻结（触发器）保证验收/取消后不可回改，费用与停机事实可追溯 |
+
+**验证**：`tech_device_work_order_smoke` 35 项全 PASS（含 doctor 无权限 403、自验 409、qc 验收 200、停用设备报修 409、设备随工单在 MAINTENANCE/ACTIVE 之间联动）；`tech_smoke`、`tech_lis_smoke`、`tech_pacs_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过。
+
 ### 评审意见书（2026-11-05）状态：**全部条目已关闭**
 
 [必须] 条目在 G51–G70 全部闭环；[建议] 条目在 G51–G79 逐条闭环（§6.12 院区串收敛、§6.13 守卫签名与错误码、§6.14 列表下推、§6.15 迁移锁风险、锁内调下游 HTTP、时间口径、worker 多实例、解析吞错）。后续新增发现按同一节奏（复现 → 修复 → 反证 → 冒烟 → 文档 → 提交 → 备份）单独开批次。

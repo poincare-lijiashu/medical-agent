@@ -1,5 +1,6 @@
 package com.medassist.tech.domain;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -223,6 +224,42 @@ public final class TechModel {
 
     /** 设备状态计数（看板）。 */
     public record DeviceStatusCount(String status, int count) {
+    }
+
+    /**
+     * 设备维保工单（G82）：报修 → 维修 → 完工 → 验收。
+     *
+     * <p>{@code orderNo} 由服务生成（WO+业务日期+序号）；{@code deviceNo}/{@code deviceName}
+     * 读取时按设备档案 JOIN 带出，不另存快照（设备改名后工单应显示当前名称）。
+     */
+    public record DeviceWorkOrder(UUID id, String orderNo, UUID deviceId, String deviceNo,
+                                  String deviceName, String orderType, String priority,
+                                  String title, String description, String reportedBy,
+                                  Instant reportedAt, String vendor, String status,
+                                  Instant startedAt, Instant finishedAt, String resolution,
+                                  BigDecimal costAmount, String acceptedBy, Instant acceptedAt,
+                                  String acceptNote, String cancelReason, String createdBy,
+                                  long version, Instant createdAt) {
+
+        public static final String OPEN = "OPEN";
+        public static final String IN_PROGRESS = "IN_PROGRESS";
+        public static final String DONE = "DONE";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String CANCELLED = "CANCELLED";
+
+        /** 计划保养 / 故障维修 / 检测。 */
+        public static final String PREVENTIVE = "PREVENTIVE";
+        public static final String CORRECTIVE = "CORRECTIVE";
+        public static final String INSPECTION = "INSPECTION";
+
+        public boolean corrective() {
+            return CORRECTIVE.equals(orderType);
+        }
+
+        /** 终态：验收或取消后工单冻结。 */
+        public boolean terminal() {
+            return ACCEPTED.equals(status) || CANCELLED.equals(status);
+        }
     }
 
     /**

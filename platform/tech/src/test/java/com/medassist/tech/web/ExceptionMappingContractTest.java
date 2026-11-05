@@ -40,6 +40,21 @@ class ExceptionMappingContractTest {
     }
 
     @Test
+    @DisplayName("维保工单码（G82）：不存在→404、状态/四眼→409、内容不合法→422")
+    void workOrderCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.TECH_WORK_ORDER_NOT_FOUND))
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.TECH_WORK_ORDER_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TECH_WORK_ORDER_SELF_ACCEPT))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TECH_WORK_ORDER_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TECH_WORK_ORDER_CANCEL_REASON_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    @Test
     @DisplayName("业务错误码不得落到 5xx（否则前端会把业务拒绝当系统故障重试）")
     void businessCodesAreNotServerErrors() {
         for (ErrorCode code : ErrorCode.values()) {

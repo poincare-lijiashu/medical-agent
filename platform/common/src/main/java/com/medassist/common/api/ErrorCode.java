@@ -357,6 +357,13 @@ public enum ErrorCode {
     TECH_REPORT_STRUCTURED_INVALID(46444, "结构化报告内容不合法（模板未发布或必填字段缺失）"),
     TECH_LIS_MESSAGE_NOT_FOUND(46450, "未找到该 LIS 入站消息"),
 
+    // ---- 设备维保工单（46xxx 续，G82）----
+    TECH_WORK_ORDER_NOT_FOUND(46460, "未找到该维保工单"),
+    TECH_WORK_ORDER_STATUS_INVALID(46461, "当前维保工单状态不允许该操作"),
+    TECH_WORK_ORDER_INVALID(46462, "维保工单内容不合法（类型/优先级/标题/完工时间/费用）"),
+    TECH_WORK_ORDER_CANCEL_REASON_REQUIRED(46463, "取消维保工单必须填写原因"),
+    TECH_WORK_ORDER_SELF_ACCEPT(46464, "维保工单不能由建单人自己验收，请由设备科或质控复核"),
+
     // ---- 病历（47xxx）----
     EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),
     EMR_RECORD_NOT_FOUND(47402, "未找到该病历文书"),
