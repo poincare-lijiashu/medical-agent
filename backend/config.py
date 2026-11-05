@@ -174,6 +174,14 @@ class Settings(BaseSettings):
     # 回答前 500 字符，不含 sources/images。
     chat_memory_turns: int = 8
 
+    # G86 联网搜索（默认关闭）：院内默认无外网，必须显式配置 provider 与 key 才可用。
+    # provider=none 时工具注册表仍可见但执行会返回「未配置」；结果域名可再用白名单收口。
+    web_search_provider: str = "none"          # none | tavily
+    web_search_base_url: str = ""              # 留空用 provider 默认地址
+    web_search_api_key: str = ""
+    web_search_timeout_s: float = 10.0
+    web_search_allowed_domains: str = ""       # 逗号分隔；非空时仅保留命中域名的结果
+
     @property
     def async_database_url(self) -> str:
         if self.pg_async_dsn:

@@ -21,6 +21,9 @@ from backend.core.medical_audit import set_tool as _audit_set_tool
 from backend.core.medical_audit import reset_tool as _audit_reset_tool
 from backend.api.v1.medical.medical_router import router as medical_router
 from backend.api.v1.auth.auth_router import router as auth_router
+from backend.api.v1.agent.agent_router import router as agent_router
+from backend.agents import catalog as agent_catalog
+from backend.core import agent_flags
 
 logger = get_logger(__name__)
 
@@ -180,6 +183,16 @@ app.add_middleware(AuditChannelMiddleware)
 
 app.include_router(medical_router, prefix="/api/v1/medical")
 app.include_router(auth_router, prefix="/api/v1")
+# G86 Agent 控制面：目录 / A2A 能力卡 / 路由预览 / 工具调用 / 运行时开关
+app.include_router(agent_router, prefix="/api/v1/agent")
+
+
+@app.get("/.well-known/agent-card.json", include_in_schema=False)
+async def well_known_agent_card(request: Request):
+    """A2A 标准发现入口（与 /api/v1/agent/card 同一份元数据）。"""
+    if not agent_flags.get_flag("agent_a2a"):
+        return JSONResponse({"detail": "A2A 能力广告已关闭"}, status_code=404)
+    return agent_catalog.agent_card(str(request.base_url).rstrip("/"))
 
 
 @app.middleware("http")

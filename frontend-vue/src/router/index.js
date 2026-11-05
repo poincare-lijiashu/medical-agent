@@ -14,6 +14,7 @@ import ReviewCenterView from '../views/ReviewCenterView.vue'
 import QcView from '../views/QcView.vue'
 import KbView from '../views/KbView.vue'
 import DataView from '../views/DataView.vue'
+import AgentView from '../views/AgentView.vue'
 import ArchView from '../views/ArchView.vue'
 
 const router = createRouter({
@@ -40,6 +41,7 @@ const router = createRouter({
         { path: 'qc', name: 'qc', component: QcView },
         { path: 'kb', name: 'kb', component: KbView },
         { path: 'data', name: 'data', component: DataView },
+        { path: 'agent', name: 'agent', component: AgentView }, // G86：Agent 控制台（admin）
         { path: 'arch', name: 'arch', component: ArchView }, // 轮 A：架构·合规（admin，静态四卡）
       ],
     },

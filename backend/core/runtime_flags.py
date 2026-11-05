@@ -23,7 +23,13 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 FLAGS_FILE = os.path.join(BASE_DIR, "data", "runtime_flags.json")
 
 # 可运行时切换的开关白名单（任务3：目前仅留痕模式；后续新开关在此登记）
-ALLOWED_FLAGS = ("qc_auto_sign_full",)
+ALLOWED_FLAGS = (
+    "qc_auto_sign_full",
+    # G86 Agent 控制面：联网搜索 / 多智能体协同 / A2A 能力广告
+    "agent_web_search",
+    "agent_multi_agent",
+    "agent_a2a",
+)
 
 _lock = threading.Lock()
 

@@ -13,6 +13,7 @@ export const NAV_ITEMS = {
   review: { t: '审核中心' },
   kb: { t: '知识库管理' },
   data: { t: '数据面板' },
+  agent: { t: 'Agent 控制台' },
   arch: { t: '架构 · 合规' },
 }
 
@@ -22,14 +23,14 @@ export const NAV_GROUPS = [
   { g: '临床助手', items: ['literature', 'rx', 'imaging', 'case'] },
   { g: '协作', items: ['mdt', 'myconsults'] },
   { g: '质控', items: ['qc', 'review'] },
-  { g: '系统', items: ['kb', 'data', 'arch'] },
+  { g: '系统', items: ['kb', 'data', 'agent', 'arch'] },
 ]
 
 // 与 legacy state.js ROLE_NAV 逐字同源（含阶段3 语义：rx 取代 drug；qc 对 doctor/pharmacist 开放）
 export const ROLE_NAV = {
   doctor: ['overview', 'literature', 'rx', 'imaging', 'case', 'mdt', 'myconsults', 'qc', 'review'],
   pharmacist: ['overview', 'literature', 'rx', 'qc', 'review'],
-  admin: ['overview', 'kb', 'qc', 'review', 'data', 'arch'],
+  admin: ['overview', 'kb', 'qc', 'review', 'data', 'agent', 'arch'],
   qc: ['overview', 'literature', 'rx', 'qc', 'review'],
 }
 
