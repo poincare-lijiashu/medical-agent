@@ -95,14 +95,9 @@ public class ApplicationController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
+        // G68：科室判定已收进 guard（与院区同为 dept+campus 双条件），这里不再二次过滤
         guard.requireApplication(id, scope);
         ApplicationView view = service.detail(id);
-        if (!scope.allDepartments() && view.application().deptId() != null
-                && !scope.canSeeDepartment(view.application().deptId())) {
-            // 跨科室读单拒绝：越权与不存在同为 404，避免泄露"该申请存在但你看不到"
-            throw new com.medassist.common.exception.BusinessException(
-                    com.medassist.common.api.ErrorCode.TECH_APPLICATION_NOT_FOUND);
-        }
         return ApiResponse.ok(new ApplicationView(
                 PhiMask.application(view.application(), scope), view.specimen()));
     }

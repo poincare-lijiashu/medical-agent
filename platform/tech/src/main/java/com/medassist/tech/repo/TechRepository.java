@@ -163,11 +163,19 @@ public class TechRepository {
                 .param("sourceOrderId", a.sourceOrderId()).param("campusId", campusId).update();
     }
 
-    /** 申请所属院区；用于院区级越权判定（不存在返回空）。 */
-    public Optional<UUID> findApplicationCampus(UUID applicationId) {
+    /** 申请的科室 + 院区（dept+campus 双条件判定用；不存在返回空）。 */
+    public Optional<ApplicationScope> findApplicationScope(UUID applicationId) {
         return jdbc.sql("""
-                        SELECT campus_id FROM tech_svc.exam_application WHERE id = ?
-                        """).param(applicationId).query(UUID.class).optional();
+                        SELECT campus_id, dept_id FROM tech_svc.exam_application WHERE id = ?
+                        """).param(applicationId)
+                .query((rs, i) -> new ApplicationScope(
+                        rs.getObject("campus_id", UUID.class),
+                        rs.getObject("dept_id", UUID.class)))
+                .optional();
+    }
+
+    /** 申请的行级归属（G68）：院区 + 科室，缺任一项都按不可见处理。 */
+    public record ApplicationScope(UUID campusId, UUID deptId) {
     }
 
     /** 按来源医嘱查申请（临床转送幂等键；手工开单返回空）。 */

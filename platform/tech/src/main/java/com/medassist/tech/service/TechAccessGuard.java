@@ -10,13 +10,17 @@ import org.springframework.stereotype.Component;
 import java.util.UUID;
 
 /**
- * 医技院区访问守卫（G49）。
+ * 医技行级访问守卫（G49 院区 + G68 科室）。
  *
- * <p>申请自身的院区固化在 {@code exam_application.campus_id}；报告、危急值、影像登记
- * 都挂在申请下，因此统一回溯到申请的院区判断，避免每张子表各存一份院区后出现漂移。
+ * <p>申请自身的院区固化在 {@code exam_application.campus_id}、科室在 {@code dept_id}；
+ * 报告、危急值、影像登记都挂在申请下，因此统一回溯到申请做 dept + campus 双条件判定，
+ * 避免每张子表各存一份归属后出现漂移。
+ *
+ * <p>为什么收进 guard（G68，评审 §6.3）：此前 guard 只校院区，科室过滤由
+ * {@code ApplicationController.detail} 在 guard 之外手工补一次——列表按科室过滤、
+ * 详情却能从 {@code /tech/reports/{id}} 读到同申请的全文报告与危急值。现在两条路径同口径。
  *
  * <p>越权与不存在返回同一个错误码：不能让调用方通过错误码差异探测"该单存在但你看不到"。
- * 跨院区角色（{@code allCampuses}）直接放行，由各服务继续做自身的存在性校验。
  */
 @Component
 public class TechAccessGuard {
@@ -34,7 +38,7 @@ public class TechAccessGuard {
 
     /** 报告（回溯到所属申请）。 */
     public void requireReport(UUID reportId, DataScope scope) {
-        if (scope.allCampuses()) {
+        if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }
         Report report = repo.findReport(reportId)
@@ -44,7 +48,7 @@ public class TechAccessGuard {
 
     /** 危急值（回溯到所属申请）。 */
     public void requireCritical(UUID criticalId, DataScope scope) {
-        if (scope.allCampuses()) {
+        if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }
         require(repo.findCriticalValue(criticalId)
@@ -54,7 +58,7 @@ public class TechAccessGuard {
 
     /** 影像检查登记（回溯到所属申请）。 */
     public void requireStudy(String studyInstanceUid, DataScope scope) {
-        if (scope.allCampuses()) {
+        if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }
         require(repo.findPacsStudyByUid(studyInstanceUid)
@@ -63,11 +67,16 @@ public class TechAccessGuard {
     }
 
     private void require(UUID applicationId, DataScope scope, ErrorCode notFound) {
-        if (scope.allCampuses()) {
+        if (scope.allCampuses() && scope.allDepartments()) {
             return;
         }
-        boolean visible = applicationId != null
-                && repo.findApplicationCampus(applicationId).map(scope::canSeeCampus).orElse(false);
+        TechRepository.ApplicationScope appScope = applicationId == null ? null
+                : repo.findApplicationScope(applicationId).orElse(null);
+        boolean visible = appScope != null
+                && (scope.allCampuses()
+                    || (appScope.campusId() != null && scope.canSeeCampus(appScope.campusId())))
+                && (scope.allDepartments()
+                    || (appScope.deptId() != null && scope.canSeeDepartment(appScope.deptId())));
         if (!visible) {
             throw new BusinessException(notFound);
         }

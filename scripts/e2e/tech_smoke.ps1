@@ -5,11 +5,11 @@
 #         -> critical value -> acknowledge -> close -> amend.
 #
 # ASCII only (Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI).
-# Prerequisites: auth :8081, empi :8082, tech :8085, gateway :18080
+# Prerequisites: auth :8081, empi :8082, tech :8085, gateway :8080
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\tech_smoke.ps1
 # ============================================================================
 param(
-    [string]$BaseUrl = "http://127.0.0.1:18080",
+    [string]$BaseUrl = "http://127.0.0.1:8080",
     [string]$Username = "admin01",
     [string]$Password = "Med@2026"
 )
@@ -64,8 +64,11 @@ $items = @(Res $r)
 Check 'items.labCount' $items.Count 2
 
 # ---------------------------------------------------------------- 4. LAB application
+# deptId is required for the four-eyes section below: doctor01 is bound to the
+# ward department, so it can only see/review applications owned by that dept.
 $r = Invoke-Api 'POST' '/api/v2/tech/applications' @{
-    patientId = $patientId; itemCode = 'LAB-K'; priority = 'STAT'; clinicalDiag = 'hypokalemia workup'
+    patientId = $patientId; deptId = '33333333-3333-3333-3333-333333333333'
+    itemCode = 'LAB-K'; priority = 'STAT'; clinicalDiag = 'hypokalemia workup'
 } $token
 Check 'app.create' $r.Status 200
 $app = Res $r
@@ -153,14 +156,30 @@ $r = Invoke-Api 'POST' "/api/v2/tech/applications/$appId/close" $null $token
 Check 'app.close' $r.Status 200
 Check 'app.closed' (Res $r).application.status 'CLOSED'
 
-# ---------------------------------------------------------------- 9. amend report
+# ---------------------------------------------------------------- 9. amend report (four eyes)
 $r = Invoke-Api 'POST' "/api/v2/tech/reports/$reportId/amend" @{
     findings = 'serum K 7.2 mmol/L (recheck 6.8)'; conclusion = 'hyperkalemia, still high on recheck'; reason = 'add recheck result'
 } $token
 Check 'report.amend' $r.Status 200
 Check 'report.amend.revision' (Res $r).report.revision 2
-Check 'report.amend.status' (Res $r).report.status 'AMENDED'
+Check 'report.amend.status' (Res $r).report.status 'DRAFT'
 Check 'report.history' (Res $r).history.Count 2
+# G67: critical values are attached to the application, so the amended revision
+# must still show them instead of an empty list.
+Check 'report.amend.criticals' (@((Res $r).criticals).Count) 1
+$amendedReportId = (Res $r).report.id
+
+# the writer may not sign its own amendment
+$r = Invoke-Api 'POST' "/api/v2/tech/reports/$amendedReportId/review" @{ approve = $true } $token
+Check 'report.amend.selfReview.403' $r.Status 403
+
+# a different reviewer (doctor01, ward dept) signs it
+$r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = 'doctor01'; password = $Password }
+Check 'amend.reviewer.login' $r.Status 200
+$reviewerToken = (Res $r).accessToken
+$r = Invoke-Api 'POST' "/api/v2/tech/reports/$amendedReportId/review" @{ approve = $true } $reviewerToken
+Check 'report.amend.review' $r.Status 200
+Check 'report.amend.finalStatus' (Res $r).report.status 'AMENDED'
 
 # ---------------------------------------------------------------- 10. EXAM flow (no specimen)
 $r = Invoke-Api 'POST' '/api/v2/tech/applications' @{
