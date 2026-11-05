@@ -2,6 +2,8 @@ package com.medassist.pharmacy.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval;
 import com.medassist.pharmacy.domain.PharmacyModel.Prescription;
@@ -36,6 +38,8 @@ import java.util.UUID;
  *   <li>只有含特殊使用级（level=3）的处方需要专项审批，其余处方调用返回 422；</li>
  *   <li>审批人不能是开方医师（四眼），也不能审批已发药/已取消处方；</li>
  *   <li>审批通过前，药师审核通过与发药都会被拦截（由 {@link PrescriptionService} 调用）；</li>
+ *   <li>统计与待审列表按处方院区收敛（G59），患者号按 {@code phi:read} 掩码；
+ *       审批前经 {@link PrescriptionAccessGuard} 校验处方院区，跨院区与不存在同码 404；</li>
  *   <li>统计只读，按开方时间过滤，默认 30 天、最长 366 天。</li>
  * </ul>
  */
@@ -48,19 +52,24 @@ public class AntibioticService {
 
     private final PharmacyRepository repo;
     private final ObjectMapper objectMapper;
+    private final PrescriptionAccessGuard guard;
 
     @Value("${pharmacy.antibiotic.prophylaxis-days:3}")
     private int prophylaxisDays = 3;
 
-    public AntibioticService(PharmacyRepository repo, ObjectMapper objectMapper) {
+    public AntibioticService(PharmacyRepository repo, ObjectMapper objectMapper,
+                             PrescriptionAccessGuard guard) {
         this.repo = repo;
         this.objectMapper = objectMapper;
+        this.guard = guard;
     }
 
-    /** 记录特殊使用级审批（approve=false 必须写理由）。 */
+    /** 记录特殊使用级审批（approve=false 必须写理由）；G59：跨院区处方不可审批。 */
     @Transactional
-    public ApprovalView approve(UUID prescriptionId, ApprovalReq req, String actor) {
+    public ApprovalView approve(UUID prescriptionId, ApprovalReq req, String actor,
+                                DataScope scope) {
         String operator = requireActor(actor);
+        guard.require(scope, prescriptionId);
         Prescription rx = repo.lockPrescription(prescriptionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));
         int level = repo.maxAntibioticLevel(prescriptionId);
@@ -98,22 +107,26 @@ public class AntibioticService {
         return new ApprovalView(level, repo.findAntibioticApproval(prescriptionId).orElse(approval));
     }
 
-    public ApprovalView approval(UUID prescriptionId) {
+    public ApprovalView approval(UUID prescriptionId, DataScope scope) {
+        guard.require(scope, prescriptionId);
         Prescription rx = repo.findPrescription(prescriptionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND));
         return new ApprovalView(repo.maxAntibioticLevel(rx.id()),
                 repo.findAntibioticApproval(prescriptionId).orElse(null));
     }
 
-    public List<PendingRow> pending(Integer limit) {
+    /** 待专项审批列表（G59）：按院区收敛，患者号按 {@code phi:read} 掩码。 */
+    public List<PendingRow> pending(Integer limit, DataScope scope) {
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.antibioticPending(size).stream()
-                .map(p -> new PendingRow(p.prescriptionId(), p.prescriptionNo(), p.patientNo(),
-                        p.prescriber(), p.status(), p.drugSummary(), p.createdAt()))
+        return repo.antibioticPending(size, CampusFilters.csv(scope.campusFilter())).stream()
+                .map(p -> new PendingRow(p.prescriptionId(), p.prescriptionNo(),
+                        scope.maskPatientNo(p.patientNo()), p.prescriber(), p.status(),
+                        p.drugSummary(), p.createdAt()))
                 .toList();
     }
 
-    public StatsView stats(LocalDate from, LocalDate to) {
+    /** 分级统计（G59）：按院区收敛；超疗程列表的患者号按 {@code phi:read} 掩码。 */
+    public StatsView stats(LocalDate from, LocalDate to, DataScope scope) {
         LocalDate today = BusinessTime.today();
         LocalDate end = to == null ? today : to;
         LocalDate start = from == null ? end.minusDays(29) : from;
@@ -123,25 +136,28 @@ public class AntibioticService {
         if (start.plusDays(366).isBefore(end)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "统计区间不得超过 366 天");
         }
+        String campusCsv = CampusFilters.csv(scope.campusFilter());
         OffsetDateTime fromTs = start.atStartOfDay(BusinessTime.zone()).toOffsetDateTime();
         OffsetDateTime toTs = end.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime();
-        List<LevelStat> levels = repo.antibioticLevelStats(fromTs, toTs).stream()
+        List<LevelStat> levels = repo.antibioticLevelStats(fromTs, toTs, campusCsv).stream()
                 .map(r -> new LevelStat(r.level(), r.rxCount(), r.quantity())).toList();
-        List<DoctorStat> doctors = repo.antibioticDoctorStats(fromTs, toTs).stream()
+        List<DoctorStat> doctors = repo.antibioticDoctorStats(fromTs, toTs, campusCsv).stream()
                 .map(r -> new DoctorStat(r.prescriber(), r.rxCount(), r.quantity())).toList();
-        List<DrugStat> drugs = repo.antibioticDrugStats(fromTs, toTs).stream()
+        List<DrugStat> drugs = repo.antibioticDrugStats(fromTs, toTs, campusCsv).stream()
                 .map(r -> new DrugStat(r.drugCode(), r.drugName(), r.level(), r.rxCount(),
                         r.quantity())).toList();
-        List<OverLimitRow> overLimit = repo.antibioticOverLimit(fromTs, toTs, prophylaxisDays, 50)
+        List<OverLimitRow> overLimit = repo.antibioticOverLimit(fromTs, toTs, prophylaxisDays, 50,
+                        campusCsv)
                 .stream()
-                .map(r -> new OverLimitRow(r.prescriptionId(), r.prescriptionNo(), r.patientNo(),
-                        r.prescriber(), r.drugName(), r.maxDays(), r.createdAt()))
+                .map(r -> new OverLimitRow(r.prescriptionId(), r.prescriptionNo(),
+                        scope.maskPatientNo(r.patientNo()), r.prescriber(), r.drugName(),
+                        r.maxDays(), r.createdAt()))
                 .toList();
         long rxCount = levels.stream().mapToLong(LevelStat::rxCount).sum();
         long specialRx = levels.stream().filter(l -> l.level() == SPECIAL_LEVEL)
                 .mapToLong(LevelStat::rxCount).sum();
         return new StatsView(start, end, prophylaxisDays, rxCount, specialRx,
-                repo.countAntibioticPending(), levels, doctors, drugs, overLimit);
+                repo.countAntibioticPending(campusCsv), levels, doctors, drugs, overLimit);
     }
 
     /** 审核/发药前的硬门槛由 {@link PrescriptionService} 直接校验（同一事务内锁处方）。 */

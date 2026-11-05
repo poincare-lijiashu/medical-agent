@@ -2,6 +2,7 @@ package com.medassist.pharmacy.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.pharmacy.domain.PharmacyModel.AntibioticApproval;
 import com.medassist.pharmacy.domain.PharmacyModel.AntibioticDoctorStatRow;
 import com.medassist.pharmacy.domain.PharmacyModel.AntibioticDrugStatRow;
@@ -32,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,15 +45,18 @@ import static org.mockito.Mockito.when;
 class AntibioticServiceTest {
 
     private PharmacyRepository repo;
+    private PrescriptionAccessGuard guard;
     private AntibioticService service;
 
     private final UUID rxId = UUID.randomUUID();
     private final UUID patientId = UUID.randomUUID();
+    private final DataScope scope = DataScope.all("pharm01", true);
 
     @BeforeEach
     void setUp() {
         repo = mock(PharmacyRepository.class);
-        service = new AntibioticService(repo, JsonMapper.builder().build());
+        guard = mock(PrescriptionAccessGuard.class);
+        service = new AntibioticService(repo, JsonMapper.builder().build(), guard);
     }
 
     private void assertCode(Runnable call, ErrorCode code) {
@@ -73,7 +78,7 @@ class AntibioticServiceTest {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW)));
         when(repo.maxAntibioticLevel(rxId)).thenReturn(2);
 
-        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "pharm01"),
+        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "pharm01", scope),
                 ErrorCode.ANTIBIOTIC_APPROVAL_INVALID);
         verify(repo, never()).upsertAntibioticApproval(any());
     }
@@ -84,7 +89,7 @@ class AntibioticServiceTest {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.DISPENSED)));
         when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
 
-        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "pharm01"),
+        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "pharm01", scope),
                 ErrorCode.PRESCRIPTION_STATUS_INVALID);
         verify(repo, never()).upsertAntibioticApproval(any());
     }
@@ -95,7 +100,7 @@ class AntibioticServiceTest {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW)));
         when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
 
-        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "doctor01"),
+        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "doctor01", scope),
                 ErrorCode.ANTIBIOTIC_SELF_APPROVAL);
         verify(repo, never()).upsertAntibioticApproval(any());
     }
@@ -106,7 +111,7 @@ class AntibioticServiceTest {
         when(repo.lockPrescription(rxId)).thenReturn(Optional.of(rx(Prescription.PENDING_REVIEW)));
         when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
 
-        assertCode(() -> service.approve(rxId, new ApprovalReq(false, "  "), "pharm01"),
+        assertCode(() -> service.approve(rxId, new ApprovalReq(false, "  "), "pharm01", scope),
                 ErrorCode.VALIDATION_FAILED);
         verify(repo, never()).upsertAntibioticApproval(any());
     }
@@ -120,7 +125,7 @@ class AntibioticServiceTest {
                 new AntibioticApproval(UUID.randomUUID(), rxId, 3, AntibioticApproval.APPROVED,
                         "会诊同意", "doctor01", Instant.now(), "pharm01", Instant.now(), 0L)));
 
-        ApprovalView view = service.approve(rxId, new ApprovalReq(true, "会诊同意"), "pharm01");
+        ApprovalView view = service.approve(rxId, new ApprovalReq(true, "会诊同意"), "pharm01", scope);
 
         ArgumentCaptor<AntibioticApproval> captor =
                 ArgumentCaptor.forClass(AntibioticApproval.class);
@@ -148,7 +153,7 @@ class AntibioticServiceTest {
         when(repo.maxAntibioticLevel(rxId)).thenReturn(3);
         when(repo.findAntibioticApproval(rxId)).thenReturn(Optional.of(existing));
 
-        service.approve(rxId, new ApprovalReq(true, null), "pharm01");
+        service.approve(rxId, new ApprovalReq(true, null), "pharm01", scope);
 
         ArgumentCaptor<AntibioticApproval> captor =
                 ArgumentCaptor.forClass(AntibioticApproval.class);
@@ -162,32 +167,32 @@ class AntibioticServiceTest {
     @Test
     @DisplayName("统计：起始晚于截止 → 422")
     void statsRejectsInvertedRange() {
-        assertCode(() -> service.stats(LocalDate.now(), LocalDate.now().minusDays(1)),
+        assertCode(() -> service.stats(LocalDate.now(), LocalDate.now().minusDays(1), scope),
                 ErrorCode.VALIDATION_FAILED);
     }
 
     @Test
     @DisplayName("统计：超过 366 天 → 422")
     void statsRejectsTooLongRange() {
-        assertCode(() -> service.stats(LocalDate.now().minusDays(400), LocalDate.now()),
+        assertCode(() -> service.stats(LocalDate.now().minusDays(400), LocalDate.now(), scope),
                 ErrorCode.VALIDATION_FAILED);
     }
 
     @Test
     @DisplayName("统计：汇总分级/医师/药品/超疗程，并以 3 天为默认阈值")
     void statsAggregatesRows() {
-        when(repo.antibioticLevelStats(any(), any())).thenReturn(List.of(
+        when(repo.antibioticLevelStats(any(), any(), any())).thenReturn(List.of(
                 new AntibioticLevelStatRow(2, 4, 12), new AntibioticLevelStatRow(3, 2, 5)));
-        when(repo.antibioticDoctorStats(any(), any())).thenReturn(List.of(
+        when(repo.antibioticDoctorStats(any(), any(), any())).thenReturn(List.of(
                 new AntibioticDoctorStatRow("doctor01", 6, 17)));
-        when(repo.antibioticDrugStats(any(), any())).thenReturn(List.of(
+        when(repo.antibioticDrugStats(any(), any(), any())).thenReturn(List.of(
                 new AntibioticDrugStatRow("DRUG-ABX3", "特殊级抗菌药", 3, 2, 5)));
-        when(repo.antibioticOverLimit(any(), any(), eq(3), anyInt())).thenReturn(List.of(
+        when(repo.antibioticOverLimit(any(), any(), eq(3), anyInt(), any())).thenReturn(List.of(
                 new AntibioticOverLimitRow(rxId, "RX20261104000001", "P1", "doctor01",
                         "特殊级抗菌药", 7, Instant.now())));
-        when(repo.countAntibioticPending()).thenReturn(2);
+        when(repo.countAntibioticPending(any())).thenReturn(2);
 
-        StatsView view = service.stats(null, null);
+        StatsView view = service.stats(null, null, scope);
 
         assertThat(view.rxCount()).isEqualTo(6);
         assertThat(view.specialRxCount()).isEqualTo(2);
@@ -199,20 +204,44 @@ class AntibioticServiceTest {
         assertThat(view.overLimit()).hasSize(1);
         assertThat(view.from()).isEqualTo(view.to().minusDays(29));
         verify(repo).antibioticOverLimit(any(OffsetDateTime.class), any(OffsetDateTime.class),
-                eq(3), eq(50));
+                eq(3), eq(50), any());
     }
 
     @Test
-    @DisplayName("待审列表：limit 缺省 50，上限 200")
+    @DisplayName("G59 待审列表：limit 缺省 50，上限 200；无 phi:read 时患者号掩码")
     void pendingNormalizesLimit() {
-        when(repo.antibioticPending(anyInt())).thenReturn(List.of(
-                new AntibioticPendingRow(rxId, "RX20261104000001", "P1", "doctor01",
+        when(repo.antibioticPending(anyInt(), any())).thenReturn(List.of(
+                new AntibioticPendingRow(rxId, "RX20261104000001", "P20261104000001", "doctor01",
                         Prescription.PENDING_REVIEW, "特殊级抗菌药×2", Instant.now())));
 
-        assertThat(service.pending(null)).hasSize(1);
-        verify(repo).antibioticPending(50);
+        assertThat(service.pending(null, scope)).hasSize(1);
+        verify(repo).antibioticPending(50, "");
 
-        service.pending(9999);
-        verify(repo).antibioticPending(200);
+        service.pending(9999, scope);
+        verify(repo).antibioticPending(200, "");
+    }
+
+    @Test
+    @DisplayName("G59：无 phi:read 权限时待审列表患者号掩码")
+    void pendingMasksPatientNoWithoutPhiRead() {
+        when(repo.antibioticPending(anyInt(), any())).thenReturn(List.of(
+                new AntibioticPendingRow(rxId, "RX20261104000001", "P20261104000001", "doctor01",
+                        Prescription.PENDING_REVIEW, "特殊级抗菌药×2", Instant.now())));
+
+        var rows = service.pending(10, DataScope.all("pharm01", false));
+
+        assertThat(rows.get(0).patientNo()).doesNotContain("20261104000001");
+        assertThat(rows.get(0).patientNo()).contains("*");
+    }
+
+    @Test
+    @DisplayName("G59：审批前经院区守卫校验（跨院区 404）")
+    void approveChecksCampusGuard() {
+        doThrow(new BusinessException(ErrorCode.PRESCRIPTION_NOT_FOUND))
+                .when(guard).require(any(), any());
+
+        assertCode(() -> service.approve(rxId, new ApprovalReq(true, null), "pharm01", scope),
+                ErrorCode.PRESCRIPTION_NOT_FOUND);
+        verify(repo, never()).upsertAntibioticApproval(any());
     }
 }

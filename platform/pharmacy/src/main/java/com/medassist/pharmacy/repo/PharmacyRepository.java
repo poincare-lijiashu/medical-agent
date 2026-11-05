@@ -1689,8 +1689,12 @@ public class PharmacyRepository {
                 .update();
     }
 
+    /**
+     * 抗菌药物分级统计（G59：按处方院区收敛，{@code campusCsv} 空串表示跨院区角色不限）。
+     */
     public List<AntibioticLevelStatRow> antibioticLevelStats(OffsetDateTime fromTs,
-                                                             OffsetDateTime toTs) {
+                                                             OffsetDateTime toTs,
+                                                             String campusCsv) {
         return jdbc.sql("""
                         SELECT d.antibiotic_level AS level, count(DISTINCT p.id) AS rx_count,
                                COALESCE(SUM(i.quantity), 0) AS quantity
@@ -1700,16 +1704,20 @@ public class PharmacyRepository {
                          WHERE d.antibiotic_level > 0
                            AND p.created_at >= :fromTs AND p.created_at < :toTs
                            AND p.status <> 'CANCELLED'
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR p.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY d.antibiotic_level
                          ORDER BY d.antibiotic_level
                         """)
                 .param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new AntibioticLevelStatRow(rs.getInt("level"),
                         rs.getLong("rx_count"), rs.getLong("quantity"))).list();
     }
 
     public List<AntibioticDoctorStatRow> antibioticDoctorStats(OffsetDateTime fromTs,
-                                                               OffsetDateTime toTs) {
+                                                               OffsetDateTime toTs,
+                                                               String campusCsv) {
         return jdbc.sql("""
                         SELECT p.prescriber, count(DISTINCT p.id) AS rx_count,
                                COALESCE(SUM(i.quantity), 0) AS quantity
@@ -1719,17 +1727,21 @@ public class PharmacyRepository {
                          WHERE d.antibiotic_level > 0
                            AND p.created_at >= :fromTs AND p.created_at < :toTs
                            AND p.status <> 'CANCELLED'
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR p.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY p.prescriber
                          ORDER BY rx_count DESC, quantity DESC
                          LIMIT 20
                         """)
                 .param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new AntibioticDoctorStatRow(rs.getString("prescriber"),
                         rs.getLong("rx_count"), rs.getLong("quantity"))).list();
     }
 
     public List<AntibioticDrugStatRow> antibioticDrugStats(OffsetDateTime fromTs,
-                                                           OffsetDateTime toTs) {
+                                                           OffsetDateTime toTs,
+                                                           String campusCsv) {
         return jdbc.sql("""
                         SELECT d.drug_code, d.name AS drug_name, d.antibiotic_level AS level,
                                count(DISTINCT p.id) AS rx_count,
@@ -1740,20 +1752,24 @@ public class PharmacyRepository {
                          WHERE d.antibiotic_level > 0
                            AND p.created_at >= :fromTs AND p.created_at < :toTs
                            AND p.status <> 'CANCELLED'
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR p.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY d.drug_code, d.name, d.antibiotic_level
                          ORDER BY quantity DESC, rx_count DESC
                          LIMIT 20
                         """)
                 .param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new AntibioticDrugStatRow(rs.getString("drug_code"),
                         rs.getString("drug_name"), rs.getInt("level"), rs.getLong("rx_count"),
                         rs.getLong("quantity"))).list();
     }
 
-    /** 超疗程提醒：抗菌药物 days 超过阈值（排除已取消/驳回）。 */
+    /** 超疗程提醒：抗菌药物 days 超过阈值（排除已取消/驳回；G59 按处方院区收敛）。 */
     public List<AntibioticOverLimitRow> antibioticOverLimit(OffsetDateTime fromTs,
                                                             OffsetDateTime toTs,
-                                                            int thresholdDays, int limit) {
+                                                            int thresholdDays, int limit,
+                                                            String campusCsv) {
         return jdbc.sql("""
                         SELECT p.id AS prescription_id, p.prescription_no, p.patient_no,
                                p.prescriber, d.name AS drug_name, MAX(i.days) AS max_days,
@@ -1765,6 +1781,8 @@ public class PharmacyRepository {
                            AND i.days > :threshold
                            AND p.created_at >= :fromTs AND p.created_at < :toTs
                            AND p.status NOT IN ('CANCELLED', 'REJECTED')
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR p.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY p.id, p.prescription_no, p.patient_no, p.prescriber,
                                   d.name, p.created_at
                          ORDER BY max_days DESC, p.created_at DESC
@@ -1772,6 +1790,7 @@ public class PharmacyRepository {
                         """)
                 .param("fromTs", fromTs).param("toTs", toTs)
                 .param("threshold", thresholdDays).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new AntibioticOverLimitRow(
                         rs.getObject("prescription_id", UUID.class),
                         rs.getString("prescription_no"), rs.getString("patient_no"),
@@ -1780,8 +1799,8 @@ public class PharmacyRepository {
                         rs.getTimestamp("created_at").toInstant())).list();
     }
 
-    /** 待专项审批：含三级抗菌药物、待审核/已审核但尚无 APPROVED 专项审批的处方。 */
-    public List<AntibioticPendingRow> antibioticPending(int limit) {
+    /** 待专项审批：含三级抗菌药物、待审核/已审核但尚无 APPROVED 专项审批的处方（G59 按院区收敛）。 */
+    public List<AntibioticPendingRow> antibioticPending(int limit, String campusCsv) {
         return jdbc.sql("""
                         SELECT p.id AS prescription_id, p.prescription_no, p.patient_no,
                                p.prescriber, p.status,
@@ -1796,12 +1815,15 @@ public class PharmacyRepository {
                            AND NOT EXISTS (
                                SELECT 1 FROM pharmacy_svc.antibiotic_approval a
                                 WHERE a.prescription_id = p.id AND a.status = 'APPROVED')
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR p.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          GROUP BY p.id, p.prescription_no, p.patient_no, p.prescriber,
                                   p.status, p.created_at
                          ORDER BY p.created_at
                          LIMIT :limit
                         """)
                 .param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new AntibioticPendingRow(
                         rs.getObject("prescription_id", UUID.class),
                         rs.getString("prescription_no"), rs.getString("patient_no"),
@@ -1810,7 +1832,7 @@ public class PharmacyRepository {
                         rs.getTimestamp("created_at").toInstant())).list();
     }
 
-    public int countAntibioticPending() {
+    public int countAntibioticPending(String campusCsv) {
         Integer count = jdbc.sql("""
                         SELECT count(DISTINCT p.id)
                           FROM pharmacy_svc.prescription p
@@ -1821,7 +1843,10 @@ public class PharmacyRepository {
                            AND NOT EXISTS (
                                SELECT 1 FROM pharmacy_svc.antibiotic_approval a
                                 WHERE a.prescription_id = p.id AND a.status = 'APPROVED')
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR p.campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                         """)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(Integer.class).single();
         return count == null ? 0 : count;
     }

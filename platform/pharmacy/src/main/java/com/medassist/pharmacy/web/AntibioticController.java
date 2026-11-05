@@ -2,6 +2,7 @@ package com.medassist.pharmacy.web;
 
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.pharmacy.service.AntibioticService;
 import com.medassist.pharmacy.web.AntibioticDtos.ApprovalReq;
@@ -28,6 +29,7 @@ import java.util.UUID;
  *
  * <p>查看统计/待审：{@code pharmacy:antibiotic:read}；
  * 特殊使用级审批：{@code pharmacy:antibiotic:approve}（审批人 ≠ 开方医师）。
+ * G59：统计/待审按处方院区收敛，审批与详情经 {@link com.medassist.pharmacy.service.PrescriptionAccessGuard} 校验院区。
  */
 @RestController
 @RequestMapping("/pharmacy/antibiotics")
@@ -48,25 +50,28 @@ public class AntibioticController {
             LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate to,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.stats(from, to));
+        return ApiResponse.ok(service.stats(from, to, scope));
     }
 
     @GetMapping("/pending")
     public ApiResponse<List<PendingRow>> pending(
             @RequestParam(required = false) Integer limit,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.pending(limit));
+        return ApiResponse.ok(service.pending(limit, scope));
     }
 
     @GetMapping("/prescriptions/{prescriptionId}/approval")
     public ApiResponse<ApprovalView> approval(
             @PathVariable UUID prescriptionId,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.approval(prescriptionId));
+        return ApiResponse.ok(service.approval(prescriptionId, scope));
     }
 
     /** 特殊使用级审批：approve=false 必须写理由。 */
@@ -75,8 +80,9 @@ public class AntibioticController {
             @PathVariable UUID prescriptionId,
             @Valid @RequestBody ApprovalReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
         Permissions.require(permissions, APPROVE);
-        return ApiResponse.ok(service.approve(prescriptionId, req, actor));
+        return ApiResponse.ok(service.approve(prescriptionId, req, actor, scope));
     }
 }

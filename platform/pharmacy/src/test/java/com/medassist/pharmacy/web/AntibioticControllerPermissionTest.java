@@ -2,6 +2,7 @@ package com.medassist.pharmacy.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.pharmacy.service.AntibioticService;
 import com.medassist.pharmacy.web.AntibioticDtos.ApprovalReq;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,7 +18,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * 抗菌药物专项接口权限矩阵：查看与审批分权。
+ * 抗菌药物专项接口权限矩阵：查看与审批分权；G59 起所有接口透传 DataScope 做院区收敛。
  */
 class AntibioticControllerPermissionTest {
 
@@ -25,6 +26,7 @@ class AntibioticControllerPermissionTest {
     private AntibioticController controller;
 
     private final UUID rxId = UUID.randomUUID();
+    private final DataScope scope = DataScope.all("pharm01", true);
 
     @BeforeEach
     void setUp() {
@@ -42,17 +44,17 @@ class AntibioticControllerPermissionTest {
     @Test
     @DisplayName("统计/待审/审批详情：必须 pharmacy:antibiotic:read")
     void readEndpointsRequireRead() {
-        assertForbidden(() -> controller.stats(null, null, "pharmacy:antibiotic:approve"));
-        controller.stats(null, null, "pharmacy:antibiotic:read");
-        verify(service).stats(null, null);
+        assertForbidden(() -> controller.stats(null, null, "pharmacy:antibiotic:approve", scope));
+        controller.stats(null, null, "pharmacy:antibiotic:read", scope);
+        verify(service).stats(null, null, scope);
 
-        assertForbidden(() -> controller.pending(10, null));
-        controller.pending(10, "pharmacy:antibiotic:read");
-        verify(service).pending(10);
+        assertForbidden(() -> controller.pending(10, null, scope));
+        controller.pending(10, "pharmacy:antibiotic:read", scope);
+        verify(service).pending(10, scope);
 
-        assertForbidden(() -> controller.approval(rxId, "pharmacy:read"));
-        controller.approval(rxId, "pharmacy:antibiotic:read");
-        verify(service).approval(rxId);
+        assertForbidden(() -> controller.approval(rxId, "pharmacy:read", scope));
+        controller.approval(rxId, "pharmacy:antibiotic:read", scope);
+        verify(service).approval(rxId, scope);
     }
 
     @Test
@@ -60,17 +62,18 @@ class AntibioticControllerPermissionTest {
     void approveRequiresApprove() {
         ApprovalReq req = new ApprovalReq(true, null);
 
-        assertForbidden(() -> controller.approve(rxId, req, "pharmacy:antibiotic:read", "pharm01"));
-        verify(service, never()).approve(any(), any(), any());
+        assertForbidden(() -> controller.approve(rxId, req,
+                "pharmacy:antibiotic:read", "pharm01", scope));
+        verify(service, never()).approve(any(), any(), any(), any());
 
-        controller.approve(rxId, req, "pharmacy:antibiotic:approve", "pharm01");
-        verify(service).approve(rxId, req, "pharm01");
+        controller.approve(rxId, req, "pharmacy:antibiotic:approve", "pharm01", scope);
+        verify(service).approve(rxId, req, "pharm01", scope);
     }
 
     @Test
     @DisplayName("权限头为空：403 且不触达服务层")
     void emptyPermissionsForbidden() {
-        assertForbidden(() -> controller.approval(rxId, null));
-        verify(service, never()).approval(any());
+        assertForbidden(() -> controller.approval(rxId, null, scope));
+        verify(service, never()).approval(any(), any());
     }
 }
