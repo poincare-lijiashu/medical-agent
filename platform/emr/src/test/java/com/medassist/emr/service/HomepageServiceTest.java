@@ -81,7 +81,7 @@ class HomepageServiceTest {
                 DataScope.all("admin01", true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID));
-        verify(repo, never()).insertHomepage(any());
+        verify(repo, never()).insertHomepage(any(), any());
     }
 
     @Test
@@ -94,7 +94,7 @@ class HomepageServiceTest {
                 DataScope.ofDepartment("doctor02", UUID.randomUUID(), true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID));
-        verify(repo, never()).insertHomepage(any());
+        verify(repo, never()).insertHomepage(any(), any());
     }
 
     @Test
@@ -107,7 +107,7 @@ class HomepageServiceTest {
                 DataScope.all("admin01", true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.EMR_HOMEPAGE_SOURCE_INVALID));
-        verify(repo, never()).insertHomepage(any());
+        verify(repo, never()).insertHomepage(any(), any());
     }
 
     @Test
@@ -122,7 +122,7 @@ class HomepageServiceTest {
         doAnswer(inv -> {
             inserted.set(inv.getArgument(0));
             return null;
-        }).when(repo).insertHomepage(any());
+        }).when(repo).insertHomepage(any(), any());
         when(repo.findHomepage(any())).thenAnswer(inv -> Optional.of(inserted.get()));
 
         service.create(new CreateHomepageReq(visitId), "admin01", DataScope.all("admin01", true));
@@ -153,7 +153,7 @@ class HomepageServiceTest {
                 DataScope.all("admin01", true)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.CONFLICT));
-        verify(repo, never()).insertHomepage(any());
+        verify(repo, never()).insertHomepage(any(), any());
     }
 
     @Test

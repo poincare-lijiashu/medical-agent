@@ -2,6 +2,7 @@ package com.medassist.emr.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
 import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.client.ClinicalClient;
@@ -117,7 +118,7 @@ public class HomepageService {
                 toJson(diagnoses), surgeryProceduresJson(src.procedures()), toJson(feeSummary),
                 total, Homepage.DRAFT,
                 null, null, null, null, null, 0L, null);
-        repo.insertHomepage(homepage);
+        repo.insertHomepage(homepage, scope.campusForWrite());
 
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("homepageNo", homepage.homepageNo());
@@ -342,12 +343,14 @@ public class HomepageService {
      * 列表（摘要口径 + 查询审计）。
      *
      * <p>只返回掩码姓名与金额合计，不返回诊断/费用明细；审计只记条数与筛选条件。
+     * G60：{@code campusIds} 空集合表示跨院区角色，SQL 层按 {@code campus_id} 收敛。
      */
     public List<HomepageSummary> list(String status, UUID patientId, UUID deptId, Integer limit,
-                                      String actor) {
+                                      java.util.Set<UUID> campusIds, String actor) {
         String normalized = blankToNull(status) == null ? null : status.trim().toUpperCase();
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        List<HomepageSummary> rows = repo.listHomepageSummaries(normalized, patientId, deptId, size);
+        List<HomepageSummary> rows = repo.listHomepageSummaries(normalized, patientId, deptId,
+                CampusFilters.csv(campusIds), size);
         audit(actor, "HOMEPAGE_QUERY", "HOMEPAGE", "-", Map.of(
                 "count", rows.size(), "status", String.valueOf(normalized),
                 "patientFilter", patientId != null, "deptFilter", deptId != null, "limit", size));

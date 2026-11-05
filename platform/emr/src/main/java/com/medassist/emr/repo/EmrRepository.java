@@ -495,6 +495,14 @@ public class EmrRepository {
                 .optional();
     }
 
+    /** 病案首页所属院区（G60：与病历正文同口径 dept+campus 双条件判定）。 */
+    public Optional<UUID> findHomepageCampus(UUID id) {
+        return jdbc.sql("SELECT campus_id FROM emr_svc.record_homepage WHERE id = ?")
+                .param(id)
+                .query((rs, i) -> rs.getObject("campus_id", UUID.class))
+                .optional();
+    }
+
     // ---------------------------------------------------------------- 签名 / 修订
 
     public void insertSignature(RecordSignature s) {
@@ -909,7 +917,7 @@ public class EmrRepository {
             status, submitted_by, submitted_by_id, submitted_at, archived_by, archived_at, version, created_at
             """;
 
-    public void insertHomepage(Homepage h) {
+    public void insertHomepage(Homepage h, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO emr_svc.record_homepage
                             (id, homepage_no, visit_id, admission_id, patient_id, patient_no,
@@ -921,7 +929,7 @@ public class EmrRepository {
                              occupation, nation, blood_type, rh_factor, rescue_count,
                              rescue_success_count, critical_case, hospital_infection,
                              chief_physician, resident_physician, coder, diagnoses, procedures,
-                             fee_summary, total_amount, status, version)
+                             fee_summary, total_amount, status, version, campus_id)
                         VALUES (:id, :homepageNo, :visitId, CAST(:admissionId AS uuid), :patientId,
                                 :patientNo, :patientName, :patientSex, CAST(:birthDate AS date),
                                 :admitAge, :visitNo, CAST(:deptId AS uuid), :deptName,
@@ -933,7 +941,7 @@ public class EmrRepository {
                                 :rhFactor, :rescueCount, :rescueSuccessCount, :criticalCase,
                                 :hospitalInfection, :chiefPhysician, :residentPhysician, :coder,
                                 CAST(:diagnoses AS jsonb), CAST(:procedures AS jsonb),
-                                CAST(:feeSummary AS jsonb), :totalAmount, 'DRAFT', 0)
+                                CAST(:feeSummary AS jsonb), :totalAmount, 'DRAFT', 0, :campusId)
                         """)
                 .param("id", h.id()).param("homepageNo", h.homepageNo())
                 .param("visitId", h.visitId()).param("admissionId", h.admissionId())
@@ -961,6 +969,7 @@ public class EmrRepository {
                 .param("coder", h.coder())
                 .param("diagnoses", h.diagnoses()).param("procedures", h.procedures())
                 .param("feeSummary", h.feeSummary()).param("totalAmount", h.totalAmount())
+                .param("campusId", campusId)
                 .update();
     }
 
@@ -1102,7 +1111,7 @@ public class EmrRepository {
      * 姓名 + 出院诊断 + 费用，且不写审计。
      */
     public List<HomepageSummary> listHomepageSummaries(String status, UUID patientId, UUID deptId,
-                                                       int limit) {
+                                                       String campusCsv, int limit) {
         return jdbc.sql("""
                         SELECT id, homepage_no, visit_no, patient_no,
                                CASE WHEN patient_name IS NULL OR patient_name = '' THEN ''
@@ -1114,11 +1123,14 @@ public class EmrRepository {
                            AND (CAST(:patientId AS uuid) IS NULL
                                 OR patient_id = CAST(:patientId AS uuid))
                            AND (CAST(:deptId AS uuid) IS NULL OR dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                          ORDER BY created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("patientId", patientId)
                 .param("deptId", deptId).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new HomepageSummary(
                         rs.getObject("id", UUID.class), rs.getString("homepage_no"),
                         rs.getString("visit_no"), rs.getString("patient_no"),

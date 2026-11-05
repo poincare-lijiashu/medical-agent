@@ -86,7 +86,8 @@ public class HomepageController {
                 filterDept = scope.deptCodes().iterator().next();
             }
         }
-        return ApiResponse.ok(PhiMask.summaries(service.list(status, patientId, filterDept, limit, actor).stream()
+        return ApiResponse.ok(PhiMask.summaries(service.list(status, patientId, filterDept, limit,
+                scope.campusFilter(), actor).stream()
                 .filter(row -> scope.canSeeDepartment(row.deptId()))
                 .toList(), scope));
     }

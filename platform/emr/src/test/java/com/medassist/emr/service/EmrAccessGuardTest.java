@@ -69,10 +69,11 @@ class EmrAccessGuardTest {
     }
 
     @Test
-    @DisplayName("病案首页：同科室放行，跨科室与不存在都按未找到处理")
+    @DisplayName("病案首页：同科室同院区放行，跨科室/跨院区/不存在都按未找到处理")
     void requireHomepageScopesByDepartment() {
         UUID homepageId = UUID.randomUUID();
         when(repo.findHomepageDepartment(homepageId)).thenReturn(Optional.of(deptA));
+        when(repo.findHomepageCampus(homepageId)).thenReturn(Optional.of(DataScope.DEFAULT_CAMPUS_ID));
 
         assertThatCode(() -> guard.requireHomepage(
                 DataScope.ofDepartment("doctor01", deptA, true), homepageId))
@@ -86,6 +87,33 @@ class EmrAccessGuardTest {
         UUID missing = UUID.randomUUID();
         when(repo.findHomepageDepartment(missing)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> guard.requireHomepage(DataScope.all("admin01", true), missing))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThatError(e, ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("G60：同科室但跨院区的病案首页不可见（dept+campus 双条件）")
+    void requireHomepageRejectsOtherCampus() {
+        UUID homepageId = UUID.randomUUID();
+        UUID eastCampus = UUID.fromString("a0000000-0000-0000-0000-000000000002");
+        when(repo.findHomepageDepartment(homepageId)).thenReturn(Optional.of(deptA));
+        when(repo.findHomepageCampus(homepageId)).thenReturn(Optional.of(eastCampus));
+
+        assertThatThrownBy(() -> guard.requireHomepage(
+                DataScope.of("doctor01", Set.of(deptA), false,
+                        Set.of(DataScope.DEFAULT_CAMPUS_ID), false, true), homepageId))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThatError(e, ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+    }
+
+    @Test
+    @DisplayName("G60：首页缺院区（历史数据）按不可见处理")
+    void requireHomepageFailsClosedWithoutCampus() {
+        UUID homepageId = UUID.randomUUID();
+        when(repo.findHomepageDepartment(homepageId)).thenReturn(Optional.of(deptA));
+        when(repo.findHomepageCampus(homepageId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> guard.requireHomepage(DataScope.all("admin01", true), homepageId))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThatError(e, ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
     }

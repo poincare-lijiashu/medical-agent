@@ -36,11 +36,18 @@ public class EmrAccessGuard {
         }
     }
 
-    /** 校验病案首页在数据范围内（详情、打印、补录、重算、提交、归档）。 */
+    /**
+     * 校验病案首页在数据范围内（详情、打印、补录、重算、提交、归档）。
+     *
+     * <p>G60：与 {@link #requireRecord} 同口径——dept + campus 双条件；
+     * 缺损院区的历史数据按不可见处理（fail-closed），避免"同科室即可跨院区读首页"。
+     */
     public void requireHomepage(DataScope scope, UUID homepageId) {
         UUID deptId = repo.findHomepageDepartment(homepageId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
-        if (!scope.canSeeDepartment(deptId)) {
+        UUID campusId = repo.findHomepageCampus(homepageId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND));
+        if (!scope.canSeeDepartment(deptId) || !scope.canSeeCampus(campusId)) {
             throw new BusinessException(ErrorCode.EMR_HOMEPAGE_NOT_FOUND);
         }
     }
