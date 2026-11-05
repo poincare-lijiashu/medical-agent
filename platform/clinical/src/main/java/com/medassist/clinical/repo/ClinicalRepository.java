@@ -6376,8 +6376,15 @@ public class ClinicalRepository {
                 .param(orderId).param(taskDate).query(MOBILE_TASK_MAPPER).optional();
     }
 
+    /**
+     * 移动护理任务列表（G61）：按任务所属就诊的科室/院区在 SQL 层收敛。
+     *
+     * <p>{@code deptCsv}/{@code campusCsv} 空串表示该维度不限（跨科室 / 跨院区角色）；
+     * 过滤发生在 LIMIT 之前，避免"先截断再内存过滤"导致可见行被占满。
+     */
     public List<MobileNursingTask> listMobileTasks(LocalDate taskDate, String status,
-                                                    String taskType, UUID wardId, int limit) {
+                                                    String taskType, UUID wardId,
+                                                    String deptCsv, String campusCsv, int limit) {
         return jdbc.sql(MOBILE_TASK_SELECT + """
                          WHERE (CAST(:taskDate AS date) IS NULL
                                 OR task_date = CAST(:taskDate AS date))
@@ -6387,12 +6394,22 @@ public class ClinicalRepository {
                                 OR task_type = CAST(:taskType AS text))
                            AND (CAST(:wardId AS uuid) IS NULL
                                 OR ward_id = CAST(:wardId AS uuid))
+                           AND (CAST(:deptCsv AS text) = ''
+                                OR visit_id IN (SELECT v.id FROM clinical_svc.visit v
+                                                 WHERE v.dept_id = ANY(
+                                                     string_to_array(CAST(:deptCsv AS text), ',')::uuid[])))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR visit_id IN (SELECT v.id FROM clinical_svc.visit v
+                                                 WHERE v.campus_id = ANY(
+                                                     string_to_array(CAST(:campusCsv AS text), ',')::uuid[])))
                          ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END,
                                   task_type, patient_no, item_name
                          LIMIT :limit
                         """)
                 .param("taskDate", taskDate).param("status", status)
                 .param("taskType", taskType).param("wardId", wardId).param("limit", limit)
+                .param("deptCsv", deptCsv == null ? "" : deptCsv)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(MOBILE_TASK_MAPPER).list();
     }
 
@@ -6450,8 +6467,8 @@ public class ClinicalRepository {
                         """).param(taskId).query(MOBILE_SCAN_MAPPER).list();
     }
 
-    /** 移动护理看板：当日待核对/已核对/异常/总任务。 */
-    public MobileBoardRow mobileBoard(LocalDate today) {
+    /** 移动护理看板：当日待核对/已核对/异常/总任务（G61：按就诊科室/院区收敛）。 */
+    public MobileBoardRow mobileBoard(LocalDate today, String deptCsv, String campusCsv) {
         return jdbc.sql("""
                         SELECT count(*) FILTER (WHERE status = 'PENDING') AS pending,
                                count(*) FILTER (WHERE status = 'VERIFIED') AS verified_today,
@@ -6459,8 +6476,18 @@ public class ClinicalRepository {
                                count(*) AS total_today
                           FROM clinical_svc.nursing_mobile_task
                          WHERE task_date = :today
+                           AND (CAST(:deptCsv AS text) = ''
+                                OR visit_id IN (SELECT v.id FROM clinical_svc.visit v
+                                                 WHERE v.dept_id = ANY(
+                                                     string_to_array(CAST(:deptCsv AS text), ',')::uuid[])))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR visit_id IN (SELECT v.id FROM clinical_svc.visit v
+                                                 WHERE v.campus_id = ANY(
+                                                     string_to_array(CAST(:campusCsv AS text), ',')::uuid[])))
                         """)
                 .param("today", today)
+                .param("deptCsv", deptCsv == null ? "" : deptCsv)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new MobileBoardRow(rs.getLong("pending"),
                         rs.getLong("verified_today"), rs.getLong("exceptions_today"),
                         rs.getLong("total_today")))

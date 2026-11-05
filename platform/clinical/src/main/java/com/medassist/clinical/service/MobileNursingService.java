@@ -13,6 +13,8 @@ import com.medassist.clinical.web.MobileNursingDtos.GenerateFromOrdersReq;
 import com.medassist.clinical.web.MobileNursingDtos.ManualTaskReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Masks;
 import com.medassist.common.time.BusinessTime;
 import org.springframework.stereotype.Service;
@@ -41,6 +43,9 @@ import java.util.UUID;
  * </ol>
  *
  * <p>安全约束：任务视图不返回期望条码；比对在服务端完成，客户端无法"照抄期望值"。
+ *
+ * <p>数据范围（G61）：所有读写都先经 {@link VisitAccessGuard} 校验任务所属就诊的
+ * 科室 + 院区；列表与看板把科室/院区条件下推 SQL，避免"截断后再内存过滤"。
  */
 @Service
 public class MobileNursingService {
@@ -55,19 +60,23 @@ public class MobileNursingService {
     private final ClinicalRepository repo;
     private final PatientClient patientClient;
     private final ObjectMapper objectMapper;
+    private final VisitAccessGuard guard;
 
     public MobileNursingService(ClinicalRepository repo, PatientClient patientClient,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper, VisitAccessGuard guard) {
         this.repo = repo;
         this.patientClient = patientClient;
         this.objectMapper = objectMapper;
+        this.guard = guard;
     }
 
     /** 从长期药品医嘱生成当日给药核对任务；已存在任务的医嘱跳过。 */
     @Transactional
-    public GenerateOutcome generateFromOrders(GenerateFromOrdersReq req, String actor) {
+    public GenerateOutcome generateFromOrders(GenerateFromOrdersReq req, String actor,
+                                              DataScope scope) {
         String operator = requireActor(actor);
         Admission admission = resolveAdmission(req.admissionId(), req.admissionNo());
+        guard.requireAdmission(scope, admission.id());
         LocalDate taskDate = req.taskDate() == null ? BusinessTime.today() : req.taskDate();
         if (taskDate.isAfter(BusinessTime.today())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "不能为未来日期生成核对任务");
@@ -113,7 +122,7 @@ public class MobileNursingService {
 
     /** 手工建单：标本采集或无法从医嘱生成的给药任务。 */
     @Transactional
-    public MobileNursingTask createManualTask(ManualTaskReq req, String actor) {
+    public MobileNursingTask createManualTask(ManualTaskReq req, String actor, DataScope scope) {
         String operator = requireActor(actor);
         String type = req.taskType().trim().toUpperCase();
         if (!TASK_TYPES.contains(type)) {
@@ -126,6 +135,7 @@ public class MobileNursingService {
             throw new BusinessException(ErrorCode.MOBILE_TASK_INVALID);
         }
         Admission admission = resolveAdmission(req.admissionId(), req.admissionNo());
+        guard.requireAdmission(scope, admission.id());
         PatientClient.PatientProfile patient = patientClient.requireProfile(admission.patientId());
         MobileNursingTask task = newTask(operator, BusinessTime.today(), type, admission,
                 patient, wardName(admission.wardId()), bedNo(admission.bedId()), "MANUAL",
@@ -139,7 +149,7 @@ public class MobileNursingService {
     }
 
     public List<MobileNursingTask> listTasks(LocalDate taskDate, String status, String taskType,
-                                             UUID wardId, int limit) {
+                                             UUID wardId, int limit, DataScope scope) {
         String normalizedStatus = status == null || status.isBlank()
                 ? null : status.trim().toUpperCase();
         if (normalizedStatus != null && !TASK_STATUSES.contains(normalizedStatus)) {
@@ -152,8 +162,12 @@ public class MobileNursingService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "任务类型只能是 MEDICATION / SPECIMEN");
         }
+        if (wardId != null) {
+            guard.requireWard(scope, wardId);
+        }
         int size = limit <= 0 ? 100 : Math.min(limit, LIST_LIMIT);
-        return repo.listMobileTasks(taskDate, normalizedStatus, normalizedType, wardId, size);
+        return repo.listMobileTasks(taskDate, normalizedStatus, normalizedType, wardId,
+                deptCsv(scope), CampusFilters.csv(scope.campusFilter()), size);
     }
 
     /**
@@ -161,7 +175,7 @@ public class MobileNursingService {
      */
     @Transactional
     public VerifyOutcome verify(UUID taskId, String patientBarcode, String itemBarcode,
-                                String actor) {
+                                String actor, DataScope scope) {
         String operator = requireActor(actor);
         String scannedPatient = patientBarcode == null ? "" : patientBarcode.trim();
         String scannedItem = itemBarcode == null ? "" : itemBarcode.trim();
@@ -170,6 +184,8 @@ public class MobileNursingService {
         }
         MobileNursingTask task = repo.lockMobileTask(taskId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MOBILE_TASK_NOT_FOUND));
+        // G61：任务所属就诊必须在本账号科室/院区范围内；越权与不存在同码
+        guard.requireAdmission(scope, task.admissionId());
         if (!task.pending()) {
             throw new BusinessException(ErrorCode.MOBILE_TASK_STATUS_INVALID,
                     "任务当前状态为 " + task.status() + "，不能重复核对");
@@ -209,10 +225,12 @@ public class MobileNursingService {
     }
 
     @Transactional
-    public MobileNursingTask markException(UUID taskId, String reason, String actor) {
+    public MobileNursingTask markException(UUID taskId, String reason, String actor,
+                                           DataScope scope) {
         String operator = requireActor(actor);
         MobileNursingTask task = repo.lockMobileTask(taskId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MOBILE_TASK_NOT_FOUND));
+        guard.requireAdmission(scope, task.admissionId());
         if (MobileNursingTask.EXCEPTION.equals(task.status())) {
             return task;
         }
@@ -233,17 +251,28 @@ public class MobileNursingService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.MOBILE_TASK_NOT_FOUND));
     }
 
-    public List<MobileScanEvent> listScans(UUID taskId) {
-        repo.findMobileTask(taskId)
+    public List<MobileScanEvent> listScans(UUID taskId, DataScope scope) {
+        MobileNursingTask task = repo.findMobileTask(taskId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MOBILE_TASK_NOT_FOUND));
+        guard.requireAdmission(scope, task.admissionId());
         return repo.listMobileScanEvents(taskId);
     }
 
-    public MobileBoardRow board() {
-        return repo.mobileBoard(BusinessTime.today());
+    public MobileBoardRow board(DataScope scope) {
+        return repo.mobileBoard(BusinessTime.today(), deptCsv(scope),
+                CampusFilters.csv(scope.campusFilter()));
     }
 
     // ---------------------------------------------------------------- 内部
+
+    /** 科室维度下推 SQL（空串 = 跨科室角色不限）；与院区同样在 LIMIT 之前生效。 */
+    private static String deptCsv(DataScope scope) {
+        if (scope.allDepartments()) {
+            return "";
+        }
+        return scope.deptCodes().stream().sorted().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
 
     private Admission resolveAdmission(UUID admissionId, String admissionNo) {
         Admission admission;

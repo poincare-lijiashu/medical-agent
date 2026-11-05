@@ -11,6 +11,7 @@ import com.medassist.clinical.web.MobileNursingDtos.GenerateFromOrdersReq;
 import com.medassist.clinical.web.MobileNursingDtos.ManualTaskReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -41,9 +43,11 @@ class MobileNursingServiceTest {
 
     private ClinicalRepository repo;
     private PatientClient patientClient;
+    private VisitAccessGuard guard;
     private MobileNursingService service;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final DataScope scope = DataScope.all("nurse01", true);
     private final UUID admissionId = UUID.randomUUID();
     private final UUID visitId = UUID.randomUUID();
     private final UUID patientId = UUID.randomUUID();
@@ -55,7 +59,8 @@ class MobileNursingServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         patientClient = mock(PatientClient.class);
-        service = new MobileNursingService(repo, patientClient, objectMapper);
+        guard = mock(VisitAccessGuard.class);
+        service = new MobileNursingService(repo, patientClient, objectMapper, guard);
     }
 
     private Admission admission(String status) {
@@ -110,14 +115,14 @@ class MobileNursingServiceTest {
         when(repo.nextMobileTaskNo()).thenReturn("MN20261104000001");
 
         var outcome = service.generateFromOrders(new GenerateFromOrdersReq(null,
-                "A20261104000001", BusinessTime.today()), "nurse01");
+                "A20261104000001", BusinessTime.today()), "nurse01", scope);
 
         assertThat(outcome.created()).isEqualTo(1);
         assertThat(outcome.skipped()).isEqualTo(1);
         verify(repo).insertMobileTask(any());
 
         assertThatThrownBy(() -> service.generateFromOrders(new GenerateFromOrdersReq(null,
-                "A20261104000001", BusinessTime.today().plusDays(1)), "nurse01"))
+                "A20261104000001", BusinessTime.today().plusDays(1)), "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
@@ -128,7 +133,7 @@ class MobileNursingServiceTest {
     void manualTaskValidation() {
         ManualTaskReq badType = new ManualTaskReq(null, "A20261104000001", "UNKNOWN",
                 "DRUG-001", "氯化钠", "B001", null, null);
-        assertThatThrownBy(() -> service.createManualTask(badType, "nurse01"))
+        assertThatThrownBy(() -> service.createManualTask(badType, "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.MOBILE_TASK_INVALID);
@@ -137,7 +142,7 @@ class MobileNursingServiceTest {
         when(repo.nextMobileTaskNo()).thenReturn("MN20261104000002");
         ManualTaskReq ok = new ManualTaskReq(null, "A20261104000001", "SPECIMEN",
                 "LAB-K", "血清钾", "SPEC-001", "采集单", null);
-        var created = service.createManualTask(ok, "nurse01");
+        var created = service.createManualTask(ok, "nurse01", scope);
         assertThat(created.taskType()).isEqualTo(MobileNursingTask.SPECIMEN);
         assertThat(created.status()).isEqualTo(MobileNursingTask.PENDING);
     }
@@ -152,7 +157,7 @@ class MobileNursingServiceTest {
         MobileNursingTask verified = task(MobileNursingTask.VERIFIED, 1);
         when(repo.findMobileTask(taskId)).thenReturn(Optional.of(verified));
 
-        var outcome = service.verify(taskId, "P001", "DRUG-001", "nurse01");
+        var outcome = service.verify(taskId, "P001", "DRUG-001", "nurse01", scope);
         assertThat(outcome.matched()).isTrue();
         assertThat(outcome.task().status()).isEqualTo(MobileNursingTask.VERIFIED);
         verify(repo, org.mockito.Mockito.times(2)).insertMobileScanEvent(any());
@@ -162,12 +167,12 @@ class MobileNursingServiceTest {
         when(repo.updateMobileTaskScan(eq(taskId), eq(false), eq("nurse01"), eq(2L)))
                 .thenReturn(true);
         when(repo.findMobileTask(taskId)).thenReturn(Optional.of(pending2));
-        var mismatch = service.verify(taskId, "P999", "DRUG-001", "nurse01");
+        var mismatch = service.verify(taskId, "P999", "DRUG-001", "nurse01", scope);
         assertThat(mismatch.matched()).isFalse();
         assertThat(mismatch.patientMatched()).isFalse();
         assertThat(mismatch.itemMatched()).isTrue();
 
-        assertThatThrownBy(() -> service.verify(taskId, " ", "DRUG-001", "nurse01"))
+        assertThatThrownBy(() -> service.verify(taskId, " ", "DRUG-001", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.MOBILE_SCAN_INVALID);
@@ -178,7 +183,7 @@ class MobileNursingServiceTest {
     void verifyRejectsNonPending() {
         when(repo.lockMobileTask(taskId)).thenReturn(Optional.of(
                 task(MobileNursingTask.VERIFIED, 1)));
-        assertThatThrownBy(() -> service.verify(taskId, "P001", "DRUG-001", "nurse01"))
+        assertThatThrownBy(() -> service.verify(taskId, "P001", "DRUG-001", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.MOBILE_TASK_STATUS_INVALID);
@@ -190,7 +195,7 @@ class MobileNursingServiceTest {
     void exceptionRules() {
         MobileNursingTask pending = task(MobileNursingTask.PENDING, 0);
         when(repo.lockMobileTask(taskId)).thenReturn(Optional.of(pending));
-        assertThatThrownBy(() -> service.markException(taskId, " ", "nurse01"))
+        assertThatThrownBy(() -> service.markException(taskId, " ", "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.MOBILE_EXCEPTION_REASON_REQUIRED);
@@ -198,12 +203,12 @@ class MobileNursingServiceTest {
         when(repo.markMobileTaskException(taskId, "患者拒绝服药", "nurse01", 0)).thenReturn(true);
         when(repo.findMobileTask(taskId)).thenReturn(Optional.of(
                 task(MobileNursingTask.EXCEPTION, 1)));
-        assertThat(service.markException(taskId, "患者拒绝服药", "nurse01").status())
+        assertThat(service.markException(taskId, "患者拒绝服药", "nurse01", scope).status())
                 .isEqualTo(MobileNursingTask.EXCEPTION);
 
         when(repo.lockMobileTask(taskId)).thenReturn(Optional.of(
                 task(MobileNursingTask.EXCEPTION, 1)));
-        assertThat(service.markException(taskId, null, "nurse01").status())
+        assertThat(service.markException(taskId, null, "nurse01", scope).status())
                 .isEqualTo(MobileNursingTask.EXCEPTION);
     }
 
@@ -211,15 +216,45 @@ class MobileNursingServiceTest {
     @DisplayName("列表：非法状态/类型 422")
     void listValidation() {
         assertThatThrownBy(() -> service.listTasks(BusinessTime.today(), "UNKNOWN", null,
-                null, 10))
+                null, 10, scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
         assertThatThrownBy(() -> service.listTasks(BusinessTime.today(), null, "UNKNOWN",
-                null, 10))
+                null, 10, scope))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
-        verify(repo, never()).listMobileTasks(any(), any(), any(), any(), anyInt());
+        verify(repo, never()).listMobileTasks(any(), any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    @DisplayName("G61：生成任务前校验住院登记在本科室/院区范围内")
+    void generateChecksAdmissionScope() {
+        stubAdmissionContext();
+        doThrow(new BusinessException(ErrorCode.NOT_FOUND, "未找到住院登记"))
+                .when(guard).requireAdmission(any(), any());
+
+        assertThatThrownBy(() -> service.generateFromOrders(new GenerateFromOrdersReq(null,
+                "A20261104000001", BusinessTime.today()), "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.NOT_FOUND);
+        verify(repo, never()).insertMobileTask(any());
+    }
+
+    @Test
+    @DisplayName("G61：扫码核对前校验任务所属就诊范围")
+    void verifyChecksTaskScope() {
+        when(repo.lockMobileTask(taskId)).thenReturn(Optional.of(
+                task(MobileNursingTask.PENDING, 0)));
+        doThrow(new BusinessException(ErrorCode.NOT_FOUND, "未找到住院登记"))
+                .when(guard).requireAdmission(any(), any());
+
+        assertThatThrownBy(() -> service.verify(taskId, "P001", "DRUG-001", "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.NOT_FOUND);
+        verify(repo, never()).insertMobileScanEvent(any());
     }
 }

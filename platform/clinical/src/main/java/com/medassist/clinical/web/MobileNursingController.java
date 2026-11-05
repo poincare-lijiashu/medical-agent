@@ -40,6 +40,9 @@ import java.util.UUID;
  * {@code mobile:nursing:manage} 从医嘱生成任务与手工建单。
  *
  * <p>任务视图不返回期望条码；扫码比对在服务端完成。
+ *
+ * <p>G61：所有接口透传 {@link DataScope}，服务层统一经 {@code VisitAccessGuard} 校验
+ * 任务所属就诊的科室 + 院区（越权与不存在同码 404），列表/看板条件下推 SQL。
  */
 @RestController
 @RequestMapping("/clinical/mobile")
@@ -66,7 +69,7 @@ public class MobileNursingController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listTasks(date, status, taskType, wardId, limit).stream()
+        return ApiResponse.ok(service.listTasks(date, status, taskType, wardId, limit, scope).stream()
                 .map(t -> view(t, scope))
                 .toList());
     }
@@ -78,7 +81,7 @@ public class MobileNursingController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, MANAGE);
-        var outcome = service.generateFromOrders(req, actor);
+        var outcome = service.generateFromOrders(req, actor, scope);
         return ApiResponse.ok(new GenerateResult(outcome.created(), outcome.skipped(),
                 outcome.tasks().stream().map(t -> view(t, scope)).toList()));
     }
@@ -90,7 +93,7 @@ public class MobileNursingController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, MANAGE);
-        return ApiResponse.ok(view(service.createManualTask(req, actor), scope));
+        return ApiResponse.ok(view(service.createManualTask(req, actor, scope), scope));
     }
 
     @PostMapping("/tasks/{id}/verify")
@@ -101,7 +104,7 @@ public class MobileNursingController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, EXECUTE);
-        var outcome = service.verify(id, req.patientBarcode(), req.itemBarcode(), actor);
+        var outcome = service.verify(id, req.patientBarcode(), req.itemBarcode(), actor, scope);
         return ApiResponse.ok(new VerificationResult(outcome.matched(),
                 outcome.patientMatched(), outcome.itemMatched(), outcome.message(),
                 view(outcome.task(), scope)));
@@ -115,7 +118,7 @@ public class MobileNursingController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, EXECUTE);
-        return ApiResponse.ok(view(service.markException(id, req.reason(), actor), scope));
+        return ApiResponse.ok(view(service.markException(id, req.reason(), actor, scope), scope));
     }
 
     @GetMapping("/tasks/{id}/scans")
@@ -124,16 +127,17 @@ public class MobileNursingController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listScans(id).stream()
+        return ApiResponse.ok(service.listScans(id, scope).stream()
                 .map(e -> scan(e, scope))
                 .toList());
     }
 
     @GetMapping("/board")
     public ApiResponse<BoardView> board(
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        MobileBoardRow row = service.board();
+        MobileBoardRow row = service.board(scope);
         return ApiResponse.ok(new BoardView(row.pending(), row.verifiedToday(),
                 row.exceptionsToday(), row.totalToday()));
     }
