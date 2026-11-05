@@ -51,6 +51,56 @@
         </div>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-consult">
+        <template #header><b>统一问答（已发布技能卡生效）</b></template>
+        <div class="skill-form">
+          <label>能力域
+            <el-select v-model="consultForm.agentId" clearable placeholder="不选则按规则路由"
+                       style="width: 100%" @change="resetConsultSkills">
+              <el-option v-for="a in consultAgents" :key="a.id"
+                         :label="a.name + '（' + a.id + '）'" :value="a.id" />
+            </el-select>
+          </label>
+          <label>指定技能卡（不选=该能力域全部已发布）
+            <el-select v-model="consultForm.skillCodes" multiple clearable
+                       placeholder="可多选" style="width: 100%">
+              <el-option v-for="s in consultSkills" :key="s.code"
+                         :label="s.name + '（' + s.code + '）'" :value="s.code" />
+            </el-select>
+          </label>
+        </div>
+        <el-input v-model="consultForm.question" type="textarea" :rows="2" maxlength="2000"
+                  show-word-limit style="margin-top: 8px"
+                  placeholder="输入临床问题；会按生效技能卡的提示模板与证据边界调用合规模型" />
+        <div style="padding-top: 8px">
+          <el-button type="primary" size="small" :loading="consultBusy" @click="runConsult">
+            执行问答
+          </el-button>
+          <span class="src" style="margin-left: 8px">
+            真实调用本地/国产模型；未配置 provider 显式失败；结果恒需人工复核
+          </span>
+        </div>
+        <div v-if="consultResult" class="route-box" data-testid="agent-consult-result">
+          <div><b>能力域：</b>{{ consultResult.agent.name }}（{{ consultResult.agent.id }}）</div>
+          <div><b>路由：</b>{{ consultResult.routing.strategy }} · {{ consultResult.routing.reason }}</div>
+          <div>
+            <b>生效技能：</b>
+            <template v-if="consultResult.appliedSkills && consultResult.appliedSkills.length">
+              <el-tag v-for="s in consultResult.appliedSkills" :key="s.code" size="small"
+                      style="margin-right: 4px">{{ s.code }} v{{ s.version }}</el-tag>
+            </template>
+            <span v-else class="src">无（按职责保守作答）</span>
+          </div>
+          <div v-if="consultResult.declaredTools && consultResult.declaredTools.length">
+            <b>技能声明工具：</b>{{ consultResult.declaredTools.join('、') }}（本次不自动调用）
+          </div>
+          <div style="white-space: pre-wrap; margin-top: 6px">
+            <b>回答：</b>{{ consultResult.answer }}
+          </div>
+          <div class="src">{{ consultResult.note }} · 耗时 {{ consultResult.elapsedMs }}ms</div>
+        </div>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-skills">
         <template #header>
           <div style="display: flex; align-items: center; justify-content: space-between">
@@ -621,6 +671,12 @@ const tools = ref([])
 const skillList = ref([])
 const question = ref('')
 const route = ref(null)
+const consultForm = ref({ agentId: '', skillCodes: [], question: '' })
+const consultResult = ref(null)
+const consultBusy = ref(false)
+const consultAgents = computed(() => (agents.value || []).filter((a) => a.id !== 'router'))
+const consultSkills = computed(() => (skillList.value || []).filter((s) => s.status === 'PUBLISHED'
+  && (!consultForm.value.agentId || s.agentId === consultForm.value.agentId)))
 const saving = ref('')
 const routing = ref(false)
 const skillOn = ref(false)
@@ -885,6 +941,29 @@ async function preview() {
     route.value = r.data
   } finally {
     routing.value = false
+  }
+}
+
+function resetConsultSkills() {
+  consultForm.value.skillCodes = []
+  consultResult.value = null
+}
+
+async function runConsult() {
+  const q = consultForm.value.question.trim()
+  if (!q) {
+    ElMessage.warning('请先输入问题')
+    return
+  }
+  consultBusy.value = true
+  try {
+    const body = { question: q }
+    if (consultForm.value.agentId) body.agentId = consultForm.value.agentId
+    if (consultForm.value.skillCodes.length) body.skillCodes = consultForm.value.skillCodes
+    const r = await http.post('/agent/consult', body)
+    consultResult.value = r.data
+  } finally {
+    consultBusy.value = false
   }
 }
 

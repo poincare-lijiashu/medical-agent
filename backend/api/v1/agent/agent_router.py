@@ -23,7 +23,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, model_policy, second_opinion, skill_advice, skill_library
+from backend.agents import catalog, consult, model_policy, second_opinion, skill_advice, skill_library
 from backend.agents import skill_ops, skill_trends, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
@@ -170,6 +170,36 @@ async def route_preview(req: RouteReq, user: dict = Depends(require_user)):
     """路由预览（不执行智能体）：返回主责智能体、置信度、候选与最大跳数。"""
     result = router_agent.route(req.question, multi_agent=req.multiAgent)
     result["role"] = user.get("role", "")
+    return result
+
+
+class ConsultReq(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
+    agentId: str | None = Field(default=None, max_length=32)
+    skillCodes: list[str] | None = Field(default=None, max_length=8)
+
+
+@router.post("/consult")
+async def agent_consult(req: ConsultReq, user: dict = Depends(require_user)):
+    """统一问答：规则路由 + 已发布技能卡生效 + 合规模型；只读、仅建议。"""
+    started = time.perf_counter()
+    try:
+        result = await consult.run(req.question, user.get("role", ""),
+                                   req.agentId, req.skillCodes)
+    except consult.ConsultForbidden as e:
+        raise HTTPException(403, str(e))
+    except consult.ConsultInvalid as e:
+        raise HTTPException(422, str(e))
+    except consult.ConsultUnavailable as e:
+        raise HTTPException(503, str(e))
+    await _audit_agent(user, "agent_consult", {
+        "agentId": result["agent"]["id"],
+        "skills": [s["code"] for s in result["appliedSkills"]],
+        "questionChars": len(req.question.strip()),
+        "answerChars": len(result.get("answer") or ""),
+        "hitl": result.get("needsHumanReview", True),
+        "ms": int((time.perf_counter() - started) * 1000),
+    })
     return result
 
 
