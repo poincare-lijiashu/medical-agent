@@ -13,11 +13,11 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G54 四眼改按账号主键判定）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1671 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
+- **HEAD**：以 `git log -1` 为准（本轮 G55 编码更正四眼同口径）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1672 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
 - **多院区口径（G51）**：`X-Campus` 缺失不再放开全院区，一律收敛主院区；`*` 是唯一的跨院区标记（网关对 ADMIN/QC 在无 campuses 声明时下发）；写入院区固定为主院区优先、否则 UUID 字典序最小。
 - **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V73、tech V13、pharmacy V20、emr V24、insurance V20、material V5、clinical V56（各服务独立 schema）。
+- **数据库**：auth V73、tech V13、pharmacy V20、emr V25、insurance V20、material V5、clinical V56（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
 - **演示账号**：`admin01 / Med@2026`（ADMIN，主院区+东院区），`doctor01`（DOCTOR，主院区）、`pharm01`、`pharm02`（PHARMACIST）、`qc01`（主院区+东院区）同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。院区冒烟脚本每次会创建 `east*` / `eastadm*`（口令 `East@2026x`，仅东院区）用于隔离验证。
@@ -115,6 +115,7 @@
 | G52 | 票据与 CA 归属校验 | 收费票据 list/detail/issue/reprint/void 全部先反查所属就诊并过 `VisitAccessGuard`（科室 + 院区）——原先只校验全局权限串，持开票权的账号可对他科/他院区开票、重打、作废；CA 签名台账不传 recordId 时只有跨院区角色可查（单院区账号必须指定病历），验签/撤销先按 `recordIdOf` 过 `EmrAccessGuard.requireRecord`。新增 4 项单测，全量 179 类 / 1667 项通过，院区冒烟 73 项复跑全过 |
 | G53 | CA 生产防退化与报盘院区收敛 | CA 适配层加构造期守卫：`prod`/`production` profile 下 mode 非 vendor、或 `CA_SECRET`/`CA_API_KEY` 为空 → 拒绝启动（原先漏配一行即静默用对称 HMAC 冒充 CA 签名）；`secret()` 不再回退源码硬编码常量，缺密钥时拒绝签名；医保报盘 `listConfirmedBills` 与两个计数查询接受 `campusCsv`，生成批次只纳入调用方可见院区清单，报文下载校验批次内清单院区（越权按批次不存在 48403 同码）。新增 3 项单测，全量 179 类 / 1670 项通过，院区冒烟 73 项复跑全过 |
 | G54 | 四眼改按账号主键判定 | emr V24 为 `record_change_request` 增加 `requester_id` / `reviewer_id` 与索引；建申请时由 `X-User-Id` 写入申请人主键；审批通过/驳回按主键判定——缺 `requester_id`（V24 前历史数据）直接拒绝审批（fail-closed），主键相同即自审自批。原先比较用户名，账号重建或同名账号即可绕过。记录审批人主键列已预留。新增 1 项单测（缺主键拒绝），全量 179 类 / 1671 项通过，院区冒烟 73 项复跑全过 |
+| G55 | 编码更正四眼同口径 | emr V25 为 `coding_correction` 增加 `requester_id` / `reviewer_id` 与索引；提交更正时由 `X-User-Id` 写入申请人主键；审批通过/驳回按主键判定，缺主键（V25 前历史数据）fail-closed 拒绝。编码更正决定 DRG 入组与首页上报内容，原先的用户名比较同样可被账号重建绕过。至此 §4.6 两处四眼（文书修改 + 编码更正）全部改为主键判定。新增 1 项单测，全量 179 类 / 1672 项通过，院区冒烟 73 项复跑全过 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
