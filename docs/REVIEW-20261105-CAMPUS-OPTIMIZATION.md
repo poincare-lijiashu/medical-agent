@@ -143,9 +143,15 @@
 |---|---|---|
 | §6.3 | `TechAccessGuard` 四个 require 只回溯申请院区，科室判定散落在 `ApplicationController.detail` 的内存过滤里：申请列表/详情按科室收敛，但 `GET /tech/reports/{id}` 与 `/tech/criticals` 对同申请可读全文与危急值——列表不可见、详情可达 | 新增 `findApplicationScope`（一条 SQL 取 `campus_id + dept_id`），guard 改为 **dept + campus 双条件**（任一为空即 fail-closed），申请/报告/危急值/影像登记四个入口同口径；Controller 删除 guard 之外的二次过滤。真实链路实测：同为主院区，`doctor01`（病区科室）对病区申请 200、对门诊科室申请 404，`admin01` 两者均 200 |
 
+### G69 批次已关闭（代码 commit `2230003`，pharmacy/tech/insurance 已执行 Flyway repair 并重启验证）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.8 | pharmacy V20、tech V13、insurance V20 三份迁移都执行 `UPDATE ... FROM clinical_svc.visit v`，硬依赖 `clinical_svc.visit.campus_id` 已存在；谁先启动谁先迁移，本域先于 clinical 时直接因缺列阻断启动（`validate-on-migrate` 让服务起不来，且错误不提示顺序问题） | 三份脚本改为 `DO $$` 守卫：仅当 `clinical_svc.visit.campus_id` 存在时才按就诊回填，否则跳过并让存量落主院区；新增 `campus_source`（`RUNTIME` / `VISIT` / `MAIN_FALLBACK`）让"引导顺序导致的兜底"可被精确识别与修复，而不是无从分辨。已应用环境用 Flyway `repair()` 重算校验和（本地三 schema 已执行），并按同一口径补齐 `campus_source` 列与标记。**反证**：在独立临时库中，守卫块在缺列时静默跳过并回落 `MAIN_FALLBACK`，旧语句则报 `column v.campus_id does not exist`。另修两处冒烟漂移：`pharmacy_smoke` 补必填 `returnId` 幂等键、超量退药按契约断言 422；`insurance_smoke` 给值班分离账号补科室与主院区（fail-closed 范围要求） |
+
 ### 未处理（下一批）
 
-其余 [必须] 项：**§2.5**（转送审计写失败覆写已成功 TRANSFERRED）、**§3.7**（rewrite 丢弃新增危急值）、**§3.9**（计费补偿毒丸饿死后续异常单）、**§6.8**（三域迁移跨 schema 回填顺序耦合）。另 §6.12（campusCsv 7 份私有实现收敛）、§6.15（大表 NOT NULL 锁风险）为 [建议] 级收敛项。
+其余 [必须] 项：**§2.5**（转送审计写失败覆写已成功 TRANSFERRED）、**§3.7**（rewrite 丢弃新增危急值）、**§3.9**（计费补偿毒丸饿死后续异常单）。另 §6.12（campusCsv 7 份私有实现收敛）、§6.15（大表 NOT NULL 锁风险）为 [建议] 级收敛项。
 
 ---
 
