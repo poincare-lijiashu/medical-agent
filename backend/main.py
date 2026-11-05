@@ -267,7 +267,9 @@ async def readyz():
 @app.get("/metrics", include_in_schema=False)
 async def metrics(user: dict = Depends(require_role("admin"))):
     """运维指标仅限管理员读取（暴露内部路由/时延分布，防信息收集）。"""
-    return PlainTextResponse(observability.exposition(), media_type="text/plain; version=0.0.4")
+    from backend.agents import consult_metrics
+    return PlainTextResponse(observability.exposition() + consult_metrics.prometheus_text(),
+                             media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/v1/health")

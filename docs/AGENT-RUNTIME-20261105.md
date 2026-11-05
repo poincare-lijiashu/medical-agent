@@ -1,7 +1,7 @@
-# Agent 运行时路线图与 G86–G101 落地（2026-11-05）
+# Agent 运行时路线图与 G86–G102 落地（2026-11-05）
 
 > 定位：面向临床辅助决策的**可审计、可回退、人在环**智能体系统。非医疗器械，所有输出须执业人员复核。
-> 本文回答三件事：① 2026 年哪些 agent 技术真正成熟；② 本平台加什么、不加什么、为什么；③ G86–G101 已交付什么、如何验证、后续怎么走。
+> 本文回答三件事：① 2026 年哪些 agent 技术真正成熟；② 本平台加什么、不加什么、为什么；③ G86–G102 已交付什么、如何验证、后续怎么走。
 
 ---
 
@@ -84,12 +84,49 @@
 | **G99** | 统一问答（技能卡真正生效） | 新增 `/agent/consult`：规则路由/显式指定 + 已发布技能卡装配 + 护栏 + 合规模型；未发布/跨智能体技能显式拒绝；审计只记长度与技能码 | 16 项新单测 + 全量测试通过；技能生效可见、境外/未配置模型显式失败、闲聊前置应答零 Token |
 | **G100** | 医生端统一问答页面 | 新增 `/ask` 独立页面：能力域点选/自动路由、已发布技能卡多选、示例问题、结果卡（路由/技能版本/需复核/耗时）、错误内联；导航按角色开放 | 真实浏览器 E2E：登录 → /ask → 提问返回结果卡，无控制台报错；全量测试通过 |
 | **G101** | 多轮上下文 + SSE 流式 | `/agent/consult` 支持 history（≤6 条/单条 2000 字/合计 6000 字，服务端不落库）；新增 `/agent/consult/stream`（meta→delta*→done/error）；追问未命中专科时沿用上一轮能力域；前端逐段渲染、停止生成、流式失败回落非流式 | 13 项新单测；真实浏览器两轮问答 SSE 200、historyTurns=2、追问仍为药物助手；全量测试通过 |
+| **G102** | 问答计量接入 Prometheus | 进程内计量：请求数（agent/channel/status）、耗时 sum/count、技能使用次数；`/metrics` 与 Agent Prometheus 端点同时导出；新增错误率与中止告警规则 | 12 项新单测；实跑问答后 `/metrics` 出现 `consult_requests_total{agent="drug",...} 1`；全量测试通过 |
 
 ---
 
-## 4. G86–G101 已交付（实现细节）
+## 4. G86–G102 已交付（实现细节）
 
-### 4.19 G101 多轮上下文与流式输出（本批）
+### 4.20 G102 问答计量接入 Prometheus（本批）
+
+**为什么加**：G101 之后问答已是临床入口，但运营只能看技能库指标，看不到"谁在用、多少失败、哪些技能真正被用"。本批补进程内计量并暴露到 Prometheus，同时保持不落库、不含问题/回答原文。
+
+**实现**
+| 文件 | 职责 |
+|---|---|
+| `backend/agents/consult_metrics.py` | 线程安全聚合：`consult_requests_total{agent,channel,status}`、`consult_duration_ms_sum/count{channel}`、`skill_usage_total{skill}`；标签转义；技能标签上限 200，超出归入 `__other__` |
+| `backend/agents/consult.py` | `run` 在成功/业务失败/上游异常时计量；`stream` 正常完成计 ok、业务失败计 error、客户端中途断开计 aborted；成功且发出 done 后才计技能使用（同一请求同编码去重） |
+| `backend/main.py` | `/metrics` 在既有进程指标后追加问答计量（仍仅 admin 可读） |
+| `backend/api/v1/agent/agent_router.py` | `/skill-library/metrics/prometheus` 追加问答计量，供院内 Prometheus 一次采集 |
+| `scripts/agent_go_live_check.py` | 上线自检新增两条必需指标校验 |
+| `deploy/prometheus/medassist-agent-ops.rules.yml` | 新增错误率 >20%（且 10 分钟错误 ≥3）与中止激增（10 分钟 ≥5）两条告警 |
+| `tests/test_consult_metrics.py` | 12 项：聚合/去重/失败不计/转义/基数上限/并发精确、run 与 stream 的 ok/error/aborted、两个导出端点 |
+
+**规则**
+- 只做**进程内**计数：多实例由 Prometheus 聚合，重启归零（标准 counter 语义），不写 PG/JSON；
+- 不记录问题、回答、患者信息；标签只有受控的 agent id、channel、status 与技能编码；
+- `status` 仅 ok / error / aborted；aborted 表示客户端在完成前断开，不计技能使用；
+- 技能标签上限 200，防标签基数失控；超限统一计入 `__other__`；
+- 告警只提示不自动处置，阈值与脚本自检口径一致。
+
+**验证**
+- 全量 pytest：**979 passed / 11 skipped**（G102 新增 12 项）。
+- 真实服务实跑：`doctor01` 登录 → `POST /agent/consult` 返回 `agent=drug`、2870 字；`admin01` 读取 `/metrics` 得到
+  `medassist_agent_consult_requests_total{agent="drug",channel="sync",status="ok"} 1` 与
+  `medassist_agent_consult_duration_ms_count{channel="sync"} 1`；Agent Prometheus 端点同样包含该指标。
+  本机当前无已发布技能卡，故 `skill_usage_total` 只有 HELP/TYPE 无样本；技能计数由单测覆盖。
+- 并发用例：8 线程 × 100 次写入，请求数与技能数均精确为 800。
+
+**残留边界**
+- 不统计 token 用量与成本（provider 返回口径不一，强行估算会失真）；
+- 进程重启计数归零，跨重启趋势依赖 Prometheus 侧保留；
+- aborted 无法区分"用户主动停止"与"网络断开"，只作为提示信号；
+- 计量为进程内，多 worker 需在 Prometheus 侧按实例聚合，不能把单实例值当全局值。
+
+### 4.19 G101 多轮上下文与流式输出（上一批）
 
 **为什么加**：G100 页面只能单轮、等整段返回，追问"那需要监测什么"会因当前句无关键词回落到文献助手，临床体验断裂。本批补多轮上下文、SSE 流式与追问路由延续，同时保持"后端不存对话"的合规取向。
 
@@ -116,7 +153,7 @@
 **残留边界**
 - 会话仅存在于浏览器内存（KeepAlive 内），刷新/换设备即丢；未做服务端会话、跨端同步与导出；
 - 历史按"条数/字数"截断，不做摘要压缩，极长对话会丢失更早上下文；
-- 未做 token 级计费/配额控制；流式失败回落非流式会再消耗一次模型调用；
+- 未做 token 级计费/配额控制；G102 已补请求/耗时/技能使用计量，仍未统计 token；流式失败回落非流式会再消耗一次模型调用；
 - 追问沿用仅看上一轮用户句，不看更早轮次，也不是模型级意图追踪。
 
 ### 4.18 G100 医生端统一问答页面（上一批）
@@ -400,7 +437,7 @@
 ### 4.3 验证
 
 - 新增 `tests/test_agent_control_plane.py` **30 项**：目录/Card 结构、路由确定性、多智能体开关、工具校验与真实执行、开关默认值/白名单、API 鉴权、A2A `message/send` 与错误码。
-- 全量 pytest：**967 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13）。
+- 全量 pytest：**979 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12）。
 - 边界反证：联网搜索默认拒绝出网；未配置 provider 时工具返回"未启用"；关闭 A2A 后标准发现入口 404；`agent_multi_agent` 关闭时候选仅主责、跳数 1。
 
 ### 4.4 残留边界（明确不做假）

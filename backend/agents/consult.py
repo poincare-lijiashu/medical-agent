@@ -22,7 +22,7 @@ import time
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.agents import catalog, model_policy, skills
+from backend.agents import catalog, consult_metrics, model_policy, skills
 from backend.agents import router as rule_router
 from backend.core import llm_config
 from backend.core.llm_factory import LLMFactory
@@ -296,22 +296,44 @@ async def run(question: str, role: str, agent_id: str | None = None,
               skill_codes: list[str] | None = None, history=None,
               runner=None) -> dict:
     """执行一次统一问答；``runner`` 可注入，用于测试/离线评测。"""
-    ctx = _prepare(question, role, agent_id, skill_codes, history)
+    started = time.perf_counter()
+    try:
+        ctx = _prepare(question, role, agent_id, skill_codes, history)
+    except ConsultError:
+        consult_metrics.record(agent_id or "unknown", "sync", "error",
+                               (time.perf_counter() - started) * 1000)
+        raise
+
     if "prefilter" in ctx:
+        consult_metrics.record("prefilter", "sync", "ok",
+                               (time.perf_counter() - started) * 1000)
         return ctx["prefilter"]
 
-    started = time.perf_counter()
+    agent_key = ctx["agent"].id
+    codes = [c["code"] for c in ctx["chosen"]]
     try:
         answer = await asyncio.wait_for(
             (runner or _default_runner)(ctx["provider"], ctx["messages"]),
             timeout=AGENT_TIMEOUT_S)
+        text = (answer or "").strip()
+        if not text:
+            raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
     except asyncio.TimeoutError:
+        consult_metrics.record(agent_key, "sync", "error",
+                               (time.perf_counter() - started) * 1000)
         raise ConsultUnavailable(
-            f"智能体 {ctx['agent'].id} 执行超时（>{int(AGENT_TIMEOUT_S)}s）") from None
+            f"智能体 {agent_key} 执行超时（>{int(AGENT_TIMEOUT_S)}s）") from None
+    except ConsultError:
+        consult_metrics.record(agent_key, "sync", "error",
+                               (time.perf_counter() - started) * 1000)
+        raise
+    except Exception as e:  # noqa: BLE001 —— 上游异常转为可读失败，不冒泡堆栈
+        consult_metrics.record(agent_key, "sync", "error",
+                               (time.perf_counter() - started) * 1000)
+        raise ConsultUnavailable(f"模型调用失败：{type(e).__name__}") from None
 
-    text = (answer or "").strip()
-    if not text:
-        raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
+    consult_metrics.record(agent_key, "sync", "ok",
+                           (time.perf_counter() - started) * 1000, codes)
     return _done_payload(ctx, text, started)
 
 
@@ -321,50 +343,83 @@ async def stream(question: str, role: str, agent_id: str | None = None,
     """流式问答：先发 meta（路由/技能），再逐段 delta，最后 done。
 
     ``streamer(provider, messages)`` 为异步生成器，可注入用于测试。
+    计量：正常完成计 ok；业务失败计 error；客户端中途断开计 aborted。
     """
-    ctx = _prepare(question, role, agent_id, skill_codes, history)
+    started = time.perf_counter()
+    try:
+        ctx = _prepare(question, role, agent_id, skill_codes, history)
+    except ConsultError:
+        consult_metrics.record(agent_id or "unknown", "stream", "error",
+                               (time.perf_counter() - started) * 1000)
+        raise
+
     if "prefilter" in ctx:
         payload = ctx["prefilter"]
+        consult_metrics.record("prefilter", "stream", "ok",
+                               (time.perf_counter() - started) * 1000)
         yield {"type": "meta", **{k: payload[k] for k in (
             "agent", "routing", "appliedSkills", "declaredTools", "needsHumanReview")},
             "historyTurns": 0}
         yield {"type": "done", **payload}
         return
 
-    started = time.perf_counter()
-    yield {
-        "type": "meta",
-        "agent": {"id": ctx["agent"].id, "name": ctx["agent"].name},
-        "routing": ctx["decision"],
-        "appliedSkills": _skill_views(ctx["chosen"]),
-        "declaredTools": sorted({t for c in ctx["chosen"]
-                                 for t in (c.get("toolAllowlist") or [])}),
-        "needsHumanReview": True,
-        "historyTurns": len(ctx["history"]),
-    }
+    agent_key = ctx["agent"].id
+    codes = [c["code"] for c in ctx["chosen"]]
+    finished = False
+    failed = False
+    try:
+        yield {
+            "type": "meta",
+            "agent": {"id": agent_key, "name": ctx["agent"].name},
+            "routing": ctx["decision"],
+            "appliedSkills": _skill_views(ctx["chosen"]),
+            "declaredTools": sorted({t for c in ctx["chosen"]
+                                     for t in (c.get("toolAllowlist") or [])}),
+            "needsHumanReview": True,
+            "historyTurns": len(ctx["history"]),
+        }
 
-    parts: list[str] = []
-    agen = (streamer or _default_streamer)(ctx["provider"], ctx["messages"])
-    it = agen.__aiter__()
-    while True:
-        try:
-            chunk = await asyncio.wait_for(it.__anext__(), timeout=STREAM_IDLE_TIMEOUT_S)
-        except StopAsyncIteration:
-            break
-        except asyncio.TimeoutError:
-            raise ConsultUnavailable(
-                f"模型流式响应超时（>{int(STREAM_IDLE_TIMEOUT_S)}s 无输出）") from None
-        except Exception as e:  # noqa: BLE001 —— 上游异常转为可读错误，不外抛堆栈
-            raise ConsultUnavailable(f"模型流式输出失败：{type(e).__name__}") from None
-        if time.perf_counter() - started > AGENT_TIMEOUT_S:
-            raise ConsultUnavailable(f"智能体 {ctx['agent'].id} 执行超时")
-        text = str(chunk or "")
-        if not text:
-            continue
-        parts.append(text)
-        yield {"type": "delta", "text": text}
+        parts: list[str] = []
+        agen = (streamer or _default_streamer)(ctx["provider"], ctx["messages"])
+        it = agen.__aiter__()
+        while True:
+            try:
+                chunk = await asyncio.wait_for(it.__anext__(),
+                                               timeout=STREAM_IDLE_TIMEOUT_S)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                raise ConsultUnavailable(
+                    f"模型流式响应超时（>{int(STREAM_IDLE_TIMEOUT_S)}s 无输出）") from None
+            except Exception as e:  # noqa: BLE001 —— 上游异常转为可读错误
+                raise ConsultUnavailable(f"模型流式输出失败：{type(e).__name__}") from None
+            if time.perf_counter() - started > AGENT_TIMEOUT_S:
+                raise ConsultUnavailable(f"智能体 {agent_key} 执行超时")
+            text = str(chunk or "")
+            if not text:
+                continue
+            parts.append(text)
+            yield {"type": "delta", "text": text}
 
-    answer = "".join(parts).strip()
-    if not answer:
-        raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
-    yield {"type": "done", **_done_payload(ctx, answer, started)}
+        answer = "".join(parts).strip()
+        if not answer:
+            raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
+        # 先计量再发 done：客户端收到 done 后立即断开也不会被误记为 aborted
+        consult_metrics.record(agent_key, "stream", "ok",
+                               (time.perf_counter() - started) * 1000, codes)
+        finished = True
+        yield {"type": "done", **_done_payload(ctx, answer, started)}
+    except ConsultError:
+        failed = True
+        consult_metrics.record(agent_key, "stream", "error",
+                               (time.perf_counter() - started) * 1000)
+        raise
+    except Exception:  # noqa: BLE001 —— 非业务异常同样按失败计量后上抛
+        failed = True
+        consult_metrics.record(agent_key, "stream", "error",
+                               (time.perf_counter() - started) * 1000)
+        raise
+    finally:
+        if not finished and not failed:
+            consult_metrics.record(agent_key, "stream", "aborted",
+                                   (time.perf_counter() - started) * 1000)

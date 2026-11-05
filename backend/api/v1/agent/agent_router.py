@@ -23,7 +23,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, consult, model_policy, second_opinion, skill_advice, skill_library
+from backend.agents import catalog, consult, consult_metrics, model_policy, second_opinion, skill_advice, skill_library
 from backend.agents import skill_ops, skill_trends, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
@@ -723,7 +723,7 @@ async def skill_library_metrics(user: dict = Depends(require_role("admin", "qc")
 @router.get("/skill-library/metrics/prometheus", response_class=PlainTextResponse)
 async def skill_library_prometheus(user: dict = Depends(require_role("admin", "qc"))):
     """Prometheus 文本导出（聚合指标，不含业务标识/PHI）；供监控采集。"""
-    return PlainTextResponse(skill_trends.prometheus_text(),
+    return PlainTextResponse(skill_trends.prometheus_text() + consult_metrics.prometheus_text(),
                              media_type="text/plain; version=0.0.4; charset=utf-8")
 
 

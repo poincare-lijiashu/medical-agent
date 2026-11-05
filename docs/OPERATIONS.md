@@ -48,6 +48,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 ## 健康/可观测
 - `/healthz`（存活） `/readyz`（就绪） `/metrics`（Prometheus 文本：请求数/各路由时延/计数）。
 - 每响应带 `X-Request-Id`；日志结构化（JSON，含 event 与上下文）。
+- 统一问答计量（G102，进程内聚合、重启归零、不含问题/回答原文）：
+  - `medassist_agent_consult_requests_total{agent,channel,status}`（status=ok/error/aborted）
+  - `medassist_agent_consult_duration_ms_sum|count{channel}`
+  - `medassist_agent_skill_usage_total{skill}`（仅成功问答累计）
+  - `/metrics`（admin）与 `/api/v1/agent/skill-library/metrics/prometheus`（admin/qc）均导出；告警规则见 `deploy/prometheus/medassist-agent-ops.rules.yml`。
 
 ## 交付前硬门禁（见计划 Phase 6）
 全量 pytest + `run_eval`（hit_rate≥0.8、引用精确率达标）+ 前端 a11y/截图 + `open-code-review` + `security-scan`；改环境后刷新机器基线（`refresh_baseline.ps1` → `check_docs.ps1` = `CONSISTENCY_OK`）。

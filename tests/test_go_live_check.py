@@ -57,7 +57,9 @@ def test_prometheus_checks():
     text = "\n".join(["medassist_agent_experiences_total 1",
                       "medassist_agent_replay_pass_ratio 1.0",
                       "medassist_agent_unused_published_skills 0",
-                      "medassist_agent_operational_alerts{level=\"high\"} 0"])
+                      "medassist_agent_operational_alerts{level=\"high\"} 0",
+                      "medassist_agent_consult_requests_total 0",
+                      "medassist_agent_skill_usage_total 0"])
     assert mod.check_prometheus(text)[0][1] is True
     assert mod.check_prometheus("medassist_agent_experiences_total 1")[0][1] is False
 
@@ -83,7 +85,9 @@ def test_run_orchestration_pass(monkeypatch):
             "medassist_agent_experiences_total 0",
             "medassist_agent_replay_pass_ratio 0",
             "medassist_agent_unused_published_skills 0",
-            "medassist_agent_operational_alerts{level=\"high\"} 0"])),
+            "medassist_agent_operational_alerts{level=\"high\"} 0",
+            "medassist_agent_consult_requests_total 0",
+            "medassist_agent_skill_usage_total 0"])),
         "/api/v1/agent/sleep-memory/scan": (200, "{}"),
         "/api/v1/agent/skill-advices?status=OPEN": (200, "{}"),
     }
