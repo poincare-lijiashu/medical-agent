@@ -19,6 +19,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
@@ -650,6 +651,13 @@ async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
 async def skill_library_metrics(user: dict = Depends(require_role("admin", "qc"))):
     """只读运营指标：经验覆盖、候选转化、回放通过率、技能审核通过率、Bot 引用。"""
     return skill_ops.metrics()
+
+
+@router.get("/skill-library/metrics/prometheus", response_class=PlainTextResponse)
+async def skill_library_prometheus(user: dict = Depends(require_role("admin", "qc"))):
+    """Prometheus 文本导出（聚合指标，不含业务标识/PHI）；供监控采集。"""
+    return PlainTextResponse(skill_trends.prometheus_text(),
+                             media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @router.post("/skill-library/snapshot")

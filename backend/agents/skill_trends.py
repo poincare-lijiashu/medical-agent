@@ -72,10 +72,8 @@ def snapshot(actor: str, day: date | None = None) -> dict:
         "metrics": skill_ops.metrics(),
     }
     with _lock:
-        items = [i for i in _load() if i.get("id") != key]
-        items.append(item)
-        items.sort(key=lambda i: i.get("date") or "")
-        _save(items[-MAX_SNAPSHOTS:])
+        # G96：按日期主键行级 upsert，多实例并发只覆盖同一天，不丢其它日期
+        pg_store.upsert_json_item("agent_skill_metrics", SNAPSHOT_FILE, item)
     return item
 
 
@@ -180,3 +178,60 @@ def alerts() -> dict:
                         for lvl in ("high", "medium", "low")},
         "note": "告警仅为运营提示，不自动停用/修改任何技能或 Bot。",
     }
+
+
+def prometheus_text() -> str:
+    """Prometheus 文本导出（只含聚合指标，不含任何业务标识/PHI）。"""
+    m = skill_ops.metrics()
+    alert_data = alerts()
+    counts = alert_data["levelCounts"]
+    cards = (m.get("skillCards") or {}).get("byStatus") or {}
+    lines = [
+        "# HELP medassist_agent_experiences_total Approved skill experiences.",
+        "# TYPE medassist_agent_experiences_total gauge",
+        f"medassist_agent_experiences_total {m['experiences']['total']}",
+        "# HELP medassist_agent_experience_coverage_ratio Experiences covered by proposals.",
+        "# TYPE medassist_agent_experience_coverage_ratio gauge",
+        f"medassist_agent_experience_coverage_ratio {m['experiences']['coverageRate']}",
+        "# HELP medassist_agent_proposals_total Skill proposals by status.",
+        "# TYPE medassist_agent_proposals_total gauge",
+        f'medassist_agent_proposals_total{{status="proposed"}} {m["proposals"]["proposed"]}',
+        f'medassist_agent_proposals_total{{status="adopted"}} {m["proposals"]["adopted"]}',
+        f'medassist_agent_proposals_total{{status="rejected"}} {m["proposals"]["rejected"]}',
+        "# HELP medassist_agent_proposal_adoption_ratio Adopted proposals / all proposals.",
+        "# TYPE medassist_agent_proposal_adoption_ratio gauge",
+        f"medassist_agent_proposal_adoption_ratio {m['proposals']['adoptionRate']}",
+        "# HELP medassist_agent_replay_checks_total Proposals with replay checks.",
+        "# TYPE medassist_agent_replay_checks_total gauge",
+        f"medassist_agent_replay_checks_total {m['proposals']['replayChecked']}",
+        "# HELP medassist_agent_replay_pass_ratio Replay pass ratio.",
+        "# TYPE medassist_agent_replay_pass_ratio gauge",
+        f"medassist_agent_replay_pass_ratio {m['proposals']['replayPassRate']}",
+        "# HELP medassist_agent_skill_cards Skill cards by status.",
+        "# TYPE medassist_agent_skill_cards gauge",
+    ]
+    for status in ("DRAFT", "IN_REVIEW", "PUBLISHED", "REJECTED", "DISABLED"):
+        lines.append(f'medassist_agent_skill_cards{{status="{status.lower()}"}} '
+                     f'{cards.get(status, 0)}')
+    lines += [
+        "# HELP medassist_agent_skill_review_pass_ratio Published+disabled / decided.",
+        "# TYPE medassist_agent_skill_review_pass_ratio gauge",
+        f"medassist_agent_skill_review_pass_ratio {m['skillCards']['reviewPassRate']}",
+        "# HELP medassist_agent_unused_published_skills Published skills without bots.",
+        "# TYPE medassist_agent_unused_published_skills gauge",
+        f"medassist_agent_unused_published_skills "
+        f"{len(m['skillCards']['unusedPublished'])}",
+        "# HELP medassist_agent_bots_total Bots by status.",
+        "# TYPE medassist_agent_bots_total gauge",
+        f"medassist_agent_bots_total {m['bots']['total']}",
+        f"medassist_agent_bots_published {m['bots']['published']}",
+        "# HELP medassist_agent_bot_teams_total Bot teams.",
+        "# TYPE medassist_agent_bot_teams_total gauge",
+        f"medassist_agent_bot_teams_total {m['bots']['teams']}",
+        "# HELP medassist_agent_operational_alerts Operational alerts by level.",
+        "# TYPE medassist_agent_operational_alerts gauge",
+        f'medassist_agent_operational_alerts{{level="high"}} {counts["high"]}',
+        f'medassist_agent_operational_alerts{{level="medium"}} {counts["medium"]}',
+        f'medassist_agent_operational_alerts{{level="low"}} {counts["low"]}',
+    ]
+    return "\n".join(lines) + "\n"

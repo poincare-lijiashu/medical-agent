@@ -1286,6 +1286,57 @@ def save_json_list(table: str, path: str, items: list) -> None:
     _json_then_pg(_save, path, items)
 
 
+# ---- 行级 upsert（G96）：多实例下快照/建议按主键幂等，避免全量覆盖互相丢数据 ----
+
+_JSON_LIST_LOCK = threading.Lock()
+
+
+async def _pg_upsert_json_item(table: str, key: str, item: dict,
+                               ignore_existing: bool) -> None:
+    conflict = ("DO NOTHING" if ignore_existing else
+                "DO UPDATE SET data=EXCLUDED.data, status=EXCLUDED.status, updated_at=now()")
+    async with _pool.acquire() as c:
+        await c.execute(
+            f"""INSERT INTO {table}({key},data,status,updated_at)
+                VALUES($1,$2::jsonb,$3,now())
+                ON CONFLICT({key}) {conflict}""",
+            str(item.get(key)), json.dumps(item, ensure_ascii=False),
+            str(item.get("status") or ""))
+
+
+def _json_upsert_item(path: str, key: str, item: dict, ignore_existing: bool) -> None:
+    with _JSON_LIST_LOCK:
+        data = _read_json(path, [])
+        exists = any(i.get(key) == item.get(key) for i in data)
+        if exists and ignore_existing:
+            return
+        data = [i for i in data if i.get(key) != item.get(key)]
+        data.append(item)
+        _write_json_atomic(path, data)
+
+
+def upsert_json_item(table: str, path: str, item: dict,
+                     ignore_existing: bool = False) -> None:
+    """按主键幂等写单条（PG 行级 upsert + JSON 镜像/兜底）。
+
+    ``ignore_existing=True``：已存在则完全不动（用于"同一建议只保留首次状态"）。
+    """
+    key = _JSON_LIST_KEYS[table]
+    domain = os.path.basename(path)
+    if offline_mode() or not _pool:
+        _json_upsert_item(path, key, item, ignore_existing)
+        if not offline_mode():
+            _repo_pg_stale.add(domain)
+        return
+    try:
+        _run_pg(_pg_upsert_json_item(table, key, item, ignore_existing))
+        _repo_pg_stale.discard(domain)
+    except Exception as e:  # noqa: BLE001 —— 行级写失败降级 JSON，读路径按 stale 回落
+        logger.warning("pg.repo.upsert_failed", error=str(e)[:120], file=domain)
+        _repo_pg_stale.add(domain)
+    _json_upsert_item(path, key, item, ignore_existing)
+
+
 async def _seed_drug_tables_impl(dict_items: list, rule_items: list) -> dict:
     out = {"drug_dict": 0, "drug_rules": 0}
     async with _pool.acquire() as c:

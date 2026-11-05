@@ -8,10 +8,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
-import uuid
 from datetime import datetime, timezone
 
 from backend.agents import skill_library, skill_ops, skill_trends
@@ -136,8 +136,11 @@ def generate(actor: str) -> list[dict]:
         for d in drafts:
             if d["dedupeKey"] in existing:
                 continue
+            # G96：id 由 dedupeKey 决定，多实例并发生成同一建议时落到同一行；
+            # ignore_existing=True 保证不会把已"忽略/完成"的状态覆盖回 OPEN。
+            advice_id = hashlib.sha1(d["dedupeKey"].encode("utf-8")).hexdigest()[:32]
             item = {
-                "id": uuid.uuid4().hex,
+                "id": advice_id,
                 **d,
                 "status": "OPEN",
                 "createdBy": actor,
@@ -146,13 +149,12 @@ def generate(actor: str) -> list[dict]:
                 "decidedAt": None,
                 "note": None,
             }
-            items.append(item)
+            pg_store.upsert_json_item("agent_skill_advices", ADVICE_FILE, item,
+                                      ignore_existing=True)
             existing.add(d["dedupeKey"])
             created.append(item)
             if len(created) >= MAX_PER_RUN:
                 break
-        if created:
-            _save(items)
     return list_advices("admin")
 
 
@@ -189,5 +191,5 @@ def _decide(advice_id: str, status: str, note: str | None, actor: str,
             raise AdviceConflict(f"当前建议状态不可处理：{item.get('status')}")
         item.update({"status": status, "decidedBy": actor,
                      "decidedAt": _now(), "note": text or None})
-        _save(items)
+        pg_store.upsert_json_item("agent_skill_advices", ADVICE_FILE, item)
         return item

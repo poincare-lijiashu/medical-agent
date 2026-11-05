@@ -73,6 +73,22 @@ def test_trends_deltas_between_days():
     assert out["deltas"]["published"] == 1
 
 
+def test_snapshot_upsert_preserves_other_days():
+    skill_trends.snapshot("qc01", date(2026, 11, 1))
+    skill_trends.snapshot("qc01", date(2026, 11, 2))
+    skill_trends.snapshot("qc01", date(2026, 11, 1))  # 同日重写
+    snaps = skill_trends.list_snapshots(30)
+    assert [s["date"] for s in snaps] == ["2026-11-01", "2026-11-02"]
+
+
+def test_prometheus_text_has_aggregates_only():
+    text = skill_trends.prometheus_text()
+    assert "medassist_agent_experiences_total 0" in text
+    assert 'medassist_agent_skill_cards{status="published"} 0' in text
+    assert "medassist_agent_operational_alerts" in text
+    assert "patient" not in text.lower()
+
+
 def test_alerts_empty():
     out = skill_trends.alerts()
     assert out["alerts"] == []
@@ -148,5 +164,9 @@ def test_api_snapshot_trends_alerts(monkeypatch, tmp_path):
     assert trends.status_code == 200 and trends.json()["sufficient"] is False
     alerts = c.get("/api/v1/agent/skill-library/alerts", headers=qc)
     assert alerts.status_code == 200 and "alerts" in alerts.json()
+    prom = c.get("/api/v1/agent/skill-library/metrics/prometheus", headers=qc)
+    assert prom.status_code == 200
+    assert "medassist_agent_experiences_total" in prom.text
+    assert "text/plain" in prom.headers.get("content-type", "")
     actions = {(e.get("payload") or {}).get("action") for e in audit.entries}
     assert "skill_metrics_snapshot" in actions

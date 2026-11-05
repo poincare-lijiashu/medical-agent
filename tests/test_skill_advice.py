@@ -98,6 +98,18 @@ def test_generate_does_not_modify_skills():
     assert all(v == "PUBLISHED" for v in after.values())
 
 
+def test_advice_id_is_deterministic_and_state_preserved():
+    import hashlib
+    for i in range(3):
+        _publish_skill(f"stable-{i}", f"稳定技能{i}")
+    items = [i for i in skill_advice.generate("qc01") if i["code"] == "UNUSED_SKILL"]
+    first = items[0]
+    assert first["id"] == hashlib.sha1(first["dedupeKey"].encode("utf-8")).hexdigest()[:32]
+    skill_advice.dismiss(first["id"], "已知晓", "qc01")
+    again = [i for i in skill_advice.generate("qc01") if i["id"] == first["id"]][0]
+    assert again["status"] == "DISMISSED" and again["note"] == "已知晓"
+
+
 def test_visibility_requires_privileged_role():
     with pytest.raises(skill_advice.AdviceConflict):
         skill_advice.list_advices("doctor")
