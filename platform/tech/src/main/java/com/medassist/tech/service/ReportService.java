@@ -101,12 +101,22 @@ public class ReportService {
         }
         List<CriticalValue> criticals = new ArrayList<>();
         if (hasCritical) {
-            // 按申请维度比对（G67）：修订版是新 revision，若只看本报告会把同一批危急值再插一遍。
             List<CriticalValue> existing = repo.listCriticalValuesByApplication(report.applicationId());
-            if (existing.isEmpty()) {
-                criticals = insertCriticals(report, req.criticalLines());
-            } else {
-                criticals = existing;
+            // G70（评审 §3.7）：按 (项目, 结果) 求差集，只补插新增危急值；
+            // 旧实现"已有任何危急值就整组沿用"，重写带入的新增项被静默丢弃。
+            Set<CriticalKey> known = new HashSet<>();
+            for (CriticalValue c : existing) {
+                known.add(keyOf(c.itemName(), c.resultValue()));
+            }
+            List<CriticalLine> added = new ArrayList<>();
+            for (CriticalLine line : req.criticalLines()) {
+                if (known.add(keyOf(line.itemName(), line.resultValue()))) {
+                    added.add(line);
+                }
+            }
+            criticals.addAll(existing);
+            if (!added.isEmpty()) {
+                criticals.addAll(insertCriticals(report, added));
             }
         }
         audit(actor, "REPORT_REWRITE", "REPORT", reportId.toString(),
@@ -259,6 +269,15 @@ public class ReportService {
     // ---------------------------------------------------------------- 结构化内容
 
     private record Structured(UUID templateId, String json) {
+    }
+
+    /** 危急值去重键：项目名 + 结果值（都去首尾空白）。 */
+    private record CriticalKey(String itemName, String resultValue) {
+    }
+
+    private static CriticalKey keyOf(String itemName, String resultValue) {
+        return new CriticalKey(itemName == null ? "" : itemName.trim(),
+                resultValue == null ? "" : resultValue.trim());
     }
 
     /**

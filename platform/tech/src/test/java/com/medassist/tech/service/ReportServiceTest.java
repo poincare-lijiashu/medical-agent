@@ -306,11 +306,35 @@ class ReportServiceTest {
         when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of(closed));
 
         var view = service.rewrite(reportId, writeReq(List.of(
-                new CriticalLine("血钾", "7.2 mmol/L", "3.5-5.3", "CRITICAL", "护士站"))), "tech01");
+                new CriticalLine("血钾", "7.2", "3.5-5.3", "CRITICAL", "护士站"))), "tech01");
 
         verify(repo, never()).insertCriticalValue(any());
         assertThat(view.criticals()).hasSize(1);
         assertThat(view.criticals().get(0).status()).isEqualTo(CriticalValue.CLOSED);
+    }
+
+    @Test
+    @DisplayName("重写草稿：已存在的危急值不重复插入，新增项按差集补插（G70 §3.7）")
+    void rewriteInsertsOnlyNewCriticals() {
+        when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.DRAFT, 1)));
+        when(repo.updateDraftReport(eq(reportId), anyString(), anyString(), eq(true),
+                any(), any())).thenReturn(true);
+        CriticalValue existing = new CriticalValue(UUID.randomUUID(), appId, reportId, "血钾",
+                "7.2", "3.5-5.3", "CRITICAL", CriticalValue.PENDING, null, Instant.now(),
+                null, null, null, Instant.now());
+        when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of(existing));
+        when(repo.findCriticalValue(any())).thenAnswer(inv -> Optional.of(
+                new CriticalValue(inv.getArgument(0), appId, reportId, "血钠", "150",
+                        "135-145", "CRITICAL", CriticalValue.PENDING, "护士站", Instant.now(),
+                        null, null, null, Instant.now())));
+
+        var view = service.rewrite(reportId, writeReq(List.of(
+                new CriticalLine("血钾", "7.2", "3.5-5.3", "CRITICAL", "护士站"),
+                new CriticalLine("血钠", "150", "135-145", "CRITICAL", "护士站"))), "tech01");
+
+        // 只补插新增的"血钠"，已存在的"血钾"不重复
+        verify(repo, org.mockito.Mockito.times(1)).insertCriticalValue(any());
+        assertThat(view.criticals()).hasSize(2);
     }
 
     @Test

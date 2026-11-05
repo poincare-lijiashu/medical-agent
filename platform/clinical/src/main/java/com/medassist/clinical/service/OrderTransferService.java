@@ -280,8 +280,14 @@ public class OrderTransferService {
                 .orElse(com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);
     }
 
+    /**
+     * 转送处方。
+     *
+     * <p>G70（评审 §2.5）：只有"建下游单据"这一步失败才算转送失败；成功回写之后的审计
+     * 属于旁路，绝不能因为审计写失败把已成功的 TRANSFERRED 覆写成 FAILED、抹掉处方号。
+     */
     private void transferToPharmacy(VisitOrder order, Visit visit, String actor) {
-        PharmacyOrderClient.RxRef ref = null;
+        PharmacyOrderClient.RxRef ref;
         try {
             // 临时医嘱 = 一次性供药，供药日期取开嘱日（与药房 (orderId, supplyDate) 幂等键配合）
             LocalDate supplyDate = order.startDate() == null ? BusinessTime.today() : order.startDate();
@@ -290,40 +296,53 @@ public class OrderTransferService {
                     order.orderedBy(), supplyDate, visitCampus(visit.id()),
                     List.of(new PharmacyOrderClient.Line(order.itemCode(), order.quantity(),
                             order.dose(), order.frequency(), null, null, null, null)));
-            if (!repo.markOrderTransferred(order.id(), EXTERNAL_PRESCRIPTION, ref.prescriptionId(),
-                    ref.prescriptionNo())) {
-                // 下游已建单，但本地已不能标记（医嘱在这期间被撤销/停嘱）：必须反向作废
-                compensateAfterStaleTransfer(order, EXTERNAL_PRESCRIPTION, actor);
-                return;
-            }
-            audit(actor, "ORDER_TRANSFER", order.id().toString(), Map.of(
-                    "orderNo", order.orderNo(), "externalType", EXTERNAL_PRESCRIPTION,
-                    "prescriptionId", ref.prescriptionId().toString(),
-                    "prescriptionNo", ref.prescriptionNo() == null ? "" : ref.prescriptionNo(),
-                    "duplicate", ref.duplicate(), "totalAmount", ref.totalAmount()));
         } catch (RuntimeException e) {
             markFailed(order, EXTERNAL_PRESCRIPTION, e, actor);
+            return;
         }
+        if (!repo.markOrderTransferred(order.id(), EXTERNAL_PRESCRIPTION, ref.prescriptionId(),
+                ref.prescriptionNo())) {
+            // 下游已建单，但本地已不能标记（医嘱在这期间被撤销/停嘱）：必须反向作废
+            compensateAfterStaleTransfer(order, EXTERNAL_PRESCRIPTION, actor);
+            return;
+        }
+        auditQuietly(actor, order, Map.of(
+                "orderNo", order.orderNo(), "externalType", EXTERNAL_PRESCRIPTION,
+                "prescriptionId", ref.prescriptionId().toString(),
+                "prescriptionNo", ref.prescriptionNo() == null ? "" : ref.prescriptionNo(),
+                "duplicate", ref.duplicate(), "totalAmount", ref.totalAmount()));
     }
 
     private void transferToTech(VisitOrder order, Visit visit, String actor) {
+        TechOrderClient.AppRef ref;
         try {
-            TechOrderClient.AppRef ref = techClient.createFromOrder(order.id(), visit.patientId(),
+            ref = techClient.createFromOrder(order.id(), visit.patientId(),
                     visit.id(), visit.visitNo(), visit.deptId(), order.orderedBy(),
                     order.itemCode(), null, "ROUTINE", null, visitCampus(visit.id()));
-            if (!repo.markOrderTransferred(order.id(), EXTERNAL_EXAM_APPLICATION,
-                    ref.applicationId(), ref.applicationNo())) {
-                compensateAfterStaleTransfer(order, EXTERNAL_EXAM_APPLICATION, actor);
-                return;
-            }
-            audit(actor, "ORDER_TRANSFER", order.id().toString(), Map.of(
-                    "orderNo", order.orderNo(), "externalType", EXTERNAL_EXAM_APPLICATION,
-                    "applicationId", ref.applicationId().toString(),
-                    "applicationNo", ref.applicationNo() == null ? "" : ref.applicationNo(),
-                    "category", ref.category() == null ? "" : ref.category(),
-                    "duplicate", ref.duplicate()));
         } catch (RuntimeException e) {
             markFailed(order, EXTERNAL_EXAM_APPLICATION, e, actor);
+            return;
+        }
+        if (!repo.markOrderTransferred(order.id(), EXTERNAL_EXAM_APPLICATION,
+                ref.applicationId(), ref.applicationNo())) {
+            compensateAfterStaleTransfer(order, EXTERNAL_EXAM_APPLICATION, actor);
+            return;
+        }
+        auditQuietly(actor, order, Map.of(
+                "orderNo", order.orderNo(), "externalType", EXTERNAL_EXAM_APPLICATION,
+                "applicationId", ref.applicationId().toString(),
+                "applicationNo", ref.applicationNo() == null ? "" : ref.applicationNo(),
+                "category", ref.category() == null ? "" : ref.category(),
+                "duplicate", ref.duplicate()));
+    }
+
+    /** 成功路径的审计：写不进去只记日志，绝不反过来改业务状态（G70）。 */
+    private void auditQuietly(String actor, VisitOrder order, Map<String, Object> detail) {
+        try {
+            audit(actor, "ORDER_TRANSFER", order.id().toString(), detail);
+        } catch (RuntimeException e) {
+            log.warn("clinical.order_transfer_audit_failed orderId={} err={}",
+                    order.id(), e.getMessage());
         }
     }
 
@@ -354,8 +373,12 @@ public class OrderTransferService {
             repo.insertTransferTask(UUID.randomUUID(), order.id(), order.visitId(),
                     EXTERNAL_PRESCRIPTION.equals(externalType) ? "PHARMACY" : "TECH", reason, actor);
         }
-        repo.updateOrderTransfer(order.id(), VisitOrder.TRANSFER_FAILED, externalType, null, null,
-                truncate(reason));
+        if (!repo.markOrderFailed(order.id(), externalType, truncate(reason))) {
+            // 期间另一线程已成功回写 TRANSFERRED：保留成功结果，只记日志
+            log.warn("clinical.order_transfer_stale_write_skipped orderId={} type={}",
+                    order.id(), externalType);
+            return;
+        }
         audit(actor, "ORDER_TRANSFER_STALE", order.id().toString(), Map.of(
                 "orderNo", order.orderNo(), "externalType", externalType,
                 "cancelConfirmed", cancelled));
@@ -366,8 +389,12 @@ public class OrderTransferService {
                 : e.getMessage());
         log.warn("clinical.order_transfer_failed orderId={} type={} err={}",
                 order.id(), externalType, reason);
-        repo.updateOrderTransfer(order.id(), VisitOrder.TRANSFER_FAILED,
-                externalType, null, null, reason);
+        if (!repo.markOrderFailed(order.id(), externalType, reason)) {
+            // 已成功转送的单绝不回写成 FAILED（G70，评审 §2.5）
+            log.warn("clinical.order_transfer_failed_write_skipped orderId={} type={}",
+                    order.id(), externalType);
+            return;
+        }
         audit(actor, "ORDER_TRANSFER_FAILED", order.id().toString(), Map.of(
                 "orderNo", order.orderNo(), "externalType", externalType, "reason", reason));
     }

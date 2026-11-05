@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -178,11 +179,12 @@ class OrderTransferServiceTest {
                 .thenThrow(new BusinessException(ErrorCode.VALIDATION_FAILED,
                         "处方存在用药禁忌：阿莫西林胶囊 儿童（<14 岁）禁用"));
 
+        when(repo.markOrderFailed(any(), any(), any())).thenReturn(true);
+
         service.schedule(visit(), List.of(order), "doctor01");
 
-        verify(repo).updateOrderTransfer(eq(orderId), eq(VisitOrder.TRANSFER_FAILED),
-                eq(OrderTransferService.EXTERNAL_PRESCRIPTION), isNull(), isNull(),
-                anyString());
+        verify(repo).markOrderFailed(eq(orderId),
+                eq(OrderTransferService.EXTERNAL_PRESCRIPTION), anyString());
         // 医嘱本身的医疗状态与金额不受影响
         verify(repo, never()).cancelOrder(any(), any());
     }
@@ -248,11 +250,36 @@ class OrderTransferServiceTest {
                 any(), any(), any()))
                 .thenThrow(new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE, "医技服务暂不可用"));
 
+        when(repo.markOrderFailed(any(), any(), any())).thenReturn(true);
+
         service.schedule(visit(), List.of(order), "doctor01");
 
-        verify(repo).updateOrderTransfer(eq(orderId), eq(VisitOrder.TRANSFER_FAILED),
-                eq(OrderTransferService.EXTERNAL_EXAM_APPLICATION), isNull(), isNull(),
-                anyString());
+        verify(repo).markOrderFailed(eq(orderId),
+                eq(OrderTransferService.EXTERNAL_EXAM_APPLICATION), anyString());
+    }
+
+    @Test
+    @DisplayName("成功回写后审计失败：保持 TRANSFERRED，绝不回写 FAILED（G70 §2.5）")
+    void auditFailureAfterSuccessKeepsTransferred() {
+        VisitOrder order = order("DRUG", VisitOrder.PLACED, VisitOrder.TRANSFER_NONE);
+        UUID rxId = UUID.randomUUID();
+        when(repo.findOrderById(orderId))
+                .thenReturn(Optional.of(order.withTransferStatus(VisitOrder.TRANSFER_PENDING)));
+        when(client.createFromOrder(any(), any(), any(), any(), any(), any(), any(LocalDate.class),
+                any(), any()))
+                .thenReturn(new PharmacyOrderClient.RxRef(rxId, "RX20261101000010", false,
+                        new BigDecimal("25.00")));
+        when(repo.markOrderTransferred(any(), any(), any(), any())).thenReturn(true);
+        doThrow(new RuntimeException("audit table unavailable"))
+                .when(repo).logChange(any(), any(), any(), any(), any());
+
+        service.schedule(visit(), List.of(order), "doctor01");
+
+        // 下游处方号保留、转送状态保持成功：审计是旁路，不能反向改写业务状态
+        verify(repo, never()).markOrderFailed(any(), any(), any());
+        verify(repo).markOrderTransferred(eq(orderId),
+                eq(OrderTransferService.EXTERNAL_PRESCRIPTION), eq(rxId),
+                eq("RX20261101000010"));
     }
 
     @Test

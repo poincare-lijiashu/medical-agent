@@ -644,14 +644,24 @@ public class PharmacyRepository {
      *
      * <p>按发生时间升序：最早的异常最先补偿，避免老单饿死。PENDING 也在列——
      * afterCommit 回调进程崩溃时会永久停在 PENDING，必须由扫描器收敛。
+     *
+     * <p>G70（评审 §3.9）：PENDING/CHARGE_FAILED 且已发生退药的单，在 {@code retry} 里
+     * 必然被拒（不能把退回去的药再收一次钱），旧扫描按 {@code dispensed_at} 取固定头部，
+     * 这些"毒丸"会永久占满每批名额、饿死后面的异常单。这里在 SQL 层排除它们
+     * （交由收费处人工处理），退款失败仍照常扫描。
      */
     public List<Dispense> listAbnormalBillingDisps(int limit) {
         return jdbc.sql("""
-                        SELECT id, dispense_no, prescription_id, operator, checker, status,
-                               total_amount, dispensed_at, version, billing_status
-                          FROM pharmacy_svc.dispense
-                         WHERE billing_status IN ('PENDING', 'CHARGE_FAILED', 'REFUND_FAILED')
-                         ORDER BY dispensed_at
+                        SELECT d.id, d.dispense_no, d.prescription_id, d.operator, d.checker,
+                               d.status, d.total_amount, d.dispensed_at, d.version,
+                               d.billing_status
+                          FROM pharmacy_svc.dispense d
+                         WHERE d.billing_status = 'REFUND_FAILED'
+                            OR (d.billing_status IN ('PENDING', 'CHARGE_FAILED')
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM pharmacy_svc.dispense_item i
+                                     WHERE i.dispense_id = d.id AND i.returned_quantity > 0))
+                         ORDER BY d.dispensed_at
                          LIMIT :limit
                         """).param("limit", limit).query(DISPENSE_MAPPER).list();
     }

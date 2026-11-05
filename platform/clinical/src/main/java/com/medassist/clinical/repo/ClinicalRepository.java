@@ -570,6 +570,25 @@ public class ClinicalRepository {
     }
 
     /**
+     * 转送失败回写：只允许从 PENDING / FAILED 覆盖（G70，评审 §2.5）。
+     *
+     * <p>成功回写之后若审计等后续动作抛异常，旧实现会走 general catch 把 TRANSFERRED
+     * 覆写成 FAILED 并清空 external_id —— 下游处方/检查真实存在，本地却丢了单号。
+     * 这里用状态守卫保证"已成功"永远不被失败回写覆盖，同时保留已有下游单号。
+     */
+    public boolean markOrderFailed(UUID orderId, String externalType, String error) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_order
+                           SET transfer_status = 'FAILED', external_type = :externalType,
+                               transfer_error = :error,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND transfer_status IN ('PENDING', 'FAILED')
+                        """)
+                .param("externalType", externalType).param("error", error)
+                .param("id", orderId).update() > 0;
+    }
+
+    /**
      * 转送回写（成功）：带"医嘱仍有效"守卫。
      *
      * <p>转送在开嘱事务提交后才调用下游，此时 visit 行锁已释放；撤销/停嘱事务可能已把医嘱
