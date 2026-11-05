@@ -96,10 +96,10 @@ class EmergencyControllerPermissionTest {
         RegisterTriageReq req = new RegisterTriageReq("doctor01");
         assertForbidden(() -> controller.register(triageId, req, "emergency:triage:create",
                 "registrar01", fullScope));
-        verify(service, never()).register(any(), any(), any());
+        verify(service, never()).register(any(), any(), any(), any());
 
         controller.register(triageId, req, "emergency:triage:register", "registrar01", fullScope);
-        verify(service).register(triageId, req, "registrar01");
+        verify(service).register(triageId, req, "registrar01", fullScope);
     }
 
     @Test

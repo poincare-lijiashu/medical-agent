@@ -139,10 +139,17 @@ public class EmergencyService {
 
     /** 急诊挂号：生成 EMERGENCY 就诊并绑定分诊记录；已挂号直接返回（幂等）。 */
     @Transactional
-    public TriageView register(UUID triageId, RegisterTriageReq req, String actor) {
+    public TriageView register(UUID triageId, RegisterTriageReq req, String actor,
+                               com.medassist.common.security.DataScope scope) {
         String operator = requireActor(actor);
         EmergencyTriage triage = repo.lockEmergencyTriage(triageId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMERGENCY_TRIAGE_NOT_FOUND));
+        // G65（评审 §6.1/§2.8）：分诊挂号必须按提交账号的科室/院区落库，
+        // 旧实现走两参 register 写死 DEFAULT_CAMPUS_ID，东院区急诊患者会被记到主院区，
+        // 其处方/检查/结算清单随之全部归错院区。
+        if (!scope.canSeeDepartment(triage.deptId())) {
+            throw new BusinessException(ErrorCode.EMERGENCY_TRIAGE_NOT_FOUND);
+        }
         if (triage.hasVisit()) {
             return toTriageView(triage);
         }
@@ -152,7 +159,7 @@ public class EmergencyService {
         }
         Visit visit = registrationService.register(new RegisterReq(triage.patientId(),
                 triage.deptId(), req.doctorId().trim(), null, "EMERGENCY", BusinessTime.today()),
-                operator);
+                operator, scope.campusForWrite());
         if (!repo.registerEmergencyTriage(triageId, visit.id(), triage.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "分诊记录已被他人修改，请刷新后重试");
         }

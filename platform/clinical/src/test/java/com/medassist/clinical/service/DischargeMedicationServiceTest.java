@@ -359,10 +359,21 @@ class DischargeMedicationServiceTest {
     }
 
     @Test
-    @DisplayName("列表：非法状态 422，limit 上限 200")
+    @DisplayName("列表：非法状态 422，limit 上限 200，院区下推 SQL（G65）")
     void listNormalizes() {
-        assertCode(() -> service.list("BAD", null, 10), ErrorCode.VALIDATION_FAILED);
-        service.list("submitted", deptId, 9999);
-        verify(repo).listDischargeMedications("SUBMITTED", deptId, 200);
+        assertCode(() -> service.list("BAD", null, 10, java.util.Set.of()),
+                ErrorCode.VALIDATION_FAILED);
+        service.list("submitted", deptId, 9999, java.util.Set.of());
+        verify(repo).listDischargeMedications("SUBMITTED", deptId, "", 200);
+    }
+
+    @Test
+    @DisplayName("G65：单据不存在时 visitIdOf 返回 404 同码")
+    void visitIdOfMissing() {
+        when(repo.findDischargeMedication(any())).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.visitIdOf(UUID.randomUUID()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.DISCHARGE_MED_NOT_FOUND);
     }
 }

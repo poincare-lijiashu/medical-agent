@@ -61,10 +61,20 @@ public class DischargeMedicationService {
         this.objectMapper = objectMapper;
     }
 
-    public List<DischargeMedication> list(String status, UUID deptId, Integer limit) {
+    /** 列表（G65）：按就诊院区收敛；{@code campusIds} 空集合表示跨院区角色。 */
+    public List<DischargeMedication> list(String status, UUID deptId, Integer limit,
+                                          java.util.Set<UUID> campusIds) {
         String normalized = normalizeStatus(status);
         int size = limit == null || limit <= 0 ? 50 : Math.min(limit, 200);
-        return repo.listDischargeMedications(normalized, deptId, size);
+        return repo.listDischargeMedications(normalized, deptId,
+                com.medassist.common.security.CampusFilters.csv(campusIds), size);
+    }
+
+    /** 单据所属就诊（G65：详情/提交/同步/取消的院区校验用）。 */
+    public UUID visitIdOf(UUID id) {
+        return repo.findDischargeMedication(id)
+                .map(DischargeMedication::visitId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.DISCHARGE_MED_NOT_FOUND));
     }
 
     public DischargeMedicationView detail(UUID id) {

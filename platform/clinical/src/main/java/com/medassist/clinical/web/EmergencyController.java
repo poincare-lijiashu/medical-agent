@@ -103,7 +103,7 @@ public class EmergencyController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, REGISTER);
-        return ApiResponse.ok(PhiMask.triage(service.register(id, req, actor), scope));
+        return ApiResponse.ok(PhiMask.triage(service.register(id, req, actor, scope), scope));
     }
 
     @PostMapping("/triage/{id}/leave")

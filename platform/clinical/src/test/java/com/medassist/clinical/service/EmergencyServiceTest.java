@@ -51,6 +51,9 @@ class EmergencyServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UUID deptId = UUID.randomUUID();
     private final UUID patientId = UUID.randomUUID();
+    /** 单院区（主院区）范围：G65 起 register 按账号写入院区。 */
+    private final com.medassist.common.security.DataScope SCOPE =
+            com.medassist.common.security.DataScope.all("registrar01", true);
 
     @BeforeEach
     void setUp() {
@@ -136,19 +139,21 @@ class EmergencyServiceTest {
         // 第一次取到 WAITING，CAS 成功后第二次取到 REGISTERED（幂等返回）
         when(repo.lockEmergencyTriage(waiting.id()))
                 .thenReturn(Optional.of(waiting), Optional.of(registered));
-        when(registrationService.register(any(), eq("registrar01"))).thenReturn(visit);
+        when(registrationService.register(any(), eq("registrar01"), any())).thenReturn(visit);
         when(repo.registerEmergencyTriage(waiting.id(), visit.id(), 0)).thenReturn(true);
         when(repo.findEmergencyTriage(waiting.id())).thenReturn(Optional.of(registered));
 
         var view = service.register(waiting.id(), new RegisterTriageReq("doctor01"),
-                "registrar01");
+                "registrar01", SCOPE);
         assertThat(view.status()).isEqualTo(EmergencyTriage.REGISTERED);
         assertThat(view.visitId()).isEqualTo(visit.id());
 
         var again = service.register(waiting.id(), new RegisterTriageReq("doctor01"),
-                "registrar01");
+                "registrar01", SCOPE);
         assertThat(again.status()).isEqualTo(EmergencyTriage.REGISTERED);
-        verify(registrationService, org.mockito.Mockito.times(1)).register(any(), anyString());
+        // G65：必须走三参重载（按账号写入院区），不能再退化成写死主院区
+        verify(registrationService, org.mockito.Mockito.times(1))
+                .register(any(), anyString(), eq(SCOPE.campusForWrite()));
     }
 
     @Test

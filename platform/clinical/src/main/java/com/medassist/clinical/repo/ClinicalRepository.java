@@ -4921,17 +4921,23 @@ public class ClinicalRepository {
                 .param(admissionId).query(DISCHARGE_MED_MAPPER).optional();
     }
 
+    /** 出院带药列表（G65）：按就诊院区收敛，空串表示跨院区角色不限。 */
     public List<DischargeMedication> listDischargeMedications(String status, UUID deptId,
-                                                              int limit) {
+                                                              String campusCsv, int limit) {
         return jdbc.sql(DISCHARGE_MED_SELECT + """
                          WHERE (CAST(:status AS text) IS NULL OR m.status = CAST(:status AS text))
                            AND (CAST(:deptId AS uuid) IS NULL OR m.dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR m.visit_id IN (SELECT v.id FROM clinical_svc.visit v
+                                                   WHERE v.campus_id = ANY(
+                                                       string_to_array(CAST(:campusCsv AS text), ',')::uuid[])))
                          ORDER BY CASE m.status WHEN 'SUBMITTED' THEN 0 WHEN 'DRAFT' THEN 1
                                                 ELSE 2 END,
                                   m.created_at DESC
                          LIMIT :limit
                         """)
                 .param("status", status).param("deptId", deptId).param("limit", limit)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(DISCHARGE_MED_MAPPER).list();
     }
 
