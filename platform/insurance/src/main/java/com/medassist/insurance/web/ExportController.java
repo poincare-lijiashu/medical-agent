@@ -3,6 +3,8 @@ package com.medassist.insurance.web;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.AuthHeaders;
+import com.medassist.common.security.CampusFilters;
+import com.medassist.common.security.DataScope;
 import com.medassist.common.security.Permissions;
 import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
@@ -55,16 +57,22 @@ public class ExportController {
         this.metrics = metrics;
     }
 
-    /** 生成报盘批次（期间内**尚未报盘**的已确认清单）。 */
+    /**
+     * 生成报盘批次（期间内**尚未报盘**的已确认清单）。
+     *
+     * <p>G53：按调用方可及院区收敛——报文含批量患者号与逐条费用，不能跨院区打包。
+     */
     @PostMapping
     public ApiResponse<ExportBatchSummary> create(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, CONFIRM);
         try {
-            SettlementExportService.ExportCreateResult result = service.create(from, to, actor);
+            SettlementExportService.ExportCreateResult result = service.create(from, to,
+                    CampusFilters.csv(scope.campusFilter()), actor);
             metrics.exportAction("create", true);
             return ApiResponse.ok(service.summary(result.batch(),
                     result.excludedAlreadyExported(), result.remainingPending()));
@@ -131,10 +139,11 @@ public class ExportController {
     public ResponseEntity<String> payload(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
-            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+            @RequestHeader(AuthHeaders.ACTOR) String actor,
+            DataScope scope) {
         Permissions.require(permissions, DOWNLOAD);
         try {
-            ExportBatch batch = service.payload(id, actor);
+            ExportBatch batch = service.payload(id, CampusFilters.csv(scope.campusFilter()), actor);
             metrics.exportAction("download", true);
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("application/xml; charset=UTF-8"))

@@ -1,11 +1,14 @@
 package com.medassist.emr.service;
 
+import com.medassist.common.api.ErrorCode;
+import com.medassist.common.exception.BusinessException;
 import com.medassist.emr.config.EmrProperties;
 import com.medassist.emr.domain.EmrModel.CaSignature;
 import com.medassist.emr.service.CaSignatureProvider.CaSignCommand;
 import com.medassist.emr.service.CaSignatureProvider.CaSignResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -13,6 +16,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Mock CA 适配层：签名后经数据库微秒精度往返仍能验签。
@@ -25,7 +29,36 @@ class CaSignatureProviderTest {
     private final CaSignatureProvider provider = new CaSignatureProvider(
             new EmrProperties(null, null, null,
                     new EmrProperties.Ca("mock", "http://127.0.0.1:9098", "",
-                            "medassist-dev-ca-secret", Duration.ofSeconds(2))));
+                            "medassist-dev-ca-secret", Duration.ofSeconds(2))),
+            new MockEnvironment());
+
+    @Test
+    @DisplayName("G53：生产 profile 下 mock 模式拒绝启动（不允许静默退化）")
+    void productionRejectsMockMode() {
+        MockEnvironment prod = new MockEnvironment();
+        prod.setActiveProfiles("prod");
+
+        assertThatThrownBy(() -> new CaSignatureProvider(
+                new EmrProperties(null, null, null,
+                        new EmrProperties.Ca("mock", "http://127.0.0.1:9098", "k", "s",
+                                Duration.ofSeconds(2))), prod))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("禁止 CA mock");
+    }
+
+    @Test
+    @DisplayName("G53：密钥缺失时拒绝生成签名，不回退硬编码常量")
+    void missingSecretRejectsSigning() {
+        CaSignatureProvider noSecret = new CaSignatureProvider(
+                new EmrProperties(null, null, null,
+                        new EmrProperties.Ca("mock", "http://127.0.0.1:9098", "", "",
+                                Duration.ofSeconds(2))),
+                new MockEnvironment());
+
+        assertThatThrownBy(() -> noSecret.sign(new CaSignCommand("MR1", "hash", "doctor01", "AUTHOR")))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.CA_SIGNATURE_INVALID));
+    }
 
     @Test
     @DisplayName("mock 签名：截断到微秒后验签通过（模拟 DB 往返）")

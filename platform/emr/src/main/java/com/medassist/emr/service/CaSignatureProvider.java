@@ -31,8 +31,45 @@ public class CaSignatureProvider {
 
     private final EmrProperties.Ca ca;
 
-    public CaSignatureProvider(EmrProperties props) {
+    /**
+     * 构造期守卫（G53）。
+     *
+     * <p>原来的 {@code mode != "vendor"} 判定让"漏配一行"静默退化成 mock：
+     * 生产环境用对称 HMAC 冒充 CA 签名，任何拿到共享密钥的人都能离线伪造
+     * "合法"签名，而无纸化证据链看起来完全正常。这里把退化路径在启动期堵死：
+     * <ul>
+     *   <li>生产 profile 下 mode 不是 vendor → 拒绝启动；</li>
+     *   <li>生产 profile 下 secret / api-key 为空 → 拒绝启动。</li>
+     * </ul>
+     * dev/test 仍允许 mock，便于本地演示。
+     */
+    public CaSignatureProvider(EmrProperties props, org.springframework.core.env.Environment environment) {
         this.ca = props.ca();
+        if (isProduction(environment)) {
+            if (isMock()) {
+                throw new IllegalStateException(
+                        "生产环境禁止 CA mock 模式：请设置 CA_MODE=vendor 并配置厂商地址与密钥");
+            }
+            if (blank(secret())) {
+                throw new IllegalStateException("生产环境必须配置 CA_SECRET（对称验签密钥不得为空）");
+            }
+            if (blank(apiKey())) {
+                throw new IllegalStateException("生产环境必须配置 CA_API_KEY");
+            }
+        }
+    }
+
+    private static boolean isProduction(org.springframework.core.env.Environment environment) {
+        if (environment == null) {
+            return false;
+        }
+        for (String profile : environment.getActiveProfiles()) {
+            String p = profile == null ? "" : profile.trim().toLowerCase();
+            if (p.equals("prod") || p.equals("production")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public String mode() {
@@ -164,8 +201,15 @@ public class CaSignatureProvider {
         return ca == null || ca.apiKey() == null ? "" : ca.apiKey();
     }
 
+    /**
+     * 对称验签密钥（G53）。
+     *
+     * <p>不再回退到源码里的硬编码常量——"代码里有一条默认密钥"意味着任何
+     * 拿到仓库的人都能为任意文书伪造签名。缺失时由 {@link #hmac} 显式报错，
+     * dev 的默认值改由配置文件提供（{@code application.yml} 的 {@code CA_SECRET}）。
+     */
     private String secret() {
-        return ca == null || ca.secret() == null ? "medassist-dev-ca-secret" : ca.secret();
+        return ca == null || ca.secret() == null ? "" : ca.secret();
     }
 
     private String payload(String hash, String signer, String signType, Instant signedAt) {
@@ -173,6 +217,10 @@ public class CaSignatureProvider {
     }
 
     private String hmac(String payload) {
+        if (blank(secret())) {
+            throw new BusinessException(ErrorCode.CA_SIGNATURE_INVALID,
+                    "CA 签名密钥未配置（CA_SECRET），拒绝生成签名");
+        }
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(secret().getBytes(StandardCharsets.UTF_8), "HmacSHA256"));

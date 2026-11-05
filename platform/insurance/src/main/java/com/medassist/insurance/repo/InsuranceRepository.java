@@ -712,10 +712,23 @@ public class InsuranceRepository {
      * 注意它**不能**防两个 create 之间的竞争，那由 {@link #lockExportPeriod} 负责。
      */
     public List<SettlementBill> listConfirmedBills(LocalDate from, LocalDate to, int limit) {
+        return listConfirmedBills(from, to, "", limit);
+    }
+
+    /**
+     * 待报盘的已确认清单（G53）：{@code campusCsv} 为空串表示不限院区。
+     *
+     * <p>报盘批次会连同患者号与逐条费用一起下发省局，必须按调用方可及院区收敛，
+     * 否则单院区医保办可以生成含其他院区患者明细的整批报文。
+     */
+    public List<SettlementBill> listConfirmedBills(LocalDate from, LocalDate to, String campusCsv,
+                                                   int limit) {
         return jdbc.sql("SELECT " + BILL_COLUMNS + """
                          FROM insurance_svc.settlement_bill b
                          WHERE b.status = 'CONFIRMED'
                            AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR b.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND NOT EXISTS (
                                SELECT 1
                                  FROM insurance_svc.settlement_export_item i
@@ -728,17 +741,37 @@ public class InsuranceRepository {
                         """)
                 .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
                 .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .param("limit", limit)
                 .query(BILL_MAPPER).list();
     }
 
+    /**
+     * 批次内清单涉及的院区（G53）：下载报文前校验"这批数据是否全在当前账号范围内"。
+     */
+    public List<UUID> listBatchCampusIds(UUID batchId) {
+        return jdbc.sql("""
+                        SELECT DISTINCT b.campus_id
+                          FROM insurance_svc.settlement_export_item i
+                          JOIN insurance_svc.settlement_bill b ON b.id = i.bill_id
+                         WHERE i.batch_id = ? AND b.campus_id IS NOT NULL
+                        """).param(batchId).query(UUID.class).list();
+    }
+
     /** 期间内已确认但**已报盘**的清单数量（用于生成前回显"被跳过多少张"）。 */
     public long countConfirmedBillsAlreadyExported(LocalDate from, LocalDate to) {
+        return countConfirmedBillsAlreadyExported(from, to, "");
+    }
+
+    /** G53：按院区收敛的"已报盘"计数（参数口径同 {@link #listConfirmedBills}）。 */
+    public long countConfirmedBillsAlreadyExported(LocalDate from, LocalDate to, String campusCsv) {
         return jdbc.sql("""
                         SELECT count(*)
                           FROM insurance_svc.settlement_bill b
                          WHERE b.status = 'CONFIRMED'
                            AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR b.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND EXISTS (
                                SELECT 1
                                  FROM insurance_svc.settlement_export_item i
@@ -748,16 +781,24 @@ public class InsuranceRepository {
                         """)
                 .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
                 .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(Long.class).single();
     }
 
     /** 期间内**待报盘**（已确认且未属有效批次）的清单数量；用于分批导出时回显剩余张数。 */
     public long countConfirmedBillsPending(LocalDate from, LocalDate to) {
+        return countConfirmedBillsPending(from, to, "");
+    }
+
+    /** G53：按院区收敛的"待报盘"计数（参数口径同 {@link #listConfirmedBills}）。 */
+    public long countConfirmedBillsPending(LocalDate from, LocalDate to, String campusCsv) {
         return jdbc.sql("""
                         SELECT count(*)
                           FROM insurance_svc.settlement_bill b
                          WHERE b.status = 'CONFIRMED'
                            AND b.confirmed_at >= :fromTs AND b.confirmed_at < :toTs
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR b.campus_id = ANY (string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND NOT EXISTS (
                                SELECT 1
                                  FROM insurance_svc.settlement_export_item i
@@ -767,6 +808,7 @@ public class InsuranceRepository {
                         """)
                 .param("fromTs", from.atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
                 .param("toTs", to.plusDays(1).atStartOfDay(BusinessTime.zone()).toOffsetDateTime())
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query(Long.class).single();
     }
 

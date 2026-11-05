@@ -76,8 +76,8 @@ class SettlementExportServiceTest {
     @Test
     @DisplayName("生成批次前先取期间级 advisory lock（R5-M5 防并发重复报盘）")
     void createAcquiresPeriodLockBeforeCounting() {
-        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
         LocalDate day = LocalDate.now();
 
@@ -85,15 +85,15 @@ class SettlementExportServiceTest {
 
         InOrder order = inOrder(repo);
         order.verify(repo).lockExportPeriod(day, day);
-        order.verify(repo).countConfirmedBillsPending(day, day);
+        order.verify(repo).countConfirmedBillsPending(day, day, "");
         order.verify(repo).insertExportBatch(any());
     }
 
     @Test
     @DisplayName("生成批次：V13 数据库兜底拒绝同清单重复报盘 → 409 且整批回滚")
     void createMapsDuplicateExportItemToConflict() {
-        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
         org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException(
                         "duplicate key value violates unique constraint"))
@@ -110,8 +110,8 @@ class SettlementExportServiceTest {
     @Test
     @DisplayName("期间内无已确认清单：409")
     void createRejectsEmptyPeriod() {
-        when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(0L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of());
+        when(repo.countConfirmedBillsAlreadyExported(any(), any(), anyString())).thenReturn(0L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
                 .isInstanceOf(BusinessException.class)
@@ -123,8 +123,8 @@ class SettlementExportServiceTest {
     @Test
     @DisplayName("本期间清单已全部报盘：409 并在消息中给出张数（MF-01）")
     void createRejectsWhenAllAlreadyExported() {
-        when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(7L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of());
+        when(repo.countConfirmedBillsAlreadyExported(any(), any(), anyString())).thenReturn(7L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
                 .isInstanceOf(BusinessException.class)
@@ -137,9 +137,9 @@ class SettlementExportServiceTest {
     @Test
     @DisplayName("生成批次：回显被跳过的已报盘张数（MF-01）")
     void createReportsExcludedCount() {
-        when(repo.countConfirmedBillsAlreadyExported(any(), any())).thenReturn(3L);
-        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(4L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.countConfirmedBillsAlreadyExported(any(), any(), anyString())).thenReturn(3L);
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(4L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
         SettlementExportService.ExportCreateResult result =
@@ -161,8 +161,8 @@ class SettlementExportServiceTest {
         for (int i = 0; i < 500; i++) {
             bills.add(bill());
         }
-        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(700L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(bills);
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(700L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(bills);
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
         SettlementExportService.ExportCreateResult result =
@@ -171,7 +171,7 @@ class SettlementExportServiceTest {
         assertThat(result.batch().billCount()).isEqualTo(500);
         assertThat(result.remainingPending()).isEqualTo(200);
         ArgumentCaptor<Integer> limit = ArgumentCaptor.forClass(Integer.class);
-        verify(repo).listConfirmedBills(any(), any(), limit.capture());
+        verify(repo).listConfirmedBills(any(), any(), anyString(), limit.capture());
         assertThat(limit.getValue()).isEqualTo(500);
     }
 
@@ -188,14 +188,14 @@ class SettlementExportServiceTest {
         assertThatThrownBy(() -> service.create(today, today.plusDays(1), "yb01"))
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
-        verify(repo, never()).listConfirmedBills(any(), any(), anyInt());
+        verify(repo, never()).listConfirmedBills(any(), any(), anyString(), anyInt());
     }
 
     @Test
     @DisplayName("生成批次：XML 含转义后的项目名、哈希 64 位、逐张落 item 并写审计")
     void createBuildsPayloadAndAudits() {
-        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(bill()));
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(bill()));
         when(repo.nextExportBatchNo()).thenReturn("EB2026110100001");
 
         SettlementExportService.ExportCreateResult result =
@@ -228,8 +228,8 @@ class SettlementExportServiceTest {
                 new BigDecimal("0.00"), SettlementBill.CONFIRMED, "not-json", "admin01", "yb01",
                 Instant.now(), null, null, null, BigDecimal.ONE, new BigDecimal("300000"), 1L,
                 Instant.now(), null, null, 0, "[]");
-        when(repo.countConfirmedBillsPending(any(), any())).thenReturn(1L);
-        when(repo.listConfirmedBills(any(), any(), anyInt())).thenReturn(List.of(broken));
+        when(repo.countConfirmedBillsPending(any(), any(), anyString())).thenReturn(1L);
+        when(repo.listConfirmedBills(any(), any(), anyString(), anyInt())).thenReturn(List.of(broken));
 
         assertThatThrownBy(() -> service.create(LocalDate.now(), LocalDate.now(), "yb01"))
                 .isInstanceOf(BusinessException.class)
@@ -355,6 +355,21 @@ class SettlementExportServiceTest {
         verify(repo).logChange(eq("yb01"), eq("EXPORT_PAYLOAD_DOWNLOAD"), eq("EXPORT_BATCH"),
                 eq("EB2026110100001"), detail.capture());
         assertThat(detail.getValue()).contains("EB2026110100001", "hash", "billCount");
+    }
+
+    @Test
+    @DisplayName("G53：批次含其他院区清单时拒绝下载（越权按批次不存在）")
+    void payloadRejectsCrossCampusBatch() {
+        ExportBatch generated = batch(ExportBatch.GENERATED, 0L);
+        UUID otherCampus = UUID.randomUUID();
+        when(repo.findExportBatch(generated.id())).thenReturn(Optional.of(generated));
+        when(repo.listBatchCampusIds(generated.id())).thenReturn(List.of(otherCampus));
+
+        assertThatThrownBy(() -> service.payload(generated.id(),
+                UUID.randomUUID().toString(), "yb01"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.INSURANCE_EXPORT_NOT_FOUND));
+        verify(repo, never()).logChange(any(), any(), any(), any(), any());
     }
 
     @Test

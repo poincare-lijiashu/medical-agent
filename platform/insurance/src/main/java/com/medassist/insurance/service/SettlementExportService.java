@@ -71,6 +71,17 @@ public class SettlementExportService {
 
     @Transactional
     public ExportCreateResult create(LocalDate from, LocalDate to, String actor) {
+        return create(from, to, "", actor);
+    }
+
+    /**
+     * 生成报盘批次（G53）：{@code campusCsv} 为空串表示不限院区。
+     *
+     * <p>省局报文含批量患者号与逐条费用，必须只纳入调用方可见院区的清单；
+     * 否则单院区医保办生成批次即可把其他院区患者明细一起报出去。
+     */
+    @Transactional
+    public ExportCreateResult create(LocalDate from, LocalDate to, String campusCsv, String actor) {
         if (from == null || to == null) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "请指定导出期间（from/to）");
         }
@@ -88,8 +99,8 @@ public class SettlementExportService {
         // 同一批清单会进入两个 GENERATED 批次 → 省局重复结算（第五轮 R5-M5）
         repo.lockExportPeriod(from, to);
         // 已报盘（GENERATED/ACCEPTED）的清单不再重复纳入；退回/撤销批次可重报
-        long excluded = repo.countConfirmedBillsAlreadyExported(from, to);
-        long pending = repo.countConfirmedBillsPending(from, to);
+        long excluded = repo.countConfirmedBillsAlreadyExported(from, to, campusCsv);
+        long pending = repo.countConfirmedBillsPending(from, to, campusCsv);
         if (pending == 0) {
             if (excluded > 0) {
                 throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY,
@@ -99,7 +110,7 @@ public class SettlementExportService {
         }
         // 单批最多 500 张：超出部分不拒绝，而是生成当前批并回显剩余张数，
         // 操作员再次调用即自动接着报（已报盘清单已被排除，天然续批，SF-02）
-        List<SettlementBill> bills = repo.listConfirmedBills(from, to, MAX_BILLS);
+        List<SettlementBill> bills = repo.listConfirmedBills(from, to, campusCsv, MAX_BILLS);
         if (bills.isEmpty()) {
             throw new BusinessException(ErrorCode.INSURANCE_EXPORT_EMPTY);
         }
@@ -236,7 +247,27 @@ public class SettlementExportService {
      * 与病历打印/检索同口径（第三轮 S-07 / 第四轮 MF-02）。
      */
     public ExportBatch payload(UUID id, String actor) {
+        return payload(id, "", actor);
+    }
+
+    /**
+     * 下载报文（G53）：{@code campusCsv} 非空时要求批次内清单全部在可见院区内。
+     *
+     * <p>越权一律按"批次不存在"返回，避免通过错误码差异探测其他院区的批次号。
+     */
+    public ExportBatch payload(UUID id, String campusCsv, String actor) {
         ExportBatch batch = find(id);
+        if (campusCsv != null && !campusCsv.isBlank()) {
+            java.util.Set<UUID> allowed = java.util.Arrays.stream(campusCsv.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty())
+                    .map(UUID::fromString)
+                    .collect(java.util.stream.Collectors.toSet());
+            boolean allVisible = repo.listBatchCampusIds(batch.id()).stream()
+                    .allMatch(allowed::contains);
+            if (!allVisible) {
+                throw new BusinessException(ErrorCode.INSURANCE_EXPORT_NOT_FOUND);
+            }
+        }
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("batchNo", batch.batchNo());
         detail.put("payloadHash", batch.payloadHash());

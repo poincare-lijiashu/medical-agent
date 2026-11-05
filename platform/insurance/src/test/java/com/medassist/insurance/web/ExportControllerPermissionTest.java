@@ -2,6 +2,7 @@ package com.medassist.insurance.web;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.security.DataScope;
 import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.service.SettlementExportService;
@@ -37,6 +38,8 @@ class ExportControllerPermissionTest {
     private ExportController controller;
 
     private final UUID id = UUID.randomUUID();
+    /** 跨院区角色：campusFilter() 为空集，对应"不按院区过滤"的既有语义。 */
+    private static final DataScope SCOPE = DataScope.all("yb01", true);
 
     @BeforeEach
     void setUp() {
@@ -61,11 +64,11 @@ class ExportControllerPermissionTest {
     @DisplayName("生成批次：只读权限不能导出，需 confirm")
     void createRequiresConfirm() {
         assertThatThrownBy(() -> controller.create(LocalDate.now(), LocalDate.now(),
-                "insurance:settlement:read,insurance:settlement:write", "cashier01"))
+                "insurance:settlement:read,insurance:settlement:write", "cashier01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(service, never()).create(any(), any(), anyString());
+        verify(service, never()).create(any(), any(), anyString(), anyString());
     }
 
     @Test
@@ -90,31 +93,31 @@ class ExportControllerPermissionTest {
     @Test
     @DisplayName("生成批次：confirm 放行并返回摘要（不含报文）")
     void createAllowedForConfirm() {
-        when(service.create(LocalDate.now(), LocalDate.now(), "yb01"))
+        when(service.create(LocalDate.now(), LocalDate.now(), "", "yb01"))
                 .thenReturn(new SettlementExportService.ExportCreateResult(batch(), 0, 0));
         when(service.summary(any(ExportBatch.class), anyInt(), anyInt())).thenReturn(summary());
 
         var resp = controller.create(LocalDate.now(), LocalDate.now(),
-                "insurance:settlement:confirm", "yb01");
+                "insurance:settlement:confirm", "yb01", SCOPE);
 
         assertThat(resp.data().batchNo()).isEqualTo("EB2026110100001");
-        verify(service).create(LocalDate.now(), LocalDate.now(), "yb01");
+        verify(service).create(LocalDate.now(), LocalDate.now(), "", "yb01");
     }
 
     @Test
     @DisplayName("报文下载：只读权限不足，需 insurance:export:download（MF-02）")
     void payloadRequiresDownloadPermission() {
         assertThatThrownBy(() -> controller.payload(id,
-                "insurance:settlement:read", "registrar01"))
+                "insurance:settlement:read", "registrar01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(service, never()).payload(any(), anyString());
+        verify(service, never()).payload(any(), anyString(), anyString());
 
-        when(service.payload(id, "yb01")).thenReturn(batch());
-        var resp = controller.payload(id, "insurance:export:download", "yb01");
+        when(service.payload(id, "", "yb01")).thenReturn(batch());
+        var resp = controller.payload(id, "insurance:export:download", "yb01", SCOPE);
         assertThat(resp.getBody()).isEqualTo("<settlementBatch/>");
-        verify(service).payload(id, "yb01");
+        verify(service).payload(id, "", "yb01");
     }
 
     @Test
@@ -137,10 +140,10 @@ class ExportControllerPermissionTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        assertThatThrownBy(() -> controller.payload(id, null, "yb01"))
+        assertThatThrownBy(() -> controller.payload(id, null, "yb01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
-        verify(service, never()).payload(any(), anyString());
+        verify(service, never()).payload(any(), anyString(), anyString());
     }
 }
