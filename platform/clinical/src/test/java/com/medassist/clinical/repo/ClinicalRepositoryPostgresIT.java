@@ -289,16 +289,20 @@ class ClinicalRepositoryPostgresIT {
     // ---------------------------------------------------------------- 辅助
 
     private void insertVisit(UUID visitId, String visitNo) {
+        // G46 起 visit.campus_id NOT NULL：夹具必须显式写入院区，否则真库门禁直接失败
         jdbc.sql("""
                         INSERT INTO clinical_svc.visit
-                            (id, visit_no, patient_id, patient_no, dept_id, doctor_id, visit_date)
-                        VALUES (:id, :no, :pid, 'IT-P-001', :dept, 'D-IT-001', :d)
+                            (id, visit_no, patient_id, patient_no, dept_id, doctor_id, visit_date,
+                             campus_id)
+                        VALUES (:id, :no, :pid, 'IT-P-001', :dept, 'D-IT-001', :d, :campus)
                         """)
                 .param("id", visitId)
                 .param("no", visitNo)
                 .param("pid", UUID.randomUUID())
                 .param("dept", deptId)
                 .param("d", LocalDate.now())
+                .param("campus", java.util.UUID.fromString(
+                        "a0000000-0000-0000-0000-000000000001"))
                 .update();
     }
 

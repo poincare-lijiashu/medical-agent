@@ -8,6 +8,8 @@
 #   定时跑，结果 artifact 留档。首次使用前需在仓库 Secrets 配置 QWEN_API_KEY
 #   （可选 QWEN_BASE_URL，默认 DashScope 兼容端点）。
 # - platform：Java 微服务矩阵（Spring Boot 4）编译 + 单元测试（P0-4 鉴权、P0-5 迁移入口）。
+# - postgres-it：真库 SQL 门禁（Testcontainers）——CAS、部分唯一索引、行锁并发语义，
+#   mock 单测无法证明（G63）。
 # - helm：部署清单静态校验（helm lint + 三环境 template + compose 叠加层 config），
 #   不依赖集群，几十秒内可拦住 95% 的清单错误。
 
@@ -29,6 +31,26 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # G63：建库步骤必须连得上真实 PG。此前该 job 没有 services，psql 打 127.0.0.1:5432
+    # 却不存在 medagent 角色 —— 步骤必失败（要么门禁常红被忽略，要么从未按书面配置跑过）。
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: medagent
+          POSTGRES_PASSWORD: medagent123
+          POSTGRES_DB: medagent
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U medagent"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PG_HOST: 127.0.0.1
+      PG_PORT: "5433"
+      PG_USER: medagent
+      PG_PASSWORD: medagent123
+      PG_DATABASE: medagent
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,10 +63,32 @@ jobs:
         run: pip install -r requirements.txt
       - name: Create isolated test database（W4.1 事故隔离：pytest 连 medagent_test，见 tests/conftest.py）
         run: |
-          PGPASSWORD=medagent123 psql -h 127.0.0.1 -U medagent -d medagent -c "SELECT 1 FROM pg_database WHERE datname='medagent_test'" | grep -q 1 || \
-            PGPASSWORD=medagent123 psql -h 127.0.0.1 -U medagent -d medagent -c "CREATE DATABASE medagent_test"
+          set -euo pipefail
+          export PGPASSWORD="$PG_PASSWORD"
+          psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DATABASE" -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='medagent_test'" | grep -q 1 || \
+            psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DATABASE" \
+              -c "CREATE DATABASE medagent_test"
       - name: Run pytest
         run: python -m pytest -q
+
+  postgres-it:
+    # G63：真库 SQL 门禁（Testcontainers + postgres:15-alpine）。
+    # mock 单测证明不了 CAS、部分唯一索引、行锁并发语义；此前 *IT 类因 surefire 默认
+    # 只收 *Test 而从未执行（Tests run: 0 同样 BUILD SUCCESS），这里显式跑起来。
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Pre-pull postgres image
+        run: docker pull postgres:15-alpine
+      - name: Real-DB integration tests (clinical / auth / insurance)
+        run: mvn -B -f platform/pom.xml -Ppostgres-it -pl clinical,auth,insurance -am test
 
   platform:
     # Java 微服务矩阵：编译 + 单测（不连数据库：JWT 与网关过滤器均为纯单元测试）

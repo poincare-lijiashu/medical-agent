@@ -135,11 +135,13 @@
 
   <profiles>
     <!--
-      真库 SQL 级集成测试（意见书 P1-4）：
-        mvn -Ppostgres-it -pl clinical test
+      真库 SQL 级集成测试（意见书 P1-4 / §5.1）：
+        mvn -Ppostgres-it -pl clinical -am test
       用 Testcontainers 起一次性 PostgreSQL，跑**真实迁移文件**建 schema，
-      验证 mock 单测覆盖不到的 SQL 语义（CAS、容量守卫、累计上限）。
+      验证 mock 单测覆盖不到的 SQL 语义（CAS、容量守卫、累计上限、部分唯一索引、并发限流）。
       镜像 postgres:15-alpine 需本地已存在（离线环境不拉取）。
+      G63：必须显式 include **/*IT.java —— surefire 默认只收 *Test/*Tests/*TestCase，
+      此前 *IT 从未被执行（`Tests run: 0` 也返回 BUILD SUCCESS，等于门禁空转）。
     -->
     <profile>
       <id>postgres-it</id>
@@ -151,6 +153,9 @@
             <configuration>
               <excludedGroups combine.self="override">__none__</excludedGroups>
               <groups>postgres</groups>
+              <includes>
+                <include>**/*IT.java</include>
+              </includes>
             </configuration>
           </plugin>
         </plugins>

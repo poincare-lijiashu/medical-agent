@@ -1,7 +1,8 @@
 """A5 seed 演示口令：显式配置（AUTH_DEMO_PASSWORD）优先；未配置则随机生成（不再硬编码）。
 
-外部审查 M1 追加：随机口令明文绝不写入文件日志（常规 logger 只记「已生成」事件、
-不带口令值）；开发环境口令明文仅打印到控制台（独立 propagate=False logger）。
+外部审查 M1 / 评审 §5.5：随机口令明文**任何通道都不打印**——"仅控制台"在
+`uvicorn ... > logs/app.log 2>&1` 的重定向下同样会落进文件，等于口令进仓。
+常规 logger 只记「已生成随机口令」事件（不带口令值）。
 """
 import logging
 
@@ -38,9 +39,8 @@ def _capture_auth_file_log(monkeypatch, tmp_path):
     return fh, tmp_path / "capture.log"
 
 
-def test_random_password_not_in_file_log_but_in_dev_console(monkeypatch, tmp_path, capsys):
-    """M1（dev 环境）：seed 随机口令 → 文件 handler 捕获不含明文口令（仅「已生成」事件）；
-    开发环境控制台仍打印明文（dev 流程靠看控制台拿口令，行为保留）。"""
+def test_random_password_never_printed(monkeypatch, tmp_path, capsys):
+    """seed 随机口令：文件日志与开发环境控制台都不得出现明文（只留「已生成」事件）。"""
     monkeypatch.setattr(settings, "auth_demo_password", "")
     monkeypatch.setattr(settings, "app_env", "development")
     fh, capture = _capture_auth_file_log(monkeypatch, tmp_path)
@@ -53,7 +53,7 @@ def test_random_password_not_in_file_log_but_in_dev_console(monkeypatch, tmp_pat
     content = capture.read_text(encoding="utf-8")
     assert "auth.seed.demo_password" in content, "文件日志应保留「已生成随机口令」事件"
     assert pw and pw not in content, "明文口令不得进入文件日志"
-    assert pw in capsys.readouterr().out, "开发环境控制台必须打印口令"
+    assert pw not in capsys.readouterr().out, "控制台同样不得打印明文（重定向即落文件）"
 
 
 def test_random_password_no_console_outside_dev(monkeypatch, tmp_path, capsys):
@@ -69,4 +69,4 @@ def test_random_password_no_console_outside_dev(monkeypatch, tmp_path, capsys):
         logging.getLogger("backend.core.auth").removeHandler(fh)
     content = capture.read_text(encoding="utf-8")
     assert pw and pw not in content
-    assert pw not in capsys.readouterr().out, "非开发环境不得打印明文口令"
+    assert pw not in capsys.readouterr().out, "生产环境不得打印明文口令"

@@ -1,4 +1,4 @@
-"""数据备份脚本（轮 A3）：pg_dump（容器内执行）+ data/ 目录打包 + 轮转保留。
+"""数据备份脚本（轮 A3；G63 收口 §5.2）：pg_dump（容器内执行）+ data/ 目录打包 + 轮转保留。
 
 用法：
     python scripts/backup.py [--keep 7] [--dry-run]
@@ -7,14 +7,20 @@
 1) pg_dump：subprocess 调 `docker exec <容器> pg_dump -U <用户> <库>`。容器名从环境变量
    BACKUP_PG_CONTAINER 读（默认 medagent_pg，与 docker-compose.yml 一致）；用户/库从
    backend config（settings.pg_user / settings.pg_database，可经 .env.local 覆盖）读。
-   dump 落 data/pg_dump.sql 随包归档（打包后删除落盘副本）。**失败不中断**：仅告警，
-   继续打包 JSON 部分（可用性优先——部分备份好过没有备份）。
-2) tar 打包 data/ → data/backups/backup_YYYYmmdd_HHMMSS.tar.gz。
+
+   **G63 起 dump 失败即整体失败（退出码 2）**：不再"仅告警继续打包"。
+   理由：旧实现先以 "wb" 截断目标文件，失败后空/半截 dump 仍被打进 tar，随后轮转
+   会用这份"没有 PG 数据"的备份挤掉早前完整备份——连续 7 天失败后全部不可恢复，
+   而脚本仍返回 0，调度方无从感知。现在的口径：
+   - 先写临时文件，校验（非空 + 头尾标记齐全）通过后才原子替换 `data/pg_dump.sql`；
+   - 校验失败：不打包、不轮转、退出码 2，上一份完整备份原样保留。
+2) tar 打包 data/ → data/backups/backup_YYYYmmdd_HHMMSS.tar.gz，并写同名 `.sha256`
+   （恢复演练按此校验产物完整性）。
    排除清单（**可重建缓存不入包**，新增可重建缓存在此登记）：
    - data/backups/                —— 备份目录自身（防递归膨胀）
    - data/kb/pubmed_v2_cache.json —— PubMed 拉取缓存，重跑 seed_kb_pubmed_v2 可重建
 3) 轮转：按文件名（backup_YYYYmmdd_HHMMSS 时间戳即字典序）排序，仅保留最近 --keep 份，
-   其余删除。
+   其余删除（连带删除 `.sha256`）。
 
 恢复：解包 tar.gz 覆盖 data/（PG 数据用解包出的 data/pg_dump.sql 导回：
 `docker exec -i <容器> psql -U <用户> <库> < data/pg_dump.sql`）。
@@ -22,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -41,28 +48,59 @@ DUMP_FILE = DATA_DIR / "pg_dump.sql"
 # 可重建缓存不入包（注释即文档：新增可重建缓存在此登记）
 EXCLUDE_REL = ("kb/pubmed_v2_cache.json",)
 
+# plain 格式 dump 的最小可信体积与首尾标记（pg_dump 15 会写这两行）
+MIN_DUMP_BYTES = 1024
+DUMP_HEAD_MARK = b"PostgreSQL database dump"
+DUMP_TAIL_MARK = b"PostgreSQL database dump complete"
+
+
+class BackupError(RuntimeError):
+    """备份过程失败（dump 不可用 / 产物校验不通过）。"""
+
 
 def pg_dump_cmd(container: str, user: str, db: str) -> list[str]:
     """容器内 pg_dump 命令行（单测断言用）。"""
     return ["docker", "exec", container, "pg_dump", "-U", user, db]
 
 
-def run_pg_dump(container: str, user: str, db: str) -> bool:
-    """执行 pg_dump 落 data/pg_dump.sql；失败仅告警返回 False（不中断备份流程）。"""
+def _looks_complete(path: Path) -> bool:
+    """plain dump 完整性粗校验：体积达标 + 头尾标记齐全（挡住空文件/半截输出）。"""
+    size = path.stat().st_size
+    if size < MIN_DUMP_BYTES:
+        return False
+    with open(path, "rb") as f:
+        head = f.read(4096)
+        f.seek(max(0, size - 4096))
+        tail = f.read()
+    return DUMP_HEAD_MARK in head and DUMP_TAIL_MARK in tail
+
+
+def run_pg_dump(container: str, user: str, db: str) -> None:
+    """执行 pg_dump 并校验；失败抛 BackupError（调用方据此中止整次备份）。
+
+    先写 `.tmp` 再原子替换：任何失败都不会破坏上一次的 `data/pg_dump.sql`。
+    """
     cmd = pg_dump_cmd(container, user, db)
     print("[pg_dump] " + " ".join(cmd))
+    tmp = DUMP_FILE.with_name(DUMP_FILE.name + ".tmp")
+    tmp.unlink(missing_ok=True)
     try:
-        with open(DUMP_FILE, "wb") as f:
+        with open(tmp, "wb") as f:
             r = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=600)
         if r.returncode != 0:
-            print(f"[pg_dump] 失败（exit={r.returncode}）："
-                  f"{r.stderr.decode(errors='replace')[:200]}")
-            return False
+            raise BackupError(
+                f"pg_dump exit={r.returncode}：{r.stderr.decode(errors='replace')[:200]}")
+        if not _looks_complete(tmp):
+            raise BackupError(
+                f"dump 产物校验失败（{tmp.stat().st_size} 字节，缺少 pg_dump 头尾标记）")
+        tmp.replace(DUMP_FILE)
         print(f"[pg_dump] 完成：{DUMP_FILE}（{DUMP_FILE.stat().st_size} 字节）")
-        return True
-    except Exception as exc:  # noqa: BLE001 —— docker 未装/容器未启动等，绝不让备份中断
-        print(f"[pg_dump] 失败：{exc}")
-        return False
+    except BackupError:
+        tmp.unlink(missing_ok=True)
+        raise
+    except Exception as exc:  # noqa: BLE001 —— docker 未装/容器未启动等，统一转成备份失败
+        tmp.unlink(missing_ok=True)
+        raise BackupError(f"pg_dump 执行失败：{exc}") from exc
 
 
 def create_archive(out_path: Path) -> list[str]:
@@ -83,14 +121,30 @@ def create_archive(out_path: Path) -> list[str]:
     return included
 
 
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_checksum(archive: Path) -> Path:
+    """写 `<archive>.sha256`（`<hex>  <文件名>`，与 sha256sum -c 兼容）。"""
+    out = archive.with_name(archive.name + ".sha256")
+    out.write_text(f"{sha256_of(archive)}  {archive.name}\n", encoding="utf-8")
+    return out
+
+
 def rotate_backups(keep: int) -> list[str]:
-    """轮转：按文件名倒序保留最近 keep 份 backup_*.tar.gz，删除其余；返回被删文件名清单。"""
+    """轮转：按文件名倒序保留最近 keep 份 backup_*.tar.gz，删除其余（连带校验文件）。"""
     if not BACKUP_DIR.is_dir():
         return []
     backups = sorted(BACKUP_DIR.glob("backup_*.tar.gz"), reverse=True)  # 时间戳文件名=字典序
     removed: list[str] = []
     for old in backups[max(0, keep):]:
         old.unlink()
+        old.with_name(old.name + ".sha256").unlink(missing_ok=True)
         removed.append(old.name)
     return removed
 
@@ -116,11 +170,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[dry-run] 3) 轮转保留最近 {args.keep} 份")
         return 0
 
-    if not run_pg_dump(container, user, db):
-        print("[backup] pg_dump 失败：继续打包 JSON 部分（部分备份好过没有备份）")
+    try:
+        run_pg_dump(container, user, db)
+    except BackupError as exc:
+        print(f"[backup] 失败：{exc}")
+        print("[backup] 未生成新备份、未轮转；上一份完整备份保持不动。修复后请重跑。")
+        return 2
+
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     included = create_archive(out_path)
+    checksum = write_checksum(out_path)
     print(f"[backup] 已打包 {len(included)} 个文件 → {out_path}")
+    print(f"[backup] 校验文件 → {checksum.name}")
     DUMP_FILE.unlink(missing_ok=True)  # dump 已随包归档，落盘副本清掉（下次重新生成）
     removed = rotate_backups(args.keep)
     if removed:

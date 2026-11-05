@@ -12,10 +12,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import logging
 import os
 import secrets
-import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -209,44 +207,23 @@ def set_password(username: str, new_password: str) -> bool:
     return True
 
 
-def _console_only_password(pw: str) -> None:
-    """把随机演示口令打印到控制台（外部审查 M1：仅开发环境调用）。
-
-    用独立 logger + propagate=False 阻断向 root/共享文件 handler 传播，保证明文
-    只出现在本次进程的控制台输出、绝不进入文件日志；StreamHandler 每次现挂当前
-    sys.stdout（不缓存 logger/handler，兼容测试的输出捕获）。"""
-    lg = logging.getLogger("backend.core.auth.demo_password_console")
-    lg.setLevel(logging.WARNING)
-    lg.propagate = False  # 关键：明文不得被任何父级（含共享文件 handler）捕获
-    for h in lg.handlers:
-        try:
-            h.close()
-        except Exception:  # noqa: BLE001 —— 关闭失败不影响本次输出
-            pass
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    lg.handlers = [h]
-    lg.warning("auth.seed.demo_password_console | password=%s（仅控制台输出，不落文件）", pw)
-
-
 def _demo_password() -> str:
     """演示账号口令选择（纯函数便于测试）：显式配置 AUTH_DEMO_PASSWORD 优先；
     未配置则随机生成（仅 dev 演示用，生产不 seed）。
 
-    安全纪律（外部审查 M1）：随机口令明文绝不写入文件日志——文件日志长期留存且
-    可经 admin 日志视图读取，属敏感泄露面。改为：
-    - 常规 logger 只记「已生成随机口令」事件（不带 password 值，控制台+文件均可见）；
-    - 开发环境（app_env=development）额外经仅控制台 logger 打印一次口令明文——
-      dev 流程仍靠看控制台拿口令；非开发环境不打印（生产不 seed，双保险）。"""
+    安全纪律（外部审查 M1 / 评审 §5.5）：
+    - 随机口令明文**在进程内使用，绝不打印到任何通道**——此前"仅控制台打印"在
+      `uvicorn ... > logs/app.log 2>&1` 这类重定向下同样会落进文件，等于口令进仓；
+    - 需要可登录的演示账号时，显式设置 `AUTH_DEMO_PASSWORD`（.env.local / CI secret）；
+    - 日志只记「已生成随机口令 + 如何配置」，不带口令值。"""
     if settings.auth_demo_password:
         return settings.auth_demo_password
     pw = secrets.token_urlsafe(12)
     from backend.core.logger import get_logger
-    get_logger(__name__).warning("auth.seed.demo_password",
-                                 env=settings.app_env,
-                                 hint="随机口令仅在开发环境控制台打印一次（不落文件日志）")
-    if settings.app_env == "development":
-        _console_only_password(pw)
+    get_logger(__name__).warning(
+        "auth.seed.demo_password",
+        env=settings.app_env,
+        hint="已生成随机演示口令且不打印明文；需要可登录的演示账号请设置 AUTH_DEMO_PASSWORD")
     return pw
 
 

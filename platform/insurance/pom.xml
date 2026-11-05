@@ -58,6 +58,13 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- 真库集成测试（G63，`mvn -Ppostgres-it`）：验证一单一次 SETTLE 与投递抢占 -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>1.21.3</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
