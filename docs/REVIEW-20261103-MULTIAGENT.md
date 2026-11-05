@@ -13,8 +13,8 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G62 刷新拒绝可落库 + 登录限流原子化）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、179 个测试类、**1691 项测试全绿**（mock 级；真库 IT 为 `-Ppostgres-it` 单独门禁）。
+- **HEAD**：以 `git log -1` 为准（本轮 G63 真库集成测试门禁）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、**178 个测试类 / 1687 项 mock 单测全绿**；另有 **10 项真库集成测试**（clinical 4 / auth 3 / insurance 3，Testcontainers + postgres:15-alpine，`mvn -Ppostgres-it` 与 CI `postgres-it` job 门禁）。此前的"179 类 / 1691 项"把一份陈旧的 `*IT` 报告算进了 mock 口径，G63 已拆分。
 - **多院区口径（G51）**：`X-Campus` 缺失不再放开全院区，一律收敛主院区；`*` 是唯一的跨院区标记（网关对 ADMIN/QC 在无 campuses 声明时下发）；写入院区固定为主院区优先、否则 UUID 字典序最小。
 - **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
 - **数据库**：auth V74、tech V13、pharmacy V20、emr V26、insurance V21、material V5、clinical V56（各服务独立 schema）。
@@ -123,6 +123,7 @@
 | G60 | 病案首页补院区归属 | emr V26 为 `record_homepage` 增加 `campus_id`（存量按同 schema 的 `medical_record.visit_id` 回溯院区，回溯不到落主院区；不依赖 clinical schema，避免迁移顺序耦合），NOT NULL + 索引；生成首页按 `scope.campusForWrite()` 固化；`EmrAccessGuard.requireHomepage` 改为 dept + campus 双条件（与 `requireRecord` 同口径，缺院区 fail-closed）；列表 SQL 按院区收敛。原先同科室即可跨院区读取首页姓名/诊断/费用/手术。新增 3 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
 | G61 | 移动护理院区/病区归属校验 | 生成任务、手工建单、扫码核对、异常登记、扫码记录五个入口统一经 `VisitAccessGuard.requireAdmission`（任务所属就诊的科室 + 院区，越权与不存在同码）；任务列表与看板把科室（`deptCodes`）与院区条件下推 SQL，过滤发生在 `LIMIT` 之前，不再"先截断再内存过滤"。原先他病区护士可为任意患者生成给药任务并扫码核对。新增 2 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
 | G62 | 刷新拒绝可落库 + 登录限流原子化 | `AuthService.refresh` 改为 `@Transactional(noRollbackFor = BusinessException)`：账号停用分支的"撤销全部刷新令牌 + REFRESH_DENIED 审计"、重放分支的 REFRESH_REPLAY 审计不再随异常回滚（原先"停用即全端下线"与盗用留痕都被抹掉），数据库异常仍回滚。登录限流从"先查计数 → bcrypt → 后记失败"改为 auth V74 `login_throttle` 桶表原子占位：`INSERT ... ON CONFLICT DO UPDATE` 单语句自增（行锁串行化），登录成功退还占位，窗口过期自动重置，并发请求无法在 record 落库前穿透阈值。新增 6 项限流单测（改写），全量 179 类 / 1691 项通过，院区冒烟 73 项复跑全过 |
+| G63 | 真库门禁落地 + 备份/恢复/凭据收口 | ①`postgres-it` profile 显式 `include **/*IT.java`——此前 surefire 只收 `*Test`，`*IT` **从未执行**（`Tests run: 0` 也 BUILD SUCCESS，门禁空转），修正后立刻暴露 clinical IT 夹具缺 `visit.campus_id` 的真实漂移并修复；②新增 auth `LoginThrottlePostgresIT`（占位/退款/窗口重置/8 线程并发严格 1..8）与 insurance `RealtimeSettlementPostgresIT`（一单一次 SETTLE 部分唯一索引、抢占 CAS 只成功一次、FAILED 可重新抢占）；③CI 新增 `postgres-it` job，pytest job 补 `services: postgres`（原先建库步骤连不上必失败）；④`backup.py` dump 失败改为退出码 2、不打包不轮转、先写 `.tmp` 并校验头尾标记，成功备份写 `.sha256`；⑤恢复演练改取 BACKUP_DIR 最近一份**真实留存产物**（含 sha256 校验、pg_restore --list 解析校验），比对 12 张核心表 + 序列数 + 外键数，实测 RTO 11.8s 全过；⑥`backup_repo.ps1` 改为"旧 mirror 改名 .old → 新 mirror 落位 → 再删 .old"，失败回滚，bundle 失败降级为退出码 2；⑦seed 随机演示口令明文**不再打印到任何通道**（旧"仅控制台"在 stdout 重定向下等同落文件）。mock 178 类 / 1687 项 + 真库 IT 10 项全绿，院区冒烟 73 项复跑全过 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 

@@ -96,9 +96,20 @@
 | §1.1 | `refresh()` 标 `@Transactional`，停用账号的"撤销全部刷新令牌"与 REFRESH_REPLAY 审计随异常回滚 | 改 `@Transactional(noRollbackFor = BusinessException.class)`：业务拒绝分支先落库再抛，数据库异常仍回滚 |
 | §1.4 | 登录限流是"check 计数 → bcrypt（~100ms）→ record"两步，并发可穿透 | auth V74 `login_throttle` 桶表：`INSERT ... ON CONFLICT DO UPDATE` 原子占位（行锁串行化），超限即 429，登录成功退还占位，窗口过期自动重置。`login_attempt` 降级为纯审计明细 |
 
+### G63 批次已关闭（代码 commit 待提交，测试/CI/备份链路）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §5.1 | 真库 IT 被默认排除，且 `*IT.java` 不在 surefire 默认 includes 里——**门禁从未真正执行** | profile 显式 `include **/*IT.java`；修正后立刻暴露 clinical IT 夹具缺 `visit.campus_id` 的真实漂移（3/4 失败）并修复；新增 auth 限流 IT、insurance 结算 IT；CI 增 `postgres-it` job。现为 mock 178 类 / 1687 项 + 真库 10 项 |
+| §5.2 | `backup.py` dump 失败仍产出"坏备份"并挤掉好备份，且返回 0 | dump 写 `.tmp` → 校验（体积 + pg_dump 头尾标记）→ 原子替换；失败退出码 2、不打包、不轮转，旧备份原样保留；成功备份写 `.sha256` |
+| §5.3 | 恢复演练当场 `pg_dump` 再恢复，从不碰真实留存产物 | 改取 BACKUP_DIR 最近一份真实产物（`backup_*.tar.gz` 或 `*.dump`），校验 sha256 / `pg_restore --list`，恢复临时库后比对 12 张核心表 + 序列数 + 外键数；实测 RTO 11.8s |
+| §5.4 | CI pytest 建库步骤无 `services`，托管 runner 上必失败 | pytest job 补 `services: postgres`（5433 → 5432）与 `PG_*` 环境变量，建库步骤改用变量并显式 `-p 5433` |
+| §5.5 | 日志明文口令，且轮转文件不匹配 `*.log` 可被 `git add -A` 入仓 | `.gitignore` 已整目录排除 `logs/`（G51）；seed 随机演示口令明文**不再打印任何通道**（旧"仅控制台"在 `> logs/app.log` 重定向下等同落文件），需要可登录演示账号必须显式配置 `AUTH_DEMO_PASSWORD` |
+| §5.6 | `backup_repo.ps1` 先删旧 mirror 再 rename，失败即零备份 | 改为"旧 mirror → `.old`；新 mirror 落位；成功后删 `.old`"，中途失败回滚旧名；`$Src`/`$Dst` 参数化；bundle 先写 `.tmp` 并 `bundle verify`，失败降级退出码 2 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项共 21 条，按 §7.2 第 1–4 批推进；其中**真库集成测试门禁**应最先补——当前 1691 项为 mock 级，修完无法验证。
+其余 [必须] 项共 15 条，按 §7.2 第 1–4 批推进。
 
 ---
 
