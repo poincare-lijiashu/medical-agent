@@ -61,6 +61,8 @@ class ReportSubscriptionServiceTest {
         when(repo.listReportSnapshots(any(), any(), any())).thenReturn(List.of(
                 new ReportSnapshot(BusinessTime.today().minusDays(1), "OUTPATIENT_PAID_AMOUNT",
                         new BigDecimal("10.00"), null, "SCHEDULED", Instant.now())));
+        // G77：默认由本实例拿到发送权；抢占失败的场景单独用例覆盖
+        when(repo.claimReportDelivery(any(), anyInt())).thenReturn(true);
     }
 
     @Test
@@ -145,6 +147,52 @@ class ReportSubscriptionServiceTest {
         assertThat(view.status()).isEqualTo("SENT");
         assertThat(view.attempts()).isEqualTo(1);
         verify(repo).markReportDelivery(deliveryId, "SENT", 1, null);
+    }
+
+    @Test
+    @DisplayName("手动投递：抢占失败 → 409，且不外发（G77）")
+    void sendSkipsWhenClaimLost() {
+        UUID subId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        LocalDate day = BusinessTime.today().minusDays(1);
+        when(repo.findReportSubscription(subId)).thenReturn(Optional.of(
+                new ReportSubscription(subId, "邮件日报", "DAILY_OPS", "EMAIL",
+                        "ops@example.com", true, 0, "admin01", Instant.now())));
+        when(repo.findReportDelivery(eq(subId), eq("DAILY_OPS"), eq(day))).thenReturn(Optional.of(
+                new ReportDelivery(deliveryId, subId, "邮件日报", "DAILY_OPS", day,
+                        "PENDING", 0, null, Instant.now(), null)));
+        when(repo.claimReportDelivery(deliveryId, 0)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.send(subId, day, "admin01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+
+        verify(emailSender, org.mockito.Mockito.never())
+                .send(any(), any(), any(), any(), any());
+        verify(repo, org.mockito.Mockito.never())
+                .markReportDelivery(any(), any(), anyInt(), any());
+    }
+
+    @Test
+    @DisplayName("定时重试：抢不到发送权的投递直接跳过，不重复外发（G77）")
+    void retrySkipsWhenClaimLost() {
+        UUID subId = UUID.randomUUID();
+        UUID deliveryId = UUID.randomUUID();
+        LocalDate day = BusinessTime.today().minusDays(1);
+        when(repo.listRetryableReportDeliveries(anyInt(), anyInt())).thenReturn(List.of(
+                new ReportDelivery(deliveryId, subId, "邮件日报", "DAILY_OPS", day,
+                        "FAILED", 1, "smtp down", Instant.now(), null)));
+        when(repo.findReportSubscription(subId)).thenReturn(Optional.of(
+                new ReportSubscription(subId, "邮件日报", "DAILY_OPS", "EMAIL",
+                        "ops@example.com", true, 0, "admin01", Instant.now())));
+        when(repo.claimReportDelivery(deliveryId, 1)).thenReturn(false);
+
+        int done = service.retryPending(50);
+
+        assertThat(done).isZero();
+        verify(emailSender, org.mockito.Mockito.never())
+                .send(any(), any(), any(), any(), any());
     }
 
     @Test

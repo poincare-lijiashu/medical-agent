@@ -1244,6 +1244,22 @@ public class PharmacyRepository {
                 .param("actor", actor).update();
     }
 
+    /**
+     * 到期自动草稿的互斥闸门（G77）：事务级 advisory lock。
+     *
+     * <p>多副本同时跑 01:10 的定时任务时，两个实例会读到同一批到期批次、
+     * 各自插入一张 DRAFT 报损单——重复单据，人工还得分辨该提交哪张。
+     * 这里在事务内抢占同名锁：拿到的一方扫描并生成，另一方本轮直接跳过；
+     * 事务结束（提交/回滚/连接断开）自动释放，不需要额外清理逻辑。
+     *
+     * <p>键值用 "PHAR" 命名空间 + 序号，避免与库内其他 advisory lock 撞号。
+     */
+    public boolean tryLockExpiryAutoDraft() {
+        return jdbc.sql("SELECT pg_try_advisory_xact_lock(:key)")
+                .param("key", 0x50484152L << 16 | 1L)
+                .query(Boolean.class).single();
+    }
+
     /** 已过期且仍有库存、且未在任何有效报损单中的批次（G28）。 */
     public List<ExpiredBatchRow> findExpiredBatchesForLoss(java.time.LocalDate today, int limit) {
         return jdbc.sql("""

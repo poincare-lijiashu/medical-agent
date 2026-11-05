@@ -266,6 +266,11 @@ public class ReportSubscriptionService {
         if ("SENT".equals(delivery.status())) {
             return toView(delivery);
         }
+        // G77：并发手动投递/定时任务同抢一条时，只有一个能发出去
+        if (!repo.claimReportDelivery(delivery.id(), delivery.attempts())) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "该报表正在投递或已被他人完成，请刷新后查看");
+        }
         audit(actor, "REPORT_DELIVERY_SEND", delivery.id().toString(), Map.of(
                 "subscription", sub.name(), "date", day.toString()));
         return toView(deliver(sub, delivery));
@@ -296,13 +301,21 @@ public class ReportSubscriptionService {
         return created;
     }
 
-    /** 定时任务：重试 PENDING/FAILED（attempts < 3），单轮最多 limit 条。 */
+    /**
+     * 定时任务：重试 PENDING/FAILED（attempts < 3），单轮最多 limit 条。
+     *
+     * <p>G77：逐条抢占后再外发。多副本同时跑时，未抢到的副本直接跳过，
+     * 不会出现"同一份日报被两个实例各发一次"。
+     */
     public int retryPending(int limit) {
         int done = 0;
         for (ReportDelivery delivery : repo.listRetryableReportDeliveries(MAX_ATTEMPTS, limit)) {
             ReportSubscription sub = repo.findReportSubscription(delivery.subscriptionId())
                     .orElse(null);
             if (sub == null || !sub.enabled()) {
+                continue;
+            }
+            if (!repo.claimReportDelivery(delivery.id(), delivery.attempts())) {
                 continue;
             }
             ReportDelivery latest = deliver(sub, delivery);

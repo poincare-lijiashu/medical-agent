@@ -1729,6 +1729,27 @@ public class ClinicalRepository {
                 .query(DELIVERY_MAPPER).list();
     }
 
+    /**
+     * 抢占一条待投递记录（G77）：把 {@code attempts} 自增作为 CAS 版本。
+     *
+     * <p>多实例部署时两个副本的定时任务会选中同一批 PENDING 行；原先两边都会
+     * 先外发（邮件/Webhook）再回写，等于同一份日报发两次。这里用
+     * {@code WHERE attempts = 读到的值} 让只有一个副本能拿到"发送权"，
+     * 另一个直接跳过。
+     *
+     * <p>抢占成功后 {@code attempts} 已 +1；调用方回写时用"读到值 + 1"即可对齐，
+     * 中途崩溃则停在 PENDING、下轮照常重试（也照常计入 3 次上限）。
+     */
+    public boolean claimReportDelivery(UUID id, int expectedAttempts) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.report_delivery
+                           SET attempts = attempts + 1, updated_at = now()
+                         WHERE id = :id AND attempts = :attempts
+                           AND status IN ('PENDING', 'FAILED')
+                        """)
+                .param("id", id).param("attempts", expectedAttempts).update() > 0;
+    }
+
     /** 回写投递结果：成功置 SENT 并记录 sent_at；失败累加 attempts 与错误。 */
     public void markReportDelivery(UUID id, String status, int attempts, String lastError) {
         jdbc.sql("""

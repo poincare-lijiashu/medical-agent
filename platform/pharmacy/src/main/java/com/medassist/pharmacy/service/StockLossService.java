@@ -13,6 +13,8 @@ import com.medassist.pharmacy.web.StockLossDtos.CreateStockLossReq;
 import com.medassist.pharmacy.web.StockLossDtos.LossLine;
 import com.medassist.pharmacy.web.StockLossDtos.ReviewStockLossReq;
 import com.medassist.pharmacy.web.StockLossDtos.StockLossView;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -44,6 +46,8 @@ import java.util.UUID;
  */
 @Service
 public class StockLossService {
+
+    private static final Logger log = LoggerFactory.getLogger(StockLossService.class);
 
     private static final Set<String> STATUSES =
             Set.of(StockLoss.DRAFT, StockLoss.SUBMITTED, StockLoss.APPROVED, StockLoss.REJECTED);
@@ -105,6 +109,11 @@ public class StockLossService {
     @Transactional
     public AutoDraftResult autoDraftExpired(String actor) {
         String operator = requireActor(actor);
+        if (!repo.tryLockExpiryAutoDraft()) {
+            // 另一个实例正在扫描（多副本同跑 01:10），本轮跳过，避免生成重复草稿
+            log.info("pharmacy.expiry_loss.auto_draft_skipped reason=lock_held");
+            return new AutoDraftResult(0, 0);
+        }
         LocalDate today = BusinessTime.today();
         List<ExpiredBatchRow> batches =
                 repo.findExpiredBatchesForLoss(today, AUTO_DRAFT_BATCH_LIMIT);

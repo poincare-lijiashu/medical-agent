@@ -55,6 +55,8 @@ class StockLossServiceTest {
         when(repo.findStockLoss(any())).thenReturn(Optional.of(loss(StockLoss.SUBMITTED, 0L, "pharm01")));
         when(repo.listStockLossItems(any())).thenReturn(List.of());
         when(repo.listStockLossAdjustments(any())).thenReturn(List.of());
+        // G77：默认本实例拿到扫描闸门；抢不到的场景单独用例覆盖
+        when(repo.tryLockExpiryAutoDraft()).thenReturn(true);
     }
 
     private StockLoss loss(String status, long version, String createdBy) {
@@ -261,6 +263,19 @@ class StockLossServiceTest {
 
         assertThat(result.losses()).isZero();
         assertThat(result.items()).isZero();
+        verify(repo, never()).insertAutoDraftLoss(any(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("效期草稿：另一实例正在扫描时直接跳过，不生成重复草稿（G77）")
+    void autoDraftSkippedWhenAnotherInstanceHoldsLock() {
+        when(repo.tryLockExpiryAutoDraft()).thenReturn(false);
+
+        AutoDraftResult result = service.autoDraftExpired("scheduler");
+
+        assertThat(result.losses()).isZero();
+        assertThat(result.items()).isZero();
+        verify(repo, never()).findExpiredBatchesForLoss(any(LocalDate.class), anyInt());
         verify(repo, never()).insertAutoDraftLoss(any(), anyString(), anyString(), anyString());
     }
 

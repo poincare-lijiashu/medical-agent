@@ -196,9 +196,15 @@
 | 时间口径漂移（§7.2 第 5 批） | 业务日期的取法三套并存：①`PatientRepository.nextPatientNo` 用 `LocalDate.now()`（JVM 默认时区，容器通常 UTC）；②`ConsentRepository.nextConsentNo` 用 SQL `to_char(now())`（数据库会话时区）；③`ConsentService` 渲染同意书 `{{date}}` 用 `LocalDate.now()`。而就诊号/病历号/首页号/结算单号/入库出库单号全部走 `BusinessTime.today()`。后果：UTC 容器下每天 00:00–08:00 建的患者号带前一天日期；同意书号与病历号跨零点可能不同日；**患者签署页上印的日期本身会错**，而这是日后举证的依据 | 三处全部统一到 `BusinessTime.today()`（会话时区依赖也从 SQL 里移除）。**反证（真实链路）**：把 empi/emr 以 `BUSINESS_ZONE=Pacific/Honolulu` 启动（业务日 2026-11-04，JVM 本地日 2026-11-05）→ 新建患者 `P20261104000656`、同意书 `IC20261104000007`、正文渲染 `Signed on 2026-11-04`；恢复默认时区后冒烟全绿。静态不变量：`src/main` 下再无 `LocalDate.now()`/`to_char(now())` 的业务用法（仅剩 `BusinessTime` 自身与显式带时区的 `LocalDate.now(BusinessTime.zone())`）。冒烟 `empi_patient_smoke`、`emr_smoke`、`emr_homepage_smoke`、`campus_isolation`(77)、`platform_smoke` 全 PASS |
 | 解析吞错（审计部分） | `ConsultationService.audit` 在序列化失败时写入 `{"consultationNo":""}`——这条审计看起来就是"一次会诊号为空但流程正常"的会诊，与真实故障无法区分；其余 8 处同类兜底都写 `_detail_serialize_failed` 标记 | 统一为 `{"_detail_serialize_failed":true}`，与本仓审计口径一致 |
 
+### G77 批次已关闭（定时任务不再假设单实例，mock 182 类 / 1730 项全绿）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| worker 多实例假设（§7.2 第 5 批） | 全部 11 个 `@Scheduled` 里，8 个本身幂等（日快照 `ON CONFLICT DO UPDATE`、投递占位 `INSERT ... ON CONFLICT DO NOTHING`、转送任务 `claim` + workerId、计费补偿 CAS、入库 claim + lease、过期令牌清理），但两个不是：①`ReportSubscriptionService.retryPending` 先列出 PENDING/FAILED 再**直接外发**（邮件/Webhook/IM），两个副本同一分钟各发一次，同一份运营日报发两遍且 attempts 虚增；②`StockLossService.autoDraftExpired` 先扫描到期批次再插 DRAFT 报损单，两个副本都读到同一批批次（谁都没提交），各自生成一张草稿，人工还得分辨该提交哪张 | ①投递改为**先抢占再外发**：`claimReportDelivery` 用 `attempts` 作 CAS 版本（`UPDATE ... WHERE id=? AND attempts=? AND status IN ('PENDING','FAILED')`），抢不到直接跳过；手动补发抢不到返回 409。崩溃留在 PENDING 下轮照常重试，不需要新状态列、不改表结构。②效期草稿扫描加事务级 advisory lock（`pg_try_advisory_xact_lock`，键 `"PHAR"<<16\|1`）：拿到锁的实例扫描生成，另一个本轮跳过并记 `auto_draft_skipped reason=lock_held`，事务结束自动释放。**反证**：两个真正并发的补发请求 → 恰好 `200` + `409`，投递记录只有 1 行、`attempts=1`；advisory lock 三会话实测：持有方 `t` → 并发第二会话 `f` → 释放后 `t`；`POST /pharmacy/stock-losses/auto-draft` 真实链路 200（SQL 与参数绑定生效）。单测补 3 项（抢不到不外发、抢不到不扫描不建单） |
+
 ### 未处理（下一批）
 
-§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移、解析吞错（其余域）、worker 多实例假设。
+§0 已关闭清单覆盖本意见书全部 [必须] 条目；§6.12、§6.14、§6.15 已关闭。剩余为 [建议] 级：guard 签名/错误码漂移（§6.13，纯一致性重构）、解析吞错（其余域）。
 
 ---
 
