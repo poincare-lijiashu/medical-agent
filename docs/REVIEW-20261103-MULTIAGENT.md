@@ -13,11 +13,11 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G79 首页快照解析不再吞错成空）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、**184 个测试类 / 1737 项 mock 单测全绿**；另有 **10 项真库集成测试**（clinical 4 / auth 3 / insurance 3，Testcontainers + postgres:15-alpine，`mvn -Ppostgres-it` 与 CI `postgres-it` job 门禁）。此前的"179 类 / 1691 项"把一份陈旧的 `*IT` 报告算进了 mock 口径，G63 已拆分。
+- **HEAD**：以 `git log -1` 为准（本轮 G80 麻醉复苏 PACU 闭环）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），446 个主代码 Java 文件、**186 个测试类 / 1760 项 mock 单测全绿**；另有 **10 项真库集成测试**（clinical 4 / auth 3 / insurance 3，Testcontainers + postgres:15-alpine，`mvn -Ppostgres-it` 与 CI `postgres-it` job 门禁）。此前的"179 类 / 1691 项"把一份陈旧的 `*IT` 报告算进了 mock 口径，G63 已拆分。
 - **多院区口径（G51）**：`X-Campus` 缺失不再放开全院区，一律收敛主院区；`*` 是唯一的跨院区标记（网关对 ADMIN/QC 在无 campuses 声明时下发）；写入院区固定为主院区优先、否则 UUID 字典序最小。
 - **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V74、tech V15、pharmacy V20、emr V26、insurance V21、material V5、clinical V57（各服务独立 schema）。
+- **数据库**：auth V74、tech V15、pharmacy V20、emr V26、insurance V21、material V5、clinical V58（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **启动顺序硬约束（实测）**：auth 必须先于 gateway 且带 `INTERNAL_API_TOKEN=medassist-dev-internal-token`（网关启动时 fail-fast 拉取撤销名单，auth 不可达或令牌不匹配都会拒绝启动）；网关另需 `--medassist.gateway.auth.internal-token=medassist-dev-internal-token`。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
@@ -32,7 +32,7 @@
 | EMPI 患者主索引 | 可用 | 85% | 建档、查重合并、PHI 掩码、变更历史 | 区域平台互联、患者门户 |
 | 门诊 | 可用 | 98% | 号源、挂号/退号/改约、接诊、医嘱、收费、收费票据（开票/重打/作废/换开）、电子票据厂商报文（开具/红冲/按期间对账）、日结与分账、就诊院区归属（挂号固化、当日列表/患者就诊史/详情按院区收敛） | 预约平台、厂商正式联调 |
 | 住院 | 可用 | 98% | 入院/床位/转床、护理执行、护理排班、临床路径（模板/入径/任务与变异/完成与退出/版本克隆）、路径统计（完成率/退出率/变异率/平均天数/科室下钻）、出院带药（开立→提交药房发药时计价→发药同步/取消）、预交金、日结、欠费预警、入出转与床位使用率趋势、病区院区与入院院区固化（病区列表/床位/住院详情按院区隔离） | 路径节点与医嘱/收费自动联动 |
-| 手术与麻醉 | 部分 | 75% | 排台、分级审批、术前访视、术中收费核对 | 麻醉记录单、复苏、手术分级目录维护 |
+| 手术与麻醉 | 可用 | 90% | 排台与手术间利用率、分级审批、术前访视与讨论、手术/麻醉知情同意、麻醉记录单与术中生命体征、术中护理、复苏室（入室→Aldrete 观察→出室→签名，评分未达 9 分拒出室、签名四眼复核）、术中收费核对 | 手术分级目录维护（按术种自动定级）、手术器械包与护士资源冲突、术后镇痛随访、PACU 床位排班 |
 | 药事 | 可用 | 98% | 处方审核、发药/退药、麻精专册、采购验收、盘点、报损、效期自动报废草稿（定时扫描+人工提交他审）、科室调拨、效期预警、发药日趋势与日快照、抗菌药物专项审批、静配中心与成品输液批次追溯、处方院区归属（开方固化、列表/待办计数/详情按院区隔离，医嘱转处方随就诊院区下发） | 调拨在途报表、合理用药规则引擎 |
 | 物资耗材 | 可用 | 98% | 目录、批次效期、出库、科室二级库、未使用退回、跨科室调拨、高值植入追溯、批次召回、出库日趋势与日快照、出库/退回/调拨/追溯/趋势院区隔离（G50） | 供应商履约报表、调拨分析 |
 | 医技（LIS + PACS） | 可用 | 96% | 申请、标本、报告、危急值、LIS 入站、PACS 阅片、DICOMweb 调阅、序列内影像分页、浏览器预览（WADO rendered）、OHIF 深链、设备质控、结构化报告模板、申请/报告/危急值/影像与阅片队列院区隔离（G49） | 区域影像互认、设备维保工单 |
@@ -132,6 +132,7 @@
 | G68 | 医技行级守卫收口（科室 + 院区） | `TechAccessGuard` 新增 `findApplicationScope`（一条 SQL 取 `campus_id + dept_id`），四个 require 改为 **dept + campus 双条件**（任一为空 fail-closed），申请/报告/危急值/影像登记同口径；删除 `ApplicationController.detail` 在 guard 之外的科室内存过滤——此前列表按科室收敛、但 `/tech/reports/{id}` 与 `/tech/criticals` 对同申请可读全文，形成"列表不可见、详情可达"。tech 冒烟补四眼修订链路（amend→DRAFT、危急值仍可见、自审 403、doctor01 签发→AMENDED），并修正脚本默认网关端口 18080→8080。mock 182 类 / 1718 项全绿，tech/LIS/院区冒烟全过 |
 | G69 | 迁移跨 schema 回填解耦 | pharmacy V20 / tech V13 / insurance V20 的院区回填原本硬依赖 `clinical_svc.visit.campus_id`：本域先于 clinical 迁移就会因缺列阻断启动。三份脚本改为 `DO $$` 守卫（列不存在则跳过回填、存量落主院区），新增 `campus_source`（RUNTIME/VISIT/MAIN_FALLBACK）让兜底行可精确识别；已应用环境用 Flyway `repair()` 重算校验和并补齐列与标记。反证在独立临时库完成：守卫块缺列时静默跳过并回落 MAIN_FALLBACK，旧语句报缺列。顺带修 `pharmacy_smoke`（补 `returnId` 幂等键、超量退药断言 422）与 `insurance_smoke`（值班分离账号补科室 + 主院区）两处契约漂移 |
 | G70 | 转送成功不被审计失败覆盖 + 重写补插新增危急值 + 补偿扫描去毒丸 | ①`OrderTransferService` 成功路径审计移出兜底 catch 并改为 `auditQuietly`，新增 `markOrderFailed`（仅 PENDING/FAILED 可覆盖），已成功 TRANSFERRED 的下游单号不会再被抹掉；过期补偿同样用状态守卫替代读后判断。②`ReportService.rewrite` 按 `(itemName, resultValue)` 求差集，新增危急值补插、已存在/已闭环不重复。③`listAbnormalBillingDisps` 在 SQL 层排除"PENDING/CHARGE_FAILED + 已退药"的毒丸行（交人工处理），`REFUND_FAILED` 照常扫描。mock 182 类 / 1720 项全绿，转送/药房/医技/院区冒烟全过 |
+| G80 | 麻醉复苏（PACU）闭环 | 手术域此前止于"术中麻醉/护理记录"，术后复苏无系统记录，评审缺口表"麻醉复苏室"一直悬空。clinical V58 新增 `pacu_stay`（一台已结束手术一份；入室固化就诊科室/院区；`OUT` 必有出室时间与去向；签名后触发器整份冻结）+ `pacu_observation`（Aldrete 五项各 0–2 分 + 生命体征，同一时间点唯一，`total` 由服务端求和并由 CHECK 与五项之和对齐）。规则：只有 `COMPLETED` 手术可入室；观察时间不得早于入室；出室以**最近一次** Aldrete ≥ 9 为门槛（更早的高分不能蒙混）；签名必须由记录人以外的人完成（四眼），出室后不可再追加观察。API：`GET/POST /clinical/surgery-cases/{id}/pacu`、`/pacu/observations`、`/pacu/discharge`、`/pacu/sign` 与 `GET /clinical/pacu/stays` 复苏看板（科室/院区谓词 + 业务日期半开区间均下推 SQL，在 `LIMIT` 之前生效）。错误码 44560–44568 落 44xxx 并同步 clinical `statusOf`（不存在 404 / 状态冲突 409 / 流程未达 422）。新增 `PacuServiceTest`(19) + `PacuControllerPermissionTest`(3) + 契约测试 PACU 组(1)；新冒烟 `clinical_pacu_smoke` 44 项全 PASS，`clinical_surgery_smoke`、`clinical_surgery_theatre_smoke`、`campus_isolation`(77)、`platform_smoke` 复跑全过；mock 186 类 / 1760 项全绿 |
 | G79 | 首页快照解析不再吞错 | `HomepageService` 读诊断/手术/费用快照时解析失败返回空集合，首页详情与打印于是显示"没有诊断、没有费用"，与真实空值无法区分；同一份数据在 HQMS 上报路径却会显式报错。改为抛 `EMR_HOMEPAGE_SNAPSHOT_INVALID(47406)`（费用非数字同判），映射 422（emr 既有契约测试禁止业务码落 5xx）。反证：把 DRAFT 首页 `diagnoses` 改成形状不对的合法 jsonb → 详情返回 422/47406 明确文案（改前 200 + 空列表），恢复后 200；已归档首页另有触发器禁止改快照。mock 184 类 / 1737 项，3 个冒烟全绿 |
 | G78 | 守卫签名与错误码口径收敛 | ①7 个行级守卫原本两种参数顺序并存，`TechAccessGuard`/`MaterialAccessGuard` 统一为 `(scope, id)`（约 44 处调用 + 3 个测试同步改），不留旧序兼容重载。②`VisitAccessGuard` 里就诊用 42404、住院登记/病区/手术记录退回通用 40400，新增 `ADMISSION_NOT_FOUND(42405)`/`WARD_NOT_FOUND(42406)`/`SURGERY_CASE_NOT_FOUND(42407)` 归一到 42xxx（HTTP 仍 404）；已发布码不重编号，改在 `ErrorCode` javadoc 写明码段分配（物资新增码从 4355x 起）。③新增 `ErrorCodeTest`（号唯一/号段合法/文案面向医护）+ `ClinicalErrorMappingContractTest`（守卫码必须映射 404，防新增码漏登记落到 default 400）。④顺带修：不存在的路径原返回 500，补 `NoResourceFoundException` 处理器 → 404。真实链路逐个验码通过，5 个冒烟全绿。mock 184 类 / 1735 项 |
 | G77 | 定时任务多实例安全 | 11 个 `@Scheduled` 逐个复核，8 个本身幂等（快照 upsert、投递占位 ON CONFLICT、转送 claim、计费 CAS、入库 lease、令牌清理），两个不安全：报表重试先列再外发（两副本各发一次）、效期草稿先扫描再插单（两副本各生成一张 DRAFT）。投递改为用 `attempts` 作 CAS 先抢占再外发（抢不到跳过，手动补发 409）；效期扫描加事务级 advisory lock（拿不到就跳过并记日志）。反证：两个并发补发 → 1×200 + 1×409 且只有 1 行记录、attempts=1；advisory lock 三会话 t/f/t。mock 182 类 / 1730 项，4 个冒烟全绿 |
@@ -469,7 +470,7 @@ cd ..\frontend-console; npm run typecheck; npm run build
 | G4 | 病案编码工作台 + ICD/DRG 字典维护 | `platform/emr/.../db/migration/emr/V10__record_homepage.sql` 仅首页 |
 | G5 | PACS 阅片与 DICOM 调阅 | `platform/tech/.../web/PacsController.java` 仅 worklist / 登记 / 状态 |
 | G6 | HL7 ADT/ORM 全量 + FHIR / 集成平台对接 | `platform/tech/.../hl7/` 仅 ORU |
-| G7 | 麻醉复苏室与手术器械 / 护士资源冲突 | `platform/clinical/.../db/migration/clinical/V16__surgery_theatre.sql` 仅手术间 |
+| G7 | 麻醉复苏室与手术器械 / 护士资源冲突 | 复苏室已由 G80 关闭（clinical V58 `pacu_stay` / `pacu_observation` + 签名冻结）；手术器械包与护士资源冲突仍未建，`platform/clinical/.../db/migration/clinical/V16__surgery_theatre.sql` 仅手术间 |
 | G8 | 护理体温单 / 生命体征 / 护理排班 | `platform/clinical/.../db/migration/clinical/V6__nursing_execution_and_multi_charge.sql` 仅执行单 |
 | G9 | 药品耗材条码二维码 + PDA 闭环 | 全仓无 barcode / qrcode 命中 |
 | G10 | 医保电子凭证 / 移动支付 + DRG 病例组合器成本核算 | `platform/insurance/.../db/migration/insurance/V7__drg_dip_grouping.sql` 仅权重 × 费率 |

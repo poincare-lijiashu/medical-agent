@@ -60,6 +60,9 @@ import com.medassist.clinical.domain.ClinicalModel.NursingSchedule;
 import com.medassist.clinical.domain.ClinicalModel.NursingShift;
 import com.medassist.clinical.domain.ClinicalModel.NursingWorkloadRow;
 import com.medassist.clinical.domain.ClinicalModel.OutpatientPaidSummary;
+import com.medassist.clinical.domain.ClinicalModel.PacuBoardRow;
+import com.medassist.clinical.domain.ClinicalModel.PacuObservation;
+import com.medassist.clinical.domain.ClinicalModel.PacuStay;
 import com.medassist.clinical.domain.ClinicalModel.PathwayDeptStatRow;
 import com.medassist.clinical.domain.ClinicalModel.PathwayInstance;
 import com.medassist.clinical.domain.ClinicalModel.PathwayInstanceStatRow;
@@ -104,6 +107,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -3707,6 +3711,167 @@ public class ClinicalRepository {
                         """)
                 .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
                 .update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 麻醉复苏（V58）
+
+    private static final RowMapper<PacuStay> PACU_STAY_MAPPER = (rs, i) -> new PacuStay(
+            rs.getObject("id", UUID.class), rs.getObject("surgery_case_id", UUID.class),
+            rs.getString("bed_no"), rs.getObject("dept_id", UUID.class),
+            rs.getObject("campus_id", UUID.class), instantOf(rs, "admitted_at"),
+            instantOf(rs, "discharged_at"), rs.getString("destination"), rs.getString("status"),
+            rs.getString("signed_by"), instantOf(rs, "signed_at"), rs.getString("created_by"),
+            rs.getLong("version"), instantOf(rs, "created_at"));
+
+    private static final RowMapper<PacuObservation> PACU_OBSERVATION_MAPPER =
+            (rs, i) -> new PacuObservation(
+                    rs.getObject("id", UUID.class), rs.getObject("stay_id", UUID.class),
+                    instantOf(rs, "recorded_at"), rs.getInt("activity"), rs.getInt("respiration"),
+                    rs.getInt("circulation"), rs.getInt("consciousness"),
+                    rs.getInt("oxygenation"), rs.getInt("total"),
+                    rs.getObject("heart_rate", Integer.class), rs.getObject("sbp", Integer.class),
+                    rs.getObject("dbp", Integer.class), rs.getObject("spo2", Integer.class),
+                    rs.getBigDecimal("temperature"), rs.getString("note"),
+                    instantOf(rs, "created_at"));
+
+    public Optional<PacuStay> findPacuStayByCase(UUID surgeryCaseId) {
+        return jdbc.sql("SELECT * FROM clinical_svc.pacu_stay WHERE surgery_case_id = ?")
+                .param(surgeryCaseId).query(PACU_STAY_MAPPER).optional();
+    }
+
+    public void insertPacuStay(PacuStay s) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pacu_stay
+                            (id, surgery_case_id, bed_no, dept_id, campus_id, admitted_at,
+                             status, created_by, version)
+                        VALUES (:id, :surgeryCaseId, :bedNo, CAST(:deptId AS uuid),
+                                CAST(:campusId AS uuid), CAST(:admittedAt AS timestamptz),
+                                :status, :createdBy, 0)
+                        """)
+                .param("id", s.id()).param("surgeryCaseId", s.surgeryCaseId())
+                .param("bedNo", s.bedNo()).param("deptId", s.deptId())
+                .param("campusId", s.campusId()).param("admittedAt", ts(s.admittedAt()))
+                .param("status", s.status()).param("createdBy", s.createdBy()).update();
+    }
+
+    /** 出室（CAS：仍在室内且未签名）。 */
+    public boolean dischargePacu(UUID id, Instant dischargedAt, String destination,
+                                 long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pacu_stay
+                           SET status = 'OUT', discharged_at = CAST(:dischargedAt AS timestamptz),
+                               destination = :destination, version = version + 1,
+                               updated_at = now()
+                         WHERE id = :id AND status = 'IN_PACU' AND signed_at IS NULL
+                           AND version = :version
+                        """)
+                .param("dischargedAt", ts(dischargedAt)).param("destination", destination)
+                .param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 签名（CAS：已出室且未签名）。 */
+    public boolean signPacu(UUID id, String signedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.pacu_stay
+                           SET signed_by = :signedBy, signed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND status = 'OUT' AND signed_at IS NULL
+                           AND version = :version
+                        """)
+                .param("signedBy", signedBy).param("id", id).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public void insertPacuObservation(PacuObservation o, String createdBy) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.pacu_observation
+                            (id, stay_id, recorded_at, activity, respiration, circulation,
+                             consciousness, oxygenation, total, heart_rate, sbp, dbp, spo2,
+                             temperature, note, created_by)
+                        VALUES (:id, :stayId, CAST(:recordedAt AS timestamptz), :activity,
+                                :respiration, :circulation, :consciousness, :oxygenation, :total,
+                                :heartRate, :sbp, :dbp, :spo2, :temperature, :note, :createdBy)
+                        """)
+                .param("id", o.id()).param("stayId", o.stayId())
+                .param("recordedAt", ts(o.recordedAt())).param("activity", o.activity())
+                .param("respiration", o.respiration()).param("circulation", o.circulation())
+                .param("consciousness", o.consciousness()).param("oxygenation", o.oxygenation())
+                .param("total", o.total()).param("heartRate", o.heartRate())
+                .param("sbp", o.sbp()).param("dbp", o.dbp()).param("spo2", o.spo2())
+                .param("temperature", o.temperature()).param("note", o.note())
+                .param("createdBy", createdBy).update();
+    }
+
+    public List<PacuObservation> listPacuObservations(UUID stayId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.pacu_observation
+                         WHERE stay_id = ? ORDER BY recorded_at
+                        """).param(stayId).query(PACU_OBSERVATION_MAPPER).list();
+    }
+
+    public Optional<PacuObservation> latestPacuObservation(UUID stayId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.pacu_observation
+                         WHERE stay_id = ? ORDER BY recorded_at DESC LIMIT 1
+                        """).param(stayId).query(PACU_OBSERVATION_MAPPER).optional();
+    }
+
+    public long countPacuObservations(UUID stayId) {
+        Long count = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.pacu_observation WHERE stay_id = ?
+                        """).param(stayId).query(Long.class).optional().orElse(0L);
+        return count;
+    }
+
+    /**
+     * 复苏看板：在职停留优先，同状态按入室时间倒序。
+     *
+     * <p>科室/院区在 SQL 层收敛且发生在 {@code LIMIT} 之前（G74 口径）：
+     * 先取 N 行再内存过滤会让不可见行占掉额度，本院区的更早记录被静默截断。
+     * {@code from}/{@code to} 是业务时区换算后的半开区间（G76）。
+     */
+    public List<PacuBoardRow> listPacuBoard(String status, Instant from, Instant to,
+                                            String deptCsv, String campusCsv, int limit) {
+        return jdbc.sql("""
+                        SELECT s.*, c.case_no, c.operation_name, c.visit_id, c.patient_id,
+                               lo.total AS last_total,
+                               COALESCE(oc.cnt, 0) AS observation_count
+                          FROM clinical_svc.pacu_stay s
+                          JOIN clinical_svc.surgery_case c ON c.id = s.surgery_case_id
+                          LEFT JOIN LATERAL (
+                              SELECT o.total FROM clinical_svc.pacu_observation o
+                               WHERE o.stay_id = s.id ORDER BY o.recorded_at DESC LIMIT 1
+                          ) lo ON true
+                          LEFT JOIN LATERAL (
+                              SELECT count(*) AS cnt FROM clinical_svc.pacu_observation o
+                               WHERE o.stay_id = s.id
+                          ) oc ON true
+                         WHERE (CAST(:status AS text) IS NULL
+                                OR s.status = CAST(:status AS text))
+                           AND (CAST(:from AS timestamptz) IS NULL
+                                OR s.admitted_at >= CAST(:from AS timestamptz))
+                           AND (CAST(:to AS timestamptz) IS NULL
+                                OR s.admitted_at < CAST(:to AS timestamptz))
+                           AND (CAST(:deptCsv AS text) = ''
+                                OR s.dept_id = ANY(
+                                    string_to_array(CAST(:deptCsv AS text), ',')::uuid[]))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR s.campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                         ORDER BY CASE s.status WHEN 'IN_PACU' THEN 0 ELSE 1 END,
+                                  s.admitted_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status).param("from", ts(from)).param("to", ts(to))
+                .param("deptCsv", deptCsv == null ? "" : deptCsv)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
+                .param("limit", limit)
+                .query((rs, i) -> new PacuBoardRow(
+                        PACU_STAY_MAPPER.mapRow(rs, i), rs.getString("case_no"),
+                        rs.getString("operation_name"), rs.getObject("visit_id", UUID.class),
+                        rs.getObject("patient_id", UUID.class),
+                        rs.getObject("last_total", Integer.class), rs.getLong("observation_count")))
+                .list();
     }
 
     // ---------------------------------------------------------------- 术前讨论 / 知情同意（V17）

@@ -238,6 +238,58 @@ public final class ClinicalModel {
         public static final String SIGNED = "SIGNED";
     }
 
+    /**
+     * 麻醉复苏（PACU）停留：一台已结束手术一份。
+     *
+     * <p>入室时从就诊固化科室与院区，复苏看板据此在 SQL 层收敛；
+     * 出室后书写签名，签名后整份记录（含观察序列）冻结。
+     */
+    public record PacuStay(UUID id, UUID surgeryCaseId, String bedNo, UUID deptId, UUID campusId,
+                           Instant admittedAt, Instant dischargedAt, String destination,
+                           String status, String signedBy, Instant signedAt, String createdBy,
+                           long version, Instant createdAt) {
+
+        public static final String IN_PACU = "IN_PACU";
+        public static final String OUT = "OUT";
+
+        public static final String DEST_WARD = "WARD";
+        public static final String DEST_ICU = "ICU";
+        public static final String DEST_DISCHARGE = "DISCHARGE";
+
+        public boolean out() {
+            return OUT.equals(status);
+        }
+
+        public boolean signed() {
+            return signedAt != null;
+        }
+    }
+
+    /**
+     * 复苏观察：Aldrete 五项评分 + 生命体征。
+     *
+     * <p>{@code total} 是五项之和（0–10），由服务层计算并落库：
+     * 出室判定与统计报表都直接取这一列，避免各处重复求和算错。
+     */
+    public record PacuObservation(UUID id, UUID stayId, Instant recordedAt, int activity,
+                                  int respiration, int circulation, int consciousness,
+                                  int oxygenation, int total, Integer heartRate, Integer sbp,
+                                  Integer dbp, Integer spo2, BigDecimal temperature, String note,
+                                  Instant createdAt) {
+
+        /** 出室标准：Aldrete ≥ 9 分（临床通行阈值）。 */
+        public static final int DISCHARGE_THRESHOLD = 9;
+
+        public boolean meetsDischargeCriteria() {
+            return total >= DISCHARGE_THRESHOLD;
+        }
+    }
+
+    /** 复苏看板行：停留记录 + 手术摘要 + 最近一次评分与观察次数。 */
+    public record PacuBoardRow(PacuStay stay, String caseNo, String operationName, UUID visitId,
+                               UUID patientId, Integer lastTotal, long observationCount) {
+    }
+
     /** 术前讨论记录（一台手术一份，签署后冻结）。 */
     public record PreopDiscussion(UUID id, UUID surgeryCaseId, Instant discussionAt,
                                   String moderator, String participants, String diagnosisSummary,

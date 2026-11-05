@@ -41,4 +41,24 @@ class ClinicalErrorMappingContractTest {
         assertThat(handler.statusOf(ErrorCode.UPSTREAM_UNAVAILABLE))
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
+
+    @Test
+    @DisplayName("复苏（PACU）码（G80）：不存在→404、状态冲突→409、流程未达→422")
+    void pacuCodesMapToExpectedStatus() {
+        assertThat(handler.statusOf(ErrorCode.PACU_STAY_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.PACU_STAY_EXISTS)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PACU_STAY_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PACU_OBSERVATION_DUPLICATED))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PACU_SELF_SIGN)).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.PACU_CASE_NOT_ELIGIBLE))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.PACU_OBSERVATION_TIME_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.PACU_DISCHARGE_NOT_READY))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.PACU_DESTINATION_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+    }
 }

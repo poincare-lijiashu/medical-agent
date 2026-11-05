@@ -183,6 +183,17 @@ public enum ErrorCode {
     CA_SIGNATURE_EXISTS(44555, "该病历签名行已有 CA 签名，请勿重复签署"),
     CA_REVOKE_REASON_REQUIRED(44556, "撤销 CA 签名必须填写原因"),
 
+    // ---- 麻醉复苏 PACU（44xxx 续，G80）----
+    PACU_STAY_NOT_FOUND(44560, "未找到该手术的复苏记录"),
+    PACU_STAY_EXISTS(44561, "该手术已有复苏记录，请勿重复入室"),
+    PACU_STAY_STATUS_INVALID(44562, "当前复苏状态不允许该操作（已出室或已签名）"),
+    PACU_CASE_NOT_ELIGIBLE(44563, "只有已完成的手术可以进入复苏室"),
+    PACU_OBSERVATION_TIME_INVALID(44564, "复苏时间不合法（入室早于手术结束、或观察/出室时间早于入室）"),
+    PACU_OBSERVATION_DUPLICATED(44565, "该时间点已有复苏观察记录，请调整时间"),
+    PACU_DISCHARGE_NOT_READY(44566, "最近一次 Aldrete 评分未达 9 分，不能出复苏室"),
+    PACU_DESTINATION_INVALID(44567, "出室去向只能是 WARD / ICU / DISCHARGE"),
+    PACU_SELF_SIGN(44568, "复苏记录不能由记录人自己签名，请由另一名医护人员复核"),
+
     // ---- 知情同意书（47xxx 续，G44）----
     CONSENT_NOT_FOUND(47420, "未找到该知情同意书"),
     CONSENT_TEMPLATE_NOT_FOUND(47421, "未找到该同意书模板，或模板未发布"),
