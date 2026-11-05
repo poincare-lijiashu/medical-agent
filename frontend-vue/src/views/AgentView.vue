@@ -247,6 +247,58 @@
         <div v-else-if="sleepReport" class="src" style="padding-top: 6px">本次扫描未发现需要处理的记忆。</div>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-skill-library">
+        <template #header>
+          <div class="card-head">
+            <b>技能库（经验 → 候选技能）</b>
+            <div>
+              <el-button size="small" @click="openExperience">新增经验</el-button>
+              <el-button type="primary" size="small" :loading="libraryBusy" @click="distill">
+                提炼候选
+              </el-button>
+            </div>
+          </div>
+        </template>
+        <div class="src">只接收已审核、已脱敏经验；确定性组合，不调用模型；候选须回放通过才生成草稿，再走四眼审核。</div>
+        <el-table :data="experiences" size="small" style="width: 100%; margin-top: 6px">
+          <el-table-column prop="agentId" label="能力域" width="100" />
+          <el-table-column prop="pattern" label="问题模式" width="220" />
+          <el-table-column prop="summary" label="处置要点" />
+          <el-table-column prop="sourceRef" label="来源" width="160" />
+          <el-table-column prop="createdBy" label="录入人" width="90" />
+        </el-table>
+        <div v-if="!experiences.length" class="src">暂无经验；录入至少两条同能力域、同模式的经验后才能提炼。</div>
+        <el-table v-if="proposals.length" :data="proposals" size="small"
+                  style="width: 100%; margin-top: 10px">
+          <el-table-column prop="name" label="候选技能" width="180" />
+          <el-table-column prop="agentId" label="能力域" width="100" />
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.status === 'ADOPTED' ? 'success' : (row.status === 'REJECTED' ? 'danger' : 'warning')">
+                {{ row.status === 'ADOPTED' ? '已采纳' : (row.status === 'REJECTED' ? '已拒绝' : '待处理') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="回放" width="90">
+            <template #default="{ row }">
+              <el-tag v-if="row.replay" size="small" :type="row.replay.passed ? 'success' : 'danger'">
+                {{ row.replay.passed ? '通过' : '未通过' }}
+              </el-tag>
+              <span v-else class="src">未运行</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="skillCode" label="生成草稿" width="170" />
+          <el-table-column label="操作" width="170">
+            <template #default="{ row }">
+              <template v-if="row.status === 'PROPOSED'">
+                <el-button size="small" type="success" @click="adoptProposal(row)">采纳</el-button>
+                <el-button size="small" type="danger" @click="rejectProposal(row)">拒绝</el-button>
+              </template>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-tools">
         <template #header><b>工具注册表</b></template>
         <el-table :data="tools" size="small" style="width: 100%">
@@ -445,6 +497,44 @@
         </el-table>
       </div>
     </el-dialog>
+
+    <el-dialog v-model="expOn" title="新增技能经验（已脱敏）" width="680px">
+      <div class="skill-form">
+        <label>能力域
+          <el-select v-model="expForm.agentId" size="small" style="width: 100%">
+            <el-option v-for="a in agents" :key="a.id" :label="a.name + '（' + a.id + '）'" :value="a.id" />
+          </el-select>
+        </label>
+        <label>标题<input v-model="expForm.title" class="inp" /></label>
+        <label style="grid-column: 1 / -1">问题模式（同模式 ≥2 条才会被提炼）
+          <input v-model="expForm.pattern" class="inp" placeholder="如：二甲双胍是否一线治疗" />
+        </label>
+        <label style="grid-column: 1 / -1">处置要点
+          <textarea v-model="expForm.summary" class="inp" rows="3" />
+        </label>
+        <label style="grid-column: 1 / -1">禁忌 / 适用边界（每行一条）
+          <textarea v-model="expForm.contraindications" class="inp" rows="2" />
+        </label>
+        <label style="grid-column: 1 / -1">证据引用（每行一条）
+          <textarea v-model="expForm.evidenceRefs" class="inp" rows="2" />
+        </label>
+        <label>来源引用（脱敏）<input v-model="expForm.sourceRef" class="inp" placeholder="如 复核单 R-2026-001" /></label>
+        <label style="grid-column: 1 / -1">工具白名单
+          <el-checkbox-group v-model="expForm.toolAllowlist">
+            <el-checkbox v-for="t in expToolOptions" :key="t.name" :label="t.name">{{ t.title }}</el-checkbox>
+          </el-checkbox-group>
+        </label>
+        <label style="grid-column: 1 / -1">
+          <el-checkbox v-model="expForm.deidentified">我确认该经验已脱敏（不含手机号/身份证/邮箱）</el-checkbox>
+        </label>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="expOn = false">取消</el-button>
+        <el-button type="primary" size="small" :loading="expBusy" @click="createExperience">
+          录入经验
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -500,6 +590,12 @@ const loopBot = ref(null)
 const loopQuestion = ref('')
 const loopResult = ref(null)
 const loopBusy = ref(false)
+const experiences = ref([])
+const proposals = ref([])
+const libraryBusy = ref(false)
+const expOn = ref(false)
+const expBusy = ref(false)
+const expForm = ref(emptyExperience())
 
 function emptyBot() {
   return {
@@ -517,6 +613,20 @@ function emptyBot() {
 
 function emptyTeam() {
   return { code: '', name: '', description: '', botCodes: [] }
+}
+
+function emptyExperience() {
+  return {
+    agentId: 'literature',
+    title: '',
+    pattern: '',
+    summary: '',
+    sourceRef: '',
+    deidentified: false,
+    toolAllowlist: [],
+    evidenceRefs: '',
+    contraindications: '',
+  }
 }
 
 function emptySkill() {
@@ -552,6 +662,13 @@ const botToolOptions = computed(() => {
 
 const publishedBots = computed(() => botList.value.filter((b) => b.status === 'PUBLISHED'))
 
+const expToolOptions = computed(() => {
+  const agent = agents.value.find((a) => a.id === expForm.value.agentId)
+  if (!agent) return []
+  const allowed = new Set(agent.tools || [])
+  return tools.value.filter((t) => allowed.has(t.name))
+})
+
 const STATUS_TEXT = {
   DRAFT: '草稿',
   IN_REVIEW: '待审核',
@@ -572,7 +689,7 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp, sl] = await Promise.all([
+  const [f, c, s, b, t, mp, wp, sl, ex, pr] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
@@ -581,6 +698,8 @@ async function loadAll() {
     http.get('/agent/model-policy'),
     http.get('/agent/web-policy'),
     http.get('/agent/sleep-memory/last'),
+    http.get('/agent/skill-experiences'),
+    http.get('/agent/skill-proposals'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -591,6 +710,8 @@ async function loadAll() {
   policy.value = { allowed: mp.data.allowed || [], blocked: mp.data.blocked || [] }
   webPolicy.value = wp.data || { enabled: false, allowedDomains: [] }
   sleepReport.value = (sl.data && sl.data.report) || null
+  experiences.value = (ex.data && ex.data.experiences) || []
+  proposals.value = (pr.data && pr.data.proposals) || []
 }
 
 async function toggle(flag, value) {
@@ -909,6 +1030,76 @@ async function runToolLoop() {
   } finally {
     loopBusy.value = false
   }
+}
+
+// ---------------------------------------------------------------- 技能库
+
+function openExperience() {
+  expForm.value = emptyExperience()
+  expOn.value = true
+}
+
+async function createExperience() {
+  expBusy.value = true
+  try {
+    await http.post('/agent/skill-experiences', {
+      agentId: expForm.value.agentId,
+      title: expForm.value.title.trim(),
+      pattern: expForm.value.pattern.trim(),
+      summary: expForm.value.summary.trim(),
+      sourceRef: expForm.value.sourceRef.trim(),
+      deidentified: expForm.value.deidentified,
+      toolAllowlist: expForm.value.toolAllowlist,
+      evidenceRefs: expForm.value.evidenceRefs.split('\n').map((s) => s.trim()).filter(Boolean),
+      contraindications: expForm.value.contraindications.split('\n').map((s) => s.trim()).filter(Boolean),
+    })
+    expOn.value = false
+    await loadAll()
+    ElMessage.success('经验已录入（仅已脱敏、已审核内容）')
+  } finally {
+    expBusy.value = false
+  }
+}
+
+async function distill() {
+  libraryBusy.value = true
+  try {
+    const r = await http.post('/agent/skill-proposals/distill', {})
+    await loadAll()
+    ElMessage.success(`提炼完成，当前候选 ${(r.data.proposals || []).length} 个`)
+  } finally {
+    libraryBusy.value = false
+  }
+}
+
+async function adoptProposal(row) {
+  try {
+    await ElMessageBox.confirm('先执行回放准入，通过后仅生成 DRAFT 技能卡（仍需四眼审核）。',
+      '采纳候选', { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  const r = await http.post(`/agent/skill-proposals/${row.id}/adopt`)
+  await loadAll()
+  if (r.data.proposal.status === 'ADOPTED') {
+    ElMessage.success(`回放通过，已生成草稿 ${r.data.skill.code}`)
+  } else {
+    ElMessage.warning(`回放未通过，候选已拒绝：${r.data.proposal.decisionNote || ''}`)
+  }
+}
+
+async function rejectProposal(row) {
+  let note = ''
+  try {
+    const r = await ElMessageBox.prompt('请填写拒绝原因', '拒绝候选',
+      { inputValidator: (v) => !!(v && v.trim()) || '必须填写原因' })
+    note = r.value
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/skill-proposals/${row.id}/reject`, { note })
+  await loadAll()
+  ElMessage.success('已拒绝')
 }
 
 function openCard() {

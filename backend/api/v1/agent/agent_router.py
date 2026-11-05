@@ -21,7 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, model_policy, second_opinion, sleep_memory, tool_loop
+from backend.agents import catalog, model_policy, second_opinion, skill_library, sleep_memory
+from backend.agents import tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -113,6 +114,22 @@ class SleepScanReq(BaseModel):
 
 class ToolLoopReq(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
+
+
+class ExperiencePayload(BaseModel):
+    agentId: str = Field(min_length=2, max_length=32)
+    title: str = Field(min_length=2, max_length=80)
+    pattern: str = Field(min_length=4, max_length=200)
+    summary: str = Field(min_length=20, max_length=1000)
+    sourceRef: str = Field(min_length=2, max_length=120)
+    deidentified: bool = False
+    toolAllowlist: list[str] = Field(default_factory=list, max_length=8)
+    evidenceRefs: list[str] = Field(default_factory=list, max_length=10)
+    contraindications: list[str] = Field(default_factory=list, max_length=5)
+
+
+class ProposalRejectReq(BaseModel):
+    note: str = Field(min_length=1, max_length=500)
 
 
 def _base_url(request: Request) -> str:
@@ -539,6 +556,83 @@ async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require
         "divergence": (result.get("divergence") or {}).get("level"),
     })
     return result
+
+
+# ---------------------------------------------------------------- 技能库：经验 → 候选（G92）
+
+def _lib_http(e: skill_library.LibraryError) -> HTTPException:
+    if isinstance(e, skill_library.LibraryNotFound):
+        return HTTPException(404, str(e))
+    if isinstance(e, skill_library.LibraryConflict):
+        return HTTPException(409, str(e))
+    return HTTPException(422, str(e))
+
+
+@router.post("/skill-experiences")
+async def create_skill_experience(req: ExperiencePayload,
+                                  user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = skill_library.create_experience(req.model_dump(),
+                                               user.get("username", "qc"))
+    except skill_library.LibraryError as e:
+        raise _lib_http(e)
+    await _audit_agent(user, "skill_experience_create",
+                       {"agentId": item["agentId"], "pattern": item["pattern"]})
+    return item
+
+
+@router.get("/skill-experiences")
+async def list_skill_experiences(agentId: str | None = None,
+                                 user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        return {"experiences": skill_library.list_experiences(user.get("role", ""), agentId)}
+    except skill_library.LibraryError as e:
+        raise _lib_http(e)
+
+
+@router.post("/skill-proposals/distill")
+async def distill_skill_proposals(user: dict = Depends(require_role("admin", "qc"))):
+    """把同能力域+同模式的 ≥2 条经验提炼为候选技能（不发布、不调用模型）。"""
+    proposals = skill_library.distill(user.get("username", "qc"))
+    await _audit_agent(user, "skill_distill", {"proposals": len(proposals)})
+    return {"proposals": proposals}
+
+
+@router.get("/skill-proposals")
+async def list_skill_proposals(status: str | None = None,
+                               user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        return {"proposals": skill_library.list_proposals(user.get("role", ""), status)}
+    except skill_library.LibraryError as e:
+        raise _lib_http(e)
+
+
+@router.post("/skill-proposals/{proposal_id}/adopt")
+async def adopt_skill_proposal(proposal_id: str, user: dict = Depends(require_role("admin"))):
+    """回放通过才生成 DRAFT 技能卡；仍须 G87 四眼审核后发布。"""
+    try:
+        result = skill_library.adopt(proposal_id, user.get("username", "admin"))
+    except skill_library.LibraryError as e:
+        raise _lib_http(e)
+    await _audit_agent(user, "skill_adopt", {
+        "proposalId": proposal_id,
+        "status": result["proposal"]["status"],
+        "skillCode": result["proposal"].get("skillCode"),
+        "replay": (result["proposal"].get("replay") or {}).get("passed"),
+    })
+    return result
+
+
+@router.post("/skill-proposals/{proposal_id}/reject")
+async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
+                                user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = skill_library.reject(proposal_id, req.note, user.get("username", "qc"))
+    except skill_library.LibraryError as e:
+        raise _lib_http(e)
+    await _audit_agent(user, "skill_proposal_reject",
+                       {"proposalId": proposal_id, "note": req.note})
+    return item
 
 
 # ---------------------------------------------------------------- 有界工具循环（G91）
