@@ -116,9 +116,16 @@
 | §4.3 | 编码更正路径漏检"恰好一个主诊断"，0 主诊断可经四眼审批落库 | 抽 `requireSinglePrimary`：提交编码、**更正申请**、**更正审批**（对存储快照复核）三处同口径；0 或 >1 一律 422 |
 | §6.9 | 停用院区仍可分配给账号；`campusIdsOf` 不看状态，令牌仍带该院区 | `campusIdsOf` JOIN `campus` 且只取 `status='ACTIVE'`；`assignCampuses` 先校验全部院区存在且启用，否则 422 |
 
+### G65 批次已关闭（代码 commit 待提交）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §2.8（§6.1 硬证据部分） | `EmergencyService.register` 走两参重载，院区写死 `DEFAULT_CAMPUS_ID`，东院区急诊患者被登记到主院区（处方/检查/结算清单随之全错） | `register` 接 `DataScope`：先校验分诊科室可见，再以 `scope.campusForWrite()` 落就诊院区；单测断言必须走三参重载且院区来自账号 |
+| §6.1（出院带药部分） | 出院带药 6 个接口无 `DataScope`/guard，列表不过院区 | 列表按就诊院区下推 SQL（`CampusFilters.csv`）；详情/提交/同步/取消先反查所属就诊过 `VisitAccessGuard`（越权与不存在同码）；开立校验 `visitId` 归属 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项共 11 条，按 §7.2 第 1–4 批推进。
+其余 [必须] 项共 10 条，按 §7.2 第 1–4 批推进。§6.1 的剩余部分（`charge`/`charge_receipt`/`emergency_triage`/`transfusion_request`/`nursing_execution` 五张表 `campus_id` 下沉 + 对应列表 SQL）单独排入下一批。
 
 ---
 
