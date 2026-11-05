@@ -21,7 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, model_policy, second_opinion, skills as skill_cards
+from backend.agents import catalog, model_policy, second_opinion, sleep_memory
+from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
 from backend.core import agent_flags, agent_tools, web_sources
@@ -104,6 +105,10 @@ class CollaborateReq(BaseModel):
 class SecondOpinionReq(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     providerIds: list[str] | None = Field(default=None, max_length=2)
+
+
+class SleepScanReq(BaseModel):
+    botCodes: list[str] | None = Field(default=None, max_length=50)
 
 
 def _base_url(request: Request) -> str:
@@ -530,6 +535,25 @@ async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require
         "divergence": (result.get("divergence") or {}).get("level"),
     })
     return result
+
+
+# ---------------------------------------------------------------- 睡眠记忆整理（G90）
+
+@router.post("/sleep-memory/scan")
+async def sleep_memory_scan(req: SleepScanReq, user: dict = Depends(require_role("admin", "qc"))):
+    """只读体检：生成候选建议（过期/重复/近似/跨 Bot 冲突），不自动修改记忆。"""
+    report = await asyncio.to_thread(
+        sleep_memory.scan, req.botCodes, None, user.get("username", "admin"))
+    await _audit_agent(user, "sleep_memory_scan", {
+        "findings": report["summary"]["findings"],
+        "bySeverity": report["summary"]["bySeverity"],
+    })
+    return report
+
+
+@router.get("/sleep-memory/last")
+async def sleep_memory_last(user: dict = Depends(require_role("admin", "qc"))):
+    return {"report": sleep_memory.last_report()}
 
 
 # ---------------------------------------------------------------- A2A（最小互操作）

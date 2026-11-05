@@ -212,6 +212,40 @@
         </div>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-sleep-memory">
+        <template #header>
+          <div class="card-head">
+            <b>睡眠记忆整理（只读建议）</b>
+            <el-button type="primary" size="small" :loading="sleepBusy" @click="runSleepScan">
+              扫描记忆
+            </el-button>
+          </div>
+        </template>
+        <div class="src">只生成候选建议，不自动修改记忆；确认/删除仍在 Bot 记忆面板人工完成。</div>
+        <div v-if="sleepReport" class="policy-row" style="padding-top: 6px">
+          <el-tag size="small">记忆 {{ sleepReport.summary.memories }}</el-tag>
+          <el-tag size="small">Bot {{ sleepReport.summary.bots }}</el-tag>
+          <el-tag size="small" type="warning">建议 {{ sleepReport.summary.findings }}</el-tag>
+          <el-tag v-for="(n, sev) in sleepReport.summary.bySeverity" :key="sev" size="small"
+                  :type="sev === 'high' ? 'danger' : (sev === 'medium' ? 'warning' : 'info')">
+            {{ sev }} {{ n }}
+          </el-tag>
+          <span class="src">{{ sleepReport.generatedAt }}</span>
+        </div>
+        <el-table v-if="sleepReport && sleepReport.findings.length" :data="sleepReport.findings"
+                  size="small" style="width: 100%; margin-top: 6px">
+          <el-table-column prop="severity" label="级别" width="70" />
+          <el-table-column prop="botCode" label="Bot" width="140" />
+          <el-table-column prop="kind" label="类型" width="170" />
+          <el-table-column prop="keys" label="记忆键" width="180">
+            <template #default="{ row }">{{ (row.keys || []).join('、') }}</template>
+          </el-table-column>
+          <el-table-column prop="reason" label="原因" />
+          <el-table-column prop="suggestion" label="建议" width="220" />
+        </el-table>
+        <div v-else-if="sleepReport" class="src" style="padding-top: 6px">本次扫描未发现需要处理的记忆。</div>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-tools">
         <template #header><b>工具注册表</b></template>
         <el-table :data="tools" size="small" style="width: 100%">
@@ -431,6 +465,8 @@ const webPolicy = ref({ enabled: false, allowedDomains: [] })
 const opinionForm = ref({ providerIds: [], question: '' })
 const opinionResult = ref(null)
 const opinionBusy = ref(false)
+const sleepReport = ref(null)
+const sleepBusy = ref(false)
 
 function emptyBot() {
   return {
@@ -503,7 +539,7 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp] = await Promise.all([
+  const [f, c, s, b, t, mp, wp, sl] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
@@ -511,6 +547,7 @@ async function loadAll() {
     http.get('/agent/bot-teams'),
     http.get('/agent/model-policy'),
     http.get('/agent/web-policy'),
+    http.get('/agent/sleep-memory/last'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -520,6 +557,7 @@ async function loadAll() {
   teamList.value = (t.data && t.data.teams) || []
   policy.value = { allowed: mp.data.allowed || [], blocked: mp.data.blocked || [] }
   webPolicy.value = wp.data || { enabled: false, allowedDomains: [] }
+  sleepReport.value = (sl.data && sl.data.report) || null
 }
 
 async function toggle(flag, value) {
@@ -804,6 +842,17 @@ async function runOpinion() {
     opinionResult.value = r.data
   } finally {
     opinionBusy.value = false
+  }
+}
+
+async function runSleepScan() {
+  sleepBusy.value = true
+  try {
+    const r = await http.post('/agent/sleep-memory/scan', {})
+    sleepReport.value = r.data
+    ElMessage.success(`扫描完成，生成 ${r.data.summary.findings} 条建议`)
+  } finally {
+    sleepBusy.value = false
   }
 }
 

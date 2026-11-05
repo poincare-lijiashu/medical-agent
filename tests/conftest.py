@@ -66,13 +66,14 @@ def _isolate_agent_stores(tmp_path, monkeypatch):
     ``medagent_test`` 里残留的行，导致"单跑通过、全量跑冲突"。这里把域存储锁定到
     tmp_path 的 JSON 文件，杜绝跨测试污染。
     """
-    from backend.agents import bot_memory, bot_teams, bots, skills
+    from backend.agents import bot_memory, bot_teams, bots, skills, sleep_memory
     from backend.core import pg_store
 
     monkeypatch.setattr(skills, "SKILLS_FILE", str(tmp_path / "agent_skills.json"))
     monkeypatch.setattr(bots, "BOTS_FILE", str(tmp_path / "agent_bots.json"))
     monkeypatch.setattr(bot_teams, "TEAMS_FILE", str(tmp_path / "bot_teams.json"))
     monkeypatch.setattr(bot_memory, "MEMORY_FILE", str(tmp_path / "bot_memories.json"))
+    monkeypatch.setattr(sleep_memory, "REPORT_FILE", str(tmp_path / "sleep_reports.json"))
 
     def _json_only(json_loader, default):
         return json_loader() if json_loader else default

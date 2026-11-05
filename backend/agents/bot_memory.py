@@ -100,6 +100,22 @@ def _expired(item: dict) -> bool:
         return False  # 非法日期在写入时已拒绝；存量脏值按"不过期"保守处理
 
 
+def is_expired(item: dict, today: date | None = None) -> bool:
+    """公开的过期判定（供睡眠整理复用；today 可注入便于测试）。"""
+    raw = (item.get("expiresAt") or "").strip()
+    if not raw:
+        return False
+    try:
+        return date.fromisoformat(raw) < (today or datetime.now().date())
+    except ValueError:
+        return False
+
+
+def all_memories() -> list[dict]:
+    """全部未删除记忆（含候选），供治理/整理扫描；不对外暴露给普通角色。"""
+    return [i for i in _load() if i.get("status") != "DELETED"]
+
+
 def _validate(payload: dict) -> dict:
     bot_code = str(payload.get("botCode") or "").strip()
     try:
