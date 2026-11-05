@@ -11,7 +11,10 @@ from backend.core.auth import seed_default_users
 from backend.core.medical_audit import AuditLog
 from backend.main import app
 
-NOW = datetime.now(timezone.utc).astimezone()
+
+def _now() -> datetime:
+    """测试执行时取当前时间，避免模块导入与用例执行跨日导致过期判定漂移。"""
+    return datetime.now(timezone.utc).astimezone()
 
 
 def _bot(code: str) -> dict:
@@ -53,10 +56,11 @@ def _kinds(report: dict) -> list[str]:
 
 def test_expired_confirmed_is_flagged():
     _bot("bot-a")
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    now = _now()
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
     _mem("bot-a", "old.rule", "旧的口径", confirm=True, expires=yesterday)
 
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=now)
     assert "EXPIRED_CONFIRMED" in _kinds(report)
     f = next(f for f in report["findings"] if f["kind"] == "EXPIRED_CONFIRMED")
     assert f["severity"] == "medium" and f["keys"] == ["old.rule"]
@@ -64,10 +68,11 @@ def test_expired_confirmed_is_flagged():
 
 def test_stale_candidate_is_flagged():
     _bot("bot-a")
+    now = _now()
     mem = _mem("bot-a", "stale.key", "待确认的口径", confirm=False)
-    _mutate(mem["id"], createdAt=(NOW - timedelta(days=20)).isoformat(timespec="seconds"))
+    _mutate(mem["id"], createdAt=(now - timedelta(days=20)).isoformat(timespec="seconds"))
 
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=now)
     assert "STALE_CANDIDATE" in _kinds(report)
 
 
@@ -76,7 +81,7 @@ def test_duplicate_value_is_flagged():
     _mem("bot-a", "k1", "呼吸科偏好使用院内 COPD 路径")
     _mem("bot-a", "k2", "呼吸科偏好使用院内 COPD 路径")
 
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=_now())
     assert "DUPLICATE_VALUE" in _kinds(report)
     f = next(f for f in report["findings"] if f["kind"] == "DUPLICATE_VALUE")
     assert set(f["keys"]) == {"k1", "k2"}
@@ -87,7 +92,7 @@ def test_near_duplicate_is_flagged():
     _mem("bot-a", "k1", "呼吸科偏好使用院内COPD路径进行急性加重管理")
     _mem("bot-a", "k2", "呼吸科偏好使用院内COPD路径进行急性加重管理v2")
 
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=_now())
     assert "NEAR_DUPLICATE" in _kinds(report)
 
 
@@ -97,7 +102,7 @@ def test_cross_bot_conflict_is_flagged_high():
     _mem("bot-a", "dept.preference", "呼吸科偏好院内路径")
     _mem("bot-b", "dept.preference", "呼吸科偏好门诊随访")
 
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=_now())
     f = next(f for f in report["findings"] if f["kind"] == "CROSS_BOT_CONFLICT")
     assert f["severity"] == "high"
     assert "bot-a" in f["botCode"] and "bot-b" in f["botCode"]
@@ -106,7 +111,7 @@ def test_cross_bot_conflict_is_flagged_high():
 def test_clean_store_has_no_findings():
     _bot("bot-a")
     _mem("bot-a", "one", "唯一且有效的口径")
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=_now())
     assert report["findings"] == []
     assert report["summary"]["memories"] == 1
 
@@ -114,7 +119,7 @@ def test_clean_store_has_no_findings():
 def test_scan_is_read_only_and_persists_report():
     _bot("bot-a")
     mem = _mem("bot-a", "kk", "内容")
-    report = sleep_memory.scan(now=NOW)
+    report = sleep_memory.scan(now=_now())
     after = [m for m in bot_memory.all_memories() if m["id"] == mem["id"]][0]
     assert after["status"] == "CONFIRMED" and after["value"] == "内容"
     assert sleep_memory.last_report()["reportId"] == report["reportId"]
@@ -125,7 +130,7 @@ def test_filter_by_bot_codes():
     _bot("bot-b")
     _mem("bot-a", "k1", "A 的内容")
     _mem("bot-b", "k2", "B 的内容")
-    report = sleep_memory.scan(bot_codes=["bot-a"], now=NOW)
+    report = sleep_memory.scan(bot_codes=["bot-a"], now=_now())
     assert report["summary"]["memories"] == 1
     assert {f["botCode"] for f in report["findings"]} in (set(), {"bot-a"})
 

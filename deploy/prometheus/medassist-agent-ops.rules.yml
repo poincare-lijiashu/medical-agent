@@ -1,0 +1,59 @@
+# ============================================================================
+# MedAssist · Agent 运营指标告警规则（G97）
+#
+# 配套接口：GET /api/v1/agent/skill-library/metrics/prometheus
+# 采集需 Bearer 令牌（admin/qc）；指标均为聚合值，不含业务标识或 PHI。
+# 阈值与后端 skill_trends 的运营告警保持一致；此处用于院内 Prometheus
+# 做持续告警，后端告警仍只在管理端展示、不自动处置。
+# ============================================================================
+groups:
+  - name: medassist-agent-ops
+    rules:
+      - alert: MedAssistAgentReplayPassRateLow
+        expr: |
+          medassist_agent_replay_pass_ratio < 0.8
+          and medassist_agent_replay_checks_total >= 3
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "技能候选回放通过率低于 80%"
+          description: "当前 {{ $value }}；请复核候选的问题模式与证据，不要为通过率放宽回放。"
+
+      - alert: MedAssistAgentUnusedPublishedSkills
+        expr: medassist_agent_unused_published_skills >= 3
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "存在未被任何 Bot 引用的生效技能"
+          description: "当前 {{ $value }} 个；请评估绑定到合适 Bot 或停用（先看影响面）。"
+
+      - alert: MedAssistAgentProposalBacklog
+        expr: medassist_agent_proposals_total{status="proposed"} >= 5
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "技能候选积压"
+          description: "当前 {{ $value }} 个待处理候选；请安排审核。"
+
+      - alert: MedAssistAgentExperienceCoverageLow
+        expr: |
+          medassist_agent_experience_coverage_ratio < 0.5
+          and medassist_agent_experiences_total >= 4
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: "经验覆盖率偏低"
+          description: "当前 {{ $value }}；请补充同能力域、同模式的已审核脱敏经验后再提炼。"
+
+      - alert: MedAssistAgentHighOperationalAlerts
+        expr: medassist_agent_operational_alerts{level="high"} > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent 运营存在高危告警"
+          description: "请登录 Agent 控制台查看告警与运营建议，人工处理。"
