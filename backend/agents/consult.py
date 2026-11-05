@@ -161,13 +161,42 @@ def build_messages(agent: catalog.AgentSpec, chosen: list[dict],
     return messages
 
 
-async def _default_runner(provider: dict, messages: list) -> str:
+def _usage_from(obj) -> dict | None:
+    """从模型响应/流式片段提取 provider 真实返回的 token 用量；缺项不估算。"""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        if any(k in obj for k in ("input_tokens", "output_tokens",
+                                  "prompt_tokens", "completion_tokens")):
+            usage = obj
+        else:
+            usage = obj.get("usage_metadata") or obj.get("token_usage")
+    else:
+        usage = getattr(obj, "usage_metadata", None)
+        if not usage:
+            usage = (getattr(obj, "response_metadata", None) or {}).get("token_usage")
+    if not isinstance(usage, dict):
+        return None
+    inp = usage.get("input_tokens", usage.get("prompt_tokens"))
+    out = usage.get("output_tokens", usage.get("completion_tokens"))
+    if inp is None or out is None:
+        return None
+    try:
+        inp, out = int(inp), int(out)
+    except (TypeError, ValueError):
+        return None
+    if inp < 0 or out < 0:
+        return None
+    return {"input_tokens": inp, "output_tokens": out}
+
+
+async def _default_runner(provider: dict, messages: list):
     llm = LLMFactory.get_llm_for_provider(provider)
     resp = await llm.ainvoke(messages)
     content = getattr(resp, "content", resp)
     if isinstance(content, list):
         content = "".join(str(c) for c in content)
-    return str(content or "").strip()
+    return str(content or "").strip(), _usage_from(resp)
 
 
 async def _default_streamer(provider: dict, messages: list):
@@ -177,7 +206,10 @@ async def _default_streamer(provider: dict, messages: list):
         if isinstance(content, list):
             content = "".join(str(c) for c in content)
         if content:
-            yield str(content)
+            yield {"text": str(content)}
+        usage = _usage_from(chunk)
+        if usage:
+            yield {"usage": usage}
 
 
 def _explicit_decision(agent: catalog.AgentSpec) -> dict:
@@ -312,10 +344,15 @@ async def run(question: str, role: str, agent_id: str | None = None,
     agent_key = ctx["agent"].id
     codes = [c["code"] for c in ctx["chosen"]]
     try:
-        answer = await asyncio.wait_for(
+        result = await asyncio.wait_for(
             (runner or _default_runner)(ctx["provider"], ctx["messages"]),
             timeout=AGENT_TIMEOUT_S)
-        text = (answer or "").strip()
+        if isinstance(result, tuple) and len(result) == 2:
+            answer, usage = result
+        else:
+            answer, usage = result, None
+        usage = _usage_from(usage) if usage else None
+        text = str(answer or "").strip()
         if not text:
             raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
     except asyncio.TimeoutError:
@@ -333,7 +370,7 @@ async def run(question: str, role: str, agent_id: str | None = None,
         raise ConsultUnavailable(f"模型调用失败：{type(e).__name__}") from None
 
     consult_metrics.record(agent_key, "sync", "ok",
-                           (time.perf_counter() - started) * 1000, codes)
+                           (time.perf_counter() - started) * 1000, codes, usage)
     return _done_payload(ctx, text, started)
 
 
@@ -380,6 +417,7 @@ async def stream(question: str, role: str, agent_id: str | None = None,
         }
 
         parts: list[str] = []
+        last_usage = None
         agen = (streamer or _default_streamer)(ctx["provider"], ctx["messages"])
         it = agen.__aiter__()
         while True:
@@ -395,7 +433,14 @@ async def stream(question: str, role: str, agent_id: str | None = None,
                 raise ConsultUnavailable(f"模型流式输出失败：{type(e).__name__}") from None
             if time.perf_counter() - started > AGENT_TIMEOUT_S:
                 raise ConsultUnavailable(f"智能体 {agent_key} 执行超时")
-            text = str(chunk or "")
+            if isinstance(chunk, dict):
+                text = str(chunk.get("text") or "")
+                usage = _usage_from(chunk.get("usage"))
+            else:
+                text = str(chunk or "")
+                usage = _usage_from(chunk)
+            if usage:
+                last_usage = usage
             if not text:
                 continue
             parts.append(text)
@@ -406,7 +451,7 @@ async def stream(question: str, role: str, agent_id: str | None = None,
             raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
         # 先计量再发 done：客户端收到 done 后立即断开也不会被误记为 aborted
         consult_metrics.record(agent_key, "stream", "ok",
-                               (time.perf_counter() - started) * 1000, codes)
+                               (time.perf_counter() - started) * 1000, codes, last_usage)
         finished = True
         yield {"type": "done", **_done_payload(ctx, answer, started)}
     except ConsultError:

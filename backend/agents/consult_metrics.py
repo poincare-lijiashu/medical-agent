@@ -7,7 +7,10 @@
 - ``medassist_agent_skill_usage_total{skill}``：成功问答中各生效技能卡的次数
   （同一请求内同编码只计 1 次）；
 - ``medassist_agent_skill_last_used_timestamp_seconds{skill}``：技能最近一次成功
-  使用的时间戳（进程内，重启归零）。
+  使用的时间戳（进程内，重启归零）；
+- ``medassist_agent_consult_tokens_total{kind="input|output"}``：成功问答的 token
+  用量（仅 provider 真实返回 usage 时累计，**绝不估算**）；
+- ``medassist_agent_consult_tokenized_requests_total``：返回了 usage 的成功问答数。
 
 边界：
 - 多实例部署时由 Prometheus 按实例聚合；进程重启计数归零（标准 counter 语义）；
@@ -28,6 +31,8 @@ _requests: dict[tuple[str, str, str], int] = defaultdict(int)
 _durations: dict[str, list] = defaultdict(lambda: [0.0, 0])
 _skill_usage: dict[str, int] = defaultdict(int)
 _skill_last_used: dict[str, float] = {}
+_tokens = {"input": 0, "output": 0}
+_tokenized_requests = 0
 
 
 def _esc(value: str) -> str:
@@ -36,13 +41,29 @@ def _esc(value: str) -> str:
             .replace("\n", "\\n"))
 
 
+def _normalize_tokens(tokens) -> dict | None:
+    """只接受 provider 明确给出的输入/输出 token；缺项或非法一律视为未提供。"""
+    if not isinstance(tokens, dict):
+        return None
+    try:
+        inp = int(tokens.get("input_tokens"))
+        out = int(tokens.get("output_tokens"))
+    except (TypeError, ValueError):
+        return None
+    if inp < 0 or out < 0:
+        return None
+    return {"input_tokens": inp, "output_tokens": out}
+
+
 def record(agent_id: str, channel: str, status: str, duration_ms: float,
-           skill_codes=()) -> None:
-    """记录一次问答结果；``skill_codes`` 只在 status=ok 时累计。"""
+           skill_codes=(), tokens=None) -> None:
+    """记录一次问答结果；``skill_codes`` 与 ``tokens`` 只在 status=ok 时累计。"""
+    global _tokenized_requests
     agent = (agent_id or "unknown")[:64]
     ch = channel if channel in ("sync", "stream") else "sync"
     st = status if status in ("ok", "error", "aborted") else "error"
     ms = max(float(duration_ms or 0), 0.0)
+    usage = _normalize_tokens(tokens) if st == "ok" else None
     with _lock:
         _requests[(agent, ch, st)] += 1
         bucket = _durations[ch]
@@ -56,6 +77,10 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
                     key = OTHER_SKILL
                 _skill_usage[key] += 1
                 _skill_last_used[key] = now
+            if usage is not None:
+                _tokens["input"] += usage["input_tokens"]
+                _tokens["output"] += usage["output_tokens"]
+                _tokenized_requests += 1
 
 
 def snapshot() -> dict:
@@ -66,6 +91,8 @@ def snapshot() -> dict:
                           for c, v in _durations.items()},
             "skills": dict(_skill_usage),
             "skill_last_used": dict(_skill_last_used),
+            "tokens": {"input": _tokens["input"], "output": _tokens["output"],
+                       "requests": _tokenized_requests},
         }
 
 
@@ -108,12 +135,24 @@ def prometheus_text() -> str:
             lines.append(
                 f'medassist_agent_skill_last_used_timestamp_seconds'
                 f'{{skill="{_esc(code)}"}} {ts:.3f}')
+        lines.extend([
+            "# HELP medassist_agent_consult_tokens_total 成功问答的 token 用量（仅 provider 返回时累计）",
+            "# TYPE medassist_agent_consult_tokens_total counter",
+            f'medassist_agent_consult_tokens_total{{kind="input"}} {_tokens["input"]}',
+            f'medassist_agent_consult_tokens_total{{kind="output"}} {_tokens["output"]}',
+            "# HELP medassist_agent_consult_tokenized_requests_total 返回了 token 用量的成功问答数",
+            "# TYPE medassist_agent_consult_tokenized_requests_total counter",
+            f'medassist_agent_consult_tokenized_requests_total {_tokenized_requests}',
+        ])
         return "\n".join(lines) + "\n"
 
 
 def reset() -> None:
+    global _tokenized_requests
     with _lock:
         _requests.clear()
         _durations.clear()
         _skill_usage.clear()
         _skill_last_used.clear()
+        _tokens["input"] = _tokens["output"] = 0
+        _tokenized_requests = 0

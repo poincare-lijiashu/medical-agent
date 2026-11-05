@@ -85,6 +85,28 @@ def test_error_does_not_count_skill_usage():
     assert snap["requests"]["drug|sync|error"] == 1
 
 
+def test_usage_normalization_variants():
+    assert consult._usage_from({"input_tokens": 3, "output_tokens": 4}) == {
+        "input_tokens": 3, "output_tokens": 4}
+    assert consult._usage_from({"prompt_tokens": 5, "completion_tokens": 6}) == {
+        "input_tokens": 5, "output_tokens": 6}
+    assert consult._usage_from({"input_tokens": 1}) is None
+    assert consult._usage_from({"input_tokens": -1, "output_tokens": 2}) is None
+    assert consult._usage_from({"input_tokens": "x", "output_tokens": 2}) is None
+    assert consult._usage_from("not-a-usage") is None
+
+    class _Resp:
+        usage_metadata = {"input_tokens": 7, "output_tokens": 8}
+
+    assert consult._usage_from(_Resp()) == {"input_tokens": 7, "output_tokens": 8}
+
+    class _Resp2:
+        usage_metadata = None
+        response_metadata = {"token_usage": {"prompt_tokens": 9, "completion_tokens": 10}}
+
+    assert consult._usage_from(_Resp2()) == {"input_tokens": 9, "output_tokens": 10}
+
+
 def test_label_escaping():
     consult_metrics.record('a"b\\c\nd', "sync", "ok", 1.0)
     text = consult_metrics.prometheus_text()
@@ -131,9 +153,51 @@ def test_run_ok_records_request_and_skill(monkeypatch):
     assert snap["skills"]["drug-check"] == 1
 
 
-def test_run_invalid_records_error(monkeypatch):
+def test_run_records_tokens_when_reported(monkeypatch):
     _provider(monkeypatch)
+    _publish()
 
+    async def runner(provider, messages):
+        return "建议监测 INR。", {"input_tokens": 12, "output_tokens": 8}
+
+    asyncio.run(consult.run("华法林和阿司匹林有相互作用吗", "doctor", runner=runner))
+    snap = consult_metrics.snapshot()
+    assert snap["tokens"] == {"input": 12, "output": 8, "requests": 1}
+    text = consult_metrics.prometheus_text()
+    assert 'medassist_agent_consult_tokens_total{kind="input"} 12' in text
+    assert 'medassist_agent_consult_tokens_total{kind="output"} 8' in text
+    assert "medassist_agent_consult_tokenized_requests_total 1" in text
+
+
+def test_run_without_usage_does_not_estimate(monkeypatch):
+    _provider(monkeypatch)
+    _publish()
+
+    async def runner(provider, messages):
+        return "建议监测 INR。"
+
+    asyncio.run(consult.run("华法林和阿司匹林有相互作用吗", "doctor", runner=runner))
+    snap = consult_metrics.snapshot()
+    assert snap["tokens"] == {"input": 0, "output": 0, "requests": 0}
+
+
+def test_stream_records_tokens_from_usage_chunk(monkeypatch):
+    _provider(monkeypatch)
+    _publish()
+
+    async def streamer(provider, messages):
+        yield {"text": "建议先"}
+        yield {"usage": {"input_tokens": 20, "output_tokens": 10}}
+        yield {"text": "监测 INR。"}
+
+    events = asyncio.run(_collect(consult.stream(
+        "华法林和阿司匹林有相互作用吗", "doctor", streamer=streamer)))
+    assert events[-1]["type"] == "done"
+    snap = consult_metrics.snapshot()
+    assert snap["tokens"] == {"input": 20, "output": 10, "requests": 1}
+
+
+def test_run_invalid_records_error(monkeypatch):
     with pytest.raises(consult.ConsultInvalid):
         asyncio.run(consult.run("x", "doctor"))
     snap = consult_metrics.snapshot()

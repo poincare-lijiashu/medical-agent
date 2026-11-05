@@ -90,7 +90,8 @@ def check_prometheus(text: str) -> list[tuple[str, bool, str]]:
                 "medassist_agent_unused_published_skills",
                 "medassist_agent_operational_alerts",
                 "medassist_agent_consult_requests_total",
-                "medassist_agent_skill_usage_total")
+                "medassist_agent_skill_usage_total",
+                "medassist_agent_consult_tokens_total")
     missing = [m for m in required if m not in text]
     return [("metrics.prometheus", not missing,
              "missing=" + ",".join(missing) if missing else "required metrics present")]

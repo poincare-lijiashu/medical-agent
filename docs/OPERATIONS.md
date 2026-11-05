@@ -53,6 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   - `medassist_agent_consult_duration_ms_sum|count{channel}`
   - `medassist_agent_skill_usage_total{skill}`（仅成功问答累计）
   - `medassist_agent_skill_last_used_timestamp_seconds{skill}`（进程内最近使用时间）
+  - `medassist_agent_consult_tokens_total{kind="input|output"}` 与 `medassist_agent_consult_tokenized_requests_total`（仅 provider 真实返回 usage 时累计，不估算）
   - `/metrics`（admin）与 `/api/v1/agent/skill-library/metrics/prometheus`（admin/qc）均导出；告警规则见 `deploy/prometheus/medassist-agent-ops.rules.yml`。
   - 页面看板：`GET /api/v1/agent/skill-library/usage`（admin/qc，Agent 控制台「技能使用率」卡片）。
 

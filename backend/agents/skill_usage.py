@@ -104,6 +104,13 @@ def report() -> dict:
                 for ch, v in durations.items()
             },
         },
+        "tokens": {
+            "input": snap["tokens"]["input"],
+            "output": snap["tokens"]["output"],
+            "total": snap["tokens"]["input"] + snap["tokens"]["output"],
+            "tokenizedRequests": snap["tokens"]["requests"],
+            "coverageRatio": _ratio(snap["tokens"]["requests"], ok_total),
+        },
         "skills": {
             "published": published_count,
             "used": len(used_published),

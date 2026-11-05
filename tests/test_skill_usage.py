@@ -78,7 +78,8 @@ def test_used_but_not_published_is_separate():
 
 
 def test_request_and_duration_aggregation():
-    consult_metrics.record("drug", "sync", "ok", 10.0)
+    consult_metrics.record("drug", "sync", "ok", 10.0,
+                           tokens={"input_tokens": 10, "output_tokens": 5})
     consult_metrics.record("drug", "sync", "error", 30.0)
     consult_metrics.record("literature", "stream", "ok", 50.0)
     consult_metrics.record("literature", "stream", "aborted", 70.0)
@@ -98,6 +99,8 @@ def test_request_and_duration_aggregation():
     assert r["duration"]["avgMs"] == 40.0
     assert r["duration"]["byChannel"]["sync"] == {"avgMs": 20.0, "count": 2}
     assert r["duration"]["byChannel"]["stream"] == {"avgMs": 60.0, "count": 2}
+    assert r["tokens"] == {"input": 10, "output": 5, "total": 15,
+                           "tokenizedRequests": 1, "coverageRatio": 0.5}
 
 
 def _client(monkeypatch, tmp_path):

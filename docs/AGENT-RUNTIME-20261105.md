@@ -1,7 +1,7 @@
-# Agent 运行时路线图与 G86–G103 落地（2026-11-05）
+# Agent 运行时路线图与 G86–G104 落地（2026-11-05）
 
 > 定位：面向临床辅助决策的**可审计、可回退、人在环**智能体系统。非医疗器械，所有输出须执业人员复核。
-> 本文回答三件事：① 2026 年哪些 agent 技术真正成熟；② 本平台加什么、不加什么、为什么；③ G86–G103 已交付什么、如何验证、后续怎么走。
+> 本文回答三件事：① 2026 年哪些 agent 技术真正成熟；② 本平台加什么、不加什么、为什么；③ G86–G104 已交付什么、如何验证、后续怎么走。
 
 ---
 
@@ -86,12 +86,46 @@
 | **G101** | 多轮上下文 + SSE 流式 | `/agent/consult` 支持 history（≤6 条/单条 2000 字/合计 6000 字，服务端不落库）；新增 `/agent/consult/stream`（meta→delta*→done/error）；追问未命中专科时沿用上一轮能力域；前端逐段渲染、停止生成、流式失败回落非流式 | 13 项新单测；真实浏览器两轮问答 SSE 200、historyTurns=2、追问仍为药物助手；全量测试通过 |
 | **G102** | 问答计量接入 Prometheus | 进程内计量：请求数（agent/channel/status）、耗时 sum/count、技能使用次数；`/metrics` 与 Agent Prometheus 端点同时导出；新增错误率与中止告警规则 | 12 项新单测；实跑问答后 `/metrics` 出现 `consult_requests_total{agent="drug",...} 1`；全量测试通过 |
 | **G103** | 技能使用率看板 | `GET /agent/skill-library/usage`：问答成功率/错误率/中止率/平均耗时、已发布技能使用率、未使用与已停用仍被计量的技能、最近使用时间；Agent 控制台新增看板卡片（含进度条与明细表） | 5 项新单测；真实浏览器看板显示问答 1 / 成功 100% / 平均 6175.3ms，刷新一致；全量测试通过 |
+| **G104** | Token 用量计量 | 从 provider 真实返回的 `usage_metadata`/`token_usage` 提取输入/输出 token（同步与流式），绝不估算；新增 `consult_tokens_total{kind}` 与 `tokenized_requests_total`；看板显示 Token 与“请求有用量”占比 | 4 项新单测；真实 DeepSeek 同步+流式问答计量 230/1067 token、覆盖 100%；浏览器看板显示一致；全量测试通过 |
 
 ---
 
-## 4. G86–G103 已交付（实现细节）
+## 4. G86–G104 已交付（实现细节）
 
-### 4.21 G103 技能使用率看板（本批）
+### 4.22 G104 Token 用量计量（本批）
+
+**为什么加**：G102/G103 只有请求数与耗时，看不到模型消耗。本批补 token 计量，但**只采信 provider 真实返回的 usage**：没有就显示"未提供"，绝不按字数估算。
+
+**实现**
+| 文件 | 职责 |
+|---|---|
+| `backend/agents/consult.py` | `_usage_from` 兼容 `usage_metadata`（input/output）与 `response_metadata.token_usage`（prompt/completion）；缺项/负数/非数字一律视为未提供；同步 runner 可返回 `(text, usage)`；流式逐个 chunk 捕获 usage |
+| `backend/agents/consult_metrics.py` | `record(..., tokens=...)` 仅在成功时累计；新增 `medassist_agent_consult_tokens_total{kind="input|output"}` 与 `medassist_agent_consult_tokenized_requests_total` |
+| `backend/agents/skill_usage.py` | 看板 `tokens`：输入、输出、合计、返回用量的请求数、覆盖率 |
+| `frontend-vue/src/views/AgentView.vue` | 看板新增 Token 标签与“请求有用量”占比；无 usage 时明确显示"未提供 token 用量" |
+| `scripts/agent_go_live_check.py` | 上线自检新增 token 指标校验 |
+| `tests/test_consult_metrics.py` / `test_skill_usage.py` | 4 项：usage 归一化变体、同步计量、无 usage 不估算、流式 usage chunk 计量；看板 token 口径 |
+
+**规则**
+- 只有 status=ok 且 provider 明确返回 usage 才累计；失败/中止不计；
+- 输入/输出必须同时存在且为非负整数，否则整条视为未提供，不补 0；
+- 流式 usage 可能出现在任意 chunk（实测 DeepSeek 在末尾前的某个 chunk），取最后一次出现的值；
+- 仍不计算费用：没有院内价格表就不做金额换算，避免假成本。
+
+**验证**
+- 全量 pytest：**988 passed / 11 skipped**（G104 新增 4 项）。
+- 真实 DeepSeek（deepseek-v4-flash）实跑：同步 1 次 + 流式 1 次，`/metrics` 得到
+  `consult_tokens_total{kind="input"} 230`、`{kind="output"} 1067`、
+  `consult_tokenized_requests_total 2`；看板显示“Token 入 230 · 出 1067（100.0% 请求有用量）”。
+- 同一环境下未返回 usage 的 provider 会显示"未提供 token 用量"，不会出现估算值。
+
+**残留边界**
+- 部分网关/模型不返回 usage（尤其流式未开启 include_usage），此时只有覆盖率下降，没有估算；
+- 不含缓存命中 token 的单独计费口径（只取输入/输出总量）；
+- 不做金额换算与预算告警；
+- 进程重启归零，跨重启需 Prometheus 保留。
+
+### 4.21 G103 技能使用率看板（上一批）
 
 **为什么加**：G102 有了计量，但只有 Prometheus 文本，运营看不出"哪些已发布技能真的被用、哪些一直空转"。本批把计量与当前技能卡对齐，在 Agent 控制台提供可直接阅读的看板，并补"最近使用时间"。
 
@@ -118,7 +152,7 @@
 - 本机当前没有已发布技能卡，因此看板明细为空态并明确提示；有已发布技能后自动出现行。
 
 **残留边界**
-- 仍不统计 token 与成本；
+- 仍不统计费用；token 用量见 G104（仅 provider 返回时累计）；
 - 无时间窗口筛选（只反映进程生命周期），跨天趋势仍需快照/Prometheus；
 - "最近使用"是进程内时间戳，重启后清空；
 - 使用率不区分技能使用深度（只计是否被引用，不计引用了几条证据或几次工具调用）。
@@ -154,7 +188,7 @@
 - 并发用例：8 线程 × 100 次写入，请求数与技能数均精确为 800。
 
 **残留边界**
-- 不统计 token 用量与成本（provider 返回口径不一，强行估算会失真）；
+- 不做金额与配额；token 用量由 G104 补（仅 provider 返回时累计，不估算）；
 - 进程重启计数归零，跨重启趋势依赖 Prometheus 侧保留；
 - aborted 无法区分"用户主动停止"与"网络断开"，只作为提示信号；
 - 计量为进程内，多 worker 需在 Prometheus 侧按实例聚合，不能把单实例值当全局值。
@@ -186,7 +220,7 @@
 **残留边界**
 - 会话仅存在于浏览器内存（KeepAlive 内），刷新/换设备即丢；未做服务端会话、跨端同步与导出；
 - 历史按"条数/字数"截断，不做摘要压缩，极长对话会丢失更早上下文；
-- 未做 token 级计费/配额控制；G102 已补请求/耗时/技能使用计量，仍未统计 token；流式失败回落非流式会再消耗一次模型调用；
+- 未做 token 级配额控制；G102 已补请求/耗时/技能计量、G104 补 token 用量（仅 provider 返回时），仍未做配额；流式失败回落非流式会再消耗一次模型调用；
 - 追问沿用仅看上一轮用户句，不看更早轮次，也不是模型级意图追踪。
 
 ### 4.18 G100 医生端统一问答页面（上一批）
@@ -470,7 +504,7 @@
 ### 4.3 验证
 
 - 新增 `tests/test_agent_control_plane.py` **30 项**：目录/Card 结构、路由确定性、多智能体开关、工具校验与真实执行、开关默认值/白名单、API 鉴权、A2A `message/send` 与错误码。
-- 全量 pytest：**984 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12 / G103 5）。
+- 全量 pytest：**988 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12 / G103 5 / G104 4）。
 - 边界反证：联网搜索默认拒绝出网；未配置 provider 时工具返回"未启用"；关闭 A2A 后标准发现入口 404；`agent_multi_agent` 关闭时候选仅主责、跳数 1。
 
 ### 4.4 残留边界（明确不做假）

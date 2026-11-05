@@ -400,6 +400,13 @@
               中止 {{ pct(usage.requests.abortedRate) }}
             </el-tag>
             <el-tag size="small">平均耗时 {{ usage.duration.avgMs }}ms</el-tag>
+            <el-tag v-if="usage.tokens && usage.tokens.total > 0" size="small">
+              Token 入 {{ usage.tokens.input }} · 出 {{ usage.tokens.output }}
+              （{{ pct(usage.tokens.coverageRatio) }} 请求有用量）
+            </el-tag>
+            <el-tag v-else-if="usage.requests.ok > 0" size="small" type="info">
+              未提供 token 用量
+            </el-tag>
             <el-tag size="small">已发布 {{ usage.skills.published }} · 已使用 {{ usage.skills.used }}</el-tag>
             <el-tag size="small" :type="usage.skills.usageRatio >= 0.5 ? 'success' : 'warning'">
               使用率 {{ pct(usage.skills.usageRatio) }}
