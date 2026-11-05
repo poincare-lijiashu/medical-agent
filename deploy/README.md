@@ -317,7 +317,8 @@ kubectl -n medassist-prod logs job/medassist-medassist-platform-migrate-auth-r<N
 | `*.autoscaling` / `*.podDisruptionBudget` | HPA 与 PDB（在线业务默认 2 副本起） |
 | `aiCore.models/data.existingClaim` | AI 中台 PVC（`create=true` 仅本地自验） |
 | `networkPolicy.enabled` | 入站隔离（生产 true） |
-| `serviceMonitor.enabled` | Prometheus Operator 抓取 `/actuator/prometheus` |
+| `serviceMonitor.enabled` | Prometheus Operator 抓取 Java `/actuator/prometheus` |
+| `serviceMonitor.aiCore.*` | 抓取 AI 中台 `/metrics`（Bearer Secret；先建 Secret 再开启） |
 | `ingress.*` | 入口域名、TLS、SSE 超时/体积注解 |
 
 ---
@@ -605,7 +606,9 @@ Loki 的 `container` 标签已出现 `medagent_pg` / `medagent_nacos` / `medagen
 - **AI 中台单副本约束**：审计/复核队列/知识库任务仍落 `/app/data` JSON，多副本会互相覆盖；
   扩容前先迁 PG/Redis，再换共享存储并开 PDB（`values-prod.yaml` 已注记）。
 - **Argo CD 仓库地址为占位**：落地时替换并配置仓库凭据（见 §5.1）
-- **AI 中台 /metrics 未纳入抓取**：需管理员令牌（防止路由分布外泄），P1 改为独立内网指标端点
+- **AI 中台 /metrics 抓取**：G105 起支持抓取专用 `METRICS_TOKEN`（未配置时仍只允许 admin 登录态）。
+  Helm 用 `serviceMonitor.aiCore`（Bearer Secret，需先建 Secret 再开启）；本地用
+  `deploy/observability` 的 Prometheus + `metrics-token` 文件。
 - **Nacos 单机形态**：compose 生产叠加层是单机 + 外部 MySQL；HA 需 3 节点集群
 - **迁移只前进**：回滚应用版本前需确认表结构兼容（§5.3）
 - **GPU 推理**：`aiCore.env.EMBED_DEVICE=cuda` + nodeSelector/tolerations 按院区 GPU 节点配置

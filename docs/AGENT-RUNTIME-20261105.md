@@ -1,7 +1,7 @@
-# Agent 运行时路线图与 G86–G104 落地（2026-11-05）
+# Agent 运行时路线图与 G86–G105 落地（2026-11-05）
 
 > 定位：面向临床辅助决策的**可审计、可回退、人在环**智能体系统。非医疗器械，所有输出须执业人员复核。
-> 本文回答三件事：① 2026 年哪些 agent 技术真正成熟；② 本平台加什么、不加什么、为什么；③ G86–G104 已交付什么、如何验证、后续怎么走。
+> 本文回答三件事：① 2026 年哪些 agent 技术真正成熟；② 本平台加什么、不加什么、为什么；③ G86–G105 已交付什么、如何验证、后续怎么走。
 
 ---
 
@@ -87,12 +87,49 @@
 | **G102** | 问答计量接入 Prometheus | 进程内计量：请求数（agent/channel/status）、耗时 sum/count、技能使用次数；`/metrics` 与 Agent Prometheus 端点同时导出；新增错误率与中止告警规则 | 12 项新单测；实跑问答后 `/metrics` 出现 `consult_requests_total{agent="drug",...} 1`；全量测试通过 |
 | **G103** | 技能使用率看板 | `GET /agent/skill-library/usage`：问答成功率/错误率/中止率/平均耗时、已发布技能使用率、未使用与已停用仍被计量的技能、最近使用时间；Agent 控制台新增看板卡片（含进度条与明细表） | 5 项新单测；真实浏览器看板显示问答 1 / 成功 100% / 平均 6175.3ms，刷新一致；全量测试通过 |
 | **G104** | Token 用量计量 | 从 provider 真实返回的 `usage_metadata`/`token_usage` 提取输入/输出 token（同步与流式），绝不估算；新增 `consult_tokens_total{kind}` 与 `tokenized_requests_total`；看板显示 Token 与“请求有用量”占比 | 4 项新单测；真实 DeepSeek 同步+流式问答计量 230/1067 token、覆盖 100%；浏览器看板显示一致；全量测试通过 |
+| **G105** | Prometheus 抓取接入 | `/metrics` 支持 `METRICS_TOKEN` 静态令牌（或 admin 登录态）；本地 observability compose 新增 Prometheus 与抓取配置；Helm 新增 ai-core ServiceMonitor（Bearer Secret 注入） | 3 项鉴权单测；promtool 校验配置/7 条规则通过；真实容器抓取 target=up 并查询到 `drug/ok=1`、token 109/509；全量测试通过 |
 
 ---
 
-## 4. G86–G104 已交付（实现细节）
+## 4. G86–G105 已交付（实现细节）
 
-### 4.22 G104 Token 用量计量（本批）
+### 4.23 G105 Prometheus 抓取接入（本批）
+
+**为什么加**：G102/G104 只把指标暴露出来，但 K8s 的 ServiceMonitor 此前明确排除 Python `/metrics`（需要 admin JWT），本地 observability 栈也没有 Prometheus。没有抓取，指标和告警都是"有文件、没数据"。
+
+**实现**
+| 文件 | 职责 |
+|---|---|
+| `backend/config.py` / `.env.example` | 新增 `METRICS_TOKEN`（留空即关闭该通道，fail-closed） |
+| `backend/api/deps.py` | `require_metrics_access`：静态令牌常量时间比较（按字节，非 ASCII fail-closed）或 admin 登录态；`require_user` 抽出 `_user_from_token` 复用 |
+| `backend/main.py` | `/metrics` 改用新依赖；未配置令牌时行为与之前一致（仅 admin） |
+| `deploy/observability/prometheus/prometheus.yml` | 抓取 `host.docker.internal:8001/metrics`，Bearer 令牌来自 `credentials_file`；加载 `deploy/prometheus` 规则 |
+| `deploy/observability/docker-compose.observability.yml` | 新增 Prometheus 服务（仅回环 9090、15 天保留、`host-gateway`、健康检查） |
+| `deploy/helm/.../servicemonitor.yaml` + `deployment-ai-core.yaml` + `values.yaml` | 可选 ai-core ServiceMonitor：`/metrics` + Bearer Secret；同一 Secret 以 `METRICS_TOKEN` 注入容器；默认关闭 |
+| `deploy/observability/prometheus/metrics-token.example` / `.gitignore` | 令牌文件模板；真实令牌与 `.env.local` 均不入库 |
+| `tests/test_metrics_auth.py` | 3 项：无令牌仅 admin、静态令牌可用且错误/越权拒绝、auth 关闭时行为 |
+
+**规则**
+- 静态令牌未配置时通道不存在（不会默认放行）；令牌只用于抓取，不映射真实用户；
+- 比较使用常量时间并按字节处理，异常 header 不会打成 500；
+- 令牌文件要求 UTF-8 无 BOM、无多余空白；K8s 用 Secret，本地用 gitignore 文件；
+- `/metrics` 仍只输出聚合指标，不含问题/回答/患者信息。
+
+**验证**
+- 全量 pytest：**991 passed / 11 skipped**（G105 新增 3 项）。
+- `promtool check config`：配置语法通过、1 个规则文件、7 条规则通过。
+- 真实容器抓取：临时 Prometheus（v2.55.1）+ no-BOM 令牌文件，target `medassist-ai-core HEALTH=up`；
+  发起一次真实问答后查询到 `medassist_agent_consult_requests_total{drug,ok}=1` 与
+  `consult_tokens_total{input}=109`、`{output}=509`。
+- 手工鉴权：正确令牌 200、错误令牌 401、无令牌 401。
+
+**残留边界**
+- 本地 compose 的 Prometheus 未预置 Alertmanager，告警只在 Prometheus UI 可见；送达需另接 Alertmanager；
+- Helm 的 ai-core ServiceMonitor 默认关闭，需先建 Secret 再显式开启（避免已有集群因缺 Secret 启动失败）；
+- 抓取只覆盖 AI 中台与 Java 服务，未包含数据库/向量库等基础设施指标；
+- 静态令牌轮换需要同时更新应用与 Prometheus Secret 并滚动重启。
+
+### 4.22 G104 Token 用量计量（上一批）
 
 **为什么加**：G102/G103 只有请求数与耗时，看不到模型消耗。本批补 token 计量，但**只采信 provider 真实返回的 usage**：没有就显示"未提供"，绝不按字数估算。
 
@@ -504,7 +541,7 @@
 ### 4.3 验证
 
 - 新增 `tests/test_agent_control_plane.py` **30 项**：目录/Card 结构、路由确定性、多智能体开关、工具校验与真实执行、开关默认值/白名单、API 鉴权、A2A `message/send` 与错误码。
-- 全量 pytest：**988 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12 / G103 5 / G104 4）。
+- 全量 pytest：**991 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12 / G103 5 / G104 4 / G105 3）。
 - 边界反证：联网搜索默认拒绝出网；未配置 provider 时工具返回"未启用"；关闭 A2A 后标准发现入口 404；`agent_multi_agent` 关闭时候选仅主责、跳数 1。
 
 ### 4.4 残留边界（明确不做假）

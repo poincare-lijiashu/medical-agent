@@ -678,6 +678,14 @@ serviceMonitor:
   interval: 30s
   scrapeTimeout: 10s
   labels: {}
+  # G105：AI 中台 /metrics 抓取（Prometheus 专用静态令牌，不要求 admin JWT）。
+  # 启用前先创建同 namespace 的 Secret（示例，令牌用随机长串）：
+  #   kubectl -n <ns> create secret generic medassist-metrics \
+  #     --from-literal=metrics-token=$(openssl rand -hex 32)
+  aiCore:
+    enabled: false
+    tokenSecretName: ""
+    tokenSecretKey: metrics-token
 
 # ---- Ingress（仅网关与 AI 中台入口）----
 ingress:

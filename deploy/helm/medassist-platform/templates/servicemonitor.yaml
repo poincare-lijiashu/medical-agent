@@ -1,9 +1,9 @@
 {{- /*
   Prometheus Operator 抓取（可选）。
-  仅选中 Java 服务（gateway/auth/empi/clinical/pharmacy）：/actuator/prometheus 由 micrometer-registry-prometheus
-  提供，已在 platform-common 中作为 runtime 依赖引入。
-  AI 中台的 /metrics 需要管理员令牌（见 backend/main.py），不纳入自动抓取，避免为抓取
-  单独开匿名端点（指标含路由分布，属内部信息）。
+  1) Java 服务（gateway/auth/...）：/actuator/prometheus 由 micrometer 提供；
+  2) AI 中台（ai-core）：/metrics 需 admin JWT 或抓取专用静态令牌（G105）。
+     启用 serviceMonitor.aiCore 前先创建同 namespace 的 Secret，并在
+     aiCore deployment 注入同一个 METRICS_TOKEN（见 deployment-ai-core.yaml）。
 */}}
 {{- if .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
@@ -40,4 +40,37 @@ spec:
           targetLabel: component
         - sourceLabels: ["__meta_kubernetes_pod_label_rollouts_pod_template_hash"]
           targetLabel: rollouts_pod_template_hash
+{{- if and .Values.aiCore.enabled .Values.serviceMonitor.aiCore.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "medassist.fullname" . }}-ai-core
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "monitoring") | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ required "serviceMonitor.aiCore.tokenSecretName 必填（抓取令牌 Secret）" .Values.serviceMonitor.aiCore.tokenSecretName }}
+          key: {{ .Values.serviceMonitor.aiCore.tokenSecretKey }}
+      relabelings:
+        - targetLabel: component
+          replacement: ai-core
+{{- end }}
 {{- end }}

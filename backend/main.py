@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import settings
-from backend.api.deps import require_role
+from backend.api.deps import require_metrics_access
 from backend.core import observability
 from backend.core.logger import get_logger
 from backend.core.medical_audit import set_channel as _audit_set_channel
@@ -265,8 +265,11 @@ async def readyz():
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics(user: dict = Depends(require_role("admin"))):
-    """运维指标仅限管理员读取（暴露内部路由/时延分布，防信息收集）。"""
+async def metrics(user: dict = Depends(require_metrics_access)):
+    """运维指标：admin 登录态或 Prometheus 抓取专用 METRICS_TOKEN。
+
+    指标含内部路由分布，未配置令牌时只允许 admin；静态令牌仅用于抓取。
+    """
     from backend.agents import consult_metrics
     return PlainTextResponse(observability.exposition() + consult_metrics.prometheus_text(),
                              media_type="text/plain; version=0.0.4")

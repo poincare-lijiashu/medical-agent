@@ -79,6 +79,39 @@ services:
       skywalking-oap:
         condition: service_started
 
+  # ---- 指标抓取：Prometheus（G105）----------------------------------------
+  # 抓取 AI 中台 /metrics（Bearer METRICS_TOKEN），加载 deploy/prometheus 告警规则。
+  # 首次使用：
+  #   Copy-Item deploy/observability/prometheus/metrics-token.example `
+  #             deploy/observability/prometheus/metrics-token
+  #   在 .env.local 设置同值 METRICS_TOKEN=<随机长串>，重启 AI 中台。
+  # 仅本机回环暴露 9090；院区访问请走反向代理与鉴权。
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}
+    container_name: medagent_prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/metrics-token:/etc/prometheus/metrics-token:ro
+      - ../../deploy/prometheus:/etc/prometheus/rules:ro
+      - medagent_prometheus:/prometheus
+    extra_hosts:
+      # Linux Docker 访问宿主机；Docker Desktop 原生支持 host.docker.internal
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready | grep -q Ready"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   # ---- 日志采集：Loki + Promtail --------------------------------------------
   # 本地以 Docker API 发现本项目容器并采集 stdout/stderr；
   # K8s 生产环境改用 Promtail/Alloy DaemonSet（见 deploy/README.md「日志采集」）。
@@ -121,3 +154,4 @@ volumes:
   medagent_skywalking_pg:
   medagent_loki:
   medagent_promtail_positions:
+  medagent_prometheus:

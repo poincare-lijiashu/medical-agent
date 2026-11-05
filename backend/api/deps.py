@@ -1,6 +1,7 @@
 """FastAPI 鉴权依赖：校验 Bearer 令牌，返回当前用户。"""
 from __future__ import annotations
 
+import secrets
 import time
 from typing import Optional
 
@@ -67,15 +68,7 @@ def ensure_not_revoked(username: Optional[str], iat: float) -> None:
         raise HTTPException(status_code=401, detail="账号已被停用或凭证已重置，请重新登录")
 
 
-def require_user(
-    request: Request,
-    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> dict:
-    if not settings.auth_enabled:
-        return {"username": "anonymous", "role": "admin", "dept": ""}
-    token = _token_from_request(creds, request)
-    if not token:
-        raise HTTPException(status_code=401, detail="未认证：请先登录 /api/v1/auth/login 获取令牌")
+def _user_from_token(token: str) -> dict:
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="令牌无效或已过期，请重新登录")
@@ -89,6 +82,49 @@ def require_user(
     if not u:  # 撤销表为进程内存态，重启后丢失：回查用户表兜底（fail-closed）
         raise HTTPException(status_code=401, detail="账号不存在或已停用")
     return {"username": sub, "role": payload.get("role"), "dept": u.get("dept", "")}
+
+
+def require_user(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> dict:
+    if not settings.auth_enabled:
+        return {"username": "anonymous", "role": "admin", "dept": ""}
+    token = _token_from_request(creds, request)
+    if not token:
+        raise HTTPException(status_code=401, detail="未认证：请先登录 /api/v1/auth/login 获取令牌")
+    return _user_from_token(token)
+
+
+def _metrics_token_matches(token: str, expected: str) -> bool:
+    """常量时间比较；按字节比较以容忍任意 header 编码，非 ASCII 令牌直接不匹配。"""
+    try:
+        return secrets.compare_digest(str(token).encode("utf-8"),
+                                      str(expected).encode("utf-8"))
+    except (UnicodeEncodeError, TypeError):
+        return False
+
+
+def require_metrics_access(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+) -> dict:
+    """Prometheus 抓取鉴权：静态 METRICS_TOKEN 或 admin 登录态，二者其一。
+
+    静态令牌仅用于抓取，不映射真实用户；未配置时该通道关闭（fail-closed）。
+    """
+    token = _token_from_request(creds, request)
+    expected = (settings.metrics_token or "").strip()
+    if expected and token and _metrics_token_matches(token.strip(), expected):
+        return {"username": "prometheus", "role": "metrics", "dept": ""}
+    if not settings.auth_enabled:
+        return {"username": "anonymous", "role": "admin", "dept": ""}
+    if not token:
+        raise HTTPException(status_code=401, detail="未认证：需 admin 登录或有效抓取令牌")
+    user = _user_from_token(token)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="权限不足：需 admin 或有效抓取令牌")
+    return user
 
 
 def require_role(*roles: str):

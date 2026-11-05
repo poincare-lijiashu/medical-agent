@@ -1,0 +1,35 @@
+# ============================================================================
+# 本地/院区自建 Prometheus 抓取配置（G105）
+#
+# 抓取目标：AI 中台 http://host.docker.internal:8001/metrics
+# 鉴权：Bearer + METRICS_TOKEN（与后端 .env.local 的 METRICS_TOKEN 一致）；
+#       令牌文件不进行版本库：先复制 metrics-token.example 为 metrics-token。
+#       令牌文件必须是 UTF-8（无 BOM）、无多余空白/换行（Windows 建议：
+#       [IO.File]::WriteAllText($path, $token, (New-Object Text.UTF8Encoding($false)))）。
+#
+# 告警规则：/etc/prometheus/rules/*.yml 来自 deploy/prometheus/（含 G97/G102 规则）。
+# ============================================================================
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: medassist-local
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: medassist-ai-core
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics-token
+    static_configs:
+      - targets: ["host.docker.internal:8001"]
+        labels:
+          component: ai-core

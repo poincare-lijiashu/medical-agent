@@ -125,6 +125,14 @@ spec:
                   name: {{ .Values.external.milvus.existingSecret }}
                   key: {{ .Values.external.milvus.secretKey }}
             {{- end }}
+            {{- if .Values.serviceMonitor.aiCore.enabled }}
+            # G105：Prometheus 抓取专用令牌（与 ServiceMonitor authorization 同一 Secret）
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "serviceMonitor.aiCore.tokenSecretName 必填（抓取令牌 Secret）" .Values.serviceMonitor.aiCore.tokenSecretName }}
+                  key: {{ .Values.serviceMonitor.aiCore.tokenSecretKey }}
+            {{- end }}
             {{- if .Values.external.skywalking.enabled }}
             # SkyWalking Python agent 实例名用 Pod 名，便于在 UI 中定位具体副本
             - name: SW_AGENT_INSTANCE_NAME

@@ -131,6 +131,11 @@ class Settings(BaseSettings):
     auth_token_expire_minutes: int = 720
     auth_refresh_expire_minutes: int = 10080
     rate_limit_per_min: int = 60
+    # Prometheus 抓取专用静态令牌（G105）：设置后 /metrics 接受
+    # `Authorization: Bearer <METRICS_TOKEN>`，无需交互式 admin JWT；
+    # 留空则不开放该通道（仍只允许 admin 登录态读取）。生产用随机长串并只挂到
+    # Prometheus ServiceMonitor 的 Secret，不进版本库。
+    metrics_token: str = ""
     auth_enabled: bool = True
     auth_seed_demo: bool = False  # 首次运行是否注入演示账号（doctor01 等）；默认关闭，仅演示环境显式开启
     auth_demo_password: str = ""  # 演示账号统一口令；留空则 seed 时随机生成（仅 dev 演示，生产不 seed）

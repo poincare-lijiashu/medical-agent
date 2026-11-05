@@ -56,6 +56,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   - `medassist_agent_consult_tokens_total{kind="input|output"}` 与 `medassist_agent_consult_tokenized_requests_total`（仅 provider 真实返回 usage 时累计，不估算）
   - `/metrics`（admin）与 `/api/v1/agent/skill-library/metrics/prometheus`（admin/qc）均导出；告警规则见 `deploy/prometheus/medassist-agent-ops.rules.yml`。
   - 页面看板：`GET /api/v1/agent/skill-library/usage`（admin/qc，Agent 控制台「技能使用率」卡片）。
+- Prometheus 抓取（G105）：
+  - 本地/院区：先复制 `deploy/observability/prometheus/metrics-token.example` 为 `metrics-token`（UTF-8 无 BOM、无多余空白），在 `.env.local` 设置同值 `METRICS_TOKEN`；再 `docker compose -f deploy/observability/docker-compose.observability.yml up -d prometheus`（仅本机 9090）。
+  - K8s：Helm 开启 `serviceMonitor.enabled` 与 `serviceMonitor.aiCore.enabled`，先创建同 namespace Secret（键 `metrics-token`），值与应用 `METRICS_TOKEN` 一致；未配置令牌时 `/metrics` 仍只允许 admin。
 
 ## 交付前硬门禁（见计划 Phase 6）
 全量 pytest + `run_eval`（hit_rate≥0.8、引用精确率达标）+ 前端 a11y/截图 + `open-code-review` + `security-scan`；改环境后刷新机器基线（`refresh_baseline.ps1` → `check_docs.ps1` = `CONSISTENCY_OK`）。

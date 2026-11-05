@@ -4,6 +4,8 @@
 .env.local
 *.key
 *.pem
+# G105：Prometheus 抓取令牌（本地生成，不进版本库）
+deploy/observability/prometheus/metrics-token
 
 # 用户隐私数据（密码哈希 / 审计日志含 PHI / 审核队列含病历）
 data/auth/
