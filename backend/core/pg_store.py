@@ -198,7 +198,8 @@ async def _init_impl() -> bool:
                                ("agent_bot_memories", "id"),
                                ("agent_skill_experiences", "id"),
                                ("agent_skill_proposals", "id"),
-                               ("agent_skill_metrics", "id")):
+                               ("agent_skill_metrics", "id"),
+                               ("agent_skill_advices", "id")):
                 await c.execute(
                     f"""CREATE TABLE IF NOT EXISTS {table}(
                         {key} text primary key, data jsonb NOT NULL, status text NOT NULL,
@@ -1230,6 +1231,7 @@ _JSON_LIST_KEYS = {
     "agent_skill_experiences": "id",
     "agent_skill_proposals": "id",
     "agent_skill_metrics": "id",
+    "agent_skill_advices": "id",
 }
 
 

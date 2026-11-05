@@ -278,6 +278,21 @@
                   :type="a.level === 'high' ? 'error' : (a.level === 'medium' ? 'warning' : 'info')"
                   style="margin: 4px 0" show-icon />
         <div v-if="metrics && !activeAlerts.length" class="src">当前无运营告警。</div>
+        <div class="policy-row">
+          <el-button size="small" :loading="adviceBusy" @click="generateAdvices">生成运营建议</el-button>
+          <span class="src">只生成可追溯待办，不自动采纳/停用/补经验。</span>
+        </div>
+        <el-table v-if="advices.length" :data="advices" size="small" style="width: 100%">
+          <el-table-column prop="severity" label="级别" width="70" />
+          <el-table-column prop="title" label="建议" width="260" />
+          <el-table-column prop="suggestedAction" label="建议动作" />
+          <el-table-column label="操作" width="150">
+            <template #default="{ row }">
+              <el-button size="small" type="success" @click="completeAdvice(row)">完成</el-button>
+              <el-button size="small" @click="dismissAdvice(row)">忽略</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
         <el-table :data="experiences" size="small" style="width: 100%; margin-top: 6px">
           <el-table-column prop="agentId" label="能力域" width="100" />
           <el-table-column prop="pattern" label="问题模式" width="220" />
@@ -652,6 +667,8 @@ const impactOn = ref(false)
 const impactData = ref(null)
 const trends = ref(null)
 const activeAlerts = ref([])
+const advices = ref([])
+const adviceBusy = ref(false)
 
 function emptyBot() {
   return {
@@ -745,7 +762,7 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt, tr, al] = await Promise.all([
+  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt, tr, al, ad] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
@@ -759,6 +776,7 @@ async function loadAll() {
     http.get('/agent/skill-library/metrics'),
     http.get('/agent/skill-library/trends?days=30'),
     http.get('/agent/skill-library/alerts'),
+    http.get('/agent/skill-advices?status=OPEN'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -774,12 +792,50 @@ async function loadAll() {
   metrics.value = mt.data || null
   trends.value = tr.data || null
   activeAlerts.value = (al.data && al.data.alerts) || []
+  advices.value = (ad.data && ad.data.advices) || []
 }
 
 async function takeSnapshot() {
   const r = await http.post('/agent/skill-library/snapshot', {})
   await loadAll()
   ElMessage.success(`已记录 ${r.data.date} 指标快照`)
+}
+
+async function generateAdvices() {
+  adviceBusy.value = true
+  try {
+    const r = await http.post('/agent/skill-advices/generate', {})
+    await loadAll()
+    ElMessage.success(`已生成/刷新 ${(r.data.advices || []).length} 条运营建议`)
+  } finally {
+    adviceBusy.value = false
+  }
+}
+
+async function dismissAdvice(row) {
+  let note = ''
+  try {
+    const r = await ElMessageBox.prompt('请填写忽略原因', '忽略运营建议',
+      { inputValidator: (v) => !!(v && v.trim()) || '必须填写原因' })
+    note = r.value
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/skill-advices/${row.id}/dismiss`, { note })
+  await loadAll()
+  ElMessage.success('已忽略')
+}
+
+async function completeAdvice(row) {
+  try {
+    await ElMessageBox.confirm('确认已在对应页面完成该建议？', '完成运营建议',
+      { type: 'warning' })
+  } catch (e) {
+    return
+  }
+  await http.post(`/agent/skill-advices/${row.id}/complete`, {})
+  await loadAll()
+  ElMessage.success('已标记完成')
 }
 
 function pct(rate) {

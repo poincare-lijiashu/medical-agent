@@ -22,8 +22,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, model_policy, second_opinion, skill_library, skill_ops
-from backend.agents import skill_trends, sleep_memory, tool_loop
+from backend.agents import catalog, model_policy, second_opinion, skill_advice, skill_library
+from backend.agents import skill_ops, skill_trends, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -135,6 +135,10 @@ class ProposalRejectReq(BaseModel):
 
 class SnapshotReq(BaseModel):
     date: str | None = Field(default=None, max_length=10)
+
+
+class AdviceNoteReq(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
 
 
 def _base_url(request: Request) -> str:
@@ -675,6 +679,60 @@ async def skill_library_trends(days: int = 30,
 async def skill_library_alerts(user: dict = Depends(require_role("admin", "qc"))):
     """阈值告警：仅提示，不自动处置。"""
     return skill_trends.alerts()
+
+
+# ---------------------------------------------------------------- 运营建议（G95）
+
+def _advice_http(e: skill_advice.AdviceError) -> HTTPException:
+    if isinstance(e, skill_advice.AdviceNotFound):
+        return HTTPException(404, str(e))
+    if isinstance(e, skill_advice.AdviceConflict):
+        return HTTPException(409, str(e))
+    return HTTPException(422, str(e))
+
+
+@router.post("/skill-advices/generate")
+async def generate_skill_advices(user: dict = Depends(require_role("admin", "qc"))):
+    """把告警翻译成待办建议；不修改任何技能/Bot/候选。"""
+    try:
+        items = skill_advice.generate(user.get("username", "qc"))
+    except skill_advice.AdviceError as e:
+        raise _advice_http(e)
+    await _audit_agent(user, "skill_advice_generate", {"advices": len(items)})
+    return {"advices": items}
+
+
+@router.get("/skill-advices")
+async def list_skill_advices(status: str | None = None,
+                             user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        return {"advices": skill_advice.list_advices(user.get("role", ""), status)}
+    except skill_advice.AdviceError as e:
+        raise _advice_http(e)
+
+
+@router.post("/skill-advices/{advice_id}/dismiss")
+async def dismiss_skill_advice(advice_id: str, req: AdviceNoteReq,
+                               user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = skill_advice.dismiss(advice_id, req.note or "", user.get("username", "qc"))
+    except skill_advice.AdviceError as e:
+        raise _advice_http(e)
+    await _audit_agent(user, "skill_advice_dismiss",
+                       {"adviceId": advice_id, "note": item.get("note")})
+    return item
+
+
+@router.post("/skill-advices/{advice_id}/complete")
+async def complete_skill_advice(advice_id: str, req: AdviceNoteReq,
+                                user: dict = Depends(require_role("admin", "qc"))):
+    try:
+        item = skill_advice.complete(advice_id, req.note, user.get("username", "qc"))
+    except skill_advice.AdviceError as e:
+        raise _advice_http(e)
+    await _audit_agent(user, "skill_advice_complete",
+                       {"adviceId": advice_id, "note": item.get("note")})
+    return item
 
 
 @router.get("/skills/{code}/impact")
