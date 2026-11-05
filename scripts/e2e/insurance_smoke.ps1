@@ -574,15 +574,24 @@ Check 'perm.doctor.read' $r.Status 200
 # ---------------------------------------------------------------- 8. duty separation (S-16)
 $r = Invoke-Api 'POST' '/api/v2/auth/users' @{
     username = "cashier$suffix"; password = 'Med@2026'; displayName = 'Window Cashier'
-    roles = @('REGISTRAR')
+    deptIds = @($deptId); roles = @('REGISTRAR')
 } $token
 Check 'user.cashier.create' $r.Status 200
+# G64: an account without any campus is fail-closed (403), so bind the main campus
+$r = Invoke-Api 'PUT' ("/api/v2/auth/users/" + (Res $r).id + "/campuses") @{
+    campusIds = @('a0000000-0000-0000-0000-000000000001')
+} $token
+Check 'user.cashier.campus' $r.Status 200
 
 $r = Invoke-Api 'POST' '/api/v2/auth/users' @{
     username = "yb$suffix"; password = 'Med@2026'; displayName = 'Insurance Officer'
-    roles = @('INSURANCE_OFFICER')
+    deptIds = @($deptId); roles = @('INSURANCE_OFFICER')
 } $token
 Check 'user.officer.create' $r.Status 200
+$r = Invoke-Api 'PUT' ("/api/v2/auth/users/" + (Res $r).id + "/campuses") @{
+    campusIds = @('a0000000-0000-0000-0000-000000000001')
+} $token
+Check 'user.officer.campus' $r.Status 200
 
 $r = Invoke-Api 'POST' '/api/v2/auth/login' @{ username = "cashier$suffix"; password = 'Med@2026' }
 Check 'login.cashier' $r.Status 200

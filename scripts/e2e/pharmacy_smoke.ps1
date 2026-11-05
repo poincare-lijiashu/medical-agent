@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # MedAssist pharmacy smoke test (through the gateway, /api/v2/pharmacy/**).
 #
 # Covers: drug catalog -> batch receiving -> prescription -> review -> FEFO
@@ -6,12 +6,12 @@
 #
 # ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less UTF-8 as ANSI.
 #
-# Prerequisites: auth :8081, empi :8082, pharmacy :8084, gateway :18080
+# Prerequisites: auth :8081, empi :8082, pharmacy :8084, gateway :8080
 # Usage (repo root):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\e2e\pharmacy_smoke.ps1
 # ============================================================================
 param(
-    [string]$BaseUrl = "http://127.0.0.1:18080",
+    [string]$BaseUrl = "http://127.0.0.1:8080",
     [string]$Username = "admin01",
     [string]$Password = "Med@2026"
 )
@@ -155,8 +155,12 @@ CheckAmt 'stock.afterDispense' (Res $r).totalStock ($stockBase + 8)
 
 # ---------------------------------------------------------------- 8. return
 $farItem = $disp.items[1].id
+# returnId is the idempotency key of the return request (required since the
+# pharmacy idempotency work); a fresh id per attempt, otherwise a retry would
+# be treated as a replay of the first return.
 $r = Invoke-Api 'POST' "/api/v2/pharmacy/dispenses/$dispId/returns" @{
     dispenseItemId = $farItem; quantity = 2; reason = 'patient stopped'
+    returnId = [guid]::NewGuid().ToString()
 } $token
 Check 'return.ok' $r.Status 200
 Check 'return.status' (Res $r).dispense.status 'PARTIAL_RETURNED'
@@ -164,8 +168,11 @@ Check 'return.recordCount' (Res $r).returns.Count 1
 
 $r = Invoke-Api 'POST' "/api/v2/pharmacy/dispenses/$dispId/returns" @{
     dispenseItemId = $farItem; quantity = 1; reason = 'over return'
+    returnId = [guid]::NewGuid().ToString()
 } $token
-Check 'return.exceed.409' $r.Status 409
+# over-return is a validation failure (quantity exceeds the dispensed line), not a
+# concurrency conflict, so the service answers 422 by contract.
+Check 'return.exceed.422' $r.Status 422
 
 $r = Invoke-Api 'GET' "/api/v2/pharmacy/drugs/$amoxId" $null $token
 CheckAmt 'stock.afterReturn' (Res $r).totalStock ($stockBase + 10)
