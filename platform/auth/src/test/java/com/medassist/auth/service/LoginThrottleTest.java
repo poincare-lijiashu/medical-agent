@@ -7,21 +7,29 @@ import com.medassist.common.exception.BusinessException;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 登录限速测试（M8：此前完全无测试）。
+ * 登录限速测试（M8；G62 改为原子占位）。
  *
- * <p>关键断言是"两个维度必须分离"：账号维度触发时只锁该账号，
- * IP 维度阈值更高，不能把同出口的其他账号连坐（医院 NAT 场景）。
+ * <p>关键断言：
+ * <ol>
+ *   <li>两个维度必须分离：账号维度触发时只锁该账号，IP 维度阈值更高，
+ *       不能把同出口的其他账号连坐（医院 NAT 场景）；</li>
+ *   <li>判定发生在占位返回的计数上（不是先查后写），并发请求由行锁串行化；</li>
+ *   <li>成功登录退还占位，成功不计入失败次数。</li>
+ * </ol>
  */
 class LoginThrottleTest {
 
@@ -31,61 +39,71 @@ class LoginThrottleTest {
     @Test
     void passesWhenBelowThresholds() {
         TokenRepository tokens = mock(TokenRepository.class);
-        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
-                .thenReturn(4L);
-        when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(29L);
+        when(tokens.claimThrottle(anyString(), any(Duration.class))).thenReturn(4, 29);
 
-        assertThatCode(() -> new LoginThrottle(tokens, PROPS).check("doctor01", "10.0.0.1"))
-                .doesNotThrowAnyException();
+        var reservation = new LoginThrottle(tokens, PROPS).reserve("doctor01", "10.0.0.1");
+
+        assertThat(reservation.active()).isTrue();
+        verify(tokens).claimThrottle(eq("u:doctor01|10.0.0.1"), eq(PROPS.window()));
+        verify(tokens).claimThrottle(eq("i:10.0.0.1"), eq(PROPS.window()));
     }
 
     @Test
-    void accountThresholdReturns429() {
+    void blocksWhenAccountIpBucketExceeded() {
         TokenRepository tokens = mock(TokenRepository.class);
-        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
-                .thenReturn(5L);
-        when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(0L);
+        when(tokens.claimThrottle(anyString(), any(Duration.class))).thenReturn(6);
 
-        assertThatThrownBy(() -> new LoginThrottle(tokens, PROPS).check("doctor01", "10.0.0.1"))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).errorCode())
-                        .isEqualTo(ErrorCode.TOO_MANY_REQUESTS))
-                .hasMessageContaining("5 分钟");
+        assertThatThrownBy(() -> new LoginThrottle(tokens, PROPS).reserve("doctor01", "10.0.0.1"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.TOO_MANY_REQUESTS));
+        // 账号维度已超限：不再占用 IP 桶
+        verify(tokens, never()).claimThrottle(eq("i:10.0.0.1"), any(Duration.class));
     }
 
     @Test
-    void ipThresholdIsHigherThanAccountThreshold() {
+    void blocksWhenIpBucketExceeded() {
         TokenRepository tokens = mock(TokenRepository.class);
-        // 账号未超限，但同 IP 已达 30 次
-        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
-                .thenReturn(0L);
-        when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(30L);
+        when(tokens.claimThrottle(eq("u:nurse99|10.0.0.1"), any(Duration.class))).thenReturn(1);
+        when(tokens.claimThrottle(eq("i:10.0.0.1"), any(Duration.class))).thenReturn(31);
 
-        assertThatThrownBy(() -> new LoginThrottle(tokens, PROPS).check("nurse99", "10.0.0.1"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("网络");
+        assertThatThrownBy(() -> new LoginThrottle(tokens, PROPS).reserve("nurse99", "10.0.0.1"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.errorCode()).isEqualTo(ErrorCode.TOO_MANY_REQUESTS));
     }
 
     @Test
-    void attackerFromAnotherIpCannotLockVictimAccount() {
-        // P1-S3：账号维度按"账号 + IP"计数；攻击者在别的 IP 上把账号打满，
-        // 不应影响受害者自己 IP 的登录（否则就是零成本账号锁定攻击）。
+    void usernameBucketIsCaseInsensitive() {
         TokenRepository tokens = mock(TokenRepository.class);
-        when(tokens.countRecentFailuresForUserAndIp(anyString(), anyString(), any(Instant.class)))
-                .thenReturn(0L);
-        when(tokens.countRecentFailuresForIp(anyString(), any(Instant.class))).thenReturn(0L);
+        when(tokens.claimThrottle(anyString(), any(Duration.class))).thenReturn(1, 1);
 
-        assertThatCode(() -> new LoginThrottle(tokens, PROPS).check("doctor01", "10.9.9.9"))
-                .doesNotThrowAnyException();
+        new LoginThrottle(tokens, PROPS).reserve("Doctor01", "10.9.9.9");
+
+        verify(tokens).claimThrottle(eq("u:doctor01|10.9.9.9"), any(Duration.class));
     }
 
     @Test
-    void disabledSwitchSkipsAllChecks() {
+    void refundOnlyForActiveReservation() {
+        TokenRepository tokens = mock(TokenRepository.class);
+        when(tokens.claimThrottle(anyString(), any(Duration.class))).thenReturn(1, 1);
+        LoginThrottle throttle = new LoginThrottle(tokens, PROPS);
+
+        var reservation = throttle.reserve("doctor01", "10.0.0.1");
+        throttle.refund(reservation);
+
+        verify(tokens).refundThrottle("u:doctor01|10.0.0.1");
+        verify(tokens).refundThrottle("i:10.0.0.1");
+    }
+
+    @Test
+    void disabledThrottleSkipsStorage() {
         TokenRepository tokens = mock(TokenRepository.class);
         LoginThrottleProperties disabled =
                 new LoginThrottleProperties(false, 5, 30, Duration.ofMinutes(5));
+        LoginThrottle throttle = new LoginThrottle(tokens, disabled);
 
-        assertThatCode(() -> new LoginThrottle(tokens, disabled).check("doctor01", "10.0.0.1"))
+        assertThatCode(() -> throttle.reserve("doctor01", "10.0.0.1"))
                 .doesNotThrowAnyException();
+        throttle.refund(LoginThrottle.Reservation.DISABLED);
+        verifyNoInteractions(tokens);
     }
 }

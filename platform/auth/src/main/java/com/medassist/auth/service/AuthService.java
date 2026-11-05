@@ -86,8 +86,10 @@ public class AuthService {
      */
     public LoginResp login(LoginReq req, String clientIp, String userAgent) {
         String username = req.username().trim();
+        LoginThrottle.Reservation reservation;
         try {
-            throttle.check(username, clientIp);
+            // G62：先原子占位再校验密码，堵住"check 与 record 之间"的并发穿透
+            reservation = throttle.reserve(username, clientIp);
         } catch (BusinessException e) {
             // 命中登录限速（429）：单独打点，便于告警区分"密码错误"与"被刷"
             countLogin("failure", "throttled");
@@ -137,6 +139,8 @@ public class AuthService {
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
         users.touchLogin(user.id());
+        // 成功登录：退还本次占位，成功不计入失败次数
+        throttle.refund(reservation);
         throttle.record(username, clientIp, true);
         countLogin("success", "none");
         audit(user.username(), "LOGIN_SUCCESS", user.id().toString(),
@@ -191,8 +195,12 @@ public class AuthService {
      * <p>加事务：撤销旧令牌与写入新令牌必须同生共死。原实现无事务，
      * 若 revoke 成功后 insertRefresh 前失败，用户会被强制下线（旧已撤销、新未写入）。
      * 登录接口仍刻意不加事务（bcrypt 耗时 + 失败审计不能被回滚）。
+     *
+     * <p><b>G62：{@code noRollbackFor = BusinessException}</b>——业务拒绝分支（账号停用时的
+     * "撤销全部刷新令牌 + REFRESH_DENIED 审计"、重放时的 "REFRESH_REPLAY 审计"）必须先落库
+     * 再抛异常，否则异常触发回滚会把"停用即全端下线"和盗用留痕一起抹掉。数据库异常仍回滚。
      */
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public LoginResp refresh(String rawRefreshToken, String clientIp, String userAgent) {
         TokenRepository.RefreshRecord record = tokens.findActive(sha256(rawRefreshToken))
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "登录已过期，请重新登录"));

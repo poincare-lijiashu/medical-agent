@@ -186,40 +186,45 @@ public class TokenRepository {
     }
 
     /**
-     * 窗口内"同一账号 + 同一来源 IP"的失败次数（P1-S3）。
+     * 限速占位：窗口内原子自增并返回自增后的次数（G62）。
      *
-     * <p>账号维度必须与 IP 组合：只按 username 全局计数时，任何人从任意地址
-     * 连错 5 次就能把别人的账号锁死（5 分钟内无法登录），是低成本拒绝服务。
+     * <p>{@code INSERT ... ON CONFLICT DO UPDATE} 单语句完成"判窗口 → 重置或自增"，
+     * 行锁保证并发请求串行计数，不再存在 check/record 之间的 TOCTOU 窗口。
+     * 窗口过期后自动从 1 重新计数。
      */
-    public long countRecentFailuresForUserAndIp(String username, String clientIp, Instant since) {
-        return jdbc.sql("""
-                        SELECT count(*)
-                          FROM auth_svc.login_attempt
-                         WHERE ts >= :since
-                           AND success = false
-                           AND lower(username) = lower(:username)
-                           AND client_ip = :ip
+    public int claimThrottle(String bucketKey, java.time.Duration window) {
+        Integer failures = jdbc.sql("""
+                        INSERT INTO auth_svc.login_throttle (bucket_key, window_start, failures)
+                        VALUES (:key, now(), 1)
+                        ON CONFLICT (bucket_key) DO UPDATE
+                           SET failures = CASE
+                                   WHEN auth_svc.login_throttle.window_start
+                                        <= now() - make_interval(secs => :windowSeconds)
+                                   THEN 1
+                                   ELSE auth_svc.login_throttle.failures + 1 END,
+                               window_start = CASE
+                                   WHEN auth_svc.login_throttle.window_start
+                                        <= now() - make_interval(secs => :windowSeconds)
+                                   THEN now()
+                                   ELSE auth_svc.login_throttle.window_start END,
+                               updated_at = now()
+                        RETURNING failures
                         """)
-                .param("since", java.sql.Timestamp.from(since))
-                .param("username", username)
-                .param("ip", clientIp)
-                .query(Long.class)
-                .single();
+                .param("key", bucketKey)
+                .param("windowSeconds", Math.max(1, window.toSeconds()))
+                .query(Integer.class).single();
+        return failures == null ? 0 : failures;
     }
 
-    /** 窗口内同一来源 IP 的失败次数（阈值应远高于账号维度，防 NAT 出口连坐）。 */
-    public long countRecentFailuresForIp(String clientIp, Instant since) {
-        return jdbc.sql("""
-                        SELECT count(*)
-                          FROM auth_svc.login_attempt
-                         WHERE ts >= :since
-                           AND success = false
-                           AND client_ip = :ip
+    /** 登录成功退还一次占位（成功不算失败），计数不小于 0。 */
+    public void refundThrottle(String bucketKey) {
+        jdbc.sql("""
+                        UPDATE auth_svc.login_throttle
+                           SET failures = GREATEST(failures - 1, 0), updated_at = now()
+                         WHERE bucket_key = :key
                         """)
-                .param("since", java.sql.Timestamp.from(since))
-                .param("ip", clientIp)
-                .query(Long.class)
-                .single();
+                .param("key", bucketKey)
+                .update();
     }
 
     public int purgeOldAttempts(Instant before) {
