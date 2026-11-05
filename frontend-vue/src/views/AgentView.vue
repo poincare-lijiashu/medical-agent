@@ -71,8 +71,9 @@
             <template #default="{ row }">v{{ row.version }}</template>
           </el-table-column>
           <el-table-column prop="createdBy" label="创建人" width="100" />
-          <el-table-column label="操作" width="230">
+          <el-table-column label="操作" width="310">
             <template #default="{ row }">
+              <el-button size="small" @click="openSkillImpact(row)">影响面</el-button>
               <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'"
                          size="small" @click="submitSkill(row)">送审</el-button>
               <template v-if="row.status === 'IN_REVIEW' && row.createdBy !== username">
@@ -106,7 +107,7 @@
           <el-table-column label="版本" width="60">
             <template #default="{ row }">v{{ row.version }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="390">
+          <el-table-column label="操作" width="470">
             <template #default="{ row }">
               <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'"
                          size="small" @click="submitBot(row)">送审</el-button>
@@ -117,6 +118,7 @@
               <el-button v-if="row.status === 'PUBLISHED'" size="small" @click="disableBot(row)">停用</el-button>
               <el-button size="small" @click="openMemory(row)">记忆</el-button>
               <el-button size="small" type="primary" @click="openToolLoop(row)">工具循环</el-button>
+              <el-button size="small" @click="openBotImpact(row)">影响面</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -260,6 +262,14 @@
           </div>
         </template>
         <div class="src">只接收已审核、已脱敏经验；确定性组合，不调用模型；候选须回放通过才生成草稿，再走四眼审核。</div>
+        <div v-if="metrics" class="policy-row" style="padding-top: 6px">
+          <el-tag size="small">经验 {{ metrics.experiences.total }} · 覆盖 {{ pct(metrics.experiences.coverageRate) }}</el-tag>
+          <el-tag size="small">候选 {{ metrics.proposals.total }} · 采纳 {{ pct(metrics.proposals.adoptionRate) }} · 回放通过 {{ pct(metrics.proposals.replayPassRate) }}</el-tag>
+          <el-tag size="small">技能 {{ metrics.skillCards.total }} · 审核通过 {{ pct(metrics.skillCards.reviewPassRate) }}</el-tag>
+          <el-tag v-if="metrics.skillCards.unusedPublished.length" size="small" type="warning">
+            未被引用的生效技能 {{ metrics.skillCards.unusedPublished.length }}
+          </el-tag>
+        </div>
         <el-table :data="experiences" size="small" style="width: 100%; margin-top: 6px">
           <el-table-column prop="agentId" label="能力域" width="100" />
           <el-table-column prop="pattern" label="问题模式" width="220" />
@@ -535,6 +545,39 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="impactOn" title="下线影响面" width="640px">
+      <div v-if="impactData">
+        <el-tag size="small">{{ impactData.skillCode || impactData.botCode }} · {{ impactData.status }}</el-tag>
+        <div v-if="impactData.warning" class="src" style="color: #b45309; padding-top: 6px">
+          {{ impactData.warning }}
+        </div>
+        <template v-if="impactData.skillCode">
+          <div style="padding-top: 8px"><b>引用 Bot：</b>
+            {{ (impactData.bots || []).map((b) => b.name + '（' + b.code + '）').join('、') || '无' }}
+          </div>
+          <div><b>所在团队：</b>{{ (impactData.teams || []).map((t) => t.name).join('、') || '无' }}</div>
+          <div><b>库内候选：</b>
+            {{ (impactData.proposals || []).map((p) => p.status).join('、') || '无' }}
+          </div>
+        </template>
+        <template v-else>
+          <div style="padding-top: 8px"><b>所在团队：</b>
+            {{ (impactData.teams || []).map((t) => t.name).join('、') || '无' }}
+          </div>
+          <div><b>长期记忆：</b>
+            已确认 {{ impactData.memories.confirmed }} / 候选 {{ impactData.memories.candidate }}
+          </div>
+          <div><b>技能卡：</b>
+            {{ (impactData.skillCards || []).map((c) => c.code + '（' + c.status + '）').join('、') || '无' }}
+          </div>
+        </template>
+      </div>
+      <div v-else class="src">加载中…</div>
+      <template #footer>
+        <el-button size="small" @click="impactOn = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -596,6 +639,9 @@ const libraryBusy = ref(false)
 const expOn = ref(false)
 const expBusy = ref(false)
 const expForm = ref(emptyExperience())
+const metrics = ref(null)
+const impactOn = ref(false)
+const impactData = ref(null)
 
 function emptyBot() {
   return {
@@ -689,7 +735,7 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp, sl, ex, pr] = await Promise.all([
+  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
@@ -700,6 +746,7 @@ async function loadAll() {
     http.get('/agent/sleep-memory/last'),
     http.get('/agent/skill-experiences'),
     http.get('/agent/skill-proposals'),
+    http.get('/agent/skill-library/metrics'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -712,6 +759,25 @@ async function loadAll() {
   sleepReport.value = (sl.data && sl.data.report) || null
   experiences.value = (ex.data && ex.data.experiences) || []
   proposals.value = (pr.data && pr.data.proposals) || []
+  metrics.value = mt.data || null
+}
+
+function pct(rate) {
+  return (Math.round((Number(rate) || 0) * 1000) / 10).toFixed(1) + '%'
+}
+
+async function openSkillImpact(row) {
+  impactData.value = null
+  impactOn.value = true
+  const r = await http.get(`/agent/skills/${row.code}/impact`)
+  impactData.value = r.data
+}
+
+async function openBotImpact(row) {
+  impactData.value = null
+  impactOn.value = true
+  const r = await http.get(`/agent/bots/${row.code}/impact`)
+  impactData.value = r.data
 }
 
 async function toggle(flag, value) {

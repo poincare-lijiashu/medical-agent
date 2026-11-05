@@ -21,8 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, model_policy, second_opinion, skill_library, sleep_memory
-from backend.agents import tool_loop
+from backend.agents import catalog, model_policy, second_opinion, skill_library, skill_ops
+from backend.agents import sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -633,6 +633,32 @@ async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
     await _audit_agent(user, "skill_proposal_reject",
                        {"proposalId": proposal_id, "note": req.note})
     return item
+
+
+# ---------------------------------------------------------------- 技能库运营（G93）
+
+@router.get("/skill-library/metrics")
+async def skill_library_metrics(user: dict = Depends(require_role("admin", "qc"))):
+    """只读运营指标：经验覆盖、候选转化、回放通过率、技能审核通过率、Bot 引用。"""
+    return skill_ops.metrics()
+
+
+@router.get("/skills/{code}/impact")
+async def skill_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
+    """技能卡下线影响面：引用它的 Bot、这些 Bot 所在团队、库内候选来源。"""
+    try:
+        return skill_ops.skill_impact(code)
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+
+
+@router.get("/bots/{code}/impact")
+async def bot_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
+    """Bot 下线影响面：所在团队、长期记忆数量、绑定技能卡状态。"""
+    try:
+        return skill_ops.bot_impact(code)
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
 
 
 # ---------------------------------------------------------------- 有界工具循环（G91）
