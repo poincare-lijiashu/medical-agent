@@ -1155,9 +1155,10 @@ public class ClinicalRepository {
         jdbc.sql("""
                         INSERT INTO clinical_svc.charge_receipt
                             (id, receipt_no, charge_id, visit_id, amount, payment_method, status,
-                             issued_by, version)
+                             issued_by, version, campus_id)
                         VALUES (:id, :no, :chargeId, :visitId, :amount,
-                                CAST(:method AS text), :status, :issuedBy, 0)
+                                CAST(:method AS text), :status, :issuedBy, 0,
+                                (SELECT v.campus_id FROM clinical_svc.visit v WHERE v.id = :visitId))
                         """)
                 .param("id", r.id()).param("no", r.receiptNo()).param("chargeId", r.chargeId())
                 .param("visitId", r.visitId()).param("amount", r.amount())
@@ -1903,8 +1904,9 @@ public class ClinicalRepository {
     public void insertCharge(Charge c) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.charge
-                            (id, charge_no, visit_id, total_amount, status, version)
-                        VALUES (:id, :chargeNo, :visitId, :total, :status, 0)
+                            (id, charge_no, visit_id, total_amount, status, version, campus_id)
+                        VALUES (:id, :chargeNo, :visitId, :total, :status, 0,
+                                (SELECT v.campus_id FROM clinical_svc.visit v WHERE v.id = :visitId))
                         """)
                 .param("id", c.id()).param("chargeNo", c.chargeNo())
                 .param("visitId", c.visitId()).param("total", c.totalAmount())
@@ -2350,8 +2352,11 @@ public class ClinicalRepository {
     public void insertNursingExecution(NursingExecution e) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.nursing_execution
-                            (id, admission_id, visit_id, order_id, exec_date, status, executor, note)
-                        VALUES (:id, :admissionId, :visitId, :orderId, :execDate, :status, :executor, :note)
+                            (id, admission_id, visit_id, order_id, exec_date, status, executor, note,
+                             campus_id)
+                        VALUES (:id, :admissionId, :visitId, :orderId, :execDate, :status, :executor,
+                                :note,
+                                (SELECT v.campus_id FROM clinical_svc.visit v WHERE v.id = :visitId))
                         """)
                 .param("id", e.id()).param("admissionId", e.admissionId())
                 .param("visitId", e.visitId()).param("orderId", e.orderId())
@@ -5168,17 +5173,18 @@ public class ClinicalRepository {
         return nextNo("clinical_svc.emergency_observation_no_seq", "EO");
     }
 
-    public void insertEmergencyTriage(EmergencyTriage t) {
+    /** 分诊建单：此时通常还没有就诊，院区由提交账号固化（G66）。 */
+    public void insertEmergencyTriage(EmergencyTriage t, UUID campusId) {
         jdbc.sql("""
                         INSERT INTO clinical_svc.emergency_triage
                             (id, triage_no, patient_id, patient_no, patient_name, dept_id,
                              triage_level, chief_complaint, temperature, pulse, respiration,
                              systolic, diastolic, spo2, green_channel, status, triaged_by,
-                             arrival_at, triaged_at)
+                             arrival_at, triaged_at, campus_id)
                         VALUES (:id, :triageNo, :patientId, :patientNo, :patientName, :deptId,
                                 :triageLevel, :chiefComplaint, :temperature, :pulse, :respiration,
                                 :systolic, :diastolic, :spo2, :greenChannel, :status, :triagedBy,
-                                :arrivalAt, :triagedAt)
+                                :arrivalAt, :triagedAt, :campusId)
                         """)
                 .param("id", t.id()).param("triageNo", t.triageNo())
                 .param("patientId", t.patientId()).param("patientNo", t.patientNo())
@@ -5190,7 +5196,7 @@ public class ClinicalRepository {
                 .param("diastolic", t.diastolic()).param("spo2", t.spo2())
                 .param("greenChannel", t.greenChannel()).param("status", t.status())
                 .param("triagedBy", t.triagedBy()).param("arrivalAt", ts(t.arrivalAt()))
-                .param("triagedAt", ts(t.triagedAt())).update();
+                .param("triagedAt", ts(t.triagedAt())).param("campusId", campusId).update();
     }
 
     public Optional<EmergencyTriage> findEmergencyTriage(UUID id) {
@@ -5206,10 +5212,14 @@ public class ClinicalRepository {
     /** 分诊队列：待就诊优先、级别优先、到达时间升序；历史记录按到达时间倒序。 */
     public List<EmergencyTriage> listEmergencyTriages(UUID deptId, String status,
                                                       OffsetDateTime fromTs,
-                                                      OffsetDateTime toTs, int limit) {
+                                                      OffsetDateTime toTs, String campusCsv,
+                                                      int limit) {
         return jdbc.sql(EMERGENCY_TRIAGE_SELECT + """
                          WHERE (CAST(:deptId AS uuid) IS NULL
                                 OR t.dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR t.campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND (CAST(:status AS text) IS NULL OR t.status = CAST(:status AS text))
                            AND t.arrival_at >= :fromTs AND t.arrival_at < :toTs
                          ORDER BY CASE t.status
@@ -5222,6 +5232,7 @@ public class ClinicalRepository {
                          LIMIT :limit
                         """)
                 .param("deptId", deptId).param("status", status)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .param("fromTs", fromTs).param("toTs", toTs).param("limit", limit)
                 .query(EMERGENCY_TRIAGE_MAPPER).list();
     }
@@ -5386,9 +5397,9 @@ public class ClinicalRepository {
                 .param("actor", actor).param("version", expectedVersion).update() > 0;
     }
 
-    /** 急诊看板：当日分诊状态/分级 + 当前床位占用（科室可空）。 */
+    /** 急诊看板：当日分诊状态/分级 + 当前床位占用（科室可空，分诊计数按院区收敛）。 */
     public EmergencyBoardRow emergencyBoard(UUID deptId, OffsetDateTime fromTs,
-                                            OffsetDateTime toTs) {
+                                            OffsetDateTime toTs, String campusCsv) {
         return jdbc.sql("""
                         SELECT
                             count(*) FILTER (WHERE t.status = 'WAITING') AS waiting,
@@ -5412,9 +5423,13 @@ public class ClinicalRepository {
                           FROM clinical_svc.emergency_triage t
                          WHERE (CAST(:deptId AS uuid) IS NULL
                                 OR t.dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR t.campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND t.arrival_at >= :fromTs AND t.arrival_at < :toTs
                         """)
                 .param("deptId", deptId).param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .query((rs, i) -> new EmergencyBoardRow(
                         rs.getLong("waiting"), rs.getLong("level1"), rs.getLong("level2"),
                         rs.getLong("level3"), rs.getLong("level4"), rs.getLong("registered"),
@@ -6653,12 +6668,14 @@ public class ClinicalRepository {
                              patient_name, gender, birth_date, ward_id, ward_name, bed_no,
                              component_id, component_code, component_name, quantity, unit,
                              blood_type, rh, hemoglobin, platelet, urgency, indication, status,
-                             requested_by, created_by)
+                             requested_by, created_by, campus_id)
                         VALUES (:id, :requestNo, :admissionId, :visitId, :patientId, :patientNo,
                                 :patientName, :gender, :birthDate, :wardId, :wardName, :bedNo,
                                 :componentId, :componentCode, :componentName, :quantity, :unit,
                                 :bloodType, :rh, :hemoglobin, :platelet, :urgency, :indication,
-                                :status, :requestedBy, :createdBy)
+                                :status, :requestedBy, :createdBy,
+                                (SELECT v.campus_id FROM clinical_svc.visit v
+                                  WHERE v.id = :visitId))
                         """)
                 .param("id", r.id()).param("requestNo", r.requestNo())
                 .param("admissionId", r.admissionId()).param("visitId", r.visitId())
@@ -6686,10 +6703,14 @@ public class ClinicalRepository {
     }
 
     public List<TransfusionRequest> listTransfusionRequests(String status, OffsetDateTime fromTs,
-                                                            OffsetDateTime toTs, int limit) {
+                                                            OffsetDateTime toTs, String campusCsv,
+                                                            int limit) {
         return jdbc.sql(TRANSFUSION_REQUEST_SELECT + """
                          WHERE (CAST(:status AS text) IS NULL
                                 OR status = CAST(:status AS text))
+                           AND (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(
+                                    string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
                            AND created_at >= :fromTs AND created_at < :toTs
                          ORDER BY CASE urgency WHEN 'EMERGENCY' THEN 0
                                                WHEN 'URGENT' THEN 1 ELSE 2 END,
@@ -6697,6 +6718,7 @@ public class ClinicalRepository {
                          LIMIT :limit
                         """)
                 .param("status", status).param("fromTs", fromTs).param("toTs", toTs)
+                .param("campusCsv", campusCsv == null ? "" : campusCsv)
                 .param("limit", limit).query(TRANSFUSION_REQUEST_MAPPER).list();
     }
 

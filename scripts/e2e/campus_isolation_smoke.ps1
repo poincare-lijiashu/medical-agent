@@ -406,5 +406,30 @@ Check "MAIN admin cannot open EAST material transfer (404)" ($mtDetailMain.code 
 $mtDetailAdmin = Call "GET" ("/material/dept-transfers/" + $mtId) $adminToken $null
 Check "cross-campus admin opens EAST material transfer" ($mtDetailAdmin.code -eq 200) $mtDetailAdmin.raw
 
+# ---------------------------------------------------------------- 11) emergency triage campus (G66)
+# Triage is created before any visit exists, so campus must come from the operator account;
+# the triage queue must be narrowed by campus.
+$triage = Call "POST" "/clinical/emergency/triage" $eastAdminToken @{
+    patientId = $patientId; deptId = $DEPT_CLINIC; triageLevel = 3;
+    chiefComplaint = "campus smoke"; temperature = 36.8; pulse = 88; respiration = 20;
+    systolic = 120; diastolic = 80; spo2 = 98; greenChannel = $null; arrivalAt = $null
+}
+Check "east admin creates emergency triage" ($triage.code -eq 200) $triage.raw
+$triageId = ""
+if ($triage.code -eq 200) { $triageId = $triage.body.data.id }
+$triageCampus = ""
+if ($triageId.Length -gt 0) { $triageCampus = SqlOne ("select campus_id from clinical_svc.emergency_triage where id='" + $triageId + "';") }
+Check "triage campus persisted EAST" ($triageCampus -eq $EAST) ($triageCampus + " " + $triage.raw)
+
+$triageEast = Call "GET" ("/clinical/emergency/triage?deptId=" + $DEPT_CLINIC + "&status=WAITING") $eastAdminToken $null
+$triageSeenEast = $false
+if ($triageEast.code -eq 200) { $triageSeenEast = (@($triageEast.body.data) | Where-Object { $_.id -eq $triageId } | Measure-Object).Count -gt 0 }
+Check "EAST triage queue includes own triage" (($triageEast.code -eq 200) -and $triageSeenEast) $triageEast.raw
+
+$triageMain = Call "GET" ("/clinical/emergency/triage?deptId=" + $DEPT_CLINIC + "&status=WAITING") $techMainToken $null
+$triageSeenMain = $false
+if ($triageMain.code -eq 200) { $triageSeenMain = (@($triageMain.body.data) | Where-Object { $_.id -eq $triageId } | Measure-Object).Count -gt 0 }
+Check "MAIN triage queue excludes EAST triage" (($triageMain.code -eq 200) -and (-not $triageSeenMain)) $triageMain.raw
+
 Write-Output ("RESULT pass=" + $script:pass + " fail=" + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

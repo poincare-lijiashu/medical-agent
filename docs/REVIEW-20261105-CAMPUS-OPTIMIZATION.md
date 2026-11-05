@@ -107,7 +107,7 @@
 | §5.5 | 日志明文口令，且轮转文件不匹配 `*.log` 可被 `git add -A` 入仓 | `.gitignore` 已整目录排除 `logs/`（G51）；seed 随机演示口令明文**不再打印任何通道**（旧"仅控制台"在 `> logs/app.log` 重定向下等同落文件），需要可登录演示账号必须显式配置 `AUTH_DEMO_PASSWORD` |
 | §5.6 | `backup_repo.ps1` 先删旧 mirror 再 rename，失败即零备份 | 改为"旧 mirror → `.old`；新 mirror 落位；成功后删 `.old`"，中途失败回滚旧名；`$Src`/`$Dst` 参数化；bundle 先写 `.tmp` 并 `bundle verify`，失败降级退出码 2 |
 
-### G64 批次已关闭（代码 commit 待提交）
+### G64 批次已关闭（代码 commit `126bd53`）
 
 | 条目 | 原问题 | 处置 |
 |---|---|---|
@@ -116,16 +116,22 @@
 | §4.3 | 编码更正路径漏检"恰好一个主诊断"，0 主诊断可经四眼审批落库 | 抽 `requireSinglePrimary`：提交编码、**更正申请**、**更正审批**（对存储快照复核）三处同口径；0 或 >1 一律 422 |
 | §6.9 | 停用院区仍可分配给账号；`campusIdsOf` 不看状态，令牌仍带该院区 | `campusIdsOf` JOIN `campus` 且只取 `status='ACTIVE'`；`assignCampuses` 先校验全部院区存在且启用，否则 422 |
 
-### G65 批次已关闭（代码 commit 待提交）
+### G65 批次已关闭（代码 commit `f0fa1cd`）
 
 | 条目 | 原问题 | 处置 |
 |---|---|---|
 | §2.8（§6.1 硬证据部分） | `EmergencyService.register` 走两参重载，院区写死 `DEFAULT_CAMPUS_ID`，东院区急诊患者被登记到主院区（处方/检查/结算清单随之全错） | `register` 接 `DataScope`：先校验分诊科室可见，再以 `scope.campusForWrite()` 落就诊院区；单测断言必须走三参重载且院区来自账号 |
 | §6.1（出院带药部分） | 出院带药 6 个接口无 `DataScope`/guard，列表不过院区 | 列表按就诊院区下推 SQL（`CampusFilters.csv`）；详情/提交/同步/取消先反查所属就诊过 `VisitAccessGuard`（越权与不存在同码）；开立校验 `visitId` 归属 |
 
+### G66 批次已关闭（clinical V57 已执行，mock 181 类 / 1705 项全绿，院区冒烟 77/77）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §6.1（五张子表） | `charge` / `charge_receipt` / `emergency_triage` / `transfusion_request` / `nursing_execution` 均无 `campus_id`；分诊建单不写院区，分诊队列、急诊看板、输血申请列表只按科室过滤，主院区账号能看东院区资金与执行数据 | **V57**：五表补 `campus_id`。可回溯就诊的四张按同 schema `clinical_svc.visit` 回填、无就诊的分诊落主院区，随后 `SET NOT NULL` + 索引。`nursing_execution` 是追加式审计表（V29 触发器拒绝 UPDATE），回填在迁移事务内 `DISABLE TRIGGER` → 回填 → `ENABLE TRIGGER`，触发器定义与业务侧"禁止改历史"语义不变。**写侧**：收费/票据/输血/护理执行的 INSERT 统一用 `(SELECT campus_id FROM clinical_svc.visit)` 取就诊院区；分诊建单（尚无就诊）改由 `scope.campusForWrite()` 固化，并先校验科室可见。**读侧**：分诊队列、急诊看板、输血申请列表接 `DataScope.campusFilter()` 下推 SQL。院区冒烟新增 4 项（分诊落 EAST、EAST 队列可见、MAIN 队列不可见），73 → 77 全过 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项共 10 条，按 §7.2 第 1–4 批推进。§6.1 的剩余部分（`charge`/`charge_receipt`/`emergency_triage`/`transfusion_request`/`nursing_execution` 五张表 `campus_id` 下沉 + 对应列表 SQL）单独排入下一批。
+其余 [必须] 项共 9 条，按 §7.2 第 3–4 批推进（§6.1 已全部关闭）。
 
 ---
 

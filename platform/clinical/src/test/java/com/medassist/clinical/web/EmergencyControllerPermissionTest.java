@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,15 +57,16 @@ class EmergencyControllerPermissionTest {
     @Test
     @DisplayName("查询：read 放行，其他急诊权限不能替代")
     void readRequiresRead() {
-        assertForbidden(() -> controller.board(null, null, null, "emergency:triage:create"));
-        controller.board(null, null, null, "emergency:triage:read");
-        verify(service).board(null, null, null);
+        assertForbidden(() -> controller.board(null, null, null, "emergency:triage:create",
+                fullScope));
+        controller.board(null, null, null, "emergency:triage:read", fullScope);
+        verify(service).board(null, null, null, Set.of());
 
         assertForbidden(() -> controller.triages(null, null, null, null,
                 "emergency:observation:manage", fullScope));
-        when(service.listTriages(null, null, null, null)).thenReturn(List.of());
+        when(service.listTriages(null, null, null, null, Set.of())).thenReturn(List.of());
         controller.triages(null, null, null, null, "emergency:triage:read", fullScope);
-        verify(service).listTriages(null, null, null, null);
+        verify(service).listTriages(null, null, null, null, Set.of());
 
         assertForbidden(() -> controller.beds(null, null));
         controller.beds(null, "emergency:triage:read");
@@ -84,10 +86,10 @@ class EmergencyControllerPermissionTest {
                 "胸痛", new BigDecimal("36.8"), 88, 20, 120, 80, 98, null, null);
         assertForbidden(() -> controller.createTriage(req, "emergency:triage:register",
                 "nurse01", fullScope));
-        verify(service, never()).createTriage(any(), any());
+        verify(service, never()).createTriage(any(), any(), any());
 
         controller.createTriage(req, "emergency:triage:create", "nurse01", fullScope);
-        verify(service).createTriage(req, "nurse01");
+        verify(service).createTriage(req, "nurse01", fullScope);
     }
 
     @Test
@@ -137,7 +139,7 @@ class EmergencyControllerPermissionTest {
                 new BigDecimal("36.8"), 88, 20, 120, 80, 98, true,
                 "WAITING", null, null, "nurse01", Instant.now(), Instant.now(), null, 0,
                 Instant.now());
-        when(service.createTriage(any(), eq("nurse01"))).thenReturn(view);
+        when(service.createTriage(any(), eq("nurse01"), any(DataScope.class))).thenReturn(view);
 
         CreateTriageReq req = new CreateTriageReq(UUID.randomUUID(), UUID.randomUUID(), 2,
                 "胸痛", null, null, null, null, null, null, null, null);

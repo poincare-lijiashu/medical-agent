@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -101,20 +102,22 @@ class EmergencyServiceTest {
                 new PatientClient.PatientRef(patientId, "MR0001", "张三"));
         when(repo.nextEmergencyTriageNo()).thenReturn("ET20261104000001");
 
-        var critical = service.createTriage(createReq(2), "nurse01");
+        var critical = service.createTriage(createReq(2), "nurse01", SCOPE);
         assertThat(critical.greenChannel()).isTrue();
         assertThat(critical.status()).isEqualTo(EmergencyTriage.WAITING);
 
-        var normal = service.createTriage(createReq(3), "nurse01");
+        var normal = service.createTriage(createReq(3), "nurse01", SCOPE);
         assertThat(normal.greenChannel()).isFalse();
 
-        verify(repo, org.mockito.Mockito.times(2)).insertEmergencyTriage(any());
+        // G66：分诊建单时还没有就诊，院区必须来自提交账号而不是写死主院区
+        verify(repo, org.mockito.Mockito.times(2))
+                .insertEmergencyTriage(any(), eq(SCOPE.campusForWrite()));
     }
 
     @Test
     @DisplayName("分诊登记：分级越界与生命体征异常 → 422")
     void rejectsInvalidLevelAndVitals() {
-        assertThatThrownBy(() -> service.createTriage(createReq(5), "nurse01"))
+        assertThatThrownBy(() -> service.createTriage(createReq(5), "nurse01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.EMERGENCY_TRIAGE_LEVEL_INVALID);
@@ -122,10 +125,24 @@ class EmergencyServiceTest {
 
         CreateTriageReq badVitals = new CreateTriageReq(patientId, deptId, 3, "头晕",
                 new BigDecimal("36.8"), 88, 20, 80, 90, 98, null, null);
-        assertThatThrownBy(() -> service.createTriage(badVitals, "nurse01"))
+        assertThatThrownBy(() -> service.createTriage(badVitals, "nurse01", SCOPE))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.EMERGENCY_TRIAGE_VITALS_INVALID);
+    }
+
+    @Test
+    @DisplayName("分诊登记：科室不在账号范围内 → 404，且不落库")
+    void rejectsInvisibleDepartment() {
+        com.medassist.common.security.DataScope otherDept =
+                com.medassist.common.security.DataScope.ofDepartments("nurse02",
+                        Set.of(UUID.randomUUID()), true);
+
+        assertThatThrownBy(() -> service.createTriage(createReq(3), "nurse02", otherDept))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.ORG_NOT_FOUND);
+        verify(repo, never()).insertEmergencyTriage(any(), any());
     }
 
     @Test
@@ -263,14 +280,14 @@ class EmergencyServiceTest {
     @DisplayName("看板：区间倒置 422；正常映射计数")
     void boardMapsCounters() {
         LocalDate today = BusinessTime.today();
-        assertThatThrownBy(() -> service.board(deptId, today, today.minusDays(1)))
+        assertThatThrownBy(() -> service.board(deptId, today, today.minusDays(1), Set.of()))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
 
-        when(repo.emergencyBoard(eq(deptId), any(), any())).thenReturn(
+        when(repo.emergencyBoard(eq(deptId), any(), any(), anyString())).thenReturn(
                 new EmergencyBoardRow(3, 1, 2, 3, 4, 5, 2, 6, 1, 15, 4, 2));
-        var view = service.board(deptId, today, today);
+        var view = service.board(deptId, today, today, Set.of());
         assertThat(view.waiting()).isEqualTo(3);
         assertThat(view.level1()).isEqualTo(1);
         assertThat(view.freeBeds()).isEqualTo(4);
@@ -281,7 +298,7 @@ class EmergencyServiceTest {
     @DisplayName("列表：非法状态 422；查询区间倒置 422")
     void listValidatesStatusAndRange() {
         LocalDate today = BusinessTime.today();
-        assertThatThrownBy(() -> service.listTriages(deptId, "UNKNOWN", today, today))
+        assertThatThrownBy(() -> service.listTriages(deptId, "UNKNOWN", today, today, Set.of()))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
@@ -290,8 +307,9 @@ class EmergencyServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
 
-        when(repo.listEmergencyTriages(eq(deptId), eq("WAITING"), any(), any(), eq(200)))
+        when(repo.listEmergencyTriages(eq(deptId), eq("WAITING"), any(), any(), anyString(),
+                eq(200)))
                 .thenReturn(List.of(triage(EmergencyTriage.WAITING, 2, null, 0)));
-        assertThat(service.listTriages(deptId, "waiting", today, today)).hasSize(1);
+        assertThat(service.listTriages(deptId, "waiting", today, today, Set.of())).hasSize(1);
     }
 }

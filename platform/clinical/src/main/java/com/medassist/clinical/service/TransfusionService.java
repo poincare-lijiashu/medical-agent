@@ -144,8 +144,9 @@ public class TransfusionService {
         return detail(request.id());
     }
 
+    /** 申请列表：按账号可见院区收敛（G66，评审 §6.1）。 */
     public List<RequestSummaryView> listRequests(String status, LocalDate from, LocalDate to,
-                                                 int limit) {
+                                                 int limit, Set<UUID> campusIds) {
         String normalized = status == null || status.isBlank() ? null : status.trim().toUpperCase();
         if (normalized != null && !STATUSES.contains(normalized)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "输血状态不合法：" + status);
@@ -153,7 +154,8 @@ public class TransfusionService {
         LocalDate[] range = resolveRange(from, to);
         int size = limit <= 0 ? 100 : Math.min(limit, LIST_LIMIT);
         return repo.listTransfusionRequests(normalized, startOfDay(range[0]),
-                        startOfDay(range[1].plusDays(1)), size).stream()
+                        startOfDay(range[1].plusDays(1)),
+                        com.medassist.common.security.CampusFilters.csv(campusIds), size).stream()
                 .map(this::toSummaryView).toList();
     }
 

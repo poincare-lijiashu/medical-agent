@@ -64,9 +64,10 @@ public class EmergencyController {
             LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate to,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.board(deptId, from, to));
+        return ApiResponse.ok(service.board(deptId, from, to, scope.campusFilter()));
     }
 
     @GetMapping("/triage")
@@ -80,7 +81,8 @@ public class EmergencyController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listTriages(deptId, status, from, to).stream()
+        return ApiResponse.ok(service.listTriages(deptId, status, from, to,
+                        scope.campusFilter()).stream()
                 .map(t -> PhiMask.triage(t, scope))
                 .toList());
     }
@@ -92,7 +94,7 @@ public class EmergencyController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, CREATE);
-        return ApiResponse.ok(PhiMask.triage(service.createTriage(req, actor), scope));
+        return ApiResponse.ok(PhiMask.triage(service.createTriage(req, actor, scope), scope));
     }
 
     @PostMapping("/triage/{id}/register")

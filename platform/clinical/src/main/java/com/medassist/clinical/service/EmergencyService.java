@@ -84,12 +84,18 @@ public class EmergencyService {
 
     /** 预检分诊登记：1–2 级自动绿色通道；患者必须存在于 EMPI。 */
     @Transactional
-    public TriageView createTriage(CreateTriageReq req, String actor) {
+    public TriageView createTriage(CreateTriageReq req, String actor,
+                                   com.medassist.common.security.DataScope scope) {
         String operator = requireActor(actor);
         if (req.triageLevel() < 1 || req.triageLevel() > 4) {
             throw new BusinessException(ErrorCode.EMERGENCY_TRIAGE_LEVEL_INVALID);
         }
         validateVitals(req);
+        // G66（评审 §6.1）：分诊建单时还没有就诊可回溯院区，改由提交账号固化，
+        // 否则主院区账号能给东院区建分诊、队列按院区过滤后自己都看不见这条记录。
+        if (!scope.canSeeDepartment(req.deptId())) {
+            throw new BusinessException(ErrorCode.ORG_NOT_FOUND, "未找到该科室");
+        }
         Dept dept = repo.findDept(req.deptId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.ORG_NOT_FOUND, "未找到该科室"));
         if (!dept.enabled()) {
@@ -110,7 +116,7 @@ public class EmergencyService {
                 req.temperature(), req.pulse(), req.respiration(), req.systolic(),
                 req.diastolic(), req.spo2(), greenChannel, EmergencyTriage.WAITING, null, null,
                 operator, arrivalAt, now, null, 0L, now, now);
-        repo.insertEmergencyTriage(triage);
+        repo.insertEmergencyTriage(triage, scope.campusForWrite());
 
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("triageNo", triage.triageNo());
@@ -124,8 +130,9 @@ public class EmergencyService {
         return toTriageView(triage);
     }
 
-    /** 分诊队列：默认今天，区间最长 92 天，最多 200 条。 */
-    public List<TriageView> listTriages(UUID deptId, String status, LocalDate from, LocalDate to) {
+    /** 分诊队列：默认今天，区间最长 92 天，最多 200 条；按账号可见院区收敛。 */
+    public List<TriageView> listTriages(UUID deptId, String status, LocalDate from, LocalDate to,
+                                        Set<UUID> campusIds) {
         String normalizedStatus = status == null || status.isBlank()
                 ? null : status.trim().toUpperCase();
         if (normalizedStatus != null && !STATUSES.contains(normalizedStatus)) {
@@ -133,7 +140,8 @@ public class EmergencyService {
         }
         LocalDate[] range = resolveRange(from, to);
         return repo.listEmergencyTriages(deptId, normalizedStatus,
-                        startOfDay(range[0]), startOfDay(range[1].plusDays(1)), LIST_LIMIT)
+                        startOfDay(range[0]), startOfDay(range[1].plusDays(1)),
+                        com.medassist.common.security.CampusFilters.csv(campusIds), LIST_LIMIT)
                 .stream().map(this::toTriageView).toList();
     }
 
@@ -318,11 +326,12 @@ public class EmergencyService {
         return repo.listEmergencyBeds(deptId).stream().map(this::toBedView).toList();
     }
 
-    /** 急诊看板：默认今天；区间最长 92 天。 */
-    public BoardView board(UUID deptId, LocalDate from, LocalDate to) {
+    /** 急诊看板：默认今天；区间最长 92 天；分诊计数按账号可见院区收敛。 */
+    public BoardView board(UUID deptId, LocalDate from, LocalDate to, Set<UUID> campusIds) {
         LocalDate[] range = resolveRange(from, to);
         EmergencyBoardRow row = repo.emergencyBoard(deptId, startOfDay(range[0]),
-                startOfDay(range[1].plusDays(1)));
+                startOfDay(range[1].plusDays(1)),
+                com.medassist.common.security.CampusFilters.csv(campusIds));
         return new BoardView(row.waiting(), row.level1(), row.level2(), row.level3(),
                 row.level4(), row.registered(), row.observing(), row.closedToday(),
                 row.leftToday(), row.totalToday(), row.freeBeds(), row.occupiedBeds());

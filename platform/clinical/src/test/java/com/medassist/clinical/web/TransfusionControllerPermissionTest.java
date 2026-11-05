@@ -67,7 +67,8 @@ class TransfusionControllerPermissionTest {
                 UUID.randomUUID(), "P001", "张三", "内科病区", "01", "去白红细胞",
                 new BigDecimal("2"), "U", "A", "POSITIVE", "URGENT", "REQUESTED", "doctor01",
                 Instant.now(), null, null);
-        when(service.listRequests(null, null, null, 100)).thenReturn(List.of(summary));
+        when(service.listRequests(null, null, null, 100, java.util.Set.of()))
+                .thenReturn(List.of(summary));
         assertForbidden(() -> controller.requests(null, null, null, 100,
                 "transfusion:crossmatch:manage", fullScope));
         var masked = controller.requests(null, null, null, 100, "transfusion:request:read",

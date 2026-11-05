@@ -76,7 +76,8 @@ public class TransfusionController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.listRequests(status, from, to, limit).stream()
+        return ApiResponse.ok(service.listRequests(status, from, to, limit, scope.campusFilter())
+                .stream()
                 .map(s -> PhiMask.transfusionSummary(s, scope))
                 .toList());
     }
