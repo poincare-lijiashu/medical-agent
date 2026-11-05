@@ -5,7 +5,9 @@
   status 取 ok / error / aborted；channel 取 sync / stream；
 - ``medassist_agent_consult_duration_ms_sum|count{channel}``：耗时合计与次数；
 - ``medassist_agent_skill_usage_total{skill}``：成功问答中各生效技能卡的次数
-  （同一请求内同编码只计 1 次）。
+  （同一请求内同编码只计 1 次）；
+- ``medassist_agent_skill_last_used_timestamp_seconds{skill}``：技能最近一次成功
+  使用的时间戳（进程内，重启归零）。
 
 边界：
 - 多实例部署时由 Prometheus 按实例聚合；进程重启计数归零（标准 counter 语义）；
@@ -15,6 +17,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import defaultdict
 
 MAX_SKILL_LABELS = 200
@@ -24,6 +27,7 @@ _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = defaultdict(int)
 _durations: dict[str, list] = defaultdict(lambda: [0.0, 0])
 _skill_usage: dict[str, int] = defaultdict(int)
+_skill_last_used: dict[str, float] = {}
 
 
 def _esc(value: str) -> str:
@@ -45,11 +49,13 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
         bucket[0] += ms
         bucket[1] += 1
         if st == "ok":
+            now = time.time()
             for code in dict.fromkeys(skill_codes or ()):
                 key = str(code)[:64]
                 if key not in _skill_usage and len(_skill_usage) >= MAX_SKILL_LABELS:
                     key = OTHER_SKILL
                 _skill_usage[key] += 1
+                _skill_last_used[key] = now
 
 
 def snapshot() -> dict:
@@ -59,6 +65,7 @@ def snapshot() -> dict:
             "durations": {c: {"sum_ms": v[0], "count": v[1]}
                           for c, v in _durations.items()},
             "skills": dict(_skill_usage),
+            "skill_last_used": dict(_skill_last_used),
         }
 
 
@@ -93,6 +100,14 @@ def prometheus_text() -> str:
         for code, n in sorted(_skill_usage.items()):
             lines.append(
                 f'medassist_agent_skill_usage_total{{skill="{_esc(code)}"}} {n}')
+        lines.extend([
+            "# HELP medassist_agent_skill_last_used_timestamp_seconds 技能最近一次成功使用时间",
+            "# TYPE medassist_agent_skill_last_used_timestamp_seconds gauge",
+        ])
+        for code, ts in sorted(_skill_last_used.items()):
+            lines.append(
+                f'medassist_agent_skill_last_used_timestamp_seconds'
+                f'{{skill="{_esc(code)}"}} {ts:.3f}')
         return "\n".join(lines) + "\n"
 
 
@@ -101,3 +116,4 @@ def reset() -> None:
         _requests.clear()
         _durations.clear()
         _skill_usage.clear()
+        _skill_last_used.clear()

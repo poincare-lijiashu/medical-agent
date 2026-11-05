@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
 from backend.agents import catalog, consult, consult_metrics, model_policy, second_opinion, skill_advice, skill_library
-from backend.agents import skill_ops, skill_trends, sleep_memory, tool_loop
+from backend.agents import skill_ops, skill_trends, skill_usage, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
@@ -718,6 +718,12 @@ async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
 async def skill_library_metrics(user: dict = Depends(require_role("admin", "qc"))):
     """只读运营指标：经验覆盖、候选转化、回放通过率、技能审核通过率、Bot 引用。"""
     return skill_ops.metrics()
+
+
+@router.get("/skill-library/usage")
+async def skill_library_usage(user: dict = Depends(require_role("admin", "qc"))):
+    """技能使用率看板（只读）：问答成功率/耗时、已发布技能使用率与最近使用时间。"""
+    return skill_usage.report()
 
 
 @router.get("/skill-library/metrics/prometheus", response_class=PlainTextResponse)

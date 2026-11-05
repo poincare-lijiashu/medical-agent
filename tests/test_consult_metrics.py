@@ -71,6 +71,8 @@ def test_record_aggregates_and_dedupes_skills():
     assert ('medassist_agent_consult_requests_total{agent="drug",channel="stream",'
             'status="error"} 1') in text
     assert 'medassist_agent_skill_usage_total{skill="drug-check"} 1' in text
+    assert ('medassist_agent_skill_last_used_timestamp_seconds'
+            '{skill="drug-check"}') in text
     assert 'medassist_agent_consult_duration_ms_sum{channel="sync"} 12.5' in text
     assert 'medassist_agent_consult_duration_ms_count{channel="sync"} 1' in text
     assert "# TYPE medassist_agent_consult_requests_total counter" in text

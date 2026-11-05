@@ -382,6 +382,59 @@
         </el-table>
       </el-card>
 
+      <el-card shadow="never" data-testid="agent-skill-usage">
+        <template #header>
+          <div class="card-head">
+            <b>技能使用率（进程内）</b>
+            <el-button size="small" :loading="usageBusy" @click="refreshUsage">刷新</el-button>
+          </div>
+        </template>
+        <template v-if="usage">
+          <div class="src">{{ usage.note }}</div>
+          <div class="policy-row" style="padding-top: 6px">
+            <el-tag size="small">问答 {{ usage.requests.total }} · 成功 {{ pct(usage.requests.successRate) }}</el-tag>
+            <el-tag size="small" :type="usage.requests.errorRate > 0.2 ? 'danger' : 'info'">
+              错误 {{ pct(usage.requests.errorRate) }}
+            </el-tag>
+            <el-tag size="small" :type="usage.requests.abortedRate > 0.2 ? 'warning' : 'info'">
+              中止 {{ pct(usage.requests.abortedRate) }}
+            </el-tag>
+            <el-tag size="small">平均耗时 {{ usage.duration.avgMs }}ms</el-tag>
+            <el-tag size="small">已发布 {{ usage.skills.published }} · 已使用 {{ usage.skills.used }}</el-tag>
+            <el-tag size="small" :type="usage.skills.usageRatio >= 0.5 ? 'success' : 'warning'">
+              使用率 {{ pct(usage.skills.usageRatio) }}
+            </el-tag>
+          </div>
+          <el-progress :percentage="usagePercent" :stroke-width="10" style="margin-top: 8px" />
+          <div v-if="usage.skills.usedNotPublished.length" class="src" style="margin-top: 6px">
+            已计量但当前非已发布：{{ usage.skills.usedNotPublished.join('、') }}（多来自历史版本或已停用技能）
+          </div>
+          <el-table v-if="usage.skills.items.length" :data="usage.skills.items" size="small"
+                    style="width: 100%; margin-top: 8px">
+            <el-table-column prop="code" label="编码" width="160" />
+            <el-table-column prop="name" label="名称" width="180" />
+            <el-table-column prop="agentId" label="能力域" width="100" />
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag size="small"
+                        :type="row.published ? (row.usage ? 'success' : 'info') : 'warning'">
+                  {{ row.published ? (row.usage ? '使用中' : '未使用') : '非已发布' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="usage" label="使用次数" width="90" />
+            <el-table-column label="占成功问答" width="110">
+              <template #default="{ row }">{{ pct(row.usageShare) }}</template>
+            </el-table-column>
+            <el-table-column label="最近使用" width="190">
+              <template #default="{ row }">{{ row.lastUsedAt || '—' }}</template>
+            </el-table-column>
+          </el-table>
+          <div v-else class="src">暂无已发布技能或计量数据；发起问答后自动累计。</div>
+        </template>
+        <div v-else class="src">加载中…</div>
+      </el-card>
+
       <el-card shadow="never" data-testid="agent-tools">
         <template #header><b>工具注册表</b></template>
         <el-table :data="tools" size="small" style="width: 100%">
@@ -719,6 +772,9 @@ const expOn = ref(false)
 const expBusy = ref(false)
 const expForm = ref(emptyExperience())
 const metrics = ref(null)
+const usage = ref(null)
+const usageBusy = ref(false)
+const usagePercent = computed(() => Math.round(((usage.value && usage.value.skills.usageRatio) || 0) * 100))
 const impactOn = ref(false)
 const impactData = ref(null)
 const trends = ref(null)
@@ -818,7 +874,7 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt, tr, al, ad] = await Promise.all([
+  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt, tr, al, ad, us] = await Promise.all([
     http.get('/agent/flags'),
     http.get('/agent/catalog'),
     http.get('/agent/skills'),
@@ -833,6 +889,7 @@ async function loadAll() {
     http.get('/agent/skill-library/trends?days=30'),
     http.get('/agent/skill-library/alerts'),
     http.get('/agent/skill-advices?status=OPEN'),
+    http.get('/agent/skill-library/usage'),
   ])
   flags.value = (f.data && f.data.flags) || []
   agents.value = (c.data && c.data.agents) || []
@@ -849,6 +906,17 @@ async function loadAll() {
   trends.value = tr.data || null
   activeAlerts.value = (al.data && al.data.alerts) || []
   advices.value = (ad.data && ad.data.advices) || []
+  usage.value = us.data || null
+}
+
+async function refreshUsage() {
+  usageBusy.value = true
+  try {
+    const r = await http.get('/agent/skill-library/usage')
+    usage.value = r.data
+  } finally {
+    usageBusy.value = false
+  }
 }
 
 async function takeSnapshot() {
