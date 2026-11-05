@@ -101,9 +101,8 @@ public class ReportService {
         }
         List<CriticalValue> criticals = new ArrayList<>();
         if (hasCritical) {
-            // 按 report_id 定向全量比对：只要本报告已登记过危急值（含已 CLOSED）就不再新增。
-            // 若按"未关闭"过滤，重写会把已闭环的危急值重新插成 PENDING，导致申请永远无法关闭。
-            List<CriticalValue> existing = repo.listCriticalValuesByReport(reportId);
+            // 按申请维度比对（G67）：修订版是新 revision，若只看本报告会把同一批危急值再插一遍。
+            List<CriticalValue> existing = repo.listCriticalValuesByApplication(report.applicationId());
             if (existing.isEmpty()) {
                 criticals = insertCriticals(report, req.criticalLines());
             } else {
@@ -135,21 +134,29 @@ public class ReportService {
             audit(actor, "REPORT_REJECT", "REPORT", reportId.toString(), Map.of(
                     "reportNo", report.reportNo(),
                     "reason", reason == null ? "" : reason.trim()));
-            return new ReportView(report, listCriticalsOf(reportId), repo.listReports(report.applicationId()));
+            return new ReportView(report, listCriticalsOf(report), repo.listReports(report.applicationId()));
+        }
+        // G67（评审 §3.8）：修订版落 DRAFT 后必须他审；这里再挡住"同一人先修订再签发"，
+        // 否则书写/审核分权在修订路径上仍然形同虚设。
+        if (report.revision() > 1 && report.reporter() != null
+                && report.reporter().equals(actor)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "修订版报告必须由非书写人审核签发");
         }
         if (!repo.finalizeReport(reportId, actor, report.revision())) {
             throw new BusinessException(ErrorCode.CONFLICT, "报告状态已变化，请刷新后重试");
         }
         Application app = repo.lockApplication(report.applicationId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_APPLICATION_NOT_FOUND));
-        if (!repo.updateApplicationStatus(app.id(), Application.IN_PROGRESS,
-                Application.REPORTED, app.version())) {
+        // 只有"执行中"的申请需要推进到 REPORTED；修订版签发时申请已在 REPORTED/CLOSED，
+        // 不能再按 IN_PROGRESS 做 CAS，否则修订永远签不出去。
+        if (Application.IN_PROGRESS.equals(app.status()) && !repo.updateApplicationStatus(
+                app.id(), Application.IN_PROGRESS, Application.REPORTED, app.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "申请状态已变化，请刷新后重试");
         }
         audit(actor, "REPORT_FINAL", "REPORT", reportId.toString(), Map.of(
                 "reportNo", report.reportNo(), "applicationNo", app.applicationNo(),
                 "criticalFlag", report.criticalFlag()));
-        return new ReportView(repo.findReport(reportId).orElseThrow(), listCriticalsOf(reportId),
+        return new ReportView(repo.findReport(reportId).orElseThrow(), listCriticalsOf(report),
                 repo.listReports(report.applicationId()));
     }
 
@@ -165,16 +172,18 @@ public class ReportService {
         repo.clearCurrentReport(old.applicationId());
         int revision = repo.nextReportRevision(old.applicationId());
         Structured structured = structured(req.templateId(), req.structured());
+        // G67（评审 §3.8）：修订版落草稿，必须由他人审核后签发。
+        // 旧实现直接落 AMENDED 且 reviewer=actor，书写/审核分权在修订路径上被完全绕过。
         Report amended = new Report(UUID.randomUUID(), old.reportNo(), old.applicationId(),
                 revision, true, req.findings().trim(), req.conclusion().trim(), actor,
-                actor, Instant.now(), Report.AMENDED, old.criticalFlag(), null,
+                null, null, Report.DRAFT, old.criticalFlag(), null,
                 structured.templateId(), structured.json());
         repo.insertReport(amended);
         audit(actor, "REPORT_AMEND", "REPORT", amended.id().toString(), Map.of(
                 "reportNo", old.reportNo(), "fromRevision", old.revision(),
                 "toRevision", revision, "reason", req.reason() == null ? "" : req.reason().trim()));
         return new ReportView(repo.findReport(amended.id()).orElseThrow(),
-                listCriticalsOf(amended.id()), repo.listReports(old.applicationId()));
+                listCriticalsOf(amended), repo.listReports(old.applicationId()));
     }
 
     // ---------------------------------------------------------------- 查询
@@ -182,13 +191,13 @@ public class ReportService {
     public ReportView detail(UUID reportId) {
         Report report = repo.findReport(reportId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_REPORT_NOT_FOUND));
-        return new ReportView(report, listCriticalsOf(reportId), repo.listReports(report.applicationId()));
+        return new ReportView(report, listCriticalsOf(report), repo.listReports(report.applicationId()));
     }
 
     public ReportView currentOf(UUID applicationId) {
         Report report = repo.findCurrentReport(applicationId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TECH_REPORT_NOT_FOUND, "该申请还没有报告"));
-        return new ReportView(report, listCriticalsOf(report.id()), repo.listReports(applicationId));
+        return new ReportView(report, listCriticalsOf(report), repo.listReports(applicationId));
     }
 
     // ---------------------------------------------------------------- 危急值
@@ -327,8 +336,9 @@ public class ReportService {
         return created;
     }
 
-    private List<CriticalValue> listCriticalsOf(UUID reportId) {
-        return repo.listCriticalValuesByReport(reportId);
+    private List<CriticalValue> listCriticalsOf(Report report) {
+        // 危急值属于这次检查而非某个 revision：修订后按申请维度读取，界面不会变成"无危急值"
+        return repo.listCriticalValuesByApplication(report.applicationId());
     }
 
     private String blankToNull(String s) {

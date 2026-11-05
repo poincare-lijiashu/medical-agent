@@ -13,11 +13,11 @@
 
 ### 0. 基线
 
-- **HEAD**：以 `git log -1` 为准（本轮 G66 临床子表院区：收费/票据/分诊/输血/护理）。
-- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、**181 个测试类 / 1705 项 mock 单测全绿**；另有 **10 项真库集成测试**（clinical 4 / auth 3 / insurance 3，Testcontainers + postgres:15-alpine，`mvn -Ppostgres-it` 与 CI `postgres-it` job 门禁）。此前的"179 类 / 1691 项"把一份陈旧的 `*IT` 报告算进了 mock 口径，G63 已拆分。
+- **HEAD**：以 `git log -1` 为准（本轮 G67 LIS 入站占位/重放 + 报告修订他审）。
+- **后端**：11 个 Maven 模块（auth / clinical / common / empi / emr / gateway / insurance / kb / material / pharmacy / tech），443 个主代码 Java 文件、**182 个测试类 / 1715 项 mock 单测全绿**；另有 **10 项真库集成测试**（clinical 4 / auth 3 / insurance 3，Testcontainers + postgres:15-alpine，`mvn -Ppostgres-it` 与 CI `postgres-it` job 门禁）。此前的"179 类 / 1691 项"把一份陈旧的 `*IT` 报告算进了 mock 口径，G63 已拆分。
 - **多院区口径（G51）**：`X-Campus` 缺失不再放开全院区，一律收敛主院区；`*` 是唯一的跨院区标记（网关对 ADMIN/QC 在无 campuses 声明时下发）；写入院区固定为主院区优先、否则 UUID 字典序最小。
 - **前端**：44 个视图，`vue-tsc --noEmit` 与 `vite build` 全绿；登录后默认进入运营驾驶舱 `/dashboard`。
-- **数据库**：auth V74、tech V13、pharmacy V20、emr V26、insurance V21、material V5、clinical V57（各服务独立 schema）。
+- **数据库**：auth V74、tech V15、pharmacy V20、emr V26、insurance V21、material V5、clinical V57（各服务独立 schema）。
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **启动顺序硬约束（实测）**：auth 必须先于 gateway 且带 `INTERNAL_API_TOKEN=medassist-dev-internal-token`（网关启动时 fail-fast 拉取撤销名单，auth 不可达或令牌不匹配都会拒绝启动）；网关另需 `--medassist.gateway.auth.internal-token=medassist-dev-internal-token`。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
@@ -128,6 +128,7 @@
 | G64 | 签名重复参数/生成清单院区/主诊断/停用院区 | ①`InternalSignature.normalizeQuery` 保留重复 key 的全部值（旧实现只留首值，`?dept=1` 追加 `&dept=2` 不破坏签名）；无重复参数的规范串与旧版逐字节一致，滚动升级不误伤；②`InsuranceService.generate` 自带院区判定：有清单按清单院区、无清单按就诊院区（临床收费汇总），取不到即 404，不再"没清单就放行"；③编码更正的**申请**与**审批**都校验"恰好一个主诊断"（与提交编码同口径），0 主诊断不能再经四眼落库；④停用院区不再能分配给账号（`campusIdsOf` 只取 ACTIVE，`assignCampuses` 前置校验）。mock 178 类 / 1692 项 + 真库 IT 10 项全绿，院区冒烟 73 项复跑全过 |
 | G65 | 急诊挂号院区 + 出院带药隔离 | ①`EmergencyService.register` 接 `DataScope`：先校验分诊科室可见，再以 `scope.campusForWrite()` 落就诊院区——旧实现走两参重载写死 `DEFAULT_CAMPUS_ID`，东院区急诊患者会被记到主院区，其处方/检查/结算清单随之全部归错院区；②出院带药列表按就诊院区下推 SQL，详情/提交/同步/取消先反查所属就诊过 `VisitAccessGuard`，开立校验 `visitId` 归属。新增 4 项单测，全量测试全绿，院区冒烟 73 项复跑全过 |
 | G66 | 临床子表院区归属（收费/票据/分诊/输血/护理） | clinical V57 为 `charge` / `charge_receipt` / `emergency_triage` / `transfusion_request` / `nursing_execution` 补 `campus_id`：可回溯就诊的四张按同 schema `visit` 回填，未挂号分诊落主院区，随后 NOT NULL + 索引；`nursing_execution` 是追加式审计表（V29 触发器拒绝 UPDATE），回填在迁移事务内临时 `DISABLE TRIGGER`、回填后立即恢复，业务侧"禁止改历史"语义不变。写侧：收费/票据/输血/护理执行 INSERT 统一以 `(SELECT campus_id FROM visit)` 固化院区，分诊建单（尚无就诊）改由 `scope.campusForWrite()` 固化并先校验科室可见；读侧：分诊队列、急诊看板、输血申请列表接 `DataScope.campusFilter()` 下推 SQL。院区冒烟新增 4 项（分诊落 EAST、EAST 队列可见、MAIN 队列不可见），73 → 77 全过；mock 181 类 / 1705 项全绿 |
+| G67 | LIS 入站占位-重放 + 报告修订他审 | ①`LisInboundService.ingest` 改为三段短事务：先 INSERT `PROCESSING` 占位并**提交**（唯一索引形成并发互斥，撞键按重复投递返回），副作用在独立事务跑、失败整体回滚，最后把结果回写同一行——原先判重→写报告→最后落消息，并发双投递会双写报告与危急值，且内层 rollback-only 时外层提交 500（实测）。tech V14 放宽状态机；V15 用 `guard_lis_message_update()` 替换整表 append-only 触发器：原文/幂等键/`received_at` 仍不可改、禁止 DELETE，只放开 status/error/application_id/report_id。②新增 `POST /tech/lis/messages/{id}/replay`（`tech:lis:write` + 关联申请的院区守卫）：CAS 抢 `PROCESSING` 后重跑，并发重放只有一个继续，可接管卡死超 10 分钟的崩溃残留；已 PROCESSED 直接返回原结果。③`ReportService.amend` 改落 `DRAFT`（原来自审自签 `AMENDED`），签发时 `revision>1` 落 `AMENDED` 且同一书写人签发 403；危急值读取/去重改按**申请维度**，修订后不再显示"无危急值"；修订签发不再因申请已 REPORTED 而 409。LIS 冒烟新增"未收标本→FAILED→收标本→重放→PROCESSED→重复重放幂等"五步，全过；mock 182 类 / 1715 项全绿 |
 
 另有 P0/P1 整改 30+ 条（锁序、幂等、审计脱敏、令牌撤销、错误码契约、备份方案、前端错误态等），详见下文各批次表格。
 
@@ -135,7 +136,7 @@
 
 **P0（下一轮直接做）**
 
-1. **安全与错账剩余 [必须] 9 条**（见 `docs/REVIEW-20261105-CAMPUS-OPTIMIZATION.md` 的 §0 进度表）：LIS 入站幂等占位与 FAILED 重放、报告修订自审、tech 详情只校院区不校科室、跨 schema 回填顺序耦合、大表 NOT NULL 锁风险、campusCsv 7 份私有实现收敛。
+1. **安全与错账剩余 [必须] 5 条**（见 `docs/REVIEW-20261105-CAMPUS-OPTIMIZATION.md` 的 §0 进度表）：转送审计写失败覆写已成功状态（§2.5）、rewrite 丢弃新增危急值（§3.7）、计费补偿毒丸饿死后续异常单（§3.9）、tech 详情只校院区不校科室（§6.3）、三域迁移跨 schema 回填顺序耦合（§6.8）。
 2. **真库门禁扩容**：当前覆盖 clinical/auth/insurance 三域 10 项；下一步补 material（可退上限 SQL）、pharmacy（静配/发药互斥）、emr（首页 dept+campus 过滤）。
 3. **统一跨院区报表口径**：驾驶舱/日快照/运营日报按院区维度拆分与汇总（跨院区汇总仅对多院区角色开放）。
 4. **集团级多租户**：tenant 维度、租户隔离与跨院区汇总口径（在院区之上增加集团层）。

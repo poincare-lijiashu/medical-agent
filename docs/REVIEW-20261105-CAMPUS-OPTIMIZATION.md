@@ -129,9 +129,17 @@
 |---|---|---|
 | §6.1（五张子表） | `charge` / `charge_receipt` / `emergency_triage` / `transfusion_request` / `nursing_execution` 均无 `campus_id`；分诊建单不写院区，分诊队列、急诊看板、输血申请列表只按科室过滤，主院区账号能看东院区资金与执行数据 | **V57**：五表补 `campus_id`。可回溯就诊的四张按同 schema `clinical_svc.visit` 回填、无就诊的分诊落主院区，随后 `SET NOT NULL` + 索引。`nursing_execution` 是追加式审计表（V29 触发器拒绝 UPDATE），回填在迁移事务内 `DISABLE TRIGGER` → 回填 → `ENABLE TRIGGER`，触发器定义与业务侧"禁止改历史"语义不变。**写侧**：收费/票据/输血/护理执行的 INSERT 统一用 `(SELECT campus_id FROM clinical_svc.visit)` 取就诊院区；分诊建单（尚无就诊）改由 `scope.campusForWrite()` 固化，并先校验科室可见。**读侧**：分诊队列、急诊看板、输血申请列表接 `DataScope.campusFilter()` 下推 SQL。院区冒烟新增 4 项（分诊落 EAST、EAST 队列可见、MAIN 队列不可见），73 → 77 全过 |
 
+### G67 批次已关闭（tech V14/V15 已执行，mock 182 类 / 1715 项全绿，LIS 冒烟含重放全过）
+
+| 条目 | 原问题 | 处置 |
+|---|---|---|
+| §3.5 | 判重 → 写报告/危急值 → 最后才落消息：并发同 control_id 双投递双双通过判重、双写报告草稿与危急值 | `ingest` 改为**三段短事务**：①先 INSERT `PROCESSING` 占位并提交（唯一索引形成互斥，撞键直接按重复投递返回）；②副作用在独立事务里跑，失败整体回滚；③再把 `PROCESSED/IGNORED/FAILED` 回写同一行。占位-处理不再共用一个大事务——内层被标记 rollback-only 时外层提交会 500（实测 `UnexpectedRollbackException`），拆分后失败也能稳定落 FAILED |
+| §3.6 | FAILED/IGNORED 被唯一键永久缓存，全仓无重放入口，瞬时故障的 ORU 永久丢失 | 新增 `POST /tech/lis/messages/{id}/replay`（`tech:lis:write`，已关联申请的过 `TechAccessGuard.requireApplication` 院区校验）：CAS 把 FAILED/IGNORED 抢成 `PROCESSING` 再重新处理，并发重放只有一个能继续；另允许接管"卡死超 10 分钟仍 PROCESSING"的崩溃残留。已 PROCESSED 的消息直接返回原结果，不重复写报告 |
+| §3.8 | 报告 amend 直接落 `AMENDED` 且 `reviewer=actor`，绕过书写/审核分权；`critical_value.report_id` 仍指旧 revision，修订后界面显示"无危急值" | amend 改落 `DRAFT`（reviewer 为空），必须走 `review` 签发；签发时 `revision>1` 落 `AMENDED`，并拒绝"同一书写人自审自签"（403）。危急值读取改按**申请维度**（新增 `listCriticalValuesByApplication`），修订版与历史版共享同一组危急值；`rewrite` 的危急值去重也改按申请维度，避免修订后再插一遍。签发时只在申请仍为 `IN_PROGRESS` 时推进到 `REPORTED`，修订签发不再因此 409 |
+
 ### 未处理（下一批）
 
-其余 [必须] 项共 9 条，按 §7.2 第 3–4 批推进（§6.1 已全部关闭）。
+其余 [必须] 项：**§2.5**（转送审计写失败覆写已成功 TRANSFERRED）、**§3.7**（rewrite 丢弃新增危急值）、**§3.9**（计费补偿毒丸饿死后续异常单）、**§6.3**（tech 详情只校院区不校科室）、**§6.8**（三域迁移跨 schema 回填顺序耦合）。另 §6.12（campusCsv 7 份私有实现收敛）、§6.15（大表 NOT NULL 锁风险）为 [建议] 级收敛项。
 
 ---
 

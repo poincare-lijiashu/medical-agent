@@ -425,11 +425,12 @@ public class TechRepository {
                 .param("id", id).update() > 0;
     }
 
-    /** 审核签发（CAS：仅 DRAFT 可迁移到 FINAL）。 */
+    /** 签发：首版落 FINAL，修订版（revision>1）落 AMENDED，两者都记录审核人（CAS：仅 DRAFT）。 */
     public boolean finalizeReport(UUID id, String reviewer, long expectedRevision) {
         return jdbc.sql("""
                         UPDATE tech_svc.exam_report
-                           SET status = 'FINAL', reviewer = :reviewer, reviewed_at = now()
+                           SET status = CASE WHEN revision > 1 THEN 'AMENDED' ELSE 'FINAL' END,
+                               reviewer = :reviewer, reviewed_at = now()
                          WHERE id = :id AND status = 'DRAFT' AND revision = :revision
                         """)
                 .param("reviewer", reviewer).param("id", id).param("revision", expectedRevision)
@@ -506,6 +507,23 @@ public class TechRepository {
                         """).param(reportId).query(CRITICAL_MAPPER).list();
     }
 
+    /**
+     * 按申请读取危急值（G67，评审 §3.8）。
+     *
+     * <p>危急值天然属于"这次检查"，报告修订会追加新 revision，若按 {@code report_id} 读，
+     * 修订后界面会显示"无危急值"。这里按申请维度读取，修订版与历史版共享同一组危急值。
+     */
+    public List<CriticalValue> listCriticalValuesByApplication(UUID applicationId) {
+        return jdbc.sql("""
+                        SELECT id, application_id, report_id, item_name, result_value, reference_range,
+                               severity, status, notified_to, notified_at, acknowledged_by,
+                               acknowledged_at, note, created_at
+                          FROM tech_svc.critical_value
+                         WHERE application_id = ?
+                         ORDER BY created_at
+                        """).param(applicationId).query(CRITICAL_MAPPER).list();
+    }
+
     /** 临床确认（CAS：仅 PENDING）。 */
     public boolean acknowledgeCritical(UUID id, String actor, String note) {
         return jdbc.sql("""
@@ -566,10 +584,56 @@ public class TechRepository {
                         """).param(messageControlId).query(LIS_MAPPER).optional();
     }
 
+    public Optional<LisInboundMessage> findLisMessage(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, message_control_id, message_type, sending_app, application_no,
+                               application_id, report_id, status, error_message, raw_message,
+                               message_hash, actor, received_at
+                          FROM tech_svc.lis_inbound_message WHERE id = ?
+                        """).param(id).query(LIS_MAPPER).optional();
+    }
+
+    /**
+     * 回写处理结果（G67）。
+     *
+     * <p>只允许从 PROCESSING 收敛，避免"重放刚抢到占位、首轮又把结果写回去"的竞态。
+     */
+    public boolean updateLisMessageResult(UUID id, String status, String errorMessage,
+                                          UUID applicationId, UUID reportId) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.lis_inbound_message
+                           SET status = :status, error_message = CAST(:error AS text),
+                               application_id = CAST(:applicationId AS uuid),
+                               report_id = CAST(:reportId AS uuid)
+                         WHERE id = :id AND status = 'PROCESSING'
+                        """)
+                .param("id", id).param("status", status).param("error", errorMessage)
+                .param("applicationId", applicationId).param("reportId", reportId)
+                .update() > 0;
+    }
+
+    /**
+     * 重放占位：FAILED/IGNORED → PROCESSING（CAS），并发重放只有一个能继续。
+     *
+     * <p>另允许接管"卡死超过 10 分钟仍 PROCESSING"的占位（进程崩溃残留），
+     * 与医保实时结算 DELIVERING 超时接管同一口径。
+     */
+    public boolean claimLisMessageForReplay(UUID id, String expectedStatus) {
+        return jdbc.sql("""
+                        UPDATE tech_svc.lis_inbound_message
+                           SET status = 'PROCESSING', error_message = NULL
+                         WHERE id = :id
+                           AND (status = :expected
+                                OR (status = 'PROCESSING'
+                                    AND received_at < now() - interval '10 minutes'))
+                        """)
+                .param("id", id).param("expected", expectedStatus).update() > 0;
+    }
+
     /**
      * 落库入站消息。
      *
-     * @return false 表示并发下同一控制 ID 已被另一请求落库（唯一索引兜底），调用方应改为读取已有记录
+     * @return false 表示并发下同一控制 ID 已被另一请求占位（唯一索引兜底），调用方应改为读取已有记录
      */
     public boolean insertLisMessage(LisInboundMessage m) {
         return jdbc.sql("""

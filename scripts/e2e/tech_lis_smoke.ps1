@@ -126,10 +126,45 @@ $badMsg += "OBX|1|NM|LAB-K^Serum Potassium||4.0|mmol/L||N`n"
 $r = Invoke-Api 'POST' '/api/v2/tech/lis/oru' $null $token 'text/plain; charset=utf-8' $badMsg
 Check 'oru.notOru.422' $r.Status 422
 
+# ---------------------------------------------------------------- 7. replay (G67)
+# A lab ORU that arrives before the specimen is received must be recorded as
+# FAILED; after collect/receive the same message can be replayed to PROCESSED.
+$r = Invoke-Api 'POST' '/api/v2/tech/applications' @{
+    patientId = $patientId; itemCode = 'LAB-K'; priority = 'ROUTINE'; clinicalDiag = 'replay case'
+} $token
+Check 'replay.app.create' $r.Status 200
+$replayAppId = (Res $r).application.id
+$replayAppNo = (Res $r).application.applicationNo
+
+$replayControlId = "RPL-$suffix"
+$replayMsg = "MSH|^~\&|LIS|HOSP|EMR|HOSP|20261101120000||ORU^R01|$replayControlId|P|2.5`n"
+$replayMsg += "OBR|1|$replayAppNo|LAB-K^Serum Potassium|`n"
+$replayMsg += "OBX|1|NM|LAB-K^Serum Potassium||4.1|mmol/L|3.5-5.3|N|||F`n"
+$r = Invoke-Api 'POST' '/api/v2/tech/lis/oru' $null $token 'text/plain; charset=utf-8' $replayMsg
+Check 'replay.beforeReceive.status' $r.Status 200
+Check 'replay.beforeReceive.failed' (Res $r).status 'FAILED'
+$replayMsgId = (Res $r).messageId
+Check 'replay.messageId' ($null -ne $replayMsgId) 'True'
+
+$r = Invoke-Api 'POST' "/api/v2/tech/applications/$replayAppId/specimen" @{ specimenType = 'SERUM' } $token
+Check 'replay.specimen.collect' $r.Status 200
+$r = Invoke-Api 'POST' "/api/v2/tech/applications/$replayAppId/specimen/receive" @{ accept = $true } $token
+Check 'replay.specimen.receive' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/tech/lis/messages/$replayMsgId/replay" $null $token
+Check 'replay.status' $r.Status 200
+Check 'replay.processed' (Res $r).status 'PROCESSED'
+Check 'replay.reportId' ($null -ne (Res $r).reportId) 'True'
+
+$r = Invoke-Api 'POST' "/api/v2/tech/lis/messages/$replayMsgId/replay" $null $token
+Check 'replay.again.status' $r.Status 200
+Check 'replay.again.duplicate' (Res $r).duplicate 'True'
+
 Write-Output "-----"
 Write-Output "APPLICATION_ID=$appId"
 Write-Output "APPLICATION_NO=$appNo"
 Write-Output "REPORT_ID=$reportId"
+Write-Output "REPLAY_MESSAGE_ID=$replayMsgId"
 if ($script:fail -gt 0) { Write-Output "RESULT FAIL ($script:fail)"; exit 1 }
 Write-Output 'RESULT PASS'
 exit 0

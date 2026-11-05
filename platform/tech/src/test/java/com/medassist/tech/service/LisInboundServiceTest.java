@@ -48,6 +48,8 @@ class LisInboundServiceTest {
 
     private final UUID appId = UUID.randomUUID();
     private final UUID reportId = UUID.randomUUID();
+    /** 内存中的"库内消息"：占位 INSERT 与结果 UPDATE 都改这一份，模拟同一行的演进。 */
+    private LisInboundMessage stored;
 
     @BeforeEach
     void setUp() {
@@ -55,8 +57,23 @@ class LisInboundServiceTest {
         applicationService = mock(ApplicationService.class);
         reportService = mock(ReportService.class);
         service = new LisInboundService(repo, applicationService, reportService,
-                JsonMapper.builder().build());
-        when(repo.insertLisMessage(any())).thenReturn(true);
+                JsonMapper.builder().build(),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        stored = null;
+        when(repo.insertLisMessage(any())).thenAnswer(inv -> {
+            stored = inv.getArgument(0);
+            return true;
+        });
+        when(repo.updateLisMessageResult(any(), anyString(), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    stored = new LisInboundMessage(stored.id(), stored.messageControlId(),
+                            stored.messageType(), stored.sendingApp(), stored.applicationNo(),
+                            inv.getArgument(3), inv.getArgument(4), inv.getArgument(1),
+                            inv.getArgument(2), stored.rawMessage(), stored.messageHash(),
+                            stored.actor(), stored.receivedAt());
+                    return true;
+                });
+        when(repo.findLisMessage(any())).thenAnswer(inv -> Optional.ofNullable(stored));
         when(repo.findLisMessageByControlId(anyString())).thenReturn(Optional.empty());
     }
 
@@ -82,11 +99,12 @@ class LisInboundServiceTest {
     }
 
     @Test
-    @DisplayName("同一控制 ID 重复投递：命中幂等，返回首次结果且不重复处理")
+    @DisplayName("同一控制 ID 重复投递：占位撞唯一键，返回库内结果且不重复处理")
     void duplicateMessageIsIdempotent() {
         LisInboundMessage existing = new LisInboundMessage(UUID.randomUUID(), "MC-1", "ORU^R01",
                 "LIS", "AP20261101000001", appId, reportId, LisInboundMessage.PROCESSED,
                 null, MSG, "hash", "LIS", Instant.now());
+        when(repo.insertLisMessage(any())).thenReturn(false);
         when(repo.findLisMessageByControlId("MC-1")).thenReturn(Optional.of(existing));
 
         OruResult result = service.ingest(MSG);
@@ -94,12 +112,13 @@ class LisInboundServiceTest {
         assertThat(result.duplicate()).isTrue();
         assertThat(result.status()).isEqualTo(LisInboundMessage.PROCESSED);
         assertThat(result.reportId()).isEqualTo(reportId);
-        verify(repo, never()).insertLisMessage(any());
+        // 占位失败即说明已有请求在处理/已处理，绝不能再写报告
+        verify(repo, never()).updateLisMessageResult(any(), anyString(), any(), any(), any());
         verify(reportService, never()).write(any(), any(), anyString());
     }
 
     @Test
-    @DisplayName("申请不存在：落 FAILED 并返回 200 结果")
+    @DisplayName("申请不存在：占位后落 FAILED 并返回 200 结果")
     void unknownApplicationRecordedAsFailed() {
         when(repo.findApplicationByNo("AP20261101000001")).thenReturn(Optional.empty());
 
@@ -107,10 +126,14 @@ class LisInboundServiceTest {
 
         assertThat(result.status()).isEqualTo(LisInboundMessage.FAILED);
         assertThat(result.errorMessage()).contains("申请号不存在");
-        ArgumentCaptor<LisInboundMessage> captor = ArgumentCaptor.forClass(LisInboundMessage.class);
-        verify(repo).insertLisMessage(captor.capture());
-        assertThat(captor.getValue().status()).isEqualTo(LisInboundMessage.FAILED);
-        assertThat(captor.getValue().messageHash()).hasSize(64);
+        ArgumentCaptor<LisInboundMessage> placeholder = ArgumentCaptor.forClass(
+                LisInboundMessage.class);
+        verify(repo).insertLisMessage(placeholder.capture());
+        // 先占位再处理：占位必须是 PROCESSING，结果由 UPDATE 回写
+        assertThat(placeholder.getValue().status()).isEqualTo(LisInboundMessage.PROCESSING);
+        assertThat(placeholder.getValue().messageHash()).hasSize(64);
+        verify(repo).updateLisMessageResult(any(), eq(LisInboundMessage.FAILED), any(), any(),
+                any());
     }
 
     @Test
@@ -205,5 +228,93 @@ class LisInboundServiceTest {
 
         assertThat(result.status()).isEqualTo(LisInboundMessage.FAILED);
         assertThat(result.errorMessage()).contains("回写失败");
+    }
+
+    @Test
+    @DisplayName("副作用抛异常：整体转 FAILED 落库，不向上冒 500")
+    void sideEffectRollbackRecordedAsFailed() {
+        when(repo.findApplicationByNo(anyString()))
+                .thenReturn(Optional.of(app(Application.IN_PROGRESS)));
+        when(repo.findCurrentReport(appId)).thenReturn(Optional.empty());
+        when(reportService.write(any(), any(), anyString()))
+                .thenThrow(new org.springframework.transaction.UnexpectedRollbackException(
+                        "Transaction rolled back because it has been marked as rollback-only"));
+
+        OruResult result = service.ingest(MSG);
+
+        assertThat(result.status()).isEqualTo(LisInboundMessage.FAILED);
+        assertThat(result.errorMessage()).contains("回写失败");
+        verify(repo).updateLisMessageResult(any(), eq(LisInboundMessage.FAILED), any(), any(),
+                any());
+    }
+
+    // ---------------------------------------------------------------- 重放（G67）
+
+    private LisInboundMessage storedMessage(UUID messageId, String status, String error) {
+        return new LisInboundMessage(messageId, "MC-1", "ORU^R01", "LIS",
+                "AP20261101000001", null, null, status, error, MSG, "hash", "LIS", Instant.now());
+    }
+
+    @Test
+    @DisplayName("重放 FAILED：重新处理并回写 PROCESSED，落 LIS_ORU_REPLAY 审计")
+    void replayFailedMessageReprocesses() {
+        UUID messageId = UUID.randomUUID();
+        stored = storedMessage(messageId, LisInboundMessage.FAILED, "回写失败：状态不允许");
+        when(repo.claimLisMessageForReplay(messageId, LisInboundMessage.FAILED)).thenReturn(true);
+        when(repo.findApplicationByNo(anyString()))
+                .thenReturn(Optional.of(app(Application.IN_PROGRESS)));
+        when(repo.findCurrentReport(appId)).thenReturn(Optional.empty());
+        when(reportService.write(any(), any(), anyString()))
+                .thenReturn(new ReportView(report(Report.DRAFT), List.of(), List.of()));
+
+        OruResult result = service.replay(messageId, "tech01");
+
+        assertThat(result.status()).isEqualTo(LisInboundMessage.PROCESSED);
+        assertThat(result.reportId()).isEqualTo(reportId);
+        verify(repo).claimLisMessageForReplay(messageId, LisInboundMessage.FAILED);
+        verify(repo).updateLisMessageResult(eq(messageId), eq(LisInboundMessage.PROCESSED),
+                any(), eq(appId), eq(reportId));
+        verify(repo).logChange(eq("tech01"), eq("LIS_ORU_REPLAY"), eq("LIS_MESSAGE"),
+                anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("重放已 PROCESSED 的消息：直接返回原结果，不重复写报告")
+    void replayProcessedMessageIsNoop() {
+        UUID messageId = UUID.randomUUID();
+        stored = storedMessage(messageId, LisInboundMessage.PROCESSED, null);
+
+        OruResult result = service.replay(messageId, "tech01");
+
+        assertThat(result.duplicate()).isTrue();
+        assertThat(result.status()).isEqualTo(LisInboundMessage.PROCESSED);
+        verify(repo, never()).claimLisMessageForReplay(any(), anyString());
+        verify(reportService, never()).write(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("并发重放：CAS 抢不到占位返回 409，不重复处理")
+    void replayConflictWhenClaimedConcurrently() {
+        UUID messageId = UUID.randomUUID();
+        stored = storedMessage(messageId, LisInboundMessage.FAILED, "回写失败");
+        when(repo.claimLisMessageForReplay(messageId, LisInboundMessage.FAILED)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.replay(messageId, "tech01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(reportService, never()).write(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("重放不存在的消息：404")
+    void replayUnknownMessage() {
+        UUID messageId = UUID.randomUUID();
+        stored = null;
+
+        assertThatThrownBy(() -> service.replay(messageId, "tech01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TECH_LIS_MESSAGE_NOT_FOUND);
     }
 }

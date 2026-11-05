@@ -11,7 +11,8 @@ import com.medassist.tech.web.TechDtos.CriticalLine;
 import com.medassist.tech.web.TechDtos.OruResult;
 import com.medassist.tech.web.TechDtos.WriteReportReq;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -45,13 +46,16 @@ public class LisInboundService {
     private final ApplicationService applicationService;
     private final ReportService reportService;
     private final ObjectMapper objectMapper;
+    private final TransactionTemplate tx;
 
     public LisInboundService(TechRepository repo, ApplicationService applicationService,
-                             ReportService reportService, ObjectMapper objectMapper) {
+                             ReportService reportService, ObjectMapper objectMapper,
+                             PlatformTransactionManager txManager) {
         this.repo = repo;
         this.applicationService = applicationService;
         this.reportService = reportService;
         this.objectMapper = objectMapper;
+        this.tx = new TransactionTemplate(txManager);
     }
 
     /**
@@ -59,63 +63,132 @@ public class LisInboundService {
      *
      * <p>报文本身不可解析（缺控制 ID/申请号/OBX）时返回 422 且不留库——没有可靠的幂等键，
      * 留库只会制造无法去重的脏数据。
+     *
+     * <p>顺序（G67，评审 §3.5）：先 INSERT 一条 PROCESSING 占位并**单独提交**，再处理副作用。
+     * 唯一索引让并发同 control_id 只有一个请求继续写报告/危急值，另一个按重复投递返回。
+     *
+     * <p>三个短事务而非一个大事务：占位必须先提交才能形成互斥；副作用失败时整段回滚，
+     * 再把 FAILED 另行落库——否则内层事务被标记 rollback-only，外层提交会变成 500。
      */
-    @Transactional
     public OruResult ingest(String raw) {
         HL7OruParser.Oru oru = HL7OruParser.parse(raw);
         if (!oru.valid()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     "HL7 消息不可用：" + String.join("；", oru.errors()));
         }
-        Optional<LisInboundMessage> existing = repo.findLisMessageByControlId(oru.controlId());
-        if (existing.isPresent()) {
-            return toResult(existing.get(), true);
-        }
         String actor = oru.sendingApp().isBlank() ? "lis" : oru.sendingApp();
         String hash = sha256(raw);
-
-        String status;
-        String error;
-        UUID applicationId = null;
-        UUID reportId = null;
-        Optional<Application> found = repo.findApplicationByNo(oru.applicationNo());
-        if (found.isEmpty()) {
-            status = LisInboundMessage.FAILED;
-            error = "申请号不存在：" + oru.applicationNo();
-        } else {
-            Application app = found.get();
-            applicationId = app.id();
-            ProcessResult processed = process(app, oru, actor);
-            status = processed.status();
-            error = processed.error();
-            reportId = processed.reportId();
+        UUID messageId = UUID.randomUUID();
+        Boolean claimed = tx.execute(status -> repo.insertLisMessage(
+                new LisInboundMessage(messageId, oru.controlId(), oru.messageType(),
+                        oru.sendingApp(), oru.applicationNo(), null, null,
+                        LisInboundMessage.PROCESSING, null, raw, hash, actor, null)));
+        if (!Boolean.TRUE.equals(claimed)) {
+            // 撞唯一键：首个请求已提交（或正在提交），读库里的最终结果按重复投递返回
+            LisInboundMessage existing = repo.findLisMessageByControlId(oru.controlId())
+                    .orElseThrow(() -> new BusinessException(
+                            ErrorCode.TECH_LIS_MESSAGE_NOT_FOUND));
+            return toResult(existing, true);
         }
-
-        LisInboundMessage message = new LisInboundMessage(UUID.randomUUID(), oru.controlId(),
-                oru.messageType(), oru.sendingApp(), oru.applicationNo(), applicationId,
-                reportId, status, error, raw, hash, actor, null);
-        if (!repo.insertLisMessage(message)) {
-            // 并发下另一请求已抢先落库：以库里那条为准，保证两端看到同一结果
-            return toResult(repo.findLisMessageByControlId(oru.controlId()).orElse(message), true);
-        }
-        audit(actor, "LIS_ORU_" + status, oru.controlId(), Map.of(
-                "applicationNo", oru.applicationNo(),
-                "applicationId", applicationId == null ? "" : applicationId.toString(),
-                "reportId", reportId == null ? "" : reportId.toString(),
-                "observations", oru.observations().size(),
-                "messageHash", hash));
-        LisInboundMessage saved = repo.findLisMessageByControlId(oru.controlId()).orElse(message);
-        return toResult(saved, false);
+        ProcessResult processed = processInTransaction(oru, actor);
+        saveResult(messageId, processed, actor, "LIS_ORU_" + processed.status(),
+                Map.of("applicationNo", oru.applicationNo(),
+                        "applicationId", processed.applicationId() == null ? ""
+                                : processed.applicationId().toString(),
+                        "reportId", processed.reportId() == null ? ""
+                                : processed.reportId().toString(),
+                        "observations", oru.observations().size(),
+                        "messageHash", hash));
+        return toResult(current(messageId), false);
     }
 
-    private record ProcessResult(String status, String error, UUID reportId) {
+    /**
+     * 重放一条已落库消息（G67，评审 §3.6）。
+     *
+     * <p>FAILED / IGNORED 才能重放：瞬时故障、申请事后补建、报告退回草稿都可能让同一报文
+     * 变得可处理。已 PROCESSED 的消息直接返回既有结果，不重复写报告。
+     */
+    public OruResult replay(UUID messageId, String actor) {
+        LisInboundMessage message = current(messageId);
+        if (LisInboundMessage.PROCESSED.equals(message.status())) {
+            return toResult(message, true);
+        }
+        Boolean claimed = tx.execute(status ->
+                repo.claimLisMessageForReplay(messageId, message.status()));
+        if (!Boolean.TRUE.equals(claimed)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "消息正在被其他请求处理，请刷新后重试");
+        }
+        HL7OruParser.Oru oru = HL7OruParser.parse(message.rawMessage());
+        ProcessResult processed = oru.valid()
+                ? processInTransaction(oru, actor)
+                : new ProcessResult(LisInboundMessage.FAILED,
+                        "报文无法解析：" + String.join("；", oru.errors()), null, null);
+        saveResult(messageId, processed, actor, "LIS_ORU_REPLAY",
+                Map.of("previousStatus", message.status(),
+                        "status", processed.status(),
+                        "messageControlId", message.messageControlId()));
+        return toResult(current(messageId), false);
+    }
+
+    /** 消息关联的申请主键；申请号不存在的失败消息为空。 */
+    public UUID applicationIdOf(UUID messageId) {
+        return current(messageId).applicationId();
+    }
+
+    private LisInboundMessage current(UUID messageId) {
+        return repo.findLisMessage(messageId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.TECH_LIS_MESSAGE_NOT_FOUND));
+    }
+
+    /**
+     * 在一个独立事务里跑副作用。
+     *
+     * <p>失败时该事务整体回滚（报告草稿、危急值都不留残影），把异常转成 FAILED 结果由
+     * 调用方另行落库；否则内层事务被标记 rollback-only，外层提交必然 500。
+     */
+    private ProcessResult processInTransaction(HL7OruParser.Oru oru, String actor) {
+        try {
+            return tx.execute(status -> process(oru, actor));
+        } catch (RuntimeException e) {
+            return new ProcessResult(LisInboundMessage.FAILED, "回写失败：" + describe(e),
+                    null, null);
+        }
+    }
+
+    private void saveResult(UUID messageId, ProcessResult processed, String actor, String action,
+                            Map<String, Object> detail) {
+        Boolean updated = tx.execute(status -> repo.updateLisMessageResult(messageId,
+                processed.status(), processed.error(), processed.applicationId(),
+                processed.reportId()));
+        if (!Boolean.TRUE.equals(updated)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "消息状态已变化，请刷新后重试");
+        }
+        audit(actor, action, messageId.toString(), detail);
+    }
+
+    private static String describe(RuntimeException e) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
+    }
+
+    private record ProcessResult(String status, String error, UUID applicationId, UUID reportId) {
+    }
+
+    private ProcessResult process(HL7OruParser.Oru oru, String actor) {
+        Optional<Application> found = repo.findApplicationByNo(oru.applicationNo());
+        if (found.isEmpty()) {
+            return new ProcessResult(LisInboundMessage.FAILED,
+                    "申请号不存在：" + oru.applicationNo(), null, null);
+        }
+        Application app = found.get();
+        return process(app, oru, actor);
     }
 
     private ProcessResult process(Application app, HL7OruParser.Oru oru, String actor) {
         if (Application.CLOSED.equals(app.status()) || Application.CANCELLED.equals(app.status())
                 || Application.REPORTED.equals(app.status())) {
             return new ProcessResult(LisInboundMessage.IGNORED,
-                    "申请当前状态为 " + app.status() + "，无需回写", null);
+                    "申请当前状态为 " + app.status() + "，无需回写", app.id(), null);
         }
         try {
             Application current = app;
@@ -130,17 +203,20 @@ public class LisInboundService {
                 Report report = existing.get();
                 if (!Report.DRAFT.equals(report.status())) {
                     return new ProcessResult(LisInboundMessage.IGNORED,
-                            "报告已签发（" + report.status() + "），不接受自动覆盖", report.id());
+                            "报告已签发（" + report.status() + "），不接受自动覆盖",
+                            current.id(), report.id());
                 }
                 reportService.rewrite(report.id(), req, actor);
-                return new ProcessResult(LisInboundMessage.PROCESSED, null, report.id());
+                return new ProcessResult(LisInboundMessage.PROCESSED, null, current.id(),
+                        report.id());
             }
             var written = reportService.write(current.id(), req, actor);
-            return new ProcessResult(LisInboundMessage.PROCESSED, null, written.report().id());
+            return new ProcessResult(LisInboundMessage.PROCESSED, null, current.id(),
+                    written.report().id());
         } catch (BusinessException e) {
             // 业务校验失败（状态不可回写、报告冲突等）：落库为 FAILED，便于 LIS 侧排查与重放
             return new ProcessResult(LisInboundMessage.FAILED,
-                    "回写失败：" + e.getMessage(), null);
+                    "回写失败：" + e.getMessage(), app.id(), null);
         }
     }
 

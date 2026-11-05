@@ -162,22 +162,66 @@ class ReportServiceTest {
     }
 
     @Test
-    @DisplayName("修订：旧版本置为非当前，新版本 revision+1 且状态 AMENDED")
-    void amendCreatesNewRevision() {
-        when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.FINAL, 1)));
+    @DisplayName("修订：旧版本置为非当前，新版本 revision+1 且落 DRAFT 等他人审核")
+    void amendCreatesDraftRevision() {
+        when(repo.findReport(any())).thenAnswer(inv -> {
+            UUID id = inv.getArgument(0);
+            if (reportId.equals(id)) {
+                return Optional.of(report(Report.FINAL, 1));
+            }
+            return Optional.of(new Report(id, "RP20261031000001", appId, 2, true,
+                    "复查所见", "结论修正", "tech01", null, null,
+                    Report.DRAFT, false, Instant.now(), null, null));
+        });
         when(repo.nextReportRevision(appId)).thenReturn(2);
-        when(repo.findReport(any())).thenAnswer(inv -> Optional.of(
-                new Report(inv.getArgument(0), "RP20261031000001", appId, 2, true,
-                        "复查所见", "结论修正", "tech01", "tech01", Instant.now(),
-                        Report.AMENDED, false, Instant.now(), null, null)));
+        when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of());
 
         service.amend(reportId, new AmendReportReq("复查所见", "结论修正", "补充复查",
                 null, null), "tech01");
 
+        ArgumentCaptor<Report> inserted = ArgumentCaptor.forClass(Report.class);
+        verify(repo).insertReport(inserted.capture());
+        // G67：修订版不再自审自签——落草稿、无审核人，必须由他人 review
+        assertThat(inserted.getValue().status()).isEqualTo(Report.DRAFT);
+        assertThat(inserted.getValue().revision()).isEqualTo(2);
+        assertThat(inserted.getValue().reviewer()).isNull();
         verify(repo).clearCurrentReport(appId);
-        verify(repo).insertReport(any(Report.class));
         verify(repo).logChange(eq("tech01"), eq("REPORT_AMEND"), eq("REPORT"),
                 anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("修订版签发：同一书写人不得自审自签")
+    void reviewRejectsSelfReviewOfAmendment() {
+        UUID amendedId = UUID.randomUUID();
+        Report amended = new Report(amendedId, "RP20261031000001", appId, 2, true,
+                "复查所见", "结论修正", "tech01", null, null, Report.DRAFT, false,
+                Instant.now(), null, null);
+        when(repo.findReport(amendedId)).thenReturn(Optional.of(amended));
+
+        assertThatThrownBy(() -> service.review(amendedId, true, null, "tech01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(repo, never()).finalizeReport(any(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("修订版签发：他人审核放行，且不重复推进申请状态")
+    void reviewAmendedByOtherSignsWithoutTouchingApplication() {
+        UUID amendedId = UUID.randomUUID();
+        Report amended = new Report(amendedId, "RP20261031000001", appId, 2, true,
+                "复查所见", "结论修正", "tech01", null, null, Report.DRAFT, false,
+                Instant.now(), null, null);
+        when(repo.findReport(amendedId)).thenReturn(Optional.of(amended));
+        when(repo.finalizeReport(amendedId, "tech02", 2)).thenReturn(true);
+        when(repo.lockApplication(appId)).thenReturn(Optional.of(app(Application.REPORTED, 5L)));
+        when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of());
+
+        service.review(amendedId, true, null, "tech02");
+
+        verify(repo).finalizeReport(amendedId, "tech02", 2);
+        verify(repo, never()).updateApplicationStatus(any(), anyString(), anyString(), anyLong());
     }
 
     @Test
@@ -233,19 +277,19 @@ class ReportServiceTest {
     }
 
     @Test
-    @DisplayName("报告明细的危急值按 reportId 定向查询（不再全库取 200 条后过滤）")
-    void detailQueriesCriticalsByReport() {
+    @DisplayName("报告明细的危急值按申请维度查询（修订后仍能看到，不再随 revision 断链）")
+    void detailQueriesCriticalsByApplication() {
         when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.DRAFT, 1)));
         CriticalValue critical = new CriticalValue(UUID.randomUUID(), appId, reportId, "血钾",
                 "7.2", "3.5-5.3", "CRITICAL", CriticalValue.PENDING, null, null, null, null,
                 null, Instant.now());
-        when(repo.listCriticalValuesByReport(reportId)).thenReturn(List.of(critical));
+        when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of(critical));
 
         var view = service.detail(reportId);
 
         assertThat(view.criticals()).hasSize(1);
         assertThat(view.criticals().get(0).itemName()).isEqualTo("血钾");
-        verify(repo).listCriticalValuesByReport(reportId);
+        verify(repo).listCriticalValuesByApplication(appId);
         verify(repo, never()).listCriticalValues(any(), any(), any(), anyInt());
     }
 
@@ -259,7 +303,7 @@ class ReportServiceTest {
         CriticalValue closed = new CriticalValue(UUID.randomUUID(), appId, reportId, "血钾",
                 "7.2", "3.5-5.3", "CRITICAL", CriticalValue.CLOSED, null, Instant.now(),
                 "nurse01", Instant.now(), "已处理", Instant.now());
-        when(repo.listCriticalValuesByReport(reportId)).thenReturn(List.of(closed));
+        when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of(closed));
 
         var view = service.rewrite(reportId, writeReq(List.of(
                 new CriticalLine("血钾", "7.2 mmol/L", "3.5-5.3", "CRITICAL", "护士站"))), "tech01");
@@ -275,7 +319,7 @@ class ReportServiceTest {
         when(repo.findReport(reportId)).thenReturn(Optional.of(report(Report.DRAFT, 1)));
         when(repo.updateDraftReport(eq(reportId), anyString(), anyString(), eq(true),
                 any(), any())).thenReturn(true);
-        when(repo.listCriticalValuesByReport(reportId)).thenReturn(List.of());
+        when(repo.listCriticalValuesByApplication(appId)).thenReturn(List.of());
         when(repo.findCriticalValue(any())).thenAnswer(inv -> Optional.of(
                 new CriticalValue(inv.getArgument(0), appId, reportId, "血钾", "7.2 mmol/L",
                         "3.5-5.3", "CRITICAL", CriticalValue.PENDING, "护士站", Instant.now(),
@@ -285,7 +329,7 @@ class ReportServiceTest {
                 new CriticalLine("血钾", "7.2 mmol/L", "3.5-5.3", "CRITICAL", "护士站"))), "tech01");
 
         verify(repo).insertCriticalValue(any());
-        verify(repo).listCriticalValuesByReport(reportId);
+        verify(repo).listCriticalValuesByApplication(appId);
     }
 
     // ---------------------------------------------------------------- 结构化报告（G35）

@@ -100,6 +100,7 @@ public final class TechModel {
                                     String rawMessage, String messageHash, String actor,
                                     Instant receivedAt) {
 
+        public static final String PROCESSING = "PROCESSING";
         public static final String PROCESSED = "PROCESSED";
         public static final String IGNORED = "IGNORED";
         public static final String FAILED = "FAILED";

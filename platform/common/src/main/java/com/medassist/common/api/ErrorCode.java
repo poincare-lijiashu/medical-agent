@@ -317,6 +317,7 @@ public enum ErrorCode {
     TECH_REPORT_TEMPLATE_STATUS_INVALID(46442, "当前模板状态不允许该操作"),
     TECH_REPORT_TEMPLATE_INVALID(46443, "模板字段定义不合法（必须至少一个字段且 key 唯一）"),
     TECH_REPORT_STRUCTURED_INVALID(46444, "结构化报告内容不合法（模板未发布或必填字段缺失）"),
+    TECH_LIS_MESSAGE_NOT_FOUND(46450, "未找到该 LIS 入站消息"),
 
     // ---- 病历（47xxx）----
     EMR_TEMPLATE_NOT_FOUND(47401, "未找到该病历模板，或模板已停用"),
