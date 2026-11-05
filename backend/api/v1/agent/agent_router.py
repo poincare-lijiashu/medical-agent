@@ -19,7 +19,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
@@ -177,6 +177,7 @@ class ConsultReq(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     agentId: str | None = Field(default=None, max_length=32)
     skillCodes: list[str] | None = Field(default=None, max_length=8)
+    history: list[dict] | None = Field(default=None, max_length=6)
 
 
 @router.post("/consult")
@@ -185,7 +186,7 @@ async def agent_consult(req: ConsultReq, user: dict = Depends(require_user)):
     started = time.perf_counter()
     try:
         result = await consult.run(req.question, user.get("role", ""),
-                                   req.agentId, req.skillCodes)
+                                   req.agentId, req.skillCodes, req.history)
     except consult.ConsultForbidden as e:
         raise HTTPException(403, str(e))
     except consult.ConsultInvalid as e:
@@ -197,10 +198,46 @@ async def agent_consult(req: ConsultReq, user: dict = Depends(require_user)):
         "skills": [s["code"] for s in result["appliedSkills"]],
         "questionChars": len(req.question.strip()),
         "answerChars": len(result.get("answer") or ""),
+        "turns": len(req.history or []),
         "hitl": result.get("needsHumanReview", True),
         "ms": int((time.perf_counter() - started) * 1000),
     })
     return result
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.post("/consult/stream")
+async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_user)):
+    """统一问答（SSE 流式）：meta → delta* → done；错误以 error 事件返回。"""
+    async def gen():
+        started = time.perf_counter()
+        try:
+            async for ev in consult.stream(req.question, user.get("role", ""),
+                                           req.agentId, req.skillCodes, req.history):
+                if ev.get("type") == "done":
+                    await _audit_agent(user, "agent_consult_stream", {
+                        "agentId": ev["agent"]["id"],
+                        "skills": [s["code"] for s in ev.get("appliedSkills") or []],
+                        "questionChars": len(req.question.strip()),
+                        "answerChars": len(ev.get("answer") or ""),
+                        "turns": len(req.history or []),
+                        "hitl": ev.get("needsHumanReview", True),
+                        "ms": int((time.perf_counter() - started) * 1000),
+                    })
+                yield _sse(ev["type"], ev)
+        except consult.ConsultForbidden as e:
+            yield _sse("error", {"status": 403, "detail": str(e)})
+        except consult.ConsultInvalid as e:
+            yield _sse("error", {"status": 422, "detail": str(e)})
+        except consult.ConsultUnavailable as e:
+            yield _sse("error", {"status": 503, "detail": str(e)})
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @router.post("/tools/{name}/invoke")
