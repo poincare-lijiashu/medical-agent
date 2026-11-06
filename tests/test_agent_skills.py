@@ -42,6 +42,26 @@ def test_create_defaults():
     assert item["guardrails"]["hitl"] is True
 
 
+def test_disabled_can_be_reenabled_only_through_review():
+    """评审 M-36：停用不是终态；重新启用回到 IN_REVIEW 且仍需四眼。"""
+    item = _created()
+    item = skills.submit_skill(item["code"], item["rowVersion"], "admin01")
+    pub = skills.review_skill(item["code"], True, None, item["rowVersion"], "qc01")
+    off = skills.disable_skill(pub["code"], pub["rowVersion"], "qc01")
+    assert off["status"] == "DISABLED"
+
+    with pytest.raises(skills.SkillConflict):
+        skills.enable_skill(off["code"], off["rowVersion"] + 1, "admin01")
+
+    back = skills.enable_skill(off["code"], off["rowVersion"], "admin01")
+    assert back["status"] == "IN_REVIEW" and back["submittedBy"] == "admin01"
+    with pytest.raises(skills.SkillForbidden):
+        skills.review_skill(back["code"], True, None, back["rowVersion"], "admin01")
+
+    pub2 = skills.review_skill(back["code"], True, None, back["rowVersion"], "qc01")
+    assert pub2["status"] == "PUBLISHED" and pub2["version"] == 2
+
+
 def test_publish_rejects_aggregate_prompt_over_budget():
     """评审 M-35：同一能力域的聚合提示超预算时，审核通过必须拒绝（而非发布后全线 422）。"""
     long_prompt = "按指南证据回答并逐条标注来源。" * 250  # ≈ 4000 字（单卡上限）

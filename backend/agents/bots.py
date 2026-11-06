@@ -321,6 +321,28 @@ def disable_bot(code: str, row_version: int, actor: str) -> dict:
         return item
 
 
+def enable_bot(code: str, row_version: int, actor: str) -> dict:
+    """重新启用已停用的 Bot（评审 M-36：DISABLED 不再是终态）。
+
+    Bot 生效同样影响问答口径，因此回审核队列（IN_REVIEW），由另一人四眼通过。
+    """
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise BotNotFound(f"未找到 Bot：{code}")
+        if item.get("status") != "DISABLED":
+            raise BotConflict(f"仅已停用的 Bot 可重新启用：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise BotConflict("Bot 已被他人修改，请刷新后重试")
+        item.update({"status": "IN_REVIEW", "submittedBy": actor,
+                     "submittedAt": _now(), "updatedBy": actor,
+                     "updatedAt": _now(),
+                     "rowVersion": int(item["rowVersion"]) + 1})
+        _upsert(item)
+        return item
+
+
 def published_bots() -> list[dict]:
     return [i for i in _load() if i.get("status") == "PUBLISHED"]
 

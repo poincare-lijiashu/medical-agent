@@ -112,6 +112,35 @@ def test_bot_lifecycle_four_eyes_and_cas():
     assert off["status"] == "DISABLED"
 
 
+def test_disabled_bot_can_be_reenabled_via_review():
+    """评审 M-36：Bot 停用后可重新启用，但仍回审核队列（提交人不能自审）。"""
+    item = _published_bot("reenable-bot")
+    off = bots.disable_bot(item["code"], item["rowVersion"], "qc01")
+    assert off["status"] == "DISABLED"
+
+    with pytest.raises(bots.BotConflict):
+        bots.enable_bot(off["code"], off["rowVersion"] + 1, "admin01")
+
+    back = bots.enable_bot(off["code"], off["rowVersion"], "admin01")
+    assert back["status"] == "IN_REVIEW" and back["submittedBy"] == "admin01"
+    with pytest.raises(bots.BotForbidden):
+        bots.review_bot(back["code"], True, None, back["rowVersion"], "admin01")
+    pub = bots.review_bot(back["code"], True, None, back["rowVersion"], "qc01")
+    assert pub["status"] == "PUBLISHED"
+
+
+def test_disabled_team_can_be_reenabled():
+    _published_bot("team-a")
+    _published_bot("team-b")
+    team = bot_teams.create_team({"code": "team-re", "name": "复启小组",
+                                  "description": "", "botCodes": ["team-a", "team-b"]},
+                                 "admin01")
+    off = bot_teams.disable_team(team["code"], team["rowVersion"], "admin01")
+    assert off["status"] == "DISABLED"
+    back = bot_teams.enable_team(off["code"], off["rowVersion"], "admin01")
+    assert back["status"] == "ACTIVE"
+
+
 def test_bot_visibility():
     _published_bot("pub-bot")
     bots.create_bot(bot_payload("draft-bot"), "admin01")

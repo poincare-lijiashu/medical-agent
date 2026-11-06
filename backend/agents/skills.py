@@ -364,6 +364,33 @@ def disable_skill(code: str, row_version: int, actor: str) -> dict:
         return item
 
 
+def enable_skill(code: str, row_version: int, actor: str) -> dict:
+    """重新启用已停用的技能卡（评审 M-36：DISABLED 不再是终态）。
+
+    走回审核队列（DISABLED → IN_REVIEW），仍由另一人四眼通过后才生效，
+    避免"停用后再启用"绕过审核。
+    """
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise SkillNotFound(f"未找到技能卡：{code}")
+        if item.get("status") != "DISABLED":
+            raise SkillConflict(f"仅已停用的技能卡可重新启用：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise SkillConflict("技能卡已被他人修改，请刷新后重试")
+        item.update({
+            "status": "IN_REVIEW",
+            "submittedBy": actor,
+            "submittedAt": _now(),
+            "updatedBy": actor,
+            "updatedAt": _now(),
+            "rowVersion": int(item["rowVersion"]) + 1,
+        })
+        _upsert(item)
+        return item
+
+
 def published_for_agent(agent_id: str) -> list[dict]:
     """运行时读取：某智能体当前生效的技能卡（供后续提示拼装/工具白名单收敛使用）。"""
     return [i for i in _load()

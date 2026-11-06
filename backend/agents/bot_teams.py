@@ -186,6 +186,24 @@ def disable_team(code: str, row_version: int, actor: str) -> dict:
         return item
 
 
+def enable_team(code: str, row_version: int, actor: str) -> dict:
+    """重新启用已停用的团队（评审 M-36：DISABLED 不再是终态）。"""
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise TeamNotFound(f"未找到团队：{code}")
+        if item.get("status") != "DISABLED":
+            raise TeamConflict(f"仅已停用的团队可重新启用：{item.get('status')}")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise TeamConflict("团队已被他人修改，请刷新后重试")
+        item.update({"status": "ACTIVE", "updatedBy": actor,
+                     "updatedAt": _now(),
+                     "rowVersion": int(item["rowVersion"]) + 1})
+        _upsert(item)
+        return item
+
+
 def team_bots(team: dict) -> list[dict]:
     """运行时展开团队成员（跳过已停用/被下线的 Bot）。"""
     out = []

@@ -131,6 +131,8 @@
                 <el-button size="small" type="danger" @click="reviewSkill(row, false)">驳回</el-button>
               </template>
               <el-button v-if="row.status === 'PUBLISHED'" size="small" @click="disableSkill(row)">停用</el-button>
+              <el-button v-if="row.status === 'DISABLED'" size="small" type="primary"
+                         @click="enableSkill(row)">重新启用</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -166,6 +168,8 @@
                 <el-button size="small" type="danger" @click="reviewBot(row, false)">驳回</el-button>
               </template>
               <el-button v-if="row.status === 'PUBLISHED'" size="small" @click="disableBot(row)">停用</el-button>
+              <el-button v-if="row.status === 'DISABLED'" size="small" type="primary"
+                         @click="enableBot(row)">重新启用</el-button>
               <el-button size="small" @click="openMemory(row)">记忆</el-button>
               <el-button size="small" type="primary" @click="openToolLoop(row)">工具循环</el-button>
               <el-button size="small" @click="openBotImpact(row)">影响面</el-button>
@@ -199,6 +203,8 @@
             <template #default="{ row }">
               <el-button size="small" type="primary" @click="openCollaborate(row)">协作</el-button>
               <el-button v-if="row.status === 'ACTIVE'" size="small" @click="disableTeam(row)">停用</el-button>
+              <el-button v-if="row.status === 'DISABLED'" size="small" type="primary"
+                         @click="enableTeam(row)">重新启用</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -1124,6 +1130,13 @@ async function disableSkill(row) {
   ElMessage.success('已停用')
 }
 
+async function enableSkill(row) {
+  // 评审 M-36：停用不是终态；重新启用回到审核队列，由另一人四眼通过后再生效
+  await http.post(`/agent/skills/${row.code}/enable`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已提交重新启用审核（需非提交人通过）')
+}
+
 // ---------------------------------------------------------------- Bot / 团队 / 记忆
 
 function openBotCreate() {
@@ -1191,6 +1204,13 @@ async function disableBot(row) {
   ElMessage.success('已停用')
 }
 
+async function enableBot(row) {
+  // 评审 M-36：Bot 重新启用同样回到审核队列
+  await http.post(`/agent/bots/${row.code}/enable`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已提交重新启用审核（需非提交人通过）')
+}
+
 function openTeamCreate() {
   teamForm.value = emptyTeam()
   teamOn.value = true
@@ -1222,6 +1242,13 @@ async function disableTeam(row) {
   await http.post(`/agent/bot-teams/${row.code}/disable`, { rowVersion: row.rowVersion })
   await loadAll()
   ElMessage.success('已停用')
+}
+
+async function enableTeam(row) {
+  // 评审 M-36：团队停用后可直接恢复（成员/技能卡仍受各自的发布状态约束）
+  await http.post(`/agent/bot-teams/${row.code}/enable`, { rowVersion: row.rowVersion })
+  await loadAll()
+  ElMessage.success('已重新启用')
 }
 
 function openCollaborate(row) {

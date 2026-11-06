@@ -409,6 +409,18 @@ async def disable_skill(code: str, req: SkillVersionReq,
     return item
 
 
+@router.post("/skills/{code}/enable")
+async def enable_skill(code: str, req: SkillVersionReq,
+                       user: dict = Depends(require_role("admin", "qc"))):
+    """重新启用已停用的技能卡（评审 M-36）；回到 IN_REVIEW，仍需另一人审核。"""
+    try:
+        item = skill_cards.enable_skill(code, req.rowVersion, user.get("username", "qc"))
+    except skill_cards.SkillError as e:
+        raise _skill_http(e)
+    await _audit_agent(user, "skill_enable", {"code": code})
+    return item
+
+
 # ---------------------------------------------------------------- Bot / 团队 / 记忆（G88）
 
 def _bot_http(e: bot_registry.BotError) -> HTTPException:
@@ -514,6 +526,18 @@ async def disable_bot(code: str, req: SkillVersionReq,
     return item
 
 
+@router.post("/bots/{code}/enable")
+async def enable_bot(code: str, req: SkillVersionReq,
+                     user: dict = Depends(require_role("admin", "qc"))):
+    """重新启用已停用的 Bot（评审 M-36）；回到 IN_REVIEW，仍需另一人审核。"""
+    try:
+        item = bot_registry.enable_bot(code, req.rowVersion, user.get("username", "qc"))
+    except bot_registry.BotError as e:
+        raise _bot_http(e)
+    await _audit_agent(user, "bot_enable", {"code": code})
+    return item
+
+
 @router.get("/bots/{code}/memories")
 async def list_bot_memories(code: str, user: dict = Depends(require_user)):
     """Bot 长期记忆：普通角色只看已确认；admin/qc 可见候选。"""
@@ -612,6 +636,18 @@ async def disable_bot_team(code: str, req: SkillVersionReq,
     except bot_teams.TeamError as e:
         raise _team_http(e)
     await _audit_agent(user, "bot_team_disable", {"code": code})
+    return item
+
+
+@router.post("/bot-teams/{code}/enable")
+async def enable_bot_team(code: str, req: SkillVersionReq,
+                          user: dict = Depends(require_role("admin", "qc"))):
+    """重新启用已停用的团队（评审 M-36）。"""
+    try:
+        item = bot_teams.enable_team(code, req.rowVersion, user.get("username", "admin"))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    await _audit_agent(user, "bot_team_enable", {"code": code})
     return item
 
 
