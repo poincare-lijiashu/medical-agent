@@ -112,6 +112,33 @@ def test_bot_lifecycle_four_eyes_and_cas():
     assert off["status"] == "DISABLED"
 
 
+def test_bot_skill_cards_loads_published_once(monkeypatch):
+    """评审 M-44：绑定多个技能卡时只做一次已发布集合加载（此前每卡一次整表读）。"""
+    card = skills.create_skill({
+        "code": "perf-card", "name": "性能探测卡",
+        "description": "用于验证 Bot 技能卡加载次数的技能卡说明文本",
+        "agentId": "literature",
+        "promptTemplate": "请基于指南证据回答，并逐条标注来源；证据不足时明确说明。",
+        "toolAllowlist": ["kb_search"], "evidenceRefs": ["SSC 2021"],
+        "guardrails": {"hitl": True, "requireEvidence": True, "maxInputChars": 1000},
+    }, "admin01")
+    skills.submit_skill(card["code"], card["rowVersion"], "admin01")
+    skills.review_skill(card["code"], True, None, 1, "qc01")
+    bot = bots.create_bot(bot_payload("perf-bot", skillCodes=["perf-card"]), "admin01")
+
+    calls: list = []
+    real = skills.list_skills
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(skills, "list_skills", spy)
+    cards = bots.bot_skill_cards(bot)
+    assert [c["code"] for c in cards] == ["perf-card"]
+    assert len(calls) == 1
+
+
 def test_disabled_bot_can_be_reenabled_via_review():
     """评审 M-36：Bot 停用后可重新启用，但仍回审核队列（提交人不能自审）。"""
     item = _published_bot("reenable-bot")

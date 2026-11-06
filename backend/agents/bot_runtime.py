@@ -52,14 +52,21 @@ def resolve_provider(bot: dict) -> dict:
     return provider
 
 
-def build_messages(bot: dict, question: str) -> list:
-    """装配 system/user 消息：身份 + 技能卡 + 工具白名单 + 已确认记忆 + 边界。"""
+def build_messages(bot: dict, question: str, cards: list | None = None,
+                   memories: list | None = None) -> list:
+    """装配 system/user 消息：身份 + 技能卡 + 工具白名单 + 已确认记忆 + 边界。
+
+    评审 M-44：``cards`` / ``memories`` 可由调用方预先加载并复用，
+    避免同一次执行里重复整表读（run_bot 会一次取好同时用于计数）。
+    """
     q = (question or "").strip()
     if not (2 <= len(q) <= MAX_QUESTION):
         raise BotUnavailable(f"问题需 2-{MAX_QUESTION} 字")
 
-    cards = bots.bot_skill_cards(bot)
-    memories = bot_memory.context_memories(bot["code"])
+    if cards is None:
+        cards = bots.bot_skill_cards(bot)
+    if memories is None:
+        memories = bot_memory.context_memories(bot["code"])
     lines = [
         f"你是「{bot['name']}」，职责与人格：{bot['persona']}",
         f"所属能力域：{bot['agentId']}。",
@@ -101,7 +108,10 @@ async def _default_runner(provider: dict, messages: list) -> str:
 async def run_bot(bot: dict, question: str, runner=None) -> dict:
     """执行单个 Bot（runner 可注入，用于测试/离线评测）。"""
     provider = resolve_provider(bot)
-    messages = build_messages(bot, question)
+    # 评审 M-44：技能卡与记忆各只加载一次，提示装配与计数复用同一份结果
+    cards = bots.bot_skill_cards(bot)
+    memories = bot_memory.context_memories(bot["code"])
+    messages = build_messages(bot, question, cards=cards, memories=memories)
     started = time.perf_counter()
     try:
         answer = await asyncio.wait_for((runner or _default_runner)(provider, messages),
@@ -117,9 +127,9 @@ async def run_bot(bot: dict, question: str, runner=None) -> dict:
         "status": "OK",
         "answer": (answer or "").strip()[:4000],
         "elapsedMs": int((time.perf_counter() - started) * 1000),
-        "memoryCount": len(bot_memory.context_memories(bot["code"])),
-        "skillCount": len(bots.bot_skill_cards(bot)),
-        "skillGuardrails": guardrails.effective(bots.bot_skill_cards(bot)),
+        "memoryCount": len(memories),
+        "skillCount": len(cards),
+        "skillGuardrails": guardrails.effective(cards),
         "hitl": True,
     }
 

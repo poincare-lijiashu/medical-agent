@@ -163,7 +163,7 @@ async def agent_card(request: Request):
 
 
 @router.get("/catalog")
-async def agent_catalog(user: dict = Depends(require_user)):
+def agent_catalog(user: dict = Depends(require_user)):  # 评审 M-43：纯同步读，交给线程池
     """智能体目录 + 工具清单 + 当前开关（按角色过滤）。"""
     role = user.get("role", "")
     return {
@@ -333,14 +333,14 @@ async def _audit_agent(user: dict, action: str, payload: dict) -> None:
 
 
 @router.get("/skills")
-async def list_skills(status: str | None = None, agentId: str | None = None,
+def list_skills(status: str | None = None, agentId: str | None = None,
                       user: dict = Depends(require_user)):
     """技能卡列表：普通角色仅见 PUBLISHED；admin/qc 可见全部并按状态/智能体过滤。"""
     return {"skills": skill_cards.list_skills(user.get("role", ""), status, agentId)}
 
 
 @router.get("/skills/{code}")
-async def get_skill(code: str, user: dict = Depends(require_user)):
+def get_skill(code: str, user: dict = Depends(require_user)):
     try:
         return skill_cards.get_skill(code, user.get("role", ""))
     except skill_cards.SkillError as e:
@@ -454,12 +454,12 @@ def _mem_http(e: bot_memory.MemoryError_) -> HTTPException:
 
 
 @router.get("/bots")
-async def list_bots(status: str | None = None, user: dict = Depends(require_user)):
+def list_bots(status: str | None = None, user: dict = Depends(require_user)):
     return {"bots": bot_registry.list_bots(user.get("role", ""), status)}
 
 
 @router.get("/bots/{code}")
-async def get_bot(code: str, user: dict = Depends(require_user)):
+def get_bot(code: str, user: dict = Depends(require_user)):
     try:
         return bot_registry.get_bot(code, user.get("role", ""))
     except bot_registry.BotError as e:
@@ -541,7 +541,7 @@ async def enable_bot(code: str, req: SkillVersionReq,
 
 
 @router.get("/bots/{code}/memories")
-async def list_bot_memories(code: str, user: dict = Depends(require_user)):
+def list_bot_memories(code: str, user: dict = Depends(require_user)):
     """Bot 长期记忆：普通角色只看已确认；admin/qc 可见候选。"""
     try:
         bot_registry.get_bot(code, user.get("role", ""))
@@ -593,12 +593,12 @@ async def delete_bot_memory(mem_id: str, user: dict = Depends(require_user)):
 
 
 @router.get("/bot-teams")
-async def list_bot_teams(status: str | None = None, user: dict = Depends(require_user)):
+def list_bot_teams(status: str | None = None, user: dict = Depends(require_user)):
     return {"teams": bot_teams.list_teams(user.get("role", ""), status)}
 
 
 @router.get("/bot-teams/{code}")
-async def get_bot_team(code: str, user: dict = Depends(require_user)):
+def get_bot_team(code: str, user: dict = Depends(require_user)):
     try:
         return bot_teams.get_team(code, user.get("role", ""))
     except bot_teams.TeamError as e:
@@ -757,7 +757,7 @@ async def create_skill_experience(req: ExperiencePayload,
 
 
 @router.get("/skill-experiences")
-async def list_skill_experiences(agentId: str | None = None,
+def list_skill_experiences(agentId: str | None = None,
                                  user: dict = Depends(require_role("admin", "qc"))):
     try:
         return {"experiences": skill_library.list_experiences(user.get("role", ""), agentId)}
@@ -774,7 +774,7 @@ async def distill_skill_proposals(user: dict = Depends(require_role("admin", "qc
 
 
 @router.get("/skill-proposals")
-async def list_skill_proposals(status: str | None = None,
+def list_skill_proposals(status: str | None = None,
                                user: dict = Depends(require_role("admin", "qc"))):
     try:
         return {"proposals": skill_library.list_proposals(user.get("role", ""), status)}
@@ -814,13 +814,13 @@ async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
 # ---------------------------------------------------------------- 技能库运营（G93）
 
 @router.get("/skill-library/metrics")
-async def skill_library_metrics(user: dict = Depends(require_role("admin", "qc"))):
+def skill_library_metrics(user: dict = Depends(require_role("admin", "qc"))):
     """只读运营指标：经验覆盖、候选转化、回放通过率、技能审核通过率、Bot 引用。"""
     return skill_ops.metrics()
 
 
 @router.get("/skill-library/usage")
-async def skill_library_usage(user: dict = Depends(require_role("admin", "qc"))):
+def skill_library_usage(user: dict = Depends(require_role("admin", "qc"))):
     """技能使用率看板（只读）：问答成功率/耗时、已发布技能使用率与最近使用时间。"""
     return skill_usage.report()
 
@@ -852,14 +852,14 @@ async def skill_library_snapshot(req: SnapshotReq,
 
 
 @router.get("/skill-library/trends")
-async def skill_library_trends(days: int = 30,
+def skill_library_trends(days: int = 30,
                                user: dict = Depends(require_role("admin", "qc"))):
     """趋势：历史不足 2 天时显式 insufficient，不插值、不推测。"""
     return skill_trends.trends(days)
 
 
 @router.get("/skill-library/alerts")
-async def skill_library_alerts(user: dict = Depends(require_role("admin", "qc"))):
+def skill_library_alerts(user: dict = Depends(require_role("admin", "qc"))):
     """阈值告警：仅提示，不自动处置。"""
     return skill_trends.alerts()
 
@@ -890,7 +890,7 @@ async def generate_skill_advices(user: dict = Depends(require_role("admin", "qc"
 
 
 @router.get("/skill-advices")
-async def list_skill_advices(status: str | None = None,
+def list_skill_advices(status: str | None = None,
                              user: dict = Depends(require_role("admin", "qc"))):
     try:
         return {"advices": skill_advice.list_advices(user.get("role", ""), status)}
@@ -926,7 +926,7 @@ async def complete_skill_advice(advice_id: str, req: AdviceNoteReq,
 
 
 @router.get("/skills/{code}/impact")
-async def skill_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
+def skill_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
     """技能卡下线影响面：引用它的 Bot、这些 Bot 所在团队、库内候选来源。"""
     try:
         return skill_ops.skill_impact(code)
@@ -935,7 +935,7 @@ async def skill_impact(code: str, user: dict = Depends(require_role("admin", "qc
 
 
 @router.get("/bots/{code}/impact")
-async def bot_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
+def bot_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
     """Bot 下线影响面：所在团队、长期记忆数量、绑定技能卡状态。"""
     try:
         return skill_ops.bot_impact(code)

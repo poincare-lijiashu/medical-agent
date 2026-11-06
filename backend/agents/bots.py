@@ -348,13 +348,13 @@ def published_bots() -> list[dict]:
 
 
 def bot_skill_cards(bot: dict) -> list[dict]:
-    """运行时取 Bot 绑定的、当前仍生效的技能卡（发布后技能被停用则自动失效）。"""
-    out = []
-    for code in bot.get("skillCodes") or []:
-        try:
-            card = skills.get_skill(code, "admin")
-        except skills.SkillError:
-            continue
-        if card.get("status") == "PUBLISHED":
-            out.append(card)
-    return out
+    """运行时取 Bot 绑定的、当前仍生效的技能卡（发布后技能被停用则自动失效）。
+
+    评审 M-44：此前逐个 ``get_skill`` 会触发 N 次整表加载；现改为**一次**取
+    已发布集合再按绑定顺序挑选（N 次文件/PG 读 → 1 次）。
+    """
+    codes = [c for c in (bot.get("skillCodes") or []) if c]
+    if not codes:
+        return []
+    published = {s.get("code"): s for s in skills.list_skills("admin", "PUBLISHED")}
+    return [published[c] for c in codes if c in published]

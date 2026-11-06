@@ -731,3 +731,20 @@ Bot 同链路、团队停用/恢复。
 401 不回退 / 排除 router / 键盘可达）。行为级验证仍靠冒烟脚本与人工浏览器，不夸大。
 
 **验证**：全量 pytest **1040 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 14. 2026-11-06 评审整改（第 10 批：Agent 端点 IO 与重复加载）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-43 | 纯同步读端点由 `async def` 改回 `def`：FastAPI 自动放线程池执行，避免同步 PG/文件 IO 阻塞事件循环（目录/技能/Bot/团队/记忆/运营看板/建议/影响面等 18 个端点） | `agent_router.py` |
+| M-44 | `bot_skill_cards` 由"逐卡 `get_skill`（N 次整表读）"改为**一次**取已发布集合再按绑定顺序挑选；`run_bot` 技能卡与记忆各只加载一次，提示装配与计数复用同一份结果（此前 4 次重复加载） | `bots.py`、`bot_runtime.py` |
+
+**新增测试**：`test_agent_bots.py::test_bot_skill_cards_loads_published_once`
+（spy `skills.list_skills`，断言只调用 1 次）。
+
+**仍存边界**：写端点仍需 `await _audit_agent`，其中同步落盘部分未线程池化（单次写入量小，优先级低）；
+Bot 团队协作仍是各 Bot 各自加载一次技能卡（可进一步共享一份缓存，未做）。
+
+**验证**：全量 pytest **1041 passed / 11 skipped**。
