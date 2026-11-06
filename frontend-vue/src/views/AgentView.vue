@@ -197,11 +197,19 @@
               <el-tag size="small" :type="row.status === 'ACTIVE' ? 'success' : 'info'">
                 {{ row.status === 'ACTIVE' ? '启用' : '停用' }}
               </el-tag>
+              <el-tag v-if="row.pendingChanges" size="small" type="warning"
+                      style="margin-left: 4px">待审核编制变更</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="170">
             <template #default="{ row }">
               <el-button size="small" type="primary" @click="openCollaborate(row)">协作</el-button>
+              <el-button v-if="row.status === 'ACTIVE'" size="small"
+                         @click="openTeamEdit(row)">改编制</el-button>
+              <template v-if="row.pendingChanges && row.submittedBy !== username">
+                <el-button size="small" type="success" @click="reviewTeam(row, true)">通过</el-button>
+                <el-button size="small" type="danger" @click="reviewTeam(row, false)">驳回</el-button>
+              </template>
               <el-button v-if="row.status === 'ACTIVE'" size="small" @click="disableTeam(row)">停用</el-button>
               <el-button v-if="row.status === 'DISABLED'" size="small" type="primary"
                          @click="enableTeam(row)">重新启用</el-button>
@@ -555,7 +563,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="teamOn" title="新建 Bot 团队" width="560px">
+    <el-dialog v-model="teamOn" :title="teamEditCode ? '修改团队编制（需另一人审核）' : '新建 Bot 团队'"
+               width="560px">
       <div class="skill-form">
         <label>编码<input v-model="teamForm.code" class="inp" placeholder="如 consult-team" /></label>
         <label>名称<input v-model="teamForm.name" class="inp" /></label>
@@ -569,7 +578,9 @@
       </div>
       <template #footer>
         <el-button size="small" @click="teamOn = false">取消</el-button>
-        <el-button type="primary" size="small" :loading="teamBusy" @click="createTeam">创建团队</el-button>
+        <el-button type="primary" size="small" :loading="teamBusy" @click="saveTeam">
+          {{ teamEditCode ? '提交审核' : '创建团队' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -760,6 +771,8 @@ const botForm = ref(emptyBot())
 const teamOn = ref(false)
 const teamBusy = ref(false)
 const teamForm = ref(emptyTeam())
+const teamEditCode = ref('')
+const teamEditRowVersion = ref(0)
 const collabOn = ref(false)
 const collabTeam = ref(null)
 const collabQuestion = ref('')
@@ -1213,24 +1226,61 @@ async function enableBot(row) {
 
 function openTeamCreate() {
   teamForm.value = emptyTeam()
+  teamEditCode.value = ''
+  teamEditRowVersion.value = 0
   teamOn.value = true
 }
 
-async function createTeam() {
+function openTeamEdit(row) {
+  // 评审 M-37：生效中团队的编制变更提交后需另一人审核才生效
+  teamForm.value = {
+    code: row.code, name: row.name, description: row.description || '',
+    botCodes: [...(row.botCodes || [])],
+  }
+  teamEditCode.value = row.code
+  teamEditRowVersion.value = row.rowVersion
+  teamOn.value = true
+}
+
+async function saveTeam() {
   teamBusy.value = true
   try {
-    await http.post('/agent/bot-teams', {
+    const body = {
       code: teamForm.value.code.trim(),
       name: teamForm.value.name.trim(),
       description: teamForm.value.description.trim(),
       botCodes: teamForm.value.botCodes,
-    })
+    }
+    if (teamEditCode.value) {
+      await http.put(`/agent/bot-teams/${teamEditCode.value}`,
+        { ...body, rowVersion: teamEditRowVersion.value })
+      ElMessage.success('已提交编制变更审核（需另一人通过）')
+    } else {
+      await http.post('/agent/bot-teams', body)
+      ElMessage.success('团队已创建')
+    }
     teamOn.value = false
     await loadAll()
-    ElMessage.success('团队已创建')
   } finally {
     teamBusy.value = false
   }
+}
+
+async function reviewTeam(row, approve) {
+  let note = ''
+  if (!approve) {
+    try {
+      const r = await ElMessageBox.prompt('驳回必须填写原因', '驳回团队变更', { inputType: 'textarea' })
+      note = (r && r.value) || ''
+    } catch (e) {
+      return
+    }
+  }
+  await http.post(`/agent/bot-teams/${row.code}/review`, {
+    rowVersion: row.rowVersion, approve, note: note || null,
+  })
+  await loadAll()
+  ElMessage.success(approve ? '已通过（成员已更新）' : '已驳回')
 }
 
 async function disableTeam(row) {

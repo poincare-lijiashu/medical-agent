@@ -436,6 +436,8 @@ def _bot_http(e: bot_registry.BotError) -> HTTPException:
 def _team_http(e: bot_teams.TeamError) -> HTTPException:
     if isinstance(e, bot_teams.TeamNotFound):
         return HTTPException(404, str(e))
+    if isinstance(e, bot_teams.TeamForbidden):
+        return HTTPException(403, str(e))
     if isinstance(e, bot_teams.TeamConflict):
         return HTTPException(409, str(e))
     return HTTPException(422, str(e))
@@ -625,6 +627,27 @@ async def update_bot_team(code: str, req: TeamUpdateReq,
     except bot_teams.TeamError as e:
         raise _team_http(e)
     await _audit_agent(user, "bot_team_update", {"code": code})
+    return item
+
+
+class TeamReviewReq(BaseModel):
+    rowVersion: int = Field(ge=0)
+    approve: bool
+    note: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/bot-teams/{code}/review")
+async def review_bot_team(code: str, req: TeamReviewReq,
+                          user: dict = Depends(require_role("admin", "qc"))):
+    """审核团队的待变更编制（评审 M-37）：提交人不得自审，通过后才改成员。"""
+    try:
+        item = bot_teams.review_team(code, req.approve, req.note, req.rowVersion,
+                                     user.get("username", "qc"))
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    await _audit_agent(user, "bot_team_review", {
+        "code": code, "approve": req.approve,
+        "noteChars": len(req.note or "")})
     return item
 
 

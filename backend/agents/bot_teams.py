@@ -49,6 +49,12 @@ class TeamConflict(TeamError):
     code = "BOT_TEAM_CONFLICT"
 
 
+class TeamForbidden(TeamError):
+    """四眼不满足（评审 M-37）。"""
+
+    code = "BOT_TEAM_FORBIDDEN"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -163,8 +169,46 @@ def update_team(code: str, payload: dict, row_version: int, actor: str) -> dict:
         data = _validate(payload, current=item)
         if data["code"] != item["code"]:
             raise TeamInvalid("团队编码不可修改")
-        item.update(data)
-        item.update({"updatedBy": actor, "updatedAt": _now(),
+        # 评审 M-37：生效中团队的编制变更不能由 admin 单人直接改；
+        # 先落为待审核变更，成员列表在通过前保持原样（不影响正在进行的协作）。
+        item["pendingChanges"] = data
+        item.update({"submittedBy": actor, "submittedAt": _now(),
+                     "updatedBy": actor, "updatedAt": _now(),
+                     "rowVersion": int(item["rowVersion"]) + 1})
+        _upsert(item)
+        return item
+
+
+def review_team(code: str, approve: bool, note: str | None, row_version: int,
+                actor: str) -> dict:
+    """审核团队的待变更编制（评审 M-37）：提交人不得自审。"""
+    with _lock:
+        items = _load()
+        item = _find(items, (code or "").strip())
+        if item is None:
+            raise TeamNotFound(f"未找到团队：{code}")
+        pending = item.get("pendingChanges")
+        if not pending:
+            raise TeamConflict("该团队没有待审核的编制变更")
+        if int(item.get("rowVersion", 0)) != int(row_version):
+            raise TeamConflict("团队已被他人修改，请刷新后重试")
+        if actor == item.get("submittedBy"):
+            raise TeamForbidden("不能审核自己提交的团队变更（四眼原则）")
+        text = (note or "").strip()
+        if not approve and not text:
+            raise TeamInvalid("驳回必须填写原因")
+        now = _now()
+        if approve:
+            # 审批时再校验一次：提交后 Bot 可能已被停用
+            _validate(pending, current=item)
+            item.update(pending)
+            item.pop("pendingChanges", None)
+        else:
+            item.pop("pendingChanges", None)
+        item.update({"status": "ACTIVE",
+                     "reviewedBy": actor, "reviewedAt": now,
+                     "reviewNote": text or None,
+                     "updatedBy": actor, "updatedAt": now,
                      "rowVersion": int(item["rowVersion"]) + 1})
         _upsert(item)
         return item

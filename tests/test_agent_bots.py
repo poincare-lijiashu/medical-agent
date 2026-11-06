@@ -141,6 +141,49 @@ def test_disabled_team_can_be_reenabled():
     assert back["status"] == "ACTIVE"
 
 
+def test_team_member_change_requires_second_review():
+    """评审 M-37：生效中团队的编制变更需另一人审核，通过前成员保持原样。"""
+    _published_bot("rev-a")
+    _published_bot("rev-b")
+    _published_bot("rev-c")
+    team = bot_teams.create_team({"code": "team-rev", "name": "审核小组",
+                                  "description": "", "botCodes": ["rev-a", "rev-b"]},
+                                 "admin01")
+    pending = bot_teams.update_team("team-rev", {
+        "code": "team-rev", "name": "审核小组", "description": "",
+        "botCodes": ["rev-a", "rev-c"],
+    }, team["rowVersion"], "admin01")
+    assert pending["pendingChanges"]["botCodes"] == ["rev-a", "rev-c"]
+    # 通过前成员仍是旧编制（不影响正在进行的协作）
+    assert bot_teams.get_team("team-rev", "admin")["botCodes"] == ["rev-a", "rev-b"]
+
+    with pytest.raises(bot_teams.TeamForbidden):
+        bot_teams.review_team("team-rev", True, None, pending["rowVersion"], "admin01")
+    approved = bot_teams.review_team("team-rev", True, None, pending["rowVersion"], "qc01")
+    assert approved["botCodes"] == ["rev-a", "rev-c"]
+    assert "pendingChanges" not in approved
+
+
+def test_team_change_reject_keeps_original():
+    """驳回后编制保持原样，并留原因。"""
+    _published_bot("rej-a")
+    _published_bot("rej-b")
+    _published_bot("rej-c")
+    bot_teams.create_team({"code": "team-rej", "name": "驳回小组",
+                           "description": "", "botCodes": ["rej-a", "rej-b"]}, "admin01")
+    pending = bot_teams.update_team("team-rej", {
+        "code": "team-rej", "name": "驳回小组", "description": "",
+        "botCodes": ["rej-b", "rej-c"],
+    }, 0, "admin01")
+    with pytest.raises(bot_teams.TeamInvalid):
+        bot_teams.review_team("team-rej", False, "", pending["rowVersion"], "qc01")
+    rejected = bot_teams.review_team("team-rej", False, "编制调整需先评估",
+                                     pending["rowVersion"], "qc01")
+    assert rejected["botCodes"] == ["rej-a", "rej-b"]
+    assert rejected["reviewNote"] == "编制调整需先评估"
+    assert "pendingChanges" not in rejected
+
+
 def test_bot_visibility():
     _published_bot("pub-bot")
     bots.create_bot(bot_payload("draft-bot"), "admin01")
