@@ -715,3 +715,19 @@ Bot 同链路、团队停用/恢复。
 若要求新建团队也必须两人审核，需要再加 `IN_REVIEW` 状态并调整现有调用方，留待后续。
 
 **验证**：全量 pytest **1035 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 13. 2026-11-06 评审整改（第 9 批：前端可用性与可访问性）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-56 | 路由级角色守卫：以 `ROLE_NAV` 为唯一口径，非授权角色访问 `/agent`、`/data`、`/kb`、`/arch` 等直接回落概览（不再"页面在但全是 403 toast"） | `router/index.js` |
+| M-57 | AskView 的 SSE 401 标记 `authExpired`：登出跳转后**不再回落非流式请求**，避免二次登出/二次跳转 | `AskView.vue` |
+| M-58 | 医生端能力域列表排除主路由智能体（`router` 只分派、不作答） | `AskView.vue` |
+| M-59 | 能力域 / 技能卡 / 示例的 `el-tag` 补 `role="button"`、`tabindex=0`、Enter/Space 触发、`aria-pressed` 与 `:focus-visible` 焦点环 | `AskView.vue` |
+
+**新增测试**：`tests/test_frontend_agent_markers.py`（5 项静态标记：角色守卫 / await 登出 /
+401 不回退 / 排除 router / 键盘可达）。行为级验证仍靠冒烟脚本与人工浏览器，不夸大。
+
+**验证**：全量 pytest **1040 passed / 11 skipped**；`npm run build` 成功。

@@ -2,6 +2,7 @@
 // 轮 A 补齐 case（多模态病例总结）与 arch（架构·合规），占位视图退役（无剩余 STUB 项）。
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { ROLE_NAV } from '../constants/nav'
 import AppShell from '../layouts/AppShell.vue'
 import LoginView from '../views/LoginView.vue'
 import OverviewView from '../views/OverviewView.vue'
@@ -52,6 +53,13 @@ const router = createRouter({
   ],
 })
 
+// 评审 M-56：路由级角色守卫。此前非 admin 直接访问 /agent、/data、/kb、/arch 会进入
+// 空白控制台（页面内十余个请求各自 403 报错）。这里以 ROLE_NAV 为唯一口径，
+// 未授权直接回落概览，避免"页面在但用不了"的假象。
+function rolesForRoute(name) {
+  return Object.keys(ROLE_NAV).filter((role) => ROLE_NAV[role].includes(name))
+}
+
 // 路由守卫：无 token 一律去 /login（携带回跳地址）；已登录访问 /login 回概览
 router.beforeEach((to) => {
   const auth = useAuthStore()
@@ -59,6 +67,8 @@ router.beforeEach((to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && auth.isLoggedIn) return { path: '/overview' }
+  const allowed = rolesForRoute(to.name)
+  if (allowed.length && !allowed.includes(auth.role)) return { path: '/overview' }
   return true
 })
 

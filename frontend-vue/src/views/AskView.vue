@@ -67,15 +67,21 @@
 
       <div class="pick">
         <span class="pick-label">能力域</span>
+        <!-- 评审 M-59：el-tag 当按钮用必须可聚焦、可键盘触发，并暴露选中态 -->
         <el-tag
           :effect="!form.agentId ? 'dark' : 'plain'" :type="!form.agentId ? 'primary' : 'info'"
-          class="pick-tag" @click="pickAgent('')"
+          class="pick-tag" role="button" tabindex="0"
+          :aria-pressed="!form.agentId"
+          @click="pickAgent('')" @keydown.enter.prevent="pickAgent('')"
+          @keydown.space.prevent="pickAgent('')"
         >自动路由</el-tag>
         <el-tag
           v-for="a in agents" :key="a.id" class="pick-tag"
           :effect="form.agentId === a.id ? 'dark' : 'plain'"
           :type="form.agentId === a.id ? 'primary' : 'info'"
-          @click="pickAgent(a.id)"
+          role="button" tabindex="0" :aria-pressed="form.agentId === a.id"
+          @click="pickAgent(a.id)" @keydown.enter.prevent="pickAgent(a.id)"
+          @keydown.space.prevent="pickAgent(a.id)"
         >{{ a.name }}</el-tag>
       </div>
 
@@ -84,13 +90,18 @@
         <el-tag
           :effect="!form.skillCodes.length ? 'dark' : 'plain'"
           :type="!form.skillCodes.length ? 'success' : 'info'"
-          class="pick-tag" @click="form.skillCodes = []"
+          class="pick-tag" role="button" tabindex="0"
+          :aria-pressed="!form.skillCodes.length"
+          @click="form.skillCodes = []" @keydown.enter.prevent="form.skillCodes = []"
+          @keydown.space.prevent="form.skillCodes = []"
         >全部已发布（默认）</el-tag>
         <el-tag
           v-for="s in agentSkills" :key="s.code" class="pick-tag"
           :effect="form.skillCodes.includes(s.code) ? 'dark' : 'plain'"
           :type="form.skillCodes.includes(s.code) ? 'success' : 'info'"
-          @click="toggleSkill(s.code)"
+          role="button" tabindex="0" :aria-pressed="form.skillCodes.includes(s.code)"
+          @click="toggleSkill(s.code)" @keydown.enter.prevent="toggleSkill(s.code)"
+          @keydown.space.prevent="toggleSkill(s.code)"
         >{{ s.name }} v{{ s.version }}</el-tag>
         <span v-if="!agentSkills.length" class="src">该能力域暂无已发布技能卡，将按职责保守作答。</span>
       </div>
@@ -99,7 +110,9 @@
         <span class="pick-label">示例</span>
         <el-tag
           v-for="(ex, i) in examples" :key="i" class="pick-tag" type="info" effect="plain"
-          @click="useExample(ex)"
+          role="button" tabindex="0"
+          @click="useExample(ex)" @keydown.enter.prevent="useExample(ex)"
+          @keydown.space.prevent="useExample(ex)"
         >{{ ex }}</el-tag>
       </div>
 
@@ -262,6 +275,14 @@ async function ask() {
   try {
     await streamConsult(q, history, placeholder)
   } catch (e) {
+    // 评审 M-57：401 已登出并跳转，不能再回落非流式（会二次 401 / 二次跳转）
+    if (e && e.authExpired) {
+      placeholder.streaming = false
+      placeholder.failed = true
+      placeholder.failNote = '登录已过期，请重新登录'
+      if (!placeholder.answer) thread.value.pop()
+      return
+    }
     if (e && e.name === 'AbortError') {
       placeholder.streaming = false
       placeholder.failed = true
@@ -313,7 +334,9 @@ async function streamConsult(q, history, placeholder) {
   if (res.status === 401) {
     await auth.logout()
     router.push('/login')
-    throw new Error('登录已过期，请重新登录')
+    const err = new Error('登录已过期，请重新登录')
+    err.authExpired = true
+    throw err
   }
   if (!res.ok || !res.body) throw new Error(await readDetail(res))
 
@@ -377,7 +400,8 @@ async function loadMeta() {
     http.get('/agent/catalog', { silentToast: true }),
     http.get('/agent/skills', { silentToast: true }),
   ])
-  agents.value = (c.data && c.data.agents) || []
+  // 评审 M-58：主路由智能体（router）只做分派、不直接作答，不能出现在可选能力域里
+  agents.value = ((c.data && c.data.agents) || []).filter((a) => a.id !== 'router')
   skillList.value = (s.data && s.data.skills) || []
 }
 
@@ -414,6 +438,8 @@ onMounted(async () => {
 .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .pick-label { color: var(--ink-3); font-size: 12.5px; margin-right: 2px; }
 .pick-tag { cursor: pointer; }
+/* 评审 M-59：键盘用户必须看得见焦点 */
+.pick-tag:focus-visible { outline: 2px solid var(--el-color-primary, #409eff); outline-offset: 2px; }
 .err { margin-top: 12px; }
 .composer { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; }
 .composer .inp {
