@@ -10,6 +10,9 @@ os.environ.setdefault("AUTH_TOKEN_IN_BODY", "true")
 # 且 redis 库已安装会让测试进程真的连上共享 Redis——chat_memory/撤销等测试要求
 # 进程级隔离语义。环境变量优先级高于 .env.local，置空即锁回 MemoryStore。
 os.environ["REDIS_URL"] = ""
+# 评审 M-28：快照调度器默认在启动时补当天快照；测试进程关闭，避免
+# TestClient 上下文把"今天已有快照"带进用例（调度逻辑由专门单测覆盖）。
+os.environ.setdefault("AGENT_SNAPSHOT_HOUR", "0")
 # W4.1 事故隔离（2026-10-30）：pytest 集成测试进程连的是真 PG（.env.local 的
 # medagent 库），全量同步 save_* 会用测试数据覆盖生产表（实测 users 17 行被清成
 # 1 行 → 全站 401）。独立测试库 medagent_test（与服务库物理隔离，表结构由
@@ -20,7 +23,17 @@ if not os.environ.get("PG_OFFLINE"):
 import pytest
 
 from backend.api import deps
+from backend.core import pg_store as _pg_store
 from backend.core import security_rate, stores
+
+# 评审 M-30：在 autouse fixture 替换之前捕获 Agent 域 PG 读写原始实现，
+# 供 tests/test_agent_pg_real.py 做真库断言。
+_PG_ORIGINALS = {
+    "load_skills": _pg_store.load_skills,
+    "save_skills": _pg_store.save_skills,
+    "load_json_list": _pg_store.load_json_list,
+    "save_json_list": _pg_store.save_json_list,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +69,15 @@ def _isolate_runtime_flags(tmp_path, monkeypatch):
     from backend.core import runtime_flags
     monkeypatch.setattr(runtime_flags, "FLAGS_FILE", str(tmp_path / "runtime_flags.json"))
     yield
+
+
+@pytest.fixture()
+def pg_originals() -> dict:
+    """Agent 域 PG 读写函数的**原始实现**（在被 `_isolate_agent_stores` 替换之前捕获）。
+
+    仅供需要真库断言的测试还原使用；普通测试不要用，否则会读写共享测试库。
+    """
+    return dict(_PG_ORIGINALS)
 
 
 @pytest.fixture(autouse=True)

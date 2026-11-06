@@ -39,7 +39,7 @@ def test_helm_prometheus_rule_matches_native_rules():
     native = _alerts(RULES)
     helm = _alerts(RULE_TEMPLATE)
     assert native == helm, f"仅本地有：{native - helm}；仅 Helm 有：{helm - native}"
-    assert len(native) == 7
+    assert len(native) == 8  # 7 条业务规则 + 多 worker 计量形态告警（M-23）
 
 
 def test_ai_core_metrics_switch_uses_single_helper():

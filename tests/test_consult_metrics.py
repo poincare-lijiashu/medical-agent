@@ -125,6 +125,17 @@ def test_agent_label_is_whitelisted():
     assert "drug|sync|ok" in consult_metrics.snapshot()["requests"]
 
 
+def test_worker_count_metric_exposes_multi_worker(monkeypatch):
+    """评审 M-23：多 worker 形态必须可见（进程内 counter 不可用于 rate）。"""
+    monkeypatch.setenv("WEB_CONCURRENCY", "4")
+    assert consult_metrics.worker_count() == 4
+    assert "medassist_agent_metrics_worker_count 4" in consult_metrics.prometheus_text()
+
+    monkeypatch.delenv("WEB_CONCURRENCY")
+    monkeypatch.setenv("UVICORN_WORKERS", "not-a-number")
+    assert consult_metrics.worker_count() == 1
+
+
 def test_skill_label_cap_falls_into_other():
     for i in range(consult_metrics.MAX_SKILL_LABELS + 5):
         consult_metrics.record("drug", "sync", "ok", 0.0, [f"skill-{i}"])

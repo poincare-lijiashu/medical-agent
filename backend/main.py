@@ -1,6 +1,7 @@
 """MedAssist 医疗智能辅助平台 — FastAPI 入口。"""
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -117,9 +118,50 @@ async def lifespan(app: FastAPI):
         await _nacos_registry.start()
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_agent.startup.nacos_failed", error=str(exc)[:120])
+    # 评审 M-28：技能运营快照必须自动生成，否则"趋势"依赖人工每天点按钮
+    _snapshot_task = None
+    _snapshot_stop = None
+    try:
+        from backend.agents import snapshot_scheduler
+        _hour = int(getattr(settings, "agent_snapshot_hour", 0) or 0)
+        if _hour > 0:
+            await asyncio.to_thread(snapshot_scheduler.catch_up)
+            _snapshot_stop = asyncio.Event()
+            _snapshot_task = asyncio.create_task(snapshot_scheduler.run_daily(
+                _snapshot_stop, _hour,
+                int(getattr(settings, "agent_snapshot_minute", 10) or 0)))
+            logger.info("medical_agent.startup.snapshot_scheduler",
+                        hour=_hour,
+                        minute=int(getattr(settings, "agent_snapshot_minute", 10) or 0))
+        else:
+            logger.info("medical_agent.startup.snapshot_scheduler_disabled")
+    except Exception as exc:  # noqa: BLE001 —— 调度失败不阻断服务
+        logger.warning("medical_agent.startup.snapshot_scheduler_failed",
+                       error=str(exc)[:120])
+    try:
+        # 评审 M-23：多 worker 形态下进程内 counter 不可信，启动时显式告警
+        from backend.agents import consult_metrics as _cm
+        _workers = _cm.worker_count()
+        if _workers > 1:
+            logger.warning("medical_agent.startup.multi_worker_metrics",
+                           workers=_workers,
+                           detail="进程内问答计量在多 worker 下会被 Prometheus 判为 reset，"
+                                  "错误率告警不可信；请固定单 worker 或改用多进程聚合")
+        else:
+            logger.info("medical_agent.startup.metrics_worker_single")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_agent.startup.metrics_worker_probe_failed",
+                       error=str(exc)[:120])
     logger.info("medical_agent.startup.done")
     yield
     logger.info("medical_agent.shutdown")
+    if _snapshot_stop is not None:
+        _snapshot_stop.set()
+    if _snapshot_task is not None:
+        try:
+            await asyncio.wait_for(_snapshot_task, timeout=5)
+        except Exception:  # noqa: BLE001 —— 超时/异常直接取消，不拖慢下线
+            _snapshot_task.cancel()
     try:
         # 优雅下线：先从 Nacos 摘除，避免滚动更新期间新请求打到正在停止的实例
         from backend.core.nacos_registry import registry as _nacos_registry

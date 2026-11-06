@@ -78,6 +78,17 @@ groups:
           summary: "统一问答错误率超过 20%"
           description: "近 10 分钟错误率 {{ $value }}（已排除前置应答）；请按 reason 标签区分输入非法与模型不可用，不要通过放宽校验降错误率。"
 
+      # 评审 M-23：多 worker 下进程内 counter 会在抓取间抖动，rate() 结果不可信。
+      # 该告警只做"形态可见"，不自动处置；修复方式是固定单 worker 或改多进程聚合。
+      - alert: MedAssistAgentMultiWorkerMetrics
+        expr: medassist_agent_metrics_worker_count > 1
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "AI 中台以多 worker 运行，问答计量不可信"
+          description: "当前 {{ $value }} 个 worker；进程内 counter 会被 Prometheus 判为 reset。请固定单 worker 或改用多进程聚合后再依赖错误率告警。"
+
       - alert: MedAssistAgentConsultAbortedSpike
         expr: sum(increase(medassist_agent_consult_requests_total{status="aborted",agent!="prefilter"}[10m])) >= 5
         for: 10m

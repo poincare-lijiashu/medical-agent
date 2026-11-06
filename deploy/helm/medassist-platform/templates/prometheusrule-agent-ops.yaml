@@ -94,6 +94,16 @@ spec:
             summary: "统一问答错误率超过 20%"
             description: "近 10 分钟错误率 {{ "{{" }} $value {{ "}}" }}（已排除前置应答）；请按 reason 标签区分输入非法与模型不可用。"
 
+        - alert: MedAssistAgentMultiWorkerMetrics
+          # 评审 M-23：多 worker 下进程内 counter 不可信（只告警形态，不自动处置）
+          expr: medassist_agent_metrics_worker_count > 1
+          for: 1h
+          labels:
+            severity: info
+          annotations:
+            summary: "AI 中台以多 worker 运行，问答计量不可信"
+            description: "当前 {{ "{{" }} $value {{ "}}" }} 个 worker；请固定单 worker 或改用多进程聚合。"
+
         - alert: MedAssistAgentConsultAbortedSpike
           expr: sum(increase(medassist_agent_consult_requests_total{status="aborted",agent!="prefilter"}[10m])) >= 5
           for: 10m

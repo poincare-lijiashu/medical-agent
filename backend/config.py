@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     # 留空则不开放该通道（仍只允许 admin 登录态读取）。生产用随机长串并只挂到
     # Prometheus ServiceMonitor 的 Secret，不进版本库。
     metrics_token: str = ""
+    # G94/M-28：技能运营指标快照的自动生成时间（本地时区）。0 表示关闭自动快照
+    # （只保留管理端手动按钮）；默认每天 01:10。启动时若当天缺失会立即补一条。
+    agent_snapshot_hour: int = 1
+    agent_snapshot_minute: int = 10
     auth_enabled: bool = True
     auth_seed_demo: bool = False  # 首次运行是否注入演示账号（doctor01 等）；默认关闭，仅演示环境显式开启
     auth_demo_password: str = ""  # 演示账号统一口令；留空则 seed 时随机生成（仅 dev 演示，生产不 seed）

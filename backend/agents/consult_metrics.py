@@ -14,11 +14,17 @@
 
 边界：
 - 多实例部署时由 Prometheus 按实例聚合；进程重启计数归零（标准 counter 语义）；
+- **多 worker 进程**（同一端口下 ``WEB_CONCURRENCY/UVICORN_WORKERS > 1``）时，
+  每次抓取可能落到不同进程，counter 会来回跳变、被 Prometheus 判为 reset，
+  ``rate()`` 结果不可信（评审 M-23）。本模块导出
+  ``medassist_agent_metrics_worker_count`` 让该形态**可见**，并在启动日志告警；
+  生产要么固定单 worker，要么接受该限制（多进程聚合需改为 multiprocess 模式，未支持）；
 - 技能标签上限 200 个，超出归入 ``__other__``，防标签基数失控；
 - 只在问答成功（含前置应答）时累计技能使用；失败/中止不计入使用量。
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import defaultdict
@@ -37,6 +43,23 @@ _skill_usage: dict[str, int] = defaultdict(int)
 _skill_last_used: dict[str, float] = {}
 _tokens = {"input": 0, "output": 0}
 _tokenized_requests = 0
+
+
+def _worker_count() -> int:
+    """读取部署侧的 worker 数（未配置视为 1）。评审 M-23：把多进程形态显式化。"""
+    for key in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        raw = (os.environ.get(key) or "").strip()
+        if raw:
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                continue
+    return 1
+
+
+def worker_count() -> int:
+    """部署侧 worker 数（公开给启动自检/文档使用）。"""
+    return _worker_count()
 
 
 def _esc(value: str) -> str:
@@ -127,6 +150,10 @@ def snapshot() -> dict:
 def prometheus_text() -> str:
     with _lock:
         lines = [
+            # 评审 M-23：多 worker 时进程内 counter 不可信，先把部署形态暴露出来
+            "# HELP medassist_agent_metrics_worker_count 部署侧 worker 进程数（>1 时进程内计数不适用于 rate）",
+            "# TYPE medassist_agent_metrics_worker_count gauge",
+            f"medassist_agent_metrics_worker_count {_worker_count()}",
             "# HELP medassist_agent_consult_requests_total 统一问答请求次数",
             "# TYPE medassist_agent_consult_requests_total counter",
         ]

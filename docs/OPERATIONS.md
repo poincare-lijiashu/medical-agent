@@ -99,6 +99,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
      kubectl -n medassist-prod get prometheusrule | grep agent-ops
      ```
 
+  **多 worker 限制（M-23）**：问答计量是**进程内**计数。若以 `WEB_CONCURRENCY/UVICORN_WORKERS > 1`
+  运行，每次抓取可能落到不同进程，counter 会来回跳变被 Prometheus 判为 reset，`rate()` 与错误率
+  告警不可信。`/metrics` 已导出 `medassist_agent_metrics_worker_count`，超过 1 时会有
+  `MedAssistAgentMultiWorkerMetrics` 告警；生产请固定单 worker；多进程聚合（prometheus_client
+  multiprocess 模式）尚未支持。
+
   **回滚语义（不会打断既有监控）**
   - `METRICS_TOKEN` 留空 → `/metrics` 退回"仅 admin JWT 可读"；Java 侧 `/actuator/prometheus` 抓取完全独立，不受影响。
   - 关闭 `serviceMonitor.aiCore.enabled` / `rules.enabled` 只删除 ai-core 抓取与 Agent 规则，不影响 Java 侧 ServiceMonitor。

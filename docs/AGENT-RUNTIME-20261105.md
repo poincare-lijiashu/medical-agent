@@ -627,5 +627,19 @@
 
 **验证**：全量 pytest **1007 passed / 11 skipped**；`npm run build` 成功。
 
-**仍待整改**：PG 真库断言与多实例 CAS（M-30/31/32）、多 worker counter 语义（M-23）、
-快照自动触发（M-28）、第三方调用性能（M-43~M-47）、其余前端可访问性（M-56~M-59）。
+---
+
+## 8. 2026-11-06 评审整改（第 4 批：运行形态与真库证据）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-28 | 新增快照调度器：启动时**补当天快照**（幂等），之后每天 `AGENT_SNAPSHOT_HOUR:MINUTE`（默认 01:10）自动生成；`0` 关闭。失败只记日志、次日重试，不阻塞服务 | `backend/agents/snapshot_scheduler.py`、`main.py` lifespan、`config.py` |
+| M-23 | 多 worker 形态显式化：`/metrics` 新增 `medassist_agent_metrics_worker_count`；启动日志告警；新增 `MedAssistAgentMultiWorkerMetrics` 规则（本地规则 + Helm CRD 同步）。**未**实现多进程聚合（明确不支持，不用假数据掩盖） | `consult_metrics.py`、`main.py`、两份规则文件、`OPERATIONS.md` |
+| M-30 | 新增真库断言 `tests/test_agent_pg_real.py`：覆盖 `agent_skills` + 7 张通用 JSON 列表表的"写入→查询→清理"，并校验 `status` 列；PG 不可用自动 skip | `tests/test_agent_pg_real.py`、`conftest.pg_originals` |
+| M-31 | 真库并发对照：两个写入者并发 `upsert_json_item` 不同主键 → 两行都在（行级语义正向证据） | 同上 |
+
+**M-32（未完成，如实登记）**：技能卡 / Bot / 团队 / 记忆四个域仍是"整表 load → 改一条 → 整表 save"，
+多实例并发时后写者会删除先写者的新增行。修复需要把四个域的写路径改为按主键 upsert + 显式删除
+（或引入 tombstone），属于结构性改造；本轮只补了真库证据与行级 API 的正向对照，**未声称已修**。
+
+**验证**：全量 pytest **1024 passed / 11 skipped**。
