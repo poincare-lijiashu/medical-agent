@@ -1342,6 +1342,141 @@ def upsert_skill_item(item: dict, path: str) -> None:
     _json_upsert_item(path, "code", item, False)
 
 
+# ---- M-32 剩余：行级 CAS（比较并交换）--------------------------------------
+# 行级 upsert 只解决"互相删除他行"；同一行被两个实例同时改时仍会后写覆盖。
+# 这里把 rowVersion 比较下推到 SQL：只有 `data->>'rowVersion'` 等于调用方读到的
+# 版本才更新，影响行数为 0 → 调用方按"已被他人修改"处理。
+
+async def _pg_cas_skill(item: dict, expected: int) -> int:
+    async with _pool.acquire() as c:
+        return await c.fetchval(
+            """WITH u AS (
+                   UPDATE agent_skills SET data=$3::jsonb, status=$4, updated_at=now()
+                   WHERE code=$1 AND (data->>'rowVersion')::int = $2
+                   RETURNING 1)
+               SELECT count(*) FROM u""",
+            str(item.get("code")), int(expected),
+            json.dumps(item, ensure_ascii=False), str(item.get("status") or "DRAFT"))
+
+
+async def _pg_cas_json_item(table: str, key: str, item: dict, expected: int) -> int:
+    async with _pool.acquire() as c:
+        return await c.fetchval(
+            f"""WITH u AS (
+                    UPDATE {table} SET data=$3::jsonb, status=$4, updated_at=now()
+                    WHERE {key}=$1 AND (data->>'rowVersion')::int = $2
+                    RETURNING 1)
+                SELECT count(*) FROM u""",
+            str(item.get(key)), int(expected),
+            json.dumps(item, ensure_ascii=False), str(item.get("status") or ""))
+
+
+def _json_cas_item(path: str, key: str, item: dict, expected: int) -> bool:
+    with _JSON_LIST_LOCK:
+        data = _read_json(path, [])
+        target = next((i for i in data if i.get(key) == item.get(key)), None)
+        if target is None or int(target.get("rowVersion", 0)) != int(expected):
+            return False
+        data = [i for i in data if i.get(key) != item.get(key)] + [item]
+        _write_json_atomic(path, data)
+        return True
+
+
+def cas_update_skill_item(item: dict, expected: int, path: str) -> bool:
+    """技能卡按 code + rowVersion 原子更新；False 表示版本已变（冲突）。"""
+    domain = os.path.basename(path)
+    if offline_mode() or not _pool:
+        return _json_cas_item(path, "code", item, expected)
+    try:
+        ok = bool(_run_pg(_pg_cas_skill(item, expected)))
+        _repo_pg_stale.discard(domain) if ok else _repo_pg_stale.add(domain)
+    except Exception as e:  # noqa: BLE001 —— PG 异常时退回 JSON CAS（语义一致）
+        logger.warning("pg.repo.cas_skill_failed", error=str(e)[:120], file=domain)
+        _repo_pg_stale.add(domain)
+        return _json_cas_item(path, "code", item, expected)
+    return ok and _json_cas_item(path, "code", item, expected)
+
+
+def cas_update_json_item(table: str, path: str, item: dict, expected: int) -> bool:
+    """通用 JSON 列表域按主键 + rowVersion 原子更新；False 表示版本已变。"""
+    key = _JSON_LIST_KEYS[table]
+    domain = os.path.basename(path)
+    if offline_mode() or not _pool:
+        return _json_cas_item(path, key, item, expected)
+    try:
+        ok = bool(_run_pg(_pg_cas_json_item(table, key, item, expected)))
+        _repo_pg_stale.discard(domain) if ok else _repo_pg_stale.add(domain)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.repo.cas_item_failed", error=str(e)[:120], file=domain)
+        _repo_pg_stale.add(domain)
+        return _json_cas_item(path, key, item, expected)
+    return ok and _json_cas_item(path, key, item, expected)
+
+
+async def _pg_insert_skill(item: dict) -> int:
+    async with _pool.acquire() as c:
+        return await c.fetchval(
+            """WITH i AS (
+                   INSERT INTO agent_skills(code,data,status,updated_at)
+                   VALUES($1,$2::jsonb,$3,now()) ON CONFLICT(code) DO NOTHING
+                   RETURNING 1)
+               SELECT count(*) FROM i""",
+            str(item.get("code")), json.dumps(item, ensure_ascii=False),
+            str(item.get("status") or "DRAFT"))
+
+
+async def _pg_insert_json_item(table: str, key: str, item: dict) -> int:
+    async with _pool.acquire() as c:
+        return await c.fetchval(
+            f"""WITH i AS (
+                    INSERT INTO {table}({key},data,status,updated_at)
+                    VALUES($1,$2::jsonb,$3,now()) ON CONFLICT({key}) DO NOTHING
+                    RETURNING 1)
+                SELECT count(*) FROM i""",
+            str(item.get(key)), json.dumps(item, ensure_ascii=False),
+            str(item.get("status") or ""))
+
+
+def _json_insert_item(path: str, key: str, item: dict) -> bool:
+    with _JSON_LIST_LOCK:
+        data = _read_json(path, [])
+        if any(i.get(key) == item.get(key) for i in data):
+            return False
+        data.append(item)
+        _write_json_atomic(path, data)
+        return True
+
+
+def insert_skill_item(item: dict, path: str) -> bool:
+    """只在不存在时插入（冲突返回 False），用于创建路径的跨实例去重。"""
+    domain = os.path.basename(path)
+    if offline_mode() or not _pool:
+        return _json_insert_item(path, "code", item)
+    try:
+        ok = bool(_run_pg(_pg_insert_skill(item)))
+        _repo_pg_stale.discard(domain) if ok else _repo_pg_stale.add(domain)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.repo.insert_skill_failed", error=str(e)[:120], file=domain)
+        _repo_pg_stale.add(domain)
+        return _json_insert_item(path, "code", item)
+    return ok and _json_insert_item(path, "code", item)
+
+
+def insert_json_item(table: str, path: str, item: dict) -> bool:
+    key = _JSON_LIST_KEYS[table]
+    domain = os.path.basename(path)
+    if offline_mode() or not _pool:
+        return _json_insert_item(path, key, item)
+    try:
+        ok = bool(_run_pg(_pg_insert_json_item(table, key, item)))
+        _repo_pg_stale.discard(domain) if ok else _repo_pg_stale.add(domain)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.repo.insert_item_failed", error=str(e)[:120], file=domain)
+        _repo_pg_stale.add(domain)
+        return _json_insert_item(path, key, item)
+    return ok and _json_insert_item(path, key, item)
+
+
 def upsert_json_item(table: str, path: str, item: dict,
                      ignore_existing: bool = False) -> None:
     """按主键幂等写单条（PG 行级 upsert + JSON 镜像/兜底）。

@@ -33,6 +33,10 @@ _PG_ORIGINALS = {
     "save_skills": _pg_store.save_skills,
     "load_json_list": _pg_store.load_json_list,
     "save_json_list": _pg_store.save_json_list,
+    "insert_skill_item": _pg_store.insert_skill_item,
+    "cas_update_skill_item": _pg_store.cas_update_skill_item,
+    "insert_json_item": _pg_store.insert_json_item,
+    "cas_update_json_item": _pg_store.cas_update_json_item,
 }
 
 
@@ -119,6 +123,18 @@ def _isolate_agent_stores(tmp_path, monkeypatch):
                         lambda table, path, json_loader=None: _json_only(json_loader, []))
     monkeypatch.setattr(pg_store, "save_json_list",
                         lambda table, path, items: pg_store._write_json_atomic(path, items))
+    # M-32：新增的行级 insert / CAS 同样锁到 JSON，避免测试进程污染 medagent_test
+    monkeypatch.setattr(pg_store, "insert_skill_item",
+                        lambda item, path: pg_store._json_insert_item(path, "code", item))
+    monkeypatch.setattr(pg_store, "cas_update_skill_item",
+                        lambda item, expected, path: pg_store._json_cas_item(
+                            path, "code", item, expected))
+    monkeypatch.setattr(pg_store, "insert_json_item",
+                        lambda table, path, item: pg_store._json_insert_item(
+                            path, pg_store._JSON_LIST_KEYS[table], item))
+    monkeypatch.setattr(pg_store, "cas_update_json_item",
+                        lambda table, path, item, expected: pg_store._json_cas_item(
+                            path, pg_store._JSON_LIST_KEYS[table], item, expected))
     yield
 
 

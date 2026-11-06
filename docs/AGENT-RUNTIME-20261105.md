@@ -748,3 +748,20 @@ Bot 同链路、团队停用/恢复。
 Bot 团队协作仍是各 Bot 各自加载一次技能卡（可进一步共享一份缓存，未做）。
 
 **验证**：全量 pytest **1041 passed / 11 skipped**。
+
+---
+
+## 15. 2026-11-06 评审整改（第 11 批：rowVersion CAS 下推 SQL）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-32（剩余） | 把 `rowVersion` 比较下推到 SQL：`UPDATE ... WHERE key=$1 AND (data->>'rowVersion')::int=$2`（CTE + `count(*)` 判断影响行数），影响 0 行即判定冲突。创建路径改为 `INSERT ... ON CONFLICT DO NOTHING`，跨实例同 code 只有一个成功。技能卡 / Bot / 团队 / 记忆四个域全部改为 CAS 写入；记忆新增内部 `rowVersion`（对外 API 不变） | `pg_store.py`、`skills.py`、`bots.py`、`bot_teams.py`、`bot_memory.py` |
+| 测试隔离 | conftest 把新增的 insert / CAS 也锁到 JSON（测试不污染 `medagent_test`），真库测试通过 `pg_originals` 还原原始实现 | `tests/conftest.py` |
+
+**新增测试**：真库 CAS——同版本只能成功一次、旧版本写失败、`insert_skill_item` 重复 code 返回 False；
+单测侧（JSON CAS）覆盖技能卡/Bot/团队/记忆的正常与冲突路径。
+
+**边界**：CAS 依赖 `data` 中存在 `rowVersion` 字段；历史记忆行若缺该字段按 0 处理（首次 CAS 会升级为 1）。
+`_save(整表)` 仍保留给迁移脚本，业务路径已全部不再调用。
+
+**验证**：全量 pytest **1043 passed / 11 skipped**。

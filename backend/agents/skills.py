@@ -96,9 +96,15 @@ def _save(items: list) -> None:
     pg_store.save_skills(items, SKILLS_FILE)
 
 
-def _upsert(item: dict) -> None:
-    """按 code 行级 upsert：多实例并发只触达目标行，不删除他方新增。"""
-    pg_store.upsert_skill_item(item, SKILLS_FILE)
+def _insert(item: dict) -> bool:
+    """只在不存在时插入；False 表示跨实例已被同 code 抢占（评审 M-32）。"""
+    return pg_store.insert_skill_item(item, SKILLS_FILE)
+
+
+def _cas(item: dict, expected: int) -> None:
+    """按 code + rowVersion 原子更新；版本已变则抛冲突（评审 M-32）。"""
+    if not pg_store.cas_update_skill_item(item, expected, SKILLS_FILE):
+        raise SkillConflict("技能卡已被他人修改，请刷新后重试")
 
 
 def _find(items: list, code: str) -> dict | None:
@@ -239,8 +245,8 @@ def create_skill(payload: dict, actor: str) -> dict:
             "reviewNote": None,
             "rowVersion": 0,
         }
-        items.append(item)
-        _upsert(item)
+        if not _insert(item):
+            raise SkillConflict(f"技能编码已存在：{data['code']}")
         return item
 
 
@@ -263,7 +269,7 @@ def update_skill(code: str, payload: dict, row_version: int, actor: str) -> dict
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -286,7 +292,7 @@ def submit_skill(code: str, row_version: int, actor: str) -> dict:
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -340,7 +346,7 @@ def review_skill(code: str, approve: bool, note: str | None, row_version: int,
             "updatedAt": now,
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -360,7 +366,7 @@ def disable_skill(code: str, row_version: int, actor: str) -> dict:
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -387,7 +393,7 @@ def enable_skill(code: str, row_version: int, actor: str) -> dict:
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 

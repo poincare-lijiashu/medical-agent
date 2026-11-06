@@ -191,6 +191,39 @@ def test_bots_multi_writer_keeps_all_rows(real_pg, tmp_path, monkeypatch):
             _delete("agent_bots", "code", code)
 
 
+def test_cas_update_rejects_stale_row_version(real_pg, tmp_path, monkeypatch):
+    """评审 M-32：rowVersion 比较下推 SQL——同版本只能成功一次。"""
+    from backend.agents import skills
+
+    monkeypatch.setattr(skills, "SKILLS_FILE", str(tmp_path / "skills.json"))
+    code = f"probe-{uuid.uuid4().hex[:10]}"
+    card = skills.create_skill(_skill_payload(code), "admin01")
+    try:
+        assert pg_store.cas_update_skill_item({**card, "rowVersion": 1}, 0,
+                                              skills.SKILLS_FILE) is True
+        # 另一个实例仍持有 v0 → 必须失败（不能后写覆盖）
+        assert pg_store.cas_update_skill_item({**card, "rowVersion": 1}, 0,
+                                              skills.SKILLS_FILE) is False
+        assert pg_store.cas_update_skill_item({**card, "rowVersion": 1}, 1,
+                                              skills.SKILLS_FILE) is True
+    finally:
+        _delete("agent_skills", "code", code)
+
+
+def test_insert_skill_rejects_duplicate_code(real_pg, tmp_path, monkeypatch):
+    """创建路径跨实例去重：同 code 第二次插入返回 False。"""
+    from backend.agents import skills
+
+    monkeypatch.setattr(skills, "SKILLS_FILE", str(tmp_path / "skills.json"))
+    code = f"probe-{uuid.uuid4().hex[:10]}"
+    item = {**_skill_payload(code), "status": "DRAFT", "rowVersion": 0}
+    try:
+        assert pg_store.insert_skill_item(item, skills.SKILLS_FILE) is True
+        assert pg_store.insert_skill_item(item, skills.SKILLS_FILE) is False
+    finally:
+        _delete("agent_skills", "code", code)
+
+
 def test_agent_skills_status_column_is_written(real_pg, tmp_path):
     """状态列参与告警/看板查询，真库侧必须与 data 一致。"""
     code = f"probe-{uuid.uuid4().hex[:10]}"

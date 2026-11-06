@@ -85,9 +85,15 @@ def _save(items: list) -> None:
     pg_store.save_json_list("agent_bot_teams", TEAMS_FILE, items)
 
 
-def _upsert(item: dict) -> None:
-    """按 code 行级 upsert：多实例并发不删除他方新增（评审 M-32）。"""
-    pg_store.upsert_json_item("agent_bot_teams", TEAMS_FILE, item)
+def _insert(item: dict) -> bool:
+    """只在不存在时插入（评审 M-32：跨实例同 code 只能有一个成功）。"""
+    return pg_store.insert_json_item("agent_bot_teams", TEAMS_FILE, item)
+
+
+def _cas(item: dict, expected: int) -> None:
+    """按 code + rowVersion 原子更新；版本已变抛冲突（评审 M-32）。"""
+    if not pg_store.cas_update_json_item("agent_bot_teams", TEAMS_FILE, item, expected):
+        raise TeamConflict("团队已被他人修改，请刷新后重试")
 
 
 def _find(items: list, code: str) -> dict | None:
@@ -151,8 +157,8 @@ def create_team(payload: dict, actor: str) -> dict:
         now = _now()
         item = {**data, "status": "ACTIVE", "rowVersion": 0,
                 "createdBy": actor, "createdAt": now, "updatedBy": actor, "updatedAt": now}
-        items.append(item)
-        _upsert(item)
+        if not _insert(item):
+            raise TeamConflict(f"团队编码已存在：{data['code']}")
         return item
 
 
@@ -175,7 +181,7 @@ def update_team(code: str, payload: dict, row_version: int, actor: str) -> dict:
         item.update({"submittedBy": actor, "submittedAt": _now(),
                      "updatedBy": actor, "updatedAt": _now(),
                      "rowVersion": int(item["rowVersion"]) + 1})
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -210,7 +216,7 @@ def review_team(code: str, approve: bool, note: str | None, row_version: int,
                      "reviewNote": text or None,
                      "updatedBy": actor, "updatedAt": now,
                      "rowVersion": int(item["rowVersion"]) + 1})
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -226,7 +232,7 @@ def disable_team(code: str, row_version: int, actor: str) -> dict:
             raise TeamConflict("团队已被他人修改，请刷新后重试")
         item.update({"status": "DISABLED", "updatedBy": actor, "updatedAt": _now(),
                      "rowVersion": int(item["rowVersion"]) + 1})
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 
@@ -244,7 +250,7 @@ def enable_team(code: str, row_version: int, actor: str) -> dict:
         item.update({"status": "ACTIVE", "updatedBy": actor,
                      "updatedAt": _now(),
                      "rowVersion": int(item["rowVersion"]) + 1})
-        _upsert(item)
+        _cas(item, row_version)
         return item
 
 

@@ -92,9 +92,16 @@ def _save(items: list) -> None:
     pg_store.save_json_list("agent_bot_memories", MEMORY_FILE, items)
 
 
-def _upsert(item: dict) -> None:
-    """按 id 行级 upsert：多实例并发不删除他方新增（评审 M-32）。"""
-    pg_store.upsert_json_item("agent_bot_memories", MEMORY_FILE, item)
+def _insert(item: dict) -> bool:
+    """只在不存在时插入（评审 M-32）。"""
+    return pg_store.insert_json_item("agent_bot_memories", MEMORY_FILE, item)
+
+
+def _cas(item: dict, expected: int) -> None:
+    """按 id + rowVersion 原子更新；版本已变抛冲突（评审 M-32）。"""
+    if not pg_store.cas_update_json_item("agent_bot_memories", MEMORY_FILE,
+                                         item, expected):
+        raise MemoryConflict("记忆已被他人修改，请刷新后重试")
 
 
 def _find(items: list, mem_id: str) -> dict | None:
@@ -192,9 +199,10 @@ def create_memory(payload: dict, actor: str) -> dict:
             "createdAt": _now(),
             "confirmedBy": None,
             "confirmedAt": None,
+            "rowVersion": 0,
         }
-        items.append(item)
-        _upsert(item)
+        if not _insert(item):
+            raise MemoryConflict("记忆写入冲突，请重试")
         return item
 
 
@@ -212,9 +220,10 @@ def confirm_memory(mem_id: str, actor: str, role: str) -> dict:
             raise MemoryForbidden("仅质控/管理员可确认 Bot 长期记忆（四眼原则）")
         if item.get("createdBy") == actor:
             raise MemoryForbidden("不能确认自己录入的记忆（四眼原则）")
+        expected = int(item.get("rowVersion", 0))
         item.update({"status": "CONFIRMED", "confirmedBy": actor,
-                     "confirmedAt": _now()})
-        _upsert(item)
+                     "confirmedAt": _now(), "rowVersion": expected + 1})
+        _cas(item, expected)
         return item
 
 
@@ -226,11 +235,13 @@ def delete_memory(mem_id: str, actor: str, role: str) -> dict:
             raise MemoryNotFound(f"未找到记忆：{mem_id}")
         if role not in ("admin", "qc") and item.get("createdBy") != actor:
             raise MemoryForbidden("只能删除自己创建的记忆")
+        expected = int(item.get("rowVersion", 0))
         item.update({"status": "DELETED", "deletedBy": actor,
                      "deletedAt": _now(),
                      # 评审 M-11：正文即 PHI 载体，软删除同时清空
-                     "value": REDACTED_VALUE, "valueRedacted": True})
-        _upsert(item)
+                     "value": REDACTED_VALUE, "valueRedacted": True,
+                     "rowVersion": expected + 1})
+        _cas(item, expected)
         return item
 
 
@@ -247,9 +258,14 @@ def purge_deleted_bodies() -> int:
                 continue
             if item.get("value") == REDACTED_VALUE:
                 continue
+            expected = int(item.get("rowVersion", 0))
             item["value"] = REDACTED_VALUE
             item["valueRedacted"] = True
-            _upsert(item)
+            item["rowVersion"] = expected + 1
+            try:
+                _cas(item, expected)
+            except MemoryConflict:  # 并发已被他人清理/修改：跳过，不阻断启动
+                continue
             changed += 1
         return changed
 
