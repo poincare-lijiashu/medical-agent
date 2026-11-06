@@ -41,6 +41,9 @@ def _clean_auth_state():
     deps._revoked_before.clear()
     security_rate.reset()
     stores.reset_store()  # 轮 B2：重建共享 store 单例（撤销/会话键不跨测试残留）
+    # 评审 M-45：/metrics 有 5s 进程内缓存，测试间必须清空，否则读到上一用例的 exposition
+    from backend import main as _main
+    _main._metrics_cache.update(at=0.0, text="")
     yield
     deps._revoked_before.clear()
 

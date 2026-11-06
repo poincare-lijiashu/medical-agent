@@ -168,6 +168,26 @@ def test_memory_expiry_and_delete():
     assert bot_memory.context_memories("deepseek-bot") == []
 
 
+def test_delete_redacts_body_and_purges_history():
+    """评审 M-11：软删除必须清空正文，历史残留由 purge 幂等清理。"""
+    _published_bot()
+    mem = bot_memory.create_memory({"botCode": "deepseek-bot", "key": "kk",
+                                    "value": "呼吸科偏好院内路径", "source": "科室"},
+                                   "admin01")
+    bot_memory.confirm_memory(mem["id"], "qc01", "qc")
+    deleted = bot_memory.delete_memory(mem["id"], "admin01", "admin")
+    assert deleted["value"] == bot_memory.REDACTED_VALUE
+    assert deleted["valueRedacted"] is True
+
+    # 模拟改造前的历史软删除：正文仍在存储里
+    items = bot_memory._load()
+    items[0]["value"] = "历史正文：患者 13800138000"
+    bot_memory._save(items)
+    assert bot_memory.purge_deleted_bodies() == 1
+    assert bot_memory._load()[0]["value"] == bot_memory.REDACTED_VALUE
+    assert bot_memory.purge_deleted_bodies() == 0  # 幂等
+
+
 def test_memory_permission():
     _published_bot()
     mem = bot_memory.create_memory({"botCode": "deepseek-bot", "key": "kk",

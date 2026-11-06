@@ -646,6 +646,23 @@
 - 状态机仍依赖 `rowVersion` 应用层 CAS（读-改-写同一把进程内锁）；多实例下"同一行被两实例同时改"
   仍可能出现后写覆盖先写——行级写只解决"互相删除他行"，不解决"同行并发更新"。彻底修复需要把
   CAS 下推到 SQL（`UPDATE ... WHERE row_version=$n` 并检查影响行数）。
-- 软删除保留正文（M-11 未处理）：记忆删除只置 `DELETED`，正文仍在存储中，PHI 残留需按保留期清理。
+- ~~软删除保留正文（M-11）~~ → **已在第 5 批修复**：删除即清空正文，历史残留由
+  `purge_deleted_bodies()` 在启动时幂等清理。
 
 **验证**：全量 pytest **1026 passed / 11 skipped**。
+
+---
+
+## 9. 2026-11-06 评审整改（第 5 批：PHI 残留、可观测与抓取成本）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-11 | 记忆软删除**同时清空正文**（`value="[已删除]"`、`valueRedacted=true`）；新增 `purge_deleted_bodies()` 在启动时幂等清理历史残留 | `bot_memory.py`、`main.py` lifespan |
+| M-33 | 四个 Agent 存储模块的"读失败/JSON 损坏"不再静默：统一 `logger.warning` 留痕，避免与"空库"混淆（**未**改成 fail-closed，以免改变既有 API 语义） | `skills.py`/`bots.py`/`bot_teams.py`/`bot_memory.py` |
+| M-45 | `/metrics` 加 5s 进程内缓存 + 线程池构建：一次抓取不再触发 ~11 次域加载，也不阻塞事件循环；Agent 侧 Prometheus 端点同样改线程池 | `main.py`、`agent_router.py` |
+
+**新增/更新测试**：`test_agent_bots.py`（删除即清空正文 + 历史 purge 幂等）；conftest 每用例清空 metrics 缓存（防跨用例读到旧 exposition）。
+
+**仍存边界**：M-43（同步 PG IO 直接跑在事件循环）只在 `/metrics` 两条路径做了线程池化，其余 Agent 端点仍是同步调用；M-44（单次 Bot 执行 O(技能数/Bot 数) 全表读）未优化。
+
+**验证**：全量 pytest **1027 passed / 11 skipped**。

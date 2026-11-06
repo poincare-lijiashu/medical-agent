@@ -25,6 +25,9 @@ from datetime import datetime, timezone
 
 from backend.agents import catalog
 from backend.core import agent_tools, pg_store
+from backend.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKILLS_FILE = os.path.join(BASE_DIR, "data", "agent_skills.json")
@@ -69,7 +72,9 @@ def _now() -> str:
 def _load() -> list:
     try:
         return pg_store.load_skills(SKILLS_FILE, _load_json)
-    except Exception:  # noqa: BLE001 —— 存储异常不拖垮主链路，按空库处理
+    except Exception as e:  # noqa: BLE001 —— 存储异常不拖垮主链路，但不静默
+        # 评审 M-33：读失败必须留痕，避免"空库"与"读失败"无法区分
+        logger.warning("agent_skills.load_failed", error=type(e).__name__)
         return []
 
 
@@ -81,7 +86,8 @@ def _load_json() -> list:
         with open(SKILLS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent_skills.json_corrupt", error=type(e).__name__)
         return []
 
 

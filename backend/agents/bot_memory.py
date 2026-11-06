@@ -21,12 +21,17 @@ from datetime import date, datetime, timezone
 
 from backend.agents import bots
 from backend.core import pg_store
+from backend.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MEMORY_FILE = os.path.join(BASE_DIR, "data", "bot_memories.json")
 
 MAX_ITEMS = 200
 MAX_VALUE = 500
+# 评审 M-11：软删除必须清空正文，避免 PHI 在存储中长期残留
+REDACTED_VALUE = "[已删除]"
 _KEY = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
 
 # 与出网脱敏同口径：这些标识不允许进入长期记忆
@@ -68,14 +73,17 @@ def _load_json() -> list:
         with open(MEMORY_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.warning("bot_memory.json_corrupt", error=type(e).__name__)
         return []
 
 
 def _load() -> list:
     try:
         return pg_store.load_json_list("agent_bot_memories", MEMORY_FILE, _load_json)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        # 评审 M-33：读失败留痕，避免与"空库"混淆
+        logger.warning("bot_memory.load_failed", error=type(e).__name__)
         return []
 
 
@@ -219,9 +227,31 @@ def delete_memory(mem_id: str, actor: str, role: str) -> dict:
         if role not in ("admin", "qc") and item.get("createdBy") != actor:
             raise MemoryForbidden("只能删除自己创建的记忆")
         item.update({"status": "DELETED", "deletedBy": actor,
-                     "deletedAt": _now()})
+                     "deletedAt": _now(),
+                     # 评审 M-11：正文即 PHI 载体，软删除同时清空
+                     "value": REDACTED_VALUE, "valueRedacted": True})
         _upsert(item)
         return item
+
+
+def purge_deleted_bodies() -> int:
+    """清理历史软删除记录中的正文（评审 M-11）。
+
+    改造前的删除只置 ``DELETED``，正文仍留在存储里；启动时调用一次，幂等。
+    返回本次清理的条数（0 表示无需处理）。
+    """
+    with _lock:
+        changed = 0
+        for item in _load():
+            if item.get("status") != "DELETED":
+                continue
+            if item.get("value") == REDACTED_VALUE:
+                continue
+            item["value"] = REDACTED_VALUE
+            item["valueRedacted"] = True
+            _upsert(item)
+            changed += 1
+        return changed
 
 
 def context_memories(bot_code: str, limit: int = 20) -> list[dict]:

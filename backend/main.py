@@ -33,6 +33,11 @@ logger = get_logger(__name__)
 VUE_DIST_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vue", "dist")
 
+# /metrics 的短 TTL 缓存（评审 M-45）：抓取间隔远大于 5s，短缓存不会影响判读，
+# 但能把"一次抓取 11 次域加载"摊薄；进程重启自然失效。
+_METRICS_CACHE_TTL_S = 5.0
+_metrics_cache: dict = {"at": 0.0, "text": ""}
+
 
 def _docs_kwargs(env: str) -> dict:
     """生产环境关闭交互式文档（/docs /redoc /openapi.json 不对外暴露），开发环境保留默认。"""
@@ -137,6 +142,15 @@ async def lifespan(app: FastAPI):
             logger.info("medical_agent.startup.snapshot_scheduler_disabled")
     except Exception as exc:  # noqa: BLE001 —— 调度失败不阻断服务
         logger.warning("medical_agent.startup.snapshot_scheduler_failed",
+                       error=str(exc)[:120])
+    try:
+        # 评审 M-11：清理历史软删除记忆的正文（PHI 残留），幂等
+        from backend.agents import bot_memory as _bot_memory
+        purged = await asyncio.to_thread(_bot_memory.purge_deleted_bodies)
+        if purged:
+            logger.info("medical_agent.startup.memory_bodies_purged", count=purged)
+    except Exception as exc:  # noqa: BLE001 —— 清理失败不阻断启动
+        logger.warning("medical_agent.startup.memory_purge_failed",
                        error=str(exc)[:120])
     try:
         # 评审 M-23：多 worker 形态下进程内 counter 不可信，启动时显式告警
@@ -316,13 +330,25 @@ async def metrics(user: dict = Depends(require_metrics_access)):
     永远无数据。此处合并为**单一口径的完整 exposition**，与 Agent 侧 Prometheus 端点一致。
     """
     from backend.agents import consult_metrics, skill_trends
-    try:
-        agent_ops = skill_trends.prometheus_text()
-    except Exception:  # noqa: BLE001 —— 运营指标聚合失败不能拖垮抓取本身
-        agent_ops = ""
-    return PlainTextResponse(
-        observability.exposition() + consult_metrics.prometheus_text() + agent_ops,
-        media_type="text/plain; version=0.0.4")
+
+    # 评审 M-45：一次抓取会触发约 11 次域加载（技能/经验/候选/建议/快照…）。
+    # 抓取间隔通常 15–30s，这里做 5s 的进程内缓存 + 线程池执行，避免：
+    # 1) 每个抓取都全量重算；2) 同步 PG/文件 IO 阻塞事件循环。
+    now = time.monotonic()
+    cached = _metrics_cache.get("text")
+    if cached and now - _metrics_cache["at"] < _METRICS_CACHE_TTL_S:
+        return PlainTextResponse(cached, media_type="text/plain; version=0.0.4")
+
+    def _build() -> str:
+        try:
+            agent_ops = skill_trends.prometheus_text()
+        except Exception:  # noqa: BLE001 —— 运营指标聚合失败不能拖垮抓取本身
+            agent_ops = ""
+        return observability.exposition() + consult_metrics.prometheus_text() + agent_ops
+
+    text = await asyncio.to_thread(_build)
+    _metrics_cache.update(at=now, text=text)
+    return PlainTextResponse(text, media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/v1/health")

@@ -769,7 +769,10 @@ async def skill_library_usage(user: dict = Depends(require_role("admin", "qc")))
 @router.get("/skill-library/metrics/prometheus", response_class=PlainTextResponse)
 async def skill_library_prometheus(user: dict = Depends(require_role("admin", "qc"))):
     """Prometheus 文本导出（聚合指标，不含业务标识/PHI）；供监控采集。"""
-    return PlainTextResponse(skill_trends.prometheus_text() + consult_metrics.prometheus_text(),
+    # 评审 M-45：聚合会触发多次域加载，放线程池避免阻塞事件循环
+    text = await asyncio.to_thread(
+        lambda: skill_trends.prometheus_text() + consult_metrics.prometheus_text())
+    return PlainTextResponse(text,
                              media_type="text/plain; version=0.0.4; charset=utf-8")
 
 

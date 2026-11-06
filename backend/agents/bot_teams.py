@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 
 from backend.agents import bots
 from backend.core import pg_store
+from backend.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TEAMS_FILE = os.path.join(BASE_DIR, "data", "bot_teams.json")
@@ -57,14 +60,17 @@ def _load_json() -> list:
         with open(TEAMS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.warning("bot_teams.json_corrupt", error=type(e).__name__)
         return []
 
 
 def _load() -> list:
     try:
         return pg_store.load_json_list("agent_bot_teams", TEAMS_FILE, _load_json)
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        # 评审 M-33：读失败留痕，避免与"空库"混淆
+        logger.warning("bot_teams.load_failed", error=type(e).__name__)
         return []
 
 
