@@ -45,6 +45,9 @@ CITE_CLAUSE = (
 DEFAULT_MAX_INPUT = 2000
 MIN_MAX_INPUT = 200
 
+# 单次问答可注入的技能卡提示总量上限（与 consult/发布准入共用同一口径，评审 M-35）
+MAX_PROMPT_BUDGET = 12000
+
 
 def effective(cards: list[dict] | None) -> dict:
     """汇总技能卡护栏：``requireEvidence`` / ``hitl`` 取或，输入上限取最严一档。"""

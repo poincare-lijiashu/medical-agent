@@ -23,7 +23,7 @@ import re
 import threading
 from datetime import datetime, timezone
 
-from backend.agents import catalog
+from backend.agents import catalog, guardrails
 from backend.core import agent_tools, pg_store
 from backend.core.logger import get_logger
 
@@ -313,6 +313,19 @@ def review_skill(code: str, approve: bool, note: str | None, row_version: int,
         now = _now()
         if approve:
             _validate(item)
+            # 评审 M-35：发布准入必须校验同一能力域的**聚合**提示预算，
+            # 否则发布后该能力域所有 /consult 都会因超预算 422。
+            others = sum(
+                len(i.get("promptTemplate") or "") for i in items
+                if i.get("status") == "PUBLISHED"
+                and i.get("agentId") == item.get("agentId")
+                and i.get("code") != item.get("code"))
+            total = others + len(item.get("promptTemplate") or "")
+            if total > guardrails.MAX_PROMPT_BUDGET:
+                raise SkillInvalid(
+                    f"该能力域已发布技能提示合计 {total} 字，超过 "
+                    f"{guardrails.MAX_PROMPT_BUDGET} 字上限；请收敛提示或先停用部分技能"
+                    "（否则发布后该能力域问答会全部失败）")
             item.update({
                 "status": "PUBLISHED",
                 "version": int(item.get("version", 0)) + 1,

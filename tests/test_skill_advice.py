@@ -110,6 +110,20 @@ def test_advice_id_is_deterministic_and_state_preserved():
     assert again["status"] == "DISMISSED" and again["note"] == "已知晓"
 
 
+def test_global_advice_uses_week_period_in_dedupe_key():
+    """评审 M-41：全局类建议按 ISO 周去重，被忽略后下一周仍能重新提醒。"""
+    first = skill_advice._advice("REPLAY_REVIEW", "high", "t", "d", "a",
+                                 "LIBRARY", None, "2026-W45")
+    same_week = skill_advice._advice("REPLAY_REVIEW", "high", "t", "d", "a",
+                                     "LIBRARY", None, "2026-W45")
+    next_week = skill_advice._advice("REPLAY_REVIEW", "high", "t", "d", "a",
+                                     "LIBRARY", None, "2026-W46")
+    assert first["dedupeKey"] == same_week["dedupeKey"]
+    assert first["dedupeKey"] != next_week["dedupeKey"]
+    assert first["dedupeKey"].endswith("2026-W45")
+    assert skill_advice._period_key().count("W") == 1
+
+
 def test_visibility_requires_privileged_role():
     with pytest.raises(skill_advice.AdviceConflict):
         skill_advice.list_advices("doctor")
@@ -146,8 +160,14 @@ def test_api_generate_dismiss_complete(monkeypatch, tmp_path):
         _publish_skill(f"api-unused-{i}", f"接口未引用技能{i}")
     r = c.post("/api/v1/agent/skill-advices/generate", headers=qc)
     assert r.status_code == 200
-    items = [i for i in r.json()["advices"] if i["code"] == "UNUSED_SKILL"]
+    body = r.json()
+    items = [i for i in body["advices"] if i["code"] == "UNUSED_SKILL"]
     assert len(items) == 3
+    # 评审 M-40：本次新建数与"当前全部"分开返回
+    assert body["createdCount"] == len(body["created"]) >= 3
+
+    again = c.post("/api/v1/agent/skill-advices/generate", headers=qc).json()
+    assert again["createdCount"] == 0  # 已存在的不重复创建
 
     assert c.post(f"/api/v1/agent/skill-advices/{items[0]['id']}/dismiss",
                   headers=qc, json={}).status_code == 422

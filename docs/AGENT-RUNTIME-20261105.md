@@ -666,3 +666,22 @@
 **仍存边界**：M-43（同步 PG IO 直接跑在事件循环）只在 `/metrics` 两条路径做了线程池化，其余 Agent 端点仍是同步调用；M-44（单次 Bot 执行 O(技能数/Bot 数) 全表读）未优化。
 
 **验证**：全量 pytest **1027 passed / 11 skipped**。
+
+---
+
+## 10. 2026-11-06 评审整改（第 6 批：发布准入与运营建议口径）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-35 | 发布准入校验**同能力域聚合提示预算**（`guardrails.MAX_PROMPT_BUDGET=12000`，与运行时共用）：超预算在审核通过时直接拒绝，不再"发布成功 → 该能力域问答全部 422"。运行时校验保留，用于存量数据 | `guardrails.py`、`skills.review_skill`、`consult.py` |
+| M-40 | 运营建议生成区分「本次新建」与「当前全部」：新增 `generate_with_stats()`，接口返回 `created/createdCount/advices`，审计按新建数计数 | `skill_advice.py`、`agent_router.py` |
+| M-41 | 全局类建议（回放通过率、经验覆盖率）去重 key 加入 **ISO 周**：同一周只提醒一次，下一周问题仍在则重新生成（此前一旦忽略永不重现） | `skill_advice._period_key` |
+| M-42 | 建议生成不再只取前 5 条（总量由 `MAX_PER_RUN` 控制）；"未被引用"文案标注为 **Bot 绑定维度**，与进程内使用率区分 | `skill_advice.generate_with_stats` |
+
+**新增测试**：草稿预算准入拒绝（`test_agent_skills`）、存量超预算运行时仍失败（`test_consult`）、
+建议新建计数与周维度去重（`test_skill_advice`）。
+
+**未做**：M-37（Bot 团队无审核环节）——需要给团队加状态机，会改变现有 `create_team` 即生效的语义，
+单列一批处理；M-36（状态机终态不可逆/编码永久占用）同理。
+
+**验证**：全量 pytest **1030 passed / 11 skipped**。

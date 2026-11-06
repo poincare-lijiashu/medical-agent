@@ -142,12 +142,35 @@ def test_guardrail_max_input(monkeypatch):
                                 runner=runner))
 
 
-def test_prompt_budget_exceeded(monkeypatch):
+def test_prompt_budget_enforced_at_publish(monkeypatch):
+    """评审 M-35：超预算在**发布准入**就被拒绝，而不是发布后让该能力域全线 422。"""
     _provider(monkeypatch)
     long_prompt = "请严格遵循院内规范作答。" + ("补充说明：" + "甲" * 90) * 35
-    for i in range(5):
+    for i in range(3):
         _publish(agent_id="literature", code=f"lit-{i}", name=f"技能{i}",
                  prompt=long_prompt)
+    with pytest.raises(skills.SkillInvalid, match="上限"):
+        _publish(agent_id="literature", code="lit-3", name="技能3",
+                 prompt=long_prompt)
+
+
+def test_runtime_budget_guard_for_legacy_data(monkeypatch):
+    """存量超预算数据（绕过准入写入）在运行时仍显式失败，不静默截断。"""
+    _provider(monkeypatch)
+    long_prompt = "请严格遵循院内规范作答。" + ("补充说明：" + "甲" * 90) * 35
+    cards = [{
+        "code": f"legacy-{i}", "name": f"存量{i}", "description": "存量超预算技能卡测试",
+        "agentId": "literature", "promptTemplate": long_prompt,
+        "toolAllowlist": ["kb_search"], "evidenceRefs": ["指南 2026"],
+        "guardrails": {"hitl": True, "requireEvidence": True, "maxInputChars": 1000},
+        "status": "PUBLISHED", "version": 1, "rowVersion": 1,
+        "createdBy": "admin01", "createdAt": "2026-01-01T00:00:00+08:00",
+        "updatedBy": "admin01", "updatedAt": "2026-01-01T00:00:00+08:00",
+        "submittedBy": "admin01", "submittedAt": "2026-01-01T00:00:00+08:00",
+        "reviewedBy": "qc01", "reviewedAt": "2026-01-01T00:00:00+08:00",
+        "reviewNote": None,
+    } for i in range(5)]
+    skills._save(cards)
 
     async def runner(provider, messages):
         return "回答"

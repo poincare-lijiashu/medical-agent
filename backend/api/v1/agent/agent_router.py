@@ -819,11 +819,15 @@ def _advice_http(e: skill_advice.AdviceError) -> HTTPException:
 async def generate_skill_advices(user: dict = Depends(require_role("admin", "qc"))):
     """把告警翻译成待办建议；不修改任何技能/Bot/候选。"""
     try:
-        items = skill_advice.generate(user.get("username", "qc"))
+        # 评审 M-40：区分"本次新建"与"当前全部"，审计计数按新建数
+        result = skill_advice.generate_with_stats(user.get("username", "qc"))
     except skill_advice.AdviceError as e:
         raise _advice_http(e)
-    await _audit_agent(user, "skill_advice_generate", {"advices": len(items)})
-    return {"advices": items}
+    await _audit_agent(user, "skill_advice_generate", {
+        "created": result["createdCount"],
+        "total": len(result["advices"]),
+    })
+    return result
 
 
 @router.get("/skill-advices")

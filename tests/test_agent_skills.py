@@ -42,6 +42,22 @@ def test_create_defaults():
     assert item["guardrails"]["hitl"] is True
 
 
+def test_publish_rejects_aggregate_prompt_over_budget():
+    """评审 M-35：同一能力域的聚合提示超预算时，审核通过必须拒绝（而非发布后全线 422）。"""
+    long_prompt = "按指南证据回答并逐条标注来源。" * 250  # ≈ 4000 字（单卡上限）
+    assert len(long_prompt) <= 4000
+
+    for i in range(3):
+        item = _created(code=f"budget-{i}", promptTemplate=long_prompt)
+        item = skills.submit_skill(item["code"], item["rowVersion"], "admin01")
+        skills.review_skill(item["code"], True, None, item["rowVersion"], "qc01")
+
+    last = _created(code="budget-3", promptTemplate=long_prompt)
+    last = skills.submit_skill(last["code"], last["rowVersion"], "admin01")
+    with pytest.raises(skills.SkillInvalid):
+        skills.review_skill(last["code"], True, None, last["rowVersion"], "qc01")
+
+
 def test_create_rejects_duplicate_code():
     _created()
     with pytest.raises(skills.SkillConflict):

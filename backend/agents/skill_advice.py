@@ -73,8 +73,22 @@ def _find(items: list, advice_id: str) -> dict | None:
     return None
 
 
+def _period_key() -> str:
+    """全局类建议的去重周期（ISO 周）。
+
+    评审 M-41：此前 ``dedupeKey`` 只含 code，导致"回放通过率异常""经验覆盖率低"
+    全库各只留一条——一旦被忽略/完成，同类问题**再也不会重新出现**。
+    加入周维度后：同一周内仍只提醒一次，下一周若问题仍在则重新生成。
+    """
+    year, week, _ = datetime.now(timezone.utc).astimezone().isocalendar()
+    return f"{year}-W{week:02d}"
+
+
 def _advice(code: str, severity: str, title: str, detail: str, action: str,
-            target_type: str, target_id: str | None) -> dict:
+            target_type: str, target_id: str | None, period: str = "") -> dict:
+    key = f"{code}:{target_id or '-'}"
+    if period:
+        key = f"{key}:{period}"
     return {
         "code": code,
         "severity": severity,
@@ -83,23 +97,35 @@ def _advice(code: str, severity: str, title: str, detail: str, action: str,
         "suggestedAction": action,
         "targetType": target_type,
         "targetId": target_id,
-        "dedupeKey": f"{code}:{target_id or '-'}",
+        "period": period or None,
+        "dedupeKey": key,
     }
 
 
 def generate(actor: str) -> list[dict]:
-    """由告警与当前数据生成建议；不修改任何技能/Bot/候选。"""
+    """由告警与当前数据生成建议；不修改任何技能/Bot/候选（返回全部建议）。"""
+    return generate_with_stats(actor)["advices"]
+
+
+def generate_with_stats(actor: str) -> dict:
+    """生成建议并返回 ``{created, createdCount, advices}``。
+
+    评审 M-40：此前接口把"全部建议"当作本次生成结果返回，审计计数随之失真；
+    这里显式区分"本次新建"与"当前全部"。
+    """
     alerts = skill_trends.alerts().get("alerts") or []
     proposals = skill_library.list_proposals("admin")
     metrics = skill_ops.metrics()
     pending = [p for p in proposals if p.get("status") == "PROPOSED"]
     unused = (metrics.get("skillCards") or {}).get("unusedPublished") or []
+    period = _period_key()
 
     drafts: list[dict] = []
     for alert in alerts:
         code = alert.get("code")
         if code in ("ADOPTION_RATE_LOW", "PROPOSAL_BACKLOG"):
-            for p in pending[:5]:
+            # 评审 M-42：不再只取前 5 条；总量由 MAX_PER_RUN 控制
+            for p in pending:
                 drafts.append(_advice(
                     "PROPOSAL_REVIEW", "medium",
                     f"候选技能待处理：{p.get('name')}",
@@ -107,11 +133,12 @@ def generate(actor: str) -> list[dict]:
                     "打开技能库，判断是否采纳（会先跑回放）或拒绝并填写原因",
                     "PROPOSAL", p.get("id")))
         elif code == "UNUSED_PUBLISHED_SKILLS":
-            for skill_code in unused[:5]:
+            for skill_code in unused:
                 drafts.append(_advice(
                     "UNUSED_SKILL", "medium",
                     f"生效技能未被引用：{skill_code}",
-                    "该技能卡已发布但没有 Bot 引用，长期闲置会造成口径漂移。",
+                    "该技能卡已发布但没有 Bot 引用（Bot 绑定维度；与进程内使用率不同），"
+                    "长期闲置会造成口径漂移。",
                     "评估绑定到合适 Bot，或停用该技能卡（先看影响面）",
                     "SKILL", skill_code))
         elif code in ("REPLAY_PASS_RATE_LOW", "REPLAY_PASS_RATE_DROP"):
@@ -120,14 +147,14 @@ def generate(actor: str) -> list[dict]:
                 "回放通过率异常，请复核候选",
                 alert.get("message") or "回放通过率低于阈值或较上次下降。",
                 "逐条查看候选的问题模式与证据，必要时拒绝；不要为通过率放宽回放",
-                "LIBRARY", None))
+                "LIBRARY", None, period))
         elif code == "EXPERIENCE_COVERAGE_LOW":
             drafts.append(_advice(
                 "EXPERIENCE_GAP", "low",
                 "经验覆盖率偏低",
                 alert.get("message") or "较多经验尚未进入候选。",
                 "补充同能力域、同问题模式的已审核脱敏经验后再提炼",
-                "LIBRARY", None))
+                "LIBRARY", None, period))
 
     with _lock:
         items = _load()
@@ -155,7 +182,8 @@ def generate(actor: str) -> list[dict]:
             created.append(item)
             if len(created) >= MAX_PER_RUN:
                 break
-    return list_advices("admin")
+    return {"created": created, "createdCount": len(created),
+            "advices": list_advices("admin")}
 
 
 def list_advices(role: str, status: str | None = None) -> list[dict]:

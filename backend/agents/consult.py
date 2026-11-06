@@ -32,7 +32,7 @@ from backend.core.medical_audit import PHIRedactor
 logger = get_logger(__name__)
 
 MAX_QUESTION = 2000
-PROMPT_BUDGET = 12000
+PROMPT_BUDGET = guardrails.MAX_PROMPT_BUDGET  # 发布准入与运行时共用同一口径（M-35）
 AGENT_TIMEOUT_S = 45.0
 STREAM_IDLE_TIMEOUT_S = 15.0
 MAX_HISTORY_TURNS = 6
