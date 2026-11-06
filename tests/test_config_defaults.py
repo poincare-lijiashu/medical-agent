@@ -17,6 +17,15 @@ def test_auth_seed_demo_default_off(monkeypatch):
     assert s.auth_seed_demo is False
 
 
+def test_production_env_aliases_are_unified():
+    """评审 S6：production / prod / staging 必须同一口径判定。"""
+    from backend.config import is_production_env
+    assert is_production_env("production")
+    assert is_production_env("prod")
+    assert is_production_env("STAGING")
+    assert not is_production_env("development")
+
+
 def test_his_adapter_default_none(monkeypatch):
     """HIS_ADAPTER 默认必须为 "none"（生产默认未对接；demo 适配器仅供集成开发参考）。"""
     monkeypatch.delenv("HIS_ADAPTER", raising=False)

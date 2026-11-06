@@ -22,9 +22,16 @@ _COOKIE_RT = "medassist_rt"   # 刷新令牌 cookie（max_age=refresh 过期分�
 
 
 def _token_from_request(creds: Optional[HTTPAuthorizationCredentials],
-                        request: Request) -> str:
+                        request: Request, allow_cookie: bool = True) -> str:
+    """Bearer 优先；``allow_cookie=False`` 时**不**回落到 cookie。
+
+    评审 S5：抓取令牌通道只允许显式 `Authorization: Bearer`，避免 cookie 成为
+    第二条令牌输入路径（浏览器会自动携带同源 cookie）。
+    """
     if creds and creds.credentials:
         return creds.credentials
+    if not allow_cookie:
+        return ""
     return request.cookies.get(_COOKIE_AT, "")
 
 
@@ -113,12 +120,16 @@ def require_metrics_access(
 
     静态令牌仅用于抓取，不映射真实用户；未配置时该通道关闭（fail-closed）。
     """
-    token = _token_from_request(creds, request)
+    # 评审 S5：抓取令牌只认 Bearer 头，不接受 cookie 回落
+    token = _token_from_request(creds, request, allow_cookie=False)
     expected = (settings.metrics_token or "").strip()
     if expected and token and _metrics_token_matches(token.strip(), expected):
         return {"username": "prometheus", "role": "metrics", "dept": ""}
     if not settings.auth_enabled:
-        return {"username": "anonymous", "role": "admin", "dept": ""}
+        # 评审 S5：无鉴权部署下 /metrics 也不公开（fail-closed）；
+        # 要抓取必须显式配置 METRICS_TOKEN。
+        raise HTTPException(status_code=503,
+                            detail="未配置 METRICS_TOKEN 且鉴权关闭：/metrics 不可用")
     if not token:
         raise HTTPException(status_code=401, detail="未认证：需 admin 登录或有效抓取令牌")
     user = _user_from_token(token)

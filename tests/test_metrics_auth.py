@@ -57,8 +57,20 @@ def test_metrics_accepts_static_token(monkeypatch, tmp_path):
     assert deps._metrics_token_matches("s3cr3t-metrics", "s3cr3t-metrics") is True
 
 
-def test_metrics_token_not_required_when_auth_disabled(monkeypatch, tmp_path):
+def test_metrics_fail_closed_when_auth_disabled_and_no_token(monkeypatch, tmp_path):
+    """评审 S5：无鉴权且未配置 METRICS_TOKEN 时 /metrics 必须拒绝（不能公开）。"""
     monkeypatch.setattr(settings, "metrics_token", "")
     monkeypatch.setattr(settings, "auth_enabled", False)
     c = _client(monkeypatch, tmp_path)
-    assert c.get("/metrics").status_code == 200
+    assert c.get("/metrics").status_code == 503
+
+
+def test_metrics_token_channel_ignores_cookie(monkeypatch, tmp_path):
+    """评审 S5：抓取令牌只认 Bearer 头，cookie 不能当作令牌通道。"""
+    monkeypatch.setattr(settings, "metrics_token", "s3cr3t-metrics")
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    c = _client(monkeypatch, tmp_path)
+    c.cookies.set("medassist_at", "s3cr3t-metrics")
+    assert c.get("/metrics").status_code == 401
+    assert c.get("/metrics",
+                 headers={"Authorization": "Bearer s3cr3t-metrics"}).status_code == 200

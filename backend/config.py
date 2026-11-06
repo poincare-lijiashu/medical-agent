@@ -214,9 +214,19 @@ def get_settings() -> Settings:
 
 settings = get_settings()
 
+# 评审 S6：生产判定唯一口径。此前三处各写一套（== "production" / 集合判定），
+# 导致 APP_ENV=prod 时启动安全校验与 /docs 关闭都不生效。
+PRODUCTION_ENVS = frozenset({"production", "prod", "staging"})
+
+
+def is_production_env(env: str | None = None) -> bool:
+    """是否为生产类环境（production / prod / staging，大小写不敏感）。"""
+    return str(env if env is not None else settings.app_env).strip().lower() in PRODUCTION_ENVS
+
+
 # JWT 密钥防呆：默认密钥等同于无鉴权（任何人可伪造令牌），一律禁止。
 if settings.auth_jwt_secret == "dev-secret-change-in-production":
-    if settings.app_env == "production":
+    if is_production_env():
         raise RuntimeError("拒绝启动：生产环境必须显式设置 AUTH_JWT_SECRET（禁止使用默认密钥）")
     import secrets as _secrets
     import warnings as _warnings

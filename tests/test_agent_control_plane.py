@@ -266,6 +266,21 @@ def _login(c, u, p="Med@2026"):
     return r.json()["access_token"]
 
 
+def test_flag_audit_records_before_value(monkeypatch, tmp_path):
+    """评审 S9：开关审计必须记录改前值（便于回滚与追责）。"""
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
+    seed_default_users()
+    c = TestClient(app)
+    adm = {"Authorization": "Bearer " + _login(c, "admin01")}
+    assert c.put("/api/v1/agent/flags", headers=adm,
+                 json={"key": "agent_web_search", "value": True}).status_code == 200
+    entry = next(e for e in audit.entries
+                 if (e.get("payload") or {}).get("action") == "flag_update")
+    assert entry["payload"]["before"] is False
+    assert entry["payload"]["value"] is True
+
+
 def test_card_endpoint_public_and_well_known(monkeypatch, tmp_path):
     agent_flags.set_flag("agent_a2a", True)  # 评审 M-12：默认关，显式开启后再验能力卡
     c = _client(monkeypatch, tmp_path)

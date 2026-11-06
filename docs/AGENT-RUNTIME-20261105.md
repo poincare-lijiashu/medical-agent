@@ -765,3 +765,23 @@ Bot 团队协作仍是各 Bot 各自加载一次技能卡（可进一步共享�
 `_save(整表)` 仍保留给迁移脚本，业务路径已全部不再调用。
 
 **验证**：全量 pytest **1043 passed / 11 skipped**。
+
+---
+
+## 16. 2026-11-06 评审整改（第 12 批：API 安全与契约细节 Should）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| S4 | SSE 响应显式 `charset=utf-8`、`Cache-Control: no-store`、`Connection: keep-alive` | `agent_router.py` |
+| S5 | `/metrics` 令牌通道只认 `Authorization: Bearer`（**不接受 cookie 回落**）；`AUTH_ENABLED=false` 且未配置 `METRICS_TOKEN` 时返回 **503**（真正 fail-closed，不再公开） | `api/deps.py` |
+| S6 | 生产判定统一为 `config.is_production_env()`（production/prod/staging），启动安全校验、`/docs` 关闭、embedder 告警口径三处一致；`APP_ENV=prod` 不再绕过安全校验 | `config.py`、`main.py` |
+| S9 | 开关写入审计记录**改前值** `before`（便于回滚与追责） | `agent_router.py` |
+
+**新增测试**：无鉴权+无令牌 → 503；cookie 不能当抓取令牌；`is_production_env` 别名口径；
+开关审计 `before/value`。
+
+**未做**：S1（400/422 错误码归一）、S2（SSE 事件 `status` 字段前端未用）、S3（慢客户端资源保护）、
+S7/S8（A2A 拓扑与 DoS，M-12 已关默认开关）、S12（快照覆盖历史）、S13（history 结构白名单）等，
+按优先级后续处理。
+
+**验证**：全量 pytest **1046 passed / 11 skipped**。

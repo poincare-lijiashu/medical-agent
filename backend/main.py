@@ -40,15 +40,20 @@ _metrics_cache: dict = {"at": 0.0, "text": ""}
 
 
 def _docs_kwargs(env: str) -> dict:
-    """生产环境关闭交互式文档（/docs /redoc /openapi.json 不对外暴露），开发环境保留默认。"""
-    if (env or "").lower() == "production":
+    """生产类环境关闭交互式文档（/docs /redoc /openapi.json 不对外暴露）。
+
+    评审 S6：统一使用 config.is_production_env（production/prod/staging）。
+    """
+    from backend.config import is_production_env
+    if is_production_env(env):
         return {"docs_url": None, "redoc_url": None, "openapi_url": None}
     return {}
 
 
 def validate_startup_security():
-    """启动前安全校验：生产环境强制高熵密钥且不允许关闭鉴权（防匿名 admin 全开放）。"""
-    if settings.app_env.lower() == "production":
+    """启动前安全校验：生产类环境强制高熵密钥且不允许关闭鉴权（防匿名 admin 全开放）。"""
+    from backend.config import is_production_env
+    if is_production_env():
         if settings.auth_jwt_secret == "dev-secret-change-in-production":
             raise RuntimeError("生产环境必须设置高熵 AUTH_JWT_SECRET（拒绝使用默认密钥启动）")
         # W3.5 轮换过渡期：旧 secret 仍参与验签，弱旧密钥等同弱主密钥（签发面虽在新
@@ -107,7 +112,8 @@ async def lifespan(app: FastAPI):
         logger.info("medical_agent.startup.embedder_ready")
     except Exception as exc:  # noqa: BLE001
         # 生产环境升级为 error：权重缺失时知识库检索会整体不可用，必须让人看见
-        _prod = str(getattr(settings, "app_env", "")).lower() in {"production", "prod", "staging"}
+        from backend.config import is_production_env
+        _prod = is_production_env()
         (logger.error if _prod else logger.warning)(
             "medical_agent.startup.embedder_failed", error=str(exc)[:240])
     try:

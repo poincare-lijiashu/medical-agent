@@ -256,8 +256,10 @@ async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_use
                 "ms": int((time.perf_counter() - started) * 1000)})
             yield _sse("error", {"status": 503, "detail": str(e)})
 
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
+    # 评审 S4：显式 charset 与 no-store；keep-alive 便于中间层识别长连接
+    return StreamingResponse(gen(), media_type="text/event-stream; charset=utf-8",
+                             headers={"Cache-Control": "no-store",
+                                      "Connection": "keep-alive",
                                       "X-Accel-Buffering": "no"})
 
 
@@ -297,6 +299,9 @@ async def list_flags(user: dict = Depends(require_role("admin"))):
 
 @router.put("/flags")
 async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
+    # 评审 S9：审计记录"改前值"，便于回滚与追责
+    before = next((f.get("enabled") for f in agent_flags.all_flags()
+                   if f.get("key") == req.key), None)
     try:
         value = agent_flags.set_flag(req.key, req.value)
     except ValueError as e:
@@ -306,7 +311,7 @@ async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
         _shared.get_audit_logger().write,
         event_type="agent", action="flag_update",
         actor=user.get("username", "admin"),
-        payload={"key": req.key, "value": value},
+        payload={"key": req.key, "before": before, "value": value},
     )
     return {"ok": True, "key": req.key, "value": value}
 
