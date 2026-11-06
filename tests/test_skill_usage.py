@@ -53,8 +53,13 @@ def test_usage_ratio_and_items():
     assert r["skills"]["published"] == 2
     assert r["skills"]["used"] == 1
     assert r["skills"]["usageRatio"] == 0.5
-    assert r["skills"]["unused"] == ["drug-b"]
-    assert r["skills"]["usedNotPublished"] == []
+    # 评审 M-26：字段名明确"进程内未使用"，避免与 skill_ops 的"未被 Bot 引用"混用
+    assert r["skills"]["unusedInProcess"] == ["drug-b"]
+    assert r["skills"]["usedNotPublishedInProcess"] == []
+    # 评审 M-27：覆盖率近似无判别力，补集中度信号
+    assert r["skills"]["skillReferences"] == 2
+    assert r["skills"]["dominantShare"] == 1.0
+    assert r["skills"]["concentration"] == 1.0
 
     by_code = {i["code"]: i for i in r["skills"]["items"]}
     assert by_code["drug-a"]["usage"] == 2
@@ -70,7 +75,7 @@ def test_used_but_not_published_is_separate():
     consult_metrics.record("drug", "sync", "ok", 5.0, ["legacy-skill"])
 
     r = skill_usage.report()
-    assert r["skills"]["usedNotPublished"] == ["legacy-skill"]
+    assert r["skills"]["usedNotPublishedInProcess"] == ["legacy-skill"]
     assert r["skills"]["used"] == 0
     item = next(i for i in r["skills"]["items"] if i["code"] == "legacy-skill")
     assert item["published"] is False

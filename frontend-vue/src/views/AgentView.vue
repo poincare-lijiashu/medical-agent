@@ -408,13 +408,17 @@
               未提供 token 用量
             </el-tag>
             <el-tag size="small">已发布 {{ usage.skills.published }} · 已使用 {{ usage.skills.used }}</el-tag>
-            <el-tag size="small" :type="usage.skills.usageRatio >= 0.5 ? 'success' : 'warning'">
-              使用率 {{ pct(usage.skills.usageRatio) }}
+            <el-tag size="small" type="info">
+              覆盖 {{ pct(usage.skills.usageRatio) }}（默认全量生效，仅作参考）
+            </el-tag>
+            <!-- 评审 M-27：覆盖率在有流量时接近 1，改用引用集中度判断"技能是否真被需要" -->
+            <el-tag size="small" :type="(usage.skills.concentration || 0) >= 0.8 ? 'warning' : 'success'">
+              引用集中度 {{ pct(usage.skills.concentration) }}
             </el-tag>
           </div>
-          <el-progress :percentage="usagePercent" :stroke-width="10" style="margin-top: 8px" />
-          <div v-if="usage.skills.usedNotPublished.length" class="src" style="margin-top: 6px">
-            已计量但当前非已发布：{{ usage.skills.usedNotPublished.join('、') }}（多来自历史版本或已停用技能）
+          <el-progress :percentage="concentrationPercent" :stroke-width="10" style="margin-top: 8px" />
+          <div v-if="usage.skills.usedNotPublishedInProcess.length" class="src" style="margin-top: 6px">
+            已计量但当前非已发布：{{ usage.skills.usedNotPublishedInProcess.join('、') }}（多来自历史版本或已停用技能）
           </div>
           <el-table v-if="usage.skills.items.length" :data="usage.skills.items" size="small"
                     style="width: 100%; margin-top: 8px">
@@ -781,7 +785,8 @@ const expForm = ref(emptyExperience())
 const metrics = ref(null)
 const usage = ref(null)
 const usageBusy = ref(false)
-const usagePercent = computed(() => Math.round(((usage.value && usage.value.skills.usageRatio) || 0) * 100))
+const concentrationPercent = computed(
+  () => Math.round(((usage.value && usage.value.skills.concentration) || 0) * 100))
 const impactOn = ref(false)
 const impactData = ref(null)
 const trends = ref(null)
@@ -881,39 +886,52 @@ function statusType(s) {
 }
 
 async function loadAll() {
-  const [f, c, s, b, t, mp, wp, sl, ex, pr, mt, tr, al, ad, us] = await Promise.all([
-    http.get('/agent/flags'),
-    http.get('/agent/catalog'),
-    http.get('/agent/skills'),
-    http.get('/agent/bots'),
-    http.get('/agent/bot-teams'),
-    http.get('/agent/model-policy'),
-    http.get('/agent/web-policy'),
-    http.get('/agent/sleep-memory/last'),
-    http.get('/agent/skill-experiences'),
-    http.get('/agent/skill-proposals'),
-    http.get('/agent/skill-library/metrics'),
-    http.get('/agent/skill-library/trends?days=30'),
-    http.get('/agent/skill-library/alerts'),
-    http.get('/agent/skill-advices?status=OPEN'),
-    http.get('/agent/skill-library/usage'),
-  ])
-  flags.value = (f.data && f.data.flags) || []
-  agents.value = (c.data && c.data.agents) || []
-  tools.value = (c.data && c.data.tools) || []
-  skillList.value = (s.data && s.data.skills) || []
-  botList.value = (b.data && b.data.bots) || []
-  teamList.value = (t.data && t.data.teams) || []
-  policy.value = { allowed: mp.data.allowed || [], blocked: mp.data.blocked || [] }
-  webPolicy.value = wp.data || { enabled: false, allowedDomains: [] }
-  sleepReport.value = (sl.data && sl.data.report) || null
-  experiences.value = (ex.data && ex.data.experiences) || []
-  proposals.value = (pr.data && pr.data.proposals) || []
-  metrics.value = mt.data || null
-  trends.value = tr.data || null
-  activeAlerts.value = (al.data && al.data.alerts) || []
-  advices.value = (ad.data && ad.data.advices) || []
-  usage.value = us.data || null
+  // 评审 M-55：15 个只读请求并发且互不依赖——用 allSettled，单项失败不吞掉其余结果
+  const calls = [
+    ['flags', () => http.get('/agent/flags', { silentToast: true })],
+    ['catalog', () => http.get('/agent/catalog', { silentToast: true })],
+    ['skills', () => http.get('/agent/skills', { silentToast: true })],
+    ['bots', () => http.get('/agent/bots', { silentToast: true })],
+    ['teams', () => http.get('/agent/bot-teams', { silentToast: true })],
+    ['modelPolicy', () => http.get('/agent/model-policy', { silentToast: true })],
+    ['webPolicy', () => http.get('/agent/web-policy', { silentToast: true })],
+    ['sleep', () => http.get('/agent/sleep-memory/last', { silentToast: true })],
+    ['experiences', () => http.get('/agent/skill-experiences', { silentToast: true })],
+    ['proposals', () => http.get('/agent/skill-proposals', { silentToast: true })],
+    ['metrics', () => http.get('/agent/skill-library/metrics', { silentToast: true })],
+    ['trends', () => http.get('/agent/skill-library/trends?days=30', { silentToast: true })],
+    ['alerts', () => http.get('/agent/skill-library/alerts', { silentToast: true })],
+    ['advices', () => http.get('/agent/skill-advices?status=OPEN', { silentToast: true })],
+    ['usage', () => http.get('/agent/skill-library/usage', { silentToast: true })],
+  ]
+  const settled = await Promise.allSettled(calls.map(([, fn]) => fn()))
+  const data = {}
+  let failed = 0
+  settled.forEach((r, i) => {
+    if (r.status === 'fulfilled') data[calls[i][0]] = r.value.data || {}
+    else failed += 1
+  })
+  const d = (k) => data[k] || {}
+  flags.value = d('flags').flags || []
+  agents.value = d('catalog').agents || []
+  tools.value = d('catalog').tools || []
+  skillList.value = d('skills').skills || []
+  botList.value = d('bots').bots || []
+  teamList.value = d('teams').teams || []
+  policy.value = { allowed: d('modelPolicy').allowed || [], blocked: d('modelPolicy').blocked || [] }
+  webPolicy.value = data.webPolicy || { enabled: false, allowedDomains: [] }
+  sleepReport.value = d('sleep').report || null
+  experiences.value = d('experiences').experiences || []
+  proposals.value = d('proposals').proposals || []
+  metrics.value = data.metrics || null
+  trends.value = data.trends || null
+  activeAlerts.value = d('alerts').alerts || []
+  advices.value = d('advices').advices || []
+  usage.value = data.usage || null
+  if (failed) {
+    // 逐项失败已静默；这里只给一条聚合提示，其余成功数据照常展示
+    ElMessage.warning(`有 ${failed} 项数据加载失败，其余已展示；可点击「刷新」重试`)
+  }
 }
 
 async function refreshUsage() {

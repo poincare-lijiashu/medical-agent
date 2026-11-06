@@ -614,5 +614,18 @@
 
 **验证**：`npm run build` 成功（dist 已重建）；全量 pytest **1007 passed / 11 skipped**。
 
+---
+
+## 7. 2026-11-06 评审整改（第 3 批：口径与前端健壮性，部分）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-26 | "未被使用"三种含义显式区分：本模块改名 `unusedInProcess` / `usedNotPublishedInProcess`，并输出 `definitions` 说明与 `skillCards.unusedPublished`（未被 Bot 引用，告警用）的差异 | `skill_usage.py`、`AgentView.vue` |
+| M-27 | 新增 `dominantShare` / `concentration`（Herfindahl）：`usageRatio` 在有流量时接近 1、无判别力，看板改以"引用集中度"为主指标并保留覆盖率作参考 | `skill_usage.py`、`AgentView.vue` |
+| M-54 | 401 拦截器改为 `await auth.logout()` 后再跳 `/login`（并避免在登录页重复跳转），不再被路由守卫弹回默认页 | `api/index.js` |
+| M-55 | `AgentView.loadAll()` 15 个只读请求改 `Promise.allSettled`：单项失败不再吞掉其余结果，并给一条聚合提示 | `AgentView.vue` |
+
+**验证**：全量 pytest **1007 passed / 11 skipped**；`npm run build` 成功。
+
 **仍待整改**：PG 真库断言与多实例 CAS（M-30/31/32）、多 worker counter 语义（M-23）、
-运营口径归一（M-26/27/28）、第三方调用性能（M-43~M-47）、前端健壮性（M-54~M-59）。
+快照自动触发（M-28）、第三方调用性能（M-43~M-47）、其余前端可访问性（M-56~M-59）。

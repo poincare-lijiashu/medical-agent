@@ -8,7 +8,15 @@
 边界：
 - 数据窗口是**当前进程**（重启归零），不落库、不含问题/回答/患者信息；
 - 使用率 = 被成功问答引用的已发布技能数 / 已发布技能数；失败与中止不计使用；
-- 已停用/已删除但仍被历史计量到的技能，单独归入 ``usedNotPublished``，不混入分母。
+- 已停用/已删除但仍被历史计量到的技能，单独归入 ``usedNotPublishedInProcess``，不混入分母。
+
+口径澄清（2026-11-06 评审 M-26 / M-27 整改）——"未被使用"有三个不同含义，**不要混用**：
+1. ``unusedInProcess``（本模块）：本进程内从未被成功问答引用；
+2. ``skillCards.unusedPublished``（skill_ops）：未被任何 Bot 绑定引用——告警与建议用它；
+3. 已停用/已删除：用 ``usedNotPublishedInProcess`` 单独归类。
+另外：默认问答会应用该能力域**全部**已发布技能卡，因此 ``usageRatio`` 在有流量的实例上
+天然接近 1，**不具备判别力**；判断"技能是否真被需要"请看 ``dominantShare`` / ``concentration``
+（引用集中度）与 ``unusedInProcess``。
 """
 from __future__ import annotations
 
@@ -62,8 +70,15 @@ def report() -> dict:
 
     published_count = len(published)
     used_published = [c for c in usage if c in published]
-    unused = sorted(c for c in published if c not in usage)
+    unused_in_process = sorted(c for c in published if c not in usage)
     used_not_published = sorted(c for c in usage if c not in published)
+
+    # 评审 M-27：引用集中度比"覆盖率"更能反映技能是否真被需要
+    counts = [usage.get(c, 0) for c in published]
+    references = sum(counts)
+    dominant = max(counts) if counts else 0
+    concentration = (round(sum((n / references) ** 2 for n in counts), 4)
+                     if references else 0.0)
 
     items = []
     for code in sorted(set(published) | set(usage),
@@ -114,9 +129,20 @@ def report() -> dict:
         "skills": {
             "published": published_count,
             "used": len(used_published),
+            # 保留字段：有流量时接近 1，仅作"是否有任何技能被执行"的下限信号
             "usageRatio": _ratio(len(used_published), published_count),
-            "unused": unused,
-            "usedNotPublished": used_not_published,
+            "usageRatioNote": "默认应用该能力域全部已发布技能，覆盖率在有流量时接近 1，"
+                              "不具备判别力；请结合 dominantShare/concentration 判读",
+            "skillReferences": references,
+            "dominantShare": _ratio(dominant, references),
+            "concentration": concentration,  # Herfindahl 指数：1=全部集中在一个技能
+            "unusedInProcess": unused_in_process,
+            "usedNotPublishedInProcess": used_not_published,
+            "definitions": {
+                "unusedInProcess": "本进程内从未被成功问答引用",
+                "unusedPublished": "未被任何 Bot 绑定（见 skill-library/metrics，告警用它）",
+                "usedNotPublishedInProcess": "已停用/已删除但仍被历史计量到",
+            },
             "items": items,
         },
         "note": _WINDOW_NOTE,

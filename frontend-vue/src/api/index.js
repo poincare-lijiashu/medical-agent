@@ -20,14 +20,15 @@ export function errText(error) {
 
 http.interceptors.response.use(
   (resp) => resp,
-  (error) => {
+  async (error) => {
     const status = error && error.response && error.response.status
     const auth = useAuthStore()
     if (status === 401) {
       // 已登录状态下的 401=令牌过期；未登录（登录页）的 401 交给调用方展示 detail
       if (auth.isLoggedIn) ElMessage.error('登录已过期，请重新登录')
-      auth.logout()
-      router.push('/login')
+      // 评审 M-54：必须等登出完成（清 user）再跳转，否则路由守卫会因"仍登录"弹回默认页
+      await auth.logout()
+      if (router.currentRoute.value.path !== '/login') router.push('/login')
     } else if (!(error && error.config && error.config.silentToast)) {
       // 调用方可传 { silentToast: true } 关闭全局提示（视图内嵌渲染错误卡片时用，避免双重提示）
       ElMessage.error(errText(error))
