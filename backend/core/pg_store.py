@@ -1315,6 +1315,33 @@ def _json_upsert_item(path: str, key: str, item: dict, ignore_existing: bool) ->
         _write_json_atomic(path, data)
 
 
+async def _pg_upsert_skill(item: dict) -> None:
+    async with _pool.acquire() as c:
+        await c.execute(_SKILLS_UPSERT, str(item.get("code")),
+                        json.dumps(item, ensure_ascii=False),
+                        str(item.get("status") or "DRAFT"))
+
+
+def upsert_skill_item(item: dict, path: str) -> None:
+    """技能卡按 code 行级 upsert（PG 真源 + JSON 镜像）。
+
+    评审 M-32：技能卡的写路径不再整表覆盖，多实例并发只触达目标行。
+    """
+    domain = os.path.basename(path)
+    if offline_mode() or not _pool:
+        _json_upsert_item(path, "code", item, False)
+        if not offline_mode():
+            _repo_pg_stale.add(domain)
+        return
+    try:
+        _run_pg(_pg_upsert_skill(item))
+        _repo_pg_stale.discard(domain)
+    except Exception as e:  # noqa: BLE001 —— 行级写失败降级 JSON，读路径按 stale 回落
+        logger.warning("pg.repo.upsert_skill_failed", error=str(e)[:120], file=domain)
+        _repo_pg_stale.add(domain)
+    _json_upsert_item(path, "code", item, False)
+
+
 def upsert_json_item(table: str, path: str, item: dict,
                      ignore_existing: bool = False) -> None:
     """按主键幂等写单条（PG 行级 upsert + JSON 镜像/兜底）。

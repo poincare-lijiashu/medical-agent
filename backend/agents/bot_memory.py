@@ -80,7 +80,13 @@ def _load() -> list:
 
 
 def _save(items: list) -> None:
+    """整表覆盖写：仅保留给迁移/测试构造使用，**业务写路径不再调用**（评审 M-32）。"""
     pg_store.save_json_list("agent_bot_memories", MEMORY_FILE, items)
+
+
+def _upsert(item: dict) -> None:
+    """按 id 行级 upsert：多实例并发不删除他方新增（评审 M-32）。"""
+    pg_store.upsert_json_item("agent_bot_memories", MEMORY_FILE, item)
 
 
 def _find(items: list, mem_id: str) -> dict | None:
@@ -180,7 +186,7 @@ def create_memory(payload: dict, actor: str) -> dict:
             "confirmedAt": None,
         }
         items.append(item)
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -200,7 +206,7 @@ def confirm_memory(mem_id: str, actor: str, role: str) -> dict:
             raise MemoryForbidden("不能确认自己录入的记忆（四眼原则）")
         item.update({"status": "CONFIRMED", "confirmedBy": actor,
                      "confirmedAt": _now()})
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -214,7 +220,7 @@ def delete_memory(mem_id: str, actor: str, role: str) -> dict:
             raise MemoryForbidden("只能删除自己创建的记忆")
         item.update({"status": "DELETED", "deletedBy": actor,
                      "deletedAt": _now()})
-        _save(items)
+        _upsert(item)
         return item
 
 

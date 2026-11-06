@@ -86,7 +86,13 @@ def _load_json() -> list:
 
 
 def _save(items: list) -> None:
+    """整表覆盖写：仅保留给迁移/测试构造使用，**业务写路径不再调用**（评审 M-32）。"""
     pg_store.save_skills(items, SKILLS_FILE)
+
+
+def _upsert(item: dict) -> None:
+    """按 code 行级 upsert：多实例并发只触达目标行，不删除他方新增。"""
+    pg_store.upsert_skill_item(item, SKILLS_FILE)
 
 
 def _find(items: list, code: str) -> dict | None:
@@ -228,7 +234,7 @@ def create_skill(payload: dict, actor: str) -> dict:
             "rowVersion": 0,
         }
         items.append(item)
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -251,7 +257,7 @@ def update_skill(code: str, payload: dict, row_version: int, actor: str) -> dict
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -274,7 +280,7 @@ def submit_skill(code: str, row_version: int, actor: str) -> dict:
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -315,7 +321,7 @@ def review_skill(code: str, approve: bool, note: str | None, row_version: int,
             "updatedAt": now,
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -335,7 +341,7 @@ def disable_skill(code: str, row_version: int, actor: str) -> dict:
             "updatedAt": _now(),
             "rowVersion": int(item["rowVersion"]) + 1,
         })
-        _save(items)
+        _upsert(item)
         return item
 
 

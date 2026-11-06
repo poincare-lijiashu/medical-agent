@@ -87,11 +87,7 @@ def test_agent_skills_table_write_read_roundtrip(real_pg, tmp_path):
 
 
 def test_upsert_item_keeps_both_writers_rows(real_pg, tmp_path):
-    """评审 M-31：两个并发写入者各 upsert 不同主键 → 两行都在（行级语义）。
-
-    对照 M-32 已知限制：``save_json_list``（整表覆盖）下两写者会互相删除，
-    因此快照/建议域必须走 ``upsert_json_item``；技能/Bot/团队/记忆域尚未改造。
-    """
+    """评审 M-31：两个并发写入者各 upsert 不同主键 → 两行都在（行级语义）。"""
     import threading
 
     table, key = "agent_skill_metrics", "id"
@@ -111,6 +107,88 @@ def test_upsert_item_keeps_both_writers_rows(real_pg, tmp_path):
     finally:
         for v in values:
             _delete(table, key, v)
+
+
+def _skill_payload(code: str) -> dict:
+    return {
+        "code": code,
+        "name": "并发探测技能",
+        "description": "用于真库并发写入校验，不会进入任何临床路径。",
+        "agentId": "drug",
+        "promptTemplate": "请核对相互作用与禁忌，并逐条标注证据来源；证据不足时说明不确定性。",
+        "toolAllowlist": ["drug_check"],
+        "evidenceRefs": ["院内规则库 2026"],
+        "guardrails": {"hitl": True, "requireEvidence": True, "maxInputChars": 1000},
+    }
+
+
+def test_skills_multi_writer_keeps_all_rows(real_pg, tmp_path, monkeypatch):
+    """评审 M-32：两个写入者并发 create_skill → 两行都在（业务写路径已改行级）。"""
+    import threading
+
+    from backend.agents import skills
+
+    monkeypatch.setattr(skills, "SKILLS_FILE", str(tmp_path / "skills.json"))
+    codes = [f"probe-{uuid.uuid4().hex[:10]}" for _ in range(2)]
+    errors: list[Exception] = []
+
+    def work(code: str):
+        try:
+            skills.create_skill(_skill_payload(code), "admin01")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(c,)) for c in codes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    try:
+        assert not errors, errors
+        for code in codes:
+            assert _count("agent_skills", "code", code) == 1, "并发创建丢失技能行"
+    finally:
+        for code in codes:
+            _delete("agent_skills", "code", code)
+
+
+def test_bots_multi_writer_keeps_all_rows(real_pg, tmp_path, monkeypatch):
+    """评审 M-32：Bot 域同样改为按 code 行级 upsert。"""
+    import threading
+
+    from backend.agents import bots
+
+    monkeypatch.setattr(bots, "BOTS_FILE", str(tmp_path / "bots.json"))
+    codes = [f"probe-{uuid.uuid4().hex[:10]}" for _ in range(2)]
+    errors: list[Exception] = []
+
+    def payload(code: str) -> dict:
+        return {
+            "code": code, "name": "并发探测 Bot",
+            "agentId": "literature",
+            "persona": "你是循证医学助手，回答必须标注证据来源与不确定性，不做诊断结论。",
+            "modelProvider": "default", "modelId": None,
+            "skillCodes": [], "toolAllowlist": [], "memoryScope": "bot",
+        }
+
+    def work(code: str):
+        try:
+            bots.create_bot(payload(code), "admin01")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(c,)) for c in codes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    try:
+        assert not errors, errors
+        for code in codes:
+            assert _count("agent_bots", "code", code) == 1, "并发创建丢失 Bot 行"
+    finally:
+        for code in codes:
+            _delete("agent_bots", "code", code)
 
 
 def test_agent_skills_status_column_is_written(real_pg, tmp_path):

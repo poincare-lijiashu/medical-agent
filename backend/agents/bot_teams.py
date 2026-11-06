@@ -69,7 +69,13 @@ def _load() -> list:
 
 
 def _save(items: list) -> None:
+    """整表覆盖写：仅保留给迁移/测试构造使用，**业务写路径不再调用**（评审 M-32）。"""
     pg_store.save_json_list("agent_bot_teams", TEAMS_FILE, items)
+
+
+def _upsert(item: dict) -> None:
+    """按 code 行级 upsert：多实例并发不删除他方新增（评审 M-32）。"""
+    pg_store.upsert_json_item("agent_bot_teams", TEAMS_FILE, item)
 
 
 def _find(items: list, code: str) -> dict | None:
@@ -134,7 +140,7 @@ def create_team(payload: dict, actor: str) -> dict:
         item = {**data, "status": "ACTIVE", "rowVersion": 0,
                 "createdBy": actor, "createdAt": now, "updatedBy": actor, "updatedAt": now}
         items.append(item)
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -154,7 +160,7 @@ def update_team(code: str, payload: dict, row_version: int, actor: str) -> dict:
         item.update(data)
         item.update({"updatedBy": actor, "updatedAt": _now(),
                      "rowVersion": int(item["rowVersion"]) + 1})
-        _save(items)
+        _upsert(item)
         return item
 
 
@@ -170,7 +176,7 @@ def disable_team(code: str, row_version: int, actor: str) -> dict:
             raise TeamConflict("团队已被他人修改，请刷新后重试")
         item.update({"status": "DISABLED", "updatedBy": actor, "updatedAt": _now(),
                      "rowVersion": int(item["rowVersion"]) + 1})
-        _save(items)
+        _upsert(item)
         return item
 
 
