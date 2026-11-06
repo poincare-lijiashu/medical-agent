@@ -18,17 +18,19 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.agents import model_policy
+from backend.agents import guardrails, model_policy
 from backend.core.llm_factory import LLMFactory
 
 MAX_QUESTION = 2000
 TIMEOUT_S = 45.0
 
-_SYSTEM = (
-    "你是临床辅助决策支持助手。请基于可靠证据回答，逐条标注来源；"
-    "证据不足时明确说明不确定性，不得编造指南/文献/剂量。"
-    "输出仅供执业医师/药师参考，不替代诊断与处方。"
-)
+# 评审 M-06：与咨询 / Bot 链路共用同一份边界与证据边界，不再各写一套措辞
+_SYSTEM = "\n".join([
+    "你是临床辅助决策支持助手。",
+    guardrails.EVIDENCE_BOUNDARY,
+    guardrails.CITE_CLAUSE,
+    guardrails.BOUNDARY,
+])
 
 # 数字/剂量（含小数与百分号前的数字）；仅用于"数字冲突"提示，不做语义判断
 _NUM = re.compile(r"\d+(?:\.\d+)?")
@@ -104,7 +106,8 @@ async def run(question: str, provider_ids: list[str] | None = None, runner=None)
         view = model_policy.provider_view(provider)
         if isinstance(result, Exception):
             opinions.append({
-                **view, "status": "FAILED", "error": type(result).__name__,
+                # 评审 M-10：对外只给稳定错误码，异常类型名不进响应体
+                **view, "status": "FAILED", "error": "MODEL_FAILED",
                 "answer": None, "hitl": True,
             })
         else:

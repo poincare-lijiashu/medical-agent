@@ -231,3 +231,13 @@ serviceMonitor:
   scrapeTimeout: 10s
   labels:
     release: kube-prometheus-stack
+  # 评审 M-19：显式声明 ai-core 抓取状态，避免"ServiceMonitor 开着 = 指标都在采"的误判。
+  # 启用前必须先创建同 namespace Secret（键 metrics-token），否则 ai-core Pod 会
+  # CreateContainerConfigError / CrashLoop（secretKeyRef 默认 optional=false）。
+  aiCore:
+    enabled: false
+    tokenSecretName: ""
+    tokenSecretKey: metrics-token
+  # 评审 M-15：K8s 形态必须部署 PrometheusRule，否则 G97/G102 规则不生效。
+  rules:
+    enabled: false

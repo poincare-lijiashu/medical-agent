@@ -192,8 +192,12 @@ def confirm_memory(mem_id: str, actor: str, role: str) -> dict:
             raise MemoryNotFound(f"未找到记忆：{mem_id}")
         if item.get("status") != "CANDIDATE":
             raise MemoryConflict(f"当前状态不可确认：{item.get('status')}")
-        if role not in ("admin", "qc") and item.get("createdBy") != actor:
-            raise MemoryForbidden("只能确认自己创建的记忆，或由质控/管理员确认")
+        # 评审 M-01 整改：记忆会注入 Bot 的 system prompt，属"持久化提示内容"，
+        # 必须由质控/管理员确认，且确认人不得是录入人（四眼），避免自写自确认的注入通道。
+        if role not in ("admin", "qc"):
+            raise MemoryForbidden("仅质控/管理员可确认 Bot 长期记忆（四眼原则）")
+        if item.get("createdBy") == actor:
+            raise MemoryForbidden("不能确认自己录入的记忆（四眼原则）")
         item.update({"status": "CONFIRMED", "confirmedBy": actor,
                      "confirmedAt": _now()})
         _save(items)

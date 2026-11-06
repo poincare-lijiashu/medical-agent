@@ -19,6 +19,25 @@
 {{- end -}}
 {{- end -}}
 
+{{/*
+AI 中台指标抓取总开关（评审 M-21 整改）。
+三处必须同一条件：deployment 注入 METRICS_TOKEN、生成 ai-core ServiceMonitor、
+（间接）G105 抓取链路的文档假设。此前 deployment 只判断 serviceMonitor.aiCore.enabled，
+会出现"令牌注入了、ServiceMonitor 没生成"，纯浪费密钥面。
+*/}}
+{{- define "medassist.aiCoreMetricsEnabled" -}}
+{{- if and .Values.aiCore.enabled .Values.serviceMonitor.enabled .Values.serviceMonitor.aiCore.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Agent 运营告警规则（PrometheusRule）开关（评审 M-15/M-6 整改）。
+本地 compose 读 deploy/prometheus/*.rules.yml；K8s Operator 形态必须部署 CRD，
+否则 G97/G102 的 7 条规则在集群里**一条都不会生效**。
+*/}}
+{{- define "medassist.agentRulesEnabled" -}}
+{{- if and .Values.serviceMonitor.enabled .Values.serviceMonitor.rules.enabled -}}true{{- end -}}
+{{- end -}}
+
 {{/* 组件级资源名：<release>-<chart>-<component> */}}
 {{- define "medassist.componentName" -}}
 {{- printf "%s-%s" (include "medassist.fullname" .root) .component | trunc 63 | trimSuffix "-" -}}

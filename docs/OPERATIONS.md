@@ -54,11 +54,55 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   - `medassist_agent_skill_usage_total{skill}`（仅成功问答累计）
   - `medassist_agent_skill_last_used_timestamp_seconds{skill}`（进程内最近使用时间）
   - `medassist_agent_consult_tokens_total{kind="input|output"}` 与 `medassist_agent_consult_tokenized_requests_total`（仅 provider 真实返回 usage 时累计，不估算）
-  - `/metrics`（admin）与 `/api/v1/agent/skill-library/metrics/prometheus`（admin/qc）均导出；告警规则见 `deploy/prometheus/medassist-agent-ops.rules.yml`。
+  - **Prometheus 只抓 `/metrics`**（G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，G97/G102 的 7 条规则全部依赖它）。`GET /api/v1/agent/skill-library/metrics/prometheus`（admin/qc JWT）是人工查看用，**不是**抓取端点。
   - 页面看板：`GET /api/v1/agent/skill-library/usage`（admin/qc，Agent 控制台「技能使用率」卡片）。
 - Prometheus 抓取（G105）：
-  - 本地/院区：先复制 `deploy/observability/prometheus/metrics-token.example` 为 `metrics-token`（UTF-8 无 BOM、无多余空白），在 `.env.local` 设置同值 `METRICS_TOKEN`；再 `docker compose -f deploy/observability/docker-compose.observability.yml up -d prometheus`（仅本机 9090）。
-  - K8s：Helm 开启 `serviceMonitor.enabled` 与 `serviceMonitor.aiCore.enabled`，先创建同 namespace Secret（键 `metrics-token`），值与应用 `METRICS_TOKEN` 一致；未配置令牌时 `/metrics` 仍只允许 admin。
+
+  **形态一：本地 / 院区 compose（7 条规则生效）**
+  1. 确认 `deploy/observability/prometheus/metrics-token` 是**普通文件**；若因文件缺失被 Docker 建成目录，先删除：
+     ```powershell
+     if (Test-Path .\deploy\observability\prometheus\metrics-token -PathType Container) {
+       Remove-Item -Recurse -Force .\deploy\observability\prometheus\metrics-token }
+     ```
+  2. 写入**裸令牌**（不带 `Bearer ` 前缀、无 BOM；尾随换行无害）：
+     ```powershell
+     $t = -join ((48..57)+(97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})
+     [IO.File]::WriteAllText("$PWD\deploy\observability\prometheus\metrics-token",
+       $t, (New-Object Text.UTF8Encoding($false)))
+     ```
+  3. `.env.local` 设置同值 `METRICS_TOKEN=$t`，重启 AI 中台；
+  4. `docker compose -f deploy/observability/docker-compose.observability.yml up -d prometheus`（仅本机 9090）。
+  容器启动即校验令牌：缺失/是目录/仍是占位符都会**直接退出**（不会出现"容器 Up、target 永久 down"）。
+
+  **形态二：K8s / Prometheus Operator（默认不生效，需显式开启）**
+  1. 先创建**同 namespace** Secret（Operator 用 `ForNamespace` 解析）：
+     ```bash
+     kubectl -n medassist-prod create secret generic medassist-metrics \
+       --from-literal=metrics-token=$(openssl rand -hex 32)
+     ```
+  2. 在环境 values 文件里显式打开（**Argo CD 场景必须改文件并随 tag 提交，`--set` 不会被持久化**）：
+     ```yaml
+     serviceMonitor:
+       enabled: true
+       aiCore:
+         enabled: true
+         tokenSecretName: medassist-metrics
+         tokenSecretKey: metrics-token
+       rules:
+         enabled: true      # 部署 PrometheusRule，否则 G97/G102 规则一条都不生效
+     ```
+  3. 确认 `monitoring` 侧的 Prometheus Operator 具备跨 namespace 读取该 Secret 的 RBAC；缺失时 Operator **静默跳过凭据**（表现为抓取 401，K8s 侧无失败信号）。
+  4. 知悉副作用：Operator 会把 Secret 值以**明文**写入 Prometheus 自身的配置 Secret，令牌轮换需两处同步。
+  5. 校验：
+     ```bash
+     kubectl -n medassist-prod get servicemonitor -l component=monitoring
+     kubectl -n medassist-prod get prometheusrule | grep agent-ops
+     ```
+
+  **回滚语义（不会打断既有监控）**
+  - `METRICS_TOKEN` 留空 → `/metrics` 退回"仅 admin JWT 可读"；Java 侧 `/actuator/prometheus` 抓取完全独立，不受影响。
+  - 关闭 `serviceMonitor.aiCore.enabled` / `rules.enabled` 只删除 ai-core 抓取与 Agent 规则，不影响 Java 侧 ServiceMonitor。
+  - 令牌疑似泄露：生成新令牌 → 应用侧 `.env.local`/K8s Secret 与 Prometheus 侧令牌文件/Prometheus 配置 Secret **同步更新** → 滚动重启应用与 Prometheus。
 
 ## 交付前硬门禁（见计划 Phase 6）
 全量 pytest + `run_eval`（hit_rate≥0.8、引用精确率达标）+ 前端 a11y/截图 + `open-code-review` + `security-scan`；改环境后刷新机器基线（`refresh_baseline.ps1` → `check_docs.ps1` = `CONSISTENCY_OK`）。
@@ -71,7 +115,7 @@ python scripts\agent_go_live_check.py --dry-run
 # 真实环境联调（口令也可用 AGENT_PASSWORD 注入，避免进 shell 历史）
 python scripts\agent_go_live_check.py --base-url http://127.0.0.1:8001 --username admin01
 ```
-- 检查项：登录 → 模型合规（仅 local/domestic，出现 foreign 即失败）→ 联网白名单（须含 nhc.gov.cn / nmpa.gov.cn / pubmed.ncbi.nlm.nih.gov）→ 技能库指标 → Prometheus 文本 → 睡眠扫描（只读）→ 运营建议列表。
+- 检查项：登录 → 模型合规（仅 local/domestic，出现 foreign 即失败）→ 联网白名单（须含 nhc.gov.cn / nmpa.gov.cn / pubmed.ncbi.nlm.nih.gov）→ 技能库指标 → Prometheus 文本（Agent 端点）→ **`/metrics` 抓取端点** → **告警规则引用指标与抓取端点的覆盖对齐**（M-14/M-34 门禁）→ 睡眠扫描（只读）→ 运营建议列表。
 - 退出码：`0` 全部通过；`1` 有失败项（逐条打印原因）；`2` 无法执行（缺口令/登录失败/服务不可达）。
 - 脚本只读，不切换开关、不写技能、不执行建议；不打印口令、令牌、密钥。
 - 任一项失败不得上线；通过也只代表**技术联调就绪**，临床验收与签字仍需人工完成。

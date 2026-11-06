@@ -142,6 +142,14 @@ class AdviceNoteReq(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class ToolInvokeReq(BaseModel):
+    """工具调用请求（评审 M-09）：拒绝未知顶层键，参数交由工具 Schema 再校验。"""
+
+    model_config = {"extra": "forbid"}
+
+    arguments: dict = Field(default_factory=dict)
+
+
 def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
@@ -229,10 +237,23 @@ async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_use
                     })
                 yield _sse(ev["type"], ev)
         except consult.ConsultForbidden as e:
+            # 评审 M-53：失败路径同样留痕（只记原因与长度，不记问题原文）
+            await _audit_agent(user, "agent_consult_stream", {
+                "status": "error", "reason": "forbidden",
+                "questionChars": len(req.question.strip()),
+                "ms": int((time.perf_counter() - started) * 1000)})
             yield _sse("error", {"status": 403, "detail": str(e)})
         except consult.ConsultInvalid as e:
+            await _audit_agent(user, "agent_consult_stream", {
+                "status": "error", "reason": "invalid",
+                "questionChars": len(req.question.strip()),
+                "ms": int((time.perf_counter() - started) * 1000)})
             yield _sse("error", {"status": 422, "detail": str(e)})
         except consult.ConsultUnavailable as e:
+            await _audit_agent(user, "agent_consult_stream", {
+                "status": "error", "reason": "unavailable",
+                "questionChars": len(req.question.strip()),
+                "ms": int((time.perf_counter() - started) * 1000)})
             yield _sse("error", {"status": 503, "detail": str(e)})
 
     return StreamingResponse(gen(), media_type="text/event-stream",
@@ -241,13 +262,13 @@ async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_use
 
 
 @router.post("/tools/{name}/invoke")
-async def invoke_tool(name: str, payload: dict, request: Request,
+async def invoke_tool(name: str, req: ToolInvokeReq,
                       user: dict = Depends(require_user)):
-    """调用注册表中的工具（参数按工具的 JSON Schema 校验）。"""
+    """调用注册表中的工具（参数按工具的 JSON Schema 校验，入参统一脱敏）。"""
     started = time.perf_counter()
     role = user.get("role", "")
     try:
-        result = await agent_tools.execute_tool(name, payload.get("arguments"), role)
+        result = await agent_tools.execute_tool(name, req.arguments, role)
     except agent_tools.ToolNotFound as e:
         raise HTTPException(404, str(e))
     except agent_tools.ToolForbidden as e:
@@ -504,7 +525,13 @@ async def list_bot_memories(code: str, user: dict = Depends(require_user)):
 
 
 @router.post("/bots/{code}/memories")
-async def create_bot_memory(code: str, req: MemoryPayload, user: dict = Depends(require_user)):
+async def create_bot_memory(code: str, req: MemoryPayload,
+                            user: dict = Depends(require_role("admin", "qc"))):
+    """录入 Bot 长期记忆候选（仅质控/管理员）。
+
+    记忆会注入 Bot 的 system prompt（评审 M-01 整改）：写入面必须收敛到可审计的角色，
+    且确认必须由非录入人完成，避免"任意登录用户自写自确认"的持久化提示注入通道。
+    """
     payload = req.model_dump()
     payload["botCode"] = code
     try:
@@ -516,7 +543,7 @@ async def create_bot_memory(code: str, req: MemoryPayload, user: dict = Depends(
 
 
 @router.post("/bot-memories/{mem_id}/confirm")
-async def confirm_bot_memory(mem_id: str, user: dict = Depends(require_user)):
+async def confirm_bot_memory(mem_id: str, user: dict = Depends(require_role("admin", "qc"))):
     try:
         item = bot_memory.confirm_memory(mem_id, user.get("username", "anonymous"),
                                          user.get("role", ""))
@@ -590,9 +617,19 @@ async def disable_bot_team(code: str, req: SkillVersionReq,
 
 @router.post("/bot-teams/{code}/collaborate")
 async def collaborate(code: str, req: CollaborateReq, user: dict = Depends(require_user)):
-    """团队协作：各 Bot 并行作答、失败隔离；结果并列展示，需人工复核。"""
+    """团队协作：各 Bot 并行作答、失败隔离；结果并列展示，需人工复核。
+
+    评审 M-03 整改：必须校验调用者角色在**每个成员 Bot 所属智能体**的 roles 白名单内，
+    否则药师可通过团队间接驱动影像/会诊等越权能力域（与 tool-loop 端点同一纪律）。
+    """
+    role = user.get("role", "")
     try:
-        team = bot_teams.get_team(code, user.get("role", ""))
+        team = bot_teams.get_team(code, role)
+        for bot in bot_teams.team_bots(team):
+            spec = catalog.get_agent(bot.get("agentId") or "")
+            if spec is None or role not in spec.roles:
+                raise HTTPException(
+                    403, f"当前角色无权使用团队中的 Bot「{bot.get('name')}」")
         result = await bot_runtime.collaborate(team, req.question)
     except bot_runtime.BotUnavailable as e:
         raise HTTPException(503, str(e))
@@ -640,6 +677,8 @@ async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require
 def _lib_http(e: skill_library.LibraryError) -> HTTPException:
     if isinstance(e, skill_library.LibraryNotFound):
         return HTTPException(404, str(e))
+    if isinstance(e, skill_library.LibraryForbidden):
+        return HTTPException(403, str(e))
     if isinstance(e, skill_library.LibraryConflict):
         return HTTPException(409, str(e))
     return HTTPException(422, str(e))
@@ -707,8 +746,9 @@ async def reject_skill_proposal(proposal_id: str, req: ProposalRejectReq,
         item = skill_library.reject(proposal_id, req.note, user.get("username", "qc"))
     except skill_library.LibraryError as e:
         raise _lib_http(e)
+    # 评审 M-13：审计只记长度与结构化结论，自由文本原文留在业务记录
     await _audit_agent(user, "skill_proposal_reject",
-                       {"proposalId": proposal_id, "note": req.note})
+                       {"proposalId": proposal_id, "noteChars": len(req.note)})
     return item
 
 
@@ -799,8 +839,10 @@ async def dismiss_skill_advice(advice_id: str, req: AdviceNoteReq,
         item = skill_advice.dismiss(advice_id, req.note or "", user.get("username", "qc"))
     except skill_advice.AdviceError as e:
         raise _advice_http(e)
+    # 评审 M-13：审计只记长度，自由文本原文留在业务记录
     await _audit_agent(user, "skill_advice_dismiss",
-                       {"adviceId": advice_id, "note": item.get("note")})
+                       {"adviceId": advice_id,
+                        "noteChars": len(item.get("note") or "")})
     return item
 
 
@@ -812,7 +854,8 @@ async def complete_skill_advice(advice_id: str, req: AdviceNoteReq,
     except skill_advice.AdviceError as e:
         raise _advice_http(e)
     await _audit_agent(user, "skill_advice_complete",
-                       {"adviceId": advice_id, "note": item.get("note")})
+                       {"adviceId": advice_id,
+                        "noteChars": len(item.get("note") or "")})
     return item
 
 
@@ -901,6 +944,9 @@ async def a2a(body: dict, user: dict = Depends(require_user)):
     仍须走对应业务接口并自行安排执业人员复核。
     """
     msg_id = body.get("id")
+    # 评审 M-12：A2A 与能力卡同受一个开关约束，关闭时连路由入口一并下线
+    if not agent_flags.get_flag("agent_a2a"):
+        return _jsonrpc_error(msg_id, -32601, "A2A 已关闭")
     if (body.get("jsonrpc") or "") != "2.0":
         return _jsonrpc_error(msg_id, -32600, "Invalid Request")
     method = body.get("method")
@@ -909,7 +955,10 @@ async def a2a(body: dict, user: dict = Depends(require_user)):
     text = _message_text(body.get("params") or {})
     if not text:
         return _jsonrpc_error(msg_id, -32602, "message.parts 缺少 text")
-    routed = router_agent.route(text[:2000])
+    if len(text) > 2000:
+        # 评审 M-12：显式拒绝超长输入，避免把路由端点当作无界计算入口
+        return _jsonrpc_error(msg_id, -32602, "message 不得超过 2000 字")
+    routed = router_agent.route(text)
     task_id = uuid.uuid4().hex
     return {
         "jsonrpc": "2.0",

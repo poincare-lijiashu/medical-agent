@@ -60,12 +60,14 @@ groups:
           description: "请登录 Agent 控制台查看告警与运营建议，人工处理。"
 
       # G102：统一问答计量（/metrics 与 Agent Prometheus 端点均导出）
+      # 评审 M-24 整改：分母排除 agent="prefilter"（闲聊前置应答零模型、恒成功），
+      # 否则真实错误率被系统性稀释；并显式要求分母 > 0，避免无流量时 NaN 误报。
       - alert: MedAssistAgentConsultErrorRateHigh
         expr: |
           (
             sum(rate(medassist_agent_consult_requests_total{status="error"}[10m]))
             /
-            sum(rate(medassist_agent_consult_requests_total[10m]))
+            sum(rate(medassist_agent_consult_requests_total{agent!="prefilter"}[10m]))
           ) > 0.2
           and
           sum(increase(medassist_agent_consult_requests_total{status="error"}[10m])) >= 3
@@ -74,10 +76,10 @@ groups:
           severity: warning
         annotations:
           summary: "统一问答错误率超过 20%"
-          description: "近 10 分钟错误率 {{ $value }}；请检查模型 provider、合规策略与技能护栏，不要通过放宽校验降错误率。"
+          description: "近 10 分钟错误率 {{ $value }}（已排除前置应答）；请按 reason 标签区分输入非法与模型不可用，不要通过放宽校验降错误率。"
 
       - alert: MedAssistAgentConsultAbortedSpike
-        expr: sum(increase(medassist_agent_consult_requests_total{status="aborted"}[10m])) >= 5
+        expr: sum(increase(medassist_agent_consult_requests_total{status="aborted",agent!="prefilter"}[10m])) >= 5
         for: 10m
         labels:
           severity: info

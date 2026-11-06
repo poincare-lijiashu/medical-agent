@@ -157,3 +157,10 @@ serviceMonitor:
   # 指标抓不到、5xx/P99 告警会静默（与 values-prod 保持一致）
   labels:
     release: kube-prometheus-stack
+  # 评审 M-19：显式声明（staging 当前不抓 ai-core / 不部署 Agent 告警规则）。
+  aiCore:
+    enabled: false
+    tokenSecretName: ""
+    tokenSecretKey: metrics-token
+  rules:
+    enabled: false

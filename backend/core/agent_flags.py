@@ -9,7 +9,8 @@
 安全默认：
 - ``agent_web_search`` 默认 **关**：院内默认无外网，开启意味着数据出网；
 - ``agent_multi_agent`` 默认 **关**：单智能体路由结果可预测，多智能体只做编排预览；
-- ``agent_a2a`` 默认 **开**：仅暴露能力卡（元数据），不含患者数据与调用凭据。
+- ``agent_a2a`` 默认 **关**（2026-11-06 评审 M-12 整改）：能力卡与 ``/a2a``
+  路由入口都会暴露内部能力域拓扑；默认不开，需要互操作时由管理员显式开启。
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ _FLAG_DEFS: "OrderedDict[str, tuple[bool, str, str, str]]" = OrderedDict([
     (
         "agent_a2a",
         (
-            True,
+            False,
             "A2A 能力广告",
             "对外提供 Agent Card（名称/技能/协议版本），供其它智能体发现与互操作。",
             "low",

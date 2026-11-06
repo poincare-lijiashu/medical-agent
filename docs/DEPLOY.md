@@ -91,6 +91,7 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 | `HIS_ADAPTER` | `none` | 未对接 HIS 保持 none（默认）；对接时填真实厂商标识，**严禁用 demo**（内存假数据，仅供集成开发参考） |
 | `VL_MAX_TOKENS` | 默认 `8192` | 影像/病例结构化描述截断防线，勿调低 |
 | `LOG_TO_FILE` | 留空（默认开） | 应用日志落 `logs/` 5MB×5 轮转；集中采集接 stdout |
+| `METRICS_TOKEN` | 生产建议开启（`openssl rand -hex 32`） | Prometheus 抓 `/metrics` 的静态令牌；**留空 = 退回仅 admin JWT 可读**（不打断既有监控）。值与本地 `deploy/observability/prometheus/metrics-token` 或 K8s Secret 保持一致，详见 OPERATIONS.md「Prometheus 抓取」 |
 | `QC_AUTO_PASS` / `QC_AUTO_SIGN` / `QC_AUTO_SIGN_FULL` | 默认值 | 自动质控通过/留痕策略需院方合规确认后再调整 |
 | 模型 API Key（`QWEN_API_KEY` 等） | 环境变量注入 | **API key 不入库**：`.env.local` 与 `data/llm_providers.json` 均已 gitignore（核对过），严禁提交仓库 |
 
@@ -114,7 +115,30 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 - [ ] 一次真实操作后确认审计落 PG：`audit_log` 表有记录（JSONL 仅为本地兜底真源）；
 - [ ] 备份策略就位：`data/*.json`（auth/users、review 队列等 JSON 真源）+ PG `pg_dump` 定期备份；
 - [ ] 生产必须改默认密码（含任何存量默认口令账号）；
-- [ ] 反向代理 TLS 终结 + SSE 三项配置（见下文 nginx 小节）。
+- [ ] 反向代理 TLS 终结 + SSE 三项配置（见下文 nginx 小节）；
+- [ ] 指标链路按需接通（见下节）：`/metrics` 可被 Prometheus 抓取，且 K8s 形态已部署 PrometheusRule。
+
+### 5. 指标抓取与告警（G105，两种形态）
+
+| 形态 | 抓取端点 | 令牌注入 | 告警规则来源 |
+| --- | --- | --- | --- |
+| 本地/院区 compose | `http://host.docker.internal:8001/metrics` | `deploy/observability/prometheus/metrics-token`（裸令牌，无 BOM） | `deploy/prometheus/*.rules.yml`（`rule_files` 挂载） |
+| K8s + Prometheus Operator | 同上（ServiceMonitor） | 同 namespace Secret，键 `metrics-token` | `PrometheusRule` CRD（`serviceMonitor.rules.enabled=true`） |
+
+- **只抓 `/metrics`**：G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，7 条 Agent 告警全部依赖它；`/api/v1/agent/skill-library/metrics/prometheus` 是人工查看端点（JWT），**不是**抓取端点。
+- K8s 默认 `serviceMonitor.aiCore.enabled=false`、`serviceMonitor.rules.enabled=false` —— **打开 ServiceMonitor 不等于指标都在采**，需在环境 values 文件显式开启（Argo CD 下 `--set` 不持久化）。
+- 回滚：`METRICS_TOKEN` 留空 → `/metrics` 退回 admin-only，Java 侧 `/actuator/prometheus` 不受影响。
+
+### 6. 灾难恢复：抓取链路恢复清单
+
+备份是仓库级（`git`）+ 数据级（`backup.py`），**令牌类文件故意不入库/不入备份**，因此恢复后必须重做：
+
+1. 生成新令牌：`openssl rand -hex 32`（PowerShell 可用 `-join ((48..57)+(97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})`）；
+2. 写入应用侧：`.env.local` 的 `METRICS_TOKEN`（或 K8s Secret），重启 AI 中台；
+3. 写入 Prometheus 侧：`deploy/observability/prometheus/metrics-token`（**裸令牌、无 `Bearer ` 前缀、无 BOM**）或重建 K8s Secret；
+4. 滚动重启 Prometheus；K8s 形态还需确认 Operator 已重新生成配置（`prometheus-<name>` Secret 更新）；
+5. 验证：`curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/metrics | head`，以及 Prometheus UI target `medassist-ai-core` = `up`；
+6. 跑一遍 `python scripts/agent_go_live_check.py --base-url ... --username admin01`（含抓取端点与告警覆盖对齐检查）。
 
 ## 日志与留存
 

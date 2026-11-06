@@ -554,3 +554,65 @@
 - 本次"容量演练"是**并发正确性冒烟**，不是完整压测基准；未测真实多实例 + 真实 PG 的吞吐/延迟上限，也未做容器级故障注入；
 - 技能卡当前不支持"同编码的新版本草稿"：已发布版本不可改，变更需停用后新建编码（保留历史口径）。
 - 联网搜索仅接入 Tavily 一种 provider（OpenAI 兼容检索生态可后续扩展），未配置时功能不存在而非"假返回"。
+
+---
+
+## 5. 2026-11-06 评审整改（第 1 批：止血）
+
+依据 `docs/reviews/20261106-agent-g86-g105/00-意见书-汇总.md` 的 60 条 Must，
+第 1 批（安全与合规边界）已全部落地。原则：**只改意见书点名的风险点，不顺手重构**。
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-01 | Bot 长期记忆写入/确认收窄到 `admin\|qc`，且确认人 ≠ 录入人（四眼） | `agent_router.py`、`bot_memory.confirm_memory` |
+| M-02 | 技能卡/Bot 审核补 `submittedBy` 四眼：提交人不得审核自己提交的版本 | `skills.review_skill`、`bots.review_bot` |
+| M-03 | `collaborate` 逐成员校验"调用者角色 ∈ 成员 Bot 的智能体 roles" | `agent_router.py` |
+| M-04 | `/agent/consult` 与流式入口接入 `PHIRedactor`（入站脱敏后再进模型） | `consult._prepare` / `clean_history` |
+| M-05 | 客户端 history 的保留段落标记中和（`【证据边界】` → `[[证据边界]]`），不能伪造系统约束 | `consult._neutralize` |
+| M-06 | 边界文案与「证据边界」抽到唯一来源 `backend/agents/guardrails.py`；**Bot 链路补齐证据边界**（无技能卡时用更强条款） | `guardrails.py`、`consult`、`bot_runtime`、`second_opinion` |
+| M-07 | 真正消费 `requireEvidence`：追加「每条结论须标注依据 / 无依据标注无证据支持」；响应回填 `skillGuardrails` | `guardrails.prompt_clauses` / `_done_payload` |
+| M-08 | 候选记录透传 `experienceAuthors`；**采纳人不得是经验作者**；经验 PHI 判定复用 `PHIRedactor` | `skill_library.py`、`_lib_http`（403） |
+| M-09 | 工具执行前统一脱敏入参；`ToolSpec.phi` 如实改 `patient`；`/tools/{name}/invoke` 改 Pydantic 模型并 `extra=forbid` | `agent_tools.execute_tool`、`agent_router.ToolInvokeReq` |
+| M-10 | 对外错误只给稳定码/人话文案，`type(e).__name__` 只进日志（consult/agent_tools/web_search/bot_runtime/second_opinion/tool_loop） | 见各模块 `logger.warning` |
+| M-12 | `agent_a2a` 默认**关**；`/a2a` 同受开关约束，超长 message 显式拒绝 | `agent_flags.py`、`agent_router.a2a` |
+| M-13 | 候选拒绝/建议忽略/完成的审计只记 `noteChars`，自由文本不落追加式日志 | `agent_router.py` |
+| M-14 | `/metrics` 合并 `skill_trends.prometheus_text()`，G97 告警依赖的 13 个指标真正可被抓取 | `backend/main.py` |
+| M-22 | `agent` 标签收敛到目录白名单，未知值归 `__other__`，杜绝标签基数放大 | `consult_metrics._agent_label` |
+| M-24 | 错误率告警分母排除 `agent="prefilter"`（零模型恒成功的闲聊前置） | `medassist-agent-ops.rules.yml` |
+| M-25 | 新增 `medassist_agent_consult_errors_total{reason}`，区分 invalid/forbidden/unavailable/timeout/other | `consult_metrics.py`、`consult._reason` |
+| M-29 | 测试用户表隔离到 `tmp_path`（此前单跑一次即把生产 `users.json` 清成 `{}`，复现 2026-10-30 全站 401 同型事故） | `tests/conftest.py::_isolate_users_file` |
+| M-34 | 上线自检新增 `/metrics` 抓取检查 + **告警规则引用指标与抓取端点对齐检查**（M-14 类事故门禁） | `scripts/agent_go_live_check.py` |
+
+**新增测试（锁住本轮行为）**
+- `test_consult.py`：入站 PHI 脱敏、history 保留标记中和、护栏条款进入提示与 `skillGuardrails` 回填；
+- `test_agent_bots.py`：Bot 提示包含证据边界；记忆四眼（录入人不得自确认，含 admin 自确认 403）；
+- `test_consult_metrics.py`：agent 标签白名单；
+- `test_agent_control_plane.py`：工具入参脱敏、A2A 默认关闭；
+- `test_skill_library.py`：拒绝原因只记长度不落原文；
+- `test_go_live_check.py`：告警规则指标覆盖对齐。
+
+**验证**：全量 pytest **1000 passed / 11 skipped**。
+
+---
+
+## 6. 2026-11-06 评审整改（第 2 批：兑现声称的交付）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| M-15 | 新增 `PrometheusRule` CRD 模板（7 条 Agent 告警），开关 `serviceMonitor.rules.enabled`；K8s 形态不再"规则一条都不生效" | `templates/prometheusrule-agent-ops.yaml` |
+| M-16 | ServiceMonitor 头部写明 Secret 同 namespace、Operator 跨 ns RBAC、**Secret 明文会被复制进 Prometheus 配置 Secret** 三个副作用 | `templates/servicemonitor.yaml` |
+| M-17 | compose 的 Prometheus 加启动前置校验：令牌缺失/是目录/仍是占位符 → 直接退出（不再"容器 Up、target 永久 down"） | `docker-compose.observability.yml` |
+| M-18 | 令牌语义写对：**裸令牌不带 `Bearer ` 前缀**、**BOM 才是致命项**（尾随空白会被 TrimSpace）；示例文件改为明显不可用的占位串 | `prometheus.yml`、`metrics-token.example` |
+| M-19/M-20/M-21 | 三开关语义统一：新增 helper `medassist.aiCoreMetricsEnabled`，令牌注入与 ServiceMonitor 共用同一条件；prod/staging 环境 values **显式声明** `aiCore` 与 `rules` | `_helpers.tpl`、`deployment-ai-core.yaml`、`values*.yaml` |
+| M-10(docs) | `DEPLOY.md` 补 `METRICS_TOKEN` 行、新增"指标抓取与告警（两形态）"与"灾难恢复：抓取链路恢复清单"；`OPERATIONS.md` 重写抓取步骤与回滚语义 | `docs/DEPLOY.md`、`docs/OPERATIONS.md` |
+| M-53 | SSE 未收到 `done` 时前端标注"内容可能不完整"（不再当完整临床结论展示）；后端流式失败路径补审计（只记原因/长度） | `AskView.vue`、`agent_router.py` |
+| M-60 | 新增可复跑资产 `scripts/e2e/agent_ask_stream_smoke.py`（校验 meta→delta*→done 与 done 完整性）；parity matrix 补录 G86–G105 前端交付，并明确区分"脚本可复跑"与"人工浏览器" | `scripts/e2e/`、`docs/qa/vue_parity_matrix.md` |
+
+**新增静态门禁**：`tests/test_deploy_observability.py`（原生规则 ↔ Helm CRD 告警同名同量、
+三开关共用 helper、compose 令牌前置校验、告警指标必须由导出端点提供）；
+`tests/test_e2e_agent_smoke.py`（冒烟脚本可导入、参数契约稳定、显式断言 done）。
+
+**验证**：`npm run build` 成功（dist 已重建）；全量 pytest **1007 passed / 11 skipped**。
+
+**仍待整改**：PG 真库断言与多实例 CAS（M-30/31/32）、多 worker counter 语义（M-23）、
+运营口径归一（M-26/27/28）、第三方调用性能（M-43~M-47）、前端健壮性（M-54~M-59）。

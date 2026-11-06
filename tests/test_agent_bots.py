@@ -132,7 +132,8 @@ def test_memory_candidate_not_in_context_until_confirmed():
     assert mem["status"] == "CANDIDATE"
     assert bot_memory.context_memories("deepseek-bot") == []
 
-    bot_memory.confirm_memory(mem["id"], "doctor01", "doctor")
+    # 评审 M-01：录入人不得自确认（四眼），确认必须由质控/管理员完成
+    bot_memory.confirm_memory(mem["id"], "qc01", "qc")
     assert [m["key"] for m in bot_memory.context_memories("deepseek-bot")] == ["dept.preference"]
     assert bot_memory.list_memories("deepseek-bot", "doctor")[0]["status"] == "CONFIRMED"
 
@@ -156,12 +157,12 @@ def test_memory_expiry_and_delete():
     mem = bot_memory.create_memory({"botCode": "deepseek-bot", "key": "old",
                                     "value": "过期规则", "source": "制度",
                                     "expiresAt": past}, "admin01")
-    bot_memory.confirm_memory(mem["id"], "admin01", "admin")
+    bot_memory.confirm_memory(mem["id"], "qc01", "qc")
     assert bot_memory.context_memories("deepseek-bot") == []
 
     fresh = bot_memory.create_memory({"botCode": "deepseek-bot", "key": "new",
                                       "value": "新规则", "source": "制度"}, "admin01")
-    bot_memory.confirm_memory(fresh["id"], "admin01", "admin")
+    bot_memory.confirm_memory(fresh["id"], "qc01", "qc")
     assert len(bot_memory.context_memories("deepseek-bot")) == 1
     bot_memory.delete_memory(fresh["id"], "admin01", "admin")
     assert bot_memory.context_memories("deepseek-bot") == []
@@ -173,6 +174,9 @@ def test_memory_permission():
                                     "value": "内容", "source": "科室"}, "doctor01")
     with pytest.raises(bot_memory.MemoryForbidden):
         bot_memory.confirm_memory(mem["id"], "doctor02", "doctor")
+    # 评审 M-01：录入人即使拥有 admin 角色也不得自确认（四眼）
+    with pytest.raises(bot_memory.MemoryForbidden):
+        bot_memory.confirm_memory(mem["id"], "doctor01", "admin")
     with pytest.raises(bot_memory.MemoryForbidden):
         bot_memory.delete_memory(mem["id"], "doctor02", "doctor")
 
@@ -196,7 +200,7 @@ def test_build_messages_includes_identity_skills_tools_memory_boundary():
     mem = bot_memory.create_memory({"botCode": "deepseek-bot", "key": "pref",
                                     "value": "呼吸科偏好院内路径", "source": "科室"},
                                    "admin01")
-    bot_memory.confirm_memory(mem["id"], "admin01", "admin")
+    bot_memory.confirm_memory(mem["id"], "qc01", "qc")
     bot = bots.get_bot("deepseek-bot", "admin")
     system, human = bot_runtime.build_messages(bot, "COPD 急性加重如何处理")
     text = system.content
@@ -204,6 +208,10 @@ def test_build_messages_includes_identity_skills_tools_memory_boundary():
     assert "kb_search" in text and "院内知识库检索" in text
     assert "呼吸科偏好院内路径" in text
     assert "非医疗器械" in text or "不是医疗器械" in text
+    # 评审 M-06：Bot 链路必须与咨询链路同一份证据边界（此前完全缺失）；
+    # 该 Bot 未绑定技能卡 → 走"未提供证据引用"的更强条款
+    assert "【证据边界】" in text
+    assert "未提供任何证据引用" in text
     assert human.content == "COPD 急性加重如何处理"
 
 
@@ -212,7 +220,7 @@ def test_run_bot_with_injected_runner_and_memory_isolated():
     _published_bot("bot-b")
     mem = bot_memory.create_memory({"botCode": "bot-a", "key": "kk",
                                     "value": "只属于 A 的记忆", "source": "科室"}, "admin01")
-    bot_memory.confirm_memory(mem["id"], "admin01", "admin")
+    bot_memory.confirm_memory(mem["id"], "qc01", "qc")
 
     async def fake(provider, messages):
         return "A 的回答"
@@ -255,7 +263,8 @@ def test_collaborate_timeout_is_isolated(monkeypatch):
 
     result = asyncio.run(bot_runtime.collaborate(team, "问题", slow))
     assert result["failed"] == 2
-    assert all(o["status"] == "FAILED" and o["error"] == "BotUnavailable"
+    # 评审 M-10：对外只回稳定错误码，不回异常类型名
+    assert all(o["status"] == "FAILED" and o["error"] == "BOT_FAILED"
                for o in result["opinions"])
 
 
@@ -302,13 +311,18 @@ def test_api_bot_lifecycle_memory_and_collaboration(monkeypatch, tmp_path):
     _published_bot("bot-b")
     assert c.get("/api/v1/agent/bots", headers=doc).json()["bots"][0]["code"] in ("bot-a", "bot-b")
 
-    # 记忆：候选 → doctor 不可见 → 确认后可见
-    r = c.post("/api/v1/agent/bots/bot-a/memories", headers=doc,
+    # 记忆：仅质控/管理员可录入（评审 M-01），候选对医生不可见，确认后可见
+    assert c.post("/api/v1/agent/bots/bot-a/memories", headers=doc,
+                  json={"key": "pref2", "value": "医生不应能录入", "source": "科室"}
+                  ).status_code == 403
+    r = c.post("/api/v1/agent/bots/bot-a/memories", headers=adm,
                json={"key": "pref", "value": "呼吸科偏好院内路径", "source": "科室"})
     assert r.status_code == 200 and r.json()["status"] == "CANDIDATE"
     assert c.get("/api/v1/agent/bots/bot-a/memories", headers=doc).json()["memories"] == []
     mem_id = r.json()["id"]
-    assert c.post(f"/api/v1/agent/bot-memories/{mem_id}/confirm", headers=doc).status_code == 200
+    # 录入人 admin 不得自确认，改由质控确认（四眼）
+    assert c.post(f"/api/v1/agent/bot-memories/{mem_id}/confirm", headers=adm).status_code == 403
+    assert c.post(f"/api/v1/agent/bot-memories/{mem_id}/confirm", headers=qc).status_code == 200
     assert c.get("/api/v1/agent/bots/bot-a/memories", headers=doc).json()["memories"][0]["key"] == "pref"
 
     # 团队 + 协作（注入假 runner，不触网）

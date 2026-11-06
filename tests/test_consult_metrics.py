@@ -108,9 +108,21 @@ def test_usage_normalization_variants():
 
 
 def test_label_escaping():
-    consult_metrics.record('a"b\\c\nd', "sync", "ok", 1.0)
+    # 评审 M-22：agent 标签已收敛到目录白名单，转义行为改由 skill 标签验证
+    consult_metrics.record("drug", "sync", "ok", 1.0, ['a"b\\c\nd'])
     text = consult_metrics.prometheus_text()
-    assert 'agent="a\\"b\\\\c\\nd"' in text
+    assert 'skill="a\\"b\\\\c\\nd"' in text
+
+
+def test_agent_label_is_whitelisted():
+    """评审 M-22：任意 agentId 不得放大标签基数，未知值归入 __other__。"""
+    consult_metrics.record("../etc/passwd", "sync", "ok", 1.0)
+    snap = consult_metrics.snapshot()
+    assert f"{consult_metrics.OTHER_AGENT}|sync|ok" in snap["requests"]
+    assert "../etc/passwd|sync|ok" not in snap["requests"]
+
+    consult_metrics.record("drug", "sync", "ok", 1.0)
+    assert "drug|sync|ok" in consult_metrics.snapshot()["requests"]
 
 
 def test_skill_label_cap_falls_into_other():

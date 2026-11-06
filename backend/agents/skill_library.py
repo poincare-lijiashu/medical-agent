@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from backend.agents import catalog, router as router_agent, skills
 from backend.core import agent_tools, pg_store
+from backend.core.medical_audit import PHIRedactor
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXPERIENCES_FILE = os.path.join(BASE_DIR, "data", "skill_experiences.json")
@@ -37,6 +38,8 @@ _PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _NORM = re.compile(r"[\s\u3000。，、；：！？,.!?;:\"'“”‘’（）()\[\]【】<>《》/\\|—\-_=+*#`~]+")
+
+_redactor = PHIRedactor()
 
 _lock = threading.RLock()
 
@@ -57,6 +60,12 @@ class LibraryConflict(LibraryError):
     code = "SKILL_LIBRARY_CONFLICT"
 
 
+class LibraryForbidden(LibraryError):
+    """角色/四眼不满足（评审 M-08 整改）。"""
+
+    code = "SKILL_LIBRARY_FORBIDDEN"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -66,8 +75,11 @@ def _norm(text: str) -> str:
 
 
 def _has_phi(text: str) -> bool:
-    return bool(_PHONE.search(text or "") or _ID_CARD.search(text or "")
-                or _EMAIL.search(text or ""))
+    """PHI 判定：复用全局唯一脱敏口径（覆盖姓名/住院号/住址），再叠本地正则兜底。"""
+    value = text or ""
+    if _redactor.redact(value) != value:
+        return True
+    return bool(_PHONE.search(value) or _ID_CARD.search(value) or _EMAIL.search(value))
 
 
 def _json_loader(path: str):
@@ -247,6 +259,9 @@ def _proposal_payload(agent_id: str, pattern: str, items: list[dict]) -> dict:
         "toolAllowlist": tools,
         "evidenceRefs": evidence,
         "experienceIds": [i["id"] for i in items],
+        # 评审 M-08：透传经验作者，审核人可见"这段提示文本最初由谁起草"
+        "experienceAuthors": sorted({i.get("createdBy") for i in items
+                                     if i.get("createdBy")}),
         "contraindications": contras,
     }
 
@@ -330,6 +345,9 @@ def adopt(proposal_id: str, actor: str) -> dict:
             raise LibraryNotFound(f"未找到候选技能：{proposal_id}")
         if proposal.get("status") != "PROPOSED":
             raise LibraryConflict(f"当前候选状态不可采纳：{proposal.get('status')}")
+        # 评审 M-08：采纳人不得是候选提示文本的经验作者（否则等于自写自采纳）
+        if actor in (proposal.get("experienceAuthors") or []):
+            raise LibraryForbidden("不能采纳由自己录入经验生成的候选技能（四眼原则）")
 
         replay = _replay(proposal)
         proposal["replay"] = replay

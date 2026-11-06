@@ -81,20 +81,41 @@ services:
 
   # ---- 指标抓取：Prometheus（G105）----------------------------------------
   # 抓取 AI 中台 /metrics（Bearer METRICS_TOKEN），加载 deploy/prometheus 告警规则。
-  # 首次使用：
-  #   Copy-Item deploy/observability/prometheus/metrics-token.example `
-  #             deploy/observability/prometheus/metrics-token
-  #   在 .env.local 设置同值 METRICS_TOKEN=<随机长串>，重启 AI 中台。
+  #
+  # 首次使用（评审 M-17/M-18 整改后的正确步骤）：
+  #   1) 先确认挂载路径是**普通文件**而不是目录（Docker 在文件缺失时会自动建同名目录）：
+  #        if (Test-Path .\deploy\observability\prometheus\metrics-token -PathType Container) {
+  #          Remove-Item -Recurse -Force .\deploy\observability\prometheus\metrics-token }
+  #   2) 生成令牌并写入（裸令牌，不带 `Bearer ` 前缀，无 BOM，无尾随换行）：
+  #        $t = -join ((48..57)+(97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})
+  #        [IO.File]::WriteAllText("$PWD\deploy\observability\prometheus\metrics-token",
+  #          $t, (New-Object Text.UTF8Encoding($false)))
+  #   3) 在 .env.local 设置同值 METRICS_TOKEN=$t，重启 AI 中台。
+  # 容器启动时会做前置校验：令牌缺失 / 是目录 / 仍是占位符 → 直接退出（restart loop 可见），
+  # 而不是"容器 Up、target 永久 down"。
   # 仅本机回环暴露 9090；院区访问请走反向代理与鉴权。
   prometheus:
     image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.55.1}
     container_name: medagent_prometheus
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=15d
-      - --web.enable-lifecycle
+      - |
+        TOKEN_FILE=/etc/prometheus/metrics-token
+        if [ ! -f "$$TOKEN_FILE" ]; then
+          echo "FATAL: $$TOKEN_FILE 缺失或不是普通文件（可能是 Docker 自动创建的目录）。" >&2
+          echo "       请删除同名目录后写入裸令牌，见 docker-compose.observability.yml 注释。" >&2
+          exit 1
+        fi
+        if grep -q "REPLACE_BEFORE_USE" "$$TOKEN_FILE"; then
+          echo "FATAL: $$TOKEN_FILE 仍是占位符，请替换为随机长串（与 METRICS_TOKEN 一致）。" >&2
+          exit 1
+        fi
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=15d \
+          --web.enable-lifecycle
     ports:
       - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:

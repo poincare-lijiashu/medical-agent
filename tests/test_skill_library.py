@@ -1,6 +1,8 @@
 """G92 技能库：经验录入校验、确定性提炼、回放准入、草稿生成与 API。"""
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -156,3 +158,25 @@ def test_api_experience_distill_adopt(monkeypatch, tmp_path):
 
     actions = {(e.get("payload") or {}).get("action") for e in audit.entries}
     assert {"skill_experience_create", "skill_distill", "skill_adopt"} <= actions
+
+
+def test_api_reject_audit_keeps_length_not_note(monkeypatch, tmp_path):
+    """评审 M-13：审计只记录 note 长度，自由文本（可能含 PHI）不落追加式日志。"""
+    c, audit = _client(monkeypatch, tmp_path)
+    qc = _h(_login(c, "qc01"))
+    for _ in range(2):
+        assert c.post("/api/v1/agent/skill-experiences", headers=qc,
+                      json=exp()).status_code == 200
+    pid = c.post("/api/v1/agent/skill-proposals/distill",
+                 headers=qc).json()["proposals"][0]["id"]
+
+    note = "患者 张三 住院号 A123456 证据不足"
+    r = c.post(f"/api/v1/agent/skill-proposals/{pid}/reject",
+               headers=qc, json={"note": note})
+    assert r.status_code == 200, r.text
+
+    dumped = json.dumps([e for e in audit.entries], ensure_ascii=False)
+    assert "A123456" not in dumped and "张三" not in dumped
+    payloads = [(e.get("payload") or {}) for e in audit.entries
+                if (e.get("payload") or {}).get("action") == "skill_proposal_reject"]
+    assert payloads and payloads[0].get("noteChars") == len(note)

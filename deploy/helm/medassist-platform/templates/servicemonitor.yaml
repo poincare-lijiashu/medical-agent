@@ -4,6 +4,13 @@
   2) AI 中台（ai-core）：/metrics 需 admin JWT 或抓取专用静态令牌（G105）。
      启用 serviceMonitor.aiCore 前先创建同 namespace 的 Secret，并在
      aiCore deployment 注入同一个 METRICS_TOKEN（见 deployment-ai-core.yaml）。
+
+  评审 M-16 提示（必须知悉）：
+  - Secret 必须与 ServiceMonitor **同 namespace**（Operator 用 ForNamespace 解析）；
+  - Operator 需要跨 namespace 读取该 Secret 的 RBAC，缺失时**静默跳过凭据**
+    （Prometheus 侧表现为 401，K8s 侧无失败信号）；
+  - Operator 会把 Secret 值以**明文**写入 Prometheus 自身的配置 Secret
+    （prometheus-<name>），等价于集群内多一份令牌副本，轮换时需同步。
 */}}
 {{- if .Values.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
@@ -40,7 +47,7 @@ spec:
           targetLabel: component
         - sourceLabels: ["__meta_kubernetes_pod_label_rollouts_pod_template_hash"]
           targetLabel: rollouts_pod_template_hash
-{{- if and .Values.aiCore.enabled .Values.serviceMonitor.aiCore.enabled }}
+{{- if include "medassist.aiCoreMetricsEnabled" . }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor

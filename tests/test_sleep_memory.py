@@ -38,7 +38,8 @@ def _mem(bot_code: str, key: str, value: str, confirm: bool = True,
         "source": "科室共识", "expiresAt": expires,
     }, "admin01")
     if confirm:
-        item = bot_memory.confirm_memory(item["id"], "admin01", "admin")
+        # 评审 M-01：录入人不得自确认（四眼），确认改由质控角色完成
+        item = bot_memory.confirm_memory(item["id"], "qc01", "qc")
     return item
 
 

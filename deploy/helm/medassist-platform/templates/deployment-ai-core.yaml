@@ -125,8 +125,9 @@ spec:
                   name: {{ .Values.external.milvus.existingSecret }}
                   key: {{ .Values.external.milvus.secretKey }}
             {{- end }}
-            {{- if .Values.serviceMonitor.aiCore.enabled }}
+            {{- if include "medassist.aiCoreMetricsEnabled" . }}
             # G105：Prometheus 抓取专用令牌（与 ServiceMonitor authorization 同一 Secret）
+            # 评审 M-21：与 ServiceMonitor 共用同一 helper 条件，不单独判断子开关
             - name: METRICS_TOKEN
               valueFrom:
                 secretKeyRef:

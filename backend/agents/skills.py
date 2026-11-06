@@ -291,6 +291,10 @@ def review_skill(code: str, approve: bool, note: str | None, row_version: int,
             raise SkillConflict("技能卡已被他人修改，请刷新后重试")
         if actor == item.get("createdBy"):
             raise SkillForbidden("不能审核自己创建的技能卡（四眼原则）")
+        # 评审 M-02 整改：四眼应比"提交人"而非仅"创建人"——否则 A 创建、B 修改、B 提交、
+        # B 审核可自审自批（submittedBy 此前只写不读）。两者任一相同即拒绝。
+        if actor == item.get("submittedBy"):
+            raise SkillForbidden("不能审核自己提交的技能卡（四眼原则）")
         text = (note or "").strip()
         if not approve and not text:
             raise SkillInvalid("驳回必须填写原因")

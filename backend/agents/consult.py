@@ -22,10 +22,14 @@ import time
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.agents import catalog, consult_metrics, model_policy, skills
+from backend.agents import catalog, consult_metrics, guardrails, model_policy, skills
 from backend.agents import router as rule_router
 from backend.core import llm_config
 from backend.core.llm_factory import LLMFactory
+from backend.core.logger import get_logger
+from backend.core.medical_audit import PHIRedactor
+
+logger = get_logger(__name__)
 
 MAX_QUESTION = 2000
 PROMPT_BUDGET = 12000
@@ -35,11 +39,24 @@ MAX_HISTORY_TURNS = 6
 MAX_HISTORY_ITEM = 2000
 MAX_HISTORY_CHARS = 6000
 
-_BOUNDARY = (
-    "【边界】你是临床辅助工具，不是医疗器械；输出仅供执业医师/药师参考，"
-    "不得替代诊断、处方或治疗决策；不得编造文献/指南/证据；"
-    "证据不足时必须明确说明不确定性，并提示人工复核。"
-)
+# 与医疗域其它问答入口同一套 PHI 脱敏（评审 M-04 整改）：Agent 控制面此前整域未接脱敏，
+# 患者身份证/手机/邮箱/病案号会原样进入模型提示。此处只脱敏**入站输入**，不改回答。
+_redactor = PHIRedactor()
+
+# 保留段落标记（评审 M-05 整改）：客户端回传的 history 若含这些标记，会被模型误认为
+# 我们写入的系统级约束（伪造「【证据边界】」即可绕过证据限制）。回传历史只允许纯对话文本。
+_RESERVED_MARKERS = ("【证据边界】", "【边界】", "【生效技能卡】", "【可用工具】",
+                     "【长期记忆】", "【已发布技能卡】", "【提示】")
+
+
+def _neutralize(text: str) -> str:
+    """把客户端可控文本里的保留段落标记转义，避免伪造系统级约束。"""
+    out = text
+    for marker in _RESERVED_MARKERS:
+        out = out.replace(marker, marker.replace("【", "[[").replace("】", "]]"))
+    return out
+
+_BOUNDARY = guardrails.BOUNDARY  # 评审 M-06：边界文案唯一来源
 
 
 class ConsultError(RuntimeError):
@@ -82,14 +99,8 @@ def select_skills(agent: catalog.AgentSpec, codes: list[str] | None) -> list[dic
 
 
 def _max_input(chosen: list[dict]) -> int:
-    caps = [MAX_QUESTION]
-    for card in chosen:
-        try:
-            caps.append(int((card.get("guardrails") or {}).get("maxInputChars")
-                            or MAX_QUESTION))
-        except (TypeError, ValueError):
-            caps.append(MAX_QUESTION)
-    return max(200, min(caps))
+    """输入上限取所有生效技能中最严一档（护栏口径统一到 guardrails 模块）。"""
+    return min(MAX_QUESTION, guardrails.effective(chosen)["maxInputChars"])
 
 
 def resolve_provider() -> dict:
@@ -106,7 +117,10 @@ def resolve_provider() -> dict:
 
 
 def clean_history(history) -> list[dict]:
-    """校验多轮上下文：仅 user/assistant，条数/单条/总量三重上限；不做服务端持久化。"""
+    """校验多轮上下文：仅 user/assistant，条数/单条/总量三重上限；不做服务端持久化。
+
+    入站即脱敏并中和保留段落标记（评审 M-04 / M-05）。
+    """
     if not history:
         return []
     if not isinstance(history, list):
@@ -121,7 +135,7 @@ def clean_history(history) -> list[dict]:
         role = str(item.get("role") or "").strip()
         if role not in ("user", "assistant"):
             raise ConsultInvalid("history.role 只能是 user 或 assistant")
-        text = str(item.get("content") or "").strip()
+        text = _neutralize(_redactor.redact(str(item.get("content") or "").strip()))
         if not text:
             raise ConsultInvalid("history.content 不能为空")
         if len(text) > MAX_HISTORY_ITEM:
@@ -147,9 +161,8 @@ def build_messages(agent: catalog.AgentSpec, chosen: list[dict],
                 f"{card['promptTemplate']}")
             if card.get("evidenceRefs"):
                 lines.append("  证据引用：" + "；".join(card["evidenceRefs"]))
-        lines.append(
-            "【证据边界】只可引用上述证据或输入中明确提供的信息；"
-            "不得补充未提供的指南条文、文献结论或数值。")
+        # 评审 M-06 / M-07：证据边界与 requireEvidence 的强制标注要求统一由 guardrails 给出
+        lines.extend(guardrails.prompt_clauses(chosen))
     else:
         lines.append("【提示】该能力域暂无生效技能卡，按职责与证据边界保守作答。")
     lines.append(_BOUNDARY)
@@ -272,8 +285,11 @@ def _route_with_history(question: str, turns: list[dict]) -> dict:
 
 def _prepare(question: str, role: str, agent_id: str | None,
              skill_codes: list[str] | None, history) -> dict:
-    """校验并装配一次问答（不含模型调用）；前置应答直接返回 payload。"""
-    q = (question or "").strip()
+    """校验并装配一次问答（不含模型调用）；前置应答直接返回 payload。
+
+    入站问题先做 PHI 脱敏与保留标记中和（评审 M-04 / M-05），再进入路由与提示装配。
+    """
+    q = _neutralize(_redactor.redact((question or "").strip()))
     if not (2 <= len(q) <= MAX_QUESTION):
         raise ConsultInvalid(f"问题需 2-{MAX_QUESTION} 字")
     turns = clean_history(history)
@@ -320,8 +336,21 @@ def _done_payload(ctx: dict, answer: str, started: float) -> dict:
         "answer": answer[:4000],
         "elapsedMs": int((time.perf_counter() - started) * 1000),
         "needsHumanReview": True,
+        # 评审 M-07：回填卡片护栏，说明本次到底按哪一档执行（hitl 恒 True 是安全不变量）
+        "skillGuardrails": guardrails.effective(chosen),
         "note": "技能卡执行口径 + 模型输出，仅供复核；不构成诊断或处方；未自动调用工具。",
     }
+
+
+def _reason(exc: BaseException) -> str:
+    """把业务异常映射为计量的 reason 标签（评审 M-25：区分输入非法与模型不可用）。"""
+    if isinstance(exc, ConsultForbidden):
+        return "forbidden"
+    if isinstance(exc, ConsultInvalid):
+        return "invalid"
+    if isinstance(exc, ConsultUnavailable):
+        return "unavailable"
+    return "other"
 
 
 async def run(question: str, role: str, agent_id: str | None = None,
@@ -331,9 +360,10 @@ async def run(question: str, role: str, agent_id: str | None = None,
     started = time.perf_counter()
     try:
         ctx = _prepare(question, role, agent_id, skill_codes, history)
-    except ConsultError:
+    except ConsultError as exc:
         consult_metrics.record(agent_id or "unknown", "sync", "error",
-                               (time.perf_counter() - started) * 1000)
+                               (time.perf_counter() - started) * 1000,
+                               reason=_reason(exc))
         raise
 
     if "prefilter" in ctx:
@@ -357,17 +387,21 @@ async def run(question: str, role: str, agent_id: str | None = None,
             raise ConsultUnavailable("模型未返回内容；请检查 provider 状态后重试")
     except asyncio.TimeoutError:
         consult_metrics.record(agent_key, "sync", "error",
-                               (time.perf_counter() - started) * 1000)
+                               (time.perf_counter() - started) * 1000,
+                               reason="timeout")
         raise ConsultUnavailable(
             f"智能体 {agent_key} 执行超时（>{int(AGENT_TIMEOUT_S)}s）") from None
-    except ConsultError:
+    except ConsultError as exc:
         consult_metrics.record(agent_key, "sync", "error",
-                               (time.perf_counter() - started) * 1000)
+                               (time.perf_counter() - started) * 1000,
+                               reason=_reason(exc))
         raise
     except Exception as e:  # noqa: BLE001 —— 上游异常转为可读失败，不冒泡堆栈
         consult_metrics.record(agent_key, "sync", "error",
-                               (time.perf_counter() - started) * 1000)
-        raise ConsultUnavailable(f"模型调用失败：{type(e).__name__}") from None
+                               (time.perf_counter() - started) * 1000,
+                               reason="unavailable")
+        logger.warning("consult.run.upstream_error", error=type(e).__name__)
+        raise ConsultUnavailable("模型服务暂不可用，请稍后重试") from None
 
     consult_metrics.record(agent_key, "sync", "ok",
                            (time.perf_counter() - started) * 1000, codes, usage)
@@ -385,9 +419,10 @@ async def stream(question: str, role: str, agent_id: str | None = None,
     started = time.perf_counter()
     try:
         ctx = _prepare(question, role, agent_id, skill_codes, history)
-    except ConsultError:
+    except ConsultError as exc:
         consult_metrics.record(agent_id or "unknown", "stream", "error",
-                               (time.perf_counter() - started) * 1000)
+                               (time.perf_counter() - started) * 1000,
+                               reason=_reason(exc))
         raise
 
     if "prefilter" in ctx:
@@ -430,7 +465,8 @@ async def stream(question: str, role: str, agent_id: str | None = None,
                 raise ConsultUnavailable(
                     f"模型流式响应超时（>{int(STREAM_IDLE_TIMEOUT_S)}s 无输出）") from None
             except Exception as e:  # noqa: BLE001 —— 上游异常转为可读错误
-                raise ConsultUnavailable(f"模型流式输出失败：{type(e).__name__}") from None
+                logger.warning("consult.stream.upstream_error", error=type(e).__name__)
+                raise ConsultUnavailable("模型服务暂不可用，请稍后重试") from None
             if time.perf_counter() - started > AGENT_TIMEOUT_S:
                 raise ConsultUnavailable(f"智能体 {agent_key} 执行超时")
             if isinstance(chunk, dict):
@@ -454,15 +490,17 @@ async def stream(question: str, role: str, agent_id: str | None = None,
                                (time.perf_counter() - started) * 1000, codes, last_usage)
         finished = True
         yield {"type": "done", **_done_payload(ctx, answer, started)}
-    except ConsultError:
+    except ConsultError as exc:
         failed = True
         consult_metrics.record(agent_key, "stream", "error",
-                               (time.perf_counter() - started) * 1000)
+                               (time.perf_counter() - started) * 1000,
+                               reason=_reason(exc))
         raise
     except Exception:  # noqa: BLE001 —— 非业务异常同样按失败计量后上抛
         failed = True
         consult_metrics.record(agent_key, "stream", "error",
-                               (time.perf_counter() - started) * 1000)
+                               (time.perf_counter() - started) * 1000,
+                               reason="other")
         raise
     finally:
         if not finished and not failed:

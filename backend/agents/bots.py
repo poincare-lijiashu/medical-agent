@@ -273,6 +273,9 @@ def review_bot(code: str, approve: bool, note: str | None, row_version: int,
             raise BotConflict("Bot 已被他人修改，请刷新后重试")
         if actor == item.get("createdBy"):
             raise BotForbidden("不能审核自己创建的 Bot（四眼原则）")
+        # 评审 M-02 整改：同时比提交人，防"他人创建→自己修改并提交→自审自批"。
+        if actor == item.get("submittedBy"):
+            raise BotForbidden("不能审核自己提交的 Bot（四眼原则）")
         text = (note or "").strip()
         if not approve and not text:
             raise BotInvalid("驳回必须填写原因")

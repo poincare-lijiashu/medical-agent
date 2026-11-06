@@ -20,6 +20,9 @@ import httpx
 
 from backend.config import settings
 from backend.core import web_sources
+from backend.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 _DEFAULT_BASE_URL = "https://api.tavily.com"
 _MAX_RESULTS = 10
@@ -93,7 +96,9 @@ def search(query: str, top_k: int = 5) -> dict:
             resp.raise_for_status()
             body = resp.json()
     except (httpx.HTTPError, ValueError) as e:  # 网络/解析异常统一降级
-        raise WebSearchUnavailable(f"联网搜索暂不可用：{type(e).__name__}") from e
+        # 评审 M-10：异常类型名只写日志，不进入对外错误文本
+        logger.warning("web_search.failed", error=type(e).__name__)
+        raise WebSearchUnavailable("联网搜索暂不可用") from e
 
     results = []
     for item in (body.get("results") or [])[:_MAX_RESULTS]:

@@ -4,12 +4,23 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "scripts", "agent_go_live_check.py")
+RULES = os.path.join(REPO, "deploy", "prometheus", "medassist-agent-ops.rules.yml")
+
+
+def _all_metrics_text() -> str:
+    """按告警规则引用 + 自检必需清单，生成一份"全覆盖"的抓取文本。"""
+    required = {"medassist_agent_skill_usage_total",
+                "medassist_agent_consult_tokens_total"}
+    with open(RULES, encoding="utf-8") as f:
+        names = set(re.findall(r"\bmedassist_[a-z0-9_]+\b", f.read())) | required
+    return "\n".join(f"{n} 0" for n in sorted(names))
 
 
 def _load():
@@ -65,6 +76,19 @@ def test_prometheus_checks():
     assert mod.check_prometheus("medassist_agent_experiences_total 1")[0][1] is False
 
 
+def test_alert_rules_covered_by_scrape_endpoint():
+    """评审 M-34：告警规则引用的指标必须都能在 /metrics 里找到。"""
+    full = dict((n, (ok, d)) for n, ok, d in
+                mod.check_alert_rules_alignment(_all_metrics_text()))
+    assert full["alerts.rules_file"][0] is True
+    assert full["alerts.metrics_covered"][0] is True
+
+    partial = mod.check_alert_rules_alignment(
+        "medassist_agent_experiences_total 0")
+    results = dict((n, (ok, d)) for n, ok, d in partial)
+    assert results["alerts.metrics_covered"][0] is False
+
+
 def test_dry_run_checks_repo():
     assert mod.main(["--dry-run"]) == 0
 
@@ -90,6 +114,7 @@ def test_run_orchestration_pass(monkeypatch):
             "medassist_agent_consult_requests_total 0",
             "medassist_agent_skill_usage_total 0",
             "medassist_agent_consult_tokens_total 0"])),
+        "/metrics": (200, _all_metrics_text()),
         "/api/v1/agent/sleep-memory/scan": (200, "{}"),
         "/api/v1/agent/skill-advices?status=OPEN": (200, "{}"),
     }

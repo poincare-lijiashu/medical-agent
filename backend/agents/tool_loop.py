@@ -104,9 +104,10 @@ async def run(question: str, bot: dict, role: str, llm_factory=None,
             await _audit_step({"step": step, "type": "timeout", "status": "TIMEOUT"})
             truncated = True
             break
-        except Exception as e:  # noqa: BLE001 —— 上游异常不冒泡，转为可复核结果
+        except Exception:  # noqa: BLE001 —— 上游异常不冒泡，转为可复核结果
+            # 评审 M-10：对外只给稳定错误码，异常类型名不进结果/审计
             trace.append({"step": step, "type": "error", "status": "ERROR",
-                          "error": type(e).__name__})
+                          "error": "MODEL_FAILED"})
             await _audit_step({"step": step, "type": "error", "status": "ERROR"})
             truncated = True
             break
@@ -151,9 +152,9 @@ async def run(question: str, bot: dict, role: str, llm_factory=None,
                 except agent_tools.ToolError as e:
                     status = "ERROR"
                     payload = {"error": e.code, "message": str(e)}
-                except Exception as e:  # noqa: BLE001 —— 单工具异常不影响后续
+                except Exception:  # noqa: BLE001 —— 单工具异常不影响后续
                     status = "ERROR"
-                    payload = {"error": "TOOL_FAILED", "message": type(e).__name__}
+                    payload = {"error": "TOOL_FAILED", "message": "工具执行失败"}
 
             messages.append(ToolMessage(
                 content=json.dumps(payload, ensure_ascii=False, default=str)[:6000],

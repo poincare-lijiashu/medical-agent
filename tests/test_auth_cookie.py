@@ -17,6 +17,9 @@ from backend.main import app
 
 @pytest.fixture()
 def test_client():
+    # M-29 整改：conftest 已把 users 表隔离到 tmp_path（空表），需显式注入演示账号
+    from backend.core.auth import seed_default_users
+    seed_default_users()
     return TestClient(app)
 
 

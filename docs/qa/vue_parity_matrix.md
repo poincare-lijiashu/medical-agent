@@ -105,3 +105,22 @@
 - admin：打开「架构 · 合规」断言四卡标题；审核中心断言无「其它科室会诊协助」tab。
 
 轮 A 验收结果：e2e 9/9 通过（tests/e2e 全目录）；全量 pytest 710 passed（基线 707 + 本轮 3）。
+
+## Agent 域前端登记（G86–G105，2026-11-06 评审 M-60 补录）
+
+> 口径：本表登记"前端交付在哪里 + 证据是什么"。**证据类型必须区分**：
+> `API 冒烟（可复跑）` = 有脚本；`人工浏览器` = 当时人工操作、仓库内无脚本；
+> `pytest` = 后端契约测试。不要把"人工验证"写成"自动化验证"。
+
+| 功能点 | 前端落点 | 证据 |
+|---|---|---|
+| Agent 控制台：能力开关（含风险等级）/工具注册表/智能体目录/路由预览/A2A 能力卡 | `frontend-vue/src/views/AgentView.vue` | pytest `tests/test_agent_control_plane.py`；UI 为人工浏览器（无脚本） |
+| 技能卡管理（新建/送审/四眼审核/停用/影响面） | `AgentView.vue` | pytest `tests/test_agent_skills.py`、`tests/test_skill_ops.py` |
+| Bot 管理 / 长期记忆（候选→确认）/团队协作 | `AgentView.vue` | pytest `tests/test_agent_bots.py` |
+| 技能库（经验→候选→回放采纳） | `AgentView.vue` | pytest `tests/test_skill_library.py` |
+| 运营看板（趋势快照/告警/建议） | `AgentView.vue` | pytest `tests/test_skill_trends.py`、`tests/test_skill_advice.py` |
+| 医生端统一问答 `/ask`（能力域选择、技能卡勾选、多轮上下文、SSE 流式、**截断标注**） | `frontend-vue/src/views/AskView.vue` | **API 冒烟可复跑**：`python scripts/e2e/agent_ask_stream_smoke.py`（校验 meta→delta*→done 与 done 完整性）；页面渲染为人工浏览器（无脚本） |
+| 技能使用率卡片（问答数/成功率/耗时/技能命中） | `AgentView.vue` | pytest `tests/test_skill_usage.py`、`tests/test_consult_metrics.py` |
+
+**仍缺（登记待补，不夸大）**：`AgentView.vue` / `AskView.vue` 的 Playwright 浏览器断言（元素可见、console 错误为 0）。
+现有 `tests/e2e/test_vue_parity.py` 覆盖的是病例/概览/审核中心/架构，**不含**本表页面。

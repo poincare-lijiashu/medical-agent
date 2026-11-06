@@ -269,10 +269,18 @@ async def metrics(user: dict = Depends(require_metrics_access)):
     """运维指标：admin 登录态或 Prometheus 抓取专用 METRICS_TOKEN。
 
     指标含内部路由分布，未配置令牌时只允许 admin；静态令牌仅用于抓取。
+    评审 M-14 整改：此前 `/metrics` 只导出进程指标 + 问答计量，而 G97 的运营告警规则
+    依赖 `skill_trends` 的 13 个指标——Prometheus 抓的是 `/metrics`，导致 5/7 条规则
+    永远无数据。此处合并为**单一口径的完整 exposition**，与 Agent 侧 Prometheus 端点一致。
     """
-    from backend.agents import consult_metrics
-    return PlainTextResponse(observability.exposition() + consult_metrics.prometheus_text(),
-                             media_type="text/plain; version=0.0.4")
+    from backend.agents import consult_metrics, skill_trends
+    try:
+        agent_ops = skill_trends.prometheus_text()
+    except Exception:  # noqa: BLE001 —— 运营指标聚合失败不能拖垮抓取本身
+        agent_ops = ""
+    return PlainTextResponse(
+        observability.exposition() + consult_metrics.prometheus_text() + agent_ops,
+        media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/v1/health")

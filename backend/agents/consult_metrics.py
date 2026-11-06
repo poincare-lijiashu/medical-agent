@@ -25,9 +25,13 @@ from collections import defaultdict
 
 MAX_SKILL_LABELS = 200
 OTHER_SKILL = "__other__"
+OTHER_AGENT = "__other__"
+MAX_AGENT_LABELS = 64
+ERROR_REASONS = ("invalid", "forbidden", "unavailable", "timeout", "other")
 
 _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = defaultdict(int)
+_errors: dict[tuple[str, str], int] = defaultdict(int)
 _durations: dict[str, list] = defaultdict(lambda: [0.0, 0])
 _skill_usage: dict[str, int] = defaultdict(int)
 _skill_last_used: dict[str, float] = {}
@@ -55,17 +59,40 @@ def _normalize_tokens(tokens) -> dict | None:
     return {"input_tokens": inp, "output_tokens": out}
 
 
+def _agent_label(agent_id: str) -> str:
+    """把 agent 标签收敛到目录内的已知能力域（评审 M-22 整改）。
+
+    `agentId` 可由调用方显式指定，若直接作为标签值会出现任意基数。这里只接受
+    catalog 中真实存在的 id 以及两个内部值，其余统一归入 `__other__`。
+    """
+    aid = (agent_id or "unknown").strip()[:64]
+    if aid in ("unknown", "prefilter"):
+        return aid
+    try:
+        from backend.agents import catalog
+        return aid if catalog.get_agent(aid) is not None else OTHER_AGENT
+    except Exception:  # noqa: BLE001 —— 目录不可用时宁可归并，也不放大基数
+        return OTHER_AGENT
+
+
 def record(agent_id: str, channel: str, status: str, duration_ms: float,
-           skill_codes=(), tokens=None) -> None:
-    """记录一次问答结果；``skill_codes`` 与 ``tokens`` 只在 status=ok 时累计。"""
+           skill_codes=(), tokens=None, reason: str | None = None) -> None:
+    """记录一次问答结果；``skill_codes`` 与 ``tokens`` 只在 status=ok 时累计。
+
+    评审 M-25 整改：错误按 `reason` 细分（invalid/forbidden/unavailable/timeout/other），
+    避免"用户输入非法"与"模型不可用"混在同一个 error 计数里无法定位。
+    """
     global _tokenized_requests
-    agent = (agent_id or "unknown")[:64]
+    agent = _agent_label(agent_id)
     ch = channel if channel in ("sync", "stream") else "sync"
     st = status if status in ("ok", "error", "aborted") else "error"
     ms = max(float(duration_ms or 0), 0.0)
     usage = _normalize_tokens(tokens) if st == "ok" else None
+    rs = "" if st != "error" else (reason if reason in ERROR_REASONS else "other")
     with _lock:
         _requests[(agent, ch, st)] += 1
+        if st == "error":
+            _errors[(agent, rs)] += 1
         bucket = _durations[ch]
         bucket[0] += ms
         bucket[1] += 1
@@ -87,6 +114,7 @@ def snapshot() -> dict:
     with _lock:
         return {
             "requests": {f"{a}|{c}|{s}": n for (a, c, s), n in _requests.items()},
+            "errors": {f"{a}|{r}": n for (a, r), n in _errors.items()},
             "durations": {c: {"sum_ms": v[0], "count": v[1]}
                           for c, v in _durations.items()},
             "skills": dict(_skill_usage),
@@ -106,6 +134,14 @@ def prometheus_text() -> str:
             lines.append(
                 f'medassist_agent_consult_requests_total{{agent="{_esc(agent)}",'
                 f'channel="{_esc(ch)}",status="{_esc(st)}"}} {n}')
+        lines.extend([
+            "# HELP medassist_agent_consult_errors_total 统一问答失败次数（按原因细分）",
+            "# TYPE medassist_agent_consult_errors_total counter",
+        ])
+        for (agent, reason), n in sorted(_errors.items()):
+            lines.append(
+                f'medassist_agent_consult_errors_total{{agent="{_esc(agent)}",'
+                f'reason="{_esc(reason)}"}} {n}')
         lines.extend([
             "# HELP medassist_agent_consult_duration_ms_sum 统一问答耗时合计（毫秒）",
             "# TYPE medassist_agent_consult_duration_ms_sum counter",
@@ -151,6 +187,7 @@ def reset() -> None:
     global _tokenized_requests
     with _lock:
         _requests.clear()
+        _errors.clear()
         _durations.clear()
         _skill_usage.clear()
         _skill_last_used.clear()

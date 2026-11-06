@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -97,6 +98,31 @@ def check_prometheus(text: str) -> list[tuple[str, bool, str]]:
              "missing=" + ",".join(missing) if missing else "required metrics present")]
 
 
+_ALERT_METRIC = re.compile(r"\bmedassist_[a-z0-9_]+\b")
+
+
+def check_alert_rules_alignment(metrics_text: str) -> list[tuple[str, bool, str]]:
+    """评审 M-34：抓取端点实际导出的指标必须覆盖告警规则引用的全部指标。
+
+    这是 M-14 那类事故的门禁——规则引用了 ``/metrics`` 没导出的指标时，
+    告警**永远不会触发**，而此前自检只验证"服务可用"。
+    """
+    rules = os.path.join(REPO_ROOT, "deploy", "prometheus",
+                         "medassist-agent-ops.rules.yml")
+    if not os.path.isfile(rules):
+        return [("alerts.rules_file", False, rules)]
+    with open(rules, encoding="utf-8") as f:
+        body = f.read()
+    referenced = sorted(set(_ALERT_METRIC.findall(body)))
+    missing = [name for name in referenced
+               if not re.search(rf"^{re.escape(name)}(?:\{{| )", metrics_text, re.M)]
+    return [
+        ("alerts.rules_file", True, f"alerts={body.count('alert:')}"),
+        ("alerts.metrics_covered", not missing,
+         "missing=" + ",".join(missing) if missing else f"{len(referenced)} metrics covered"),
+    ]
+
+
 def check_repo() -> list[tuple[str, bool, str]]:
     out = []
     dist = os.path.join(REPO_ROOT, "frontend-vue", "dist", "index.html")
@@ -104,6 +130,11 @@ def check_repo() -> list[tuple[str, bool, str]]:
     rules = os.path.join(REPO_ROOT, "deploy", "prometheus",
                          "medassist-agent-ops.rules.yml")
     out.append(("repo.prometheus_rules", os.path.isfile(rules), rules))
+    if os.path.isfile(rules):
+        with open(rules, encoding="utf-8") as f:
+            body = f.read()
+        out.append(("repo.prometheus_rules_alerts", "alert:" in body,
+                    f"alerts={body.count('alert:')} metrics={len(set(_ALERT_METRIC.findall(body)))}"))
     try:
         head = subprocess.check_output(["git", "-C", REPO_ROOT, "rev-parse", "--short", "HEAD"],
                                        text=True).strip()
@@ -157,6 +188,13 @@ def run(base_url: str, username: str, password: str, timeout: float) -> int:
     results.append(("metrics.prometheus_endpoint", status == 200, f"http={status}"))
     if status == 200:
         results.extend(check_prometheus(raw))
+
+    # 评审 M-34：Prometheus 真正抓取的是 /metrics，必须单独验证它并做告警覆盖对齐
+    status, metrics_raw = _request(base_url, "/metrics", token=token, timeout=timeout)
+    results.append(("metrics.scrape_endpoint", status == 200, f"http={status}"))
+    if status == 200:
+        results.extend(check_prometheus(metrics_raw))
+        results.extend(check_alert_rules_alignment(metrics_raw))
 
     status, raw = _request(base_url, AGENT_PREFIX + "/sleep-memory/scan", "POST",
                            token=token, body={}, timeout=timeout)

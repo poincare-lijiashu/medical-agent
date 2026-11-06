@@ -108,6 +108,22 @@ def _isolate_case_archive(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_users_file(tmp_path, monkeypatch):
+    """用户表隔离（2026-11-06 评审 M-29 整改）：此前 conftest 未覆盖 `auth.USERS_FILE`，
+    凡调用 `seed_default_users()` / `create_user()` / `delete_user()` 而未自行 monkeypatch
+    的测试都会读写真实 data/auth/users.json。
+
+    实测事故：`tests/test_row_level_users.py` 单跑一次即把生产用户表清成 `{}`，
+    使 4 个演示账号全部失效——与 2026-10-30「users 表被清成 1 行 → 全站 401」同型复发。
+    本 fixture 与 runtime_flags / case_archive 同模式：默认指向 tmp_path 的空表，
+    需要登录的测试须在自身 fixture 里显式 `seed_default_users()`（与其余用例同一纪律）。
+    """
+    from backend.core import auth
+    monkeypatch.setattr(auth, "USERS_FILE", str(tmp_path / "users.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_review_queue_and_audit(tmp_path, monkeypatch):
     """隔离残余缺口根治（2026-10-30 收尾）：审核队列与审计文件此前无全局隔离——
     未显式 monkeypatch 的测试会写真实 data/review/queue.json 与 data/audit/audit.jsonl。

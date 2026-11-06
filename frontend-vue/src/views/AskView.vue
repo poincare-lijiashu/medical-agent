@@ -321,6 +321,7 @@ async function streamConsult(q, history, placeholder) {
   const dec = new TextDecoder()
   let buf = ''
   let ev = null
+  let completed = false
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
@@ -348,6 +349,7 @@ async function streamConsult(q, history, placeholder) {
           }
           placeholder.answer = d.answer || placeholder.answer
           placeholder.streaming = false
+          completed = true
         } else if (ev === 'error') {
           throw new Error(d.detail || '生成失败')
         }
@@ -356,6 +358,14 @@ async function streamConsult(q, history, placeholder) {
     }
   }
   placeholder.streaming = false
+  // 评审 M-53：没有收到 done 事件 → 回答可能被截断，不能当成完整临床结论展示
+  if (!completed) {
+    placeholder.failed = true
+    placeholder.truncated = true
+    placeholder.failNote = placeholder.answer
+      ? '连接提前结束：以上内容可能不完整，请重新提问或转人工复核'
+      : '连接提前结束：未收到完整回答，请重试'
+  }
 }
 
 function stop() {

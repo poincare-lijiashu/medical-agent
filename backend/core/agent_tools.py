@@ -23,6 +23,11 @@ from typing import Any, Callable
 
 from backend.core import agent_flags, medical_drug, medical_kb
 from backend.core import web_search as web_search_mod
+from backend.core.logger import get_logger
+from backend.core.medical_audit import PHIRedactor
+
+logger = get_logger(__name__)
+_redactor = PHIRedactor()
 
 # 输入上限：与 MCP 工具口径一致，防止单次调用把超大文本塞进检索/规则引擎
 _MAX_QUERY = 2000
@@ -74,7 +79,9 @@ def _kb_search(args: dict) -> dict:
     try:
         rows = medical_kb.search_hybrid(args["query"], int(args.get("top_k") or 3))
     except Exception as e:  # noqa: BLE001 —— 向量库/模型故障统一转可读错误
-        raise ToolUnavailable(f"知识库检索暂不可用：{type(e).__name__}") from e
+        # 评审 M-10：异常类型名写日志，不进入对外错误文本
+        logger.warning("agent_tool.kb_search.failed", error=type(e).__name__)
+        raise ToolUnavailable("知识库检索暂不可用") from e
     return {"total": len(rows), "chunks": rows}
 
 
@@ -82,7 +89,8 @@ def _drug_check(args: dict) -> dict:
     try:
         return medical_drug.check(args["question"])
     except Exception as e:  # noqa: BLE001 —— 规则库损坏同样降级，不冒泡 500
-        raise ToolUnavailable(f"药物规则核对暂不可用：{type(e).__name__}") from e
+        logger.warning("agent_tool.drug_check.failed", error=type(e).__name__)
+        raise ToolUnavailable("药物规则核对暂不可用") from e
 
 
 def _web_search(args: dict) -> dict:
@@ -107,7 +115,8 @@ TOOLS: dict[str, ToolSpec] = {
             "additionalProperties": False,
         },
         roles=("doctor", "pharmacist", "qc", "admin"),
-        phi="none",
+        # 评审 M-09：入参可能含患者主诉/病案信息，分级如实声明为 patient
+        phi="patient",
         handler=_kb_search,
     ),
     "drug_check": ToolSpec(
@@ -121,7 +130,7 @@ TOOLS: dict[str, ToolSpec] = {
             "additionalProperties": False,
         },
         roles=("doctor", "pharmacist", "qc", "admin"),
-        phi="none",
+        phi="patient",
         handler=_drug_check,
     ),
     "web_search": ToolSpec(
@@ -138,7 +147,7 @@ TOOLS: dict[str, ToolSpec] = {
             "additionalProperties": False,
         },
         roles=("doctor", "pharmacist", "qc", "admin"),
-        phi="none",
+        phi="patient",  # 查询串通常来自患者上下文，出网前另有一道 redact_query
         handler=_web_search,
         feature_flag="agent_web_search",
         external_egress=True,
@@ -237,9 +246,20 @@ def validate_arguments(spec: ToolSpec, arguments: Any) -> dict:
     return cleaned
 
 
+def _redact_arguments(arguments: dict) -> dict:
+    """入站统一脱敏（评审 M-09）：检索/规则引擎与嵌入模型都不应见到患者标识。
+
+    ``web_search`` 出网前另有一道 ``redact_query``（第二道防线，保留）。
+    """
+    return {
+        key: (_redactor.redact(value) if isinstance(value, str) else value)
+        for key, value in arguments.items()
+    }
+
+
 async def execute_tool(name: str, arguments: Any, role: str) -> dict:
     """异步执行工具（同步 handler 放线程池，避免阻塞事件循环）。"""
     spec = get_tool(name, role)
-    cleaned = validate_arguments(spec, arguments)
+    cleaned = _redact_arguments(validate_arguments(spec, arguments))
     result = await asyncio.to_thread(spec.handler, cleaned)
     return {"tool": spec.name, "result": result}

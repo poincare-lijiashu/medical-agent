@@ -21,18 +21,14 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.agents import bot_memory, bot_teams, bots, model_policy
+from backend.agents import bot_memory, bot_teams, bots, guardrails, model_policy
 from backend.core import agent_tools, llm_config
 from backend.core.llm_factory import LLMFactory
 
 MAX_QUESTION = 2000
 BOT_TIMEOUT_S = 30.0
 
-_BOUNDARY = (
-    "【边界】你是临床辅助工具，不是医疗器械；输出仅供执业医师/药师参考，"
-    "不得替代诊断、处方或治疗决策；不得编造文献/指南/证据；"
-    "证据不足时必须明确说明不确定性。"
-)
+_BOUNDARY = guardrails.BOUNDARY  # 评审 M-06：与咨询链路同一份边界文案
 
 
 class BotUnavailable(RuntimeError):
@@ -74,6 +70,11 @@ def build_messages(bot: dict, question: str) -> list:
             lines.append(f"- {card['name']}（{card['code']}）：{card['promptTemplate']}")
             if card.get("evidenceRefs"):
                 lines.append(f"  证据引用：{'；'.join(card['evidenceRefs'])}")
+        # 评审 M-06 / M-07：补齐「证据边界」并真正消费 requireEvidence
+        lines.extend(guardrails.prompt_clauses(cards))
+    else:
+        # 没有生效技能卡时同样要有证据边界（无证据 → 禁止给具体条文/剂量）
+        lines.extend(guardrails.prompt_clauses([]))
     if bot.get("toolAllowlist"):
         lines.append("【可用工具】（只能调用下列工具，不得越权）")
         for name in bot["toolAllowlist"]:
@@ -118,6 +119,7 @@ async def run_bot(bot: dict, question: str, runner=None) -> dict:
         "elapsedMs": int((time.perf_counter() - started) * 1000),
         "memoryCount": len(bot_memory.context_memories(bot["code"])),
         "skillCount": len(bots.bot_skill_cards(bot)),
+        "skillGuardrails": guardrails.effective(bots.bot_skill_cards(bot)),
         "hitl": True,
     }
 
@@ -140,7 +142,8 @@ async def collaborate(team: dict, question: str, runner=None) -> dict:
                 "botCode": bot["code"], "name": bot["name"],
                 "modelProvider": bot.get("modelProvider") or "default",
                 "status": "FAILED",
-                "error": type(result).__name__,
+                # 评审 M-10：对外只给稳定错误码，异常类型名不进出响应体
+                "error": "BOT_FAILED",
                 "hitl": True,
             })
         else:

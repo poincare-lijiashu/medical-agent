@@ -2,10 +2,16 @@
 # 本地/院区自建 Prometheus 抓取配置（G105）
 #
 # 抓取目标：AI 中台 http://host.docker.internal:8001/metrics
-# 鉴权：Bearer + METRICS_TOKEN（与后端 .env.local 的 METRICS_TOKEN 一致）；
-#       令牌文件不进行版本库：先复制 metrics-token.example 为 metrics-token。
-#       令牌文件必须是 UTF-8（无 BOM）、无多余空白/换行（Windows 建议：
-#       [IO.File]::WriteAllText($path, $token, (New-Object Text.UTF8Encoding($false)))）。
+# 鉴权：authorization.type=Bearer + credentials_file（与后端 .env.local 的 METRICS_TOKEN 一致）。
+#
+# 令牌文件规则（评审 M-18 整改，按重要性排序）：
+#   1) 文件内容 = **裸令牌**，不要带 `Bearer ` 前缀——Prometheus 会自己拼前缀，
+#      带前缀会变成 `Bearer Bearer xxx` → 401；
+#   2) 必须是普通文件，不能是目录（缺文件时 Docker 会自动建同名目录，见 compose 注释）；
+#   3) **不能有 BOM**（Prometheus 只 TrimSpace，不去 BOM）；尾随换行/空白无害；
+#   4) 令牌文件不入版本库：先复制 metrics-token.example 为 metrics-token 并替换为随机长串。
+#   Windows 建议：
+#       [IO.File]::WriteAllText($path, $token, (New-Object Text.UTF8Encoding($false)))
 #
 # 告警规则：/etc/prometheus/rules/*.yml 来自 deploy/prometheus/（含 G97/G102 规则）。
 # ============================================================================

@@ -1,0 +1,105 @@
+{{- /*
+  Agent 运营告警规则（Prometheus Operator 形态，评审 M-15 / M-6 整改）。
+
+  为什么需要这个模板：
+  - deploy/prometheus/medassist-agent-ops.rules.yml 是 **Prometheus 原生 rule_files 格式**，
+    只被本地 compose 的 /etc/prometheus/rules/*.yml 挂载消费；
+  - K8s Operator 形态下没有任何组件会读它，G97/G102 的 7 条规则在集群里一条都不会生效；
+  - 本模板把同一组规则以 PrometheusRule CRD 形式部署，开关为
+    serviceMonitor.enabled + serviceMonitor.rules.enabled。
+
+  维护约定：本文件与 deploy/prometheus/medassist-agent-ops.rules.yml **必须同步**；
+  改阈值/表达式时两处一起改（规则语义以汇总意见书 G97/G102 口径为准）。
+  指标来源：/metrics（G105 起同时导出 consult_metrics 与 skill_trends）。
+*/}}
+{{- if include "medassist.agentRulesEnabled" . }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "medassist.fullname" . }}-agent-ops
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "monitoring") | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: medassist-agent-ops
+      rules:
+        - alert: MedAssistAgentReplayPassRateLow
+          expr: |
+            medassist_agent_replay_pass_ratio < 0.8
+            and medassist_agent_replay_checks_total >= 3
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "技能候选回放通过率低于 80%"
+            description: "当前 {{ "{{" }} $value {{ "}}" }}；请复核候选的问题模式与证据，不要为通过率放宽回放。"
+
+        - alert: MedAssistAgentUnusedPublishedSkills
+          expr: medassist_agent_unused_published_skills >= 3
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "存在未被任何 Bot 引用的生效技能"
+            description: "当前 {{ "{{" }} $value {{ "}}" }} 个；请评估绑定到合适 Bot 或停用（先看影响面）。"
+
+        - alert: MedAssistAgentProposalBacklog
+          expr: medassist_agent_proposals_total{status="proposed"} >= 5
+          for: 24h
+          labels:
+            severity: info
+          annotations:
+            summary: "技能候选积压"
+            description: "当前 {{ "{{" }} $value {{ "}}" }} 个待处理候选；请安排审核。"
+
+        - alert: MedAssistAgentExperienceCoverageLow
+          expr: |
+            medassist_agent_experience_coverage_ratio < 0.5
+            and medassist_agent_experiences_total >= 4
+          for: 24h
+          labels:
+            severity: info
+          annotations:
+            summary: "经验覆盖率偏低"
+            description: "当前 {{ "{{" }} $value {{ "}}" }}；请补充同能力域、同模式的已审核脱敏经验后再提炼。"
+
+        - alert: MedAssistAgentHighOperationalAlerts
+          expr: medassist_agent_operational_alerts{level="high"} > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Agent 运营存在高危告警"
+            description: "请登录 Agent 控制台查看告警与运营建议，人工处理。"
+
+        - alert: MedAssistAgentConsultErrorRateHigh
+          # 评审 M-24：分母排除 agent="prefilter"（闲聊前置应答零模型、恒成功），
+          # 否则真实错误率被系统性稀释。
+          expr: |
+            (
+              sum(rate(medassist_agent_consult_requests_total{status="error"}[10m]))
+              /
+              sum(rate(medassist_agent_consult_requests_total{agent!="prefilter"}[10m]))
+            ) > 0.2
+            and
+            sum(increase(medassist_agent_consult_requests_total{status="error"}[10m])) >= 3
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "统一问答错误率超过 20%"
+            description: "近 10 分钟错误率 {{ "{{" }} $value {{ "}}" }}（已排除前置应答）；请按 reason 标签区分输入非法与模型不可用。"
+
+        - alert: MedAssistAgentConsultAbortedSpike
+          expr: sum(increase(medassist_agent_consult_requests_total{status="aborted",agent!="prefilter"}[10m])) >= 5
+          for: 10m
+          labels:
+            severity: info
+          annotations:
+            summary: "统一问答中止次数偏高"
+            description: "近 10 分钟客户端中止 {{ "{{" }} $value {{ "}}" }} 次；可能是主动停止或链路超时，请结合网关日志排查。"
+{{- end }}

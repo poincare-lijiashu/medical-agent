@@ -110,7 +110,8 @@ def test_bot_impact_memories_teams_and_skill_status():
                            "description": "", "botCodes": ["ops-a", "ops-b"]}, "admin01")
     mem = bot_memory.create_memory({"botCode": "ops-a", "key": "kk",
                                     "value": "科室偏好", "source": "科室"}, "admin01")
-    bot_memory.confirm_memory(mem["id"], "admin01", "admin")
+    # 评审 M-01：录入人不得自确认（四眼），确认改由质控角色完成
+    bot_memory.confirm_memory(mem["id"], "qc01", "qc")
 
     impact = skill_ops.bot_impact("ops-a")
     assert impact["status"] == "PUBLISHED"

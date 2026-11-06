@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 
 from fastapi.testclient import TestClient
@@ -44,6 +45,13 @@ def test_agent_tools_are_registered():
     for agent in catalog.AGENTS:
         for name in agent.tools:
             assert name in agent_tools.TOOLS, f"{agent.id} 引用了未注册工具 {name}"
+
+
+def test_tool_arguments_are_redacted():
+    """评审 M-09：工具入站在执行前统一脱敏（检索/规则引擎不见患者标识）。"""
+    cleaned = agent_tools._redact_arguments({"query": "患者 13800138000 的用药核对"})
+    assert "13800138000" not in cleaned["query"]
+    assert "用药核对" in cleaned["query"]
 
 
 def test_card_has_required_a2a_fields():
@@ -227,7 +235,8 @@ def test_flags_defaults_and_metadata():
     flags = {f["key"]: f for f in agent_flags.all_flags()}
     assert flags["agent_web_search"]["default"] is False
     assert flags["agent_multi_agent"]["default"] is False
-    assert flags["agent_a2a"]["default"] is True
+    # 评审 M-12：A2A 能力广告默认关闭（避免默认暴露内部能力域拓扑）
+    assert flags["agent_a2a"]["default"] is False
     assert flags["agent_web_search"]["risk"] == "high"
 
 
@@ -258,6 +267,7 @@ def _login(c, u, p="Med@2026"):
 
 
 def test_card_endpoint_public_and_well_known(monkeypatch, tmp_path):
+    agent_flags.set_flag("agent_a2a", True)  # 评审 M-12：默认关，显式开启后再验能力卡
     c = _client(monkeypatch, tmp_path)
     r = c.get("/api/v1/agent/card")
     assert r.status_code == 200
@@ -313,6 +323,7 @@ def test_flags_admin_only_and_toggle(monkeypatch, tmp_path):
 
 
 def test_a2a_message_send(monkeypatch, tmp_path):
+    agent_flags.set_flag("agent_a2a", True)  # 评审 M-12：默认关，显式开启
     c = _client(monkeypatch, tmp_path)
     h = {"Authorization": "Bearer " + _login(c, "doctor01")}
     body = {
@@ -330,9 +341,23 @@ def test_a2a_message_send(monkeypatch, tmp_path):
 
 
 def test_a2a_method_not_found(monkeypatch, tmp_path):
+    agent_flags.set_flag("agent_a2a", True)
     c = _client(monkeypatch, tmp_path)
     h = {"Authorization": "Bearer " + _login(c, "doctor01")}
     r = c.post("/api/v1/agent/a2a", headers=h,
                json={"jsonrpc": "2.0", "id": 1, "method": "message/stream", "params": {}})
     assert r.status_code == 200
     assert r.json()["error"]["code"] == -32601
+
+
+def test_a2a_closed_by_default(monkeypatch, tmp_path):
+    """评审 M-12：默认关闭时连路由入口一并下线，而不是只藏能力卡。"""
+    c = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+    r = c.post("/api/v1/agent/a2a", headers=h,
+               json={"jsonrpc": "2.0", "id": 1, "method": "message/send",
+                     "params": {"message": {"role": "user",
+                                            "parts": [{"kind": "text", "text": "核对药物"}]}}})
+    assert r.status_code == 200
+    assert r.json()["error"]["code"] == -32601
+    assert "message/send" not in json.dumps(r.json(), ensure_ascii=False)

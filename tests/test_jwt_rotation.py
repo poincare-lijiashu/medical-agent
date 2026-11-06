@@ -16,6 +16,13 @@ from backend.config import settings
 from backend.main import app
 
 
+@pytest.fixture(autouse=True)
+def _seed_users():
+    # M-29 整改：conftest 已把 users 表隔离到 tmp_path（空表），需显式注入演示账号
+    from backend.core.auth import seed_default_users
+    seed_default_users()
+
+
 def test_secret_rotation_zero_kickout(monkeypatch):
     """换 secret + previous=旧值 → 旧令牌仍可用（在线用户零踢出）。"""
     old_secret = "old-secret-for-rotation-0123456789abcdef"
