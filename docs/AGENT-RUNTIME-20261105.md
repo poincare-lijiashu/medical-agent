@@ -1140,3 +1140,30 @@ Playwright 冒烟只在本地起服务且装 playwright 时执行，CI 默认 sk
 - `/a2a` 的调用入口与能力卡共用 `agent_a2a` 开关，但本批未新增按调用方的细粒度授权（仍为登录 + 通用限流 + 模型配额）。
 
 **验证**：全量 pytest **1106 passed / 13 skipped**；本批无前端改动，`dist` 未重建。
+
+---
+
+## 31. 2026-11-06 评审整改（第 27 批：模型并发闸门与本地联调/交互验收）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 03-S8 | 新增**进程内模型调用并发闸门**：`AGENT_MODEL_MAX_CONCURRENCY`（默认 4）限制同时调用数；满额排队 `AGENT_MODEL_QUEUE_TIMEOUT_S`（默认 10s）后返回 **503**；作为 yield 依赖挂在 consult/stream、second-opinion、collaborate、tool-loop 五个真正调模型的端点（流式响应结束后才释放） | `backend/agents/model_gate.py`（新建）、`backend/api/deps.py`、`agent_router.py`、`config.py`、`.env.example` |
+| 04-S18 | `frontend-vue/vite.config.js` 补 `server.proxy`：`npm run dev`（5173）时 `/api` 与 `/.well-known` 代理到 `127.0.0.1:8001`，不再全部 404；生产构建不受影响 | `vite.config.js` |
+| 04（验收锚点） | Playwright 新增 **G3** 路由预览交互断言（输入→点击「预览路由」→结果卡指向药物助手；规则路由不调模型、不改状态），并同步 `vue_parity_matrix.md` | `tests/e2e/test_vue_parity.py`、`docs/qa/vue_parity_matrix.md` |
+
+**为什么这样改**：通用限流（60/min）与每用户模型配额只能约束"单个调用者"，无法阻止多人同时各发 1 次把共享
+GPU 上的本地模型压满；没有并发闸门时表现为"所有人的回答一起变慢"，且客户端无法区分"忙"与"卡死"。
+本地 `npm run dev` 缺代理则前端根本无法单独联调，只能整包构建后由后端托管，开发迭代成本高。
+
+**新增测试**：`tests/test_model_gate.py` 6 项（默认值、上限=1 时第二调用超时、上限=2 时两路并行且第三路超时、
+调用体抛错仍释放槽位、依赖映射 503、依赖收尾归还槽位）；`test_frontend_agent_markers.py` 增加 vite 代理标记。
+
+**仍存边界**：
+- 并发闸门是**单进程信号量**：多副本部署时每个副本各自计数，全局上限需在网关或模型服务侧另做；
+- 排队是**无优先级 FIFO**，不做科室/紧急度区分；超时值需按院内实际响应时间调；
+- 只有"真正调模型"的 5 个端点走闸门，规则路由/目录/运营看板等只读接口不受影响（也不应受影响）；
+- dev 代理只是本地便利，不做鉴权/改写；生产仍由后端同源托管 `dist`；
+- G3 仍需本地服务 + playwright，CI 默认 skip（14 skipped 中新增 1 条）。
+
+**验证**：全量 pytest **1113 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
+

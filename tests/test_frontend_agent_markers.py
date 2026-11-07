@@ -13,11 +13,19 @@ API = os.path.join(REPO, "frontend-vue", "src", "api", "index.js")
 ASK = os.path.join(REPO, "frontend-vue", "src", "views", "AskView.vue")
 AGENT = os.path.join(REPO, "frontend-vue", "src", "views", "AgentView.vue")
 LABELS = os.path.join(REPO, "frontend-vue", "src", "constants", "labels.js")
+VITE = os.path.join(REPO, "frontend-vue", "vite.config.js")
 
 
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as f:
         return f.read()
+
+
+def test_vite_dev_proxy_targets_backend():
+    """评审 04-S18：npm run dev 时同源相对请求必须代理到后端，否则全部 404。"""
+    body = _read(VITE)
+    assert "server:" in body
+    assert "'/api'" in body and "http://127.0.0.1:8001" in body
 
 
 def test_router_has_role_guard():

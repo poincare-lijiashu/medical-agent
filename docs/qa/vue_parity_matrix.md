@@ -96,7 +96,7 @@
 - ~~A-4 修改本人密码（openChangePwd → 顶栏入口 + change-password 弹条）~~ → **已补齐**（AppShell.vue 顶栏「改密」入口 + 对话框；前端一致性校验；成功 toast + 强制重登，后端 revoke 旧令牌；标记锁 test_change_password_frontend_markers_present）
 - ~~A-7 beforeunload 防误关（浏览器行为，评估迁移价值）~~ → **已补齐**（AppShell.vue window beforeunload 守卫 + stores/dirty.js 脏标记；rx 工作台 case_text 非空或已选药单非空 → preventDefault 弹原生确认；标记锁 test_beforeunload_guard_frontend_markers_present）
 
-## Playwright 冒烟锚点（tests/e2e/test_vue_parity.py，3 个测试函数）
+## Playwright 冒烟锚点（tests/e2e/test_vue_parity.py，按账号组织）
 
 - doctor01（单函数顺序断言，降低全量套件请求密度）：打开「病例总结」断言表单元素
   （病例框/上传/提交；不触发 LLM）→ 概览断言 hero/5 指标卡/最近活动/快速进入且无过渡期
@@ -111,6 +111,8 @@ Agent 域追加（2026-11-07，评审 04-S10）：
 - G2 `test_agent_console_cards_visible`（admin01）：Agent 控制台五张关键卡片
   （`agent-flags`/`agent-route`/`agent-consult`/`agent-skills`/`agent-bots`）可见，
   且无 JS console 错误（资源加载类 404 不计）。
+- G3 `test_agent_console_route_preview_interaction`（admin01）：输入临床问题 → 点
+  「预览路由」→ 结果卡出现并指向药物助手；规则路由确定性、不调模型、不改运行时状态。
 
 > 说明：e2e 需本地服务 127.0.0.1:8001 与 playwright；缺任一条件自动 skip，不计入全量
 > pytest 的 passed 数。矩阵中 Agent 域的"人工浏览器"结论仍保留，不因为加了冒烟就改写成
@@ -134,7 +136,8 @@ Agent 域追加（2026-11-07，评审 04-S10）：
 | 医生端统一问答 `/ask`（能力域选择、技能卡勾选、多轮上下文、SSE 流式、**截断标注**） | `frontend-vue/src/views/AskView.vue` | **API 冒烟可复跑**：`python scripts/e2e/agent_ask_stream_smoke.py`（校验 meta→delta*→done 与 done 完整性）；页面渲染为人工浏览器（无脚本） |
 | 技能使用率卡片（问答数/成功率/耗时/技能命中） | `AgentView.vue` | pytest `tests/test_skill_usage.py`、`tests/test_consult_metrics.py` |
 
-**补充（2026-11-07，评审 04-S10）**：已为 `AskView`（渲染要素、不触发 LLM）与
-`AgentView`（五张关键卡片 + 无 JS console 错误）补 Playwright 冒烟，见上文 G1/G2。
-仍缺：Agent 控制台**交互链路**（开关切换、送审/审核、协作执行）的浏览器断言——
-这些涉及真实模型调用与状态变更，当前只由后端 pytest + 人工浏览器覆盖。
+**补充（2026-11-07，评审 04-S10 / 03-S8 批次）**：已为 `AskView`（渲染要素、不触发 LLM）、
+`AgentView`（五张关键卡片 + 无 JS console 错误）、以及 Agent 控制台的**路由预览交互**
+（输入→点击→结果卡）补 Playwright 冒烟，见上文 G1/G2/G3。
+仍缺：Agent 控制台的**状态变更型**交互（开关切换、送审/审核、协作执行）浏览器断言——
+这些会真实改运行时开关或调用模型，当前只由后端 pytest + 人工浏览器覆盖。

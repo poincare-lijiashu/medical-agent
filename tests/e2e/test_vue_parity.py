@@ -360,3 +360,21 @@ def test_agent_console_cards_visible(page):
     real = [e for e in errors if "Failed to load resource" not in e]
     assert real == [], real[:3]
 
+
+# ---- G3：Agent 控制台路由预览交互链路（评审 04，不触发模型调用） ----
+
+def test_agent_console_route_preview_interaction(page):
+    """G3 验收：输入临床问题 → 点「预览路由」→ 结果卡出现且指向药物助手。
+    规则路由是确定性的，不消耗模型 Token，也不改任何运行时状态。"""
+    _login(page, "admin01")
+    _nav(page, "Agent 控制台")
+    card = page.locator('[data-testid="agent-route"]')
+    card.locator("textarea").fill("华法林和阿司匹林能一起用吗")
+    card.get_by_role("button", name="预览路由").click()
+    result = page.locator('[data-testid="agent-route-result"]')
+    expect(result).to_be_visible()
+    expect(result).to_contain_text("药物信息助手")
+    expect(result).to_contain_text("drug")
+    # 失败提示不应同时出现（成功路径）
+    expect(page.locator('[data-testid="agent-route-error"]')).to_have_count(0)
+

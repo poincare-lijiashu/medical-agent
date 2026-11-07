@@ -179,3 +179,18 @@ def model_quota(request: Request):
     if not allow("model:" + _identity(request), limit=limit, window=60):
         raise HTTPException(status_code=429,
                             detail="模型调用配额已用尽（每分钟），请稍后再试")
+
+
+async def model_slot():
+    """模型调用并发闸门（评审 03-S8）：限制进程内同时调用数，排队超时 503。
+
+    与 ``model_quota`` 互补：配额防单用户刷，本闸门防多人并发把共享 GPU 打满。
+    作为 yield 依赖使用：请求（含流式响应）结束后自动释放槽位。
+    """
+    from backend.agents import model_gate
+
+    try:
+        async with model_gate.slot():
+            yield
+    except model_gate.ModelBusy as e:
+        raise HTTPException(status_code=503, detail=str(e))

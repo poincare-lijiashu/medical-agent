@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     agent_public_base_url: str = ""
     # 评审 03-S7：能力卡只披露对外可用能力域（逗号分隔）；留空=不披露任何能力域（fail-closed）。
     agent_card_disclosed_agents: str = "literature,drug,kb"
+    # 评审 03-S8：进程内同时进行的模型调用上限；满额排队 AGENT_MODEL_QUEUE_TIMEOUT_S 后 503。
+    agent_model_max_concurrency: int = 4
+    agent_model_queue_timeout_s: float = 10.0
     cors_origins: list[str] = ["http://localhost:8001", "http://127.0.0.1:8001"]
 
     # LLM — Qwen（阿里云百炼，OpenAI 兼容）
