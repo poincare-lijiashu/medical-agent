@@ -133,6 +133,41 @@ services:
       retries: 10
       start_period: 20s
 
+  # ---- 告警送达：Alertmanager + 本地日志 sink（第 52 批）--------------------
+  # Prometheus 规则命中 → alertmanager → alert-sink（仅打印摘要到 stdout）。
+  # 验证：docker logs medagent_alert_sink | findstr ALERT_WEBHOOK
+  # 生产：把 alertmanager.yml 的 receiver 换成院内短信/IM/工单 Webhook。
+  alert-sink:
+    image: ${ALERT_SINK_IMAGE:-python:3.11-slim}
+    container_name: medagent_alert_sink
+    restart: unless-stopped
+    command: ["python", "/app/receiver.py"]
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./alertmanager/receiver.py:/app/receiver.py:ro
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.27.0}
+    container_name: medagent_alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_HOST_PORT:-9093}:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - medagent_alertmanager:/alertmanager
+    depends_on:
+      - alert-sink
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/ready | grep -q Ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   # ---- 日志采集：Loki + Promtail --------------------------------------------
   # 本地以 Docker API 发现本项目容器并采集 stdout/stderr；
   # K8s 生产环境改用 Promtail/Alloy DaemonSet（见 deploy/README.md「日志采集」）。
@@ -176,3 +211,4 @@ volumes:
   medagent_loki:
   medagent_promtail_positions:
   medagent_prometheus:
+  medagent_alertmanager:

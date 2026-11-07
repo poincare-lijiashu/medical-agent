@@ -114,6 +114,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   - 关闭 `serviceMonitor.aiCore.enabled` / `rules.enabled` 只删除 ai-core 抓取与 Agent 规则，不影响 Java 侧 ServiceMonitor。
   - 令牌疑似泄露：生成新令牌 → 应用侧 `.env.local`/K8s Secret 与 Prometheus 侧令牌文件/Prometheus 配置 Secret **同步更新** → 滚动重启应用与 Prometheus。
 
+**告警送达（本地 Alertmanager，第 52 批）**
+```powershell
+docker compose -f deploy/observability/docker-compose.observability.yml up -d alert-sink alertmanager
+# 合成告警（不依赖业务指标，只验证投递链路）
+$body='[{"labels":{"alertname":"DeliverySmokeTest","severity":"info"}}]'
+Invoke-RestMethod -Uri http://127.0.0.1:9093/api/v2/alerts -Method Post `
+  -ContentType 'application/json' -Body $body
+Start-Sleep -Seconds 10
+docker logs medagent_alert_sink --tail 10   # 期望：ALERT_WEBHOOK status=firing alerts=DeliverySmokeTest
+```
+- `alert-sink` 只打印 alertname/status，不落库、不转发、不含业务数据；生产必须把
+  `deploy/observability/alertmanager/alertmanager.yml` 的 receiver 换成院内短信/IM/工单，
+  并配置静默、分组与升级策略。
+- 本地 `group_wait=5s` 仅为快速验证；生产按通知渠道 SLA 调整。
+
 ## 交付前硬门禁（见计划 Phase 6）
 全量 pytest + `run_eval`（hit_rate≥0.8、引用精确率达标）+ 前端 a11y/截图 + `open-code-review` + `security-scan`；改环境后刷新机器基线（`refresh_baseline.ps1` → `check_docs.ps1` = `CONSISTENCY_OK`）。
 

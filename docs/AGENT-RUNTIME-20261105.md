@@ -1891,6 +1891,38 @@ PASS storage.domains = mode=pg stale=0
 - stale 列表直接展示域名，域数量有界但不做折叠（当前最多十余个）；
 - 配置读取发生在每次失败/打开时，settings 为进程内单例，不支持运行中热改。 
 
+---
+
+## 56. 2026-11-08 上线准备（第 52 批：告警送达闭环）
+
+**缺口**：第 49 批把"指标 → 规则"打通了，但告警只在 Prometheus UI 可见——没有
+Alertmanager，也就没有"送达"证据；G105 之后一直登记着这条边界。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `deploy/observability/alertmanager/alertmanager.yml` | 本地路由：`group_wait=5s`、按 alertname 分组，webhook 指向 `alert-sink:8080`；`send_resolved=true` |
+| `deploy/observability/alertmanager/receiver.py` | 只读日志 sink：仅打印 `status` 与 `alertname`，不落库、不转发、无业务数据；仅内网监听 |
+| `deploy/observability/docker-compose.observability.yml` | 新增 `alertmanager`（回环 9093 + 持久卷）与 `alert-sink`（python:3.11-slim 挂载脚本） |
+| `deploy/observability/prometheus/prometheus.yml` | 新增 `alerting.alertmanagers` → `alertmanager:9093` |
+| `tests/test_deploy_observability.py` | 新增静态闭环断言（服务、卷、抓取目标、receiver、sink 文件） |
+| `docs/OPERATIONS.md` | 新增"告警送达"验证步骤与生产替换要求 |
+
+**真实验证**
+- `docker compose ... up -d alert-sink alertmanager`：两容器 Up，`/-/ready` 返回 200；
+- `POST /api/v2/alerts` 注入合成告警 `DeliverySmokeTest`，10s 后 sink 日志：
+  `ALERT_WEBHOOK status=firing alerts=DeliverySmokeTest`——**送达链路成立**。
+
+**测试**：`test_deploy_observability.py` **6 passed**；全量 pytest（PG 在线）
+**1160 passed / 16 skipped**（16 项 skip 均为 E2E 服务未启动）。
+
+**仍存边界**：
+- 本地 sink 只是验证通道，**不是生产通知渠道**；生产必须替换 receiver 并配置静默/升级；
+- 合成告警绕过规则评估，只证明"Alertmanager → Webhook"，不证明某条业务规则真的会触发
+  （后者需要构造指标条件）；
+- 未接 Prometheus → Alertmanager 的真实规则告警演练（需等待 for 时长，本批未做）；
+- 两容器为本地验证而启动，未纳入 Helm（K8s 由院内 Alertmanager 承担）。
+
 
 
 

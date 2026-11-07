@@ -1,0 +1,28 @@
+# ============================================================================
+# 本地/院区自建 Alertmanager（第 52 批）
+#
+# 目的：Prometheus 规则命中后，验证"告警能送达"——此前只在本机 Prometheus UI
+# 可见，送达链路无任何证据。
+#
+# 本地形态：所有告警统一投递到 alert-sink（同 compose 的只读日志接收器），
+# 便于用 `docker logs medagent_alert_sink` 验证；**这不是生产通知渠道**。
+# 生产请把 route.receiver 指向院内短信/IM/工单 Webhook，并配置静默与升级策略。
+#
+# 分组参数刻意缩短（local 环境快速验证）：group_wait=5s / group_interval=30s。
+# ============================================================================
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: local-webhook
+  group_by: ["alertname"]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 1h
+
+receivers:
+  - name: local-webhook
+    webhook_configs:
+      - url: http://alert-sink:8080/webhook
+        send_resolved: true
+        max_alerts: 20

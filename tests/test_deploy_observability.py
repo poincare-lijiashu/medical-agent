@@ -22,6 +22,11 @@ SERVICEMONITOR = os.path.join(REPO, "deploy", "helm", "medassist-platform",
                               "templates", "servicemonitor.yaml")
 COMPOSE = os.path.join(REPO, "deploy", "observability",
                        "docker-compose.observability.yml")
+PROMETHEUS = os.path.join(REPO, "deploy", "observability", "prometheus", "prometheus.yml")
+ALERTMANAGER = os.path.join(REPO, "deploy", "observability", "alertmanager",
+                            "alertmanager.yml")
+ALERT_RECEIVER = os.path.join(REPO, "deploy", "observability", "alertmanager",
+                              "receiver.py")
 
 
 def _alerts(path: str) -> set[str]:
@@ -76,6 +81,18 @@ def test_compose_prometheus_guards_token_file():
     assert "metrics-token" in compose
     assert "REPLACE_BEFORE_USE" in compose
     assert "test -f" in compose or "[ ! -f" in compose
+
+
+def test_alert_delivery_wired_in_local_stack():
+    """第 52 批：规则命中后必须能送达——Prometheus→Alertmanager→本地 sink 静态闭环。"""
+    compose = _read(COMPOSE)
+    assert "alertmanager:" in compose and "alert-sink:" in compose
+    assert "medagent_alertmanager:" in compose  # 持久卷已声明
+    assert "alertmanager:9093" in _read(PROMETHEUS)
+    cfg = _read(ALERTMANAGER)
+    assert "http://alert-sink:8080/webhook" in cfg
+    assert "send_resolved: true" in cfg
+    assert os.path.isfile(ALERT_RECEIVER)
 
 
 def test_alert_rules_only_reference_scrape_endpoint_metrics():
