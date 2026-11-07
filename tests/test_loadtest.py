@@ -74,6 +74,24 @@ def test_endpoints_match_registered_routes():
             assert ep[len("/api/v1/medical"):] in med_paths, f"{ep} 不在 medical_router 注册路由中"
 
 
+# ---------- Cookie 会话（生产默认 AUTH_TOKEN_IN_BODY=false） ----------
+
+def test_cookie_from_extracts_access_token():
+    raw = ["medassist_at=abc.def.ghi; Path=/; HttpOnly; SameSite=lax",
+           "other=1; Path=/"]
+    assert lt._cookie_from(raw) == "medassist_at=abc.def.ghi"
+    assert lt._cookie_from([]) == ""
+    assert lt._cookie_from(None) == ""
+
+
+def test_auth_headers_supports_token_only_cookie_only_and_both():
+    assert lt._auth_headers(("tk", None)) == {"Authorization": "Bearer tk"}
+    assert lt._auth_headers((None, "medassist_at=x")) == {"Cookie": "medassist_at=x"}
+    assert lt._auth_headers((None, None)) == {}
+    both = lt._auth_headers(("tk", "medassist_at=x"))
+    assert both == {"Authorization": "Bearer tk", "Cookie": "medassist_at=x"}
+
+
 # ---------- 渲染：纯文本表包含关键列 ----------
 
 def test_render_table_contains_columns():

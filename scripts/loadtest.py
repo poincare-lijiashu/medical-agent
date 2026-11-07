@@ -153,56 +153,75 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 # ---------- HTTP 层（httpx 优先，urllib 降级；两分支统计语义一致） ----------
 
+def _cookie_from(values) -> str:
+    """从 Set-Cookie 列表取访问令牌 cookie（生产默认 AUTH_TOKEN_IN_BODY=false）。"""
+    for raw in values or []:
+        pair = str(raw).split(";", 1)[0].strip()
+        if pair.startswith("medassist_at="):
+            return pair
+    return ""
+
+
 async def _request(method: str, url: str, token: str | None, json_body: dict | None,
-                   timeout: float) -> tuple[int, dict]:
-    """通用请求 → (状态码, JSON body)。供登录/账号管理用；网络异常向上抛。"""
+                   timeout: float, cookie: str | None = None) -> tuple[int, dict, str]:
+    """通用请求 → (状态码, JSON body, 会话 cookie)。登录/账号管理用；网络异常向上抛。"""
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
+    if cookie:
+        headers["Cookie"] = cookie
     if _HAS_HTTPX:
         async with httpx.AsyncClient(trust_env=False, timeout=timeout) as c:
             r = await c.request(method, url, json=json_body, headers=headers)
         try:
-            return r.status_code, r.json()
+            body = r.json()
         except ValueError:
-            return r.status_code, {}
+            body = {}
+        return r.status_code, body, _cookie_from(r.headers.get_list("set-cookie"))
 
-    def _do() -> tuple[int, dict]:  # urllib 降级：阻塞调用放线程池
+    def _do() -> tuple[int, dict, str]:  # urllib 降级：阻塞调用放线程池
         data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
         req = urlrequest.Request(url, data=data, headers=headers, method=method)
         try:
             with urlrequest.urlopen(req, timeout=timeout) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
+                rt = _cookie_from(resp.headers.get_all("Set-Cookie"))
+                return resp.status, json.loads(resp.read().decode("utf-8")), rt
         except HTTPError as e:  # 4xx/5xx 也读出 body 供上层判断
-            return e.code, {}
+            return e.code, {}, _cookie_from(e.headers.get_all("Set-Cookie") if e.headers else [])
 
     return await asyncio.to_thread(_do)
 
 
-async def _login(base_url: str, username: str, password: str, timeout: float) -> str:
-    """独立登录拿 access_token（每虚拟用户各登录一次，独立会话）。"""
+async def _login(base_url: str, username: str, password: str,
+                 timeout: float) -> tuple[str | None, str | None]:
+    """独立登录，返回 (token, cookie)：生产默认只有 httpOnly Cookie。"""
+    status, data, cookie = 0, {}, ""
     for attempt in range(20):  # 429 退避：前轮压测可能耗尽该账号限流窗口
-        status, data = await _request("POST", base_url + LOGIN_PATH, None,
-                                      {"username": username, "password": password}, timeout)
+        status, data, cookie = await _request(
+            "POST", base_url + LOGIN_PATH, None,
+            {"username": username, "password": password}, timeout)
         if status != 429:
             break
         await asyncio.sleep(5.0)
-    if status != 200:
-        raise SystemExit(f"登录失败 HTTP {status}: {str(data)[:120]}（检查 --username/--password）")
-    return data["access_token"]
+    token = data.get("access_token") if isinstance(data, dict) else None
+    if status != 200 or (not token and not cookie):
+        raise SystemExit(f"登录失败 HTTP {status}: {str(data)[:120]}"
+                         "（检查 --username/--password；生产默认依赖 Cookie 会话）")
+    return token, cookie
 
 
-async def _provision_users(base_url: str, admin_token: str, names: list[str],
-                           password: str, timeout: float) -> None:
+async def _provision_users(base_url: str, admin_token: str | None, admin_cookie: str | None,
+                           names: list[str], password: str, timeout: float) -> None:
     """准备阶段：admin 批量创建独立压测账号（loadtestNN，doctor 角色）。
     已存在（上次 --keep-users 残留）则容忍复用。"""
     url = base_url + _MEDICAL_PREFIX + "/admin/users"
     for u in names:
         # 429 退避重试：限流窗口 60/分，批量建号必撞——指数不敏感，固定 6s 退避即可
         for attempt in range(30):
-            status, data = await _request("POST", url, admin_token,
-                                          {"username": u, "password": password,
-                                           "role": "doctor", "dept": "压测"}, timeout)
+            status, data, _ = await _request(
+                "POST", url, admin_token,
+                {"username": u, "password": password, "role": "doctor", "dept": "压测"},
+                timeout, cookie=admin_cookie)
             if status != 429:
                 break
             await asyncio.sleep(6.0)
@@ -212,34 +231,49 @@ async def _provision_users(base_url: str, admin_token: str, names: list[str],
             await asyncio.sleep(0.35)  # admin 建号同样受 60/分限流——节奏化避开 429
 
 
-async def _cleanup_users(base_url: str, admin_token: str, names: list[str],
-                         timeout: float) -> None:
+async def _cleanup_users(base_url: str, admin_token: str | None, admin_cookie: str | None,
+                         names: list[str], timeout: float) -> None:
     """收尾阶段：逐个删除压测账号（幂等，404 容忍）；失败仅提示不中断。"""
     for u in names:
         try:
-            status, _ = await _request("DELETE", base_url + _MEDICAL_PREFIX + "/admin/users/" + u,
-                                       admin_token, None, timeout)
+            status, _, _ = await _request(
+                "DELETE", base_url + _MEDICAL_PREFIX + "/admin/users/" + u,
+                admin_token, None, timeout, cookie=admin_cookie)
             if status not in (200, 404):
                 print(f"[cleanup] 删除 {u} 失败 HTTP {status}（可用 --keep-users 复查或手动删）")
         except Exception as e:  # noqa: BLE001 —— 清理是 best-effort
             print(f"[cleanup] 删除 {u} 异常：{e}")
 
 
-async def _one_request(base_url: str, ep: str, token: str, timeout: float,
+# 会话元组：(Bearer token, Cookie 头)；生产默认 AUTH_TOKEN_IN_BODY=false 时 token 为 None，
+# 仅靠 Cookie 鉴权，故压测请求两路凭据都带（哪个有效用哪个）。
+
+def _auth_headers(session: tuple[str | None, str | None]) -> dict:
+    token, cookie = session
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    if cookie:
+        headers["Cookie"] = cookie
+    return headers
+
+
+async def _one_request(base_url: str, ep: str, session, timeout: float,
                        client) -> tuple[bool, float]:
     """单次 GET：(是否成功, 延迟ms)。任何异常按失败计（计入错误数）。"""
     url = base_url + ep
+    headers = _auth_headers(session)
     t0 = time.perf_counter()
     ok = False
     if client is not None:  # httpx 异步路径
         try:
-            r = await client.get(url, headers={"Authorization": "Bearer " + token})
+            r = await client.get(url, headers=headers)
             ok = r.status_code < 400
         except Exception:  # noqa: BLE001 —— 网络异常统一计错误
             ok = False
     else:  # urllib 降级路径
         def _do() -> int:
-            req = urlrequest.Request(url, headers={"Authorization": "Bearer " + token})
+            req = urlrequest.Request(url, headers=headers)
             with urlrequest.urlopen(req, timeout=timeout) as resp:
                 return resp.status
         try:
@@ -249,7 +283,7 @@ async def _one_request(base_url: str, ep: str, token: str, timeout: float,
     return ok, (time.perf_counter() - t0) * 1000.0
 
 
-async def _worker(idx: int, base_url: str, token: str, deadline: float, pace: float,
+async def _worker(idx: int, base_url: str, session, deadline: float, pace: float,
                   timeout: float, results: list, client) -> None:
     """单虚拟用户：轮询打混合 GET，直到 deadline；pace>0 时按固定节奏节流。"""
     interval = 1.0 / pace if pace > 0 else 0.0
@@ -264,7 +298,7 @@ async def _worker(idx: int, base_url: str, token: str, deadline: float, pace: fl
         if time.monotonic() >= deadline:
             break
         next_due = time.monotonic() + interval
-        ok, lat = await _one_request(base_url, ep, token, timeout, client)
+        ok, lat = await _one_request(base_url, ep, session, timeout, client)
         results.append((ep, ok, lat))
 
 
@@ -278,15 +312,16 @@ async def _run(args: argparse.Namespace) -> int:
 
     # 每虚拟用户一个独立账号（服务端限流按账号计 60 次/分，共享单账号必撞 429）
     load_names = [f"loadtest{i:02d}" for i in range(1, args.users + 1)]
-    admin_token = None
+    admin_session = None
     if not args.keep_users:
         print(f"[prepare] 以 {args.admin_username} 登录并创建 {len(load_names)} 个压测账号…")
-        admin_token = await _login(base, args.admin_username, password, args.timeout)
-        await _provision_users(base, admin_token, load_names, password, args.timeout)
+        admin_session = await _login(base, args.admin_username, password, args.timeout)
+        await _provision_users(base, admin_session[0], admin_session[1],
+                               load_names, password, args.timeout)
 
     try:
         print(f"[login] {args.users} 个虚拟用户各自独立登录 {base}{LOGIN_PATH} …")
-        tokens = await asyncio.gather(
+        sessions = await asyncio.gather(
             *[_login(base, u, password, args.timeout) for u in load_names])
 
         stages = ramp_stages(args.users) if args.ramp else [args.users]
@@ -300,7 +335,7 @@ async def _run(args: argparse.Namespace) -> int:
                 deadline = time.monotonic() + args.seconds
                 print(f"[stage {si + 1}/{len(stages)}] 并发={n}，持续 {args.seconds}s …")
                 await asyncio.gather(
-                    *[_worker(k, base, tokens[k], deadline, args.pace, args.timeout,
+                    *[_worker(k, base, sessions[k], deadline, args.pace, args.timeout,
                               results, client)
                       for k in range(n)])
         finally:
@@ -308,9 +343,10 @@ async def _run(args: argparse.Namespace) -> int:
                 await client.aclose()
         wall = time.monotonic() - wall_start
     finally:
-        if admin_token is not None and not args.keep_users:
+        if admin_session is not None and not args.keep_users:
             print("[cleanup] 删除压测账号…")
-            await _cleanup_users(base, admin_token, load_names, args.timeout)
+            await _cleanup_users(base, admin_session[0], admin_session[1],
+                                 load_names, args.timeout)
 
     stats = summarize(results, wall)
     print(f"\n目标 {base}｜虚拟用户 {args.users}｜实测时长 {wall:.1f}s｜"

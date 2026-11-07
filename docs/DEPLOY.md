@@ -476,24 +476,47 @@ docker compose --profile full up -d --scale app=3
 
 > 评测行动项 1：`scripts/loadtest.py` 实测。环境：Windows 单机、uvicorn 单进程（`backend.main:app`）、PG 在线；压测目标 127.0.0.1:8001。脚本只打纯 Web 层端点——**刻意不压 LLM 端点**（/ask 类接口瓶颈在外部大模型 API，测它只复述外部容量，对 Web 层容量评估无意义）。压测账号为脚本自动创建/清理的独立 `loadtestNN`（服务端限流 60 次/分/**账号**，共享单账号会撞 429 污染延迟数据）。
 
-实测数字（`--users 16 --seconds 25 --ramp`，即并发 1/4/8/16 四档各 25s，每账号 pace 0.8 RPS）：
+**基线 A：默认限流形态下的稳定工作点**（`--users 30 --seconds 90`，每账号 pace 0.8 RPS，
+即服务端限流 60 次/分/账号的 80% 水位）：
 
-| 端点 | 请求数 | RPS（全周期均） | p50(ms) | p95(ms) | p99(ms) | 错误 |
+| 端点 | 请求数 | RPS | p50(ms) | p95(ms) | p99(ms) | 错误 |
 |---|---|---|---|---|---|---|
-| /healthz | 145 | 1.44 | 8.1 | 32.2 | 39.3 | 0 |
-| /api/v1/medical/drug/dict | 145 | 1.44 | 30.1 | 64.6 | 82.7 | 0 |
-| /api/v1/medical/prescriptions/mine | 145 | 1.44 | 58.2 | 94.8 | 110.3 | 0 |
-| /api/v1/medical/review/pending | 145 | 1.44 | 80.8 | 104.8 | 297.7 | 0 |
+| /healthz | 540 | 5.97 | 45.6 | 78.1 | 233.2 | 0 |
+| /api/v1/medical/drug/dict | 540 | 5.97 | 97.9 | 268.1 | 418.2 | 0 |
+| /api/v1/medical/prescriptions/mine | 540 | 5.97 | 164.2 | 353.9 | 435.1 | 0 |
+| /api/v1/medical/review/pending | 540 | 5.97 | 232.8 | 444.6 | 479.9 | 0 |
 
-结论：**Web 层容量充裕，不是系统瓶颈**——16 并发用户（限流预算内，合计 ~12.8 RPS；上表 RPS 为含低并发爬坡档的全周期平均）下全部端点 p95 < 110ms、错误 0；`/review/pending` 的 p99 尖峰（298ms）来自爬坡档首次冷查询。LLM 端点受外部大模型 API 吞吐/延迟限制，不在本基线内（容量规划按厂商配额评估，见上方「API 容灾说明」）。
+合计 **23.9 RPS、2160 请求、0 错误 / 0 × 429**，最慢端点 p99 480ms。
+
+**基线 B：放开限流后的饱和点**（临时实例 `RATE_LIMIT_PER_MIN=600`，`--pace 0` 全速）：
+
+| 并发 | 时长 | 总请求 | 合计 RPS | 错误 | prescriptions/mine p50/p95 | review/pending p50/p95 |
+|---|---|---|---|---|---|---|
+| 30 | 30.2s | 2868 | 95 | 0 | 391 / 877ms | 511 / 1035ms |
+| 60 | 30.6s | 3189 | 104 | 0 | 809 / 1538ms | 893 / 1600ms |
+
+结论：**单实例只读吞吐在 ~100 RPS 附近饱和**——并发从 30 翻到 60，吞吐只从 95 涨到
+104 RPS，而 p50 翻倍、p95 从 ~1.0s 升到 ~1.6s（p99 2.0s），全程 0 5xx / 0 429。
+`/healthz` 在 60 并发下 p50 仍 4ms，说明事件循环未被拖垮，瓶颈在每请求的数据访问路径
+（业务端点内部 `asyncio.to_thread(...)` 走同步 repo → `pg_store` 线程桥）。
+
+容量判断：默认限流（60 次/分/账号）下服务端只用到约 24 RPS，距离饱和点 4 倍余量，
+**按常规院内并发（数十名医生）容量充裕**；若要支撑 >100 RPS 的只读峰值，需要多 worker
+或多实例（尚未实测）。LLM 端点受外部大模型 API 吞吐/延迟限制，不在本基线内
+（容量规划按厂商配额评估，见上方「API 容灾说明」）。
 
 复现命令：
 
 ```bash
-python scripts/loadtest.py --users 16 --seconds 25 --ramp
-# 先起服务：python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
-# 脚本自动创建并清理压测账号（--keep-users 保留）；--pace 0 全速可验证限流器（预期大量 429）
+python scripts/loadtest.py --users 30 --seconds 90          # 基线 A（默认限流）
+RATE_LIMIT_PER_MIN=600 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8002
+python scripts/loadtest.py --base-url http://127.0.0.1:8002 --users 60 --seconds 30 --pace 0  # 基线 B
+# 脚本自动创建并清理压测账号（--keep-users 保留）；生产默认 Cookie 会话已适配（AUTH_TOKEN_IN_BODY=false 可跑）
 ```
+
+边界：只压只读 GET（写路径/SSE/LLM 未压）；压测客户端与服务同机、单进程 asyncio，
+未排除客户端侧共同瓶颈，也未做 server 端 CPU profile 定量归因；上述数字为本机
+（20 核 / 15.5GB、单 uvicorn worker）本数据量下的结果。
 
 ## 质控 HIS 对接与本地模型规划
 

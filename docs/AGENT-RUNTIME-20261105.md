@@ -2091,6 +2091,70 @@ skills_mirror_bytes=2   # "[]" —— 与 PG 真源一致
 - 重建期间若有并发业务写，镜像可能仍短暂落后（PG 真源不受影响，下次写会再补）；
 - 仅 API/运维命令，管理端暂无按钮（避免误触；后续可按需加二次确认入口）。
 
+---
+
+## 62. 2026-11-08 上线准备（第 58 批：压测脚本 Cookie 会话修复 + 只读负载基线）
+
+**背景**：评测行动项 1 要求「负载基线（单机实测）」。此前已有 `scripts/loadtest.py`，
+但脚本只认响应体里的 `access_token`；生产默认 `AUTH_TOKEN_IN_BODY=false`（仅 httpOnly
+Cookie），导致准备阶段 admin 建号直接 401——脚本在真实部署形态下**跑不起来**。
+
+**修复**（`scripts/loadtest.py`）
+| 变更 | 说明 |
+|---|---|
+| `_cookie_from(values)` | 从 `Set-Cookie` 取 `medassist_at=...`（只保留 name=value） |
+| `_request(...) -> (status, body, cookie)` | 登录/建号/删号统一回收会话 cookie；支持传入 `cookie=` |
+| `_login(...) -> (token, cookie)` | 两者都没有才判失败（兼容 Cookie-only 与 Bearer 两种部署） |
+| `_auth_headers(session)` | 会话元组 `(token, cookie)` → 同时带 `Authorization` 与 `Cookie`（哪个有效用哪个） |
+| `_one_request` / `_worker` / `_run` | 由单 `token` 改为会话元组，贯穿压测请求、建号、清理三处 |
+
+`tests/test_loadtest.py` 新增 2 项（Cookie 提取、请求头组合四种情况）；定向 **9 passed**。
+
+**实测环境**：20 核 / 15.5GB，单机、单 uvicorn worker、PG 在线（`storage.mode=pg`），
+目标为 4 个只读 GET（`/healthz`、`/drug/dict`、`/prescriptions/mine`、`/review/pending`）轮询。
+
+**基线 1：默认限流形态（60 次/分/账号）**
+```
+python scripts/loadtest.py --users 30 --seconds 90 --password ***
+目标 8001｜虚拟用户 30｜实测时长 90.4s｜pace=0.8 RPS/用户
+端点                                  请求数  RPS   p50(ms)  p95(ms)  p99(ms)  错误
+/healthz                            540  5.97  45.6     78.1     233.2    0
+/api/v1/medical/prescriptions/mine  540  5.97  164.2    353.9    435.1    0
+/api/v1/medical/review/pending      540  5.97  232.8    444.6    479.9    0
+/api/v1/medical/drug/dict           540  5.97  97.9     268.1    418.2    0
+合计请求 2160，错误 0
+```
+合计约 **23.9 RPS**、**0 错误/0 429**，最慢端点 p99 480ms。这是"限流器允许的稳定工作点"，
+不是服务端上限。
+
+**基线 2：放开限流后的饱和点**（临时第二实例 `8002`，`RATE_LIMIT_PER_MIN=600`，`--pace 0` 全速）
+
+| 并发 | 时长 | 总请求 | 合计 RPS | 错误 | `prescriptions/mine` p50/p95 | `review/pending` p50/p95 |
+|---|---|---|---|---|---|---|
+| 30 | 30.2s | 2868 | **95** | 0 | 391 / 877ms | 511 / 1035ms |
+| 60 | 30.6s | 3189 | **104** | 0 | 809 / 1538ms | 893 / 1600ms |
+
+并发翻倍，吞吐只从 ~95 涨到 ~104 RPS，而 p50 翻倍、p95 从 ~1.0s 涨到 ~1.6s
+（p99 达 2.0s）——**单实例只读吞吐已在 ~100 RPS 附近饱和**，继续加并发只增加排队延迟。
+全程 0 5xx / 0 429；`/healthz` 在 60 并发下 p50 仍 4ms，说明事件循环本身没被拖垮，
+瓶颈在**每请求的数据访问路径**（`prescriptions/mine`、`review/pending` 内部
+`asyncio.to_thread(...)` 走同步 repo → `pg_store` 线程桥）。
+
+**清理**：压测账号 `loadtest01..NN` 均由脚本自动删除；临时 `8002` 实例已停止，
+`8001` 保持运行。
+
+**本批测试**：定向 `test_loadtest` **9 passed**；全量 pytest（PG 在线、E2E 服务在跑）
+**1187 passed**（较上批 1169 + 16 skipped，本批新增 2 项且 16 项 E2E 由 skip 转为实跑）。
+
+**仍存边界**（不夸大）
+- 只压**只读 GET**；写路径、LLM `/ask` 类端点、SSE 流式均未压（后者瓶颈在外部模型）；
+- 单进程 asyncio 压测客户端同机运行，**未排除客户端侧成为共同瓶颈**；未做 server 侧
+  CPU profile 定量归因（"瓶颈在 to_thread/PG 桥"是由端点差异推断，不是 profile 结论）；
+- 未验证多 worker（`--workers N`）、多机横向扩容与 PG 连接池上限；
+- 100 RPS 是**本机本配置**的数字，换硬件/数据量（处方、审核队列行数增长）会变；
+- `--pace 0` 会持续打满，仅适合短时容量探测，勿在共享环境长时间跑。
+
+
 
 
 
