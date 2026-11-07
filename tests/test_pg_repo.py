@@ -1176,6 +1176,7 @@ def test_primary_mode_read_failure_marks_stale_and_recovers(monkeypatch, tmp_pat
     monkeypatch.setattr(pg_store, "_run_pg", boom)
     assert pg_store._pg_or_json(_query, lambda: [], path, []) == []
     assert "probe.json" in pg_store.storage_status()["staleDomains"]
+    assert "probe.json" in pg_store._pg_stale_probe  # 第 54 批：登记供心跳重探
 
     def ok(coro):
         coro.close()
@@ -1262,3 +1263,52 @@ def test_run_pg_fast_fails_when_circuit_open(monkeypatch):
         pg_store._run_pg(coro)
     # 未提交的协程必须关闭，不能留 "never awaited"
     assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+
+
+# ---- 第 54 批：stale 域恢复探测（抓取心跳自动清 stale / 解除告警） ----
+
+def _register_probe(domain: str) -> None:
+    async def _query():
+        return None
+
+    pg_store._remember_stale_probe(domain, _query)
+
+
+def test_probe_stale_domains_clears_on_success(monkeypatch):
+    pg_store._repo_pg_stale.add("probe.json")
+    _register_probe("probe.json")
+
+    def ok(coro):
+        coro.close()
+        return [{"id": "x"}]
+
+    monkeypatch.setattr(pg_store, "_run_pg", ok)
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    res = pg_store.probe_stale_domains()
+    assert res["cleared"] == 1 and res["remaining"] == 0
+    assert "probe.json" not in pg_store._repo_pg_stale
+    assert "probe.json" not in pg_store._pg_stale_probe
+
+
+def test_probe_stale_domains_skips_when_circuit_open(monkeypatch):
+    pg_store._repo_pg_stale.add("probe.json")
+    _register_probe("probe.json")
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", time.monotonic() + 60)
+    res = pg_store.probe_stale_domains()
+    assert res["skipped"] == "circuit_open" and res["cleared"] == 0
+    assert "probe.json" in pg_store._repo_pg_stale
+
+
+def test_probe_stale_domains_keeps_stale_on_failure(monkeypatch):
+    pg_store._repo_pg_stale.add("probe.json")
+    _register_probe("probe.json")
+
+    def boom(coro):
+        coro.close()
+        raise OSError("down")
+
+    monkeypatch.setattr(pg_store, "_run_pg", boom)
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    res = pg_store.probe_stale_domains()
+    assert res["probed"] == 1 and res["cleared"] == 0
+    assert "probe.json" in pg_store._repo_pg_stale

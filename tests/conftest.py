@@ -69,6 +69,8 @@ def _isolate_pg_runtime():
     # 第 50 批：连接熔断状态同样复位，避免一个用例的失败熔断污染后续用例
     pg_store._pg_fail_streak = 0
     pg_store._pg_circuit_until = 0.0
+    # 第 54 批：stale 重探登记表同样复位
+    pg_store._pg_stale_probe.clear()
 
 
 @pytest.fixture(autouse=True)

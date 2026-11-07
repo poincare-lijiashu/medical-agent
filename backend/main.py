@@ -352,6 +352,12 @@ async def metrics(user: dict = Depends(require_metrics_access)):
             agent_ops = skill_trends.prometheus_text()
         except Exception:  # noqa: BLE001 —— 运营指标聚合失败不能拖垮抓取本身
             agent_ops = ""
+        # 第 54 批：抓取心跳顺带重探 stale 域（≤3 个/次）——恢复后告警自动解除，
+        # 不再依赖用户碰巧打开页面；熔断打开时 probe 内部直接跳过。
+        try:
+            _pg_store.probe_stale_domains(limit=3)
+        except Exception:  # noqa: BLE001 —— 探测失败绝不影响抓取
+            pass
         return (observability.exposition() + consult_metrics.prometheus_text()
                 + agent_ops + _pg_store.prometheus_text())
 

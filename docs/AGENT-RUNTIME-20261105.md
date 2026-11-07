@@ -1958,6 +1958,39 @@ Alertmanager，也就没有"送达"证据；G105 之后一直登记着这条边�
 - 演练用的是 `StorageStaleDomains`（5m for），其它规则的触发条件未逐条实测；
 - Prometheus/Alertmanager 为本地验证容器，未纳入 Helm（K8s 由院内 Alertmanager 承担）。
 
+---
+
+## 58. 2026-11-08 上线准备（第 54 批：stale 恢复探测，告警自动解除）
+
+**接第 53 批的边界**：stale 清除是惰性的（下次成功读该域），长期不被读的域会让
+`StorageStaleDomains` 持续 firing，恢复后也只能靠人打开页面。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 读失败时登记该域的 loader（`_pg_stale_probe`，只存可调用对象、不存数据）；新增 `probe_stale_domains(limit=3)`：每次最多重探 3 个域，成功即清 stale 并移除登记；**熔断打开时直接跳过**（不把探测拖进连接超时） |
+| `backend/main.py` | `/metrics` 构建时调用一次 `probe_stale_domains(limit=3)`——用抓取心跳做自愈，不新增定时任务 |
+| `tests/conftest.py` | 每用例复位 `_pg_stale_probe`，避免跨测试污染 |
+| `tests/test_pg_repo.py` | 新增 3 项：探测成功清 stale、熔断时跳过、失败保持 stale；读失败用例补"已登记探针"断言 |
+
+**真实演练（无任何用户读请求）**
+| 步骤 | 观测 |
+|---|---|
+| 停 PG + 4 次登录 | Prometheus 查询 `sum(medassist_agent_storage_stale_domains)` = **7** |
+| 恢复 PG，仅等待 Prometheus 抓取 150s | 同一查询返回 **no-series**（全部清除） |
+
+期间只发生 Prometheus 抓取（30s 一次），没有任何业务读请求——证明告警可自动解除。
+
+**测试**：定向 **65 passed**；全量 pytest（PG 在线）**1163 passed / 16 skipped**
+（16 项 skip 均为 E2E 服务未启动）。
+
+**仍存边界**：
+- 每次抓取最多重探 3 个域，stale 很多时需要多个抓取周期（有界、可控）；
+- 只覆盖"读失败"登记的域；启动时无池导致的 stale（`_json_then_pg` 无 loader）不会被心跳探测，
+  需等一次成功写/读；
+- 探测会增加抓取时的 PG 往返（≤3 次/30s），PG 慢而未掉线时会拉长抓取耗时；
+- `limit` 暂为常量 3，未做成配置项。
+
 
 
 

@@ -362,6 +362,49 @@ def storage_status() -> dict:
     }
 
 
+# ---------- stale 域恢复探测（第 54 批）----------
+# 记录"上次读失败的 loader"，抓取心跳时每域重试一次：成功即清 stale、告警自动解除，
+# 不再依赖用户碰巧打开页面。只保存可调用对象，不存数据/凭据。
+_pg_stale_probe: dict[str, object] = {}
+_probe_lock = threading.Lock()
+
+
+def _remember_stale_probe(domain: str, load_fn) -> None:
+    with _probe_lock:
+        _pg_stale_probe[domain] = load_fn
+
+
+def _forget_stale_probe(domain: str) -> None:
+    with _probe_lock:
+        _pg_stale_probe.pop(domain, None)
+
+
+def probe_stale_domains(limit: int = 3) -> dict:
+    """对 stale 域做一次只读重探（每次最多 limit 个），成功即清除标记。
+
+    返回 ``{probed, cleared, remaining}``；熔断打开时返回 ``skipped=circuit_open``，
+    避免探测本身又把请求拖进连接超时。
+    """
+    remaining = len(_repo_pg_stale)
+    if circuit_open():
+        return {"probed": 0, "cleared": 0, "remaining": remaining, "skipped": "circuit_open"}
+    with _probe_lock:
+        items = [(d, fn) for d, fn in _pg_stale_probe.items()
+                 if d in _repo_pg_stale and fn is not None][:max(1, int(limit))]
+    probed = cleared = 0
+    for domain, load_fn in items:
+        probed += 1
+        try:
+            _run_pg(load_fn())
+        except Exception:  # noqa: BLE001 —— 探测失败保持 stale，下次心跳再试
+            continue
+        _repo_pg_stale.discard(domain)
+        _stale_warned.discard(domain)
+        _forget_stale_probe(domain)
+        cleared += 1
+    return {"probed": probed, "cleared": cleared, "remaining": len(_repo_pg_stale)}
+
+
 def prometheus_text() -> str:
     """存储真源指标（Prometheus 文本）：池可用 / 模式 / 按域 stale。
 
@@ -674,6 +717,7 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
             if primary:
                 # 运行中 PG 掉线：不置位则 stale 指标与告警永远看不到（本轮演练实测）
                 _repo_pg_stale.add(domain)
+                _remember_stale_probe(domain, load_fn)  # 供抓取心跳重探（第 54 批）
             if isinstance(e, PGUnavailable):
                 # 熔断期的快速失败是预期行为，circuit_open 已 WARN 一次；此处降为 DEBUG
                 logger.debug("pg.repo.load_fallback_json", error=str(e)[:120],
@@ -685,6 +729,7 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
             if primary:
                 _repo_pg_stale.discard(domain)
                 _stale_warned.discard(domain)
+                _forget_stale_probe(domain)
             if data is not None:
                 return data
     else:
