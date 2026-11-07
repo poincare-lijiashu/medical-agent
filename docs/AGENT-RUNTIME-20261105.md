@@ -1505,6 +1505,42 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 - 若用户预先启动了默认 60/min 的实例，全量 9 项仍可能 429（已把 admin 密度压到最低，
   但无法保证外部实例配置）。
 
+---
+
+## 45. 2026-11-07 评审整改（第 41 批：快照调度时间收敛）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S9 / M-28 | 新增 `normalize_schedule`：hour∉0..23、minute∉0..59、非整数 → 回落 01:10 并告警；`run_daily` 入口先收敛再进循环，避免常驻协程在 `datetime.replace` 抛 `ValueError` 后静默停摆 | `snapshot_scheduler.py`、`main.py` |
+| 02-S9 | 补 4 项测试：合法/非法时间收敛、恰好等于目标时刻顺延明天、非法配置仍能走到生成快照 | `tests/test_snapshot_scheduler.py` |
+
+**复核结论（先查再改）**：
+- 启动 catch-up：`catch_up()` 只在"今天无快照"时补一条，按日期主键幂等，未发现遗漏；
+- 跨日幂等：`snapshot()` 按 `id=日期` 行级 upsert，同日重写保留 `overwritten` /
+  `previous` / `overwriteCount`，多实例并发后写覆盖前写但不丢其它日期；
+- **发现真实缺口**：`AGENT_SNAPSHOT_HOUR=24` / `AGENT_SNAPSHOT_MINUTE=90` 这类配置能通过
+  `hour > 0` 开关，却在 `now.replace(hour=24)` 抛 `ValueError`。调度协程是 `create_task`
+  的常驻任务，异常只表现为 "Task exception was never retrieved"，自动快照从此不再生成
+  ——正是 M-28 要消灭的"趋势断档"，只是触发条件从"没人点按钮"变成"配置写错"。
+
+**处理选择**：采用"可观测降级"而不是启动失败——回落默认 01:10 + `snapshot.schedule_invalid`
+告警，保证趋势不断档；启动日志记录**配置值**，调度器告警记录**生效值**，二者可区分。
+
+**验证**：
+- `tests/test_snapshot_scheduler.py`：**10 passed**（新增 4 项）；
+- 全量 pytest：**1116 passed / 42 skipped**。说明：本机 Docker 本次未能启动
+  （`docker desktop start` 后引擎 5 分钟未就绪、无 Docker 进程），27 项 PG 真源/行级
+  测试按设计 skip；本批改动不涉及 PG 路径。Docker 在线时基线为上一批的
+  1139 passed / 15 skipped，加上本批 4 项应为 **1143 / 15**，PG 子集待 Docker 可用时补跑。
+
+**仍存边界**：
+- 只收敛时间参数，不改变"`agent_snapshot_hour=0` 表示关闭"的既有语义，因此午夜 00:00
+  仍不能作为调度时刻（需另加显式 enable 开关才能消除该限制）；
+- 不补历史缺口：停机跨多天只生成恢复当天一条，缺失日不插值（与 `trends` 的
+  `sufficient=false` 一致）；
+- 时钟大幅回拨/夏令时未特殊处理（依赖 asyncio 单调时钟，最多延后一次）；
+- 多实例同日仍可能各写一次（行级 upsert，后写记 `overwritten`，不丢其它日期）。
+
 
 
 

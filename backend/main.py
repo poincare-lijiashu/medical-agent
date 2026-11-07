@@ -135,15 +135,15 @@ async def lifespan(app: FastAPI):
     try:
         from backend.agents import snapshot_scheduler
         _hour = int(getattr(settings, "agent_snapshot_hour", 0) or 0)
+        _minute = int(getattr(settings, "agent_snapshot_minute", 10) or 0)
         if _hour > 0:
             await asyncio.to_thread(snapshot_scheduler.catch_up)
             _snapshot_stop = asyncio.Event()
             _snapshot_task = asyncio.create_task(snapshot_scheduler.run_daily(
-                _snapshot_stop, _hour,
-                int(getattr(settings, "agent_snapshot_minute", 10) or 0)))
+                _snapshot_stop, _hour, _minute))
+            # 记录的是**配置值**；越界时 run_daily 会回落 01:10 并另记 schedule_invalid
             logger.info("medical_agent.startup.snapshot_scheduler",
-                        hour=_hour,
-                        minute=int(getattr(settings, "agent_snapshot_minute", 10) or 0))
+                        hour=_hour, minute=_minute)
         else:
             logger.info("medical_agent.startup.snapshot_scheduler_disabled")
     except Exception as exc:  # noqa: BLE001 —— 调度失败不阻断服务

@@ -23,10 +23,28 @@ from backend.core.logger import get_logger
 logger = get_logger(__name__)
 
 SCHEDULER_ACTOR = "scheduler"
+DEFAULT_HOUR = 1
+DEFAULT_MINUTE = 10
 
 
 def _today() -> str:
     return datetime.now().astimezone().date().isoformat()
+
+
+def normalize_schedule(hour: int, minute: int) -> tuple[int, int, bool]:
+    """把调度时间收敛到合法范围；越界/非整数回落默认 01:10 并返回 ``valid=False``。
+
+    为什么需要：``datetime.replace(hour=24)`` 会抛 ``ValueError``，而 ``run_daily``
+    是常驻协程——异常会让自动快照**静默停摆**，又回到 M-28 之前"趋势靠人工点按钮"
+    的状态。这里在入口收敛并由调用方记告警，让"配置写错"表现为可观测的降级而非停摆。
+    """
+    try:
+        h, m = int(hour), int(minute)
+    except (TypeError, ValueError):
+        return DEFAULT_HOUR, DEFAULT_MINUTE, False
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return DEFAULT_HOUR, DEFAULT_MINUTE, False
+    return h, m, True
 
 
 def _next_run(now: datetime, hour: int, minute: int) -> datetime:
@@ -57,7 +75,17 @@ def catch_up(actor: str = SCHEDULER_ACTOR) -> dict | None:
 
 
 async def run_daily(stop: asyncio.Event, hour: int, minute: int = 10) -> None:
-    """每天 ``hour:minute`` 生成一次快照；stop 置位后立即退出。"""
+    """每天 ``hour:minute`` 生成一次快照；stop 置位后立即退出。
+
+    非法配置（hour∉0..23 / minute∉0..59 / 非整数）在入口回落默认 01:10 并告警，
+    避免常驻协程因 ``ValueError`` 死掉导致自动快照停摆。
+    """
+    valid_hour, valid_minute, ok = normalize_schedule(hour, minute)
+    if not ok:
+        logger.warning("snapshot.schedule_invalid",
+                       configured=f"{hour}:{minute}",
+                       fallback=f"{valid_hour}:{valid_minute}")
+    hour, minute = valid_hour, valid_minute
     while not stop.is_set():
         now = datetime.now().astimezone()
         target = _next_run(now, hour, minute)
