@@ -2382,6 +2382,56 @@ urllib 降级路径把 304 归为成功（此前会被 `HTTPError` 记成错误�
 - 未验证多 worker 下 SSE 流式问答的真实并发上限；
 - 未验证多 worker 是否能正确共享"运行时开关"（读写都落 PG/JSON，按代码应一致，未实测）。
 
+---
+
+## 67. 2026-11-08 上线准备（第 63 批：`/review/pending` 分页——角标不再每 60s 拉 229KB）
+
+**问题**：待核对列表实测 76 条 = **229,086 B**，而侧边角标每 60s 轮询一次只为拿一个数字
+（`refreshReviewBadge` 把整表拉回来数长度）；审核中心表格也是"整表下发 + 浏览器 slice"。
+
+**后端**（`backend/api/v1/medical/review.py`）
+| 变更 | 说明 |
+|---|---|
+| `GET /review/pending` 新增 `limit`（0–500）/ `offset` / `q`（≤100 字） | 缺省不传 = 全量，**旧调用方与既有测试零影响** |
+| 响应新增 `total` | = 角色过滤（qc 剔除 drug）+ 关键字过滤后的条数 |
+| `_match_query()` | 与前端旧过滤同字段（agent/question/submitted_by/risk_reason），大小写不敏感 |
+| 图片可见性裁剪只在**切片后**执行 | 分页请求不再为整表做 `_review_image_view` |
+| 审计 payload 补 `total/limit/offset` | 可回溯"谁翻到第几页"，`n` 仍为本次返回条数 |
+
+**前端**
+- `stores/badges.js`：角标改 `?limit=0`，用 `total` 计数（qc 的 drug 过滤已在服务端，前端
+  不再二次过滤，否则会把已过滤的 total 数错）；
+- `views/ReviewCenterView.vue`：qc/admin 待核对表改服务端分页（`limit=REVIEW_PER`），
+  关键字筛选改服务端 `q`（300ms 防抖、归零页码）；计数头/空态/分页统一用 `pendCount`
+  （= `total`），角标改走 `badges.refreshReviewBadge()`；清空确认框用 `?limit=0` 取数量；
+  doctor/pharmacist 的"我的记录"仍是本地列表（数据量小，逻辑不动）。
+
+**实测响应体**（重启 8001 后，admin 视角 76 条 / qc 视角 52 条）
+
+| 请求 | admin | qc |
+|---|---|---|
+| 无参数（旧行为） | 229,086 B / 76 条 | 210,555 B / 52 条 |
+| `?limit=12` | **31,770 B** / 12 条 | 31,767 B / 12 条 |
+| `?limit=0` | **40 B** / total=76 | 37 B / total=52 |
+| `?q=阿司匹林` | 3,048 B / 2 条 | 3,045 B / 2 条 |
+
+**验证**
+- 定向 `tests/test_review_pending_paging.py` **7 passed**（默认全量/limit=0/分页/q 过滤/
+  qc 剔除 drug/非法参数 422/审计字段）；
+- `test_frontend_syntax` 的角标标记锁按新机制更新：原先锁"前端 `i.agent !== 'drug'` 二次过滤"，
+  现锁"只取计数 `limit: 0`"，qc 的 drug 过滤由 `test_drug_pharm_review` 在服务端锁定；
+- 前端 `npm run build` 通过（dist 已随提交更新）；E2E **10 passed**（含
+  `test_qc_pending_list_visible_with_count_header`：计数头/角标/列表三方对账仍一致）；
+- 全量 pytest **1201 passed**（1194 + 本批 7 项）。
+
+**仍存边界**
+- 单条仍回完整 `answer`（~700 字），积压上千条时单页仍会变大；"列表摘要 + 详情接口"
+  需改详情弹窗取数，未做；
+- 未在"上千条待核对"的数据量下实测（当前 76/52 条）；
+- 关键字只匹配 4 个字段的**子串**，无分词/拼音/模糊纠错；过滤在内存里线性扫全表
+  （未下推到 PG 查询）；
+- 分页与筛选依赖前端防抖（300ms），快速连打关键字会丢弃中间请求（只应用最后一次）。
+
 
 
 

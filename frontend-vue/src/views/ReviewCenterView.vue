@@ -168,7 +168,7 @@
     <div v-else class="page-body" v-loading="loading">
       <!-- F1：待核对计数头（与侧边栏角标同源对账，服务端真值在页面上可见） -->
       <el-card v-if="tab === 'pending'" shadow="never" style="border-left: 3px solid var(--accent)" data-testid="pending-count">
-        <b>共 <span class="num">{{ pendItems.length }}</span> 条{{ isMine ? (isPh ? '待办（待审处方）' : '待确认') : '待核对' }}</b>
+        <b>共 <span class="num">{{ pendCount }}</span> 条{{ isMine ? (isPh ? '待办（待审处方）' : '待确认') : '待核对' }}</b>
         <span class="src" style="margin-left: 8px">{{ isMine ? '与侧边栏角标同源。' : (badges.cfgFull ? '与侧边栏角标同源；留痕模式下 AI 已自动签发项在此只读留档。' : '与侧边栏角标同源；需第二名人员签发/驳回。') }}</span>
       </el-card>
       <!-- 开药待审区（pharmacist/admin 专属数据源；qc/doctor 403 不拉取不渲染） -->
@@ -207,7 +207,7 @@
 
       <!-- 我的待确认 / 待核对表（空态文案按角色/模式逐字） -->
       <template v-if="tab === 'pending'">
-        <el-card v-if="!pendItems.length" shadow="never">
+        <el-card v-if="!pendCount" shadow="never">
           <div class="empty-box">
             <!-- F1：加载失败时空态主文案不再谎报「没有待核对项」（假空误导根因之一） -->
             <div>{{ loadErr ? '列表加载失败（详见上方错误提示），请点右上角「刷新」重试。' : (isMine ? (isPh ? '暂无待办（开药待审）。' : '没有您的待确认项。') : '没有待核对项。') }}</div>
@@ -266,7 +266,7 @@
           </table>
           <div class="pager">
             <el-button size="small" :disabled="pendPage === 0" @click="pendPage--; scrollTop()">‹ 上一页</el-button>
-            <span class="src num">第 {{ pendPage + 1 }} / {{ pendPages }} 页 · 共 {{ pendItems.length }} 项</span>
+            <span class="src num">第 {{ pendPage + 1 }} / {{ pendPages }} 页 · 共 {{ pendCount }} 项</span>
             <el-button size="small" :disabled="pendPage >= pendPages - 1" @click="pendPage++; scrollTop()">下一页 ›</el-button>
           </div>
         </el-card>
@@ -440,7 +440,7 @@
 // 状态语义对齐 legacy：reviewItems/myConfirmItems/historyItems/rxPendingItems/rxHistoryItems/
 // reviewMe/reviewFilterQ/分页（12/页）/seq 守卫；canSign=(qc||admin)&&!cfgFull；
 // canSignItem: drug→pharmacist/admin（问题4 收权），其它 agent→canSign。
-import { computed, defineOptions, onActivated, onMounted, reactive, ref } from 'vue'
+import { computed, defineOptions, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api'
 import { md, fmtTs, detailText, splitConsultQuestion, splitAiByDept } from '../utils/assist'
@@ -483,6 +483,7 @@ const reviewMe = ref('')
 const filterQ = ref('')
 const pendPage = ref(0)
 const histPage = ref(0)
+const pendTotal = ref(0) // 第 63 批：服务端分页总数（qc/admin 待核对）；doctor/pharmacist 走本地列表
 const REVIEW_PER = 12
 let loadSeq = 0 // 加载请求序号守卫：并发加载只应用最新一次响应（legacy reviewLoadSeq 同语义）
 
@@ -518,10 +519,8 @@ async function load() {
   loadErr.value = ''
   try {
     if (!isMine.value) {
-      const { data } = await http.get('/medical/review/pending')
+      await loadPendingPage(seq)
       if (seq !== loadSeq) return
-      reviewItems.value = data.pending || []
-      reviewMe.value = data.me || ''
       // 历史拉取失败静默不阻塞（legacy try-catch 同语义）；drug 类记录所有角色都过滤
       try {
         const h = await http.get('/medical/review/history')
@@ -536,10 +535,9 @@ async function load() {
           if (xp.status === 200) rxPendingItems.value = xp.data.items || []
         } catch (_) { /* 开药待审加载失败静默 */ }
       }
-      // 角标：qc=其它助手高危项（drug 除外）；admin=全部待核对+开药待审
-      badges.reviewTodoCount = (role.value === 'qc')
-        ? (reviewItems.value || []).filter((i) => i.agent !== 'drug').length
-        : (reviewItems.value || []).length + (rxPendingItems.value || []).length
+      // 角标：第 63 批改走 store 的统一口径（limit=0 只取 total）。分页后当前页长度
+      // 不再等于待办数，原先按列表长度计数会直接把角标算成 12。
+      badges.refreshReviewBadge()
     } else {
       const { data } = await http.get('/medical/review/my-pending-confirm')
       if (seq !== loadSeq) return
@@ -588,17 +586,49 @@ onActivated(() => {
   activatedOnce.value = true
 })
 
-// ---- 待处理列表（筛选+分页）----
-const pendItems = computed(() => {
+// ---- 待处理列表：qc/admin 走**服务端**分页+筛选；doctor/pharmacist（我的记录）仍本地处理 ----
+// 第 63 批：/review/pending 实测 76 条 = 229KB，整表下发后浏览器再 slice。改为
+// limit+offset+q 服务端分页（缺省不限，旧调用方零影响）；关键字在服务端过滤，
+// 因此分页不会把匹配项漏到别的页。
+async function loadPendingPage(seq = loadSeq) {
+  const params = { limit: REVIEW_PER, offset: pendPage.value * REVIEW_PER }
+  const kw = filterQ.value.trim()
+  if (kw) params.q = kw
+  const { data } = await http.get('/medical/review/pending', { params })
+  if (seq !== loadSeq) return
+  reviewItems.value = data.pending || []
+  pendTotal.value = Number(data.total ?? reviewItems.value.length)
+  reviewMe.value = data.me || ''
+  // 越界纠偏（签发/驳回后总数变小）：跳到最后一页，由 watch 触发重拉
+  if (!reviewItems.value.length && pendTotal.value > 0 && pendPage.value > 0) {
+    pendPage.value = Math.max(0, Math.ceil(pendTotal.value / REVIEW_PER) - 1)
+  }
+}
+
+const mineFiltered = computed(() => {
   const q = filterQ.value.trim().toLowerCase()
-  const src = isMine.value ? myConfirmItems.value : reviewItems.value
+  const src = myConfirmItems.value
   if (!q) return src
   return src.filter((p) => ((p.agent || '') + ' ' + (p.question || '') + ' ' + (p.submitted_by || '') + ' ' + (p.risk_reason || '')).toLowerCase().includes(q))
 })
-const pendPages = computed(() => Math.max(1, Math.ceil(pendItems.value.length / REVIEW_PER)))
+// 计数头/空态/分页统一口径：服务端模式下是 total（不受当前页影响）
+const pendCount = computed(() => (isMine.value ? mineFiltered.value.length : pendTotal.value))
+const pendPages = computed(() => Math.max(1, Math.ceil(pendCount.value / REVIEW_PER)))
 const pendSlice = computed(() => {
+  if (!isMine.value) return reviewItems.value // 服务端已分页，直接用当前页
   const pg = Math.min(pendPage.value, pendPages.value - 1)
-  return pendItems.value.slice(pg * REVIEW_PER, pg * REVIEW_PER + REVIEW_PER)
+  return mineFiltered.value.slice(pg * REVIEW_PER, pg * REVIEW_PER + REVIEW_PER)
+})
+
+let pendFilterTimer = null
+watch(pendPage, () => { if (!isMine.value) loadPendingPage() })
+watch(filterQ, () => {
+  if (isMine.value) { pendPage.value = 0; return } // 本地过滤：不需要重拉
+  clearTimeout(pendFilterTimer)
+  pendFilterTimer = setTimeout(() => {
+    if (pendPage.value !== 0) { pendPage.value = 0; return } // 归零由 watch 触发重拉
+    loadPendingPage()
+  }, 300)
 })
 
 // ---- 历史（pharmacist 合并处方审核记录：补 _rx/agent/submitted_by/risk_reason 供筛选与行渲染分流）----
@@ -826,8 +856,9 @@ const purgeWord = ref('')
 async function purgePending() {
   let n = 0
   try {
-    const { data } = await http.get('/medical/review/pending')
-    n = (data.pending || []).length
+    // 第 63 批：只取计数（limit=0 → {pending: [], total}），不再为确认框下载整表
+    const { data } = await http.get('/medical/review/pending', { params: { limit: 0 } })
+    n = Number(data.total || 0)
   } catch (e) { ElMessage.error('加载失败：' + detailText(e)); return }
   purgeN.value = n
   purgeWord.value = ''

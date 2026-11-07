@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.api.deps import rate_limit, require_role, require_user
@@ -54,20 +54,47 @@ def _review_image_view(item: dict, role: str, username: str) -> dict:
     return {k: v for k, v in item.items() if k != "images"}
 
 
+def _match_query(item: dict, q: str) -> bool:
+    """列表关键字匹配：与前端旧实现同字段（助手/问题/提交人/风险原因），大小写不敏感。"""
+    return q in " ".join(str(item.get(k) or "") for k in
+                         ("agent", "question", "submitted_by", "risk_reason")).lower()
+
+
 @router.get("/review/pending")
-async def review_pending(user: dict = Depends(require_role(*_REVIEW_ROLES))):
+async def review_pending(
+        limit: int | None = Query(None, ge=0, le=500,
+                                  description="返回条数上限；缺省=全部（旧行为）。0=只取计数"),
+        offset: int = Query(0, ge=0, description="跳过条数（与 limit 配套分页）"),
+        q: str | None = Query(None, max_length=100, description="关键字筛选（服务端过滤后再分页）"),
+        user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    """待核对列表（角色过滤 + 可选关键字/分页）。
+
+    第 63 批：/review/pending 实测 76 条 = 229KB，而侧边角标每 60s 轮询只为拿一个数字。
+    新增 ``limit/offset/q`` 与响应 ``total``（**缺省仍返回全部**，旧调用方零影响）：
+    - 角标/清空确认只传 ``limit=0`` → 响应只有 ``total``（约 100B）；
+    - 前端列表可用 ``limit+offset+q`` 做服务端分页/筛选，不再整表下发。
+    ``total`` = 角色过滤（qc 剔除 drug）+ 关键字过滤后的条数；``q`` 在服务端过滤，
+    因此分页不会漏配（不会出现"第 2 页看不到第 1 页的匹配项"）。
+    """
     items = await asyncio.to_thread(review.pending)
     role = user.get("role", "")
     me = user.get("username", "system")
     if role == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
         items = [i for i in items if i.get("agent") != "drug"]  # drug 审核权=pharmacist/admin
+    keyword = (q or "").strip().lower()
+    if keyword:
+        items = [i for i in items if _match_query(i, keyword)]
+    total = len(items)
+    page = items[offset:offset + limit] if limit is not None else items[offset:]
     # 图片可见性统一规则（与 /review/history 一致）：qc 审非 drug 项可见 images（修复
-    # 「qc 看不到待审 imaging 图片」）；doctor 他人待审项剥 images（原全量返回，同步收紧）
-    items = [_review_image_view(i, role, me) for i in items]
+    # 「qc 看不到待审 imaging 图片」）；doctor 他人待审项剥 images（原全量返回，同步收紧）。
+    # 只在切片后处理：分页请求不再为整表做图片裁剪。
+    page = [_review_image_view(i, role, me) for i in page]
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="list_pending",
                             actor=user.get("username", "system"),
-                            payload={"n": len(items), "role": user.get("role", "")})
-    return {"pending": items, "me": user.get("username")}
+                            payload={"n": len(page), "total": total, "role": role,
+                                     "limit": limit, "offset": offset})
+    return {"pending": page, "me": user.get("username"), "total": total}
 
 
 @router.get("/review/history")

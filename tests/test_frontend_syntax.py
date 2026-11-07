@@ -451,7 +451,10 @@ def test_rx_round2_review_badge_markers_present():
     assert "/medical/review/pending" in fn, "角标数据源必须含 /review/pending（qc/admin 待核对）"
     assert "/medical/prescriptions/pending" in fn, "角标数据源必须含 /prescriptions/pending（待审处方数）"
     assert "role !== 'pharmacist'" in fn, "pharmacist 不再拉取 /review/pending（跳过 drug 待核对）"
-    assert "i.agent !== 'drug'" in fn, "qc 只算其它助手高危项（问题4 分流）"
+    # 第 63 批：角标只取计数（limit=0 → {pending: [], total}），不再为 60s 轮询拉整表 229KB。
+    # 「qc 只算其它助手高危项」已**下沉到服务端**（/review/pending 对 qc 剔除 drug，
+    # 由 tests/test_drug_pharm_review.py 锁定）；前端二次过滤反而会把已过滤的 total 数错。
+    assert "limit: 0" in fn, "角标应只取计数（limit=0），不得整表下发"
     # 问题2：pharmacist 角标=待审处方数（进入审核中心 load() 即刷新）
     assert "badges.reviewTodoCount = (rxPendingItems.value || []).length" in html, \
         "pharmacist 角标=待审处方数（drug 待核对区已移除）"

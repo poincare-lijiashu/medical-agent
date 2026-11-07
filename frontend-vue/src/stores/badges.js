@@ -41,9 +41,12 @@ export const useBadgeStore = defineStore('badges', {
       let n = 0
       if (role !== 'pharmacist') {
         try {
-          const { data } = await http.get('/medical/review/pending', { silentToast: true })
-          const pend = data.pending || []
-          n += (role === 'qc') ? pend.filter((i) => i.agent !== 'drug').length : pend.length
+          // 第 63 批：只要计数，不要整表。此前每 60s 轮询会把 76 条 / 229KB 全量拉回来只为
+          // 数长度。`limit=0` 后端直接回 `{pending: [], total}`（约 100B）；qc 的 drug 过滤
+          // 已在服务端完成，前端不再二次过滤（否则会把已过滤的 total 数错）。
+          const { data } = await http.get('/medical/review/pending',
+            { params: { limit: 0 }, silentToast: true })
+          n += Number(data.total || 0)
         } catch (_) { /* 角标刷新失败静默 */ }
       }
       if (role === 'pharmacist' || role === 'admin') {
