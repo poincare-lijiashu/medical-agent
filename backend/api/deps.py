@@ -1,8 +1,10 @@
 """FastAPI 鉴权依赖：校验 Bearer 令牌，返回当前用户。"""
 from __future__ import annotations
 
+import ipaddress
 import secrets
 import time
+from functools import lru_cache
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -146,6 +148,53 @@ def require_role(*roles: str):
     return _dep
 
 
+@lru_cache(maxsize=8)
+def _trusted_networks(spec: str) -> tuple:
+    """解析 TRUSTED_PROXIES（IP 或 CIDR，逗号分隔）；非法条目忽略（宁可不信任）。
+
+    缓存按配置字符串，配置变更（测试 monkeypatch）后调用 cache_clear 即生效。
+    """
+    nets = []
+    for part in (spec or "").split(","):
+        item = part.strip()
+        if not item:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            continue
+    return tuple(nets)
+
+
+def _ip_in(ip: str, nets: tuple) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in nets)
+
+
+def _client_ip(request: Request) -> str:
+    """限流身份用的客户端 IP（第 71 批：仅在直连方是可信代理时才采信 XFF）。
+
+    - 默认（TRUSTED_PROXIES 为空）只看 TCP 对端，**不信任任何转发头**（XFF 可伪造）；
+    - 直连方在可信网段内时，从右往左取第一个非可信跳（最接近真实客户端）；
+      全部跳都在可信网段内时退回最左一跳（内网自证）；
+    - 无 client 信息返回 unknown（与旧行为一致）。
+    """
+    peer = request.client.host if request.client else ""
+    if not peer:
+        return "unknown"
+    nets = _trusted_networks((settings.trusted_proxies or "").strip())
+    if not nets or not _ip_in(peer, nets):
+        return peer
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    for hop in reversed(hops):
+        if not _ip_in(hop, nets):
+            return hop
+    return hops[0] if hops else peer
+
+
 def _identity(request: Request) -> str:
     h = request.headers.get("authorization", "")
     if h.startswith("Bearer "):
@@ -157,13 +206,14 @@ def _identity(request: Request) -> str:
         p = decode_token(ck)
         if p:
             return "u:" + str(p.get("sub", ""))
-    return "ip:" + (request.client.host if request.client else "unknown")
+    return "ip:" + _client_ip(request)
 
 
 def rate_limit(request: Request):
-    """按登录用户或 IP 的滑动窗口限流；超限 429。"""
+    """按登录用户或 IP 的滑动窗口限流；超限 429（带 Retry-After=窗口长度）。"""
     if not allow(_identity(request), limit=settings.rate_limit_per_min, window=60):
-        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试",
+                            headers={"Retry-After": "60"})
 
 
 def model_quota(request: Request):
@@ -178,7 +228,8 @@ def model_quota(request: Request):
         return
     if not allow("model:" + _identity(request), limit=limit, window=60):
         raise HTTPException(status_code=429,
-                            detail="模型调用配额已用尽（每分钟），请稍后再试")
+                            detail="模型调用配额已用尽（每分钟），请稍后再试",
+                            headers={"Retry-After": "60"})
 
 
 async def model_slot():

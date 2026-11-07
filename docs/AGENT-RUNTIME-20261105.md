@@ -2731,6 +2731,59 @@ python -m pytest -q --cov=backend --cov-report=term-missing:skip-covered --cov-f
 - 只在本地按 CI 命令验证，未在 GitHub Actions 真机跑（本机无 Actions runner）；
 - 阈值是全局数字，个别高风险模块（如 `consult.py`）可能低于 85% 却仍被整体拉平——未做**按文件**阈值（coverage `fail_under` 支持按文件，但需要先逐模块摸底）。
 
+## 75. 2026-11-08 上线准备（第 71 批：反向代理后的限流身份 + 429 退避语义）
+
+**问题**：`_identity` 只取 `request.client.host`。文档里的 nginx 会写 `X-Forwarded-For`，但
+**nginx 与后端不在同一回环地址时**（K8s、独立容器、宿主机反代到容器），uvicorn 默认只信任
+`127.0.0.1` 的转发头，后端看到的对端就是 nginx 地址——所有匿名请求（登录、健康检查）
+共用同一个 60 次/分钟桶，换班/早高峰会被整院一起限流。反过来，无条件采信 XFF 又会让
+攻击者换个请求头就绕过限流。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/config.py` | 新增 `TRUSTED_PROXIES`（逗号分隔 IP/CIDR；留空=不信任任何转发头） |
+| `backend/api/deps.py` | `_trusted_networks`（lru_cache 解析、非法条目忽略）、`_ip_in`、`_client_ip`：仅当直连方在可信网段内才采信 XFF，并从右往左取第一个非可信跳；`_identity` 改用 `_client_ip`；`rate_limit`/`model_quota` 的 429 补 `Retry-After: 60` |
+| `.env.example` | 补 `TRUSTED_PROXIES` 与"不配会让匿名桶共享"的说明 |
+| `docs/DEPLOY.md` | nginx 小节补必配说明与两种取值示例 |
+| `tests/test_rate_limit_identity.py` | +7：默认忽略伪造头、可信代理取最右非可信跳、非可信直连不可用头、全可信退回最左、非法配置忽略+IPv6、`_identity` 取真实 IP、429 带 Retry-After（通用+模型配额） |
+
+**设计取舍**
+- **默认不信任**：空配置行为与旧版一致（只看 TCP 对端），不引入新的伪造面；
+- **与 uvicorn 不重复信任**：uvicorn 已把真实 IP 写进 `client.host` 时，该值不在可信网段，
+  本逻辑直接采用、不再解析 XFF；仅在 uvicorn 未改写（跨主机代理 / `--no-proxy-headers`）时生效；
+- **取右侧跳**：`nginx $proxy_add_x_forwarded_for` 会把真实来源追加在右端，左端是客户端自填；
+- **配错即不信任**：非法 IP/CIDR 条目被丢弃，宁可不识别也不放宽。
+
+**真实数据（临时实例，`--no-proxy-headers` + `RATE_LIMIT_PER_MIN=3`，错误口令登录）**
+
+配置 `TRUSTED_PROXIES=127.0.0.1`（端口 8012）：
+```
+A(203.0.113.7) 1/2/3 → 401, 401, 401
+A 第 4 次            → 429  Retry-After=60
+B(203.0.113.9) 第 1 次 → 401     ← 两个客户端各自独立计数
+```
+未配置 `TRUSTED_PROXIES`（端口 8013）：
+```
+A 1/2/3 → 401    A 第 4 次 → 429    B 第 1 次 → 429   ← XFF 被忽略，共用一个桶
+```
+两组对照证明：配置前"所有经代理的匿名请求共享一个桶"，配置后按真实客户端拆分，
+且 429 均带 `Retry-After: 60`。
+
+**校验**
+- 定向 `test_rate_limit_identity + test_security + test_auth_cookie` **30 passed**；
+- 全量 pytest：**1235 passed**（1228 + 本批 7）；
+- 红队门禁 `-m redteam` 仍全绿（安全用例未被本批影响）。
+
+**仍存边界**
+- 只覆盖限流身份；审计/日志里的客户端 IP 仍以 uvicorn 视图为准（未统一改造日志字段）；
+- 未做"可信代理变更后热生效"：`TRUSTED_PROXIES` 改动需重启进程（与其它 settings 一致）；
+- 若部署使用 `uvicorn --proxy-headers --forwarded-allow-ips=*`，uvicorn 会先改写
+  `client.host`，本层拿到的已是客户端 IP——安全边界取决于 `--forwarded-allow-ips` 的取值，
+  文档已要求按实际网段收紧，但未在启动脚本里强制校验；
+- `Retry-After` 固定 60s（窗口长度），未按剩余窗口精确计算；
+- 多实例共享限流仍依赖 `REDIS_URL`（第 66 批）；本批只修身份，不改变计数后端。
+
 
 
 

@@ -468,6 +468,22 @@ server {
 
 > `X-Accel-Buffering: no` 响应头已由后端下发，nginx 默认尊重它；显式写 `proxy_buffering off` 是双保险。
 
+**限流身份（第 71 批，必配）**：匿名请求（登录等）按客户端 IP 限流。uvicorn 默认只信任
+`127.0.0.1` 的转发头；**nginx 在不同容器/主机时**，后端看到的对端是 nginx 的地址，
+所有匿名请求会共用同一个 60 次/分钟桶。此时必须把直连代理写进 `TRUSTED_PROXIES`：
+
+```env
+# nginx 与后端同机（uvicorn 监听 127.0.0.1）
+TRUSTED_PROXIES=127.0.0.1
+# nginx 在 K8s/独立网段（按实际网段收紧，不要用 0.0.0.0/0）
+TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
+```
+
+- 只有**直连方确实在 `TRUSTED_PROXIES` 内**时才采信 `X-Forwarded-For`，并从右往左取
+  第一个非可信跳（客户端自填的最左值会被忽略，防伪造绕过）；
+- 留空 = 不采信任何转发头（外网直连/未配代理时最安全）；
+- 429 响应带 `Retry-After: 60`，客户端与网关应据此退避，不要立即重试。
+
 ### docker compose 横向扩容
 
 ```bash

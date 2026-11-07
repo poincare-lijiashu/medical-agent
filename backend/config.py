@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     auth_token_expire_minutes: int = 720
     auth_refresh_expire_minutes: int = 10080
     rate_limit_per_min: int = 60
+    # 第 71 批：反向代理可信地址（逗号分隔的 IP/CIDR，留空=不信任任何转发头）。
+    # 文档里的 nginx 会写 X-Forwarded-For，但只有**直连方确实是可信代理**时才采信；
+    # 否则所有匿名请求（登录/健康检查）都会共用 nginx 的地址桶，60 次/分钟被全院共享。
+    # 配置示例：TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8
+    trusted_proxies: str = ""
     # 评审 S3：SSE 流式问答的**同时存活**上限（进程内信号量）。请求限流管的是
     # 每分钟次数，管不住"60 条长连接同时占着模型连接"；这里给并发一个硬上限。
     # 多副本部署时实际上限 = 本值 × 副本数，需按模型侧配额合计评估。
