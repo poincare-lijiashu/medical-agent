@@ -322,6 +322,11 @@
         <template #header>
           <div class="card-head">
             <b>技能库（经验 → 候选技能）</b>
+            <!-- 评审 02-S4：与下方"本进程运行时"计量明确区分时间窗口 -->
+            <el-tag size="small" type="info" data-testid="skill-library-window"
+                    title="按业务日幂等写入持久化存储；时间窗口与下方进程内计量不同">
+              持久化资产快照
+            </el-tag>
             <div>
               <el-button size="small" @click="openExperience">新增经验</el-button>
               <el-button type="primary" size="small" :loading="libraryBusy" @click="distill">
@@ -404,7 +409,12 @@
       <el-card shadow="never" data-testid="agent-skill-usage">
         <template #header>
           <div class="card-head">
-            <b>技能使用率（进程内）</b>
+            <b>技能使用率（本进程运行时）</b>
+            <!-- 评审 02-S4：显式标注进程内窗口，避免与上方持久化快照混读 -->
+            <el-tag size="small" type="warning" data-testid="skill-usage-window"
+                    title="进程内累计，服务重启归零；不是按日持久化数据">
+              进程内累计 · 重启归零
+            </el-tag>
             <el-button size="small" :loading="usageBusy" @click="refreshUsage">刷新</el-button>
           </div>
         </template>
@@ -416,10 +426,10 @@
           <div class="policy-row" style="padding-top: 6px">
             <el-tag v-if="usage.dataAvailable === false" size="small" type="warning">暂无数据</el-tag>
             <el-tag size="small">问答 {{ usage.requests.total }} · 成功 {{ pct(usage.requests.successRate) }}</el-tag>
-            <el-tag size="small" :type="usage.requests.errorRate > 0.2 ? 'danger' : 'info'">
+            <el-tag size="small" :type="usage.requests.errorRate > (usage.thresholds ? usage.thresholds.errorRate : 0.2) ? 'danger' : 'info'">
               错误 {{ pct(usage.requests.errorRate) }}
             </el-tag>
-            <el-tag size="small" :type="usage.requests.abortedRate > 0.2 ? 'warning' : 'info'">
+            <el-tag size="small" :type="usage.requests.abortedRate > (usage.thresholds ? usage.thresholds.abortedRate : 0.2) ? 'warning' : 'info'">
               中止 {{ pct(usage.requests.abortedRate) }}
             </el-tag>
             <el-tag size="small">平均耗时 {{ usage.duration.avgMs }}ms</el-tag>
@@ -431,6 +441,13 @@
               未提供 token 用量
             </el-tag>
             <el-tag size="small">已发布 {{ usage.skills.published }} · 已使用 {{ usage.skills.used }}</el-tag>
+            <!-- 评审 02-S1/S14：质量信号只提示复查，按成功问答计，可多信号叠加 -->
+            <el-tag v-if="usage.quality && usage.quality.flagged > 0" size="small" type="warning"
+                    data-testid="usage-quality" :title="usage.quality.note">
+              质量信号 {{ usage.quality.flagged }}（过短 {{ usage.quality.signals.short }} /
+              缺证据 {{ usage.quality.signals.no_evidence }} /
+              疑似拒答 {{ usage.quality.signals.refusal }}）
+            </el-tag>
             <el-tag size="small" type="info">
               覆盖 {{ pct(usage.skills.usageRatio) }}（默认全量生效，仅作参考）
             </el-tag>
@@ -440,6 +457,10 @@
             </el-tag>
           </div>
           <el-progress :percentage="concentrationPercent" :stroke-width="10" style="margin-top: 8px" />
+          <!-- 评审 02-S14：累计占比 vs Prometheus 时间窗 rate 的口径差异必须显式说明 -->
+          <div v-if="usage.requests.errorRateNote" class="src" style="margin-top: 6px">
+            {{ usage.requests.errorRateNote }}
+          </div>
           <div v-if="usage.skills.usedNotPublishedInProcess.length" class="src" style="margin-top: 6px">
             已计量但当前非已发布：{{ usage.skills.usedNotPublishedInProcess.join('、') }}（多来自历史版本或已停用技能）
           </div>

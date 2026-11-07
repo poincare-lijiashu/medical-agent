@@ -1247,6 +1247,32 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 
 **验证**：全量 pytest **1122 passed / 14 skipped**；规则 YAML 解析通过（13 条）。
 
+---
+
+## 35. 2026-11-06 评审整改（第 31 批：看板窗口语义与阈值对齐）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S4 | Agent 控制台两张卡片加**显式窗口标签**：技能库为「持久化资产快照」，使用率为「进程内累计 · 重启归零」；避免把按日持久化数据与进程内计量混读 | `AgentView.vue` |
+| 02-S14 | 看板阈值改由后端 `skill_usage.THRESHOLDS` 下发（错误率 0.2 / 中止率 0.2 / 质量 0.3），前端不再硬编码；新增 `requests.errorRateNote` 说明"进程累计占比 ≠ Prometheus 30 分钟窗口 rate" | `skill_usage.py`、`AgentView.vue` |
+| 02-S1（展示） | 看板新增「质量信号」标签（过短/缺证据/疑似拒答计数）与 `signalsPerOk`（可 >1，语义同 `perRequestAvg`，不是占比） | `skill_usage.py`、`AgentView.vue` |
+
+**为什么这样改**：看板的错误率是"进程启动以来累计占比"，Prometheus 是"近 30 分钟窗口 rate"，
+低 QPS 下两者可差一个数量级；不做窗口标注与口径说明，运营无法解释"看板不红但告警在响"。
+阈值硬编码在前端还会与规则漂移，改一处忘另一处。
+
+**新增测试**：`test_quality_aggregation_and_thresholds`（后端聚合/阈值/口径注释）、
+`test_agent_view_marks_window_semantics_and_quality`（前端标记锁）、G2 Playwright 增加两张卡片的窗口标签断言。
+
+**仍存边界**：
+- 看板仍是**进程累计值**，没有改成"近 N 分钟窗口"；本轮只把差异显式化，未改变计量模型；
+- `signalsPerOk` 可 >1（一条答案多信号），运营需按"信号次数"而非"受影响答案数"理解；
+- 阈值常量在后端 `skill_usage.THRESHOLDS` 与告警规则两处，改阈值仍需同步（无自动比对测试）；
+- 质量信号未进入按日快照，历史趋势仍只在 Prometheus 时序里。
+
+**验证**：全量 pytest **1124 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
+
+
 
 
 

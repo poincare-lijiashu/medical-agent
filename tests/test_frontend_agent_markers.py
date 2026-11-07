@@ -21,6 +21,16 @@ def _read(path: str) -> str:
         return f.read()
 
 
+def test_agent_view_marks_window_semantics_and_quality():
+    """评审 02-S4/S14：两类数据窗口必须有显式标签；阈值取后端，质量信号可见。"""
+    body = _read(AGENT)
+    assert "持久化资产快照" in body
+    assert "进程内累计 · 重启归零" in body
+    assert "usage.thresholds" in body
+    assert "usage.quality.flagged" in body
+    assert "errorRateNote" in body
+
+
 def test_vite_dev_proxy_targets_backend():
     """评审 04-S18：npm run dev 时同源相对请求必须代理到后端，否则全部 404。"""
     body = _read(VITE)

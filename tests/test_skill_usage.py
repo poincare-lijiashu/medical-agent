@@ -28,6 +28,22 @@ def _publish(code: str, name: str, agent_id: str = "drug") -> str:
     return card["code"]
 
 
+def test_quality_aggregation_and_thresholds():
+    """评审 02-S1/S14：质量信号按成功问答聚合；阈值由后端给出，口径注释随数据返回。"""
+    _publish("drug-q", "质量技能")
+    consult_metrics.record("drug", "sync", "ok", 10.0, ["drug-q"])
+    consult_metrics.record_quality("drug", ["short", "no_evidence"])
+    consult_metrics.record_quality("drug", ["short"])
+
+    r = skill_usage.report()
+    assert r["quality"]["signals"] == {"short": 2, "no_evidence": 1, "refusal": 0}
+    assert r["quality"]["flagged"] == 3
+    assert r["quality"]["signalsPerOk"] == 3.0  # 一条答案可命中多个信号，可 >1
+    assert r["thresholds"] == {"errorRate": 0.2, "abortedRate": 0.2, "qualityRate": 0.3}
+    assert "累计" in r["requests"]["errorRateNote"]
+    assert r["window"] == "process"
+
+
 def test_empty_report():
     r = skill_usage.report()
     assert r["window"] == "process"

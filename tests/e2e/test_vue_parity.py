@@ -356,6 +356,9 @@ def test_agent_console_cards_visible(page):
         expect(page.locator(f'[data-testid="{tid}"]')).to_be_visible()
     expect(page.get_by_text("能力开关（运行时生效）")).to_be_visible()
     expect(page.get_by_text("临床技能卡（受控）")).to_be_visible()
+    # 评审 02-S4：持久化资产快照 vs 进程内运行时，两张卡片必须有显式窗口标签
+    expect(page.locator('[data-testid="skill-library-window"]')).to_contain_text("持久化资产快照")
+    expect(page.locator('[data-testid="skill-usage-window"]')).to_contain_text("进程内累计")
     # 资源加载类报错（如 favicon 404）不算 JS 异常；其余 console error 视为回归
     real = [e for e in errors if "Failed to load resource" not in e]
     assert real == [], real[:3]

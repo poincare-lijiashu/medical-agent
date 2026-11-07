@@ -29,6 +29,13 @@ _WINDOW_NOTE = (
     "失败与中止不计技能使用；不含患者信息。"
 )
 
+# 评审 02-S14：看板判定阈值来自后端常量，前端不再硬编码，且与 Prometheus 规则同值
+THRESHOLDS = {
+    "errorRate": 0.2,      # 与 MedAssistAgentConsultErrorRateHigh 一致
+    "abortedRate": 0.2,    # 中止率提示线（无独立告警）
+    "qualityRate": 0.3,    # 与 MedAssistAgentAnswerQualityLow 一致
+}
+
 
 def _iso(ts: float | None) -> str | None:
     if not ts:
@@ -98,6 +105,15 @@ def report() -> dict:
             "lastUsedAt": _iso(last_used.get(code)),
         })
 
+    # 评审 02-S1/S14：回答质量信号按成功问答聚合；一条答案可命中多个信号，
+    # 因此 signalsPerOk 可 >1（与 perRequestAvg 同一语义提醒，不是"占比"）。
+    quality_counts = {"short": 0, "no_evidence": 0, "refusal": 0}
+    for key, n in (snap.get("quality") or {}).items():
+        _, _, signal = key.partition("|")
+        if signal in quality_counts:
+            quality_counts[signal] += n
+    flagged = sum(quality_counts.values())
+
     return {
         "window": "process",
         "generatedAt": datetime.now(timezone.utc).astimezone().isoformat(
@@ -112,6 +128,17 @@ def report() -> dict:
             "abortedRate": _ratio(aborted, total),
             "channels": channels,
             "agents": agents,
+            # 评审 02-S14：明确这是进程累计占比，不是 Prometheus 的时间窗 rate
+            "errorRateNote": "进程累计占比（启动以来），与 Prometheus 近 30 分钟窗口 rate 不同；"
+                             "低 QPS 时两者可能明显偏离，判读时以 Prometheus 告警为准。",
+        },
+        "thresholds": dict(THRESHOLDS),
+        "quality": {
+            "signals": quality_counts,
+            "flagged": flagged,
+            "signalsPerOk": _ratio(flagged, ok_total),
+            "note": "启发式信号（过短/缺证据/疑似拒答），按成功问答计；一条答案可命中多个信号；"
+                    "仅提示人工复查，不拦截、不改写答案。",
         },
         "duration": {
             "avgMs": round(dur_sum / dur_count, 1) if dur_count else 0.0,
