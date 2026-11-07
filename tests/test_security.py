@@ -1,4 +1,5 @@
 """安全/正确性加固的离线单测：claim 溯源、PHI 扩展、限流、刷新令牌。"""
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.core import security_rate
@@ -11,6 +12,9 @@ from backend.core.auth import (
 )
 from backend.core.medical_audit import PHIRedactor
 from backend.agents.medical.literature.nodes import _ground_citations
+
+# 第 70 批：红队门禁标记（CI `-m redteam` 先跑，失败立即阻断；默认全量仍包含）
+pytestmark = pytest.mark.redteam
 
 
 def test_ground_citations_keeps_verifiable():

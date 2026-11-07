@@ -31,6 +31,9 @@ from backend.core.auth import seed_default_users
 from backend.core.medical_audit import AuditLog
 from backend.main import app
 
+# 第 70 批：红队门禁标记（CI `-m redteam` 先跑，失败立即阻断；默认全量仍包含）
+pytestmark = pytest.mark.redteam
+
 CASE = "患者女，68 岁，高血压合并房颤，需长期抗凝管理，近期膝关节疼痛明显，评估用药方案。"
 
 # 注入载荷（A1 任务书原文指令）：混入正常病例后提交，模拟越权指令注入

@@ -2689,6 +2689,48 @@ GET /review/pending?limit=12&compact=1     11,089 B   （35%）
 - 列表不再显示缩略图，qc 需点详情才看到影像（交互变化，已在 UI 文案标注）；
 - 未做 ETag/304：同一页反复刷新仍会重传 11KB 摘要（收益已足够，未再加缓存层）。
 
+## 74. 2026-11-08 上线准备（第 70 批：CI 覆盖率 + 红队阻断——把"手工全绿"变成"合并前强制"）
+
+**接 HANDOFF 剩余 backlog**：「红队对抗测试 CI 阻断、后端测试覆盖率≥85%」此前只有用例、
+没有门槛：`ci.yml` 只跑 `pytest -q`，覆盖率从未测量，红队用例与普通用例混在一起，
+删掉标记或删掉用例都不会被任何机制发现。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `requirements.txt` | 固定 `pytest-cov==6.1.1`（CI 的 `--cov` 参数依赖它；未固定会在环境漂移时报 unknown option） |
+| `pytest.ini` | 注册 `redteam` 标记（标记只做筛选，**默认全量仍包含**这些用例，不做排除） |
+| `tests/test_prompt_injection.py` / `tests/test_security.py` | 模块级 `pytestmark = pytest.mark.redteam`（共 22 条：越权注入、字典外药、假"已批准"、PHI、令牌/限流边界） |
+| `.github/workflows/ci.yml` | pytest job 新增两步：① `pytest -q -m redteam`（先跑、失败立即阻断）；② 全量 `--cov=backend --cov-fail-under=85` |
+| `tests/test_ci_gates.py` | +5 静态锁：阈值≥85、红队步在覆盖率之前、标记已注册、两模块均打标记且用例≥20、pytest-cov 已固定 |
+| `docs/DEPLOY.md` / `docs/HANDOFF.md` | 记录 AI 中台 CI 门禁与 backlog 关闭 |
+
+**为什么这样设计**
+- **先红队后全量**：对抗用例 7 秒跑完，注入/越权一旦回归应在第一分钟暴露，而不是等 4 分钟全量；
+- **标记不排除**：`pytest -m redteam` 只是筛选，默认 `pytest -q` 仍执行它们——不会出现"门禁绿了、日常却漏跑"；
+- **阈值 85% 而非"当前值 87%"**：留 2pt 缓冲吸收环境差异（如无 Redis/PG 时的分支）；但低于 85 说明新增代码完全没被测到，正确做法是补测试，不是降阈值；
+- **静态锁而非只写在 CI**：CI 配置改动在本地跑 `pytest` 时不可见，`test_ci_gates.py` 让"删门禁"在本地也变红。
+
+**真实数据（本机，与 CI 同一条命令）**
+```
+python -m pytest -q -m redteam
+→ 22 passed, 1206 deselected（6.6s）
+
+python -m pytest -q --cov=backend --cov-report=term-missing:skip-covered --cov-fail-under=85
+→ TOTAL 10090 stmts / 1275 miss / 87%
+→ Required test coverage of 85% reached. Total coverage: 87.36%
+→ 1228 passed（249.6s）
+```
+（同批先测基线为 87%（1278 miss），终跑 1275 miss；差异属测试顺序/环境分支的测量波动，
+量级未变，因此阈值仍取 85%。）
+
+**仍存边界**
+- 覆盖率只统计 `backend/`，不含前端与 Java 平台（后者由各自 CI job 覆盖）；
+- 覆盖率是**行覆盖**，不等于分支/路径覆盖；高覆盖率仍可能有未测异常分支；
+- 红队集合是 22 条**离线确定性**用例，不替代真实模型的红队演练（LLM 输出不确定性无法用单测覆盖）；
+- 只在本地按 CI 命令验证，未在 GitHub Actions 真机跑（本机无 Actions runner）；
+- 阈值是全局数字，个别高风险模块（如 `consult.py`）可能低于 85% 却仍被整体拉平——未做**按文件**阈值（coverage `fail_under` 支持按文件，但需要先逐模块摸底）。
+
 
 
 

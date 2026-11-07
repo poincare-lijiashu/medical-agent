@@ -30,6 +30,8 @@ setuptools<81
 pytest==8.3.4
 # 对抗轮 A3：单测全局超时防线（pytest.ini addopts --timeout=300）
 pytest-timeout==2.4.0
+# 第 70 批：覆盖率门禁（CI 强制 backend ≥85%；本地实测 87%）
+pytest-cov==6.1.1
 # LLM client (Qwen MaaS via DashScope openai-compat)
 openai==1.66.3
 # Nacos 服务注册（P0-5，计划书 D6.1）：Nacos 2.5.1 服务端实测须用 SDK 3.x——

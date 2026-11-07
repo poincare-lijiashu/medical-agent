@@ -418,6 +418,9 @@ Java 微服务矩阵（`platform/`）与 Python AI 中台的集群形态已交�
 - 容量：2535 请求 / 0 错误 / 0 限流，126.8 rps；p50 5.4ms、p95 12.7ms、p99 17.1ms、max 33.8ms。
 - 容灾：dump 3.83MB，恢复 + 校验 **11.2s**，演练总耗时 12.4s；`app_user` 99、`patient` 576、`admission` 172、`medical_record` 122、`prescription` 212 行数全部一致。
 - CI 门禁：后端 `mvn package`（170 个测试类 / 1606 用例）、前端 `npm ci + typecheck + build`、Helm lint + dev/staging/prod 三套 template 渲染。
+- AI 中台 CI 门禁（第 70 批）：先跑 `pytest -q -m redteam`（22 条对抗/安全用例，失败立即阻断），
+  再跑全量 `pytest -q --cov=backend --cov-fail-under=85`（本地实测 **87.36%**）。
+  阈值只允许上调：新增代码未被测到应补测试，而不是降阈值；门禁存在性由 `tests/test_ci_gates.py` 静态锁定。
 
 **回滚顺序**：`helm rollback` / Argo CD 回退到上一 Revision → 等 readiness 通过 → 重跑 `release_gate.ps1`；数据库迁移只前进不回滚，回退前确认本次迁移向后兼容（新增表/列/索引，不删不改旧列）。
 

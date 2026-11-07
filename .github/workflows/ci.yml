@@ -70,8 +70,14 @@ jobs:
             "SELECT 1 FROM pg_database WHERE datname='medagent_test'" | grep -q 1 || \
             psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DATABASE" \
               -c "CREATE DATABASE medagent_test"
-      - name: Run pytest
-        run: python -m pytest -q
+      # 第 70 批：红队对抗/安全用例先跑，失败立即阻断（不等到全量跑完才报）。
+      # 标记只做筛选，默认全量仍包含这些用例，删除标记不会让门禁"变绿"。
+      - name: Red-team gate（-m redteam）
+        run: python -m pytest -q -m redteam
+      # 第 70 批：覆盖率门禁。本地全量实测 backend 87%（10090 stmts / 1278 miss）；
+      # 阈值取 85% 留 2pt 缓冲——低于阈值说明有新增代码完全没被测到，应补测试而不是降阈值。
+      - name: Run pytest（覆盖率门禁 backend ≥85%）
+        run: python -m pytest -q --cov=backend --cov-report=term-missing:skip-covered --cov-fail-under=85
 
   postgres-it:
     # G63：真库 SQL 门禁（Testcontainers + postgres:15-alpine）。
