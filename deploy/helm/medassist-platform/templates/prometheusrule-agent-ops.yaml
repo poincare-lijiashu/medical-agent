@@ -235,4 +235,40 @@ spec:
           annotations:
             summary: "共享存储（Redis）降级：{{ "{{" }} $labels.instance {{ "}}" }}"
             description: "该实例已回落本实例内存镜像，多副本限流/令牌撤销不再共享。查 redis.degraded 日志、Redis 可达性，以及是否漏装 redis 依赖（import_missing）。"
+
+        # 第 68 批：向量库检索面（看门狗超时/重建/回落 dense 不再只有日志）。
+        # 不部署知识库的环境请按环境屏蔽 Unreachable，其余两条无样本不触发。
+        - alert: MedAssistMilvusUnreachable
+          expr: medassist_agent_milvus_reachable == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "向量库不可达：{{ "{{" }} $labels.instance {{ "}}" }}"
+            description: "该实例 TCP 预检连续失败，知识库检索将报错或静默退化为无证据回答。请检查 Milvus 服务、网络与 milvus_uri。"
+
+        - alert: MedAssistMilvusRetrieveTimeouts
+          expr: sum(increase(medassist_agent_milvus_retrieve_timeouts_total[15m])) >= 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "向量库检索 RPC 看门狗超时频繁"
+            description: "近 15 分钟 {{ "{{" }} $value {{ "}}" }} 次超时（每次超时弃置挂起线程并重建客户端）；请检查 Milvus 负载与网络抖动。"
+
+        - alert: MedAssistMilvusDegradedSearches
+          expr: |
+            (
+              sum(increase(medassist_agent_milvus_degraded_searches_total[30m]))
+              /
+              sum(increase(medassist_agent_milvus_searches_total[30m]))
+            ) > 0.3
+            and
+            sum(increase(medassist_agent_milvus_searches_total[30m])) >= 10
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "混合检索降级率超过 30%"
+            description: "近 30 分钟 {{ "{{" }} $value {{ "}}" }} 的检索回落 dense；请检查混合检索与 collection 的 sparse 字段是否可用。"
 {{- end }}

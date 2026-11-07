@@ -2579,6 +2579,67 @@ medassist_agent_redis_import_missing 0
 - 只覆盖 Redis；Milvus 降级没有对应指标（有 20s 看门狗与检索降级日志）；
 - Helm 模板里的规则只做了静态同名校验，未在真实 K8s 集群 apply。
 
+## 72. 2026-11-08 上线准备（第 68 批：Milvus 检索面从"只有日志"变成"有指标+告警"）
+
+**接第 67 批的遗留**：Redis 降级已可观测，但同类的**向量库检索退化**仍只有日志——
+`medical_kb.retrieve_timeout_rebuild` / `hybrid_fallback` 两条 warning 埋在 JSON 日志里。
+Milvus 挂掉时问答照常 200，只是证据变空/变少；`/healthz` 与状态码都看不出来。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/medical_kb.py` | 进程内计量 + `prometheus_text()`：`reachable`（gauge）与 `probes / probe_failures / searches / retrieve_timeouts / timeout_rebuilds / degraded_searches` 六个 counter；抽出 `_probe_tcp()`，TCP 预检**成功缓存 5s、失败不缓存**；在 `_rpc_with_timeout`（超时）、`search_hybrid`（重建/降级）三处埋点；`reset_metrics()` 测试钩子 |
+| `backend/main.py` | `/metrics` 追加 `medical_kb.prometheus_text()`（导入/预检异常退化为空串，不影响其它指标） |
+| `deploy/prometheus/medassist-agent-ops.rules.yml` | +3：`MedAssistMilvusUnreachable`（`reachable==0`，5m，critical）、`MedAssistMilvusRetrieveTimeouts`（15m 内 ≥3 次，warning）、`MedAssistMilvusDegradedSearches`（30m 降级率 >30% 且样本 ≥10，warning） |
+| `deploy/helm/.../prometheusrule-agent-ops.yaml` | 同步同 3 条（两处必须同名同量） |
+| `tests/test_milvus_timeout_guard.py` | +4：成功预检缓存、失败不缓存、超时/重建计数、降级计数；autouse 计量重置保证隔离 |
+| `tests/test_deploy_observability.py` | 规则数 18→21；导出文本纳入 `medical_kb.prometheus_text()`（M-14 门禁） |
+| `docs/OPERATIONS.md` | 指标清单补向量库 7 项；规则数 18→21 与分项 |
+| `.env.local` | 补 `METRICS_TOKEN`（与 `deploy/observability/prometheus/metrics-token` 一致；本机文件不入库） |
+
+**规则设计取舍**
+- 不可达用 critical：`reachable==0` 时检索必然失败或落无证据分支，属于"服务在、能力没了"；
+- 超时用"15 分钟内 ≥3 次"而非单次：单次抖动常见，且每次超时的代价已被看门狗限住（弃置挂起线程 + 重建一次）；
+- 降级率用 `degraded/searches` 且要求样本 ≥10：低流量下 1/1=100% 会误报；
+- 三条都只提示、不自动处置：不自动重启 Milvus、不自动切换检索源——医疗证据链不接受静默换源。
+
+**真实数据**（本机仅 pg/observability 在跑，Milvus 未启动；临时实例 8010，`METRICS_TOKEN` 鉴权）
+```
+medassist_agent_milvus_reachable 0
+medassist_agent_milvus_probes_total 1            → 第二次抓取（+7s）2
+medassist_agent_milvus_probe_failures_total 1    → 2
+```
+失败不缓存 → 每次抓取重新探测，gauge 始终反映现状。
+
+**正向路径**（临时实例 8011，`MILVUS_URI` 指向本机已监听端口，只验证 TCP 预检）
+```
+medassist_agent_milvus_reachable 1
+medassist_agent_milvus_probes_total 1            → 第二次抓取（+6s）2
+```
+`probes_total` 仍 +1：`/metrics` 端点自身 5s 缓存与预检 5s 正向缓存同窗口，抓取间隔 >5s 时各探一次；
+缓存收益在"面板轮询 + 抓取"这类更密集叠加时体现，已由单测（`test_metrics_probe_success_cached_and_exported`）锁定。
+
+**端到端（真实 Prometheus）**
+- 启动时发现本地 Prometheus 对 8001 持续 401（`MedAssistAgentScrapeDown` / `MetricsAbsent` 已在 firing）——
+  原因是 8001 未注入 `METRICS_TOKEN`；补上后 target `health=up`，两条告警转 `inactive`（自动解除）；
+- `POST /-/reload` 后规则数 **17 → 21**，三条 Milvus 规则均加载；
+- Prometheus 查询 `medassist_agent_milvus_reachable{instance="host.docker.internal:8001"}` = **0**；
+- `MedAssistMilvusUnreachable` 状态 **pending**（`for: 5m` 到点即 firing），另两条无样本保持 `inactive`。
+
+**校验**
+- `promtool check rules`：**SUCCESS: 21 rules found**；
+- 全量 pytest：**1218 passed**（1214 + 本批 4）；
+- 本地规则集与 Helm 模板同名同量静态门禁通过（21/21）。
+
+**仍存边界**
+- 指标是**进程内**计数，重启归零；多 worker 下各 worker 各自计数（与 G102 同一边界，未做多进程聚合）；
+- `reachable` 只是 TCP 预检，不代表 collection 已 load/索引可用——端口通但 `load_collection` 失败仍会走降级，只能从 `degraded_searches` 看出来；
+- `probes_total` 随抓取频率增长（失败时尤其快），只用于本窗口判读，不适合长期趋势；
+- 超时计数含 `doc_count` / `describe_collection` 等非问答路径，排查需结合 `searches_total` 分辨；
+- 抓取令牌是环境配置：`.env.local` 已补，但换机/换院区仍需与 Prometheus 侧文件同步，否则回到 401；
+- 未在真实 K8s 集群 apply（Helm 只有静态同名校验）；
+- 未启动真实 Milvus 做"超时→重建→恢复"端到端演练，该路径由 `test_milvus_timeout_guard.py` 的 0.3s 注入超时覆盖。
+
 
 
 

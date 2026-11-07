@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import socket
+import threading
+import time
 from urllib.parse import urlsplit
 
 from pymilvus import DataType, MilvusClient
@@ -19,6 +21,37 @@ from backend.db.db_base import get_milvus_token
 
 logger = get_logger(__name__)
 _cache: dict = {}
+
+# 第 68 批：检索面进程内计量（导出为 Prometheus 指标；重启归零，均为聚合值、无业务标识）。
+# 之前看门狗超时/客户端重建/降级只写在日志里——多副本部署时"某台实例的向量检索一直超时、
+# 问答静默退化为无证据"很难被发现，只能靠人翻日志。
+_METRIC_LOCK = threading.Lock()
+_stats: dict = {
+    "reachable": False,   # 最近一次 TCP 预检结果（gauge）
+    "probe_at": 0.0,      # 最近一次预检时刻（monotonic；仅用于成功结果缓存）
+    "probes": 0,
+    "probe_failures": 0,
+    "searches": 0,        # search_hybrid 调用次数（分母）
+    "timeouts": 0,        # 看门狗触发次数（任意 RPC，含 doc_count/describe）
+    "rebuilds": 0,        # 超时后丢弃客户端重建的次数
+    "degraded": 0,        # 混合检索失败回落 dense 的次数
+}
+
+# 健康预检结果的正向缓存（秒）。成功时 5s 内复用，避免面板轮询 + /metrics 反复建 TCP；
+# **失败不缓存**：Milvus 恢复后必须立刻可见，不能因为缓存继续报不可达。
+_PROBE_TTL_S = 5.0
+
+
+def _metric_inc(key: str) -> None:
+    with _METRIC_LOCK:
+        _stats[key] = int(_stats.get(key, 0)) + 1
+
+
+def reset_metrics() -> None:
+    """测试钩子：清空检索面计量（进程内计数，不涉及任何业务数据）。"""
+    with _METRIC_LOCK:
+        _stats.update(reachable=False, probe_at=0.0, probes=0, probe_failures=0,
+                      searches=0, timeouts=0, rebuilds=0, degraded=0)
 
 
 class MilvusTimeout(RuntimeError):
@@ -48,6 +81,7 @@ def _rpc_with_timeout(fn, *args, **kwargs):
     try:
         return ex.submit(fn, *args, **kwargs).result(timeout=timeout)
     except concurrent.futures.TimeoutError as e:
+        _metric_inc("timeouts")  # 第 68 批：超时从"只有日志"变成可告警计数
         raise MilvusTimeout(f"Milvus RPC 超时（>{timeout:g}s）：弃置挂起线程并触发客户端重建") from e
     finally:
         ex.shutdown(wait=False)
@@ -82,15 +116,73 @@ def milvus_status() -> dict:
     return {"connected": ok, "uri": _masked_uri(settings.milvus_uri)}
 
 
-def _milvus_reachable() -> bool:
-    """Milvus TCP 快速预检（<0.5s）。Milvus 离线时毫秒级 fail-fast：
-    pymilvus 连接失败不写缓存，此前每次面板请求都要白等 10s 超时。"""
-    u = urlsplit(settings.milvus_uri)
+def _probe_tcp() -> bool:
+    """一次真实 TCP 预检（<0.5s）；非法 URI 一律 fail-closed。"""
     try:
+        u = urlsplit(settings.milvus_uri)
         with socket.create_connection((u.hostname or "127.0.0.1", u.port or 19530), timeout=0.5):
             return True
-    except OSError:
+    except (OSError, ValueError):
         return False
+
+
+def _milvus_reachable() -> bool:
+    """Milvus TCP 快速预检（<0.5s）。Milvus 离线时毫秒级 fail-fast：
+    pymilvus 连接失败不写缓存，此前每次面板请求都要白等 10s 超时。
+
+    第 68 批：计量探测次数/失败数，并给**成功结果**加 5s 缓存（面板轮询 + /metrics
+    抓取不再各自建 TCP）；失败不缓存，保证恢复后立刻可见。"""
+    now = time.monotonic()
+    with _METRIC_LOCK:
+        if _stats["reachable"] and now - _stats["probe_at"] < _PROBE_TTL_S:
+            return True
+    ok = _probe_tcp()
+    with _METRIC_LOCK:
+        _stats["probe_at"] = time.monotonic()
+        _stats["reachable"] = ok
+        _stats["probes"] = int(_stats["probes"]) + 1
+        if not ok:
+            _stats["probe_failures"] = int(_stats["probe_failures"]) + 1
+    return ok
+
+
+def prometheus_text() -> str:
+    """Milvus 检索面指标（Prometheus 文本）。
+
+    为什么导出：看门狗超时、客户端重建、回落 dense 此前只留在日志里。多副本部署时
+    "某台实例的向量检索一直超时、问答静默退化成无证据"没有任何持续信号。
+    抓取时做一次 TCP 预检（成功缓存 5s、失败不缓存），保证 gauge 是新鲜值，而不是
+    "没人访问知识库面板 → gauge 永远是 0"的假告警。
+    """
+    try:
+        _milvus_reachable()
+    except Exception:  # noqa: BLE001 —— 预检失败绝不影响抓取本身
+        pass
+    with _METRIC_LOCK:
+        s = dict(_stats)
+    return "\n".join([
+        "# HELP medassist_agent_milvus_reachable 向量库 TCP 预检是否可达（1=最近一次预检成功）",
+        "# TYPE medassist_agent_milvus_reachable gauge",
+        f"medassist_agent_milvus_reachable {1 if s['reachable'] else 0}",
+        "# HELP medassist_agent_milvus_probes_total 向量库 TCP 预检次数（成功结果 5s 内复用，不计入）",
+        "# TYPE medassist_agent_milvus_probes_total counter",
+        f"medassist_agent_milvus_probes_total {int(s['probes'])}",
+        "# HELP medassist_agent_milvus_probe_failures_total 向量库 TCP 预检失败次数（失败不缓存，随抓取递增）",
+        "# TYPE medassist_agent_milvus_probe_failures_total counter",
+        f"medassist_agent_milvus_probe_failures_total {int(s['probe_failures'])}",
+        "# HELP medassist_agent_milvus_searches_total 混合检索调用次数",
+        "# TYPE medassist_agent_milvus_searches_total counter",
+        f"medassist_agent_milvus_searches_total {int(s['searches'])}",
+        "# HELP medassist_agent_milvus_retrieve_timeouts_total 检索 RPC 看门狗超时次数（含 doc_count/describe）",
+        "# TYPE medassist_agent_milvus_retrieve_timeouts_total counter",
+        f"medassist_agent_milvus_retrieve_timeouts_total {int(s['timeouts'])}",
+        "# HELP medassist_agent_milvus_timeout_rebuilds_total 超时后丢弃客户端并重建的次数（只统计检索路径）",
+        "# TYPE medassist_agent_milvus_timeout_rebuilds_total counter",
+        f"medassist_agent_milvus_timeout_rebuilds_total {int(s['rebuilds'])}",
+        "# HELP medassist_agent_milvus_degraded_searches_total 混合检索失败回落 dense 的次数（证据质量下降）",
+        "# TYPE medassist_agent_milvus_degraded_searches_total counter",
+        f"medassist_agent_milvus_degraded_searches_total {int(s['degraded'])}",
+    ]) + "\n"
 
 
 def _collection():
@@ -184,19 +276,23 @@ def search_hybrid(query: str, top_k: int = 3, fetch: int = 12) -> list:
     （MilvusTimeout）先 _reset_client 重建客户端重试一次，仍失败落回既有降级语义
     （dense 兜底 / 异常向上抛由调用方降级），绝不让 ask 路径分钟级挂起。"""
     from backend.core.reranker import rerank
+    _metric_inc("searches")  # 第 68 批：降级率 = degraded / searches（告警分母）
     cands: list = []
     try:
         cands = _hybrid_candidates(query, fetch)
     except MilvusTimeout as e:
         # 重建路径：丢弃缓存客户端（全新 gRPC 会话）后重试一次
+        _metric_inc("rebuilds")
         logger.warning("medical_kb.retrieve_timeout_rebuild", error=str(e)[:120])
         _reset_client()
         try:
             cands = _hybrid_candidates(query, fetch)
         except Exception as e2:  # noqa: BLE001 —— 重建后仍失败：走既有降级语义
+            _metric_inc("degraded")
             logger.warning("medical_kb.hybrid_fallback", error=str(e2)[:120])
             cands = search_dense(query, top_k=fetch)
     except Exception as e:  # noqa: BLE001
+        _metric_inc("degraded")
         logger.warning("medical_kb.hybrid_fallback", error=str(e)[:120])
         cands = search_dense(query, top_k=fetch)
 

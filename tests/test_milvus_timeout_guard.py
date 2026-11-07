@@ -52,6 +52,14 @@ def _fast_timeout_and_clean_cache(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_milvus_metrics():
+    """第 68 批：进程内计量跨测试隔离（只清计数，不涉及任何业务数据）。"""
+    kb.reset_metrics()
+    yield
+    kb.reset_metrics()
+
+
+@pytest.fixture(autouse=True)
 def _stub_heavy_models(monkeypatch):
     """屏蔽 BGE/reranker 重模型：本文件只验证看门狗与重建编排，不加载本地权重。"""
     import backend.core.embedder as emb
@@ -138,6 +146,61 @@ def test_doc_count_timeout_returns_negative(monkeypatch):
     """doc_count 检索挂起 → 看门狗超时 → 既有失败语义 -1（前端显示 … 而非假 0）。"""
     monkeypatch.setattr(kb, "_collection", lambda: _HangCol(1.2))
     assert kb.doc_count() == -1
+
+
+def test_metrics_probe_success_cached_and_exported(monkeypatch):
+    """第 68 批：预检成功 → gauge=1；5s 内复用，不重复建 TCP（面板轮询 + 抓取不再各自探测）。"""
+    calls: list = []
+    monkeypatch.setattr(kb, "_probe_tcp", lambda: calls.append(1) or True)
+    text = kb.prometheus_text()
+    assert "medassist_agent_milvus_reachable 1" in text
+    assert "medassist_agent_milvus_probes_total 1" in text
+    assert "medassist_agent_milvus_probe_failures_total 0" in text
+    kb.prometheus_text()
+    assert len(calls) == 1, "成功结果必须在 _PROBE_TTL_S 内复用"
+
+
+def test_metrics_probe_failure_not_cached(monkeypatch):
+    """失败不缓存：Milvus 恢复后必须立刻可见，不能被 5s 正向缓存继续报不可达。"""
+    monkeypatch.setattr(kb, "_probe_tcp", lambda: False)
+    kb.prometheus_text()
+    text = kb.prometheus_text()
+    assert "medassist_agent_milvus_reachable 0" in text
+    assert "medassist_agent_milvus_probes_total 2" in text
+    assert "medassist_agent_milvus_probe_failures_total 2" in text
+
+
+def test_metrics_timeout_and_rebuild_exported(monkeypatch):
+    """看门狗超时 + 重建 + 恢复成功：超时/重建各 +1，降级仍为 0（重建成功不算降级）。"""
+    monkeypatch.setattr(kb, "_probe_tcp", lambda: False)
+    hang, ok = _HangCol(1.2), _OkCol()
+    state = {"rebuilt": False}
+    monkeypatch.setattr(kb, "_collection", lambda: ok if state["rebuilt"] else hang)
+    monkeypatch.setattr(kb, "_has_sparse", lambda col: False)
+    monkeypatch.setattr(kb, "_reset_client", lambda: state.__setitem__("rebuilt", True))
+    assert kb.search_hybrid("高血压用药", top_k=3)
+    text = kb.prometheus_text()
+    assert "medassist_agent_milvus_searches_total 1" in text
+    assert "medassist_agent_milvus_retrieve_timeouts_total 1" in text
+    assert "medassist_agent_milvus_timeout_rebuilds_total 1" in text
+    assert "medassist_agent_milvus_degraded_searches_total 0" in text
+
+
+def test_metrics_degraded_search_exported(monkeypatch):
+    """混合检索异常 → 回落 dense 成功：degraded/searches 各 +1（告警分子的真实来源）。"""
+    monkeypatch.setattr(kb, "_probe_tcp", lambda: False)
+
+    def boom(q, fetch):
+        raise RuntimeError("hybrid boom")
+
+    monkeypatch.setattr(kb, "_hybrid_candidates", boom)
+    monkeypatch.setattr(kb, "search_dense",
+                        lambda q, top_k=3: [{"content": "高血压防治要点", "source": "指南2024", "score": 0.9}])
+    assert kb.search_hybrid("高血压用药", top_k=1)
+    text = kb.prometheus_text()
+    assert "medassist_agent_milvus_searches_total 1" in text
+    assert "medassist_agent_milvus_degraded_searches_total 1" in text
+    assert "medassist_agent_milvus_retrieve_timeouts_total 0" in text
 
 
 def test_timeout_value_from_settings(monkeypatch):
