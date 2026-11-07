@@ -5,12 +5,22 @@
 
 ```
 deploy/
-├── helm/medassist-platform/     # 平台 Helm Chart（业务服务 + 迁移 Hook + APM 注入）
+├── helm/medassist-platform/     # 平台 Helm Chart（业务服务 + 迁移 Hook + APM 注入 + ServiceMonitor/PrometheusRule）
 ├── argocd/                      # AppProject / app-of-apps / 三环境 Application
 ├── nacos/                       # Nacos 2.5.1 官方 MySQL schema + 生产化运行手册
-├── observability/               # SkyWalking OAP/UI 自建底座（compose）
+├── prometheus/                  # Agent 运营告警规则（Prometheus 原生 rule 文件，面向本地 compose）
+├── observability/               # SkyWalking OAP/UI 自建底座 + 本地 Prometheus/Loki（compose）
+│   └── prometheus/              # 本地抓取配置（scrape ai-core /metrics）与令牌挂载约定
 └── docker/entrypoint.sh         # AI 中台容器入口（按需挂载 SkyWalking Python agent）
 ```
+
+> 告警规则有两种形态，**不要混用**：
+> - `deploy/prometheus/*.rules.yml`：Prometheus **原生 rule 文件**（非 `PrometheusRule` CRD），
+>   给本地 compose 的 Prometheus 用（`rule_files` 直接加载）；
+> - `deploy/helm/.../templates/prometheusrule-agent-ops.yaml`：K8s `PrometheusRule` CRD，
+>   需开 `serviceMonitor.rules.enabled`，由 Prometheus Operator 消费。
+> 本地 compose 只覆盖 Agent 侧规则；`deploy/observability/alerts/medassist-alerts.yaml`
+> 中的 Java 侧 `PrometheusRule` 在本地形态无消费者（本地也不抓 `/actuator/prometheus`）。
 
 ---
 

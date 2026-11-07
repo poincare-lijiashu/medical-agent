@@ -93,6 +93,13 @@ def test_dry_run_checks_repo():
     assert mod.main(["--dry-run"]) == 0
 
 
+def test_repo_check_covers_local_scrape_artifacts():
+    """评审 06-S8：本地抓取形态的必需文件进入自检清单。"""
+    results = dict((n, (ok, d)) for n, ok, d in mod.check_repo())
+    assert results["repo.prometheus_scrape_config"][0] is True
+    assert results["repo.metrics_token_example"][0] is True
+
+
 def test_missing_password_returns_2():
     assert mod.main([]) == 2
 

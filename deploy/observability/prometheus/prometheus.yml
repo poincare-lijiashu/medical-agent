@@ -36,6 +36,10 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/metrics-token
     static_configs:
+      # 注意（评审 06-S5）：host.docker.internal 在 Docker Desktop 上解析到宿主机，
+      # 但在 **Linux Docker Engine** 下 host-gateway 解析到 docker0 网关，访问不到只监听
+      # 127.0.0.1:8001 的 AI 中台。Linux 部署请让 AI 中台监听 SERVER_HOST=0.0.0.0，
+      # 或改用 network_mode: host / 同 compose 服务名直连。
       - targets: ["host.docker.internal:8001"]
         labels:
           component: ai-core

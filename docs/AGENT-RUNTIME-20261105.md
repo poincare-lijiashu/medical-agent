@@ -832,3 +832,24 @@ HTTP 层（`HistoryTurn`）只校验单条 2000 字与条数 6，合计 6000 字
 `consult.stream` 的 `finally`（`aclose()` 触发 `GeneratorExit`，已覆盖，但未测真实网络断连）。
 
 **验证**：全量 pytest **1052 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 19. 2026-11-06 评审整改（第 15 批：部署形态与文档一致性 Should）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 06-S2 | `Chart.yaml` 版本 `0.1.1` → **0.2.0**（G102–G105 改了 ServiceMonitor/ai-core Deployment/values，却未递增）；Chart README 增「版本记录」表，写清 0.2.0 的变更点 | `Chart.yaml`、Chart `README.md` |
+| 06-S3 | Chart README 参数表补齐 `serviceMonitor.aiCore.enabled/tokenSecretName/tokenSecretKey` 与 `serviceMonitor.rules.enabled`，与 `deploy/README.md` 同口径，并注明"启用前须先建同 namespace Secret" | Chart `README.md` |
+| 06-S4 | `deploy/README.md` 目录树补 `deploy/prometheus/` 与 `deploy/observability/prometheus/`；新增"两种告警规则形态不要混用"的说明（原生 rule 文件 vs `PrometheusRule` CRD） | `deploy/README.md` |
+| 06-S5 | `prometheus.yml` 在抓取目标处写明 **Linux Docker Engine** 下 `host-gateway` 访问不到只监听 `127.0.0.1` 的中台（需 `SERVER_HOST=0.0.0.0` 或 host 网络） | `deploy/observability/prometheus/prometheus.yml` |
+| 06-S6 | 明确本地 compose 只覆盖 Agent 侧规则；Java 侧 `PrometheusRule` 在本地形态无消费者（本地不抓 `/actuator/prometheus`） | `deploy/README.md` |
+| 06-S8 | `go_live_check.check_repo` 增加 `deploy/observability/prometheus/prometheus.yml` 与 `metrics-token.example` 存在性校验 | `scripts/agent_go_live_check.py` |
+| 附带 | `deploy/offline/README.md` 的离线包示例版本同步为 `0.2.0`（避免读者按旧版本号打包后对不上） | `deploy/offline/README.md` |
+
+**新增测试**：`test_go_live_check.py::test_repo_check_covers_local_scrape_artifacts`。
+
+**仍存边界**：Chart 版本递增只解决"变更可追溯"，未接入 CI 自动校验（改模板忘记改版本仍可能发生）；
+`helm lint/template` 未在本机执行（无 helm 二进制），模板正确性依赖既有渲染测试与人工。
+
+**验证**：全量 pytest **1053 passed / 11 skipped**；`agent_go_live_check.py --dry-run` PASS（新增两项 repo 检查为 PASS）。

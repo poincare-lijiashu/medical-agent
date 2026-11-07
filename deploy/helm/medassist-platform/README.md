@@ -38,8 +38,19 @@ helm template medassist . -n medassist-prod -f values-prod.yaml
 | `migration.enabled` | true | PreSync/预升级 Hook 迁移 Job |
 | `gateway/auth/empi/aiCore.*` | 见 values | 镜像、副本、资源、探针、HPA、PDB |
 | `networkPolicy.enabled` | false | 入站隔离（生产 true） |
-| `serviceMonitor.enabled` | false | Prometheus Operator 抓取 |
+| `serviceMonitor.enabled` | false | Prometheus Operator 抓取 Java `/actuator/prometheus` |
+| `serviceMonitor.aiCore.enabled` | false | 抓取 AI 中台 `/metrics`（Bearer 静态令牌）；**启用前须先创建同 namespace Secret** |
+| `serviceMonitor.aiCore.tokenSecretName` | `""` | 令牌 Secret 名（为空则不渲染 ai-core ServiceMonitor） |
+| `serviceMonitor.aiCore.tokenSecretKey` | `metrics-token` | Secret 内键名；值须为**裸令牌**（不带 `Bearer `，无 BOM） |
+| `serviceMonitor.rules.enabled` | false | Agent 运营告警 `PrometheusRule`（仅 K8s Operator 形态；本地 compose 读 `deploy/prometheus/*.rules.yml`） |
 | `ingress.*` | disabled | 入口域名/TLS/SSE 注解 |
+
+## 版本记录
+
+| 版本 | 变更点 |
+|---|---|
+| 0.2.0 | 新增 Agent 运营告警 `PrometheusRule` 模板、`serviceMonitor.aiCore`（含 `tokenSecretName`/`tokenSecretKey`）与三个告警开关，默认全部关闭；`Chart.yaml` 版本随模板变更递增（评审 06-S2） |
+| 0.1.1 | 2026-10-31 基线：Java 服务矩阵 + ai-core + 迁移 Hook + ServiceMonitor（仅 Java 侧） |
 
 ## 关键机制
 

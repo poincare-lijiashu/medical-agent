@@ -135,6 +135,12 @@ def check_repo() -> list[tuple[str, bool, str]]:
             body = f.read()
         out.append(("repo.prometheus_rules_alerts", "alert:" in body,
                     f"alerts={body.count('alert:')} metrics={len(set(_ALERT_METRIC.findall(body)))}"))
+    # 评审 06-S8：本地抓取形态的两个必需文件（缺任一个，告警规则都拿不到数据）
+    scrape = os.path.join(REPO_ROOT, "deploy", "observability", "prometheus", "prometheus.yml")
+    out.append(("repo.prometheus_scrape_config", os.path.isfile(scrape), scrape))
+    token_example = os.path.join(REPO_ROOT, "deploy", "observability", "prometheus",
+                                 "metrics-token.example")
+    out.append(("repo.metrics_token_example", os.path.isfile(token_example), token_example))
     try:
         head = subprocess.check_output(["git", "-C", REPO_ROOT, "rev-parse", "--short", "HEAD"],
                                        text=True).strip()

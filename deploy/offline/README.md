@@ -54,7 +54,7 @@ docker build \
 ### 1.2 打包 Chart
 ```bash
 helm package deploy/helm/medassist-platform -d offline-bundle/
-# 产物：medassist-platform-0.1.1.tgz
+# 产物：medassist-platform-0.2.0.tgz（版本号随 Chart.yaml，勿手写死）
 ```
 
 > ai-core 镜像较大（含 torch/transformers，数 GB 级），构建机预留 ≥15GB 磁盘与 ≥8GB 内存；
@@ -142,7 +142,7 @@ kubectl -n medassist-prod create secret generic medassist-internal-hmac \
 ### 2.3 安装
 
 ```bash
-helm upgrade --install medassist ./medassist-platform-0.1.1.tgz \
+helm upgrade --install medassist ./medassist-platform-0.2.0.tgz \
   -n medassist-prod --create-namespace \
   -f values-prod.yaml \
   --set gateway.image.tag=1.0.0 --set auth.image.tag=1.0.0 \
