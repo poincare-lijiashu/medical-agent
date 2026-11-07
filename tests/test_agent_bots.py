@@ -157,6 +157,27 @@ def test_disabled_bot_can_be_reenabled_via_review():
     assert pub["status"] == "PUBLISHED"
 
 
+def test_publish_rejects_bot_when_default_provider_is_noncompliant(monkeypatch):
+    """评审 01-S17：绑 default provider 的 Bot 在发布时校验当前默认模型合规。"""
+    from backend.agents import model_policy
+    from backend.core import llm_config
+
+    item = bots.create_bot(bot_payload("default-bot"), "admin01")
+    sub = bots.submit_bot(item["code"], item["rowVersion"], "admin01")
+    # 当前默认模型是境外（不合规）→ 审核通过必须失败
+    monkeypatch.setattr(llm_config, "active_provider", lambda kind: {
+        "id": "openai", "base_url": "https://api.openai.com/v1",
+        "model_id": "gpt-4o", "api_key": "x"})
+    assert model_policy.is_allowed(llm_config.active_provider("chat")) is False
+    with pytest.raises(bots.BotInvalid, match="默认模型"):
+        bots.review_bot(sub["code"], True, None, sub["rowVersion"], "qc01")
+
+    # 未配置 provider 时不拦（运行时 fail-closed），保证离线环境可发布
+    monkeypatch.setattr(llm_config, "active_provider", lambda kind: None)
+    published = bots.review_bot(sub["code"], True, None, sub["rowVersion"], "qc01")
+    assert published["status"] == "PUBLISHED"
+
+
 def test_disabled_team_can_be_reenabled():
     _published_bot("team-a")
     _published_bot("team-b")

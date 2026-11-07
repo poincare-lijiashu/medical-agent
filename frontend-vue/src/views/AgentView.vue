@@ -410,7 +410,11 @@
         </template>
         <template v-if="usage">
           <div class="src">{{ usage.note }}</div>
+          <!-- 评审 01-S7：区分"无数据"与"0%"（进程重启后计数归零，0% 不等于没人用） -->
+          <div v-if="usage.dataAvailable === false" class="src" data-testid="usage-empty"
+               style="margin-top: 6px; color: #b45309">{{ usage.dataNote }}</div>
           <div class="policy-row" style="padding-top: 6px">
+            <el-tag v-if="usage.dataAvailable === false" size="small" type="warning">暂无数据</el-tag>
             <el-tag size="small">问答 {{ usage.requests.total }} · 成功 {{ pct(usage.requests.successRate) }}</el-tag>
             <el-tag size="small" :type="usage.requests.errorRate > 0.2 ? 'danger' : 'info'">
               错误 {{ pct(usage.requests.errorRate) }}
@@ -1472,7 +1476,9 @@ async function distill() {
   try {
     const r = await http.post('/agent/skill-proposals/distill', {})
     await loadAll()
-    ElMessage.success(`提炼完成，当前候选 ${(r.data.proposals || []).length} 个`)
+    // 评审 01-S9：接口返回 created=本次新建，不能再把"历史全部候选"当成本次成果
+    const created = r.data.created ?? (r.data.proposals || []).length
+    ElMessage.success(created ? `提炼完成，本次新增候选 ${created} 个` : '提炼完成，本次没有新候选')
   } finally {
     libraryBusy.value = false
   }

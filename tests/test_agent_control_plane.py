@@ -380,6 +380,20 @@ def test_flags_admin_only_and_toggle(monkeypatch, tmp_path):
                  json={"key": "nope", "value": True}).status_code == 422
 
 
+def test_a2a_rejects_malformed_params_without_500(monkeypatch, tmp_path):
+    """评审 01-S18：params 不是对象/parts 不是数组时返回 JSON-RPC 错误，不能 500。"""
+    agent_flags.set_flag("agent_a2a", True)
+    c = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+    for params in ("not-an-object", {"message": "x"},
+                   {"message": {"parts": "x"}}):
+        r = c.post("/api/v1/agent/a2a", headers=h, json={
+            "jsonrpc": "2.0", "id": "bad-1", "method": "message/send",
+            "params": params})
+        assert r.status_code == 200, r.text
+        assert r.json()["error"]["code"] == -32602
+
+
 def test_a2a_message_send(monkeypatch, tmp_path):
     agent_flags.set_flag("agent_a2a", True)  # 评审 M-12：默认关，显式开启
     c = _client(monkeypatch, tmp_path)

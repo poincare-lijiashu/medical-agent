@@ -303,6 +303,15 @@ def review_bot(code: str, approve: bool, note: str | None, row_version: int,
         now = _now()
         if approve:
             _validate(item)
+            # 评审 01-S17：绑 default provider 的 Bot 在创建期跳过了合规检查；
+            # 发布是"承诺可运行"的时刻，这里对当前默认 provider 再校验一次。
+            # 未配置任何 provider 时不拦（运行时 fail-closed 会给 503），避免离线环境无法发布。
+            if item.get("modelProvider") == "default":
+                current_provider = llm_config.active_provider("chat")
+                if current_provider and not model_policy.is_allowed(current_provider):
+                    raise BotInvalid(
+                        "当前默认模型不允许用于临床辅助（仅本地/国产），无法发布该 Bot；"
+                        "请先改用合规 provider 或为 Bot 绑定具体 provider")
             item.update({"status": "PUBLISHED",
                          "version": int(item.get("version", 0)) + 1})
         else:

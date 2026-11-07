@@ -1009,3 +1009,32 @@ toast vs 内联），用户与管理员看到的是两套系统；而"失败后�
 `onDeactivated` 中止依赖 KeepAlive 生命周期，若将来把 AskView 移出 include 列表需同步调整。
 
 **验证**：全量 pytest **1089 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 26. 2026-11-06 评审整改（第 22 批：无数据语义、计数失真与发布前合规）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 01-S7 | `skill_usage.report()` 增加 `dataAvailable` / `dataNote`：进程内无任何问答计量时显式标注"尚无数据（重启归零）"，前端展示警示标签与说明，避免把 0% 误读为"没人用" | `skill_usage.py`、`AgentView.vue` |
+| 01-S9（同源） | `skill_library.distill()` 改为只返回**本次新建**的候选；接口返回 `{created, proposals}`，审计按 created 计数；前端提示改为"本次新增 N 个 / 没有新候选"（此前把历史全部候选当成本次成果） | `skill_library.py`、`agent_router.py`、`AgentView.vue` |
+| 01-S10 | 删除 `skill_trends._save` 与 `skill_advice._save` 两个已无调用方的整表覆盖入口（改用行级 upsert 后的遗留），杜绝误用 | `skill_trends.py`、`skill_advice.py` |
+| 01-S12 | 提炼去重：同 (能力域, 问题模式) 已有 PROPOSED/ADOPTED 不再重复；已拒绝允许重试，但若同 code 技能卡已存在则不再生成。`adopt` 把编码冲突单独识别为"同模式已有技能卡"，不再笼统写成"草稿创建失败" | `skill_library.py` |
+| 01-S13 | `_replay` 循环外一次性加载经验并建 id 索引（此前每条经验触发一次全表读） | `skill_library.py` |
+| 01-S17 | Bot 发布时对 `default` provider 再校验一次合规（创建期跳过）；未配置 provider 时不拦（运行时 fail-closed），离线环境仍可发布 | `bots.py` |
+| 01-S18 | `/a2a` 的 `params/message/parts` 任一层类型不符时返回 JSON-RPC `-32602`，不再 AttributeError → 500 | `agent_router.py` |
+
+**为什么这样改**：这一批集中在"数字与状态要说真话"——无数据不能显示 0%，本次新建不能
+显示历史总量，发布要通过就必须真能跑；同时把两处会误导排查的错误（编码冲突说成草稿失败、
+A2A 畸形入参 500）改成可定位的显式错误。
+
+**新增测试**：`skill_usage` 无数据/有数据两态；`skill_library` 同 code 技能卡时不重复提炼、
+重复提炼返回空；`bots` 默认 provider 不合规时拒绝发布（未配置时放行）；`/a2a` 三类畸形
+params 返回 -32602。
+
+**仍存边界**：`distill` 的接口形态变化（`proposals` 仅含新建）属于对外契约调整，
+若院内有脚本依赖"返回全量"需改用 `GET /agent/skill-proposals`（已在 docstring 注明）；
+Bot 发布校验只看**当时**的默认 provider，发布后管理员切换默认模型仍可能让旧 Bot 运行时 503；
+`dataAvailable` 只反映进程内窗口，跨重启的真实使用率仍应看 Prometheus 持久化指标。
+
+**验证**：全量 pytest **1093 passed / 11 skipped**；`npm run build` 成功。

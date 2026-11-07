@@ -62,10 +62,6 @@ def _load() -> list:
         return []
 
 
-def _save(items: list) -> None:
-    pg_store.save_json_list("agent_skill_advices", ADVICE_FILE, items)
-
-
 def _find(items: list, advice_id: str) -> dict | None:
     for item in items:
         if item.get("id") == advice_id:

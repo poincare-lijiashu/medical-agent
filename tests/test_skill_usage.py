@@ -35,6 +35,16 @@ def test_empty_report():
     assert r["requests"]["successRate"] == 0.0
     assert r["skills"]["published"] == 0
     assert r["skills"]["usageRatio"] == 0.0
+    # 评审 01-S7：无数据必须显式标注，不能把 0% 当成"没人用"
+    assert r["dataAvailable"] is False
+    assert r["dataNote"] and "尚无" in r["dataNote"]
+
+
+def test_report_marks_data_available_after_requests():
+    consult_metrics.record("drug", "sync", "ok", 10.0)
+    r = skill_usage.report()
+    assert r["dataAvailable"] is True
+    assert r["dataNote"] is None
     assert r["skills"]["items"] == []
     assert "重启归零" in r["note"]
 

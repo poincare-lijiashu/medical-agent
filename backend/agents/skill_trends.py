@@ -56,10 +56,6 @@ def _load() -> list:
         return []
 
 
-def _save(items: list) -> None:
-    pg_store.save_json_list("agent_skill_metrics", SNAPSHOT_FILE, items)
-
-
 def _summary(metrics: dict) -> dict:
     """快照关键计数的摘要（覆盖前留痕用，只含聚合数字，不含任何患者或业务明细）。"""
     return {

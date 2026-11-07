@@ -145,5 +145,10 @@ def report() -> dict:
             },
             "items": items,
         },
+        # 评审 01-S7：区分"无数据"与"0%"——进程重启后计量归零，0% 会被误读成
+        # "完全没人用"。dataAvailable=false 时前端应显示"暂无数据"而不是 0。
+        "dataAvailable": total > 0,
+        "dataNote": None if total > 0 else
+        "当前进程内尚无问答计量（服务重启后归零），以下比率不代表业务真实使用情况",
         "note": _WINDOW_NOTE,
     }

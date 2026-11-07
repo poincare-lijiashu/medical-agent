@@ -269,13 +269,19 @@ def distill(actor: str) -> list[dict]:
 
     with _lock:
         proposals = _load_proposals()
+        # 评审 01-S12：同一 (能力域, 问题模式) 已有 PROPOSED/ADOPTED 候选时不再重复提炼；
+        # 已拒绝的允许重试（例如路由规则修好后回放可过），但若同 code 的技能卡已存在
+        # （典型：上次因编码冲突被拒），仍不再生成——否则采纳只会再次撞编码。
         existing = {(p.get("agentId"), _norm(p.get("pattern")))
                     for p in proposals if p.get("status") in ("PROPOSED", "ADOPTED")}
+        existing_codes = {s.get("code") for s in skills.list_skills("admin")}
         created = []
         for (agent_id, pattern_key), items in groups.items():
             if len(items) < 2 or (agent_id, pattern_key) in existing:
                 continue
             data = _proposal_payload(agent_id, items[0]["pattern"], items)
+            if data["code"] in existing_codes:
+                continue
             proposal = {
                 "id": uuid.uuid4().hex,
                 **data,
@@ -292,9 +298,10 @@ def distill(actor: str) -> list[dict]:
             created.append(proposal)
         if created:
             _save_proposals(proposals)
-    items = _load_proposals()
-    items.sort(key=lambda i: i.get("createdAt") or "", reverse=True)
-    return items
+    # 评审 01-S9 同源问题：只返回**本次新建**的候选，避免"接口/审计计数"把
+    # 历史全部候选都算成本次成果（调用方要看全量请用 list_proposals）
+    created.sort(key=lambda i: i.get("createdAt") or "", reverse=True)
+    return created
 
 
 def _find_proposal(items: list, proposal_id: str) -> dict | None:
@@ -307,8 +314,10 @@ def _find_proposal(items: list, proposal_id: str) -> dict | None:
 def _replay(proposal: dict) -> dict:
     """回放准入：每条经验模式都必须路由到该能力域（或作为候选出现）。"""
     cases = []
+    # 评审 01-S13：循环外只加载一次经验并建 id 索引（此前每条经验都全表读一次）
+    experiences = {e.get("id"): e for e in _load_experiences()}
     for exp_id in proposal.get("experienceIds") or []:
-        exp = next((e for e in _load_experiences() if e.get("id") == exp_id), None)
+        exp = experiences.get(exp_id)
         if not exp:
             continue
         routed = router_agent.route(exp.get("pattern") or "")
@@ -362,6 +371,13 @@ def adopt(proposal_id: str, actor: str) -> dict:
                 "guardrails": {"hitl": True, "requireEvidence": True,
                                "maxInputChars": 2000},
             }, actor)
+        except skills.SkillConflict as e:
+            # 评审 01-S12：编码冲突说明"同一问题模式已有技能卡"，不是回放问题
+            proposal.update({"status": "REJECTED", "decidedBy": actor,
+                             "decidedAt": _now(),
+                             "decisionNote": f"技能编码已存在（同一问题模式已有技能卡）：{e}"})
+            _save_proposals(proposals)
+            return {"proposal": proposal, "skill": None}
         except skills.SkillError as e:
             proposal.update({"status": "REJECTED", "decidedBy": actor,
                              "decidedAt": _now(),

@@ -859,10 +859,15 @@ def list_skill_experiences(agentId: str | None = None,
 
 @router.post("/skill-proposals/distill")
 async def distill_skill_proposals(user: dict = Depends(require_role("admin", "qc"))):
-    """把同能力域+同模式的 ≥2 条经验提炼为候选技能（不发布、不调用模型）。"""
+    """把同能力域+同模式的 ≥2 条经验提炼为候选技能（不发布、不调用模型）。
+
+    返回 ``{created, proposals}``：``proposals`` 只含**本次新建**的候选；
+    要看全部候选请用 ``GET /agent/skill-proposals``。
+    """
     proposals = skill_library.distill(user.get("username", "qc"))
-    await _audit_agent(user, "skill_distill", {"proposals": len(proposals)})
-    return {"proposals": proposals}
+    await _audit_agent(user, "skill_distill", {
+        "created": len(proposals), "proposals": len(proposals)})
+    return {"created": len(proposals), "proposals": proposals}
 
 
 @router.get("/skill-proposals")
@@ -1100,9 +1105,17 @@ def _jsonrpc_error(msg_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
-def _message_text(params: dict) -> str:
-    message = (params or {}).get("message") or {}
-    parts = message.get("parts") or []
+def _message_text(params) -> str:
+    # 评审 01-S18：params/message/parts 任一层不是预期类型时返回空串，
+    # 由调用方回 JSON-RPC -32602（此前会 AttributeError → 500）
+    if not isinstance(params, dict):
+        return ""
+    message = params.get("message")
+    if not isinstance(message, dict):
+        return ""
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return ""
     texts = [p.get("text", "") for p in parts
              if isinstance(p, dict) and p.get("kind", "text") == "text"]
     return "\n".join(t for t in texts if t).strip()

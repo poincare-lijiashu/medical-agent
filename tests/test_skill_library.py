@@ -61,8 +61,8 @@ def test_distill_requires_two_experiences():
     assert p["status"] == "PROPOSED"
     assert p["evidenceRefs"] and p["toolAllowlist"] == ["kb_search"]
 
-    # 重复提炼不产生重复候选
-    assert len(skill_library.distill("qc01")) == 1
+    # 重复提炼不产生重复候选：distill 只返回本次新建（此处应为空）
+    assert skill_library.distill("qc01") == []
 
 
 def test_adopt_passes_replay_and_creates_draft():
@@ -126,6 +126,27 @@ def test_replay_rejects_when_experiences_are_gone():
     assert result["proposal"]["replay"]["passed"] is False
     assert result["proposal"]["status"] == "REJECTED"
     assert result["skill"] is None
+
+
+def test_distill_skips_pattern_whose_skill_code_already_exists():
+    """评审 01-S12：同模式技能卡已存在时不再重复提炼（否则采纳必撞编码）。"""
+    _create()
+    _create()
+    proposal = skill_library.distill("qc01")[0]
+    skills.create_skill({
+        "code": proposal["code"], "name": "同模式历史技能",
+        "description": "用于验证同一问题模式不会重复生成候选的技能卡说明文本。",
+        "agentId": proposal["agentId"],
+        "promptTemplate": "请基于指南证据回答，并逐条标注来源；证据不足时明确说明。",
+        "toolAllowlist": ["kb_search"], "evidenceRefs": ["指南 2026"],
+        "guardrails": {"hitl": True, "requireEvidence": True, "maxInputChars": 1000},
+    }, "admin01")
+    skill_library.reject(proposal["id"], "证据不足", "qc01")
+
+    codes = {s.get("code") for s in skills.list_skills("admin")}
+    assert proposal["code"] in codes, (proposal["code"], codes)
+    # distill 只返回本次新建；同 code 技能卡已存在 → 不新建
+    assert skill_library.distill("qc01") == []
 
 
 def test_reject_requires_reason_and_is_terminal():
