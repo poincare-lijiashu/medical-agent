@@ -101,7 +101,7 @@ AGENTS: tuple[AgentSpec, ...] = (
             name="相互作用与禁忌核对",
             description="按院内规则库识别相互作用/禁忌/重复用药，返回严重度与处理建议。",
             tags=("drug", "interaction", "contraindication"),
-            examples=("华法林和阿司匹林能一起用吗", "这个患者用莫西沙星要注意什么"),
+            examples=("华法林和阿司匹林能一起用吗", "莫西沙星和茶碱合用要注意什么"),
         ),),
     ),
     AgentSpec(
@@ -117,7 +117,7 @@ AGENTS: tuple[AgentSpec, ...] = (
             name="院内知识库检索",
             description="返回指南/共识原文片段与来源，不下诊断结论。",
             tags=("kb", "retrieval", "rag"),
-            examples=("院内成人退热流程", "围手术期抗凝管理共识"),
+            examples=("知识库有没有院内成人退热流程", "知识库里的围手术期抗凝管理共识"),
         ),),
     ),
     AgentSpec(

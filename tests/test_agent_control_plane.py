@@ -112,6 +112,22 @@ def test_catalog_filters_by_role():
 
 # ---------------------------------------------------------------- 路由
 
+def test_all_catalog_examples_route_to_their_agent():
+    """评审 06-M12 / 01-S2：目录广告的每个示例都必须真能路由到该能力域。
+
+    这是"广告与实际能力不漂移"的强不变量：新增技能/示例时若写了不可达的文案，
+    这里会直接失败，而不是等 E2E 或用户发现"问了却被分派到别的助手"。
+    """
+    for agent in catalog.AGENTS:
+        if not agent.auto_routable:
+            continue
+        for skill in agent.skills:
+            for example in skill.examples:
+                routed = route_agent.route(example)["agent"]
+                assert routed == agent.id, (
+                    f"{agent.id} 的示例「{example}」实际路由到 {routed}")
+
+
 def test_catalog_examples_route_to_their_agent_for_drug():
     """评审 06-M12（E2E 发现）：目录广告的示例必须真能路由到该能力域。
 
