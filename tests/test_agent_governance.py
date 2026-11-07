@@ -41,6 +41,25 @@ def test_classify_local_domestic_foreign_unknown():
     assert not model_policy.is_allowed(UNKNOWN)
 
 
+@pytest.mark.parametrize("url,expected", [
+    ("http://10.0.0.5:8000/v1", "local"),        # 内网自建推理节点
+    ("http://172.16.3.9:8000/v1", "local"),
+    ("http://192.168.1.10:8000/v1", "local"),
+    ("http://[::1]:8000/v1", "local"),           # IPv6 回环
+    ("", "unknown"),                              # 空 base_url
+    ("not a url", "unknown"),                     # 畸形 URL
+])
+def test_classify_private_hosts_and_malformed_url(url, expected):
+    """评审 05-S9：内网段/IPv6 必须判 local；空与畸形 URL 必须 fail-closed。
+
+    参数名不能叫 ``base_url``——会与 pytest-base-url 插件的同名 fixture 冲突。
+    """
+    cls = model_policy.classify(provider("x", url))
+    assert cls == expected
+    if expected == "unknown":
+        assert model_policy.is_allowed(provider("x", url)) is False
+
+
 def test_policy_snapshot_never_exposes_api_key(monkeypatch):
     monkeypatch.setattr(model_policy, "chat_providers",
                         lambda: [LOCAL, DOMESTIC, FOREIGN, UNKNOWN])
@@ -168,6 +187,18 @@ def test_second_opinion_invalid_input_is_client_error():
         asyncio.run(second_opinion.run("高血压如何分级", ["local-vllm"]))
     with pytest.raises(second_opinion.SecondOpinionInvalid):
         asyncio.run(second_opinion.run("高血压如何分级", ["local-vllm", "deepseek", "qwen"]))
+
+
+def test_second_opinion_both_models_failing_is_unavailable(monkeypatch):
+    """评审 05-S8：两个模型全失败必须整体不可用（fail-closed），不返回半份意见。"""
+    monkeypatch.setattr(model_policy, "allowed_chat_providers",
+                        lambda: [LOCAL, DOMESTIC])
+
+    async def boom(provider_, messages):
+        raise RuntimeError("upstream down")
+
+    with pytest.raises(second_opinion.SecondOpinionUnavailable, match="均未返回"):
+        asyncio.run(second_opinion.run("高血压用药", runner=boom))
 
 
 def test_second_opinion_runs_two_models_and_isolates_failure(monkeypatch):

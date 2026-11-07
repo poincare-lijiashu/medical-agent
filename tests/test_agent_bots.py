@@ -238,16 +238,28 @@ def test_memory_candidate_not_in_context_until_confirmed():
 
 
 def test_memory_rejects_phi_and_duplicates():
+    """评审 05-S5：手机号/身份证/邮箱**三种**直接标识都必须被拒（此前只测了手机号）。"""
     _published_bot()
-    with pytest.raises(bot_memory.MemoryInvalid):
-        bot_memory.create_memory({"botCode": "deepseek-bot", "key": "phone",
-                                  "value": "联系 13800138000", "source": "手工"},
-                                 "doctor01")
+    for value in ("联系 13800138000", "身份证 110101199003071234",
+                  "邮箱 zhang@example.com"):
+        with pytest.raises(bot_memory.MemoryInvalid):
+            bot_memory.create_memory({"botCode": "deepseek-bot", "key": "phi",
+                                      "value": value, "source": "手工"},
+                                     "doctor01")
     bot_memory.create_memory({"botCode": "deepseek-bot", "key": "k1",
                               "value": "偏好静脉通路", "source": "科室"}, "doctor01")
     with pytest.raises(bot_memory.MemoryConflict):
         bot_memory.create_memory({"botCode": "deepseek-bot", "key": "k1",
                                   "value": "另一条", "source": "科室"}, "doctor01")
+
+
+def test_memory_expiry_boundaries():
+    """评审 05-S6：到期日当天仍有效；昨天过期；非法日期保守视为不过期。"""
+    today = date(2026, 11, 7)
+    assert bot_memory.is_expired({"expiresAt": "2026-11-07"}, today) is False
+    assert bot_memory.is_expired({"expiresAt": "2026-11-06"}, today) is True
+    assert bot_memory.is_expired({"expiresAt": "not-a-date"}, today) is False
+    assert bot_memory.is_expired({}, today) is False
 
 
 def test_memory_expiry_and_delete():
@@ -352,21 +364,25 @@ def test_run_bot_with_injected_runner_and_memory_isolated():
 
 
 def test_collaborate_isolates_failures(monkeypatch):
-    _published_bot("bot-a")
-    _published_bot("bot-b")
+    """评审 05-S3：两个 Bot 必须是**不同身份**且各自独立作答，不能共用一份意见。"""
+    _published_bot("bot-a", name="甲助手")
+    _published_bot("bot-b", name="乙助手")
     team = bot_teams.create_team({"code": "team-x", "name": "会诊小组",
                                   "description": "", "botCodes": ["bot-a", "bot-b"]}, "admin01")
 
     async def fake(provider, messages):
         name = messages[0].content.split("「")[1].split("」")[0]
-        if name == "DeepSeek 临床助手" and "bot-a" in messages[0].content:
-            pass
         return f"{name} 的意见"
 
     result = asyncio.run(bot_runtime.collaborate(team, "问题", fake))
     assert len(result["opinions"]) == 2
     assert result["needsHumanReview"] is True
     assert result["failed"] == 0
+    names = [o["name"] for o in result["opinions"]]
+    answers = [o["answer"] for o in result["opinions"]]
+    assert names == ["甲助手", "乙助手"]
+    assert len(set(names)) == 2 and len(set(answers)) == 2
+    assert all(a.endswith("的意见") for a in answers)
 
 
 def test_collaborate_timeout_is_isolated(monkeypatch):

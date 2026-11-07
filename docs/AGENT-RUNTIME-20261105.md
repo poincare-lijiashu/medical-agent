@@ -902,3 +902,32 @@ admin→200、覆盖审计字段；`test_agent_governance.py::test_second_opinio
 模块专属上限（工具步数、记忆条数、提示预算装配规则）仍各自定义，属有意保留。
 
 **验证**：全量 pytest **1061 passed / 11 skipped**。
+
+---
+
+## 22. 2026-11-06 评审整改（第 18 批：测试有效性与隔离）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 05-S2 | 删除 `test_agent_skills.py` 的 `assert [...] == [...] or len(...) == 2`：右半段恒真，左半段失败也绿。改为集合断言（顺序不是接口契约） | `tests/test_agent_skills.py` |
+| 05-S3 | 协作测试改为两个**不同名字**的 Bot（甲助手/乙助手），删除 `if ... pass` 死分支，并断言两人名字与回答各不相同（防"同一份意见复制两份"） | `tests/test_agent_bots.py` |
+| 05-S5 | 长期记忆 PHI 拒绝参数化覆盖**手机号/身份证/邮箱**三种标识（此前只测手机号） | `tests/test_agent_bots.py` |
+| 05-S6 | 补 `is_expired` 边界：到期日==今天仍有效、昨天过期、非法日期保守不过期（注入固定 today，不依赖系统时钟） | `tests/test_agent_bots.py` |
+| 05-S8 | 补"两个模型全失败 → `SecondOpinionUnavailable`"用例（fail-closed 关键分支此前无测试） | `tests/test_agent_governance.py` |
+| 05-S9 | 补私网段（10/172.16/192.168）、IPv6 回环、空 URL、畸形 URL 的分类断言（内网自建节点判错会误拒上线） | `tests/test_agent_governance.py` |
+| 05-S10 | 补输入上限边界：`len == cap` 通过 / `cap+1` 拒绝；`_max_input` 对 `<200` 的声明值按 200 钳制 | `tests/test_consult.py` |
+| 05-S11 | `consult_metrics` 重置上提到 `conftest.py` autouse fixture，删除两个测试文件内的重复定义（消除跨文件顺序耦合） | `tests/conftest.py`、`test_consult_metrics.py`、`test_skill_usage.py` |
+| 05-S12 | 使用率端点测试改为断言 `body == skill_usage.report()`，不再只验字段存在（防端点层参数错位） | `tests/test_skill_usage.py` |
+
+**为什么这样改**：评审指出的是"测试看起来覆盖了、实际不可能失败"的问题。假绿比没测更危险——
+它让人误以为有防线。本批把 `or` 兜底、死分支、纯字段存在性断言全部换成语义断言，
+并把进程内计量的隔离责任从各测试文件上提到基础设施。
+
+**过程中的真实发现**：删除 `or` 兜底后立刻暴露原断言期望值有误（实际顺序是
+`["pub-one", "draft-one"]`）——证明该兜底确实长期掩盖了失败。
+
+**仍存边界**：本批未做 05-S1（AST 自动发现新增持久化出口）与 05-S7（回放"部分经验路由到
+别的域"混合场景）、05-S4（drug_check 业务内容断言）、SSE 断连计量的真实网络测试，
+留待后续批次；测试仍是"标记 + 单测"为主，前端无单元测试框架。
+
+**验证**：全量 pytest **1071 passed / 11 skipped**。

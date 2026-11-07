@@ -176,8 +176,10 @@ def test_list_visibility_and_filters():
     admin = skills.list_skills("admin")
     assert {i["code"] for i in admin} == {"draft-one", "pub-one"}
     assert [i["code"] for i in skills.list_skills("admin", status="DRAFT")] == ["draft-one"]
-    assert [i["code"] for i in skills.list_skills("admin", agent_id="literature")] == \
-        ["draft-one", "pub-one"] or len(skills.list_skills("admin", agent_id="literature")) == 2
+    # 评审 05-S2：删掉 `or len(...) == 2` 兜底——此前右半段恒真，左半段的断言失败也不会报错。
+    # 列表顺序不是接口契约（按 updatedAt 倒序，受写入时序影响），因此断言集合而非顺序。
+    assert {i["code"] for i in skills.list_skills("admin", agent_id="literature")} == \
+        {"draft-one", "pub-one"}
 
     with pytest.raises(skills.SkillNotFound):
         skills.get_skill("draft-one", "doctor")

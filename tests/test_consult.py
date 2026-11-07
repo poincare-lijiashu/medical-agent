@@ -142,6 +142,28 @@ def test_guardrail_max_input(monkeypatch):
                                 runner=runner))
 
 
+def test_guardrail_max_input_boundary(monkeypatch):
+    """评审 05-S10：恰好等于上限应通过，超 1 字应拒绝（off-by-one 边界）。"""
+    _provider(monkeypatch)
+    _publish(agent_id="literature", code="lit-a", name="循证检索", max_input=200)
+
+    async def runner(provider, messages):
+        return "回答"
+
+    out = asyncio.run(consult.run("药" * 200, "doctor", agent_id="literature",
+                                  runner=runner))
+    assert out["answer"] == "回答"
+    with pytest.raises(consult.ConsultInvalid, match="护栏上限"):
+        asyncio.run(consult.run("药" * 201, "doctor", agent_id="literature",
+                                runner=runner))
+
+
+def test_max_input_floor_is_clamped():
+    """评审 05-S10：声明值低于下限 200 时按 200 生效（不允许把上限调到失效）。"""
+    assert consult._max_input([{"guardrails": {"maxInputChars": 100}}]) == 200
+    assert consult._max_input([{"guardrails": {"maxInputChars": 800}}]) == 800
+
+
 def test_prompt_budget_enforced_at_publish(monkeypatch):
     """评审 M-35：超预算在**发布准入**就被拒绝，而不是发布后让该能力域全线 422。"""
     _provider(monkeypatch)

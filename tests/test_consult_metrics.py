@@ -28,11 +28,7 @@ LOCAL_PROVIDER = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _reset_metrics():
-    consult_metrics.reset()
-    yield
-    consult_metrics.reset()
+# 评审 05-S11：计量重置已上提到 tests/conftest.py 的 autouse fixture，此处不再重复定义
 
 
 def _provider(monkeypatch):

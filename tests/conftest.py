@@ -180,3 +180,15 @@ def _isolate_review_queue_and_audit(tmp_path, monkeypatch):
     from backend.core import medical_audit
     monkeypatch.setattr(medical_audit._log, "path", str(tmp_path / "audit.jsonl"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_consult_metrics():
+    """评审 05-S11：``consult_metrics`` 是模块级可变计数，此前由两个测试文件各自
+    定义 ``_reset_metrics`` 规避，其余文件只写不读——顺序一变，精确计数断言就会翻车。
+    这里上提到 conftest，让"进程内计量"与运行时开关一样由基础设施统一兜底。
+    """
+    from backend.agents import consult_metrics
+    consult_metrics.reset()
+    yield
+    consult_metrics.reset()

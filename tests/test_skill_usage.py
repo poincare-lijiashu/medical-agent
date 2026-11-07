@@ -10,11 +10,7 @@ from backend.core.medical_audit import AuditLog
 from backend.main import app
 
 
-@pytest.fixture(autouse=True)
-def _reset_metrics():
-    consult_metrics.reset()
-    yield
-    consult_metrics.reset()
+# 评审 05-S11：计量重置已上提到 tests/conftest.py 的 autouse fixture，此处不再重复定义
 
 
 def _publish(code: str, name: str, agent_id: str = "drug") -> str:
@@ -131,5 +127,7 @@ def test_usage_endpoint_role_guard(monkeypatch, tmp_path):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["window"] == "process"
-    assert "usageRatio" in body["skills"]
-    assert "successRate" in body["requests"]
+    # 评审 05-S12：端点返回值必须与 report() 一致（防止端点层参数错位后仍"绿"）
+    assert body == skill_usage.report()
+    assert body["requests"]["total"] == 0
+    assert body["skills"]["usageRatio"] == 0.0
