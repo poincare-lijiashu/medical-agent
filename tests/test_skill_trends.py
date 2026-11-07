@@ -67,6 +67,16 @@ def test_alerts_accepts_precomputed_metrics(monkeypatch):
     assert calls == []
 
 
+def test_prometheus_exports_process_usage_ratio():
+    """评审 02-S6：看板 usageRatio 同步导出到 Prometheus，便于交叉验证（进程内口径）。"""
+    from backend.agents import consult_metrics
+
+    _publish_skill("usage-skill", "使用率技能")
+    consult_metrics.record("literature", "sync", "ok", 5.0, ["usage-skill"])
+    text = skill_trends.prometheus_text()
+    assert "medassist_agent_skill_usage_ratio 1.0" in text
+
+
 def test_prometheus_exports_by_agent_dimensions():
     """评审 02-S11：经验与已发布技能按能力域导出，便于告警下钻到具体科室。"""
     _exp("按域模式甲")

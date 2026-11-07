@@ -449,7 +449,7 @@
               疑似拒答 {{ usage.quality.signals.refusal }}）
             </el-tag>
             <el-tag size="small" type="info">
-              覆盖 {{ pct(usage.skills.usageRatio) }}（默认全量生效，仅作参考）
+              使用率 {{ usage.skills.used }}/{{ usage.skills.published }}（{{ pct(usage.skills.usageRatio) }}，默认全量生效，仅作参考）
             </el-tag>
             <!-- 评审 M-27：覆盖率在有流量时接近 1，改用引用集中度判断"技能是否真被需要" -->
             <el-tag size="small" :type="(usage.skills.concentration || 0) >= 0.8 ? 'warning' : 'success'">

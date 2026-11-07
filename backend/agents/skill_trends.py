@@ -170,6 +170,19 @@ def _gap_days(prev_date, cur_date) -> int | None:
         return None
 
 
+def _usage_ratio() -> float:
+    """本进程内"被引用的已发布技能 / 已发布技能"（评审 02-S6，与看板 usageRatio 同口径）。"""
+    try:
+        from backend.agents import consult_metrics, skills
+        published = {s["code"] for s in skills.list_skills("admin", "PUBLISHED")}
+        if not published:
+            return 0.0
+        used = set((consult_metrics.snapshot().get("skills") or {})) & published
+        return round(len(used) / len(published), 4)
+    except Exception:  # noqa: BLE001 —— 指标导出失败不能拖垮抓取
+        return 0.0
+
+
 def alerts(metrics: dict | None = None) -> dict:
     """阈值告警：当前指标 + 相邻快照回放通过率下降。不自动处置。
 
@@ -296,6 +309,11 @@ def prometheus_text() -> str:
         "# HELP medassist_agent_skill_review_pass_ratio Published+disabled / decided.",
         "# TYPE medassist_agent_skill_review_pass_ratio gauge",
         f"medassist_agent_skill_review_pass_ratio {m['skillCards']['reviewPassRate']}",
+        # 评审 02-S6：把看板的 usageRatio 也导出，便于与 Prometheus 侧交叉验证。
+        # 注意它是**进程内**口径（重启归零），与持久化技能数相除，不是长期趋势。
+        "# HELP medassist_agent_skill_usage_ratio 本进程内被成功问答引用的已发布技能占比",
+        "# TYPE medassist_agent_skill_usage_ratio gauge",
+        f"medassist_agent_skill_usage_ratio {_usage_ratio()}",
         "# HELP medassist_agent_unused_published_skills Published skills without bots.",
         "# TYPE medassist_agent_unused_published_skills gauge",
         f"medassist_agent_unused_published_skills "

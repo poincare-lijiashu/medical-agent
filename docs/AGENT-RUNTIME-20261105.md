@@ -1373,6 +1373,31 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 
 **验证**：全量 pytest **1133 passed / 14 skipped**；规则 YAML 解析通过（15 条）。
 
+---
+
+## 40. 2026-11-06 评审整改（第 36 批：使用率口径交叉校验）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S6 | 看板的 `usageRatio` 同步导出为 `medassist_agent_skill_usage_ratio`（进程内口径，重启归零），可与 Prometheus 侧交叉验证；HELP 文案显式标注口径 | `skill_trends.py` |
+| 02-S6（展示） | 看板标签从「覆盖 X%」改为「使用率 used/published（X%，默认全量生效，仅作参考）」，把分母直接写出来 | `AgentView.vue` |
+| 06（文档） | `OPERATIONS.md` 指标清单补 `skill_usage_ratio` | `docs/OPERATIONS.md` |
+
+**为什么这样改**：`usageRatio`（被引用的已发布技能/已发布技能）此前只在看板可见，Prometheus 侧
+没有对应指标，运营无法交叉验证"看板数字是否可信"；同时中文里「覆盖率」与「使用率」极易混读，
+把 `used/published` 直接写进标签能消除歧义。
+
+**新增测试**：`test_prometheus_exports_process_usage_ratio`（发布技能 + 记录一次使用后导出为 1.0）。
+
+**仍存边界**：
+- 该指标是**进程内**口径（重启归零、多副本各自独立），不能当长期趋势；
+- 默认问答会应用能力域全部已发布技能，有流量时该值天然接近 1，**不具备判别力**（判断真实需求请看 `dominantShare`/`concentration`）；
+- 未新增基于该值的告警（避免对"接近 1 的指标"做无意义阈值）；
+- 看板与 Prometheus 的分子都来自同一进程快照，跨副本下仍可能不一致。
+
+**验证**：全量 pytest **1134 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
+
+
 
 
 
