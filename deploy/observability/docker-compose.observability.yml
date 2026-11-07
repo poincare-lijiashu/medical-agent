@@ -162,7 +162,9 @@ services:
     depends_on:
       - alert-sink
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/ready | grep -q Ready"]
+      # Alertmanager 的 /-/ready 返回 "OK"（不是 Prometheus 的 "... Ready."）：
+      # 用 HTTP 200 判定，别 grep 文案，否则容器永远 unhealthy（第 53 批实测）。
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9093/-/ready || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10

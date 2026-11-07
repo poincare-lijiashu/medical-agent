@@ -1923,6 +1923,41 @@ Alertmanager，也就没有"送达"证据；G105 之后一直登记着这条边�
 - 未接 Prometheus → Alertmanager 的真实规则告警演练（需等待 for 时长，本批未做）；
 - 两容器为本地验证而启动，未纳入 Helm（K8s 由院内 Alertmanager 承担）。
 
+---
+
+## 57. 2026-11-08 上线准备（第 53 批：真实规则告警送达演练）
+
+**目的**：第 52 批只验证了"Alertmanager → sink"；本批验证**业务规则真的会触发并送达**。
+
+**演练前置**
+- Prometheus 以新配置启动，`medassist-ai-core` target = **up**（后端以 `0.0.0.0:8001` 监听，
+  `host.docker.internal` 可达）；
+- 发现并修复：Alertmanager 的 `/-/ready` 返回 `OK` 而不是 Prometheus 的 `"... Ready."`，
+  原健康检查 `grep -q Ready` 让容器一直 `unhealthy`（服务实际正常）。改为按 HTTP 200 判定，
+  并在部署一致性测试中断言。
+
+**演练过程（真实停 PG）**
+| 时间 | 观测 |
+|---|---|
+| 0s | 停 `medagent_pg` + 4 次登录 → `/metrics` stale=7 |
+| 60s | Prometheus 告警进入 `pending`，`value=7` |
+| 360s | 进入 `firing`（5m `for` + 抓取/评估周期） |
+| +8s | sink 日志 `ALERT_WEBHOOK status=firing alerts=MedAssistAgentStorageStaleDomains` |
+| 恢复 PG 后 | 先只清掉被读到的域（value=1），执行一次全量自检后 stale=0 |
+| 再 70s | 告警消失，并送达 `ALERT_WEBHOOK status=resolved alerts=MedAssistAgentStorageStaleDomains` |
+
+**演练暴露的边界（真实行为，不修）**：stale 清除是**惰性**的——恢复后只有"下一次成功读该域"
+才会清除；长期不被读的域会让告警持续 firing。恢复后应跑一次
+`agent_go_live_check.py`（或打开管理端页面）主动触发全量读。
+
+**测试**：`test_deploy_observability.py` **6 passed**（新增健康检查断言）；
+全量 pytest（PG 在线）**1160 passed / 16 skipped**。
+
+**仍存边界**：
+- 仅在本地 Docker 形态验证；院内通知渠道（短信/IM/工单）未接；
+- 演练用的是 `StorageStaleDomains`（5m for），其它规则的触发条件未逐条实测；
+- Prometheus/Alertmanager 为本地验证容器，未纳入 Helm（K8s 由院内 Alertmanager 承担）。
+
 
 
 

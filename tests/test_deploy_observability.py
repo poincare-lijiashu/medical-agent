@@ -93,6 +93,8 @@ def test_alert_delivery_wired_in_local_stack():
     assert "http://alert-sink:8080/webhook" in cfg
     assert "send_resolved: true" in cfg
     assert os.path.isfile(ALERT_RECEIVER)
+    # 第 53 批：/-/ready 返回 "OK" 而不是 "... Ready."——健康检查必须按 HTTP 200 判定
+    assert "wget -q -O /dev/null http://localhost:9093/-/ready" in compose
 
 
 def test_alert_rules_only_reference_scrape_endpoint_metrics():
