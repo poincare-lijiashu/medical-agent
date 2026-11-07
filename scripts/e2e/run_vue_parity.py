@@ -47,7 +47,13 @@ def has_playwright() -> bool:
 
 
 def _start_backend(base_url: str, log_path: str) -> subprocess.Popen:
-    """启动 uvicorn（仅用于本地 E2E）；输出重定向到临时日志。"""
+    """启动 uvicorn（仅用于本地 E2E）；输出重定向到临时日志。
+
+    评审第 40 批：全量 E2E 会以同一演示账号连续加载多个页面（每个页面首刷约 10 个
+    只读接口），瞬间超过生产默认 60 次/分钟限流，导致「路由预览」等用例假红。
+    这里仅对**本脚本拉起的测试后端**放宽到 600 次/分钟；调用方显式设置的环境变量
+    优先（setdefault），应用默认值不变、生产不受影响。
+    """
     host = "127.0.0.1"
     port = "8001"
     try:
@@ -58,8 +64,11 @@ def _start_backend(base_url: str, log_path: str) -> subprocess.Popen:
         pass
     cmd = [sys.executable, "-m", "uvicorn", "backend.main:app",
            "--host", host, "--port", port]
+    env = os.environ.copy()
+    env.setdefault("RATE_LIMIT_PER_MIN", "600")
     log = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 —— 交给子进程持有
-    return subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT)
+    return subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT,
+                            env=env)
 
 
 def _wait_up(base_url: str, seconds: float) -> bool:

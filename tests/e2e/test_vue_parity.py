@@ -15,12 +15,17 @@
 - 任务2 方案A：doctor UI 手动加字典外药「测试」→ 行内填理由 → 提交 200 →
   pharm01 待审卡见「含字典外药品·重点审核」红徽（两项共用一次 pharm01 会话省限流）。
 
+状态变更轮（test_agent_flag_toggle_restores_original）：
+- 管理员开关「读原值 → UI 切换 → API 断言 → finally 按当前值 CAS 还原」，
+  补上此前只验「读」不验「写」的缺口；选中等风险 agent_multi_agent（不触发模型/工具）。
+
 说明：依赖运行中的服务 127.0.0.1:8001（healthz 不通则 skip）；未装 playwright 整文件
 skip；演示口令 = seed（AUTH_DEMO_PASSWORD）Med@2026，与既有 e2e 文件同源。
 doctor01 的三项断言合并为单函数顺序执行（同 test_vue_assist 风格），降低全量套件
 连续执行时 doctor01 的登录/首刷请求密度（服务端 60 次/分钟滑动窗口限流，429 会红）。
 """
 import json
+import re
 import time
 import urllib.request
 
@@ -74,6 +79,65 @@ def _login(page, username: str) -> None:
 
 def _nav(page, label: str) -> None:
     page.click(f'.rail a.nav:has-text("{label}")')
+
+
+# ---- G4：能力开关状态变更闭环（评审 04 登记缺口：此前只覆盖「读」不覆盖「写」） ----
+# 放在文件最前：admin01 的请求密度从零开始累计，避免与后续 admin 用例叠加触发限流。
+
+_FLAG_KEY = "agent_multi_agent"
+_CHECKED = re.compile(r"is-checked")
+
+
+def _flag_enabled(flags: list | None, key: str) -> bool | None:
+    return next((f.get("enabled") for f in (flags or []) if f.get("key") == key), None)
+
+
+def test_agent_flag_toggle_restores_original(page):
+    """状态变更型 E2E：读原值 → UI 切换 → API 断言 → 恢复原值。
+
+    选 `agent_multi_agent`（中风险）：切换只改变编排预览，不触发模型或工具调用。
+    恢复放在 finally，用 API 按当前值做 CAS 还原——断言中途失败也不会污染演示环境。
+    """
+    st, d = _api("POST", "/api/v1/auth/login",
+                 body={"username": "admin01", "password": DEMO_PASSWORD})
+    assert st == 200, d
+    tok = d["access_token"]
+    st, body = _api("GET", "/api/v1/agent/flags", tok)
+    assert st == 200, body
+    original = _flag_enabled(body.get("flags"), _FLAG_KEY)
+    assert original is not None, "前置期望：Agent 控制台暴露 agent_multi_agent 开关"
+
+    try:
+        _login(page, "admin01")
+        _nav(page, "Agent 控制台")
+        row = page.locator(f'[data-testid="flag-{_FLAG_KEY}"]')
+        expect(row).to_be_visible()
+        switch = row.locator(".el-switch")
+        if original:
+            expect(switch).to_have_class(_CHECKED)
+        else:
+            expect(switch).not_to_have_class(_CHECKED)
+
+        switch.click()
+        # 成功提示出现在 PUT 落库 + 目录刷新之后，用它作为「服务端已变更」的可见信号
+        # （按文案过滤，避免登录成功的旧 toast 抢占 .el-message.first）
+        expect(page.locator('.el-message:has-text("多智能体协同已")').first).to_be_visible()
+        if original:
+            expect(switch).not_to_have_class(_CHECKED)
+        else:
+            expect(switch).to_have_class(_CHECKED)
+
+        st, after = _api("GET", "/api/v1/agent/flags", tok)
+        assert st == 200, after
+        assert _flag_enabled(after.get("flags"), _FLAG_KEY) is (not original)
+    finally:
+        # 还原原值：先读当前值，再以它为 CAS 期望值写回（避免覆盖并发的其它切换）
+        st, cur = _api("GET", "/api/v1/agent/flags", tok)
+        if st == 200:
+            now = _flag_enabled(cur.get("flags"), _FLAG_KEY)
+            if now is not None and now != original:
+                _api("PUT", "/api/v1/agent/flags", tok,
+                     {"key": _FLAG_KEY, "value": original, "expected": now})
 
 
 def test_parity_doctor_case_overview_consults(page):
