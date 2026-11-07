@@ -1787,6 +1787,46 @@ PASS storage.domains = mode=pg stale=0
 - E2E 仍需手工/脚本拉起服务，15 项 skip 属预期；
 - 上线自检 PASS 只代表"技术联调就绪"，临床验收与签字仍需人工。
 
+---
+
+## 53. 2026-11-08 上线准备（第 49 批：存储漂移指标与告警 + 故障演练）
+
+**目标**：第 47 批的 stale 只在各自进程内可见；本批把它导出为 Prometheus 指标并配告警，
+让**多副本**漂移能被集中发现。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `prometheus_text()`：`storage_ready`、`storage_mode{mode}`、`storage_stale_domains{domain}`（域数量有限、无 DSN/凭据；无 stale 时不输出样本） |
+| `backend/main.py` | `/metrics` 合并该 exposition |
+| `deploy/prometheus/medassist-agent-ops.rules.yml` + Helm `prometheusrule-agent-ops.yaml` | 新增 `MedAssistAgentStorageStaleDomains`（warning, 5m）与 `MedAssistAgentStorageNotPg`（critical, 10m，排除显式 offline） |
+| `tests/test_deploy_observability.py` | 规则数 15→17；静态门禁把 `pg_store.prometheus_text()` 纳入导出指标集合 |
+| `tests/test_pg_repo.py` | 新增 3 项：指标文本含 mode/stale 且无凭据；无 stale 时只声明 TYPE；pg_primary 读失败置 stale、读成功清除 |
+
+**演练中发现的第二处真缺陷**：`pg_primary=True` 下运行中 PG 掉线时，写按设计直接抛错
+（不产生分裂状态），但**读回落从未置 stale**——于是新告警对"运行中掉线"完全失灵。
+修复：`_pg_or_json` 按模式区分——
+- `pg_primary=true`：stale 只作**可观测标记**；读失败置位、读成功清除；读仍继续尝试 PG
+  （JSON 只是镜像，不存在"JSON 领先 PG"的回滚风险）；
+- 旧编排（`pg_primary=false`）：stale 仍是数据安全闸门，读回落 JSON 防回滚，语义不变。
+
+**故障演练（真实 Docker PG）**
+| 步骤 | 观测 |
+|---|---|
+| A. 健康 | `alerts.metrics_covered = 18 metrics covered`；`storage.pg=True`；`stale=0`；**RESULT PASS** |
+| B. `docker stop medagent_pg` 后触发登录 | `/metrics` 出现 7 条 stale：`users.json`、`agent_skills.json`、`agent_bots.json`、`bot_teams.json`、`skill_experiences.json`、`skill_proposals.json`、`skill_metrics_snapshots.json` |
+| C. `docker start medagent_pg` 后重新读 | stale 样本全部消失（读成功自动清除） |
+
+**测试**：定向 **54 passed**；全量 pytest（PG 在线）**1155 passed / 15 skipped**
+（15 项 skip 均为 E2E 服务未启动）。
+
+**仍存边界**：
+- `storage_ready` 只表示"池对象存在"：PG 运行中掉线时它仍为 1，`StorageNotPg` 不会触发；
+  这种情况由 `StorageStaleDomains` 覆盖（本批已验证）；
+- PG 掉线期间每次读都要等连接超时（实测约 2s/域），一次全量自检会明显变慢；
+- stale 是进程内标记，靠 Prometheus 按 `instance` 聚合；单实例内已恢复后立即消失，
+  历史告警需依赖 Prometheus 时序（本批未接 Alertmanager）。
+
 
 
 

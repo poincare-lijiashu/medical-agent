@@ -1152,3 +1152,61 @@ def test_storage_status_reports_mode_and_stale_domains(monkeypatch):
         assert "dsn" not in json.dumps(st).lower()  # 只读快照不得泄露连接串
     finally:
         pg_store._repo_pg_stale.discard("probe.json")
+
+
+def test_primary_mode_read_failure_marks_stale_and_recovers(monkeypatch, tmp_path):
+    """运行中 PG 掉线：读失败要置 stale（指标可见），恢复后读成功自动清除。"""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "pg_primary", True)
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setenv("PG_OFFLINE", "")
+    path = str(tmp_path / "probe.json")
+    (tmp_path / "probe.json").write_text("[]", encoding="utf-8")
+
+    def boom(coro):
+        coro.close()
+        raise RuntimeError("pg down")
+
+    async def _query():
+        return None
+
+    monkeypatch.setattr(pg_store, "_run_pg", boom)
+    assert pg_store._pg_or_json(_query, lambda: [], path, []) == []
+    assert "probe.json" in pg_store.storage_status()["staleDomains"]
+
+    def ok(coro):
+        coro.close()
+        return [{"id": "x"}]
+
+    monkeypatch.setattr(pg_store, "_run_pg", ok)
+    assert pg_store._pg_or_json(_query, lambda: [], path, []) == [{"id": "x"}]
+    assert "probe.json" not in pg_store.storage_status()["staleDomains"]
+
+
+def test_prometheus_text_exports_mode_and_stale(monkeypatch):
+    """第 49 批：stale 必须能被集中 Prometheus 看到（带 domain 标签、无凭据）。"""
+    class _Pool:
+        pass
+
+    monkeypatch.setattr(pg_store, "_pool", _Pool())
+    monkeypatch.delenv("PG_OFFLINE", raising=False)
+    pg_store._repo_pg_stale.add('q"uote.json')
+    try:
+        text = pg_store.prometheus_text()
+        assert "medassist_agent_storage_ready 1" in text
+        assert 'medassist_agent_storage_mode{mode="pg"} 1' in text
+        assert 'medassist_agent_storage_stale_domains{domain="q\\"uote.json"} 1' in text
+        assert "dsn" not in text.lower()
+    finally:
+        pg_store._repo_pg_stale.discard('q"uote.json')
+
+
+def test_prometheus_text_declares_family_without_stale(monkeypatch):
+    """无 stale 时只声明 TYPE、不输出样本——sum(...)>0 的告警不会误触发。"""
+    monkeypatch.setattr(pg_store, "_pool", None)
+    monkeypatch.delenv("PG_OFFLINE", raising=False)
+    text = pg_store.prometheus_text()
+    assert "# TYPE medassist_agent_storage_stale_domains gauge" in text
+    assert "medassist_agent_storage_stale_domains{" not in text
+    assert "medassist_agent_storage_ready 0" in text

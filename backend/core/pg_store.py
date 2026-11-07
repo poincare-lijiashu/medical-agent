@@ -281,6 +281,33 @@ def storage_status() -> dict:
     }
 
 
+def prometheus_text() -> str:
+    """存储真源指标（Prometheus 文本）：池可用 / 模式 / 按域 stale。
+
+    为什么导出：stale 只在**本进程**内可见；多副本部署时，某个实例写 PG 失败回落
+    JSON，其它实例完全无感。导出为带 ``domain`` 标签的 gauge 后，集中 Prometheus
+    可以跨实例发现"有域在漂移"。
+
+    基数与安全：域数量固定且有限（不取用户输入）；只输出域文件名，不含 DSN/账号。
+    无 stale 域时不输出样本——``sum(...) > 0`` 的告警此时不触发（正确语义）。
+    """
+    st = storage_status()
+    lines = [
+        "# HELP medassist_agent_storage_ready 存储真源池可用（1=PG 池已建立，0=回落 JSON）",
+        "# TYPE medassist_agent_storage_ready gauge",
+        f"medassist_agent_storage_ready {1 if st['ready'] else 0}",
+        "# HELP medassist_agent_storage_mode 存储模式（offline/pg/json-fallback，值为 1）",
+        "# TYPE medassist_agent_storage_mode gauge",
+        f'medassist_agent_storage_mode{{mode="{st["mode"]}"}} 1',
+        "# HELP medassist_agent_storage_stale_domains 本进程内 PG 写失败、读回落 JSON 的域（每个域一条）",
+        "# TYPE medassist_agent_storage_stale_domains gauge",
+    ]
+    for domain in st["staleDomains"]:
+        safe = str(domain).replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'medassist_agent_storage_stale_domains{{domain="{safe}"}} 1')
+    return "\n".join(lines) + "\n"
+
+
 async def ping() -> bool:
     """只读连通性探针（admin 运维卡片用）：SELECT 1，任何异常/未建池一律 False。
     绝不写库、绝不重试（面板展示需快速失败），与 mirror_* 的 best-effort 写路径互不影响。"""
@@ -540,7 +567,10 @@ def _warn_stale_fallback_once(domain: str) -> None:
 
 def _pg_or_json(load_fn, json_loader, path: str, default):
     """repo 读编排：PG 池可用且本域非 stale → 读 PG（非空即真源）；None/stale/异常/超时/
-    空表 → JSON（现状行为；stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。
+    空表 → JSON（现状行为；旧编排下 stale 时 JSON 恒为最新已落盘数据，读它保证不回滚）。
+
+    pg_primary=true 时 stale 只作可观测标记（读仍继续尝试 PG，成功后自动清除），
+    这样"运行中 PG 掉线"能被 stale 指标/告警看到，恢复后也会自动消失。
     任务2：PG_OFFLINE=on → 直接 JSON 纯静默（不告警）；无池/stale 读回落首次 WARN
     后同 file 去重静默（DEBUG）。"""
     domain = os.path.basename(path)
@@ -549,14 +579,25 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
         if json_loader is not None:
             return json_loader()
         return _read_json(path, default)
-    if _pool and domain not in _repo_pg_stale:
+    # pg_primary：JSON 只是镜像，不存在"JSON 领先 PG"的回滚风险——stale 此时是
+    # **可观测标记**（PG 读失败过），读仍应继续尝试 PG，成功后自动清除。
+    # 旧编排（pg_primary=false）：stale 是数据安全闸门，读必须回落 JSON 防回滚。
+    primary = bool(getattr(settings, "pg_primary", True))
+    if _pool and (primary or domain not in _repo_pg_stale):
         try:
             data = _run_pg(load_fn())
-            if data is not None:
-                return data
         except Exception as e:  # noqa: BLE001 —— PG 任何异常都降级 JSON，绝不影响调用方
+            if primary:
+                # 运行中 PG 掉线：不置位则 stale 指标与告警永远看不到（本轮演练实测）
+                _repo_pg_stale.add(domain)
             logger.warning("pg.repo.load_fallback_json", error=str(e)[:120],
                            file=os.path.basename(path))
+        else:
+            if primary:
+                _repo_pg_stale.discard(domain)
+                _stale_warned.discard(domain)
+            if data is not None:
+                return data
     else:
         # 任务1：stale 读回落从 debug 升级为 warning——这是"数据暂存 JSON 未同步 PG"
         # 的异常窗口，运维必须可在日志中看到（写失败时已有 save_pg_failed 告警配对）。
