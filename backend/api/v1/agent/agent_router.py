@@ -34,6 +34,20 @@ from backend.core import agent_flags, agent_tools, web_sources
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 
+# ============================================================================
+# 错误码对照表（评审 03-S1：全站一套口径，新增端点请按此映射，勿各自发明）
+#
+#   401  未认证 / 令牌失效（前端统一登出跳转）
+#   403  已认证但无权（角色不在能力域 roles、四眼自审、团队越权）
+#   404  资源不存在（技能卡 / Bot / 团队 / 记忆 / 建议 / 候选）
+#   409  资源**状态**冲突（已发布不可改、非 ACTIVE 不可停用、rowVersion CAS 冲突）
+#   422  请求体字段校验失败（长度/枚举/条数/格式；pydantic 与业务校验同一码）
+#   429  并发/配额已满（SSE 并发槽、请求限流）
+#   500  未识别的服务端异常（**不再降级成 422**，避免掩盖 bug）
+#   503  服务能力不可用（模型 provider 未配置/不合规、工具被运维关闭、上游超时）
+#
+# 约定：default 分支一律 500；只有明确的 *Invalid 才是 422。
+# ============================================================================
 
 class RouteReq(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
@@ -356,7 +370,8 @@ async def invoke_tool(name: str, req: ToolInvokeReq,
     except agent_tools.ToolForbidden as e:
         raise HTTPException(403, str(e))
     except agent_tools.ToolDisabled as e:
-        raise HTTPException(409, str(e))
+        # 评审 03-S1：开关关闭属于"服务能力暂不可用"，不是资源状态冲突（409 会被误读为并发冲突）
+        raise HTTPException(503, str(e))
     except agent_tools.ToolInvalidArguments as e:
         raise HTTPException(422, str(e))
     except agent_tools.ToolUnavailable as e:
@@ -406,7 +421,9 @@ def _skill_http(e: skill_cards.SkillError) -> HTTPException:
         return HTTPException(403, str(e))
     if isinstance(e, skill_cards.SkillConflict):
         return HTTPException(409, str(e))
-    return HTTPException(422, str(e))
+    if isinstance(e, skill_cards.SkillInvalid):
+        return HTTPException(422, str(e))
+    return HTTPException(500, "技能卡操作失败（服务端异常）")
 
 
 async def _audit_agent(user: dict, action: str, payload: dict) -> None:
@@ -516,7 +533,9 @@ def _bot_http(e: bot_registry.BotError) -> HTTPException:
         return HTTPException(403, str(e))
     if isinstance(e, bot_registry.BotConflict):
         return HTTPException(409, str(e))
-    return HTTPException(422, str(e))
+    if isinstance(e, bot_registry.BotInvalid):
+        return HTTPException(422, str(e))
+    return HTTPException(500, "Bot 操作失败（服务端异常）")
 
 
 def _team_http(e: bot_teams.TeamError) -> HTTPException:
@@ -526,7 +545,9 @@ def _team_http(e: bot_teams.TeamError) -> HTTPException:
         return HTTPException(403, str(e))
     if isinstance(e, bot_teams.TeamConflict):
         return HTTPException(409, str(e))
-    return HTTPException(422, str(e))
+    if isinstance(e, bot_teams.TeamInvalid):
+        return HTTPException(422, str(e))
+    return HTTPException(500, "Bot 团队操作失败（服务端异常）")
 
 
 def _mem_http(e: bot_memory.MemoryError_) -> HTTPException:
@@ -536,7 +557,9 @@ def _mem_http(e: bot_memory.MemoryError_) -> HTTPException:
         return HTTPException(403, str(e))
     if isinstance(e, bot_memory.MemoryConflict):
         return HTTPException(409, str(e))
-    return HTTPException(422, str(e))
+    if isinstance(e, bot_memory.MemoryInvalid):
+        return HTTPException(422, str(e))
+    return HTTPException(500, "记忆操作失败（服务端异常）")
 
 
 @router.get("/bots")
@@ -788,10 +811,31 @@ async def collaborate(code: str, req: CollaborateReq, user: dict = Depends(requi
 
 # ---------------------------------------------------------------- 模型合规 / 白名单联网 / 第二意见（G89）
 
+def _mask_host(host: str) -> str:
+    """把主机名/IP 降级为掩码（保留末级域，便于判断用途但不暴露内网拓扑）。"""
+    value = (host or "").strip()
+    if not value:
+        return ""
+    if value.replace(".", "").isdigit() or ":" in value:
+        return "***"      # IPv4 / IPv6
+    parts = value.split(".")
+    if len(parts) >= 2:
+        return "***." + ".".join(parts[-2:])
+    return "***"
+
+
 @router.get("/model-policy")
 async def model_policy_snapshot(user: dict = Depends(require_user)):
-    """模型合规快照：只展示 provider 分类与主机，**不含 api_key**。"""
-    return model_policy.policy_snapshot()
+    """模型合规快照：只展示 provider 分类；**不含 api_key**。
+
+    评审 03-S11：主机名/内网 IP 属于内部部署拓扑，普通角色只看掩码形式，
+    仅 admin/qc 可见完整主机（便于运维核对）。
+    """
+    snap = model_policy.policy_snapshot()
+    if user.get("role") not in ("admin", "qc"):
+        for p in snap["providers"]:
+            p["host"] = _mask_host(p.get("host"))
+    return snap
 
 
 @router.get("/web-policy")
@@ -832,7 +876,9 @@ def _lib_http(e: skill_library.LibraryError) -> HTTPException:
         return HTTPException(403, str(e))
     if isinstance(e, skill_library.LibraryConflict):
         return HTTPException(409, str(e))
-    return HTTPException(422, str(e))
+    if isinstance(e, skill_library.LibraryInvalid):
+        return HTTPException(422, str(e))
+    return HTTPException(500, "技能库操作失败（服务端异常）")
 
 
 @router.post("/skill-experiences")
@@ -978,7 +1024,9 @@ def _advice_http(e: skill_advice.AdviceError) -> HTTPException:
         return HTTPException(404, str(e))
     if isinstance(e, skill_advice.AdviceConflict):
         return HTTPException(409, str(e))
-    return HTTPException(422, str(e))
+    if isinstance(e, skill_advice.AdviceInvalid):
+        return HTTPException(422, str(e))
+    return HTTPException(500, "运营建议操作失败（服务端异常）")
 
 
 @router.post("/skill-advices/generate")

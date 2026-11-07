@@ -267,6 +267,11 @@ def test_api_policy_endpoints_and_second_opinion(monkeypatch, tmp_path):
     snap = c.get("/api/v1/agent/model-policy", headers=h).json()
     assert {p["id"] for p in snap["allowed"]} == {"local-vllm", "deepseek"}
     assert "secret-" not in str(snap)
+    # 评审 03-S11：普通角色只看掩码主机，admin 才可见完整主机
+    assert snap["providers"] and all("***" in p["host"] for p in snap["providers"])
+    adm = _h(_login(c, "admin01"))
+    adm_snap = c.get("/api/v1/agent/model-policy", headers=adm).json()
+    assert any("***" not in p["host"] for p in adm_snap["providers"])
 
     web = c.get("/api/v1/agent/web-policy", headers=h).json()
     assert web["enabled"] is False

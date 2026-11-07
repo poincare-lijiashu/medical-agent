@@ -308,6 +308,35 @@ def test_input_limits_have_single_source():
     assert guardrails.MIN_MAX_INPUT == limits.MIN_MAX_INPUT
 
 
+def test_error_mapping_table_is_enforced():
+    """评审 03-S1：未识别的领域异常必须 500（不再降级 422），明确 Invalid 才是 422。"""
+    from backend.agents import (bot_memory, bot_teams, bots, skill_advice,
+                                skill_library, skills)
+    from backend.api.v1.agent import agent_router
+
+    cases = [
+        (agent_router._skill_http, skills.SkillError, skills.SkillInvalid),
+        (agent_router._bot_http, bots.BotError, bots.BotInvalid),
+        (agent_router._team_http, bot_teams.TeamError, bot_teams.TeamInvalid),
+        (agent_router._mem_http, bot_memory.MemoryError_, bot_memory.MemoryInvalid),
+        (agent_router._lib_http, skill_library.LibraryError, skill_library.LibraryInvalid),
+        (agent_router._advice_http, skill_advice.AdviceError, skill_advice.AdviceInvalid),
+    ]
+    for helper, base, invalid in cases:
+        assert helper(invalid("bad")).status_code == 422, base.__name__
+        assert helper(base("boom")).status_code == 500, base.__name__
+
+
+def test_tool_disabled_maps_to_503(monkeypatch, tmp_path):
+    """评审 03-S1：工具被运维关闭是"能力不可用"，不是资源状态冲突。"""
+    agent_flags.set_flag("agent_web_search", False)
+    c = _client(monkeypatch, tmp_path)
+    doc = {"Authorization": "Bearer " + _login(c, "doctor01")}
+    r = c.post("/api/v1/agent/tools/web_search/invoke", headers=doc,
+               json={"arguments": {"query": "肺癌 指南"}})
+    assert r.status_code == 503, r.text
+
+
 def test_flag_audit_records_before_value(monkeypatch, tmp_path):
     """评审 S9：开关审计必须记录改前值（便于回滚与追责）。"""
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))

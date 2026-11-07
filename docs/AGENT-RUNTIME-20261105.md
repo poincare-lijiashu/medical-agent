@@ -1038,3 +1038,26 @@ Bot 发布校验只看**当时**的默认 provider，发布后管理员切换默
 `dataAvailable` 只反映进程内窗口，跨重启的真实使用率仍应看 Prometheus 持久化指标。
 
 **验证**：全量 pytest **1093 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 27. 2026-11-06 评审整改（第 23 批：错误码对照表与内部拓扑收敛）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 03-S1 | 在 `agent_router.py` 顶部固化**错误码对照表**（401/403/404/409/422/429/500/503 各自的语义与判据）；六个领域 helper（技能/Bot/团队/记忆/技能库/建议）显式区分 `*Invalid → 422`，**default 分支由 422 改为 500**，不再把未识别异常降级成"参数不合法"；`ToolDisabled` 由 409 改为 **503**（运维关闭属能力不可用，不是并发冲突） | `agent_router.py` |
+| 03-S11 | `GET /agent/model-policy` 对非 admin/qc 角色**掩码主机**（IPv4/IPv6 → `***`，域名 → `***.hospital.local`），只保留分类与"是否允许"；admin/qc 仍可见完整主机便于运维核对 | `agent_router.py` |
+
+**为什么这样改**：default 落 422 会把真实服务端 bug（500 级）伪装成"你参数写错了"，排障时
+方向完全跑偏；而"工具被关闭"报 409 会让前端提示"该记录已被他人修改"。另外把 provider 主机名
+暴露给任意医生/药师，等于公开内网推理节点清单——这对攻击者是免费的拓扑情报。
+
+**新增测试**：`test_agent_control_plane.py` 逐 helper 断言 `Invalid→422 / 其他→500`；
+`ToolDisabled` API 断言 503；`test_agent_governance.py` 断言普通角色主机全部带 `***`、
+admin 可见完整主机。
+
+**仍存边界**：错误码表以注释形式固化，未做成可执行断言（helper 与异常类型的对应关系由单测覆盖）；
+掩码只作用于 `/model-policy`，`/second-opinion` 返回的 `provider_view` 仍含 host（该端点结果本就需要
+说明"是哪两个模型"）；09/03 分册中其它 Should（如 `/a2a` 每用户模型配额）未在本批处理。
+
+**验证**：全量 pytest **1095 passed / 11 skipped**。
