@@ -143,6 +143,17 @@
           <span class="src num" style="margin-left: auto">{{ x.cmd }}</span>
           <el-button size="small" @click="copyText(x.cmd)">复制命令</el-button>
         </div>
+        <!-- 第 51 批：存储真源状态（模式 / 熔断 / 按域 stale）——不看日志也能判断是否降级 -->
+        <div v-if="storage" data-testid="storage-status"
+             style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0 4px; border-top: 1px dashed #e4e7ed; margin-top: 6px">
+          <el-tag :type="storage.mode === 'pg' ? 'success' : 'warning'" effect="light" size="small" round>{{ storageLabel }}</el-tag>
+          <b style="font-size: 13px">存储真源</b>
+          <span class="src num">mode={{ storage.mode || '—' }} · 熔断={{ storage.circuitOpen ? '打开' : '关闭' }}</span>
+          <el-tag v-if="storage.circuitOpen" type="danger" effect="light" size="small" round>快速降级中</el-tag>
+        </div>
+        <div v-if="storage && (storage.staleDomains || []).length" class="src" data-testid="storage-stale" style="padding-bottom: 4px">
+          按域 stale（PG 写失败回落 JSON）：{{ (storage.staleDomains || []).join('、') }}
+        </div>
       </el-card>
 
       <!-- 应用日志健康卡（只读 · 尾部最多 500 行；逐行转义后渲染防注入） -->
@@ -488,6 +499,15 @@ const infraRows = computed(() => {
     { name: 'Milvus 知识库', ok: mv.connected === true, detail: mv.uri || '', cmd: 'docker compose restart milvus' },
     { name: 'PostgreSQL 镜像', ok: pg.ok === true, detail: '审计/用户/复核队列双写镜像', cmd: 'docker compose restart postgres' },
   ]
+})
+// 第 51 批：存储真源快照（mode / circuitOpen / staleDomains），与上线自检同一数据源
+const storage = computed(() => (d.value && d.value.infra && d.value.infra.storage) || null)
+const storageLabel = computed(() => {
+  const m = storage.value && storage.value.mode
+  if (m === 'pg') return 'PG 真源'
+  if (m === 'json-fallback') return 'JSON 兜底'
+  if (m === 'offline') return '离线 JSON'
+  return '未知'
 })
 // 剪贴板复制（legacy copyText 同语义：只复制文本，绝不触发任何执行）
 function copyText(t) {

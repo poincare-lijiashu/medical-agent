@@ -445,3 +445,16 @@ def test_agent_console_route_preview_interaction(page):
     # 失败提示不应同时出现（成功路径）
     expect(page.locator('[data-testid="agent-route-error"]')).to_have_count(0)
 
+
+# ---- G5：管理端数据面板存储真源状态（第 51 批） ----
+
+def test_admin_data_panel_storage_status(page):
+    """数据面板读取 infra.storage：模式与熔断状态可见（不依赖 PG 是否在线）。"""
+    _login(page, "admin01")
+    _nav(page, "数据面板")
+    box = page.locator('[data-testid="storage-status"]')
+    expect(box).to_be_visible()
+    expect(box).to_contain_text("存储真源")
+    expect(box).to_contain_text("mode=")
+    expect(box).to_contain_text("熔断=")
+

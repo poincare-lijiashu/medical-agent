@@ -1238,6 +1238,19 @@ def test_pg_circuit_ignores_non_connectivity_errors(monkeypatch):
     assert pg_store.circuit_open() is False
 
 
+def test_pg_circuit_threshold_is_configurable(monkeypatch):
+    """第 51 批：阈值可由 settings（PG_CIRCUIT_FAILS）覆盖。"""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "pg_circuit_fails", 2)
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    monkeypatch.setattr(pg_store, "_pg_fail_streak", 0)
+    pg_store._pg_circuit_failure(OSError("refused"))
+    assert pg_store.circuit_open() is False
+    pg_store._pg_circuit_failure(OSError("refused"))
+    assert pg_store.circuit_open() is True
+
+
 def test_run_pg_fast_fails_when_circuit_open(monkeypatch):
     monkeypatch.setattr(pg_store, "_pg_circuit_until", time.monotonic() + 60)
 

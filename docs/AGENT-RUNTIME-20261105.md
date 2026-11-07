@@ -1858,10 +1858,38 @@ PASS storage.domains = mode=pg stale=0
 （15 项 skip 均为 E2E 服务未启动）。
 
 **仍存边界**：
-- 阈值（3 次）与冷却（15s）是模块常量，尚未做成环境变量；
+- 阈值（3 次）与冷却（15s）在本批是模块常量；第 51 批已改为 `PG_CIRCUIT_FAILS` /
+  `PG_CIRCUIT_COOLDOWN_S` 可配置；
 - 熔断是**每进程**状态：多副本各自独立判断，不做跨实例协调；
 - 冷却结束后只放行"下一个请求"做探测；若 PG 仍不可用，会再等一次超时后重新打开；
 - 只覆盖 `_run_pg` 同步桥接；启动期 `_arun`（init/迁移）不在熔断范围。
+
+---
+
+## 55. 2026-11-08 上线准备（第 51 批：熔断可配置 + 管理端存储状态可视化）
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/config.py` | 新增 `PG_CIRCUIT_FAILS`（默认 3）与 `PG_CIRCUIT_COOLDOWN_S`（默认 15） |
+| `backend/core/pg_store.py` | 阈值/冷却改为从 settings 读取（`_circuit_threshold` / `_circuit_cooldown`），非法值回落默认、冷却下限 1s |
+| `frontend-vue/src/views/DataView.vue` | 数据面板「基础设施」卡新增 `storage-status`：模式标签（PG 真源 / JSON 兜底 / 离线 JSON）、熔断开关、`快速降级中` 标记；有 stale 时显示 `storage-stale` 域列表 |
+| `tests/test_pg_repo.py` | 新增 1 项：阈值可配置（settings=2 时两次失败即打开） |
+| `tests/e2e/test_vue_parity.py` | 新增 `test_admin_data_panel_storage_status`（admin 数据面板可见存储状态，不依赖 PG 在线） |
+
+**为什么做**：运维此前只能看日志或调自检脚本才知道"是否在降级运行"；管理端面板与自检
+共用同一份 `infra.storage` 数据源，看到的就是后端真实判断。
+
+**验证**
+- `run_vue_parity.py`：**10 passed**（新增数据面板用例；16.6s）；
+- 前端 `npm run build` 成功，`frontend-vue/dist` 已更新（旧 JS/CSS 资产删除）；
+- 定向 `test_pg_repo + test_deploy_observability`：**57 passed**；
+- 全量 pytest（PG 在线）：**1159 passed / 16 skipped**（16 项 skip = E2E 服务未启动）。
+
+**仍存边界**：
+- 面板不自动轮询，需刷新页面（与其它运维卡一致）；
+- stale 列表直接展示域名，域数量有界但不做折叠（当前最多十余个）；
+- 配置读取发生在每次失败/打开时，settings 为进程内单例，不支持运行中热改。 
 
 
 

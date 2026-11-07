@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # JSON 降为 best-effort 镜像快照；false=旧编排（JSON 先写真源，PG best-effort 镜像）。
     # 无 PG 池 / PG_OFFLINE 离线模式下两种编排等价（JSON 是唯一持久层）。
     pg_primary: bool = True
+    # 第 50/51 批：PG 连接熔断。连续 N 次连接类失败后，在冷却期内直接回落 JSON，
+    # 避免每次请求都等连接超时（实测约 2s/域）；冷却结束自动探测，成功即闭合。
+    pg_circuit_fails: int = 3
+    pg_circuit_cooldown_s: float = 15.0
     pg_user: str = "eduagent"
     pg_password: str = ""
     pg_database: str = "eduagent_medical"

@@ -44,6 +44,24 @@ _pg_fail_streak = 0
 _pg_circuit_until = 0.0  # time.monotonic() 截止点
 
 
+def _circuit_threshold() -> int:
+    """熔断阈值：settings 可覆盖（PG_CIRCUIT_FAILS），非法值回落 3。"""
+    try:
+        return max(1, int(getattr(settings, "pg_circuit_fails", _PG_CIRCUIT_FAILS)
+                          or _PG_CIRCUIT_FAILS))
+    except (TypeError, ValueError):
+        return _PG_CIRCUIT_FAILS
+
+
+def _circuit_cooldown() -> float:
+    """冷却秒数：settings 可覆盖（PG_CIRCUIT_COOLDOWN_S），下限 1s。"""
+    try:
+        return max(1.0, float(getattr(settings, "pg_circuit_cooldown_s",
+                                      _PG_CIRCUIT_COOLDOWN_S)))
+    except (TypeError, ValueError):
+        return _PG_CIRCUIT_COOLDOWN_S
+
+
 class PGUnavailable(RuntimeError):
     """PG 熔断期间的快速失败（不等待连接超时，由上层回落 JSON 或返回 5xx）。"""
 
@@ -74,10 +92,10 @@ def _pg_circuit_failure(exc: BaseException) -> None:
         return
     with _circuit_lock:
         _pg_fail_streak += 1
-        if _pg_fail_streak >= _PG_CIRCUIT_FAILS and time.monotonic() >= _pg_circuit_until:
-            _pg_circuit_until = time.monotonic() + _PG_CIRCUIT_COOLDOWN_S
+        if _pg_fail_streak >= _circuit_threshold() and time.monotonic() >= _pg_circuit_until:
+            _pg_circuit_until = time.monotonic() + _circuit_cooldown()
             _pg_fail_streak = 0
-            logger.warning("pg.circuit_open", cooldown_s=_PG_CIRCUIT_COOLDOWN_S,
+            logger.warning("pg.circuit_open", cooldown_s=_circuit_cooldown(),
                            detail="近期连续连接失败：短暂快速回落 JSON，冷却后自动探测")
 
 # ---------- 专用 DB 事件循环（池归属该循环，同步/异步桥接均经它执行池操作） ----------
