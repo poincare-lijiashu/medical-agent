@@ -198,6 +198,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/restore_milvus.ps1 -
 **演练记录（2026-10-30）**：备份 → `restore_milvus.ps1` 全量还原 → 容器 6/6 Up →
 `run_eval.py` **9/9** 与演练前一致。**演练通过**。
 
+### 代码快照（git bundle）恢复演练（2026-11-08 追加）
+
+```powershell
+git bundle verify <backup-dir>\medical_agent_YYYYMMDD.bundle
+git clone <backup-dir>\medical_agent_YYYYMMDD.bundle <restore-dir>
+cd <restore-dir>
+python -m pytest tests\test_go_live_check.py tests\test_snapshot_scheduler.py -q
+python scripts\agent_go_live_check.py --dry-run
+```
+
+**演练记录（2026-11-08）**：`medical_agent_20261108.bundle` → `verify` 输出
+"records a complete history"（5 refs）→ 克隆 HEAD **20dd1c6** 与原仓库一致 →
+克隆体 **23 passed**、`--dry-run` **PASS**。**演练通过**。
+
+**完整恢复的边界（bundle 只覆盖入库内容）**：
+| 资产 | 是否在 bundle | 恢复方式 |
+|---|---|---|
+| 代码 / Helm / 文档 / `frontend-vue/dist` | 是 | `git clone` bundle |
+| `data/` 内已入库的字典、指南、示例 | 是 | 随克隆恢复 |
+| `data/auth/users.json`、`data/llm_providers.json` | **否**（含账户/密钥，已 gitignore） | 由 `scripts/restore.py --backup ... --yes` 从 `backup_*.tar.gz` 恢复 |
+| PG 业务数据 | **否** | 同上（psql 导回 dump） |
+| `.env.local` / K8s Secret | **否** | 从密管/运维台账注入 |
+| 嵌入模型 `backend/models/embedding/bge-m3` | **否** | 按部署文档单独下发（或允许下载的受控环境） |
+| `frontend-vue/node_modules` | **否** | 不需要（`dist` 已入库）；要改前端再 `npm ci` |
+
+结论：bundle 能独立证明"代码与已入库资产可恢复"，但**业务数据与密钥必须走
+`restore.py` + Secret 注入**；只恢复 bundle 会得到"能跑测试、但无账号/无模型"的空壳。
+
 **卷操作纪律（强制，源于同日事故）**：
 
 1. **禁止内联 `sh -c "…\$var…"` 传参**。PowerShell 双引号会插值 `$var`（未定义即空串），

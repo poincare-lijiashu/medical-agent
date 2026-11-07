@@ -1651,6 +1651,37 @@ Should（读当前代码确认，不新增业务逻辑）：
 - `model.allowed_classes` 依赖真实 provider 注册；脚本不会自动创建 provider；
 - `/metrics` 仍要求抓取令牌，本地未配置时该项会持续失败——这是设计取舍（fail-closed）。
 
+---
+
+## 49. 2026-11-08 上线准备（第 45 批：代码快照恢复演练）
+
+**为什么做**：备份脚本一直在跑，但"备份能不能恢复"只验证过 PG/数据侧
+（`DEPLOY.md` 2026-09-12 演练）。代码侧的 bundle 从未做过 verify→clone→跑测试的闭环，
+一旦真需要恢复，才发现 bundle 不可用就晚了。
+
+**演练步骤与结果**
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 校验 bundle | `git bundle verify <backup-dir>\medical_agent_20261108.bundle` | OK，"records a complete history"（5 refs） |
+| 克隆到临时目录 | `git clone <bundle> D:\cache\temp\medassist_restore_drill` | 成功 |
+| 版本一致性 | `git -C <clone> rev-parse --short HEAD` | **20dd1c6**，与原仓库一致 |
+| 克隆体测试 | `pytest tests/test_go_live_check.py tests/test_snapshot_scheduler.py -q` | **23 passed** |
+| 克隆体自检 | `python scripts/agent_go_live_check.py --dry-run` | **PASS**（repo 6 项） |
+| 清理 | 删除临时克隆 | 已删除 |
+
+**演练暴露的恢复边界（已写入 `docs/DEPLOY.md`）**：bundle 只含**入库内容**——
+`data/auth/users.json`、`data/llm_providers.json`、PG 业务数据、`.env.local`/Secret、
+嵌入模型均不在其中；只恢复 bundle 会得到"能跑测试但无账号、无模型"的空壳。
+完整恢复 = bundle（代码）+ `scripts/restore.py --backup`（数据）+ 密钥/模型资产注入。
+
+**验证**：本批只改文档，未改代码；全量 pytest 仍为 **1121 passed / 43 skipped**
+（Docker 不可用，28 项 PG 用例按设计 skip）。
+
+**仍存边界**：
+- 演练在同一台机器、同一个 Python 环境完成，未验证"换机 + 空环境"的依赖安装；
+- 未演练从 bundle 恢复后**真实拉起服务**（需要密钥与模型资产，属现场条件）；
+- bundle 是每日手工/批次后生成，不保证 RPO；生产应按 CronJob 定时备份（见 DEPLOY）。
+
 
 
 
