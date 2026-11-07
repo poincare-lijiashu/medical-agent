@@ -51,6 +51,7 @@ def test_argparse_defaults():
     assert args.users == 16 and args.seconds == 25
     assert args.pace == 0.8 and args.ramp is False
     assert args.username == "doctor01" and args.timeout == 10.0
+    assert args.etag is False and args.paths is None
 
 
 def test_ramp_stages_quarter_doubling():

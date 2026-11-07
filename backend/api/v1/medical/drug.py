@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from backend.api.deps import rate_limit, require_role, require_user
@@ -41,17 +43,48 @@ class DrugDictManageReq(BaseModel):
     item: dict
 
 
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """If-None-Match 判定：支持逗号分隔多值与弱校验前缀 ``W/``（RFC 7232 §3.2）。"""
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    for raw in header.split(","):
+        token = raw.strip()
+        if token.startswith("W/"):
+            token = token[2:].strip()
+        if token == etag:
+            return True
+    return False
+
+
 @router.get("/drug/dict")
-async def drug_dict_list(user: dict = Depends(require_user)):
+async def drug_dict_list(request: Request, user: dict = Depends(require_user)):
     """阶段1.5 预留：药品字典管理 list 接口（全量字典+规则+免责声明）。
-    阶段1.2：管理页数据源（只读），增删改端点随阶段1.5 落地（invalidate 钩子已就绪）。"""
+    阶段1.2：管理页数据源（只读），增删改端点随阶段1.5 落地（invalidate 钩子已就绪）。
+
+    第 61 批：加内容哈希 ETag + 304。实测该响应 **116KB**，是容量归因里最重的两个
+    端点之一（§63）；浏览器按 ETag 重新校验后命中的 304 只有响应头（~200B），
+    开药/字典页反复打开不再重复拉全量。用**内容哈希**而不是文件 mtime 作 ETag：
+    多实例下 PG 是字典真源、各实例 JSON 镜像可能滞后，mtime 会给出错误的"未变更"。
+    """
     from backend.core import drug_dict as dd
     d = await asyncio.to_thread(dd.load_dict)
     rules = await asyncio.to_thread(dd.load_rules)
     # 评测行动项4：stats 并入审校覆盖率（reviewed/unreviewed/高危子集；既有键不丢）
     stats = await asyncio.to_thread(dd.stats)
     stats.update(await asyncio.to_thread(dd.rules_review_stats))
-    return {"disclaimer": dd.DISCLAIMER, "drugs": d, "rules": rules, "stats": stats}
+    payload = {"disclaimer": dd.DISCLAIMER, "drugs": d, "rules": rules, "stats": stats}
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    etag = '"' + hashlib.sha1(body).hexdigest() + '"'
+    headers = {
+        "ETag": etag,
+        # private：内容对所有登录用户相同，但不进共享缓存（含患者无关数据也不外泄）
+        "Cache-Control": "private, max-age=0, must-revalidate",
+    }
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @router.post("/admin/drug/dict")

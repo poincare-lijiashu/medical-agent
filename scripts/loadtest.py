@@ -23,6 +23,7 @@ backend/core/security_rate.py，身份取 Bearer sub）。因此每虚拟用户�
     # --ramp：并发分 1/4/8/16 四档爬坡，每档约 --seconds 秒
     # --paths /healthz：只压单个端点（容量归因：先量框架上限，再看业务端点）
     # --pace 0：全速（会触发 429，除非服务端 RATE_LIMIT_PER_MIN 已放开）
+    # --etag：缓存命中模式（带 If-None-Match 压 304，测 ETag 优化的真实收益）
 """
 from __future__ import annotations
 
@@ -153,6 +154,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--paths", default=None,
                    help="只压指定端点（逗号分隔，默认混合 4 个只读 GET）。"
                         "容量归因用：如 --paths /healthz 单独测框架上限")
+    p.add_argument("--etag", action="store_true",
+                   help="缓存命中模式：先取一次 ETag，压测请求都带 If-None-Match "
+                        "（测 304 吞吐；对无 ETag 的端点自动退回普通请求）")
     return p.parse_args(argv)
 
 
@@ -271,11 +275,36 @@ def _auth_headers(session: tuple[str | None, str | None]) -> dict:
     return headers
 
 
+async def _collect_etags(base_url: str, session, endpoints: tuple[str, ...],
+                         timeout: float, client) -> dict[str, str]:
+    """预取每个端点的 ETag（``--etag`` 模式）。拿不到就跳过该端点（回落普通请求）。"""
+    out: dict[str, str] = {}
+    for ep in endpoints:
+        try:
+            if client is not None:
+                r = await client.get(base_url + ep, headers=_auth_headers(session))
+                etag = r.headers.get("etag")
+            else:
+                def _do(u=base_url + ep) -> str | None:
+                    req = urlrequest.Request(u, headers=_auth_headers(session))
+                    with urlrequest.urlopen(req, timeout=timeout) as resp:
+                        return resp.headers.get("ETag")
+                etag = await asyncio.to_thread(_do)
+        except Exception:  # noqa: BLE001 —— 预取失败不影响压测，退回普通请求
+            etag = None
+        if etag:
+            out[ep] = etag
+    return out
+
+
 async def _one_request(base_url: str, ep: str, session, timeout: float,
-                       client) -> tuple[bool, float]:
+                       client, etags: dict[str, str] | None = None
+                       ) -> tuple[bool, float]:
     """单次 GET：(是否成功, 延迟ms)。任何异常按失败计（计入错误数）。"""
     url = base_url + ep
     headers = _auth_headers(session)
+    if etags and ep in etags:
+        headers["If-None-Match"] = etags[ep]   # 命中返回 304（响应体为空）
     t0 = time.perf_counter()
     ok = False
     if client is not None:  # httpx 异步路径
@@ -287,8 +316,11 @@ async def _one_request(base_url: str, ep: str, session, timeout: float,
     else:  # urllib 降级路径
         def _do() -> int:
             req = urlrequest.Request(url, headers=headers)
-            with urlrequest.urlopen(req, timeout=timeout) as resp:
-                return resp.status
+            try:
+                with urlrequest.urlopen(req, timeout=timeout) as resp:
+                    return resp.status
+            except HTTPError as e:  # 304 是成功（缓存命中），必须与真正的错误区分
+                return e.code
         try:
             ok = (await asyncio.to_thread(_do)) < 400
         except Exception:  # noqa: BLE001
@@ -298,7 +330,8 @@ async def _one_request(base_url: str, ep: str, session, timeout: float,
 
 async def _worker(idx: int, base_url: str, session, deadline: float, pace: float,
                   timeout: float, results: list, client,
-                  endpoints: tuple[str, ...] = ENDPOINTS) -> None:
+                  endpoints: tuple[str, ...] = ENDPOINTS,
+                  etags: dict[str, str] | None = None) -> None:
     """单虚拟用户：轮询打混合 GET，直到 deadline；pace>0 时按固定节奏节流。"""
     interval = 1.0 / pace if pace > 0 else 0.0
     next_due = 0.0
@@ -312,7 +345,7 @@ async def _worker(idx: int, base_url: str, session, deadline: float, pace: float
         if time.monotonic() >= deadline:
             break
         next_due = time.monotonic() + interval
-        ok, lat = await _one_request(base_url, ep, session, timeout, client)
+        ok, lat = await _one_request(base_url, ep, session, timeout, client, etags)
         results.append((ep, ok, lat))
 
 
@@ -343,6 +376,11 @@ async def _run(args: argparse.Namespace) -> int:
         client = (httpx.AsyncClient(trust_env=False, timeout=args.timeout,
                                     limits=httpx.Limits(max_connections=args.users * 2 + 8))
                   if _HAS_HTTPX else None)
+        etags: dict[str, str] = {}
+        if getattr(args, "etag", False):
+            etags = await _collect_etags(base, sessions[0], endpoints, args.timeout, client)
+            print(f"[etag] 预取到 {len(etags)}/{len(endpoints)} 个端点的 ETag"
+                  f"（其余端点按普通请求压）")
         results: list = []
         wall_start = time.monotonic()
         try:
@@ -351,7 +389,7 @@ async def _run(args: argparse.Namespace) -> int:
                 print(f"[stage {si + 1}/{len(stages)}] 并发={n}，持续 {args.seconds}s …")
                 await asyncio.gather(
                     *[_worker(k, base, sessions[k], deadline, args.pace, args.timeout,
-                              results, client, endpoints)
+                              results, client, endpoints, etags)
                       for k in range(n)])
         finally:
             if client is not None:
@@ -366,7 +404,8 @@ async def _run(args: argparse.Namespace) -> int:
     stats = summarize(results, wall)
     print(f"\n目标 {base}｜虚拟用户 {args.users}｜实测时长 {wall:.1f}s｜"
           f"pace={args.pace if args.pace > 0 else '全速'} RPS/用户｜"
-          f"端点 {len(endpoints)} 个{'' if len(endpoints) > 1 else '（单端点）'}\n")
+          f"端点 {len(endpoints)} 个{'' if len(endpoints) > 1 else '（单端点）'}"
+          f"{f'｜etag 命中 {len(etags)}' if etags else ''}\n")
     print(render_table(stats))
     print(f"\n合计请求 {sum(s['requests'] for s in stats.values())}，"
           f"错误 {sum(s['errors'] for s in stats.values())}")

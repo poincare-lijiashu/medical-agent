@@ -232,3 +232,52 @@ def test_frontend_disclaimer_matches_backend_and_docs():
     assert 'drugDictPanel' not in html, "admin 数据面板字典卡应已移除（阶段4 任务1）"
     md = (BASE / "docs" / "DEPLOY.md").read_text(encoding="utf-8")
     assert "药品数据免责声明" in md
+
+
+# ---- 第 61 批：/drug/dict 内容哈希 ETag + 304（116KB 全量 → 304 只回头）----
+
+def test_drug_dict_etag_and_304(env):
+    c = env.client
+    H = _login(c, "doctor01")
+    U = "/api/v1/medical/drug/dict"
+
+    r1 = c.get(U, headers=H)
+    assert r1.status_code == 200
+    etag = r1.headers["etag"]
+    assert etag.startswith('"') and etag.endswith('"') and len(etag) > 10
+    assert "private" in r1.headers["cache-control"]      # 不进共享缓存
+    assert "must-revalidate" in r1.headers["cache-control"]
+    body = r1.json()
+    assert body["drugs"] and body["disclaimer"]           # 内容未被 Response 包装破坏
+
+    # 命中 → 304 且响应体为空（浏览器/客户端省掉 116KB）
+    r2 = c.get(U, headers={**H, "If-None-Match": etag})
+    assert r2.status_code == 304 and r2.content == b""
+    # 弱校验前缀 W/ 与多值列表同样命中
+    assert c.get(U, headers={**H, "If-None-Match": "W/" + etag}).status_code == 304
+    assert c.get(U, headers={**H, "If-None-Match": '"x", ' + etag}).status_code == 304
+    # 不匹配 → 200 全量，内容与首次一致
+    r3 = c.get(U, headers={**H, "If-None-Match": '"deadbeef"'})
+    assert r3.status_code == 200 and r3.json() == body
+
+    # 字典真的变了 → ETag 必须变（防"永久 304"缓存中毒）
+    admin = _login(c, "admin01")
+    assert c.post("/api/v1/medical/admin/drug/dict", headers=admin,
+                  json={"action": "add", "item": {"name": "ETag探针药"}}).status_code == 200
+    r4 = c.get(U, headers={**H, "If-None-Match": etag})
+    assert r4.status_code == 200
+    assert r4.headers["etag"] != etag
+    assert any(d.get("name") == "ETag探针药" for d in r4.json()["drugs"])
+
+
+def test_etag_matches_header_forms():
+    from backend.api.v1.medical.drug import _etag_matches
+    e = '"abc"'
+    assert _etag_matches(None, e) is False
+    assert _etag_matches("", e) is False
+    assert _etag_matches(e, e) is True
+    assert _etag_matches(" " + e + " ", e) is True
+    assert _etag_matches('"x",' + e, e) is True       # 多值列表
+    assert _etag_matches("W/" + e, e) is True          # 弱校验
+    assert _etag_matches("*", e) is True
+    assert _etag_matches('"other"', e) is False
