@@ -62,6 +62,31 @@ def _circuit_cooldown() -> float:
         return _PG_CIRCUIT_COOLDOWN_S
 
 
+# ---------- PG 连接池容量（第 59 批）----------
+# 为什么可配：第 58 批实测单实例只读吞吐在 ~100 RPS 饱和，而池上限固定 5。
+# 池满时请求在取连接处排队，是"吞吐上不去、延迟线性涨"的候选瓶颈之一。
+# 默认值保持 1/5 不变（避免无谓的连接数上涨），压测/扩容场景再按需放开。
+_PG_POOL_MIN = 1
+_PG_POOL_MAX = 5
+
+
+def _pool_min() -> int:
+    """池下限：settings 可覆盖（PG_POOL_MIN），非法值回落 1。"""
+    try:
+        return max(1, int(getattr(settings, "pg_pool_min", _PG_POOL_MIN) or _PG_POOL_MIN))
+    except (TypeError, ValueError):
+        return _PG_POOL_MIN
+
+
+def _pool_max() -> int:
+    """池上限：settings 可覆盖（PG_POOL_MAX）；下限跟 min 对齐，上限 100（防手滑打爆 PG）。"""
+    try:
+        configured = int(getattr(settings, "pg_pool_max", _PG_POOL_MAX) or _PG_POOL_MAX)
+    except (TypeError, ValueError):
+        configured = _PG_POOL_MAX
+    return min(100, max(_pool_min(), configured))
+
+
 class PGUnavailable(RuntimeError):
     """PG 熔断期间的快速失败（不等待连接超时，由上层回落 JSON 或返回 5xx）。"""
 
@@ -188,7 +213,8 @@ def offline_mode() -> bool:
 async def _init_impl() -> bool:
     """建池 + 建表（含旧表平滑升级：users.dept / review_queue.images）。"""
     global _pool
-    pool = await asyncpg.create_pool(_dsn(), min_size=1, max_size=5, timeout=5)
+    pool = await asyncpg.create_pool(_dsn(), min_size=_pool_min(),
+                                     max_size=_pool_max(), timeout=5)
     try:
         async with pool.acquire() as c:
             await c.execute("""CREATE TABLE IF NOT EXISTS audit_log(

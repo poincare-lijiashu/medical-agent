@@ -19,8 +19,10 @@ backend/core/security_rate.py，身份取 Bearer sub）。因此每虚拟用户�
 （POST /api/v1/auth/login，凭据读 auth.seed 的演示账号约定）拿 Bearer token。
 
 用法：
-    python scripts/loadtest.py --users 16 --seconds 25 --ramp
+    python scripts/loadtest.py --users 30 --seconds 90
     # --ramp：并发分 1/4/8/16 四档爬坡，每档约 --seconds 秒
+    # --paths /healthz：只压单个端点（容量归因：先量框架上限，再看业务端点）
+    # --pace 0：全速（会触发 429，除非服务端 RATE_LIMIT_PER_MIN 已放开）
 """
 from __future__ import annotations
 
@@ -148,7 +150,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--password", default=None,
                    help="登录口令；缺省读 settings.auth_demo_password（.env.local AUTH_DEMO_PASSWORD）")
     p.add_argument("--timeout", type=float, default=10.0, help="单请求超时（秒）")
+    p.add_argument("--paths", default=None,
+                   help="只压指定端点（逗号分隔，默认混合 4 个只读 GET）。"
+                        "容量归因用：如 --paths /healthz 单独测框架上限")
     return p.parse_args(argv)
+
+
+def resolve_paths(raw: str | None) -> tuple[str, ...]:
+    """``--paths`` → 端点元组；未指定时用默认混合集。空/非法输入回落默认。"""
+    if not raw:
+        return ENDPOINTS
+    picked = tuple(x.strip() for x in raw.split(",") if x.strip())
+    return picked or ENDPOINTS
 
 
 # ---------- HTTP 层（httpx 优先，urllib 降级；两分支统计语义一致） ----------
@@ -284,13 +297,14 @@ async def _one_request(base_url: str, ep: str, session, timeout: float,
 
 
 async def _worker(idx: int, base_url: str, session, deadline: float, pace: float,
-                  timeout: float, results: list, client) -> None:
+                  timeout: float, results: list, client,
+                  endpoints: tuple[str, ...] = ENDPOINTS) -> None:
     """单虚拟用户：轮询打混合 GET，直到 deadline；pace>0 时按固定节奏节流。"""
     interval = 1.0 / pace if pace > 0 else 0.0
     next_due = 0.0
     i = idx
     while True:
-        ep = ENDPOINTS[i % len(ENDPOINTS)]
+        ep = endpoints[i % len(endpoints)]
         i += 1
         now = time.monotonic()
         if interval and now < next_due:
@@ -310,6 +324,7 @@ async def _run(args: argparse.Namespace) -> int:
     if not password:
         raise SystemExit("未提供口令：传 --password 或在 .env.local 配置 AUTH_DEMO_PASSWORD")
 
+    endpoints = resolve_paths(getattr(args, "paths", None))
     # 每虚拟用户一个独立账号（服务端限流按账号计 60 次/分，共享单账号必撞 429）
     load_names = [f"loadtest{i:02d}" for i in range(1, args.users + 1)]
     admin_session = None
@@ -336,7 +351,7 @@ async def _run(args: argparse.Namespace) -> int:
                 print(f"[stage {si + 1}/{len(stages)}] 并发={n}，持续 {args.seconds}s …")
                 await asyncio.gather(
                     *[_worker(k, base, sessions[k], deadline, args.pace, args.timeout,
-                              results, client)
+                              results, client, endpoints)
                       for k in range(n)])
         finally:
             if client is not None:
@@ -350,7 +365,8 @@ async def _run(args: argparse.Namespace) -> int:
 
     stats = summarize(results, wall)
     print(f"\n目标 {base}｜虚拟用户 {args.users}｜实测时长 {wall:.1f}s｜"
-          f"pace={args.pace if args.pace > 0 else '全速'} RPS/用户\n")
+          f"pace={args.pace if args.pace > 0 else '全速'} RPS/用户｜"
+          f"端点 {len(endpoints)} 个{'' if len(endpoints) > 1 else '（单端点）'}\n")
     print(render_table(stats))
     print(f"\n合计请求 {sum(s['requests'] for s in stats.values())}，"
           f"错误 {sum(s['errors'] for s in stats.values())}")

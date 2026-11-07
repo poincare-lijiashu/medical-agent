@@ -74,6 +74,16 @@ def test_endpoints_match_registered_routes():
             assert ep[len("/api/v1/medical"):] in med_paths, f"{ep} 不在 medical_router 注册路由中"
 
 
+# ---------- --paths（容量归因：单端点） ----------
+
+def test_resolve_paths_default_and_custom():
+    assert lt.resolve_paths(None) == lt.ENDPOINTS       # 不传 = 默认混合集
+    assert lt.resolve_paths("") == lt.ENDPOINTS          # 空串回落
+    assert lt.resolve_paths(" /healthz , /api , /x ") == ("/healthz", "/api", "/x")
+    assert lt.resolve_paths("/a,/b,,/c") == ("/a", "/b", "/c")   # 逗号分隔 + 去空项
+    assert lt.resolve_paths(" , ") == lt.ENDPOINTS       # 全是空白 → 回落
+
+
 # ---------- Cookie 会话（生产默认 AUTH_TOKEN_IN_BODY=false） ----------
 
 def test_cookie_from_extracts_access_token():

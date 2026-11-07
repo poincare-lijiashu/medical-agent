@@ -1252,6 +1252,55 @@ def test_pg_circuit_threshold_is_configurable(monkeypatch):
     assert pg_store.circuit_open() is True
 
 
+# ---- 第 59 批：连接池容量可配（默认 1/5 不变） ----
+
+def test_pool_config_defaults_match_legacy(monkeypatch):
+    """默认值必须与历史硬编码（min=1/max=5）一致，避免升级即改变连接数。"""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "pg_pool_min", 1)
+    monkeypatch.setattr(settings, "pg_pool_max", 5)
+    assert pg_store._pool_min() == 1
+    assert pg_store._pool_max() == 5
+
+
+def test_pool_config_clamps_invalid_values(monkeypatch):
+    """非法/危险配置不能让建池失败或打爆 PG：min≥1、max 不低于 min、max≤100。"""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "pg_pool_min", 0)
+    assert pg_store._pool_min() == 1
+    monkeypatch.setattr(settings, "pg_pool_min", "bad")
+    assert pg_store._pool_min() == 1
+    # 0/空 视为"没配"，回落默认 5（比压到 1 更安全：不会把吞吐误伤成单连接）
+    monkeypatch.setattr(settings, "pg_pool_max", 0)
+    assert pg_store._pool_max() == 5
+    monkeypatch.setattr(settings, "pg_pool_min", 10)
+    monkeypatch.setattr(settings, "pg_pool_max", 3)
+    assert pg_store._pool_max() == 10  # 上限不得小于下限
+    monkeypatch.setattr(settings, "pg_pool_max", 9999)
+    assert pg_store._pool_max() == 100
+
+
+def test_init_pool_uses_configured_sizes(monkeypatch):
+    """建池时真正把配置传给 asyncpg.create_pool（防止只改常量不接线）。"""
+    from backend.config import settings
+
+    captured: dict = {}
+
+    async def _fake_create_pool(dsn, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop-after-capture")
+
+    monkeypatch.setattr(settings, "pg_pool_min", 2)
+    monkeypatch.setattr(settings, "pg_pool_max", 20)
+    monkeypatch.setattr(pg_store.asyncpg, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(pg_store, "_pool", None)
+    with pytest.raises(RuntimeError, match="stop-after-capture"):
+        asyncio.run(pg_store._init_impl())
+    assert captured["min_size"] == 2 and captured["max_size"] == 20
+
+
 def test_run_pg_fast_fails_when_circuit_open(monkeypatch):
     monkeypatch.setattr(pg_store, "_pg_circuit_until", time.monotonic() + 60)
 

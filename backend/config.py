@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     # 避免每次请求都等连接超时（实测约 2s/域）；冷却结束自动探测，成功即闭合。
     pg_circuit_fails: int = 3
     pg_circuit_cooldown_s: float = 15.0
+    # 第 59 批：连接池容量可调（默认 1/5 与历史行为一致）。单实例只读吞吐在高并发下
+    # 先卡在取连接排队，扩容/压测时按 PG max_connections 剩余量放开（上限硬顶 100）。
+    pg_pool_min: int = 1
+    pg_pool_max: int = 5
     pg_user: str = "eduagent"
     pg_password: str = ""
     pg_database: str = "eduagent_medical"
