@@ -1747,6 +1747,46 @@ Should（读当前代码确认，不新增业务逻辑）：
 - 清除依赖该域下一次成功写（设计如此），没有"强制重试/清空"入口；
 - 管理端 UI 暂未渲染 `infra.storage`（仅 API 与自检消费），可视化留待前端批次。
 
+---
+
+## 52. 2026-11-08 验收（第 48 批：PG 真库子集补跑与上线自检全 PASS）
+
+**背景**：第 40–47 批期间 Docker 引擎不可用，28 项 PG 真库/行级用例按设计 skip。
+本轮 Docker 恢复后补跑并做完整回归。
+
+| 项目 | 结果 |
+|---|---|
+| PG 容器 | `medagent_pg` Up，`pg_isready` = accepting connections |
+| `tests/test_agent_pg_real.py` | **15 passed**（9 张 Agent 域表，含第 42 批新增 `agent_sleep_reports`） |
+| `test_pg_integration` / `test_pg_primary` / `test_row_level_users` / `test_row_level_review` | **15 passed** |
+| 全量 pytest（PG 在线） | **1152 passed / 15 skipped**；15 项 skip 全部是"服务未启动"的 E2E，无 PG 跳过 |
+| `run_vue_parity.py`（PG 在线） | **9 passed**（15.4s） |
+| `agent_go_live_check.py --require-pg` | **RESULT PASS**（0 FAIL） |
+
+**上线自检关键行**：
+```
+PASS auth.session = cookie
+PASS model.allowed_classes = allowed=2 classes=['domestic']
+PASS alerts.metrics_covered = 15 metrics covered
+PASS storage.pg = http=200 pg=True require=True
+PASS storage.domains = mode=pg stale=0
+```
+
+**两点澄清**：
+1. 第 44 批的 `model.allowed_classes = allowed=0` 不是"缺 provider 配置"，而是 **PG 掉线时
+   读的是旧 JSON 兜底**（其中没有 provider 行）。PG 在线后可见 2 个 domestic provider，
+   自检自然转 PASS——这反证了第 46/47 批把 PG 真源纳入门禁的必要性。
+2. 启动日志出现 `snapshot.catch_up.created | date=2026-11-08`：第 41 批的调度收敛在
+   **真实 PG 模式**下也按预期补了当天快照（此前只在无 PG 的测试环境验证过）。
+
+**清理**：E2E 处方 2 条由 `cleanup_test_data.py` 删除（13→11）；`runtime_flags.json`
+已还原；睡眠报告运行时文件已删除。
+
+**仍存边界**：
+- PG 为本机 Docker 演示实例（`medagent`），非院内集群；
+- E2E 仍需手工/脚本拉起服务，15 项 skip 属预期；
+- 上线自检 PASS 只代表"技术联调就绪"，临床验收与签字仍需人工。
+
 
 
 
