@@ -11,6 +11,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROUTER = os.path.join(REPO, "frontend-vue", "src", "router", "index.js")
 API = os.path.join(REPO, "frontend-vue", "src", "api", "index.js")
 ASK = os.path.join(REPO, "frontend-vue", "src", "views", "AskView.vue")
+AGENT = os.path.join(REPO, "frontend-vue", "src", "views", "AgentView.vue")
+LABELS = os.path.join(REPO, "frontend-vue", "src", "constants", "labels.js")
 
 
 def _read(path: str) -> str:
@@ -101,3 +103,59 @@ def test_literature_view_401_is_unified():
     assert "await auth.logout()" in body
     assert "return 'auth'" in body
     assert "if (streamed === 'auth') return" in body
+
+
+def test_enum_labels_have_single_source():
+    """评审 04-S3：策略/状态中英文映射只有 constants/labels.js 一份，两页共用。"""
+    labels = _read(LABELS)
+    assert "STRATEGY_TEXT" in labels and "STATUS_TEXT" in labels
+    ask = _read(ASK)
+    agent = _read(AGENT)
+    assert "from '../constants/labels'" in ask
+    assert "from '../constants/labels'" in agent
+    # 本地不得再自建一份映射（防止再次漂移）
+    assert "const STATUS_TEXT = {" not in agent
+    assert "single: '单智能体直达'" not in ask
+
+
+def test_agent_view_clears_stale_results_and_shows_inline_errors():
+    """评审 04-S3/S4：失败就地展示，发起请求前清空旧结果。"""
+    body = _read(AGENT)
+    assert 'data-testid="agent-route-error"' in body
+    assert 'data-testid="agent-consult-error"' in body
+    assert "route.value = null" in body
+    assert "consultResult.value = null" in body
+    assert "md(consultResult.answer" in body
+
+
+def test_agent_view_refresh_has_loading_and_sequence_guard():
+    """评审 04-S5：刷新按钮 loading + 请求序号守卫，旧响应不覆盖新数据。"""
+    body = _read(AGENT)
+    assert ':loading="loadingAll"' in body
+    assert "const seq = ++loadSeq" in body
+    assert "seq !== loadSeq" in body
+    assert "++loadSeq" in body
+
+
+def test_agent_view_tables_avoid_horizontal_overflow():
+    """评审 04-S9：长字段截断 + 操作列收窄，避免固定列宽溢出 1028px。"""
+    body = _read(AGENT)
+    assert "show-overflow-tooltip" in body
+    assert 'class-name="ops-col"' in body
+    assert ".ops-col .el-button" in body
+
+
+def test_ask_view_new_chat_confirm_and_deactivate_abort():
+    """评审 04-S11：生成中清空需确认；KeepAlive 失活时中止请求。"""
+    body = _read(ASK)
+    assert "ElMessageBox.confirm" in body
+    assert "onDeactivated(" in body
+    assert "if (loading.value) stop()" in body
+    assert "const inputEl = ref(null)" in body
+
+
+def test_ask_view_history_keeps_complete_pairs():
+    """评审 04（历史裁剪）：按问答对丢弃，历史首条永远是 user。"""
+    body = _read(ASK)
+    assert "pairs.slice(-3)" in body
+    assert "kept.flat()" in body

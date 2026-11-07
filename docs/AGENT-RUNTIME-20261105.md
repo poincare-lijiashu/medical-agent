@@ -982,3 +982,30 @@ admin→200、覆盖审计字段；`test_agent_governance.py::test_second_opinio
 表格溢出、新建对话确认、空态文案、选中态图标）。
 
 **验证**：全量 pytest **1083 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 25. 2026-11-06 评审整改（第 21 批：两视图口径统一与操作安全）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 04-S3 | 新增 `constants/labels.js` 作为策略/状态枚举中文的**唯一来源**（`strategyText`/`statusText`/`statusType`），AskView 与 AgentView 共用；AgentView 不再直接输出 `single/supervisor` 英文码；回答统一走 `md()` Markdown 渲染 | `constants/labels.js`（新建）、`AskView.vue`、`AgentView.vue` |
+| 04-S3/S4 | AgentView 的路由预览与统一问答：发起前**清空旧结果**，失败时卡片内联错误条（`agent-route-error` / `agent-consult-error`），不再"失败但旧结果留在原地被误读" | `AgentView.vue` |
+| 04-S5 | 刷新按钮 `:loading` + 禁用；`loadAll` 加请求序号守卫（旧批次晚到直接丢弃）；`refreshUsage` 主动作废在飞的 `loadAll`，避免旧快照覆盖新 Token 数据 | `AgentView.vue` |
+| 04-S9 | 技能卡/Bot 表的编码、名称、模型列改 `min-width` + `show-overflow-tooltip`；Bot 操作列 470→300px 并允许按钮换行，消除固定列宽溢出 | `AgentView.vue` |
+| 04-S11 | 生成中「新建对话」改为二次确认（`ElMessageBox.confirm`），不再静默丢弃已生成内容；`onDeactivated` 中止进行中的请求（KeepAlive 下不再后台持续消耗模型配额） | `AskView.vue` |
+| 04-S16/S17 | 空态文案明确"指定技能需先选择能力域"、"最近 3 轮 / 6 条"；能力域/技能卡选中态加 `✓` 前缀（不只靠颜色）；示例点击后聚焦输入框并提示"已填入，点击提问发送" | `AskView.vue` |
+| 历史裁剪 | `buildHistory` 改为**以问答对为单位**丢弃（最近 3 对、合计 ≤6000 字），保证历史首条永远是 `user`，不再出现"历史以 assistant 开头"的畸形上下文 | `AskView.vue` |
+
+**为什么这样改**：同一后端概念在两个页面出现两种说法（英文枚举 vs 中文、纯文本 vs Markdown、
+toast vs 内联），用户与管理员看到的是两套系统；而"失败后旧结果留存""旧响应覆盖新数据"
+属于会让人做出错误判断的问题——尤其在临床辅助场景，界面不能把上一次的结论冒充这一次。
+
+**新增测试**：`test_frontend_agent_markers.py` 新增 6 项（枚举单一来源、失败清空+内联错误、
+刷新 loading 与序号守卫、表格溢出约束、新建对话确认与失活中止、历史成对裁剪）。
+
+**仍存边界**：前端仍无组件级单测，以上为静态标记 + `npm run build` + 人工浏览器验证；
+`show-overflow-tooltip` 只覆盖长文本列，窄屏（<1024px）仍可能出现横向滚动；
+`onDeactivated` 中止依赖 KeepAlive 生命周期，若将来把 AskView 移出 include 列表需同步调整。
+
+**验证**：全量 pytest **1089 passed / 11 skipped**；`npm run build` 成功。

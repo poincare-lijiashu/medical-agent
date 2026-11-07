@@ -9,7 +9,7 @@
       </div>
       <div>
         <el-button size="small" @click="openCard">查看 A2A 能力卡</el-button>
-        <el-button size="small" @click="loadAll">刷新</el-button>
+        <el-button size="small" :loading="loadingAll" :disabled="loadingAll" @click="loadAll">刷新</el-button>
       </div>
     </div>
 
@@ -40,9 +40,12 @@
           <el-button type="primary" size="small" :loading="routing" @click="preview">预览路由</el-button>
           <span class="src" style="margin-left: 8px">规则路由：可解释、可复现，不消耗模型 Token</span>
         </div>
+        <!-- 评审 04-S3/S4：失败就地显示，且发起新请求时旧结果已清空，不会被误读为本次结果 -->
+        <el-alert v-if="routeError" type="error" :closable="false" show-icon
+                  style="margin-top: 8px" :title="routeError" data-testid="agent-route-error" />
         <div v-if="route" class="route-box" data-testid="agent-route-result">
           <div><b>主责智能体：</b>{{ route.name }}（{{ route.agent }}）</div>
-          <div><b>置信度：</b>{{ route.confidence }} · <b>策略：</b>{{ route.strategy }} · <b>最大跳数：</b>{{ route.maxHops }}</div>
+          <div><b>置信度：</b>{{ route.confidence }} · <b>策略：</b>{{ strategyText(route.strategy) }} · <b>最大跳数：</b>{{ route.maxHops }}</div>
           <div><b>原因：</b>{{ route.reason }}</div>
           <div v-if="route.candidates && route.candidates.length > 1">
             <b>候选：</b>{{ route.candidates.map((c) => c.agent + ':' + c.score).join(' / ') }}
@@ -80,9 +83,11 @@
             真实调用本地/国产模型；未配置 provider 显式失败；结果恒需人工复核
           </span>
         </div>
+        <el-alert v-if="consultError" type="error" :closable="false" show-icon
+                  style="margin-top: 8px" :title="consultError" data-testid="agent-consult-error" />
         <div v-if="consultResult" class="route-box" data-testid="agent-consult-result">
           <div><b>能力域：</b>{{ consultResult.agent.name }}（{{ consultResult.agent.id }}）</div>
-          <div><b>路由：</b>{{ consultResult.routing.strategy }} · {{ consultResult.routing.reason }}</div>
+          <div><b>路由：</b>{{ strategyText(consultResult.routing.strategy) }} · {{ consultResult.routing.reason }}</div>
           <div>
             <b>生效技能：</b>
             <template v-if="consultResult.appliedSkills && consultResult.appliedSkills.length">
@@ -94,9 +99,8 @@
           <div v-if="consultResult.declaredTools && consultResult.declaredTools.length">
             <b>技能声明工具：</b>{{ consultResult.declaredTools.join('、') }}（本次不自动调用）
           </div>
-          <div style="white-space: pre-wrap; margin-top: 6px">
-            <b>回答：</b>{{ consultResult.answer }}
-          </div>
+          <!-- 评审 04-S3：与医生端同一套 Markdown 渲染，不再直接摊纯文本 -->
+          <div class="md-body answer-text" style="margin-top: 6px" v-html="md(consultResult.answer || '')"></div>
           <div class="src">{{ consultResult.note }} · 耗时 {{ consultResult.elapsedMs }}ms</div>
         </div>
       </el-card>
@@ -109,8 +113,8 @@
           </div>
         </template>
         <el-table :data="skillList" size="small" style="width: 100%">
-          <el-table-column prop="code" label="编码" width="150" />
-          <el-table-column prop="name" label="名称" width="180" />
+          <el-table-column prop="code" label="编码" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
           <el-table-column prop="agentId" label="智能体" width="110" />
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
@@ -147,10 +151,10 @@
           </div>
         </template>
         <el-table :data="botList" size="small" style="width: 100%">
-          <el-table-column prop="code" label="编码" width="140" />
-          <el-table-column prop="name" label="名称" width="160" />
+          <el-table-column prop="code" label="编码" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
           <el-table-column prop="agentId" label="能力域" width="100" />
-          <el-table-column prop="modelProvider" label="模型" width="130" />
+          <el-table-column prop="modelProvider" label="模型" min-width="130" show-overflow-tooltip />
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-tag size="small" :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
@@ -159,7 +163,8 @@
           <el-table-column label="版本" width="60">
             <template #default="{ row }">v{{ row.version }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="470">
+          <!-- 评审 04-S9：操作列收窄，按钮允许换行，避免固定 470px 导致全表横向溢出 -->
+          <el-table-column label="操作" width="300" class-name="ops-col">
             <template #default="{ row }">
               <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'"
                          size="small" @click="submitBot(row)">送审</el-button>
@@ -739,6 +744,8 @@
 import { computed, defineOptions, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
+import { statusText, statusType, strategyText } from '../constants/labels'
+import { md, detailText } from '../utils/assist'
 import { useAuthStore } from '../stores/auth'
 
 defineOptions({ name: 'AgentView' })
@@ -752,9 +759,14 @@ const tools = ref([])
 const skillList = ref([])
 const question = ref('')
 const route = ref(null)
+const routeError = ref('')
 const consultForm = ref({ agentId: '', skillCodes: [], question: '' })
 const consultResult = ref(null)
+const consultError = ref('')
 const consultBusy = ref(false)
+// 评审 04-S5：刷新按钮 loading + 请求序号守卫，后到的旧响应直接丢弃
+const loadingAll = ref(false)
+let loadSeq = 0
 const consultAgents = computed(() => (agents.value || []).filter((a) => a.id !== 'router'))
 const consultSkills = computed(() => (skillList.value || []).filter((s) => s.status === 'PUBLISHED'
   && (!consultForm.value.agentId || s.agentId === consultForm.value.agentId)))
@@ -885,28 +897,15 @@ const expToolOptions = computed(() => {
   return tools.value.filter((t) => allowed.has(t.name))
 })
 
-const STATUS_TEXT = {
-  DRAFT: '草稿',
-  IN_REVIEW: '待审核',
-  PUBLISHED: '已生效',
-  REJECTED: '已驳回',
-  DISABLED: '已停用',
-}
-
-function statusText(s) {
-  return STATUS_TEXT[s] || s
-}
-
-function statusType(s) {
-  if (s === 'PUBLISHED') return 'success'
-  if (s === 'IN_REVIEW') return 'warning'
-  if (s === 'REJECTED') return 'danger'
-  return 'info'
-}
+// 评审 04-S3：状态/策略枚举的中文映射已收敛到 constants/labels.js，两页共用
 
 async function loadAll() {
-  // 评审 M-55：15 个只读请求并发且互不依赖——用 allSettled，单项失败不吞掉其余结果
-  const calls = [
+  // 评审 04-S5：并发刷新时只让最后一次请求写状态（旧响应晚到会被丢弃）
+  const seq = ++loadSeq
+  loadingAll.value = true
+  try {
+    // 评审 M-55：15 个只读请求并发且互不依赖——用 allSettled，单项失败不吞掉其余结果
+    const calls = [
     ['flags', () => http.get('/agent/flags', { silentToast: true })],
     ['catalog', () => http.get('/agent/catalog', { silentToast: true })],
     ['skills', () => http.get('/agent/skills', { silentToast: true })],
@@ -930,6 +929,7 @@ async function loadAll() {
     if (r.status === 'fulfilled') data[calls[i][0]] = r.value.data || {}
     else failed += 1
   })
+  if (seq !== loadSeq) return   // 旧批次晚到：丢弃，避免覆盖更新的数据
   const d = (k) => data[k] || {}
   flags.value = d('flags').flags || []
   agents.value = d('catalog').agents || []
@@ -951,10 +951,15 @@ async function loadAll() {
     // 逐项失败已静默；这里只给一条聚合提示，其余成功数据照常展示
     ElMessage.warning(`有 ${failed} 项数据加载失败，其余已展示；可点击「刷新」重试`)
   }
+  } finally {
+    if (seq === loadSeq) loadingAll.value = false
+  }
 }
 
 async function refreshUsage() {
   usageBusy.value = true
+  // 评审 04-S5：单独刷新使用率时作废在飞的 loadAll，防止旧快照回写覆盖新 Token 数据
+  ++loadSeq
   try {
     const r = await http.get('/agent/skill-library/usage')
     usage.value = r.data
@@ -1048,9 +1053,14 @@ async function preview() {
     return
   }
   routing.value = true
+  // 评审 04-S4：先清空旧结果，失败时不会把上次的路由当成这次
+  route.value = null
+  routeError.value = ''
   try {
     const r = await http.post('/agent/route', { question: question.value.trim() })
     route.value = r.data
+  } catch (e) {
+    routeError.value = '路由预览失败：' + detailText(e)
   } finally {
     routing.value = false
   }
@@ -1068,12 +1078,17 @@ async function runConsult() {
     return
   }
   consultBusy.value = true
+  // 评审 04-S4：先清空旧结果，失败时显示错误态而不是上一次的回答
+  consultResult.value = null
+  consultError.value = ''
   try {
     const body = { question: q }
     if (consultForm.value.agentId) body.agentId = consultForm.value.agentId
     if (consultForm.value.skillCodes.length) body.skillCodes = consultForm.value.skillCodes
-    const r = await http.post('/agent/consult', body)
+    const r = await http.post('/agent/consult', body, { silentToast: true })
     consultResult.value = r.data
+  } catch (e) {
+    consultError.value = '问答失败：' + detailText(e)
   } finally {
     consultBusy.value = false
   }
@@ -1514,6 +1529,8 @@ onMounted(loadAll)
 }
 .src { color: var(--ink-3, #64748b); font-size: 12px }
 .card-head { display: flex; align-items: center; justify-content: space-between }
+/* 评审 04-S9：操作列按钮允许换行，避免窄屏下撑出横向滚动条 */
+.ops-col .el-button { margin-left: 0; margin-right: 6px; margin-top: 4px }
 .policy-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 0 }
 .skill-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px }
 .skill-form label { display: flex; flex-direction: column; gap: 4px }

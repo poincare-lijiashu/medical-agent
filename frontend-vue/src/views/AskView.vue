@@ -35,7 +35,7 @@
             <div class="bubble bot" :data-testid="m.streaming ? 'ask-streaming' : 'ask-turn'">
               <div class="meta" v-if="m.meta">
                 <el-tag size="small">{{ m.meta.agent.name }}</el-tag>
-                <el-tag size="small" type="info">{{ strategyText(m.meta) }}</el-tag>
+                <el-tag size="small" type="info">{{ metaStrategyText(m.meta) }}</el-tag>
                 <el-tag v-if="m.meta.needsHumanReview" size="small" type="warning">需人工复核</el-tag>
                 <span class="src">{{ m.meta.routing.reason }}<template v-if="m.meta.elapsedMs != null"> · {{ m.meta.elapsedMs }}ms</template></span>
               </div>
@@ -65,8 +65,8 @@
         <b>怎么用</b>
         <div class="src" style="text-align: left; max-width: 620px; margin: 6px auto 0">
           ① 不选能力域时由规则路由自动分派；也可直接点选专科智能体；<br />
-          ② 技能卡默认应用该能力域全部已发布版本，也可只勾选指定技能；<br />
-          ③ 支持连续追问（仅回传最近 6 条，后端不存储对话）；<br />
+          ② 技能卡默认应用该能力域全部已发布版本，也可只勾选指定技能（需先选择能力域）；<br />
+          ③ 支持连续追问（仅回传最近 3 轮 / 6 条，后端不存储对话）；<br />
           ④ 回答附路由原因、生效技能版本与耗时，所有结果均需人工复核。
         </div>
       </div>
@@ -81,6 +81,7 @@
           @click="pickAgent('')" @keydown.enter.prevent="pickAgent('')"
           @keydown.space.prevent="pickAgent('')"
         >自动路由</el-tag>
+        <!-- 评审 04-S17：选中态除深浅色外再加 ✓，不依赖颜色区分 -->
         <el-tag
           v-for="a in agents" :key="a.id" class="pick-tag"
           :effect="form.agentId === a.id ? 'dark' : 'plain'"
@@ -88,7 +89,7 @@
           role="button" tabindex="0" :aria-pressed="form.agentId === a.id"
           @click="pickAgent(a.id)" @keydown.enter.prevent="pickAgent(a.id)"
           @keydown.space.prevent="pickAgent(a.id)"
-        >{{ a.name }}</el-tag>
+        >{{ form.agentId === a.id ? '✓ ' : '' }}{{ a.name }}</el-tag>
       </div>
 
       <div v-if="form.agentId" class="pick">
@@ -100,7 +101,7 @@
           :aria-pressed="!form.skillCodes.length"
           @click="form.skillCodes = []" @keydown.enter.prevent="form.skillCodes = []"
           @keydown.space.prevent="form.skillCodes = []"
-        >全部已发布（默认）</el-tag>
+        >{{ !form.skillCodes.length ? '✓ ' : '' }}全部已发布（默认）</el-tag>
         <el-tag
           v-for="s in agentSkills" :key="s.code" class="pick-tag"
           :class="{ 'is-limit': skillLimitReached && !form.skillCodes.includes(s.code) }"
@@ -110,7 +111,7 @@
           :aria-disabled="skillLimitReached && !form.skillCodes.includes(s.code)"
           @click="toggleSkill(s.code)" @keydown.enter.prevent="toggleSkill(s.code)"
           @keydown.space.prevent="toggleSkill(s.code)"
-        >{{ s.name }} v{{ s.version }}</el-tag>
+        >{{ form.skillCodes.includes(s.code) ? '✓ ' : '' }}{{ s.name }} v{{ s.version }}</el-tag>
         <!-- 评审 04-S2：把后端的 8 张上限与 12000 字提示词预算前置到界面 -->
         <span class="src" data-testid="skill-count">
           已选 {{ form.skillCodes.length }}/{{ SKILL_LIMIT }} 张（提示词合计预算 12000 字）
@@ -130,6 +131,7 @@
 
       <div class="composer">
         <textarea
+          ref="inputEl"
           v-model="form.question" class="inp" rows="3" maxlength="2000"
           data-testid="ask-input"
           placeholder="例：华法林与阿司匹林联用需要注意什么？（Ctrl+Enter 发送）"
@@ -151,10 +153,11 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, nextTick, onDeactivated, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import http from '../api'
+import { strategyText } from '../constants/labels'
 import { useAuthStore } from '../stores/auth'
 import { detailText, md } from '../utils/assist'
 
@@ -170,6 +173,7 @@ const thread = ref([])
 const loading = ref(false)
 const error = ref('')
 const threadEl = ref(null)
+const inputEl = ref(null)
 let controller = null
 
 const agentSkills = computed(() => skillList.value.filter(
@@ -180,9 +184,8 @@ const agentSkills = computed(() => skillList.value.filter(
 const SKILL_LIMIT = 8
 const skillLimitReached = computed(() => form.value.skillCodes.length >= SKILL_LIMIT)
 
-function strategyText(meta) {
-  const s = meta && meta.routing && meta.routing.strategy
-  return { single: '单智能体直达', supervisor: '主路由 + 候选', explicit: '手动指定', prefilter: '快捷应答' }[s] || s || ''
+function metaStrategyText(meta) {
+  return strategyText(meta && meta.routing ? meta.routing.strategy : '')
 }
 
 // 示例问题：优先当前能力域目录里声明的示例，最多 4 条
@@ -226,35 +229,54 @@ function toggleSkill(code) {
 function useExample(text) {
   form.value.question = text
   error.value = ''
+  // 评审 04-S17：示例只做填入，不自动提交；聚焦输入框并给出轻提示，避免误以为已发送
+  nextTick(() => { if (inputEl.value) inputEl.value.focus() })
+  ElMessage.info('已填入输入框，点击「提问」发送')
 }
 
-function newChat() {
-  if (loading.value) stop()
+async function newChat() {
+  // 评审 04-S11：生成中清空会静默丢弃已生成内容，必须先确认
+  if (loading.value) {
+    try {
+      await ElMessageBox.confirm('正在生成回答，停止并清空本次对话？已生成内容将丢失。',
+        '确认清空', { type: 'warning', confirmButtonText: '停止并清空', cancelButtonText: '继续生成' })
+    } catch (_) {
+      return
+    }
+    stop()
+  }
   thread.value = []
   form.value.question = ''
   error.value = ''
 }
 
-// 仅回传"已完成"的问答对；最近 6 条、合计 ≤6000 字（与后端上限一致）
+// 评审 04-S11：AskView 在 KeepAlive 内，离开页面不会触发 onUnmounted；
+// 不中止则后台继续消耗模型配额，这里在失活时主动断开。
+onDeactivated(() => {
+  if (loading.value) stop()
+})
+
+// 仅回传"已完成"的问答对；最近 3 轮（6 条）、合计 ≤6000 字（与后端上限一致）
 function buildHistory() {
-  const msgs = []
+  const pairs = []
   for (let i = 0; i < thread.value.length; i++) {
     const u = thread.value[i]
     const a = thread.value[i + 1]
     if (u.role === 'user' && a && a.role === 'assistant'
         && a.answer && !a.streaming && !a.failed) {
-      msgs.push({ role: 'user', content: u.text })
-      msgs.push({ role: 'assistant', content: a.answer })
+      pairs.push([
+        { role: 'user', content: u.text },
+        { role: 'assistant', content: a.answer },
+      ])
       i++
     }
   }
-  let sliced = msgs.slice(-6)
-  let total = sliced.reduce((n, m) => n + m.content.length, 0)
-  while (sliced.length && total > 6000) {
-    total -= sliced[0].content.length
-    sliced = sliced.slice(1)
-  }
-  return sliced
+  // 评审 04（历史裁剪）：以问答对为单位丢弃，保证首条永远是 user，不能出现"历史以
+  // assistant 开头"的畸形上下文（后端只校验 role 合法与总量，不会拦这种形态）
+  let kept = pairs.slice(-3)
+  const size = () => kept.reduce((n, p) => n + p[0].content.length + p[1].content.length, 0)
+  while (kept.length && size() > 6000) kept = kept.slice(1)
+  return kept.flat()
 }
 
 function scrollBottom() {
