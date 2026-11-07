@@ -116,6 +116,69 @@ def test_file_rotation_creates_backups(monkeypatch, tmp_path):
     assert backups, "超限应产生轮转备份文件"
 
 
+def test_per_process_file_name(monkeypatch, tmp_path):
+    """第 72 批：多实例模式按进程分文件（app-<pid>.log），不再争用同一个 app.log。"""
+    monkeypatch.setattr(settings, "log_to_file", "on")
+    monkeypatch.setattr(settings, "log_file_per_process", True)
+    monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
+    lg = logger_mod.get_logger("t-log-per-process")
+    lg.info("多进程落盘")
+    logdir = tmp_path / "logs"
+    assert (logdir / f"app-{__import__('os').getpid()}.log").exists()
+    assert not (logdir / "app.log").exists()
+
+
+def test_rotation_failure_is_guarded_and_logging_continues(monkeypatch, tmp_path, capsys):
+    """第 72 批回归锁：轮转失败（多进程占用）不再抛进 logging 的错误处理刷屏，
+    而是跳过本次轮转、继续写当前文件；只提示一次，冷却后重试。"""
+    monkeypatch.setattr(settings, "log_to_file", "on")
+    monkeypatch.setattr(settings, "log_dir", str(tmp_path / "logs"))
+    monkeypatch.setattr(logger_mod, "_FILE_MAX_BYTES", 300)
+    name = "t-log-rotate-fail"
+    lg = logger_mod.get_logger(name)
+    fh = [h for h in logging.getLogger(name).handlers
+          if isinstance(h, logging.handlers.RotatingFileHandler)][0]
+
+    def boom(src, dst):
+        raise PermissionError("[WinError 32] 另一个程序正在使用此文件")
+
+    monkeypatch.setattr(fh, "rotate", boom)
+    for i in range(6):
+        lg.info("y" * 120, n=i)  # 不应抛异常
+    assert fh.rotate_failures == 1, "首次失败计数 +1，冷却期内不再重复尝试"
+    fh.flush()
+    text = (tmp_path / "logs" / "app.log").read_text(encoding="utf-8")
+    assert "y" * 120 in text, "轮转失败后仍必须继续写当前文件（不能丢日志）"
+    err = capsys.readouterr().err
+    assert err.count("[logger] 日志轮转被跳过") == 1, "失败提示只应出现一次（不刷屏）"
+
+    # 冷却结束 → 允许再次尝试（仍失败则计数 +1）
+    fh._rotate_retry_at = 0
+    lg.info("z" * 120)
+    assert fh.rotate_failures == 2
+
+
+def test_resolve_log_path_prefers_newest(monkeypatch, tmp_path):
+    """admin 日志卡解析：单文件模式 app.log 优先；缺失/多进程模式取最新 app-<pid>.log。"""
+    logdir = tmp_path / "logs"
+    logdir.mkdir()
+    old = logdir / "app-100.log"
+    new = logdir / "app-200.log"
+    old.write_text("old\n", encoding="utf-8")
+    new.write_text("new\n", encoding="utf-8")
+    import os as _os
+    _os.utime(old, (1000, 1000))
+    _os.utime(new, (2000, 2000))
+
+    monkeypatch.setattr(settings, "log_file_per_process", False)
+    assert logger_mod.resolve_log_path(str(logdir)) == str(new)
+    (logdir / "app.log").write_text("main\n", encoding="utf-8")
+    assert logger_mod.resolve_log_path(str(logdir)) == str(logdir / "app.log")
+
+    monkeypatch.setattr(settings, "log_file_per_process", True)
+    assert logger_mod.resolve_log_path(str(logdir)) == str(new)
+
+
 def test_log_dir_unwritable_degrades_to_console(monkeypatch, tmp_path):
     """目录不可写：初始化失败只降级控制台（不抛异常、不阻断业务）。"""
     monkeypatch.setattr(settings, "log_to_file", "on")

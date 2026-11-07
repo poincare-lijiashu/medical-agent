@@ -87,6 +87,25 @@ def test_admin_logs_metadata_fields(monkeypatch, tmp_path):
     assert "应用日志未启用（LOG_TO_FILE）" in d2["note"]
 
 
+# ---------- /admin/logs：多进程日志（第 72 批） ----------
+
+def test_admin_logs_reads_newest_per_process_file(monkeypatch, tmp_path):
+    """app.log 不存在但存在 app-<pid>.log（多进程模式）→ 取最新一份并在提示中标注文件名。"""
+    logdir = tmp_path / "logs"
+    logdir.mkdir(parents=True)
+    (logdir / "app-100.log").write_bytes(b"old-line\n")
+    (logdir / "app-200.log").write_bytes(b"new-line\n")
+    import os
+    os.utime(logdir / "app-100.log", (1000, 1000))
+    os.utime(logdir / "app-200.log", (2000, 2000))
+    c = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "admin01")}
+    d = c.get("/api/v1/medical/admin/logs", headers=h).json()
+    assert d["lines"] == ["new-line"]
+    assert d["path"].endswith("app-200.log") and d["exists"] is True
+    assert "多进程日志 app-200.log" in d["note"]
+
+
 # ---------- /admin/logs：尾部行序 + N 上限 ----------
 
 def test_admin_logs_tail_lines_and_cap(monkeypatch, tmp_path):

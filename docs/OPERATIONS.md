@@ -48,6 +48,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 ## 健康/可观测
 - `/healthz`（存活） `/readyz`（就绪） `/metrics`（Prometheus 文本：请求数/各路由时延/计数）。
 - 每响应带 `X-Request-Id`；日志结构化（JSON，含 event 与上下文）。
+- 应用日志文件：默认 `logs/app.log`（5MB × 5 备份，`LOG_TO_FILE=off` 可关）；**多实例/多 worker
+  部署请设 `LOG_FILE_PER_PROCESS=true`**，每个进程写 `app-<pid>.log`，否则多进程争用同一文件的
+  轮转（Windows 报 `WinError 32`）。`GET /admin/logs` 会自动读取最新一份并在提示中标注文件名；
+  单文件模式下轮转失败只跳过本次轮转并继续写，不再向 stderr 刷错误堆栈。
 - 统一问答计量（G102，进程内聚合、重启归零、不含问题/回答原文）：
   - `medassist_agent_consult_requests_total{agent,channel,status}`（status=ok/error/aborted）
   - `medassist_agent_consult_duration_ms_sum|count{channel}`（旧口径，保留兼容）与标准 histogram `medassist_agent_consult_duration_seconds{channel}`（可算 P95/P99）

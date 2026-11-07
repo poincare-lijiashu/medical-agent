@@ -492,6 +492,9 @@ docker compose --profile full up -d --scale app=3
 ```
 
 - 多实例共享 Milvus/PG/MinIO 基础设施，无需额外协调；审计 JSONL 各实例本地落盘 + PG 双写镜像，跨实例审计以 PG 为准
+- **日志按进程分文件（第 72 批）**：多实例/多 worker 必须设 `LOG_FILE_PER_PROCESS=true`
+  （写 `app-<pid>.log`）。共用 `app.log` 时实测轮转失败（Windows `WinError 32`），
+  且跨进程追加会互相覆盖/丢行（3 进程各 300 条，单文件仅落 871 行）；分文件后互不影响
 - **数据一致性（W4.1 行级化已完成）**：users/review_queue/consults/prescriptions 高频写域在 PG 主模式
   （PG_PRIMARY=true 默认）走单行 UPSERT——多实例并发写不同条目不丢更新（验收：tests/test_row_level_review.py
   并发集成）。务必保持 PG_PRIMARY=true；置 false（灰度回滚）后行级写回落全量同步，多实例并发会互相覆盖，

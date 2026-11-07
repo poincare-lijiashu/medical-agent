@@ -2784,6 +2784,60 @@ A 1/2/3 → 401    A 第 4 次 → 429    B 第 1 次 → 429   ← XFF 被忽�
 - `Retry-After` 固定 60s（窗口长度），未按剩余窗口精确计算；
 - 多实例共享限流仍依赖 `REDIS_URL`（第 66 批）；本批只修身份，不改变计数后端。
 
+## 76. 2026-11-08 上线准备（第 72 批：多实例日志轮转——从"刷屏丢行"到"按进程分文件 + 失败不阻断"）
+
+**问题来源**：第 71 批起两个临时实例时，启动日志里出现
+`PermissionError: [WinError 32] ... logs\app.log -> app.log.1`，紧接着是一整段
+`--- Logging error ---` 堆栈（每次触发轮转都打印一次）。根因：所有进程共用一个
+`RotatingFileHandler` 指向同一个 `app.log`；A 进程轮转时 B 进程仍持有句柄，Windows
+拒绝重命名，stdlib 把异常交给 `logging.handleError`——日志还在写，但没人轮转、stderr 刷屏。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/logger.py` | 新增 `_SafeRotatingFileHandler`：轮转失败（OSError/WinError 32）→ 跳过本次、重开当前文件继续写、60s 冷却后重试，仅首次提示一行；新增 `LOG_FILE_PER_PROCESS` → `app-<pid>.log`；新增 `resolve_log_path()`（单文件优先 app.log，缺失/多进程模式取最新 `app-<pid>.log`） |
+| `backend/config.py` / `.env.example` | 新增 `LOG_FILE_PER_PROCESS`（默认 false，单实例行为不变） |
+| `backend/api/v1/medical/admin.py` | `/admin/logs` 改用 `resolve_log_path()`；多进程时提示语标注实际文件名 |
+| `tests/test_logger_file.py` | +3：按进程分文件、轮转失败保护（继续写/只提示一次/冷却后重试）、路径解析优先级 |
+| `tests/test_admin_logs.py` | +1：app.log 缺失时读取最新 `app-<pid>.log` 并标注 |
+| `docs/OPERATIONS.md` / `docs/DEPLOY.md` | 多实例必须开 `LOG_FILE_PER_PROCESS` 的说明 |
+
+**设计取舍**
+- **默认不改变单实例行为**：`app.log` 路径、`/admin/logs` 健康卡完全不变；
+- **失败可继续**：轮转失败不能丢日志，也不能让日志系统把业务拖垮——所以是"跳过轮转、
+  重开文件、冷却重试"，而不是抛错或关闭文件日志；
+- **只提示一次**：`rotate_failures` 计数 + 60s 冷却，避免每批日志刷一段堆栈；
+- **分文件是推荐解**：单文件即使不崩，跨进程追加本身也不安全（见下实测丢行）。
+
+**真实数据（3 个 OS 进程并发写同一目录，`maxBytes=2048`，每进程 300 条）**
+```
+logging_error_tracebacks 0      ← 修复前每条轮转失败都会打一段 "--- Logging error ---"
+rotation_skip_notices    3      ← 每个进程只提示一次
+log_files                ['app.log']
+total_lines              871    ← 900 条里丢了 29 行（跨进程追加/覆盖，非轮转本身）
+```
+分文件模式（`LOG_FILE_PER_PROCESS=true`，两个真实实例 8014/8015）：
+```
+app-9648.log   1425 B
+app-30416.log  1498 B
+GET /admin/logs → path=...\app-30416.log，note="多进程日志 app-30416.log；共 5 行…"
+```
+结论：单文件模式由"崩 + 刷屏"变为"可继续写但可能丢行"；多实例正确姿势是分文件，
+已写进部署文档。
+
+**校验**
+- 全量 pytest：**1239 passed**（1235 + 本批 4）；
+- 定向 `test_logger_file + test_admin_logs` **18 passed**；
+- 临时实例已停止、验证目录（`logs_verify_72*`）已删除。
+
+**仍存边界**
+- `LOG_FILE_PER_PROCESS=true` 时每个进程一个文件，`/admin/logs` 只展示**最新一份**
+  （不跨文件聚合；多副本时运维仍需按实例取日志，或走 stdout/集中采集）；
+- 分文件后进程重启会产生新的 `app-<pid>.log`，旧文件不会自动清理（依赖运维/日志采集）；
+- 未做跨进程文件锁：单文件模式下的丢行问题只有"改用分文件"才能根治，本批未实现；
+- 轮转失败计数只在进程内可见，未导出为 Prometheus 指标；
+- 验证是 Windows 本机 + 3 个独立进程，未在 Linux 多 worker（fork）与 K8s 侧验证。
+
 
 
 

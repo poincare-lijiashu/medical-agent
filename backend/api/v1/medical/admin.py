@@ -272,9 +272,11 @@ def _read_log_tail(n: int) -> tuple[str, list[str], str, dict]:
     返回 (文件绝对路径, 行列表[旧→新], 提示语, 元数据)；元数据 {path, size_bytes,
     exists, total_lines} 供前端「日志健康卡」展示；文件不存在 → 提示
     「应用日志未启用（LOG_TO_FILE）」且元数据归零。"""
-    from backend.core.logger import _FILE_NAME
+    # 第 72 批：多进程模式下主文件是 app-<pid>.log（取最新一份），单文件模式仍是 app.log
+    from backend.core.logger import _FILE_NAME, resolve_log_path
     log_dir = (settings.log_dir or "logs").strip() or "logs"
-    path = os.path.abspath(os.path.join(log_dir, _FILE_NAME))  # 绝对路径（健康卡展示）
+    path = os.path.abspath(resolve_log_path(log_dir))  # 绝对路径（健康卡展示）
+    multi = os.path.basename(path) != _FILE_NAME
     meta = {"path": path, "size_bytes": 0, "exists": False, "total_lines": 0}
     if not os.path.isfile(path):
         return path, [], "应用日志未启用（LOG_TO_FILE）", meta
@@ -291,7 +293,8 @@ def _read_log_tail(n: int) -> tuple[str, list[str], str, dict]:
     all_lines = raw.decode("utf-8", errors="replace").splitlines()
     if window < size and all_lines:
         all_lines = all_lines[1:]  # 丢弃窗口起点处可能被截断的残行
-    return path, all_lines[-n:], f"共 {min(len(all_lines), n)} 行（最新在底部）", meta
+    prefix = f"多进程日志 {os.path.basename(path)}；" if multi else ""
+    return path, all_lines[-n:], f"{prefix}共 {min(len(all_lines), n)} 行（最新在底部）", meta
 
 
 @router.get("/admin/logs")

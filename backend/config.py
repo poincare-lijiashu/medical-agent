@@ -200,6 +200,10 @@ class Settings(BaseSettings):
     # LOG_TO_FILE：on/true/1 强制开；off/false/0 强制关；空（默认）全环境开启（开发也落文件，显式 off 才关）
     log_to_file: str = ""
     log_dir: str = "logs"
+    # 第 72 批：多实例/多 worker 时按进程分文件（app-<pid>.log），避免共用 app.log
+    # 轮转时互相抢文件句柄（Windows 实测 PermissionError: WinError 32）。
+    # 默认 false（单实例保持 app.log，admin 日志卡路径不变）；横向扩容请置 true。
+    log_file_per_process: bool = False
 
     # L1 agentic 检索循环（环境变量 LITERATURE_AGENTIC 覆盖）：开启后 grade 零命中
     # 进入 refine 决策节点（LLM 改写重检/放弃），关闭则保持旧的重检索路径
