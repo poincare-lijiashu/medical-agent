@@ -123,8 +123,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 python scripts\agent_go_live_check.py --dry-run
 
 # 真实环境联调（口令也可用 AGENT_PASSWORD 注入，避免进 shell 历史）
-python scripts\agent_go_live_check.py --base-url http://127.0.0.1:8001 --username admin01
+# METRICS_TOKEN 用于 /metrics 抓取检查（也可用环境变量 METRICS_TOKEN）
+python scripts\agent_go_live_check.py --base-url http://127.0.0.1:8001 --username admin01 --metrics-token ***
 ```
+- 会话：响应体令牌（仅 `AUTH_TOKEN_IN_BODY=true`）或生产默认的 httpOnly Cookie 均可；
+  `/metrics` 按设计不接受 cookie，必须提供 `METRICS_TOKEN`（或 body 令牌），否则该项显式失败。
 - 检查项：登录 → 模型合规（仅 local/domestic，出现 foreign 即失败）→ 联网白名单（须含 nhc.gov.cn / nmpa.gov.cn / pubmed.ncbi.nlm.nih.gov）→ 技能库指标 → Prometheus 文本（Agent 端点）→ **`/metrics` 抓取端点** → **告警规则引用指标与抓取端点的覆盖对齐**（M-14/M-34 门禁）→ 睡眠扫描（只读）→ 运营建议列表。
 - 退出码：`0` 全部通过；`1` 有失败项（逐条打印原因）；`2` 无法执行（缺口令/登录失败/服务不可达）。
 - 脚本只读，不切换开关、不写技能、不执行建议；不打印口令、令牌、密钥。

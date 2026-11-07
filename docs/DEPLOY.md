@@ -138,7 +138,7 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 3. 写入 Prometheus 侧：`deploy/observability/prometheus/metrics-token`（**裸令牌、无 `Bearer ` 前缀、无 BOM**）或重建 K8s Secret；
 4. 滚动重启 Prometheus；K8s 形态还需确认 Operator 已重新生成配置（`prometheus-<name>` Secret 更新）；
 5. 验证：`curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/metrics | head`，以及 Prometheus UI target `medassist-ai-core` = `up`；
-6. 跑一遍 `python scripts/agent_go_live_check.py --base-url ... --username admin01`（含抓取端点与告警覆盖对齐检查）。
+6. 跑一遍 `python scripts/agent_go_live_check.py --base-url ... --username admin01 --metrics-token ...`（含抓取端点与告警覆盖对齐检查；会话可用 httpOnly Cookie，`/metrics` 需抓取令牌）。
 
 ## 日志与留存
 

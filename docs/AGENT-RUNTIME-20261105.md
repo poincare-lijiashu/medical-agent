@@ -1613,6 +1613,44 @@ Should（读当前代码确认，不新增业务逻辑）：
 - Should 的判定依据是台账记录 + 本次代码复核，未重新做端到端复现；
 - 意见书是 2026-11-06 快照，此后新增能力不在其评审范围内。
 
+---
+
+## 48. 2026-11-08 评审整改（第 44 批：上线自检支持 Cookie 会话与冷启动指标）
+
+**怎么发现的**：本批先跑可复跑验收链路——`run_vue_parity.py` **9 passed**、
+`agent_go_live_check.py --dry-run` PASS（repo 6 项，HEAD=7af4e35）。随后对真实服务跑
+完整自检，脚本却以 `RESULT FAIL (no token)` 退出 2：它只认响应体 `access_token`，
+而生产默认 `AUTH_TOKEN_IN_BODY=false`（令牌只走 httpOnly Cookie）——**自检脚本无法在
+它最该检查的安全配置下运行**。
+
+**修复**
+| 文件 | 变更 |
+|---|---|
+| `scripts/agent_go_live_check.py` | `_request` 返回响应头（统一小写、`set-cookie` 保留全部值）；`_session_cookie` 从多个 cookie 中优先取 `medassist_at`（refresh cookie 不能用于接口鉴权）；新增 `--metrics-token`（或环境变量 `METRICS_TOKEN`）；`/metrics` 显式只用 Bearer，401/403 时输出 `metrics.scrape_hint` 说明原因 |
+| 同上（第二处） | `_metric_exported`：指标族只要有**样本行或 `# TYPE` 声明**即视为已导出；`check_prometheus` 与告警覆盖对齐共用同一判定。此前 `check_prometheus` 用子串匹配，HELP 行也算"存在"，与对齐检查口径不一致 |
+| `.gitignore` | 忽略 `data/sleep_memory_reports.json`（睡眠扫描运行时产物） |
+| `docs/OPERATIONS.md`、`docs/DEPLOY.md` | 自检命令补 `--metrics-token` 与会话说明 |
+
+**第二处修复的原因**：真实冷启动实例的 `/metrics` 里 `consult_requests_total` 只有
+`# HELP`/`# TYPE`（首次自增前没有样本行），旧对齐检查会判"指标缺失"→ 上线自检假红；
+而"规则引用了根本不存在的指标族"仍会被判失败。
+
+**真实验证（Cookie 会话 + 抓取令牌）**
+- `auth.session = cookie`，`/metrics` 200，`alerts.metrics_covered = 15 metrics covered`；
+- 唯一 FAIL：`model.allowed_classes = allowed=0 classes=[]`——本机演示库未配置任何
+  local/domestic provider，属**预期的上线门禁失败**（没有合规模型不应上线），不是脚本缺陷。
+
+**测试与数值**
+- `tests/test_go_live_check.py`：**13 passed**（新增 cookie 会话编排、抓取令牌缺失提示、
+  TYPE-only 指标判定、cookie 解析优先级）；
+- 全量 pytest：**1121 passed / 43 skipped**（Docker 不可用，28 项 PG 用例按设计 skip）。
+
+**仍存边界**：
+- Cookie 会话是一次性进程内使用，脚本不处理 cookie 过期续期（长检查链路超出 access TTL
+  时会中途 401，退出码 1，需重新执行）；
+- `model.allowed_classes` 依赖真实 provider 注册；脚本不会自动创建 provider；
+- `/metrics` 仍要求抓取令牌，本地未配置时该项会持续失败——这是设计取舍（fail-closed）。
+
 
 
 
