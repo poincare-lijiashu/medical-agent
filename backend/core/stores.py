@@ -113,6 +113,9 @@ class MemoryStore:
 
 
 _sentinel = object()
+# 第 66 批：Redis 降级冷却（秒）。失败后这段时间内直接走内存镜像、不再触网，
+# 避免"Redis 挂掉 → 每个请求都吃满 2s 连接超时"把整站拖慢（实测 4.0–6.1s/请求）。
+_DEGRADED_COOLDOWN_S = 10.0
 
 
 class RedisStore:
@@ -121,7 +124,8 @@ class RedisStore:
     - 懒 import redis：仅在第一次构造时尝试；未装包 → _import_failed，操作全部走
       内存镜像，结果正确、不报错（单实例语义降级，服务不中断）。
     - 每操作 try/except：网络抖动/命令失败 → 本实例内存镜像兜底；连接对象置空，
-      下次操作自动重连。首次失败 warn「redis.degraded」一条，之后静默回落。
+      **10s 冷却期内不再触网**（否则每请求都要等满连接超时），冷却后再试；成功即
+      记一条「redis.recovered」。首次失败 warn「redis.degraded」一条，之后静默。
     - 值统一 JSON 序列化（跨进程可读）；incr 走 INCRBY 纯整数；ttl 归一化到
       「0 = 无过期或不存在」（与 MemoryStore 语义一致）。
     """
@@ -131,6 +135,7 @@ class RedisStore:
         self._client = None           # 懒建（redis-py 懒连接，构造不触网）
         self._import_failed = False   # 未安装 redis 包 → 永久走内存镜像
         self._degraded_logged = False
+        self._degraded_until = 0.0    # 第 66 批：降级冷却截止（monotonic）
         self._fallback = MemoryStore()  # 内存镜像（降级期间的本地兜底）
         try:
             import redis  # noqa: F401  懒 import：仅 RedisStore 构造时触发
@@ -146,18 +151,32 @@ class RedisStore:
         return self._client
 
     def _exec(self, redis_fn, fallback_fn):
-        """统一执行：Redis 失败（未装包/网络/命令异常）→ 内存镜像兜底，结果对调用方一致。"""
-        if not self._import_failed:
-            try:
-                return redis_fn(self._get_client())
-            except Exception:
-                self._client = None  # 连接池可能已坏，下次操作重建
-                if not self._degraded_logged:
-                    self._degraded_logged = True
-                    logger.warning(
-                        "redis.degraded: Redis 不可用，本实例回落进程内内存镜像"
-                        "（多实例共享语义降级为单实例）；恢复后自动重连")
-        return fallback_fn()
+        """统一执行：Redis 失败（未装包/网络/命令异常）→ 内存镜像兜底，结果对调用方一致。
+
+        第 66 批：加**降级冷却**。此前每次操作都会重新尝试连接（`socket_connect_timeout=2`），
+        Redis 挂掉后**每个请求**都要吃满 2s×操作数——实测单请求 4.0–6.1s，等于把整站拖慢。
+        现在失败后 10s 内直接走内存镜像（不再触网），冷却结束再试一次；成功即恢复共享语义。
+        """
+        if self._import_failed:
+            return fallback_fn()
+        if time.monotonic() < self._degraded_until:
+            return fallback_fn()  # 冷却期内不触网（避免每请求吃满连接超时）
+        try:
+            result = redis_fn(self._get_client())
+        except Exception:
+            self._client = None  # 连接池可能已坏，冷却结束后重建
+            self._degraded_until = time.monotonic() + _DEGRADED_COOLDOWN_S
+            if not self._degraded_logged:
+                self._degraded_logged = True
+                logger.warning(
+                    "redis.degraded: Redis 不可用，本实例回落进程内内存镜像"
+                    "（多实例共享语义降级为单实例）；%ss 后自动重试",
+                    _DEGRADED_COOLDOWN_S)
+            return fallback_fn()
+        if self._degraded_logged:  # 恢复：清标志 + 记一条 INFO（只记一次）
+            self._degraded_logged = False
+            logger.info("redis.recovered: Redis 可用，恢复跨实例共享语义")
+        return result
 
     def get(self, key: str, default: Any = None) -> Any:
         def via_redis(client):

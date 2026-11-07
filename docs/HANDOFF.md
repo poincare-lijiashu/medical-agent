@@ -1768,7 +1768,10 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - 红队对抗测试 CI 阻断、后端测试覆盖率≥85%
 - 短信验证码找回密码（现为基础版：联系管理员+admin 重置）
 - HIS/EMR 对接、院方授权知识库替换教学语料、临床验证
-- 多实例部署时：限流/令牌撤销表/审计日志从内存迁 Redis
+- ~~多实例部署时：限流/令牌撤销表/审计日志从内存迁 Redis~~ ✅ 已就位并复测（2026-11-08 第 66 批）：
+  限流与令牌撤销已由 `REDIS_URL` 切共享存储（双进程实测：限流 60×200+40×429、撤销 A 改密
+  B 401）；审计日志本来就是「本地 JSONL + PG 镜像」，跨实例以 PG 为准，不需要 Redis。
+  同批修掉 Redis 挂掉时每请求 4–6s 的降级延迟（加 10s 冷却）
 - 死代码清理：llm_factory._AGENT_MODEL_ROUTING（未真正生效）；medical_eval.py / medical_hitl.py 已删除（零运行时调用方，2026-09-10）
 - ~~llm_factory httpx 客户端未在 lifespan shutdown 关闭~~ ✅ 已修（第 64 批，2026-11-08）：
   `aclose_http_clients()` 下线关闭 + 清模型缓存，`http_clients()` 关闭后自动重建；

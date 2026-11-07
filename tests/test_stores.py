@@ -243,6 +243,61 @@ class TestRedisDegradedFallback:
         assert len(degraded) == 1, "首次失败 warn 一次，后续静默回落（防日志风暴）"
 
 
+# ---------- 3b. 第 66 批：降级冷却（Redis 挂掉后不得每请求吃满连接超时） ----------
+
+
+class TestRedisDegradedCooldown:
+    def test_no_retry_within_cooldown(self, monkeypatch):
+        """失败后冷却期内**完全不触网**（否则每个请求都要等 socket_connect_timeout）。"""
+        attempts = {"n": 0}
+
+        class _Broken:
+            def __getattr__(self, name):
+                attempts["n"] += 1
+                raise ConnectionError("mock redis down")
+
+        mod = types.ModuleType("redis")
+        mod.Redis = types.SimpleNamespace(from_url=lambda *a, **kw: _Broken())
+        monkeypatch.setitem(sys.modules, "redis", mod)
+        monkeypatch.setattr(settings, "redis_url", "redis://mock:6379/0")
+        st = stores.get_store()
+
+        st.set("k", "v", ttl=60)          # 第 1 次：触网失败 → 进冷却
+        first = attempts["n"]
+        assert first >= 1
+        for _ in range(9):
+            assert st.get("k") == "v"     # 冷却期内：走内存镜像，结果仍正确
+            st.incr("n")
+        assert attempts["n"] == first, "冷却期内不得再尝试连接 Redis"
+        assert st._degraded_until > time.monotonic() - stores._DEGRADED_COOLDOWN_S
+
+    def test_retry_after_cooldown_and_log_recovered(self, monkeypatch, caplog):
+        class _Broken:
+            def __getattr__(self, name):
+                raise ConnectionError("mock redis down")
+
+        mod = types.ModuleType("redis")
+        mod.Redis = types.SimpleNamespace(from_url=lambda *a, **kw: _Broken())
+        monkeypatch.setitem(sys.modules, "redis", mod)
+        monkeypatch.setattr(settings, "redis_url", "redis://mock:6379/0")
+        st = stores.get_store()
+
+        with caplog.at_level("WARNING"):
+            st.set("k", "v")
+        assert [r for r in caplog.records if "redis.degraded" in r.getMessage()]
+
+        # 模拟"冷却结束 + Redis 已恢复"：换回健康客户端
+        good = _FakeRedisClient()
+        st._client = good
+        st._degraded_until = 0.0
+        with caplog.at_level("INFO"):
+            st.set("k2", "v2")
+        assert good.data.get("k2") is not None, "恢复后应重新走共享存储"
+        assert [r for r in caplog.records if "redis.recovered" in r.getMessage()], \
+            "恢复时记一条 redis.recovered"
+        assert st._degraded_logged is False
+
+
 # ---------- 4. 三组件接入回归（共享语义；默认内存路径由既有测试锁定） ----------
 
 

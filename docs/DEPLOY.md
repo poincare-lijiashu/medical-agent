@@ -323,6 +323,8 @@ python scripts/run_eval.py --dry-run
 > 三档规模对应三档配置：同一套代码，环境变量决定形态。限流/会话记忆/令牌撤销三处状态由
 > `REDIS_URL` 自动选择后端——留空=进程内存（单机），非空=Redis（多实例共享）；Redis 不可用
 > 自动回落本实例内存镜像（日志一条 `redis.degraded`），服务不中断，恢复后自动重连。
+> **第 66 批补充**：失败后 10s 冷却期内不再触网（否则每个请求都要等满 2s 连接超时，实测
+> 单请求 4.0–6.1s）；冷却结束只探一次，成功即记 `redis.recovered` 并恢复共享语义。
 
 ### 一级：科室级单机（默认，零配置）
 
@@ -348,7 +350,7 @@ python scripts/run_eval.py --dry-run
    - [ ] token 互通：实例 A 登录取令牌 → 携令牌请求实例 B 返回 200
    - [ ] 限流共享：对实例 A 连打满 `RATE_LIMIT_PER_MIN` 次 → 同一身份请求实例 B 返回 429
    - [ ] 撤销互通：实例 A 执行改密/删用户 → 持旧令牌请求实例 B 返回 401
-   - [ ] 降级演练：`docker stop redis` → 服务不中断（每实例日志一条 `redis.degraded`，限流/撤销降级为单实例语义）；`docker start redis` → 自动重连恢复共享
+   - [ ] 降级演练：`docker stop redis` → 服务不中断（每实例日志一条 `redis.degraded`，限流/撤销降级为单实例语义），**且请求延迟不得劣化**（第 66 批修复前实测 4.0–6.1s/请求；修复后只有冷却到期那一次探活约 2s，其余 20–45ms）；`docker start redis` → 自动重连恢复共享
 
 **二级形态实测记录（2026-10-30，W4.2 转型计划书验收）**：本机宿主双实例（uvicorn 8001/8002，
 `REDIS_URL=redis://127.0.0.1:6379/0`，redis 5.3.1 + `redis:7-alpine`）验证清单 4/4 通过——
@@ -358,6 +360,16 @@ python scripts/run_eval.py --dry-run
 后限流 key 回到 Redis（dbsize 恢复增长）。**踩坑备注：`redis` Python 库为可选依赖
 （requirements.txt 注释行），启用二级形态前必须 `pip install "redis>=5,<6"`，否则 RedisStore
 import 失败静默回落内存镜像（incr 照常返回、无 degraded 外显日志），双实例限流不共享。**
+
+**二级形态复测（2026-11-08，第 66 批）**：临时 `redis:7-alpine`（127.0.0.1:6380）+ 两个独立
+uvicorn 进程（8007/8008，`RATE_LIMIT_PER_MIN=60`）：
+- 限流共享：同一账号在 A/B 之间交替打 100 次 → **60×200 + 40×429**（对照：无 Redis 的 2
+  worker 是 92×200，≈2 倍配额）；
+- 撤销互通：在 B 登录的临时用户令牌，经 A 上 admin 重置密码后，**A/B 均 401**；
+- 降级延迟（本次新发现并修复）：`docker stop redis` 后原实现 **4.0–6.1s/请求**（每次操作都
+  重试连接，2s×操作数）；加 10s 降级冷却后 → 冷却到期那一次探活 ~2.1s，**其余 29–44ms**；
+- 恢复：`docker start` 后冷却结束自动重连，限流立即回到共享计数（60/40），Redis 内可见
+  `rl:u:doctor01:<window>` / `rl:ip:...`。
 
 ### 三级：集团级路线图（规划性内容，激活条件标注）
 
