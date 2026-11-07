@@ -566,6 +566,34 @@ mtime）作 ETag，保证多实例下 PG 改了字典也能立刻失效。
 连接池容量已可配（`PG_POOL_MIN` 默认 1、`PG_POOL_MAX` 默认 5，硬顶 100）：
 需要时按 PG `max_connections` 剩余量放开，但按上面的实测，它**不是**当前吞吐瓶颈。
 
+### 多 worker（`uvicorn --workers N`）实测与注意
+
+同一台机器、同一份 PG、同样的混合只读负载（60s 账号池，全速）：
+
+| 形态 | 并发 | 合计 RPS | `review/pending` p50 | 错误 |
+|---|---|---|---|---|
+| 单 worker | 30 | 95 | 511ms | 0 |
+| **4 worker** | 30 | **260** | 247ms | 0 |
+| 4 worker | 60 | ~210（客户端同机先饱和） | — | 0 |
+
+单机横向扩 worker 有效（2.7×），瓶颈从"单进程串行"转到共享资源（本机 GPU/CPU 与
+压测客户端同进程）。
+
+**多 worker/多实例必须知道的四件事**（都已实测或代码确认）：
+1. **限流是进程内计数**：默认 60 次/分/账号是**每 worker** 一份。实测 2 worker + 默认
+   限流，一个账号连打 100 次 → `92×200 + 8×429`（≈2 倍配额）。要么配置 `REDIS_URL`
+   （计数改共享固定窗口，见 `backend/core/security_rate.py`），要么把
+   `RATE_LIMIT_PER_MIN` 按 worker 数**下调**（60/N）。
+2. **`/metrics` 的进程内 counter 会来回跳变**：多 worker 下 Prometheus 会判 reset，
+   `rate()` 不可信。启动时会打 `medical_agent.startup.multi_worker_metrics` 告警
+   （第 62 批修复：`--workers N` 不设环境变量，此前这条告警**从不触发**）。
+3. **技能快照调度器每个 worker 各跑一份**：按"日期主键 upsert"幂等，重复无害；
+   但同一时刻会有 N 次冗余写。
+4. **SSE 并发槽 `AGENT_STREAM_MAX_CONCURRENT` 也是每 worker**：总并发 = 配置值 × N。
+
+结论：**默认单 worker + 多实例（nginx upstream）更可控**；确有单机多 worker 需求时，
+先配 `REDIS_URL` 并下调 `RATE_LIMIT_PER_MIN`，再按上表容量规划。
+
 ## 质控 HIS 对接与本地模型规划
 
 > 本章节为规划性内容（与院方对接节奏相关），描述目标形态与已就位的系统能力锚点；落地以院方接口规范为准。

@@ -2325,6 +2325,63 @@ urllib 降级路径把 304 归为成功（此前会被 `HTTPError` 记成错误�
 - 未在浏览器里做 E2E 网络断言（没有 Playwright 校验"第二次加载是 304"）；复用了标准
   HTTP 语义 + Playwright 已能正常渲染该页（全量套件通过）。
 
+---
+
+## 66. 2026-11-08 上线准备（第 62 批：多 worker 实测 + M-23 安全网失效修复）
+
+**背景**：`docs/DEPLOY.md` 一直写"要更高吞吐用多 worker/多实例"，但从未实测；而
+`consult_metrics._worker_count()` 只读 `WEB_CONCURRENCY`/`UVICORN_WORKERS`/`GUNICORN_WORKERS`
+——**`uvicorn --workers N` 一个都不设**。
+
+**实测发现的缺陷**：起 `--workers 2`（默认限流），启动日志里 2 份 `startup.done`、
+2 份 `snapshot_scheduler`、2 份 `pg_store.ready`，但 `medical_agent.startup.multi_worker_metrics`
+告警 **0 次**，反而打了 `metrics_worker_single`。即"多 worker 会污染 Prometheus counter"
+这条 M-23 安全网在**我们推荐的部署形态下完全不生效**。
+
+**修复**（`backend/agents/consult_metrics.py`）
+| 变更 | 说明 |
+|---|---|
+| `_worker_count()` 增加进程树探测 | 环境变量优先；未配置时若 `multiprocessing.parent_process()` 非空 → 返回 **2**（uvicorn `--workers` 用 multiprocessing(spawn) 派生 worker；语义是"至少 2 个"，不是精确副本数） |
+| 异常兜底 | 拿不到进程树按单 worker，绝不让启动路径炸掉 |
+| `tests/test_consult_metrics.py` +1 | 单进程/派生/环境变量优先/探测抛错 四种分支 |
+
+**修复验证**：重起 2 worker 后日志出现
+```
+[WARNING] medical_agent.startup.multi_worker_metrics | workers=2 detail=进程内问答计量在多 worker 下会被 Prometheus 判为 reset，错误率告警不可信；…
+```
+
+**多 worker 容量实测**（同机、同 PG、混合只读 GET 全速，`--workers 4` 起在 8004）
+
+| 形态 | 并发 | 时长 | 合计请求 | 合计 RPS | review/pending p50 | 错误 |
+|---|---|---|---|---|---|---|
+| 单 worker（第 58 批） | 30 | 30.2s | 2868 | 95 | 511ms | 0 |
+| **4 worker** | 30 | 30.3s | 7878 | **260** | 247ms | 0 |
+| 4 worker | 10 | 10.1s | 2383 | 236 | 96ms | 0 |
+| 4 worker | 60 | 10.7s | — | ~210 | — | 0 |
+
+单机加 worker 有效（约 2.7×），但 60 并发时吞吐反而回落——压测客户端与服务**同机单进程**，
+客户端自己也到顶了，此数不能当作服务端上限。
+
+**同时实测确认的运维约束**（已写入 DEPLOY「多 worker 实测与注意」）
+- **限流按进程计**：2 worker + 默认 60 次/分/账号，单账号连打 100 次 → `92×200 + 8×429`
+  （≈2 倍配额）。要么配 `REDIS_URL` 走共享计数，要么按 `60/N` 下调。
+- 每个 worker 各载一份 bge-m3（显存 × N）——2 worker 启动约 28s，4 worker 可启动；
+  本次未压到显存上限，8+ worker 未验证。
+- 快照调度器、SSE 并发槽同样是每 worker 一份。
+
+**清理**：临时 8004（4 worker）/8005（2 worker，含限流实验）均已停止，8001 保持运行；
+顺带清掉 2026-10-30 遗留的 `loadtest61..64` 四个压测账号（PG users 17 → 13，loadtest 0）。
+
+**测试**：定向 `test_consult_metrics` **23 passed**；全量 pytest（PG 在线、E2E 在跑）
+**1194 passed**。
+
+**仍存边界**
+- 60 并发档的"回落"来自同机共用的压测客户端，**没有排除客户端瓶颈**，也未做服务端 CPU profile；
+- 只测了 2/4 worker，未测 8+、未测配 `REDIS_URL` 后限流是否真的聚合（Redis 后端有单测，
+  但没有多 worker 真机验证）；
+- 未验证多 worker 下 SSE 流式问答的真实并发上限；
+- 未验证多 worker 是否能正确共享"运行时开关"（读写都落 PG/JSON，按代码应一致，未实测）。
+
 
 
 

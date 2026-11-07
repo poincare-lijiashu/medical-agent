@@ -60,7 +60,18 @@ _tokenized_requests = 0
 
 
 def _worker_count() -> int:
-    """读取部署侧的 worker 数（未配置视为 1）。评审 M-23：把多进程形态显式化。"""
+    """读取部署侧的 worker 数（未配置视为 1）。评审 M-23：把多进程形态显式化。
+
+    第 62 批修复：``uvicorn --workers N`` **不会**设置 ``WEB_CONCURRENCY`` /
+    ``UVICORN_WORKERS``（实测 2 worker 启动日志里 M-23 的告警一次都没出现），
+    而这是我们文档里推荐的多 worker 形态——安全网等于失效。这里补一条检测：
+    uvicorn 的 ``--workers`` 用 multiprocessing(spawn) 派生 worker，子进程的
+    ``parent_process()`` 非空；单进程直跑时为 None。
+
+    返回值语义：显式环境变量优先；检测到"多进程派生"时返回 **2**（=至少 2 个，
+    子进程拿不到 supervisor 的真实 worker 数），因此该值只用于"是否多 worker"判定，
+    不要当成精确副本数。
+    """
     for key in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
         raw = (os.environ.get(key) or "").strip()
         if raw:
@@ -68,6 +79,12 @@ def _worker_count() -> int:
                 return max(1, int(raw))
             except ValueError:
                 continue
+    try:
+        import multiprocessing
+        if multiprocessing.parent_process() is not None:
+            return 2
+    except Exception:  # noqa: BLE001 —— 拿不到进程树就算了，按单 worker 处理
+        pass
     return 1
 
 

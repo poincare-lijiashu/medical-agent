@@ -132,6 +132,32 @@ def test_worker_count_metric_exposes_multi_worker(monkeypatch):
     assert consult_metrics.worker_count() == 1
 
 
+def test_worker_count_detects_uvicorn_workers_spawn(monkeypatch):
+    """第 62 批：``uvicorn --workers N`` 不设任何环境变量，必须靠进程树识别。
+
+    实测缺陷：2 worker 启动日志里 M-23 告警一次都没出现（只读 env 等于安全网失效）。
+    """
+    import multiprocessing
+
+    for k in ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS"):
+        monkeypatch.delenv(k, raising=False)
+    # 单进程直跑：没有父进程对象
+    monkeypatch.setattr(multiprocessing, "parent_process", lambda: None)
+    assert consult_metrics.worker_count() == 1
+    # uvicorn --workers：worker 由 multiprocessing 派生 → parent_process 非空
+    monkeypatch.setattr(multiprocessing, "parent_process", lambda: object())
+    assert consult_metrics.worker_count() == 2      # 语义：至少 2 个
+    # 显式环境变量优先（能拿到精确值）
+    monkeypatch.setenv("WEB_CONCURRENCY", "3")
+    assert consult_metrics.worker_count() == 3
+    monkeypatch.delenv("WEB_CONCURRENCY")
+    # 进程树探测本身异常时不能让启动路径炸掉
+    def _boom():
+        raise OSError("no proc tree")
+    monkeypatch.setattr(multiprocessing, "parent_process", _boom)
+    assert consult_metrics.worker_count() == 1
+
+
 def test_skill_label_cap_falls_into_other():
     for i in range(consult_metrics.MAX_SKILL_LABELS + 5):
         consult_metrics.record("drug", "sync", "ok", 0.0, [f"skill-{i}"])
