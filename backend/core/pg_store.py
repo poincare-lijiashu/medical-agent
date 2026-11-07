@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from concurrent.futures import TimeoutError as _FutTimeout
 from datetime import datetime, timezone
 
@@ -31,6 +32,53 @@ from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
 _pool = None
+
+# ---------- PG 连接熔断（第 50 批）----------
+# 为什么需要：PG 掉线时每次读都要等连接超时（本机实测约 2s/域），一次自检/首屏
+# 会串行等十几个 2s。熔断只针对**连接类**异常：连续 3 次后 15s 内直接快速回落，
+# 冷却结束自动探测；成功一次立即闭合。查询/数据类错误（缺列等）不触发熔断。
+_PG_CIRCUIT_FAILS = 3
+_PG_CIRCUIT_COOLDOWN_S = 15.0
+_circuit_lock = threading.Lock()
+_pg_fail_streak = 0
+_pg_circuit_until = 0.0  # time.monotonic() 截止点
+
+
+class PGUnavailable(RuntimeError):
+    """PG 熔断期间的快速失败（不等待连接超时，由上层回落 JSON 或返回 5xx）。"""
+
+
+def circuit_open() -> bool:
+    return time.monotonic() < _pg_circuit_until
+
+
+def _pg_error_is_connectivity(exc: BaseException) -> bool:
+    """只有"连不上"类异常才计入熔断；查询错误/数据错误不应让全局快速回落。"""
+    if isinstance(exc, (_FutTimeout, asyncio.TimeoutError, TimeoutError,
+                        OSError, ConnectionError)):
+        return True
+    name = type(exc).__name__.lower()
+    return any(k in name for k in ("connection", "cannotconnect", "interface", "timeout"))
+
+
+def _pg_circuit_success() -> None:
+    global _pg_fail_streak, _pg_circuit_until
+    with _circuit_lock:
+        _pg_fail_streak = 0
+        _pg_circuit_until = 0.0
+
+
+def _pg_circuit_failure(exc: BaseException) -> None:
+    global _pg_fail_streak, _pg_circuit_until
+    if not _pg_error_is_connectivity(exc):
+        return
+    with _circuit_lock:
+        _pg_fail_streak += 1
+        if _pg_fail_streak >= _PG_CIRCUIT_FAILS and time.monotonic() >= _pg_circuit_until:
+            _pg_circuit_until = time.monotonic() + _PG_CIRCUIT_COOLDOWN_S
+            _pg_fail_streak = 0
+            logger.warning("pg.circuit_open", cooldown_s=_PG_CIRCUIT_COOLDOWN_S,
+                           detail="近期连续连接失败：短暂快速回落 JSON，冷却后自动探测")
 
 # ---------- 专用 DB 事件循环（池归属该循环，同步/异步桥接均经它执行池操作） ----------
 _db_loop: asyncio.AbstractEventLoop | None = None
@@ -76,13 +124,26 @@ def _run_pg(coro):
     """同步桥接：协程提交到专用 DB 循环并阻塞取结果（任意线程可调，含事件循环线程——
     DB 循环在独立线程，绝不与调用方互锁）。超时/异常向上抛，由 repo 层捕获回落 JSON。
     超时后尽力取消挂起协程：否则 PG 半开/挂起场景协程滞留池中（max_size=5）逐渐
-    耗尽连接，后续请求全部超时降级（取消经 future 链传播为协程 CancelledError）。"""
+    耗尽连接，后续请求全部超时降级（取消经 future 链传播为协程 CancelledError）。
+
+    第 50 批：熔断打开时**不提交**协程，直接抛 ``PGUnavailable``——省掉每次约 2s 的
+    连接超时；未提交的协程必须 ``close()``，否则产生 "never awaited" 泄漏告警。
+    """
+    if circuit_open():
+        getattr(coro, "close", lambda: None)()
+        raise PGUnavailable("PG 熔断中：快速失败（冷却后自动探测）")
     fut = asyncio.run_coroutine_threadsafe(coro, _get_db_loop())
     try:
-        return fut.result(timeout=_BRIDGE_TIMEOUT)
+        out = fut.result(timeout=_BRIDGE_TIMEOUT)
     except _FutTimeout:
         fut.cancel()
+        _pg_circuit_failure(_FutTimeout("pg bridge timeout"))
         raise
+    except Exception as e:
+        _pg_circuit_failure(e)
+        raise
+    _pg_circuit_success()
+    return out
 
 
 async def _arun(coro):
@@ -278,6 +339,8 @@ def storage_status() -> dict:
         "mode": "offline" if offline_mode() else ("pg" if _pool else "json-fallback"),
         "ready": _pool is not None,
         "staleDomains": sorted(_repo_pg_stale),
+        # 第 50 批：连接熔断状态（打开期间读快速回落 JSON，不再每次等连接超时）
+        "circuitOpen": circuit_open(),
     }
 
 
@@ -301,6 +364,9 @@ def prometheus_text() -> str:
         f'medassist_agent_storage_mode{{mode="{st["mode"]}"}} 1',
         "# HELP medassist_agent_storage_stale_domains 本进程内 PG 写失败、读回落 JSON 的域（每个域一条）",
         "# TYPE medassist_agent_storage_stale_domains gauge",
+        "# HELP medassist_agent_storage_circuit_open PG 连接熔断是否打开（1=快速回落中）",
+        "# TYPE medassist_agent_storage_circuit_open gauge",
+        f"medassist_agent_storage_circuit_open {1 if circuit_open() else 0}",
     ]
     for domain in st["staleDomains"]:
         safe = str(domain).replace("\\", "\\\\").replace('"', '\\"')
@@ -590,8 +656,13 @@ def _pg_or_json(load_fn, json_loader, path: str, default):
             if primary:
                 # 运行中 PG 掉线：不置位则 stale 指标与告警永远看不到（本轮演练实测）
                 _repo_pg_stale.add(domain)
-            logger.warning("pg.repo.load_fallback_json", error=str(e)[:120],
-                           file=os.path.basename(path))
+            if isinstance(e, PGUnavailable):
+                # 熔断期的快速失败是预期行为，circuit_open 已 WARN 一次；此处降为 DEBUG
+                logger.debug("pg.repo.load_fallback_json", error=str(e)[:120],
+                             file=os.path.basename(path))
+            else:
+                logger.warning("pg.repo.load_fallback_json", error=str(e)[:120],
+                               file=os.path.basename(path))
         else:
             if primary:
                 _repo_pg_stale.discard(domain)

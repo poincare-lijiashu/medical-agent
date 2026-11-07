@@ -66,6 +66,9 @@ def _isolate_pg_runtime():
     pg_store._pool = None
     pg_store._repo_pg_stale.clear()
     pg_store._stale_warned.clear()
+    # 第 50 批：连接熔断状态同样复位，避免一个用例的失败熔断污染后续用例
+    pg_store._pg_fail_streak = 0
+    pg_store._pg_circuit_until = 0.0
 
 
 @pytest.fixture(autouse=True)

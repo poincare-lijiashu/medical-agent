@@ -213,7 +213,11 @@ spec:
 
         - alert: MedAssistAgentStorageNotPg
           expr: |
-            medassist_agent_storage_ready == 0
+            (
+              medassist_agent_storage_ready == 0
+              or
+              medassist_agent_storage_circuit_open == 1
+            )
             unless on(instance) medassist_agent_storage_mode{mode="offline"} == 1
           for: 10m
           labels:

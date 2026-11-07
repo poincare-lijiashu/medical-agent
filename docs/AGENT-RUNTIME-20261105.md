@@ -1827,6 +1827,42 @@ PASS storage.domains = mode=pg stale=0
 - stale 是进程内标记，靠 Prometheus 按 `instance` 聚合；单实例内已恢复后立即消失，
   历史告警需依赖 Prometheus 时序（本批未接 Alertmanager）。
 
+---
+
+## 54. 2026-11-08 上线准备（第 50 批：PG 连接熔断）
+
+**问题**：PG 掉线时每次读都要等连接超时（实测约 2.1s/域）；首屏/自检串行读 7 个域
+≈ 15s，用户侧表现为"服务卡住"而不是"快速降级"。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 进程内连接熔断：**连续 3 次连接类失败** → 打开 15s，期间 `_run_pg` 不提交协程、直接抛 `PGUnavailable`；任意一次成功立即闭合；查询/数据错误（缺列等）**不计入**熔断。未提交协程显式 `close()`，避免 "never awaited" |
+| 同上 | `storage_status()` 增加 `circuitOpen`；`prometheus_text()` 增加 `medassist_agent_storage_circuit_open`；`StorageNotPg` 告警表达式纳入熔断打开 |
+| `tests/conftest.py` | 每个用例 teardown 复位熔断状态，避免跨测试污染 |
+| `tests/test_pg_repo.py` | 新增 3 项：阈值触发/成功闭合、查询错误不触发、熔断期 `_run_pg` 快速失败且协程已关闭 |
+
+**真实故障演练（Docker PG）**
+| 步骤 | 观测 |
+|---|---|
+| 停 PG 后连续 3 次登录 | **2123 / 2098 / 2111 ms**（每次等连接超时） |
+| 第 4 次登录 | **68 ms**（熔断已打开，快速回落 JSON） |
+| `/metrics` | `storage_circuit_open 1` + 7 条 stale 域 |
+| 恢复 PG + 冷却 16s 后登录 | **158 ms**，`circuit_open 0`，stale 清空（探测成功自动闭合） |
+
+日志确认：第 3 次失败后打印一次 `pg.circuit_open`；演练时熔断期内每个域仍打 WARNING，
+本批随后把 `PGUnavailable` 的逐域日志降为 DEBUG（只保留一次 circuit_open 告警），
+该日志级别调整未再重跑演练，仅由代码审阅确认。
+
+**测试**：定向 **91 passed**；全量 pytest（PG 在线）**1158 passed / 15 skipped**
+（15 项 skip 均为 E2E 服务未启动）。
+
+**仍存边界**：
+- 阈值（3 次）与冷却（15s）是模块常量，尚未做成环境变量；
+- 熔断是**每进程**状态：多副本各自独立判断，不做跨实例协调；
+- 冷却结束后只放行"下一个请求"做探测；若 PG 仍不可用，会再等一次超时后重新打开；
+- 只覆盖 `_run_pg` 同步桥接；启动期 `_arun`（init/迁移）不在熔断范围。
+
 
 
 

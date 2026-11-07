@@ -213,7 +213,11 @@ groups:
       # 显式离线模式（PG_OFFLINE=on，脚本/单测）不算故障；其余 ready=0 都是真源不可用。
       - alert: MedAssistAgentStorageNotPg
         expr: |
-          medassist_agent_storage_ready == 0
+          (
+            medassist_agent_storage_ready == 0
+            or
+            medassist_agent_storage_circuit_open == 1
+          )
           unless on(instance) medassist_agent_storage_mode{mode="offline"} == 1
         for: 10m
         labels:

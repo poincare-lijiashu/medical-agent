@@ -9,7 +9,9 @@ transaction/acquire），内存字典存表；repo 的同步桥接会把协程�
 线程执行，假池方法为纯内存操作，瞬时返回、确定性可断言。
 """
 import asyncio
+import inspect
 import json
+import time
 
 import pytest
 
@@ -1210,3 +1212,40 @@ def test_prometheus_text_declares_family_without_stale(monkeypatch):
     assert "# TYPE medassist_agent_storage_stale_domains gauge" in text
     assert "medassist_agent_storage_stale_domains{" not in text
     assert "medassist_agent_storage_ready 0" in text
+
+
+# ---- 第 50 批：PG 连接熔断（故障期快速回落，不再每次等连接超时） ----
+
+def test_pg_circuit_opens_after_connectivity_failures(monkeypatch):
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    monkeypatch.setattr(pg_store, "_pg_fail_streak", 0)
+    for _ in range(pg_store._PG_CIRCUIT_FAILS - 1):
+        pg_store._pg_circuit_failure(OSError("refused"))
+    assert pg_store.circuit_open() is False
+    pg_store._pg_circuit_failure(OSError("refused"))
+    assert pg_store.circuit_open() is True
+    assert pg_store.storage_status()["circuitOpen"] is True
+    pg_store._pg_circuit_success()
+    assert pg_store.circuit_open() is False
+
+
+def test_pg_circuit_ignores_non_connectivity_errors(monkeypatch):
+    """缺列/约束等查询错误不应触发全局快速回落（否则会误伤其它健康域）。"""
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    monkeypatch.setattr(pg_store, "_pg_fail_streak", 0)
+    for _ in range(5):
+        pg_store._pg_circuit_failure(RuntimeError("column does not exist"))
+    assert pg_store.circuit_open() is False
+
+
+def test_run_pg_fast_fails_when_circuit_open(monkeypatch):
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", time.monotonic() + 60)
+
+    async def _query():
+        return None
+
+    coro = _query()
+    with pytest.raises(pg_store.PGUnavailable):
+        pg_store._run_pg(coro)
+    # 未提交的协程必须关闭，不能留 "never awaited"
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
