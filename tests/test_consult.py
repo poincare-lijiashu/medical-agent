@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 
-from backend.agents import consult, guardrails, skills
+from backend.agents import consult, consult_metrics, guardrails, skills
 from backend.core import llm_config
 from backend.core.auth import seed_default_users
 from backend.core.medical_audit import AuditLog
@@ -52,6 +52,31 @@ def _publish(agent_id: str = "drug", code: str = "drug-check",
     item = skills.submit_skill(card["code"], 0, "admin01")
     skills.review_skill(card["code"], True, None, item["rowVersion"], "qc01")
     return card["code"]
+
+
+def test_quality_signals_are_deterministic():
+    """评审 02-S1：过短/缺证据/疑似拒答是确定性启发式，只提示不改答案。"""
+    assert consult.quality_signals("") == []
+    assert "short" in consult.quality_signals("建议观察")
+    assert "no_evidence" in consult.quality_signals("建议观察")
+    good = "根据 2026 年指南与院内共识，建议监测 INR 并评估出血风险，必要时调整剂量并随诊。"
+    assert consult.quality_signals(good) == []
+    assert "refusal" in consult.quality_signals("抱歉，我无法回答该问题")
+
+
+def test_run_records_quality_signals_without_blocking(monkeypatch):
+    """成功但过短/无证据的答案要进入质量计量，且响应照常返回。"""
+    _provider(monkeypatch)
+
+    async def runner(provider, messages):
+        return "建议观察。"
+
+    out = asyncio.run(consult.run("华法林和阿司匹林有相互作用吗", "doctor",
+                                  runner=runner))
+    assert out["agent"]["id"] == "drug"
+    quality = consult_metrics.snapshot()["quality"]
+    assert quality.get("drug|short") == 1
+    assert quality.get("drug|no_evidence") == 1
 
 
 def test_auto_route_applies_published_skills(monkeypatch):

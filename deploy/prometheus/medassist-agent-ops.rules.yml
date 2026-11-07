@@ -152,3 +152,21 @@ groups:
         annotations:
           summary: "token 用量采集覆盖率低于 50%"
           description: "近 1 小时仅 {{ $value }} 的成功问答返回了 usage；请检查 provider/模型是否改变了响应结构（本平台不估算 token）。"
+
+      # 回答质量：成功问答中"过短/缺证据/疑似拒答"的占比。
+      # 信号是启发式，只提示复查，不自动重试或拦截（医疗答案宁可人工看，不可静默改写）。
+      - alert: MedAssistAgentAnswerQualityLow
+        expr: |
+          (
+            sum(increase(medassist_agent_answer_quality_total{signal=~"short|no_evidence|refusal"}[1h]))
+            /
+            sum(increase(medassist_agent_consult_requests_total{status="ok",agent!="prefilter"}[1h]))
+          ) > 0.3
+          and
+          sum(increase(medassist_agent_consult_requests_total{status="ok",agent!="prefilter"}[1h])) >= 20
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "回答质量风险信号占比超过 30%"
+          description: "近 1 小时 {{ $value }} 的成功回答命中过短/缺证据/疑似拒答；请按 agent 与 signal 标签复查提示模板与模型输出，不要只看总量。"

@@ -18,6 +18,7 @@ G87 的技能卡此前只被 Bot 运行时装配（G88）使用；普通问答�
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -37,6 +38,33 @@ logger = get_logger(__name__)
 PROMPT_BUDGET = guardrails.MAX_PROMPT_BUDGET  # 发布准入与运行时共用同一口径（M-35）
 AGENT_TIMEOUT_S = 45.0
 STREAM_IDLE_TIMEOUT_S = 15.0
+
+# 评审 02-S1：回答质量信号（启发式，只用于运营告警，不改变答案、不参与放行）
+SHORT_ANSWER_CHARS = 40
+_EVIDENCE_RE = re.compile(r"(来源|参考|证据|指南|文献|共识|\[\d+\]|【\d+】|\d{4}\s*年)")
+_REFUSAL_RE = re.compile(r"^(抱歉|很抱歉|无法|不能|不便|恕难)")
+
+
+def quality_signals(answer: str) -> list[str]:
+    """从成功答案中提取质量风险信号（确定性规则，便于测试与口径统一）。
+
+    - ``short``：答案长度 < 40 字（可能截断或敷衍）；
+    - ``no_evidence``：未出现任何证据/来源/指南类提示（本平台要求可溯源）；
+    - ``refusal``：答案以"抱歉/无法/不能"等开头（可能是拒答而非临床建议）。
+    这些只是**提示**，不拦截响应；运营结合人工复核判断。
+    """
+    text = (answer or "").strip()
+    if not text:
+        return []
+    out: list[str] = []
+    if len(text) < SHORT_ANSWER_CHARS:
+        out.append("short")
+    if not _EVIDENCE_RE.search(text):
+        out.append("no_evidence")
+    if _REFUSAL_RE.match(text[:20]):
+        out.append("refusal")
+    return out
+
 
 # 与医疗域其它问答入口同一套 PHI 脱敏（评审 M-04 整改）：Agent 控制面此前整域未接脱敏，
 # 患者身份证/手机/邮箱/病案号会原样进入模型提示。此处只脱敏**入站输入**，不改回答。
@@ -425,6 +453,7 @@ async def run(question: str, role: str, agent_id: str | None = None,
 
     consult_metrics.record(agent_key, "sync", "ok",
                            (time.perf_counter() - started) * 1000, codes, usage)
+    consult_metrics.record_quality(agent_key, quality_signals(text))
     return _done_payload(ctx, text, started)
 
 
@@ -508,6 +537,7 @@ async def stream(question: str, role: str, agent_id: str | None = None,
         # 先计量再发 done：客户端收到 done 后立即断开也不会被误记为 aborted
         consult_metrics.record(agent_key, "stream", "ok",
                                (time.perf_counter() - started) * 1000, codes, last_usage)
+        consult_metrics.record_quality(agent_key, quality_signals(answer))
         finished = True
         yield {"type": "done", **_done_payload(ctx, answer, started)}
     except ConsultError as exc:

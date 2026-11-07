@@ -38,6 +38,8 @@ OTHER_SKILL = "__other__"
 OTHER_AGENT = "__other__"
 MAX_AGENT_LABELS = 64
 ERROR_REASONS = ("invalid", "forbidden", "unavailable", "timeout", "other")
+# 评审 02-S1：回答质量信号（启发式，只做运营提示，不参与放行/拦截）
+QUALITY_SIGNALS = ("short", "no_evidence", "refusal")
 
 _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = defaultdict(int)
@@ -45,6 +47,7 @@ _errors: dict[tuple[str, str], int] = defaultdict(int)
 _durations: dict[str, list] = defaultdict(lambda: [0.0, 0])
 _skill_usage: dict[str, int] = defaultdict(int)
 _skill_last_used: dict[str, float] = {}
+_quality: dict[tuple[str, str], int] = defaultdict(int)
 _tokens = {"input": 0, "output": 0}
 _tokenized_requests = 0
 
@@ -137,6 +140,19 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
                 _tokenized_requests += 1
 
 
+def record_quality(agent_id: str, signals) -> None:
+    """记录成功问答中的质量风险信号（评审 02-S1）。
+
+    信号是**启发式**（答案过短/缺证据引用/疑似拒答），只用于运营告警与人工复核，
+    不改变响应内容、不参与放行判断；失败/中止的请求不记录（它们已有 error/aborted 计量）。
+    """
+    agent = _agent_label(agent_id)
+    with _lock:
+        for sig in dict.fromkeys(signals or ()):
+            if sig in QUALITY_SIGNALS:
+                _quality[(agent, sig)] += 1
+
+
 def snapshot() -> dict:
     with _lock:
         return {
@@ -146,6 +162,7 @@ def snapshot() -> dict:
                           for c, v in _durations.items()},
             "skills": dict(_skill_usage),
             "skill_last_used": dict(_skill_last_used),
+            "quality": {f"{a}|{s}": n for (a, s), n in _quality.items()},
             "tokens": {"input": _tokens["input"], "output": _tokens["output"],
                        "requests": _tokenized_requests},
         }
@@ -210,7 +227,19 @@ def prometheus_text() -> str:
             "# HELP medassist_agent_consult_tokenized_requests_total 返回了 token 用量的成功问答数",
             "# TYPE medassist_agent_consult_tokenized_requests_total counter",
             f'medassist_agent_consult_tokenized_requests_total {_tokenized_requests}',
+            "# HELP medassist_agent_answer_quality_total 成功问答中的质量风险信号（启发式，仅提示）",
+            "# TYPE medassist_agent_answer_quality_total counter",
         ])
+        if _quality:
+            for (agent, sig), n in sorted(_quality.items()):
+                lines.append(
+                    f'medassist_agent_answer_quality_total{{agent="{_esc(agent)}",'
+                    f'signal="{_esc(sig)}"}} {n}')
+        else:
+            # 零样本时也保留指标族，避免上线自检的"规则引用指标覆盖"门禁误判缺失
+            for sig in QUALITY_SIGNALS:
+                lines.append('medassist_agent_answer_quality_total'
+                             f'{{agent="unknown",signal="{sig}"}} 0')
         return "\n".join(lines) + "\n"
 
 
@@ -228,5 +257,6 @@ def reset() -> None:
         _durations.clear()
         _skill_usage.clear()
         _skill_last_used.clear()
+        _quality.clear()
         _tokens["input"] = _tokens["output"] = 0
         _tokenized_requests = 0

@@ -310,6 +310,20 @@ def test_metrics_endpoint_includes_consult_metrics(monkeypatch, tmp_path):
     assert "medassist_counter_total" in r.text  # 既有指标仍保留
 
 
+def test_quality_signals_exported_with_zero_baseline():
+    """评审 02-S1：质量信号按 agent/signal 导出；无样本时保留零值族供告警门禁识别。"""
+    consult_metrics.record_quality("drug", ["short", "no_evidence", "not-a-signal"])
+    text = consult_metrics.prometheus_text()
+    assert 'medassist_agent_answer_quality_total{agent="drug",signal="short"} 1' in text
+    assert 'medassist_agent_answer_quality_total{agent="drug",signal="no_evidence"} 1' in text
+    assert "not-a-signal" not in text
+
+    consult_metrics.reset()
+    text = consult_metrics.prometheus_text()
+    assert "medassist_agent_answer_quality_total" in text
+    assert 'signal="short"} 0' in text
+
+
 def test_agent_prometheus_is_skill_domain_only(monkeypatch, tmp_path):
     """评审 01-S6：consult 计量只在 /metrics 暴露；Agent 端点只给 skill 域，防双目标重复计数。"""
     c = _client(monkeypatch, tmp_path)

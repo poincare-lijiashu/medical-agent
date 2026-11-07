@@ -1217,10 +1217,36 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 **仍存边界**：
 - `up{job="medassist-ai-core"}` 只对本地 compose 的 job 名成立；K8s 以 ServiceMonitor 的 job 标签为准，跨形态由 `absent` 规则兜底；
 - token 阈值（30 万/小时）是示例值，未按院区实际调用量建模，需运营按基线调整；
-- 回答质量类告警（空答案/拒答/缺证据）未新增专用计数器——目前只有 `status="error"` 与 `reason` 标签可区分，属下一步工作；
+- 回答质量类告警（空答案/拒答/缺证据）未新增专用计数器——目前只有 `status="error"` 与 `reason` 标签可区分，属下一步工作（已在 §34 落地）；
 - `prometheus.yml` 的 `scrape_interval/evaluation_interval` 仍为 30s（本轮只调规则窗口，未改抓取频率）。
 
 **验证**：全量 pytest **1119 passed / 14 skipped**；规则 YAML 解析通过（12 条）。
+
+---
+
+## 34. 2026-11-06 评审整改（第 30 批：回答质量信号与告警）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S1（剩余） | 新增**回答质量启发式信号**（`short` 过短 / `no_evidence` 缺证据引用 / `refusal` 疑似拒答），在同步与流式成功问答后记录；只做运营提示，不拦截、不改写答案 | `consult.py`（`quality_signals`）、`consult_metrics.record_quality` |
+| 02-S1（剩余） | 新增指标 `medassist_agent_answer_quality_total{agent,signal}`；零样本时保留零值族，避免上线自检"规则引用指标覆盖"门禁误判 | `consult_metrics.py` |
+| 02-S1（剩余） | 新增告警 `MedAssistAgentAnswerQualityLow`（质量信号 / 成功问答 > 30%，分母 ≥20），本地规则与 Helm 同步（13 条） | `deploy/prometheus/medassist-agent-ops.rules.yml`、`prometheusrule-agent-ops.yaml` |
+
+**为什么这样改**：`needsHumanReview=True` 是安全不变量而不是质量信号；此前链路里没有任何
+"答案过短/缺证据/拒答"的可观测面，运营只能靠人工抽样。质量信号是**确定性启发式**（便于复现与
+解释），只用于告警与复查，绝不自动重试或改写给临床看的内容。
+
+**新增测试**：`test_quality_signals_are_deterministic`、`test_run_records_quality_signals_without_blocking`、
+`test_quality_signals_exported_with_zero_baseline`；规则同名同量断言更新为 13 条。
+
+**仍存边界**：
+- 启发式阈值（40 字、证据关键词表）是通用起点，专科差异未建模，可能产生误报/漏报；
+- 质量信号只按 `agent` 与 `signal` 聚合，不记录问题/答案原文（隐私边界不变）；
+- 未做"拒答 vs 合理不确定性"的语义区分，也未接入人工复核队列自动生成待办；
+- 告警阈值 30% 为示例值，需按院区基线调整；零样本时导出 `agent="unknown"` 的零值样本，仅为让门禁可识别指标族。
+
+**验证**：全量 pytest **1122 passed / 14 skipped**；规则 YAML 解析通过（13 条）。
+
 
 
 
