@@ -20,6 +20,12 @@
         title="辅助工具，非医疗器械：回答仅供执业医师/药师参考，必须人工复核，不构成诊断或处方。"
       />
 
+      <!-- 评审 04-S7：错误条放在线程上方（长对话下不会被顶出视口），且页面只用这一条通道 -->
+      <el-alert
+        v-if="error" type="error" :closable="false" show-icon class="err"
+        :title="error" data-testid="ask-error"
+      />
+
       <div ref="threadEl" class="thread" v-if="thread.length">
         <template v-for="(m, i) in thread" :key="i">
           <div v-if="m.role === 'user'" class="row me">
@@ -97,12 +103,18 @@
         >全部已发布（默认）</el-tag>
         <el-tag
           v-for="s in agentSkills" :key="s.code" class="pick-tag"
+          :class="{ 'is-limit': skillLimitReached && !form.skillCodes.includes(s.code) }"
           :effect="form.skillCodes.includes(s.code) ? 'dark' : 'plain'"
           :type="form.skillCodes.includes(s.code) ? 'success' : 'info'"
           role="button" tabindex="0" :aria-pressed="form.skillCodes.includes(s.code)"
+          :aria-disabled="skillLimitReached && !form.skillCodes.includes(s.code)"
           @click="toggleSkill(s.code)" @keydown.enter.prevent="toggleSkill(s.code)"
           @keydown.space.prevent="toggleSkill(s.code)"
         >{{ s.name }} v{{ s.version }}</el-tag>
+        <!-- 评审 04-S2：把后端的 8 张上限与 12000 字提示词预算前置到界面 -->
+        <span class="src" data-testid="skill-count">
+          已选 {{ form.skillCodes.length }}/{{ SKILL_LIMIT }} 张（提示词合计预算 12000 字）
+        </span>
         <span v-if="!agentSkills.length" class="src">该能力域暂无已发布技能卡，将按职责保守作答。</span>
       </div>
 
@@ -115,8 +127,6 @@
           @keydown.space.prevent="useExample(ex)"
         >{{ ex }}</el-tag>
       </div>
-
-      <el-alert v-if="error" type="error" :closable="false" show-icon class="err" :title="error" />
 
       <div class="composer">
         <textarea
@@ -166,6 +176,10 @@ const agentSkills = computed(() => skillList.value.filter(
   (s) => s.agentId === form.value.agentId && s.status === 'PUBLISHED',
 ))
 
+// 评审 04-S2：与后端 ConsultReq.skillCodes(max_length=8) 同口径，超限在界面即时拦下
+const SKILL_LIMIT = 8
+const skillLimitReached = computed(() => form.value.skillCodes.length >= SKILL_LIMIT)
+
 function strategyText(meta) {
   const s = meta && meta.routing && meta.routing.strategy
   return { single: '单智能体直达', supervisor: '主路由 + 候选', explicit: '手动指定', prefilter: '快捷应答' }[s] || s || ''
@@ -198,8 +212,15 @@ function pickAgent(id) {
 function toggleSkill(code) {
   const list = form.value.skillCodes
   const i = list.indexOf(code)
-  if (i >= 0) list.splice(i, 1)
-  else list.push(code)
+  if (i >= 0) {
+    list.splice(i, 1)
+    return
+  }
+  if (list.length >= SKILL_LIMIT) {
+    ElMessage.warning(`最多选择 ${SKILL_LIMIT} 张技能卡（后端同口径），请先取消一张`)
+    return
+  }
+  list.push(code)
 }
 
 function useExample(text) {
@@ -284,10 +305,11 @@ async function ask() {
       return
     }
     if (e && e.name === 'AbortError') {
+      // 评审 04-S14：停止生成同样留痕（后端记 aborted），界面不能"什么都没发生"
       placeholder.streaming = false
       placeholder.failed = true
-      placeholder.failNote = '已停止生成（内容可能不完整）'
-      if (!placeholder.answer) thread.value.pop()
+      placeholder.aborted = true
+      placeholder.failNote = '已停止生成（本次已中止，内容可能不完整）'
       return
     }
     // 评审 S2：前置校验（403/422/503）与限流（429）已是最终结论，不回落非流式；
@@ -300,23 +322,22 @@ async function ask() {
     }
     // 流式在收到任何内容前失败 → 回落非流式，避免空白
     if (!placeholder.meta && !placeholder.answer) {
-      thread.value.pop()
       try {
         const r = await http.post('/agent/consult', bodyOf(q, history), { silentToast: true })
         const d = r.data || {}
-        thread.value.push({
-          role: 'assistant',
-          answer: d.answer || '',
-          meta: {
-            agent: d.agent, routing: d.routing, appliedSkills: d.appliedSkills || [],
-            declaredTools: d.declaredTools || [], needsHumanReview: d.needsHumanReview,
-            note: d.note, elapsedMs: d.elapsedMs,
-          },
-          streaming: false,
-          failed: false,
-        })
+        // 评审 04-S8：复用同一占位对象，回落失败时也能就地说明，不留孤立提问
+        placeholder.answer = d.answer || ''
+        placeholder.meta = {
+          agent: d.agent, routing: d.routing, appliedSkills: d.appliedSkills || [],
+          declaredTools: d.declaredTools || [], needsHumanReview: d.needsHumanReview,
+          note: d.note, elapsedMs: d.elapsedMs,
+        }
+        placeholder.streaming = false
+        placeholder.failed = false
       } catch (e2) {
-        error.value = detailText(e2)
+        placeholder.streaming = false
+        placeholder.failed = true
+        placeholder.failNote = '请求失败：' + detailText(e2)
       }
     } else {
       placeholder.streaming = false
@@ -363,7 +384,8 @@ async function streamConsult(q, history, placeholder) {
   let buf = ''
   let ev = null
   let completed = false
-  while (true) {
+  let terminal = false
+  while (!terminal) {
     const { value, done } = await reader.read()
     if (done) break
     buf += dec.decode(value, { stream: true })
@@ -391,15 +413,38 @@ async function streamConsult(q, history, placeholder) {
           placeholder.answer = d.answer || placeholder.answer
           placeholder.streaming = false
           completed = true
+          // 评审 04-S12：终态后立即停止读循环并复位 ev，避免后续 data 行被当成第二个 done
+          terminal = true
+          ev = null
+          break
         } else if (ev === 'error') {
           // 评审 S2：优先按稳定 code 分支，文案只做兜底
           const err = new Error(d.detail || '生成失败')
           err.sseCode = d.code || ''
+          terminal = true
+          ev = null
           throw err
         }
         scrollBottom()
       }
     }
+  }
+  // 评审 04-S12：服务端若未以空行收尾，最后一个事件会留在 buf 里——不能静默丢弃
+  if (!terminal && buf.trim()) {
+    const s = buf.trim()
+    if (s.startsWith('data:')) {
+      try {
+        const d = JSON.parse(s.slice(5).trim())
+        if (d && typeof d.answer === 'string' && d.answer) {
+          placeholder.answer = d.answer
+          completed = true
+        }
+      } catch (_) { /* 不完整事件：交给下方截断提示 */ }
+    }
+  }
+  if (terminal) {
+    // 已拿到终态：主动关闭响应体，让服务端尽快感知断开（不多占一条模型连接）
+    try { await reader.cancel() } catch (_) { /* 已关闭 */ }
   }
   placeholder.streaming = false
   // 评审 M-53：没有收到 done 事件 → 回答可能被截断，不能当成完整临床结论展示
@@ -459,6 +504,8 @@ onMounted(async () => {
 .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .pick-label { color: var(--ink-3); font-size: 12.5px; margin-right: 2px; }
 .pick-tag { cursor: pointer; }
+/* 评审 04-S2：达到 8 张上限后，未选中的技能卡明确显示为不可再选 */
+.pick-tag.is-limit { opacity: .45; cursor: not-allowed; }
 /* 评审 M-59：键盘用户必须看得见焦点 */
 .pick-tag:focus-visible { outline: 2px solid var(--el-color-primary, #409eff); outline-offset: 2px; }
 .err { margin-top: 12px; }

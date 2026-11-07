@@ -60,3 +60,44 @@ def test_ask_view_stream_prevalidation_uses_real_status():
     assert "err.noFallback = true" in body
     assert "err.sseCode = d.code" in body
     assert "e.noFallback" in body
+
+
+def test_ask_view_error_banner_sits_above_thread():
+    """评审 04-S7：错误条必须在线程上方，长对话下不能被顶出视口。"""
+    body = _read(ASK)
+    assert body.index('data-testid="ask-error"') < body.index('class="thread"')
+
+
+def test_ask_view_skill_selection_limit_is_front_loaded():
+    """评审 04-S2：8 张技能卡上限在界面即时拦截，并显示已选计数。"""
+    body = _read(ASK)
+    assert "const SKILL_LIMIT = 8" in body
+    assert "skillLimitReached" in body
+    assert 'data-testid="skill-count"' in body
+
+
+def test_ask_view_sse_terminal_state_and_residual_buffer():
+    """评审 04-S12：终态后停止读循环、复位 ev、处理残留缓冲并主动关闭连接。"""
+    body = _read(ASK)
+    assert "let terminal = false" in body
+    assert "terminal = true" in body
+    assert "ev = null" in body
+    assert "await reader.cancel()" in body
+    assert "buf.trim()" in body
+
+
+def test_ask_view_keeps_bubble_on_abort_and_fallback_failure():
+    """评审 04-S8 / S14：停止或回落失败都保留气泡就地说明，不留孤立提问。"""
+    body = _read(ASK)
+    assert "placeholder.aborted = true" in body
+    assert "已停止生成（本次已中止" in body
+    assert "placeholder.failNote = '请求失败：' + detailText(e2)" in body
+
+
+def test_literature_view_401_is_unified():
+    """评审 04-S15：文献流式 401 与 AskView 同纪律（await 登出 + 提示 + 不回落）。"""
+    lit = os.path.join(REPO, "frontend-vue", "src", "views", "LiteratureView.vue")
+    body = _read(lit)
+    assert "await auth.logout()" in body
+    assert "return 'auth'" in body
+    assert "if (streamed === 'auth') return" in body

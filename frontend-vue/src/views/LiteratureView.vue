@@ -106,6 +106,7 @@ async function send() {
     // SSE 流式优先（legacy streamLit 同链路）；任一失败回落非流式 /literature/ask
     let streamed = false
     try { streamed = await streamLit(q) } catch (_) { streamed = false }
+    if (streamed === 'auth') return  // 评审 04-S15：已登出跳转，不再回落
     if (!streamed) await fallbackAsk(q)
   } finally {
     thinking.on = false
@@ -121,7 +122,13 @@ async function streamLit(q) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question: q, session_id: sessionId.value }),
   })
-  if (res.status === 401) { auth.logout(); router.push('/login'); return true }
+  if (res.status === 401) {
+    // 评审 04-S15：与 AskView 统一——await 登出、跳转并给出提示，不能当成"流式成功"静默吞掉
+    await auth.logout()
+    ElMessage.warning('登录已过期，请重新登录')
+    router.push('/login')
+    return 'auth'
+  }
   if (!res.ok || !res.body) return false
   const rd = res.body.getReader()
   const dec = new TextDecoder()
