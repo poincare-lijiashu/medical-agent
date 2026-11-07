@@ -50,6 +50,14 @@ def test_experience_validation(override):
         skill_library.create_experience(exp(**override), "qc01")
 
 
+def test_experience_records_its_backer():
+    """评审 01-S11：经验没有独立第二人复核，但必须记录"谁背书"（录入人 + 时间）。"""
+    item = _create()
+    assert item["status"] == "APPROVED"
+    assert item["approvedBy"] == "qc01"
+    assert item["approvedAt"]
+
+
 def test_distill_requires_two_experiences():
     _create()
     assert skill_library.distill("qc01") == []

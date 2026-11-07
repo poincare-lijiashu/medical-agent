@@ -71,7 +71,8 @@ def test_usage_ratio_and_items():
     assert by_code["drug-a"]["usage"] == 2
     assert by_code["drug-a"]["published"] is True
     assert by_code["drug-a"]["lastUsedAt"]
-    assert by_code["drug-a"]["usageShare"] == 1.0
+    # 评审 01-S5：一个请求可应用多张卡，该值语义是"每成功问答平均引用次数"，可 >1
+    assert by_code["drug-a"]["perRequestAvg"] == 1.0
     assert by_code["drug-b"]["usage"] == 0
     assert by_code["drug-b"]["lastUsedAt"] is None
 

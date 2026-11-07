@@ -1,7 +1,9 @@
-"""G92 技能库：从**审核通过的经验**沉淀候选技能，经回放准入后才生成草稿。
+"""G92 技能库：从 qc/admin 录入并背书的经验沉淀候选技能，经回放准入后才生成草稿。
 
 "自我进化"的边界（医疗场景）：
-- 只接收**已审核通过、已脱敏**的经验（由 qc/admin 显式录入，不从对话自动抓取）；
+- 只接收**已脱敏**的经验（由 qc/admin 显式录入，不从对话自动抓取）；**录入即视为录入人
+  背书"该经验可用"**（`approvedBy/approvedAt` 记录背书账号与时间），本模块不做经验级
+  第二人复核——四眼纪律落在最后的技能卡发布（G87）；
 - 提炼是**确定性组合**（不调用模型生成新知识）：把同一能力域、同一问题模式的
   多条经验的处置要点/证据/禁忌合并成技能草稿；
 - 回放准入：候选技能必须能通过"该模式输入应路由到该能力域"的检查；不通过不得入库；
@@ -131,7 +133,13 @@ def _clean(values, limit: int, field: str) -> list[str]:
 
 
 def create_experience(payload: dict, actor: str) -> dict:
-    """录入一条已审核、已脱敏的经验（qc/admin）。"""
+    """录入一条经验（仅 qc/admin；**录入即由该账号背书为"已确认可用"**）。
+
+    评审 01-S11：此前 docstring 写"只接收已审核通过的经验"，但代码层并没有独立的
+    第二人复核环节。这里如实说明口径：录入人自身的 qc/admin 身份就是背书，
+    真正的四眼在**技能卡发布**那一步；`approvedBy/approvedAt` 记录背书账号与时间，
+    便于追责，也让"谁说的这条经验可用"可查。
+    """
     agent_id = str(payload.get("agentId") or "").strip()
     agent = catalog.get_agent(agent_id)
     if agent is None:
@@ -188,6 +196,9 @@ def create_experience(payload: dict, actor: str) -> dict:
         "status": "APPROVED",
         "createdBy": actor,
         "createdAt": _now(),
+        # 评审 01-S11：录入人即背书人（没有第二人复核）；与四眼发布审核区分开记录
+        "approvedBy": actor,
+        "approvedAt": _now(),
     }
     with _lock:
         items = _load_experiences()

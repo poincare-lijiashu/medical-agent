@@ -62,6 +62,12 @@ def _jaccard(a: str, b: str) -> float:
     return round(len(sa & sb) / len(union), 3) if union else 0.0
 
 
+def _jaccard_sets(sa: set[str], sb: set[str]) -> float:
+    """已预算 bigram 集合的 Jaccard（评审 01-S8：两两比较时不再重复构建字符集）。"""
+    union = sa | sb
+    return round(len(sa & sb) / len(union), 3) if union else 0.0
+
+
 def _age_days(created_at: str, now: datetime) -> int:
     try:
         ts = datetime.fromisoformat(created_at)
@@ -133,16 +139,19 @@ def scan(bot_codes: list[str] | None = None, now: datetime | None = None,
         if mem.get("status") == "CONFIRMED":
             by_bot.setdefault(mem.get("botCode"), []).append(mem)
     for bot, items in by_bot.items():
-        for i in range(len(items)):
-            for j in range(i + 1, len(items)):
-                a, b = items[i], items[j]
-                if _norm(a.get("value")) == _norm(b.get("value")):
+        # 评审 01-S8：归一化文本与 bigram 集合各预计算一次（O(n²) 次比较不再重复构建字符集）
+        prepared = [(_norm(m.get("value")), _bigrams(m.get("value")), m) for m in items]
+        for i in range(len(prepared)):
+            for j in range(i + 1, len(prepared)):
+                norm_a, bigrams_a, a = prepared[i]
+                norm_b, bigrams_b, b = prepared[j]
+                if norm_a == norm_b:
                     findings.append(_finding(
                         "DUPLICATE_VALUE", "medium", bot, [a, b],
                         "两条已确认记忆内容完全相同",
                         "保留一条，删除另一条"))
                 else:
-                    score = _jaccard(a.get("value"), b.get("value"))
+                    score = _jaccard_sets(bigrams_a, bigrams_b)
                     if score >= NEAR_DUP_THRESHOLD:
                         findings.append(_finding(
                             "NEAR_DUPLICATE", "low", bot, [a, b],

@@ -457,8 +457,8 @@
               </template>
             </el-table-column>
             <el-table-column prop="usage" label="使用次数" width="90" />
-            <el-table-column label="占成功问答" width="110">
-              <template #default="{ row }">{{ pct(row.usageShare) }}</template>
+            <el-table-column label="每问答平均引用" width="120">
+              <template #default="{ row }">{{ (row.perRequestAvg ?? 0).toFixed(2) }}</template>
             </el-table-column>
             <el-table-column label="最近使用" width="190">
               <template #default="{ row }">{{ row.lastUsedAt || '—' }}</template>

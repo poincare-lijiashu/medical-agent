@@ -1087,3 +1087,27 @@ admin 可见完整主机。
 Playwright 冒烟只在本地起服务且装 playwright 时执行，CI 默认 skip（13 skipped 中的 2 条）。
 
 **验证**：全量 pytest **1099 passed / 13 skipped**；`npm run build` 成功。
+
+---
+
+## 29. 2026-11-06 评审整改（第 25 批：字段语义、扫描性能与经验背书口径）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 01-S5 | `skill_usage` 的 `usageShare` 更名为 **`perRequestAvg`**（每成功问答平均引用次数，可 >1，不是占比）；前端列名改为「每问答平均引用」并按数值展示（不再用百分比） | `skill_usage.py`、`AgentView.vue` |
+| 01-S8 | 睡眠记忆的两两比较**预计算**归一化文本与 bigram 集合（新增 `_jaccard_sets`），O(n²) 次比较不再重复构建字符集；`_jaccard` 保留给单次比较 | `sleep_memory.py` |
+| 01-S11 | 经验录入口径**如实化**：docstring 不再声称"只接收已审核通过的经验"，明确"录入人（qc/admin）即背书人"，并新增 `approvedBy/approvedAt` 字段记录背书账号与时间；真正的四眼仍在技能卡发布 | `skill_library.py` |
+
+**为什么这样改**：`usageShare` 的数值可 >1 却被当"占成功问答"显示，运营会读成"120% 的问答用了它"；
+睡眠扫描在 200 条记忆时每次约 2 万次字符集构建，属纯浪费；经验"已审核"的说法与代码不符，
+审计上会让人误以为存在第二人复核记录。
+
+**新增测试**：`skill_usage` 断言 `perRequestAvg`；`skill_library` 断言经验记录 `approvedBy/approvedAt`；
+`sleep_memory` 断言 `_jaccard_sets` 与 `_jaccard` 结果一致（防优化改语义）。
+
+**仍存边界**：`perRequestAvg` 的分母是**成功问答数**（非技能引用总次数），多技能并行时仍可能 >1，
+这是刻意保留的真实语义；睡眠扫描仍是 O(n²)，只是常数项下降（200 条上限下可接受，未做分桶）；
+经验的"背书"只是字段记录，不阻止同一账号录入后自己采纳（采纳侧有四眼校验，
+但"录入人 ≠ 采纳人"只在经验作者字段层面成立）。
+
+**验证**：全量 pytest **1101 passed / 13 skipped**；`npm run build` 成功。

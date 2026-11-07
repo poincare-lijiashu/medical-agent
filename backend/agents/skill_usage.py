@@ -92,7 +92,9 @@ def report() -> dict:
             "version": (card or {}).get("version"),
             "published": card is not None,
             "usage": count,
-            "usageShare": _ratio(count, ok_total),
+            # 评审 01-S5：一个请求可应用多张技能卡，该值可 >1，不是"占比"，
+            # 而是"每成功问答平均被引用次数"；旧名 usageShare 已废弃（易被误读为百分比）。
+            "perRequestAvg": _ratio(count, ok_total),
             "lastUsedAt": _iso(last_used.get(code)),
         })
 

@@ -17,6 +17,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).astimezone()
 
 
+def test_jaccard_sets_matches_string_version():
+    """评审 01-S8：预计算 bigram 的相似度必须与字符串版本完全一致（防优化改语义）。"""
+    a, b = "呼吸科倾向使用院内 COPD 路径", "呼吸科倾向使用院内 COPD 路径方案"
+    sa, sb = sleep_memory._bigrams(a), sleep_memory._bigrams(b)
+    assert sleep_memory._jaccard_sets(sa, sb) == sleep_memory._jaccard(a, b)
+
+
 def _bot(code: str) -> dict:
     return bots.create_bot({
         "code": code,
