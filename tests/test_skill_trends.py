@@ -38,6 +38,35 @@ def _publish_skill(code: str, name: str) -> None:
     skills.review_skill(card["code"], True, None, item["rowVersion"], "qc01")
 
 
+def _fake_metrics() -> dict:
+    return {
+        "experiences": {"total": 0, "coverageRate": 0},
+        "proposals": {"proposed": 0, "adopted": 0, "rejected": 0, "adoptionRate": 0,
+                      "replayChecked": 0, "replayPassRate": 0},
+        "skillCards": {"byStatus": {}, "reviewPassRate": 0, "unpublished": [],
+                       "unusedPublished": []},
+        "bots": {"total": 0, "published": 0, "teams": 0},
+    }
+
+
+def test_prometheus_text_loads_metrics_once(monkeypatch):
+    """评审 01-S4：一次抓取只加载一遍域数据（alerts 复用同一份 metrics）。"""
+    calls: list[int] = []
+    fake = _fake_metrics()
+    monkeypatch.setattr(skill_ops, "metrics", lambda: calls.append(1) or fake)
+    skill_trends.prometheus_text()
+    assert len(calls) == 1
+
+
+def test_alerts_accepts_precomputed_metrics(monkeypatch):
+    """传入 metrics 时不得再次调用 skill_ops.metrics()。"""
+    calls: list[int] = []
+    monkeypatch.setattr(skill_ops, "metrics", lambda: calls.append(1) or _fake_metrics())
+    out = skill_trends.alerts(_fake_metrics())
+    assert "alerts" in out
+    assert calls == []
+
+
 def test_snapshot_is_idempotent_per_day():
     skill_trends.snapshot("qc01", date(2026, 11, 1))
     skill_trends.snapshot("admin01", date(2026, 11, 1))

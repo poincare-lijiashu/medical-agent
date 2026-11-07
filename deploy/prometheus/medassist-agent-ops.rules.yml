@@ -1,9 +1,10 @@
 # ============================================================================
 # MedAssist · Agent 运营指标告警规则（G97 运营 + G102 问答计量）
 #
-# 配套接口：GET /api/v1/agent/skill-library/metrics/prometheus
-# （G102 起同时导出统一问答计量；/metrics 亦包含）
-# 采集需 Bearer 令牌（admin/qc）；指标均为聚合值，不含业务标识或 PHI。
+# 配套抓取端点：GET /metrics（Bearer METRICS_TOKEN 或 admin 登录态）
+# Agent 端点 GET /api/v1/agent/skill-library/metrics/prometheus 仅供 admin/qc 人工查看，
+# **不是**抓取端点（评审 01-S6：两处都抓会让 consult counter 的 rate() 翻倍）。
+# 指标均为聚合值，不含业务标识或 PHI。
 # 阈值与后端 skill_trends 的运营告警保持一致；此处用于院内 Prometheus
 # 做持续告警，后端告警仍只在管理端展示、不自动处置。
 # ============================================================================

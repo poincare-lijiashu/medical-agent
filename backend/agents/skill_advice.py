@@ -109,9 +109,10 @@ def generate_with_stats(actor: str) -> dict:
     评审 M-40：此前接口把"全部建议"当作本次生成结果返回，审计计数随之失真；
     这里显式区分"本次新建"与"当前全部"。
     """
-    alerts = skill_trends.alerts().get("alerts") or []
     proposals = skill_library.list_proposals("admin")
+    # 评审 01-S4：先算一次指标，告警复用同一份，避免一次生成加载两遍域数据
     metrics = skill_ops.metrics()
+    alerts = skill_trends.alerts(metrics).get("alerts") or []
     pending = [p for p in proposals if p.get("status") == "PROPOSED"]
     unused = (metrics.get("skillCards") or {}).get("unusedPublished") or []
     period = _period_key()

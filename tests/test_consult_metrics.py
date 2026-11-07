@@ -310,14 +310,19 @@ def test_metrics_endpoint_includes_consult_metrics(monkeypatch, tmp_path):
     assert "medassist_counter_total" in r.text  # 既有指标仍保留
 
 
-def test_agent_prometheus_includes_consult_metrics(monkeypatch, tmp_path):
+def test_agent_prometheus_is_skill_domain_only(monkeypatch, tmp_path):
+    """评审 01-S6：consult 计量只在 /metrics 暴露；Agent 端点只给 skill 域，防双目标重复计数。"""
     c = _client(monkeypatch, tmp_path)
     token = _login(c, "admin01")
     consult_metrics.record("literature", "stream", "ok", 5.0, ["lit-a"])
+    headers = {"Authorization": "Bearer " + token}
 
-    r = c.get("/api/v1/agent/skill-library/metrics/prometheus",
-              headers={"Authorization": "Bearer " + token})
+    r = c.get("/api/v1/agent/skill-library/metrics/prometheus", headers=headers)
     assert r.status_code == 200, r.text
     assert "medassist_agent_experiences_total" in r.text
-    assert "medassist_agent_consult_requests_total" in r.text
-    assert 'skill="lit-a"' in r.text
+    assert "medassist_agent_consult_requests_total" not in r.text
+    assert 'skill="lit-a"' not in r.text
+
+    scrape = c.get("/metrics", headers=headers)
+    assert scrape.status_code == 200
+    assert "medassist_agent_consult_requests_total" in scrape.text

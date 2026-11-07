@@ -383,9 +383,11 @@ def bot_skill_cards(bot: dict) -> list[dict]:
 
     评审 M-44：此前逐个 ``get_skill`` 会触发 N 次整表加载；现改为**一次**取
     已发布集合再按绑定顺序挑选（N 次文件/PG 读 → 1 次）。
+    评审 01-S1：装配顺序统一按 ``code`` 排序，与 ``/consult`` 的 ``select_skills``
+    一致——提示词顺序影响输出，两链路顺序不同会让同一组技能"不可复现"。
     """
     codes = [c for c in (bot.get("skillCodes") or []) if c]
     if not codes:
         return []
     published = {s.get("code"): s for s in skills.list_skills("admin", "PUBLISHED")}
-    return [published[c] for c in codes if c in published]
+    return [published[c] for c in sorted(codes) if c in published]

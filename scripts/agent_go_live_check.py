@@ -85,14 +85,23 @@ def check_web_policy(policy: dict) -> list[tuple[str, bool, str]]:
     return out
 
 
-def check_prometheus(text: str) -> list[tuple[str, bool, str]]:
-    required = ("medassist_agent_experiences_total",
-                "medassist_agent_replay_pass_ratio",
-                "medassist_agent_unused_published_skills",
-                "medassist_agent_operational_alerts",
-                "medassist_agent_consult_requests_total",
-                "medassist_agent_skill_usage_total",
-                "medassist_agent_consult_tokens_total")
+_SKILL_METRICS = ("medassist_agent_experiences_total",
+                  "medassist_agent_replay_pass_ratio",
+                  "medassist_agent_unused_published_skills",
+                  "medassist_agent_operational_alerts")
+_CONSULT_METRICS = ("medassist_agent_consult_requests_total",
+                    "medassist_agent_skill_usage_total",
+                    "medassist_agent_consult_tokens_total")
+
+
+def check_prometheus(text: str, full: bool = True) -> list[tuple[str, bool, str]]:
+    """校验指标端点。
+
+    评审 01-S6：``/metrics`` 是唯一抓取端点（skill + consult 全量）；Agent 侧的
+    ``/skill-library/metrics/prometheus`` 只供人工查看 skill 域，故用 ``full=False``
+    只要求 skill 指标——否则自检会把"正确的分工"误判为缺失。
+    """
+    required = _SKILL_METRICS + (_CONSULT_METRICS if full else ())
     missing = [m for m in required if m not in text]
     return [("metrics.prometheus", not missing,
              "missing=" + ",".join(missing) if missing else "required metrics present")]
@@ -193,7 +202,8 @@ def run(base_url: str, username: str, password: str, timeout: float) -> int:
                            token=token, timeout=timeout)
     results.append(("metrics.prometheus_endpoint", status == 200, f"http={status}"))
     if status == 200:
-        results.extend(check_prometheus(raw))
+        # 评审 01-S6：该端点只导出 skill 域（consult 指标只在 /metrics）
+        results.extend(check_prometheus(raw, full=False))
 
     # 评审 M-34：Prometheus 真正抓取的是 /metrics，必须单独验证它并做告警覆盖对齐
     status, metrics_raw = _request(base_url, "/metrics", token=token, timeout=timeout)

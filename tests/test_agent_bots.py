@@ -187,6 +187,16 @@ def test_list_bots_filters_by_agent_roles():
     assert {"lit-bot", "img-bot"} <= {b["code"] for b in bots.list_bots("admin")}
 
 
+def test_bot_skill_cards_sorted_by_code(monkeypatch):
+    """评审 01-S1：Bot 与 /consult 的技能装配顺序统一按 code，保证提示可复现。"""
+    monkeypatch.setattr(skills, "list_skills",
+                        lambda role, status=None, agent_id=None: [
+                            {"code": "b-card", "version": 1},
+                            {"code": "a-card", "version": 1}])
+    bot = {"skillCodes": ["b-card", "a-card"]}
+    assert [c["code"] for c in bots.bot_skill_cards(bot)] == ["a-card", "b-card"]
+
+
 def test_disabled_team_can_be_reenabled():
     _published_bot("team-a")
     _published_bot("team-b")

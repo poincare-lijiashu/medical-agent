@@ -1167,3 +1167,32 @@ GPU 上的本地模型压满；没有并发闸门时表现为"所有人的回答
 
 **验证**：全量 pytest **1113 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
 
+---
+
+## 32. 2026-11-06 评审整改（第 28 批：装配顺序、指标单一抓取源与域加载次数）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 01-S1 | Bot 运行时技能卡装配顺序统一按 `code` 排序，与 `/consult` 的 `select_skills` 一致——同一组技能在两条链路注入顺序相同，提示可复现 | `bots.bot_skill_cards` |
+| 01-S4 | `skill_trends.alerts(metrics=None)` 支持复用已算好的指标；`prometheus_text()` 与 `skill_advice.generate_with_stats()` 各只加载一次域数据（此前一次抓取/生成会重复调用 `skill_ops.metrics()`） | `skill_trends.py`、`skill_advice.py` |
+| 01-S6 | `consult_metrics` 只在 `/metrics` 暴露；`/agent/skill-library/metrics/prometheus` 改为**只含 skill 域**（人工查看），消除"双 target 抓取 → `rate()` 翻倍"的部署陷阱；上线自检区分两类端点要求 | `agent_router.py`、`scripts/agent_go_live_check.py`、`deploy/prometheus/medassist-agent-ops.rules.yml` |
+| 06（文档） | `OPERATIONS.md` / `DEPLOY.md` 明确 Agent 端点"只含 skill 域、不是抓取端点"；规则文件头注释同步为 `/metrics` | `docs/OPERATIONS.md`、`docs/DEPLOY.md` |
+
+**为什么这样改**：技能提示顺序影响模型输出，两条链路顺序不同会让"同一问题、同一组技能"不可复现；
+一次抓取重复加载域数据在 30s 间隔下是纯浪费；同一批 counter 被两个 target 抓取会让
+`rate()` 翻倍——这是"看板数字看起来对、告警阈值却按两倍量级判断"的隐蔽事故。
+
+**新增测试**：`test_agent_bots.py::test_bot_skill_cards_sorted_by_code`；
+`test_skill_trends.py::test_prometheus_text_loads_metrics_once`、`test_alerts_accepts_precomputed_metrics`；
+`test_consult_metrics.py` 改为断言 Agent 端点不含 consult 指标且 `/metrics` 含；
+`test_go_live_check.py::test_prometheus_check_distinguishes_agent_and_scrape_endpoints`。
+
+**仍存边界**：
+- 只消除了"同一请求内"的重复加载，没有做跨请求 TTL 缓存（`/metrics` 已有 5s 进程内缓存）；
+- 技能顺序按 `code` 排序，**不再保留 Bot 编制时的用户填写顺序**——如未来需要"临床优先级排序"，应新增显式字段而不是依赖数组顺序；
+- Agent 端点仍是 admin/qc JWT 鉴权（720 分钟过期），仅用于人工核对，不作为长期抓取凭据；
+- 历史台账中 G102 段落"Agent 端点追加问答计量"的表述保留为当时事实，本批已在 §32 与运维文档中给出当前口径。
+
+**验证**：全量 pytest **1117 passed / 14 skipped**；`agent_go_live_check.py --dry-run` PASS（repo 5 项全过）。
+
+

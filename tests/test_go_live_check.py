@@ -100,6 +100,15 @@ def test_repo_check_covers_local_scrape_artifacts():
     assert results["repo.metrics_token_example"][0] is True
 
 
+def test_prometheus_check_distinguishes_agent_and_scrape_endpoints():
+    """评审 01-S6：Agent 端点只要求 skill 域；/metrics 必须含 consult 域。"""
+    skill_only = "\n".join(mod._SKILL_METRICS) + "\n"
+    assert mod.check_prometheus(skill_only, full=False)[0][1] is True
+    assert mod.check_prometheus(skill_only, full=True)[0][1] is False
+    full_text = skill_only + "\n".join(mod._CONSULT_METRICS) + "\n"
+    assert mod.check_prometheus(full_text, full=True)[0][1] is True
+
+
 def test_missing_password_returns_2():
     assert mod.main([]) == 2
 
@@ -117,10 +126,7 @@ def test_run_orchestration_pass(monkeypatch):
             "medassist_agent_experiences_total 0",
             "medassist_agent_replay_pass_ratio 0",
             "medassist_agent_unused_published_skills 0",
-            "medassist_agent_operational_alerts{level=\"high\"} 0",
-            "medassist_agent_consult_requests_total 0",
-            "medassist_agent_skill_usage_total 0",
-            "medassist_agent_consult_tokens_total 0"])),
+            "medassist_agent_operational_alerts{level=\"high\"} 0"])),
         "/metrics": (200, _all_metrics_text()),
         "/api/v1/agent/sleep-memory/scan": (200, "{}"),
         "/api/v1/agent/skill-advices?status=OPEN": (200, "{}"),

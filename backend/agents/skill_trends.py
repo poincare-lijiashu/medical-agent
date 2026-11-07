@@ -153,9 +153,13 @@ def _get(metrics: dict, section: str, key: str):
     return (metrics.get(section) or {}).get(key)
 
 
-def alerts() -> dict:
-    """阈值告警：当前指标 + 相邻快照回放通过率下降。不自动处置。"""
-    m = skill_ops.metrics()
+def alerts(metrics: dict | None = None) -> dict:
+    """阈值告警：当前指标 + 相邻快照回放通过率下降。不自动处置。
+
+    评审 01-S4：可传入已算好的 ``metrics``，让一次抓取/一次建议生成只加载一次域数据
+    （此前 ``prometheus_text()`` 与 ``skill_advice`` 各自重复调用 ``skill_ops.metrics()``）。
+    """
+    m = metrics if metrics is not None else skill_ops.metrics()
     out: list[dict] = []
 
     def add(level: str, code: str, message: str, metric: str, value, threshold) -> None:
@@ -217,7 +221,8 @@ def alerts() -> dict:
 def prometheus_text() -> str:
     """Prometheus 文本导出（只含聚合指标，不含任何业务标识/PHI）。"""
     m = skill_ops.metrics()
-    alert_data = alerts()
+    # 评审 01-S4：复用同一次加载结果，避免一次抓取触发两遍域读取
+    alert_data = alerts(m)
     counts = alert_data["levelCounts"]
     cards = (m.get("skillCards") or {}).get("byStatus") or {}
     lines = [

@@ -990,10 +990,14 @@ def skill_library_usage(user: dict = Depends(require_role("admin", "qc"))):
 
 @router.get("/skill-library/metrics/prometheus", response_class=PlainTextResponse)
 async def skill_library_prometheus(user: dict = Depends(require_role("admin", "qc"))):
-    """Prometheus 文本导出（聚合指标，不含业务标识/PHI）；供监控采集。"""
+    """技能运营指标的 Prometheus 文本（**人工查看用**，不是抓取端点）。
+
+    评审 01-S6：同一批 ``consult_metrics`` counter 曾同时出现在本端点与 ``/metrics``，
+    两个 target 都抓会让 ``rate()`` 翻倍。现在抓取统一走 ``/metrics``（含 consult_metrics
+    与 skill_trends），本端点只保留 skill 域指标供 admin/qc 人工核对。
+    """
     # 评审 M-45：聚合会触发多次域加载，放线程池避免阻塞事件循环
-    text = await asyncio.to_thread(
-        lambda: skill_trends.prometheus_text() + consult_metrics.prometheus_text())
+    text = await asyncio.to_thread(lambda: skill_trends.prometheus_text())
     return PlainTextResponse(text,
                              media_type="text/plain; version=0.0.4; charset=utf-8")
 
