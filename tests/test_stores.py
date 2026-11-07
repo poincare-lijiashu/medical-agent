@@ -298,6 +298,54 @@ class TestRedisDegradedCooldown:
         assert st._degraded_logged is False
 
 
+# ---------- 3c. 第 67 批：共享存储可观测指标 ----------
+
+
+class TestRedisMetrics:
+    def test_memory_backend_exports_disabled(self, monkeypatch):
+        monkeypatch.setattr(settings, "redis_url", "")
+        stores.reset_store()
+        text = stores.prometheus_text()
+        assert "medassist_agent_redis_enabled 0" in text
+        assert "medassist_agent_redis_degraded 0" in text
+        assert "medassist_agent_redis_import_missing 0" in text
+        assert stores.redis_status() == {"enabled": False, "degraded": False,
+                                         "importMissing": False}
+
+    def test_redis_healthy_exports_enabled_not_degraded(self, monkeypatch, fake_redis):
+        monkeypatch.setattr(settings, "redis_url", "redis://mock:6379/0")
+        stores.reset_store()
+        stores.get_store().set("k", "v")     # 走一次成功路径
+        text = stores.prometheus_text()
+        assert "medassist_agent_redis_enabled 1" in text
+        assert "medassist_agent_redis_degraded 0" in text
+
+    def test_degraded_is_exported_after_failure(self, monkeypatch):
+        class _Broken:
+            def __getattr__(self, name):
+                raise ConnectionError("mock redis down")
+
+        mod = types.ModuleType("redis")
+        mod.Redis = types.SimpleNamespace(from_url=lambda *a, **kw: _Broken())
+        monkeypatch.setitem(sys.modules, "redis", mod)
+        monkeypatch.setattr(settings, "redis_url", "redis://mock:6379/0")
+        stores.reset_store()
+        stores.get_store().set("k", "v")     # 失败 → 进入降级冷却
+        assert stores.redis_status()["degraded"] is True
+        assert "medassist_agent_redis_degraded 1" in stores.prometheus_text()
+
+    def test_import_missing_is_visible(self, monkeypatch):
+        """文档点名的坑：配了 REDIS_URL 但没装 redis 包 → 必须可观测，而不是静默。"""
+        monkeypatch.setitem(sys.modules, "redis", None)
+        monkeypatch.setattr(settings, "redis_url", "redis://mock:6379/0")
+        stores.reset_store()
+        assert stores.redis_status() == {"enabled": True, "degraded": True,
+                                         "importMissing": True}
+        text = stores.prometheus_text()
+        assert "medassist_agent_redis_import_missing 1" in text
+        assert "medassist_agent_redis_degraded 1" in text
+
+
 # ---------- 4. 三组件接入回归（共享语义；默认内存路径由既有测试锁定） ----------
 
 

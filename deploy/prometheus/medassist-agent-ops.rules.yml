@@ -225,3 +225,14 @@ groups:
         annotations:
           summary: "Agent 存储未使用 PG 真源"
           description: "该实例 PG 池不可用且非显式离线模式；多副本下会与其他实例数据互不可见，请立即检查 PG 与网络。"
+
+      # 第 67 批：共享存储（Redis）降级。降级期间限流/会话/令牌撤销退回本实例内存，
+      # 多副本语义失效（限流变松、跨实例撤销不生效），但服务仍 200——只看日志很容易漏。
+      - alert: MedAssistRedisDegraded
+        expr: medassist_agent_redis_enabled == 1 and medassist_agent_redis_degraded == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "共享存储（Redis）降级：{{ $labels.instance }}"
+          description: "该实例已回落本实例内存镜像，多副本限流/令牌撤销不再共享。查 redis.degraded 日志、Redis 可达性，以及是否漏装 redis 依赖（import_missing）。"

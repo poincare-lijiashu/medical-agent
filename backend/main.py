@@ -356,6 +356,7 @@ async def metrics(user: dict = Depends(require_metrics_access)):
 
     def _build() -> str:
         from backend.core import pg_store as _pg_store
+        from backend.core import stores as _stores
         try:
             agent_ops = skill_trends.prometheus_text()
         except Exception:  # noqa: BLE001 —— 运营指标聚合失败不能拖垮抓取本身
@@ -367,7 +368,7 @@ async def metrics(user: dict = Depends(require_metrics_access)):
         except Exception:  # noqa: BLE001 —— 探测失败绝不影响抓取
             pass
         return (observability.exposition() + consult_metrics.prometheus_text()
-                + agent_ops + _pg_store.prometheus_text())
+                + agent_ops + _pg_store.prometheus_text() + _stores.prometheus_text())
 
     text = await asyncio.to_thread(_build)
     _metrics_cache.update(at=now, text=text)

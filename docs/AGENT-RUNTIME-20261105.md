@@ -2540,6 +2540,45 @@ uvicorn `--reload`、或测试里反复 `TestClient` 进出 lifespan，都会不
   撤销可能失效**（现有设计如此，未改）；
 - 复测用的是单机临时容器，未覆盖网络分区、Redis 主从切换。
 
+---
+
+## 71. 2026-11-08 上线准备（第 67 批：Redis 降级从"只有日志"变成"有指标+告警"）
+
+**接第 66 批的遗留**：Redis 降级只有一个 `redis.degraded` 日志。多副本部署时，某个实例
+已经在用本地内存计数（限流变松、跨实例撤销失效），而服务照常 200 —— **监控上完全看不出来**。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/stores.py` | 新增 `redis_status()` 与 `prometheus_text()`：`medassist_agent_redis_enabled` / `_degraded` / `_import_missing` 三个 gauge |
+| `backend/main.py` | `/metrics` 追加 `stores.prometheus_text()` |
+| `deploy/prometheus/medassist-agent-ops.rules.yml` | 新增 `MedAssistRedisDegraded`（`enabled==1 and degraded==1`，for 5m，warning） |
+| `deploy/helm/.../prometheusrule-agent-ops.yaml` | 同步同一条规则（两处必须同名同量，静态门禁锁定） |
+| `tests/test_stores.py` | +4：内存后端全 0 / Redis 健康 enabled=1 degraded=0 / 失败后 degraded=1 / **缺依赖 import_missing=1 可见** |
+| `tests/test_deploy_observability.py` | 规则数 17→18；导出文本纳入 `stores.prometheus_text()`（M-14 门禁） |
+| `docs/OPERATIONS.md` | 指标清单补存储/共享后端一行；规则数 15→18（旧数字已漂移） |
+
+**真实验证**（8009 实例，`REDIS_URL=redis://127.0.0.1:6399/0` 指向不存在的端口）
+```
+medassist_agent_redis_enabled 1
+medassist_agent_redis_degraded 1
+medassist_agent_redis_import_missing 0
+```
+（登录触发一次限流计数 → Redis 失败 → 降级，指标随之变 1。）
+
+`import_missing` 是专门针对文档里那个坑：配了 `REDIS_URL` 但没装 `redis` 包时，旧实现
+静默回落内存镜像、连 `redis.degraded` 都不会打；现在这个状态有独立指标。
+
+**测试**：定向 `test_stores + test_deploy_observability + test_go_live_check` **47 passed**；
+全量 pytest **1214 passed**（1210 + 本批 4 项）。
+
+**仍存边界**
+- `degraded` 是**瞬时**状态（冷却 10s 后会自动再试、可能短暂回到 0），规则用 `for: 5m`
+  抗抖动；如果 Redis 反复闪断，告警可能一直不触发而指标在 0/1 跳动（未做 `changes()` 型规则）；
+- 指标是按实例导出的，未做"多副本中有几台在降级"的聚合看板（Prometheus 侧 `count()` 可得）；
+- 只覆盖 Redis；Milvus 降级没有对应指标（有 20s 看门狗与检索降级日志）；
+- Helm 模板里的规则只做了静态同名校验，未在真实 K8s 集群 apply。
+
 
 
 

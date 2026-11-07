@@ -113,7 +113,8 @@ class MemoryStore:
 
 
 _sentinel = object()
-# 第 66 批：Redis 降级冷却（秒）。失败后这段时间内直接走内存镜像、不再触网，
+
+# Redis 降级冷却（秒）。失败后这段时间内直接走内存镜像、不再触网，
 # 避免"Redis 挂掉 → 每个请求都吃满 2s 连接超时"把整站拖慢（实测 4.0–6.1s/请求）。
 _DEGRADED_COOLDOWN_S = 10.0
 
@@ -243,3 +244,43 @@ def reset_store() -> None:
     """测试钩子：清空单例（下次 get_store 按当前配置重建），保证测试间状态隔离。"""
     global _store_instance
     _store_instance = None
+
+
+def redis_status() -> dict:
+    """共享存储状态（供 /metrics 与自检）：是否启用、是否降级、是否缺依赖。
+
+    - ``enabled``：配置了 ``REDIS_URL``（=多实例共享限流/会话/令牌撤销）；
+    - ``degraded``：当前回落本实例内存镜像（连接失败冷却中，**或**配了 URL 但没装
+      ``redis`` 包——后者是文档里点名的静默坑，这里让它变成可观测指标）；
+    - ``importMissing``：配了 URL 但 ``redis`` 依赖缺失。
+    """
+    st = get_store()
+    if not isinstance(st, RedisStore):
+        return {"enabled": False, "degraded": False, "importMissing": False}
+    import_missing = bool(st._import_failed)
+    return {
+        "enabled": True,
+        "degraded": import_missing or time.monotonic() < st._degraded_until,
+        "importMissing": import_missing,
+    }
+
+
+def prometheus_text() -> str:
+    """共享存储指标（Prometheus 文本）。
+
+    为什么导出：降级只体现在一行 ``redis.degraded`` 日志里，多副本部署时"某个实例
+    已经在用本地内存计数"很难被发现（限流变松、跨实例撤销失效）。导出成 gauge 后
+    可以用规则 ``MedAssistRedisDegraded`` 持续告警。
+    """
+    s = redis_status()
+    return "\n".join([
+        "# HELP medassist_agent_redis_enabled 是否配置共享存储 REDIS_URL（1=多实例共享限流/会话/撤销）",
+        "# TYPE medassist_agent_redis_enabled gauge",
+        f"medassist_agent_redis_enabled {1 if s['enabled'] else 0}",
+        "# HELP medassist_agent_redis_degraded 共享存储是否降级（1=回落本实例内存镜像）",
+        "# TYPE medassist_agent_redis_degraded gauge",
+        f"medassist_agent_redis_degraded {1 if s['degraded'] else 0}",
+        "# HELP medassist_agent_redis_import_missing 配了 REDIS_URL 但缺少 redis 依赖（1=静默回落、多实例不共享）",
+        "# TYPE medassist_agent_redis_import_missing gauge",
+        f"medassist_agent_redis_import_missing {1 if s['importMissing'] else 0}",
+    ]) + "\n"

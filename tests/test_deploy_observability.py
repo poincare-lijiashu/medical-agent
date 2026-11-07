@@ -45,8 +45,8 @@ def test_helm_prometheus_rule_matches_native_rules():
     helm = _alerts(RULE_TEMPLATE)
     assert native == helm, f"仅本地有：{native - helm}；仅 Helm 有：{helm - native}"
     # 7 条业务规则 + 多 worker + 抓取缺失/down + token 成本/采集率 + 质量 + P95 + 标签溢出
-    # + 第 49 批存储 stale / 非 PG 模式 2 条
-    assert len(native) == 17
+    # + 第 49 批存储 stale / 非 PG 模式 2 条 + 第 67 批 Redis 降级 1 条
+    assert len(native) == 18
 
 
 def test_alert_windows_do_not_double_stack_with_for():
@@ -100,14 +100,14 @@ def test_alert_delivery_wired_in_local_stack():
 def test_alert_rules_only_reference_scrape_endpoint_metrics():
     """告警规则引用的指标名必须与 /metrics 导出的族名一致（M-14 的静态侧门禁）。"""
     from backend.agents import consult_metrics, skill_trends
-    from backend.core import pg_store
+    from backend.core import pg_store, stores
     # 计数器在零样本时不会出现在导出里，这里先制造一条合法样本再比对
     consult_metrics.record("drug", "sync", "ok", 1.0, ["drug-check"])
     # stale_domains 只在有 stale 域时才有样本行；加一个探针域让静态门禁能覆盖它
     pg_store._repo_pg_stale.add("probe.json")
     try:
         exported = (consult_metrics.prometheus_text() + skill_trends.prometheus_text()
-                    + pg_store.prometheus_text())
+                    + pg_store.prometheus_text() + stores.prometheus_text())
     finally:
         pg_store._repo_pg_stale.discard("probe.json")
         consult_metrics.reset()
