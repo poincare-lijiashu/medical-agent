@@ -118,6 +118,18 @@ Agent 域追加（2026-11-07，评审 04-S10）：
 > pytest 的 passed 数。矩阵中 Agent 域的"人工浏览器"结论仍保留，不因为加了冒烟就改写成
 > "全自动验收"。
 
+**可复跑命令（评审 06-M12）**：
+
+```powershell
+# 一条命令：探测/拉起后端 → 检查 playwright → 运行 8 项 Vue E2E
+python scripts/e2e/run_vue_parity.py
+# 只连已有服务、不自动拉起：
+python scripts/e2e/run_vue_parity.py --no-start
+```
+
+退出码：`0` 全过；`1` 有失败；`2` 服务不可用/启动失败；`3` 缺 playwright（附安装命令）。
+2026-11-07 实测：自动拉起后端后 **8 passed**（含 G1/G2/G3）。
+
 轮 A 验收结果：e2e 9/9 通过（tests/e2e 全目录）；全量 pytest 710 passed（基线 707 + 本轮 3）。
 
 ## Agent 域前端登记（G86–G105，2026-11-06 评审 M-60 补录）

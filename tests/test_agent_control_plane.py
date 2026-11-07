@@ -112,6 +112,18 @@ def test_catalog_filters_by_role():
 
 # ---------------------------------------------------------------- 路由
 
+def test_catalog_examples_route_to_their_agent_for_drug():
+    """评审 06-M12（E2E 发现）：目录广告的示例必须真能路由到该能力域。
+
+    此前药物示例"华法林和阿司匹林能一起用吗"不含"药/相互作用"，实际回落文献，
+    属于"广告了但示例不可达"。这里锁住药物域的这组口语关键词。
+    """
+    example = "华法林和阿司匹林能一起用吗"
+    assert route_agent.route(example)["agent"] == "drug"
+    assert route_agent.route("这两种药可以合用吗")["agent"] == "drug"
+    assert route_agent.route("二甲双胍与碘造影剂同用要注意什么")["agent"] == "drug"
+
+
 def test_route_drug():
     r = route_agent.route("华法林和阿司匹林有相互作用吗")
     assert r["agent"] == "drug"
