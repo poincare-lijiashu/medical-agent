@@ -93,6 +93,22 @@ def test_route_mdt_precedence():
     assert route_agent.route("这个患者需要多学科会诊吗")["agent"] == "mdt"
 
 
+def test_route_kb_reachable_and_router_not_answer_domain():
+    """评审 01-S2：目录里的每个能力域都必须可达；router 只分派、不作答。"""
+    r = route_agent.route("院内知识库有没有静脉溶栓操作规程")
+    assert r["agent"] == "kb"
+    assert "知识库" in r["reason"] or "操作规程" in r["reason"]
+
+    payload = {a["id"]: a for a in catalog.catalog_payload("doctor")}
+    assert payload["router"]["autoRoutable"] is False
+    assert payload["kb"]["autoRoutable"] is True
+    # 目录声明的可自动路由能力域，必须都能被规则命中（防止再次出现"广告了但不可达"）
+    routable = {i for i, a in payload.items() if a["autoRoutable"]}
+    rule_agents = set(route_agent._RULES)
+    assert routable == rule_agents
+    assert "prefilter" not in routable
+
+
 def test_route_falls_back_to_literature():
     r = route_agent.route("最近有什么新进展")
     assert r["agent"] == "literature"
@@ -173,10 +189,23 @@ def test_validate_arguments():
 
 
 def test_execute_drug_check_real_handler():
+    """评审 05-S4：真实处理器必须返回**可核对**的业务内容，不能只断言 dict。
+
+    华法林 + 阿司匹林在院内规则库中是有明确条目的高危组合；这里断言药对、严重度
+    与来源，确保"工具返回空 dict"式的回归会被发现。
+    """
     out = asyncio.run(agent_tools.execute_tool(
         "drug_check", {"question": "华法林和阿司匹林能一起用吗"}, "doctor"))
     assert out["tool"] == "drug_check"
-    assert isinstance(out["result"], dict)
+    result = out["result"]
+    assert isinstance(result, dict)
+    assert result["drugs"] == ["华法林", "阿司匹林"]
+    assert result["max_severity"] == "高危"
+    assert result["sources"], "必须给出规则库来源，便于溯源"
+    finding = next(f for f in result["findings"] if set(f["pair"]) == {"华法林", "阿司匹林"})
+    assert finding["severity"] == "高危"
+    assert finding["note"] and "出血" in finding["note"]
+    assert "华法林" in result["answer"] and "阿司匹林" in result["answer"]
 
 
 def test_web_search_disabled_by_default(monkeypatch):

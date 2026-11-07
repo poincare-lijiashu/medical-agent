@@ -139,6 +139,9 @@ def _validate(payload: dict, current: dict | None = None) -> dict:
     agent = catalog.get_agent(agent_id)
     if agent is None:
         raise BotInvalid(f"未找到智能体：{agent_id}")
+    # 评审 01-S2：主路由智能体只做分派，不能作为 Bot 的作答能力域
+    if agent.id == "router":
+        raise BotInvalid("主路由智能体只做分派，不能绑定为 Bot 的能力域")
 
     name = str(payload.get("name") or "").strip()
     if not (2 <= len(name) <= 80):

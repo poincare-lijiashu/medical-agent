@@ -90,6 +90,18 @@ def test_explicit_agent_skips_rule_router(monkeypatch):
     assert out["routing"]["strategy"] == "explicit"
 
 
+def test_explicit_router_agent_rejected(monkeypatch):
+    """评审 01-S2：主路由智能体只做分派，显式指定也必须拒绝（不得被当作答案能力域）。"""
+    _provider(monkeypatch)
+
+    async def runner(provider, messages):
+        return "不该被调用"
+
+    with pytest.raises(consult.ConsultInvalid, match="只做分派"):
+        asyncio.run(consult.run("指南证据", "doctor", agent_id="router",
+                                runner=runner))
+
+
 def test_explicit_skill_subset(monkeypatch):
     _provider(monkeypatch)
     _publish(agent_id="literature", code="lit-a", name="循证检索")

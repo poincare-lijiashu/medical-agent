@@ -297,6 +297,9 @@ def _prepare(question: str, role: str, agent_id: str | None,
         agent = catalog.get_agent(agent_id)
         if agent is None:
             raise ConsultInvalid(f"未找到智能体：{agent_id}")
+        # 评审 01-S2：主路由智能体只做分派，不直接作答（目录里也已标注 autoRoutable=false）
+        if agent.id == "router":
+            raise ConsultInvalid("主路由智能体只做分派，不直接作答；请选择具体能力域")
         decision = _explicit_decision(agent)
     else:
         decision = _route_with_history(q, turns)

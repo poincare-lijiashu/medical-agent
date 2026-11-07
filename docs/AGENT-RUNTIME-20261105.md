@@ -931,3 +931,27 @@ admin→200、覆盖审计字段；`test_agent_governance.py::test_second_opinio
 留待后续批次；测试仍是"标记 + 单测"为主，前端无单元测试框架。
 
 **验证**：全量 pytest **1071 passed / 11 skipped**。
+
+---
+
+## 23. 2026-11-06 评审整改（第 19 批：隔离自动发现 + 回放混合场景 + 能力域可达性）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 05-S1 | 新增 `tests/test_store_isolation.py`：用 AST 扫描 `backend/agents/*.py` 模块级 `*_FILE = os.path.join(BASE_DIR, "data", …)`，断言每个常量在当前测试里都指向 `tmp_path`。新增持久化模块漏隔离会**立刻失败**，不再依赖人手维护清单 | `tests/test_store_isolation.py`（新建） |
+| 05-S4 | `drug_check` 真实处理器断言从"是 dict"改为业务语义：药对 `{华法林, 阿司匹林}`、`max_severity=高危`、`findings` 命中项含"出血"、`sources` 非空 | `tests/test_agent_control_plane.py` |
+| 05-S7 | 补回放混合场景：同候选内两条经验一条路由到目标域、一条回落到文献 → 整体 `passed=False` 且逐条 `[True, False]`；补"经验被清理 → cases 为空 → 拒绝" | `tests/test_skill_library.py` |
+| 01-S2 | `kb` 加入确定性路由（窄关键词：知识库/院内制度/操作规程/sop），消除"目录有、永远不可达"；`AgentSpec.auto_routable` 标注并由 `/agent/catalog` 暴露 `autoRoutable`；`router` 置 False，并在 `/consult` 显式指定、Bot 绑定两处**显式拒绝**"主路由作答" | `catalog.py`、`router.py`、`consult.py`、`bots.py` |
+
+**为什么这样改**：前两项让"验证"本身可信（隔离漏了会红、工具返回空会红）；第四项消除
+目录广告与实际能力的漂移——`kb` 之前只在文档里存在，`router` 则可能被当作答案能力域调用，
+两条都属于"能力承诺大于实现"。
+
+**过程中发现**：给 `kb` 加规则后，`routable == 规则集合` 的断言可以长期防回退
+（今后新增能力域若忘记加规则或忘记标 `autoRoutable`，该测试会失败）。
+
+**仍存边界**：`kb` 的关键词仍是人工枚举（院内问法多样，可能漏召回，回落文献是保守策略）；
+`autoRoutable` 目前只被目录与测试消费，前端未展示"仅显式可达"标签（当前 router 已被前端
+硬过滤，实际无可选项）；AST 扫描只覆盖 `backend/agents/`，其它目录新增持久化文件不在守卫范围。
+
+**验证**：全量 pytest **1078 passed / 11 skipped**。

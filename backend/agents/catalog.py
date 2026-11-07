@@ -40,6 +40,9 @@ class AgentSpec:
     roles: tuple[str, ...]
     tools: tuple[str, ...]
     skills: tuple[Skill, ...]
+    # 评审 01-S2：是否可被**自动路由**选中。``router`` 只做分派、不直接作答，
+    # 必须显式置 False；其余能力域默认 True（目录与路由规则保持一致）。
+    auto_routable: bool = True
 
 
 AGENTS: tuple[AgentSpec, ...] = (
@@ -58,6 +61,7 @@ AGENTS: tuple[AgentSpec, ...] = (
             tags=("triage", "routing", "handoff"),
             examples=("这个患者的用药有相互作用吗", "帮我总结这份病例"),
         ),),
+        auto_routable=False,  # 只做分派，不能作为答案能力域
     ),
     AgentSpec(
         id="literature",
@@ -201,6 +205,7 @@ def catalog_payload(role: str) -> list[dict]:
             "description": agent.description,
             "model": agent.model,
             "hitl": agent.hitl,
+            "autoRoutable": agent.auto_routable,
             "roles": list(agent.roles),
             "tools": list(agent.tools),
             "skills": [

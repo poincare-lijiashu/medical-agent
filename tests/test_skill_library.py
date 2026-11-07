@@ -93,6 +93,41 @@ def test_adopt_replay_failure_does_not_create_skill():
     assert result["proposal"]["replay"]["cases"][0]["actualAgent"] == "drug"
 
 
+def test_replay_rejects_partially_routed_proposal():
+    """评审 05-S7：同一候选里"部分经验路由到别的域"必须整体不通过。
+
+    两条经验归一化后同模式（`_norm` 会去掉连字符），因此被合并进同一个候选；
+    但原始措辞一条含 "x线"（命中 imaging）、一条含 "x-线"（不命中、回落 literature），
+    回放必须逐条判定并因为存在失败项而整体拒绝。
+    """
+    _create(pattern="胸部X线检查如何判读", agent="imaging")
+    _create(pattern="胸部X-线检查如何判读", agent="imaging")
+    proposal = skill_library.distill("qc01")[0]
+    assert len(proposal["experienceIds"]) == 2
+
+    result = skill_library.adopt(proposal["id"], "admin01")
+    replay = result["proposal"]["replay"]
+    assert replay["passed"] is False
+    assert result["proposal"]["status"] == "REJECTED"
+    assert result["skill"] is None
+    assert [c["passed"] for c in replay["cases"]] == [True, False]
+    assert replay["cases"][1]["actualAgent"] == "literature"
+
+
+def test_replay_rejects_when_experiences_are_gone():
+    """评审 05-S7：经验被删除后 cases 为空，不得因"没有失败项"而放行。"""
+    _create()
+    _create()
+    proposal = skill_library.distill("qc01")[0]
+    skill_library._save_experiences([])  # 模拟经验被清理
+
+    result = skill_library.adopt(proposal["id"], "admin01")
+    assert result["proposal"]["replay"]["cases"] == []
+    assert result["proposal"]["replay"]["passed"] is False
+    assert result["proposal"]["status"] == "REJECTED"
+    assert result["skill"] is None
+
+
 def test_reject_requires_reason_and_is_terminal():
     _create()
     _create()

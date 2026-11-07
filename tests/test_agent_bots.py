@@ -61,6 +61,7 @@ def test_bot_create_defaults_and_duplicate():
 @pytest.mark.parametrize("override", [
     {"code": "Bad_Code"},
     {"agentId": "nope"},
+    {"agentId": "router"},                   # 主路由只分派，不能作为作答域（评审 01-S2）
     {"persona": "太短"},
     {"toolAllowlist": ["drug_check"]},       # literature 未声明
     {"toolAllowlist": ["nope"]},
