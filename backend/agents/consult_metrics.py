@@ -13,7 +13,11 @@
 - ``medassist_agent_consult_tokenized_requests_total``：返回了 usage 的成功问答数。
 
 边界：
-- 多实例部署时由 Prometheus 按实例聚合；进程重启计数归零（标准 counter 语义）；
+- 多实例部署时由 Prometheus 按实例聚合；**进程重启会让 counter 归零**。这不是"标准
+  counter 语义"（标准要求生命周期内单调递增），而是"进程重启型 counter"：Prometheus
+  的 ``rate()``/``increase()`` 能通过 reset 检测容忍，但**裸 counter 求和不可跨重启、
+  不可跨副本解释**。查询总量请用 ``sum(increase(...[1h]))``，不要用
+  ``sum(medassist_agent_consult_requests_total)``（每次发布都会跳变）；
 - **多 worker 进程**（同一端口下 ``WEB_CONCURRENCY/UVICORN_WORKERS > 1``）时，
   每次抓取可能落到不同进程，counter 会来回跳变、被 Prometheus 判为 reset，
   ``rate()`` 结果不可信（评审 M-23）。本模块导出
@@ -211,6 +215,12 @@ def prometheus_text() -> str:
 
 
 def reset() -> None:
+    """清零全部进程内计数（**仅测试/诊断用**，生产不要调用）。
+
+    评审 02-S3：生产调用会让 Prometheus 观察到一次人为 reset（等价于进程重启），
+    ``rate()`` 会把它计入 reset 检测，短窗口内可能低估流量。test conftest 通过
+    autouse fixture 调用本函数，确保用例间互不影响。
+    """
     global _tokenized_requests
     with _lock:
         _requests.clear()

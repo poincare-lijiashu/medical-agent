@@ -39,7 +39,20 @@ def test_helm_prometheus_rule_matches_native_rules():
     native = _alerts(RULES)
     helm = _alerts(RULE_TEMPLATE)
     assert native == helm, f"仅本地有：{native - helm}；仅 Helm 有：{helm - native}"
-    assert len(native) == 8  # 7 条业务规则 + 多 worker 计量形态告警（M-23）
+    # 7 条业务规则 + 多 worker 形态 + 抓取缺失/down + token 成本/采集率（评审 02-S1）
+    assert len(native) == 12
+
+
+def test_alert_windows_do_not_double_stack_with_for():
+    """评审 02-S2：错误率/中止规则的窗口与 for 不得等长叠加成双倍响应时间。"""
+    body = _read(RULES)
+    assert "[30m]" in body
+    rate_block = body.split("MedAssistAgentConsultErrorRateHigh", 1)[1].split("- alert:", 1)[0]
+    assert "[10m]" not in rate_block
+    assert "for: 5m" in rate_block
+    aborted_block = body.split("MedAssistAgentConsultAbortedSpike", 1)[1].split("- alert:", 1)[0]
+    assert "[10m]" not in aborted_block
+    assert "for: 5m" in aborted_block
 
 
 def test_ai_core_metrics_switch_uses_single_helper():

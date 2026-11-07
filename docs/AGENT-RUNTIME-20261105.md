@@ -1195,4 +1195,32 @@ GPU 上的本地模型压满；没有并发闸门时表现为"所有人的回答
 
 **验证**：全量 pytest **1117 passed / 14 skipped**；`agent_go_live_check.py --dry-run` PASS（repo 5 项全过）。
 
+---
+
+## 33. 2026-11-06 评审整改（第 29 批：告警成熟度与计量口径）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S1 | 告警从 8 条扩到 **12 条**：新增「指标完全缺失」（`absent(worker_count)`，覆盖令牌 401/端点改错/服务未起）、「抓取目标 down」（`up{job="medassist-ai-core"}==0`）、「token 用量超 30 万/小时」、「token 采集覆盖率 <50%」；本地原生规则与 Helm `PrometheusRule` 同步 | `deploy/prometheus/medassist-agent-ops.rules.yml`、`templates/prometheusrule-agent-ops.yaml` |
+| 02-S2 | 问答错误率/中止规则：窗口 `[10m]` → `[30m]`、`for` 10m → 5m，避免"窗口 + for"叠加成约 40 分钟响应时间，同时提升低 QPS 下的样本密度 | 同上 |
+| 02-S3 | 计量注释纠正：进程重启归零**不是**"标准 counter 语义"，总量查询必须用 `increase()`；`reset()` 明确标注仅测试/诊断用，并说明生产调用等价于一次人为 reset | `consult_metrics.py` |
+| 02-S10 | 候选状态指标从 `byStatus` **动态导出**（未来新增 `WITHDRAWN/EXPIRED` 不会静默漏掉），三个已知状态即使为 0 也保留样本 | `skill_ops.py`、`skill_trends.py` |
+
+**为什么这样改**：抓取失败时指标"消失"会被误读为"零流量"，这是监控体系里最危险的一类假阴性；
+token 已计量却无任何规则消费，等于白采；`for` 与窗口等长会让一次 10 分钟内的故障风暴既不
+firing 也不留痕（Prometheus 不保留 firing 前历史）。状态标签硬编码则会在新增状态时造成
+`sum(byStatus) != total` 却无人察觉。
+
+**新增测试**：`test_alert_windows_do_not_double_stack_with_for`、`test_proposals_status_export_is_dynamic`；
+Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/metrics` 导出的对齐门禁继续通过。
+
+**仍存边界**：
+- `up{job="medassist-ai-core"}` 只对本地 compose 的 job 名成立；K8s 以 ServiceMonitor 的 job 标签为准，跨形态由 `absent` 规则兜底；
+- token 阈值（30 万/小时）是示例值，未按院区实际调用量建模，需运营按基线调整；
+- 回答质量类告警（空答案/拒答/缺证据）未新增专用计数器——目前只有 `status="error"` 与 `reason` 标签可区分，属下一步工作；
+- `prometheus.yml` 的 `scrape_interval/evaluation_interval` 仍为 30s（本轮只调规则窗口，未改抓取频率）。
+
+**验证**：全量 pytest **1119 passed / 14 skipped**；规则 YAML 解析通过（12 条）。
+
+
 

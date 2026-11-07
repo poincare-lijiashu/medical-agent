@@ -125,7 +125,7 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 | 本地/院区 compose | `http://host.docker.internal:8001/metrics` | `deploy/observability/prometheus/metrics-token`（裸令牌，无 BOM） | `deploy/prometheus/*.rules.yml`（`rule_files` 挂载） |
 | K8s + Prometheus Operator | 同上（ServiceMonitor） | 同 namespace Secret，键 `metrics-token` | `PrometheusRule` CRD（`serviceMonitor.rules.enabled=true`） |
 
-- **只抓 `/metrics`**：G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，7 条 Agent 告警全部依赖它；`/api/v1/agent/skill-library/metrics/prometheus` 是人工查看端点（JWT，**只含 skill 域指标**），**不是**抓取端点——两处都抓会让 consult counter 的 `rate()` 翻倍。
+- **只抓 `/metrics`**：G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，当前 12 条 Agent 告警全部依赖它；`/api/v1/agent/skill-library/metrics/prometheus` 是人工查看端点（JWT，**只含 skill 域指标**），**不是**抓取端点——两处都抓会让 consult counter 的 `rate()` 翻倍。
 - K8s 默认 `serviceMonitor.aiCore.enabled=false`、`serviceMonitor.rules.enabled=false` —— **打开 ServiceMonitor 不等于指标都在采**，需在环境 values 文件显式开启（Argo CD 下 `--set` 不持久化）。
 - 回滚：`METRICS_TOKEN` 留空 → `/metrics` 退回 admin-only，Java 侧 `/actuator/prometheus` 不受影响。
 

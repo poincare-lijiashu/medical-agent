@@ -234,9 +234,17 @@ def prometheus_text() -> str:
         f"medassist_agent_experience_coverage_ratio {m['experiences']['coverageRate']}",
         "# HELP medassist_agent_proposals_total Skill proposals by status.",
         "# TYPE medassist_agent_proposals_total gauge",
-        f'medassist_agent_proposals_total{{status="proposed"}} {m["proposals"]["proposed"]}',
-        f'medassist_agent_proposals_total{{status="adopted"}} {m["proposals"]["adopted"]}',
-        f'medassist_agent_proposals_total{{status="rejected"}} {m["proposals"]["rejected"]}',
+    ]
+    # 评审 02-S10：从 byStatus 动态导出全部状态（未来新增 WITHDRAWN/EXPIRED 也不会漏）；
+    # 三个已知状态即使为 0 也保留样本，保证告警表达式的指标名始终存在。
+    status_counts = {str(k).lower(): v
+                     for k, v in ((m.get("proposals") or {}).get("byStatus") or {}).items()}
+    for known in ("proposed", "adopted", "rejected"):
+        status_counts.setdefault(known, 0)
+    for status in sorted(status_counts):
+        lines.append(f'medassist_agent_proposals_total{{status="{status}"}} '
+                     f'{status_counts[status]}')
+    lines += [
         "# HELP medassist_agent_proposal_adoption_ratio Adopted proposals / all proposals.",
         "# TYPE medassist_agent_proposal_adoption_ratio gauge",
         f"medassist_agent_proposal_adoption_ratio {m['proposals']['adoptionRate']}",

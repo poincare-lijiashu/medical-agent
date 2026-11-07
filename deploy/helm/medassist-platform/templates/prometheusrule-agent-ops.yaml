@@ -4,7 +4,7 @@
   为什么需要这个模板：
   - deploy/prometheus/medassist-agent-ops.rules.yml 是 **Prometheus 原生 rule_files 格式**，
     只被本地 compose 的 /etc/prometheus/rules/*.yml 挂载消费；
-  - K8s Operator 形态下没有任何组件会读它，G97/G102 的 7 条规则在集群里一条都不会生效；
+  - K8s Operator 形态下没有任何组件会读它，G97/G102 的规则在集群里一条都不会生效；
   - 本模板把同一组规则以 PrometheusRule CRD 形式部署，开关为
     serviceMonitor.enabled + serviceMonitor.rules.enabled。
 
@@ -79,20 +79,21 @@ spec:
         - alert: MedAssistAgentConsultErrorRateHigh
           # 评审 M-24：分母排除 agent="prefilter"（闲聊前置应答零模型、恒成功），
           # 否则真实错误率被系统性稀释。
+          # 评审 02-S2：窗口 30m + for 5m，避免"窗口 + for"叠加成约 40 分钟响应时间。
           expr: |
             (
-              sum(rate(medassist_agent_consult_requests_total{status="error"}[10m]))
+              sum(rate(medassist_agent_consult_requests_total{status="error"}[30m]))
               /
-              sum(rate(medassist_agent_consult_requests_total{agent!="prefilter"}[10m]))
+              sum(rate(medassist_agent_consult_requests_total{agent!="prefilter"}[30m]))
             ) > 0.2
             and
-            sum(increase(medassist_agent_consult_requests_total{status="error"}[10m])) >= 3
-          for: 10m
+            sum(increase(medassist_agent_consult_requests_total{status="error"}[30m])) >= 3
+          for: 5m
           labels:
             severity: warning
           annotations:
             summary: "统一问答错误率超过 20%"
-            description: "近 10 分钟错误率 {{ "{{" }} $value {{ "}}" }}（已排除前置应答）；请按 reason 标签区分输入非法与模型不可用。"
+            description: "近 30 分钟错误率 {{ "{{" }} $value {{ "}}" }}（已排除前置应答）；请按 reason 标签区分输入非法与模型不可用。"
 
         - alert: MedAssistAgentMultiWorkerMetrics
           # 评审 M-23：多 worker 下进程内 counter 不可信（只告警形态，不自动处置）
@@ -105,11 +106,58 @@ spec:
             description: "当前 {{ "{{" }} $value {{ "}}" }} 个 worker；请固定单 worker 或改用多进程聚合。"
 
         - alert: MedAssistAgentConsultAbortedSpike
-          expr: sum(increase(medassist_agent_consult_requests_total{status="aborted",agent!="prefilter"}[10m])) >= 5
-          for: 10m
+          expr: sum(increase(medassist_agent_consult_requests_total{status="aborted",agent!="prefilter"}[30m])) >= 5
+          for: 5m
           labels:
             severity: info
           annotations:
             summary: "统一问答中止次数偏高"
-            description: "近 10 分钟客户端中止 {{ "{{" }} $value {{ "}}" }} 次；可能是主动停止或链路超时，请结合网关日志排查。"
+            description: "近 30 分钟客户端中止 {{ "{{" }} $value {{ "}}" }} 次；可能是主动停止或链路超时，请结合网关日志排查。"
+
+        # ---- 评审 02-S1：抓取失败 / token 成本 / token 采集率 ----
+        - alert: MedAssistAgentMetricsAbsent
+          expr: absent(medassist_agent_metrics_worker_count)
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "AI 中台指标完全缺失（抓取失败或令牌不匹配）"
+            description: "连续 10 分钟未采到任何 medassist_agent_* 指标；请检查 METRICS_TOKEN 与 /metrics 鉴权。"
+
+        - alert: MedAssistAgentScrapeDown
+          # 本地 compose 的 job 名为 medassist-ai-core；K8s 以 ServiceMonitor 的 job 标签为准，
+          # 跨形态兜底由 MedAssistAgentMetricsAbsent 承担。
+          expr: up{job="medassist-ai-core"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "AI 中台抓取目标 down"
+            description: "Prometheus 无法抓取 /metrics；请检查网络、鉴权与目标地址（target={{ "{{" }} $labels.instance {{ "}}" }}）。"
+
+        - alert: MedAssistAgentTokenBudgetHigh
+          # 总量/趋势必须用 increase()，不要裸 sum(counter)（进程重启会归零）。
+          expr: sum(increase(medassist_agent_consult_tokens_total[1h])) > 300000
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "最近 1 小时 token 用量超过 30 万"
+            description: "当前 {{ "{{" }} $value {{ "}}" }} token/小时；请确认是否为异常批量调用。"
+
+        - alert: MedAssistAgentTokenUsageCoverageLow
+          expr: |
+            (
+              sum(increase(medassist_agent_consult_tokenized_requests_total[1h]))
+              /
+              sum(increase(medassist_agent_consult_requests_total{status="ok",agent!="prefilter"}[1h]))
+            ) < 0.5
+            and
+            sum(increase(medassist_agent_consult_requests_total{status="ok",agent!="prefilter"}[1h])) >= 20
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "token 用量采集覆盖率低于 50%"
+            description: "近 1 小时仅 {{ "{{" }} $value {{ "}}" }} 的成功问答返回了 usage；请检查 provider/模型响应结构（本平台不估算 token）。"
 {{- end }}

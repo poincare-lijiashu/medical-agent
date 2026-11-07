@@ -67,6 +67,18 @@ def test_alerts_accepts_precomputed_metrics(monkeypatch):
     assert calls == []
 
 
+def test_proposals_status_export_is_dynamic(monkeypatch):
+    """评审 02-S10：候选状态从 byStatus 动态导出，新增状态不会静默漏掉。"""
+    m = _fake_metrics()
+    m["proposals"]["byStatus"] = {"PROPOSED": 1, "WITHDRAWN": 2}
+    monkeypatch.setattr(skill_ops, "metrics", lambda: m)
+    text = skill_trends.prometheus_text()
+    assert 'medassist_agent_proposals_total{status="withdrawn"} 2' in text
+    assert 'medassist_agent_proposals_total{status="proposed"} 1' in text
+    # 已知但为 0 的状态仍保留样本，保证告警表达式的指标名存在
+    assert 'medassist_agent_proposals_total{status="adopted"} 0' in text
+
+
 def test_snapshot_is_idempotent_per_day():
     skill_trends.snapshot("qc01", date(2026, 11, 1))
     skill_trends.snapshot("admin01", date(2026, 11, 1))

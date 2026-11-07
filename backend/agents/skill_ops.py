@@ -49,6 +49,8 @@ def metrics() -> dict:
         },
         "proposals": {
             "total": len(proposals),
+            # 评审 02-S10：导出全部状态的分解，避免 Prometheus 侧漏掉未来新增状态
+            "byStatus": _by_key(proposals, "status"),
             "proposed": sum(1 for p in proposals if p.get("status") == "PROPOSED"),
             "adopted": len(adopted),
             "rejected": len(rejected),
