@@ -129,6 +129,17 @@ docker logs medagent_alert_sink --tail 10   # 期望：ALERT_WEBHOOK status=firi
   并配置静默、分组与升级策略。
 - 本地 `group_wait=5s` 仅为快速验证；生产按通知渠道 SLA 调整。
 
+**镜像重建（PG → JSON，第 57 批）**
+```powershell
+# admin 登录后（Cookie 会话），按需重建全部或指定域
+Invoke-RestMethod -Uri http://127.0.0.1:8001/api/v1/agent/storage/rebuild-mirror `
+  -Method Post -ContentType 'application/json' -Body '{}' -WebSession $s
+```
+- 仅 admin；PG 不可用（无池/离线）返回 **409**，绝不用空数据覆盖镜像；写库异常返回 503。
+- 域：`skills/bots/teams/memories/experiences/proposals/snapshots/advices/sleepReports`；
+  `skills` 走 `agent_skills` 专用读，其余走通用 JSON 列表域。
+- 用途：多进程并发写镜像丢失/滞后时，用 PG 真源一次性重写；操作写审计。
+
 ## 交付前硬门禁（见计划 Phase 6）
 全量 pytest + `run_eval`（hit_rate≥0.8、引用精确率达标）+ 前端 a11y/截图 + `open-code-review` + `security-scan`；改环境后刷新机器基线（`refresh_baseline.ps1` → `check_docs.ps1` = `CONSISTENCY_OK`）。
 

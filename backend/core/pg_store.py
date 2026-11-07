@@ -405,6 +405,29 @@ def probe_stale_domains(limit: int = 3) -> dict:
     return {"probed": probed, "cleared": cleared, "remaining": len(_repo_pg_stale)}
 
 
+def _require_pg_for_rebuild() -> None:
+    """重建镜像只允许在 PG 真源可用时进行——否则会把空/旧数据写回镜像。"""
+    if offline_mode() or not _pool:
+        raise PGUnavailable("PG 不可用：拒绝重建镜像（避免用空数据覆盖）")
+
+
+def rebuild_skills_mirror(path: str) -> int:
+    """用 PG 真源重写技能卡 JSON 镜像；返回写入条数。"""
+    _require_pg_for_rebuild()
+    items = _run_pg(_pg_load_skills()) or []
+    _write_json_atomic(path, items)
+    return len(items)
+
+
+def rebuild_json_mirror(table: str, path: str) -> int:
+    """用 PG 真源重写通用 JSON 列表镜像（表名走白名单）；返回写入条数。"""
+    _require_pg_for_rebuild()
+    key = _JSON_LIST_KEYS[table]
+    items = _run_pg(_pg_load_json_list(table, key)) or []
+    _write_json_atomic(path, items)
+    return len(items)
+
+
 def prometheus_text() -> str:
     """存储真源指标（Prometheus 文本）：池可用 / 模式 / 按域 stale。
 

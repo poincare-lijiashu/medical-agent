@@ -1341,3 +1341,70 @@ def test_insert_json_item_tolerates_json_mirror_failure(monkeypatch, tmp_path, p
                         lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
     assert pg_store.insert_json_item("agent_bot_memories", str(tmp_path / "m.json"),
                                      {"id": "probe"}) is True
+
+
+# ---- 第 57 批：用 PG 真源重建 JSON 镜像（管理员受控修复入口） ----
+
+def test_rebuild_json_mirror_refuses_without_pg(monkeypatch, tmp_path):
+    monkeypatch.setattr(pg_store, "_pool", None)
+    monkeypatch.setenv("PG_OFFLINE", "on")
+    with pytest.raises(pg_store.PGUnavailable):
+        pg_store.rebuild_json_mirror("agent_bot_memories", str(tmp_path / "m.json"))
+
+
+def test_rebuild_json_mirror_writes_pg_truth(monkeypatch, tmp_path):
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setenv("PG_OFFLINE", "")
+    rows = [{"id": "x"}]
+
+    def ok(coro):
+        coro.close()
+        return rows
+
+    monkeypatch.setattr(pg_store, "_run_pg", ok)
+    path = tmp_path / "m.json"
+    assert pg_store.rebuild_json_mirror("agent_bot_memories", str(path)) == 1
+    assert json.loads(path.read_text(encoding="utf-8")) == rows
+
+
+def test_rebuild_skills_mirror_writes_pg_truth(monkeypatch, tmp_path):
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setenv("PG_OFFLINE", "")
+    rows = [{"code": "c1", "status": "DRAFT"}]
+
+    def ok(coro):
+        coro.close()
+        return rows
+
+    monkeypatch.setattr(pg_store, "_run_pg", ok)
+    path = tmp_path / "skills.json"
+    assert pg_store.rebuild_skills_mirror(str(path)) == 1
+    assert json.loads(path.read_text(encoding="utf-8")) == rows
+
+
+def test_rebuild_mirror_endpoint_guards_and_permissions(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from backend.core.auth import seed_default_users
+    from backend.main import app
+
+    seed_default_users()
+    c = TestClient(app)
+
+    def tok(username: str) -> str:
+        r = c.post("/api/v1/auth/login",
+                   json={"username": username, "password": "Med@2026"})
+        return r.json()["access_token"]
+
+    doc = {"Authorization": "Bearer " + tok("doctor01")}
+    adm = {"Authorization": "Bearer " + tok("admin01")}
+    url = "/api/v1/agent/storage/rebuild-mirror"
+    assert c.post(url, json={}, headers=doc).status_code == 403
+    assert c.post(url, json={"domains": ["nope"]}, headers=adm).status_code == 422
+
+    def refuse(*a, **k):
+        raise pg_store.PGUnavailable("no pg")
+
+    monkeypatch.setattr(pg_store, "rebuild_json_mirror", refuse)
+    assert c.post(url, json={"domains": ["memories"]},
+                  headers=adm).status_code == 409

@@ -30,7 +30,7 @@ from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import model_quota, model_slot, rate_limit, require_role, require_user
 from backend.config import settings
-from backend.core import agent_flags, agent_tools, web_sources
+from backend.core import agent_flags, agent_tools, web_sources, pg_store
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 
@@ -416,6 +416,52 @@ async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
         payload={"key": req.key, "before": before, "value": value},
     )
     return {"ok": True, "key": req.key, "value": value}
+
+
+# ---------------------------------------------------------------- 镜像重建（第 57 批）
+# 背景：PG 是真源，JSON 只是灾难镜像；多进程并发写镜像可能丢/滞后，需要可控的修复入口。
+
+class MirrorRebuildReq(BaseModel):
+    domains: list[str] = Field(default_factory=list, max_length=12)
+
+
+def _mirror_domains() -> dict[str, tuple[str, str]]:
+    """域名 → (PG 表, JSON 镜像路径)。路径在调用时取模块常量（便于测试 monkeypatch）。"""
+    return {
+        "skills": ("agent_skills", skill_cards.SKILLS_FILE),
+        "bots": ("agent_bots", bot_registry.BOTS_FILE),
+        "teams": ("agent_bot_teams", bot_teams.TEAMS_FILE),
+        "memories": ("agent_bot_memories", bot_memory.MEMORY_FILE),
+        "experiences": ("agent_skill_experiences", skill_library.EXPERIENCES_FILE),
+        "proposals": ("agent_skill_proposals", skill_library.PROPOSALS_FILE),
+        "snapshots": ("agent_skill_metrics", skill_trends.SNAPSHOT_FILE),
+        "advices": ("agent_skill_advices", skill_advice.ADVICE_FILE),
+        "sleepReports": ("agent_sleep_reports", sleep_memory.REPORT_FILE),
+    }
+
+
+@router.post("/storage/rebuild-mirror")
+async def rebuild_mirror(req: MirrorRebuildReq, user: dict = Depends(require_role("admin"))):
+    """用 PG 真源重写 JSON 镜像（admin；PG 不可用时 409，绝不用空数据覆盖）。"""
+    mapping = _mirror_domains()
+    names = req.domains or list(mapping)
+    unknown = [n for n in names if n not in mapping]
+    if unknown:
+        raise HTTPException(422, f"未知镜像域：{unknown}")
+    counts: dict[str, int] = {}
+    for name in names:
+        table, path = mapping[name]
+        try:
+            if name == "skills":
+                counts[name] = await asyncio.to_thread(pg_store.rebuild_skills_mirror, path)
+            else:
+                counts[name] = await asyncio.to_thread(pg_store.rebuild_json_mirror, table, path)
+        except pg_store.PGUnavailable as e:
+            raise HTTPException(409, str(e))
+        except Exception as e:  # noqa: BLE001 —— 不泄露内部细节
+            raise HTTPException(503, f"{name} 重建失败：{type(e).__name__}")
+    await _audit_agent(user, "storage_mirror_rebuild", {"domains": names, "counts": counts})
+    return {"ok": True, "counts": counts}
 
 
 # ---------------------------------------------------------------- 临床技能卡（G87）

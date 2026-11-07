@@ -2059,6 +2059,38 @@ Windows 抛 `WinError 32（另一个程序正在使用此文件）`，异常直�
 - 演练同机、同 PG、无网络分区；不是吞吐压测（40 并发、0.46s 完成，仅证明正确性）；
 - 镜像失败日志在极端并发下会变多（每域每次失败一条 WARNING，未做去重）。
 
+---
+
+## 61. 2026-11-08 上线准备（第 57 批：镜像重建入口）
+
+**接第 56 批的边界**：并发写会让 JSON 镜像丢/滞后，但此前没有修复入口。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | `rebuild_skills_mirror(path)` / `rebuild_json_mirror(table, path)`：从 PG 真源读，重写 JSON 镜像；**无池/离线时抛 `PGUnavailable` 拒绝**（避免空数据覆盖） |
+| `backend/api/v1/agent/agent_router.py` | `POST /agent/storage/rebuild-mirror`（admin）：可选 `domains`（默认全部 9 个域）；未知域 422、PG 不可用 409、写失败 503；成功写审计 `storage_mirror_rebuild` |
+| `tests/test_pg_repo.py` | 4 项：无 PG 拒绝、通用域写入、技能域写入、端点 403/422/409 |
+| `docs/OPERATIONS.md` | 增加重建命令、错误码与用途说明 |
+
+**真实验证**（PG 在线，admin Cookie 会话）
+```
+ok=True
+count_skills=0 / bots=0 / teams=0 / memories=0 / experiences=0
+count_proposals=0 / advices=0
+count_snapshots=2 / sleepReports=4
+skills_mirror_bytes=2   # "[]" —— 与 PG 真源一致
+```
+镜像被一次性重写为 PG 当前内容；审计留痕含各域条数。
+
+**测试**：定向 `test_pg_repo` **61 passed**；全量 pytest（PG 在线）
+**1169 passed / 16 skipped**（16 项 skip 均为 E2E 服务未启动）。
+
+**仍存边界**：
+- 重建是同步执行（当前各域数据量小）；数据量大时应改为后台任务；
+- 重建期间若有并发业务写，镜像可能仍短暂落后（PG 真源不受影响，下次写会再补）；
+- 仅 API/运维命令，管理端暂无按钮（避免误触；后续可按需加二次确认入口）。
+
 
 
 
