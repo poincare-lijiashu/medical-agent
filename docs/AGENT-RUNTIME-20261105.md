@@ -804,6 +804,31 @@ S7/S8（A2A 拓扑与 DoS，M-12 已关默认开关）、S12（快照覆盖历�
 `::test_history_payload_passed_through`（合法 history 透传给 `consult.run`）。
 
 **仍存边界**：`history` 仍是"客户端自报"，服务端不校验其与上一轮真实会话一致（无会话存储）；
-单条 2000 字符上限只约束单条，总量由条数 × 单条上限间接约束（未单独设总预算）。
+HTTP 层（`HistoryTurn`）只校验单条 2000 字与条数 6，合计 6000 字的总量上限由运行时的
+`consult.clean_history()` 承担（同一口径，但错误在路由层之后才暴露）。
 
 **验证**：全量 pytest **1048 passed / 11 skipped**。
+
+---
+
+## 18. 2026-11-06 评审整改（第 14 批：SSE 错误语义 + 慢客户端/断连保护）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| S2 | 新增 `consult.prepare()`：角色权限、输入长度、护栏上限、技能卡选择、模型合规全部**在开流之前**完成。流式端点先用它装配，失败返回真正的 HTTP 403/422/503（与 `/consult` 同口径），并把 `ctx` 传入 `consult.stream(ctx=...)` 复用，避免重复读技能卡。只有流开始后的错误才用 SSE `error` 事件，且新增稳定 `code`（`FORBIDDEN`/`INVALID`/`UNAVAILABLE`） | `consult.py`、`agent_router.py` |
+| S3 | ① 生成器每轮 `await request.is_disconnected()`，客户端断开即停止拉取；② `finally` 中显式 `agen.aclose()`，不再依赖 GC 释放上游模型连接；③ 新增并发闸门 `agent_stream_max_concurrent`（默认 16，进程内信号量），槽位占满直接 **429**；④ `parts` 累积按 `MAX_ANSWER_CHARS=4000` 截断（与 done 的 answer 截断一致），慢客户端下不再线性增长 | `consult.py`、`agent_router.py`、`config.py` |
+| 前端 | 流式请求拿到 403/422/503/429 时**不再回落非流式**（回落只会以同一原因再失败、并可能二次消耗模型配额），保留气泡展示原因；流内 `error` 事件按 `code` 分支，不依赖中文文案 | `frontend-vue/.../AskView.vue` |
+
+**为什么这样改**：SSE 一旦写出响应头，HTTP 状态码就固定了，`_prepare` 在第一次 yield 前抛错时
+客户端看到的是"200 + error 事件"，网关和 Prometheus 全按成功计——错误语义与同步端点不一致。
+把前置校验提到路由层后，可观测口径统一，且前端不会再多打一次必然失败的请求。
+
+**新增测试**：`test_consult.py` 新增 4 项——前置校验 422/503 走真实状态码且无 `event:` 负载、
+角色越权 403、并发槽占满 429；流内错误断言 `code`；`test_frontend_agent_markers.py` 新增前端标记项。
+
+**仍存边界**：并发闸门是**进程内**的，多副本部署实际并发上限 = 本值 × 副本数，未做跨实例配额；
+`is_disconnected()` 只在每轮 delta 时检查，"客户端可写但极慢"（socket 写阻塞）情形仍依赖
+服务器写超时与网关配置，不做 per-connection 写超时；断连后的 `aborted` 计量依赖
+`consult.stream` 的 `finally`（`aclose()` 触发 `GeneratorExit`，已覆盖，但未测真实网络断连）。
+
+**验证**：全量 pytest **1052 passed / 11 skipped**；`npm run build` 成功。

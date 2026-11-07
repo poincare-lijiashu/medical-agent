@@ -21,6 +21,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
 from backend.agents import catalog, consult, consult_metrics, model_policy, second_opinion, skill_advice, skill_library
@@ -28,6 +29,7 @@ from backend.agents import skill_ops, skill_trends, skill_usage, sleep_memory, t
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
 from backend.api.deps import rate_limit, require_role, require_user
+from backend.config import settings
 from backend.core import agent_flags, agent_tools, web_sources
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
@@ -233,15 +235,79 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+# 评审 S2：流内错误的稳定错误码（前端按 code 分支，不依赖中文文案）
+_SSE_ERROR_CODE = {403: "FORBIDDEN", 422: "INVALID", 503: "UNAVAILABLE"}
+
+# 评审 S3：流式问答的并发闸门（进程内）。请求限流按"每分钟次数"，
+# 无法限制"多条长连接同时占用模型连接"；这里给同时存活的流一个硬上限。
+_STREAM_SLOTS = asyncio.Semaphore(max(1, settings.agent_stream_max_concurrent))
+
+
+class _StreamSlot:
+    """可幂等释放的并发槽。
+
+    端点被取消（客户端在首个字节前断开）时生成器不会进入 ``finally``，
+    因此由 StreamingResponse 的 background 兜底释放；用标志位避免重复归还。
+    """
+
+    def __init__(self, sem: asyncio.Semaphore):
+        self._sem = sem
+        self._held = True
+
+    def release(self) -> None:
+        if self._held:
+            self._held = False
+            self._sem.release()
+
+
+async def _audit_stream_failure(user: dict, req: "ConsultReq", reason: str,
+                                started: float) -> None:
+    """流式失败留痕（评审 M-53）：只记原因与长度，不记问题原文。"""
+    await _audit_agent(user, "agent_consult_stream", {
+        "status": "error", "reason": reason,
+        "questionChars": len(req.question.strip()),
+        "ms": int((time.perf_counter() - started) * 1000)})
+
+
 @router.post("/consult/stream")
-async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_user)):
-    """统一问答（SSE 流式）：meta → delta* → done；错误以 error 事件返回。"""
+async def agent_consult_stream(req: ConsultReq, request: Request,
+                               user: dict = Depends(require_user)):
+    """统一问答（SSE 流式）：meta → delta* → done。
+
+    评审 S2：角色/输入/护栏/技能卡/模型合规等**前置校验**在打开 SSE 之前完成，
+    失败返回真正的 HTTP 403/422/503（与同步端点同口径）；只有流开始后的错误
+    才用 ``error`` 事件（带稳定 ``code``）。
+    评审 S3：断连检测 + 上游显式 ``aclose()`` + 并发闸门 + 有界累积。
+    """
+    role = user.get("role", "")
+    started = time.perf_counter()
+    try:
+        ctx = consult.prepare(req.question, role, req.agentId, req.skillCodes,
+                              req.history_payload())
+    except consult.ConsultForbidden as e:
+        await _audit_stream_failure(user, req, "forbidden", started)
+        raise HTTPException(403, str(e))
+    except consult.ConsultInvalid as e:
+        await _audit_stream_failure(user, req, "invalid", started)
+        raise HTTPException(422, str(e))
+    except consult.ConsultUnavailable as e:
+        await _audit_stream_failure(user, req, "unavailable", started)
+        raise HTTPException(503, str(e))
+
+    # 评审 S3：并发已满时显式 429，而不是排队占用连接直到模型超时
+    if _STREAM_SLOTS.locked():
+        raise HTTPException(429, "流式问答并发已满，请稍后重试")
+    await _STREAM_SLOTS.acquire()
+    slot = _StreamSlot(_STREAM_SLOTS)
+
     async def gen():
-        started = time.perf_counter()
+        agen = consult.stream(req.question, role, req.agentId, req.skillCodes,
+                              req.history_payload(), ctx=ctx)
         try:
-            async for ev in consult.stream(req.question, user.get("role", ""),
-                                           req.agentId, req.skillCodes,
-                                           req.history_payload()):
+            async for ev in agen:
+                # 评审 S3：客户端断开即停止拉取，finally 中 aclose 释放上游模型连接
+                if await request.is_disconnected():
+                    break
                 if ev.get("type") == "done":
                     await _audit_agent(user, "agent_consult_stream", {
                         "agentId": ev["agent"]["id"],
@@ -254,30 +320,27 @@ async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_use
                     })
                 yield _sse(ev["type"], ev)
         except consult.ConsultForbidden as e:
-            # 评审 M-53：失败路径同样留痕（只记原因与长度，不记问题原文）
-            await _audit_agent(user, "agent_consult_stream", {
-                "status": "error", "reason": "forbidden",
-                "questionChars": len(req.question.strip()),
-                "ms": int((time.perf_counter() - started) * 1000)})
-            yield _sse("error", {"status": 403, "detail": str(e)})
+            await _audit_stream_failure(user, req, "forbidden", started)
+            yield _sse("error", {"status": 403, "code": _SSE_ERROR_CODE[403],
+                                 "detail": str(e)})
         except consult.ConsultInvalid as e:
-            await _audit_agent(user, "agent_consult_stream", {
-                "status": "error", "reason": "invalid",
-                "questionChars": len(req.question.strip()),
-                "ms": int((time.perf_counter() - started) * 1000)})
-            yield _sse("error", {"status": 422, "detail": str(e)})
+            await _audit_stream_failure(user, req, "invalid", started)
+            yield _sse("error", {"status": 422, "code": _SSE_ERROR_CODE[422],
+                                 "detail": str(e)})
         except consult.ConsultUnavailable as e:
-            await _audit_agent(user, "agent_consult_stream", {
-                "status": "error", "reason": "unavailable",
-                "questionChars": len(req.question.strip()),
-                "ms": int((time.perf_counter() - started) * 1000)})
-            yield _sse("error", {"status": 503, "detail": str(e)})
+            await _audit_stream_failure(user, req, "unavailable", started)
+            yield _sse("error", {"status": 503, "code": _SSE_ERROR_CODE[503],
+                                 "detail": str(e)})
+        finally:
+            await agen.aclose()
+            slot.release()
 
     # 评审 S4：显式 charset 与 no-store；keep-alive 便于中间层识别长连接
     return StreamingResponse(gen(), media_type="text/event-stream; charset=utf-8",
                              headers={"Cache-Control": "no-store",
                                       "Connection": "keep-alive",
-                                      "X-Accel-Buffering": "no"})
+                                      "X-Accel-Buffering": "no"},
+                             background=BackgroundTask(slot.release))
 
 
 @router.post("/tools/{name}/invoke")

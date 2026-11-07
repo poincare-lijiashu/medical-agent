@@ -582,7 +582,11 @@ def test_consult_stream_endpoint_and_audit(monkeypatch, tmp_path):
     c, audit = _client(monkeypatch, tmp_path)
     token = _login(c, "doctor01")
 
-    async def fake_stream(question, role, agent_id=None, skill_codes=None, history=None):
+    # 评审 S2：路由层先做前置校验（prepare），再开 SSE；这里把装配结果打桩
+    monkeypatch.setattr(consult, "prepare", lambda *a, **k: {"stub": True})
+
+    async def fake_stream(question, role, agent_id=None, skill_codes=None, history=None,
+                          ctx=None):
         base = {"agent": {"id": "drug", "name": "药物信息助手"},
                 "routing": {"strategy": "single"},
                 "appliedSkills": [{"code": "drug-check", "name": "药物核对",
@@ -611,8 +615,10 @@ def test_consult_stream_endpoint_and_audit(monkeypatch, tmp_path):
 def test_consult_stream_error_event(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
     token = _login(c, "doctor01")
+    monkeypatch.setattr(consult, "prepare", lambda *a, **k: {"stub": True})
 
-    async def fake_stream(question, role, agent_id=None, skill_codes=None, history=None):
+    async def fake_stream(question, role, agent_id=None, skill_codes=None, history=None,
+                          ctx=None):
         if False:
             yield {}
         raise consult.ConsultUnavailable("模型不可用")
@@ -623,6 +629,8 @@ def test_consult_stream_error_event(monkeypatch, tmp_path):
                json={"question": "药物相互作用"})
     assert r.status_code == 200
     assert "event: error" in r.text and '"status": 503' in r.text
+    # 评审 S2：流内错误带稳定 code，前端不依赖中文文案分支
+    assert '"code": "UNAVAILABLE"' in r.text
 
 
 def test_consult_stream_history_too_many_returns_422(monkeypatch, tmp_path):
@@ -633,4 +641,49 @@ def test_consult_stream_history_too_many_returns_422(monkeypatch, tmp_path):
                json={"question": "药物相互作用",
                      "history": [{"role": "user", "content": "甲"}] * 7})
     assert r.status_code == 422
+
+
+def test_stream_prevalidation_returns_real_http_status(monkeypatch, tmp_path):
+    """评审 S2：前置校验失败返回真正的 HTTP 状态码，不再"200 + error 事件"。"""
+    _publish(agent_id="literature", code="lit-a", name="循证检索")
+    c, _ = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+
+    # 422：业务校验失败（显式空技能卡数组）
+    r = c.post("/api/v1/agent/consult/stream", headers=h,
+               json={"question": "指南证据", "agentId": "literature", "skillCodes": []})
+    assert r.status_code == 422
+    assert "event:" not in r.text
+
+    # 503：模型合规校验失败（无可用 provider）
+    monkeypatch.setattr(llm_config, "active_provider", lambda kind: None)
+    r = c.post("/api/v1/agent/consult/stream", headers=h,
+               json={"question": "指南证据", "agentId": "literature"})
+    assert r.status_code == 503
+    assert "event:" not in r.text
+
+
+def test_stream_forbidden_returns_403_before_sse(monkeypatch, tmp_path):
+    """评审 S2：角色越权在开 SSE 之前就被拒绝（此前是 200 + error 事件）。"""
+    _provider(monkeypatch)
+    c, _ = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "pharm01")}
+    r = c.post("/api/v1/agent/consult/stream", headers=h,
+               json={"question": "看看这张胸部 CT", "agentId": "imaging"})
+    assert r.status_code == 403
+    assert "event:" not in r.text
+
+
+def test_stream_concurrency_guard_returns_429(monkeypatch, tmp_path):
+    """评审 S3：并发槽占满时显式 429，不排队占用连接直到模型超时。"""
+    from backend.api.v1.agent import agent_router
+    _provider(monkeypatch)
+    _publish(agent_id="literature", code="lit-a", name="循证检索")
+    c, _ = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+
+    monkeypatch.setattr(agent_router, "_STREAM_SLOTS", asyncio.Semaphore(0))
+    r = c.post("/api/v1/agent/consult/stream", headers=h,
+               json={"question": "指南证据", "agentId": "literature"})
+    assert r.status_code == 429
 

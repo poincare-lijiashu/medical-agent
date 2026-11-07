@@ -131,6 +131,10 @@ class Settings(BaseSettings):
     auth_token_expire_minutes: int = 720
     auth_refresh_expire_minutes: int = 10080
     rate_limit_per_min: int = 60
+    # 评审 S3：SSE 流式问答的**同时存活**上限（进程内信号量）。请求限流管的是
+    # 每分钟次数，管不住"60 条长连接同时占着模型连接"；这里给并发一个硬上限。
+    # 多副本部署时实际上限 = 本值 × 副本数，需按模型侧配额合计评估。
+    agent_stream_max_concurrent: int = 16
     # Prometheus 抓取专用静态令牌（G105）：设置后 /metrics 接受
     # `Authorization: Bearer <METRICS_TOKEN>`，无需交互式 admin JWT；
     # 留空则不开放该通道（仍只允许 admin 登录态读取）。生产用随机长串并只挂到

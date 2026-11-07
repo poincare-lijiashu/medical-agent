@@ -38,6 +38,9 @@ STREAM_IDLE_TIMEOUT_S = 15.0
 MAX_HISTORY_TURNS = 6
 MAX_HISTORY_ITEM = 2000
 MAX_HISTORY_CHARS = 6000
+# 与 ``_done_payload`` 的 answer 截断保持一致：流式累积也按此上限截止，
+# 避免慢客户端场景下 parts 随 delta 无限增长（评审 S3）
+MAX_ANSWER_CHARS = 4000
 
 # 与医疗域其它问答入口同一套 PHI 脱敏（评审 M-04 整改）：Agent 控制面此前整域未接脱敏，
 # 患者身份证/手机/邮箱/病案号会原样进入模型提示。此处只脱敏**入站输入**，不改回答。
@@ -325,6 +328,24 @@ def _prepare(question: str, role: str, agent_id: str | None,
     }
 
 
+def prepare(question: str, role: str, agent_id: str | None = None,
+            skill_codes: list[str] | None = None, history=None) -> dict:
+    """前置校验与提示装配（评审 S2）：供路由层在打开 SSE 之前完成。
+
+    角色权限、输入长度、护栏上限、技能卡选择、模型合规都在这里失败，
+    这样流式端点可以返回真正的 HTTP 403/422/503，而不是 200 + error 事件。
+    失败同样计入 ``error`` 计量（channel=stream），前置校验不留计量盲区。
+    """
+    started = time.perf_counter()
+    try:
+        return _prepare(question, role, agent_id, skill_codes, history)
+    except ConsultError as exc:
+        consult_metrics.record(agent_id or "unknown", "stream", "error",
+                               (time.perf_counter() - started) * 1000,
+                               reason=_reason(exc))
+        raise
+
+
 def _done_payload(ctx: dict, answer: str, started: float) -> dict:
     agent = ctx["agent"]
     chosen = ctx["chosen"]
@@ -410,20 +431,16 @@ async def run(question: str, role: str, agent_id: str | None = None,
 
 async def stream(question: str, role: str, agent_id: str | None = None,
                  skill_codes: list[str] | None = None, history=None,
-                 streamer=None):
+                 streamer=None, ctx: dict | None = None):
     """流式问答：先发 meta（路由/技能），再逐段 delta，最后 done。
 
     ``streamer(provider, messages)`` 为异步生成器，可注入用于测试。
+    ``ctx`` 为 ``prepare()`` 的结果：路由层已预装配时直接复用，避免重复读技能卡。
     计量：正常完成计 ok；业务失败计 error；客户端中途断开计 aborted。
     """
     started = time.perf_counter()
-    try:
-        ctx = _prepare(question, role, agent_id, skill_codes, history)
-    except ConsultError as exc:
-        consult_metrics.record(agent_id or "unknown", "stream", "error",
-                               (time.perf_counter() - started) * 1000,
-                               reason=_reason(exc))
-        raise
+    if ctx is None:
+        ctx = prepare(question, role, agent_id, skill_codes, history)
 
     if "prefilter" in ctx:
         payload = ctx["prefilter"]
@@ -452,6 +469,7 @@ async def stream(question: str, role: str, agent_id: str | None = None,
         }
 
         parts: list[str] = []
+        total_chars = 0
         last_usage = None
         agen = (streamer or _default_streamer)(ctx["provider"], ctx["messages"])
         it = agen.__aiter__()
@@ -479,7 +497,10 @@ async def stream(question: str, role: str, agent_id: str | None = None,
                 last_usage = usage
             if not text:
                 continue
-            parts.append(text)
+            # 评审 S3：累积缓冲按最终答复上限截断（慢客户端下不再随 delta 线性增长）
+            if total_chars < MAX_ANSWER_CHARS:
+                parts.append(text)
+                total_chars += len(text)
             yield {"type": "delta", "text": text}
 
         answer = "".join(parts).strip()

@@ -51,3 +51,12 @@ def test_ask_view_pick_tags_are_keyboard_accessible():
     assert "@keydown.enter.prevent" in body
     assert "@keydown.space.prevent" in body
     assert ":focus-visible" in body
+
+
+def test_ask_view_stream_prevalidation_uses_real_status():
+    """评审 S2：前置校验失败（403/422/503/429）不回落非流式，流内错误按 code 分支。"""
+    body = _read(ASK)
+    assert "err.httpStatus = res.status" in body
+    assert "err.noFallback = true" in body
+    assert "err.sseCode = d.code" in body
+    assert "e.noFallback" in body

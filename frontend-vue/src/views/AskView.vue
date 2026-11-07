@@ -290,6 +290,14 @@ async function ask() {
       if (!placeholder.answer) thread.value.pop()
       return
     }
+    // 评审 S2：前置校验（403/422/503）与限流（429）已是最终结论，不回落非流式；
+    // 保留气泡展示原因，避免"提问孤立留存且无助手回复"
+    if (e && e.noFallback) {
+      placeholder.streaming = false
+      placeholder.failed = true
+      placeholder.failNote = e.message || '请求失败'
+      return
+    }
     // 流式在收到任何内容前失败 → 回落非流式，避免空白
     if (!placeholder.meta && !placeholder.answer) {
       thread.value.pop()
@@ -313,7 +321,10 @@ async function ask() {
     } else {
       placeholder.streaming = false
       placeholder.failed = true
-      placeholder.failNote = '生成中断：' + (e.message || '网络异常')
+      // 评审 S2：流内错误已带 code 与明确原因，不再套"生成中断"前缀
+      placeholder.failNote = e.sseCode
+        ? (e.message || '生成失败')
+        : '生成中断：' + (e.message || '网络异常')
     }
   } finally {
     loading.value = false
@@ -338,7 +349,14 @@ async function streamConsult(q, history, placeholder) {
     err.authExpired = true
     throw err
   }
-  if (!res.ok || !res.body) throw new Error(await readDetail(res))
+  if (!res.ok || !res.body) {
+    const err = new Error(await readDetail(res))
+    // 评审 S2：403/422/503/429 已由后端在开流之前给出真实状态码；
+    // 此时回落非流式会以同一原因再失败一次（还可能二次消耗模型配额），直接展示。
+    err.httpStatus = res.status
+    err.noFallback = true
+    throw err
+  }
 
   const reader = res.body.getReader()
   const dec = new TextDecoder()
@@ -374,7 +392,10 @@ async function streamConsult(q, history, placeholder) {
           placeholder.streaming = false
           completed = true
         } else if (ev === 'error') {
-          throw new Error(d.detail || '生成失败')
+          // 评审 S2：优先按稳定 code 分支，文案只做兜底
+          const err = new Error(d.detail || '生成失败')
+          err.sseCode = d.code || ''
+          throw err
         }
         scrollBottom()
       }
