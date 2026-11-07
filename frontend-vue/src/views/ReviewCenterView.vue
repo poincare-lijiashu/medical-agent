@@ -225,14 +225,20 @@
               <tr v-for="p in pendSlice" :key="p.id">
                 <td>
                   <details>
-                    <summary class="qtext" style="cursor: pointer; list-style: none">{{ p.agent }}：{{ (p.question || '').slice(0, 60) }} <span class="src">▾ 展开全文</span></summary>
+                    <summary class="qtext" style="cursor: pointer; list-style: none">{{ p.agent }}：{{ (p.question || '').slice(0, 60) }} <span class="src">▾ 展开题目</span></summary>
                     <div class="txt" style="margin-top: 8px; white-space: pre-wrap">{{ p.question }}</div>
-                    <div class="txt md-body" style="margin-top: 6px" v-html="md(p.answer || '')"></div>
+                    <!-- 第 69 批：服务端列表 compact（无 answer/images）→ 只显示预览；点「详情」按需取全文。
+                         「我的待确认」仍是全量数据（answer 存在），保持原有 md 渲染。 -->
+                    <div v-if="p.answerPreview !== undefined" class="txt" style="margin-top: 6px; white-space: pre-wrap">{{ p.answerPreview || '（暂无预览，点「详情」查看完整回答）' }}</div>
+                    <div v-else class="txt md-body" style="margin-top: 6px" v-html="md(p.answer || '')"></div>
+                    <el-button v-if="p.answerPreview !== undefined && (p.answerLength || 0) > (p.answerPreview || '').length"
+                               size="small" style="margin-top: 8px" @click.stop.prevent="openDetail(p)">查看完整回答（{{ p.answerLength }} 字）</el-button>
                   </details>
                   <!-- 缩略图条：仅渲染 data:image/ 白名单影像（后端 _review_image_view 按角色收窄后的前端消费） -->
                   <div v-if="imgOf(p).length" class="review-thumbs">
                     <img v-for="(u, ui) in imgOf(p)" :key="ui" class="thumb" alt="留痕影像缩略图" loading="lazy" :src="u" style="cursor: zoom-in" @click="showImg(u)" />
                   </div>
+                  <div v-else-if="p.imageCount" class="src" style="margin-top: 4px">含 {{ p.imageCount }} 张影像，点「详情」查看</div>
                 </td>
                 <td class="num">{{ (p.confidence || 0).toFixed(2) }}</td>
                 <td><el-tag type="warning" effect="light" size="small" round>{{ p.risk_reason || '高风险' }}</el-tag></td>
@@ -591,7 +597,8 @@ onActivated(() => {
 // limit+offset+q 服务端分页（缺省不限，旧调用方零影响）；关键字在服务端过滤，
 // 因此分页不会把匹配项漏到别的页。
 async function loadPendingPage(seq = loadSeq) {
-  const params = { limit: REVIEW_PER, offset: pendPage.value * REVIEW_PER }
+  // 第 69 批：compact=1 → 列表只回摘要/计数（实测 212KB → 25KB），全文与影像走详情接口。
+  const params = { limit: REVIEW_PER, offset: pendPage.value * REVIEW_PER, compact: 1 }
   const kw = filterQ.value.trim()
   if (kw) params.q = kw
   const { data } = await http.get('/medical/review/pending', { params })
@@ -652,7 +659,22 @@ function scrollTop() { window.scrollTo(0, 0) }
 const detailOn = ref(false)
 const detail = ref(null)
 const detailMine = computed(() => !!detail.value && detail.value.submitted_by === reviewMe.value)
-function openDetail(p) { detail.value = p; detailOn.value = true }
+// 第 69 批：列表 compact（不含 answer/images）→ 首次打开详情按单条接口取全文与影像。
+// 历史/我的待确认本来就有全文，不重复请求；detailSeq 防"快速点两条后旧响应覆盖新详情"。
+const detailSeq = ref(0)
+async function openDetail(p) {
+  detail.value = p
+  detailOn.value = true
+  if (p.answer !== undefined) return
+  const seq = ++detailSeq.value
+  try {
+    const { data } = await http.get('/medical/review/item/' + encodeURIComponent(p.id))
+    if (seq !== detailSeq.value) return
+    if (detail.value && detail.value.id === p.id) detail.value = data.item || p
+  } catch (e) {
+    ElMessage.error('详情加载失败：' + detailText(e))
+  }
+}
 
 const rejectOn = ref(false)
 const rejectNote = ref('')

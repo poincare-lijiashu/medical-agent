@@ -65,6 +65,7 @@ ROUTE_SNAPSHOT: list[tuple[str, str]] = [
     ("POST", "/consults/{cid}/opinion"),
     ("POST", "/consults/{cid}/close"),
     ("GET", "/review/pending"),
+    ("GET", "/review/item/{rid}"),
     ("GET", "/review/history"),
     ("GET", "/review/status"),
     ("GET", "/review/my-pending-confirm"),

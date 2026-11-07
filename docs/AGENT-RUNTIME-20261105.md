@@ -2640,6 +2640,55 @@ medassist_agent_milvus_probes_total 1            → 第二次抓取（+6s）2
 - 未在真实 K8s 集群 apply（Helm 只有静态同名校验）；
 - 未启动真实 Milvus 做"超时→重建→恢复"端到端演练，该路径由 `test_milvus_timeout_guard.py` 的 0.3s 注入超时覆盖。
 
+## 73. 2026-11-08 上线准备（第 69 批：`/review/pending` 列表/详情分离——`answer` 与影像不再随列表搬运）
+
+**接第 63 批的遗留**：第 63 批已把角标改成 `limit=0`，但列表单条仍含完整 `answer`
+（约 700 字/条）与 base64 `images`。实测 76 条待核对 = **229KB**，其中影像 105KB、
+回答全文 33KB；审核中心每翻一页都要把这些内容重新传给浏览器，而列表只显示摘要。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/api/v1/medical/review.py` | `/review/pending` 新增 `compact`（默认 false=旧行为）；`_compact_item` 去掉 `answer/images`，改回 `answerPreview`(160 字)/`answerLength`/`imageCount`；新增 `GET /review/item/{rid}` 单条详情（角色可见性与列表一致，qc 的 drug 项按 404 处理，图片仍走 `_review_image_view`；审计只记 rid+角色） |
+| `frontend-vue/src/views/ReviewCenterView.vue` | 列表请求带 `compact: 1`；列表内展示 160 字预览 +「查看完整回答（N 字）」；影像改为「含 N 张影像，点详情查看」；`openDetail` 首次打开按单条接口取全文/影像（`detailSeq` 防串页）；「我的待确认」仍是全量数据，保持原 md 渲染 |
+| `frontend-vue/src/utils/audit.js` | `humanizeAudit` 补 `detail`（审计人话化覆盖门禁） |
+| `tests/test_review_pending_paging.py` | +5：compact 省略字段/预览与计数、影像可见性计数、详情全文+审计、qc 的 drug/不存在均 404、医生看他人条目剥影像；原审计断言补 `compact=false` |
+| `tests/test_router_split_guard.py` | 路由快照登记 `GET /review/item/{rid}` |
+| `docs/DEPLOY.md` | 分页表补 compact 三行实测 |
+
+**设计取舍**
+- **默认不改行为**：`compact` 是显式开关，旧调用方/MCP/既有测试零影响；
+- **影像不进列表**：列表原缩略图可点开大图，现改为「含 N 张影像」+ 详情内查看——少数一次点击换掉每页 100KB 级 base64；
+- **详情与列表同一套可见性**：qc 看不到的 drug 项在详情也 404，避免"列表过滤、详情反推"；
+- **详情审计只记 rid/角色**：不把临床正文写进审计 payload（已有测试锁定）。
+
+**真实数据**（8001，admin01 登录，真实 PG 队列 76 条）
+```
+GET /review/pending                       229,086 B
+GET /review/pending?compact=1              66,098 B   （29%）
+GET /review/pending?limit=12               31,770 B
+GET /review/pending?limit=12&compact=1     11,089 B   （35%）
+```
+首条：`answerLength=677`、`answerPreview` 160 字、`imageCount=0`；`GET /review/item/{id}`
+返回 677 字全文，响应中无 `answerPreview`（不以摘要冒充全文）。
+
+**真实浏览器（Chrome DevTools MCP，8001）**
+- admin01 登录 → 审核中心「待处理」：12 行，侧栏角标 76；
+- 首行展示 160 字截断预览 +「查看完整回答（677 字）」按钮；
+- 点「详情」→ 弹窗「AI 回答」621 字符（>160），完整收尾；控制台 **0 error / 0 warn**。
+
+**校验**
+- 全量 pytest：**1223 passed**（1218 + 本批 5）；
+- `npm run build`：通过（bundle 1.37MB，仅既有体积告警）；
+- 前端人话化与路由快照两道静态门禁通过。
+
+**仍存边界**
+- `/review/history` 仍整表回 50 条全文（历史区暂未做按需详情）；积压增长后同法可套用；
+- `compact` 只裁 `answer/images`；`question`/`sources`/`meta` 仍全量，若题干本身很长需再裁；
+- 详情接口是**额外一次请求**，弱网时比原先"列表直接点开"多一跳（真实浏览器实测无感）；
+- 列表不再显示缩略图，qc 需点详情才看到影像（交互变化，已在 UI 文案标注）；
+- 未做 ETag/304：同一页反复刷新仍会重传 11KB 摘要（收益已足够，未再加缓存层）。
+
 
 
 

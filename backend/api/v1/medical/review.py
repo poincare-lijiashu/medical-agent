@@ -60,14 +60,32 @@ def _match_query(item: dict, q: str) -> bool:
                          ("agent", "question", "submitted_by", "risk_reason")).lower()
 
 
+_PREVIEW_CHARS = 160
+
+
+def _compact_item(item: dict) -> dict:
+    """列表瘦身（第 69 批）：去掉 answer 与 images，改下发预览长度/影像张数。
+
+    实测 52 条待核对 = 212KB，其中 base64 影像 105KB、回答全文 31KB；列表只需要
+    摘要，全文与影像按需走 GET /review/item/{rid}。影像按 _review_image_view 已做
+    角色收窄后再计数，因此医生看他人条目时 imageCount=0（与其可见性一致）。"""
+    out = {k: v for k, v in item.items() if k not in ("answer", "images")}
+    answer = str(item.get("answer") or "")
+    out["answerPreview"] = answer[:_PREVIEW_CHARS]
+    out["answerLength"] = len(answer)
+    out["imageCount"] = len(item.get("images") or [])
+    return out
+
+
 @router.get("/review/pending")
 async def review_pending(
         limit: int | None = Query(None, ge=0, le=500,
                                   description="返回条数上限；缺省=全部（旧行为）。0=只取计数"),
         offset: int = Query(0, ge=0, description="跳过条数（与 limit 配套分页）"),
         q: str | None = Query(None, max_length=100, description="关键字筛选（服务端过滤后再分页）"),
+        compact: bool = Query(False, description="列表瘦身：省略 answer/images，改下发预览/张数（详情走 /review/item/{rid}）"),
         user: dict = Depends(require_role(*_REVIEW_ROLES))):
-    """待核对列表（角色过滤 + 可选关键字/分页）。
+    """待核对列表（角色过滤 + 可选关键字/分页/瘦身）。
 
     第 63 批：/review/pending 实测 76 条 = 229KB，而侧边角标每 60s 轮询只为拿一个数字。
     新增 ``limit/offset/q`` 与响应 ``total``（**缺省仍返回全部**，旧调用方零影响）：
@@ -90,11 +108,34 @@ async def review_pending(
     # 「qc 看不到待审 imaging 图片」）；doctor 他人待审项剥 images（原全量返回，同步收紧）。
     # 只在切片后处理：分页请求不再为整表做图片裁剪。
     page = [_review_image_view(i, role, me) for i in page]
+    if compact:  # 第 69 批：full answer/base64 影像不进列表；详情按需单条取
+        page = [_compact_item(i) for i in page]
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="list_pending",
                             actor=user.get("username", "system"),
                             payload={"n": len(page), "total": total, "role": role,
-                                     "limit": limit, "offset": offset})
+                                     "limit": limit, "offset": offset, "compact": compact})
     return {"pending": page, "me": user.get("username"), "total": total}
+
+
+@router.get("/review/item/{rid}")
+async def review_item(rid: str, user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    """单条核对详情（第 69 批：compact 列表的内容来源）。
+
+    角色可见性与 /review/pending 完全一致：qc 的 drug 项按「不存在」处理（不通过详情
+    接口反推被列表过滤的条目）；图片仍走 _review_image_view 统一收窄（医生看他人条目
+    不给影像，提交人本人/admin/该项审核角色可见）。审计只记 rid 与角色，不记内容。
+    """
+    key = (rid or "").strip()[:64]
+    role = user.get("role", "")
+    me = user.get("username", "system")
+    item = await asyncio.to_thread(review.get, key) if key else None
+    if item is None or (role == "qc" and item.get("agent") == "drug"):
+        raise HTTPException(404, "复核单不存在")
+    item = _review_image_view(item, role, me)
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review",
+                            action="detail", actor=me,
+                            payload={"rid": key, "role": role})
+    return {"item": item}
 
 
 @router.get("/review/history")
