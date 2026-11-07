@@ -29,6 +29,8 @@ def test_agent_view_marks_window_semantics_and_quality():
     assert "usage.thresholds" in body
     assert "usage.quality.flagged" in body
     assert "errorRateNote" in body
+    # 评审 03-S9：开关切换带 expected 做 CAS
+    assert "expected: !!flag.enabled" in body
 
 
 def test_vite_dev_proxy_targets_backend():

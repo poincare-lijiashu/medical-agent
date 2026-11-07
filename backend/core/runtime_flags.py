@@ -34,6 +34,10 @@ ALLOWED_FLAGS = (
 _lock = threading.Lock()
 
 
+class FlagConflict(RuntimeError):
+    """开关的期望值与当前值不一致（评审 03-S9：并发切换的 CAS 失败）。"""
+
+
 def _load() -> dict:
     """JSON 兜底读（pg_store json_loader 回调用）：文件缺失/损坏 → 空 dict（全部回落 settings）。"""
     try:
@@ -58,12 +62,22 @@ def get_flag(key: str, default: bool) -> bool:
     return bool(_load_all().get(key, default))
 
 
-def set_flag(key: str, value: bool) -> bool:
-    """写单个开关（白名单校验 + JSON 原子写与 PG 全量同步双落）；返回落盘后的值。非法键抛 ValueError。"""
+def set_flag(key: str, value: bool, *, expected: bool | None = None,
+             default: bool = False) -> bool:
+    """写单个开关（白名单校验 + JSON 原子写与 PG 全量同步双落）；返回落盘后的值。
+
+    评审 03-S9：``expected`` 非 None 时做 CAS——当前生效值必须等于期望值才写入，
+    否则抛 ``FlagConflict``。读与写在同一把进程锁内，避免两个 admin 并发切换互相覆盖。
+    非法键抛 ValueError。
+    """
     if key not in ALLOWED_FLAGS:
         raise ValueError(f"不支持的运行时开关：{key}")
     with _lock:
         d = _load_all()
+        current = bool(d.get(key, default))
+        if expected is not None and current != bool(expected):
+            raise FlagConflict(
+                f"开关 {key} 已被他人修改（当前 {current}，期望 {bool(expected)}），请刷新后重试")
         d[key] = bool(value)
         pg_store.save_runtime_flags(d, FLAGS_FILE)  # 轮 A3：JSON 先落 + PG best-effort 同步
     return bool(value)

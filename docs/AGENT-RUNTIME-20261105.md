@@ -1298,6 +1298,32 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 
 **验证**：全量 pytest **1126 passed / 14 skipped**；规则 YAML 解析通过（14 条）。
 
+---
+
+## 37. 2026-11-06 评审整改（第 33 批：A2A 入参 schema 与开关 CAS）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 03-S18 | `/a2a` 入参改为 Pydantic 模型（`A2ARequest`/`A2AMessage`/`A2APart`）；嵌套结构不合法仍回 JSON-RPC **-32602**（HTTP 200），不会 500 | `agent_router.py` |
+| 03-S9 | 开关写入支持**可选 CAS**：`runtime_flags.set_flag(..., expected=, default=)` 在同一把锁内比较当前值；不一致抛 `FlagConflict` → 路由映射 **409**；前端切换带 `expected`，冲突时回读真实值 | `runtime_flags.py`、`agent_flags.py`、`agent_router.py`、`AgentView.vue` |
+
+**为什么这样改**：`body: dict` 只能靠运行时 `isinstance` 兜底，字段契约无法从 OpenAPI 看出，
+新增字段/类型变化容易退回 500；开关并发切换则是"后者静默覆盖前者"——在医疗治理里，
+"谁把联网开关打开/关掉"必须可解释。CAS 冲突让第二位 admin 明确看到"已被他人修改"。
+
+**新增测试**：`test_flag_cas_rejects_stale_expected`（期望值过期 → 409，不带 expected 仍兼容）、
+`test_a2a_rejects_malformed_params_without_500` 增加"parts 元素不是对象"用例；
+前端标记锁增加 `expected: !!flag.enabled`。
+
+**仍存边界**：
+- CAS 是**进程内锁 + 存储层最后写入**：多副本并发仍可能各自基于旧值写入（要跨副本严格 CAS 需存储层版本号）；
+- `expected` 是可选字段：脚本/旧客户端不传时仍无并发保护（兼容性取舍）；
+- `/a2a` 外层 `params: object` 故意宽松，嵌套校验失败统一回 -32602，与 JSON-RPC 惯例一致而非 HTTP 422；
+- 未对 `id` 做长度/类型强约束（仅 `str | int | None`），超长 id 会原样回显。
+
+**验证**：全量 pytest **1129 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
+
+
 
 
 

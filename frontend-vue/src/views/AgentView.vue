@@ -1057,7 +1057,10 @@ async function openBotImpact(row) {
 async function toggle(flag, value) {
   saving.value = flag.key
   try {
-    const r = await http.put('/agent/flags', { key: flag.key, value: !!value })
+    // 评审 03-S9：带上切换前值做 CAS，两个 admin 并发时后者收到 409 并回读
+    const r = await http.put('/agent/flags', {
+      key: flag.key, value: !!value, expected: !!flag.enabled,
+    })
     flag.enabled = !!(r.data && r.data.value)
     // 开关会改变工具可用性，目录同步刷新
     const c = await http.get('/agent/catalog')

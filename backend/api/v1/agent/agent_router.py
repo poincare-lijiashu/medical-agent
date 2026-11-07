@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
@@ -57,6 +57,8 @@ class RouteReq(BaseModel):
 class FlagReq(BaseModel):
     key: str = Field(max_length=64)
     value: bool
+    # 评审 03-S9：可选 CAS——前端带上切换前的值，避免两个 admin 并发互相覆盖
+    expected: bool | None = None
 
 
 class SkillPayload(BaseModel):
@@ -399,10 +401,13 @@ async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
     before = next((f.get("enabled") for f in agent_flags.all_flags()
                    if f.get("key") == req.key), None)
     try:
-        value = agent_flags.set_flag(req.key, req.value)
+        value = agent_flags.set_flag(req.key, req.value, req.expected)
     except ValueError as e:
         # 评审 S1：请求参数语义非法统一 422（此前此处 400、日期非法 422）
         raise HTTPException(422, str(e))
+    except agent_flags.FlagConflict as e:
+        # 评审 03-S9：并发切换的 CAS 冲突 → 409，由前端回读真实值
+        raise HTTPException(409, str(e))
     from backend.api.v1.medical import shared as _shared
     await asyncio.to_thread(
         _shared.get_audit_logger().write,
@@ -1178,39 +1183,63 @@ def _jsonrpc_error(msg_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
+class A2APart(BaseModel):
+    """A2A 消息片段（评审 03-S18：用 schema 收口，避免类型异常打成 500）。"""
+    model_config = {"extra": "allow"}
+
+    kind: str = "text"
+    text: str = ""
+
+
+class A2AMessage(BaseModel):
+    model_config = {"extra": "allow"}
+
+    parts: list[A2APart] = Field(default_factory=list)
+
+
+class A2ARequest(BaseModel):
+    """JSON-RPC 外壳：params 故意保持宽松，嵌套结构由 A2AMessage 单独校验并回 -32602。"""
+    model_config = {"extra": "allow"}
+
+    jsonrpc: str = ""
+    id: str | int | None = None
+    method: str = ""
+    params: object | None = None
+
+
 def _message_text(params) -> str:
-    # 评审 01-S18：params/message/parts 任一层不是预期类型时返回空串，
+    # 评审 01-S18 / 03-S18：params/message/parts 任一层类型不符时返回空串，
     # 由调用方回 JSON-RPC -32602（此前会 AttributeError → 500）
     if not isinstance(params, dict):
         return ""
-    message = params.get("message")
-    if not isinstance(message, dict):
+    raw = params.get("message")
+    if not isinstance(raw, dict):
         return ""
-    parts = message.get("parts")
-    if not isinstance(parts, list):
+    try:
+        message = A2AMessage.model_validate(raw)
+    except ValidationError:
         return ""
-    texts = [p.get("text", "") for p in parts
-             if isinstance(p, dict) and p.get("kind", "text") == "text"]
-    return "\n".join(t for t in texts if t).strip()
+    return "\n".join(part.text for part in message.parts
+                     if part.kind == "text" and part.text).strip()
 
 
 @router.post("/a2a")
-async def a2a(body: dict, user: dict = Depends(require_user)):
+async def a2a(body: A2ARequest, user: dict = Depends(require_user)):
     """A2A JSON-RPC 最小实现：``message/send`` 返回路由任务结果。
 
     仅完成"发现 + 路由"：不生成临床结论、不写复核队列；调用方拿到 agent 后
     仍须走对应业务接口并自行安排执业人员复核。
     """
-    msg_id = body.get("id")
+    msg_id = body.id
     # 评审 M-12：A2A 与能力卡同受一个开关约束，关闭时连路由入口一并下线
     if not agent_flags.get_flag("agent_a2a"):
         return _jsonrpc_error(msg_id, -32601, "A2A 已关闭")
-    if (body.get("jsonrpc") or "") != "2.0":
+    if (body.jsonrpc or "") != "2.0":
         return _jsonrpc_error(msg_id, -32600, "Invalid Request")
-    method = body.get("method")
+    method = body.method
     if method != "message/send":
         return _jsonrpc_error(msg_id, -32601, f"Method not found: {method}")
-    text = _message_text(body.get("params") or {})
+    text = _message_text(body.params or {})
     if not text:
         return _jsonrpc_error(msg_id, -32602, "message.parts 缺少 text")
     if len(text) > 2000:

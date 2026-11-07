@@ -445,13 +445,58 @@ def test_flags_admin_only_and_toggle(monkeypatch, tmp_path):
                  json={"key": "nope", "value": True}).status_code == 422
 
 
+def test_flag_update_cas_prevents_lost_update(monkeypatch, tmp_path):
+    """评审 03-S9：带 expected 的切换是 CAS，过期期望值必须 409 而不是静默覆盖。"""
+    c = _client(monkeypatch, tmp_path)
+    adm = {"Authorization": "Bearer " + _login(c, "admin01")}
+    first = c.put("/api/v1/agent/flags", headers=adm,
+                  json={"key": "agent_a2a", "value": True, "expected": False})
+    assert first.status_code == 200 and first.json()["value"] is True
+    stale = c.put("/api/v1/agent/flags", headers=adm,
+                  json={"key": "agent_a2a", "value": False, "expected": False})
+    assert stale.status_code == 409
+    fresh = c.put("/api/v1/agent/flags", headers=adm,
+                  json={"key": "agent_a2a", "value": False, "expected": True})
+    assert fresh.status_code == 200 and fresh.json()["value"] is False
+
+
+def test_a2a_part_shape_is_validated_by_schema(monkeypatch, tmp_path):
+    """评审 03-S18：parts 元素类型不符时仍回 -32602（schema 收口，不 500）。"""
+    agent_flags.set_flag("agent_a2a", True)
+    c = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+    r = c.post("/api/v1/agent/a2a", headers=h, json={
+        "jsonrpc": "2.0", "id": "bad-part", "method": "message/send",
+        "params": {"message": {"parts": ["not-an-object"]}}})
+    assert r.status_code == 200
+    assert r.json()["error"]["code"] == -32602
+
+
+def test_flag_cas_rejects_stale_expected(monkeypatch, tmp_path):
+    """评审 03-S9：并发切换带 expected 时，过期的一方必须 409 而不是静默覆盖。"""
+    c = _client(monkeypatch, tmp_path)
+    adm = {"Authorization": "Bearer " + _login(c, "admin01")}
+    r = c.put("/api/v1/agent/flags", headers=adm,
+              json={"key": "agent_web_search", "value": True, "expected": False})
+    assert r.status_code == 200 and r.json()["value"] is True
+    stale = c.put("/api/v1/agent/flags", headers=adm,
+                  json={"key": "agent_web_search", "value": False, "expected": False})
+    assert stale.status_code == 409
+    assert "已被他人修改" in stale.text
+    # 不带 expected 仍允许（兼容脚本调用），只是没有并发保护
+    ok = c.put("/api/v1/agent/flags", headers=adm,
+               json={"key": "agent_web_search", "value": False})
+    assert ok.status_code == 200
+
+
 def test_a2a_rejects_malformed_params_without_500(monkeypatch, tmp_path):
     """评审 01-S18：params 不是对象/parts 不是数组时返回 JSON-RPC 错误，不能 500。"""
     agent_flags.set_flag("agent_a2a", True)
     c = _client(monkeypatch, tmp_path)
     h = {"Authorization": "Bearer " + _login(c, "doctor01")}
     for params in ("not-an-object", {"message": "x"},
-                   {"message": {"parts": "x"}}):
+                   {"message": {"parts": "x"}},
+                   {"message": {"parts": ["not-a-dict"]}}):
         r = c.post("/api/v1/agent/a2a", headers=h, json={
             "jsonrpc": "2.0", "id": "bad-1", "method": "message/send",
             "params": params})

@@ -18,6 +18,9 @@ from collections import OrderedDict
 
 from backend.core import runtime_flags
 
+# 评审 03-S9：CAS 冲突类型透出，路由层据此映射 409
+FlagConflict = runtime_flags.FlagConflict
+
 # key -> (默认值, 中文名, 说明, 风险等级)
 _FLAG_DEFS: "OrderedDict[str, tuple[bool, str, str, str]]" = OrderedDict([
     (
@@ -61,11 +64,15 @@ def get_flag(key: str) -> bool:
     return runtime_flags.get_flag(key, default)
 
 
-def set_flag(key: str, value: bool) -> bool:
-    """写开关（白名单在 runtime_flags 中同样校验）；非法键抛 ValueError。"""
+def set_flag(key: str, value: bool, expected: bool | None = None) -> bool:
+    """写开关（白名单在 runtime_flags 中同样校验）；非法键抛 ValueError。
+
+    评审 03-S9：传 ``expected`` 时做 CAS（并发切换不再静默覆盖）。
+    """
     if key not in _FLAG_DEFS:
         raise ValueError(f"不支持的 Agent 开关：{key}")
-    return runtime_flags.set_flag(key, bool(value))
+    default = _FLAG_DEFS[key][0]
+    return runtime_flags.set_flag(key, bool(value), expected=expected, default=default)
 
 
 def all_flags() -> list[dict]:
