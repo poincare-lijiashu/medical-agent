@@ -1682,6 +1682,38 @@ Should（读当前代码确认，不新增业务逻辑）：
 - 未演练从 bundle 恢复后**真实拉起服务**（需要密钥与模型资产，属现场条件）；
 - bundle 是每日手工/批次后生成，不保证 RPO；生产应按 CronJob 定时备份（见 DEPLOY）。
 
+---
+
+## 50. 2026-11-08 上线准备（第 46 批：PG 真源纳入上线门禁）
+
+**缺口**：`/healthz`、`/readyz` 只回答"进程活着"；PG 掉线时服务会静默回落 JSON——
+单实例看起来完全健康，多副本却互相看不到写入。管理端数据面板已有 `infra.pg.ok`
+（`pg_store.ping()`），但上线自检从未消费它。
+
+**修复（不改后端，只复用既有只读端点）**
+| 文件 | 变更 |
+|---|---|
+| `scripts/agent_go_live_check.py` | 新增 `storage.pg` 检查：调用 `GET /api/v1/medical/admin/data`（admin 只读）读取 `infra.pg.ok`；新增 `--require-pg`（或 `AGENT_REQUIRE_PG=1`）把该项从"仅展示"变为门禁 |
+| `docs/OPERATIONS.md`、`docs/DEPLOY.md` | 说明生产多副本必须开 `--require-pg` |
+| `tests/test_go_live_check.py` | 新增 `test_require_pg_gate`：PG=false 时 `--require-pg` 必须失败，PG=true 通过 |
+
+**真实验证（同一实例，PG 未启动）**
+| 模式 | `storage.pg` | 总结果 |
+|---|---|---|
+| 默认（仅展示） | `PASS storage.pg = http=200 pg=False require=False` | FAIL(1)（仅"未配置合规 provider"） |
+| `--require-pg` | `FAIL storage.pg = http=200 pg=False require=True` | FAIL(2) |
+
+说明默认模式不会因本地无 PG 而假红，生产显式开启后能拦住"PG 掉线仍上线"。
+
+**测试**：`tests/test_go_live_check.py` **14 passed**；全量 pytest **1122 passed / 43 skipped**
+（Docker 不可用，28 项 PG 用例按设计 skip）。
+
+**仍存边界**：
+- `storage.pg` 只做 `SELECT 1` 连通性；**按域 stale（写失败回落 JSON）不在该端点暴露**，
+  部分域漂移仍可能漏检；
+- `/admin/data` 聚合用户/审计/队列等只读查询，自检调用有一次额外成本（可接受，非抓取路径）；
+- 本地开发无 PG 属预期，默认不要求；是否开启由部署方显式决定。
+
 
 
 

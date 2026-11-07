@@ -7,6 +7,7 @@
 - 技能库指标 / Prometheus 导出
 - 睡眠记忆扫描（只读）
 - 运营建议列表
+- 存储真源状态（`infra.pg`）；`--require-pg` / `AGENT_REQUIRE_PG=1` 时 PG 不可用即失败
 - 仓库产物（Vue dist、Prometheus 规则、当前 HEAD）
 
 用法：
@@ -218,7 +219,7 @@ def _print(results: list[tuple[str, bool, str]]) -> int:
 
 
 def run(base_url: str, username: str, password: str, timeout: float,
-        metrics_token: str = "") -> int:
+        metrics_token: str = "", require_pg: bool = False) -> int:
     results: list[tuple[str, bool, str]] = check_repo()
 
     status, raw, headers = _request(base_url, "/api/v1/auth/login", "POST",
@@ -278,6 +279,14 @@ def run(base_url: str, username: str, password: str, timeout: float,
     status, raw, _ = call(AGENT_PREFIX + "/skill-advices?status=OPEN")
     results.append(("advice.list_endpoint", status == 200, f"http={status}"))
 
+    # 生产多副本必须确认 PG 是真源：服务"健康"但 PG 掉线时会静默回落 JSON，
+    # 多实例之间互相看不到写入。--require-pg（或 AGENT_REQUIRE_PG=1）把这一项变成门禁。
+    status, raw, _ = call("/api/v1/medical/admin/data")
+    infra = (_json(raw) or {}).get("infra") or {}
+    pg_ok = bool((infra.get("pg") or {}).get("ok"))
+    results.append(("storage.pg", status == 200 and (pg_ok or not require_pg),
+                    f"http={status} pg={pg_ok} require={require_pg}"))
+
     failed = _print(results)
     print("----------------------------------------")
     print(("RESULT PASS" if failed == 0 else f"RESULT FAIL ({failed})"))
@@ -293,6 +302,10 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--metrics-token", default=os.getenv("METRICS_TOKEN", ""),
                         help="抓取令牌（/metrics 用；也可用环境变量 METRICS_TOKEN）")
+    parser.add_argument("--require-pg", action="store_true",
+                        default=(os.getenv("AGENT_REQUIRE_PG", "").strip().lower()
+                                 in ("1", "on", "true", "yes")),
+                        help="要求 PG 必须可用（生产多副本应开启；也可用 AGENT_REQUIRE_PG=1）")
     parser.add_argument("--dry-run", action="store_true",
                         help="只检查仓库产物，不连接服务")
     args = parser.parse_args(argv)
@@ -305,7 +318,8 @@ def main(argv=None) -> int:
         print("FAIL auth.password = 未提供（使用 --password 或 AGENT_PASSWORD）")
         return 2
     return run(args.base_url, args.username, args.password, args.timeout,
-               metrics_token=(args.metrics_token or "").strip())
+               metrics_token=(args.metrics_token or "").strip(),
+               require_pg=bool(args.require_pg))
 
 
 if __name__ == "__main__":

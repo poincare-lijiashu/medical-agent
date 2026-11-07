@@ -149,6 +149,7 @@ def test_run_orchestration_pass_with_cookie_session(monkeypatch):
         "/metrics": _all_metrics_text(),
         "/api/v1/agent/sleep-memory/scan": "{}",
         "/api/v1/agent/skill-advices?status=OPEN": "{}",
+        "/api/v1/medical/admin/data": json.dumps({"infra": {"pg": {"ok": True}}}),
     }
 
     def fake(base, path, method="GET", token=None, body=None, timeout=15.0, cookie=None):
@@ -213,3 +214,29 @@ def test_metrics_without_scrape_token_reports_hint(monkeypatch):
     monkeypatch.setattr(mod, "_print", spy)
     assert mod.run("http://example", "admin01", "secret", 1.0) == 1
     assert any(name == "metrics.scrape_hint" and not ok for name, ok, _ in printed)
+
+
+def test_require_pg_gate(monkeypatch):
+    """--require-pg：PG 不可用必须失败（服务健康但真源掉线是多副本事故）。"""
+    state = {"pg": False}
+
+    def fake(base, path, method="GET", token=None, body=None, timeout=15.0, cookie=None):
+        if path == "/api/v1/auth/login":
+            return 200, json.dumps({"access_token": "t"}), {}
+        if path == "/api/v1/medical/admin/data":
+            return 200, json.dumps({"infra": {"pg": {"ok": state["pg"]}}}), {}
+        if path.endswith("/model-policy"):
+            return 200, json.dumps({"allowed": [{"id": "local", "class": "local"}]}), {}
+        if path.endswith("/web-policy"):
+            return 200, json.dumps({"enabled": False, "allowedDomains": [
+                "nhc.gov.cn", "nmpa.gov.cn", "pubmed.ncbi.nlm.nih.gov"]}), {}
+        if path == "/metrics":
+            return 200, _all_metrics_text(), {}
+        if path.endswith("/prometheus"):
+            return 200, "\n".join(f"{m} 0" for m in mod._SKILL_METRICS), {}
+        return 200, "{}", {}
+
+    monkeypatch.setattr(mod, "_request", fake)
+    assert mod.run("http://example", "admin01", "secret", 1.0, require_pg=True) == 1
+    state["pg"] = True
+    assert mod.run("http://example", "admin01", "secret", 1.0, require_pg=True) == 0
