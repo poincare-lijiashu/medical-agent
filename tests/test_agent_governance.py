@@ -160,6 +160,16 @@ def test_second_opinion_rejects_foreign_id(monkeypatch):
         assert "不允许" in str(e)
 
 
+def test_second_opinion_invalid_input_is_client_error():
+    """评审 03-S14：入参不合法（问题过短 / provider 个数不对）应为 422 类异常。"""
+    with pytest.raises(second_opinion.SecondOpinionInvalid):
+        asyncio.run(second_opinion.run("短"))
+    with pytest.raises(second_opinion.SecondOpinionInvalid):
+        asyncio.run(second_opinion.run("高血压如何分级", ["local-vllm"]))
+    with pytest.raises(second_opinion.SecondOpinionInvalid):
+        asyncio.run(second_opinion.run("高血压如何分级", ["local-vllm", "deepseek", "qwen"]))
+
+
 def test_second_opinion_runs_two_models_and_isolates_failure(monkeypatch):
     monkeypatch.setattr(model_policy, "allowed_chat_providers",
                         lambda: [LOCAL, DOMESTIC])
@@ -177,6 +187,28 @@ def test_second_opinion_runs_two_models_and_isolates_failure(monkeypatch):
 
 
 # ---------------------------------------------------------------- API
+
+def test_api_second_opinion_error_mapping(monkeypatch, tmp_path):
+    """评审 03-S14：入参不合法 → 422；provider 不合规 / 可用不足 → 503。"""
+    c = _client(monkeypatch, tmp_path)
+    h = _h(_login(c, "doctor01"))
+
+    r = c.post("/api/v1/agent/second-opinion", headers=h,
+               json={"question": "高血压如何分级", "providerIds": ["local-vllm"]})
+    assert r.status_code == 422, r.text
+
+    monkeypatch.setattr(llm_config, "find_provider",
+                        lambda kind, pid: FOREIGN if pid == "openai" else None)
+    r = c.post("/api/v1/agent/second-opinion", headers=h,
+               json={"question": "高血压如何分级",
+                     "providerIds": ["openai", "deepseek"]})
+    assert r.status_code == 503, r.text
+
+    monkeypatch.setattr(model_policy, "allowed_chat_providers", lambda: [LOCAL])
+    r = c.post("/api/v1/agent/second-opinion", headers=h,
+               json={"question": "高血压如何分级"})
+    assert r.status_code == 503, r.text
+
 
 def _client(monkeypatch, tmp_path):
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))

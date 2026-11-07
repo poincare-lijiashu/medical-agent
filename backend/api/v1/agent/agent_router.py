@@ -802,11 +802,17 @@ async def web_policy(user: dict = Depends(require_user)):
 
 @router.post("/second-opinion")
 async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require_user)):
-    """双模型第二意见：仅国产/本地模型；意见并列 + 启发式差异信号。"""
+    """双模型第二意见：仅国产/本地模型；意见并列 + 启发式差异信号。
+
+    评审 03-S14：入参不合法（问题长度 / provider 个数）→ 422；
+    provider 不合规或合规 provider 不足 → 503（服务端配置问题，不是调用方错误）。
+    """
     try:
         result = await second_opinion.run(req.question, req.providerIds)
-    except model_policy.ModelPolicyViolation as e:
+    except second_opinion.SecondOpinionInvalid as e:
         raise HTTPException(422, str(e))
+    except model_policy.ModelPolicyViolation as e:
+        raise HTTPException(503, str(e))
     except second_opinion.SecondOpinionUnavailable as e:
         raise HTTPException(503, str(e))
     await _audit_agent(user, "second_opinion", {
@@ -923,8 +929,13 @@ async def skill_library_prometheus(user: dict = Depends(require_role("admin", "q
 
 @router.post("/skill-library/snapshot")
 async def skill_library_snapshot(req: SnapshotReq,
-                                 user: dict = Depends(require_role("admin", "qc"))):
-    """记录某业务日的指标快照（同一天幂等覆盖）。"""
+                                 user: dict = Depends(require_role("admin"))):
+    """记录某业务日的指标快照（同一天幂等覆盖，但覆盖留痕）。
+
+    评审 03-S12：写端点收紧到 **admin**（qc 只需要读）；同日覆盖时响应里带
+    ``overwritten`` / ``overwriteCount`` / ``previous`` 摘要，审计同样记录，
+    避免"事后补录值"与"当天原始值"无法区分。
+    """
     day = None
     if req.date:
         try:
@@ -932,8 +943,13 @@ async def skill_library_snapshot(req: SnapshotReq,
         except ValueError:
             raise HTTPException(422, "date 需为 YYYY-MM-DD")
     item = await asyncio.to_thread(skill_trends.snapshot,
-                                   user.get("username", "qc"), day)
-    await _audit_agent(user, "skill_metrics_snapshot", {"date": item["date"]})
+                                   user.get("username", "admin"), day)
+    await _audit_agent(user, "skill_metrics_snapshot", {
+        "date": item["date"],
+        "overwritten": item.get("overwritten", False),
+        "overwriteCount": item.get("overwriteCount", 0),
+        "previousGeneratedBy": (item.get("previous") or {}).get("generatedBy"),
+    })
     return item
 
 

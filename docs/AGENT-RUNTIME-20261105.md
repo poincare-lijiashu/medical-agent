@@ -853,3 +853,28 @@ HTTP 层（`HistoryTurn`）只校验单条 2000 字与条数 6，合计 6000 字
 `helm lint/template` 未在本机执行（无 helm 二进制），模板正确性依赖既有渲染测试与人工。
 
 **验证**：全量 pytest **1053 passed / 11 skipped**；`agent_go_live_check.py --dry-run` PASS（新增两项 repo 检查为 PASS）。
+
+---
+
+## 20. 2026-11-06 评审整改（第 16 批：快照可追溯 + 第二意见错误码）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 03-S12 | 指标快照同日覆盖**留痕**：`overwritten`、`overwriteCount`、`firstGeneratedAt/By`、`previous{generatedAt, generatedBy, summary}`（摘要只含聚合计数）；写端点由 `admin|qc` 收紧到 **admin**（qc 只读）；审计记录 `overwritten/overwriteCount/previousGeneratedBy` | `skill_trends.py`、`agent_router.py` |
+| 03-S14 | 第二意见拆开两类异常：`SecondOpinionInvalid`（问题长度 / provider 个数）→ **422**；`ModelPolicyViolation`（选了境外 provider）与"合规 provider 不足 2 个"→ **503**（此前两者恰好映射反了） | `second_opinion.py`、`agent_router.py` |
+| 前端 | 审计日志文案对同日覆盖显示"覆盖重写 第 N 次，原生成人 X"，与后端 payload 对齐 | `frontend-vue/src/utils/audit.js` |
+
+**为什么这样改**：快照是"某业务日的指标"这一事实的历史记录，可覆写且无痕迹等于历史可以被静默改写；
+把覆盖次数、首次生成人与覆盖前摘要写进记录和审计后，"事后补录"可被识别。第二意见的两类失败
+性质完全不同：调用方选错了参数应自己改（422），而"院内没配够合规模型"改参数也没用（503）。
+
+**新增测试**：`test_skill_trends.py::test_snapshot_rewrite_leaves_trace`（首写/二次/三次覆盖的
+`overwritten`、`overwriteCount`、`firstGeneratedBy`、`previous.summary`）；API 用例补 qc→403、
+admin→200、覆盖审计字段；`test_agent_governance.py::test_second_opinion_invalid_input_is_client_error`
+与 `::test_api_second_opinion_error_mapping`（422 / 503 / 503）。
+
+**仍存边界**：快照仍是"同一天一条"（不追加多版本），`previous` 只保留**最近一次**覆盖前摘要，
+更早的覆盖历史只能从审计日志回溯；`overwritten` 只在同日重写时为真，跨天补录（指定过去日期）
+仍按首次生成记录，不校验"该日期是否已过"。
+
+**验证**：全量 pytest **1056 passed / 11 skipped**；`npm run build` 成功。

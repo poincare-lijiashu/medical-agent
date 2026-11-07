@@ -41,6 +41,14 @@ class SecondOpinionUnavailable(RuntimeError):
     """可用模型不足/全部失败。"""
 
 
+class SecondOpinionInvalid(ValueError):
+    """客户端入参不合法（问题长度、provider 个数/格式）——对应 HTTP 422。
+
+    评审 03-S14：此前"只传 1 个 provider"被当作服务不可用（503），
+    与"provider 不合规"（服务端配置问题，应 503）恰好反了；此处拆开两类异常。
+    """
+
+
 def _normalize(text: str) -> str:
     return _PUNCT.sub("", (text or "").lower())
 
@@ -80,12 +88,12 @@ async def _default_runner(provider: dict, messages: list) -> str:
 async def run(question: str, provider_ids: list[str] | None = None, runner=None) -> dict:
     q = (question or "").strip()
     if not (2 <= len(q) <= MAX_QUESTION):
-        raise SecondOpinionUnavailable(f"问题需 2-{MAX_QUESTION} 字")
+        raise SecondOpinionInvalid(f"问题需 2-{MAX_QUESTION} 字")
 
     if provider_ids:
         ids = [str(p).strip() for p in provider_ids if str(p).strip()]
         if len(ids) != 2:
-            raise SecondOpinionUnavailable("第二意见需要恰好选择 2 个模型提供方")
+            raise SecondOpinionInvalid("第二意见需要恰好选择 2 个模型提供方")
         providers = [model_policy.resolve_allowed(pid) for pid in ids]
     else:
         providers = model_policy.allowed_chat_providers()[:2]

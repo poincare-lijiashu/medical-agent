@@ -81,6 +81,25 @@ def test_snapshot_upsert_preserves_other_days():
     assert [s["date"] for s in snaps] == ["2026-11-01", "2026-11-02"]
 
 
+def test_snapshot_rewrite_leaves_trace():
+    """评审 03-S12：同日覆盖必须留痕，不能把"事后补录"与"当天原始值"混为一谈。"""
+    first = skill_trends.snapshot("admin01", date(2026, 11, 3))
+    assert first["overwritten"] is False
+    assert first["overwriteCount"] == 0
+    assert first["firstGeneratedBy"] == "admin01"
+
+    second = skill_trends.snapshot("admin02", date(2026, 11, 3))
+    assert second["overwritten"] is True
+    assert second["overwriteCount"] == 1
+    assert second["firstGeneratedBy"] == "admin01"
+    assert second["previous"]["generatedBy"] == "admin01"
+    assert set(second["previous"]["summary"]) >= {"experiences", "proposals", "published"}
+
+    third = skill_trends.snapshot("admin01", date(2026, 11, 3))
+    assert third["overwriteCount"] == 2
+    assert skill_trends.list_snapshots(30)[-1]["firstGeneratedBy"] == "admin01"
+
+
 def test_prometheus_text_has_aggregates_only():
     text = skill_trends.prometheus_text()
     assert "medassist_agent_experiences_total 0" in text
@@ -152,12 +171,25 @@ def test_api_snapshot_trends_alerts(monkeypatch, tmp_path):
     c, audit = _client(monkeypatch, tmp_path)
     doc = _h(_login(c, "doctor01"))
     qc = _h(_login(c, "qc01"))
+    adm = _h(_login(c, "admin01"))
 
     assert c.post("/api/v1/agent/skill-library/snapshot", headers=doc, json={}).status_code == 403
-    r = c.post("/api/v1/agent/skill-library/snapshot", headers=qc,
+    # 评审 03-S12：写端点收紧到 admin，qc 只读
+    assert c.post("/api/v1/agent/skill-library/snapshot", headers=qc,
+                  json={"date": "2026-11-01"}).status_code == 403
+    r = c.post("/api/v1/agent/skill-library/snapshot", headers=adm,
                json={"date": "2026-11-01"})
     assert r.status_code == 200 and r.json()["date"] == "2026-11-01"
-    assert c.post("/api/v1/agent/skill-library/snapshot", headers=qc,
+    assert r.json()["overwritten"] is False
+    r2 = c.post("/api/v1/agent/skill-library/snapshot", headers=adm,
+                json={"date": "2026-11-01"})
+    assert r2.status_code == 200 and r2.json()["overwritten"] is True
+    assert r2.json()["overwriteCount"] == 1
+    entry = [e for e in audit.entries
+             if e.get("payload", {}).get("action") == "skill_metrics_snapshot"][-1]
+    assert entry["payload"]["overwritten"] is True
+    assert entry["payload"]["overwriteCount"] == 1
+    assert c.post("/api/v1/agent/skill-library/snapshot", headers=adm,
                   json={"date": "2026-13-01"}).status_code == 422
 
     trends = c.get("/api/v1/agent/skill-library/trends", headers=qc)

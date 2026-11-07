@@ -60,18 +60,56 @@ def _save(items: list) -> None:
     pg_store.save_json_list("agent_skill_metrics", SNAPSHOT_FILE, items)
 
 
+def _summary(metrics: dict) -> dict:
+    """快照关键计数的摘要（覆盖前留痕用，只含聚合数字，不含任何患者或业务明细）。"""
+    return {
+        "experiences": _get(metrics, "experiences", "total"),
+        "proposals": _get(metrics, "proposals", "total"),
+        "adopted": _get(metrics, "proposals", "adopted"),
+        "published": _get(metrics, "skillCards", "published"),
+        "adoptionRate": _get(metrics, "proposals", "adoptionRate"),
+    }
+
+
 def snapshot(actor: str, day: date | None = None) -> dict:
-    """生成/更新某业务日的指标快照（同一天幂等）。"""
+    """生成/更新某业务日的指标快照（同一天幂等）。
+
+    评审 03-S12：同日重写原本**不留任何痕迹**，"当天原始值"与"事后补录值"无法区分。
+    现在保留首次生成信息（``firstGeneratedAt`` / ``firstGeneratedBy``），并记录
+    ``overwritten``、``overwriteCount`` 与覆盖前摘要（``previous``）。
+    """
     day = day or _now().date()
     key = day.isoformat()
-    item = {
-        "id": key,
-        "date": key,
-        "generatedAt": _now().isoformat(timespec="seconds"),
-        "generatedBy": actor,
-        "metrics": skill_ops.metrics(),
-    }
     with _lock:
+        previous = next((i for i in _load() if i.get("id") == key), None)
+        item = {
+            "id": key,
+            "date": key,
+            "generatedAt": _now().isoformat(timespec="seconds"),
+            "generatedBy": actor,
+            "metrics": skill_ops.metrics(),
+        }
+        if previous:
+            item.update({
+                "overwritten": True,
+                "overwriteCount": int(previous.get("overwriteCount") or 0) + 1,
+                "firstGeneratedAt": previous.get("firstGeneratedAt")
+                or previous.get("generatedAt"),
+                "firstGeneratedBy": previous.get("firstGeneratedBy")
+                or previous.get("generatedBy"),
+                "previous": {
+                    "generatedAt": previous.get("generatedAt"),
+                    "generatedBy": previous.get("generatedBy"),
+                    "summary": _summary(previous.get("metrics") or {}),
+                },
+            })
+        else:
+            item.update({
+                "overwritten": False,
+                "overwriteCount": 0,
+                "firstGeneratedAt": item["generatedAt"],
+                "firstGeneratedBy": actor,
+            })
         # G96：按日期主键行级 upsert，多实例并发只覆盖同一天，不丢其它日期
         pg_store.upsert_json_item("agent_skill_metrics", SNAPSHOT_FILE, item)
     return item

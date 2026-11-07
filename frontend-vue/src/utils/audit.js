@@ -145,7 +145,9 @@ export function humanizeAudit(e) {
     skill_distill: () => `提炼技能候选（当前 ${p.proposals ?? 0} 个）`,
     skill_adopt: () => `采纳技能候选 ${p.proposalId || '—'}（${p.status || ''}${p.replay ? ' · 回放通过' : ''}）`,
     skill_proposal_reject: () => `拒绝技能候选 ${p.proposalId || '—'}（${p.note || '—'}）`,
-    skill_metrics_snapshot: () => `记录技能库指标快照 ${p.date || '—'}`,
+    // 评审 03-S12：同日覆盖在审计里必须一眼可见（此前与首次生成无法区分）
+    skill_metrics_snapshot: () => `记录技能库指标快照 ${p.date || '—'}`
+      + (p.overwritten ? `（覆盖重写 第 ${p.overwriteCount ?? 1} 次，原生成人 ${p.previousGeneratedBy || '—'}）` : ''),
     skill_advice_generate: () => `生成运营建议（当前 ${p.advices ?? 0} 条）`,
     skill_advice_dismiss: () => `忽略运营建议 ${p.adviceId || '—'}（${p.note || '—'}）`,
     skill_advice_complete: () => `完成运营建议 ${p.adviceId || '—'}`,
