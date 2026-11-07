@@ -326,3 +326,37 @@ def test_qc_pending_list_visible_with_count_header(page):
     badge = page.locator('.rail a.nav:has-text("审核中心") .nav-tag')
     if server_n > 0:
         expect(badge).to_have_text(str(server_n))
+
+# ---- G1：医生端统一问答页渲染（不触发 LLM，评审 04-S10） ----
+
+def test_agent_ask_view_renders_without_llm(page):
+    """G1 验收：AskView 渲染要素齐全——输入框/免责条/空态说明/发送按钮，
+    且**不发送任何提问**（不触发模型调用）。"""
+    _login(page, "doctor01")
+    _nav(page, "智能问答")
+    expect(page.locator('[data-testid="ask-input"]')).to_be_visible()
+    expect(page.get_by_text("辅助工具，非医疗器械")).to_be_visible()
+    expect(page.get_by_text("怎么用")).to_be_visible()
+    expect(page.locator('[data-testid="ask-send"]')).to_be_visible()
+    expect(page.locator(".pick .pick-tag").first).to_be_visible()
+    # 未发送：线程为空，不存在流式占位
+    assert page.locator('[data-testid="ask-streaming"]').count() == 0
+
+
+# ---- G2：管理员 Agent 控制台卡片可见（评审 04-S10） ----
+
+def test_agent_console_cards_visible(page):
+    """G2 验收：admin 打开 Agent 控制台，关键卡片可见且无 JS console 错误。"""
+    errors = []
+    page.on("console",
+            lambda m: errors.append(m.text) if m.type == "error" else None)
+    _login(page, "admin01")
+    _nav(page, "Agent 控制台")
+    for tid in ("agent-flags", "agent-route", "agent-consult", "agent-skills", "agent-bots"):
+        expect(page.locator(f'[data-testid="{tid}"]')).to_be_visible()
+    expect(page.get_by_text("能力开关（运行时生效）")).to_be_visible()
+    expect(page.get_by_text("临床技能卡（受控）")).to_be_visible()
+    # 资源加载类报错（如 favicon 404）不算 JS 异常；其余 console error 视为回归
+    real = [e for e in errors if "Failed to load resource" not in e]
+    assert real == [], real[:3]
+

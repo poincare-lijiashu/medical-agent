@@ -17,7 +17,7 @@
 | beforeunload 防误关（聊天/质控草稿未发拦截） | app.js `beforeUnloadGuard` | ✅ AppShell.vue（登录态 + dirty store 有未保存 rx 工作台内容 → preventDefault 弹原生确认） |
 | rx 导航红点角标（被驳回处方数，进「我的处方」清零） | views_core.js `renderRail` + views_assist.js `refreshRxBadge` | ✅ AppShell.vue badgeFor + stores/badges.js refreshRxBadge |
 | review 导航待办角标（qc 其它高危/admin 全部/pharmacist 待审处方红） | app.js `refreshReviewBadge` + views_core.js `renderRail` | ✅ stores/badges.js refreshReviewBadge + badgeFor |
-| review 导航会诊红徽标（待我（本科室）意见的 consult 数） | views_assist.js `updateConsultBadge/refreshConsultBadge` | ❌ 缺失 → **轮 A 补齐**（badges.consultPendingOps + refreshConsultBadge） |
+| review 导航会诊红徽标（待我（本科室）意见的 consult 数） | views_assist.js `updateConsultBadge/refreshConsultBadge` | ✅ badges.consultPendingOps + refreshConsultBadge（轮 A 补齐） |
 | 角标 60s 定时轮询 | 无（legacy 仅登录/切视图刷新） | ✅ AppShell.vue（增强项，超出 legacy） |
 | 聊天输入草稿跨视图保留 | views_assist.js `chatInput` | ✅ KeepAlive（AppShell include 列表，框架级等价） |
 
@@ -25,12 +25,12 @@
 
 | 功能点 | legacy 位置 | Vue 实现状态 |
 |---|---|---|
-| hero 欢迎语（欢迎回来，X + 边界文案） | views_core.js `loadOverview` | ❌ 缺失 → **轮 A 补齐** |
+| hero 欢迎语（欢迎回来，X + 边界文案） | views_core.js `loadOverview` | ✅ OverviewView.vue（`ov-hero`） |
 | 5 指标卡（待双人核对/已处理核对/知识库文档/近期事件/系统版本） | views_core.js `loadOverview` stats | ✅ OverviewView.vue（轮1 简版）→ **轮 A 重写完整** |
-| 知识库文档数 sentinel（kb_docs=-1 显示「…」可刷新重试） | views_core.js `fmtCnt` | ❌ 缺失 → **轮 A 补齐** |
-| 最近活动 feed（humanizeAudit 人话 + actor + ts） | views_core.js `loadOverview` acts | ❌ 缺失 → **轮 A 补齐**（utils/audit.js humanizeAudit 已具备） |
-| 快速进入列表（按角色过滤 6 项：literature/rx/imaging/case/mdt/qc） | views_core.js `loadOverview` quick | ❌ 缺失 → **轮 A 补齐** |
-| 过时「迁移轮1/过渡期」文案清理 | 无（Vue 轮1 占位自造） | ❌ → **轮 A 移除** |
+| 知识库文档数 sentinel（kb_docs=-1 显示「…」可刷新重试） | views_core.js `fmtCnt` | ✅ OverviewView.vue（sentinel → 「…」） |
+| 最近活动 feed（humanizeAudit 人话 + actor + ts） | views_core.js `loadOverview` acts | ✅ OverviewView.vue（`ov-recent` + utils/audit.js） |
+| 快速进入列表（按角色过滤 6 项：literature/rx/imaging/case/mdt/qc） | views_core.js `loadOverview` quick | ✅ OverviewView.vue（`ov-quick`） |
+| 过时「迁移轮1/过渡期」文案清理 | 无（Vue 轮1 占位自造） | ✅ 已移除（e2e 断言无该文案） |
 
 ## C. 临床助手
 
@@ -50,8 +50,8 @@
 | MDT 多智能体会诊（病例+附图 → /mdt/consult → 结论卡/紧急度/建议先做/小结/各专科意见） | views_assist.js `runMdt/renderMdt/urgencyPill` | ✅ ConsultView.vue（mdt） |
 | 发起真实跨科室会诊（AI 底稿随单+附图+确认弹条+成功清空） | views_assist.js `startRealConsult` | ✅ ConsultView.vue |
 | 我的会诊（三段式详情 splitConsultQuestion/splitAiByDept+缩略图+结束会诊+参与过列表） | views_assist.js `loadMyConsults/consultDetailBlocks/closeConsult` | ✅ ConsultView.vue（myconsults） |
-| 会诊收件箱 = 审核中心第三栏「其它科室会诊协助」（doctor/pharmacist；GET /consults/inbox 列表+受邀科室+发起人+意见表单+提交 POST /consults/{id}/opinion） | views_assist.js `loadConsultInbox/renderConsultInbox/submitOpinion` | ❌ 缺失 → **轮 A 补齐**（ReviewCenterView 第四 tab「会诊协助」） |
-| 收件箱 tab 角标（本科室未提交意见数；科室一票口径 o.dept===meDept） | views_assist.js `updateConsultBadge` | ❌ 缺失 → **轮 A 补齐**（与侧边栏红徽标同源） |
+| 会诊收件箱 = 审核中心第三栏「其它科室会诊协助」（doctor/pharmacist；GET /consults/inbox 列表+受邀科室+发起人+意见表单+提交 POST /consults/{id}/opinion） | views_assist.js `loadConsultInbox/renderConsultInbox/submitOpinion` | ✅ ReviewCenterView.vue（会诊协助 tab，轮 A 补齐） |
+| 收件箱 tab 角标（本科室未提交意见数；科室一票口径 o.dept===meDept） | views_assist.js `updateConsultBadge` | ✅ badges.consultPendingOps（与侧边栏红徽标同源） |
 
 ## E. 质控与审核中心
 
@@ -82,7 +82,7 @@
 | 基础设施只读卡（milvus/pg 状态+复制命令不代执行） | views_admin.js `loadData` infraRows | ✅ DataView.vue |
 | 应用日志健康卡（行数 1~500/等级行高亮/元数据行） | views_admin.js `loadAppLogs/fmtLogSize/hlLogLevels` | ✅ DataView.vue |
 | 模型配置（chat/vision 列表+测试/新增/激活/回退内置/删除） | views_admin.js `renderLlm/llmTest/llmSave/llmActivate/llmDeactivate/llmDel` | ✅ DataView.vue |
-| 架构·合规视图（六层架构流/RAG 反幻觉四闸/人机协同双人核对/合规红线，静态四卡） | index.html `#scr-arch` 静态区块 | ❌ 占位 → **轮 A 补齐 ArchView.vue** |
+| 架构·合规视图（六层架构流/RAG 反幻觉四闸/人机协同双人核对/合规红线，静态四卡） | index.html `#scr-arch` 静态区块 | ✅ ArchView.vue（轮 A 补齐） |
 
 ## 轮 A 补齐清单（❌ → ✅）
 
@@ -104,6 +104,18 @@
 - pharmacist：审核中心断言「其它科室会诊协助」tab 可见（且无病例库 tab）。
 - admin：打开「架构 · 合规」断言四卡标题；审核中心断言无「其它科室会诊协助」tab。
 
+Agent 域追加（2026-11-07，评审 04-S10）：
+
+- G1 `test_agent_ask_view_renders_without_llm`（doctor01）：/ask 渲染输入框、免责条、
+  空态「怎么用」、发送按钮与能力域标签；**不发送提问**，断言无流式占位。
+- G2 `test_agent_console_cards_visible`（admin01）：Agent 控制台五张关键卡片
+  （`agent-flags`/`agent-route`/`agent-consult`/`agent-skills`/`agent-bots`）可见，
+  且无 JS console 错误（资源加载类 404 不计）。
+
+> 说明：e2e 需本地服务 127.0.0.1:8001 与 playwright；缺任一条件自动 skip，不计入全量
+> pytest 的 passed 数。矩阵中 Agent 域的"人工浏览器"结论仍保留，不因为加了冒烟就改写成
+> "全自动验收"。
+
 轮 A 验收结果：e2e 9/9 通过（tests/e2e 全目录）；全量 pytest 710 passed（基线 707 + 本轮 3）。
 
 ## Agent 域前端登记（G86–G105，2026-11-06 评审 M-60 补录）
@@ -122,5 +134,7 @@
 | 医生端统一问答 `/ask`（能力域选择、技能卡勾选、多轮上下文、SSE 流式、**截断标注**） | `frontend-vue/src/views/AskView.vue` | **API 冒烟可复跑**：`python scripts/e2e/agent_ask_stream_smoke.py`（校验 meta→delta*→done 与 done 完整性）；页面渲染为人工浏览器（无脚本） |
 | 技能使用率卡片（问答数/成功率/耗时/技能命中） | `AgentView.vue` | pytest `tests/test_skill_usage.py`、`tests/test_consult_metrics.py` |
 
-**仍缺（登记待补，不夸大）**：`AgentView.vue` / `AskView.vue` 的 Playwright 浏览器断言（元素可见、console 错误为 0）。
-现有 `tests/e2e/test_vue_parity.py` 覆盖的是病例/概览/审核中心/架构，**不含**本表页面。
+**补充（2026-11-07，评审 04-S10）**：已为 `AskView`（渲染要素、不触发 LLM）与
+`AgentView`（五张关键卡片 + 无 JS console 错误）补 Playwright 冒烟，见上文 G1/G2。
+仍缺：Agent 控制台**交互链路**（开关切换、送审/审核、协作执行）的浏览器断言——
+这些涉及真实模型调用与状态变更，当前只由后端 pytest + 人工浏览器覆盖。

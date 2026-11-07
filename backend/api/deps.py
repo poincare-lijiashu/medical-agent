@@ -164,3 +164,18 @@ def rate_limit(request: Request):
     """按登录用户或 IP 的滑动窗口限流；超限 429。"""
     if not allow(_identity(request), limit=settings.rate_limit_per_min, window=60):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+
+
+def model_quota(request: Request):
+    """模型调用类端点专用配额（评审 03-S8）。
+
+    与通用请求限流分开计：通用限流防的是"刷接口"，这里防的是"单用户把模型算力吃满"。
+    默认 ``AGENT_MODEL_QUOTA_PER_MIN=30``；设为 0 可关闭（不建议生产关闭）。
+    仅作用于真正调用模型的端点（consult/stream、second-opinion、协作、工具循环）。
+    """
+    limit = int(settings.agent_model_quota_per_min or 0)
+    if limit <= 0:
+        return
+    if not allow("model:" + _identity(request), limit=limit, window=60):
+        raise HTTPException(status_code=429,
+                            detail="模型调用配额已用尽（每分钟），请稍后再试")

@@ -31,7 +31,7 @@ export const NAV_GROUPS = [
 export const ROLE_NAV = {
   doctor: ['overview', 'ask', 'literature', 'rx', 'imaging', 'case', 'mdt', 'myconsults', 'qc', 'review'],
   pharmacist: ['overview', 'ask', 'literature', 'rx', 'qc', 'review'],
-  admin: ['overview', 'kb', 'qc', 'review', 'data', 'agent', 'arch'],
+  admin: ['overview', 'ask', 'kb', 'qc', 'review', 'data', 'agent', 'arch'],
   qc: ['overview', 'ask', 'literature', 'rx', 'qc', 'review'],
 }
 

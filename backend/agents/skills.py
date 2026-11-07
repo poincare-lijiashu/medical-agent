@@ -198,7 +198,12 @@ def _validate(payload: dict, current: dict | None = None) -> dict:
 
 
 def list_skills(role: str, status: str | None = None, agent_id: str | None = None) -> list[dict]:
-    """列表：普通角色只看 PUBLISHED；admin/qc 可看全部并可按状态/智能体过滤。"""
+    """列表：普通角色只看 PUBLISHED；admin/qc 可看全部并可按状态/智能体过滤。
+
+    评审 03-S10：普通角色还要按**能力域角色**过滤（与 `catalog_payload` 同一口径），
+    否则药师能看到影像/会诊域的技能卡，进而选进团队驱动越权能力域。
+    admin/qc 仍看全部（审核需要跨能力域可见）。
+    """
     items = _load()
     privileged = role in ("admin", "qc")
     if not privileged:
@@ -209,6 +214,10 @@ def list_skills(role: str, status: str | None = None, agent_id: str | None = Non
             continue
         if agent_id and item.get("agentId") != agent_id:
             continue
+        if not privileged:
+            spec = catalog.get_agent(item.get("agentId") or "")
+            if spec is None or role not in spec.roles:
+                continue
         out.append(item)
     out.sort(key=lambda i: (i.get("status") != "PUBLISHED", i.get("code")))
     return out

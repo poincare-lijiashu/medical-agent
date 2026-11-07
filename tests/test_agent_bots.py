@@ -178,6 +178,15 @@ def test_publish_rejects_bot_when_default_provider_is_noncompliant(monkeypatch):
     assert published["status"] == "PUBLISHED"
 
 
+def test_list_bots_filters_by_agent_roles():
+    """评审 03-S10：普通角色看不到不属于自己能力域的 Bot（避免越权组合前置条件）。"""
+    _published_bot("lit-bot")
+    _published_bot("img-bot", agentId="imaging", persona="你是影像结构化助手，输出所见并提示医师复核，不做诊断结论。")
+    assert {b["code"] for b in bots.list_bots("pharmacist")} == {"lit-bot"}
+    assert {b["code"] for b in bots.list_bots("doctor")} == {"lit-bot", "img-bot"}
+    assert {"lit-bot", "img-bot"} <= {b["code"] for b in bots.list_bots("admin")}
+
+
 def test_disabled_team_can_be_reenabled():
     _published_bot("team-a")
     _published_bot("team-b")

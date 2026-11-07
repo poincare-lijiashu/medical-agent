@@ -185,6 +185,22 @@ def test_list_visibility_and_filters():
         skills.get_skill("draft-one", "doctor")
 
 
+def test_list_filters_by_agent_roles_for_normal_roles():
+    """评审 03-S10：普通角色只看自己能力域的已发布技能卡（与 catalog 同口径）。"""
+    lit = _created("lit-visible")
+    skills.submit_skill("lit-visible", lit["rowVersion"], "admin01")
+    skills.review_skill("lit-visible", True, None, 1, "qc01")
+    img = _created("img-hidden", agentId="imaging", name="影像结构化所见",
+                   description="影像结构化描述技能卡的说明文本，供医师复核后使用。")
+    skills.submit_skill("img-hidden", img["rowVersion"], "admin01")
+    skills.review_skill("img-hidden", True, None, 1, "qc01")
+
+    assert {s["code"] for s in skills.list_skills("pharmacist")} == {"lit-visible"}
+    assert {s["code"] for s in skills.list_skills("doctor")} == {"lit-visible", "img-hidden"}
+    admin = {s["code"] for s in skills.list_skills("admin")}
+    assert {"lit-visible", "img-hidden"} <= admin
+
+
 def test_published_for_agent():
     _created("pub-one")
     skills.submit_skill("pub-one", 0, "admin01")

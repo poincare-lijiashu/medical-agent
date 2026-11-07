@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     # 每分钟次数，管不住"60 条长连接同时占着模型连接"；这里给并发一个硬上限。
     # 多副本部署时实际上限 = 本值 × 副本数，需按模型侧配额合计评估。
     agent_stream_max_concurrent: int = 16
+    # 评审 03-S8：模型调用类端点的**每用户每分钟**配额（与通用请求限流分开计）。
+    # 0 表示关闭（不建议生产关闭）；默认 30 次/分钟/用户。
+    agent_model_quota_per_min: int = 30
     # Prometheus 抓取专用静态令牌（G105）：设置后 /metrics 接受
     # `Authorization: Bearer <METRICS_TOKEN>`，无需交互式 admin JWT；
     # 留空则不开放该通道（仍只允许 admin 登录态读取）。生产用随机长串并只挂到

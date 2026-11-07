@@ -198,11 +198,24 @@ def _validate(payload: dict, current: dict | None = None) -> dict:
 
 
 def list_bots(role: str, status: str | None = None) -> list[dict]:
+    """列表：普通角色只看 PUBLISHED 且**能力域角色允许**的 Bot（评审 03-S10）。
+
+    与 `catalog_payload` 同一口径：能看到 = 能选进团队；只按发布状态过滤会让
+    药师看到影像/会诊域的 Bot，为越权组合提供前置条件。
+    """
     items = _load()
     privileged = role in ("admin", "qc")
     if not privileged:
         status = "PUBLISHED"
-    out = [i for i in items if not status or i.get("status") == status]
+    out = []
+    for item in items:
+        if status and item.get("status") != status:
+            continue
+        if not privileged:
+            spec = catalog.get_agent(item.get("agentId") or "")
+            if spec is None or role not in spec.roles:
+                continue
+        out.append(item)
     out.sort(key=lambda i: (i.get("status") != "PUBLISHED", i.get("code")))
     return out
 

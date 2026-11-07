@@ -28,7 +28,7 @@ from backend.agents import catalog, consult, consult_metrics, model_policy, seco
 from backend.agents import skill_ops, skill_trends, skill_usage, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
-from backend.api.deps import rate_limit, require_role, require_user
+from backend.api.deps import model_quota, rate_limit, require_role, require_user
 from backend.config import settings
 from backend.core import agent_flags, agent_tools, web_sources
 
@@ -220,7 +220,7 @@ class ConsultReq(BaseModel):
         return [t.model_dump() for t in self.history] if self.history else None
 
 
-@router.post("/consult")
+@router.post("/consult", dependencies=[Depends(model_quota)])
 async def agent_consult(req: ConsultReq, user: dict = Depends(require_user)):
     """统一问答：规则路由 + 已发布技能卡生效 + 合规模型；只读、仅建议。"""
     started = time.perf_counter()
@@ -283,7 +283,7 @@ async def _audit_stream_failure(user: dict, req: "ConsultReq", reason: str,
         "ms": int((time.perf_counter() - started) * 1000)})
 
 
-@router.post("/consult/stream")
+@router.post("/consult/stream", dependencies=[Depends(model_quota)])
 async def agent_consult_stream(req: ConsultReq, request: Request,
                                user: dict = Depends(require_user)):
     """统一问答（SSE 流式）：meta → delta* → done。
@@ -783,7 +783,7 @@ async def enable_bot_team(code: str, req: SkillVersionReq,
     return item
 
 
-@router.post("/bot-teams/{code}/collaborate")
+@router.post("/bot-teams/{code}/collaborate", dependencies=[Depends(model_quota)])
 async def collaborate(code: str, req: CollaborateReq, user: dict = Depends(require_user)):
     """团队协作：各 Bot 并行作答、失败隔离；结果并列展示，需人工复核。
 
@@ -844,7 +844,7 @@ async def web_policy(user: dict = Depends(require_user)):
     return {"enabled": agent_flags.get_flag("agent_web_search"), **web_sources.describe()}
 
 
-@router.post("/second-opinion")
+@router.post("/second-opinion", dependencies=[Depends(model_quota)])
 async def run_second_opinion(req: SecondOpinionReq, user: dict = Depends(require_user)):
     """双模型第二意见：仅国产/本地模型；意见并列 + 启发式差异信号。
 
@@ -1100,7 +1100,7 @@ def bot_impact(code: str, user: dict = Depends(require_role("admin", "qc"))):
 
 # ---------------------------------------------------------------- 有界工具循环（G91）
 
-@router.post("/bots/{code}/tool-loop")
+@router.post("/bots/{code}/tool-loop", dependencies=[Depends(model_quota)])
 async def bot_tool_loop(code: str, req: ToolLoopReq, user: dict = Depends(require_user)):
     """Bot 在硬边界内多步调用工具：≤3 步、≤3 次调用、≤60s，每步审计。"""
     role = user.get("role", "")

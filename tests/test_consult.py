@@ -294,6 +294,22 @@ def _login(c, u, p="Med@2026"):
     return r.json()["access_token"]
 
 
+def test_model_quota_per_user(monkeypatch, tmp_path):
+    """评审 03-S8：模型调用类端点有独立的每用户每分钟配额（与通用限流分开）。"""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "agent_model_quota_per_min", 1)
+    c, _ = _client(monkeypatch, tmp_path)
+    h = {"Authorization": "Bearer " + _login(c, "doctor01")}
+
+    first = c.post("/api/v1/agent/consult", headers=h,
+                   json={"question": "药物相互作用"})
+    assert first.status_code != 429   # 第一次放行（业务结果可能因无 provider 而 503）
+    second = c.post("/api/v1/agent/consult", headers=h,
+                    json={"question": "药物相互作用"})
+    assert second.status_code == 429
+    assert "配额" in second.json()["detail"]
+
+
 def test_consult_requires_auth(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
     assert c.post("/api/v1/agent/consult", json={"question": "药物相互作用"}).status_code == 401

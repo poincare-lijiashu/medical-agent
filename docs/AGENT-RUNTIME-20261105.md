@@ -1061,3 +1061,29 @@ admin 可见完整主机。
 说明"是哪两个模型"）；09/03 分册中其它 Should（如 `/a2a` 每用户模型配额）未在本批处理。
 
 **验证**：全量 pytest **1095 passed / 11 skipped**。
+
+---
+
+## 28. 2026-11-06 评审整改（第 24 批：角色维度可见性、模型配额与前端验收锚点）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 03-S10 | `skills.list_skills` / `bots.list_bots` 对普通角色增加**能力域角色维度**过滤（与 `catalog_payload` 同一口径）：药师不再看到影像/会诊域的技能卡与 Bot（这正是"能看见→能选→能驱动"越权组合的前置条件）。admin/qc 仍看全部（审核需跨域） | `skills.py`、`bots.py` |
+| 03-S8 | 新增 `model_quota` 依赖与 `AGENT_MODEL_QUOTA_PER_MIN`（默认 30/分钟/用户）：只作用于真正调用模型的端点（`/consult`、`/consult/stream`、`/second-opinion`、协作、工具循环），与通用请求限流分开计；超限 429 | `api/deps.py`、`config.py`、`agent_router.py` |
+| 04-S6 | 侧边栏 `ROLE_NAV.admin` 增加 `ask`：后端对 admin 开放 `/consult`，前端必须有入口（管理员可端到端自检技能卡效果） | `constants/nav.js` |
+| 04-S10 | `docs/qa/vue_parity_matrix.md`：把轮 A 已补齐的 ❌ 全部回填为 ✅（A-10/B 全部/D-4/D-5/F-8），新增 Agent 域 Playwright 冒烟锚点（G1/G2）与"仍缺交互链路"的如实说明；新增 e2e：AskView 渲染要素（**不触发 LLM**）、AgentView 五张关键卡片可见且无 JS console 错误 | 矩阵文档、`tests/e2e/test_vue_parity.py` |
+
+**为什么这样改**：可见性就是权限的一部分——能看见不该看见的能力域，用户就会尝试选它，
+越权组合从"选不进"变成"选得进"。模型配额则解决"通用限流 60/min 仍可把 60 次全用在
+最贵的模型调用上"的问题。矩阵回填是兑现"❌ 全部补齐后本表应全绿"的承诺，不再让文档
+与代码互相矛盾。
+
+**新增测试**：`skills`/`bots` 角色过滤（药师看不到 imaging 域）；`/consult` 配额第二次 429；
+`nav.js` admin 含 ask 的标记测试；两条 Playwright 冒烟（无服务/无 playwright 时 skip）。
+
+**仍存边界**：配额是**进程内**滑动窗口，多副本按副本数放大，且不跨重启累计；
+角色过滤只覆盖列表接口，`GET /agent/skills/{code}` 仍按"存在即返回（普通角色限 PUBLISHED）"——
+直接按 code 访问跨域技能卡仍可见（不可用，`consult` 会以角色/能力域校验拒绝）；
+Playwright 冒烟只在本地起服务且装 playwright 时执行，CI 默认 skip（13 skipped 中的 2 条）。
+
+**验证**：全量 pytest **1099 passed / 13 skipped**；`npm run build` 成功。

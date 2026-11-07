@@ -159,3 +159,9 @@ def test_ask_view_history_keeps_complete_pairs():
     body = _read(ASK)
     assert "pairs.slice(-3)" in body
     assert "kept.flat()" in body
+
+
+def test_admin_has_ask_entry():
+    """评审 04-S6：后端对 admin 开放 /consult，前端侧边栏必须有入口（否则只能用 URL 硬进）。"""
+    nav = _read(os.path.join(REPO, "frontend-vue", "src", "constants", "nav.js"))
+    assert "admin: ['overview', 'ask'" in nav
