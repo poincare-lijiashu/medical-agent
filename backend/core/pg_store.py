@@ -263,6 +263,24 @@ def available() -> bool:
     return _pool is not None
 
 
+def storage_status() -> dict:
+    """进程内存储真源状态（只读；不含连接串/凭据/账号）。
+
+    ``mode``：
+    - ``offline``：``PG_OFFLINE=on``，JSON 是唯一真源（脚本/单测）；
+    - ``pg``：池已建立，读走 PG 真源；
+    - ``json-fallback``：未显式离线但池不可用（掉线/初始化失败），读回落 JSON。
+
+    ``staleDomains``：本进程内"PG 写失败 → 读回落 JSON"的域（文件名）。
+    这是多副本漂移的早期信号——单实例仍能读写，但其它实例看不到这些域的写入。
+    """
+    return {
+        "mode": "offline" if offline_mode() else ("pg" if _pool else "json-fallback"),
+        "ready": _pool is not None,
+        "staleDomains": sorted(_repo_pg_stale),
+    }
+
+
 async def ping() -> bool:
     """只读连通性探针（admin 运维卡片用）：SELECT 1，任何异常/未建池一律 False。
     绝不写库、绝不重试（面板展示需快速失败），与 mirror_* 的 best-effort 写路径互不影响。"""

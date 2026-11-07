@@ -239,7 +239,9 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     return {"users": users, "audit_recent": audit_recent, "review": stats,
             "pg_counts": pg_counts, "kb_docs": await asyncio.to_thread(doc_count),
             "events_total": len(al.entries), "device": device(), "uptime_s": int(time.time() - _START),
-            "infra": {"milvus": milvus, "pg": {"ok": pg_ok}},
+            "infra": {"milvus": milvus, "pg": {"ok": pg_ok},
+                      # 第 47 批：模式 + 按域 stale（写失败回落 JSON）——多副本漂移早期信号
+                      "storage": pg_store.storage_status()},
             # 任务3：admin「留痕模式」开关卡数据源（runtime_flags 优先，运行时切换即时反映）
             "flags": {"qc_auto_sign_full": runtime_flags.full_mode()}}
 

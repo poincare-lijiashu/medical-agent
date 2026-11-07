@@ -1714,6 +1714,39 @@ Should（读当前代码确认，不新增业务逻辑）：
 - `/admin/data` 聚合用户/审计/队列等只读查询，自检调用有一次额外成本（可接受，非抓取路径）；
 - 本地开发无 PG 属预期，默认不要求；是否开启由部署方显式决定。
 
+---
+
+## 51. 2026-11-08 上线准备（第 47 批：按域 stale 暴露与门禁）
+
+**接上批的边界**：`storage.pg` 只做 `SELECT 1`；"某个域写 PG 失败 → 本进程读回落 JSON"
+仍不可见——这正是多副本互相看不到写入的早期状态。
+
+**修复**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `storage_status()`：`mode`（offline / pg / json-fallback）、`ready`、`staleDomains`（本进程内写失败回落的域，排序）；只读快照，不含 DSN/凭据 |
+| `backend/api/v1/medical/admin.py` | `/medical/admin/data` 的 `infra.storage` 返回上述快照（admin 只读） |
+| `scripts/agent_go_live_check.py` | 新增 `storage.domains`：`--require-pg` 时 stale 非空即失败；默认仅展示 |
+| `docs/OPERATIONS.md` | 多副本说明补 `storage.domains` |
+| `tests/test_pg_repo.py`、`tests/test_go_live_check.py` | 新增 2 项：模式/stale 快照语义；require-pg 下 stale 域必须失败、默认不失败 |
+
+**真实验证（PG 未启动，同一实例）**
+| 模式 | 输出 | 结论 |
+|---|---|---|
+| 默认 | `PASS storage.pg … pg=False`；`PASS storage.domains mode=json-fallback stale=1:sleep_memory_reports.json` | 仅展示；总 FAIL(1)（缺合规 provider） |
+| `--require-pg` | `FAIL storage.pg … require=True`；`FAIL storage.domains … stale=1:…` | 门禁生效；总 FAIL(3) |
+
+说明：实测中睡眠扫描写报告触发 PG 写失败，`staleDomains` 立即出现该域——这不是造数据，
+而是本批要抓的真实漂移信号。
+
+**测试**：定向 **60 passed**；全量 pytest **1124 passed / 43 skipped**
+（Docker 不可用，28 项 PG 用例按设计 skip）。
+
+**仍存边界**：
+- stale 是**进程内**集合，不跨副本聚合；多副本需各自被自检（或后续接集中式指标）；
+- 清除依赖该域下一次成功写（设计如此），没有"强制重试/清空"入口；
+- 管理端 UI 暂未渲染 `infra.storage`（仅 API 与自检消费），可视化留待前端批次。
+
 
 
 

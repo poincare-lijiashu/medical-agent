@@ -240,3 +240,30 @@ def test_require_pg_gate(monkeypatch):
     assert mod.run("http://example", "admin01", "secret", 1.0, require_pg=True) == 1
     state["pg"] = True
     assert mod.run("http://example", "admin01", "secret", 1.0, require_pg=True) == 0
+
+
+def test_require_pg_fails_on_stale_domain(monkeypatch):
+    """按域 stale（写失败回落 JSON）在多副本下是漂移信号：require-pg 时必须失败。"""
+    def fake(base, path, method="GET", token=None, body=None, timeout=15.0, cookie=None):
+        if path == "/api/v1/auth/login":
+            return 200, json.dumps({"access_token": "t"}), {}
+        if path == "/api/v1/medical/admin/data":
+            return 200, json.dumps({"infra": {
+                "pg": {"ok": True},
+                "storage": {"mode": "pg", "ready": True,
+                            "staleDomains": ["queue.json"]}}}), {}
+        if path.endswith("/model-policy"):
+            return 200, json.dumps({"allowed": [{"id": "local", "class": "local"}]}), {}
+        if path.endswith("/web-policy"):
+            return 200, json.dumps({"enabled": False, "allowedDomains": [
+                "nhc.gov.cn", "nmpa.gov.cn", "pubmed.ncbi.nlm.nih.gov"]}), {}
+        if path == "/metrics":
+            return 200, _all_metrics_text(), {}
+        if path.endswith("/prometheus"):
+            return 200, "\n".join(f"{m} 0" for m in mod._SKILL_METRICS), {}
+        return 200, "{}", {}
+
+    monkeypatch.setattr(mod, "_request", fake)
+    assert mod.run("http://example", "admin01", "secret", 1.0, require_pg=True) == 1
+    # 默认仅展示：stale 不会让本地/单实例环境假红
+    assert mod.run("http://example", "admin01", "secret", 1.0) == 0

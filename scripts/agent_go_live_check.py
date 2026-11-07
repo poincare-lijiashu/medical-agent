@@ -286,6 +286,14 @@ def run(base_url: str, username: str, password: str, timeout: float,
     pg_ok = bool((infra.get("pg") or {}).get("ok"))
     results.append(("storage.pg", status == 200 and (pg_ok or not require_pg),
                     f"http={status} pg={pg_ok} require={require_pg}"))
+    if status == 200:
+        storage = infra.get("storage") or {}
+        stale = list(storage.get("staleDomains") or [])
+        detail = f"mode={storage.get('mode') or '?'} stale={len(stale)}"
+        if stale:
+            detail += ":" + ",".join(stale[:5]) + ("..." if len(stale) > 5 else "")
+        # 按域 stale = 本进程写 PG 失败、读回落 JSON；多副本下别的实例看不到这些写入
+        results.append(("storage.domains", not stale or not require_pg, detail))
 
     failed = _print(results)
     print("----------------------------------------")

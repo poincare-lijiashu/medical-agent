@@ -1127,3 +1127,28 @@ def test_all_truth_sources_route_through_atomic_write(tmp_path, monkeypatch):
     pg_store.save_case_archive([{"id": "arch-1", "archived_at": "t"}], ca)
     assert sorted(calls) == sorted([q, u, c, r, d, rl, l, dp, ca]), \
         "9 个真源写路径必须全部经 _write_json_atomic（问题1 统一检查；阶段4 增病例库）"
+
+
+# ---- 第 47 批：存储状态快照（管理端/上线自检共用，只读、无凭据） ----
+
+def test_storage_status_reports_mode_and_stale_domains(monkeypatch):
+    class _Pool:
+        pass
+
+    monkeypatch.setattr(pg_store, "_pool", None)
+    monkeypatch.setenv("PG_OFFLINE", "on")
+    assert pg_store.storage_status()["mode"] == "offline"
+
+    monkeypatch.delenv("PG_OFFLINE", raising=False)
+    st = pg_store.storage_status()
+    assert st["mode"] == "json-fallback" and st["ready"] is False
+
+    monkeypatch.setattr(pg_store, "_pool", _Pool())
+    pg_store._repo_pg_stale.add("probe.json")
+    try:
+        st = pg_store.storage_status()
+        assert st["mode"] == "pg" and st["ready"] is True
+        assert st["staleDomains"] == ["probe.json"]
+        assert "dsn" not in json.dumps(st).lower()  # 只读快照不得泄露连接串
+    finally:
+        pg_store._repo_pg_stale.discard("probe.json")
