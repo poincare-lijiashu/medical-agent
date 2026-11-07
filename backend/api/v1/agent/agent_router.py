@@ -16,7 +16,7 @@ import json
 import time
 import uuid
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -181,11 +181,27 @@ async def route_preview(req: RouteReq, user: dict = Depends(require_user)):
     return result
 
 
+class HistoryTurn(BaseModel):
+    """多轮上下文单条（评审 S13）：结构白名单，未知字段直接拒绝。
+
+    此前 `list[dict]` 允许客户端塞任意键（并被静默忽略），契约不清晰；
+    这里把 role/content 收紧到与 consult.clean_history 同一口径。
+    """
+
+    model_config = {"extra": "forbid"}
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=2000)
+
+
 class ConsultReq(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     agentId: str | None = Field(default=None, max_length=32)
     skillCodes: list[str] | None = Field(default=None, max_length=8)
-    history: list[dict] | None = Field(default=None, max_length=6)
+    history: list[HistoryTurn] | None = Field(default=None, max_length=6)
+
+    def history_payload(self) -> list[dict] | None:
+        return [t.model_dump() for t in self.history] if self.history else None
 
 
 @router.post("/consult")
@@ -194,7 +210,7 @@ async def agent_consult(req: ConsultReq, user: dict = Depends(require_user)):
     started = time.perf_counter()
     try:
         result = await consult.run(req.question, user.get("role", ""),
-                                   req.agentId, req.skillCodes, req.history)
+                                   req.agentId, req.skillCodes, req.history_payload())
     except consult.ConsultForbidden as e:
         raise HTTPException(403, str(e))
     except consult.ConsultInvalid as e:
@@ -224,7 +240,8 @@ async def agent_consult_stream(req: ConsultReq, user: dict = Depends(require_use
         started = time.perf_counter()
         try:
             async for ev in consult.stream(req.question, user.get("role", ""),
-                                           req.agentId, req.skillCodes, req.history):
+                                           req.agentId, req.skillCodes,
+                                           req.history_payload()):
                 if ev.get("type") == "done":
                     await _audit_agent(user, "agent_consult_stream", {
                         "agentId": ev["agent"]["id"],
@@ -305,7 +322,8 @@ async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
     try:
         value = agent_flags.set_flag(req.key, req.value)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        # 评审 S1：请求参数语义非法统一 422（此前此处 400、日期非法 422）
+        raise HTTPException(422, str(e))
     from backend.api.v1.medical import shared as _shared
     await asyncio.to_thread(
         _shared.get_audit_logger().write,

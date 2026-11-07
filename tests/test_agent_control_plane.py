@@ -333,8 +333,9 @@ def test_flags_admin_only_and_toggle(monkeypatch, tmp_path):
               json={"key": "agent_web_search", "value": True})
     assert r.status_code == 200 and r.json()["value"] is True
     assert agent_flags.get_flag("agent_web_search") is True
+    # 评审 S1：非法开关键属于请求体语义错误，统一归一到 422（与其它入参校验一致）
     assert c.put("/api/v1/agent/flags", headers=adm,
-                 json={"key": "nope", "value": True}).status_code == 400
+                 json={"key": "nope", "value": True}).status_code == 422
 
 
 def test_a2a_message_send(monkeypatch, tmp_path):

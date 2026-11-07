@@ -785,3 +785,25 @@ S7/S8（A2A 拓扑与 DoS，M-12 已关默认开关）、S12（快照覆盖历�
 按优先级后续处理。
 
 **验证**：全量 pytest **1046 passed / 11 skipped**。
+
+---
+
+## 17. 2026-11-06 评审整改（第 13 批：错误码归一 + 多轮上下文结构白名单）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| S1 | `PUT /agent/flags` 非法开关键由 **400 归一为 422**：属于请求体语义校验失败，与全站其它入参校验（`ConsultReq.question` 长度、`skillCodes` 条数等）保持同一错误码口径，前端只需处理一种校验失败 | `agent_router.py` |
+| S13 | `history` 由 `list[dict]` 改为**结构白名单** `list[HistoryTurn]`：`model_config = {"extra": "forbid"}` 拒绝未知字段；`role` 限定 `Literal["user","assistant"]`（`system` 角色注入直接 422）；`content` 1–2000 字符；条数上限 6 保持。原样透传改为 `ConsultReq.history_payload()`，`/consult` 与 `/consult/stream` 共用一份收敛结果 | `agent_router.py` |
+
+**为什么这样改**：多轮上下文此前是"任意 dict 直通车"，客户端可塞入 `role=system` 或任意附加字段，
+配合提示词注入尝试绕过系统级边界（M-05 的保留标记中和只解决了文本层，没解决结构层）。结构白名单让
+非法形态在入口即被拒绝，运行时不需再做"防御性猜测"。
+
+**新增测试**：`test_agent_control_plane.py` 非法开关键断言改 422；
+`test_consult.py::test_history_payload_rejects_unknown_fields`（未知字段 / `system` 角色 / 空 content → 422）、
+`::test_history_payload_passed_through`（合法 history 透传给 `consult.run`）。
+
+**仍存边界**：`history` 仍是"客户端自报"，服务端不校验其与上一轮真实会话一致（无会话存储）；
+单条 2000 字符上限只约束单条，总量由条数 × 单条上限间接约束（未单独设总预算）。
+
+**验证**：全量 pytest **1048 passed / 11 skipped**。
