@@ -2467,6 +2467,35 @@ uvicorn `--reload`、或测试里反复 `TestClient` 进出 lifespan，都会不
 - `aclose_http_clients()` 内部异常被 lifespan 吞掉（只保证不阻断下线），若真实环境里
   close 抛错，只能靠日志缺失发现（未加失败日志）。
 
+---
+
+## 69. 2026-11-08 上线准备（第 65 批：PubMed 熔断改为连续失败计数）
+
+**来源**：`docs/HANDOFF.md`「剩余 backlog」里的
+`PubMed 熔断是全局共享，单点失败会全员降级（应改失败计数）`。
+
+**问题**（`backend/agents/medical/literature/nodes.py`）：`_pubmed_ids` 里
+`except Exception: _PUBMED_BREAKER_UNTIL = now + 300`——**任意一次**异常（DNS 抖动、
+一次超时、偶发坏 JSON）都会让**所有用户**在 5 分钟内完全跳过 PubMed 检索。
+熔断是模块级全局变量，没有"连续失败"概念。
+
+**修复**
+| 变更 | 说明 |
+|---|---|
+| `_PUBMED_FAIL_STREAK` + `_PUBMED_FAIL_THRESHOLD=3` | 连续失败 3 次才熔断（5 分钟冷却不变） |
+| `_pubmed_note_failure()` | 累计失败；达阈值才置 `_PUBMED_BREAKER_UNTIL`，并把计数归零重新累计；同时记 `pubmed.breaker_open` |
+| `_pubmed_note_success()` | 成功后清零（抖动不累积） |
+| `tests/test_pubmed_breaker.py` | 4 项：单次/两次失败不熔断；第 3 次熔断且熔断期内**不再发请求**；中间成功清零；`PUBMED_ENABLED=false` 连请求都不发 |
+
+**测试**：定向 **4 passed**；全量 pytest **1208 passed**（1204 + 本批 4 项）。
+
+**仍存边界**
+- 熔断仍是**进程级全局**（不是按用户/按查询），多 worker 下每个进程各自计数——这是原设计，
+  本批只改了"何时熔断"，没改作用域；
+- 阈值 3 次 / 冷却 300s 仍是模块常量，未做成配置项；
+- 没有"半开"状态（冷却到期直接放行，不试探性放一个请求）；
+- 未在真实断网环境演练（只做了单测级注入）。
+
 
 
 

@@ -1774,7 +1774,8 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
   `aclose_http_clients()` 下线关闭 + 清模型缓存，`http_clients()` 关闭后自动重建；
   接线由 `tests/test_llm_http_clients.py` 锁定（真实 SIGTERM 演练未做）
 - preview/delete 的 tag 清洗仍可在用户改名上传时存在残留（已统一白名单但旧 tag 可能已损坏）
-- PubMed 熔断是全局共享，单点失败会全员降级（应改失败计数）
+- ~~PubMed 熔断是全局共享，单点失败会全员降级（应改失败计数）~~ ✅ 已修（第 65 批，2026-11-08）：
+  改为连续 3 次失败才熔断、成功即清零；4 项单测锁定（tests/test_pubmed_breaker.py）
 
 ## 关键事实
 - 服务健康检查 http://127.0.0.1:8001/healthz；重启前先 kill 8001 LISTENING PID

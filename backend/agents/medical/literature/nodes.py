@@ -56,14 +56,35 @@ class AgenticDecision(BaseModel):
     reason: str = ""
 
 
-# PubMed 熔断：连接失败/超时后短时间内不再尝试，避免每个问题挂 10s
+# PubMed 熔断：连续失败达到阈值后短时间内不再尝试，避免每个问题挂 10s。
+# 第 65 批：原实现"**任一** 异常立刻全局熔断 5 分钟"——一次网络抖动/DNS 抖动会让
+# **所有用户**整整 5 分钟检索不到文献（单点失败全员降级）。改为**连续失败计数**：
+# 连续 N 次失败才熔断，期间成功一次即清零；冷却结束允许重试，再失败重新累计。
 _PUBMED_BREAKER_UNTIL = 0.0  # monotonic 时间戳；0 表示未触发
 _PUBMED_BREAKER_COOLDOWN = 300  # 触发后冷却 5 分钟
+_PUBMED_FAIL_STREAK = 0  # 连续失败次数（成功即清零）
+_PUBMED_FAIL_THRESHOLD = 3  # 连续失败达到该值才熔断
 _PUBMED_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)  # 默认 2s 连 5s 读（网络受限环境）
 
 
+def _pubmed_note_success() -> None:
+    """一次成功即清零连续失败计数（抖动不该累积成熔断）。"""
+    global _PUBMED_FAIL_STREAK
+    _PUBMED_FAIL_STREAK = 0
+
+
+def _pubmed_note_failure() -> None:
+    """记一次失败；连续达到阈值才置冷却，并把计数归零重新累计。"""
+    global _PUBMED_FAIL_STREAK, _PUBMED_BREAKER_UNTIL
+    _PUBMED_FAIL_STREAK += 1
+    if _PUBMED_FAIL_STREAK >= _PUBMED_FAIL_THRESHOLD:
+        _PUBMED_BREAKER_UNTIL = time.monotonic() + _PUBMED_BREAKER_COOLDOWN
+        _PUBMED_FAIL_STREAK = 0
+        logger.warning("pubmed.breaker_open", fails=_PUBMED_FAIL_THRESHOLD,
+                       cooldown_s=_PUBMED_BREAKER_COOLDOWN)
+
+
 async def _pubmed_ids(q: str, k: int = 5):
-    global _PUBMED_BREAKER_UNTIL
     # 离网开关：院内无外网时置 PUBMED_ENABLED=false，直接跳过（连 DNS 都不发）
     if not bool(getattr(settings, "pubmed_enabled", True)):
         return []
@@ -75,10 +96,12 @@ async def _pubmed_ids(q: str, k: int = 5):
                 "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
                 params={"db": "pubmed", "term": q, "retmax": k, "retmode": "json"},
             )
-            return r.json().get("esearchresult", {}).get("idlist", [])
+            ids = r.json().get("esearchresult", {}).get("idlist", [])
     except Exception:  # noqa: BLE001
-        _PUBMED_BREAKER_UNTIL = time.monotonic() + _PUBMED_BREAKER_COOLDOWN
+        _pubmed_note_failure()
         return []
+    _pubmed_note_success()
+    return ids
 
 
 def _strip_md(s: str) -> str:
