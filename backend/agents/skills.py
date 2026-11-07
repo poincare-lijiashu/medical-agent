@@ -23,7 +23,7 @@ import re
 import threading
 from datetime import datetime, timezone
 
-from backend.agents import catalog, guardrails
+from backend.agents import catalog, guardrails, limits
 from backend.core import agent_tools, pg_store
 from backend.core.logger import get_logger
 
@@ -38,7 +38,7 @@ MAX_TOOLS = 8
 MAX_EVIDENCE = 10
 MAX_PROMPT = 4000
 MIN_PROMPT = 20
-MAX_INPUT = 2000
+MAX_INPUT = limits.MAX_INPUT  # 评审 01-S03：与 guardrails / consult 同一口径
 
 _CODE = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 

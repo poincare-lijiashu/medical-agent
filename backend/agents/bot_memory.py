@@ -20,7 +20,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from backend.agents import bots
-from backend.core import pg_store
+from backend.core import pg_store, phi
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,10 +34,7 @@ MAX_VALUE = 500
 REDACTED_VALUE = "[已删除]"
 _KEY = re.compile(r"^[a-z][a-z0-9_.-]{1,63}$")
 
-# 与出网脱敏同口径：这些标识不允许进入长期记忆
-_PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# 与出网脱敏同口径：这些标识不允许进入长期记忆（评审 01-S14：模式统一在 core.phi）
 
 _lock = threading.RLock()
 
@@ -151,7 +148,7 @@ def _validate(payload: dict) -> dict:
     value = str(payload.get("value") or "").strip()
     if not (2 <= len(value) <= MAX_VALUE):
         raise MemoryInvalid(f"记忆内容需 2-{MAX_VALUE} 字")
-    if _PHONE.search(value) or _ID_CARD.search(value) or _EMAIL.search(value):
+    if phi.has_direct_identifier(value):
         raise MemoryInvalid("长期记忆不得包含手机号/身份证/邮箱等可识别个人信息")
 
     source = str(payload.get("source") or "").strip()

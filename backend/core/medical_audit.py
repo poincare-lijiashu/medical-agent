@@ -21,25 +21,8 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 
+from backend.core import phi
 from backend.core.logger import get_logger
-
-_PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_IDCARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")  # 用数字环视，避开中文字符导致 \b 失效
-_MRN = re.compile(r"(?:住院号|病案号|门诊号|就诊号|MRN)\s*[:：]?\s*[A-Za-z0-9\-]{4,}")
-_SOCIAL = re.compile(r"\b\d{3}-\d{4}-\d{4}-\d{1,2}\b")  # 社保卡式(需连字符，保守)
-# 中文姓名：仅上下文锚定（姓名标签引导，或“患者/病人 + 人名 + 性别/年龄”形态特征），
-# 孤立两字词（如症状“胃疼”）绝不误伤。
-_NAME = re.compile(
-    r"(?:患者姓名|病人姓名|医师签名|医师|签名|联系人|姓名)\s*[:：]\s*[\u4e00-\u9fa5·]{2,4}"
-    r"|(?:患者|病人)\s*[\u4e00-\u9fa5·]{2,4}(?=\s*[，,、]\s*(?:男|女|年龄|岁))"
-)
-# 中文地址：住址标签引导，或“行政区 + 道路 + 门牌”形态（省/市/区县 + 路/街/巷/镇等 + 号/栋/室）。
-_ADDR = re.compile(
-    r"(?:家庭住址|住址|地址|现居)\s*[:：]?\s*[\u4e00-\u9fa50-9A-Za-z]{4,40}"
-    r"|[\u4e00-\u9fa5]{2,8}(?:省|自治区)[\u4e00-\u9fa5]{1,8}(?:市|区|县|州)"
-    r"|[\u4e00-\u9fa5]{2,6}(?:市|区|县|旗)[\u4e00-\u9fa5]{1,8}(?:路|街道|街|巷|道|村|镇|小区|大厦|大道)[\u4e00-\u9fa50-9A-Za-z]{0,12}(?:号|栋|幢|单元|室|楼)?"
-)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AUDIT_DIR = os.path.join(BASE_DIR, "data", "audit")
@@ -98,14 +81,8 @@ def current_tool() -> str:
 
 class PHIRedactor:
     def redact(self, text: str) -> str:
-        t = _IDCARD.sub("[REDACTED-ID]", text)
-        t = _MRN.sub("[REDACTED-MRN]", t)
-        t = _EMAIL.sub("[REDACTED-EMAIL]", t)   # 先邮箱，避免手机正则吃掉号码型邮箱前缀
-        t = _PHONE.sub("[REDACTED-PHONE]", t)
-        t = _SOCIAL.sub("[REDACTED-ID]", t)
-        t = _NAME.sub("[REDACTED-NAME]", t)     # 上下文锚定的中文姓名（防误伤症状词）
-        t = _ADDR.sub("[REDACTED-ADDR]", t)     # 住址标签 / 行政区+道路形态
-        return t
+        # 评审 01-S14：模式与替换顺序统一收敛到 backend.core.phi（单一实现，防漂移）
+        return phi.redact(text)
 
 
 class AuditLog:

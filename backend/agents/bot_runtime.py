@@ -22,10 +22,10 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.agents import bot_memory, bot_teams, bots, guardrails, model_policy
+from backend.agents.limits import MAX_QUESTION
 from backend.core import agent_tools, llm_config
 from backend.core.llm_factory import LLMFactory
 
-MAX_QUESTION = 2000
 BOT_TIMEOUT_S = 30.0
 
 _BOUNDARY = guardrails.BOUNDARY  # 评审 M-06：与咨询链路同一份边界文案

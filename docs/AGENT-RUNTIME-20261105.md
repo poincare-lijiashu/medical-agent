@@ -878,3 +878,27 @@ admin→200、覆盖审计字段；`test_agent_governance.py::test_second_opinio
 仍按首次生成记录，不校验"该日期是否已过"。
 
 **验证**：全量 pytest **1056 passed / 11 skipped**；`npm run build` 成功。
+
+---
+
+## 21. 2026-11-06 评审整改（第 17 批：单一实现收敛——PHI / 上限常量 / 工具循环异常）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 01-S14 | 新增 `backend/core/phi.py` 作为 PHI 模式与判定的**唯一实现**：`PHONE/ID_CARD/EMAIL/MRN/SOCIAL/NAME/ADDR` + `redact()`（审计口径）、`has_phi()`、`has_direct_identifier()`、`redact_direct()`（出网口径）。`medical_audit.PHIRedactor`、`bot_memory`、`skill_library._has_phi`、`web_search.redact_query` 全部改为调用它，删除四处复制的正则 | `core/phi.py`（新建）、`core/medical_audit.py`、`core/web_search.py`、`agents/bot_memory.py`、`agents/skill_library.py` |
+| 01-S03 | 新增 `backend/agents/limits.py`：`MAX_QUESTION` / `MIN_MAX_INPUT` / `MAX_INPUT` / `MAX_HISTORY_*` / `MAX_ANSWER_CHARS` 单一定义；`consult`、`bot_runtime`、`tool_loop`、`second_opinion`、`skills`、`guardrails` 改为引用 | `agents/limits.py`（新建）+ 上述 6 个模块 |
+| 01-S15 | 工具循环拆出 `ToolLoopForbidden`（角色越权 → **403**）与 `ToolLoopInvalid`（问题长度 → **422**），两者继承 `ToolLoopUnavailable`（保持既有捕获语义）；路由按序映射 403/422/503 | `tool_loop.py`、`agent_router.py` |
+
+**为什么这样改**：这三项都是"同一事实存在多份实现"的问题——脱敏正则漏改一处就是隐私事故，
+输入上限漏改一处就是两条链路口径不一致，权限异常映射成 503 会让调用方误以为"服务挂了"而不是
+"我没权限"。收敛成单一来源后，改一处即全局生效，并有测试防止再次分裂。
+
+**新增测试**：`test_medical_audit.py::test_phi_patterns_have_single_source`（审计/出网两种占位符
+同源、临床文本不误判）；`test_agent_control_plane.py::test_input_limits_have_single_source`；
+`test_tool_loop.py` 新增 `ToolLoopForbidden` / `ToolLoopInvalid` 类型断言与 API 403/422 映射。
+
+**仍存边界**：`phi.py` 仍是正则实现，只覆盖结构化标识与上下文锚定的姓名/住址，不识别
+自由文本中的间接标识（如罕见病 + 就诊日期组合）；`limits.py` 只收敛跨链路共享值，
+模块专属上限（工具步数、记忆条数、提示预算装配规则）仍各自定义，属有意保留。
+
+**验证**：全量 pytest **1061 passed / 11 skipped**。

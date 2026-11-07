@@ -1,6 +1,29 @@
 from backend.core.medical_audit import PHIRedactor, AuditLog
 
 
+def test_phi_patterns_have_single_source():
+    """评审 01-S14：脱敏模式只有 backend.core.phi 一份，四条链路必须同口径。"""
+    from backend.agents import skill_library
+    from backend.core import phi, web_search
+
+    text = "患者 13800138000，身份证 110101199001011234，邮箱 a@b.com"
+    # 审计口径占位符
+    redacted = phi.redact(text)
+    assert "[REDACTED-PHONE]" in redacted and "[REDACTED-ID]" in redacted
+    assert "13800138000" not in redacted and "a@b.com" not in redacted
+    # 出网口径占位符（同一个模式源，不同占位符）
+    out = web_search.redact_query(text)
+    assert "13800138000" not in out and "110101199001011234" not in out
+    assert "[PHONE]" in out and "[ID]" in out and "[EMAIL]" in out
+    # 直接标识判定与 PHIRedactor 走同一套模式
+    assert phi.has_direct_identifier(text)
+    assert PHIRedactor().redact(text) == redacted
+    # 纯临床文本不得被误判
+    clean = "华法林与阿司匹林联用需监测 INR 与出血风险"
+    assert not phi.has_direct_identifier(clean)
+    assert not skill_library._has_phi(clean)
+
+
 def test_redacts_phone():
     out = PHIRedactor().redact("Call 13800001234 today")
     assert '13800001234' not in out

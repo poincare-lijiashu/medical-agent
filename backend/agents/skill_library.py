@@ -21,8 +21,7 @@ import uuid
 from datetime import datetime, timezone
 
 from backend.agents import catalog, router as router_agent, skills
-from backend.core import agent_tools, pg_store
-from backend.core.medical_audit import PHIRedactor
+from backend.core import agent_tools, pg_store, phi
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXPERIENCES_FILE = os.path.join(BASE_DIR, "data", "skill_experiences.json")
@@ -34,12 +33,7 @@ MAX_CONTRAS = 5
 MAX_EVIDENCE = 10
 MAX_TOOLS = 8
 
-_PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _NORM = re.compile(r"[\s\u3000。，、；：！？,.!?;:\"'“”‘’（）()\[\]【】<>《》/\\|—\-_=+*#`~]+")
-
-_redactor = PHIRedactor()
 
 _lock = threading.RLock()
 
@@ -75,11 +69,9 @@ def _norm(text: str) -> str:
 
 
 def _has_phi(text: str) -> bool:
-    """PHI 判定：复用全局唯一脱敏口径（覆盖姓名/住院号/住址），再叠本地正则兜底。"""
+    """PHI 判定：复用全局唯一脱敏口径（覆盖姓名/住院号/住址），再叠直接标识兜底。"""
     value = text or ""
-    if _redactor.redact(value) != value:
-        return True
-    return bool(_PHONE.search(value) or _ID_CARD.search(value) or _EMAIL.search(value))
+    return phi.has_phi(value) or phi.has_direct_identifier(value)
 
 
 def _json_loader(path: str):

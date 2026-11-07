@@ -21,6 +21,7 @@ import time
 from langchain_core.messages import ToolMessage
 
 from backend.agents import bot_runtime, catalog, model_policy
+from backend.agents.limits import MAX_QUESTION
 from backend.core import agent_tools
 from backend.core.llm_factory import LLMFactory
 
@@ -28,11 +29,21 @@ MAX_STEPS = 3
 MAX_TOOL_CALLS = 3
 STEP_TIMEOUT_S = 30.0
 TOTAL_TIMEOUT_S = 60.0
-MAX_QUESTION = 2000
 
 
 class ToolLoopUnavailable(RuntimeError):
     """Bot 无法执行工具循环（模型/权限/参数问题）。"""
+
+
+class ToolLoopForbidden(ToolLoopUnavailable):
+    """角色无权使用该 Bot（评审 01-S15：权限不足 ≠ 服务不可用，应映射 403）。
+
+    继承 ``ToolLoopUnavailable`` 以保持既有调用方的捕获语义不变。
+    """
+
+
+class ToolLoopInvalid(ToolLoopUnavailable):
+    """客户端入参不合法（问题长度）——应映射 422。"""
 
 
 def _tool_def(name: str) -> dict:
@@ -66,13 +77,13 @@ async def run(question: str, bot: dict, role: str, llm_factory=None,
     """执行一次有界工具循环；``llm_factory`` 可注入用于测试/离线评测。"""
     q = (question or "").strip()
     if not (2 <= len(q) <= MAX_QUESTION):
-        raise ToolLoopUnavailable(f"问题需 2-{MAX_QUESTION} 字")
+        raise ToolLoopInvalid(f"问题需 2-{MAX_QUESTION} 字")
 
     agent = catalog.get_agent(bot.get("agentId") or "")
     if agent is None:
         raise ToolLoopUnavailable(f"未找到 Bot 的能力域：{bot.get('agentId')}")
     if role not in agent.roles:
-        raise ToolLoopUnavailable(f"当前角色无权使用该 Bot：{role}")
+        raise ToolLoopForbidden(f"当前角色无权使用该 Bot：{role}")
 
     provider = bot_runtime.resolve_provider(bot)
     allowed = _allowed_tools(bot)

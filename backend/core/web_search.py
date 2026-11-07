@@ -13,13 +13,12 @@
 """
 from __future__ import annotations
 
-import re
 from urllib.parse import urlparse
 
 import httpx
 
 from backend.config import settings
-from backend.core import web_sources
+from backend.core import phi, web_sources
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,17 +31,12 @@ class WebSearchUnavailable(RuntimeError):
     """联网搜索不可用（未配置/离线/上游失败）。调用方应转成用户可读提示。"""
 
 
-# 入站可识别标识：手机号、18 位身份证、邮箱（与平台 PHI 脱敏口径保持同类）
-_PHONE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# 入站可识别标识：手机号、18 位身份证、邮箱（评审 01-S14：模式统一在 core.phi）
 
 
 def redact_query(text: str) -> str:
     """出网前脱敏（保留临床语义，仅替换可直接识别个人的标识）。"""
-    s = _EMAIL.sub("[EMAIL]", text or "")
-    s = _ID_CARD.sub("[ID]", s)
-    s = _PHONE.sub("[PHONE]", s)
+    s = phi.redact_direct(text or "", phone="[PHONE]", id_card="[ID]", email="[EMAIL]")
     return " ".join(s.split())[:500]
 
 

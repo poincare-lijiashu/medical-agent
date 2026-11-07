@@ -21,6 +21,8 @@
 """
 from __future__ import annotations
 
+from backend.agents import limits
+
 BOUNDARY = (
     "【边界】你是临床辅助工具，不是医疗器械；输出仅供执业医师/药师参考，"
     "不得替代诊断、处方或治疗决策；不得编造文献/指南/证据；"
@@ -42,8 +44,9 @@ CITE_CLAUSE = (
     "无依据的结论必须标注「无证据支持」，不得省略。"
 )
 
-DEFAULT_MAX_INPUT = 2000
-MIN_MAX_INPUT = 200
+# 评审 01-S03：输入上限统一由 limits 提供（此前与 skills/consult 各写一份）
+DEFAULT_MAX_INPUT = limits.MAX_INPUT
+MIN_MAX_INPUT = limits.MIN_MAX_INPUT
 
 # 单次问答可注入的技能卡提示总量上限（与 consult/发布准入共用同一口径，评审 M-35）
 MAX_PROMPT_BUDGET = 12000

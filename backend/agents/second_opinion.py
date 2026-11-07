@@ -19,9 +19,9 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.agents import guardrails, model_policy
+from backend.agents.limits import MAX_QUESTION
 from backend.core.llm_factory import LLMFactory
 
-MAX_QUESTION = 2000
 TIMEOUT_S = 45.0
 
 # 评审 M-06：与咨询 / Bot 链路共用同一份边界与证据边界，不再各写一套措辞

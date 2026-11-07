@@ -1060,6 +1060,10 @@ async def bot_tool_loop(code: str, req: ToolLoopReq, user: dict = Depends(requir
             await _audit_agent(user, "tool_loop_step",
                                {"bot": code, **ev})
         result = await tool_loop.run(req.question, bot, role, audit=_audit_step)
+    except tool_loop.ToolLoopForbidden as e:
+        raise HTTPException(403, str(e))
+    except tool_loop.ToolLoopInvalid as e:
+        raise HTTPException(422, str(e))
     except tool_loop.ToolLoopUnavailable as e:
         raise HTTPException(503, str(e))
     except bot_registry.BotError as e:

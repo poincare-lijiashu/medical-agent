@@ -149,6 +149,22 @@ def test_role_scope_enforced():
                                   llm_factory=lambda p: FakeLLM([AIMessage(content="x")])))
 
 
+def test_permission_error_is_forbidden_typed():
+    """评审 01-S15：权限不足用 ToolLoopForbidden 表达，便于 API 层映射 403。"""
+    bot = _bot(agent="imaging", tools=())
+    with pytest.raises(tool_loop.ToolLoopForbidden):
+        asyncio.run(tool_loop.run("问题", bot, "pharmacist",
+                                  llm_factory=lambda p: FakeLLM([AIMessage(content="x")])))
+
+
+def test_short_question_is_invalid_typed():
+    """评审 01-S15 同批：入参不合法用 ToolLoopInvalid 表达，便于映射 422。"""
+    bot = _bot()
+    with pytest.raises(tool_loop.ToolLoopInvalid):
+        asyncio.run(tool_loop.run("短", bot, "doctor",
+                                  llm_factory=lambda p: FakeLLM([AIMessage(content="x")])))
+
+
 def test_per_step_audit(executed):
     bot = _bot()
     llm = FakeLLM([_call(), AIMessage(content="答案")])
@@ -180,6 +196,31 @@ def _login(c, u, p="Med@2026"):
 
 def _h(t):
     return {"Authorization": "Bearer " + t}
+
+
+def test_api_tool_loop_error_mapping(monkeypatch, tmp_path):
+    """评审 01-S15：服务层权限异常映射 403、入参异常映射 422（不再一律 503）。"""
+    c, _ = _client(monkeypatch, tmp_path)
+    doc = _h(_login(c, "doctor01"))
+    bot = _bot()
+    b = bots.submit_bot("loop-bot", bot["rowVersion"], "admin01")
+    bots.review_bot("loop-bot", True, None, b["rowVersion"], "qc01")
+
+    async def deny(*a, **k):
+        raise tool_loop.ToolLoopForbidden("当前角色无权使用该 Bot")
+
+    monkeypatch.setattr(tool_loop, "run", deny)
+    r = c.post("/api/v1/agent/bots/loop-bot/tool-loop", headers=doc,
+               json={"question": "高血压如何分级"})
+    assert r.status_code == 403, r.text
+
+    async def invalid(*a, **k):
+        raise tool_loop.ToolLoopInvalid("问题需 2-2000 字")
+
+    monkeypatch.setattr(tool_loop, "run", invalid)
+    r = c.post("/api/v1/agent/bots/loop-bot/tool-loop", headers=doc,
+               json={"question": "高血压如何分级"})
+    assert r.status_code == 422, r.text
 
 
 def test_api_tool_loop_permissions_and_success(monkeypatch, tmp_path):

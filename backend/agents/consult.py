@@ -24,6 +24,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from backend.agents import catalog, consult_metrics, guardrails, model_policy, skills
 from backend.agents import router as rule_router
+from backend.agents.limits import (MAX_ANSWER_CHARS, MAX_HISTORY_CHARS,
+                                   MAX_HISTORY_ITEM, MAX_HISTORY_TURNS,
+                                   MAX_QUESTION)
 from backend.core import llm_config
 from backend.core.llm_factory import LLMFactory
 from backend.core.logger import get_logger
@@ -31,16 +34,9 @@ from backend.core.medical_audit import PHIRedactor
 
 logger = get_logger(__name__)
 
-MAX_QUESTION = 2000
 PROMPT_BUDGET = guardrails.MAX_PROMPT_BUDGET  # 发布准入与运行时共用同一口径（M-35）
 AGENT_TIMEOUT_S = 45.0
 STREAM_IDLE_TIMEOUT_S = 15.0
-MAX_HISTORY_TURNS = 6
-MAX_HISTORY_ITEM = 2000
-MAX_HISTORY_CHARS = 6000
-# 与 ``_done_payload`` 的 answer 截断保持一致：流式累积也按此上限截止，
-# 避免慢客户端场景下 parts 随 delta 无限增长（评审 S3）
-MAX_ANSWER_CHARS = 4000
 
 # 与医疗域其它问答入口同一套 PHI 脱敏（评审 M-04 整改）：Agent 控制面此前整域未接脱敏，
 # 患者身份证/手机/邮箱/病案号会原样进入模型提示。此处只脱敏**入站输入**，不改回答。

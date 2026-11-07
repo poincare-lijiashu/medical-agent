@@ -266,6 +266,19 @@ def _login(c, u, p="Med@2026"):
     return r.json()["access_token"]
 
 
+def test_input_limits_have_single_source():
+    """评审 01-S03：跨链路共享的输入上限只能有一份定义（漏改一处即口径漂移）。"""
+    from backend.agents import (bot_runtime, consult, guardrails, limits,
+                                second_opinion, skills, tool_loop)
+
+    assert consult.MAX_QUESTION == limits.MAX_QUESTION
+    assert bot_runtime.MAX_QUESTION == limits.MAX_QUESTION
+    assert tool_loop.MAX_QUESTION == limits.MAX_QUESTION
+    assert second_opinion.MAX_QUESTION == limits.MAX_QUESTION
+    assert skills.MAX_INPUT == limits.MAX_INPUT == guardrails.DEFAULT_MAX_INPUT
+    assert guardrails.MIN_MAX_INPUT == limits.MIN_MAX_INPUT
+
+
 def test_flag_audit_records_before_value(monkeypatch, tmp_path):
     """评审 S9：开关审计必须记录改前值（便于回滚与追责）。"""
     audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
