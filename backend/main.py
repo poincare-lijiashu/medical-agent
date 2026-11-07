@@ -193,6 +193,14 @@ async def lifespan(app: FastAPI):
         await pg_store.close()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        # 第 64 批：关闭全局 httpx 客户端（此前从未 close，连接池/线程随进程泄漏；
+        # reload/反复 TestClient lifespan 会不断累积）。内部同时丢弃模型缓存，
+        # 避免下次 get_llm 拿到已关闭的 client。
+        from backend.core import llm_factory
+        await llm_factory.aclose_http_clients()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app = FastAPI(title="MedAssist · 医疗智能辅助平台 API", version=settings.app_version,

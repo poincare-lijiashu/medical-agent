@@ -1770,7 +1770,9 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - HIS/EMR 对接、院方授权知识库替换教学语料、临床验证
 - 多实例部署时：限流/令牌撤销表/审计日志从内存迁 Redis
 - 死代码清理：llm_factory._AGENT_MODEL_ROUTING（未真正生效）；medical_eval.py / medical_hitl.py 已删除（零运行时调用方，2026-09-10）
-- llm_factory httpx 客户端未在 lifespan shutdown 关闭
+- ~~llm_factory httpx 客户端未在 lifespan shutdown 关闭~~ ✅ 已修（第 64 批，2026-11-08）：
+  `aclose_http_clients()` 下线关闭 + 清模型缓存，`http_clients()` 关闭后自动重建；
+  接线由 `tests/test_llm_http_clients.py` 锁定（真实 SIGTERM 演练未做）
 - preview/delete 的 tag 清洗仍可在用户改名上传时存在残留（已统一白名单但旧 tag 可能已损坏）
 - PubMed 熔断是全局共享，单点失败会全员降级（应改失败计数）
 

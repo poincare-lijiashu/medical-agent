@@ -2432,6 +2432,41 @@ urllib 降级路径把 304 归为成功（此前会被 `HTTPError` 记成错误�
   （未下推到 PG 查询）；
 - 分页与筛选依赖前端防抖（300ms），快速连打关键字会丢弃中间请求（只应用最后一次）。
 
+---
+
+## 68. 2026-11-08 上线准备（第 64 批：LLM 长连接池下线未关闭）
+
+**来源**：`docs/HANDOFF.md`「剩余 backlog」里的
+`llm_factory httpx 客户端未在 lifespan shutdown 关闭`。
+
+**问题**：`backend/core/llm_factory.py` 的两个模块级客户端
+（`_HTTP_ASYNC_CLIENT` / `_HTTP_SYNC_CLIENT`，超时 120s、长连接池）**从未 close**。
+uvicorn `--reload`、或测试里反复 `TestClient` 进出 lifespan，都会不断累积连接与线程。
+审计其余 `httpx.Client(...)` 用法（literature/web_search/llm_config）都是 `with` 上下文，
+只有这一处是模块级长生命周期对象。
+
+**修复**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/llm_factory.py` | 抽出 `_make_async_client/_make_sync_client`；新增 `http_clients()`（**已关闭则自动重建**）与 `aclose_http_clients()`（关客户端 + 清 `LLMFactory._instances` 模型缓存 + 记 `llm_factory.http_clients_closed`） |
+| 3 处 `init_chat_model` 参数组装 | 改用 `http_clients()` 取当前实例（provider / Qwen 回落 / VL 三路） |
+| `backend/main.py` lifespan 下线 | 在 `pg_store.close()` 之后调用 `llm_factory.aclose_http_clients()`，异常仅告警不阻断下线 |
+| `tests/test_llm_http_clients.py` | 3 项：关闭 + 缓存清空；关闭后再取用会重建；lifespan **接线标记锁**（防钩子被删） |
+
+**为什么必须"重建"而不是只关**：模型缓存里的 chat model 持有旧 client；只关不清缓存，
+下一次 `get_llm` 会把已关闭的 client 递给 SDK（`Client has been closed`）。因此
+`aclose` 先清缓存，`http_clients()` 发现 `is_closed` 就换新实例。
+
+**测试**：定向 `test_llm_http_clients` **3 passed**；全量 pytest **1204 passed**。
+
+**仍存边界**
+- **没有拿到"优雅下线的真实日志"**：本机的停止方式是直接杀进程（SIGTERM/SIGINT 未送达），
+  `medical_agent.shutdown` / `llm_factory.http_clients_closed` 都没打出来。所以"接线正确"
+  由单测 + 源码标记锁保证，**不是**由一次真实 SIGTERM 演练保证；
+- 只处理了 LLM 客户端；Milvus/PG 各自已有独立的 close 路径（分批验证过），未在本批复核；
+- `aclose_http_clients()` 内部异常被 lifespan 吞掉（只保证不阻断下线），若真实环境里
+  close 抛错，只能靠日志缺失发现（未加失败日志）。
+
 
 
 

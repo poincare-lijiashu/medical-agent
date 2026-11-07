@@ -21,14 +21,53 @@ logger = get_logger(__name__)                         # 本模块的日志器，
 # 背景：Windows 系统代理或 HTTPS_PROXY 环境变量会被 httpx 默认探测到，
 #       导致 DeepSeek 请求经代理后 TLS 握手失败。DeepSeek 国内可直连，无需代理。
 # trust_env=False 表示：完全忽略系统代理和相关环境变量。
-_HTTP_ASYNC_CLIENT = httpx.AsyncClient(               # 异步客户端（给 ainvoke/astream 用）
-    trust_env=False,
-    timeout=httpx.Timeout(120.0, connect=15.0),       # 总超时 120 秒，建立连接超时 15 秒
-)
-_HTTP_SYNC_CLIENT = httpx.Client(                     # 同步客户端（给 invoke 用）
-    trust_env=False,
-    timeout=httpx.Timeout(120.0, connect=15.0),
-)
+def _make_async_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        trust_env=False,
+        timeout=httpx.Timeout(120.0, connect=15.0),   # 总超时 120 秒，建立连接超时 15 秒
+    )
+
+
+def _make_sync_client() -> httpx.Client:
+    return httpx.Client(
+        trust_env=False,
+        timeout=httpx.Timeout(120.0, connect=15.0),
+    )
+
+
+_HTTP_ASYNC_CLIENT = _make_async_client()             # 异步客户端（给 ainvoke/astream 用）
+_HTTP_SYNC_CLIENT = _make_sync_client()               # 同步客户端（给 invoke 用）
+
+
+def http_clients() -> tuple[httpx.AsyncClient, httpx.Client]:
+    """取当前可用的全局客户端；已被 close 过就重建。
+
+    为什么要"可重建"：lifespan 下线会关闭它们（防连接池/线程泄漏，2026-11-08 第 64 批）。
+    而测试用 ``TestClient`` 会反复进出 lifespan——若不重建，下一轮拿到的就是已关闭的
+    client，模型调用会直接抛 ``Client has been closed``。
+    """
+    global _HTTP_ASYNC_CLIENT, _HTTP_SYNC_CLIENT
+    if _HTTP_ASYNC_CLIENT.is_closed:
+        _HTTP_ASYNC_CLIENT = _make_async_client()
+    if _HTTP_SYNC_CLIENT.is_closed:
+        _HTTP_SYNC_CLIENT = _make_sync_client()
+    return _HTTP_ASYNC_CLIENT, _HTTP_SYNC_CLIENT
+
+
+async def aclose_http_clients() -> None:
+    """下线清理：关闭全局 httpx 客户端，并丢弃模型缓存（缓存里的模型持有旧 client）。
+
+    只关客户端不清缓存的话，下一次 ``get_llm`` 会把**已关闭**的 client 递给 SDK。
+    """
+    global _HTTP_ASYNC_CLIENT, _HTTP_SYNC_CLIENT
+    LLMFactory._instances.clear()
+    try:
+        await _HTTP_ASYNC_CLIENT.aclose()
+    finally:
+        _HTTP_SYNC_CLIENT.close()
+    logger.info("llm_factory.http_clients_closed")
+
+
 # ── Agent 类型 → 模型标识符 的路由表 ────────────────────────────
 # 想给某类业务换模型(对应模型厂商)，只改这里一行即可。
 # 这里的_AGENT_MODEL_ROUTING键对应的是业务名称，值是每个业务选择的哪个模型厂商
@@ -129,6 +168,7 @@ class LLMFactory:
         from backend.core.llm_config import parse_extra_params
         user_extra = parse_extra_params(provider.get("extra_params"))
         manages_thinking = ("thinking" in user_extra) or ("enable_thinking" in user_extra)
+        http_async, http_sync = http_clients()  # 已关闭则自动重建（见 aclose_http_clients）
         kwargs = {
             "model": provider["model_id"],
             "model_provider": "openai",
@@ -136,8 +176,8 @@ class LLMFactory:
             "openai_api_key": provider["api_key"],
             "base_url": provider["base_url"],
             "max_retries": 3,
-            "http_async_client": _HTTP_ASYNC_CLIENT,
-            "http_client": _HTTP_SYNC_CLIENT,
+            "http_async_client": http_async,
+            "http_client": http_sync,
         }
         if not manages_thinking:
             if "deepseek" in (provider.get("base_url") or "").lower():
@@ -161,6 +201,7 @@ class LLMFactory:
         settings = cls._get_settings()             # 取配置
         model_id = settings.qwen_model_chat        # 同步到通义千问：模型名来自 .env 的 QWEN_MODEL_CHAT（原 _MODEL_ID_MAP 的 deepseek 名不再用于骨干）
 
+        http_async, http_sync = http_clients()     # 绕过代理；已关闭则自动重建
         return {
             "model": model_id,                     # 模型名，如 "qwen-plus"
             "model_provider": "openai",            # Qwen 走 DashScope/MaaS 的 OpenAI 兼容接口
@@ -168,8 +209,8 @@ class LLMFactory:
             "api_key": settings.qwen_api_key,      # 来自 .env.local 的 QWEN_API_KEY
             "base_url": settings.qwen_base_url,    # QWEN_BASE_URL（兼容模式端点）
             "max_retries": 3,                      # 对连接类错误(APIConnectionError/5xx)自动退避重试，吸收 MaaS 端点间歇性抖动
-            "http_async_client": _HTTP_ASYNC_CLIENT,  # 用上面绕过代理的异步客户端
-            "http_client": _HTTP_SYNC_CLIENT,         # 同步客户端
+            "http_async_client": http_async,
+            "http_client": http_sync,
         }
     @classmethod
     def get_llm(
@@ -273,6 +314,7 @@ class LLMFactory:
                             api_format=provider["api_format"], max_tokens=kwargs["max_tokens"])
                 return cls._instances[cache_key]
             settings = cls._get_settings()
+            http_async, http_sync = http_clients()  # 已关闭则自动重建
             kwargs = {
                 "model": settings.qwen_model_vl,
                 "model_provider": "openai",
@@ -281,8 +323,8 @@ class LLMFactory:
                 "base_url": settings.qwen_base_url,
                 "max_tokens": settings.vl_max_tokens,  # 任务4：不再依赖网关默认值（截断根因）
                 "max_retries": 3,
-                "http_async_client": _HTTP_ASYNC_CLIENT,
-                "http_client": _HTTP_SYNC_CLIENT,
+                "http_async_client": http_async,
+                "http_client": http_sync,
                 "extra_body": {"enable_thinking": False},
             }
             cls._instances[cache_key] = init_chat_model(**kwargs)
