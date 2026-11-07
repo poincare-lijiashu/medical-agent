@@ -128,9 +128,11 @@ def report() -> dict:
             "abortedRate": _ratio(aborted, total),
             "channels": channels,
             "agents": agents,
-            # 评审 02-S14：明确这是进程累计占比，不是 Prometheus 的时间窗 rate
+            # 评审 02-S14 / 04-S13：明确这是进程累计占比，且含前端回落重试
             "errorRateNote": "进程累计占比（启动以来），与 Prometheus 近 30 分钟窗口 rate 不同；"
-                             "低 QPS 时两者可能明显偏离，判读时以 Prometheus 告警为准。",
+                             "低 QPS 时两者可能明显偏离，判读时以 Prometheus 告警为准。"
+                             "口径含前端流式失败后回落非流式的重试：同一问题可能产生 "
+                             "stream|error + sync|ok 两条计量，错误率会被相应放大。",
         },
         "thresholds": dict(THRESHOLDS),
         "quality": {

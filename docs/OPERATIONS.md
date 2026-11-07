@@ -58,7 +58,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   - `medassist_agent_skill_labels_tracked` / `medassist_agent_skill_labels_overflow`（标签基数与溢出数；溢出后新技能归入 `__other__`）
   - `medassist_agent_skill_usage_ratio`（本进程内被成功问答引用的已发布技能占比，与看板 `usageRatio` 同口径；重启归零）
   - **Prometheus 只抓 `/metrics`**（G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，当前 15 条规则全部依赖它）。`GET /api/v1/agent/skill-library/metrics/prometheus`（admin/qc JWT）是人工查看用，**只含 skill 域指标、不是抓取端点**；两处都抓会让 consult counter 的 `rate()` 翻倍。
-  - 页面看板：`GET /api/v1/agent/skill-library/usage`（admin/qc，Agent 控制台「技能使用率」卡片）。
+  - 页面看板：`GET /api/v1/agent/skill-library/usage`（admin/qc，Agent 控制台「技能使用率」卡片）。看板错误率是**进程累计值**，且含前端「流式失败回落非流式」的重试（同一问题可能记 `stream|error` + `sync|ok` 两条）；判读服务稳定性请以 Prometheus 的 30 分钟窗口 rate 为准。
 - Prometheus 抓取（G105）：
 
   **形态一：本地 / 院区 compose（15 条规则生效）**

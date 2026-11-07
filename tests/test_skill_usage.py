@@ -41,6 +41,8 @@ def test_quality_aggregation_and_thresholds():
     assert r["quality"]["signalsPerOk"] == 3.0  # 一条答案可命中多个信号，可 >1
     assert r["thresholds"] == {"errorRate": 0.2, "abortedRate": 0.2, "qualityRate": 0.3}
     assert "累计" in r["requests"]["errorRateNote"]
+    # 评审 04-S13：口径必须写明"含前端流式回落重试"，否则错误率会被误读为服务不稳定
+    assert "回落" in r["requests"]["errorRateNote"]
     assert r["window"] == "process"
 
 
