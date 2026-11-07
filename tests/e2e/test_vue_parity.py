@@ -230,37 +230,38 @@ def _api(method: str, path: str, token: str = "", body: dict | None = None) -> t
 
 
 def _purge_created_prescriptions(ids: list[str]) -> None:
-    """F2 防再犯：teardown 自清理本测试创建的处方（按 id 直调域层删除函数）。
-    PG 池初始化在**独立线程**执行——playwright sync（greenlet）上下文内 asyncio.run
-    会静默失败（RuntimeWarning: coroutine 'init' was never awaited → 只删 JSON 漏删
-    PG 真源，实测残留）；线程内与普通脚本等价。审计 jsonl 不动；失败仅告警，
-    残留由 scripts/cleanup_test_data.py 按 [e2e] 标记兜底清。"""
-    ids = [i for i in (ids or []) if i]
-    if not ids:
+    """F2 防再犯：teardown 自清理本测试产生的处方（标记口径，跑在**独立子进程**）。
+
+    为什么是子进程而不是本进程直调域层（2026-11-08 实测修正）：
+    ``tests/conftest.py`` 会把 pytest 进程的 ``PG_DATABASE`` 指向隔离库
+    ``medagent_test``（防止全量同步覆盖服务库），而 e2e 服务写的是**服务库**。
+    本进程直调 ``delete_prescriptions`` 实际删的是测试库 → 每次都"成功删 0 条"，
+    服务库残留照旧累积（实测三轮 9 条，计入 doctor01「被驳回」角标）；更危险的是
+    一旦 id 撞上，会把测试库的列表**回写进真实 JSON 镜像**。
+    改为子进程 + 摘掉 ``PG_DATABASE``（让 settings 回落 .env.local 的服务库），
+    并复用运维脚本 ``scripts/cleanup_test_data.py`` 的标记判定，判定口径只有一处。
+
+    ``ids`` 仅用于日志（标记扫描不依赖它们）。审计 jsonl 不动；清理失败只告警，
+    不掩盖测试结果。"""
+    import os
+    import subprocess
+    import sys
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = os.path.join(repo_root, "scripts", "cleanup_test_data.py")
+    env = dict(os.environ)
+    env.pop("PG_DATABASE", None)  # conftest 的测试库指向不能带进清理子进程
+    try:
+        cp = subprocess.run([sys.executable, script], cwd=repo_root, env=env,
+                            capture_output=True, text=True, timeout=180)
+    except Exception as exc:  # noqa: BLE001 —— 自清理失败不掩盖测试结果
+        print(f"[e2e cleanup] 清理子进程失败（残留由 cleanup_test_data.py 兜底）："
+              f"{type(exc).__name__}: {exc}")
         return
-    import threading
-
-    def _do() -> None:
-        try:
-            import asyncio
-
-            from backend.core import pg_store
-            from backend.core.prescriptions import delete_prescriptions
-            pg_ready = asyncio.run(pg_store.init())
-            try:
-                removed = delete_prescriptions(ids)
-            finally:
-                if pg_ready:
-                    asyncio.run(pg_store.close())
-            print(f"[e2e cleanup] 已清理本测试创建的处方"
-                  f"（PG 同步={'on' if pg_ready else 'off'}）：{removed}")
-        except Exception as exc:  # noqa: BLE001 —— 自清理失败不掩盖测试结果
-            print(f"[e2e cleanup] 清理失败（残留由 cleanup_test_data.py 兜底）："
-                  f"{type(exc).__name__}: {exc}")
-
-    th = threading.Thread(target=_do, name="e2e-rx-cleanup", daemon=True)
-    th.start()
-    th.join(timeout=30)
+    lines = (cp.stdout or "").splitlines()
+    summary = [ln for ln in lines if "命中" in ln or "已删除" in ln or "无需清理" in ln]
+    print(f"[e2e cleanup] rc={cp.returncode} 本次创建 ids={len([i for i in (ids or []) if i])}"
+          f"｜{' / '.join(summary[-2:]) if summary else (cp.stderr or '')[:200]}")
 
 
 def test_parity_rx_reject_and_out_of_dict_flow(page):

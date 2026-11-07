@@ -162,5 +162,17 @@ python scripts\agent_go_live_check.py --base-url http://127.0.0.1:8001 --usernam
 - 脚本只读，不切换开关、不写技能、不执行建议；不打印口令、令牌、密钥。
 - 任一项失败不得上线；通过也只代表**技术联调就绪**，临床验收与签字仍需人工完成。
 
+## 测试数据清理（E2E / 压测残留）
+```powershell
+python scripts\cleanup_test_data.py --dry-run   # 先看命中项，不删
+python scripts\cleanup_test_data.py             # 执行（幂等，重复跑第二次删 0 条）
+```
+- 删什么：带 `[e2e]` 标记的处方、含特征药名「测试」的处方、`doctor=loadtest*` 的压测产物，
+  以及历史固定用例文案（见脚本内 `match_reason`）。**审计 jsonl 不动**（留痕完整）。
+- 何时跑：E2E 批跑中断、或发现演示账号「被驳回」角标异常时。新版 E2E 的 teardown 会在
+  **独立子进程**里自动跑本脚本（pytest 进程的 `PG_DATABASE` 指向隔离库 `medagent_test`，
+  直调会删错库——这是 2026-11-08 实测发现的静默失败）。
+- 注意：脚本按标记判定，会删掉所有命中项；执行前先 `--dry-run` 核对。
+
 ## 合规边界
 辅助决策工具，非医疗器械；不得替代诊断/处方；输出须执业医师/药师复核；不处理未脱敏 PHI 于外部；日志与快照本地留存、不外发密钥。

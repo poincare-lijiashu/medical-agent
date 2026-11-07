@@ -2209,6 +2209,59 @@ python scripts/loadtest.py --users 30 --seconds 90 --password ***
 **清理**：临时 `8002`（pool=20）与 `8003`（PG_OFFLINE）实例均已停止，`8001` 保持运行；
 压测账号自动删除，工作区仅剩本批 5 个源码/测试改动。
 
+---
+
+## 64. 2026-11-08 上线准备（第 60 批：E2E 残留清理——删错库的静默失败）
+
+**发现路径**：第 58/59 批每次全量 pytest 后 `data/prescriptions.json` 都会变脏，`git
+checkout` 复原后**下次再跑还是脏**。顺着查 PG 真源：`prescriptions` 20 行里有
+**9 行是 e2e 产物**（`[e2e]` 标记，`doctor01`，三次运行 19:23 / 19:41 / 19:45 累积），
+会计入医生的「被驳回」角标——测试数据进了生产演示库，且自清理"看起来成功"。
+
+**根因**：`tests/conftest.py` 会把 pytest 进程的 `PG_DATABASE` 指向隔离库
+`medagent_test`（防全量同步覆盖服务库）。而 E2E 的 teardown 在**本进程**直调
+`delete_prescriptions` → 删的是**测试库**，服务库残留照旧累积，打印却是
+`已清理 0 条（PG 同步=on）`——静默失败。更危险的是：若 id 恰好撞上，会把测试库的
+列表**回写进真实 JSON 镜像**（全量覆盖语义）。
+
+**修复**（`tests/e2e/test_vue_parity.py::_purge_created_prescriptions`）
+- 改为**独立子进程**跑 `scripts/cleanup_test_data.py`，并在子进程 env 中**摘掉
+  `PG_DATABASE`**，让 settings 回落 `.env.local` 的服务库；
+- 判定口径复用运维脚本的 `match_reason`（`[e2e]` / 特征药名「测试」/ 历史固定文案），
+  不再"自己一套 id 清单"；
+- 清理失败只告警，不影响测试结论。
+
+**真实验证**
+| 步骤 | 结果 |
+|---|---|
+| 修复前 dry-run | 命中 **9** 条 / 共 20 条（三次运行的累积） |
+| 执行清理 | 删除 9 条，PG 20 → **11**（与 JSON 镜像 11 一致）；0 条 e2e 残留 |
+| 再跑 E2E（`test_parity_rx_reject_and_out_of_dict_flow`） | PASSED；teardown 子进程 `rc=0`，`命中 2 / 共 13`、`已删除 2`；PG 回到 **11** |
+| 跑完后 `git status` | 只剩本批源码改动，`data/prescriptions.json` **不再变脏** |
+
+**同源问题②：`data/runtime_flags.json` 每次跑也被改脏**
+E2E 的开关用例「读原值 → 切换 → CAS 还原」，但 `set_flag` 只要被调用就会持久化该键；
+文件里本来没有 `agent_multi_agent`，还原成默认值 `false` 仍会把键写进去 → 工作区恒脏。
+不能改 `set_flag` 语义（删键会让 `get_flag(key, settings值)` 回落到**不同的**默认值，
+`test_full_trace_mode` 会红）。改为**把该文件当运行时产物**：值本来就等于
+`settings.qc_auto_sign_full=True`（settings 里是默认值），落盘纯属冗余。已在 `.gitignore`
+排除并 `git rm --cached`（文件保留在磁盘，行为零变化）。
+
+**测试**：全量 pytest（PG 在线、含新 teardown）**1191 passed**；跑完后
+`git status` 只剩源码/文档改动，两个运行时文件都不再变脏。
+
+**文档**：`docs/OPERATIONS.md` 新增「测试数据清理（E2E / 压测残留）」——何时跑、
+删什么、`--dry-run` 先行、以及"直调会删错库"这个坑。
+
+**仍存边界**
+- 清理按**标记**判定，会删掉所有命中项（例如真实用户恰好写了「膝关节轻度疼痛」也会
+  被误判）——这是既有脚本的既定口径，仅适用于演示/测试环境，**生产库不得直接跑**；
+  `docs/OPERATIONS.md` 已写明"执行前先 dry-run"；
+- 只覆盖处方；`review_queue`（当前 1168 行）没有 e2e 标记，未做残留甄别；
+- E2E 仍直连运行中的服务（没做数据目录隔离），写的是真实服务库/JSON 镜像——本批只保证
+  "跑完能清干净"，不是"从不写入"；彻底隔离需要数据目录抽象（40+ 模块硬编码路径），
+  未在本批实施。
+
 
 
 

@@ -17,6 +17,9 @@ data/backups/
 
 # 模型配置（含第三方 API Key，严禁入库）
 data/llm_providers.json
+# 运行时开关状态（admin 面板切换写入；值等于 settings 默认时本就不需要落盘，
+# E2E 开关键用例每次跑都会往文件里补键 → 属于运行时产物，不入库）
+data/runtime_flags.json
 # 运营指标按日快照（运行时产物：由定时任务/手动触发写入，不入库）
 data/skill_metrics_snapshots.json
 # 睡眠记忆体检报告（运行时产物：每次 scan 追加，最多 20 份，不入库）
