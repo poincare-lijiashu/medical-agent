@@ -17,6 +17,8 @@ data/backups/
 
 # 模型配置（含第三方 API Key，严禁入库）
 data/llm_providers.json
+# 运营指标按日快照（运行时产物：由定时任务/手动触发写入，不入库）
+data/skill_metrics_snapshots.json
 
 # 临时产物（安装/种子过程错误日志与一次性验证输出）
 data/*.err
