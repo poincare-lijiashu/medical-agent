@@ -21,6 +21,8 @@ data/llm_providers.json
 data/skill_metrics_snapshots.json
 # 睡眠记忆体检报告（运行时产物：每次 scan 追加，最多 20 份，不入库）
 data/sleep_memory_reports.json
+# Agent 技能卡 JSON 镜像（PG 为真源，JSON 只是灾难镜像；运行时生成，不入库）
+data/agent_skills.json
 
 # 临时产物（安装/种子过程错误日志与一次性验证输出）
 data/*.err
