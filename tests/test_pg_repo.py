@@ -1312,3 +1312,32 @@ def test_probe_stale_domains_keeps_stale_on_failure(monkeypatch):
     res = pg_store.probe_stale_domains()
     assert res["probed"] == 1 and res["cleared"] == 0
     assert "probe.json" in pg_store._repo_pg_stale
+
+
+# ---- 第 56 批：PG 成功即为成功（JSON 镜像并发写失败不得返回 500） ----
+
+def _pg_ok(coro):
+    coro.close()
+    return True
+
+
+def test_insert_skill_tolerates_json_mirror_failure(monkeypatch, tmp_path, pg_originals):
+    monkeypatch.setattr(pg_store, "insert_skill_item", pg_originals["insert_skill_item"])
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setenv("PG_OFFLINE", "")
+    monkeypatch.setattr(pg_store, "_run_pg", _pg_ok)
+    monkeypatch.setattr(pg_store, "_json_insert_item",
+                        lambda *a, **k: (_ for _ in ()).throw(PermissionError("locked")))
+    assert pg_store.insert_skill_item({"code": "probe"},
+                                      str(tmp_path / "skills.json")) is True
+
+
+def test_insert_json_item_tolerates_json_mirror_failure(monkeypatch, tmp_path, pg_originals):
+    monkeypatch.setattr(pg_store, "insert_json_item", pg_originals["insert_json_item"])
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setenv("PG_OFFLINE", "")
+    monkeypatch.setattr(pg_store, "_run_pg", _pg_ok)
+    monkeypatch.setattr(pg_store, "_json_insert_item",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("locked")))
+    assert pg_store.insert_json_item("agent_bot_memories", str(tmp_path / "m.json"),
+                                     {"id": "probe"}) is True

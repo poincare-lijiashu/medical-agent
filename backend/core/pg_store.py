@@ -1655,7 +1655,15 @@ def insert_skill_item(item: dict, path: str) -> bool:
         logger.warning("pg.repo.insert_skill_failed", error=str(e)[:120], file=domain)
         _repo_pg_stale.add(domain)
         return _json_insert_item(path, "code", item)
-    return ok and _json_insert_item(path, "code", item)
+    if not ok:
+        return False
+    # 第 56 批：PG 已是真源，JSON 只是镜像——多进程并发写同一文件可能失败/被锁，
+    # 镜像失败只告警，绝不让业务写返回 500（此前 40 并发创建有 12 个假 500）。
+    try:
+        _json_insert_item(path, "code", item)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.repo.json_mirror_failed", error=str(e)[:120], file=domain)
+    return True
 
 
 def insert_json_item(table: str, path: str, item: dict) -> bool:
@@ -1670,7 +1678,14 @@ def insert_json_item(table: str, path: str, item: dict) -> bool:
         logger.warning("pg.repo.insert_item_failed", error=str(e)[:120], file=domain)
         _repo_pg_stale.add(domain)
         return _json_insert_item(path, key, item)
-    return ok and _json_insert_item(path, key, item)
+    if not ok:
+        return False
+    # 第 56 批：同 insert_skill_item——PG 成功即成功，JSON 镜像失败只告警
+    try:
+        _json_insert_item(path, key, item)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.repo.json_mirror_failed", error=str(e)[:120], file=domain)
+    return True
 
 
 def upsert_json_item(table: str, path: str, item: dict,
