@@ -143,6 +143,44 @@ def test_filter_by_bot_codes():
     assert {f["botCode"] for f in report["findings"]} in (set(), {"bot-a"})
 
 
+# ---- 第 42 批（M-39）：报告必须走 PG 真源，且顺序不被 PG 的 DESC 读打乱 ----
+
+def test_reports_use_agent_sleep_reports_domain(monkeypatch):
+    from backend.core import pg_store
+
+    calls = []
+    real_load = pg_store.load_json_list
+    real_save = pg_store.save_json_list
+
+    def spy_load(table, path, json_loader=None):
+        calls.append(("load", table))
+        return real_load(table, path, json_loader)
+
+    def spy_save(table, path, items):
+        calls.append(("save", table))
+        real_save(table, path, items)
+
+    monkeypatch.setattr(pg_store, "load_json_list", spy_load)
+    monkeypatch.setattr(pg_store, "save_json_list", spy_save)
+
+    _bot("bot-a")
+    report = sleep_memory.scan(now=_now())
+    assert sleep_memory.last_report()["reportId"] == report["reportId"]
+    assert ("save", "agent_sleep_reports") in calls
+    assert ("load", "agent_sleep_reports") in calls
+
+
+def test_reports_restore_ascending_order_from_pg(monkeypatch):
+    """PG 读默认 updated_at DESC；报告必须按 generatedAt 还原为旧→新。"""
+    from backend.core import pg_store
+
+    newer = {"reportId": "new", "generatedAt": "2026-11-08T10:00:00+08:00"}
+    older = {"reportId": "old", "generatedAt": "2026-11-07T10:00:00+08:00"}
+    monkeypatch.setattr(pg_store, "load_json_list",
+                        lambda table, path, json_loader=None: [newer, older])
+    assert sleep_memory.last_report()["reportId"] == "new"
+
+
 # ---------------------------------------------------------------- API
 
 def _client(monkeypatch, tmp_path):

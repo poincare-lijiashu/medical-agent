@@ -1,7 +1,7 @@
-"""评审 M-30：Agent 域 8 张 PG 表的**真库**断言（medagent_test）。
+"""评审 M-30：Agent 域 9 张 PG 表的**真库**断言（medagent_test）。
 
 背景：此前"多实例安全"只有线程级间接证据，PG 真库语义零证据。
-本文件直接对 ``agent_skills`` + 7 张通用 JSON 列表表做"写入 → 查询 → 清理"，
+本文件直接对 ``agent_skills`` + 8 张通用 JSON 列表表做"写入 → 查询 → 清理"，
 PG 不可用（PG_OFFLINE/连接失败）时自动跳过，不阻塞离线环境。
 
 安全：只写本测试生成的唯一键，结束即删；不改动测试库既有行。
@@ -24,6 +24,7 @@ GENERIC = {
     "agent_skill_proposals": "id",
     "agent_skill_metrics": "id",
     "agent_skill_advices": "id",
+    "agent_sleep_reports": "reportId",
 }
 
 

@@ -1541,6 +1541,44 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 - 时钟大幅回拨/夏令时未特殊处理（依赖 asyncio 单调时钟，最多延后一次）；
 - 多实例同日仍可能各写一次（行级 upsert，后写记 `overwritten`，不丢其它日期）。
 
+---
+
+## 46. 2026-11-08 评审整改（第 42 批：Must 清单闭口与睡眠记忆 PG 真源）
+
+**盘点方法**：把意见书 60 条 Must 与台账 §5–§45 逐条对照，挑出**此前未在台账出现的 9 条**
+（M-38/39/46/47/48/49/50/51/52）逐一读当前代码判定；其余 51 条已在既有批次中记录。
+
+| 编号 | 结论 | 证据 / 落点 |
+|---|---|---|
+| M-38 | **边界（已登记）** | 业务写已全部改行级（M-32）；同一行被两实例同时更新仍是应用层 `rowVersion` CAS，行级写只解决"互删他行"，不解决"同行并发后写覆盖"（§13 边界已写明） |
+| M-39 | **真缺陷·本批修复** | 报告此前只读写 JSON，并直接调用私有 `pg_store._write_json_atomic`；多实例下 A 实例生成的报告 B 实例看不到 |
+| M-46 | **边界（性能）** | bigram 集合已预计算（01-S8）；O(n²) 两两比较保留——只读体检、`MAX_FINDINGS=200`，未引入近似索引 |
+| M-47 | **已修** | §32：`prometheus_text()` / 建议生成各只加载一次域数据，`/metrics` 另有 5s 进程内缓存 |
+| M-48 | **已修** | 抓取令牌只认 Bearer、不接受 cookie 回落；鉴权关闭且未配 `METRICS_TOKEN` → 503，不公开 |
+| M-49 | **已修** | 统一走 `config.is_production_env()`（main.py 三处判定同源） |
+| M-50 | **部分修复 + 边界** | `/model-policy` 对非 admin/qc 掩码主机与内网地址；`/web-policy` 仅返回公开学术/监管白名单，不含内部拓扑，保留登录可见 |
+| M-51 | **已修** | §33：开关写入带 `expected` 做 CAS（冲突 409）；审计记录 `before` 与 `value` |
+| M-52 | **已修** | 快照写端点收紧到 admin；同日覆盖返回 `overwritten` / `overwriteCount` / `previous`，审计同步留痕 |
+
+**M-39 修复内容**：
+| 文件 | 变更 |
+|---|---|
+| `pg_store.py` | 新增 `agent_sleep_reports(reportId)` 建表 + `_JSON_LIST_KEYS` 白名单（第 9 张 Agent 域表） |
+| `sleep_memory.py` | `_load_reports` 改走 `pg_store.load_json_list`（PG 真源 + JSON 兜底），并按 `generatedAt` 升序还原"旧→新"——PG 读默认 `updated_at DESC`，不排序会让 `last_report()` 取到最旧一条；`_save_report` 改走 `save_json_list`，不再触碰私有写函数 |
+| `tests/test_agent_pg_real.py` | 真库往返参数化新增第 9 张表（PG 可用时执行） |
+| `tests/test_sleep_memory.py` | 新增 2 项：报告确实走 `agent_sleep_reports` 域；PG 返回 DESC 时仍按 `generatedAt` 还原升序 |
+
+**验证**：
+- `tests/test_sleep_memory.py` + `test_agent_pg_real.py`：**12 passed / 15 skipped**（后者因 PG 不可用按设计 skip）；
+- 全量 pytest：**1118 passed / 43 skipped**。本机 Docker 仍未能启动，28 项 PG 用例按设计 skip；
+  Docker 在线时预期 **1146 passed / 15 skipped**（上一批 1143 + 本批 2 项 + 新增真库参数 1 项）。
+
+**仍存边界**：
+- 报告写仍是"整表覆盖"（`save_json_list`）：两实例同一时刻各生成一份时可能丢其中一份
+  （最多 20 份只读分析产物，不影响临床链路）；彻底修复需行级 append + 定期裁剪；
+- 升序按 `generatedAt` 字符串比较，依赖报告统一使用本地时区（当前生成端只有一处）；
+- 新增表的真库往返在 Docker 可用前未实际执行，仅有离线 JSON 语义证据。
+
 
 
 

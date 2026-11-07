@@ -199,7 +199,9 @@ async def _init_impl() -> bool:
                                ("agent_skill_experiences", "id"),
                                ("agent_skill_proposals", "id"),
                                ("agent_skill_metrics", "id"),
-                               ("agent_skill_advices", "id")):
+                               ("agent_skill_advices", "id"),
+                               # 评审 M-39：睡眠记忆报告此前只写 JSON，多实例读不到
+                               ("agent_sleep_reports", "reportId")):
                 await c.execute(
                     f"""CREATE TABLE IF NOT EXISTS {table}(
                         {key} text primary key, data jsonb NOT NULL, status text NOT NULL,
@@ -1232,6 +1234,7 @@ _JSON_LIST_KEYS = {
     "agent_skill_proposals": "id",
     "agent_skill_metrics": "id",
     "agent_skill_advices": "id",
+    "agent_sleep_reports": "reportId",
 }
 
 

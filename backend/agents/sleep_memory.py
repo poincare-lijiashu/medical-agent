@@ -78,7 +78,8 @@ def _age_days(created_at: str, now: datetime) -> int:
     return max(0, (now - ts).days)
 
 
-def _load_reports() -> list:
+def _load_reports_json() -> list:
+    """JSON 兜底读（PG 不可用或表为空时由 ``load_json_list`` 调用）。"""
     if not os.path.isfile(REPORT_FILE):
         return []
     try:
@@ -89,10 +90,22 @@ def _load_reports() -> list:
         return []
 
 
+def _load_reports() -> list:
+    """报告读 PG 真源（JSON 兜底），并按生成时间升序。
+
+    评审 M-39：此前只读写 JSON（还直接调 ``pg_store._write_json_atomic``），
+    多实例下 A 实例生成的报告 B 实例看不到；PG 读默认 ``updated_at DESC``，
+    这里按 ``generatedAt`` 升序还原"旧→新"，保证 ``last_report()`` 取最新一条。
+    """
+    items = pg_store.load_json_list("agent_sleep_reports", REPORT_FILE, _load_reports_json)
+    return sorted(items, key=lambda r: str(r.get("generatedAt") or ""))
+
+
 def _save_report(report: dict) -> None:
     reports = _load_reports()
     reports.append(report)
-    pg_store._write_json_atomic(REPORT_FILE, reports[-MAX_REPORTS:])
+    # 评审 M-39：走通用 JSON 列表域（PG 真源 + JSON 兜底），不再直接碰私有写函数
+    pg_store.save_json_list("agent_sleep_reports", REPORT_FILE, reports[-MAX_REPORTS:])
 
 
 def _finding(kind: str, severity: str, bot: str, memories: list[dict],
