@@ -52,6 +52,8 @@ _duration_buckets: dict[str, list[int]] = defaultdict(
     lambda: [0] * (len(_DURATION_BUCKETS) + 1))
 _skill_usage: dict[str, int] = defaultdict(int)
 _skill_last_used: dict[str, float] = {}
+# 评审 02-S12：记录被归并进 __other__ 的**不同**技能编码，让"溢出"可观测
+_skill_overflow: set[str] = set()
 _quality: dict[tuple[str, str], int] = defaultdict(int)
 _tokens = {"input": 0, "output": 0}
 _tokenized_requests = 0
@@ -142,6 +144,7 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
             for code in dict.fromkeys(skill_codes or ()):
                 key = str(code)[:64]
                 if key not in _skill_usage and len(_skill_usage) >= MAX_SKILL_LABELS:
+                    _skill_overflow.add(key)
                     key = OTHER_SKILL
                 _skill_usage[key] += 1
                 _skill_last_used[key] = now
@@ -174,6 +177,7 @@ def snapshot() -> dict:
             "duration_buckets": {c: list(v) for c, v in _duration_buckets.items()},
             "skills": dict(_skill_usage),
             "skill_last_used": dict(_skill_last_used),
+            "skill_overflow": sorted(_skill_overflow),
             "quality": {f"{a}|{s}": n for (a, s), n in _quality.items()},
             "tokens": {"input": _tokens["input"], "output": _tokens["output"],
                        "requests": _tokenized_requests},
@@ -247,6 +251,15 @@ def prometheus_text() -> str:
         for code, n in sorted(_skill_usage.items()):
             lines.append(
                 f'medassist_agent_skill_usage_total{{skill="{_esc(code)}"}} {n}')
+        # 评审 02-S12：标签基数溢出必须可见（否则 __other__ 会悄悄吞掉全部新技能）
+        lines.extend([
+            "# HELP medassist_agent_skill_labels_tracked 已跟踪的技能标签数",
+            "# TYPE medassist_agent_skill_labels_tracked gauge",
+            f"medassist_agent_skill_labels_tracked {len(_skill_usage)}",
+            "# HELP medassist_agent_skill_labels_overflow 被归并进 __other__ 的不同技能数",
+            "# TYPE medassist_agent_skill_labels_overflow gauge",
+            f"medassist_agent_skill_labels_overflow {len(_skill_overflow)}",
+        ])
         lines.extend([
             "# HELP medassist_agent_skill_last_used_timestamp_seconds 技能最近一次成功使用时间",
             "# TYPE medassist_agent_skill_last_used_timestamp_seconds gauge",
@@ -294,6 +307,7 @@ def reset() -> None:
         _duration_buckets.clear()
         _skill_usage.clear()
         _skill_last_used.clear()
+        _skill_overflow.clear()
         _quality.clear()
         _tokens["input"] = _tokens["output"] = 0
         _tokenized_requests = 0

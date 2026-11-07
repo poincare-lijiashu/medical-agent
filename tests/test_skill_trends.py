@@ -197,6 +197,23 @@ def test_alerts_replay_drop_from_snapshots(monkeypatch):
                for a in out["alerts"])
 
 
+def test_alerts_replay_drop_requires_adjacent_days(monkeypatch):
+    """评审 02-S8：跨多天的快照不比较，避免把累计变化误报成单日突变。"""
+    base = {"experiences": {"total": 0, "coverageRate": 0},
+            "proposals": {"total": 0, "proposed": 0, "replayChecked": 0,
+                          "replayPassRate": 0, "adoptionRate": 0},
+            "skillCards": {"published": 0, "unusedPublished": [],
+                           "reviewPassRate": 0}}
+    older = {"date": "2026-11-01", "metrics": {**base,
+             "proposals": {**base["proposals"], "replayPassRate": 1.0}}}
+    newer = {"date": "2026-11-04", "metrics": {**base,
+             "proposals": {**base["proposals"], "replayPassRate": 0.5}}}
+    monkeypatch.setattr(skill_trends, "list_snapshots", lambda days=2: [older, newer])
+    monkeypatch.setattr(skill_ops, "metrics", lambda: base)
+    out = skill_trends.alerts()
+    assert not any(a["code"] == "REPLAY_PASS_RATE_DROP" for a in out["alerts"])
+
+
 # ---------------------------------------------------------------- API
 
 def _client(monkeypatch, tmp_path):

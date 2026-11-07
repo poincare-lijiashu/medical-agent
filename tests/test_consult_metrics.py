@@ -310,6 +310,19 @@ def test_metrics_endpoint_includes_consult_metrics(monkeypatch, tmp_path):
     assert "medassist_counter_total" in r.text  # 既有指标仍保留
 
 
+def test_skill_label_overflow_is_observable(monkeypatch):
+    """评审 02-S12：基数溢出后新技能归入 __other__，但溢出数量必须可查。"""
+    monkeypatch.setattr(consult_metrics, "MAX_SKILL_LABELS", 2)
+    consult_metrics.record("drug", "sync", "ok", 1, ["a-card", "b-card", "c-card"])
+
+    snap = consult_metrics.snapshot()
+    assert snap["skill_overflow"] == ["c-card"]
+    assert snap["skills"]["__other__"] == 1
+    text = consult_metrics.prometheus_text()
+    assert "medassist_agent_skill_labels_overflow 1" in text
+    assert "medassist_agent_skill_labels_tracked 3" in text  # 2 个真实标签 + __other__
+
+
 def test_duration_histogram_is_cumulative_and_exported():
     """评审 02-S13：标准 histogram（秒），bucket 累积、sum/count 可被 histogram_quantile 消费。"""
     consult_metrics.record("drug", "sync", "ok", 30)

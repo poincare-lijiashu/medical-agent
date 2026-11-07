@@ -159,6 +159,17 @@ def _esc(value: str) -> str:
             .replace("\n", "\\n"))
 
 
+def _gap_days(prev_date, cur_date) -> int | None:
+    """两个业务日期相差的天数；缺失/非法返回 None（评审 02-S8）。"""
+    try:
+        from datetime import date
+        a = date.fromisoformat(str(prev_date))
+        b = date.fromisoformat(str(cur_date))
+        return (b - a).days
+    except (TypeError, ValueError):
+        return None
+
+
 def alerts(metrics: dict | None = None) -> dict:
     """阈值告警：当前指标 + 相邻快照回放通过率下降。不自动处置。
 
@@ -209,11 +220,18 @@ def alerts(metrics: dict | None = None) -> dict:
     if len(snaps) >= 2:
         prev = (snaps[0].get("metrics") or {}).get("proposals") or {}
         cur = (snaps[1].get("metrics") or {}).get("proposals") or {}
-        drop = round((prev.get("replayPassRate") or 0) - (cur.get("replayPassRate") or 0), 3)
-        if drop >= REPLAY_DROP_THRESHOLD:
-            add("high", "REPLAY_PASS_RATE_DROP",
-                f"回放通过率较上次快照下降 {drop:.0%}",
-                "proposals.replayPassRate", cur.get("replayPassRate"), prev.get("replayPassRate"))
+        # 评审 02-S8：只在"相邻自然日"比较；快照缺失导致跨多天时，
+        # "较上次下降"会把累计变化误报成突变，因此不比较并显式跳过。
+        gap = _gap_days(snaps[0].get("date"), snaps[1].get("date"))
+        if gap == 1:
+            drop = round((prev.get("replayPassRate") or 0)
+                         - (cur.get("replayPassRate") or 0), 3)
+            if drop >= REPLAY_DROP_THRESHOLD:
+                add("high", "REPLAY_PASS_RATE_DROP",
+                    f"回放通过率 {snaps[0].get('date')}→{snaps[1].get('date')} "
+                    f"下降 {drop:.0%}",
+                    "proposals.replayPassRate", cur.get("replayPassRate"),
+                    prev.get("replayPassRate"))
 
     return {
         "generatedAt": _now().isoformat(timespec="seconds"),

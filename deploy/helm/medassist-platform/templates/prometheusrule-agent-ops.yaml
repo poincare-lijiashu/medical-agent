@@ -191,4 +191,13 @@ spec:
           annotations:
             summary: "同步问答 P95 时延超过 20 秒"
             description: "近 30 分钟 P95={{ "{{" }} $value {{ "}}" }}s；请检查模型队列、并发闸门与上游 provider 状态。"
+
+        - alert: MedAssistAgentSkillLabelOverflow
+          expr: medassist_agent_skill_labels_overflow > 0
+          for: 6h
+          labels:
+            severity: info
+          annotations:
+            summary: "技能标签基数溢出（新技能被归入 __other__）"
+            description: "当前 {{ "{{" }} $value {{ "}}" }} 个不同技能编码已被归并；请评估提升 MAX_SKILL_LABELS 或清理长期未用技能卡。"
 {{- end }}

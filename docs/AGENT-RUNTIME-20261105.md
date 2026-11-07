@@ -1348,6 +1348,32 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 
 **验证**：全量 pytest **1131 passed / 14 skipped**。
 
+---
+
+## 39. 2026-11-06 评审整改（第 35 批：快照比较跨度与标签溢出可观测）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S8 | `REPLAY_PASS_RATE_DROP` 只在**相邻自然日**（`gap == 1`）比较；跨多天（快照缺失）不比较，告警文案带 `prev→cur` 日期，避免把累计变化说成"突然下降" | `skill_trends.py` |
+| 02-S12 | 技能标签溢出可观测：新增 `medassist_agent_skill_labels_tracked` 与 `medassist_agent_skill_labels_overflow`（被归并进 `__other__` 的不同技能数）；新增告警 `MedAssistAgentSkillLabelOverflow`（>0，info） | `consult_metrics.py`、规则文件 + Helm（15 条） |
+| 06（文档） | `OPERATIONS.md` / `DEPLOY.md` 规则数量（15）与指标清单同步 | 两个文档 |
+
+**为什么这样改**：快照依赖人工/定时触发，缺一天就会让"相邻两条"跨越任意长的时间；
+仍以"较上次下降"呈现会误导运营以为发生了单日突变。标签溢出则相反——溢出后新技能全部
+沉到 `__other__`，只查 `skill_usage_total` 会得出"这些技能从没被用过"的错误结论。
+
+**新增测试**：`test_alerts_replay_drop_requires_adjacent_days`、`test_skill_label_overflow_is_observable`
+（溢出计数、`__other__` 归属、两项 gauge 导出）。
+
+**仍存边界**：
+- 跨多天的下降**完全静默**（既不告警也不提示"跳过比较"）；如需可另加 info 级别"快照断档"提示；
+- 溢出只统计"不同编码数"，不统计被归并的调用次数；
+- `MAX_SKILL_LABELS=200` 仍是常量，未做成配置项；
+- 标签溢出告警为 info，需人工到控制台核对实际技能使用情况。
+
+**验证**：全量 pytest **1133 passed / 14 skipped**；规则 YAML 解析通过（15 条）。
+
+
 
 
 
