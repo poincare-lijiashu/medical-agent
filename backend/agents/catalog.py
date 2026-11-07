@@ -222,11 +222,29 @@ def catalog_payload(role: str) -> list[dict]:
     return out
 
 
+def disclosed_agents() -> tuple[AgentSpec, ...]:
+    """对外披露的能力域（评审 03-S7：只暴露白名单，不再广播全部内部拓扑）。
+
+    白名单由 ``AGENT_CARD_DISCLOSED_AGENTS`` 配置；留空表示不披露任何能力域
+    （fail-closed，能力卡只剩协议元数据）。
+    """
+    raw = getattr(settings, "agent_card_disclosed_agents", "") or ""
+    wanted = [p.strip() for p in raw.split(",") if p.strip()]
+    return tuple(a for a in AGENTS if a.id in wanted)
+
+
+def card_base_url(fallback: str) -> str:
+    """能力卡 ``url`` 的基址：优先可信配置，避免 Host 头注入（评审 03-S7）。"""
+    base = getattr(settings, "agent_public_base_url", "") or fallback or ""
+    return base.rstrip("/")
+
+
 def agent_card(base_url: str) -> dict:
     """生成 A2A Agent Card（公开元数据，不含患者数据/密钥/内部地址）。"""
     base = (base_url or "").rstrip("/")
+    agents = disclosed_agents()
     skills = []
-    for agent in AGENTS:
+    for agent in agents:
         for s in agent.skills:
             skills.append({
                 "id": s.id,
@@ -267,6 +285,8 @@ def agent_card(base_url: str) -> dict:
             "a2aEnabled": agent_flags.get_flag("agent_a2a"),
             "multiAgentEnabled": agent_flags.get_flag("agent_multi_agent"),
             "webSearchEnabled": agent_flags.get_flag("agent_web_search"),
-            "agents": [a.id for a in AGENTS],
+            # 评审 03-S7：只列对外披露的能力域；内部质控/影像/病例/会诊域不进能力卡
+            "agents": [a.id for a in agents],
+            "disclosure": "allowlist",
         },
     }

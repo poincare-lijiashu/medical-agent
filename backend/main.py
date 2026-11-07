@@ -254,7 +254,8 @@ async def well_known_agent_card(request: Request):
     """A2A 标准发现入口（与 /api/v1/agent/card 同一份元数据）。"""
     if not agent_flags.get_flag("agent_a2a"):
         return JSONResponse({"detail": "A2A 能力广告已关闭"}, status_code=404)
-    return agent_catalog.agent_card(str(request.base_url).rstrip("/"))
+    return agent_catalog.agent_card(
+        agent_catalog.card_base_url(str(request.base_url).rstrip("/")))
 
 
 @app.middleware("http")

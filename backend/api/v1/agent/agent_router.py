@@ -167,7 +167,8 @@ class ToolInvokeReq(BaseModel):
 
 
 def _base_url(request: Request) -> str:
-    return str(request.base_url).rstrip("/")
+    """能力卡基址：优先可信配置，避免 Host 头注入（评审 03-S7）。"""
+    return catalog.card_base_url(str(request.base_url))
 
 
 @router.get("/card")
@@ -730,12 +731,22 @@ async def update_bot_team(code: str, req: TeamUpdateReq,
                           user: dict = Depends(require_role("admin"))):
     payload = req.model_dump()
     row_version = payload.pop("rowVersion")
+    # 评审 03-S15：审计要能回放"成员被换成了谁"，因此先取改前编制
+    try:
+        before = bot_teams.get_team(code, "admin").get("botCodes")
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
     try:
         item = bot_teams.update_team(code, payload, row_version,
                                      user.get("username", "admin"))
     except bot_teams.TeamError as e:
         raise _team_http(e)
-    await _audit_agent(user, "bot_team_update", {"code": code})
+    await _audit_agent(user, "bot_team_update", {
+        "code": code,
+        "before": before,
+        "pending": (item.get("pendingChanges") or {}).get("botCodes"),
+        "name": (item.get("pendingChanges") or {}).get("name"),
+    })
     return item
 
 
@@ -750,12 +761,18 @@ async def review_bot_team(code: str, req: TeamReviewReq,
                           user: dict = Depends(require_role("admin", "qc"))):
     """审核团队的待变更编制（评审 M-37）：提交人不得自审，通过后才改成员。"""
     try:
+        before = bot_teams.get_team(code, "admin").get("botCodes")
+    except bot_teams.TeamError as e:
+        raise _team_http(e)
+    try:
         item = bot_teams.review_team(code, req.approve, req.note, req.rowVersion,
                                      user.get("username", "qc"))
     except bot_teams.TeamError as e:
         raise _team_http(e)
     await _audit_agent(user, "bot_team_review", {
         "code": code, "approve": req.approve,
+        # 评审 03-S15：审核通过即换编制，前后值都要留痕
+        "before": before, "after": item.get("botCodes"),
         "noteChars": len(req.note or "")})
     return item
 
@@ -805,6 +822,8 @@ async def collaborate(code: str, req: CollaborateReq, user: dict = Depends(requi
         raise _team_http(e)
     await _audit_agent(user, "bot_collaborate",
                        {"team": code, "opinions": len(result["opinions"]),
+                        # 评审 03-S15：留痕"本次由哪些 Bot 同场作答"（换编制=换口径）
+                        "bots": [o.get("botCode") for o in result["opinions"]],
                         "failed": result["failed"]})
     return result
 

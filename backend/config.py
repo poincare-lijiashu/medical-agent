@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     server_host: str = "127.0.0.1"
     server_port: int = 8001
+    # 评审 03-S7：A2A 能力卡对外 URL 使用可信配置，避免 Host 头被反向代理改写；
+    # 留空时回落到请求的 base_url（仅建议在开发环境这样用）。
+    agent_public_base_url: str = ""
+    # 评审 03-S7：能力卡只披露对外可用能力域（逗号分隔）；留空=不披露任何能力域（fail-closed）。
+    agent_card_disclosed_agents: str = "literature,drug,kb"
     cors_origins: list[str] = ["http://localhost:8001", "http://127.0.0.1:8001"]
 
     # LLM — Qwen（阿里云百炼，OpenAI 兼容）

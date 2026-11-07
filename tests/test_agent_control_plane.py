@@ -67,6 +67,42 @@ def test_card_has_required_a2a_fields():
     assert card["x-medassist"]["hitlRequired"] is True
 
 
+def test_card_discloses_only_allowlisted_agents(monkeypatch):
+    """评审 03-S7：能力卡只暴露白名单能力域，不再广播全部内部拓扑。"""
+    monkeypatch.setattr(catalog.settings, "agent_card_disclosed_agents", "literature,kb")
+    card = catalog.agent_card("https://his.example")
+    assert card["x-medassist"]["agents"] == ["literature", "kb"]
+    assert card["x-medassist"]["disclosure"] == "allowlist"
+    assert {s["x-agent"] for s in card["skills"]} == {"literature", "kb"}
+
+
+def test_card_empty_allowlist_discloses_nothing(monkeypatch):
+    """白名单留空 = fail-closed：只剩协议元数据，不披露任何能力域。"""
+    monkeypatch.setattr(catalog.settings, "agent_card_disclosed_agents", "")
+    card = catalog.agent_card("https://his.example")
+    assert card["x-medassist"]["agents"] == []
+    assert card["skills"] == []
+
+
+def test_card_base_url_prefers_trusted_config(monkeypatch):
+    """评审 03-S7：对外 URL 用可信配置，Host 头不能改写能力卡地址。"""
+    monkeypatch.setattr(catalog.settings, "agent_public_base_url",
+                        "https://ai.hospital.example/")
+    assert catalog.card_base_url("http://evil.example/") == "https://ai.hospital.example"
+
+
+def test_card_endpoints_ignore_host_header_when_configured(monkeypatch, tmp_path):
+    agent_flags.set_flag("agent_a2a", True)
+    monkeypatch.setattr(catalog.settings, "agent_public_base_url",
+                        "https://ai.hospital.example")
+    c = _client(monkeypatch, tmp_path)
+    r = c.get("/api/v1/agent/card", headers={"Host": "evil.example"})
+    assert r.status_code == 200
+    assert r.json()["url"] == "https://ai.hospital.example/api/v1/agent/a2a"
+    w = c.get("/.well-known/agent-card.json", headers={"Host": "evil.example"})
+    assert w.json()["url"] == "https://ai.hospital.example/api/v1/agent/a2a"
+
+
 def test_catalog_filters_by_role():
     doctor = {a["id"] for a in catalog.catalog_payload("doctor")}
     pharmacist = {a["id"] for a in catalog.catalog_payload("pharmacist")}

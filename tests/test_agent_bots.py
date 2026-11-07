@@ -511,3 +511,54 @@ def test_api_bot_lifecycle_memory_and_collaboration(monkeypatch, tmp_path):
     team = c.get("/api/v1/agent/bot-teams/team-x", headers=adm).json()
     assert c.post("/api/v1/agent/bot-teams/team-x/disable", headers=adm,
                   json={"rowVersion": team["rowVersion"]}).status_code == 200
+
+
+def test_team_audit_records_membership_before_and_after(monkeypatch, tmp_path):
+    """评审 03-S15：换编制等于换输出口径，审计须能回放"谁在场"的前后值。"""
+    audit = AuditLog(path=str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: audit)
+    seed_default_users()
+    c = TestClient(app)
+    adm = _h(_login(c, "admin01"))
+    qc = _h(_login(c, "qc01"))
+    doc = _h(_login(c, "doctor01"))
+    for code in ("beta-a", "beta-b", "beta-c"):
+        _published_bot(code)
+
+    r = c.post("/api/v1/agent/bot-teams", headers=adm,
+               json={"code": "team-beta", "name": "审计小组", "description": "",
+                     "botCodes": ["beta-a", "beta-b"]})
+    assert r.status_code == 200, r.text
+    pending = c.put("/api/v1/agent/bot-teams/team-beta", headers=adm, json={
+        "code": "team-beta", "name": "审计小组", "description": "",
+        "botCodes": ["beta-a", "beta-c"], "rowVersion": r.json()["rowVersion"],
+    }).json()
+    assert pending["pendingChanges"]["botCodes"] == ["beta-a", "beta-c"]
+
+    # 提交人不得自审（四眼），由质控通过；通过即换编制
+    assert c.post("/api/v1/agent/bot-teams/team-beta/review", headers=adm,
+                  json={"approve": True, "rowVersion": pending["rowVersion"]}
+                  ).status_code == 403
+    assert c.post("/api/v1/agent/bot-teams/team-beta/review", headers=qc,
+                  json={"approve": True, "rowVersion": pending["rowVersion"]}
+                  ).status_code == 200
+
+    async def fake(provider, messages):
+        return "意见"
+
+    monkeypatch.setattr(bot_runtime, "_default_runner", fake)
+    assert c.post("/api/v1/agent/bot-teams/team-beta/collaborate", headers=doc,
+                  json={"question": "COPD 急性加重如何处理"}).status_code == 200
+
+    def _payload(action: str) -> dict:
+        # action 由 AuditLog.write 归一化进 payload["action"]，不在顶层键
+        return [e["payload"] for e in audit.entries
+                if e.get("event_type") == "agent"
+                and (e.get("payload") or {}).get("action") == action][-1]
+
+    assert _payload("bot_team_create")["bots"] == ["beta-a", "beta-b"]
+    assert _payload("bot_team_update")["before"] == ["beta-a", "beta-b"]
+    assert _payload("bot_team_update")["pending"] == ["beta-a", "beta-c"]
+    assert _payload("bot_team_review")["before"] == ["beta-a", "beta-b"]
+    assert _payload("bot_team_review")["after"] == ["beta-a", "beta-c"]
+    assert _payload("bot_collaborate")["bots"] == ["beta-a", "beta-c"]

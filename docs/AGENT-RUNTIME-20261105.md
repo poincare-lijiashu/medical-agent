@@ -541,7 +541,9 @@
 ### 4.3 验证
 
 - 新增 `tests/test_agent_control_plane.py` **30 项**：目录/Card 结构、路由确定性、多智能体开关、工具校验与真实执行、开关默认值/白名单、API 鉴权、A2A `message/send` 与错误码。
-- 全量 pytest：**991 passed / 11 skipped**（G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12 / G103 5 / G104 4 / G105 3）。
+- 全量 pytest：**991 passed / 11 skipped**（括号内为**各批次新增用例数**，非累计总数；
+  G86 30 / G87 21 / G88 21 / G89 10 / G90 9 / G91 9 / G92 15 / G93 6 / G94 9 / G95 8 / G96 3 / G97 4 / G98 7 / G99 16 / G100 1 / G101 13 / G102 12 / G103 5 / G104 4 / G105 3）。
+  评审 06-M11：此处口径已明确，后续批次的总数以各节"验证"为准（最新见文末）。
 - 边界反证：联网搜索默认拒绝出网；未配置 provider 时工具返回"未启用"；关闭 A2A 后标准发现入口 404；`agent_multi_agent` 关闭时候选仅主责、跳数 1。
 
 ### 4.4 残留边界（明确不做假）
@@ -1111,3 +1113,30 @@ Playwright 冒烟只在本地起服务且装 playwright 时执行，CI 默认 sk
 但"录入人 ≠ 采纳人"只在经验作者字段层面成立）。
 
 **验证**：全量 pytest **1101 passed / 13 skipped**；`npm run build` 成功。
+
+---
+
+## 30. 2026-11-06 评审整改（第 26 批：A2A 披露面、团队审计与文档口径）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 03-S7 | 能力卡**只披露白名单能力域**（默认 `literature,drug,kb`，留空=不披露）；`x-medassist.disclosure=allowlist`；`url` 优先使用可信配置 `AGENT_PUBLIC_BASE_URL`，Host 头不再能改写对外地址；开关默认关（前批已改） | `config.py`、`catalog.py`、`agent_router.py`、`main.py`、`.env.example` |
+| 03-S15 | 团队编制变更审计补**改前/待审/审核后**的 `botCodes`；协作审计补**本次参与作答的 Bot 清单**；四眼审核（提交人不得自审）已在前批落地 | `agent_router.py` |
+| 06-M11 | 台账 §4.3 的括号数字明确为「各批次新增用例数，非累计总数」，消除与批次表/总数的口径冲突 | `docs/AGENT-RUNTIME-20261105.md` |
+
+**为什么这样改**：能力卡虽然不含患者数据，但"默认公开 + 列出全部内部能力域与示例"在互联网侧部署时是不必要的侦察面；
+`request.base_url` 受 Host 头影响，反向代理配置不当会把内部地址写进对外元数据。团队换编制等于换输出口径，
+原审计只记 `code`，事后无法回答"当时是谁在作答"。
+
+**新增测试**：`test_card_discloses_only_allowlisted_agents`、`test_card_empty_allowlist_discloses_nothing`、
+`test_card_base_url_prefers_trusted_config`、`test_card_endpoints_ignore_host_header_when_configured`；
+`test_team_audit_records_membership_before_and_after`（创建/变更/审核/协作四类审计的前后值）。
+
+**仍存边界**：
+- 团队**创建**仍由 admin 单人直接落 `ACTIVE`（视为编排配置；成员必须是已发布 Bot，且 `collaborate` 逐成员校验调用者角色）；
+  编制**变更**必须走 `pendingChanges` + 非提交人审核，且审核通过时再次校验成员仍为 PUBLISHED；
+- 能力卡白名单只影响"对外广告"，不改变内部路由与目录（`/agent/catalog` 仍按登录角色返回）；
+- 未配置 `AGENT_PUBLIC_BASE_URL` 时仍回落到请求 Host（开发便利），生产应在环境变量中显式配置；
+- `/a2a` 的调用入口与能力卡共用 `agent_a2a` 开关，但本批未新增按调用方的细粒度授权（仍为登录 + 通用限流 + 模型配额）。
+
+**验证**：全量 pytest **1106 passed / 13 skipped**；本批无前端改动，`dist` 未重建。
