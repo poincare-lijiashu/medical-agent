@@ -153,6 +153,12 @@ def _get(metrics: dict, section: str, key: str):
     return (metrics.get(section) or {}).get(key)
 
 
+def _esc(value: str) -> str:
+    """Prometheus 标签值转义（与 consult_metrics 同口径）。"""
+    return (str(value).replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n"))
+
+
 def alerts(metrics: dict | None = None) -> dict:
     """阈值告警：当前指标 + 相邻快照回放通过率下降。不自动处置。
 
@@ -232,6 +238,14 @@ def prometheus_text() -> str:
         "# HELP medassist_agent_experience_coverage_ratio Experiences covered by proposals.",
         "# TYPE medassist_agent_experience_coverage_ratio gauge",
         f"medassist_agent_experience_coverage_ratio {m['experiences']['coverageRate']}",
+    ]
+    # 评审 02-S11：按能力域分解，运营可用 sum by (agentId) 定位到具体科室
+    for agent_id, n in sorted((m["experiences"].get("byAgent") or {}).items()):
+        lines.append(f'medassist_agent_experiences_by_agent{{agentId="{_esc(agent_id)}"}} {n}')
+    for agent_id, n in sorted((m["skillCards"].get("publishedByAgent") or {}).items()):
+        lines.append(
+            f'medassist_agent_published_skills_by_agent{{agentId="{_esc(agent_id)}"}} {n}')
+    lines += [
         "# HELP medassist_agent_proposals_total Skill proposals by status.",
         "# TYPE medassist_agent_proposals_total gauge",
     ]

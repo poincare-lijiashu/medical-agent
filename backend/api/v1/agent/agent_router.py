@@ -1069,6 +1069,10 @@ async def generate_skill_advices(user: dict = Depends(require_role("admin", "qc"
     await _audit_agent(user, "skill_advice_generate", {
         "created": result["createdCount"],
         "total": len(result["advices"]),
+        # 评审 02-S5：截断与已存在数量一并留痕，避免"只生成了几条"无法解释
+        "candidateCount": result.get("candidateCount"),
+        "truncated": result.get("truncated"),
+        "remaining": result.get("remaining"),
     })
     return result
 

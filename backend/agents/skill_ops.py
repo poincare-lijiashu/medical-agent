@@ -62,6 +62,10 @@ def metrics() -> dict:
         "skillCards": {
             "total": len(cards),
             "byStatus": card_status,
+            # 评审 02-S11：按能力域分解，告警可下钻到具体 agentId
+            "byAgent": _by_key(cards, "agentId"),
+            "publishedByAgent": _by_key(
+                [c for c in cards if c.get("status") == "PUBLISHED"], "agentId"),
             "reviewPassRate": _rate(passed, decided),
             "published": len(published_codes),
             "referencedByBots": len(published_codes & referenced_by_bots),

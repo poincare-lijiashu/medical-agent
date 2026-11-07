@@ -1323,6 +1323,32 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 
 **验证**：全量 pytest **1129 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
 
+---
+
+## 38. 2026-11-06 评审整改（第 34 批：指标按能力域下钻与建议截断显式化）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S11 | 新增按能力域导出的 gauge：`medassist_agent_experiences_by_agent{agentId}`、`medassist_agent_published_skills_by_agent{agentId}`；`skill_ops.metrics()` 同步暴露 `skillCards.byAgent/publishedByAgent` | `skill_ops.py`、`skill_trends.py` |
+| 02-S5 | 建议生成显式返回截断信息：`candidateCount` / `skippedExisting` / `truncated` / `remaining` / `maxPerRun`；审计同步记录这些字段，不再让人误以为"只有 5 条待办" | `skill_advice.py`、`agent_router.py` |
+| 06（文档） | `OPERATIONS.md` 指标清单补 by-agent 两项 | `docs/OPERATIONS.md` |
+
+**为什么这样改**：「经验覆盖率偏低」告警只能说明整体低，运营还得自己逐能力域查 API；
+多科室院里，定位"是呼吸科没沉淀经验还是影像科"成本很高。建议生成到 `MAX_PER_RUN` 就停，
+此前响应里没有任何"还有多少条没生成"的信号，运营会误判队列已清空。
+
+**新增测试**：`test_prometheus_exports_by_agent_dimensions`、`test_generate_reports_truncation_explicitly`
+（含"第二轮补齐剩余、第三轮全部跳过"的连续性断言）。
+
+**仍存边界**：
+- by-agent 指标覆盖经验与**已发布**技能卡，不含候选/草稿的按域分解；
+- 覆盖率告警本身仍是全局阈值，未做"按 agentId 分别告警"（导出维度已具备，规则可按需扩展）；
+- `candidateCount` 是"告警触发的候选建议条数"，与"当前全部 OPEN 建议数"不同（后者在 `advices` 里）；
+- 截断按 `MAX_PER_RUN=20` 控制，未做分批游标；重复调用会继续补齐，但可能产生多次审计事件。
+
+**验证**：全量 pytest **1131 passed / 14 skipped**。
+
+
 
 
 

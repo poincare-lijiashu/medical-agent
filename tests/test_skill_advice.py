@@ -55,6 +55,29 @@ def test_generate_unused_skill_advices_and_dedupe():
     assert len([i for i in again if i["code"] == "UNUSED_SKILL"]) == 3
 
 
+def test_generate_reports_truncation_explicitly(monkeypatch):
+    """评审 02-S5：达到 MAX_PER_RUN 时必须显式返回 truncated/remaining，不能静默截断。"""
+    monkeypatch.setattr(skill_advice, "MAX_PER_RUN", 2)
+    for i in range(4):
+        _publish_skill(f"trunc-{i}", f"截断技能{i}")
+
+    result = skill_advice.generate_with_stats("qc01")
+    assert result["createdCount"] == 2
+    assert result["candidateCount"] >= 4
+    assert result["truncated"] is True
+    assert result["remaining"] >= 1
+    assert result["maxPerRun"] == 2
+
+    again = skill_advice.generate_with_stats("qc01")
+    # 第二轮先把上次未生成的剩余项补完；补完后不再截断
+    assert again["createdCount"] == result["remaining"]
+    assert again["truncated"] is False
+
+    third = skill_advice.generate_with_stats("qc01")
+    assert third["createdCount"] == 0
+    assert third["skippedExisting"] == third["candidateCount"]
+
+
 def test_generate_proposal_review_advices():
     _proposals(3)
     items = skill_advice.generate("qc01")

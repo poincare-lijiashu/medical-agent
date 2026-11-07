@@ -67,6 +67,15 @@ def test_alerts_accepts_precomputed_metrics(monkeypatch):
     assert calls == []
 
 
+def test_prometheus_exports_by_agent_dimensions():
+    """评审 02-S11：经验与已发布技能按能力域导出，便于告警下钻到具体科室。"""
+    _exp("按域模式甲")
+    _publish_skill("lit-by-agent", "按域技能")
+    text = skill_trends.prometheus_text()
+    assert 'medassist_agent_experiences_by_agent{agentId="literature"} 1' in text
+    assert 'medassist_agent_published_skills_by_agent{agentId="literature"} 1' in text
+
+
 def test_proposals_status_export_is_dynamic(monkeypatch):
     """评审 02-S10：候选状态从 byStatus 动态导出，新增状态不会静默漏掉。"""
     m = _fake_metrics()

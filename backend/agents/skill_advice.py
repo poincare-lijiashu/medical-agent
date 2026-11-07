@@ -157,8 +157,14 @@ def generate_with_stats(actor: str) -> dict:
         items = _load()
         existing = {i.get("dedupeKey") for i in items}
         created = []
+        skipped_existing = 0
+        processed = 0
         for d in drafts:
+            if len(created) >= MAX_PER_RUN:
+                break
+            processed += 1
             if d["dedupeKey"] in existing:
+                skipped_existing += 1
                 continue
             # G96：id 由 dedupeKey 决定，多实例并发生成同一建议时落到同一行；
             # ignore_existing=True 保证不会把已"忽略/完成"的状态覆盖回 OPEN。
@@ -177,10 +183,15 @@ def generate_with_stats(actor: str) -> dict:
                                       ignore_existing=True)
             existing.add(d["dedupeKey"])
             created.append(item)
-            if len(created) >= MAX_PER_RUN:
-                break
+    # 评审 02-S5：截断必须显式（total/shown），不能让人误以为"只有 5 条待办"
+    remaining = max(0, len(drafts) - processed)
     return {"created": created, "createdCount": len(created),
-            "advices": list_advices("admin")}
+            "advices": list_advices("admin"),
+            "candidateCount": len(drafts),
+            "skippedExisting": skipped_existing,
+            "truncated": remaining > 0,
+            "remaining": remaining,
+            "maxPerRun": MAX_PER_RUN}
 
 
 def list_advices(role: str, status: str | None = None) -> list[dict]:
