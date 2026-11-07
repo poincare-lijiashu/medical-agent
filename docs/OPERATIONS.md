@@ -50,16 +50,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - 每响应带 `X-Request-Id`；日志结构化（JSON，含 event 与上下文）。
 - 统一问答计量（G102，进程内聚合、重启归零、不含问题/回答原文）：
   - `medassist_agent_consult_requests_total{agent,channel,status}`（status=ok/error/aborted）
-  - `medassist_agent_consult_duration_ms_sum|count{channel}`
+  - `medassist_agent_consult_duration_ms_sum|count{channel}`（旧口径，保留兼容）与标准 histogram `medassist_agent_consult_duration_seconds{channel}`（可算 P95/P99）
   - `medassist_agent_skill_usage_total{skill}`（仅成功问答累计）
   - `medassist_agent_skill_last_used_timestamp_seconds{skill}`（进程内最近使用时间）
   - `medassist_agent_consult_tokens_total{kind="input|output"}` 与 `medassist_agent_consult_tokenized_requests_total`（仅 provider 真实返回 usage 时累计，不估算）
-  - **Prometheus 只抓 `/metrics`**（G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，当前 13 条规则全部依赖它）。`GET /api/v1/agent/skill-library/metrics/prometheus`（admin/qc JWT）是人工查看用，**只含 skill 域指标、不是抓取端点**；两处都抓会让 consult counter 的 `rate()` 翻倍。
+  - **Prometheus 只抓 `/metrics`**（G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，当前 14 条规则全部依赖它）。`GET /api/v1/agent/skill-library/metrics/prometheus`（admin/qc JWT）是人工查看用，**只含 skill 域指标、不是抓取端点**；两处都抓会让 consult counter 的 `rate()` 翻倍。
   - 页面看板：`GET /api/v1/agent/skill-library/usage`（admin/qc，Agent 控制台「技能使用率」卡片）。
 - Prometheus 抓取（G105）：
 
-  **形态一：本地 / 院区 compose（13 条规则生效）**
-  规则覆盖：技能运营 5 条 + 问答错误率/中止 2 条 + 多 worker 形态 1 条 + 抓取缺失/target down 2 条 + token 成本/采集率 2 条 + 回答质量 1 条。
+  **形态一：本地 / 院区 compose（14 条规则生效）**
+  规则覆盖：技能运营 5 条 + 问答错误率/中止 2 条 + 多 worker 形态 1 条 + 抓取缺失/target down 2 条 + token 成本/采集率 2 条 + 回答质量 1 条 + 同步 P95 时延 1 条。
   1. 确认 `deploy/observability/prometheus/metrics-token` 是**普通文件**；若因文件缺失被 Docker 建成目录，先删除：
      ```powershell
      if (Test-Path .\deploy\observability\prometheus\metrics-token -PathType Container) {

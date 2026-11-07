@@ -40,11 +40,16 @@ MAX_AGENT_LABELS = 64
 ERROR_REASONS = ("invalid", "forbidden", "unavailable", "timeout", "other")
 # 评审 02-S1：回答质量信号（启发式，只做运营提示，不参与放行/拦截）
 QUALITY_SIGNALS = ("short", "no_evidence", "refusal")
+# 评审 02-S13：标准 Prometheus histogram（秒），支持 histogram_quantile 计算 P95/P99
+_DURATION_BUCKETS = (0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0)
 
 _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = defaultdict(int)
 _errors: dict[tuple[str, str], int] = defaultdict(int)
 _durations: dict[str, list] = defaultdict(lambda: [0.0, 0])
+# channel -> 每个 bucket 的累计次数（record 时按 le 递增，导出时天然累积）
+_duration_buckets: dict[str, list[int]] = defaultdict(
+    lambda: [0] * (len(_DURATION_BUCKETS) + 1))
 _skill_usage: dict[str, int] = defaultdict(int)
 _skill_last_used: dict[str, float] = {}
 _quality: dict[tuple[str, str], int] = defaultdict(int)
@@ -126,6 +131,12 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
         bucket = _durations[ch]
         bucket[0] += ms
         bucket[1] += 1
+        seconds = ms / 1000.0
+        hist = _duration_buckets[ch]
+        for idx, le in enumerate(_DURATION_BUCKETS):
+            if seconds <= le:
+                hist[idx] += 1
+        hist[-1] += 1  # +Inf
         if st == "ok":
             now = time.time()
             for code in dict.fromkeys(skill_codes or ()):
@@ -160,6 +171,7 @@ def snapshot() -> dict:
             "errors": {f"{a}|{r}": n for (a, r), n in _errors.items()},
             "durations": {c: {"sum_ms": v[0], "count": v[1]}
                           for c, v in _durations.items()},
+            "duration_buckets": {c: list(v) for c, v in _duration_buckets.items()},
             "skills": dict(_skill_usage),
             "skill_last_used": dict(_skill_last_used),
             "quality": {f"{a}|{s}": n for (a, s), n in _quality.items()},
@@ -204,6 +216,30 @@ def prometheus_text() -> str:
         for ch, v in sorted(_durations.items()):
             lines.append(
                 f'medassist_agent_consult_duration_ms_count{{channel="{_esc(ch)}"}} {v[1]}')
+        # 评审 02-S13：标准 histogram（秒），可被 histogram_quantile 消费（P95/P99）
+        lines.extend([
+            "# HELP medassist_agent_consult_duration_seconds 统一问答耗时（秒）",
+            "# TYPE medassist_agent_consult_duration_seconds histogram",
+        ])
+        hist_source = dict(_duration_buckets)
+        if not hist_source:
+            # 零样本时保留指标族，避免上线自检的"规则引用指标覆盖"门禁误判缺失
+            hist_source = {"sync": [0] * (len(_DURATION_BUCKETS) + 1)}
+        for ch, buckets in sorted(hist_source.items()):
+            total_s = _durations.get(ch, [0.0, 0])[0] / 1000.0
+            for idx, le in enumerate(_DURATION_BUCKETS):
+                lines.append(
+                    f'medassist_agent_consult_duration_seconds_bucket'
+                    f'{{channel="{_esc(ch)}",le="{le:g}"}} {buckets[idx]}')
+            lines.append(
+                f'medassist_agent_consult_duration_seconds_bucket'
+                f'{{channel="{_esc(ch)}",le="+Inf"}} {buckets[-1]}')
+            lines.append(
+                f'medassist_agent_consult_duration_seconds_sum{{channel="{_esc(ch)}"}} '
+                f'{total_s:.3f}')
+            lines.append(
+                f'medassist_agent_consult_duration_seconds_count{{channel="{_esc(ch)}"}} '
+                f'{_durations.get(ch, [0.0, 0])[1]}')
         lines.extend([
             "# HELP medassist_agent_skill_usage_total 生效技能卡在成功问答中的使用次数",
             "# TYPE medassist_agent_skill_usage_total counter",
@@ -255,6 +291,7 @@ def reset() -> None:
         _requests.clear()
         _errors.clear()
         _durations.clear()
+        _duration_buckets.clear()
         _skill_usage.clear()
         _skill_last_used.clear()
         _quality.clear()

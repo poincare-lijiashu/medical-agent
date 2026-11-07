@@ -176,4 +176,19 @@ spec:
           annotations:
             summary: "回答质量风险信号占比超过 30%"
             description: "近 1 小时 {{ "{{" }} $value {{ "}}" }} 的成功回答命中过短/缺证据/疑似拒答；请按 agent 与 signal 标签复查提示模板与模型输出。"
+
+        - alert: MedAssistAgentConsultLatencyP95High
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (rate(medassist_agent_consult_duration_seconds_bucket{channel="sync"}[30m]))
+            ) > 20
+            and
+            sum(rate(medassist_agent_consult_duration_seconds_count{channel="sync"}[30m])) > 0.02
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "同步问答 P95 时延超过 20 秒"
+            description: "近 30 分钟 P95={{ "{{" }} $value {{ "}}" }}s；请检查模型队列、并发闸门与上游 provider 状态。"
 {{- end }}

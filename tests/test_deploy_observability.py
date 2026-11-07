@@ -39,8 +39,8 @@ def test_helm_prometheus_rule_matches_native_rules():
     native = _alerts(RULES)
     helm = _alerts(RULE_TEMPLATE)
     assert native == helm, f"仅本地有：{native - helm}；仅 Helm 有：{helm - native}"
-    # 7 条业务规则 + 多 worker 形态 + 抓取缺失/down + token 成本/采集率 + 回答质量
-    assert len(native) == 13
+    # 7 条业务规则 + 多 worker 形态 + 抓取缺失/down + token 成本/采集率 + 回答质量 + 时延 P95
+    assert len(native) == 14
 
 
 def test_alert_windows_do_not_double_stack_with_for():

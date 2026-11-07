@@ -1272,6 +1272,33 @@ Helm/原生规则同名同量断言更新为 12 条；告警引用指标与 `/me
 
 **验证**：全量 pytest **1124 passed / 14 skipped**；`npm run build` 成功（`dist` 已重建）。
 
+---
+
+## 36. 2026-11-06 评审整改（第 32 批：问答时延直方图与 P95 告警）
+
+| 编号 | 整改内容 | 关键落点 |
+|---|---|---|
+| 02-S13 | 新增标准 Prometheus histogram `medassist_agent_consult_duration_seconds{channel}`（11 个 ms→s bucket + `_sum`/`_count`），可直接用 `histogram_quantile()` 算 P95/P99；旧 `duration_ms_sum/count` 保留兼容 | `consult_metrics.py` |
+| 02-S13 | 新增告警 `MedAssistAgentConsultLatencyP95High`（sync 通道 P95 > 20s 且样本率 > 0.02/s），本地规则与 Helm 同步（14 条） | 规则文件 + `prometheusrule-agent-ops.yaml` |
+| 06（文档） | `OPERATIONS.md` / `DEPLOY.md` 指标清单与"14 条规则"口径同步 | 两个文档 |
+
+**为什么这样改**：此前只有 `_sum/_count` 两个独立 counter，只能算平均值，`histogram_quantile()`
+完全不可用——而这正是容量与故障演练最需要的 P95/P99。平均值会掩盖长尾：模型偶发 30s
+超时在均值上几乎看不出来，但患者侧体验已经崩了。
+
+**新增测试**：`test_duration_histogram_is_cumulative_and_exported`（bucket 累积语义、sum/count、旧口径兼容）、
+`test_duration_histogram_zero_baseline_when_no_samples`（零样本保留指标族，防门禁误判）；
+规则同名同量断言更新为 14 条。
+
+**仍存边界**：
+- bucket 边界是通用起点（50ms–60s），未按院内实际分布调优；超出 60s 的观测全部落入 `+Inf`；
+- 流式通道耗时含生成时间，未纳入 P95 告警（只覆盖 sync），流式长尾仍需单独建模；
+- 直方图为进程内计数，重启归零、多副本各自独立；`histogram_quantile` 已按 `le` 聚合，但跨副本仍需 Prometheus 聚合；
+- 未做按 agent 维度的时延分解（只有 channel），定位到具体能力域仍需下钻日志。
+
+**验证**：全量 pytest **1126 passed / 14 skipped**；规则 YAML 解析通过（14 条）。
+
+
 
 
 

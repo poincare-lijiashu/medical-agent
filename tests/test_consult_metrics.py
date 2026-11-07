@@ -310,6 +310,30 @@ def test_metrics_endpoint_includes_consult_metrics(monkeypatch, tmp_path):
     assert "medassist_counter_total" in r.text  # 既有指标仍保留
 
 
+def test_duration_histogram_is_cumulative_and_exported():
+    """评审 02-S13：标准 histogram（秒），bucket 累积、sum/count 可被 histogram_quantile 消费。"""
+    consult_metrics.record("drug", "sync", "ok", 30)
+    consult_metrics.record("drug", "sync", "ok", 120)
+    text = consult_metrics.prometheus_text()
+
+    assert 'medassist_agent_consult_duration_seconds_bucket{channel="sync",le="0.05"} 1' in text
+    assert 'medassist_agent_consult_duration_seconds_bucket{channel="sync",le="0.1"} 1' in text
+    assert 'medassist_agent_consult_duration_seconds_bucket{channel="sync",le="0.2"} 2' in text
+    assert 'medassist_agent_consult_duration_seconds_bucket{channel="sync",le="+Inf"} 2' in text
+    assert ('medassist_agent_consult_duration_seconds_sum{channel="sync"} 0.150'
+            in text)
+    assert 'medassist_agent_consult_duration_seconds_count{channel="sync"} 2' in text
+    # 旧 ms 口径保留，兼容既有看板/脚本
+    assert 'medassist_agent_consult_duration_ms_sum{channel="sync"} 150.0' in text
+
+
+def test_duration_histogram_zero_baseline_when_no_samples():
+    """零样本时保留指标族，避免告警规则覆盖门禁误判缺失。"""
+    text = consult_metrics.prometheus_text()
+    assert 'medassist_agent_consult_duration_seconds_bucket{channel="sync",le="+Inf"} 0' in text
+    assert 'medassist_agent_consult_duration_seconds_count{channel="sync"} 0' in text
+
+
 def test_quality_signals_exported_with_zero_baseline():
     """评审 02-S1：质量信号按 agent/signal 导出；无样本时保留零值族供告警门禁识别。"""
     consult_metrics.record_quality("drug", ["short", "no_evidence", "not-a-signal"])
