@@ -5059,6 +5059,49 @@ dry-run（回填前）：会诊单 17 单；jsonb 意见 9 条；子表 0 行；
 - 未加 `consult_opinions.dept` 的独立索引（当前 `(consult_id, dept)` 足够覆盖 `NOT EXISTS` 相关子查询）；
 - 未做定时对账（可接 CronJob，复用脚本 dry-run 的退出码）。
 
+## 129. 2026-11-09 数据结构（第 125 批：pending 读路径可切子表——默认关闭、带对账闸门）
+
+**问题（§128 边界）**：子表建好并双写回填后，读路径仍读 jsonb——索引能力没有被使用。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/config.py` | 新增 `consult_opinions_pending: bool = False`（默认读 jsonb，行为与历史完全一致） |
+| `backend/core/pg_store.py` | 新增 `_CONSULT_PENDING_FILTER_SUBTABLE`（`count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM consult_opinions o WHERE o.consult_id = consults.id AND o.dept = $n))`）；`_pg_consult_inbox_page_impl` / `consult_inbox_page` 增加 `use_subtable` 参数，total 与 pending 仍**同一条聚合语句** |
+| `backend/core/consults.py` | `inbox_page` 按 `settings.consult_opinions_pending` 传 `use_subtable` |
+| `scripts/backfill_consult_opinions.py` | 新增 `--check`：只对账、不写入，不一致退出码 1（供 CronJob/CI 告警）；`exit_code()` 抽成纯函数 |
+| 测试 | +3：子表 SQL 形状（`NOT EXISTS` + 纯科室名探针、不再读 jsonb）、开关切换域层参数、`exit_code` 语义；定向 **77 passed** |
+
+**真机验证（真实 PG）**
+```
+两条读路径逐科室对账：10/10 一致，路径差异科室数 0
+  骨科 1/1、内科 3/2、外科 3/2、急诊 1/1、口腔 1/0，其余 0/0
+计划（骨科，默认）：两条路径都 Aggregate → Seq Scan on consults（17 行，0.06–0.09ms）
+计划（骨科，关 seq/hash/merge）：
+  jsonb 路径 → Index Scan ix_consults_status_order + 行内过滤（无子表访问）
+  子表路径 → Index Only Scan using ix_consult_opinions_dept
+             Index Cond: ((consult_id = consults.id) AND (dept = '骨科'))
+             Heap Fetches: 0
+--check：会诊单 17 / 意见 9 / 不一致 0 → 退出码 0
+```
+
+**设计取舍**
+- **默认关闭**：子表是派生数据，双写漏一行就会"多算待填"；由运维确认 `--check` 为 0 后再打开；
+- **同一聚合语句**：切路径不增加往返，total/pending 仍同口径；
+- **不切内存回落**：PG 不可用时仍按 jsonb 语义算 pending（子表也是从 jsonb 派生的，结果等价）；
+- **`--check` 独立退出码**：可接 CronJob 做"影子数据漂移"告警，而不只是回填工具。
+
+**校验**
+- 定向：**77 passed**；
+- 全量 pytest：**1525 passed / 0 failed / 1 skipped**（5:30，含 e2e；连续第十一批零失败）。
+
+**仍存边界**
+- 子表路径**默认未启用**：生产需要显式改配置并重启（无运行时开关，避免误切）；
+- 小表下两条路径计划都是顺扫，索引优势要等数据量（本机 17 单 / 9 条意见）；
+- 子表与 jsonb 仍非同一事务强一致（双写失败只告警），因此依赖 `--check` 巡检兜底；
+- `--check` 是整表对账（全量读 consults），千万级时需要改为抽样/按月窗口；
+- 未把 `pending` 的读路径选择暴露到 admin 面板（避免运维误切后无人知道口径变了）。
+
 
 
 

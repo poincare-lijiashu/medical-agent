@@ -148,3 +148,12 @@ def test_backfill_diff_by_consult():
     assert backfill.diff_by_consult({"c1": 2}, {"c1": 0}) == ["c1"]  # 期望有、实际缺
     assert backfill.diff_by_consult({"c1": 1}, {"c1": 2}) == ["c1"]  # 行数不符
     assert backfill.diff_by_consult({"c1": 1}, {"c1": 1, "c9": 1}) == ["c9"]  # 孤儿行
+
+
+def test_backfill_exit_code_semantics():
+    """`--check` 不允许忽略差异；`--apply` 后仍有差异也算失败（供 CronJob 告警）。"""
+    assert backfill.exit_code([], apply=False, check=False) == 0
+    assert backfill.exit_code(["c1"], apply=False, check=False) == 0  # 普通 dry-run 不算失败
+    assert backfill.exit_code(["c1"], apply=False, check=True) == 1
+    assert backfill.exit_code([], apply=False, check=True) == 0
+    assert backfill.exit_code(["c1"], apply=True, check=False) == 1

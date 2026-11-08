@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # JSON 降为 best-effort 镜像快照；false=旧编排（JSON 先写真源，PG best-effort 镜像）。
     # 无 PG 池 / PG_OFFLINE 离线模式下两种编排等价（JSON 是唯一持久层）。
     pg_primary: bool = True
+    # 第 125 批：收件箱"待本科室填意见"的读路径。false=读 jsonb（默认，与历史一致）；
+    # true=读派生子表 consult_opinions（`NOT EXISTS` 才能走索引，§127/§128）。
+    # 切换前必须确认 `scripts/backfill_consult_opinions.py --check` 无差异——子表由双写维护，
+    # 一旦双写漏行，读子表会多算"待填"，因此默认关闭、由运维显式开启。
+    consult_opinions_pending: bool = False
     # 第 50/51 批：PG 连接熔断。连续 N 次连接类失败后，在冷却期内直接回落 JSON，
     # 避免每次请求都等连接超时（实测约 2s/域）；冷却结束自动探测，成功即闭合。
     pg_circuit_fails: int = 3

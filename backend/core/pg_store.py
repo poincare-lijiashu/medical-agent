@@ -1999,22 +1999,37 @@ _CONSULT_PENDING_FILTER = (
     " @> ${n}::jsonb))"
 )
 
+# 第 125 批：读派生子表（`settings.consult_opinions_pending`）时的同口径计数。
+# `NOT EXISTS` 是关系表上的反连接，可以走 `ix_consult_opinions_dept`——这是 §127 证明
+# jsonb 取反做不到的事；子表由双写维护，切换前须 `backfill --check` 无差异。
+_CONSULT_PENDING_FILTER_SUBTABLE = (
+    "count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM consult_opinions o"
+    " WHERE o.consult_id = consults.id AND o.dept = ${n}))"
+)
+
 
 async def _pg_consult_inbox_page_impl(where: str, params: list, limit: int | None,
-                                      offset: int, dept: str) -> dict | None:
+                                      offset: int, dept: str,
+                                      use_subtable: bool = False) -> dict | None:
     """收件箱分页：{"items", "total", "pending"}；空表 → None。
 
     `pending` 是**整个过滤结果**里"本科室还没填意见"的条数（不是当前页），与第 77 批
-    的应用层口径一致——角标要的是"还有几单等我"，翻页不该改变它。"""
+    的应用层口径一致——角标要的是"还有几单等我"，翻页不该改变它。
+    第 125 批：`use_subtable=True` 时改读 `consult_opinions`（可走索引），否则读 jsonb。"""
     async with _pool.acquire() as c:
         if not await c.fetchval("SELECT count(*) FROM consults"):
             return None
         n = len(params)
         # total 与 pending 一次聚合出（同一条语句、同一份扫描结果）
+        if use_subtable:
+            filter_sql = _CONSULT_PENDING_FILTER_SUBTABLE.format(n=n + 1)
+            probe = dept
+        else:
+            filter_sql = _CONSULT_PENDING_FILTER.format(n=n + 1)
+            probe = json.dumps([{"dept": dept}], ensure_ascii=False)
         agg = await c.fetchrow(  # noqa: S608 —— where 为域层固定片段
-            "SELECT count(*) AS total, " + _CONSULT_PENDING_FILTER.format(n=n + 1)
-            + " AS pending FROM consults WHERE " + where, *params,
-            json.dumps([{"dept": dept}], ensure_ascii=False))
+            "SELECT count(*) AS total, " + filter_sql
+            + " AS pending FROM consults WHERE " + where, *params, probe)
         total = int((agg or {}).get("total") or 0)
         pending = int((agg or {}).get("pending") or 0)
         sql = _CONSULT_WHERE_SELECT + where + _CONSULT_ORDER  # noqa: S608
@@ -2030,8 +2045,11 @@ async def _pg_consult_inbox_page_impl(where: str, params: list, limit: int | Non
 
 
 def consult_inbox_page(where: str, params: tuple = (), limit: int | None = None,
-                       offset: int = 0, dept: str = "") -> dict | None:
-    """收件箱分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+                       offset: int = 0, dept: str = "",
+                       use_subtable: bool = False) -> dict | None:
+    """收件箱分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。
+
+    第 125 批：`use_subtable` 由域层按 `settings.consult_opinions_pending` 传入。"""
     if offline_mode() or not _pool:
         return None
     if not bool(getattr(settings, "pg_primary", True)) and "consults.json" in _repo_pg_stale:
@@ -2039,7 +2057,7 @@ def consult_inbox_page(where: str, params: tuple = (), limit: int | None = None,
     try:
         return _pg_call("consults", "inbox_page",
                         _pg_consult_inbox_page_impl(where, list(params or ()), limit,
-                                                    offset, dept))
+                                                    offset, dept, use_subtable))
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，收件箱照常可用
         logger.warning("pg.consult_inbox_page_failed", error=str(e)[:120])
         return None

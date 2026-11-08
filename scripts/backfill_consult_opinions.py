@@ -11,6 +11,7 @@ GIN）。双写自第 124 批起生效，**历史会诊**需要本脚本回填�
 
 用法：
     python scripts/backfill_consult_opinions.py            # dry-run
+    python scripts/backfill_consult_opinions.py --check    # 只对账（不一致退出码 1）
     python scripts/backfill_consult_opinions.py --apply    # 重建子表
 """
 import argparse
@@ -71,13 +72,20 @@ def diff_by_consult(expected: dict[str, int], actual: dict[str, int]) -> list[st
     return bad
 
 
+def exit_code(bad: list[str], *, apply: bool, check: bool) -> int:
+    """退出码：`--check` 不允许忽略差异；`--apply` 之后仍有差异也算失败（供 CronJob 告警）。"""
+    if apply or check:
+        return 1 if bad else 0
+    return 0
+
+
 async def _table_counts(conn) -> dict[str, int]:
     rows = await conn.fetch(
         "SELECT consult_id, count(*) AS n FROM consult_opinions GROUP BY 1")
     return {str(r["consult_id"]): int(r["n"]) for r in rows}
 
 
-async def _run(apply: bool, dsn: str) -> int:
+async def _run(apply: bool, check: bool, dsn: str) -> int:
     conn = await asyncpg.connect(dsn)
     try:
         # 幂等建表：本脚本可能先于应用启动执行（此时 init() 还没跑过）
@@ -93,6 +101,9 @@ async def _run(apply: bool, dsn: str) -> int:
         if bad:
             print("  不一致单号（前 10）：", ", ".join(bad[:10]))
         if not apply:
+            if check:
+                print("对账结果：" + ("不一致（退出码 1）" if bad else "一致"))
+                return exit_code(bad, apply=False, check=True)
             print("dry-run：未写入。加 --apply 重建子表。")
             return 0
 
@@ -109,7 +120,7 @@ async def _run(apply: bool, dsn: str) -> int:
         after = await _table_counts(conn)
         bad2 = diff_by_consult(stats["perConsult"], after)
         print(f"已重建：{sum(after.values())} 行 / {len(after)} 单；残留不一致 {len(bad2)}")
-        return 1 if bad2 else 0
+        return exit_code(bad2, apply=True, check=False)
     finally:
         await conn.close()
 
@@ -117,11 +128,13 @@ async def _run(apply: bool, dsn: str) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="会诊意见子表回填（默认 dry-run）")
     ap.add_argument("--apply", action="store_true", help="真正执行重建（默认只统计）")
+    ap.add_argument("--check", action="store_true",
+                    help="只对账：不一致退出码 1（供 CronJob/CI 告警），不写入")
     ap.add_argument("--dsn", default="", help="覆盖 DSN（默认取 settings）")
     args = ap.parse_args(argv)
     dsn = args.dsn or settings.async_database_url.replace("postgresql+asyncpg://",
                                                           "postgresql://")
-    return asyncio.run(_run(args.apply, dsn))
+    return asyncio.run(_run(args.apply, args.check, dsn))
 
 
 if __name__ == "__main__":

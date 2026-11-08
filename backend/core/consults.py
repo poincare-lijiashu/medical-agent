@@ -229,7 +229,10 @@ def inbox_page(dept: str, q: str = "", limit: int | None = None,
     if not dept:
         return [], 0, 0
     where, params = _inbox_where(dept, q)
-    page = pg_store.consult_inbox_page(where, params, limit, offset, dept)
+    # 第 125 批：pending 读路径可切到派生子表（settings.consult_opinions_pending）
+    page = pg_store.consult_inbox_page(
+        where, params, limit, offset, dept,
+        use_subtable=bool(getattr(settings, "consult_opinions_pending", False)))
     if page is not None:
         return page["items"], int(page["total"]), int(page["pending"])
     items = _inbox_memory(dept, q)

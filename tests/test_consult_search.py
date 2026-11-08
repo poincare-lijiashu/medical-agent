@@ -479,3 +479,37 @@ def test_inbox_summary_passes_limit_zero_to_domain(monkeypatch, tmp_path):
     d = c.get("/api/v1/medical/consults/inbox", headers=_h(), params={"summary": 1}).json()
     assert seen["limit"] == 0
     assert d["items"] == [] and d["total"] == 3 and d["pendingForMe"] == 2
+
+
+# ---------- 第 125 批：pending 读路径可切到派生子表 ----------
+
+def test_inbox_page_subtable_sql_uses_not_exists(monkeypatch):
+    """子表路径：`NOT EXISTS (SELECT 1 FROM consult_opinions …)`，探针是纯科室名。"""
+    conn = _inbox_pool(monkeypatch, _InboxConn(total=3, pending=1))
+    out = asyncio.run(pg_store._pg_consult_inbox_page_impl(
+        "status = 'open' AND data->'target_depts' @> $1::jsonb", ["[\"心内科\"]"], 10, 0,
+        "心内科", use_subtable=True))
+    assert out == {"items": [], "total": 3, "pending": 1}
+    agg = [s for s in conn.sqls if "FILTER" in s]
+    assert agg and "consult_opinions o" in agg[0] and "NOT EXISTS" in agg[0]
+    assert "data->'opinions'" not in agg[0], "子表路径不应再读 jsonb 意见"
+    assert ("[\"心内科\"]", "心内科") in conn.args  # 纯科室名，不是 jsonb 探针
+
+
+def test_inbox_page_flag_switches_read_path(monkeypatch):
+    """settings.consult_opinions_pending 决定域层传 use_subtable（默认关闭 = 读 jsonb）。"""
+    from backend.config import settings
+    seen = {}
+
+    def _fake(where, params, limit=None, offset=0, dept="", use_subtable=False):
+        seen["use_subtable"] = use_subtable
+        return {"items": [], "total": 0, "pending": 0}
+
+    monkeypatch.setattr(pg_store, "consult_inbox_page", _fake)
+    monkeypatch.setattr(settings, "consult_opinions_pending", True)
+    consults.inbox_page("心内科", "", 10, 0)
+    assert seen["use_subtable"] is True
+
+    monkeypatch.setattr(settings, "consult_opinions_pending", False)
+    consults.inbox_page("心内科", "", 10, 0)
+    assert seen["use_subtable"] is False
