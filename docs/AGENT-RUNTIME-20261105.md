@@ -4828,13 +4828,62 @@ doctor01：发起 13 / 参与 1
 
 **校验**
 - 定向：`test_consult_search + test_frontend_syntax` **48 passed**；
-- 全量 pytest：待补（后台运行完成即记）。
+- 全量 pytest：**1494 passed / 0 failed / 1 skipped**（5:30，含 e2e；连续第五批零失败）。
 
 **仍存边界**
 - 两侧共用页码：参与侧比发起侧多时，翻页会出现"发起侧已空、参与侧还有"；
 - 切片与 total 仍在应用层（PG 已过滤，但 total 用 `len`，未下推 `count(*)`）；
 - 无排序选择（固定"新→旧"，与旧行为一致）；
 - 10/页为常量，不随用户偏好调整。
+
+## 124. 2026-11-08 性能与正确性（第 120 批：审计聚合结果 10s 短缓存）
+
+**问题**：§108–§110 把审计过滤做成"每次改动都重查过滤后总数 + 候选值"，两条请求各需
+对 `audit_log` 做一次全表聚合（count / 三组 GROUP BY）。本机 2,269 行实测 count 0.62 ms、
+带条件 count 1.89 ms、三组 facets 合计 ≈3.9 ms——当前量级无感，但生产千万级热表上，
+管理员每改一次过滤（前端 300ms 防抖后）就重算一次，会明显拖慢面板。
+
+**实现**（`backend/api/v1/medical/audit.py`）
+| 能力 | 说明 |
+|---|---|
+| 短缓存 | `_audit_cache`（进程内 dict，`time.monotonic()` 计时），TTL 10s |
+| 缓存范围 | 过滤后 `total` 与 `facets`；**分页 items 不缓存**（翻页必须看到最新记录） |
+| 键 | count：`(start, end, actor, event, action)`；facets：`(start, end)`；参数一变立即重查 |
+| 只缓存真源 | PG 返回 `None`（不可用/超时）时**不写缓存**：降级结果若缓存，PG 恢复后最长 10s 仍返回 JSONL 旧值 |
+| 上限 | `_AUDIT_CACHE_MAX = 256`；写满先清过期项，仍满则整清（缓存仅优化，不损正确性） |
+| 测试隔离 | `tests/conftest.py` 新增 autouse `_isolate_audit_aggregate_cache`（用例前后都清） |
+
+**顺带修掉一个真实缺陷**：初版把 JSONL 回落也写进缓存，`tests/test_audit_filters.py`
+全文件跑时 `test_admin_audit_facets_route_uses_pg` 失败——前一用例（PG 不可用 → 回落
+JSONL）把候选值写进缓存，紧随其后的"PG 可用"用例直接读到旧值、跳过了自己的 PG 桩。
+不是"跨文件随机干扰"，而是缓存语义 bug；改为"只缓存 PG 真源"后组合用例全绿。
+生产同型风险：PG 短暂不可用期间的降级值会被钉住 10s。
+
+**真机实测（真实 PG，2,269 行；只测 SQL 耗时，未做接口级对比）**
+```
+count(*)                    0.62 ms/次（5 次均值）
+count where actor=$1        1.89 ms/次
+facets actors               2.06 ms/次
+facets events               0.82 ms/次
+facets actions              1.00 ms/次        （三组合计 ≈3.9 ms）
+→ 当前量级缓存收益可忽略（毫秒级）；价值在千万级热表上摊薄 count / GROUP BY
+```
+
+**校验**
+- 定向：`test_audit_cache + test_audit_filters` **26 passed**（6 + 20）；
+- 全量 pytest：**1500 passed / 0 failed / 1 skipped**（7:16，含 e2e；连续第六批零失败）。
+- 过程记录：期间另有两份全量**被同时启动**（终端会话重置导致重复拉起），并发两份时
+  e2e 的 Agent 列表用例因共享限流窗口/登录态互相干扰出现 2 条假红；单份串行运行零失败，
+  据此确认与代码无关（本批只改了审计缓存与 conftest，未触碰 Agent/e2e 路径）。
+
+**仍存边界**
+- TTL 内新增审计事件不反映在"共 N 条"（items 实时 → 二者可能短暂不一致）；
+- 缓存是**进程内**：多 worker/多副本各一份，翻页跨实例命中率低（未接 Redis）；
+- 仍是 count 全表聚合，未做近似计数/物化视图（千万级仍会慢）；
+- `facets` 键只有时间窗，不含三个过滤值（候选值本就与过滤无关）；
+- 归档（§121）删行后不主动失效缓存：最长 10s 内候选值仍含已归档值；
+- 未在真机做接口级"命中/未命中"对比（本机无运行中的服务实例，行为由单测锁定）。
+
 
 
 

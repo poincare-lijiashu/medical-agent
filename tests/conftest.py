@@ -197,3 +197,17 @@ def _isolate_consult_metrics():
     consult_metrics.reset()
     yield
     consult_metrics.reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_audit_aggregate_cache():
+    """第 120 批：``/admin/audit`` 的 count / facets 有 10s 进程内短缓存。
+
+    同一进程内连续跑多个用例时，"上一个用例缓存的聚合值"会让下一个用例跳过自己的
+    PG 桩（实测：`test_audit_filters.py` 里 PG 回落的用例先把候选值写进缓存，紧随其后
+    的"PG 可用"用例直接读到旧值而失败）。审计缓存属于纯性能优化，测试间清空即可。
+    """
+    from backend.api.v1.medical import audit
+    audit._reset_audit_cache()
+    yield
+    audit._reset_audit_cache()

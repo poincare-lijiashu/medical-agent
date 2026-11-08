@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -37,6 +38,43 @@ _AUDIT_PAGE_SIZE = 50
 # 第 109 批：全量导出上限。合规抽查常见"某人某段时间全部操作"，但一次性把百万行塞进
 # 一个响应会打爆内存与浏览器；上限内全量、超限截断并用响应头显式告知（不静默截断）。
 _AUDIT_EXPORT_MAX = 10000
+
+# ---------- 第 120 批：审计聚合结果短缓存（count / facets） ----------
+# 为什么：管理员在审计流里翻页/改过滤时，"过滤后总数"与"候选值"是最贵的两个聚合
+# （对 audit_log 全表 count / 三次 GROUP BY）。本机 2.2k 行无感，生产千万级每次翻页
+# 都重算会成为瓶颈。TTL 10s 的取舍：审计是**只增**数据，10s 内"共 N 条"可能少 1–2 条，
+# 对合规抽查可接受；分页 items 不缓存（翻页要看到最新记录）。
+_AUDIT_CACHE_TTL_S = 10.0
+# 键组合来自管理员手工过滤（actor/event/action/时间窗），命中率低但组合多；
+# 过期项只在被再次访问时清除，所以必须设上限，防止长期不重启的进程里字典无限增长。
+_AUDIT_CACHE_MAX = 256
+_audit_cache: dict[tuple, tuple[float, object]] = {}
+
+
+def _cache_get(key: tuple):
+    hit = _audit_cache.get(key)
+    if hit is None:
+        return None
+    at, value = hit
+    if (time.monotonic() - at) < _AUDIT_CACHE_TTL_S:
+        return value
+    _audit_cache.pop(key, None)
+    return None
+
+
+def _cache_put(key: tuple, value) -> None:
+    if len(_audit_cache) >= _AUDIT_CACHE_MAX:
+        now = time.monotonic()
+        for k in [k for k, (at, _) in _audit_cache.items() if now - at >= _AUDIT_CACHE_TTL_S]:
+            _audit_cache.pop(k, None)
+        if len(_audit_cache) >= _AUDIT_CACHE_MAX:
+            _audit_cache.clear()  # 全是新键：缓存仅优化，整清不损失正确性
+    _audit_cache[key] = (time.monotonic(), value)
+
+
+def _reset_audit_cache() -> None:
+    """清空聚合缓存（单测隔离用；生产靠 TTL 自然过期）。"""
+    _audit_cache.clear()
 
 
 def _audit_filters(actor: str, event: str, action: str) -> tuple[str, str, str]:
@@ -140,6 +178,37 @@ def _audit_item(e: dict) -> dict:
             "payload": e.get("payload", {})}  # 完整 payload 下传，供前端人话化详情
 
 
+async def _audit_count_cached(actor_f: str, event_f: str, action_f: str,
+                              start: datetime | None, end: datetime | None) -> int | None:
+    """过滤后总数（10s 短缓存；PG 拿不到时返回 None，由前端回退满页判断）。"""
+    key = ("count", start, end, actor_f, event_f, action_f)
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    total = await pg_store.audit_count_pg(actor=actor_f, event_type=event_f,
+                                         action=action_f, start=start, end=end)
+    if total is not None:
+        _cache_put(key, total)
+    return total
+
+
+async def _audit_facets_cached(start: datetime | None, end: datetime | None) -> dict:
+    """过滤框候选值（10s 短缓存，**只缓存 PG 真源结果**）。
+
+    为什么不缓存 JSONL 回落：回落是降级路径，若把降级结果也写进缓存，PG 恢复后
+    最长 TTL 内仍继续返回 JSONL 数据（实测在测试里表现为"PG 可用了却拿旧值"）；
+    JSONL 是进程内列表，重算本来就不贵，宁可每次都算。"""
+    key = ("facets", start, end)
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    data = await pg_store.audit_facets_pg(start=start, end=end)
+    if data is None:
+        return _audit_facets_jsonl(start, end)
+    _cache_put(key, data)
+    return data
+
+
 async def _audit_page(off: int, actor_f: str = "", event_f: str = "", action_f: str = "",
                       start: datetime | None = None,
                       end: datetime | None = None) -> tuple[list, int | None]:
@@ -147,6 +216,7 @@ async def _audit_page(off: int, actor_f: str = "", event_f: str = "", action_f: 
 
     返回 (items, total)；total 为"过滤后"总条数，PG 不可用且能算出时为 JSONL 计数，
     两者都拿不到时 None（前端回退"本页是否满页"判断下一页）。
+    第 120 批：total 走 10s 短缓存（items 不缓存）。
     """
     try:
         src = await pg_store.audit_recent_pg(_AUDIT_PAGE_SIZE, offset=off, actor=actor_f,
@@ -159,8 +229,7 @@ async def _audit_page(off: int, actor_f: str = "", event_f: str = "", action_f: 
         src = matched[off:off + _AUDIT_PAGE_SIZE]
         total: int | None = len(matched)
     else:
-        total = await pg_store.audit_count_pg(actor=actor_f, event_type=event_f,
-                                               action=action_f, start=start, end=end)
+        total = await _audit_count_cached(actor_f, event_f, action_f, start, end)
     return [_audit_item(e) for e in src], total
 
 
@@ -257,9 +326,7 @@ async def admin_audit_facets(user: dict = Depends(require_role("admin")),
     不影响分页/导出口径：候选只用于补全输入框，不参与"过滤后总数"。
     """
     start, end = _audit_window(audit_from, audit_to)
-    data = await pg_store.audit_facets_pg(start=start, end=end)
-    if data is None:
-        data = _audit_facets_jsonl(start, end)
+    data = await _audit_facets_cached(start, end)
     return {"actors": data.get("actors", []), "events": data.get("events", []),
             "actions": data.get("actions", []), "limit": _FACET_LIMIT,
             "tz": _audit_tz()[1]}
