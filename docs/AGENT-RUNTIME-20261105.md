@@ -5018,6 +5018,48 @@ summary（limit=0）：items=0，total/pending 与全量一致，单次 2.0–2.
 - `target_depts` 的 GIN 只在选择度高时才被选中，本机数据量下同样顺扫；
 - 前端未改（10/页、60s 轮询）。
 
+## 128. 2026-11-09 数据结构（第 124 批：会诊意见子表——双写 + 回填，读路径未切换）
+
+**问题（§127 结论）**：收件箱 `pending` 是"opinions 里**没有**本科室意见"，取反写法无法走
+任何 jsonb 索引；要做成可索引的取反查询，只能有一个"每科室一行"的关系表。
+
+**本批范围（有意收窄）**：只做 **建表 + 双写 + 回填 + 对账**；**读路径不切换**——
+先用真实数据证明"子表与 jsonb 始终一致"，下一批再谈切换，避免把数据迁移和查询改写混在一起。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | ① `_CONSULT_OPINIONS_DDL`（`consult_opinions(consult_id, dept, doctor, content, ts)`，主键 `(consult_id, doctor)`）+ `ix_consult_opinions_dept`，随 `_init_impl` 幂等建表；② `consult_opinion_rows(item)`：jsonb → 子表行的**唯一映射口径**（跳过无 `doctor` 的意见，非法 ts → NULL）；③ `_sync_consult_opinions(conn, item)`：先删后插、包在事务/保存点里，**失败只告警不阻断主单写入**；④ 双写挂点：行级 `upsert_consult_row` 与全量 `_pg_save_consults`（后者用一条 `jsonb_array_elements` SQL 整体重建） |
+| `scripts/backfill_consult_opinions.py`（新） | 默认 dry-run（打印"多少单/多少条意见/子表现状/不一致单号"）；`--apply` 单事务 `DELETE` + 分批 `executemany` 重建；**幂等建表**（可先于应用启动执行）；重建后再逐单对账，残留不一致返回非 0 |
+| `tests/test_consult_opinions_sync.py`（新，8 条） | 映射口径（空 doctor 跳过、坏 ts→None、无 id→空）、先删后插、异常吞掉、行级双写会写子表、全量同步整体重建、DDL 接线到 `_init_impl`、回填 `plan()` 统计、`diff_by_consult()` 对账（含孤儿行） |
+
+**真机验证（真实 PG）**
+```
+dry-run（回填前）：会诊单 17 单；jsonb 意见 9 条；子表 0 行；不一致 9 单
+--apply       ：已重建 9 行 / 9 单；残留不一致 0
+复跑 dry-run   ：子表现状 9 行 / 9 单；不一致 0（幂等）
+双写自测（临时单 con-selftest-124，用完即删）：
+  首写                    → 子表 2 行（d1/内科、d2/外科）
+  改成 1 条后重写          → 子表 1 行，内容为"改后的意见"（先删后插生效）
+  走全量同步 _pg_save_consults → 子表仍 1 行（整体重建生效）
+  清理后总账               → 17 单 / 9 行 / 不一致 0
+```
+
+**校验**
+- 定向：`test_consult_opinions_sync + test_consult_search + test_pg_consults_lists + test_consults`
+  **69 passed**；
+- 全量 pytest：**1522 passed / 0 failed / 1 skipped**（5:33，含 e2e；连续第十批零失败）。
+
+**仍存边界**
+- **读路径未切换**：`inbox_page` 的 pending 仍读 jsonb；子表当前只是"被验证的影子数据"；
+- 子表非强一致：写失败只告警（可回填），极端情况下会短暂缺行；
+- 全量同步路径是 `DELETE` 整表重建（会诊量大时应改分批/差异同步）；
+- 无 `doctor` 的意见不进子表（jsonb 仍保留，展示不受影响），因此"按医生查意见"仍需读 jsonb；
+- 回填脚本运行期间应用仍可写会诊：脚本在单事务内重建，提交前读侧看到旧值，提交后以最新 jsonb 为准（未做写锁）；
+- 未加 `consult_opinions.dept` 的独立索引（当前 `(consult_id, dept)` 足够覆盖 `NOT EXISTS` 相关子查询）；
+- 未做定时对账（可接 CronJob，复用脚本 dry-run 的退出码）。
+
+
 
 
 

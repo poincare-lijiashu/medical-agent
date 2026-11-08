@@ -526,6 +526,12 @@ async def _init_impl() -> bool:
             await c.execute("""CREATE TABLE IF NOT EXISTS consults(
                 id text primary key, data jsonb, initiator text, status text,
                 updated_at timestamptz default now())""")
+            # 第 124 批：会诊意见子表（**派生索引**，jsonb 仍是唯一真源）。
+            # 为什么：收件箱"待本科室填意见"是 `NOT (opinions @> …)`，取反无法走 GIN
+            # （§127 实测），而子表上的 `NOT EXISTS` 天然可索引。先双写 + 回填，读路径暂不切换。
+            await c.execute(_CONSULT_OPINIONS_DDL)
+            await c.execute("CREATE INDEX IF NOT EXISTS ix_consult_opinions_dept "
+                            "ON consult_opinions(consult_id, dept)")
             # 阶段2.1：智能开药处方（id=rx-* 业务键；data jsonb 全量留痕 + doctor/status
             # 冗余列便于药剂科工作清单与运维排查；状态机语义在 prescriptions 域模块）
             await c.execute("""CREATE TABLE IF NOT EXISTS prescriptions(
@@ -1779,6 +1785,78 @@ _CONSULT_UPSERT = """INSERT INTO consults(id,data,initiator,status) VALUES($1,$2
    ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data, initiator=EXCLUDED.initiator,
    status=EXCLUDED.status, updated_at=now()"""
 
+# ---- 第 124 批：会诊意见子表（派生索引） ----
+# jsonb 的 `opinions` 仍是唯一真源；子表只用于"待本科室填意见"这类**取反**查询
+# （jsonb 取反走不了 GIN，见 §127）。双写 + 回填先落地，读路径暂不切换。
+_CONSULT_OPINIONS_DDL = """CREATE TABLE IF NOT EXISTS consult_opinions(
+    consult_id text NOT NULL, dept text NOT NULL, doctor text NOT NULL,
+    content text NOT NULL DEFAULT '', ts timestamptz,
+    primary key (consult_id, doctor))"""
+
+_CONSULT_OPINIONS_UPSERT = """INSERT INTO consult_opinions(consult_id,dept,doctor,content,ts)
+    VALUES($1,$2,$3,$4,$5)
+    ON CONFLICT(consult_id,doctor) DO UPDATE SET dept=EXCLUDED.dept,
+    content=EXCLUDED.content, ts=EXCLUDED.ts"""
+
+# 全量同步（save_consults 路径）用一条 SQL 从 jsonb 重建，避免逐单 Python 循环
+_CONSULT_OPINIONS_FULL_SYNC = """INSERT INTO consult_opinions(consult_id,dept,doctor,content,ts)
+    SELECT c.id, coalesce(o->>'dept',''), o->>'doctor', coalesce(o->>'content',''),
+           CASE WHEN (o->>'ts') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+                THEN (o->>'ts')::timestamptz END
+    FROM consults c
+    CROSS JOIN LATERAL jsonb_array_elements(coalesce(c.data->'opinions','[]'::jsonb)) o
+    WHERE coalesce(o->>'doctor','') <> ''
+    ON CONFLICT(consult_id,doctor) DO UPDATE SET dept=EXCLUDED.dept,
+    content=EXCLUDED.content, ts=EXCLUDED.ts"""
+
+
+def _opinion_ts(v) -> datetime | None:
+    """意见时间戳 → datetime（非法/缺失 → None，时间只用于展示排序，不参与业务判定）。"""
+    s = str(v or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def consult_opinion_rows(item: dict) -> list[tuple]:
+    """会诊单 → 子表行（双写与回填脚本共用的**唯一**映射口径）。
+
+    跳过没有 doctor 的意见（子表主键是 (consult_id, doctor)，空 doctor 会互相覆盖）。
+    """
+    cid = item.get("id")
+    if not cid:
+        return []
+    out = []
+    for o in (item.get("opinions") or []):
+        if not isinstance(o, dict) or not str(o.get("doctor") or "").strip():
+            continue
+        out.append((str(cid), str(o.get("dept") or ""), str(o.get("doctor") or ""),
+                    str(o.get("content") or ""), _opinion_ts(o.get("ts"))))
+    return out
+
+
+async def _sync_consult_opinions(c, item: dict) -> None:
+    """单条会诊的意见子表同步（先删后插，包在事务/保存点里）。
+
+    派生索引失败**绝不阻断主单写入**：子表丢掉的行可由 `scripts/backfill_consult_opinions.py`
+    从 jsonb 重建；因此这里只告警。
+    """
+    cid = item.get("id")
+    if not cid:
+        return
+    rows = consult_opinion_rows(item)
+    try:
+        async with c.transaction():
+            await c.execute("DELETE FROM consult_opinions WHERE consult_id = $1", str(cid))
+            if rows:
+                await c.executemany(_CONSULT_OPINIONS_UPSERT, rows)
+    except Exception as e:  # noqa: BLE001 —— 派生索引失败不回滚主数据
+        logger.warning("pg.consult_opinions_sync_failed", cid=str(cid)[:64],
+                       error=str(e)[:120])
+
 
 async def _pg_load_consults() -> list | None:
     async with _pool.acquire() as c:
@@ -1801,6 +1879,13 @@ async def _pg_save_consults(items: list) -> None:
                 await c.execute("DELETE FROM consults")
             if rows:
                 await c.executemany(_CONSULT_UPSERT, rows)
+            # 第 124 批：派生索引随全量同步整体重建（事务内，失败只告警不影响主数据）
+            try:
+                async with c.transaction():
+                    await c.execute("DELETE FROM consult_opinions")
+                    await c.execute(_CONSULT_OPINIONS_FULL_SYNC)
+            except Exception as e:  # noqa: BLE001 —— 派生索引可回填重建
+                logger.warning("pg.consult_opinions_resync_failed", error=str(e)[:120])
 
 
 def load_consults(path: str, json_loader=None) -> list:
@@ -1823,6 +1908,8 @@ def upsert_consult_row(item: dict) -> None:
         async with _pool.acquire() as c:
             await c.execute(_CONSULT_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
                             item.get("initiator", ""), item.get("status", "open"))
+            # 第 124 批：意见子表随单行写同步（派生索引，失败不抛）
+            await _sync_consult_opinions(c, item)
 
     _pg_write_call("consults", "upsert_row", _impl())
 
