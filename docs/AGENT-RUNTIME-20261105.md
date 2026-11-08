@@ -3743,6 +3743,52 @@ rx_doctor/rx_status、consult_inbox/initiator、case_list：仍是 Seq Scan（�
 - `consults` 的 GIN 索引对小表反而增加写入成本，收益要等数据量上来才体现；
 - 未做索引膨胀/命中率监控，也没有"慢查询"采集。
 
+## 97. 2026-11-08 可观测性（第 93 批：PG 查询耗时/失败按域计量）
+
+**问题**：第 81–92 批把列表/计数/详情下推到 PG 后，这些查询成了首屏与 60s 角标轮询的
+主依赖；但它们**成功与耗时完全不可见**，失败也只在日志里留一条 warning 后静默回落
+JSON——功能照常、数据可能滞后或多副本不一致，监控此前看不到。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_pg_call(domain, op, coro)`（成功/失败都计一次，失败原样抛出）与进程内计量 `_record_pg_query`；12 个已知 (domain, op) 键固定预置零样本；`prometheus_text()` 追加 `medassist_agent_pg_query_total` / `_errors_total` / `_seconds_total{domain,op}` |
+| `backend/core/pg_store.py` | 10 个已下推入口接入计量：review pending/history/get_row/my_rows/status_counts、consults list、prescriptions page、case_archive list/stats、单据 get_row |
+| `deploy/prometheus/medassist-agent-ops.rules.yml` + Helm `prometheusrule-agent-ops.yaml` | 新增 2 条告警：15 分钟内失败 ≥3 次（已回落 JSON）、平均耗时 >500ms 且流量充足；两处规则集合同步（23 条） |
+| `tests/test_pg_query_metrics.py` | +5：成功计量、失败计量并原样抛出、熔断快速失败计为 error、公开入口失败回落 None 仍计量、守卫（离线/无池）不计入且零样本可导出 |
+
+**设计取舍**
+- **只统计真正尝试了 PG 的调用**：离线/无池/旧编排 stale 在守卫处直接返回，不计入——
+  否则纯 JSON 部署会被误报成"PG 一直失败"；
+- **错误含熔断**：`PGUnavailable` 同样计 error，因为它意味着"这段时间读一直在回落 JSON"；
+- **固定零样本**：12 个键在启动时即为 0，Prometheus 首抓就有族名与标签，静态门禁
+  （规则引用的指标必须已导出）与 `increase()` 在无流量时不失真；
+- **口径诚实**：只导出累计耗时与次数（非 histogram），告警里明确写"平均耗时，不是 P95"。
+
+**真实数据（8001，真实 PG，qc01 触发 4 个列表）**
+```
+review_queue/pending_page   total=1 errors=0 0.0064s
+review_queue/history_page   total=1 errors=0 0.0082s
+review_queue/status_counts  total=1 errors=0 0.0030s
+case_archive/list           total=1 errors=0 0.0024s
+case_archive/stats          total=1 errors=0 0.0024s
+未触达的键保持零样本（同一族名下 0 / 0 / 0.000000）
+```
+
+**校验**
+- 定向 `test_pg_query_metrics + test_deploy_observability` **11 passed**；
+- 全量 pytest：**1401 passed**（1396 + 本批 5）；
+- 规则 YAML 可解析：1 组 23 条（本地与 Helm 同名同量）；
+- 重启 8001 → `/healthz` 200；`/metrics`（Bearer 静态令牌）实测出现上述非零样本。
+
+**仍存边界**
+- 只有累计耗时/次数，没有 bucket，因此**没有 P95/P99**；需要分位时后续加 histogram；
+- 只覆盖已下推的 10 个读入口：镜像写（`mirror_*`）、全量同步（`_pg_save_*`）、
+  `ping`、stale 探测未计量；
+- 进程内计数：多 worker 下各进程独立（与既有 `medassist_agent_metrics_worker_count` 提示一致）；
+- 未覆盖数据库侧（锁等待、连接池排队、慢 SQL 文本）；没有 `pg_stat_statements` 采集；
+- 告警阈值（3 次/15 分钟、500ms 平均）是初始经验值，未做容量标定。
+
 
 
 

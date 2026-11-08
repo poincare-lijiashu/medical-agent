@@ -189,6 +189,68 @@ def _run_pg(coro):
     return out
 
 
+# ---------- 第 93 批：PG 查询耗时/失败按域计量（Prometheus 导出） ----------
+# 为什么：第 81–92 批把列表/计数/详情下推到 PG 后，这些查询成了首屏与角标轮询的
+# 主要依赖；但它们成功/失败/耗时此前只在失败时打一条 warning。运维看不到
+# "哪个域在变慢、哪个域的失败在持续（= 一直在回落 JSON）"。
+# 口径：只统计**真正尝试了 PG** 的调用；离线/无池/旧编排 stale 在守卫处直接返回，
+# 不计入（否则 JSON 部署会被误报成 PG 失败）。错误含熔断快速失败（PGUnavailable）。
+# 基数：domain/op 全部来自本模块内部常量（不取用户输入），组合数固定且有限。
+# 固定预置这些键（零样本）：Prometheus 首抓就能看到族名与标签，静态门禁（规则引用的
+# 指标必须已导出）与 rate()/increase() 在无流量时也不会因"样本不存在"失真。
+_PG_METRIC_KEYS = (
+    ("review_queue", "pending_page"),
+    ("review_queue", "history_page"),
+    ("review_queue", "get_row"),
+    ("review_queue", "my_rows"),
+    ("review_queue", "status_counts"),
+    ("consults", "list"),
+    ("consults", "get_row"),
+    ("prescriptions", "page"),
+    ("prescriptions", "get_row"),
+    ("case_archive", "list"),
+    ("case_archive", "stats"),
+    ("case_archive", "get_row"),
+)
+_pg_metrics_lock = threading.Lock()
+_pg_query_stats: dict[tuple[str, str], dict[str, float]] = {
+    k: {"total": 0.0, "errors": 0.0, "seconds": 0.0} for k in _PG_METRIC_KEYS
+}
+
+
+def _record_pg_query(domain: str, op: str, seconds: float, ok: bool) -> None:
+    key = (str(domain), str(op))
+    with _pg_metrics_lock:
+        st = _pg_query_stats.get(key)
+        if st is None:
+            st = {"total": 0.0, "errors": 0.0, "seconds": 0.0}
+            _pg_query_stats[key] = st
+        st["total"] += 1
+        if not ok:
+            st["errors"] += 1
+        st["seconds"] += max(0.0, float(seconds))
+
+
+def _reset_pg_query_metrics() -> None:
+    """恢复为零样本（仅单测用；生产不调用）。"""
+    with _pg_metrics_lock:
+        _pg_query_stats.clear()
+        for key in _PG_METRIC_KEYS:
+            _pg_query_stats[key] = {"total": 0.0, "errors": 0.0, "seconds": 0.0}
+
+
+def _pg_call(domain: str, op: str, coro):
+    """带计量的 _run_pg：成功/失败都计一次，失败原样抛出（调用方回落 JSON 语义不变）。"""
+    t0 = time.perf_counter()
+    try:
+        out = _run_pg(coro)
+    except Exception:
+        _record_pg_query(domain, op, time.perf_counter() - t0, False)
+        raise
+    _record_pg_query(domain, op, time.perf_counter() - t0, True)
+    return out
+
+
 async def _arun(coro):
     """异步桥接：主循环协程内把池操作转投专用 DB 循环（wrap_future 支持跨循环等待）。"""
     return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, _get_db_loop()))
@@ -521,7 +583,22 @@ def prometheus_text() -> str:
         "# HELP medassist_agent_storage_circuit_open PG 连接熔断是否打开（1=快速回落中）",
         "# TYPE medassist_agent_storage_circuit_open gauge",
         f"medassist_agent_storage_circuit_open {1 if circuit_open() else 0}",
+        "# HELP medassist_agent_pg_query_total 真正尝试过的 PG 查询次数（domain/op）",
+        "# TYPE medassist_agent_pg_query_total counter",
+        "# HELP medassist_agent_pg_query_errors_total PG 查询失败次数（已回落 JSON，含熔断快速失败）",
+        "# TYPE medassist_agent_pg_query_errors_total counter",
+        "# HELP medassist_agent_pg_query_seconds_total PG 查询累计耗时（秒）",
+        "# TYPE medassist_agent_pg_query_seconds_total counter",
     ]
+    with _pg_metrics_lock:
+        snapshot = [(d, o, dict(stat)) for (d, o), stat in sorted(_pg_query_stats.items())]
+    for domain, op, stat in snapshot:
+        safe_d = str(domain).replace("\\", "\\\\").replace('"', '\\"')
+        safe_o = str(op).replace("\\", "\\\\").replace('"', '\\"')
+        labels = f'domain="{safe_d}",op="{safe_o}"'
+        lines.append(f"medassist_agent_pg_query_total{{{labels}}} {int(stat['total'])}")
+        lines.append(f"medassist_agent_pg_query_errors_total{{{labels}}} {int(stat['errors'])}")
+        lines.append(f"medassist_agent_pg_query_seconds_total{{{labels}}} {stat['seconds']:.6f}")
     for domain in st["staleDomains"]:
         safe = str(domain).replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'medassist_agent_storage_stale_domains{{domain="{safe}"}} 1')
@@ -1126,8 +1203,9 @@ def review_pending_page(exclude_drug: bool = False, keyword: str = "",
     if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
         return None
     try:
-        return _run_pg(_pg_review_pending_impl(bool(exclude_drug), keyword, limit,
-                                               max(0, int(offset))))
+        return _pg_call("review_queue", "pending_page",
+                        _pg_review_pending_impl(bool(exclude_drug), keyword, limit,
+                                                max(0, int(offset))))
     except Exception as e:  # noqa: BLE001 —— 分页失败回落内存，绝不影响待核列表
         logger.warning("pg.review_pending_page_failed", error=str(e)[:120])
         return None
@@ -1199,9 +1277,10 @@ def review_history_page(involves: str | None = None, base_limit: int = 50,
     if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
         return None
     try:
-        return _run_pg(_pg_review_history_impl(involves, base_limit, bool(hide_pending),
-                                               bool(hide_drug), keyword, limit,
-                                               max(0, int(offset))))
+        return _pg_call("review_queue", "history_page",
+                        _pg_review_history_impl(involves, base_limit, bool(hide_pending),
+                                                bool(hide_drug), keyword, limit,
+                                                max(0, int(offset))))
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，历史列表照常可用
         logger.warning("pg.review_history_page_failed", error=str(e)[:120])
         return None
@@ -1228,7 +1307,7 @@ def get_review_row(rid: str) -> tuple[bool, dict | None]:
     if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
         return (False, None)
     try:
-        return _run_pg(_pg_get_review_row_impl(rid))
+        return _pg_call("review_queue", "get_row", _pg_get_review_row_impl(rid))
     except Exception as e:  # noqa: BLE001 —— 单条查询失败回落 JSON，不影响详情页
         logger.warning("pg.get_review_row_failed", error=str(e)[:120])
         return (False, None)
@@ -1256,7 +1335,8 @@ def review_my_rows(where: str, params: tuple = ()) -> list | None:
     if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
         return None
     try:
-        return _run_pg(_pg_review_my_rows_impl(where, list(params or ())))
+        return _pg_call("review_queue", "my_rows",
+                        _pg_review_my_rows_impl(where, list(params or ())))
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，个人列表照常可用
         logger.warning("pg.review_my_rows_failed", error=str(e)[:120])
         return None
@@ -1283,7 +1363,7 @@ def review_status_counts() -> dict | None:
     if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
         return None
     try:
-        return _run_pg(_pg_review_status_counts_impl())
+        return _pg_call("review_queue", "status_counts", _pg_review_status_counts_impl())
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，概览照常可用
         logger.warning("pg.review_status_counts_failed", error=str(e)[:120])
         return None
@@ -1430,7 +1510,7 @@ def consult_list(where: str, params: tuple = ()) -> list | None:
     if not bool(getattr(settings, "pg_primary", True)) and "consults.json" in _repo_pg_stale:
         return None
     try:
-        return _run_pg(_pg_consult_list_impl(where, list(params or ())))
+        return _pg_call("consults", "list", _pg_consult_list_impl(where, list(params or ())))
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，会诊列表照常可用
         logger.warning("pg.consult_list_failed", error=str(e)[:120])
         return None
@@ -1467,7 +1547,7 @@ def _get_data_row(table: str, rid: str) -> tuple[bool, dict | None]:
             and f"{table}.json" in _repo_pg_stale):
         return (False, None)
     try:
-        return _run_pg(_pg_get_data_row_impl(table, rid))
+        return _pg_call(table, "get_row", _pg_get_data_row_impl(table, rid))
     except Exception as e:  # noqa: BLE001 —— 单条查询失败回落 JSON，不影响详情页
         logger.warning("pg.get_data_row_failed", table=table, error=str(e)[:120])
         return (False, None)
@@ -1598,8 +1678,9 @@ def prescriptions_page(where: str = "", params: tuple = (), limit: int | None = 
     if not bool(getattr(settings, "pg_primary", True)) and "prescriptions.json" in _repo_pg_stale:
         return None
     try:
-        return _run_pg(_pg_rx_page_impl(where, list(params or ()), limit,
-                                        max(0, int(offset)), count_by_status))
+        return _pg_call("prescriptions", "page",
+                        _pg_rx_page_impl(where, list(params or ()), limit,
+                                         max(0, int(offset)), count_by_status))
     except Exception as e:  # noqa: BLE001 —— 分页失败回落内存，绝不影响列表可用性
         logger.warning("pg.prescriptions_page_failed", error=str(e)[:120])
         return None
@@ -1674,7 +1755,7 @@ def case_archive_list(where: str = "TRUE", params: tuple = ()) -> list | None:
             and "case_archive.json" in _repo_pg_stale):
         return None
     try:
-        return _run_pg(_pg_case_list_impl(where, list(params or ())))
+        return _pg_call("case_archive", "list", _pg_case_list_impl(where, list(params or ())))
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，病例库照常可用
         logger.warning("pg.case_archive_list_failed", error=str(e)[:120])
         return None
@@ -1700,7 +1781,7 @@ def case_archive_stats() -> dict | None:
             and "case_archive.json" in _repo_pg_stale):
         return None
     try:
-        return _run_pg(_pg_case_stats_impl())
+        return _pg_call("case_archive", "stats", _pg_case_stats_impl())
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.case_archive_stats_failed", error=str(e)[:120])
         return None

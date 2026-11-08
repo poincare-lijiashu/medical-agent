@@ -273,3 +273,32 @@ groups:
         annotations:
           summary: "混合检索降级率超过 30%"
           description: "近 30 分钟 {{ $value }} 的检索回落 dense（丢失稀疏召回，证据质量下降）；请检查混合检索与 collection 的 sparse 字段是否可用。"
+
+      # 第 93 批：PG 查询面。列表/计数/详情下推 PG 后，失败会**静默回落 JSON**
+      # （功能照常、但数据可能滞后/多副本不一致），只有一条 warning，监控此前看不到。
+      - alert: MedAssistAgentPgQueryErrors
+        expr: sum by (instance, domain, op) (increase(medassist_agent_pg_query_errors_total[15m])) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PG 查询持续失败（已回落 JSON）：{{ $labels.domain }}/{{ $labels.op }}"
+          description: "近 15 分钟 {{ $value }} 次失败；请检查 PG 连接、熔断状态与表结构。失败期间该域的读走 JSON，可能滞后或多副本不一致。"
+
+      # 口径说明：本平台只导出累计耗时与次数（非 histogram），此处是**平均耗时**，
+      # 用于发现"整体变慢一个数量级"，不是 P95；需要分位时再加 bucket。
+      - alert: MedAssistAgentPgQuerySlow
+        expr: |
+          (
+            sum by (instance, domain, op) (rate(medassist_agent_pg_query_seconds_total[10m]))
+            /
+            clamp_min(sum by (instance, domain, op) (rate(medassist_agent_pg_query_total[10m])), 0.001)
+          ) > 0.5
+          and
+          sum by (instance, domain, op) (rate(medassist_agent_pg_query_total[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PG 查询平均耗时超过 500ms：{{ $labels.domain }}/{{ $labels.op }}"
+          description: "近 10 分钟平均 {{ $value }}s（非 P95）；请检查表规模、索引命中（EXPLAIN）与 PG 负载，必要时补索引或收敛查询。"
