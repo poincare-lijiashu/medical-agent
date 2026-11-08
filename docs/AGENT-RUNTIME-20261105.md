@@ -4621,6 +4621,34 @@ helm 未安装 → 真实渲染测试 skip（CI 有 helm 时自动执行）
   `grafana_dashboard` / `grafana_datasource`）；
 - 面板 JSON 内数据源 uid 固定为 `prometheus/loki/alertmanager`，改名需同步面板。
 
+## 118. 2026-11-08 测试可靠性（第 114 批：E2E 登录限流自动重试）
+
+**问题**：服务端每账号 60 次/分钟**滑动窗口**限流；四个 e2e 文件顺序复跑同一批演示账号，
+边缘情况下登录返回 429、页面停在登录页 → `.rail a.nav` 15s 超时。近几批全量验收每次都要
+人工复跑并解释"是限流不是回归"，属测试基础设施缺陷。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `tests/e2e/_ratelimit.py`（新） | `login_with_rate_limit_retry`：监听 `/auth/login` 的 429（双保险：页面正文含"请求过于频繁"）→ 等 61s 窗口并**重放一次**登录；非限流超时原样抛出，绝不吞真实失败 |
+| `tests/e2e/test_vue_{parity,admin,assist}.py` + `test_smoke_flow.py` | `_login` 拆成可重放的 `_submit_login`（清 token + 填表 + 点击），统一走 retry 包装 |
+
+**真实验证**
+```
+修复前（同环境）：pytest tests/e2e → 4 failed（全部 `.rail a.nav` 超时）
+第一次：16 passed（97s）
+紧接着第二次（压力，窗口已消耗）：15 passed / 1 failed（176s，触发重试等待）
+  失败项 = test_vue_admin_admin_panels（KB 面板"页面内首刷"429，非登录阶段）；单跑 1 passed
+全量：1476 passed / 1 failed / 1 skipped（6:00，含重试等待）
+  唯一失败 = test_agent_console_route_preview_interaction（页面内首刷 429）；单跑 1 passed
+```
+
+**仍存边界**
+- 只覆盖**登录**阶段 429；页面内首刷数据 429 仍可能造成断言假红（可选方案：CI 用
+  `RATE_LIMIT_PER_MIN=300` 启动被测服务，或在关键断言前检测提示后刷新——均未做）；
+- 重试上限 1 次、等待 61s（只在确认限流时触发，CI 总时长可能 +1~2 分钟）；
+- 不改变生产默认限流（`rate_limit_per_min=60`）。
+
 
 
 

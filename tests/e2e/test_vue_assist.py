@@ -18,6 +18,8 @@ pytest.importorskip("playwright")  # 环境没装 playwright → 自动 skip，�
 
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
+from tests.e2e._ratelimit import login_with_rate_limit_retry  # noqa: E402
+
 BASE_URL = "http://127.0.0.1:8001"
 # 免责声明片段（DRUG_DISCLAIMER 前半句，足以锁定文案不漂移）
 RX_DISCLAIMER_SNIPPET = "药品数据由 AI 辅助生成，临床使用前必须经执业药师核对"
@@ -45,14 +47,21 @@ def page():
         browser.close()
 
 
-def _login_app(page) -> None:
-    """登录 Vue 应用：占位输入 + 登录按钮 → 等待侧边导航出现。"""
+def _submit_login_app(page) -> None:
+    """填表并提交（可重放）。"""
     page.goto("/")
     page.wait_for_selector('input[placeholder="用户名"]')
     page.fill('input[placeholder="用户名"]', "doctor01")
     page.fill('input[placeholder="密码"]', "Med@2026")  # seed 演示口令（AUTH_DEMO_PASSWORD）
     page.get_by_role("button", name="登录").click()
-    page.wait_for_selector(".rail a.nav")  # 布局壳侧边导航
+
+
+def _login_app(page) -> None:
+    """登录 Vue 应用：占位输入 + 登录按钮 → 等待侧边导航出现。
+
+    第 114 批：撞到 60 次/分钟限流时自动等窗口重放一次（环境抖动不吞真实失败）。
+    """
+    login_with_rate_limit_retry(page, lambda: _submit_login_app(page))
 
 
 def _nav(page, label: str) -> None:

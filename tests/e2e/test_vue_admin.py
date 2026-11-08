@@ -20,6 +20,8 @@ pytest.importorskip("playwright")  # 环境没装 playwright → 自动 skip，�
 
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
+from tests.e2e._ratelimit import login_with_rate_limit_retry  # noqa: E402
+
 BASE_URL = "http://127.0.0.1:8001"
 
 # 演示账号（backend/core/auth.py seed_default_users 同源；口令=AUTH_DEMO_PASSWORD）
@@ -51,8 +53,8 @@ def page():
         browser.close()
 
 
-def _login(page, username: str) -> None:
-    """以指定演示账号登录主入口 /：先清登录态（换角色隔离），再走登录表单。"""
+def _submit_login(page, username: str) -> None:
+    """填表并提交（可重放：先清登录态，换角色隔离）。"""
     page.goto("/")
     page.evaluate("localStorage.clear()")
     page.goto("/")
@@ -60,7 +62,11 @@ def _login(page, username: str) -> None:
     page.fill('input[placeholder="用户名"]', username)
     page.fill('input[placeholder="密码"]', DEMO_PASSWORD)
     page.get_by_role("button", name="登录").click()
-    page.wait_for_selector(".rail a.nav")  # 布局壳侧边导航
+
+
+def _login(page, username: str) -> None:
+    """以指定演示账号登录主入口 /：撞到 60 次/分钟限流时自动等窗口重放一次（第 114 批）。"""
+    login_with_rate_limit_retry(page, lambda: _submit_login(page, username))
 
 
 def _nav(page, label: str) -> None:
