@@ -68,22 +68,30 @@ async def aclose_http_clients() -> None:
     logger.info("llm_factory.http_clients_closed")
 
 
-# ── Agent 类型 → 模型标识符 的路由表 ────────────────────────────
-# 想给某类业务换模型(对应模型厂商)，只改这里一行即可。
-# 这里的_AGENT_MODEL_ROUTING键对应的是业务名称，值是每个业务选择的哪个模型厂商
-_AGENT_MODEL_ROUTING: dict[str, str] = {
-    "qa":               "deepseek-chat",   # 智能问答
-    "exam_subjective":  "deepseek-chat",   # 试卷-简答题批改
-    "exam_code":        "deepseek-chat",   # 试卷-代码题批改（coder 已并入 chat）
-    "resume":           "deepseek-chat",   # 简历审查
-    "interview":        "deepseek-chat",   # 模拟面试
-    "intent":           "deepseek-chat",   # 意图识别
-    "summarize":        "deepseek-chat",   # 对话摘要压缩
-    "medical_literature": "deepseek-chat", # 医疗-文献助手
-    "medical_imaging":    "deepseek-chat", # 医疗-影像辅助
-    "medical_drug":       "deepseek-chat", # 医疗-药物信息
-    "medical_case":       "deepseek-chat", # 医疗-多模态病例
-}
+# ── Agent 类型白名单（第 74 批：删除伪路由表）────────────────────
+# 历史背景：这里原是一张 `agent_type → 模型名` 的映射，但所有值都是同一个模型名，
+# 且 `_build_model_kwargs` **从未使用该值**（真实模型来自管理端激活 provider 或
+# QWEN_MODEL_CHAT）。保留它会误导"改一行就能给某业务换模型"，实际改了没有任何效果。
+# 现在只保留"允许哪些业务类型"的白名单；要给某类业务换模型，请走管理端 provider 绑定
+# （LLMFactory.get_llm_for_provider / Bot 模型绑定）。
+_AGENT_TYPES: frozenset[str] = frozenset({
+    "qa",                 # 智能问答（历史教育域类型，保留兼容）
+    "exam_subjective",    # 试卷-简答题批改
+    "exam_code",          # 试卷-代码题批改
+    "resume",             # 简历审查
+    "interview",          # 模拟面试
+    "intent",             # 意图识别
+    "summarize",          # 对话摘要压缩
+    "medical_literature",  # 医疗-文献助手
+    "medical_imaging",     # 医疗-影像辅助
+    "medical_drug",        # 医疗-药物信息
+    "medical_case",        # 医疗-多模态病例
+})
+
+# 模型实例缓存命名空间：同一底层模型（provider/环境模型）在不同 agent_type 间共享，
+# 因此缓存粒度是 (温度, 流式)，**不能**按 agent_type 拆（否则同一模型会被创建多份，
+# 连接池/内存翻倍）。改动缓存粒度需同步评估 token 成本与连接数。
+_MODEL_CACHE_NS = "chat"
 
 
 class LLMFactory:
@@ -191,10 +199,11 @@ class LLMFactory:
         return kwargs
 
     @classmethod
-    def _build_model_kwargs(cls, model_key: str) -> dict[str, Any]:
+    def _build_model_kwargs(cls) -> dict[str, Any]:
         """内部方法：组装 init_chat_model 需要的所有参数。
         F6：优先使用管理端激活的 chat provider（openai/anthropic 双格式）；
-        无激活配置时回落 .env 内置 Qwen 配置（行为与旧版完全一致）。"""
+        无激活配置时回落 .env 内置 Qwen 配置（行为与旧版完全一致）。
+        第 74 批：删除未使用的 `model_key` 参数（原路由表值从未参与模型构建）。"""
         provider = active_provider("chat")
         if provider:
             return cls._provider_kwargs(provider)
@@ -221,19 +230,15 @@ class LLMFactory:
     ) -> BaseChatModel:
         """按 Agent 类型获取模型实例（带缓存）。
         相同 (模型, 温度, 是否流式) 的组合只会创建一次，之后复用。"""
-        if agent_type not in _AGENT_MODEL_ROUTING:        # 校验：不认识的类型直接报错（早暴露问题）
+        if agent_type not in _AGENT_TYPES:        # 校验：不认识的类型直接报错（早暴露问题）
             raise ValueError(
                 f"未知 agent_type: '{agent_type}'，"
-                f"可用类型：{list(_AGENT_MODEL_ROUTING.keys())}"
+                f"可用类型：{sorted(_AGENT_TYPES)}"
             )
-        model_key = _AGENT_MODEL_ROUTING[agent_type]  # 查路由表，拿到模型标识符(模型厂商)
-        # print(f'model_key: {model_key}')
-        # 用「模型_温度_是否流式」拼一个缓存键：不同组合各缓存一份
-        cache_key = f"{model_key}_{temperature}_{streaming}"
-        # print(f'cache_key: {cache_key}')
+        # 缓存键 = 命名空间 + 温度 + 流式。同一底层模型跨 agent_type 共享（见 _MODEL_CACHE_NS）。
+        cache_key = f"{_MODEL_CACHE_NS}_{temperature}_{streaming}"
         if cache_key not in cls._instances:  # 缓存里没有才新建
-            # print(f'cache_key: {cache_key}')
-            kwargs = cls._build_model_kwargs(model_key)  # 组装基础参数
+            kwargs = cls._build_model_kwargs()  # 组装基础参数
             # print(f'kwargs: {kwargs}')
             kwargs["temperature"] = temperature           # 覆盖温度
             kwargs["streaming"] = streaming               # 设置是否流式
@@ -256,7 +261,7 @@ class LLMFactory:
             cls._instances[cache_key] = llm               # 存进缓存
             logger.info(  # 记一条结构化日志，便于观察
                 "llm_factory.model_initialized",
-                agent_type=agent_type, model_key=model_key,
+                agent_type=agent_type, model=kwargs.get("model"),
                 temperature=temperature, streaming=streaming,
             )
         return cls._instances[cache_key]

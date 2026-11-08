@@ -2893,6 +2893,57 @@ doctor full 176,143 B / 200 条 → slim 12,691 B / 12 条（total 185）
 - `hide_pending/hide_drug` 是显式开关而非默认：其它调用方（MCP/脚本）仍可能拿到含 drug/pending 的历史全集；
 - 未做 ETag/304，翻回上一页仍会重传约 12KB 摘要。
 
+## 78. 2026-11-08 技术债清理（第 74 批：删除 `_AGENT_MODEL_ROUTING` 伪路由表）
+
+**接 HANDOFF 剩余 backlog**：`llm_factory._AGENT_MODEL_ROUTING` 是一张
+`agent_type → 模型名` 的映射，注释写着"想给某类业务换模型只改这里一行"。事实是：
+所有值都是同一个模型名，且 `_build_model_kwargs(model_key)` **从未使用这个参数**——
+真实模型来自管理端激活 provider 或 `QWEN_MODEL_CHAT`。也就是说，维护者按注释改表不会
+产生任何效果，属于会主动误导人的死代码；直接删除又会改变模型缓存键（`model_key_温度_流式`）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/llm_factory.py` | `_AGENT_MODEL_ROUTING` → `_AGENT_TYPES`（frozenset 白名单）；新增 `_MODEL_CACHE_NS = "chat"`，缓存键改为 `chat_温度_流式`（**粒度不变**，同一底层模型仍跨 agent_type 共享）；`_build_model_kwargs()` 删除未使用的 `model_key` 参数；初始化日志由 `model_key=` 改为 `model=`（真实模型名） |
+| `tests/test_llm_factory_agent_types.py` | +4：伪表不得复活、未知类型报错含可用类型、缓存粒度（跨类型共享 / 温度与流式拆分）、`_build_model_kwargs` 不再有 `model_key` |
+| `tests/test_llm_config.py` | 两处 `_build_model_kwargs("medical_literature")` 改为无参调用（适配签名） |
+| `docs/OPERATIONS.md` | 新增「模型与供应商」：换模型走激活 provider / Bot 绑定，不改代码；缓存粒度与热切换说明 |
+| `docs/HANDOFF.md` | backlog 该项标记完成 |
+
+**设计取舍**
+- **保留白名单而不是删除校验**：未知 agent_type 早失败是既有防线（能拦住拼写错误），
+  只是它不再假装"类型决定模型"；
+- **缓存键显式命名空间**：删除映射后如果直接改用 `agent_type` 做键，会让同一模型按
+  11 个类型各建一份（连接池/内存翻倍）；用常量 `chat` 保持与原 `deepseek-chat` 完全一致的粒度；
+- **不迁就教育域类型**：`qa/exam_*/resume/interview/intent/summarize` 仍在白名单（兼容旧调用），
+  但注释明确它们是历史类型，医疗域实际使用 `medical_*`；
+- **换模型能力不变**：管理端激活 provider、`get_llm_for_provider`、Bot 模型绑定均是既有路径。
+
+**真实数据（本机进程内，monkeypatch 掉真实模型构建，不触网）**
+```
+routing_table_present False
+agent_types 11
+unknown_agent_error 未知 agent_type: 'no-such-agent'，可用类型：['exam_code', ...]
+shared_instance True built_models 2
+cache_keys ['chat_0.3_False', 'chat_0_False']
+distinct_temp True
+日志：llm_factory.model_initialized | agent_type=qa model=fake temperature=0 streaming=False
+```
+（对比清理前：缓存键为 `deepseek-chat_0_False`，日志字段为 `model_key=deepseek-chat`。）
+
+**校验**
+- 定向 `test_llm_factory_agent_types + test_llm_config + test_llm_hot_reload +
+  test_llm_extra_params + test_llm_http_clients` **51 passed**；
+- 全量 pytest：**1252 passed**（1248 + 本批 4）。
+
+**仍存边界**
+- 本批是技术债清理，不改变任何业务行为；模型选择仍由"全局激活 provider / Bot 绑定"决定，
+  没有新增"按 agent_type 选模型"的能力（如需该能力应做成显式注册表并接入 provider 校验）；
+- 白名单仍含教育域类型（`qa/exam_*/resume/...`），未评估是否还有调用方，删除需单独确认；
+- 缓存粒度仍是进程内 (温度, 流式)，多 worker 各自缓存（与既有边界一致）；
+- 真实模型构建未在本批触发（`.env.local` 未配置 QWEN Key），仅验证了控制流与缓存键；
+- 日志字段从 `model_key` 改为 `model`，若有外部日志采集按 `model_key` 建索引需同步调整。
+
 
 
 

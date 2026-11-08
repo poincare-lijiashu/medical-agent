@@ -45,6 +45,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - 双人核对：药物禁忌/影像高危/低置信入队，审核人≠提交人。
 - 密钥：仅 `.env.local`（不进版本库）；`.env.example` 只放占位符。
 
+## 模型与供应商
+- 全局 chat/vision 模型由管理端「LLM 供应商」激活的 provider 决定（PG `llm_providers`）；
+  未激活时回落 `.env` 的 `QWEN_*`。**给某类业务换模型不要改代码**：原
+  `llm_factory._AGENT_MODEL_ROUTING` 伪路由表已删除（路由值从未参与模型构建，改它不会生效）；
+  全局换模型走"激活 provider"，按 Bot 换模型走 Bot 模型绑定。
+- `LLMFactory` 的实例缓存粒度是 **(温度, 流式)**：同一底层模型跨 agent_type 共享；
+  激活/停用 provider 会清空缓存并重建（热切换，无需重启进程）。
+
 ## 健康/可观测
 - `/healthz`（存活） `/readyz`（就绪） `/metrics`（Prometheus 文本：请求数/各路由时延/计数）。
 - 每响应带 `X-Request-Id`；日志结构化（JSON，含 event 与上下文）。

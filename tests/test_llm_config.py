@@ -353,13 +353,13 @@ def test_deactivate_falls_back_to_builtin_qwen_kwargs(monkeypatch, tmp_path):
     pid = lc.add_provider("chat", "openai", _URL, "gpt-test", "测试模型", _KEY)
     lc.activate("chat", pid)
     # 激活时走 provider 参数
-    kw_active = LLMFactory._build_model_kwargs("medical_literature")
+    kw_active = LLMFactory._build_model_kwargs()
     assert kw_active["model"] == "gpt-test" and kw_active["base_url"] == _URL
     # 清空激活（=回退内置配置）→ active None 且回落 Qwen
     lc.deactivate("chat")
     assert lc.active_provider("chat") is None
     assert lc.active_provider("vision") is None
-    kw = LLMFactory._build_model_kwargs("medical_literature")
+    kw = LLMFactory._build_model_kwargs()
     assert kw["model"] == settings.qwen_model_chat
     assert kw["base_url"] == settings.qwen_base_url
     assert kw["api_key"] == settings.qwen_api_key
