@@ -397,6 +397,49 @@ _PG_INDEX_DDL = (
 )
 
 
+# ---------- 第 97 批：关键字子串检索改 LIKE + pg_trgm（可走 GIN 索引） ----------
+# 语义与内存 `_match_query` 完全一致：agent/question/submitted_by/risk_reason 空格拼接、
+# lower、子串包含。与 POSITION 的唯一差异是"可被 trigram GIN 索引加速"：
+# 本机实测 1168 行、关键词命中 12 条时，POSITION 走 ts 索引并回表过滤（~0.99ms）；
+# LIKE + trgm GIN 走 Bitmap Index Scan（~0.07ms）。用户输入的 % _ 与转义符 ! 一律按
+# 字面量处理（ESCAPE '!'），不会变成通配符。
+_SEARCH_EXPR = ("lower(coalesce(agent,'') || ' ' || coalesce(question,'') || ' ' || "
+                "coalesce(submitted_by,'') || ' ' || coalesce(risk_reason,''))")
+
+
+def _like_contains(kw: str) -> str:
+    """转义 LIKE 通配符（转义符 '!'）：! → !!、% → !%、_ → !_，其余原样。"""
+    return str(kw).replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
+def _search_cond(n: int) -> str:
+    """子串匹配条件（$n 传入 `_like_contains(lower(keyword))`）。"""
+    return f"{_SEARCH_EXPR} LIKE ('%' || ${n} || '%') ESCAPE '!'"
+
+
+async def _ensure_search_index(c) -> None:
+    """建 pg_trgm 扩展（best-effort）与 review_queue 检索表达式 GIN 索引。
+
+    扩展可能装在非 search_path 的 schema（本机实测 `emr_svc`），因此 opclass 必须按
+    `pg_opclass` 查出的真实 schema 限定；扩展/权限缺失时跳过——LIKE 仍然正确，只是
+    退化为顺序扫描。索引只在首次启动创建（IF NOT EXISTS），大表首次建索引会占用启动时间。
+    """
+    try:
+        await c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    except Exception as e:  # noqa: BLE001 —— 无权限/禁用扩展时不影响建表
+        logger.warning("pg.trgm_extension_skipped", error=str(e)[:120])
+    schema = await c.fetchval(
+        "SELECT n.nspname FROM pg_opclass o JOIN pg_namespace n ON n.oid = o.opcnamespace "
+        "WHERE o.opcname = 'gin_trgm_ops' LIMIT 1")
+    if not schema:
+        logger.warning("pg.trgm_index_skipped", detail="gin_trgm_ops 不可用（扩展未安装）")
+        return
+    quoted = '"' + str(schema).replace('"', '""') + '"'
+    await c.execute(
+        "CREATE INDEX IF NOT EXISTS ix_review_queue_search_trgm ON review_queue "
+        f"USING gin (({_SEARCH_EXPR}) {quoted}.gin_trgm_ops)")
+
+
 async def _init_impl() -> bool:
     """建池 + 建表（含旧表平滑升级：users.dept / review_queue.images）。"""
     global _pool
@@ -501,6 +544,11 @@ async def _init_impl() -> bool:
             # 第 92 批：上述表建好后统一补索引（幂等，见 _PG_INDEX_DDL 注释）
             for _ddl in _PG_INDEX_DDL:
                 await c.execute(_ddl)
+            # 第 97 批：关键字检索的 trigram GIN 索引（扩展/权限缺失时跳过，检索照常）
+            try:
+                await _ensure_search_index(c)
+            except Exception as e:  # noqa: BLE001 —— 检索加速失败绝不影响启动
+                logger.warning("pg.search_index_skipped", error=str(e)[:120])
     except Exception:
         try:
             await pool.close()
@@ -1283,13 +1331,9 @@ async def _pg_review_pending_impl(exclude_drug: bool, keyword: str,
             conds.append("agent IS DISTINCT FROM 'drug'")
         kw = (keyword or "").strip().lower()
         if kw:
-            # 与 _match_query 完全同构：agent/question/submitted_by/risk_reason 以空格拼接后
-            # 做大小写不敏感子串匹配。用 POSITION 而非 LIKE，避免用户输入的 % _ 被当通配符。
-            params.append(kw)
-            conds.append(
-                f"POSITION(${len(params)} IN lower("
-                "coalesce(agent,'') || ' ' || coalesce(question,'') || ' ' || "
-                "coalesce(submitted_by,'') || ' ' || coalesce(risk_reason,''))) > 0")
+            # 与 _match_query 完全同构（第 97 批改为 LIKE，可走 trgm GIN；% _ ! 按字面量转义）
+            params.append(_like_contains(kw))
+            conds.append(_search_cond(len(params)))
         where = " WHERE " + " AND ".join(conds)
         total = int(await c.fetchval(  # noqa: S608 —— 片段均为固定常量
             "SELECT count(*) FROM review_queue" + where, *params) or 0)
@@ -1328,11 +1372,6 @@ def review_pending_page(exclude_drug: bool = False, keyword: str = "",
 # 因此分两步：先取"基础集合 id 上限"，再在该集合内过滤/计数/分页（避免把过滤提前到
 # 截断之前，导致"能看到 200 条之外的历史"这一行为漂移）。
 
-_HISTORY_KW = (
-    "POSITION(${n} IN lower("
-    "coalesce(agent,'') || ' ' || coalesce(question,'') || ' ' || "
-    "coalesce(submitted_by,'') || ' ' || coalesce(risk_reason,''))) > 0")
-
 
 async def _pg_review_history_impl(involves: str | None, base_limit: int,
                                   hide_pending: bool, hide_drug: bool, keyword: str,
@@ -1360,8 +1399,8 @@ async def _pg_review_history_impl(involves: str | None, base_limit: int,
             conds.append("agent IS DISTINCT FROM 'drug'")
         kw = (keyword or "").strip().lower()
         if kw:
-            params.append(kw)
-            conds.append(_HISTORY_KW.format(n=len(params)))
+            params.append(_like_contains(kw))
+            conds.append(_search_cond(len(params)))
         where = " WHERE " + " AND ".join(conds)
         total = int(await c.fetchval(  # noqa: S608 —— 片段均为固定常量
             "SELECT count(*) FROM review_queue" + where, *params) or 0)

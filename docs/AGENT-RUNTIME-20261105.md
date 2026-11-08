@@ -3916,6 +3916,55 @@ medassist_agent_pg_write_total{domain="users",op="delete_row"} 0
 - `/metrics` 增至约 38KB，键数继续增长时需要改为"仅已触达键"；
 - 未对 purge 做"删除行数"计量（只有次数/耗时），无法从指标判断一次清理影响多大。
 
+## 101. 2026-11-08 性能与容量（第 97 批：关键字子串检索改 LIKE + pg_trgm，可索引）
+
+**问题**：待核/历史的关键字检索用 `POSITION($n IN lower(四字段拼接))`——语义正确，但
+**任何索引都用不上**：即使 status 已收窄，仍要回表逐行计算拼接串（本机 1168 行、
+关键词命中 12 条时 ~0.99ms）。队列越大，关键字查询越线性变慢。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增统一表达式常量 `_SEARCH_EXPR`、`_like_contains`（`!`→`!!`、`%`→`!%`、`_`→`!_`）、`_search_cond`；待核/历史关键字改为 `… LIKE ('%' \|\| $n \|\| '%') ESCAPE '!'` |
+| `backend/core/pg_store.py` | `_ensure_search_index`：best-effort `CREATE EXTENSION IF NOT EXISTS pg_trgm`，按 `pg_opclass` 查到的**真实 schema** 建 `ix_review_queue_search_trgm`（本机在 `emr_svc`，不能写死 public）；扩展/权限缺失只告警跳过，检索仍正确 |
+| `tests/test_pg_search_like.py` | +4：转义映射、`%`/`_`/`!` 按字面量、大小写不敏感、中文子串 |
+| `tests/test_pg_indexes.py` | +1：扩展先建、trgm 索引随后且 schema 限定；假连接补 `fetchval` |
+| `tests/test_pg_review_pending_page.py` / `..._history_page.py` | 假池 where 解析从 POSITION 改为 LIKE（含反转义），锁定"行为不变" |
+
+**设计取舍**
+- **保留子串语义**：不引 tsvector——中文没有分词扩展时 `simple` 配置不切词，子串查询会失效；
+  trigram 对 CJK 子串天然可用（3 字即 3 个 trigram）；
+- **通配符必须字面量**：`ESCAPE '!'` 且先转义，用户输入 `%`/`_` 不会变成通配符，
+  也无法借此构造全表扫描式模式（`%%%`）；
+- **扩展建在哪个 schema 不确定**：写死 `gin_trgm_ops` 在本机会直接报"operator class
+  does not exist"（扩展装在 `emr_svc`），因此启动时查 `pg_opclass` 再限定；
+- **索引失败不影响启动**：无权限建扩展/索引的环境退化为扫描，只是没加速。
+
+**真实数据（真实 PG 5433，1168 行）**
+```
+语义等价（SQL vs Python 逐关键词对账，status=pending）：
+  华法林 12/12   CT 66/66   50% 0/0   ! 1/1   doctor01 66/66   _ 1/1   全部 OK
+计划：
+  华法林 → BitmapAnd(ix_review_queue_status_ts, ix_review_queue_search_trgm)  0.130–0.177ms
+  （改造前 POSITION 走 ix_review_queue_ts 后回表过滤 1156 行：0.991ms）
+```
+8001 重启后 API 实测（qc01）：`pending?q=` 与 `history?q=` 均 200，计数与 SQL 一致
+（例如 `q=CT` pending=42 / history=49；`q=_` pending=1）。
+
+**校验**
+- 定向 `test_pg_search_like + pending/history + indexes` **30 passed**；
+- 全量 pytest：**1415 passed**（1410 + 本批 5）；
+- 重启 8001 → `/healthz` 200；init 幂等重放扩展/索引无错误。
+
+**仍存边界**
+- **1–2 字关键词不走 trgm 索引**（实测 `CT` 仅用 status 索引）：trigram 需要 ≥3 字符才能
+  提取；中文两字词（如"内科"）仍会扫描，属索引机制限制；
+- 索引表达式必须与查询逐字一致（改字段/拼接格式要同步改 `_SEARCH_EXPR`，否则静默退化）；
+- 首次在**大表**上建 GIN 索引会阻塞写入（`CREATE INDEX` 非 CONCURRENTLY，且在启动路径）；
+- 只加速 review_queue；处方/会诊/病例库目前没有关键字检索入口，未建索引；
+- 无相关性排序/高亮：仍是"包含即命中"，结果顺序沿用列表顺序；
+- 扩展 schema 依赖运行库实际安装位置，跨环境迁移时以启动日志 `pg.trgm_*_skipped` 为准。
+
 
 
 

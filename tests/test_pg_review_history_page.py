@@ -74,9 +74,17 @@ def _where_match(item, where, args):
         elif part == "agent IS DISTINCT FROM 'drug'":
             if item.get("agent") == "drug":
                 return False
-        elif part.startswith("POSITION($"):
+        elif part.startswith("lower(coalesce(agent"):
+            # 第 97 批：LIKE + ESCAPE '!'（$n 为已转义关键词），测试侧按字面量还原后比较
             idx = int(part.split("$")[1].split(" ")[0]) - 1
-            kw = args[idx]
+            raw = args[idx]
+            buf, i = [], 0
+            while i < len(raw):
+                if raw[i] == "!" and i + 1 < len(raw):
+                    buf.append(raw[i + 1]); i += 2
+                else:
+                    buf.append(raw[i]); i += 1
+            kw = "".join(buf)
             blob = " ".join(str(item.get(k) or "") for k in
                             ("agent", "question", "submitted_by", "risk_reason")).lower()
             if kw not in blob:

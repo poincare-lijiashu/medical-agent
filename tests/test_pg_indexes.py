@@ -23,6 +23,12 @@ class _FakeConn:
         self.statements.append(sql)
         return "OK"
 
+    async def fetchval(self, sql, *args):
+        # 第 97 批：_ensure_search_index 会查 gin_trgm_ops 所在 schema
+        if "gin_trgm_ops" in str(sql):
+            return "public"
+        return 0
+
 
 class _FakeAcquire:
     def __init__(self, conn):
@@ -61,10 +67,22 @@ def _run_init(monkeypatch) -> list[str]:
 def test_init_issues_every_index_ddl(monkeypatch):
     """常量里声明的索引必须全部真正下发（防止只定义不执行）。"""
     statements = _run_init(monkeypatch)
-    issued = [s for s in statements if "CREATE INDEX" in s]
     expected = list(pg_store._PG_INDEX_DDL)
-    assert issued[-len(expected):] == expected
+    for ddl in expected:
+        assert ddl in statements, ddl
     assert len(expected) == 15
+
+
+def test_search_trgm_index_is_created_after_extension(monkeypatch):
+    """第 97 批：pg_trgm 扩展先建，再按 opclass 真实 schema 建 trigram GIN 索引。"""
+    statements = _run_init(monkeypatch)
+    ext_at = next(i for i, s in enumerate(statements)
+                  if s.startswith("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+    trgm_at = next(i for i, s in enumerate(statements)
+                   if "ix_review_queue_search_trgm" in s)
+    assert ext_at < trgm_at
+    assert "USING gin" in statements[trgm_at]
+    assert 'public' in statements[trgm_at] and 'gin_trgm_ops' in statements[trgm_at]
 
 
 def test_indexes_are_idempotent(monkeypatch):
