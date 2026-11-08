@@ -285,6 +285,9 @@ _PG_WRITE_METRIC_KEYS = (
     ("prescriptions", "upsert_row"),
     ("case_archive", "upsert_row"),
     ("skills", "upsert_row"),
+    ("review_queue", "purge"),
+    ("review_queue", "purge_drug"),
+    ("users", "delete_row"),
 )
 _pg_write_stats: dict[tuple[str, str], dict] = {
     k: _new_pg_stat() for k in _PG_WRITE_METRIC_KEYS
@@ -891,7 +894,7 @@ async def purge_pending_reviews() -> str:
     if not _pool:
         return ""
     try:
-        return await _arun(_purge_pending_impl())
+        return await _pg_write_async("review_queue", "purge", _purge_pending_impl())
     except Exception:  # noqa: BLE001
         return ""
 
@@ -902,7 +905,7 @@ def purge_pending_reviews_strict() -> str:
     PG 留 pending / JSON 已清 的分裂）；JSON 镜像由调用方 mirror_json_file。"""
     if offline_mode() or not _pool:
         raise RuntimeError("purge_pending_reviews_strict 需要 PG 池")
-    return _run_pg(_purge_pending_impl())
+    return _pg_write_call("review_queue", "purge", _purge_pending_impl())
 
 
 async def _purge_drug_impl() -> str:
@@ -917,7 +920,7 @@ async def purge_drug_reviews() -> str:
     if not _pool:
         return ""
     try:
-        return await _arun(_purge_drug_impl())
+        return await _pg_write_async("review_queue", "purge_drug", _purge_drug_impl())
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1152,7 +1155,7 @@ def delete_user_row(username: str) -> int:
             res = await c.execute("DELETE FROM users WHERE username=$1", username)
             return int(res.split()[-1]) if res else 0
 
-    return _run_pg(_impl())
+    return _pg_write_call("users", "delete_row", _impl())
 
 
 def has_pool() -> bool:

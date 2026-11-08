@@ -3874,6 +3874,48 @@ POST /prescriptions 201/200 → prescriptions/upsert_row=1、audit_log/mirror=1
 - 镜像写是 async 主循环路径，多 worker 下各进程独立计数（与既有 worker 提示一致）；
 - 未区分"PG 拒绝"与"连接失败"的错误类型（只有总数）。
 
+## 100. 2026-11-08 可观测性（第 96 批：补齐 DELETE/purge 写计量 + 写 P95 告警）
+
+**问题**：第 95 批覆盖了镜像写、全量同步与单行 UPSERT，但**删除类写**仍是盲区：
+批量清空待核（`purge_pending_reviews` / 严格版）、按 agent 清理 drug 遗留行、
+用户删除都不计数；同时写路径只有"失败次数"告警，变慢没有任何信号。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 写键新增 `review_queue/purge`、`review_queue/purge_drug`、`users/delete_row`（零样本预置）；`purge_pending_reviews`（宽松 async）、`purge_pending_reviews_strict`（严格 sync）、`purge_drug_reviews`、`delete_user_row` 接入计量（语义不变：宽松版吞异常并计 error，严格版/UPSERT 抛出） |
+| `deploy/prometheus/...rules.yml` + Helm PrometheusRule | 新增 `MedAssistAgentPgWriteSlow`：写 P95>1s 且近 10 分钟 QPS>0.02（排除低频 full_sync 单次偏慢）；规则总数 25 |
+| `tests/test_pg_write_metrics.py` | +1：宽松/严格/按 agent 三种 purge 与用户删除的次数、错误与导出标签 |
+| `tests/test_deploy_observability.py` | 规则计数同步为 25 |
+
+**设计取舍**
+- **purge 的两种版本共用同一键**（`review_queue/purge`）：它们的 SQL 完全相同，差异只在
+  失败处理；错误数已经能区分"宽松版失败被吞"与"严格版失败抛出"的调用结果；
+- **写 P95 阈值 1s**（读是 500ms）：写包含事务、索引维护与批量副作用，合理上界更高；
+- **QPS>0.02 门限**：full_sync 是低频重操作，不能让其单次耗时直接触发告警；
+- **删除也计入 total**：否则"写总次数"会在清理操作后与真实写量脱节。
+
+**真实数据（8001，真实 PG）**
+```
+/metrics 200，38,258 B
+medassist_agent_pg_write_total{domain="review_queue",op="purge"} 0
+medassist_agent_pg_write_total{domain="review_queue",op="purge_drug"} 0
+medassist_agent_pg_write_total{domain="users",op="delete_row"} 0
+```
+（本批未执行真实删除操作，只验证键已导出；计数由单测覆盖成功/失败两态。）
+
+**校验**
+- 定向 `test_pg_write_metrics + test_deploy_observability` **14 passed**；
+- 全量 pytest：**1410 passed**（1409 + 本批 1）；
+- 规则 YAML 可解析：25 条（含 5 条 PG/存储相关）；
+- 重启 8001 → `/healthz` 200，`/metrics` 三个新键可见。
+
+**仍存边界**
+- 仍未覆盖 `delete_json_item` 一类通用删除（当前无独立 PG 行删除导出，删除随全量同步走）；
+- 写 P95 阈值与 QPS 门限未做容量标定；
+- `/metrics` 增至约 38KB，键数继续增长时需要改为"仅已触达键"；
+- 未对 purge 做"删除行数"计量（只有次数/耗时），无法从指标判断一次清理影响多大。
+
 
 
 

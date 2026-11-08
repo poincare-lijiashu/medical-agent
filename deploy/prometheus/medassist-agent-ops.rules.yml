@@ -312,3 +312,20 @@ groups:
         annotations:
           summary: "PG 写持续失败：{{ $labels.domain }}/{{ $labels.op }}"
           description: "近 15 分钟 {{ $value }} 次失败；请检查 PG 连接、磁盘与表结构，并对照 storage_stale_domains 确认回落范围。"
+
+      # 第 96 批：写耗时 P95（与读共用直方图桶；阈值放宽到 1s，因批量 purge/同步更重）。
+      # QPS 门限可避免低频的 full_sync 单次偏慢直接告警。
+      - alert: MedAssistAgentPgWriteSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, domain, op) (rate(medassist_agent_pg_write_duration_seconds_bucket[10m]))
+          ) > 1
+          and
+          sum by (domain, op) (rate(medassist_agent_pg_write_duration_seconds_count[10m])) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PG 写 P95 超过 1s：{{ $labels.domain }}/{{ $labels.op }}"
+          description: "近 10 分钟 P95={{ $value }}s；请检查 PG 负载、锁等待、磁盘，以及该写点是否在批量操作。"

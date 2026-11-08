@@ -143,6 +143,40 @@ def test_mirror_failure_is_swallowed_but_counted(monkeypatch):
     assert 'medassist_agent_pg_write_errors_total{domain="review_queue",op="mirror"} 1' in text
 
 
+def test_purge_and_delete_paths_are_counted(monkeypatch):
+    """第 96 批：批量 purge（宽松/严格/按 agent）与用户删除也计入写路径。"""
+    _reset()
+    monkeypatch.setattr(pg_store, "_pool", object())
+
+    async def _arun_ok(coro):
+        getattr(coro, "close", lambda: None)()
+        return "DELETE 3"
+
+    monkeypatch.setattr(pg_store, "_arun", _arun_ok)
+    assert asyncio.run(pg_store.purge_pending_reviews()) == "DELETE 3"
+    assert asyncio.run(pg_store.purge_drug_reviews()) == "DELETE 3"
+
+    def _run_ok(coro):
+        getattr(coro, "close", lambda: None)()
+        return "DELETE 2"
+
+    monkeypatch.setattr(pg_store, "_run_pg", _run_ok)
+    assert pg_store.purge_pending_reviews_strict() == "DELETE 2"
+
+    def _run_delete(coro):
+        getattr(coro, "close", lambda: None)()
+        return 1
+
+    monkeypatch.setattr(pg_store, "_run_pg", _run_delete)
+    assert pg_store.delete_user_row("doctor01") == 1
+
+    text = pg_store.prometheus_text()
+    assert 'medassist_agent_pg_write_total{domain="review_queue",op="purge"} 2' in text
+    assert 'medassist_agent_pg_write_total{domain="review_queue",op="purge_drug"} 1' in text
+    assert 'medassist_agent_pg_write_total{domain="users",op="delete_row"} 1' in text
+    assert 'medassist_agent_pg_write_errors_total{domain="users",op="delete_row"} 0' in text
+
+
 def test_guards_do_not_count_writes(monkeypatch):
     """无池：镜像写直接返回、UPSERT 抛 RuntimeError，都不计写入次数。"""
     _reset()
