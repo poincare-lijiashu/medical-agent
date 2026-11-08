@@ -4113,6 +4113,39 @@ Grafana 去 `docker logs`/Loki；告警触发也只能去 Alertmanager UI 看—
 - 日志面板未配置 traceId 点击跳转；
 - 未验证 Loki 实际查询渲染（本次只验证 provisioning 与面板定义；Loki 容器未起）。
 
+## 106. 2026-11-08 性能与容量（第 102 批：`/metrics` 只导出已触达的 PG 键）
+
+**问题**：第 93–96 批为了"首抓可见 / 规则门禁"，把 25 个 (domain, op) 键固定零样本导出，
+每个键 12 行（2 计数器 + 8 桶 + sum/count + `+Inf`）。实际绝大多数键长期为 0，
+`/metrics` 固定膨胀到 **38.3KB**，每 15s 抓取一次都在搬运无用行。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | `_emit_pg_family(..., anchors)`：只导出 `total>0` 的键；每族保留一个**零样本锚点**（读 `review_queue/pending_page`、写 `repo/full_sync`），保证族名与标签格式恒在（静态门禁、Grafana 面板定义、首抓可见性都不受影响） |
+| `backend/core/pg_store.py` | 新增 `_PG_METRIC_ANCHORS`；内部计数种子不变（键一旦被触达即按真实累计值导出） |
+| `tests/test_pg_query_metrics.py` / `test_pg_write_metrics.py` | 守卫用例改为断言"锚点 0 仍导出、未触达键不出现"；新增"只导出已触达键 + 锚点"用例 |
+
+**真实数据（8001，真实 PG）**
+```
+改造前：38,258 B（25 键 × 12 行，绝大多数为 0）
+改造后 冷启动（未打业务接口）：12,168 B（3 个键：读锚点 + 写锚点 + users/mirror）
+改造后 触达 待核/历史/病例库 后：16,258 B（6 个键 = 3 个真实读 + 2 个真实写 + 1 锚点）
+```
+体积只随"真实发生的操作类型"增长，不再与键总数成正比。
+
+**校验**
+- 定向 `test_pg_query_metrics + test_pg_write_metrics + deploy_observability + grafana_provisioning` **27 passed**；
+- 全量 pytest：**1427 passed**（1426 + 本批 1）；
+- 重启 8001：`/healthz` 200；锚点与已触达键均可在 `/metrics` 中查到。
+
+**仍存边界**
+- 未触达键在 Prometheus 里**没有该序列**（面板此时显示"无数据"而不是 0）——这是本批的
+  有意取舍；依赖"某键恒有 0 样本"的外部看板需要改查询（`or vector(0)`）；
+- 键一旦触达就永久导出（进程生命周期内），长时间运行后仍会逐步接近全量；
+- 未按抓取周期做"最近 N 分钟无流量则不再导出"的衰减；
+- 锚点之外的族名（如未来新增的 pg 相关族）需要手工加锚点，否则门禁会先失败。
+
 
 
 

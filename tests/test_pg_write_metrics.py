@@ -178,13 +178,17 @@ def test_purge_and_delete_paths_are_counted(monkeypatch):
 
 
 def test_guards_do_not_count_writes(monkeypatch):
-    """无池：镜像写直接返回、UPSERT 抛 RuntimeError，都不计写入次数。"""
+    """无池：镜像写直接返回、UPSERT 抛 RuntimeError，都不计写入次数。
+
+    第 102 批起未触达键不导出：只有锚点（repo/full_sync）保持零样本。
+    """
     _reset()
     monkeypatch.setattr(pg_store, "_pool", None)
     asyncio.run(pg_store.mirror_audit("event", "system", {}))
     with pytest.raises(RuntimeError):
         pg_store.upsert_prescription_row({"id": "rx-1"})
     text = pg_store.prometheus_text()
-    assert 'medassist_agent_pg_write_total{domain="audit_log",op="mirror"} 0' in text
-    assert 'medassist_agent_pg_write_total{domain="prescriptions",op="upsert_row"} 0' in text
+    assert 'medassist_agent_pg_write_total{domain="repo",op="full_sync"} 0' in text
+    assert 'domain="audit_log",op="mirror"' not in text
+    assert 'domain="prescriptions",op="upsert_row"' not in text
     assert "# TYPE medassist_agent_pg_write_duration_seconds histogram" in text

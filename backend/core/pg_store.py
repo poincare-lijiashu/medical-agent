@@ -292,6 +292,12 @@ _PG_WRITE_METRIC_KEYS = (
 _pg_write_stats: dict[tuple[str, str], dict] = {
     k: _new_pg_stat() for k in _PG_WRITE_METRIC_KEYS
 }
+# 第 102 批：每族只保留一个"零样本锚点"（族名/标签格式恒在，静态门禁与首抓可见），
+# 其余未触达键不再固定导出——见 _emit_pg_family 的体积说明。
+_PG_METRIC_ANCHORS = {
+    "query": {("review_queue", "pending_page")},
+    "write": {("repo", "full_sync")},
+}
 
 
 def _record_pg_write(domain: str, op: str, seconds: float, ok: bool) -> None:
@@ -692,15 +698,20 @@ def rebuild_json_mirror(table: str, path: str) -> int:
     return len(items)
 
 
-def _emit_pg_family(lines: list, prefix: str, stats: dict) -> None:
+def _emit_pg_family(lines: list, prefix: str, stats: dict, anchors: set) -> None:
     """把一组 (domain, op) 计量写成 Prometheus 文本（计数器 + 直方图）。
 
     prefix 为族名前缀（``…pg_query`` / ``…pg_write``），由本模块内部常量固定传入。
+    第 102 批：**只导出已触达的键**（total>0）外加每族一个零样本锚点——
+    否则 25 个键 × 12 行会固定占掉 ~30KB 抓取体积，而绝大多数键长期为 0。
+    锚点保证族名/标签格式始终存在（静态门禁与首抓可见性不受影响）。
     """
     with _pg_metrics_lock:
         snapshot = [(d, o, {**stat, "buckets": list(stat["buckets"])})
                     for (d, o), stat in sorted(stats.items())]
     for domain, op, stat in snapshot:
+        if stat["total"] <= 0 and (domain, op) not in anchors:
+            continue
         safe_d = str(domain).replace("\\", "\\\\").replace('"', '\\"')
         safe_o = str(op).replace("\\", "\\\\").replace('"', '\\"')
         labels = f'domain="{safe_d}",op="{safe_o}"'
@@ -751,8 +762,10 @@ def prometheus_text() -> str:
         "# HELP medassist_agent_pg_write_duration_seconds PG 写耗时直方图（秒，可算 P95/P99）",
         "# TYPE medassist_agent_pg_write_duration_seconds histogram",
     ]
-    _emit_pg_family(lines, "medassist_agent_pg_query", _pg_query_stats)
-    _emit_pg_family(lines, "medassist_agent_pg_write", _pg_write_stats)
+    _emit_pg_family(lines, "medassist_agent_pg_query", _pg_query_stats,
+                    _PG_METRIC_ANCHORS["query"])
+    _emit_pg_family(lines, "medassist_agent_pg_write", _pg_write_stats,
+                    _PG_METRIC_ANCHORS["write"])
     for domain in st["staleDomains"]:
         safe = str(domain).replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'medassist_agent_storage_stale_domains{{domain="{safe}"}} 1')

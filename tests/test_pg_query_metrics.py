@@ -114,16 +114,26 @@ def test_public_entry_falls_back_and_counts_error(monkeypatch):
 def test_guards_do_not_count(monkeypatch):
     """离线/无池在守卫处直接返回：不计入（否则纯 JSON 部署会被误报为 PG 失败）。
 
-    零样本键会固定导出（便于 Prometheus 首抓与规则门禁），但计数必须保持 0。
+    第 102 批起只导出"已触达键 + 每族锚点"：未触达键不再固定出现在文本里。
     """
     _reset()
     monkeypatch.setattr(pg_store, "_pool", None)
     assert pg_store.case_archive_list() is None
     assert pg_store.prescriptions_page() is None
     text = pg_store.prometheus_text()
-    assert 'medassist_agent_pg_query_total{domain="case_archive",op="list"} 0' in text
-    assert 'medassist_agent_pg_query_total{domain="prescriptions",op="page"} 0' in text
-    assert 'medassist_agent_pg_query_errors_total{domain="prescriptions",op="page"} 0' in text
-    assert _bucket(text, 'domain="prescriptions",op="page"', "+Inf") == 0
+    assert 'medassist_agent_pg_query_total{domain="review_queue",op="pending_page"} 0' in text
+    assert 'domain="case_archive",op="list"' not in text
+    assert 'domain="prescriptions",op="page"' not in text
+    assert _bucket(text, 'domain="review_queue",op="pending_page"', "+Inf") == 0
     assert "# TYPE medassist_agent_pg_query_total counter" in text
     assert "# TYPE medassist_agent_pg_query_duration_seconds histogram" in text
+
+
+def test_only_touched_keys_plus_anchor_are_exported():
+    """第 102 批：未触达键不导出（控 /metrics 体积），锚点保证族名恒在。"""
+    _reset()
+    pg_store._record_pg_query("consults", "list", 0.01, True)
+    text = pg_store.prometheus_text()
+    assert 'medassist_agent_pg_query_total{domain="consults",op="list"} 1' in text
+    assert 'medassist_agent_pg_query_total{domain="review_queue",op="pending_page"} 0' in text
+    assert 'domain="review_queue",op="my_rows"' not in text
