@@ -60,6 +60,34 @@
           <div v-else class="src">暂无文档。</div>
         </template>
       </el-card>
+      <!-- 第 79 批：只读完整性检查（脏 tag / 零切片 / 重名 / 零向量），不修改任何数据 -->
+      <el-card shadow="never">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+          <h3 style="margin: 0">完整性检查</h3>
+          <span class="src">只读：检查旧 tag / 零切片 / 重名 / 零向量，不修改数据</span>
+          <el-button size="small" style="margin-left: auto" :loading="integrityLoading"
+                     data-testid="kb-integrity" @click="runIntegrity">开始检查</el-button>
+        </div>
+        <div v-if="integrity" style="margin-top: 10px" data-testid="kb-integrity-result">
+          <div class="lead">
+            扫描 <b class="num">{{ integrity.summary.scanned }}</b> 篇 · 问题
+            <b class="num">{{ integrity.issues.length }}</b> 项 · 向量核对
+            {{ integrity.vectorCheck ? '已执行' : '未执行（Milvus 不可达或已关闭）' }}
+          </div>
+          <el-table v-if="integrity.issues.length" :data="integrity.issues" size="small" style="margin-top: 8px">
+            <el-table-column prop="doc_tag" label="doc_tag" min-width="160" />
+            <el-table-column prop="name" label="名称" min-width="160" />
+            <el-table-column prop="chunks" label="切片" width="70" align="right" />
+            <el-table-column label="问题" min-width="200">
+              <template #default="{ row }">
+                <el-tag v-for="x in row.issues" :key="x" size="small" type="warning"
+                        effect="light" style="margin-right: 4px">{{ x }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-else class="src" style="margin-top: 6px">未发现异常。</div>
+        </div>
+      </el-card>
     </div>
 
     <!-- 切片预览对话框 -->
@@ -80,7 +108,7 @@
 import { computed, defineOptions, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
-import { esc, fmtTs } from '../utils/assist'
+import { esc, fmtTs, detailText } from '../utils/assist'
 
 defineOptions({ name: 'KbView' })
 
@@ -92,6 +120,21 @@ const kbMsg = ref('')
 const uploadPct = ref(0)
 const uploading = ref(false)
 const fileRef = ref(null)
+// 第 79 批：完整性检查（只读）
+const integrity = ref(null)
+const integrityLoading = ref(false)
+
+async function runIntegrity() {
+  integrityLoading.value = true
+  try {
+    const { data } = await http.get('/medical/admin/kb/integrity')
+    integrity.value = data
+  } catch (e) {
+    ElMessage.error('检查失败：' + detailText(e))
+  } finally {
+    integrityLoading.value = false
+  }
+}
 
 const kbPages = computed(() => Math.max(1, Math.ceil((kbData.value ? kbData.value.docs.length : 0) / KB_PER)))
 const docSlice = computed(() => (kbData.value ? kbData.value.docs.slice(kbPage.value * KB_PER, kbPage.value * KB_PER + KB_PER) : []))

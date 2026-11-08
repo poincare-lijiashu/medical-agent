@@ -3115,6 +3115,55 @@ guke（骨科）  n=1 pendingForMe=1： 1,413 B → summary 67 B
 - 未提供"批量清理残留"管理界面/脚本，只能逐条 preview/delete；
 - 未在真实 Milvus 上做旧键数据的删除/预览端到端验证（本机未启动向量库）。
 
+## 83. 2026-11-08 运营能力（第 79 批：知识库完整性检查——把兼容逻辑变成可运营的只读体检）
+
+**接第 78 批**：旧 tag 兼容做完了，但管理员没有入口知道"库里现在有没有脏数据"。
+本批加一个只读体检：旧 tag、零切片、同名多 tag、Milvus 零向量，一键出结果。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/kb_ingest.py` | 新增 `integrity_report(check_vectors=True, max_check=50)`：manifest 脏键/零切片/重名 + 逐条 `count(*)` 核对零向量；坏键标 `unqueryable_tag`；Milvus 不可达/单条查询失败只降级为 `vectorCheck=false`，不抛错；**只读** |
+| `backend/api/v1/medical/kb.py` | 新增 `GET /admin/kb/integrity`（admin；`check_vectors` 可关）；审计 `kb.integrity_scan`（只记扫描数/问题数/是否核对向量） |
+| `frontend-vue/src/views/KbView.vue` | 知识库页新增「完整性检查」卡片：开始检查 → 扫描数/问题数/向量核对状态 + 问题明细表 |
+| `frontend-vue/src/utils/audit.js` | `humanizeAudit` 补 `integrity_scan` |
+| `tests/test_kb_integrity.py` | +4：四类问题齐全、跳过向量、Milvus 不可达降级、端点 admin 门禁+审计 |
+| `tests/test_router_split_guard.py` / `tests/test_frontend_syntax.py` | 路由快照登记；KbView import 断言允许追加 detailText |
+| `docs/OPERATIONS.md` | 「知识库运维」只读体检说明 |
+
+**设计取舍**
+- **只读、不修复**：删除/迁移是不可逆操作，本批只提供事实；修复仍走 admin 逐条预览/删除
+  （第 78 批已保证旧 tag 可删）；
+- **向量核对有上限**（默认 50 条）：避免体检把整库扫一遍；超限只做 manifest 级检查；
+- **单条查询失败不拖垮整次**：记录日志并把后续向量核对标记为未执行；
+- **坏键单独标记**：含 `"`/`\\` 的旧键无法安全拼 filter，标 `unqueryable_tag` 而不是假装查过。
+
+**真实数据（8001，真实 manifest）**
+```
+GET /admin/kb/integrity → 200
+vectorCheck=false（本机 Milvus 未启动）
+scanned=3, issues=1
+issue: {doc_tag: "local_corpus", chunks: 0, issues: ["empty_chunks"]}
+```
+`local_corpus` 是**故意保留的废弃审计记录**（名称已写明"数据已清除，仅存审计记录"），
+体检把它标出来是事实陈述、不是误报——管理员可据此判断是否清理。
+
+**真实浏览器（Chrome DevTools MCP，admin01）**
+- 知识库管理 → 开始检查 → `扫描 3 篇 · 问题 1 项 · 向量核对 未执行（Milvus 不可达或已关闭）`；
+- 明细行 `local_corpus` / 切片 0 / `empty_chunks`；控制台 0 error。
+
+**校验**
+- 定向 `test_kb_integrity + test_audit_humanize_coverage + test_router_split_guard +
+  test_kb_legacy_tags` **16 passed**；
+- 全量 pytest：**1274 passed**（1270 + 本批 4）；
+- `npm run build` 通过。
+
+**仍存边界**
+- 只读：不提供一键清理/迁移，也不改 manifest；
+- 零向量只核前 50 条（`vectorCheckedLimit` 可调），大库需分批或下推脚本；
+- 重名只按 `name` 完全相同判断，不做大小写/空格归一；
+- 未区分"故意保留的废弃审计记录"与真正异常（如 `local_corpus`），需人工看名称判断。
+
 
 
 

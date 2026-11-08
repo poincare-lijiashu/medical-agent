@@ -53,6 +53,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - `LLMFactory` 的实例缓存粒度是 **(温度, 流式)**：同一底层模型跨 agent_type 共享；
   激活/停用 provider 会清空缓存并重建（热切换，无需重启进程）。
 
+## 知识库运维
+- 只读完整性检查：`GET /api/v1/medical/admin/kb/integrity`（admin；`check_vectors=false`
+  可跳过 Milvus 核对）。检查旧 tag（未清洗）、零切片、同名多 tag、Milvus 零向量；
+  **只报告不修复**，知识库页「完整性检查 → 开始检查」可触发。Milvus 不可达时
+  `vectorCheck=false`，其余检查照常返回。
+
 ## 健康/可观测
 - `/healthz`（存活） `/readyz`（就绪） `/metrics`（Prometheus 文本：请求数/各路由时延/计数）。
 - 每响应带 `X-Request-Id`；日志结构化（JSON，含 event 与上下文）。

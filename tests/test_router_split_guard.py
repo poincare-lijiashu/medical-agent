@@ -83,6 +83,7 @@ ROUTE_SNAPSHOT: list[tuple[str, str]] = [
     ("POST", "/admin/kb/upload"),
     ("GET", "/admin/kb/upload/status/{task_id}"),
     ("GET", "/admin/kb"),
+    ("GET", "/admin/kb/integrity"),
     ("GET", "/admin/kb/{tag}/preview"),
     ("DELETE", "/admin/kb/{tag}"),
     ("GET", "/health"),

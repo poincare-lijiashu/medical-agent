@@ -404,6 +404,74 @@ def list_docs() -> dict:
             "docs": docs}
 
 
+def integrity_report(check_vectors: bool = True, max_check: int = 50) -> dict:
+    """知识库只读体检（第 79 批）。
+
+    只读，不修改任何数据；检查四类问题：
+    - `legacy_tag`：manifest 键未通过 `_safe_tag`（旧版残留，preview/delete 需反查）；
+    - `empty_chunks`：manifest 登记切片数 <= 0；
+    - `duplicate_name`：同一文件名对应多个 tag（改名重传后的重复）；
+    - `zero_vectors`：Milvus 中该 document_id 的向量数为 0（孤儿 manifest）。
+    `unqueryable_tag`：旧键含引号/反斜杠/控制字符，无法安全构造 filter（需人工处理）。
+    Milvus 不可达时 `vectorCheck=false`，其余检查照常返回；向量核对最多 `max_check` 条
+    （避免一次体检把整个库扫一遍）。
+    """
+    m = _load_manifest()
+    totals = {"scanned": len(m), "legacyTag": 0, "emptyChunks": 0,
+              "duplicateName": 0, "zeroVectors": 0, "unqueryableTag": 0}
+    tags_by_name: dict[str, list[str]] = {}
+    for tag, meta in m.items():
+        tags_by_name.setdefault(str((meta or {}).get("name") or ""), []).append(tag)
+    dup_tags: set[str] = set()
+    for name, tags in tags_by_name.items():
+        if name and len(tags) > 1:
+            dup_tags.update(tags)
+    col = None
+    if check_vectors and m:
+        try:
+            col = _collection()
+        except Exception as exc:  # noqa: BLE001 —— 向量库不可达：跳过向量核对
+            logger.warning("kb_ingest.integrity_vector_skip", error=str(exc)[:120])
+            col = None
+    vector_checked = False
+    issues: list[dict] = []
+    for i, (tag, meta) in enumerate(m.items()):
+        meta = meta or {}
+        found: list[str] = []
+        if _safe_tag(tag) != tag:
+            found.append("legacy_tag")
+            totals["legacyTag"] += 1
+        chunks = int(meta.get("chunks") or 0)
+        if chunks <= 0:
+            found.append("empty_chunks")
+            totals["emptyChunks"] += 1
+        if tag in dup_tags:
+            found.append("duplicate_name")
+            totals["duplicateName"] += 1
+        if col is not None and i < max_check:
+            expr = _milvus_eq("document_id", tag)
+            if not expr:
+                found.append("unqueryable_tag")
+                totals["unqueryableTag"] += 1
+            else:
+                try:
+                    rows = col.query("medical_kb", filter=expr, output_fields=["count(*)"])
+                    n = int(rows[0]["count(*)"] or 0) if rows else 0
+                    vector_checked = True
+                    if n == 0:
+                        found.append("zero_vectors")
+                        totals["zeroVectors"] += 1
+                except Exception as exc:  # noqa: BLE001 —— 单条查询失败不拖垮整次体检
+                    logger.warning("kb_ingest.integrity_vector_failed",
+                                   tag=tag[:64], error=str(exc)[:120])
+                    col = None
+        if found:
+            issues.append({"doc_tag": tag, "name": meta.get("name") or "",
+                           "chunks": chunks, "issues": found})
+    return {"vectorCheck": vector_checked, "vectorCheckedLimit": max_check,
+            "summary": totals, "issues": issues}
+
+
 def preview_doc(tag: str, limit: int = 3) -> dict:
     """预览某文档的前 N 个切片内容（查）。异常/无数据返回空列表，绝不抛错。
 

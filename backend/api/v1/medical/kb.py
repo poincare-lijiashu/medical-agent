@@ -116,6 +116,23 @@ async def kb_list(user: dict = Depends(require_role("admin"))):
     return await asyncio.to_thread(kb_ingest.list_docs)
 
 
+@router.get("/admin/kb/integrity")
+async def kb_integrity(check_vectors: bool = True,
+                       user: dict = Depends(require_role("admin"))):
+    """知识库只读体检（第 79 批）：脏 tag / 零切片 / 重名 / 零向量。
+
+    只读，不修复；`check_vectors=false` 可在 Milvus 不可达/大库时跳过向量核对。
+    审计只记扫描数、问题数与是否核对了向量，不记文档正文。
+    """
+    rep = await asyncio.to_thread(kb_ingest.integrity_report, check_vectors)
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="kb",
+                            action="integrity_scan", actor=user.get("username", "system"),
+                            payload={"scanned": rep["summary"]["scanned"],
+                                     "issues": len(rep["issues"]),
+                                     "vectorCheck": rep["vectorCheck"]})
+    return rep
+
+
 @router.get("/admin/kb/{tag}/preview")
 async def kb_preview(tag: str, user: dict = Depends(require_role("admin"))):
     return await asyncio.to_thread(kb_ingest.preview_doc, tag)

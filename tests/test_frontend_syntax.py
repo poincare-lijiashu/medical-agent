@@ -784,7 +784,9 @@ def test_kbview_xss_esc_markers_present():
     固定标签 <b>/<span class="num"> 保留（纯静态骨架不受影响）。"""
     src = (VUE_SRC / "views" / "KbView.vue").read_text(encoding="utf-8")
     # esc 从 utils/assist 导入（共享实现，与 legacy esc 同净化策略）
-    assert "import { esc, fmtTs } from '../utils/assist'" in src, "KbView 应导入共享 esc()"
+    # 第 79 批：新增 detailText（完整性检查错误提示），esc/fmtTs 仍来自共享实现
+    assert "import { esc, fmtTs" in src and "from '../utils/assist'" in src, \
+        "KbView 应导入共享 esc()/fmtTs（可追加 detailText）"
     for marker in (
         "esc(label) + ' 状态查询失败，重试中…'",
         "esc(label) + ' 任务不存在'",

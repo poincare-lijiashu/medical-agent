@@ -21,6 +21,7 @@ export function humanizeAudit(e) {
     status: () => p.rid ? `查看了复核单状态（${p.rid}）` : '查看了复核队列状态',
     detail: () => p.rid ? `查看了核对详情（${p.rid}）` : '查看了核对详情',
     history_detail: () => p.rid ? `查看了历史详情（${p.rid}）` : '查看了历史详情',
+    integrity_scan: () => p.scanned !== undefined ? `执行了知识库完整性检查（扫描 ${p.scanned} 篇 / 问题 ${p.issues ?? 0} 项）` : '执行了知识库完整性检查',
     purge_pending: () => p.n !== undefined ? `清空了待核对列表（${p.n} 条）` : '清空了待核对列表',
     review_enqueued: () => `答案进入待核对队列${rid ? ('（' + rid + '）') : ''}`,
     auto_sign_full: () => `留痕模式自动签发（${rid}）`.trim(),
