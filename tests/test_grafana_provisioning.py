@@ -27,18 +27,23 @@ def _read(path: str) -> str:
 
 
 def test_datasource_uid_matches_dashboard_references():
+    """面板引用的数据源必须是 provisioning 里声明过的 uid（否则打开就是空的）。"""
     ds = yaml.safe_load(_read(DATASOURCE))
-    item = ds["datasources"][0]
-    assert item["uid"] == "prometheus"
-    assert item["url"] == "http://prometheus:9090"
-    assert item["isDefault"] is True
+    by_uid = {item["uid"]: item for item in ds["datasources"]}
+    assert set(by_uid) == {"prometheus", "loki", "alertmanager"}
+    assert by_uid["prometheus"]["url"] == "http://prometheus:9090"
+    assert by_uid["prometheus"]["isDefault"] is True
+    assert by_uid["loki"]["type"] == "loki"
+    assert by_uid["alertmanager"]["type"] == "alertmanager"
 
     dash = json.loads(_read(DASHBOARD))
-    refs = {p.get("datasource", {}).get("uid") for p in dash["panels"]}
+    refs = set()
     for panel in dash["panels"]:
+        refs.add(panel.get("datasource", {}).get("uid"))
         for target in panel.get("targets", []):
             refs.add(target.get("datasource", {}).get("uid"))
-    assert refs == {"prometheus"}, refs
+    assert refs <= set(by_uid), sorted(refs - set(by_uid))
+    assert refs == {"prometheus", "loki"}, refs  # 告警面板走 Prometheus ALERTS
 
 
 def test_provider_points_at_mounted_dashboard_dir():
@@ -77,6 +82,21 @@ def test_dashboard_panel_ids_are_unique():
     dash = json.loads(_read(DASHBOARD))
     ids = [p["id"] for p in dash["panels"]]
     assert len(ids) == len(set(ids))
+
+
+def test_logs_and_firing_alerts_panels_are_wired():
+    """第 101 批：日志面板必须用 LogQL（loki uid），告警面板必须读 ALERTS。"""
+    dash = json.loads(_read(DASHBOARD))
+    logs = [p for p in dash["panels"] if p["type"] == "logs"]
+    assert len(logs) == 2
+    for panel in logs:
+        assert panel["datasource"]["uid"] == "loki"
+        for target in panel["targets"]:
+            assert target["datasource"]["uid"] == "loki"
+            assert target["expr"].startswith("{container=~")
+
+    alert = [p for p in dash["panels"] if p["type"] == "table"][0]
+    assert any("ALERTS" in t.get("expr", "") for t in alert["targets"])
 
 
 def test_compose_wires_grafana_securely():

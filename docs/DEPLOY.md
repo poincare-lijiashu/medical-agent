@@ -140,9 +140,9 @@ docker compose -f deploy/observability/docker-compose.observability.yml up -d gr
 
 | 交付物 | 路径 | 说明 |
 | --- | --- | --- |
-| 数据源 | `deploy/observability/grafana/provisioning/datasources/prometheus.yml` | uid=`prometheus`，指向 `http://prometheus:9090` |
+| 数据源 | `deploy/observability/grafana/provisioning/datasources/prometheus.yml` | 三个只读源：`prometheus`（默认）、`loki`、`alertmanager` |
 | 面板目录 | `deploy/observability/grafana/provisioning/dashboards/medassist.yml` | 挂载 `/var/lib/grafana/dashboards`，30s 重扫 |
-| 总览面板 | `deploy/observability/grafana/dashboards/medassist-overview.json` | 9 个面板：问答 QPS/错误率/P95、Token、技能使用、PG 读写 P95 与错误、存储/依赖状态 |
+| 总览面板 | `deploy/observability/grafana/dashboards/medassist-overview.json` | 12 个面板：问答 QPS/错误率/P95、Token、技能使用、PG 读写 P95 与错误、存储/依赖状态、错误日志、全量日志、正在触发的告警 |
 
 - 面板只引用 `/metrics` 真实导出的指标（`test_grafana_provisioning.py` 与告警规则门禁同口径）；
 - 口令通过 `GRAFANA_ADMIN_PASSWORD` 注入（`.env.local` / K8s Secret），不要用默认值；

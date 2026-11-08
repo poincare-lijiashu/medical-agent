@@ -4076,6 +4076,43 @@ GET /api/dashboards/uid/medassist-overview → title="MedAssist · AI 中台总�
 - K8s 形态未落 ConfigMap/sidecar 清单，仅文档说明迁移方式；
 - 面板刷新 30s、查询窗口 5–10 分钟，未做变量（科室/实例）与下钻联动。
 
+## 105. 2026-11-08 可观测性交付（第 101 批：Grafana 接 Loki/Alertmanager + 日志与告警面板）
+
+**问题**：第 100 批只有 Prometheus 数据源与指标面板。值班排查"接口 500"时仍要离开
+Grafana 去 `docker logs`/Loki；告警触发也只能去 Alertmanager UI 看——面板与日志、
+告警是割裂的。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `deploy/observability/grafana/provisioning/datasources/prometheus.yml` | 数据源扩为三个（均只读）：`prometheus`（默认）、`loki`（`http://loki:3100`）、`alertmanager`（`http://alertmanager:9093`） |
+| `deploy/observability/grafana/dashboards/medassist-overview.json` | 新增 3 个面板：错误日志（LogQL `{container=~".+"} |~ "(?i)(error|exception|traceback)"`）、全量日志、正在触发的告警（Prometheus `ALERTS{alertstate="firing"}` 表格） |
+| `tests/test_grafana_provisioning.py` | 数据源 uid 集合扩为 3 个且面板引用必须在其中；新增日志面板必须用 LogQL/loki、告警面板必须读 ALERTS |
+| `docs/DEPLOY.md` | 5.1 更新为 3 数据源 / 12 面板 |
+
+**真实容器验证（grafana/grafana:11.4.0，复用第 100 批镜像）**
+```
+/api/datasources → [('alertmanager','alertmanager','http://alertmanager:9093'),
+                    ('loki','loki','http://loki:3100'),
+                    ('prometheus','prometheus','http://prometheus:9090')]
+/api/dashboards/uid/medassist-overview → panels=12
+面板标题：… 存储与依赖状态、错误日志（近 1 小时）、最近日志（全部容器）、正在触发的告警
+验证后已 stop + rm 容器。
+```
+（Loki/Alertmanager 容器未启动时，Grafana 仍能完成 provisioning；面板查不到数据属预期。）
+
+**校验**
+- 定向 `test_grafana_provisioning` **6 passed**；
+- 全量 pytest：**1426 passed**（1425 + 本批 1）。
+
+**仍存边界**
+- 日志面板的 `container=~".+"` 是"本项目容器全量"，未按 service 细分下拉变量；AI 中台在
+  本地是**裸进程**（8001），若未进容器则 Loki 采不到它的日志（采集配置只发现 Docker 容器）；
+- 告警面板读 Prometheus `ALERTS`（与规则一致），不是 Alertmanager 的静默/分组视图；
+  Alertmanager 数据源已就绪但未做专用面板；
+- 日志面板未配置 traceId 点击跳转；
+- 未验证 Loki 实际查询渲染（本次只验证 provisioning 与面板定义；Loki 容器未起）。
+
 
 
 

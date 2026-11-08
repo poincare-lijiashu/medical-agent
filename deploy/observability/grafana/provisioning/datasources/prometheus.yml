@@ -1,6 +1,9 @@
 apiVersion: 1
 
-# 第 100 批：Prometheus 数据源（Grafana provisioning，容器启动即生效，无需手工点选）
+# 第 100/101 批：Grafana 数据源（容器启动即生效，无需手工点选）
+#   - Prometheus：全部 medassist_* 指标与 ALERTS 规则状态
+#   - Loki：容器日志（Promtail 标签 container/service/stream）
+#   - Alertmanager：Grafana 告警面板 / 静默与通知排查（只读）
 datasources:
   - name: Prometheus
     uid: prometheus
@@ -11,3 +14,19 @@ datasources:
     editable: false
     jsonData:
       timeInterval: 15s
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: false
+    jsonData:
+      implementation: prometheus
