@@ -3609,6 +3609,50 @@ JSON 镜像：命中该行且 status=approved / reviewed_by=qc01（就地更新�
 > 记录启动自动找回"机制有效；也给后续验证留了纪律：验证数据要么走 API 清理接口，
 > 要么同时清 PG 与不可追踪的镜像目录。
 
+## 94. 2026-11-08 性能与容量（第 90 批：病例库列表/统计/详情/软删除下推 PG）
+
+**问题**：病例库（QC 通过自动归档，随质控量单调增长）此前整表两遍读：
+`GET /case-archive` 先 `list_cases` 全表 + 内存筛选，再由 `stats()` **再读一遍**算总数；
+`/case-archive/mine`、`get`、`remove` 同样是全表线性查找。归档条目含整段脱敏病历
+（record/labs），整表解码成本远高于普通列表。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `case_archive_list(where, params)`（固定 where + `$n`，排序 `archived_at DESC NULLS LAST, id DESC`）、`case_archive_stats()`（`count(*) FILTER (WHERE status='active')` 一次聚合）、`get_case_archive_row()`（复用第 85 批三态直查）、`upsert_case_archive_row()`（单行 UPSERT） |
+| `backend/core/case_archive.py` | 新增 `_persist_new` / `_mutate_row`；`archive_from_review` 改单行写、`remove` 改单条读/写、`get` 主键直查、`list_cases` 用 `_list_where` 翻译筛选条件（日期 `COALESCE(substring(archived_at,1,10),'')` 与内存字典序同口径）、`list_mine` 条件查询、`stats` 走 PG 聚合；全部 `None` 回落内存 |
+| `tests/test_pg_case_archive.py` | +13：列表/科室/状态/日期区间（含边界）、我的归档仅 active、统计聚合、主键详情、软删除单行写与重复移除守卫、归档入队单行写、空表/无池/异常回落、路由走 PG（`_load` 炸弹） |
+
+**设计取舍**
+- **日期过滤语义严格对齐 Python**：内存用 `ts[:10]` 字典序比较，缺 `archived_at` 的历史行
+  等价空串；SQL 用 `COALESCE(substring(data->>'archived_at',1,10),'')`，`>=`/`<=` 结果与
+  内存逐例一致（已在单测里锁边界）；
+- **统计单独下推**：`count(*) FILTER` 一条 SQL 取代"再读全表数一遍"，避免列表接口两次全扫；
+- **列表仍全量返回**：病例库前端尚无分页；上量后可在既有 `where` 上加 LIMIT/OFFSET；
+- **单行写沿用三域同构**：`upsert_case_archive_row` 严格（失败抛出），镜像就地更新。
+
+**真实数据（8001，真实 PG；合成 3 条验证数据覆盖科室/状态/日期，验证后已清理）**
+```
+all（含 3 条合成 + 1 条真实）  MATCH n=4
+stats                          MATCH {total:4, active:3, removed:1}
+dept=验证科                     MATCH n=2
+status=removed                 MATCH n=1
+date_from=2026-02-01&date_to=2026-03-31  MATCH n=2
+/case-archive/mine（doctor01）  MATCH n=2
+cleanup_left=0（验证数据已从 PG 删除；JSON 镜像仅读取未写入）
+```
+
+**校验**
+- 定向 `test_pg_case_archive + test_case_archive + test_pg_consults_lists` **34 passed**；
+- 全量 pytest：**1385 passed**（1372 + 本批 13）；
+- 重启 8001 后 6/6 实测一致。
+
+**仍存边界**
+- 列表无分页（前端未接入），大库需补 `limit/offset/total`；
+- `record/labs` 整段返回，未做字段投影裁剪（列表确实需要摘要展示，暂保持）；
+- 归档写入挂点在 QC 签发流程内（try/except 兜底），本次改动未改变其失败不影响质控主流程的语义。
+
+
 
 
 

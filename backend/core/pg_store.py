@@ -1581,6 +1581,80 @@ def save_case_archive(items: list, path: str) -> None:
     _json_then_pg(_pg_save_case_archive, path, items)
 
 
+# ---- 第 90 批：病例库列表/统计/详情/单行写 下推 PG ----
+# 与 consults/prescriptions 同模式：where 由域层以固定常量传入，值走 $n；
+# 排序 archived_at DESC NULLS LAST, id DESC（与内存 _load()[::-1] 的「新→旧」一致）。
+
+async def _pg_case_list_impl(where: str, params: list) -> list | None:
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM case_archive"):
+            return None
+        rows = await c.fetch(  # noqa: S608 —— where 为域层固定片段
+            "SELECT data FROM case_archive WHERE " + where
+            + " ORDER BY data->>'archived_at' DESC NULLS LAST, id DESC", *params)
+    return [d for d in (_json_data_row(r) for r in rows) if d is not None]
+
+
+def case_archive_list(where: str = "TRUE", params: tuple = ()) -> list | None:
+    """病例库列表同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+    if offline_mode() or not _pool:
+        return None
+    if (not bool(getattr(settings, "pg_primary", True))
+            and "case_archive.json" in _repo_pg_stale):
+        return None
+    try:
+        return _run_pg(_pg_case_list_impl(where, list(params or ())))
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，病例库照常可用
+        logger.warning("pg.case_archive_list_failed", error=str(e)[:120])
+        return None
+
+
+async def _pg_case_stats_impl() -> dict | None:
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM case_archive"):
+            return None
+        row = await c.fetchrow(
+            "SELECT count(*) AS total, "
+            "count(*) FILTER (WHERE status = 'active') AS active FROM case_archive")
+    total = int(row["total"] or 0)
+    active = int(row["active"] or 0)
+    return {"total": total, "active": active, "removed": total - active}
+
+
+def case_archive_stats() -> dict | None:
+    """病例库统计（总数/在库/已移除）：无池/离线/stale/异常/空表 → None。"""
+    if offline_mode() or not _pool:
+        return None
+    if (not bool(getattr(settings, "pg_primary", True))
+            and "case_archive.json" in _repo_pg_stale):
+        return None
+    try:
+        return _run_pg(_pg_case_stats_impl())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.case_archive_stats_failed", error=str(e)[:120])
+        return None
+
+
+def get_case_archive_row(arch_id: str) -> tuple[bool, dict | None]:
+    """病例库单条按主键直查（三态语义同第 85 批）。"""
+    return _get_data_row("case_archive", arch_id)
+
+
+def upsert_case_archive_row(item: dict) -> None:
+    """W4.x 单行 UPSERT（case_archive）：归档/软删除为单据级变更，行级写根除多实例
+    全量同步互覆。无池/离线/失败抛 RuntimeError（调用方按 pg_primary 决定回落全量）。"""
+    if offline_mode() or not _pool:
+        raise RuntimeError("upsert_case_archive_row 需要 PG 池"
+                           "（离线/单机形态请走 save_case_archive 全量同步）")
+
+    async def _impl():
+        async with _pool.acquire() as c:
+            await c.execute(_CASE_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
+                            item.get("dept", ""), item.get("status", "active"))
+
+    _run_pg(_impl())
+
+
 # ---- 阶段1.1：药品字典 drug_dict / 相互作用规则 drug_rules（PG 真源 + JSON 兜底） ----
 # 语义与 users/review_queue 完全一致：读 = PG 池可用且域非 stale → PG 真源（空表回落
 # JSON）；写 = JSON 原子写先行 + PG 全量同步（best-effort，域级 stale）。

@@ -21,6 +21,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from backend.config import settings
 from backend.core import pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -59,6 +60,41 @@ def _load() -> list[dict]:
 def _save(items: list[dict]) -> None:
     # JSON 原子写兜底 + PG 全量同步（best-effort）；运行在调用方 _lock 临界区内
     pg_store.save_case_archive(items, CASE_ARCHIVE_FILE)
+
+
+def _persist_new(item: dict) -> None:
+    """第 90 批：新增归档不再读全表——PG 主模式单行 UPSERT + 镜像就地追加；
+    灰度回滚/无池/离线保持原「读全量 → append → 全量写」。运行在 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_case_archive_row(item)
+        pg_store.mirror_json_upsert(CASE_ARCHIVE_FILE, item)
+        return
+    items = _load()
+    items.append(item)
+    _save(items)
+
+
+def _mutate_row(arch_id: str, fn, not_found: ValueError) -> dict:
+    """第 90 批：单条「定位 → 校验 → 变更 → 落盘」（替代读全表线性查找）。
+
+    PG 主模式：主键直查 + 单行 UPSERT + 镜像就地更新；`(False, None)`（PG 答不了）
+    或灰度回滚/无池形态 → 回落原「读全量 → 改一条 → 全量写」。运行在 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        found, item = pg_store.get_case_archive_row(arch_id)
+        if found:
+            if item is None:
+                raise not_found
+            fn(item)
+            pg_store.upsert_case_archive_row(item)  # 严格：失败抛出防 PG/JSON 分裂
+            pg_store.mirror_json_upsert(CASE_ARCHIVE_FILE, item)
+            return item
+    items = _load()
+    for i in items:
+        if i.get("id") == arch_id:
+            fn(i)
+            _save(items)
+            return i
+    raise not_found
 
 
 def _patient_ref(record: dict) -> str:
@@ -103,17 +139,44 @@ def archive_from_review(item: dict) -> dict:
         "removed_reason": None,
     }
     with _lock:
-        items = _load()
-        items.append(entry)
-        _save(items)
+        _persist_new(entry)  # 第 90 批：PG 主模式不再为新归档读全表
     return entry
 
 
 def get(arch_id: str) -> dict | None:
+    """第 90 批：优先按主键直查 PG；PG 不可用/空表/异常 → 回落 _load() 线性查找。"""
+    found, item = pg_store.get_case_archive_row(arch_id)
+    if found:
+        return item
     for i in _load():
         if i.get("id") == arch_id:
             return i
     return None
+
+
+def _list_where(dept: str | None, status: str | None,
+                date_from: str, date_to: str) -> tuple[str, tuple]:
+    """第 90 批：把科室/状态/日期区间翻译成固定 where 片段（值走 $n）。
+
+    日期与内存同口径：取 archived_at 前 10 位做字典序比较；缺 archived_at 的历史行
+    与空串等价（`COALESCE(...,'')`），保证与 Python 的字符串比较结果一致。"""
+    conds: list[str] = []
+    params: list = []
+    if dept:
+        params.append(dept)
+        conds.append(f"dept = ${len(params)}")
+    if status:
+        params.append(status)
+        conds.append(f"status = ${len(params)}")
+    if date_from:
+        params.append(date_from)
+        conds.append("COALESCE(substring(data->>'archived_at', 1, 10), '') "
+                     f">= ${len(params)}")
+    if date_to:
+        params.append(date_to)
+        conds.append("COALESCE(substring(data->>'archived_at', 1, 10), '') "
+                     f"<= ${len(params)}")
+    return (" AND ".join(conds) if conds else "TRUE"), tuple(params)
 
 
 def list_cases(*, dept: str | None = None, status: str | None = None,
@@ -121,9 +184,14 @@ def list_cases(*, dept: str | None = None, status: str | None = None,
     """全量清单（qc/admin）：按科室/状态/归档日期区间筛选，新→旧。
 
     日期参数取 YYYY-MM-DD，与 archived_at（ISO 串）前 10 位做字典序比较。
+    第 90 批：优先 PG 条件查询；空表/无池/异常回落既有内存过滤。
     """
     df = str(date_from or "").strip()
     dt = str(date_to or "").strip()
+    where, params = _list_where(dept, status, df, dt)
+    rows = pg_store.case_archive_list(where, params)
+    if rows is not None:
+        return rows
     out = []
     for i in _load()[::-1]:
         if dept and i.get("dept") != dept:
@@ -140,7 +208,12 @@ def list_cases(*, dept: str | None = None, status: str | None = None,
 
 
 def list_mine(doctor: str) -> list[dict]:
-    """doctor 仅本人 status=active（新→旧，只读）。doctor 无移除权，removed 条目不可见。"""
+    """doctor 仅本人 status=active（新→旧，只读）。doctor 无移除权，removed 条目不可见。
+    第 90 批：优先 PG 条件查询，空表/无池/异常回落内存过滤。"""
+    rows = pg_store.case_archive_list(
+        "data->>'submitted_by' = $1 AND status = 'active'", (doctor,))
+    if rows is not None:
+        return rows
     return [i for i in _load()[::-1]
             if i.get("submitted_by") == doctor and i.get("status") == "active"]
 
@@ -149,28 +222,31 @@ def remove(arch_id: str, operator: str, reason: str) -> dict:
     """软删除：status=removed + removed_by/removed_reason 留痕（qc/admin，路由层限权）。
 
     原因必填（缺失 ValueError → 端点 422）；已移除条目不得重复移除（保留首次原因留痕）。
+    第 90 批：PG 主模式单条读/写（不再读全表）。
     """
     if not (operator or "").strip():
         raise ValueError("操作人不能为空")
     reason = str(reason or "").strip()
     if not reason:
         raise ValueError("移除原因必填")
+
+    def _do(i: dict) -> None:
+        if i.get("status") == "removed":
+            raise ValueError(f"该条目已移除：{arch_id}")
+        i["status"] = "removed"
+        i["removed_by"] = operator.strip()
+        i["removed_reason"] = reason
+
     with _lock:
-        items = _load()
-        for i in items:
-            if i.get("id") == arch_id:
-                if i.get("status") == "removed":
-                    raise ValueError(f"该条目已移除：{arch_id}")
-                i["status"] = "removed"
-                i["removed_by"] = operator.strip()
-                i["removed_reason"] = reason
-                _save(items)
-                return i
-    raise ValueError(f"归档条目不存在：{arch_id}")
+        return _mutate_row(arch_id, _do, ValueError(f"归档条目不存在：{arch_id}"))
 
 
 def stats() -> dict:
-    """库内统计：{total, active, removed}（病例库统计头，N 例在库 / M 移除）。"""
+    """库内统计：{total, active, removed}（病例库统计头，N 例在库 / M 移除）。
+    第 90 批：优先 PG 聚合（count + FILTER），空表/无池/异常回落内存统计。"""
+    st = pg_store.case_archive_stats()
+    if st is not None:
+        return st
     items = _load()
     active = sum(1 for i in items if i.get("status") == "active")
     return {"total": len(items), "active": active, "removed": len(items) - active}
