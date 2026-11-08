@@ -706,6 +706,21 @@ serviceMonitor:
   rules:
     enabled: false
 
+# ---- Grafana 面板/数据源（可选，第 113 批）----
+# 本地 compose 用 provisioning 目录直接挂载；K8s 下 Grafana 多由外部
+# （kube-prometheus-stack 等）提供、不读仓库文件——本段把同一份面板与数据源以
+# ConfigMap 交付，由 Grafana sidecar（grafana_dashboard / grafana_datasource label）抓取。
+# 默认 false：未装 sidecar 时多出的 ConfigMap 无消费者，开了也没有收益。
+# 面板单一真源：deploy/observability/grafana/dashboards/*.json
+#   （改完跑 python scripts/sync_grafana_dashboards.py，CI --check 门禁会红）。
+observability:
+  grafana:
+    enabled: false
+    # 按集群实际 Service 名填写（compose 默认为 prometheus:9090 等短名）
+    prometheusUrl: http://prometheus:9090
+    lokiUrl: http://loki:3100
+    alertmanagerUrl: http://alertmanager:9093
+
 # ---- Ingress（仅网关与 AI 中台入口）----
 ingress:
   enabled: false

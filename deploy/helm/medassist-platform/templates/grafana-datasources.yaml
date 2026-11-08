@@ -1,0 +1,45 @@
+{{- /*
+  Grafana 数据源（第 113 批）：与本地 compose 的 provisioning 同结构（3 个只读数据源），
+  但地址改为 values 参数——K8s 里 Prometheus/Loki/Alertmanager 的 Service 名与 compose 不同。
+
+  交付方式：ConfigMap + label grafana_datasource="1"，由 Grafana sidecar 自动加载。
+  开关：observability.grafana.enabled（默认 false；未装 sidecar 时开了也没有消费者）。
+*/}}
+{{- if .Values.observability.grafana.enabled }}
+{{- $ := . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "medassist.fullname" . }}-grafana-datasources
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "monitoring") | nindent 4 }}
+    grafana_datasource: "1"
+data:
+  medassist-datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: {{ .Values.observability.grafana.prometheusUrl | quote }}
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: 15s
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: {{ .Values.observability.grafana.lokiUrl | quote }}
+        editable: false
+      - name: Alertmanager
+        uid: alertmanager
+        type: alertmanager
+        access: proxy
+        url: {{ .Values.observability.grafana.alertmanagerUrl | quote }}
+        editable: false
+        jsonData:
+          implementation: prometheus
+{{- end }}

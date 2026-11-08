@@ -4573,6 +4573,54 @@ facets.actions 与 SQL 逐项一致
 - 别名表硬编码：新增镜像事件若与 JSONL 命名不一致需补表（回填脚本复用同一张表）；
 - 回填脚本无断点续跑（单条 UPDATE，2k 行毫秒级；百万级需分批）。
 
+## 117. 2026-11-08 部署一致性（第 113 批：Helm 交付 Grafana 面板/数据源）
+
+**问题**：第 100/101 批交付的 Grafana provisioning 只被本地 compose 的 Grafana 挂载；
+K8s 部署（Helm chart）里既无 dashboard ConfigMap 也无 datasource ConfigMap——集群里
+"指标有、看板没有"，现场要手工导入 JSON。属于**部署形态不一致**（本地验收通过 ≠ 集群可用）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `scripts/sync_grafana_dashboards.py`（新） | 由 `deploy/observability/grafana/dashboards/*.json` 生成 Helm ConfigMap；`--check` 门禁；**把面板里的 Grafana 模板变量 `{{…}}` 转义为 `{{ "{{" }}`**（否则 Helm 渲染报 function 未定义） |
+| `templates/grafana-dashboards.yaml`（生成产物） | ConfigMap + `grafana_dashboard: "1"`（Grafana sidecar 抓取），开关 `observability.grafana.enabled` |
+| `templates/grafana-datasources.yaml`（新，手写） | ConfigMap + `grafana_datasource: "1"`，3 个只读数据源，URL 走 values（K8s Service 名与 compose 不同） |
+| `values.yaml` | `observability.grafana.enabled=false` + `prometheusUrl/lokiUrl/alertmanagerUrl` |
+| `tests/test_grafana_helm_assets.py`（新，6 条） | 生成产物与源文件逐字一致；ConfigMap label/键名/uid；剥离 Helm 指令后 YAML 可解析、JSON 可解析；values 默认关闭；helm 可用时真实渲染（本机 skip） |
+
+**设计取舍**
+- **生成产物而不是手抄两份**：面板 11.5KB / 12 个面板，手抄必然漂移；`--check` 让
+  "改面板忘记同步"在测试阶段就红；
+- **面板源文件唯一**：compose 与 K8s 共用 `dashboards/*.json`，不复制进 chart；
+- **datasource 手写 + URL 参数化**：结构只 3 条，K8s Service 名随环境变，参数化比生成直观；
+- **默认关闭**：没有 Grafana sidecar 时多出的 ConfigMap 无消费者；开启即由 sidecar 自动加载
+  （不绑死 kube-prometheus-stack）；
+- **`{{` 转义**：面板里 11 处 Grafana 模板变量会被 Helm 当模板执行——这是"生成成功但渲染失败"
+  的典型坑，脚本统一转义并在文件头注明。
+
+**产物验证（真实执行）**
+```
+python scripts/sync_grafana_dashboards.py --check → OK（682 行，与面板源一致）
+剥离 Helm 指令后 YAML 解析成功：kind=ConfigMap，data 键 medassist-overview.json，
+  panel.uid=medassist-overview，title=MedAssist · AI 中台总览
+datasources 块解析：uid=[prometheus, loki, alertmanager]
+默认 values：observability.grafana.enabled=false
+helm 未安装 → 真实渲染测试 skip（CI 有 helm 时自动执行）
+```
+
+**校验**
+- 定向：`test_grafana_helm_assets + test_grafana_provisioning + test_deploy_observability`
+  首次 16 passed / 1 skipped；补 YAML 解析用例后 **5 passed / 1 skipped**（单文件）；
+- 全量 pytest：**1473 passed / 4 failed / 1 skipped**；4 条为 e2e `.rail a.nav` 超时
+  （60 次/分钟限流），`pytest --lf` 复跑 **4 passed**。
+
+**仍存边界**
+- 本机无 helm，`helm template` 渲染测试被 skip（CI 需安装 helm 才真正覆盖）；
+- 只交付 dashboard/datasource，不含 Grafana 本体部署（假定外部提供 + sidecar）；
+- sidecar label 需与院内 Grafana 配置一致（默认 kube-prometheus-stack 的
+  `grafana_dashboard` / `grafana_datasource`）；
+- 面板 JSON 内数据源 uid 固定为 `prometheus/loki/alertmanager`，改名需同步面板。
+
 
 
 

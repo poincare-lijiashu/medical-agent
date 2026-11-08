@@ -1,0 +1,682 @@
+{{- /*
+  Grafana 面板（第 113 批）：把本地 provisioning 的 dashboard 以 ConfigMap 交付给
+  Grafana sidecar（label grafana_dashboard="1"）自动抓取。
+
+  为什么需要：deploy/observability/grafana/provisioning 只被本地 compose 的 Grafana
+  挂载；K8s 部署下 Grafana 多由 kube-prometheus-stack 等外部提供，不读仓库文件——
+  否则集群里一块面板都没有（监控指标有、看板没有）。
+
+  单一真源：deploy/observability/grafana/dashboards/*.json
+  本文件由 scripts/sync_grafana_dashboards.py 生成，**请勿手改**；
+  改完面板跑 `python scripts/sync_grafana_dashboards.py`，CI 用 --check 门禁。
+
+  注意：面板 JSON 里含 Grafana 模板变量（`{{...}}`），Helm 会误当模板执行，
+  生成时已转义为 `{{ "{{" }}`（渲染后还原为字面 `{{`）。
+*/}}
+{{- if .Values.observability.grafana.enabled }}
+{{- $ := . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "medassist.fullname" . }}-grafana-dashboards
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "monitoring") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  medassist-overview.json: |
+    {
+      "uid": "medassist-overview",
+      "title": "MedAssist · AI 中台总览",
+      "tags": [
+        "medassist",
+        "ai-core"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "editable": false,
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timepicker": {
+        "refresh_intervals": [
+          "30s",
+          "1m",
+          "5m",
+          "15m"
+        ]
+      },
+      "templating": {
+        "list": []
+      },
+      "annotations": {
+        "list": []
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "问答 QPS（按能力域）",
+          "description": "rate(consult_requests_total[5m])；status 区分 ok/error/aborted。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": {
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (agent) (rate(medassist_agent_consult_requests_total[5m]))",
+              "legendFormat": "{{ "{{" }}agent}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "问答错误率（近 5 分钟）",
+          "description": "分母排除 prefilter（闲聊前置应答零模型、恒成功），与后端告警口径一致。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.1
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.2
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "area"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(rate(medassist_agent_consult_requests_total{status=\"error\"}[5m])) / clamp_min(sum(rate(medassist_agent_consult_requests_total{agent!=\"prefilter\"}[5m])), 0.001)"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "同步问答 P95",
+          "description": "histogram_quantile(0.95, sync channel)；流式含生成时间，不纳入。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 10
+                  },
+                  {
+                    "color": "red",
+                    "value": 20
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "area"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(medassist_agent_consult_duration_seconds_bucket{channel=\"sync\"}[5m])))"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Token 用量速率（input / output）",
+          "description": "只统计 provider 真实返回的 usage；没有 usage 的请求不计入。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (kind) (rate(medassist_agent_consult_tokens_total[5m]))",
+              "legendFormat": "{{ "{{" }}kind}}"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "技能使用 top（近 5 分钟）",
+          "description": "按技能码拆分；标签基数溢出时新技能归入 __other__（见 skill_labels_overflow）。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (skill) (rate(medassist_agent_skill_usage_total[5m]))",
+              "legendFormat": "{{ "{{" }}skill}}"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "PG 读 P95（按域/操作）",
+          "description": "直方图（第 94 批）；P95>500ms 有告警，这里看趋势与热点。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le, domain, op) (rate(medassist_agent_pg_query_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{ "{{" }}domain}}/{{ "{{" }}op}}"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "PG 写 P95（按域/操作）",
+          "description": "镜像写/全量同步/单行 UPSERT/删除（第 95–96 批）。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le, domain, op) (rate(medassist_agent_pg_write_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{ "{{" }}domain}}/{{ "{{" }}op}}"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "PG 错误速率（读 / 写）",
+          "description": "读失败 = 该域回落 JSON（可能滞后/多副本不一致）；写失败见第 95 批语义。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 24
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "fillOpacity": 10
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (domain) (rate(medassist_agent_pg_query_errors_total[5m]))",
+              "legendFormat": "read/{{ "{{" }}domain}}"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (domain) (rate(medassist_agent_pg_write_errors_total[5m]))",
+              "legendFormat": "write/{{ "{{" }}domain}}"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "type": "stat",
+          "title": "存储与依赖状态",
+          "description": "ready/circuit 为 1=正常；stale>0 表示有域写失败回落 JSON；redis_degraded=1 表示多副本语义失效。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 24
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "medassist_agent_storage_ready",
+              "legendFormat": "storage_ready"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "medassist_agent_storage_circuit_open",
+              "legendFormat": "circuit_open"
+            },
+            {
+              "refId": "C",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(medassist_agent_storage_stale_domains)",
+              "legendFormat": "stale_domains"
+            },
+            {
+              "refId": "D",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "medassist_agent_redis_degraded",
+              "legendFormat": "redis_degraded"
+            },
+            {
+              "refId": "E",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "medassist_agent_milvus_reachable",
+              "legendFormat": "milvus_reachable"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "type": "logs",
+          "title": "错误日志（近 1 小时）",
+          "description": "Loki + Promtail 采集的本项目容器日志；行级过滤 error/exception/traceback（不区分大小写）。",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 32
+          },
+          "options": {
+            "showTime": true,
+            "showLabels": false,
+            "wrapLogMessage": true,
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{container=~\".+\"} |~ \"(?i)(error|exception|traceback)\"",
+              "legendFormat": "{{ "{{" }}container}}"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "type": "logs",
+          "title": "最近日志（全部容器）",
+          "description": "排查用：先看错误面板，再回到全量日志按 traceId/关键词过滤。",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 32
+          },
+          "options": {
+            "showTime": true,
+            "showLabels": false,
+            "wrapLogMessage": true,
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{container=~\".+\"}",
+              "legendFormat": "{{ "{{" }}container}}"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "type": "table",
+          "title": "正在触发的告警（Prometheus ALERTS）",
+          "description": "alertstate=firing；通知送达与静默请到 Alertmanager（已配置为数据源）。",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 40
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "left"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "alertname",
+                "desc": false
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "ALERTS{alertstate=\"firing\"}",
+              "format": "table",
+              "instant": true
+            }
+          ]
+        }
+      ]
+    }
+{{- end }}
