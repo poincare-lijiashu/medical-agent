@@ -4787,7 +4787,7 @@ helm 未安装 → 未做真实渲染（与 §117 同边界，CI 有 helm 时补
 
 **校验**
 - 定向：`test_audit_archive_cronjob` **3 passed**；
-- 全量 pytest：待补（后台运行完成即记）。
+- 全量 pytest：**1492 passed / 0 failed / 1 skipped**（5:27，含 e2e；连续第四批零失败）。
 
 **仍存边界**
 - 本机无 helm，未做 `helm template` 渲染验证；
