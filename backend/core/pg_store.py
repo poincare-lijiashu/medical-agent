@@ -939,6 +939,29 @@ def mirror_json_file(path: str, data) -> None:
     _write_json_atomic(path, data)
 
 
+def mirror_json_upsert(path: str, item: dict, key: str = "id") -> None:
+    """JSON 镜像**就地更新**（第 87 批，PG 主模式的单行写配套）：
+
+    读现有镜像 → 同 key 替换（不存在则追加）→ 原子写。与 `mirror_json_file(全量覆盖)`
+    相比，调用方无需为了刷新镜像而先读全表；镜像本身只是灾难恢复源（PG 仍是真源），
+    故失败仅告警、绝不冒泡影响已成功的 PG 写。"""
+    try:
+        data = _read_json(path, [])
+        if not isinstance(data, list):
+            data = []
+        kid = item.get(key)
+        for idx, old in enumerate(data):
+            if isinstance(old, dict) and old.get(key) == kid:
+                data[idx] = item
+                break
+        else:
+            data.append(item)
+        _write_json_atomic(path, data)
+    except Exception as e:  # noqa: BLE001 —— 镜像失败不影响 PG 真源
+        logger.warning("pg.mirror_json_upsert_failed", file=os.path.basename(path),
+                       error=str(e)[:120])
+
+
 # ---- departments（id=顺序号保序，还原 {"list":[...]} 形态） ----
 
 async def _pg_load_departments() -> dict | None:

@@ -3475,6 +3475,52 @@ POST /prescriptions/rx-not-exist/review         → 404「处方不存在」
 - 排序依赖 `ts` 文本列（ISO 前缀可比），历史格式不一致时需迁移规范化；
 - 与第 82/83 批相同：关键字/过滤均为逐行表达式，无专用索引。
 
+## 91. 2026-11-08 性能与容量（第 87 批：复核写路径单条读/单行写）
+
+**问题**：复核域所有写操作（`submit` 入队、`resolve` 签批、`reopen` 翻案、`self_confirm`
+知情确认）都是 `with _lock: items = _load()` **读全表 → 改一条 → 全量镜像**。PDCA 里最热的
+写是「签批」：每次质检员点通过都要解码整张队列表（本机真实数据 1168 行；JSON 镜像 1099 行），
+写镜像时还要再序列化整表；队列越长，单次签批越慢。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `mirror_json_upsert(path, item, key="id")`：读现有镜像 → 同 key 替换/追加 → 原子写；失败仅告警（镜像只是灾难恢复源，绝不冒泡影响已成功的 PG 写） |
+| `backend/core/medical_review.py` | 新增 `_persist_new`（新增：单行 UPSERT + 镜像追加）与 `_mutate_row`（既有行：主键直查 + 单行 UPSERT + 镜像就地更新）；`submit / resolve / reopen / self_confirm` 全部切换到新骨架；`(False, None)`（PG 答不了）或灰度/无池形态回落原「读全量→改→全量写」 |
+| `tests/test_review_single_row_write.py` | +14：PG 主模式下四个写操作均不调用 `_load`（炸弹断言）、失败不落盘、双控/已处理/重复确认守卫、`(False,None)` 回落、`submit` 追加语义、镜像替换/追加/坏文件重建/写失败静默 |
+
+**设计取舍**
+- **PG 主模式与回滚形态严格分派**：只有 `pg_primary && has_pool()` 走单行；灰度回滚/离线/
+  无池仍全量（与拆分前完全一致，回滚即恢复旧行为）；
+- **镜像可失败**：单行写成功后 JSON 镜像即使失败也不该让接口 500（PG 已是真源）；这与旧
+  `mirror_json_file` 抛错行为不同，属有意改进，已在本节说明；
+- **不引入缓存/脏写**：每次仍从 PG 读最新行再改，状态机校验看到的始终是真源；
+- **锁语义不变**：`_lock` 仍包住「读-改-写」，单实例内不会并发改写同一条。
+
+**真实数据（8001，真实 PG；临时行 rev-verify87 验证后已清理）**
+```
+POST /review/rev-verify87/resolve {"decision":"approved","note":"第87批验证"}（qc01）
+  → 200, status=approved, reviewed_by=qc01
+PG 回读：{status: approved, reviewed_by: qc01, review_note: 第87批验证}
+JSON 镜像：命中该行且 status=approved / reviewed_by=qc01（就地更新生效，未整体覆盖）
+```
+
+**校验**
+- 定向 `test_review_single_row_write + test_review_flow + test_review_permission +
+  test_qc_resubmit + test_row_level_review + test_pg_review_get_row` **49 passed**；
+- 全量 pytest：**1352 passed**（1338 + 本批 14）；
+- 重启 8001 后真实 PG 实测如上。
+
+**仍存边界**
+- `purge_pending()` 仍是批量全量（按 status 清理，天然需要全表）；
+- 处方/会诊写路径（`_mutate` / `create` / `add_opinion`）仍是全表读，待后续批次按同模式改造；
+- 镜像就地更新是「读 JSON → 改 → 写 JSON」，仍是 O(n) 本地 IO（比全量 PG 解码便宜，
+  但不是 O(1)）；若要彻底消除，需要把镜像改为追加写/数据库导出；
+- **镜像与真源存在天然滞后**（实测 PG 1168 行 / JSON 1099 行）：镜像只在写路径刷新，
+  读路径从不回写——这是"PG 真源"设计的既定事实，不是缺陷；灾难恢复时应以 PG 备份
+  为主、镜像仅作兜底参考。
+
+
 
 
 

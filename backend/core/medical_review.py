@@ -121,6 +121,44 @@ def _save_row(item: dict, items: list[dict]) -> None:
         _save(items)
 
 
+def _persist_new(item: dict) -> None:
+    """第 87 批：新增一条时不再读全表——PG 主模式单行 UPSERT + JSON 镜像就地追加；
+    灰度回滚/无池/离线保持原「读全量 → append → 全量写」语义（行为不变）。
+    运行在调用方 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_review_row(item)
+        pg_store.mirror_json_upsert(QUEUE_FILE, item)
+        return
+    items = _load()
+    items.append(item)
+    _save(items)
+
+
+def _mutate_row(rid: str, fn) -> dict:
+    """第 87 批：单条「定位 → 校验/变更 → 落盘」骨架（替代读全表线性查找）。
+
+    PG 主模式：主键直查（get_review_row）+ 单行 UPSERT + 镜像就地更新；
+    `(False, None)`（无池/离线/空表/异常 = PG 答不了）或灰度回滚形态 → 回落原
+    「读全量 → 改一条 → 全量写」，行为与拆分前完全一致。
+    运行在调用方 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        found, item = pg_store.get_review_row(rid)
+        if found:
+            if item is None:
+                raise ReviewError("未找到该审核条目")
+            fn(item)
+            pg_store.upsert_review_row(item)  # 严格：PG 写失败抛出，防 PG/JSON 分裂
+            pg_store.mirror_json_upsert(QUEUE_FILE, item)
+            return item
+    items = _load()
+    for i in items:
+        if i["id"] == rid:
+            fn(i)
+            _save(items)
+            return i
+    raise ReviewError("未找到该审核条目")
+
+
 def submit(*, agent: str, question: str, answer: str, confidence: float,
            risk_reason: str, submitted_by: str,
            images: list[str] | None = None,
@@ -144,7 +182,6 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
     except (TypeError, ValueError):
         attempt_n = 1
     with _lock:
-        items = _load()
         entry = {
             "id": rid, "ts": _now(), "agent": agent, "question": question,
             "answer": answer, "confidence": confidence, "risk_reason": risk_reason,
@@ -161,8 +198,7 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
             # 任务3 全交互留痕：溯源来源存档（JSON 兜底真源；PG 镜像同列）
             "sources": list(sources) if sources else None,
         }
-        items.append(entry)
-        _save_row(entry, items)
+        _persist_new(entry)  # 第 87 批：PG 主模式不再为新条目读全表
     return rid
 
 
@@ -188,21 +224,19 @@ def self_confirm(rid: str, username: str) -> dict:
     """
     if not username:
         raise ReviewError("确认人不能为空")
+
+    def _do(i: dict) -> None:
+        if i.get("submitted_by") != username:
+            raise ReviewError("仅提交人本人可确认")
+        if not i.get("self_confirm_required"):
+            raise ReviewError("该条目无需知情确认")
+        if i.get("confirmed_by_self"):
+            raise ReviewError("该条目已确认过")
+        i["confirmed_by_self"] = True
+        i["self_confirmed_at"] = _now()
+
     with _lock:
-        items = _load()
-        for i in items:
-            if i["id"] == rid:
-                if i.get("submitted_by") != username:
-                    raise ReviewError("仅提交人本人可确认")
-                if not i.get("self_confirm_required"):
-                    raise ReviewError("该条目无需知情确认")
-                if i.get("confirmed_by_self"):
-                    raise ReviewError("该条目已确认过")
-                i["confirmed_by_self"] = True
-                i["self_confirmed_at"] = _now()
-                _save_row(i, items)
-                return i
-        raise ReviewError("未找到该审核条目")
+        return _mutate_row(rid, _do)
 
 
 def my_rejections(username: str) -> list[dict]:
@@ -355,23 +389,21 @@ def resolve(rid: str, decision: str, reviewer: str, note: str = "",
         raise ReviewError("decision 需为 approved 或 rejected")
     if not reviewer:
         raise ReviewError("审核人不能为空")
+
+    def _do(i: dict) -> None:
+        if i["status"] != "pending":
+            raise ReviewError(f"该条目已处理：{i['status']}")
+        if reviewer == i["submitted_by"]:
+            raise ReviewError("双控失败：审核人不能是提交人本人")
+        i["status"] = decision
+        i["reviewed_by"] = reviewer
+        i["review_note"] = note
+        i["resolved_at"] = _now()
+        if not keep_images:
+            i["images"] = None  # FIND-03a：人工签发历史瘦身，影像不再留存
+
     with _lock:
-        items = _load()
-        for i in items:
-            if i["id"] == rid:
-                if i["status"] != "pending":
-                    raise ReviewError(f"该条目已处理：{i['status']}")
-                if reviewer == i["submitted_by"]:
-                    raise ReviewError("双控失败：审核人不能是提交人本人")
-                i["status"] = decision
-                i["reviewed_by"] = reviewer
-                i["review_note"] = note
-                i["resolved_at"] = _now()
-                if not keep_images:
-                    i["images"] = None  # FIND-03a：人工签发历史瘦身，影像不再留存
-                _save_row(i, items)
-                return i
-        raise ReviewError("未找到该审核条目")
+        return _mutate_row(rid, _do)
 
 
 def reopen(rid: str, operator: str) -> dict:
@@ -380,18 +412,16 @@ def reopen(rid: str, operator: str) -> dict:
     双控对称：operator 不能是提交人本人（防止单人闭环操纵条目生命周期）。"""
     if not operator:
         raise ReviewError("翻案操作人不能为空")
+
+    def _do(i: dict) -> None:
+        if i["status"] == "pending":
+            raise ReviewError("该条目仍在待核对，无需重开")
+        if operator == i["submitted_by"]:
+            raise ReviewError("双控失败：翻案人不能是提交人本人")
+        i["status"] = "pending"
+        i["reviewed_by"] = None
+        i["review_note"] = None
+        i["resolved_at"] = None
+
     with _lock:
-        items = _load()
-        for i in items:
-            if i["id"] == rid:
-                if i["status"] == "pending":
-                    raise ReviewError("该条目仍在待核对，无需重开")
-                if operator == i["submitted_by"]:
-                    raise ReviewError("双控失败：翻案人不能是提交人本人")
-                i["status"] = "pending"
-                i["reviewed_by"] = None
-                i["review_note"] = None
-                i["resolved_at"] = None
-                _save_row(i, items)
-                return i
-        raise ReviewError("未找到该审核条目")
+        return _mutate_row(rid, _do)
