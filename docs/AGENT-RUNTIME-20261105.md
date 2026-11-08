@@ -3965,6 +3965,44 @@ medassist_agent_pg_write_total{domain="users",op="delete_row"} 0
 - 无相关性排序/高亮：仍是"包含即命中"，结果顺序沿用列表顺序；
 - 扩展 schema 依赖运行库实际安装位置，跨环境迁移时以启动日志 `pg.trgm_*_skipped` 为准。
 
+## 102. 2026-11-08 正确性与性能（第 98 批：`/admin/data` 统计失真修复 + 探针短缓存）
+
+**问题（两个，第一个是 bug 不是性能）**
+1. 数据面板的「待核 / 通过 / 驳回」此前用 `review.list_all(with_images=False)` 计算，
+   而 `list_all` 默认 `limit=100`（`_load()[::-1][:100]`，只取**最新 100 条**）。真实队列
+   1168 行时，界面显示 `pending=3 / approved=97 / rejected=0`，实际是
+   `76 / 1091 / 1`——管理员看到的处理量差了约 11 倍；
+2. 面板耗时约 **1038ms**：其中 ~1000ms 是两次基础设施探针（Milvus TCP 预检 ~503ms +
+   `doc_count` ~500ms，本地 Milvus 未启动时各自 fail-fast 一次），业务数据只占 ~5ms。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/api/v1/medical/admin.py` | 统计改走第 91 批的 `review.status_counts()`（PG `GROUP BY status`，全量口径）；返回 `None` 时回落 `list_all` 内存计数（无池/离线/空表行为不变） |
+| `backend/api/v1/medical/admin.py` | 新增 `_infra_cached` + `_INFRA_TTL_S=5s`：Milvus 状态与 kb 文档数 5s 内复用；探针异常降级为"不可用"（不再可能把面板打成 500）；PG `SELECT 1`（~1ms）不缓存 |
+| `tests/test_admin_data_counts.py` | +3：有计数时不读全表（`list_all` 炸弹）、无计数回落内存、两次请求只穿透一次探针且第二次命中缓存 |
+
+**真实数据（8001，真实 PG）**
+```
+修复前（按 list_all 最新 100 条）：pending=3  approved=97  rejected=0   ← 与真实值严重不符
+修复后（GROUP BY 全表）：            pending=76 approved=1091 rejected=1  ← 与 SQL 一致
+面板延迟：1038–1063ms → 28–32ms（首调仍 ~1s，两次探针冷启动；后续 5s 窗口内命中缓存）
+核心对比：list_all(100 行) 31.5ms  vs  status_counts(1168 行聚合) 3.6ms
+```
+
+**校验**
+- 定向 `test_admin_data_counts + admin_ops + kb_doccount + audit_pagination` **15 passed**；
+- 全量 pytest：**1418 passed**（1415 + 本批 3）；
+- 重启 8001 → `/healthz` 200；连续 5 次 `/admin/data` 统计与 SQL 一致。
+
+**仍存边界**
+- 探针缓存 5s：Milvus/文档数变化最多滞后 5s（运维面板可接受；状态类信息不应作为实时指标）；
+- 首次调用仍需 ~1s（探针冷启动）；若 Milvus 长期不可用，每 5s 仍有一次 1s 代价；
+- `pg_counts` 仍逐表 `count(*)`（3 张表，毫秒级），未缓存；
+- `review.status_counts()` 在 PG 不可用/空表时返回 `None`，此时回落内存统计仍是
+  "最新 100 条"口径——**纯 JSON 部署下该面板数字仍只反映最近 100 条**（该形态下没有
+  全量计数接口；已在此处明确，不在本批扩面）。
+
 
 
 

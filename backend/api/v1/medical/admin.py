@@ -20,6 +20,35 @@ router = APIRouter(dependencies=[Depends(rate_limit)])
 
 _START = time.time()
 
+# 第 98 批：基础设施探针短缓存（默认 5s）。
+# 为什么：Milvus TCP 预检与 doc_count 各自 fail-fast ~500ms；本地实测 /admin/data
+# 约 1038ms，其中 ~1000ms 是这两次探针（业务数据只占 ~5ms）。面板刷新/多人同时打开
+# 会反复付这份代价。状态类信息对 5s 陈旧不敏感，缓存后热路径 ~5ms。
+_INFRA_TTL_S = 5.0
+_infra_cache: dict = {"at": 0.0, "milvus": None, "kb_docs": None}
+
+
+def _reset_admin_infra_cache() -> None:
+    """清空探针缓存（单测隔离用）。"""
+    _infra_cache.update(at=0.0, milvus=None, kb_docs=None)
+
+
+async def _infra_cached(milvus_status, doc_count) -> tuple[dict, int]:
+    """返回 (milvus 状态, kb 文档数)；TTL 内复用，异常一律降级为"不可用"。"""
+    now = time.monotonic()
+    if _infra_cache["milvus"] is not None and (now - _infra_cache["at"]) < _INFRA_TTL_S:
+        return _infra_cache["milvus"], _infra_cache["kb_docs"]
+    try:
+        milvus = await asyncio.to_thread(milvus_status)
+    except Exception:  # noqa: BLE001 —— 状态探针绝不影响面板主数据
+        milvus = {"connected": False, "uri": ""}
+    try:
+        kb_docs = await asyncio.to_thread(doc_count)
+    except Exception:  # noqa: BLE001
+        kb_docs = -1
+    _infra_cache.update(at=now, milvus=milvus, kb_docs=kb_docs)
+    return milvus, kb_docs
+
 
 @router.get("/config")
 async def get_config(user: dict = Depends(require_user)):
@@ -205,10 +234,20 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", ""),
               "dept": rec.get("dept", "")}
              for u, rec in (await asyncio.to_thread(all_users)).items()]
-    items = await asyncio.to_thread(review.list_all, with_images=False)  # 数据面板统计只计数，剥离 images 控响应体积（任务5）
-    stats = {"pending": sum(1 for i in items if i.get("status") == "pending"),
-             "approved": sum(1 for i in items if i.get("status") == "approved"),
-             "rejected": sum(1 for i in items if i.get("status") == "rejected")}
+    # 第 98 批：状态统计优先走 PG `GROUP BY status`（第 91 批能力），不再读全表解码。
+    # 1168 行的队列此前每次打开数据面板都要整表取一遍（即便已剥离 images）；现在只取
+    # 3 行分布。无池/离线/旧编排 stale/异常/空表 → None，回落既有内存计数（行为不变）。
+    counts = await asyncio.to_thread(review.status_counts)
+    if counts is None:
+        items = await asyncio.to_thread(review.list_all, with_images=False)
+        stats = {"pending": sum(1 for i in items if i.get("status") == "pending"),
+                 "approved": sum(1 for i in items if i.get("status") == "approved"),
+                 "rejected": sum(1 for i in items if i.get("status") == "rejected")}
+    else:
+        dist = counts.get("counts") or {}
+        stats = {"pending": int(counts.get("pending", 0) or 0),
+                 "approved": int(dist.get("approved", 0) or 0),
+                 "rejected": int(dist.get("rejected", 0) or 0)}
     al = _shared.get_audit_logger()
     # 任务5：审计流数据源切换为 PG audit_log 真源（audit_recent_pg 按 ts 倒序分页，返回
     # 与 JSONL recent 相同结构 [{ts,event_type,actor,payload}]）；PG 未建池/异常/超时
@@ -230,18 +269,16 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
         pg_counts = await pg_store.counts()
     except Exception:  # noqa: BLE001
         pg_counts = {}
-    # 基础设施只读状态（前端运维卡片）：milvus TCP 预检（<0.5s fail-fast）+ pg SELECT 1 探针。
+    # 基础设施只读状态（前端运维卡片）：milvus TCP 预检 + kb 文档数走 5s 短缓存
+    # （两者各自 fail-fast ~500ms，是面板延迟的主要来源）；pg SELECT 1 探针开销 ~1ms 不缓存。
     # 安全红线：只报状态/命令文本供展示与复制，本端点绝不提供任何执行/重启能力。
-    try:
-        milvus = await asyncio.to_thread(milvus_status)
-    except Exception:  # noqa: BLE001 —— 状态探针绝不影响面板主数据
-        milvus = {"connected": False, "uri": ""}
+    milvus, kb_docs = await _infra_cached(milvus_status, doc_count)
     try:
         pg_ok = await pg_store.ping()
     except Exception:  # noqa: BLE001
         pg_ok = False
     return {"users": users, "audit_recent": audit_recent, "review": stats,
-            "pg_counts": pg_counts, "kb_docs": await asyncio.to_thread(doc_count),
+            "pg_counts": pg_counts, "kb_docs": kb_docs,
             "events_total": len(al.entries), "device": device(), "uptime_s": int(time.time() - _START),
             "infra": {"milvus": milvus, "pg": {"ok": pg_ok},
                       # 第 47 批：模式 + 按域 stale（写失败回落 JSON）——多副本漂移早期信号
