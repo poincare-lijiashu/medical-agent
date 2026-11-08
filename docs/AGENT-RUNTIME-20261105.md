@@ -4475,6 +4475,56 @@ tz 回显: "中国标准时间"（Windows 本地时区；分页与 facets 一致
 - 跨时区院区需要按用户维度时区，当前是全局配置；
 - facets 每次展开拉一次（无进程内缓存），超大数据量需缓存/物化视图。
 
+## 115. 2026-11-08 临床功能（第 111 批：会诊关键字检索——收件箱 + 我的会诊）
+
+**问题**：会诊只有"按科室/按发起人"两个视角的滚动列表；随着会诊累积（本机 doctor01 已
+13 单发起），找"某个病例的会诊""谁提过某类意见"只能肉眼翻页。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/consults.py` | `matches_query(item, q)`：question / ai_analysis / initiator / target_depts / 已填意见正文，大小写不敏感子串（与 `prescriptions.matches_query` 同口径） |
+| `backend/api/v1/medical/consults.py` | `/consults/inbox` 增 `q`（≤100）：**dept 隔离之后、分页之前**过滤，`total/pendingForMe` 同口径；`/consults/mine` 增 `q`（两侧列表同口径）；两处审计只记 `q: bool`，**不记录关键字内容** |
+| `frontend-vue/src/views/ReviewCenterView.vue` | 会诊 tab 搜索框（300ms 防抖）；过滤中不更新 tab 角标（保持"整箱待我填"口径）；无结果给独立文案 |
+| `frontend-vue/src/views/ConsultView.vue` | 「我的会诊」搜索框（两侧同口径）；空态区分"无记录 / 无匹配" |
+| `tests/test_consult_search.py`（新，8 条） | matches 覆盖面、q→total/pending、q 后分页、无命中、summary+q、审计不落关键字、mine 两侧、q 超长 422 |
+| `tests/test_frontend_syntax.py` | 前端标记锁（服务端下发、角标不被过滤污染） |
+
+**设计取舍**
+- **服务端过滤而不是前端内存过滤**：`/consults/inbox` 本身就是服务端 dept 隔离；前端过滤会
+  把"过滤后为空"与"没有会诊"混在一起，且分页/total 无法同口径；
+- **q 在 dept 之后、分页之前**：先隔离（安全边界）→ 再检索 → 最后切片，offset 是过滤后偏移；
+- **total/pendingForMe 用过滤后集合**：与"共 N 条"一致；角标轮询（`summary=1` 不传 q）保持
+  整箱口径，视图内过滤时前端也不覆盖角标；
+- **审计不记关键字**：病例文本可能含 PHI，审计只记 `q: bool`（与处方检索同纪律）；
+- **与处方检索共用匹配规则**：大小写不敏感子串，不引入第二套语义（避免"处方能搜到、会诊搜不到"）；
+- **应用层过滤而非 SQL 下推**：会诊量级远小于处方/审计，`consult_list` 已是条件查询；
+  下推留待量大时（如实标注边界）。
+
+**真实数据（8001 + 真实库）**
+```
+doctor01：我发起 13 / 我参与 1
+  /consults/mine?q=肚子疼，好几天了   → 1 条（逐条复算匹配通过）
+  /consults/mine?q=<不存在关键词>     → 0 / 0
+waike01（外科）收件箱 3 条
+  /consults/inbox?q=肚子疼，好几天了  → 1 条，total=1
+  /consults/inbox?q=<不存在关键词>    → 0 条，total=0
+7/7 校验通过
+```
+
+**校验**
+- 定向：`test_consult_search + test_consult_inbox_paging + test_consults +
+  test_frontend_syntax + test_router_split_guard` **75 passed**；
+- 全量 pytest：**1462 passed / 4 failed**；4 条均为 e2e `.rail a.nav` 超时（60 次/分钟
+  限流），`pytest --lf` 复跑 **4 passed**，与本次改动无关。
+
+**仍存边界**
+- 会诊检索在应用层（先取全量再过滤），会诊数上量后需下推 SQL / trigram；
+- 仅子串匹配，无分词/拼音/同义词；
+- `/consults/mine` 无分页，超大量时仍一次返回全部匹配；
+- 收件箱角标在过滤中不刷新（设计如此），清空搜索后恢复；
+- 检索面不含 AI 分科依据（`team.reason`）与会诊汇总（`summary`）。
+
 
 
 

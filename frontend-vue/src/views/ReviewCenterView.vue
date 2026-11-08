@@ -105,12 +105,20 @@
     <!-- ============ 会诊协助 tab（轮 A：legacy loadConsultInbox/renderConsultInbox 语义迁移，
          数据源 GET /consults/inbox；doctor/pharmacist 专属） ============ -->
     <div v-else-if="tab === 'consults'" class="page-body" v-loading="consultLoading" data-testid="consult-inbox">
+      <!-- 第 111 批：服务端关键字过滤（病例/AI 意见/发起人/受邀科室/已填意见；300ms 防抖） -->
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 8px">
+        <el-input v-model="consultQ" data-testid="consult-inbox-q" clearable
+                  placeholder="搜索会诊：病例 / 发起人 / 受邀科室 / 已填意见（服务端过滤）"
+                  style="max-width: 480px" @input="onConsultQInput" />
+        <span class="src num">{{ consultQ.trim() ? `匹配 ${consultItems.length} 条` : `共 ${consultItems.length} 条` }}</span>
+      </div>
       <el-card v-if="consultErr" shadow="never"><el-alert type="error" :closable="false" show-icon :title="consultErr" /></el-card>
-      <!-- 空态（legacy 逐字：含当前账号科室提示与一票语义） -->
+      <!-- 空态（legacy 逐字：含当前账号科室提示与一票语义；过滤无结果给独立文案，避免误导"没有请求"） -->
       <el-card v-else-if="!consultItems.length" shadow="never">
         <div class="empty-box">
-          <div>暂无其它科室的会诊协助请求。</div>
-          <div class="lead" style="margin: 8px auto 0">当其它科室发起跨科室会诊并邀请您所在科室（{{ consultDept || '未设置' }}）时，会出现在这里；意见仅有建议权，每人一票。</div>
+          <div>{{ consultQ.trim() ? '没有匹配的会诊请求。' : '暂无其它科室的会诊协助请求。' }}</div>
+          <div v-if="!consultQ.trim()" class="lead" style="margin: 8px auto 0">当其它科室发起跨科室会诊并邀请您所在科室（{{ consultDept || '未设置' }}）时，会出现在这里；意见仅有建议权，每人一票。</div>
+          <div v-else class="lead" style="margin: 8px auto 0">当前关键字：{{ consultQ.trim() }}（清空搜索框可恢复全部）。</div>
         </div>
       </el-card>
       <el-card v-for="c in consultItems" :key="c.id" shadow="never" style="border-left: 3px solid var(--accent)" :data-cid="c.id">
@@ -881,25 +889,38 @@ const consultMe = ref('')
 const consultDept = ref('')
 const consultLoading = ref(false)
 const consultErr = ref('')
+const consultQ = ref('') // 第 111 批：服务端关键字过滤（病例/AI 意见/发起人/科室/已填意见）
+let consultQTimer = 0
 const opDrafts = reactive({}) // 各会诊单意见草稿（按 id 独立，切 tab 不丢）
 
 async function loadConsultInbox() {
   consultLoading.value = true
   consultErr.value = ''
+  const kw = consultQ.value.trim()
   try {
-    const { data } = await http.get('/medical/consults/inbox', { silentToast: true })
+    const { data } = await http.get('/medical/consults/inbox', {
+      silentToast: true, params: kw ? { q: kw } : {},
+    })
     consultItems.value = data.items || []
     consultMe.value = data.me || ''
     consultDept.value = data.dept || ''
-    // tab 徽标：待我（本科室）意见数——科室一票口径 o.dept===dept（legacy updateConsultBadge 同实现）
+    // tab 徽标：待我（本科室）意见数——科室一票口径 o.dept===dept（legacy updateConsultBadge 同实现）。
+    // 第 111 批：过滤中不更新角标（否则"搜 1 条"会把角标覆盖成 0/1，与"整箱待我填"口径冲突）。
     badges.meDept = consultDept.value
-    badges.consultPendingOps = (consultItems.value || [])
-      .filter((c) => !((c.opinions || []).some((o) => o.dept === consultDept.value))).length
+    if (!kw) {
+      badges.consultPendingOps = (consultItems.value || [])
+        .filter((c) => !((c.opinions || []).some((o) => o.dept === consultDept.value))).length
+    }
   } catch (e) {
     consultErr.value = '⚠ ' + detailText(e)
   } finally {
     consultLoading.value = false
   }
+}
+// 关键字输入：300ms 防抖（与处方/审计搜索同节奏；服务端过滤，不分页的收件箱直接重拉）
+function onConsultQInput() {
+  if (consultQTimer) clearTimeout(consultQTimer)
+  consultQTimer = setTimeout(() => { consultQTimer = 0; loadConsultInbox() }, 300)
 }
 
 // 本人是否已提交意见（legacy 行级判定 o.doctor===consultMe，医生粒度）

@@ -133,6 +133,8 @@ async def consult_inbox(
                                   description="返回条数上限；缺省=全部（旧行为）。0=只取计数"),
         offset: int = Query(0, ge=0, description="跳过条数"),
         summary: bool = Query(False, description="只回计数（items=[]），供角标轮询"),
+        q: str = Query("", max_length=100,
+                       description="关键字过滤（病例/AI 意见/发起人/受邀科室/已填意见，子串）"),
         user: dict = Depends(require_user)):
     """「其它科室会诊协助」收件箱：当前医生 dept 匹配的 open 会诊单
     （服务端按 dept 实时过滤隔离；账号未设置科室则恒为空）。
@@ -140,11 +142,18 @@ async def consult_inbox(
     数据返回与非 silent 完全一致；视图内刷新不传 silent，业务审计照旧保留。
     第 77 批：新增 `limit/offset/summary` 与 `total/pendingForMe`——角标只需
     "本科室还有几单未填意见"，此前每 60s 把整个收件箱（含影像/意见）拉回前端再过滤。
-    `pendingForMe` 由服务端按本科室意见计算（与前端原 `opinions.some(dept)` 同口径）。"""
+    `pendingForMe` 由服务端按本科室意见计算（与前端原 `opinions.some(dept)` 同口径）。
+    第 111 批：`q` 在 dept 隔离之后、分页之前过滤（total/pendingForMe 同口径）；
+    审计只记"是否带关键字"（不记录关键字本身，避免病例内容进审计）。
+    角标轮询（summary=1）不传 q，口径保持"整箱待我填"。
+    """
     from backend.core import consults
     me = user.get("username", "system")
     dept = user.get("dept", "")
     items = await asyncio.to_thread(consults.inbox_for, dept) if dept else []
+    q_f = (q or "").strip()[:100]
+    if q_f:
+        items = [c for c in items if consults.matches_query(c, q_f)]
     total = len(items)
     pending_for_me = sum(
         1 for c in items
@@ -157,23 +166,29 @@ async def consult_inbox(
                                 actor=me, payload={"n": len(page), "total": total, "dept": dept,
                                                    "role": user.get("role", ""),
                                                    "limit": limit, "offset": offset,
-                                                   "summary": summary})
+                                                   "summary": summary, "q": bool(q_f)})
     return {"items": page, "me": me, "dept": dept, "total": total,
             "pendingForMe": pending_for_me}
 
 
 @router.get("/consults/mine")
-async def consult_mine(user: dict = Depends(require_user)):
+async def consult_mine(user: dict = Depends(require_user),
+                       q: str = Query("", max_length=100,
+                                      description="关键字过滤（病例/AI 意见/受邀科室/已填意见）")):
     """发起者视角：我发起的全部会诊（含已结束）+ 我参与过的（作为受邀科室填过意见）。
-    数据隔离由服务端过滤保证。"""
+    数据隔离由服务端过滤保证。第 111 批：`q` 在两侧列表上同口径过滤（审计只记是否带关键字）。"""
     from backend.core import consults
     me = user.get("username", "system")
+    q_f = (q or "").strip()[:100]
     initiated = await asyncio.to_thread(consults.by_initiator, me)
     participated = await asyncio.to_thread(consults.participated, me)
+    if q_f:
+        initiated = [c for c in initiated if consults.matches_query(c, q_f)]
+        participated = [c for c in participated if consults.matches_query(c, q_f)]
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="list_mine",
                             actor=me, payload={"initiated": len(initiated),
                                                "participated": len(participated),
-                                               "role": user.get("role", "")})
+                                               "role": user.get("role", ""), "q": bool(q_f)})
     return {"initiated": initiated, "participated": participated, "me": me}
 
 

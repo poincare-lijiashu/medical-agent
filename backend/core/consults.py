@@ -214,6 +214,25 @@ def participated(user: str) -> list[dict]:
             if any(o.get("doctor") == user for o in (i.get("opinions") or []))]
 
 
+def matches_query(item: dict, q: str) -> bool:
+    """第 111 批：会诊单关键字匹配（大小写不敏感子串）；空关键字恒 True。
+
+    检索面：病例/会诊问题、AI 各科意见、发起人、受邀科室、已填意见正文——
+    覆盖"按病例找""按科室找""按谁提过意见找"三类常见诉求。
+    与 prescriptions.matches_query 同语义（同一交互预期，不引入第二套匹配规则）。
+    """
+    kw = str(q or "").strip().lower()
+    if not kw:
+        return True
+    opinions = " ".join(str((o or {}).get("content") or "")
+                        for o in (item.get("opinions") or []) if isinstance(o, dict))
+    blob = " ".join((str(item.get("question") or ""), str(item.get("ai_analysis") or ""),
+                     str(item.get("initiator") or ""),
+                     " ".join(str(d) for d in (item.get("target_depts") or [])),
+                     opinions)).lower()
+    return kw in blob
+
+
 def add_opinion(cid: str, doctor: str, dept: str, content: str) -> dict:
     """受邀科室医生填写本科室意见（仅建议权无驳回权，任务4：意见按科室一票）。
 

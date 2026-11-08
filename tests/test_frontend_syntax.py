@@ -894,3 +894,24 @@ def test_audit_facets_and_timezone_markers():
         assert marker in src, f"缺少审计候选/时区标记：{marker}"
 
 
+# ---- 第 111 批：会诊检索（收件箱 + 我的会诊，服务端 q） ----
+
+def test_consult_search_frontend_markers():
+    """会诊搜索必须下发到服务端（不能只在前端内存过滤），且角标不被过滤结果污染。
+
+    锁定：
+    - 收件箱/我的会诊各一个搜索框（300ms 防抖）；
+    - 关键字仅在非空时下发（空值保持旧请求形状）；
+    - 收件箱过滤中不更新 tab 角标（整箱口径）；
+    - 过滤无结果给独立文案，不误导"没有请求"。"""
+    src = _vue_source()
+    for marker in (
+        'data-testid="consult-inbox-q"', "const consultQ = ref('')",
+        "function onConsultQInput()", "if (!kw) {",
+        'data-testid="consult-mine-q"', "const mineQ = ref('')",
+        "function onMineQInput()",
+        "params: kw ? { q: kw } : {}", "没有匹配的会诊请求", "没有匹配的会诊记录",
+    ):
+        assert marker in src, f"缺少会诊检索标记：{marker}"
+
+

@@ -95,11 +95,20 @@
         <el-button size="small" @click="loadMyConsults">刷新</el-button>
       </div>
       <div class="page-body">
+        <!-- 第 111 批：服务端关键字过滤（我发起的 + 我参与过的 两侧同口径；300ms 防抖） -->
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 8px">
+          <el-input v-model="mineQ" data-testid="consult-mine-q" clearable
+                    placeholder="搜索我的会诊：病例 / 受邀科室 / 已填意见（服务端过滤）"
+                    style="max-width: 480px" @input="onMineQInput" />
+          <span class="src num">我发起的 {{ initiated.length }} · 我参与过的 {{ participated.length }}</span>
+        </div>
         <el-card v-if="mineErr" shadow="never"><el-alert type="error" :closable="false" show-icon :title="mineErr" /></el-card>
         <el-empty v-else-if="!mineLoading && !initiated.length && !participated.length"
-          description="暂无会诊记录。在「多智能体会诊」页填写病例后，可一键「发起真实跨科室会诊」分发给目标科室医生。" />
+          :description="mineQ.trim()
+            ? '没有匹配的会诊记录（当前关键字：' + mineQ.trim() + '）。'
+            : '暂无会诊记录。在「多智能体会诊」页填写病例后，可一键「发起真实跨科室会诊」分发给目标科室医生。'" />
         <template v-else v-loading="mineLoading">
-          <h3 style="margin: 0">我发起的（{{ initiated.length }}）</h3>
+          <h3 v-if="initiated.length" style="margin: 0">我发起的（{{ initiated.length }}）</h3>
           <el-card v-for="c in initiated" :key="c.id" shadow="never">
             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
               <h3 style="margin: 0">会诊 {{ c.id }}</h3>
@@ -260,14 +269,19 @@ const initiated = ref([])
 const participated = ref([])
 const mineLoading = ref(false)
 const mineErr = ref('')
+const mineQ = ref('') // 第 111 批：服务端关键字过滤（两侧列表同口径）
+let mineQTimer = 0
 
 watch(() => route.name, (n) => { if (n === 'myconsults') loadMyConsults() }, { immediate: true })
 
 async function loadMyConsults() {
   mineLoading.value = true
   mineErr.value = ''
+  const kw = mineQ.value.trim()
   try {
-    const { data } = await http.get('/medical/consults/mine', { silentToast: true })
+    const { data } = await http.get('/medical/consults/mine', {
+      silentToast: true, params: kw ? { q: kw } : {},
+    })
     initiated.value = data.initiated || []
     participated.value = data.participated || []
   } catch (e) {
@@ -275,6 +289,11 @@ async function loadMyConsults() {
   } finally {
     mineLoading.value = false
   }
+}
+// 关键字输入：300ms 防抖（与收件箱/处方/审计搜索同节奏）
+function onMineQInput() {
+  if (mineQTimer) clearTimeout(mineQTimer)
+  mineQTimer = setTimeout(() => { mineQTimer = 0; loadMyConsults() }, 300)
 }
 
 // 拆分函数已提取至 utils/assist.js（轮 A：我的会诊与会诊收件箱同源共享），
