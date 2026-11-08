@@ -89,6 +89,43 @@ def _save_row(item: dict, items: list[dict]) -> None:
         _save(items)
 
 
+def _persist_new(item: dict) -> None:
+    """第 88 批：新建会诊不再读全表——PG 主模式单行 UPSERT + 镜像就地追加；
+    灰度回滚/无池/离线保持原「读全量 → append → 全量写」。运行在 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_consult_row(item)
+        pg_store.mirror_json_upsert(CONSULTS_FILE, item)
+        return
+    items = _load()
+    items.append(item)
+    _save(items)
+
+
+def _mutate_row(cid: str, fn, not_found) -> dict:
+    """第 88 批：单条「定位 → 校验 → 变更 → 落盘」（替代读全表线性查找）。
+
+    PG 主模式：主键直查 + 单行 UPSERT + 镜像就地更新；`(False, None)`（PG 答不了）
+    或灰度回滚/无池形态 → 回落原「读全量 → 改一条 → 全量写」。not_found 由调用方
+    传入（add_opinion/close 都用 ConsultNotFoundError，保持既有错误类型与文案）。
+    运行在调用方 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        found, item = pg_store.get_consult_row(cid)
+        if found:
+            if item is None:
+                raise not_found
+            fn(item)
+            pg_store.upsert_consult_row(item)  # 严格：失败抛出防 PG/JSON 分裂
+            pg_store.mirror_json_upsert(CONSULTS_FILE, item)
+            return item
+    items = _load()
+    for i in items:
+        if i["id"] == cid:
+            fn(i)
+            _save_row(i, items)
+            return i
+    raise not_found
+
+
 def create(*, initiator: str, question: str, ai_analysis: str, target_depts: list[str],
            team: dict | None = None, images: list[str] | None = None,
            initiator_dept: str = "") -> str:
@@ -111,7 +148,6 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
         compressed = [u for u in compressed if isinstance(u, str) and u.startswith("data:image/")] or None
     stored_images = None if compressed is None else _cap_total_chars(compressed)
     with _lock:
-        items = _load()
         entry = {
             "id": cid, "initiator": initiator, "initiator_dept": initiator_dept or "",
             "question": question, "images": stored_images,
@@ -126,8 +162,7 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
             "status": "open",
             "created_at": _now(), "closed_at": None, "summary": None,
         }
-        items.append(entry)
-        _save_row(entry, items)
+        _persist_new(entry)  # 第 88 批：PG 主模式不再为新会诊读全表
     return cid
 
 
@@ -179,24 +214,22 @@ def add_opinion(cid: str, doctor: str, dept: str, content: str) -> dict:
         raise ConsultError("意见内容不能为空")
     if not dept:
         raise ConsultPermissionError("请先联系管理员设置科室，再填写会诊意见")
+
+    def _do(i: dict) -> None:
+        if i.get("status") != "open":
+            raise ConsultError(f"该会诊已结束（{i.get('status')}），不再受理意见")
+        if dept not in (i.get("target_depts") or []):
+            raise ConsultPermissionError("您所在科室未被邀请参与该会诊")
+        if any(o.get("doctor") == doctor for o in (i.get("opinions") or [])):
+            raise ConsultError("您已提交过本科室意见（每人仅一票）")
+        # 任务4：科室一票——该科室已有人提交（含同科室其他医生）→ 拒绝
+        if any(o.get("dept") == dept for o in (i.get("opinions") or [])):
+            raise ConsultError("该科室已完成意见")
+        i.setdefault("opinions", []).append(
+            {"doctor": doctor, "dept": dept, "content": content, "ts": _now()})
+
     with _lock:
-        items = _load()
-        for i in items:
-            if i["id"] == cid:
-                if i.get("status") != "open":
-                    raise ConsultError(f"该会诊已结束（{i.get('status')}），不再受理意见")
-                if dept not in (i.get("target_depts") or []):
-                    raise ConsultPermissionError("您所在科室未被邀请参与该会诊")
-                if any(o.get("doctor") == doctor for o in (i.get("opinions") or [])):
-                    raise ConsultError("您已提交过本科室意见（每人仅一票）")
-                # 任务4：科室一票——该科室已有人提交（含同科室其他医生）→ 拒绝
-                if any(o.get("dept") == dept for o in (i.get("opinions") or [])):
-                    raise ConsultError("该科室已完成意见")
-                i.setdefault("opinions", []).append(
-                    {"doctor": doctor, "dept": dept, "content": content, "ts": _now()})
-                _save_row(i, items)
-                return i
-        raise ConsultNotFoundError("未找到该会诊")
+        return _mutate_row(cid, _do, ConsultNotFoundError("未找到该会诊"))
 
 
 def close(cid: str, initiator: str) -> dict:
@@ -204,26 +237,24 @@ def close(cid: str, initiator: str) -> dict:
     署名）落回会诊记录 summary 字段。非发起者 → 权限错 403；已结束 → 业务错 400。"""
     if not initiator:
         raise ConsultPermissionError("仅发起者本人可结束会诊")
+
+    def _do(i: dict) -> None:
+        if i.get("initiator") != initiator:
+            raise ConsultPermissionError("仅发起者本人可结束会诊并汇总")
+        if i.get("status") != "open":
+            raise ConsultError("该会诊已结束，请勿重复操作")
+        ops = i.get("opinions") or []
+        lines = ["【AI 初步意见（按科室定向）】", i.get("ai_analysis") or "（无）", "",
+                 "—— 各科室医生意见（并排署名 · 仅建议权）——"]
+        if ops:
+            for o in ops:
+                lines.append(f"【{o.get('dept', '')} · {o.get('doctor', '')}】"
+                             f"{o.get('content', '')}（{o.get('ts', '')}）")
+        else:
+            lines.append("（会诊结束时未收到科室医生意见）")
+        i["status"] = "closed"
+        i["closed_at"] = _now()
+        i["summary"] = "\n".join(lines)
+
     with _lock:
-        items = _load()
-        for i in items:
-            if i["id"] == cid:
-                if i.get("initiator") != initiator:
-                    raise ConsultPermissionError("仅发起者本人可结束会诊并汇总")
-                if i.get("status") != "open":
-                    raise ConsultError("该会诊已结束，请勿重复操作")
-                ops = i.get("opinions") or []
-                lines = ["【AI 初步意见（按科室定向）】", i.get("ai_analysis") or "（无）", "",
-                         "—— 各科室医生意见（并排署名 · 仅建议权）——"]
-                if ops:
-                    for o in ops:
-                        lines.append(f"【{o.get('dept', '')} · {o.get('doctor', '')}】"
-                                     f"{o.get('content', '')}（{o.get('ts', '')}）")
-                else:
-                    lines.append("（会诊结束时未收到科室医生意见）")
-                i["status"] = "closed"
-                i["closed_at"] = _now()
-                i["summary"] = "\n".join(lines)
-                _save_row(i, items)
-                return i
-        raise ConsultNotFoundError("未找到该会诊")
+        return _mutate_row(cid, _do, ConsultNotFoundError("未找到该会诊"))

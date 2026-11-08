@@ -3513,12 +3513,56 @@ JSON 镜像：命中该行且 status=approved / reviewed_by=qc01（就地更新�
 
 **仍存边界**
 - `purge_pending()` 仍是批量全量（按 status 清理，天然需要全表）；
-- 处方/会诊写路径（`_mutate` / `create` / `add_opinion`）仍是全表读，待后续批次按同模式改造；
+- 处方/会诊写路径当时仍是全表读——**已在第 88 批按同一模式改造完成**（见 §92）；
 - 镜像就地更新是「读 JSON → 改 → 写 JSON」，仍是 O(n) 本地 IO（比全量 PG 解码便宜，
   但不是 O(1)）；若要彻底消除，需要把镜像改为追加写/数据库导出；
 - **镜像与真源存在天然滞后**（实测 PG 1168 行 / JSON 1099 行）：镜像只在写路径刷新，
   读路径从不回写——这是"PG 真源"设计的既定事实，不是缺陷；灾难恢复时应以 PG 备份
   为主、镜像仅作兜底参考。
+
+## 92. 2026-11-08 性能与容量（第 88 批：处方/会诊写路径单条读、单行写）
+
+**问题**：处方与会诊的所有单据操作（`create/approve/reject/rewrite/submit`、`create/opinion/close`）
+同样是 `with _lock: items = _load()` **读全表 → 改一张单 → 全量镜像**。处方表与会诊表随
+使用年限增长，一次审核/一条意见的延迟随表规模线性上升；镜像也要重新序列化整表。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/prescriptions.py` | 新增 `_persist_new`（新建：单行 UPSERT + 镜像追加）与 `_mutate_row`（单据变更：主键直查 + 单行 UPSERT + 镜像就地更新）；`create` 与 `_mutate`（approve/reject/rewrite/submit 共用）切换到新骨架 |
+| `backend/core/consults.py` | 同样新增 `_persist_new` / `_mutate_row`（`not_found` 由调用方传入，保持 `ConsultNotFoundError` 类型与文案）；`create / add_opinion / close` 切换 |
+| `tests/test_doc_single_row_write.py` | +11：PG 主模式下建方/审核/建会诊/填意见/结束会诊均不调用 `_load`（炸弹断言）、状态机与权限守卫失败不落盘、`(False,None)` 回落、镜像不再全量覆盖 |
+
+**设计取舍**
+- **与第 87 批复核域完全同构**：`_persist_new` / `_mutate_row` 三件套（读单条→改→单行写+
+  镜像就地更新），三个域行为一致、易于审计；
+- **失败不落盘**：业务校验（状态机/双控/权限/科室一票）全部在 `fn(item)` 内先执行，
+  抛错时不会产生任何写入；
+- **回落路径保留原语义**：`(False, None)`（无池/离线/空表/异常）或灰度回滚时仍是
+  「读全量 → 改 → 全量写」，回滚开关即可恢复旧行为；
+- **错误类型不放宽**：会诊的 not-found 仍抛调用方传入的 `ConsultNotFoundError`，
+  路由 404 语义不变。
+
+**真实数据（8001，真实 PG；验证数据已清理）**
+```
+处方：POST /prescriptions → rx-47baae0a(pending_pharm)；POST /{rid}/review → 200 approved/pharm01
+      PG 回读 {status: approved, doctor: doctor01}；JSON 镜像命中且 status=approved
+会诊：域层（真 PG 池）create → add_opinion → close
+      PG 回读 {status: closed, closed_at: 2026-11-08T04:06:05+00:00}
+      summary 含「心内科 · doctor02」；JSON 镜像命中且 status=closed
+```
+
+**校验**
+- 定向 `test_doc_single_row_write + test_prescriptions + test_consults` **71 passed**；
+- 全量 pytest：**1363 passed**（1352 + 本批 11）；
+- 重启 8001 后真实 PG 实测如上（两条链路均单条读/写，镜像就地更新）。
+
+**仍存边界**
+- `delete_prescriptions`、`purge_pending` 等批量操作仍是全量（语义如此）；
+- `stats()`（处方状态分布）与 `/admin/data` 统计仍全表扫描（运维低频）；
+- 会诊 `inbox_for/by_initiator/participated` 三个列表仍全表内存过滤（会诊量小，
+  留待有需要时按第 82–86 批模式下推）。
+
 
 
 

@@ -86,6 +86,42 @@ def _save_row(item: dict, items: list[dict]) -> None:
         _save(items)
 
 
+def _persist_new(item: dict) -> None:
+    """第 88 批：新建处方不再读全表——PG 主模式单行 UPSERT + 镜像就地追加；
+    灰度回滚/无池/离线保持原「读全量 → append → 全量写」。运行在 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        pg_store.upsert_prescription_row(item)
+        pg_store.mirror_json_upsert(PRESCRIPTIONS_FILE, item)
+        return
+    items = _load()
+    items.append(item)
+    _save(items)
+
+
+def _mutate_row(rx_id: str, fn) -> dict:
+    """第 88 批：单条「定位 → 校验流转 → 变更 → 落盘」（替代读全表线性查找）。
+
+    PG 主模式：主键直查 + 单行 UPSERT + 镜像就地更新；`(False, None)`（PG 答不了）
+    或灰度回滚/无池形态 → 回落原「读全量 → 改一条 → 全量写」，行为完全不变。
+    运行在调用方 _lock 临界区内。"""
+    if settings.pg_primary and pg_store.has_pool():
+        found, item = pg_store.get_prescription_row(rx_id)
+        if found:
+            if item is None:
+                raise ValueError(f"处方不存在：{rx_id}")
+            fn(item)
+            pg_store.upsert_prescription_row(item)  # 严格：失败抛出防 PG/JSON 分裂
+            pg_store.mirror_json_upsert(PRESCRIPTIONS_FILE, item)
+            return item
+    items = _load()
+    for i in items:
+        if i["id"] == rx_id:
+            fn(i)
+            _save_row(i, items)
+            return i
+    raise ValueError(f"处方不存在：{rx_id}")
+
+
 def delete_prescriptions(ids: list[str]) -> list[str]:
     """按 id 硬删除处方（F2 e2e 测试数据清理专用；审计 jsonl 不动）。
 
@@ -164,23 +200,16 @@ def create(*, doctor: str, dept: str = "", case_text: str, drugs: list[dict],
         "forced_high_risk": bool(forced_high_risk),
     }
     with _lock:
-        items = _load()
-        items.append(rx)
-        _save_row(rx, items)
+        _persist_new(rx)  # 第 88 批：PG 主模式不再为新处方读全表
     return rx
 
 
 def _mutate(rx_id: str, fn) -> dict:
     """锁内「定位 → 校验流转 → 变更 → 落盘」公共骨架；fn(rx) 原地修改并返回 rx。
-    未找到 → ValueError（业务错，路由层转 404/400 由后续阶段决定）。"""
+    未找到 → ValueError（业务错，路由层转 404/400 由后续阶段决定）。
+    第 88 批：委托 `_mutate_row`（PG 主模式单条读/写，其它形态保持全量语义）。"""
     with _lock:
-        items = _load()
-        for i in items:
-            if i["id"] == rx_id:
-                fn(i)
-                _save_row(i, items)
-                return i
-    raise ValueError(f"处方不存在：{rx_id}")
+        return _mutate_row(rx_id, fn)
 
 
 def approve(rx_id: str, pharmacist: str, opinion: str = "") -> dict:
