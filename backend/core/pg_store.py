@@ -911,11 +911,30 @@ async def counts() -> dict:
 
 # ---------- 任务5：admin 审计流 PG 真源查询（audit_log 按 ts 倒序分页） ----------
 
-async def _audit_recent_pg_impl(limit: int, offset: int) -> list:
+async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
+                                event_type: str = "", action: str = "") -> list:
+    """第 107 批：审计流可选过滤（actor/event_type/payload.action，全部精确匹配）。
+
+    过滤在 SQL 侧完成，offset 是"过滤后"的偏移（与前端分页一致）；三参均为空时
+    SQL 与旧版逐字一致（无 WHERE）。
+    """
+    conds, params = [], []
+    if actor:
+        params.append(actor)
+        conds.append(f"actor = ${len(params)}")
+    if event_type:
+        params.append(event_type)
+        conds.append(f"event_type = ${len(params)}")
+    if action:
+        params.append(action)
+        conds.append(f"payload->>'action' = ${len(params)}")
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    n = len(params)
     async with _pool.acquire() as c:
-        rows = await c.fetch(
-            "SELECT ts, event_type, actor, payload FROM audit_log "
-            "ORDER BY ts DESC, id DESC LIMIT $1 OFFSET $2", limit, offset)
+        rows = await c.fetch(  # noqa: S608 —— 片段均为固定常量，值走 $n
+            "SELECT ts, event_type, actor, payload FROM audit_log" + where
+            + f" ORDER BY ts DESC, id DESC LIMIT ${n + 1} OFFSET ${n + 2}",
+            *params, limit, offset)
     out = []
     for r in rows:
         p = r["payload"]
@@ -930,16 +949,20 @@ async def _audit_recent_pg_impl(limit: int, offset: int) -> list:
     return out
 
 
-async def audit_recent_pg(limit: int = 50, offset: int = 0) -> list | None:
+async def audit_recent_pg(limit: int = 50, offset: int = 0, actor: str = "",
+                          event_type: str = "", action: str = "") -> list | None:
     """任务5：admin 审计流数据源——PG audit_log 表按 ts 倒序分页。
 
+    第 107 批：支持 actor/event_type/action 精确过滤（SQL 侧过滤后再分页）。
     返回与 AuditLog.recent(JSONL) 相同结构 [{ts,event_type,actor,payload}]（payload
     内含 action/role 等字段）；未建池/异常/超时一律返回 None（调用方回落 JSONL 现状），
     绝不冒泡影响 admin 面板。"""
     if not _pool:
         return None
     try:
-        return await _arun(_audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset))))
+        return await _arun(_audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset)),
+                                                 str(actor or ""), str(event_type or ""),
+                                                 str(action or "")))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.audit_recent_failed", error=str(e)[:120])
         return None

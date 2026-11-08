@@ -4263,10 +4263,48 @@ API 实测（pharm01）：pending?limit=12&offset=0 → 7 条/total=7；offset=1
 - 全量 pytest：**1434 passed**（1433 + 本批 1）。
 
 **仍存边界**
-- 待审列表在页内执行「通过/驳回」后只更新当前项，不会自动补位（需手动翻页/刷新才补齐 12 条）；
+- 待审列表在页内执行「通过/驳回」后只更新当前项，不会自动补位（需手动翻页/刷新才补齐 12 条）
+  ——**更正（第 107 批核对）**：`rxReviewPost` 成功/失败都会调用 `load()`，实际会按当前页
+  重拉并自动补位；本条边界不成立，保留原文以便追溯；
 - 关键字输入触发的是整页 `load()`（含历史/角标），不是只刷处方区；
 - 未做浏览器交互回归；
 - 医生端「我的处方」与药师端分页各自实现（未抽公共分页组件）。
+
+## 111. 2026-11-08 合规运营（第 107 批：审计流按人/事件/动作过滤）
+
+**问题**：`/admin/data` 的审计流只有 offset 翻页。合规抽查最常见的问题是"某人做过哪些
+操作""某类事件发生过几次"，此前只能把 50 条一页页翻出来肉眼筛。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | `_audit_recent_pg_impl` 增加 actor / event_type / payload.action 三个**精确匹配**条件（值走 `$n`，空参时 SQL 与旧版逐字一致）；`audit_recent_pg` 透传 |
+| `backend/api/v1/medical/admin.py` | `/admin/data` 新增 `audit_actor` / `audit_event` / `audit_action`（trim + 截断 64 字）；PG 不可用时回落 JSONL：**先过滤 → 再倒序 → 最后按 offset 切片**（与 PG 同口径） |
+| `tests/test_audit_filters.py` | +4：SQL 形状与参数顺序、无参 SQL 不变、路由透传（含 trim/offset）、JSONL 过滤后分页 |
+
+**真实数据（真实 PG，audit_log 2,149 行）**
+```
+actor=admin01            SQL 1488 / Python 1488  OK
+event_type='review'      0/0（见下：PG 事件名是点号形式）
+payload.action 精确匹配  0/0（mirror 事件的 payload 不含 action）
+actor+event 组合         0/0
+API：?audit_actor=admin01 → 50 条且全部 actor=admin01
+     ?audit_event=review.approved → 5 条且全部为 review.approved（与 SQL 计数一致）
+```
+
+**校验**
+- 定向 `test_audit_filters + audit_pagination + audit_payload + admin_ops + admin_data_counts` **25 passed**；
+- 全量 pytest：**1438 passed**（1434 + 本批 4）；
+- 重启 8001 后上述 API 实测通过。
+
+**仍存边界**
+- **事件名两源不一致**：PG 镜像写的是点号形式（`review.approved` / `admin.user_deleted`），
+  JSONL 写的是原始 `event_type`（如 `review`）；过滤按"各自数据源的原值"精确匹配，
+  跨源同一业务动作可能要用不同字面量；
+- 只支持精确匹配，没有 contains / 时间区间 / 多值（`IN`）；
+- 前端审计区尚未加过滤输入框（本批只交付后端参数）；
+- `audit_log` 只有 `(ts DESC)` 索引，按 actor/event 过滤在大表上仍是扫描；
+- `payload.action` 只对 JSONL 写入真实 action，镜像事件多数没有该字段。
 
 
 

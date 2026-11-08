@@ -241,11 +241,13 @@ async def admin_delete_department(name: str, user: dict = Depends(require_role("
 
 # ---------- admin 运维：数据面板 / 队列清理（只读优先，不做裸 SQL） ----------
 @router.get("/admin/data")
-async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: int = 0):
+async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: int = 0,
+                     audit_actor: str = "", audit_event: str = "", audit_action: str = ""):
     """管理员只读数据面板：用户、审计流、队列统计、PG 镜像与知识库规模、基础设施状态。
 
     audit_offset（任务A）：审计流翻页偏移（每页 50，与前端「上一页/下一页」配合）；
     负数按 0 处理，绝不因越界参数 500。
+    第 107 批：审计流可按 actor / event_type / payload.action 精确过滤（先过滤再分页）。
     """
     from backend.core.auth import all_users
     from backend.core.medical_kb import doc_count, milvus_status
@@ -263,12 +265,23 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     # F5：保留完整 ISO 串（含 +00:00 偏移），fmtTs 依赖时区信息做本地化。
     # 任务A：audit_offset 翻页（每页 50）。
     off = max(0, audit_offset)
+    actor_f = (audit_actor or "").strip()[:64]
+    event_f = (audit_event or "").strip()[:64]
+    action_f = (audit_action or "").strip()[:64]
     try:
-        audit_src = await pg_store.audit_recent_pg(50, offset=off)
+        audit_src = await pg_store.audit_recent_pg(50, offset=off, actor=actor_f,
+                                                   event_type=event_f, action=action_f)
     except Exception:  # noqa: BLE001 —— 数据源切换绝不影响面板主数据
         audit_src = None
     if audit_src is None:
-        audit_src = al.recent(50, offset=off)
+        def _match(e: dict) -> bool:
+            p = e.get("payload") or {}
+            return ((not actor_f or e.get("actor") == actor_f)
+                    and (not event_f or e.get("event_type") == event_f)
+                    and (not action_f or p.get("action") == action_f))
+        # 过滤后分页（与 PG 侧同口径；entries 为时间正序，倒序后切片）
+        entries = getattr(al, "entries", []) or []
+        audit_src = [e for e in entries if _match(e)][::-1][off:off + 50]
     audit_recent = [{"ts": e["ts"], "event": e["event_type"],
                      "action": (e.get("payload") or {}).get("action", ""), "actor": e["actor"],
                      "payload": e.get("payload", {})}  # 完整 payload 下传，供前端人话化详情
