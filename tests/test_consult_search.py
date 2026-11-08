@@ -185,3 +185,40 @@ def test_inbox_fallback_filters_in_memory(monkeypatch):
     part = consults.participated("waike01", "清创")
     assert [i["id"] for i in part] == ["c2"]
     assert consults.participated("waike01", "不存在") == []
+
+
+# ---------- 第 119 批：我的会诊服务端分页 ----------
+
+def test_mine_paging_slices_both_sides(monkeypatch, tmp_path):
+    """/consults/mine：两侧共用 limit/offset，total 为过滤后全量；不传 limit 保持旧的全量行为。"""
+    c, log = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(consults, "by_initiator",
+                        lambda u, q="": [dict(i) for i in ROWS if consults.matches_query(i, q)])
+    monkeypatch.setattr(consults, "participated",
+                        lambda u, q="": ([dict(ROWS[1])]
+                                         if consults.matches_query(ROWS[1], q) else []))
+
+    d = c.get("/api/v1/medical/consults/mine", headers=_h(),
+              params={"limit": 2, "offset": 0}).json()
+    assert [i["id"] for i in d["initiated"]] == ["c1", "c2"]
+    assert [i["id"] for i in d["participated"]] == ["c2"]
+    assert d["initiatedTotal"] == 3 and d["participatedTotal"] == 1
+    assert d["limit"] == 2 and d["offset"] == 0
+
+    d2 = c.get("/api/v1/medical/consults/mine", headers=_h(),
+               params={"limit": 2, "offset": 2}).json()
+    assert [i["id"] for i in d2["initiated"]] == ["c3"]
+    assert d2["participated"] == []  # 该侧不足一页
+    assert d2["initiatedTotal"] == 3 and d2["participatedTotal"] == 1
+
+    d3 = c.get("/api/v1/medical/consults/mine", headers=_h(),
+               params={"limit": 2, "offset": 0, "q": "胸痛"}).json()
+    assert [i["id"] for i in d3["initiated"]] == ["c1"] and d3["initiatedTotal"] == 1
+
+    ev = [e for e in log.entries if e["payload"].get("action") == "list_mine"]
+    assert ev[-1]["payload"]["initiatedTotal"] == 1
+    assert ev[-1]["payload"]["limit"] == 2 and ev[-1]["payload"]["q"] is True
+
+    d4 = c.get("/api/v1/medical/consults/mine", headers=_h()).json()
+    assert len(d4["initiated"]) == 3 and d4["initiatedTotal"] == 3
+    assert d4["limit"] is None

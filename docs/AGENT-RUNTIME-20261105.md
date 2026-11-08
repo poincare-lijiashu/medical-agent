@@ -4796,6 +4796,46 @@ helm 未安装 → 未做真实渲染（与 §117 同边界，CI 有 helm 时补
 - Job 失败无告警（可接 `kube_job_failed` 规则，未做）；
 - CronJob 时区按集群（默认 UTC），与 §114 的业务时区不是同一口径（脚本按容器本地时区解释 `--before`）。
 
+## 123. 2026-11-08 临床功能（第 119 批：我的会诊服务端分页）
+
+**问题（§120 边界）**：`/consults/mine` 两侧列表一次全量返回，前端逐条渲染完整会诊卡
+（AI 意见、各科意见、随单影像）；13 条时页面已很长，量级再涨会明显卡顿。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/api/v1/medical/consults.py` | `/consults/mine` 增 `limit`（0–200）/`offset`：两侧**共用同页**；返回 `initiatedTotal/participatedTotal/offset/limit`；`limit` 缺省保持旧整表行为；审计加 totals/limit/offset |
+| `frontend-vue/.../ConsultView.vue` | `MINE_PER=10`；计数改 totals（不再用当前页长度）；搜索变化回第 1 页；底部上一页/下一页 + "第 N/M 页"；越界自动纠偏 |
+| 测试 | `test_consult_search` +1（第 1/2 页、total、q+分页、旧行为）；`test_frontend_syntax` +1（分页标记锁） |
+
+**设计取舍**
+- **两侧共用页码**：两个视角数据量差异大（13/1），各自独立分页需要 4 个参数与两套控件；
+  共用同页 + 各自 total 覆盖"翻看历史会诊"的主诉求，界面只一组按钮；
+- **`limit=None` 保持全量**：不破坏旧调用（e2e/脚本/第三方），分页是新参数而非破坏性变更；
+- **越界纠偏**：换关键字/结束会诊后当前页可能超出总数 → 自动回最后一页（不展示空白页）；
+- **计数用 total**：避免"我发起的（3）"实际是当前页长度。
+
+**真机验证（8001 + 真实数据）**
+```
+doctor01：发起 13 / 参与 1
+  limit=10&offset=0   → 10 条，total 13 / 1
+  limit=10&offset=10  → 3 条（参与侧 0）
+  limit=10&offset=100 → 空，total 仍 13
+  q=内科&limit=10     → 10 条，total 10（过滤后全量）
+  不传 limit          → 13 条，limit=null（旧行为）
+8/8 通过；dist 已换新 bundle（index-DiLCkEte.js）
+```
+
+**校验**
+- 定向：`test_consult_search + test_frontend_syntax` **48 passed**；
+- 全量 pytest：待补（后台运行完成即记）。
+
+**仍存边界**
+- 两侧共用页码：参与侧比发起侧多时，翻页会出现"发起侧已空、参与侧还有"；
+- 切片与 total 仍在应用层（PG 已过滤，但 total 用 `len`，未下推 `count(*)`）；
+- 无排序选择（固定"新→旧"，与旧行为一致）；
+- 10/页为常量，不随用户偏好调整。
+
 
 
 

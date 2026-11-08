@@ -173,20 +173,34 @@ async def consult_inbox(
 @router.get("/consults/mine")
 async def consult_mine(user: dict = Depends(require_user),
                        q: str = Query("", max_length=100,
-                                      description="关键字过滤（病例/AI 意见/受邀科室/已填意见）")):
+                                      description="关键字过滤（病例/AI 意见/受邀科室/已填意见）"),
+                       limit: int | None = Query(None, ge=0, le=200,
+                                                 description="每侧返回条数上限；缺省=全部（旧行为）"),
+                       offset: int = Query(0, ge=0, description="跳过条数（两侧共用）")):
     """发起者视角：我发起的全部会诊（含已结束）+ 我参与过的（作为受邀科室填过意见）。
-    数据隔离由服务端过滤保证。第 111 批：`q` 在两侧列表上同口径过滤（审计只记是否带关键字）。"""
+    数据隔离由服务端过滤保证。第 111 批：`q` 在两侧列表上同口径过滤（审计只记是否带关键字）。
+    第 119 批：`limit/offset` 服务端分页（**两侧共用同一页**，返回各自 total）；
+    缺省 `limit=None` 时保持旧的整表返回，前端旧调用不受影响。"""
     from backend.core import consults
     me = user.get("username", "system")
     q_f = (q or "").strip()[:100]
     # 第 116 批：q 下推 PG（两个视角各自拼条件），不再拉全量后在应用层过滤
     initiated = await asyncio.to_thread(consults.by_initiator, me, q_f)
     participated = await asyncio.to_thread(consults.participated, me, q_f)
+    init_total, part_total = len(initiated), len(participated)
+    if limit is not None:
+        initiated = initiated[offset:offset + limit]
+        participated = participated[offset:offset + limit]
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="list_mine",
                             actor=me, payload={"initiated": len(initiated),
                                                "participated": len(participated),
-                                               "role": user.get("role", ""), "q": bool(q_f)})
-    return {"initiated": initiated, "participated": participated, "me": me}
+                                               "initiatedTotal": init_total,
+                                               "participatedTotal": part_total,
+                                               "role": user.get("role", ""), "q": bool(q_f),
+                                               "limit": limit, "offset": offset})
+    return {"initiated": initiated, "participated": participated, "me": me,
+            "initiatedTotal": init_total, "participatedTotal": part_total,
+            "offset": offset, "limit": limit}
 
 
 @router.post("/consults/{cid}/opinion")

@@ -915,3 +915,23 @@ def test_consult_search_frontend_markers():
         assert marker in src, f"缺少会诊检索标记：{marker}"
 
 
+# ---- 第 119 批：我的会诊服务端分页 ----
+
+def test_consult_mine_pager_markers():
+    """「我的会诊」必须服务端分页（不能前端切片），且计数用 total 而非当前页长度。
+
+    锁定：MINE_PER 常量、limit/offset 下发、totals 渲染、上一页/下一页与越界禁用。"""
+    src = _vue_source()
+    for marker in (
+        "const MINE_PER = 10", "const mineOffset = ref(0)",
+        "const mineInitTotal = ref(0)", "const minePartTotal = ref(0)",
+        "params: { limit: MINE_PER, offset: mineOffset.value",
+        "function mineGo(delta)",
+        "if (next < 0 || next >= mineMaxTotal.value) return",
+        'data-testid="consult-mine-pager"', 'data-testid="consult-mine-prev"',
+        'data-testid="consult-mine-next"', ":disabled=\"mineOffset + MINE_PER >= mineMaxTotal\"",
+        "我发起的 {{ mineInitTotal }}",
+    ):
+        assert marker in src, f"缺少我的会诊分页标记：{marker}"
+
+

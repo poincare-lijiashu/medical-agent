@@ -100,15 +100,15 @@
           <el-input v-model="mineQ" data-testid="consult-mine-q" clearable
                     placeholder="搜索我的会诊：病例 / 受邀科室 / 已填意见（服务端过滤）"
                     style="max-width: 480px" @input="onMineQInput" />
-          <span class="src num">我发起的 {{ initiated.length }} · 我参与过的 {{ participated.length }}</span>
+          <span class="src num">我发起的 {{ mineInitTotal }} · 我参与过的 {{ minePartTotal }}</span>
         </div>
         <el-card v-if="mineErr" shadow="never"><el-alert type="error" :closable="false" show-icon :title="mineErr" /></el-card>
-        <el-empty v-else-if="!mineLoading && !initiated.length && !participated.length"
+        <el-empty v-else-if="!mineLoading && !mineInitTotal && !minePartTotal"
           :description="mineQ.trim()
             ? '没有匹配的会诊记录（当前关键字：' + mineQ.trim() + '）。'
             : '暂无会诊记录。在「多智能体会诊」页填写病例后，可一键「发起真实跨科室会诊」分发给目标科室医生。'" />
         <template v-else v-loading="mineLoading">
-          <h3 v-if="initiated.length" style="margin: 0">我发起的（{{ initiated.length }}）</h3>
+          <h3 v-if="initiated.length" style="margin: 0">我发起的（{{ mineInitTotal }}）</h3>
           <el-card v-for="c in initiated" :key="c.id" shadow="never">
             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
               <h3 style="margin: 0">会诊 {{ c.id }}</h3>
@@ -168,7 +168,7 @@
             </div>
           </el-card>
           <el-card v-if="participated.length" shadow="never">
-            <h3 style="margin-top: 0">我参与过的会诊（作为受邀科室填写过意见）</h3>
+            <h3 style="margin-top: 0">我参与过的会诊（{{ minePartTotal }}，作为受邀科室填写过意见）</h3>
             <ul class="feed">
               <li v-for="(c, i) in participated" :key="i">
                 <span class="t num">{{ fmtTs(c.created_at) }}</span>
@@ -177,6 +177,15 @@
               </li>
             </ul>
           </el-card>
+          <!-- 第 119 批：服务端分页（两侧共用页码；只在总数超过一页时出现） -->
+          <div v-if="mineMaxTotal > MINE_PER" data-testid="consult-mine-pager"
+               style="display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 10px">
+            <span class="src num">第 {{ minePage }} / {{ minePages }} 页（我发起的/我参与过的共用页码）</span>
+            <el-button size="small" data-testid="consult-mine-prev"
+                       :disabled="mineOffset === 0" @click="mineGo(-1)">上一页</el-button>
+            <el-button size="small" data-testid="consult-mine-next"
+                       :disabled="mineOffset + MINE_PER >= mineMaxTotal" @click="mineGo(1)">下一页</el-button>
+          </div>
         </template>
       </div>
     </template>
@@ -186,7 +195,7 @@
 <script setup>
 // 会诊状态跨路由/切视图保留（KeepAlive）：lastMdtReport 作真实会诊底稿随单发出后清空
 // （legacy 同语义，避免下次误带旧稿）。
-import { defineOptions, ref, watch } from 'vue'
+import { computed, defineOptions, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
@@ -265,12 +274,20 @@ async function startRealConsult() {
 }
 
 // ---- 我的会诊（legacy loadMyConsults/consultDetailBlocks 语义迁移） ----
+const MINE_PER = 10 // 第 119 批：服务端分页（两侧共用页码）
 const initiated = ref([])
 const participated = ref([])
 const mineLoading = ref(false)
 const mineErr = ref('')
 const mineQ = ref('') // 第 111 批：服务端关键字过滤（两侧列表同口径）
+const mineOffset = ref(0)
+const mineInitTotal = ref(0)
+const minePartTotal = ref(0)
 let mineQTimer = 0
+
+const mineMaxTotal = computed(() => Math.max(mineInitTotal.value, minePartTotal.value))
+const minePages = computed(() => Math.max(1, Math.ceil(mineMaxTotal.value / MINE_PER)))
+const minePage = computed(() => Math.floor(mineOffset.value / MINE_PER) + 1)
 
 watch(() => route.name, (n) => { if (n === 'myconsults') loadMyConsults() }, { immediate: true })
 
@@ -280,20 +297,38 @@ async function loadMyConsults() {
   const kw = mineQ.value.trim()
   try {
     const { data } = await http.get('/medical/consults/mine', {
-      silentToast: true, params: kw ? { q: kw } : {},
+      silentToast: true,
+      params: { limit: MINE_PER, offset: mineOffset.value, ...(kw ? { q: kw } : {}) },
     })
     initiated.value = data.initiated || []
     participated.value = data.participated || []
+    mineInitTotal.value = data.initiatedTotal ?? initiated.value.length
+    minePartTotal.value = data.participatedTotal ?? participated.value.length
+    // 越界纠偏：换关键字/结束会诊后当前页可能超出总数 → 回到最后一页
+    if (mineOffset.value > 0 && mineOffset.value >= mineMaxTotal.value) {
+      mineOffset.value = Math.max(0, (minePages.value - 1) * MINE_PER)
+      return loadMyConsults()
+    }
   } catch (e) {
     mineErr.value = '⚠ ' + detailText(e)
   } finally {
     mineLoading.value = false
   }
 }
-// 关键字输入：300ms 防抖（与收件箱/处方/审计搜索同节奏）
+// 关键字输入：300ms 防抖（与收件箱/处方/审计搜索同节奏）；换关键字回第 1 页
 function onMineQInput() {
   if (mineQTimer) clearTimeout(mineQTimer)
-  mineQTimer = setTimeout(() => { mineQTimer = 0; loadMyConsults() }, 300)
+  mineQTimer = setTimeout(() => {
+    mineQTimer = 0
+    mineOffset.value = 0
+    loadMyConsults()
+  }, 300)
+}
+function mineGo(delta) {
+  const next = mineOffset.value + delta * MINE_PER
+  if (next < 0 || next >= mineMaxTotal.value) return
+  mineOffset.value = next
+  loadMyConsults()
 }
 
 // 拆分函数已提取至 utils/assist.js（轮 A：我的会诊与会诊收件箱同源共享），
