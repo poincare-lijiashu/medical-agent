@@ -171,7 +171,11 @@
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
             <h3 style="margin: 0">我的处方</h3>
             <span class="src">状态流转：待药剂科审核 → 已通过 / 已驳回（驳回可重写，提交后自动重新送审）</span>
-            <el-button size="small" style="margin-left: auto" @click="loadRxMine">刷新</el-button>
+            <!-- 第 104 批：服务端关键字检索（病例摘要/药品名/科室；300ms 防抖，回第 1 页） -->
+            <el-input v-model="mineQ" class="inp" style="max-width: 300px; margin-left: auto"
+              clearable placeholder="搜索：病例摘要 / 药品名 / 科室" spellcheck="false"
+              data-testid="rx-mine-q" aria-label="搜索我的处方" @input="onMineQInput" />
+            <el-button size="small" @click="loadRxMine">刷新</el-button>
           </div>
         </el-card>
         <el-card v-if="mineErr" shadow="never"><el-alert type="error" :closable="false" show-icon :title="mineErr" /></el-card>
@@ -437,13 +441,27 @@ function rxResetCompose() {
   manual.name = ''; manual.dose = ''; manual.freq = ''
 }
 
-// ---- 我的处方（GET /prescriptions/mine，服务端分页） ----
+// ---- 我的处方（GET /prescriptions/mine，服务端分页 + 关键字） ----
+const mineQ = ref('')
+let mineQTimer = null
+
+function onMineQInput() {
+  clearTimeout(mineQTimer)
+  // 防抖 300ms；搜索条件变化必须回到第 1 页（否则会停在越界页码）
+  mineQTimer = setTimeout(() => {
+    if (minePage.value !== 0) minePage.value = 0
+    else loadRxMine()
+  }, 300)
+}
+
 async function loadRxMine() {
   mineLoading.value = true
   mineErr.value = ''
   try {
+    const kw = mineQ.value.trim()
     const { data } = await http.get('/medical/prescriptions/mine', {
-      params: { limit: RX_PER, offset: minePage.value * RX_PER }, silentToast: true,
+      params: { limit: RX_PER, offset: minePage.value * RX_PER, ...(kw ? { q: kw } : {}) },
+      silentToast: true,
     })
     rxMineCache.value = data.items || []
     mineTotal.value = Number(data.total ?? rxMineCache.value.length)

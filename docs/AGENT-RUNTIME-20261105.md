@@ -4179,6 +4179,34 @@ SQL vs Python 逐关键词对账：口腔科 11/11、阿莫西林 3/3、doctor01
 - `summary=1` 的计数不受 q 影响（角标语义），若要做"筛选结果的角标"需另加参数；
 - 审计不记录关键字，排查"谁搜了什么"只能靠接入层日志。
 
+## 108. 2026-11-08 前端交付（第 104 批：处方页搜索框接服务端检索）
+
+**问题**：第 103 批做完了后端 `q`，但医生端「我的处方」页没有输入框——能力不可达。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `frontend-vue/src/views/RxView.vue` | 「我的处方」头部新增搜索框（`data-testid="rx-mine-q"`，clearable）：`q` 300ms 防抖；条件变化先回第 1 页再重拉；请求仅在非空时带 `q`（避免空参数扰动缓存/审计口径） |
+| `frontend-vue/dist/*` | `npm run build` 产物（仓库跟踪 dist；8001 直接托管） |
+
+**真实交付验证**
+```
+npm run build → ✓ built in 8.81s（仅 chunk>500kB 既有告警）
+GET http://127.0.0.1:8001/ → 新资产 index-DL_CZzSM.js
+该 JS 含 rx-mine-q 与占位符「病例摘要 / 药品名 / 科室」→ 服务端已在提供新构建
+```
+
+**校验**
+- 定向 `test_frontend_syntax + router_split_guard + cache_control + prescriptions_paging + prescription_search` **50 passed**；
+- 全量 pytest：**1433 passed**（与上批相同——本批无后端逻辑变更）。
+
+**仍存边界**
+- 只接了医生「我的处方」；药师「待审队列」（ReviewCenterView 的处方审核轨）尚未加搜索框；
+- 搜索词不写入 URL（刷新/分享不保留）；
+- 无"搜索无结果"专门空态（沿用「暂无处方记录」）；
+- 前端无单元测试框架：本批以构建 + 资产内容核对 + 现有语法门禁验证，未做浏览器交互回归；
+- `dist` 入库导致每次构建都会产生大文件 diff（既有仓库约定，未改）。
+
 
 
 
