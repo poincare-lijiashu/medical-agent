@@ -3560,8 +3560,55 @@ JSON 镜像：命中该行且 status=approved / reviewed_by=qc01（就地更新�
 **仍存边界**
 - `delete_prescriptions`、`purge_pending` 等批量操作仍是全量（语义如此）；
 - `stats()`（处方状态分布）与 `/admin/data` 统计仍全表扫描（运维低频）；
-- 会诊 `inbox_for/by_initiator/participated` 三个列表仍全表内存过滤（会诊量小，
-  留待有需要时按第 82–86 批模式下推）。
+- 会诊 `inbox_for/by_initiator/participated` 三个列表当时仍全表内存过滤——**已在第 89 批
+  下推 PG**（见 §93）；
+
+## 93. 2026-11-08 性能与容量（第 89 批：会诊列表下推 PG）
+
+**问题**：会诊的三个列表仍是 `_load()[::-1]` 全表扫描后内存过滤：
+- `GET /consults/inbox`（收件箱，侧栏角标每 60s 调 `summary=1` 拉一次）；
+- `GET /consults/mine` 的 `initiated`（我发起）与 `participated`（我参与）。
+会诊单虽比复核队列少，但单张含 AI 分析/影像/意见，整表解码成本更高。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_pg_consult_list_impl` + `consult_list(where, params)`：固定 where 常量 + `$n` 参数、`ORDER BY data->>'created_at' DESC NULLS LAST, id DESC`；空表/无池/离线/旧编排 stale/异常 → `None`（调用方回落内存） |
+| `backend/core/consults.py` | `inbox_for`（`status='open' AND data->'target_depts' @> $1::jsonb`）、`by_initiator`（`initiator=$1`）、`participated`（`data->'opinions' @> $1::jsonb`）优先 PG，`None` 时保留原内存过滤 |
+| `tests/test_pg_consults_lists.py` | +9：收件箱按科室/仅 open、空科室短路、我发起、我参与、空表/无池/异常回落、JSON 兜底、路由 `/consults/mine` 走 PG（`_load` 炸弹） |
+
+**设计取舍**
+- **jsonb 包含匹配而非展开过滤**：`target_depts @> '["心内科"]'`、`opinions @> '[{"doctor":"x"}]'`
+  与内存 `dept in target_depts` / `any(o.doctor == user)` 语义一致，且可用 GIN 索引
+  （未来上量时 `CREATE INDEX ... USING gin ((data->'target_depts'))` 即可）；
+- **空科室短路**：`dept` 为空直接返回 `[]`（与内存一致，不查 PG）；
+- **排序同内存**：`created_at DESC NULLS LAST, id DESC`，与 `_load()[::-1]` 的"新→旧"一致；
+  缺 `created_at` 的历史行排最后（避免 PG 默认 DESC 把 NULL 顶到最前）；
+- **仍全量返回**：三个列表暂不分页（会诊单量级小，前端角标/列表口径未变）。
+
+**真实数据（8001，真实 PG；与直连 asyncpg 等价 SQL 逐条对账）**
+```
+8 个有科室的用户 ×（收件箱 ids/total/pendingForMe + 我发起 + 我参与）= 40 项断言，全部 MATCH
+  例：neike01 收件箱 3 条、我发起 1 条、我参与 5 条；
+      doctor01 收件箱 1 条、我发起 13 条、我参与 1 条
+```
+
+**校验**
+- 定向 `test_pg_consults_lists + test_consults + test_doc_single_row_write` **45 passed**；
+- 全量 pytest：**1372 passed**（1363 + 本批 9）；
+- 重启 8001 后 40/40 实测一致。
+
+**仍存边界**
+- 三个列表仍无分页；若会诊单累积到数千，需要补 `limit/offset/total`；
+- `participated` 用 jsonb 包含匹配，`opinions` 数组元素即使有额外字段也匹配（与内存一致）；
+- 会诊详情已按主键直查（第 85 批），但列表未做投影裁剪（仍返回整单 JSON）。
+
+> 运维备注：第 87 批的临时验证行 `rev-verify87` 曾因 `data/review/` 被 gitignore
+> 而未被 `git checkout` 回滚，下次启动被 `migrate_json_to_pg` 重新导入（启动日志
+> `review_queue_reconciled=1`）——已从 PG 与 JSON 镜像双端清理。这反证了"JSON 独有
+> 记录启动自动找回"机制有效；也给后续验证留了纪律：验证数据要么走 API 清理接口，
+> 要么同时清 PG 与不可追踪的镜像目录。
+
 
 
 

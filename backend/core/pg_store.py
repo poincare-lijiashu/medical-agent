@@ -1338,6 +1338,33 @@ def upsert_consult_row(item: dict) -> None:
     _run_pg(_impl())
 
 
+# ---- 第 89 批：会诊列表（收件箱/我发起/我参与）下推 PG ----
+# 三个列表原本都是 `_load()[::-1]` 全表扫描后内存过滤；收件箱还被角标每 60s 拉一次。
+# where 片段由 consults 域层以固定常量传入，值走 $n（科室/用户名用 jsonb 数组包含匹配）。
+
+async def _pg_consult_list_impl(where: str, params: list) -> list | None:
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM consults"):
+            return None  # 空表 → JSON 才是真源
+        rows = await c.fetch(  # noqa: S608 —— where 为域层固定片段
+            "SELECT data FROM consults WHERE " + where
+            + " ORDER BY data->>'created_at' DESC NULLS LAST, id DESC", *params)
+    return [d for d in (_json_data_row(r) for r in rows) if d is not None]
+
+
+def consult_list(where: str, params: tuple = ()) -> list | None:
+    """会诊列表同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "consults.json" in _repo_pg_stale:
+        return None
+    try:
+        return _run_pg(_pg_consult_list_impl(where, list(params or ())))
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，会诊列表照常可用
+        logger.warning("pg.consult_list_failed", error=str(e)[:120])
+        return None
+
+
 # ---- 第 85 批：单据类（consults/prescriptions）按主键直查 ----
 # 与第 84 批复核详情同一模式：三态 (found, item)——(True, dict) 命中 / (True, None) 确定不存在 /
 # (False, None) PG 无法回答（调用方回落 JSON 线性查找）。表名只接受本模块内部常量。

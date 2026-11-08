@@ -181,20 +181,35 @@ def inbox_for(dept: str) -> list[dict]:
     """某科室的会诊收件箱：target_depts 含该科室且仍 open 的单，新→旧。
 
     实时按 dept 匹配（users.dept 即此值）：分发即达目标科室全部在职医生，无名单快照。
-    """
+    第 89 批：优先 PG 条件查询（jsonb 数组包含），空表/无池/异常回落既有内存过滤。"""
     if not dept:
         return []
+    rows = pg_store.consult_list(
+        "status = 'open' AND data->'target_depts' @> $1::jsonb",
+        (json.dumps([dept], ensure_ascii=False),))
+    if rows is not None:
+        return rows
     return [i for i in _load()[::-1]
             if i.get("status") == "open" and dept in (i.get("target_depts") or [])]
 
 
 def by_initiator(user: str) -> list[dict]:
-    """发起者视角：本人发起的全部会诊（含已结束），新→旧。"""
+    """发起者视角：本人发起的全部会诊（含已结束），新→旧。
+    第 89 批：优先 PG 条件查询，空表/无池/异常回落内存过滤。"""
+    rows = pg_store.consult_list("initiator = $1", (user,))
+    if rows is not None:
+        return rows
     return [i for i in _load()[::-1] if i.get("initiator") == user]
 
 
 def participated(user: str) -> list[dict]:
-    """参与视角：本人作为受邀科室医生给过意见（每人一票留痕）的会诊，新→旧。"""
+    """参与视角：本人作为受邀科室医生给过意见（每人一票留痕）的会诊，新→旧。
+    第 89 批：优先 PG 条件查询（opinions jsonb 包含 {doctor: user}），异常回落内存。"""
+    rows = pg_store.consult_list(
+        "data->'opinions' @> $1::jsonb",
+        (json.dumps([{"doctor": user}], ensure_ascii=False),))
+    if rows is not None:
+        return rows
     return [i for i in _load()[::-1]
             if any(o.get("doctor") == user for o in (i.get("opinions") or []))]
 
