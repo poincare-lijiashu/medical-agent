@@ -4525,6 +4525,54 @@ waike01（外科）收件箱 3 条
 - 收件箱角标在过滤中不刷新（设计如此），清空搜索后恢复；
 - 检索面不含 AI 分科依据（`team.reason`）与会诊汇总（`summary`）。
 
+## 116. 2026-11-08 数据完整性（第 112 批：镜像审计补 action + 历史回填）
+
+**问题**：第 107–110 批围绕审计"按动作过滤/候选值"做了完整链路，但 PG 侧
+`audit_log.payload` 从不带 `action`（镜像只写 `event_type='review.approved'`）。
+真实库 **2,196 / 2,199 行 action 为 null** → PG 部署下 action 过滤恒 0、action 候选恒空：
+**已交付的能力实际不可用**（声称与事实不符，属数据完整性缺口而非 UI 问题）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | `audit_action_for`（显式 > 别名表 > 点号后半段）、`_audit_payload_with_action`（已有 action 不覆盖、不原地改调用方对象）；`mirror_audit` 增可选 `action`，写入前自动补 |
+| `scripts/backfill_audit_action.py`（新） | 历史回填：默认 dry-run 列出"事件 → 将写入 action → 行数"；`--apply` 执行**幂等** UPDATE（只处理 `payload->>'action' IS NULL`；CASE 与 Python 同口径） |
+| `tests/test_audit_mirror_action.py`（新，7 条） | 映射规则、不覆盖/不改入参、镜像写补 action、无池 no-op、回填 SQL 幂等/口径、dry-run 计划 |
+
+**别名表**（跨源命名不一致的 5 个）
+```
+review.approved   → resolved_approved      review.rejected → resolved_rejected
+consult.created   → consult_created        consult.opinion → consult_opinion
+consult.closed    → consult_closed
+```
+其余事件取点号后半段（`admin.user_created → user_created`）。
+
+**真实数据（8001 + 真实 PG）**
+```
+回填前：audit_log 2,199 行，缺 action 2,196 行（18 类事件）
+dry-run：user_deleted 746 / user_created 742 / submitted 313 / answer 142 / rejected 101 / ...
+apply  ：UPDATE 2196 → 剩余缺 action 0
+回填后 actions top：user_deleted 746 / user_created 742 / submitted 313 / answer 181 /
+                    rejected 101 / approved 98
+facets.actions 与 SQL 逐项一致
+/admin/audit?audit_action=resolved_approved → total=5（SQL 5）—— action 过滤首次真实可用
+二次 dry-run：待回填 0 行（幂等）
+7/7 校验通过
+```
+
+**校验**
+- 定向：`test_audit_mirror_action + test_pg_write_metrics + test_audit_humanize_coverage +
+  test_audit_filters` **37 passed**；
+- 全量 pytest：**1468 passed / 4 failed**；4 条均为 e2e `.rail a.nav` 超时（60 次/分钟限流），
+  `pytest --lf` 复跑 **4 passed**，与本次改动无关。
+
+**仍存边界**
+- `*.answer` 类事件的 action 统一为 `answer`（drug/literature/imaging/mdt/case 在 JSONL 侧
+  分别是 answered/query 等）——跨源仍不完全一致；
+- 回填只补 action，不改 event_type 命名（历史点号名保留）；
+- 别名表硬编码：新增镜像事件若与 JSONL 命名不一致需补表（回填脚本复用同一张表）；
+- 回填脚本无断点续跑（单条 UPDATE，2k 行毫秒级；百万级需分批）。
+
 
 
 

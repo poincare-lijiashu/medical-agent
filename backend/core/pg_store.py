@@ -818,18 +818,54 @@ async def ping() -> bool:
 
 # ---------- 合规镜像写（best-effort；池操作全部经专用 DB 循环） ----------
 
+# 第 112 批：镜像审计事件名是"域.动作"（review.approved），而 JSONL 侧 payload.action 是
+# 动作名（resolved_approved）。此前镜像 payload 不带 action → PG 部署下 admin 审计流的
+# "按动作过滤/候选值"恒为空（第 107–110 批交付的 action 维度实际不可用）。
+# 现在写入时自动补 action：默认取点号后半段，跨源命名不一致的用别名表纠正。
+_ACTION_ALIASES = {
+    "review.approved": "resolved_approved",
+    "review.rejected": "resolved_rejected",
+    "consult.created": "consult_created",
+    "consult.opinion": "consult_opinion",
+    "consult.closed": "consult_closed",
+}
+
+
+def audit_action_for(event_type: str, action: str | None = None) -> str:
+    """镜像事件 → payload.action（显式传入优先，其次别名表，最后取点号后半段）。"""
+    if action:
+        return action
+    ev = str(event_type or "")
+    if ev in _ACTION_ALIASES:
+        return _ACTION_ALIASES[ev]
+    return ev.split(".", 1)[-1] if "." in ev else ev
+
+
+def _audit_payload_with_action(event_type: str, payload: dict | None,
+                               action: str | None = None) -> dict:
+    """补 action 但不覆盖调用方已有值（已有视为权威，避免双向改写）。"""
+    p = dict(payload or {})
+    if not p.get("action"):
+        p["action"] = audit_action_for(event_type, action)
+    return p
+
+
 async def _mirror_audit_impl(event_type: str, actor: str, payload: dict) -> None:
     async with _pool.acquire() as c:
         await c.execute("INSERT INTO audit_log(event_type,actor,payload) VALUES($1,$2,$3::jsonb)",
                         event_type, actor, json.dumps(payload, ensure_ascii=False))
 
 
-async def mirror_audit(event_type: str, actor: str, payload: dict) -> None:
+async def mirror_audit(event_type: str, actor: str, payload: dict,
+                       action: str | None = None) -> None:
+    """镜像写审计（best-effort）。action 可显式指定；缺省按事件名/别名表补进 payload。"""
     if not _pool:
         return
     try:
         await _pg_write_async("audit_log", "mirror",
-                              _mirror_audit_impl(event_type, actor, payload))
+                              _mirror_audit_impl(event_type, actor,
+                                                 _audit_payload_with_action(event_type, payload,
+                                                                            action)))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
 
