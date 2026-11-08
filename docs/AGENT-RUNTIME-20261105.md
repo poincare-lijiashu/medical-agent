@@ -4758,6 +4758,44 @@ SQL 对账：SELECT to_char(ts,'YYYY-MM'), count(*) … → 345 / 1904（合计 
 - 归档后的检索需外部工具（JSONL 不回灌 admin 面板）；
 - 保留期由运维按院内制度决定，脚本不内置默认值。
 
+## 122. 2026-11-08 部署一致性（第 118 批：审计归档 CronJob）
+
+**问题**：第 117 批交付了归档脚本，但没有调度形态——生产要么靠人工记得跑，要么各自写
+cron；Helm 部署下没有任何对应资源，等于"能力有、没人调"。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `templates/audit-archive-cronjob.yaml`（新） | CronJob：`schedule` / 保留期 `beforeDays` / 输出目录 / PVC 或 emptyDir / `env` 注入 / 资源限额 / **`concurrencyPolicy: Forbid`**；命令显式 `--apply` |
+| `values.yaml` | `auditArchive`（`enabled=false`、每周日 03:00、`beforeDays=365`、`outDir`、`pvc`、`image`、`env: []`）+ 开启前三条检查清单 |
+| `tests/test_audit_archive_cronjob.py`（新，3 条） | 模板标记、values 默认关闭、剥离 Helm 指令后 YAML 可解析且 args 指向脚本 |
+
+**设计取舍**
+- **默认关闭**：归档会删热表数据，必须由运维确认保留期后开启（values 注释写明三条前置检查）；
+- **`concurrencyPolicy: Forbid`**：避免两次归档并发、两条 `DELETE` 互抢行；
+- **不硬编码连接串**：`auditArchive.env` 注入，与主应用同源（各集群 Secret 名不同）；
+- **pvc 留空→emptyDir** 并在注释标注"Pod 重建即丢，仅试跑"；
+- 截止日由容器内 `date -d '-N days'` 计算，脚本只收 `YYYY-MM-DD`（口径单一，不引入第二套日期解析）。
+
+**验证**
+```
+定向：3 passed
+YAML（剥离 Helm 指令后）：kind=CronJob / apiVersion=batch/v1 / concurrencyPolicy=Forbid /
+  workingDir=/app / args 指向 archive_audit_log.py
+helm 未安装 → 未做真实渲染（与 §117 同边界，CI 有 helm 时补渲染断言）
+```
+
+**校验**
+- 定向：`test_audit_archive_cronjob` **3 passed**；
+- 全量 pytest：待补（后台运行完成即记）。
+
+**仍存边界**
+- 本机无 helm，未做 `helm template` 渲染验证；
+- 镜像内必须含 `scripts/archive_audit_log.py` 与 Python 依赖（镜像构建未加断言）；
+- 只引用 PVC 名，不创建 PV/PVC；
+- Job 失败无告警（可接 `kube_job_failed` 规则，未做）；
+- CronJob 时区按集群（默认 UTC），与 §114 的业务时区不是同一口径（脚本按容器本地时区解释 `--before`）。
+
 
 
 

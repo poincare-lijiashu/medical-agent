@@ -1,0 +1,70 @@
+{{- /*
+  审计日志归档 CronJob（第 118 批）：定期把早于保留期的 audit_log 按月导出后清理。
+
+  - 脚本：scripts/archive_audit_log.py（默认 dry-run；这里显式 --apply）
+  - 保留期：auditArchive.beforeDays（"今天 - N 天"之前）
+  - 落盘目录：auditArchive.outDir（建议挂 PVC；未配 pvc 时用 emptyDir，仅适合试跑）
+  - 连接串：不在此硬编码——通过 auditArchive.env 注入（与主应用同源），
+    例如 DATABASE_URL / ASYNC_DATABASE_URL，具体名以集群现有 ConfigMap/Secret 为准。
+  - 默认 enabled=false：归档会删热表数据，必须由运维确认保留期后开启。
+*/}}
+{{- if .Values.auditArchive.enabled }}
+{{- $ := . }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "medassist.fullname" . }}-audit-archive
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ops") | nindent 4 }}
+spec:
+  schedule: {{ .Values.auditArchive.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "medassist.labels" (dict "root" $ "component" "ops") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          {{- with .Values.serviceAccount.name }}
+          serviceAccountName: {{ . }}
+          {{- end }}
+          containers:
+            - name: archive
+              image: "{{ .Values.auditArchive.image.repository }}:{{ .Values.auditArchive.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.auditArchive.image.pullPolicy }}
+              workingDir: /app
+              command: ["/bin/sh", "-c"]
+              args:
+                - >-
+                  python scripts/archive_audit_log.py
+                  --before "$(date -d '-{{ .Values.auditArchive.beforeDays }} days' +%F)"
+                  --apply --out "{{ .Values.auditArchive.outDir }}"
+              {{- with .Values.auditArchive.env }}
+              env:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              volumeMounts:
+                - name: archive
+                  mountPath: {{ .Values.auditArchive.outDir }}
+          volumes:
+            - name: archive
+              {{- if .Values.auditArchive.pvc }}
+              persistentVolumeClaim:
+                claimName: {{ .Values.auditArchive.pvc }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+{{- end }}

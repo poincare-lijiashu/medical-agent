@@ -1,0 +1,80 @@
+"""第 118 批：审计归档 CronJob（Helm）静态交付锁。
+
+锁定：
+- 模板受 `auditArchive.enabled` 开关控制，默认关闭（归档会删热表数据）；
+- 定时、保留期、输出目录、PVC/emptyDir 两个分支、env 注入都在；
+- `concurrencyPolicy: Forbid`（避免两次归档并发互抢行）；
+- 剥掉 Helm 指令后仍是合法 YAML，且 cron 的 args 真的带 `--apply`（不是 dry-run）。
+"""
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+CHART = ROOT / "deploy" / "helm" / "medassist-platform"
+TPL = CHART / "templates" / "audit-archive-cronjob.yaml"
+VALUES = CHART / "values.yaml"
+
+
+def _strip_helm(text: str) -> str:
+    """去掉 Helm 注释块与指令行（含 `{{` 的行），剩余部分应为合法 YAML。"""
+    out, in_comment = [], False
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s.startswith("{{- /*") or s.startswith("{{/*"):
+            in_comment = True
+            continue
+        if in_comment:
+            if "*/}}" in ln:
+                in_comment = False
+            continue
+        if "{{" in ln:
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def test_cronjob_template_markers():
+    text = TPL.read_text(encoding="utf-8")
+    for marker in (
+        "if .Values.auditArchive.enabled",
+        "apiVersion: batch/v1",
+        "kind: CronJob",
+        ".Values.auditArchive.schedule | quote",
+        "concurrencyPolicy: Forbid",
+        "successfulJobsHistoryLimit: 3",
+        "--before \"$(date -d '-{{ .Values.auditArchive.beforeDays }} days' +%F)\"",
+        "--apply --out",
+        ".Values.auditArchive.outDir",
+        "if .Values.auditArchive.pvc",
+        "persistentVolumeClaim:",
+        "emptyDir: {}",
+        "with .Values.auditArchive.env",
+        "toYaml . | nindent 16",
+        'image: "{{ .Values.auditArchive.image.repository }}'
+        ':{{ .Values.auditArchive.image.tag | default .Chart.AppVersion }}"',
+    ):
+        assert marker in text, f"缺少 CronJob 标记：{marker}"
+
+
+def test_values_default_off_and_flags():
+    text = VALUES.read_text(encoding="utf-8")
+    seg = text.split("auditArchive:")[1]
+    assert "enabled: false" in seg
+    for key in ("schedule:", "beforeDays: 365", "outDir:", "pvc:", "env: []"):
+        assert key in seg, f"values 缺少 {key}"
+
+
+def test_cronjob_parses_as_yaml():
+    yaml = pytest.importorskip("yaml")
+    doc = yaml.safe_load(_strip_helm(TPL.read_text(encoding="utf-8")))
+    assert doc["kind"] == "CronJob"
+    assert doc["apiVersion"] == "batch/v1"
+    spec = doc["spec"]
+    assert spec["concurrencyPolicy"] == "Forbid"
+    c = spec["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+    assert c["name"] == "archive"
+    assert c["workingDir"] == "/app"
+    assert "archive_audit_log.py" in c["args"][0]
+    # 剥离 Helm 指令会把插值行（--before/--out）整行去掉，故 --apply 在模板原文断言
+    assert "--apply" in TPL.read_text(encoding="utf-8")

@@ -721,6 +721,29 @@ observability:
     lokiUrl: http://loki:3100
     alertmanagerUrl: http://alertmanager:9093
 
+# ---- 审计日志归档（可选，第 118 批）----
+# 对应 scripts/archive_audit_log.py：把早于保留期的 audit_log 行按月导出 JSONL 后从热表删除。
+# 默认关闭：归档会**删除热表数据**，必须由运维确认保留期后再开。开启前请确保：
+#   1) outDir 挂到持久卷（未配 pvc 时用 emptyDir，Pod 重建即丢，仅适合试跑）；
+#   2) 保留期到院内合规要求（beforeDays，默认 365 天）；
+#   3) 先手工跑一次 dry-run 核对行数（脚本默认 dry-run）。
+auditArchive:
+  enabled: false
+  schedule: "0 3 * * 0"          # 每周日 03:00（集群时区）
+  beforeDays: 365                # 归档"今天 - N 天"之前的数据
+  outDir: /data/audit_archive    # 归档目录（建议挂 PVC）
+  pvc: ""                        # 持久卷声明名；留空=emptyDir（试跑）
+  image:
+    repository: medassist-platform   # 按实际中台主镜像填写
+    tag: ""                          # 空 = Chart.AppVersion
+    pullPolicy: IfNotPresent
+  # 连接串等环境变量（与主应用同源）。示例：
+  #   env:
+  #     - name: DATABASE_URL
+  #       valueFrom:
+  #         secretKeyRef: { name: medassist-db, key: dsn }
+  env: []
+
 # ---- Ingress（仅网关与 AI 中台入口）----
 ingress:
   enabled: false
