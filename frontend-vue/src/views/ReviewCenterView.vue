@@ -176,6 +176,14 @@
         <el-card shadow="never" style="border-left: 3px solid var(--accent)" data-testid="rx-pending-section">
           <h3 style="margin: 0">开药待审（处方队列）</h3>
           <div class="src" style="margin-top: 4px">开药工作台直送的处方：核对药单与相互作用；驳回必须填写意见（双控：不能审核本人提交的处方）。</div>
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px">
+            <!-- 第 105 批：服务端关键字检索（病例摘要/药品名/科室；300ms 防抖） -->
+            <el-input v-model="rxPendingQ" class="inp" style="max-width: 300px"
+              clearable placeholder="搜索：病例摘要 / 药品名 / 科室" spellcheck="false"
+              data-testid="rx-pending-q" aria-label="搜索开药待审处方" @input="onRxPendingQInput" />
+            <span class="src num" data-testid="rx-pending-total">
+              共 {{ rxPendingTotal }} 张{{ rxPendingQ.trim() ? '（筛选结果）' : '' }}</span>
+          </div>
         </el-card>
         <el-card v-if="!rxPendingItems.length" shadow="never"><div class="src">暂无开药待审处方。</div></el-card>
         <el-card v-for="it in rxPendingItems" :key="it.id" shadow="never" :data-rxid="it.id">
@@ -491,6 +499,9 @@ const reviewItems = ref([])
 const myConfirmItems = ref([])
 const historyItems = ref([])
 const rxPendingItems = ref([])
+const rxPendingQ = ref('') // 第 105 批：开药待审核队列关键字（服务端过滤）
+const rxPendingTotal = ref(0)
+let rxPendingTimer = null
 const rxHistoryItems = ref([])
 const reviewMe = ref('')
 const filterQ = ref('')
@@ -527,6 +538,23 @@ function confType(c) { return c >= 0.75 ? 'success' : (c >= 0.6 ? 'primary' : 'w
 function confLabel(c) { return c >= 0.75 ? '高置信' : (c >= 0.6 ? '中等' : '偏低') }
 
 // ---- 数据加载（qc/admin 与 mine 双分支；角标随数据刷新） ----
+function onRxPendingQInput() {
+  clearTimeout(rxPendingTimer)
+  rxPendingTimer = setTimeout(() => { load() }, 300) // 300ms 防抖后整页重拉（含角标）
+}
+
+async function fetchRxPending(seq) {
+  const kw = rxPendingQ.value.trim()
+  const xp = await http.get('/medical/prescriptions/pending', {
+    params: kw ? { q: kw } : {}, silentToast: true, // 第 105 批：q 服务端过滤
+  })
+  if (seq !== loadSeq) return
+  if (xp.status === 200) {
+    rxPendingItems.value = xp.data.items || []
+    rxPendingTotal.value = Number(xp.data.total ?? rxPendingItems.value.length)
+  }
+}
+
 async function load() {
   const seq = ++loadSeq
   loading.value = true
@@ -540,11 +568,10 @@ async function load() {
         await loadHistoryPage(seq)
       } catch (_) { if (seq !== loadSeq) return }
       rxPendingItems.value = []
+      // 开药待审：admin 也可读（qc 403 不拉取）；第 105 批支持关键字 q
       if (role.value === 'admin') {
         try {
-          const xp = await http.get('/medical/prescriptions/pending', { silentToast: true }) // qc 403 不拉取
-          if (seq !== loadSeq) return
-          if (xp.status === 200) rxPendingItems.value = xp.data.items || []
+          await fetchRxPending(seq)
         } catch (_) { /* 开药待审加载失败静默 */ }
       }
       // 角标：第 63 批改走 store 的统一口径（limit=0 只取 total）。分页后当前页长度
@@ -564,17 +591,15 @@ async function load() {
       rxHistoryItems.value = []
       if (role.value === 'pharmacist') {
         try {
-          const xp = await http.get('/medical/prescriptions/pending', { silentToast: true })
-          if (seq !== loadSeq) return
-          if (xp.status === 200) rxPendingItems.value = xp.data.items || []
+          await fetchRxPending(seq)
         } catch (_) { /* 静默 */ }
         try {
           const rh = await http.get('/medical/prescriptions/reviewed-by-me', { silentToast: true })
           if (seq !== loadSeq) return
           if (rh.status === 200) rxHistoryItems.value = rh.data.items || []
         } catch (_) { /* 静默 */ }
-        // pharmacist 待办角标只算待审处方数（药物待核对区已移除）
-        badges.reviewTodoCount = (rxPendingItems.value || []).length
+        // pharmacist 待办角标只算待审处方数（用服务端 total，避免被关键字筛选影响）
+        badges.reviewTodoCount = rxPendingTotal.value
       }
       // 轮 A：进入审核中心即刷新「我的待确认」黄徽标与「待我意见的会诊」红徽标
       // （legacy loadReviewMine 末尾 renderRail/refreshConsultBadge 同语义）

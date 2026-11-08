@@ -456,7 +456,7 @@ def test_rx_round2_review_badge_markers_present():
     # 由 tests/test_drug_pharm_review.py 锁定）；前端二次过滤反而会把已过滤的 total 数错。
     assert "limit: 0" in fn, "角标应只取计数（limit=0），不得整表下发"
     # 问题2：pharmacist 角标=待审处方数（进入审核中心 load() 即刷新）
-    assert "badges.reviewTodoCount = (rxPendingItems.value || []).length" in html, \
+    assert "badges.reviewTodoCount = rxPendingTotal.value" in html, \
         "pharmacist 角标=待审处方数（drug 待核对区已移除）"
 
 
@@ -525,7 +525,7 @@ def test_drug_purge_frontend_markers_present():
     # 反向锁针对 UI 字面量（注释中的「语义变更注明」不计）：drug 待核对表头/tab 已移除
     assert "ph?'药物待核对'" not in html, "pharmacist 待处理 tab 标签「药物待核对」应已移除"
     assert "药物高危待核对（需药剂科复核）" not in html, "drug 待核对表头应已移除"
-    assert "badges.reviewTodoCount = (rxPendingItems.value || []).length" in html, \
+    assert "badges.reviewTodoCount = rxPendingTotal.value" in html, \
         "pharmacist 角标只算待审处方数"
     shared_src = (ROOT / "backend" / "api" / "v1" / "medical" / "shared.py").read_text(encoding="utf-8")
     assert "两药快查已下线，drug 项不再入队（开药走 prescriptions）" in shared_src, \

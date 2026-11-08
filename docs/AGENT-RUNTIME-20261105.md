@@ -4207,6 +4207,36 @@ GET http://127.0.0.1:8001/ → 新资产 index-DL_CZzSM.js
 - 前端无单元测试框架：本批以构建 + 资产内容核对 + 现有语法门禁验证，未做浏览器交互回归；
 - `dist` 入库导致每次构建都会产生大文件 diff（既有仓库约定，未改）。
 
+## 109. 2026-11-08 前端交付（第 105 批：药师开药待审队列搜索框）
+
+**问题**：第 104 批只接了医生「我的处方」；药师/管理员在审核中心的「开药待审（处方队列）」
+仍只能滚动查找，而这是药师每天最重的入口。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `frontend-vue/src/views/ReviewCenterView.vue` | 「开药待审」卡片新增搜索框（`data-testid="rx-pending-q"`）：300ms 防抖后整页重拉；显示「共 N 张（筛选结果）」；admin 与 pharmacist 共用同一 `fetchRxPending()` |
+| `frontend-vue/src/views/ReviewCenterView.vue` | 药师角标改用服务端 `total`（`rxPendingTotal`）而不是当前列表长度——否则搜索会把"待审数"角标一起缩小，语义错误 |
+| `tests/test_frontend_syntax.py` | 两条旧标记断言同步为 `badges.reviewTodoCount = rxPendingTotal.value` |
+| `frontend-vue/dist/*` | 重新构建产物 |
+
+**真实交付验证**
+```
+npm run build → ✓ built in 5.31s
+GET / ===> 新资产 index-CK17etyO.js；含 rx-pending-q 与 rx-pending-total
+```
+
+**校验**
+- 定向 `test_frontend_syntax + prescriptions_paging + prescription_search + router_split_guard` **45 passed**；
+- 全量 pytest：**1433 passed**（本批无后端逻辑变更）。
+
+**仍存边界**
+- 搜索触发的是整页 `load()`（会连带刷新历史和角标），不是只刷新处方区；高延迟网络下略重；
+- 开药待审列表仍是"全量拉取 + 前端渲染"（后端支持 limit/offset，但该区未接分页），
+  处方量大后需要与医生端一样改服务端分页；
+- 搜索词不写入 URL，也不跨 tab 保留；
+- 未做浏览器交互回归（构建 + 资产内容核对 + 语法门禁）。
+
 
 
 
