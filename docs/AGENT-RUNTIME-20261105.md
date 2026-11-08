@@ -4424,6 +4424,57 @@ API: /admin/audit?audit_from=2026-10-30&audit_to=2026-10-30   total=333（SQL 33
 - `audit_log` 无 ts 分区，长期需归档/分区；
 - 服务端 CSV 只含原始字段（人话描述仍由前端本页导出提供）。
 
+## 114. 2026-11-08 合规运营（第 110 批：审计候选值全量 + 业务时区）
+
+**问题**
+1. 第 108 批的过滤候选取自"当页 50 条"——想按不在这页的事件名过滤时只能凭记忆手输；
+2. 日期窗口按"服务端本地时区"解释。容器默认 UTC 时，"按日历日"筛选/导出会与用户本地
+   日期偏 8 小时——跨零点数据落到错误的一天（**正确性缺口**，不只是体验问题）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/config.py` | `audit_timezone: str = ""`（环境变量 `AUDIT_TIMEZONE`，IANA 名如 `Asia/Shanghai`；空=服务端本地） |
+| `backend/core/pg_store.py` | `_audit_facets_pg_impl` / `audit_facets_pg`：actor / event_type / payload.action 三类 `GROUP BY`（次数倒序、同次数字典序、各前 100、排除空值），复用半开时间窗；新增计量键 `("audit_log","facets")` |
+| `backend/api/v1/medical/audit.py` | `_audit_tz()`（非法时区名 → 告警并回落本地，绝不 500）；`_audit_window` 改用业务时区；`/admin/audit` 回显 `tz`；新增 `GET /admin/audit/facets`（PG 优先 / JSONL 聚合回落） |
+| `frontend-vue/src/views/DataView.vue` | 展开面板时拉一次 facets（不随翻页重复）；候选优先远端、未加载回落本页；"时间（时区名）"标签 |
+| 测试 | +5：时区窗口（UTC / +8 / 非法）、facets SQL 形状、路由 JSONL 回落聚合、PG 透传、响应回显 tz；路由快照 63→64；前端标记锁 |
+
+**设计取舍**
+- **facets 独立端点 + 展开时一次拉取**：候选是"补全工具"，不该跟着每次翻页/输入刷新；
+  一次 GROUP BY 换稳定候选；失败静默回落本页，不影响过滤本身；
+- **候选不参与过滤口径**：facets 只填输入框，"共 N 条"仍由过滤后 `count(*)` 决定，
+  避免两个数字语义混淆；
+- **空值排除**：PG 侧 `payload.action` 全为 null，不排除会给出一个空候选；现在返回空数组（诚实）；
+- **时区配置错误回落本地而非拒绝启动**：审计面板不是关键路径，配置错误告警即可；
+  `tz` 字段让前端显示实际采用的时区，用户能直接看出偏差；
+- **回显 tz 用 `tzname()`**：Windows 下是"中国标准时间"、Linux 下是 "CST"——这是人读标签；
+  显式配置时回显配置的 IANA 名。
+
+**真实数据（8001 + 真实 PG，`audit_log` 2,185 行）**
+```
+facets: actors 前 5 = admin01 1489 / doctor01 492 / pharm01 199 / neike01 2 / qc01 2（与 SQL 逐项一致）
+        events 前 5 = admin.user_deleted 746 / admin.user_created 742 / prescription.submitted 306 /
+                       literature.answer 142 / prescription.rejected 99（与 SQL 一致）
+        actions = []（SQL 中 payload->>'action' 全为 NULL，共 2185 行）
+时间窗 10-30: actors = doctor01 269 / pharm01 61 / admin01 2 / neike01 1（与 SQL 一致）
+tz 回显: "中国标准时间"（Windows 本地时区；分页与 facets 一致）
+10/10 校验通过
+```
+
+**校验**
+- 定向：`test_audit_filters + test_router_split_guard + test_frontend_syntax +
+  test_pg_query_metrics` **63 passed**；
+- 全量 pytest：**1456 passed / 1 failed**；失败为 e2e 页面显示"请求过于频繁"（60 次/分钟
+  限流），`pytest --lf` 单独复跑 **1 passed**，与本次改动无关。
+
+**仍存边界**
+- facets 各最多 100 个候选（长尾仍需手输）；
+- `payload.action` 在 PG 侧全为 null（真实 action 只在 JSONL 侧），PG 部署下 action 候选恒为空；
+- 业务时区只影响审计日期窗口，不改日志时间戳或其他模块口径；
+- 跨时区院区需要按用户维度时区，当前是全局配置；
+- facets 每次展开拉一次（无进程内缓存），超大数据量需缓存/物化视图。
+
 
 
 

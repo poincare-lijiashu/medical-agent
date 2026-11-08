@@ -348,3 +348,92 @@ def test_admin_audit_route_requires_admin(monkeypatch):
                headers={"Authorization": "Bearer " + r.json()["access_token"]})
     assert r2.status_code == 403
 
+
+# ---------- 第 110 批：业务时区 + 过滤框候选值（facets） ----------
+
+def test_audit_window_respects_business_timezone(monkeypatch):
+    """日期窗口按 settings.audit_timezone 解释：UTC→+0，Asia/Shanghai→+8，非法→回落本地不抛。"""
+    from datetime import timedelta
+
+    from backend.api.v1.medical.audit import _audit_tz, _audit_window
+    from backend.config import settings as cfg
+
+    monkeypatch.setattr(cfg, "audit_timezone", "UTC")
+    s, e = _audit_window("2026-10-30", "2026-10-30")
+    assert s.utcoffset() == timedelta(0) and e.utcoffset() == timedelta(0)
+    assert (s.date().isoformat(), e.date().isoformat()) == ("2026-10-30", "2026-10-31")
+
+    monkeypatch.setattr(cfg, "audit_timezone", "Asia/Shanghai")
+    s2, _ = _audit_window("2026-10-30", "")
+    assert s2.utcoffset() == timedelta(hours=8)
+    assert _audit_tz()[1] == "Asia/Shanghai"
+
+    monkeypatch.setattr(cfg, "audit_timezone", "Not/AZone")
+    tz3, name3 = _audit_tz()
+    assert tz3 is not None and "invalid" in name3  # 配置错误不 500，回落本地并标注
+
+
+class _FacetConn:
+    def __init__(self):
+        self.calls = []
+
+    async def fetch(self, sql, *a):
+        self.calls.append((" ".join(sql.split()), a))
+        return [{"v": "admin01", "n": 3}]
+
+
+def test_pg_facets_sql_shape(monkeypatch):
+    """facets 三条 GROUP BY 复用时间窗；空值/空串排除；前 100、次数倒序。"""
+    from datetime import datetime, timezone
+    conn = _FacetConn()
+    monkeypatch.setattr(pg_store, "_pool", _Pool(conn))
+    s = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    e = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    out = asyncio.run(pg_store._audit_facets_pg_impl(s, e))
+    assert out == {"actors": [{"v": "admin01", "n": 3}],
+                   "events": [{"v": "admin01", "n": 3}],
+                   "actions": [{"v": "admin01", "n": 3}]}
+    assert len(conn.calls) == 3
+    for (sql, args), expr in zip(conn.calls, ("actor", "event_type", "payload->>'action'")):
+        assert sql.startswith(f"SELECT {expr} AS v, count(*) AS n FROM audit_log"
+                              f" WHERE ts >= $1 AND ts < $2 AND {expr} IS NOT NULL"
+                              f" AND {expr} <> ''")
+        assert "GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT 100" in sql
+        assert args == (s, e)
+
+
+def test_admin_audit_facets_route_jsonl_fallback(monkeypatch):
+    """PG 不可用：facets 从 JSONL 聚合（次数倒序、同次数按字典序），并回显时区。"""
+    async def _none(*a, **k):
+        return None
+
+    monkeypatch.setattr(pg_store, "audit_facets_pg", _none)
+    c, h = _client(monkeypatch)
+    d = c.get("/api/v1/medical/admin/audit/facets", headers=h).json()
+    assert [x["v"] for x in d["actors"]] == ["admin01", "pharm01", "qc01"]
+    assert [x["n"] for x in d["actors"]] == [2, 1, 1]
+    assert [x["v"] for x in d["events"]] == ["review", "prescription"]
+    assert [x["n"] for x in d["events"]] == [3, 1]
+    assert [x["v"] for x in d["actions"]] == ["approved", "reopened",
+                                              "resolved_approved", "resolved_rejected"]
+    assert d["limit"] == 100 and d["tz"]
+
+
+def test_admin_audit_facets_route_uses_pg(monkeypatch):
+    async def _fake(start=None, end=None):
+        return {"actors": [{"v": "a", "n": 9}], "events": [], "actions": []}
+
+    monkeypatch.setattr(pg_store, "audit_facets_pg", _fake)
+    c, h = _client(monkeypatch)
+    d = c.get("/api/v1/medical/admin/audit/facets", headers=h).json()
+    assert d["actors"] == [{"v": "a", "n": 9}] and d["events"] == [] and d["actions"] == []
+
+
+def test_admin_audit_response_echoes_timezone(monkeypatch):
+    """分页响应回显业务时区名（前端「时间（Asia/Shanghai）」提示的数据源）。"""
+    from backend.config import settings as cfg
+    monkeypatch.setattr(cfg, "audit_timezone", "UTC")
+    c, h = _client(monkeypatch)
+    d = c.get("/api/v1/medical/admin/audit", headers=h).json()
+    assert d["tz"] == "UTC"
+

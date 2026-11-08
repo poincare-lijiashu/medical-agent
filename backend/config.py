@@ -200,6 +200,10 @@ class Settings(BaseSettings):
     # LOG_TO_FILE：on/true/1 强制开；off/false/0 强制关；空（默认）全环境开启（开发也落文件，显式 off 才关）
     log_to_file: str = ""
     log_dir: str = "logs"
+    # 第 110 批：审计日期窗口的"业务时区"（IANA 名，如 Asia/Shanghai）。
+    # 空 = 服务端本地时区（单机/单时区部署零配置）；**容器默认 UTC** 时必须显式设置，
+    # 否则 admin「按日历日」筛选/导出会与用户本地日期偏 8 小时（跨零点数据落到错误的一天）。
+    audit_timezone: str = ""
     # 第 72 批：多实例/多 worker 时按进程分文件（app-<pid>.log），避免共用 app.log
     # 轮转时互相抢文件句柄（Windows 实测 PermissionError: WinError 32）。
     # 默认 false（单实例保持 app.log，admin 日志卡路径不变）；横向扩容请置 true。

@@ -214,6 +214,8 @@ _PG_METRIC_KEYS = (
     # 第 108 批：admin 审计流读路径（分页 + 过滤后总数）纳入同口径计量
     ("audit_log", "recent_page"),
     ("audit_log", "count"),
+    # 第 110 批：过滤框候选值（GROUP BY 聚合）读路径计量
+    ("audit_log", "facets"),
 )
 # 第 94 批：耗时直方图桶（秒）。覆盖本地实测（2–8ms）到熔断前的桥接上限（3s），
 # 让 P95/P99 可算；`+Inf` 不在常量里，导出时以 total 补。
@@ -1041,6 +1043,46 @@ async def audit_count_pg(actor: str = "", event_type: str = "", action: str = ""
                                                         str(action or ""), start, end))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.audit_count_failed", error=str(e)[:120])
+        return None
+
+
+# ---------- 第 110 批：审计过滤框候选值（GROUP BY 聚合） ----------
+_AUDIT_FACET_LIMIT = 100
+
+
+async def _audit_facets_pg_impl(start: datetime | None = None,
+                                end: datetime | None = None) -> dict:
+    """过滤框候选值：actor / event_type / payload.action 按出现次数倒序（各前 100）。
+
+    与分页/计数共用 `_audit_where` 的时间窗；空值/空串排除（否则候选里出现空选项）。
+    三类各一次 GROUP BY（本地各 ~1ms），比前端跨页收集稳定且完整。
+    """
+    where, params = _audit_where("", "", "", start, end)
+    out: dict[str, list] = {"actors": [], "events": [], "actions": []}
+    async with _pool.acquire() as c:
+        for key, expr in (("actors", "actor"), ("events", "event_type"),
+                          ("actions", "payload->>'action'")):
+            cond = f"{expr} IS NOT NULL AND {expr} <> ''"
+            clause = (where + " AND " + cond) if where else (" WHERE " + cond)
+            rows = await c.fetch(  # noqa: S608 —— 列名是固定常量，值走 $n
+                f"SELECT {expr} AS v, count(*) AS n FROM audit_log" + clause
+                + f" GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT {_AUDIT_FACET_LIMIT}",
+                *params)
+            out[key] = [{"v": r["v"], "n": int(r["n"])} for r in rows]
+    return out
+
+
+async def audit_facets_pg(start: datetime | None = None,
+                          end: datetime | None = None) -> dict | None:
+    """审计过滤框候选值；PG 不可用/异常 → None（调用方按 JSONL 聚合）。
+
+    与分页/导出同纪律：best-effort，绝不冒泡影响面板。"""
+    if not _pool:
+        return None
+    try:
+        return await _arun_metered("audit_log", "facets", _audit_facets_pg_impl(start, end))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.audit_facets_failed", error=str(e)[:120])
         return None
 
 

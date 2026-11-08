@@ -1,7 +1,8 @@
 <!-- 数据面板（轮3，admin）：语义迁移 legacy loadData/审计流/留痕模式开关/新增用户/
      用户表/科室管理/基础设施/应用日志健康卡/LLM 模型配置（F6）——
      统计卡只读；审计流（humanizeAudit 人话映射逐字迁至 utils/audit.js）默认收起、
-     服务端精确过滤（操作者/事件/动作/日期区间，先过滤再分页，走轻端点 /admin/audit）+
+     服务端精确过滤（操作者/事件/动作/日期区间，先过滤再分页，走轻端点 /admin/audit；
+     候选值来自 /admin/audit/facets 全量前 100，日期按业务时区解释）+
      本页搜索 + 翻页（每页 50，翻头自动回退）+ CSV 导出（本页 BOM+引号转义 /
      按过滤全量走服务端 /admin/audit/export，≤10000 行且服务端留痕）/payload JSON
      折叠；留痕模式运行时开关（确认弹条文案逐字，POST /admin/config-toggle 即时生效）；
@@ -30,7 +31,7 @@
 
       <!-- 审计流（默认收起；展开后限高滚动；服务端过滤/翻页/CSV 导出） -->
       <el-card v-if="d" shadow="never" data-testid="audit-panel">
-        <h3 style="margin: 0 0 8px; cursor: pointer; user-select: none" @click="auditPanelOpen = !auditPanelOpen">
+        <h3 style="margin: 0 0 8px; cursor: pointer; user-select: none" @click="toggleAuditPanel">
           审计流（共 {{ auditTotalText }} 条）<span>{{ auditPanelOpen ? '▾' : '▸' }}</span>
           <span style="font-weight: 400; font-size: 12px; color: var(--ink-3)">第 {{ Math.floor(auditOffset / AUDIT_PAGE_SIZE) + 1 }} 页 · 每页 {{ AUDIT_PAGE_SIZE }} 条 · 点开看原始 JSON</span>
         </h3>
@@ -54,14 +55,14 @@
             <input v-model="auditAction" class="inp" list="audit-action-opts" data-testid="audit-filter-action"
                    placeholder="动作（精确，如 resolved_approved）" style="max-width: 190px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
             <datalist id="audit-action-opts"><option v-for="v in auditFacets.actions" :key="v" :value="v" /></datalist>
-            <span class="src">时间：</span>
+            <span class="src">时间（{{ auditTz || '本地时区' }}）：</span>
             <input v-model="auditFrom" type="date" class="inp" data-testid="audit-filter-from"
                    style="max-width: 145px" @change="onAuditFilterInput" />
             <span class="src">至</span>
             <input v-model="auditTo" type="date" class="inp" data-testid="audit-filter-to"
                    style="max-width: 145px" @change="onAuditFilterInput" />
             <el-button size="small" data-testid="audit-filter-reset" :disabled="!auditFiltered" @click="resetAuditFilters">清空过滤</el-button>
-            <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作 / 日期区间（精确匹配；候选项取自本页）' }}</span>
+            <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作 / 日期区间（精确匹配；候选来自全量前 100）' }}</span>
           </div>
           <ul class="feed" style="max-height: 420px; overflow: auto" data-testid="audit-list">
             <template v-if="auditView.length">
@@ -343,9 +344,11 @@ const auditTotal = ref(null)
 const auditActor = ref('')
 const auditEvent = ref('')
 const auditAction = ref('')
-const auditFrom = ref('') // 第 109 批：YYYY-MM-DD（含首尾日，后端按本地时区换算半开窗）
+const auditFrom = ref('') // 第 109 批：YYYY-MM-DD（含首尾日，后端按业务时区换算半开窗）
 const auditTo = ref('')
 const auditExporting = ref(false)
+const auditFacetsRemote = ref(null) // 第 110 批：全量候选值（一次拉取，跨页稳定）
+const auditTz = ref('')             // 业务时区名（后端回显，缺省=服务端本地）
 let auditFilterTimer = 0
 let auditLoadSeq = 0 // 竞态守卫：只认最后一次请求的结果（连续输入/翻页时旧响应不覆盖新结果）
 
@@ -361,8 +364,15 @@ const auditTotalText = computed(() => {
   return '—'
 })
 
-// 候选值（datalist）：取自当前页，帮助用户拼出精确值（事件名/动作名是字符串，手输易错）
+// 候选值（datalist）：优先服务端全量（/admin/audit/facets，前 100），未加载时回落本页。
+// 为什么不是只取本页：想按"不在这页"的事件名过滤时，用户只能凭记忆手输（易错）。
 const auditFacets = computed(() => {
+  const remote = auditFacetsRemote.value
+  if (remote) {
+    const pick = (arr) => (arr || []).map((x) => (x && x.v) || x).filter(Boolean)
+    return { actors: pick(remote.actors), events: pick(remote.events),
+             actions: pick(remote.actions) }
+  }
   const uniq = (vals) => Array.from(new Set(vals.filter(Boolean))).slice(0, 20)
   return {
     actors: uniq(auditRows.value.map((e) => e.actor)),
@@ -441,9 +451,22 @@ async function loadAudit() {
     if (seq !== auditLoadSeq) return // 旧响应丢弃（连续输入/翻页竞态）
     auditRows.value = data.items || []
     auditTotal.value = data.total ?? null
+    if (data.tz) auditTz.value = data.tz
   } catch (e) {
     if (seq === auditLoadSeq) loadErr.value = detailText(e)
   }
+}
+// 展开面板时拉一次全量候选值（GROUP BY 前 100）；失败静默回落本页候选，不影响过滤
+async function loadAuditFacets() {
+  try {
+    const { data } = await http.get('/medical/admin/audit/facets')
+    auditFacetsRemote.value = data
+    if (data && data.tz) auditTz.value = data.tz
+  } catch (_) { /* 候选值失败不影响过滤本身 */ }
+}
+function toggleAuditPanel() {
+  auditPanelOpen.value = !auditPanelOpen.value
+  if (auditPanelOpen.value && !auditFacetsRemote.value) loadAuditFacets()
 }
 // 过滤输入：回第 1 页 + 300ms 防抖（与处方搜索同节奏）
 function onAuditFilterInput() {

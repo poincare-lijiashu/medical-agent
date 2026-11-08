@@ -873,3 +873,24 @@ def test_audit_time_window_and_export_markers():
         assert marker in src, f"缺少审计时间区间/全量导出标记：{marker}"
 
 
+# ---- 第 110 批：审计过滤候选值（全量 facets）+ 业务时区回显 ----
+
+def test_audit_facets_and_timezone_markers():
+    """候选值必须来自服务端全量（不依赖当前页），时区由后端回显。
+
+    锁定：
+    - 展开面板时拉一次 /admin/audit/facets（不随翻页重复拉）；
+    - 候选优先远端（前 100），未加载时回落本页；
+    - 分页响应回显 tz 并展示在"时间（…）"标签。"""
+    src = _vue_source()
+    for marker in (
+        "const auditFacetsRemote = ref(null)", "const auditTz = ref('')",
+        "'/medical/admin/audit/facets'", "async function loadAuditFacets()",
+        "function toggleAuditPanel()",
+        "if (auditPanelOpen.value && !auditFacetsRemote.value) loadAuditFacets()",
+        "if (data.tz) auditTz.value = data.tz", "pick(remote.actors)",
+        "候选来自全量前 100",
+    ):
+        assert marker in src, f"缺少审计候选/时区标记：{marker}"
+
+

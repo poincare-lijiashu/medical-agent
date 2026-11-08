@@ -15,13 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from backend.api.deps import require_role
 from backend.api.v1.medical import shared as _shared
+from backend.config import settings
 from backend.core import pg_store
+from backend.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # rate_limit 由父路由 admin.router 统一声明（include 时叠加），此处不重复挂载，
 # 避免一次请求被计两次限流。
@@ -39,12 +45,30 @@ def _audit_filters(actor: str, event: str, action: str) -> tuple[str, str, str]:
             (action or "").strip()[:64])
 
 
-def _audit_window(from_date: str, to_date: str) -> tuple[datetime | None, datetime | None]:
-    """第 109 批：日期区间（含首尾日）→ 半开时间窗 [start, end)。
+def _audit_tz() -> tuple[object, str]:
+    """第 110 批：审计"业务时区"（settings.audit_timezone，IANA 名）。
 
-    输入只接受 ``YYYY-MM-DD``（前端原生 date input 即此格式）；按**服务端本地时区**
-    解释为当天 00:00，截止日 end 取次日 00:00——这样"11-01 ~ 11-07"含 7 日全天，
-    且相邻区间不重不漏。非法格式/起止倒置 → 400（不静默忽略，避免导出范围不符预期）。
+    空 = 服务端本地时区；配置了非法时区名 → 告警并回落本地（配置错误绝不 500/阻塞面板）。
+    容器默认 UTC 时必须显式设置，否则"按日历日"筛选与用户本地日期偏若干小时。"""
+    name = (getattr(settings, "audit_timezone", "") or "").strip()
+    local = datetime.now().astimezone().tzinfo
+    if not name:
+        return local, (datetime.now().astimezone().tzname() or "local")
+    try:
+        return ZoneInfo(name), name
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("audit.timezone_invalid", configured=name[:64],
+                       detail="回落服务端本地时区")
+        return local, f"{name[:32]}(invalid→local)"
+
+
+def _audit_window(from_date: str, to_date: str) -> tuple[datetime | None, datetime | None]:
+    """第 109/110 批：日期区间（含首尾日）→ 半开时间窗 [start, end)。
+
+    输入只接受 ``YYYY-MM-DD``（前端原生 date input 即此格式）；按**业务时区**
+    （settings.audit_timezone，缺省服务端本地）解释为当天 00:00，截止日 end 取次日 00:00
+    ——这样"11-01 ~ 11-07"含 7 日全天，且相邻区间不重不漏。
+    非法格式/起止倒置 → 400（不静默忽略，避免导出范围不符预期）。
     """
     def _parse(v: str) -> date | None:
         s = (v or "").strip()
@@ -57,7 +81,7 @@ def _audit_window(from_date: str, to_date: str) -> tuple[datetime | None, dateti
     d1, d2 = _parse(from_date), _parse(to_date)
     if d1 and d2 and d1 > d2:
         raise HTTPException(400, "起始日期不能晚于截止日期")
-    tz = datetime.now().astimezone().tzinfo
+    tz = _audit_tz()[0]
     start = datetime.combine(d1, datetime.min.time(), tzinfo=tz) if d1 else None
     end = (datetime.combine(d2 + timedelta(days=1), datetime.min.time(), tzinfo=tz)
            if d2 else None)
@@ -91,6 +115,23 @@ def _audit_jsonl_rows(actor_f: str, event_f: str, action_f: str,
     entries = getattr(_shared.get_audit_logger(), "entries", []) or []
     return [e for e in entries
             if _audit_match(e, actor_f, event_f, action_f, start, end)][::-1]
+
+
+_FACET_LIMIT = 100
+
+
+def _audit_facets_jsonl(start: datetime | None, end: datetime | None) -> dict:
+    """JSONL 回落侧的候选值聚合（与 PG 侧同结构：按次数倒序、同次数按字典序、各前 100）。"""
+    rows = _audit_jsonl_rows("", "", "", start, end)
+
+    def _top(values) -> list:
+        c = Counter(v for v in values if v)
+        return [{"v": k, "n": n}
+                for k, n in sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))[:_FACET_LIMIT]]
+
+    return {"actors": _top(e.get("actor") for e in rows),
+            "events": _top(e.get("event_type") for e in rows),
+            "actions": _top((e.get("payload") or {}).get("action") for e in rows)}
 
 
 def _audit_item(e: dict) -> dict:
@@ -150,6 +191,7 @@ async def admin_audit(user: dict = Depends(require_role("admin")), audit_offset:
     start, end = _audit_window(audit_from, audit_to)
     items, total = await _audit_page(off, actor_f, event_f, action_f, start, end)
     return {"items": items, "total": total, "offset": off, "limit": _AUDIT_PAGE_SIZE,
+            "tz": _audit_tz()[1],
             "filters": {"actor": actor_f, "event": event_f, "action": action_f,
                         "from": (audit_from or "").strip(), "to": (audit_to or "").strip()}}
 
@@ -203,3 +245,21 @@ def _write_export_audit(actor_name: str, filters: dict, rows: int, truncated: bo
                                      actor=actor_name,
                                      payload={"filters": filters, "rows": rows,
                                               "truncated": truncated})
+
+
+@router.get("/admin/audit/facets")
+async def admin_audit_facets(user: dict = Depends(require_role("admin")),
+                             audit_from: str = "", audit_to: str = ""):
+    """第 110 批：审计过滤框候选值（actor / event / action，各前 100，按出现次数倒序）。
+
+    为什么独立：第 108 批的 datalist 候选取自"当前页 50 条"——用户想按某个不在这页的
+    事件名过滤时只能凭记忆手输。此端点对全量做 GROUP BY（可选时间窗），候选稳定完整。
+    不影响分页/导出口径：候选只用于补全输入框，不参与"过滤后总数"。
+    """
+    start, end = _audit_window(audit_from, audit_to)
+    data = await pg_store.audit_facets_pg(start=start, end=end)
+    if data is None:
+        data = _audit_facets_jsonl(start, end)
+    return {"actors": data.get("actors", []), "events": data.get("events", []),
+            "actions": data.get("actions", []), "limit": _FACET_LIMIT,
+            "tz": _audit_tz()[1]}
