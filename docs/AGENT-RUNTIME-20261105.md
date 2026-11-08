@@ -4678,6 +4678,51 @@ helm 未安装 → 真实渲染测试 skip（CI 有 helm 时自动执行）
 - 每轮最多 2 次窗口等待（最坏 +2 分钟/条），仅真实限流时触发；
 - 生产默认限流不变；CI 仍建议 `RATE_LIMIT_PER_MIN=300` 启动被测服务以进一步压缩等待。
 
+## 120. 2026-11-08 临床检索性能（第 116 批：会诊关键字下推 PG）
+
+**问题（第 115 批遗留边界）**：会诊 `q` 在应用层过滤——先把整箱（`inbox_for` 全量行、
+含影像/意见 JSON）从 PG 拉回进程，再逐条 `matches_query`。会诊量上量后等于每次搜索全表传输；
+收件箱还要先分页切片，顺序是"拉全量 → 过滤 → 切片"，与处方（第 103 批已下推）不一致。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | `_CONSULT_SEARCH_EXPR`（question / ai_analysis / initiator / target_depts / opinions.content 拼接后 lower）+ `consult_search_cond(n)`（`LIKE '%' || $n || '%' ESCAPE '!'`），与 `rx_search_cond` 同形 |
+| `backend/core/consults.py` | `inbox_for(dept, q="")` / `by_initiator(user, q="")` / `participated(user, q="")`：`q` 非空时追加条件并传 `_like_contains` 转义后的参数；**PG 不可用回落内存时仍用 `matches_query` 同口径过滤** |
+| `backend/api/v1/medical/consults.py` | 收件箱/我的会诊不再做应用层过滤（把 `q` 交给 core）；审计口径不变（只记 `q: bool`） |
+| 测试 | `test_consult_search` +4：条件形状、下推 SQL/参数、无 q 保持旧 SQL、回落内存同口径；两个既有 mock 桩改为双参 |
+
+**设计取舍**
+- **下推而不是在 API 层切片**：条件交给 PG 后，`total / pendingForMe` 仍是"过滤后集合"，
+  但传输量从整箱降到命中行；
+- **与内存回落共用同一语义**：SQL 表达式与 `matches_query` 覆盖同样五个面、同样大小写不敏感
+  子串；PG 挂掉时行为不变（避免"切换数据源就换结果"）；
+- **通配符显式转义**：`%`/`_`/`!` 经 `_like_contains` 转义，用户输入 `%` 是字面匹配而非全表；
+- **未加 trgm 索引**：会诊表当前仅 14 行，`LIKE` 全表扫描成本可忽略；量级上来再加
+  （与 review_queue 的 `_ensure_search_index` 同法，需重建表达式索引）。
+
+**真机验证（8001 + 真实 PG，doctor01 13/1、waike01 收件箱 3）**
+```
+mine  q=肚子疼，好几天了 → 1=1   q=内科 → 11=11   q=doctor01 → 13=13
+      q=你好你是谁 → 1=1        q=腹部疼痛，排除胀 → 1=1   q=外科 → 9=9
+      q='%' → 0（全量 14；证明字面匹配生效）
+inbox q=肚子疼 → 1=1(total=1)  q=内科 → 2=2  q=doctor01 → 3=3  q='外科' → 3=3
+13/13 校验通过（SQL 侧结果与 Python `matches_query` 逐条一致）
+```
+
+**校验**
+- 定向：`test_consult_search + test_pg_consults_lists + test_consults +
+  test_consult_inbox_paging` **51 passed**；
+- 全量 pytest：**1481 passed / 0 failed / 1 skipped**（11:11，含 e2e；连续第二批零失败）；
+- 非 e2e 子集单独复核：**1465 passed / 1 skipped**（8:54）。
+
+**仍存边界**
+- 会诊查询仍无专用索引（小表 Seq Scan；上量后需表达式 GIN/trgm + `EXPLAIN` 复测）；
+- `target_depts` 用 `data->>'target_depts'` 的文本表示匹配（含引号/逗号），仅保证子串语义，
+  不是数组元素级精确匹配；
+- `/consults/mine` 仍无分页（两侧列表各自全量返回）；
+- 检索面不含 `team.reason` 与会诊汇总字段（与第 111 批一致）。
+
 
 
 

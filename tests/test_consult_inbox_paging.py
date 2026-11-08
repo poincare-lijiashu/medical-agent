@@ -22,7 +22,7 @@ def _client(monkeypatch, tmp_path, dept="心内科"):
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
     monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     monkeypatch.setattr(consults, "inbox_for",
-                        lambda d: [dict(i) for i in INBOX] if d else [])
+                        lambda d, q="": [dict(i) for i in INBOX] if d else [])
     monkeypatch.setattr("backend.api.deps.get_user",
                         lambda u: {"role": "", "dept": dept})
     return TestClient(app), log

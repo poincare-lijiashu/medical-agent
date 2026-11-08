@@ -150,10 +150,9 @@ async def consult_inbox(
     from backend.core import consults
     me = user.get("username", "system")
     dept = user.get("dept", "")
-    items = await asyncio.to_thread(consults.inbox_for, dept) if dept else []
     q_f = (q or "").strip()[:100]
-    if q_f:
-        items = [c for c in items if consults.matches_query(c, q_f)]
+    # 第 116 批：q 下推到 PG（consults.inbox_for 内部拼条件），不再先拉全箱再过滤
+    items = await asyncio.to_thread(consults.inbox_for, dept, q_f) if dept else []
     total = len(items)
     pending_for_me = sum(
         1 for c in items
@@ -180,11 +179,9 @@ async def consult_mine(user: dict = Depends(require_user),
     from backend.core import consults
     me = user.get("username", "system")
     q_f = (q or "").strip()[:100]
-    initiated = await asyncio.to_thread(consults.by_initiator, me)
-    participated = await asyncio.to_thread(consults.participated, me)
-    if q_f:
-        initiated = [c for c in initiated if consults.matches_query(c, q_f)]
-        participated = [c for c in participated if consults.matches_query(c, q_f)]
+    # 第 116 批：q 下推 PG（两个视角各自拼条件），不再拉全量后在应用层过滤
+    initiated = await asyncio.to_thread(consults.by_initiator, me, q_f)
+    participated = await asyncio.to_thread(consults.participated, me, q_f)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="list_mine",
                             actor=me, payload={"initiated": len(initiated),
                                                "participated": len(participated),

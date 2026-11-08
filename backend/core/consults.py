@@ -177,41 +177,58 @@ def get(cid: str) -> dict | None:
     return None
 
 
-def inbox_for(dept: str) -> list[dict]:
+def inbox_for(dept: str, q: str = "") -> list[dict]:
     """某科室的会诊收件箱：target_depts 含该科室且仍 open 的单，新→旧。
 
     实时按 dept 匹配（users.dept 即此值）：分发即达目标科室全部在职医生，无名单快照。
-    第 89 批：优先 PG 条件查询（jsonb 数组包含），空表/无池/异常回落既有内存过滤。"""
+    第 89 批：优先 PG 条件查询（jsonb 数组包含），空表/无池/异常回落既有内存过滤。
+    第 116 批：`q` 下推 PG（`consult_search_cond`）；回落内存时用 `matches_query` 同口径过滤。"""
     if not dept:
         return []
-    rows = pg_store.consult_list(
-        "status = 'open' AND data->'target_depts' @> $1::jsonb",
-        (json.dumps([dept], ensure_ascii=False),))
+    conds = ["status = 'open'", "data->'target_depts' @> $1::jsonb"]
+    params: list = [json.dumps([dept], ensure_ascii=False)]
+    kw = (q or "").strip().lower()
+    if kw:
+        params.append(pg_store._like_contains(kw))
+        conds.append(pg_store.consult_search_cond(len(params)))
+    rows = pg_store.consult_list(" AND ".join(conds), tuple(params))
     if rows is not None:
         return rows
     return [i for i in _load()[::-1]
-            if i.get("status") == "open" and dept in (i.get("target_depts") or [])]
+            if i.get("status") == "open" and dept in (i.get("target_depts") or [])
+            and matches_query(i, kw)]
 
 
-def by_initiator(user: str) -> list[dict]:
+def by_initiator(user: str, q: str = "") -> list[dict]:
     """发起者视角：本人发起的全部会诊（含已结束），新→旧。
-    第 89 批：优先 PG 条件查询，空表/无池/异常回落内存过滤。"""
-    rows = pg_store.consult_list("initiator = $1", (user,))
+    第 89 批：优先 PG 条件查询，空表/无池/异常回落内存过滤；第 116 批 `q` 下推。"""
+    conds, params = ["initiator = $1"], [user]
+    kw = (q or "").strip().lower()
+    if kw:
+        params.append(pg_store._like_contains(kw))
+        conds.append(pg_store.consult_search_cond(len(params)))
+    rows = pg_store.consult_list(" AND ".join(conds), tuple(params))
     if rows is not None:
         return rows
-    return [i for i in _load()[::-1] if i.get("initiator") == user]
+    return [i for i in _load()[::-1] if i.get("initiator") == user and matches_query(i, kw)]
 
 
-def participated(user: str) -> list[dict]:
+def participated(user: str, q: str = "") -> list[dict]:
     """参与视角：本人作为受邀科室医生给过意见（每人一票留痕）的会诊，新→旧。
-    第 89 批：优先 PG 条件查询（opinions jsonb 包含 {doctor: user}），异常回落内存。"""
-    rows = pg_store.consult_list(
-        "data->'opinions' @> $1::jsonb",
-        (json.dumps([{"doctor": user}], ensure_ascii=False),))
+    第 89 批：优先 PG 条件查询（opinions jsonb 包含 {doctor: user}），异常回落内存。
+    第 116 批 `q` 下推。"""
+    conds = ["data->'opinions' @> $1::jsonb"]
+    params: list = [json.dumps([{"doctor": user}], ensure_ascii=False)]
+    kw = (q or "").strip().lower()
+    if kw:
+        params.append(pg_store._like_contains(kw))
+        conds.append(pg_store.consult_search_cond(len(params)))
+    rows = pg_store.consult_list(" AND ".join(conds), tuple(params))
     if rows is not None:
         return rows
     return [i for i in _load()[::-1]
-            if any(o.get("doctor") == user for o in (i.get("opinions") or []))]
+            if any(o.get("doctor") == user for o in (i.get("opinions") or []))
+            and matches_query(i, kw)]
 
 
 def matches_query(item: dict, q: str) -> bool:

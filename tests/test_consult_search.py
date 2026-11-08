@@ -14,18 +14,18 @@ import json
 
 from fastapi.testclient import TestClient
 
-from backend.core import consults
+from backend.core import consults, pg_store
 from backend.core.auth import create_access_token
 from backend.core.medical_audit import AuditLog
 from backend.main import app
 
 ROWS = [
-    {"id": "c1", "question": "反复胸痛三月，考虑冠心病", "initiator": "doctor01",
+    {"id": "c1", "status": "open", "question": "反复胸痛三月，考虑冠心病", "initiator": "doctor01",
      "target_depts": ["心内科", "内分泌科"], "opinions": []},
-    {"id": "c2", "question": "糖尿病足溃疡", "initiator": "doctor02",
+    {"id": "c2", "status": "open", "question": "糖尿病足溃疡", "initiator": "doctor02",
      "target_depts": ["外科"],
      "opinions": [{"dept": "外科", "doctor": "waike01", "content": "建议清创引流"}]},
-    {"id": "c3", "question": "头痛伴视物模糊",
+    {"id": "c3", "status": "open", "question": "头痛伴视物模糊",
      "ai_analysis": "神经内科会诊意见：需排除颅内占位",
      "initiator": "doctor01", "target_depts": ["心内科"], "opinions": []},
 ]
@@ -34,8 +34,10 @@ ROWS = [
 def _client(monkeypatch, tmp_path, dept="心内科"):
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
     monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
+    # 第 116 批：q 由 consults 内部下推 PG；此处的桩模拟"PG 已过滤"的结果
     monkeypatch.setattr(consults, "inbox_for",
-                        lambda d: [dict(i) for i in ROWS] if d else [])
+                        lambda d, q="": [dict(i) for i in ROWS
+                                         if d and consults.matches_query(i, q)])
     monkeypatch.setattr("backend.api.deps.get_user", lambda u: {"role": "", "dept": dept})
     return TestClient(app), log
 
@@ -104,8 +106,11 @@ def test_inbox_audit_records_flag_not_keyword(monkeypatch, tmp_path):
 
 def test_mine_q_filters_both_sides(monkeypatch, tmp_path):
     c, log = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(consults, "by_initiator", lambda u: [dict(i) for i in ROWS])
-    monkeypatch.setattr(consults, "participated", lambda u: [dict(ROWS[1])])
+    monkeypatch.setattr(consults, "by_initiator",
+                        lambda u, q="": [dict(i) for i in ROWS if consults.matches_query(i, q)])
+    monkeypatch.setattr(consults, "participated",
+                        lambda u, q="": ([dict(ROWS[1])]
+                                         if consults.matches_query(ROWS[1], q) else []))
     d = c.get("/api/v1/medical/consults/mine", headers=_h(), params={"q": "胸痛"}).json()
     assert [i["id"] for i in d["initiated"]] == ["c1"]
     assert d["participated"] == []
@@ -121,3 +126,62 @@ def test_q_over_length_rejected(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
     r = c.get("/api/v1/medical/consults/inbox", headers=_h(), params={"q": "x" * 101})
     assert r.status_code == 422
+
+
+# ---------- 第 116 批：会诊检索下推 PG ----------
+
+def test_consult_search_condition_shape():
+    """条件必须对五个检索面做 lower + LIKE ESCAPE，且参数走 $n（防注入）。"""
+    cond = pg_store.consult_search_cond(2)
+    assert "LIKE ('%' || $2 || '%') ESCAPE '!'" in cond
+    for field in ("question", "ai_analysis", "initiator", "target_depts"):
+        assert f"data->>'{field}'" in cond
+    assert "jsonb_array_elements" in cond and "e->>'content'" in cond
+
+
+def test_inbox_pushes_q_to_pg(monkeypatch):
+    """有 q 时 SQL 带三个条件（open / 科室包含 / 关键字），参数依次为 dept、转义关键字。"""
+    seen = {}
+
+    def fake_list(where, params):
+        seen["where"], seen["params"] = where, params
+        return [{"id": "c1"}]
+
+    monkeypatch.setattr(pg_store, "consult_list", fake_list)
+    out = consults.inbox_for("心内科", "胸痛")
+    assert out == [{"id": "c1"}]
+    assert "status = 'open'" in seen["where"]
+    assert "data->'target_depts' @> $1::jsonb" in seen["where"]
+    assert "$2" in seen["where"]
+    assert seen["params"] == ('["心内科"]', "胸痛")
+
+    # 通配符必须转义（否则用户输入 % 会变成全表匹配）
+    consults.inbox_for("心内科", "100%_x")
+    assert seen["params"][1] == "100!%!_x"
+
+
+def test_inbox_without_q_keeps_old_sql(monkeypatch):
+    seen = {}
+
+    def fake_list(where, params):
+        seen["where"], seen["params"] = where, params
+        return []
+
+    monkeypatch.setattr(pg_store, "consult_list", fake_list)
+    consults.inbox_for("心内科", "  ")
+    assert seen["where"] == "status = 'open' AND data->'target_depts' @> $1::jsonb"
+    assert seen["params"] == ('["心内科"]',)
+
+
+def test_inbox_fallback_filters_in_memory(monkeypatch):
+    """PG 不可用（None）时回落内存过滤，且与 matches_query 同口径。"""
+    monkeypatch.setattr(pg_store, "consult_list", lambda *a, **k: None)
+    monkeypatch.setattr(consults, "_load", lambda: [dict(i) for i in ROWS])
+    out = consults.inbox_for("心内科", "胸痛")
+    assert [i["id"] for i in out] == ["c1"]
+
+    mine = consults.by_initiator("doctor01", "颅内占位")
+    assert [i["id"] for i in mine] == ["c3"]
+    part = consults.participated("waike01", "清创")
+    assert [i["id"] for i in part] == ["c2"]
+    assert consults.participated("waike01", "不存在") == []

@@ -1981,6 +1981,23 @@ def rx_search_cond(n: int) -> str:
             f"WHERE lower(coalesce(e->>'name', '')) LIKE {pattern}))")
 
 
+# 第 116 批：会诊关键字下推（与 `consults.matches_query` 同口径：病例 / AI 意见 /
+# 发起人 / 受邀科室 / 已填意见正文）。此前 q 在应用层过滤（先把整箱拉回来再筛），
+# 会诊量上量后等于每次搜索全表传输；下推后由 PG 先筛选。
+_CONSULT_SEARCH_EXPR = (
+    "lower(coalesce(data->>'question', '') || ' ' || coalesce(data->>'ai_analysis', '')"
+    " || ' ' || coalesce(data->>'initiator', '')"
+    " || ' ' || coalesce(data->>'target_depts', '')"
+    " || ' ' || coalesce((SELECT string_agg(e->>'content', ' ')"
+    " FROM jsonb_array_elements(coalesce(data->'opinions', '[]'::jsonb)) e), ''))"
+)
+
+
+def consult_search_cond(n: int) -> str:
+    """会诊关键字条件（$n 传 `_like_contains(lower(keyword))`）。"""
+    return f"{_CONSULT_SEARCH_EXPR} LIKE ('%' || ${n} || '%') ESCAPE '!'"
+
+
 async def _pg_rx_page_impl(where: str, params: list, limit: int | None,
                            offset: int, count_by_status: bool) -> dict | None:
     """处方分页/计数查询：返回 {items,total[,counts]}；空表 → None（与 load 同语义回落 JSON）。"""
