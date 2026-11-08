@@ -212,6 +212,37 @@ def _safe_tag(tag: str) -> str:
     return re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff]", "", str(tag))[:64]
 
 
+def _milvus_eq(field: str, value: str) -> str | None:
+    """构造 Milvus 字符串等值表达式；含引号/反斜杠/控制字符 → None（不拼接，防过滤注入）。
+
+    第 78 批：旧版 ingest 未清洗 doc_tag，manifest 里可能残留 `old-tag.v1` 这类历史键。
+    为了能预览/删除它们，需要在 filter 里使用**原键**；只放行不会破坏双引号字面量的字符
+    （`-` `.` 空格 括号等常见形态可以，`"`/`\\`/控制字符一律拒绝）。
+    """
+    v = str(value or "")
+    if not v or any(ch in v for ch in ('"', "\\")) or any(ord(ch) < 0x20 for ch in v):
+        return None
+    return f'{field} == "{v}"'
+
+
+def _resolve_manifest_key(tag: str) -> str:
+    """URL/接口传入的 tag → manifest 中的真实键（第 78 批）。
+
+    先精确匹配；否则按 `_safe_tag` 反查旧键——旧版 ingest 不做清洗，`old-tag.v1`
+    会以原样登记，而 preview/delete 传进来的清洗后是 `oldtagv1`，导致"列表看得到、
+    预览为空、删除 0 条"的残留。返回原键（可能含 `-`/`.`），调用方再用 `_milvus_eq`
+    判断能否安全拼进 filter。"""
+    raw = str(tag or "")
+    m = _load_manifest()
+    if raw in m:
+        return raw
+    safe = _safe_tag(raw)
+    for k in m:
+        if _safe_tag(k) == safe:
+            return k
+    return safe
+
+
 ALLOWED_EXTS = {".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg"}  # 任务C：图片走 OCR 入库（此前硬解乱码问题由 OCR 正规解决）
 # 任务C 扫描版判定：页文本为空比例 >60% → 扫描版（逐页 OCR）
@@ -374,50 +405,72 @@ def list_docs() -> dict:
 
 
 def preview_doc(tag: str, limit: int = 3) -> dict:
-    """预览某文档的前 N 个切片内容（查）。异常/无数据返回空列表，绝不抛错。"""
-    safe = _safe_tag(tag)
+    """预览某文档的前 N 个切片内容（查）。异常/无数据返回空列表，绝不抛错。
+
+    第 78 批：先按 manifest 原键查（兼容旧版未清洗 tag），为空再按清洗后 tag 查
+    （新版数据）；两段 filter 都经 `_milvus_eq` 防注入。"""
+    key = _resolve_manifest_key(tag)
     out: list = []
     try:
         col = _collection()
-        rows = col.query("medical_kb", filter=f'document_id == "{safe}"',
-                         limit=limit, output_fields=["content", "source_name"])
-        for r in rows or []:
-            out.append({"content": (r.get("content") or "")[:300], "source": r.get("source_name", "")})
+        for cand in dict.fromkeys([key, _safe_tag(tag)]):
+            expr = _milvus_eq("document_id", cand)
+            if not expr:
+                continue
+            rows = col.query("medical_kb", filter=expr, limit=limit,
+                             output_fields=["content", "source_name"])
+            if rows:
+                for r in rows:
+                    out.append({"content": (r.get("content") or "")[:300],
+                                "source": r.get("source_name", "")})
+                break
     except Exception as exc:  # noqa: BLE001
-        logger.warning("kb_ingest.preview_failed", tag=safe, error=str(exc)[:120])
-    return {"tag": safe, "chunks": out}
+        logger.warning("kb_ingest.preview_failed", tag=key[:64], error=str(exc)[:120])
+    return {"tag": key, "chunks": out}
 
 
 def doc_meta(tag: str) -> dict:
-    """删除审计用（轮 A1）：按 tag 取 manifest 元数据（name/chunks/ts）；不存在返回空 dict。"""
-    return _load_manifest().get(tag, {})
+    """删除审计用（轮 A1）：按 tag 取 manifest 元数据（name/chunks/ts）；不存在返回空 dict。
+    第 78 批：兼容旧版未清洗键（按清洗后 tag 反查）。"""
+    return _load_manifest().get(_resolve_manifest_key(tag), {})
 
 
 def delete_doc(tag: str) -> int:
+    key = _resolve_manifest_key(tag)
     safe = _safe_tag(tag)
-    if not safe:
+    if not key or not safe:
         return 0
     # 轮 A1：内置库允许 admin 界面删除（kb_delete 端点本就 require_role("admin") 门禁；
     # 此前对 BUILTIN_TAGS 直接 raise ValueError 且端点未捕获 → 裸 500。误删可重跑种子脚本恢复）
     col = _collection()
     deleted = 0
-    try:
-        res = col.delete("medical_kb", filter=f'document_id == "{safe}"')
-        if isinstance(res, dict):
-            deleted = int(res.get("delete_count", 0) or 0)
+    # 第 78 批：旧版数据可能同时存在"原键"和"清洗后键"两种 document_id，
+    # 两个都尝试（去重）；原键含引号/反斜杠时跳过该候选（不拼 filter）。
+    for cand in dict.fromkeys([key, safe]):
+        expr = _milvus_eq("document_id", cand)
+        if not expr:
+            logger.warning("kb_ingest.unsafe_legacy_tag", tag=key[:64])
+            continue
         try:
-            col.flush("medical_kb")
-        except Exception:  # noqa: BLE001
-            pass
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("kb_ingest.delete_failed", error=str(exc)[:120])
-        # 之前：删除失败仍 pop manifest 造成孤儿向量；现在：失败时不动 manifest，由上层提示重试
-        return 0
+            res = col.delete("medical_kb", filter=expr)
+            if isinstance(res, dict):
+                deleted += int(res.get("delete_count", 0) or 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("kb_ingest.delete_failed", error=str(exc)[:120])
+            # 之前：删除失败仍 pop manifest 造成孤儿向量；现在：失败时不动 manifest，由上层提示重试
+            return 0
+    try:
+        col.flush("medical_kb")
+    except Exception:  # noqa: BLE001
+        pass
     if deleted <= 0:
-        logger.warning("kb_ingest.delete_no_match", tag=safe)
+        logger.warning("kb_ingest.delete_no_match", tag=key[:64])
         return 0
     m = _load_manifest()
-    if m.pop(safe, None) is not None:
+    removed = m.pop(key, None)
+    if removed is None:
+        removed = m.pop(safe, None)
+    if removed is not None:
         _save_manifest(m)
     return deleted
 

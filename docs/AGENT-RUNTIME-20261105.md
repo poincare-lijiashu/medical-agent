@@ -3074,6 +3074,47 @@ guke（骨科）  n=1 pendingForMe=1： 1,413 B → summary 67 B
 - 徽标挂在「审核中心」导航而非「我的会诊」（历史设计），未在本批调整；
 - summary 仍返回 `me/dept` 两个小字段（便于前端同步 dept 文案）。
 
+## 82. 2026-11-08 数据完整性（第 78 批：旧版 KB tag 残留——预览/删除不再"看得到删不掉"）
+
+**接 HANDOFF 最后一条数据遗留**：旧版 `ingest_document` 不清洗 `doc_tag`，`old-tag.v1`
+会以原样写进 manifest 与 Milvus `document_id`；后来 preview/delete 统一走 `_safe_tag`
+（把 `-`/`.` 等剥掉），于是传入 `oldtagv1` 时：manifest 精确匹配不到、Milvus 也查不到，
+表现为"列表里看得到、预览为空、删除 0 条"，条目永远删不掉（且旧 filter 直接拼接存在注入面）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/kb_ingest.py` | 新增 `_milvus_eq()`：仅放行不含 `"`/`\\`/控制字符的值，否则返回 None（不拼接 filter）；新增 `_resolve_manifest_key()`：接口 tag 先精确匹配、再按 `_safe_tag` 反查旧键；`preview_doc/doc_meta/delete_doc` 全部改用原键；删除时去重尝试「原键 + 清洗键」，两者都失败则**不动 manifest** |
+| `tests/test_kb_legacy_tags.py` | +6：原键反查、doc_meta、预览走原键、删除同时清两种 id 并移除 manifest、含引号旧键不拼 filter 且保留 manifest、`_milvus_eq` 注入边界 |
+| `docs/HANDOFF.md` | backlog 该项标记完成 |
+
+**设计取舍**
+- **原键反查而不是批量迁移**：迁移 manifest 键会改变用户可见 tag，且需要重新确认向量 id；
+  反查在读取路径上兼容，零数据改写、零停机；
+- **filter 白名单**：旧键可能来自文件名，`"`/`\\` 极罕见但一旦存在就是注入面；
+  拒绝这类值只影响极少数坏键（保留 manifest 待人工处理），不会误删；
+- **未命中不 pop manifest**：宁可显示"删除 0 条"也不制造孤儿向量（此前教训见 delete 失败路径）；
+- **flush 只在有删除尝试后执行一次**，保持原有 Milvus 可见性语义。
+
+**真实数据**
+- 本机 `data/kb_manifest.json` 现有 **3 个键、脏键 0 个**——说明当前环境没有存量残留；
+  本批是**预防性兼容 + 注入面收口**，不是修复线上已损坏数据。
+- 行为验证：`test_kb_legacy_tags` 用假 collection 断言 filter 内容与 manifest 变更；
+  真实 Milvus 在本机未启动，未做端到端删除演练（见边界）。
+
+**校验**
+- 定向 `test_kb_legacy_tags + test_kb_ingest + test_kb_total_endpoint + test_kb_doccount`
+  **39 passed**；
+- 全量 pytest：**1270 passed**（1264 + 本批 6）。
+
+**仍存边界**
+- 含 `"`/`\\`/控制字符的旧键无法构造安全 filter，只能保留 manifest 等人工处理
+  （会持续出现在列表里，删除返回 0）；
+- 旧版向量若使用了**清洗后**以外的复杂键（如含 `/`），`_milvus_eq` 允许 `/` 拼接，
+  但仍依赖 Milvus 对该字符的支持，未在真机验证；
+- 未提供"批量清理残留"管理界面/脚本，只能逐条 preview/delete；
+- 未在真实 Milvus 上做旧键数据的删除/预览端到端验证（本机未启动向量库）。
+
 
 
 

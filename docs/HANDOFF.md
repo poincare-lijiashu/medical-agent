@@ -1781,7 +1781,10 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 - ~~llm_factory httpx 客户端未在 lifespan shutdown 关闭~~ ✅ 已修（第 64 批，2026-11-08）：
   `aclose_http_clients()` 下线关闭 + 清模型缓存，`http_clients()` 关闭后自动重建；
   接线由 `tests/test_llm_http_clients.py` 锁定（真实 SIGTERM 演练未做）
-- preview/delete 的 tag 清洗仍可在用户改名上传时存在残留（已统一白名单但旧 tag 可能已损坏）
+- ~~preview/delete 的 tag 清洗仍可在用户改名上传时存在残留~~ ✅ 已修（第 78 批，2026-11-08）：
+  preview/delete/doc_meta 先按 manifest 原键反查（兼容旧版未清洗 tag），Milvus filter
+  统一走 `_milvus_eq`（含引号/反斜杠/控制字符拒绝拼接，防注入）；删除同时尝试原键与
+  清洗键，未命中时不动 manifest（不制造孤儿向量）。6 项单测锁定（tests/test_kb_legacy_tags.py）
 - ~~PubMed 熔断是全局共享，单点失败会全员降级（应改失败计数）~~ ✅ 已修（第 65 批，2026-11-08）：
   改为连续 3 次失败才熔断、成功即清零；4 项单测锁定（tests/test_pubmed_breaker.py）
 
