@@ -202,6 +202,12 @@
             </template>
           </el-card>
           <el-card v-if="!mineLoading && !rxMineCache.length" shadow="never"><div class="src">暂无处方记录。</div></el-card>
+          <!-- 第 76 批：服务端分页（12/页），配合 /prescriptions/mine 的 limit/offset/total -->
+          <div v-if="mineTotal > RX_PER" style="display: flex; align-items: center; gap: 12px; padding: 4px 2px">
+            <el-button size="small" :disabled="minePage === 0" @click="minePage--">‹ 上一页</el-button>
+            <span class="src num">第 {{ minePage + 1 }} / {{ minePages }} 页 · 共 {{ mineTotal }} 张</span>
+            <el-button size="small" :disabled="minePage >= minePages - 1" @click="minePage++">下一页 ›</el-button>
+          </div>
         </div>
       </template>
     </div>
@@ -254,6 +260,11 @@ const rxMineCache = ref([])
 const mineLoading = ref(false)
 const mineErr = ref('')
 const submitting = ref(false)
+// 第 76 批：我的处方改为服务端分页（12/页）；第 75 批起接口已支持 limit/offset/total。
+const RX_PER = 12
+const minePage = ref(0)
+const mineTotal = ref(0)
+const minePages = computed(() => Math.max(1, Math.ceil(mineTotal.value / RX_PER)))
 
 // T3 beforeunload 防误关：rx 工作台未保存内容（病例文本非空或已选药单非空）→
 // 脏标记同步进全局 dirty store（AppShell 离开页面前读取弹浏览器原生确认）
@@ -407,6 +418,7 @@ async function rxSubmit() {
     else await http.post('/medical/prescriptions', body, { silentToast: true })
     ElMessage.success(rxEditId.value ? '处方已改写并重新送审' : '处方已提交，等待药剂科审核')
     rxResetCompose()
+    minePage.value = 0  // 第 76 批：新提交/重写后回第一页（最新记录在最前）
     switchTab('mine')
   } catch (e) {
     ElMessage.error('提交失败：' + detailText(e))
@@ -425,19 +437,27 @@ function rxResetCompose() {
   manual.name = ''; manual.dose = ''; manual.freq = ''
 }
 
-// ---- 我的处方（GET /prescriptions/mine） ----
+// ---- 我的处方（GET /prescriptions/mine，服务端分页） ----
 async function loadRxMine() {
   mineLoading.value = true
   mineErr.value = ''
   try {
-    const { data } = await http.get('/medical/prescriptions/mine', { silentToast: true })
+    const { data } = await http.get('/medical/prescriptions/mine', {
+      params: { limit: RX_PER, offset: minePage.value * RX_PER }, silentToast: true,
+    })
     rxMineCache.value = data.items || []
+    mineTotal.value = Number(data.total ?? rxMineCache.value.length)
+    // 越界纠偏（重写后总数变小/翻到空页）：跳到最后一页，由 watch 触发重拉
+    if (!rxMineCache.value.length && mineTotal.value > 0 && minePage.value > 0) {
+      minePage.value = Math.max(0, Math.ceil(mineTotal.value / RX_PER) - 1)
+    }
   } catch (e) {
     mineErr.value = '⚠ 处方加载失败：' + detailText(e)
   } finally {
     mineLoading.value = false
   }
 }
+watch(minePage, () => loadRxMine())
 
 // 重写：回填 case_text/drugs（含原联用理由）→ 提交走 rewrite 自动重提（legacy rxStartRewrite 同实现）
 function rxStartRewrite(id) {
