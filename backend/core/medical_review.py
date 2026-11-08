@@ -242,6 +242,14 @@ def _is_auto_signed(item: dict) -> bool:
     return str(item.get("reviewed_by") or "").startswith("AI·")
 
 
+def is_auto_signed(item: dict) -> bool:
+    """公开只读判定（第 73 批）：历史详情接口复用人机签发判定，避免两处漂移。
+
+    历史视图的合规规则不同（人工签发后不留原图），路由层需要这个判定来选择
+    是否保留 images；保持单一实现（本函数只是 _is_auto_signed 的公开别名）。"""
+    return _is_auto_signed(item)
+
+
 def list_involved(username: str, limit: int = 200) -> list[dict]:
     """问题3修复：本人参与的已处理记录（submitted_by=me OR reviewed_by=me），新→旧。
 

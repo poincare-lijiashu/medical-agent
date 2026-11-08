@@ -491,9 +491,10 @@ def test_rx_round2_qc_scope_markers_present():
     # ②qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）
     assert "if (role.value === 'admin') {" in html, \
         "qc/admin 路径仅 admin 拉取 /prescriptions/pending（qc 403 不请求）"
-    # ③两处历史装载（qc/admin 与 mine）均过滤 drug 旧遗留记录
-    assert html.count("i.agent !== 'drug'") >= 2, \
-        "历史列表须所有角色过滤 drug 旧遗留记录（两处装载点）"
+    # ③历史装载均过滤 drug 旧遗留记录：第 73 批起非 pharmacist 下沉服务端（hide_drug=1），
+    # pharmacist 合并处方轨仍本地过滤——两种实现合计必须有两处覆盖。
+    assert html.count("i.agent !== 'drug'") + html.count("hide_drug: 1") >= 2, \
+        "历史列表须所有角色过滤 drug（pharmacist 本地 + 其它角色服务端 hide_drug）"
 
 
 def test_review_race_guard_frontend_markers_present():

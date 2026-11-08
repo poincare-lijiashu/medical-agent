@@ -316,13 +316,19 @@
               <tr v-for="p in histSlice.filter((x) => !x._rx)" :key="p.id">
                 <td>
                   <details>
-                    <summary class="qtext" style="cursor: pointer; list-style: none">{{ p.agent }}：{{ (p.question || '').slice(0, 60) }} <span class="src">▾ 展开全文</span></summary>
+                    <summary class="qtext" style="cursor: pointer; list-style: none">{{ p.agent }}：{{ (p.question || '').slice(0, 60) }} <span class="src">▾ 展开题目</span></summary>
                     <div class="txt" style="margin-top: 8px; white-space: pre-wrap">{{ p.question }}</div>
-                    <div class="txt md-body" style="margin-top: 6px" v-html="md(p.answer || '')"></div>
+                    <!-- 第 73 批：非 pharmacist 的历史列表走服务端 compact（无 answer/images）；
+                         pharmacist 仍合并处方轨，保持全量数据与 md 渲染。 -->
+                    <div v-if="p.answerPreview !== undefined" class="txt" style="margin-top: 6px; white-space: pre-wrap">{{ p.answerPreview || '（暂无预览，点「详情」查看完整回答）' }}</div>
+                    <div v-else class="txt md-body" style="margin-top: 6px" v-html="md(p.answer || '')"></div>
+                    <el-button v-if="p.answerPreview !== undefined && (p.answerLength || 0) > (p.answerPreview || '').length"
+                               size="small" style="margin-top: 8px" @click.stop.prevent="openDetail(p, 'history')">查看完整回答（{{ p.answerLength }} 字）</el-button>
                   </details>
                   <div v-if="imgOf(p).length" class="review-thumbs">
                     <img v-for="(u, ui) in imgOf(p)" :key="ui" class="thumb" alt="留痕影像缩略图" loading="lazy" :src="u" style="cursor: zoom-in" @click="showImg(u)" />
                   </div>
+                  <div v-else-if="p.imageCount" class="src" style="margin-top: 4px">含 {{ p.imageCount }} 张影像，点「详情」查看</div>
                 </td>
                 <td class="num">{{ (p.confidence || 0).toFixed(2) }}</td>
                 <td><el-tag type="warning" effect="light" size="small" round>{{ p.risk_reason || '高风险' }}</el-tag></td>
@@ -336,13 +342,14 @@
                   <div v-if="isAuto(p) && canSign && p.submitted_by !== reviewMe" style="margin-top: 6px">
                     <el-button size="small" @click="reopen(p.id)">转人工复核</el-button>
                   </div>
+                  <div style="margin-top: 6px"><el-button size="small" @click="openDetail(p, 'history')">详情</el-button></div>
                 </td>
               </tr>
             </tbody>
           </table>
           <div class="pager">
             <el-button size="small" :disabled="histPage === 0" @click="histPage--; scrollTop()">‹ 上一页</el-button>
-            <span class="src num">第 {{ histPage + 1 }} / {{ histPages }} 页 · 共 {{ histItems.length }} 条已处理</span>
+            <span class="src num">第 {{ histPage + 1 }} / {{ histPages }} 页 · 共 {{ isPh ? histItems.length : histTotal }} 条已处理</span>
             <el-button size="small" :disabled="histPage >= histPages - 1" @click="histPage++; scrollTop()">下一页 ›</el-button>
           </div>
         </el-card>
@@ -490,6 +497,7 @@ const filterQ = ref('')
 const pendPage = ref(0)
 const histPage = ref(0)
 const pendTotal = ref(0) // 第 63 批：服务端分页总数（qc/admin 待核对）；doctor/pharmacist 走本地列表
+const histTotal = ref(0) // 第 73 批：历史服务端分页总数（pharmacist 合并处方轨仍走本地列表）
 const REVIEW_PER = 12
 let loadSeq = 0 // 加载请求序号守卫：并发加载只应用最新一次响应（legacy reviewLoadSeq 同语义）
 
@@ -527,11 +535,9 @@ async function load() {
     if (!isMine.value) {
       await loadPendingPage(seq)
       if (seq !== loadSeq) return
-      // 历史拉取失败静默不阻塞（legacy try-catch 同语义）；drug 类记录所有角色都过滤
+      // 历史拉取失败静默不阻塞（legacy try-catch 同语义）；drug/pending 过滤已下推服务端
       try {
-        const h = await http.get('/medical/review/history')
-        if (seq !== loadSeq) return
-        historyItems.value = (h.data.items || []).filter((i) => i.status !== 'pending' && i.agent !== 'drug')
+        await loadHistoryPage(seq)
       } catch (_) { if (seq !== loadSeq) return }
       rxPendingItems.value = []
       if (role.value === 'admin') {
@@ -550,11 +556,10 @@ async function load() {
       myConfirmItems.value = data.items || []
       reviewMe.value = data.me || ''
       // 「我的历史」= 本人参与的记录（submitted_by=me OR reviewed_by=me）+ drug 过滤（全角色一致）；
-      // 拉取失败静默不阻塞（legacy 同语义）
+      // 拉取失败静默不阻塞（legacy 同语义）。第 73 批：非 pharmacist 改为服务端分页 + compact，
+      // pharmacist 需要与处方审核轨合并，保持全量本地分页（下方 rxHistoryItems）。
       try {
-        const h = await http.get('/medical/review/history')
-        if (seq !== loadSeq) return
-        historyItems.value = (h.data.items || []).filter((i) => (i.submitted_by === reviewMe.value || i.reviewed_by === reviewMe.value) && i.status !== 'pending' && i.agent !== 'drug')
+        await loadHistoryPage(seq)
       } catch (_) { if (seq !== loadSeq) return }
       rxHistoryItems.value = []
       if (role.value === 'pharmacist') {
@@ -627,28 +632,64 @@ const pendSlice = computed(() => {
   return mineFiltered.value.slice(pg * REVIEW_PER, pg * REVIEW_PER + REVIEW_PER)
 })
 
+// 第 73 批：历史服务端分页（pharmacist 除外——需与处方审核轨合并，保持本地分页）。
+// hide_pending/hide_drug 把原先浏览器的过滤下推，避免"当前页不足 12 条"或跨页漏配。
+async function loadHistoryPage(seq = loadSeq) {
+  if (isPh.value) {
+    // pharmacist 需与处方审核轨合并，保持全量拉取 + 本地过滤/分页（原语义不变）
+    const h = await http.get('/medical/review/history')
+    if (seq !== loadSeq) return
+    historyItems.value = (h.data.items || []).filter((i) => (i.submitted_by === reviewMe.value || i.reviewed_by === reviewMe.value) && i.status !== 'pending' && i.agent !== 'drug')
+    histTotal.value = historyItems.value.length
+    return
+  }
+  const params = {
+    limit: REVIEW_PER, offset: histPage.value * REVIEW_PER, compact: 1,
+    hide_pending: 1, hide_drug: 1
+  }
+  const kw = filterQ.value.trim()
+  if (kw) params.q = kw
+  const { data } = await http.get('/medical/review/history', { params })
+  if (seq !== loadSeq) return
+  historyItems.value = data.items || []
+  histTotal.value = Number(data.total ?? historyItems.value.length)
+  // 越界纠偏（翻案/筛选后总数变小）：跳到最后一页，由 watch 触发重拉
+  if (!historyItems.value.length && histTotal.value > 0 && histPage.value > 0) {
+    histPage.value = Math.max(0, Math.ceil(histTotal.value / REVIEW_PER) - 1)
+  }
+}
+
 let pendFilterTimer = null
 watch(pendPage, () => { if (!isMine.value) loadPendingPage() })
+watch(histPage, () => { if (!isPh.value) loadHistoryPage() })
 watch(filterQ, () => {
-  if (isMine.value) { pendPage.value = 0; return } // 本地过滤：不需要重拉
   clearTimeout(pendFilterTimer)
   pendFilterTimer = setTimeout(() => {
+    if (!isPh.value) {
+      if (histPage.value !== 0) { histPage.value = 0; return }
+      loadHistoryPage()
+    }
+    if (isMine.value) { pendPage.value = 0; return } // 我的待确认：本地过滤，不需要重拉
     if (pendPage.value !== 0) { pendPage.value = 0; return } // 归零由 watch 触发重拉
     loadPendingPage()
   }, 300)
 })
 
 // ---- 历史（pharmacist 合并处方审核记录：补 _rx/agent/submitted_by/risk_reason 供筛选与行渲染分流）----
+// 非 pharmacist：服务端已过滤+分页，直接用当前页；pharmacist：本地合并 + 本地筛选/切片（原语义）。
 const histItems = computed(() => {
+  if (!isPh.value) return historyItems.value || []
   const q = filterQ.value.trim().toLowerCase()
-  const rxh = (role.value === 'pharmacist' ? (rxHistoryItems.value || []) : [])
+  const rxh = (rxHistoryItems.value || [])
     .map((p) => ({ ...p, _rx: true, agent: '处方审核', submitted_by: p.doctor || '—', risk_reason: p.forced_high_risk ? '高危强制开立' : '处方审核' }))
   const hist = rxh.concat(historyItems.value || [])
   if (!q) return hist
   return hist.filter((p) => ((p.agent || '') + ' ' + (p.question || '') + ' ' + (p.submitted_by || '') + ' ' + (p.risk_reason || '')).toLowerCase().includes(q))
 })
-const histPages = computed(() => Math.max(1, Math.ceil(histItems.value.length / REVIEW_PER)))
+const histPages = computed(() => Math.max(1,
+  Math.ceil((isPh.value ? histItems.value.length : histTotal.value) / REVIEW_PER)))
 const histSlice = computed(() => {
+  if (!isPh.value) return historyItems.value // 服务端已分页
   const pg = Math.min(histPage.value, histPages.value - 1)
   return histItems.value.slice(pg * REVIEW_PER, pg * REVIEW_PER + REVIEW_PER)
 })
@@ -662,13 +703,15 @@ const detailMine = computed(() => !!detail.value && detail.value.submitted_by ==
 // 第 69 批：列表 compact（不含 answer/images）→ 首次打开详情按单条接口取全文与影像。
 // 历史/我的待确认本来就有全文，不重复请求；detailSeq 防"快速点两条后旧响应覆盖新详情"。
 const detailSeq = ref(0)
-async function openDetail(p) {
+// kind='history' → 走历史详情（人工签发剥影像的合规规则不同）；缺省=待核对详情。
+async function openDetail(p, kind = 'pending') {
   detail.value = p
   detailOn.value = true
   if (p.answer !== undefined) return
   const seq = ++detailSeq.value
+  const url = kind === 'history' ? '/medical/review/history/item/' : '/medical/review/item/'
   try {
-    const { data } = await http.get('/medical/review/item/' + encodeURIComponent(p.id))
+    const { data } = await http.get(url + encodeURIComponent(p.id))
     if (seq !== detailSeq.value) return
     if (detail.value && detail.value.id === p.id) detail.value = data.item || p
   } catch (e) {

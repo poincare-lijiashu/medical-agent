@@ -138,16 +138,43 @@ async def review_item(rid: str, user: dict = Depends(require_role(*_REVIEW_ROLES
     return {"item": item}
 
 
+def _history_view(item: dict, role: str, me: str) -> dict:
+    """历史视图的图片合规规则（第 73 批抽出，列表与详情共用）。
+
+    与 /review/pending 不同：**人工签发后不留原图**（FIND-03a），只有 AI 自动签发才可能
+    保留影像；doctor/pharmacist 还要求「本人提交」（list_involved 的既有语义）。
+    qc/admin 在自动签发记录上再走 _review_image_view（qc 非 drug 可见）。
+    """
+    auto = review.is_auto_signed(item)
+    if role in ("doctor", "pharmacist"):
+        if auto and item.get("submitted_by") == me:
+            return dict(item)
+        return {k: v for k, v in item.items() if k != "images"}
+    if not auto:
+        item = {k: v for k, v in item.items() if k != "images"}
+    return _review_image_view(item, role, me)
+
+
 @router.get("/review/history")
-async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
-    """历史列表（任务5 语义更新）：list_all 现按签发方式剥离——仅人工签发记录剥离 images
-    （FIND-03a 人工复核后不留原图）；AI·留痕模式(自动) 签发的记录保留 images（用户自己的
-    交互留痕，前端历史区缩略图可见）。
-    可见性边界（服务端强制，本批修复统一规则）：图片返回给 = 提交人本人 + admin +
-    该项审核所需角色（agent 非 drug 项 → qc+admin：qc 审核需要看图；agent=drug →
-    pharmacist+admin）——原「非本人一律剥 images」导致 qc 历史区看不到 imaging 影像，
-    已修复；doctor 仅本人参与记录可见（隐私边界保留，不扩大暴露面）。"""
-    items = await asyncio.to_thread(review.list_all, limit=50)
+async def review_history(
+        limit: int | None = Query(None, ge=0, le=500,
+                                  description="返回条数上限；缺省=全部（旧行为）。0=只取计数"),
+        offset: int = Query(0, ge=0, description="跳过条数（与 limit 配套分页）"),
+        q: str | None = Query(None, max_length=100, description="关键字筛选（服务端过滤后再分页）"),
+        compact: bool = Query(False, description="省略 answer/images，改下发预览/张数"),
+        hide_pending: bool = Query(False, description="排除 pending（与前端历史区口径一致）"),
+        hide_drug: bool = Query(False, description="排除 agent=drug（历史区统一不展示药物项）"),
+        user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    """历史列表（第 73 批：新增可选分页/筛选/瘦身，缺省行为与旧版完全一致）。
+
+    语义保持：list_all 按签发方式剥离（人工签发不留原图，AI 自动签发保留）；
+    可见性 = 提交人本人 + admin + 该项审核所需角色；doctor/pharmacist 只看本人参与记录。
+    新增参数只影响"取哪一页/怎么裁字段"：
+    - ``hide_pending`` / ``hide_drug`` 供前端把原本在浏览器做的过滤移到服务端，
+      否则分页会出现"当前页不足 12 条"或跨页漏配；
+    - ``compact`` 改回 ``answerPreview/answerLength/imageCount``，全文走
+      ``GET /review/history/item/{rid}``（历史视图规则与列表同源）。
+    """
     me = user.get("username", "system")
     role = user.get("role", "")
     # 问题3修复（实测结论）：doctor/pharmacist 的「我的历史」数据源改为服务端按人检索
@@ -156,14 +183,49 @@ async def review_history(user: dict = Depends(require_role(*_REVIEW_ROLES))):
     # 最新 50 条窗口，前端按 reviewed_by=me 过滤恒空。qc/admin 全局档案语义不变。
     if role in ("doctor", "pharmacist"):
         items = await asyncio.to_thread(review.list_involved, me)
-    # 图片可见性统一规则（与 /review/pending 一致）：qc 审非 drug 项可见 images（修复
-    # qc 历史区看不到 imaging 影像）；pharmacist 的 drug 项可见；doctor 他人项剥 images；
-    # admin/提交人本人全可见
-    items = [_review_image_view(i, role, me) for i in items]
+    else:
+        items = await asyncio.to_thread(review.list_all, limit=50)
+    if hide_pending:
+        items = [i for i in items if i.get("status") != "pending"]
+    if hide_drug:
+        items = [i for i in items if i.get("agent") != "drug"]
+    keyword = (q or "").strip().lower()
+    if keyword:
+        items = [i for i in items if _match_query(i, keyword)]
+    total = len(items)
+    page = items[offset:offset + limit] if limit is not None else items[offset:]
+    page = [_history_view(i, role, me) for i in page]
+    if compact:
+        page = [_compact_item(i) for i in page]
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="history",
-                            actor=user.get("username", "system"),
-                            payload={"n": len(items), "role": user.get("role", "")})
-    return {"items": items}
+                            actor=me,
+                            payload={"n": len(page), "total": total, "role": role,
+                                     "limit": limit, "offset": offset, "compact": compact})
+    return {"items": page, "total": total}
+
+
+@router.get("/review/history/item/{rid}")
+async def review_history_item(rid: str, user: dict = Depends(require_role(*_REVIEW_ROLES))):
+    """单条历史详情（第 73 批：compact 历史列表的内容来源）。
+
+    与 /review/item/{rid} 的关键差异：**人工签发记录剥 images**（FIND-03a），
+    AI 自动签发才按角色可见；doctor/pharmacist 仅限本人参与过的记录（否则 404，
+    与列表的数据源 list_involved 一致）。审计只记 rid/角色，不记临床正文。
+    """
+    key = (rid or "").strip()[:64]
+    role = user.get("role", "")
+    me = user.get("username", "system")
+    item = await asyncio.to_thread(review.get, key) if key else None
+    if item is None:
+        raise HTTPException(404, "复核单不存在")
+    if role in ("doctor", "pharmacist") and me not in (item.get("submitted_by"),
+                                                       item.get("reviewed_by")):
+        raise HTTPException(404, "复核单不存在")
+    item = _history_view(item, role, me)
+    await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review",
+                            action="history_detail", actor=me,
+                            payload={"rid": key, "role": role})
+    return {"item": item}
 
 
 @router.get("/review/status")

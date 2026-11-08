@@ -2838,6 +2838,61 @@ GET /admin/logs → path=...\app-30416.log，note="多进程日志 app-30416.log
 - 轮转失败计数只在进程内可见，未导出为 Prometheus 指标；
 - 验证是 Windows 本机 + 3 个独立进程，未在 Linux 多 worker（fork）与 K8s 侧验证。
 
+## 77. 2026-11-08 上线准备（第 73 批：`/review/history` 分页/瘦身 + 历史详情合规口径）
+
+**接第 69 批的遗留**：待核对列表已瘦身，但历史区仍是"全量下发 + 浏览器过滤/切片"。
+实测 admin 50 条 = **53,475 B**、doctor 200 条 = **176,143 B**；前端每页只显示 12 条，
+其余都在传输/解析后丢弃。且历史上没有单条详情接口——若直接复用 `/review/item/{rid}`，
+会绕开"人工签发后不留原图"（FIND-03a）的合规规则。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/api/v1/medical/review.py` | `/review/history` 新增 `limit/offset/q/compact/hide_pending/hide_drug`（缺省=旧行为）；抽出 `_history_view()` 统一历史图片规则；新增 `GET /review/history/item/{rid}`（人工签发剥 images；doctor/pharmacist 仅本人参与记录，否则 404；审计只记 rid+角色） |
+| `backend/core/medical_review.py` | 新增公开 `is_auto_signed()`（`_is_auto_signed` 的只读别名），避免路由重复实现"AI·"判定 |
+| `frontend-vue/src/views/ReviewCenterView.vue` | 非 pharmacist 历史改为服务端分页 + compact（`hide_pending/hide_drug` 下推过滤）；pharmacist 仍需合并处方审核轨，保持全量本地分页；历史行展示预览 + 「查看完整回答」/「详情」；`openDetail(p, 'history')` 走历史详情接口 |
+| `frontend-vue/src/utils/audit.js` | `humanizeAudit` 补 `history_detail` |
+| `tests/test_review_history_paging.py` | +9：默认全量、hide 过滤、分页越界、q、compact、人工/AI 影像合规、doctor 范围 404、角色范围、审计字段 |
+| `tests/test_router_split_guard.py` / `tests/test_frontend_syntax.py` | 路由快照登记新端点；drug 过滤断言改为"本地 + 服务端各一处" |
+| `docs/DEPLOY.md` | 历史分页实测表 + 合规口径 |
+
+**设计取舍**
+- **默认不改行为**：所有新参数缺省时仍返回全量，MCP/脚本等旧调用方零影响；
+- **过滤必须在分页前**：`hide_pending/hide_drug` 在服务端先过滤再切片，否则页内条数不足、跨页漏配；
+- **历史详情单独端点**：不复用 `/review/item`，因为后者面向待核对（人工签发前），历史必须
+  "人工签发不留原图"；两个端点共用 `_review_image_view` 与 `is_auto_signed`，规则不重复写；
+- **doctor/pharmacist 范围**：详情要求本人参与（提交或审核），与列表数据源 `list_involved` 一致；
+- **pharmacist 暂不瘦身**：其历史需与处方审核轨合并，服务端分页会破坏"双轨统一分页"，
+  本批明确保留现状并写入边界。
+
+**真实数据（8001，真实 PG 队列）**
+```
+admin  full 53,475 B / 50 条 → slim 12,579 B / 12 条（total 41）
+doctor full 176,143 B / 200 条 → slim 12,691 B / 12 条（total 185）
+```
+- admin 首条详情 200、`answerLen=125`；doctor 首条详情 `answerLen=1421`（预览 160 字）；
+- 人工签发样本：admin 8 条 / doctor 13 条，`GET /review/history/item/{id}` 均 **无 images**、
+  正文可取——合规规则在真实数据上成立。
+
+**真实浏览器（Chrome DevTools MCP，最终构建）**
+- 审核中心 → 历史记录：`第 1 / 4 页 · 共 41 条已处理`，表格 12 行；
+- 行内预览固定 160 字，长回答带「查看完整回答（1421 字）」；
+- 点「详情」→ AI 回答 1421 字完整呈现；点「下一页」→ 第 2 / 4 页且内容切换；
+- 控制台 0 error。
+
+**校验**
+- 全量 pytest：**1248 passed**（1239 + 本批 9）；
+- `npm run build` 通过；前端标记门禁 29 passed；
+- 临时无（本批只读接口，未写业务数据）。
+
+**仍存边界**
+- pharmacist 历史仍是全量（review 200 条上限 + 处方轨），未做联合分页；
+- 列表 `question` 仍全量：若题干很长，单页仍会偏大（本批未裁）；
+- `total` 以"服务端已过滤后的集合"为准；doctor 的 200 条上限未改变（超出部分不可见）；
+- 历史详情为额外一次请求（弱网多一跳），实测无感；
+- `hide_pending/hide_drug` 是显式开关而非默认：其它调用方（MCP/脚本）仍可能拿到含 drug/pending 的历史全集；
+- 未做 ETag/304，翻回上一页仍会重传约 12KB 摘要。
+
 
 
 
