@@ -36,9 +36,17 @@ def _client(monkeypatch, tmp_path, dept="心内科"):
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
     monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     # 第 116 批：q 由 consults 内部下推 PG；此处的桩模拟"PG 已过滤"的结果
-    monkeypatch.setattr(consults, "inbox_for",
-                        lambda d, q="": [dict(i) for i in ROWS
-                                         if d and consults.matches_query(i, q)])
+    # 第 122 批：路由改调 inbox_page，返回 (页, total, pending)
+    def _fake_page(d, q="", limit=None, offset=0):
+        items = [dict(i) for i in ROWS if d and consults.matches_query(i, q)]
+        total = len(items)
+        pending = sum(1 for c in items
+                      if not any((o or {}).get("dept") == d for o in (c.get("opinions") or [])))
+        if limit is not None:
+            items = items[offset:offset + limit]
+        return items, total, pending
+
+    monkeypatch.setattr(consults, "inbox_page", _fake_page)
     monkeypatch.setattr("backend.api.deps.get_user", lambda u: {"role": "", "dept": dept})
     return TestClient(app), log
 
@@ -341,3 +349,107 @@ def test_page_fallback_filters_then_slices_in_memory(monkeypatch):
     part, part_total = consults.participated_page("waike01", "清创", 5, 0)
     assert part_total == 1 and [i["id"] for i in part] == ["c2"]
     assert consults.participated_page("waike01", "不存在")[1] == 0
+
+
+# ---------- 第 122 批：收件箱 total / pendingForMe / 切片下推 PG ----------
+
+class _InboxConn:
+    """收件箱分页的三次查询（总数 / 待填数 / 取数）分别返回可区分结果。"""
+
+    def __init__(self, total=3, pending=1, table_rows=4):
+        self.total = total
+        self.pending = pending
+        self.table_rows = table_rows
+        self.sqls: list[str] = []
+        self.args: list[tuple] = []
+
+    async def fetchval(self, sql, *a):
+        s = " ".join(sql.split())
+        self.sqls.append(s)
+        self.args.append(a)
+        if s == "SELECT count(*) FROM consults":
+            return self.table_rows
+        if "NOT EXISTS" in s:
+            return self.pending
+        return self.total
+
+    async def fetch(self, sql, *a):
+        self.sqls.append(" ".join(sql.split()))
+        self.args.append(a)
+        return []
+
+
+def _inbox_pool(monkeypatch, conn):
+    monkeypatch.setattr(pg_store, "_pool", _CapturePool(conn))
+    return conn
+
+
+def test_inbox_page_sql_counts_pending_with_not_exists(monkeypatch):
+    """无关键字：pending 的 dept 用 $2（独立语句），取数按本语句编号 LIMIT $2/OFFSET $3。"""
+    conn = _inbox_pool(monkeypatch, _InboxConn(total=3, pending=1))
+    out = asyncio.run(pg_store._pg_consult_inbox_page_impl(
+        "status = 'open' AND data->'target_depts' @> $1::jsonb", ["[\"心内科\"]"], 10, 0,
+        "心内科"))
+    assert out == {"items": [], "total": 3, "pending": 1}
+    pend = [s for s in conn.sqls if "NOT EXISTS" in s]
+    assert pend and "e->>'dept' = $2" in pend[0]
+    sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
+    assert sel and sel[0].endswith("LIMIT $2 OFFSET $3"), sel
+    assert conn.args[-1] == ("[\"心内科\"]", 10, 0)
+    assert ("[\"心内科\"]", "心内科") in conn.args
+
+
+def test_inbox_page_sql_keyword_shifts_placeholders(monkeypatch):
+    """带关键字：where 2 个参数 → pending 用 $3，取数 LIMIT $3/OFFSET $4（各自独立编号）。"""
+    conn = _inbox_pool(monkeypatch, _InboxConn())
+    asyncio.run(pg_store._pg_consult_inbox_page_impl(
+        "status = 'open' AND data->'target_depts' @> $1::jsonb AND x LIKE $2", 
+        ["[\"心内科\"]", "胸痛"], 5, 10, "心内科"))
+    pend = [s for s in conn.sqls if "NOT EXISTS" in s]
+    assert pend and "e->>'dept' = $3" in pend[0]
+    sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
+    assert sel and sel[0].endswith("LIMIT $3 OFFSET $4"), sel
+    assert conn.args[-1] == ("[\"心内科\"]", "胸痛", 5, 10)
+
+
+def test_inbox_page_limit_zero_returns_no_rows_but_counts(monkeypatch):
+    """summary 场景：limit=0 只算两个计数（不搬运正文）。"""
+    conn = _inbox_pool(monkeypatch, _InboxConn(total=9, pending=4))
+    out = asyncio.run(pg_store._pg_consult_inbox_page_impl(
+        "status = 'open' AND data->'target_depts' @> $1::jsonb", ["[\"外科\"]"], 0, 0, "外科"))
+    assert out == {"items": [], "total": 9, "pending": 4}
+    sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
+    assert sel and sel[0].endswith("LIMIT $2 OFFSET $3")
+
+
+def test_inbox_page_empty_table_falls_back(monkeypatch):
+    conn = _inbox_pool(monkeypatch, _InboxConn(table_rows=0))
+    assert asyncio.run(pg_store._pg_consult_inbox_page_impl(
+        "status = 'open' AND data->'target_depts' @> $1::jsonb", ["[\"外科\"]"], 10, 0,
+        "外科")) is None
+
+
+def test_inbox_page_memory_fallback_matches_pg_semantics(monkeypatch):
+    """PG 不可用：total 是过滤后全量、pending 也按全量算、切片只影响 items。"""
+    monkeypatch.setattr(pg_store, "consult_inbox_page", lambda *a, **k: None)
+    monkeypatch.setattr(consults, "_load", lambda: [dict(i) for i in ROWS])
+    items, total, pending = consults.inbox_page("心内科", "", 1, 0)
+    assert [i["id"] for i in items] == ["c3"] and total == 2 and pending == 2
+    items2, total2, pending2 = consults.inbox_page("外科", "", None, 0)
+    assert [i["id"] for i in items2] == ["c2"] and total2 == 1 and pending2 == 0
+    assert consults.inbox_page("", "", None, 0) == ([], 0, 0)
+
+
+def test_inbox_summary_passes_limit_zero_to_domain(monkeypatch, tmp_path):
+    """summary=1：路由以 limit=0 调用域层（计数照常，行不搬运）。"""
+    c, _ = _client(monkeypatch, tmp_path)
+    seen = {}
+
+    def _fake(d, q="", limit=None, offset=0):
+        seen.update(limit=limit, offset=offset)
+        return [], 3, 2
+
+    monkeypatch.setattr(consults, "inbox_page", _fake)
+    d = c.get("/api/v1/medical/consults/inbox", headers=_h(), params={"summary": 1}).json()
+    assert seen["limit"] == 0
+    assert d["items"] == [] and d["total"] == 3 and d["pendingForMe"] == 2

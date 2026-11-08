@@ -4928,6 +4928,53 @@ q=内科   ：页内 3 / total 10 == 全量过滤 10
 - 前端仍是固定 10/页、无"跳到第 N 页"；
 - JSON 回落形态的 total 仍是 `len`（没有更便宜的计数手段）。
 
+## 126. 2026-11-08 性能（第 122 批：会诊收件箱 total/pending/切片下推 PG）
+
+**问题（§125 边界）**：`/consults/inbox` 是 `/consults` 域最后一条"整箱拉取"——即使前端
+只要角标数字（`summary=1`），服务端也先把整箱会诊（病例 + AI 意见 + 影像 data URL）拉进
+进程算 `total`/`pendingForMe` 再丢掉；侧栏角标每 60s 拉一次，量级上来后是持续空转。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_CONSULT_PENDING_SQL`（`NOT EXISTS(jsonb_array_elements(opinions) e WHERE e->>'dept' = $n)`）与 `_pg_consult_inbox_page_impl`：空表判定 → 同 where 的 `COUNT(*)`（total）→ 同一 where + pending 条件再 `COUNT(*)`（待填数）→ 参数化 `LIMIT/OFFSET` 取页；同步入口 `consult_inbox_page()`，计量键 `("consults","inbox_page")` |
+| `backend/core/consults.py` | 抽出 `_inbox_where` / `_inbox_memory` / `_pending_in`；新增 `inbox_page()` → `(当前页, 过滤后总数, 待本科室填意见数)`；`inbox_for()` 保留整箱语义 |
+| `backend/api/v1/medical/consults.py` | 改调 `inbox_page`；**`summary=1` 传 `limit=0`** —— 只算两个计数、一行正文都不搬运；响应字段与审计字段不变 |
+| 测试 | `test_consult_search` +6（NOT EXISTS 形状与独立占位符编号、带关键字编号位移、limit=0、空表回落、内存回落同口径、summary 传 0）、`test_pg_consults_lists` +1（路由级：total/pending 由 COUNT 给出 + summary 空 items）；两处旧桩改 `inbox_page` |
+
+**设计取舍**
+- **pending 用 `NOT EXISTS` 而非取回 opinions**：角标只关心"本科室是否已填"，库里判空最便宜；
+- **pending 仍是"整个过滤结果"口径**（不是当前页）：翻页/分页不该改变"还有几单等我"；
+- **每个 COUNT 是独立语句、占位符独立编号**：pending 的 dept 是 `$n+1`，取数仍是 `$n+1/$n+2`
+  （初版误写成 `$n+2/$n+3`，被 SQL 形状测试与假池共同拦下）；
+- **`summary=1` 走 `limit=0`**：比在应用层"取全量再丢弃"省掉整条取数路径，含 ORDER BY。
+
+**真机验证（真实 PG，10 个科室全覆盖）**
+```
+[内科]   全箱=3 total=3 pending=2（内存 pending=2）页内累计=3
+[外科]   全箱=3 total=3 pending=2（内存 pending=2）页内累计=3
+[口腔科] 全箱=1 total=1 pending=0（内存 pending=0）页内累计=1
+[急诊科] 全箱=1 total=1 pending=1（内存 pending=1）页内累计=1
+[骨科]   全箱=1 total=1 pending=1（内存 pending=1）页内累计=1
+[空箱科室] 全箱=0 total=0 pending=0
+summary（limit=0）：items=0，total/pending 与全量一致，单次 2.0–2.8ms
+```
+
+**校验**
+- 定向：`test_consult_search + test_consults + test_pg_consults_lists + test_consult_inbox_paging`
+  **65 passed**；
+- 全量 pytest：**1513 passed / 0 failed / 1 skipped**（5:22，含 e2e；连续第八批零失败）。
+
+**仍存边界**
+- 一次请求最多 4 次查询（空表判定 + total + pending + 取数；summary 为 3 次），未合并为单条
+  CTE（合并后可省一次往返，但 SQL 可读性下降）；
+- 三次查询非同一快照：并发填写意见时 pending 可能比页内实际多/少 1；
+- `pending` 的 `NOT EXISTS` 对 `opinions` 数组逐元素展开，意见多的单会有解析开销
+  （可加 `data->'opinions' @> '[{"dept": ...}]'` 走 GIN，未做）；
+- 空表判定仍是 `count(*)` 全表（沿用既有"PG 空表 → JSON 真源"纪律）；
+- 前端未改：仍 10/页、角标 60s 轮询（服务端已变便宜，轮询频率未动）。
+
+
 
 
 

@@ -1900,6 +1900,57 @@ def consult_page(where: str, params: tuple = (), limit: int | None = None,
         return None
 
 
+# 第 122 批：收件箱角标"待本科室填意见"的库内计数。
+# 语义与前端原 `opinions.some(dept)` 取反一致：该会诊的 opinions 里**没有**本科室的意见。
+_CONSULT_PENDING_SQL = (
+    " AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements("
+    "coalesce(data->'opinions', '[]'::jsonb)) e WHERE e->>'dept' = ${n})"
+)
+
+
+async def _pg_consult_inbox_page_impl(where: str, params: list, limit: int | None,
+                                      offset: int, dept: str) -> dict | None:
+    """收件箱分页：{"items", "total", "pending"}；空表 → None。
+
+    `pending` 是**整个过滤结果**里"本科室还没填意见"的条数（不是当前页），与第 77 批
+    的应用层口径一致——角标要的是"还有几单等我"，翻页不该改变它。"""
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM consults"):
+            return None
+        total = int(await c.fetchval(  # noqa: S608 —— where 为域层固定片段
+            "SELECT count(*) FROM consults WHERE " + where, *params) or 0)
+        n = len(params)
+        pending = int(await c.fetchval(  # noqa: S608 —— dept 走参数位，非拼接
+            "SELECT count(*) FROM consults WHERE " + where
+            + _CONSULT_PENDING_SQL.format(n=n + 1), *params, dept) or 0)
+        sql = _CONSULT_WHERE_SELECT + where + _CONSULT_ORDER  # noqa: S608
+        if limit is None:
+            rows = await c.fetch(sql, *params)
+        else:
+            # 占位符按**本语句**编号（与上面 pending 语句各自独立，不接着往后排）
+            rows = await c.fetch(  # noqa: S608 —— 参数化 LIMIT/OFFSET
+                sql + f" LIMIT ${n + 1} OFFSET ${n + 2}",
+                *params, max(0, int(limit)), max(0, int(offset)))
+    items = [d for d in (_json_data_row(r) for r in rows) if d is not None]
+    return {"items": items, "total": total, "pending": pending}
+
+
+def consult_inbox_page(where: str, params: tuple = (), limit: int | None = None,
+                       offset: int = 0, dept: str = "") -> dict | None:
+    """收件箱分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "consults.json" in _repo_pg_stale:
+        return None
+    try:
+        return _pg_call("consults", "inbox_page",
+                        _pg_consult_inbox_page_impl(where, list(params or ()), limit,
+                                                    offset, dept))
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，收件箱照常可用
+        logger.warning("pg.consult_inbox_page_failed", error=str(e)[:120])
+        return None
+
+
 # ---- 第 85 批：单据类（consults/prescriptions）按主键直查 ----
 # 与第 84 批复核详情同一模式：三态 (found, item)——(True, dict) 命中 / (True, None) 确定不存在 /
 # (False, None) PG 无法回答（调用方回落 JSON 线性查找）。表名只接受本模块内部常量。

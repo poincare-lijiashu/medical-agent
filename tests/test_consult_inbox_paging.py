@@ -21,8 +21,17 @@ INBOX = [
 def _client(monkeypatch, tmp_path, dept="心内科"):
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
     monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
-    monkeypatch.setattr(consults, "inbox_for",
-                        lambda d, q="": [dict(i) for i in INBOX] if d else [])
+    # 第 122 批：路由改调 inbox_page（过滤 → total/pending → 切片 三项一起下推 PG）
+    def _fake_page(d, q="", limit=None, offset=0):
+        items = [dict(i) for i in INBOX] if d else []
+        total = len(items)
+        pending = sum(1 for c in items
+                      if not any((o or {}).get("dept") == d for o in (c.get("opinions") or [])))
+        if limit is not None:
+            items = items[offset:offset + limit]
+        return items, total, pending
+
+    monkeypatch.setattr(consults, "inbox_page", _fake_page)
     monkeypatch.setattr("backend.api.deps.get_user",
                         lambda u: {"role": "", "dept": dept})
     return TestClient(app), log

@@ -177,26 +177,66 @@ def get(cid: str) -> dict | None:
     return None
 
 
-def inbox_for(dept: str, q: str = "") -> list[dict]:
-    """某科室的会诊收件箱：target_depts 含该科室且仍 open 的单，新→旧。
-
-    实时按 dept 匹配（users.dept 即此值）：分发即达目标科室全部在职医生，无名单快照。
-    第 89 批：优先 PG 条件查询（jsonb 数组包含），空表/无池/异常回落既有内存过滤。
-    第 116 批：`q` 下推 PG（`consult_search_cond`）；回落内存时用 `matches_query` 同口径过滤。"""
-    if not dept:
-        return []
+def _inbox_where(dept: str, q: str) -> tuple[str, tuple]:
+    """收件箱 where 片段（open + 受邀科室包含 + 可选关键字）。"""
     conds = ["status = 'open'", "data->'target_depts' @> $1::jsonb"]
     params: list = [json.dumps([dept], ensure_ascii=False)]
     kw = (q or "").strip().lower()
     if kw:
         params.append(pg_store._like_contains(kw))
         conds.append(pg_store.consult_search_cond(len(params)))
-    rows = pg_store.consult_list(" AND ".join(conds), tuple(params))
-    if rows is not None:
-        return rows
+    return " AND ".join(conds), tuple(params)
+
+
+def _inbox_memory(dept: str, q: str) -> list[dict]:
+    """内存回落：dept 实时匹配 + 关键字，新→旧（与 PG 路径同口径）。"""
+    kw = (q or "").strip().lower()
     return [i for i in _load()[::-1]
             if i.get("status") == "open" and dept in (i.get("target_depts") or [])
             and matches_query(i, kw)]
+
+
+def _pending_in(items: list[dict], dept: str) -> int:
+    """"本科室还没填意见"条数（角标口径：只看是否已有本科室意见，不看医生个人）。"""
+    return sum(1 for c in items
+               if not any((o or {}).get("dept") == dept for o in (c.get("opinions") or [])))
+
+
+def inbox_for(dept: str, q: str = "") -> list[dict]:
+    """某科室的会诊收件箱：target_depts 含该科室且仍 open 的单，新→旧。
+
+    实时按 dept 匹配（users.dept 即此值）：分发即达目标科室全部在职医生，无名单快照。
+    第 89 批：优先 PG 条件查询（jsonb 数组包含），空表/无池/异常回落既有内存过滤。
+    第 116 批：`q` 下推 PG（`consult_search_cond`）；回落内存时用 `matches_query` 同口径过滤。
+    第 122 批：分页/计数调用方用 `inbox_page`（本函数保留整箱语义）。"""
+    if not dept:
+        return []
+    where, params = _inbox_where(dept, q)
+    rows = pg_store.consult_list(where, params)
+    if rows is not None:
+        return rows
+    return _inbox_memory(dept, q)
+
+
+def inbox_page(dept: str, q: str = "", limit: int | None = None,
+               offset: int = 0) -> tuple[list[dict], int, int]:
+    """收件箱分页：返回 (当前页, 过滤后总数, **待本科室填意见**条数)。
+
+    第 122 批：三件事一起下推 PG——COUNT(*) 取 total、`NOT EXISTS(opinions.dept)` 取
+    pending、参数化 LIMIT/OFFSET 取页；`pending` 仍是**整个过滤结果**的口径（角标不随
+    翻页变化）。`summary=1` 时路由传 `limit=0`，只算两个计数不搬运任何正文。
+    PG 不可用 → 内存过滤 + 切片，三项语义与 PG 路径一致。"""
+    if not dept:
+        return [], 0, 0
+    where, params = _inbox_where(dept, q)
+    page = pg_store.consult_inbox_page(where, params, limit, offset, dept)
+    if page is not None:
+        return page["items"], int(page["total"]), int(page["pending"])
+    items = _inbox_memory(dept, q)
+    total, pending = len(items), _pending_in(items, dept)
+    if limit is not None:
+        items = items[offset:offset + limit]
+    return items, total, pending
 
 
 def _initiator_conds(user: str, q: str) -> tuple[str, tuple]:

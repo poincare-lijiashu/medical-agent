@@ -86,6 +86,13 @@ class _FakeConn:
         s = " ".join(sql.split())
         if s == "SELECT count(*) FROM consults":
             return len(self.rows)
+        # 第 122 批：收件箱的"待本科室填意见"计数（NOT EXISTS opinions.dept）
+        if "NOT EXISTS" in s:
+            where = s.split(" WHERE ", 1)[1].split(" AND NOT EXISTS", 1)[0]
+            dept = a[-1]
+            rows = [r for r in self.rows if _match(r, where, a[:-1])]
+            return len([r for r in rows
+                        if not any(o.get("dept") == dept for o in (r.get("opinions") or []))])
         # 第 121 批：分页下推会先做一次带 where 的 COUNT（total）
         if s.startswith("SELECT count(*) FROM consults WHERE "):
             return len([r for r in self.rows if _match(r, s.split(" WHERE ", 1)[1], a)])
@@ -168,10 +175,10 @@ def test_domain_falls_back_to_json(monkeypatch):
 
 # ---------- 路由层 ----------
 
-def _client(monkeypatch, tmp_path):
+def _client(monkeypatch, tmp_path, dept=""):
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
     monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
-    monkeypatch.setattr("backend.api.deps.get_user", lambda u: {"role": "", "dept": ""})
+    monkeypatch.setattr("backend.api.deps.get_user", lambda u: {"role": "", "dept": dept})
     return TestClient(app)
 
 
@@ -207,3 +214,23 @@ def test_route_mine_paging_uses_sql_limit(monkeypatch, tmp_path):
     assert [i["id"] for i in d["initiated"]] == ["c3", "c1"]
     assert d["initiatedTotal"] == 3
     assert d["participated"] == [] and d["participatedTotal"] == 1
+
+
+def test_route_inbox_counts_pending_via_sql(monkeypatch, tmp_path):
+    """第 122 批：收件箱 total/pendingForMe 由库内 COUNT 给出，页内走 LIMIT/OFFSET。"""
+    _use_pool(monkeypatch)
+
+    def _boom():
+        raise AssertionError("PG 可用时收件箱不应再读全量 consults")
+
+    monkeypatch.setattr(consult_mod, "_load", _boom)
+    c = _client(monkeypatch, tmp_path, dept="心内科")
+    tok = create_access_token("doctor01", "doctor")
+    h = {"Authorization": "Bearer " + tok}
+
+    d = c.get("/api/v1/medical/consults/inbox?limit=1&offset=0", headers=h).json()
+    assert [i["id"] for i in d["items"]] == ["c2"]  # 新→旧，取第 1 条
+    assert d["total"] == 2 and d["pendingForMe"] == 1  # c2 已填本科室意见，c1 未填
+
+    s = c.get("/api/v1/medical/consults/inbox?summary=1", headers=h).json()
+    assert s["items"] == [] and s["total"] == 2 and s["pendingForMe"] == 1

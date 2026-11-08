@@ -146,20 +146,16 @@ async def consult_inbox(
     第 111 批：`q` 在 dept 隔离之后、分页之前过滤（total/pendingForMe 同口径）；
     审计只记"是否带关键字"（不记录关键字本身，避免病例内容进审计）。
     角标轮询（summary=1）不传 q，口径保持"整箱待我填"。
+    第 122 批：total / pendingForMe / 切片三项一起下推 PG；summary=1 时以 `limit=0`
+    取数——只算两个计数，不把会诊正文/意见/影像搬进进程。
     """
     from backend.core import consults
     me = user.get("username", "system")
     dept = user.get("dept", "")
     q_f = (q or "").strip()[:100]
-    # 第 116 批：q 下推到 PG（consults.inbox_for 内部拼条件），不再先拉全箱再过滤
-    items = await asyncio.to_thread(consults.inbox_for, dept, q_f) if dept else []
-    total = len(items)
-    pending_for_me = sum(
-        1 for c in items
-        if not any((o or {}).get("dept") == dept for o in (c.get("opinions") or []))
-    )
-    page = [] if summary else (
-        items[offset:offset + limit] if limit is not None else items[offset:])
+    items, total, pending_for_me = await asyncio.to_thread(
+        consults.inbox_page, dept, q_f, 0 if summary else limit, offset)
+    page = items
     if not silent:
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="list_inbox",
                                 actor=me, payload={"n": len(page), "total": total, "dept": dept,
