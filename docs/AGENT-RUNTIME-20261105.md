@@ -4037,6 +4037,45 @@ medassist_agent_pg_write_total{domain="users",op="delete_row"} 0
 - 内存计数包含未知状态（计入 `counts`，不计入 resolved），与 PG 实现一致；
 - `/overview` 的 `events_total` 仍取进程内审计条数（重启归零语义未变）。
 
+## 104. 2026-11-08 可观测性交付（第 100 批：Grafana 数据源/面板 provisioning）
+
+**问题**：监控链路此前有 `/metrics` 抓取（G105）、25 条告警规则、Alertmanager 送达与
+Loki 日志，但**没有可视化面板**——值班人员只能手写 PromQL 或看告警文本；面板靠手工
+创建又会在重建环境后丢失。
+
+**实现（全部声明式，容器启动即生效）**
+| 文件 | 变更 |
+|---|---|
+| `deploy/observability/grafana/provisioning/datasources/prometheus.yml` | 数据源 uid=`prometheus` → `http://prometheus:9090`，默认源、只读 |
+| `deploy/observability/grafana/provisioning/dashboards/medassist.yml` | file provider：`/var/lib/grafana/dashboards`，30s 重扫，`allowUiUpdates=false`（文件即真源） |
+| `deploy/observability/grafana/dashboards/medassist-overview.json` | 9 个面板：问答 QPS、错误率、同步 P95、Token、技能使用 top、PG 读/写 P95、PG 读/写错误、存储与依赖状态 |
+| `deploy/observability/docker-compose.observability.yml` | 新增 grafana 服务：仅回环 3000、匿名关闭、注册关闭、健康检查、两个只读挂载 + `medagent_grafana` 命名卷 |
+| `tests/test_grafana_provisioning.py` | +5：数据源 uid 与面板引用一致、provider 路径、面板 PromQL 指标必须能从 `/metrics` 导出、panel id 唯一、compose 接线与安全开关 |
+| `docs/DEPLOY.md` | 新增「5.1 可视化面板」：启动命令、交付物表、口令注入与 K8s 迁移提示 |
+
+**真实容器验证（Docker 29.7.2，grafana/grafana:11.4.0）**
+```
+docker compose ... up -d --no-deps grafana  → Container medagent_grafana Started
+GET /api/health     → {"database":"ok","version":"11.4.0"}
+GET /api/search?query=MedAssist → uid=medassist-overview, folder=MedAssist
+GET /api/dashboards/uid/medassist-overview → title="MedAssist · AI 中台总览", panels=9
+面板标题逐个核对（问答 QPS/错误率/P95、Token、技能、PG 读/写 P95、PG 错误、存储状态）
+验证后已 stop + rm 容器，不残留运行实例。
+```
+`docker compose config --quiet` 通过（compose 语法与变量展开合法）。
+
+**校验**
+- 定向 `test_grafana_provisioning + test_deploy_observability` **11 passed**；
+- 全量 pytest：**1425 passed**（1420 + 本批 5）。
+
+**仍存边界**
+- 数据源只有 Prometheus；Loki 日志已在采集但未接入 Grafana（需再加 Loki 数据源与日志面板）；
+- 未接入 Alertmanager 数据源，面板看不到"正在触发的告警"（只在 Prometheus/Alertmanager UI）；
+- 默认口令 `admin` 仅为本地便捷；院区必须注入 `GRAFANA_ADMIN_PASSWORD` 并首次登录修改；
+- 面板未做逐图视觉验收（只验证 API 层面的 provisioning 与指标名对齐）；
+- K8s 形态未落 ConfigMap/sidecar 清单，仅文档说明迁移方式；
+- 面板刷新 30s、查询窗口 5–10 分钟，未做变量（科室/实例）与下钻联动。
+
 
 
 

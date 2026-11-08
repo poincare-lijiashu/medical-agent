@@ -1,0 +1,13 @@
+apiVersion: 1
+
+# 第 100 批：Prometheus 数据源（Grafana provisioning，容器启动即生效，无需手工点选）
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s

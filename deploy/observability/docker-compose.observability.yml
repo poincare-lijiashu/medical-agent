@@ -133,6 +133,37 @@ services:
       retries: 10
       start_period: 20s
 
+  # ---- 可视化：Grafana（第 100 批）----------------------------------------
+  # 数据源与仪表盘全部走 provisioning（容器启动即生效，无需手工点选）。
+  # 安全：仅本机回环 3000；匿名访问默认关闭，登录口令由 GRAFANA_ADMIN_PASSWORD 注入
+  # （默认 admin，首次登录后必须修改；院区部署请从 .env.local/Secret 注入强口令）。
+  # 仪表盘目录：deploy/observability/grafana/dashboards（唯一数据源 = Prometheus）。
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.4.0}
+    container_name: medagent_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - medagent_grafana:/var/lib/grafana
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   # ---- 告警送达：Alertmanager + 本地日志 sink（第 52 批）--------------------
   # Prometheus 规则命中 → alertmanager → alert-sink（仅打印摘要到 stdout）。
   # 验证：docker logs medagent_alert_sink | findstr ALERT_WEBHOOK
@@ -214,3 +245,4 @@ volumes:
   medagent_promtail_positions:
   medagent_prometheus:
   medagent_alertmanager:
+  medagent_grafana:

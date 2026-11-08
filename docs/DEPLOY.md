@@ -129,6 +129,25 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 - K8s 默认 `serviceMonitor.aiCore.enabled=false`、`serviceMonitor.rules.enabled=false` —— **打开 ServiceMonitor 不等于指标都在采**，需在环境 values 文件显式开启（Argo CD 下 `--set` 不持久化）。
 - 回滚：`METRICS_TOKEN` 留空 → `/metrics` 退回 admin-only，Java 侧 `/actuator/prometheus` 不受影响。
 
+### 5.1 可视化面板（Grafana，第 100 批）
+
+本地/院区 compose 已内置 Grafana（provisioning 交付，**无需手工建数据源/导入面板**）：
+
+```powershell
+docker compose -f deploy/observability/docker-compose.observability.yml up -d grafana
+# http://127.0.0.1:3000（默认 admin/admin，首次登录后必须改；匿名访问默认关闭）
+```
+
+| 交付物 | 路径 | 说明 |
+| --- | --- | --- |
+| 数据源 | `deploy/observability/grafana/provisioning/datasources/prometheus.yml` | uid=`prometheus`，指向 `http://prometheus:9090` |
+| 面板目录 | `deploy/observability/grafana/provisioning/dashboards/medassist.yml` | 挂载 `/var/lib/grafana/dashboards`，30s 重扫 |
+| 总览面板 | `deploy/observability/grafana/dashboards/medassist-overview.json` | 9 个面板：问答 QPS/错误率/P95、Token、技能使用、PG 读写 P95 与错误、存储/依赖状态 |
+
+- 面板只引用 `/metrics` 真实导出的指标（`test_grafana_provisioning.py` 与告警规则门禁同口径）；
+- 口令通过 `GRAFANA_ADMIN_PASSWORD` 注入（`.env.local` / K8s Secret），不要用默认值；
+- K8s 形态可用同一份 JSON 走 ConfigMap + Grafana sidecar 或 `grafana-operator`，数据源 URL 改为集群内 Prometheus Service。
+
 ### 6. 灾难恢复：抓取链路恢复清单
 
 备份是仓库级（`git`）+ 数据级（`backup.py`），**令牌类文件故意不入库/不入备份**，因此恢复后必须重做：

@@ -1,0 +1,14 @@
+apiVersion: 1
+
+# 第 100 批：仪表盘目录（挂载 ./grafana/dashboards → /var/lib/grafana/dashboards）
+providers:
+  - name: medassist
+    orgId: 1
+    folder: MedAssist
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
