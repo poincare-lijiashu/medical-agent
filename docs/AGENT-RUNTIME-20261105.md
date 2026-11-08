@@ -4749,7 +4749,7 @@ SQL 对账：SELECT to_char(ts,'YYYY-MM'), count(*) … → 345 / 1904（合计 
 
 **校验**
 - 定向：`test_audit_archive` **8 passed**；
-- 全量 pytest：待补（后台运行完成即记）。
+- 全量 pytest：**1489 passed / 0 failed / 1 skipped**（5:09，含 e2e；连续第三批零失败）。
 
 **仍存边界**
 - `--apply` 是单次 `DELETE`，百万级会长时间持锁（需按 id 分批）；
