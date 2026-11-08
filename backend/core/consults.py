@@ -199,36 +199,87 @@ def inbox_for(dept: str, q: str = "") -> list[dict]:
             and matches_query(i, kw)]
 
 
-def by_initiator(user: str, q: str = "") -> list[dict]:
-    """发起者视角：本人发起的全部会诊（含已结束），新→旧。
-    第 89 批：优先 PG 条件查询，空表/无池/异常回落内存过滤；第 116 批 `q` 下推。"""
+def _initiator_conds(user: str, q: str) -> tuple[str, tuple]:
+    """发起者视角的 where 片段（第 116 批 q 下推的固定形态，分页/整表共用）。"""
     conds, params = ["initiator = $1"], [user]
     kw = (q or "").strip().lower()
     if kw:
         params.append(pg_store._like_contains(kw))
         conds.append(pg_store.consult_search_cond(len(params)))
-    rows = pg_store.consult_list(" AND ".join(conds), tuple(params))
-    if rows is not None:
-        return rows
-    return [i for i in _load()[::-1] if i.get("initiator") == user and matches_query(i, kw)]
+    return " AND ".join(conds), tuple(params)
 
 
-def participated(user: str, q: str = "") -> list[dict]:
-    """参与视角：本人作为受邀科室医生给过意见（每人一票留痕）的会诊，新→旧。
-    第 89 批：优先 PG 条件查询（opinions jsonb 包含 {doctor: user}），异常回落内存。
-    第 116 批 `q` 下推。"""
+def _participated_conds(user: str, q: str) -> tuple[str, tuple]:
+    """参与视角的 where 片段（opinions jsonb 包含 {doctor: user}）。"""
     conds = ["data->'opinions' @> $1::jsonb"]
     params: list = [json.dumps([{"doctor": user}], ensure_ascii=False)]
     kw = (q or "").strip().lower()
     if kw:
         params.append(pg_store._like_contains(kw))
         conds.append(pg_store.consult_search_cond(len(params)))
-    rows = pg_store.consult_list(" AND ".join(conds), tuple(params))
+    return " AND ".join(conds), tuple(params)
+
+
+def by_initiator(user: str, q: str = "") -> list[dict]:
+    """发起者视角：本人发起的全部会诊（含已结束），新→旧。
+    第 89 批：优先 PG 条件查询，空表/无池/异常回落内存过滤；第 116 批 `q` 下推。
+    第 121 批：整表调用方用本函数；分页调用方用 `by_initiator_page`（切片与计数下推 PG）。"""
+    where, params = _initiator_conds(user, q)
+    rows = pg_store.consult_list(where, params)
     if rows is not None:
         return rows
+    kw = (q or "").strip().lower()
+    return [i for i in _load()[::-1] if i.get("initiator") == user and matches_query(i, kw)]
+
+
+def by_initiator_page(user: str, q: str = "", limit: int | None = None,
+                      offset: int = 0) -> tuple[list[dict], int]:
+    """发起者视角分页：返回 (当前页, **过滤后**总数)，新→旧。
+
+    第 121 批：把 LIMIT/OFFSET 与 COUNT 一起下推 PG（`consult_page`）；`limit=None`
+    仍取全量（旧行为），只是 total 改为库内统计。PG 不可用 → 内存过滤后切片，
+    total 含义与 PG 路径一致（过滤后的全量条数，不是当前页长度）。"""
+    where, params = _initiator_conds(user, q)
+    page = pg_store.consult_page(where, params, limit, offset)
+    if page is not None:
+        return page["items"], int(page["total"])
+    kw = (q or "").strip().lower()
+    items = [i for i in _load()[::-1] if i.get("initiator") == user and matches_query(i, kw)]
+    total = len(items)
+    if limit is not None:
+        items = items[offset:offset + limit]
+    return items, total
+
+
+def participated(user: str, q: str = "") -> list[dict]:
+    """参与视角：本人作为受邀科室医生给过意见（每人一票留痕）的会诊，新→旧。
+    第 89 批：优先 PG 条件查询（opinions jsonb 包含 {doctor: user}），异常回落内存。
+    第 116 批 `q` 下推；第 121 批分页见 `participated_page`。"""
+    where, params = _participated_conds(user, q)
+    rows = pg_store.consult_list(where, params)
+    if rows is not None:
+        return rows
+    kw = (q or "").strip().lower()
     return [i for i in _load()[::-1]
             if any(o.get("doctor") == user for o in (i.get("opinions") or []))
             and matches_query(i, kw)]
+
+
+def participated_page(user: str, q: str = "", limit: int | None = None,
+                      offset: int = 0) -> tuple[list[dict], int]:
+    """参与视角分页（语义与 `by_initiator_page` 完全对称）。"""
+    where, params = _participated_conds(user, q)
+    page = pg_store.consult_page(where, params, limit, offset)
+    if page is not None:
+        return page["items"], int(page["total"])
+    kw = (q or "").strip().lower()
+    items = [i for i in _load()[::-1]
+             if any(o.get("doctor") == user for o in (i.get("opinions") or []))
+             and matches_query(i, kw)]
+    total = len(items)
+    if limit is not None:
+        items = items[offset:offset + limit]
+    return items, total
 
 
 def matches_query(item: dict, q: str) -> bool:

@@ -10,6 +10,7 @@
 说明：本文件 monkeypatch `consults.inbox_for` 直接返回固定集合（绕过 dept 隔离），
 dept 隔离语义由 tests/test_consult_inbox_paging.py 覆盖。
 """
+import asyncio
 import json
 
 from fastapi.testclient import TestClient
@@ -44,6 +45,23 @@ def _client(monkeypatch, tmp_path, dept="心内科"):
 
 def _h():
     return {"Authorization": "Bearer " + create_access_token("doctor01", "doctor")}
+
+
+def _stub_mine_pages(monkeypatch):
+    """桩：`/consults/mine` 的两侧分页域函数（第 121 批起路由改调 `*_page`）。
+    这里复刻过滤 → total → 切片三步，语义与 PG 下推一致。"""
+    def _fake(pool, u, q="", limit=None, offset=0):
+        items = [dict(i) for i in pool if consults.matches_query(i, q)]
+        total = len(items)
+        if limit is not None:
+            items = items[offset:offset + limit]
+        return items, total
+
+    monkeypatch.setattr(consults, "by_initiator_page",
+                        lambda u, q="", limit=None, offset=0: _fake(ROWS, u, q, limit, offset))
+    monkeypatch.setattr(consults, "participated_page",
+                        lambda u, q="", limit=None, offset=0: _fake(
+                            [ROWS[1]], u, q, limit, offset))
 
 
 def test_matches_query_covers_all_fields():
@@ -106,11 +124,7 @@ def test_inbox_audit_records_flag_not_keyword(monkeypatch, tmp_path):
 
 def test_mine_q_filters_both_sides(monkeypatch, tmp_path):
     c, log = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(consults, "by_initiator",
-                        lambda u, q="": [dict(i) for i in ROWS if consults.matches_query(i, q)])
-    monkeypatch.setattr(consults, "participated",
-                        lambda u, q="": ([dict(ROWS[1])]
-                                         if consults.matches_query(ROWS[1], q) else []))
+    _stub_mine_pages(monkeypatch)
     d = c.get("/api/v1/medical/consults/mine", headers=_h(), params={"q": "胸痛"}).json()
     assert [i["id"] for i in d["initiated"]] == ["c1"]
     assert d["participated"] == []
@@ -192,11 +206,7 @@ def test_inbox_fallback_filters_in_memory(monkeypatch):
 def test_mine_paging_slices_both_sides(monkeypatch, tmp_path):
     """/consults/mine：两侧共用 limit/offset，total 为过滤后全量；不传 limit 保持旧的全量行为。"""
     c, log = _client(monkeypatch, tmp_path)
-    monkeypatch.setattr(consults, "by_initiator",
-                        lambda u, q="": [dict(i) for i in ROWS if consults.matches_query(i, q)])
-    monkeypatch.setattr(consults, "participated",
-                        lambda u, q="": ([dict(ROWS[1])]
-                                         if consults.matches_query(ROWS[1], q) else []))
+    _stub_mine_pages(monkeypatch)
 
     d = c.get("/api/v1/medical/consults/mine", headers=_h(),
               params={"limit": 2, "offset": 0}).json()
@@ -222,3 +232,112 @@ def test_mine_paging_slices_both_sides(monkeypatch, tmp_path):
     d4 = c.get("/api/v1/medical/consults/mine", headers=_h()).json()
     assert len(d4["initiated"]) == 3 and d4["initiatedTotal"] == 3
     assert d4["limit"] is None
+
+
+# ---------- 第 121 批：我的会诊分页下推 PG（LIMIT/OFFSET + 同口径 COUNT） ----------
+
+class _CaptureConn:
+    """记录 SQL 与参数的假连接：count(*) 走 fetchval，取数走 fetch（返回0行即可）。"""
+
+    def __init__(self, total=2, table_rows=3):
+        self.total = total
+        self.table_rows = table_rows
+        self.sqls: list[str] = []
+        self.args: list[tuple] = []
+
+    async def fetchval(self, sql, *a):
+        s = " ".join(sql.split())
+        self.sqls.append(s)
+        if s == "SELECT count(*) FROM consults":
+            return self.table_rows
+        return self.total
+
+    async def fetch(self, sql, *a):
+        self.sqls.append(" ".join(sql.split()))
+        self.args.append(a)
+        return []
+
+
+class _CaptureAcquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _CapturePool:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return _CaptureAcquire(self.conn)
+
+
+def test_consult_page_sql_pushes_limit_and_counts(monkeypatch):
+    """LIMIT/OFFSET 参数化下推；COUNT 用同一 where、同一组参数（total 与页内同口径）。"""
+    conn = _CaptureConn(total=7)
+    monkeypatch.setattr(pg_store, "_pool", _CapturePool(conn))
+    out = asyncio.run(pg_store._pg_consult_page_impl("initiator = $1", ["doctor01"], 10, 20))
+    assert out == {"items": [], "total": 7}
+    assert "SELECT count(*) FROM consults WHERE initiator = $1" in conn.sqls
+    sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
+    assert sel and sel[0].endswith("LIMIT $2 OFFSET $3"), sel
+    assert conn.args[0] == ("doctor01", 10, 20)
+
+
+def test_consult_page_without_limit_keeps_full_sql(monkeypatch):
+    """limit=None 保持旧的整表语义（无 LIMIT 子句），但仍返回总数。"""
+    conn = _CaptureConn(total=5)
+    monkeypatch.setattr(pg_store, "_pool", _CapturePool(conn))
+    out = asyncio.run(pg_store._pg_consult_page_impl("initiator = $1", ["doctor01"], None, 0))
+    assert out == {"items": [], "total": 5}
+    sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
+    assert sel and "LIMIT" not in sel[0]
+    assert conn.args[0] == ("doctor01",)
+
+
+def test_consult_page_empty_table_falls_back(monkeypatch):
+    """空表 → None（JSON 才是真源），调用方回落内存而非返回空页。"""
+    conn = _CaptureConn(table_rows=0)
+    monkeypatch.setattr(pg_store, "_pool", _CapturePool(conn))
+    assert asyncio.run(pg_store._pg_consult_page_impl("initiator = $1", ["x"], 10, 0)) is None
+
+
+def test_by_initiator_page_uses_pg_page(monkeypatch):
+    """域层把 limit/offset 与过滤条件原样交给 pg_store.consult_page，并回传其 total。"""
+    seen = {}
+
+    def _fake_page(where, params, limit=None, offset=0):
+        seen.update(where=where, params=params, limit=limit, offset=offset)
+        return {"items": [{"id": "c1"}], "total": 42}
+
+    monkeypatch.setattr(pg_store, "consult_page", _fake_page)
+    items, total = consults.by_initiator_page("doctor01", "胸痛", 10, 20)
+    assert items == [{"id": "c1"}] and total == 42
+    assert seen["where"] == "initiator = $1 AND " + pg_store.consult_search_cond(2)
+    assert seen["params"] == ("doctor01", "胸痛")
+    assert seen["limit"] == 10 and seen["offset"] == 20
+
+    consults.participated_page("doctor01", "", 5, 0)
+    assert seen["where"] == "data->'opinions' @> $1::jsonb"
+    assert json.loads(seen["params"][0]) == [{"doctor": "doctor01"}]
+
+
+def test_page_fallback_filters_then_slices_in_memory(monkeypatch):
+    """PG 不可用 → 内存过滤 + 切片，total 仍是过滤后全量（不是页长度）。"""
+    monkeypatch.setattr(pg_store, "consult_page", lambda *a, **k: None)
+    monkeypatch.setattr(consults, "_load", lambda: [dict(i) for i in ROWS])
+    # ROWS 按文件顺序（c1,c2,c3）；内存路径为 _load()[::-1] → 倒序
+    items, total = consults.by_initiator_page("doctor01", "", 1, 1)
+    assert total == 2 and [i["id"] for i in items] == ["c1"]
+
+    items2, total2 = consults.by_initiator_page("doctor01", "胸痛")
+    assert total2 == 1 and [i["id"] for i in items2] == ["c1"]  # limit=None 全量
+
+    part, part_total = consults.participated_page("waike01", "清创", 5, 0)
+    assert part_total == 1 and [i["id"] for i in part] == ["c2"]
+    assert consults.participated_page("waike01", "不存在")[1] == 0

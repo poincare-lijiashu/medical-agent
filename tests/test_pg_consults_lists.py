@@ -5,6 +5,7 @@
 （与内存 `[::-1]` 同序）；空表/无池/离线/异常回落既有内存实现，行为不变。
 """
 import json
+import re
 
 from fastapi.testclient import TestClient
 
@@ -85,16 +86,28 @@ class _FakeConn:
         s = " ".join(sql.split())
         if s == "SELECT count(*) FROM consults":
             return len(self.rows)
+        # 第 121 批：分页下推会先做一次带 where 的 COUNT（total）
+        if s.startswith("SELECT count(*) FROM consults WHERE "):
+            return len([r for r in self.rows if _match(r, s.split(" WHERE ", 1)[1], a)])
         raise AssertionError(f"假池未实现的 fetchval: {s[:100]}")
 
     async def fetch(self, sql, *a):
         s = " ".join(sql.split())
         assert s.startswith("SELECT data FROM consults WHERE"), s[:100]
-        where = s.split(" WHERE ", 1)[1].split(" ORDER BY ", 1)[0]
+        where, rest = s.split(" WHERE ", 1)[1].split(" ORDER BY ", 1)
+        # LIMIT/OFFSET 是参数化的（$n/$n+1），按占位符序号从参数尾部取出
+        m = re.search(r"LIMIT \$(\d+) OFFSET \$(\d+)", rest)
+        limit = offset = None
+        if m:
+            limit = a[int(m.group(1)) - 1]
+            offset = a[int(m.group(2)) - 1]
+            a = a[:int(m.group(1)) - 1]
         rows = [r for r in self.rows if _match(r, where, a)]
-        return [{"data": json.dumps(r, ensure_ascii=False)}
-                for r in sorted(rows, key=lambda r: (r.get("created_at") or "", r.get("id") or ""),
-                                reverse=True)]
+        rows = sorted(rows, key=lambda r: (r.get("created_at") or "", r.get("id") or ""),
+                      reverse=True)
+        if offset is not None:
+            rows = rows[offset:offset + limit]
+        return [{"data": json.dumps(r, ensure_ascii=False)} for r in rows]
 
 
 def _use_pool(monkeypatch, rows=ROWS):
@@ -177,3 +190,20 @@ def test_route_mine_uses_pg(monkeypatch, tmp_path):
     d = r.json()
     assert [i["id"] for i in d["initiated"]] == ["c4", "c3", "c1"]
     assert [i["id"] for i in d["participated"]] == ["c2"]
+
+
+def test_route_mine_paging_uses_sql_limit(monkeypatch, tmp_path):
+    """第 121 批：limit/offset 下推 PG，total 由同口径 COUNT 给出（不再读全量切片）。"""
+    _use_pool(monkeypatch)
+
+    def _boom():
+        raise AssertionError("PG 可用时分页不应再读全量 consults")
+
+    monkeypatch.setattr(consult_mod, "_load", _boom)
+    c = _client(monkeypatch, tmp_path)
+    tok = create_access_token("doctor01", "doctor")
+    d = c.get("/api/v1/medical/consults/mine?limit=2&offset=1",
+              headers={"Authorization": "Bearer " + tok}).json()
+    assert [i["id"] for i in d["initiated"]] == ["c3", "c1"]
+    assert d["initiatedTotal"] == 3
+    assert d["participated"] == [] and d["participatedTotal"] == 1

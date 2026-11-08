@@ -1830,14 +1830,17 @@ def upsert_consult_row(item: dict) -> None:
 # ---- 第 89 批：会诊列表（收件箱/我发起/我参与）下推 PG ----
 # 三个列表原本都是 `_load()[::-1]` 全表扫描后内存过滤；收件箱还被角标每 60s 拉一次。
 # where 片段由 consults 域层以固定常量传入，值走 $n（科室/用户名用 jsonb 数组包含匹配）。
+_CONSULT_WHERE_SELECT = "SELECT data FROM consults WHERE "
+# 新→旧：created_at 缺失的行排最后（NULLS LAST），同刻按 id 倒序保证分页稳定
+_CONSULT_ORDER = " ORDER BY data->>'created_at' DESC NULLS LAST, id DESC"
+
 
 async def _pg_consult_list_impl(where: str, params: list) -> list | None:
     async with _pool.acquire() as c:
         if not await c.fetchval("SELECT count(*) FROM consults"):
             return None  # 空表 → JSON 才是真源
         rows = await c.fetch(  # noqa: S608 —— where 为域层固定片段
-            "SELECT data FROM consults WHERE " + where
-            + " ORDER BY data->>'created_at' DESC NULLS LAST, id DESC", *params)
+            _CONSULT_WHERE_SELECT + where + _CONSULT_ORDER, *params)
     return [d for d in (_json_data_row(r) for r in rows) if d is not None]
 
 
@@ -1851,6 +1854,49 @@ def consult_list(where: str, params: tuple = ()) -> list | None:
         return _pg_call("consults", "list", _pg_consult_list_impl(where, list(params or ())))
     except Exception as e:  # noqa: BLE001 —— 失败回落内存，会诊列表照常可用
         logger.warning("pg.consult_list_failed", error=str(e)[:120])
+        return None
+
+
+# ---- 第 121 批：会诊列表分页下推（LIMIT/OFFSET + 同口径 COUNT） ----
+# 第 119 批把「我的会诊」在应用层切片：PG 仍返回过滤后的**整表**，`total` 用 len 算。
+# 单页 10 条时前端无感，但会诊量上千后每次翻页都要搬运全量 JSONB。这里把切片与计数
+# 一起下推；`limit=None` 保留整表语义（旧调用方不受影响，只是多一次 COUNT）。
+
+async def _pg_consult_page_impl(where: str, params: list, limit: int | None,
+                                offset: int) -> dict | None:
+    """{"items": [...], "total": n}；空表 → None（调用方回落 JSON）。
+
+    COUNT 与取数用同一个 where / 同一组参数，保证"共 N 条"与页内数据同口径（第 119 批
+    的 total 语义不变，只是改为库内统计）。"""
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM consults"):
+            return None  # 空表 → JSON 才是真源
+        total = int(await c.fetchval(  # noqa: S608 —— where 为域层固定片段
+            "SELECT count(*) FROM consults WHERE " + where, *params) or 0)
+        sql = _CONSULT_WHERE_SELECT + where + _CONSULT_ORDER  # noqa: S608
+        if limit is None:
+            rows = await c.fetch(sql, *params)
+        else:
+            n = len(params)
+            rows = await c.fetch(  # noqa: S608 —— 参数化 LIMIT/OFFSET，非拼接
+                sql + f" LIMIT ${n + 1} OFFSET ${n + 2}",
+                *params, max(0, int(limit)), max(0, int(offset)))
+    items = [d for d in (_json_data_row(r) for r in rows) if d is not None]
+    return {"items": items, "total": total}
+
+
+def consult_page(where: str, params: tuple = (), limit: int | None = None,
+                 offset: int = 0) -> dict | None:
+    """会诊分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "consults.json" in _repo_pg_stale:
+        return None
+    try:
+        return _pg_call("consults", "page",
+                        _pg_consult_page_impl(where, list(params or ()), limit, offset))
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，会诊分页照常可用
+        logger.warning("pg.consult_page_failed", error=str(e)[:120])
         return None
 
 

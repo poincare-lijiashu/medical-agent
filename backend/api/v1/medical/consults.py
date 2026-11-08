@@ -180,17 +180,15 @@ async def consult_mine(user: dict = Depends(require_user),
     """发起者视角：我发起的全部会诊（含已结束）+ 我参与过的（作为受邀科室填过意见）。
     数据隔离由服务端过滤保证。第 111 批：`q` 在两侧列表上同口径过滤（审计只记是否带关键字）。
     第 119 批：`limit/offset` 服务端分页（**两侧共用同一页**，返回各自 total）；
-    缺省 `limit=None` 时保持旧的整表返回，前端旧调用不受影响。"""
+    缺省 `limit=None` 时保持旧的整表返回，前端旧调用不受影响。
+    第 121 批：切片与 total 一起下推 PG（不再"取全量再内存切片"）。"""
     from backend.core import consults
     me = user.get("username", "system")
     q_f = (q or "").strip()[:100]
-    # 第 116 批：q 下推 PG（两个视角各自拼条件），不再拉全量后在应用层过滤
-    initiated = await asyncio.to_thread(consults.by_initiator, me, q_f)
-    participated = await asyncio.to_thread(consults.participated, me, q_f)
-    init_total, part_total = len(initiated), len(participated)
-    if limit is not None:
-        initiated = initiated[offset:offset + limit]
-        participated = participated[offset:offset + limit]
+    initiated, init_total = await asyncio.to_thread(
+        consults.by_initiator_page, me, q_f, limit, offset)
+    participated, part_total = await asyncio.to_thread(
+        consults.participated_page, me, q_f, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="list_mine",
                             actor=me, payload={"initiated": len(initiated),
                                                "participated": len(participated),

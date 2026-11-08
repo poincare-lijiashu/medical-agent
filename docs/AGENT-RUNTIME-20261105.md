@@ -4884,6 +4884,51 @@ facets actions              1.00 ms/次        （三组合计 ≈3.9 ms）
 - 归档（§121）删行后不主动失效缓存：最长 10s 内候选值仍含已归档值；
 - 未在真机做接口级"命中/未命中"对比（本机无运行中的服务实例，行为由单测锁定）。
 
+## 125. 2026-11-08 性能（第 121 批：我的会诊分页与计数下推 PG）
+
+**问题（§123/§124 边界）**：`/consults/mine` 虽然支持 `limit/offset`，但 PG 仍返回**过滤后整表**，
+`total` 用 `len()`、切片在应用层。当前 13 条无感，会诊量上千后每次翻页都要把全量 JSONB
+（病例 + AI 意见 + 各科意见 + 影像 data URL）搬进进程再丢掉，纯浪费。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 抽出 `_CONSULT_WHERE_SELECT` / `_CONSULT_ORDER`（列表与分页共用同一排序）；新增 `_pg_consult_page_impl`（空表判定 → 同 where 的 `COUNT(*)` → 参数化 `LIMIT/OFFSET`）与同步入口 `consult_page()`（无池/离线/旧编排 stale/异常 → None）；计量键 `("consults","page")` |
+| `backend/core/consults.py` | 抽出 `_initiator_conds` / `_participated_conds`（整表与分页共用同一过滤形态）；新增 `by_initiator_page` / `participated_page` → `(当前页, 过滤后总数)`；`by_initiator` / `participated` 保留整表语义（内部走 `consult_list`，老调用方零影响） |
+| `backend/api/v1/medical/consults.py` | `/consults/mine` 改调 `*_page`；响应字段与审计字段完全不变（`initiatedTotal/participatedTotal/limit/offset`） |
+| 测试 | `test_consult_search` +4（SQL 形状/无 limit/空表回落/域层参数与内存回落）；`test_pg_consults_lists` 假池支持"带 where 的 COUNT + 参数化 LIMIT/OFFSET"，+1 路由分页用例；两处旧桩改 `*_page` |
+
+**设计取舍**
+- **COUNT 与取数同 where、同参数**：保证 total 与页内数据同口径（仍是"过滤后全量"，不是页长度）；
+- **两次往返、非同一快照**：并发新建会诊时 total 可能比页内累计多 1 条（可接受，不做事务包裹）；
+- **`limit=None` 仍取整表**：旧调用方（e2e/脚本）语义不变，只多一次 COUNT；
+- **空表仍返回 None**：保持"PG 空表 → JSON 才是真源"的既有纪律，避免首发部署读到空页；
+- **内存回落路径同步支持切片**：total 仍是过滤后全量，与 PG 路径同义。
+
+**真机验证（真实 PG）**
+```
+doctor01 发起 13：offset 0/5/10 → 页内 5/5/3，total 恒 13；offset=15 → 空页
+                  页内累计 13 == 全量 13
+waike01  发起 2 / 参与 3：页内累计 == 全量
+q=内科   ：页内 3 / total 10 == 全量过滤 10
+单页耗时 2.3–4.7 ms（含 COUNT + 取数）
+```
+
+**校验**
+- 定向：`test_consult_search + test_consults + test_pg_consults_lists + test_consult_inbox_paging`
+  **58 passed**；
+- 全量 pytest：**1506 passed / 0 failed / 1 skipped**（5:58，含 e2e；连续第七批零失败）。
+
+**仍存边界**
+- COUNT 与取数两次往返、非同一快照（并发写入时 total 可能多 1 条）；
+- 排序仍作用在 `data->>'created_at'` 表达式上，未建表达式/复合索引（量大需
+  `(initiator, data->>'created_at')` + `EXPLAIN` 复测）；
+- 收件箱 `/consults/inbox` 未改：仍整箱拉取后应用层切片，`pendingForMe` 逐条在内存算
+  （要下推需 `NOT EXISTS` 子查询，单独一批）；
+- 前端仍是固定 10/页、无"跳到第 N 页"；
+- JSON 回落形态的 total 仍是 `len`（没有更便宜的计数手段）。
+
+
 
 
 
