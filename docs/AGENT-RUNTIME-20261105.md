@@ -2944,6 +2944,49 @@ distinct_temp True
 - 真实模型构建未在本批触发（`.env.local` 未配置 QWEN Key），仅验证了控制流与缓存键；
 - 日志字段从 `model_key` 改为 `model`，若有外部日志采集按 `model_key` 建索引需同步调整。
 
+## 79. 2026-11-08 上线准备（第 75 批：处方列表分页/计数——角标不再每 60s 拉全量处方）
+
+**问题**：医生端侧栏「被驳回处方」角标每 60s 调一次 `/prescriptions/mine`，只为统计
+`rejected` 条数；`review` 角标对 pharmacist/admin 也会整表拉 `/prescriptions/pending`
+只为数长度。处方随使用年限无界增长，这是继 `/review/pending` 之后同一类"用轮询换一个数字"
+的隐患；三个处方列表端点也都没有分页参数。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/api/v1/medical/prescriptions.py` | `/prescriptions/mine` 新增 `limit/offset/status/summary` 与 `total`；`summary=1` → `items=[]` + 按状态 `counts`；`/pending`、`/reviewed-by-me` 新增 `limit/offset/total`（缺省仍是全量） |
+| `frontend-vue/src/stores/badges.js` | `refreshRxBadge` 改 `summary=1` 读 `counts.rejected`；`refreshReviewBadge` 的处方待审计数改 `limit=0` 读 `total` |
+| `tests/test_prescriptions_paging.py` | +7：默认全量、分页/status、summary 计数且无正文、pending 计数、reviewed 分页、非法参数 422、审计字段 |
+| `docs/DEPLOY.md` | 处方列表实测表 + "医生端卡片列表仍全量"边界 |
+
+**设计取舍**
+- **缺省不改行为**：三个端点不传参数时仍返回全部，旧调用方（前端卡片、MCP、脚本）零影响；
+- **summary 只回计数**：不返回任何 `case_text/drugs`，测试断言响应文本不含 `case_text`；
+- **status 过滤在切片前**：与 review 的 `hide_*` 同理，避免页内条数不足；
+- **审计补 total/limit/offset/summary**：便于回溯"谁用哪种口径查了处方"。
+
+**真实数据（8001，真实 PG）**
+```
+doctor01 mine 8 条：全量 6,403 B → summary 80 B（每 60s 轮询，98.8%↓）
+pharmacist pending 5 条：全量 3,315 B → limit=0 37 B
+reviewed-by-me 5 条：全量 4,953 B，total=5
+```
+`summary` 返回 `counts={pending_pharm:5, approved:3}`，与列表状态一致。
+
+**校验**
+- 定向 `test_prescriptions_paging + test_prescriptions + test_frontend_syntax +
+  test_audit_payload` **80 passed**；
+- 全量 pytest：**1259 passed**（1252 + 本批 7）；
+- `npm run build` 通过（badges.js 改动已入库）。
+
+**仍存边界**
+- **服务端仍会加载全量再切片/计数**：`list_mine/list_pending/list_reviewed_by` 现在仍读全表
+  （PG/JSON），本批只减少网络传输；若要降低 CPU/DB 负载需把 `limit/offset/count` 下推 SQL；
+- 医生端「我的处方」卡片列表**前端未接入分页**（接口已就绪），仍一次拉全部；
+- `summary` 的 counts 在进程内按全量遍历计算，与 `list_mine` 的加载成本同阶；
+- `status` 只支持精确匹配，未做多状态/时间范围过滤；
+- pharmacist 历史合并轨仍未分页（第 73 批已记录）。
+
 
 
 

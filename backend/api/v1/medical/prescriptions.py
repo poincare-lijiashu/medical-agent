@@ -11,7 +11,7 @@ import asyncio
 import json
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
@@ -250,41 +250,90 @@ async def prescription_create(req: PrescriptionSubmitReq,
     return item
 
 
+def _page(items: list[dict], limit: int | None, offset: int) -> list[dict]:
+    """第 75 批：内存切片（与 review 列表同语义：limit=None 返回 offset 之后全部）。"""
+    return items[offset:offset + limit] if limit is not None else items[offset:]
+
+
 @router.get("/prescriptions/mine")
-async def prescription_mine(user: dict = Depends(require_role("doctor"))):
-    """我的处方列表（新→旧；服务端按登录医生过滤，只回本人数据）。"""
+async def prescription_mine(
+        limit: int | None = Query(None, ge=0, le=500,
+                                  description="返回条数上限；缺省=全部（旧行为）。0=只取计数"),
+        offset: int = Query(0, ge=0, description="跳过条数"),
+        status: str | None = Query(None, max_length=32, description="按状态过滤（如 rejected）"),
+        summary: bool = Query(False, description="只回计数（items=[]），供角标轮询"),
+        user: dict = Depends(require_role("doctor"))):
+    """我的处方列表（新→旧；服务端按登录医生过滤，只回本人数据）。
+
+    第 75 批：新增 `limit/offset/status/summary` 与响应 `total`（缺省仍是全量，旧调用方零影响）。
+    为什么：医生端侧栏角标每 60s 调一次本端点，只为统计 rejected 数；处方随使用年限无界增长，
+    整表下发会把"一个数字"变成越来越大的轮询负载。`summary=1` 只回 `{counts, total}`。
+    """
     me = user.get("username", "system")
     items = await asyncio.to_thread(rx.list_mine, me)
+    counts: dict = {}
+    for i in items:
+        st = str(i.get("status") or "unknown")
+        counts[st] = counts.get(st, 0) + 1
+    if summary:
+        total = len(items)
+        page: list[dict] = []
+    else:
+        if status:
+            items = [i for i in items if i.get("status") == status]
+        total = len(items)
+        page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription", action="list",
-                            actor=me, payload=_rx_audit(user, n=len(items)))
-    return {"items": items, "me": me}
+                            actor=me, payload=_rx_audit(user, n=len(page), total=total,
+                                                        limit=limit, offset=offset,
+                                                        summary=summary))
+    out = {"items": page, "me": me, "total": total}
+    if summary:
+        out["counts"] = counts
+    return out
 
 
 @router.get("/prescriptions/reviewed-by-me")
-async def prescription_reviewed_by_me(user: dict = Depends(require_role("pharmacist"))):
+async def prescription_reviewed_by_me(
+        limit: int | None = Query(None, ge=0, le=500, description="返回条数上限；缺省=全部"),
+        offset: int = Query(0, ge=0, description="跳过条数"),
+        user: dict = Depends(require_role("pharmacist"))):
     """问题3②：本人（药剂科）审核过的处方清单（pharm_reviewer=me，approved/rejected，新→旧）。
 
     背景：pharmacist 驳回/签发的处方此前不在 /review/history 体系（处方与 review 队列
     双轨），审核中心「我的历史」看不到——本端点供前端「我的历史」tab 合并渲染处方
-    审核记录（rid/状态/意见/时间）。仅 pharmacist（admin 走全局档案，doctor/qc 403）。"""
+    审核记录（rid/状态/意见/时间）。仅 pharmacist（admin 走全局档案，doctor/qc 403）。
+    第 75 批：新增可选 `limit/offset` 与 `total`（缺省全量；合并轨暂未分页）。"""
     me = user.get("username", "system")
     items = await asyncio.to_thread(rx.list_reviewed_by, me)
+    total = len(items)
+    page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                             action="list_reviewed_by_me", actor=me,
-                            payload=_rx_audit(user, n=len(items)))
-    return {"items": items, "me": me}
+                            payload=_rx_audit(user, n=len(page), total=total,
+                                              limit=limit, offset=offset))
+    return {"items": page, "me": me, "total": total}
 
 
 @router.get("/prescriptions/pending")
-async def prescription_pending(user: dict = Depends(require_role("pharmacist", "admin"))):
+async def prescription_pending(
+        limit: int | None = Query(None, ge=0, le=500,
+                                  description="返回条数上限；缺省=全部。0=只取计数"),
+        offset: int = Query(0, ge=0, description="跳过条数"),
+        user: dict = Depends(require_role("pharmacist", "admin"))):
     """药剂科待审队列（pending_pharm，新→旧；pharmacist/admin 可见，doctor/qc 403）。
     问题4 收窄（语义变更）：原 pharmacist/qc/admin——处方审核权=药剂科+管理员，
-    质控科（qc）只管病例质控，不再读取开药待审队列。"""
+    质控科（qc）只管病例质控，不再读取开药待审队列。
+    第 75 批：新增可选 `limit/offset` 与 `total`；侧栏角标改 `limit=0` 只取计数。"""
     me = user.get("username", "system")
     items = await asyncio.to_thread(rx.list_pending)
+    total = len(items)
+    page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
-                            action="list_pending", actor=me, payload=_rx_audit(user, n=len(items)))
-    return {"items": items, "me": me}
+                            action="list_pending", actor=me,
+                            payload=_rx_audit(user, n=len(page), total=total,
+                                              limit=limit, offset=offset))
+    return {"items": page, "me": me, "total": total}
 
 
 @router.post("/prescriptions/{rid}/review")

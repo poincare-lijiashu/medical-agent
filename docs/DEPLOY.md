@@ -625,7 +625,20 @@ mtime）作 ETag，保证多实例下 PG 改了字典也能立刻失效。
 单条全文走 `GET /review/history/item/{rid}`：与待核对详情不同，**人工签发记录剥 images**
 （FIND-03a），AI 自动签发才按角色可见；doctor/pharmacist 仅限本人参与记录（否则 404）。
 
+处方列表（第 75 批，缺省仍是全量）：`/prescriptions/mine|pending|reviewed-by-me` 支持
+`limit/offset` + `total`；`mine` 另有 `status` 过滤与 `summary=1`（只回按状态计数）。
+实测（真实队列，doctor01 8 条 / 待审 5 条）：
+
+| 请求 | 响应体 | 说明 |
+|---|---|---|
+| `mine` 全量 | 6,403 B | 兼容保留 |
+| `mine?summary=1`（角标每 60s） | **80 B** | 只回 `counts`，不再整表下发 |
+| `pending` 全量 | 3,315 B | 兼容保留 |
+| `pending?limit=0`（角标） | **37 B** | 只回 `total` |
+
 仍待做的优化（尚未实施）：
+- 医生端「我的处方」卡片列表仍一次拉全部（第 75 批已备好 `limit/offset/total`，前端未接入；
+  处方积压增大后应改为服务端分页）；
 - pharmacist 的「我的历史」需要与处方审核轨合并，仍是全量拉取 + 本地分页
   （review 队列部分 200 条上限）；若要继续瘦身，需要先定"处方轨 + review 轨"联合分页口径；
 - 单进程混合只读 ~100 RPS，若需更高应按"多实例 + nginx upstream"扩容

@@ -51,8 +51,11 @@ export const useBadgeStore = defineStore('badges', {
       }
       if (role === 'pharmacist' || role === 'admin') {
         try {
-          const { data } = await http.get('/medical/prescriptions/pending', { silentToast: true })
-          n += (data.items || []).length
+          // 第 75 批：同 review/pending，只取计数（limit=0 → {items: [], total}），
+          // 不再为 60s 轮询下载整个待审队列（处方随使用年限无界增长）。
+          const { data } = await http.get('/medical/prescriptions/pending',
+            { params: { limit: 0 }, silentToast: true })
+          n += Number(data.total ?? (data.items || []).length)
         } catch (_) { /* 静默 */ }
       }
       this.reviewTodoCount = n
@@ -63,8 +66,10 @@ export const useBadgeStore = defineStore('badges', {
       const auth = useAuthStore()
       if (auth.role !== 'doctor') return
       try {
-        const { data } = await http.get('/medical/prescriptions/mine', { silentToast: true })
-        this.rxRejectedCount = (data.items || []).filter((i) => i.status === 'rejected').length
+        // 第 75 批：summary=1 只回按状态分组的计数（items=[]），角标不再整表下载。
+        const { data } = await http.get('/medical/prescriptions/mine',
+          { params: { summary: 1 }, silentToast: true })
+        this.rxRejectedCount = Number(((data.counts || {}).rejected) || 0)
       } catch (_) { /* 静默 */ }
     },
     // 轮 A（legacy refreshConsultBadge 逐字语义）：doctor/pharmacist 拉会诊收件箱统计
