@@ -3689,6 +3689,60 @@ GET /medical/overview → pending=76 MATCH, resolved=1092 MATCH
 - `events_total` 取进程内审计条数（重启归零语义未变）；
 - 概览其余字段（device/uptime/kb_docs）与本次无关。
 
+## 96. 2026-11-08 性能与容量（第 92 批：为 81–91 批下推查询补 PG 索引）
+
+**问题**：第 81–91 批把列表/计数/详情全部下推到 PG，但除 `audit_log(ts DESC)` 外
+四张业务表（review_queue / prescriptions / consults / case_archive）**没有任何索引**。
+下推只解决了"不读全表到 Python"，SQL 侧仍可能是 Seq Scan + Sort；队列到万级后
+待核/历史的 `ORDER BY ts` 与按人过滤会线性变慢。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增模块常量 `_PG_INDEX_DDL`（15 条 `CREATE INDEX IF NOT EXISTS`），在 `_init_impl()` 建表之后统一下发；表达式/列序与各 `_pg_*_impl` 的 WHERE/ORDER BY 逐字对齐 |
+| `tests/test_pg_indexes.py` | +4：init 真正下发全部索引、全部幂等（IF NOT EXISTS）、索引晚于建表（全新库可启动）、表达式与查询口径对齐 |
+
+索引清单（按表）：
+- `review_queue`：`(status, ts, id)` 待核；`(submitted_by, ts DESC, id DESC)` /
+  `(reviewed_by, ts DESC, id DESC)` 历史与个人列表；`(ts DESC, id DESC)` 历史全表分页；
+- `prescriptions`：`(doctor, (data->>'created_at') DESC NULLS LAST, id DESC)`、
+  `(status, (data->>'created_at') DESC NULLS LAST, id DESC)`、`(doctor, status)` 分组计数；
+- `consults`：`(status, …created_at DESC)`、`(initiator, …created_at DESC)`、
+  `GIN ((data->'target_depts'))`、`GIN ((data->'opinions'))`（对应 `@>` 包含查询）；
+- `case_archive`：`((data->>'archived_at') DESC NULLS LAST, id DESC)`、`(dept, status)`、
+  `(status)`、`((data->>'submitted_by'), status)`。
+
+**真实数据（真实 PG 5433，索引前后 `EXPLAIN (ANALYZE, BUFFERS)`）**
+```
+行数：review_queue 1168 / prescriptions 13 / consults 17 / case_archive 1
+review_pending   Seq Scan + Sort (0.203ms) → Index Scan ix_review_queue_status_ts (0.054ms)
+review_history   Seq Scan + Sort (0.408ms) → Index Scan ix_review_queue_ts      (0.077ms)
+rx_doctor/rx_status、consult_inbox/initiator、case_list：仍是 Seq Scan（计划未变）
+```
+小表（13/17/1 行）优化器理性选择顺序扫描，**索引已建但未生效**——如实记录，不宣称
+提升；只有 1168 行的 review_queue 出现真实计划切换。`pg_indexes` 已确认 15 个索引
+（含主键共 19 个）全部存在。
+
+**校验**
+- 定向 `test_pg_indexes` **4 passed**；
+- 全量 pytest：**1396 passed**（1392 + 本批 4）；
+- 重启 8001（init 重放 15 条 IF NOT EXISTS 幂等）→ `/healthz` 200；
+- 真实账号实测列表：admin `/overview`、`/case-archive`、`/admin/data` 200；
+  pharmacist `/prescriptions/pending` 200（total=6）；qc `/review/pending`（total=52）、
+  `/review/history`、`/case-archive` 200；doctor `/consults/inbox`（total=3）、
+  `/review/my-pending-confirm`、`/prescriptions/mine` 200。
+
+**仍存边界**
+- 索引只在 `_init_impl` 建表时下发：已在运行、不发版重启的实例不会自动补索引（本次为
+  手工在真库执行同一批 DDL + 重启验证）；也没有迁移版本表，未来改索引需靠新索引名；
+- `CREATE INDEX`（非 CONCURRENTLY）在超大表上会短暂阻塞写入；当前表规模无影响，
+  上量后如需在线建索引要单独走 `CONCURRENTLY`（不能放在事务/init 里）；
+- 待核/历史的关键字检索仍是 `POSITION(...)` 拼串扫描，未做 tsvector/GIN，关键字查询
+  仍随表增长线性变慢；
+- 部分列表（历史 base_limit、病例库）未做 SQL 分页下推，`total` 仍需 count；
+- `consults` 的 GIN 索引对小表反而增加写入成本，收益要等数据量上来才体现；
+- 未做索引膨胀/命中率监控，也没有"慢查询"采集。
+
 
 
 

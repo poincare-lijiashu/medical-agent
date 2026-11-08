@@ -210,6 +210,47 @@ def offline_mode() -> bool:
     return (os.environ.get("PG_OFFLINE") or "").strip().lower() in _TRUTHY
 
 
+# ---------- 第 92 批：第 81–91 批下推查询的配套索引 ----------
+# 索引表达式/列序与各查询逐字对齐（见对应 _pg_*_impl 的 WHERE/ORDER BY）：
+#   review_queue  → 待核 status+ts 顺序、历史/个人 submitted_by|reviewed_by+ts 倒序、全表 ts 倒序
+#   prescriptions → doctor|status + data->>'created_at' 倒序（第 81 批分页/计数）
+#   consults      → status/initiator + created_at 倒序、target_depts/opinions 的 jsonb 包含（GIN）
+#   case_archive  → archived_at 倒序、dept+status、status、submitted_by+status（第 90 批）
+# 全部 IF NOT EXISTS，多实例重复启动幂等；小表当前可能仍选顺序扫描，随数据量增长生效。
+_PG_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS ix_review_queue_status_ts "
+    "ON review_queue(status, ts, id)",
+    "CREATE INDEX IF NOT EXISTS ix_review_queue_submitter_ts "
+    "ON review_queue(submitted_by, ts DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_review_queue_reviewer_ts "
+    "ON review_queue(reviewed_by, ts DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_review_queue_ts "
+    "ON review_queue(ts DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_prescriptions_doctor_order "
+    "ON prescriptions(doctor, ((data->>'created_at')) DESC NULLS LAST, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_prescriptions_status_order "
+    "ON prescriptions(status, ((data->>'created_at')) DESC NULLS LAST, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_prescriptions_doctor_status "
+    "ON prescriptions(doctor, status)",
+    "CREATE INDEX IF NOT EXISTS ix_consults_status_order "
+    "ON consults(status, ((data->>'created_at')) DESC NULLS LAST, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_consults_initiator_order "
+    "ON consults(initiator, ((data->>'created_at')) DESC NULLS LAST, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_consults_target_depts_gin "
+    "ON consults USING gin ((data->'target_depts'))",
+    "CREATE INDEX IF NOT EXISTS ix_consults_opinions_gin "
+    "ON consults USING gin ((data->'opinions'))",
+    "CREATE INDEX IF NOT EXISTS ix_case_archive_archived_order "
+    "ON case_archive(((data->>'archived_at')) DESC NULLS LAST, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_case_archive_dept_status "
+    "ON case_archive(dept, status)",
+    "CREATE INDEX IF NOT EXISTS ix_case_archive_status "
+    "ON case_archive(status)",
+    "CREATE INDEX IF NOT EXISTS ix_case_archive_submitted "
+    "ON case_archive(((data->>'submitted_by')), status)",
+)
+
+
 async def _init_impl() -> bool:
     """建池 + 建表（含旧表平滑升级：users.dept / review_queue.images）。"""
     global _pool
@@ -311,6 +352,9 @@ async def _init_impl() -> bool:
                     f"""CREATE TABLE IF NOT EXISTS {table}(
                         {key} text primary key, data jsonb NOT NULL, status text NOT NULL,
                         updated_at timestamptz default now())""")
+            # 第 92 批：上述表建好后统一补索引（幂等，见 _PG_INDEX_DDL 注释）
+            for _ddl in _PG_INDEX_DDL:
+                await c.execute(_ddl)
     except Exception:
         try:
             await pool.close()
