@@ -211,6 +211,14 @@
             联用理由：{{ it.contraindication_reason || '（未填写）' }}
           </div>
         </el-card>
+        <!-- 第 106 批：开药待审服务端分页（12/页；与医生端「我的处方」同口径） -->
+        <div v-if="rxPendingTotal > RX_PEND_PER" data-testid="rx-pending-pager"
+          style="display: flex; align-items: center; gap: 12px; padding: 4px 2px">
+          <el-button size="small" :disabled="rxPendingPage === 0" @click="rxPendingGo(-1)">‹ 上一页</el-button>
+          <span class="src num">第 {{ rxPendingPage + 1 }} / {{ Math.ceil(rxPendingTotal / RX_PEND_PER) }} 页 · 共 {{ rxPendingTotal }} 张</span>
+          <el-button size="small" :disabled="(rxPendingPage + 1) * RX_PEND_PER >= rxPendingTotal"
+            @click="rxPendingGo(1)">下一页 ›</el-button>
+        </div>
       </template>
 
       <!-- 我的待确认 / 待核对表（空态文案按角色/模式逐字） -->
@@ -500,7 +508,10 @@ const myConfirmItems = ref([])
 const historyItems = ref([])
 const rxPendingItems = ref([])
 const rxPendingQ = ref('') // 第 105 批：开药待审核队列关键字（服务端过滤）
-const rxPendingTotal = ref(0)
+const rxPendingTotal = ref(0) // 第 106 批：服务端过滤后总数（分页用）
+const rxPendingBadgeTotal = ref(0) // 未加关键字时的待审总数（角标只认它）
+const RX_PEND_PER = 12
+const rxPendingPage = ref(0)
 let rxPendingTimer = null
 const rxHistoryItems = ref([])
 const reviewMe = ref('')
@@ -540,18 +551,37 @@ function confLabel(c) { return c >= 0.75 ? '高置信' : (c >= 0.6 ? '中等' : 
 // ---- 数据加载（qc/admin 与 mine 双分支；角标随数据刷新） ----
 function onRxPendingQInput() {
   clearTimeout(rxPendingTimer)
+  rxPendingPage.value = 0 // 条件变化回第 1 页
   rxPendingTimer = setTimeout(() => { load() }, 300) // 300ms 防抖后整页重拉（含角标）
+}
+
+function rxPendingGo(delta) {
+  const last = Math.max(0, Math.ceil(rxPendingTotal.value / RX_PEND_PER) - 1)
+  const next = Math.min(last, Math.max(0, rxPendingPage.value + delta))
+  if (next === rxPendingPage.value) return
+  rxPendingPage.value = next
+  fetchRxPending(++loadSeq).catch(() => { /* 翻页失败静默；保留当前列表 */ })
 }
 
 async function fetchRxPending(seq) {
   const kw = rxPendingQ.value.trim()
   const xp = await http.get('/medical/prescriptions/pending', {
-    params: kw ? { q: kw } : {}, silentToast: true, // 第 105 批：q 服务端过滤
+    params: {
+      limit: RX_PEND_PER, offset: rxPendingPage.value * RX_PEND_PER,
+      ...(kw ? { q: kw } : {}),
+    },
+    silentToast: true, // 第 105/106 批：q + 服务端分页
   })
   if (seq !== loadSeq) return
   if (xp.status === 200) {
     rxPendingItems.value = xp.data.items || []
     rxPendingTotal.value = Number(xp.data.total ?? rxPendingItems.value.length)
+    if (!kw) rxPendingBadgeTotal.value = rxPendingTotal.value // 角标不受筛选影响
+    // 越界纠偏（审核后总数变小）：跳到最后一页再拉一次
+    if (!rxPendingItems.value.length && rxPendingTotal.value > 0 && rxPendingPage.value > 0) {
+      rxPendingPage.value = Math.max(0, Math.ceil(rxPendingTotal.value / RX_PEND_PER) - 1)
+      await fetchRxPending(seq)
+    }
   }
 }
 
@@ -598,8 +628,8 @@ async function load() {
           if (seq !== loadSeq) return
           if (rh.status === 200) rxHistoryItems.value = rh.data.items || []
         } catch (_) { /* 静默 */ }
-        // pharmacist 待办角标只算待审处方数（用服务端 total，避免被关键字筛选影响）
-        badges.reviewTodoCount = rxPendingTotal.value
+        // pharmacist 待办角标只算待审处方数（用未筛选的服务端 total，避免被搜索影响）
+        badges.reviewTodoCount = rxPendingBadgeTotal.value
       }
       // 轮 A：进入审核中心即刷新「我的待确认」黄徽标与「待我意见的会诊」红徽标
       // （legacy loadReviewMine 末尾 renderRail/refreshConsultBadge 同语义）

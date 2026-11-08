@@ -4237,6 +4237,37 @@ GET / ===> 新资产 index-CK17etyO.js；含 rx-pending-q 与 rx-pending-total
 - 搜索词不写入 URL，也不跨 tab 保留；
 - 未做浏览器交互回归（构建 + 资产内容核对 + 语法门禁）。
 
+## 110. 2026-11-08 前端交付（第 106 批：开药待审队列服务端分页）
+
+**问题**：第 105 批给开药待审加了搜索，但列表仍是"全量拉取 + 前端渲染"（后端早已支持
+`limit/offset/total` 却没用）。处方会随年限增长，药师每次进审核中心都要拉全部待审。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `frontend-vue/src/views/ReviewCenterView.vue` | 开药待审改服务端分页（`RX_PEND_PER=12`）：`fetchRxPending` 带 `limit/offset`；新增 `rxPendingGo()`（翻页只重拉处方区）；页码越界自动回最后一页；搜索条件变化回第 1 页 |
+| `frontend-vue/src/views/ReviewCenterView.vue` | 角标改用**未筛选**的 `rxPendingBadgeTotal`（只有 `q` 为空时更新），搜索/翻页都不再影响"待审数" |
+| `tests/test_frontend_syntax.py` | 新增分页标记锁（12/页、`rxPendingGo`、`rx-pending-pager`、角标取自未筛选 total） |
+| `frontend-vue/dist/*` | 重新构建产物 |
+
+**真实交付验证**
+```
+npm run build → ✓ built in 5.14s
+GET / → index-9PCwFrCk.js 含 rx-pending-pager
+API 实测（pharm01）：pending?limit=12&offset=0 → 7 条/total=7；offset=12 → 0 条/total=7
+两页 id 无重叠、并集 7 = total（分页口径正确）
+```
+
+**校验**
+- 定向 `test_frontend_syntax + prescriptions_paging + prescription_search` **43 passed**；
+- 全量 pytest：**1434 passed**（1433 + 本批 1）。
+
+**仍存边界**
+- 待审列表在页内执行「通过/驳回」后只更新当前项，不会自动补位（需手动翻页/刷新才补齐 12 条）；
+- 关键字输入触发的是整页 `load()`（含历史/角标），不是只刷处方区；
+- 未做浏览器交互回归；
+- 医生端「我的处方」与药师端分页各自实现（未抽公共分页组件）。
+
 
 
 
