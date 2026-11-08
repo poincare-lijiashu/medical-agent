@@ -4723,6 +4723,41 @@ inbox q=肚子疼 → 1=1(total=1)  q=内科 → 2=2  q=doctor01 → 3=3  q='外
 - `/consults/mine` 仍无分页（两侧列表各自全量返回）；
 - 检索面不含 `team.reason` 与会诊汇总字段（与第 111 批一致）。
 
+## 121. 2026-11-08 合规运维（第 117 批：审计日志归档——按月冷存 + 热表清理）
+
+**问题**：`audit_log` 只增不减（本机已 2,249 行；生产按日均数百条会到千万级）。合规要求
+"可追溯"不等于"必须长期留在热表"——热表膨胀会拖慢审计筛选/计数、放大备份体积；
+此前没有任何归档或清理手段（§113/§114 边界反复记录）。
+
+**实现**（`scripts/archive_audit_log.py`，新）
+| 能力 | 说明 |
+|---|---|
+| dry-run（默认） | 只输出"截止日 + 按月行数 + 目标文件"，不写不删 |
+| `--apply` | 单事务 `DELETE … RETURNING` → 按月**追加**写 `data/audit_archive/audit-YYYY-MM.jsonl` → 提交；写文件异常自动 **ROLLBACK**（绝不"删了没存档"） |
+| `--before` 必填 | `YYYY-MM-DD`，按本地时区当天 00:00（半开窗，与 §114 审计日期筛选同口径） |
+| 行格式 | id / ts / event_type / actor / payload；payload 兼容 dict / JSON 字符串 / 非法值（`_raw`） |
+| 测试（`test_audit_archive.py`，8 条） | 截止点与非法日期、跨月分组与汇总、三种 payload、缺参退出、apply 写文件并删除、dry-run 零副作用、**写文件失败回滚** |
+
+**真机验证（真实 PG；只跑 dry-run，避免清空演示数据）**
+```
+python scripts/archive_audit_log.py --before 2026-11-09
+  → 2249 行 / 2 个月：2026-10 345、2026-11 1904；dry-run 未写入、未删除
+SQL 对账：SELECT to_char(ts,'YYYY-MM'), count(*) … → 345 / 1904（合计 2249，一致）
+归档目录存在：False（dry-run 零副作用）
+未对本地库执行 --apply（会清空 2.2k 行演示审计）；apply 与回滚路径由 8 条单测覆盖
+```
+
+**校验**
+- 定向：`test_audit_archive` **8 passed**；
+- 全量 pytest：待补（后台运行完成即记）。
+
+**仍存边界**
+- `--apply` 是单次 `DELETE`，百万级会长时间持锁（需按 id 分批）；
+- 归档文件追加写且不编号：同月多次归档会产生多份，无去重；
+- 无自动调度（需 cron / K8s CronJob 调用，未提供清单）；
+- 归档后的检索需外部工具（JSONL 不回灌 admin 面板）；
+- 保留期由运维按院内制度决定，脚本不内置默认值。
+
 
 
 
