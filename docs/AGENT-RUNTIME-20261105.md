@@ -3831,6 +3831,49 @@ sum=0.015675s  count=3
 - 告警阈值（P95 500ms、QPS>0.05）未做容量标定；
 - 未接入 Grafana 面板（本批只保证指标与规则可采集）。
 
+## 99. 2026-11-08 可观测性（第 95 批：PG 写路径计量，读/写两侧同口径）
+
+**问题**：第 93/94 批补齐了读路径，但写入侧仍是盲区——镜像写失败只打一条 warning
+（数据只落 JSON，读路径按 stale 回落）、全量同步失败只置 stale、单行 UPSERT 失败由
+调用方兜底。运维无法回答"哪类写失败在持续""写是不是变慢了"。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增写路径计量（与读同构）：`_pg_write_call`（同步 `_run_pg` 包装）、`_pg_write_async`（镜像写的 async 包装）、`_record_pg_write`；导出 `medassist_agent_pg_write_total` / `_errors_total` / `_duration_seconds`（直方图） |
+| `backend/core/pg_store.py` | 接入 11 个写点：`_json_then_pg` 全量同步（两条编排分支）、`mirror_audit/user/review`、`upsert_user/review/consult/prescription/case_archive/skill/json_item` |
+| `deploy/prometheus/...rules.yml` + Helm PrometheusRule | 新增 `MedAssistAgentPgWriteErrors`（15 分钟失败 ≥3，两处规则集合同步为 24 条） |
+| `tests/test_pg_write_metrics.py` | +7：同步/异步成功与失败、主写失败不写 JSON 且计量、旧编排失败置 stale 且计量、镜像失败吞异常但计量、无池守卫不计入 |
+
+**设计取舍**
+- **错误语义分两类**：镜像写是 best-effort（吞异常、只计 error），主写/单行 UPSERT
+  计 error 后原样抛出——既保留现有 500/stale 语义，又让失败可观测；
+- **写用独立族名**（`pg_write_*`）而非混入 `pg_query_*`：读失败的处置是"回落 JSON"，
+  写失败的处置是"防分裂/置 stale"，混在一起会让告警描述和面板口径都说不清；
+- **复用同一套直方图桶**：写的合理区间与读接近（毫秒级），无需单独调桶；
+- **零样本键固定预置**：与读路径一致，首抓即可见、规则门禁不依赖流量。
+
+**真实数据（8001，真实 PG）**
+```
+POST /prescriptions 201/200 → prescriptions/upsert_row=1、audit_log/mirror=1
+启动期用户镜像 → users/mirror=13
+全部写错误 = 0（10 个键零样本可见）
+/metrics 35,385 B
+```
+
+**校验**
+- 定向 `test_pg_write_metrics + test_pg_query_metrics + test_deploy_observability` **19 passed**；
+- 全量 pytest：**1409 passed**（1402 + 本批 7）；
+- 规则 YAML 可解析：24 条，四条 PG/存储规则均在；
+- 重启 8001 → `/healthz` 200；真实处方提交后 `/metrics` 出现上述非零写样本。
+
+**仍存边界**
+- 未覆盖 DELETE（用户/条目删除）与 `purge_*` 清理路径，写次数不是"全部写操作"的完备口径；
+- 只导出耗时直方图，**没有写 P95 告警**（避免同一类告警过多；需要时按 `pg_write_*` 规则再加）；
+- `/metrics` 增至约 35KB（读写两族 × 固定键），后续若键数增长需改为"仅已触达键"；
+- 镜像写是 async 主循环路径，多 worker 下各进程独立计数（与既有 worker 提示一致）；
+- 未区分"PG 拒绝"与"连接失败"的错误类型（只有总数）。
+
 
 
 

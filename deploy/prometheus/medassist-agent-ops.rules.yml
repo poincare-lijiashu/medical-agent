@@ -301,3 +301,14 @@ groups:
         annotations:
           summary: "PG 查询 P95 超过 500ms：{{ $labels.domain }}/{{ $labels.op }}"
           description: "近 10 分钟 P95={{ $value }}s；请检查表规模、索引命中（EXPLAIN）与 PG 负载，必要时补索引或收敛查询。"
+
+      # 第 95 批：写路径（镜像写 / 全量同步 / 单行 UPSERT）。镜像写失败不冒泡——数据只落
+      # JSON，读路径按 stale 回落；主写失败则由调用方 500。两者都必须可见。
+      - alert: MedAssistAgentPgWriteErrors
+        expr: sum by (instance, domain, op) (increase(medassist_agent_pg_write_errors_total[15m])) >= 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PG 写持续失败：{{ $labels.domain }}/{{ $labels.op }}"
+          description: "近 15 分钟 {{ $value }} 次失败；请检查 PG 连接、磁盘与表结构，并对照 storage_stale_domains 确认回落范围。"

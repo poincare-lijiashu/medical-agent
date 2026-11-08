@@ -47,8 +47,8 @@ def test_helm_prometheus_rule_matches_native_rules():
     # 7 条业务规则 + 多 worker + 抓取缺失/down + token 成本/采集率 + 质量 + P95 + 标签溢出
     # + 第 49 批存储 stale / 非 PG 模式 2 条 + 第 67 批 Redis 降级 1 条
     # + 第 68 批向量库不可达/超时/降级 3 条
-    # + 第 93 批 PG 查询失败/平均耗时 2 条
-    assert len(native) == 23
+    # + 第 93 批 PG 查询失败/平均耗时 2 条（第 94 批升级为 P95，第 95 批补写失败 1 条）
+    assert len(native) == 24
 
 
 def test_alert_windows_do_not_double_stack_with_for():

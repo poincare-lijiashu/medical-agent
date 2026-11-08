@@ -246,11 +246,14 @@ def _record_pg_query(domain: str, op: str, seconds: float, ok: bool) -> None:
 
 
 def _reset_pg_query_metrics() -> None:
-    """恢复为零样本（仅单测用；生产不调用）。"""
+    """恢复为零样本（仅单测用；生产不调用）。读写两侧一起重置。"""
     with _pg_metrics_lock:
         _pg_query_stats.clear()
         for key in _PG_METRIC_KEYS:
             _pg_query_stats[key] = _new_pg_stat()
+        _pg_write_stats.clear()
+        for key in _PG_WRITE_METRIC_KEYS:
+            _pg_write_stats[key] = _new_pg_stat()
 
 
 def _pg_call(domain: str, op: str, coro):
@@ -262,6 +265,70 @@ def _pg_call(domain: str, op: str, coro):
         _record_pg_query(domain, op, time.perf_counter() - t0, False)
         raise
     _record_pg_query(domain, op, time.perf_counter() - t0, True)
+    return out
+
+
+# ---------- 第 95 批：PG 写路径同口径计量（镜像写 / 全量同步 / 单行 UPSERT） ----------
+# 为什么：读路径（93/94 批）已有耗时与失败率，但写入侧仍是盲区——镜像写失败只打
+# 一条 warning，全量同步失败只置 stale，单行 UPSERT 失败由调用方兜底。运维无法回答
+# "哪类写失败在持续""写是不是变慢了"。本批与读路径同构：成功/失败各计一次 + 直方图。
+# 口径：只统计**真正尝试写 PG** 的调用（无池/离线直接返回不计）；镜像写吞异常但
+# 计 error；主写/单行 UPSERT 计 error 后原样抛出（调用方语义不变）。
+_PG_WRITE_METRIC_KEYS = (
+    ("repo", "full_sync"),
+    ("audit_log", "mirror"),
+    ("users", "mirror"),
+    ("review_queue", "mirror"),
+    ("review_queue", "upsert_row"),
+    ("users", "upsert_row"),
+    ("consults", "upsert_row"),
+    ("prescriptions", "upsert_row"),
+    ("case_archive", "upsert_row"),
+    ("skills", "upsert_row"),
+)
+_pg_write_stats: dict[tuple[str, str], dict] = {
+    k: _new_pg_stat() for k in _PG_WRITE_METRIC_KEYS
+}
+
+
+def _record_pg_write(domain: str, op: str, seconds: float, ok: bool) -> None:
+    key = (str(domain), str(op))
+    value = max(0.0, float(seconds))
+    with _pg_metrics_lock:
+        st = _pg_write_stats.get(key)
+        if st is None:
+            st = _new_pg_stat()
+            _pg_write_stats[key] = st
+        st["total"] += 1
+        if not ok:
+            st["errors"] += 1
+        st["seconds"] += value
+        for i, bound in enumerate(_PG_LATENCY_BUCKETS):
+            if value <= bound:
+                st["buckets"][i] += 1
+
+
+def _pg_write_call(domain: str, op: str, coro):
+    """同步写计量：成功/失败都计一次，失败原样抛出。"""
+    t0 = time.perf_counter()
+    try:
+        out = _run_pg(coro)
+    except Exception:
+        _record_pg_write(domain, op, time.perf_counter() - t0, False)
+        raise
+    _record_pg_write(domain, op, time.perf_counter() - t0, True)
+    return out
+
+
+async def _pg_write_async(domain: str, op: str, coro):
+    """异步写计量（镜像写走主循环 → 专用 DB 循环）：失败原样抛出，由调用方 best-effort 处理。"""
+    t0 = time.perf_counter()
+    try:
+        out = await _arun(coro)
+    except Exception:
+        _record_pg_write(domain, op, time.perf_counter() - t0, False)
+        raise
+    _record_pg_write(domain, op, time.perf_counter() - t0, True)
     return out
 
 
@@ -574,6 +641,29 @@ def rebuild_json_mirror(table: str, path: str) -> int:
     return len(items)
 
 
+def _emit_pg_family(lines: list, prefix: str, stats: dict) -> None:
+    """把一组 (domain, op) 计量写成 Prometheus 文本（计数器 + 直方图）。
+
+    prefix 为族名前缀（``…pg_query`` / ``…pg_write``），由本模块内部常量固定传入。
+    """
+    with _pg_metrics_lock:
+        snapshot = [(d, o, {**stat, "buckets": list(stat["buckets"])})
+                    for (d, o), stat in sorted(stats.items())]
+    for domain, op, stat in snapshot:
+        safe_d = str(domain).replace("\\", "\\\\").replace('"', '\\"')
+        safe_o = str(op).replace("\\", "\\\\").replace('"', '\\"')
+        labels = f'domain="{safe_d}",op="{safe_o}"'
+        lines.append(f"{prefix}_total{{{labels}}} {int(stat['total'])}")
+        lines.append(f"{prefix}_errors_total{{{labels}}} {int(stat['errors'])}")
+        for bound, n in zip(_PG_LATENCY_BUCKETS, stat["buckets"]):
+            lines.append(f"{prefix}_duration_seconds_bucket"
+                         f'{{{labels},le="{bound}"}} {int(n)}')
+        lines.append(f"{prefix}_duration_seconds_bucket"
+                     f'{{{labels},le="+Inf"}} {int(stat["total"])}')
+        lines.append(f"{prefix}_duration_seconds_sum{{{labels}}} {stat['seconds']:.6f}")
+        lines.append(f"{prefix}_duration_seconds_count{{{labels}}} {int(stat['total'])}")
+
+
 def prometheus_text() -> str:
     """存储真源指标（Prometheus 文本）：池可用 / 模式 / 按域 stale。
 
@@ -603,25 +693,15 @@ def prometheus_text() -> str:
         "# TYPE medassist_agent_pg_query_errors_total counter",
         "# HELP medassist_agent_pg_query_duration_seconds PG 查询耗时直方图（秒，可算 P95/P99）",
         "# TYPE medassist_agent_pg_query_duration_seconds histogram",
+        "# HELP medassist_agent_pg_write_total 真正尝试过的 PG 写次数（镜像/全量同步/单行 UPSERT）",
+        "# TYPE medassist_agent_pg_write_total counter",
+        "# HELP medassist_agent_pg_write_errors_total PG 写失败次数（镜像写失败不冒泡，主写失败由调用方处理）",
+        "# TYPE medassist_agent_pg_write_errors_total counter",
+        "# HELP medassist_agent_pg_write_duration_seconds PG 写耗时直方图（秒，可算 P95/P99）",
+        "# TYPE medassist_agent_pg_write_duration_seconds histogram",
     ]
-    with _pg_metrics_lock:
-        snapshot = [(d, o, {**stat, "buckets": list(stat["buckets"])})
-                    for (d, o), stat in sorted(_pg_query_stats.items())]
-    for domain, op, stat in snapshot:
-        safe_d = str(domain).replace("\\", "\\\\").replace('"', '\\"')
-        safe_o = str(op).replace("\\", "\\\\").replace('"', '\\"')
-        labels = f'domain="{safe_d}",op="{safe_o}"'
-        lines.append(f"medassist_agent_pg_query_total{{{labels}}} {int(stat['total'])}")
-        lines.append(f"medassist_agent_pg_query_errors_total{{{labels}}} {int(stat['errors'])}")
-        for bound, n in zip(_PG_LATENCY_BUCKETS, stat["buckets"]):
-            lines.append(f"medassist_agent_pg_query_duration_seconds_bucket"
-                         f'{{{labels},le="{bound}"}} {int(n)}')
-        lines.append(f"medassist_agent_pg_query_duration_seconds_bucket"
-                     f'{{{labels},le="+Inf"}} {int(stat["total"])}')
-        lines.append(f"medassist_agent_pg_query_duration_seconds_sum{{{labels}}} "
-                     f"{stat['seconds']:.6f}")
-        lines.append(f"medassist_agent_pg_query_duration_seconds_count{{{labels}}} "
-                     f"{int(stat['total'])}")
+    _emit_pg_family(lines, "medassist_agent_pg_query", _pg_query_stats)
+    _emit_pg_family(lines, "medassist_agent_pg_write", _pg_write_stats)
     for domain in st["staleDomains"]:
         safe = str(domain).replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'medassist_agent_storage_stale_domains{{domain="{safe}"}} 1')
@@ -656,7 +736,8 @@ async def mirror_audit(event_type: str, actor: str, payload: dict) -> None:
     if not _pool:
         return
     try:
-        await _arun(_mirror_audit_impl(event_type, actor, payload))
+        await _pg_write_async("audit_log", "mirror",
+                              _mirror_audit_impl(event_type, actor, payload))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
 
@@ -673,7 +754,8 @@ async def mirror_user(username: str, role: str, pw_hash: str) -> None:
     if not _pool:
         return
     try:
-        await _arun(_mirror_user_impl(username, role, pw_hash))
+        await _pg_write_async("users", "mirror",
+                              _mirror_user_impl(username, role, pw_hash))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.mirror_user_failed", error=str(e)[:120])
 
@@ -727,7 +809,7 @@ async def mirror_review(item: dict | None) -> None:
     if not _pool or not item:
         return
     try:
-        await _arun(_mirror_review_impl(item))
+        await _pg_write_async("review_queue", "mirror", _mirror_review_impl(item))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.mirror_review_failed", error=str(e)[:120])
 
@@ -739,7 +821,7 @@ def upsert_review_row(item: dict) -> None:
     与 upsert_user_row 同纪律：本函数只管 PG 行，JSON 镜像由调用方 mirror_json_file。"""
     if offline_mode() or not _pool:
         raise RuntimeError("upsert_review_row 需要 PG 池（离线/单机形态请走 save_queue 全量同步）")
-    _run_pg(_mirror_review_impl(item))
+    _pg_write_call("review_queue", "upsert_row", _mirror_review_impl(item))
 
 
 async def _counts_impl() -> dict:
@@ -958,7 +1040,7 @@ def _json_then_pg(save_fn, path: str, data) -> None:
     # 既浪费（每次写都重解析环境）又会绕过测试/运行期对 settings 的 patch（实测回归）。
     if settings.pg_primary:
         try:
-            _run_pg(save_fn(data))
+            _pg_write_call("repo", "full_sync", save_fn(data))
         except Exception as e:
             # 真源写失败：不写 JSON（避免分裂），向上抛出由调用方决定语义（HTTP 500）
             logger.warning("pg.repo.primary_write_failed", error=str(e)[:120],
@@ -975,7 +1057,7 @@ def _json_then_pg(save_fn, path: str, data) -> None:
     # ---- 旧编排（JSON 主写，pg_primary=false 灰度回滚用）----
     _write_json_atomic(path, data)
     try:
-        _run_pg(save_fn(data))
+        _pg_write_call("repo", "full_sync", save_fn(data))
         _repo_pg_stale.discard(domain)
         _stale_warned.discard(domain)  # 任务2：stale 已清除，下次再 stale 重新 WARN
     except Exception as e:  # noqa: BLE001
@@ -1056,7 +1138,8 @@ def upsert_user_row(username: str, role: str, dept: str, password_hash: str) -> 
     无池/离线：调用方须自行保证 JSON 真源（本函数只管 PG 行，不落盘）。"""
     if offline_mode() or not _pool:
         raise RuntimeError("upsert_user_row 需要 PG 池（离线/单机形态请走 save_users 全量同步）")
-    _run_pg(_pg_upsert_user_row(username, role, dept, password_hash))
+    _pg_write_call("users", "upsert_row",
+                   _pg_upsert_user_row(username, role, dept, password_hash))
 
 
 def delete_user_row(username: str) -> int:
@@ -1509,7 +1592,7 @@ def upsert_consult_row(item: dict) -> None:
             await c.execute(_CONSULT_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
                             item.get("initiator", ""), item.get("status", "open"))
 
-    _run_pg(_impl())
+    _pg_write_call("consults", "upsert_row", _impl())
 
 
 # ---- 第 89 批：会诊列表（收件箱/我发起/我参与）下推 PG ----
@@ -1641,7 +1724,7 @@ def upsert_prescription_row(item: dict) -> None:
             await c.execute(_RX_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
                             item.get("doctor", ""), item.get("status", "pending_pharm"))
 
-    _run_pg(_impl())
+    _pg_write_call("prescriptions", "upsert_row", _impl())
 
 
 # ---- 第 81 批：处方列表分页/计数下推 PG ----
@@ -1827,7 +1910,7 @@ def upsert_case_archive_row(item: dict) -> None:
             await c.execute(_CASE_UPSERT, item["id"], json.dumps(item, ensure_ascii=False),
                             item.get("dept", ""), item.get("status", "active"))
 
-    _run_pg(_impl())
+    _pg_write_call("case_archive", "upsert_row", _impl())
 
 
 # ---- 阶段1.1：药品字典 drug_dict / 相互作用规则 drug_rules（PG 真源 + JSON 兜底） ----
@@ -2162,7 +2245,7 @@ def upsert_skill_item(item: dict, path: str) -> None:
             _repo_pg_stale.add(domain)
         return
     try:
-        _run_pg(_pg_upsert_skill(item))
+        _pg_write_call("skills", "upsert_row", _pg_upsert_skill(item))
         _repo_pg_stale.discard(domain)
     except Exception as e:  # noqa: BLE001 —— 行级写失败降级 JSON，读路径按 stale 回落
         logger.warning("pg.repo.upsert_skill_failed", error=str(e)[:120], file=domain)
@@ -2334,7 +2417,8 @@ def upsert_json_item(table: str, path: str, item: dict,
             _repo_pg_stale.add(domain)
         return
     try:
-        _run_pg(_pg_upsert_json_item(table, key, item, ignore_existing))
+        _pg_write_call(table, "upsert_row",
+                       _pg_upsert_json_item(table, key, item, ignore_existing))
         _repo_pg_stale.discard(domain)
     except Exception as e:  # noqa: BLE001 —— 行级写失败降级 JSON，读路径按 stale 回落
         logger.warning("pg.repo.upsert_failed", error=str(e)[:120], file=domain)
