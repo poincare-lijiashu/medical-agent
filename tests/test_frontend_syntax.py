@@ -847,3 +847,29 @@ def test_audit_server_filters_markers():
     # 旧实现（翻页重拉整个面板）必须消失：审计翻页只应调用 loadAudit
     assert "await loadData()\n  if (delta > 0" not in src
 
+
+# ---- 第 109 批：审计时间区间（YYYY-MM-DD）+ 按过滤全量导出 ----
+
+def test_audit_time_window_and_export_markers():
+    """日期区间必须下发给后端（本地日历日语义），全量导出必须走服务端端点。
+
+    锁定：
+    - 两个原生 date 输入（change 触发防抖查询）与清空逻辑；
+    - 参数仅非空时下发（空值保持旧 SQL 无 WHERE）；
+    - 全量导出走 GET /admin/audit/export（blob 响应），并读 X-Export-Rows/Truncated；
+    - 截断必须显式提示（不静默丢行）。"""
+    src = _vue_source()
+    for marker in (
+        'data-testid="audit-filter-from"', 'data-testid="audit-filter-to"',
+        'type="date"', '@change="onAuditFilterInput"',
+        "if (auditFrom.value) p.audit_from = auditFrom.value",
+        "if (auditTo.value) p.audit_to = auditTo.value",
+        "auditFrom.value = ''", "auditTo.value = ''",
+        'data-testid="audit-export-all"', "async function exportAuditAll()",
+        "'/medical/admin/audit/export'", "responseType: 'blob'",
+        "res.headers['x-export-rows']", "res.headers['x-export-truncated'] === '1'",
+        "达到 10000 行上限，已截断",
+    ):
+        assert marker in src, f"缺少审计时间区间/全量导出标记：{marker}"
+
+

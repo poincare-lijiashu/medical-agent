@@ -1,8 +1,9 @@
 <!-- 数据面板（轮3，admin）：语义迁移 legacy loadData/审计流/留痕模式开关/新增用户/
      用户表/科室管理/基础设施/应用日志健康卡/LLM 模型配置（F6）——
      统计卡只读；审计流（humanizeAudit 人话映射逐字迁至 utils/audit.js）默认收起、
-     服务端精确过滤（操作者/事件/动作，先过滤再分页，走轻端点 /admin/audit）+
-     本页搜索 + 翻页（每页 50，翻头自动回退）+ CSV 导出（BOM+引号转义）/payload JSON
+     服务端精确过滤（操作者/事件/动作/日期区间，先过滤再分页，走轻端点 /admin/audit）+
+     本页搜索 + 翻页（每页 50，翻头自动回退）+ CSV 导出（本页 BOM+引号转义 /
+     按过滤全量走服务端 /admin/audit/export，≤10000 行且服务端留痕）/payload JSON
      折叠；留痕模式运行时开关（确认弹条文案逐字，POST /admin/config-toggle 即时生效）；
      用户删除需输入用户名确认；日志行仅展示不执行，ERROR/WARNING 高亮；
      LLM：provider 列表/新增/激活/停用（回内置 Qwen）/连通性测试/厂商预设防抖预填。 -->
@@ -38,9 +39,11 @@
             <el-input v-model="auditSearch" placeholder="本页内搜索：事件/操作/用户/人话描述" style="flex: 1; min-width: 180px" clearable />
             <el-button size="small" :disabled="auditOffset <= 0" @click="auditPage(-1)">上一页</el-button>
             <el-button size="small" :disabled="auditAtEnd" @click="auditPage(1)">下一页</el-button>
-            <el-button size="small" data-testid="audit-csv" @click="exportAuditCsv">导出审计 CSV</el-button>
+            <el-button size="small" data-testid="audit-csv" @click="exportAuditCsv">导出本页 CSV</el-button>
+            <el-button size="small" type="primary" plain data-testid="audit-export-all"
+                       :loading="auditExporting" @click="exportAuditAll">按过滤导出全量（≤10000）</el-button>
           </div>
-          <!-- 第 108 批：服务端精确过滤（先过滤再分页；输入防抖 300ms，过滤变化回第 1 页） -->
+          <!-- 第 108/109 批：服务端精确过滤（先过滤再分页；输入防抖 300ms，过滤变化回第 1 页） -->
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-top: 1px dashed var(--line)">
             <input v-model="auditActor" class="inp" list="audit-actor-opts" data-testid="audit-filter-actor"
                    placeholder="操作者（精确）" style="max-width: 150px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
@@ -51,8 +54,14 @@
             <input v-model="auditAction" class="inp" list="audit-action-opts" data-testid="audit-filter-action"
                    placeholder="动作（精确，如 resolved_approved）" style="max-width: 190px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
             <datalist id="audit-action-opts"><option v-for="v in auditFacets.actions" :key="v" :value="v" /></datalist>
+            <span class="src">时间：</span>
+            <input v-model="auditFrom" type="date" class="inp" data-testid="audit-filter-from"
+                   style="max-width: 145px" @change="onAuditFilterInput" />
+            <span class="src">至</span>
+            <input v-model="auditTo" type="date" class="inp" data-testid="audit-filter-to"
+                   style="max-width: 145px" @change="onAuditFilterInput" />
             <el-button size="small" data-testid="audit-filter-reset" :disabled="!auditFiltered" @click="resetAuditFilters">清空过滤</el-button>
-            <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作（精确匹配；候选项取自本页）' }}</span>
+            <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作 / 日期区间（精确匹配；候选项取自本页）' }}</span>
           </div>
           <ul class="feed" style="max-height: 420px; overflow: auto" data-testid="audit-list">
             <template v-if="auditView.length">
@@ -334,11 +343,14 @@ const auditTotal = ref(null)
 const auditActor = ref('')
 const auditEvent = ref('')
 const auditAction = ref('')
+const auditFrom = ref('') // 第 109 批：YYYY-MM-DD（含首尾日，后端按本地时区换算半开窗）
+const auditTo = ref('')
+const auditExporting = ref(false)
 let auditFilterTimer = 0
 let auditLoadSeq = 0 // 竞态守卫：只认最后一次请求的结果（连续输入/翻页时旧响应不覆盖新结果）
 
 const auditFiltered = computed(() => !!(auditActor.value.trim() || auditEvent.value.trim()
-  || auditAction.value.trim()))
+  || auditAction.value.trim() || auditFrom.value || auditTo.value))
 
 // 总数文案：有服务端总数用总数；无（PG 与 JSONL 都拿不到）时——
 // 未过滤回落面板 events_total，已过滤显示「—」（不编造）
@@ -389,6 +401,8 @@ function auditParams() {
   if (a) p.audit_actor = a
   if (e) p.audit_event = e
   if (c) p.audit_action = c
+  if (auditFrom.value) p.audit_from = auditFrom.value
+  if (auditTo.value) p.audit_to = auditTo.value
   return p
 }
 
@@ -441,6 +455,8 @@ function resetAuditFilters() {
   auditActor.value = ''
   auditEvent.value = ''
   auditAction.value = ''
+  auditFrom.value = ''
+  auditTo.value = ''
   auditOffset.value = 0
   loadAudit()
 }
@@ -476,6 +492,36 @@ function exportAuditCsv() {
   a.remove()
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   ElMessage.success('已导出 ' + rows.length + ' 条审计')
+}
+// 第 109 批：按当前过滤条件导出全量（服务端生成 CSV，上限 10,000；截断显式提示）
+// 为什么放服务端：跨页全量必须由真源生成；前端只有一页数据，且导出需服务端留痕。
+async function exportAuditAll() {
+  if (auditExporting.value) return
+  auditExporting.value = true
+  try {
+    const params = auditParams()
+    delete params.audit_offset // 全量导出与当前页码无关
+    const res = await http.get('/medical/admin/audit/export', { params, responseType: 'blob' })
+    const rows = res.headers['x-export-rows'] || '?'
+    const truncated = res.headers['x-export-truncated'] === '1'
+    const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'audit_' + new Date().toISOString().slice(0, 10) + '_filtered.csv'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    if (truncated) {
+      ElMessage.warning('已导出 ' + rows + ' 条（达到 10000 行上限，已截断；请缩小时间范围分批导出）')
+    } else {
+      ElMessage.success('已按当前过滤导出 ' + rows + ' 条审计（服务端已留痕）')
+    }
+  } catch (e) {
+    ElMessage.error('导出失败：' + detailText(e))
+  } finally {
+    auditExporting.value = false
+  }
 }
 
 // ---- 留痕模式运行时开关（POST /admin/config-toggle 写 runtime_flags.json，即时生效） ----

@@ -4373,6 +4373,57 @@ API（cookie 会话）:
 - 过滤候选值只来自当前页，跨页全集需要额外的 `DISTINCT` 端点（未做）；
 - 审计流仍无时间区间过滤与导出全量（CSV 只导当前页/当前本页搜索结果）。
 
+## 113. 2026-11-08 合规运营（第 109 批：审计时间区间过滤 + 按过滤全量导出）
+
+**问题**：第 108 批把 actor/event/action 过滤接到前端，但合规抽查最常用的维度是"某段时间"；
+且前端只能导出当前页 50 条，跨页取证要人肉翻页拼接。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | `_audit_where` 增加**半开时间窗** `[start, end)`（`ts >= $n AND ts < $n`）；`_audit_recent_pg_impl` / `_audit_count_pg_impl` / `audit_recent_pg` / `audit_count_pg` 透传 `start/end`，分页与计数共用同一片段 |
+| `backend/api/v1/medical/audit.py`（新） | 从 admin.py 拆出审计端点（admin.py 回落到 <600 行护栏）：`GET /admin/audit`、`GET /admin/audit/export`；`_audit_window`（YYYY-MM-DD → 本地时区半开窗，非法/倒置 400）、`_audit_match` / `_audit_jsonl_rows`（PG/JSONL 同口径）、`_csv_cell`（引号转义 + Excel 公式注入防护） |
+| `backend/api/v1/medical/admin.py` | 删除审计实现与端点，`include_router(audit.router)` 固定在 `/admin/data` 之前（保持既有路由注册顺序）；`/admin/data` 增加 `audit_from/audit_to` |
+| `frontend-vue/src/views/DataView.vue` | 审计区新增起止日期（原生 date）+「按过滤导出全量（≤10000）」；导出走服务端 blob，读 `X-Export-Rows/X-Export-Truncated`，截断显式提示 |
+| `frontend-vue/src/utils/audit.js` | `audit_export` 人话映射（`test_audit_humanize_coverage` 要求后端新增 action 必须有映射） |
+| `tests/test_audit_filters.py` 等 | +6：半开窗 SQL、JSONL 时间窗、非法日期、CSV 形状/注入、截断、导出留痕；路由快照 62→63；前端标记锁 |
+
+**设计取舍**
+- **半开窗 `[start, end)`**：截止日换算为次日 00:00 → "11-01~11-07"含 7 日全天，相邻区间不重不漏；
+- **日期按服务端本地时区解释**：与用户看到的审计时间（fmtTs 本地化）一致；请求只传日历日，避免前端时区换算歧义；
+- **非法日期 400 而不是忽略**：静默忽略会让用户以为导出了某段时间、实际是全量——合规场景下这是错误数据；
+- **导出上限 10000 + 显式截断头**：全量读入内存必须设上限，超限用 `X-Export-Truncated: 1` 告知并由前端提示缩小范围；
+- **CSV 公式注入防护**：审计含用户输入（用户名/payload），`=cmd|...` 在 Excel 打开会被执行；服务端导出统一前置单引号；
+- **导出留痕**：`admin.audit_export` 记过滤条件/行数/是否截断；留痕写在读取之后，故不会出现在本次导出文件内（已在 docstring 说明）；
+- **拆 audit.py 而不是压缩注释**：admin.py 触及 600 行护栏，按域拆分是项目既定路线（W4.3），且保持路由注册顺序不变。
+
+**真实数据（8001 + 真实 PG，`audit_log` 2,178 行）**
+```
+PG 日分布（Asia/Shanghai）: 11-08 1821 / 11-07 12 / 10-30 333 / 10-29 12
+API: /admin/audit?audit_from=2026-10-30&audit_to=2026-10-30   total=333（SQL 333）
+     /admin/audit?audit_from=2026-11-07&audit_to=2026-11-08   total=1833（SQL 1833）
+     filters 回显 from/to 正确
+导出: /admin/audit/export?audit_from=2026-11-07&audit_to=2026-11-08
+      X-Export-Rows=1833 / X-Export-Truncated=0 / CSV 1834 行（含表头）/ BOM 存在 / 表头逐字一致
+留痕: PG mirror 中 admin.audit_export 计数 0 → 1
+异常: /admin/audit?audit_from=2026/01/01 → 400；from > to → 400
+14/14 校验通过
+```
+
+**校验**
+- 定向：`test_audit_filters + test_router_split_guard + test_frontend_syntax +
+  test_pg_query_metrics + test_audit_pagination + test_admin_logs` **67 passed**；
+- 新增 action 触发 `test_audit_humanize_coverage` 红 → 补 `audit_export` 映射后 **50 passed**；
+- 全量 pytest：**1447 passed / 4 failed**；4 条均为 `tests/e2e` 的 `.rail a.nav` 超时，
+  服务器日志同期 **8 条 429**（60 次/分钟滑动窗口），单独复跑 4 条 **4 passed**，与本次改动无关。
+
+**仍存边界**
+- 日期粒度只到"日"（无时分秒区间）；
+- 导出上限 10,000 行，超限需缩小时间范围分批；无异步大导出任务队列（10 万级以上会占用请求线程）；
+- 时间窗按服务端本地时区解释：多时区部署时需要显式配置"业务时区"（当前单时区部署）；
+- `audit_log` 无 ts 分区，长期需归档/分区；
+- 服务端 CSV 只含原始字段（人话描述仍由前端本页导出提供）。
+
 
 
 

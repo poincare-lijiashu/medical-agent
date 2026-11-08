@@ -158,6 +158,18 @@ export function humanizeAudit(e) {
     user_deleted: () => `删除了用户 ${p.user || '—'}`,
     department_added: () => `新增了科室 ${p.name || '—'}`,
     department_removed: () => `删除了科室 ${p.name || '—'}`,
+    /* 第 109 批：审计全量导出（payload: filters/rows/truncated） */
+    audit_export: () => `按过滤条件导出审计 ${p.rows ?? 0} 条`
+      + (p.truncated ? '（达到 10000 行上限，已截断）' : '')
+      + (p.filters && (p.filters.actor || p.filters.event || p.filters.action
+        || p.filters.from || p.filters.to)
+        ? `（${[p.filters.actor ? '操作者 ' + p.filters.actor : '',
+                p.filters.event ? '事件 ' + p.filters.event : '',
+                p.filters.action ? '动作 ' + p.filters.action : '',
+                p.filters.from || p.filters.to
+                  ? '日期 ' + (p.filters.from || '…') + '~' + (p.filters.to || '…') : '']
+            .filter(Boolean).join(' · ')}）`
+        : ''),
     /* 阶段1.5：药品字典/规则管理变更（payload 带 target=dict|rules；dict 带 name，rules 带药对） */
     drug_dict_changed: () => p.target === 'rules'
       ? `${p.action === 'add' ? '新增了' : p.action === 'update' ? '更新了' : '删除了'}相互作用规则（${p.drug_a || '—'} × ${p.drug_b || '—'}）`

@@ -10,7 +10,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.deps import rate_limit, require_role, require_user, revoke_user
+from backend.api.v1.medical import audit as audit_router
 from backend.api.v1.medical import shared as _shared
+from backend.api.v1.medical.audit import (_audit_filters, _audit_page,  # noqa: F401
+                                          _audit_window)
 from backend.config import settings
 from backend.core import llm_config, runtime_flags
 from backend.core import pg_store
@@ -240,73 +243,22 @@ async def admin_delete_department(name: str, user: dict = Depends(require_role("
 
 
 # ---------- admin 运维：数据面板 / 队列清理（只读优先，不做裸 SQL） ----------
-_AUDIT_PAGE_SIZE = 50
-
-
-def _audit_filters(actor: str, event: str, action: str) -> tuple[str, str, str]:
-    """第 108 批：审计过滤参数归一（trim + 64 字上限，防超长参数打崩 SQL/缓存）。"""
-    return ((actor or "").strip()[:64], (event or "").strip()[:64],
-            (action or "").strip()[:64])
-
-
-async def _audit_page(off: int, actor_f: str = "", event_f: str = "",
-                      action_f: str = "") -> tuple[list, int | None]:
-    """第 108 批：审计流一页（PG 真源优先 → JSONL 回落，同一过滤口径）。
-
-    返回 (items, total)；total 为"过滤后"总条数，PG 不可用且能算出时为 JSONL 计数，
-    两者都拿不到时 None（前端回退"本页是否满页"判断下一页）。
-    """
-    al = _shared.get_audit_logger()
-    try:
-        src = await pg_store.audit_recent_pg(_AUDIT_PAGE_SIZE, offset=off, actor=actor_f,
-                                             event_type=event_f, action=action_f)
-    except Exception:  # noqa: BLE001 —— 数据源切换绝不影响面板主数据
-        src = None
-    if src is None:
-        def _match(e: dict) -> bool:
-            p = e.get("payload") or {}
-            return ((not actor_f or e.get("actor") == actor_f)
-                    and (not event_f or e.get("event_type") == event_f)
-                    and (not action_f or p.get("action") == action_f))
-        # 过滤后分页（与 PG 侧同口径；entries 为时间正序，倒序后切片）
-        entries = getattr(al, "entries", []) or []
-        matched = [e for e in entries if _match(e)][::-1]
-        src = matched[off:off + _AUDIT_PAGE_SIZE]
-        total: int | None = len(matched)
-    else:
-        total = await pg_store.audit_count_pg(actor=actor_f, event_type=event_f, action=action_f)
-    items = [{"ts": e["ts"], "event": e["event_type"],
-              "action": (e.get("payload") or {}).get("action", ""), "actor": e["actor"],
-              "payload": e.get("payload", {})}  # 完整 payload 下传，供前端人话化详情
-             for e in src]
-    return items, total
-
-
-@router.get("/admin/audit")
-async def admin_audit(user: dict = Depends(require_role("admin")), audit_offset: int = 0,
-                      audit_actor: str = "", audit_event: str = "", audit_action: str = ""):
-    """第 108 批：审计流专用分页端点（只读）。
-
-    为什么独立：数据面板 /admin/data 还带用户表、复核统计、Milvus 探针等重活；审计过滤
-    输入框每敲一次都拉全量面板是浪费。此端点只查审计一页 + 过滤后总数，前端过滤/翻页
-    走它，首屏与刷新仍走 /admin/data。参数与回落语义与 /admin/data 完全一致。
-    """
-    off = max(0, audit_offset)
-    actor_f, event_f, action_f = _audit_filters(audit_actor, audit_event, audit_action)
-    items, total = await _audit_page(off, actor_f, event_f, action_f)
-    return {"items": items, "total": total, "offset": off, "limit": _AUDIT_PAGE_SIZE,
-            "filters": {"actor": actor_f, "event": event_f, "action": action_f}}
+# 第 109 批：审计流端点（/admin/audit、/admin/audit/export）与过滤实现拆到 audit.py；
+# 此处 include 的位置固定在 /admin/data 之前，保持既有路由注册顺序快照。
+router.include_router(audit_router.router)
 
 
 @router.get("/admin/data")
 async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: int = 0,
-                     audit_actor: str = "", audit_event: str = "", audit_action: str = ""):
+                     audit_actor: str = "", audit_event: str = "", audit_action: str = "",
+                     audit_from: str = "", audit_to: str = ""):
     """管理员只读数据面板：用户、审计流、队列统计、PG 镜像与知识库规模、基础设施状态。
 
     audit_offset（任务A）：审计流翻页偏移（每页 50，与前端「上一页/下一页」配合）；
     负数按 0 处理，绝不因越界参数 500。
     第 107 批：审计流可按 actor / event_type / payload.action 精确过滤（先过滤再分页）。
     第 108 批：过滤/分页逻辑抽到 _audit_page（与 /admin/audit 共享），并增返 audit_total。
+    第 109 批：增加 audit_from / audit_to 时间区间（含首尾日）。
     """
     from backend.core.auth import all_users
     from backend.core.medical_kb import doc_count, milvus_status
@@ -324,7 +276,8 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     # F5：保留完整 ISO 串（含 +00:00 偏移），fmtTs 依赖时区信息做本地化。
     off = max(0, audit_offset)
     actor_f, event_f, action_f = _audit_filters(audit_actor, audit_event, audit_action)
-    audit_recent, audit_total = await _audit_page(off, actor_f, event_f, action_f)
+    start, end = _audit_window(audit_from, audit_to)
+    audit_recent, audit_total = await _audit_page(off, actor_f, event_f, action_f, start, end)
     try:
         pg_counts = await pg_store.counts()
     except Exception:  # noqa: BLE001

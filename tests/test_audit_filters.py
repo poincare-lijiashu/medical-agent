@@ -17,13 +17,14 @@ from backend.core.auth import seed_default_users
 from backend.main import app
 
 ENTRIES = [
-    {"ts": "2026-01-01T00:00:00+00:00", "event_type": "review", "actor": "admin01",
+    # 本地时区（+08:00）中午：日期区间按本地日历日解释，测试不依赖运行机器时区
+    {"ts": "2026-01-01T12:00:00+08:00", "event_type": "review", "actor": "admin01",
      "payload": {"action": "resolved_approved"}},
-    {"ts": "2026-01-02T00:00:00+00:00", "event_type": "prescription", "actor": "pharm01",
+    {"ts": "2026-01-02T12:00:00+08:00", "event_type": "prescription", "actor": "pharm01",
      "payload": {"action": "approved"}},
-    {"ts": "2026-01-03T00:00:00+00:00", "event_type": "review", "actor": "qc01",
+    {"ts": "2026-01-03T12:00:00+08:00", "event_type": "review", "actor": "qc01",
      "payload": {"action": "resolved_rejected"}},
-    {"ts": "2026-01-04T00:00:00+00:00", "event_type": "review", "actor": "admin01",
+    {"ts": "2026-01-04T12:00:00+08:00", "event_type": "review", "actor": "admin01",
      "payload": {"action": "reopened"}},
 ]
 
@@ -114,14 +115,14 @@ def test_pg_count_sql_shape_with_filters(monkeypatch):
 def test_route_passes_filters_to_pg(monkeypatch):
     seen = {}
 
-    async def _fake(limit, offset=0, actor="", event_type="", action=""):
+    async def _fake(limit, offset=0, actor="", event_type="", action="", start=None, end=None):
         seen.update(limit=limit, offset=offset, actor=actor,
                     event_type=event_type, action=action)
         return []
 
     monkeypatch.setattr(pg_store, "audit_recent_pg", _fake)
 
-    async def _count(actor="", event_type="", action=""):
+    async def _count(actor="", event_type="", action="", start=None, end=None):
         return 0
 
     monkeypatch.setattr(pg_store, "audit_count_pg", _count)
@@ -165,7 +166,8 @@ def test_admin_audit_route_pages_with_jsonl_fallback(monkeypatch):
                                                  "resolved_approved"]
     assert d["total"] == 3
     assert d["offset"] == 0 and d["limit"] == 50
-    assert d["filters"] == {"actor": "", "event": "review", "action": ""}
+    assert d["filters"] == {"actor": "", "event": "review", "action": "",
+                            "from": "", "to": ""}
 
     d2 = c.get("/api/v1/medical/admin/audit?audit_event=review&audit_offset=2", headers=h).json()
     assert [e["action"] for e in d2["items"]] == ["resolved_approved"]
@@ -180,10 +182,10 @@ def test_admin_audit_route_uses_pg_total(monkeypatch):
     rows = [{"ts": "2026-01-04T00:00:00+00:00", "event_type": "review",
              "actor": "admin01", "payload": {"action": "reopened"}}]
 
-    async def _fake(limit, offset=0, actor="", event_type="", action=""):
+    async def _fake(limit, offset=0, actor="", event_type="", action="", start=None, end=None):
         return rows
 
-    async def _count(actor="", event_type="", action=""):
+    async def _count(actor="", event_type="", action="", start=None, end=None):
         return 2149
 
     monkeypatch.setattr(pg_store, "audit_recent_pg", _fake)
@@ -191,6 +193,149 @@ def test_admin_audit_route_uses_pg_total(monkeypatch):
     c, h = _client(monkeypatch)
     d = c.get("/api/v1/medical/admin/audit?audit_actor=admin01", headers=h).json()
     assert len(d["items"]) == 1 and d["total"] == 2149
+
+
+# ---------- 第 109 批：时间区间（半开窗）+ 全量导出 ----------
+
+def test_pg_time_window_sql_is_half_open(monkeypatch):
+    """时间区间以半开 [start, end) 下发；截止日由调用方换算为次日 00:00。"""
+    from datetime import datetime, timezone
+    conn = _Conn()
+    monkeypatch.setattr(pg_store, "_pool", _Pool(conn))
+    s = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    e = datetime(2026, 11, 8, tzinfo=timezone.utc)
+    asyncio.run(pg_store._audit_recent_pg_impl(50, 0, "admin01", "", "", s, e))
+    assert ("WHERE actor = $1 AND ts >= $2 AND ts < $3" in conn.sql)
+    assert conn.args[:3] == ("admin01", s, e)
+    assert conn.args[3:] == (50, 0)
+
+    asyncio.run(pg_store._audit_count_pg_impl("", "", "", s, e))
+    assert conn.sql == "SELECT count(*) FROM audit_log WHERE ts >= $1 AND ts < $2"
+    assert conn.args == (s, e)
+
+
+def test_jsonl_fallback_time_window(monkeypatch):
+    """JSONL 回落同样按半开窗过滤（ENTRIES 为 01-01 ~ 01-04，含首尾日语义）。"""
+    async def _none(*a, **k):
+        return None
+
+    monkeypatch.setattr(pg_store, "audit_recent_pg", _none)
+    c, h = _client(monkeypatch)
+    d = c.get("/api/v1/medical/admin/audit?audit_from=2026-01-02&audit_to=2026-01-03",
+              headers=h).json()
+    assert [e["action"] for e in d["items"]] == ["resolved_rejected", "approved"]
+    assert d["total"] == 2
+    assert d["filters"]["from"] == "2026-01-02" and d["filters"]["to"] == "2026-01-03"
+
+    # 只给起始日：>= 当日 00:00 → 01-03、01-04 两天
+    d2 = c.get("/api/v1/medical/admin/audit?audit_from=2026-01-03", headers=h).json()
+    assert [e["action"] for e in d2["items"]] == ["reopened", "resolved_rejected"]
+    # 只给截止日：< 次日 00:00 → 01-01 当天也包含（按本地时区解释）
+    d3 = c.get("/api/v1/medical/admin/audit?audit_to=2026-01-01", headers=h).json()
+    assert len(d3["items"]) == 1 and d3["items"][0]["action"] == "resolved_approved"
+
+
+def test_audit_window_rejects_bad_input(monkeypatch):
+    """非法日期/起止倒置 → 400（不静默忽略，避免导出范围与预期不符）。"""
+    c, h = _client(monkeypatch)
+    r = c.get("/api/v1/medical/admin/audit?audit_from=2026/01/01", headers=h)
+    assert r.status_code == 400 and "YYYY-MM-DD" in r.json()["detail"]
+    r2 = c.get("/api/v1/medical/admin/audit?audit_from=2026-02-01&audit_to=2026-01-01",
+               headers=h)
+    assert r2.status_code == 400 and "不能晚于" in r2.json()["detail"]
+
+
+def test_csv_cell_escapes_formula_and_quotes():
+    """CSV 单元格：引号转义 + Excel 公式注入防护（= + - @ 前置单引号）。"""
+    from backend.api.v1.medical.audit import _csv_cell
+    assert _csv_cell('a"b') == '"a""b"'
+    assert _csv_cell("=1+1") == "\"'=1+1\""
+    assert _csv_cell("+SUM(A1)") == "\"'+SUM(A1)\""
+    assert _csv_cell("-2") == "\"'-2\""
+    assert _csv_cell("@x") == "\"'@x\""
+    assert _csv_cell(None) == '""'
+    assert _csv_cell("张三") == '"张三"'
+
+
+def test_export_csv_shape_and_headers(monkeypatch):
+    """全量导出：BOM + 表头 + 行数头；payload 原样（JSON）随行下发。"""
+    rows = [
+        {"ts": "2026-01-04T00:00:00+00:00", "event_type": "admin",
+         "actor": "=cmd|' /C calc'!A0", "payload": {"action": "user_created", "n": 2}},
+        {"ts": "2026-01-03T00:00:00+00:00", "event_type": "review",
+         "actor": "qc01", "payload": {"action": "resolved", "note": 'he said "no"'}},
+    ]
+
+    async def _fake(limit, offset=0, actor="", event_type="", action="", start=None, end=None):
+        assert limit == 10001  # 多取 1 行用于判断是否截断
+        return rows
+
+    monkeypatch.setattr(pg_store, "audit_recent_pg", _fake)
+    c, h = _client(monkeypatch)
+    r = c.get("/api/v1/medical/admin/audit/export?audit_actor=admin01", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    assert r.headers["x-export-rows"] == "2"
+    assert r.headers["x-export-truncated"] == "0"
+    body = r.content.decode("utf-8-sig")
+    lines = body.strip().split("\r\n")
+    assert lines[0] == '"时间","事件","动作","操作者","payload"'
+    assert "\"'=cmd|' /C calc'!A0\"" in lines[1]  # 公式注入被前置单引号
+    assert "he said" in lines[2]                  # payload JSON 随行
+    assert lines[2].startswith('"2026-01-03T00:00:00+00:00","review","resolved","qc01"')
+
+
+def test_export_truncates_at_limit(monkeypatch):
+    """超过上限：只返回 10000 行并以 X-Export-Truncated: 1 显式告知。"""
+    rows = [{"ts": "2026-01-04T00:00:00+00:00", "event_type": "review",
+             "actor": "a", "payload": {}}] * 10001
+
+    async def _fake(limit, offset=0, actor="", event_type="", action="", start=None, end=None):
+        return rows
+
+    monkeypatch.setattr(pg_store, "audit_recent_pg", _fake)
+    c, h = _client(monkeypatch)
+    r = c.get("/api/v1/medical/admin/audit/export", headers=h)
+    assert r.status_code == 200
+    assert r.headers["x-export-rows"] == "10000"
+    assert r.headers["x-export-truncated"] == "1"
+
+
+def test_export_writes_audit_trail(monkeypatch):
+    """导出是合规敏感操作：必须留痕（action=audit_export，含过滤条件与行数）。"""
+    writes = []
+
+    class _SpyAudit:
+        def __init__(self):
+            self.entries = []
+
+        def write(self, *a, **k):
+            writes.append(k)
+
+        def recent(self, n=8, offset=0):
+            return []
+
+    async def _fake(limit, offset=0, actor="", event_type="", action="", start=None, end=None):
+        return []
+
+    async def _mirror(*a, **k):
+        return None
+
+    monkeypatch.setattr(pg_store, "audit_recent_pg", _fake)
+    monkeypatch.setattr(pg_store, "mirror_audit", _mirror)
+    c, h = _client(monkeypatch)
+    # 注意：_client 会 patch get_audit_logger，spy 必须在它之后安装
+    monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", _SpyAudit)
+    r = c.get("/api/v1/medical/admin/audit/export?audit_actor=doctor01&audit_from=2026-01-01",
+              headers=h)
+    assert r.status_code == 200
+    assert writes, "导出必须写审计"
+    k = writes[-1]
+    assert k["event_type"] == "admin" and k["action"] == "audit_export"
+    assert k["payload"]["filters"]["actor"] == "doctor01"
+    assert k["payload"]["filters"]["from"] == "2026-01-01"
+    assert k["payload"]["rows"] == 0 and k["payload"]["truncated"] is False
 
 
 def test_admin_audit_route_requires_admin(monkeypatch):

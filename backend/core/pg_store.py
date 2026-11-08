@@ -937,10 +937,13 @@ async def counts() -> dict:
 
 # ---------- 任务5：admin 审计流 PG 真源查询（audit_log 按 ts 倒序分页） ----------
 
-def _audit_where(actor: str, event_type: str, action: str) -> tuple[str, list]:
-    """第 108 批：审计流过滤 SQL 片段（三处复用：分页 / 计数）。
+def _audit_where(actor: str, event_type: str, action: str,
+                 start: datetime | None = None,
+                 end: datetime | None = None) -> tuple[str, list]:
+    """第 108/109 批：审计流过滤 SQL 片段（分页 / 计数复用）。
 
-    返回 (where_sql, params)；三参均为空 → ("", [])，SQL 与旧版逐字一致。
+    返回 (where_sql, params)；全部条件为空 → ("", [])，SQL 与旧版逐字一致。
+    时间区间为**半开** [start, end)：调用方把"截止日"换算成次日 00:00，边界不重不漏。
     值一律走 $n 占位符，条件列名是固定常量（无注入面）。"""
     conds, params = [], []
     if actor:
@@ -952,17 +955,25 @@ def _audit_where(actor: str, event_type: str, action: str) -> tuple[str, list]:
     if action:
         params.append(action)
         conds.append(f"payload->>'action' = ${len(params)}")
+    if start is not None:
+        params.append(start)
+        conds.append(f"ts >= ${len(params)}")
+    if end is not None:
+        params.append(end)
+        conds.append(f"ts < ${len(params)}")
     return ((" WHERE " + " AND ".join(conds)) if conds else ""), params
 
 
 async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
-                                event_type: str = "", action: str = "") -> list:
+                                event_type: str = "", action: str = "",
+                                start: datetime | None = None,
+                                end: datetime | None = None) -> list:
     """第 107 批：审计流可选过滤（actor/event_type/payload.action，全部精确匹配）。
 
-    过滤在 SQL 侧完成，offset 是"过滤后"的偏移（与前端分页一致）；三参均为空时
-    SQL 与旧版逐字一致（无 WHERE）。
+    过滤在 SQL 侧完成，offset 是"过滤后"的偏移（与前端分页一致）；全部条件为空时
+    SQL 与旧版逐字一致（无 WHERE）。第 109 批增加半开时间区间 [start, end)。
     """
-    where, params = _audit_where(actor, event_type, action)
+    where, params = _audit_where(actor, event_type, action, start, end)
     n = len(params)
     async with _pool.acquire() as c:
         rows = await c.fetch(  # noqa: S608 —— 片段均为固定常量，值走 $n
@@ -983,19 +994,24 @@ async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
     return out
 
 
-async def _audit_count_pg_impl(actor: str = "", event_type: str = "", action: str = "") -> int:
+async def _audit_count_pg_impl(actor: str = "", event_type: str = "", action: str = "",
+                               start: datetime | None = None,
+                               end: datetime | None = None) -> int:
     """第 108 批：过滤后的审计总条数（前端据此显示"共 N 条"并精确禁用下一页）。"""
-    where, params = _audit_where(actor, event_type, action)
+    where, params = _audit_where(actor, event_type, action, start, end)
     async with _pool.acquire() as c:
         return int(await c.fetchval("SELECT count(*) FROM audit_log" + where, *params) or 0)  # noqa: S608
 
 
 async def audit_recent_pg(limit: int = 50, offset: int = 0, actor: str = "",
-                          event_type: str = "", action: str = "") -> list | None:
+                          event_type: str = "", action: str = "",
+                          start: datetime | None = None,
+                          end: datetime | None = None) -> list | None:
     """任务5：admin 审计流数据源——PG audit_log 表按 ts 倒序分页。
 
     第 107 批：支持 actor/event_type/action 精确过滤（SQL 侧过滤后再分页）。
     第 108 批：读路径纳入 Prometheus 计量（domain=audit_log, op=recent_page）。
+    第 109 批：支持半开时间区间 [start, end)。
     返回与 AuditLog.recent(JSONL) 相同结构 [{ts,event_type,actor,payload}]（payload
     内含 action/role 等字段）；未建池/异常/超时一律返回 None（调用方回落 JSONL 现状），
     绝不冒泡影响 admin 面板。"""
@@ -1005,13 +1021,15 @@ async def audit_recent_pg(limit: int = 50, offset: int = 0, actor: str = "",
         return await _arun_metered("audit_log", "recent_page",
                                    _audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset)),
                                                          str(actor or ""), str(event_type or ""),
-                                                         str(action or "")))
+                                                         str(action or ""), start, end))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.audit_recent_failed", error=str(e)[:120])
         return None
 
 
-async def audit_count_pg(actor: str = "", event_type: str = "", action: str = "") -> int | None:
+async def audit_count_pg(actor: str = "", event_type: str = "", action: str = "",
+                         start: datetime | None = None,
+                         end: datetime | None = None) -> int | None:
     """第 108 批：过滤后的审计总条数；PG 不可用/异常 → None（调用方按 JSONL 计数）。
 
     与 audit_recent_pg 同纪律：best-effort，绝不冒泡影响 admin 面板。"""
@@ -1020,7 +1038,7 @@ async def audit_count_pg(actor: str = "", event_type: str = "", action: str = ""
     try:
         return await _arun_metered("audit_log", "count",
                                    _audit_count_pg_impl(str(actor or ""), str(event_type or ""),
-                                                        str(action or "")))
+                                                        str(action or ""), start, end))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.audit_count_failed", error=str(e)[:120])
         return None
