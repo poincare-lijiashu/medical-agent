@@ -1140,6 +1140,33 @@ def review_history_page(involves: str | None = None, base_limit: int = 50,
         return None
 
 
+# ---- 第 84 批：单条复核详情按主键直查（替代"读全表再线性查找"） ----
+
+async def _pg_get_review_row_impl(rid: str) -> tuple[bool, dict | None]:
+    """(PG 是否给出答案, 条目)。空表 → (False, None)：JSON 才是真源，调用方回退线性查找。"""
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM review_queue"):
+            return (False, None)
+        rows = await c.fetch(  # noqa: S608 —— 固定列名
+            f"SELECT {','.join(_REVIEW_COLS)}, images FROM review_queue WHERE id = $1", rid)
+    if not rows:
+        return (True, None)  # 表非空且无此 id → 确定不存在（不再回落 JSON）
+    return (True, _review_item_from_row(rows[0]))
+
+
+def get_review_row(rid: str) -> tuple[bool, dict | None]:
+    """单条详情同步入口：无池/离线/旧编排 stale/异常 → (False, None)（调用方走 JSON 现状）。"""
+    if not rid or offline_mode() or not _pool:
+        return (False, None)
+    if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
+        return (False, None)
+    try:
+        return _run_pg(_pg_get_review_row_impl(rid))
+    except Exception as e:  # noqa: BLE001 —— 单条查询失败回落 JSON，不影响详情页
+        logger.warning("pg.get_review_row_failed", error=str(e)[:120])
+        return (False, None)
+
+
 # ---- llm_providers（kind/pid/data/active；data 内嵌 _seq 还原 providers 顺序） ----
 
 _LLM_IMPORT = """INSERT INTO llm_providers(kind,pid,data,active) VALUES($1,$2,$3::jsonb,$4)

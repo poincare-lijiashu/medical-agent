@@ -3348,6 +3348,48 @@ pharm01（本人参与）               total=5   MATCH
 - 关键字仍逐行 `POSITION`，无全文索引；
 - 图片裁剪在应用层（当页≤500 条），未下推为 SQL 中的 JSON 删除。
 
+## 88. 2026-11-08 性能与容量（第 84 批：单条复核详情按主键直查 PG）
+
+**问题**：`review.get(rid)` 实现是 `_load()` 读**全表**再线性查找。详情页（`/review/item/{rid}`、
+`/review/history/item/{rid}`）、知情确认、质控重提预填等路径都会调用它——队列 600+ 条时，
+"看一条"要付整表解码成本，且随年限线性变差。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_pg_get_review_row_impl` + `get_review_row()`：`SELECT … FROM review_queue WHERE id = $1`（主键直查，images/meta/sources 解码复用 `_review_item_from_row`）；返回 `(found, item)` 三元语义：`(True, dict)` 命中 / `(True, None)` 确定不存在 / `(False, None)` PG 无法回答 |
+| `backend/core/medical_review.py` | `get()` 优先 PG 直查；`found=False` 时回落既有 `_load()` 线性查找（无池/离线/空表/异常，行为不变） |
+| `tests/test_pg_review_get_row.py` | +8：命中+图片解码、确定不存在不回落、空表/无池/异常回落、域层优先 PG（`_load` 设炸弹）、JSON 兜底、详情路由 200/404 |
+
+**设计取舍**
+- **三态而不是 `dict | None`**：必须区分"PG 说没有"和"PG 答不了"——前者若回落 JSON，
+  已从 PG 删除的记录会被 JSON 残留"复活"（读取语义分裂）；后者才应走 JSON 兜底；
+- **空表仍算"答不了"**：与 `load_queue` 的"空表回落 JSON"一致，迁移未导入窗口不丢数据；
+- **复用行解码函数**：详情与列表字段/JSON 解码完全同源，避免两处漂移；
+- **不缓存**：单次主键查询成本已很低，不做进程缓存（避免审核状态变更后读到旧值）。
+
+**真实数据（8001，真实 PG）**
+```
+GET /review/pending?limit=1                    → rev-7d54163bab
+GET /review/item/rev-7d54163bab                → 200, item.id 一致
+GET /review/item/rev-does-not-exist            → 404「复核单不存在」
+GET /review/history?limit=1                    → rev-be04220a6a
+GET /review/history/item/rev-be04220a6a        → 200, item.id 一致
+```
+
+**校验**
+- 定向 `test_pg_review_get_row + test_row_level_review + test_review_flow` **18 passed**；
+  含真实池用例（`test_row_level_review`：写入后 `review.get` 仍能读回）；
+- 全量 pytest：**1319 passed**（1311 + 本批 8）；
+- 重启 8001 后实测（上表）命中/未命中路径均正确。
+
+**仍存边界**
+- 仅复核队列详情下推；处方 `prescriptions.get()`、会诊 `consults.get()` 仍是全表线性查找
+  （量级小，留待有需要时按同模式处理）；
+- `found=(True,None)` 依赖"表非空"判据：若 PG 与 JSON 都为空，仍会走一次 JSON 读（无数据，
+  成本可忽略）。
+
+
 
 
 

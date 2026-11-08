@@ -251,6 +251,11 @@ def page_history(involves: str | None = None, base_limit: int = 50,
 
 
 def get(rid: str) -> dict | None:
+    """单条查询：第 84 批优先按主键直查 PG（避免为一条详情读全表）；
+    PG 不可用/空表 → 回落既有 _load() 线性查找（行为不变）。"""
+    found, item = pg_store.get_review_row(rid)
+    if found:
+        return item
     for i in _load():
         if i["id"] == rid:
             return i
