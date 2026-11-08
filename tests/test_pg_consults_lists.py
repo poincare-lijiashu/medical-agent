@@ -86,17 +86,22 @@ class _FakeConn:
         s = " ".join(sql.split())
         if s == "SELECT count(*) FROM consults":
             return len(self.rows)
-        # 第 122 批：收件箱的"待本科室填意见"计数（NOT EXISTS opinions.dept）
-        if "NOT EXISTS" in s:
-            where = s.split(" WHERE ", 1)[1].split(" AND NOT EXISTS", 1)[0]
-            dept = a[-1]
-            rows = [r for r in self.rows if _match(r, where, a[:-1])]
-            return len([r for r in rows
-                        if not any(o.get("dept") == dept for o in (r.get("opinions") or []))])
         # 第 121 批：分页下推会先做一次带 where 的 COUNT（total）
         if s.startswith("SELECT count(*) FROM consults WHERE "):
             return len([r for r in self.rows if _match(r, s.split(" WHERE ", 1)[1], a)])
         raise AssertionError(f"假池未实现的 fetchval: {s[:100]}")
+
+    async def fetchrow(self, sql, *a):
+        """第 123 批：total 与 pending 合并成一条 FILTER 聚合。"""
+        s = " ".join(sql.split())
+        assert "FILTER" in s, s[:100]
+        where = s.split(" FROM consults WHERE ", 1)[1]
+        dept = json.loads(a[-1])[0]["dept"]
+        rows = [r for r in self.rows if _match(r, where, a[:-1])]
+        return {"total": len(rows),
+                "pending": len([r for r in rows
+                                if not any(o.get("dept") == dept
+                                           for o in (r.get("opinions") or []))])}
 
     async def fetch(self, sql, *a):
         s = " ".join(sql.split())

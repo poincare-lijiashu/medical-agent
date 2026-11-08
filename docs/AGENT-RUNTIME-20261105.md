@@ -4970,9 +4970,54 @@ summary（limit=0）：items=0，total/pending 与全量一致，单次 2.0–2.
   CTE（合并后可省一次往返，但 SQL 可读性下降）；
 - 三次查询非同一快照：并发填写意见时 pending 可能比页内实际多/少 1；
 - `pending` 的 `NOT EXISTS` 对 `opinions` 数组逐元素展开，意见多的单会有解析开销
-  （可加 `data->'opinions' @> '[{"dept": ...}]'` 走 GIN，未做）；
+  （曾设想改用 `data->'opinions' @> '[{"dept": ...}]'` 走 GIN；§127 实测证明取反无法走 GIN）；
 - 空表判定仍是 `count(*)` 全表（沿用既有"PG 空表 → JSON 真源"纪律）；
 - 前端未改：仍 10/页、角标 60s 轮询（服务端已变便宜，轮询频率未动）。
+
+## 127. 2026-11-08 数据库执行计划核查（第 123 批：total/pending 合并聚合 + 索引结论）
+
+**原计划**：给 §125/§126 的下推补索引，让收件箱 pending 走 GIN。
+
+**真机核查结论（先证伪，再改方案）**
+- 本地 `consults` 已有 5 个索引（§92 建）：`consults_pkey`、`ix_consults_status_order`、
+  `ix_consults_initiator_order`、`ix_consults_target_depts_gin`、`ix_consults_opinions_gin`；
+- 本想用 `NOT (opinions @> probe)` 命中 `ix_consults_opinions_gin`，但 **GIN 不支持取反**：
+  实测 `SET enable_seqscan=off` 后计划代价被罚到 `cost=10000000003.30`（仍回退顺扫），
+  耗时 332ms；17 行时默认计划本来就是 Seq Scan（0.08ms）。
+  → **"给 pending 加索引"这条路不成立**，如实记下，避免后续重复踩坑；
+- 索引仍有效服务于正向包含：`data->'target_depts' @> '["骨科"]'`（收件箱过滤）与
+  `initiator` 排序分页（第 121 批）。
+
+**本批实际改动**（`backend/core/pg_store.py`）
+| 变更 | 说明 |
+|---|---|
+| 合并聚合 | `SELECT count(*) AS total, count(*) FILTER (WHERE NOT (coalesce(data->'opinions','[]') @> $n::jsonb)) AS pending FROM consults WHERE …` —— 一条语句、一次扫描出两个计数 |
+| 条件改写 | pending 从逐元素 `NOT EXISTS(jsonb_array_elements(...))` 改为等价的 jsonb 包含取反（省掉每行一次集合返回函数展开；`coalesce` 保证无 opinions 键的单仍计为待填） |
+| 查询次数 | 收件箱一次请求从 **4 次**（空表判定 + total + pending + 取数）降到 **3 次**（空表判定 + 聚合 + 取数） |
+| 测试 | 新增 1 条索引 DDL 锁（`ix_consults_opinions_gin` / `target_depts_gin` / `initiator_order` 必须在建表清单里）；改写 2 条 SQL 形状用例（断言只有一条 FILTER 聚合、探针是 `[{"dept": X}]`、总查询数=3） |
+
+**真机等价性 + 计划（真实 PG，10 个科室）**
+```
+旧 NOT EXISTS pending == 新 FILTER pending：10/10 科室一致
+  骨科 1/1、内科 2/2、外科 2/2、急诊 1/1、口腔 0/0，其余 0/0
+域层 inbox_page：total/pending 与 inbox_for 内存口径 10/10 一致
+计划（骨科）：Aggregate → Seq Scan on consults（17 行，0.079ms，shared hit=15）
+10 个科室各一次收件箱分页：合计 41.3ms（均 4.1ms，含 3 次查询）
+```
+
+**校验**
+- 定向：`test_consult_search + test_consults + test_pg_consults_lists + test_consult_inbox_paging`
+  **66 passed**；
+- 全量 pytest：**1514 passed / 0 failed / 1 skipped**（5:25，含 e2e；连续第九批零失败）。
+
+**仍存边界**
+- pending 依然无法走索引（取反语义）：上量后需要把 `opinions` 规范化为子表
+  （`consult_opinions(consult_id, dept, doctor, …)` + `NOT EXISTS` 才能索引）；
+- 小表默认计划仍是 Seq Scan（正常）；未用假数据造百万行去"演示索引"，结论以上面实测为准；
+- 聚合与取数仍是两次往返、非同一快照（并发填写时 pending 可能差 1）；
+- `target_depts` 的 GIN 只在选择度高时才被选中，本机数据量下同样顺扫；
+- 前端未改（10/页、60s 轮询）。
+
 
 
 

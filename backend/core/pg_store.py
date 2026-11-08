@@ -1900,11 +1900,16 @@ def consult_page(where: str, params: tuple = (), limit: int | None = None,
         return None
 
 
-# 第 122 批：收件箱角标"待本科室填意见"的库内计数。
+# 第 122/123 批：收件箱角标"待本科室填意见"的库内计数。
 # 语义与前端原 `opinions.some(dept)` 取反一致：该会诊的 opinions 里**没有**本科室的意见。
-_CONSULT_PENDING_SQL = (
-    " AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements("
-    "coalesce(data->'opinions', '[]'::jsonb)) e WHERE e->>'dept' = ${n})"
+# 第 123 批：① 与 total 合并成一次聚合（`count(*) FILTER (...)`），少一次往返；
+# ② 用等价的 jsonb 包含判断取反代替逐元素 NOT EXISTS（真机 10 个科室逐一对账一致）。
+# 注意（实测结论）：`NOT (@>)` **无法走 GIN**——GIN 不支持取反，我们试过强制
+# enable_seqscan=off 后代价被罚到 1e10 仍回退顺扫。因此这里省的是"行内函数调用 +
+# 一次数据库往返"，不是索引；上量后若要索引支撑，需要把 opinions 规范化为子表。
+_CONSULT_PENDING_FILTER = (
+    "count(*) FILTER (WHERE NOT (coalesce(data->'opinions', '[]'::jsonb)"
+    " @> ${n}::jsonb))"
 )
 
 
@@ -1917,17 +1922,19 @@ async def _pg_consult_inbox_page_impl(where: str, params: list, limit: int | Non
     async with _pool.acquire() as c:
         if not await c.fetchval("SELECT count(*) FROM consults"):
             return None
-        total = int(await c.fetchval(  # noqa: S608 —— where 为域层固定片段
-            "SELECT count(*) FROM consults WHERE " + where, *params) or 0)
         n = len(params)
-        pending = int(await c.fetchval(  # noqa: S608 —— dept 走参数位，非拼接
-            "SELECT count(*) FROM consults WHERE " + where
-            + _CONSULT_PENDING_SQL.format(n=n + 1), *params, dept) or 0)
+        # total 与 pending 一次聚合出（同一条语句、同一份扫描结果）
+        agg = await c.fetchrow(  # noqa: S608 —— where 为域层固定片段
+            "SELECT count(*) AS total, " + _CONSULT_PENDING_FILTER.format(n=n + 1)
+            + " AS pending FROM consults WHERE " + where, *params,
+            json.dumps([{"dept": dept}], ensure_ascii=False))
+        total = int((agg or {}).get("total") or 0)
+        pending = int((agg or {}).get("pending") or 0)
         sql = _CONSULT_WHERE_SELECT + where + _CONSULT_ORDER  # noqa: S608
         if limit is None:
             rows = await c.fetch(sql, *params)
         else:
-            # 占位符按**本语句**编号（与上面 pending 语句各自独立，不接着往后排）
+            # 占位符按**本语句**编号（与上面聚合语句各自独立，不接着往后排）
             rows = await c.fetch(  # noqa: S608 —— 参数化 LIMIT/OFFSET
                 sql + f" LIMIT ${n + 1} OFFSET ${n + 2}",
                 *params, max(0, int(limit)), max(0, int(offset)))

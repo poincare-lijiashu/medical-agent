@@ -369,9 +369,16 @@ class _InboxConn:
         self.args.append(a)
         if s == "SELECT count(*) FROM consults":
             return self.table_rows
-        if "NOT EXISTS" in s:
-            return self.pending
-        return self.total
+        raise AssertionError(f"未预期的 fetchval: {s[:100]}")
+
+    async def fetchrow(self, sql, *a):
+        """第 123 批：total 与 pending 合并成一次 FILTER 聚合。"""
+        s = " ".join(sql.split())
+        self.sqls.append(s)
+        self.args.append(a)
+        if "FILTER" in s:
+            return {"total": self.total, "pending": self.pending}
+        raise AssertionError(f"未预期的 fetchrow: {s[:100]}")
 
     async def fetch(self, sql, *a):
         self.sqls.append(" ".join(sql.split()))
@@ -384,29 +391,48 @@ def _inbox_pool(monkeypatch, conn):
     return conn
 
 
-def test_inbox_page_sql_counts_pending_with_not_exists(monkeypatch):
-    """无关键字：pending 的 dept 用 $2（独立语句），取数按本语句编号 LIMIT $2/OFFSET $3。"""
+def test_consult_pending_index_ddl_exists():
+    """第 123 批：pending 的 `@>` 探针依赖 `ix_consults_opinions_gin`，DDL 必须仍在建表清单里。"""
+    ddl = " ".join(pg_store._PG_INDEX_DDL)
+    assert "ix_consults_opinions_gin" in ddl
+    assert "USING gin ((data->'opinions'))" in ddl
+    assert "ix_consults_target_depts_gin" in ddl
+    assert "ix_consults_initiator_order" in ddl
+
+
+def test_inbox_page_sql_single_aggregate_for_total_and_pending(monkeypatch):
+    """第 123 批：total 与 pending 合并成一条 FILTER 聚合；整请求只剩 3 次查询。
+
+    语义：pending = 该单 opinions 里**没有**本科室意见（jsonb 包含探针取反）。
+    占位符按各自语句编号：聚合的探针 $2，取数 LIMIT $2/OFFSET $3（无关键字时）。"""
     conn = _inbox_pool(monkeypatch, _InboxConn(total=3, pending=1))
     out = asyncio.run(pg_store._pg_consult_inbox_page_impl(
         "status = 'open' AND data->'target_depts' @> $1::jsonb", ["[\"心内科\"]"], 10, 0,
         "心内科"))
     assert out == {"items": [], "total": 3, "pending": 1}
-    pend = [s for s in conn.sqls if "NOT EXISTS" in s]
-    assert pend and "e->>'dept' = $2" in pend[0]
+
+    agg = [s for s in conn.sqls if "FILTER" in s]
+    assert len(agg) == 1, f"应只有一条聚合语句，实际={agg}"
+    assert "count(*) FILTER (WHERE NOT (coalesce(data->'opinions'" in agg[0]
+    assert "@> $2::jsonb" in agg[0] and "NOT EXISTS" not in agg[0]
+    # 探针是 jsonb 数组：[{"dept": "心内科"}]
+    assert ("[\"心内科\"]", '[{"dept": "\u5fc3\u5185\u79d1"}]') in conn.args
+
     sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
     assert sel and sel[0].endswith("LIMIT $2 OFFSET $3"), sel
     assert conn.args[-1] == ("[\"心内科\"]", 10, 0)
-    assert ("[\"心内科\"]", "心内科") in conn.args
+    # 空表判定 + 聚合 + 取数 = 3 次（第 122 批是 4 次）
+    assert len(conn.sqls) == 3, conn.sqls
 
 
 def test_inbox_page_sql_keyword_shifts_placeholders(monkeypatch):
-    """带关键字：where 2 个参数 → pending 用 $3，取数 LIMIT $3/OFFSET $4（各自独立编号）。"""
+    """带关键字：where 2 个参数 → 聚合探针 $3，取数 LIMIT $3/OFFSET $4（各自独立编号）。"""
     conn = _inbox_pool(monkeypatch, _InboxConn())
     asyncio.run(pg_store._pg_consult_inbox_page_impl(
         "status = 'open' AND data->'target_depts' @> $1::jsonb AND x LIKE $2", 
         ["[\"心内科\"]", "胸痛"], 5, 10, "心内科"))
-    pend = [s for s in conn.sqls if "NOT EXISTS" in s]
-    assert pend and "e->>'dept' = $3" in pend[0]
+    agg = [s for s in conn.sqls if "FILTER" in s]
+    assert agg and "@> $3::jsonb" in agg[0]
     sel = [s for s in conn.sqls if s.startswith("SELECT data FROM consults WHERE")]
     assert sel and sel[0].endswith("LIMIT $3 OFFSET $4"), sel
     assert conn.args[-1] == ("[\"心内科\"]", "胸痛", 5, 10)
