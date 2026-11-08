@@ -238,6 +238,18 @@ def page_pending(exclude_drug: bool = False, keyword: str = "",
     return pg_store.review_pending_page(exclude_drug, keyword, limit, offset)
 
 
+def page_history(involves: str | None = None, base_limit: int = 50,
+                 hide_pending: bool = False, hide_drug: bool = False, keyword: str = "",
+                 limit: int | None = None, offset: int = 0) -> dict | None:
+    """第 83 批：历史列表分页/筛选/计数下推 PG。
+
+    involves=me → 基础集合为「本人参与」(submitted_by/reviewed_by=me) 最新 base_limit 条；
+    None → 全表最新 base_limit 条。**先截断再过滤**，与内存 list_involved/list_all 一致。
+    None → 路由层回落既有内存实现。"""
+    return pg_store.review_history_page(involves, base_limit, hide_pending, hide_drug,
+                                        keyword, limit, offset)
+
+
 def get(rid: str) -> dict | None:
     for i in _load():
         if i["id"] == rid:

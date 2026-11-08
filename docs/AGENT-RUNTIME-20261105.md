@@ -3300,6 +3300,55 @@ q=华法林  → 内存=12 / PG=12；q=CT → 66/66；q=doctor01 → 66/66；q=�
 - `ts` 为文本列，排序依赖 ISO 前缀可比性（历史数据格式一致才成立）；
 - qc 收窄只按 `agent`，未把 `agent IS NULL` 的脏数据单独归类。
 
+## 87. 2026-11-08 性能与容量（第 83 批：历史列表分页/筛选/计数下推 PG）
+
+**问题**：`GET /review/history` 每次翻页都把整个队列读进内存——admin/qc 取最新 50 条、
+doctor/pharmacist 取本人参与最新 200 条，再在内存做 hide_pending/hide_drug/关键字过滤与
+切片。真实队列 600+ 条，历史页每次 12 条也要付全表代价；`list_involved` 还要逐条做图片
+剥离（复制 dict）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_pg_review_history_impl` + `review_history_page()`：先按"基础集合"取 id（本人参与 `submitted_by=me OR reviewed_by=me` 最新 N，或全表最新 N），再在该集合内 `id = ANY($1)` + hide_pending/hide_drug/关键字 过滤、`count(*)`、`ORDER BY ts DESC, id DESC` 分页；空表/无池/离线/stale/异常 → `None` |
+| `backend/core/medical_review.py` | 新增 `page_history()` 薄封装（involves/base_limit 由路由按角色决定） |
+| `backend/api/v1/medical/review.py` | `/review/history` 优先用 PG 结果；`None` 时保留原 `list_involved/list_all` + 内存过滤/切片 |
+| `tests/test_pg_review_history_page.py` | +11：本人集合新→旧、admin 全表、**先截断再过滤**、hide 标志、关键字大小写、分页/limit=0、无参与记录空页、空表/无池/异常回落、路由走 PG + 图片可见性规则、admin 过滤路由 |
+
+**设计取舍**
+- **"先截断再过滤"必须保真**：内存实现是 `list_involved(...)[:200]` / `list_all(limit=50)`
+  之后才过滤——若把过滤提前到截断之前，用户会看到 50/200 条窗口之外的历史，属于行为漂移。
+  故分两步 SQL：先取基础集合 id（≤200/50），再在其内过滤/计数/分页；
+- **不在 SQL 里做图片裁剪**：`_history_view` 的可见性规则（人工签发剥图 / 仅发起人可见）
+  仍作用于当页，避免把合规逻辑复制进 SQL 造成双份漂移；
+- **id 集合用 `ANY($1)`**：最多 200 个 text id，传输成本可忽略，换来实现简单、可测；
+- **空集合不回落**：表非空但本人无参与记录 → 返回 `{items:[], total:0}`（由 PG 回答，
+  避免又去 JSON 读一遍）。
+
+**真实数据（8001，真实 PG；重启用批前内存实现先取基线，再逐项比对）**
+```
+admin 全量（最新 50）            total=50  MATCH（50 条 id/图片键完全一致）
+admin hide_pending+hide_drug     total=41  MATCH
+admin q=华法林                    total=1   MATCH
+admin limit=5&offset=4&hide_pending total=47 MATCH（5 条切片一致）
+doctor01（本人参与最新 200）       total=200 MATCH
+pharm01（本人参与）               total=5   MATCH
+```
+
+**校验**
+- 定向 `test_pg_review_history_page + test_review_history_paging + test_review_flow +
+  test_review_images` **40 passed**；
+- 全量 pytest：**1311 passed**（1300 + 本批 11）；
+- 重启 8001 后用批前基线逐项比对：6/6 MATCH（顺序、total、图片可见性标志全等）。
+
+**仍存边界**
+- 基础集合仍受 200/50 上限（沿用旧语义）；若产品上要"全量历史可检索"，需去掉上限并加索引；
+- 历史详情 `GET /review/history/item/{rid}` 仍走 `review.get()`（单条全表扫描，
+  队列大时需按 id 主键直查）；
+- 关键字仍逐行 `POSITION`，无全文索引；
+- 图片裁剪在应用层（当页≤500 条），未下推为 SQL 中的 JSON 删除。
+
+
 
 
 

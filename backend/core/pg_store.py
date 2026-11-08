@@ -1066,6 +1066,80 @@ def review_pending_page(exclude_drug: bool = False, keyword: str = "",
         return None
 
 
+# ---- 第 83 批：历史列表分页/筛选/计数下推 PG ----
+# 语义必须与内存实现逐条一致：
+#   doctor/pharmacist → list_involved(me) = (submitted_by=me OR reviewed_by=me) 最新 200 条；
+#   qc/admin          → list_all(limit=50) = 全表最新 50 条；
+#   **先截断再过滤**（hide_pending/hide_drug/q），total=过滤后条数，最后才切片。
+# 因此分两步：先取"基础集合 id 上限"，再在该集合内过滤/计数/分页（避免把过滤提前到
+# 截断之前，导致"能看到 200 条之外的历史"这一行为漂移）。
+
+_HISTORY_KW = (
+    "POSITION(${n} IN lower("
+    "coalesce(agent,'') || ' ' || coalesce(question,'') || ' ' || "
+    "coalesce(submitted_by,'') || ' ' || coalesce(risk_reason,''))) > 0")
+
+
+async def _pg_review_history_impl(involves: str | None, base_limit: int,
+                                  hide_pending: bool, hide_drug: bool, keyword: str,
+                                  limit: int | None, offset: int) -> dict | None:
+    """历史列表：返回 {items,total}；空表 → None（回落 JSON 真源）。"""
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM review_queue"):
+            return None
+        cap = max(1, int(base_limit))
+        if involves:
+            id_rows = await c.fetch(
+                "SELECT id FROM review_queue WHERE (submitted_by = $1 OR reviewed_by = $1) "
+                "ORDER BY ts DESC, id DESC LIMIT $2", involves, cap)
+        else:
+            id_rows = await c.fetch(
+                "SELECT id FROM review_queue ORDER BY ts DESC, id DESC LIMIT $1", cap)
+        ids = [r["id"] for r in id_rows]
+        if not ids:  # 本人无参与记录（表非空）→ 空页，但仍由 PG 回答
+            return {"items": [], "total": 0}
+        conds = ["id = ANY($1)"]
+        params: list = [ids]
+        if hide_pending:
+            conds.append("status <> 'pending'")
+        if hide_drug:
+            conds.append("agent IS DISTINCT FROM 'drug'")
+        kw = (keyword or "").strip().lower()
+        if kw:
+            params.append(kw)
+            conds.append(_HISTORY_KW.format(n=len(params)))
+        where = " WHERE " + " AND ".join(conds)
+        total = int(await c.fetchval(  # noqa: S608 —— 片段均为固定常量
+            "SELECT count(*) FROM review_queue" + where, *params) or 0)
+        sql = (f"SELECT {','.join(_REVIEW_COLS)}, images FROM review_queue" + where
+               + " ORDER BY ts DESC, id DESC")  # noqa: S608 —— 与内存 [::-1] 同序
+        if limit is None:
+            rows = await c.fetch(sql, *params)
+        else:
+            n = len(params)
+            rows = await c.fetch(sql + f" LIMIT ${n + 1} OFFSET ${n + 2}",  # noqa: S608
+                                 *params, max(0, int(limit)), max(0, int(offset)))
+        return {"items": [_review_item_from_row(r) for r in rows], "total": total}
+
+
+def review_history_page(involves: str | None = None, base_limit: int = 50,
+                        hide_pending: bool = False, hide_drug: bool = False,
+                        keyword: str = "", limit: int | None = None,
+                        offset: int = 0) -> dict | None:
+    """历史列表分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
+        return None
+    try:
+        return _run_pg(_pg_review_history_impl(involves, base_limit, bool(hide_pending),
+                                               bool(hide_drug), keyword, limit,
+                                               max(0, int(offset))))
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，历史列表照常可用
+        logger.warning("pg.review_history_page_failed", error=str(e)[:120])
+        return None
+
+
 # ---- llm_providers（kind/pid/data/active；data 内嵌 _seq 还原 providers 顺序） ----
 
 _LLM_IMPORT = """INSERT INTO llm_providers(kind,pid,data,active) VALUES($1,$2,$3::jsonb,$4)

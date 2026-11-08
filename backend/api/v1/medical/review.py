@@ -181,23 +181,30 @@ async def review_history(
     """
     me = user.get("username", "system")
     role = user.get("role", "")
+    keyword = (q or "").strip().lower()
     # 问题3修复（实测结论）：doctor/pharmacist 的「我的历史」数据源改为服务端按人检索
     # （submitted_by=me OR reviewed_by=me）——原 list_all(limit=50)
     # 按插入序全局截断，真实队列中 pharmacist 处理的 drug 项被其后大量自动签发条目挤出
     # 最新 50 条窗口，前端按 reviewed_by=me 过滤恒空。qc/admin 全局档案语义不变。
-    if role in ("doctor", "pharmacist"):
-        items = await asyncio.to_thread(review.list_involved, me)
-    else:
-        items = await asyncio.to_thread(review.list_all, limit=50)
-    if hide_pending:
-        items = [i for i in items if i.get("status") != "pending"]
-    if hide_drug:
-        items = [i for i in items if i.get("agent") != "drug"]
-    keyword = (q or "").strip().lower()
-    if keyword:
-        items = [i for i in items if _match_query(i, keyword)]
-    total = len(items)
-    page = items[offset:offset + limit] if limit is not None else items[offset:]
+    involves = me if role in ("doctor", "pharmacist") else None
+    pg = await asyncio.to_thread(review.page_history, involves,
+                                 200 if involves else 50, hide_pending, hide_drug,
+                                 keyword, limit, offset)
+    if pg is not None:  # 第 83 批：基础集合截断 + 过滤 + 计数 + 切片全在 PG（语义与内存一致）
+        page, total = pg["items"], pg["total"]
+    else:  # 无池/离线/异常/空表 → 既有内存实现（行为不变）
+        if involves:
+            items = await asyncio.to_thread(review.list_involved, me)
+        else:
+            items = await asyncio.to_thread(review.list_all, limit=50)
+        if hide_pending:
+            items = [i for i in items if i.get("status") != "pending"]
+        if hide_drug:
+            items = [i for i in items if i.get("agent") != "drug"]
+        if keyword:
+            items = [i for i in items if _match_query(i, keyword)]
+        total = len(items)
+        page = items[offset:offset + limit] if limit is not None else items[offset:]
     page = [_history_view(i, role, me) for i in page]
     if compact:
         page = [_compact_item(i) for i in page]
