@@ -3023,6 +3023,57 @@ reviewed-by-me 5 条：全量 4,953 B，total=5
 - 浏览器演练使用的是临时页长 3 的构建，未在页长 12 + 超过 12 条真实数据下演练
   （当前数据不足，造数会污染真实队列）。
 
+## 81. 2026-11-08 上线准备（第 77 批：会诊收件箱计数化——最后一个 60s 轮询拉全量的角标）
+
+**接第 75/76 批的同一类问题**：会诊红点角标（`refreshConsultBadge`）每 60s 拉整个
+`/consults/inbox`，再在前端用 `opinions.some(dept)` 过滤出"本科室还没填意见"的数。
+实测外科 waike01 仅有 3 单，全量响应就 **56,589 B**（会诊含影像/意见正文），
+而这只是为显示一个"2"。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/api/v1/medical/consults.py` | `/consults/inbox` 新增 `limit/offset/summary`，响应补 `total` 与 `pendingForMe`（服务端按本科室意见计算，口径与原前端 `opinions.some(dept)` 一致）；审计补 total/limit/offset/summary；`silent` 仍跳过审计 |
+| `frontend-vue/src/stores/badges.js` | `refreshConsultBadge` 改 `summary=1`，直接读 `pendingForMe`；`silent=1` 轮询语义保留 |
+| `tests/test_consult_inbox_paging.py` | +5：默认全量、分页切片但计数全局、summary 不含正文、无科室为空、审计字段与 silent 跳过 |
+| `tests/test_frontend_syntax.py` | 角标标记锁更新为"silent 参数 + summary=1 + pendingForMe" |
+| `docs/DEPLOY.md` | 收件箱实测表 |
+
+**设计取舍**
+- **计数在服务端算**：前端口径依赖本科室 dept，服务端本来就知道，避免把整包意见传给浏览器；
+- **summary 不复用 `limit=0`**：会诊角标还需要 `pendingForMe`（不是简单总数），单独开关更清晰；
+- **缺省不变**：不传参数仍是全量，`/myconsults` 视图照旧拿完整会诊（含意见/影像）；
+- **silent 审计语义不变**：轮询不写审计，视图刷新写。
+
+**真实数据（8001，真实会诊数据）**
+```
+waike01（外科）n=3 pendingForMe=2：56,589 B → summary 70 B
+neike01（内科）n=3 pendingForMe=2： 5,495 B → summary 70 B
+guke（骨科）  n=1 pendingForMe=1： 1,413 B → summary 67 B
+口腔科/儿科等无待办：69~78 B → 69~78 B（无可压缩空间）
+```
+（外科那 3 单含较大影像，故全量特别大；这也正是"轮询不该拉全量"的证据。）
+
+**真实浏览器（Chrome DevTools MCP，waike01）**
+- 登录 waike01 后，左侧「审核中心」红徽标显示 **2**（`title=待我意见的会诊`，
+  `background-color=rgb(192,57,43)`），与 `/myconsults` 页面「其它科室会诊协助 2」一致；
+- 控制台 0 error。
+- 说明：徽标挂在「审核中心」入口而不是「我的会诊」入口（AppShell 既有设计），
+  浏览器验收脚本里"我的会诊徽标"的字面条件因此判 FAIL，但**数值与语义正确**；
+  本批没有改角标挂载位置。
+
+**校验**
+- 定向 `test_consult_inbox_paging + test_consults + test_frontend_syntax` **59 passed**；
+- 全量 pytest：**1264 passed**（1259 + 本批 5）；
+- `npm run build` 通过。
+
+**仍存边界**
+- 服务端仍是"取全量再切片/计数"（`inbox_for` 返回全部），本批只减少传输；
+  要降低 DB/内存需把过滤与计数下推 PG；
+- `pendingForMe` 只按 dept 判断，不区分"同一科室多人是否已有人填过"（与旧前端口径一致）；
+- 徽标挂在「审核中心」导航而非「我的会诊」（历史设计），未在本批调整；
+- summary 仍返回 `me/dept` 两个小字段（便于前端同步 dept 文案）。
+
 
 
 

@@ -83,11 +83,12 @@ export const useBadgeStore = defineStore('badges', {
       const role = auth.role
       if (role === 'qc' || role === 'admin') return // qc/admin 无「其它科室会诊协助」tab
       try {
+        // 第 77 批：角标只要"本科室未填意见"的计数——summary=1 服务端直接算好
+        // pendingForMe，不再把整个收件箱（含影像/意见）拉回前端过滤。
         const { data } = await http.get('/medical/consults/inbox',
-          { params: silent ? { silent: 1 } : {}, silentToast: true })
+          { params: { ...(silent ? { silent: 1 } : {}), summary: 1 }, silentToast: true })
         this.meDept = data.dept || ''
-        this.consultPendingOps = (data.items || [])
-          .filter((c) => !((c.opinions || []).some((o) => o.dept === this.meDept))).length
+        this.consultPendingOps = Number(data.pendingForMe ?? 0)
       } catch (_) { /* 静默 */ }
     },
     // 定时轮询入口（任务⑦）：每 60s 按服务端真值刷新角标（登录后由 AppShell 启动）。

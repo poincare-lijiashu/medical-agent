@@ -710,8 +710,11 @@ def test_consult_badge_poll_silent_markers_present():
     poll = _extract_badge_action("poll")
     assert "refreshConsultBadge(true)" in poll, "poll() 必须并入 refreshConsultBadge（silent 轮询路径）"
     consult = _extract_badge_action("refreshConsultBadge")
-    assert "params: silent ? { silent: 1 } : {}" in consult, \
+    assert "silent ? { silent: 1 } : {}" in consult, \
         "refreshConsultBadge 轮询路径必须带 silent=1 参数（非 silent 刷新点保持业务审计）"
+    # 第 77 批：角标只取计数（summary=1 → pendingForMe），不再拉整个收件箱前端过滤
+    assert "summary: 1" in consult and "pendingForMe" in consult, \
+        "角标应走 summary=1 并读服务端 pendingForMe 计数"
     assert "'/medical/consults/inbox'" in consult, "角标数据源必须为 /consults/inbox"
 
 

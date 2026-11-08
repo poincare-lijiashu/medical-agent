@@ -11,7 +11,7 @@ import asyncio
 import threading
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.api.deps import rate_limit, require_user
@@ -127,20 +127,39 @@ async def consult_create(req: AskReq, user: dict = Depends(require_user)):
 
 
 @router.get("/consults/inbox")
-async def consult_inbox(silent: bool = False, user: dict = Depends(require_user)):
+async def consult_inbox(
+        silent: bool = False,
+        limit: int | None = Query(None, ge=0, le=200,
+                                  description="返回条数上限；缺省=全部（旧行为）。0=只取计数"),
+        offset: int = Query(0, ge=0, description="跳过条数"),
+        summary: bool = Query(False, description="只回计数（items=[]），供角标轮询"),
+        user: dict = Depends(require_user)):
     """「其它科室会诊协助」收件箱：当前医生 dept 匹配的 open 会诊单
     （服务端按 dept 实时过滤隔离；账号未设置科室则恒为空）。
     silent=true 供前端角标轮询（读操作降噪）：跳过 list_inbox 审计写入，
-    数据返回与非 silent 完全一致；视图内刷新不传 silent，业务审计照旧保留。"""
+    数据返回与非 silent 完全一致；视图内刷新不传 silent，业务审计照旧保留。
+    第 77 批：新增 `limit/offset/summary` 与 `total/pendingForMe`——角标只需
+    "本科室还有几单未填意见"，此前每 60s 把整个收件箱（含影像/意见）拉回前端再过滤。
+    `pendingForMe` 由服务端按本科室意见计算（与前端原 `opinions.some(dept)` 同口径）。"""
     from backend.core import consults
     me = user.get("username", "system")
     dept = user.get("dept", "")
     items = await asyncio.to_thread(consults.inbox_for, dept) if dept else []
+    total = len(items)
+    pending_for_me = sum(
+        1 for c in items
+        if not any((o or {}).get("dept") == dept for o in (c.get("opinions") or []))
+    )
+    page = [] if summary else (
+        items[offset:offset + limit] if limit is not None else items[offset:])
     if not silent:
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="list_inbox",
-                                actor=me, payload={"n": len(items), "dept": dept,
-                                                   "role": user.get("role", "")})
-    return {"items": items, "me": me, "dept": dept}
+                                actor=me, payload={"n": len(page), "total": total, "dept": dept,
+                                                   "role": user.get("role", ""),
+                                                   "limit": limit, "offset": offset,
+                                                   "summary": summary})
+    return {"items": page, "me": me, "dept": dept, "total": total,
+            "pendingForMe": pending_for_me}
 
 
 @router.get("/consults/mine")
