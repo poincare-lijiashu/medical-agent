@@ -300,6 +300,12 @@ def page_history(involves: str | None = None, base_limit: int = 50,
                                         keyword, limit, offset)
 
 
+def status_counts() -> dict | None:
+    """第 91 批：复核状态计数下推 PG（概览面板不再读全表）；
+    None → 调用方回落既有「读全表再计数」（无池/离线/空表/异常）。"""
+    return pg_store.review_status_counts()
+
+
 def get(rid: str) -> dict | None:
     """单条查询：第 84 批优先按主键直查 PG（避免为一条详情读全表）；
     PG 不可用/空表 → 回落既有 _load() 线性查找（行为不变）。"""

@@ -1218,6 +1218,33 @@ def review_my_rows(where: str, params: tuple = ()) -> list | None:
         return None
 
 
+# ---- 第 91 批：复核状态计数（概览面板用，替代「读全表再计数」） ----
+
+async def _pg_review_status_counts_impl() -> dict | None:
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM review_queue"):
+            return None  # 空表 → JSON 才是真源
+        rows = await c.fetch(
+            "SELECT status, count(*) AS n FROM review_queue GROUP BY status")
+    counts = {str(r["status"] or "unknown"): int(r["n"]) for r in rows}
+    return {"pending": counts.get("pending", 0),
+            "resolved": counts.get("approved", 0) + counts.get("rejected", 0),
+            "counts": counts}
+
+
+def review_status_counts() -> dict | None:
+    """复核状态计数：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存计数）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
+        return None
+    try:
+        return _run_pg(_pg_review_status_counts_impl())
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，概览照常可用
+        logger.warning("pg.review_status_counts_failed", error=str(e)[:120])
+        return None
+
+
 # ---- llm_providers（kind/pid/data/active；data 内嵌 _seq 还原 providers 顺序） ----
 
 _LLM_IMPORT = """INSERT INTO llm_providers(kind,pid,data,active) VALUES($1,$2,$3::jsonb,$4)

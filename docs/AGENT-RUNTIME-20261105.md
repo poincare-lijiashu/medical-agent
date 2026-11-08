@@ -3652,6 +3652,44 @@ cleanup_left=0（验证数据已从 PG 删除；JSON 镜像仅读取未写入）
 - `record/labs` 整段返回，未做字段投影裁剪（列表确实需要摘要展示，暂保持）；
 - 归档写入挂点在 QC 签发流程内（try/except 兜底），本次改动未改变其失败不影响质控主流程的语义。
 
+## 95. 2026-11-08 性能与容量（第 91 批：概览面板状态计数下推 PG）
+
+**问题**：`GET /medical/overview` 的管理台概览为拿「待核对 / 已处理」两个数字，
+调用 `review.list_all(with_images=False)` **读全表并解码**（本机 1168 行），再内存求和。
+管理台每次刷新都付出与队列规模成正比的成本。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_pg_review_status_counts_impl` + `review_status_counts()`：`SELECT status, count(*) GROUP BY status` 一次聚合，返回 `{pending, resolved, counts}`；空表/无池/离线/旧编排 stale/异常 → `None` |
+| `backend/core/medical_review.py` | 新增 `status_counts()` 薄封装 |
+| `backend/api/v1/medical/admin.py` | `/overview` 优先用 PG 计数；`None` 时保留原 `list_all` + 内存求和（行为不变） |
+| `tests/test_pg_overview_counts.py` | +7：计数口径（resolved=approved+rejected）、全状态分布、空表/无池/异常回落、路由走 PG（`list_all` 炸弹）、无池路由回落 |
+
+**设计取舍**
+- **只下推计数，不下推 recent**：`al.recent(8)` 读的是进程内审计缓冲（O(1)），无需改；
+- **`resolved` 口径保持 approved+rejected**：与内存 sum 完全一致，其他状态（如 draft）只出现在
+  `counts` 里、不参与 resolved；
+- **空表回落**：与全线约定一致（空表 → JSON 真源 → 内存计数）。
+
+**真实数据（8001，真实 PG）**
+```
+SQL:  {'approved': 1091, 'rejected': 1, 'pending': 76}
+GET /medical/overview → pending=76 MATCH, resolved=1092 MATCH
+```
+
+**校验**
+- 定向 `test_pg_overview_counts + test_admin_users + test_observability` **15 passed**；
+- 全量 pytest：**1392 passed**（1385 + 本批 7）；
+- 重启 8001 后实测与 SQL 一致。
+
+**仍存边界**
+- `/admin/data` 的兜底 `_load_optional_table` 仍按需读取整个 JSON/表（管理页低频、且是"数据导出"语义），
+  未改；
+- `events_total` 取进程内审计条数（重启归零语义未变）；
+- 概览其余字段（device/uptime/kb_docs）与本次无关。
+
+
 
 
 

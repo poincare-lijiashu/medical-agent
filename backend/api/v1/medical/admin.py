@@ -70,9 +70,13 @@ async def overview(user: dict = Depends(require_user)):
     """概览面板：真实运行与合规指标（不编造）。"""
     from backend.core.embedder import device
     from backend.core.medical_kb import doc_count
-    items = await asyncio.to_thread(review.list_all, with_images=False)  # 队列文件读盘移出事件循环（QUALITY-001）；概览只计数，剥离 images 控响应体积（任务5）
-    pending = sum(1 for i in items if i.get("status") == "pending")
-    resolved = sum(1 for i in items if i.get("status") in ("approved", "rejected"))
+    counts = await asyncio.to_thread(review.status_counts)  # 第 91 批：PG 聚合计数
+    if counts is not None:
+        pending, resolved = counts["pending"], counts["resolved"]
+    else:  # 无池/离线/空表/异常 → 既有全表读 + 内存计数（行为不变）
+        items = await asyncio.to_thread(review.list_all, with_images=False)  # 队列文件读盘移出事件循环（QUALITY-001）；概览只计数，剥离 images 控响应体积（任务5）
+        pending = sum(1 for i in items if i.get("status") == "pending")
+        resolved = sum(1 for i in items if i.get("status") in ("approved", "rejected"))
     al = _shared.get_audit_logger()
     # 任务1：recent 携带完整 payload，前端 humanizeAudit 生成人话描述（仅 event 名不可读）
     recent = [{"ts": e["ts"][11:19], "event": e["event_type"],
