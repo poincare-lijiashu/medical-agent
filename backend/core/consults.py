@@ -132,6 +132,10 @@ def create(*, initiator: str, question: str, ai_analysis: str, target_depts: lis
 
 
 def get(cid: str) -> dict | None:
+    """第 85 批：优先按主键直查 PG；PG 不可用/空表/异常 → 回落 _load() 线性查找。"""
+    found, item = pg_store.get_consult_row(cid)
+    if found:
+        return item
     for i in _load():
         if i["id"] == cid:
             return i

@@ -1245,15 +1245,7 @@ async def _pg_load_consults() -> list | None:
         rows = await c.fetch("SELECT data FROM consults ORDER BY data->>'created_at', id")
     if not rows:
         return None
-    out = []
-    for r in rows:
-        try:
-            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
-        except Exception:  # noqa: BLE001 —— 单行损坏跳过，不拖垮整个列表
-            continue
-        if isinstance(d, dict):
-            out.append(d)
-    return out
+    return [d for d in (_json_data_row(r) for r in rows) if d is not None]
 
 
 async def _pg_save_consults(items: list) -> None:
@@ -1295,6 +1287,53 @@ def upsert_consult_row(item: dict) -> None:
     _run_pg(_impl())
 
 
+# ---- 第 85 批：单据类（consults/prescriptions）按主键直查 ----
+# 与第 84 批复核详情同一模式：三态 (found, item)——(True, dict) 命中 / (True, None) 确定不存在 /
+# (False, None) PG 无法回答（调用方回落 JSON 线性查找）。表名只接受本模块内部常量。
+
+def _json_data_row(r) -> dict | None:
+    """data jsonb 行 → dict（驱动可能直返 str/dict；单行损坏返回 None）。"""
+    try:
+        d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+    except Exception:  # noqa: BLE001 —— 单行损坏不拖垮调用方
+        return None
+    return d if isinstance(d, dict) else None
+
+
+async def _pg_get_data_row_impl(table: str, rid: str) -> tuple[bool, dict | None]:
+    async with _pool.acquire() as c:
+        if not await c.fetchval(f"SELECT count(*) FROM {table}"):  # noqa: S608 (内部常量表名)
+            return (False, None)  # 空表 → JSON 才是真源
+        rows = await c.fetch(  # noqa: S608
+            f"SELECT data FROM {table} WHERE id = $1", rid)
+    if not rows:
+        return (True, None)  # 表非空且无此 id → 确定不存在（不再回落 JSON）
+    return (True, _json_data_row(rows[0]))
+
+
+def _get_data_row(table: str, rid: str) -> tuple[bool, dict | None]:
+    if not rid or offline_mode() or not _pool:
+        return (False, None)
+    if (not bool(getattr(settings, "pg_primary", True))
+            and f"{table}.json" in _repo_pg_stale):
+        return (False, None)
+    try:
+        return _run_pg(_pg_get_data_row_impl(table, rid))
+    except Exception as e:  # noqa: BLE001 —— 单条查询失败回落 JSON，不影响详情页
+        logger.warning("pg.get_data_row_failed", table=table, error=str(e)[:120])
+        return (False, None)
+
+
+def get_consult_row(cid: str) -> tuple[bool, dict | None]:
+    """会诊单按主键直查（三态语义见 _get_data_row 注释）。"""
+    return _get_data_row("consults", cid)
+
+
+def get_prescription_row(rid: str) -> tuple[bool, dict | None]:
+    """处方按主键直查（三态语义见 _get_data_row 注释）。"""
+    return _get_data_row("prescriptions", rid)
+
+
 # ---- 阶段2.1：智能开药处方（data jsonb 全量留痕，created_at 内嵌 data 中，读时按其排序还原追加顺序） ----
 
 _RX_UPSERT = """INSERT INTO prescriptions(id,data,doctor,status) VALUES($1,$2::jsonb,$3,$4)
@@ -1304,15 +1343,7 @@ _RX_UPSERT = """INSERT INTO prescriptions(id,data,doctor,status) VALUES($1,$2::j
 
 def _rx_rows_to_items(rows) -> list[dict]:
     """prescriptions 行 → 处方 dict（单行 jsonb 损坏跳过，不拖垮列表/整页）。"""
-    out = []
-    for r in rows:
-        try:
-            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
-        except Exception:  # noqa: BLE001 —— 单行损坏跳过
-            continue
-        if isinstance(d, dict):
-            out.append(d)
-    return out
+    return [d for d in (_json_data_row(r) for r in rows) if d is not None]
 
 
 async def _pg_load_prescriptions() -> list | None:

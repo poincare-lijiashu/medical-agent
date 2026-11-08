@@ -263,6 +263,11 @@ def submit(rx_id: str, doctor: str) -> dict:
 
 
 def get(rx_id: str) -> dict | None:
+    """第 85 批：优先按主键直查 PG（单据详情不再读全表）；
+    PG 不可用/空表/异常 → 回落既有 _load() 线性查找（行为不变）。"""
+    found, item = pg_store.get_prescription_row(rx_id)
+    if found:
+        return item
     for i in _load():
         if i["id"] == rx_id:
             return i

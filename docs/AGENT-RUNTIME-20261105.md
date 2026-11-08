@@ -3389,6 +3389,49 @@ GET /review/history/item/rev-be04220a6a        → 200, item.id 一致
 - `found=(True,None)` 依赖"表非空"判据：若 PG 与 JSON 都为空，仍会走一次 JSON 读（无数据，
   成本可忽略）。
 
+## 89. 2026-11-08 性能与容量（第 85 批：会诊/处方单据按主键直查 PG）
+
+**问题**：第 84 批只解决了复核队列详情；`consults.get(cid)` 与 `prescriptions.get(rid)` 仍是
+`_load()` 读全表再线性查找。真实调用点：
+- `POST /consults` 创建后立即 `consults.get(cid)` 回显整单（每次新建会诊都读全表）；
+- `review.get` 的 6 处调用点（确认/重提/历史详情/镜像）已在第 84 批受益；
+- `prescriptions.get` 当前主要由测试与运维脚本使用（生产路径已走 `_mutate` 返回值）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增通用 `_json_data_row`（data jsonb 解码，consults/prescriptions 共用）、`_pg_get_data_row_impl` + `_get_data_row` + `get_consult_row/get_prescription_row`：`SELECT data FROM <table> WHERE id=$1`，三态返回 `(found, item)`；表名仅接受内部常量；空表/无池/离线/旧编排 stale/异常 → `(False, None)` |
+| `backend/core/consults.py` | `get()` 优先 PG 直查，`found=False` 回落 `_load()` 线性查找 |
+| `backend/core/prescriptions.py` | `get()` 同上 |
+| `tests/test_pg_data_row_get.py` | +10：两表单据命中、确定不存在、空表/无池/异常回落、域层优先 PG（`_load` 设炸弹）、JSON 兜底、jsonb 损坏行按"确定不存在"处理 |
+
+**设计取舍**
+- **两个域共用一个实现**：单据数据形态一致（id + data jsonb），共用后解码/回落语义不会分叉；
+- **表名白名单式传入**：只由本模块内部常量 `"consults"` / `"prescriptions"` 传入，不接收外部输入；
+- **jsonb 损坏按"确定不存在"**：PG 已回答（坏行不可读），回落 JSON 只会读到旧副本，误导更大；
+- **写路径不动**：`_mutate` 仍需全量列表做 JSON 镜像，单条直查只服务读路径。
+
+**真实数据（8001，真实 PG）**
+```
+POST /prescriptions（doctor01）                 → 200, rx-d32a33d6, status=pending_pharm
+POST /prescriptions/rx-d32a33d6/review（pharm01）→ 200, status=approved, reviewer=pharm01, id 一致
+GET  /prescriptions/mine?status=approved&limit=50 → 200, total=4, 包含新单
+POST /prescriptions/rx-not-exist/review         → 404「处方不存在」
+```
+
+**校验**
+- 定向 `test_pg_data_row_get + test_prescriptions + test_consults + test_row_level_review`
+  **75 passed**；
+- 全量 pytest：**1329 passed**（1319 + 本批 10）；
+- 重启 8001 后按上表跑通创建→审核→按状态查询完整链路。
+
+**仍存边界**
+- 写路径（`create/approve/reject/rewrite/submit/add_opinion/close`）仍读全量列表（为 JSON
+  镜像与状态机校验）；改为"单条读 + 单行写 + 增量镜像"需重构落盘协议，留待单独批次；
+- `case_archive.get()`、`drug_dict` 等小表未改（量级小）；
+- 三态判据仍是"表非空"，空表场景多一次 JSON 读（无数据，成本可忽略）。
+
+
 
 
 
