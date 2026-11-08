@@ -3431,6 +3431,51 @@ POST /prescriptions/rx-not-exist/review         → 404「处方不存在」
 - `case_archive.get()`、`drug_dict` 等小表未改（量级小）；
 - 三态判据仍是"表非空"，空表场景多一次 JSON 读（无数据，成本可忽略）。
 
+## 90. 2026-11-08 性能与容量（第 86 批：个人视角列表下推 PG）
+
+**问题**：三个"我的"列表仍是全表扫描后按 `submitted_by` 内存过滤：
+- `GET /review/my-pending-confirm`（任务3 知情确认，医生端进页面即拉）；
+- `GET /qc/my-rejections`（我的质控驳回 + 重提链）；
+- `GET /drug/my-rejections`（药物助手驳回提示）。
+队列 600+ 条时，每次打开页面都要整表解码，且三个列表各自扫一遍。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_pg_review_my_rows_impl` + `review_my_rows(where, params)`：`submitted_by=$1` + 固定条件、`ORDER BY ts DESC, id DESC`、结果统一剥离 images；空表/无池/离线/旧编排 stale/异常 → `None`（调用方回落内存） |
+| `backend/core/medical_review.py` | `my_pending_confirm / my_rejections / my_drug_rejections` 优先 PG 条件查询，`None` 时保留原 `_load()[::-1]` 过滤实现 |
+| `tests/test_pg_review_my_rows.py` | +9：待确认只取未确认（NULL/False 同义）、驳回含重提链、药物驳回、跨用户隔离、images 剥离、空表/无池/异常回落、JSON 兜底、路由走 PG |
+
+**设计取舍**
+- **where 仍是固定常量**：三条 SQL 的过滤条件由域层硬编码、值走 `$n`，不接受外部片段；
+- **`confirmed_by_self IS NOT TRUE`**：与内存 `not i.get("confirmed_by_self")` 完全等价
+  （NULL 与 False 都算未确认），避免 `= false` 漏掉旧行 NULL；
+- **`COALESCE(resubmit_of,'') <> ''`**：内存以真值判断（空串为假），SQL 必须把空串排除，
+  否则重提链会把"占位空串"的行误算进来；
+- **剥图下沉到 PG 层**：三个列表内存实现本就剥 images，SQL 返回后统一剔除，避免把大图
+  字节搬进应用层再丢弃。
+
+**真实数据（8001，真实 PG；与直连 asyncpg 的等价 SQL 逐条对账）**
+```
+候选用户 7 个（doctor01/admin01/erbihou01/neike01/pharm01/waike01/erke01）
+3 个列表 × 7 用户 = 21 次比对，全部 MATCH：
+  doctor01 pending_confirm n=1；admin01 qc_rejections n=1；其余 0
+  响应中 items 均无 images 键
+```
+
+**校验**
+- 定向 `test_pg_review_my_rows + test_qc_resubmit + test_review_permission +
+  test_pg_review_pending_page` **36 passed**；
+- 全量 pytest：**1338 passed**（1329 + 本批 9）；
+- 重启 8001 后 21/21 实测一致。
+
+**仍存边界**
+- 三个列表仍是"全量返回"（无 limit/offset）——个人维度基数小，暂不分页；若单个医生
+  累积上万条，需补 `limit` 与 `total`；
+- 排序依赖 `ts` 文本列（ISO 前缀可比），历史格式不一致时需迁移规范化；
+- 与第 82/83 批相同：关键字/过滤均为逐行表达式，无专用索引。
+
+
 
 
 

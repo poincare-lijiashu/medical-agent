@@ -168,7 +168,13 @@ def submit(*, agent: str, question: str, answer: str, confidence: float,
 
 def my_pending_confirm(username: str) -> list[dict]:
     """任务3：本人待知情确认项（submitted_by=本人 且 self_confirm_required 且未确认），
-    新→旧，剥离 images（体积控制与 list_all 同纪律）。"""
+    新→旧，剥离 images（体积控制与 list_all 同纪律）。
+    第 86 批：优先 PG 条件查询（确认列已行级化），空表/无池/异常回落既有内存扫描。"""
+    rows = pg_store.review_my_rows(
+        "submitted_by = $1 AND self_confirm_required AND confirmed_by_self IS NOT TRUE",
+        (username,))
+    if rows is not None:
+        return rows
     return [{k: v for k, v in i.items() if k != "images"}
             for i in _load()[::-1]
             if i.get("submitted_by") == username and i.get("self_confirm_required")
@@ -208,7 +214,12 @@ def my_rejections(username: str) -> list[dict]:
     drug 驳回改由 my_drug_rejections 提供药物助手上下文提示。
     携带 review_note（驳回原因）/reviewed_by（审核人）/resolved_at（时间）/
     attempt/resubmit_of/meta（原病历结构化留档 record+labs，供前端「重新提交」逐栏直填），
-    供医生端只读卡片。"""
+    供医生端只读卡片。第 86 批：优先 PG 条件查询（resubmit_of 列已行级化）。"""
+    rows = pg_store.review_my_rows(
+        "submitted_by = $1 AND agent = 'qc' AND "
+        "(status = 'rejected' OR COALESCE(resubmit_of, '') <> '')", (username,))
+    if rows is not None:
+        return rows
     return [{k: v for k, v in i.items() if k != "images"}
             for i in _load()[::-1]
             if i.get("submitted_by") == username and i.get("agent") == "qc"
@@ -218,7 +229,12 @@ def my_rejections(username: str) -> list[dict]:
 def my_drug_rejections(username: str) -> list[dict]:
     """阶段0.2：本人被药剂科驳回（agent=drug 且 status=rejected）的记录，新→旧，
     剥离 images。供药物助手视图显示「曾被药剂科驳回：{问题}」提示（过渡实现）：
-    与 qc 驳回分流入各自的上下文，避免质控卡片出现不可重提的药物条目。"""
+    与 qc 驳回分流入各自的上下文，避免质控卡片出现不可重提的药物条目。
+    第 86 批：优先 PG 条件查询，空表/无池/异常回落既有内存扫描。"""
+    rows = pg_store.review_my_rows(
+        "submitted_by = $1 AND agent = 'drug' AND status = 'rejected'", (username,))
+    if rows is not None:
+        return rows
     return [{k: v for k, v in i.items() if k != "images"}
             for i in _load()[::-1]
             if i.get("submitted_by") == username and i.get("agent") == "drug"

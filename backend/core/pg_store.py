@@ -1167,6 +1167,34 @@ def get_review_row(rid: str) -> tuple[bool, dict | None]:
         return (False, None)
 
 
+# ---- 第 86 批：个人视角列表（我的待确认 / 我的质控驳回 / 药物驳回）按人过滤下推 PG ----
+# 这三个列表原本都是 `_load()[::-1]` 全表扫描后按 submitted_by 过滤；医生端每次进页面
+# 都会拉一遍。where 片段由域层以固定常量传入，值走 $n 占位符；返回已剥离 images（与内存同纪律）。
+
+async def _pg_review_my_rows_impl(where: str, params: list) -> list | None:
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM review_queue"):
+            return None  # 空表 → JSON 才是真源
+        rows = await c.fetch(  # noqa: S608 —— where 为域层固定片段
+            f"SELECT {','.join(_REVIEW_COLS)}, images FROM review_queue"
+            + " WHERE " + where + " ORDER BY ts DESC, id DESC", *params)
+    return [{k: v for k, v in _review_item_from_row(r).items() if k != "images"}
+            for r in rows]
+
+
+def review_my_rows(where: str, params: tuple = ()) -> list | None:
+    """个人列表同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存实现）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
+        return None
+    try:
+        return _run_pg(_pg_review_my_rows_impl(where, list(params or ())))
+    except Exception as e:  # noqa: BLE001 —— 失败回落内存，个人列表照常可用
+        logger.warning("pg.review_my_rows_failed", error=str(e)[:120])
+        return None
+
+
 # ---- llm_providers（kind/pid/data/active；data 内嵌 _seq 还原 providers 顺序） ----
 
 _LLM_IMPORT = """INSERT INTO llm_providers(kind,pid,data,active) VALUES($1,$2,$3::jsonb,$4)
