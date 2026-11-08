@@ -3164,6 +3164,45 @@ issue: {doc_tag: "local_corpus", chunks: 0, issues: ["empty_chunks"]}
 - 重名只按 `name` 完全相同判断，不做大小写/空格归一；
 - 未区分"故意保留的废弃审计记录"与真正异常（如 `local_corpus`），需人工看名称判断。
 
+## 84. 2026-11-08 安全加固（第 80 批：临床接口禁止缓存——共用工作站不留上一患者数据）
+
+**问题**：API 响应此前没有 `Cache-Control`。医院共用工作站上，医生 A 退出后医生 B
+按浏览器"返回"，浏览器可能从内存/磁盘缓存还原上一位患者的处方、审核详情、问答 JSON；
+这些内容含 PHI，属于典型的共享终端泄露面。反向代理若配置了缓存，问题同样存在。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/main.py` | 安全响应头中间件：`/api/v1/medical/`、`/api/v1/agent/`、`/api/v1/auth/` 统一补 `Cache-Control: no-store` + `Pragma: no-cache`；**豁免** `/medical/drug/dict`（保留第 61 批 ETag/304）与 `/medical/config`（非 PHI 高频配置）；用 `setdefault` 不覆盖端点已设置的头 |
+| `tests/test_cache_control.py` | +5：敏感接口 no-store、review 前缀覆盖、登录失败也不缓存、drug/dict 不被 no-store 打死、healthz/首页不强制 |
+| `docs/OPERATIONS.md` | 鉴权与安全一节补缓存策略 |
+
+**设计取舍**
+- **按前缀而不是逐个端点**：新加的临床/Agent 端点自动获得保护，不需要每个开发者记得加头；
+- **豁免必须显式**：`drug/dict` 的 ETag 收益已实测（116KB→304、94→241 RPS），不能被安全头一刀切；
+- **只加 `no-store`，不加 `no-cache` 之外的强约束**：`no-store` 已足够阻止落盘；不引入
+  `must-revalidate` 等会影响流式/大响应的组合；
+- **不覆盖端点自设头**：未来如某接口确需短缓存，可在端点显式设置并优先。
+
+**真实数据（8001，真实实例）**
+```
+GET /api/v1/medical/prescriptions/mine → 200, Cache-Control: no-store, Pragma: no-cache
+GET /api/v1/medical/drug/dict           → 200, Cache-Control: private, max-age=0, must-revalidate（ETag 端点头，未被覆盖）
+GET /api/v1/medical/config              → 200, 无 Cache-Control（豁免）
+GET /healthz                            → 200, 无 Cache-Control
+```
+
+**校验**
+- 定向 `test_cache_control` **5 passed**；
+- 全量 pytest：**1279 passed**（1274 + 本批 5）。
+
+**仍存边界**
+- `no-store` 依赖浏览器/代理遵守；已落盘的旧缓存不会被主动清除（换版后首次访问自然失效）；
+- 未设置 `Vary: Cookie`（no-store 下无必要；若未来放开某接口缓存需补）；
+- 非 API 的 HTML（`/` 首页）不强制 no-store：入口页本身不含 PHI，但浏览器"返回"仍可能
+  展示旧页面骨架（数据接口会重新请求并受 no-store 约束）；
+- 未做浏览器端 `Clear-Site-Data` 登出清理（可作后续批次）。
+
 
 
 

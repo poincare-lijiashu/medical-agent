@@ -294,11 +294,24 @@ _SECURITY_HEADERS = {
 }
 
 
+# 第 80 批：临床数据接口禁止浏览器/代理缓存（防"退出后按返回键看到上一位患者的缓存"）。
+# 只对含诊疗内容的 API 前缀生效；两个**明确豁免**：
+# - /medical/drug/dict：靠 ETag/304 省 116KB（第 61 批），no-store 会让它每次全量重传；
+# - /medical/config：全院共享的非 PHI 配置（导航/开关），高频读取且无患者数据。
+_CACHE_NO_STORE_PREFIXES = ("/api/v1/medical/", "/api/v1/agent/", "/api/v1/auth/")
+_CACHE_EXEMPT_PREFIXES = ("/api/v1/medical/drug/dict", "/api/v1/medical/config")
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
     for k, v in _SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)  # setdefault：不覆盖端点已显式设置的同名头
+    path = request.url.path
+    if path.startswith(_CACHE_NO_STORE_PREFIXES) and \
+            not path.startswith(_CACHE_EXEMPT_PREFIXES):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
     return response
 
 

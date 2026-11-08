@@ -44,6 +44,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - PHI：入站脱敏身份证/手机/邮箱/病案号/社保卡；审计追加式、无删除接口。
 - 双人核对：药物禁忌/影像高危/低置信入队，审核人≠提交人。
 - 密钥：仅 `.env.local`（不进版本库）；`.env.example` 只放占位符。
+- 临床数据接口统一 `Cache-Control: no-store` + `Pragma: no-cache`（共用工作站退出后
+  "返回"不还原上一位患者数据）；**豁免** `/medical/drug/dict`（保留 ETag/304 省 116KB）
+  与 `/medical/config`（非 PHI 高频配置）。`/healthz`、静态资源不强制。
 
 ## 模型与供应商
 - 全局 chat/vision 模型由管理端「LLM 供应商」激活的 provider 决定（PG `llm_providers`）；
