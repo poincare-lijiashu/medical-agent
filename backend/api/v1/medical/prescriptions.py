@@ -262,6 +262,8 @@ async def prescription_mine(
         offset: int = Query(0, ge=0, description="跳过条数"),
         status: str | None = Query(None, max_length=32, description="按状态过滤（如 rejected）"),
         summary: bool = Query(False, description="只回计数（items=[]），供角标轮询"),
+        q: str = Query("", max_length=100,
+                       description="关键字：病例摘要/医生/科室/药品名（大小写不敏感子串）"),
         user: dict = Depends(require_role("doctor"))):
     """我的处方列表（新→旧；服务端按登录医生过滤，只回本人数据）。
 
@@ -271,8 +273,8 @@ async def prescription_mine(
     """
     me = user.get("username", "system")
     counts: dict = {}
-    pg = await asyncio.to_thread(rx.page_mine, me, limit, offset, status, summary)
-    if pg is not None:  # 第 81 批：过滤/排序/切片/计数已在 PG 完成（不再全表解码）
+    pg = await asyncio.to_thread(rx.page_mine, me, limit, offset, status, summary, q)
+    if pg is not None:  # 第 81 批：过滤/排序/切片/计数已在 PG 完成（第 103 批含关键字下推）
         page = pg.get("items") or []
         total = pg["total"]
         counts = pg.get("counts") or {}
@@ -285,6 +287,7 @@ async def prescription_mine(
             total = len(items)
             page = []
         else:
+            items = [i for i in items if rx.matches_query(i, q)]  # 第 103 批：内存同构过滤
             if status:
                 items = [i for i in items if i.get("status") == status]
             total = len(items)
@@ -330,17 +333,20 @@ async def prescription_pending(
         limit: int | None = Query(None, ge=0, le=500,
                                   description="返回条数上限；缺省=全部。0=只取计数"),
         offset: int = Query(0, ge=0, description="跳过条数"),
+        q: str = Query("", max_length=100,
+                       description="关键字：病例摘要/医生/科室/药品名（大小写不敏感子串）"),
         user: dict = Depends(require_role("pharmacist", "admin"))):
     """药剂科待审队列（pending_pharm，新→旧；pharmacist/admin 可见，doctor/qc 403）。
     问题4 收窄（语义变更）：原 pharmacist/qc/admin——处方审核权=药剂科+管理员，
     质控科（qc）只管病例质控，不再读取开药待审队列。
     第 75 批：新增可选 `limit/offset` 与 `total`；侧栏角标改 `limit=0` 只取计数。"""
     me = user.get("username", "system")
-    pg = await asyncio.to_thread(rx.page_pending, limit, offset)
-    if pg is not None:  # 第 81 批：PG 侧过滤/排序/切片/计数
+    pg = await asyncio.to_thread(rx.page_pending, limit, offset, q)
+    if pg is not None:  # 第 81 批：PG 侧过滤/排序/切片/计数（第 103 批含关键字）
         page, total = pg.get("items") or [], pg["total"]
     else:
         items = await asyncio.to_thread(rx.list_pending)
+        items = [i for i in items if rx.matches_query(i, q)]  # 第 103 批：内存同构过滤
         total = len(items)
         page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",

@@ -4146,6 +4146,39 @@ Grafana 去 `docker logs`/Loki；告警触发也只能去 Alertmanager UI 看—
 - 未按抓取周期做"最近 N 分钟无流量则不再导出"的衰减；
 - 锚点之外的族名（如未来新增的 pg 相关族）需要手工加锚点，否则门禁会先失败。
 
+## 107. 2026-11-08 临床功能（第 103 批：处方列表关键字检索）
+
+**问题**：审核中心（review_queue）已有服务端关键字检索，但**处方列表没有**：医生在
+「我的处方」、药师在「待审队列」只能翻页肉眼找，处方量上来后不可用。
+
+**实现（后端先把能力做实，前端下一批接搜索框）**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_RX_SEARCH_EXPR` 与 `rx_search_cond(n)`：病例摘要/医生/科室 + `drugs` 数组里的药品名，`LIKE … ESCAPE '!'`（`% _ !` 按字面量） |
+| `backend/core/prescriptions.py` | 新增 `matches_query()`（与 PG 条件同构的内存匹配）；`page_mine(..., q="")`、`page_pending(..., q="")` 把关键字下推 PG（`summary=1` 时忽略 q，保持角标口径） |
+| `backend/api/v1/medical/prescriptions.py` | `/prescriptions/mine` 与 `/prescriptions/pending` 新增 `q`（≤100 字）；无池回落时用 `matches_query` 过滤；**审计不记录关键字本身**（避免把用户输入/潜在 PHI 落审计） |
+| `tests/test_prescription_search.py` | +6：SQL 条件与转义、summary 忽略 q、内存匹配语义、mine 路由内存过滤、pending 路由透传 q |
+
+**真实数据（真实 PG，14 行处方）**
+```
+SQL vs Python 逐关键词对账：口腔科 11/11、阿莫西林 3/3、doctor01 11/11、% 0/0、_ 0/0 全部一致
+8001 实测（doctor01 / pharm01）：
+  mine?q=阿莫西林 → total 2（首条药品名=阿莫西林）；pending?q=阿莫西林 → total 1
+  mine?q=口腔科 → total 11；pending?q=口腔科 → total 7；q=% → 0（字面量，非通配）
+```
+
+**校验**
+- 定向 `test_prescription_search + test_pg_prescriptions_page` **17 passed**；
+- 全量 pytest：**1433 passed**（1427 + 本批 6）。
+
+**仍存边界**
+- 前端搜索框尚未接入（本批只交付后端参数与语义）；
+- 处方表**没有 trigram 索引**（当前 14 行，顺序扫描毫秒级）；上量后需按
+  `rx_search_cond` 的表达式建 GIN 索引并调整条件字面量；
+- 关键字只覆盖病例摘要/医生/科室/药品名，不含审核意见（`pharm_opinion`）与状态中文名；
+- `summary=1` 的计数不受 q 影响（角标语义），若要做"筛选结果的角标"需另加参数；
+- 审计不记录关键字，排查"谁搜了什么"只能靠接入层日志。
+
 
 
 

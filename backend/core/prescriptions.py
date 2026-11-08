@@ -325,25 +325,52 @@ def list_reviewed_by(pharmacist: str) -> list[dict]:
             and i.get("status") in ("approved", "rejected")]
 
 
+# ---------- 第 103 批：关键字匹配（与 PG 条件同构，供无池回落路径） ----------
+
+def _search_blob(item: dict) -> str:
+    names = " ".join(str(d.get("name") or "") for d in (item.get("drugs") or [])
+                     if isinstance(d, dict))
+    return " ".join((str(item.get("case_text") or ""), str(item.get("doctor") or ""),
+                     str(item.get("dept") or ""), names)).lower()
+
+
+def matches_query(item: dict, q: str) -> bool:
+    """大小写不敏感子串匹配（病例摘要/医生/科室/药品名）；空关键字恒 True。"""
+    kw = str(q or "").strip().lower()
+    return (not kw) or kw in _search_blob(item)
+
+
 # ---------- 第 81 批：列表分页/计数下推 PG（None=回落上面的内存实现） ----------
 # where 片段全部是常量，值走 $n 占位符；PG 不可用/离线/异常/空表 → None，
 # 路由层据此保留既有内存切片（行为不变，测试环境的 monkeypatch 也仍然生效）。
 
 def page_mine(doctor: str, limit: int | None, offset: int, status: str | None = None,
-              summary: bool = False) -> dict | None:
-    """我的处方分页：summary 时按状态分组计数（忽略 status 过滤、不取正文）。"""
+              summary: bool = False, q: str = "") -> dict | None:
+    """我的处方分页：summary 时按状态分组计数（忽略 status/q 过滤、不取正文）。
+
+    第 103 批：q 走 PG 下推（病例摘要/医生/科室 + 药品名，大小写不敏感子串）。"""
     me = (doctor or "").strip()
     if summary:
         return pg_store.prescriptions_page("doctor = $1", (me,), 0, 0, count_by_status=True)
+    conds, params = ["doctor = $1"], [me]
     if status:
-        return pg_store.prescriptions_page("doctor = $1 AND status = $2", (me, status),
-                                           limit, offset)
-    return pg_store.prescriptions_page("doctor = $1", (me,), limit, offset)
+        params.append(status)
+        conds.append(f"status = ${len(params)}")
+    kw = (q or "").strip().lower()
+    if kw:
+        params.append(pg_store._like_contains(kw))
+        conds.append(pg_store.rx_search_cond(len(params)))
+    return pg_store.prescriptions_page(" AND ".join(conds), tuple(params), limit, offset)
 
 
-def page_pending(limit: int | None, offset: int) -> dict | None:
-    """药剂科待核清单分页（pending_pharm）。"""
-    return pg_store.prescriptions_page("status = 'pending_pharm'", (), limit, offset)
+def page_pending(limit: int | None, offset: int, q: str = "") -> dict | None:
+    """药剂科待核清单分页（pending_pharm）；第 103 批支持关键字 q。"""
+    conds, params = ["status = 'pending_pharm'"], []
+    kw = (q or "").strip().lower()
+    if kw:
+        params.append(pg_store._like_contains(kw))
+        conds.append(pg_store.rx_search_cond(len(params)))
+    return pg_store.prescriptions_page(" AND ".join(conds), tuple(params), limit, offset)
 
 
 def page_reviewed_by(pharmacist: str, limit: int | None, offset: int) -> dict | None:

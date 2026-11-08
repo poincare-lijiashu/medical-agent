@@ -1790,6 +1790,19 @@ def upsert_prescription_row(item: dict) -> None:
 _RX_ORDER = (" ORDER BY data->>'created_at' DESC NULLS LAST, id DESC"
              )  # 新→旧（与内存 list_* 的 [::-1] 同序）；旧行缺 created_at 时排最后（PG 默认 DESC 会把 NULL 排最前）
 
+# 第 103 批：处方关键字检索（病例摘要/医生/科室 + 药品名）。
+# 与内存实现同构：全部 lower + 子串包含；`%` `_` `!` 由 ESCAPE '!' 保持字面量。
+_RX_SEARCH_EXPR = ("lower(coalesce(data->>'case_text','') || ' ' || "
+                   "coalesce(data->>'doctor','') || ' ' || coalesce(data->>'dept',''))")
+
+
+def rx_search_cond(n: int) -> str:
+    """处方关键字条件（$n 传 `_like_contains(lower(keyword))`）。"""
+    pattern = f"('%' || ${n} || '%') ESCAPE '!'"
+    return (f"({_RX_SEARCH_EXPR} LIKE {pattern} OR EXISTS ("
+            "SELECT 1 FROM jsonb_array_elements(coalesce(data->'drugs', '[]'::jsonb)) e "
+            f"WHERE lower(coalesce(e->>'name', '')) LIKE {pattern}))")
+
 
 async def _pg_rx_page_impl(where: str, params: list, limit: int | None,
                            offset: int, count_by_status: bool) -> dict | None:
