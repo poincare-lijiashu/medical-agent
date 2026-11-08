@@ -819,3 +819,31 @@ def test_rx_pending_server_pagination_markers():
     assert 'data-testid="rx-pending-pager"' in src
     assert "if (!kw) rxPendingBadgeTotal.value = rxPendingTotal.value" in src
     assert "badges.reviewTodoCount = rxPendingBadgeTotal.value" in src
+
+
+# ---- 第 108 批：数据面板审计流服务端过滤（actor / event / action）+ 专用分页端点 ----
+
+def test_audit_server_filters_markers():
+    """审计过滤框必须真正下发到后端（不能只在本页过滤），且过滤/翻页走轻端点。
+
+    锁定：
+    - 三个过滤输入（data-testid）+ 清空按钮；
+    - 参数仅在非空时下发（空值保持旧 SQL 无 WHERE）；
+    - 过滤输入 300ms 防抖 + 回第 1 页；
+    - 过滤/翻页走 GET /medical/admin/audit（不重拉用户表/探针/日志/LLM）；
+    - 总数与"下一页"可用性来自服务端 total（拿不到时才回退满页判断）。"""
+    src = _vue_source()
+    for marker in (
+        'data-testid="audit-filter-actor"', 'data-testid="audit-filter-event"',
+        'data-testid="audit-filter-action"', 'data-testid="audit-filter-reset"',
+        "if (a) p.audit_actor = a", "if (e) p.audit_event = e", "if (c) p.audit_action = c",
+        "function onAuditFilterInput()", "function resetAuditFilters()",
+        "setTimeout(() => { auditFilterTimer = 0; loadAudit() }, 300)",
+        "'/medical/admin/audit'", "const auditAtEnd = computed",
+        "auditTotal.value = data.total ?? null",
+        "auditOffset.value + auditRows.value.length >= auditTotal.value",
+    ):
+        assert marker in src, f"缺少审计服务端过滤标记：{marker}"
+    # 旧实现（翻页重拉整个面板）必须消失：审计翻页只应调用 loadAudit
+    assert "await loadData()\n  if (delta > 0" not in src
+

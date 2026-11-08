@@ -1,7 +1,8 @@
 <!-- 数据面板（轮3，admin）：语义迁移 legacy loadData/审计流/留痕模式开关/新增用户/
      用户表/科室管理/基础设施/应用日志健康卡/LLM 模型配置（F6）——
      统计卡只读；审计流（humanizeAudit 人话映射逐字迁至 utils/audit.js）默认收起、
-     搜索本页过滤/翻页（每页 50，翻头自动回退）/CSV 导出（BOM+引号转义）/payload JSON
+     服务端精确过滤（操作者/事件/动作，先过滤再分页，走轻端点 /admin/audit）+
+     本页搜索 + 翻页（每页 50，翻头自动回退）+ CSV 导出（BOM+引号转义）/payload JSON
      折叠；留痕模式运行时开关（确认弹条文案逐字，POST /admin/config-toggle 即时生效）；
      用户删除需输入用户名确认；日志行仅展示不执行，ERROR/WARNING 高亮；
      LLM：provider 列表/新增/激活/停用（回内置 Qwen）/连通性测试/厂商预设防抖预填。 -->
@@ -26,18 +27,32 @@
         </div>
       </div>
 
-      <!-- 审计流（默认收起；展开后限高滚动；搜索本页过滤/翻页/CSV 导出） -->
+      <!-- 审计流（默认收起；展开后限高滚动；服务端过滤/翻页/CSV 导出） -->
       <el-card v-if="d" shadow="never" data-testid="audit-panel">
         <h3 style="margin: 0 0 8px; cursor: pointer; user-select: none" @click="auditPanelOpen = !auditPanelOpen">
-          审计流（共 {{ d.events_total ?? d.audit_recent.length }} 条）<span>{{ auditPanelOpen ? '▾' : '▸' }}</span>
+          审计流（共 {{ auditTotalText }} 条）<span>{{ auditPanelOpen ? '▾' : '▸' }}</span>
           <span style="font-weight: 400; font-size: 12px; color: var(--ink-3)">第 {{ Math.floor(auditOffset / AUDIT_PAGE_SIZE) + 1 }} 页 · 每页 {{ AUDIT_PAGE_SIZE }} 条 · 点开看原始 JSON</span>
         </h3>
         <template v-if="auditPanelOpen">
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 8px">
-            <el-input v-model="auditSearch" placeholder="搜索 事件/操作/用户（如 drug / purge_pending / doctor01，本页内过滤）" style="flex: 1; min-width: 180px" clearable />
+            <el-input v-model="auditSearch" placeholder="本页内搜索：事件/操作/用户/人话描述" style="flex: 1; min-width: 180px" clearable />
             <el-button size="small" :disabled="auditOffset <= 0" @click="auditPage(-1)">上一页</el-button>
-            <el-button size="small" :disabled="d.audit_recent.length < AUDIT_PAGE_SIZE" @click="auditPage(1)">下一页</el-button>
+            <el-button size="small" :disabled="auditAtEnd" @click="auditPage(1)">下一页</el-button>
             <el-button size="small" data-testid="audit-csv" @click="exportAuditCsv">导出审计 CSV</el-button>
+          </div>
+          <!-- 第 108 批：服务端精确过滤（先过滤再分页；输入防抖 300ms，过滤变化回第 1 页） -->
+          <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-top: 1px dashed var(--line)">
+            <input v-model="auditActor" class="inp" list="audit-actor-opts" data-testid="audit-filter-actor"
+                   placeholder="操作者（精确）" style="max-width: 150px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
+            <datalist id="audit-actor-opts"><option v-for="v in auditFacets.actors" :key="v" :value="v" /></datalist>
+            <input v-model="auditEvent" class="inp" list="audit-event-opts" data-testid="audit-filter-event"
+                   placeholder="事件（精确，如 review.approved）" style="max-width: 220px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
+            <datalist id="audit-event-opts"><option v-for="v in auditFacets.events" :key="v" :value="v" /></datalist>
+            <input v-model="auditAction" class="inp" list="audit-action-opts" data-testid="audit-filter-action"
+                   placeholder="动作（精确，如 resolved_approved）" style="max-width: 190px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
+            <datalist id="audit-action-opts"><option v-for="v in auditFacets.actions" :key="v" :value="v" /></datalist>
+            <el-button size="small" data-testid="audit-filter-reset" :disabled="!auditFiltered" @click="resetAuditFilters">清空过滤</el-button>
+            <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作（精确匹配；候选项取自本页）' }}</span>
           </div>
           <ul class="feed" style="max-height: 420px; overflow: auto" data-testid="audit-list">
             <template v-if="auditView.length">
@@ -312,6 +327,43 @@ const loadErr = ref('')
 const auditPanelOpen = ref(false) // 审计流默认收起（标题点击展开；翻页/搜索不回缩——v-if 模板内状态保持）
 const auditSearch = ref('')
 const auditOffset = ref(0)
+// 第 108 批：审计流服务端过滤（actor / event / action 精确匹配）与本页数据/总数分离——
+// 过滤输入只拉审计一页（GET /admin/audit），不重拉用户表/探针/日志/LLM 配置。
+const auditRows = ref([])
+const auditTotal = ref(null)
+const auditActor = ref('')
+const auditEvent = ref('')
+const auditAction = ref('')
+let auditFilterTimer = 0
+let auditLoadSeq = 0 // 竞态守卫：只认最后一次请求的结果（连续输入/翻页时旧响应不覆盖新结果）
+
+const auditFiltered = computed(() => !!(auditActor.value.trim() || auditEvent.value.trim()
+  || auditAction.value.trim()))
+
+// 总数文案：有服务端总数用总数；无（PG 与 JSONL 都拿不到）时——
+// 未过滤回落面板 events_total，已过滤显示「—」（不编造）
+const auditTotalText = computed(() => {
+  if (auditTotal.value !== null) return String(auditTotal.value)
+  const dd = d.value
+  if (!auditFiltered.value && dd) return String(dd.events_total ?? (dd.audit_recent || []).length)
+  return '—'
+})
+
+// 候选值（datalist）：取自当前页，帮助用户拼出精确值（事件名/动作名是字符串，手输易错）
+const auditFacets = computed(() => {
+  const uniq = (vals) => Array.from(new Set(vals.filter(Boolean))).slice(0, 20)
+  return {
+    actors: uniq(auditRows.value.map((e) => e.actor)),
+    events: uniq(auditRows.value.map((e) => e.event)),
+    actions: uniq(auditRows.value.map((e) => e.action)),
+  }
+})
+
+// 下一页可用性：有总数按总数精确判断；无总数回退「本页是否满页」
+const auditAtEnd = computed(() => {
+  if (auditTotal.value !== null) return auditOffset.value + auditRows.value.length >= auditTotal.value
+  return auditRows.value.length < AUDIT_PAGE_SIZE
+})
 
 const statCards = computed(() => {
   const dd = d.value
@@ -328,11 +380,25 @@ const statCards = computed(() => {
 // doc_count sentinel：后端查询失败返回 -1（区分「真 0」），显示 … 表示未知
 function fmtCnt(v) { return v < 0 ? '…' : String(v) }
 
+// 审计流查询参数：偏移 + 非空的服务端过滤项（空值不下发，后端与旧版逐字一致）
+function auditParams() {
+  const p = { audit_offset: auditOffset.value }
+  const a = auditActor.value.trim()
+  const e = auditEvent.value.trim()
+  const c = auditAction.value.trim()
+  if (a) p.audit_actor = a
+  if (e) p.audit_event = e
+  if (c) p.audit_action = c
+  return p
+}
+
 async function loadData() {
   loadErr.value = ''
   try {
-    const { data } = await http.get('/medical/admin/data', { params: { audit_offset: auditOffset.value } })
+    const { data } = await http.get('/medical/admin/data', { params: auditParams() })
     d.value = data
+    auditRows.value = data.audit_recent || []
+    auditTotal.value = data.audit_total ?? null
     badges.loadConfig() // 留痕模式状态同步到角标 store（审核中心只读档案判定）
     loadDeptPanel()
     loadAppLogs()
@@ -343,16 +409,41 @@ async function loadData() {
 }
 onMounted(loadData)
 
-// ---- 审计流：搜索（本页过滤 事件/动作/操作者/人话描述）+ 翻页（翻头自动回退）+ CSV 导出 ----
+// ---- 审计流：服务端过滤（精确匹配）+ 翻页（翻头自动回退）+ 本页搜索 + CSV 导出 ----
 const auditView = computed(() => {
   const q = auditSearch.value.trim().toLowerCase()
-  const items = d.value ? d.value.audit_recent || [] : []
+  const items = auditRows.value
   if (!q) return items
   return items.filter((e) => {
     const hay = ((e.event || '') + ' ' + (e.action || '') + ' ' + (e.actor || '') + ' ' + humanizeAudit(e)).toLowerCase()
     return hay.includes(q)
   })
 })
+// 只拉审计一页（过滤/翻页走轻端点，不重拉用户表/探针/日志/LLM）
+async function loadAudit() {
+  const seq = ++auditLoadSeq
+  try {
+    const { data } = await http.get('/medical/admin/audit', { params: auditParams() })
+    if (seq !== auditLoadSeq) return // 旧响应丢弃（连续输入/翻页竞态）
+    auditRows.value = data.items || []
+    auditTotal.value = data.total ?? null
+  } catch (e) {
+    if (seq === auditLoadSeq) loadErr.value = detailText(e)
+  }
+}
+// 过滤输入：回第 1 页 + 300ms 防抖（与处方搜索同节奏）
+function onAuditFilterInput() {
+  auditOffset.value = 0
+  if (auditFilterTimer) clearTimeout(auditFilterTimer)
+  auditFilterTimer = setTimeout(() => { auditFilterTimer = 0; loadAudit() }, 300)
+}
+function resetAuditFilters() {
+  auditActor.value = ''
+  auditEvent.value = ''
+  auditAction.value = ''
+  auditOffset.value = 0
+  loadAudit()
+}
 function auditTagType(e) {
   const cat = String(e.event || '').split('.')[0] || ''
   const map = { auth: 'success', admin: 'primary', review: 'warning', pharm: 'primary', qc: 'info' }
@@ -361,10 +452,10 @@ function auditTagType(e) {
 async function auditPage(delta) {
   const prev = auditOffset.value
   auditOffset.value = Math.max(0, auditOffset.value + delta * AUDIT_PAGE_SIZE)
-  await loadData()
-  if (delta > 0 && d.value && !(d.value.audit_recent || []).length) {
+  await loadAudit()
+  if (delta > 0 && !auditRows.value.length) { // 越界（服务端已无数据）→ 回退上一页
     auditOffset.value = prev
-    await loadData()
+    await loadAudit()
   }
 }
 // 导出审计 CSV（本页、应用搜索框过滤后条目）：BOM 头保证 Excel 中文不乱码；引号转义防注入

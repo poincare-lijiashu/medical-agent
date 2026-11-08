@@ -211,6 +211,9 @@ _PG_METRIC_KEYS = (
     ("case_archive", "list"),
     ("case_archive", "stats"),
     ("case_archive", "get_row"),
+    # 第 108 批：admin 审计流读路径（分页 + 过滤后总数）纳入同口径计量
+    ("audit_log", "recent_page"),
+    ("audit_log", "count"),
 )
 # 第 94 批：耗时直方图桶（秒）。覆盖本地实测（2–8ms）到熔断前的桥接上限（3s），
 # 让 P95/P99 可算；`+Inf` 不在常量里，导出时以 total 补。
@@ -261,6 +264,21 @@ def _pg_call(domain: str, op: str, coro):
     t0 = time.perf_counter()
     try:
         out = _run_pg(coro)
+    except Exception:
+        _record_pg_query(domain, op, time.perf_counter() - t0, False)
+        raise
+    _record_pg_query(domain, op, time.perf_counter() - t0, True)
+    return out
+
+
+async def _arun_metered(domain: str, op: str, coro):
+    """第 108 批：异步读计量（与 _pg_call 同口径，供主循环内已 await 的 PG 读使用）。
+
+    为什么单独一个：`_pg_call` 走同步桥接，在 async 端点里调用会阻塞事件循环；
+    审计流读路径本就是 `await _arun(...)`，这里只补计量，不改桥接方式。"""
+    t0 = time.perf_counter()
+    try:
+        out = await _arun(coro)
     except Exception:
         _record_pg_query(domain, op, time.perf_counter() - t0, False)
         raise
@@ -400,6 +418,14 @@ _PG_INDEX_DDL = (
     "ON case_archive(status)",
     "CREATE INDEX IF NOT EXISTS ix_case_archive_submitted "
     "ON case_archive(((data->>'submitted_by')), status)",
+    # 第 108 批：审计流过滤（/admin/audit 与 /admin/data 的 audit_actor/audit_event）
+    # 与排序键对齐——(过滤列, ts DESC, id DESC) 使 SQL 侧过滤后分页可走索引，
+    # 不必"扫全表 + 排序 + 过滤"。payload.action 未建索引：实测 2159 行全为 null
+    # （JSONL 侧才有真实 action），建了也不会被使用，留待该字段真有数据时再补。
+    "CREATE INDEX IF NOT EXISTS ix_audit_log_actor_ts "
+    "ON audit_log(actor, ts DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_audit_log_event_ts "
+    "ON audit_log(event_type, ts DESC, id DESC)",
 )
 
 
@@ -911,13 +937,11 @@ async def counts() -> dict:
 
 # ---------- 任务5：admin 审计流 PG 真源查询（audit_log 按 ts 倒序分页） ----------
 
-async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
-                                event_type: str = "", action: str = "") -> list:
-    """第 107 批：审计流可选过滤（actor/event_type/payload.action，全部精确匹配）。
+def _audit_where(actor: str, event_type: str, action: str) -> tuple[str, list]:
+    """第 108 批：审计流过滤 SQL 片段（三处复用：分页 / 计数）。
 
-    过滤在 SQL 侧完成，offset 是"过滤后"的偏移（与前端分页一致）；三参均为空时
-    SQL 与旧版逐字一致（无 WHERE）。
-    """
+    返回 (where_sql, params)；三参均为空 → ("", [])，SQL 与旧版逐字一致。
+    值一律走 $n 占位符，条件列名是固定常量（无注入面）。"""
     conds, params = [], []
     if actor:
         params.append(actor)
@@ -928,7 +952,17 @@ async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
     if action:
         params.append(action)
         conds.append(f"payload->>'action' = ${len(params)}")
-    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    return ((" WHERE " + " AND ".join(conds)) if conds else ""), params
+
+
+async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
+                                event_type: str = "", action: str = "") -> list:
+    """第 107 批：审计流可选过滤（actor/event_type/payload.action，全部精确匹配）。
+
+    过滤在 SQL 侧完成，offset 是"过滤后"的偏移（与前端分页一致）；三参均为空时
+    SQL 与旧版逐字一致（无 WHERE）。
+    """
+    where, params = _audit_where(actor, event_type, action)
     n = len(params)
     async with _pool.acquire() as c:
         rows = await c.fetch(  # noqa: S608 —— 片段均为固定常量，值走 $n
@@ -949,22 +983,46 @@ async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
     return out
 
 
+async def _audit_count_pg_impl(actor: str = "", event_type: str = "", action: str = "") -> int:
+    """第 108 批：过滤后的审计总条数（前端据此显示"共 N 条"并精确禁用下一页）。"""
+    where, params = _audit_where(actor, event_type, action)
+    async with _pool.acquire() as c:
+        return int(await c.fetchval("SELECT count(*) FROM audit_log" + where, *params) or 0)  # noqa: S608
+
+
 async def audit_recent_pg(limit: int = 50, offset: int = 0, actor: str = "",
                           event_type: str = "", action: str = "") -> list | None:
     """任务5：admin 审计流数据源——PG audit_log 表按 ts 倒序分页。
 
     第 107 批：支持 actor/event_type/action 精确过滤（SQL 侧过滤后再分页）。
+    第 108 批：读路径纳入 Prometheus 计量（domain=audit_log, op=recent_page）。
     返回与 AuditLog.recent(JSONL) 相同结构 [{ts,event_type,actor,payload}]（payload
     内含 action/role 等字段）；未建池/异常/超时一律返回 None（调用方回落 JSONL 现状），
     绝不冒泡影响 admin 面板。"""
     if not _pool:
         return None
     try:
-        return await _arun(_audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset)),
-                                                 str(actor or ""), str(event_type or ""),
-                                                 str(action or "")))
+        return await _arun_metered("audit_log", "recent_page",
+                                   _audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset)),
+                                                         str(actor or ""), str(event_type or ""),
+                                                         str(action or "")))
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.audit_recent_failed", error=str(e)[:120])
+        return None
+
+
+async def audit_count_pg(actor: str = "", event_type: str = "", action: str = "") -> int | None:
+    """第 108 批：过滤后的审计总条数；PG 不可用/异常 → None（调用方按 JSONL 计数）。
+
+    与 audit_recent_pg 同纪律：best-effort，绝不冒泡影响 admin 面板。"""
+    if not _pool:
+        return None
+    try:
+        return await _arun_metered("audit_log", "count",
+                                   _audit_count_pg_impl(str(actor or ""), str(event_type or ""),
+                                                        str(action or "")))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.audit_count_failed", error=str(e)[:120])
         return None
 
 

@@ -4306,6 +4306,73 @@ API：?audit_actor=admin01 → 50 条且全部 actor=admin01
 - `audit_log` 只有 `(ts DESC)` 索引，按 actor/event 过滤在大表上仍是扫描；
 - `payload.action` 只对 JSONL 写入真实 action，镜像事件多数没有该字段。
 
+## 112. 2026-11-08 合规运营（第 108 批：审计过滤接入前端 + 专用分页端点 + 过滤索引）
+
+**问题**：第 107 批只交付了后端过滤参数——前端审计区仍只有一个"本页内过滤"的搜索框，
+查"某人做过什么/某类事件几次"仍要一页页翻。且 `/admin/data` 同时携带用户表、复核统计、
+Milvus/PG 探针、日志尾与 LLM 配置：过滤输入每敲一次就重拉整块面板；翻页也没有准确依据
+（只能靠"本页是否满 50 条"猜下一页是否还有）。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 抽出 `_audit_where`（分页/计数共用同一 WHERE 片段，值走 `$n`）；新增 `_audit_count_pg_impl` / `audit_count_pg`（**过滤后** `count(*)`）；`audit_recent_pg` 与新 count 走 `_arun_metered`（`domain=audit_log`, `op=recent_page/count`）；`_PG_INDEX_DDL` +2：`(actor, ts DESC, id DESC)` / `(event_type, ts DESC, id DESC)` |
+| `backend/api/v1/medical/admin.py` | 新增 `GET /admin/audit`（只读，admin）：返回一页 + 过滤后 `total` + 回显 `filters/offset/limit`；`_audit_page` / `_audit_filters` 抽出供 `/admin/data` 共用，后者增返 `audit_total` |
+| `frontend-vue/src/views/DataView.vue` | 审计区新增 3 个服务端过滤输入（操作者/事件/动作，datalist 候选取自本页）+ 清空按钮；300ms 防抖、过滤变化回第 1 页、竞态守卫（只认最后一次响应）；过滤/翻页走 `/admin/audit`（不再重拉整块面板）；"共 N 条"与"下一页"禁用改用服务端 total |
+| `tests/test_audit_filters.py` | +5：count SQL 形状/参数、`/admin/audit` JSONL 回落分页与 total、PG total 透传、负数 offset、非 admin 403 |
+| `tests/test_pg_indexes.py` / `test_router_split_guard.py` / `test_frontend_syntax.py` | 索引条数 15→17 + 形状断言；路由快照 +1（62）；前端过滤标记锁（含"翻页不得再调 loadData"的反向断言） |
+
+**设计取舍**
+- **独立轻端点，而不是给 `/admin/data` 加开关**：面板端点的重活（Milvus 探针、日志尾、
+  LLM 配置）与审计过滤无关；输入框每次停顿都拉一遍纯属浪费。`/admin/audit` 只查一页 +
+  一次 count，过滤/分页逻辑与面板共用 `_audit_page`，不会出现两套口径。
+- **用 `total` 取代"满页即还有"**：过滤后常见"第 2 页只有 3 条"；用 `count(*)` 精确禁用
+  下一页，并把标题"共 N 条"从全局总数改为**过滤后**总数（否则会出现"过滤出 5 条却显示
+  共 2,164 条"的口径矛盾）。PG 与 JSONL 都拿不到时回退满页判断，不编造数字。
+- **datalist 而不是下拉**：候选值来自当前页（`review.approved` 这类事件名手输易错），
+  但仍允许自由输入（过滤值不必出现在当前页）；输入语义仍是精确匹配，不偷偷改成模糊。
+- **只给 actor/event 建索引**：实测 `payload.action` 在 PG 侧 2,164 行全为 null
+  （真实 action 只在 JSONL 侧），建表达式索引不会被用到，留待该字段真有数据再补。
+
+**真实数据（8001 + 真实 PG，`audit_log` 2,164 行）**
+```
+SQL: count(*) WHERE actor='admin01'              = 1488
+     count(*) WHERE event_type='review.approved' = 5
+     count(*) WHERE actor AND event_type（组合）  = 0
+API（cookie 会话）:
+  /admin/audit?audit_actor=admin01          total=1488 / 本页 50 条且全部 actor=admin01
+  /admin/audit?audit_event=review.approved  total=5    / 5 条且事件一致
+  /admin/audit?audit_actor=admin01&audit_offset=50   第 2 页 50 条，首条 ts 与第 1 页不同
+  /admin/audit?audit_actor=no-such-actor    total=0    / items=[]
+  /admin/data?audit_actor=admin01           audit_total=1488，audit_recent 与 /admin/audit 逐条一致
+  /admin/audit?audit_offset=-5              offset=0（不 500）
+  /admin/audit?audit_actor=%20admin01%20    filters.actor='admin01'（trim 生效）
+  16/16 校验通过
+查询计划（真实库）:
+  actor 过滤分页   → Index Scan using ix_audit_log_actor_ts，0.082ms / 26 buffers
+  event 过滤分页   → Bitmap Index Scan using ix_audit_log_event_ts，0.091ms（5 行）
+  count(*) actor   → 仍 Seq Scan（2,164 行时优化器选全表），0.245ms —— 如实记录
+```
+
+**校验**
+- 定向：`test_audit_filters + test_pg_indexes + test_router_split_guard + test_frontend_syntax
+  + test_admin_data_counts + test_admin_logs + test_audit_pagination + test_pg_query_metrics`
+  **64 passed**；
+- 全量 pytest：**1441 passed / 2 failed**；2 条失败均为 `tests/e2e` 的 `.rail a.nav`
+  超时——服务端日志同期 **28 条 429 Too Many Requests**（e2e 套件连续登录触到 60 次/分钟
+  滑动窗口限流，文件头注释已声明该风险），单独复跑这 2 条 **2 passed**，与本次改动无关；
+- 真机 API 校验：16/16 通过（见上表），`/admin/audit` 与 `/admin/data` 的 total/条目逐条一致。
+
+**仍存边界**
+- 仍是**精确匹配**：没有 contains / 时间区间 / 多值（`IN`）；
+- **事件名两源不一致**仍在（PG 点号 `review.approved` vs JSONL 原名 `review`），datalist
+  候选取自当前页，切换数据源时可能看不到另一种写法；
+- `payload.action` 在 PG 侧全为 null，action 过滤目前只能命中 JSONL 数据；
+- `count(*)` 在万级以上可能退回顺序扫描（本机 2,164 行 0.245ms 可接受），超大表需计数缓存
+  或按时间分区；
+- 过滤候选值只来自当前页，跨页全集需要额外的 `DISTINCT` 端点（未做）；
+- 审计流仍无时间区间过滤与导出全量（CSV 只导当前页/当前本页搜索结果）。
+
 
 
 

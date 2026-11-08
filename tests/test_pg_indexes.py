@@ -1,8 +1,10 @@
 """第 92 批：81–91 批下推查询的配套 PG 索引（假池注入，绝不连真实 PG）。
 
-背景：第 81–91 批把列表/计数/详情下推到了 PG，但此前只有 audit_log 有索引。
+背景：第 81–91 批把列表/计数/详情下推到了 PG，但此前只有 audit_log 的 (ts DESC) 有索引。
 本批给 review_queue / prescriptions / consults / case_archive 补与查询逐字对齐的
 索引，全部 IF NOT EXISTS（多实例重复启动幂等，小表可继续走顺序扫描）。
+第 108 批：审计流过滤（actor / event_type）接入前端后，补 (过滤列, ts DESC, id DESC)
+两条索引——过滤后分页可走索引，而不是"扫全表 + 排序 + 过滤"。
 
 锁定语义：
 - 每个索引都由 _init_impl 真正下发（不是只定义常量不接线）；
@@ -70,7 +72,7 @@ def test_init_issues_every_index_ddl(monkeypatch):
     expected = list(pg_store._PG_INDEX_DDL)
     for ddl in expected:
         assert ddl in statements, ddl
-    assert len(expected) == 15
+    assert len(expected) == 17
 
 
 def test_search_trgm_index_is_created_after_extension(monkeypatch):
@@ -123,3 +125,6 @@ def test_index_shapes_match_downstream_queries():
     assert ("case_archive(((data->>'archived_at')) DESC NULLS LAST, id DESC)"
             in pg_store._PG_INDEX_DDL[11])
     assert "case_archive(((data->>'submitted_by')), status)" in pg_store._PG_INDEX_DDL[14]
+    # 第 108 批：审计流过滤列 + 排序键（与 WHERE actor/event + ORDER BY ts DESC, id DESC 对齐）
+    assert "audit_log(actor, ts DESC, id DESC)" in pg_store._PG_INDEX_DDL[15]
+    assert "audit_log(event_type, ts DESC, id DESC)" in pg_store._PG_INDEX_DDL[16]
