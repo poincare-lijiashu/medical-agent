@@ -291,6 +291,34 @@ def list_reviewed_by(pharmacist: str) -> list[dict]:
             and i.get("status") in ("approved", "rejected")]
 
 
+# ---------- 第 81 批：列表分页/计数下推 PG（None=回落上面的内存实现） ----------
+# where 片段全部是常量，值走 $n 占位符；PG 不可用/离线/异常/空表 → None，
+# 路由层据此保留既有内存切片（行为不变，测试环境的 monkeypatch 也仍然生效）。
+
+def page_mine(doctor: str, limit: int | None, offset: int, status: str | None = None,
+              summary: bool = False) -> dict | None:
+    """我的处方分页：summary 时按状态分组计数（忽略 status 过滤、不取正文）。"""
+    me = (doctor or "").strip()
+    if summary:
+        return pg_store.prescriptions_page("doctor = $1", (me,), 0, 0, count_by_status=True)
+    if status:
+        return pg_store.prescriptions_page("doctor = $1 AND status = $2", (me, status),
+                                           limit, offset)
+    return pg_store.prescriptions_page("doctor = $1", (me,), limit, offset)
+
+
+def page_pending(limit: int | None, offset: int) -> dict | None:
+    """药剂科待核清单分页（pending_pharm）。"""
+    return pg_store.prescriptions_page("status = 'pending_pharm'", (), limit, offset)
+
+
+def page_reviewed_by(pharmacist: str, limit: int | None, offset: int) -> dict | None:
+    """药剂科本人已审核处方分页（含 approved/rejected）。"""
+    return pg_store.prescriptions_page(
+        "data->>'pharm_reviewer' = $1 AND status IN ('approved', 'rejected')",
+        ((pharmacist or "").strip(),), limit, offset)
+
+
 def stats() -> dict:
     """状态分布统计：{total, draft, pending_pharm, approved, rejected}（管理/运维用）。"""
     items = _load()

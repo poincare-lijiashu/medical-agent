@@ -270,19 +270,25 @@ async def prescription_mine(
     整表下发会把"一个数字"变成越来越大的轮询负载。`summary=1` 只回 `{counts, total}`。
     """
     me = user.get("username", "system")
-    items = await asyncio.to_thread(rx.list_mine, me)
     counts: dict = {}
-    for i in items:
-        st = str(i.get("status") or "unknown")
-        counts[st] = counts.get(st, 0) + 1
-    if summary:
-        total = len(items)
-        page: list[dict] = []
-    else:
-        if status:
-            items = [i for i in items if i.get("status") == status]
-        total = len(items)
-        page = _page(items, limit, offset)
+    pg = await asyncio.to_thread(rx.page_mine, me, limit, offset, status, summary)
+    if pg is not None:  # 第 81 批：过滤/排序/切片/计数已在 PG 完成（不再全表解码）
+        page = pg.get("items") or []
+        total = pg["total"]
+        counts = pg.get("counts") or {}
+    else:  # 无池/离线/异常/空表 → 既有内存切片（行为不变）
+        items = await asyncio.to_thread(rx.list_mine, me)
+        for i in items:
+            st = str(i.get("status") or "unknown")
+            counts[st] = counts.get(st, 0) + 1
+        if summary:
+            total = len(items)
+            page = []
+        else:
+            if status:
+                items = [i for i in items if i.get("status") == status]
+            total = len(items)
+            page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription", action="list",
                             actor=me, payload=_rx_audit(user, n=len(page), total=total,
                                                         limit=limit, offset=offset,
@@ -305,9 +311,13 @@ async def prescription_reviewed_by_me(
     审核记录（rid/状态/意见/时间）。仅 pharmacist（admin 走全局档案，doctor/qc 403）。
     第 75 批：新增可选 `limit/offset` 与 `total`（缺省全量；合并轨暂未分页）。"""
     me = user.get("username", "system")
-    items = await asyncio.to_thread(rx.list_reviewed_by, me)
-    total = len(items)
-    page = _page(items, limit, offset)
+    pg = await asyncio.to_thread(rx.page_reviewed_by, me, limit, offset)
+    if pg is not None:  # 第 81 批：PG 侧过滤/排序/切片/计数
+        page, total = pg.get("items") or [], pg["total"]
+    else:
+        items = await asyncio.to_thread(rx.list_reviewed_by, me)
+        total = len(items)
+        page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                             action="list_reviewed_by_me", actor=me,
                             payload=_rx_audit(user, n=len(page), total=total,
@@ -326,9 +336,13 @@ async def prescription_pending(
     质控科（qc）只管病例质控，不再读取开药待审队列。
     第 75 批：新增可选 `limit/offset` 与 `total`；侧栏角标改 `limit=0` 只取计数。"""
     me = user.get("username", "system")
-    items = await asyncio.to_thread(rx.list_pending)
-    total = len(items)
-    page = _page(items, limit, offset)
+    pg = await asyncio.to_thread(rx.page_pending, limit, offset)
+    if pg is not None:  # 第 81 批：PG 侧过滤/排序/切片/计数
+        page, total = pg.get("items") or [], pg["total"]
+    else:
+        items = await asyncio.to_thread(rx.list_pending)
+        total = len(items)
+        page = _page(items, limit, offset)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                             action="list_pending", actor=me,
                             payload=_rx_audit(user, n=len(page), total=total,

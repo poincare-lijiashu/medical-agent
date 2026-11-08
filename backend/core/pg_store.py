@@ -1146,20 +1146,25 @@ _RX_UPSERT = """INSERT INTO prescriptions(id,data,doctor,status) VALUES($1,$2::j
    status=EXCLUDED.status, updated_at=now()"""
 
 
+def _rx_rows_to_items(rows) -> list[dict]:
+    """prescriptions 行 → 处方 dict（单行 jsonb 损坏跳过，不拖垮列表/整页）。"""
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
+        except Exception:  # noqa: BLE001 —— 单行损坏跳过
+            continue
+        if isinstance(d, dict):
+            out.append(d)
+    return out
+
+
 async def _pg_load_prescriptions() -> list | None:
     async with _pool.acquire() as c:
         rows = await c.fetch("SELECT data FROM prescriptions ORDER BY data->>'created_at', id")
     if not rows:
         return None
-    out = []
-    for r in rows:
-        try:
-            d = json.loads(r["data"]) if isinstance(r["data"], str) else r["data"]
-        except Exception:  # noqa: BLE001 —— 单行损坏跳过，不拖垮整个列表
-            continue
-        if isinstance(d, dict):
-            out.append(d)
-    return out
+    return _rx_rows_to_items(rows)
 
 
 async def _pg_save_prescriptions(items: list) -> None:
@@ -1198,6 +1203,70 @@ def upsert_prescription_row(item: dict) -> None:
                             item.get("doctor", ""), item.get("status", "pending_pharm"))
 
     _run_pg(_impl())
+
+
+# ---- 第 81 批：处方列表分页/计数下推 PG ----
+# 为什么：第 75 批的 limit/offset/summary 只是"读全量再内存切片"——处方随年限无界增长，
+# 角标轮询仍要全表解码。这里把 WHERE/ORDER/LIMIT/OFFSET/COUNT 全部下推 PG。
+# where 片段由 prescriptions 域层以**固定常量**传入（不拼外部字符串），值走 $n 占位符。
+
+_RX_ORDER = (" ORDER BY data->>'created_at' DESC NULLS LAST, id DESC"
+             )  # 新→旧（与内存 list_* 的 [::-1] 同序）；旧行缺 created_at 时排最后（PG 默认 DESC 会把 NULL 排最前）
+
+
+async def _pg_rx_page_impl(where: str, params: list, limit: int | None,
+                           offset: int, count_by_status: bool) -> dict | None:
+    """处方分页/计数查询：返回 {items,total[,counts]}；空表 → None（与 load 同语义回落 JSON）。"""
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM prescriptions"):
+            return None
+        cond = (" WHERE " + where) if where else ""
+        args = list(params)
+        total = None
+        counts = None
+        if count_by_status:
+            counts = {}
+            for r in await c.fetch(  # noqa: S608 —— cond 为域层固定片段
+                    "SELECT status, count(*) AS n FROM prescriptions" + cond
+                    + " GROUP BY status", *args):
+                counts[str(r["status"] or "unknown")] = int(r["n"])
+            total = sum(counts.values())
+        sql = "SELECT data FROM prescriptions" + cond + _RX_ORDER  # noqa: S608
+        if limit is None:
+            rows = await c.fetch(sql, *args)
+        else:
+            n = len(args)
+            rows = await c.fetch(sql + f" LIMIT ${n + 1} OFFSET ${n + 2}",  # noqa: S608
+                                 *args, max(0, int(limit)), max(0, int(offset)))
+            if total is None:
+                total = int(await c.fetchval(  # noqa: S608
+                    "SELECT count(*) FROM prescriptions" + cond, *args) or 0)
+        items = _rx_rows_to_items(rows)
+        if total is None:  # limit=None 且未计数：全量即 total
+            total = len(items)
+        out = {"items": items, "total": int(total)}
+        if counts is not None:
+            out["counts"] = counts
+        return out
+
+
+def prescriptions_page(where: str = "", params: tuple = (), limit: int | None = None,
+                       offset: int = 0, count_by_status: bool = False) -> dict | None:
+    """处方分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存逻辑）。
+
+    返回 {"items": [...], "total": n, "counts": {...}?}：items 已按新→旧排好且已切片，
+    total 为**过滤后总数**（与切片无关）；count_by_status 时按 status 分组计数，
+    且 total=各分组之和（summary 角标语义）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "prescriptions.json" in _repo_pg_stale:
+        return None
+    try:
+        return _run_pg(_pg_rx_page_impl(where, list(params or ()), limit,
+                                        max(0, int(offset)), count_by_status))
+    except Exception as e:  # noqa: BLE001 —— 分页失败回落内存，绝不影响列表可用性
+        logger.warning("pg.prescriptions_page_failed", error=str(e)[:120])
+        return None
 
 
 # ---- 阶段4：病例库合规归档（data jsonb 全量留痕，archived_at 内嵌 data 中，读时按其排序还原追加顺序） ----

@@ -3203,6 +3203,57 @@ GET /healthz                            → 200, 无 Cache-Control
   展示旧页面骨架（数据接口会重新请求并受 no-store 约束）；
 - 未做浏览器端 `Clear-Site-Data` 登出清理（可作后续批次）。
 
+## 85. 2026-11-08 性能与容量（第 81 批：处方列表分页/计数下推 PG——角标轮询不再全表解码）
+
+**问题**：第 75 批给 `/prescriptions/mine|pending|reviewed-by-me` 加了 `limit/offset/summary`，
+但实现是**读全量 → 内存过滤 → 切片**：`_load()` 仍把整张 `prescriptions` 表读进内存并逐行
+`json.loads`，`summary=1` 的角标轮询（每 60s 一次）同样要付出全表代价。处方随使用年限
+无界增长，这等于把"一个数字"的轮询变成越来越大的固定开销。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 新增 `_rx_rows_to_items`（与全量读共用行解码，单行损坏跳过语义不变）；新增 `_pg_rx_page_impl` + `prescriptions_page()`：WHERE / `ORDER BY data->>'created_at' DESC NULLS LAST, id DESC` / LIMIT / OFFSET / `count(*)` / `GROUP BY status` 全部下推；空表、无池、离线、旧编排 stale、异常一律返回 `None`（调用方回落内存） |
+| `backend/core/prescriptions.py` | 新增 `page_mine/page_pending/page_reviewed_by`：where 片段为**固定常量**，值走 `$n` 占位符；`summary` 走 `GROUP BY status` 且 `total`=各分组之和、不取正文 |
+| `backend/api/v1/medical/prescriptions.py` | 三个列表端点优先使用 PG 分页结果；`None` 时保留原有 `list_*` + `_page` 内存路径（旧行为/测试 monkeypatch 零影响） |
+| `tests/test_pg_prescriptions_page.py` | +11：假池断言分页顺序/切片/`total`/状态过滤/summary 计数/空表与无池回落/查询异常降级/路由确实走 PG（内存 `list_mine` 设为炸弹） |
+
+**设计取舍**
+- **单查询 vs 先 count 再取页**：分页时执行 `count(*)` + 取页两条 SQL（同一连接），
+  换来 `total` 精确；`summary` 则用一条 `GROUP BY status` 同时得到计数与总数，避免两次扫描；
+- **空表仍回落 JSON**：与 `_pg_load_prescriptions` 同语义——表空但 JSON 有数据时保持可读
+  （迁移未导入窗口不丢数据）；
+- **`NULLS LAST`**：PG 对 `DESC` 默认 `NULLS FIRST`，历史行若缺 `created_at` 会被顶到最前，
+  与内存"新→旧"不一致；显式 `NULLS LAST` 保证两种路径同序；
+- **不新增索引**：现有数据量（8 条）与 `id` 主键足够；真正上量后再按
+  `(doctor, (data->>'created_at'))` 建表达式索引，本批不提前优化。
+
+**真实数据（8001，真实 PG `medagent_pg:5433`，doctor01）**
+```
+GET /prescriptions/mine（缺省全量）      → total=8, ids=rx-53e4ca73,rx-12413815,rx-9e72b950,...
+GET /prescriptions/mine?limit=2&offset=0 → total=8, ids=rx-53e4ca73,rx-12413815（与全量前两条一致）
+GET /prescriptions/mine?limit=3&offset=3 → ids=rx-9b342e24,rx-a9793b9c,rx-97c2b3e7（与全量 [3:6] 完全一致）
+GET /prescriptions/mine?summary=1        → total=8, counts={pending_pharm:5, approved:3}
+GET /prescriptions/pending?limit=1       → total=5（= summary 的 pending_pharm 计数）
+GET /prescriptions/reviewed-by-me?limit=1→ total=5
+GET /prescriptions/mine?status=rejected  → total=0（该医生暂无驳回单）
+```
+
+**校验**
+- 定向 `test_pg_prescriptions_page + test_prescriptions_paging` **18 passed**；
+  `test_prescriptions` 在内共 **53 passed**；
+- 全量 pytest：**1290 passed**（1279 + 本批 11）；
+- 重启 8001 后真实 PG 实测如上（分页切片与内存全量顺序逐条一致）。
+
+**仍存边界**
+- 只下推三个列表端点；`stats()`、`get()` 与写路径仍走全量读（写路径本身已是单行 UPSERT，
+  不受影响；`stats()` 为运维低频接口）；
+- `total` 是查询时刻快照，两次请求之间新增/审核会变化（与所有分页接口同语义）；
+- 深翻页（大 offset）仍是 `OFFSET` 扫描，未改 keyset 分页；真实上量后需按 created_at 游标化；
+- 未建 `(doctor, created_at)` 表达式索引（当前 8 条无必要，已在设计取舍中记录条件）；
+- `reviewed-by-me` 依赖 `data->>'pharm_reviewer'` 表达式过滤，未走冗余列（该字段不在表列中）。
+
+
 
 
 
