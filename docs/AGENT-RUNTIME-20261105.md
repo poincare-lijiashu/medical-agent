@@ -3789,6 +3789,48 @@ case_archive/stats          total=1 errors=0 0.0024s
 - 未覆盖数据库侧（锁等待、连接池排队、慢 SQL 文本）；没有 `pg_stat_statements` 采集；
 - 告警阈值（3 次/15 分钟、500ms 平均）是初始经验值，未做容量标定。
 
+## 98. 2026-11-08 可观测性（第 94 批：PG 查询耗时直方图，P95 可算）
+
+**问题**：第 93 批只导出累计耗时与次数，告警只能比较**平均耗时**——单次 3s 的慢查询
+会被大量 5ms 查询稀释，看不出来。平均值的告警阈值（500ms）在实际样本上几乎不可能触发。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 计量结构增加累积桶 `_PG_LATENCY_BUCKETS=(0.001,0.005,0.01,0.05,0.1,0.5,1.0,5.0)`；导出 `medassist_agent_pg_query_duration_seconds` 直方图（`_bucket{le}`/`_sum`/`_count`），**取代**第 93 批的 `_seconds_total`（同一份累计秒数，现与桶配对） |
+| `deploy/prometheus/...rules.yml` + Helm PrometheusRule | `MedAssistAgentPgQuerySlow` 改为 `histogram_quantile(0.95, …)`，阈值 P95>500ms 且近 10 分钟 QPS>0.05；规则总数仍 23 |
+| `tests/test_pg_query_metrics.py` | 成功用例改断言直方图；新增累积桶正确性用例（0.0005s/0.03s 两样本逐桶核对、+Inf=总次数） |
+
+**设计取舍**
+- **桶边界按实测分布选**：本地 2–8ms，最小桶 1ms、最大 5s（覆盖桥接超时 3s），8 个桶足够
+  区分"毫秒级正常"与"百毫秒级异常"，又不至于让 `_bucket` 行数爆炸；
+- **`+Inf` 恒等于 total**：直方图语义要求，也让 `_count` 与 `pg_query_total` 可交叉校验；
+- **替换而非并存**：`_seconds_total` 是上一批刚引入、无外部消费方，继续保留会造成
+  "同一份累计时间两个名字"，容易在面板上重复计算——本批明确以 histogram 为唯一口径；
+- **仍保留 total/errors 计数器**：错误率告警不依赖直方图，语义更直观。
+
+**真实数据（8001，真实 PG，qc01 连续 3 轮待核/历史/病例库）**
+```
+pending_page 3 次：le=0.001 → 0，le=0.005 → 2，le=0.01 → 3，le=+Inf → 3
+sum=0.015675s  count=3
+```
+即 2 次 ≤5ms、1 次落在 5–10ms；桶单调不减、+Inf 与 count 一致，可被
+`histogram_quantile` 直接消费。
+
+**校验**
+- 定向 `test_pg_query_metrics + test_deploy_observability` **12 passed**；
+- 全量 pytest：**1402 passed**（1401 + 本批 1）；
+- 规则 YAML 可解析：1 组 23 条，两条 PG 规则均在；
+- 重启 8001 → `/healthz` 200，`/metrics` 22,036 B（直方图新增约 12 行 × 12 键）。
+
+**仍存边界**
+- `/metrics` 体积随固定键数增长：12 键 ×（8 桶 + sum/count + 2 计数器）≈ 150 行；
+  若后续键数扩到几十个，需要改为只导出"已触达键"或减少桶；
+- 桶是固定的：若某域长期 >5s，`+Inf` 会吞掉所有样本、P95 退化为"≥5s"，需要调桶；
+- 仍未覆盖数据库侧（锁等待、连接池排队、慢 SQL 文本）与镜像写路径；
+- 告警阈值（P95 500ms、QPS>0.05）未做容量标定；
+- 未接入 Grafana 面板（本批只保证指标与规则可采集）。
+
 
 
 

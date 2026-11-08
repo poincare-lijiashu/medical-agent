@@ -282,20 +282,19 @@ spec:
             summary: "PG 查询持续失败（已回落 JSON）：{{ "{{" }} $labels.domain {{ "}}" }}/{{ "{{" }} $labels.op {{ "}}" }}"
             description: "近 15 分钟 {{ "{{" }} $value {{ "}}" }} 次失败；请检查 PG 连接、熔断状态与表结构。"
 
-        # 口径：只导出累计耗时/次数（非 histogram），此处是平均耗时，不是 P95。
+        # 口径：直方图 8 个桶（1ms–5s），此处为 P95；只在流量充足时评估。
         - alert: MedAssistAgentPgQuerySlow
           expr: |
-            (
-              sum by (instance, domain, op) (rate(medassist_agent_pg_query_seconds_total[10m]))
-              /
-              clamp_min(sum by (instance, domain, op) (rate(medassist_agent_pg_query_total[10m])), 0.001)
+            histogram_quantile(
+              0.95,
+              sum by (le, domain, op) (rate(medassist_agent_pg_query_duration_seconds_bucket[10m]))
             ) > 0.5
             and
-            sum by (instance, domain, op) (rate(medassist_agent_pg_query_total[10m])) > 0.05
+            sum by (domain, op) (rate(medassist_agent_pg_query_duration_seconds_count[10m])) > 0.05
           for: 10m
           labels:
             severity: warning
           annotations:
-            summary: "PG 查询平均耗时超过 500ms：{{ "{{" }} $labels.domain {{ "}}" }}/{{ "{{" }} $labels.op {{ "}}" }}"
-            description: "近 10 分钟平均 {{ "{{" }} $value {{ "}}" }}s（非 P95）；请检查表规模、索引命中与 PG 负载。"
+            summary: "PG 查询 P95 超过 500ms：{{ "{{" }} $labels.domain {{ "}}" }}/{{ "{{" }} $labels.op {{ "}}" }}"
+            description: "近 10 分钟 P95={{ "{{" }} $value {{ "}}" }}s；请检查表规模、索引命中与 PG 负载。"
 {{- end }}

@@ -212,23 +212,37 @@ _PG_METRIC_KEYS = (
     ("case_archive", "stats"),
     ("case_archive", "get_row"),
 )
+# 第 94 批：耗时直方图桶（秒）。覆盖本地实测（2–8ms）到熔断前的桥接上限（3s），
+# 让 P95/P99 可算；`+Inf` 不在常量里，导出时以 total 补。
+_PG_LATENCY_BUCKETS = (0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0)
 _pg_metrics_lock = threading.Lock()
-_pg_query_stats: dict[tuple[str, str], dict[str, float]] = {
-    k: {"total": 0.0, "errors": 0.0, "seconds": 0.0} for k in _PG_METRIC_KEYS
+
+
+def _new_pg_stat() -> dict:
+    return {"total": 0.0, "errors": 0.0, "seconds": 0.0,
+            "buckets": [0.0] * len(_PG_LATENCY_BUCKETS)}
+
+
+_pg_query_stats: dict[tuple[str, str], dict] = {
+    k: _new_pg_stat() for k in _PG_METRIC_KEYS
 }
 
 
 def _record_pg_query(domain: str, op: str, seconds: float, ok: bool) -> None:
     key = (str(domain), str(op))
+    value = max(0.0, float(seconds))
     with _pg_metrics_lock:
         st = _pg_query_stats.get(key)
         if st is None:
-            st = {"total": 0.0, "errors": 0.0, "seconds": 0.0}
+            st = _new_pg_stat()
             _pg_query_stats[key] = st
         st["total"] += 1
         if not ok:
             st["errors"] += 1
-        st["seconds"] += max(0.0, float(seconds))
+        st["seconds"] += value
+        for i, bound in enumerate(_PG_LATENCY_BUCKETS):  # 累积桶：所有 bound >= value
+            if value <= bound:
+                st["buckets"][i] += 1
 
 
 def _reset_pg_query_metrics() -> None:
@@ -236,7 +250,7 @@ def _reset_pg_query_metrics() -> None:
     with _pg_metrics_lock:
         _pg_query_stats.clear()
         for key in _PG_METRIC_KEYS:
-            _pg_query_stats[key] = {"total": 0.0, "errors": 0.0, "seconds": 0.0}
+            _pg_query_stats[key] = _new_pg_stat()
 
 
 def _pg_call(domain: str, op: str, coro):
@@ -587,18 +601,27 @@ def prometheus_text() -> str:
         "# TYPE medassist_agent_pg_query_total counter",
         "# HELP medassist_agent_pg_query_errors_total PG 查询失败次数（已回落 JSON，含熔断快速失败）",
         "# TYPE medassist_agent_pg_query_errors_total counter",
-        "# HELP medassist_agent_pg_query_seconds_total PG 查询累计耗时（秒）",
-        "# TYPE medassist_agent_pg_query_seconds_total counter",
+        "# HELP medassist_agent_pg_query_duration_seconds PG 查询耗时直方图（秒，可算 P95/P99）",
+        "# TYPE medassist_agent_pg_query_duration_seconds histogram",
     ]
     with _pg_metrics_lock:
-        snapshot = [(d, o, dict(stat)) for (d, o), stat in sorted(_pg_query_stats.items())]
+        snapshot = [(d, o, {**stat, "buckets": list(stat["buckets"])})
+                    for (d, o), stat in sorted(_pg_query_stats.items())]
     for domain, op, stat in snapshot:
         safe_d = str(domain).replace("\\", "\\\\").replace('"', '\\"')
         safe_o = str(op).replace("\\", "\\\\").replace('"', '\\"')
         labels = f'domain="{safe_d}",op="{safe_o}"'
         lines.append(f"medassist_agent_pg_query_total{{{labels}}} {int(stat['total'])}")
         lines.append(f"medassist_agent_pg_query_errors_total{{{labels}}} {int(stat['errors'])}")
-        lines.append(f"medassist_agent_pg_query_seconds_total{{{labels}}} {stat['seconds']:.6f}")
+        for bound, n in zip(_PG_LATENCY_BUCKETS, stat["buckets"]):
+            lines.append(f"medassist_agent_pg_query_duration_seconds_bucket"
+                         f'{{{labels},le="{bound}"}} {int(n)}')
+        lines.append(f"medassist_agent_pg_query_duration_seconds_bucket"
+                     f'{{{labels},le="+Inf"}} {int(stat["total"])}')
+        lines.append(f"medassist_agent_pg_query_duration_seconds_sum{{{labels}}} "
+                     f"{stat['seconds']:.6f}")
+        lines.append(f"medassist_agent_pg_query_duration_seconds_count{{{labels}}} "
+                     f"{int(stat['total'])}")
     for domain in st["staleDomains"]:
         safe = str(domain).replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'medassist_agent_storage_stale_domains{{domain="{safe}"}} 1')

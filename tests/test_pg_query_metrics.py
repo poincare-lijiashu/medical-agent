@@ -1,12 +1,15 @@
-"""第 93 批：PG 查询耗时/失败按域计量（Prometheus）。
+"""第 93/94 批：PG 查询耗时/失败按域计量（Prometheus）。
 
 背景：第 81–92 批把列表/计数/详情下推到 PG 后，这些查询成了首屏与角标轮询的主依赖，
-但成功/耗时此前不可见，失败也只有一条 warning。本批在 `_pg_call` 处计量并导出
-`medassist_agent_pg_query_total` / `_errors_total` / `_seconds_total`（domain/op 标签）。
+但成功/耗时此前不可见，失败也只有一条 warning。第 93 批在 `_pg_call` 处计量并导出
+`medassist_agent_pg_query_total` / `_errors_total` / `_seconds_total`；第 94 批把耗时
+升级为直方图 `medassist_agent_pg_query_duration_seconds`（bucket/sum/count），使
+P95/P99 可算（`_seconds_total` 被 histogram 的 `_sum` 取代）。
 
 锁定语义：
 - 只统计**真正尝试了 PG** 的调用（离线/无池/旧编排 stale 的守卫直接返回，不计入）；
 - 失败（含熔断 PGUnavailable）计入 errors 并原样抛出，调用方回落 JSON 行为不变；
+- 桶是累积的（le=0.05 包含所有 ≤50ms 的样本），+Inf 恒等于总次数；
 - 导出基数由内部常量决定（domain/op 不取用户输入），文本可被 Prometheus 抓取。
 """
 import pytest
@@ -19,11 +22,17 @@ def _reset():
     pg_store._reset_pg_query_metrics()
 
 
+def _bucket(text: str, labels: str, bound: str) -> int:
+    prefix = f"medassist_agent_pg_query_duration_seconds_bucket{{{labels},le=\"{bound}\"}}"
+    line = [ln for ln in text.splitlines() if ln.startswith(prefix)][0]
+    return int(line.rsplit(" ", 1)[1])
+
+
 def test_pg_call_records_success(monkeypatch):
     _reset()
 
     def _fake_run(coro):
-        getattr(coro, 'close', lambda: None)()  # 假实现不消费协程：显式关闭，避免 never-awaited 告警
+        getattr(coro, "close", lambda: None)()  # 假实现不消费协程：显式关闭，避免 never-awaited 告警
         return {"ok": True}
 
     monkeypatch.setattr(pg_store, "_run_pg", _fake_run)
@@ -32,9 +41,26 @@ def test_pg_call_records_success(monkeypatch):
     labels = 'domain="review_queue",op="pending_page"'
     assert f"medassist_agent_pg_query_total{{{labels}}} 1" in text
     assert f"medassist_agent_pg_query_errors_total{{{labels}}} 0" in text
-    seconds_line = [ln for ln in text.splitlines()
-                    if ln.startswith(f"medassist_agent_pg_query_seconds_total{{{labels}}}")][0]
-    assert float(seconds_line.rsplit(" ", 1)[1]) >= 0.0
+    assert _bucket(text, labels, "+Inf") == 1
+    assert f"medassist_agent_pg_query_duration_seconds_count{{{labels}}} 1" in text
+    sum_line = [ln for ln in text.splitlines()
+                if ln.startswith(f"medassist_agent_pg_query_duration_seconds_sum{{{labels}}}")][0]
+    assert float(sum_line.rsplit(" ", 1)[1]) >= 0.0
+
+
+def test_histogram_buckets_are_cumulative():
+    """0.03s 与 0.0005s 两个样本：le=0.001 只含后者，le>=0.05 含两者，+Inf=总次数。"""
+    _reset()
+    for seconds in (0.03, 0.0005):
+        pg_store._record_pg_query("review_queue", "pending_page", seconds, True)
+    text = pg_store.prometheus_text()
+    labels = 'domain="review_queue",op="pending_page"'
+    assert _bucket(text, labels, "0.001") == 1
+    assert _bucket(text, labels, "0.005") == 1
+    assert _bucket(text, labels, "0.01") == 1
+    assert _bucket(text, labels, "0.05") == 2
+    assert _bucket(text, labels, "+Inf") == 2
+    assert f"medassist_agent_pg_query_duration_seconds_count{{{labels}}} 2" in text
 
 
 def test_pg_call_records_error_and_reraises(monkeypatch):
@@ -98,4 +124,6 @@ def test_guards_do_not_count(monkeypatch):
     assert 'medassist_agent_pg_query_total{domain="case_archive",op="list"} 0' in text
     assert 'medassist_agent_pg_query_total{domain="prescriptions",op="page"} 0' in text
     assert 'medassist_agent_pg_query_errors_total{domain="prescriptions",op="page"} 0' in text
+    assert _bucket(text, 'domain="prescriptions",op="page"', "+Inf") == 0
     assert "# TYPE medassist_agent_pg_query_total counter" in text
+    assert "# TYPE medassist_agent_pg_query_duration_seconds histogram" in text
