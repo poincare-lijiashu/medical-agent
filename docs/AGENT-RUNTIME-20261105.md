@@ -3253,6 +3253,54 @@ GET /prescriptions/mine?status=rejected  → total=0（该医生暂无驳回单�
 - 未建 `(doctor, created_at)` 表达式索引（当前 8 条无必要，已在设计取舍中记录条件）；
 - `reviewed-by-me` 依赖 `data->>'pharm_reviewer'` 表达式过滤，未走冗余列（该字段不在表列中）。
 
+## 86. 2026-11-08 性能与容量（第 82 批：待核对列表分页/筛选/计数下推 PG）
+
+**问题**：`GET /review/pending` 是最后一个仍"读全量队列 → 内存过滤 → 切片"的高频端点。
+侧栏角标每 60s 调一次 `limit=0` 只为拿一个数字，而真实队列 76 条待核（历史 600+）每次
+都要整表解码 + 逐条 JSON 解析；`q` 关键字与 qc 角色收窄也都在内存做。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/pg_store.py` | 抽出 `_review_item_from_row`（与全量读共用行解码，images/meta/sources jsonb 解码语义不变）；新增 `_pg_review_pending_impl` + `review_pending_page()`：`status='pending'`、qc 的 `agent IS DISTINCT FROM 'drug'`、关键字 `POSITION(lower($n) IN …)`、`count(*)`、`ORDER BY ts, id` / LIMIT / OFFSET 全部下推；空表/无池/离线/旧编排 stale/异常 → `None` |
+| `backend/core/medical_review.py` | 新增 `page_pending()` 薄封装（域层唯一 PG 入口，便于测试 monkeypatch） |
+| `backend/api/v1/medical/review.py` | `/review/pending` 优先用 PG 结果；`None` 时保留原 `review.pending()` + 角色/关键字/切片内存逻辑 |
+| `tests/test_pg_review_pending_page.py` | +10：假池断言 ts 升序/切片/total/qc 剔 drug/关键字四字段匹配与大小写/image jsonb 解码/空表与无池/异常降级/路由确实走 PG（内存 `pending` 设炸弹）/compact 依赖解码 |
+
+**设计取舍**
+- **关键字用 `POSITION` 而非 `LIKE`**：与内存 `_match_query` 的"空格拼接后子串匹配"完全同构，
+  且用户输入的 `%`/`_` 不会被当作通配符（避免 `q=%` 意外命中全表）；
+- **`ORDER BY ts, id` 升序**：`pending()` 是队列序（先进先出，与 `_pg_load_queue` 一致），
+  不能按处方列表那样倒序——分页必须与旧行为同序，否则翻页会重复/漏项；
+- **qc 收窄留在 SQL**：`agent IS DISTINCT FROM 'drug'` 让 NULL agent 保留，等价内存
+  `i.get("agent") != "drug"`；
+- **只在分页后做图片裁剪/瘦身**：`_review_image_view` 与 `_compact_item` 仍作用于当页，
+  不为整表付出裁剪成本。
+
+**真实数据（8001，真实 PG，76 条待核）**
+```
+GET /review/pending（admin，全量）        → total=76
+GET /review/pending?limit=2&offset=0      → 与全量前两条一致（rev-7d54163bab, rev-5dd30e01f3）
+GET /review/pending?limit=5&offset=3      → 与全量 [3:8] 完全一致
+GET /review/pending?limit=0               → total=76, items=0（角标只回一个数字）
+GET /review/pending（qc）                 → total=52, 且 drug 项 0 条（76-24）
+q=华法林  → 内存=12 / PG=12；q=CT → 66/66；q=doctor01 → 66/66；q=不存在… → 0/0
+```
+
+**校验**
+- 定向 `test_pg_review_pending_page + test_review_pending_paging + test_review_flow +
+  test_audit_payload` **36 passed**；
+- 全量 pytest：**1300 passed**（1290 + 本批 10）；
+- 重启 8001 后与内存实现逐关键词对账（上表右列），结果完全一致。
+
+**仍存边界**
+- `/review/history` 仍是内存过滤（`list_involved` 有图片剥离与 limit=50 全局截断语义，
+  下推需同时改可见性规则，留待后续批次）；
+- 关键字匹配是逐行 `POSITION`，无全文索引；队列继续增长后需 GIN/tsvector；
+- `ts` 为文本列，排序依赖 ISO 前缀可比性（历史数据格式一致才成立）；
+- qc 收窄只按 `agent`，未把 `agent IS NULL` 的脏数据单独归类。
+
+
 
 
 

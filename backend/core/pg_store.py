@@ -969,23 +969,25 @@ def save_departments(d: dict, path: str) -> None:
 
 # ---- review_queue（含 images jsonb；ts+id 排序还原追加顺序） ----
 
+def _review_item_from_row(r) -> dict:
+    """review_queue 行 → 队列条目（images/meta/sources jsonb 解码，兼容驱动直返 dict）。"""
+    d = {k: r[k] for k in _REVIEW_COLS}
+    img = r["images"]
+    d["images"] = json.loads(img) if img else None
+    meta = d.get("meta")
+    d["meta"] = json.loads(meta) if isinstance(meta, str) and meta else meta
+    src = d.get("sources")
+    d["sources"] = json.loads(src) if isinstance(src, str) and src else src
+    return d
+
+
 async def _pg_load_queue() -> list | None:
     async with _pool.acquire() as c:
         rows = await c.fetch(f"""SELECT {','.join(_REVIEW_COLS)}, images
             FROM review_queue ORDER BY ts, id""")  # noqa: S608 (固定列名)
     if not rows:
         return None
-    out = []
-    for r in rows:
-        d = {k: r[k] for k in _REVIEW_COLS}
-        img = r["images"]
-        d["images"] = json.loads(img) if img else None
-        meta = r["meta"]
-        d["meta"] = json.loads(meta) if isinstance(meta, str) and meta else meta
-        src = d.get("sources")  # 任务3：sources jsonb → list（兼容驱动直返 dict）
-        d["sources"] = json.loads(src) if isinstance(src, str) and src else src
-        out.append(d)
-    return out
+    return [_review_item_from_row(r) for r in rows]
 
 
 async def _pg_save_queue(items: list) -> None:
@@ -1009,6 +1011,59 @@ def load_queue(path: str, json_loader=None) -> list:
 
 def save_queue(items: list, path: str) -> None:
     _json_then_pg(_pg_save_queue, path, items)
+
+
+# ---- 第 82 批：待核对列表分页/筛选/计数下推 PG ----
+# 为什么：/review/pending 是唯一仍"读全量队列再过滤切片"的高频端点——侧栏角标每 60s
+# 调一次 limit=0 只为拿一个数字，实测 600+ 条队列要整表解码。这里把 status/角色收窄/
+# 关键字/分页/计数全部下推 PG，内存 pending() 仅作 JSON 兜底。
+
+async def _pg_review_pending_impl(exclude_drug: bool, keyword: str,
+                                  limit: int | None, offset: int) -> dict | None:
+    """待核对分页：返回 {items,total}；空表 → None（回落 JSON 真源）。"""
+    async with _pool.acquire() as c:
+        if not await c.fetchval("SELECT count(*) FROM review_queue"):
+            return None
+        conds = ["status = 'pending'"]
+        params: list = []
+        if exclude_drug:  # 问题4：qc 不见 drug 项（与内存过滤语义一致；agent 为 NULL 时保留）
+            conds.append("agent IS DISTINCT FROM 'drug'")
+        kw = (keyword or "").strip().lower()
+        if kw:
+            # 与 _match_query 完全同构：agent/question/submitted_by/risk_reason 以空格拼接后
+            # 做大小写不敏感子串匹配。用 POSITION 而非 LIKE，避免用户输入的 % _ 被当通配符。
+            params.append(kw)
+            conds.append(
+                f"POSITION(${len(params)} IN lower("
+                "coalesce(agent,'') || ' ' || coalesce(question,'') || ' ' || "
+                "coalesce(submitted_by,'') || ' ' || coalesce(risk_reason,''))) > 0")
+        where = " WHERE " + " AND ".join(conds)
+        total = int(await c.fetchval(  # noqa: S608 —— 片段均为固定常量
+            "SELECT count(*) FROM review_queue" + where, *params) or 0)
+        sql = (f"SELECT {','.join(_REVIEW_COLS)}, images FROM review_queue" + where
+               + " ORDER BY ts, id")  # noqa: S608 —— 与 _pg_load_queue 同序（队列先进先出）
+        if limit is None:
+            rows = await c.fetch(sql, *params)
+        else:
+            n = len(params)
+            rows = await c.fetch(sql + f" LIMIT ${n + 1} OFFSET ${n + 2}",  # noqa: S608
+                                 *params, max(0, int(limit)), max(0, int(offset)))
+        return {"items": [_review_item_from_row(r) for r in rows], "total": total}
+
+
+def review_pending_page(exclude_drug: bool = False, keyword: str = "",
+                        limit: int | None = None, offset: int = 0) -> dict | None:
+    """待核对分页同步入口：无池/离线/旧编排 stale/异常/空表 → None（调用方回落内存）。"""
+    if offline_mode() or not _pool:
+        return None
+    if not bool(getattr(settings, "pg_primary", True)) and "queue.json" in _repo_pg_stale:
+        return None
+    try:
+        return _run_pg(_pg_review_pending_impl(bool(exclude_drug), keyword, limit,
+                                               max(0, int(offset))))
+    except Exception as e:  # noqa: BLE001 —— 分页失败回落内存，绝不影响待核列表
+        logger.warning("pg.review_pending_page_failed", error=str(e)[:120])
+        return None
 
 
 # ---- llm_providers（kind/pid/data/active；data 内嵌 _seq 还原 providers 顺序） ----

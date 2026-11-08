@@ -229,6 +229,15 @@ def pending() -> list[dict]:
     return [i for i in _load() if i["status"] == "pending"]
 
 
+def page_pending(exclude_drug: bool = False, keyword: str = "",
+                 limit: int | None = None, offset: int = 0) -> dict | None:
+    """第 82 批：待核对列表分页/筛选/计数下推 PG。
+
+    返回 {items,total}（items 已按 ts,id 升序切片，与内存 pending() 的队列顺序一致）；
+    None → 路由层回落既有内存实现（无池/离线/异常/空表，行为完全不变）。"""
+    return pg_store.review_pending_page(exclude_drug, keyword, limit, offset)
+
+
 def get(rid: str) -> dict | None:
     for i in _load():
         if i["id"] == rid:

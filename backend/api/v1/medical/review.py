@@ -94,16 +94,20 @@ async def review_pending(
     ``total`` = 角色过滤（qc 剔除 drug）+ 关键字过滤后的条数；``q`` 在服务端过滤，
     因此分页不会漏配（不会出现"第 2 页看不到第 1 页的匹配项"）。
     """
-    items = await asyncio.to_thread(review.pending)
     role = user.get("role", "")
     me = user.get("username", "system")
-    if role == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
-        items = [i for i in items if i.get("agent") != "drug"]  # drug 审核权=pharmacist/admin
     keyword = (q or "").strip().lower()
-    if keyword:
-        items = [i for i in items if _match_query(i, keyword)]
-    total = len(items)
-    page = items[offset:offset + limit] if limit is not None else items[offset:]
+    pg = await asyncio.to_thread(review.page_pending, role == "qc", keyword, limit, offset)
+    if pg is not None:  # 第 82 批：status/角色收窄/关键字/分页/计数已在 PG 完成
+        page, total = pg["items"], pg["total"]
+    else:  # 无池/离线/异常/空表 → 既有内存过滤 + 切片（行为不变）
+        items = await asyncio.to_thread(review.pending)
+        if role == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
+            items = [i for i in items if i.get("agent") != "drug"]  # drug 审核权=pharmacist/admin
+        if keyword:
+            items = [i for i in items if _match_query(i, keyword)]
+        total = len(items)
+        page = items[offset:offset + limit] if limit is not None else items[offset:]
     # 图片可见性统一规则（与 /review/history 一致）：qc 审非 drug 项可见 images（修复
     # 「qc 看不到待审 imaging 图片」）；doctor 他人待审项剥 images（原全量返回，同步收紧）。
     # 只在切片后处理：分页请求不再为整表做图片裁剪。
