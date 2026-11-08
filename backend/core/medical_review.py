@@ -302,8 +302,24 @@ def page_history(involves: str | None = None, base_limit: int = 50,
 
 def status_counts() -> dict | None:
     """第 91 批：复核状态计数下推 PG（概览面板不再读全表）；
-    None → 调用方回落既有「读全表再计数」（无池/离线/空表/异常）。"""
+    None → 调用方回落 `status_counts_memory()`（无池/离线/空表/异常）。"""
     return pg_store.review_status_counts()
+
+
+def status_counts_memory() -> dict:
+    """第 99 批：无 PG 时的全量状态计数（JSON 真源**全表**）。
+
+    与 `status_counts()` 同口径（pending / resolved=approved+rejected / counts 分布）。
+    为什么单独提供：`/overview` 与 `/admin/data` 的回落分支此前用 `list_all()`，而它默认
+    只取最新 100 条——纯 JSON 部署下 1168 行队列会显示 pending=3（真实 76）。本函数遍历
+    全部行，只返回计数、不下发条目。"""
+    dist: dict[str, int] = {}
+    for i in _load():
+        st = str(i.get("status") or "unknown")
+        dist[st] = dist.get(st, 0) + 1
+    return {"pending": dist.get("pending", 0),
+            "resolved": dist.get("approved", 0) + dist.get("rejected", 0),
+            "counts": dist}
 
 
 def get(rid: str) -> dict | None:

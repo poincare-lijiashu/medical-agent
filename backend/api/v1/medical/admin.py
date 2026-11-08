@@ -25,29 +25,53 @@ _START = time.time()
 # 约 1038ms，其中 ~1000ms 是这两次探针（业务数据只占 ~5ms）。面板刷新/多人同时打开
 # 会反复付这份代价。状态类信息对 5s 陈旧不敏感，缓存后热路径 ~5ms。
 _INFRA_TTL_S = 5.0
-_infra_cache: dict = {"at": 0.0, "milvus": None, "kb_docs": None}
+_milvus_cache: dict = {"at": 0.0, "value": None}
+_kb_docs_cache: dict = {"at": 0.0, "value": None}
 
 
 def _reset_admin_infra_cache() -> None:
     """清空探针缓存（单测隔离用）。"""
-    _infra_cache.update(at=0.0, milvus=None, kb_docs=None)
+    _milvus_cache.update(at=0.0, value=None)
+    _kb_docs_cache.update(at=0.0, value=None)
 
 
-async def _infra_cached(milvus_status, doc_count) -> tuple[dict, int]:
-    """返回 (milvus 状态, kb 文档数)；TTL 内复用，异常一律降级为"不可用"。"""
+async def _cached_milvus(milvus_status) -> dict:
+    """Milvus 状态（5s TTL；探针异常降级为"不可用"）。"""
     now = time.monotonic()
-    if _infra_cache["milvus"] is not None and (now - _infra_cache["at"]) < _INFRA_TTL_S:
-        return _infra_cache["milvus"], _infra_cache["kb_docs"]
+    if _milvus_cache["value"] is not None and (now - _milvus_cache["at"]) < _INFRA_TTL_S:
+        return _milvus_cache["value"]
     try:
-        milvus = await asyncio.to_thread(milvus_status)
+        value = await asyncio.to_thread(milvus_status)
     except Exception:  # noqa: BLE001 —— 状态探针绝不影响面板主数据
-        milvus = {"connected": False, "uri": ""}
+        value = {"connected": False, "uri": ""}
+    _milvus_cache.update(at=now, value=value)
+    return value
+
+
+async def _cached_kb_docs(doc_count) -> int:
+    """知识库文档数（5s TTL；Milvus 冷启动/不可达时单次 ~500ms）。"""
+    now = time.monotonic()
+    if _kb_docs_cache["value"] is not None and (now - _kb_docs_cache["at"]) < _INFRA_TTL_S:
+        return _kb_docs_cache["value"]
     try:
-        kb_docs = await asyncio.to_thread(doc_count)
+        value = await asyncio.to_thread(doc_count)
     except Exception:  # noqa: BLE001
-        kb_docs = -1
-    _infra_cache.update(at=now, milvus=milvus, kb_docs=kb_docs)
-    return milvus, kb_docs
+        value = -1
+    _kb_docs_cache.update(at=now, value=value)
+    return value
+
+
+async def _review_stats() -> dict:
+    """复核状态统计：PG 聚合优先；无池/离线/空表/异常 → JSON **全表**计数。
+
+    第 99 批：回落分支不再用 `list_all()`（默认只取最新 100 条，会严重少计）。"""
+    counts = await asyncio.to_thread(review.status_counts)
+    if counts is None:
+        counts = await asyncio.to_thread(review.status_counts_memory)
+    dist = counts.get("counts") or {}
+    return {"pending": int(counts.get("pending", 0) or 0),
+            "approved": int(dist.get("approved", 0) or 0),
+            "rejected": int(dist.get("rejected", 0) or 0)}
 
 
 @router.get("/config")
@@ -99,20 +123,15 @@ async def overview(user: dict = Depends(require_user)):
     """概览面板：真实运行与合规指标（不编造）。"""
     from backend.core.embedder import device
     from backend.core.medical_kb import doc_count
-    counts = await asyncio.to_thread(review.status_counts)  # 第 91 批：PG 聚合计数
-    if counts is not None:
-        pending, resolved = counts["pending"], counts["resolved"]
-    else:  # 无池/离线/空表/异常 → 既有全表读 + 内存计数（行为不变）
-        items = await asyncio.to_thread(review.list_all, with_images=False)  # 队列文件读盘移出事件循环（QUALITY-001）；概览只计数，剥离 images 控响应体积（任务5）
-        pending = sum(1 for i in items if i.get("status") == "pending")
-        resolved = sum(1 for i in items if i.get("status") in ("approved", "rejected"))
+    stats = await _review_stats()
+    pending, resolved = stats["pending"], stats["approved"] + stats["rejected"]
     al = _shared.get_audit_logger()
     # 任务1：recent 携带完整 payload，前端 humanizeAudit 生成人话描述（仅 event 名不可读）
     recent = [{"ts": e["ts"][11:19], "event": e["event_type"],
                "action": e["payload"].get("action", ""), "actor": e["actor"],
                "payload": e.get("payload", {})}
               for e in al.recent(8)]
-    kb_docs = await asyncio.to_thread(doc_count)  # Milvus 冷启动可能慢，移出事件循环防阻塞全服务
+    kb_docs = await _cached_kb_docs(doc_count)  # Milvus 冷启动可能慢，5s 短缓存 + 移出事件循环
     return {
         "kb_docs": kb_docs, "pending": pending, "resolved": resolved,
         "events_total": len(al.entries), "device": device(),
@@ -234,20 +253,9 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     users = [{"username": u, "role": rec.get("role", ""), "created": rec.get("created", ""),
               "dept": rec.get("dept", "")}
              for u, rec in (await asyncio.to_thread(all_users)).items()]
-    # 第 98 批：状态统计优先走 PG `GROUP BY status`（第 91 批能力），不再读全表解码。
-    # 1168 行的队列此前每次打开数据面板都要整表取一遍（即便已剥离 images）；现在只取
-    # 3 行分布。无池/离线/旧编排 stale/异常/空表 → None，回落既有内存计数（行为不变）。
-    counts = await asyncio.to_thread(review.status_counts)
-    if counts is None:
-        items = await asyncio.to_thread(review.list_all, with_images=False)
-        stats = {"pending": sum(1 for i in items if i.get("status") == "pending"),
-                 "approved": sum(1 for i in items if i.get("status") == "approved"),
-                 "rejected": sum(1 for i in items if i.get("status") == "rejected")}
-    else:
-        dist = counts.get("counts") or {}
-        stats = {"pending": int(counts.get("pending", 0) or 0),
-                 "approved": int(dist.get("approved", 0) or 0),
-                 "rejected": int(dist.get("rejected", 0) or 0)}
+    # 第 98/99 批：状态统计走 PG `GROUP BY status`（无池 → JSON 全表计数），不再读
+    # 最新 100 条估算——1168 行队列下旧实现把 pending 显示成 3（真实 76）。
+    stats = await _review_stats()
     al = _shared.get_audit_logger()
     # 任务5：审计流数据源切换为 PG audit_log 真源（audit_recent_pg 按 ts 倒序分页，返回
     # 与 JSONL recent 相同结构 [{ts,event_type,actor,payload}]）；PG 未建池/异常/超时
@@ -272,7 +280,8 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
     # 基础设施只读状态（前端运维卡片）：milvus TCP 预检 + kb 文档数走 5s 短缓存
     # （两者各自 fail-fast ~500ms，是面板延迟的主要来源）；pg SELECT 1 探针开销 ~1ms 不缓存。
     # 安全红线：只报状态/命令文本供展示与复制，本端点绝不提供任何执行/重启能力。
-    milvus, kb_docs = await _infra_cached(milvus_status, doc_count)
+    milvus = await _cached_milvus(milvus_status)
+    kb_docs = await _cached_kb_docs(doc_count)
     try:
         pg_ok = await pg_store.ping()
     except Exception:  # noqa: BLE001

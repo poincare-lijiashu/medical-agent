@@ -1,4 +1,4 @@
-"""第 98 批：`/admin/data` 状态统计走 PG GROUP BY（不再读全表解码）。
+"""第 98/99 批：概览与数据面板的状态统计（PG 聚合 → JSON 全表回落）。
 
 背景：该面板此前为三个数字调用 `review.list_all(with_images=False)`——1168 行的队列每次
 打开都要整表取一遍。第 91 批已有 `review.status_counts()`（PG `GROUP BY status`），本批接上。
@@ -49,15 +49,41 @@ def test_admin_data_uses_status_counts(monkeypatch, tmp_path):
 
 
 def test_admin_data_falls_back_to_memory_when_no_counts(monkeypatch, tmp_path):
-    """无池/离线/空表 → status_counts 返回 None，回落内存计数（结果口径一致）。"""
+    """无池/离线/空表 → status_counts None，回落 JSON **全表**计数（不再看最新 100 条）。"""
     c, h = _client(monkeypatch, tmp_path)
     monkeypatch.setattr(review, "status_counts", lambda: None)
-    monkeypatch.setattr(review, "list_all", lambda *a, **k: [
-        {"status": "pending"}, {"status": "pending"},
-        {"status": "approved"}, {"status": "rejected"},
-    ])
+    monkeypatch.setattr(review, "status_counts_memory",
+                        lambda: {"pending": 120, "resolved": 30,
+                                 "counts": {"pending": 120, "approved": 25, "rejected": 5}})
+    monkeypatch.setattr(review, "list_all",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应读前 100 条")))
     d = c.get("/api/v1/medical/admin/data", headers=h).json()
-    assert d["review"] == {"pending": 2, "approved": 1, "rejected": 1}
+    assert d["review"] == {"pending": 120, "approved": 25, "rejected": 5}
+
+
+def test_overview_uses_memory_counts_when_pg_unavailable(monkeypatch, tmp_path):
+    """第 99 批：概览的 pending/resolved 在无 PG 时也必须是全量口径。"""
+    c, h = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(review, "status_counts", lambda: None)
+    monkeypatch.setattr(review, "status_counts_memory",
+                        lambda: {"pending": 120, "resolved": 30,
+                                 "counts": {"pending": 120, "approved": 20, "rejected": 10}})
+    monkeypatch.setattr(review, "list_all",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应读前 100 条")))
+    d = c.get("/api/v1/medical/overview", headers=h).json()
+    assert d["pending"] == 120 and d["resolved"] == 30
+
+
+def test_status_counts_memory_counts_all_rows(monkeypatch):
+    """直接锁定 JSON 计数实现：150 行全量统计（而不是前 100 行）。"""
+    rows = ([{"status": "pending"} for _ in range(120)]
+            + [{"status": "approved"} for _ in range(25)]
+            + [{"status": "rejected"} for _ in range(5)])
+    monkeypatch.setattr(review, "_load", lambda: rows)
+    got = review.status_counts_memory()
+    assert got["pending"] == 120
+    assert got["resolved"] == 30
+    assert got["counts"] == {"pending": 120, "approved": 25, "rejected": 5}
 
 
 def test_admin_data_infra_probes_are_cached(monkeypatch, tmp_path):

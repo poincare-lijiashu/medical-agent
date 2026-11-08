@@ -4003,6 +4003,40 @@ medassist_agent_pg_write_total{domain="users",op="delete_row"} 0
   "最新 100 条"口径——**纯 JSON 部署下该面板数字仍只反映最近 100 条**（该形态下没有
   全量计数接口；已在此处明确，不在本批扩面）。
 
+## 103. 2026-11-08 正确性与性能（第 99 批：纯 JSON 全量计数 + 概览探针缓存）
+
+**问题**
+1. 第 98 批修好了 PG 路径，但**无 PG 的回落分支仍是 `list_all()`（默认最新 100 条）**：
+   `/overview` 与 `/admin/data` 在纯 JSON 部署下依旧会少计（1168 行 → pending 显示 3）；
+2. `/overview` 每次调用都同步跑一次 `doc_count()`（Milvus 不可达时 fail-fast ~500ms），
+   而它是登录后最高频的面板接口。
+
+**实现**
+| 文件 | 变更 |
+|---|---|
+| `backend/core/medical_review.py` | 新增 `status_counts_memory()`：遍历 JSON **全表**统计（pending / resolved=approved+rejected / counts），只返回计数不下发条目 |
+| `backend/api/v1/medical/admin.py` | 抽出 `_review_stats()`：PG 聚合优先，`None` → `status_counts_memory()`；`/overview` 与 `/admin/data` 共用，消除两处口径漂移 |
+| `backend/api/v1/medical/admin.py` | 探针缓存拆为 `_cached_milvus` / `_cached_kb_docs`（各自 5s TTL）：`/overview` 复用 kb 文档数缓存，`/admin/data` 用两者 |
+| `tests/test_admin_data_counts.py` / `test_pg_overview_counts.py` | 回落用例改为断言"读全表计数、不得调 list_all"；新增 `status_counts_memory` 150 行全量统计单测 |
+
+**真实数据（8001，真实 PG）**
+```
+/overview：pending=76 resolved=1092 kb_docs=-1
+延迟：522.5ms（首次 doc_count 冷启动） → 23.2 / 22.3 / 22.2ms（5s 窗口内命中缓存）
+```
+（PG 可用时统计口径不变；本批主要闭合"纯 JSON 回落少计"与概览探针重复成本。）
+
+**校验**
+- 定向 `test_admin_data_counts + test_pg_overview_counts + admin_ops + observability` **19 passed**；
+- 全量 pytest：**1420 passed**（1418 + 本批 2）；
+- 重启 8001 → `/healthz` 200；概览统计与 PG `GROUP BY` 一致。
+
+**仍存边界**
+- 纯 JSON 回落是 **O(n) 全表读+遍历**（每次调用）：没有增量计数器，队列很大时该分支仍慢；
+- 探针缓存 5s：文档数/可用性最多滞后 5s；首次调用仍付一次 ~500ms；
+- 内存计数包含未知状态（计入 `counts`，不计入 resolved），与 PG 实现一致；
+- `/overview` 的 `events_total` 仍取进程内审计条数（重启归零语义未变）。
+
 
 
 

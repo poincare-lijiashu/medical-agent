@@ -114,10 +114,12 @@ def test_route_overview_uses_pg_counts(monkeypatch, tmp_path):
 
 
 def test_route_overview_falls_back(monkeypatch, tmp_path):
-    """无池时仍走原全表计数（行为不变）。"""
+    """无池时走 JSON **全表**计数（第 99 批：不再用 list_all 的前 100 条口径）。"""
     monkeypatch.setattr(pg_store, "_pool", None)
     rows = [dict(r) for r in ROWS]
-    monkeypatch.setattr(review, "list_all", lambda with_images=True: rows)
+    monkeypatch.setattr(review, "_load", lambda: rows)
+    monkeypatch.setattr(review, "list_all",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应读 list_all")))
     log = AuditLog(path=str(tmp_path / "audit.jsonl"))
     monkeypatch.setattr("backend.api.v1.medical.shared.get_audit_logger", lambda: log)
     monkeypatch.setattr("backend.api.deps.get_user", lambda u: {"role": "", "dept": ""})
