@@ -192,8 +192,6 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     if escalated:
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="qc", action="qc_escalated",
                                 actor=actor, payload={"attempt": attempt, "resubmit_of": resubmit_of})
-        await pg_store.mirror_audit("qc.qc_escalated", actor,
-                                    {"attempt": attempt, "resubmit_of": resubmit_of})
     text = "\n".join(lines)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="qc", action="query", actor=actor,
                             payload={"fields": len(req.record), "labs": len(req.labs or {}),
@@ -308,8 +306,6 @@ async def case_archive_remove(arch_id: str, body: CaseArchiveRemoveReq,
                             action="removed", actor=me,
                             payload={"arch_id": arch_id, "reason": body.reason.strip()[:120],
                                      "role": user.get("role", "")})
-    await pg_store.mirror_audit("case_archive.removed", me,
-                                {"arch_id": arch_id, "reason": body.reason.strip()[:120]})
     return entry
 
 

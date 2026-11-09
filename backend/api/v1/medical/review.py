@@ -324,7 +324,6 @@ async def review_self_confirm(rid: str, user: dict = Depends(require_user)):
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="self_confirmed",
                             actor=me, payload={"rid": rid})
     await pg_store.mirror_review(item)
-    await pg_store.mirror_audit("review.self_confirmed", me, {"rid": rid})
     return item
 
 
@@ -352,7 +351,6 @@ async def review_resolve(rid: str, body: ResolveReq,
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action=f"resolved_{body.decision}",
                             actor=reviewer, payload={"rid": rid, "role": user.get("role", "")})
     await pg_store.mirror_review(item)
-    await pg_store.mirror_audit(f"review.{body.decision}", reviewer, {"rid": rid})
     if item.get("agent") == "qc" and body.decision == "approved":
         # 阶段4.2 归档挂点：质控（qc）approve 成功 → 自动归档病例库。全兜底：失败仅审计
         # case_archive.failed，绝不影响质控主流程（质控结论已签发生效）。
@@ -363,13 +361,10 @@ async def review_resolve(rid: str, body: ResolveReq,
                                     payload={"rid": rid, "arch_id": entry["id"],
                                              "dept": entry.get("dept", ""),
                                              "role": user.get("role", "")})
-            await pg_store.mirror_audit("case_archive.created", reviewer,
-                                        {"rid": rid, "arch_id": entry["id"]})
         except Exception as e:  # noqa: BLE001 —— 归档失败绝不冒泡
             await asyncio.to_thread(_shared.get_audit_logger().write, event_type="case_archive",
                                     action="failed", actor=reviewer,
                                     payload={"rid": rid, "err": str(e)[:150]})
-            await pg_store.mirror_audit("case_archive.failed", reviewer, {"rid": rid})
     return item
 
 
@@ -385,5 +380,4 @@ async def review_reopen(rid: str, user: dict = Depends(require_role(*_RESOLVE_RO
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="reopened",
                             actor=operator, payload={"rid": rid, "role": user.get("role", "")})
     await pg_store.mirror_review(item)
-    await pg_store.mirror_audit("review.reopened", operator, {"rid": rid})
     return item

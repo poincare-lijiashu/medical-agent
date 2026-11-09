@@ -5646,6 +5646,50 @@ tests/test_deploy_observability.py + test_grafana_helm_assets.py + test_ci_gates
 - 集群侧 Secret 与 Operator 跨 namespace RBAC 需运维按 SOP 预置（代码侧只能 fail-closed）；
 - E6（AI 中台单副本/RWO/Recreate 单点）与 A3（审计语义统一）仍待办。
 
+## 141. 2026-11-09 评测 A3：审计 PG/JSONL 语义统一（唯一镜像点 + 历史行读侧归一）（第 138 批）
+
+**已做**
+
+1. **写路径：审计镜像收敛到唯一挂钩点**（评测 02 P0-3）
+   - 新增 `pg_store.mirror_audit_sync()`（同步桥，任意线程可调；无池/离线 no-op，失败只告警）。
+   - `medical_audit.AuditLog._emit` 在 JSONL 落盘后统一调用它——**每一条审计事件自动进 PG**，
+     新增审计点不再依赖开发者记得写 `mirror_audit`（此前 PG 覆盖率约 7%）。
+   - 删除 27 个路由里的显式 `await pg_store.mirror_audit(...)`（避免双写）；
+     `literature/imaging/case` 的答案事件改为先写 JSONL（`event_type=<agent>`,
+     `action=answered`），再由挂钩点镜像——两侧覆盖率天然 1:1。
+2. **命名：两侧同构**
+   - 新行 PG `event_type` 与 JSONL 完全一致（`inline`/`review`/`prescription`…），
+     `payload.action` 由 `write(action=...)` 写入；不再出现 `review.approved` 这类点号名。
+3. **读路径：历史行归一（不改库）**
+   - `_normalize_audit_row()`：历史 `域.动作` 行输出时拆成"域名 + payload.action"
+     （别名表纠正 `review.approved→resolved_approved`、`*.answer→answered`）。
+   - 事件过滤条件改为 `event_type = $n OR event_type LIKE $n || '.%'`：按域过滤同时命中
+     新旧两种形态；facets 的 event_type 候选按 `split_part(event_type,'.',1)` 聚合。
+4. **测试**：新增 `tests/test_audit_mirror_universal.py`（唯一挂钩点 / 归一 / 过滤 SQL /
+   answer 别名）；`test_audit_filters.py` 的 SQL 形态断言同步更新。
+
+**真机验证**
+
+```
+触发一次内联审方（doctor01）后 PG audit_log 最新 3 行：
+  2323 | inline            | rx_checked | doctor01   ← 新代码：无点号、action 齐全
+  2322 | inline.rx_checked | rx_checked | doctor01   ← 历史行
+  2321 | literature.answer | answer     | doctor01   ← 历史行
+GET /admin/audit?audit_event=inline（admin01）：
+  total=2；两条均显示 event=inline / action=rx_checked（历史行已归一）
+定向：test_audit_mirror_universal + audit_filters/mirror_action/medical_audit/
+      payload/humanize/admin_logs/inline_ai/consults/prescriptions/review_flow/qc
+  → 140 passed
+全量（不含 e2e）→ 1545 passed / 1 skipped（2 分 53 秒）
+```
+
+**本批仍未解决**
+
+- 历史 PG 行未物理改写（读侧归一已保证语义一致）；如需彻底统一可再跑一次性
+  `UPDATE audit_log SET event_type=split_part(event_type,'.',1), payload=...` 迁移脚本。
+- E6（AI 中台单副本/RWO/Recreate 单点）、C5（lint/漏洞扫描/分支保护）、D 系列前端仍在清单。
+
+
 
 
 

@@ -27,7 +27,7 @@ from typing import Literal
 from backend.api.deps import rate_limit, require_user
 from backend.api.v1.medical import shared as _shared
 from backend.core import drug_dict as dd
-from backend.core import pg_store
+from backend.core import pg_store  # noqa: F401 —— 兼容既有测试对模块属性的 monkeypatch
 from backend.core import qc as qc_core
 from backend.core.logger import get_logger
 
@@ -94,13 +94,11 @@ def _level(defects: list[dict]) -> str:
 async def _audit(actor: str, action: str, payload: dict) -> None:
     """内联检查审计：只记计数/等级，绝不写病例正文或药名清单全文。
 
-    ``pg_store.mirror_audit`` 是协程（PG 侧审计镜像），必须 await：
-    此前漏 await 会抛 "coroutine was never awaited"，PG 审计静默丢失。
-    """
+    评测 A3：PG 镜像已由 `AuditLog._emit` 统一挂钩（event_type=inline +
+    payload.action），此处不再单独调用 `pg_store.mirror_audit`，避免双写。"""
     try:
         _shared.get_audit_logger().write(event_type="inline", action=action,
                                          actor=actor, payload=payload)
-        await pg_store.mirror_audit(f"inline.{action}", actor, payload)
     except Exception as exc:  # noqa: BLE001 —— 审计失败不阻断临床提示
         logger.warning("inline.audit_failed", action=action, error=str(exc)[:120])
 

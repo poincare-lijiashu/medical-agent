@@ -87,7 +87,8 @@ def test_pg_sql_shape_with_filters(monkeypatch):
     conn = _Conn()
     monkeypatch.setattr(pg_store, "_pool", _Pool(conn))
     asyncio.run(pg_store._audit_recent_pg_impl(50, 10, "admin01", "review", "reopened"))
-    assert ("WHERE actor = $1 AND event_type = $2 AND payload->>'action' = $3" in conn.sql)
+    assert ("WHERE actor = $1 AND (event_type = $2 OR event_type LIKE $2 || '.%')"
+            " AND payload->>'action' = $3" in conn.sql)
     assert conn.args == ("admin01", "review", "reopened", 50, 10)
 
 
@@ -100,11 +101,14 @@ def test_pg_sql_unchanged_without_filters(monkeypatch):
 
 
 def test_pg_count_sql_shape_with_filters(monkeypatch):
-    """第 108 批：总数复用同一 WHERE 片段（条件列名固定、值走 $n）。"""
+    """第 108 批：总数复用同一 WHERE 片段（条件列名固定、值走 $n）。
+
+    评测 A3：事件过滤同时命中"域名"与历史的"域.动作"两种形态。"""
     conn = _Conn(count_value=2149)
     monkeypatch.setattr(pg_store, "_pool", _Pool(conn))
     assert asyncio.run(pg_store._audit_count_pg_impl("admin01", "review", "")) == 2149
-    assert conn.sql == "SELECT count(*) FROM audit_log WHERE actor = $1 AND event_type = $2"
+    assert conn.sql == ("SELECT count(*) FROM audit_log WHERE actor = $1 AND "
+                        "(event_type = $2 OR event_type LIKE $2 || '.%')")
     assert conn.args == ("admin01", "review")
 
     asyncio.run(pg_store._audit_count_pg_impl())
@@ -394,7 +398,8 @@ def test_pg_facets_sql_shape(monkeypatch):
                    "events": [{"v": "admin01", "n": 3}],
                    "actions": [{"v": "admin01", "n": 3}]}
     assert len(conn.calls) == 3
-    for (sql, args), expr in zip(conn.calls, ("actor", "event_type", "payload->>'action'")):
+    for (sql, args), expr in zip(conn.calls, ("actor", "split_part(event_type, '.', 1)",
+                                              "payload->>'action'")):
         assert sql.startswith(f"SELECT {expr} AS v, count(*) AS n FROM audit_log"
                               f" WHERE ts >= $1 AND ts < $2 AND {expr} IS NOT NULL"
                               f" AND {expr} <> ''")

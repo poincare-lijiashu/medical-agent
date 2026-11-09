@@ -195,6 +195,14 @@ class AuditLog:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        # 评测 02 P0-3（A3）：PG 审计镜像的**唯一挂钩点**。JSONL 是权威记录，PG 同步
+        # best-effort；没有池/离线时 mirror_audit_sync 直接 no-op，失败只告警。
+        # 这样新增审计点无需各自记得 mirror_audit，PG/JSONL 覆盖率天然 1:1。
+        try:
+            from backend.core import pg_store
+            pg_store.mirror_audit_sync(event_type, actor, payload)
+        except Exception:  # noqa: BLE001 —— 镜像失败绝不影响审计主路径
+            pass
 
     def write(self, event_type: str = "event", action: str = "", actor: str = "system",
               payload: dict | None = None, **kw) -> None:

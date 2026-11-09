@@ -116,8 +116,6 @@ async def admin_config_toggle(req: ConfigToggleReq, user: dict = Depends(require
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="admin", action="config_toggle",
                             actor=user.get("username", "admin"),
                             payload={"key": req.key, "from": cur, "to": val})
-    await pg_store.mirror_audit("admin.config_toggle", user.get("username", "admin"),
-                                {"key": req.key, "value": val})
     return {"ok": True, "key": req.key, "value": val}
 
 
@@ -180,7 +178,6 @@ async def admin_create_user(body: UserCreateReq, user: dict = Depends(require_ro
                             actor=user.get("username", "admin"),
                             payload={"user": uname, "role": body.role,
                                      "dept": (body.dept or "").strip()})
-    await pg_store.mirror_audit("admin.user_created", user.get("username", "admin"), {"user": uname})
     rec = await asyncio.to_thread(get_user, uname)
     if rec:
         await pg_store.mirror_user(uname, rec.get("role", ""), rec.get("password_hash", ""))
@@ -198,7 +195,6 @@ async def admin_delete_user(username: str, user: dict = Depends(require_role("ad
     revoke_user(username)  # 使其已签发的令牌立即失效
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="admin", action="user_deleted",
                             actor=user.get("username", "admin"), payload={"user": username})
-    await pg_store.mirror_audit("admin.user_deleted", user.get("username", "admin"), {"user": username})
     return {"ok": True}
 
 
@@ -315,7 +311,6 @@ async def admin_purge_pending(body: PurgeReq, user: dict = Depends(require_role(
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review", action="purge_pending",
                             actor=user.get("username", "admin"),
                             payload={"count": n, "role": user.get("role", "")})
-    await pg_store.mirror_audit("review.purge_pending", user.get("username", "admin"), {"count": n})
     await pg_store.purge_pending_reviews()
     return {"purged": n}
 

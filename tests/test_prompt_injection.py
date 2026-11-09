@@ -257,8 +257,8 @@ def test_imaging_vl_injection_structured_no_side_effect(inj_env, monkeypatch):
     assert (injected["review_id"] is None) == (plain["review_id"] is None), \
         "入队语义与纯文本对照完全一致"
     assert act_plain == act_injected, "注入不引入任何额外审计事件"
-    assert act_injected <= {"vl_described", "review_enqueued", "auto_sign_full"}, \
-        "审计动作集限于标准留痕语义（无注入引出的额外事件）"
+    assert act_injected <= {"vl_described", "review_enqueued", "auto_sign_full", "answered"}, \
+        "审计动作集限于标准留痕语义（无注入引出的额外事件）；answered=评测 A3 起入 JSONL 的答案事件"
     assert injected["answer"].startswith("影像所见"), "VL 文本原样透出（展示数据）"
     assert not os.path.isfile(tmp / "prescriptions.json"), "状态机无变化：零处方产生"
 

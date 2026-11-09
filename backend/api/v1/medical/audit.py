@@ -299,8 +299,6 @@ async def admin_audit_export(user: dict = Depends(require_role("admin")),
     filters = {"actor": actor_f, "event": event_f, "action": action_f,
                "from": (audit_from or "").strip(), "to": (audit_to or "").strip()}
     await asyncio.to_thread(_write_export_audit, actor_name, filters, len(rows), truncated)
-    await pg_store.mirror_audit("admin.audit_export", actor_name,
-                                {"filters": filters, "rows": len(rows), "truncated": truncated})
     filename = "audit_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".csv"
     return Response(content=body, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"',

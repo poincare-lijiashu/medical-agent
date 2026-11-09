@@ -122,7 +122,6 @@ async def consult_create(req: AskReq, user: dict = Depends(require_user)):
                             actor=actor, payload={"cid": cid, "role": user.get("role", ""),
                                                   "departments": team["departments"],
                                                   "reasoning": team.get("reasoning", "")})
-    await pg_store.mirror_audit("consult.created", actor, {"cid": cid})
     return item
 
 
@@ -216,7 +215,6 @@ async def consult_opinion(cid: str, body: ConsultOpinionReq, user: dict = Depend
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="consult_opinion",
                             actor=me, payload={"cid": cid, "dept": user.get("dept", ""),
                                                "role": user.get("role", "")})
-    await pg_store.mirror_audit("consult.opinion", me, {"cid": cid})
     return item
 
 
@@ -238,5 +236,4 @@ async def consult_close(cid: str, user: dict = Depends(require_user)):
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="consult", action="consult_closed",
                             actor=me, payload={"cid": cid, "role": user.get("role", ""),
                                                "opinions": len(item.get("opinions") or [])})
-    await pg_store.mirror_audit("consult.closed", me, {"cid": cid})
     return item

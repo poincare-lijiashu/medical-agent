@@ -957,7 +957,9 @@ def audit_action_for(event_type: str, action: str | None = None) -> str:
     ev = str(event_type or "")
     if ev in _ACTION_ALIASES:
         return _ACTION_ALIASES[ev]
-    return ev.split(".", 1)[-1] if "." in ev else ev
+    act = ev.split(".", 1)[-1] if "." in ev else ev
+    # 历史答案事件是 `<agent>.answer`，JSONL 侧 action 统一为 answered（评测 A3 同构）
+    return "answered" if act == "answer" else act
 
 
 def _audit_payload_with_action(event_type: str, payload: dict | None,
@@ -985,6 +987,30 @@ async def mirror_audit(event_type: str, actor: str, payload: dict,
                               _mirror_audit_impl(event_type, actor,
                                                  _audit_payload_with_action(event_type, payload,
                                                                             action)))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
+
+
+def mirror_audit_sync(event_type: str, actor: str, payload: dict,
+                      action: str | None = None) -> None:
+    """同步审计镜像（**审计写入的唯一挂钩点**；任意线程可调，best-effort）。
+
+    评测 02 P0-3（A3）：此前 PG 审计只在 28 个显式调用点镜像（覆盖率约 7%），且事件名
+    是"域.动作"（review.approved），与 JSONL 的"域 + payload.action"不同构。改为由
+    `medical_audit.AuditLog._emit` 在每次 JSONL 落盘后统一调用本函数——
+    - event_type 与 JSONL 完全一致（PG/JSONL 天然 1:1，新增审计点自动进 PG）；
+    - payload.action 由 `write(action=...)` 写入，历史点号名由读侧 `_normalize_audit_row` 归一。
+    失败只告警（JSONL 仍是权威记录），PG 未建池/离线直接 no-op。
+    """
+    if offline_mode() or not _pool:
+        return
+    try:
+        _pg_write_call("audit_log", "mirror",
+                       _mirror_audit_impl(event_type, actor,
+                                          _audit_payload_with_action(event_type, payload,
+                                                                     action)))
+    except PGUnavailable:
+        return  # 熔断期：JSONL 已落盘，恢复后新事件自然补齐
     except Exception as e:  # noqa: BLE001
         logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
 
@@ -1108,7 +1134,10 @@ def _audit_where(actor: str, event_type: str, action: str,
         conds.append(f"actor = ${len(params)}")
     if event_type:
         params.append(event_type)
-        conds.append(f"event_type = ${len(params)}")
+        # 评测 02 P0-3（A3）：历史 PG 行存"域.动作"（review.approved），JSONL 存"域"+
+        # payload.action。按域过滤时必须同时命中两种形态，否则面板在 PG/JSONL 间切换
+        # 命中数完全不同；按旧点号名精确过滤仍然可用（等值分支）。
+        conds.append(f"(event_type = ${len(params)} OR event_type LIKE ${len(params)} || '.%')")
     if action:
         params.append(action)
         conds.append(f"payload->>'action' = ${len(params)}")
@@ -1121,6 +1150,22 @@ def _audit_where(actor: str, event_type: str, action: str,
     return ((" WHERE " + " AND ".join(conds)) if conds else ""), params
 
 
+def _normalize_audit_row(event_type: str, payload: dict) -> tuple[str, dict]:
+    """把历史的"域.动作"行归一成与 JSONL 同构的 (域名, payload.action)（评测 A3）。
+
+    第 112 批起新行本就带 payload.action；更早的行只有 event_type=review.approved。
+    读时归一（不改库里历史数据）→ 同一过滤值在 PG/JSONL 两侧命中同一批记录。
+    """
+    ev = str(event_type or "")
+    if "." not in ev:
+        return ev, payload
+    domain, _, _rest = ev.partition(".")
+    p = dict(payload or {})
+    if not p.get("action"):
+        p["action"] = audit_action_for(ev)
+    return domain, p
+
+
 async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
                                 event_type: str = "", action: str = "",
                                 start: datetime | None = None,
@@ -1129,6 +1174,7 @@ async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
 
     过滤在 SQL 侧完成，offset 是"过滤后"的偏移（与前端分页一致）；全部条件为空时
     SQL 与旧版逐字一致（无 WHERE）。第 109 批增加半开时间区间 [start, end)。
+    评测 A3：输出统一归一为"域名 + payload.action"（历史点号行不再与 JSONL 语义分裂）。
     """
     where, params = _audit_where(actor, event_type, action, start, end)
     n = len(params)
@@ -1146,8 +1192,9 @@ async def _audit_recent_pg_impl(limit: int, offset: int, actor: str = "",
             except Exception:  # noqa: BLE001 —— 单行 payload 损坏降级空对象，不拖垮整页
                 p = {}
         ts = r["ts"]
+        event_name, payload_out = _normalize_audit_row(r["event_type"], p)
         out.append({"ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-                    "event_type": r["event_type"], "actor": r["actor"], "payload": p})
+                    "event_type": event_name, "actor": r["actor"], "payload": payload_out})
     return out
 
 
@@ -1215,7 +1262,10 @@ async def _audit_facets_pg_impl(start: datetime | None = None,
     where, params = _audit_where("", "", "", start, end)
     out: dict[str, list] = {"actors": [], "events": [], "actions": []}
     async with _pool.acquire() as c:
-        for key, expr in (("actors", "actor"), ("events", "event_type"),
+        # 评测 A3：event_type 候选按"域"聚合（历史 review.approved 与新的 review 合并成
+        # 一个选项）；action 取 payload.action（第 112 批起所有镜像行都有）。
+        for key, expr in (("actors", "actor"),
+                          ("events", "split_part(event_type, '.', 1)"),
                           ("actions", "payload->>'action'")):
             cond = f"{expr} IS NOT NULL AND {expr} <> ''"
             clause = (where + " AND " + cond) if where else (" WHERE " + cond)

@@ -73,7 +73,10 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
     时强制待确认（drug 高危语义）。
     fallback/offtopic 拒答不入队（调用方维持既有分支，不进本函数）。
     sources：响应溯源来源随条目存档。resubmit_of/attempt/meta 透传（任务6）。"""
-    await pg_store.mirror_audit(f"{agent}.answer", actor, {"conf": conf, "review": review_flag})
+    # 评测 A3：答案事件先写 JSONL（权威），PG 镜像由 AuditLog._emit 统一挂钩。
+    # 此前只 mirror 到 PG（event_type=literature.answer）→ JSONL 缺该事件、且两侧命名不同构。
+    await asyncio.to_thread(get_audit_logger().write, event_type=agent, action="answered",
+                            actor=actor, payload={"conf": conf, "review": review_flag})
     if current_channel() == "mcp":
         # 批2 任务1 安全边界（docs/MCP.md）：MCP 外部 AI 客户端的调用【不写审核队列】——
         # 结果由外部客户端消费自担（免责声明见 MCP 工具 docstring），避免外部批量调用

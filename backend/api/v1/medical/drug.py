@@ -129,8 +129,6 @@ async def admin_drug_dict_manage(req: DrugDictManageReq,
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="admin",
                             action="drug_dict_changed", actor=actor,
                             payload={"target": "dict", "action": action, "name": name})
-    await pg_store.mirror_audit("admin.drug_dict_changed", actor,
-                                {"target": "dict", "action": action, "name": name})
     return {"ok": True}
 
 
@@ -180,9 +178,6 @@ async def admin_drug_rules_manage(req: DrugDictManageReq,
                             action="drug_dict_changed", actor=actor,
                             payload={"target": "rules", "action": action,
                                      "drug_a": pair[0], "drug_b": pair[1]})
-    await pg_store.mirror_audit("admin.drug_dict_changed", actor,
-                                {"target": "rules", "action": action,
-                                 "drug_a": pair[0], "drug_b": pair[1]})
     return {"ok": True}
 
 
@@ -217,8 +212,6 @@ async def admin_drug_rules_review(req: DrugRulesReviewReq,
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="drug_rules",
                             action="reviewed", actor=actor,
                             payload={"count": n, "decision": decision})
-    await pg_store.mirror_audit("drug_rules.reviewed", actor,
-                                {"count": n, "decision": decision})
     return {"ok": True, "stats": await asyncio.to_thread(dd.rules_review_stats)}
 
 

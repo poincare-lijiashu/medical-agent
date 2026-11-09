@@ -127,9 +127,6 @@ async def prescription_suggest(req: PrescribeSuggestReq,
                             action="suggested", actor=actor,
                             payload={"q": case_text[:AUDIT_Q_SNIPPET], "n": len(suggestions),
                                      "blocked": blocked, "dropped": dropped})
-    await pg_store.mirror_audit("prescription.suggested", actor,
-                                {"q": case_text[:AUDIT_Q_SNIPPET], "n": len(suggestions),
-                                 "blocked": blocked, "dropped": dropped})
     return {"suggestions": suggestions, "blocked": blocked, "conflicts": conflicts,
             "warnings": warnings, "disclaimer": dd.DISCLAIMER}
 
@@ -242,13 +239,11 @@ async def prescription_create(req: PrescriptionSubmitReq,
                         out_of_dict_drugs=ood)  # 方案A：外典药名单随审计留痕
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                             action="submitted", actor=me, payload=payload)
-    await pg_store.mirror_audit("prescription.submitted", me, payload)
     if forced:  # 高危强制开立单独留痕（审计矩阵 forced_with_reason 事件）
         fp = _rx_audit(user, rid=item["id"],
                        reason=req.contraindication_reason.strip()[:AUDIT_Q_SNIPPET])
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                                 action="forced_with_reason", actor=me, payload=fp)
-        await pg_store.mirror_audit("prescription.forced_with_reason", me, fp)
     return item
 
 
@@ -381,12 +376,10 @@ async def prescription_review(rid: str, body: PrescriptionReviewReq,
             item = await asyncio.to_thread(rx.approve, rid, me, body.opinion)
             await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                                     action="approved", actor=me, payload=payload)
-            await pg_store.mirror_audit("prescription.approved", me, payload)
         else:
             item = await asyncio.to_thread(rx.reject, rid, me, body.opinion)
             await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                                     action="rejected", actor=me, payload=payload)
-            await pg_store.mirror_audit("prescription.rejected", me, payload)
     except ValueError as e:  # 状态机拒绝（draft/approved/rejected 再签发等）→ 400
         raise HTTPException(400, str(e))
     return item
@@ -423,10 +416,8 @@ async def prescription_rewrite(rid: str, body: PrescriptionRewriteReq,
     payload = _rx_audit(user, rid=rid, n=len(cleaned), forced_high_risk=forced)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                             action="rewritten", actor=me, payload=payload)
-    await pg_store.mirror_audit("prescription.rewritten", me, payload)
     if forced:  # 改写后仍高危强制开立 → 单独留痕
         fp = _rx_audit(user, rid=rid, reason=eff_reason.strip()[:AUDIT_Q_SNIPPET])
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="prescription",
                                 action="forced_with_reason", actor=me, payload=fp)
-        await pg_store.mirror_audit("prescription.forced_with_reason", me, fp)
     return item
