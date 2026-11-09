@@ -6523,3 +6523,50 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - 归档容器以 10001 运行：上线前确认主镜像内 `/app` 对 other 可读（不可读则调 values 的
   `runAsUser` 或镜像 `USER`）；
 - `trustedProxies` 生产默认留空（不信任任何 XFF）；填 ingress-nginx Pod 网段才生效。
+
+## 161. 2026-11-10 评测 06 P1-6：仓库备份保留策略 + PG 备份 CronJob 生产化（第 158 批）
+
+**问题（评测 06 P1-6 / P1-2 相邻项）**
+
+- `scripts/backup_repo.ps1` **无保留策略**：本机 `<backup-dir>` 已积压 96 个 bundle /
+  1618 MB（10 个每日快照 + 86 个历史手工快照），只增不减。
+- `deploy/backup/pg-backup-cronjob.yaml`：①`timeZone` 缺失（注释自认"由集群节点决定"，
+  混合/海外集群会把 02:00 备份跑进业务高峰）；②容器无安全上下文（无只读根文件系统/
+  无 drop ALL/无 seccomp）；③无 `PGCONNECT_TIMEOUT`，PG 不可达时会在 2h 的
+  `activeDeadlineSeconds` 里干等，占着 Job 槽位；④归档已加 `tmp` emptyDir，备份没有。
+
+**已做**
+
+1. **保留策略（`-Keep` / `-NoPrune`）**：
+   - 只匹配 `^medical_agent_(\d{8})\.bundle$` 的每日快照，按文件名倒序保留最新 `-Keep`
+     （默认 14）份；**刚写出的 bundle 无论排序如何都强制保留**；`-NoPrune` 可关闭；
+   - 镜像目录、`.tmp`、手工命名快照（`_round3fixN` 等 86 个）**一律不参与删除**；
+   - 新增只读可见性输出 `BUNDLES: total=N sizeMB=X`，手工快照由运维自行决策，脚本不动手；
+   - 脚本继续保持**纯 ASCII**（PS 5.1 无 BOM UTF-8 会按 ANSI 解析——2026-10-30 事故根因）。
+2. **PG 备份 CronJob**：`timeZone: Asia/Shanghai`、Pod `seccompProfile: RuntimeDefault`、
+   容器 `allowPrivilegeEscalation: false` + `readOnlyRootFilesystem: true` +
+   `capabilities.drop: [ALL]`、`/tmp` emptyDir、`PGCONNECT_TIMEOUT=10`。
+3. **回归锁**（`tests/test_backup_assets.py` 3 条）：
+   - YAML 解析锁定 schedule/timeZone/安全上下文/PVC/`PGCONNECT_TIMEOUT`/`pg_restore --list`
+     校验/`-maxdepth 1` 清理；
+   - `backup_repo.ps1` **逐字节 ASCII** 断言（事故防再犯）；
+   - 保留策略标记：精确正则、`-NoPrune`、刚写 bundle 必保留、绝不 `Remove-Item $mirror`。
+
+**验证**
+
+```
+临时目录行为验证（真跑脚本，seed 16 个假每日快照 + 1 个手工快照）：
+  PRUNED: 3 old bundle(s) (keep=14)
+  BUNDLES: total=15 sizeMB=28.1
+  BACKUP OK: ... HEAD=a13eb75e pruned=3
+  daily_left=14 / adhoc_kept=True / exit=0
+定向：tests/test_backup_assets.py → 3 passed
+全量（不含 e2e）→ 1585 passed / 1 skipped
+```
+
+**遗留**
+
+- 86 个历史手工 bundle（约 1.5 GB）保留未删：它们是不同议题的人工快照，脚本只报告不清理；
+  运维确认后可手工归档或删除；
+- 备份 CronJob 仍使用单节点 RWO PVC（`ReadWriteOnce`），跨节点恢复需先迁移卷或改 S3/NFS CSI；
+- 备份失败告警依赖第 157 批的 `MedassistJobFailed` / `MedassistBackupStale`，需院内路由到值班通道。

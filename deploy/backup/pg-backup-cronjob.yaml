@@ -19,8 +19,10 @@ metadata:
     app.kubernetes.io/part-of: medassist-platform
     app.kubernetes.io/component: backup
 spec:
-  # 每天 02:00（业务低峰）；时区由集群节点决定，跨时区部署请显式设 timeZone
+  # 每天 02:00（业务低峰）。显式 timeZone：集群节点时区不可控，跨时区部署会跑偏
+  # （K8s ≥1.27 生效；更早版本需自行统一节点时区）。
   schedule: "0 2 * * *"
+  timeZone: Asia/Shanghai
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -40,6 +42,8 @@ spec:
             runAsNonRoot: true
             runAsUser: 65534
             fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: pg-dump
               image: postgres:15.19-alpine
@@ -52,6 +56,9 @@ spec:
                   value: medagent
                 - name: PGUSER
                   value: medagent
+                # 连不上时 10s 失败，而不是在 2h activeDeadline 里干等
+                - name: PGCONNECT_TIMEOUT
+                  value: "10"
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
@@ -82,9 +89,16 @@ spec:
                   # 清理过期备份（只删本目录下匹配命名的文件，避免误删）
                   find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'medagent-*.dump*' \
                        -mtime "+${RETENTION_DAYS}" -print -delete
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               volumeMounts:
                 - name: backup
                   mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
               resources:
                 requests:
                   cpu: 100m
@@ -96,6 +110,9 @@ spec:
             - name: backup
               persistentVolumeClaim:
                 claimName: medassist-pg-backup
+            # 根文件系统只读：pg_dump/pg_restore 的临时文件落 /tmp
+            - name: tmp
+              emptyDir: {}
 ---
 # 备份盘（生产请替换为支持快照/NFS 的 StorageClass；单节点 hostPath 仅适合自建验证）
 apiVersion: v1

@@ -19,12 +19,20 @@
 #      child-process cwd ("repository '.' does not exist").
 #   5) Exit codes are honest: 0 = mirror + bundle OK, 2 = mirror OK but bundle
 #      failed (degraded), 1 = hard failure (no usable new mirror).
+#   6) Retention (review 06 P1-6): dated bundles accumulated to 96 files / 1.6 GB.
+#      Keep the newest -Keep bundles (default 14) and prune older ones. The
+#      verified mirror above is the primary backup; bundles are dated snapshots.
+#      Only files matching medical_agent_YYYYMMDD.bundle are ever deleted, the
+#      just-written bundle is always kept, and -NoPrune disables pruning.
 # Usage:  powershell -File scripts\backup_repo.ps1 [-Src <repo>] [-Dst <dir>]
+#                                 [-Keep 14] [-NoPrune]
 # Restore: git clone <Dst>\medical_agent_YYYYMMDD.bundle <dir>
 #          (a bundle clone needs no existing repo -- it rescued this project)
 param(
     [string]$Src = "<repo>",
-    [string]$Dst = "<backup-dir>"
+    [string]$Dst = "<backup-dir>",
+    [int]$Keep = 14,
+    [switch]$NoPrune
 )
 
 $ErrorActionPreference = "Continue"
@@ -102,5 +110,41 @@ if ($bundleCode -ne 0) {
     Write-Output "BACKUP DEGRADED: mirror=$mirror bundle=FAILED HEAD=$head_src"
     exit 2
 }
-Write-Output "BACKUP OK: mirror=$mirror bundle=$bundle HEAD=$head_src"
+
+# -- 3) retention of dated bundles (never touches the mirror, never deletes the
+# bundle just written, only exact medical_agent_YYYYMMDD.bundle names)
+$pruned = 0
+$freedMB = 0.0
+if (-not $NoPrune -and $Keep -gt 0) {
+    $all = @(Get-ChildItem -Path $Dst -Filter "medical_agent_*.bundle" -File -ErrorAction SilentlyContinue |
+             Where-Object { $_.Name -match '^medical_agent_(\d{8})\.bundle$' } |
+             Sort-Object Name -Descending)
+    if ($all.Count -gt 0) {
+        $keepNames = @($all | Select-Object -First $Keep | ForEach-Object { $_.Name })
+        $keepNames += (Split-Path $bundle -Leaf)
+        foreach ($f in $all) {
+            if ($keepNames -contains $f.Name) { continue }
+            try {
+                $freedMB += ($f.Length / 1MB)
+                Remove-Item -Force -Path $f.FullName
+                $pruned += 1
+            } catch {
+                Write-Output "WARN: prune failed for $($f.Name) -- keeping file"
+            }
+        }
+    }
+    if ($pruned -gt 0) {
+        Write-Output ("PRUNED: {0} old bundle(s), freed {1:N1} MB (keep={2})" -f $pruned, $freedMB, $Keep)
+    }
+}
+
+# -- 4) read-only visibility: total bundles on disk (ad-hoc/manual snapshots are
+# never auto-deleted; surface the size so operators can decide themselves)
+$allBundles = @(Get-ChildItem -Path $Dst -Filter "*.bundle" -File -ErrorAction SilentlyContinue)
+if ($allBundles.Count -gt 0) {
+    $totalMB = (($allBundles | Measure-Object -Property Length -Sum).Sum / 1MB)
+    Write-Output ("BUNDLES: total={0} sizeMB={1:N1} (only medical_agent_YYYYMMDD.bundle is auto-pruned)" -f $allBundles.Count, $totalMB)
+}
+
+Write-Output "BACKUP OK: mirror=$mirror bundle=$bundle HEAD=$head_src pruned=$pruned"
 exit 0
