@@ -77,20 +77,53 @@ def ensure_not_revoked(username: Optional[str], iat: float) -> None:
         raise HTTPException(status_code=401, detail="账号已被停用或凭证已重置，请重新登录")
 
 
+# 第 126 批：统一身份。Java 医院平台（platform/auth）是唯一签发方时，其令牌载荷形如
+#   {sub: 账号UUID, username: "doctor01", roles: ["DOCTOR"], permissions: [...], org, jti}
+# 与 Python 自签令牌的 {sub: "doctor01", role: "doctor"} 结构不同，但**同一 HS256 密钥**。
+# 这里做载荷兼容：优先取 username 声明，并把 Java 角色码映射到本系统的角色枚举。
+# 安全边界：验签通过即视为可信（同一密钥），但仍回查本地用户表确认账号存在——
+# Java 侧停用账号不会实时同步到本进程，这一缺口由"回查用户表"部分兜住（见台账 §130 边界）。
+_JAVA_ROLE_MAP = {
+    "ADMIN": "admin",
+    "DOCTOR": "doctor",
+    "PHARMACIST": "pharmacist",
+    "QC": "qc",
+    # 护理/住院处等角色在 AI 中台没有独立能力域：演示期按 doctor 只读处理，
+    # 生产接入前应补一张显式的角色映射矩阵（不要靠默认分支放行）。
+    "NURSE": "doctor",
+}
+
+
+def _identity_from_payload(payload: dict) -> tuple[str, str]:
+    """令牌载荷 → (username, role)。兼容本系统自签与 Java 平台签发两种形态。"""
+    username = str(payload.get("username") or payload.get("sub") or "")
+    role = payload.get("role")
+    if not role:
+        roles = payload.get("roles") or []
+        if isinstance(roles, str):
+            roles = [roles]
+        role = _JAVA_ROLE_MAP.get(str(roles[0]).upper()) if roles else None
+    return username, str(role or "")
+
+
 def _user_from_token(token: str) -> dict:
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="令牌无效或已过期，请重新登录")
-    sub = payload.get("sub")
+    username, role = _identity_from_payload(payload)
+    if not username:
+        raise HTTPException(status_code=401, detail="令牌缺少身份声明，请重新登录")
     try:
         iat = float(payload.get("iat") or 0)
     except (TypeError, ValueError):
         iat = 0.0
-    ensure_not_revoked(sub, iat)
-    u = get_user(sub)
+    ensure_not_revoked(username, iat)
+    u = get_user(username)
     if not u:  # 撤销表为进程内存态，重启后丢失：回查用户表兜底（fail-closed）
         raise HTTPException(status_code=401, detail="账号不存在或已停用")
-    return {"username": sub, "role": payload.get("role"), "dept": u.get("dept", "")}
+    # Java 令牌的科室在 org/depts 声明里；本系统用 users.dept（中文科室名）做数据范围，
+    # 两者编码体系不同，这里只以本地用户表为准，避免把 UUID 当科室名用。
+    return {"username": username, "role": role or u.get("role"), "dept": u.get("dept", "")}
 
 
 def require_user(
@@ -200,12 +233,14 @@ def _identity(request: Request) -> str:
     if h.startswith("Bearer "):
         p = decode_token(h[7:])
         if p:
-            return "u:" + str(p.get("sub", ""))
+            # 第 126 批：Java 平台令牌的 sub 是账号 UUID，必须用 username 声明做限流身份，
+            # 否则同一账号在两边会占用两个不同的限流桶。
+            return "u:" + _identity_from_payload(p)[0]
     ck = request.cookies.get(_COOKIE_AT, "")  # W3.1：cookie 会话的限流身份同样按用户聚合
     if ck:
         p = decode_token(ck)
         if p:
-            return "u:" + str(p.get("sub", ""))
+            return "u:" + _identity_from_payload(p)[0]
     return "ip:" + _client_ip(request)
 
 

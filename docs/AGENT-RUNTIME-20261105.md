@@ -5131,3 +5131,62 @@ dry-run（回填前）：会诊单 17 单；jsonb 意见 9 条；子表 0 行；
 
 
 
+
+## 130. 2026-11-09 统一身份与演示联调（第 126 批：一次登录，一套系统）
+
+**用户诉求**：不想"两个系统登录两次"；Java 医院系统是主系统，AI 要长进去。
+
+**现状核查（实测，非推断）**
+| 事实 | 证据 |
+|---|---|
+| AI 中台**内部** agent 与医疗早已合并 | `backend/main.py:254-257` 三 router 同应用；`agent_router.py:31` 复用同一 `require_user`；`frontend-vue/src/router/index.js:48` 的 `/agent` 是 AppShell 子路由 |
+| 真正"两套"是 `platform/`（Java，11 jar）+ `backend/`（Python） | 两边各自签发 JWT：Java `POST /api/v2/auth/login`（`sub`=账号 UUID、`roles` 数组、jti、TTL 30min）；Python `POST /api/v1/auth/login`（`sub`=username、`role`、TTL 720min） |
+| 两套前端 | `frontend-vue` 14 视图（AI 中台）；`frontend-console` **47 视图**（挂号/住院/药房/手术/医保/护理/PACS/检验/耗材/静配） |
+
+**主流做法（结论）**：多语言后端是常态（Epic 用 Cache/MUMPS、卫宁 WiNEX 用 Java 微服务 + 独立 Python AI 引擎 WiNGPT），
+但**前端是一个统一门户、身份只登录一次**（统一认证 + 门户级 SSO）。"两个前端各登一次"不是主流，
+问题不在"分不分中台"，而在**身份与会话没有统一**。
+
+**本批实现（一次登录的四块拼图）**
+| # | 实现 | 文件 |
+|---|---|---|
+| 1 | **Java 全栈启动脚本**：一次拉起 8080-8089 十个服务，含迁移、端口就绪轮询、失败即打印日志尾部并退出码非 0 | `scripts/run_platform_demo.ps1`（新） |
+| 2 | **JWT 密钥统一**：脚本读 `.env.local` 的 `AUTH_JWT_SECRET`（64 字符）注入 Java `JWT_SECRET`，两边同一 HS256 密钥 | 同上 |
+| 3 | **Python 接受 Java 令牌**：`_identity_from_payload` 兼容两种载荷（取 `username` 声明、`roles[0]` 映射 doctor/pharmacist/admin/qc）；限流身份同步改用 username | `backend/api/deps.py:80-127,231-244` |
+| 4 | **前端令牌桥**：`frontend-console` 把同一枚 JWT 通过 `?token=` 交给 AI 前端，AI 前端以 Bearer 携带并先回调 `/auth/me` 服务端确认，随后把 token 从地址栏抹除 | `frontend-vue/src/api/index.js:12-29`、`stores/auth.js`、`router/index.js:63-87`；`frontend-console/src/views/AiAssistantView.vue`（新） |
+| 5 | **统一入口**：`frontend-console` 导航第一项「AI 临床助手」(`/ai`)，iframe 内嵌 AI 中台，进入即为已登录态 | `frontend-console/src/navigation.ts:14-21`、`router/index.ts:19-23` |
+
+**真机验证（本机，全部实测）**
+```
+Java 全栈：8080-8089 十个端口全部监听（10 个 java 进程）
+Flyway：auth_svc 78 个迁移校验通过（current version 77），无重复执行
+登录经网关：POST 8080/api/v2/auth/login → 200，doctor01 / roles=DOCTOR，token 2863 字符
+患者数据：GET 8080/api/v2/empi/patients?patientNo=P20261105000730
+          → name=Smoke Patient 9002，idNo=1101****9002，phone=139****1111（密文解密成功、默认脱敏）
+统一身份：同一枚 Java 令牌 → Python /api/v1/auth/me → 200 {doctor01, doctor, 口腔科}
+          → /api/v1/medical/config → 200（milvus.connected=true）
+          → /api/v1/medical/admin/data → 403（角色映射正确，非 admin 被拒）
+前端：5180 首页 200；5180/api/v2/auth/login 经代理到网关 200
+构建：frontend-vue 8.9s、frontend-console 4.7s（47 视图已代码分割，主包 178KB）
+```
+
+**过程中的三个真实问题（已修）**
+1. **PowerShell 5 按 GBK 解析 UTF-8 脚本** → 中文全部乱码、字符串未闭合报语法错。修：脚本写 UTF-8 BOM。
+2. **EMPI 密钥被我错误覆盖** → 自造的 33 字节 key 覆盖了 `application-dev.yml` 的默认值，`FieldCipher` 拒绝启动。
+   修：**不注入** `EMPI_FIELD_KEY`/`EMPI_HASH_SALT`，让 dev 配置的原密钥生效——库里 731 条患者密文正是用它加密的。
+3. **子进程随 PowerShell 会话结束被回收** → `Start-Process` 启的 java 在命令结束时被杀。修：脚本末尾常驻心跳，配合后台运行保持存活。
+
+**本批新增边界（如实登记）**
+- **iframe 是过渡形态**：做到"一次登录、一个入口"，但 AI 仍是独立页面，尚未嵌入业务流程
+  （真正深度集成应是：开医嘱时内联审方提示、写病历时内联质控、患者卡片旁内联会诊建议）。
+- **角色映射是演示级**：只映射 ADMIN/DOCTOR/PHARMACIST/QC，NURSE 暂按 doctor 只读；
+  未覆盖 REGISTRAR/ANESTHETIST/OR_NURSE 等，生产前需一张显式角色矩阵。
+- **撤销不同步**：Java 侧停用账号/登出不会实时同步到 Python（Python 只回查本地用户表），
+  最长受 Java 令牌 TTL（30min）约束。
+- **科室编码两套**：Java 用 `depts`(UUID) / `org`，Python 用 `users.dept`（中文名）；
+  当前以本地用户表为准，未做映射，所以 AI 侧的数据范围仍按 Python 用户表。
+- **演示密钥固定**：`INTERNAL_API_TOKEN=medassist-dev-internal-token`、EMPI dev key 均为开发值，
+  仅限本机演示；生产必须走 Secret。
+- **未做**：Java 前端与 AI 前端共用一套设计系统（`DESIGN-SYSTEM.md` 目前只覆盖 console）；
+  AI 中台的 14 个视图未按 console 的导航分组重排。
+

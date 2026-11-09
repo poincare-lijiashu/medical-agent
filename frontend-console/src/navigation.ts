@@ -12,6 +12,14 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   {
+    name: 'ai',
+    path: '/ai',
+    title: 'AI 临床助手',
+    hint: '多智能体会诊 · 智能审方 · 病历质控 · 文献循证 · 知识库问答 · Agent 编排',
+    icon: 'monitor',
+    group: '总览',
+  },
+  {
     name: 'dashboard',
     path: '/dashboard',
     title: '运营驾驶舱',

@@ -61,8 +61,24 @@ function rolesForRoute(name) {
 }
 
 // 路由守卫：无 token 一律去 /login（携带回跳地址）；已登录访问 /login 回概览
-router.beforeEach((to) => {
+// 第 126 批：支持从医院业务控制台（Java 平台）带令牌进入——一次登录、两个系统都认。
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+
+  // 外部令牌（?token=...）：先用 /auth/me 在服务端确认，再清掉 URL 里的令牌
+  // （避免令牌留在浏览历史/地址栏/截图里）。
+  // 注意：**总是**采用外部令牌（即使本地已有旧会话）——从医院业务控制台进来时，
+  // 当前登录身份应以那边的令牌为准，否则会沿用一个可能已失效的本地会话。
+  const ext = to.query && to.query.token
+  if (typeof ext === 'string' && ext) {
+    const ok = await auth.adoptToken(ext)
+    if (ok) {
+      const q = { ...to.query }
+      delete q.token
+      return { path: to.path, query: q, replace: true }
+    }
+  }
+
   if (!to.meta.public && !auth.isLoggedIn) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }

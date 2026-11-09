@@ -9,6 +9,25 @@ import { useAuthStore } from '../stores/auth'
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 60000, withCredentials: true })
 
+// 第 126 批：统一身份（一次登录，两个系统都认）。
+// 医院业务控制台（frontend-console）登录后持有 Java 平台签发的 JWT；进入 AI 中台时
+// 通过 URL 传进来，这里以 Bearer 携带——跨端口/跨源场景下 cookie 不可用，Bearer 是
+// 唯一可靠通道。后端两边共用同一 HS256 密钥，因此同一枚令牌两边都验得过。
+export const BEARER_KEY = 'medassist_bearer'
+
+http.interceptors.request.use((cfg) => {
+  try {
+    const t = sessionStorage.getItem(BEARER_KEY)
+    if (t && !(cfg.headers && cfg.headers.Authorization)) {
+      cfg.headers = cfg.headers || {}
+      cfg.headers.Authorization = `Bearer ${t}`
+    }
+  } catch {
+    // sessionStorage 不可用（隐私模式）时静默退化到 cookie 通道
+  }
+  return cfg
+})
+
 // 错误 → 中文文案：后端 detail（字符串）优先，其次按状态/网络归因
 export function errText(error) {
   const d = error && error.response && error.response.data && error.response.data.detail

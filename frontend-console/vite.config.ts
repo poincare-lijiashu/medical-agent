@@ -21,6 +21,17 @@ export default defineConfig({
       },
     },
   },
+  // 本机演示用预览服务（构建产物 + 同一套代理），避免"dev 能跑、preview 404"。
+  preview: {
+    host: '127.0.0.1',
+    port: 5180,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
