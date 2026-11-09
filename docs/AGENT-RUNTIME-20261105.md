@@ -6699,3 +6699,37 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - 归档/回填脚本以外的临时运维 SQL 若需改审计行，必须显式 `SET LOCAL`（这是设计意图）；
 - 数据库超级用户仍可 `DROP TRIGGER`/`ALTER TABLE ... DISABLE TRIGGER`——真正的防篡改还需
   审计库异地只写账号 / WORM 存储，属部署侧（评测 04 P1-5 静态加密同批）后续项。
+
+## 165. 2026-11-10 评测 04 P1-2：概览活动流按角色裁剪（横向越权）（第 162 批）
+
+**问题（评测 04 P1-2）**
+
+- `GET /medical/overview` 只要登录即可：返回**全院**最近 8 条审计事件，含操作者与完整
+  payload（可能带患者姓名）。普通医生/药师可据此推断他人接诊与患者信息——
+  唯一"可被外部利用"的越权读接口（同批 `/review/pending` 已在 B2 修复）。
+
+**已做**
+
+1. 新增 `_overview_events(al, user)`（`backend/api/v1/medical/admin.py`）：
+   - `role in ("admin","qc")` → 全院最近 8 条 + 完整 payload（院级质控需要）；
+   - 其余角色（doctor/pharmacist/nurse/guest）→ 只保留 `actor == 本人` 的事件（从 500 条
+     有界缓存中过滤后取最新 8 条），且 `payload` **只留 action**（患者字段不下发）；
+   - 返回结构不变（ts/event/action/actor/payload），前端 `humanizeAudit` 无需改动。
+2. 概览其余字段保持原样（聚合计数 `pending/resolved/events_total`、设备、合规勾选）。
+3. **回归锁**（`tests/test_overview_scope.py` 5 条）：医生只看到本人且无 patient；
+   药师同样受限；护士（Java 映射角色，本地无账号）用 helper 覆盖同分支；admin/qc 看到
+   全院且保留 payload；helper 截断 8 条且新→旧。
+
+**验证**
+
+```
+定向：test_overview_scope + test_admin_users + test_pg_overview_counts + test_admin_data_counts
+      → 21 passed（重跑 5 passed）
+全量（不含 e2e）→ 1603 passed / 1 skipped
+```
+
+**遗留**
+
+- 聚合计数（待核/已核/事件总数）仍对全员可见：属"量级信息"，不含个体；如需再收紧可按
+  角色返回 null 并让前端显示"—"；
+- 概览未做 per-role 的审计**留痕**（读操作本身不写审计），如合规要求"谁看了概览"需另加。

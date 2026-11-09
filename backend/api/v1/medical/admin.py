@@ -119,19 +119,44 @@ async def admin_config_toggle(req: ConfigToggleReq, user: dict = Depends(require
     return {"ok": True, "key": req.key, "value": val}
 
 
+# 评测 04 P1-2：概览活动流的作用域。
+# 此前任何登录用户都能拿到**全院**最近 8 条审计事件（含操作者与 payload，patient 姓名等）。
+# 现在：admin/qc（院级质控角色）看全院；其余角色只看**自己**的事件，且 payload 仅保留
+# action（其余字段可能含患者信息，非必要不下发）。
+_OVERVIEW_FULL_ROLES = ("admin", "qc")
+
+
+def _overview_events(al, user: dict) -> list[dict]:
+    """按角色裁剪概览活动流（人话渲染仍需 event/action/actor）。"""
+    priv = str(user.get("role") or "") in _OVERVIEW_FULL_ROLES
+    if priv:
+        rows = al.recent(8)
+    else:
+        me = str(user.get("username") or "")
+        rows = [e for e in al.recent(500) if e.get("actor") == me][:8]
+    out = []
+    for e in rows:
+        payload = e.get("payload") or {}
+        action = payload.get("action", "")
+        out.append({"ts": str(e.get("ts", ""))[11:19], "event": e.get("event_type", ""),
+                    "action": action, "actor": e.get("actor", ""),
+                    "payload": payload if priv else {"action": action}})
+    return out
+
+
 @router.get("/overview")
 async def overview(user: dict = Depends(require_user)):
-    """概览面板：真实运行与合规指标（不编造）。"""
+    """概览面板：真实运行与合规指标（不编造）。
+
+    活动流按角色裁剪（评测 04 P1-2）：admin/qc 全院，其余仅本人事件。
+    """
     from backend.core.embedder import device
     from backend.core.medical_kb import doc_count
     stats = await _review_stats()
     pending, resolved = stats["pending"], stats["approved"] + stats["rejected"]
     al = _shared.get_audit_logger()
     # 任务1：recent 携带完整 payload，前端 humanizeAudit 生成人话描述（仅 event 名不可读）
-    recent = [{"ts": e["ts"][11:19], "event": e["event_type"],
-               "action": e["payload"].get("action", ""), "actor": e["actor"],
-               "payload": e.get("payload", {})}
-              for e in al.recent(8)]
+    recent = _overview_events(al, user)
     kb_docs = await _cached_kb_docs(doc_count)  # Milvus 冷启动可能慢，5s 短缓存 + 移出事件循环
     return {
         "kb_docs": kb_docs, "pending": pending, "resolved": resolved,
