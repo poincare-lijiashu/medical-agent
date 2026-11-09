@@ -203,6 +203,12 @@ class Settings(BaseSettings):
 
     # 请求体上限（MB）：Content-Length 超限直接 413；KbUploadReq base64 需 ~30MB，默认 40 留余量
     max_body_mb: int = 40
+    # 评测 04 P1-10：文档解析资源上限（恶意/超大 PDF·图片可让 OCR 跑满 CPU）。
+    # - kb_ocr_max_pages：扫描版 PDF 逐页 OCR 的页数硬上限（超出明确报错要求拆分）；
+    # - kb_extract_timeout_s：单次解析（含 OCR）总时限，页间检查、超时中止入库。
+    # 两者都是"拒绝并提示拆分"，不是静默截断——宁可让用户拆文件，也不让一个请求占满 CPU。
+    kb_ocr_max_pages: int = 200
+    kb_extract_timeout_s: float = 180.0
 
     # 影像/病例高危征象词表：留空用内置默认；逗号分隔覆盖，供院方对齐放射科危急值清单
     imaging_risk_words: str = ""

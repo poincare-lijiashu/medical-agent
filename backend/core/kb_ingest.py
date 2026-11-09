@@ -28,6 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from backend.config import settings
 from backend.core import kb_guard, ocr as kb_ocr
 from backend.core.embedder import embed_dense_sparse
 from backend.core.logger import get_logger
@@ -257,8 +258,14 @@ TEXT_MAX_CHARS = 8_000_000
 
 def extract_text(filename: str, raw: bytes, on_ocr_page=None) -> str:
     """提取文本。on_ocr_page(done, total)：任务C 扫描版 PDF 逐页 OCR 进度回调
-    （异步任务写状态文件 scan_pages/ocr_pages 用；同步路径不传）。"""
-    text = _extract_text_raw(filename, raw, on_ocr_page=on_ocr_page)
+    （异步任务写状态文件 scan_pages/ocr_pages 用；同步路径不传）。
+    评测 04 P1-10：整次解析（含 OCR）有总时限，超时抛 ValueError（400 要求拆分）。"""
+    try:
+        timeout_s = max(1.0, float(getattr(settings, "kb_extract_timeout_s", 180.0) or 180.0))
+    except (TypeError, ValueError):
+        timeout_s = 180.0
+    deadline = time.monotonic() + timeout_s
+    text = _extract_text_raw(filename, raw, on_ocr_page=on_ocr_page, deadline=deadline)
     if len(text) > TEXT_MAX_CHARS:
         raise ValueError(f"文档过大：提取文本 {len(text):,} 字符（上限 {TEXT_MAX_CHARS:,}），请拆分后上传")
     return text
@@ -281,16 +288,35 @@ def _looks_scanned(page_texts: list[str]) -> bool:
     return empty / len(page_texts) > SCANNED_EMPTY_RATIO
 
 
-def _ocr_pdf(raw: bytes, on_page=None) -> str:
+def _ocr_page_limit() -> int:
+    """扫描版 PDF OCR 页数上限（settings 可覆盖，非法值回落 200）。"""
+    try:
+        return max(1, int(getattr(settings, "kb_ocr_max_pages", 200) or 200))
+    except (TypeError, ValueError):
+        return 200
+
+
+def _ocr_pdf(raw: bytes, on_page=None, deadline: float | None = None) -> str:
     """扫描版 PDF → 逐页渲染 pixmap（150dpi）→ OCR → 页间 \\n 拼接。
     on_page(done, total) 供异步任务进度；未安装/推理失败 → ValueError 明确报错
-    （同步路径 400 透传、异步任务 error 态可见），绝不静默返回空文本。"""
+    （同步路径 400 透传、异步任务 error 态可见），绝不静默返回空文本。
+
+    评测 04 P1-10：①页数上限（`KB_OCR_MAX_PAGES`，默认 200）——恶意扫描件上千页会让
+    OCR 跑满 CPU 数小时；②页间检查总时限 `deadline`（monotonic），超时中止并提示拆分。
+    两个上限都是"明确拒绝"，不做静默截断——少识别几页比"跑满 CPU 且无人知道"更可控。"""
     import fitz  # PyMuPDF
     out: list[str] = []
+    limit = _ocr_page_limit()
     try:
         with fitz.open(stream=raw, filetype="pdf") as doc:
             total = len(doc)
+            if total > limit:
+                raise ValueError(f"扫描版PDF页数过多：{total} 页（OCR 上限 {limit} 页），"
+                                 "请拆分后上传或先做文字层")
             for i, page in enumerate(doc):
+                if deadline is not None and time.monotonic() > deadline:
+                    raise ValueError(f"文档解析超时（OCR 已处理 {i}/{total} 页），"
+                                     "请拆分后上传或先做文字层")
                 png = page.get_pixmap(dpi=OCR_RENDER_DPI).tobytes("png")
                 out.append(kb_ocr.ocr_image_bytes(png))
                 if on_page:
@@ -314,19 +340,22 @@ def _ocr_single_image(raw: bytes) -> str:
         raise ValueError(f"图片OCR失败：{str(e)[:120]}") from e
 
 
-def _extract_text_raw(filename: str, raw: bytes, on_ocr_page=None) -> str:
+def _extract_text_raw(filename: str, raw: bytes, on_ocr_page=None,
+                      deadline: float | None = None) -> str:
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".pdf":
         pages = _pdf_page_texts(raw)
         if _looks_scanned(pages):
             # 任务C：扫描版（页文本空比例 >60%）→ 逐页 OCR；OCR 后仍无文本按空白件明确报错
-            text = _ocr_pdf(raw, on_page=on_ocr_page)
+            text = _ocr_pdf(raw, on_page=on_ocr_page, deadline=deadline)
             if not text.strip():
                 raise ValueError("扫描版PDF需OCR：已完成 OCR 但未识别到任何文字"
                                  "（空白页/纯图片无文字？），请检查文件")
             return text
         return "\n".join(pages)
     if ext in IMAGE_EXTS:  # 任务C：单图上传直接 OCR
+        if deadline is not None and time.monotonic() > deadline:
+            raise ValueError("文档解析超时（图片 OCR 前已超时），请压缩图片后重试")
         return _ocr_single_image(raw)
     # md/txt：尝试 UTF-8，失败回落 GBK（Windows 中文常见）
     try:

@@ -6851,3 +6851,44 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
   "引用源人工审核 + 定期抽检"，本批只做自动化第一道闸；
 - `force=true` 目前仅 API 可用，管理界面未给"复核放行"按钮（后端参数已就绪）；
 - 已入库的历史文档未回溯扫描（如需，可加一次性脚本按 manifest 预览内容重扫并标红）。
+
+## 169. 2026-11-10 评测 04 P1-10（第一步）：文档解析资源上限（OCR 页数 + 解析时限）（第 166 批）
+
+**问题（评测 04 P1-10）**
+
+- 知识库解析（PyMuPDF 渲染 + 逐页 OCR）在请求线程/后台线程里跑，**没有任何上限**：
+  一个上千页的扫描件（或恶意构造 PDF/超大图片）可让单实例 CPU 跑满数小时，
+  期间其它上传排队、同步请求超时；此前只有"PDF 总页数 ≤ PDF_MAX_PAGES"和
+  "提取文本 ≤ 800 万字符"两道闸，OCR 页数与耗时均不受控。
+
+**已做**
+
+1. **配置**（`backend/config.py`）：
+   - `KB_OCR_MAX_PAGES`（默认 200）：扫描版 PDF 的 **OCR 页数**硬上限；
+   - `KB_EXTRACT_TIMEOUT_S`（默认 180s）：单次解析（含 OCR）总时限。
+2. **`kb_ingest.extract_text()`**：按配置计算 `deadline`（monotonic）并向下透传。
+3. **`_ocr_pdf(raw, on_page, deadline)`**（评测 04 P1-10）：
+   - 打开 PDF 后先查页数 → 超限直接 `ValueError("扫描版PDF页数过多：N 页（OCR 上限 M 页）…")`，
+     **一页都不 OCR**（避免先烧 CPU 再报错）；
+   - 每页 OCR 前检查 `deadline` → 超时立即中止并提示"已处理 i/total 页，请拆分"。
+4. **`_extract_text_raw(..., deadline)`**：图片 OCR 前同样检查一次（跨阶段不越界）。
+5. 所有拒绝都是**明确 400/任务 error**（用户看到"请拆分"），不做静默截断——
+   少识别几页比"跑满 CPU 且无人知道"可控。
+
+**验证**
+
+```
+定向：test_kb_parse_limits（假 fitz 驱动）+ test_kb_ingest + test_kb_guard → 42 passed
+  覆盖：超页数在首屏 OCR 前拒绝（OCR 调用 0 次）；超时（deadline 已过）零 OCR 即中止；
+        正常 2 页放行；extract_text 从 settings 计算 deadline；非法配置回落 180s
+全量（不含 e2e）→ 1637 passed / 1 skipped
+```
+
+**遗留**
+
+- 仍是**线程内**限制：PyMuPDF 单页 `get_text()/get_pixmap()` 是 C 调用，无法中途打断；
+  真要"硬隔离"需把解析放进子进程（`multiprocessing`，超时 kill）——第二步再做，
+  须先确认容器镜像内的启动方式与内存开销；
+- 同步上传的 HTTP 等待未加 `wait_for`：加了也杀不掉线程，只是"提前返回假成功/超时"，
+  反而可能重复入库；当前上限已让单请求有界（≤ OCR 页数 × 单页耗时，且总时限兜底）；
+- 并发上限沿用 `_INGEST_SEMAPHORE(2)`（异步路径），同步路径仍受通用请求限流约束。
