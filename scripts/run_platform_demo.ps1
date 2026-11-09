@@ -77,23 +77,41 @@ if ($Stop) {
 # ---------- 运行环境 ----------
 $env:MEDASSIST_ENV = "dev"                 # 必须显式声明：缺省按生产处理会拒绝启动
 $env:JWT_ISSUER = "medassist-auth"
-# 服务间内部令牌：与各服务 application-dev.yml 里的字面值保持一致。
-# 注意 empi 的 dev yml 把 internal-token 写成了字面量（不是占位符），
-# 所以这里必须用同一个值，否则 clinical → empi 的内部调用会被拒。
-$env:INTERNAL_API_TOKEN = "medassist-dev-internal-token"
+
+# 密钥治理（第 129 批）：本脚本**不再内置任何演示密钥字面量**。
+# 两个值都必须来自 .env.local（或当前进程环境变量），缺失即 fail-fast——
+# 静默回落到仓库里的公开值，等于把"能伪造任意身份/调用内部接口"的能力写进版本库。
+$envFile = Join-Path $Root ".env.local"
+
+function Get-EnvValue([string]$Name) {
+    # 进程环境变量优先（CI/容器注入），其次 .env.local
+    $v = [Environment]::GetEnvironmentVariable($Name)
+    if ($v) { return $v.Trim() }
+    if (Test-Path $envFile) {
+        $m = Select-String -Path $envFile -Pattern "^$Name=(.+)$"
+        if ($m) { return $m.Matches[0].Groups[1].Value.Trim() }
+    }
+    return ""
+}
 
 # JWT 密钥：与 Python AI 中台共用，才能做到"一次登录、两边都认"
-$secret = ""
-$envFile = Join-Path $Root ".env.local"
-if (Test-Path $envFile) {
-    $m = Select-String -Path $envFile -Pattern '^AUTH_JWT_SECRET=(.+)$'
-    if ($m) { $secret = $m.Matches[0].Groups[1].Value.Trim() }
-}
+$secret = Get-EnvValue "AUTH_JWT_SECRET"
 if (-not $secret) {
-    $secret = "<dev-jwt-secret>"
-    Write-Host "[WARN] .env.local 未配置 AUTH_JWT_SECRET：Python AI 中台与 Java 平台将无法互通令牌" -ForegroundColor Yellow
+    Write-Host "[FAIL] 未配置 AUTH_JWT_SECRET（.env.local 或环境变量）。" -ForegroundColor Red
+    Write-Host "       该密钥必须与 Python AI 中台一致，否则无法一次登录；且禁止使用仓库内的演示值。" -ForegroundColor Red
+    exit 1
 }
 $env:JWT_SECRET = $secret
+
+# 服务间内部令牌：/internal/** 端点 fail-closed 校验，缺失即拒绝。
+# 同上：必须由 .env.local/环境变量提供，不在脚本里写死。
+$internal = Get-EnvValue "INTERNAL_API_TOKEN"
+if (-not $internal) {
+    Write-Host "[FAIL] 未配置 INTERNAL_API_TOKEN（.env.local 或环境变量）。" -ForegroundColor Red
+    Write-Host "       各 Java 服务与 AI 中台必须使用同一个值，否则内部调用与身份同步会被拒。" -ForegroundColor Red
+    exit 1
+}
+$env:INTERNAL_API_TOKEN = $internal
 
 # EMPI 字段加密与查重盐：**不注入环境变量**，让各服务 application-dev.yml 的
 # 开发默认值生效——数据库里已有的患者密文就是用它加密的，换值会导致无法解密。

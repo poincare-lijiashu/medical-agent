@@ -33,6 +33,11 @@ export const ROLE_NAV = {
   pharmacist: ['overview', 'ask', 'literature', 'rx', 'qc', 'review'],
   admin: ['overview', 'ask', 'kb', 'qc', 'review', 'data', 'agent', 'arch'],
   qc: ['overview', 'ask', 'literature', 'rx', 'qc', 'review'],
+  // 护士：Java 令牌映射为 nurse，**只读**。菜单只放不会写业务数据的视图
+  // （概览/统一问答/文献/影像均为 require_user；开药、会诊、质控、审核需医生/药师/质控角色）。
+  nurse: ['overview', 'ask', 'literature', 'imaging'],
+  // 访客（挂号收费/医保办等非临床角色）：仅公共知识能力，不含任何患者数据。
+  guest: ['ask', 'literature'],
 }
 
 // 角色中文名（legacy 顶栏显示原始 role 码；新壳转中文便于阅读，权限判断始终用 role 码）
@@ -41,4 +46,6 @@ export const ROLE_LABEL = {
   pharmacist: '药师',
   qc: '质控员',
   admin: '管理员',
+  nurse: '护士（只读）',
+  guest: '访客（公共知识）',
 }

@@ -94,17 +94,24 @@ _JAVA_ROLE_MAP = {
     "DOCTOR": "doctor",
     "QC": "qc",
     "PHARMACIST": "pharmacist",
-    # 临床相关：可读患者数据
-    "NURSE": "doctor",
-    "NURSE_MANAGER": "doctor",
-    "TECHNICIAN": "doctor",
-    "CHRONIC_CARE": "doctor",
-    "BLOOD_BANK": "doctor",
-    "HEALTH_EXAM": "doctor",
+    # 临床辅助角色：只读（可看概览/问答/文献/影像，不可写开药/会诊/质控）。
+    # 第 129 批修正：此前这些角色映射成 doctor，等于把**写权限**给了护士/医技，
+    # 与"护士只读"的临床授权模型不符。读写边界见 require_user 的 nurse 分支。
+    "NURSE": "nurse",
+    "NURSE_MANAGER": "nurse",
+    "TECHNICIAN": "nurse",
+    "CHRONIC_CARE": "nurse",
+    "BLOOD_BANK": "nurse",
+    "HEALTH_EXAM": "nurse",
     # 非临床：仅公共知识能力（文献/知识库），不含患者数据
     "REGISTRAR": "guest",
     "INSURANCE_OFFICER": "guest",
 }
+
+# 只读角色允许的**非安全方法**路径前缀（登出/刷新等会话管理必须放行，
+# 否则护士连退出都做不到）。业务写接口一律 403。
+_NURSE_WRITE_ALLOW_PREFIXES = ("/api/v1/auth/",)
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def _identity_from_payload(payload: dict) -> tuple[str, str]:
@@ -160,7 +167,13 @@ def require_user(
     token = _token_from_request(creds, request)
     if not token:
         raise HTTPException(status_code=401, detail="未认证：请先登录 /api/v1/auth/login 获取令牌")
-    return _user_from_token(token)
+    user = _user_from_token(token)
+    # 第 129 批：只读角色（护士/医技）在**入口处**统一拦写操作——
+    # 不必逐个端点核对 require_role，新增写端点也不会漏。会话管理（登出/刷新）放行。
+    if user.get("role") == "nurse" and request.method not in _SAFE_METHODS:
+        if not request.url.path.startswith(_NURSE_WRITE_ALLOW_PREFIXES):
+            raise HTTPException(status_code=403, detail="护士账号为只读权限：不允许执行该操作")
+    return user
 
 
 def _metrics_token_matches(token: str, expected: str) -> bool:
@@ -199,8 +212,13 @@ def require_metrics_access(
 
 
 def require_role(*roles: str):
-    def _dep(user: dict = Depends(require_user)) -> dict:
+    def _dep(request: Request, user: dict = Depends(require_user)) -> dict:
         if roles and user.get("role") not in roles:
+            # 护士只读：读端点（require_role("doctor")）对安全方法放行——写方法已在
+            # require_user 统一 403，因此这里放行不会放大写权限。
+            if (user.get("role") == "nurse" and "doctor" in roles
+                    and request.method in _SAFE_METHODS):
+                return user
             raise HTTPException(status_code=403, detail=f"权限不足：需角色 {list(roles)}")
         return user
     return _dep

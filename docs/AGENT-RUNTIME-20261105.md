@@ -5312,3 +5312,54 @@ GET /internal/users/disabled（带内部令牌）→ 200 {"data":[]}
   下一批引入 `nurse` 只读角色（安全方法放行、写方法 403）。
 - **`guest` 前端体验、演示密钥治理**（`medassist-dev-internal-token` 等开发值）仍在待办。
 
+## 133. 2026-11-09 角色收口与前端体验（第 130 批：护士只读 / 访客可用 / 菜单不再回落医生）
+
+**为什么做**：演示账号进 AI 中台后"能看到医生菜单、点进去全是 403"，观感等同未登录；
+同时 NURSE 等临床辅助角色被映射成 `doctor`，等于把开药/会诊/质控的**写权限**发给了护士。
+本批把角色模型与前端菜单一次对齐。
+
+**已做**
+
+1. **角色映射修正**：`NURSE / NURSE_MANAGER / TECHNICIAN / CHRONIC_CARE / BLOOD_BANK /
+   HEALTH_EXAM` → `nurse`（只读），不再映射 `doctor`；`REGISTRAR / INSURANCE_OFFICER` → `guest`；
+   未知角色 fail-closed 到 `guest`。
+2. **写操作统一收口**：`require_user` 在入口处判断——`nurse` 的非安全方法（POST/PUT/PATCH/DELETE）
+   一律 403，仅放行 `/api/v1/auth/**`（登出/刷新等会话管理）；`require_role` 允许 `nurse`
+   在安全方法下通过 `doctor` 读端点。新增写端点不会漏（不必逐端点核对）。
+3. **前端菜单与路由**：`ROLE_NAV` 新增 `nurse`（概览/问答/文献/影像）与 `guest`（问答/文献）；
+   **未知角色不再回落 `doctor` 菜单**；路由守卫改为回落到"该角色第一个可用页"
+   （修复 guest 被反复打回 `/overview` 的 403 空白页/重定向循环）。
+   guest/nurse 顶栏显示权限说明、隐藏"改密"、跳过审核角标轮询（减少 403 噪音）。
+4. **评测 D1**：补回 legacy 迁移丢失的三条 CSS（`.num` / `ul.feed .t` / `ul.feed .a`），
+   模板里 35 处在用，此前数字全部失去等宽对齐。
+5. **评测 B5**：`data/consults.json`、`data/prescriptions.json` 停止跟踪（`git rm --cached`，
+   本地文件保留），`.gitignore` 补齐含病例原文的三个数据文件。
+6. **密钥治理（演示脚本）**：`scripts/run_platform_demo.ps1` 删除内置的 JWT / 内部令牌字面量，
+   改为从 `.env.local` 或进程环境变量读取；缺失即 **fail-fast** 并给出修复指引。
+7. **修复一个被旧产物掩盖的严重回归（评测 C1 的现场证据）**：第 126 批重写 `main.js`
+   调整启动顺序时，**误删了 `app.use(ElementPlus, { locale: zhCn })`**。旧 `dist` 是删除前
+   构建的，所以演示一直正常；本次按要求重新构建后，登录页所有 `el-*` 组件退化为未解析的
+   自定义元素（只剩标题和裸文字），16 个 e2e 用例全部卡在"找不到用户名输入框"。
+   已补回注册，并给 CI 增加 `frontend-ai` job：**每次都从源码真实构建 frontend-vue**，
+   不再出现"源码坏了但旧产物还能跑"的绿灯。
+
+**真机验证**
+
+```
+cashier1421（REGISTRAR）→ Java 登录 → Python GET /api/v1/auth/me
+    {"username":"cashier1421","role":"guest","dept":""}      ← 不再看到医生菜单
+前端 npm run build 通过（dist 已更新）
+定向测试 tests/test_platform_identity.py 9 passed
+全量：1519 passed / 1 skipped；e2e 重跑 16 passed（修复 Element Plus 注册后全部恢复）
+```
+
+**本批仍未解决（继续登记，不掩盖）**
+
+- **历史提交里的 PHI 仍在**：本批只是停止继续跟踪；彻底清除需 `git filter-repo` +
+  协调所有克隆强推，属于团队决策，未擅自执行。
+- **Java 账号主数据缺科室**（225/238 无 `org_code`）仍未补，需在账号管理侧补齐。
+- **EMPI dev key** 仍写在 `application-dev.yml`（数据库存量密文与之绑定，换值需重加密迁移）；
+  生产必须由 Secret 注入，本地演示值只限本机。
+- **深度内联集成**（开医嘱内联审方、写病历内联质控、患者卡片旁会诊建议）尚未开始；
+  当前仍是"一个入口 + iframe"的过渡形态。
+

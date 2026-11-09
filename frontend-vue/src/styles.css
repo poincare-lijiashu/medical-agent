@@ -96,4 +96,10 @@ ul.feed { list-style: none; margin: 0; padding: 0 }
 ul.feed li { padding: 5px 0; border-bottom: 1px dashed var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline }
 ul.feed li:last-child { border-bottom: 0 }
 ul.feed .e { font-weight: 500; color: var(--ink) }
+/* 第 129 批（评测 D1）：legacy→Vue3 迁移漏掉的三条规则。
+   模板仍在用 class="num"/"a"/"t"（共 35 处），缺规则会让所有数字失去等宽对齐
+   （审核中心置信度列抖动）、概览"最近活动"的操作者不再右对齐。 */
+.num { font-variant-numeric: tabular-nums }
+ul.feed .t { color: var(--ink-3); font-size: 11.5px; font-variant-numeric: tabular-nums; flex: none }
+ul.feed .a { color: var(--ink-3); margin-left: auto; font-size: 12px }
 ol.rules { padding-left: 20px; color: var(--ink-2); line-height: 1.8 }

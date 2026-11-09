@@ -11,6 +11,12 @@ deploy/observability/prometheus/metrics-token
 data/auth/
 data/audit/
 data/review/
+# 含病例原文的业务数据（评测 B5）：此前被跟踪（consults 12 次提交 / prescriptions 16 次），
+# 属于已发生的泄露面。本批起停止跟踪，历史清理另走 git filter-repo 流程（需团队确认后执行）。
+# 注意：文件仍在本地磁盘上（运行时真源/JSON 兜底），只是不再进版本库。
+data/consults.json
+data/prescriptions.json
+data/case_archive.json
 
 # 备份产物（backup.py/restore.py 的 tar.gz 含全量业务数据，严禁入库）
 data/backups/

@@ -60,6 +60,13 @@ function rolesForRoute(name) {
   return Object.keys(ROLE_NAV).filter((role) => ROLE_NAV[role].includes(name))
 }
 
+/** 当前角色的第一个可用入口：用于"无权访问该页"时的落点。
+ *  第 129 批：guest/nurse 没有 overview 权限时，此前一律回落 /overview → 死循环/403 空白页。 */
+function firstAllowedFor(role) {
+  const list = ROLE_NAV[role] || []
+  return list.length ? `/${list[0]}` : ''
+}
+
 // 路由守卫：无 token 一律去 /login（携带回跳地址）；已登录访问 /login 回概览
 // 第 126 批：支持从医院业务控制台（Java 平台）带令牌进入——一次登录、两个系统都认。
 router.beforeEach(async (to) => {
@@ -82,9 +89,14 @@ router.beforeEach(async (to) => {
   if (!to.meta.public && !auth.isLoggedIn) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
-  if (to.name === 'login' && auth.isLoggedIn) return { path: '/overview' }
+  if (to.name === 'login' && auth.isLoggedIn) return { path: firstAllowedFor(auth.role) || '/ask' }
   const allowed = rolesForRoute(to.name)
-  if (allowed.length && !allowed.includes(auth.role)) return { path: '/overview' }
+  if (allowed.length && !allowed.includes(auth.role)) {
+    // 落到该角色真正有权限的第一页（guest → /ask，nurse → /overview）；
+    // 无任何菜单的角色不硬跳（避免死循环），由 AppShell 显示"无可用功能"。
+    const fallback = firstAllowedFor(auth.role)
+    if (fallback && to.path !== fallback) return { path: fallback }
+  }
   return true
 })
 

@@ -13,6 +13,8 @@ import httpx
 import jwt
 import pytest
 from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
+from starlette.requests import Request
 
 from backend.api import deps
 from backend.config import settings
@@ -96,3 +98,44 @@ def test_sync_once_unconfigured_is_noop(monkeypatch):
     monkeypatch.setattr(settings, "platform_auth_base_url", "")
     assert platform_identity.sync_once() is False
     assert platform_identity.check("anyone", "j1") is True
+
+
+# ---------- 角色映射：护士只读 / 非临床 guest ----------
+
+def _req(method: str, path: str) -> Request:
+    return Request({"type": "http", "method": method, "path": path,
+                    "headers": [], "query_string": b"",
+                    "server": ("testserver", 80), "client": ("127.0.0.1", 1234)})
+
+
+def _call_require_user(token: str, method: str, path: str) -> dict:
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    return deps.require_user(_req(method, path), creds)
+
+
+def test_nurse_read_only_blocks_writes():
+    token = _java_token(username="nurse01", roles=("NURSE",))
+    # 读：放行（require_user 本身通过）
+    assert _call_require_user(token, "GET", "/api/v1/medical/overview")["role"] == "nurse"
+    # 写：入口处 403
+    with pytest.raises(HTTPException) as exc:
+        _call_require_user(token, "POST", "/api/v1/medical/prescriptions")
+    assert exc.value.status_code == 403
+    # 会话管理必须放行，否则护士无法登出
+    assert _call_require_user(token, "POST", "/api/v1/auth/logout")["role"] == "nurse"
+
+
+def test_nurse_satisfies_doctor_on_read_only():
+    token = _java_token(username="nurse01", roles=("NURSE",))
+    dep = deps.require_role("doctor")
+    user = _call_require_user(token, "GET", "/api/v1/medical/case-archive/mine")
+    # 直接调用内层依赖：读取端点在安全方法下应放行
+    assert dep(_req("GET", "/api/v1/medical/case-archive/mine"), user)["role"] == "nurse"
+    with pytest.raises(HTTPException) as exc:
+        dep(_req("POST", "/api/v1/medical/qc/record"), user)
+    assert exc.value.status_code == 403
+
+
+def test_non_clinical_and_unknown_roles_map_to_guest():
+    assert deps._user_from_token(_java_token(username="cashier_x", roles=("REGISTRAR",)))["role"] == "guest"
+    assert deps._user_from_token(_java_token(username="mystery_x", roles=("SOMETHING_NEW",)))["role"] == "guest"

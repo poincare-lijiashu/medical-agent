@@ -14,7 +14,12 @@
       <div class="userchip">
         <span>{{ auth.username }}</span>
         <el-tag size="small" effect="plain">{{ roleLabel }}</el-tag>
-        <el-button size="small" text data-testid="topbar-changepwd" @click="openChangePwd">改密</el-button>
+        <!-- 第 129 批：Java 独有账号在 AI 中台没有本地口令，改密只会失败；
+             guest/nurse 直接隐藏，避免"点了报错"的坏体验 -->
+        <el-button
+          v-if="!limitedRole && !readOnlyRole"
+          size="small" text data-testid="topbar-changepwd" @click="openChangePwd"
+        >改密</el-button>
         <el-button size="small" text @click="onLogout">退出</el-button>
       </div>
     </header>
@@ -35,8 +40,15 @@
             :title="b.title"
           >{{ b.n }}</span></RouterLink>
         </template>
+        <div v-if="!railGroups.length" class="rail-note">当前账号无可用功能，请联系管理员分配角色。</div>
       </aside>
       <main class="content">
+        <div v-if="limitedRole" class="role-note">
+          当前为「公共知识」权限：可使用智能问答与医学文献检索。患者数据、开药、质控等临床功能需临床角色。
+        </div>
+        <div v-else-if="readOnlyRole" class="role-note">
+          当前为「只读」权限：可查看概览、问答、文献与影像结果；开药、会诊、质控等写操作不可用。
+        </div>
         <!-- KeepAlive：轮2/3 视图状态跨路由保留（切视图不丢会话历史/表单，等价 legacy 内存态） -->
         <RouterView v-slot="{ Component }">
           <KeepAlive include="AskView,LiteratureView,ImagingView,CaseView,ConsultView,RxView,ReviewCenterView,QcView,KbView,DataView">
@@ -85,13 +97,22 @@ const dirty = useDirtyStore()
 const router = useRouter()
 const route = useRoute()
 
-// 按当前角色过滤菜单（与 legacy ROLE_NAV 相同的 key 列表），空组自动隐藏
+// 按当前角色过滤菜单（与 legacy ROLE_NAV 相同的 key 列表），空组自动隐藏。
+// 第 129 批：未知角色**不再回落 doctor**——此前 guest（挂号收费/医保办）会看到整套医生菜单，
+// 点进去全是 403，正是演示时"登录了却像未登录"的观感来源。现在未知角色给空菜单 + 明确提示。
 const railGroups = computed(() => {
-  const allow = ROLE_NAV[auth.role] || ROLE_NAV.doctor
+  const allow = ROLE_NAV[auth.role] || []
   return NAV_GROUPS
     .map((g) => ({ g: g.g, items: g.items.filter((k) => allow.includes(k)) }))
     .filter((g) => g.items.length > 0)
 })
+
+// 当前角色是否只有公共知识能力（guest）：顶栏给一条明确提示，避免用户以为系统坏了
+const limitedRole = computed(() => auth.role === 'guest')
+// 只读角色（护士）：所有写操作在后端被拒，前端给出文案
+const readOnlyRole = computed(() => auth.role === 'nurse')
+// 角标轮询只对能读审核队列的角色有意义；guest/nurse 轮询会打出一串 403
+const badgeRoles = ['doctor', 'pharmacist', 'qc', 'admin']
 
 const roleLabel = computed(() => ROLE_LABEL[auth.role] || auth.role || '—')
 
@@ -142,6 +163,8 @@ onMounted(() => {
   // 弹浏览器原生确认，防误关/误刷新丢失未保存内容
   window.addEventListener('beforeunload', onBeforeUnload)
   if (!auth.isLoggedIn) return
+  // 第 129 批：guest/nurse 不轮询审核角标（这些端点按角色收口，轮询只会刷 403）
+  if (!badgeRoles.includes(auth.role)) return
   badges.refreshReviewBadge()
   badges.refreshRxBadge()
   badges.loadConfig()
@@ -218,4 +241,25 @@ async function onLogout() {
   font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
 }
 .nav-tag.red { background: #c0392b }
+
+/* 第 129 批：角色受限提示（guest/nurse）——把"看不到功能"的原因讲清楚 */
+.rail-note {
+  margin: 8px 4px;
+  padding: 10px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.role-note {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2, #f6f8f7);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
 </style>
