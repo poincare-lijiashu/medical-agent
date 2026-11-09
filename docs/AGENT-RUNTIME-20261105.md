@@ -5969,3 +5969,51 @@ npm run build（frontend-vue）→ 4.48s 通过
 
 - 轮询仍是 HTTP 轮询（SSE 推送方案未做）；`badges` store 的 4 处视图直写 state 未收编为 action；
 - `cfgFull` 双数据源（store vs `d.flags`）未收敛。
+
+## 148. 2026-11-10 评测 P0-5：frontend-vue lint 与纯函数单测门禁（第 145 批）
+
+**问题（评测 03-frontend-ux P0-5）**
+
+- 生产实际托管的前端只有 Python 侧的"关键字符串必须存在"标记锁——把分页/转义/审计人话的
+  逻辑改坏而不改字符串时，CI 依然全绿；全仓无 ESLint / Vitest / 任何行为测试。
+
+**已做**
+
+1. **ESLint（正确性规则，阻断）**
+   - `frontend-vue/eslint.config.js`：`js.configs.recommended` + `eslint-plugin-vue flat/essential`，
+     浏览器全局变量；**不含格式类规则**（缩进/属性排序/引号），避免一次性 700+ 条噪音。
+   - `package.json` 新增 `npm run lint`（`eslint src`）。
+   - 首次运行仅 4 个真实问题，全部修复：
+     - `KbView` 两个未使用变量（`label`、`txt`）；
+     - `ReviewCenterView` 未使用的 `signNote`；
+     - `ConsultView` 在 `<template>` 上使用 `v-loading`（无效指令）→ 移到 `.page-body` 容器。
+2. **Vitest 纯函数单测（17 例）**
+   - `frontend-vue/tests/unit/utils.test.js`：`esc`/`md`（XSS 转义、粗体/标题/列表/换行/LaTeX）、
+     `confMeta` 阈值、`srcItems`（6 条截断 + PMID 链接）、`splitConsultQuestion`/`splitAiByDept`、
+     `fmtTs`/`detailText` 的非法值兜底、`humanizeAudit`（点号事件/已知动作/未映射兜底不编造）、
+     `fmtLogSize`/`fmtUp`、`scrollContentTop`（可滚动滚 `.content`、窄屏回落文档根）。
+   - 用 `vi.mock('../../src/api')` 隔离 axios/element-plus/router 依赖链，测试 <1s。
+   - `package.json` 新增 `npm run test:unit`（`vitest run`）。
+3. **CI 行为门禁**：`frontend-ai` job 变为 `npm ci → lint → test:unit → build`，从此
+   "源码逻辑坏了但字符串没变"会被拦下。
+4. **回归锁**：`tests/test_ci_gates.py::test_frontend_vue_has_lint_and_unit_test_gates`
+   —— scripts 必须暴露 lint/test:unit、devDependencies 必须钉 eslint/vitest、单测用例 ≥10、
+   CI 的 frontend-ai 内三步顺序必须是 lint → test:unit → build。
+
+**验证**
+
+```
+npm run lint        → 0 problems
+npm run test:unit   → 1 file / 17 tests passed（509ms）
+npm run build       → 6.97s 通过
+yaml.safe_load(ci.yml) → 11 job，frontend-ai 步骤 [npm ci, npm run lint, npm run test:unit, npm run build]
+定向：test_ci_gates + test_frontend_syntax + test_frontend_agent_markers → 72 passed
+真机（doctor01）：/myconsults 13/1 计数、搜索框、13 张卡片正常，无加载遮罩残留，console 0 条
+全量（不含 e2e）→ 1558 passed / 1 skipped
+```
+
+**本批仍未解决**
+
+- i18n（全中文硬编码）与 axe/Lighthouse 可访问性门禁未接；
+- `frontend-console` 已有 vue-tsc，`frontend-vue` 仍无类型检查（JS 项目）；
+- ESLint 的格式类规则（缩进/排序）与 Prettier 未启用。

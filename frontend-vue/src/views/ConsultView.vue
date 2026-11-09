@@ -94,7 +94,7 @@
         <div style="flex: 1"></div>
         <el-button size="small" @click="loadMyConsults">刷新</el-button>
       </div>
-      <div class="page-body">
+      <div class="page-body" v-loading="mineLoading">
         <!-- 第 111 批：服务端关键字过滤（我发起的 + 我参与过的 两侧同口径；300ms 防抖） -->
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 8px">
           <el-input v-model="mineQ" data-testid="consult-mine-q" clearable
@@ -107,7 +107,7 @@
           :description="mineQ.trim()
             ? '没有匹配的会诊记录（当前关键字：' + mineQ.trim() + '）。'
             : '暂无会诊记录。在「多智能体会诊」页填写病例后，可一键「发起真实跨科室会诊」分发给目标科室医生。'" />
-        <template v-else v-loading="mineLoading">
+        <template v-else>
           <h3 v-if="initiated.length" style="margin: 0">我发起的（{{ mineInitTotal }}）</h3>
           <el-card v-for="c in initiated" :key="c.id" shadow="never">
             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">

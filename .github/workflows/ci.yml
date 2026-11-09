@@ -232,6 +232,12 @@ jobs:
           cache-dependency-path: frontend-vue/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # 评测 P0-5：此前 frontend-vue 只有"关键字符串必须存在"的标记锁，
+      # 逻辑改坏但字符串不变时 CI 全绿。lint（正确性规则）与纯函数单测是行为级门禁。
+      - name: Lint (eslint + vue essential)
+        run: npm run lint
+      - name: Unit tests (vitest)
+        run: npm run test:unit
       - name: Production build
         run: npm run build
 

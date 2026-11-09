@@ -783,7 +783,6 @@ const rejectNote = ref('')
 const rejectTarget = ref('')
 const signOn = ref(false)
 const signDec = ref('approved')
-const signNote = ref('')
 const resolving = ref(false)
 
 // resolve：驳回先填原因（可选备注），签发直接确认（F4：备注之后先确认再执行）

@@ -194,13 +194,12 @@ async function uploadKb() {
   uploading.value = true
   let okAny = false
   for (const f of fs) {
-    const label = f.name
     kbMsg.value = '处理中：' + esc(f.name) + ' …'
     if (!/\.(md|txt|pdf)$/i.test(f.name)) { kbMsg.value = esc(f.name) + ' 不支持（仅 .md/.txt/.pdf）'; continue }
     try {
       const b = await readB64(f)
       // 诊断3：先取响应文本再尝试解析 JSON——413 等非 JSON 体也能带上状态码+原因
-      let r, d, txt = ''
+      let r, d
       try {
         r = await http.post('/medical/admin/kb/upload', { name: f.name, data_b64: b }, { silentToast: true })
         d = r.data

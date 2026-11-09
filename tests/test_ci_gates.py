@@ -120,3 +120,30 @@ def test_review_governance_files_exist():
                 os.path.join("ISSUE_TEMPLATE", "bug_report.md")):
         assert os.path.isfile(os.path.join(GITHUB_DIR, rel)), f"缺少 .github/{rel}"
     assert "@medassist-maintainers" in _read(os.path.join(GITHUB_DIR, "CODEOWNERS"))
+
+
+def test_frontend_vue_has_lint_and_unit_test_gates():
+    """评测 P0-5：frontend-vue 必须有 lint 与行为级单测（此前只有字符串标记锁）。
+
+    - package.json 暴露 lint / test:unit；
+    - eslint 配置存在且只选正确性规则（不含格式噪音）；
+    - 纯函数单测文件存在且用例数 >= 10；
+    - CI 的 frontend-ai job 串行执行 lint → test:unit → build。
+    """
+    import json
+    pkg_path = os.path.join(REPO, "frontend-vue", "package.json")
+    with open(pkg_path, encoding="utf-8") as f:
+        pkg = json.load(f)
+    assert "lint" in pkg["scripts"] and "test:unit" in pkg["scripts"]
+    assert any(k == "eslint" for k in pkg["devDependencies"]), "必须声明 eslint"
+    assert any(k == "vitest" for k in pkg["devDependencies"]), "必须声明 vitest"
+    assert os.path.isfile(os.path.join(REPO, "frontend-vue", "eslint.config.js"))
+    test_file = os.path.join(REPO, "frontend-vue", "tests", "unit", "utils.test.js")
+    assert os.path.isfile(test_file), "纯函数单测文件缺失"
+    with open(test_file, encoding="utf-8") as f:
+        body = f.read()
+    assert body.count("it(") >= 10, "单测用例太少，门禁形同虚设"
+    ci = _read(CI)
+    job = ci[ci.index("frontend-ai:"):ci.index("image-build:")]
+    assert "npm run lint" in job and "npm run test:unit" in job
+    assert job.index("npm run lint") < job.index("npm run test:unit") < job.index("npm run build")
