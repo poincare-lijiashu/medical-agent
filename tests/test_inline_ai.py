@@ -126,3 +126,15 @@ async def test_qc_check_can_include_connotation_with_redaction(monkeypatch):
     assert any(d["issue"] == "诊断缺依据" for d in out["defects"])
     # 入模前脱敏：手机号不得原样进入模型输入
     assert "13800138000" not in seen.get("现病史", "")
+
+@pytest.mark.asyncio
+async def test_inline_qc_reports_connotation_unavailable(monkeypatch):
+    """评测 E5：显式请求内涵轨但模型不可用 → 响应标记 connotation_unavailable，不伪装无缺陷。"""
+    def _down(record):
+        raise inline.qc_core.ConnotationUnavailable("llm down")
+
+    monkeypatch.setattr(inline.qc_core, "connotation_check", _down)
+    out = await inline.inline_qc_check(
+        inline.QcCheckReq(fields={"主诉": "头痛 2 天"}, include_connotation=True), _user())
+    assert out["connotation_unavailable"] is True
+    assert out["needs_human_review"] is True

@@ -6237,3 +6237,48 @@ docker exec medagent_pg pg_dump -U medagent --schema public medagent
 - 历史备份产物（旧版全库 dump）仍含其他系统数据，应按保留策略清理并重做一次新版备份；
 - 彻底方案是**独立数据库**（`createdb medagent`）而不是共享实例的 public schema；
 - `tests/test_restore.py` 只做纯函数/命令序列验证，真实恢复演练仍需在隔离库执行。
+
+## 155. 2026-11-10 评测 E5：内涵质量轨不可用不得被当作"零缺陷"自动归档（第 152 批）
+
+**问题（评测 01 P1-5，临床安全语义）**
+
+- `backend/core/qc.py::connotation_check` 的 `except Exception: return []` 把"LLM 没跑成"
+  与"模型跑过且无缺陷"混为一谈；
+- `review_quality` 据此给出 `confidence=0.85`；开启 `QC_AUTO_PASS` 时
+  `backend/api/v1/medical/qc.py` 会走 `auto_pass` 分支——**自动归档病历**。
+  即：模型故障时反而最容易"绿灯放行"，与"宁可人工复核"的安全默认相反。
+
+**已做**
+
+1. **异常显式化**：新增 `ConnotationUnavailable(RuntimeError)`，`connotation_check`
+   在 LLM/解析失败时抛出（空列表从此只代表"跑过且无缺陷"）。
+2. **汇总层降置信**：`review_quality` 捕获后置 `connotation_unavailable=True`，
+   置信固定 `0.45`（低于任何自动放行阈值），`needs_human_review` 保持 True。
+3. **路由双保险**：`/qc/record` 在 `auto_pass` 条件里显式排除
+   `connotation_unavailable`，并在回答中追加
+   「⚠ 内涵质量轨未执行…已强制人工终审」——不把"没查"当"没问题"。
+4. **显式按钮场景**：`inline_qc_check(include_connotation=true)` 捕获该异常，
+   响应新增 `connotation_unavailable` 字段（确定性轨结果照常返回，不伪装完整）。
+5. **回归锁**：
+   - `test_qc_automation.py::test_qc_auto_pass_never_archives_when_connotation_track_unavailable`
+     （开 `QC_AUTO_PASS` + 轨不可用 → status=ok、needs_human_review=True、review_id 非空、
+      置信 ≤0.5、答案含"内涵质量轨未执行"、人工队列 1 条）；
+   - 同文件单测 `test_review_quality_marks_connotation_unavailable`；
+   - `test_inline_ai.py::test_inline_qc_reports_connotation_unavailable`。
+
+**验证**
+
+```
+定向：test_qc_automation + test_inline_ai → 19 passed
+      test_qc_category / test_qc_resubmit / test_qc / test_review_permission → 全部通过
+ruff：All checks passed
+全量（不含 e2e）→ 1567 passed / 1 skipped
+```
+
+**说明**：既有测试里 `connotation_check` 被 monkeypatch 成"返回 []"代表"模型跑过且无缺陷"，
+语义未变；只有真实异常路径才触发新的降级逻辑。
+
+**仍未解决**
+
+- 前端质控结果卡未展示 `connotation_unavailable` 文案（后端已给字段）；
+- ICD/危急值轨的"未启用"与"检查通过"在 UI 上仍靠 note 文案区分。

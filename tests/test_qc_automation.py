@@ -199,3 +199,40 @@ def test_qc_auto_sign_high_risk_still_manual(monkeypatch, tmp_path):
     assert d["needs_human_review"] is True  # 禁忌/高危仍人工双控
     rid = d["review_id"]
     assert rid and review.get(rid)["status"] == "pending"
+
+def test_qc_auto_pass_never_archives_when_connotation_track_unavailable(monkeypatch, tmp_path):
+    """评测 E5：LLM 不可用（内涵轨未执行）不得被当成"零缺陷"自动归档。
+
+    旧行为：connotation_check 异常 → 返回 [] → 置信 0.85 → qc_auto_pass 直接归档病历。
+    新行为：抛 ConnotationUnavailable → 置信 0.45 + 强制入队人工 + 答案显式告知轨未执行。
+    """
+    c, _ = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "qc_auto_pass", True)
+    monkeypatch.setattr(settings, "qc_auto_sign_full", False)
+
+    def _unavailable(record):
+        raise qc_mod.ConnotationUnavailable("llm down")
+
+    monkeypatch.setattr(qc_mod, "connotation_check", _unavailable)
+    tok = _login(c, "doctor01", "Med@2026")
+    r = c.post("/api/v1/medical/qc/record", headers=_h(tok),
+               json={"record": dict(FULL_RECORD)})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "ok"
+    assert d["needs_human_review"] is True
+    assert d["review_id"], "必须入队人工，而不是自动归档"
+    assert d["confidence"] <= 0.5
+    assert "内涵质量轨未执行" in d["answer"]
+    assert len(review.pending()) == 1
+
+
+def test_review_quality_marks_connotation_unavailable(monkeypatch):
+    """单元锁：轨不可用时置信降到 0.45 且带 connotation_unavailable 标记。"""
+    def _unavailable(record):
+        raise qc_mod.ConnotationUnavailable("x")
+    monkeypatch.setattr(qc_mod, "connotation_check", _unavailable)
+    out = qc_mod.review_quality(dict(FULL_RECORD))
+    assert out["connotation_unavailable"] is True
+    assert out["connotation"] == []
+    assert out["confidence"] <= 0.5

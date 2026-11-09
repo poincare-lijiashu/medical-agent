@@ -184,9 +184,15 @@ async def inline_qc_check(req: QcCheckReq, user: dict = Depends(require_user)):
         defects = await asyncio.to_thread(_homepage_completeness, record)
     else:
         defects = await asyncio.to_thread(qc_core.completeness_check, record)
+    connotation_unavailable = False
     if req.profile == "emr" and req.include_connotation and record:
         redacted = {k: _shared.redactor.redact(v) for k, v in record.items()}
-        defects = defects + await asyncio.to_thread(qc_core.connotation_check, redacted)
+        # 评测 E5：内涵轨失败（LLM 不可用）在显式按钮场景下跳过该轨，
+        # 但绝不伪装成"无缺陷"——响应带 connotation_unavailable 供前端如实提示。
+        try:
+            defects = defects + await asyncio.to_thread(qc_core.connotation_check, redacted)
+        except qc_core.ConnotationUnavailable:
+            connotation_unavailable = True
     counts = {k: sum(1 for d in defects if d.get("level") == k) for k in ("高", "中", "低")}
     await _audit(actor, "qc_checked", {"fields": len(record), "defects": len(defects),
                                        "level": _level(defects), "profile": req.profile,
@@ -194,4 +200,5 @@ async def inline_qc_check(req: QcCheckReq, user: dict = Depends(require_user)):
     return {"level": _level(defects), "defects": defects, "counts": counts,
             "profile": req.profile,
             "completeness_pass": not any(d.get("track") == "完整性" for d in defects),
+            "connotation_unavailable": connotation_unavailable,
             "needs_human_review": True, "disclaimer": DISCLAIMER}

@@ -51,8 +51,18 @@ def completeness_check(record: dict) -> list[dict]:
     return defects
 
 
+class ConnotationUnavailable(RuntimeError):
+    """内涵质量轨未能执行（LLM 不可用 / 输出不可解析）。
+
+    评测 E5：此前该轨异常直接返回 []，与"模型跑过且无缺陷"无法区分 →
+    review_quality 给出 0.85 置信，qc_auto_pass 开启时会把病历**自动归档**。
+    现在显式抛出，由调用方降置信并强制人工终审。
+    """
+
+
 def connotation_check(record: dict) -> list[dict]:
-    """内涵质量：主诉/现病史/诊断的一致性与逻辑。LLM Think 两步；失败降级返回空。
+    """内涵质量：主诉/现病史/诊断的一致性与逻辑。LLM Think 两步；**失败抛
+    ConnotationUnavailable**（不再静默返回空列表——空列表只代表"跑过且无缺陷"）。
 
     任务1：category 强制枚举（QC_CATEGORIES），prompt 内给出六维定义；
     解析时经 normalize_category 收敛，非枚举值一律归「其他」。
@@ -82,8 +92,8 @@ def connotation_check(record: dict) -> list[dict]:
                         "level": dd.get("level", "中"), "track": "内涵质量",
                         "category": normalize_category(dd.get("category"))})
         return out
-    except Exception:  # noqa: BLE001
-        return []  # 降级：LLM 不可用则该轨未执行，不影响其它轨
+    except Exception as exc:  # noqa: BLE001 —— LLM/解析任何异常都视为该轨不可用
+        raise ConnotationUnavailable(f"内涵质量轨不可用：{exc}") from exc
 
 
 def icd_check(record: dict, code_table: dict | None) -> dict:
@@ -131,18 +141,26 @@ def critical_value_check(labs: dict, thresholds: dict | None) -> dict:
 def review_quality(record: dict, icd_table=None, thresholds=None, labs=None) -> dict:
     """三轨汇总为 AI 建议（含完整性+内涵缺陷、ICD/危急状态、置信、需人工终审）。"""
     comp = completeness_check(record)
-    con = connotation_check(record)
+    con_err = False
+    try:
+        con = connotation_check(record)
+    except ConnotationUnavailable:
+        con, con_err = [], True  # 评测 E5：轨不可用 ≠ 无缺陷，禁止因此抬高置信/自动归档
     icd = icd_check(record, icd_table)
     crit = critical_value_check(labs or {}, thresholds)
     defects = comp + con
     # 危急值或高危缺陷 → 置信偏低且必须人工终审
     has_critical = bool(crit.get("flags"))
     high = [d for d in defects if d.get("level") in ("高", "危急")]
-    conf = 0.85 if not defects and not has_critical else (0.6 if not high else 0.45)
+    if con_err:
+        conf = 0.45  # 三轨只跑了两轨：低于任何自动放行阈值，强制人工
+    else:
+        conf = 0.85 if not defects and not has_critical else (0.6 if not high else 0.45)
     # 确定性硬伤 = 完整性规则引擎失败项（100% 可解释，QC_AUTO_PASS 开启时用于自动驳回）
     hard_defects = [f"{d['field']}：{d['issue']}" for d in comp]
     return {
         "defects": defects, "completeness": comp, "connotation": con,
+        "connotation_unavailable": con_err,
         "icd": icd, "critical": crit, "has_critical": has_critical,
         "hard_defects": hard_defects, "hard_pass": not hard_defects,
         "confidence": conf, "needs_human_review": True,  # 病历质控终审恒定人工签字

@@ -179,6 +179,9 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
     lines = [f"【病案质控·AI建议】完整性缺 {len(out['completeness'])} 项、内涵缺陷 {len(out['connotation'])} 项；"
              f"ICD {out['icd']['note'] if not out['icd']['enabled'] else '已核对'}；"
              f"危急值 {out['critical']['note'] if not out['critical']['enabled'] else ('标记'+str(len(out['critical']['flags']))+'项')}。"]
+    if out.get("connotation_unavailable"):
+        # 评测 E5：模型不可用时内涵轨没跑——不能把"没查"当"没问题"，必须显式告知并强制人工
+        lines.append("⚠ 内涵质量轨未执行（模型不可用/输出无法解析），本次结论不完整，已强制人工终审。")
     for d in out["defects"][:12]:
         lines.append(f"- [{d['track']}/{d['level']}] {d.get('field','')}：{d.get('issue','')}")
     for f in out["critical"].get("flags", []):
@@ -210,7 +213,10 @@ async def qc_record(req: QcReq, user: dict = Depends(require_user)):
                            confidence=out["confidence"], needs_human_review=False,
                            sources=sources, review_id=None, status="auto_rejected",
                            qc_defects=out["defects"])
-        if out["confidence"] >= 0.85 and not escalated:  # 任务6：escalated 永远进人工，优先于 auto_pass
+        # 评测 E5：内涵轨不可用时置信已降到 0.45，这里再显式短路自动归档，
+        # 避免"模型没跑"被当作"零缺陷"直接归档病历。
+        if (out["confidence"] >= 0.85 and not escalated
+                and not out.get("connotation_unavailable")):  # 任务6：escalated 永远进人工，优先于 auto_pass
             await asyncio.to_thread(_shared.get_audit_logger().write, event_type="qc", action="auto_pass",
                                     actor=actor, payload={"conf": out["confidence"]})
             await _his_push_qc_result("", {"status": "auto_archived",
