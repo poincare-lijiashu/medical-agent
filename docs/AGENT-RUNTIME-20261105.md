@@ -5224,3 +5224,49 @@ iframe 内：MedAssist 临床决策支持工作台，右上角「doctor01 医师
 - **未做**：Java 前端与 AI 前端共用一套设计系统（`DESIGN-SYSTEM.md` 目前只覆盖 console）；
   AI 中台的 14 个视图未按 console 的导航分组重排。
 
+
+## 131. 2026-11-09 演示事故：Java 已登录但 AI 中台显示「未登录」（第 127 批）
+
+**现象（用户实际演示时发生）**：在 Java 医院控制台正常登录并进入「AI 临床助手」，
+iframe 内的 AI 中台却显示未登录 / 无数据，当场演示失败。
+
+**根因（实测数据，不是猜测）**
+| 事实 | 数据 |
+|---|---|
+| Java 平台账号总数 | **238**（来自 `auth_svc.app_user`） |
+| Python 本地用户表账号 | **8**（`data/auth/users.json`：guke/waike01/qc01/jizhen01/admin01/shenjing01/doctor01/neike01） |
+| Java 角色种类 | **12**：ADMIN(74)、DOCTOR(87)、REGISTRAR(37)、INSURANCE_OFFICER(37)、PHARMACIST(2)、QC(1)、NURSE/NURSE_MANAGER/TECHNICIAN/HEALTH_EXAM/CHRONIC_CARE/BLOOD_BANK(0) |
+| 第 126 批的角色映射 | 只有 4 种（ADMIN/DOCTOR/PHARMACIST/QC）+ NURSE |
+
+两处叠加导致：任何 **Java 独有账号**（74 个 ADMIN 里除 admin01 外的、37 个挂号收费员、37 个医保办……）
+进入 AI 中台时，`_user_from_token` 回查本地用户表失败 → **401** → 前端按未登录处理。
+「角色映射只覆盖 4 种」还让 REGISTRAR/INSURANCE_OFFICER 落到无角色分支。
+
+**修复（`backend/api/deps.py`）**
+1. **Java 令牌不再要求本地用户表有记录**：带 `roles` 声明的令牌（Java 签发）只验签 + 读声明；
+   无 `roles` 的（本系统自签）仍要求本地用户存在，被删/停用即 401（fail-closed 不变）。
+2. **角色映射补齐 12 种**：临床类（DOCTOR/NURSE/NURSE_MANAGER/TECHNICIAN/CHRONIC_CARE/
+   BLOOD_BANK/HEALTH_EXAM）→ `doctor`；ADMIN→`admin`；QC→`qc`；PHARMACIST→`pharmacist`；
+   **非临床类（REGISTRAR 挂号收费、INSURANCE_OFFICER 医保办）→ `guest`**。
+3. **未知角色 fail-closed 到 `guest`**，绝不默认给 `doctor`（避免权限放大）。
+
+**真机验证**
+```
+cashier1421（Java 独有，REGISTRAR）→ Python /api/v1/auth/me → 200
+    {"username":"cashier1421","role":"guest","dept":""}     ← 修复前是 401
+admin01（本地表有）→ 200 {"username":"admin01","role":"admin","dept":"医务处"}
+doctor01 → 200 {"doctor01","doctor","口腔科"}
+定向测试 40 passed（auth / auth_cookie / security / rate_limit_identity / metrics_auth）
+```
+
+**本批仍未解决（继续登记，不掩盖）**
+- **`dept` 为空的数据范围问题**：本地表没有的账号（如 87 个 DOCTOR 中的绝大多数）`dept=""`，
+  进入 AI 中台后按"无科室"处理，患者列表/待审等会**看不到数据**（安全上正确，体验上仍需补）。
+  正解是"科室编码统一"：从 Java `auth_svc.dept` 建立 username→中文科室映射，
+  或让 Java 令牌直接携带科室中文名（下批做）。
+- **`guest` 的前端体验未做**：现在能登录，但菜单仍按角色过滤，`guest` 会被重定向到概览后拿到 403；
+  需要给 guest 一套「仅公共知识检索（文献/知识库）」的菜单与提示。
+- **撤销仍不同步**：Java 停用账号后，Python 最长受令牌 30min TTL 约束。
+- **演示建议（临时）**：给客户演示时请用 `doctor01` / `admin01`（本地表有、科室完整）；
+  其余 236 个账号能登录但数据范围受限，这是下一批要修掉的。
+

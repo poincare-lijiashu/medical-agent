@@ -80,17 +80,29 @@ def ensure_not_revoked(username: Optional[str], iat: float) -> None:
 # 第 126 批：统一身份。Java 医院平台（platform/auth）是唯一签发方时，其令牌载荷形如
 #   {sub: 账号UUID, username: "doctor01", roles: ["DOCTOR"], permissions: [...], org, jti}
 # 与 Python 自签令牌的 {sub: "doctor01", role: "doctor"} 结构不同，但**同一 HS256 密钥**。
-# 这里做载荷兼容：优先取 username 声明，并把 Java 角色码映射到本系统的角色枚举。
-# 安全边界：验签通过即视为可信（同一密钥），但仍回查本地用户表确认账号存在——
-# Java 侧停用账号不会实时同步到本进程，这一缺口由"回查用户表"部分兜住（见台账 §130 边界）。
+#
+# 第 127 批（演示事故修复）：Java 有 238 个账号 / 12 种角色，本地用户表只有 8 个账号；
+# 此前"回查本地用户表失败即 401"导致任何 Java 独有账号进入 AI 中台都显示"未登录"。
+# 现改为：**Java 签发的令牌不再要求本地用户表有记录**（Java 是唯一身份源），
+# 本地表只用于补充业务属性（中文科室名）。
+#
+# 角色映射原则：临床类角色给读权限；非临床类（挂号收费/医保办）映射为 guest——
+# 可以进系统用公共知识能力，但拿不到患者数据（宁可 403，不做权限放大）。
 _JAVA_ROLE_MAP = {
     "ADMIN": "admin",
     "DOCTOR": "doctor",
-    "PHARMACIST": "pharmacist",
     "QC": "qc",
-    # 护理/住院处等角色在 AI 中台没有独立能力域：演示期按 doctor 只读处理，
-    # 生产接入前应补一张显式的角色映射矩阵（不要靠默认分支放行）。
+    "PHARMACIST": "pharmacist",
+    # 临床相关：可读患者数据
     "NURSE": "doctor",
+    "NURSE_MANAGER": "doctor",
+    "TECHNICIAN": "doctor",
+    "CHRONIC_CARE": "doctor",
+    "BLOOD_BANK": "doctor",
+    "HEALTH_EXAM": "doctor",
+    # 非临床：仅公共知识能力（文献/知识库），不含患者数据
+    "REGISTRAR": "guest",
+    "INSURANCE_OFFICER": "guest",
 }
 
 
@@ -102,7 +114,8 @@ def _identity_from_payload(payload: dict) -> tuple[str, str]:
         roles = payload.get("roles") or []
         if isinstance(roles, str):
             roles = [roles]
-        role = _JAVA_ROLE_MAP.get(str(roles[0]).upper()) if roles else None
+        # 未知角色 fail-closed 到 guest（绝不默认给 doctor，避免权限放大）
+        role = _JAVA_ROLE_MAP.get(str(roles[0]).upper(), "guest") if roles else None
     return username, str(role or "")
 
 
@@ -118,12 +131,17 @@ def _user_from_token(token: str) -> dict:
     except (TypeError, ValueError):
         iat = 0.0
     ensure_not_revoked(username, iat)
-    u = get_user(username)
-    if not u:  # 撤销表为进程内存态，重启后丢失：回查用户表兜底（fail-closed）
+    u = get_user(username) or {}
+    # 第 127 批：Java 平台的 238 个账号不可能都同步进本地 8 条用户表，
+    # 因此**Java 签发的令牌（带 roles 声明）不再要求本地表有记录**；
+    # 本系统自签令牌仍要求本地用户存在（被删/停用即失效，fail-closed）。
+    if not u and "roles" not in payload:
         raise HTTPException(status_code=401, detail="账号不存在或已停用")
-    # Java 令牌的科室在 org/depts 声明里；本系统用 users.dept（中文科室名）做数据范围，
-    # 两者编码体系不同，这里只以本地用户表为准，避免把 UUID 当科室名用。
-    return {"username": username, "role": role or u.get("role"), "dept": u.get("dept", "")}
+    # 科室：Java 用 org/depts(UUID)，本系统用 users.dept(中文名)。查不到本地用户时留空，
+    # 由数据范围逻辑按"无科室=无患者数据"处理（宁可少看，不可越权多看）。
+    return {"username": username,
+            "role": role or u.get("role") or "guest",
+            "dept": u.get("dept", "") or ""}
 
 
 def require_user(
