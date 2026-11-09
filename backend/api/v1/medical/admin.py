@@ -15,7 +15,7 @@ from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.audit import (_audit_filters, _audit_page,  # noqa: F401
                                           _audit_window)
 from backend.config import settings
-from backend.core import llm_config, runtime_flags
+from backend.core import llm_config, log_redact, runtime_flags
 from backend.core import pg_store
 from backend.core import medical_review as review
 
@@ -370,7 +370,9 @@ def _read_log_tail(n: int) -> tuple[str, list[str], str, dict]:
     if window < size and all_lines:
         all_lines = all_lines[1:]  # 丢弃窗口起点处可能被截断的残行
     prefix = f"多进程日志 {os.path.basename(path)}；" if multi else ""
-    return path, all_lines[-n:], f"{prefix}共 {min(len(all_lines), n)} 行（最新在底部）", meta
+    # 评测 04 P1-3：日志文件保持原样，但**下发给浏览器**前掩码口令/令牌/Key/身份证/手机号
+    tail = log_redact.redact_lines(all_lines[-n:])
+    return path, tail, f"{prefix}共 {min(len(all_lines), n)} 行（最新在底部）", meta
 
 
 @router.get("/admin/logs")
@@ -380,7 +382,8 @@ async def admin_logs(lines: int = 200, user: dict = Depends(require_role("admin"
     本批次新增日志健康卡元数据：path（绝对路径）/ size_bytes / exists / total_lines，
     与既有 file/lines/note 并存（向后兼容）。安全边界：只读主日志文件（app.log），
     不提供任何下载/删除/执行能力；日志内容可能含用户输入，前端必须逐行 esc() 后
-    渲染（防注入）。文件不存在/未启用返回提示不报错。
+    渲染（防注入）。返回前统一脱敏（评测 04 P1-3）：口令/令牌/API Key/身份证/手机号
+    掩码，键名与上下文保留，仍可排障。文件不存在/未启用返回提示不报错。
     """
     n = max(1, min(int(lines or 200), 500))
     try:

@@ -6733,3 +6733,39 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - 聚合计数（待核/已核/事件总数）仍对全员可见：属"量级信息"，不含个体；如需再收紧可按
   角色返回 null 并让前端显示"—"；
 - 概览未做 per-role 的审计**留痕**（读操作本身不写审计），如合规要求"谁看了概览"需另加。
+
+## 166. 2026-11-10 评测 04 P1-3：/admin/logs 下发前脱敏（第 163 批）
+
+**问题（评测 04 P1-3）**
+
+- `/medical/admin/logs` 把 `logs/app.log` 尾部**原文**返回给浏览器：日志里可能有
+  `password=`、`Authorization: Bearer …`、厂商 API Key、JWT，以及患者身份证/手机号。
+  日志文件本身（本地磁盘、仅运维可读）应保留完整信息，但 HTTP 响应是另一条通道。
+
+**已做**
+
+1. 新模块 `backend/core/log_redact.py`（纯函数、可复用）：
+   - 键值对掩码：password/passwd/pwd/token/secret/api_key/apikey/authorization/cookie/
+     access_token/refresh_token/client_secret（保留键名与分隔符，只替换值）；
+   - `Bearer <token>`、JWT（`eyJ....`）、厂商 Key（`sk-/ak-/pk-`）；
+   - 身份证 18 位（保留前 6 位地区码 + 后 4 位，掩码出生日期段）、手机号（保留前 3 后 4）；
+   - 顺序：先 Bearer 再键值对（否则 `Authorization: Bearer` 的方案词会被当值吃掉）；
+   - **幂等**：对已脱敏文本重复处理结果不变。
+2. `_read_log_tail()` 出口统一 `redact_lines()`：端点、健康卡元数据与行数/行序全部不变，
+   文件本身不改写（排障仍可用原始日志）。
+3. **回归锁**（`tests/test_log_redact.py` 6 条）：键值对保留键名、Bearer/JWT/厂商 Key、
+   身份证/手机号保留可核对片段、普通日志行零改动、幂等、顺序与行数保持、`_read_log_tail`
+   出口真的接入。
+
+**验证**
+
+```
+定向：test_log_redact + test_admin_logs → 14 passed
+全量（不含 e2e）→ 1609 passed / 1 skipped
+```
+
+**遗留**
+
+- 患者姓名无法用正则识别：如需"日志不含姓名"，只能在写入侧收敛（禁止把病例原文写日志）；
+- 该脱敏只作用于 `/admin/logs` 出口；其他导出/下载通道如新增，需复用同一函数；
+- 前端仍按逐行 esc() 渲染（防注入），与本批脱敏互补。
