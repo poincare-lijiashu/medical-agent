@@ -5575,5 +5575,47 @@ runtime_flags：qc_auto_sign_full false（JSON+PG 双写已重置）；full_mode
 - 境内 MaaS（如百炼）是否满足院方"数据不出院"要求仍需院方法律意见（代码只保证"不出境"）；
 - C2–C5（CI 镜像/helm 门禁/e2e PHI 污染/lint 与分支保护）仍待办。
 
+## 139. 2026-11-09 评测 C2/C3/C4：helm 生产门禁转绿 + 镜像构建入 CI + e2e 数据隔离（第 136 批）
+
+**已做**
+
+1. **C2 helm 生产门禁**（评测 06 P0-1）
+   - 根因：`values-prod.yaml` 未覆盖 Java 服务镜像 tag，继承 `values.yaml` 的
+     `0.1.0-SNAPSHOT`；`_helpers.tpl` 对非 dev 环境 fail-closed 拒绝 SNAPSHOT →
+     `helm template -f values-prod.yaml` 必红。
+   - 给 gateway/auth/empi/clinical/pharmacy/material/tech/emr/insurance/kb 十个服务
+     显式钉 `tag: "1.0.0"`（不可变）；`auditArchive` 模板 tag 为空会回落
+     `Chart.AppVersion=0.1.0-SNAPSHOT`，同样在 prod 显式覆盖为 `1.0.0`。
+2. **C3 交付镜像进入 CI**（评测 05 P0-2）
+   - `requirements.txt` 补 `PyJWT==2.13.0`：此前仅靠传递依赖安装，全新环境
+     `import jwt` 必崩，而单测环境恰好有传递依赖 → CI 永远发现不了。
+   - `.github/workflows/ci.yml` 新增 `image-build` job：`docker/build-push-action`
+     真实构建 Dockerfile（不推送，gha 缓存），把"镜像装不起来"挡在合并前。
+3. **C4 e2e 数据污染**（评测 05 P0-3）
+   - `tests/conftest.py` 新增 autouse `_isolate_consults_and_prescriptions`：
+     会诊/处方 JSON 真源默认指向 tmp_path。此前 e2e 与未显式 monkeypatch 的用例会
+     覆盖 `data/consults.json`、`data/prescriptions.json`（真实病例文本），既污染本地
+     演示数据，也让 B5 "停止跟踪 PHI 文件"的防线在本地形同虚设。
+4. **测试**：跑处方/会诊两组用例后，`data/consults.json`、`data/prescriptions.json`
+   的 LastWriteTime 均未变化（隔离生效）。
+
+**真机验证**
+
+```
+values-prod.yaml YAML 解析通过；12 个镜像位（10 服务 + aiCore 继承 0.1.0 + auditArchive）
+  仅 aiCore 继承且非 SNAPSHOT，prod 覆盖中 SNAPSHOT 数 = 0
+tests：test_consults/prescriptions/pg_consults_lists/ci_gates/deploy_observability/
+       grafana_helm_assets/e2e_runner/e2e_api_smoke → 104 passed / 1 skipped
+数据隔离：跑 60 个处方/会诊用例 → data/consults.json、data/prescriptions.json 未变
+全量（不含 e2e）→ 1541 passed / 1 skipped（2 分 50 秒）
+```
+
+**本批仍未解决**
+
+- 本地无 helm 可执行文件，未在本机实跑 `helm template`；CI 的 helm job 会真实执行
+  （静态 YAML + SNAPSHOT 检查已在本机验证）。
+- A3 审计 `event_type` 语义、C5（lint/漏洞扫描/分支保护）、D 系列前端体验仍在清单。
+
+
 
 

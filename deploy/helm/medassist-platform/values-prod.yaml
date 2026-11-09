@@ -79,6 +79,9 @@ internalAuth:
 
 gateway:
   replicaCount: 3
+  # 评测 06 P0-1（C2）：生产禁止 SNAPSHOT，且必须显式钉住不可变 tag——此前依赖
+  # values.yaml 的 0.1.0-SNAPSHOT，`helm template values-prod.yaml` 直接被 _helpers 拦成红。
+  image: {repository: platform-gateway, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     # Ingress-nginx 与节点均位于集群内网段：只有这些来源的 XFF 才可信（M3）。
     # 若 Ingress 使用独立网段，请按实际收窄，不要直接沿用示例。
@@ -92,6 +95,7 @@ gateway:
 
 auth:
   replicaCount: 2
+  image: {repository: platform-auth, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     # 生产禁止 baseline：schema 漂移必须让迁移失败，而不是被静默标记为已迁移（S9）
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
@@ -103,6 +107,7 @@ auth:
 
 empi:
   replicaCount: 2
+  image: {repository: platform-empi, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -113,6 +118,7 @@ empi:
 
 clinical:
   replicaCount: 3
+  image: {repository: platform-clinical, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -123,6 +129,7 @@ clinical:
 
 pharmacy:
   replicaCount: 2
+  image: {repository: platform-pharmacy, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -133,6 +140,7 @@ pharmacy:
 
 material:
   replicaCount: 2
+  image: {repository: platform-material, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -143,6 +151,7 @@ material:
 
 tech:
   replicaCount: 2
+  image: {repository: platform-tech, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -153,6 +162,7 @@ tech:
 
 emr:
   replicaCount: 2
+  image: {repository: platform-emr, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -163,6 +173,7 @@ emr:
 
 insurance:
   replicaCount: 2
+  image: {repository: platform-insurance, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -173,6 +184,7 @@ insurance:
 
 kb:
   replicaCount: 2
+  image: {repository: platform-kb, tag: "1.0.0", pullPolicy: IfNotPresent}
   env:
     - {name: FLYWAY_BASELINE_ON_MIGRATE, value: "false"}
   resources:
@@ -180,6 +192,11 @@ kb:
     limits: {cpu: "2", memory: 1536Mi}
   autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPUUtilizationPercentage: 65}
   podDisruptionBudget: {enabled: true, minAvailable: 1}
+
+# 审计归档 CronJob：模板 tag 为空时回落 Chart.AppVersion（当前为 0.1.0-SNAPSHOT），
+# 生产必须显式钉住不可变版本，避免"发布成功但镜像没换"。
+auditArchive:
+  image: {repository: medassist-platform, tag: "1.0.0", pullPolicy: IfNotPresent}
 
 aiCore:
   enabled: true

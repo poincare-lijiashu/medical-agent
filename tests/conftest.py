@@ -188,6 +188,22 @@ def _isolate_review_queue_and_audit(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_consults_and_prescriptions(tmp_path, monkeypatch):
+    """评测 05 P0-3（C4）：会诊/处方 JSON 真源此前无全局隔离。
+
+    e2e（tests/e2e 与 tests/test_e2e_*.py）跑完会覆盖 `data/consults.json` /
+    `data/prescriptions.json`（含真实病例文本），既污染本地演示数据，也让"仓库里是否
+    跟踪 PHI 文件"的门禁失去意义（B5 已停止跟踪，但本地真源仍会被写脏）。
+    与 users/review_queue/case_archive 同模式：默认指向 tmp_path；测试自身 monkeypatch
+    在其后生效，语义不变。"""
+    from backend.core import consults, prescriptions
+    monkeypatch.setattr(consults, "CONSULTS_FILE", str(tmp_path / "consults.json"))
+    monkeypatch.setattr(prescriptions, "PRESCRIPTIONS_FILE",
+                        str(tmp_path / "prescriptions.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_consult_metrics():
     """评审 05-S11：``consult_metrics`` 是模块级可变计数，此前由两个测试文件各自
     定义 ``_reset_metrics`` 规避，其余文件只写不读——顺序一变，精确计数断言就会翻车。

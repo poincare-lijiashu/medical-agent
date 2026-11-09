@@ -13,6 +13,8 @@
 # - migration-lint：迁移安全门禁——拦截新迁移里的阻塞式 NOT NULL（G73，评审 §6.15）。
 # - helm：部署清单静态校验（helm lint + 三环境 template + compose 叠加层 config），
 #   不依赖集群，几十秒内可拦住 95% 的清单错误。
+# - image-build：真实构建交付镜像（不推送）——评测 05 P0-2（C3）：此前 CI 不构建镜像，
+#   requirements 缺 PyJWT 这类"全新环境才炸"的问题永远发现不了。
 
 name: CI
 
@@ -165,6 +167,24 @@ jobs:
         run: npm ci
       - name: Production build
         run: npm run build
+
+  image-build:
+    # 评测 05 P0-2（C3）：交付镜像是 Dockerfile + requirements.txt 的真实组合，纯单测
+    # 发现不了"缺依赖/系统库"（PyJWT 缺失即典型）。只构建不推送，失败即红。
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: medassist-ai-core:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   helm:
     # 部署清单静态校验：无需集群，防止 values/模板漂移进入主干
