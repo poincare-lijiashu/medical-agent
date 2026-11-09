@@ -145,12 +145,13 @@
 // 状态语义对齐 legacy：QC_LABELS 七栏/重提上下文 qcResubmitOf/qcLastDefects+维度过滤/
 // 三档分流徽标；重提预填 meta.record（中文键与 QC_LABELS 一致）+meta.labs，签名栏不回填；
 // 仅确有预填内容才提示"已预填"（旧版条目未留档如实提示手动填写，不谎报）。
-import { computed, defineOptions, onMounted, reactive, ref } from 'vue'
+import { computed, defineOptions, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api'
 import { md, fmtTs, detailText } from '../utils/assist'
 import EmptyState from '../components/EmptyState.vue'
 import { useAuthStore } from '../stores/auth'
+import { useDirtyStore } from '../stores/dirty'
 
 defineOptions({ name: 'QcView' })
 
@@ -170,6 +171,14 @@ const qcOut = ref(null)
 const qcErr = ref('')
 const qcLastDefects = ref([])
 const catFilter = ref('全部')
+
+// 评测 P1-3：质控工作台脏标记（此前只覆盖 rx，SPA 内切页会静默丢失 20 分钟输入）。
+// 判定：粘贴原文 / 检验值 / 7 栏任一有内容（签名栏是自动填的账号，不计入）。
+const dirty = useDirtyStore()
+watch([qcPaste, qcLabs, () => fields.slice(0, 6).join('\u0000')], () => {
+  dirty.qc = !!qcPaste.value.trim() || !!qcLabs.value.trim()
+    || fields.slice(0, 6).some((v) => String(v || '').trim())
+}, { immediate: true })
 
 // ---- 重提上下文（resubmit_of 随下次运行质控一并提交） ----
 const resubmitOf = ref(null)

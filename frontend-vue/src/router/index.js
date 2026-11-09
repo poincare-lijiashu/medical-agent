@@ -5,7 +5,9 @@
 // 首屏单 JS 1348KB raw / 434KB gzip；懒加载后登录页/概览只下载自己需要的 chunk。
 // 布局壳与登录页保留静态（首屏立即需要），其余按路由分包。
 import { createRouter, createWebHistory } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
+import { useDirtyStore } from '../stores/dirty'
 import { ROLE_NAV } from '../constants/nav'
 import AppShell from '../layouts/AppShell.vue'
 import LoginView from '../views/LoginView.vue'
@@ -106,3 +108,21 @@ router.beforeEach(async (to) => {
 })
 
 export default router
+
+// 评测 P1-3：SPA 内路由跳转的未保存内容拦截（beforeunload 只覆盖关页/刷新）。
+// 覆盖 rx 工作台与质控工作台；登出/去登录页不拦（登出本身要能完成）。
+router.beforeEach(async (to, from) => {
+  if (to.name === 'login') return true
+  if (to.path === from.path) return true
+  const dirty = useDirtyStore()
+  if (!dirty.hasUnsaved) return true
+  try {
+    await ElMessageBox.confirm('当前页面有未保存内容，离开将丢失。确认离开？', '未保存内容', {
+      type: 'warning', confirmButtonText: '离开', cancelButtonText: '留在本页',
+    })
+    dirty.reset()
+    return true
+  } catch {
+    return false
+  }
+})

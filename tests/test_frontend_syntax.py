@@ -993,3 +993,27 @@ def test_empty_and_error_states_are_shared_components():
     assert 'class="src">⚠' not in src, "裸文本错误不得回潮"
 
 
+# ---- 评测 P1-2/P1-3：未保存内容拦截 + 可见性感知轮询 ----
+
+def test_unsaved_guard_covers_qc_and_router_navigation():
+    """质控工作台也必须进未保存拦截（此前只覆盖 rx），且要拦 SPA 内路由跳转。"""
+    dirty = (VUE_SRC / "stores" / "dirty.js").read_text(encoding="utf-8")
+    assert "qc: false" in dirty and "reset()" in dirty
+    assert "!!s.rx || !!s.qc" in dirty
+    qc = (VUE_SRC / "views" / "QcView.vue").read_text(encoding="utf-8")
+    assert "useDirtyStore" in qc and "dirty.qc =" in qc
+    router = (VUE_SRC / "router" / "index.js").read_text(encoding="utf-8")
+    assert "dirty.hasUnsaved" in router
+    assert "ElMessageBox.confirm" in router
+    assert "dirty.reset()" in router
+
+
+def test_badge_polling_is_visibility_aware():
+    """后台标签页不得继续轮询（此前 60s 固定 × 4–5 请求，与业务请求抢限流窗口）。"""
+    shell = (VUE_SRC / "layouts" / "AppShell.vue").read_text(encoding="utf-8")
+    assert "visibilitychange" in shell
+    assert "document.visibilityState === 'visible'" in shell
+    assert "const POLL_MS = 90_000" in shell
+    assert "setInterval(() => badges.poll(), 60_000)" not in shell
+
+

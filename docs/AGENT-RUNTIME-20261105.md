@@ -5930,3 +5930,42 @@ npm run build（frontend-vue）→ 4.71s 通过
 - 15 处 `el-card v-if="xxxErr"` + `el-alert` 的错误态（ReviewCenter/Consult/Rx/Imaging/Case）
   尚未统一为 `ErrorState`；
 - E6（AI 中台单副本/RWO/Recreate 单点）仍未立项处理。
+
+## 147. 2026-11-09 评测 P1-2/P1-3：未保存内容拦截 + 可见性感知轮询（第 144 批）
+
+**问题（评测 03-frontend-ux P1-2 / P1-3）**
+
+- `dirty` store 只有 `rx` 一个字段：质控工作台填了 7 栏病历 + 粘贴原文 + 检验值后，SPA 内切页
+  **静默丢弃**（`beforeunload` 只覆盖关页/刷新，不覆盖 vue-router 跳转）——临床数据丢失风险；
+- 角标轮询是无条件 60s 固定频率（`badges.poll()` 最多 4–5 请求/分钟），后台标签页照跑；
+  医院多账号共用出口 IP 时与业务请求抢同一个 60 次/分钟限流窗口。
+
+**已做**
+
+1. **dirty store 扩展**：`{ rx, qc }` + `hasUnsaved = rx || qc` + `reset()` action。
+2. **QcView 同步脏标记**：`watch([qcPaste, qcLabs, 七栏拼接])`，任一非空即 `dirty.qc = true`
+   （签名栏自动填账号，不计入）。
+3. **路由守卫拦截 SPA 内跳转**：`router.beforeEach` 在 `dirty.hasUnsaved` 时弹
+   `ElMessageBox.confirm('当前页面有未保存内容，离开将丢失。确认离开？')`；
+   「留在本页」→ 返回 false 停留、「离开」→ `dirty.reset()` 后放行；去登录页/登出不拦（登出必须能完成）。
+4. **轮询改为可见性感知**：页面隐藏时 `clearInterval`，回到前台 `poll()` 一次并重建；
+   周期 60s → 90s（待办数是分钟级语义），`onUnmounted` 注销 `visibilitychange`。
+5. **回归锁**：`tests/test_frontend_syntax.py` 新增
+   - `test_unsaved_guard_covers_qc_and_router_navigation`（store/router/QcView 三处）；
+   - `test_badge_polling_is_visibility_aware`（必须监听 visibilitychange、周期 90s、
+     禁止回退到 `setInterval(... 60_000)`）。
+
+**真机验证**（admin01）
+
+```
+/qc 主诉输入「测试主诉」→ 点「概览」：弹出「未保存内容 / 当前页面有未保存内容，离开将丢失。确认离开？」
+  点「留在本页」：仍在 /qc，主诉值保留
+  再点「概览」→「离开」：跳转 /overview，遮罩关闭、无残留
+定向：test_frontend_syntax + test_frontend_agent_markers → 62 passed
+npm run build（frontend-vue）→ 4.48s 通过
+```
+
+**本批仍未解决**
+
+- 轮询仍是 HTTP 轮询（SSE 推送方案未做）；`badges` store 的 4 处视图直写 state 未收编为 action；
+- `cfgFull` 双数据源（store vs `d.flags`）未收敛。

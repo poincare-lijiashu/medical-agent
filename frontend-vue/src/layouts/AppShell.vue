@@ -155,26 +155,50 @@ watch(() => route.name, (nv, ov) => {
   if (ov === 'rx' && nv !== 'rx') badges.refreshRxBadge()
 })
 
-// 登录态下：首刷角标 + 60s 定时轮询（任务⑦；legacy 仅登录/切视图刷新，轮3 补定时轮询）
+// 登录态下：首刷角标 + 定时轮询（任务⑦；legacy 仅登录/切视图刷新，轮3 补定时轮询）
+// 评测 P1-2：此前是无条件 60s 固定轮询（最多 4–5 请求/分钟），后台标签页也照跑，
+// 医院多账号共用出口 IP 时会与业务请求抢同一个 60 次/分钟限流窗口。
+// 现改为：① 页面隐藏即停表；② 回到前台补一次并重建；③ 周期放宽到 90s（待办数分钟级延迟无感）。
 let timer = null
+const POLL_MS = 90_000
+
+function startPolling() {
+  if (timer) clearInterval(timer)
+  timer = setInterval(() => {
+    if (document.visibilityState === 'visible') badges.poll()
+  }, POLL_MS)
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    badges.poll()
+    startPolling()
+  } else if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
 onMounted(() => {
   // T3 beforeunload 防误关（矩阵 A-7 补齐，legacy app.js beforeUnloadGuard 语义迁移）：
   // 登录状态下存在进行中操作（rx 工作台病例文本非空或已选药单非空）→ preventDefault
   // 弹浏览器原生确认，防误关/误刷新丢失未保存内容
   window.addEventListener('beforeunload', onBeforeUnload)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   if (!auth.isLoggedIn) return
   // 第 129 批：guest/nurse 不轮询审核角标（这些端点按角色收口，轮询只会刷 403）
   if (!badgeRoles.includes(auth.role)) return
   badges.refreshReviewBadge()
   badges.refreshRxBadge()
   badges.loadConfig()
-  // consult 徽标实时化由 poll() 承载（60s 轮询；silent=1 读操作降噪——后端跳过
+  // consult 徽标实时化由 poll() 承载（90s 轮询；silent=1 读操作降噪——后端跳过
   // list_inbox 审计写入，不再制造审计噪音；进审核中心/收件箱刷新点仍走业务审计）
-  timer = setInterval(() => badges.poll(), 60_000)
+  startPolling()
 })
 onUnmounted(() => {
   if (timer) clearInterval(timer)
   window.removeEventListener('beforeunload', onBeforeUnload)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 
 // T3：离开页面前守卫——returnValue 置非空串才会触发浏览器原生「确定要离开？」确认框
