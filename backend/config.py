@@ -203,12 +203,13 @@ class Settings(BaseSettings):
     # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN / QC_AUTO_SIGN_FULL 均可被同名环境变量覆盖）
     qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审
     qc_auto_sign: bool = True   # True：药物中危规则库提示自动签发（AI·阈值自动留痕）；高危/禁忌仍人工双控
-    # 任务3 留痕模式（默认 True）：全部 ask 类响应无条件入 review_queue 并立即自动签发
+    # 留痕模式（评测 04 P0-4：默认关闭）：开启后全部 ask 类响应无条件入 review_queue 并立即自动签发
     # （reviewed_by=「AI·留痕模式(自动)」，含 LLM 自由文本高危——全部自动，医生侧不阻塞；
     # 低置信/高危项由提交医生知情确认）。运行中可经 admin「留痕模式」开关卡即时切换
     # （backend/core/runtime_flags.py：flags 文件优先于本启动值）。显式设 False 恢复旧语义
-    # （仅高危入队 + 人工双控）。默认值由 False 改 True 属任务3 显式行为变更。
-    qc_auto_sign_full: bool = True
+    # （仅高危入队 + 人工双控）。评测 04 P0-4：商业版默认 False（高危结论必须人工双核；
+    # 院方合规确认后显式设 QC_AUTO_SIGN_FULL=true 或经 admin 开关开启，SOP 见 docs/DEPLOY.md）。
+    qc_auto_sign_full: bool = False
 
     # HIS 对接适配器（批2 任务2，backend/integration）：none=未对接（默认，NullAdapter 空转）；
     # demo=内存假数据（演示/联调）；对接真实医院时填厂商标识（registry.register_adapter

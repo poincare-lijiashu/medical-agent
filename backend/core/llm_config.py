@@ -281,13 +281,43 @@ def mask_key(key: str) -> str:
     return k[:6] + "***" + k[-4:]
 
 
+def _error_hint(resp, api_key: str = "") -> str:
+    """错误响应只回显状态码/厂商错误码，**绝不回显响应体原文**（评测 04 P1-1）。
+
+    原实现把 `r.text[:120]` 直接返回给前端——高权限 admin 用内网地址即可读取内网
+    服务响应（云元数据/actuator 等）。这里只提取 `error.code/type`（或短字符串），
+    并把调用方 api_key 出现的任何片段替换为 ***。"""
+    try:
+        body = resp.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    err = body.get("error")
+    if isinstance(err, dict):
+        code = err.get("code") or err.get("type") or ""
+    else:
+        code = err if isinstance(err, str) else ""
+    code = str(code or "").strip()[:40]
+    if api_key and len(api_key) > 4:
+        code = code.replace(api_key, "***")
+    return f"：{code}" if code else ""
+
+
 def test_provider(api_format: str, base_url: str, model_id: str, api_key: str,
                   extra_params: str = "") -> dict:
     """连通性测试（不落盘）。返回 {"ok","latency_ms","detail"}；detail 不回显 key。
 
     extra_params（任务2）：用户填写的厂商特殊参数合并进请求 payload —— 真实验证
     用户参数可用性（而非仅验证基础连通）；显式思考参数（thinking/enable_thinking）
-    存在时默认的 enable_thinking=False 让位（GLM 5.x「始终思考」模型对关闭参数 400）。"""
+    存在时默认的 enable_thinking=False 让位（GLM 5.x「始终思考」模型对关闭参数 400）。
+
+    评测 04 P1-1：与 add_provider 复用同一条 SSRF 防线（私网/回环/云元数据拒绝），
+    且错误详情不回显响应体——否则本端点就是"高权限 SSRF + 内网响应读取"通道。"""
+    try:
+        _reject_private_host(base_url)
+    except ValueError as e:
+        return {"ok": False, "latency_ms": 0, "detail": str(e)}
     t0 = time.perf_counter()
     url = (base_url or "").rstrip("/")
     user_extra = parse_extra_params(extra_params)
@@ -320,7 +350,7 @@ def test_provider(api_format: str, base_url: str, model_id: str, api_key: str,
             r = client.post(url, headers=headers, json=payload)
         latency_ms = int((time.perf_counter() - t0) * 1000)
         if r.status_code >= 400:
-            detail = f"HTTP {r.status_code}: {r.text[:120]}"
+            detail = f"HTTP {r.status_code}" + _error_hint(r, api_key)
             # 4xx 且用户未填 extra_params 时附厂商建议（如 GLM 强制思考模型的 thinking 参数）
             if 400 <= r.status_code < 500 and not user_extra:
                 sug = suggest_extra_params(base_url, model_id)

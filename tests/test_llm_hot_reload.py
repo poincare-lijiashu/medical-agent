@@ -16,7 +16,7 @@ import pytest
 from backend.core import llm_config as lc
 from backend.core.llm_factory import LLMFactory
 
-_URL = "https://api.example.com/v1"
+_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"  # 境内域名：过出境策略
 _KEY1 = "sk-key-000000000001"
 _KEY2 = "sk-key-000000000002"
 

@@ -1,6 +1,6 @@
 """任务3 全交互留痕：4 类 agent（literature/drug/imaging/case）+ MDT 的 ask 类响应
 无条件入 review_queue（留痕模式自动签发）、待确认规则边界（conf 0.59/0.61）、
-FULL 默认 on、imaging/case 空响应兜底（不入队）、sources 随条目存档。
+FULL 默认 off（本文件显式开启）、imaging/case 空响应兜底（不入队）、sources 随条目存档。
 
 不触网：literature 用替身图、VL/MDT 图用 monkeypatch 替身；队列/用户/审计隔离到 tmp_path。
 """
@@ -8,6 +8,7 @@ import base64
 import io
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -18,6 +19,13 @@ from backend.core import medical_review as review
 from backend.core.auth import seed_default_users
 from backend.core.medical_audit import AuditLog
 from backend.main import app
+
+
+@pytest.fixture(autouse=True)
+def _full_mode_on(monkeypatch):
+    """本文件聚焦留痕模式语义：显式开启。评测 04 P0-4 已把产品默认改为 False
+    （高危结论必须人工双核），默认值本身由 `test_full_mode_default_off` 单独锁定。"""
+    monkeypatch.setattr(settings, "qc_auto_sign_full", True)
 
 
 def _png_data_url() -> str:
@@ -73,11 +81,14 @@ class _FakeVL:
         return _R()
 
 
-# ---------- FULL 默认 on ----------
+# ---------- FULL 默认 off ----------
 
-def test_full_mode_default_on():
-    """任务3：qc_auto_sign_full 默认 True（留痕模式默认开启，显式行为变更）。"""
-    assert settings.qc_auto_sign_full is True
+def test_full_mode_default_off():
+    """评测 04 P0-4：商业版默认 False（高危结论必须人工双人复核）。
+
+    本文件其余用例经 autouse fixture 显式开启留痕模式；生产/新部署默认走人工双控。"""
+    from backend.config import Settings
+    assert Settings.model_fields["qc_auto_sign_full"].default is False
 
 
 # ---------- 全 agent 入队（4 类各一 + MDT） ----------

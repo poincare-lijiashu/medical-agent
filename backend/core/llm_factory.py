@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage      # 结构化降级重试时
 from langchain_core.runnables import Runnable         # 「可运行对象」基类，结构化模型属于它
 
 from backend.config import get_settings               # 读配置（API Key、base_url 等）
+from backend.core import model_policy                 # 评测 04 P0-3：医疗主链路同样禁止境外 provider
 from backend.core.llm_config import active_provider   # F6：管理端动态模型配置（chat/vision）
 from backend.core.logger import get_logger            # 结构化日志
 
@@ -206,6 +207,9 @@ class LLMFactory:
         第 74 批：删除未使用的 `model_key` 参数（原路由表值从未参与模型构建）。"""
         provider = active_provider("chat")
         if provider:
+            # 评测 04 P0-3：管理端配置的 provider 必须先过出境策略（fail-closed），
+            # 否则医疗主链路（处方建议/质控/文献/影像/MDT）会把病例原文发往境外厂商。
+            model_policy.assert_allowed(provider)
             return cls._provider_kwargs(provider)
         settings = cls._get_settings()             # 取配置
         model_id = settings.qwen_model_chat        # 同步到通义千问：模型名来自 .env 的 QWEN_MODEL_CHAT（原 _MODEL_ID_MAP 的 deepseek 名不再用于骨干）
@@ -311,6 +315,8 @@ class LLMFactory:
         if cache_key not in cls._instances:
             provider = active_provider("vision")
             if provider:
+                # 评测 04 P0-3：影像 data URL + 描述同样不得出境（与 chat 同一策略）
+                model_policy.assert_allowed(provider)
                 kwargs = cls._provider_kwargs(provider)
                 kwargs["temperature"] = temperature
                 kwargs["max_tokens"] = cls._get_settings().vl_max_tokens  # 任务4：覆盖 anthropic 默认 1024 / 补 openai 缺省

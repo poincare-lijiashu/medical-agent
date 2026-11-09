@@ -5529,4 +5529,51 @@ tests/test_pg_repo.py + test_consult_opinions_sync.py + test_consults.py + test_
 - 一致性巡检仍未接 CI/CronJob（P1-1）；A3 审计 event_type 语义、B3 出境管控、
   B4 高危急会诊自动签发默认值、C2–C5 仍在 P0 清单。
 
+## 138. 2026-11-09 评测 B3/B4/P1-1：医疗主链路出境闸门 + 留痕模式默认关闭 + 连通性测试 SSRF 收口（第 135 批）
+
+**已做**
+
+1. **B3 医疗主链路出境管控**（评测 04 P0-3）
+   - 策略纯判定下沉到 `backend/core/model_policy.py`（`classify/is_allowed/assert_allowed` +
+     国产/境外域名表），`agents/model_policy.py` 只保留读配置的视图函数并原样转出符号——
+     解决"core 不能依赖 agents"与"医疗域没接策略"的两难，既有导入面零改动。
+   - `llm_factory._build_model_kwargs()`（chat）与 `get_vl_llm()`（vision）在拿到 admin
+     配置的 provider 后**先过 `assert_allowed`**：境外/未知直接抛 `ModelPolicyViolation`，
+     模型不会被创建，病例文本/影像 data URL 一个字节都不会发出（fail-closed）。
+   - `main.py` 注册异常处理器：`ModelPolicyViolation` → **503**（不 500、不降级、不改道），
+     日志 `llm.model_policy_blocked` 带请求路径与分类原因，便于运维定位误配。
+2. **B4 留痕模式默认关闭**（评测 04 P0-4）
+   - `settings.qc_auto_sign_full` 默认 `True → False`；`.env.example` 同步 `false`；
+     `docs/DEPLOY.md` 增补"开启 SOP"（院方医务/质控/合规三方书面确认 → 显式环境变量
+     或 admin 开关 → 留痕记录可抽检/reopen → 关闭即时生效）。
+   - 现有部署若已显式写过 `runtime_flags.qc_auto_sign_full=true`，属运营显式选择；
+     本机演示环境按合规默认**已重置为 false**（JSON + PG 双写），高危结论回到人工双控。
+   - 红队用例：默认配置下高危影像必须停在 `pending`，`reviewed_by` 不得以 `AI·` 开头。
+3. **P1-1 连通性测试 SSRF 收口**（评测 04 P1-1）
+   - `llm_config.test_provider()` 入口复用 `_reject_private_host`（与保存同一防线）：
+     内网/回环/云元数据地址直接返回失败，**不发请求**。
+   - 错误详情不再回显 `r.text[:120]`，改 `_error_hint()` 只给状态码 + 厂商 `error.code/type`
+     （并按调用方 api_key 做替换），堵住"admin 读取内网响应"的通道。
+4. **测试**：新增 `tests/test_model_policy_gate.py`（分类矩阵 / chat+vision 拦截境外与未知 /
+   境内放行 / agents 导入面兼容 / 503 处理器注册）；`test_llm_config.py` 增私网不发请求、
+   错误体不回显；`test_review_images.py` 增默认配置红队用例；留痕模式相关用例改为显式开启。
+
+**真机验证**
+
+```
+活配置 provider：无激活项 → 回落 QWEN_BASE_URL=https://dashscope.aliyuncs.com/... → domestic 放行
+runtime_flags：qc_auto_sign_full false（JSON+PG 双写已重置）；full_mode()=False
+定向：test_model_policy_gate + test_llm_config + test_review_images + test_full_trace_mode
+      + test_runtime_flags + test_review_permission → 75 passed
+全量（不含 e2e）→ 1541 passed / 1 skipped（3 分 00 秒）
+重启 8001（新代码）：health 200
+```
+
+**本批仍未解决**
+
+- A3 审计两侧 `event_type` 语义统一（2 人日，需历史数据迁移脚本）仍在 P0；
+- 境内 MaaS（如百炼）是否满足院方"数据不出院"要求仍需院方法律意见（代码只保证"不出境"）；
+- C2–C5（CI 镜像/helm 门禁/e2e PHI 污染/lint 与分支保护）仍待办。
+
+
 

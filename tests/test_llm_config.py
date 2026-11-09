@@ -15,7 +15,7 @@ from backend.core import llm_config as lc
 from backend.core.auth import seed_default_users
 from backend.main import app
 
-_URL = "https://api.example.com/v1"
+_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"  # 境内域名：医疗主链路出境策略放行
 _KEY = "sk-abc1234567890xy"  # 18 位：可验证「前6后4中***」脱敏
 
 
@@ -245,6 +245,29 @@ def test_test_provider_http_error(monkeypatch):
     _fake_client(monkeypatch, lambda url, **kw: _Resp(401, '{"error":"invalid api key"}'))
     r = lc.test_provider("openai", _URL, "m1", _KEY)
     assert r["ok"] is False and "401" in r["detail"]
+
+
+def test_test_provider_private_host_rejected_without_egress(monkeypatch):
+    """评测 04 P1-1：连通性测试复用保存侧 SSRF 防线——私网/云元数据地址不发请求。"""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "llm_allow_private_hosts", False)
+    monkeypatch.setattr(settings, "llm_private_hosts_allowlist", "")
+    holder = _fake_client(monkeypatch, lambda url, **kw: _Resp(200))
+    r = lc.test_provider("openai", "http://169.254.169.254/latest/meta-data", "m1", "k")
+    assert r["ok"] is False and "内网/回环" in r["detail"]
+    assert holder["calls"] == [], "私网地址必须被拦截，绝不能真的发请求"
+
+
+def test_test_provider_error_detail_hides_body(monkeypatch):
+    """评测 04 P1-1：错误详情只给状态码/厂商错误码，不回显响应体原文。"""
+    _fake_client(monkeypatch, lambda url, **kw: _Resp(
+        401, text='{"error":{"code":"invalid_api_key","message":"RAW_SECRET_BODY"}}',
+        json_data={"error": {"code": "invalid_api_key", "message": "RAW_SECRET_BODY"}}))
+    r = lc.test_provider("openai", _URL, "m1", _KEY)
+    assert r["ok"] is False and "401" in r["detail"]
+    assert "invalid_api_key" in r["detail"]
+    assert "RAW_SECRET_BODY" not in r["detail"], "响应体原文（可能含内网内容）不得回显"
 
 
 def test_test_provider_non_json_200(monkeypatch):

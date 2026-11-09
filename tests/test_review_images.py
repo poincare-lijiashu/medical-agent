@@ -136,6 +136,8 @@ def test_history_endpoint_images_visibility_boundary(monkeypatch, tmp_path):
     隐私边界保留：doctor 仅本人参与记录（doctor02 对他人记录连条目都不可见，
     服务端按人检索 list_involved，隔离强于剥 images）；admin 全可见（合规审计）。"""
     from backend.core import auth as auth_mod
+    from backend.config import settings
+    monkeypatch.setattr(settings, "qc_auto_sign_full", True)  # 本用例验证留痕记录的影像可见性
     monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
     seed_default_users()
@@ -206,6 +208,24 @@ def test_pending_images_visibility_by_reviewer_role(monkeypatch, tmp_path):
     tok_doc2 = _login(c, "doctor02", "Med@2026x")
     pending_d2 = c.get("/api/v1/medical/review/pending", headers=_h(tok_doc2)).json()["pending"]
     assert rid not in [i["id"] for i in pending_d2], "医生不应看到他人提交的待审条目"
+
+
+def test_default_config_high_risk_never_auto_signed(monkeypatch, tmp_path):
+    """评测 04 P0-4 红队：**不改任何开关**（产品默认）时，高危影像必须留在 pending，
+    签发人不得是「AI·…」——双人复核默认生效，AI 不得自己签发自己。"""
+    from backend.core import auth as auth_mod
+    monkeypatch.setattr(auth_mod, "USERS_FILE", str(tmp_path / "users.json"))
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    seed_default_users()
+    monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _FakeVL())
+    c = TestClient(app)
+    tok = _login(c, "doctor01", "Med@2026")
+    r = c.post("/api/v1/medical/imaging/ask", headers=_h(tok),
+               json={"question": "这张胸片有什么异常", "images": [_png_data_url(640, 480)]})
+    assert r.status_code == 200, r.text
+    item = review.get(r.json()["review_id"])
+    assert item["status"] == "pending", "默认配置下高危结论不得自动签发"
+    assert not str(item.get("reviewed_by") or "").startswith("AI·")
 
 
 def test_submit_caps_total_image_chars_4m(monkeypatch, tmp_path):

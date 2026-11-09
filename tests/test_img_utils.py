@@ -15,6 +15,7 @@ from PIL import Image
 from backend.core import img_utils
 from backend.core import medical_imaging as mi
 from backend.core import medical_review as review
+from backend.config import settings
 from backend.core.auth import seed_default_users
 from backend.main import app
 
@@ -97,6 +98,8 @@ def _h(t):
 
 def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    # 本文件验证「压缩后的图随留痕入队」：显式开启留痕模式（评测 04 P0-4 已改默认关）
+    monkeypatch.setattr(settings, "qc_auto_sign_full", True)
     seed_default_users()
     monkeypatch.setattr(mi, "get_vl_llm", lambda temperature=0: _FakeVL())
     return TestClient(app)

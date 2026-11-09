@@ -41,7 +41,7 @@ def _h(t):
 # ---------- 单元层：flags 文件读写与回落 ----------
 
 def test_get_flag_falls_back_to_settings(monkeypatch):
-    """flags 文件缺失/无键 → 回落 settings 启动值（默认 True）。"""
+    """flags 文件缺失/无键 → 回落 settings 启动值（评测 04 P0-4 后默认 False）。"""
     assert runtime_flags.full_mode() is settings.qc_auto_sign_full
     monkeypatch.setattr(settings, "qc_auto_sign_full", False)
     assert runtime_flags.full_mode() is False  # settings 变化仍可感知（无覆盖键时）
@@ -80,6 +80,7 @@ def test_config_toggle_requires_admin(monkeypatch, tmp_path):
 
 def test_config_toggle_switches_runtime(monkeypatch, tmp_path):
     """admin 切换 → flags 落盘 + /config 即时反映 + 决策点行为跟随（无需重启）。"""
+    monkeypatch.setattr(settings, "qc_auto_sign_full", True)  # 从「留痕模式开」开始切
     c, audit = _client(monkeypatch, tmp_path)
     adm = _login(c, "admin01")
     doc = _login(c, "doctor01")
@@ -113,6 +114,7 @@ def test_config_toggle_rejects_unknown_key(monkeypatch, tmp_path):
 
 def test_admin_data_exposes_flags(monkeypatch, tmp_path):
     """admin_data 下发 flags（前端「留痕模式」开关卡数据源）。"""
+    monkeypatch.setattr(settings, "qc_auto_sign_full", True)  # 显式开启后验证开关卡
     c, _ = _client(monkeypatch, tmp_path)
     adm = _login(c, "admin01")
     d = c.get("/api/v1/medical/admin/data", headers=_h(adm)).json()

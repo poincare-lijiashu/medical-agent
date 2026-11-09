@@ -159,7 +159,8 @@ def test_vl_llm_admin_provider_overrides_max_tokens(monkeypatch):
     """管理端激活 vision provider（anthropic 格式，_provider_kwargs 固定 max_tokens=1024）
     → 必须被 settings.vl_max_tokens 覆盖（两分支统一配置）。"""
     from backend.core import llm_factory as lf
-    provider = {"id": "p-v", "api_format": "anthropic", "base_url": "https://y/v1",
+    provider = {"id": "p-v", "api_format": "anthropic",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "model_id": "claude-vision", "display_name": "V", "api_key": "k"}
     monkeypatch.setattr(lf, "active_provider", lambda kind: provider)
     captured = _capture_init_chat_model(monkeypatch)

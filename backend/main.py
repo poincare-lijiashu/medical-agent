@@ -16,6 +16,7 @@ from backend.config import settings
 from backend.api.deps import require_metrics_access
 from backend.core import observability
 from backend.core.logger import get_logger
+from backend.core.model_policy import ModelPolicyViolation
 from backend.core.medical_audit import set_channel as _audit_set_channel
 from backend.core.medical_audit import reset_channel as _audit_reset_channel
 from backend.core.medical_audit import set_tool as _audit_set_tool
@@ -270,6 +271,17 @@ class AuditChannelMiddleware:
 
 
 app.add_middleware(AuditChannelMiddleware)
+
+
+@app.exception_handler(ModelPolicyViolation)
+async def _model_policy_violation(request: Request, exc: ModelPolicyViolation):
+    """评测 04 P0-3：医疗主链路命中出境策略 → 503（不降级、不 500、不改道）。
+
+    此时模型**尚未被创建**，病例文本/影像 data URL 一个字节都不会发出。"""
+    logger.warning("llm.model_policy_blocked", path=request.url.path,
+                   error=str(exc)[:200])
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
 
 app.include_router(medical_router, prefix="/api/v1/medical")
 app.include_router(auth_router, prefix="/api/v1")
