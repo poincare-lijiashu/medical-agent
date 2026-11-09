@@ -271,6 +271,38 @@ public class UserRepository {
         }
     }
 
+    /**
+     * 组织编码 → 科室中文名（签发令牌时写入 {@code dept} 声明）。
+     *
+     * <p>AI 中台按中文科室名做数据范围与质控归属，本平台按 {@code org_code}（D001…）授权。
+     * 两套编码必须在**身份源**这里收敛：令牌同时携带 {@code org}（编码）与 {@code dept}（中文名），
+     * 下游就不需要维护第二份映射表。查不到（空编码/历史脏数据）返回 {@link Optional#empty()}，
+     * 由下游按"无科室"处理——宁可少看，不做越权放大。
+     */
+    public Optional<String> orgNameOf(String orgCode) {
+        if (orgCode == null || orgCode.isBlank()) {
+            return Optional.empty();
+        }
+        return jdbc.sql("SELECT name FROM auth_svc.org WHERE code = ?")
+                .param(orgCode)
+                .query(String.class)
+                .optional()
+                .map(String::trim)
+                .filter(name -> !name.isEmpty());
+    }
+
+    /**
+     * 非 ACTIVE 账号的用户名（停用/锁定）。
+     *
+     * <p>供 AI 中台增量同步：访问令牌是无状态的，停用账号后旧令牌在 TTL 内仍可验签通过；
+     * 下游按本清单拒绝，才能做到"停用即下线"，而不是等令牌自然过期。
+     */
+    public List<String> nonActiveUsernames() {
+        return jdbc.sql("SELECT username FROM auth_svc.app_user WHERE status <> 'ACTIVE' ORDER BY username")
+                .query(String.class)
+                .list();
+    }
+
     public List<String> rolesOf(UUID userId) {
         return jdbc.sql("""
                         SELECT role_code FROM auth_svc.user_role

@@ -124,6 +124,22 @@ public class AuthController {
         return ApiResponse.ok(service.revocationsSince(Instant.ofEpochMilli(Math.max(0, since))));
     }
 
+    /**
+     * 内部：非 ACTIVE 账号用户名清单（AI 中台同步"停用即下线"）。
+     *
+     * <p>访问令牌是无状态的：停用账号只会撤销刷新令牌，已签发的访问令牌在 TTL 内
+     * 仍能通过验签。下游（AI 中台）按本清单拒绝，窗口从"令牌 TTL（最长 30 分钟）"
+     * 收敛到"同步周期（默认 15 秒）"。
+     *
+     * <p>与 revocations 一样必须校验内部令牌：清单暴露"谁被停用"，属于安全敏感信息。
+     */
+    @GetMapping("/internal/users/disabled")
+    public ApiResponse<List<String>> disabledUsers(
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireInternalToken(provided);
+        return ApiResponse.ok(service.disabledUsernames());
+    }
+
     /** 内部令牌校验（集群内排障；网关对该路径直接 404，不对外暴露）。 */
     @PostMapping("/internal/token/verify")
     public ApiResponse<VerifyResp> verify(

@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.config import settings
+from backend.core import platform_identity
 from backend.core.auth import decode_token, get_user
 from backend.core.security_rate import allow
 from backend.core.stores import get_store
@@ -137,11 +138,17 @@ def _user_from_token(token: str) -> dict:
     # 本系统自签令牌仍要求本地用户存在（被删/停用即失效，fail-closed）。
     if not u and "roles" not in payload:
         raise HTTPException(status_code=401, detail="账号不存在或已停用")
-    # 科室：Java 用 org/depts(UUID)，本系统用 users.dept(中文名)。查不到本地用户时留空，
+    # 第 129 批：Java 侧登出/踢下线/停用账号后，本系统不再等令牌 TTL 自然过期。
+    # 撤销名单与停用清单一律来自 auth 服务的内部端点（15s 同步）；未配置同步时该方法恒 True。
+    if "roles" in payload and not platform_identity.check(username, payload.get("jti")):
+        raise HTTPException(status_code=401, detail="账号已被停用或会话已失效，请重新登录")
+    # 科室：Java 令牌自带 dept（org_code 对应的中文名，身份源一次收敛），
+    # 历史令牌/本系统自签令牌回落到本地用户表。查不到时空串，
     # 由数据范围逻辑按"无科室=无患者数据"处理（宁可少看，不可越权多看）。
+    dept = str(payload.get("dept") or u.get("dept") or "").strip()
     return {"username": username,
             "role": role or u.get("role") or "guest",
-            "dept": u.get("dept", "") or ""}
+            "dept": dept}
 
 
 def require_user(

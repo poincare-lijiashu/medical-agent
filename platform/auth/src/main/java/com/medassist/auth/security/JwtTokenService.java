@@ -114,6 +114,18 @@ public class JwtTokenService {
      */
     public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
                              List<UUID> deptIds, List<UUID> campusIds) {
+        return issue(user, roles, permissions, deptIds, campusIds, null);
+    }
+
+    /**
+     * 为账号签发访问令牌，并携带**科室中文名**（AI 中台数据范围用）。
+     *
+     * <p>本平台以 {@code org_code}（D001…）标识科室，AI 中台以中文科室名标识；两者在
+     * 身份源这里一次收敛——令牌同时给出 {@code org} 与 {@code dept}，下游不再维护第二套映射。
+     * 科室缺失时不下发该声明，下游按"无科室=无患者数据"处理（宁可少看，不越权）。
+     */
+    public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
+                             List<UUID> deptIds, List<UUID> campusIds, String deptName) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = now.plus(props.ttl());
         String tokenId = UUID.randomUUID().toString();
@@ -136,6 +148,9 @@ public class JwtTokenService {
         }
         if (user.orgCode() != null && !user.orgCode().isBlank()) {
             claims.claim("org", user.orgCode());
+        }
+        if (deptName != null && !deptName.isBlank()) {
+            claims.claim("dept", deptName.trim());
         }
 
         Jwt jwt = encoder.encode(JwtEncoderParameters.from(

@@ -5270,3 +5270,45 @@ doctor01 → 200 {"doctor01","doctor","口腔科"}
 - **演示建议（临时）**：给客户演示时请用 `doctor01` / `admin01`（本地表有、科室完整）；
   其余 236 个账号能登录但数据范围受限，这是下一批要修掉的。
 
+## 132. 2026-11-09 统一身份收口：科室编码一次收敛 + 撤销/停用 15 秒同步（第 129 批）
+
+**为什么做**：用户提出"科室两套编码（Java UUID / Python 中文名）"与"撤销不同步（停用后 Python
+还能用最长 30 分钟）"两条硬边界。两者根因相同：**Java 是唯一身份源，但令牌只带 UUID 编码，
+不带下游能直接使用的语义**。本批把两套编码在签发点收敛，并补上撤销/停用的增量同步。
+
+**已做**
+
+1. **令牌携带科室中文名**：`JwtTokenService.issue(...)` 新增 `deptName` 参数，写入 `dept` 声明；
+   `AuthService` 三条签发路径（登录/SSO/刷新）统一走 `issueAccess()`，由
+   `UserRepository.orgNameOf(org_code)` 查 `auth_svc.org.name` 解析。查不到则不下发该声明。
+2. **新增内部端点** `GET /internal/users/disabled`（fail-closed 校验 `X-Internal-Token`），
+   返回非 ACTIVE 账号用户名清单。
+3. **AI 中台增量同步** `backend/core/platform_identity.py`：每 `IDENTITY_SYNC_SECONDS`（默认 15s）
+   直连 auth 服务拉取撤销名单（jti 增量）与停用清单（全量覆盖，支持恢复）；
+   未配置地址/令牌时不启动（行为与历史一致）；从不是成功过则放行（不因认证服务抖动全员 401）。
+4. **鉴权采纳** `backend/api/deps.py`：Java 令牌优先取载荷 `dept`（本地表仅兜底）；
+   校验 `jti` 是否被撤销、账号是否被停用，命中即 401。
+
+**真机验证**
+
+```
+doctor01 登录 → 令牌 claims: {username:doctor01, roles:[DOCTOR], org:D003, dept:口腔科, jti:...}
+POST /api/v2/auth/logout → /internal/revocations 立即出现该 jti
+等待 17s → Python GET /api/v1/auth/me（旧令牌）→ 401
+    {"detail":"账号已被停用或会话已失效，请重新登录"}     ← 修复前会一直 200 到 TTL
+GET /internal/users/disabled（带内部令牌）→ 200 {"data":[]}
+定向测试：tests/test_platform_identity.py 6 passed；鉴权/架构定向 34 passed
+```
+
+**本批仍未解决（继续登记，不掩盖）**
+
+- **225/238 个账号在 Java 侧本身就没有 `org_code`**（`auth_svc.app_user` 实测），
+  因此令牌没有 `dept`——这不是映射缺失，而是账号主数据缺科室。正解是在账号管理里补齐归属，
+  或在组织架构同步时按 `user_dept` 回填；**不能**用"猜科室"的方式放大数据范围。
+- **`user_dept` 与 `org_code` 两套口径并存**：`user_dept` 指向临床科室 UUID（名称形如
+  "内科住院病区"，服务 Java 数据范围），`org_code` 指向组织架构（名称形如"内科"）。
+  本批令牌以 `org_code` 为准（与 AI 中台科室字典同构）；两套主数据的一致性治理单列后续批次。
+- **NURSE / NURSE_MANAGER / TECHNICIAN 等仍映射 `doctor`**（含写权限），与"护士只读"不符；
+  下一批引入 `nurse` 只读角色（安全方法放行、写方法 403）。
+- **`guest` 前端体验、演示密钥治理**（`medassist-dev-internal-token` 等开发值）仍在待办。
+

@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     # （只保留管理端手动按钮）；默认每天 01:10。启动时若当天缺失会立即补一条。
     agent_snapshot_hour: int = 1
     agent_snapshot_minute: int = 10
+    # 统一身份（第 129 批）：Java 医院平台是唯一签发方，AI 中台只验签并同步"撤销/停用"。
+    # platform_auth_base_url 留空 = 不同步（单机/离线形态，行为与历史一致）；
+    # 配置后每 identity_sync_seconds 秒拉取内部端点（直连 auth 服务，不经网关）：
+    #   GET /internal/revocations?since=<ms>  → 已登出/被踢下线的 jti
+    #   GET /internal/users/disabled          → 停用/锁定账号用户名
+    # 两个端点都要求 X-Internal-Token（与 Java 侧 INTERNAL_API_TOKEN 同值），未配则不同步。
+    platform_auth_base_url: str = ""
+    internal_api_token: str = ""
+    identity_sync_seconds: float = 15.0
     auth_enabled: bool = True
     auth_seed_demo: bool = False  # 首次运行是否注入演示账号（doctor01 等）；默认关闭，仅演示环境显式开启
     auth_demo_password: str = ""  # 演示账号统一口令；留空则 seed 时随机生成（仅 dev 演示，生产不 seed）

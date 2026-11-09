@@ -135,7 +135,7 @@ public class AuthService {
         List<UUID> campusIds = users.campusIdsOf(user.id());
         // 历史 PBKDF2 哈希在线升级为 BCrypt：登录成功后一次性重写，失败不影响本次登录
         upgradeLegacyHash(user, req.password());
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds, campusIds);
+        JwtTokenService.IssuedToken access = issueAccess(user, roles, permissions, deptIds, campusIds);
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
         users.touchLogin(user.id());
@@ -174,7 +174,7 @@ public class AuthService {
         List<String> permissions = rbac.permissionsOfUser(user.id());
         List<UUID> deptIds = users.deptIdsOf(user.id());
         List<UUID> campusIds = users.campusIdsOf(user.id());
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions, deptIds, campusIds);
+        JwtTokenService.IssuedToken access = issueAccess(user, roles, permissions, deptIds, campusIds);
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
 
         users.touchLogin(user.id());
@@ -221,7 +221,7 @@ public class AuthService {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "刷新令牌已失效，请重新登录");
         }
 
-        JwtTokenService.IssuedToken access = jwt.issue(user, roles, permissions,
+        JwtTokenService.IssuedToken access = issueAccess(user, roles, permissions,
                 users.deptIdsOf(user.id()), users.campusIdsOf(user.id()));
         IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, record.id());
         audit(user.username(), "REFRESH_SUCCESS", user.id().toString(),
@@ -302,7 +302,28 @@ public class AuthService {
                 .orElseGet(VerifyResp::invalid);
     }
 
+    /**
+     * 内部：非 ACTIVE 账号用户名清单（AI 中台同步"停用即下线"用）。
+     *
+     * <p>访问令牌无状态，停用账号只能撤销刷新令牌，旧访问令牌仍能验签通过；
+     * 下游按本清单拒绝，才能把窗口从"令牌 TTL"压到"同步周期"。
+     */
+    public List<String> disabledUsernames() {
+        return users.nonActiveUsernames();
+    }
+
     // ---------------------------------------------------------------- 内部方法
+
+    /**
+     * 签发访问令牌：统一在此解析科室中文名，确保三种签发路径（登录/SSO/刷新）声明一致。
+     * 科室查不到时传 null——令牌不带 {@code dept}，下游按"无科室"处理。
+     */
+    private JwtTokenService.IssuedToken issueAccess(UserAccount user, List<String> roles,
+                                                    List<String> permissions, List<UUID> deptIds,
+                                                    List<UUID> campusIds) {
+        String deptName = users.orgNameOf(user.orgCode()).orElse(null);
+        return jwt.issue(user, roles, permissions, deptIds, campusIds, deptName);
+    }
 
     private IssuedRefresh issueRefresh(UUID userId, String clientIp, String userAgent, UUID rotatedFrom) {
         byte[] raw = new byte[REFRESH_TOKEN_BYTES];

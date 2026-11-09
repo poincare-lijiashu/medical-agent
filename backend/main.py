@@ -172,9 +172,27 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_agent.startup.metrics_worker_probe_failed",
                        error=str(exc)[:120])
+    try:
+        # 第 129 批：统一身份的"撤销/停用"同步（Java auth 是唯一身份源）。
+        # 未配置 PLATFORM_AUTH_BASE_URL / INTERNAL_API_TOKEN 时不启动，行为与历史一致。
+        from backend.core import platform_identity
+        if platform_identity.start():
+            logger.info("medical_agent.startup.identity_sync_started",
+                        base_url=settings.platform_auth_base_url,
+                        interval_s=float(settings.identity_sync_seconds or 15))
+        else:
+            logger.info("medical_agent.startup.identity_sync_disabled",
+                        detail="未配置内部认证地址/令牌：仅本地验签，不同步撤销与停用")
+    except Exception as exc:  # noqa: BLE001 —— 同步失败不阻断启动（业务侧有缓存兜底）
+        logger.warning("medical_agent.startup.identity_sync_failed", error=str(exc)[:120])
     logger.info("medical_agent.startup.done")
     yield
     logger.info("medical_agent.shutdown")
+    try:
+        from backend.core import platform_identity
+        platform_identity.stop()
+    except Exception:  # noqa: BLE001
+        pass
     if _snapshot_stop is not None:
         _snapshot_stop.set()
     if _snapshot_task is not None:
