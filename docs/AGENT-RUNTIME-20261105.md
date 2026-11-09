@@ -5694,3 +5694,46 @@ GET /admin/audit?audit_event=inline（admin01）：
 
 
 
+
+## 142. 2026-11-09 评测 D2：Agent 控制台按域刷新 + 只读请求在飞合并（第 139 批）
+
+**问题（评测 03-frontend-ux P0-2）**
+
+- `AgentView.vue` 1485 行 / 22 个动作函数，每个动作成功后都整页 `loadAll()`（15 个并发 GET）；
+  "停用一个 Bot" = 1 个 POST + 15 个 GET，管理员连做 4 次动作即打满
+  60 次/分钟滑动窗口限流（`backend/api/deps.py`），429 + `Retry-After: 60`。
+
+**已做**
+
+1. **按域加载**（`frontend-vue/src/views/AgentView.vue`）
+   - 新增 `LOADERS`（15 个域：flags/catalog/skills/bots/teams/modelPolicy/webPolicy/sleep/
+     experiences/proposals/metrics/trends/alerts/advices/usage），每项自带 `url` 与 `apply`。
+   - `loadDomains(names)` 只拉指定域并写回对应状态；首屏与「刷新」按钮仍走全量 `loadAll()`。
+   - `domainSeq` 按域独立序号：只丢弃"本域被更新批次超越"的结果，域刷新不再整体作废在飞的全量刷新。
+   - 22 个动作改为定向刷新（多数 1 个 GET）：
+     skills/bots/teams/proposals/advices/experiences 各自单域；采纳候选 = proposals + skills；
+     快照 = metrics + trends；使用率刷新 = usage 单域。
+2. **只读请求在飞合并**（`frontend-vue/src/api/index.js`）
+   - 新增 `dedupeGet(url, cfg)`：同一 URL 并发读共享一个网络请求（默认关闭，需显式 `dedupe: true`）。
+   - **不做时间窗口缓存**；任何非 GET/HEAD 响应推进 `_writeEpoch`，跨写边界的合并一律作废，
+     避免"写操作后复用写之前的旧读结果"。
+3. **回归锁**：`tests/test_frontend_agent_markers.py::test_agent_view_action_refresh_is_domain_scoped`
+   断言 `LOADERS`/`loadDomains`/各域调用存在、动作里不得再出现 `await loadAll()`、
+   API 层必须导出 `dedupeGet`。
+
+**真机验证**（`http://127.0.0.1:8001/`，构建产物 index-BkZ2ZLeg.js）
+
+```
+登录 admin01 → /agent：12 张表 / 11 行正常渲染（8 个智能体、3 个工具）
+点击「生成运营建议」：POST /agent/skill-advices/generate 200 + GET /agent/skill-advices?status=OPEN 200（共 2 个请求）
+点击顶部「刷新」：14 个只读 GET 全 200，页面仍正常渲染
+全程 39 个请求，无 4xx/5xx、无 429、控制台无 error
+定向：test_frontend_agent_markers + test_frontend_syntax → 56 passed
+npm run build（frontend-vue）→ 1721 modules，8.58s 通过
+全量（不含 e2e）→ 1546 passed / 1 skipped
+```
+
+**本批仍未解决**
+
+- `AgentView.vue` 仍有 1485 行 / 10 个 dialog（第二步拆分 `src/components/agent/*` 未做）；
+- 其余 D 系列：D4 分页控件统一、D5/D6 frontend-vue 规范与首屏体积、C5 lint/漏洞扫描、E6 单副本单点。

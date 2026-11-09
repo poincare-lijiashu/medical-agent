@@ -768,7 +768,7 @@
 <script setup>
 import { computed, defineOptions, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import http from '../api'
+import http, { dedupeGet } from '../api'
 import { statusText, statusType, strategyText } from '../constants/labels'
 import { md, detailText } from '../utils/assist'
 import { useAuthStore } from '../stores/auth'
@@ -924,58 +924,115 @@ const expToolOptions = computed(() => {
 
 // 评审 04-S3：状态/策略枚举的中文映射已收敛到 constants/labels.js，两页共用
 
+// ---------------------------------------------------------------- 数据加载（按域）
+// 评测 D2（03-frontend-ux P0-2）：此前 22 个动作函数成功后一律整页 loadAll()，
+// 即"停用一个 Bot" = 1 个 POST + 15 个并发 GET；管理员连做 4 次动作就会打到
+// 60 次/分钟滑动窗口限流（backend/api/deps.py），收到 429 + Retry-After。
+// 现改为**按域加载**：动作只刷新自己影响的域（通常 1–3 个请求），
+// 首屏与「刷新」按钮仍走全量 loadAll()。
+const READ = Object.freeze({ silentToast: true, dedupe: true })
+
+const LOADERS = {
+  flags: {
+    url: '/agent/flags',
+    apply: (d) => { flags.value = d.flags || [] },
+  },
+  catalog: {
+    url: '/agent/catalog',
+    apply: (d) => { agents.value = d.agents || []; tools.value = d.tools || [] },
+  },
+  skills: {
+    url: '/agent/skills',
+    apply: (d) => { skillList.value = d.skills || [] },
+  },
+  bots: {
+    url: '/agent/bots',
+    apply: (d) => { botList.value = d.bots || [] },
+  },
+  teams: {
+    url: '/agent/bot-teams',
+    apply: (d) => { teamList.value = d.teams || [] },
+  },
+  modelPolicy: {
+    url: '/agent/model-policy',
+    apply: (d) => { policy.value = { allowed: d.allowed || [], blocked: d.blocked || [] } },
+  },
+  webPolicy: {
+    url: '/agent/web-policy',
+    apply: (d) => { webPolicy.value = d || { enabled: false, allowedDomains: [] } },
+  },
+  sleep: {
+    url: '/agent/sleep-memory/last',
+    apply: (d) => { sleepReport.value = d.report || null },
+  },
+  experiences: {
+    url: '/agent/skill-experiences',
+    apply: (d) => { experiences.value = d.experiences || [] },
+  },
+  proposals: {
+    url: '/agent/skill-proposals',
+    apply: (d) => { proposals.value = d.proposals || [] },
+  },
+  metrics: {
+    url: '/agent/skill-library/metrics',
+    apply: (d) => { metrics.value = d },
+  },
+  trends: {
+    url: '/agent/skill-library/trends?days=30',
+    apply: (d) => { trends.value = d },
+  },
+  alerts: {
+    url: '/agent/skill-library/alerts',
+    apply: (d) => { activeAlerts.value = d.alerts || [] },
+  },
+  advices: {
+    url: '/agent/skill-advices?status=OPEN',
+    apply: (d) => { advices.value = d.advices || [] },
+  },
+  usage: {
+    url: '/agent/skill-library/usage',
+    apply: (d) => { usage.value = d },
+  },
+}
+
+// 每个域一条独立序号：只丢弃"本域被更新的批次超越"的结果，
+// 域刷新不会把在飞的全量刷新整体作废（反过来也一样）。
+const domainSeq = Object.create(null)
+
+function bumpDomain(name) {
+  domainSeq[name] = (domainSeq[name] || 0) + 1
+  return domainSeq[name]
+}
+
+async function loadDomains(names) {
+  const gens = {}
+  names.forEach((n) => { gens[n] = bumpDomain(n) })
+  const entries = names.filter((n) => LOADERS[n]).map((n) => ({ name: n, loader: LOADERS[n] }))
+  const settled = await Promise.allSettled(entries.map((e) => dedupeGet(e.loader.url, READ)))
+  let failed = 0
+  settled.forEach((r, i) => {
+    const e = entries[i]
+    if (r.status === 'fulfilled') {
+      if (domainSeq[e.name] === gens[e.name]) e.loader.apply(r.value.data || {})
+    } else {
+      failed += 1
+    }
+  })
+  return failed
+}
+
 async function loadAll() {
-  // 评审 04-S5：并发刷新时只让最后一次请求写状态（旧响应晚到会被丢弃）
+  // 评审 04-S5：并发刷新时只让最后一次全量刷新负责收尾（旧批次不关别人的 loading）
   const seq = ++loadSeq
   loadingAll.value = true
   try {
-    // 评审 M-55：15 个只读请求并发且互不依赖——用 allSettled，单项失败不吞掉其余结果
-    const calls = [
-    ['flags', () => http.get('/agent/flags', { silentToast: true })],
-    ['catalog', () => http.get('/agent/catalog', { silentToast: true })],
-    ['skills', () => http.get('/agent/skills', { silentToast: true })],
-    ['bots', () => http.get('/agent/bots', { silentToast: true })],
-    ['teams', () => http.get('/agent/bot-teams', { silentToast: true })],
-    ['modelPolicy', () => http.get('/agent/model-policy', { silentToast: true })],
-    ['webPolicy', () => http.get('/agent/web-policy', { silentToast: true })],
-    ['sleep', () => http.get('/agent/sleep-memory/last', { silentToast: true })],
-    ['experiences', () => http.get('/agent/skill-experiences', { silentToast: true })],
-    ['proposals', () => http.get('/agent/skill-proposals', { silentToast: true })],
-    ['metrics', () => http.get('/agent/skill-library/metrics', { silentToast: true })],
-    ['trends', () => http.get('/agent/skill-library/trends?days=30', { silentToast: true })],
-    ['alerts', () => http.get('/agent/skill-library/alerts', { silentToast: true })],
-    ['advices', () => http.get('/agent/skill-advices?status=OPEN', { silentToast: true })],
-    ['usage', () => http.get('/agent/skill-library/usage', { silentToast: true })],
-  ]
-  const settled = await Promise.allSettled(calls.map(([, fn]) => fn()))
-  const data = {}
-  let failed = 0
-  settled.forEach((r, i) => {
-    if (r.status === 'fulfilled') data[calls[i][0]] = r.value.data || {}
-    else failed += 1
-  })
-  if (seq !== loadSeq) return   // 旧批次晚到：丢弃，避免覆盖更新的数据
-  const d = (k) => data[k] || {}
-  flags.value = d('flags').flags || []
-  agents.value = d('catalog').agents || []
-  tools.value = d('catalog').tools || []
-  skillList.value = d('skills').skills || []
-  botList.value = d('bots').bots || []
-  teamList.value = d('teams').teams || []
-  policy.value = { allowed: d('modelPolicy').allowed || [], blocked: d('modelPolicy').blocked || [] }
-  webPolicy.value = data.webPolicy || { enabled: false, allowedDomains: [] }
-  sleepReport.value = d('sleep').report || null
-  experiences.value = d('experiences').experiences || []
-  proposals.value = d('proposals').proposals || []
-  metrics.value = data.metrics || null
-  trends.value = data.trends || null
-  activeAlerts.value = d('alerts').alerts || []
-  advices.value = d('advices').advices || []
-  usage.value = data.usage || null
-  if (failed) {
-    // 逐项失败已静默；这里只给一条聚合提示，其余成功数据照常展示
-    ElMessage.warning(`有 ${failed} 项数据加载失败，其余已展示；可点击「刷新」重试`)
-  }
+    // 评审 M-55：只读请求并发且互不依赖——allSettled，单项失败不吞掉其余结果
+    const failed = await loadDomains(Object.keys(LOADERS))
+    if (seq !== loadSeq) return   // 旧批次晚到：丢弃，避免覆盖更新的数据
+    if (failed) {
+      // 逐项失败已静默；这里只给一条聚合提示，其余成功数据照常展示
+      ElMessage.warning(`有 ${failed} 项数据加载失败，其余已展示；可点击「刷新」重试`)
+    }
   } finally {
     if (seq === loadSeq) loadingAll.value = false
   }
@@ -983,11 +1040,9 @@ async function loadAll() {
 
 async function refreshUsage() {
   usageBusy.value = true
-  // 评审 04-S5：单独刷新使用率时作废在飞的 loadAll，防止旧快照回写覆盖新 Token 数据
-  ++loadSeq
   try {
-    const r = await http.get('/agent/skill-library/usage')
-    usage.value = r.data
+    // 单独刷新使用率：只重载 usage 域，不再作废在飞的全量刷新
+    await loadDomains(['usage'])
   } finally {
     usageBusy.value = false
   }
@@ -995,7 +1050,7 @@ async function refreshUsage() {
 
 async function takeSnapshot() {
   const r = await http.post('/agent/skill-library/snapshot', {})
-  await loadAll()
+  await loadDomains(['metrics', 'trends'])
   ElMessage.success(`已记录 ${r.data.date} 指标快照`)
 }
 
@@ -1003,7 +1058,7 @@ async function generateAdvices() {
   adviceBusy.value = true
   try {
     const r = await http.post('/agent/skill-advices/generate', {})
-    await loadAll()
+    await loadDomains(['advices'])
     ElMessage.success(`已生成/刷新 ${(r.data.advices || []).length} 条运营建议`)
   } finally {
     adviceBusy.value = false
@@ -1020,7 +1075,7 @@ async function dismissAdvice(row) {
     return
   }
   await http.post(`/agent/skill-advices/${row.id}/dismiss`, { note })
-  await loadAll()
+  await loadDomains(['advices'])
   ElMessage.success('已忽略')
 }
 
@@ -1032,7 +1087,7 @@ async function completeAdvice(row) {
     return
   }
   await http.post(`/agent/skill-advices/${row.id}/complete`, {})
-  await loadAll()
+  await loadDomains(['advices'])
   ElMessage.success('已标记完成')
 }
 
@@ -1141,7 +1196,7 @@ async function createSkill() {
       guardrails: { hitl: true, requireEvidence: true, maxInputChars: 2000 },
     })
     skillOn.value = false
-    await loadAll()
+    await loadDomains(['skills'])
     ElMessage.success('已创建草稿，需另一名管理员/质控审核后生效')
   } finally {
     skillBusy.value = false
@@ -1150,7 +1205,7 @@ async function createSkill() {
 
 async function submitSkill(row) {
   await http.post(`/agent/skills/${row.code}/submit`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['skills'])
   ElMessage.success('已提交审核')
 }
 
@@ -1170,7 +1225,7 @@ async function reviewSkill(row, approve) {
   }
   await http.post(`/agent/skills/${row.code}/review`,
     { approve, note, rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['skills'])
   ElMessage.success(approve ? '已发布' : '已驳回')
 }
 
@@ -1182,14 +1237,14 @@ async function disableSkill(row) {
     return
   }
   await http.post(`/agent/skills/${row.code}/disable`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['skills'])
   ElMessage.success('已停用')
 }
 
 async function enableSkill(row) {
   // 评审 M-36：停用不是终态；重新启用回到审核队列，由另一人四眼通过后再生效
   await http.post(`/agent/skills/${row.code}/enable`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['skills'])
   ElMessage.success('已提交重新启用审核（需非提交人通过）')
 }
 
@@ -1215,7 +1270,7 @@ async function createBot() {
       memoryScope: botForm.value.memoryScope,
     })
     botOn.value = false
-    await loadAll()
+    await loadDomains(['bots'])
     ElMessage.success('已创建 Bot 草稿，需另一名管理员/质控审核后生效')
   } finally {
     botBusy.value = false
@@ -1224,7 +1279,7 @@ async function createBot() {
 
 async function submitBot(row) {
   await http.post(`/agent/bots/${row.code}/submit`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['bots'])
   ElMessage.success('已提交审核')
 }
 
@@ -1244,7 +1299,7 @@ async function reviewBot(row, approve) {
   }
   await http.post(`/agent/bots/${row.code}/review`,
     { approve, note, rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['bots'])
   ElMessage.success(approve ? '已发布' : '已驳回')
 }
 
@@ -1256,14 +1311,14 @@ async function disableBot(row) {
     return
   }
   await http.post(`/agent/bots/${row.code}/disable`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['bots'])
   ElMessage.success('已停用')
 }
 
 async function enableBot(row) {
   // 评审 M-36：Bot 重新启用同样回到审核队列
   await http.post(`/agent/bots/${row.code}/enable`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['bots'])
   ElMessage.success('已提交重新启用审核（需非提交人通过）')
 }
 
@@ -1303,7 +1358,7 @@ async function saveTeam() {
       ElMessage.success('团队已创建')
     }
     teamOn.value = false
-    await loadAll()
+    await loadDomains(['teams'])
   } finally {
     teamBusy.value = false
   }
@@ -1322,7 +1377,7 @@ async function reviewTeam(row, approve) {
   await http.post(`/agent/bot-teams/${row.code}/review`, {
     rowVersion: row.rowVersion, approve, note: note || null,
   })
-  await loadAll()
+  await loadDomains(['teams'])
   ElMessage.success(approve ? '已通过（成员已更新）' : '已驳回')
 }
 
@@ -1333,14 +1388,14 @@ async function disableTeam(row) {
     return
   }
   await http.post(`/agent/bot-teams/${row.code}/disable`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['teams'])
   ElMessage.success('已停用')
 }
 
 async function enableTeam(row) {
   // 评审 M-36：团队停用后可直接恢复（成员/技能卡仍受各自的发布状态约束）
   await http.post(`/agent/bot-teams/${row.code}/enable`, { rowVersion: row.rowVersion })
-  await loadAll()
+  await loadDomains(['teams'])
   ElMessage.success('已重新启用')
 }
 
@@ -1488,7 +1543,7 @@ async function createExperience() {
       contraindications: expForm.value.contraindications.split('\n').map((s) => s.trim()).filter(Boolean),
     })
     expOn.value = false
-    await loadAll()
+    await loadDomains(['experiences'])
     ElMessage.success('经验已录入（仅已脱敏、已审核内容）')
   } finally {
     expBusy.value = false
@@ -1499,7 +1554,7 @@ async function distill() {
   libraryBusy.value = true
   try {
     const r = await http.post('/agent/skill-proposals/distill', {})
-    await loadAll()
+    await loadDomains(['proposals'])
     // 评审 01-S9：接口返回 created=本次新建，不能再把"历史全部候选"当成本次成果
     const created = r.data.created ?? (r.data.proposals || []).length
     ElMessage.success(created ? `提炼完成，本次新增候选 ${created} 个` : '提炼完成，本次没有新候选')
@@ -1516,7 +1571,8 @@ async function adoptProposal(row) {
     return
   }
   const r = await http.post(`/agent/skill-proposals/${row.id}/adopt`)
-  await loadAll()
+  // 采纳通过会生成新的 DRAFT 技能卡，技能列表需同步
+  await loadDomains(['proposals', 'skills'])
   if (r.data.proposal.status === 'ADOPTED') {
     ElMessage.success(`回放通过，已生成草稿 ${r.data.skill.code}`)
   } else {
@@ -1534,7 +1590,7 @@ async function rejectProposal(row) {
     return
   }
   await http.post(`/agent/skill-proposals/${row.id}/reject`, { note })
-  await loadAll()
+  await loadDomains(['proposals'])
   ElMessage.success('已拒绝')
 }
 

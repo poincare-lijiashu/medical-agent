@@ -181,6 +181,28 @@ def test_ask_view_history_keeps_complete_pairs():
     assert "kept.flat()" in body
 
 
+def test_agent_view_action_refresh_is_domain_scoped():
+    """评测 D2（03-frontend-ux P0-2）：动作后只刷新受影响域 + 读请求在飞合并。
+
+    此前 22 个动作函数成功后都整页重载 15 个 GET，管理员连做 4 次动作即撞
+    60 次/分钟限流。这里锁住"动作只刷自己的域、全量只给首屏/刷新按钮"，
+    禁止回退到每个动作都全量重载。
+    """
+    body = _read(AGENT)
+    assert "const LOADERS = {" in body
+    assert "async function loadDomains(names)" in body
+    assert "await loadDomains(['skills'])" in body
+    assert "await loadDomains(['bots'])" in body
+    assert "await loadDomains(['teams'])" in body
+    assert "await loadDomains(['proposals'])" in body
+    # 全量重载只允许出现在首屏挂载（刷新按钮为 @click="loadAll"）
+    assert "await loadAll()" not in body
+    assert "onMounted(loadAll)" in body
+    api = _read(API)
+    assert "export function dedupeGet" in api
+    assert "_writeEpoch" in api
+
+
 def test_admin_has_ask_entry():
     """评审 04-S6：后端对 admin 开放 /consult，前端侧边栏必须有入口（否则只能用 URL 硬进）。"""
     nav = _read(os.path.join(REPO, "frontend-vue", "src", "constants", "nav.js"))

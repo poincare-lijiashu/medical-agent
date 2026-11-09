@@ -9,6 +9,29 @@ import { useAuthStore } from '../stores/auth'
 
 const http = axios.create({ baseURL: '/api/v1', timeout: 60000, withCredentials: true })
 
+// 评测 D2（03-frontend-ux P0-2）：只读 GET 的**在飞合并**。
+// 同一 URL 的并发读只发一次网络请求（多个视图/刷新同时拉同一资源时合并），
+// 结果不做时间窗口缓存；任何写操作（非 GET/HEAD 响应）都会推进 _writeEpoch，
+// 跨写边界的合并一律作废——避免"写操作之后复用写之前的旧读结果"。
+// 默认关闭，调用方显式传 { dedupe: true } 才启用（保持既有调用零语义变化）。
+let _writeEpoch = 0
+const _inflightReads = new Map()
+
+export function dedupeGet(url, config = {}) {
+  const { dedupe, ...rest } = config
+  if (!dedupe) return http.get(url, rest)
+  const key = url + '|' + JSON.stringify(rest.params || null)
+  const hit = _inflightReads.get(key)
+  if (hit && hit.epoch === _writeEpoch) return hit.promise
+  const epoch = _writeEpoch
+  const p = http.get(url, rest).finally(() => {
+    const cur = _inflightReads.get(key)
+    if (cur && cur.promise === p) _inflightReads.delete(key)
+  })
+  _inflightReads.set(key, { epoch, promise: p })
+  return p
+}
+
 // 第 126 批：统一身份（一次登录，两个系统都认）。
 // 医院业务控制台（frontend-console）登录后持有 Java 平台签发的 JWT；进入 AI 中台时
 // 通过 URL 传进来，这里以 Bearer 携带——跨端口/跨源场景下 cookie 不可用，Bearer 是
@@ -38,7 +61,11 @@ export function errText(error) {
 }
 
 http.interceptors.response.use(
-  (resp) => resp,
+  (resp) => {
+    const m = String((resp.config && resp.config.method) || 'get').toLowerCase()
+    if (m !== 'get' && m !== 'head') _writeEpoch += 1
+    return resp
+  },
   async (error) => {
     const status = error && error.response && error.response.status
     const auth = useAuthStore()
