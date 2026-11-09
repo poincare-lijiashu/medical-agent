@@ -17,11 +17,11 @@
         <el-card shadow="never">
           <label class="lead" style="display: block; margin-bottom: 8px">描述病例或会诊问题（含症状、既往史、用药、检查结果等）</label>
           <textarea
-            v-model="mdtCase" class="inp" rows="4" data-testid="mdt-case"
+            v-model="mdtCase" class="inp" rows="4" data-testid="mdt-case" aria-label="会诊病例或问题"
             placeholder="例：62 岁男性，2 型糖尿病合并冠心病，近期 eGFR 45，正在服二甲双胍与辛伐他汀，拟加用克拉霉素治疗感染，请评估用药与方案。"
           ></textarea>
           <!-- 会诊发起框待附影像（独立上传，compressImage 同策略，成功发起后清空） -->
-          <input ref="imgRef" type="file" accept="image/*" multiple style="display:none" @change="onFiles" />
+          <input ref="imgRef" type="file" accept="image/*" multiple style="display:none" data-testid="mdt-file" aria-label="选择会诊影像" @change="onFiles" />
           <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
             <el-button size="small" data-testid="mdt-upload" @click="imgRef && imgRef.click()">附影像图片</el-button>
             <span class="src">{{ consultImages.length

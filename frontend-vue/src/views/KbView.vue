@@ -14,7 +14,7 @@
     <div class="page-body" style="max-width: 900px">
       <el-card shadow="never">
         <h3 style="margin-top: 0">上传文档</h3>
-        <input ref="fileRef" type="file" accept=".md,.txt,.pdf" multiple style="margin: 10px 0; font-size: 13px" data-testid="kb-file" />
+        <input ref="fileRef" type="file" accept=".md,.txt,.pdf" multiple style="margin: 10px 0; font-size: 13px" data-testid="kb-file" aria-label="选择知识库文档" />
         <div>
           <el-button type="primary" :loading="uploading" data-testid="kb-upload" @click="uploadKb">上传并向量化</el-button>
         </div>

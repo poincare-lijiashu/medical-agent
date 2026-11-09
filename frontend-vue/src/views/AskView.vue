@@ -131,7 +131,7 @@
 
       <div class="composer">
         <textarea
-          ref="inputEl"
+          ref="inputEl" aria-label="提问内容"
           v-model="form.question" class="inp" rows="3" maxlength="2000"
           data-testid="ask-input"
           placeholder="例：华法林与阿司匹林联用需要注意什么？（Ctrl+Enter 发送）"

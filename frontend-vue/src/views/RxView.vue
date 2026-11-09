@@ -33,7 +33,7 @@
         <el-card shadow="never">
           <template #header><b>① 病例摘要</b></template>
           <textarea
-            v-model="rxCase" class="inp" rows="5" data-testid="rx-case"
+            v-model="rxCase" class="inp" rows="5" data-testid="rx-case" aria-label="病例摘要"
             placeholder="粘贴病例要点（诊断、症状、检验、过敏史与正在用药等，20-5000 字）…"
           ></textarea>
           <div style="margin-top: 10px">

@@ -259,7 +259,7 @@
                   </details>
                   <!-- 缩略图条：仅渲染 data:image/ 白名单影像（后端 _review_image_view 按角色收窄后的前端消费） -->
                   <div v-if="imgOf(p).length" class="review-thumbs">
-                    <img v-for="(u, ui) in imgOf(p)" :key="ui" class="thumb" alt="留痕影像缩略图" loading="lazy" :src="u" style="cursor: zoom-in" @click="showImg(u)" />
+                    <img v-for="(u, ui) in imgOf(p)" :key="ui" class="thumb" alt="留痕影像缩略图" loading="lazy" :src="u" style="cursor: zoom-in" role="button" tabindex="0" @click="showImg(u)" @keydown.enter.prevent="showImg(u)" @keydown.space.prevent="showImg(u)" />
                   </div>
                   <div v-else-if="p.imageCount" class="src" style="margin-top: 4px">含 {{ p.imageCount }} 张影像，点「详情」查看</div>
                 </td>
@@ -346,7 +346,7 @@
                                size="small" style="margin-top: 8px" @click.stop.prevent="openDetail(p, 'history')">查看完整回答（{{ p.answerLength }} 字）</el-button>
                   </details>
                   <div v-if="imgOf(p).length" class="review-thumbs">
-                    <img v-for="(u, ui) in imgOf(p)" :key="ui" class="thumb" alt="留痕影像缩略图" loading="lazy" :src="u" style="cursor: zoom-in" @click="showImg(u)" />
+                    <img v-for="(u, ui) in imgOf(p)" :key="ui" class="thumb" alt="留痕影像缩略图" loading="lazy" :src="u" style="cursor: zoom-in" role="button" tabindex="0" @click="showImg(u)" @keydown.enter.prevent="showImg(u)" @keydown.space.prevent="showImg(u)" />
                   </div>
                   <div v-else-if="p.imageCount" class="src" style="margin-top: 4px">含 {{ p.imageCount }} 张影像，点「详情」查看</div>
                 </td>
@@ -388,7 +388,7 @@
         <template v-if="imgOf(detail).length">
           <h4 style="margin-top: 14px">影像（点击放大）</h4>
           <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px">
-            <img v-for="(u, ui) in imgOf(detail)" :key="ui" class="thumb" style="width: 38px; height: 38px; object-fit: cover; border-radius: 6px; cursor: zoom-in" :src="u" alt="待核对影像" @click="showImg(u)" />
+            <img v-for="(u, ui) in imgOf(detail)" :key="ui" class="thumb" style="width: 38px; height: 38px; object-fit: cover; border-radius: 6px; cursor: zoom-in" :src="u" alt="待核对影像" role="button" tabindex="0" @click="showImg(u)" @keydown.enter.prevent="showImg(u)" @keydown.space.prevent="showImg(u)" />
           </div>
         </template>
         <h4 style="margin-top: 14px">提交人</h4><div>{{ detail.submitted_by || '' }}</div>

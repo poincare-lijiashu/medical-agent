@@ -35,7 +35,7 @@
         <h3 style="margin-top: 0">病历内容</h3>
         <div style="margin-bottom: 14px">
           <label class="src" style="display: block; margin-bottom: 6px">粘贴整段病历（门诊/住院原文），AI 自动拆分到下方各栏；仅辅助填表，可手动修改</label>
-          <textarea v-model="qcPaste" class="inp" rows="3" data-testid="qc-paste" placeholder="例：患者男，35 岁。主诉：右下后牙自发痛 3 天。现病史：… 既往史：… 体格检查：… 辅助检查：… 初步诊断：… 医师签名：张医生"></textarea>
+          <textarea v-model="qcPaste" class="inp" rows="3" data-testid="qc-paste" aria-label="粘贴整段病历" placeholder="例：患者男，35 岁。主诉：右下后牙自发痛 3 天。现病史：… 既往史：… 体格检查：… 辅助检查：… 初步诊断：… 医师签名：张医生"></textarea>
           <div style="margin-top: 8px">
             <el-button size="small" :loading="parsing" data-testid="qc-parse" @click="qcParsePaste">自动拆分填充</el-button>
           </div>

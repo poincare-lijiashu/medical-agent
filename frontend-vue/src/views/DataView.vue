@@ -31,7 +31,10 @@
 
       <!-- 审计流（默认收起；展开后限高滚动；服务端过滤/翻页/CSV 导出） -->
       <el-card v-if="d" shadow="never" data-testid="audit-panel">
-        <h3 style="margin: 0 0 8px; cursor: pointer; user-select: none" @click="toggleAuditPanel">
+        <h3 style="margin: 0 0 8px; cursor: pointer; user-select: none" role="button" tabindex="0"
+            :aria-expanded="auditPanelOpen ? 'true' : 'false'"
+            @click="toggleAuditPanel"
+            @keydown.enter.prevent="toggleAuditPanel" @keydown.space.prevent="toggleAuditPanel">
           审计流（共 {{ auditTotalText }} 条）<span>{{ auditPanelOpen ? '▾' : '▸' }}</span>
           <span style="font-weight: 400; font-size: 12px; color: var(--ink-3)">第 {{ Math.floor(auditOffset / AUDIT_PAGE_SIZE) + 1 }} 页 · 每页 {{ AUDIT_PAGE_SIZE }} 条 · 点开看原始 JSON</span>
         </h3>
@@ -62,10 +65,10 @@
                    placeholder="动作（精确，如 resolved_approved）" style="max-width: 190px" autocomplete="off" spellcheck="false" @input="onAuditFilterInput" />
             <datalist id="audit-action-opts"><option v-for="v in auditFacets.actions" :key="v" :value="v" /></datalist>
             <span class="src">时间（{{ auditTz || '本地时区' }}）：</span>
-            <input v-model="auditFrom" type="date" class="inp" data-testid="audit-filter-from"
+            <input v-model="auditFrom" type="date" class="inp" data-testid="audit-filter-from" aria-label="审计起始日期"
                    style="max-width: 145px" @change="onAuditFilterInput" />
             <span class="src">至</span>
-            <input v-model="auditTo" type="date" class="inp" data-testid="audit-filter-to"
+            <input v-model="auditTo" type="date" class="inp" data-testid="audit-filter-to" aria-label="审计结束日期"
                    style="max-width: 145px" @change="onAuditFilterInput" />
             <el-button size="small" data-testid="audit-filter-reset" :disabled="!auditFiltered" @click="resetAuditFilters">清空过滤</el-button>
             <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作 / 日期区间（精确匹配；候选来自全量前 100）' }}</span>

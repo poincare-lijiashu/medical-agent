@@ -147,3 +147,22 @@ def test_frontend_vue_has_lint_and_unit_test_gates():
     job = ci[ci.index("frontend-ai:"):ci.index("image-build:")]
     assert "npm run lint" in job and "npm run test:unit" in job
     assert job.index("npm run lint") < job.index("npm run test:unit") < job.index("npm run build")
+
+
+def test_frontend_vue_enforces_accessibility_rules():
+    """评测 P0-5/P1-5：可访问性规则必须进 lint 门禁（不能只靠人工走查）。
+
+    锁定"真影响键盘/读屏"的规则：点击元素可聚焦 + 键盘触发、输入框有标签、aria 合法；
+    label-has-for 对 Element Plus 自定义组件误报，明确关闭（配置里写明原因）。
+    """
+    import json
+    cfg_path = os.path.join(REPO, "frontend-vue", "eslint.config.js")
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = f.read()
+    for rule in ("click-events-have-key-events", "no-static-element-interactions",
+                 "form-control-has-label", "aria-props", "aria-role"):
+        assert rule in cfg, f"a11y 规则缺失：{rule}"
+    assert "label-has-for': 'off'" in cfg.replace('"', "'")
+    with open(os.path.join(REPO, "frontend-vue", "package.json"), encoding="utf-8") as f:
+        pkg = json.load(f)
+    assert any(k == "eslint-plugin-vuejs-accessibility" for k in pkg["devDependencies"])

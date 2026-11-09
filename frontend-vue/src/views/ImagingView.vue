@@ -16,11 +16,11 @@
       <el-card shadow="never" data-testid="img-form">
         <template #header><b>提问与影像</b></template>
         <textarea
-          v-model="question" class="inp" rows="3" data-testid="img-question"
+          v-model="question" class="inp" rows="3" data-testid="img-question" aria-label="影像提问"
           placeholder="上传 CT/DR/病理图片后提问（可补充临床信息）…"
         ></textarea>
         <!-- 多图上传：累加模式（分次选择追加，上限 10 张），先压缩再入列 -->
-        <input ref="fileRef" type="file" accept="image/*" multiple style="display:none" @change="onFiles" />
+        <input ref="fileRef" type="file" accept="image/*" multiple style="display:none" data-testid="img-file" aria-label="选择影像图片" @change="onFiles" />
         <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
           <el-button size="small" data-testid="img-upload" @click="fileRef && fileRef.click()">上传影像</el-button>
           <span class="src">{{ images.length ? `已选 ${images.length} 张（可分多次添加，最多 10 张）` : '' }}</span>

@@ -6017,3 +6017,47 @@ yaml.safe_load(ci.yml) → 11 job，frontend-ai 步骤 [npm ci, npm run lint, np
 - i18n（全中文硬编码）与 axe/Lighthouse 可访问性门禁未接；
 - `frontend-console` 已有 vue-tsc，`frontend-vue` 仍无类型检查（JS 项目）；
 - ESLint 的格式类规则（缩进/排序）与 Prettier 未启用。
+
+## 149. 2026-11-10 评测 P1-5：可访问性规则进 lint 门禁（第 146 批）
+
+**问题（评测 03-frontend-ux P1-5）**
+
+- 20 处 `aria-*` 里 15 处只是输入框 `aria-label`；表格语义、可点击非按钮元素、图标按钮
+  几乎为零；且没有任何自动化可访问性门禁（`docs/DESIGN-SYSTEM.md` 自己也承认 axe/Lighthouse 未接入 CI）。
+- 典型实锤：`DataView` 的「审计流」标题是 `<h3 @click>`——**键盘完全无法展开**；
+  `ReviewCenterView` 的影像缩略图是 `<img @click>`——手术/核对场景里键盘用户点不开；
+  多个 `textarea/date input` 没有可访问名称（读屏只念"编辑框"）。
+
+**已做**
+
+1. **规则入 lint（阻断）**：`eslint.config.js` 启用 `eslint-plugin-vuejs-accessibility` 中
+   "真影响键盘/读屏"的 11 条规则：`click-events-have-key-events`、`no-static-element-interactions`、
+   `form-control-has-label`、`aria-props`/`aria-role`/`aria-unsupported-elements`、
+   `role-has-required-aria-props`、`anchor-has-content`、`no-autofocus`、`no-distracting-elements`、
+   `mouse-events-have-key-events`；`label-has-for` 对 Element Plus 自定义组件误报，明确关闭并注明原因。
+2. **21 处真实问题全部修复**：
+   - `DataView` 审计流标题：`role="button" tabindex="0" aria-expanded` + Enter/Space 切换；
+   - `ReviewCenterView` 3 处影像缩略图：`role="button" tabindex="0"` + Enter/Space 放大；
+   - 12 处输入控件补可访问名称：提问框（Ask/Literature）、病例框（Case/Consult/Imaging/Rx）、
+     质控粘贴框、知识库/病例/会诊/影像文件选择框、审计起止日期。
+3. **回归锁**：`tests/test_ci_gates.py::test_frontend_vue_enforces_accessibility_rules`
+   —— 5 条核心规则必须在配置里、`label-has-for` 必须显式 off、插件必须在 devDependencies。
+
+**验证**
+
+```
+npm run lint        → 0 problems（含 a11y 规则）
+npm run test:unit   → 17 passed
+npm run build       → 5.16s 通过
+真机（admin01）/data：审计流标题 role=button / tabindex=0 / aria-expanded 随点击 false→true→false；
+  两个日期输入 aria-label「审计起始日期 / 审计结束日期」；无障碍树显示 button collapsed/expanded
+真机 /review：审核中心完整渲染（76 条待核对 / 7 张待审处方），console 0 条
+定向：test_ci_gates → 11 passed
+全量（不含 e2e）→ 1559 passed / 1 skipped
+```
+
+**本批仍未解决**
+
+- axe / Lighthouse 自动化审计（需要浏览器环境）与全键盘 Tab 走查 e2e 未接；
+- 手写表格的 `<th scope="col">`、对话框关闭后焦点归还未系统整改；
+- 图标按钮（×）的 `aria-label` 仍有遗漏（ImagingView/CaseView 的删除按钮）。

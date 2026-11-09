@@ -46,7 +46,7 @@
     </div>
     <div class="composer">
       <textarea
-        v-model="input" class="inp" rows="2" data-testid="lit-input"
+        v-model="input" class="inp" rows="2" data-testid="lit-input" aria-label="文献检索问题"
         placeholder="例：二甲双胍是一线治疗吗？（Enter 发送 · Shift+Enter 换行）"
         :disabled="sending" @keydown.enter.exact.prevent="send"
       ></textarea>
