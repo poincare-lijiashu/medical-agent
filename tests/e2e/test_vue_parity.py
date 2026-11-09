@@ -33,6 +33,8 @@ import pytest
 
 pytest.importorskip("playwright")  # 环境没装 playwright → 自动 skip，保证 CI 全绿
 
+pytestmark = pytest.mark.e2e  # 评测 C6：CI 用 `-m e2e` 分层执行
+
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
 
 from tests.e2e._ratelimit import login_with_rate_limit_retry  # noqa: E402

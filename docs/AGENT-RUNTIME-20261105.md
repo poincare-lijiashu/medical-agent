@@ -6415,3 +6415,44 @@ GET /medical/admin/audit?limit=5 → total=2694，读取正常
   报表**可能有秒级延迟（JSONL 仍是权威源）。
 - 进程被强杀时队列内未写 PG 的条目会缺失（JSONL 可回放，`scripts/migrate_json_to_pg.py`
   与启动对账可补齐部分场景）；如要求零缺口，可改为持久化队列（Redis Stream/outbox 表）。
+
+## 159. 2026-11-10 评测 C6：e2e 接入 CI（分层 marker + 独立 job）（第 156 批）
+
+**问题（评测 05 P0-5 / C6）**
+
+- CI 的 pytest job 不起 8001 服务：`tests/e2e/` 的 16 个浏览器用例在 CI 里**全部 skip**，
+  "CI 绿"并不代表主链路可用；且整套 e2e 顺序跑会撞 60 次/分钟限流（单例实测 63s），
+  与单测混跑不可行。
+
+**已做**
+
+1. **分层 marker**：4 个 e2e 文件（smoke / vue_admin / vue_assist / vue_parity）加
+   `pytestmark = pytest.mark.e2e`；`pytest.ini` 注册 `e2e` 标记。
+   默认全量仍包含它们（未被排除），CI 用 `-m e2e` 精确分层。
+2. **CI 独立 e2e job**
+   - 起 `postgres:15-alpine`（5433）+ uvicorn（`APP_ENV=development`、`AUTH_SEED_DEMO=true`、
+     `EMBED_DEVICE=cpu`、`EMBED_ALLOW_DOWNLOAD=false`；模型缺失时启动会降级但不阻塞）；
+   - `pip install pytest-playwright` + `playwright install --with-deps chromium`；
+   - `python -m pytest -q -m e2e --timeout=600`（Playwright 真浏览器）；
+   - uvicorn 日志/测试产物作为 artifact 留档；`timeout-minutes: 40`。
+   - **暂设 `continue-on-error: true`**：共享 runner 上 60 次/分钟限流窗口与浏览器抖动需
+     观察一个周期，避免 G63 式"门禁常红被绕过"；观察后再切强制。
+3. **回归锁**：`tests/test_ci_gates.py::test_ci_runs_e2e_in_layered_job`
+   —— CI 必须有 e2e job/`-m e2e`/`AUTH_SEED_DEMO`/playwright 安装，pytest.ini 必须注册标记，
+   4 个文件必须有 `pytestmark`。
+
+**验证**
+
+```
+pytest -m e2e --collect-only → 16/1593 collected（其余 1577 deselected，分层生效）
+pytest -m e2e tests/e2e/test_vue_assist.py → 1 passed（4.76s，真浏览器、真服务）
+yaml.safe_load(ci.yml) → 12 个 job（新增 e2e）
+定向：test_ci_gates → 12 passed
+全量（不含 e2e）→ 1576 passed / 1 skipped
+```
+
+**遗留**
+
+- e2e job 先非阻断；观察一周期后把 `continue-on-error` 去掉；
+- 整套 16 例在共享 runner 上预计 10–20 分钟（限流等待占大头），后续如需压缩可把
+  "只读页面打开"类用例合并或按账号分片。

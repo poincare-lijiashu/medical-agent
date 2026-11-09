@@ -388,3 +388,69 @@ jobs:
           name: eval-report
           path: eval/results_baseline.json
           if-no-files-found: ignore
+
+  e2e:
+    # 评测 C6：此前 CI 从不跑 e2e —— 16 个浏览器用例在 CI 全 skip（只 skip 不执行），
+    # 生产前端/主链路实际只有本地人工冒烟。本 job 起 PG + uvicorn + Chromium 真跑
+    # `-m e2e`；先以"可观测不阻断"（continue-on-error）接入一个周期：共享 runner 上
+    # 限流窗口（60 次/分钟）与浏览器抖动需要观察，避免 G63 式"常红被绕过"。
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: medagent
+          POSTGRES_PASSWORD: medagent123
+          POSTGRES_DB: medagent
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U medagent"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PG_HOST: 127.0.0.1
+      PG_PORT: "5433"
+      PG_USER: medagent
+      PG_PASSWORD: medagent123
+      PG_DATABASE: medagent
+      # e2e 用演示账号（doctor01/pharm01/admin01），必须显式开 seed 且非 production
+      APP_ENV: development
+      AUTH_SEED_DEMO: "true"
+      EMBED_DEVICE: cpu
+      EMBED_ALLOW_DOWNLOAD: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest-playwright==0.7.1
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Start backend
+        run: |
+          nohup python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001 > uvicorn.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8001/healthz && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8001/healthz || (tail -80 uvicorn.log && exit 1)
+      - name: Run e2e（Playwright，分层 marker）
+        run: python -m pytest -q -m e2e --timeout=600
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            uvicorn.log
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7

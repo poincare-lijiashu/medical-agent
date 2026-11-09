@@ -166,3 +166,19 @@ def test_frontend_vue_enforces_accessibility_rules():
     with open(os.path.join(REPO, "frontend-vue", "package.json"), encoding="utf-8") as f:
         pkg = json.load(f)
     assert any(k == "eslint-plugin-vuejs-accessibility" for k in pkg["devDependencies"])
+
+
+def test_ci_runs_e2e_in_layered_job():
+    """评测 C6：e2e 必须被 CI 真正执行（此前只 skip 不跑），且按 marker 与单测分层。"""
+    ci = _read(CI)
+    assert "\n  e2e:" in ci, "CI 必须有独立 e2e job"
+    assert "-m e2e" in ci
+    assert "AUTH_SEED_DEMO" in ci, "e2e 依赖演示账号，必须显式开 seed"
+    assert "playwright install" in ci
+    ini = _read(PYTEST_INI)
+    assert re.search(r"(?m)^\s+e2e:", ini), "pytest.ini 必须注册 e2e 标记"
+    e2e_dir = os.path.join(REPO, "tests", "e2e")
+    for name in ("test_smoke_flow.py", "test_vue_admin.py",
+                 "test_vue_assist.py", "test_vue_parity.py"):
+        with open(os.path.join(e2e_dir, name), encoding="utf-8") as f:
+            assert "pytestmark = pytest.mark.e2e" in f.read(), f"{name} 缺 e2e 标记"
