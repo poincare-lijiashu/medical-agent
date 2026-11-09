@@ -5176,6 +5176,40 @@ Flyway：auth_svc 78 个迁移校验通过（current version 77），无重复�
    修：**不注入** `EMPI_FIELD_KEY`/`EMPI_HASH_SALT`，让 dev 配置的原密钥生效——库里 731 条患者密文正是用它加密的。
 3. **子进程随 PowerShell 会话结束被回收** → `Start-Process` 启的 java 在命令结束时被杀。修：脚本末尾常驻心跳，配合后台运行保持存活。
 
+**浏览器端到端验证中发现并修复的另外三个问题（均由真实点击复现，非推测）**
+4. **`NAV_GROUPS` 漏了「总览」** → 侧栏按 `NAV_GROUPS` 过滤（`AppShell.vue:146-151`），
+   「运营驾驶舱」「运营洞察」「AI 临床助手」**整组不渲染**。这不是本批引入的，
+   是既有缺陷（演示时根本看不到驾驶舱）。修：`navigation.ts:392-394` 补 `'总览'`。
+5. **AI 中台对所有响应下发 `X-Frame-Options: DENY` + `frame-ancestors 'none'`** → iframe 必被拦。
+   修：新增 `settings.embed_frame_ancestors`（默认空 = 行为不变）；配置后**仅前端文档**改用
+   `frame-ancestors <白名单>` 并移除 XFO，**API 响应仍保持 `'none'`**（实测两种响应头分别正确）。
+6. **`?token=` 被 `/` → `/overview` 的 redirect 丢掉** → iframe 内首屏全是 401 并触发登出。
+   修：令牌采纳提前到 `main.js` 的挂载前（`await adoptToken` 后再 `app.use(router)`），
+   守卫里保留兜底逻辑。
+
+**演示启动步骤（本机）**
+```powershell
+# 0) 底座（Docker）
+docker compose up -d postgres etcd minio milvus
+# 1) Java 医院业务（8080-8089，10 个服务）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_platform_demo.ps1
+# 2) Python AI 中台（8001）
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
+# 3) 医院业务控制台（5180，构建产物 + /api 代理到网关）
+cd frontend-console; npx vite preview
+# 浏览器打开 http://127.0.0.1:5180 → doctor01 / Med@2026 → 左侧「总览 · AI 临床助手」
+```
+
+**浏览器验证结论（真实点击 + 截图）**
+```
+登录 5180 → /dashboard，右上角 doctor01
+侧栏「总览」组出现「AI 临床助手」，href=/ai
+点击 → iframe src=http://127.0.0.1:8001/?token=<JWT>，尺寸 1125×619，无 frame 拦截
+iframe 内：MedAssist 临床决策支持工作台，右上角「doctor01 医师 · 退出」，无登录表单
+          卡片：待双人核对 76 / 已处理核对 1092 / 知识库文档 2997 / 版本 1.0.0
+控制台无 X-Frame-Options 类报错
+```
+
 **本批新增边界（如实登记）**
 - **iframe 是过渡形态**：做到"一次登录、一个入口"，但 AI 仍是独立页面，尚未嵌入业务流程
   （真正深度集成应是：开医嘱时内联审方提示、写病历时内联质控、患者卡片旁内联会诊建议）。

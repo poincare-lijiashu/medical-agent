@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # JSON 降为 best-effort 镜像快照；false=旧编排（JSON 先写真源，PG best-effort 镜像）。
     # 无 PG 池 / PG_OFFLINE 离线模式下两种编排等价（JSON 是唯一持久层）。
     pg_primary: bool = True
+    # 第 126 批：允许被哪些来源用 <iframe> 嵌入本前端（CSP frame-ancestors 语法，
+    # 空格分隔，如 "http://127.0.0.1:5180 http://localhost:5180"）。
+    # 空 = 保持 X-Frame-Options: DENY（默认，行为不变）。
+    # 只对**前端文档**放行；API 响应永远不允许被嵌入（保持 frame-ancestors 'none'）。
+    embed_frame_ancestors: str = ""
     # 第 125 批：收件箱"待本科室填意见"的读路径。false=读 jsonb（默认，与历史一致）；
     # true=读派生子表 consult_opinions（`NOT EXISTS` 才能走索引，§127/§128）。
     # 切换前必须确认 `scripts/backfill_consult_opinions.py --check` 无差异——子表由双写维护，

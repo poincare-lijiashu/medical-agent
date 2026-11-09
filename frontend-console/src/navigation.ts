@@ -390,6 +390,8 @@ export const NAV_ITEMS: NavItem[] = [
 ]
 
 export const NAV_GROUPS = [
+  // 第 126 批：`总览` 此前缺失，导致运营驾驶舱/运营洞察/AI 助手整组不渲染。
+  '总览',
   '临床诊疗',
   '住院管理',
   '医技检查',
