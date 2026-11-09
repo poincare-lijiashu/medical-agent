@@ -16,6 +16,7 @@ import time
 import pytest
 
 from backend.core import auth as auth_mod
+from backend.core import case_archive as ca_mod
 from backend.core import consults as consults_mod
 from backend.core import departments as dept_mod
 from backend.core import llm_config as lc
@@ -219,6 +220,9 @@ class FakeConn:
             self.db["review_queue"] = {k: v for k, v in self.db["review_queue"].items()
                                        if v.get("status") != "pending"}
             return f"DELETE {n}"
+        if s.startswith("DELETE FROM consult_opinions"):
+            # 评测 A4：全量重建/单条同步都先删（假池不存子表，仅确认 SQL 形态）
+            return "DELETE"
         if s.startswith("INSERT INTO consult_opinions"):
             # 第 132 批（A1）：会诊意见子表全量重建（迁移后由 jsonb 派生），假池不存子表
             return "INSERT"
@@ -290,6 +294,9 @@ class FakeConn:
             # 轮 A3：runtime_flags UPSERT（value jsonb str → 往返）
             for k, value in rows:
                 self.db["runtime_flags"][k] = json.loads(value)
+            return
+        if s.startswith("INSERT INTO consult_opinions"):
+            # 评测 A4：派生行逐条 UPSERT（假池不存子表，仅确认 SQL 形态）
             return
         raise AssertionError(f"假池未实现的 executemany: {s[:80]}")
 
@@ -1108,21 +1115,27 @@ def test_write_json_atomic_tmp_then_replace(tmp_path, monkeypatch):
     """问题1 写侧回归锁：_write_json_atomic 必须先完整写 tmp 文件、再 os.replace 原子替换——
     并发读（前端轮询）恰逢写入窗口也不会读到截断/空文件。诊断结论：8 个 JSON 真源写路径
     已统一原子化，本测试锁定该形态防回退。fake replace 只记录不替换：
-    断言（1）replace 以 path+'.tmp' 为源、path 为目标；（2）调用时 tmp 内容已完整落盘；
+    断言（1）replace 以 `path+'.tmp.<pid>.<tid>'` 为源、path 为目标（评测 P0-4：临时名
+    带 pid/线程号，避免并发写同一目标时互相截断中间态）；（2）调用时 tmp 内容已完整落盘；
     （3）replace 之前目标文件未被截断。"""
     target = str(tmp_path / "atomic.json")
     with open(target, "w", encoding="utf-8") as f:
         json.dump({"old": 1}, f)
     calls = []
+    seen = {}
 
     def fake_replace(src, dst):
         calls.append((src, dst))  # 只记录不执行：验证 replace 调用时 tmp 已完整写好
+        with open(src, encoding="utf-8") as f:
+            seen["content"] = json.load(f)
 
     monkeypatch.setattr(pg_store.os, "replace", fake_replace)
     pg_store._write_json_atomic(target, {"new": 2, "items": [1, 2, 3]})
-    assert calls == [(target + ".tmp", target)], "必须以 path+'.tmp' 为源、path 为目标替换"
-    with open(str(tmp_path / "atomic.json.tmp"), encoding="utf-8") as f:
-        assert json.load(f) == {"new": 2, "items": [1, 2, 3]}  # replace 前内容已完整写入 tmp
+    assert len(calls) == 1
+    src, dst = calls[0]
+    assert dst == target
+    assert src.startswith(target + ".tmp."), "必须以 path+'.tmp.<pid>.<tid>' 为源、path 为目标"
+    assert seen["content"] == {"new": 2, "items": [1, 2, 3]}  # replace 前内容已完整写入 tmp
     with open(target, encoding="utf-8") as f:
         assert json.load(f) == {"old": 1}  # replace 之前目标文件未被截断/置空
 
@@ -1490,3 +1503,74 @@ def test_rebuild_mirror_endpoint_guards_and_permissions(monkeypatch):
     monkeypatch.setattr(pg_store, "rebuild_json_mirror", refuse)
     assert c.post(url, json={"domains": ["memories"]},
                   headers=adm).status_code == 409
+
+
+# ---- 评测 P0-4：JSON 镜像丢行修复（读改写加锁 + 启动按 PG 真源对账） ----
+
+def test_mirror_json_upsert_concurrent_no_lost_update(tmp_path):
+    """8 线程并发写同一镜像文件：每条都必须保留。
+
+    修复前 mirror_json_upsert 是无锁 read-modify-write，两个写者各持旧快照、后写覆盖
+    先写（生产实测 consults PG 17 / JSON 15、review_queue PG 1168 / JSON 1098）。"""
+    import threading
+    path = str(tmp_path / "consults.json")
+    items = [{"id": f"c{i}"} for i in range(40)]
+
+    def worker(batch):
+        for it in batch:
+            pg_store.mirror_json_upsert(path, it)
+
+    threads = [threading.Thread(target=worker, args=(items[i::8],)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    assert len(data) == len(items)
+    assert {r["id"] for r in data} == {i["id"] for i in items}
+
+
+def test_mirror_json_file_is_best_effort(tmp_path):
+    """镜像写失败不得冒泡：PG 已写成功时，磁盘问题不能把业务请求变成 500。"""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    pg_store.mirror_json_file(str(blocker / "sub" / "x.json"), [{"id": "c1"}])  # 不抛异常
+
+
+def test_rebuild_clinical_mirror_refuses_empty_pg(fake_pg, tmp_path):
+    """PG 空表拒绝重建镜像（无法区分"真没数据"与"迁移没跑"，不能用空数据覆盖）。"""
+    with pytest.raises(pg_store.PGUnavailable):
+        pg_store.rebuild_clinical_mirror("consults", str(tmp_path / "consults.json"))
+    assert not (tmp_path / "consults.json").exists()
+
+
+def test_resync_clinical_mirrors_projects_pg_truth(fake_pg, tmp_path, monkeypatch):
+    """启动对账：按 PG 真源投影镜像——PG 独有行补齐、JSON 独有行移除、内容回退纠正。"""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "pg_primary", True)  # 覆盖本文件 autouse 的旧编排
+    c_path = tmp_path / "consults.json"
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(c_path))
+    monkeypatch.setattr(review, "QUEUE_FILE", str(tmp_path / "queue.json"))
+    monkeypatch.setattr(rx_mod, "PRESCRIPTIONS_FILE", str(tmp_path / "rx.json"))
+    monkeypatch.setattr(ca_mod, "CASE_ARCHIVE_FILE", str(tmp_path / "case.json"))
+
+    pg_rows = [{"id": "c1", "status": "closed", "created_at": "2026-11-01T00:00:00"},
+               {"id": "c2", "status": "open", "created_at": "2026-11-02T00:00:00"}]
+    fake_pg["consults"] = {r["id"]: r for r in pg_rows}
+    # 镜像现状：c1 状态回退（open）、c2 缺失、c3 为 JSON 独有（PG 已无）
+    c_path.write_text(json.dumps(
+        [{"id": "c1", "status": "open", "created_at": "2026-11-01T00:00:00"},
+         {"id": "c3", "status": "open"}], ensure_ascii=False), encoding="utf-8")
+
+    stats = asyncio.run(pg_store.resync_clinical_mirrors())
+
+    assert stats["consults"]["pg"] == 2
+    assert stats["consults"]["added"] == 1    # c2 补齐
+    assert stats["consults"]["removed"] == 1  # c3 移除（PG 已无）
+    assert stats["consults"]["changed"] == 1  # c1 状态回退纠正
+    with open(c_path, encoding="utf-8") as f:
+        after = {r["id"]: r for r in json.load(f)}
+    assert set(after) == {"c1", "c2"}
+    assert after["c1"]["status"] == "closed"

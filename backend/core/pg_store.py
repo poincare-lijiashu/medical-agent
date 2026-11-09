@@ -14,10 +14,13 @@
 - migrate_json_to_pg：PG 表空而 JSON 有数据 → 幂等导入（ON CONFLICT DO NOTHING）；
   PG 非空时对 review_queue 按 id 差集补齐 JSON 独有记录（任务1 数据修复：PG 同步失败
   窗口内 JSON 积累的记录，重启后自动找回）；lifespan 启动时自动触发，scripts/migrate_json_to_pg.py 可手动触发。
+- resync_clinical_mirrors：migrate 之后按 PG 真源重建临床域（审核队列/会诊/处方/病例库）
+  JSON 镜像（评测 P0-4：镜像读-改-写并发会丢行，启动对账幂等并记录修正条数）。
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import threading
@@ -532,6 +535,11 @@ async def _init_impl() -> bool:
             await c.execute(_CONSULT_OPINIONS_DDL)
             await c.execute("CREATE INDEX IF NOT EXISTS ix_consult_opinions_dept "
                             "ON consult_opinions(consult_id, dept)")
+            # 评测 A4：补外键（先清孤儿派生行；失败只告警，旧库权限不足不影响启动）
+            try:
+                await c.execute(_CONSULT_OPINIONS_FK_DDL)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pg.consult_opinions_fk_skipped", error=str(e)[:120])
             # 阶段2.1：智能开药处方（id=rx-* 业务键；data jsonb 全量留痕 + doctor/status
             # 冗余列便于药剂科工作清单与运维排查；状态机语义在 prescriptions 域模块）
             await c.execute("""CREATE TABLE IF NOT EXISTS prescriptions(
@@ -730,6 +738,111 @@ def rebuild_json_mirror(table: str, path: str) -> int:
     items = _run_pg(_pg_load_json_list(table, key)) or []
     _write_json_atomic(path, items)
     return len(items)
+
+
+# ---------- 评测 P0-4：临床域镜像对账（PG 真源 → JSON 镜像） ----------
+# 医学域四个列表（审核队列/会诊/处方/病例库）不走 _JSON_LIST_KEYS 通用表，各有一
+# 专属读函数。镜像写路径（mirror_json_upsert）已加锁；这里补"按 PG 全量重建"的
+# 修复入口，供启动对账（resync_clinical_mirrors）与运维手动重建共用。
+
+def _clinical_mirror_sources() -> dict[str, tuple[str, str, object]]:
+    """域名 → (PG 表名, JSON 镜像路径, PG 全量读协程函数)。
+
+    路径在调用时解析（便于测试 monkeypatch，也避免模块级导入环）。"""
+    from backend.core.case_archive import CASE_ARCHIVE_FILE
+    from backend.core.consults import CONSULTS_FILE
+    from backend.core.medical_review import QUEUE_FILE
+    from backend.core.prescriptions import PRESCRIPTIONS_FILE
+    return {
+        "reviewQueue": ("review_queue", QUEUE_FILE, _pg_load_queue),
+        "consults": ("consults", CONSULTS_FILE, _pg_load_consults),
+        "prescriptions": ("prescriptions", PRESCRIPTIONS_FILE, _pg_load_prescriptions),
+        "caseArchive": ("case_archive", CASE_ARCHIVE_FILE, _pg_load_case_archive),
+    }
+
+
+def rebuild_clinical_mirror(domain: str, path: str | None = None,
+                            allow_empty: bool = False) -> int:
+    """用 PG 真源重写临床域 JSON 镜像；返回写入条数。
+
+    默认 PG 该域为空 → 抛 ``PGUnavailable`` 拒绝（无法区分"真没数据"与"迁移没跑"，
+    宁可不写也不要用空表覆盖镜像）；purge 场景显式传 ``allow_empty=True``——
+    此时 PG 已清空、镜像必须跟着清空，否则必然分叉。
+    镜像仅供人工排查/灾难参考；权威恢复走 pg_dump。"""
+    _require_pg_for_rebuild()
+    src = _clinical_mirror_sources().get(domain)
+    if src is None:
+        raise KeyError(f"未知临床镜像域：{domain}")
+    _, default_path, loader = src
+    target = path or default_path
+    items = _run_pg(loader()) or []
+    if not items and not allow_empty:
+        raise PGUnavailable(f"{domain} 在 PG 中为空：拒绝用空数据覆盖 JSON 镜像")
+    with _MIRROR_LOCK, _mirror_file_lock(target):
+        _write_json_atomic(target, items)
+    return len(items)
+
+
+def _rebuild_queue_mirror_safe() -> None:
+    """purge 后按 PG 重建审核队列 JSON 镜像（best-effort）。
+
+    评测 P0-4 第 4 条：purge_*_reviews 只删 PG，镜像保留被清行 → PG/JSON 必然分叉，
+    回落路径会把已清理的 drug/pending 行"复活"。"""
+    from backend.core.medical_review import QUEUE_FILE
+    try:
+        rebuild_clinical_mirror("reviewQueue", QUEUE_FILE, allow_empty=True)
+    except Exception as e:  # noqa: BLE001 —— 镜像修复失败不影响 purge 结果
+        logger.warning("pg.purge_mirror_resync_failed", error=str(e)[:120])
+
+
+async def resync_clinical_mirrors() -> dict:
+    """PG 真源 → 临床域 JSON 镜像对账重建（启动时调用；幂等）。
+
+    评测 P0-4：镜像写是 read-modify-write，多实例并发会丢行，全量镜像又可能用过期
+    内存快照——实测 PG 有、JSON 无（consults 17 vs 15，review_queue 70 行）以及
+    同一单状态回退（open vs closed）。启动时（migrate 把 JSON 独有行补进 PG 之后）
+    按 PG 全量投影回镜像，可把历史分叉一次性纠正并写入修正条数日志。
+
+    安全边界：① 仅 pg_primary=true（PG 为真源）时执行，旧编排 JSON 才是真源，
+    投影会删掉尚未同步 PG 的新数据；② PG 空表跳过（保留镜像）；③ 写盘仍走镜像锁，
+    与运行中的单行镜像写互斥。返回 {域名: 统计}；任何异常只告警不影响启动。"""
+    if offline_mode() or not _pool or not bool(getattr(settings, "pg_primary", True)):
+        return {}
+    out: dict[str, dict] = {}
+    for name, (_, path, loader) in _clinical_mirror_sources().items():
+        try:
+            rows = await _arun(loader())
+        except Exception as e:  # noqa: BLE001 —— 单域失败不影响其它域
+            logger.warning("pg.mirror_resync_read_failed", domain=name,
+                           error=str(e)[:120])
+            continue
+        if not rows:
+            continue  # 空表：PG 无权威数据，保留镜像不动
+        try:
+            before = _read_json(path, [])
+            before_list = [r for r in before if isinstance(r, dict)] \
+                if isinstance(before, list) else []
+            before_by_id = {r.get("id"): r for r in before_list if r.get("id")}
+            after_ids = {r.get("id") for r in rows if r.get("id")}
+            stats = {
+                "pg": len(rows),
+                "json_before": len(before_list),
+                "added": len(after_ids - set(before_by_id)),
+                "removed": len(set(before_by_id) - after_ids),
+                "changed": sum(1 for r in rows
+                               if r.get("id") in before_by_id
+                               and before_by_id[r["id"]] != r),
+            }
+            with _MIRROR_LOCK, _mirror_file_lock(path):
+                _write_json_atomic(path, rows)
+        except Exception as e:  # noqa: BLE001 —— 镜像写失败只告警
+            logger.warning("pg.mirror_resync_write_failed", domain=name,
+                           error=str(e)[:120])
+            continue
+        out[name] = stats
+        if stats["added"] or stats["removed"] or stats["changed"]:
+            logger.info("pg.mirror_resync", domain=name, **stats)
+    return out
 
 
 def _emit_pg_family(lines: list, prefix: str, stats: dict, anchors: set) -> None:
@@ -1138,9 +1251,11 @@ async def purge_pending_reviews() -> str:
     if not _pool:
         return ""
     try:
-        return await _pg_write_async("review_queue", "purge", _purge_pending_impl())
+        res = await _pg_write_async("review_queue", "purge", _purge_pending_impl())
     except Exception:  # noqa: BLE001
         return ""
+    await asyncio.to_thread(_rebuild_queue_mirror_safe)  # 评测 P0-4：镜像跟随 PG 清理
+    return res
 
 
 def purge_pending_reviews_strict() -> str:
@@ -1164,9 +1279,11 @@ async def purge_drug_reviews() -> str:
     if not _pool:
         return ""
     try:
-        return await _pg_write_async("review_queue", "purge_drug", _purge_drug_impl())
+        res = await _pg_write_async("review_queue", "purge_drug", _purge_drug_impl())
     except Exception:  # noqa: BLE001
         return ""
+    await asyncio.to_thread(_rebuild_queue_mirror_safe)  # 评测 P0-4：镜像跟随 PG 清理
+    return res
 
 
 # ---------- B1 repo 层：四个模块文件读写的统一出入口（PG 真源 + JSON 兜底） ----------
@@ -1183,12 +1300,94 @@ def _read_json(path: str, default):
 
 
 def _write_json_atomic(path: str, data) -> None:
-    """通用原子写（tmp + os.replace），与既有各模块写盘形态一致（ensure_ascii=False/indent=2）。"""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    """通用原子写（tmp + os.replace），与既有各模块写盘形态一致（ensure_ascii=False/indent=2）。
+
+    临时文件名带 pid/线程号：多进程/多线程同时写同一目标时不会共用同一个 `.tmp`
+    而互相截断中间态（固定名在并发下会把对方写了一半的文件 replace 上线）。"""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):  # replace 成功后不存在；异常时清理半成品
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+# ---------- JSON 镜像写：进程内锁 + 跨进程文件锁（评测 P0-4）----------
+# 背景：mirror_json_upsert 是"读整文件 → 改一行 → 重写"的 read-modify-write；两个写者
+# 同时读到同一份旧文件时后写覆盖先写，镜像静默丢行（生产实测 consults PG 17 / JSON 15、
+# review_queue PG 1168 / JSON 1098）。修复：① 所有镜像读改写串行化（进程内 RLock +
+# 跨进程 advisory 锁，后者 best-effort、超时只告警）；② 启动时按 PG 真源重建镜像
+# （resync_clinical_mirrors）。镜像定位也修正为"仅供人工排查/灾难参考"，
+# 权威恢复走 pg_dump——不再承诺逐行完整。
+_MIRROR_LOCK = threading.RLock()
+_MIRROR_FILE_LOCK_TIMEOUT_S = 2.0
+
+
+def _try_lock_fd(fd: int) -> bool:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_fd(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def _mirror_file_lock(path: str):
+    """跨进程镜像锁（best-effort）：`<path>.lock` 旁路文件 + msvcrt/fcntl。
+
+    拿不到锁（打开失败/等待超时）仍继续写——镜像不是业务主路径，可用性优先；
+    同进程内互斥由 `_MIRROR_LOCK` 保证，本锁只用于多实例场景。"""
+    fd = None
+    try:
+        fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR)
+    except OSError as e:
+        logger.debug("pg.mirror_lock_open_failed", file=os.path.basename(path),
+                     error=str(e)[:80])
+    acquired = False
+    if fd is not None:
+        deadline = time.monotonic() + _MIRROR_FILE_LOCK_TIMEOUT_S
+        while True:
+            if _try_lock_fd(fd):
+                acquired = True
+                break
+            if time.monotonic() >= deadline:
+                logger.warning("pg.mirror_lock_timeout", file=os.path.basename(path),
+                               detail="跨进程镜像锁等待超时：继续写（可用性优先）")
+                break
+            time.sleep(0.01)
+    try:
+        yield
+    finally:
+        if fd is not None:
+            if acquired:
+                _unlock_fd(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 _repo_pg_stale: set[str] = set()  # 任务1：repo 层 PG 全量同步失败「域」集合（键=文件名）。
@@ -1296,7 +1495,9 @@ def _json_then_pg(save_fn, path: str, data) -> None:
         _repo_pg_stale.discard(domain)
         _stale_warned.discard(domain)
         try:
-            _write_json_atomic(path, data)  # 镜像快照（PG 灾难时最近的恢复源）
+            # 镜像快照：仅供人工排查/灾难参考（不承诺逐行完整；权威恢复走 pg_dump）。
+            # 完整对账由 resync_clinical_mirrors 在启动时按 PG 重建。
+            _write_json_atomic(path, data)
         except Exception as e:  # noqa: BLE001
             logger.warning("pg.repo.mirror_json_failed", error=str(e)[:120],
                            file=os.path.basename(path))
@@ -1408,29 +1609,42 @@ def has_pool() -> bool:
 
 
 def mirror_json_file(path: str, data) -> None:
-    """JSON 镜像快照（原子写，best-effort）：PG 主写成功后由调用方刷新，
-    覆盖无害（PG 是真源；灾难时这是最近的恢复源）。"""
-    _write_json_atomic(path, data)
+    """JSON 镜像快照（原子写，best-effort）：PG 主写成功后由调用方刷新。
+
+    定位（评测 P0-4 修正）：镜像仅供人工排查/灾难参考，**不承诺逐行完整**——权威
+    恢复走 pg_dump；完整对账由 `resync_clinical_mirrors` 在启动时按 PG 重建。
+    写失败/锁超时只告警，绝不让已成功的 PG 写变成业务 500。"""
+    try:
+        with _MIRROR_LOCK, _mirror_file_lock(path):
+            _write_json_atomic(path, data)
+    except Exception as e:  # noqa: BLE001 —— 镜像失败不影响 PG 真源
+        logger.warning("pg.mirror_json_file_failed", file=os.path.basename(path),
+                       error=str(e)[:120])
 
 
 def mirror_json_upsert(path: str, item: dict, key: str = "id") -> None:
     """JSON 镜像**就地更新**（第 87 批，PG 主模式的单行写配套）：
 
     读现有镜像 → 同 key 替换（不存在则追加）→ 原子写。与 `mirror_json_file(全量覆盖)`
-    相比，调用方无需为了刷新镜像而先读全表；镜像本身只是灾难恢复源（PG 仍是真源），
-    故失败仅告警、绝不冒泡影响已成功的 PG 写。"""
+    相比，调用方无需为了刷新镜像而先读全表；镜像本身只是灾难恢复参考（PG 仍是真源），
+    故失败仅告警、绝不冒泡影响已成功的 PG 写。
+
+    评测 P0-4：读-改-写必须串行化——进程内 `_MIRROR_LOCK` + 跨进程 `<path>.lock`。
+    此前无锁并发时两个写者各持旧快照、后写覆盖先写，镜像静默丢行（生产实测
+    consults PG 17 / JSON 15）。"""
     try:
-        data = _read_json(path, [])
-        if not isinstance(data, list):
-            data = []
-        kid = item.get(key)
-        for idx, old in enumerate(data):
-            if isinstance(old, dict) and old.get(key) == kid:
-                data[idx] = item
-                break
-        else:
-            data.append(item)
-        _write_json_atomic(path, data)
+        with _MIRROR_LOCK, _mirror_file_lock(path):
+            data = _read_json(path, [])
+            if not isinstance(data, list):
+                data = []
+            kid = item.get(key)
+            for idx, old in enumerate(data):
+                if isinstance(old, dict) and old.get(key) == kid:
+                    data[idx] = item
+                    break
+            else:
+                data.append(item)
+            _write_json_atomic(path, data)
     except Exception as e:  # noqa: BLE001 —— 镜像失败不影响 PG 真源
         logger.warning("pg.mirror_json_upsert_failed", file=os.path.basename(path),
                        error=str(e)[:120])
@@ -1793,21 +2007,31 @@ _CONSULT_OPINIONS_DDL = """CREATE TABLE IF NOT EXISTS consult_opinions(
     content text NOT NULL DEFAULT '', ts timestamptz,
     primary key (consult_id, doctor))"""
 
+# 评测 A4：派生表补外键（jsonb 仍是唯一真源，子表可随时重建）。
+# 幂等 DO 块：首次执行先清孤儿行（主单已被删除、子表残留），再加 FK；
+# ON DELETE CASCADE 从根上消除"删主单留孤儿"，避免待填意见统计被污染。
+# 任一步失败只告警（旧库权限不足等），不影响启动与主数据。
+_CONSULT_OPINIONS_FK_DDL = """DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conname = 'fk_consult_opinions_consult') THEN
+        DELETE FROM consult_opinions o
+         WHERE NOT EXISTS (SELECT 1 FROM consults c WHERE c.id = o.consult_id);
+        ALTER TABLE consult_opinions
+            ADD CONSTRAINT fk_consult_opinions_consult
+            FOREIGN KEY (consult_id) REFERENCES consults(id) ON DELETE CASCADE;
+    END IF;
+END $$"""
+
 _CONSULT_OPINIONS_UPSERT = """INSERT INTO consult_opinions(consult_id,dept,doctor,content,ts)
     VALUES($1,$2,$3,$4,$5)
     ON CONFLICT(consult_id,doctor) DO UPDATE SET dept=EXCLUDED.dept,
     content=EXCLUDED.content, ts=EXCLUDED.ts"""
 
-# 全量同步（save_consults 路径）用一条 SQL 从 jsonb 重建，避免逐单 Python 循环
-_CONSULT_OPINIONS_FULL_SYNC = """INSERT INTO consult_opinions(consult_id,dept,doctor,content,ts)
-    SELECT c.id, coalesce(o->>'dept',''), o->>'doctor', coalesce(o->>'content',''),
-           CASE WHEN (o->>'ts') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-                THEN (o->>'ts')::timestamptz END
-    FROM consults c
-    CROSS JOIN LATERAL jsonb_array_elements(coalesce(c.data->'opinions','[]'::jsonb)) o
-    WHERE coalesce(o->>'doctor','') <> ''
-    ON CONFLICT(consult_id,doctor) DO UPDATE SET dept=EXCLUDED.dept,
-    content=EXCLUDED.content, ts=EXCLUDED.ts"""
+# 评测 A4：全量重建改走 Python 口径（见 _rebuild_consult_opinions）。原 SQL 版用
+# `(o->>'ts')::timestamptz`，正则只校验前缀形状不校验值域：遇到
+# `2026-13-45T99:99:99` 抛 DatetimeFieldOverflowError → 整段重建回滚（主单却写成功）。
+# ts 只用于展示排序、不参与业务判定，非法值置 NULL 即可，不能因此丢派生行。
 
 
 def _opinion_ts(v) -> datetime | None:
@@ -1858,6 +2082,22 @@ async def _sync_consult_opinions(c, item: dict) -> None:
                        error=str(e)[:120])
 
 
+async def _rebuild_consult_opinions(c, items: list) -> None:
+    """按 jsonb 真源整体重建意见子表（全量同步路径；**Python 唯一映射口径**）。
+
+    评测 A4：替换原 SQL 全量重建——SQL 侧 `(o->>'ts')::timestamptz` 遇到值域非法
+    时间戳会抛 DatetimeFieldOverflowError 并回滚整段重建。这里复用
+    `consult_opinion_rows` 的安全解析（非法/缺失 ts → NULL，只影响展示排序）。
+    """
+    rows: list[tuple] = []
+    for it in (items or []):
+        if isinstance(it, dict):
+            rows.extend(consult_opinion_rows(it))
+    await c.execute("DELETE FROM consult_opinions")
+    if rows:
+        await c.executemany(_CONSULT_OPINIONS_UPSERT, rows)
+
+
 async def _pg_load_consults() -> list | None:
     async with _pool.acquire() as c:
         rows = await c.fetch("SELECT data FROM consults ORDER BY data->>'created_at', id")
@@ -1880,10 +2120,10 @@ async def _pg_save_consults(items: list) -> None:
             if rows:
                 await c.executemany(_CONSULT_UPSERT, rows)
             # 第 124 批：派生索引随全量同步整体重建（事务内，失败只告警不影响主数据）
+            # 评测 A4：改走 Python 口径（非法 ts 不再炸掉整段重建）
             try:
                 async with c.transaction():
-                    await c.execute("DELETE FROM consult_opinions")
-                    await c.execute(_CONSULT_OPINIONS_FULL_SYNC)
+                    await _rebuild_consult_opinions(c, items)
             except Exception as e:  # noqa: BLE001 —— 派生索引可回填重建
                 logger.warning("pg.consult_opinions_resync_failed", error=str(e)[:120])
 
@@ -2687,7 +2927,7 @@ async def _pg_upsert_json_item(table: str, key: str, item: dict,
 
 
 def _json_upsert_item(path: str, key: str, item: dict, ignore_existing: bool) -> None:
-    with _JSON_LIST_LOCK:
+    with _JSON_LIST_LOCK, _mirror_file_lock(path):
         data = _read_json(path, [])
         exists = any(i.get(key) == item.get(key) for i in data)
         if exists and ignore_existing:
@@ -3077,7 +3317,10 @@ async def _migrate_impl() -> dict:
                         for i in cs_items if isinstance(i, dict) and i.get("id")]
                 if rows:
                     await c.executemany(_CONSULT_UPSERT, rows)
-                    await c.execute(_CONSULT_OPINIONS_FULL_SYNC)
+                    # 评测 A4：逐单同步派生行（Python 口径，非法 ts 置 NULL 不中断）
+                    for i in cs_items:
+                        if isinstance(i, dict) and i.get("id"):
+                            await _sync_consult_opinions(c, i)
                     out["consults"] = len(rows)
             else:
                 existing = {r["id"] for r in await c.fetch("SELECT id FROM consults")}
@@ -3087,7 +3330,11 @@ async def _migrate_impl() -> dict:
                         if isinstance(i, dict) and i.get("id") and i["id"] not in existing]
                 if rows:
                     await c.executemany(_CONSULT_UPSERT, rows)
-                    await c.execute(_CONSULT_OPINIONS_FULL_SYNC)
+                    # 评测 A4：只同步本次补齐的单（不再全表重建，避免误删 PG 既有派生行）
+                    added_ids = {r[0] for r in rows}
+                    for i in cs_items:
+                        if isinstance(i, dict) and i.get("id") in added_ids:
+                            await _sync_consult_opinions(c, i)
                     out["consults_reconciled"] = len(rows)
         # 轮 A3：runtime_flags——repo JSON 兜底文件 ⊇ PG（JSON 先写不回滚）：
         # 表空 → 全量导入；PG 非空 → 按 key 差集只增不覆盖补齐（幂等可重复跑，

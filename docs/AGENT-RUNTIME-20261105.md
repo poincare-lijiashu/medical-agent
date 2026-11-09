@@ -5471,3 +5471,62 @@ tests/test_inline_ai.py → 6 passed
   根因是 `mirror_json_upsert` 的无锁 read-modify-write + 全量重写；需单独一批做全量对账与锁化。
 - A3 审计两侧 event_type 语义、B3 出境管控、B4 自动签发默认值、C2/C3/C4/C5 仍在 P0 清单。
 
+## 137. 2026-11-09 评测 A2/A4：镜像锁化与启动对账 + 意见子表外键/时间戳安全（第 134 批）
+
+**已做**
+
+1. **A2 JSON 镜像丢行修复**（评测 02 P0-4）
+   - `_write_json_atomic` 临时名改为 `path.tmp.<pid>.<tid>`：多进程/多线程同写不再
+     共用 `.tmp` 互相截断中间态；`replace` 成功/失败都清理半成品。
+   - `_MIRROR_LOCK`（进程内 RLock）+ `_mirror_file_lock`（跨进程 `<path>.lock`，
+     msvcrt/fcntl，非阻塞重试 2s，超时只告警）：`mirror_json_upsert` /
+     `mirror_json_file` / `_json_upsert_item` 的"读整文件→改→重写"全部串行化。
+     `mirror_json_file` 改为真正 best-effort（写盘失败只告警，不让已成功的 PG 写变 500）。
+   - **启动对账** `resync_clinical_mirrors()`：migrate 之后按 PG 真源重建
+     reviewQueue/consults/prescriptions/caseArchive 四个镜像，逐域记录
+     `added/removed/changed`；仅 `pg_primary` + 有池执行，PG 空表跳过（不拿空数据覆盖）。
+   - `rebuild_clinical_mirror()` 与 admin `POST /api/v1/agent/storage/rebuild-mirror`
+     新增四个临床域（手动修复入口；PG 空表返回 409）。
+   - `purge_pending_reviews` / `purge_drug_reviews` 成功后同步重建队列镜像
+     （评测第 4 条：此前只删 PG 不删 JSON，回落时会把已清理的 drug/pending 行"复活"）。
+   - 修正镜像定位承诺（代码注释 + 模块 docstring）：仅供人工排查/灾难参考，权威恢复走 pg_dump。
+2. **A4 会诊意见子表**（评测 02 P0-2）
+   - `_CONSULT_OPINIONS_FK_DDL`：幂等 DO 块，首次先清孤儿派生行，再加
+     `FOREIGN KEY (consult_id) REFERENCES consults(id) ON DELETE CASCADE`；
+     init 中执行，失败只告警（旧库权限不足不影响启动）。jsonb 仍是唯一真源。
+   - 删除 `_CONSULT_OPINIONS_FULL_SYNC` 的 SQL 侧 `(ts)::timestamptz` 强转（值域非法如
+     `2026-13-45T99:99:99` 会抛 DatetimeFieldOverflowError 并回滚整段重建）；改为
+     `_rebuild_consult_opinions()` 复用 `consult_opinion_rows`：非法 ts → NULL，行不丢。
+     `_migrate_impl` 改为只对本次导入的单 `_sync_consult_opinions`（不再全表重建）。
+   - `scripts/backfill_consult_opinions.py` 新增 `classify()`：**数量不符 vs 孤儿行**
+     分开报（此前孤儿被误报为双写漏写）；`--apply` 重建后补外键。
+3. **测试**：`test_pg_repo.py` 新增并发镜像写（8 线程×40 条零丢行）、镜像写 best-effort、
+   临床重建拒绝空表、启动对账增删改统计；`test_consult_opinions_sync.py` 新增
+   非法时间戳不炸重建、外键 DDL 形态、对账分类；原子写断言适配新临时名。
+
+**真机验证**
+
+```
+重启前实际分叉（PG / JSON）：consults 17/15、review_queue 1169/1099
+python scripts/migrate_json_to_pg.py：
+  pg.mirror_resync domain=reviewQueue pg=1169 json_before=1099 added=70 removed=0 changed=0
+  pg.mirror_resync domain=consults    pg=17   json_before=15   added=2  removed=0 changed=1
+  二次执行：四域 added/removed/changed 全 0（幂等）
+重启 8001（新代码）：health 200；queue.json=1169、consults.json=17
+python scripts/backfill_consult_opinions.py --check：
+  会诊单 17 单 / jsonb 意见 9 条；子表 9 行 9 单；数量不符 0，孤儿行 0 → 一致
+pg_constraint：fk_consult_opinions_consult |
+  FOREIGN KEY (consult_id) REFERENCES consults(id) ON DELETE CASCADE
+tests/test_pg_repo.py + test_consult_opinions_sync.py + test_consults.py + test_review_single_row_write.py
+  → 119 passed
+全量（不含 e2e）→ 1532 passed / 1 skipped（3 分 25 秒）
+```
+
+**本批仍未解决**
+
+- 镜像仍是"每次单行写重写整个文件"（queue.json 3.1MB），写放大未做节流；
+  正确性已由锁 + 启动对账兜底，但高频写入时值得后续做按时间窗合并落盘。
+- 一致性巡检仍未接 CI/CronJob（P1-1）；A3 审计 event_type 语义、B3 出境管控、
+  B4 高危急会诊自动签发默认值、C2–C5 仍在 P0 清单。
+
+

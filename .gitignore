@@ -43,6 +43,8 @@ data/skill_advices.json
 data/*.err
 data/*.log
 data/*.tmp
+# 评测 P0-4：JSON 镜像跨进程锁的旁路文件（运行时生成，不入库）
+data/*.lock
 data/verify_out.txt
 
 # 阶段5 PubMed 扩容拉取缓存（9.7MB 大文件不入库；可在线再生成，离线复现走

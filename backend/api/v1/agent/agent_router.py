@@ -31,6 +31,7 @@ from backend.agents import router as router_agent
 from backend.api.deps import model_quota, model_slot, rate_limit, require_role, require_user
 from backend.config import settings
 from backend.core import agent_flags, agent_tools, web_sources, pg_store
+from backend.core import case_archive, consults, medical_review, prescriptions
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 
@@ -422,7 +423,7 @@ async def set_flag(req: FlagReq, user: dict = Depends(require_role("admin"))):
 # 背景：PG 是真源，JSON 只是灾难镜像；多进程并发写镜像可能丢/滞后，需要可控的修复入口。
 
 class MirrorRebuildReq(BaseModel):
-    domains: list[str] = Field(default_factory=list, max_length=12)
+    domains: list[str] = Field(default_factory=list, max_length=16)
 
 
 def _mirror_domains() -> dict[str, tuple[str, str]]:
@@ -437,7 +438,15 @@ def _mirror_domains() -> dict[str, tuple[str, str]]:
         "snapshots": ("agent_skill_metrics", skill_trends.SNAPSHOT_FILE),
         "advices": ("agent_skill_advices", skill_advice.ADVICE_FILE),
         "sleepReports": ("agent_sleep_reports", sleep_memory.REPORT_FILE),
+        # 评测 P0-4：临床域镜像（审核队列/会诊/处方/病例库）同样提供手动对账重建入口
+        "reviewQueue": ("review_queue", medical_review.QUEUE_FILE),
+        "consults": ("consults", consults.CONSULTS_FILE),
+        "prescriptions": ("prescriptions", prescriptions.PRESCRIPTIONS_FILE),
+        "caseArchive": ("case_archive", case_archive.CASE_ARCHIVE_FILE),
     }
+
+
+_CLINICAL_MIRROR_DOMAINS = ("reviewQueue", "consults", "prescriptions", "caseArchive")
 
 
 @router.post("/storage/rebuild-mirror")
@@ -454,6 +463,9 @@ async def rebuild_mirror(req: MirrorRebuildReq, user: dict = Depends(require_rol
         try:
             if name == "skills":
                 counts[name] = await asyncio.to_thread(pg_store.rebuild_skills_mirror, path)
+            elif name in _CLINICAL_MIRROR_DOMAINS:
+                counts[name] = await asyncio.to_thread(
+                    pg_store.rebuild_clinical_mirror, name, path)
             else:
                 counts[name] = await asyncio.to_thread(pg_store.rebuild_json_mirror, table, path)
         except pg_store.PGUnavailable as e:

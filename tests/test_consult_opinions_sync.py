@@ -114,20 +114,47 @@ def test_upsert_consult_row_syncs_opinions(monkeypatch):
 
 
 def test_full_save_rebuilds_derived_table(monkeypatch):
-    """全量同步（save_consults 路径）整体重建子表，避免删除会诊后残留孤儿行。"""
+    """全量同步（save_consults 路径）整体重建子表，避免删除会诊后残留孤儿行。
+
+    评测 A4：重建改走 Python 口径（`consult_opinion_rows`），不再依赖 SQL 侧
+    `(ts)::timestamptz` 强转。"""
     conn = _Conn()
     monkeypatch.setattr(pg_store, "_pool", _Pool(conn))
     asyncio.run(pg_store._pg_save_consults([ITEM]))
     assert "DELETE FROM consult_opinions" in conn.executed
-    assert any("jsonb_array_elements" in s for s in conn.executed)
-    assert "INSERT INTO consult_opinions" in conn.executed[-1]
+    assert conn.bulk_sql and "INSERT INTO consult_opinions" in conn.bulk_sql[-1]
+    opinion_rows = [r for r in conn.bulk if len(r) == 5]  # 子表 5 列；主单 UPSERT 4 列
+    assert len(opinion_rows) == 2  # 无 doctor 的脏数据仍跳过
+
+
+def test_full_save_survives_out_of_range_ts(monkeypatch):
+    """评测 A4：值域非法的时间戳（如 2026-13-45T99:99:99）不得炸掉整段派生重建。
+
+    原 SQL 用 `(o->>'ts')::timestamptz`，正则只校验前缀形状 → DatetimeFieldOverflowError
+    → 整段重建回滚，主单却写成功。现在非法 ts 只置 NULL（仅影响展示排序），行不丢。"""
+    conn = _Conn()
+    monkeypatch.setattr(pg_store, "_pool", _Pool(conn))
+    item = {"id": "c9", "opinions": [
+        {"doctor": "d9", "dept": "内科", "content": "建议复查",
+         "ts": "2026-13-45T99:99:99"}]}
+    asyncio.run(pg_store._pg_save_consults([item]))  # 不抛
+    opinion_rows = [r for r in conn.bulk if len(r) == 5]
+    assert len(opinion_rows) == 1
+    assert opinion_rows[0][4] is None
 
 
 def test_opinions_table_ddl_is_wired_into_init():
     assert "CREATE TABLE IF NOT EXISTS consult_opinions" in pg_store._CONSULT_OPINIONS_DDL
     assert "primary key (consult_id, doctor)" in pg_store._CONSULT_OPINIONS_DDL
+    # 评测 A4：外键 + ON DELETE CASCADE（先清孤儿再加约束，幂等 DO 块）
+    assert "FOREIGN KEY (consult_id) REFERENCES consults(id) ON DELETE CASCADE" \
+        in " ".join(pg_store._CONSULT_OPINIONS_FK_DDL.split())
+    assert "DELETE FROM consult_opinions" in pg_store._CONSULT_OPINIONS_FK_DDL
+    assert "NOT EXISTS (SELECT 1 FROM consults" in " ".join(
+        pg_store._CONSULT_OPINIONS_FK_DDL.split())
     src = inspect.getsource(pg_store._init_impl)
     assert "_CONSULT_OPINIONS_DDL" in src
+    assert "_CONSULT_OPINIONS_FK_DDL" in src
     assert "create index if not exists ix_consult_opinions_dept" in src.lower()
 
 
@@ -148,6 +175,15 @@ def test_backfill_diff_by_consult():
     assert backfill.diff_by_consult({"c1": 2}, {"c1": 0}) == ["c1"]  # 期望有、实际缺
     assert backfill.diff_by_consult({"c1": 1}, {"c1": 2}) == ["c1"]  # 行数不符
     assert backfill.diff_by_consult({"c1": 1}, {"c1": 1, "c9": 1}) == ["c9"]  # 孤儿行
+
+
+def test_backfill_classify_separates_mismatch_and_orphans():
+    """评测 A4：数量不符（可回填修复）与孤儿行（主单已删，需 FK 级联）必须分开报。"""
+    cls = backfill.classify({"c1": 2, "c2": 0}, {"c1": 1, "c9": 1})
+    assert cls["mismatch"] == ["c1"]     # 期望 2 实际 1
+    assert cls["orphans"] == ["c9"]      # c9 主单不存在
+    ok = backfill.classify({"c1": 2}, {"c1": 2})
+    assert ok == {"mismatch": [], "orphans": []}
 
 
 def test_backfill_exit_code_semantics():

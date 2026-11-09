@@ -72,6 +72,19 @@ def diff_by_consult(expected: dict[str, int], actual: dict[str, int]) -> list[st
     return bad
 
 
+def classify(expected: dict[str, int], actual: dict[str, int]) -> dict:
+    """把差异分成两类（评测 A4），避免运维误判：
+
+    - ``mismatch``：主单存在、但子表行数与 jsonb 不符（双写漏写/多写），可 --apply 修复；
+    - ``orphans``：子表有记录、consults 主单已不存在（删除路径未级联），回填修不了——
+      初始化时 `_CONSULT_OPINIONS_FK_DDL` 会先清孤儿再加外键（ON DELETE CASCADE）。
+    原实现用 diff_by_consult 把两者混成"不一致"，孤儿行被误报为双写漏写。"""
+    mismatch = [cid for cid in sorted(expected)
+                if int(expected.get(cid, 0)) != int(actual.get(cid, 0))]
+    orphans = sorted(set(actual) - set(expected))
+    return {"mismatch": mismatch, "orphans": orphans}
+
+
 def exit_code(bad: list[str], *, apply: bool, check: bool) -> int:
     """退出码：`--check` 不允许忽略差异；`--apply` 之后仍有差异也算失败（供 CronJob 告警）。"""
     if apply or check:
@@ -93,13 +106,16 @@ async def _run(apply: bool, check: bool, dsn: str) -> int:
         rows = await conn.fetch("SELECT id, data FROM consults")
         stats = plan(rows)
         actual = await _table_counts(conn)
-        bad = diff_by_consult(stats["perConsult"], actual)
+        cls = classify(stats["perConsult"], actual)
+        bad = cls["mismatch"] + cls["orphans"]
         print(f"会诊单 {stats['consults']} 单；jsonb 意见 {stats['opinions']} 条"
               f"（跳过无 doctor {stats['skipped']} 条）")
         print(f"子表现状 {sum(actual.values())} 行 / {len(actual)} 单；"
-              f"与 jsonb 不一致单数 {len(bad)}")
-        if bad:
-            print("  不一致单号（前 10）：", ", ".join(bad[:10]))
+              f"数量不符单数 {len(cls['mismatch'])}，孤儿行单数 {len(cls['orphans'])}")
+        if cls["mismatch"]:
+            print("  数量不符单号（前 10）：", ", ".join(cls["mismatch"][:10]))
+        if cls["orphans"]:
+            print("  孤儿行单号（前 10，主单已不存在）：", ", ".join(cls["orphans"][:10]))
         if not apply:
             if check:
                 print("对账结果：" + ("不一致（退出码 1）" if bad else "一致"))
@@ -117,6 +133,11 @@ async def _run(apply: bool, check: bool, dsn: str) -> int:
             for i in range(0, len(all_rows), BATCH):
                 await conn.executemany(pg_store._CONSULT_OPINIONS_UPSERT,
                                        all_rows[i:i + BATCH])
+        # 评测 A4：重建后补外键（先清孤儿），从根上防止"删主单留孤儿"再次发生
+        try:
+            await conn.execute(pg_store._CONSULT_OPINIONS_FK_DDL)
+        except Exception as e:  # noqa: BLE001 —— 权限不足等只提示，不影响已完成的回填
+            print(f"（外键创建跳过：{type(e).__name__}: {str(e)[:80]}）")
         after = await _table_counts(conn)
         bad2 = diff_by_consult(stats["perConsult"], after)
         print(f"已重建：{sum(after.values())} 行 / {len(after)} 单；残留不一致 {len(bad2)}")

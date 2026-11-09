@@ -91,6 +91,8 @@ async def lifespan(app: FastAPI):
             migrated = await pg_store.migrate_json_to_pg()  # B1：PG 空表自动导入 JSON 存量（幂等）
             if migrated:
                 logger.info("medical_agent.startup.pg_migrated", **migrated)
+            # 评测 P0-4：migrate 之后按 PG 真源重建临床域 JSON 镜像（幂等；修正并发丢行/状态回退）
+            await pg_store.resync_clinical_mirrors()
             for u, rec in all_users().items():
                 await pg_store.mirror_user(u, rec.get("role", ""), rec.get("password_hash", ""))
             logger.info("medical_agent.startup.pg_ready")
