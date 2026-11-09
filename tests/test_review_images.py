@@ -202,11 +202,10 @@ def test_pending_images_visibility_by_reviewer_role(monkeypatch, tmp_path):
     pending_self = c.get("/api/v1/medical/review/pending", headers=_h(tok_doc1)).json()["pending"]
     entry_self = next(i for i in pending_self if i["id"] == rid)
     assert entry_self.get("images"), "提交人本人对待审项影像可见"
-    # doctor（他人提交的待审项）：images 剥离（统一规则：doctor 仅本人提交的）
+    # doctor（他人提交的待审项）：评测 B2 收窄后整条不下发（不再只是剥影像）
     tok_doc2 = _login(c, "doctor02", "Med@2026x")
     pending_d2 = c.get("/api/v1/medical/review/pending", headers=_h(tok_doc2)).json()["pending"]
-    entry_d2 = next(i for i in pending_d2 if i["id"] == rid)
-    assert not entry_d2.get("images"), "doctor 他人待审项 images 应剥离（隐私边界不变）"
+    assert rid not in [i["id"] for i in pending_d2], "医生不应看到他人提交的待审条目"
 
 
 def test_submit_caps_total_image_chars_4m(monkeypatch, tmp_path):

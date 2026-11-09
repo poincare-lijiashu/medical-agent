@@ -349,8 +349,9 @@ async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
                             payload={"len": len(req.text), "role": user.get("role", "")})
     try:
         llm = get_llm("medical_literature")
+        # 评测 B1：病历拆分同样禁止把原文直送模型——先脱敏直接标识，保留临床字段。
         r = await llm.ainvoke([SystemMessage(content=_QC_PARSE_PROMPT),
-                               HumanMessage(content=req.text)])
+                               HumanMessage(content=_redactor.redact(req.text))])
         out = r.content if hasattr(r, "content") else str(r)
         if isinstance(out, list):  # 某些 provider 返回分段
             out = "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in out)

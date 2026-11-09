@@ -66,7 +66,9 @@ async def prescription_suggest(req: PrescribeSuggestReq,
     """
     from backend.core import drug_dict as dd
     actor = user.get("username", "system")
-    case_text = req.case_text.strip()
+    # 评测 B1：病例原文禁止直送 LLM / 直写审计。先经统一 PHI 脱敏（core.phi 单一实现），
+    # 姓名/电话/身份证/住址等直接标识替换为占位符；临床要素（症状/诊断/药名）保持原样。
+    case_text = _shared.redactor.redact(req.case_text.strip())
     # 候选池：规范名+类别（LLM 只能从清单选药；空字典兜底空清单 → 全部丢弃）
     drugs = await asyncio.to_thread(dd.load_dict)
     pool = "\n".join(f"- {d.get('name')}（{d.get('category') or '其他'}）"

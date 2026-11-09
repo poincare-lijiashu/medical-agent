@@ -212,10 +212,14 @@ def test_pending_visibility_qc_excludes_drug_pharm_admin_keep(monkeypatch, tmp_p
     ph = _login(c, "pharm01")
     adm = _login(c, "admin01")
     qc = _login(c, "qc01")
-    for tok in (ph, adm):  # pharmacist/admin：drug + 非 drug 均可见（语义不变）
-        ids = [i["id"] for i in
-               c.get("/api/v1/medical/review/pending", headers=_h(tok)).json()["pending"]]
-        assert rid_drug in ids and rid_other in ids
+    # 评测 B2 收窄后： pharmacist 只见 drug 项（非 drug 的病例正文不再横向可见）；
+    # admin 仍可见全部（兜底审核权）。qc 见非 drug（见下）。
+    ids_ph = [i["id"] for i in
+              c.get("/api/v1/medical/review/pending", headers=_h(ph)).json()["pending"]]
+    assert rid_drug in ids_ph and rid_other not in ids_ph
+    ids_adm = [i["id"] for i in
+               c.get("/api/v1/medical/review/pending", headers=_h(adm)).json()["pending"]]
+    assert rid_drug in ids_adm and rid_other in ids_adm
     ids_qc = [i["id"] for i in
               c.get("/api/v1/medical/review/pending", headers=_h(qc)).json()["pending"]]
     assert rid_other in ids_qc, "qc 仍可见其它助手高危项"

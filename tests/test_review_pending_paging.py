@@ -161,15 +161,19 @@ def test_compact_omits_answer_and_images(monkeypatch, tmp_path):
     assert len(slim.content) < len(full.content) / 2
 
 
-def test_compact_respects_image_visibility(monkeypatch, tmp_path):
-    """影像张数按角色可见性计数：提交人本人可见，其他医生看到 0（不泄露存在性）。"""
+def test_compact_hides_other_doctors_items(monkeypatch, tmp_path):
+    """评测 B2（横向越权修复）：医生只能看到本人提交的待核对项。
+
+    此前 doctor02 能看到 doctor01 的 r1（仅剥影像）；现在整条不再下发，
+    连"存在性"都不泄露（比剥图片更强）。提交人本人仍可见影像计数。
+    """
     c, _ = _client(monkeypatch, tmp_path)
     own = c.get("/api/v1/medical/review/pending", headers=_token("doctor01", "doctor"),
                 params={"compact": 1}).json()["pending"]
     assert next(i for i in own if i["id"] == "r1")["imageCount"] == 1
     other = c.get("/api/v1/medical/review/pending", headers=_token("doctor02", "doctor"),
                   params={"compact": 1}).json()["pending"]
-    assert next(i for i in other if i["id"] == "r1")["imageCount"] == 0
+    assert "r1" not in [i["id"] for i in other]
 
 
 def test_detail_returns_full_item_and_audits(monkeypatch, tmp_path):
@@ -195,10 +199,10 @@ def test_detail_hidden_for_qc_drug_and_unknown(monkeypatch, tmp_path):
     assert ok.status_code == 200 and ok.json()["item"]["id"] == "r2"
 
 
-def test_detail_strips_images_for_other_doctor(monkeypatch, tmp_path):
-    """医生查看他人条目：正文可见（审核依据），影像按隐私边界剥离。"""
+def test_detail_hidden_for_other_doctor(monkeypatch, tmp_path):
+    """评测 B2：医生用 rid 直查他人条目 → 404（不能绕过列表的归属过滤）。"""
     c, _ = _client(monkeypatch, tmp_path)
-    item = c.get("/api/v1/medical/review/item/r1",
-                 headers=_token("doctor02", "doctor")).json()["item"]
-    assert item["answer"] == "A" * 2000
-    assert "images" not in item
+    r = c.get("/api/v1/medical/review/item/r1", headers=_token("doctor02", "doctor"))
+    assert r.status_code == 404
+    own = c.get("/api/v1/medical/review/item/r1", headers=_token("doctor01", "doctor"))
+    assert own.status_code == 200 and own.json()["item"]["answer"] == "A" * 2000

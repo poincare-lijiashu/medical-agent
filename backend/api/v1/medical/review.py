@@ -97,9 +97,29 @@ async def review_pending(
     role = user.get("role", "")
     me = user.get("username", "system")
     keyword = (q or "").strip().lower()
-    pg = await asyncio.to_thread(review.page_pending, role == "qc", keyword, limit, offset)
+    # 评测 B2：横向越权修复。此前 doctor 调本端点能拿到**全院他人**待核对条目（含病例
+    # 摘要与 AI 回答），只有影像被剥掉；pharmacist 也能看到非 drug 项。授权口径改为：
+    #   qc/admin → 全局（qc 剔除 drug）；
+    #   pharmacist → 仅 drug 项（药物高危核对是药剂科职责）；
+    #   doctor → **仅本人提交**（前端本来就只展示"我的待确认"，走 my-pending-confirm）。
+    # 收窄角色走内存过滤（这些角色不依赖服务端分页；limit=0 的角标计数仍然正确）。
+    if role in ("doctor", "pharmacist"):
+        items = await asyncio.to_thread(review.pending)
+        if role == "doctor":
+            items = [i for i in items if i.get("submitted_by") == me]
+        else:
+            items = [i for i in items if i.get("agent") == "drug"]
+        if keyword:
+            items = [i for i in items if _match_query(i, keyword)]
+        total = len(items)
+        page = items[offset:offset + limit] if limit is not None else items[offset:]
+        pg = None
+    else:
+        pg = await asyncio.to_thread(review.page_pending, role == "qc", keyword, limit, offset)
     if pg is not None:  # 第 82 批：status/角色收窄/关键字/分页/计数已在 PG 完成
         page, total = pg["items"], pg["total"]
+    elif role in ("doctor", "pharmacist"):
+        pass  # 上面已按归属/drug 过滤并切片（不能让下面的全局内存分支覆盖）
     else:  # 无池/离线/异常/空表 → 既有内存过滤 + 切片（行为不变）
         items = await asyncio.to_thread(review.pending)
         if role == "qc":  # 问题4 彻底收窄：qc 界面不见 drug 项（含旧遗留），
@@ -133,7 +153,16 @@ async def review_item(rid: str, user: dict = Depends(require_role(*_REVIEW_ROLES
     role = user.get("role", "")
     me = user.get("username", "system")
     item = await asyncio.to_thread(review.get, key) if key else None
-    if item is None or (role == "qc" and item.get("agent") == "drug"):
+    # 评测 B2：详情接口与列表同一授权口径（否则可用 rid 直查绕过列表过滤）。
+    forbidden = False
+    if item is not None:
+        if role == "qc" and item.get("agent") == "drug":
+            forbidden = True
+        elif role == "doctor" and item.get("submitted_by") != me:
+            forbidden = True
+        elif role == "pharmacist" and item.get("agent") != "drug":
+            forbidden = True
+    if item is None or forbidden:
         raise HTTPException(404, "复核单不存在")
     item = _review_image_view(item, role, me)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="review",
