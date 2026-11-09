@@ -42,8 +42,12 @@ _pool = None
 # 冷却结束自动探测；成功一次立即闭合。查询/数据类错误（缺列等）不触发熔断。
 _PG_CIRCUIT_FAILS = 3
 _PG_CIRCUIT_COOLDOWN_S = 15.0
+# 评测 E3：慢查询/桥接超时**单独计数**——一条慢 SQL 不应让全站回落 JSON；
+# 连续超时达到该阈值（每次 3s 桥接上限，≈30s 持续异常）才视作 PG 黑洞并短暂熔断。
+_PG_TIMEOUT_TRIP = 10
 _circuit_lock = threading.Lock()
 _pg_fail_streak = 0
+_pg_timeout_streak = 0
 _pg_circuit_until = 0.0  # time.monotonic() 截止点
 
 
@@ -99,23 +103,51 @@ def circuit_open() -> bool:
 
 
 def _pg_error_is_connectivity(exc: BaseException) -> bool:
-    """只有"连不上"类异常才计入熔断；查询错误/数据错误不应让全局快速回落。"""
-    if isinstance(exc, (_FutTimeout, asyncio.TimeoutError, TimeoutError,
-                        OSError, ConnectionError)):
+    """只有"连不上"类异常才应立即计入熔断；慢查询/桥接超时不在此列。
+
+    评测 E3：旧实现把 `_FutTimeout`/`asyncio.TimeoutError` 也算连接失败，
+    一条慢 SQL 打满 3 秒即让**全站**读回落 JSON 15 秒（与注释宣称相反）。
+    超时改由 `_pg_error_is_timeout` 单独累计（见 `_pg_circuit_failure`）。
+    """
+    if isinstance(exc, (_FutTimeout, asyncio.TimeoutError, TimeoutError)):
+        return False
+    if isinstance(exc, (OSError, ConnectionError)):
         return True
     name = type(exc).__name__.lower()
-    return any(k in name for k in ("connection", "cannotconnect", "interface", "timeout"))
+    return any(k in name for k in ("connection", "cannotconnect", "interface"))
+
+
+def _pg_error_is_timeout(exc: BaseException) -> bool:
+    """慢查询/桥接超时：与"连不上"分开计数（连接超时类仍按连接失败处理）。"""
+    name = type(exc).__name__.lower()
+    if "connection" in name:  # asyncpg ConnectionTimeoutError 等：属连接类
+        return False
+    return isinstance(exc, (_FutTimeout, asyncio.TimeoutError, TimeoutError)) or "timeout" in name
 
 
 def _pg_circuit_success() -> None:
-    global _pg_fail_streak, _pg_circuit_until
+    global _pg_fail_streak, _pg_timeout_streak, _pg_circuit_until
     with _circuit_lock:
         _pg_fail_streak = 0
+        _pg_timeout_streak = 0
         _pg_circuit_until = 0.0
 
 
 def _pg_circuit_failure(exc: BaseException) -> None:
-    global _pg_fail_streak, _pg_circuit_until
+    global _pg_fail_streak, _pg_timeout_streak, _pg_circuit_until
+    if _pg_error_is_timeout(exc):
+        # 慢 SQL/桥接超时：累计"超时连击"，达到阈值才升级熔断——
+        # 单条慢查询只影响本次调用（调用方已回落 JSON），不触发全站快速失败。
+        with _circuit_lock:
+            _pg_timeout_streak += 1
+            if _pg_timeout_streak < _PG_TIMEOUT_TRIP or time.monotonic() < _pg_circuit_until:
+                return
+            _pg_timeout_streak = 0
+            _pg_fail_streak = 0
+            _pg_circuit_until = time.monotonic() + _circuit_cooldown()
+        logger.warning("pg.circuit_open", cooldown_s=_circuit_cooldown(),
+                       detail="连续桥接超时（疑似 PG 黑洞/严重过载）：短暂快速回落 JSON")
+        return
     if not _pg_error_is_connectivity(exc):
         return
     with _circuit_lock:
@@ -480,8 +512,16 @@ async def _ensure_search_index(c) -> None:
 async def _init_impl() -> bool:
     """建池 + 建表（含旧表平滑升级：users.dept / review_queue.images）。"""
     global _pool
-    pool = await asyncpg.create_pool(_dsn(), min_size=_pool_min(),
-                                     max_size=_pool_max(), timeout=5)
+    pool = await asyncpg.create_pool(
+        _dsn(), min_size=_pool_min(), max_size=_pool_max(), timeout=5,
+        server_settings={
+            # 评测 E3：语句/锁/空闲事务超时在**连接级**设置，不依赖院方 PG 实例配置
+            # （实测生产 statement_timeout=0：一条卡住的 SQL 永久占用连接，池 5 条很快耗尽）。
+            "statement_timeout": "10000",
+            "lock_timeout": "2000",
+            "idle_in_transaction_session_timeout": "30000",
+        },
+    )
     try:
         async with pool.acquire() as c:
             await c.execute("""CREATE TABLE IF NOT EXISTS audit_log(

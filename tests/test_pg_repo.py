@@ -1608,3 +1608,38 @@ def test_set_flag_single_key_upsert_does_not_clobber_other_replica(fake_pg, tmp_
     # JSON 镜像仍写（灾难恢复源），且包含两把开关
     mirrored = json.loads(f.read_text(encoding="utf-8"))
     assert mirrored["agent_a2a"] is True and mirrored["qc_auto_sign_full"] is False
+
+
+def test_pg_circuit_ignores_slow_query_timeouts(monkeypatch):
+    """评测 E3：慢查询/桥接超时不得立即打开全站熔断（旧实现 3 次超时即回落 JSON 15s）。"""
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    monkeypatch.setattr(pg_store, "_pg_fail_streak", 0)
+    monkeypatch.setattr(pg_store, "_pg_timeout_streak", 0)
+    # 连续 3 次超时（旧实现会在此刻熔断）
+    for _ in range(3):
+        pg_store._pg_circuit_failure(pg_store._FutTimeout("bridge timeout"))
+    assert pg_store.circuit_open() is False, "单条慢 SQL 不应让全站回落 JSON"
+    # 持续超时（≈30s）才升级熔断，防止 PG 黑洞导致每次请求都等 3s
+    for _ in range(pg_store._PG_TIMEOUT_TRIP):
+        pg_store._pg_circuit_failure(pg_store._FutTimeout("bridge timeout"))
+    assert pg_store.circuit_open() is True
+    pg_store._pg_circuit_success()
+    assert pg_store.circuit_open() is False
+
+
+def test_init_pool_sets_server_statement_timeouts(monkeypatch):
+    """评测 E3：语句/锁/空闲事务超时在连接级设置，不依赖院方 PG 实例配置。"""
+    captured: dict = {}
+
+    async def _fake_create_pool(dsn, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop-after-capture")
+
+    monkeypatch.setattr(pg_store.asyncpg, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(pg_store, "_pool", None)
+    with pytest.raises(RuntimeError, match="stop-after-capture"):
+        asyncio.run(pg_store._init_impl())
+    ss = captured["server_settings"]
+    assert ss["statement_timeout"] == "10000"
+    assert ss["lock_timeout"] == "2000"
+    assert ss["idle_in_transaction_session_timeout"] == "30000"

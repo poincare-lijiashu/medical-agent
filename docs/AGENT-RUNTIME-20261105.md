@@ -6282,3 +6282,45 @@ ruff：All checks passed
 
 - 前端质控结果卡未展示 `connotation_unavailable` 文案（后端已给字段）；
 - ICD/危急值轨的"未启用"与"检查通过"在 UI 上仍靠 note 文案区分。
+
+## 156. 2026-11-10 评测 E3：熔断只认"连不上"，慢查询不再全站回落 + PG 连接级超时（第 153 批）
+
+**问题（评测 01 P1-4）**
+
+- `_pg_error_is_connectivity` 把 `_FutTimeout`/`asyncio.TimeoutError`/`TimeoutError` 也算
+  "连接失败"，与注释"只有连不上才熔断"矛盾：**一条慢 SQL 打满 3 秒桥接上限，
+  连续 3 次就让全站读回落 JSON 15 秒**（数据停在旧镜像上）。
+- 实测 PG 侧 `statement_timeout=0`：卡住的 SQL 永久占用连接，池上限 5 条很快耗尽，
+  之后所有请求排队等 3s 桥接超时。
+
+**已做**
+
+1. **熔断分类修正**
+   - `_pg_error_is_connectivity`：显式排除各类超时；`OSError`/`ConnectionError` 与
+     名字含 connection/interface 的异常（含 asyncpg `ConnectionTimeoutError`）仍算连接类。
+   - 新增 `_pg_error_is_timeout` + `_pg_timeout_streak`：慢查询/桥接超时**单独累计**，
+     连续达 `_PG_TIMEOUT_TRIP=10`（每次 3s，≈30s 持续异常）才升级熔断——
+     单条慢查询只影响本次调用；PG 黑洞仍会在 30s 内被快速失败兜住。
+   - 成功一次同时清零连接失败与超时两个连击（`_pg_circuit_success`）。
+2. **PG 连接级超时**（不依赖院方实例配置）
+   - `asyncpg.create_pool(..., server_settings={statement_timeout:10s, lock_timeout:2s,
+     idle_in_transaction_session_timeout:30s})`——慢 SQL 最多占用连接 10s，
+     锁等待 2s 放弃，空闲事务 30s 回收。
+3. **测试**
+   - `test_pg_circuit_ignores_slow_query_timeouts`：3 次桥接超时**不**熔断；
+     累计 10 次才熔断；成功后立即闭合。
+   - `test_init_pool_sets_server_statement_timeouts`：建池必须真正把三个超时传给 asyncpg。
+   - conftest 的熔断状态复位补充 `_pg_timeout_streak`。
+
+**验证**
+
+```
+定向：test_pg_repo + test_pg_indexes → 77 passed
+后端重启（加载新池参数）→ /api/v1/health 200
+全量（不含 e2e）→ 1569 passed / 1 skipped
+```
+
+**仍未解决（与 E3 相邻的 P2）**
+
+- `mirror_audit` 仍在请求路径上同步等待 PG（虽"绝不冒泡"但会拖慢写请求）；
+- `_arun`（异步桥）无超时；建议下一批按 P1-5 给异步路径加 `wait_for(3s)`。
