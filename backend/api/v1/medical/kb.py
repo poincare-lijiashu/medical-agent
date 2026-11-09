@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from backend.api.deps import rate_limit, require_role, require_user
 from backend.api.v1.medical import shared as _shared
-from backend.core import kb_ingest
+from backend.core import kb_guard, kb_ingest
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
 
@@ -51,6 +52,9 @@ class KbUploadReq(BaseModel):
     # 任务B：结构感知切分文档类型（如 "pdf"/"text"）；缺省按扩展名判定（PDF 默认
     # 结构感知）。前端暂不加 UI，后端参数就绪（透传给 ingest/异步任务）。
     doc_kind: str | None = Field(default=None, max_length=20)
+    # 评测 04 P1-4：内容命中投毒特征时默认拒绝入库；管理员人工复核确认后传 force=true
+    # 才放行（仍留痕：manifest 记 reviewed=true 与上传者/sha256）。
+    force: bool = False
 
 
 @router.post("/admin/kb/upload")
@@ -78,15 +82,35 @@ async def kb_upload(req: KbUploadReq, user: dict = Depends(require_role("admin")
         raise HTTPException(400, "文件内容为空")
     # 大文件 → 后台任务：立即返回 task_id（不再等待 BGE-M3 分钟级向量化）
     if await asyncio.to_thread(kb_ingest.should_ingest_async, req.name, raw):
+        # 纯文本大文件可低成本预扫（PDF 需抽取/OCR，交给后台任务扫并落错误状态）
+        if ext in (".txt", ".md"):
+            reasons = kb_guard.scan_text(raw.decode("utf-8", errors="replace"))
+            if reasons and not req.force:
+                await asyncio.to_thread(_shared.get_audit_logger().write, event_type="kb",
+                                        action="upload_quarantined", actor=actor,
+                                        payload={"name": req.name[:120], "reasons": reasons[:3],
+                                                 "sha256": hashlib.sha256(raw).hexdigest()})
+                raise HTTPException(400, "内容疑似指令注入，已隔离未入库：" +
+                                    "；".join(reasons[:3]) + "（确认为正常文献请传 force=true 复核）")
         task_id = await asyncio.to_thread(kb_ingest.start_ingest_task,
-                                          req.name[:250], raw, None, req.doc_kind)
+                                          req.name[:250], raw, None, req.doc_kind,
+                                          req.force, actor)
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="kb", action="upload_async",
-                                actor=actor, payload={"name": req.name[:120], "task_id": task_id})
+                                actor=actor, payload={"name": req.name[:120], "task_id": task_id,
+                                                      "bytes": len(raw),
+                                                      "sha256": hashlib.sha256(raw).hexdigest()})
         return {"task_id": task_id, "mode": "async", "name": req.name[:250]}
     # 小文件 → 同步路径（现状行为完全保留）
     try:
         out = await asyncio.to_thread(kb_ingest.ingest_b64, req.name[:250], req.data_b64,
-                                      None, req.doc_kind)
+                                      None, req.doc_kind, req.force, actor)
+    except kb_guard.KbQuarantined as e:
+        # 评测 04 P1-4：投毒特征 → 隔离（未写向量库/manifest），审计留痕供复核
+        await asyncio.to_thread(_shared.get_audit_logger().write, event_type="kb",
+                                action="upload_quarantined", actor=actor,
+                                payload={"name": req.name[:120], "reasons": e.reasons[:3],
+                                         "sha256": hashlib.sha256(raw).hexdigest()})
+        raise HTTPException(400, str(e) + "（确认为正常文献请传 force=true 复核）")
     except ValueError as e:
         # 任务5：确定性业务错误（扫描版 PDF/文档过大等）→ 透传具体原因，不再笼统"失败"
         await asyncio.to_thread(_shared.get_audit_logger().write, event_type="kb", action="upload_rejected",

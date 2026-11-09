@@ -112,6 +112,8 @@ export function humanizeAudit(e) {
     upload_rejected: () => `知识库上传被拒绝（${T || '文件'}：${String(p.reason || '类型不支持').slice(0, 60)}）`,
     upload_async: () => `上传了大文件，后台向量化中（${T || '文件'}）`,
     upload_failed: () => `知识库文件摄取失败（${T || '文件'}）`,
+    /* 评测 04 P1-4：命中指令注入特征被隔离，未入库，待人工复核（force=true 可放行） */
+    upload_quarantined: () => `知识库上传被隔离（${T || '文件'}：疑似指令注入，待人工复核）`,
     delete: () => T ? `删除了 ${T}` : '执行了删除',
     /* 轮 A1：内置库删除 / 删除失败兜底（kb.builtin_removed / kb.delete_failed） */
     builtin_removed: () => T ? `删除了内置知识库 ${T}（重跑种子脚本可恢复）` : '删除了内置知识库',

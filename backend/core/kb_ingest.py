@@ -28,7 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from backend.core import ocr as kb_ocr
+from backend.core import kb_guard, ocr as kb_ocr
 from backend.core.embedder import embed_dense_sparse
 from backend.core.logger import get_logger
 from backend.core.medical_kb import _collection, doc_count
@@ -336,13 +336,17 @@ def _extract_text_raw(filename: str, raw: bytes, on_ocr_page=None) -> str:
 
 
 def ingest_document(name: str, raw: bytes, doc_tag: str | None = None,
-                    doc_kind: str | None = None) -> dict:
+                    doc_kind: str | None = None, force: bool = False,
+                    uploader: str = "") -> dict:
     """返回 {doc_tag, chunks, inserted}。幂等：同 doc_tag 先删后插。
-    doc_kind：结构感知切分文档类型（任务B）；缺省按扩展名判定（PDF → "pdf"）。"""
+    doc_kind：结构感知切分文档类型（任务B）；缺省按扩展名判定（PDF → "pdf"）。
+    force/uploader（评测 04 P1-4）：投毒扫描命中时拒绝入库（除非管理员 force 复核）；
+    uploader 与内容 sha256 写入 manifest，供审计追溯"谁在何时传了什么"。"""
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXTS:
         raise ValueError(f"不支持的文件类型：{ext or '(无扩展名)'}（仅允许 md/txt/pdf/png/jpg）")
     text = extract_text(name, raw)
+    kb_guard.ensure_safe(text, force=force)  # 命中即抛 KbQuarantined（不写向量库/manifest）
     # 兜底：极端混合型 PDF（非扫描判定但整体无文本）仍给明确报错
     if not text.strip():
         raise ValueError("扫描版PDF需OCR，暂不支持：该 PDF 未提取到任何文本层，"
@@ -369,15 +373,19 @@ def ingest_document(name: str, raw: bytes, doc_tag: str | None = None,
     col.insert("medical_kb", data)
     col.load_collection("medical_kb")
     m = _load_manifest()
-    m[tag] = {"name": name, "chunks": len(data), "ts": datetime.now(timezone.utc).isoformat()}
+    m[tag] = {"name": name, "chunks": len(data), "ts": datetime.now(timezone.utc).isoformat(),
+              "uploader": uploader, "sha256": hashlib.sha256(raw).hexdigest(),
+              "reviewed": bool(force)}  # 评测 04 P1-4：来源/指纹/人工复核留痕
     _save_manifest(m)
     logger.info("kb_ingest.done", tag=tag, inserted=len(data))
-    return {"doc_tag": tag, "chunks": len(chunks), "inserted": len(data)}
+    return {"doc_tag": tag, "chunks": len(chunks), "inserted": len(data), "reviewed": bool(force)}
 
 
 def ingest_b64(name: str, data_b64: str, doc_tag: str | None = None,
-               doc_kind: str | None = None) -> dict:
-    return ingest_document(name, base64.b64decode(data_b64), doc_tag, doc_kind=doc_kind)
+               doc_kind: str | None = None, force: bool = False,
+               uploader: str = "") -> dict:
+    return ingest_document(name, base64.b64decode(data_b64), doc_tag, doc_kind=doc_kind,
+                           force=force, uploader=uploader)
 
 
 # 种子内置库：前三者为阶段 5 前的 demo 来源（local_corpus / sample_guideline 已由 v2 替换，
@@ -640,7 +648,8 @@ def _embed_with_progress(chunks: list[str], on_progress) -> tuple[list, list]:
 
 
 def start_ingest_task(name: str, raw: bytes, doc_tag: str | None = None,
-                      doc_kind: str | None = None) -> str:
+                      doc_kind: str | None = None, force: bool = False,
+                      uploader: str = "") -> str:
     """创建后台摄取任务：文件落盘 uploads/，状态文件置 processing，启动 daemon 线程，
     立即返回 task_id（路由层不再等待向量化的分钟级耗时）。"""
     task_id = "kbt-" + uuid.uuid4().hex[:12]
@@ -652,19 +661,21 @@ def start_ingest_task(name: str, raw: bytes, doc_tag: str | None = None,
     _write_task({"task_id": task_id, "name": name, "status": "processing",
                  "progress": 0, "total": 0, "error": None, "result": None,
                  "created_at": datetime.now(timezone.utc).isoformat()})
-    threading.Thread(target=run_ingest_task, args=(task_id, name, stored, doc_tag, doc_kind),
+    threading.Thread(target=run_ingest_task,
+                     args=(task_id, name, stored, doc_tag, doc_kind, force, uploader),
                      daemon=True, name=f"kb-ingest-{task_id}").start()
     logger.info("kb_ingest.task_started", task_id=task_id, name=name[:120], bytes=len(raw))
     return task_id
 
 
 def run_ingest_task(task_id: str, name: str, stored_path: str,
-                    doc_tag: str | None = None, doc_kind: str | None = None) -> None:
+                    doc_tag: str | None = None, doc_kind: str | None = None,
+                    force: bool = False, uploader: str = "") -> None:
     """后台线程主体（终评 F5）：全局 Semaphore(2) 限并发摄取——daemon 线程超配额时
     在本函数入口排队而非全部并发跑（embedding 显存/CPU 不会被 20 个大 PDF 同时打爆），
     extract→chunk→embed→入库逻辑在 _run_ingest_task_locked 内不变。"""
     with _INGEST_SEMAPHORE:
-        _run_ingest_task_locked(task_id, name, stored_path, doc_tag, doc_kind)
+        _run_ingest_task_locked(task_id, name, stored_path, doc_tag, doc_kind, force, uploader)
 
 
 # 终评 F5：后台摄取并发上限（可测：第 3 个任务阻塞到前两个之一释放才进入）
@@ -672,7 +683,8 @@ _INGEST_SEMAPHORE = threading.Semaphore(2)
 
 
 def _run_ingest_task_locked(task_id: str, name: str, stored_path: str,
-                            doc_tag: str | None = None, doc_kind: str | None = None) -> None:
+                            doc_tag: str | None = None, doc_kind: str | None = None,
+                            force: bool = False, uploader: str = "") -> None:
     """后台线程实际执行体：extract（扫描版逐页 OCR，进度 scan_pages/ocr_pages 落盘）→
     结构感知 chunk → 分批 embed（进度落盘）→ 入 Milvus → manifest。
     任何异常 → status=error + error 原因（前端轮询可见），绝不冒泡杀线程栈。"""
@@ -692,6 +704,8 @@ def _run_ingest_task_locked(task_id: str, name: str, stored_path: str,
             _write_task(_state(scan_pages=total, ocr_pages=done))
 
         text = extract_text(name, raw, on_ocr_page=_on_ocr_page)
+        # 评测 04 P1-4：与同步路径同一投毒扫描（命中 → 任务 status=error，原因可轮询）
+        kb_guard.ensure_safe(text, force=force)
         # 兜底：极端混合型 PDF（非扫描判定但整体无文本）仍给明确报错
         if not text.strip():
             raise ValueError("扫描版PDF需OCR，暂不支持：该 PDF 未提取到任何文本层，"
@@ -723,7 +737,9 @@ def _run_ingest_task_locked(task_id: str, name: str, stored_path: str,
         col.insert("medical_kb", data)
         col.load_collection("medical_kb")
         m = _load_manifest()
-        m[tag] = {"name": name, "chunks": len(data), "ts": datetime.now(timezone.utc).isoformat()}
+        m[tag] = {"name": name, "chunks": len(data), "ts": datetime.now(timezone.utc).isoformat(),
+                  "uploader": uploader, "sha256": hashlib.sha256(raw).hexdigest(),
+                  "reviewed": bool(force)}
         _save_manifest(m)
         _write_task(_state(total=total, progress=total, status="done",
                            result={"doc_tag": tag, "chunks": len(chunks), "inserted": len(data)}))
