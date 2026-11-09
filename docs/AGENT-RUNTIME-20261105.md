@@ -6162,3 +6162,37 @@ PUT 两键恢复 false → PG 四行全 false；data/runtime_flags.json 镜像�
 - 限流计数在未配置 REDIS_URL 时仍是"每副本各算各的"（多副本需 `external.redis.enabled=true`）；
 - 同键并发切换仍是"后到覆盖"（完整 CAS 需 PG advisory lock，已记为后续项）；
 - 上传文件仍落 `/app/data`，多副本必须共享卷。
+
+## 153. 2026-11-10 评测 E6（第二步）：运行时开关跨副本 CAS（advisory lock）（第 150 批）
+
+**问题**
+
+- 上一批把全量同步改成单键 UPSERT，解决了"不同开关互相清除"；但**同一个开关**的
+  并发切换仍只有进程锁——两个 admin 在两个副本上同时切换留痕模式时，双方 `expected`
+  都能通过，后写者静默覆盖先写者。这与接口承诺的 409（评审 03-S9）不符。
+
+**已做**
+
+1. `pg_store.cas_runtime_flag(key, value, expected)`：
+   - 事务内先 `pg_advisory_xact_lock(int64('med_flag'))`，把同键"读-判-写"串行化到
+     集群级；再 `SELECT value ... WHERE key=$1` 比较期望值，最后才 UPSERT；
+   - 返回三态：`True`=已写 / `False`=期望值不符（上层 409）/ `None`=PG 不可用（走本地路径）；
+   - 任何异常都降级为 None（不误报冲突、不中断开关切换）。
+2. `runtime_flags.set_flag` 编排：PG 可用 → 跨副本 CAS；PG 不可用 → 进程锁内本地 CAS
+   （修复了一个实现顺序坑：必须在写入前比较期望值，否则读到的永远是刚写入的新值）。
+3. 假池补齐 `fetchrow`（单键读值）与 advisory lock SQL，`test_pg_repo` 的 CAS 用例覆盖
+   "另一个副本已写 → 期望值不符 → 拒绝且不改库"。
+
+**真机验证**（重启后端，admin01 cookie 会话）
+
+```
+health=True
+PUT agent_a2a=true  expected=false → 200（True）
+PUT agent_a2a=true  expected=false → 409（过期期望）
+PUT agent_a2a=false expected=true  → 200（False）
+PG: agent_a2a=false（恢复原状）
+全量（不含 e2e）→ 1562 passed / 1 skipped
+```
+
+**E6 仍未闭环（同上一批，需环境）**：共享存储 RWX/ReadOnlyMany、Redis 开启、
+上传文件共享卷；这些是"能否真正起 2 个副本"的运维前提，代码侧已 fail-fast。

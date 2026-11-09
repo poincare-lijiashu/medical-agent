@@ -2865,7 +2865,7 @@ def save_runtime_flag(key: str, value: bool) -> bool:
     只 UPSERT 本键，不清除其它键：两个副本同时切换不同开关时，不会再出现
     "A 写入后被 B 的全量同步 DELETE 掉"的丢失更新。
     返回 True=PG 已写；False=PG 不可用（调用方走 JSON 落盘路径）。
-    同键并发切换仍是"后到覆盖"——完整 CAS 需 PG 行锁/advisory lock，列为后续项。
+    需要"同键并发只许一个人成功"时用 ``cas_runtime_flag``。
     """
     if offline_mode() or not _pool:
         return False
@@ -2876,6 +2876,44 @@ def save_runtime_flag(key: str, value: bool) -> bool:
         logger.warning("pg.runtime_flags.upsert_one_failed", error=str(e)[:120])
         return False
     return True
+
+
+# advisory lock 常量：'med_flag' 的 int64 表示（PG advisory lock 要求 64 位整数）。
+# 作用是把**同一 key 的 CAS 读-判-写**串行化——两个副本同时切换同一开关时只有一个成功，
+# 另一个拿到 False（上层 409），与单机进程锁承诺的语义一致。
+_FLAGS_LOCK_ID = int.from_bytes(b"med_flag", "big")
+
+
+async def _pg_cas_runtime_flag(key: str, value: bool, expected) -> bool:
+    async with _pool.acquire() as c:
+        async with c.transaction():
+            await c.execute("SELECT pg_advisory_xact_lock($1)", _FLAGS_LOCK_ID)
+            row = await c.fetchrow("SELECT value FROM runtime_flags WHERE key=$1", str(key))
+            current = None
+            if row is not None:
+                raw = row["value"]
+                current = bool(json.loads(raw)) if isinstance(raw, str) else bool(raw)
+            if expected is not None and current is not None and current != bool(expected):
+                return False
+            await c.executemany(_FLAGS_UPSERT, [(str(key), json.dumps(bool(value)))])
+            return True
+
+
+def cas_runtime_flag(key: str, value: bool, expected=None):
+    """跨副本 CAS 写运行时开关。
+
+    True=写入成功；False=期望值与 PG 当前值不符（上层抛 FlagConflict）；
+    None=PG 不可用（调用方按单机语义在进程锁内再校验并落 JSON）。
+    键不存在时视为"无当前值"，不做拦截（首次写入）。
+    """
+    if offline_mode() or not _pool:
+        return None
+    try:
+        return _pg_write_call("runtime_flags", "cas_one",
+                              _pg_cas_runtime_flag(str(key), bool(value), expected))
+    except Exception as e:  # noqa: BLE001 —— 任何异常都降级 JSON 路径，不误报冲突
+        logger.warning("pg.runtime_flags.cas_failed", error=str(e)[:120])
+        return None
 
 
 def mirror_runtime_flags_json(d: dict, path: str) -> None:

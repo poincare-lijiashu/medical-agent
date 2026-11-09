@@ -72,19 +72,27 @@ def set_flag(key: str, value: bool, *, expected: bool | None = None,
     """
     if key not in ALLOWED_FLAGS:
         raise ValueError(f"不支持的运行时开关：{key}")
+    # 评测 E6：跨副本 CAS 先行（PG advisory lock 串行化同键读-判-写）。
+    # 返回 True=已写 / False=冲突 / None=PG 不可用（走进程锁 + JSON 路径）。
+    verdict = pg_store.cas_runtime_flag(key, value, expected)
     with _lock:
         d = _load_all()
-        current = bool(d.get(key, default))
-        if expected is not None and current != bool(expected):
+        if verdict is False:
+            current = bool(d.get(key, default))
             raise FlagConflict(
                 f"开关 {key} 已被他人修改（当前 {current}，期望 {bool(expected)}），请刷新后重试")
-        d[key] = bool(value)
-        # 评测 E6（多副本）：PG 可用时只 UPSERT 本键——全量同步会删除"不在本实例
-        # 快照里"的键，两个副本并发切换不同开关时会互相清除（丢失更新）。
-        if pg_store.save_runtime_flag(key, value):
-            pg_store.mirror_runtime_flags_json(d, FLAGS_FILE)
+        if verdict is None:
+            # 单机/离线：进程锁内做本地 CAS（跨进程不保证，但无 PG 时这是唯一可用语义）。
+            # 注意必须在写入前比较——否则读到的永远是刚写入的新值。
+            current = bool(d.get(key, default))
+            if expected is not None and current != bool(expected):
+                raise FlagConflict(
+                    f"开关 {key} 已被他人修改（当前 {current}，期望 {bool(expected)}），请刷新后重试")
+            d[key] = bool(value)
+            pg_store.save_runtime_flags(d, FLAGS_FILE)
         else:
-            pg_store.save_runtime_flags(d, FLAGS_FILE)  # 单机/离线：JSON 落盘 + PG best-effort
+            d[key] = bool(value)
+            pg_store.mirror_runtime_flags_json(d, FLAGS_FILE)
     return bool(value)
 
 

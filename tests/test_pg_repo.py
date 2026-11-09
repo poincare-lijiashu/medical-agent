@@ -148,9 +148,23 @@ class FakeConn:
                 return len(self.db[t])
         raise AssertionError(f"假池未实现的 fetchval: {s[:80]}")
 
+    async def fetchrow(self, sql, *a):
+        self._fail()
+        s = " ".join(sql.split())
+        if s.startswith("SELECT value FROM runtime_flags WHERE key"):
+            # 评测 E6：跨副本 CAS 读当前值（单键）；不存在返回 None
+            key = a[0]
+            if key in self.db["runtime_flags"]:
+                return {"value": json.dumps(self.db["runtime_flags"][key])}
+            return None
+        raise AssertionError(f"假池未实现的 fetchrow: {s[:80]}")
+
     async def execute(self, sql, *a):
         self._fail()
         s = " ".join(sql.split())
+        if s.startswith("SELECT pg_advisory_xact_lock"):
+            # 评测 E6：advisory lock 在假池里是 no-op（单线程顺序执行，无真实并发）
+            return "SELECT 1"
         if s.startswith("DELETE FROM users WHERE NOT"):
             keep = set(a[0])
             self.db["users"] = {k: v for k, v in self.db["users"].items() if k in keep}
