@@ -5460,6 +5460,7 @@ frontend-console：vue-tsc 0 error；vite build 通过
 ```
 tests/test_pg_repo.py → 65 passed
 tests/test_inline_ai.py → 6 passed
+全量（不含 e2e）→ 1526 passed / 1 skipped（3 分 08 秒）
 真机：PG consults=17，JSON=15（PG ⊇ JSON，无缺口 → 启动无 pg_migrated，符合预期）
       POST /api/v1/medical/inline/rx-check → 200，stderr 无 coroutine 警告
 ```
