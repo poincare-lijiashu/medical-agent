@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -16,10 +17,13 @@ from backend.api.deps import (
     _COOKIE_RT,
     _client_ip,
     _token_from_refresh_request,
+    _token_from_request,
+    ensure_jti_not_revoked,
     ensure_not_revoked,
     rate_limit,
     require_role,
     require_user,
+    revoke_token,
     revoke_user,
 )
 from backend.config import settings
@@ -66,6 +70,10 @@ class LoginResp(BaseModel):
 
 class RefreshReq(BaseModel):
     refresh_token: str = ""  # W3.1：为空时读 httpOnly cookie（body 显式携带仍兼容）
+
+
+class LogoutReq(BaseModel):
+    refresh_token: str = ""  # 非浏览器客户端（脚本/服务间）显式携带；浏览器走 httpOnly cookie
 
 
 class ChangePwdReq(BaseModel):
@@ -134,6 +142,7 @@ def refresh(body: RefreshReq, request: Request, response: Response):
     except (TypeError, ValueError):
         iat = 0.0
     ensure_not_revoked(username, iat)  # 重置密码/删除用户后，旧刷新令牌一律拒绝续签
+    ensure_jti_not_revoked(payload.get("jti"))  # 评测 04 P1-7：登出的会话不能再续签
     at = create_access_token(username, u["role"])
     rt2 = create_refresh_token(username)
     _set_auth_cookies(response, at, rt2)
@@ -141,10 +150,15 @@ def refresh(body: RefreshReq, request: Request, response: Response):
 
 
 @router.post("/auth/logout")
-def logout(response: Response):
-    """登出：清除 httpOnly cookie。不做鉴权（无副作用动作；改密/删号撤销后
-    旧令牌本应失效，若此处要求认证反而清不掉过期 cookie）。服务端无状态 JWT
-    不做服务端撤销——令牌随 cookie 清除与自然过期失效。"""
+def logout(request: Request, response: Response, body: Optional[LogoutReq] = None):
+    """登出：**服务端**按 jti 撤销本次访问/刷新令牌，再清 cookie（评测 04 P1-7）。
+
+    此前只清 cookie：刷新令牌在 7 天有效期内仍可续签——cookie 被复制/设备被接管后
+    无法踢下线。这里不要求鉴权（令牌本身就是凭证，撤销自己持有的令牌无副作用），
+    访问令牌已过期时也能清掉刷新令牌，避免"过期后无法真正登出"。
+    """
+    revoke_token(_token_from_request(None, request))
+    revoke_token(_token_from_refresh_request(body.refresh_token if body else "", request))
     response.delete_cookie(_COOKIE_AT, path="/")
     response.delete_cookie(_COOKIE_RT, path="/")
     return {"ok": True}

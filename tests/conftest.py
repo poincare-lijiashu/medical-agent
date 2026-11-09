@@ -43,6 +43,7 @@ _PG_ORIGINALS = {
 @pytest.fixture(autouse=True)
 def _clean_auth_state():
     deps._revoked_before.clear()
+    deps._revoked_jti.clear()  # 评测 04 P1-7：登出撤销表同样按用例隔离
     security_rate.reset()
     stores.reset_store()  # 轮 B2：重建共享 store 单例（撤销/会话键不跨测试残留）
     # 评审 M-45：/metrics 有 5s 进程内缓存，测试间必须清空，否则读到上一用例的 exposition
@@ -50,6 +51,7 @@ def _clean_auth_state():
     _main._metrics_cache.update(at=0.0, text="")
     yield
     deps._revoked_before.clear()
+    deps._revoked_jti.clear()
 
 
 @pytest.fixture(autouse=True)

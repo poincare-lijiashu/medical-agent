@@ -15,6 +15,7 @@ import json
 import os
 import secrets
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -76,6 +77,7 @@ def create_access_token(username: str, role: str) -> str:
     payload = {
         "sub": username,
         "role": role,
+        "jti": uuid.uuid4().hex,  # 评测 04 P1-7：会话唯一 ID，登出按 jti 服务端撤销
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=settings.auth_token_expire_minutes)).timestamp()),
     }
@@ -92,6 +94,7 @@ def decode_token(token: str) -> Optional[dict]:
 def create_refresh_token(username: str) -> str:
     now = datetime.now(timezone.utc)
     payload = {"sub": username, "typ": "refresh",
+               "jti": uuid.uuid4().hex,  # 与服务端撤销表对应（登出/踢下线）
                "iat": int(now.timestamp()),
                "exp": int((now + timedelta(minutes=settings.auth_refresh_expire_minutes)).timestamp())}
     return jwt.encode(payload, settings.auth_jwt_secret, algorithm="HS256")

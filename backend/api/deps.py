@@ -12,7 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.config import settings
 from backend.core import platform_identity
-from backend.core.auth import decode_token, get_user
+from backend.core.auth import decode_refresh_payload, decode_token, get_user
 from backend.core.security_rate import allow
 from backend.core.stores import get_store
 
@@ -78,6 +78,47 @@ def ensure_not_revoked(username: Optional[str], iat: float) -> None:
         raise HTTPException(status_code=401, detail="账号已被停用或凭证已重置，请重新登录")
 
 
+# 评测 04 P1-7：登出必须**服务端**失效本次会话，而不是只清 cookie。
+# 按令牌 `jti` 记撤销（TTL = 该令牌剩余寿命，到期自动清理），访问令牌与刷新令牌各一条。
+# 本地表做快路径（进程内存），未命中再查共享存储——多副本下任一实例登出，另一实例同样拒绝。
+_revoked_jti: dict[str, float] = {}  # jti → 到期时刻（time.time()）
+_JTI_PREFIX = "revoke:jti:"
+
+
+def revoke_token(token: Optional[str]) -> None:
+    """撤销单个令牌（登出）：识别访问令牌或刷新令牌；无法解析/无 jti 时静默忽略。"""
+    if not token:
+        return
+    payload = decode_token(token) or decode_refresh_payload(token)
+    if not payload:
+        return
+    jti = str(payload.get("jti") or "")
+    if not jti:
+        return
+    now = time.time()
+    try:
+        exp = float(payload.get("exp") or 0)
+    except (TypeError, ValueError):
+        exp = 0.0
+    ttl = max(1.0, min(_TOKEN_MAX_AGE, exp - now)) if exp else float(_TOKEN_MAX_AGE)
+    _revoked_jti[jti] = now + ttl
+    get_store().set(_JTI_PREFIX + jti, 1, ttl=ttl)
+    for k in [k for k, v in _revoked_jti.items() if v <= now]:
+        _revoked_jti.pop(k, None)  # 已自然过期的撤销记录无需保留
+
+
+def ensure_jti_not_revoked(jti: Optional[str]) -> None:
+    """该会话是否已登出（或被服务端撤销）。无 jti 的旧令牌按既有语义放行。"""
+    if not jti:
+        return
+    jti = str(jti)
+    now = time.time()
+    if _revoked_jti.get(jti, 0.0) > now:
+        raise HTTPException(status_code=401, detail="会话已退出，请重新登录")
+    if get_store().get(_JTI_PREFIX + jti) is not None:
+        raise HTTPException(status_code=401, detail="会话已退出，请重新登录")
+
+
 # 第 126 批：统一身份。Java 医院平台（platform/auth）是唯一签发方时，其令牌载荷形如
 #   {sub: 账号UUID, username: "doctor01", roles: ["DOCTOR"], permissions: [...], org, jti}
 # 与 Python 自签令牌的 {sub: "doctor01", role: "doctor"} 结构不同，但**同一 HS256 密钥**。
@@ -139,6 +180,7 @@ def _user_from_token(token: str) -> dict:
     except (TypeError, ValueError):
         iat = 0.0
     ensure_not_revoked(username, iat)
+    ensure_jti_not_revoked(payload.get("jti"))  # 评测 04 P1-7：登出后访问令牌也立即失效
     u = get_user(username) or {}
     # 第 127 批：Java 平台的 238 个账号不可能都同步进本地 8 条用户表，
     # 因此**Java 签发的令牌（带 roles 声明）不再要求本地表有记录**；

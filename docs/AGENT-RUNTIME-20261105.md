@@ -6612,3 +6612,44 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
   采样写入 `auth` 事件；
 - 锁定计数未接入 Prometheus；如需值班可见，可加 `medassist_login_locked_total`；
 - 密钥/口令策略（长度、复杂度、定期更换）仍属 P1 未做项。
+
+## 163. 2026-11-10 评测 04 P1-7：登出改为服务端失效（jti 撤销）（第 160 批）
+
+**问题（评测 04 P1-7）**
+
+- `POST /auth/logout` 只 `delete_cookie`：刷新令牌在 7 天有效期内**仍可续签**，
+  访问令牌继续有效到 720 分钟——cookie 被复制/设备被接管后无法踢下线；
+  且此前代码注释自认"服务端无状态 JWT 不做撤销"。
+
+**已做**
+
+1. **令牌带 `jti`**（`backend/core/auth.py`）：访问令牌与刷新令牌各生成
+   `uuid4().hex`，为"按会话撤销"提供稳定标识；旧令牌无 jti 时保持既有语义（放行）。
+2. **撤销表（`backend/api/deps.py`）**：`revoke_token()` 解析访问/刷新令牌的 `jti` 与 `exp`，
+   写 `_revoked_jti`（进程内快路径）+ KVStore `revoke:jti:<jti>`（TTL=剩余寿命，最长 8 天）。
+   `ensure_jti_not_revoked()` 先查本地再查共享存储——多副本任一实例登出，其他实例同样拒绝。
+3. **接入点**：
+   - `_user_from_token`（所有鉴权入口）在 `ensure_not_revoked` 后校验 jti；
+   - `/auth/refresh` 续签前校验 jti（已登出的会话不能续签）；
+   - `/auth/logout` 读取 cookie 访问令牌 + cookie/body 刷新令牌并逐个撤销，再清 cookie；
+     不要求鉴权（令牌本身是凭证；访问令牌已过期时也能清掉刷新令牌）。
+4. **测试隔离**：`tests/conftest.py` 每例复位 `_revoked_jti`。
+5. **回归锁**（`tests/test_logout_revocation.py` 4 条）：登出后 RT 续签 401 + AT 立即 401；
+   仅影响本会话（双客户端）；清空本地快路径后仍拒绝（共享存储生效）；无 cookie 的
+   Bearer 客户端用 body 刷新令牌同样被撤销。
+
+**验证**
+
+```
+定向：test_logout_revocation + test_auth_cookie + test_auth + test_jwt_rotation → 21 passed
+全量（不含 e2e）→ 1594 passed / 1 skipped
+（进程内 TestClient 验证；未重启 8001 在线服务）
+```
+
+**取舍与遗留**
+
+- 每个已认证请求多一次 KVStore 读取（内存 dict 命中即返回；Redis 场景约 0.2ms/次）。
+  未加"负缓存"是为了保持撤销**立即**生效（多副本一致优先于这点开销）。
+- **刷新令牌未做轮换**：续签不会撤销旧 RT（并发刷新会互相踢掉，需前端配合）。
+  如需 replay 防护，建议下一步做"旧 RT 撤销 + 宽限 60s"的轮换策略。
+- 撤销记录未进 Prometheus；如需观测可加 `medassist_session_revoked_total`。
