@@ -1686,3 +1686,33 @@ def test_arun_without_timeout_still_allows_long_tasks(monkeypatch):
         return "done"
 
     assert asyncio.run(pg_store._arun(_quick())) == "done"
+
+
+def test_mirror_audit_sync_enqueues_and_flush_writes(monkeypatch):
+    """评测 P1-5：镜像改为非阻塞入队；flush 后 PG 写入完成（管理端 read-your-writes）。"""
+    seen = []
+
+    async def _impl(event_type, actor, payload):
+        seen.append((event_type, actor, payload))
+
+    monkeypatch.setattr(pg_store, "_mirror_audit_impl", _impl)
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setattr(pg_store, "_audit_q", None)
+    pg_store.mirror_audit_sync("literature", "doctor01", {"q": "x"}, action="query")
+    assert pg_store.mirror_audit_flush(3.0) is True
+    assert seen == [("literature", "doctor01", {"q": "x", "action": "query"})]
+
+
+def test_audit_queue_full_drops_without_blocking(monkeypatch):
+    """队列满时丢弃镜像且不阻塞调用方（JSONL 仍是权威记录）。"""
+    import queue as _queue
+
+    monkeypatch.setattr(pg_store, "_pool", object())
+    monkeypatch.setattr(pg_store, "offline_mode", lambda: False)
+    monkeypatch.setattr(pg_store, "_audit_q", _queue.Queue(maxsize=1))
+    monkeypatch.setattr(pg_store, "_audit_q_drops", 0)
+    monkeypatch.setattr(pg_store, "_audit_q_warned", False)
+    pg_store.mirror_audit_sync("literature", "doctor01", {})
+    pg_store.mirror_audit_sync("literature", "doctor01", {})  # 队列满 → 丢弃
+    assert pg_store._audit_q_drops == 1
+    pg_store._audit_q.task_done()

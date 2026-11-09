@@ -72,6 +72,12 @@ def _isolate_pg_runtime():
     pg_store._pg_circuit_until = 0.0
     # 第 54 批：stale 重探登记表同样复位
     pg_store._pg_stale_probe.clear()
+    # 审计镜像异步队列：先把上一用例的条目排空，再丢弃队列引用（旧 worker 阻塞在旧队列上，
+    # 不会读取新用例的数据）；丢弃计数/告警位一并复位。
+    pg_store.mirror_audit_flush(1.0)
+    pg_store._audit_q = None
+    pg_store._audit_q_drops = 0
+    pg_store._audit_q_warned = False
 
 
 @pytest.fixture(autouse=True)

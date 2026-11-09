@@ -6372,3 +6372,46 @@ ruff：All checks passed
 - `mirror_audit` 仍在业务请求路径上**同步等待** PG（现在最多 3s）：建议"JSONL 必成功 +
   PG 镜像丢后台队列/异步任务"；
 - `_run_pg`（同步桥）在 `full_mode` 已改线程池后仍是其他同步调用点的阻塞源，后续按调用点收敛。
+
+## 158. 2026-11-10 数据层 P1-5（相邻项）：审计镜像异步化（第 155 批）
+
+**问题**
+
+- `AuditLog._emit` 在每次 JSONL 落盘后**同步桥**镜像一次 PG（最长 3s）。
+  该挂钩点在所有业务写请求路径上（会诊/处方/审核/质控…），PG 一慢，
+  **写请求被审计拖住**；虽然是 best-effort 不冒泡，但延迟真实存在。
+
+**已做**
+
+1. **非阻塞入队 + 单后台线程排空**
+   - `mirror_audit_sync` 改为 `put_nowait`（队列上限 1000），立即返回；
+     后台线程 `pg-audit-mirror` 逐条调用原 `_mirror_audit_impl`（3s 桥接上限）；
+   - 队列满时**丢弃镜像并告警一次**（JSONL 仍是权威记录，审计本身不丢）；
+   - 熔断期直接跳过（JSONL 已落盘，恢复后新事件自然补齐）。
+2. **read-your-writes 保证**
+   - `audit_recent_pg` / `audit_count_pg` / `audit_facets_pg` 读前先
+     `await _flush_audit_mirror(1.0)`（线程池执行，不阻塞事件循环）；
+   - `close()` 关池前排空队列（最多 2s），减少停机时 PG 缺口。
+3. **测试隔离**：conftest 每例先 flush 再丢弃队列引用（旧 worker 阻塞在旧队列，
+   不会读新用例数据），丢弃计数/告警位复位。
+4. **回归锁**
+   - `test_mirror_audit_sync_enqueues_and_flush_writes`（入队 → flush → PG 写入完成）；
+   - `test_audit_queue_full_drops_without_blocking`（满队列丢弃且不阻塞）。
+
+**真机验证**（重启后端）
+
+```
+health=True
+GET /medical/review/pending?limit=1（admin，业务审计事件）
+PG audit_log: before=2694 → after=2695（delta=1，异步线程写入）
+最新两行：review|list_pending / prescription|list
+GET /medical/admin/audit?limit=5 → total=2694，读取正常
+全量（不含 e2e）→ 1575 passed / 1 skipped；ruff All checks passed
+```
+
+**权衡与遗留**
+
+- PG 镜像不再是"写完即进库"：管理端读取已通过 flush 保证一致性；**外部直连 PG 的
+  报表**可能有秒级延迟（JSONL 仍是权威源）。
+- 进程被强杀时队列内未写 PG 的条目会缺失（JSONL 可回放，`scripts/migrate_json_to_pg.py`
+  与启动对账可补齐部分场景）；如要求零缺口，可改为持久化队列（Redis Stream/outbox 表）。

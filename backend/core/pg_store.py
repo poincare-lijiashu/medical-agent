@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import os
+import queue
 import threading
 import time
 from concurrent.futures import TimeoutError as _FutTimeout
@@ -699,6 +700,8 @@ async def close() -> None:
     global _pool
     if _pool:
         try:
+            # 关池前尽力排空审计镜像队列（JSONL 已落盘，这里只是减少 PG 缺口）
+            await _flush_audit_mirror(2.0)
             await _arun(_close_pool_impl())
         except Exception:  # noqa: BLE001
             pass
@@ -1047,28 +1050,83 @@ async def mirror_audit(event_type: str, actor: str, payload: dict,
         logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
 
 
+# ---------- 审计镜像异步队列（评测 02 P1-5 相邻项） ----------
+# 为什么：`_emit` 每写一条 JSONL 就同步桥镜像一次 PG，PG 变慢时业务写请求会被审计
+# 拖住（最长 3s）。现改为**非阻塞入队 + 单后台线程排空**：JSONL 仍是权威且同步落盘，
+# PG 镜像 best-effort；管理端读取前先 flush（read-your-writes），队列满时丢弃并告警。
+_AUDIT_QUEUE_MAX = 1000
+_audit_q: "queue.Queue | None" = None
+_audit_q_lock = threading.Lock()
+_audit_q_drops = 0
+_audit_q_warned = False
+
+
+def _audit_mirror_worker(q: "queue.Queue") -> None:
+    while True:
+        item = q.get()
+        try:
+            if item is None:
+                return
+            event_type, actor, payload = item
+            _pg_write_call("audit_log", "mirror", _mirror_audit_impl(event_type, actor, payload))
+        except PGUnavailable:
+            pass  # 熔断期：JSONL 已落盘，恢复后的新事件自然补齐
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
+        finally:
+            q.task_done()
+
+
+def _audit_queue() -> "queue.Queue":
+    global _audit_q
+    with _audit_q_lock:
+        if _audit_q is None:
+            _audit_q = queue.Queue(maxsize=_AUDIT_QUEUE_MAX)
+            threading.Thread(target=_audit_mirror_worker, args=(_audit_q,), daemon=True,
+                             name="pg-audit-mirror").start()
+        return _audit_q
+
+
+def mirror_audit_flush(timeout: float = 1.0) -> bool:
+    """等待镜像队列排空（管理端读取前调用，保证 read-your-writes）。"""
+    with _audit_q_lock:
+        q = _audit_q
+    if q is None:
+        return True
+    deadline = time.monotonic() + max(0.0, timeout)
+    while q.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return q.unfinished_tasks == 0
+
+
+async def _flush_audit_mirror(timeout: float = 1.0) -> None:
+    """async 上下文排空镜像队列（不阻塞事件循环）。"""
+    await asyncio.to_thread(mirror_audit_flush, timeout)
+
+
 def mirror_audit_sync(event_type: str, actor: str, payload: dict,
                       action: str | None = None) -> None:
-    """同步审计镜像（**审计写入的唯一挂钩点**；任意线程可调，best-effort）。
+    """审计镜像入口（**唯一挂钩点**；非阻塞入队，任意线程可调，best-effort）。
 
-    评测 02 P0-3（A3）：此前 PG 审计只在 28 个显式调用点镜像（覆盖率约 7%），且事件名
-    是"域.动作"（review.approved），与 JSONL 的"域 + payload.action"不同构。改为由
-    `medical_audit.AuditLog._emit` 在每次 JSONL 落盘后统一调用本函数——
-    - event_type 与 JSONL 完全一致（PG/JSONL 天然 1:1，新增审计点自动进 PG）；
-    - payload.action 由 `write(action=...)` 写入，历史点号名由读侧 `_normalize_audit_row` 归一。
-    失败只告警（JSONL 仍是权威记录），PG 未建池/离线直接 no-op。
+    评测 02 P0-3（A3）：由 `medical_audit.AuditLog._emit` 在每次 JSONL 落盘后统一调用，
+    event_type 与 JSONL 完全一致，payload.action 由 `write(action=...)` 写入，
+    历史点号名由读侧 `_normalize_audit_row` 归一。
+    评测 P1-5（相邻项）：改为入队由后台线程写 PG——PG 慢/挂起不再拖住业务写请求；
+    队列满（1000）时丢弃镜像并告警一次（JSONL 仍是权威记录，绝不丢审计）。
     """
+    global _audit_q_drops, _audit_q_warned
     if offline_mode() or not _pool:
         return
+    p = _audit_payload_with_action(event_type, payload, action)
     try:
-        _pg_write_call("audit_log", "mirror",
-                       _mirror_audit_impl(event_type, actor,
-                                          _audit_payload_with_action(event_type, payload,
-                                                                     action)))
-    except PGUnavailable:
-        return  # 熔断期：JSONL 已落盘，恢复后新事件自然补齐
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pg.mirror_audit_failed", error=str(e)[:120])
+        _audit_queue().put_nowait((event_type, actor, p))
+    except queue.Full:
+        with _audit_q_lock:
+            _audit_q_drops += 1
+            if not _audit_q_warned:
+                _audit_q_warned = True
+                logger.warning("pg.mirror_audit_queue_full",
+                               detail="审计镜像队列已满：仅保留 JSONL，PG 镜像将缺失部分条目")
 
 
 async def _mirror_user_impl(username: str, role: str, pw_hash: str) -> None:
@@ -1277,6 +1335,8 @@ async def audit_recent_pg(limit: int = 50, offset: int = 0, actor: str = "",
     绝不冒泡影响 admin 面板。"""
     if not _pool:
         return None
+    # 评测 P1-5（相邻项）：镜像改异步入队后，读前先排空，保证管理端 read-your-writes
+    await _flush_audit_mirror(1.0)
     try:
         return await _arun_metered("audit_log", "recent_page",
                                    _audit_recent_pg_impl(max(1, int(limit)), max(0, int(offset)),
@@ -1295,6 +1355,7 @@ async def audit_count_pg(actor: str = "", event_type: str = "", action: str = ""
     与 audit_recent_pg 同纪律：best-effort，绝不冒泡影响 admin 面板。"""
     if not _pool:
         return None
+    await _flush_audit_mirror(1.0)  # 同上：计数前先排空镜像队列
     try:
         return await _arun_metered("audit_log", "count",
                                    _audit_count_pg_impl(str(actor or ""), str(event_type or ""),
@@ -1340,6 +1401,7 @@ async def audit_facets_pg(start: datetime | None = None,
     与分页/导出同纪律：best-effort，绝不冒泡影响面板。"""
     if not _pool:
         return None
+    await _flush_audit_mirror(1.0)  # 候选值聚合前先排空镜像队列
     try:
         return await _arun_metered("audit_log", "facets", _audit_facets_pg_impl(start, end))
     except Exception as e:  # noqa: BLE001
