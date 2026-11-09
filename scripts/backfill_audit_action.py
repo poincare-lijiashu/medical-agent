@@ -59,7 +59,11 @@ async def _run(dsn: str, apply: bool) -> int:
         if not apply:
             print("dry-run：未写入。加 --apply 执行。")
             return 0
-        status = await conn.execute(build_update_sql())
+        # 评测 04 P1-8：audit_log 有 append-only 触发器；回填属受控运维动作，
+        # 只在本事务内声明意图（SET LOCAL 随事务结束失效）。
+        async with conn.transaction():
+            await conn.execute("SET LOCAL medassist.audit_archive = 'on'")
+            status = await conn.execute(build_update_sql())
         print("已执行:", status)
         left = await conn.fetchval(
             "SELECT count(*) FROM audit_log WHERE payload->>'action' IS NULL")

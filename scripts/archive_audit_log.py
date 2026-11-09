@@ -112,6 +112,9 @@ async def _run(before: str, apply: bool, out_dir: Path, dsn: str) -> int:
 
         out_dir.mkdir(parents=True, exist_ok=True)
         async with conn.transaction():
+            # 评测 04 P1-8：audit_log 有 append-only 触发器，只有同一事务内显式声明
+            # 归档意图才允许 DELETE（SET LOCAL 随事务结束自动失效，不留会话级后门）。
+            await conn.execute("SET LOCAL medassist.audit_archive = 'on'")
             rows = await conn.fetch(
                 "DELETE FROM audit_log WHERE ts < $1 "
                 "RETURNING id, ts, event_type, actor, payload", cutoff)

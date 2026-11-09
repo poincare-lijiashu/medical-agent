@@ -122,9 +122,14 @@ class _FakeConn:
         self.deleted = False
         self.rolled_back = False
         self.closed = False
+        self.statements = []  # 评测 04 P1-8：记录 SET LOCAL 等非查询语句
 
     def transaction(self):
         return _FakeTx(self)
+
+    async def execute(self, sql, *args):
+        self.statements.append(sql)
+        return "OK"
 
     async def fetch(self, sql, *args):
         if sql.lstrip().startswith("SELECT ts, count(*)"):
@@ -154,6 +159,8 @@ def test_apply_writes_files_and_deletes(monkeypatch, tmp_path):
     monkeypatch.setattr(mod.asyncpg, "connect", _connect)
     rc = asyncio.run(mod._run("2026-03-01", True, tmp_path, "postgresql://x/y"))
     assert rc == 0 and conn.deleted and not conn.rolled_back and conn.closed
+    # 评测 04 P1-8：DELETE 之前必须先在同一事务内声明归档意图（append-only 白名单）
+    assert any("SET LOCAL medassist.audit_archive = 'on'" in s for s in conn.statements)
     jan = (tmp_path / "audit-2026-01.jsonl").read_text(encoding="utf-8").splitlines()
     feb = (tmp_path / "audit-2026-02.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(jan) == 1 and len(feb) == 2

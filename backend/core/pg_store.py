@@ -434,6 +434,37 @@ def offline_mode() -> bool:
     return (os.environ.get("PG_OFFLINE") or "").strip().lower() in _TRUTHY
 
 
+# ---------- 评测 04 P1-8：审计表 append-only 保护 ----------
+# 合规要求"审计不可篡改"：此前 audit_log 可被任意 UPDATE/DELETE（全仓无 TRIGGER/REVOKE），
+# 一条误写的运维 SQL 就能抹掉留痕。这里用行级触发器拦截 UPDATE/DELETE。
+#
+# 白名单：归档（archive_audit_log.py）与历史回填（backfill_audit_action.py）必须能改，
+# 它们在同一事务内先 `SET LOCAL medassist.audit_archive = 'on'`——GUC 只在该事务生效，
+# 连接归还池后自动失效，不会留下长期后门。INSERT 不受影响（审计只增）。
+# 触发器创建失败只告警（旧库权限不足不阻塞启动；运维可按 _AUDIT_APPEND_ONLY_DDL 手工补建）。
+_AUDIT_APPEND_ONLY_GUC = "medassist.audit_archive"
+_AUDIT_APPEND_ONLY_DDL = (
+    """CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF coalesce(current_setting('medassist.audit_archive', true), '') = 'on' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+  RAISE EXCEPTION 'audit_log 为追加写表：禁止 %（归档/回填请在同一事务内 SET LOCAL medassist.audit_archive = ''on''）', TG_OP
+    USING ERRCODE = 'insufficient_privilege';
+END $$""",
+    "DROP TRIGGER IF EXISTS trg_audit_log_append_only ON audit_log",
+    "CREATE TRIGGER trg_audit_log_append_only BEFORE UPDATE OR DELETE ON audit_log "
+    "FOR EACH ROW EXECUTE FUNCTION audit_log_append_only()",
+)
+
+
+async def _ensure_audit_append_only(c) -> None:
+    """建 append-only 触发器（幂等，best-effort）。"""
+    for ddl in _AUDIT_APPEND_ONLY_DDL:
+        await c.execute(ddl)
+
+
 # ---------- 第 92 批：第 81–91 批下推查询的配套索引 ----------
 # 索引表达式/列序与各查询逐字对齐（见对应 _pg_*_impl 的 WHERE/ORDER BY）：
 #   review_queue  → 待核 status+ts 顺序、历史/个人 submitted_by|reviewed_by+ts 倒序、全表 ts 倒序
@@ -654,6 +685,11 @@ async def _init_impl() -> bool:
                 await _ensure_search_index(c)
             except Exception as e:  # noqa: BLE001 —— 检索加速失败绝不影响启动
                 logger.warning("pg.search_index_skipped", error=str(e)[:120])
+            # 评测 04 P1-8：审计 append-only 触发器（权限不足只告警，不阻塞启动）
+            try:
+                await _ensure_audit_append_only(c)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("pg.audit_guard_skipped", error=str(e)[:120])
     except Exception:
         try:
             await pool.close()

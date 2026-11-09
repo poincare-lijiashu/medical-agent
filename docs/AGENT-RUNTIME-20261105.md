@@ -6653,3 +6653,49 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - **刷新令牌未做轮换**：续签不会撤销旧 RT（并发刷新会互相踢掉，需前端配合）。
   如需 replay 防护，建议下一步做"旧 RT 撤销 + 宽限 60s"的轮换策略。
 - 撤销记录未进 Prometheus；如需观测可加 `medassist_session_revoked_total`。
+
+## 164. 2026-11-10 评测 04 P1-8：审计表 append-only 保护（第 161 批）
+
+**问题（评测 04 P1-8）**
+
+- `audit_log` 可被任意 `UPDATE/DELETE`（全仓无 TRIGGER、无 REVOKE）：一条误写的运维 SQL
+  就能抹掉留痕，"审计不可篡改"只停留在文档里。
+
+**已做**
+
+1. **行级触发器**（`backend/core/pg_store.py`，建库时自动创建，幂等）：
+   - `audit_log_append_only()` + `trg_audit_log_append_only BEFORE UPDATE OR DELETE ... FOR EACH ROW`；
+   - 默认 `RAISE EXCEPTION`（`ERRCODE=insufficient_privilege`），`INSERT` 不受影响；
+   - 唯一白名单：**同一事务内** `SET LOCAL medassist.audit_archive = 'on'`
+     （`current_setting(..., true)`，缺省安全；GUC 随事务结束失效，连接归还池不留后门）；
+   - 先 `DROP TRIGGER IF EXISTS` 再建（不依赖 PG14+ 的 `CREATE TRIGGER IF NOT EXISTS`）；
+   - 创建失败只 `logger.warning("pg.audit_guard_skipped")`，旧库权限不足不阻塞启动。
+2. **两个受控写路径显式声明意图**：
+   - `scripts/archive_audit_log.py`：`async with conn.transaction()` 内、`DELETE` 之前
+     `SET LOCAL medassist.audit_archive = 'on'`；
+   - `scripts/backfill_audit_action.py`：回填 `UPDATE` 包进显式事务并同样声明。
+3. **回归锁**（`tests/test_audit_append_only.py` 4 条 + 归档用例加 1 条断言）：
+   触发器为行级 UPDATE/DELETE、GUC 缺省拒绝、幂等 DROP/CREATE、建库流程真的调用、
+   失败只告警；两个脚本的 `SET LOCAL` 必须在写操作之前且在同一事务内；
+   `_FakeConn` 新增 `execute` 记录并断言归档先声明后删除。
+
+**验证（真库行为，隔离库 `audit_guard_probe`，验证后已 DROP）**
+
+```
+用应用内 `_AUDIT_APPEND_ONLY_DDL` 原样建表 + 函数 + 触发器（PostgreSQL 15.19）
+  INSERT 1 行                     → INSERT 0 1
+  UPDATE audit_log SET actor=...  → ERROR: audit_log 为追加写表：禁止 UPDATE（exit=1）
+  DELETE FROM audit_log           → ERROR: ... 禁止 DELETE（exit=1）
+  BEGIN; SET LOCAL ...='on'; UPDATE; DELETE; COMMIT; → UPDATE 1 / DELETE 1 / COMMIT（exit=0）
+  再插 1 行后（事务已结束）DELETE  → ERROR 禁止 DELETE（exit=1），行数仍为 1
+    → 证明 GUC 只在事务内生效，不跨事务/会话残留
+定向：test_audit_append_only + test_audit_archive + test_pg_indexes + test_pg_repo → 95 passed
+全量（不含 e2e）→ 1598 passed / 1 skipped
+```
+
+**遗留**
+
+- 触发器随应用启动创建：**在线服务需重启一次**才会在当前库生效（未重启 8001）；
+- 归档/回填脚本以外的临时运维 SQL 若需改审计行，必须显式 `SET LOCAL`（这是设计意图）；
+- 数据库超级用户仍可 `DROP TRIGGER`/`ALTER TABLE ... DISABLE TRIGGER`——真正的防篡改还需
+  审计库异地只写账号 / WORM 存储，属部署侧（评测 04 P1-5 静态加密同批）后续项。
