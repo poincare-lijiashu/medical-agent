@@ -6086,3 +6086,28 @@ npm run lint → 0 problems；npm run build → 5.08s
 ```
 
 **仍未解决**：axe/Lighthouse 自动化审计、全键盘 Tab e2e 走查、对话框关闭后焦点归还。
+
+## 151. 2026-11-10 评测 P2-6：跨年审计时间戳带年份（第 148 批）
+
+**问题（评测 03-frontend-ux P2-6）**
+
+- `utils/assist.js::fmtTs` 只格式化「月日时分」，**没有年份**——审计流、审核历史、会诊记录
+  跨年时无法区分 2025/2026 的同一日期，与"全链路可追溯审计"的合规卖点冲突。
+
+**已做**
+
+1. `fmtTs` 双格式：**当年**记录保持紧凑的「月日 时分」（表格不变宽）；**跨年**记录自动带年份
+   （`yyyy/mm/dd hh:mm`）。所有消费方（DataView 审计流、ReviewCenter 历史、ConsultView 等）自动受益。
+2. 单测新增：跨年输入必须含年份、当年输入不含年份（避免"所有表格都变宽"的回退）。
+3. 单测总量 17 → 18 例。
+
+**验证**
+
+```
+npm run test:unit → 18 passed
+npm run lint      → 0 problems
+npm run build     → 4.96s
+全量（不含 e2e）→ 1560 passed / 1 skipped
+```
+
+**说明**：本批只改展示格式，不改接口与数据；当年记录视觉与旧版一致。

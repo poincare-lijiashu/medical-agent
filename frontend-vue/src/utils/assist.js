@@ -65,13 +65,21 @@ export function refineThink(r) {
 }
 
 // ---- 时间戳（legacy fmtTs 同实现：zh-CN 月日时分，非法值原样转义返回）----
+// 评测 P2-6：跨年审计记录必须能区分年份（"全链路可追溯"的合规要求），
+// 当年记录仍保持紧凑的「月日 时分」，避免所有表格列变宽。
 const _tsFmt = new Intl.DateTimeFormat('zh-CN', {
   month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+})
+const _tsFmtFull = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hour12: false,
 })
 export function fmtTs(s) {
   if (!s) return ''
   const d = new Date(s)
-  return isNaN(d) ? esc(s) : _tsFmt.format(d)
+  if (isNaN(d)) return esc(s)
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  return (sameYear ? _tsFmt : _tsFmtFull).format(d)
 }
 
 // ---- 422/校验错误 detail 提取：数组（pydantic）→ msg 拼接；字符串 → 原样

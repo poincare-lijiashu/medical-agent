@@ -87,6 +87,12 @@ describe('fmtTs / detailText', () => {
     expect(detailText({ response: { data: { detail: '直接文案' } } })).toBe('直接文案')
     expect(detailText(new Error('x'))).toBe('网络异常')
   })
+
+  it('跨年时间戳带年份，当年保持紧凑（评测 P2-6 合规可追溯）', () => {
+    expect(fmtTs('2019-03-05T10:00:00')).toContain('2019')
+    const thisYear = String(new Date().getFullYear())
+    expect(fmtTs(new Date().toISOString())).not.toContain(thisYear)
+  })
 })
 
 describe('humanizeAudit：审计事件人话化', () => {
