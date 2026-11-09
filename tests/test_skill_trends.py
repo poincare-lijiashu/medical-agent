@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import date
 
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.agents import skill_library, skill_ops, skill_trends, skills

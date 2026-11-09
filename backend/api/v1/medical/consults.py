@@ -18,7 +18,6 @@ from backend.api.deps import rate_limit, require_user
 from backend.api.v1.medical.schemas import AskReq
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import _enqueue_if_risk, redactor as _redactor
-from backend.core import pg_store
 from backend.core.intent import offtopic_tech_reply
 
 router = APIRouter(dependencies=[Depends(rate_limit)])

@@ -5,7 +5,6 @@ PG 走显式离线模式（PG_OFFLINE=on → purge_pg_drug_rows 返回 None，�
 """
 import importlib.util
 import json
-import os
 import sys
 from pathlib import Path
 

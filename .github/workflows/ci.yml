@@ -79,7 +79,74 @@ jobs:
       # 第 70 批：覆盖率门禁。本地全量实测 backend 87%（10090 stmts / 1278 miss）；
       # 阈值取 85% 留 2pt 缓冲——低于阈值说明有新增代码完全没被测到，应补测试而不是降阈值。
       - name: Run pytest（覆盖率门禁 backend ≥85%）
-        run: python -m pytest -q --cov=backend --cov-report=term-missing:skip-covered --cov-fail-under=85
+        run: python -m pytest -q --cov=backend --cov-report=term-missing:skip-covered --cov-report=xml:reports/coverage.xml --junitxml=reports/junit.xml --cov-fail-under=85
+      # 评测 C5（05-testing-ci P0-4）：覆盖率/用例清单留档，便于回溯"哪次提交开始掉"。
+      - name: Upload pytest artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  lint:
+    # 评测 C5（05-testing-ci P0-4）：Python 静态门禁（此前完全没有）。
+    # 规则集见 ruff.toml：只选"正确性"（E9 语法错误 + F 未定义名/未使用导入等），
+    # 基线已清零，因此**阻断**；风格类规则待基线清理后分批启用。
+    # 历史收益：本批上线即发现 security_rate.py 的 F823（_last_sweep 缺 global，
+    # 内存限流键数 >256 时 UnboundLocalError）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff==0.14.4
+      - name: Ruff（E9 + pyflakes）
+        run: python -m ruff check backend tests scripts
+
+  vuln-scan:
+    # 评测 C5（05-testing-ci P0-4）：供应链漏洞扫描。
+    # 先以"可观测不阻断"上线一个周期（continue-on-error）：存量依赖可能已有
+    # 待升级 CVE，直接阻断会让所有提交变红而被绕过——这正是 G63 的教训。
+    # 报告作为 artifact 留档；一个周期后按实际结果决定哪些级别切强制。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install scanners
+        run: pip install pip-audit==2.9.0
+      - name: pip-audit（requirements.txt）
+        continue-on-error: true
+        run: python -m pip_audit -r requirements.txt --format json --output pip-audit.json
+      - name: npm audit（frontend-vue）
+        continue-on-error: true
+        working-directory: frontend-vue
+        run: npm audit --audit-level=high --json > ../npm-audit-vue.json
+      - name: npm audit（frontend-console）
+        continue-on-error: true
+        working-directory: frontend-console
+        run: npm audit --audit-level=high --json > ../npm-audit-console.json
+      - name: Upload vuln reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vuln-reports
+          path: |
+            pip-audit.json
+            npm-audit-vue.json
+            npm-audit-console.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   postgres-it:
     # G63：真库 SQL 门禁（Testcontainers + postgres:15-alpine）。

@@ -5737,3 +5737,59 @@ npm run build（frontend-vue）→ 1721 modules，8.58s 通过
 
 - `AgentView.vue` 仍有 1485 行 / 10 个 dialog（第二步拆分 `src/components/agent/*` 未做）；
 - 其余 D 系列：D4 分页控件统一、D5/D6 frontend-vue 规范与首屏体积、C5 lint/漏洞扫描、E6 单副本单点。
+
+## 143. 2026-11-09 评测 C5：Python 静态门禁 + 供应链扫描 + 评审治理文件（第 140 批）
+
+**问题（评测 05-testing-ci P0-4）**
+
+- `.github/` 下只有 `ci.yml` 一个文件：无 ruff、无 pip-audit/npm audit、无 CODEOWNERS/PR 模板，
+  所有门禁在技术上都可被直接 push 绕过；覆盖率只有日志，无 artifact。
+
+**已做**
+
+1. **ruff 静态门禁（阻断）**
+   - 新增 `ruff.toml`：`target-version=py311`、`line-length=120`、`select=["E9","F"]`。
+     规则集只选"正确性"（语法错误 + pyflakes），不选 I/UP/B/E501——后者基线 700+ 条，
+     一次性改造会淹没真正缺陷，待基线清理后分批启用。
+   - CI 新增 `lint` job：`python -m ruff check backend tests scripts`（ruff 0.14.4 钉版）。
+   - **基线清零**：54 条存量问题全部处理（43 条 ruff --fix 自动修复未使用导入/空 f-string，
+     11 条手工修：9 处未使用变量保留调用只去赋值、1 处占位列表删除、1 处真 bug 见下）。
+2. **真 bug 修复（lint 首次上线即发现）**
+   - `backend/core/security_rate.py:48` F823：`_allow_memory()` 内写 `_last_sweep = now`
+     却缺 `global`，该名被判定为局部变量 → **`_hits` 键数 >256 时每次限流都会
+     `UnboundLocalError`（全院 500）**，而常规单测永远走不到该分支。
+   - 修复：函数内 `global _last_sweep`；新增回归
+     `tests/test_stores.py::test_memory_rate_sweeper_survives_many_keys`（300 个过期桶触发清扫）。
+3. **供应链扫描（先可观测不阻断）**
+   - CI 新增 `vuln-scan` job：`pip-audit -r requirements.txt` + 两个前端
+     `npm audit --audit-level=high --json`；报告统一作为 `vuln-reports` artifact 留档。
+   - **暂设 `continue-on-error: true`**：存量依赖可能已有待升级 CVE，直接阻断会让所有提交
+     变红而被绕过（G63 教训）。观察一个周期后按实际结果决定哪些级别切强制。
+4. **测试留档**
+   - pytest job 增加 `--junitxml=reports/junit.xml` 与 `--cov-report=xml:reports/coverage.xml`，
+     `pytest-reports` artifact 保留 14 天。
+5. **评审治理文件**
+   - `.github/CODEOWNERS`（占位团队 `@medassist-maintainers`，安全/数据/部署/依赖路径单独指定）；
+   - `.github/pull_request_template.md`（影响面勾选、验证命令、回滚方式、PHI 检查）；
+   - `.github/ISSUE_TEMPLATE/bug_report.md`（禁止粘贴真实患者数据/密钥）。
+   - **分支保护是仓库设置项，代码侧无法开启**：需在 Settings → Branches 为 main 勾选
+     "Require a PR"+"Require review from Code Owners"+"Require status checks"（勾 pytest/lint/frontend-ai/helm）。
+6. **工具依赖分离**：新增 `requirements-dev.txt`（`-r requirements.txt` + `ruff==0.14.4` + `pip-audit==2.9.0`），
+   运行镜像仍只装 `requirements.txt`。
+7. **门禁回归锁**：`tests/test_ci_gates.py` 新增 4 条——lint 真实存在且规则集/版本固定、漏洞扫描覆盖
+   Python+两个前端且留档、测试报告 artifact、CODEOWNERS/PR/ISSUE 模板存在。
+
+**验证**
+
+```
+python -m ruff check backend tests scripts → All checks passed!
+yaml.safe_load(ci.yml) → 11 个 job（新增 lint / vuln-scan）
+定向：test_ci_gates + test_stores + test_rate_limit_identity → 43 passed
+全量（不含 e2e）→ 1551 passed / 1 skipped
+```
+
+**本批仍未解决**
+
+- `mypy`/`vue-tsc`（frontend-vue）类型检查未接；`npm audit` 与 `pip-audit` 仍为非阻断；
+- 分支保护需运维在仓库设置中开启（代码侧只能提供 CODEOWNERS 与模板）；
+- 风格类规则（I/UP/B/E501，767 条）与 pre-commit 钩子未启用。

@@ -22,7 +22,7 @@ from backend.api.v1.medical.schemas import AskResp
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import _enqueue_if_risk, redactor as _redactor
 from backend.config import settings
-from backend.core import pg_store, qc
+from backend.core import qc
 from backend.core import case_archive
 from backend.core import medical_review as review
 from backend.integration import registry as his_registry

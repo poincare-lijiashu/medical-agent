@@ -1,0 +1,20 @@
+# 代码所有者（评测 C5：此前 .github/ 下只有 ci.yml，任何门禁都可被直接 push 绕过）
+#
+# 生效方式：GitHub 仓库 Settings → Branches → main 的分支保护里勾选
+#   "Require a pull request before merging" + "Require review from Code Owners"
+#   + "Require status checks to pass"（勾选 CI 的 pytest / lint / frontend-ai / helm 等）。
+# 文件本身只声明"谁该审"，**不开启保护**——保护是仓库设置项，无法用代码提交。
+#
+# 注意：把下面的占位团队替换为本仓库真实团队/账号，否则 GitHub 无法解析所有者。
+*                       @medassist-maintainers
+
+# 安全与合规相关：必须由安全/架构负责人复核
+backend/api/deps.py              @medassist-maintainers
+backend/core/auth.py             @medassist-maintainers
+backend/core/pg_store.py         @medassist-maintainers
+backend/core/security_rate.py    @medassist-maintainers
+docs/EVAL-20261109/             @medassist-maintainers
+.github/                        @medassist-maintainers
+deploy/helm/                    @medassist-maintainers
+requirements.txt                @medassist-maintainers
+requirements-dev.txt            @medassist-maintainers

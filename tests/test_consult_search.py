@@ -449,7 +449,7 @@ def test_inbox_page_limit_zero_returns_no_rows_but_counts(monkeypatch):
 
 
 def test_inbox_page_empty_table_falls_back(monkeypatch):
-    conn = _inbox_pool(monkeypatch, _InboxConn(table_rows=0))
+    _inbox_pool(monkeypatch, _InboxConn(table_rows=0))
     assert asyncio.run(pg_store._pg_consult_inbox_page_impl(
         "status = 'open' AND data->'target_depts' @> $1::jsonb", ["[\"外科\"]"], 10, 0,
         "外科")) is None

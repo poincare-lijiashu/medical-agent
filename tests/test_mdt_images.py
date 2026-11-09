@@ -16,7 +16,6 @@ import asyncio
 import base64
 import io
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient

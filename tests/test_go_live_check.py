@@ -5,9 +5,7 @@ import importlib.util
 import json
 import os
 import re
-import sys
 
-import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "scripts", "agent_go_live_check.py")

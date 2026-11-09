@@ -10,7 +10,6 @@
 - 索引/DOS 防护：关键词原样走参数（不拼 SQL），无注入面。
 """
 import asyncio
-import json
 
 from backend.core import pg_store
 

@@ -114,7 +114,6 @@ def test_image_ocr_unavailable_explicit_error(monkeypatch):
 
 def test_async_task_scan_ocr_progress_fields(monkeypatch, tmp_path):
     """异步任务 OCR 进度字段：run_ingest_task 同步驱动，状态文件含 scan_pages/ocr_pages。"""
-    import json
     import os
     import uuid
     from tests.test_kb_ingest import _make_pdf

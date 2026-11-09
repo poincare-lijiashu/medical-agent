@@ -5,7 +5,6 @@ a) 入口渠道标记：X-MedAssist-Channel 请求头（MCP server 恒发 "mcp"�
 b) POST /kb/search：知识库纯检索端点（检索层替身，不发真实 Milvus/嵌入请求）。
 c) GET /review/status：队列计数 + 单条状态元数据（剥离临床内容）+ 404。
 """
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.core import medical_review as review

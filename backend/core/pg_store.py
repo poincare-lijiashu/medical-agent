@@ -26,7 +26,7 @@ import os
 import threading
 import time
 from concurrent.futures import TimeoutError as _FutTimeout
-from datetime import datetime, timezone
+from datetime import datetime
 
 import asyncpg
 

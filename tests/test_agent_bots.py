@@ -44,7 +44,7 @@ def bot_payload(code: str = "deepseek-bot", **over) -> dict:
 
 
 def _published_bot(code: str = "deepseek-bot", actor: str = "admin01", **over) -> dict:
-    item = bots.create_bot(bot_payload(code, **over), actor)
+    bots.create_bot(bot_payload(code, **over), actor)
     bot = bots.get_bot(code, "admin")
     bot = bots.submit_bot(code, bot["rowVersion"], actor)
     return bots.review_bot(code, True, None, bot["rowVersion"], "qc01")
@@ -474,7 +474,7 @@ def test_api_bot_lifecycle_memory_and_collaboration(monkeypatch, tmp_path):
     r = c.post("/api/v1/agent/bots", headers=adm, json=bot_payload("bot-a"))
     assert r.status_code == 200, r.text
     a = r.json()
-    r = c.post(f"/api/v1/agent/bots/bot-a/submit", headers=adm,
+    r = c.post("/api/v1/agent/bots/bot-a/submit", headers=adm,
                json={"rowVersion": a["rowVersion"]})
     assert r.status_code == 200
     a = r.json()

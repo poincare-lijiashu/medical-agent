@@ -8,7 +8,7 @@ import time
 from fastapi.testclient import TestClient
 
 from backend.core import auth as auth_mod
-from backend.core.auth import create_user, get_user, seed_default_users
+from backend.core.auth import create_user, seed_default_users
 from backend.main import app
 
 

@@ -226,7 +226,7 @@ def test_api_tool_loop_error_mapping(monkeypatch, tmp_path):
 def test_api_tool_loop_permissions_and_success(monkeypatch, tmp_path):
     c, audit = _client(monkeypatch, tmp_path)
     doc = _h(_login(c, "doctor01"))
-    adm = _h(_login(c, "admin01"))
+    _h(_login(c, "admin01"))
     bot = _bot()
 
     # 草稿 Bot：普通角色不可见

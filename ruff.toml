@@ -1,0 +1,19 @@
+# 评测 C5（05-testing-ci P0-4）：CI lint 门禁配置。
+#
+# 规则集刻意只选"正确性"：E9（语法错误）+ F（pyflakes：未定义名/未使用导入/
+# 未使用变量/覆盖式空 f-string）。风格类（I 导入排序、UP 语法现代化、B bugbear、
+# E501 行宽）当前基线有 700+ 条，一次性改造会淹没真正缺陷，待基线清理后分批启用。
+#
+# 本配置同时被本地与 CI 使用：`python -m ruff check backend tests scripts`。
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+  "frontend-vue",
+  "frontend-console",
+  "platform",
+  "data",
+  "models",
+]
+
+[lint]
+select = ["E9", "F"]

@@ -400,3 +400,19 @@ class TestComponentIntegration:
         assert security_rate.allow("u1", limit=2, window=60) is False  # 第 3 次超限
         assert any(k.startswith("rl:") for k in fake_redis.data)       # 计数确实落共享存储
         assert security_rate.allow("u2", limit=2, window=60) is True   # 其它 key 不受影响
+
+
+def test_memory_rate_sweeper_survives_many_keys(monkeypatch):
+    """回归（评测 C5 lint 发现）：键数 >256 时清扫路径曾因缺 global 抛 UnboundLocalError。
+
+    限流是登录/问答的第一道门——这条路径一抛错就是全院 500，且只在"IP 桶超过 256 个"
+    的压测规模下才触发，常规单测永远走不到。F823 由 ruff 静态规则捕获，这里补行为锁。
+    """
+    monkeypatch.setattr(settings, "redis_url", "")
+    stores.reset_store()
+    security_rate.reset()
+    for i in range(300):
+        security_rate._hits[f"ip:10.0.{i // 200}.{i % 200}"].append(0.0)  # 全部是过期桶
+    assert security_rate.allow("ip:203.0.113.9", limit=60, window=60) is True
+    assert security_rate._last_sweep > 0            # 清扫时间已写回模块变量
+    assert len(security_rate._hits) < 300           # 过期桶被回收，内存不会无界增长

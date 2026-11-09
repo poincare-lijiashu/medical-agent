@@ -4,7 +4,6 @@
 管理台都要整表读。本批：PG 聚合一次拿到 pending / resolved / 全状态分布，
 空表/无池/离线/异常回落既有全表计数（行为不变）。
 """
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.core import medical_review as review

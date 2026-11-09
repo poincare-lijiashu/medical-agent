@@ -45,7 +45,7 @@ def drill_llm() -> int:
     user = os.environ.get("MEDICAL_EVAL_USER", "admin01")
     pw = os.environ.get("MEDICAL_EVAL_PASS", "")
     assert pw, "请设置 MEDICAL_EVAL_PASS（演练管理员口令）"
-    r = call("POST", "/api/v1/auth/login", {"username": user, "password": pw})
+    call("POST", "/api/v1/auth/login", {"username": user, "password": pw})
     assert any(c.name == "medassist_at" for c in _jar), "应有 httpOnly 访问令牌 cookie（W3.1 形态）"
     print("1 login(cookie): OK")
 

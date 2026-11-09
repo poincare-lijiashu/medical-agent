@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from backend.api.deps import rate_limit, require_role
 from backend.api.v1.medical.schemas import AUDIT_Q_SNIPPET
 from backend.api.v1.medical import shared as _shared
-from backend.core import pg_store
 from backend.core import prescriptions as rx  # 阶段2.3 处方流转域层（状态机/repo）
 from backend.core.llm_factory import get_llm  # suggest 端点走模块级符号（测试 monkeypatch 兼容）
 from backend.core.logger import get_logger

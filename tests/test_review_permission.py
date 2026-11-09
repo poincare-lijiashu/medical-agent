@@ -97,7 +97,7 @@ def test_review_list_endpoints_keep_multi_role(monkeypatch, tmp_path):
 def test_my_rejections_only_own_with_reason_and_time(monkeypatch, tmp_path):
     c, _ = _client(monkeypatch, tmp_path)
     doc = _login(c, "doctor01", "Med@2026")
-    qc = _login(c, "qc01", "Med@2026")
+    _login(c, "qc01", "Med@2026")
     rid_doc = _mkitem("doctor01")
     rid_ph = _mkitem("pharm01")
     review.resolve(rid_doc, "rejected", "qc01", "主诉与现病史矛盾")

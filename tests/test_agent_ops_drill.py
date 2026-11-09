@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 
-from backend.agents import skill_advice, skill_library, skill_trends, skills
+from backend.agents import skill_advice, skill_trends, skills
 from backend.core import pg_store
 from backend.core.auth import seed_default_users
 from backend.main import app

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """连通性测试 4xx 时的厂商建议参数提示（GLM 强制思考场景）。"""
-import httpx
 import pytest
 
 from backend.core import llm_config as lc

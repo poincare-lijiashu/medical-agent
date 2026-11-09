@@ -1,9 +1,8 @@
 """G90 睡眠记忆整理：只读体检、候选建议、报告落盘与权限。"""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.agents import bot_memory, bots, sleep_memory

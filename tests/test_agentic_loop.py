@@ -303,7 +303,6 @@ def test_llm_failure_failsafe_giveup(agentic_on, monkeypatch):
     assert _is_fallback(out)
     assert out["attempts"] == 1
     assert searches == [QUESTION]
-    ev = [c for c in [] ]  # 占位防误读，审计断言见下
     assert len(struct.prompts) == 1
 
 

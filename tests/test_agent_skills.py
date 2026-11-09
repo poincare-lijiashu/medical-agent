@@ -101,7 +101,7 @@ def test_create_rejects_invalid_payload(override):
 
 
 def test_update_only_draft_and_cas():
-    item = _created()
+    _created()
     updated = skills.update_skill("sepsis-bundle",
                                   payload(name="脓毒症集束化提醒（修订）"), 0, "admin01")
     assert updated["name"].endswith("（修订）")

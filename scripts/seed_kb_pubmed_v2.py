@@ -344,7 +344,7 @@ def main() -> int:
     mode = "DEGRADE(含滑窗复用)" if degrade else "NORMAL"
     print(f"EMBED MODE={mode} rows={len(rows)} ...", flush=True)
 
-    from backend.core.embedder import embed_dense_sparse, device
+    from backend.core.embedder import embed_dense_sparse
     from backend.core.medical_kb import _collection
     from backend.core.kb_ingest import register_doc
 

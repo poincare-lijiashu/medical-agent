@@ -11,7 +11,6 @@
 """
 import json
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -92,8 +91,8 @@ def test_suggest_qwen_and_misc_empty():
 
 def test_add_provider_extra_params_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setattr(lc, "LLM_CONFIG_FILE", str(tmp_path / "llm_providers.json"))
-    pid = lc.add_provider("chat", "openai", _URL, "glm-5", "GLM", _KEY,
-                          extra_params='{"thinking":{"type":"high"}}')
+    lc.add_provider("chat", "openai", _URL, "glm-5", "GLM", _KEY,
+                    extra_params='{"thinking":{"type":"high"}}')
     stored = lc.load_config()["chat"]["providers"][0]
     assert stored["extra_params"] == '{"thinking":{"type":"high"}}'
 

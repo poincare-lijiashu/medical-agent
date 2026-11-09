@@ -68,3 +68,55 @@ def test_pytest_cov_pinned_for_ci():
     """CI 用的 --cov 参数依赖 pytest-cov；未固定版本会在环境漂移时直接报 unknown option。"""
     req = _read(REQUIREMENTS)
     assert re.search(r"(?m)^pytest-cov==", req), "requirements.txt 必须固定 pytest-cov 版本"
+
+
+# ---------------------------------------------------------------- 评测 C5（第 139 批）
+RUFF_CFG = os.path.join(REPO, "ruff.toml")
+REQUIREMENTS_DEV = os.path.join(REPO, "requirements-dev.txt")
+GITHUB_DIR = os.path.join(REPO, ".github")
+
+
+def test_lint_gate_is_real_and_blocking():
+    """评测 C5：Python 静态门禁必须真实存在且会红。
+
+    - CI 必须真的跑 ruff（而不是只装工具）；
+    - 规则集必须落在"正确性"（E9/F）——基线已清零，因此可阻断；
+    - 工具版本必须固定（否则 ruff 升级引入新规则会让同一份代码突然变红）。
+    """
+    ci = _read(CI)
+    assert "python -m ruff check backend tests scripts" in ci
+    assert "pip install ruff==" in ci
+    cfg = _read(RUFF_CFG)
+    assert 'select = ["E9", "F"]' in cfg
+    dev = _read(REQUIREMENTS_DEV)
+    assert re.search(r"(?m)^ruff==", dev), "requirements-dev.txt 必须固定 ruff 版本"
+
+
+def test_dependency_vulnerability_scan_is_wired():
+    """评测 C5：供应链扫描必须覆盖 Python 与两个前端，并把报告留档。"""
+    ci = _read(CI)
+    assert "pip_audit -r requirements.txt" in ci
+    assert ci.count("npm audit --audit-level=high") == 2, "两个前端目录都要扫"
+    assert "vuln-reports" in ci, "扫描报告必须作为 artifact 留档（否则等于没扫）"
+    dev = _read(REQUIREMENTS_DEV)
+    assert re.search(r"(?m)^pip-audit==", dev), "requirements-dev.txt 必须固定 pip-audit 版本"
+
+
+def test_test_reports_are_archived():
+    """评测 C5：用例清单与覆盖率 XML 必须留档，才能回溯"哪次提交开始掉"。"""
+    ci = _read(CI)
+    assert "--junitxml=reports/junit.xml" in ci
+    assert "--cov-report=xml:reports/coverage.xml" in ci
+    assert "pytest-reports" in ci
+
+
+def test_review_governance_files_exist():
+    """评测 C5：CODEOWNERS / PR 模板 / ISSUE 模板必须存在（此前 .github 只有 ci.yml）。
+
+    注意：分支保护本身是仓库设置项，代码侧只能提供所有者声明与模板，
+    真正的"必须 PR + 必须过 CI"要在 Settings → Branches 里开启。
+    """
+    for rel in ("CODEOWNERS", "pull_request_template.md",
+                os.path.join("ISSUE_TEMPLATE", "bug_report.md")):
+        assert os.path.isfile(os.path.join(GITHUB_DIR, rel)), f"缺少 .github/{rel}"
+    assert "@medassist-maintainers" in _read(os.path.join(GITHUB_DIR, "CODEOWNERS"))

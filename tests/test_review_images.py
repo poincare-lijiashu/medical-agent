@@ -5,7 +5,6 @@
   _load PermissionError 重试（FIND-04）；
 - 路由：imaging/ask 高危入队后 review/pending 条目含 images（VL 用 Fake 捕获，不触网络）。
 """
-import asyncio
 import base64
 import builtins
 import io

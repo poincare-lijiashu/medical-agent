@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from backend.agents import bot_memory, bot_runtime, bot_teams, bots as bot_registry
-from backend.agents import catalog, consult, consult_metrics, model_policy, second_opinion, skill_advice, skill_library
+from backend.agents import catalog, consult, model_policy, second_opinion, skill_advice, skill_library
 from backend.agents import skill_ops, skill_trends, skill_usage, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent

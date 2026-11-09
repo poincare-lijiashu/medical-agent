@@ -1,7 +1,6 @@
 """G103 技能使用率看板数据：聚合口径、未使用/未发布技能与接口权限。"""
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.agents import consult_metrics, skill_usage, skills

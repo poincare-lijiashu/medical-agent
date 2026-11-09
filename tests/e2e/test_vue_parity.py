@@ -24,7 +24,6 @@ skip；演示口令 = seed（AUTH_DEMO_PASSWORD）Med@2026，与既有 e2e 文�
 doctor01 的三项断言合并为单函数顺序执行（同 test_vue_assist 风格），降低全量套件
 连续执行时 doctor01 的登录/首刷请求密度（服务端 60 次/分钟滑动窗口限流，429 会红）。
 """
-import json
 import re
 import time
 import urllib.request

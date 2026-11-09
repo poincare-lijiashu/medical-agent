@@ -16,7 +16,7 @@ import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
 from backend.agents import consult, consult_metrics, guardrails, skills
 from backend.core import llm_config

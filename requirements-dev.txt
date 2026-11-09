@@ -1,0 +1,6 @@
+# 开发/CI 工具依赖（不进运行镜像；运行镜像只装 requirements.txt）
+# 评测 C5（05-testing-ci P0-4）：lint 与供应链扫描的门禁工具必须固定版本，
+# 否则工具自身行为漂移会让同一份代码时红时绿。
+-r requirements.txt
+ruff==0.14.4
+pip-audit==2.9.0

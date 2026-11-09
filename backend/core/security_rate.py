@@ -43,6 +43,7 @@ def _allow_shared(key: str, limit: int, window: int) -> bool:
 
 def _allow_memory(key: str, limit: int, window: int) -> bool:
     """进程内滑动窗口（默认路径，逻辑与单机版一致）。"""
+    global _last_sweep  # 下面会写回清扫时间；缺 global 时该名变局部 → 键数 >256 时 UnboundLocalError
     now = time.monotonic()
     with _lock:
         if len(_hits) > 256 and now - _last_sweep > 60:

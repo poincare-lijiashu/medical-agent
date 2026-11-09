@@ -83,8 +83,8 @@ def test_metrics_rates_and_references():
 
 def test_skill_impact_lists_bots_teams_and_proposals():
     code = _published_library_skill()
-    a = _bot("ops-a", code)
-    b = _bot("ops-b", code)
+    _bot("ops-a", code)
+    _bot("ops-b", code)
     _publish_bot("ops-a")
     _publish_bot("ops-b")
     team = bot_teams.create_team({"code": "ops-team", "name": "运营团队",
