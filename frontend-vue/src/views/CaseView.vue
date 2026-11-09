@@ -32,7 +32,7 @@
         <div v-if="images.length" style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px">
           <div v-for="(s, i) in images" :key="i" class="thumbbox">
             <el-image :src="s" fit="cover" class="thumb" :preview-src-list="images" :initial-index="i" preview-teleported />
-            <el-button class="del" size="small" circle type="danger" @click="images.splice(i, 1)">×</el-button>
+            <el-button class="del" size="small" circle type="danger" aria-label="删除该图片" @click="images.splice(i, 1)">×</el-button>
           </div>
         </div>
         <div style="margin-top: 12px">

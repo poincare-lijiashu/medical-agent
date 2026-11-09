@@ -6061,3 +6061,28 @@ npm run build       → 5.16s 通过
 - axe / Lighthouse 自动化审计（需要浏览器环境）与全键盘 Tab 走查 e2e 未接；
 - 手写表格的 `<th scope="col">`、对话框关闭后焦点归还未系统整改；
 - 图标按钮（×）的 `aria-label` 仍有遗漏（ImagingView/CaseView 的删除按钮）。
+
+## 150. 2026-11-10 评测 P1-5 收尾：表格语义与图标按钮可访问名称（第 147 批）
+
+**问题**
+
+- 审核中心两张手写 `<table class="rv-table">` 的表头全是裸 `<th>`（无 `scope="col"`），
+  读屏软件无法把单元格与列名关联——医生用读屏核对 76 条待核对项时听到的是孤立数字；
+- 影像/病例的删除按钮只有 `×` 字符，没有 `aria-label`，读屏只会念"乘号"。
+
+**已做**
+
+1. `ReviewCenterView` 两张手写表的 10 个 `<th>` 全部补 `scope="col"`；
+2. `ImagingView` / `CaseView` 的删除按钮补 `aria-label="删除该图片"`；
+3. 回归锁：`tests/test_frontend_syntax.py::test_table_headers_and_icon_buttons_have_accessibility_names`
+   —— `<th scope="col">` ≥10、删除按钮 `aria-label` ≥2。
+
+**验证**
+
+```
+npm run lint → 0 problems；npm run build → 5.08s
+定向 test_frontend_syntax → 42 passed
+全量（不含 e2e）→ 1560 passed / 1 skipped
+```
+
+**仍未解决**：axe/Lighthouse 自动化审计、全键盘 Tab e2e 走查、对话框关闭后焦点归还。

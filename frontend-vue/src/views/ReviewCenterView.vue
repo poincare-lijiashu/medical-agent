@@ -243,7 +243,7 @@
         </el-card>
         <el-card v-else body-style="padding:0" style="overflow: hidden">
           <table class="rv-table">
-            <thead><tr><th>项目{{ isMine ? '（点击展开全文）' : '' }}</th><th>置信度</th><th>风险</th><th>提交人</th><th>{{ isMine ? '操作' : '操作' }}</th></tr></thead>
+            <thead><tr><th scope="col">项目{{ isMine ? '（点击展开全文）' : '' }}</th><th scope="col">置信度</th><th scope="col">风险</th><th scope="col">提交人</th><th scope="col">{{ isMine ? '操作' : '操作' }}</th></tr></thead>
             <tbody>
               <tr v-for="p in pendSlice" :key="p.id">
                 <td>
@@ -308,7 +308,7 @@
         </el-card>
         <el-card v-else body-style="padding:0" style="overflow: hidden">
           <table class="rv-table">
-            <thead><tr><th>项目（点击展开全文）</th><th>置信度</th><th>风险</th><th>提交人</th><th>处理结果</th></tr></thead>
+            <thead><tr><th scope="col">项目（点击展开全文）</th><th scope="col">置信度</th><th scope="col">风险</th><th scope="col">提交人</th><th scope="col">处理结果</th></tr></thead>
             <tbody>
               <!-- 处方审核记录专用行（rid/状态/意见/时间双轨取自处方字段） -->
               <tr v-for="p in histSlice.filter((x) => x._rx)" :key="'rx' + p.id">

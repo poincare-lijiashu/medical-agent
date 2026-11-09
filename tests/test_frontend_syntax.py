@@ -1017,3 +1017,10 @@ def test_badge_polling_is_visibility_aware():
     assert "setInterval(() => badges.poll(), 60_000)" not in shell
 
 
+
+
+def test_table_headers_and_icon_buttons_have_accessibility_names():
+    """评测 P1-5 收尾：手写表格必须给 th scope，图标按钮必须有 aria-label。"""
+    src = _vue_source()
+    assert src.count('<th scope="col">') >= 10, "审核中心两张手写表的表头都要 scope=col"
+    assert src.count('aria-label="删除该图片"') >= 2, "影像/病例删除按钮必须有可访问名称"
