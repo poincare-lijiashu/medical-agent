@@ -138,6 +138,32 @@ def test_security_headers_on_all_responses():
     assert "default-src 'self'" in csp
 
 
+def test_embed_frame_ancestors_only_relaxes_html_documents(monkeypatch):
+    """第 126 批：iframe 白名单只对前端 HTML 文档生效，API/健康检查仍禁止被嵌入。
+
+    这是"一次登录、一个入口"的安全前提：放开嵌入不能顺带把接口也放开。
+    """
+    from backend.config import settings
+    monkeypatch.setattr(settings, "embed_frame_ancestors", "http://127.0.0.1:5180")
+    c = TestClient(_app())
+
+    # 非 HTML（健康检查）→ 保持 DENY，行为与默认一致
+    h = c.get("/healthz")
+    assert h.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in h.headers["Content-Security-Policy"]
+
+    # API 响应同样保持 DENY
+    a = c.get("/api/v1/medical/health")
+    assert a.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in a.headers["Content-Security-Policy"]
+
+    # 前端文档 → 移除 XFO，CSP 放行指定来源（dist 已入库，/ 返回 index.html）
+    d = c.get("/")
+    assert d.text.lstrip().startswith("<!DOCTYPE html") or "<html" in d.text[:200]
+    assert "X-Frame-Options" not in d.headers
+    assert "frame-ancestors http://127.0.0.1:5180" in d.headers["Content-Security-Policy"]
+
+
 def test_load_optional_table_uses_with_open(monkeypatch):
     """QUALITY-005：可选表读取必须 with-open（上下文管理器）确保句柄及时关闭，
     防 Windows 下句柄占用锁文件。"""

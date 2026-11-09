@@ -307,11 +307,12 @@ async def _security_headers(request: Request, call_next):
     response = await call_next(request)
     headers = dict(_SECURITY_HEADERS)
     # 第 126 批：统一门户里 AI 中台以 iframe 呈现（一次登录、一个入口）。
-    # 只对**前端文档**放行被指定来源嵌入；API 响应保持 frame-ancestors 'none'。
+    # 只对**前端 HTML 文档**放行被指定来源嵌入；API/健康检查/指标等响应保持
+    # frame-ancestors 'none'（用 content-type 判定，比"路径前缀白名单"更难漏）。
     # 未配置 embed_frame_ancestors 时行为与历史完全一致（DENY）。
     ancestors = (getattr(settings, "embed_frame_ancestors", "") or "").strip()
-    if ancestors and not request.url.path.startswith(("/api/", "/docs", "/redoc",
-                                                    "/openapi.json")):
+    if ancestors and not request.url.path.startswith("/api/") \
+            and str(response.headers.get("content-type", "")).startswith("text/html"):
         headers.pop("X-Frame-Options", None)  # XFO 不支持多来源/跨端口，改用 CSP
         headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
             "frame-ancestors 'none'", f"frame-ancestors {ancestors}")
