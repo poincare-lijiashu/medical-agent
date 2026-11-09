@@ -5793,3 +5793,45 @@ yaml.safe_load(ci.yml) → 11 个 job（新增 lint / vuln-scan）
 - `mypy`/`vue-tsc`（frontend-vue）类型检查未接；`npm audit` 与 `pip-audit` 仍为非阻断；
 - 分支保护需运维在仓库设置中开启（代码侧只能提供 CODEOWNERS 与模板）；
 - 风格类规则（I/UP/B/E501，767 条）与 pre-commit 钩子未启用。
+
+## 144. 2026-11-09 评测 D3/D4：统一分页条 + 翻页回顶修复（第 141 批）
+
+**问题（评测 03-frontend-ux P0-3 / P1-1）**
+
+- 6 处分页 4 种写法：有的带「‹ ›」有的不带、有的有总数有的没有、有的右对齐有的左对齐；
+- `ReviewCenterView` 的 `scrollTop()` 实现是 `window.scrollTo(0, 0)`，但真实滚动容器是
+  `AppShell` 的 `.content`（html/body 高度锁死）→ **翻页后页面根本不动**；`RxView`/`KbView`/
+  `ConsultView`/`DataView` 连回顶都没调，行为各不相同。
+
+**已做**
+
+1. **统一组件 `frontend-vue/src/components/PagerBar.vue`**
+   - props：`page`（0 基）/ `pageCount` / `total`（null=未知，不编造总数）/ `unit` / `align` / `note`；
+   - 统一文案：`‹ 上一页` + `第 N / M 页 · 共 T 单位` + `下一页 ›`，禁用边界统一；
+   - 翻页统一调用 `utils/scroll.js::scrollContentTop()`（滚 `.content`），`window.scrollTo` 全仓清零。
+2. **7 个分页点全部接入**：审核中心（开药待审 / 待核对 / 历史）、我的处方、知识库、审计流、我的会诊。
+   - 审计流此前是工具条里两个裸按钮（无页码、无总数）——现在与全站同文案，且**总数已知时用
+     `ceil(total/size)` 作真实总页数**（浏览器复验时发现"共 2399 条却显示第 1 / 2 页"的口径分裂，已修）；
+   - 我的会诊保留 `align="end"` 与"两侧共用页码"说明，仅统一文案与回顶行为。
+3. **清理**：删除 `ReviewCenterView`/`KbView` 里已无引用的 `.pager` 样式与 `scrollTop()` 死代码。
+4. **回归锁**：`tests/test_frontend_syntax.py`
+   - 新增 `test_pager_bar_is_shared_by_all_pagers`：`<PagerBar` ≥6 处、必须 import 组件、
+     `scrollContentTop`/`.content` 必须存在、`window.scrollTo` 不得回潮；
+   - `test_consult_mine_pager_markers` 改为断言 PagerBar 的 `page/pageCount/total/align`。
+
+**真机验证**（admin01，构建产物 index-DMv4t9U2.js）
+
+```
+/data 展开审计流：分页条显示「第 1 / 2 页 · 共 2399 条」，上一页禁用、下一页可用
+点击下一页 → 「第 2 / 3 页 · 共 2403 条」，列表首条 11/09 23:25 → 23:01
+请求 GET /medical/admin/audit?audit_offset=50 → 200；无错误 toast、无 429
+（2399→2403 是本次登录/访问自身的审计留痕写入）
+定向：test_frontend_syntax + test_frontend_agent_markers → 57 passed
+npm run build（frontend-vue）→ 5.35s 通过
+```
+
+**本批仍未解决（D4 的 P1-4 部分）**
+
+- 空态/错误态仍未统一（5 种空态写法、4 种错误态写法、`DataView` 裸文本 `⚠` 错误）；
+  `EmptyState.vue` / `ErrorState.vue` 与 14 视图替换留下一批。
+- 页大小仍有 10（会诊）/12（审核/处方）/50（知识库/审计）三档，未做数据量论证后的统一。

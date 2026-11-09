@@ -220,13 +220,10 @@
           </div>
         </el-card>
         <!-- 第 106 批：开药待审服务端分页（12/页；与医生端「我的处方」同口径） -->
-        <div v-if="rxPendingTotal > RX_PEND_PER" data-testid="rx-pending-pager"
-          style="display: flex; align-items: center; gap: 12px; padding: 4px 2px">
-          <el-button size="small" :disabled="rxPendingPage === 0" @click="rxPendingGo(-1)">‹ 上一页</el-button>
-          <span class="src num">第 {{ rxPendingPage + 1 }} / {{ Math.ceil(rxPendingTotal / RX_PEND_PER) }} 页 · 共 {{ rxPendingTotal }} 张</span>
-          <el-button size="small" :disabled="(rxPendingPage + 1) * RX_PEND_PER >= rxPendingTotal"
-            @click="rxPendingGo(1)">下一页 ›</el-button>
-        </div>
+        <PagerBar v-if="rxPendingTotal > RX_PEND_PER" data-testid="rx-pending-pager"
+          :page="rxPendingPage" :page-count="Math.ceil(rxPendingTotal / RX_PEND_PER)"
+          :total="rxPendingTotal" unit="张"
+          @change="(p) => rxPendingGo(p - rxPendingPage)" />
       </template>
 
       <!-- 我的待确认 / 待核对表（空态文案按角色/模式逐字） -->
@@ -294,11 +291,8 @@
               </tr>
             </tbody>
           </table>
-          <div class="pager">
-            <el-button size="small" :disabled="pendPage === 0" @click="pendPage--; scrollTop()">‹ 上一页</el-button>
-            <span class="src num">第 {{ pendPage + 1 }} / {{ pendPages }} 页 · 共 {{ pendCount }} 项</span>
-            <el-button size="small" :disabled="pendPage >= pendPages - 1" @click="pendPage++; scrollTop()">下一页 ›</el-button>
-          </div>
+          <PagerBar :page="pendPage" :page-count="pendPages" :total="pendCount" unit="项"
+            @change="pendPage = $event" />
         </el-card>
       </template>
 
@@ -371,11 +365,9 @@
               </tr>
             </tbody>
           </table>
-          <div class="pager">
-            <el-button size="small" :disabled="histPage === 0" @click="histPage--; scrollTop()">‹ 上一页</el-button>
-            <span class="src num">第 {{ histPage + 1 }} / {{ histPages }} 页 · 共 {{ isPh ? histItems.length : histTotal }} 条已处理</span>
-            <el-button size="small" :disabled="histPage >= histPages - 1" @click="histPage++; scrollTop()">下一页 ›</el-button>
-          </div>
+          <PagerBar :page="histPage" :page-count="histPages"
+            :total="isPh ? histItems.length : histTotal" unit="条已处理"
+            @change="histPage = $event" />
         </el-card>
       </template>
     </div>
@@ -485,6 +477,7 @@ import { useAuthStore } from '../stores/auth'
 import { useBadgeStore } from '../stores/badges'
 import DrugDictEditor from '../components/DrugDictEditor.vue'
 import DrugRulesEditor from '../components/DrugRulesEditor.vue'
+import PagerBar from '../components/PagerBar.vue'
 
 defineOptions({ name: 'ReviewCenterView' })
 
@@ -757,7 +750,7 @@ const histSlice = computed(() => {
   return histItems.value.slice(pg * REVIEW_PER, pg * REVIEW_PER + REVIEW_PER)
 })
 
-function scrollTop() { window.scrollTo(0, 0) }
+// 翻页回顶统一由 components/PagerBar 处理（滚 .content，见 utils/scroll.js）
 
 // ---- 签发/驳回/翻案/知情确认（review 队列）----
 const detailOn = ref(false)
@@ -1019,10 +1012,6 @@ async function purgeGo() {
 
 <style scoped>
 .tabbar { padding: 10px 26px; gap: 8px }
-.pager {
-  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-  border-top: 1px solid var(--line);
-}
 .rv-table { width: 100%; border-collapse: collapse; font-size: 13px }
 .rv-table th, .rv-table td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top }
 .rv-table th { color: var(--ink-3); font-weight: 500; font-size: 12px; white-space: nowrap }

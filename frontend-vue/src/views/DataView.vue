@@ -38,8 +38,14 @@
         <template v-if="auditPanelOpen">
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 8px">
             <el-input v-model="auditSearch" placeholder="本页内搜索：事件/操作/用户/人话描述" style="flex: 1; min-width: 180px" clearable />
-            <el-button size="small" :disabled="auditOffset <= 0" @click="auditPage(-1)">上一页</el-button>
-            <el-button size="small" :disabled="auditAtEnd" @click="auditPage(1)">下一页</el-button>
+            <!-- 总数已知时用真实总页数（ceil(total/size)）；未知时才用"当前页 + 前瞻"，
+                 否则会出现"共 2399 条却显示第 1 / 2 页"的口径分裂。 -->
+            <PagerBar :page="Math.floor(auditOffset / AUDIT_PAGE_SIZE)"
+              :page-count="auditTotal !== null
+                ? Math.ceil(auditTotal / AUDIT_PAGE_SIZE)
+                : Math.floor(auditOffset / AUDIT_PAGE_SIZE) + (auditAtEnd ? 1 : 2)"
+              :total="auditTotal" unit="条"
+              @change="(p) => auditPage(p - Math.floor(auditOffset / AUDIT_PAGE_SIZE))" />
             <el-button size="small" data-testid="audit-csv" @click="exportAuditCsv">导出本页 CSV</el-button>
             <el-button size="small" type="primary" plain data-testid="audit-export-all"
                        :loading="auditExporting" @click="exportAuditAll">按过滤导出全量（≤10000）</el-button>
@@ -325,6 +331,7 @@ import { fmtTs, detailText } from '../utils/assist'
 import { humanizeAudit, fmtLogSize, fmtUp } from '../utils/audit'
 import { useAuthStore } from '../stores/auth'
 import { useBadgeStore } from '../stores/badges'
+import PagerBar from '../components/PagerBar.vue'
 
 defineOptions({ name: 'DataView' })
 

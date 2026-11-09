@@ -207,11 +207,8 @@
           </el-card>
           <el-card v-if="!mineLoading && !rxMineCache.length" shadow="never"><div class="src">暂无处方记录。</div></el-card>
           <!-- 第 76 批：服务端分页（12/页），配合 /prescriptions/mine 的 limit/offset/total -->
-          <div v-if="mineTotal > RX_PER" style="display: flex; align-items: center; gap: 12px; padding: 4px 2px">
-            <el-button size="small" :disabled="minePage === 0" @click="minePage--">‹ 上一页</el-button>
-            <span class="src num">第 {{ minePage + 1 }} / {{ minePages }} 页 · 共 {{ mineTotal }} 张</span>
-            <el-button size="small" :disabled="minePage >= minePages - 1" @click="minePage++">下一页 ›</el-button>
-          </div>
+          <PagerBar v-if="mineTotal > RX_PER" :page="minePage" :page-count="minePages"
+            :total="mineTotal" unit="张" @change="minePage = $event" />
         </div>
       </template>
     </div>
@@ -227,6 +224,7 @@ import http from '../api'
 import { detailText, fmtTs } from '../utils/assist'
 import { DRUG_DISCLAIMER } from '../constants/copy'
 import { useDirtyStore } from '../stores/dirty'
+import PagerBar from '../components/PagerBar.vue'
 
 defineOptions({ name: 'RxView' })
 

@@ -178,14 +178,10 @@
             </ul>
           </el-card>
           <!-- 第 119 批：服务端分页（两侧共用页码；只在总数超过一页时出现） -->
-          <div v-if="mineMaxTotal > MINE_PER" data-testid="consult-mine-pager"
-               style="display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 10px">
-            <span class="src num">第 {{ minePage }} / {{ minePages }} 页（我发起的/我参与过的共用页码）</span>
-            <el-button size="small" data-testid="consult-mine-prev"
-                       :disabled="mineOffset === 0" @click="mineGo(-1)">上一页</el-button>
-            <el-button size="small" data-testid="consult-mine-next"
-                       :disabled="mineOffset + MINE_PER >= mineMaxTotal" @click="mineGo(1)">下一页</el-button>
-          </div>
+          <PagerBar v-if="mineMaxTotal > MINE_PER" data-testid="consult-mine-pager"
+            :page="minePage - 1" :page-count="minePages" :total="mineMaxTotal" unit="条"
+            align="end" note="（我发起的/我参与过的共用页码）"
+            @change="(p) => mineGo(p - (minePage - 1))" />
         </template>
       </div>
     </template>
@@ -200,6 +196,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
 import { appendImages } from '../utils/image'
+import PagerBar from '../components/PagerBar.vue'
 import { confMeta, md, srcItems, fmtTs, detailText, splitConsultQuestion, splitAiByDept } from '../utils/assist'
 
 defineOptions({ name: 'ConsultView' })

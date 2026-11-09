@@ -51,11 +51,8 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div class="pager">
-              <el-button size="small" :disabled="kbPage === 0" @click="kbPage--">‹ 上一页</el-button>
-              <span class="src num">第 {{ kbPage + 1 }} / {{ kbPages }} 页 · 共 {{ kbData.docs.length }} 篇</span>
-              <el-button size="small" :disabled="kbPage >= kbPages - 1" @click="kbPage++">下一页 ›</el-button>
-            </div>
+            <PagerBar :page="kbPage" :page-count="kbPages"
+              :total="kbData.docs.length" unit="篇" @change="kbPage = $event" />
           </template>
           <div v-else class="src">暂无文档。</div>
         </template>
@@ -109,6 +106,7 @@ import { computed, defineOptions, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
 import { esc, fmtTs, detailText } from '../utils/assist'
+import PagerBar from '../components/PagerBar.vue'
 
 defineOptions({ name: 'KbView' })
 
@@ -264,6 +262,3 @@ async function deleteKb(row) {
 }
 </script>
 
-<style scoped>
-.pager { display: flex; align-items: center; gap: 12px; padding: 12px 0 }
-</style>
