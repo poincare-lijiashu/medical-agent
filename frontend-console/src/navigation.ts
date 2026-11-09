@@ -15,7 +15,8 @@ export const NAV_ITEMS: NavItem[] = [
     name: 'ai',
     path: '/ai',
     title: 'AI 临床助手',
-    hint: '多智能体会诊 · 智能审方 · 病历质控 · 文献循证 · 知识库问答 · Agent 编排',
+    // 第 132 批：审方/质控已内联到业务流程，此页保留为深度会话与全量能力入口
+    hint: '完整工作台：深度会诊 / 文献循证 / 知识库问答 / Agent 编排（审方与质控已内联到医嘱、病案首页）',
     icon: 'monitor',
     group: '总览',
   },

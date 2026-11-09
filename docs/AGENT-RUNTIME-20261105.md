@@ -5390,3 +5390,53 @@ tests -k "review or prescription or qc_parse" → 244 passed
 A3 审计 event_type 两侧语义、B3 医疗主链路出境管控、B4 高危自动签发默认值、
 C2 helm 门禁、C3 镜像构建、C4 e2e 隔离、C5 门禁补齐。
 
+## 135. 2026-11-09 从 iframe 走向业务内嵌（第 132 批：内联审方 / 内联质控 / 患者卡片会诊）
+
+**为什么做**：iframe 只是"一次登录、一个入口"的过渡形态——AI 仍是独立页面。
+商业形态要求 AI 出现在**业务动作发生的地方**：开医嘱时内联审方、写病历时内联质控、
+患者卡片旁内联会诊建议。本批把这三处落到控制台真实页面里，不跳页、不复制身份。
+
+**已做**
+
+1. **后端两个内联端点**（`backend/api/v1/medical/inline.py`）：
+   - `POST /inline/rx-check`：药品字典归一 → 字典外 / 重复用药 / 两两相互作用。
+     **确定性规则、不调 LLM**（毫秒级），审计只记计数与等级，不记药名清单与病例原文。
+   - `POST /inline/qc-check`：`profile=emr|homepage` 两套必填表（首页不会被误报"缺主诉"）。
+     emr 默认只跑完整性；显式 `include_connotation=true` 才追加 LLM 内涵质量，入模前 PHI 脱敏。
+2. **控制台 AI 直连客户端**（`frontend-console/src/api/http.ts` 的 `aiRequest`）：
+   Python 端点返回裸 JSON、错误体是 `{detail}`，与 Java 的 `ApiResponse` 信封不同；
+   统一复用同一枚 Bearer、同一套 401 刷新与超时语义，不引入第二套登录。
+3. **四个内联组件**（`components/ai/`）：`AiPanel`（等级/加载/错误/免责）、
+   `InlineRxAudit`（450ms 防抖 + AbortController 丢弃陈旧请求）、
+   `InlineConsult`（按需生成，展示智能体/耗时/需复核）、`InlineQc`（首页/病历两档）。
+4. **三处业务集成**：
+   - 医嘱工作台「开立医嘱」卡片内：当前药品行 + 本次就诊已开药品医嘱 → AI 审方；
+   - 右侧患者上下文卡片下：AI 会诊建议（不离开患者卡片，可展开全文）；
+   - 病案首页明细内：首页内联质控（必填项缺失即提示，不阻断提交）。
+   `/ai` 保留为完整工作台（深度会诊/文献/知识库/Agent），导航文案明确"审方/质控已内联"。
+5. **真机发现并修复权限缺口**：DOCTOR 缺 `clinical:charge:read`，医嘱工作台显示
+   "收费单读取失败"；新增 `V78__doctor_charge_read.sql` 并同步线上授权（settle 仍只给收费/管理员）。
+
+**真机验证**
+
+```
+POST /api/v1/medical/inline/rx-check（华法林 + 阿司匹林）
+  → {"level":"high","findings":[{"severity":"高","title":"高危相互作用","detail":"出血风险叠加…"}]}
+POST /api/v1/medical/inline/qc-check（profile=homepage，只填病案号/科室）
+  → 缺「主治医师」「离院方式」「主要诊断」三项高危，未误报主诉
+浏览器（5180，doctor01）：/orders → 选中患者与接诊中就诊 →
+  开立区出现「AI 审方」、患者上下文出现「AI 会诊建议」  PASS
+frontend-console：vue-tsc 0 error；vite build 通过
+后端：tests/test_inline_ai.py 6 passed；架构/路由快照 14 passed
+全量（不含 e2e）：1525 passed / 1 skipped（3 分 03 秒）
+收费权限修复后 GET /clinical/visits/{id}/charge → 200
+```
+
+**本批仍未解决（继续登记，不掩盖）**
+
+- **EMR 自由文本编辑器尚不存在**：Java emr 只有首页/编码/知情同意/模板，没有病历正文 CRUD，
+  所以"写病历时内联质控"暂落在**病案首页**。下一步要先补 EMR 编辑器与记录接口，再内联质控。
+- **内联审方是提示而非强校验**：不阻断开立（高风险仍由医师确认后照常开单），
+  若院方要求"高危必须填写理由"，需要在 Java 医嘱服务侧加硬校验并回写审计。
+- 住院、急诊、药房、手术等其他业务页尚未接入内联 AI；本批先打通三条主链路与组件复用底座。
+

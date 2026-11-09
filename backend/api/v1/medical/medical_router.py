@@ -32,8 +32,8 @@ import os  # noqa: F401 —— 兼容：tests/test_security 经 mr.os.path 打�
 from fastapi import APIRouter, Depends
 
 from backend.api.deps import rate_limit
-from backend.api.v1.medical import (admin, consults, drug, imaging, kb, literature,
-                                    prescriptions, qc, review)
+from backend.api.v1.medical import (admin, consults, drug, imaging, inline, kb,
+                                    literature, prescriptions, qc, review)
 from backend.api.v1.medical.literature import _get_lit_graph  # noqa: F401 —— 兼容再导出（函数读属主模块全局）
 from backend.api.v1.medical.consults import _get_mdt_graph    # noqa: F401 —— 兼容再导出
 from backend.api.v1.medical.qc import (QC_FIELDS, QcParseReq, QcReq,        # noqa: F401
@@ -56,6 +56,8 @@ router.include_router(consults.router)
 router.include_router(review.router)
 router.include_router(qc.router)
 router.include_router(kb.router)
+# 第 132 批：业务流程内嵌（开医嘱内联审方 / 写病历内联质控）
+router.include_router(inline.router)
 
 
 @router.get("/health", dependencies=[Depends(rate_limit)])  # 拆分前 /health 在带 rate_limit 的路由器上，显式声明保持等价

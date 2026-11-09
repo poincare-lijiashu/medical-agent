@@ -3,8 +3,10 @@
     <header class="ai-bar">
       <div class="ai-title">
         <span class="ai-dot" />
-        <strong>AI 临床助手</strong>
-        <span class="ai-hint">已用当前登录身份进入，无需二次登录</span>
+        <strong>AI 临床助手 · 完整工作台</strong>
+        <span class="ai-hint">
+          已用当前登录身份进入，无需二次登录；审方与质控已内联在医嘱工作台/病案首页
+        </span>
       </div>
       <div class="ai-actions">
         <button class="btn btn--ghost" type="button" @click="reload">重新加载</button>

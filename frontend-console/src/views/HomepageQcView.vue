@@ -91,6 +91,16 @@
           <strong class="num">{{ money(detail.homepage.totalAmount) }}</strong>
         </div>
 
+        <!-- 内联质控（第 132 批）：在首页明细里就地检查必填项，不跳到 AI 页面 -->
+        <div class="detail-section">
+          <InlineQc
+            :fields="qcFields"
+            profile="homepage"
+            title="首页内联质控"
+            subtitle="按首页必填项就地检查（不阻断提交）"
+          />
+        </div>
+
         <div class="detail-grid">
           <div class="kv"><span>患者</span><strong>{{ detail.homepage.patientName }}</strong></div>
           <div class="kv"><span>病案号</span><strong class="mono">{{ detail.homepage.patientNo }}</strong></div>
@@ -162,7 +172,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import InlineQc from '@/components/ai/InlineQc.vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -193,6 +204,26 @@ const totalCount = ref(0)
 const detailOpen = ref(false)
 const detailLoading = ref(false)
 const detail = ref<HomepageView | null>(null)
+
+/**
+ * 内联质控的输入：只放**结构化首页字段**（与后端 profile=homepage 的必填项对齐）。
+ * 不塞主诉/现病史——首页没有这些字段，塞空值会被误报成"缺主诉"。
+ */
+const qcFields = computed<Record<string, string>>((): Record<string, string> => {
+  const d = detail.value
+  if (!d) return {}
+  const h = d.homepage
+  return {
+    病案号: h.patientNo || '',
+    科室: h.deptName || '',
+    主治医师: h.attendingDoctor || '',
+    离院方式: h.dischargeMode || '',
+    主要诊断: (d.diagnoses || []).map((x) => `${x.code} ${x.name}`).join('；'),
+    手术操作: (d.procedures || []).map((x) => `${x.code} ${x.name}`).join('；'),
+    住院天数: h.stayDays == null ? '' : String(h.stayDays),
+    总费用: String(h.totalAmount ?? ''),
+  }
+})
 
 function countOf(value: string) {
   if (!value) return totalCount.value

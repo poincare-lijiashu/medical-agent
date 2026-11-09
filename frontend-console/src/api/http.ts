@@ -16,6 +16,8 @@ export class ApiError extends Error {
 }
 
 const BASE = '/api/v2'
+/** AI 中台（Python）经同一网关转发：/api/v1/** → 127.0.0.1:8001。 */
+const AI_BASE = '/api/v1'
 
 interface TokenState {
   accessToken: string | null
@@ -57,14 +59,18 @@ export interface RequestOptions {
   headers?: Record<string, string>
 }
 
-function buildUrl(path: string, query?: RequestOptions['query']) {
-  const url = new URL(BASE + path, window.location.origin)
+function buildUrlWith(base: string, path: string, query?: RequestOptions['query']) {
+  const url = new URL(base + path, window.location.origin)
   if (query) {
     for (const [k, v] of Object.entries(query)) {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v))
     }
   }
   return url.pathname + url.search
+}
+
+function buildUrl(path: string, query?: RequestOptions['query']) {
+  return buildUrlWith(BASE, path, query)
 }
 
 let refreshing: Promise<boolean> | null = null
@@ -283,4 +289,96 @@ export function errorText(e: unknown): string {
   }
   if (e instanceof Error) return e.message
   return '操作失败，请稍后重试'
+}
+
+/* ------------------------------------------------------------------ *
+ * AI 中台直连（第 132 批：内联审方/内联质控/会诊建议）
+ *
+ * 与 /api/v2（Java，统一 ApiResponse 信封）不同，Python 端点返回**裸 JSON**，
+ * 错误体是 FastAPI 的 {detail: "..."}。因此不能复用 once() 的信封解析，
+ * 但必须复用同一枚 Bearer 令牌、同一套 401 刷新与超时语义。
+ * ------------------------------------------------------------------ */
+
+export class AiRequestError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'AiRequestError'
+    this.status = status
+  }
+}
+
+/** 解析 FastAPI 错误体：detail 可能是字符串，也可能是 pydantic 校验错误数组。 */
+function aiErrorMessage(text: string, status: number): string {
+  try {
+    const body = JSON.parse(text) as { detail?: unknown; message?: string }
+    if (typeof body.detail === 'string' && body.detail) return body.detail
+    if (Array.isArray(body.detail)) {
+      const msgs = body.detail
+        .map((d) => {
+          const item = d as { msg?: string; loc?: unknown[] }
+          const loc = Array.isArray(item.loc) ? item.loc.slice(-1).join('.') : ''
+          return loc ? `${loc}：${item.msg ?? ''}` : String(item.msg ?? '')
+        })
+        .filter(Boolean)
+      if (msgs.length) return msgs.join('；')
+    }
+    if (typeof body.message === 'string' && body.message) return body.message
+  } catch {
+    /* 非 JSON 错误体：走兜底文案 */
+  }
+  return `AI 服务请求失败（HTTP ${status}）`
+}
+
+async function aiOnce<T>(path: string, opts: RequestOptions, retried: boolean): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json', ...opts.headers }
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
+
+  let res: Response
+  let text: string
+  try {
+    const payload = await fetchText(buildUrlWith(AI_BASE, path, opts.query), {
+      method: opts.method ?? 'GET',
+      headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: opts.signal,
+    })
+    res = payload.res
+    text = payload.text
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'AbortError') throw err
+    if (err.name === 'TimeoutError') {
+      throw new AiRequestError('AI 服务响应超时，请稍后重试', 0)
+    }
+    throw new AiRequestError('AI 服务不可达，请检查网关与 AI 中台是否在线', 0)
+  }
+
+  if (res.status === 401) {
+    if (!retried && (await doRefresh())) return aiOnce<T>(path, opts, true)
+    onSessionExpired?.()
+    throw new AiRequestError('登录状态已失效，请重新登录', 401)
+  }
+  if (!res.ok) throw new AiRequestError(aiErrorMessage(text, res.status), res.status)
+  if (!text) return undefined as T
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new AiRequestError('AI 服务返回格式不正确', res.status)
+  }
+}
+
+/** AI 中台请求：裸 JSON + Bearer + 401 单次刷新。 */
+export function aiRequest<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  return aiOnce<T>(path, opts, false)
+}
+
+export function aiGet<T>(path: string, query?: RequestOptions['query'], signal?: AbortSignal) {
+  return aiRequest<T>(path, { query, signal })
+}
+
+export function aiPost<T>(path: string, body?: unknown, signal?: AbortSignal) {
+  return aiRequest<T>(path, { method: 'POST', body, signal })
 }

@@ -314,6 +314,11 @@
             <div v-if="modeHint" class="entry-hint">
               <AppIcon name="info" :size="13" /> {{ modeHint }}
             </div>
+
+            <!-- 内联审方（第 132 批）：边开医嘱边核对，不离开当前页面 -->
+            <div class="entry-ai">
+              <InlineRxAudit :items="rxAuditItems" />
+            </div>
           </div>
 
           <div v-else-if="selectedVisit.status === 'REGISTERED'" class="notice">
@@ -500,6 +505,14 @@
           <button v-if="canReveal" class="btn btn--sm btn--block" type="button" @click="revealPatient">
             <AppIcon name="lock" :size="13" /> 查看敏感信息（留痕）
           </button>
+
+          <!-- 患者卡片旁的会诊建议（第 132 批）：不离开当前患者即可发起 AI 多智能体会诊 -->
+          <InlineConsult
+            :patient-name="selectedPatient.name"
+            :patient-no="selectedPatient.patientNo"
+            :dept-name="selectedVisit ? deptName(selectedVisit.deptId) : ''"
+            :visit-no="selectedVisit?.visitNo || ''"
+          />
         </div>
 
         <div class="inspector-block">
@@ -759,6 +772,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import InlineConsult from '@/components/ai/InlineConsult.vue'
+import InlineRxAudit from '@/components/ai/InlineRxAudit.vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -1141,6 +1156,25 @@ const line = reactive({
   dose: '',
   frequency: '',
   orderMode: 'TEMP',
+  // 收费项目分类（DRUG/TREATMENT/EXAM/…）：内联审方只核对药品，避免把检查项误报"字典外药品"
+  category: '',
+})
+
+/**
+ * 内联审方的输入：本次就诊已开立的**药品类**医嘱 + 当前正在填写的药品行。
+ * 规则在 AI 中台侧执行（确定性、毫秒级），这里只负责把上下文拼对。
+ */
+const rxAuditItems = computed(() => {
+  const out: { name: string; dose: string; frequency: string }[] = []
+  for (const o of orders.value) {
+    if (o.orderType !== 'DRUG') continue
+    if (o.status === 'CANCELLED' || o.status === 'STOPPED') continue
+    out.push({ name: o.itemName, dose: o.dose || '', frequency: o.frequency || '' })
+  }
+  if (line.itemCode && line.category === 'DRUG') {
+    out.push({ name: line.itemName, dose: line.dose, frequency: line.frequency })
+  }
+  return out
 })
 
 const frequencyOptions = computed(() => {
@@ -1215,6 +1249,7 @@ async function submitOrder() {
     line.price = 0
     line.quantity = 1
     line.dose = ''
+    line.category = ''
     await Promise.all([loadOrders(), loadCharge()])
   } catch (e) {
     // 保留 pendingOrderKey：用户重试时仍是同一个键，不会重复开单
@@ -1285,6 +1320,7 @@ function chooseItem(it: ChargeItem) {
   line.itemName = it.name
   line.unit = it.unit
   line.price = it.price
+  line.category = it.category
   catalogOpen.value = false
 }
 

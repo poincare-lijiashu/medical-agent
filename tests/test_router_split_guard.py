@@ -89,6 +89,10 @@ ROUTE_SNAPSHOT: list[tuple[str, str]] = [
     ("GET", "/admin/kb/integrity"),
     ("GET", "/admin/kb/{tag}/preview"),
     ("DELETE", "/admin/kb/{tag}"),
+    # 第 132 批：业务流程内联（开医嘱审方 / 病历质控）。新增端点必须在 /health 之前，
+    # 否则 catch-all 顺序变化会改变路由解析结果。
+    ("POST", "/inline/rx-check"),
+    ("POST", "/inline/qc-check"),
     ("GET", "/health"),
 ]
 
@@ -133,7 +137,7 @@ def test_no_from_import_of_audit_accessor():
 
 
 def test_route_snapshot_order_locked():
-    """③ 路由快照锁：64 端点的 (method, path) 与注册顺序均不可变。"""
+    """③ 路由快照锁：66 端点的 (method, path) 与注册顺序均不可变。"""
     actual = []
     for r in mr.router.routes:
         methods = sorted(m for m in getattr(r, "methods", ()) or ()
