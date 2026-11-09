@@ -3,5 +3,12 @@
 // 翻页后页面根本不动，用户停在上页的垂直偏移上。
 export function scrollContentTop() {
   const el = document.querySelector('.content')
-  if (el) el.scrollTop = 0
+  // 桌面：.content 是滚动容器（overflow-y:auto 且内容溢出）。
+  // 窄屏：.app-grid 改为单列、高度自适应，滚动回到文档根，避免"滚了没反应"。
+  if (el && el.scrollHeight > el.clientHeight) {
+    el.scrollTop = 0
+    return
+  }
+  const root = document.scrollingElement || document.documentElement
+  if (root) root.scrollTop = 0
 }

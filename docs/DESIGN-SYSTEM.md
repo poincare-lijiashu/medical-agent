@@ -1,6 +1,7 @@
 # 铭医 MedAssist · 设计系统 v4「开放平面 / Open Plane」
 
-> 适用：`frontend-console/`（对接 `/api/v2` 的临床控制台）。
+> 适用：`frontend-console/`（对接 `/api/v2` 的临床控制台）与 `frontend-vue/`（AI 中台，
+> 生产由 FastAPI 托管在 `/`）。两者的落地差异见 §0。
 > 目标：让人在 8 小时工作里**看得清、扫得快、敢下手**；不是让页面"像设计过"。
 
 v4 不是 v3 的调色，而是把 v3 的“技能外观”全部拆掉。依据不是个人偏好，而是：
@@ -13,6 +14,26 @@ v4 不是 v3 的调色，而是把 v3 的“技能外观”全部拆掉。依据
 - `docs/skills-audit/full/03-ui-ux-pro-max/references/quick-reference.md`
 
 补读清单与逐条对照见 [FULL-READ.md](./skills-audit/FULL-READ.md)。
+
+---
+
+## 0. 适用范围与已知偏差（2026-11-09，评测 D5）
+
+| 前端 | 角色 | 令牌来源 | 状态 |
+|---|---|---|---|
+| `frontend-console/` | 医院业务控制台（Java `/api/v2`） | 本文 v4 临床青绿 `#1F6F5C` | 规范基线；`npm run typecheck` + build 入 CI |
+| `frontend-vue/` | AI 中台（Python `/api/v1`，生产托管 `/`） | `src/styles.css` 自有变量：`--accent: #2563c9`（医学蓝） | **在范围内**，以下偏差待收敛 |
+
+已知偏差（对应 `docs/EVAL-20261109/03-frontend-ux.md`）：
+
+- **主色不一致**：`frontend-vue` 用医学蓝 `#2563c9`，Element Plus 主色梯度
+  （`--el-color-primary-light-3/5/7/8/9`、`dark-2`）按蓝色固化。切到青绿需整体重算梯度并逐页目视，
+  属独立视觉决策，未在本轮做；
+- 模板内仍有大量内联 `style=`（P0-4/D6），未全部走令牌；无 i18n、无 ESLint/Prettier（P0-5）；
+- 已落地：`.num` 等宽数字（D1）、统一 `PagerBar`（D4）、翻页滚 `.content`（D3）、
+  路由级懒加载 + vendor 分包 + 900/640px 断点（D6）。
+
+维护纪律：改 `frontend-vue` 的视觉令牌或布局时**必须同步本表**；两个前端共用本文的五条底线与禁止项。
 
 ---
 

@@ -1,23 +1,28 @@
 // 路由：轮4 切换默认入口后 history base=/（与 vite base、后端 / 与 /app 双入口一致）。
 // 轮 A 补齐 case（多模态病例总结）与 arch（架构·合规），占位视图退役（无剩余 STUB 项）。
+//
+// 评测 D6：视图全部改为**路由级懒加载**。此前 14 个视图静态 import + Element Plus 全量注册，
+// 首屏单 JS 1348KB raw / 434KB gzip；懒加载后登录页/概览只下载自己需要的 chunk。
+// 布局壳与登录页保留静态（首屏立即需要），其余按路由分包。
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { ROLE_NAV } from '../constants/nav'
 import AppShell from '../layouts/AppShell.vue'
 import LoginView from '../views/LoginView.vue'
-import OverviewView from '../views/OverviewView.vue'
-import AskView from '../views/AskView.vue'
-import LiteratureView from '../views/LiteratureView.vue'
-import ImagingView from '../views/ImagingView.vue'
-import CaseView from '../views/CaseView.vue'
-import ConsultView from '../views/ConsultView.vue'
-import RxView from '../views/RxView.vue'
-import ReviewCenterView from '../views/ReviewCenterView.vue'
-import QcView from '../views/QcView.vue'
-import KbView from '../views/KbView.vue'
-import DataView from '../views/DataView.vue'
-import AgentView from '../views/AgentView.vue'
-import ArchView from '../views/ArchView.vue'
+
+const OverviewView = () => import('../views/OverviewView.vue')
+const AskView = () => import('../views/AskView.vue')
+const LiteratureView = () => import('../views/LiteratureView.vue')
+const ImagingView = () => import('../views/ImagingView.vue')
+const CaseView = () => import('../views/CaseView.vue')
+const ConsultView = () => import('../views/ConsultView.vue')
+const RxView = () => import('../views/RxView.vue')
+const ReviewCenterView = () => import('../views/ReviewCenterView.vue')
+const QcView = () => import('../views/QcView.vue')
+const KbView = () => import('../views/KbView.vue')
+const DataView = () => import('../views/DataView.vue')
+const AgentView = () => import('../views/AgentView.vue')
+const ArchView = () => import('../views/ArchView.vue')
 
 const router = createRouter({
   history: createWebHistory('/'),

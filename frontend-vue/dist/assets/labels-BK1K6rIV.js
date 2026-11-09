@@ -1,0 +1,1 @@
+const r={single:"单智能体直达",supervisor:"主路由 + 候选",explicit:"手动指定",prefilter:"快捷应答"},e={DRAFT:"草稿",IN_REVIEW:"待审核",PUBLISHED:"已生效",REJECTED:"已驳回",DISABLED:"已停用"};function E(n){return r[n]||n||""}function t(n){return e[n]||n||""}function T(n){return n==="PUBLISHED"?"success":n==="IN_REVIEW"?"warning":n==="REJECTED"?"danger":"info"}export{T as a,t as b,E as s};

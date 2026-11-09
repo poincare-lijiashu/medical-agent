@@ -200,7 +200,11 @@ npx skills add nextlevelbuilder/ui-ux-pro-max-skill
 
 ### 3.8 把 AI 生成代码纳入工程规范
 
-- 目录：`frontend-console/`（新前端与旧 `frontend-vue` 隔离），TypeScript `strict: true`。
+- 目录：`frontend-console/`（新前端）与 `frontend-vue/`（AI 中台，生产由 FastAPI 托管在 `/`）都在本规范范围内；
+  TypeScript `strict: true` 目前只覆盖 `frontend-console/`，`frontend-vue/` 为 `.vue` + `script setup` 的 JS。
+  两者的令牌差异与已知偏差见 `docs/DESIGN-SYSTEM.md` §0（评测 D5：此前本指南只声明适用于 console，Vue 前端处于规范真空）。
+- ESLint/Prettier 目前只在 `frontend-console/` 落地；`frontend-vue/` 尚无 lint/format 门禁，
+  CI 的 Python lint（ruff）不覆盖 `.vue`（评测 P0-5，待补）。
 - 类型：`src/api/types.ts` 手写/生成自后端 DTO，禁止 `any`；请求函数集中在 `src/api/`。
 - Lint：ESLint + Prettier + `import/order`；CI 里 `tsc --noEmit` 必须通过。
 - 组件白名单：只允许 `components/ui/*`（shadcn 生成）与 `components/domain/*`；新增 UI 原语需评审。

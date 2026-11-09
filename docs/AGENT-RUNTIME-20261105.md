@@ -5835,3 +5835,55 @@ npm run build（frontend-vue）→ 5.35s 通过
 - 空态/错误态仍未统一（5 种空态写法、4 种错误态写法、`DataView` 裸文本 `⚠` 错误）；
   `EmptyState.vue` / `ErrorState.vue` 与 14 视图替换留下一批。
 - 页大小仍有 10（会诊）/12（审核/处方）/50（知识库/审计）三档，未做数据量论证后的统一。
+
+## 145. 2026-11-09 评测 D5/D6：设计规范覆盖 Vue 前端 + 路由懒加载/分包/响应式（第 142 批）
+
+**问题（评测 03-frontend-ux P0-4 / P0-6 / P2-1）**
+
+- `frontend-vue` 处于"规范真空"：`DESIGN-SYSTEM.md` 与 `FRONTEND-SKILL-GUIDE.md` 都只声明适用于
+  `frontend-console/`；该前端也没继承 legacy 完整 CSS（D1 已补）。
+- 首屏单 JS 1348KB raw / 434KB gzip（14 视图全静态 import + Element Plus 全量注册）；
+- 全仓 `@media` = 0：1024px 护士站一体机/平板上只能横向滚动。
+
+**已做**
+
+1. **规范覆盖（D5）**
+   - `docs/DESIGN-SYSTEM.md` 顶部适用声明改为"两个前端都在范围内"，新增 §0「适用范围与已知偏差」：
+     逐项列出主色差异（医学蓝 `#2563c9` vs v4 青绿 `#1F6F5C`、EP 梯度按蓝固化）、内联样式、
+     无 i18n/lint 等未收敛项，以及已落地的 D1/D3/D4/D6；并写明"改令牌必须同步本表"的纪律。
+   - `docs/FRONTEND-SKILL-GUIDE.md` §3.8 同步：目录范围、TypeScript 只覆盖 console、
+     `frontend-vue` 尚无 ESLint/Prettier 门禁（注明评测 P0-5，待补）。
+2. **路由级懒加载（D6）**
+   - `router/index.js`：13 个视图改为 `const X = () => import(...)`；`AppShell`/`LoginView` 保留静态
+     （首屏立即需要）。路由名/角色守卫/KeepAlive 语义不变。
+3. **厂商分包（D6）**
+   - `vite.config.js` 增加 `build.rollupOptions.output.manualChunks`：`vendor-vue` / `vendor-element` /
+     `vendor` 三类，业务代码变更不再让框架缓存失效。
+   - 构建产物：首屏 JS 拆为 `index 18.4KB + vendor-vue 114.7KB + vendor 181.7KB + vendor-element 814.4KB`
+     （gzip 合计约 375KB，较此前单文件 445KB 降 16%）；每个视图独立 chunk（AgentView 60.4KB、
+     ReviewCenter 56.9KB、DataView 32.7KB…），只在访问时下载。
+4. **响应式（D6）**
+   - `styles.css` 新增 `@media (max-width: 900px)`：`.app-grid` 单列、侧栏折叠为顶部横向导航
+     （隐藏分组标题、nav 不换行、横向滚动）、内容改为文档流滚动；`@media (max-width: 640px)`：
+     顶栏/页头/页面内边距收紧、隐藏副标题。
+   - `utils/scroll.js` 增加窄屏回落：`.content` 不构成滚动容器时滚 `document.scrollingElement`，
+     保证 `PagerBar` 在两种布局下都能回顶。
+5. **回归锁**：`tests/test_frontend_syntax.py` 新增
+   - `test_router_views_are_lazy_loaded`（13 个视图必须 `() => import(`、禁止静态 import 回潮、vite 必须有 manualChunks）；
+   - `test_responsive_breakpoints_exist`（900/640 两个断点 + 侧栏折叠规则必须存在）。
+
+**真机验证**（admin01，构建产物 index-Db_AwsEn.js + vendor-*）
+
+```
+/login → /overview：4 个首屏请求全 200
+/agent：12 张表正常渲染；懒加载 chunk AgentView-C971_7Pl.js / labels-* / assist-* / AgentView-*.css 全 200
+视口 800x900：aside display:flex / row / nowrap，8 个导航项 y 全为 64 横排；clientWidth=scrollWidth=785，无横向滚动
+控制台无 error/warn，44 条请求无 4xx/5xx
+定向：test_frontend_syntax + test_frontend_agent_markers → 59 passed
+```
+
+**本批仍未解决**
+
+- Element Plus 仍是全量注册（`vendor-element` 814KB raw / 256KB gzip）：进一步降首屏需改按需引入；
+- 403 处内联 `style=` 未收敛为语义类（D6 样式部分）；i18n / ESLint / 前端单测（P0-5）未接；
+- 主色统一到 v4 青绿属独立视觉决策，已登记在 DESIGN-SYSTEM §0。

@@ -19,5 +19,19 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    // 评测 D6：首屏单 JS 1348KB raw / 434KB gzip。视图已路由级懒加载，
+    // 这里再把框架与组件库拆成独立 chunk：变更业务代码不会让 vendor 缓存失效，
+    // 首屏也可并行下载/解析。
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('element-plus') || id.includes('@element-plus')) return 'vendor-element'
+          if (id.includes('/vue/') || id.includes('vue-router') || id.includes('pinia')
+              || id.includes('@vue/')) return 'vendor-vue'
+          return 'vendor'
+        },
+      },
+    },
   },
 })

@@ -103,3 +103,24 @@ ul.feed .e { font-weight: 500; color: var(--ink) }
 ul.feed .t { color: var(--ink-3); font-size: 11.5px; font-variant-numeric: tabular-nums; flex: none }
 ul.feed .a { color: var(--ink-3); margin-left: auto; font-size: 12px }
 ol.rules { padding-left: 20px; color: var(--ink-2); line-height: 1.8 }
+
+/* ===== 响应式（评测 D6）：此前全仓 0 个 @media，1024px 护士站一体机/平板只能横向滚动。
+   断点策略：≤900px 侧栏折叠为顶部横向导航、内容改为文档流滚动；≤640px 收紧内边距与字号。 ===== */
+@media (max-width: 900px) {
+  .app-grid { grid-template-columns: 1fr; height: auto; min-height: calc(100% - 56px) }
+  .rail {
+    display: flex; gap: 6px; padding: 8px 10px;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    overflow-x: auto; overflow-y: hidden;
+  }
+  .rail .grp { display: none }
+  .nav { width: auto; white-space: nowrap }
+  .content { overflow-y: visible }
+}
+@media (max-width: 640px) {
+  .topbar { gap: 8px; padding: 0 12px }
+  .mark small { display: none }
+  .shead { padding: 14px 16px; flex-wrap: wrap }
+  .shead h2 { font-size: 19px }
+  .page-body { padding: 16px; max-width: none }
+}

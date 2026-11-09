@@ -952,3 +952,29 @@ def test_pager_bar_is_shared_by_all_pagers():
     assert "window.scrollTo" not in src
 
 
+# ---- 评测 D6：路由级懒加载 + 厂商分包 + 响应式断点 ----
+
+def test_router_views_are_lazy_loaded():
+    """验收：视图必须路由级懒加载，且构建把 vue / element-plus 拆成独立 vendor chunk。
+
+    此前 14 个视图静态 import + Element Plus 全量注册，首屏单 JS 1348KB raw / 434KB gzip。
+    这里锁住"新增视图不得再静态 import"的形态，避免体积回退。
+    """
+    router = (VUE_SRC / "router" / "index.js").read_text(encoding="utf-8")
+    for view in ("OverviewView", "AskView", "LiteratureView", "ImagingView", "CaseView",
+                 "ConsultView", "RxView", "ReviewCenterView", "QcView", "KbView",
+                 "DataView", "AgentView", "ArchView"):
+        assert f"const {view} = () => import(" in router, f"{view} 必须路由级懒加载"
+    assert "import OverviewView from" not in router, "不得回退为静态 import"
+    vite = (VUE_ROOT / "vite.config.js").read_text(encoding="utf-8")
+    assert "manualChunks" in vite and "vendor-element" in vite
+
+
+def test_responsive_breakpoints_exist():
+    """验收：全仓必须有断点（此前 @media = 0，1024px 护士站一体机只能横向滚动）。"""
+    css = (VUE_SRC / "styles.css").read_text(encoding="utf-8")
+    assert "@media (max-width: 900px)" in css
+    assert "@media (max-width: 640px)" in css
+    assert ".rail .grp { display: none }" in css, "窄屏侧栏应折叠为横向导航"
+
+
