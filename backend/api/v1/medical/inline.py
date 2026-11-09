@@ -91,12 +91,16 @@ def _level(defects: list[dict]) -> str:
     return "low"
 
 
-def _audit(actor: str, action: str, payload: dict) -> None:
-    """内联检查审计：只记计数/等级，绝不写病例正文或药名清单全文。"""
+async def _audit(actor: str, action: str, payload: dict) -> None:
+    """内联检查审计：只记计数/等级，绝不写病例正文或药名清单全文。
+
+    ``pg_store.mirror_audit`` 是协程（PG 侧审计镜像），必须 await：
+    此前漏 await 会抛 "coroutine was never awaited"，PG 审计静默丢失。
+    """
     try:
         _shared.get_audit_logger().write(event_type="inline", action=action,
                                          actor=actor, payload=payload)
-        pg_store.mirror_audit(f"inline.{action}", actor, payload)
+        await pg_store.mirror_audit(f"inline.{action}", actor, payload)
     except Exception as exc:  # noqa: BLE001 —— 审计失败不阻断临床提示
         logger.warning("inline.audit_failed", action=action, error=str(exc)[:120])
 
@@ -163,8 +167,8 @@ async def inline_rx_check(req: RxCheckReq, user: dict = Depends(require_user)):
             })
 
     counts = {k: sum(1 for f in findings if f["severity"] == k) for k in ("高", "中", "低")}
-    _audit(actor, "rx_checked", {"items": len(req.items), "findings": len(findings),
-                                 "level": _level(findings)})
+    await _audit(actor, "rx_checked", {"items": len(req.items), "findings": len(findings),
+                                       "level": _level(findings)})
     return {"level": _level(findings), "findings": findings, "counts": counts,
             "disclaimer": DISCLAIMER}
 
@@ -186,9 +190,9 @@ async def inline_qc_check(req: QcCheckReq, user: dict = Depends(require_user)):
         redacted = {k: _shared.redactor.redact(v) for k, v in record.items()}
         defects = defects + await asyncio.to_thread(qc_core.connotation_check, redacted)
     counts = {k: sum(1 for d in defects if d.get("level") == k) for k in ("高", "中", "低")}
-    _audit(actor, "qc_checked", {"fields": len(record), "defects": len(defects),
-                                 "level": _level(defects), "profile": req.profile,
-                                 "connotation": bool(req.include_connotation)})
+    await _audit(actor, "qc_checked", {"fields": len(record), "defects": len(defects),
+                                       "level": _level(defects), "profile": req.profile,
+                                       "connotation": bool(req.include_connotation)})
     return {"level": _level(defects), "defects": defects, "counts": counts,
             "profile": req.profile,
             "completeness_pass": not any(d.get("track") == "完整性" for d in defects),

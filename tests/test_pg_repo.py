@@ -16,6 +16,7 @@ import time
 import pytest
 
 from backend.core import auth as auth_mod
+from backend.core import consults as consults_mod
 from backend.core import departments as dept_mod
 from backend.core import llm_config as lc
 from backend.core import medical_drug as md_mod
@@ -106,6 +107,9 @@ class FakeConn:
         if s.startswith("SELECT data FROM consults"):
             return [{"data": json.dumps(self.db["consults"][k], ensure_ascii=False)}
                     for k in sorted(self.db["consults"])]
+        if s.startswith("SELECT id FROM consults"):
+            # 第 132 批（A1）：会诊单迁移差集补齐用（只取 id 集合）
+            return [{"id": k} for k in self.db["consults"]]
         if s.startswith("SELECT data FROM prescriptions"):
             # 阶段2.1：处方真源读（data jsonb → 模拟驱动返回 str；created_at 排序）
             return [{"data": json.dumps(self.db["prescriptions"][k], ensure_ascii=False)}
@@ -138,7 +142,7 @@ class FakeConn:
             return 1
         for t in ("users", "departments", "review_queue", "llm_providers",
                   "drug_dict", "drug_rules", "prescriptions", "case_archive",
-                  "runtime_flags"):
+                  "consults", "runtime_flags"):
             if s == f"SELECT count(*) FROM {t}":
                 return len(self.db[t])
         raise AssertionError(f"假池未实现的 fetchval: {s[:80]}")
@@ -215,6 +219,9 @@ class FakeConn:
             self.db["review_queue"] = {k: v for k, v in self.db["review_queue"].items()
                                        if v.get("status") != "pending"}
             return f"DELETE {n}"
+        if s.startswith("INSERT INTO consult_opinions"):
+            # 第 132 批（A1）：会诊意见子表全量重建（迁移后由 jsonb 派生），假池不存子表
+            return "INSERT"
         raise AssertionError(f"假池未实现的 execute: {s[:80]}")
 
     async def executemany(self, sql, rows):
@@ -612,6 +619,8 @@ def _seed_json_files(tmp_path, monkeypatch):
     monkeypatch.setattr(md_mod, "DRUG_RULES_FILE", str(tmp_path / "no_drug_rules.json"))
     # 阶段2.1：处方 JSON 兜底文件一并隔离（防真实 data/prescriptions.json 影响精确断言）
     monkeypatch.setattr(rx_mod, "PRESCRIPTIONS_FILE", str(tmp_path / "no_prescriptions.json"))
+    # 第 132 批（A1）：会诊单补进迁移清单后，同样隔离真实 data/consults.json
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(tmp_path / "no_consults.json"))
 
 
 def test_migrate_imports_when_tables_empty(fake_pg, tmp_path, monkeypatch):
@@ -964,6 +973,30 @@ def test_migrate_prescriptions_imports_and_reconciles(fake_pg, tmp_path, monkeyp
     # 幂等：再次迁移无补齐
     assert not asyncio.run(pg_store.migrate_json_to_pg()).get("prescriptions_reconciled")
     assert set(fake_pg["prescriptions"]) == {"rx-pg-already", "rx-json-only"}
+
+
+def test_migrate_consults_imports_and_reconciles(fake_pg, tmp_path, monkeypatch):
+    """第 132 批（评测 A1）：会诊单补进迁移清单——PG 非空时按 id 差集补齐 JSON 独有记录。
+
+    此前 consults 缺席迁移：PG 表非空后读路径不再回落 JSON，旧会诊单永久不可见。
+    """
+    from backend.core import consults as consults_mod
+
+    c_file = tmp_path / "consults.json"
+    keep = {"id": "con-pg", "initiator": "doctor01", "status": "open",
+            "created_at": "2026-01-01T00:00:00+00:00"}
+    lost = {"id": "con-json-only", "initiator": "doctor02", "status": "open",
+            "created_at": "2026-02-01T00:00:00+00:00"}
+    c_file.write_text(json.dumps([keep, lost], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(consults_mod, "CONSULTS_FILE", str(c_file))
+    fake_pg["consults"] = {keep["id"]: {**keep}}          # PG 旧真源子集（非空表）
+
+    out = asyncio.run(pg_store.migrate_json_to_pg())
+    assert out.get("consults_reconciled") == 1
+    assert fake_pg["consults"]["con-json-only"]["initiator"] == "doctor02"
+    # 幂等：再次迁移无补齐
+    assert not asyncio.run(pg_store.migrate_json_to_pg()).get("consults_reconciled")
+    assert set(fake_pg["consults"]) == {"con-pg", "con-json-only"}
 
 
 # ---------- 阶段4：病例库合规归档 repo 往返 + 迁移（照 prescriptions 模式） ----------

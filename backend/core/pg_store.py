@@ -3064,6 +3064,31 @@ async def _migrate_impl() -> dict:
                 if rows:
                     await c.executemany(_CASE_UPSERT, rows)
                     out["case_archive_reconciled"] = len(rows)
+        # 第 132 批（评测 A1）：会诊单此前缺席迁移清单——PG 表非空后读路径不再回落 JSON，
+        # 旧会诊单永久不可见，且换环境时静默丢数据。与 prescriptions/case_archive 同纪律：
+        # 表空 → 全量导入；PG 非空 → 按 id 差集只增不覆盖（幂等可重复跑）。
+        # 会诊意见子表由 jsonb 重建（FULL_SYNC 幂等），避免列表/待填意见查询缺行。
+        from backend.core.consults import CONSULTS_FILE
+        cs_items = _read_json(CONSULTS_FILE, [])
+        if isinstance(cs_items, list) and cs_items:
+            if not await c.fetchval("SELECT count(*) FROM consults"):
+                rows = [(i.get("id"), json.dumps(i, ensure_ascii=False),
+                         i.get("initiator", ""), i.get("status", "open"))
+                        for i in cs_items if isinstance(i, dict) and i.get("id")]
+                if rows:
+                    await c.executemany(_CONSULT_UPSERT, rows)
+                    await c.execute(_CONSULT_OPINIONS_FULL_SYNC)
+                    out["consults"] = len(rows)
+            else:
+                existing = {r["id"] for r in await c.fetch("SELECT id FROM consults")}
+                rows = [(i.get("id"), json.dumps(i, ensure_ascii=False),
+                         i.get("initiator", ""), i.get("status", "open"))
+                        for i in cs_items
+                        if isinstance(i, dict) and i.get("id") and i["id"] not in existing]
+                if rows:
+                    await c.executemany(_CONSULT_UPSERT, rows)
+                    await c.execute(_CONSULT_OPINIONS_FULL_SYNC)
+                    out["consults_reconciled"] = len(rows)
         # 轮 A3：runtime_flags——repo JSON 兜底文件 ⊇ PG（JSON 先写不回滚）：
         # 表空 → 全量导入；PG 非空 → 按 key 差集只增不覆盖补齐（幂等可重复跑，
         # 与 drug_dict 同纪律）。

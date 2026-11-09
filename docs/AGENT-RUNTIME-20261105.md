@@ -5440,3 +5440,33 @@ frontend-console：vue-tsc 0 error；vite build 通过
   若院方要求"高危必须填写理由"，需要在 Java 医嘱服务侧加硬校验并回写审计。
 - 住院、急诊、药房、手术等其他业务页尚未接入内联 AI；本批先打通三条主链路与组件复用底座。
 
+## 136. 2026-11-09 评测 A1：会诊单补进迁移清单 + 内联审计协程修复（第 133 批）
+
+**已做**
+
+1. **A1 数据可信**：`pg_store._migrate_impl` 增加 `consults` 域——表空全量导入；
+   PG 非空按 id 差集**只增不覆盖**补齐（与 prescriptions/case_archive 同纪律，幂等）；
+   会诊意见子表由 jsonb 重建（`_CONSULT_OPINIONS_FULL_SYNC`，幂等）。
+   此前 consults 缺席迁移清单：PG 表非空后读路径不再回落 JSON，旧会诊单永久不可见。
+2. **内联审计协程修复**：`pg_store.mirror_audit` 是协程，`inline._audit` 此前漏 `await`，
+   实测启动日志出现 `RuntimeWarning: coroutine 'mirror_audit' was never awaited`，
+   PG 侧内联审计静默丢失。改为 `async def _audit` + await，两个端点同步调整。
+3. **测试**：fake PG 补齐 `SELECT id FROM consults` / `count(*) FROM consults` /
+   `INSERT INTO consult_opinions`；`_seed_json_files` 隔离真实 `data/consults.json`；
+   新增 `test_migrate_consults_imports_and_reconciles`（PG 非空 + JSON 独有 → 补齐 1 条，二次幂等）。
+
+**验证**
+
+```
+tests/test_pg_repo.py → 65 passed
+tests/test_inline_ai.py → 6 passed
+真机：PG consults=17，JSON=15（PG ⊇ JSON，无缺口 → 启动无 pg_migrated，符合预期）
+      POST /api/v1/medical/inline/rx-check → 200，stderr 无 coroutine 警告
+```
+
+**本批仍未解决**
+
+- **A2 JSON 镜像与 PG 已分叉**：实测 PG 17 条 vs JSON 15 条（2 条 JSON 缺失），
+  根因是 `mirror_json_upsert` 的无锁 read-modify-write + 全量重写；需单独一批做全量对账与锁化。
+- A3 审计两侧 event_type 语义、B3 出境管控、B4 自动签发默认值、C2/C3/C4/C5 仍在 P0 清单。
+

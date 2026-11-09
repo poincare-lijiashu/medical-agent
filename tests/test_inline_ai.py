@@ -22,8 +22,11 @@ def _isolate(monkeypatch):
         def write(self, **kw):
             writes.append(kw)
 
+    async def _mirror(*a, **k):
+        return None
+
     monkeypatch.setattr(inline._shared, "get_audit_logger", lambda: _Log())
-    monkeypatch.setattr(inline.pg_store, "mirror_audit", lambda *a, **k: None)
+    monkeypatch.setattr(inline.pg_store, "mirror_audit", _mirror)
     return writes
 
 
