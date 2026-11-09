@@ -209,6 +209,10 @@ class Settings(BaseSettings):
     # 两者都是"拒绝并提示拆分"，不是静默截断——宁可让用户拆文件，也不让一个请求占满 CPU。
     kb_ocr_max_pages: int = 200
     kb_extract_timeout_s: float = 180.0
+    # 解析隔离（评测 04 P1-10 第二步）：PDF/图片解析放进子进程，超时直接 kill
+    # （PyMuPDF/OCR 是 C 调用，线程无法打断）。受限环境自动回落线程内解析。
+    kb_parse_isolation: bool = True
+    kb_parse_timeout_s: float = 150.0
 
     # 影像/病例高危征象词表：留空用内置默认；逗号分隔覆盖，供院方对齐放射科危急值清单
     imaging_risk_words: str = ""

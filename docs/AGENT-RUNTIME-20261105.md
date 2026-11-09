@@ -6892,3 +6892,46 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - 同步上传的 HTTP 等待未加 `wait_for`：加了也杀不掉线程，只是"提前返回假成功/超时"，
   反而可能重复入库；当前上限已让单请求有界（≤ OCR 页数 × 单页耗时，且总时限兜底）；
 - 并发上限沿用 `_INGEST_SEMAPHORE(2)`（异步路径），同步路径仍受通用请求限流约束。
+
+## 170. 2026-11-10 评测 04 P1-10（第二步）：解析子进程隔离（硬超时 kill）（第 167 批）
+
+**问题（上批遗留）**
+
+- 第 166 批只做"页间检查 + 页数上限"：PyMuPDF 的 `get_text()/get_pixmap()` 与 OCR 推理是
+  C/原生调用，**线程无法打断**——单页畸形 PDF（递归对象/超大图像）仍可卡死线程并占满 CPU。
+
+**已做**
+
+1. **新模块 `backend/core/kb_parse_proc.py`**
+   - `extract_text_isolated(filename, raw, timeout_s, on_page)`：写临时文件传参（避免 pickle
+     大 bytes）→ 子进程解析 → Queue 回报 `page/ok/err`；
+   - **硬超时**：父进程等到 deadline 未拿到结果 → `terminate()` → 1s 后仍活着 `kill()` →
+     抛 `ValueError("文档解析超时（子进程已终止…）")`；子进程异常退出 → 明确报错；
+   - 启动方式：有 `fork` 用 fork（Linux 零重导入），否则 `spawn`（Windows）；
+   - 子进程只解析、不加载 embedding 模型（embedder 为函数内懒加载）；
+   - `selfcheck()`：可部署后验证环境是否允许起子进程；启动失败抛 `IsolationUnavailable`。
+2. **`kb_ingest.extract_text()`**：PDF/图片（二进制解析，风险面）走子进程；`md/txt` 仍进程内
+   （纯解码无风险，省一次进程开销）；`IsolationUnavailable`（沙箱/受限）→ 记 warning 并
+   **自动回落线程内解析**（仍受页数/时限约束，上传不中断）。
+3. **配置**：`KB_PARSE_ISOLATION`（默认 true）、`KB_PARSE_TIMEOUT_S`（默认 150s，小于总时限 180s）。
+4. **测试**：`tests/test_kb_parse_proc.py` 7 条（echo 往返 / 超时 kill 且秒级返回 / 错误透传 /
+   文本真实解析往返 / PDF 走隔离 / txt 跳过隔离 / 不可用时回落）。
+   `tests/conftest.py` 新增 autouse：**测试默认关闭隔离**——既有 KB 用例 monkeypatch 的
+   `_extract_text_raw`/`fitz`/OCR 桩不会传播到子进程（spawn/fork 各自导入），不关会假红；
+   隔离本身由专门用例显式开启。
+
+**验证**
+
+```
+定向：test_kb_parse_proc → 7 passed（含 Windows spawn 实跑，3.2s）
+      KB 全套（ingest/guard/limits/proc）→ 49 passed
+全量（不含 e2e）→ 1644 passed / 1 skipped
+```
+
+**取舍与遗留**
+
+- 每个解析子进程有独立解释器内存（约 100–200MB 量级），并发仍受 `_INGEST_SEMAPHORE(2)` 约束；
+  大 PDF 并发上传时的内存峰值需在 staging 实测；
+- `kb_parse_isolation=false` 可回退到线程内（应急开关，通过 aiCore.env 注入）；
+- 子进程内 OCR 依赖镜像中有 PyMuPDF/rapidocr（与主进程同镜像，天然一致）；
+- 未来可把 embedding 也搬进子进程池做 CPU 配额（cgroups）——属部署侧资源治理。

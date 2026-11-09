@@ -41,6 +41,18 @@ _PG_ORIGINALS = {
 
 
 @pytest.fixture(autouse=True)
+def _disable_kb_parse_isolation(monkeypatch):
+    """评测 04 P1-10：测试默认关闭解析子进程隔离。
+
+    原因：既有 KB 用例通过 monkeypatch 替换父进程的 `_extract_text_raw`/`fitz`/OCR，
+    这些桩**不会传播到子进程**（spawn/fork 都各自导入模块）。隔离本身由
+    `tests/test_kb_parse_proc.py` 显式开启验证；生产默认仍为 true。
+    """
+    from backend.config import settings
+    monkeypatch.setattr(settings, "kb_parse_isolation", False)
+
+
+@pytest.fixture(autouse=True)
 def _clean_auth_state():
     deps._revoked_before.clear()
     deps._revoked_jti.clear()  # 评测 04 P1-7：登出撤销表同样按用例隔离

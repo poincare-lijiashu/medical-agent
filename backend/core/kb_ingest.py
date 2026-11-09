@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime, timezone
 
 from backend.config import settings
-from backend.core import kb_guard, ocr as kb_ocr
+from backend.core import kb_guard, kb_parse_proc, ocr as kb_ocr
 from backend.core.embedder import embed_dense_sparse
 from backend.core.logger import get_logger
 from backend.core.medical_kb import _collection, doc_count
@@ -264,6 +264,21 @@ def extract_text(filename: str, raw: bytes, on_ocr_page=None) -> str:
         timeout_s = max(1.0, float(getattr(settings, "kb_extract_timeout_s", 180.0) or 180.0))
     except (TypeError, ValueError):
         timeout_s = 180.0
+    ext = os.path.splitext(filename)[1].lower()
+    if (ext == ".pdf" or ext in IMAGE_EXTS) and getattr(settings, "kb_parse_isolation", True):
+        # 评测 04 P1-10 第二步：子进程解析（硬超时 kill），受限环境回落线程内
+        try:
+            iso_timeout = min(timeout_s, max(1.0, float(
+                getattr(settings, "kb_parse_timeout_s", 150.0) or 150.0)))
+            iso_text = kb_parse_proc.extract_text_isolated(
+                filename, raw, iso_timeout, on_page=on_ocr_page)
+        except kb_parse_proc.IsolationUnavailable as e:
+            logger.warning("kb.parse_isolation_unavailable", error=str(e)[:120])
+        else:
+            if len(iso_text) > TEXT_MAX_CHARS:
+                raise ValueError(f"文档过大：提取文本 {len(iso_text):,} 字符"
+                                 f"（上限 {TEXT_MAX_CHARS:,}），请拆分后上传")
+            return iso_text
     deadline = time.monotonic() + timeout_s
     text = _extract_text_raw(filename, raw, on_ocr_page=on_ocr_page, deadline=deadline)
     if len(text) > TEXT_MAX_CHARS:
