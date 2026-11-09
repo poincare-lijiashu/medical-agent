@@ -5616,6 +5616,37 @@ tests：test_consults/prescriptions/pg_consults_lists/ci_gates/deploy_observabil
   （静态 YAML + SNAPSHOT 检查已在本机验证）。
 - A3 审计 `event_type` 语义、C5（lint/漏洞扫描/分支保护）、D 系列前端体验仍在清单。
 
+## 140. 2026-11-09 评测 E7：生产默认开启 AI 中台抓取与 25 条 Agent 告警（第 137 批）
+
+**已做**
+
+1. `values-prod.yaml` / `values-staging.yaml`：`serviceMonitor.aiCore.enabled` 与
+   `serviceMonitor.rules.enabled` 由 `false` 改为 `true`，`tokenSecretName` 指向
+   `medassist-metrics`。此前生产"服务 200、面板全绿"——问答量/错误率/token/P95/
+   PG 慢查询/Milvus 降级一条都抓不到，25 条告警一条都不生效（评测 06 P0-2）。
+2. 上线前置写进 values 注释、`docs/DEPLOY.md`、`deploy/README.md`：
+   `kubectl -n <ns> create secret generic medassist-metrics --from-literal=metrics-token=...`，
+   并让 AI 中台 `METRICS_TOKEN` 与 Secret 一致；模板 `required` 保证开启抓取却不给
+   Secret 名时直接渲染失败（fail-closed，不会静默 401）。
+3. 顺带对齐 `aiCore.image.tag`：prod 显式钉 `1.0.0`（与 `deploy/README.md` 安装命令
+   `--set aiCore.image.tag=1.0.0` 一致），不再依赖 values.yaml 的 0.1.0 默认。
+
+**真机验证**
+
+```
+values-prod / values-staging YAML 解析通过：
+  aiCore={enabled: true, tokenSecretName: medassist-metrics, rules.enabled: true}
+tests/test_deploy_observability.py + test_grafana_helm_assets.py + test_ci_gates.py
+  → 16 passed / 1 skipped（本地规则 ↔ Helm PrometheusRule 25 条仍同名同量）
+全量（不含 e2e）→ 1541 passed / 1 skipped（2 分 50 秒）
+```
+
+**本批仍未解决**
+
+- 集群侧 Secret 与 Operator 跨 namespace RBAC 需运维按 SOP 预置（代码侧只能 fail-closed）；
+- E6（AI 中台单副本/RWO/Recreate 单点）与 A3（审计语义统一）仍待办。
+
+
 
 
 

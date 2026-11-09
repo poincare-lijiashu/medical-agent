@@ -328,7 +328,7 @@ kubectl -n medassist-prod logs job/medassist-medassist-platform-migrate-auth-r<N
 | `aiCore.models/data.existingClaim` | AI 中台 PVC（`create=true` 仅本地自验） |
 | `networkPolicy.enabled` | 入站隔离（生产 true） |
 | `serviceMonitor.enabled` | Prometheus Operator 抓取 Java `/actuator/prometheus` |
-| `serviceMonitor.aiCore.*` | 抓取 AI 中台 `/metrics`（Bearer Secret；先建 Secret 再开启） |
+| `serviceMonitor.aiCore.*` | 抓取 AI 中台 `/metrics`（Bearer Secret；先建 Secret 再开启）；**staging/prod 默认开启**，部署前须先建 `medassist-metrics` Secret |
 | `ingress.*` | 入口域名、TLS、SSE 超时/体积注解 |
 
 ---

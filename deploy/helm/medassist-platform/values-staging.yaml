@@ -157,10 +157,13 @@ serviceMonitor:
   # 指标抓不到、5xx/P99 告警会静默（与 values-prod 保持一致）
   labels:
     release: kube-prometheus-stack
-  # 评审 M-19：显式声明（staging 当前不抓 ai-core / 不部署 Agent 告警规则）。
+  # 评审 M-19：显式声明（评测 06 P0-2：staging 同样开启，作为生产的演练环境——
+  # 若 staging 不抓，告警规则与抓取链路要到生产才第一次生效）。
+  # 前置：kubectl -n medassist-staging create secret generic medassist-metrics \
+  #         --from-literal=metrics-token=$(openssl rand -hex 32)
   aiCore:
-    enabled: false
-    tokenSecretName: ""
+    enabled: true
+    tokenSecretName: medassist-metrics
     tokenSecretKey: metrics-token
   rules:
-    enabled: false
+    enabled: true

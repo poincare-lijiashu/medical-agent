@@ -126,7 +126,9 @@ npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|
 | K8s + Prometheus Operator | 同上（ServiceMonitor） | 同 namespace Secret，键 `metrics-token` | `PrometheusRule` CRD（`serviceMonitor.rules.enabled=true`） |
 
 - **只抓 `/metrics`**：G105 起该端点同时导出 `consult_metrics` 与 `skill_trends`，当前 15 条 Agent 告警全部依赖它；`/api/v1/agent/skill-library/metrics/prometheus` 是人工查看端点（JWT，**只含 skill 域指标**），**不是**抓取端点——两处都抓会让 consult counter 的 `rate()` 翻倍。
-- K8s 默认 `serviceMonitor.aiCore.enabled=false`、`serviceMonitor.rules.enabled=false` —— **打开 ServiceMonitor 不等于指标都在采**，需在环境 values 文件显式开启（Argo CD 下 `--set` 不持久化）。
+- K8s 默认 `serviceMonitor.aiCore.enabled=false`、`serviceMonitor.rules.enabled=false`（dev）；**staging/prod 已默认开启**（评测 06 P0-2）——**打开 ServiceMonitor 不等于指标都在采**，环境 values 里必须同时给出 `tokenSecretName`，且部署前先建 Secret：
+  `kubectl -n <ns> create secret generic medassist-metrics --from-literal=metrics-token=$(openssl rand -hex 32)`，
+  并让 AI 中台的 `METRICS_TOKEN` 与 Secret 值一致（否则 Pod CreateContainerConfigError / 抓取 401）。
 - 回滚：`METRICS_TOKEN` 留空 → `/metrics` 退回 admin-only，Java 侧 `/actuator/prometheus` 不受影响。
 
 ### 5.1 可视化面板（Grafana，第 100 批）

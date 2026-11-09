@@ -200,6 +200,9 @@ auditArchive:
 
 aiCore:
   enabled: true
+  # 与 deploy/README.md 的安装命令（--set aiCore.image.tag=1.0.0）保持一致：
+  # 生产显式钉不可变版本，不依赖 values.yaml 的 0.1.0 默认值。
+  image: {repository: ai-core, tag: "1.0.0", pullPolicy: IfNotPresent}
   # 单副本：AI 中台的审计/复核队列/知识库任务仍落 /app/data 下的 JSON 文件
   # （多副本并发写会互相覆盖）。扩容前必须先把这些状态迁到 PG/Redis，
   # 再把 models/data 换成共享存储（ReadOnlyMany/RWX）并开启 PDB。
@@ -251,10 +254,18 @@ serviceMonitor:
   # 评审 M-19：显式声明 ai-core 抓取状态，避免"ServiceMonitor 开着 = 指标都在采"的误判。
   # 启用前必须先创建同 namespace Secret（键 metrics-token），否则 ai-core Pod 会
   # CreateContainerConfigError / CrashLoop（secretKeyRef 默认 optional=false）。
+  #
+  # 评测 06 P0-2（E7）：生产**默认开启** AI 中台抓取与 25 条 Agent 告警规则——
+  # 此前两者都是 false，导致问答量/错误率/token/P95/PG 慢查询/Milvus 降级在生产集群
+  # 里一条都抓不到、25 条告警一条都不生效（服务 200，面板全绿）。
+  # 上线前置（部署前必须完成，否则 Pod 起不来）：
+  #   kubectl -n medassist-prod create secret generic medassist-metrics \
+  #     --from-literal=metrics-token=$(openssl rand -hex 32)
+  # 并确保 AI 中台 .env/Secret 的 METRICS_TOKEN 与上值一致。
   aiCore:
-    enabled: false
-    tokenSecretName: ""
+    enabled: true
+    tokenSecretName: medassist-metrics
     tokenSecretKey: metrics-token
   # 评审 M-15：K8s 形态必须部署 PrometheusRule，否则 G97/G102 规则不生效。
   rules:
-    enabled: false
+    enabled: true
