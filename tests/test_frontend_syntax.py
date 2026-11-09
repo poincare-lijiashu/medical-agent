@@ -978,3 +978,18 @@ def test_responsive_breakpoints_exist():
     assert ".rail .grp { display: none }" in css, "窄屏侧栏应折叠为横向导航"
 
 
+# ---- 评测 D4/P1-4：空态 / 错误态统一组件 ----
+
+def test_empty_and_error_states_are_shared_components():
+    """空态/错误态必须是统一组件（此前 5 种空态写入、4 种错误态，DataView 还用裸文本 ⚠）。
+
+    规范：空态 =「暂无 X」+「下一步做什么」；错误态 = el-alert + 可选重试。
+    """
+    src = _vue_source()
+    assert src.count("<EmptyState") >= 10, "各视图空态应统一走 EmptyState"
+    assert src.count("<ErrorState") >= 2, "错误态应统一走 ErrorState"
+    assert "import EmptyState from '../components/EmptyState.vue'" in src
+    assert "import ErrorState from '../components/ErrorState.vue'" in src
+    assert 'class="src">⚠' not in src, "裸文本错误不得回潮"
+
+

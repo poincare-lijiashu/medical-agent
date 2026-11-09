@@ -140,7 +140,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="!skillList.length" class="src">暂无技能卡；技能卡必须经非创建人审核后才会生效。</div>
+        <EmptyState v-if="!skillList.length" title="暂无技能卡" hint="技能卡必须经非创建人审核后才会生效；可在上方新建草稿。" />
       </el-card>
 
       <el-card shadow="never" data-testid="agent-bots">
@@ -181,7 +181,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="!botList.length" class="src">暂无 Bot；Bot 是"有身份、有模型、有记忆"的持续实体，须经非创建人审核后生效。</div>
+        <EmptyState v-if="!botList.length" title="暂无 Bot" hint="Bot 是有身份、有模型、有记忆的持续实体，须经非创建人审核后生效。" />
       </el-card>
 
       <el-card shadow="never" data-testid="agent-teams">
@@ -221,7 +221,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="!teamList.length" class="src">暂无团队；2–4 个已发布 Bot 可组成一个协作小组。</div>
+        <EmptyState v-if="!teamList.length" title="暂无团队" hint="2–4 个已发布 Bot 可组成一个协作小组。" />
       </el-card>
 
       <el-card shadow="never" data-testid="agent-model-policy">
@@ -374,7 +374,7 @@
           <el-table-column prop="sourceRef" label="来源" width="160" />
           <el-table-column prop="createdBy" label="录入人" width="90" />
         </el-table>
-        <div v-if="!experiences.length" class="src">暂无经验；录入至少两条同能力域、同模式的经验后才能提炼。</div>
+        <EmptyState v-if="!experiences.length" title="暂无经验" hint="录入至少两条同能力域、同模式的经验后才能提炼。" />
         <el-table v-if="proposals.length" :data="proposals" size="small"
                   style="width: 100%; margin-top: 10px">
           <el-table-column prop="name" label="候选技能" width="180" />
@@ -485,7 +485,7 @@
               <template #default="{ row }">{{ row.lastUsedAt || '—' }}</template>
             </el-table-column>
           </el-table>
-          <div v-else class="src">暂无已发布技能或计量数据；发起问答后自动累计。</div>
+          <EmptyState v-else title="暂无计量数据" hint="发起问答后自动累计；已发布技能的使用量会显示在这里。" />
         </template>
         <div v-else class="src">加载中…</div>
       </el-card>
@@ -772,6 +772,7 @@ import http, { dedupeGet } from '../api'
 import { statusText, statusType, strategyText } from '../constants/labels'
 import { md, detailText } from '../utils/assist'
 import { useAuthStore } from '../stores/auth'
+import EmptyState from '../components/EmptyState.vue'
 
 defineOptions({ name: 'AgentView' })
 

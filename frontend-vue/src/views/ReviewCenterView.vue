@@ -193,7 +193,9 @@
               共 {{ rxPendingTotal }} 张{{ rxPendingQ.trim() ? '（筛选结果）' : '' }}</span>
           </div>
         </el-card>
-        <el-card v-if="!rxPendingItems.length" shadow="never"><div class="src">暂无开药待审处方。</div></el-card>
+        <el-card v-if="!rxPendingItems.length" shadow="never">
+          <EmptyState title="暂无开药待审处方" hint="医生提交处方后会自动进入这里，由药师签发或驳回。" />
+        </el-card>
         <el-card v-for="it in rxPendingItems" :key="it.id" shadow="never" :data-rxid="it.id">
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
             <b class="num">{{ it.id }}</b>
@@ -478,6 +480,7 @@ import { useBadgeStore } from '../stores/badges'
 import DrugDictEditor from '../components/DrugDictEditor.vue'
 import DrugRulesEditor from '../components/DrugRulesEditor.vue'
 import PagerBar from '../components/PagerBar.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 defineOptions({ name: 'ReviewCenterView' })
 

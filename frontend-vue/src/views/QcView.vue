@@ -110,7 +110,7 @@
               <div class="txt" style="margin-top: 2px">驳回原因：{{ i.review_note || '未填写' }}</div>
             </div>
           </template>
-          <div v-else class="src">暂无驳回记录。</div>
+          <EmptyState v-else title="暂无驳回记录" hint="质控驳回的病历会出现在这里，可按时间回看。" />
         </div>
       </el-card>
 
@@ -134,7 +134,7 @@
               </details>
             </div>
           </template>
-          <div v-else class="src">暂无在库归档病历。</div>
+          <EmptyState v-else title="暂无在库归档病历" hint="质控审核通过（approve）的病历会自动入库。" />
         </div>
       </el-card>
     </div>
@@ -149,6 +149,7 @@ import { computed, defineOptions, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api'
 import { md, fmtTs, detailText } from '../utils/assist'
+import EmptyState from '../components/EmptyState.vue'
 import { useAuthStore } from '../stores/auth'
 
 defineOptions({ name: 'QcView' })

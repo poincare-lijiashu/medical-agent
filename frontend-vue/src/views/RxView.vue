@@ -70,7 +70,7 @@
             </label>
           </el-card>
           <el-card v-else-if="!rxBlocked && !rxWarnings.length" shadow="never">
-            <div class="src">暂无推荐结果：可直接在下方自定义加药。</div>
+            <EmptyState title="暂无推荐结果" hint="可直接在下方自定义加药。" />
           </el-card>
         </template>
 
@@ -205,7 +205,9 @@
               <el-button size="small" style="margin-top: 6px" @click="rxStartRewrite(it.id)">重写</el-button>
             </template>
           </el-card>
-          <el-card v-if="!mineLoading && !rxMineCache.length" shadow="never"><div class="src">暂无处方记录。</div></el-card>
+          <el-card v-if="!mineLoading && !rxMineCache.length" shadow="never">
+            <EmptyState title="暂无处方记录" hint="提交处方后可在「我的处方」查看审核状态。" />
+          </el-card>
           <!-- 第 76 批：服务端分页（12/页），配合 /prescriptions/mine 的 limit/offset/total -->
           <PagerBar v-if="mineTotal > RX_PER" :page="minePage" :page-count="minePages"
             :total="mineTotal" unit="张" @change="minePage = $event" />
@@ -225,6 +227,7 @@ import { detailText, fmtTs } from '../utils/assist'
 import { DRUG_DISCLAIMER } from '../constants/copy'
 import { useDirtyStore } from '../stores/dirty'
 import PagerBar from '../components/PagerBar.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 defineOptions({ name: 'RxView' })
 

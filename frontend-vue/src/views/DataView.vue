@@ -19,7 +19,7 @@
       <el-button size="small" @click="loadData">刷新</el-button>
     </div>
     <div class="page-body" style="max-width: 1080px">
-      <div v-if="loadErr" class="src">⚠ {{ loadErr }}</div>
+      <ErrorState v-if="loadErr" :message="loadErr" hint="数据未加载完整，其余区域可点右上角「刷新」重试。" retryable @retry="loadData" />
 
       <!-- 统计卡（只读） -->
       <div v-if="d" class="stats-row">
@@ -85,7 +85,7 @@
                 </details>
               </li>
             </template>
-            <li v-else><span class="a">暂无记录</span></li>
+            <li v-else><EmptyState title="暂无记录" hint="调整筛选条件或时间范围后重试。" /></li>
           </ul>
         </template>
       </el-card>
@@ -156,7 +156,7 @@
               <span style="margin-left: auto"><el-button size="small" @click="deleteDept(n)">删除</el-button></span>
             </li>
           </template>
-          <li v-else><span class="a">{{ deptErr || '暂无科室' }}</span></li>
+          <li v-else><span class="a" :style="deptErr ? 'color: var(--danger, #c0392b)' : ''">{{ deptErr || '暂无科室' }}</span></li>
         </ul>
         <div style="display: flex; gap: 8px; padding-top: 8px">
           <el-input v-model="deptNew" placeholder="新科室名称（如：康复科）" style="flex: 1" autocomplete="off" @keydown.enter.prevent="addDept" />
@@ -203,7 +203,7 @@
       <!-- 模型配置（对话 / 视觉 · 双格式，F6 语义） -->
       <el-card v-if="d" shadow="never" data-testid="llm-panel">
         <h3 style="margin-top: 0">模型配置（对话 / 视觉 · 双格式）</h3>
-        <div v-if="llmErr" class="src">⚠ 模型配置加载失败</div>
+        <ErrorState v-if="llmErr" message="模型配置加载失败" hint="可重试；未加载不影响已生效的问答/文献能力。" retryable @retry="loadLlm" />
         <template v-else-if="llm">
           <template v-for="[kind, label] in [['chat', '对话模型'], ['vision', '视觉模型']]" :key="kind">
             <h4 style="margin: 12px 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
@@ -332,6 +332,8 @@ import { humanizeAudit, fmtLogSize, fmtUp } from '../utils/audit'
 import { useAuthStore } from '../stores/auth'
 import { useBadgeStore } from '../stores/badges'
 import PagerBar from '../components/PagerBar.vue'
+import EmptyState from '../components/EmptyState.vue'
+import ErrorState from '../components/ErrorState.vue'
 
 defineOptions({ name: 'DataView' })
 

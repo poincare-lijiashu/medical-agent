@@ -5887,3 +5887,46 @@ npm run build（frontend-vue）→ 5.35s 通过
 - Element Plus 仍是全量注册（`vendor-element` 814KB raw / 256KB gzip）：进一步降首屏需改按需引入；
 - 403 处内联 `style=` 未收敛为语义类（D6 样式部分）；i18n / ESLint / 前端单测（P0-5）未接；
 - 主色统一到 v4 青绿属独立视觉决策，已登记在 DESIGN-SYSTEM §0。
+
+## 146. 2026-11-09 评测 D4（P1-4）：空态/错误态统一组件（第 143 批）
+
+**问题（评测 03-frontend-ux P1-4）**
+
+- 14 个视图里 5 种空态写法、6 种句式；4 种错误态写法；
+- `DataView` 用裸文本 `⚠ {{ loadErr }}` / `⚠ 模型配置加载失败`，字号/颜色与空态一致 →
+  用户分不清"没有数据"还是"加载失败"；科室列表还把 `deptErr` 与"暂无科室"混在同一位置。
+
+**已做**
+
+1. **新增两个公共组件**
+   - `components/EmptyState.vue`：`title`（暂无 X）+ `hint`（下一步做什么）+ 可选 `actionLabel/@action`，
+     居中、走 `--ink-2/--ink-3` 令牌；
+   - `components/ErrorState.vue`：`el-alert type=error`（标题+说明）+ 可选「重试」按钮，
+     不再用裸文本。
+2. **12 处空态统一接入**：AgentView 5 处（技能卡/Bot/团队/经验/计量）、QcView 2 处（驳回记录/归档病历）、
+   RxView 2 处（推荐结果/我的处方）、KbView 1、ReviewCenter 开药待审 1、DataView 审计流 1。
+   所有空态都补了"下一步做什么"（例如知识库："可在上方上传 PDF/Word，或从内置医学库同步"）。
+3. **错误态统一**：DataView 的页面加载失败与模型配置加载失败改为 `ErrorState`，均带「重试」
+   （分别重跑 `loadData` / `loadLlm`）；科室列表加载失败改为红色文案，与"暂无科室"在视觉上可区分。
+4. **回归锁**：`tests/test_frontend_syntax.py::test_empty_and_error_states_are_shared_components`
+   —— `<EmptyState` ≥10、`<ErrorState` ≥2、两个组件必须被 import、`class="src">⚠` 不得回潮。
+
+**真机验证**（admin01，构建产物含 EmptyState-*.js/css）
+
+```
+/agent 经验库：class="empty-title" 文本「暂无经验」+ 提示行「录入至少两条同能力域、同模式的经验后才能提炼。」，
+  容器与父容器水平中心偏差 0（居中）
+/data：KPI/审计流/用户/科室/模型配置全部加载，.el-alert--error = 0
+/kb：3 条文档、分页「第 1 / 1 页」正常，.el-alert--error = 0
+三个页面 console 均无消息
+定向：test_frontend_syntax + test_frontend_agent_markers → 60 passed
+npm run build（frontend-vue）→ 4.71s 通过
+```
+
+**本批仍未解决**
+
+- `ConsultView` 仍用 `el-empty`（Element Plus 标准组件）未并入 EmptyState；`AgentView` 的
+  "暂无合规 provider" 是行内片段，保留原样；
+- 15 处 `el-card v-if="xxxErr"` + `el-alert` 的错误态（ReviewCenter/Consult/Rx/Imaging/Case）
+  尚未统一为 `ErrorState`；
+- E6（AI 中台单副本/RWO/Recreate 单点）仍未立项处理。

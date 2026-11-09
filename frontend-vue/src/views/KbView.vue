@@ -54,7 +54,7 @@
             <PagerBar :page="kbPage" :page-count="kbPages"
               :total="kbData.docs.length" unit="篇" @change="kbPage = $event" />
           </template>
-          <div v-else class="src">暂无文档。</div>
+          <EmptyState v-else title="暂无文档" hint="可在上方上传 PDF/Word，或从内置医学库同步。" />
         </template>
       </el-card>
       <!-- 第 79 批：只读完整性检查（脏 tag / 零切片 / 重名 / 零向量），不修改任何数据 -->
@@ -107,6 +107,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api'
 import { esc, fmtTs, detailText } from '../utils/assist'
 import PagerBar from '../components/PagerBar.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 defineOptions({ name: 'KbView' })
 
