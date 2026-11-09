@@ -14,7 +14,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.api.deps import rate_limit, require_user
+from backend.api.deps import model_quota, rate_limit, require_user
 from backend.api.v1.medical.schemas import AskReq
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import _enqueue_if_risk, redactor as _redactor
@@ -41,7 +41,8 @@ class MdtReq(BaseModel):
 
 
 @router.post("/mdt/consult")
-async def mdt_consult(req: MdtReq, user: dict = Depends(require_user)):
+async def mdt_consult(req: MdtReq, user: dict = Depends(require_user),
+                      _quota: None = Depends(model_quota)):
     case = _redactor.redact(req.case)
     actor = user.get("username", "system")
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="mdt", action="query",
@@ -76,7 +77,8 @@ class ConsultOpinionReq(BaseModel):
 
 
 @router.post("/consults")
-async def consult_create(req: AskReq, user: dict = Depends(require_user)):
+async def consult_create(req: AskReq, user: dict = Depends(require_user),
+                         _quota: None = Depends(model_quota)):
     """发起跨科室会诊：Agent 决策点（LLM 读病例+实时科室清单自主选专科）→ 按科室生成
     定向初步意见 → 分发给目标科室全部在职医生。images 复用 AskReq 既有图片白名单
     （≤6 张、单张 ≤6MB）。审计：consult_created + consult_dispatch（Agent 组队留痕）。"""

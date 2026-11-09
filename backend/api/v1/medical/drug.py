@@ -12,7 +12,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from backend.api.deps import rate_limit, require_role, require_user
+from backend.api.deps import model_quota, rate_limit, require_role, require_user
 from backend.api.v1.medical.schemas import AUDIT_Q_SNIPPET, AskReq, AskResp
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import _enqueue_if_risk, redactor as _redactor
@@ -216,7 +216,8 @@ async def admin_drug_rules_review(req: DrugRulesReviewReq,
 
 
 @router.post("/drug/ask", response_model=AskResp)
-async def drug_ask(req: AskReq, user: dict = Depends(require_user)):
+async def drug_ask(req: AskReq, user: dict = Depends(require_user),
+                   _quota: None = Depends(model_quota)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
     pre = prefilter_reply(q)

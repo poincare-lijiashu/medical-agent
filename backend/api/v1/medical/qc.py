@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
-from backend.api.deps import rate_limit, require_role, require_user
+from backend.api.deps import model_quota, rate_limit, require_role, require_user
 from backend.api.v1.medical.schemas import AskResp
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import _enqueue_if_risk, redactor as _redactor
@@ -138,7 +138,8 @@ async def _his_push_qc_result(record_id: str, result: dict, actor: str) -> None:
 
 
 @router.post("/qc/record", response_model=AskResp)
-async def qc_record(req: QcReq, user: dict = Depends(require_user)):
+async def qc_record(req: QcReq, user: dict = Depends(require_user),
+                    _quota: None = Depends(model_quota)):
     actor = user.get("username", "system")
     dept = user.get("dept", "")
     if not dept:  # 科室由服务端绑定（签名/科室同源权威），未设置科室拒绝出报告
@@ -343,7 +344,8 @@ def _extract_json_obj(raw) -> dict:
 
 
 @router.post("/qc/parse")
-async def qc_parse(req: QcParseReq, user: dict = Depends(require_user)):
+async def qc_parse(req: QcParseReq, user: dict = Depends(require_user),
+                   _quota: None = Depends(model_quota)):
     """病历文本 → 七字段 JSON（{fields: {...}}）。缺字段留空字符串，解析失败 502。"""
     from backend.core.llm_factory import get_llm
     actor = user.get("username", "system")

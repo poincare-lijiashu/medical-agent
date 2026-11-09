@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from backend.api.deps import rate_limit, require_role
+from backend.api.deps import model_quota, rate_limit, require_role
 from backend.api.v1.medical.schemas import AUDIT_Q_SNIPPET
 from backend.api.v1.medical import shared as _shared
 from backend.core import prescriptions as rx  # 阶段2.3 处方流转域层（状态机/repo）
@@ -54,7 +54,8 @@ def _extract_llm_json_list(raw) -> list:
 
 @router.post("/prescriptions/suggest")
 async def prescription_suggest(req: PrescribeSuggestReq,
-                               user: dict = Depends(require_role("doctor"))):
+                               user: dict = Depends(require_role("doctor")),
+                               _quota: None = Depends(model_quota)):
     """智能开药建议（阶段2.2）：病例摘要 → 字典约束 LLM 推荐 + 相互作用硬校验。
 
     流程：药品字典候选池（规范名+类别）注入 prompt 强制 LLM 只能从清单选药 →

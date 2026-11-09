@@ -12,7 +12,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from backend.api.deps import rate_limit, require_user
+from backend.api.deps import model_quota, rate_limit, require_user
 from backend.api.v1.medical.schemas import AUDIT_Q_SNIPPET, AskReq, AskResp
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import (_enqueue_if_risk, _is_fallback_answer, _sse,
@@ -37,7 +37,8 @@ def _get_lit_graph():
 
 
 @router.post("/literature/ask", response_model=AskResp)
-async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
+async def literature_ask(req: AskReq, user: dict = Depends(require_user),
+                         _quota: None = Depends(model_quota)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
     # 任务3 会话记忆：session_id 可选（前端每会话固定 uuid；评估路径不带 → 天然跳过）。
@@ -97,7 +98,8 @@ async def literature_ask(req: AskReq, user: dict = Depends(require_user)):
 
 
 @router.post("/literature/stream")
-async def literature_stream(req: AskReq, user: dict = Depends(require_user)):
+async def literature_stream(req: AskReq, user: dict = Depends(require_user),
+                            _quota: None = Depends(model_quota)):
     """SSE 流式：逐节点推进度(retrieve/grade/generate/verify) + 末尾 result。失败发 error 事件。
     任务3：与非流式 ask 同一会话记忆语义（session_id 可选 → 注入/写入/审计一致）。"""
     q = _redactor.redact(req.question)

@@ -6769,3 +6769,40 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - 患者姓名无法用正则识别：如需"日志不含姓名"，只能在写入侧收敛（禁止把病例原文写日志）；
 - 该脱敏只作用于 `/admin/logs` 出口；其他导出/下载通道如新增，需复用同一函数；
 - 前端仍按逐行 esc() 渲染（防注入），与本批脱敏互补。
+
+## 167. 2026-11-10 评测 04 P1-9：模型配额覆盖医疗域 LLM 端点（第 164 批）
+
+**问题（评测 04 P1-9）**
+
+- `model_quota` 只挂在 agent 域；医疗域（处方建议 / MDT / 跨科会诊组队 / 质控复核 /
+  病历解析 / 文献问答与流式 / 药物助手 / 影像 / 病例总结）用的是同一个模型池，
+  却可无限刷——单账号即可把院内模型额度打满，且没有 429 信号。
+
+**已做**
+
+1. 10 个会触发模型调用的医疗端点统一加 `Depends(model_quota)`（身份仍由 `deps._identity`
+   统一取：Bearer/cookie → `u:<username>`，与 agent 域共用 `model:<身份>` 桶）：
+   - `POST /prescriptions/suggest`、`POST /mdt/consult`、`POST /consults`
+   - `POST /qc/record`、`POST /qc/parse`
+   - `POST /literature/ask`、`POST /literature/stream`
+   - `POST /drug/ask`、`POST /imaging/ask`、`POST /case/ask`
+2. 纯读端点（`/drug/dict` 等）**不挂**配额，避免翻页/列表把模型配额吃掉。
+3. **回归锁**（`tests/test_model_quota_medical.py` 12 条）：
+   - 逐端点静态断言路由依赖里确有 `model_quota`（防止新增 LLM 端点漏挂）；
+   - 读端点反证（`/drug/dict` 不含配额）；
+   - 行为：`agent_model_quota_per_min=1` 时，文献端点走离题预筛（不调模型）计 1 次，
+     再调**影像**端点 → 429 + `Retry-After: 60` + 提示含"配额"（证明跨端点共用同桶）。
+
+**验证**
+
+```
+定向：tests/test_model_quota_medical.py → 12 passed
+全量（不含 e2e）→ 1621 passed / 1 skipped
+```
+
+**遗留**
+
+- 配额是"每身份每分钟"：多副本下未共享时各自计算（配置 REDIS_URL 后 `security_rate`
+  走共享存储，已具备条件）；
+- 医疗域 LLM 调用**成本**（token 数）仍无预算上限（评测 06 P1-8），属模型治理后续项；
+- 429 目前前端只在部分视图提示，可统一到全局拦截器（非安全项）。

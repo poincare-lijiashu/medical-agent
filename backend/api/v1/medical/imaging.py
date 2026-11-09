@@ -8,7 +8,7 @@ import asyncio
 
 from fastapi import APIRouter, Depends
 
-from backend.api.deps import rate_limit, require_user
+from backend.api.deps import model_quota, rate_limit, require_user
 from backend.api.v1.medical.schemas import AUDIT_Q_SNIPPET, AskReq, AskResp
 from backend.api.v1.medical import shared as _shared
 from backend.api.v1.medical.shared import (_ask_prefilter, _vl_describe_flow,
@@ -18,7 +18,8 @@ router = APIRouter(dependencies=[Depends(rate_limit)])
 
 
 @router.post("/imaging/ask", response_model=AskResp)
-async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
+async def imaging_ask(req: AskReq, user: dict = Depends(require_user),
+                      _quota: None = Depends(model_quota)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
     pre = await _ask_prefilter("imaging", q, actor)
@@ -35,7 +36,8 @@ async def imaging_ask(req: AskReq, user: dict = Depends(require_user)):
 
 
 @router.post("/case/ask", response_model=AskResp)
-async def case_ask(req: AskReq, user: dict = Depends(require_user)):
+async def case_ask(req: AskReq, user: dict = Depends(require_user),
+                   _quota: None = Depends(model_quota)):
     q = _redactor.redact(req.question)
     actor = user.get("username", "system")
     pre = await _ask_prefilter("case", q, actor)
