@@ -118,3 +118,19 @@ def test_alert_rules_only_reference_scrape_endpoint_metrics():
     referenced = set(re.findall(r"\bmedassist_[a-z0-9_]+\b", _read(RULES)))
     assert referenced, "规则文件应至少引用一个 medassist_* 指标"
     assert referenced <= names, f"规则引用了未导出的指标：{sorted(referenced - names)}"
+
+
+def test_ai_core_multi_replica_fails_fast_instead_of_pending():
+    """评测 E6：多副本必须共享存储 + 滚动发布；配置不满足时 helm 直接失败。
+
+    背景：单副本 + RWO 卷改 RollingUpdate 会让新 Pod 永久 Pending（P0-7）。
+    这里锁住模板里的 fail-fast 与 values 里的"多副本配方"说明，防止有人只改
+    replicaCount 就上线导致发布/回滚双双卡死。
+    """
+    tpl = _read(DEPLOYMENT)
+    assert "aiCore.replicaCount>1" in tpl
+    assert "{{- fail" in tpl
+    assert "ReadWriteOnce" in tpl and "ReadWriteMany" in tpl
+    values = _read(os.path.join(REPO, "deploy", "helm", "medassist-platform", "values.yaml"))
+    assert "多副本配方" in values
+    assert "aiCore.strategy: RollingUpdate" in values

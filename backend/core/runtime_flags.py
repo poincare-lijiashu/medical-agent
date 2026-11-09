@@ -79,7 +79,12 @@ def set_flag(key: str, value: bool, *, expected: bool | None = None,
             raise FlagConflict(
                 f"开关 {key} 已被他人修改（当前 {current}，期望 {bool(expected)}），请刷新后重试")
         d[key] = bool(value)
-        pg_store.save_runtime_flags(d, FLAGS_FILE)  # 轮 A3：JSON 先落 + PG best-effort 同步
+        # 评测 E6（多副本）：PG 可用时只 UPSERT 本键——全量同步会删除"不在本实例
+        # 快照里"的键，两个副本并发切换不同开关时会互相清除（丢失更新）。
+        if pg_store.save_runtime_flag(key, value):
+            pg_store.mirror_runtime_flags_json(d, FLAGS_FILE)
+        else:
+            pg_store.save_runtime_flags(d, FLAGS_FILE)  # 单机/离线：JSON 落盘 + PG best-effort
     return bool(value)
 
 

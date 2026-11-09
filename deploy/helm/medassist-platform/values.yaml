@@ -595,6 +595,14 @@ aiCore:
   # 单副本 + RWO 卷（模型/运行态数据）：必须 Recreate，否则 RollingUpdate 的新 Pod
   # 抢不到同一块 RWO 卷会永久 Pending，发布卡死且无法回滚（P0-7）。
   # 多副本化前提：/app/data 状态迁 PG/Redis + 模型改 ReadOnlyMany 共享存储后再改回 RollingUpdate。
+  #
+  # 多副本配方（评测 E6；需环境提供共享存储，缺一项模板会 fail-fast）：
+  #   aiCore.replicaCount: 2
+  #   aiCore.strategy: RollingUpdate          # Recreate 会让全部副本同时停机
+  #   aiCore.models.accessModes: ["ReadOnlyMany"]   # 或 existingClaim 指向共享存储
+  #   aiCore.data.accessModes: ["ReadWriteMany"]
+  #   external.redis.enabled: true             # 限流计数/会话记忆/令牌撤销跨实例共享
+  #   aiCore.podDisruptionBudget.minAvailable: 1
   strategy: Recreate
   # 模型加载与嵌入推理较慢，优雅停机放宽（SSE 长连接需自然收敛）
   terminationGracePeriodSeconds: 60

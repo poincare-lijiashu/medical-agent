@@ -6111,3 +6111,54 @@ npm run build     → 4.96s
 ```
 
 **说明**：本批只改展示格式，不改接口与数据；当年记录视觉与旧版一致。
+
+## 152. 2026-11-10 评测 E6（多副本就绪第一步）：运行时开关单键写 + Helm 多副本 fail-fast（第 149 批）
+
+**问题（评测 06 P0-3 / 00 总评 E6）**
+
+- 部署是 `replicaCount: 1` + `Recreate` + RWO 卷，AI 中台是整站单点；
+- 代码侧还有一个**多副本下必然发生的丢失更新**：`runtime_flags.set_flag` 走
+  `save_runtime_flags` 全量同步（`DELETE FROM runtime_flags WHERE NOT key = ANY(...)`）。
+  两个副本并发切换**不同**开关时，后写者会把先写者刚写的键删掉——管理员 A 打开的开关
+  会被 B 的操作静默关掉，且 JSON 镜像同样被覆盖。
+- Helm 侧只改 `replicaCount: 2` 不改存储时，新 Pod 抢不到 RWO 卷会**永久 Pending**，
+  发布与回滚双双卡死（P0-7 事故形态）。
+
+**已做**
+
+1. **单键写（跨副本不互相清除）**
+   - `pg_store.save_runtime_flag(key, value)`：只对**本键** `UPSERT`（复用 `_FLAGS_UPSERT`），
+     不清除其它键；PG 不可用返回 False 由调用方回落 JSON。
+   - `pg_store.mirror_runtime_flags_json(d, path)`：PG 已落库时只写 JSON 镜像，
+     不再走"全量同步"（否则会用本实例旧快照覆盖其它副本刚写的键）。
+   - `runtime_flags.set_flag` 分支：PG 可用 → 单键写 + JSON 镜像；单机/离线 → 原路径。
+   - `save_runtime_flags` 的全量删除语义保留，但 docstring 明确"只给迁移/运维脚本用"。
+2. **Helm 多副本 fail-fast**
+   - `deployment-ai-core.yaml`：`replicaCount > 1` 时强制 `strategy=RollingUpdate`；
+     `models.create`/`data.create` 且 accessModes 仍含 `ReadWriteOnce` 时 `fail` 并给出改法。
+   - `values.yaml` 增加"多副本配方"（2 副本 / RollingUpdate / ReadOnlyMany + ReadWriteMany /
+     Redis / PDB minAvailable=1），说明缺一项即模板失败。
+3. **测试**
+   - `tests/test_pg_repo.py::test_set_flag_single_key_upsert_does_not_clobber_other_replica`：
+     另一个副本已写 `agent_a2a=true` 时切 `qc_auto_sign_full=false`，两键都必须在；
+     期望值不符抛 `FlagConflict` 且不改库；JSON 镜像同时包含两键。
+   - `tests/test_deploy_observability.py::test_ai_core_multi_replica_fails_fast_instead_of_pending`。
+
+**真机验证**（重启后端加载新代码，admin01 cookie 会话）
+
+```
+GET /agent/flags → agent_web_search=False / agent_multi_agent=False / agent_a2a=False
+PUT agent_a2a=true → PG: agent_a2a=true
+PUT agent_web_search=true → PG 同时保留：agent_a2a=true、agent_web_search=true、
+  agent_multi_agent=false、qc_auto_sign_full=false（旧实现会删掉前一键）
+PUT 两键恢复 false → PG 四行全 false；data/runtime_flags.json 镜像四键一致
+全量（不含 e2e）→ 1562 passed / 1 skipped（3 分 03 秒）
+```
+
+**E6 仍未闭环（需环境/独立立项）**
+
+- 共享存储：模型权重走 `ReadOnlyMany`、`/app/data` 走 `ReadWriteMany`（或对象存储），
+  由运维提供 StorageClass；代码侧已 fail-fast 不会误发布；
+- 限流计数在未配置 REDIS_URL 时仍是"每副本各算各的"（多副本需 `external.redis.enabled=true`）；
+- 同键并发切换仍是"后到覆盖"（完整 CAS 需 PG advisory lock，已记为后续项）；
+- 上传文件仍落 `/app/data`，多副本必须共享卷。

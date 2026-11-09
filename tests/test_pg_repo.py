@@ -1574,3 +1574,23 @@ def test_resync_clinical_mirrors_projects_pg_truth(fake_pg, tmp_path, monkeypatc
         after = {r["id"]: r for r in json.load(f)}
     assert set(after) == {"c1", "c2"}
     assert after["c1"]["status"] == "closed"
+
+def test_set_flag_single_key_upsert_does_not_clobber_other_replica(fake_pg, tmp_path, monkeypatch):
+    """评测 E6（多副本）：set_flag 只 UPSERT 本键，不清除另一个副本刚写的键。
+
+    旧实现走 save_runtime_flags 全量同步（DELETE WHERE NOT key=ANY），两个副本并发
+    切换不同开关时会互相清除 → 管理员 A 打开的开关被 B 的操作静默关掉。
+    """
+    from backend.core import runtime_flags as rf
+    f = tmp_path / "runtime_flags.json"
+    monkeypatch.setattr(rf, "FLAGS_FILE", str(f))
+    fake_pg["runtime_flags"] = {"agent_a2a": True}      # 另一个副本刚写入
+    rf.set_flag("qc_auto_sign_full", False)
+    assert fake_pg["runtime_flags"] == {"agent_a2a": True, "qc_auto_sign_full": False}
+    # CAS：期望值与 PG 当前不一致 → 拒绝且不改库
+    with pytest.raises(rf.FlagConflict):
+        rf.set_flag("agent_a2a", False, expected=False)
+    assert fake_pg["runtime_flags"]["agent_a2a"] is True
+    # JSON 镜像仍写（灾难恢复源），且包含两把开关
+    mirrored = json.loads(f.read_text(encoding="utf-8"))
+    assert mirrored["agent_a2a"] is True and mirrored["qc_auto_sign_full"] is False

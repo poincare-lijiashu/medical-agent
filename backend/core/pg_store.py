@@ -2846,8 +2846,41 @@ def load_runtime_flags(json_loader=None, path: str = "runtime_flags.json") -> di
 
 
 def save_runtime_flags(d: dict, path: str) -> None:
-    """运行时开关写：JSON 原子写兜底 + PG 全量同步（不在键集的一并清除）。"""
+    """运行时开关写：JSON 原子写兜底 + PG 全量同步（不在键集的一并清除）。
+
+    **多副本注意**：全量同步会删除"不在本次键集"的 PG 行——只有明确知道完整键集时
+    才能调用（迁移/运维脚本）。运行时单键切换请用 ``save_runtime_flag``。
+    """
     _json_then_pg(_pg_save_runtime_flags, path, d)
+
+
+async def _pg_upsert_runtime_flag(key: str, value: bool) -> None:
+    async with _pool.acquire() as c:
+        await c.executemany(_FLAGS_UPSERT, [(str(key), json.dumps(bool(value)))])
+
+
+def save_runtime_flag(key: str, value: bool) -> bool:
+    """运行时开关**单键**写（评测 E6 多副本安全）。
+
+    只 UPSERT 本键，不清除其它键：两个副本同时切换不同开关时，不会再出现
+    "A 写入后被 B 的全量同步 DELETE 掉"的丢失更新。
+    返回 True=PG 已写；False=PG 不可用（调用方走 JSON 落盘路径）。
+    同键并发切换仍是"后到覆盖"——完整 CAS 需 PG 行锁/advisory lock，列为后续项。
+    """
+    if offline_mode() or not _pool:
+        return False
+    try:
+        _pg_write_call("runtime_flags", "upsert_one",
+                       _pg_upsert_runtime_flag(str(key), bool(value)))
+    except Exception as e:  # noqa: BLE001 —— 写失败由调用方回落 JSON，不中断开关切换
+        logger.warning("pg.runtime_flags.upsert_one_failed", error=str(e)[:120])
+        return False
+    return True
+
+
+def mirror_runtime_flags_json(d: dict, path: str) -> None:
+    """JSON 镜像写（PG 已单键落库时用）：避免全量同步把其它副本刚写的键删掉。"""
+    _write_json_atomic(path, d)
 
 
 # ---- G87：临床技能卡（PG 真源 + JSON 兜底，语义同 runtime_flags） ----

@@ -33,6 +33,22 @@ spec:
       maxSurge: 1
       maxUnavailable: 0
     {{- end }}
+  {{- /*
+    评测 E6：多副本必须"共享存储 + 滚动发布"。配置不满足时在这里 fail-fast——
+    否则发布后新 Pod 抢不到 RWO 卷会永久 Pending，且回滚同样卡住（P0-7 事故形态）。
+    外部 existingClaim 的访问模式无法静态判断，故只在 create=true 时校验。
+  */}}
+  {{- if gt (int .Values.aiCore.replicaCount) 1 }}
+  {{- if eq (.Values.aiCore.strategy | default "Recreate") "Recreate" }}
+  {{- fail "aiCore.replicaCount>1 时 strategy 必须为 RollingUpdate：Recreate 会让全部副本同时停机" }}
+  {{- end }}
+  {{- if and .Values.aiCore.models.create (has "ReadWriteOnce" .Values.aiCore.models.accessModes) }}
+  {{- fail "aiCore.replicaCount>1 且 models.create=true：模型 PVC 不能是 ReadWriteOnce，请改 ReadOnlyMany/ReadWriteMany 或用 existingClaim 指向共享存储" }}
+  {{- end }}
+  {{- if and .Values.aiCore.data.create (has "ReadWriteOnce" .Values.aiCore.data.accessModes) }}
+  {{- fail "aiCore.replicaCount>1 且 data.create=true：运行态 PVC 不能是 ReadWriteOnce，请改 ReadWriteMany 或用 existingClaim 指向共享存储" }}
+  {{- end }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 6 }}
