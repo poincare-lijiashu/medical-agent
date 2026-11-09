@@ -2,8 +2,13 @@
   审计日志归档 CronJob（第 118 批）：定期把早于保留期的 audit_log 按月导出后清理。
 
   - 脚本：scripts/archive_audit_log.py（默认 dry-run；这里显式 --apply）
-  - 保留期：auditArchive.beforeDays（"今天 - N 天"之前）
-  - 落盘目录：auditArchive.outDir（建议挂 PVC；未配 pvc 时用 emptyDir，仅适合试跑）
+  - 保留期：auditArchive.beforeDays（"今天 - N 天"之前）——**由脚本自己按
+    `--before-days` 计算**，不依赖容器里的 `date -d`（alpine/busybox 无 GNU date，
+    原写法会让归档 Job 直接失败且无人察觉，评测 06 P1-2）
+  - 时区：auditArchive.timeZone（默认 Asia/Shanghai；集群节点时区不可控）
+  - 落盘目录：auditArchive.outDir（必须挂 PVC。未配 pvc 时只有显式
+    allowEmptyDir=true 才允许 emptyDir，否则渲染失败——emptyDir 会在 Pod 重建时
+    丢掉归档，等于"删了热表却没留下冷存"）
   - 连接串：不在此硬编码——通过 auditArchive.env 注入（与主应用同源），
     例如 DATABASE_URL / ASYNC_DATABASE_URL，具体名以集群现有 ConfigMap/Secret 为准。
   - 默认 enabled=false：归档会删热表数据，必须由运维确认保留期后开启。
@@ -19,18 +24,31 @@ metadata:
     {{- include "medassist.labels" (dict "root" $ "component" "ops") | nindent 4 }}
 spec:
   schedule: {{ .Values.auditArchive.schedule | quote }}
+  # 集群节点时区不可控：显式声明（K8s ≥1.27；更早版本忽略该字段，需自行统一节点时区）
+  timeZone: {{ .Values.auditArchive.timeZone | default "Asia/Shanghai" | quote }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
+  # 调度器错过窗口（集群重启/维护）后 30 分钟内仍补跑一次；再晚就等下一个周期
+  startingDeadlineSeconds: 1800
   jobTemplate:
     spec:
       backoffLimit: 1
+      # 归档大表时不应无限挂起占连接（超时由 K8s 终止，Pod 记为 Failed → 告警）
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
             {{- include "medassist.labels" (dict "root" $ "component" "ops") | nindent 12 }}
         spec:
           restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
           {{- with .Values.serviceAccount.name }}
           serviceAccountName: {{ . }}
           {{- end }}
@@ -43,12 +61,20 @@ spec:
               args:
                 - >-
                   python scripts/archive_audit_log.py
-                  --before "$(date -d '-{{ .Values.auditArchive.beforeDays }} days' +%F)"
+                  --before-days {{ .Values.auditArchive.beforeDays }}
                   --apply --out "{{ .Values.auditArchive.outDir }}"
-              {{- with .Values.auditArchive.env }}
+              # 根文件系统只读：Python 不写 .pyc，临时文件落 /tmp（emptyDir）
               env:
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              {{- with .Values.auditArchive.env }}
                 {{- toYaml . | nindent 16 }}
               {{- end }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               resources:
                 requests:
                   cpu: 50m
@@ -59,12 +85,18 @@ spec:
               volumeMounts:
                 - name: archive
                   mountPath: {{ .Values.auditArchive.outDir }}
+                - name: tmp
+                  mountPath: /tmp
           volumes:
             - name: archive
               {{- if .Values.auditArchive.pvc }}
               persistentVolumeClaim:
                 claimName: {{ .Values.auditArchive.pvc }}
-              {{- else }}
+              {{- else if .Values.auditArchive.allowEmptyDir }}
               emptyDir: {}
+              {{- else }}
+              {{- fail "auditArchive.enabled=true 但未配置 auditArchive.pvc：emptyDir 会在 Pod 重建时丢失归档（=热表已删、冷存没留）。请挂持久卷，或显式设 auditArchive.allowEmptyDir=true 仅用于试跑。" }}
               {{- end }}
+            - name: tmp
+              emptyDir: {}
 {{- end }}

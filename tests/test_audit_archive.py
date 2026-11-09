@@ -12,6 +12,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -39,6 +41,31 @@ def test_cutoff_invalid_exits():
         except SystemExit:
             continue
         raise AssertionError(f"应拒绝非法日期：{bad!r}")
+
+
+def test_before_days_avoids_gnu_date_dependency():
+    """评测 06 P1-2：CronJob 用 `--before-days`，由脚本算「今天 - N 天」。"""
+    mod = _load()
+    from datetime import date, timedelta
+
+    expect = (datetime.now().astimezone().date() - timedelta(days=365)).isoformat()
+    assert mod.cutoff_date_from_days(365) == expect
+    assert mod.cutoff_date_from_days(0) == date.today().isoformat()
+    assert mod.cutoff_from(mod.cutoff_date_from_days(1)).date() < date.today()
+    try:
+        mod.cutoff_date_from_days(-1)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("负数天数应被拒绝")
+
+
+def test_before_and_before_days_are_mutually_exclusive():
+    """`--before` 与 `--before-days` 必须且只能给一个（argparse 直接退出）。"""
+    mod = _load()
+    for argv in ([], ["--before", "2026-01-01", "--before-days", "30"]):
+        with pytest.raises(SystemExit):
+            mod.main(argv)
 
 
 def test_group_and_summary_by_month():

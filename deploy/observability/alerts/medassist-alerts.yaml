@@ -230,3 +230,58 @@ spec:
           annotations:
             summary: "JVM 堆使用率超过 90%（{{ $labels.instance }}）"
             description: "检查 GC 日志与内存限制；持续高位可能触发 OOMKilled。"
+
+    # ---- 批处理（迁移 / 备份 / 审计归档）失败告警（评测 06 P1-1）----
+    # 背景：这些 Job 失败时服务仍然 200、面板全绿——备份停摆、迁移失败、审计归档静默，
+    # 直到需要恢复数据时才发现"没有可用的备份/归档"。这里按 kube-state-metrics 的
+    # Job/CronJob 状态兜住三类静默失败：Job 失败、CronJob 被挂起、成功时间过期。
+    #
+    # 兼容性：kube-state-metrics v2.13+ 用 kube_job_failed，旧版用 kube_job_status_failed；
+    # 两条用 `or` 合并（同一 namespace/job_name 标签），集群升级不会出现"规则无数据"。
+    - name: medassist.batch
+      rules:
+        - alert: MedassistJobFailed
+          expr: |
+            (max by (namespace, job_name) (kube_job_failed{namespace=~"medassist.*"} > 0))
+            or
+            (max by (namespace, job_name) (kube_job_status_failed{namespace=~"medassist.*"} > 0))
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "批处理 Job 失败：{{ $labels.namespace }}/{{ $labels.job_name }}"
+            description: "迁移/备份/审计归档等 Job 失败不会自动恢复。查看该 Job 的 Pod 日志与 events；
+                          若是备份或归档失败，先确认数据仍可恢复，再重跑。"
+
+        - alert: MedassistCronJobSuspended
+          expr: kube_cronjob_spec_suspend{namespace=~"medassist.*"} == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CronJob 被挂起：{{ $labels.namespace }}/{{ $labels.cronjob }}"
+            description: "挂起期间不会产生新的备份/归档。确认是计划内维护，否则恢复调度（kubectl patch ... suspend=false）。"
+
+        - alert: MedassistBackupStale
+          expr: |
+            time() - max by (namespace, cronjob) (
+              kube_cronjob_status_last_successful_time{namespace=~"medassist.*", cronjob=~".*pg-backup.*"})
+            > 93600
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL 备份超过 26 小时未成功（{{ $labels.cronjob }}）"
+            description: "RPO 已劣化到 > 24h。检查备份 CronJob 的 Pod 日志、备份盘容量与 PG 口令 Secret。"
+
+        - alert: MedassistAuditArchiveStale
+          expr: |
+            time() - max by (namespace, cronjob) (
+              kube_cronjob_status_last_successful_time{namespace=~"medassist.*", cronjob=~".*audit-archive.*"})
+            > 691200
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "审计归档超过 8 天未成功（{{ $labels.cronjob }}）"
+            description: "归档是每周任务；连续错过一个周期说明 CronJob 失败或被挂起，热表将持续膨胀并影响保留期合规。"

@@ -27,6 +27,10 @@ ALERTMANAGER = os.path.join(REPO, "deploy", "observability", "alertmanager",
                             "alertmanager.yml")
 ALERT_RECEIVER = os.path.join(REPO, "deploy", "observability", "alertmanager",
                               "receiver.py")
+PLATFORM_ALERTS = os.path.join(REPO, "deploy", "observability", "alerts",
+                               "medassist-alerts.yaml")
+VALUES = os.path.join(REPO, "deploy", "helm", "medassist-platform", "values.yaml")
+VALUES_PROD = os.path.join(REPO, "deploy", "helm", "medassist-platform", "values-prod.yaml")
 
 
 def _alerts(path: str) -> set[str]:
@@ -134,3 +138,36 @@ def test_ai_core_multi_replica_fails_fast_instead_of_pending():
     values = _read(os.path.join(REPO, "deploy", "helm", "medassist-platform", "values.yaml"))
     assert "多副本配方" in values
     assert "aiCore.strategy: RollingUpdate" in values
+
+
+def test_batch_jobs_have_failure_alerts():
+    """评测 06 P1-1：备份/迁移/归档失败必须告警，而不是"服务 200、面板全绿"。"""
+    alerts = _alerts(PLATFORM_ALERTS)
+    for name in ("MedassistJobFailed", "MedassistCronJobSuspended",
+                 "MedassistBackupStale", "MedassistAuditArchiveStale"):
+        assert name in alerts, f"缺少批处理告警：{name}"
+    body = _read(PLATFORM_ALERTS)
+    # kube-state-metrics 新旧指标名都要覆盖（集群升级不应让规则静默变空）
+    assert "kube_job_failed" in body and "kube_job_status_failed" in body
+    assert "kube_cronjob_status_last_successful_time" in body
+    # 备份停摆是 RPO 问题，必须 critical；归档是合规问题，warning 即可
+    backup_block = body.split("MedassistBackupStale", 1)[1].split("- alert:", 1)[0]
+    assert "severity: critical" in backup_block
+
+
+def test_ai_core_exposes_required_production_settings():
+    """评测 06 P1-4：AUDIT_TIMEZONE/TRUSTED_PROXIES/PG_POOL_MAX 必须有 Helm 入口。
+
+    此前这三项只能改 ConfigMap 或用 `helm --set`，Argo CD 下一次同步就会回滚，
+    等于"改了就丢"；这里锁住 values → Deployment env 的显式通路。
+    """
+    tpl = _read(DEPLOYMENT)
+    for key in ("PG_POOL_MIN", "PG_POOL_MAX", "TRUSTED_PROXIES", "AUDIT_TIMEZONE"):
+        assert f"- name: {key}" in tpl, f"Deployment 缺少环境变量 {key}"
+    for ref in (".Values.aiCore.pgPool.min", ".Values.aiCore.pgPool.max",
+                ".Values.aiCore.trustedProxies", ".Values.aiCore.auditTimezone"):
+        assert ref in tpl, f"环境变量未接到 values：{ref}"
+    values = _read(VALUES)
+    assert "pgPool:" in values and "trustedProxies:" in values and "auditTimezone:" in values
+    prod = _read(VALUES_PROD)
+    assert "pgPool:" in prod and "max: 10" in prod

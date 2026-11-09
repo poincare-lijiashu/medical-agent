@@ -125,6 +125,15 @@ spec:
             # 向量库
             - name: MILVUS_URI
               value: {{ .Values.external.milvus.uri | quote }}
+            # 生产必需配置（评测 06 P1-4）：显式进入 Deployment，Argo CD 才不会被 ConfigMap 漂移回滚
+            - name: PG_POOL_MIN
+              value: {{ .Values.aiCore.pgPool.min | default 1 | quote }}
+            - name: PG_POOL_MAX
+              value: {{ .Values.aiCore.pgPool.max | default 5 | quote }}
+            - name: TRUSTED_PROXIES
+              value: {{ .Values.aiCore.trustedProxies | default "" | quote }}
+            - name: AUDIT_TIMEZONE
+              value: {{ .Values.aiCore.auditTimezone | default "" | quote }}
             {{- if .Values.external.redis.enabled }}
             # 多副本必需：限流计数 / 会话记忆 / 令牌撤销时间戳跨实例共享。
             # 不配置时退化为进程内内存（单副本可用，多副本会各算各的）。

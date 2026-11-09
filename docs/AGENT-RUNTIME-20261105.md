@@ -6456,3 +6456,70 @@ yaml.safe_load(ci.yml) → 12 个 job（新增 e2e）
 - e2e job 先非阻断；观察一周期后把 `continue-on-error` 去掉；
 - 整套 16 例在共享 runner 上预计 10–20 分钟（限流等待占大头），后续如需压缩可把
   "只读页面打开"类用例合并或按账号分片。
+
+## 160. 2026-11-10 评测 06 P1-1/P1-2/P1-4：批处理失败告警 + 审计归档 CronJob 生产化 + 生产必需配置 Helm 入口（第 157 批）
+
+**问题（评测 06 P1-1 / P1-2 / P1-4）**
+
+- **P1-1 零条 Job/CronJob 失败告警**：迁移 Job、PG 备份 CronJob、审计归档 CronJob 失败时
+  服务仍 200、面板全绿——"备份停摆/归档静默"要到需要恢复数据时才发现。
+- **P1-2 审计归档 CronJob 不可上生产**：①`timeZone` 缺失（按节点时区跑）；②无 Pod/容器
+  安全上下文；③截止日用 `date -d '-N days'`，只有 GNU date 支持，alpine/busybox 镜像上
+  直接失败且无人察觉；④未配 PVC 时静默用 `emptyDir`——Pod 重建即丢归档，等于"热表删了、
+  冷存没留"。
+- **P1-4 生产必需配置缺 Helm 入口**：`PG_POOL_MAX` / `TRUSTED_PROXIES` / `AUDIT_TIMEZONE`
+  只能改 ConfigMap 或 `helm --set`；Argo CD 下一次 Git 同步就回滚，等于"改了就丢"。
+
+**已做**
+
+1. **批处理告警组 `medassist.batch`**（`deploy/observability/alerts/medassist-alerts.yaml`）：
+   - `MedassistJobFailed`：`kube_job_failed or kube_job_status_failed > 0`（新旧 KSM 指标名
+     兼容，集群升级不会让规则静默变空），`for: 10m`，warning；
+   - `MedassistCronJobSuspended`：`kube_cronjob_spec_suspend == 1`，`for: 30m`；
+   - `MedassistBackupStale`：`time() - last_successful_time > 26h`，**critical**（RPO 已破 24h）；
+   - `MedassistAuditArchiveStale`：归档超过 8 天未成功（每周任务，错过一个周期即告警）。
+2. **归档 CronJob 生产化**（`templates/audit-archive-cronjob.yaml` + `values.yaml`）：
+   - `timeZone: Asia/Shanghai`、`startingDeadlineSeconds: 1800`、`activeDeadlineSeconds: 3600`；
+   - Pod：`runAsNonRoot/runAsUser|Group 10001/fsGroup/seccompProfile: RuntimeDefault`；
+     容器：`allowPrivilegeEscalation: false` + `readOnlyRootFilesystem: true` +
+     `capabilities.drop: [ALL]`，`/tmp` 挂 emptyDir，`PYTHONDONTWRITEBYTECODE=1`；
+   - 截止日改 `--before-days N`（脚本内算"今天 - N 天"，不依赖 GNU date）；
+   - **未配 `auditArchive.pvc` 且未显式 `allowEmptyDir=true` → `fail` 拒绝渲染**。
+   - `scripts/archive_audit_log.py`：新增 `cutoff_date_from_days()` 与 `--before-days`，
+     与 `--before` **必须且只能二选一**（argparse 直接退出）。
+3. **生产必需配置显式入口**：`values.yaml` 新增 `aiCore.pgPool.{min,max}`、
+   `aiCore.trustedProxies`、`aiCore.auditTimezone`，并在 `deployment-ai-core.yaml` 注入
+   `PG_POOL_MIN/PG_POOL_MAX/TRUSTED_PROXIES/AUDIT_TIMEZONE`；`values-prod.yaml` 覆盖
+   `pgPool {2,10}`（含全院 max_connections 预算注释）、`auditTimezone`、归档 `timeZone`。
+4. **回归锁**：
+   - `tests/test_audit_archive_cronjob.py`：标记表更新（`--before-days`/`timeZone`），
+     新增加固标记与"emptyDir 必须显式允许"两条；
+   - `tests/test_audit_archive.py`：`--before-days` 计算、负数拒绝、与 `--before` 互斥；
+   - `tests/test_deploy_observability.py`：批处理 4 条告警（含新旧 KSM 指标名、备份 critical）、
+     ai-core 四个环境变量 values→env 通路。
+
+**验证**
+
+```
+helm lint（alpine/helm:3.16.3）→ 0 chart(s) failed
+helm template dev / staging / prod → exit=0（2541 / 6602 / 6605 行）
+helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
+  错误信息："emptyDir 会在 Pod 重建时丢失归档…"
+渲染产物解析（--set enabled+pvc）：timeZone=Asia/Shanghai、
+  args="--before-days 365 --apply --out /data/audit_archive"、
+  podSC runAsUser=10001/seccompProfile、container readOnlyRootFilesystem=true、
+  volume=persistentVolumeClaim medassist-audit-archive；
+  ai-core env {PG_POOL_MIN:2, PG_POOL_MAX:10, TRUSTED_PROXIES:"", AUDIT_TIMEZONE:Asia/Shanghai}
+告警文件 yaml.safe_load → 7 个 group，medassist.batch 4 条告警
+定向：test_audit_archive + test_audit_archive_cronjob + test_deploy_observability → 24 passed
+全量（不含 e2e）→ 1582 passed / 1 skipped
+```
+
+**遗留**
+
+- `Medassist*` 批处理告警需院内 Alertmanager 路由到值班通道（样例见
+  `deploy/observability/alerts/alertmanager-routes.example.yaml`）；
+- `auditArchive.enabled` 仍默认 false：开启前必须由院方确认保留期并填 `auditArchive.pvc`；
+- 归档容器以 10001 运行：上线前确认主镜像内 `/app` 对 other 可读（不可读则调 values 的
+  `runAsUser` 或镜像 `USER`）；
+- `trustedProxies` 生产默认留空（不信任任何 XFF）；填 ingress-nginx Pod 网段才生效。

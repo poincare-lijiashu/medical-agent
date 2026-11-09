@@ -650,6 +650,18 @@ aiCore:
     mountPath: /app/data
   # 业务配置（QWEN_API_KEY 等敏感项放 Secret，通过 envFrom 注入）
   existingSecret: medassist-ai-core
+  # 生产必需配置的显式入口（评测 06 P1-4）：此前只能改 ConfigMap 或 `helm --set`，
+  # Argo CD 下会被下一次 Git 同步回滚，等于"改了就丢"。
+  # PG 连接池（每个副本独立）：上限必须计入全院 max_connections 预算
+  # （AI 中台 + 10 个 Java 服务 + 监控导出，评测 06 P1-3）。
+  pgPool:
+    min: 1
+    max: 5
+  # 受信代理网段（逗号分隔 IP/CIDR）。留空 = 不信任任何转发头（默认最安全）；
+  # 只有前置 ingress/网关的 Pod 网段才应填这里，否则客户端可伪造 X-Forwarded-For。
+  trustedProxies: ""
+  # 审计展示/导出使用的时区（空 = 容器本地时区）。与归档 CronJob 的 timeZone 保持同口径。
+  auditTimezone: "Asia/Shanghai"
   env:
     APP_ENV: production
     EMBED_DEVICE: cpu
@@ -732,15 +744,19 @@ observability:
 # ---- 审计日志归档（可选，第 118 批）----
 # 对应 scripts/archive_audit_log.py：把早于保留期的 audit_log 行按月导出 JSONL 后从热表删除。
 # 默认关闭：归档会**删除热表数据**，必须由运维确认保留期后再开。开启前请确保：
-#   1) outDir 挂到持久卷（未配 pvc 时用 emptyDir，Pod 重建即丢，仅适合试跑）；
+#   1) outDir 挂到持久卷（auditArchive.pvc）。未配 pvc 时模板会**直接渲染失败**——
+#      emptyDir 在 Pod 重建/重调度后归档就没了，等于"热表删了、冷存没留"；
+#      仅试跑可显式设 allowEmptyDir=true；
 #   2) 保留期到院内合规要求（beforeDays，默认 365 天）；
 #   3) 先手工跑一次 dry-run 核对行数（脚本默认 dry-run）。
 auditArchive:
   enabled: false
-  schedule: "0 3 * * 0"          # 每周日 03:00（集群时区）
-  beforeDays: 365                # 归档"今天 - N 天"之前的数据
-  outDir: /data/audit_archive    # 归档目录（建议挂 PVC）
-  pvc: ""                        # 持久卷声明名；留空=emptyDir（试跑）
+  schedule: "0 3 * * 0"          # 每周日 03:00（按 timeZone 解释）
+  timeZone: Asia/Shanghai        # K8s ≥1.27 生效；更早版本忽略，需统一节点时区
+  beforeDays: 365                # 归档"今天 - N 天"之前的数据（脚本内计算，不依赖 date -d）
+  outDir: /data/audit_archive    # 归档目录（必须挂 PVC）
+  pvc: ""                        # 持久卷声明名；留空则必须显式 allowEmptyDir=true
+  allowEmptyDir: false           # 仅试跑：允许 emptyDir（Pod 重建即丢归档）
   image:
     repository: medassist-platform   # 按实际中台主镜像填写
     tag: ""                          # 空 = Chart.AppVersion

@@ -195,8 +195,12 @@ kb:
 
 # 审计归档 CronJob：模板 tag 为空时回落 Chart.AppVersion（当前为 0.1.0-SNAPSHOT），
 # 生产必须显式钉住不可变版本，避免"发布成功但镜像没换"。
+# 归档目录必须挂持久卷：未配 pvc 时模板直接 fail（emptyDir 会丢归档），
+# 生产开启前请填 auditArchive.pvc 并把 enabled 改为 true（保留期需院方确认）。
 auditArchive:
   image: {repository: medassist-platform, tag: "1.0.0", pullPolicy: IfNotPresent}
+  timeZone: Asia/Shanghai
+  allowEmptyDir: false
 
 aiCore:
   enabled: true
@@ -217,6 +221,14 @@ aiCore:
     # 院内默认无外网：关闭 PubMed 检索（不产生任何外网等待）。
     # 若院方开通了 NCBI 白名单，可改回 "true"。
     PUBMED_ENABLED: "false"
+  # 评测 06 P1-3/P1-4：连接池上限必须计入全院 max_connections 预算后再定。
+  # 2 副本 × 10 连接 = 20；叠加 10 个 Java 服务与监控导出仍应留 ≥30% 余量。
+  pgPool:
+    min: 2
+    max: 10
+  # 受信代理：填 ingress-nginx（或前置网关）的 Pod 网段；默认留空 = 不信任任何 XFF。
+  trustedProxies: ""
+  auditTimezone: Asia/Shanghai
   # 生产必须由存储团队预置模型 PVC（建议共享存储 ReadOnlyMany，多副本共享同一份权重）
   models: {existingClaim: medassist-models, create: false}
   data: {existingClaim: medassist-ai-core-data, create: false}

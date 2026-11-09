@@ -7,12 +7,18 @@
 - **默认 dry-run**：只统计"按月多少行、将写哪些文件"，不写不删；
 - `--apply` 才执行：单事务内 `DELETE ... RETURNING`，**先落盘成功再 COMMIT**，
   落盘异常自动 ROLLBACK（不会出现"删了但没存档"）；
-- 必须显式给 `--before YYYY-MM-DD`（按服务端本地时区解释，口径与审计日期筛选一致）；
+- 必须显式给 `--before YYYY-MM-DD` 或 `--before-days N`（按服务端本地时区解释，
+  口径与审计日期筛选一致）；
 - 按月分文件、追加写：同一月多次归档不会覆盖历史文件。
+
+`--before-days N`（评测 06 P1-2）：CronJob 里此前用 `date -d '-N days'` 计算截止日，
+该写法只有 GNU date 支持——alpine/busybox 镜像上直接报错，归档 Job 静默失败。
+改为由脚本自己算「今天 - N 天」，容器只需 Python，不再依赖宿主机 date 实现。
 
 用法：
     python scripts/archive_audit_log.py --before 2026-01-01            # dry-run
     python scripts/archive_audit_log.py --before 2026-01-01 --apply    # 归档并删除
+    python scripts/archive_audit_log.py --before-days 365 --apply      # 按保留期（CronJob）
 """
 import argparse
 import asyncio
@@ -20,7 +26,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,6 +45,14 @@ def cutoff_from(before: str) -> datetime:
     except ValueError:
         raise SystemExit("--before 需为 YYYY-MM-DD（如 2026-01-01）") from None
     return datetime.combine(d, datetime.min.time()).astimezone()
+
+
+def cutoff_date_from_days(days: int) -> str:
+    """「今天 - N 天」→ YYYY-MM-DD（本地时区）；不依赖容器里的 GNU date。"""
+    if days < 0:
+        raise SystemExit("--before-days 不能为负数")
+    today = datetime.now().astimezone().date()
+    return (today - timedelta(days=days)).isoformat()
 
 
 def month_key(ts: datetime) -> str:
@@ -117,13 +131,18 @@ async def _run(before: str, apply: bool, out_dir: Path, dsn: str) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="审计日志归档（默认 dry-run）")
-    ap.add_argument("--before", required=True, help="归档该日期之前的行（YYYY-MM-DD）")
+    ap.add_argument("--before", default="", help="归档该日期之前的行（YYYY-MM-DD）")
+    ap.add_argument("--before-days", type=int, default=None,
+                    help="按「今天 - N 天」计算截止日（与 --before 二选一）")
     ap.add_argument("--apply", action="store_true", help="真正执行（默认只统计）")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="归档目录（默认 data/audit_archive）")
     ap.add_argument("--dsn", default="", help="覆盖 DSN（默认取 settings）")
     args = ap.parse_args(argv)
+    if bool(args.before.strip()) == (args.before_days is not None):
+        ap.error("必须且只能给 --before 或 --before-days 之一")
+    before = args.before.strip() or cutoff_date_from_days(args.before_days)
     dsn = args.dsn or settings.async_database_url.replace("postgresql+asyncpg://", "postgresql://")
-    return asyncio.run(_run(args.before, args.apply, Path(args.out), dsn))
+    return asyncio.run(_run(before, args.apply, Path(args.out), dsn))
 
 
 if __name__ == "__main__":
