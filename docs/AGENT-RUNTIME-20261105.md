@@ -6196,3 +6196,44 @@ PG: agent_a2a=false（恢复原状）
 
 **E6 仍未闭环（同上一批，需环境）**：共享存储 RWX/ReadOnlyMany、Redis 开启、
 上传文件共享卷；这些是"能否真正起 2 个副本"的运维前提，代码侧已 fail-fast。
+
+## 154. 2026-11-10 评测 A5：备份/恢复限定 public schema，杜绝误删院内其它系统 211 张表（第 151 批）
+
+**问题（评测 02 P1-4，升级为 P0）**
+
+- `scripts/backup.py` 的 `pg_dump` 是**全库 dump**（无 schema 过滤）；而 PG 实例与院内
+  9 个系统共享：`public` 21 张表是本系统，其余 **211 张**属于 clinical_svc / emr_svc /
+  pharmacy_svc / auth_svc / tech_svc / insurance_svc / material_svc / kb_svc / empi_svc。
+- `scripts/restore.py` 从 dump 解析**所有** `CREATE TABLE` 生成 `DROP TABLE ... CASCADE`
+  前奏 → 一次恢复会删掉别人 211 张表，并用本备份把其生产数据回滚到 dump 时刻；
+  `CASCADE` 还会连带外键指向的表。备份产物里同样混入其他系统的 PHI。
+
+**已做**
+
+1. **备份限定 schema**：`pg_dump_cmd(...)` 增加 `--schema public`（`docker exec … pg_dump -U … --schema public <db>`）。
+2. **恢复解析只收 public**：`dump_tables()` 去引号后按 `schema.table` 解析，非 `public` 一律忽略；
+   无限定名的 `CREATE TABLE` 视为 `public`（pg_dump 在 search_path=public 下的输出）。
+3. **DROP 前奏硬拒绝**：`drop_prelude()` 对任何非 `public` 表名直接 `ValueError`——
+   即使解析层被改坏，DROP 也发不到院内其它 schema；仍严禁 `drop database`。
+4. **恢复执行前守卫**：dump 非空但解析不到 public 建表语句（旧版全库 dump / 数据-only dump）
+   → 打印原因并返回 2，不进安全 tar、不调 docker。
+5. **测试**：`test_backup` 更新命令断言；`test_restore` 新增
+   - `test_dump_tables_ignores_other_schemas_and_drop_guard_refuses`（clinical_svc / emr_svc /
+     无前缀三种输入；非 public 进 prelude 必须抛错）；
+   - `test_yes_refuses_dump_without_public_tables`（拒绝执行且零 subprocess）。
+
+**真机验证**
+
+```
+PG 表数：public=21  clinical_svc=79  emr_svc=21  pharmacy_svc=31（其余 schema 略）
+docker exec medagent_pg pg_dump -U medagent --schema public medagent
+  → 3,374,596 字节；dump_tables=21；nonpublic=[]；DROP 前奏=21
+（旧行为：dump 覆盖 232 张表，前奏会 DROP 全部 232 张）
+全量（不含 e2e）→ 1564 passed / 1 skipped
+```
+
+**遗留（需运维决策）**
+
+- 历史备份产物（旧版全库 dump）仍含其他系统数据，应按保留策略清理并重做一次新版备份；
+- 彻底方案是**独立数据库**（`createdb medagent`）而不是共享实例的 public schema；
+- `tests/test_restore.py` 只做纯函数/命令序列验证，真实恢复演练仍需在隔离库执行。

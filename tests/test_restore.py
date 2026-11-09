@@ -94,6 +94,31 @@ def test_dump_tables_parses_create_table_only():
         "DROP TABLE IF EXISTS", ""), "绝不允许出现 drop database"
 
 
+def test_dump_tables_ignores_other_schemas_and_drop_guard_refuses():
+    """评测 A5：只解析 public schema；DROP 前奏对非 public 表名直接拒绝。
+
+    共享 PG 实例里 public 之外还有院内 9 个系统的 211 张表——旧实现会把它们
+    一起 DROP 并用本备份回滚，属灾难性越界。
+    """
+    sql = ("CREATE TABLE public.users (id int);\n"
+           "CREATE TABLE clinical_svc.patient (id int);\n"
+           'CREATE TABLE "emr_svc"."record" (id int);\n'
+           "CREATE TABLE unqualified_tbl (id int);\n")
+    tables = restore.dump_tables(sql)
+    assert tables == ["public.users", "public.unqualified_tbl"]
+    with pytest.raises(ValueError):
+        restore.drop_prelude(["clinical_svc.patient"])
+
+
+def test_yes_refuses_dump_without_public_tables(iso, tmp_path):
+    """评测 A5：旧版全库 dump / 数据-only dump 不得进入 DROP 前奏执行路径。"""
+    data, fake = iso
+    tar_path = _make_backup(data.parent, {"drug_dict.json": b"[]"},
+                            dump=b"-- dump\nCREATE TABLE clinical_svc.patient (id int);\n")
+    assert restore.main(["--backup", str(tar_path), "--yes"]) == 2
+    assert fake.calls == [], "拒绝执行时不得调用 psql/docker"
+
+
 def test_dry_run_makes_no_writes(iso, capsys):
     """dry-run：打印计划但零 subprocess、零写文件——探针文件保留、内容不变、无 safety tar。"""
     data, fake = iso

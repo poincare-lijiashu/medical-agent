@@ -15,8 +15,9 @@
      psql 导回；dump 内无 DROP 语句，脚本解析其中 CREATE TABLE 生成
      `DROP TABLE IF EXISTS <表> CASCADE` 前奏一并喂入
      `docker exec -i <容器> psql -U <用户> -d <库> -v ON_ERROR_STOP=1`。
-     **严禁 drop database**：只重建 dump 覆盖的表（表由 dump 内 CREATE 重建，
-     恢复前的脏数据/演练探针行随 DROP 清除；owned 序列随表级联删除）；
+     **严禁 drop database；严禁触碰 public 之外的 schema**（评测 A5：PG 实例与院内
+     9 个系统共享，public 之外还有 211 张表）——解析只收 public 表，DROP 前奏对
+     非 public 表名直接拒绝；dump 内没有 public 建表语句时拒绝执行。
   4) 验证：逐 *.json 对比「备份内行数 vs 当前行数」+ 打印 PG 关键表 count。
 
 容器名：环境变量 BACKUP_PG_CONTAINER（默认 medagent_pg，与 backup.py 一致；
@@ -65,24 +66,41 @@ def pg_restore_cmd(container: str, user: str, db: str) -> list[str]:
             "-v", "ON_ERROR_STOP=1"]
 
 
-def dump_tables(sql_text: str) -> list[str]:
-    """解析 dump 内 CREATE TABLE 语句，返回表名（保持出现顺序，供 DROP 前奏）。
+def dump_tables(sql_text: str, schema: str = "public") -> list[str]:
+    """解析 dump 内 CREATE TABLE 语句，**只返回本系统 schema 的表**（评测 A5）。
 
-    只认 `CREATE TABLE [IF NOT EXISTS] <名字> (`；CREATE TABLESPACE 不会被
-    `CREATE TABLE\\s` 误匹配（后跟字母 S）。pg_dump 输出形如 `CREATE TABLE public.users (`。
+    背景：PG 实例与院内 9 个系统共享（public 之外还有 211 张表）。旧实现不区分
+    schema，`DROP ... CASCADE` 会把别人的表一起删掉并用本备份回滚其数据。
+    这里的原则是"宁可漏删，不能误删"：非 ``schema`` 的表一律忽略；
+    无限定名的 CREATE TABLE 视为 ``schema``（pg_dump 在 search_path=public 下的输出）。
     """
     import re
     tables: list[str] = []
     for m in re.finditer(r"(?im)^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
                          r"([A-Za-z0-9_\".$]+)\s*\(", sql_text):
-        name = m.group(1).strip('"')
-        if name not in tables:
-            tables.append(name)
+        # 去引号后按 schema.table 解析（"public"."users" 与 public.users 等价）
+        name = m.group(1).replace('"', "")
+        sch, _, tbl = name.partition(".")
+        if not tbl:  # 无 schema 前缀 → 视为本系统 schema
+            sch, tbl = schema, name
+        if sch != schema:
+            continue  # 评测 A5：绝不触碰 public 之外的 schema
+        full = f"{schema}.{tbl}"
+        if full not in tables:
+            tables.append(full)
     return tables
 
 
-def drop_prelude(tables: list[str]) -> str:
-    """DROP 前奏 SQL：只删 dump 覆盖的表（CASCADE 级联 owned 序列），严禁 drop database。"""
+def drop_prelude(tables: list[str], schema: str = "public") -> str:
+    """DROP 前奏 SQL：只删 delta 内**本 schema** 的表（CASCADE 级联 owned 序列）。
+
+    双重保护：调用方传入非 ``schema`` 表名直接抛 ValueError——即使解析层被改坏，
+    也不允许把 DROP 发到院内其它系统；严禁 drop database（含 schema 越界）。
+    """
+    for t in tables:
+        sch = t.split(".", 1)[0] if "." in t else schema
+        if sch != schema:
+            raise ValueError(f"拒绝 DROP 非 {schema} schema 的表：{t}")
     return "\n".join(f"DROP TABLE IF EXISTS {t} CASCADE;" for t in tables) + "\n"
 
 
@@ -277,6 +295,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.yes:
         print("[dry-run] 未写入任何文件、未调用 docker（加 --yes 实际执行）")
         return 0
+
+    # 评测 A5：dump 里没有 public 建表语句时拒绝恢复——可能是旧版全库 dump 或
+    # 数据-only dump，在未知库结构上执行 DROP 前奏风险不可控。
+    if dump and not dump_tables(dump.decode(errors="replace")):
+        print("[restore] 备份内没有 public schema 的 CREATE TABLE：拒绝执行，"
+              "请用新版 scripts/backup.py（已限定 --schema public）重新备份")
+        return 2
 
     print("[警告] --yes：即将覆盖 data/ 并恢复 PG（先 DROP dump 内表）。"
           "请确认后端服务已停止、无写入进程后再继续。")

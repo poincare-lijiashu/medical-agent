@@ -58,9 +58,14 @@ class BackupError(RuntimeError):
     """备份过程失败（dump 不可用 / 产物校验不通过）。"""
 
 
-def pg_dump_cmd(container: str, user: str, db: str) -> list[str]:
-    """容器内 pg_dump 命令行（单测断言用）。"""
-    return ["docker", "exec", container, "pg_dump", "-U", user, db]
+def pg_dump_cmd(container: str, user: str, db: str, schema: str = "public") -> list[str]:
+    """容器内 pg_dump 命令行（单测断言用）。
+
+    评测 A5：**必须限定 schema**。共享 PG 实例里本系统只占 public（21 张表），
+    其余 9 个 schema 的 211 张表属于院内其他系统；全库 dump 会把它们的 PHI 打进
+    备份产物，restore 的 DROP 前奏还会连带回滚别人的生产数据。
+    """
+    return ["docker", "exec", container, "pg_dump", "-U", user, "--schema", schema, db]
 
 
 def _looks_complete(path: Path) -> bool:

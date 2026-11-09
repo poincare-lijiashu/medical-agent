@@ -37,9 +37,14 @@ def iso(monkeypatch, tmp_path):
 
 
 def test_pg_dump_cmd_sequence():
-    """命令序列：docker exec <容器> pg_dump -U <用户> <库>。"""
+    """命令序列：docker exec <容器> pg_dump -U <用户> --schema public <库>。
+
+    评测 A5：必须限定 public schema——共享实例里其余 9 个 schema 的 211 张表
+    属于院内其他系统，全库 dump 会把它们的 PHI 混入备份。
+    """
     assert backup.pg_dump_cmd("medagent_pg", "medagent", "medagent") == \
-        ["docker", "exec", "medagent_pg", "pg_dump", "-U", "medagent", "medagent"]
+        ["docker", "exec", "medagent_pg", "pg_dump", "-U", "medagent",
+         "--schema", "public", "medagent"]
 
 
 class _FakeRun:
@@ -66,7 +71,7 @@ def test_run_pg_dump_success_writes_valid_dump(iso, monkeypatch):
     backup.run_pg_dump("medagent_pg", "medagent", "medagent")
 
     assert fake.calls == [["docker", "exec", "medagent_pg", "pg_dump",
-                           "-U", "medagent", "medagent"]]
+                           "-U", "medagent", "--schema", "public", "medagent"]]
     assert (iso / "pg_dump.sql").read_bytes() == VALID_DUMP
     assert not (iso / "pg_dump.sql.tmp").exists(), "临时文件必须被原子替换掉"
 
@@ -130,7 +135,7 @@ def test_main_dry_run_prints_steps_without_output(iso, monkeypatch, capsys):
 
     assert backup.main(["--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "docker exec medagent_pg pg_dump -U medagent medagent" in out
+    assert "docker exec medagent_pg pg_dump -U medagent --schema public medagent" in out
     assert "kb/pubmed_v2_cache.json" in out, "排除清单应在 dry-run 输出中注明"
     assert not list((iso / "backups").glob("backup_*.tar.gz")), "dry-run 不得落盘"
     assert fake.calls == [], "dry-run 不得执行 pg_dump"
