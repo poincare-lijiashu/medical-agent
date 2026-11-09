@@ -157,6 +157,13 @@ class Settings(BaseSettings):
     auth_token_expire_minutes: int = 720
     auth_refresh_expire_minutes: int = 10080
     rate_limit_per_min: int = 60
+    # 评测 04 P1-6：登录爆破专用防护（按 账号+客户端IP 计连续失败）。
+    # 通用 60 次/分钟限流挡不住"同一账号每秒换一个口令"：一天可试 8.6 万次。
+    # 达到 fail_limit 次失败后锁定 lock_s 秒，成功登录清零；计数走 KVStore
+    # （配置 REDIS_URL 后跨副本共享）。设为 0 可关闭（不建议生产关闭）。
+    login_fail_limit: int = 5
+    login_fail_window_s: int = 900
+    login_lock_s: int = 900
     # 第 71 批：反向代理可信地址（逗号分隔的 IP/CIDR，留空=不信任任何转发头）。
     # 文档里的 nginx 会写 X-Forwarded-For，但只有**直连方确实是可信代理**时才采信；
     # 否则所有匿名请求（登录/健康检查）都会共用 nginx 的地址桶，60 次/分钟被全院共享。

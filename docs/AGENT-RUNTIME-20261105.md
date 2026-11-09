@@ -6570,3 +6570,45 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
   运维确认后可手工归档或删除；
 - 备份 CronJob 仍使用单节点 RWO PVC（`ReadWriteOnce`），跨节点恢复需先迁移卷或改 S3/NFS CSI；
 - 备份失败告警依赖第 157 批的 `MedassistJobFailed` / `MedassistBackupStale`，需院内路由到值班通道。
+
+## 162. 2026-11-10 评测 04 P1-6：登录爆破专用防护（账号+IP 连续失败锁定）（第 159 批）
+
+**问题（评测 04 P1-6）**
+
+- 登录只有**通用 60 次/分钟**限流：攻击者可 1 次/秒慢速撞同一账号（日均 8.6 万次），
+  或换 IP 绕过 IP 桶，弱口令必被撞开；且无失败计数、无临时锁定、无任何信号。
+
+**已做**
+
+1. **新模块 `backend/core/login_guard.py`**
+   - 按 `(username, client_ip)` 计**连续失败**：达到 `LOGIN_FAIL_LIMIT`（默认 5）锁定
+     `LOGIN_LOCK_S` 秒（默认 15 分钟），窗口 `LOGIN_FAIL_WINDOW_S`（默认 900s）；
+   - 成功登录 `clear()` 清零；锁定后计数清空，解锁后从 0 重新累计；
+   - 计数/锁定标记走 `stores.get_store()`：配置 `REDIS_URL` 后跨副本共享，未配置时
+     进程内内存；每次调用重新取 store（`reset_store()` 立即生效，不持旧单例）；
+   - 键片段截断 + `:` 替换，避免键注入；**防护层异常一律 fail-open**（登录可用性优先）；
+   - `LOGIN_FAIL_LIMIT=0` 可关闭；`status()` 供排障（剩余锁定秒数/窗口内失败数）。
+2. **`/auth/login` 接入**：先查锁定（**在 PBKDF2 之前**，锁定期不再烧 0.2s CPU）→
+   认证 → 失败记数（达阈值直接 429）→ 成功清零。429 带 `Retry-After`；
+   提示文案统一为"登录失败次数过多，请约 N 分钟后再试"，**不区分账号是否存在**（防枚举）。
+3. **配置**：`backend/config.py` 新增 `login_fail_limit / login_fail_window_s / login_lock_s`
+   （环境变量同名大写）。
+4. **回归锁**（`tests/test_login_guard.py` 5 条）：阈值锁定 + Retry-After + 锁定期拒绝正确
+   口令；成功清零；按账号/IP 隔离；不存在账号同样锁定且文案不含"用户名或密码错误"；
+   `limit=0` 关闭。
+
+**验证**
+
+```
+定向：test_login_guard + test_auth + test_auth_cookie + test_body_limit +
+      test_cache_control + test_password → 30 passed
+全量（不含 e2e）→ 1590 passed / 1 skipped
+（鉴权链路用 TestClient 进程内验证；未重启 8001 在线服务）
+```
+
+**遗留**
+
+- 失败登录未写审计（避免被刷时审计链膨胀）；如需等保留痕，建议按"每账号每小时首次失败"
+  采样写入 `auth` 事件；
+- 锁定计数未接入 Prometheus；如需值班可见，可加 `medassist_login_locked_total`；
+- 密钥/口令策略（长度、复杂度、定期更换）仍属 P1 未做项。

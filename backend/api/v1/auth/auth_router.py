@@ -6,6 +6,7 @@ W3.1 httpOnly cookie（转型计划书 WF-3）：登录/刷新把令牌写入 ht
 from __future__ import annotations
 
 import asyncio
+import math
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 from backend.api.deps import (
     _COOKIE_AT,
     _COOKIE_RT,
+    _client_ip,
     _token_from_refresh_request,
     ensure_not_revoked,
     rate_limit,
@@ -21,7 +23,7 @@ from backend.api.deps import (
     revoke_user,
 )
 from backend.config import settings
-from backend.core import pg_store
+from backend.core import login_guard, pg_store
 from backend.core.auth import (
     authenticate,
     create_access_token,
@@ -84,12 +86,31 @@ def _login_resp(username: str, role: str, at: str, rt: str) -> LoginResp:
                      refresh_token=rt if settings.auth_token_in_body else "")
 
 
+def _lock_detail(seconds: int) -> str:
+    """锁定提示：只给"稍后再试"，不含账号是否存在的信息（防枚举）。"""
+    minutes = max(1, math.ceil(int(seconds or 0) / 60))
+    return f"登录失败次数过多，请约 {minutes} 分钟后再试"
+
+
 @router.post("/auth/login", response_model=LoginResp)
-async def login(body: LoginReq, response: Response):
+async def login(body: LoginReq, request: Request, response: Response):
+    # 评测 04 P1-6：先查锁定（不查用户是否存在——锁定键只由"该账号名 + IP 的失败"产生，
+    # 对不存在账号同样生效，因此响应不泄露账号存在性）。
+    ip = _client_ip(request)
+    wait = await asyncio.to_thread(login_guard.locked_seconds, body.username, ip)
+    if wait > 0:
+        raise HTTPException(status_code=429, detail=_lock_detail(wait),
+                            headers={"Retry-After": str(wait)})
     # PBKDF2 600k 迭代 ~0.2s CPU + users.json 读盘，必须移出事件循环（QUALITY-001）
     user = await asyncio.to_thread(authenticate, body.username, body.password)
     if not user:
+        lock_s = await asyncio.to_thread(login_guard.record_failure, body.username, ip)
+        if lock_s > 0:
+            raise HTTPException(status_code=429, detail=_lock_detail(lock_s),
+                                headers={"Retry-After": str(lock_s)})
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    # 成功登录清零：正常用户偶尔输错不会累积到锁定
+    await asyncio.to_thread(login_guard.clear, body.username, ip)
     at = create_access_token(user["username"], user["role"])
     rt = create_refresh_token(user["username"])
     _set_auth_cookies(response, at, rt)
