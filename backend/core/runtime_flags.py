@@ -55,6 +55,15 @@ def _load_all() -> dict:
     return pg_store.load_runtime_flags(json_loader=_load, path=FLAGS_FILE)
 
 
+def all_flags() -> dict:
+    """一次性读取全量开关（PG 真源→JSON 兜底）。
+
+    评测 E4：目录/工具/路由需要同时判断多个开关，逐个 get_flag 会产生多次
+    PG 同步桥（每次最长 3s）；改为一次读后由调用方按默认值收敛。
+    """
+    return _load_all()
+
+
 def get_flag(key: str, default: bool) -> bool:
     """读单个开关：flags（PG→JSON）优先；无键/非白名单/缺失 → default（settings 启动值）。"""
     if key not in ALLOWED_FLAGS:

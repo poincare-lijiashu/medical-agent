@@ -315,7 +315,7 @@ async def _arun_metered(domain: str, op: str, coro):
     审计流读路径本就是 `await _arun(...)`，这里只补计量，不改桥接方式。"""
     t0 = time.perf_counter()
     try:
-        out = await _arun(coro)
+        out = await _arun(coro, timeout=_BRIDGE_TIMEOUT)
     except Exception:
         _record_pg_query(domain, op, time.perf_counter() - t0, False)
         raise
@@ -388,7 +388,7 @@ async def _pg_write_async(domain: str, op: str, coro):
     """异步写计量（镜像写走主循环 → 专用 DB 循环）：失败原样抛出，由调用方 best-effort 处理。"""
     t0 = time.perf_counter()
     try:
-        out = await _arun(coro)
+        out = await _arun(coro, timeout=_BRIDGE_TIMEOUT)
     except Exception:
         _record_pg_write(domain, op, time.perf_counter() - t0, False)
         raise
@@ -396,9 +396,25 @@ async def _pg_write_async(domain: str, op: str, coro):
     return out
 
 
-async def _arun(coro):
-    """异步桥接：主循环协程内把池操作转投专用 DB 循环（wrap_future 支持跨循环等待）。"""
-    return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, _get_db_loop()))
+async def _arun(coro, timeout: float | None = None):
+    """异步桥接：主循环协程内把池操作转投专用 DB 循环（wrap_future 支持跨循环等待）。
+
+    评测 P1-5：默认 ``timeout=None`` 保持 init/迁移等长任务不受限；热点读/镜像写
+    必须显式传 ``_BRIDGE_TIMEOUT``——PG 慢查询时不再无限期挂起事件循环，
+    超时统一抛 ``PGUnavailable``（调用方已有 JSON 回落分支）。
+    """
+    if timeout is not None and circuit_open():
+        getattr(coro, "close", lambda: None)()
+        raise PGUnavailable("PG 熔断中：快速失败（冷却后自动探测）")
+    fut = asyncio.run_coroutine_threadsafe(coro, _get_db_loop())
+    try:
+        if timeout is None:
+            return await asyncio.wrap_future(fut)
+        return await asyncio.wait_for(asyncio.wrap_future(fut), timeout=timeout)
+    except asyncio.TimeoutError:
+        fut.cancel()
+        _pg_circuit_failure(asyncio.TimeoutError("async bridge timeout"))
+        raise PGUnavailable(f"PG 异步桥接超时（>{timeout}s）：已降级")
 
 
 def _dsn() -> str:

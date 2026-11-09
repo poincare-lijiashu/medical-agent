@@ -1643,3 +1643,46 @@ def test_init_pool_sets_server_statement_timeouts(monkeypatch):
     assert ss["statement_timeout"] == "10000"
     assert ss["lock_timeout"] == "2000"
     assert ss["idle_in_transaction_session_timeout"] == "30000"
+
+
+def test_arun_timeout_raises_pgunavailable(monkeypatch):
+    """评测 P1-5：异步桥接（热点读/镜像写）必须带 3s 上限，不无限期挂起事件循环。"""
+    import concurrent.futures
+    fut = concurrent.futures.Future()  # 永不完成：模拟 PG 挂起
+
+    def _submit(coro, loop):
+        coro.close()  # 避免 never-awaited 告警
+        return fut
+
+    monkeypatch.setattr(pg_store.asyncio, "run_coroutine_threadsafe", _submit)
+    monkeypatch.setattr(pg_store, "_get_db_loop", lambda: object())
+    monkeypatch.setattr(pg_store, "_pg_circuit_until", 0.0)
+    monkeypatch.setattr(pg_store, "_pg_timeout_streak", 0)
+
+    async def _never():
+        return 1
+
+    async def _main():
+        return await pg_store._arun(_never(), timeout=0.05)
+
+    with pytest.raises(pg_store.PGUnavailable):
+        asyncio.run(_main())
+
+
+def test_arun_without_timeout_still_allows_long_tasks(monkeypatch):
+    """init/迁移等长任务不受 3s 限制（timeout=None 保持原语义）。"""
+    import concurrent.futures
+    fut = concurrent.futures.Future()
+    fut.set_result("done")
+
+    def _submit(coro, loop):
+        coro.close()
+        return fut
+
+    monkeypatch.setattr(pg_store.asyncio, "run_coroutine_threadsafe", _submit)
+    monkeypatch.setattr(pg_store, "_get_db_loop", lambda: object())
+
+    async def _quick():
+        return "done"
+
+    assert asyncio.run(pg_store._arun(_quick())) == "done"

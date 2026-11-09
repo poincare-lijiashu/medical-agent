@@ -91,7 +91,7 @@ async def get_config(user: dict = Depends(require_user)):
             "milvus": milvus,
             # 任务3：前端据此切换审核中心形态（True=留痕模式：qc/admin 全局只读档案）。
             # runtime_flags 优先（admin 运行时切换即时生效），无键回落 settings 启动值。
-            "qc_auto_sign_full": runtime_flags.full_mode()}
+            "qc_auto_sign_full": await asyncio.to_thread(runtime_flags.full_mode)}
 
 
 class ConfigToggleReq(BaseModel):
@@ -110,7 +110,7 @@ async def admin_config_toggle(req: ConfigToggleReq, user: dict = Depends(require
     """
     if req.key not in runtime_flags.ALLOWED_FLAGS:
         raise HTTPException(400, f"不支持的运行时开关：{req.key}")
-    cur = runtime_flags.full_mode() if req.key == "qc_auto_sign_full" else False
+    cur = await asyncio.to_thread(runtime_flags.full_mode) if req.key == "qc_auto_sign_full" else False
     new_val = (not cur) if req.value is None else bool(req.value)
     val = await asyncio.to_thread(runtime_flags.set_flag, req.key, new_val)
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="admin", action="config_toggle",
@@ -295,7 +295,7 @@ async def admin_data(user: dict = Depends(require_role("admin")), audit_offset: 
                       # 第 47 批：模式 + 按域 stale（写失败回落 JSON）——多副本漂移早期信号
                       "storage": pg_store.storage_status()},
             # 任务3：admin「留痕模式」开关卡数据源（runtime_flags 优先，运行时切换即时反映）
-            "flags": {"qc_auto_sign_full": runtime_flags.full_mode()}}
+            "flags": {"qc_auto_sign_full": await asyncio.to_thread(runtime_flags.full_mode)}}
 
 
 class PurgeReq(BaseModel):

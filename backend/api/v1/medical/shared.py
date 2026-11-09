@@ -83,7 +83,8 @@ async def _enqueue_if_risk(agent: str, q: str, answer: str, conf: float, review_
         # 污染审核流；审计留痕照常（各端点 query/answered 事件 + channel/tool 标记）。
         # 与 web 流量唯一语义差异：不入队、无 review_id；答案正文/置信度/来源照常返回。
         return None
-    full = runtime_flags.full_mode()  # runtime_flags.json 优先（admin 运行时切换即时生效）
+    # 评测 E4：flags 读走专门线程——同步桥最长阻塞 3s，直接调用会卡住整个事件循环
+    full = await asyncio.to_thread(runtime_flags.full_mode)  # admin 运行时切换即时生效
     # 本批次任务2（drug 类豁免留痕模式）：FULL 短路（入队即自动签发）只适用于非 drug
     # agent——drug 类无论 QC_AUTO_SIGN_FULL 如何都走既有三档（QC_AUTO_SIGN=on 时中危
     # 规则库提示自动签发、高危恒人工、两开关均 off 时全部人工），保证药剂科始终有

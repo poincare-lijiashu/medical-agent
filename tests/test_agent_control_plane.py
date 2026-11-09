@@ -571,3 +571,31 @@ def test_a2a_closed_by_default(monkeypatch, tmp_path):
     assert r.status_code == 200
     assert r.json()["error"]["code"] == -32601
     assert "message/send" not in json.dumps(r.json(), ensure_ascii=False)
+
+
+def test_enabled_map_reads_flags_once(monkeypatch):
+    """评测 E4：目录类多键读取只做一次 PG 同步桥，而不是逐键 get_flag。"""
+    from backend.core import runtime_flags
+    calls = {"n": 0}
+
+    def _all():
+        calls["n"] += 1
+        return {"agent_a2a": True}
+
+    def _boom(*a, **k):
+        raise AssertionError("enabled_map 不得逐个 get_flag（会产生多次同步桥）")
+
+    monkeypatch.setattr(runtime_flags, "all_flags", _all)
+    monkeypatch.setattr(runtime_flags, "get_flag", _boom)
+    assert agent_flags.enabled_map() == {
+        "agent_web_search": False, "agent_multi_agent": False, "agent_a2a": True}
+    assert calls["n"] == 1
+
+
+def test_ask_enqueue_reads_flags_off_event_loop():
+    """评测 E4：ask 主链路的 flags 读取必须走线程池（同步桥最长 3s，不能卡事件循环）。"""
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "backend", "api", "v1", "medical", "shared.py")
+    with open(path, encoding="utf-8") as f:
+        assert "await asyncio.to_thread(runtime_flags.full_mode)" in f.read()

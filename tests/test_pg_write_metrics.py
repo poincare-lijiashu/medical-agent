@@ -69,14 +69,14 @@ def test_write_async_records_success_and_error(monkeypatch):
     _reset()
     calls = {"n": 0}
 
-    async def _arun_ok(coro):
+    async def _arun_ok(coro, timeout=None):
         getattr(coro, "close", lambda: None)()
         calls["n"] += 1
 
     monkeypatch.setattr(pg_store, "_arun", _arun_ok)
     asyncio.run(pg_store._pg_write_async("audit_log", "mirror", object()))
 
-    async def _arun_boom(coro):
+    async def _arun_boom(coro, timeout=None):
         getattr(coro, "close", lambda: None)()
         raise RuntimeError("pg gone")
 
@@ -133,7 +133,7 @@ def test_mirror_failure_is_swallowed_but_counted(monkeypatch):
     _reset()
     monkeypatch.setattr(pg_store, "_pool", object())
 
-    async def _arun_boom(coro):
+    async def _arun_boom(coro, timeout=None):
         getattr(coro, "close", lambda: None)()
         raise RuntimeError("pg gone")
 
@@ -148,7 +148,7 @@ def test_purge_and_delete_paths_are_counted(monkeypatch):
     _reset()
     monkeypatch.setattr(pg_store, "_pool", object())
 
-    async def _arun_ok(coro):
+    async def _arun_ok(coro, timeout=None):
         getattr(coro, "close", lambda: None)()
         return "DELETE 3"
 

@@ -91,5 +91,10 @@ def all_flags() -> list[dict]:
 
 
 def enabled_map() -> dict[str, bool]:
-    """{key: bool} 快照，供目录/工具/路由一次性过滤。"""
-    return {key: get_flag(key) for key in FLAG_KEYS}
+    """{key: bool} 快照，供目录/工具/路由一次性过滤。
+
+    评测 E4：此前逐个 get_flag → 3 次 PG 同步桥；改为一次读全量 flags 后按
+    默认值/白名单收敛（未知键一律 False，fail-closed 语义不变）。
+    """
+    flags = runtime_flags.all_flags()
+    return {key: bool(flags.get(key, _FLAG_DEFS[key][0])) for key in FLAG_KEYS}

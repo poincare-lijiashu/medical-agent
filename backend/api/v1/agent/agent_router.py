@@ -177,7 +177,8 @@ def _base_url(request: Request) -> str:
 @router.get("/card")
 async def agent_card(request: Request):
     """A2A Agent Card（公开）。关闭 A2A 能力广告后返回 404。"""
-    if not agent_flags.get_flag("agent_a2a"):
+    # 评测 E4：flags 读走线程池，避免同步桥阻塞事件循环
+    if not await asyncio.to_thread(agent_flags.get_flag, "agent_a2a"):
         raise HTTPException(404, "A2A 能力广告已关闭")
     return catalog.agent_card(_base_url(request))
 
@@ -924,7 +925,8 @@ async def model_policy_snapshot(user: dict = Depends(require_user)):
 @router.get("/web-policy")
 async def web_policy(user: dict = Depends(require_user)):
     """联网来源白名单 + 当前开关（开关仍由 admin 控制，默认关闭）。"""
-    return {"enabled": agent_flags.get_flag("agent_web_search"), **web_sources.describe()}
+    return {"enabled": await asyncio.to_thread(agent_flags.get_flag, "agent_web_search"),
+            **web_sources.describe()}
 
 
 @router.post("/second-opinion", dependencies=[Depends(model_quota), Depends(model_slot)])
@@ -1294,7 +1296,7 @@ async def a2a(body: A2ARequest, user: dict = Depends(require_user)):
     """
     msg_id = body.id
     # 评审 M-12：A2A 与能力卡同受一个开关约束，关闭时连路由入口一并下线
-    if not agent_flags.get_flag("agent_a2a"):
+    if not await asyncio.to_thread(agent_flags.get_flag, "agent_a2a"):
         return _jsonrpc_error(msg_id, -32601, "A2A 已关闭")
     if (body.jsonrpc or "") != "2.0":
         return _jsonrpc_error(msg_id, -32600, "Invalid Request")

@@ -6324,3 +6324,51 @@ ruff：All checks passed
 
 - `mirror_audit` 仍在请求路径上同步等待 PG（虽"绝不冒泡"但会拖慢写请求）；
 - `_arun`（异步桥）无超时；建议下一批按 P1-5 给异步路径加 `wait_for(3s)`。
+
+## 157. 2026-11-10 评测 E4 + 数据层 P1-5：flags 读离开事件循环 + 异步桥 3s 超时（第 154 批）
+
+**问题**
+
+- **E4**：`shared.py` 的留痕判定 `runtime_flags.full_mode()` 在 ask 公共路径上直接走
+  同步 PG 桥（最长 3s）——PG 一慢，**整个事件循环被卡住**；`admin` 配置/数据面板、
+  A2A 卡片与路由同样原地调用。
+- **P1-5（数据层）**：`_arun`（异步桥）没有超时，`audit_recent_pg` / `mirror_audit`
+  等热点在 PG 挂起时会**无限期**等待；审计镜像还挂在业务写请求路径上。
+
+**已做**
+
+1. **E4：flags 读全部移出事件循环**
+   - `shared.py` 留痕判定、`admin.py` 三处（GET /config、config-toggle、admin_data）
+     改 `await asyncio.to_thread(runtime_flags.full_mode)`；
+   - `agent_router` 的 `/card`、`/web-policy`、`/a2a` 三处 `get_flag` 同样走线程池；
+   - `agent_flags.enabled_map()` 从"逐键 get_flag（3 次同步桥）"改为
+     `runtime_flags.all_flags()` **一次读取**后按默认值收敛；`/catalog` 本身是同步端点
+     （FastAPI 自动线程池），不再叠加 3 次桥。
+2. **P1-5：异步桥加超时**
+   - `_arun(coro, timeout=None)`：默认保持 init/迁移/种子等长任务**不受限**；
+     `_arun_metered`（审计读）与 `_pg_write_async`（镜像写）显式传 `_BRIDGE_TIMEOUT=3s`；
+   - 超时 → `fut.cancel()` + `_pg_circuit_failure(timeout)` + 抛 `PGUnavailable`；
+     熔断打开时带超时的调用直接快速失败（init 等无超时调用不受影响）；
+   - 调用方已有 JSON 回落分支（`audit_recent_pg` 等 catch 后返回 None），语义不变。
+3. **测试**
+   - `test_enabled_map_reads_flags_once`（禁止逐键 get_flag；一次 all_flags）；
+   - `test_ask_enqueue_reads_flags_off_event_loop`（shared.py 必须 `await asyncio.to_thread(...)`）；
+   - `test_arun_timeout_raises_pgunavailable`、`test_arun_without_timeout_still_allows_long_tasks`；
+   - `test_pg_write_metrics` 的 `_arun` 替身适配 `timeout` 关键字。
+
+**验证**
+
+```
+后端重启 → /api/v1/health 200
+GET /medical/config → qc_auto_sign_full=False
+GET /agent/catalog  → flags={agent_web_search:false, agent_multi_agent:false, agent_a2a:false}
+定向：pg_repo + pg_query_metrics + pg_primary + pg_write_metrics → 全部通过
+ruff：All checks passed
+全量（不含 e2e）→ 1573 passed / 1 skipped
+```
+
+**仍未解决**
+
+- `mirror_audit` 仍在业务请求路径上**同步等待** PG（现在最多 3s）：建议"JSONL 必成功 +
+  PG 镜像丢后台队列/异步任务"；
+- `_run_pg`（同步桥）在 `full_mode` 已改线程池后仍是其他同步调用点的阻塞源，后续按调用点收敛。
