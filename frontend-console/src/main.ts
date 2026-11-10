@@ -2,6 +2,8 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
 import { restoreSession } from './stores/session'
+// 启动即初始化语言（读取本机偏好并同步 <html lang>），避免首帧语言与文档声明不一致
+import './i18n'
 import '@fontsource-variable/ibm-plex-sans/wght.css'
 import '@fontsource/ibm-plex-mono/latin-400.css'
 import '@fontsource/ibm-plex-mono/latin-500.css'

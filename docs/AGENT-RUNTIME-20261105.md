@@ -7386,3 +7386,47 @@ Java：GatewayRouteConfigTest → 14 passed
 - Java 服务 JDBC 连接未加 `sslmode`（本批只覆盖 AI 中台 Python 侧）；
 - `deploy/backup/pg-backup-cronjob.yaml`（`pg_dump -Fc`）未加密，建议接 age 或密钥信封；
 - 下一步：03 前端 i18n 与长列表虚拟滚动。
+
+## 181. 2026-11-10 评测 03 P0-5：前端 i18n 起步 + 导航分组回归修复（第 178 批）
+
+**问题**
+
+- 控制台 1000+ 条中文文案硬编码在模板里，没有任何 i18n 结构：要进英文环境医院就得逐字替换；
+  评测 03 P0-5 的要求是「现在就把文案外置的规矩立起来」（全量迁移可以后做）；
+- `NAV_GROUPS` 缺 `门诊管理`：`挂号收费`、`收费票据` 两个入口只在命令面板里搜得到，
+  侧栏整组不渲染（与第 126 批 `总览` 缺失是同一类问题）；
+- 文案字典没有回归锁：漏翻/拼错 key 只会在界面上静默回落中文，本地和 CI 都不会报错。
+
+**已做**
+
+1. **`frontend-console/src/i18n/`（零依赖，不引入 vue-i18n）**：`zh-CN.ts` 为唯一真源；
+   `en.ts` 用 `Record<MessageKey, string>` 约束（漏翻、拼错 key 直接 typecheck 失败）；
+   `index.ts` 提供响应式 `locale`、`t(key, vars?, fallback?)`（`{name}` 插值 + 缺 key 三级回落）、
+   `navTitle/navHint/navGroupLabel`、`setLocale/toggleLocale`；持久化
+   `medassist.console.locale`，首次按浏览器语言判定（院内默认中文），并同步 `<html lang>`。
+2. **壳层国际化**：`AppShell.vue` 的跳过链接、侧栏/导航 aria、品牌副标题、范围卡、命令入口、
+   用户菜单（新增语言切换项，`globe` 图标）、移动端顶栏；`CommandPalette.vue` 的对话框/搜索/
+   空态/快捷键说明，以及导航命令的标题、说明、分组。
+3. **导航元数据外置**：43 个导航条目的 `title/hint` 与 11 个分组名全部进字典；
+   `navigation.ts` 保留中文作为兜底，字典缺 key 时不会渲染出裸 key。
+4. **修复 `NAV_GROUPS` 缺 `门诊管理`**：`挂号收费`、`收费票据` 重新出现在侧栏。
+5. **回归锁 `tests/test_frontend_i18n.py`（5 条）**：导航条目 title/hint 中英齐备、分组齐备、
+   中英 key 集合一致、字典无重复 key、英文字典不得残留中文（`shell.language` 例外）。
+   该锁当场抓到 `门诊管理` 缺失。
+
+**验证**
+
+```
+前端：npm run typecheck → 通过；npm run build → 通过（index gzip 68.5 KB）
+定向：tests/test_frontend_i18n.py → 5 passed
+全量（不含 e2e）→ 1718 passed / 1 skipped
+```
+
+**遗留**
+
+- 视图内文案（各业务页的按钮/表头/toast）尚未外置：本批只覆盖壳层与导航，
+  后续「改到哪页迁哪页」，新代码禁止再硬编码中文；
+- 登录页 / 403 页不在 `AppShell` 内，仍是中文；
+- `utils/format.ts` 的日期与数字仍固定 `zh-CN`，未随语言切换；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+

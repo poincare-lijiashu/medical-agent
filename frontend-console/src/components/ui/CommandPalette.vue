@@ -4,15 +4,15 @@
     <Transition name="palette">
       <div v-if="open" class="palette-root" role="presentation">
         <div class="palette-backdrop" @click="close" />
-        <div class="palette" role="dialog" aria-modal="true" aria-label="命令面板">
+        <div class="palette" role="dialog" aria-modal="true" :aria-label="t('palette.dialog')">
           <div class="palette-search">
             <AppIcon name="search" :size="16" class="muted" />
             <input
               ref="inputEl"
               v-model.trim="query"
               class="palette-input"
-              placeholder="搜索页面、动作或患者…"
-              aria-label="命令搜索"
+              :placeholder="t('palette.placeholder')"
+              :aria-label="t('palette.search')"
               @keydown.down.prevent="move(1)"
               @keydown.up.prevent="move(-1)"
               @keydown.enter.prevent="run"
@@ -40,14 +40,14 @@
                 <span v-if="item.kbd" class="palette-key">{{ item.kbd }}</span>
               </button>
             </template>
-            <div v-if="flat.length === 0" class="palette-empty">没有匹配的命令</div>
+            <div v-if="flat.length === 0" class="palette-empty">{{ t('palette.empty') }}</div>
           </div>
 
           <div class="palette-foot">
-            <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-            <span><kbd>ENTER</kbd> 执行</span>
+            <span><kbd>↑</kbd><kbd>↓</kbd> {{ t('palette.select') }}</span>
+            <span><kbd>ENTER</kbd> {{ t('palette.run') }}</span>
             <span class="spacer" />
-            <span>仅显示当前账号有权限的入口</span>
+            <span>{{ t('palette.scopeNote') }}</span>
           </div>
         </div>
       </div>
@@ -60,6 +60,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { NAV_ITEMS } from '@/navigation'
+import { navHint, navTitle, t } from '@/i18n'
 import { hasPermission } from '@/stores/session'
 
 interface Command {
@@ -88,10 +89,10 @@ const activeId = ref('')
 const commands = computed<Command[]>(() => {
   const nav: Command[] = NAV_ITEMS.filter((n) => !n.permissions || hasPermission(n.permissions)).map((n) => ({
     id: `nav:${n.name}`,
-    title: n.title,
-    hint: n.hint,
+    title: navTitle(n.name, n.title),
+    hint: navHint(n.name, n.hint),
     icon: n.icon,
-    group: '导航',
+    group: t('palette.groupNav'),
     run: () => {
       void router.push(n.path)
       close()
@@ -100,11 +101,11 @@ const commands = computed<Command[]>(() => {
   const actions: Command[] = [
     {
       id: 'act:refresh',
-      title: '刷新当前页面',
-      hint: '重新拉取服务端数据',
+      title: t('palette.refresh.title'),
+      hint: t('palette.refresh.hint'),
       icon: 'refresh',
       kbd: 'R',
-      group: '动作',
+      group: t('palette.groupAction'),
       run: () => {
         emit('refresh')
         close()
@@ -112,11 +113,11 @@ const commands = computed<Command[]>(() => {
     },
     {
       id: 'act:theme',
-      title: '切换浅色 / 深色主题',
-      hint: '跟随本机偏好，不写入服务端',
+      title: t('palette.theme.title'),
+      hint: t('palette.theme.hint'),
       icon: 'moon',
       kbd: 'T',
-      group: '动作',
+      group: t('palette.groupAction'),
       run: () => {
         emit('theme')
         close()
@@ -124,10 +125,10 @@ const commands = computed<Command[]>(() => {
     },
     {
       id: 'act:logout',
-      title: '退出登录',
-      hint: '撤销当前令牌',
+      title: t('palette.logout.title'),
+      hint: t('palette.logout.hint'),
       icon: 'logout',
-      group: '动作',
+      group: t('palette.groupAction'),
       run: () => {
         emit('logout')
         close()

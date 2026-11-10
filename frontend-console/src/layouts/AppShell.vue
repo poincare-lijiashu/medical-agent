@@ -1,6 +1,6 @@
 <template>
   <div class="app">
-    <a class="skip-link" href="#main">跳到主要内容</a>
+    <a class="skip-link" href="#main">{{ t('app.skipToMain') }}</a>
 
     <div v-if="mobileOpen" class="nav-scrim" aria-hidden="true" @click="closeNav()" />
 
@@ -10,30 +10,30 @@
       :class="{ open: mobileOpen }"
       :inert="isMobile && !mobileOpen ? true : undefined"
       :aria-hidden="isMobile && !mobileOpen ? 'true' : undefined"
-      aria-label="主导航"
+      :aria-label="t('shell.mainNav')"
     >
       <div class="sidebar-head">
-        <RouterLink to="/dashboard" class="brand" aria-label="铭医 MedAssist 首页">
+        <RouterLink to="/dashboard" class="brand" :aria-label="t('shell.home')">
           <img src="/brand/mark.svg?v=4" width="28" height="28" alt="" class="brand-mark" />
           <span class="brand-text">
-            <span class="brand-name">铭医</span>
-            <span class="brand-sub">临床协同控制台</span>
+            <span class="brand-name">{{ t('app.name') }}</span>
+            <span class="brand-sub">{{ t('app.brandSub') }}</span>
           </span>
         </RouterLink>
-        <button class="nav-close" type="button" aria-label="关闭导航" @click="closeNav(true)">
+        <button class="nav-close" type="button" :aria-label="t('shell.closeNav')" @click="closeNav(true)">
           <AppIcon name="x" :size="18" />
         </button>
       </div>
 
       <div class="scope">
-        <span class="scope-k">当前范围</span>
+        <span class="scope-k">{{ t('shell.scope') }}</span>
         <span class="scope-v">{{ scopeLabel }}</span>
         <span class="scope-r">{{ session.roleLabel.value }}</span>
       </div>
 
-      <nav class="nav" aria-label="功能导航">
+      <nav class="nav" :aria-label="t('shell.funcNav')">
         <div v-for="group in groups" :key="group.name" class="nav-group">
-          <div class="group-label">{{ group.name }}</div>
+          <div class="group-label">{{ navGroupLabel(group.name) }}</div>
           <RouterLink
             v-for="item in group.items"
             :key="item.name"
@@ -44,7 +44,7 @@
             @click="closeNav()"
           >
             <AppIcon :name="item.icon" :size="16" />
-            <span class="nav-label">{{ item.title }}</span>
+            <span class="nav-label">{{ navTitle(item.name, item.title) }}</span>
           </RouterLink>
         </div>
       </nav>
@@ -52,14 +52,14 @@
       <div class="sidebar-foot">
         <button class="cmd" type="button" @click="openPalette">
           <AppIcon name="search" :size="15" />
-          <span>跳转或搜索</span>
+          <span>{{ t('shell.palette') }}</span>
           <span class="cmd-key">{{ metaKey }}K</span>
         </button>
 
         <button class="user" type="button" :aria-expanded="userMenuOpen" @click="userMenuOpen = !userMenuOpen">
           <span class="avatar" aria-hidden="true">{{ initial }}</span>
           <span class="user-meta">
-            <span class="user-name truncate">{{ session.user.value?.displayName || '未登录' }}</span>
+            <span class="user-name truncate">{{ session.user.value?.displayName || t('shell.notLoggedIn') }}</span>
             <span class="user-role truncate">{{ session.user.value?.username || '—' }}</span>
           </span>
           <AppIcon name="chevron-down" :size="14" class="user-chev" />
@@ -71,13 +71,17 @@
               <div class="user-menu-name">{{ session.user.value?.displayName }}</div>
               <div class="user-menu-sub">{{ session.roleLabel.value }} · {{ scopeLabel }}</div>
             </div>
+            <button class="user-menu-item" type="button" role="menuitem" @click="switchLocale">
+              <AppIcon name="globe" :size="16" />
+              {{ t('shell.language') }}
+            </button>
             <button class="user-menu-item" type="button" role="menuitem" @click="toggleTheme">
               <AppIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="16" />
-              {{ theme === 'dark' ? '切换到浅色' : '切换到深色' }}
+              {{ theme === 'dark' ? t('shell.switchToLight') : t('shell.switchToDark') }}
             </button>
             <button class="user-menu-item is-danger" type="button" role="menuitem" @click="logout">
               <AppIcon name="logout" :size="16" />
-              退出登录
+              {{ t('shell.logout') }}
             </button>
           </div>
         </Transition>
@@ -90,12 +94,12 @@
           ref="menuBtn"
           class="mobile-menu"
           type="button"
-          :aria-label="`打开导航，当前页面 ${activeTitle}`"
+          :aria-label="t('shell.openNav', { title: activeTitle })"
           @click="openNav"
         >
           <AppIcon name="list" :size="20" />
         </button>
-        <span class="mobile-brand">铭医</span>
+        <span class="mobile-brand">{{ t('app.name') }}</span>
         <span class="mobile-scope">{{ session.roleLabel.value }}</span>
       </header>
 
@@ -120,6 +124,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
 import { NAV_GROUPS, NAV_ITEMS, findNav } from '@/navigation'
+import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
 import { hasPermission, session } from '@/stores/session'
 
 const route = useRoute()
@@ -140,7 +145,7 @@ const metaKey = computed(() => (navigator.platform.toLowerCase().includes('mac')
 
 const scopeLabel = computed(() => {
   const org = session.user.value?.orgCode
-  return org ? `${org} · 本院` : '本院'
+  return org ? t('shell.scopeOrg', { org }) : t('shell.scopeLocal')
 })
 
 const groups = computed(() =>
@@ -151,12 +156,18 @@ const groups = computed(() =>
 )
 
 const activeTitle = computed(() =>
-  route.name ? findNav(String(route.name))?.title ?? '控制台' : '控制台',
+  route.name ? navTitle(String(route.name), findNav(String(route.name))?.title ?? t('shell.console')) : t('shell.console'),
 )
-const initial = computed(() => (session.user.value?.displayName || '医').slice(0, 1))
+const initial = computed(() => (session.user.value?.displayName || t('app.name')).slice(0, 1))
 
 function applyTheme() {
   document.documentElement.dataset.theme = theme.value
+}
+
+/** 语言切换只影响本机显示偏好，不写服务端；标题栏 aria 文案随之更新。 */
+function switchLocale() {
+  userMenuOpen.value = false
+  toggleLocale()
 }
 
 function toggleTheme() {
