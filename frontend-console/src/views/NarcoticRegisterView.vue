@@ -11,6 +11,8 @@
       </template>
     </PageHeader>
 
+    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="load" />
+
     <div class="kpi-strip">
       <div class="kpi">
         <div class="kpi-label">专册记录</div>
@@ -168,6 +170,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { pharmacyApi } from '@/api'
@@ -183,6 +186,8 @@ const status = ref('')
 const rows = ref<NarcoticRegister[]>([])
 const loading = ref(false)
 const busy = ref(false)
+/** 专册加载失败：非空即错误态，不能显示成"区间内没有记录"。 */
+const loadErr = ref('')
 
 const pendingCount = computed(() => rows.value.filter((r) => r.status === 'PENDING_RETURN').length)
 const returnedCount = computed(() => rows.value.filter((r) => r.status === 'RETURNED').length)
@@ -204,10 +209,12 @@ function shiftDays(days: number) {
 
 async function load() {
   loading.value = true
+  loadErr.value = ''
   try {
     rows.value = await pharmacyApi.narcoticRegister(from.value || undefined, to.value || undefined, status.value || undefined, 200)
   } catch (e) {
     toast.error('专册加载失败', errorText(e))
+    loadErr.value = errorText(e)
     rows.value = []
   } finally {
     loading.value = false

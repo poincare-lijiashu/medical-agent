@@ -11,6 +11,8 @@
       </template>
     </PageHeader>
 
+    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="load" />
+
     <div class="stats">
       <button
         v-for="s in statusTabs"
@@ -177,6 +179,7 @@ import InlineQc from '@/components/ai/InlineQc.vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { emrApi } from '@/api'
@@ -196,6 +199,8 @@ const status = ref('')
 const rows = ref<HomepageSummary[]>([])
 const loading = ref(false)
 const busy = ref(false)
+/** 首页列表加载失败：非空即错误态，不能显示成"当前筛选条件下没有首页"。 */
+const loadErr = ref('')
 
 /** 各状态的数量单独统计：rows 只含当前筛选状态，不能直接拿它算其他页签。 */
 const counts = ref<Record<string, number>>({})
@@ -252,6 +257,7 @@ async function loadCounts() {
 
 async function load() {
   loading.value = true
+  loadErr.value = ''
   try {
     const [list] = await Promise.all([
       emrApi.homepages(status.value || undefined, 100),
@@ -260,6 +266,7 @@ async function load() {
     rows.value = list
   } catch (e) {
     toast.error('首页列表加载失败', errorText(e))
+    loadErr.value = errorText(e)
     rows.value = []
   } finally {
     loading.value = false

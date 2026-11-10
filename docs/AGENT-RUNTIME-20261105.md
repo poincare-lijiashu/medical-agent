@@ -9125,6 +9125,56 @@ typecheck → 通过；build → 通过（入口 91.5KB gzip，仍在预算内�
 - 页面级空态/失败态/无权限态的统一性仍需逐页抽查（本批只锁了公共组件）；
 - 真实浏览器 + 读屏实测依赖可用登录环境（Java 网关 8080），暂未执行。
 
+## 216. 2026-11-11 页面级加载失败态统一（第 216 批）
+
+**范围**：13 个高频页面。修复“加载失败被渲染成空数据”的误判问题——医护看到
+“没有床位/没有患者”时，可能真的以为业务为空。
+
+**本批做了什么**
+
+1. **持久失败态**：以下页面主数据加载失败时渲染 `LoadError`（role=alert + 重试），
+   toast 仅作补充：
+   `Inpatient`、`OrdersWorkbench`、`Nursing`、`Consultation`、`HomepageQc`、
+   `PreopVisit`、`NarcoticRegister`、`SurgeryCharges`、`Knowledge`、
+   `HisWorkbench`、`InsuranceOps`。
+2. **重试走真实加载路径**：
+   - Inpatient：新增 `reloadAll`（先病区、再床位/在院；病区失败不用空病区覆盖页面）；
+   - Nursing / Orders：各自的 `reloadAll` / `refreshAll`；
+   - Preop / SurgeryCharges / Knowledge：`retryLoad` 根据当前上下文分流到正确加载函数；
+   - HisWorkbench：把原 `statusError` 归并为 `loadErr`，retry=`loadStatus`。
+3. **失败与空态区分**：加载开始时清空 `loadErr`；失败写入具体 `errorText`；
+   操作失败（提交/审批/删除/打印）仍走 toast，不混入页面失败态。
+4. **容器页错误上抛**：`InsuranceOpsView` 作为 tab 容器，接收 `InsuranceGroupingPanel`
+   的 `load-error` 事件；重试通过 key 重挂该面板（不整页刷新、不丢其它面板状态）。
+5. **统一组件**：`PharmacyConfigView`、`AiOverviewView` 的自定义错误条改用 `LoadError`
+   （保留原有 i18n 标题与重试）。
+6. **新回归锁** `tests/test_console_load_states.py`（5 条）：13 页必须引入并渲染
+   `LoadError` 且绑定 `@retry`；主加载 catch 必须写 `loadErr` 并在重载时清空；
+   InsuranceOps 面板上报链路；反向锁禁止“只有 toast/空列表”；LoadError 组件保留
+   `role=alert`、`retry` 事件与重试禁用。
+
+**本批设计决策（可回退）**
+
+- **失败 ≠ 空态**：医疗场景里“空”是业务结论，不能让网络错误伪装成它；
+  持久错误条 + 显式重试是底线。
+- **只改主数据加载**：把提交/审批失败也做成整页错误会打断工作流；那些继续 toast。
+- **容器页用事件而不是全局状态**：InsuranceOps 只在自己那一层展示错误，重试只重挂
+  出问题的面板，其它面板的数据不被清掉。
+
+**验证**
+
+```
+typecheck → 通过；build → 通过（dist 已更新）
+定向：加载失败态 → 5 passed
+全量：pytest --ignore=tests/e2e → 1830 passed / 1 skipped
+```
+
+**遗留**
+
+- AI 对话/病例/影像等“任务型”错误属于单次请求失败，仍以就地提示为主，未纳入本批；
+- 无权限态（403）在各页是否统一，尚未逐页审计。
+
+
 
 
 

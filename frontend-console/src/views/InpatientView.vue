@@ -5,11 +5,13 @@
       :sub="`病区床位与在院患者 · 入出院 / 分床转床 / 预交金 / 欠费预警 · 当前角色 ${role}`"
     >
       <template #actions>
-        <button class="btn" type="button" :disabled="loading" @click="reloadWard">
+        <button class="btn" type="button" :disabled="loading" @click="reloadAll">
           <AppIcon name="refresh" :size="15" /> 刷新
         </button>
       </template>
     </PageHeader>
+
+    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="reloadAll" />
 
     <div class="kpi-strip">
       <KpiCard label="在院患者" :value="activeCount" unit="人" :meta="`含待入科 ${pendingAdmitCount} 人`" />
@@ -470,6 +472,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, empiApi } from '@/api'
@@ -491,6 +494,8 @@ import { ageOf, dateTime, genderLabel, money } from '@/utils/format'
 const role = computed(() => session.roleLabel.value)
 const loading = ref(false)
 const busy = ref(false)
+/** 主数据加载失败：非空即错误态，不能退化成"没有患者/床位"。 */
+const loadErr = ref('')
 
 const canAdmit = computed(() => hasPermission('inpatient:admission:create'))
 const canAssignBed = computed(() => hasPermission('inpatient:bed:assign'))
@@ -547,6 +552,7 @@ async function loadWards() {
     }
   } catch (e) {
     toast.error('病区加载失败', errorText(e))
+    loadErr.value = errorText(e)
     wards.value = []
   }
 }
@@ -555,6 +561,7 @@ async function reloadWard() {
   if (!selectedWardId.value) return
   const wardId = selectedWardId.value
   loading.value = true
+  loadErr.value = ''
   try {
     const [bedList, inHospital, admitted] = await Promise.all([
       clinicalApi.beds(wardId),
@@ -579,11 +586,19 @@ async function reloadWard() {
   } catch (e) {
     if (selectedWardId.value !== wardId) return
     toast.error('住院数据加载失败', errorText(e))
+    loadErr.value = errorText(e)
     beds.value = []
     admissions.value = []
   } finally {
     if (selectedWardId.value === wardId) loading.value = false
   }
+}
+
+/** 病区与床位/在院数据都算主数据：先拉病区，失败时不再用空病区覆盖页面。 */
+async function reloadAll() {
+  loadErr.value = ''
+  await loadWards()
+  if (!loadErr.value) await reloadWard()
 }
 
 /* ------------------------------ 入院登记 ------------------------------ */
@@ -832,8 +847,7 @@ onMounted(async () => {
   } catch {
     /* 科室名失败不影响住院主流程 */
   }
-  await loadWards()
-  await reloadWard()
+  await reloadAll()
 })
 </script>
 

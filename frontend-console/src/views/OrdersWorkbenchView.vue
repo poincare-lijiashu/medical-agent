@@ -11,6 +11,8 @@
       </template>
     </PageHeader>
 
+    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="refreshAll" />
+
     <!-- 患者上下文 -->
     <section class="card ctx">
       <div class="ctx-search">
@@ -778,6 +780,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi, empiApi } from '@/api'
@@ -800,6 +803,8 @@ import { ageOf, date, dateTime, genderLabel, money } from '@/utils/format'
 
 const busy = ref(false)
 const loading = ref(false)
+/** 基础数据（科室/频次/医嘱/收费）加载失败：非空即错误态。 */
+const loadErr = ref('')
 const updatedAt = ref('')
 
 function stamp() {
@@ -900,6 +905,7 @@ function visitTypeLabel(type: string) {
 
 async function loadVisits(patientId: string) {
   visitsLoading.value = true
+  loadErr.value = ''
   selectedVisit.value = null
   orders.value = []
   charge.value = null
@@ -910,6 +916,7 @@ async function loadVisits(patientId: string) {
     if (active) await pickVisit(active)
   } catch (e) {
     toast.error('就诊记录加载失败', errorText(e))
+    loadErr.value = errorText(e)
     visits.value = []
   } finally {
     visitsLoading.value = false
@@ -1206,6 +1213,7 @@ async function loadOrders() {
   const visit = selectedVisit.value
   if (!visit) return
   ordersLoading.value = true
+  loadErr.value = ''
   try {
     const list = await clinicalApi.orders(visit.id)
     // 期间切换了就诊：丢弃旧就诊的医嘱，避免写进新表头。
@@ -1215,6 +1223,7 @@ async function loadOrders() {
   } catch (e) {
     if (selectedVisit.value?.id !== visit.id) return
     toast.error('医嘱加载失败', errorText(e))
+    loadErr.value = errorText(e)
   } finally {
     if (selectedVisit.value?.id === visit.id) ordersLoading.value = false
   }
@@ -1503,12 +1512,14 @@ async function startVisit() {
 
 async function refreshAll() {
   loading.value = true
+  loadErr.value = ''
   try {
     departments.value = await clinicalApi.departments()
     frequencies.value = await clinicalApi.frequencies()
     if (selectedVisit.value) await Promise.all([loadOrders(), loadCharge()])
   } catch (e) {
     toast.error('基础数据加载失败', errorText(e))
+    loadErr.value = errorText(e)
   } finally {
     loading.value = false
   }

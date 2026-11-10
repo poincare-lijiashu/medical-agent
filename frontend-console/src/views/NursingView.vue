@@ -11,6 +11,8 @@
       </template>
     </PageHeader>
 
+    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="reloadAll" />
+
     <div class="card filter-bar">
       <label class="field ward-pick">
         <span class="label">病区</span>
@@ -299,6 +301,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { clinicalApi } from '@/api'
@@ -330,6 +333,8 @@ const loading = ref(false)
 const loadingPatients = ref(false)
 const loadingDetail = ref(false)
 const busy = ref(false)
+/** 病区 / 在院患者加载失败：非空即错误态，不能显示成"暂无在院患者"。 */
+const loadErr = ref('')
 
 const orderRows = computed(() =>
   orders.value.filter((o) => {
@@ -366,6 +371,7 @@ async function loadWards() {
     }
   } catch (e) {
     toast.error('病区加载失败', errorText(e))
+    loadErr.value = errorText(e)
     wards.value = []
   }
 }
@@ -374,6 +380,7 @@ async function loadPatients() {
   if (!selectedWardId.value) return
   const wardId = selectedWardId.value
   loadingPatients.value = true
+  loadErr.value = ''
   try {
     const list = await clinicalApi.admissions(wardId, 'IN_HOSPITAL')
     if (selectedWardId.value !== wardId) return
@@ -392,6 +399,7 @@ async function loadPatients() {
   } catch (e) {
     if (selectedWardId.value !== wardId) return
     toast.error('在院患者加载失败', errorText(e))
+    loadErr.value = errorText(e)
     patients.value = []
   } finally {
     if (selectedWardId.value === wardId) loadingPatients.value = false
@@ -407,6 +415,7 @@ async function loadDetail() {
   const admission = selectedAdmission.value
   if (!admission) return
   loadingDetail.value = true
+  loadErr.value = ''
   try {
     const [orderList, execList] = await Promise.all([
       clinicalApi.orders(admission.visitId),
@@ -418,6 +427,7 @@ async function loadDetail() {
   } catch (e) {
     if (selectedAdmission.value?.id !== admission.id) return
     toast.error('护理执行数据加载失败', errorText(e))
+    loadErr.value = errorText(e)
     orders.value = []
     executions.value = []
   } finally {
@@ -427,9 +437,10 @@ async function loadDetail() {
 
 async function reloadAll() {
   loading.value = true
+  loadErr.value = ''
   try {
     await loadWards()
-    await loadPatients()
+    if (!loadErr.value) await loadPatients()
   } finally {
     loading.value = false
   }
@@ -526,13 +537,7 @@ async function submitCorrect() {
 }
 
 onMounted(async () => {
-  loading.value = true
-  try {
-    await loadWards()
-    await loadPatients()
-  } finally {
-    loading.value = false
-  }
+  await reloadAll()
 })
 </script>
 

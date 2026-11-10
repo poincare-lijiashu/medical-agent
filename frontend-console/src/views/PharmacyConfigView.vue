@@ -8,16 +8,13 @@
       </template>
     </PageHeader>
 
-    <div v-if="loadErr" class="sheet notice">
-      <div class="notice-body">
-        <AppIcon name="alert" :size="18" />
-        <div>
-          <strong>{{ t('pharmCfg.toast.loadFail') }}</strong>
-          <p>{{ loadErr }}</p>
-        </div>
-      </div>
-      <button class="btn btn--sm" type="button" :disabled="loading" @click="load">{{ t('pharmCfg.retry') }}</button>
-    </div>
+    <LoadError
+      v-if="loadErr"
+      :title="t('pharmCfg.toast.loadFail')"
+      :message="loadErr"
+      :retrying="loading"
+      @retry="load"
+    />
 
     <div class="kpi-strip">
       <KpiCard :label="t('pharmCfg.kpi.drugs')" :value="stats.drugs ?? 0" :unit="t('pharmCfg.unit.kind')" :meta="t('pharmCfg.kpi.drugsMeta')" />
@@ -356,6 +353,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {

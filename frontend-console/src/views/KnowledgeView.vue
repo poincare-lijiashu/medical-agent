@@ -11,6 +11,8 @@
       </template>
     </PageHeader>
 
+    <LoadError v-if="loadErr" :message="loadErr" @retry="retryLoad" />
+
     <div class="kb">
       <aside class="sheet spaces">
         <div class="sheet-head">
@@ -223,6 +225,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import { kbApi } from '@/api'
@@ -236,6 +239,8 @@ const documents = ref<KbDocument[]>([])
 const stats = ref({ documents: 0, readyDocuments: 0, chunks: 0 })
 const loadingSpaces = ref(false)
 const busy = ref(false)
+/** 空间 / 文档加载失败：非空即错误态，不能显示成"尚未加入任何知识空间"。 */
+const loadErr = ref('')
 const tab = ref<'search' | 'answer'>('search')
 const mode = ref('HYBRID')
 const query = ref('')
@@ -273,6 +278,7 @@ function matchLabel(m: string) {
 
 async function loadSpaces() {
   loadingSpaces.value = true
+  loadErr.value = ''
   try {
     const all = await kbApi.spaces(50)
     // 已归档空间后端拒绝文档与检索访问，列表里不展示，避免点进去必然报错
@@ -280,6 +286,7 @@ async function loadSpaces() {
     if (!space.value && spaces.value.length) await selectSpace(spaces.value[0])
   } catch (e) {
     toast.error('知识空间加载失败', errorText(e))
+    loadErr.value = errorText(e)
   } finally {
     loadingSpaces.value = false
   }
@@ -301,6 +308,7 @@ async function selectSpace(s: KbSpace) {
 async function loadDocuments() {
   const current = space.value
   if (!current) return
+  loadErr.value = ''
   try {
     const list = await kbApi.documents(current.id, undefined, 100)
     if (space.value?.id !== current.id) return
@@ -308,7 +316,14 @@ async function loadDocuments() {
   } catch (e) {
     if (space.value?.id !== current.id) return
     toast.error('文档加载失败', errorText(e))
+    loadErr.value = errorText(e)
   }
+}
+
+/** 主数据入口：已选空间时重载空间内容，否则重新拉空间列表。 */
+function retryLoad() {
+  if (space.value) void selectSpace(space.value)
+  else void loadSpaces()
 }
 
 async function loadStats() {

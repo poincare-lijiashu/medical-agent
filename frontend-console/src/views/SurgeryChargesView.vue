@@ -13,6 +13,8 @@
 
     <PatientVisitSearch @select="onSelect" />
 
+    <LoadError v-if="loadErr" :message="loadErr" @retry="retryLoad" />
+
     <div v-if="!visit" class="card">
       <EmptyState
         art="orders"
@@ -158,6 +160,7 @@ import { computed, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
@@ -176,6 +179,8 @@ const preview = ref<SurgeryChargePreview | null>(null)
 const previewLoading = ref(false)
 const busy = ref(false)
 const confirmOpen = ref(false)
+/** 手术病例 / 收费预览加载失败：非空即错误态，不能显示成"该就诊没有手术病例"。 */
+const loadErr = ref('')
 
 const canSettle = computed(() => hasPermission('clinical:charge:settle'))
 
@@ -184,20 +189,28 @@ const chargedLines = computed(() => (preview.value?.lines ?? []).filter((l) => l
 const pendingLines = computed(() => (preview.value?.lines ?? []).filter((l) => !l.charged))
 const chargedAmount = computed(() => chargedLines.value.reduce((sum, l) => sum + l.amount, 0))
 
+async function loadCases() {
+  const currentVisit = visit.value
+  if (!currentVisit) return
+  casesLoading.value = true
+  loadErr.value = ''
+  try {
+    cases.value = await surgeryApi.cases(currentVisit.id)
+    if (cases.value.length) await selectCase(cases.value[0])
+  } catch (e) {
+    toast.error('手术病例加载失败', errorText(e))
+    loadErr.value = errorText(e)
+  } finally {
+    casesLoading.value = false
+  }
+}
+
 async function onSelect(payload: { patient: Patient; visit: Visit }) {
   visit.value = payload.visit
   cases.value = []
   current.value = null
   preview.value = null
-  casesLoading.value = true
-  try {
-    cases.value = await surgeryApi.cases(payload.visit.id)
-    if (cases.value.length) await selectCase(cases.value[0])
-  } catch (e) {
-    toast.error('手术病例加载失败', errorText(e))
-  } finally {
-    casesLoading.value = false
-  }
+  await loadCases()
 }
 
 async function selectCase(c: SurgeryCase) {
@@ -208,14 +221,22 @@ async function selectCase(c: SurgeryCase) {
 async function loadPreview() {
   if (!current.value) return
   previewLoading.value = true
+  loadErr.value = ''
   try {
     preview.value = await surgeryApi.chargePreview(current.value.id)
   } catch (e) {
     toast.error('收费预览加载失败', errorText(e))
+    loadErr.value = errorText(e)
     preview.value = null
   } finally {
     previewLoading.value = false
   }
+}
+
+/** 主数据入口：有选中病例时重载收费预览，否则重新拉病例列表。 */
+function retryLoad() {
+  if (current.value) void loadPreview()
+  else void loadCases()
 }
 
 async function submit() {

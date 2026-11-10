@@ -33,9 +33,12 @@
         <div v-if="statusLoading" class="loading">
           <div v-for="i in 4" :key="i" class="skeleton" style="height: 38px" />
         </div>
-        <div v-else-if="statusError" class="notice notice--danger">
-          {{ statusError }}
-        </div>
+        <LoadError
+          v-else-if="loadErr"
+          :message="loadErr"
+          :retrying="statusLoading"
+          @retry="loadStatus"
+        />
         <template v-else-if="status">
           <div class="grid-4">
             <div class="kv"><span>适配器</span><strong class="mono">{{ status.adapter || 'none' }}</strong></div>
@@ -159,6 +162,7 @@ import { computed, onMounted, ref } from 'vue'
 import InlineRxAudit from '@/components/ai/InlineRxAudit.vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { aiGet, errorText } from '@/api/http'
 
@@ -199,7 +203,8 @@ interface HisOrder {
 
 const status = ref<HisStatus | null>(null)
 const statusLoading = ref(false)
-const statusError = ref('')
+/** 集成状态加载失败：非空即错误态，不能显示成"状态未知"。 */
+const loadErr = ref('')
 
 const patientId = ref('')
 const patient = ref<HisPatient | null>(null)
@@ -244,12 +249,12 @@ const rxItems = computed(() =>
 
 async function loadStatus() {
   statusLoading.value = true
-  statusError.value = ''
+  loadErr.value = ''
   try {
     status.value = await aiGet<HisStatus>('/medical/integration/status')
   } catch (e) {
     status.value = null
-    statusError.value = `集成状态读取失败：${errorText(e)}`
+    loadErr.value = `集成状态读取失败：${errorText(e)}`
   } finally {
     statusLoading.value = false
   }

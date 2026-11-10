@@ -8,13 +8,13 @@
       </template>
     </PageHeader>
 
-    <div v-if="loadErr" class="notice">
-      <AppIcon name="alert" :size="16" />
-      <div>
-        <strong>{{ t('aiOverview.errorTitle') }}</strong>
-        <p>{{ loadErr }}</p>
-      </div>
-    </div>
+    <LoadError
+      v-if="loadErr"
+      :title="t('aiOverview.errorTitle')"
+      :message="loadErr"
+      :retrying="loading"
+      @retry="load"
+    />
 
     <div class="kpi-strip">
       <KpiCard :label="t('aiOverview.kpi.pending')" :value="d?.pending ?? '—'" />
@@ -73,6 +73,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { aiOverview, type AiOverview } from '@/api/ai'
 import { errorText } from '@/api/http'

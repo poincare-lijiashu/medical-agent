@@ -60,16 +60,23 @@
       </span>
     </div>
 
+    <LoadError v-if="loadErr" :message="loadErr" @retry="reloadActivePanel" />
+
     <InsuranceCatalogPanel v-if="tab === 'catalog'" />
     <InsuranceExportPanel v-else-if="tab === 'export'" />
-    <InsuranceGroupingPanel v-else-if="tab === 'grouping'" />
+    <InsuranceGroupingPanel
+      v-else-if="tab === 'grouping'"
+      :key="panelKey"
+      @load-error="onPanelError"
+    />
     <InsuranceRealtimePanel v-else />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import InsuranceCatalogPanel from '@/components/domain/InsuranceCatalogPanel.vue'
 import InsuranceExportPanel from '@/components/domain/InsuranceExportPanel.vue'
@@ -79,6 +86,27 @@ import { session } from '@/stores/session'
 
 const role = session.roleLabel
 const tab = ref<'catalog' | 'export' | 'grouping' | 'realtime'>('catalog')
+
+/**
+ * 目录 / 报盘 / 实时结算面板各自渲染 LoadError；DRG/DIP 面板按 tab 懒挂载，
+ * 这里汇总它的加载失败，避免失败退化成"没有分组方案"。
+ */
+const loadErr = ref('')
+const panelKey = ref(0)
+
+function onPanelError(message: string) {
+  loadErr.value = message
+}
+
+/** 重新挂载当前面板即重新拉起主数据。 */
+function reloadActivePanel() {
+  loadErr.value = ''
+  panelKey.value += 1
+}
+
+watch(tab, () => {
+  loadErr.value = ''
+})
 </script>
 
 <style scoped>

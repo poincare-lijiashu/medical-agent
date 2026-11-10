@@ -369,6 +369,9 @@ const canManage = computed(() => hasPermission('insurance:grouping:manage'))
 const busy = ref(false)
 const loading = ref(false)
 
+/** 主数据加载失败交给页面统一渲染持久错误态 + 重试。 */
+const emit = defineEmits<{ 'load-error': [message: string] }>()
+
 const schemes = ref<PaymentScheme[]>([])
 const schemesLoading = ref(false)
 const schemeCode = ref('')
@@ -380,6 +383,7 @@ const rules = ref<PaymentGroupRule[]>([])
 async function loadSchemes(selectCode?: string) {
   schemesLoading.value = true
   loading.value = true
+  emit('load-error', '')
   try {
     schemes.value = await insuranceGroupingApi.schemes()
     const preferred = selectCode ?? schemeCode.value
@@ -391,6 +395,7 @@ async function loadSchemes(selectCode?: string) {
     await loadSchemeDetail()
   } catch (e) {
     toast.error('支付方案加载失败', errorText(e))
+    emit('load-error', errorText(e))
     schemes.value = []
     groups.value = []
     rules.value = []
@@ -407,6 +412,7 @@ async function loadSchemeDetail() {
     return
   }
   loading.value = true
+  emit('load-error', '')
   try {
     const [g, r] = await Promise.all([
       insuranceGroupingApi.groups(schemeCode.value),
@@ -416,6 +422,7 @@ async function loadSchemeDetail() {
     rules.value = r
   } catch (e) {
     toast.error('分组与规则加载失败', errorText(e))
+    emit('load-error', errorText(e))
     groups.value = []
     rules.value = []
   } finally {

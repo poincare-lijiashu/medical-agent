@@ -13,6 +13,8 @@
 
     <PatientVisitSearch @select="onSelect" />
 
+    <LoadError v-if="loadErr" :message="loadErr" @retry="retryLoad" />
+
     <div v-if="!visit" class="card">
       <EmptyState
         art="orders"
@@ -213,6 +215,7 @@ import { computed, reactive, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
@@ -229,6 +232,8 @@ const record = ref<PreopVisit | null>(null)
 const recordLoading = ref(false)
 const busy = ref(false)
 const confirmSign = ref(false)
+/** 手术病例 / 访视单加载失败：非空即错误态，不能显示成"该就诊没有手术病例"。 */
+const loadErr = ref('')
 
 const asaGrades = ['I', 'II', 'III', 'IV', 'V', 'VI']
 const mallampatiGrades = ['I', 'II', 'III', 'IV']
@@ -288,22 +293,30 @@ function fillForm(r: PreopVisit | null) {
   form.riskNote = r?.riskNote ?? ''
 }
 
-async function onSelect(payload: { patient: Patient; visit: Visit }) {
-  visit.value = payload.visit
-  cases.value = []
-  current.value = null
-  record.value = null
+async function loadCases() {
+  const currentVisit = visit.value
+  if (!currentVisit) return
   casesLoading.value = true
+  loadErr.value = ''
   try {
-    cases.value = await surgeryApi.cases(payload.visit.id)
+    cases.value = await surgeryApi.cases(currentVisit.id)
     // 访视单只对未开始的手术有意义：优先选中"已计划"的病例
     const first = cases.value.find((c) => c.status === 'PLANNED') ?? cases.value[0]
     if (first) await selectCase(first)
   } catch (e) {
     toast.error('手术病例加载失败', errorText(e))
+    loadErr.value = errorText(e)
   } finally {
     casesLoading.value = false
   }
+}
+
+async function onSelect(payload: { patient: Patient; visit: Visit }) {
+  visit.value = payload.visit
+  cases.value = []
+  current.value = null
+  record.value = null
+  await loadCases()
 }
 
 /** 请求代次：切换病例时旧响应必须被丢弃，否则 A 的 ASA/禁食会填进 B。 */
@@ -313,6 +326,7 @@ async function selectCase(c: SurgeryCase) {
   const seq = ++recordSeq
   current.value = c
   recordLoading.value = true
+  loadErr.value = ''
   try {
     const next = await surgeryApi.preopVisit(c.id)
     if (seq !== recordSeq || current.value?.id !== c.id) return
@@ -321,6 +335,7 @@ async function selectCase(c: SurgeryCase) {
   } catch (e) {
     if (seq !== recordSeq) return
     toast.error('访视单加载失败', errorText(e))
+    loadErr.value = errorText(e)
     record.value = null
     fillForm(null)
   } finally {
@@ -330,6 +345,12 @@ async function selectCase(c: SurgeryCase) {
 
 function reloadRecord() {
   if (current.value) void selectCase(current.value)
+}
+
+/** 主数据入口：有选中病例时重载访视单，否则重新拉病例列表。 */
+function retryLoad() {
+  if (current.value) void selectCase(current.value)
+  else void loadCases()
 }
 
 function payload() {

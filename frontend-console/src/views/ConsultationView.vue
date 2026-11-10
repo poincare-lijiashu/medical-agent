@@ -11,6 +11,8 @@
       </template>
     </PageHeader>
 
+    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="load" />
+
     <div class="kpi-strip">
       <div class="kpi" :class="{ 'is-warn': requestedCount > 0 }">
         <div class="kpi-label">待受理</div>
@@ -218,6 +220,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import PatientVisitSearch from '@/components/domain/PatientVisitSearch.vue'
@@ -232,6 +235,8 @@ const rows = ref<Consultation[]>([])
 const departments = ref<Dept[]>([])
 const loading = ref(false)
 const busy = ref(false)
+/** 会诊列表加载失败：非空即错误态，不能显示成"没有会诊"。 */
+const loadErr = ref('')
 
 const patient = ref<Patient | null>(null)
 const visit = ref<Visit | null>(null)
@@ -291,10 +296,12 @@ function onPickVisit(payload: { patient: Patient; visit: Visit }) {
 
 async function load() {
   loading.value = true
+  loadErr.value = ''
   try {
     rows.value = await clinicalApi.consultations(status.value || undefined, 200)
   } catch (e) {
     toast.error('会诊列表加载失败', errorText(e))
+    loadErr.value = errorText(e)
     rows.value = []
   } finally {
     loading.value = false
