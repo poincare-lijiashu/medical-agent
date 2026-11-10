@@ -62,6 +62,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN'],
   },
   {
+    // 第 197 批：AI 知识库（与控制台 HIS 侧「知识库」是两套数据）
+    name: 'ai-kb',
+    path: '/ai/kb',
+    title: 'AI 知识库',
+    hint: '文档上传与向量化 · 切片预览 · 删除 · 完整性检查',
+    icon: 'kb',
+    group: 'AI 智能',
+    roles: ['ADMIN'],
+  },
+  {
     name: 'ops-insights',
     path: '/ops-insights',
     title: '运营洞察',

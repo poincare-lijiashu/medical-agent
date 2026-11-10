@@ -388,6 +388,10 @@ export function aiPost<T>(path: string, body?: unknown, signal?: AbortSignal) {
   return aiRequest<T>(path, { method: 'POST', body, signal })
 }
 
+export function aiDelete<T>(path: string, signal?: AbortSignal) {
+  return aiRequest<T>(path, { method: 'DELETE', signal })
+}
+
 export interface AiDownloadResult {
   blob: Blob
   /** 服务端回显的导出行数（缺失按 0） */

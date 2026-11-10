@@ -8,7 +8,7 @@
  * 注意：Python 端点返回**裸 JSON**（无 `{code,data}` 信封），
  * 错误体是 FastAPI 的 `{detail}`；不要用 `get()`（那是 Java 信封通道）。
  */
-import { aiGet, aiPost } from './http'
+import { aiDelete, aiGet, aiPost } from './http'
 
 /** `/api/v1/medical/overview` 的最小契约（其余字段按需再补）。 */
 export interface AiOverview {
@@ -426,4 +426,83 @@ export interface AiAppLog {
 
 export function aiAppLogs(lines = 200): Promise<AiAppLog> {
   return aiGet<AiAppLog>('/medical/admin/logs', { lines })
+}
+
+/* ------------------------------------------------------------------ *
+ * AI 知识库管理（第 197 批，仅 admin）
+ *
+ * 上传走 JSON `data_b64`（与后端契约一致，不是 multipart）；大文件立即返回
+ * `task_id`，前端 2s 轮询 `/admin/kb/upload/status/{id}` 直到 done/error。
+ * 与控制台 HIS 侧的「知识库」（/api/v2）是两套数据，互不影响。
+ * ------------------------------------------------------------------ */
+
+export interface AiKbDoc {
+  name?: string
+  /** builtin = 内置库（可删除，重跑种子脚本恢复） */
+  kind?: string
+  chunks?: number
+  ts?: string
+  doc_tag?: string
+}
+
+export interface AiKbList {
+  total?: number
+  uploaded?: number
+  docs?: AiKbDoc[]
+}
+
+export interface AiKbUploadResult {
+  mode?: string
+  task_id?: string
+  inserted?: number
+  name?: string
+}
+
+export interface AiKbTask {
+  status?: string
+  progress?: number
+  total?: number
+  error?: string
+  result?: { inserted?: number }
+}
+
+export interface AiKbIssue {
+  doc_tag?: string
+  name?: string
+  chunks?: number
+  issues?: string[]
+}
+
+export interface AiKbIntegrity {
+  summary?: { scanned?: number }
+  issues?: AiKbIssue[]
+  vectorCheck?: boolean
+}
+
+export interface AiKbPreview {
+  chunks?: { content?: string; source?: string }[]
+}
+
+export function aiKbList(): Promise<AiKbList> {
+  return aiGet<AiKbList>('/medical/admin/kb')
+}
+
+export function aiKbUpload(name: string, dataB64: string, force = false): Promise<AiKbUploadResult> {
+  return aiPost<AiKbUploadResult>('/medical/admin/kb/upload', { name, data_b64: dataB64, force })
+}
+
+export function aiKbTask(taskId: string): Promise<AiKbTask> {
+  return aiGet<AiKbTask>(`/medical/admin/kb/upload/status/${encodeURIComponent(taskId)}`)
+}
+
+export function aiKbIntegrity(checkVectors = true): Promise<AiKbIntegrity> {
+  return aiGet<AiKbIntegrity>('/medical/admin/kb/integrity', { check_vectors: checkVectors })
+}
+
+export function aiKbPreview(tag: string): Promise<AiKbPreview> {
+  return aiGet<AiKbPreview>(`/medical/admin/kb/${encodeURIComponent(tag)}/preview`)
+}
+
+export function aiKbDelete(tag: string): Promise<{ deleted?: string }> {
+  return aiDelete<{ deleted?: string }>(`/medical/admin/kb/${encodeURIComponent(tag)}`)
 }

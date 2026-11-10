@@ -46,6 +46,12 @@ const router = createRouter({
           component: () => import('@/views/AiDataView.vue'),
         },
         {
+          // 第 197 批：AI 知识库管理（仅管理员）
+          path: 'ai/kb',
+          name: 'ai-kb',
+          component: () => import('@/views/AiKbView.vue'),
+        },
+        {
           path: 'ops-insights',
           name: 'ops-insights',
           component: () => import('@/views/OpsInsightView.vue'),
