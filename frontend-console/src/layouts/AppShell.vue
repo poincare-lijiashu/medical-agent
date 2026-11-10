@@ -128,11 +128,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
-import { NAV_GROUPS, NAV_ITEMS, findNav } from '@/navigation'
+import { NAV_GROUPS, NAV_ITEMS, canSeeNav, findNav } from '@/navigation'
 import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
 import { issueHandoff } from '@/utils/sso'
 import { broadcastLogout, onRemoteLogout } from '@/utils/sessionBus'
-import { clearSession, hasPermission, session } from '@/stores/session'
+import { clearSession, session } from '@/stores/session'
 
 const route = useRoute()
 const router = useRouter()
@@ -160,7 +160,7 @@ const scopeLabel = computed(() => {
 const groups = computed(() =>
   NAV_GROUPS.map((name) => ({
     name,
-    items: NAV_ITEMS.filter((n) => n.group === name && (!n.permissions || hasPermission(n.permissions))),
+    items: NAV_ITEMS.filter((n) => n.group === name && canSeeNav(n)),
   })).filter((g) => g.items.length > 0),
 )
 

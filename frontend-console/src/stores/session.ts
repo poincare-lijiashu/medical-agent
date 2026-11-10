@@ -97,6 +97,18 @@ export function hasPermission(perm?: string | string[]): boolean {
   return list.some((p) => permissions.value.has(p))
 }
 
+/**
+ * 角色判定（第 191 批）：导航条目除权限点外还需要按角色收窄
+ * （审核中心只对 qc/admin/doctor/pharmacist 有意义，护士登录看见入口只会拿到 403）。
+ * 角色与后端一致用大写常量（ADMIN/DOCTOR/PHARMACIST/QC），比较时统一大写。
+ */
+export function hasRole(roles?: string | string[]): boolean {
+  if (!roles) return true
+  const list = Array.isArray(roles) ? roles : [roles]
+  const mine = new Set((state.user?.roles ?? []).map((r) => r.toUpperCase()))
+  return list.some((r) => mine.has(r.toUpperCase()))
+}
+
 export const session = {
   state,
   isLoggedIn: computed(() => Boolean(state.accessToken && state.user)),
@@ -149,4 +161,5 @@ export const session = {
     clearSession()
   },
   hasPermission,
+  hasRole,
 }

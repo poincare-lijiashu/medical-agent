@@ -16,30 +16,16 @@
       </div>
     </div>
 
-    <div class="stats">
-      <div class="stat">
-        <span class="stat-label">{{ t('aiOverview.kpi.pending') }}</span>
-        <span class="stat-value num">{{ d?.pending ?? '—' }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">{{ t('aiOverview.kpi.resolved') }}</span>
-        <span class="stat-value num">{{ d?.resolved ?? '—' }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">{{ t('aiOverview.kpi.kbDocs') }}</span>
-        <span class="stat-value num">
-          <span v-if="kbUnknown" :title="t('aiOverview.kbUnknownHint')">…</span>
-          <template v-else>{{ d?.kb_docs ?? '—' }}</template>
-        </span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">{{ t('aiOverview.kpi.events') }}</span>
-        <span class="stat-value num">{{ d?.events_total ?? '—' }}</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">{{ t('aiOverview.kpi.version') }}</span>
-        <span class="stat-value num">{{ d?.version ?? '—' }}</span>
-      </div>
+    <div class="kpi-strip">
+      <KpiCard :label="t('aiOverview.kpi.pending')" :value="d?.pending ?? '—'" />
+      <KpiCard :label="t('aiOverview.kpi.resolved')" :value="d?.resolved ?? '—'" />
+      <KpiCard
+        :label="t('aiOverview.kpi.kbDocs')"
+        :value="kbUnknown ? '…' : (d?.kb_docs ?? '—')"
+        :meta="kbUnknown ? t('aiOverview.kbUnknownHint') : undefined"
+      />
+      <KpiCard :label="t('aiOverview.kpi.events')" :value="d?.events_total ?? '—'" />
+      <KpiCard :label="t('aiOverview.kpi.version')" :value="d?.version ?? '—'" />
     </div>
 
     <div class="sheet">
@@ -86,6 +72,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import KpiCard from '@/components/ui/KpiCard.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { aiOverview, type AiOverview } from '@/api/ai'
 import { errorText } from '@/api/http'

@@ -1,3 +1,5 @@
+import { hasPermission, hasRole } from '@/stores/session'
+
 export interface NavItem {
   name: string
   path: string
@@ -8,6 +10,8 @@ export interface NavItem {
   group: string
   /** 任一权限点命中即可见；为空表示登录即可见 */
   permissions?: string[]
+  /** 任一角色命中即可见（第 191 批）；为空表示不限角色 */
+  roles?: string[]
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -36,6 +40,16 @@ export const NAV_ITEMS: NavItem[] = [
     hint: 'AI 运行状态：待双人核对 · 知识库文档 · 最近 AI 活动',
     icon: 'spark',
     group: 'AI 智能',
+  },
+  {
+    // 第 191 批：审核中心迁入控制台（角色矩阵与 AI 中台一致：qc/admin/doctor/pharmacist）
+    name: 'ai-review',
+    path: '/ai/review',
+    title: '审核中心',
+    hint: '高危双人核对 · 开药待审 · 会诊协助 · 病例库',
+    icon: 'shield',
+    group: 'AI 智能',
+    roles: ['ADMIN', 'DOCTOR', 'PHARMACIST', 'QC'],
   },
   {
     name: 'ops-insights',
@@ -428,4 +442,18 @@ export const NAV_GROUPS = [
 
 export function findNav(name: string): NavItem | undefined {
   return NAV_ITEMS.find((n) => n.name === name)
+}
+
+/**
+ * 导航可见性（第 191 批）：权限点 + 角色两道门。
+ *
+ * 只加路由不加分组会让整组不渲染（第 126/178 批踩过两次），
+ * 只加分组不加角色门则会让无权限角色看见入口、点进去吃 403——
+ * 侧栏、命令面板与路由守卫必须共用这一个判定。
+ */
+export function canSeeNav(item: NavItem | undefined): boolean {
+  if (!item) return true
+  if (item.roles && !hasRole(item.roles)) return false
+  if (item.permissions && !hasPermission(item.permissions)) return false
+  return true
 }

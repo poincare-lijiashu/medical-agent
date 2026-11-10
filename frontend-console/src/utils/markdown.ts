@@ -1,0 +1,55 @@
+/**
+ * 受限 Markdown 渲染（第 191 批从 `frontend-vue/src/utils/assist.js` 的 `md()` 迁移）。
+ *
+ * 为什么不是通用 markdown 库：AI 回答里混有 LaTeX 片段与自由文本，只需要
+ * 「粗体 / 标题 / 列表 / 换行」这几种排版；更要紧的是安全边界——
+ * **先整体转义 HTML，再做受限变换**，因此 `v-html` 消费方拿到的字符串
+ * 不含任何可注入标签（与旧前端同一净化策略，切换前后渲染结果一致）。
+ */
+
+export function escapeHtml(input: unknown): string {
+  return String(input ?? '').replace(/[<>&"']/g, (c) => {
+    switch (c) {
+      case '<':
+        return '&lt;'
+      case '>':
+        return '&gt;'
+      case '&':
+        return '&amp;'
+      case '"':
+        return '&quot;'
+      default:
+        return '&#39;'
+    }
+  })
+}
+
+/** 安全 Markdown：先转义，再渲染粗体/标题/列表/换行 + 轻量 LaTeX 清理。 */
+export function md(text: string | null | undefined): string {
+  let out = escapeHtml(text)
+  out = out
+    .replace(/\\times/g, '×')
+    .replace(/\\approx/g, '≈')
+    .replace(/\\text\{([^}]*)\}/g, '$1')
+    .replace(/\\[a-zA-Z]+/g, '')
+    .replace(/\$/g, '')
+  out = out.replace(/^#{1,4}\s*(.+)$/gm, '<b>$1</b>')
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+  out = out.replace(/(^|[^*\n])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+  out = out.replace(/^[ \t]*[•*\-–]\s+(.+)$/gm, '• $1')
+  out = out.replace(/^[ \t]*(\d+)[.、]\s+(.+)$/gm, '$1. $2')
+  return out.replace(/\n/g, '<br>')
+}
+
+/** 会诊问题拆分：病例原文 / AI 多智能体会诊底稿（与旧前端 splitConsultQuestion 同实现）。 */
+export function splitConsultQuestion(question: string | null | undefined): {
+  caseText: string
+  draft: string
+} {
+  const text = String(question ?? '')
+  const marker = '【AI 多智能体会诊底稿】'
+  const at = text.indexOf(marker)
+  return at >= 0
+    ? { caseText: text.slice(0, at).trim(), draft: text.slice(at + marker.length).trim() }
+    : { caseText: text.trim(), draft: '' }
+}

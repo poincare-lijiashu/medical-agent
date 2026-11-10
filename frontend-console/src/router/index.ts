@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { findNav } from '@/navigation'
-import { hasPermission, session } from '@/stores/session'
+import { canSeeNav, findNav } from '@/navigation'
+import { session } from '@/stores/session'
 
 const router = createRouter({
   // 生产托管在 /console/ 子路径（vite base 同步为 /console/）：必须用 BASE_URL，
@@ -32,6 +32,12 @@ const router = createRouter({
           path: 'ai-overview',
           name: 'ai-overview',
           component: () => import('@/views/AiOverviewView.vue'),
+        },
+        {
+          // 第 191 批：审核中心迁入控制台（AI 中台 /api/v1，同一枚登录令牌）
+          path: 'ai/review',
+          name: 'ai-review',
+          component: () => import('@/views/AiReviewView.vue'),
         },
         {
           path: 'ops-insights',
@@ -182,8 +188,8 @@ router.beforeEach((to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   const item = to.name ? findNav(String(to.name)) : undefined
-  if (item?.permissions && !hasPermission(item.permissions)) {
-    return { name: 'forbidden', query: { from: item.title } }
+  if (!canSeeNav(item)) {
+    return { name: 'forbidden', query: { from: item?.title } }
   }
   return true
 })

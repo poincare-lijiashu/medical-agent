@@ -287,6 +287,11 @@ export function errorText(e: unknown): string {
     if (e.status === 403) return `需要权限：${e.message}`
     return e.message
   }
+  // AI 中台（裸 JSON）与 Java 通道同样是 403 语义，提示必须一致，避免"只显示一句后端原文"
+  if (e instanceof AiRequestError) {
+    if (e.status === 403) return `需要权限：${e.message}`
+    return e.message
+  }
   if (e instanceof Error) return e.message
   return '操作失败，请稍后重试'
 }

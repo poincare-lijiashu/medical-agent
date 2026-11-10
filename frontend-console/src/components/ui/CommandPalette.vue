@@ -59,9 +59,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
-import { NAV_ITEMS } from '@/navigation'
+import { NAV_ITEMS, canSeeNav } from '@/navigation'
 import { navHint, navTitle, t } from '@/i18n'
-import { hasPermission } from '@/stores/session'
 
 interface Command {
   id: string
@@ -87,7 +86,7 @@ const inputEl = ref<HTMLInputElement | null>(null)
 const activeId = ref('')
 
 const commands = computed<Command[]>(() => {
-  const nav: Command[] = NAV_ITEMS.filter((n) => !n.permissions || hasPermission(n.permissions)).map((n) => ({
+  const nav: Command[] = NAV_ITEMS.filter((n) => canSeeNav(n)).map((n) => ({
     id: `nav:${n.name}`,
     title: navTitle(n.name, n.title),
     hint: navHint(n.name, n.hint),
