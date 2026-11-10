@@ -77,7 +77,7 @@ def test_ai_http_methods_match_backend():
 
     src = AI_API.read_text(encoding="utf-8")
     calls = re.findall(
-        r"ai(Get|Post|Put|Delete|Stream|Download)(?:<[^;]{0,240}?>)?\(\s*'([^']+)'",
+        r"ai(Get|Post|Put|Delete|Stream|Download)(?:<[^();'\"]{0,300}>)?\(\s*'([^']+)'",
         src,
     )
     assert calls, "未解析到任何 AI 调用"

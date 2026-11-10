@@ -9418,6 +9418,50 @@ typecheck → 通过；build → 通过（入口 92.8KB gzip，预算内）
   需在 Java 侧加 ArchUnit/集成测试，或由 CI 导出 OpenAPI 后再比对；
 - 契约只校验“路径 + 方法”，不校验请求体字段；字段级契约需 OpenAPI/JSON Schema 对齐。
 
+## 223. 2026-11-11 Java（/api/v2）接口契约回归（第 223 批）
+
+**范围**：`frontend-console/src/api/index.ts` ↔ `platform/**` 下全部 Spring 控制器。
+上一批只锁了 AI 中台（`/api/v1`），Java 侧 390 个调用仍是“改名就 404、换方法就 405”
+的盲区；Java 服务名/前缀还受网关 `StripPrefix` 影响，人工走查极易看错。
+
+**本批做了什么**
+
+1. **静态解析控制器**：`platform/*/src/main/java/**` 中带 `@RestController` 的文件，
+   取类级 `@RequestMapping`（含 `{"/a","/b"}` 数组写法，取第一个对外路径）+ 方法级
+   `@Get/Post/Put/Delete/PatchMapping`；无路径注解（`@GetMapping`）按“类级前缀”处理。
+2. **按网关规则还原真实路径**：解析 `platform/gateway/.../application.yml` 的
+   `Path=/api/v2/{service}/**` + `StripPrefix=N`。`N=2`（clinical/pharmacy/material/
+   tech/emr/insurance/kb）服务内自带 `/{service}`；`N=3`（auth/empi/audit）服务内没有，
+   契约路径需补回服务段。`audit` 由 auth 服务承载，用一行 `SERVICE_OWNER` 例外表说明，
+   不靠目录名猜。
+3. **前端调用解析**：`get/post/put/upload/download/request`，同时支持单引号与模板字符串
+   （路径参数大量写成 `` `/clinical/visits/${id}` ``）；泛型段禁止出现括号/分号/引号，
+   避免 `get<A[]>(...)` 跨行吞掉后面的 `post<B>(...)` 造成假阳性。`request()` 的方法由
+   options 决定，静态不可判 → 只校验路径、不校验方法。
+4. **四类断言**（`tests/test_console_java_api_contract.py`，5 条）：解析规模（≥500 路由 /
+   ≥350 调用）、网关前缀规则（auth/empi=3、clinical=2）、路径存在性、方法一致性、
+   禁止前端自带网关前缀。动态段（前端 `${...}` / 后端 `{...}`）视为任意一段。
+5. **清理**：删除定位解析问题用的临时脚本，不留在仓库。
+
+**审计结果**
+
+- 390 个 `/api/v2` 调用全部能在控制器里找到对应路径，方法全部匹配（含 auth 的
+  `/auth/login|refresh|me|logout|sso/*|users|campuses|rbac`、`/audit/events`、
+  `/empi/patients`）；无前端自带前缀。本批为**纯质量门**，不改业务代码。
+
+**验证**
+
+```
+定向：Java 契约 + AI 契约 → 10 passed
+全量：pytest --ignore=tests/e2e → 1864 passed / 1 skipped
+```
+
+**遗留**
+
+- 契约只覆盖“路径 + 方法”，请求体字段与响应结构仍无机器校验（需 Java 侧导出 OpenAPI）；
+- 反向未校验：控制器里有、前端未使用的接口不报警（包含给其它客户端的只读/内部接口）；
+- 网关白名单、限流与权限点属运行时行为，静态解析覆盖不到，仍需联调环境验证。
+
 
 
 
