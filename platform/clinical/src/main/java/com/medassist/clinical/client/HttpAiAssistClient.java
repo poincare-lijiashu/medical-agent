@@ -46,6 +46,7 @@ public class HttpAiAssistClient implements AiAssistClient {
 
     private final RestClient client; // null = 未配置（调用时 503）
 
+    @org.springframework.beans.factory.annotation.Autowired
     public HttpAiAssistClient(ClinicalProperties props) {
         this(props, null);
     }

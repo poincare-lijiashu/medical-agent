@@ -613,6 +613,17 @@ public final class ClinicalModel {
     public record Ward(UUID id, String code, String name, UUID deptId, boolean enabled) {
     }
 
+    /**
+     * 病区占用汇总（第 188 批）：仪表盘一次取回全部病区的床位/在院/待入院计数。
+     *
+     * <p>为什么要有它：运营驾驶舱此前对每个病区各拉一次 beds + admissions
+     * （100 个病区 = 200 个请求），必然触发网关限流（429），页面整块降级为空态。
+     * 汇总接口只做两条聚合 SQL，请求数从 O(病区数) 降到 O(1)。
+     */
+    public record WardOccupancy(UUID wardId, String code, String name,
+                                int inHospital, int pending, int totalBeds, int occupiedBeds) {
+    }
+
     /** 护理班次字典（G26）。 */
     public record NursingShift(UUID id, String code, String name,
                                java.time.LocalTime startTime, java.time.LocalTime endTime,

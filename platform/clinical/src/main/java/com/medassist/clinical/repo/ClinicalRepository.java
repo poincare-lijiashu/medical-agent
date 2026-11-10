@@ -98,6 +98,7 @@ import com.medassist.clinical.domain.ClinicalModel.VisitDiagnosis;
 import com.medassist.clinical.domain.ClinicalModel.VisitOrder;
 import com.medassist.clinical.domain.ClinicalModel.VisitTransfer;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.domain.ClinicalModel.WardOccupancy;
 import com.medassist.clinical.domain.ClinicalModel.WardAdmissionRow;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReceipt;
 import com.medassist.clinical.domain.ClinicalModel.WardMedReturn;
@@ -2156,6 +2157,47 @@ public class ClinicalRepository {
                         SELECT id, ward_id, bed_no, status, version FROM clinical_svc.bed
                          WHERE ward_id = ? ORDER BY bed_no
                         """).param(wardId).query(BED_MAPPER).list();
+    }
+
+    /**
+     * 病区占用汇总（第 188 批）：一条 SQL 聚合床位与入院，避免仪表盘 N 个病区打爆限流。
+     *
+     * <p>只统计传入病区（调用方已按院区/科室收敛），空集合直接返回空。
+     */
+    public List<WardOccupancy> wardOccupancy(Collection<UUID> wardIds) {
+        if (wardIds == null || wardIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("""
+                        SELECT w.id AS ward_id, w.code, w.name,
+                               COALESCE(a.in_hospital, 0) AS in_hospital,
+                               COALESCE(a.pending, 0) AS pending,
+                               COALESCE(b.total_beds, 0) AS total_beds,
+                               COALESCE(b.occupied_beds, 0) AS occupied_beds
+                          FROM clinical_svc.ward w
+                          LEFT JOIN (SELECT ward_id,
+                                            COUNT(*) FILTER (WHERE status = 'IN_HOSPITAL') AS in_hospital,
+                                            COUNT(*) FILTER (WHERE status = 'ADMITTED') AS pending
+                                       FROM clinical_svc.admission GROUP BY ward_id) a
+                                 ON a.ward_id = w.id
+                          LEFT JOIN (SELECT ward_id,
+                                            COUNT(*) AS total_beds,
+                                            COUNT(*) FILTER (WHERE status IN ('OCCUPIED','RESERVED')) AS occupied_beds
+                                       FROM clinical_svc.bed GROUP BY ward_id) b
+                                 ON b.ward_id = w.id
+                         WHERE w.id = ANY(CAST(:ids AS uuid[]))
+                         ORDER BY w.code
+                        """)
+                .param("ids", wardIds.toArray(UUID[]::new))
+                .query((rs, i) -> new WardOccupancy(
+                        rs.getObject("ward_id", UUID.class),
+                        rs.getString("code"),
+                        rs.getString("name"),
+                        rs.getInt("in_hospital"),
+                        rs.getInt("pending"),
+                        rs.getInt("total_beds"),
+                        rs.getInt("occupied_beds")))
+                .list();
     }
 
     public Optional<Bed> findBed(UUID id) {

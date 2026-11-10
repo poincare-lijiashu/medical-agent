@@ -74,6 +74,20 @@ public class InpatientService {
         return repo.listWards(campusCsv(campusIds), deptIds);
     }
 
+    /**
+     * 病区占用汇总（第 188 批）：驾驶舱一次取全，避免「N 个病区 × 2 个明细接口」触发网关限流。
+     *
+     * <p>病区集合仍复用 listWards 的院区/科室下推（权限口径不变），占用数由一条聚合 SQL 得出。
+     */
+    public List<com.medassist.clinical.domain.ClinicalModel.WardOccupancy> wardSummary(
+            java.util.Set<UUID> campusIds, java.util.Collection<UUID> deptIds) {
+        List<Ward> wards = listWards(campusIds, deptIds);
+        if (wards.isEmpty()) {
+            return List.of();
+        }
+        return repo.wardOccupancy(wards.stream().map(Ward::id).toList());
+    }
+
     @Transactional
     public Ward createWard(CreateWardReq req, String actor) {
         return createWard(req, actor, com.medassist.common.security.DataScope.DEFAULT_CAMPUS_ID);

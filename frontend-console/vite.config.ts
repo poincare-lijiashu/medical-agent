@@ -15,6 +15,8 @@ export default defineConfig(({ command }) => ({
     },
   },
   server: {
+    // 固定 IPv4：Windows 上默认只监听 ::1 时，http://127.0.0.1:5174 会连接被拒（演示踩过）
+    host: '127.0.0.1',
     port: 5174,
     proxy: {
       '/api': {

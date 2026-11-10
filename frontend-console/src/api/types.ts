@@ -307,6 +307,20 @@ export interface Ward {
   enabled: boolean
 }
 
+/**
+ * 病区占用汇总（第 188 批）：仪表盘「住院床位」用一次请求取全。
+ * 后端 `GET /clinical/inpatient/ward-summary`，权限口径与 /clinical/wards 一致。
+ */
+export interface WardOccupancy {
+  wardId: string
+  code: string
+  name: string
+  inHospital: number
+  pending: number
+  totalBeds: number
+  occupiedBeds: number
+}
+
 /** 病区床位（转科选床用；只有 FREE 状态可被占用）。 */
 export interface Bed {
   id: string

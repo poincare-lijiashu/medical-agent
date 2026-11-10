@@ -177,6 +177,7 @@ import type {
   VisitOrder,
   VisitTransfer,
   Ward,
+  WardOccupancy,
 } from './types'
 
 export const authApi = {
@@ -322,6 +323,11 @@ export const clinicalApi = {
   settle: (visitId: string, paymentMethod: string) =>
     post<ChargeView>(`/clinical/visits/${visitId}/settle`, { paymentMethod }),
   wards: () => get<Ward[]>('/clinical/wards'),
+  /**
+   * 病区占用汇总（第 188 批）：驾驶舱一次拿全部病区的床位/在院/待入院计数。
+   * 不要再用「逐个病区拉 beds + admissions」——240 个病区会发 480 个请求，必被限流。
+   */
+  wardSummary: () => get<WardOccupancy[]>('/clinical/inpatient/ward-summary'),
   beds: (wardId: string) => get<Bed[]>(`/clinical/wards/${wardId}/beds`),
   createBeds: (wardId: string, bedNos: string[]) =>
     post<Bed[]>(`/clinical/wards/${wardId}/beds`, { bedNos }),

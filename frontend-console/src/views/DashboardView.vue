@@ -1019,24 +1019,17 @@ async function loadOutpatient() {
 async function loadInpatient() {
   sectionError.inpatient = ''
   try {
-    const wards = await clinicalApi.wards()
-    const rows = await Promise.all(
-      wards.map(async (w) => {
-        const [admissions, beds] = await Promise.all([
-          clinicalApi.admissions(w.id),
-          clinicalApi.beds(w.id),
-        ])
-        return {
-          id: w.id,
-          name: w.name,
-          inHospital: admissions.filter((a) => a.status === 'IN_HOSPITAL').length,
-          pending: admissions.filter((a) => a.status === 'ADMITTED').length,
-          totalBeds: beds.length,
-          occupiedBeds: beds.filter((b) => b.status === 'OCCUPIED' || b.status === 'RESERVED').length,
-        }
-      }),
-    )
-    wardRows.value = rows
+    // 第 188 批：一次拿汇总。此前对每个病区各拉 beds + admissions（243 个病区 ≈ 486 个请求），
+    // 必然触发网关限流（429），「住院床位」整块降级为空态。
+    const summary = await clinicalApi.wardSummary()
+    wardRows.value = summary.map((w) => ({
+      id: w.wardId,
+      name: w.name,
+      inHospital: w.inHospital,
+      pending: w.pending,
+      totalBeds: w.totalBeds,
+      occupiedBeds: w.occupiedBeds,
+    }))
   } catch (e) {
     wardRows.value = []
     sectionError.inpatient = `住院床位加载失败：${errorText(e)}`

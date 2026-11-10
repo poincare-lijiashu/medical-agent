@@ -2,6 +2,7 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.domain.ClinicalModel.WardOccupancy;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
@@ -94,6 +95,21 @@ public class InpatientController {
             DataScope scope) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.listWards(scope.campusFilter(),
+                scope.allDepartments() ? null : scope.deptCodes()));
+    }
+
+    /**
+     * 病区占用汇总（第 188 批）：运营驾驶舱用**一次请求**代替 N 个病区 × 2 次明细请求。
+     *
+     * <p>背景：驾驶舱曾对 100 个病区逐个拉床位与入院（200 个请求），必然触发网关限流（429），
+     * 「住院床位」整块降级为空态。权限口径与 {@link #listWards} 完全一致（院区/科室下推 SQL）。
+     */
+    @GetMapping("/inpatient/ward-summary")
+    public ApiResponse<List<WardOccupancy>> wardSummary(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.wardSummary(scope.campusFilter(),
                 scope.allDepartments() ? null : scope.deptCodes()));
     }
 
