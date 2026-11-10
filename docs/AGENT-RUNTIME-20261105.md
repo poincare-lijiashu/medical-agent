@@ -7851,3 +7851,42 @@ AI 工作台：doctor01 / Med@2026 登录 → /overview
 - Java 侧只做了编译（`-DskipTests package`），未跑 `mvn test`（时间成本高，建议 CI 覆盖）；
 - 驾驶舱其他区块若出现新的 N+1 拉取，同样应走汇总接口（本轮只修了病区）。
 
+## 192. 2026-11-10 演示状态快照与休眠恢复清单（第 189 批）
+
+**结论：仍是两套 SPA（不是一套代码）**
+
+- 已统一：同一镜像、同一域名（`/` AI 工作台，`/console` 控制台）、同一身份源
+  （Java 签发 JWT，Python 按 `roles` 映射）、同域 SSO 交接（控制台 → AI 工作台）、
+  跨标签页全局登出。
+- 未统一：两套代码库（`frontend-vue` / `frontend-console`，技术栈不同）、两套登录页、
+  反向（AI 工作台 → 控制台）不自动登录。真正"一套代码"需要把 AgentView / DataView /
+  ReviewCenter 等深度能力迁入控制台。
+
+**演示环境（本机当前状态）**
+
+| 入口 | 地址 | 账号（密码均 `Med@2026`） |
+|---|---|---|
+| 临床控制台 | http://localhost:5174/ | admin01 / doctor01 / qc01 / pharm01 |
+| AI 工作台 | http://127.0.0.1:8001/ | 同上 |
+| Java 网关 + 业务服务 | 8080 / 8081–8089 | — |
+| Python AI 中台 | 8001 | — |
+
+已验证：控制台驾驶舱 **15 个请求全 200**（243 个病区走单次 `ward-summary`）；
+AI 工作台概览 + 审核中心 **12 个请求全 200**；两侧浏览器控制台无 error。
+全量 pytest → **1774 passed / 1 skipped**。
+
+**电脑休眠后的恢复清单（按顺序）**
+
+1. Java 服务（休眠一般不会杀进程；这条已在跑会自动跳过）：
+   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_platform_demo.ps1`
+2. 控制台 dev：`cd frontend-console; npm run dev`（Vite 已固定 127.0.0.1:5174）
+3. AI 中台：若 8001 未监听 → `python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001`
+4. 自检：`Get-NetTCPConnection -State Listen | ? LocalPort -in 5174,8001,8080,8083`
+   四个端口都在即可开始；若遇 401/403，先在控制台退出（广播全局登出）再重新登录。
+
+**演示前待办**
+
+- 控制台其余 40+ 页面逐页点检（本轮只走查了驾驶舱 / 概览 / 审核中心）；
+- Java 侧未跑 `mvn test`（本轮仅 `-DskipTests package`，编译通过）；
+- 演示数据为种子数据（如"今日门诊 0"属正常，不是故障）。
+
