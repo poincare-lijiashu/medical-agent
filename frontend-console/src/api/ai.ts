@@ -225,3 +225,83 @@ export function aiCaseArchive(
 export function aiCaseArchiveRemove(id: string, reason: string) {
   return aiPost<AiCaseArchive>(`/medical/case-archive/${encodeURIComponent(id)}/remove`, { reason })
 }
+
+/* ------------------------------------------------------------------ *
+ * 药事配置（第 195 批）：药品字典 + 相互作用规则维护
+ *
+ * 数据源 `GET /medical/drug/dict` 一次返回字典、规则、统计与免责声明
+ * （116KB，带 ETag/304）；写走 `/medical/admin/drug/*`，成功返回 `{ok:true}`，
+ * 业务校验失败是 FastAPI 422（detail 中文，直接透出）。
+ * ------------------------------------------------------------------ */
+
+export interface AiDrugEntry {
+  name: string
+  category?: string
+  level?: string
+  aliases?: string[]
+  brand_names?: string[]
+}
+
+export interface AiDrugRule {
+  drug_a: string
+  drug_b: string
+  severity?: string
+  mechanism?: string
+  management?: string
+  /** approved = 已人工审校（其余视为未审校） */
+  review_status?: string
+  reviewed_by?: string
+  reviewed_at?: string
+  source?: string
+}
+
+export interface AiDrugStats {
+  drugs?: number
+  rules?: number
+  high?: number
+  mid?: number
+  reviewed?: number
+  total?: number
+  high_risk_reviewed?: number
+  high_risk_total?: number
+  unreviewed?: number
+  categories?: Record<string, number>
+}
+
+export interface AiDrugDict {
+  drugs?: AiDrugEntry[]
+  rules?: AiDrugRule[]
+  stats?: AiDrugStats
+  disclaimer?: string
+}
+
+export function aiDrugDict(): Promise<AiDrugDict> {
+  return aiGet<AiDrugDict>('/medical/drug/dict')
+}
+
+/** 药品字典增删改（按规范名定位，整体替换）。 */
+export function aiSaveDrugEntry(
+  action: 'add' | 'update' | 'delete',
+  item: AiDrugEntry | { name: string },
+): Promise<{ ok?: boolean }> {
+  return aiPost<{ ok?: boolean }>('/medical/admin/drug/dict', { action, item })
+}
+
+/** 相互作用规则增删改（按规范药对定位，与输入顺序无关）。 */
+export function aiSaveDrugRule(
+  action: 'add' | 'update' | 'delete',
+  item: Omit<AiDrugRule, 'review_status' | 'reviewed_by' | 'reviewed_at'>,
+): Promise<{ ok?: boolean }> {
+  return aiPost<{ ok?: boolean }>('/medical/admin/drug/rules', { action, item })
+}
+
+/** 规则审校批量标记：keys 为 `drug_a||drug_b` 编码键；审校人由后端取当前登录名。 */
+export function aiMarkDrugRules(
+  keys: string[],
+  decision: 'approved' | 'unreviewed',
+): Promise<{ ok?: boolean; stats?: AiDrugStats }> {
+  return aiPost<{ ok?: boolean; stats?: AiDrugStats }>('/medical/admin/drug/rules/review', {
+    keys,
+    decision,
+  })
+}

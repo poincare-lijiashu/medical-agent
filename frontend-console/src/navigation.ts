@@ -268,6 +268,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['pharmacy:read'],
   },
   {
+    // 第 195 批：药品字典与相互作用规则维护（旧界面塞在审核中心的两个 tab，属药事主数据）
+    name: 'pharmacy-config',
+    path: '/pharmacy-config',
+    title: '药事配置',
+    hint: '药品字典与相互作用规则维护 · 高危规则阻断 · 审校覆盖率',
+    icon: 'sliders',
+    group: '药事管理',
+    roles: ['ADMIN', 'PHARMACIST'],
+  },
+  {
     name: 'stock-take',
     path: '/stock-take',
     title: '药品盘点',

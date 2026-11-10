@@ -115,6 +115,12 @@ const router = createRouter({
         { path: 'pacs', name: 'pacs', component: () => import('@/views/PacsWorkbenchView.vue') },
         { path: 'narcotic', name: 'narcotic', component: () => import('@/views/NarcoticRegisterView.vue') },
         { path: 'pharmacy', name: 'pharmacy', component: () => import('@/views/PharmacyView.vue') },
+        {
+          // 第 195 批：药品字典 / 相互作用规则维护（药剂科 + 管理员）
+          path: 'pharmacy-config',
+          name: 'pharmacy-config',
+          component: () => import('@/views/PharmacyConfigView.vue'),
+        },
         { path: 'stock-take', name: 'stock-take', component: () => import('@/views/StockTakeView.vue') },
         { path: 'stock-loss', name: 'stock-loss', component: () => import('@/views/StockLossView.vue') },
         {
