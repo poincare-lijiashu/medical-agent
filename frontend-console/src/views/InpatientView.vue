@@ -177,6 +177,15 @@
                         预交金
                       </button>
                       <button
+                        v-if="canReadPatient"
+                        class="btn btn--sm"
+                        type="button"
+                        :disabled="printingWristId === a.id"
+                        @click="printWristband(a)"
+                      >
+                        {{ printingWristId === a.id ? '读取…' : '腕带' }}
+                      </button>
+                      <button
                         v-if="canFinance"
                         class="btn btn--sm"
                         type="button"
@@ -507,6 +516,8 @@ const canAssignBed = computed(() => hasPermission('inpatient:bed:assign'))
 const canDischarge = computed(() => hasPermission('inpatient:admission:discharge'))
 const canDeposit = computed(() => hasPermission('inpatient:deposit:manage'))
 const canFinance = computed(() => hasPermission('inpatient:finance:read'))
+/** 腕带要印姓名/性别/年龄，必须有患者主索引读权限（与病案号可见性同源）。 */
+const canReadPatient = computed(() => hasPermission('empi:patient:read'))
 const canManageWard = computed(() => hasPermission('inpatient:ward:manage'))
 
 const wards = ref<Ward[]>([])
@@ -843,6 +854,49 @@ async function printFinanceSummary() {
     toast.error('费用明细读取失败', errorText(e))
   } finally {
     printingFinance.value = false
+  }
+}
+
+/** 腕带：读一次患者主索引（性别/年龄不在住院视图里），按两联打印便于备用替换。 */
+const printingWristId = ref('')
+
+async function printWristband(a: AdmissionView) {
+  if (printingWristId.value) return
+  printingWristId.value = a.id
+  try {
+    const p = await empiApi.patient(a.patientId)
+    const esc = escapeHtml
+    const printedAt = dateTime(new Date().toISOString())
+    const wardName = wards.value.find((w) => w.id === a.wardId)?.name ?? ''
+    const band = `
+      <div class="band">
+        <div class="row"><span class="label">铭医 · 住院腕带</span><span class="label">打印 ${esc(printedAt)}</span></div>
+        <div class="row"><span class="name">${esc(p.name)}</span><span>${esc(genderLabel(p.gender))} · ${esc(ageOf(p.birthDate))}</span></div>
+        <div class="row"><span class="label">住院号</span><span class="no">${esc(a.admissionNo)}</span></div>
+        <div class="row"><span>病案号 ${esc(p.patientNo)}</span><span>${esc(wardName)} ${esc(a.bedNo ?? '未分床')}</span></div>
+        <div class="row"><span class="label">入院 ${a.admittedAt ? esc(dateTime(a.admittedAt)) : '—'}</span><span>${esc(a.attendingDoctor)} 医师</span></div>
+        <div class="barcode">条码区（标签号 / 住院号）</div>
+      </div>`
+    const ok = printHtml({
+      title: `腕带 ${a.admissionNo}`,
+      body: band + band,
+      css: `
+        .band { border: 2px solid #111; border-radius: 6px; padding: 10px 14px; height: 92mm;
+                display: flex; flex-direction: column; justify-content: space-between; page-break-inside: avoid; }
+        .band + .band { margin-top: 10mm; }
+        .row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+        .name { font-size: 26px; font-weight: 700; letter-spacing: 1px; }
+        .no { font-size: 20px; font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: 1px; }
+        .label { font-size: 11px; color: #555; }
+        .barcode { margin-top: 8px; height: 26mm; border: 1px dashed #999; color: #777;
+                   display: flex; align-items: center; justify-content: center; font-size: 11px; }
+      `,
+    })
+    if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+  } catch (e) {
+    toast.error('患者信息读取失败', errorText(e))
+  } finally {
+    printingWristId.value = ''
   }
 }
 
