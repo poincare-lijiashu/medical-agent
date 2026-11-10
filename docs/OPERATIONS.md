@@ -73,7 +73,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   - fail-closed：生产类环境未配密钥 → 保存密钥直接失败；读到密文但密钥缺失/错误 →
     读取直接失败（绝不把密文当 key 调模型），日志与异常均提示密钥问题；
   - 本地开发可不配（保持旧行为，仅告警一次）；
-  - 轮换：新密钥写入 Secret 后，旧数据用旧密钥版本解密、下次保存自动转新密钥。
+  - **轮换（第 181 批起无需停写）**：改配 `SECRETS_ENCRYPTION_KEYS`（JSON 密钥环），
+    新密钥加入 `keys` 并把 `active` 指向它 → 新写入用 `enc:v2:<keyId>:`，旧密文仍用旧密钥解密；
+    确认存量都升级后再从 `keys` 摘掉旧密钥（摘早了会解不开旧密文，服务会明确报错而不是静默降级）。
+    第 179 批的 `enc:v1:` 密文不带 keyId，密钥环模式下会依次尝试环内密钥——
+    因此**轮换期必须保留旧密钥**，等 v1 存量清零再摘。
+    `field_crypto.encryption_mode()` 可查当前形态（keyring / single / none）。
 - **Java 服务 JDBC TLS（第 180 批，已实现）**：9 个 Java 服务的
   `spring.datasource.url` 统一带 `sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}`，
   Helm `medassist.commonEnv` 把 `external.postgres.sslmode` / `sslrootcert` 注入为

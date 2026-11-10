@@ -112,7 +112,7 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 | `medassist-internal` | `token` | 服务间内部接口令牌（clinical / emr / insurance 内网直连调用 EMPI 与彼此） |
 | `medassist-internal-hmac` | `keys-json`（v1 HMAC，过渡期）<br>`gateway-private-key` / `gateway-public-key`（Ed25519，阶段二）<br>`clinical` / `emr` / `insurance` / `pharmacy` / `tech`（每调用方密钥） | 服务间签名（MF-07）。`keys-json`：`{"active":"gw-2026-11","keys":{"gw-2026-11":"<base64 32B>"}}`，轮换期可同时保留新旧网关 key；Ed25519 私钥**只挂网关**、公钥只挂业务服务；调用方密钥按组件裁剪（详见 §4.2.1） |
 | `medassist-empi` | `field-key` / `hash-salt` | 患者字段 AES-256 密钥与查重盐（**换密钥会导致存量密文不可解**） |
-| `medassist-ai-core` | `QWEN_API_KEY` / `AUTH_JWT_SECRET` / `SECRETS_ENCRYPTION_KEY` 等 | AI 中台业务密钥（`envFrom` 注入）。`SECRETS_ENCRYPTION_KEY`（base64 32B）用于 LLM 供应商 api_key 的字段级加密，生产未配置则拒绝保存模型密钥 |
+| `medassist-ai-core` | `QWEN_API_KEY` / `AUTH_JWT_SECRET` / `SECRETS_ENCRYPTION_KEY` / `SECRETS_ENCRYPTION_KEYS` 等 | AI 中台业务密钥（`envFrom` 注入）。LLM 供应商 api_key 的字段级加密：单密钥用 `SECRETS_ENCRYPTION_KEY`（base64 32B），多版本轮换用 `SECRETS_ENCRYPTION_KEYS`（`{"active":"k2","keys":{...}}`，优先）；生产未配置则拒绝保存模型密钥 |
 | `medassist-prod-tls` | `tls.crt` / `tls.key` | Ingress 证书 |
 
 7. **PVC**（AI 中台）：`medassist-models`（≥20Gi，建议共享存储 ReadOnlyMany）、`medassist-ai-core-data`

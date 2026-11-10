@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 
 import pytest
 
@@ -20,6 +21,13 @@ from backend.core import llm_config as lc
 PLAIN = "sk-live-0123456789abcdef"
 KEY_A = base64.b64encode(b"A" * 32).decode()
 KEY_B = base64.b64encode(b"B" * 32).decode()
+
+
+@pytest.fixture(autouse=True)
+def _clean_key_env(monkeypatch):
+    """隔离本机环境：密钥变量只由各用例显式设置，避免开发机全局配置影响断言。"""
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.delenv(fc.KEYS_ENV, raising=False)
 
 
 def _cfg(api_key: str = PLAIN) -> dict:
@@ -174,3 +182,85 @@ def test_llm_config_fails_closed_when_store_is_sealed_but_key_missing(monkeypatc
     monkeypatch.delenv(fc.KEY_ENV, raising=False)
     with pytest.raises(fc.FieldCryptoError):
         lc.load_config()
+
+
+# ---- 密钥环：轮换不停写（第 181 批） ----
+
+def _ring(active: str, **keys: str) -> str:
+    return json.dumps({"active": active, "keys": keys})
+
+
+def test_keyring_writes_versioned_ciphertext(monkeypatch):
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k1", k1=KEY_A))
+    sealed = fc.seal_secret(PLAIN)
+    assert sealed.startswith(f"{fc.PREFIX_V2}k1:"), "密钥环模式密文必须自带 keyId"
+    assert PLAIN not in sealed
+    assert fc.open_secret(sealed) == PLAIN
+
+
+def test_rotation_keeps_old_ciphertext_readable(monkeypatch):
+    """轮换的核心承诺：切换 active 后，旧密文仍能解，新写入自动用新密钥。"""
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k1", k1=KEY_A, k2=KEY_B))
+    old = fc.seal_secret(PLAIN)
+    assert old.startswith(f"{fc.PREFIX_V2}k1:")
+
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k2", k1=KEY_A, k2=KEY_B))
+    assert fc.open_secret(old) == PLAIN, "保留旧密钥时必须能解旧密文（无需停写）"
+    new = fc.seal_secret(PLAIN)
+    assert new.startswith(f"{fc.PREFIX_V2}k2:"), "新写入必须使用 active 密钥"
+    assert fc.open_secret(new) == PLAIN
+
+
+def test_keyring_decrypts_legacy_v1_ciphertext(monkeypatch):
+    """第 179 批的 v1 密文（不带 keyId）在密钥环模式下也必须可解。"""
+    legacy = fc.seal_secret(PLAIN, key=fc.load_key(KEY_A))
+    assert legacy.startswith(fc.PREFIX)
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k2", k1=KEY_A, k2=KEY_B))
+    assert fc.open_secret(legacy) == PLAIN
+
+
+def test_missing_key_id_in_ring_fails_loudly(monkeypatch):
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k2", k1=KEY_A, k2=KEY_B))
+    sealed = fc.seal_secret(PLAIN)
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k1", k1=KEY_A))
+    with pytest.raises(fc.FieldCryptoError, match="不在密钥环"):
+        fc.open_secret(sealed)
+
+
+def test_keyring_config_validation():
+    bad = (
+        "not-json",                                        # 非 JSON
+        "[]",                                              # 非对象
+        '{"active":"k1","keys":{}}',                       # 空 keys
+        f'{{"active":"nope","keys":{{"k1":"{KEY_A}"}}}}',   # active 不在 keys
+        f'{{"active":"a:b","keys":{{"a:b":"{KEY_A}"}}}}',   # keyId 含非法字符
+        '{"active":"k1","keys":{"k1":"not-base64"}}',      # 密钥不是 base64
+    )
+    for raw in bad:
+        with pytest.raises(fc.FieldCryptoError):
+            fc.load_ring(raw)
+
+
+def test_encryption_mode_reports_source(monkeypatch):
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.delenv(fc.KEYS_ENV, raising=False)
+    assert fc.encryption_mode() == "none"
+    monkeypatch.setenv(fc.KEY_ENV, KEY_A)
+    assert fc.encryption_mode() == "single"
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k1", k1=KEY_A))
+    assert fc.encryption_mode() == "keyring", "密钥环优先于单密钥"
+
+
+def test_llm_config_uses_keyring_when_configured(monkeypatch):
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k1", k1=KEY_A))
+    store = _fake_store(monkeypatch)
+    pid = lc.add_provider("chat", "openai", "https://api.example.com/v1", "m", "A", PLAIN)
+    at_rest = store["chat"]["providers"][0]["api_key"]
+    assert at_rest.startswith(f"{fc.PREFIX_V2}k1:")
+    assert lc.find_provider("chat", pid)["api_key"] == PLAIN
+

@@ -7517,3 +7517,41 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 - K8s 卷加密（StorageClass + KMS）仍属基础设施交付；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 184. 2026-11-10 密钥轮换：字段加密多版本密钥环（第 181 批）
+
+**问题**
+
+- §182 的字段加密只有单密钥 `SECRETS_ENCRYPTION_KEY`：轮换必须停写（否则旧密文立即解不开），
+  而"密钥疑似泄露、要尽快换掉"恰恰是最不能停机的场景；
+- 单密钥密文 `enc:v1:` 不记录密钥版本，运维也无法判断"哪些数据还没升级"。
+
+**已做**
+
+1. **密钥环 `SECRETS_ENCRYPTION_KEYS`**（`{"active":"k2","keys":{"k1":"<b64>","k2":"<b64>"}}`，
+   优先于单密钥）；新密文格式 `enc:v2:<keyId>:<payload>` 自带密钥版本，解密按 keyId 精确取密钥。
+2. **兼容与迁移**：`enc:v1:` 旧密文在密钥环模式下依次尝试环内密钥（环很小，代价可忽略），
+   因此「加新密钥 → 切 active → 保留旧密钥」即可完成轮换；旧密文在下一次保存时自动升级为 v2。
+   密钥环配置非法（非 JSON / 空 keys / active 不在 keys / keyId 含非法字符 / 密钥非 base64）
+   一律 fail-closed 报错，不做"尽力而为"。
+3. **可观测**：`encryption_mode()` 返回 keyring / single / none；密文引用的 keyId 不在环内时
+   明确报错（提示保留旧密钥或回滚 Secret 版本），绝不静默降级。
+4. **文档**：`docs/OPERATIONS.md` 轮换步骤改为"无需停写"（含 v1 存量清零顺序）；
+   `.env.example` 增 `SECRETS_ENCRYPTION_KEYS`；`deploy/README.md` 的 ai-core Secret 清单补齐。
+5. **回归锁**：`tests/test_field_crypto.py` 新增 7 条（v2 格式、轮换后旧密文可解、v1 兼容、
+   keyId 缺失报错、6 种非法配置、mode 判定、`llm_config` 走密钥环时落库为 v2），
+   并加 autouse 夹具隔离本机密钥环境变量，避免开发机全局配置污染断言。
+
+**验证**
+
+```
+定向：test_field_crypto + test_llm_config + test_llm_hot_reload + test_pg_repo → 125 passed
+全量（不含 e2e）→ 1745 passed / 1 skipped
+```
+
+**遗留**
+
+- 仍无法直接统计"多少存量还是 v1"：需要一条只读巡检（扫 `llm_providers` 前缀计数）
+  才能判断何时可以摘掉旧密钥；
+- 密钥环只在 AI 中台（Python）生效；EMPI 的 Java 侧 `field-key` 仍是单密钥（另有其轮换流程）；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+
