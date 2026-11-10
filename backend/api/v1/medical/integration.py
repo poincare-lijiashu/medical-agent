@@ -1,4 +1,4 @@
-"""HIS 深度集成读端点（评测「深度集成」）：患者摘要 / 医嘱清单。
+"""HIS 深度集成读端点（评测「深度集成」）：对接状态 / 患者摘要 / 医嘱清单。
 
 为什么单独成路由：这是 AI 中台**第一次真正读取院内业务数据**（此前只有质控结论回写）。
 读取入口必须满足三条：
@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.deps import rate_limit, require_role
 from backend.api.v1.medical import shared as _shared
+from backend.config import settings
 from backend.integration import registry as his_registry
 from backend.integration.base import NullAdapter
 
@@ -43,6 +44,25 @@ def _adapter():
 async def _audit(action: str, user: dict, **payload) -> None:
     await asyncio.to_thread(_shared.get_audit_logger().write, event_type="his", action=action,
                             actor=user.get("username", "system"), payload=payload)
+
+
+@router.get("/integration/status")
+async def integration_status(user: dict = Depends(require_role("doctor", "admin", "qc"))):
+    """对接状态只读诊断（控制台「HIS 集成工作台」首屏用）。
+
+    与读端点不同：**未对接/配置错误也返回 200**（configured=false + error 文案），
+    让实施人员能区分「尚未配置」与「已配置但读取故障」；只回适配器标识与协议名，
+    不回网关地址、账号、令牌等凭据信息，也不写审计（无患者数据、无业务动作）。
+    """
+    try:
+        adapter = his_registry.get_adapter()
+    except Exception as e:  # noqa: BLE001 —— 未知厂商标识/缺必填配置：如实回报，不抛 500
+        return {"configured": False, "adapter": (settings.his_adapter or "none").strip().lower(),
+                "protocol": "", "error": str(e)[:160]}
+    if isinstance(adapter, NullAdapter):
+        return {"configured": False, "adapter": "none", "protocol": "", "error": ""}
+    return {"configured": True, "adapter": (settings.his_adapter or "").strip().lower(),
+            "protocol": getattr(adapter, "protocol", ""), "error": ""}
 
 
 @router.get("/integration/patient/{patient_id}")

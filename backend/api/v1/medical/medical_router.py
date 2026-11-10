@@ -24,7 +24,7 @@
 - review.py       /review/pending|history|status|my-pending-confirm|self-confirm|resolve|reopen
 - qc.py           /qc/record /qc/my-rejections /qc/parse /case-archive*
 - kb.py           /kb/search /admin/kb*
-- integration.py  /integration/patient/{id} /integration/orders/{id}（HIS 深度集成读端点）
+- integration.py  /integration/status|patient/{id}|orders/{id}（HIS 深度集成诊断/读端点）
 """
 from __future__ import annotations
 

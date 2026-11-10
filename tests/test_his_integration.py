@@ -190,3 +190,44 @@ def test_qc_push_unknown_adapter_config_is_contained(monkeypatch, tmp_path):
     ev = [e for e in log.entries if e["event_type"] == "his"
           and e["payload"].get("action") == "push_failed"]
     assert ev and ev[-1]["payload"].get("stage") == "resolve_adapter"
+
+
+# ---------- 4. 对接状态只读诊断端点（/integration/status） ----------
+
+def _get_status(c, tok):
+    return c.get("/api/v1/medical/integration/status",
+                 headers={"Authorization": "Bearer " + tok})
+
+
+def test_status_reports_none_without_audit_noise(monkeypatch, tmp_path):
+    """未对接：200 + configured=false（不是 501——诊断端点要能回答"为什么不能读"）。"""
+    monkeypatch.setattr(settings, "his_adapter", "none")
+    c, log = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+    r = _get_status(c, tok)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"configured": False, "adapter": "none", "protocol": "", "error": ""}
+    assert not [e for e in log.entries if e["event_type"] == "his"], "诊断端点不应产生 his.* 审计噪音"
+
+
+def test_status_reports_demo_protocol(monkeypatch, tmp_path):
+    """已对接：回报适配器标识与协议名（供控制台展示，不含地址/令牌）。"""
+    monkeypatch.setattr(settings, "his_adapter", "demo")
+    c, _ = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+    body = _get_status(c, tok).json()
+    assert body["configured"] is True
+    assert body["adapter"] == "demo"
+    assert "DEMO" in body["protocol"]
+    assert body["error"] == ""
+
+
+def test_status_reports_config_error(monkeypatch, tmp_path):
+    """配置了未知厂商标识：200 + configured=false + error 指明配置值与可用项，便于实施人员纠错。"""
+    monkeypatch.setattr(settings, "his_adapter", "his_vendor_typo")
+    c, _ = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+    body = _get_status(c, tok).json()
+    assert body["configured"] is False
+    assert body["adapter"] == "his_vendor_typo"
+    assert "his_vendor_typo" in body["error"] and "demo" in body["error"]

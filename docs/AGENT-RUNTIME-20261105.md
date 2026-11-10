@@ -7118,3 +7118,47 @@ python scripts/release_check.py
   若需 `CHANGELOG.md` 可从台账按批次生成，属后续项）；
 - Java 平台（`platform/pom.xml`）版本 `0.1.0-SNAPSHOT` 与 AI 中台 1.0.0 并行演进，
   未纳入本门禁（两套技术栈发布节奏不同，强行统一会误导）。
+
+## 175. 2026-11-10 HIS 深度集成：控制台「HIS 集成工作台」+ 对接状态诊断端点（第 172 批）
+
+**问题**
+
+- 第 168–170 批已落地 FHIR R4 / HL7 v2 MLLP 适配器、患者与医嘱读端点、Java 侧
+  `/internal/ai/*` 反向调用，但控制台**没有任何入口**能回答"当前对接的是谁、
+  能不能读、读出来对不对"——实施人员只能 curl；评测「HIS 深度集成」要求
+  HIS 工作台内可自检。
+
+**已做**
+
+1. **`GET /medical/integration/status`（只读诊断）**：与读端点不同，未对接/配置错误
+   也返回 **200 + `configured=false` + `error`**，让实施人员区分"尚未配置"与
+   "已配置但读取故障"；只回适配器标识与协议名，**不回**网关地址/账号/令牌，
+   且不写审计（无患者数据、无业务动作，避免每开一次页面一条 `his.*` 噪音）。
+2. **适配器补 `protocol` 类属性**：`FHIR R4（REST）` / `HL7 v2.5（MLLP）` /
+   `DEMO（内存假数据，仅联调用）`——状态端点与前端由此展示协议，业务代码零改动。
+3. **前端新页「HIS 集成工作台」**（`/his-workbench`，系统管理组，临床或管理员任一
+   权限可见）：
+   - 状态卡：已对接 / 未对接 / 配置有误 + 适配器、协议、读写能力；未对接给出
+     `HIS_ADAPTER=fhir|hl7v2|demo` 的接入指引；
+   - 患者主索引查询：患者与医嘱**并行读取**；404（查无此人）、502（适配器故障）
+     给出明确文案；未对接时查询禁用（不伪造空数据）；
+   - 医嘱表（兼容 FHIR/HL7 统一字段 `name/dosage/priority` 与 demo 的
+     `drug/route/freq`），并复用第 132 批的 `InlineRxAudit` 对 HIS 医嘱就地审方。
+4. **回归锁**：路由快照 66 → **67**（新增 `/integration/status`，仍在 `/health` 前）；
+   `tests/test_his_integration.py` 新增 3 条——none 无 `his.*` 审计噪音、
+   demo 回报协议、未知厂商 `configured=false` 且 error 含配置值与可用项。
+
+**验证**
+
+```
+定向：test_his_integration + test_router_split_guard + test_fhir_adapter → 27 passed
+前端：npm run typecheck 通过；npm run build 通过（HisWorkbenchView chunk 7.30 kB）
+全量（不含 e2e）→ 1678 passed / 1 skipped
+```
+
+**遗留**
+
+- 页面读取链路仅在 demo 适配器下验证（无真实 FHIR/MLLP 网关），staging 双系统联调
+  仍待排期；
+- 下一步：② 网关/Helm 对 `/internal/**` 的放行策略（仅内网或网关鉴权路由）；
+  ③ EMPI 唯一真源（AI 侧只存 `empi_id` + 哈希）。

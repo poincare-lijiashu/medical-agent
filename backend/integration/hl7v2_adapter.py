@@ -97,6 +97,8 @@ def build_qc_oru(record_id: str, result: dict, control_id: str) -> str:
 class Hl7v2HisAdapter(HisAdapter):
     """HL7 v2 MLLP 适配器（短连接 + 逐条 ACK）。"""
 
+    protocol = "HL7 v2.5（MLLP）"
+
     def __init__(self, host: str | None = None, port: int | None = None,
                  timeout_s: float | None = None, encoding: str | None = None):
         self.host = (host if host is not None else settings.hl7_mllp_host or "").strip()

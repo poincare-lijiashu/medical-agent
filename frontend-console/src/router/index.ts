@@ -149,6 +149,12 @@ const router = createRouter({
           name: 'report-subscriptions',
           component: () => import('@/views/ReportSubscriptionView.vue'),
         },
+        {
+          // 第 172 批：HIS 深度整合自检（适配器状态 / 患者与医嘱读取 / 就地审方）
+          path: 'his-workbench',
+          name: 'his-workbench',
+          component: () => import('@/views/HisWorkbenchView.vue'),
+        },
         { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],

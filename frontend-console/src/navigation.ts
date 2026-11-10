@@ -380,6 +380,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:report:subscription:read'],
   },
   {
+    name: 'his-workbench',
+    path: '/his-workbench',
+    title: 'HIS 集成工作台',
+    hint: '对接自检：适配器状态 · 患者主索引/医嘱读取 · 就地 AI 审方（只读）',
+    icon: 'hospital',
+    group: '系统管理',
+    // 医生/质控要看读取链路，信息科管理员排查配置——任一权限可见
+    permissions: ['clinical:visit:read', 'auth:user:read'],
+  },
+  {
     name: 'system',
     path: '/system',
     title: '系统管理',

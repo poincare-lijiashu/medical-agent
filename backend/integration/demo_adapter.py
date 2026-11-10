@@ -36,6 +36,7 @@ _ORDERS: dict[str, list[dict]] = {
 class DemoHisAdapter(HisAdapter):
     """内存假数据实现：线程安全（推送记录上锁），无任何真实网络调用。"""
 
+    protocol = "DEMO（内存假数据，仅联调用）"
     _pushed: list[dict] = []
     _lock = threading.Lock()
 

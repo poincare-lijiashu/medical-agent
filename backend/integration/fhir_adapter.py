@@ -123,6 +123,8 @@ def build_qc_document_reference(record_id: str, result: dict) -> dict:
 class FhirHisAdapter(HisAdapter):
     """FHIR R4 REST 适配器（HIS_ADAPTER=fhir）。"""
 
+    protocol = "FHIR R4（REST）"
+
     def __init__(self, base_url: str | None = None, token: str | None = None,
                  timeout_s: float | None = None, verify_tls: bool | None = None,
                  transport: httpx.BaseTransport | None = None):
