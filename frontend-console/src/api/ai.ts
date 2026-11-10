@@ -1221,6 +1221,119 @@ export function aiBotImpact(code: string): Promise<AiBotImpact> {
   return aiGet<AiBotImpact>(`/agent/bots/${encodeURIComponent(code)}/impact`)
 }
 
+/* ------------------------------------------------------------------ *
+ * Bot 团队（第 207 批，仅 ADMIN / QC）
+ *
+ * 团队是**编排配置**：成员必须是已发布 Bot，2-4 个；创建即 ACTIVE，
+ * 但生效中团队的编制变更先落 pendingChanges，须非提交人审核后才换成员。
+ * 协作是并行作答、失败隔离，不合成共识。
+ * ------------------------------------------------------------------ */
+
+export interface AiTeam {
+  code: string
+  name?: string
+  description?: string
+  botCodes?: string[]
+  /** ACTIVE / DISABLED */
+  status?: string
+  rowVersion?: number
+  createdBy?: string
+  createdAt?: string
+  updatedBy?: string
+  updatedAt?: string
+  submittedBy?: string | null
+  submittedAt?: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
+  reviewNote?: string | null
+  /** 待审核的编制变更（通过前不影响当前成员） */
+  pendingChanges?: {
+    code?: string
+    name?: string
+    description?: string
+    botCodes?: string[]
+  } | null
+}
+
+export interface AiTeamInput {
+  code: string
+  name: string
+  description: string
+  botCodes: string[]
+}
+
+export interface AiTeamUpdateInput extends AiTeamInput {
+  rowVersion: number
+}
+
+export interface AiTeamOpinion {
+  botCode?: string
+  name?: string
+  agentId?: string
+  modelProvider?: string
+  modelId?: string | null
+  /** OK / FAILED */
+  status?: string
+  answer?: string | null
+  error?: string
+  elapsedMs?: number
+  memoryCount?: number
+  skillCount?: number
+  hitl?: boolean
+}
+
+export interface AiTeamCollaborate {
+  team?: string
+  question?: string
+  opinions?: AiTeamOpinion[]
+  failed?: number
+  modelDiversity?: string[]
+  needsHumanReview?: boolean
+  note?: string
+}
+
+export function aiAgentTeams(status?: string): Promise<{ teams?: AiTeam[] }> {
+  return aiGet<{ teams?: AiTeam[] }>('/agent/bot-teams', { status })
+}
+
+export function aiTeamCreate(input: AiTeamInput): Promise<AiTeam> {
+  return aiPost<AiTeam>('/agent/bot-teams', input)
+}
+
+/** 修改生效中团队：落为待审核变更，通过前成员保持不变。 */
+export function aiTeamUpdate(code: string, input: AiTeamUpdateInput): Promise<AiTeam> {
+  return aiPut<AiTeam>(`/agent/bot-teams/${encodeURIComponent(code)}`, input)
+}
+
+export function aiTeamReview(
+  code: string,
+  approve: boolean,
+  note: string,
+  rowVersion: number,
+): Promise<AiTeam> {
+  return aiPost<AiTeam>(`/agent/bot-teams/${encodeURIComponent(code)}/review`, {
+    approve,
+    note,
+    rowVersion,
+  })
+}
+
+export function aiTeamDisable(code: string, rowVersion: number): Promise<AiTeam> {
+  return aiPost<AiTeam>(`/agent/bot-teams/${encodeURIComponent(code)}/disable`, { rowVersion })
+}
+
+export function aiTeamEnable(code: string, rowVersion: number): Promise<AiTeam> {
+  return aiPost<AiTeam>(`/agent/bot-teams/${encodeURIComponent(code)}/enable`, { rowVersion })
+}
+
+/** 团队协作试跑：各 Bot 并行作答、失败隔离；结果恒需人工复核。 */
+export function aiTeamCollaborate(code: string, question: string): Promise<AiTeamCollaborate> {
+  return aiPost<AiTeamCollaborate>(
+    `/agent/bot-teams/${encodeURIComponent(code)}/collaborate`,
+    { question },
+  )
+}
+
 export function aiAgentConsult(
   body: {
     question: string

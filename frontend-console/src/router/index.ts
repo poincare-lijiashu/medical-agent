@@ -230,6 +230,12 @@ const router = createRouter({
           component: () => import('@/views/AiBotsView.vue'),
         },
         {
+          // 第 207 批：Bot 团队与协作试跑（管理员 / 质控）
+          path: 'ai/agent/teams',
+          name: 'ai-teams',
+          component: () => import('@/views/AiTeamsView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',

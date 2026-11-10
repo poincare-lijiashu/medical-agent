@@ -520,6 +520,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'QC'],
   },
   {
+    // 第 207 批：Bot 团队与协作（编制变更需审核；协作只做并列意见）
+    name: 'ai-teams',
+    path: '/ai/agent/teams',
+    title: 'AI Bot 团队',
+    hint: '团队编制 · 待审变更 diff · 协作试跑并列意见 · 停用/启用',
+    icon: 'layers',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',
