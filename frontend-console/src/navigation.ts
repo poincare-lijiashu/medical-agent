@@ -33,6 +33,15 @@ export const NAV_ITEMS: NavItem[] = [
     group: '总览',
   },
   {
+    // 第 198 批：AI 对话（文献循证 + 专科问答统一入口，本地多会话）
+    name: 'ai-chat',
+    path: '/ai/chat',
+    title: 'AI 对话',
+    hint: '文献循证与专科问答统一入口 · 本地多会话 · 证据与来源可追溯',
+    icon: 'spark',
+    group: 'AI 智能',
+  },
+  {
     // 第 190 批：统一系统迁入的第一个 AI 视图（AI 中台 /api/v1，与控制台共用同一会话令牌）
     name: 'ai-overview',
     path: '/ai-overview',

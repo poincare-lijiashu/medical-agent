@@ -400,6 +400,140 @@ export interface AiDownloadResult {
   truncated: boolean
 }
 
+export interface AiStreamOptions {
+  signal?: AbortSignal
+  /**
+   * 单条 SSE 事件回调。返回 `false` 表示调用方已拿到终态，
+   * 通道会立刻断开读取（释放服务端模型连接），不再等待剩余字节。
+   */
+  onEvent: (event: string, data: Record<string, unknown>) => boolean | void
+}
+
+/**
+ * AI 中台 SSE 流（第 198 批：文献循证 / 专科问答）。
+ *
+ * 为什么不能复用 `aiPost`：SSE 响应体不是一次性 JSON，`res.text()` 会等到
+ * 流结束才返回（长连接直接假死）；这里保留 `fetch` + `ReadableStream` 读取，
+ * 但**必须复用**同一枚 Bearer、同一次 401 刷新与同样的错误体解析，
+ * 否则会出现"页面其它请求自动续期、对话却直接 401"的割裂表现。
+ *
+ * 解析遵循 SSE 规范：`event:` 指定事件名、`data:` 可多行、空行分发；
+ * 服务端未以空行收尾时，残留的最后一条事件同样会分发（不能静默丢弃）。
+ */
+export async function aiStream(
+  path: string,
+  body: unknown,
+  opts: AiStreamOptions,
+  retried = false,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    Accept: 'text/event-stream',
+    'Content-Type': 'application/json',
+  }
+  if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
+
+  let res: Response
+  try {
+    res = await fetch(buildUrlWith(AI_BASE, path), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body ?? {}),
+      signal: opts.signal,
+    })
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'AbortError') throw err
+    throw new AiRequestError('AI 服务不可达，请检查网关与 AI 中台是否在线', 0)
+  }
+
+  if (res.status === 401) {
+    if (!retried && !opts.signal?.aborted && (await doRefresh())) {
+      return aiStream(path, body, opts, true)
+    }
+    onSessionExpired?.()
+    throw new AiRequestError('登录状态已失效，请重新登录', 401)
+  }
+  if (!res.ok || !res.body) {
+    let text = ''
+    try {
+      text = await res.text()
+    } catch {
+      text = ''
+    }
+    throw new AiRequestError(aiErrorMessage(text, res.status), res.status)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let event = ''
+  let dataLines: string[] = []
+  let stopped = false
+
+  /** 分发一条完整事件；返回 false 表示调用方要求停止读取。 */
+  function dispatch(): boolean {
+    if (!dataLines.length) {
+      event = ''
+      return true
+    }
+    const raw = dataLines.join('\n')
+    const name = event || 'message'
+    dataLines = []
+    event = ''
+    let data: Record<string, unknown>
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      data = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { value: parsed }
+    } catch {
+      data = { raw }
+    }
+    return opts.onEvent(name, data) !== false
+  }
+
+  try {
+    while (!stopped) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const rawLine of lines) {
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+        if (!line) {
+          if (!dispatch()) {
+            stopped = true
+            break
+          }
+          continue
+        }
+        if (line.startsWith(':')) continue // 注释/心跳
+        const at = line.indexOf(':')
+        const field = at === -1 ? line : line.slice(0, at)
+        let val = at === -1 ? '' : line.slice(at + 1)
+        if (val.startsWith(' ')) val = val.slice(1)
+        if (field === 'event') event = val
+        else if (field === 'data') dataLines.push(val)
+      }
+    }
+
+    if (!stopped && buffer.trim()) {
+      const line = buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer
+      if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+      else if (line.startsWith('event:')) event = line.slice(6).trim()
+      if (!dispatch()) stopped = true
+    }
+  } finally {
+    // 已拿到终态或调用方中止：主动取消响应体，让服务端尽快感知断开。
+    try {
+      await reader.cancel()
+    } catch {
+      /* 已关闭 */
+    }
+  }
+}
+
 /**
  * AI 中台文件下载（第 196 批：审计 CSV 全量导出）。
  *

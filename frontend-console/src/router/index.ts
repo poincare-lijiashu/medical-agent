@@ -29,6 +29,12 @@ const router = createRouter({
           component: () => import('@/views/DashboardView.vue'),
         },
         {
+          // 第 198 批：AI 对话（文献循证 + 专科问答统一入口）
+          path: 'ai/chat',
+          name: 'ai-chat',
+          component: () => import('@/views/AiChatView.vue'),
+        },
+        {
           path: 'ai-overview',
           name: 'ai-overview',
           component: () => import('@/views/AiOverviewView.vue'),

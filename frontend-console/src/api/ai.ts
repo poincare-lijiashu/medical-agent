@@ -506,3 +506,144 @@ export function aiKbPreview(tag: string): Promise<AiKbPreview> {
 export function aiKbDelete(tag: string): Promise<{ deleted?: string }> {
   return aiDelete<{ deleted?: string }>(`/medical/admin/kb/${encodeURIComponent(tag)}`)
 }
+
+/* ------------------------------------------------------------------ *
+ * AI 对话（第 198 批）：文献循证 + 专科问答
+ *
+ * 两条链路都是 AI 中台裸 JSON / SSE：
+ *   - 文献：`POST /medical/literature/stream`（progress/refine/result/error）
+ *           失败回落非流式 `POST /medical/literature/ask`（同一 session_id）。
+ *   - 问答：`POST /agent/consult/stream`（meta/delta/done/error）
+ *           失败回落非流式 `POST /agent/consult`。
+ * 流式走 `aiStream`（Bearer + 401 刷新 + SSE 解析），这里只描述契约。
+ * ------------------------------------------------------------------ */
+
+/** 精排证据（仅文献模式有值）。 */
+export interface AiEvidence {
+  content?: string
+  source?: string
+  score?: number
+  /** 精排原始分（sigmoid 前的 logit）；界面展示前转百分制更易读 */
+  rerank?: number
+}
+
+/** agentic 检索改写轨迹（第 N 轮改写/停止）。 */
+export interface AiRefineStep {
+  attempt?: number
+  action?: string
+  old_query?: string
+  new_query?: string
+  reason?: string
+}
+
+export interface AiLiteratureResult {
+  answer?: string
+  confidence?: number
+  needs_human_review?: boolean
+  sources?: string[]
+  review_id?: string | null
+  evidence?: AiEvidence[]
+  refine_trace?: AiRefineStep[]
+  status?: string
+}
+
+export function aiLiteratureAsk(
+  question: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<AiLiteratureResult> {
+  return aiPost<AiLiteratureResult>(
+    '/medical/literature/ask',
+    { question, session_id: sessionId },
+    signal,
+  )
+}
+
+export interface AiAgentSkillSpec {
+  id?: string
+  name?: string
+  description?: string
+  tags?: string[]
+  examples?: string[]
+}
+
+/** 能力域（智能体）目录项。 */
+export interface AiAgent {
+  id: string
+  name?: string
+  description?: string
+  model?: string
+  hitl?: boolean
+  autoRoutable?: boolean
+  roles?: string[]
+  tools?: string[]
+  skills?: AiAgentSkillSpec[]
+}
+
+export interface AiAgentCatalog {
+  agents?: AiAgent[]
+  tools?: string[]
+  flags?: Record<string, boolean>
+}
+
+/** 技能卡（普通角色只返回已发布）。 */
+export interface AiSkillCard {
+  code: string
+  name?: string
+  version?: number | string
+  agentId?: string
+  status?: string
+  examples?: string[]
+  description?: string
+}
+
+export interface AiAgentSkillRef {
+  code?: string
+  name?: string
+  version?: string | number
+}
+
+export interface AiRouting {
+  strategy?: string
+  reason?: string
+  confidence?: number
+  agentId?: string
+  candidates?: string[]
+}
+
+export interface AiConsultResult {
+  answer?: string
+  agent?: { id?: string; name?: string }
+  routing?: AiRouting
+  appliedSkills?: AiAgentSkillRef[]
+  declaredTools?: string[]
+  needsHumanReview?: boolean
+  note?: string
+  elapsedMs?: number
+  historyTurns?: number
+}
+
+export interface AiConsultHistoryTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export function aiAgentCatalog(signal?: AbortSignal): Promise<AiAgentCatalog> {
+  return aiGet<AiAgentCatalog>('/agent/catalog', undefined, signal)
+}
+
+export function aiAgentSkills(signal?: AbortSignal): Promise<{ skills?: AiSkillCard[] }> {
+  return aiGet<{ skills?: AiSkillCard[] }>('/agent/skills', undefined, signal)
+}
+
+export function aiAgentConsult(
+  body: {
+    question: string
+    agentId?: string
+    skillCodes?: string[]
+    history?: AiConsultHistoryTurn[]
+  },
+  signal?: AbortSignal,
+): Promise<AiConsultResult> {
+  return aiPost<AiConsultResult>('/agent/consult', body, signal)
+}
