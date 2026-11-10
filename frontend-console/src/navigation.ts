@@ -510,6 +510,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'QC'],
   },
   {
+    // 第 206 批：Bot 与长期记忆（管理员创建、质控审核记忆）
+    name: 'ai-bots',
+    path: '/ai/agent/bots',
+    title: 'AI Bot 与记忆',
+    hint: 'Bot 身份与模型绑定 · 技能卡与工具白名单 · 长期记忆候选确认 · 四眼发布 · 影响面',
+    icon: 'users',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',

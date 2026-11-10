@@ -1073,6 +1073,154 @@ export function aiSkillImpact(code: string): Promise<AiSkillImpact> {
   return aiGet<AiSkillImpact>(`/agent/skills/${encodeURIComponent(code)}/impact`)
 }
 
+/* ------------------------------------------------------------------ *
+ * Bot 与长期记忆（第 206 批，仅 ADMIN / QC）
+ *
+ * Bot 是一等身份：自己的模型绑定、技能卡、工具白名单与长期记忆。
+ * 发布治理与技能卡同纪律：DRAFT → IN_REVIEW → PUBLISHED / REJECTED，
+ * 四眼审核、rowVersion CAS、发布后不可改。
+ * 记忆默认落 CANDIDATE，必须由非录入人确认后才注入提示上下文。
+ * ------------------------------------------------------------------ */
+
+export interface AiBot {
+  code: string
+  name?: string
+  agentId?: string
+  /** 人格 / 职责说明（20-2000 字） */
+  persona?: string
+  /** default = 当前激活的 chat provider */
+  modelProvider?: string
+  modelId?: string | null
+  skillCodes?: string[]
+  toolAllowlist?: string[]
+  /** bot = 仅本 Bot；team = 团队协作内共享 */
+  memoryScope?: string
+  status?: string
+  version?: number
+  createdBy?: string
+  createdAt?: string
+  updatedBy?: string
+  updatedAt?: string
+  submittedBy?: string | null
+  submittedAt?: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
+  reviewNote?: string | null
+  rowVersion?: number
+}
+
+export interface AiBotInput {
+  code: string
+  name: string
+  agentId: string
+  persona: string
+  modelProvider: string
+  modelId?: string
+  skillCodes: string[]
+  toolAllowlist: string[]
+  memoryScope: string
+}
+
+export interface AiBotUpdateInput extends AiBotInput {
+  rowVersion: number
+}
+
+export interface AiBotMemory {
+  id: string
+  botCode?: string
+  key?: string
+  value?: string
+  source?: string
+  expiresAt?: string | null
+  /** CANDIDATE / CONFIRMED / DELETED */
+  status?: string
+  createdBy?: string
+  createdAt?: string
+  confirmedBy?: string | null
+  confirmedAt?: string | null
+  rowVersion?: number
+}
+
+export interface AiBotMemoryInput {
+  key: string
+  value: string
+  source: string
+  expiresAt?: string
+}
+
+export interface AiBotImpact {
+  botCode?: string
+  status?: string
+  teams?: AiSkillImpactRef[]
+  memories?: { total?: number; confirmed?: number; candidate?: number }
+  skillCards?: { code?: string; status?: string }[]
+  warning?: string | null
+}
+
+export function aiAgentBots(status?: string): Promise<{ bots?: AiBot[] }> {
+  return aiGet<{ bots?: AiBot[] }>('/agent/bots', { status })
+}
+
+/** 新建 Bot（仅 admin，落为 DRAFT）。 */
+export function aiBotCreate(input: AiBotInput): Promise<AiBot> {
+  return aiPost<AiBot>('/agent/bots', input)
+}
+
+export function aiBotUpdate(code: string, input: AiBotUpdateInput): Promise<AiBot> {
+  return aiPut<AiBot>(`/agent/bots/${encodeURIComponent(code)}`, input)
+}
+
+export function aiBotSubmit(code: string, rowVersion: number): Promise<AiBot> {
+  return aiPost<AiBot>(`/agent/bots/${encodeURIComponent(code)}/submit`, { rowVersion })
+}
+
+export function aiBotReview(
+  code: string,
+  approve: boolean,
+  note: string,
+  rowVersion: number,
+): Promise<AiBot> {
+  return aiPost<AiBot>(`/agent/bots/${encodeURIComponent(code)}/review`, {
+    approve,
+    note,
+    rowVersion,
+  })
+}
+
+export function aiBotDisable(code: string, rowVersion: number): Promise<AiBot> {
+  return aiPost<AiBot>(`/agent/bots/${encodeURIComponent(code)}/disable`, { rowVersion })
+}
+
+export function aiBotEnable(code: string, rowVersion: number): Promise<AiBot> {
+  return aiPost<AiBot>(`/agent/bots/${encodeURIComponent(code)}/enable`, { rowVersion })
+}
+
+export function aiBotMemories(code: string): Promise<{ memories?: AiBotMemory[] }> {
+  return aiGet<{ memories?: AiBotMemory[] }>(
+    `/agent/bots/${encodeURIComponent(code)}/memories`,
+  )
+}
+
+/** 录入记忆候选（仅 admin/qc；确认必须由另一人完成）。 */
+export function aiBotMemoryCreate(code: string, input: AiBotMemoryInput): Promise<AiBotMemory> {
+  return aiPost<AiBotMemory>(`/agent/bots/${encodeURIComponent(code)}/memories`, input)
+}
+
+export function aiBotMemoryConfirm(memId: string): Promise<AiBotMemory> {
+  return aiPost<AiBotMemory>(
+    `/agent/bot-memories/${encodeURIComponent(memId)}/confirm`,
+  )
+}
+
+/** 软删除：服务端同时清空正文（PHI 不长期残留）。 */
+export function aiBotMemoryDelete(memId: string): Promise<AiBotMemory> {
+  return aiDelete<AiBotMemory>(`/agent/bot-memories/${encodeURIComponent(memId)}`)
+}
+
+export function aiBotImpact(code: string): Promise<AiBotImpact> {
+  return aiGet<AiBotImpact>(`/agent/bots/${encodeURIComponent(code)}/impact`)
+}
+
 export function aiAgentConsult(
   body: {
     question: string

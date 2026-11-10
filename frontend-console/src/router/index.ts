@@ -224,6 +224,12 @@ const router = createRouter({
           component: () => import('@/views/AiSkillsView.vue'),
         },
         {
+          // 第 206 批：Bot 与长期记忆（管理员 / 质控）
+          path: 'ai/agent/bots',
+          name: 'ai-bots',
+          component: () => import('@/views/AiBotsView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',
