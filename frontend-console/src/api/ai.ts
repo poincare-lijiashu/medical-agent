@@ -8,7 +8,7 @@
  * 注意：Python 端点返回**裸 JSON**（无 `{code,data}` 信封），
  * 错误体是 FastAPI 的 `{detail}`；不要用 `get()`（那是 Java 信封通道）。
  */
-import { aiDelete, aiGet, aiPost } from './http'
+import { aiDelete, aiGet, aiPost, aiPut } from './http'
 
 /** `/api/v1/medical/overview` 的最小契约（其余字段按需再补）。 */
 export interface AiOverview {
@@ -902,9 +902,24 @@ export interface AiAgent {
   skills?: AiAgentSkillSpec[]
 }
 
+/** 工具注册表条目（含数据边界与出网标记）。 */
+export interface AiAgentTool {
+  name: string
+  title?: string
+  description?: string
+  /** patient = 可触达患者数据；none = 不含患者数据 */
+  phi?: string
+  externalEgress?: boolean
+  /** 受哪个运行时开关约束（null 表示不受开关限制） */
+  featureFlag?: string | null
+  enabled?: boolean
+  reason?: string | null
+  roles?: string[]
+}
+
 export interface AiAgentCatalog {
   agents?: AiAgent[]
-  tools?: string[]
+  tools?: AiAgentTool[]
   flags?: Record<string, boolean>
 }
 
@@ -1004,4 +1019,155 @@ export function aiImagingAsk(
     { question, ...(images.length ? { images } : {}) },
     signal,
   )
+}
+
+/* ------------------------------------------------------------------ *
+ * Agent 编排治理（第 204 批，仅管理员）
+ *
+ * 这一层只做「治理视图」，不执行临床推理：
+ *   - flags：运行时能力开关，PUT 带 expected 做 CAS，冲突返回 409；
+ *   - route：规则路由预览，可解释、可复现，不消耗 Token；
+ *   - catalog：智能体目录 + 工具注册表（同一端点，按角色过滤）；
+ *   - model-policy / web-policy：合规快照与出网白名单；
+ *   - second-opinion：双模型并列意见（不投票、不裁判）。
+ * ------------------------------------------------------------------ */
+
+/** 运行时能力开关（risk 决定是否需要二次确认）。 */
+export interface AiAgentFlag {
+  key: string
+  title: string
+  description: string
+  risk?: string
+  enabled?: boolean
+  /** 出厂默认值（用于界面提示「默认关闭」） */
+  default?: boolean
+}
+
+/** 路由候选（分数为规则命中分，不是模型概率）。 */
+export interface AiAgentRouteCandidate {
+  agent?: string
+  score?: number
+  reason?: string
+}
+
+export interface AiAgentRouteResult {
+  agent?: string
+  name?: string
+  confidence?: number
+  reason?: string
+  /** single = 单智能体直达；multi = 多智能体协同 */
+  strategy?: string
+  candidates?: AiAgentRouteCandidate[]
+  maxHops?: number
+  fallbackAgent?: string
+  multiAgentEnabled?: boolean
+  hitl?: boolean
+  /** 前置拒答/引导文案（为空表示正常分派） */
+  prefilterReply?: string | null
+}
+
+/** 模型合规视图：绝不含 api_key。 */
+export interface AiAgentProviderView {
+  id?: string
+  displayName?: string
+  modelId?: string
+  apiFormat?: string
+  /** admin/qc 可见完整主机；其他角色为掩码 */
+  host?: string
+  /** local / domestic / foreign / unknown */
+  class?: string
+  allowed?: boolean
+}
+
+export interface AiAgentModelPolicy {
+  allowedClasses?: string[]
+  providers?: AiAgentProviderView[]
+  allowed?: AiAgentProviderView[]
+  blocked?: AiAgentProviderView[]
+  note?: string
+}
+
+export interface AiAgentWebPolicy {
+  enabled?: boolean
+  domestic?: string[]
+  academic?: string[]
+  extra?: string[]
+  allowedDomains?: string[]
+  note?: string
+}
+
+export interface AiAgentOpinion {
+  id?: string
+  displayName?: string
+  modelId?: string
+  status?: string
+  answer?: string | null
+  /** 稳定错误码（如 MODEL_FAILED），不含异常类型名 */
+  error?: string
+  hitl?: boolean
+}
+
+export interface AiAgentDivergence {
+  level?: string
+  lexicalOverlap?: number
+  numericConflicts?: string[]
+  note?: string
+}
+
+export interface AiAgentSecondOpinion {
+  question?: string
+  opinions?: AiAgentOpinion[]
+  failed?: number
+  divergence?: AiAgentDivergence | null
+  needsHumanReview?: boolean
+  elapsedMs?: number
+  note?: string
+}
+
+export function aiAgentFlags(): Promise<{ flags?: AiAgentFlag[] }> {
+  return aiGet<{ flags?: AiAgentFlag[] }>('/agent/flags')
+}
+
+/**
+ * 切换运行时开关（仅 admin）。
+ *
+ * `expected` 是切换前的值：两名管理员同时操作时，后到的一次会 409，
+ * 由前端重新拉取真实值，避免静默覆盖。
+ */
+export function aiAgentSetFlag(
+  key: string,
+  value: boolean,
+  expected?: boolean,
+): Promise<{ ok?: boolean; key?: string; value?: boolean }> {
+  return aiPut<{ ok?: boolean; key?: string; value?: boolean }>('/agent/flags', {
+    key,
+    value,
+    expected,
+  })
+}
+
+export function aiAgentRoute(
+  question: string,
+  multiAgent: boolean,
+): Promise<AiAgentRouteResult> {
+  return aiPost<AiAgentRouteResult>('/agent/route', { question, multiAgent })
+}
+
+export function aiAgentModelPolicy(): Promise<AiAgentModelPolicy> {
+  return aiGet<AiAgentModelPolicy>('/agent/model-policy')
+}
+
+export function aiAgentWebPolicy(): Promise<AiAgentWebPolicy> {
+  return aiGet<AiAgentWebPolicy>('/agent/web-policy')
+}
+
+/** 双模型第二意见：provider 必须合规；只传 2 个，或留空由服务端取前两个。 */
+export function aiAgentSecondOpinion(
+  question: string,
+  providerIds: string[],
+): Promise<AiAgentSecondOpinion> {
+  return aiPost<AiAgentSecondOpinion>('/agent/second-opinion', {
+    question,
+    providerIds: providerIds.length ? providerIds : undefined,
+  })
 }

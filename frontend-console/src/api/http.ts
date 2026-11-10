@@ -388,6 +388,11 @@ export function aiPost<T>(path: string, body?: unknown, signal?: AbortSignal) {
   return aiRequest<T>(path, { method: 'POST', body, signal })
 }
 
+/** AI 中台 PUT（第 204 批）：运行时开关等幂等更新，语义与 POST 一致。 */
+export function aiPut<T>(path: string, body?: unknown, signal?: AbortSignal) {
+  return aiRequest<T>(path, { method: 'PUT', body, signal })
+}
+
 export function aiDelete<T>(path: string, signal?: AbortSignal) {
   return aiRequest<T>(path, { method: 'DELETE', signal })
 }

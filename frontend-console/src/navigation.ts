@@ -490,6 +490,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['auth:user:read', 'audit:log:read'],
   },
   {
+    // 第 204 批：Agent 编排治理总览（运行时开关 / 路由 / 目录 / 工具 / 合规 / 第二意见）
+    name: 'ai-agent',
+    path: '/ai/agent',
+    title: 'AI 智能体编排',
+    hint: '能力开关 · 路由预览 · 智能体目录 · 工具注册表 · 模型合规 · 双模型第二意见',
+    icon: 'branch',
+    group: '系统管理',
+    roles: ['ADMIN'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',

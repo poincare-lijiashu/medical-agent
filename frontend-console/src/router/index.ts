@@ -212,6 +212,12 @@ const router = createRouter({
         },
         { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
         {
+          // 第 204 批：Agent 编排治理总览（仅管理员）
+          path: 'ai/agent',
+          name: 'ai-agent',
+          component: () => import('@/views/AiAgentView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',
