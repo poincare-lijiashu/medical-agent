@@ -44,6 +44,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - PHI：入站脱敏身份证/手机/邮箱/病案号/社保卡；审计追加式、无删除接口。
 - 双人核对：药物禁忌/影像高危/低置信入队，审核人≠提交人。
 - 密钥：仅 `.env.local`（不进版本库）；`.env.example` 只放占位符。
+- **统一身份与跨端 SSO（第 126/186 批）**：医院平台（Java `platform/auth`）是唯一签发方，
+  Python AI 中台按 `roles` 声明映射角色（`ADMIN/DOCTOR/QC/PHARMACIST` → 同名，临床辅助角色
+  → 只读 `nurse`，挂号/医保 → `guest`），并同步 Java 侧的吊销/停用名单。
+  控制台「AI 深度工作台」入口使用**同域一次性票据**（localStorage，60s、读即删）交接令牌，
+  目标页启动时经 `/auth/me` 服务端验签——令牌不进 URL。反方向不自动登录（自签令牌缺 Java 声明）。
 - 临床数据接口统一 `Cache-Control: no-store` + `Pragma: no-cache`（共用工作站退出后
   "返回"不还原上一位患者数据）；**豁免** `/medical/drug/dict`（保留 ETag/304 省 116KB）
   与 `/medical/config`（非 PHI 高频配置）。`/healthz`、静态资源不强制。

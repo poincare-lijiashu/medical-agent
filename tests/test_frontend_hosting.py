@@ -93,10 +93,15 @@ def test_ai_workbench_still_served_at_root():
 
 
 def test_cross_entry_links_between_two_uis():
-    """第 185 批：两套 UI 同域后必须能互相跳转（否则用户要靠记 URL，仍像两套系统）。"""
+    """第 185/186 批：两套 UI 同域后必须能互相跳转，且控制台 → AI 工作台走 SSO 交接。
+
+    控制台侧不能用普通 `<a href="/">`——那会绕过一次性票据，用户到目标页仍要再登录。
+    """
     console_shell = _read(os.path.join(CONSOLE, "src", "layouts", "AppShell.vue"))
-    assert 'href="/"' in console_shell and "shell.aiWorkbench" in console_shell, \
-        "临床控制台必须提供进入 AI 工作台的入口"
+    assert "openAiWorkbench" in console_shell and "window.open('/', '_blank', 'noopener')" in console_shell
+    assert "issueHandoff(session.state.accessToken)" in console_shell, \
+        "打开 AI 工作台前必须写入一次性 SSO 票据"
+    assert 'href="/"' not in console_shell, "跨端入口不得用普通链接（会绕过 SSO 交接）"
     vue_shell = _read(os.path.join(REPO, "frontend-vue", "src", "layouts", "AppShell.vue"))
     assert 'href="/console/"' in vue_shell, "AI 工作台必须提供进入临床控制台的入口"
     i18n_zh = _read(os.path.join(CONSOLE, "src", "i18n", "zh-CN.ts"))

@@ -7722,3 +7722,45 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 - 审计校验结果未持久化"最近一次"，刷新页面即清空；
 - 下一步：身份统一（SSO 桥）或长列表虚拟滚动。
 
+## 189. 2026-11-10 跨端单点登录：控制台 → AI 工作台一次性票据（第 186 批）
+
+**问题**
+
+- 两套 UI 同域后仍是"各登录一次"：医生从控制台点进 AI 工作台还要再输账号，
+  这是全站最像"拼装系统"的地方；
+- 既有 iframe 集成用 `?token=` 传令牌：令牌会进浏览器历史、Referer 与代理日志，
+  属于明确的泄漏面。
+
+**已做**
+
+1. **同域一次性票据**（`frontend-console/src/utils/sso.ts`）：
+   `medassist.sso.handoff.v1` 存 `{token, at}`，60 秒有效；
+   控制台「AI 深度工作台」改为按钮——先写票据再
+   `window.open('/', '_blank', 'noopener')`，**令牌不进 URL**；
+   存储不可用时不阻断跳转（目标页走自身登录页兜底）。
+2. **目标页消费**（`frontend-vue/src/utils/sso.js` + `main.js`）：
+   **先删除再解析**（坏票据也只能用一次），过期/损坏返回空串；
+   `main.js` 在 **router 挂载前** `adoptToken()`，令牌仍由 `/api/v1/auth/me` 服务端验签，
+   并做 Java 侧吊销/停用检查（前端绝不自报身份）。
+   显式 `?token=` 仍优先，兼容既有 iframe 集成。
+3. **边界**：反方向（AI 工作台 → 控制台）不做自动登录——Python 自签令牌不含 Java 的
+   `roles` 声明，强行复用会 401，仍走普通链接。
+4. **文档**：`docs/OPERATIONS.md`「统一身份与跨端 SSO」、`docs/DEPLOY.md` 前端章节写明方式与边界。
+5. **回归锁 `tests/test_sso_handoff.py`（3 条）**：控制台写票据且不得拼接 URL；
+   目标页必须在 router 挂载前消费并调 `adoptToken`；
+   **node 直接执行 `sso.js`** 验证一次性 / 60s 过期 / 坏 JSON / 无票据四类真实行为。
+
+**验证**
+
+```
+定向：test_sso_handoff + test_frontend_hosting → 10 passed（含 node 行为测试）
+前端：console typecheck + build 通过；frontend-vue build 通过（两套 dist 已入库）
+全量（不含 e2e）→ 1770 passed / 1 skipped
+```
+
+**遗留**
+
+- 控制台登出不会销毁 AI 工作台已建立的会话（各自 TTL）；"全局登出"需要服务端会话中心；
+- 反方向自动登录需要 Java 接受 Python 令牌，或统一到同一签发方（身份收敛时一并做）；
+- 审计校验结果不持久化；长列表虚拟滚动仍未做。
+

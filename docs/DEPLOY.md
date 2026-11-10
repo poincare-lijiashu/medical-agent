@@ -70,8 +70,11 @@ npm run build   # 产物：frontend-console/dist/（vite base=/console/，router
 - 两套产物的资源前缀不同：AI 工作台用 `/assets/*`，控制台用 `/console/assets/*`
   （vite base 决定），因此可以安全地放在同一域名下，不会互相覆盖；
   `backend/main.py` 的 StaticFiles（根）与 `/console/**` 路由分别托管，深链全部回落各自 index.html。
-- **入口互跳（第 185 批）**：AI 工作台顶栏「临床控制台 ↗」→ `/console/`；控制台用户菜单
-  「AI 深度工作台」→ `/`。均新开页签，不打断当前业务上下文；两套 UI 各自维护登录态。
+- **入口互跳与单点登录（第 185/186 批）**：AI 工作台顶栏「临床控制台 ↗」→ `/console/`；
+  控制台用户菜单「AI 深度工作台」→ `/`。控制台方向走 **同域 SSO 交接**：点击时写一张
+  一次性票据（localStorage，60 秒有效、读即删除），AI 工作台启动时取走并经 `/auth/me`
+  服务端验签确认——**令牌不进 URL/历史记录**。反方向仍是普通链接（Python 自签令牌不含
+  Java 侧 `roles` 声明，不能反向复用），需各自登录。
 
 ### 部署形态
 
