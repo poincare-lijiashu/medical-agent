@@ -248,6 +248,12 @@ const router = createRouter({
           component: () => import('@/views/AiLibraryView.vue'),
         },
         {
+          // 第 210 批：智能体实验台（睡眠记忆体检 / 有界工具循环）
+          path: 'ai/agent/lab',
+          name: 'ai-lab',
+          component: () => import('@/views/AiLabView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',

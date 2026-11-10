@@ -1654,6 +1654,87 @@ export function aiProposalReject(id: string, note: string): Promise<AiProposal> 
   return aiPost<AiProposal>(`/agent/skill-proposals/${encodeURIComponent(id)}/reject`, { note })
 }
 
+/* ------------------------------------------------------------------ *
+ * 智能体实验台（第 210 批，仅 ADMIN / QC）
+ *
+ * 两件只读/受控的运行时验证：
+ *   - 睡眠记忆体检：过期、候选滞留、重复/近似、跨 Bot 同 key 冲突；只建议不修改；
+ *   - 有界工具循环：≤3 步 / ≤3 次调用 / ≤60s，越权工具不执行，逐步审计。
+ * ------------------------------------------------------------------ */
+
+export interface AiSleepFinding {
+  kind?: string
+  severity?: string
+  botCode?: string
+  memoryIds?: string[]
+  keys?: string[]
+  values?: string[]
+  reason?: string
+  suggestion?: string
+}
+
+export interface AiSleepSummary {
+  memories?: number
+  bots?: number
+  findings?: number
+  byKind?: Record<string, number>
+  bySeverity?: Record<string, number>
+}
+
+export interface AiSleepReport {
+  reportId?: string
+  generatedAt?: string
+  generatedBy?: string
+  filters?: { botCodes?: string[] }
+  summary?: AiSleepSummary
+  findings?: AiSleepFinding[]
+  note?: string
+}
+
+export interface AiToolStep {
+  step?: number
+  /** tool / final / timeout / error */
+  type?: string
+  /** OK / BLOCKED / ERROR / TIMEOUT */
+  status?: string
+  tool?: string
+  ms?: number
+  argKeys?: string[]
+  error?: string
+}
+
+export interface AiToolLoopResult {
+  botCode?: string
+  provider?: AiAgentProviderView
+  question?: string
+  answer?: string
+  steps?: AiToolStep[]
+  toolCalls?: number
+  truncated?: boolean
+  elapsedMs?: number
+  needsHumanReview?: boolean
+  note?: string
+}
+
+export function aiSleepLast(): Promise<{ report?: AiSleepReport | null }> {
+  return aiGet<{ report?: AiSleepReport | null }>('/agent/sleep-memory/last')
+}
+
+/** 运行一次只读体检（可选指定 Bot）；不自动修改任何记忆。 */
+export function aiSleepScan(botCodes?: string[]): Promise<AiSleepReport> {
+  return aiPost<AiSleepReport>('/agent/sleep-memory/scan', {
+    botCodes: botCodes && botCodes.length ? botCodes : undefined,
+  })
+}
+
+/** 有界工具循环：真实调用模型与工具，会消耗配额。 */
+export function aiBotToolLoop(code: string, question: string): Promise<AiToolLoopResult> {
+  return aiPost<AiToolLoopResult>(
+    `/agent/bots/${encodeURIComponent(code)}/tool-loop`,
+    { question },
+  )
+}
+
 export function aiAgentConsult(
   body: {
     question: string

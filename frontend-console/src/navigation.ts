@@ -550,6 +550,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'QC'],
   },
   {
+    // 第 210 批：智能体实验台（记忆体检 / 工具循环）
+    name: 'ai-lab',
+    path: '/ai/agent/lab',
+    title: 'AI 智能体实验台',
+    hint: '睡眠记忆体检（过期/重复/冲突）· 有界工具循环（≤3 步 / ≤3 次 / ≤60s）· 逐步审计',
+    icon: 'terminal',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',
