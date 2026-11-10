@@ -7074,3 +7074,47 @@ Python 全量（不含 e2e）→ 1656 passed / 1 skipped（跨栈无回归）
   院方规范到手后改函数即可；
 - 长连接/重连/批量预取未做（短连接 + 逐条 ACK 是兼容性最好的起点）；
 - 尚无 staging 真实网关联调（当前用 TCP 回环 + mock 覆盖协议与映射）。
+
+## 174. 2026-11-10 评测 05 P1-8：版本号单一真源 + 发布一致性门禁（第 171 批）
+
+**问题（评测 05 P1-8）**
+
+- 版本号散落四处且已实测漂移：backend `config.py=1.0.0`、Chart `appVersion=0.1.0-SNAPSHOT`、
+  前端 `package.json=0.1.0`、`values-prod` 镜像 tag=1.0.0；没有 CHANGELOG/发布产物清单，
+  "发的到底是哪个版本"只能靠人记。
+
+**已做**
+
+1. **单一真源**：仓库根新增 `VERSION`（`1.0.0`）。
+   - `backend/config.py`：`app_version` 默认值改为 `_read_version()` 读 VERSION
+     （读不到回落 `0.0.0-dev`）；`APP_VERSION` 环境变量仍可覆盖（部署期打标）。
+   - `deploy/helm/medassist-platform/Chart.yaml`：`appVersion` 对齐 `1.0.0`
+     （Java 平台版本独立演进，不再强行与 Maven SNAPSHOT 绑死）。
+   - `frontend-vue/package.json`：`version` 对齐 `1.0.0`。
+2. **`scripts/release_check.py`**（CI/本地同一命令）：
+   - 校验 VERSION 为合法 SemVer，且 backend 运行时值 / Chart.appVersion / 前端 package.json
+     三处与 VERSION 一致；不一致退出码 1（阻断发布）；
+   - 同时输出发布清单：版本、git sha/dirty、三类镜像 tag（`ai-core:1.0.0` /
+     `medassist-platform:1.0.0` / `frontend-vue:1.0.0`）；`--json` 供 CI 归档。
+   - 读取 JSON/YAML 用 `utf-8-sig`：Windows 写入 BOM 时不误报（本批实测踩到，已修）。
+3. **CI**：`lint` job 增加 `python scripts/release_check.py`——版本漂移即红。
+4. **回归锁**（`tests/test_release_version.py` 7 条）：四处一致、backend 默认值确实来自
+   VERSION 文件、Chart/前端对齐、`--json` 清单结构与 problems 为空、漂移可检出、
+   非法 SemVer 被拒、CI 确实执行该脚本。
+
+**验证**
+
+```
+python scripts/release_check.py
+→ 版本：1.0.0  git：<sha> ｜ 镜像：ai-core:1.0.0 / medassist-platform:1.0.0 / frontend-vue:1.0.0
+→ 版本一致性：OK（VERSION / backend / Chart.appVersion / frontend 四处一致）
+定向：tests/test_release_version.py → 7 passed
+全量（不含 e2e）→ 1675 passed / 1 skipped
+```
+
+**遗留**
+
+- 无自动生成 CHANGELOG（台账 `docs/AGENT-RUNTIME-20261105.md` 仍是唯一变更史；
+  若需 `CHANGELOG.md` 可从台账按批次生成，属后续项）；
+- Java 平台（`platform/pom.xml`）版本 `0.1.0-SNAPSHOT` 与 AI 中台 1.0.0 并行演进，
+  未纳入本门禁（两套技术栈发布节奏不同，强行统一会误导）。

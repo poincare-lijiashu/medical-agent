@@ -1,7 +1,7 @@
 {
   "name": "medassist-frontend-vue",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "MedAssist Vue3 新前端（迁移轮1：脚手架 + 登录/导航/布局壳）",
   "scripts": {
@@ -28,3 +28,4 @@
     "vitest": "^3.2.4"
   }
 }
+

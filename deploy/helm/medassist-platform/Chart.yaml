@@ -2,11 +2,11 @@ apiVersion: v2
 name: medassist-platform
 description: MedAssist 全院级平台（Java 微服务矩阵 gateway/auth/empi + Python AI 中台）生产部署 Chart
 type: application
-# Chart 版本遵循 SemVer；appVersion 跟随平台版本（与 Maven 0.1.0-SNAPSHOT 对齐）
+# Chart 版本遵循 SemVer；appVersion 与仓库根 VERSION 单一真源一致（Java 平台版本独立演进）
 # 0.2.0（2026-11-06）：新增 Agent 运营告警 PrometheusRule 模板、ai-core ServiceMonitor、
 #                      values 三个告警开关；均为可选能力，默认关闭。变更点见 README「版本记录」。
 version: 0.2.0
-appVersion: "0.1.0-SNAPSHOT"
+appVersion: "1.0.0"
 kubeVersion: ">=1.27.0-0"
 keywords:
   - his
@@ -15,3 +15,4 @@ keywords:
   - medical
 annotations:
   medassist.io/owner: platform-team
+

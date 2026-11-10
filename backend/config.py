@@ -10,10 +10,26 @@ _live_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_local = os.path.join(_live_path, ".env.local")
 
 
+def _read_version() -> str:
+    """版本单一真源：仓库根 `VERSION`（评测 05 P1-8）。
+
+    此前版本号散落四处（config.py / Chart.yaml appVersion / frontend package.json /
+    values-prod 镜像 tag），已实测漂移（1.0.0 vs 0.1.0-SNAPSHOT）。
+    现在代码默认值读 VERSION；`APP_VERSION` 环境变量仍可覆盖（部署期临时打标）。
+    读不到文件时回落 "0.0.0-dev"（源码树外运行不炸）。
+    """
+    try:
+        with open(os.path.join(_live_path, "VERSION"), "r", encoding="utf-8") as f:
+            v = (f.read() or "").strip()
+            return v or "0.0.0-dev"
+    except OSError:
+        return "0.0.0-dev"
+
+
 class Settings(BaseSettings):
     # 应用/服务
     app_env: str = "development"
-    app_version: str = "1.0.0"
+    app_version: str = _read_version()
     log_level: str = "INFO"
     server_host: str = "127.0.0.1"
     server_port: int = 8001

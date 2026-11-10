@@ -107,6 +107,9 @@ jobs:
         run: pip install ruff==0.14.4
       - name: Ruff（E9 + pyflakes）
         run: python -m ruff check backend tests scripts
+      # 评测 05 P1-8：版本号单一真源（VERSION）与四处落点一致性；漂移即阻断发布
+      - name: 版本一致性（VERSION / backend / Chart / 前端）
+        run: python scripts/release_check.py
 
   vuln-scan:
     # 评测 C5（05-testing-ci P0-4）：供应链漏洞扫描。
