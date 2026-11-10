@@ -60,6 +60,14 @@ spec:
             matchLabels:
               {{- include "medassist.selectorLabels" (dict "root" $ "component" "gateway") | nindent 14 }}
         {{- if eq $component "empi" }}
+        # 第 174 批：AI 中台读取患者主索引（EMPI 唯一真源），同命名空间内网直连、
+        # 不经网关（/internal/** 网关永久 404），仍要求 X-Internal-Token。
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "ai-core") | nindent 14 }}
         # 临床核心与药房直接调用 EMPI 内部患者接口（服务间直连，不经网关）
         - namespaceSelector:
             matchLabels:

@@ -134,6 +134,15 @@ spec:
               value: {{ .Values.aiCore.trustedProxies | default "" | quote }}
             - name: AUDIT_TIMEZONE
               value: {{ .Values.aiCore.auditTimezone | default "" | quote }}
+            {{- if .Values.aiCore.empi.baseUrl }}
+            # 患者主索引（EMPI）唯一真源（第 174 批）：内部接口令牌与 clinical/empi 共用
+            # external.internalApi 的 Secret；缺令牌时 AI 侧 fail-closed（拒绝读取患者主索引）。
+            - name: EMPI_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.internalApi.existingSecret }}
+                  key: {{ .Values.external.internalApi.secretKey }}
+            {{- end }}
             {{- if .Values.external.redis.enabled }}
             # 多副本必需：限流计数 / 会话记忆 / 令牌撤销时间戳跨实例共享。
             # 不配置时退化为进程内内存（单副本可用，多副本会各算各的）。

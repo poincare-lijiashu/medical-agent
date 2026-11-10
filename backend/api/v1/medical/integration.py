@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend.api.deps import rate_limit, require_role
 from backend.api.v1.medical import shared as _shared
 from backend.config import settings
+from backend.integration import empi as empi_source
 from backend.integration import registry as his_registry
 from backend.integration.base import NullAdapter
 
@@ -53,35 +54,57 @@ async def integration_status(user: dict = Depends(require_role("doctor", "admin"
     与读端点不同：**未对接/配置错误也返回 200**（configured=false + error 文案），
     让实施人员能区分「尚未配置」与「已配置但读取故障」；只回适配器标识与协议名，
     不回网关地址、账号、令牌等凭据信息，也不写审计（无患者数据、无业务动作）。
+
+    第 174 批：`configured` 仍表示 HIS 适配器（医嘱/回写的来源）；患者摘要另由
+    `empi.configured` 表示——EMPI 是患者主索引唯一真源，两者可独立对接。
     """
+    empi_state = empi_source.describe()
     try:
         adapter = his_registry.get_adapter()
     except Exception as e:  # noqa: BLE001 —— 未知厂商标识/缺必填配置：如实回报，不抛 500
         return {"configured": False, "adapter": (settings.his_adapter or "none").strip().lower(),
-                "protocol": "", "error": str(e)[:160]}
+                "protocol": "", "error": str(e)[:160], "empi": empi_state}
     if isinstance(adapter, NullAdapter):
-        return {"configured": False, "adapter": "none", "protocol": "", "error": ""}
+        return {"configured": False, "adapter": "none", "protocol": "", "error": "",
+                "empi": empi_state}
     return {"configured": True, "adapter": (settings.his_adapter or "").strip().lower(),
-            "protocol": getattr(adapter, "protocol", ""), "error": ""}
+            "protocol": getattr(adapter, "protocol", ""), "error": "", "empi": empi_state}
 
 
 @router.get("/integration/patient/{patient_id}")
 async def integration_patient(patient_id: str,
                               user: dict = Depends(require_role("doctor", "admin", "qc"))):
-    """按主索引读取患者摘要（姓名/性别/年龄）；未找到 404；HIS 故障 502。"""
+    """按主索引读取患者摘要：**优先 EMPI（唯一真源）**，未配置 EMPI 时回落 HIS 适配器。
+
+    AI 侧不复制患者主数据，只做只读引用；审计仍用患者标识哈希（PHI 最小化）。
+    """
+    if empi_source.is_configured():
+        try:
+            rec = await asyncio.to_thread(empi_source.get_client().fetch_patient, patient_id)
+        except Exception as e:  # noqa: BLE001 —— EMPI 故障/令牌错误不冒泡成 500
+            await _audit("read_failed", user, kind="patient", source="empi",
+                         pid_hash=_pid_hash(patient_id), error=str(e)[:160])
+            raise HTTPException(502, "EMPI 患者信息读取失败（已记录，请稍后重试）")
+        if rec is None:
+            await _audit("patient_not_found", user, source="empi", pid_hash=_pid_hash(patient_id))
+            raise HTTPException(404, "EMPI 未找到该患者（请核对患者主索引）")
+        await _audit("patient_read", user, source="empi", pid_hash=_pid_hash(patient_id),
+                     adapter="EmpiClient")
+        return {"patient": rec, "source": "empi", "adapter": "EmpiClient"}
+
     adapter = _adapter()
     try:
         rec = await asyncio.to_thread(adapter.fetch_patient, patient_id)
     except Exception as e:  # noqa: BLE001 —— 适配器故障不冒泡成 500 堆栈（前端有明确文案）
-        await _audit("read_failed", user, kind="patient", pid_hash=_pid_hash(patient_id),
-                     error=str(e)[:160])
+        await _audit("read_failed", user, kind="patient", source="his",
+                     pid_hash=_pid_hash(patient_id), error=str(e)[:160])
         raise HTTPException(502, "HIS 患者信息读取失败（已记录，请稍后重试）")
     if rec is None:
-        await _audit("patient_not_found", user, pid_hash=_pid_hash(patient_id))
+        await _audit("patient_not_found", user, source="his", pid_hash=_pid_hash(patient_id))
         raise HTTPException(404, "HIS 未找到该患者（请核对患者主索引）")
-    await _audit("patient_read", user, pid_hash=_pid_hash(patient_id),
+    await _audit("patient_read", user, source="his", pid_hash=_pid_hash(patient_id),
                  adapter=type(adapter).__name__)
-    return {"patient": rec, "adapter": type(adapter).__name__}
+    return {"patient": rec, "source": "his", "adapter": type(adapter).__name__}
 
 
 @router.get("/integration/orders/{patient_id}")

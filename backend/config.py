@@ -246,6 +246,15 @@ class Settings(BaseSettings):
     hl7_mllp_port: int = 2575
     hl7_mllp_timeout_s: float = 5.0
     hl7_encoding: str = "utf-8"
+    # ---- 患者主索引（EMPI）唯一真源（评测「HIS 深度集成」第 ③ 步）----
+    # AI 侧不建患者表、不复制主数据：读患者摘要时优先走院内 EMPI 内部接口
+    # （同命名空间直连，X-Internal-Token 与平台共用 external.internalApi 同一个 Secret）。
+    # EMPI_BASE_URL 留空 = 未配置（回落到 HIS 适配器，兼容院方暂无 EMPI 的现场）；
+    # 配了地址但没配令牌 → fail-closed（拒绝启动读取，状态端点回报配置错误）。
+    empi_base_url: str = ""
+    empi_internal_token: str = ""
+    empi_timeout_s: float = 5.0
+    empi_verify_tls: bool = True
 
     # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN / QC_AUTO_SIGN_FULL 均可被同名环境变量覆盖）
     qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审

@@ -76,3 +76,33 @@ def test_his_assist_has_own_rate_limit_before_clinical_catch_all():
     paths = [r["path"] for r in rules]
     assert "/api/v2/clinical/ai-assist" in paths, "缺少 HIS → AI 外部通道限流规则"
     assert paths.index("/api/v2/clinical/ai-assist") < paths.index("/api/v2/clinical")
+
+
+# ---------- 第 174 批：AI 中台 → EMPI 内网通道（患者主索引唯一真源） ----------
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def test_ai_core_empi_wiring_is_fail_closed():
+    """EMPI 地址走 ConfigMap、令牌仅在有地址时从 internalApi Secret 注入（缺令牌即不读）。"""
+    values = _load(os.path.join(CHART, "values.yaml"))
+    assert values["aiCore"]["empi"]["baseUrl"] == "", "默认必须未配置（回落 HIS 适配器）"
+
+    cfg = _read(os.path.join(CHART, "templates", "configmap-ai-core.yaml"))
+    assert "EMPI_BASE_URL" in cfg and "EMPI_TIMEOUT_S" in cfg and "EMPI_VERIFY_TLS" in cfg
+
+    dep = _read(os.path.join(CHART, "templates", "deployment-ai-core.yaml"))
+    assert "{{- if .Values.aiCore.empi.baseUrl }}" in dep
+    assert "EMPI_INTERNAL_TOKEN" in dep
+    assert ".Values.external.internalApi.existingSecret" in dep, \
+        "内部令牌必须复用 Java 侧同一枚 Secret（否则 EMPI fail-closed 403）"
+
+
+def test_empi_network_policy_allows_ai_core():
+    """empi 段入站放行必须包含 ai-core；漏配时 prod 开 NetworkPolicy 后 AI 读患者只会超时。"""
+    netpol = _read(os.path.join(CHART, "templates", "networkpolicy.yaml"))
+    empi_block = netpol.split('{{- if eq $component "empi" }}', 1)[1] \
+                      .split('{{- if eq $component "clinical" }}', 1)[0]
+    assert '"component" "ai-core"' in empi_block

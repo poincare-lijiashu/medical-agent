@@ -7207,3 +7207,52 @@ mvn -pl gateway,clinical -am -Dtest=GatewayRouteConfigTest,AiAssistControllerMap
 - `"/"` 仍指向 ai-core：FastAPI 的 `/docs`、`/openapi.json` 等文档端点未纳入收敛
   （若公网可达会暴露内部接口结构），建议下一批与 `/actuator` 一起做入口白名单；
 - 下一步：③ EMPI 唯一真源（AI 侧只存 `empi_id` + 哈希）。
+
+## 177. 2026-11-10 HIS 深度集成：患者主索引 EMPI 唯一真源（第 174 批）
+
+**问题**
+
+- 第 168 批起患者摘要只能来自 HIS 适配器（FHIR/HL7/demo）。院内 EMPI 才是患者主索引
+  唯一真源，AI 侧若沿这条路径继续，未来落库必然复制患者主数据（重复、漂移、PHI 扩散）；
+- EMPI 已有内网接口 `GET /internal/patients/{uuid}`（令牌 fail-closed），但 AI 中台
+  既没有客户端，Helm 也没注入 `EMPI_*`，NetworkPolicy 更未放行 `ai-core → empi`——
+  生产开启网络策略后只会超时。
+
+**已做**
+
+1. **`backend/integration/empi.py`（只读客户端）**：`X-Internal-Token` + 5s 超时；
+   404→`None`、401/403→`ValueError`（配置/令牌问题，响亮失败）、5xx/网络→抛出；
+   只映射最小字段（姓名/性别/出生日期→年龄/病案号/状态），证件号/手机号/住址不出域；
+   地址或令牌缺失即 `ValueError`（**fail-closed，不允许匿名读主索引**）。
+   `settings` 新增 `EMPI_BASE_URL / EMPI_INTERNAL_TOKEN / EMPI_TIMEOUT_S / EMPI_VERIFY_TLS`。
+2. **读端点改为"EMPI 优先、HIS 回落"**：`/integration/patient/{id}` 响应新增
+   `source`（`empi`/`his`）与 `adapter`；审计仍只用患者标识哈希并带 `source`；
+   `/integration/status` 增加 `empi.configured` 与 `empi.error`（不回显地址/令牌）。
+3. **Helm 接线（缺一项生产就跑不通）**：`aiCore.empi.baseUrl`（默认空）；
+   ConfigMap 注入 `EMPI_BASE_URL/EMPI_TIMEOUT_S/EMPI_VERIFY_TLS`；Deployment **仅在
+   配置了地址时**从 `external.internalApi` 的同一枚 Secret 注入 `EMPI_INTERNAL_TOKEN`；
+   NetworkPolicy 放行同命名空间 `ai-core → empi`。
+4. **控制台「HIS 集成工作台」**：状态卡展示 EMPI 是否唯一真源与诊断文案；患者卡新增
+   "来源 / 病案号"；仅配置 EMPI 时患者摘要可读、医嘱区明确提示"HIS 适配器未对接"。
+5. **回归锁**：新增 `tests/test_empi_client.py` 8 条（映射最小字段、令牌随请求、
+   404/403/5xx 语义、缺令牌/缺地址、describe 三态）；`test_his_integration` +2
+   （EMPI 优先且医嘱仍 501、未配置回落 HIS）；`test_ingress_internal_paths` +2
+   （Helm 接线 fail-closed、NetworkPolicy 放行 ai-core）。
+6. **文档**：`docs/INTEGRATION.md` 新增 §8.6（原则、读取/字段/回退/失败/配置/网络表），
+   §8.5 三项标记落地批次。
+
+**验证**
+
+```
+定向：test_empi_client + test_his_integration + test_ingress_internal_paths → 28 passed
+前端：npm run typecheck 通过；npm run build 通过
+全量（不含 e2e）→ 1694 passed / 1 skipped
+```
+
+**遗留**
+
+- 无真实 EMPI 联调（MockTransport 覆盖映射与错误语义）；Helm 模板仅静态断言
+  （本机未装 helm，未做 `helm template` 渲染）；
+- EMPI 侧仍只读：建档/合并/去重仍在 Java 平台，AI 不参与写；
+- 下一步：④ staging 双系统联调脚本 + 契约测试进 CI；入口面 `/docs`、`/openapi.json`、
+  `/actuator` 白名单收敛（§176 遗留）。

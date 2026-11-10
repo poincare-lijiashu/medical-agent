@@ -202,17 +202,22 @@ def _get_status(c, tok):
 def test_status_reports_none_without_audit_noise(monkeypatch, tmp_path):
     """未对接：200 + configured=false（不是 501——诊断端点要能回答"为什么不能读"）。"""
     monkeypatch.setattr(settings, "his_adapter", "none")
+    monkeypatch.setattr(settings, "empi_base_url", "")
+    monkeypatch.setattr(settings, "empi_internal_token", "")
     c, log = _client(monkeypatch, tmp_path)
     tok = _login(c, "doctor01", "Med@2026")
     r = _get_status(c, tok)
     assert r.status_code == 200, r.text
-    assert r.json() == {"configured": False, "adapter": "none", "protocol": "", "error": ""}
+    assert r.json() == {"configured": False, "adapter": "none", "protocol": "", "error": "",
+                        "empi": {"configured": False, "error": ""}}
     assert not [e for e in log.entries if e["event_type"] == "his"], "诊断端点不应产生 his.* 审计噪音"
 
 
 def test_status_reports_demo_protocol(monkeypatch, tmp_path):
     """已对接：回报适配器标识与协议名（供控制台展示，不含地址/令牌）。"""
     monkeypatch.setattr(settings, "his_adapter", "demo")
+    monkeypatch.setattr(settings, "empi_base_url", "")
+    monkeypatch.setattr(settings, "empi_internal_token", "")
     c, _ = _client(monkeypatch, tmp_path)
     tok = _login(c, "doctor01", "Med@2026")
     body = _get_status(c, tok).json()
@@ -220,14 +225,65 @@ def test_status_reports_demo_protocol(monkeypatch, tmp_path):
     assert body["adapter"] == "demo"
     assert "DEMO" in body["protocol"]
     assert body["error"] == ""
+    assert body["empi"] == {"configured": False, "error": ""}
 
 
 def test_status_reports_config_error(monkeypatch, tmp_path):
     """配置了未知厂商标识：200 + configured=false + error 指明配置值与可用项，便于实施人员纠错。"""
     monkeypatch.setattr(settings, "his_adapter", "his_vendor_typo")
+    monkeypatch.setattr(settings, "empi_base_url", "")
+    monkeypatch.setattr(settings, "empi_internal_token", "")
     c, _ = _client(monkeypatch, tmp_path)
     tok = _login(c, "doctor01", "Med@2026")
     body = _get_status(c, tok).json()
     assert body["configured"] is False
     assert body["adapter"] == "his_vendor_typo"
     assert "his_vendor_typo" in body["error"] and "demo" in body["error"]
+
+
+# ---------- 5. 患者主索引唯一真源（EMPI 优先，第 174 批） ----------
+
+class _FakeEmpi:
+    def fetch_patient(self, patient_id):
+        return {"patient_id": patient_id, "patient_no": "ZY001", "name": "张三",
+                "sex": "男", "age": 60, "status": "ACTIVE"}
+
+
+def _get(c, tok, path):
+    return c.get("/api/v1/medical/" + path, headers={"Authorization": "Bearer " + tok})
+
+
+def test_patient_read_prefers_empi_and_orders_stay_on_his(monkeypatch, tmp_path):
+    """EMPI 配置后患者摘要走 EMPI（唯一真源），即使 HIS 未对接；医嘱仍只来自 HIS → 501。"""
+    monkeypatch.setattr(settings, "his_adapter", "none")
+    monkeypatch.setattr(settings, "empi_base_url", "http://empi:8082")
+    monkeypatch.setattr(settings, "empi_internal_token", "t")
+    monkeypatch.setattr("backend.integration.empi.get_client", lambda: _FakeEmpi())
+    c, log = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+
+    r = _get(c, tok, "integration/patient/P001")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"] == "empi" and body["adapter"] == "EmpiClient"
+    assert body["patient"]["name"] == "张三" and body["patient"]["patient_no"] == "ZY001"
+
+    ev = [e for e in log.entries if e["event_type"] == "his"
+          and e["payload"].get("action") == "patient_read"]
+    assert ev and ev[-1]["payload"]["source"] == "empi"
+    assert "P001" not in str(ev[-1]["payload"]), "审计不得落明文患者标识"
+
+    assert _get(c, tok, "integration/orders/P001").status_code == 501
+
+
+def test_patient_read_falls_back_to_his_when_empi_not_configured(monkeypatch, tmp_path):
+    """未配置 EMPI（默认）：走 HIS 适配器，响应标记 source=his，行为与第 168 批一致。"""
+    monkeypatch.setattr(settings, "empi_base_url", "")
+    monkeypatch.setattr(settings, "empi_internal_token", "")
+    monkeypatch.setattr(settings, "his_adapter", "demo")
+    DemoHisAdapter.reset()
+    c, _ = _client(monkeypatch, tmp_path)
+    tok = _login(c, "doctor01", "Med@2026")
+    body = _get(c, tok, "integration/patient/P001").json()
+    assert body["source"] == "his" and body["adapter"] == "DemoHisAdapter"
+    assert body["patient"]["name"] == "张三"

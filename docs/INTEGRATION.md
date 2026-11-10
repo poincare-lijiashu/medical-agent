@@ -149,10 +149,30 @@ payload 只记**患者标识哈希**（sha256 前 12 位）与适配器名，不
 ### 8.5 下一步（按收益排序）
 
 1. **HL7 v2 MLLP 适配器**（`backend/integration/hl7v2_adapter.py`）：老院区仍以 HL7 v2.5
-   ADT/ORM/ORU 为主，MLLP 长连接 + ACK 语义是另一条必备通道；
-2. **Java 平台侧 AI 客户端**：HIS 界面内触发质控/审方（双向集成），避免医生开两个系统；
-3. **患者主索引（EMPI）唯一真源**：AI 侧只存 `empi_id` 引用 + 哈希，不复制患者主数据；
+   ADT/ORM/ORU 为主，MLLP 长连接 + ACK 语义是另一条必备通道（第 170 批已落地）；
+2. **Java 平台侧 AI 客户端**：HIS 界面内触发质控/审方（双向集成），避免医生开两个系统
+   （第 169/173 批已落地：外部通道 `/api/v2/clinical/ai-assist/**`）；
+3. **患者主索引（EMPI）唯一真源**：AI 侧只存 `empi_id` 引用 + 哈希，不复制患者主数据
+   （第 174 批已落地，见 §8.6）；
 4. **契约测试进 CI**：用 FHIR 官方示例资源 + MockTransport 已覆盖；再加 staging 双系统联调。
+
+### 8.6 患者主索引（EMPI）唯一真源（第 174 批）
+
+**原则**：患者主索引只存在于 EMPI；AI 中台不建患者表、不复制姓名/证件号等主数据，
+审计与引用只用 `empi_id`（UUID）或其哈希（`sha256` 前 12 位）。
+
+| 环节 | 事实 |
+|---|---|
+| 读取 | `GET /internal/patients/{uuid}`（同命名空间直连，不经网关；`X-Internal-Token`，fail-closed） |
+| 字段 | 只映射姓名/性别/出生日期（推出年龄）/病案号/状态；证件号、手机号、住址不出 EMPI |
+| 回退 | `EMPI_BASE_URL` 留空 → 患者摘要回落 HIS 适配器（FHIR / HL7 v2），兼容暂无 EMPI 的现场 |
+| 失败 | 404 → 业务 404；401/403 → 502 + 审计（令牌/配置问题，不静默降级）；5xx → 502 |
+| 配置 | `EMPI_BASE_URL` / `EMPI_INTERNAL_TOKEN` / `EMPI_TIMEOUT_S` / `EMPI_VERIFY_TLS`；Helm 侧 `aiCore.empi.baseUrl` + 复用 `external.internalApi` 的 Secret |
+| 网络 | NetworkPolicy 放行 `ai-core → empi`（同命名空间）；网关对 `/internal/**` 永久 404 |
+
+`GET /api/v1/medical/integration/patient/{id}` 响应新增 `source`（`empi` / `his`）与 `adapter`，
+控制台「HIS 集成工作台」据此展示"EMPI（唯一真源）/ HIS 适配器"；`/integration/status`
+新增 `empi.configured` 与 `empi.error`（不回显地址/令牌）。
 
 ## 九、Java 侧 AI 客户端（HIS → AI 反向调用，`clinical.ai.base-url`）
 

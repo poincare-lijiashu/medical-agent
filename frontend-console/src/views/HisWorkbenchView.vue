@@ -12,7 +12,7 @@
   <div class="page">
     <PageHeader
       title="HIS 集成工作台"
-      sub="对接自检：适配器状态 · 患者主索引读取 · 医嘱读取 · 就地 AI 审方。只读诊断，不会修改院内数据。"
+      sub="对接自检：适配器状态 · 患者主索引（EMPI 唯一真源）· 医嘱读取 · 就地 AI 审方。只读诊断，不会修改院内数据。"
     >
       <template #actions>
         <button class="btn" type="button" :disabled="statusLoading" @click="loadStatus">
@@ -42,11 +42,16 @@
             <div class="kv"><span>协议</span><strong>{{ status.protocol || '—' }}</strong></div>
             <div class="kv"><span>读取能力</span><strong>{{ status.configured ? '患者 / 医嘱' : '未启用' }}</strong></div>
             <div class="kv"><span>回写能力</span><strong>{{ status.configured ? '质控结论回写' : '未启用' }}</strong></div>
+            <div class="kv"><span>患者主索引</span><strong>{{ empiState.configured ? 'EMPI（唯一真源）' : 'EMPI 未配置 · 回落 HIS' }}</strong></div>
+            <div class="kv"><span>EMPI 诊断</span><strong>{{ empiState.error || (empiState.configured ? '正常' : '—') }}</strong></div>
           </div>
           <p v-if="!status.configured" class="hint block-hint">
             {{ status.error
               ? `配置有误：${status.error}`
-              : '尚未对接 HIS（HIS_ADAPTER=none）。对接 FHIR 网关配置 HIS_ADAPTER=fhir + FHIR_BASE_URL；老院区 MLLP 通道配置 HIS_ADAPTER=hl7v2 + HL7_MLLP_HOST；本地联调可用 demo（P001/P002 假数据）。' }}
+              : '尚未对接 HIS 适配器（HIS_ADAPTER=none）。对接 FHIR 网关配置 HIS_ADAPTER=fhir + FHIR_BASE_URL；老院区 MLLP 通道配置 HIS_ADAPTER=hl7v2 + HL7_MLLP_HOST；本地联调可用 demo（P001/P002 假数据）。' }}
+          </p>
+          <p v-if="!empiState.configured && !empiState.error" class="hint block-hint">
+            患者主索引可由院内 EMPI 提供（EMPI_BASE_URL + EMPI_INTERNAL_TOKEN，内部接口直连）——配置后患者摘要以 EMPI 为唯一真源，AI 侧不复制主数据。
           </p>
         </template>
       </div>
@@ -67,17 +72,17 @@
               v-model.trim="patientId"
               class="input mono"
               maxlength="64"
-              placeholder="住院号 / 门诊号 / EMPI"
-              :disabled="!status?.configured"
+              placeholder="住院号 / 门诊号 / EMPI UUID"
+              :disabled="!patientReadable"
             />
           </label>
-          <button class="btn btn--primary" type="submit" :disabled="loading || !patientId || !status?.configured">
+          <button class="btn btn--primary" type="submit" :disabled="loading || !patientId || !patientReadable">
             读取患者与医嘱
           </button>
         </form>
 
-        <div v-if="!status?.configured" class="notice">
-          未对接 HIS，读取不可用。接入路径见 docs/INTEGRATION.md。
+        <div v-if="!patientReadable" class="notice">
+          未对接 HIS 与 EMPI，读取不可用。接入路径见 docs/INTEGRATION.md。
         </div>
 
         <div v-else-if="loading" class="loading">
@@ -93,7 +98,7 @@
           v-else-if="!patient"
           art="orders"
           title="请输入患者主索引"
-          desc="读取链路：AI 中台 → HIS 适配器（FHIR R4 / HL7 v2 MLLP / 厂商私有实现）；查无此人返回 404，适配器故障返回 502。"
+          desc="读取链路：AI 中台 → EMPI 内部接口（唯一真源）/ HIS 适配器（FHIR R4、HL7 v2 MLLP、厂商私有实现）；查无此人 404，故障 502。"
         />
 
         <template v-else>
@@ -105,6 +110,8 @@
             <div class="kv"><span>过敏史</span><strong>{{ allergiesText }}</strong></div>
             <div class="kv span-2"><span>诊断</span><strong>{{ str(patient.diagnosis) }}</strong></div>
             <div class="kv"><span>主索引</span><strong class="mono">{{ str(patient.patient_id) || patientId }}</strong></div>
+            <div class="kv"><span>病案号</span><strong class="mono">{{ str(patient.patient_no) }}</strong></div>
+            <div class="kv"><span>来源</span><strong>{{ source === 'empi' ? 'EMPI（唯一真源）' : 'HIS 适配器' }}</strong></div>
           </div>
 
           <div class="orders-head">
@@ -113,7 +120,10 @@
             <span class="hint">读取范围以院方视图为准（在院 / 历史）</span>
           </div>
 
-          <div v-if="orders.length === 0" class="muted">该患者暂无医嘱。</div>
+          <div v-if="!status?.configured" class="notice">
+            HIS 适配器未对接：医嘱不可用（患者摘要仍来自 {{ source === 'empi' ? 'EMPI' : 'HIS' }}）。
+          </div>
+          <div v-else-if="orders.length === 0" class="muted">该患者暂无医嘱。</div>
           <div v-else class="table-wrap">
             <table class="table">
               <thead>
@@ -157,16 +167,20 @@ interface HisStatus {
   adapter: string
   protocol: string
   error: string
+  /** 第 174 批：EMPI 是患者主索引唯一真源，与 HIS 适配器可独立对接 */
+  empi?: { configured: boolean; error: string }
 }
 
 interface HisPatient {
   patient_id?: string
+  patient_no?: string
   name?: string
   sex?: string
   age?: number | null
   dept?: string
   allergies?: string[]
   diagnosis?: string
+  status?: string
   [k: string]: unknown
 }
 
@@ -189,9 +203,18 @@ const statusError = ref('')
 
 const patientId = ref('')
 const patient = ref<HisPatient | null>(null)
+/** 患者摘要来源：empi=唯一真源；his=未配置 EMPI 时的回落适配器 */
+const source = ref<'empi' | 'his' | ''>('')
 const orders = ref<HisOrder[]>([])
 const loading = ref(false)
 const queryError = ref('')
+
+const empiState = computed(() => status.value?.empi || { configured: false, error: '' })
+
+/** 患者摘要可由 EMPI 或 HIS 任一来源提供；医嘱/回写只依赖 HIS 适配器。 */
+const patientReadable = computed(
+  () => Boolean(status.value && (status.value.configured || empiState.value.configured)),
+)
 
 const statusBadge = computed(() => {
   if (statusLoading.value) return { text: '检测中', cls: 'badge--neutral' }
@@ -238,15 +261,22 @@ async function lookup() {
   loading.value = true
   queryError.value = ''
   patient.value = null
+  source.value = ''
   orders.value = []
   try {
-    // 患者与医嘱并行读取：任一失败都要给出明确原因（404 查无此人 / 502 适配器故障）
-    const [p, o] = await Promise.all([
-      aiGet<{ patient: HisPatient }>(`/medical/integration/patient/${encodeURIComponent(pid)}`),
-      aiGet<{ orders: HisOrder[] }>(`/medical/integration/orders/${encodeURIComponent(pid)}`),
-    ])
+    // 患者摘要优先 EMPI（唯一真源）；未配置时后端自动回落 HIS 适配器
+    const p = await aiGet<{ patient: HisPatient; source?: 'empi' | 'his' }>(
+      `/medical/integration/patient/${encodeURIComponent(pid)}`,
+    )
     patient.value = p.patient
-    orders.value = o.orders || []
+    source.value = p.source || ''
+    // 医嘱只来自 HIS：适配器未对接时后端返回 501，这里直接跳过（页面已有提示）
+    if (status.value?.configured) {
+      const o = await aiGet<{ orders: HisOrder[] }>(
+        `/medical/integration/orders/${encodeURIComponent(pid)}`,
+      )
+      orders.value = o.orders || []
+    }
   } catch (e) {
     queryError.value = errorText(e)
   } finally {

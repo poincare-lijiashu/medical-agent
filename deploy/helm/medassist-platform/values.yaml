@@ -650,6 +650,13 @@ aiCore:
     mountPath: /app/data
   # 业务配置（QWEN_API_KEY 等敏感项放 Secret，通过 envFrom 注入）
   existingSecret: medassist-ai-core
+  # 患者主索引（EMPI）唯一真源（第 174 批）：AI 读患者摘要优先走 EMPI 内部接口，
+  # 不复制患者主数据；baseUrl 留空 = 未配置（回落 HIS 适配器）。
+  # 令牌复用 external.internalApi 的 Secret（与 clinical/empi 同一个 X-Internal-Token）。
+  empi:
+    baseUrl: ""
+    timeoutS: 5
+    verifyTls: true
   # 生产必需配置的显式入口（评测 06 P1-4）：此前只能改 ConfigMap 或 `helm --set`，
   # Argo CD 下会被下一次 Git 同步回滚，等于"改了就丢"。
   # PG 连接池（每个副本独立）：上限必须计入全院 max_connections 预算

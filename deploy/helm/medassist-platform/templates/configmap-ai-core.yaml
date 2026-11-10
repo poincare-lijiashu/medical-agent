@@ -18,6 +18,13 @@ data:
   # 离网默认：只加载本地权重，禁止运行时访问 HuggingFace（院内无外网时否则会挂到超时）
   EMBED_ALLOW_DOWNLOAD: "false"
   # 注：PUBMED_ENABLED 走 aiCore.env（values.yaml 默认 true；纯内网环境在 values 覆盖为 false）
+  # 患者主索引（EMPI）唯一真源（第 174 批）：留空 = 未配置，患者摘要回落 HIS 适配器。
+  # 地址不是敏感信息，放 ConfigMap；令牌走 Deployment 的 Secret 引用（EMPI_INTERNAL_TOKEN）。
+  EMPI_BASE_URL: {{ .Values.aiCore.empi.baseUrl | default "" | quote }}
+  {{- if .Values.aiCore.empi.baseUrl }}
+  EMPI_TIMEOUT_S: {{ .Values.aiCore.empi.timeoutS | default 5 | quote }}
+  EMPI_VERIFY_TLS: {{ .Values.aiCore.empi.verifyTls | default true | quote }}
+  {{- end }}
   {{- if .Values.external.nacos.enabled }}
   NACOS_ENABLED: "true"
   NACOS_SERVER_ADDRESSES: {{ .Values.external.nacos.serverAddr | quote }}
