@@ -8,242 +8,245 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="reloadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="reloadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiData.kpi.pending')" :value="review.pending ?? 0" :unit="t('aiData.unit.item')" :tone="(review.pending ?? 0) > 0 ? 'warn' : 'default'" />
-      <KpiCard :label="t('aiData.kpi.approved')" :value="review.approved ?? 0" :unit="t('aiData.unit.item')" />
-      <KpiCard :label="t('aiData.kpi.rejected')" :value="review.rejected ?? 0" :unit="t('aiData.unit.item')" />
-      <KpiCard :label="t('aiData.kpi.kbDocs')" :value="kbDocs" :unit="t('aiData.unit.doc')" :meta="t('aiData.kpi.kbDocsMeta')" />
-      <KpiCard :label="t('aiData.kpi.events')" :value="d?.events_total ?? 0" :unit="t('aiData.unit.event')" :meta="t('aiData.kpi.eventsMeta')" />
-      <KpiCard :label="t('aiData.kpi.uptime')" :value="uptimeText" :meta="deviceText" />
-    </div>
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiData.kpi.pending')" :value="review.pending ?? 0" :unit="t('aiData.unit.item')" :tone="(review.pending ?? 0) > 0 ? 'warn' : 'default'" />
+        <KpiCard :label="t('aiData.kpi.approved')" :value="review.approved ?? 0" :unit="t('aiData.unit.item')" />
+        <KpiCard :label="t('aiData.kpi.rejected')" :value="review.rejected ?? 0" :unit="t('aiData.unit.item')" />
+        <KpiCard :label="t('aiData.kpi.kbDocs')" :value="kbDocs" :unit="t('aiData.unit.doc')" :meta="t('aiData.kpi.kbDocsMeta')" />
+        <KpiCard :label="t('aiData.kpi.events')" :value="d?.events_total ?? 0" :unit="t('aiData.unit.event')" :meta="t('aiData.kpi.eventsMeta')" />
+        <KpiCard :label="t('aiData.kpi.uptime')" :value="uptimeText" :meta="deviceText" />
+      </div>
 
-    <div class="grid-2">
-      <!-- 基础设施（只读状态；命令仅供复制，系统不代执行） -->
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiData.infra.title') }}</span>
-          <span class="spacer" />
-          <span class="hint">{{ t('aiData.infra.hint') }}</span>
-        </div>
-        <div class="sheet-body stack">
-          <div class="infra-row">
-            <span class="badge" :class="milvusOk ? 'badge--ok' : 'badge--danger'">
-              {{ milvusOk ? t('aiData.infra.ok') : t('aiData.infra.down') }}
-            </span>
-            <span class="is-strong">{{ t('aiData.infra.milvus') }}</span>
-            <span class="muted mono">{{ infra.milvus?.uri || '—' }}</span>
+      <div class="grid-2">
+        <!-- 基础设施（只读状态；命令仅供复制，系统不代执行） -->
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiData.infra.title') }}</span>
             <span class="spacer" />
-            <button class="btn btn--sm" type="button" @click="copyText('docker compose restart milvus')">
-              <AppIcon name="copy" :size="13" /> {{ t('aiData.infra.copyCmd') }}
-            </button>
+            <span class="hint">{{ t('aiData.infra.hint') }}</span>
           </div>
-          <div class="infra-row">
-            <span class="badge" :class="pgOk ? 'badge--ok' : 'badge--danger'">
-              {{ pgOk ? t('aiData.infra.ok') : t('aiData.infra.down') }}
-            </span>
-            <span class="is-strong">{{ t('aiData.infra.pg') }}</span>
-            <span class="muted">{{ t('aiData.infra.pgDetail') }}</span>
-            <span class="spacer" />
-            <button class="btn btn--sm" type="button" @click="copyText('docker compose restart postgres')">
-              <AppIcon name="copy" :size="13" /> {{ t('aiData.infra.copyCmd') }}
-            </button>
-          </div>
-          <div class="infra-row">
-            <span class="badge" :class="storageTone">{{ storageLabel }}</span>
-            <span class="is-strong">{{ t('aiData.infra.storage') }}</span>
-            <span class="muted mono">{{ t('aiData.infra.storageMode', { mode: infra.storage?.mode || '—' }) }}</span>
-            <span v-if="infra.storage?.circuitOpen" class="badge badge--danger">{{ t('aiData.infra.circuitOpen') }}</span>
-            <span class="spacer" />
-            <span class="muted small">{{ t('aiData.infra.pgCounts', { audit: counts.audit_log ?? '—', users: counts.users ?? '—', review: counts.review_queue ?? '—' }) }}</span>
-          </div>
-          <p v-if="(infra.storage?.staleDomains || []).length" class="stale">
-            {{ t('aiData.infra.stale', { list: (infra.storage?.staleDomains || []).join('、') }) }}
-          </p>
-        </div>
-      </div>
-
-      <!-- 留痕模式（运行时开关） -->
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiData.flag.title') }}</span>
-          <span class="spacer" />
-          <span class="badge" :class="fullOn ? 'badge--ok' : 'badge--neutral'">
-            {{ fullOn ? t('aiData.flag.on') : t('aiData.flag.off') }}
-          </span>
-        </div>
-        <div class="sheet-body stack">
-          <p class="muted small">{{ t('aiData.flag.desc') }}</p>
-          <p class="muted mono small">{{ t('aiData.flag.source', { value: String(fullOn) }) }}</p>
-          <div class="row-actions">
-            <button
-              class="btn"
-              :class="fullOn ? 'btn--danger' : 'btn--primary'"
-              type="button"
-              :disabled="flagBusy"
-              @click="askToggleFlag"
-            >
-              <AppIcon name="sliders" :size="14" />
-              {{ fullOn ? t('aiData.flag.turnOff') : t('aiData.flag.turnOn') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ============ 审计流（服务端过滤 + 分页 + 导出 + 链校验） ============ -->
-    <div class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiData.audit.title') }}</span>
-        <span class="badge badge--neutral">{{ auditTotalText }}</span>
-        <span class="spacer" />
-        <label class="field">
-          <span class="label">{{ t('aiData.audit.pageSearch') }}</span>
-          <input v-model="pageQ" class="input" type="search" spellcheck="false" :placeholder="t('aiData.audit.pageSearchHint')" />
-        </label>
-        <button class="btn btn--sm" type="button" :disabled="auditLoading" @click="loadAudit">
-          <AppIcon name="refresh" :size="13" /> {{ t('aiData.audit.reload') }}
-        </button>
-      </div>
-
-      <div class="filters">
-        <label class="field">
-          <span class="label">{{ t('aiData.audit.actor') }}</span>
-          <input v-model="filter.actor" class="input" list="ai-audit-actors" autocomplete="off" spellcheck="false" :placeholder="t('aiData.audit.actorHint')" @input="onFilterInput" />
-          <datalist id="ai-audit-actors">
-            <option v-for="x in facets.actors" :key="x.v" :value="x.v">{{ x.n }}</option>
-          </datalist>
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiData.audit.event') }}</span>
-          <input v-model="filter.event" class="input" list="ai-audit-events" autocomplete="off" spellcheck="false" :placeholder="t('aiData.audit.eventHint')" @input="onFilterInput" />
-          <datalist id="ai-audit-events">
-            <option v-for="x in facets.events" :key="x.v" :value="x.v">{{ x.n }}</option>
-          </datalist>
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiData.audit.action') }}</span>
-          <input v-model="filter.action" class="input" list="ai-audit-actions" autocomplete="off" spellcheck="false" :placeholder="t('aiData.audit.actionHint')" @input="onFilterInput" />
-          <datalist id="ai-audit-actions">
-            <option v-for="x in facets.actions" :key="x.v" :value="x.v">{{ x.n }}</option>
-          </datalist>
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiData.audit.from') }}</span>
-          <input v-model="filter.from" class="input" type="date" aria-label="audit from" @change="onFilterInput" />
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiData.audit.to') }}</span>
-          <input v-model="filter.to" class="input" type="date" aria-label="audit to" @change="onFilterInput" />
-        </label>
-        <button class="btn btn--sm" type="button" :disabled="!filterActive" @click="resetFilters">
-          {{ t('aiData.audit.clear') }}
-        </button>
-      </div>
-      <p class="filter-hint hint">{{ filterActive ? t('aiData.audit.filterOn') : t('aiData.audit.filterHint') }}</p>
-
-      <div class="audit-actions">
-        <button class="btn btn--sm" type="button" :disabled="auditExporting || auditRows.length === 0" @click="exportPageCsv">
-          <AppIcon name="download" :size="13" /> {{ t('aiData.audit.exportPage') }}
-        </button>
-        <button class="btn btn--sm btn--primary" type="button" :disabled="auditExporting" @click="exportAll">
-          <AppIcon name="download" :size="13" /> {{ t('aiData.audit.exportAll') }}
-        </button>
-        <button class="btn btn--sm" type="button" :disabled="verifying" @click="verifyChain">
-          <AppIcon name="shield" :size="13" /> {{ verifying ? t('aiData.audit.verifying') : t('aiData.audit.verify') }}
-        </button>
-        <span class="spacer" />
-        <span class="muted small">{{ t('aiData.audit.tz', { tz: auditTz || t('aiData.audit.localTz') }) }}</span>
-      </div>
-
-      <div v-if="verifyResult" class="verify" :class="verifyResult.ok ? 'verify--ok' : 'verify--bad'">
-        <AppIcon :name="verifyResult.ok ? 'check' : 'alert'" :size="16" />
-        <div class="verify-body">
-          <strong>
-            {{ verifyResult.ok
-              ? t('aiData.audit.verifyOk', { n: verifyResult.checked ?? 0 })
-              : t('aiData.audit.verifyBad', { reason: verifyResult.firstBroken?.reason || '—' }) }}
-          </strong>
-          <p v-if="verifyResult.legacy" class="small">{{ t('aiData.audit.verifyLegacy', { n: verifyResult.legacy }) }}</p>
-          <p v-if="verifyResult.firstBroken" class="small mono">
-            {{ t('aiData.audit.verifyAt', { file: verifyResult.firstBroken.file || '—', line: verifyResult.firstBroken.line ?? '?', seq: verifyResult.firstBroken.seq ?? '?' }) }}
-          </p>
-        </div>
-        <button class="btn btn--sm btn--ghost" type="button" @click="verifyResult = null">{{ t('aiData.audit.dismiss') }}</button>
-      </div>
-
-      <TableSkeleton v-if="auditLoading" :rows="6" />
-      <EmptyState
-        v-else-if="auditView.length === 0"
-        :title="t('aiData.audit.empty.title')"
-        :desc="pageQ.trim() ? t('aiData.audit.empty.searchDesc') : t('aiData.audit.empty.desc')"
-      />
-      <ul v-else class="audit-list">
-        <li v-for="(e, i) in auditView" :key="`${e.ts || ''}-${i}`">
-          <details>
-            <summary>
-              <span class="badge badge--neutral mono">{{ e.event || '—' }}</span>
-              <span class="audit-text">{{ humanizeAudit(e) }}</span>
+          <div class="sheet-body stack">
+            <div class="infra-row">
+              <span class="badge" :class="milvusOk ? 'badge--ok' : 'badge--danger'">
+                {{ milvusOk ? t('aiData.infra.ok') : t('aiData.infra.down') }}
+              </span>
+              <span class="is-strong">{{ t('aiData.infra.milvus') }}</span>
+              <span class="muted mono">{{ infra.milvus?.uri || '—' }}</span>
               <span class="spacer" />
-              <span class="muted small mono">{{ dateTime(e.ts) }}</span>
-              <span class="muted small">{{ e.actor || '—' }}</span>
-            </summary>
-            <pre class="record-pre">{{ JSON.stringify(e.payload || {}, null, 2) }}</pre>
-          </details>
-        </li>
-      </ul>
-      <div class="pager">
-        <span class="pager-info">
-          {{ t('aiData.audit.pager', { page: auditPage + 1, pages: auditPages, total: auditTotalText }) }}
-        </span>
-        <button class="btn btn--sm" type="button" :disabled="auditPage === 0 || auditLoading" @click="goPage(-1)">
-          {{ t('aiData.audit.prev') }}
-        </button>
-        <button class="btn btn--sm" type="button" :disabled="auditAtEnd || auditLoading" @click="goPage(1)">
-          {{ t('aiData.audit.next') }}
-        </button>
-      </div>
-    </div>
+              <button class="btn btn--sm" type="button" @click="copyText('docker compose restart milvus')">
+                <AppIcon name="copy" :size="13" /> {{ t('aiData.infra.copyCmd') }}
+              </button>
+            </div>
+            <div class="infra-row">
+              <span class="badge" :class="pgOk ? 'badge--ok' : 'badge--danger'">
+                {{ pgOk ? t('aiData.infra.ok') : t('aiData.infra.down') }}
+              </span>
+              <span class="is-strong">{{ t('aiData.infra.pg') }}</span>
+              <span class="muted">{{ t('aiData.infra.pgDetail') }}</span>
+              <span class="spacer" />
+              <button class="btn btn--sm" type="button" @click="copyText('docker compose restart postgres')">
+                <AppIcon name="copy" :size="13" /> {{ t('aiData.infra.copyCmd') }}
+              </button>
+            </div>
+            <div class="infra-row">
+              <span class="badge" :class="storageTone">{{ storageLabel }}</span>
+              <span class="is-strong">{{ t('aiData.infra.storage') }}</span>
+              <span class="muted mono">{{ t('aiData.infra.storageMode', { mode: infra.storage?.mode || '—' }) }}</span>
+              <span v-if="infra.storage?.circuitOpen" class="badge badge--danger">{{ t('aiData.infra.circuitOpen') }}</span>
+              <span class="spacer" />
+              <span class="muted small">{{ t('aiData.infra.pgCounts', { audit: counts.audit_log ?? '—', users: counts.users ?? '—', review: counts.review_queue ?? '—' }) }}</span>
+            </div>
+            <p v-if="(infra.storage?.staleDomains || []).length" class="stale">
+              {{ t('aiData.infra.stale', { list: (infra.storage?.staleDomains || []).join('、') }) }}
+            </p>
+          </div>
+        </div>
 
-    <!-- ============ 应用日志（只读尾部，仅排障） ============ -->
-    <div class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiData.log.title') }}</span>
-        <span class="spacer" />
-        <label class="field">
-          <span class="label">{{ t('aiData.log.lines') }}</span>
-          <input v-model.number="logN" class="input log-n" type="number" min="1" max="500" />
-        </label>
-        <button class="btn btn--sm" type="button" :disabled="logBusy" @click="loadLogs">
-          <AppIcon name="refresh" :size="13" /> {{ t('aiData.log.reload') }}
-        </button>
+        <!-- 留痕模式（运行时开关） -->
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiData.flag.title') }}</span>
+            <span class="spacer" />
+            <span class="badge" :class="fullOn ? 'badge--ok' : 'badge--neutral'">
+              {{ fullOn ? t('aiData.flag.on') : t('aiData.flag.off') }}
+            </span>
+          </div>
+          <div class="sheet-body stack">
+            <p class="muted small">{{ t('aiData.flag.desc') }}</p>
+            <p class="muted mono small">{{ t('aiData.flag.source', { value: String(fullOn) }) }}</p>
+            <div class="row-actions">
+              <button
+                class="btn"
+                :class="fullOn ? 'btn--danger' : 'btn--primary'"
+                type="button"
+                :disabled="flagBusy"
+                @click="askToggleFlag"
+              >
+                <AppIcon name="sliders" :size="14" />
+                {{ fullOn ? t('aiData.flag.turnOff') : t('aiData.flag.turnOn') }}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-      <p class="log-meta muted mono small">{{ logMetaText }}</p>
-      <p v-if="logNote" class="muted small">{{ logNote }}</p>
-      <pre class="record-pre log-view"><template v-for="(line, i) in logLines" :key="i"><span :class="{ 'log-err': line.includes('ERROR'), 'log-warn': line.includes('WARNING') }">{{ line }}</span>{{ '\n' }}</template></pre>
-    </div>
 
-    <!-- ============ 留痕模式切换确认（高影响运行时开关） ============ -->
-    <AppModal
-      v-model="flagOpen"
-      :title="fullOn ? t('aiData.flag.turnOffTitle') : t('aiData.flag.turnOnTitle')"
-      width="480px"
-    >
-      <p class="modal-note">{{ fullOn ? t('aiData.flag.turnOffBody') : t('aiData.flag.turnOnBody') }}</p>
-      <template #footer>
-        <button class="btn" type="button" :disabled="flagBusy" @click="flagOpen = false">{{ t('aiData.flag.cancel') }}</button>
-        <button
-          class="btn"
-          :class="fullOn ? 'btn--danger' : 'btn--primary'"
-          type="button"
-          :disabled="flagBusy"
-          @click="confirmToggleFlag"
-        >
-          {{ t('aiData.flag.confirm') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- ============ 审计流（服务端过滤 + 分页 + 导出 + 链校验） ============ -->
+      <div class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiData.audit.title') }}</span>
+          <span class="badge badge--neutral">{{ auditTotalText }}</span>
+          <span class="spacer" />
+          <label class="field">
+            <span class="label">{{ t('aiData.audit.pageSearch') }}</span>
+            <input v-model="pageQ" class="input" type="search" spellcheck="false" :placeholder="t('aiData.audit.pageSearchHint')" />
+          </label>
+          <button class="btn btn--sm" type="button" :disabled="auditLoading" @click="loadAudit">
+            <AppIcon name="refresh" :size="13" /> {{ t('aiData.audit.reload') }}
+          </button>
+        </div>
+
+        <div class="filters">
+          <label class="field">
+            <span class="label">{{ t('aiData.audit.actor') }}</span>
+            <input v-model="filter.actor" class="input" list="ai-audit-actors" autocomplete="off" spellcheck="false" :placeholder="t('aiData.audit.actorHint')" @input="onFilterInput" />
+            <datalist id="ai-audit-actors">
+              <option v-for="x in facets.actors" :key="x.v" :value="x.v">{{ x.n }}</option>
+            </datalist>
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiData.audit.event') }}</span>
+            <input v-model="filter.event" class="input" list="ai-audit-events" autocomplete="off" spellcheck="false" :placeholder="t('aiData.audit.eventHint')" @input="onFilterInput" />
+            <datalist id="ai-audit-events">
+              <option v-for="x in facets.events" :key="x.v" :value="x.v">{{ x.n }}</option>
+            </datalist>
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiData.audit.action') }}</span>
+            <input v-model="filter.action" class="input" list="ai-audit-actions" autocomplete="off" spellcheck="false" :placeholder="t('aiData.audit.actionHint')" @input="onFilterInput" />
+            <datalist id="ai-audit-actions">
+              <option v-for="x in facets.actions" :key="x.v" :value="x.v">{{ x.n }}</option>
+            </datalist>
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiData.audit.from') }}</span>
+            <input v-model="filter.from" class="input" type="date" aria-label="audit from" @change="onFilterInput" />
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiData.audit.to') }}</span>
+            <input v-model="filter.to" class="input" type="date" aria-label="audit to" @change="onFilterInput" />
+          </label>
+          <button class="btn btn--sm" type="button" :disabled="!filterActive" @click="resetFilters">
+            {{ t('aiData.audit.clear') }}
+          </button>
+        </div>
+        <p class="filter-hint hint">{{ filterActive ? t('aiData.audit.filterOn') : t('aiData.audit.filterHint') }}</p>
+
+        <div class="audit-actions">
+          <button class="btn btn--sm" type="button" :disabled="auditExporting || auditRows.length === 0" @click="exportPageCsv">
+            <AppIcon name="download" :size="13" /> {{ t('aiData.audit.exportPage') }}
+          </button>
+          <button class="btn btn--sm btn--primary" type="button" :disabled="auditExporting" @click="exportAll">
+            <AppIcon name="download" :size="13" /> {{ t('aiData.audit.exportAll') }}
+          </button>
+          <button class="btn btn--sm" type="button" :disabled="verifying" @click="verifyChain">
+            <AppIcon name="shield" :size="13" /> {{ verifying ? t('aiData.audit.verifying') : t('aiData.audit.verify') }}
+          </button>
+          <span class="spacer" />
+          <span class="muted small">{{ t('aiData.audit.tz', { tz: auditTz || t('aiData.audit.localTz') }) }}</span>
+        </div>
+
+        <div v-if="verifyResult" class="verify" :class="verifyResult.ok ? 'verify--ok' : 'verify--bad'">
+          <AppIcon :name="verifyResult.ok ? 'check' : 'alert'" :size="16" />
+          <div class="verify-body">
+            <strong>
+              {{ verifyResult.ok
+                ? t('aiData.audit.verifyOk', { n: verifyResult.checked ?? 0 })
+                : t('aiData.audit.verifyBad', { reason: verifyResult.firstBroken?.reason || '—' }) }}
+            </strong>
+            <p v-if="verifyResult.legacy" class="small">{{ t('aiData.audit.verifyLegacy', { n: verifyResult.legacy }) }}</p>
+            <p v-if="verifyResult.firstBroken" class="small mono">
+              {{ t('aiData.audit.verifyAt', { file: verifyResult.firstBroken.file || '—', line: verifyResult.firstBroken.line ?? '?', seq: verifyResult.firstBroken.seq ?? '?' }) }}
+            </p>
+          </div>
+          <button class="btn btn--sm btn--ghost" type="button" @click="verifyResult = null">{{ t('aiData.audit.dismiss') }}</button>
+        </div>
+
+        <TableSkeleton v-if="auditLoading" :rows="6" />
+        <EmptyState
+          v-else-if="auditView.length === 0"
+          :title="t('aiData.audit.empty.title')"
+          :desc="pageQ.trim() ? t('aiData.audit.empty.searchDesc') : t('aiData.audit.empty.desc')"
+        />
+        <ul v-else class="audit-list">
+          <li v-for="(e, i) in auditView" :key="`${e.ts || ''}-${i}`">
+            <details>
+              <summary>
+                <span class="badge badge--neutral mono">{{ e.event || '—' }}</span>
+                <span class="audit-text">{{ humanizeAudit(e) }}</span>
+                <span class="spacer" />
+                <span class="muted small mono">{{ dateTime(e.ts) }}</span>
+                <span class="muted small">{{ e.actor || '—' }}</span>
+              </summary>
+              <pre class="record-pre">{{ JSON.stringify(e.payload || {}, null, 2) }}</pre>
+            </details>
+          </li>
+        </ul>
+        <div class="pager">
+          <span class="pager-info">
+            {{ t('aiData.audit.pager', { page: auditPage + 1, pages: auditPages, total: auditTotalText }) }}
+          </span>
+          <button class="btn btn--sm" type="button" :disabled="auditPage === 0 || auditLoading" @click="goPage(-1)">
+            {{ t('aiData.audit.prev') }}
+          </button>
+          <button class="btn btn--sm" type="button" :disabled="auditAtEnd || auditLoading" @click="goPage(1)">
+            {{ t('aiData.audit.next') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- ============ 应用日志（只读尾部，仅排障） ============ -->
+      <div class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiData.log.title') }}</span>
+          <span class="spacer" />
+          <label class="field">
+            <span class="label">{{ t('aiData.log.lines') }}</span>
+            <input v-model.number="logN" class="input log-n" type="number" min="1" max="500" />
+          </label>
+          <button class="btn btn--sm" type="button" :disabled="logBusy" @click="loadLogs">
+            <AppIcon name="refresh" :size="13" /> {{ t('aiData.log.reload') }}
+          </button>
+        </div>
+        <p class="log-meta muted mono small">{{ logMetaText }}</p>
+        <p v-if="logNote" class="muted small">{{ logNote }}</p>
+        <pre class="record-pre log-view"><template v-for="(line, i) in logLines" :key="i"><span :class="{ 'log-err': line.includes('ERROR'), 'log-warn': line.includes('WARNING') }">{{ line }}</span>{{ '\n' }}</template></pre>
+      </div>
+
+      <!-- ============ 留痕模式切换确认（高影响运行时开关） ============ -->
+      <AppModal
+        v-model="flagOpen"
+        :title="fullOn ? t('aiData.flag.turnOffTitle') : t('aiData.flag.turnOnTitle')"
+        width="480px"
+      >
+        <p class="modal-note">{{ fullOn ? t('aiData.flag.turnOffBody') : t('aiData.flag.turnOnBody') }}</p>
+        <template #footer>
+          <button class="btn" type="button" :disabled="flagBusy" @click="flagOpen = false">{{ t('aiData.flag.cancel') }}</button>
+          <button
+            class="btn"
+            :class="fullOn ? 'btn--danger' : 'btn--primary'"
+            type="button"
+            :disabled="flagBusy"
+            @click="confirmToggleFlag"
+          >
+            {{ t('aiData.flag.confirm') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -255,6 +258,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiAdminData,
@@ -271,7 +275,7 @@ import {
   type AiAuditVerify,
   type AiInfraStatus,
 } from '@/api/ai'
-import { aiDownload, errorText } from '@/api/http'
+import { aiDownload, errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -285,6 +289,7 @@ const PER = 50
 const d = ref<AiAdminData | null>(null)
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 let loadSeq = 0
 
 /* ---------- 审计流 ---------- */
@@ -408,6 +413,7 @@ async function reloadAll() {
   const seq = ++loadSeq
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   try {
     const res = await aiAdminData(filter, auditOffset.value)
     if (seq !== loadSeq) return
@@ -417,7 +423,12 @@ async function reloadAll() {
     await Promise.allSettled([loadFacets(), loadLogs()])
   } catch (e) {
     if (seq !== loadSeq) return
-    loadErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      loadErr.value = ''
+    } else {
+      loadErr.value = errorText(e)
+    }
   } finally {
     if (seq === loadSeq) loading.value = false
   }

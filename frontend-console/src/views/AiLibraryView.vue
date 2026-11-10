@@ -15,388 +15,391 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiLib.kpi.open')" :value="openAdvices.length" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.openMeta')" />
-      <KpiCard :label="t('aiLib.kpi.high')" :value="highAdvices.length" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.highMeta')" />
-      <KpiCard :label="t('aiLib.kpi.experiences')" :value="experiences.length" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.experiencesMeta')" />
-      <KpiCard :label="t('aiLib.kpi.proposed')" :value="proposedCount" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.proposedMeta')" />
-      <KpiCard :label="t('aiLib.kpi.adopted')" :value="adoptedCount" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.adoptedMeta')" />
-    </div>
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiLib.kpi.open')" :value="openAdvices.length" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.openMeta')" />
+        <KpiCard :label="t('aiLib.kpi.high')" :value="highAdvices.length" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.highMeta')" />
+        <KpiCard :label="t('aiLib.kpi.experiences')" :value="experiences.length" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.experiencesMeta')" />
+        <KpiCard :label="t('aiLib.kpi.proposed')" :value="proposedCount" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.proposedMeta')" />
+        <KpiCard :label="t('aiLib.kpi.adopted')" :value="adoptedCount" :unit="t('aiLib.unit.item')" :meta="t('aiLib.kpi.adoptedMeta')" />
+      </div>
 
-    <!-- 待办建议 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiLib.advices.title') }}</span>
-        <span class="spacer" />
-        <select v-model="adviceFilter" class="select filter" :aria-label="t('aiLib.advices.filter')">
-          <option value="OPEN">{{ t('aiLib.advices.filterOpen') }}</option>
-          <option value="">{{ t('aiLib.advices.filterAll') }}</option>
-          <option value="DONE">{{ t('aiLib.advices.statusDone') }}</option>
-          <option value="DISMISSED">{{ t('aiLib.advices.statusDismissed') }}</option>
-        </select>
-      </div>
-      <TableSkeleton v-if="loading && !advices.length" :rows="3" />
-      <div v-else-if="visibleAdvices.length" class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiLib.advices.col.severity') }}</th>
-              <th>{{ t('aiLib.advices.col.title') }}</th>
-              <th>{{ t('aiLib.advices.col.action') }}</th>
-              <th>{{ t('aiLib.advices.col.target') }}</th>
-              <th>{{ t('aiLib.advices.col.state') }}</th>
-              <th>{{ t('aiLib.advices.col.ops') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in visibleAdvices" :key="a.id">
-              <td data-primary><span class="badge" :class="levelClass(a.severity)">{{ levelText(a.severity) }}</span></td>
-              <td data-label="title">
-                <span class="is-strong">{{ a.title }}</span>
-                <span class="sub">{{ a.detail }}</span>
-                <span v-if="a.note" class="sub">{{ t('aiLib.advices.note', { note: a.note }) }}</span>
-              </td>
-              <td data-label="action"><span class="hint">{{ a.suggestedAction }}</span></td>
-              <td data-label="target">
-                <span class="badge badge--neutral mono">{{ a.targetType || '—' }}</span>
-                <span v-if="a.targetId" class="sub mono">{{ a.targetId }}</span>
-              </td>
-              <td data-label="state">
-                <span class="badge" :class="adviceStatusClass(a.status)">{{ adviceStatusText(a.status) }}</span>
-                <span v-if="a.decidedBy" class="sub">{{ t('aiLib.advices.by', { user: a.decidedBy }) }}</span>
-              </td>
-              <td data-label="ops">
-                <div v-if="a.status === 'OPEN'" class="row-actions">
-                  <button class="btn btn--sm btn--primary" type="button" :disabled="busy === a.id" @click="openAdvice(a, 'complete')">
-                    {{ t('aiLib.advices.complete') }}
-                  </button>
-                  <button class="btn btn--sm" type="button" :disabled="busy === a.id" @click="openAdvice(a, 'dismiss')">
-                    {{ t('aiLib.advices.dismiss') }}
-                  </button>
-                </div>
-                <span v-else class="hint">{{ shortTime(a.decidedAt) }}</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="sheet-body">
-        <EmptyState :title="t('aiLib.advices.empty')" :desc="t('aiLib.advices.emptyDesc')" />
-      </div>
-      <div class="sheet-body advices-note">
-        <p class="hint">{{ t('aiLib.advices.dedupe') }}</p>
-      </div>
-    </section>
-
-    <!-- 经验库 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiLib.exp.title') }}</span>
-        <span class="spacer" />
-        <select v-model="expAgent" class="select filter" :aria-label="t('aiLib.exp.filterAgent')">
-          <option value="">{{ t('aiLib.exp.filterAgent') }}</option>
-          <option v-for="ag in agents" :key="ag.id" :value="ag.id">{{ ag.name || ag.id }}</option>
-        </select>
-        <button class="btn btn--sm" type="button" @click="openExperience">
-          <AppIcon name="plus" :size="14" /> {{ t('aiLib.exp.create') }}
-        </button>
-      </div>
-      <div v-if="visibleExperiences.length" class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiLib.exp.col.title') }}</th>
-              <th>{{ t('aiLib.exp.col.agent') }}</th>
-              <th>{{ t('aiLib.exp.col.pattern') }}</th>
-              <th>{{ t('aiLib.exp.col.source') }}</th>
-              <th>{{ t('aiLib.exp.col.approved') }}</th>
-              <th>{{ t('aiLib.exp.col.created') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="e in visibleExperiences" :key="e.id">
-              <td data-primary>
-                <span class="is-strong">{{ e.title }}</span>
-                <span class="sub">{{ e.summary }}</span>
-              </td>
-              <td data-label="agent"><span class="badge badge--neutral mono">{{ e.agentId }}</span></td>
-              <td data-label="pattern"><span class="mono">{{ e.pattern }}</span></td>
-              <td data-label="source"><span class="hint">{{ e.sourceRef }}</span></td>
-              <td data-label="approved">
-                <span class="mono">{{ e.approvedBy || '—' }}</span>
-                <span class="sub">{{ shortTime(e.approvedAt) }}</span>
-              </td>
-              <td data-label="created"><span class="mono muted">{{ shortTime(e.createdAt) }}</span></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="sheet-body">
-        <EmptyState :title="t('aiLib.exp.empty')" :desc="t('aiLib.exp.emptyDesc')" />
-      </div>
-    </section>
-
-    <!-- 候选技能 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiLib.prop.title') }}</span>
-        <span class="spacer" />
-        <select v-model="propFilter" class="select filter" :aria-label="t('aiLib.prop.filter')">
-          <option value="">{{ t('aiLib.prop.filterAll') }}</option>
-          <option value="PROPOSED">{{ t('aiLib.prop.statusProposed') }}</option>
-          <option value="ADOPTED">{{ t('aiLib.prop.statusAdopted') }}</option>
-          <option value="REJECTED">{{ t('aiLib.prop.statusRejected') }}</option>
-        </select>
-        <button class="btn btn--sm" type="button" :disabled="distilling" @click="distillProposals">
-          <AppIcon name="layers" :size="14" />
-          {{ distilling ? t('aiLib.prop.distilling') : t('aiLib.prop.distill') }}
-        </button>
-      </div>
-      <div v-if="visibleProposals.length" class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiLib.prop.col.name') }}</th>
-              <th>{{ t('aiLib.prop.col.agent') }}</th>
-              <th>{{ t('aiLib.prop.col.pattern') }}</th>
-              <th>{{ t('aiLib.prop.col.state') }}</th>
-              <th>{{ t('aiLib.prop.col.replay') }}</th>
-              <th>{{ t('aiLib.prop.col.ops') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in visibleProposals" :key="p.id">
-              <td data-primary>
-                <span class="is-strong">{{ p.name }}</span>
-                <span class="sub mono">{{ p.code }}</span>
-                <span class="sub">{{ p.description }}</span>
-              </td>
-              <td data-label="agent"><span class="badge badge--neutral mono">{{ p.agentId }}</span></td>
-              <td data-label="pattern"><span class="mono">{{ p.pattern }}</span></td>
-              <td data-label="state">
-                <span class="badge" :class="propStatusClass(p.status)">{{ propStatusText(p.status) }}</span>
-                <span v-if="p.skillCode" class="sub mono">{{ p.skillCode }}</span>
-                <span v-if="p.decisionNote" class="sub">{{ p.decisionNote }}</span>
-              </td>
-              <td data-label="replay">
-                <span v-if="p.replay" class="badge" :class="p.replay?.passed ? 'badge--ok' : 'badge--danger'">
-                  {{ p.replay?.passed ? t('aiLib.prop.replayPassed') : t('aiLib.prop.replayFailed') }}
-                </span>
-                <span v-else class="hint">{{ t('aiLib.prop.replayNone') }}</span>
-              </td>
-              <td data-label="ops">
-                <div class="row-actions">
-                  <button v-if="p.replay" class="btn btn--sm btn--ghost" type="button" @click="openReplay(p)">
-                    {{ t('aiLib.prop.viewReplay') }}
-                  </button>
-                  <template v-if="p.status === 'PROPOSED'">
-                    <button v-if="isAdmin" class="btn btn--sm btn--primary" type="button" @click="openAdopt(p)">
-                      {{ t('aiLib.prop.adopt') }}
-                    </button>
-                    <button class="btn btn--sm btn--danger" type="button" @click="openReject(p)">
-                      {{ t('aiLib.prop.reject') }}
-                    </button>
-                  </template>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="sheet-body">
-        <EmptyState :title="t('aiLib.prop.empty')" :desc="t('aiLib.prop.emptyDesc')" />
-      </div>
-    </section>
-
-    <!-- 待办处理 -->
-    <AppModal v-model="adviceOpen" :title="adviceAction === 'dismiss' ? t('aiLib.adviceModal.dismissTitle') : t('aiLib.adviceModal.completeTitle')" width="520px" :dismissible="!busy">
-      <div class="stack">
-        <p class="modal-note">{{ adviceTarget?.title }}</p>
-        <label class="field">
-          <span class="label">
-            {{ t('aiLib.adviceModal.note') }}
-            <span v-if="adviceAction === 'dismiss'" class="req">*</span>
-          </span>
-          <textarea v-model="adviceNote" class="textarea" rows="3" maxlength="500" />
-        </label>
-        <div v-if="adviceErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ adviceErr }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="!!busy" @click="adviceTarget = null">
-          {{ t('aiLib.cancel') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="!!busy" @click="decideAdvice">
-          {{ busy ? t('aiLib.busy') : t('aiLib.confirm') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 录入经验 -->
-    <AppModal v-model="expOpen" :title="t('aiLib.expModal.title')" width="880px" :dismissible="!expSaving">
-      <div class="stack">
-        <div class="form-grid">
-          <label class="field">
-            <span class="label">{{ t('aiLib.expModal.agent') }} <span class="req">*</span></span>
-            <select v-model="expForm.agentId" class="select" @change="onExpAgentChange">
-              <option v-for="ag in agents" :key="ag.id" :value="ag.id">{{ ag.name || ag.id }}（{{ ag.id }}）</option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiLib.expModal.titleField') }} <span class="req">*</span></span>
-            <input v-model="expForm.title" class="input" type="text" maxlength="80" />
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiLib.expModal.pattern') }} <span class="req">*</span></span>
-            <input v-model="expForm.pattern" class="input" type="text" maxlength="200" />
-            <span class="hint">{{ t('aiLib.expModal.patternHint') }}</span>
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiLib.expModal.summary') }} <span class="req">*</span></span>
-            <textarea v-model="expForm.summary" class="textarea" rows="4" maxlength="1000" />
-            <span class="hint">{{ t('aiLib.expModal.summaryHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiLib.expModal.source') }} <span class="req">*</span></span>
-            <input v-model="expForm.sourceRef" class="input" type="text" maxlength="120" />
-            <span class="hint">{{ t('aiLib.expModal.sourceHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiLib.expModal.contra') }}</span>
-            <textarea v-model="expForm.contraText" class="textarea" rows="2" maxlength="800" />
-            <span class="hint">{{ t('aiLib.expModal.contraHint') }}</span>
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiLib.expModal.evidence') }} <span class="req">*</span></span>
-            <textarea v-model="expForm.evidenceText" class="textarea" rows="3" />
-            <span class="hint">{{ t('aiLib.expModal.evidenceHint') }}</span>
-          </label>
-          <div class="field span-2">
-            <span class="label">{{ t('aiLib.expModal.tools') }}</span>
-            <div v-if="expAgentTools.length" class="picks">
-              <label v-for="tool in expAgentTools" :key="tool" class="check">
-                <input
-                  type="checkbox"
-                  :checked="expForm.tools.includes(tool)"
-                  :disabled="!expForm.tools.includes(tool) && expForm.tools.length >= MAX_TOOLS"
-                  @change="toggleExpTool(tool, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="mono">{{ tool }}</span>
-              </label>
-            </div>
-            <span v-else class="hint">{{ t('aiLib.expModal.toolsNone') }}</span>
-          </div>
-        </div>
-
-        <label class="check">
-          <input v-model="expForm.deidentified" type="checkbox" />
-          <span>{{ t('aiLib.expModal.deidentified') }}</span>
-        </label>
-
-        <div v-if="expErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ expErr }}</span>
-        </div>
-        <p class="hint">{{ t('aiLib.expModal.note') }}</p>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="expSaving" @click="expOpen = false">
-          {{ t('aiLib.cancel') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="expSaving" @click="saveExperience">
-          {{ expSaving ? t('aiLib.expModal.saving') : t('aiLib.expModal.save') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 采纳确认 -->
-    <AppModal v-model="adoptOpen" :title="t('aiLib.adopt.title', { code: adoptTarget?.code || '' })" width="520px" :dismissible="!adopting">
-      <div class="stack">
-        <p class="modal-note">{{ t('aiLib.adopt.body') }}</p>
-        <p class="hint">{{ t('aiLib.adopt.hint') }}</p>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="adopting" @click="adoptTarget = null">
-          {{ t('aiLib.cancel') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="adopting" @click="confirmAdopt">
-          {{ adopting ? t('aiLib.busy') : t('aiLib.adopt.confirm') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 回放明细 / 采纳结果 -->
-    <AppModal v-model="replayOpen" :title="t('aiLib.replay.title', { code: replayTarget?.code || '' })" width="760px">
-      <div v-if="replayTarget" class="stack">
-        <div class="row row-wrap">
-          <b>{{ replayTarget.name || replayTarget.code }}</b>
-          <span class="badge" :class="replayTarget.replay?.passed ? 'badge--ok' : 'badge--danger'">
-            {{ replayTarget.replay?.passed ? t('aiLib.prop.replayPassed') : t('aiLib.prop.replayFailed') }}
-          </span>
+      <!-- 待办建议 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiLib.advices.title') }}</span>
           <span class="spacer" />
-          <span class="hint mono">{{ replayTarget.replay?.checkedAt }}</span>
+          <select v-model="adviceFilter" class="select filter" :aria-label="t('aiLib.advices.filter')">
+            <option value="OPEN">{{ t('aiLib.advices.filterOpen') }}</option>
+            <option value="">{{ t('aiLib.advices.filterAll') }}</option>
+            <option value="DONE">{{ t('aiLib.advices.statusDone') }}</option>
+            <option value="DISMISSED">{{ t('aiLib.advices.statusDismissed') }}</option>
+          </select>
         </div>
-        <div v-if="(replayTarget.replay?.cases || []).length" class="table-wrap">
-          <table class="table table--compact table--stack">
+        <TableSkeleton v-if="loading && !advices.length" :rows="3" />
+        <div v-else-if="visibleAdvices.length" class="table-wrap">
+          <table class="table table--stack">
             <thead>
               <tr>
-                <th>{{ t('aiLib.replay.col.input') }}</th>
-                <th>{{ t('aiLib.replay.col.expected') }}</th>
-                <th>{{ t('aiLib.replay.col.actual') }}</th>
-                <th>{{ t('aiLib.replay.col.passed') }}</th>
+                <th>{{ t('aiLib.advices.col.severity') }}</th>
+                <th>{{ t('aiLib.advices.col.title') }}</th>
+                <th>{{ t('aiLib.advices.col.action') }}</th>
+                <th>{{ t('aiLib.advices.col.target') }}</th>
+                <th>{{ t('aiLib.advices.col.state') }}</th>
+                <th>{{ t('aiLib.advices.col.ops') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="c in replayTarget.replay?.cases || []" :key="c.experienceId">
-                <td data-primary><span class="mono">{{ c.input }}</span></td>
-                <td data-label="expected"><span class="badge badge--neutral mono">{{ c.expectedAgent }}</span></td>
-                <td data-label="actual"><span class="badge badge--neutral mono">{{ c.actualAgent }}</span></td>
-                <td data-label="passed">
-                  <span class="badge" :class="c.passed ? 'badge--ok' : 'badge--danger'">
-                    {{ c.passed ? t('aiLib.yes') : t('aiLib.no') }}
-                  </span>
+              <tr v-for="a in visibleAdvices" :key="a.id">
+                <td data-primary><span class="badge" :class="levelClass(a.severity)">{{ levelText(a.severity) }}</span></td>
+                <td data-label="title">
+                  <span class="is-strong">{{ a.title }}</span>
+                  <span class="sub">{{ a.detail }}</span>
+                  <span v-if="a.note" class="sub">{{ t('aiLib.advices.note', { note: a.note }) }}</span>
+                </td>
+                <td data-label="action"><span class="hint">{{ a.suggestedAction }}</span></td>
+                <td data-label="target">
+                  <span class="badge badge--neutral mono">{{ a.targetType || '—' }}</span>
+                  <span v-if="a.targetId" class="sub mono">{{ a.targetId }}</span>
+                </td>
+                <td data-label="state">
+                  <span class="badge" :class="adviceStatusClass(a.status)">{{ adviceStatusText(a.status) }}</span>
+                  <span v-if="a.decidedBy" class="sub">{{ t('aiLib.advices.by', { user: a.decidedBy }) }}</span>
+                </td>
+                <td data-label="ops">
+                  <div v-if="a.status === 'OPEN'" class="row-actions">
+                    <button class="btn btn--sm btn--primary" type="button" :disabled="busy === a.id" @click="openAdvice(a, 'complete')">
+                      {{ t('aiLib.advices.complete') }}
+                    </button>
+                    <button class="btn btn--sm" type="button" :disabled="busy === a.id" @click="openAdvice(a, 'dismiss')">
+                      {{ t('aiLib.advices.dismiss') }}
+                    </button>
+                  </div>
+                  <span v-else class="hint">{{ shortTime(a.decidedAt) }}</span>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p v-if="replayTarget.decisionNote" class="notice notice--warn">
-          <AppIcon name="info" :size="15" />
-          <span>{{ replayTarget.decisionNote }}</span>
-        </p>
-        <p v-if="replayTarget.skillCode" class="notice notice--ok">
-          <AppIcon name="check-circle" :size="15" />
-          <span>{{ t('aiLib.replay.created', { code: replayTarget.skillCode }) }}</span>
-        </p>
-        <p class="hint">{{ t('aiLib.replay.hint') }}</p>
-      </div>
-    </AppModal>
-
-    <!-- 驳回候选 -->
-    <AppModal v-model="rejectOpen" :title="t('aiLib.reject.title', { code: rejectTarget?.code || '' })" width="520px" :dismissible="!rejecting">
-      <div class="stack">
-        <label class="field">
-          <span class="label">{{ t('aiLib.reject.note') }} <span class="req">*</span></span>
-          <textarea v-model="rejectNote" class="textarea" rows="3" maxlength="500" />
-        </label>
-        <div v-if="rejectErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ rejectErr }}</span>
+        <div v-else class="sheet-body">
+          <EmptyState :title="t('aiLib.advices.empty')" :desc="t('aiLib.advices.emptyDesc')" />
         </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="rejecting" @click="rejectTarget = null">
-          {{ t('aiLib.cancel') }}
-        </button>
-        <button class="btn btn--danger" type="button" :disabled="rejecting" @click="confirmReject">
-          {{ rejecting ? t('aiLib.busy') : t('aiLib.reject.confirm') }}
-        </button>
-      </template>
-    </AppModal>
+        <div class="sheet-body advices-note">
+          <p class="hint">{{ t('aiLib.advices.dedupe') }}</p>
+        </div>
+      </section>
+
+      <!-- 经验库 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiLib.exp.title') }}</span>
+          <span class="spacer" />
+          <select v-model="expAgent" class="select filter" :aria-label="t('aiLib.exp.filterAgent')">
+            <option value="">{{ t('aiLib.exp.filterAgent') }}</option>
+            <option v-for="ag in agents" :key="ag.id" :value="ag.id">{{ ag.name || ag.id }}</option>
+          </select>
+          <button class="btn btn--sm" type="button" @click="openExperience">
+            <AppIcon name="plus" :size="14" /> {{ t('aiLib.exp.create') }}
+          </button>
+        </div>
+        <div v-if="visibleExperiences.length" class="table-wrap">
+          <table class="table table--stack">
+            <thead>
+              <tr>
+                <th>{{ t('aiLib.exp.col.title') }}</th>
+                <th>{{ t('aiLib.exp.col.agent') }}</th>
+                <th>{{ t('aiLib.exp.col.pattern') }}</th>
+                <th>{{ t('aiLib.exp.col.source') }}</th>
+                <th>{{ t('aiLib.exp.col.approved') }}</th>
+                <th>{{ t('aiLib.exp.col.created') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in visibleExperiences" :key="e.id">
+                <td data-primary>
+                  <span class="is-strong">{{ e.title }}</span>
+                  <span class="sub">{{ e.summary }}</span>
+                </td>
+                <td data-label="agent"><span class="badge badge--neutral mono">{{ e.agentId }}</span></td>
+                <td data-label="pattern"><span class="mono">{{ e.pattern }}</span></td>
+                <td data-label="source"><span class="hint">{{ e.sourceRef }}</span></td>
+                <td data-label="approved">
+                  <span class="mono">{{ e.approvedBy || '—' }}</span>
+                  <span class="sub">{{ shortTime(e.approvedAt) }}</span>
+                </td>
+                <td data-label="created"><span class="mono muted">{{ shortTime(e.createdAt) }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="sheet-body">
+          <EmptyState :title="t('aiLib.exp.empty')" :desc="t('aiLib.exp.emptyDesc')" />
+        </div>
+      </section>
+
+      <!-- 候选技能 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiLib.prop.title') }}</span>
+          <span class="spacer" />
+          <select v-model="propFilter" class="select filter" :aria-label="t('aiLib.prop.filter')">
+            <option value="">{{ t('aiLib.prop.filterAll') }}</option>
+            <option value="PROPOSED">{{ t('aiLib.prop.statusProposed') }}</option>
+            <option value="ADOPTED">{{ t('aiLib.prop.statusAdopted') }}</option>
+            <option value="REJECTED">{{ t('aiLib.prop.statusRejected') }}</option>
+          </select>
+          <button class="btn btn--sm" type="button" :disabled="distilling" @click="distillProposals">
+            <AppIcon name="layers" :size="14" />
+            {{ distilling ? t('aiLib.prop.distilling') : t('aiLib.prop.distill') }}
+          </button>
+        </div>
+        <div v-if="visibleProposals.length" class="table-wrap">
+          <table class="table table--stack">
+            <thead>
+              <tr>
+                <th>{{ t('aiLib.prop.col.name') }}</th>
+                <th>{{ t('aiLib.prop.col.agent') }}</th>
+                <th>{{ t('aiLib.prop.col.pattern') }}</th>
+                <th>{{ t('aiLib.prop.col.state') }}</th>
+                <th>{{ t('aiLib.prop.col.replay') }}</th>
+                <th>{{ t('aiLib.prop.col.ops') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in visibleProposals" :key="p.id">
+                <td data-primary>
+                  <span class="is-strong">{{ p.name }}</span>
+                  <span class="sub mono">{{ p.code }}</span>
+                  <span class="sub">{{ p.description }}</span>
+                </td>
+                <td data-label="agent"><span class="badge badge--neutral mono">{{ p.agentId }}</span></td>
+                <td data-label="pattern"><span class="mono">{{ p.pattern }}</span></td>
+                <td data-label="state">
+                  <span class="badge" :class="propStatusClass(p.status)">{{ propStatusText(p.status) }}</span>
+                  <span v-if="p.skillCode" class="sub mono">{{ p.skillCode }}</span>
+                  <span v-if="p.decisionNote" class="sub">{{ p.decisionNote }}</span>
+                </td>
+                <td data-label="replay">
+                  <span v-if="p.replay" class="badge" :class="p.replay?.passed ? 'badge--ok' : 'badge--danger'">
+                    {{ p.replay?.passed ? t('aiLib.prop.replayPassed') : t('aiLib.prop.replayFailed') }}
+                  </span>
+                  <span v-else class="hint">{{ t('aiLib.prop.replayNone') }}</span>
+                </td>
+                <td data-label="ops">
+                  <div class="row-actions">
+                    <button v-if="p.replay" class="btn btn--sm btn--ghost" type="button" @click="openReplay(p)">
+                      {{ t('aiLib.prop.viewReplay') }}
+                    </button>
+                    <template v-if="p.status === 'PROPOSED'">
+                      <button v-if="isAdmin" class="btn btn--sm btn--primary" type="button" @click="openAdopt(p)">
+                        {{ t('aiLib.prop.adopt') }}
+                      </button>
+                      <button class="btn btn--sm btn--danger" type="button" @click="openReject(p)">
+                        {{ t('aiLib.prop.reject') }}
+                      </button>
+                    </template>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="sheet-body">
+          <EmptyState :title="t('aiLib.prop.empty')" :desc="t('aiLib.prop.emptyDesc')" />
+        </div>
+      </section>
+
+      <!-- 待办处理 -->
+      <AppModal v-model="adviceOpen" :title="adviceAction === 'dismiss' ? t('aiLib.adviceModal.dismissTitle') : t('aiLib.adviceModal.completeTitle')" width="520px" :dismissible="!busy">
+        <div class="stack">
+          <p class="modal-note">{{ adviceTarget?.title }}</p>
+          <label class="field">
+            <span class="label">
+              {{ t('aiLib.adviceModal.note') }}
+              <span v-if="adviceAction === 'dismiss'" class="req">*</span>
+            </span>
+            <textarea v-model="adviceNote" class="textarea" rows="3" maxlength="500" />
+          </label>
+          <div v-if="adviceErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ adviceErr }}</span>
+          </div>
+        </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="!!busy" @click="adviceTarget = null">
+            {{ t('aiLib.cancel') }}
+          </button>
+          <button class="btn btn--primary" type="button" :disabled="!!busy" @click="decideAdvice">
+            {{ busy ? t('aiLib.busy') : t('aiLib.confirm') }}
+          </button>
+        </template>
+      </AppModal>
+
+      <!-- 录入经验 -->
+      <AppModal v-model="expOpen" :title="t('aiLib.expModal.title')" width="880px" :dismissible="!expSaving">
+        <div class="stack">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">{{ t('aiLib.expModal.agent') }} <span class="req">*</span></span>
+              <select v-model="expForm.agentId" class="select" @change="onExpAgentChange">
+                <option v-for="ag in agents" :key="ag.id" :value="ag.id">{{ ag.name || ag.id }}（{{ ag.id }}）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiLib.expModal.titleField') }} <span class="req">*</span></span>
+              <input v-model="expForm.title" class="input" type="text" maxlength="80" />
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiLib.expModal.pattern') }} <span class="req">*</span></span>
+              <input v-model="expForm.pattern" class="input" type="text" maxlength="200" />
+              <span class="hint">{{ t('aiLib.expModal.patternHint') }}</span>
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiLib.expModal.summary') }} <span class="req">*</span></span>
+              <textarea v-model="expForm.summary" class="textarea" rows="4" maxlength="1000" />
+              <span class="hint">{{ t('aiLib.expModal.summaryHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiLib.expModal.source') }} <span class="req">*</span></span>
+              <input v-model="expForm.sourceRef" class="input" type="text" maxlength="120" />
+              <span class="hint">{{ t('aiLib.expModal.sourceHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiLib.expModal.contra') }}</span>
+              <textarea v-model="expForm.contraText" class="textarea" rows="2" maxlength="800" />
+              <span class="hint">{{ t('aiLib.expModal.contraHint') }}</span>
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiLib.expModal.evidence') }} <span class="req">*</span></span>
+              <textarea v-model="expForm.evidenceText" class="textarea" rows="3" />
+              <span class="hint">{{ t('aiLib.expModal.evidenceHint') }}</span>
+            </label>
+            <div class="field span-2">
+              <span class="label">{{ t('aiLib.expModal.tools') }}</span>
+              <div v-if="expAgentTools.length" class="picks">
+                <label v-for="tool in expAgentTools" :key="tool" class="check">
+                  <input
+                    type="checkbox"
+                    :checked="expForm.tools.includes(tool)"
+                    :disabled="!expForm.tools.includes(tool) && expForm.tools.length >= MAX_TOOLS"
+                    @change="toggleExpTool(tool, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="mono">{{ tool }}</span>
+                </label>
+              </div>
+              <span v-else class="hint">{{ t('aiLib.expModal.toolsNone') }}</span>
+            </div>
+          </div>
+
+          <label class="check">
+            <input v-model="expForm.deidentified" type="checkbox" />
+            <span>{{ t('aiLib.expModal.deidentified') }}</span>
+          </label>
+
+          <div v-if="expErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ expErr }}</span>
+          </div>
+          <p class="hint">{{ t('aiLib.expModal.note') }}</p>
+        </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="expSaving" @click="expOpen = false">
+            {{ t('aiLib.cancel') }}
+          </button>
+          <button class="btn btn--primary" type="button" :disabled="expSaving" @click="saveExperience">
+            {{ expSaving ? t('aiLib.expModal.saving') : t('aiLib.expModal.save') }}
+          </button>
+        </template>
+      </AppModal>
+
+      <!-- 采纳确认 -->
+      <AppModal v-model="adoptOpen" :title="t('aiLib.adopt.title', { code: adoptTarget?.code || '' })" width="520px" :dismissible="!adopting">
+        <div class="stack">
+          <p class="modal-note">{{ t('aiLib.adopt.body') }}</p>
+          <p class="hint">{{ t('aiLib.adopt.hint') }}</p>
+        </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="adopting" @click="adoptTarget = null">
+            {{ t('aiLib.cancel') }}
+          </button>
+          <button class="btn btn--primary" type="button" :disabled="adopting" @click="confirmAdopt">
+            {{ adopting ? t('aiLib.busy') : t('aiLib.adopt.confirm') }}
+          </button>
+        </template>
+      </AppModal>
+
+      <!-- 回放明细 / 采纳结果 -->
+      <AppModal v-model="replayOpen" :title="t('aiLib.replay.title', { code: replayTarget?.code || '' })" width="760px">
+        <div v-if="replayTarget" class="stack">
+          <div class="row row-wrap">
+            <b>{{ replayTarget.name || replayTarget.code }}</b>
+            <span class="badge" :class="replayTarget.replay?.passed ? 'badge--ok' : 'badge--danger'">
+              {{ replayTarget.replay?.passed ? t('aiLib.prop.replayPassed') : t('aiLib.prop.replayFailed') }}
+            </span>
+            <span class="spacer" />
+            <span class="hint mono">{{ replayTarget.replay?.checkedAt }}</span>
+          </div>
+          <div v-if="(replayTarget.replay?.cases || []).length" class="table-wrap">
+            <table class="table table--compact table--stack">
+              <thead>
+                <tr>
+                  <th>{{ t('aiLib.replay.col.input') }}</th>
+                  <th>{{ t('aiLib.replay.col.expected') }}</th>
+                  <th>{{ t('aiLib.replay.col.actual') }}</th>
+                  <th>{{ t('aiLib.replay.col.passed') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in replayTarget.replay?.cases || []" :key="c.experienceId">
+                  <td data-primary><span class="mono">{{ c.input }}</span></td>
+                  <td data-label="expected"><span class="badge badge--neutral mono">{{ c.expectedAgent }}</span></td>
+                  <td data-label="actual"><span class="badge badge--neutral mono">{{ c.actualAgent }}</span></td>
+                  <td data-label="passed">
+                    <span class="badge" :class="c.passed ? 'badge--ok' : 'badge--danger'">
+                      {{ c.passed ? t('aiLib.yes') : t('aiLib.no') }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="replayTarget.decisionNote" class="notice notice--warn">
+            <AppIcon name="info" :size="15" />
+            <span>{{ replayTarget.decisionNote }}</span>
+          </p>
+          <p v-if="replayTarget.skillCode" class="notice notice--ok">
+            <AppIcon name="check-circle" :size="15" />
+            <span>{{ t('aiLib.replay.created', { code: replayTarget.skillCode }) }}</span>
+          </p>
+          <p class="hint">{{ t('aiLib.replay.hint') }}</p>
+        </div>
+      </AppModal>
+
+      <!-- 驳回候选 -->
+      <AppModal v-model="rejectOpen" :title="t('aiLib.reject.title', { code: rejectTarget?.code || '' })" width="520px" :dismissible="!rejecting">
+        <div class="stack">
+          <label class="field">
+            <span class="label">{{ t('aiLib.reject.note') }} <span class="req">*</span></span>
+            <textarea v-model="rejectNote" class="textarea" rows="3" maxlength="500" />
+          </label>
+          <div v-if="rejectErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ rejectErr }}</span>
+          </div>
+        </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="rejecting" @click="rejectTarget = null">
+            {{ t('aiLib.cancel') }}
+          </button>
+          <button class="btn btn--danger" type="button" :disabled="rejecting" @click="confirmReject">
+            {{ rejecting ? t('aiLib.busy') : t('aiLib.reject.confirm') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -408,6 +411,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiAdviceComplete,
@@ -427,7 +431,7 @@ import {
   type AiExperienceInput,
   type AiProposal,
 } from '@/api/ai'
-import { errorText } from '@/api/http'
+import { errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { hasRole } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -444,6 +448,7 @@ const proposals = ref<AiProposal[]>([])
 const agents = ref<AiAgent[]>([])
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 
 const adviceFilter = ref('OPEN')
 const expAgent = ref('')
@@ -551,6 +556,7 @@ function shortTime(value?: string | null): string {
 async function loadAll() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   const results = await Promise.allSettled([
     aiAdvices(),
     aiExperiences(),
@@ -563,8 +569,14 @@ async function loadAll() {
   if (propRes.status === 'fulfilled') proposals.value = propRes.value.proposals ?? []
   if (catRes.status === 'fulfilled') agents.value = catRes.value.agents ?? []
 
+  const denied = results.some((r) => r.status === 'rejected' && isForbidden(r.reason))
   const failed = results.find((r) => r.status === 'rejected')
-  if (failed && failed.status === 'rejected') loadErr.value = errorText(failed.reason)
+  if (denied) {
+    forbidden.value = true
+    loadErr.value = ''
+  } else if (failed && failed.status === 'rejected') {
+    loadErr.value = errorText(failed.reason)
+  }
   loading.value = false
 }
 

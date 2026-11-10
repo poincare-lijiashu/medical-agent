@@ -30,6 +30,12 @@ const messages: Record<MessageKey, string> = {
   'boundary.retry': 'Retry this page',
   'boundary.home': 'Back to dashboard',
 
+  /* ---------- Permission denied (API 403) ---------- */
+  'forbidden.title': 'No access',
+  'forbidden.desc': 'Your account cannot view this page. Contact an administrator if your role recently changed.',
+  'forbidden.back': 'Go back',
+  'forbidden.home': 'Back to dashboard',
+
   /* ---------- Action feedback ---------- */
   'toast.region': 'Action feedback',
   'toast.close': 'Dismiss notification',

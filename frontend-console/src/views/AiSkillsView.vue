@@ -15,323 +15,326 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiSkills.kpi.total')" :value="skills.length" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.totalMeta')" />
-      <KpiCard :label="t('aiSkills.kpi.published')" :value="countStatus('PUBLISHED')" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.publishedMeta')" />
-      <KpiCard :label="t('aiSkills.kpi.pending')" :value="countStatus('IN_REVIEW')" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.pendingMeta')" />
-      <KpiCard :label="t('aiSkills.kpi.disabled')" :value="countStatus('DISABLED')" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.disabledMeta')" />
-      <KpiCard :label="t('aiSkills.kpi.agents')" :value="agentCoverage" :unit="t('aiSkills.unit.agent')" :meta="t('aiSkills.kpi.agentsMeta')" />
-    </div>
-
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiSkills.list.title') }}</span>
-        <span class="hint">{{ t('aiSkills.list.hint') }}</span>
-        <span class="spacer" />
-        <select v-model="statusFilter" class="select filter" :aria-label="t('aiSkills.filter.status')">
-          <option value="">{{ t('aiSkills.filter.status') }}</option>
-          <option v-for="s in STATUSES" :key="s" :value="s">{{ statusText(s) }}</option>
-        </select>
-        <select v-model="agentFilter" class="select filter" :aria-label="t('aiSkills.filter.agent')">
-          <option value="">{{ t('aiSkills.filter.agent') }}</option>
-          <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name || a.id }}</option>
-        </select>
-        <input
-          v-model="query"
-          class="input search"
-          type="search"
-          :placeholder="t('aiSkills.filter.search')"
-          :aria-label="t('aiSkills.filter.search')"
-        />
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiSkills.kpi.total')" :value="skills.length" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.totalMeta')" />
+        <KpiCard :label="t('aiSkills.kpi.published')" :value="countStatus('PUBLISHED')" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.publishedMeta')" />
+        <KpiCard :label="t('aiSkills.kpi.pending')" :value="countStatus('IN_REVIEW')" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.pendingMeta')" />
+        <KpiCard :label="t('aiSkills.kpi.disabled')" :value="countStatus('DISABLED')" :unit="t('aiSkills.unit.card')" :meta="t('aiSkills.kpi.disabledMeta')" />
+        <KpiCard :label="t('aiSkills.kpi.agents')" :value="agentCoverage" :unit="t('aiSkills.unit.agent')" :meta="t('aiSkills.kpi.agentsMeta')" />
       </div>
 
-      <TableSkeleton v-if="loading && !skills.length" :rows="5" />
-      <div v-else-if="visibleSkills.length" class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiSkills.col.code') }}</th>
-              <th>{{ t('aiSkills.col.agent') }}</th>
-              <th>{{ t('aiSkills.col.status') }}</th>
-              <th class="is-num">{{ t('aiSkills.col.version') }}</th>
-              <th>{{ t('aiSkills.col.creator') }}</th>
-              <th>{{ t('aiSkills.col.updated') }}</th>
-              <th>{{ t('aiSkills.col.action') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="s in visibleSkills" :key="s.code">
-              <td data-primary>
-                <span class="is-strong">{{ s.name || s.code }}</span>
-                <span class="sub mono">{{ s.code }}</span>
-              </td>
-              <td data-label="agent"><span class="badge badge--neutral mono">{{ s.agentId || '—' }}</span></td>
-              <td data-label="status">
-                <span class="badge" :class="statusClass(s.status)">{{ statusText(s.status) }}</span>
-                <span v-if="s.reviewNote" class="sub truncate" :title="s.reviewNote">{{ s.reviewNote }}</span>
-              </td>
-              <td class="is-num" data-label="version">v{{ s.version ?? 0 }}</td>
-              <td data-label="creator">{{ s.createdBy || '—' }}</td>
-              <td data-label="updated"><span class="mono muted">{{ shortTime(s.updatedAt) }}</span></td>
-              <td data-label="action" class="ops-col">
-                <div class="row-actions">
-                  <button v-if="canEdit(s)" class="btn btn--sm" type="button" @click="openEdit(s)">
-                    {{ t('aiSkills.action.edit') }}
-                  </button>
-                  <button v-if="isAdmin && canEdit(s)" class="btn btn--sm" type="button" :disabled="busy === s.code" @click="submitSkill(s)">
-                    {{ t('aiSkills.action.submit') }}
-                  </button>
-                  <template v-if="canReview(s)">
-                    <button class="btn btn--sm btn--primary" type="button" @click="openReview(s, true)">
-                      {{ t('aiSkills.action.approve') }}
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiSkills.list.title') }}</span>
+          <span class="hint">{{ t('aiSkills.list.hint') }}</span>
+          <span class="spacer" />
+          <select v-model="statusFilter" class="select filter" :aria-label="t('aiSkills.filter.status')">
+            <option value="">{{ t('aiSkills.filter.status') }}</option>
+            <option v-for="s in STATUSES" :key="s" :value="s">{{ statusText(s) }}</option>
+          </select>
+          <select v-model="agentFilter" class="select filter" :aria-label="t('aiSkills.filter.agent')">
+            <option value="">{{ t('aiSkills.filter.agent') }}</option>
+            <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name || a.id }}</option>
+          </select>
+          <input
+            v-model="query"
+            class="input search"
+            type="search"
+            :placeholder="t('aiSkills.filter.search')"
+            :aria-label="t('aiSkills.filter.search')"
+          />
+        </div>
+
+        <TableSkeleton v-if="loading && !skills.length" :rows="5" />
+        <div v-else-if="visibleSkills.length" class="table-wrap">
+          <table class="table table--stack">
+            <thead>
+              <tr>
+                <th>{{ t('aiSkills.col.code') }}</th>
+                <th>{{ t('aiSkills.col.agent') }}</th>
+                <th>{{ t('aiSkills.col.status') }}</th>
+                <th class="is-num">{{ t('aiSkills.col.version') }}</th>
+                <th>{{ t('aiSkills.col.creator') }}</th>
+                <th>{{ t('aiSkills.col.updated') }}</th>
+                <th>{{ t('aiSkills.col.action') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in visibleSkills" :key="s.code">
+                <td data-primary>
+                  <span class="is-strong">{{ s.name || s.code }}</span>
+                  <span class="sub mono">{{ s.code }}</span>
+                </td>
+                <td data-label="agent"><span class="badge badge--neutral mono">{{ s.agentId || '—' }}</span></td>
+                <td data-label="status">
+                  <span class="badge" :class="statusClass(s.status)">{{ statusText(s.status) }}</span>
+                  <span v-if="s.reviewNote" class="sub truncate" :title="s.reviewNote">{{ s.reviewNote }}</span>
+                </td>
+                <td class="is-num" data-label="version">v{{ s.version ?? 0 }}</td>
+                <td data-label="creator">{{ s.createdBy || '—' }}</td>
+                <td data-label="updated"><span class="mono muted">{{ shortTime(s.updatedAt) }}</span></td>
+                <td data-label="action" class="ops-col">
+                  <div class="row-actions">
+                    <button v-if="canEdit(s)" class="btn btn--sm" type="button" @click="openEdit(s)">
+                      {{ t('aiSkills.action.edit') }}
                     </button>
-                    <button class="btn btn--sm btn--danger" type="button" @click="openReview(s, false)">
-                      {{ t('aiSkills.action.reject') }}
+                    <button v-if="isAdmin && canEdit(s)" class="btn btn--sm" type="button" :disabled="busy === s.code" @click="submitSkill(s)">
+                      {{ t('aiSkills.action.submit') }}
                     </button>
-                  </template>
-                  <button v-if="canDisable(s)" class="btn btn--sm" type="button" @click="askConfirm(s, 'disable')">
-                    {{ t('aiSkills.action.disable') }}
-                  </button>
-                  <button v-if="canEnable(s)" class="btn btn--sm" type="button" @click="askConfirm(s, 'enable')">
-                    {{ t('aiSkills.action.enable') }}
-                  </button>
-                  <button class="btn btn--sm btn--ghost" type="button" @click="openImpact(s)">
-                    {{ t('aiSkills.action.impact') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="sheet-body">
-        <EmptyState :title="t('aiSkills.filter.empty')" :desc="t('aiSkills.filter.emptyDesc')">
-          <button v-if="isAdmin" class="btn btn--sm" type="button" @click="openCreate">
-            {{ t('aiSkills.create') }}
+                    <template v-if="canReview(s)">
+                      <button class="btn btn--sm btn--primary" type="button" @click="openReview(s, true)">
+                        {{ t('aiSkills.action.approve') }}
+                      </button>
+                      <button class="btn btn--sm btn--danger" type="button" @click="openReview(s, false)">
+                        {{ t('aiSkills.action.reject') }}
+                      </button>
+                    </template>
+                    <button v-if="canDisable(s)" class="btn btn--sm" type="button" @click="askConfirm(s, 'disable')">
+                      {{ t('aiSkills.action.disable') }}
+                    </button>
+                    <button v-if="canEnable(s)" class="btn btn--sm" type="button" @click="askConfirm(s, 'enable')">
+                      {{ t('aiSkills.action.enable') }}
+                    </button>
+                    <button class="btn btn--sm btn--ghost" type="button" @click="openImpact(s)">
+                      {{ t('aiSkills.action.impact') }}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="sheet-body">
+          <EmptyState :title="t('aiSkills.filter.empty')" :desc="t('aiSkills.filter.emptyDesc')">
+            <button v-if="isAdmin" class="btn btn--sm" type="button" @click="openCreate">
+              {{ t('aiSkills.create') }}
+            </button>
+          </EmptyState>
+        </div>
+      </section>
+
+      <!-- 新建 / 编辑 -->
+      <AppModal
+        v-model="editorOpen"
+        :title="editing ? t('aiSkills.edit.title', { code: editing.code }) : t('aiSkills.create.title')"
+        width="880px"
+        :dismissible="!saving"
+      >
+        <div class="stack">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">{{ t('aiSkills.form.code') }} <span class="req">*</span></span>
+              <input v-model="form.code" class="input mono" type="text" spellcheck="false" :disabled="!!editing" :placeholder="t('aiSkills.form.codeHint')" />
+              <span class="hint">{{ t('aiSkills.form.codeHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiSkills.form.name') }} <span class="req">*</span></span>
+              <input v-model="form.name" class="input" type="text" maxlength="80" />
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiSkills.form.agent') }} <span class="req">*</span></span>
+              <select v-model="form.agentId" class="select" :disabled="!!editing" @change="onAgentChange">
+                <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name || a.id }}（{{ a.id }}）</option>
+              </select>
+            </label>
+            <div class="field">
+              <span class="label">{{ t('aiSkills.form.state') }}</span>
+              <div class="row row-wrap">
+                <span class="badge" :class="statusClass(editing?.status)">{{ statusText(editing?.status) }}</span>
+                <span class="hint mono">v{{ editing?.version ?? 0 }}</span>
+              </div>
+            </div>
+            <label class="field span-2">
+              <span class="label">{{ t('aiSkills.form.description') }} <span class="req">*</span></span>
+              <textarea v-model="form.description" class="textarea" rows="2" maxlength="500" />
+              <span class="hint">{{ t('aiSkills.form.descriptionHint') }}</span>
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiSkills.form.prompt') }} <span class="req">*</span></span>
+              <textarea v-model="form.promptTemplate" class="textarea mono" rows="7" maxlength="4000" />
+              <span class="hint">{{ t('aiSkills.form.promptHint') }}</span>
+            </label>
+
+            <div class="field span-2">
+              <span class="label">{{ t('aiSkills.form.tools') }}</span>
+              <div v-if="agentTools.length" class="tool-picks">
+                <label v-for="tool in agentTools" :key="tool" class="check">
+                  <input
+                    type="checkbox"
+                    :checked="form.tools.includes(tool)"
+                    :disabled="!form.tools.includes(tool) && form.tools.length >= MAX_TOOLS"
+                    @change="toggleTool(tool, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="mono">{{ tool }}</span>
+                </label>
+              </div>
+              <span v-else class="hint">{{ t('aiSkills.form.toolsNone') }}</span>
+              <span class="hint">{{ t('aiSkills.form.toolsHint') }}</span>
+            </div>
+
+            <label class="field span-2">
+              <span class="label">{{ t('aiSkills.form.evidence') }} <span class="req">*</span></span>
+              <textarea v-model="form.evidenceText" class="textarea" rows="3" :placeholder="t('aiSkills.form.evidenceHint')" />
+              <span class="hint">{{ t('aiSkills.form.evidenceHint') }}</span>
+            </label>
+
+            <div class="field span-2">
+              <span class="label">{{ t('aiSkills.form.guardrails') }}</span>
+              <div class="row row-wrap guardrails">
+                <label class="check">
+                  <input v-model="form.hitl" type="checkbox" :disabled="agentRequiresHitl" />
+                  <span>{{ t('aiSkills.form.hitl') }}</span>
+                </label>
+                <label class="check">
+                  <input v-model="form.requireEvidence" type="checkbox" />
+                  <span>{{ t('aiSkills.form.requireEvidence') }}</span>
+                </label>
+                <label class="inline-field">
+                  <span>{{ t('aiSkills.form.maxInput') }}</span>
+                  <input v-model.number="form.maxInputChars" class="input input--num" type="number" min="200" max="2000" step="100" />
+                </label>
+              </div>
+              <span v-if="agentRequiresHitl" class="hint">{{ t('aiSkills.form.hitlLocked') }}</span>
+              <span class="hint">{{ t('aiSkills.form.maxInputHint') }}</span>
+            </div>
+          </div>
+
+          <div v-if="formErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ formErr }}</span>
+          </div>
+          <p class="hint">{{ t('aiSkills.form.note') }}</p>
+        </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="saving" @click="editorOpen = false">
+            {{ t('aiSkills.action.cancel') }}
           </button>
-        </EmptyState>
-      </div>
-    </section>
+          <button class="btn btn--primary" type="button" :disabled="saving" @click="saveSkill">
+            {{ saving ? t('aiSkills.form.saving') : t('aiSkills.form.save') }}
+          </button>
+        </template>
+      </AppModal>
 
-    <!-- 新建 / 编辑 -->
-    <AppModal
-      v-model="editorOpen"
-      :title="editing ? t('aiSkills.edit.title', { code: editing.code }) : t('aiSkills.create.title')"
-      width="880px"
-      :dismissible="!saving"
-    >
-      <div class="stack">
-        <div class="form-grid">
+      <!-- 审核 -->
+      <AppModal v-model="reviewOpen" :title="t('aiSkills.review.title', { code: reviewTarget?.code || '' })" width="600px" :dismissible="!reviewBusy">
+        <div class="stack">
+          <div class="row row-wrap">
+            <b>{{ reviewTarget?.name || reviewTarget?.code }}</b>
+            <span class="mono muted">{{ reviewTarget?.code }}</span>
+            <span class="badge badge--warn">{{ statusText('IN_REVIEW') }}</span>
+            <span class="badge" :class="reviewApprove ? 'badge--ok' : 'badge--danger'">
+              {{ reviewApprove ? t('aiSkills.action.approve') : t('aiSkills.action.reject') }}
+            </span>
+          </div>
+          <p class="hint">{{ t('aiSkills.review.hint') }}</p>
           <label class="field">
-            <span class="label">{{ t('aiSkills.form.code') }} <span class="req">*</span></span>
-            <input v-model="form.code" class="input mono" type="text" spellcheck="false" :disabled="!!editing" :placeholder="t('aiSkills.form.codeHint')" />
-            <span class="hint">{{ t('aiSkills.form.codeHint') }}</span>
+            <span class="label">
+              {{ t('aiSkills.review.note') }}
+              <span v-if="!reviewApprove" class="req">*</span>
+            </span>
+            <textarea v-model="reviewNote" class="textarea" rows="3" maxlength="2000" />
           </label>
-          <label class="field">
-            <span class="label">{{ t('aiSkills.form.name') }} <span class="req">*</span></span>
-            <input v-model="form.name" class="input" type="text" maxlength="80" />
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiSkills.form.agent') }} <span class="req">*</span></span>
-            <select v-model="form.agentId" class="select" :disabled="!!editing" @change="onAgentChange">
-              <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name || a.id }}（{{ a.id }}）</option>
-            </select>
-          </label>
-          <div class="field">
-            <span class="label">{{ t('aiSkills.form.state') }}</span>
+          <div v-if="reviewErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ reviewErr }}</span>
+          </div>
+        </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="reviewBusy" @click="reviewOpen = false">
+            {{ t('aiSkills.action.cancel') }}
+          </button>
+          <button
+            class="btn"
+            :class="reviewApprove ? 'btn--primary' : 'btn--danger'"
+            type="button"
+            :disabled="reviewBusy"
+            @click="confirmReview"
+          >
+            {{ reviewBusy ? t('aiSkills.confirm.busy') : (reviewApprove ? t('aiSkills.review.approve') : t('aiSkills.review.reject')) }}
+          </button>
+        </template>
+      </AppModal>
+
+      <!-- 影响面 -->
+      <AppModal v-model="impactOpen" :title="t('aiSkills.impact.title', { code: impactTarget?.code || '' })" width="680px">
+        <TableSkeleton v-if="impactLoading" :rows="3" />
+        <div v-else-if="impact" class="stack">
+          <div v-if="impact.warning" class="notice notice--warn">
+            <AppIcon name="warning" :size="15" />
+            <span>{{ impact.warning }}</span>
+          </div>
+          <div>
+            <div class="insp-label">{{ t('aiSkills.impact.bots') }}</div>
+            <div v-if="(impact.bots || []).length" class="table-wrap">
+              <table class="table table--compact">
+                <thead>
+                  <tr>
+                    <th>{{ t('aiSkills.impact.col.code') }}</th>
+                    <th>{{ t('aiSkills.impact.col.name') }}</th>
+                    <th>{{ t('aiSkills.impact.col.status') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="b in impact.bots" :key="b.code">
+                    <td class="mono">{{ b.code }}</td>
+                    <td>{{ b.name || '—' }}</td>
+                    <td><span class="badge badge--neutral">{{ b.status || '—' }}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="hint">{{ t('aiSkills.impact.none') }}</p>
+          </div>
+          <div>
+            <div class="insp-label">{{ t('aiSkills.impact.teams') }}</div>
             <div class="row row-wrap">
-              <span class="badge" :class="statusClass(editing?.status)">{{ statusText(editing?.status) }}</span>
-              <span class="hint mono">v{{ editing?.version ?? 0 }}</span>
+              <span v-for="tm in impact.teams || []" :key="tm.code" class="chip">{{ tm.name || tm.code }}</span>
+              <span v-if="!(impact.teams || []).length" class="hint">{{ t('aiSkills.impact.none') }}</span>
             </div>
           </div>
-          <label class="field span-2">
-            <span class="label">{{ t('aiSkills.form.description') }} <span class="req">*</span></span>
-            <textarea v-model="form.description" class="textarea" rows="2" maxlength="500" />
-            <span class="hint">{{ t('aiSkills.form.descriptionHint') }}</span>
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiSkills.form.prompt') }} <span class="req">*</span></span>
-            <textarea v-model="form.promptTemplate" class="textarea mono" rows="7" maxlength="4000" />
-            <span class="hint">{{ t('aiSkills.form.promptHint') }}</span>
-          </label>
-
-          <div class="field span-2">
-            <span class="label">{{ t('aiSkills.form.tools') }}</span>
-            <div v-if="agentTools.length" class="tool-picks">
-              <label v-for="tool in agentTools" :key="tool" class="check">
-                <input
-                  type="checkbox"
-                  :checked="form.tools.includes(tool)"
-                  :disabled="!form.tools.includes(tool) && form.tools.length >= MAX_TOOLS"
-                  @change="toggleTool(tool, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="mono">{{ tool }}</span>
-              </label>
+          <div>
+            <div class="insp-label">{{ t('aiSkills.impact.proposals') }}</div>
+            <div class="row row-wrap">
+              <span v-for="p in impact.proposals || []" :key="p.id" class="chip mono">{{ p.id }} · {{ p.status }}</span>
+              <span v-if="!(impact.proposals || []).length" class="hint">{{ t('aiSkills.impact.none') }}</span>
             </div>
-            <span v-else class="hint">{{ t('aiSkills.form.toolsNone') }}</span>
-            <span class="hint">{{ t('aiSkills.form.toolsHint') }}</span>
           </div>
+          <p class="hint">{{ t('aiSkills.impact.hint') }}</p>
+        </div>
+      </AppModal>
 
-          <label class="field span-2">
-            <span class="label">{{ t('aiSkills.form.evidence') }} <span class="req">*</span></span>
-            <textarea v-model="form.evidenceText" class="textarea" rows="3" :placeholder="t('aiSkills.form.evidenceHint')" />
-            <span class="hint">{{ t('aiSkills.form.evidenceHint') }}</span>
-          </label>
-
-          <div class="field span-2">
-            <span class="label">{{ t('aiSkills.form.guardrails') }}</span>
-            <div class="row row-wrap guardrails">
-              <label class="check">
-                <input v-model="form.hitl" type="checkbox" :disabled="agentRequiresHitl" />
-                <span>{{ t('aiSkills.form.hitl') }}</span>
-              </label>
-              <label class="check">
-                <input v-model="form.requireEvidence" type="checkbox" />
-                <span>{{ t('aiSkills.form.requireEvidence') }}</span>
-              </label>
-              <label class="inline-field">
-                <span>{{ t('aiSkills.form.maxInput') }}</span>
-                <input v-model.number="form.maxInputChars" class="input input--num" type="number" min="200" max="2000" step="100" />
-              </label>
-            </div>
-            <span v-if="agentRequiresHitl" class="hint">{{ t('aiSkills.form.hitlLocked') }}</span>
-            <span class="hint">{{ t('aiSkills.form.maxInputHint') }}</span>
-          </div>
-        </div>
-
-        <div v-if="formErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ formErr }}</span>
-        </div>
-        <p class="hint">{{ t('aiSkills.form.note') }}</p>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="saving" @click="editorOpen = false">
-          {{ t('aiSkills.action.cancel') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="saving" @click="saveSkill">
-          {{ saving ? t('aiSkills.form.saving') : t('aiSkills.form.save') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 审核 -->
-    <AppModal v-model="reviewOpen" :title="t('aiSkills.review.title', { code: reviewTarget?.code || '' })" width="600px" :dismissible="!reviewBusy">
-      <div class="stack">
-        <div class="row row-wrap">
-          <b>{{ reviewTarget?.name || reviewTarget?.code }}</b>
-          <span class="mono muted">{{ reviewTarget?.code }}</span>
-          <span class="badge badge--warn">{{ statusText('IN_REVIEW') }}</span>
-          <span class="badge" :class="reviewApprove ? 'badge--ok' : 'badge--danger'">
-            {{ reviewApprove ? t('aiSkills.action.approve') : t('aiSkills.action.reject') }}
-          </span>
-        </div>
-        <p class="hint">{{ t('aiSkills.review.hint') }}</p>
-        <label class="field">
-          <span class="label">
-            {{ t('aiSkills.review.note') }}
-            <span v-if="!reviewApprove" class="req">*</span>
-          </span>
-          <textarea v-model="reviewNote" class="textarea" rows="3" maxlength="2000" />
-        </label>
-        <div v-if="reviewErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ reviewErr }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="reviewBusy" @click="reviewOpen = false">
-          {{ t('aiSkills.action.cancel') }}
-        </button>
-        <button
-          class="btn"
-          :class="reviewApprove ? 'btn--primary' : 'btn--danger'"
-          type="button"
-          :disabled="reviewBusy"
-          @click="confirmReview"
-        >
-          {{ reviewBusy ? t('aiSkills.confirm.busy') : (reviewApprove ? t('aiSkills.review.approve') : t('aiSkills.review.reject')) }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 影响面 -->
-    <AppModal v-model="impactOpen" :title="t('aiSkills.impact.title', { code: impactTarget?.code || '' })" width="680px">
-      <TableSkeleton v-if="impactLoading" :rows="3" />
-      <div v-else-if="impact" class="stack">
-        <div v-if="impact.warning" class="notice notice--warn">
-          <AppIcon name="warning" :size="15" />
-          <span>{{ impact.warning }}</span>
-        </div>
-        <div>
-          <div class="insp-label">{{ t('aiSkills.impact.bots') }}</div>
-          <div v-if="(impact.bots || []).length" class="table-wrap">
-            <table class="table table--compact">
-              <thead>
-                <tr>
-                  <th>{{ t('aiSkills.impact.col.code') }}</th>
-                  <th>{{ t('aiSkills.impact.col.name') }}</th>
-                  <th>{{ t('aiSkills.impact.col.status') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="b in impact.bots" :key="b.code">
-                  <td class="mono">{{ b.code }}</td>
-                  <td>{{ b.name || '—' }}</td>
-                  <td><span class="badge badge--neutral">{{ b.status || '—' }}</span></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-else class="hint">{{ t('aiSkills.impact.none') }}</p>
-        </div>
-        <div>
-          <div class="insp-label">{{ t('aiSkills.impact.teams') }}</div>
-          <div class="row row-wrap">
-            <span v-for="tm in impact.teams || []" :key="tm.code" class="chip">{{ tm.name || tm.code }}</span>
-            <span v-if="!(impact.teams || []).length" class="hint">{{ t('aiSkills.impact.none') }}</span>
-          </div>
-        </div>
-        <div>
-          <div class="insp-label">{{ t('aiSkills.impact.proposals') }}</div>
-          <div class="row row-wrap">
-            <span v-for="p in impact.proposals || []" :key="p.id" class="chip mono">{{ p.id }} · {{ p.status }}</span>
-            <span v-if="!(impact.proposals || []).length" class="hint">{{ t('aiSkills.impact.none') }}</span>
-          </div>
-        </div>
-        <p class="hint">{{ t('aiSkills.impact.hint') }}</p>
-      </div>
-    </AppModal>
-
-    <!-- 停用 / 重新启用确认 -->
-    <AppModal
-      v-model="confirmOpen"
-      :title="confirmAction === 'disable'
-        ? t('aiSkills.confirm.disableTitle', { code: confirmTarget?.code || '' })
-        : t('aiSkills.confirm.enableTitle', { code: confirmTarget?.code || '' })"
-      width="480px"
-      :dismissible="!busy"
-    >
-      <p class="modal-note">
-        {{ confirmAction === 'disable' ? t('aiSkills.confirm.disableBody') : t('aiSkills.confirm.enableBody') }}
-      </p>
-      <template #footer>
-        <button class="btn" type="button" :disabled="!!busy" @click="confirmTarget = null">
-          {{ t('aiSkills.action.cancel') }}
-        </button>
-        <button
-          class="btn"
-          :class="confirmAction === 'disable' ? 'btn--danger' : 'btn--primary'"
-          type="button"
-          :disabled="!!busy"
-          @click="confirmToggle"
-        >
-          {{ busy ? t('aiSkills.confirm.busy') : t('aiSkills.confirm.ok') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- 停用 / 重新启用确认 -->
+      <AppModal
+        v-model="confirmOpen"
+        :title="confirmAction === 'disable'
+          ? t('aiSkills.confirm.disableTitle', { code: confirmTarget?.code || '' })
+          : t('aiSkills.confirm.enableTitle', { code: confirmTarget?.code || '' })"
+        width="480px"
+        :dismissible="!busy"
+      >
+        <p class="modal-note">
+          {{ confirmAction === 'disable' ? t('aiSkills.confirm.disableBody') : t('aiSkills.confirm.enableBody') }}
+        </p>
+        <template #footer>
+          <button class="btn" type="button" :disabled="!!busy" @click="confirmTarget = null">
+            {{ t('aiSkills.action.cancel') }}
+          </button>
+          <button
+            class="btn"
+            :class="confirmAction === 'disable' ? 'btn--danger' : 'btn--primary'"
+            type="button"
+            :disabled="!!busy"
+            @click="confirmToggle"
+          >
+            {{ busy ? t('aiSkills.confirm.busy') : t('aiSkills.confirm.ok') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -343,6 +346,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiAgentCatalog,
@@ -359,7 +363,7 @@ import {
   type AiSkillImpact,
   type AiSkillInput,
 } from '@/api/ai'
-import { AiRequestError, errorText } from '@/api/http'
+import { AiRequestError, errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { hasRole, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -377,6 +381,7 @@ const skills = ref<AiSkillCard[]>([])
 const agents = ref<AiAgent[]>([])
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 
 const statusFilter = ref('')
 const agentFilter = ref('')
@@ -486,6 +491,7 @@ function canEnable(s: AiSkillCard): boolean {
 async function loadAll() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   try {
     const [page, catalog] = await Promise.all([
       aiAgentSkills(statusFilter.value || undefined, agentFilter.value || undefined),
@@ -494,7 +500,12 @@ async function loadAll() {
     skills.value = page.skills ?? []
     agents.value = catalog.agents ?? []
   } catch (e) {
-    loadErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      loadErr.value = ''
+    } else {
+      loadErr.value = errorText(e)
+    }
   } finally {
     loading.value = false
   }

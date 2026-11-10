@@ -8,225 +8,228 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiLlm.kpi.chat')" :value="chatCount" :unit="t('aiLlm.unit.provider')" :meta="t('aiLlm.kpi.chatMeta')" />
-      <KpiCard :label="t('aiLlm.kpi.vision')" :value="visionCount" :unit="t('aiLlm.unit.provider')" :meta="t('aiLlm.kpi.visionMeta')" />
-      <KpiCard :label="t('aiLlm.kpi.activeChat')" :value="activeName('chat')" />
-      <KpiCard :label="t('aiLlm.kpi.activeVision')" :value="activeName('vision')" />
-      <KpiCard
-        :label="t('aiLlm.kpi.rotation')"
-        :value="inventory ? (inventory.rotationReady ? t('aiLlm.rotation.ready') : t('aiLlm.rotation.pending')) : '—'"
-        :meta="inventory ? t('aiLlm.kpi.rotationMeta', { mode: inventory.mode || '—' }) : undefined"
-      />
-    </div>
-
-    <div class="grid-2">
-      <section v-for="ch in CHANNELS" :key="ch" class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t(`aiLlm.channel.${ch}`) }}</span>
-          <span class="badge" :class="activeProvider(ch) ? 'badge--accent' : 'badge--neutral'">
-            {{ activeProvider(ch) ? t('aiLlm.channel.custom') : t('aiLlm.channel.builtin') }}
-          </span>
-          <span class="spacer" />
-          <button
-            v-if="activeProvider(ch)"
-            class="btn btn--sm"
-            type="button"
-            :disabled="busy === ch"
-            @click="deactivate(ch)"
-          >
-            {{ t('aiLlm.channel.useBuiltin') }}
-          </button>
-        </div>
-
-        <div v-if="channelProviders(ch).length" class="table-wrap">
-          <table class="table table--stack">
-            <thead>
-              <tr>
-                <th>{{ t('aiLlm.col.name') }}</th>
-                <th>{{ t('aiLlm.col.format') }}</th>
-                <th>{{ t('aiLlm.col.model') }}</th>
-                <th>{{ t('aiLlm.col.key') }}</th>
-                <th class="col-action">{{ t('aiLlm.col.action') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="p in channelProviders(ch)" :key="p.id">
-                <td class="is-strong" data-primary>
-                  {{ p.display_name || p.model_id || p.id }}
-                  <span v-if="providers[ch]?.active === p.id" class="badge badge--ok">{{ t('aiLlm.active.badge') }}</span>
-                </td>
-                <td data-label="format"><span class="badge badge--neutral">{{ p.api_format || '—' }}</span></td>
-                <td data-label="model">
-                  <div class="mono">{{ p.model_id || '—' }}</div>
-                  <div class="hint truncate" :title="p.base_url">{{ p.base_url || '—' }}</div>
-                  <div v-if="p.extra_params" class="hint truncate mono" :title="p.extra_params">
-                    {{ t('aiLlm.col.extra') }}: {{ p.extra_params }}
-                  </div>
-                </td>
-                <td data-label="key"><span class="mono muted">{{ p.api_key || '—' }}</span></td>
-                <td class="col-action">
-                  <div class="row-actions">
-                    <button
-                      v-if="providers[ch]?.active !== p.id"
-                      class="btn btn--sm"
-                      type="button"
-                      :disabled="busy === ch"
-                      @click="activate(ch, p)"
-                    >
-                      {{ t('aiLlm.action.activate') }}
-                    </button>
-                    <button class="btn btn--sm btn--danger" type="button" @click="askDelete(ch, p)">
-                      {{ t('aiLlm.action.delete') }}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div v-else class="sheet-body">
-          <p class="muted small">{{ t('aiLlm.channel.empty') }}</p>
-        </div>
-      </section>
-    </div>
-
-    <!-- 新增 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiLlm.form.title') }}</span>
-        <span class="spacer" />
-        <span class="hint">{{ t('aiLlm.form.security') }}</span>
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiLlm.kpi.chat')" :value="chatCount" :unit="t('aiLlm.unit.provider')" :meta="t('aiLlm.kpi.chatMeta')" />
+        <KpiCard :label="t('aiLlm.kpi.vision')" :value="visionCount" :unit="t('aiLlm.unit.provider')" :meta="t('aiLlm.kpi.visionMeta')" />
+        <KpiCard :label="t('aiLlm.kpi.activeChat')" :value="activeName('chat')" />
+        <KpiCard :label="t('aiLlm.kpi.activeVision')" :value="activeName('vision')" />
+        <KpiCard
+          :label="t('aiLlm.kpi.rotation')"
+          :value="inventory ? (inventory.rotationReady ? t('aiLlm.rotation.ready') : t('aiLlm.rotation.pending')) : '—'"
+          :meta="inventory ? t('aiLlm.kpi.rotationMeta', { mode: inventory.mode || '—' }) : undefined"
+        />
       </div>
-      <div class="sheet-body stack">
-        <div class="form-grid">
-          <label class="field">
-            <span class="label">{{ t('aiLlm.form.kind') }}</span>
-            <select v-model="form.kind" class="select">
-              <option value="chat">{{ t('aiLlm.channel.chat') }}</option>
-              <option value="vision">{{ t('aiLlm.channel.vision') }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiLlm.form.format') }}</span>
-            <select v-model="form.api_format" class="select">
-              <option value="openai">openai</option>
-              <option value="anthropic">anthropic</option>
-            </select>
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiLlm.form.baseUrl') }} <span class="req">*</span></span>
-            <input v-model="form.base_url" class="input" type="url" spellcheck="false" :placeholder="t('aiLlm.form.baseUrlHint')" />
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiLlm.form.modelId') }} <span class="req">*</span></span>
-            <input v-model="form.model_id" class="input" type="text" spellcheck="false" :placeholder="t('aiLlm.form.modelIdHint')" />
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiLlm.form.displayName') }}</span>
-            <input v-model="form.display_name" class="input" type="text" :placeholder="t('aiLlm.form.displayNameHint')" />
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiLlm.form.apiKey') }}</span>
-            <div class="row">
-              <input
-                v-model="form.api_key"
-                class="input"
-                :type="showKey ? 'text' : 'password'"
-                autocomplete="new-password"
-                spellcheck="false"
-                :placeholder="t('aiLlm.form.apiKeyHint')"
-              />
-              <button class="btn btn--sm" type="button" @click="showKey = !showKey">
-                {{ showKey ? t('aiLlm.form.hideKey') : t('aiLlm.form.showKey') }}
-              </button>
-            </div>
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiLlm.form.extra') }}</span>
-            <div class="row">
-              <input
-                v-model="form.extra_params"
-                class="input mono"
-                type="text"
-                spellcheck="false"
-                :placeholder="t('aiLlm.form.extraHint')"
-              />
-              <button class="btn btn--sm" type="button" :disabled="!form.extra_params.trim()" @click="formatExtra">
-                {{ t('aiLlm.form.formatJson') }}
-              </button>
-            </div>
-            <span v-if="suggesting" class="hint">{{ t('aiLlm.form.suggesting') }}</span>
-            <span v-else-if="suggestionApplied" class="hint">{{ t('aiLlm.form.suggested') }}</span>
-            <span class="hint">{{ t('aiLlm.form.extraRule') }}</span>
-          </label>
-        </div>
 
-        <div v-if="testResult" class="notice" :class="testResult.ok ? 'notice--ok' : 'notice--danger'">
-          <AppIcon :name="testResult.ok ? 'check' : 'alert'" :size="15" />
-          <div class="notice-main">
-            <strong>{{ testResult.ok ? t('aiLlm.test.ok', { ms: testResult.latency_ms ?? 0 }) : t('aiLlm.test.fail') }}</strong>
-            <p v-if="testResult.detail">{{ testResult.detail }}</p>
+      <div class="grid-2">
+        <section v-for="ch in CHANNELS" :key="ch" class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t(`aiLlm.channel.${ch}`) }}</span>
+            <span class="badge" :class="activeProvider(ch) ? 'badge--accent' : 'badge--neutral'">
+              {{ activeProvider(ch) ? t('aiLlm.channel.custom') : t('aiLlm.channel.builtin') }}
+            </span>
+            <span class="spacer" />
+            <button
+              v-if="activeProvider(ch)"
+              class="btn btn--sm"
+              type="button"
+              :disabled="busy === ch"
+              @click="deactivate(ch)"
+            >
+              {{ t('aiLlm.channel.useBuiltin') }}
+            </button>
+          </div>
+
+          <div v-if="channelProviders(ch).length" class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>{{ t('aiLlm.col.name') }}</th>
+                  <th>{{ t('aiLlm.col.format') }}</th>
+                  <th>{{ t('aiLlm.col.model') }}</th>
+                  <th>{{ t('aiLlm.col.key') }}</th>
+                  <th class="col-action">{{ t('aiLlm.col.action') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in channelProviders(ch)" :key="p.id">
+                  <td class="is-strong" data-primary>
+                    {{ p.display_name || p.model_id || p.id }}
+                    <span v-if="providers[ch]?.active === p.id" class="badge badge--ok">{{ t('aiLlm.active.badge') }}</span>
+                  </td>
+                  <td data-label="format"><span class="badge badge--neutral">{{ p.api_format || '—' }}</span></td>
+                  <td data-label="model">
+                    <div class="mono">{{ p.model_id || '—' }}</div>
+                    <div class="hint truncate" :title="p.base_url">{{ p.base_url || '—' }}</div>
+                    <div v-if="p.extra_params" class="hint truncate mono" :title="p.extra_params">
+                      {{ t('aiLlm.col.extra') }}: {{ p.extra_params }}
+                    </div>
+                  </td>
+                  <td data-label="key"><span class="mono muted">{{ p.api_key || '—' }}</span></td>
+                  <td class="col-action">
+                    <div class="row-actions">
+                      <button
+                        v-if="providers[ch]?.active !== p.id"
+                        class="btn btn--sm"
+                        type="button"
+                        :disabled="busy === ch"
+                        @click="activate(ch, p)"
+                      >
+                        {{ t('aiLlm.action.activate') }}
+                      </button>
+                      <button class="btn btn--sm btn--danger" type="button" @click="askDelete(ch, p)">
+                        {{ t('aiLlm.action.delete') }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="sheet-body">
+            <p class="muted small">{{ t('aiLlm.channel.empty') }}</p>
+          </div>
+        </section>
+      </div>
+
+      <!-- 新增 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiLlm.form.title') }}</span>
+          <span class="spacer" />
+          <span class="hint">{{ t('aiLlm.form.security') }}</span>
+        </div>
+        <div class="sheet-body stack">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">{{ t('aiLlm.form.kind') }}</span>
+              <select v-model="form.kind" class="select">
+                <option value="chat">{{ t('aiLlm.channel.chat') }}</option>
+                <option value="vision">{{ t('aiLlm.channel.vision') }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiLlm.form.format') }}</span>
+              <select v-model="form.api_format" class="select">
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+              </select>
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiLlm.form.baseUrl') }} <span class="req">*</span></span>
+              <input v-model="form.base_url" class="input" type="url" spellcheck="false" :placeholder="t('aiLlm.form.baseUrlHint')" />
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiLlm.form.modelId') }} <span class="req">*</span></span>
+              <input v-model="form.model_id" class="input" type="text" spellcheck="false" :placeholder="t('aiLlm.form.modelIdHint')" />
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiLlm.form.displayName') }}</span>
+              <input v-model="form.display_name" class="input" type="text" :placeholder="t('aiLlm.form.displayNameHint')" />
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiLlm.form.apiKey') }}</span>
+              <div class="row">
+                <input
+                  v-model="form.api_key"
+                  class="input"
+                  :type="showKey ? 'text' : 'password'"
+                  autocomplete="new-password"
+                  spellcheck="false"
+                  :placeholder="t('aiLlm.form.apiKeyHint')"
+                />
+                <button class="btn btn--sm" type="button" @click="showKey = !showKey">
+                  {{ showKey ? t('aiLlm.form.hideKey') : t('aiLlm.form.showKey') }}
+                </button>
+              </div>
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiLlm.form.extra') }}</span>
+              <div class="row">
+                <input
+                  v-model="form.extra_params"
+                  class="input mono"
+                  type="text"
+                  spellcheck="false"
+                  :placeholder="t('aiLlm.form.extraHint')"
+                />
+                <button class="btn btn--sm" type="button" :disabled="!form.extra_params.trim()" @click="formatExtra">
+                  {{ t('aiLlm.form.formatJson') }}
+                </button>
+              </div>
+              <span v-if="suggesting" class="hint">{{ t('aiLlm.form.suggesting') }}</span>
+              <span v-else-if="suggestionApplied" class="hint">{{ t('aiLlm.form.suggested') }}</span>
+              <span class="hint">{{ t('aiLlm.form.extraRule') }}</span>
+            </label>
+          </div>
+
+          <div v-if="testResult" class="notice" :class="testResult.ok ? 'notice--ok' : 'notice--danger'">
+            <AppIcon :name="testResult.ok ? 'check' : 'alert'" :size="15" />
+            <div class="notice-main">
+              <strong>{{ testResult.ok ? t('aiLlm.test.ok', { ms: testResult.latency_ms ?? 0 }) : t('aiLlm.test.fail') }}</strong>
+              <p v-if="testResult.detail">{{ testResult.detail }}</p>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn" type="button" :disabled="testing || saving" @click="test">
+              <AppIcon name="activity" :size="14" />
+              {{ testing ? t('aiLlm.test.running') : t('aiLlm.test.run') }}
+            </button>
+            <button class="btn btn--primary" type="button" :disabled="saving || testing" @click="save">
+              <AppIcon name="check" :size="14" />
+              {{ saving ? t('aiLlm.form.saving') : t('aiLlm.form.save') }}
+            </button>
+            <span class="hint">{{ t('aiLlm.test.note') }}</span>
           </div>
         </div>
+      </section>
 
-        <div class="form-actions">
-          <button class="btn" type="button" :disabled="testing || saving" @click="test">
-            <AppIcon name="activity" :size="14" />
-            {{ testing ? t('aiLlm.test.running') : t('aiLlm.test.run') }}
-          </button>
-          <button class="btn btn--primary" type="button" :disabled="saving || testing" @click="save">
-            <AppIcon name="check" :size="14" />
-            {{ saving ? t('aiLlm.form.saving') : t('aiLlm.form.save') }}
-          </button>
-          <span class="hint">{{ t('aiLlm.test.note') }}</span>
+      <!-- 密钥盘点 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiLlm.inventory.title') }}</span>
+          <span v-if="inventory" class="badge" :class="inventory.rotationReady ? 'badge--ok' : 'badge--warn'">
+            {{ inventory.rotationReady ? t('aiLlm.rotation.ready') : t('aiLlm.rotation.pending') }}
+          </span>
+          <span class="spacer" />
+          <span class="hint">{{ t('aiLlm.inventory.hint') }}</span>
         </div>
-      </div>
-    </section>
 
-    <!-- 密钥盘点 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiLlm.inventory.title') }}</span>
-        <span v-if="inventory" class="badge" :class="inventory.rotationReady ? 'badge--ok' : 'badge--warn'">
-          {{ inventory.rotationReady ? t('aiLlm.rotation.ready') : t('aiLlm.rotation.pending') }}
-        </span>
-        <span class="spacer" />
-        <span class="hint">{{ t('aiLlm.inventory.hint') }}</span>
-      </div>
-
-      <div v-if="inventory" class="sheet-body stack">
-        <div class="inv-grid">
-          <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.mode') }}</span><span class="inv-v">{{ inventory.mode || '—' }}</span></div>
-          <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.total') }}</span><span class="inv-v">{{ inventory.total ?? 0 }}</span></div>
-          <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.currentKey') }}</span><span class="inv-v">{{ inventory.currentKey ?? 0 }}</span></div>
-          <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.plaintext') }}</span><span class="inv-v" :class="{ 'is-bad': (inventory.plaintext ?? 0) > 0 }">{{ inventory.plaintext ?? 0 }}</span></div>
-          <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.legacy') }}</span><span class="inv-v" :class="{ 'is-bad': (inventory.legacyV1 ?? 0) > 0 }">{{ inventory.legacyV1 ?? 0 }}</span></div>
+        <div v-if="inventory" class="sheet-body stack">
+          <div class="inv-grid">
+            <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.mode') }}</span><span class="inv-v">{{ inventory.mode || '—' }}</span></div>
+            <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.total') }}</span><span class="inv-v">{{ inventory.total ?? 0 }}</span></div>
+            <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.currentKey') }}</span><span class="inv-v">{{ inventory.currentKey ?? 0 }}</span></div>
+            <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.plaintext') }}</span><span class="inv-v" :class="{ 'is-bad': (inventory.plaintext ?? 0) > 0 }">{{ inventory.plaintext ?? 0 }}</span></div>
+            <div class="inv"><span class="inv-k">{{ t('aiLlm.inventory.legacy') }}</span><span class="inv-v" :class="{ 'is-bad': (inventory.legacyV1 ?? 0) > 0 }">{{ inventory.legacyV1 ?? 0 }}</span></div>
+          </div>
+          <div class="row row-wrap">
+            <span class="hint">{{ t('aiLlm.inventory.versions') }}</span>
+            <span v-for="[version, count] in versionRows" :key="version" class="badge badge--neutral mono">{{ version }} × {{ count }}</span>
+            <span v-if="!versionRows.length" class="hint">—</span>
+          </div>
+          <p v-if="(inventory.keysOutOfRing || []).length" class="hint is-bad">
+            {{ t('aiLlm.inventory.outOfRing', { list: (inventory.keysOutOfRing || []).join('、') }) }}
+          </p>
+          <p class="hint">{{ inventory.rotationReady ? t('aiLlm.inventory.readyDesc') : t('aiLlm.inventory.pendingDesc') }}</p>
         </div>
-        <div class="row row-wrap">
-          <span class="hint">{{ t('aiLlm.inventory.versions') }}</span>
-          <span v-for="[version, count] in versionRows" :key="version" class="badge badge--neutral mono">{{ version }} × {{ count }}</span>
-          <span v-if="!versionRows.length" class="hint">—</span>
+        <div v-else class="sheet-body">
+          <p class="muted small">{{ t('aiLlm.inventory.loading') }}</p>
         </div>
-        <p v-if="(inventory.keysOutOfRing || []).length" class="hint is-bad">
-          {{ t('aiLlm.inventory.outOfRing', { list: (inventory.keysOutOfRing || []).join('、') }) }}
-        </p>
-        <p class="hint">{{ inventory.rotationReady ? t('aiLlm.inventory.readyDesc') : t('aiLlm.inventory.pendingDesc') }}</p>
-      </div>
-      <div v-else class="sheet-body">
-        <p class="muted small">{{ t('aiLlm.inventory.loading') }}</p>
-      </div>
-    </section>
+      </section>
 
-    <AppModal v-model="deleteOpen" :title="t('aiLlm.delete.title', { name: deleteName })" width="480px">
-      <p class="modal-note">{{ t('aiLlm.delete.body') }}</p>
-      <template #footer>
-        <button class="btn" type="button" @click="deleteTarget = null">{{ t('aiLlm.action.cancel') }}</button>
-        <button class="btn btn--danger" type="button" @click="confirmDelete">{{ t('aiLlm.action.confirmDelete') }}</button>
-      </template>
-    </AppModal>
+      <AppModal v-model="deleteOpen" :title="t('aiLlm.delete.title', { name: deleteName })" width="480px">
+        <p class="modal-note">{{ t('aiLlm.delete.body') }}</p>
+        <template #footer>
+          <button class="btn" type="button" @click="deleteTarget = null">{{ t('aiLlm.action.cancel') }}</button>
+          <button class="btn btn--danger" type="button" @click="confirmDelete">{{ t('aiLlm.action.confirmDelete') }}</button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -237,6 +240,7 @@ import AppModal from '@/components/ui/AppModal.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import {
   aiLlmActivate,
   aiLlmAdd,
@@ -252,7 +256,7 @@ import {
   type AiLlmProviders,
   type AiLlmTestResult,
 } from '@/api/ai'
-import { errorText } from '@/api/http'
+import { errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 
@@ -275,6 +279,7 @@ const providers = ref<AiLlmProviders>({})
 const inventory = ref<AiLlmKeyInventory | null>(null)
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 
 const form = reactive<FormState>({
   kind: 'chat',
@@ -328,12 +333,18 @@ function activeName(kind: Channel): string {
 async function loadAll() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   try {
     const [list, inv] = await Promise.all([aiLlmProviders(), aiLlmKeyInventory()])
     providers.value = list ?? {}
     inventory.value = inv ?? null
   } catch (e) {
-    loadErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      loadErr.value = ''
+    } else {
+      loadErr.value = errorText(e)
+    }
   } finally {
     loading.value = false
   }

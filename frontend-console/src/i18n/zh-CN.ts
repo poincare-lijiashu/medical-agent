@@ -33,6 +33,12 @@ const messages = {
   'boundary.retry': '重试当前页',
   'boundary.home': '返回驾驶舱',
 
+  /* ---------- 权限受限（API 403） ---------- */
+  'forbidden.title': '无访问权限',
+  'forbidden.desc': '当前账号无权查看此页面。如岗位调整后仍无法访问，请联系系统管理员。',
+  'forbidden.back': '返回上一页',
+  'forbidden.home': '返回驾驶舱',
+
   /* ---------- 操作反馈 ---------- */
   'toast.region': '操作反馈',
   'toast.close': '关闭提示',

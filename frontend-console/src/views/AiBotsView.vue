@@ -15,353 +15,102 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiBots.kpi.total')" :value="bots.length" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.totalMeta')" />
-      <KpiCard :label="t('aiBots.kpi.published')" :value="countStatus('PUBLISHED')" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.publishedMeta')" />
-      <KpiCard :label="t('aiBots.kpi.pending')" :value="countStatus('IN_REVIEW')" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.pendingMeta')" />
-      <KpiCard :label="t('aiBots.kpi.disabled')" :value="countStatus('DISABLED')" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.disabledMeta')" />
-      <KpiCard :label="t('aiBots.kpi.agents')" :value="agentCoverage" :unit="t('aiBots.unit.agent')" :meta="t('aiBots.kpi.agentsMeta')" />
-    </div>
-
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiBots.list.title') }}</span>
-        <span class="hint">{{ t('aiBots.list.hint') }}</span>
-        <span class="spacer" />
-        <select v-model="statusFilter" class="select filter" :aria-label="t('aiBots.filter.status')">
-          <option value="">{{ t('aiBots.filter.status') }}</option>
-          <option v-for="s in STATUSES" :key="s" :value="s">{{ statusText(s) }}</option>
-        </select>
-        <select v-model="agentFilter" class="select filter" :aria-label="t('aiBots.filter.agent')">
-          <option value="">{{ t('aiBots.filter.agent') }}</option>
-          <option v-for="a in botAgents" :key="a.id" :value="a.id">{{ a.name || a.id }}</option>
-        </select>
-        <input
-          v-model="query"
-          class="input search"
-          type="search"
-          :placeholder="t('aiBots.filter.search')"
-          :aria-label="t('aiBots.filter.search')"
-        />
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiBots.kpi.total')" :value="bots.length" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.totalMeta')" />
+        <KpiCard :label="t('aiBots.kpi.published')" :value="countStatus('PUBLISHED')" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.publishedMeta')" />
+        <KpiCard :label="t('aiBots.kpi.pending')" :value="countStatus('IN_REVIEW')" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.pendingMeta')" />
+        <KpiCard :label="t('aiBots.kpi.disabled')" :value="countStatus('DISABLED')" :unit="t('aiBots.unit.bot')" :meta="t('aiBots.kpi.disabledMeta')" />
+        <KpiCard :label="t('aiBots.kpi.agents')" :value="agentCoverage" :unit="t('aiBots.unit.agent')" :meta="t('aiBots.kpi.agentsMeta')" />
       </div>
 
-      <TableSkeleton v-if="loading && !bots.length" :rows="5" />
-      <div v-else-if="visibleBots.length" class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiBots.col.bot') }}</th>
-              <th>{{ t('aiBots.col.agent') }}</th>
-              <th>{{ t('aiBots.col.model') }}</th>
-              <th>{{ t('aiBots.col.status') }}</th>
-              <th class="is-num">{{ t('aiBots.col.version') }}</th>
-              <th class="is-num">{{ t('aiBots.col.skills') }}</th>
-              <th>{{ t('aiBots.col.memory') }}</th>
-              <th>{{ t('aiBots.col.action') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="b in visibleBots" :key="b.code">
-              <td data-primary>
-                <span class="is-strong">{{ b.name || b.code }}</span>
-                <span class="sub mono">{{ b.code }}</span>
-              </td>
-              <td data-label="agent"><span class="badge badge--neutral mono">{{ b.agentId || '—' }}</span></td>
-              <td data-label="model">
-                <span class="mono">{{ providerLabel(b.modelProvider) }}</span>
-                <span v-if="b.modelId" class="sub mono">{{ b.modelId }}</span>
-              </td>
-              <td data-label="status">
-                <span class="badge" :class="statusClass(b.status)">{{ statusText(b.status) }}</span>
-                <span v-if="b.reviewNote" class="sub truncate" :title="b.reviewNote">{{ b.reviewNote }}</span>
-              </td>
-              <td class="is-num" data-label="version">v{{ b.version ?? 0 }}</td>
-              <td class="is-num" data-label="skills">{{ (b.skillCodes || []).length }}</td>
-              <td data-label="memory">
-                <span class="badge badge--neutral">{{ scopeText(b.memoryScope) }}</span>
-              </td>
-              <td data-label="action" class="ops-col">
-                <div class="row-actions">
-                  <button v-if="canEdit(b)" class="btn btn--sm" type="button" @click="openEdit(b)">
-                    {{ t('aiBots.action.edit') }}
-                  </button>
-                  <button v-if="isAdmin && canEdit(b)" class="btn btn--sm" type="button" :disabled="busy === b.code" @click="submitBot(b)">
-                    {{ t('aiBots.action.submit') }}
-                  </button>
-                  <template v-if="canReview(b)">
-                    <button class="btn btn--sm btn--primary" type="button" @click="openReview(b, true)">
-                      {{ t('aiBots.action.approve') }}
-                    </button>
-                    <button class="btn btn--sm btn--danger" type="button" @click="openReview(b, false)">
-                      {{ t('aiBots.action.reject') }}
-                    </button>
-                  </template>
-                  <button v-if="canDisable(b)" class="btn btn--sm" type="button" @click="askConfirm(b, 'disable')">
-                    {{ t('aiBots.action.disable') }}
-                  </button>
-                  <button v-if="canEnable(b)" class="btn btn--sm" type="button" @click="askConfirm(b, 'enable')">
-                    {{ t('aiBots.action.enable') }}
-                  </button>
-                  <button class="btn btn--sm" type="button" @click="openMemories(b)">
-                    {{ t('aiBots.action.memory') }}
-                  </button>
-                  <button class="btn btn--sm btn--ghost" type="button" @click="openImpact(b)">
-                    {{ t('aiBots.action.impact') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="sheet-body">
-        <EmptyState :title="t('aiBots.filter.empty')" :desc="t('aiBots.filter.emptyDesc')">
-          <button v-if="isAdmin" class="btn btn--sm" type="button" @click="openCreate">
-            {{ t('aiBots.create') }}
-          </button>
-        </EmptyState>
-      </div>
-    </section>
-
-    <!-- 新建 / 编辑 -->
-    <AppModal
-      v-model="editorOpen"
-      :title="editing ? t('aiBots.edit.title', { code: editing.code }) : t('aiBots.create.title')"
-      width="880px"
-      :dismissible="!saving"
-    >
-      <div class="stack">
-        <div class="form-grid">
-          <label class="field">
-            <span class="label">{{ t('aiBots.form.code') }} <span class="req">*</span></span>
-            <input v-model="form.code" class="input mono" type="text" spellcheck="false" :disabled="!!editing" :placeholder="t('aiBots.form.codeHint')" />
-            <span class="hint">{{ t('aiBots.form.codeHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiBots.form.name') }} <span class="req">*</span></span>
-            <input v-model="form.name" class="input" type="text" maxlength="80" />
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiBots.form.agent') }} <span class="req">*</span></span>
-            <select v-model="form.agentId" class="select" @change="onAgentChange">
-              <option v-for="a in botAgents" :key="a.id" :value="a.id">{{ a.name || a.id }}（{{ a.id }}）</option>
-            </select>
-            <span class="hint">{{ t('aiBots.form.agentHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiBots.form.provider') }}</span>
-            <select v-model="form.provider" class="select">
-              <option value="default">{{ t('aiBots.form.providerDefault') }}</option>
-              <option v-for="p in allowedProviders" :key="p.id" :value="p.id">
-                {{ p.displayName || p.id }} · {{ p.modelId || '—' }}
-              </option>
-            </select>
-            <span class="hint">{{ t('aiBots.form.providerHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiBots.form.modelId') }}</span>
-            <input v-model="form.modelId" class="input mono" type="text" maxlength="128" spellcheck="false" />
-            <span class="hint">{{ t('aiBots.form.modelIdHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiBots.form.memoryScope') }}</span>
-            <select v-model="form.memoryScope" class="select">
-              <option value="bot">{{ t('aiBots.scope.bot') }}</option>
-              <option value="team">{{ t('aiBots.scope.team') }}</option>
-            </select>
-            <span class="hint">{{ t('aiBots.form.memoryScopeHint') }}</span>
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiBots.form.persona') }} <span class="req">*</span></span>
-            <textarea v-model="form.persona" class="textarea" rows="4" maxlength="2000" />
-            <span class="hint">{{ t('aiBots.form.personaHint') }}</span>
-          </label>
-
-          <div class="field span-2">
-            <span class="label">{{ t('aiBots.form.skills') }}</span>
-            <div v-if="agentSkills.length" class="picks">
-              <label v-for="s in agentSkills" :key="s.code" class="check">
-                <input
-                  type="checkbox"
-                  :checked="form.skillCodes.includes(s.code)"
-                  :disabled="!form.skillCodes.includes(s.code) && form.skillCodes.length >= MAX_SKILLS"
-                  @change="toggleSkill(s.code, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ s.name || s.code }}</span>
-                <span class="mono muted">{{ s.code }}</span>
-              </label>
-            </div>
-            <span v-else class="hint">{{ t('aiBots.form.skillsNone') }}</span>
-            <span class="hint">{{ t('aiBots.form.skillsHint') }}</span>
-          </div>
-
-          <div class="field span-2">
-            <span class="label">{{ t('aiBots.form.tools') }}</span>
-            <div v-if="agentTools.length" class="picks">
-              <label v-for="tool in agentTools" :key="tool" class="check">
-                <input
-                  type="checkbox"
-                  :checked="form.tools.includes(tool)"
-                  :disabled="!form.tools.includes(tool) && form.tools.length >= MAX_TOOLS"
-                  @change="toggleTool(tool, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="mono">{{ tool }}</span>
-              </label>
-            </div>
-            <span v-else class="hint">{{ t('aiBots.form.toolsNone') }}</span>
-            <span class="hint">{{ t('aiBots.form.toolsHint') }}</span>
-          </div>
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiBots.list.title') }}</span>
+          <span class="hint">{{ t('aiBots.list.hint') }}</span>
+          <span class="spacer" />
+          <select v-model="statusFilter" class="select filter" :aria-label="t('aiBots.filter.status')">
+            <option value="">{{ t('aiBots.filter.status') }}</option>
+            <option v-for="s in STATUSES" :key="s" :value="s">{{ statusText(s) }}</option>
+          </select>
+          <select v-model="agentFilter" class="select filter" :aria-label="t('aiBots.filter.agent')">
+            <option value="">{{ t('aiBots.filter.agent') }}</option>
+            <option v-for="a in botAgents" :key="a.id" :value="a.id">{{ a.name || a.id }}</option>
+          </select>
+          <input
+            v-model="query"
+            class="input search"
+            type="search"
+            :placeholder="t('aiBots.filter.search')"
+            :aria-label="t('aiBots.filter.search')"
+          />
         </div>
 
-        <div v-if="formErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ formErr }}</span>
-        </div>
-        <p class="hint">{{ t('aiBots.form.note') }}</p>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="saving" @click="editorOpen = false">
-          {{ t('aiBots.action.cancel') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="saving" @click="saveBot">
-          {{ saving ? t('aiBots.form.saving') : t('aiBots.form.save') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 审核 -->
-    <AppModal v-model="reviewOpen" :title="t('aiBots.review.title', { code: reviewTarget?.code || '' })" width="600px" :dismissible="!reviewBusy">
-      <div class="stack">
-        <div class="row row-wrap">
-          <b>{{ reviewTarget?.name || reviewTarget?.code }}</b>
-          <span class="mono muted">{{ reviewTarget?.code }}</span>
-          <span class="badge badge--warn">{{ statusText('IN_REVIEW') }}</span>
-          <span class="badge" :class="reviewApprove ? 'badge--ok' : 'badge--danger'">
-            {{ reviewApprove ? t('aiBots.action.approve') : t('aiBots.action.reject') }}
-          </span>
-        </div>
-        <p class="hint">{{ t('aiBots.review.hint') }}</p>
-        <label class="field">
-          <span class="label">
-            {{ t('aiBots.review.note') }}
-            <span v-if="!reviewApprove" class="req">*</span>
-          </span>
-          <textarea v-model="reviewNote" class="textarea" rows="3" maxlength="2000" />
-        </label>
-        <div v-if="reviewErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ reviewErr }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="reviewBusy" @click="reviewOpen = false">
-          {{ t('aiBots.action.cancel') }}
-        </button>
-        <button
-          class="btn"
-          :class="reviewApprove ? 'btn--primary' : 'btn--danger'"
-          type="button"
-          :disabled="reviewBusy"
-          @click="confirmReview"
-        >
-          {{ reviewBusy ? t('aiBots.confirm.busy') : (reviewApprove ? t('aiBots.review.approve') : t('aiBots.review.reject')) }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 长期记忆 -->
-    <AppModal
-      v-model="memoryOpen"
-      :title="t('aiBots.memory.title', { code: memoryBot?.code || '' })"
-      width="900px"
-      :dismissible="!memBusy"
-    >
-      <div class="stack">
-        <p class="hint">{{ t('aiBots.memory.hint') }}</p>
-
-        <div class="mem-form">
-          <div class="form-grid">
-            <label class="field">
-              <span class="label">{{ t('aiBots.memory.key') }} <span class="req">*</span></span>
-              <input v-model="memForm.key" class="input mono" type="text" maxlength="64" spellcheck="false" :placeholder="t('aiBots.memory.keyHint')" />
-            </label>
-            <label class="field">
-              <span class="label">{{ t('aiBots.memory.source') }} <span class="req">*</span></span>
-              <input v-model="memForm.source" class="input" type="text" maxlength="200" />
-            </label>
-            <label class="field span-2">
-              <span class="label">{{ t('aiBots.memory.value') }} <span class="req">*</span></span>
-              <textarea v-model="memForm.value" class="textarea" rows="2" maxlength="500" />
-              <span class="hint">{{ t('aiBots.memory.valueHint') }}</span>
-            </label>
-            <label class="field">
-              <span class="label">{{ t('aiBots.memory.expires') }}</span>
-              <input v-model="memForm.expiresAt" class="input" type="date" />
-              <span class="hint">{{ t('aiBots.memory.expiresHint') }}</span>
-            </label>
-            <div class="field mem-actions">
-              <button class="btn btn--primary" type="button" :disabled="memBusy" @click="addMemory">
-                <AppIcon name="plus" :size="14" />
-                {{ memBusy ? t('aiBots.confirm.busy') : t('aiBots.memory.add') }}
-              </button>
-            </div>
-          </div>
-          <div v-if="memErr" class="notice notice--danger" role="alert">
-            <AppIcon name="alert" :size="15" />
-            <span>{{ memErr }}</span>
-          </div>
-        </div>
-
-        <TableSkeleton v-if="memLoading" :rows="3" />
-        <div v-else-if="memories.length" class="table-wrap">
-          <table class="table table--compact table--stack">
+        <TableSkeleton v-if="loading && !bots.length" :rows="5" />
+        <div v-else-if="visibleBots.length" class="table-wrap">
+          <table class="table table--stack">
             <thead>
               <tr>
-                <th>{{ t('aiBots.memory.col.key') }}</th>
-                <th>{{ t('aiBots.memory.col.value') }}</th>
-                <th>{{ t('aiBots.memory.col.source') }}</th>
-                <th>{{ t('aiBots.memory.col.state') }}</th>
-                <th>{{ t('aiBots.memory.col.expires') }}</th>
-                <th>{{ t('aiBots.memory.col.creator') }}</th>
-                <th>{{ t('aiBots.memory.col.action') }}</th>
+                <th>{{ t('aiBots.col.bot') }}</th>
+                <th>{{ t('aiBots.col.agent') }}</th>
+                <th>{{ t('aiBots.col.model') }}</th>
+                <th>{{ t('aiBots.col.status') }}</th>
+                <th class="is-num">{{ t('aiBots.col.version') }}</th>
+                <th class="is-num">{{ t('aiBots.col.skills') }}</th>
+                <th>{{ t('aiBots.col.memory') }}</th>
+                <th>{{ t('aiBots.col.action') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="m in memories" :key="m.id">
-                <td data-primary><span class="mono">{{ m.key }}</span></td>
-                <td data-label="value"><span class="mem-value">{{ m.value }}</span></td>
-                <td data-label="source"><span class="hint">{{ m.source }}</span></td>
-                <td data-label="state">
-                  <span class="badge" :class="m.status === 'CONFIRMED' ? 'badge--ok' : 'badge--warn'">
-                    {{ m.status === 'CONFIRMED' ? t('aiBots.memory.status.confirmed') : t('aiBots.memory.status.candidate') }}
-                  </span>
-                  <span v-if="isExpired(m)" class="badge badge--danger">{{ t('aiBots.memory.expired') }}</span>
+              <tr v-for="b in visibleBots" :key="b.code">
+                <td data-primary>
+                  <span class="is-strong">{{ b.name || b.code }}</span>
+                  <span class="sub mono">{{ b.code }}</span>
                 </td>
-                <td data-label="expires"><span class="mono muted">{{ m.expiresAt || '—' }}</span></td>
-                <td data-label="creator">{{ m.createdBy || '—' }}</td>
-                <td data-label="action">
+                <td data-label="agent"><span class="badge badge--neutral mono">{{ b.agentId || '—' }}</span></td>
+                <td data-label="model">
+                  <span class="mono">{{ providerLabel(b.modelProvider) }}</span>
+                  <span v-if="b.modelId" class="sub mono">{{ b.modelId }}</span>
+                </td>
+                <td data-label="status">
+                  <span class="badge" :class="statusClass(b.status)">{{ statusText(b.status) }}</span>
+                  <span v-if="b.reviewNote" class="sub truncate" :title="b.reviewNote">{{ b.reviewNote }}</span>
+                </td>
+                <td class="is-num" data-label="version">v{{ b.version ?? 0 }}</td>
+                <td class="is-num" data-label="skills">{{ (b.skillCodes || []).length }}</td>
+                <td data-label="memory">
+                  <span class="badge badge--neutral">{{ scopeText(b.memoryScope) }}</span>
+                </td>
+                <td data-label="action" class="ops-col">
                   <div class="row-actions">
-                    <button
-                      v-if="m.status === 'CANDIDATE' && m.createdBy !== me"
-                      class="btn btn--sm btn--primary"
-                      type="button"
-                      :disabled="memBusy"
-                      @click="confirmMemory(m)"
-                    >
-                      {{ t('aiBots.memory.confirm') }}
+                    <button v-if="canEdit(b)" class="btn btn--sm" type="button" @click="openEdit(b)">
+                      {{ t('aiBots.action.edit') }}
                     </button>
-                    <template v-if="memPendingDelete === m.id">
-                      <button class="btn btn--sm btn--danger" type="button" :disabled="memBusy" @click="deleteMemory(m)">
-                        {{ t('aiBots.memory.deleteConfirm') }}
+                    <button v-if="isAdmin && canEdit(b)" class="btn btn--sm" type="button" :disabled="busy === b.code" @click="submitBot(b)">
+                      {{ t('aiBots.action.submit') }}
+                    </button>
+                    <template v-if="canReview(b)">
+                      <button class="btn btn--sm btn--primary" type="button" @click="openReview(b, true)">
+                        {{ t('aiBots.action.approve') }}
                       </button>
-                      <button class="btn btn--sm" type="button" @click="memPendingDelete = ''">
-                        {{ t('aiBots.action.cancel') }}
+                      <button class="btn btn--sm btn--danger" type="button" @click="openReview(b, false)">
+                        {{ t('aiBots.action.reject') }}
                       </button>
                     </template>
-                    <button v-else class="btn btn--sm btn--ghost" type="button" @click="memPendingDelete = m.id">
-                      {{ t('aiBots.memory.delete') }}
+                    <button v-if="canDisable(b)" class="btn btn--sm" type="button" @click="askConfirm(b, 'disable')">
+                      {{ t('aiBots.action.disable') }}
+                    </button>
+                    <button v-if="canEnable(b)" class="btn btn--sm" type="button" @click="askConfirm(b, 'enable')">
+                      {{ t('aiBots.action.enable') }}
+                    </button>
+                    <button class="btn btn--sm" type="button" @click="openMemories(b)">
+                      {{ t('aiBots.action.memory') }}
+                    </button>
+                    <button class="btn btn--sm btn--ghost" type="button" @click="openImpact(b)">
+                      {{ t('aiBots.action.impact') }}
                     </button>
                   </div>
                 </td>
@@ -369,71 +118,325 @@
             </tbody>
           </table>
         </div>
-        <EmptyState v-else :title="t('aiBots.memory.empty')" :desc="t('aiBots.memory.emptyDesc')" />
-      </div>
-    </AppModal>
+        <div v-else class="sheet-body">
+          <EmptyState :title="t('aiBots.filter.empty')" :desc="t('aiBots.filter.emptyDesc')">
+            <button v-if="isAdmin" class="btn btn--sm" type="button" @click="openCreate">
+              {{ t('aiBots.create') }}
+            </button>
+          </EmptyState>
+        </div>
+      </section>
 
-    <!-- 影响面 -->
-    <AppModal v-model="impactOpen" :title="t('aiBots.impact.title', { code: impactTarget?.code || '' })" width="680px">
-      <TableSkeleton v-if="impactLoading" :rows="3" />
-      <div v-else-if="impact" class="stack">
-        <div v-if="impact.warning" class="notice notice--warn">
-          <AppIcon name="warning" :size="15" />
-          <span>{{ impact.warning }}</span>
-        </div>
-        <div class="mem-counts">
-          <span class="fact"><span class="hint">{{ t('aiBots.impact.memTotal') }}</span><b class="num">{{ impact.memories?.total ?? 0 }}</b></span>
-          <span class="fact"><span class="hint">{{ t('aiBots.impact.memConfirmed') }}</span><b class="num">{{ impact.memories?.confirmed ?? 0 }}</b></span>
-          <span class="fact"><span class="hint">{{ t('aiBots.impact.memCandidate') }}</span><b class="num">{{ impact.memories?.candidate ?? 0 }}</b></span>
-        </div>
-        <div>
-          <div class="insp-label">{{ t('aiBots.impact.teams') }}</div>
-          <div class="row row-wrap">
-            <span v-for="tm in impact.teams || []" :key="tm.code" class="chip">{{ tm.name || tm.code }}</span>
-            <span v-if="!(impact.teams || []).length" class="hint">{{ t('aiBots.impact.none') }}</span>
+      <!-- 新建 / 编辑 -->
+      <AppModal
+        v-model="editorOpen"
+        :title="editing ? t('aiBots.edit.title', { code: editing.code }) : t('aiBots.create.title')"
+        width="880px"
+        :dismissible="!saving"
+      >
+        <div class="stack">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">{{ t('aiBots.form.code') }} <span class="req">*</span></span>
+              <input v-model="form.code" class="input mono" type="text" spellcheck="false" :disabled="!!editing" :placeholder="t('aiBots.form.codeHint')" />
+              <span class="hint">{{ t('aiBots.form.codeHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiBots.form.name') }} <span class="req">*</span></span>
+              <input v-model="form.name" class="input" type="text" maxlength="80" />
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiBots.form.agent') }} <span class="req">*</span></span>
+              <select v-model="form.agentId" class="select" @change="onAgentChange">
+                <option v-for="a in botAgents" :key="a.id" :value="a.id">{{ a.name || a.id }}（{{ a.id }}）</option>
+              </select>
+              <span class="hint">{{ t('aiBots.form.agentHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiBots.form.provider') }}</span>
+              <select v-model="form.provider" class="select">
+                <option value="default">{{ t('aiBots.form.providerDefault') }}</option>
+                <option v-for="p in allowedProviders" :key="p.id" :value="p.id">
+                  {{ p.displayName || p.id }} · {{ p.modelId || '—' }}
+                </option>
+              </select>
+              <span class="hint">{{ t('aiBots.form.providerHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiBots.form.modelId') }}</span>
+              <input v-model="form.modelId" class="input mono" type="text" maxlength="128" spellcheck="false" />
+              <span class="hint">{{ t('aiBots.form.modelIdHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiBots.form.memoryScope') }}</span>
+              <select v-model="form.memoryScope" class="select">
+                <option value="bot">{{ t('aiBots.scope.bot') }}</option>
+                <option value="team">{{ t('aiBots.scope.team') }}</option>
+              </select>
+              <span class="hint">{{ t('aiBots.form.memoryScopeHint') }}</span>
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiBots.form.persona') }} <span class="req">*</span></span>
+              <textarea v-model="form.persona" class="textarea" rows="4" maxlength="2000" />
+              <span class="hint">{{ t('aiBots.form.personaHint') }}</span>
+            </label>
+
+            <div class="field span-2">
+              <span class="label">{{ t('aiBots.form.skills') }}</span>
+              <div v-if="agentSkills.length" class="picks">
+                <label v-for="s in agentSkills" :key="s.code" class="check">
+                  <input
+                    type="checkbox"
+                    :checked="form.skillCodes.includes(s.code)"
+                    :disabled="!form.skillCodes.includes(s.code) && form.skillCodes.length >= MAX_SKILLS"
+                    @change="toggleSkill(s.code, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ s.name || s.code }}</span>
+                  <span class="mono muted">{{ s.code }}</span>
+                </label>
+              </div>
+              <span v-else class="hint">{{ t('aiBots.form.skillsNone') }}</span>
+              <span class="hint">{{ t('aiBots.form.skillsHint') }}</span>
+            </div>
+
+            <div class="field span-2">
+              <span class="label">{{ t('aiBots.form.tools') }}</span>
+              <div v-if="agentTools.length" class="picks">
+                <label v-for="tool in agentTools" :key="tool" class="check">
+                  <input
+                    type="checkbox"
+                    :checked="form.tools.includes(tool)"
+                    :disabled="!form.tools.includes(tool) && form.tools.length >= MAX_TOOLS"
+                    @change="toggleTool(tool, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="mono">{{ tool }}</span>
+                </label>
+              </div>
+              <span v-else class="hint">{{ t('aiBots.form.toolsNone') }}</span>
+              <span class="hint">{{ t('aiBots.form.toolsHint') }}</span>
+            </div>
           </div>
+
+          <div v-if="formErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ formErr }}</span>
+          </div>
+          <p class="hint">{{ t('aiBots.form.note') }}</p>
         </div>
-        <div>
-          <div class="insp-label">{{ t('aiBots.impact.skills') }}</div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="saving" @click="editorOpen = false">
+            {{ t('aiBots.action.cancel') }}
+          </button>
+          <button class="btn btn--primary" type="button" :disabled="saving" @click="saveBot">
+            {{ saving ? t('aiBots.form.saving') : t('aiBots.form.save') }}
+          </button>
+        </template>
+      </AppModal>
+
+      <!-- 审核 -->
+      <AppModal v-model="reviewOpen" :title="t('aiBots.review.title', { code: reviewTarget?.code || '' })" width="600px" :dismissible="!reviewBusy">
+        <div class="stack">
           <div class="row row-wrap">
-            <span v-for="c in impact.skillCards || []" :key="c.code" class="chip mono">
-              {{ c.code }} ·
-              <span :class="c.status === 'PUBLISHED' ? 'ink-ok' : 'ink-danger'">{{ c.status }}</span>
+            <b>{{ reviewTarget?.name || reviewTarget?.code }}</b>
+            <span class="mono muted">{{ reviewTarget?.code }}</span>
+            <span class="badge badge--warn">{{ statusText('IN_REVIEW') }}</span>
+            <span class="badge" :class="reviewApprove ? 'badge--ok' : 'badge--danger'">
+              {{ reviewApprove ? t('aiBots.action.approve') : t('aiBots.action.reject') }}
             </span>
-            <span v-if="!(impact.skillCards || []).length" class="hint">{{ t('aiBots.impact.none') }}</span>
+          </div>
+          <p class="hint">{{ t('aiBots.review.hint') }}</p>
+          <label class="field">
+            <span class="label">
+              {{ t('aiBots.review.note') }}
+              <span v-if="!reviewApprove" class="req">*</span>
+            </span>
+            <textarea v-model="reviewNote" class="textarea" rows="3" maxlength="2000" />
+          </label>
+          <div v-if="reviewErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ reviewErr }}</span>
           </div>
         </div>
-        <p class="hint">{{ t('aiBots.impact.hint') }}</p>
-      </div>
-    </AppModal>
+        <template #footer>
+          <button class="btn" type="button" :disabled="reviewBusy" @click="reviewOpen = false">
+            {{ t('aiBots.action.cancel') }}
+          </button>
+          <button
+            class="btn"
+            :class="reviewApprove ? 'btn--primary' : 'btn--danger'"
+            type="button"
+            :disabled="reviewBusy"
+            @click="confirmReview"
+          >
+            {{ reviewBusy ? t('aiBots.confirm.busy') : (reviewApprove ? t('aiBots.review.approve') : t('aiBots.review.reject')) }}
+          </button>
+        </template>
+      </AppModal>
 
-    <!-- 停用 / 重新启用确认 -->
-    <AppModal
-      v-model="confirmOpen"
-      :title="confirmAction === 'disable'
-        ? t('aiBots.confirm.disableTitle', { code: confirmTarget?.code || '' })
-        : t('aiBots.confirm.enableTitle', { code: confirmTarget?.code || '' })"
-      width="480px"
-      :dismissible="!busy"
-    >
-      <p class="modal-note">
-        {{ confirmAction === 'disable' ? t('aiBots.confirm.disableBody') : t('aiBots.confirm.enableBody') }}
-      </p>
-      <template #footer>
-        <button class="btn" type="button" :disabled="!!busy" @click="confirmTarget = null">
-          {{ t('aiBots.action.cancel') }}
-        </button>
-        <button
-          class="btn"
-          :class="confirmAction === 'disable' ? 'btn--danger' : 'btn--primary'"
-          type="button"
-          :disabled="!!busy"
-          @click="confirmToggle"
-        >
-          {{ busy ? t('aiBots.confirm.busy') : t('aiBots.confirm.ok') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- 长期记忆 -->
+      <AppModal
+        v-model="memoryOpen"
+        :title="t('aiBots.memory.title', { code: memoryBot?.code || '' })"
+        width="900px"
+        :dismissible="!memBusy"
+      >
+        <div class="stack">
+          <p class="hint">{{ t('aiBots.memory.hint') }}</p>
+
+          <div class="mem-form">
+            <div class="form-grid">
+              <label class="field">
+                <span class="label">{{ t('aiBots.memory.key') }} <span class="req">*</span></span>
+                <input v-model="memForm.key" class="input mono" type="text" maxlength="64" spellcheck="false" :placeholder="t('aiBots.memory.keyHint')" />
+              </label>
+              <label class="field">
+                <span class="label">{{ t('aiBots.memory.source') }} <span class="req">*</span></span>
+                <input v-model="memForm.source" class="input" type="text" maxlength="200" />
+              </label>
+              <label class="field span-2">
+                <span class="label">{{ t('aiBots.memory.value') }} <span class="req">*</span></span>
+                <textarea v-model="memForm.value" class="textarea" rows="2" maxlength="500" />
+                <span class="hint">{{ t('aiBots.memory.valueHint') }}</span>
+              </label>
+              <label class="field">
+                <span class="label">{{ t('aiBots.memory.expires') }}</span>
+                <input v-model="memForm.expiresAt" class="input" type="date" />
+                <span class="hint">{{ t('aiBots.memory.expiresHint') }}</span>
+              </label>
+              <div class="field mem-actions">
+                <button class="btn btn--primary" type="button" :disabled="memBusy" @click="addMemory">
+                  <AppIcon name="plus" :size="14" />
+                  {{ memBusy ? t('aiBots.confirm.busy') : t('aiBots.memory.add') }}
+                </button>
+              </div>
+            </div>
+            <div v-if="memErr" class="notice notice--danger" role="alert">
+              <AppIcon name="alert" :size="15" />
+              <span>{{ memErr }}</span>
+            </div>
+          </div>
+
+          <TableSkeleton v-if="memLoading" :rows="3" />
+          <div v-else-if="memories.length" class="table-wrap">
+            <table class="table table--compact table--stack">
+              <thead>
+                <tr>
+                  <th>{{ t('aiBots.memory.col.key') }}</th>
+                  <th>{{ t('aiBots.memory.col.value') }}</th>
+                  <th>{{ t('aiBots.memory.col.source') }}</th>
+                  <th>{{ t('aiBots.memory.col.state') }}</th>
+                  <th>{{ t('aiBots.memory.col.expires') }}</th>
+                  <th>{{ t('aiBots.memory.col.creator') }}</th>
+                  <th>{{ t('aiBots.memory.col.action') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="m in memories" :key="m.id">
+                  <td data-primary><span class="mono">{{ m.key }}</span></td>
+                  <td data-label="value"><span class="mem-value">{{ m.value }}</span></td>
+                  <td data-label="source"><span class="hint">{{ m.source }}</span></td>
+                  <td data-label="state">
+                    <span class="badge" :class="m.status === 'CONFIRMED' ? 'badge--ok' : 'badge--warn'">
+                      {{ m.status === 'CONFIRMED' ? t('aiBots.memory.status.confirmed') : t('aiBots.memory.status.candidate') }}
+                    </span>
+                    <span v-if="isExpired(m)" class="badge badge--danger">{{ t('aiBots.memory.expired') }}</span>
+                  </td>
+                  <td data-label="expires"><span class="mono muted">{{ m.expiresAt || '—' }}</span></td>
+                  <td data-label="creator">{{ m.createdBy || '—' }}</td>
+                  <td data-label="action">
+                    <div class="row-actions">
+                      <button
+                        v-if="m.status === 'CANDIDATE' && m.createdBy !== me"
+                        class="btn btn--sm btn--primary"
+                        type="button"
+                        :disabled="memBusy"
+                        @click="confirmMemory(m)"
+                      >
+                        {{ t('aiBots.memory.confirm') }}
+                      </button>
+                      <template v-if="memPendingDelete === m.id">
+                        <button class="btn btn--sm btn--danger" type="button" :disabled="memBusy" @click="deleteMemory(m)">
+                          {{ t('aiBots.memory.deleteConfirm') }}
+                        </button>
+                        <button class="btn btn--sm" type="button" @click="memPendingDelete = ''">
+                          {{ t('aiBots.action.cancel') }}
+                        </button>
+                      </template>
+                      <button v-else class="btn btn--sm btn--ghost" type="button" @click="memPendingDelete = m.id">
+                        {{ t('aiBots.memory.delete') }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <EmptyState v-else :title="t('aiBots.memory.empty')" :desc="t('aiBots.memory.emptyDesc')" />
+        </div>
+      </AppModal>
+
+      <!-- 影响面 -->
+      <AppModal v-model="impactOpen" :title="t('aiBots.impact.title', { code: impactTarget?.code || '' })" width="680px">
+        <TableSkeleton v-if="impactLoading" :rows="3" />
+        <div v-else-if="impact" class="stack">
+          <div v-if="impact.warning" class="notice notice--warn">
+            <AppIcon name="warning" :size="15" />
+            <span>{{ impact.warning }}</span>
+          </div>
+          <div class="mem-counts">
+            <span class="fact"><span class="hint">{{ t('aiBots.impact.memTotal') }}</span><b class="num">{{ impact.memories?.total ?? 0 }}</b></span>
+            <span class="fact"><span class="hint">{{ t('aiBots.impact.memConfirmed') }}</span><b class="num">{{ impact.memories?.confirmed ?? 0 }}</b></span>
+            <span class="fact"><span class="hint">{{ t('aiBots.impact.memCandidate') }}</span><b class="num">{{ impact.memories?.candidate ?? 0 }}</b></span>
+          </div>
+          <div>
+            <div class="insp-label">{{ t('aiBots.impact.teams') }}</div>
+            <div class="row row-wrap">
+              <span v-for="tm in impact.teams || []" :key="tm.code" class="chip">{{ tm.name || tm.code }}</span>
+              <span v-if="!(impact.teams || []).length" class="hint">{{ t('aiBots.impact.none') }}</span>
+            </div>
+          </div>
+          <div>
+            <div class="insp-label">{{ t('aiBots.impact.skills') }}</div>
+            <div class="row row-wrap">
+              <span v-for="c in impact.skillCards || []" :key="c.code" class="chip mono">
+                {{ c.code }} ·
+                <span :class="c.status === 'PUBLISHED' ? 'ink-ok' : 'ink-danger'">{{ c.status }}</span>
+              </span>
+              <span v-if="!(impact.skillCards || []).length" class="hint">{{ t('aiBots.impact.none') }}</span>
+            </div>
+          </div>
+          <p class="hint">{{ t('aiBots.impact.hint') }}</p>
+        </div>
+      </AppModal>
+
+      <!-- 停用 / 重新启用确认 -->
+      <AppModal
+        v-model="confirmOpen"
+        :title="confirmAction === 'disable'
+          ? t('aiBots.confirm.disableTitle', { code: confirmTarget?.code || '' })
+          : t('aiBots.confirm.enableTitle', { code: confirmTarget?.code || '' })"
+        width="480px"
+        :dismissible="!busy"
+      >
+        <p class="modal-note">
+          {{ confirmAction === 'disable' ? t('aiBots.confirm.disableBody') : t('aiBots.confirm.enableBody') }}
+        </p>
+        <template #footer>
+          <button class="btn" type="button" :disabled="!!busy" @click="confirmTarget = null">
+            {{ t('aiBots.action.cancel') }}
+          </button>
+          <button
+            class="btn"
+            :class="confirmAction === 'disable' ? 'btn--danger' : 'btn--primary'"
+            type="button"
+            :disabled="!!busy"
+            @click="confirmToggle"
+          >
+            {{ busy ? t('aiBots.confirm.busy') : t('aiBots.confirm.ok') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -445,6 +448,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiAgentBots,
@@ -470,7 +474,7 @@ import {
   type AiBotMemory,
   type AiSkillCard,
 } from '@/api/ai'
-import { AiRequestError, errorText } from '@/api/http'
+import { AiRequestError, errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { hasRole, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -491,6 +495,7 @@ const allowedProviders = ref<AiAgentProviderView[]>([])
 const publishedSkills = ref<AiSkillCard[]>([])
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 
 const statusFilter = ref('')
 const agentFilter = ref('')
@@ -613,6 +618,7 @@ function canEnable(b: AiBot): boolean {
 async function loadAll() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   const results = await Promise.allSettled([
     aiAgentBots(statusFilter.value || undefined),
     aiAgentCatalog(),
@@ -625,8 +631,14 @@ async function loadAll() {
   if (policyRes.status === 'fulfilled') allowedProviders.value = policyRes.value.allowed ?? []
   if (skillRes.status === 'fulfilled') publishedSkills.value = skillRes.value.skills ?? []
 
-  const critical = [botRes, catRes].find((r) => r.status === 'rejected')
-  if (critical && critical.status === 'rejected') loadErr.value = errorText(critical.reason)
+  const denied = results.some((r) => r.status === 'rejected' && isForbidden(r.reason))
+  if (denied) {
+    forbidden.value = true
+    loadErr.value = ''
+  } else {
+    const critical = [botRes, catRes].find((r) => r.status === 'rejected')
+    if (critical && critical.status === 'rejected') loadErr.value = errorText(critical.reason)
+  }
   loading.value = false
 }
 

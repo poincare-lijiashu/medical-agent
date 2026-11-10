@@ -9174,6 +9174,51 @@ typecheck → 通过；build → 通过（dist 已更新）
 - AI 对话/病例/影像等“任务型”错误属于单次请求失败，仍以就地提示为主，未纳入本批；
 - 无权限态（403）在各页是否统一，尚未逐页审计。
 
+## 217. 2026-11-11 无权限态（403）统一（第 217 批）
+
+**范围**：13 个管理/治理页面。此前 403 被当作“加载失败”，页面显示“数据加载失败 /
+重试”，容易被误读为系统故障；而且 KPI 与表格仍会渲染 0/空值，像“业务真的为空”。
+
+**本批做了什么**
+
+1. **区分 403 与故障**：`http.ts` 新增 `isForbidden(e)`，只认 `status === 403`
+   （`AiRequestError` 与 Java 信封错误都带 status）。
+2. **专用受限态** `PermissionDenied.vue`：`role="alert"` + shield 图标 + 明确说明；
+   操作只有「返回上一页 / 返回驾驶舱」，**没有重试**、**不渲染任何业务数据**；
+   历史栈不足时回驾驶舱。
+3. **13 页接入**：AiAgent / AiSkills / AiBots / AiTeams / AiOps / AiLibrary / AiLab /
+   AiData / AiKb / AiLlm / AiReview / System / PharmacyConfig。
+   - 主加载 catch：403 → `forbidden=true` 且清空 `loadErr`；其它错误仍走 LoadError；
+   - 并行加载按“任一 403 即受限”（角色边界已不匹配，继续展示部分数据会误导）；
+   - 模板：`<PermissionDenied v-if="forbidden" />` + `<template v-else>` 包住全部
+     业务内容（KPI/表格/弹窗），PageHeader 保留；不新增 DOM 包裹层，`.page` 布局不变；
+   - `SystemView` 三个 Tab 共用同一受限态，收敛掉原来的双重条件。
+4. **i18n**：`forbidden.title/desc/back/home` 中英同步。
+5. **新回归锁** `tests/test_console_forbidden_state.py`（6 条）：helper 判定、组件
+   契约（无重试/回退入口）、13 页均引用且互斥隐藏业务内容、System 三 Tab 收敛、
+   反向锁（LoadError 不得先于 v-else 渲染）、中英文案齐备。
+
+**本批设计决策（可回退）**
+
+- **403 不给“重试”**：重试不会改变角色；给出重试只会让用户反复点击。
+- **受限时整页隐藏业务内容**：0/空表会被当成业务事实，这是医疗场景最危险的误导。
+- **API 403 兜底不替代路由守卫**：导航仍按角色/权限收窄；本批只处理“会话中途角色
+  变化/服务端矩阵更严”的情况。
+
+**验证**
+
+```
+typecheck → 通过；build → 通过
+定向：无权限态 → 6 passed
+全量：pytest --ignore=tests/e2e → 1836 passed / 1 skipped
+```
+
+**遗留**
+
+- `AiReviewView` 的处方/历史等次要链路仍沿用原忽略/toast 语义（主链路已覆盖）；
+- 其余普通业务页（非管理页）的 403 表现未逐页纳入本批。
+
+
 
 
 

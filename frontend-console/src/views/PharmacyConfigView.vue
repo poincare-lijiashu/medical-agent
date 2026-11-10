@@ -8,342 +8,345 @@
       </template>
     </PageHeader>
 
-    <LoadError
-      v-if="loadErr"
-      :title="t('pharmCfg.toast.loadFail')"
-      :message="loadErr"
-      :retrying="loading"
-      @retry="load"
-    />
-
-    <div class="kpi-strip">
-      <KpiCard :label="t('pharmCfg.kpi.drugs')" :value="stats.drugs ?? 0" :unit="t('pharmCfg.unit.kind')" :meta="t('pharmCfg.kpi.drugsMeta')" />
-      <KpiCard
-        :label="t('pharmCfg.kpi.rules')"
-        :value="stats.rules ?? 0"
-        :unit="t('pharmCfg.unit.rule')"
-        :meta="t('pharmCfg.kpi.rulesMeta', { high: stats.high ?? 0, mid: stats.mid ?? 0 })"
-        :tone="(stats.high ?? 0) > 0 ? 'warn' : 'default'"
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError
+        v-if="loadErr"
+        :title="t('pharmCfg.toast.loadFail')"
+        :message="loadErr"
+        :retrying="loading"
+        @retry="load"
       />
-      <KpiCard
-        :label="t('pharmCfg.kpi.coverage')"
-        :value="`${stats.reviewed ?? 0}/${stats.total ?? 0}`"
-        :meta="t('pharmCfg.kpi.coverageMeta', { hr: stats.high_risk_reviewed ?? 0, ht: stats.high_risk_total ?? (stats.high ?? 0) })"
-        :tone="coverageOk ? 'ok' : 'accent'"
-      />
-    </div>
 
-    <div class="seg" role="tablist" :aria-label="t('pharmCfg.tabs')">
-      <button
-        v-for="tb in tabs"
-        :key="tb.key"
-        class="seg-btn"
-        :class="{ active: tab === tb.key }"
-        type="button"
-        role="tab"
-        :aria-selected="tab === tb.key"
-        @click="tab = tb.key"
-      >
-        {{ tb.label }}
-      </button>
-    </div>
+      <div class="kpi-strip">
+        <KpiCard :label="t('pharmCfg.kpi.drugs')" :value="stats.drugs ?? 0" :unit="t('pharmCfg.unit.kind')" :meta="t('pharmCfg.kpi.drugsMeta')" />
+        <KpiCard
+          :label="t('pharmCfg.kpi.rules')"
+          :value="stats.rules ?? 0"
+          :unit="t('pharmCfg.unit.rule')"
+          :meta="t('pharmCfg.kpi.rulesMeta', { high: stats.high ?? 0, mid: stats.mid ?? 0 })"
+          :tone="(stats.high ?? 0) > 0 ? 'warn' : 'default'"
+        />
+        <KpiCard
+          :label="t('pharmCfg.kpi.coverage')"
+          :value="`${stats.reviewed ?? 0}/${stats.total ?? 0}`"
+          :meta="t('pharmCfg.kpi.coverageMeta', { hr: stats.high_risk_reviewed ?? 0, ht: stats.high_risk_total ?? (stats.high ?? 0) })"
+          :tone="coverageOk ? 'ok' : 'accent'"
+        />
+      </div>
 
-    <p v-if="disclaimer" class="disclaimer">
-      <AppIcon name="info" :size="14" />
-      <span>{{ disclaimer }}</span>
-    </p>
+      <div class="seg" role="tablist" :aria-label="t('pharmCfg.tabs')">
+        <button
+          v-for="tb in tabs"
+          :key="tb.key"
+          class="seg-btn"
+          :class="{ active: tab === tb.key }"
+          type="button"
+          role="tab"
+          :aria-selected="tab === tb.key"
+          @click="tab = tb.key"
+        >
+          {{ tb.label }}
+        </button>
+      </div>
 
-    <!-- ============ 药品字典 ============ -->
-    <template v-if="tab === 'dict'">
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">
-            {{ editingDrugName ? t('pharmCfg.dict.form.titleEdit', { name: editingDrugName }) : t('pharmCfg.dict.form.titleAdd') }}
-          </span>
-          <span class="spacer" />
-          <span class="hint">{{ t('pharmCfg.dict.nameLockedHint') }}</span>
+      <p v-if="disclaimer" class="disclaimer">
+        <AppIcon name="info" :size="14" />
+        <span>{{ disclaimer }}</span>
+      </p>
+
+      <!-- ============ 药品字典 ============ -->
+      <template v-if="tab === 'dict'">
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">
+              {{ editingDrugName ? t('pharmCfg.dict.form.titleEdit', { name: editingDrugName }) : t('pharmCfg.dict.form.titleAdd') }}
+            </span>
+            <span class="spacer" />
+            <span class="hint">{{ t('pharmCfg.dict.nameLockedHint') }}</span>
+          </div>
+          <div class="sheet-body">
+            <div class="form-grid">
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.dict.name') }}</span>
+                <input
+                  v-model="drugForm.name"
+                  class="input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  :readonly="Boolean(editingDrugName)"
+                  :placeholder="t('pharmCfg.dict.nameHint')"
+                />
+              </label>
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.dict.category') }}</span>
+                <input v-model="drugForm.category" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.categoryHint')" />
+              </label>
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.dict.level') }}</span>
+                <input v-model="drugForm.level" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.levelHint')" />
+              </label>
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.dict.alias') }}</span>
+                <input v-model="drugForm.aliases" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.aliasHint')" />
+              </label>
+              <label class="field span-2">
+                <span class="label">{{ t('pharmCfg.dict.brand') }}</span>
+                <input v-model="drugForm.brands" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.brandHint')" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn--primary" type="button" :disabled="saving" @click="saveDrug">
+                <AppIcon name="check" :size="14" />
+                {{ editingDrugName ? t('pharmCfg.dict.saveEdit') : t('pharmCfg.dict.saveAdd') }}
+              </button>
+              <button class="btn" type="button" :disabled="saving" @click="resetDrug">{{ t('pharmCfg.action.reset') }}</button>
+              <span class="hint">{{ drugHint }}</span>
+            </div>
+          </div>
         </div>
-        <div class="sheet-body">
-          <div class="form-grid">
+
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('pharmCfg.dict.listTitle') }}</span>
+            <span class="badge badge--neutral">{{ drugFiltered.length }}</span>
+            <span class="spacer" />
             <label class="field">
-              <span class="label">{{ t('pharmCfg.dict.name') }}</span>
+              <span class="label">{{ t('pharmCfg.action.search') }}</span>
               <input
-                v-model="drugForm.name"
+                v-model="drugSearch"
                 class="input"
-                autocomplete="off"
+                type="search"
                 spellcheck="false"
-                :readonly="Boolean(editingDrugName)"
-                :placeholder="t('pharmCfg.dict.nameHint')"
+                data-testid="pharm-dict-search"
+                :placeholder="t('pharmCfg.dict.searchHint')"
               />
             </label>
             <label class="field">
               <span class="label">{{ t('pharmCfg.dict.category') }}</span>
-              <input v-model="drugForm.category" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.categoryHint')" />
-            </label>
-            <label class="field">
-              <span class="label">{{ t('pharmCfg.dict.level') }}</span>
-              <input v-model="drugForm.level" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.levelHint')" />
-            </label>
-            <label class="field">
-              <span class="label">{{ t('pharmCfg.dict.alias') }}</span>
-              <input v-model="drugForm.aliases" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.aliasHint')" />
-            </label>
-            <label class="field span-2">
-              <span class="label">{{ t('pharmCfg.dict.brand') }}</span>
-              <input v-model="drugForm.brands" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.dict.brandHint')" />
-            </label>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn--primary" type="button" :disabled="saving" @click="saveDrug">
-              <AppIcon name="check" :size="14" />
-              {{ editingDrugName ? t('pharmCfg.dict.saveEdit') : t('pharmCfg.dict.saveAdd') }}
-            </button>
-            <button class="btn" type="button" :disabled="saving" @click="resetDrug">{{ t('pharmCfg.action.reset') }}</button>
-            <span class="hint">{{ drugHint }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('pharmCfg.dict.listTitle') }}</span>
-          <span class="badge badge--neutral">{{ drugFiltered.length }}</span>
-          <span class="spacer" />
-          <label class="field">
-            <span class="label">{{ t('pharmCfg.action.search') }}</span>
-            <input
-              v-model="drugSearch"
-              class="input"
-              type="search"
-              spellcheck="false"
-              data-testid="pharm-dict-search"
-              :placeholder="t('pharmCfg.dict.searchHint')"
-            />
-          </label>
-          <label class="field">
-            <span class="label">{{ t('pharmCfg.dict.category') }}</span>
-            <select v-model="drugCategory" class="select">
-              <option value="">{{ t('pharmCfg.dict.allCategories') }}</option>
-              <option v-for="[name, n] in categories" :key="name" :value="name">{{ name }}（{{ n }}）</option>
-            </select>
-          </label>
-        </div>
-
-        <TableSkeleton v-if="loading && !data" :rows="6" />
-        <EmptyState
-          v-else-if="drugFiltered.length === 0"
-          :title="drugSearch.trim() || drugCategory ? t('pharmCfg.dict.empty.searchTitle') : t('pharmCfg.dict.empty.title')"
-          :desc="drugSearch.trim() || drugCategory ? t('pharmCfg.dict.empty.searchDesc') : t('pharmCfg.dict.empty.desc')"
-        />
-        <div v-else class="table-wrap">
-          <table class="table table--stack">
-            <thead>
-              <tr>
-                <th>{{ t('pharmCfg.col.name') }}</th>
-                <th>{{ t('pharmCfg.col.category') }}</th>
-                <th>{{ t('pharmCfg.col.level') }}</th>
-                <th>{{ t('pharmCfg.col.alias') }}</th>
-                <th>{{ t('pharmCfg.col.brand') }}</th>
-                <th class="col-action">{{ t('pharmCfg.col.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="d in drugRows" :key="d.name">
-                <td class="is-strong" data-primary>{{ d.name }}</td>
-                <td data-label="category">{{ d.category || t('pharmCfg.dict.otherCategory') }}</td>
-                <td data-label="level">{{ d.level || t('pharmCfg.dict.defaultLevel') }}</td>
-                <td data-label="alias">{{ (d.aliases || []).join('、') || '—' }}</td>
-                <td data-label="brand">{{ (d.brand_names || []).join('、') || '—' }}</td>
-                <td class="col-action">
-                  <div class="row-actions">
-                    <button class="btn btn--sm" type="button" @click="startEditDrug(d)">
-                      <AppIcon name="edit" :size="13" /> {{ t('pharmCfg.action.edit') }}
-                    </button>
-                    <button class="btn btn--sm btn--danger" type="button" @click="askRemoveDrug(d)">
-                      {{ t('pharmCfg.action.delete') }}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div v-if="drugPages > 1" class="pager">
-          <span class="pager-info">{{ t('pharmCfg.pager', { page: drugPage + 1, pages: drugPages, total: drugFiltered.length }) }}</span>
-          <button class="btn btn--sm" type="button" :disabled="drugPage === 0" @click="drugPage -= 1">{{ t('pharmCfg.action.prev') }}</button>
-          <button class="btn btn--sm" type="button" :disabled="drugPage >= drugPages - 1" @click="drugPage += 1">{{ t('pharmCfg.action.next') }}</button>
-        </div>
-      </div>
-    </template>
-
-    <!-- ============ 相互作用规则 ============ -->
-    <template v-if="tab === 'rules'">
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">
-            {{ editingPair ? t('pharmCfg.rules.form.titleEdit', { pair: editingPairLabel }) : t('pharmCfg.rules.form.titleAdd') }}
-          </span>
-          <span class="spacer" />
-          <span class="hint">{{ t('pharmCfg.rules.pairLockedHint') }}</span>
-        </div>
-        <div class="sheet-body">
-          <div class="form-grid">
-            <label class="field">
-              <span class="label">{{ t('pharmCfg.rules.drugA') }}</span>
-              <input
-                v-model="ruleForm.a"
-                class="input"
-                autocomplete="off"
-                spellcheck="false"
-                :readonly="Boolean(editingPair)"
-                :placeholder="t('pharmCfg.rules.drugAHint')"
-              />
-            </label>
-            <label class="field">
-              <span class="label">{{ t('pharmCfg.rules.drugB') }}</span>
-              <input
-                v-model="ruleForm.b"
-                class="input"
-                autocomplete="off"
-                spellcheck="false"
-                :readonly="Boolean(editingPair)"
-                :placeholder="t('pharmCfg.rules.drugBHint')"
-              />
-            </label>
-            <label class="field">
-              <span class="label">{{ t('pharmCfg.rules.severity') }}</span>
-              <select v-model="ruleForm.severity" class="select">
-                <option value="高危">{{ t('pharmCfg.rules.severityHigh') }}</option>
-                <option value="中危">{{ t('pharmCfg.rules.severityMid') }}</option>
+              <select v-model="drugCategory" class="select">
+                <option value="">{{ t('pharmCfg.dict.allCategories') }}</option>
+                <option v-for="[name, n] in categories" :key="name" :value="name">{{ name }}（{{ n }}）</option>
               </select>
             </label>
-            <label class="field">
-              <span class="label">{{ t('pharmCfg.rules.mechanism') }}</span>
-              <input v-model="ruleForm.mechanism" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.rules.mechanismHint')" />
-            </label>
-            <label class="field span-2">
-              <span class="label">{{ t('pharmCfg.rules.management') }}</span>
-              <input v-model="ruleForm.management" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.rules.managementHint')" />
-            </label>
           </div>
-          <div class="form-actions">
-            <button class="btn btn--primary" type="button" :disabled="saving" @click="saveRule">
-              <AppIcon name="check" :size="14" />
-              {{ editingPair ? t('pharmCfg.rules.saveEdit') : t('pharmCfg.rules.saveAdd') }}
-            </button>
-            <button class="btn" type="button" :disabled="saving" @click="resetRule">{{ t('pharmCfg.action.reset') }}</button>
-            <span class="hint">{{ ruleHint }}</span>
+
+          <TableSkeleton v-if="loading && !data" :rows="6" />
+          <EmptyState
+            v-else-if="drugFiltered.length === 0"
+            :title="drugSearch.trim() || drugCategory ? t('pharmCfg.dict.empty.searchTitle') : t('pharmCfg.dict.empty.title')"
+            :desc="drugSearch.trim() || drugCategory ? t('pharmCfg.dict.empty.searchDesc') : t('pharmCfg.dict.empty.desc')"
+          />
+          <div v-else class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>{{ t('pharmCfg.col.name') }}</th>
+                  <th>{{ t('pharmCfg.col.category') }}</th>
+                  <th>{{ t('pharmCfg.col.level') }}</th>
+                  <th>{{ t('pharmCfg.col.alias') }}</th>
+                  <th>{{ t('pharmCfg.col.brand') }}</th>
+                  <th class="col-action">{{ t('pharmCfg.col.actions') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="d in drugRows" :key="d.name">
+                  <td class="is-strong" data-primary>{{ d.name }}</td>
+                  <td data-label="category">{{ d.category || t('pharmCfg.dict.otherCategory') }}</td>
+                  <td data-label="level">{{ d.level || t('pharmCfg.dict.defaultLevel') }}</td>
+                  <td data-label="alias">{{ (d.aliases || []).join('、') || '—' }}</td>
+                  <td data-label="brand">{{ (d.brand_names || []).join('、') || '—' }}</td>
+                  <td class="col-action">
+                    <div class="row-actions">
+                      <button class="btn btn--sm" type="button" @click="startEditDrug(d)">
+                        <AppIcon name="edit" :size="13" /> {{ t('pharmCfg.action.edit') }}
+                      </button>
+                      <button class="btn btn--sm btn--danger" type="button" @click="askRemoveDrug(d)">
+                        {{ t('pharmCfg.action.delete') }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="drugPages > 1" class="pager">
+            <span class="pager-info">{{ t('pharmCfg.pager', { page: drugPage + 1, pages: drugPages, total: drugFiltered.length }) }}</span>
+            <button class="btn btn--sm" type="button" :disabled="drugPage === 0" @click="drugPage -= 1">{{ t('pharmCfg.action.prev') }}</button>
+            <button class="btn btn--sm" type="button" :disabled="drugPage >= drugPages - 1" @click="drugPage += 1">{{ t('pharmCfg.action.next') }}</button>
           </div>
         </div>
-      </div>
-
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('pharmCfg.rules.listTitle') }}</span>
-          <span class="badge badge--neutral">{{ ruleFiltered.length }}</span>
-          <span class="spacer" />
-          <label class="field">
-            <span class="label">{{ t('pharmCfg.rules.review') }}</span>
-            <select v-model="ruleFilter" class="select">
-              <option value="all">{{ t('pharmCfg.rules.filter.all') }}</option>
-              <option value="unreviewed">{{ t('pharmCfg.rules.filter.unreviewed') }}</option>
-              <option value="approved">{{ t('pharmCfg.rules.filter.approved') }}</option>
-              <option value="unreviewed_high">{{ t('pharmCfg.rules.filter.unreviewedHigh') }}</option>
-            </select>
-          </label>
-          <button class="btn btn--sm btn--primary" type="button" :disabled="marking || checkedKeys.length === 0" @click="markRules('approved')">
-            <AppIcon name="check" :size="13" /> {{ t('pharmCfg.rules.mark') }}
-          </button>
-          <button class="btn btn--sm" type="button" :disabled="marking || checkedKeys.length === 0" @click="markRules('unreviewed')">
-            {{ t('pharmCfg.rules.unmark') }}
-          </button>
-        </div>
-
-        <p class="bulk-hint">
-          {{ checkedKeys.length ? t('pharmCfg.rules.selected', { n: checkedKeys.length }) : t('pharmCfg.rules.selectHint') }}
-        </p>
-
-        <TableSkeleton v-if="loading && !data" :rows="6" />
-        <EmptyState
-          v-else-if="ruleFiltered.length === 0"
-          :title="ruleFilter !== 'all' ? t('pharmCfg.rules.empty.filteredTitle') : t('pharmCfg.rules.empty.title')"
-          :desc="ruleFilter !== 'all' ? t('pharmCfg.rules.empty.filteredDesc') : t('pharmCfg.rules.empty.desc')"
-        />
-        <div v-else class="table-wrap">
-          <table class="table table--stack">
-            <thead>
-              <tr>
-                <th class="col-check">
-                  <input
-                    type="checkbox"
-                    :checked="pageAllChecked"
-                    :aria-label="t('pharmCfg.rules.selectAll')"
-                    @change="toggleAll"
-                  />
-                </th>
-                <th>{{ t('pharmCfg.col.pair') }}</th>
-                <th>{{ t('pharmCfg.col.severity') }}</th>
-                <th>{{ t('pharmCfg.col.review') }}</th>
-                <th>{{ t('pharmCfg.col.detail') }}</th>
-                <th class="col-action">{{ t('pharmCfg.col.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in ruleRows" :key="row.key">
-                <td class="col-check">
-                  <input v-model="checkedKeys" type="checkbox" :value="row.key" :aria-label="t('pharmCfg.rules.selectOne', { pair: row.label })" />
-                </td>
-                <td class="is-strong" data-primary>{{ row.label }}</td>
-                <td data-label="severity">
-                  <span class="badge" :class="row.r.severity === '高危' ? 'badge--danger' : 'badge--accent'">
-                    {{ row.r.severity === '高危' ? t('pharmCfg.rules.severityHigh') : t('pharmCfg.rules.severityMid') }}
-                  </span>
-                </td>
-                <td data-label="review">
-                  <span class="badge" :class="isReviewed(row.r) ? 'badge--ok' : 'badge--neutral'">
-                    {{ isReviewed(row.r) ? t('pharmCfg.rules.reviewed') : t('pharmCfg.rules.unreviewed') }}
-                  </span>
-                  <div v-if="isReviewed(row.r)" class="muted small">
-                    {{ row.r.reviewed_by || '—' }}
-                    <template v-if="row.r.reviewed_at"> · {{ dateTime(row.r.reviewed_at) }}</template>
-                  </div>
-                </td>
-                <td data-label="detail">
-                  <div class="rule-mech">{{ row.r.mechanism || '—' }}</div>
-                  <div class="muted small">{{ t('pharmCfg.rules.managementPrefix', { text: row.r.management || '—' }) }}</div>
-                </td>
-                <td class="col-action">
-                  <div class="row-actions">
-                    <button class="btn btn--sm" type="button" @click="startEditRule(row)">
-                      <AppIcon name="edit" :size="13" /> {{ t('pharmCfg.action.edit') }}
-                    </button>
-                    <button class="btn btn--sm btn--danger" type="button" @click="askRemoveRule(row)">
-                      {{ t('pharmCfg.action.delete') }}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div v-if="rulePages > 1" class="pager">
-          <span class="pager-info">{{ t('pharmCfg.pager', { page: rulePage + 1, pages: rulePages, total: ruleFiltered.length }) }}</span>
-          <button class="btn btn--sm" type="button" :disabled="rulePage === 0" @click="rulePage -= 1">{{ t('pharmCfg.action.prev') }}</button>
-          <button class="btn btn--sm" type="button" :disabled="rulePage >= rulePages - 1" @click="rulePage += 1">{{ t('pharmCfg.action.next') }}</button>
-        </div>
-      </div>
-    </template>
-
-    <!-- ============ 删除确认（药品 / 规则共用；高危操作说明影响面） ============ -->
-    <AppModal v-model="removeOpen" :title="removeTarget ? removeTitle : t('pharmCfg.remove.genericTitle')" width="460px">
-      <p class="modal-note">{{ removeTarget ? removeBody : '' }}</p>
-      <template #footer>
-        <button class="btn" type="button" :disabled="removing" @click="removeOpen = false">{{ t('pharmCfg.action.cancel') }}</button>
-        <button class="btn btn--danger" type="button" :disabled="removing" @click="confirmRemove">
-          {{ t('pharmCfg.action.confirmDelete') }}
-        </button>
       </template>
-    </AppModal>
+
+      <!-- ============ 相互作用规则 ============ -->
+      <template v-if="tab === 'rules'">
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">
+              {{ editingPair ? t('pharmCfg.rules.form.titleEdit', { pair: editingPairLabel }) : t('pharmCfg.rules.form.titleAdd') }}
+            </span>
+            <span class="spacer" />
+            <span class="hint">{{ t('pharmCfg.rules.pairLockedHint') }}</span>
+          </div>
+          <div class="sheet-body">
+            <div class="form-grid">
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.rules.drugA') }}</span>
+                <input
+                  v-model="ruleForm.a"
+                  class="input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  :readonly="Boolean(editingPair)"
+                  :placeholder="t('pharmCfg.rules.drugAHint')"
+                />
+              </label>
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.rules.drugB') }}</span>
+                <input
+                  v-model="ruleForm.b"
+                  class="input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  :readonly="Boolean(editingPair)"
+                  :placeholder="t('pharmCfg.rules.drugBHint')"
+                />
+              </label>
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.rules.severity') }}</span>
+                <select v-model="ruleForm.severity" class="select">
+                  <option value="高危">{{ t('pharmCfg.rules.severityHigh') }}</option>
+                  <option value="中危">{{ t('pharmCfg.rules.severityMid') }}</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="label">{{ t('pharmCfg.rules.mechanism') }}</span>
+                <input v-model="ruleForm.mechanism" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.rules.mechanismHint')" />
+              </label>
+              <label class="field span-2">
+                <span class="label">{{ t('pharmCfg.rules.management') }}</span>
+                <input v-model="ruleForm.management" class="input" autocomplete="off" spellcheck="false" :placeholder="t('pharmCfg.rules.managementHint')" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn--primary" type="button" :disabled="saving" @click="saveRule">
+                <AppIcon name="check" :size="14" />
+                {{ editingPair ? t('pharmCfg.rules.saveEdit') : t('pharmCfg.rules.saveAdd') }}
+              </button>
+              <button class="btn" type="button" :disabled="saving" @click="resetRule">{{ t('pharmCfg.action.reset') }}</button>
+              <span class="hint">{{ ruleHint }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('pharmCfg.rules.listTitle') }}</span>
+            <span class="badge badge--neutral">{{ ruleFiltered.length }}</span>
+            <span class="spacer" />
+            <label class="field">
+              <span class="label">{{ t('pharmCfg.rules.review') }}</span>
+              <select v-model="ruleFilter" class="select">
+                <option value="all">{{ t('pharmCfg.rules.filter.all') }}</option>
+                <option value="unreviewed">{{ t('pharmCfg.rules.filter.unreviewed') }}</option>
+                <option value="approved">{{ t('pharmCfg.rules.filter.approved') }}</option>
+                <option value="unreviewed_high">{{ t('pharmCfg.rules.filter.unreviewedHigh') }}</option>
+              </select>
+            </label>
+            <button class="btn btn--sm btn--primary" type="button" :disabled="marking || checkedKeys.length === 0" @click="markRules('approved')">
+              <AppIcon name="check" :size="13" /> {{ t('pharmCfg.rules.mark') }}
+            </button>
+            <button class="btn btn--sm" type="button" :disabled="marking || checkedKeys.length === 0" @click="markRules('unreviewed')">
+              {{ t('pharmCfg.rules.unmark') }}
+            </button>
+          </div>
+
+          <p class="bulk-hint">
+            {{ checkedKeys.length ? t('pharmCfg.rules.selected', { n: checkedKeys.length }) : t('pharmCfg.rules.selectHint') }}
+          </p>
+
+          <TableSkeleton v-if="loading && !data" :rows="6" />
+          <EmptyState
+            v-else-if="ruleFiltered.length === 0"
+            :title="ruleFilter !== 'all' ? t('pharmCfg.rules.empty.filteredTitle') : t('pharmCfg.rules.empty.title')"
+            :desc="ruleFilter !== 'all' ? t('pharmCfg.rules.empty.filteredDesc') : t('pharmCfg.rules.empty.desc')"
+          />
+          <div v-else class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th class="col-check">
+                    <input
+                      type="checkbox"
+                      :checked="pageAllChecked"
+                      :aria-label="t('pharmCfg.rules.selectAll')"
+                      @change="toggleAll"
+                    />
+                  </th>
+                  <th>{{ t('pharmCfg.col.pair') }}</th>
+                  <th>{{ t('pharmCfg.col.severity') }}</th>
+                  <th>{{ t('pharmCfg.col.review') }}</th>
+                  <th>{{ t('pharmCfg.col.detail') }}</th>
+                  <th class="col-action">{{ t('pharmCfg.col.actions') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in ruleRows" :key="row.key">
+                  <td class="col-check">
+                    <input v-model="checkedKeys" type="checkbox" :value="row.key" :aria-label="t('pharmCfg.rules.selectOne', { pair: row.label })" />
+                  </td>
+                  <td class="is-strong" data-primary>{{ row.label }}</td>
+                  <td data-label="severity">
+                    <span class="badge" :class="row.r.severity === '高危' ? 'badge--danger' : 'badge--accent'">
+                      {{ row.r.severity === '高危' ? t('pharmCfg.rules.severityHigh') : t('pharmCfg.rules.severityMid') }}
+                    </span>
+                  </td>
+                  <td data-label="review">
+                    <span class="badge" :class="isReviewed(row.r) ? 'badge--ok' : 'badge--neutral'">
+                      {{ isReviewed(row.r) ? t('pharmCfg.rules.reviewed') : t('pharmCfg.rules.unreviewed') }}
+                    </span>
+                    <div v-if="isReviewed(row.r)" class="muted small">
+                      {{ row.r.reviewed_by || '—' }}
+                      <template v-if="row.r.reviewed_at"> · {{ dateTime(row.r.reviewed_at) }}</template>
+                    </div>
+                  </td>
+                  <td data-label="detail">
+                    <div class="rule-mech">{{ row.r.mechanism || '—' }}</div>
+                    <div class="muted small">{{ t('pharmCfg.rules.managementPrefix', { text: row.r.management || '—' }) }}</div>
+                  </td>
+                  <td class="col-action">
+                    <div class="row-actions">
+                      <button class="btn btn--sm" type="button" @click="startEditRule(row)">
+                        <AppIcon name="edit" :size="13" /> {{ t('pharmCfg.action.edit') }}
+                      </button>
+                      <button class="btn btn--sm btn--danger" type="button" @click="askRemoveRule(row)">
+                        {{ t('pharmCfg.action.delete') }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="rulePages > 1" class="pager">
+            <span class="pager-info">{{ t('pharmCfg.pager', { page: rulePage + 1, pages: rulePages, total: ruleFiltered.length }) }}</span>
+            <button class="btn btn--sm" type="button" :disabled="rulePage === 0" @click="rulePage -= 1">{{ t('pharmCfg.action.prev') }}</button>
+            <button class="btn btn--sm" type="button" :disabled="rulePage >= rulePages - 1" @click="rulePage += 1">{{ t('pharmCfg.action.next') }}</button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ============ 删除确认（药品 / 规则共用；高危操作说明影响面） ============ -->
+      <AppModal v-model="removeOpen" :title="removeTarget ? removeTitle : t('pharmCfg.remove.genericTitle')" width="460px">
+        <p class="modal-note">{{ removeTarget ? removeBody : '' }}</p>
+        <template #footer>
+          <button class="btn" type="button" :disabled="removing" @click="removeOpen = false">{{ t('pharmCfg.action.cancel') }}</button>
+          <button class="btn btn--danger" type="button" :disabled="removing" @click="confirmRemove">
+            {{ t('pharmCfg.action.confirmDelete') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -355,6 +358,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiDrugDict,
@@ -366,7 +370,7 @@ import {
   type AiDrugRule,
   type AiDrugStats,
 } from '@/api/ai'
-import { errorText } from '@/api/http'
+import { errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -384,6 +388,7 @@ const saving = ref(false)
 const marking = ref(false)
 const removing = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 const data = ref<AiDrugDict | null>(null)
 
 const tabs = computed(() => [
@@ -512,11 +517,14 @@ const removeBody = computed(() =>
 async function load() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   try {
     data.value = await aiDrugDict()
     checkedKeys.value = []
   } catch (e) {
-    loadErr.value = errorText(e)
+    const denied = isForbidden(e)
+    forbidden.value = denied
+    loadErr.value = denied ? '' : errorText(e)
   } finally {
     loading.value = false
   }

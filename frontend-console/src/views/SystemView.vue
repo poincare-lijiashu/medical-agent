@@ -16,590 +16,593 @@
       </template>
     </PageHeader>
 
-    <div class="card tabs-card">
-      <div class="seg" role="tablist" aria-label="系统管理分区">
-        <button
-          v-if="canReadUsers"
-          class="seg-btn"
-          :class="{ active: tab === 'users' }"
-          type="button"
-          @click="switchTab('users')"
-        >
-          账号管理
-        </button>
-        <button
-          v-if="canReadCampus"
-          class="seg-btn"
-          :class="{ active: tab === 'campus' }"
-          type="button"
-          @click="switchTab('campus')"
-        >
-          院区管理
-        </button>
-        <button
-          v-if="canReadAudit"
-          class="seg-btn"
-          :class="{ active: tab === 'audit' }"
-          type="button"
-          @click="switchTab('audit')"
-        >
-          审计日志
-        </button>
-      </div>
-      <span class="spacer" />
-      <span class="hint">
-        {{ tab === 'users'
-          ? '角色决定权限点；科室与院区绑定决定数据范围'
-          : tab === 'campus'
-            ? '院区是数据归属边界：停用后不再接收新数据，历史数据保持原归属'
-            : '审计只读，查询审计本身不产生新事件' }}
-      </span>
-    </div>
-
-    <template v-if="tab === 'users'">
-      <div class="kpi-strip">
-        <KpiCard label="账号总数" :value="usersTotal" unit="个" :meta="`当前筛选：${userStatus ? statusLabel(userStatus) : '全部状态'}`" />
-        <KpiCard label="本页启用" :value="enabledCount" unit="个" />
-        <KpiCard label="本页停用" :value="disabledCount" unit="个" :tone="disabledCount > 0 ? 'warn' : 'default'" />
-        <KpiCard label="可分配角色" :value="roles.length" unit="种" meta="来自授权矩阵，只读" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <div class="card tabs-card">
+        <div class="seg" role="tablist" aria-label="系统管理分区">
+          <button
+            v-if="canReadUsers"
+            class="seg-btn"
+            :class="{ active: tab === 'users' }"
+            type="button"
+            @click="switchTab('users')"
+          >
+            账号管理
+          </button>
+          <button
+            v-if="canReadCampus"
+            class="seg-btn"
+            :class="{ active: tab === 'campus' }"
+            type="button"
+            @click="switchTab('campus')"
+          >
+            院区管理
+          </button>
+          <button
+            v-if="canReadAudit"
+            class="seg-btn"
+            :class="{ active: tab === 'audit' }"
+            type="button"
+            @click="switchTab('audit')"
+          >
+            审计日志
+          </button>
+        </div>
+        <span class="spacer" />
+        <span class="hint">
+          {{ tab === 'users'
+            ? '角色决定权限点；科室与院区绑定决定数据范围'
+            : tab === 'campus'
+              ? '院区是数据归属边界：停用后不再接收新数据，历史数据保持原归属'
+              : '审计只读，查询审计本身不产生新事件' }}
+        </span>
       </div>
 
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">账号</span>
-          <span class="badge badge--neutral">{{ usersTotal }}</span>
-          <span class="spacer" />
-          <label class="field filter-status">
-            <span class="label">状态</span>
-            <select v-model="userStatus" class="select" @change="resetUserPage">
-              <option value="">全部</option>
-              <option value="ACTIVE">启用</option>
-              <option value="DISABLED">停用</option>
-            </select>
+      <template v-if="tab === 'users'">
+        <div class="kpi-strip">
+          <KpiCard label="账号总数" :value="usersTotal" unit="个" :meta="`当前筛选：${userStatus ? statusLabel(userStatus) : '全部状态'}`" />
+          <KpiCard label="本页启用" :value="enabledCount" unit="个" />
+          <KpiCard label="本页停用" :value="disabledCount" unit="个" :tone="disabledCount > 0 ? 'warn' : 'default'" />
+          <KpiCard label="可分配角色" :value="roles.length" unit="种" meta="来自授权矩阵，只读" />
+        </div>
+
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">账号</span>
+            <span class="badge badge--neutral">{{ usersTotal }}</span>
+            <span class="spacer" />
+            <label class="field filter-status">
+              <span class="label">状态</span>
+              <select v-model="userStatus" class="select" @change="resetUserPage">
+                <option value="">全部</option>
+                <option value="ACTIVE">启用</option>
+                <option value="DISABLED">停用</option>
+              </select>
+            </label>
+            <label class="field filter-org">
+              <span class="label">机构</span>
+              <select v-model="userOrg" class="select" @change="resetUserPage">
+                <option value="">全部</option>
+                <option v-for="o in orgs" :key="o.code" :value="o.code">
+                  {{ o.name }}（{{ o.code }}）
+                </option>
+              </select>
+            </label>
+            <button v-if="canCreate" class="btn btn--sm btn--primary" type="button" @click="openCreate">
+              <AppIcon name="plus" :size="13" /> 新建账号
+            </button>
+          </div>
+
+          <TableSkeleton v-if="usersLoading" :rows="5" />
+
+          <LoadError
+            v-else-if="usersError"
+            :message="usersError"
+            :retrying="usersLoading"
+            @retry="loadUsers"
+          />
+
+          <EmptyState
+            v-else-if="users.length === 0"
+            art="orders"
+            title="当前筛选条件下没有账号"
+            desc="账号由管理员创建并分配角色；临床角色必须绑定至少一个科室。"
+          />
+
+          <div v-else class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>用户名</th>
+                  <th>姓名 / 工号</th>
+                  <th>机构</th>
+                  <th class="is-num">科室</th>
+                  <th>院区</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>最后登录</th>
+                  <th style="width: 240px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="u in users" :key="u.id">
+                  <td class="mono" data-primary>{{ u.username }}</td>
+                  <td data-label="姓名 / 工号">
+                    <div class="is-strong">{{ u.displayName }}</div>
+                    <div class="muted" style="font-size: var(--fs-small)">{{ u.employeeNo || '无工号' }}</div>
+                  </td>
+                  <td data-label="机构">
+                    <div>{{ orgName(u.orgCode) }}</div>
+                    <div class="mono muted" style="font-size: var(--fs-small)">{{ u.orgCode || '—' }}</div>
+                  </td>
+                  <td class="is-num" data-label="科室">{{ u.deptIds.length }}</td>
+                  <td data-label="院区">{{ campusNames(u.campusIds) }}</td>
+                  <td data-label="角色">
+                    <span v-for="r in u.roles" :key="r" class="badge badge--neutral role-badge">
+                      {{ roleName(r) }}
+                    </span>
+                  </td>
+                  <td data-label="状态"><StatusPill :value="u.status" /></td>
+                  <td data-label="最后登录">{{ u.lastLoginAt ? dateTime(u.lastLoginAt) : '从未登录' }}</td>
+                  <td data-label="操作">
+                    <div class="row-actions">
+                      <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openEdit(u)">编辑</button>
+                      <button v-if="canAssign" class="btn btn--sm" type="button" @click="openRoles(u)">角色</button>
+                      <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openCampuses(u)">院区</button>
+                      <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openReset(u)">重置密码</button>
+                      <button
+                        v-if="canDisable"
+                        class="btn btn--sm"
+                        :class="{ 'btn--danger': u.status === 'ACTIVE' }"
+                        type="button"
+                        :disabled="busy"
+                        @click="toggleUser(u)"
+                      >
+                        {{ u.status === 'ACTIVE' ? '停用' : '启用' }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pager">
+            <span class="muted">共 {{ usersTotal }} 条 · 第 {{ userPage }} / {{ userPages }} 页</span>
+            <span class="spacer" />
+            <button class="btn btn--sm" type="button" :disabled="userPage <= 1 || usersLoading" @click="prevUserPage">
+              上一页
+            </button>
+            <button
+              class="btn btn--sm"
+              type="button"
+              :disabled="userPage >= userPages || usersLoading"
+              @click="nextUserPage"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <template v-else-if="tab === 'campus'">
+        <div class="kpi-strip">
+          <KpiCard label="院区总数" :value="campuses.length" unit="个" />
+          <KpiCard label="启用院区" :value="activeCampusCount" unit="个" />
+          <KpiCard
+            label="停用院区"
+            :value="disabledCampusCount"
+            unit="个"
+            :tone="disabledCampusCount > 0 ? 'warn' : 'default'"
+          />
+          <KpiCard label="账号总数" :value="usersTotal" unit="个" meta="来自账号管理" />
+        </div>
+
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">院区</span>
+            <span class="badge badge--neutral">{{ campuses.length }}</span>
+            <span class="spacer" />
+            <span class="hint">编码创建后不可修改；至少保留一个启用院区</span>
+            <button v-if="canManageCampus" class="btn btn--sm btn--primary" type="button" @click="openCampusCreate">
+              <AppIcon name="plus" :size="13" /> 新建院区
+            </button>
+          </div>
+
+          <TableSkeleton v-if="campusLoading" :rows="3" />
+
+          <LoadError
+            v-else-if="campusError"
+            :message="campusError"
+            :retrying="campusLoading"
+            @retry="loadCampuses"
+          />
+
+          <EmptyState
+            v-else-if="campuses.length === 0"
+            art="orders"
+            title="尚未配置院区"
+            desc="至少需要配置一个院区，业务数据才能确定归属；请联系管理员初始化。"
+          />
+
+          <div v-else class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>编码</th>
+                  <th>名称</th>
+                  <th class="is-num">排序</th>
+                  <th>状态</th>
+                  <th class="is-num">本页账号</th>
+                  <th style="width: 180px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in campuses" :key="c.id">
+                  <td class="mono" data-primary>{{ c.code }}</td>
+                  <td data-label="名称">{{ c.name }}</td>
+                  <td class="is-num" data-label="排序">{{ c.sortNo }}</td>
+                  <td data-label="状态"><StatusPill :value="c.status" /></td>
+                  <td class="is-num" data-label="本页账号">{{ campusUserCount(c.id) }}</td>
+                  <td data-label="操作">
+                    <div class="row-actions">
+                      <button v-if="canManageCampus" class="btn btn--sm" type="button" @click="openCampusEdit(c)">
+                        编辑
+                      </button>
+                      <button
+                        v-if="canManageCampus"
+                        class="btn btn--sm"
+                        :class="{ 'btn--danger': c.status === 'ACTIVE' }"
+                        type="button"
+                        :disabled="busy"
+                        @click="toggleCampus(c)"
+                      >
+                        {{ c.status === 'ACTIVE' ? '停用' : '启用' }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">审计日志</span>
+            <span class="badge badge--neutral">{{ auditTotal }}</span>
+            <span class="spacer" />
+            <span class="hint">跨 auth / empi 等域的变更日志；时间留空表示不限</span>
+          </div>
+
+          <div class="toolbar">
+            <label class="field">
+              <span class="label">操作人</span>
+              <input v-model.trim="auditForm.actor" class="input" placeholder="例如 admin01" @keydown.enter="resetAuditPage" />
+            </label>
+            <label class="field">
+              <span class="label">动作</span>
+              <input v-model.trim="auditForm.action" class="input" placeholder="例如 USER_DISABLE" @keydown.enter="resetAuditPage" />
+            </label>
+            <label class="field">
+              <span class="label">对象类型</span>
+              <input v-model.trim="auditForm.targetType" class="input" placeholder="例如 USER" @keydown.enter="resetAuditPage" />
+            </label>
+            <label class="field">
+              <span class="label">开始时间</span>
+              <input v-model="auditForm.from" class="input" type="datetime-local" />
+            </label>
+            <label class="field">
+              <span class="label">结束时间</span>
+              <input v-model="auditForm.to" class="input" type="datetime-local" />
+            </label>
+            <button class="btn btn--primary" type="button" :disabled="auditLoading" @click="resetAuditPage">
+              查询
+            </button>
+            <button class="btn" type="button" :disabled="auditLoading" @click="clearAudit">清空条件</button>
+          </div>
+
+          <TableSkeleton v-if="auditLoading" :rows="5" />
+
+          <LoadError
+            v-else-if="auditError"
+            :message="auditError"
+            :retrying="auditLoading"
+            @retry="loadAudit"
+          />
+
+          <EmptyState
+            v-else-if="auditRows.length === 0"
+            art="orders"
+            title="当前条件下没有审计事件"
+            desc="可放宽时间范围或清空操作人/动作条件后重试。"
+          />
+
+          <div v-else class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>来源</th>
+                  <th>操作人</th>
+                  <th>动作</th>
+                  <th>对象</th>
+                  <th style="width: 88px">详情</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="e in auditRows" :key="`${e.source}-${e.id}`">
+                  <td data-primary>{{ dateTime(e.ts) }}</td>
+                  <td data-label="来源"><span class="badge badge--neutral">{{ e.source }}</span></td>
+                  <td data-label="操作人">{{ e.actor }}</td>
+                  <td class="mono" data-label="动作">{{ e.action }}</td>
+                  <td data-label="对象">
+                    <div>{{ e.targetType || '—' }}</div>
+                    <div class="mono muted" style="font-size: var(--fs-small)">{{ shortId(e.targetId) }}</div>
+                  </td>
+                  <td data-label="详情">
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      :disabled="!e.detail"
+                      @click="openAuditDetail(e)"
+                    >
+                      查看
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pager">
+            <span class="muted">共 {{ auditTotal }} 条 · 第 {{ auditPage }} / {{ auditPages }} 页</span>
+            <span class="spacer" />
+            <button class="btn btn--sm" type="button" :disabled="auditPage <= 1 || auditLoading" @click="prevAuditPage">
+              上一页
+            </button>
+            <button
+              class="btn btn--sm"
+              type="button"
+              :disabled="auditPage >= auditPages || auditLoading"
+              @click="nextAuditPage"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <AppModal
+        v-model="userModalOpen"
+        :title="userMode === 'create' ? '新建账号' : '编辑账号'"
+        :subtitle="userMode === 'edit' ? editing?.username : ''"
+        width="760px"
+      >
+        <div class="form-grid">
+          <template v-if="userMode === 'create'">
+            <label class="field">
+              <span class="label">用户名 <span class="req">*</span></span>
+              <input v-model.trim="userForm.username" class="input" maxlength="64" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span class="label">初始密码 <span class="req">*</span></span>
+              <input
+                v-model="userForm.password"
+                class="input"
+                type="password"
+                maxlength="64"
+                autocomplete="new-password"
+              />
+              <span class="hint">至少 8 位，同时含字母与数字。</span>
+            </label>
+          </template>
+          <label class="field">
+            <span class="label">姓名 <span class="req">*</span></span>
+            <input v-model.trim="userForm.displayName" class="input" maxlength="64" />
           </label>
-          <label class="field filter-org">
+          <label class="field">
+            <span class="label">工号</span>
+            <input v-model.trim="userForm.employeeNo" class="input" maxlength="32" />
+          </label>
+          <label class="field">
             <span class="label">机构</span>
-            <select v-model="userOrg" class="select" @change="resetUserPage">
-              <option value="">全部</option>
+            <select v-model="userForm.orgCode" class="select">
+              <option value="">未指定</option>
               <option v-for="o in orgs" :key="o.code" :value="o.code">
                 {{ o.name }}（{{ o.code }}）
               </option>
             </select>
           </label>
-          <button v-if="canCreate" class="btn btn--sm btn--primary" type="button" @click="openCreate">
-            <AppIcon name="plus" :size="13" /> 新建账号
-          </button>
-        </div>
 
-        <TableSkeleton v-if="usersLoading" :rows="5" />
+          <div v-if="deptEditable" class="field field--full">
+            <span class="label">临床科室绑定 <span class="hint">医师/护士至少绑定一个</span></span>
+            <div class="check-grid">
+              <label v-for="d in departments" :key="d.id" class="check">
+                <input v-model="userForm.deptIds" type="checkbox" :value="d.id" />
+                <span>{{ d.name }}</span>
+              </label>
+            </div>
+          </div>
+          <div v-else class="field field--full">
+            <span class="hint">当前账号没有科室字典读取权限：创建时无法绑定科室，编辑时保持原有绑定不变。</span>
+          </div>
 
-        <LoadError
-          v-else-if="usersError"
-          :message="usersError"
-          :retrying="usersLoading"
-          @retry="loadUsers"
-        />
-
-        <EmptyState
-          v-else-if="users.length === 0"
-          art="orders"
-          title="当前筛选条件下没有账号"
-          desc="账号由管理员创建并分配角色；临床角色必须绑定至少一个科室。"
-        />
-
-        <div v-else class="table-wrap">
-          <table class="table table--stack">
-            <thead>
-              <tr>
-                <th>用户名</th>
-                <th>姓名 / 工号</th>
-                <th>机构</th>
-                <th class="is-num">科室</th>
-                <th>院区</th>
-                <th>角色</th>
-                <th>状态</th>
-                <th>最后登录</th>
-                <th style="width: 240px">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="u in users" :key="u.id">
-                <td class="mono" data-primary>{{ u.username }}</td>
-                <td data-label="姓名 / 工号">
-                  <div class="is-strong">{{ u.displayName }}</div>
-                  <div class="muted" style="font-size: var(--fs-small)">{{ u.employeeNo || '无工号' }}</div>
-                </td>
-                <td data-label="机构">
-                  <div>{{ orgName(u.orgCode) }}</div>
-                  <div class="mono muted" style="font-size: var(--fs-small)">{{ u.orgCode || '—' }}</div>
-                </td>
-                <td class="is-num" data-label="科室">{{ u.deptIds.length }}</td>
-                <td data-label="院区">{{ campusNames(u.campusIds) }}</td>
-                <td data-label="角色">
-                  <span v-for="r in u.roles" :key="r" class="badge badge--neutral role-badge">
-                    {{ roleName(r) }}
-                  </span>
-                </td>
-                <td data-label="状态"><StatusPill :value="u.status" /></td>
-                <td data-label="最后登录">{{ u.lastLoginAt ? dateTime(u.lastLoginAt) : '从未登录' }}</td>
-                <td data-label="操作">
-                  <div class="row-actions">
-                    <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openEdit(u)">编辑</button>
-                    <button v-if="canAssign" class="btn btn--sm" type="button" @click="openRoles(u)">角色</button>
-                    <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openCampuses(u)">院区</button>
-                    <button v-if="canUpdate" class="btn btn--sm" type="button" @click="openReset(u)">重置密码</button>
-                    <button
-                      v-if="canDisable"
-                      class="btn btn--sm"
-                      :class="{ 'btn--danger': u.status === 'ACTIVE' }"
-                      type="button"
-                      :disabled="busy"
-                      @click="toggleUser(u)"
-                    >
-                      {{ u.status === 'ACTIVE' ? '停用' : '启用' }}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="pager">
-          <span class="muted">共 {{ usersTotal }} 条 · 第 {{ userPage }} / {{ userPages }} 页</span>
-          <span class="spacer" />
-          <button class="btn btn--sm" type="button" :disabled="userPage <= 1 || usersLoading" @click="prevUserPage">
-            上一页
-          </button>
-          <button
-            class="btn btn--sm"
-            type="button"
-            :disabled="userPage >= userPages || usersLoading"
-            @click="nextUserPage"
-          >
-            下一页
-          </button>
-        </div>
-      </div>
-    </template>
-
-    <template v-else-if="tab === 'campus'">
-      <div class="kpi-strip">
-        <KpiCard label="院区总数" :value="campuses.length" unit="个" />
-        <KpiCard label="启用院区" :value="activeCampusCount" unit="个" />
-        <KpiCard
-          label="停用院区"
-          :value="disabledCampusCount"
-          unit="个"
-          :tone="disabledCampusCount > 0 ? 'warn' : 'default'"
-        />
-        <KpiCard label="账号总数" :value="usersTotal" unit="个" meta="来自账号管理" />
-      </div>
-
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">院区</span>
-          <span class="badge badge--neutral">{{ campuses.length }}</span>
-          <span class="spacer" />
-          <span class="hint">编码创建后不可修改；至少保留一个启用院区</span>
-          <button v-if="canManageCampus" class="btn btn--sm btn--primary" type="button" @click="openCampusCreate">
-            <AppIcon name="plus" :size="13" /> 新建院区
-          </button>
-        </div>
-
-        <TableSkeleton v-if="campusLoading" :rows="3" />
-
-        <LoadError
-          v-else-if="campusError"
-          :message="campusError"
-          :retrying="campusLoading"
-          @retry="loadCampuses"
-        />
-
-        <EmptyState
-          v-else-if="campuses.length === 0"
-          art="orders"
-          title="尚未配置院区"
-          desc="至少需要配置一个院区，业务数据才能确定归属；请联系管理员初始化。"
-        />
-
-        <div v-else class="table-wrap">
-          <table class="table table--stack">
-            <thead>
-              <tr>
-                <th>编码</th>
-                <th>名称</th>
-                <th class="is-num">排序</th>
-                <th>状态</th>
-                <th class="is-num">本页账号</th>
-                <th style="width: 180px">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="c in campuses" :key="c.id">
-                <td class="mono" data-primary>{{ c.code }}</td>
-                <td data-label="名称">{{ c.name }}</td>
-                <td class="is-num" data-label="排序">{{ c.sortNo }}</td>
-                <td data-label="状态"><StatusPill :value="c.status" /></td>
-                <td class="is-num" data-label="本页账号">{{ campusUserCount(c.id) }}</td>
-                <td data-label="操作">
-                  <div class="row-actions">
-                    <button v-if="canManageCampus" class="btn btn--sm" type="button" @click="openCampusEdit(c)">
-                      编辑
-                    </button>
-                    <button
-                      v-if="canManageCampus"
-                      class="btn btn--sm"
-                      :class="{ 'btn--danger': c.status === 'ACTIVE' }"
-                      type="button"
-                      :disabled="busy"
-                      @click="toggleCampus(c)"
-                    >
-                      {{ c.status === 'ACTIVE' ? '停用' : '启用' }}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </template>
-
-    <template v-else>
-      <div class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">审计日志</span>
-          <span class="badge badge--neutral">{{ auditTotal }}</span>
-          <span class="spacer" />
-          <span class="hint">跨 auth / empi 等域的变更日志；时间留空表示不限</span>
-        </div>
-
-        <div class="toolbar">
-          <label class="field">
-            <span class="label">操作人</span>
-            <input v-model.trim="auditForm.actor" class="input" placeholder="例如 admin01" @keydown.enter="resetAuditPage" />
-          </label>
-          <label class="field">
-            <span class="label">动作</span>
-            <input v-model.trim="auditForm.action" class="input" placeholder="例如 USER_DISABLE" @keydown.enter="resetAuditPage" />
-          </label>
-          <label class="field">
-            <span class="label">对象类型</span>
-            <input v-model.trim="auditForm.targetType" class="input" placeholder="例如 USER" @keydown.enter="resetAuditPage" />
-          </label>
-          <label class="field">
-            <span class="label">开始时间</span>
-            <input v-model="auditForm.from" class="input" type="datetime-local" />
-          </label>
-          <label class="field">
-            <span class="label">结束时间</span>
-            <input v-model="auditForm.to" class="input" type="datetime-local" />
-          </label>
-          <button class="btn btn--primary" type="button" :disabled="auditLoading" @click="resetAuditPage">
-            查询
-          </button>
-          <button class="btn" type="button" :disabled="auditLoading" @click="clearAudit">清空条件</button>
-        </div>
-
-        <TableSkeleton v-if="auditLoading" :rows="5" />
-
-        <LoadError
-          v-else-if="auditError"
-          :message="auditError"
-          :retrying="auditLoading"
-          @retry="loadAudit"
-        />
-
-        <EmptyState
-          v-else-if="auditRows.length === 0"
-          art="orders"
-          title="当前条件下没有审计事件"
-          desc="可放宽时间范围或清空操作人/动作条件后重试。"
-        />
-
-        <div v-else class="table-wrap">
-          <table class="table table--stack">
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>来源</th>
-                <th>操作人</th>
-                <th>动作</th>
-                <th>对象</th>
-                <th style="width: 88px">详情</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="e in auditRows" :key="`${e.source}-${e.id}`">
-                <td data-primary>{{ dateTime(e.ts) }}</td>
-                <td data-label="来源"><span class="badge badge--neutral">{{ e.source }}</span></td>
-                <td data-label="操作人">{{ e.actor }}</td>
-                <td class="mono" data-label="动作">{{ e.action }}</td>
-                <td data-label="对象">
-                  <div>{{ e.targetType || '—' }}</div>
-                  <div class="mono muted" style="font-size: var(--fs-small)">{{ shortId(e.targetId) }}</div>
-                </td>
-                <td data-label="详情">
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    :disabled="!e.detail"
-                    @click="openAuditDetail(e)"
-                  >
-                    查看
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="pager">
-          <span class="muted">共 {{ auditTotal }} 条 · 第 {{ auditPage }} / {{ auditPages }} 页</span>
-          <span class="spacer" />
-          <button class="btn btn--sm" type="button" :disabled="auditPage <= 1 || auditLoading" @click="prevAuditPage">
-            上一页
-          </button>
-          <button
-            class="btn btn--sm"
-            type="button"
-            :disabled="auditPage >= auditPages || auditLoading"
-            @click="nextAuditPage"
-          >
-            下一页
-          </button>
-        </div>
-      </div>
-    </template>
-
-    <AppModal
-      v-model="userModalOpen"
-      :title="userMode === 'create' ? '新建账号' : '编辑账号'"
-      :subtitle="userMode === 'edit' ? editing?.username : ''"
-      width="760px"
-    >
-      <div class="form-grid">
-        <template v-if="userMode === 'create'">
-          <label class="field">
-            <span class="label">用户名 <span class="req">*</span></span>
-            <input v-model.trim="userForm.username" class="input" maxlength="64" autocomplete="off" />
-          </label>
-          <label class="field">
-            <span class="label">初始密码 <span class="req">*</span></span>
-            <input
-              v-model="userForm.password"
-              class="input"
-              type="password"
-              maxlength="64"
-              autocomplete="new-password"
-            />
-            <span class="hint">至少 8 位，同时含字母与数字。</span>
-          </label>
-        </template>
-        <label class="field">
-          <span class="label">姓名 <span class="req">*</span></span>
-          <input v-model.trim="userForm.displayName" class="input" maxlength="64" />
-        </label>
-        <label class="field">
-          <span class="label">工号</span>
-          <input v-model.trim="userForm.employeeNo" class="input" maxlength="32" />
-        </label>
-        <label class="field">
-          <span class="label">机构</span>
-          <select v-model="userForm.orgCode" class="select">
-            <option value="">未指定</option>
-            <option v-for="o in orgs" :key="o.code" :value="o.code">
-              {{ o.name }}（{{ o.code }}）
-            </option>
-          </select>
-        </label>
-
-        <div v-if="deptEditable" class="field field--full">
-          <span class="label">临床科室绑定 <span class="hint">医师/护士至少绑定一个</span></span>
-          <div class="check-grid">
-            <label v-for="d in departments" :key="d.id" class="check">
-              <input v-model="userForm.deptIds" type="checkbox" :value="d.id" />
-              <span>{{ d.name }}</span>
-            </label>
+          <div v-if="userMode === 'create'" class="field field--full">
+            <span class="label">角色 <span class="req">*</span></span>
+            <div class="check-grid">
+              <label v-for="r in roles" :key="r.code" class="check">
+                <input v-model="userForm.roles" type="checkbox" :value="r.code" />
+                <span>{{ r.name }}</span>
+                <span class="mono muted">{{ r.code }}</span>
+              </label>
+            </div>
           </div>
         </div>
-        <div v-else class="field field--full">
-          <span class="hint">当前账号没有科室字典读取权限：创建时无法绑定科室，编辑时保持原有绑定不变。</span>
-        </div>
+        <template #footer>
+          <button class="btn" type="button" @click="userModalOpen = false">取消</button>
+          <button class="btn btn--primary" type="button" :disabled="busy || !userFormValid" @click="submitUser">
+            保存
+          </button>
+        </template>
+      </AppModal>
 
-        <div v-if="userMode === 'create'" class="field field--full">
-          <span class="label">角色 <span class="req">*</span></span>
+      <AppModal
+        v-model="roleModalOpen"
+        title="分配角色"
+        :subtitle="roleTarget ? `${roleTarget.displayName} · ${roleTarget.username}` : ''"
+        width="620px"
+      >
+        <div class="stack">
+          <div class="notice notice--warn">
+            角色是全量替换：取消某个角色会立即收回其权限点；临床角色必须保留科室绑定。
+          </div>
           <div class="check-grid">
             <label v-for="r in roles" :key="r.code" class="check">
-              <input v-model="userForm.roles" type="checkbox" :value="r.code" />
+              <input v-model="roleSelection" type="checkbox" :value="r.code" />
               <span>{{ r.name }}</span>
               <span class="mono muted">{{ r.code }}</span>
             </label>
           </div>
         </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" @click="userModalOpen = false">取消</button>
-        <button class="btn btn--primary" type="button" :disabled="busy || !userFormValid" @click="submitUser">
-          保存
-        </button>
-      </template>
-    </AppModal>
+        <template #footer>
+          <button class="btn" type="button" @click="roleModalOpen = false">取消</button>
+          <button
+            class="btn btn--primary"
+            type="button"
+            :disabled="busy || roleSelection.length === 0"
+            @click="submitRoles"
+          >
+            保存角色
+          </button>
+        </template>
+      </AppModal>
 
-    <AppModal
-      v-model="roleModalOpen"
-      title="分配角色"
-      :subtitle="roleTarget ? `${roleTarget.displayName} · ${roleTarget.username}` : ''"
-      width="620px"
-    >
-      <div class="stack">
-        <div class="notice notice--warn">
-          角色是全量替换：取消某个角色会立即收回其权限点；临床角色必须保留科室绑定。
-        </div>
-        <div class="check-grid">
-          <label v-for="r in roles" :key="r.code" class="check">
-            <input v-model="roleSelection" type="checkbox" :value="r.code" />
-            <span>{{ r.name }}</span>
-            <span class="mono muted">{{ r.code }}</span>
+      <AppModal
+        v-model="resetModalOpen"
+        title="重置密码"
+        :subtitle="resetTarget ? `${resetTarget.displayName} · ${resetTarget.username}` : ''"
+        width="520px"
+      >
+        <div class="stack">
+          <div class="notice notice--danger">
+            重置后旧密码立即失效；请通过安全渠道把新密码交给本人，并在首次登录后修改。
+          </div>
+          <label class="field">
+            <span class="label">新密码 <span class="req">*</span></span>
+            <input v-model="resetForm.password" class="input" type="password" maxlength="64" autocomplete="new-password" />
+            <span class="hint">至少 8 位，同时含字母与数字，且不能与用户名相同。</span>
+          </label>
+          <label class="field">
+            <span class="label">确认新密码 <span class="req">*</span></span>
+            <input v-model="resetForm.confirm" class="input" type="password" maxlength="64" autocomplete="new-password" />
           </label>
         </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" @click="roleModalOpen = false">取消</button>
-        <button
-          class="btn btn--primary"
-          type="button"
-          :disabled="busy || roleSelection.length === 0"
-          @click="submitRoles"
-        >
-          保存角色
-        </button>
-      </template>
-    </AppModal>
+        <template #footer>
+          <button class="btn" type="button" @click="resetModalOpen = false">取消</button>
+          <button
+            class="btn btn--danger"
+            type="button"
+            :disabled="busy || !resetValid"
+            @click="submitReset"
+          >
+            确认重置
+          </button>
+        </template>
+      </AppModal>
 
-    <AppModal
-      v-model="resetModalOpen"
-      title="重置密码"
-      :subtitle="resetTarget ? `${resetTarget.displayName} · ${resetTarget.username}` : ''"
-      width="520px"
-    >
-      <div class="stack">
-        <div class="notice notice--danger">
-          重置后旧密码立即失效；请通过安全渠道把新密码交给本人，并在首次登录后修改。
-        </div>
-        <label class="field">
-          <span class="label">新密码 <span class="req">*</span></span>
-          <input v-model="resetForm.password" class="input" type="password" maxlength="64" autocomplete="new-password" />
-          <span class="hint">至少 8 位，同时含字母与数字，且不能与用户名相同。</span>
-        </label>
-        <label class="field">
-          <span class="label">确认新密码 <span class="req">*</span></span>
-          <input v-model="resetForm.confirm" class="input" type="password" maxlength="64" autocomplete="new-password" />
-        </label>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" @click="resetModalOpen = false">取消</button>
-        <button
-          class="btn btn--danger"
-          type="button"
-          :disabled="busy || !resetValid"
-          @click="submitReset"
-        >
-          确认重置
-        </button>
-      </template>
-    </AppModal>
-
-    <AppModal
-      v-model="campusModalOpen"
-      :title="campusMode === 'create' ? '新建院区' : '编辑院区'"
-      :subtitle="campusMode === 'edit' ? editingCampus?.code : ''"
-      width="520px"
-    >
-      <div class="stack">
-        <label class="field">
-          <span class="label">院区编码 <span class="req">*</span></span>
-          <input v-model.trim="campusForm.code" class="input" maxlength="32" :disabled="campusMode === 'edit'" />
-          <span class="hint">字母/数字/下划线/短横线，2-32 位；创建后不可修改。</span>
-        </label>
-        <label class="field">
-          <span class="label">名称 <span class="req">*</span></span>
-          <input v-model.trim="campusForm.name" class="input" maxlength="64" />
-        </label>
-        <label class="field">
-          <span class="label">排序号</span>
-          <input v-model.number="campusForm.sortNo" class="input" type="number" min="0" max="9999" />
-          <span class="hint">越小越靠前，默认 100。</span>
-        </label>
-        <div v-if="campusMode === 'edit'" class="notice notice--warn">
-          停用后该院区不再接收新数据，历史数据仍按原院区可见；至少保留一个启用院区。
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" @click="campusModalOpen = false">取消</button>
-        <button class="btn btn--primary" type="button" :disabled="busy || !campusFormValid" @click="submitCampus">
-          保存
-        </button>
-      </template>
-    </AppModal>
-
-    <AppModal
-      v-model="campusAssignOpen"
-      title="分配院区"
-      :subtitle="campusTarget ? `${campusTarget.displayName} · ${campusTarget.username}` : ''"
-      width="560px"
-    >
-      <div class="stack">
-        <div class="notice notice--warn">
-          院区是全量替换且至少保留一个；保存后需重新登录才下发新的 campuses 声明。
-        </div>
-        <div v-if="campuses.length > 0" class="check-grid">
-          <label v-for="c in campuses" :key="c.id" class="check">
-            <input v-model="campusSelection" type="checkbox" :value="c.id" />
-            <span>{{ c.name }}</span>
-            <span class="mono muted">{{ c.code }}</span>
+      <AppModal
+        v-model="campusModalOpen"
+        :title="campusMode === 'create' ? '新建院区' : '编辑院区'"
+        :subtitle="campusMode === 'edit' ? editingCampus?.code : ''"
+        width="520px"
+      >
+        <div class="stack">
+          <label class="field">
+            <span class="label">院区编码 <span class="req">*</span></span>
+            <input v-model.trim="campusForm.code" class="input" maxlength="32" :disabled="campusMode === 'edit'" />
+            <span class="hint">字母/数字/下划线/短横线，2-32 位；创建后不可修改。</span>
           </label>
+          <label class="field">
+            <span class="label">名称 <span class="req">*</span></span>
+            <input v-model.trim="campusForm.name" class="input" maxlength="64" />
+          </label>
+          <label class="field">
+            <span class="label">排序号</span>
+            <input v-model.number="campusForm.sortNo" class="input" type="number" min="0" max="9999" />
+            <span class="hint">越小越靠前，默认 100。</span>
+          </label>
+          <div v-if="campusMode === 'edit'" class="notice notice--warn">
+            停用后该院区不再接收新数据，历史数据仍按原院区可见；至少保留一个启用院区。
+          </div>
         </div>
-        <div v-else class="hint">尚未加载院区字典，请确认当前账号具备 auth:campus:read 权限。</div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" @click="campusAssignOpen = false">取消</button>
-        <button
-          class="btn btn--primary"
-          type="button"
-          :disabled="busy || campusSelection.length === 0"
-          @click="submitCampuses"
-        >
-          保存院区
-        </button>
-      </template>
-    </AppModal>
+        <template #footer>
+          <button class="btn" type="button" @click="campusModalOpen = false">取消</button>
+          <button class="btn btn--primary" type="button" :disabled="busy || !campusFormValid" @click="submitCampus">
+            保存
+          </button>
+        </template>
+      </AppModal>
 
-    <AppModal
-      v-model="auditDetailOpen"
-      title="审计详情"
-      :subtitle="auditDetail ? `${auditDetail.action} · ${auditDetail.actor}` : ''"
-      width="720px"
-    >
-      <div v-if="auditDetail" class="stack">
-        <div class="detail-grid">
-          <div class="kv"><span>时间</span><strong>{{ dateTime(auditDetail.ts) }}</strong></div>
-          <div class="kv"><span>来源</span><strong>{{ auditDetail.source }}</strong></div>
-          <div class="kv"><span>操作人</span><strong>{{ auditDetail.actor }}</strong></div>
-          <div class="kv"><span>动作</span><strong class="mono">{{ auditDetail.action }}</strong></div>
-          <div class="kv"><span>对象类型</span><strong>{{ auditDetail.targetType || '—' }}</strong></div>
-          <div class="kv"><span>对象 ID</span><strong class="mono">{{ auditDetail.targetId || '—' }}</strong></div>
+      <AppModal
+        v-model="campusAssignOpen"
+        title="分配院区"
+        :subtitle="campusTarget ? `${campusTarget.displayName} · ${campusTarget.username}` : ''"
+        width="560px"
+      >
+        <div class="stack">
+          <div class="notice notice--warn">
+            院区是全量替换且至少保留一个；保存后需重新登录才下发新的 campuses 声明。
+          </div>
+          <div v-if="campuses.length > 0" class="check-grid">
+            <label v-for="c in campuses" :key="c.id" class="check">
+              <input v-model="campusSelection" type="checkbox" :value="c.id" />
+              <span>{{ c.name }}</span>
+              <span class="mono muted">{{ c.code }}</span>
+            </label>
+          </div>
+          <div v-else class="hint">尚未加载院区字典，请确认当前账号具备 auth:campus:read 权限。</div>
         </div>
-        <div class="detail-block">
-          <span class="muted">原始明细</span>
-          <pre class="detail-pre">{{ prettyDetail(auditDetail.detail) }}</pre>
+        <template #footer>
+          <button class="btn" type="button" @click="campusAssignOpen = false">取消</button>
+          <button
+            class="btn btn--primary"
+            type="button"
+            :disabled="busy || campusSelection.length === 0"
+            @click="submitCampuses"
+          >
+            保存院区
+          </button>
+        </template>
+      </AppModal>
+
+      <AppModal
+        v-model="auditDetailOpen"
+        title="审计详情"
+        :subtitle="auditDetail ? `${auditDetail.action} · ${auditDetail.actor}` : ''"
+        width="720px"
+      >
+        <div v-if="auditDetail" class="stack">
+          <div class="detail-grid">
+            <div class="kv"><span>时间</span><strong>{{ dateTime(auditDetail.ts) }}</strong></div>
+            <div class="kv"><span>来源</span><strong>{{ auditDetail.source }}</strong></div>
+            <div class="kv"><span>操作人</span><strong>{{ auditDetail.actor }}</strong></div>
+            <div class="kv"><span>动作</span><strong class="mono">{{ auditDetail.action }}</strong></div>
+            <div class="kv"><span>对象类型</span><strong>{{ auditDetail.targetType || '—' }}</strong></div>
+            <div class="kv"><span>对象 ID</span><strong class="mono">{{ auditDetail.targetId || '—' }}</strong></div>
+          </div>
+          <div class="detail-block">
+            <span class="muted">原始明细</span>
+            <pre class="detail-pre">{{ prettyDetail(auditDetail.detail) }}</pre>
+          </div>
         </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" @click="auditDetailOpen = false">关闭</button>
-      </template>
-    </AppModal>
+        <template #footer>
+          <button class="btn" type="button" @click="auditDetailOpen = false">关闭</button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -611,10 +614,11 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { clinicalApi, systemApi } from '@/api'
-import { errorText } from '@/api/http'
+import { errorText, isForbidden } from '@/api/http'
 import type { AuditEvent, Campus, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -635,6 +639,7 @@ const tab = ref<Tab>(
   canReadUsers.value ? 'users' : canReadCampus.value ? 'campus' : 'audit',
 )
 const busy = ref(false)
+const forbidden = ref(false)
 
 const roles = ref<RoleRef[]>([])
 const orgs = ref<OrgRef[]>([])
@@ -661,6 +666,7 @@ const disabledCount = computed(() => users.value.filter((u) => u.status === 'DIS
 async function loadUsers() {
   if (!canReadUsers.value) return
   usersLoading.value = true
+  forbidden.value = false
   try {
     const page = await systemApi.users({
       orgCode: userOrg.value || undefined,
@@ -672,6 +678,13 @@ async function loadUsers() {
     usersTotal.value = page.total
     usersError.value = ''
   } catch (e) {
+    if (isForbidden(e)) {
+      forbidden.value = true
+      users.value = []
+      usersTotal.value = 0
+      usersError.value = ''
+      return
+    }
     toast.error('账号列表加载失败', errorText(e))
     users.value = []
     usersTotal.value = 0
@@ -903,10 +916,17 @@ const disabledCampusCount = computed(() => campuses.value.filter((c) => c.status
 async function loadCampuses() {
   if (!canReadCampus.value) return
   campusLoading.value = true
+  forbidden.value = false
   try {
     campuses.value = await systemApi.campuses()
     campusError.value = ''
   } catch (e) {
+    if (isForbidden(e)) {
+      forbidden.value = true
+      campuses.value = []
+      campusError.value = ''
+      return
+    }
     toast.error('院区列表加载失败', errorText(e))
     campuses.value = []
     campusError.value = errorText(e)
@@ -1058,6 +1078,7 @@ function toIso(local: string): string | undefined {
 async function loadAudit() {
   if (!canReadAudit.value) return
   auditLoading.value = true
+  forbidden.value = false
   try {
     const page = await systemApi.auditEvents({
       actor: auditForm.actor || undefined,
@@ -1072,6 +1093,13 @@ async function loadAudit() {
     auditTotal.value = page.total
     auditError.value = ''
   } catch (e) {
+    if (isForbidden(e)) {
+      forbidden.value = true
+      auditRows.value = []
+      auditTotal.value = 0
+      auditError.value = ''
+      return
+    }
     toast.error('审计日志加载失败', errorText(e))
     auditRows.value = []
     auditTotal.value = 0

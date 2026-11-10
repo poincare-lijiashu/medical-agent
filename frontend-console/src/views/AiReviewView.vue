@@ -37,102 +37,211 @@
       />
     </div>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="reloadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="reloadAll" />
 
-    <div class="seg" role="tablist" :aria-label="t('aiReview.tabs')">
-      <button
-        v-for="tb in tabs"
-        :key="tb.key"
-        class="seg-btn"
-        :class="{ active: tab === tb.key }"
-        type="button"
-        role="tab"
-        :aria-selected="tab === tb.key"
-        @click="switchTab(tb.key)"
-      >
-        {{ tb.label }}
-        <span v-if="tb.count !== undefined" class="seg-count">{{ tb.count }}</span>
-      </button>
-    </div>
-
-    <!-- ============ 待处理 / 我的待确认 ============ -->
-    <template v-if="tab === 'pending'">
-      <!-- 开药待审（admin / pharmacist）：服务端分页 + 关键字检索 -->
-      <div v-if="canRx" class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiReview.rx.title') }}</span>
-          <span class="badge badge--neutral">{{ rxTotal }}</span>
-          <span class="spacer" />
-          <label class="field">
-            <span class="label">{{ t('aiReview.search') }}</span>
-            <input
-              v-model="rxKeyword"
-              class="input"
-              type="search"
-              spellcheck="false"
-              data-testid="review-rx-search"
-              :placeholder="t('aiReview.rx.search')"
-            />
-          </label>
-        </div>
-
-        <TableSkeleton v-if="rxLoading && rxRows.length === 0" :rows="3" />
-        <EmptyState
-          v-else-if="rxRows.length === 0"
-          :title="t('aiReview.rx.empty.title')"
-          :desc="t('aiReview.rx.empty.desc')"
-        />
-        <div v-else class="rx-list">
-          <article v-for="p in rxRows" :key="p.id" class="rx-card">
-            <div class="rx-head">
-              <span class="mono is-strong">{{ p.id }}</span>
-              <span v-if="p.forced_high_risk" class="badge badge--danger">{{ t('aiReview.rx.forced') }}</span>
-              <span v-if="p.out_of_dict" class="badge badge--danger">{{ t('aiReview.rx.outOfDict') }}</span>
-              <span class="muted">
-                {{ t('aiReview.rx.meta', { doctor: p.doctor || '—', dept: p.dept || '—', time: dateTime(p.created_at) }) }}
-              </span>
-              <span class="spacer" />
-              <button class="btn btn--sm btn--primary" type="button" @click="openRxModal(p, 'approve')">
-                <AppIcon name="check" :size="13" /> {{ t('aiReview.action.approve') }}
-              </button>
-              <button class="btn btn--sm" type="button" @click="openRxModal(p, 'reject')">
-                <AppIcon name="x" :size="13" /> {{ t('aiReview.action.reject') }}
-              </button>
-            </div>
-            <p class="rx-case">{{ p.case_text || t('aiReview.rx.noCase') }}</p>
-            <ul class="rx-drugs">
-              <li v-for="(d, i) in p.drugs || []" :key="i">
-                <span :class="['rx-drug-name', { 'is-ood': d.out_of_dict }]">{{ d.name }}</span>
-                <span v-if="d.out_of_dict" class="badge badge--danger">{{ t('aiReview.rx.drugOutOfDict') }}</span>
-                <span class="muted">
-                  {{ d.dose || t('aiReview.rx.doseTbd') }} · {{ d.freq || t('aiReview.rx.freqTbd') }}
-                  <template v-if="d.note"> · {{ t('aiReview.rx.drugNote', { note: d.note }) }}</template>
-                </span>
-              </li>
-            </ul>
-            <p v-if="p.contraindication_reason || p.forced_high_risk" class="rx-reason">
-              {{ t('aiReview.rx.reason', { reason: p.contraindication_reason || t('aiReview.rx.reasonEmpty') }) }}
-            </p>
-          </article>
-        </div>
-        <div v-if="rxTotal > PER" class="pager">
-          <button class="btn btn--sm" type="button" :disabled="rxPage === 0" @click="rxGo(-1)">
-            {{ t('aiReview.action.prev') }}
-          </button>
-          <span class="pager-info">
-            {{ t('aiReview.pager', { page: rxPage + 1, pages: Math.max(1, Math.ceil(rxTotal / PER)), total: rxTotal }) }}
-          </span>
-          <button class="btn btn--sm" type="button" :disabled="rxPage >= Math.ceil(rxTotal / PER) - 1" @click="rxGo(1)">
-            {{ t('aiReview.action.next') }}
-          </button>
-        </div>
+      <div class="seg" role="tablist" :aria-label="t('aiReview.tabs')">
+        <button
+          v-for="tb in tabs"
+          :key="tb.key"
+          class="seg-btn"
+          :class="{ active: tab === tb.key }"
+          type="button"
+          role="tab"
+          :aria-selected="tab === tb.key"
+          @click="switchTab(tb.key)"
+        >
+          {{ tb.label }}
+          <span v-if="tb.count !== undefined" class="seg-count">{{ tb.count }}</span>
+        </button>
       </div>
 
-      <!-- 高危待核对 / 我的待确认 -->
-      <div class="sheet">
+      <!-- ============ 待处理 / 我的待确认 ============ -->
+      <template v-if="tab === 'pending'">
+        <!-- 开药待审（admin / pharmacist）：服务端分页 + 关键字检索 -->
+        <div v-if="canRx" class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiReview.rx.title') }}</span>
+            <span class="badge badge--neutral">{{ rxTotal }}</span>
+            <span class="spacer" />
+            <label class="field">
+              <span class="label">{{ t('aiReview.search') }}</span>
+              <input
+                v-model="rxKeyword"
+                class="input"
+                type="search"
+                spellcheck="false"
+                data-testid="review-rx-search"
+                :placeholder="t('aiReview.rx.search')"
+              />
+            </label>
+          </div>
+
+          <TableSkeleton v-if="rxLoading && rxRows.length === 0" :rows="3" />
+          <EmptyState
+            v-else-if="rxRows.length === 0"
+            :title="t('aiReview.rx.empty.title')"
+            :desc="t('aiReview.rx.empty.desc')"
+          />
+          <div v-else class="rx-list">
+            <article v-for="p in rxRows" :key="p.id" class="rx-card">
+              <div class="rx-head">
+                <span class="mono is-strong">{{ p.id }}</span>
+                <span v-if="p.forced_high_risk" class="badge badge--danger">{{ t('aiReview.rx.forced') }}</span>
+                <span v-if="p.out_of_dict" class="badge badge--danger">{{ t('aiReview.rx.outOfDict') }}</span>
+                <span class="muted">
+                  {{ t('aiReview.rx.meta', { doctor: p.doctor || '—', dept: p.dept || '—', time: dateTime(p.created_at) }) }}
+                </span>
+                <span class="spacer" />
+                <button class="btn btn--sm btn--primary" type="button" @click="openRxModal(p, 'approve')">
+                  <AppIcon name="check" :size="13" /> {{ t('aiReview.action.approve') }}
+                </button>
+                <button class="btn btn--sm" type="button" @click="openRxModal(p, 'reject')">
+                  <AppIcon name="x" :size="13" /> {{ t('aiReview.action.reject') }}
+                </button>
+              </div>
+              <p class="rx-case">{{ p.case_text || t('aiReview.rx.noCase') }}</p>
+              <ul class="rx-drugs">
+                <li v-for="(d, i) in p.drugs || []" :key="i">
+                  <span :class="['rx-drug-name', { 'is-ood': d.out_of_dict }]">{{ d.name }}</span>
+                  <span v-if="d.out_of_dict" class="badge badge--danger">{{ t('aiReview.rx.drugOutOfDict') }}</span>
+                  <span class="muted">
+                    {{ d.dose || t('aiReview.rx.doseTbd') }} · {{ d.freq || t('aiReview.rx.freqTbd') }}
+                    <template v-if="d.note"> · {{ t('aiReview.rx.drugNote', { note: d.note }) }}</template>
+                  </span>
+                </li>
+              </ul>
+              <p v-if="p.contraindication_reason || p.forced_high_risk" class="rx-reason">
+                {{ t('aiReview.rx.reason', { reason: p.contraindication_reason || t('aiReview.rx.reasonEmpty') }) }}
+              </p>
+            </article>
+          </div>
+          <div v-if="rxTotal > PER" class="pager">
+            <button class="btn btn--sm" type="button" :disabled="rxPage === 0" @click="rxGo(-1)">
+              {{ t('aiReview.action.prev') }}
+            </button>
+            <span class="pager-info">
+              {{ t('aiReview.pager', { page: rxPage + 1, pages: Math.max(1, Math.ceil(rxTotal / PER)), total: rxTotal }) }}
+            </span>
+            <button class="btn btn--sm" type="button" :disabled="rxPage >= Math.ceil(rxTotal / PER) - 1" @click="rxGo(1)">
+              {{ t('aiReview.action.next') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 高危待核对 / 我的待确认 -->
+        <div class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ pendingTitle }}</span>
+            <span class="badge badge--neutral">{{ pendCount }}</span>
+            <span class="spacer" />
+            <label class="field">
+              <span class="label">{{ t('aiReview.search') }}</span>
+              <input
+                v-model="keyword"
+                class="input"
+                type="search"
+                spellcheck="false"
+                data-testid="review-search"
+                :placeholder="t('aiReview.searchPlaceholder')"
+              />
+            </label>
+          </div>
+
+          <TableSkeleton v-if="loading && pendView.length === 0" :rows="5" />
+          <EmptyState
+            v-else-if="pendView.length === 0"
+            :title="keyword.trim() ? t('aiReview.empty.search.title') : isPh ? t('aiReview.empty.ph.title') : isMine ? t('aiReview.empty.mine.title') : t('aiReview.empty.pending.title')"
+            :desc="keyword.trim() ? t('aiReview.empty.search.desc') : isPh ? t('aiReview.empty.ph.desc') : isMine ? t('aiReview.empty.mine.desc') : t('aiReview.empty.pending.desc')"
+          />
+          <div v-else class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>{{ t('aiReview.col.item') }}</th>
+                  <th class="is-num">{{ t('aiReview.col.confidence') }}</th>
+                  <th>{{ t('aiReview.col.risk') }}</th>
+                  <th>{{ t('aiReview.col.submitter') }}</th>
+                  <th class="col-action">{{ t('aiReview.col.action') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in pendView" :key="row.id">
+                  <td data-primary>
+                    <button class="link-btn" type="button" @click="openDetail(row, 'pending')">
+                      {{ row.agent || '—' }}：{{ preview(row.question) }}
+                    </button>
+                    <p v-if="row.answerPreview !== undefined" class="preview">
+                      {{ row.answerPreview || t('aiReview.item.noPreview') }}
+                    </p>
+                    <p v-else-if="row.answer" class="preview">{{ preview(row.answer) }}</p>
+                    <p v-if="row.imageCount || imagesOf(row).length" class="muted small">
+                      {{ t('aiReview.item.images', { n: row.imageCount ?? imagesOf(row).length }) }}
+                    </p>
+                  </td>
+                  <td class="is-num">{{ (row.confidence ?? 0).toFixed(2) }}</td>
+                  <td><span class="badge badge--warn">{{ row.risk_reason || t('aiReview.risk.high') }}</span></td>
+                  <td>
+                    {{ row.submitted_by || '—' }}
+                    <div class="muted small">{{ dateTime(row.ts) }}</div>
+                  </td>
+                  <td class="col-action">
+                    <template v-if="isMine">
+                      <span v-if="needsSelfConfirm(row)" class="badge badge--accent">{{ t('aiReview.item.selfConfirmPending') }}</span>
+                      <div class="row-actions">
+                        <button v-if="needsSelfConfirm(row)" class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="selfConfirm(row.id)">
+                          {{ t('aiReview.action.selfConfirm') }}
+                        </button>
+                        <button class="btn btn--sm" type="button" @click="openDetail(row, 'pending')">
+                          {{ t('aiReview.action.detail') }}
+                        </button>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <span v-if="row.submitted_by === me" class="muted small">{{ t('aiReview.doubleControl.self') }}</span>
+                      <div v-else-if="canSignItem(row)" class="row-actions">
+                        <button class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="askResolve(row.id, 'approved')">
+                          {{ t('aiReview.action.approve') }}
+                        </button>
+                        <button class="btn btn--sm" type="button" :disabled="busy" @click="askResolve(row.id, 'rejected')">
+                          {{ t('aiReview.action.reject') }}
+                        </button>
+                        <button class="btn btn--sm" type="button" @click="openDetail(row, 'pending')">
+                          {{ t('aiReview.action.detail') }}
+                        </button>
+                      </div>
+                      <div v-else class="row-actions">
+                        <span class="muted small">{{ signDeniedHint(row) }}</span>
+                        <button class="btn btn--sm" type="button" @click="openDetail(row, 'pending')">
+                          {{ t('aiReview.action.detail') }}
+                        </button>
+                      </div>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="pendPages > 1" class="pager">
+            <button class="btn btn--sm" type="button" :disabled="pendPage === 0" @click="pendPage -= 1">
+              {{ t('aiReview.action.prev') }}
+            </button>
+            <span class="pager-info">
+              {{ t('aiReview.pager', { page: Math.min(pendPage, pendPages - 1) + 1, pages: pendPages, total: pendCount }) }}
+            </span>
+            <button class="btn btn--sm" type="button" :disabled="pendPage >= pendPages - 1" @click="pendPage += 1">
+              {{ t('aiReview.action.next') }}
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ============ 历史记录 / 我的历史 ============ -->
+      <div v-if="tab === 'history'" class="sheet">
         <div class="sheet-head">
-          <span class="sheet-title">{{ pendingTitle }}</span>
-          <span class="badge badge--neutral">{{ pendCount }}</span>
+          <span class="sheet-title">{{ isMine ? t('aiReview.tab.myHistory') : t('aiReview.tab.history') }}</span>
+          <span class="badge badge--neutral">{{ histCount }}</span>
           <span class="spacer" />
           <label class="field">
             <span class="label">{{ t('aiReview.search') }}</span>
@@ -141,17 +250,17 @@
               class="input"
               type="search"
               spellcheck="false"
-              data-testid="review-search"
+              data-testid="review-history-search"
               :placeholder="t('aiReview.searchPlaceholder')"
             />
           </label>
         </div>
 
-        <TableSkeleton v-if="loading && pendView.length === 0" :rows="5" />
+        <TableSkeleton v-if="loading && histCount === 0" :rows="5" />
         <EmptyState
-          v-else-if="pendView.length === 0"
-          :title="keyword.trim() ? t('aiReview.empty.search.title') : isPh ? t('aiReview.empty.ph.title') : isMine ? t('aiReview.empty.mine.title') : t('aiReview.empty.pending.title')"
-          :desc="keyword.trim() ? t('aiReview.empty.search.desc') : isPh ? t('aiReview.empty.ph.desc') : isMine ? t('aiReview.empty.mine.desc') : t('aiReview.empty.pending.desc')"
+          v-else-if="histCount === 0"
+          :title="keyword.trim() ? t('aiReview.empty.search.title') : t('aiReview.empty.history.title')"
+          :desc="keyword.trim() ? t('aiReview.empty.search.desc') : t('aiReview.empty.history.desc')"
         />
         <div v-else class="table-wrap">
           <table class="table table--stack">
@@ -161,388 +270,147 @@
                 <th class="is-num">{{ t('aiReview.col.confidence') }}</th>
                 <th>{{ t('aiReview.col.risk') }}</th>
                 <th>{{ t('aiReview.col.submitter') }}</th>
-                <th class="col-action">{{ t('aiReview.col.action') }}</th>
+                <th>{{ t('aiReview.col.result') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in pendView" :key="row.id">
+              <!-- 药师：处方审核轨（与待核对同源的处方数据，状态/意见/时间取自处方字段） -->
+              <tr v-for="p in histRxRows" :key="'rx-' + p.id">
                 <td data-primary>
-                  <button class="link-btn" type="button" @click="openDetail(row, 'pending')">
-                    {{ row.agent || '—' }}：{{ preview(row.question) }}
-                  </button>
-                  <p v-if="row.answerPreview !== undefined" class="preview">
-                    {{ row.answerPreview || t('aiReview.item.noPreview') }}
-                  </p>
-                  <p v-else-if="row.answer" class="preview">{{ preview(row.answer) }}</p>
-                  <p v-if="row.imageCount || imagesOf(row).length" class="muted small">
-                    {{ t('aiReview.item.images', { n: row.imageCount ?? imagesOf(row).length }) }}
+                  <div class="is-strong">{{ t('aiReview.history.rxItem', { id: p.id }) }}</div>
+                  <p class="preview">{{ preview(p.case_text) }}</p>
+                  <p class="muted small">
+                    {{ (p.drugs || []).map((d) => d.name).join('、') || t('aiReview.rx.noDrugs') }}
                   </p>
                 </td>
-                <td class="is-num">{{ (row.confidence ?? 0).toFixed(2) }}</td>
-                <td><span class="badge badge--warn">{{ row.risk_reason || t('aiReview.risk.high') }}</span></td>
+                <td class="is-num">—</td>
                 <td>
-                  {{ row.submitted_by || '—' }}
-                  <div class="muted small">{{ dateTime(row.ts) }}</div>
+                  <span class="badge" :class="p.forced_high_risk ? 'badge--danger' : 'badge--neutral'">
+                    {{ p.forced_high_risk ? t('aiReview.rx.forced') : t('aiReview.history.rxReview') }}
+                  </span>
                 </td>
-                <td class="col-action">
-                  <template v-if="isMine">
-                    <span v-if="needsSelfConfirm(row)" class="badge badge--accent">{{ t('aiReview.item.selfConfirmPending') }}</span>
-                    <div class="row-actions">
-                      <button v-if="needsSelfConfirm(row)" class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="selfConfirm(row.id)">
-                        {{ t('aiReview.action.selfConfirm') }}
-                      </button>
-                      <button class="btn btn--sm" type="button" @click="openDetail(row, 'pending')">
-                        {{ t('aiReview.action.detail') }}
-                      </button>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <span v-if="row.submitted_by === me" class="muted small">{{ t('aiReview.doubleControl.self') }}</span>
-                    <div v-else-if="canSignItem(row)" class="row-actions">
-                      <button class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="askResolve(row.id, 'approved')">
-                        {{ t('aiReview.action.approve') }}
-                      </button>
-                      <button class="btn btn--sm" type="button" :disabled="busy" @click="askResolve(row.id, 'rejected')">
-                        {{ t('aiReview.action.reject') }}
-                      </button>
-                      <button class="btn btn--sm" type="button" @click="openDetail(row, 'pending')">
-                        {{ t('aiReview.action.detail') }}
-                      </button>
-                    </div>
-                    <div v-else class="row-actions">
-                      <span class="muted small">{{ signDeniedHint(row) }}</span>
-                      <button class="btn btn--sm" type="button" @click="openDetail(row, 'pending')">
-                        {{ t('aiReview.action.detail') }}
-                      </button>
-                    </div>
-                  </template>
+                <td>
+                  {{ p.doctor || '—' }}
+                  <div class="muted small">{{ dateTime(p.created_at) }}</div>
+                </td>
+                <td>
+                  <StatusPill :value="p.status === 'approved' ? 'APPROVED' : 'REJECTED'" :label="p.status === 'approved' ? t('aiReview.history.rxApproved') : t('aiReview.history.rejected')" />
+                  <div class="muted small">
+                    {{ p.pharm_reviewer || '—' }}
+                    <template v-if="p.pharm_reviewed_at"> · {{ dateTime(p.pharm_reviewed_at) }}</template>
+                    <template v-if="p.pharm_opinion"> · {{ p.pharm_opinion }}</template>
+                  </div>
+                </td>
+              </tr>
+
+              <!-- 复核队列历史 -->
+              <tr v-for="p in histReviewRows" :key="p.id">
+                <td data-primary>
+                  <button class="link-btn" type="button" @click="openDetail(p, 'history')">
+                    {{ p.agent || '—' }}：{{ preview(p.question) }}
+                  </button>
+                  <p v-if="p.answerPreview !== undefined" class="preview">
+                    {{ p.answerPreview || t('aiReview.item.noPreview') }}
+                  </p>
+                  <p v-else-if="p.answer" class="preview">{{ preview(p.answer) }}</p>
+                  <p v-if="p.imageCount || imagesOf(p).length" class="muted small">
+                    {{ t('aiReview.item.images', { n: p.imageCount ?? imagesOf(p).length }) }}
+                  </p>
+                </td>
+                <td class="is-num">{{ (p.confidence ?? 0).toFixed(2) }}</td>
+                <td><span class="badge badge--warn">{{ p.risk_reason || t('aiReview.risk.high') }}</span></td>
+                <td>
+                  {{ p.submitted_by || '—' }}
+                  <div class="muted small">{{ dateTime(p.ts) }}</div>
+                </td>
+                <td>
+                  <StatusPill
+                    :value="p.status === 'approved' ? 'APPROVED' : 'REJECTED'"
+                    :label="p.status === 'approved' ? (isAuto(p) ? t('aiReview.history.autoSigned') : t('aiReview.history.approved')) : t('aiReview.history.rejected')"
+                  />
+                  <div class="muted small">
+                    {{ p.reviewed_by || '—' }}
+                    <template v-if="p.resolved_at"> · {{ dateTime(p.resolved_at) }}</template>
+                    <template v-if="p.review_note"> · {{ p.review_note }}</template>
+                  </div>
+                  <div class="row-actions">
+                    <button v-if="canReopen(p)" class="btn btn--sm" type="button" :disabled="busy" @click="reopen(p.id)">
+                      {{ t('aiReview.action.reopen') }}
+                    </button>
+                    <button class="btn btn--sm" type="button" @click="openDetail(p, 'history')">
+                      {{ t('aiReview.action.detail') }}
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div v-if="pendPages > 1" class="pager">
-          <button class="btn btn--sm" type="button" :disabled="pendPage === 0" @click="pendPage -= 1">
+        <div v-if="histPages > 1" class="pager">
+          <button class="btn btn--sm" type="button" :disabled="histPage === 0" @click="histPage -= 1">
             {{ t('aiReview.action.prev') }}
           </button>
           <span class="pager-info">
-            {{ t('aiReview.pager', { page: Math.min(pendPage, pendPages - 1) + 1, pages: pendPages, total: pendCount }) }}
+            {{ t('aiReview.pager', { page: Math.min(histPage, histPages - 1) + 1, pages: histPages, total: histCount }) }}
           </span>
-          <button class="btn btn--sm" type="button" :disabled="pendPage >= pendPages - 1" @click="pendPage += 1">
+          <button class="btn btn--sm" type="button" :disabled="histPage >= histPages - 1" @click="histPage += 1">
             {{ t('aiReview.action.next') }}
           </button>
         </div>
       </div>
-    </template>
 
-    <!-- ============ 历史记录 / 我的历史 ============ -->
-    <div v-if="tab === 'history'" class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ isMine ? t('aiReview.tab.myHistory') : t('aiReview.tab.history') }}</span>
-        <span class="badge badge--neutral">{{ histCount }}</span>
-        <span class="spacer" />
-        <label class="field">
-          <span class="label">{{ t('aiReview.search') }}</span>
-          <input
-            v-model="keyword"
-            class="input"
-            type="search"
-            spellcheck="false"
-            data-testid="review-history-search"
-            :placeholder="t('aiReview.searchPlaceholder')"
-          />
-        </label>
-      </div>
-
-      <TableSkeleton v-if="loading && histCount === 0" :rows="5" />
-      <EmptyState
-        v-else-if="histCount === 0"
-        :title="keyword.trim() ? t('aiReview.empty.search.title') : t('aiReview.empty.history.title')"
-        :desc="keyword.trim() ? t('aiReview.empty.search.desc') : t('aiReview.empty.history.desc')"
-      />
-      <div v-else class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiReview.col.item') }}</th>
-              <th class="is-num">{{ t('aiReview.col.confidence') }}</th>
-              <th>{{ t('aiReview.col.risk') }}</th>
-              <th>{{ t('aiReview.col.submitter') }}</th>
-              <th>{{ t('aiReview.col.result') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <!-- 药师：处方审核轨（与待核对同源的处方数据，状态/意见/时间取自处方字段） -->
-            <tr v-for="p in histRxRows" :key="'rx-' + p.id">
-              <td data-primary>
-                <div class="is-strong">{{ t('aiReview.history.rxItem', { id: p.id }) }}</div>
-                <p class="preview">{{ preview(p.case_text) }}</p>
-                <p class="muted small">
-                  {{ (p.drugs || []).map((d) => d.name).join('、') || t('aiReview.rx.noDrugs') }}
-                </p>
-              </td>
-              <td class="is-num">—</td>
-              <td>
-                <span class="badge" :class="p.forced_high_risk ? 'badge--danger' : 'badge--neutral'">
-                  {{ p.forced_high_risk ? t('aiReview.rx.forced') : t('aiReview.history.rxReview') }}
-                </span>
-              </td>
-              <td>
-                {{ p.doctor || '—' }}
-                <div class="muted small">{{ dateTime(p.created_at) }}</div>
-              </td>
-              <td>
-                <StatusPill :value="p.status === 'approved' ? 'APPROVED' : 'REJECTED'" :label="p.status === 'approved' ? t('aiReview.history.rxApproved') : t('aiReview.history.rejected')" />
-                <div class="muted small">
-                  {{ p.pharm_reviewer || '—' }}
-                  <template v-if="p.pharm_reviewed_at"> · {{ dateTime(p.pharm_reviewed_at) }}</template>
-                  <template v-if="p.pharm_opinion"> · {{ p.pharm_opinion }}</template>
-                </div>
-              </td>
-            </tr>
-
-            <!-- 复核队列历史 -->
-            <tr v-for="p in histReviewRows" :key="p.id">
-              <td data-primary>
-                <button class="link-btn" type="button" @click="openDetail(p, 'history')">
-                  {{ p.agent || '—' }}：{{ preview(p.question) }}
-                </button>
-                <p v-if="p.answerPreview !== undefined" class="preview">
-                  {{ p.answerPreview || t('aiReview.item.noPreview') }}
-                </p>
-                <p v-else-if="p.answer" class="preview">{{ preview(p.answer) }}</p>
-                <p v-if="p.imageCount || imagesOf(p).length" class="muted small">
-                  {{ t('aiReview.item.images', { n: p.imageCount ?? imagesOf(p).length }) }}
-                </p>
-              </td>
-              <td class="is-num">{{ (p.confidence ?? 0).toFixed(2) }}</td>
-              <td><span class="badge badge--warn">{{ p.risk_reason || t('aiReview.risk.high') }}</span></td>
-              <td>
-                {{ p.submitted_by || '—' }}
-                <div class="muted small">{{ dateTime(p.ts) }}</div>
-              </td>
-              <td>
-                <StatusPill
-                  :value="p.status === 'approved' ? 'APPROVED' : 'REJECTED'"
-                  :label="p.status === 'approved' ? (isAuto(p) ? t('aiReview.history.autoSigned') : t('aiReview.history.approved')) : t('aiReview.history.rejected')"
-                />
-                <div class="muted small">
-                  {{ p.reviewed_by || '—' }}
-                  <template v-if="p.resolved_at"> · {{ dateTime(p.resolved_at) }}</template>
-                  <template v-if="p.review_note"> · {{ p.review_note }}</template>
-                </div>
-                <div class="row-actions">
-                  <button v-if="canReopen(p)" class="btn btn--sm" type="button" :disabled="busy" @click="reopen(p.id)">
-                    {{ t('aiReview.action.reopen') }}
-                  </button>
-                  <button class="btn btn--sm" type="button" @click="openDetail(p, 'history')">
-                    {{ t('aiReview.action.detail') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-if="histPages > 1" class="pager">
-        <button class="btn btn--sm" type="button" :disabled="histPage === 0" @click="histPage -= 1">
-          {{ t('aiReview.action.prev') }}
-        </button>
-        <span class="pager-info">
-          {{ t('aiReview.pager', { page: Math.min(histPage, histPages - 1) + 1, pages: histPages, total: histCount }) }}
-        </span>
-        <button class="btn btn--sm" type="button" :disabled="histPage >= histPages - 1" @click="histPage += 1">
-          {{ t('aiReview.action.next') }}
-        </button>
-      </div>
-    </div>
-
-    <!-- ============ 会诊协助收件箱（doctor / pharmacist） ============ -->
-    <div v-if="tab === 'consults'" class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiReview.consult.title') }}</span>
-        <span class="badge badge--neutral">{{ consultTotal }}</span>
-        <span class="spacer" />
-        <label class="field">
-          <span class="label">{{ t('aiReview.search') }}</span>
-          <input
-            v-model="consultKeyword"
-            class="input"
-            type="search"
-            spellcheck="false"
-            data-testid="review-consult-search"
-            :placeholder="t('aiReview.consult.search')"
-          />
-        </label>
-      </div>
-
-      <LoadError v-if="consultErr" :message="consultErr" :retrying="consultLoading" @retry="loadConsults()" />
-      <TableSkeleton v-else-if="consultLoading && consultRows.length === 0" :rows="3" />
-      <EmptyState
-        v-else-if="consultRows.length === 0"
-        :title="t('aiReview.empty.consults.title')"
-        :desc="consultKeyword.trim() ? t('aiReview.empty.search.desc') : t('aiReview.consult.emptyDesc', { dept: consultDept || t('aiReview.consult.noDept') })"
-      />
-      <div v-else class="card-list">
-        <article v-for="c in consultRows" :key="c.id" class="block-card">
-          <div class="rx-head">
-            <span class="is-strong">{{ t('aiReview.consult.cardTitle') }}</span>
-            <span class="badge badge--warn">{{ t('aiReview.consult.active') }}</span>
-            <span class="muted">
-              {{ t('aiReview.consult.meta', { initiator: c.initiator || '—', dept: c.initiator_dept || '—', time: dateTime(c.created_at) }) }}
-            </span>
-          </div>
-          <div class="tag-row">
-            <span class="muted">{{ t('aiReview.consult.targets') }}</span>
-            <span v-for="(d, i) in c.target_depts || []" :key="i" class="badge badge--neutral">{{ d }}</span>
-          </div>
-          <h4 class="block-title">{{ t('aiReview.consult.summary') }}</h4>
-          <p class="case-text">{{ splitConsult(c.question).caseText || t('aiReview.consult.emptyCase') }}</p>
-          <template v-if="splitConsult(c.question).draft">
-            <h4 class="block-title">{{ t('aiReview.consult.draft') }}</h4>
-            <div class="md-body" v-html="md(splitConsult(c.question).draft)" />
-          </template>
-          <template v-if="c.ai_analysis">
-            <h4 class="block-title">{{ t('aiReview.consult.aiByDept') }}</h4>
-            <div class="md-body" v-html="md(c.ai_analysis)" />
-          </template>
-          <div v-if="consultThumbs(c).length" class="thumb-row">
-            <img
-              v-for="(u, i) in consultThumbs(c)"
-              :key="i"
-              class="thumb"
-              :src="u"
-              :alt="t('aiReview.detail.images')"
-              role="button"
-              tabindex="0"
-              @click="showImage(u)"
-              @keydown.enter.prevent="showImage(u)"
-            />
-          </div>
-          <div v-if="consultMine(c)" class="consult-done">{{ t('aiReview.consult.opinion.done') }}</div>
-          <div v-else class="consult-form">
-            <textarea
-              v-model="opDrafts[c.id]"
-              class="textarea"
-              rows="2"
-              :aria-label="t('aiReview.consult.opinion.aria', { id: c.id })"
-              :placeholder="t('aiReview.consult.opinion.placeholder')"
-            />
-            <button class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="submitOpinion(c)">
-              {{ t('aiReview.action.submitOpinion') }}
-            </button>
-          </div>
-        </article>
-      </div>
-    </div>
-
-    <!-- ============ 我发起的会诊（发起者视角：跟踪 / 结束汇总） ============ -->
-    <ConsultInitiatedPanel v-if="tab === 'mine-consults'" />
-
-    <!-- ============ 病例库（qc / admin，质控通过自动归档） ============ -->
-    <div v-if="tab === 'cases'" class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiReview.case.title') }}</span>
-        <span class="badge badge--ok">{{ t('aiReview.case.statActive', { n: caseStats.active ?? 0 }) }}</span>
-        <span class="badge badge--neutral">{{ t('aiReview.case.statRemoved', { n: caseStats.removed ?? 0 }) }}</span>
-        <span class="spacer" />
-        <label class="field">
-          <span class="label">{{ t('aiReview.case.filter.dept') }}</span>
-          <select v-model="caseDept" class="select" @change="loadCase()">
-            <option value="">{{ t('aiReview.case.filter.allDept') }}</option>
-            <option v-for="d in caseDepts" :key="d" :value="d">{{ d }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiReview.case.filter.status') }}</span>
-          <select v-model="caseStatus" class="select" @change="loadCase()">
-            <option value="">{{ t('aiReview.case.filter.allStatus') }}</option>
-            <option value="active">{{ t('aiReview.case.status.active') }}</option>
-            <option value="removed">{{ t('aiReview.case.status.removed') }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiReview.case.filter.from') }}</span>
-          <input v-model="caseFrom" class="input" type="date" @change="loadCase()" />
-        </label>
-        <label class="field">
-          <span class="label">{{ t('aiReview.case.filter.to') }}</span>
-          <input v-model="caseTo" class="input" type="date" @change="loadCase()" />
-        </label>
-      </div>
-
-      <TableSkeleton v-if="caseLoading && caseRows.length === 0" :rows="4" />
-      <LoadError v-else-if="caseErr" :message="caseErr" :retrying="caseLoading" @retry="loadCase()" />
-      <EmptyState
-        v-else-if="caseRows.length === 0"
-        :title="t('aiReview.empty.cases.title')"
-        :desc="t('aiReview.empty.cases.desc')"
-      />
-      <div v-else class="card-list">
-        <article v-for="c in caseRows" :key="c.id" class="block-card">
-          <div class="rx-head">
-            <span class="mono is-strong">{{ c.id }}</span>
-            <span class="badge" :class="c.status === 'active' ? 'badge--ok' : 'badge--neutral'">
-              {{ c.status === 'active' ? t('aiReview.case.status.active') : t('aiReview.case.status.removed') }}
-            </span>
-            <span class="badge badge--neutral">{{ c.dept || t('aiReview.case.noDept') }}</span>
-            <span class="muted">
-              {{ t('aiReview.case.meta', { patient: c.patient_ref || '—', time: dateTime(c.archived_at), reviewer: c.reviewed_by || '—' }) }}
-            </span>
-            <span class="spacer" />
-            <button v-if="c.status === 'active'" class="btn btn--sm btn--danger" type="button" @click="openCaseRemove(c.id)">
-              <AppIcon name="trash" :size="13" /> {{ t('aiReview.action.remove') }}
-            </button>
-          </div>
-          <p class="case-text">{{ c.qc_conclusion || t('aiReview.case.noConclusion') }}</p>
-          <p class="muted small">{{ t('aiReview.case.confidence', { v: c.qc_confidence ?? '—' }) }}</p>
-          <details class="case-details">
-            <summary>{{ t('aiReview.case.record') }}</summary>
-            <pre class="record-pre">{{ JSON.stringify(c.record || {}, null, 2) }}</pre>
-            <p v-if="c.labs && Object.keys(c.labs).length" class="muted small">
-              {{ t('aiReview.case.labs', { list: labLine(c.labs) }) }}
-            </p>
-          </details>
-          <p v-if="c.status !== 'active'" class="muted small">
-            {{ t('aiReview.case.removedBy', { who: c.removed_by || '—', reason: c.removed_reason || '—' }) }}
-          </p>
-        </article>
-      </div>
-    </div>
-
-    <!-- ============ 核对详情 ============ -->
-    <AppModal
-      v-model="detailOpen"
-      :title="detail ? t('aiReview.detail.title', { agent: detail.agent || '—' }) : t('aiReview.detail.titlePlain')"
-      width="760px"
-    >
-      <div v-if="detail" class="detail">
-        <div class="detail-bar">
-          <span class="badge" :class="`badge--${confMeta(detail.confidence).tone}`">
-            {{ t('aiReview.detail.confidence', { label: confMeta(detail.confidence).label, value: (detail.confidence ?? 0).toFixed(2) }) }}
-          </span>
-          <span class="badge badge--warn">{{ detail.risk_reason || t('aiReview.risk.high') }}</span>
-          <span v-if="isAuto(detail)" class="badge badge--accent">{{ t('aiReview.detail.autoSigned') }}</span>
-          <span v-if="detail.confirmed_by_self" class="badge badge--ok">{{ t('aiReview.detail.selfConfirmed') }}</span>
+      <!-- ============ 会诊协助收件箱（doctor / pharmacist） ============ -->
+      <div v-if="tab === 'consults'" class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiReview.consult.title') }}</span>
+          <span class="badge badge--neutral">{{ consultTotal }}</span>
           <span class="spacer" />
-          <span class="mono muted">{{ detail.id }}</span>
+          <label class="field">
+            <span class="label">{{ t('aiReview.search') }}</span>
+            <input
+              v-model="consultKeyword"
+              class="input"
+              type="search"
+              spellcheck="false"
+              data-testid="review-consult-search"
+              :placeholder="t('aiReview.consult.search')"
+            />
+          </label>
         </div>
 
-        <TableSkeleton v-if="detailLoading" :rows="5" />
-        <template v-else>
-          <section>
-            <h4 class="block-title">{{ t('aiReview.detail.question') }}</h4>
-            <div class="md-body" v-html="md(detail.question)" />
-          </section>
-          <section>
-            <h4 class="block-title">{{ t('aiReview.detail.answer') }}</h4>
-            <div class="md-body" v-html="md(detail.answer || t('aiReview.detail.noAnswer'))" />
-          </section>
-          <section v-if="imagesOf(detail).length">
-            <h4 class="block-title">{{ t('aiReview.detail.images') }}</h4>
-            <div class="thumb-row">
+        <LoadError v-if="consultErr" :message="consultErr" :retrying="consultLoading" @retry="loadConsults()" />
+        <TableSkeleton v-else-if="consultLoading && consultRows.length === 0" :rows="3" />
+        <EmptyState
+          v-else-if="consultRows.length === 0"
+          :title="t('aiReview.empty.consults.title')"
+          :desc="consultKeyword.trim() ? t('aiReview.empty.search.desc') : t('aiReview.consult.emptyDesc', { dept: consultDept || t('aiReview.consult.noDept') })"
+        />
+        <div v-else class="card-list">
+          <article v-for="c in consultRows" :key="c.id" class="block-card">
+            <div class="rx-head">
+              <span class="is-strong">{{ t('aiReview.consult.cardTitle') }}</span>
+              <span class="badge badge--warn">{{ t('aiReview.consult.active') }}</span>
+              <span class="muted">
+                {{ t('aiReview.consult.meta', { initiator: c.initiator || '—', dept: c.initiator_dept || '—', time: dateTime(c.created_at) }) }}
+              </span>
+            </div>
+            <div class="tag-row">
+              <span class="muted">{{ t('aiReview.consult.targets') }}</span>
+              <span v-for="(d, i) in c.target_depts || []" :key="i" class="badge badge--neutral">{{ d }}</span>
+            </div>
+            <h4 class="block-title">{{ t('aiReview.consult.summary') }}</h4>
+            <p class="case-text">{{ splitConsult(c.question).caseText || t('aiReview.consult.emptyCase') }}</p>
+            <template v-if="splitConsult(c.question).draft">
+              <h4 class="block-title">{{ t('aiReview.consult.draft') }}</h4>
+              <div class="md-body" v-html="md(splitConsult(c.question).draft)" />
+            </template>
+            <template v-if="c.ai_analysis">
+              <h4 class="block-title">{{ t('aiReview.consult.aiByDept') }}</h4>
+              <div class="md-body" v-html="md(c.ai_analysis)" />
+            </template>
+            <div v-if="consultThumbs(c).length" class="thumb-row">
               <img
-                v-for="(u, i) in imagesOf(detail)"
+                v-for="(u, i) in consultThumbs(c)"
                 :key="i"
                 class="thumb"
                 :src="u"
@@ -553,142 +421,277 @@
                 @keydown.enter.prevent="showImage(u)"
               />
             </div>
-          </section>
-          <section>
-            <h4 class="block-title">{{ t('aiReview.detail.submitter') }}</h4>
-            <p>{{ detail.submitted_by || '—' }} · {{ dateTime(detail.ts) }}</p>
-          </section>
-          <section v-if="detail.reviewed_by && detail.status !== 'pending'">
-            <h4 class="block-title">{{ t('aiReview.detail.review') }}</h4>
-            <p>
-              {{ detail.reviewed_by }}
-              <template v-if="detail.resolved_at"> · {{ dateTime(detail.resolved_at) }}</template>
-              <template v-if="detail.review_note"> · {{ detail.review_note }}</template>
-            </p>
-          </section>
-        </template>
+            <div v-if="consultMine(c)" class="consult-done">{{ t('aiReview.consult.opinion.done') }}</div>
+            <div v-else class="consult-form">
+              <textarea
+                v-model="opDrafts[c.id]"
+                class="textarea"
+                rows="2"
+                :aria-label="t('aiReview.consult.opinion.aria', { id: c.id })"
+                :placeholder="t('aiReview.consult.opinion.placeholder')"
+              />
+              <button class="btn btn--sm btn--primary" type="button" :disabled="busy" @click="submitOpinion(c)">
+                {{ t('aiReview.action.submitOpinion') }}
+              </button>
+            </div>
+          </article>
+        </div>
       </div>
 
-      <template #footer>
-        <button
-          v-if="detail && needsSelfConfirm(detail)"
-          class="btn btn--primary"
-          type="button"
-          :disabled="busy"
-          @click="selfConfirm(detail.id)"
-        >
-          {{ t('aiReview.action.selfConfirm') }}
-        </button>
-        <template v-if="detail && detail.status === 'pending' && detail.submitted_by !== me && canSignItem(detail)">
-          <button class="btn btn--primary" type="button" :disabled="busy" @click="askResolve(detail.id, 'approved')">
-            {{ t('aiReview.action.approve') }}
+      <!-- ============ 我发起的会诊（发起者视角：跟踪 / 结束汇总） ============ -->
+      <ConsultInitiatedPanel v-if="tab === 'mine-consults'" />
+
+      <!-- ============ 病例库（qc / admin，质控通过自动归档） ============ -->
+      <div v-if="tab === 'cases'" class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiReview.case.title') }}</span>
+          <span class="badge badge--ok">{{ t('aiReview.case.statActive', { n: caseStats.active ?? 0 }) }}</span>
+          <span class="badge badge--neutral">{{ t('aiReview.case.statRemoved', { n: caseStats.removed ?? 0 }) }}</span>
+          <span class="spacer" />
+          <label class="field">
+            <span class="label">{{ t('aiReview.case.filter.dept') }}</span>
+            <select v-model="caseDept" class="select" @change="loadCase()">
+              <option value="">{{ t('aiReview.case.filter.allDept') }}</option>
+              <option v-for="d in caseDepts" :key="d" :value="d">{{ d }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiReview.case.filter.status') }}</span>
+            <select v-model="caseStatus" class="select" @change="loadCase()">
+              <option value="">{{ t('aiReview.case.filter.allStatus') }}</option>
+              <option value="active">{{ t('aiReview.case.status.active') }}</option>
+              <option value="removed">{{ t('aiReview.case.status.removed') }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiReview.case.filter.from') }}</span>
+            <input v-model="caseFrom" class="input" type="date" @change="loadCase()" />
+          </label>
+          <label class="field">
+            <span class="label">{{ t('aiReview.case.filter.to') }}</span>
+            <input v-model="caseTo" class="input" type="date" @change="loadCase()" />
+          </label>
+        </div>
+
+        <TableSkeleton v-if="caseLoading && caseRows.length === 0" :rows="4" />
+        <LoadError v-else-if="caseErr" :message="caseErr" :retrying="caseLoading" @retry="loadCase()" />
+        <EmptyState
+          v-else-if="caseRows.length === 0"
+          :title="t('aiReview.empty.cases.title')"
+          :desc="t('aiReview.empty.cases.desc')"
+        />
+        <div v-else class="card-list">
+          <article v-for="c in caseRows" :key="c.id" class="block-card">
+            <div class="rx-head">
+              <span class="mono is-strong">{{ c.id }}</span>
+              <span class="badge" :class="c.status === 'active' ? 'badge--ok' : 'badge--neutral'">
+                {{ c.status === 'active' ? t('aiReview.case.status.active') : t('aiReview.case.status.removed') }}
+              </span>
+              <span class="badge badge--neutral">{{ c.dept || t('aiReview.case.noDept') }}</span>
+              <span class="muted">
+                {{ t('aiReview.case.meta', { patient: c.patient_ref || '—', time: dateTime(c.archived_at), reviewer: c.reviewed_by || '—' }) }}
+              </span>
+              <span class="spacer" />
+              <button v-if="c.status === 'active'" class="btn btn--sm btn--danger" type="button" @click="openCaseRemove(c.id)">
+                <AppIcon name="trash" :size="13" /> {{ t('aiReview.action.remove') }}
+              </button>
+            </div>
+            <p class="case-text">{{ c.qc_conclusion || t('aiReview.case.noConclusion') }}</p>
+            <p class="muted small">{{ t('aiReview.case.confidence', { v: c.qc_confidence ?? '—' }) }}</p>
+            <details class="case-details">
+              <summary>{{ t('aiReview.case.record') }}</summary>
+              <pre class="record-pre">{{ JSON.stringify(c.record || {}, null, 2) }}</pre>
+              <p v-if="c.labs && Object.keys(c.labs).length" class="muted small">
+                {{ t('aiReview.case.labs', { list: labLine(c.labs) }) }}
+              </p>
+            </details>
+            <p v-if="c.status !== 'active'" class="muted small">
+              {{ t('aiReview.case.removedBy', { who: c.removed_by || '—', reason: c.removed_reason || '—' }) }}
+            </p>
+          </article>
+        </div>
+      </div>
+
+      <!-- ============ 核对详情 ============ -->
+      <AppModal
+        v-model="detailOpen"
+        :title="detail ? t('aiReview.detail.title', { agent: detail.agent || '—' }) : t('aiReview.detail.titlePlain')"
+        width="760px"
+      >
+        <div v-if="detail" class="detail">
+          <div class="detail-bar">
+            <span class="badge" :class="`badge--${confMeta(detail.confidence).tone}`">
+              {{ t('aiReview.detail.confidence', { label: confMeta(detail.confidence).label, value: (detail.confidence ?? 0).toFixed(2) }) }}
+            </span>
+            <span class="badge badge--warn">{{ detail.risk_reason || t('aiReview.risk.high') }}</span>
+            <span v-if="isAuto(detail)" class="badge badge--accent">{{ t('aiReview.detail.autoSigned') }}</span>
+            <span v-if="detail.confirmed_by_self" class="badge badge--ok">{{ t('aiReview.detail.selfConfirmed') }}</span>
+            <span class="spacer" />
+            <span class="mono muted">{{ detail.id }}</span>
+          </div>
+
+          <TableSkeleton v-if="detailLoading" :rows="5" />
+          <template v-else>
+            <section>
+              <h4 class="block-title">{{ t('aiReview.detail.question') }}</h4>
+              <div class="md-body" v-html="md(detail.question)" />
+            </section>
+            <section>
+              <h4 class="block-title">{{ t('aiReview.detail.answer') }}</h4>
+              <div class="md-body" v-html="md(detail.answer || t('aiReview.detail.noAnswer'))" />
+            </section>
+            <section v-if="imagesOf(detail).length">
+              <h4 class="block-title">{{ t('aiReview.detail.images') }}</h4>
+              <div class="thumb-row">
+                <img
+                  v-for="(u, i) in imagesOf(detail)"
+                  :key="i"
+                  class="thumb"
+                  :src="u"
+                  :alt="t('aiReview.detail.images')"
+                  role="button"
+                  tabindex="0"
+                  @click="showImage(u)"
+                  @keydown.enter.prevent="showImage(u)"
+                />
+              </div>
+            </section>
+            <section>
+              <h4 class="block-title">{{ t('aiReview.detail.submitter') }}</h4>
+              <p>{{ detail.submitted_by || '—' }} · {{ dateTime(detail.ts) }}</p>
+            </section>
+            <section v-if="detail.reviewed_by && detail.status !== 'pending'">
+              <h4 class="block-title">{{ t('aiReview.detail.review') }}</h4>
+              <p>
+                {{ detail.reviewed_by }}
+                <template v-if="detail.resolved_at"> · {{ dateTime(detail.resolved_at) }}</template>
+                <template v-if="detail.review_note"> · {{ detail.review_note }}</template>
+              </p>
+            </section>
+          </template>
+        </div>
+
+        <template #footer>
+          <button
+            v-if="detail && needsSelfConfirm(detail)"
+            class="btn btn--primary"
+            type="button"
+            :disabled="busy"
+            @click="selfConfirm(detail.id)"
+          >
+            {{ t('aiReview.action.selfConfirm') }}
           </button>
-          <button class="btn btn--danger" type="button" :disabled="busy" @click="askResolve(detail.id, 'rejected')">
-            {{ t('aiReview.action.reject') }}
+          <template v-if="detail && detail.status === 'pending' && detail.submitted_by !== me && canSignItem(detail)">
+            <button class="btn btn--primary" type="button" :disabled="busy" @click="askResolve(detail.id, 'approved')">
+              {{ t('aiReview.action.approve') }}
+            </button>
+            <button class="btn btn--danger" type="button" :disabled="busy" @click="askResolve(detail.id, 'rejected')">
+              {{ t('aiReview.action.reject') }}
+            </button>
+          </template>
+          <button v-if="detail && canReopen(detail)" class="btn" type="button" :disabled="busy" @click="reopen(detail.id)">
+            {{ t('aiReview.action.reopen') }}
+          </button>
+          <button class="btn" type="button" @click="detailOpen = false">{{ t('aiReview.action.close') }}</button>
+        </template>
+      </AppModal>
+
+      <!-- ============ 签发 / 驳回确认（备注写入审计留痕） ============ -->
+      <AppModal
+        v-model="signOpen"
+        :title="signDecision === 'approved' ? t('aiReview.sign.title.approve') : t('aiReview.sign.title.reject')"
+        width="460px"
+      >
+        <p class="modal-note">{{ t('aiReview.sign.sub') }}</p>
+        <label class="field block">
+          <span class="label">{{ t('aiReview.sign.note') }}</span>
+          <textarea v-model="signNote" class="textarea" rows="3" :placeholder="t('aiReview.sign.notePlaceholder')" />
+        </label>
+        <template #footer>
+          <button class="btn" type="button" :disabled="busy" @click="signOpen = false">{{ t('aiReview.action.cancel') }}</button>
+          <button
+            class="btn"
+            :class="signDecision === 'approved' ? 'btn--primary' : 'btn--danger'"
+            type="button"
+            :disabled="busy"
+            @click="confirmResolve"
+          >
+            {{ t('aiReview.action.confirm') }}
           </button>
         </template>
-        <button v-if="detail && canReopen(detail)" class="btn" type="button" :disabled="busy" @click="reopen(detail.id)">
-          {{ t('aiReview.action.reopen') }}
-        </button>
-        <button class="btn" type="button" @click="detailOpen = false">{{ t('aiReview.action.close') }}</button>
-      </template>
-    </AppModal>
+      </AppModal>
 
-    <!-- ============ 签发 / 驳回确认（备注写入审计留痕） ============ -->
-    <AppModal
-      v-model="signOpen"
-      :title="signDecision === 'approved' ? t('aiReview.sign.title.approve') : t('aiReview.sign.title.reject')"
-      width="460px"
-    >
-      <p class="modal-note">{{ t('aiReview.sign.sub') }}</p>
-      <label class="field block">
-        <span class="label">{{ t('aiReview.sign.note') }}</span>
-        <textarea v-model="signNote" class="textarea" rows="3" :placeholder="t('aiReview.sign.notePlaceholder')" />
-      </label>
-      <template #footer>
-        <button class="btn" type="button" :disabled="busy" @click="signOpen = false">{{ t('aiReview.action.cancel') }}</button>
-        <button
-          class="btn"
-          :class="signDecision === 'approved' ? 'btn--primary' : 'btn--danger'"
-          type="button"
-          :disabled="busy"
-          @click="confirmResolve"
-        >
-          {{ t('aiReview.action.confirm') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- ============ 处方审核（通过 / 驳回，驳回意见必填） ============ -->
+      <AppModal
+        v-model="rxModalOpen"
+        :title="rxModalMode === 'approve' ? t('aiReview.rx.modal.approveTitle') : t('aiReview.rx.modal.rejectTitle')"
+        width="480px"
+        :subtitle="rxTargetId"
+      >
+        <p class="modal-note">
+          {{ rxModalMode === 'approve' ? t('aiReview.rx.modal.approveSub') : t('aiReview.rx.modal.rejectSub') }}
+        </p>
+        <label class="field block">
+          <span class="label">
+            {{ rxModalMode === 'reject' ? t('aiReview.rx.modal.opinionRequired') : t('aiReview.rx.modal.opinionOptional') }}
+          </span>
+          <textarea v-model="rxOpinion" class="textarea" rows="3" :placeholder="t('aiReview.rx.modal.opinionPlaceholder')" />
+        </label>
+        <template #footer>
+          <button class="btn" type="button" :disabled="busy" @click="rxModalOpen = false">{{ t('aiReview.action.cancel') }}</button>
+          <button
+            class="btn"
+            :class="rxModalMode === 'approve' ? 'btn--primary' : 'btn--danger'"
+            type="button"
+            :disabled="busy"
+            @click="submitRx"
+          >
+            {{ t('aiReview.action.confirm') }}
+          </button>
+        </template>
+      </AppModal>
 
-    <!-- ============ 处方审核（通过 / 驳回，驳回意见必填） ============ -->
-    <AppModal
-      v-model="rxModalOpen"
-      :title="rxModalMode === 'approve' ? t('aiReview.rx.modal.approveTitle') : t('aiReview.rx.modal.rejectTitle')"
-      width="480px"
-      :subtitle="rxTargetId"
-    >
-      <p class="modal-note">
-        {{ rxModalMode === 'approve' ? t('aiReview.rx.modal.approveSub') : t('aiReview.rx.modal.rejectSub') }}
-      </p>
-      <label class="field block">
-        <span class="label">
-          {{ rxModalMode === 'reject' ? t('aiReview.rx.modal.opinionRequired') : t('aiReview.rx.modal.opinionOptional') }}
-        </span>
-        <textarea v-model="rxOpinion" class="textarea" rows="3" :placeholder="t('aiReview.rx.modal.opinionPlaceholder')" />
-      </label>
-      <template #footer>
-        <button class="btn" type="button" :disabled="busy" @click="rxModalOpen = false">{{ t('aiReview.action.cancel') }}</button>
-        <button
-          class="btn"
-          :class="rxModalMode === 'approve' ? 'btn--primary' : 'btn--danger'"
-          type="button"
-          :disabled="busy"
-          @click="submitRx"
-        >
-          {{ t('aiReview.action.confirm') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- ============ 移出病例库（原因必填，软删除留痕） ============ -->
+      <AppModal v-model="caseRemoveOpen" :title="t('aiReview.case.remove.title', { id: caseRemoveId })" width="460px">
+        <p class="modal-note">{{ t('aiReview.case.remove.hint') }}</p>
+        <label class="field block">
+          <span class="label">{{ t('aiReview.case.remove.reason') }}</span>
+          <textarea v-model="caseRemoveReason" class="textarea" rows="3" :placeholder="t('aiReview.case.remove.placeholder')" />
+        </label>
+        <template #footer>
+          <button class="btn" type="button" :disabled="busy" @click="caseRemoveOpen = false">{{ t('aiReview.action.cancel') }}</button>
+          <button class="btn btn--danger" type="button" :disabled="busy" @click="confirmCaseRemove">
+            {{ t('aiReview.action.confirm') }}
+          </button>
+        </template>
+      </AppModal>
 
-    <!-- ============ 移出病例库（原因必填，软删除留痕） ============ -->
-    <AppModal v-model="caseRemoveOpen" :title="t('aiReview.case.remove.title', { id: caseRemoveId })" width="460px">
-      <p class="modal-note">{{ t('aiReview.case.remove.hint') }}</p>
-      <label class="field block">
-        <span class="label">{{ t('aiReview.case.remove.reason') }}</span>
-        <textarea v-model="caseRemoveReason" class="textarea" rows="3" :placeholder="t('aiReview.case.remove.placeholder')" />
-      </label>
-      <template #footer>
-        <button class="btn" type="button" :disabled="busy" @click="caseRemoveOpen = false">{{ t('aiReview.action.cancel') }}</button>
-        <button class="btn btn--danger" type="button" :disabled="busy" @click="confirmCaseRemove">
-          {{ t('aiReview.action.confirm') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- ============ 清空待核对（admin；确认词双保险） ============ -->
+      <AppModal v-model="purgeOpen" :title="t('aiReview.purge.title')" width="480px">
+        <p class="modal-note">{{ t('aiReview.purge.sub', { n: purgeN }) }}</p>
+        <p class="modal-note">{{ t('aiReview.purge.wordHint') }} <code class="purge-word">{{ PURGE_WORD }}</code></p>
+        <label class="field block">
+          <span class="label">{{ t('aiReview.purge.word') }}</span>
+          <input v-model="purgeWord" class="input" type="text" autocomplete="off" spellcheck="false" :placeholder="PURGE_WORD" />
+        </label>
+        <template #footer>
+          <button class="btn" type="button" :disabled="busy" @click="purgeOpen = false">{{ t('aiReview.action.cancel') }}</button>
+          <button
+            class="btn btn--danger"
+            type="button"
+            :disabled="busy || purgeWord.trim() !== PURGE_WORD"
+            @click="confirmPurge"
+          >
+            {{ t('aiReview.action.confirm') }}
+          </button>
+        </template>
+      </AppModal>
 
-    <!-- ============ 清空待核对（admin；确认词双保险） ============ -->
-    <AppModal v-model="purgeOpen" :title="t('aiReview.purge.title')" width="480px">
-      <p class="modal-note">{{ t('aiReview.purge.sub', { n: purgeN }) }}</p>
-      <p class="modal-note">{{ t('aiReview.purge.wordHint') }} <code class="purge-word">{{ PURGE_WORD }}</code></p>
-      <label class="field block">
-        <span class="label">{{ t('aiReview.purge.word') }}</span>
-        <input v-model="purgeWord" class="input" type="text" autocomplete="off" spellcheck="false" :placeholder="PURGE_WORD" />
-      </label>
-      <template #footer>
-        <button class="btn" type="button" :disabled="busy" @click="purgeOpen = false">{{ t('aiReview.action.cancel') }}</button>
-        <button
-          class="btn btn--danger"
-          type="button"
-          :disabled="busy || purgeWord.trim() !== PURGE_WORD"
-          @click="confirmPurge"
-        >
-          {{ t('aiReview.action.confirm') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- ============ 影像查看（仅 data:image/ 白名单） ============ -->
-    <AppModal v-model="imageOpen" :title="t('aiReview.image.title')" width="640px">
-      <img v-if="imageSrc" class="image-full" :src="imageSrc" :alt="t('aiReview.detail.images')" />
-    </AppModal>
+      <!-- ============ 影像查看（仅 data:image/ 白名单） ============ -->
+      <AppModal v-model="imageOpen" :title="t('aiReview.image.title')" width="640px">
+        <img v-if="imageSrc" class="image-full" :src="imageSrc" :alt="t('aiReview.detail.images')" />
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -701,6 +704,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import ConsultInitiatedPanel from '@/components/domain/ai/ConsultInitiatedPanel.vue'
@@ -725,7 +729,7 @@ import {
   type AiPrescription,
   type AiReviewItem,
 } from '@/api/ai'
-import { errorText } from '@/api/http'
+import { errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -805,6 +809,7 @@ watch(
 const loading = ref(false)
 const busy = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 const me = ref('')
 const keyword = ref('')
 let loadSeq = 0
@@ -999,7 +1004,12 @@ async function loadConsults(seq = loadSeq) {
     if (!kw) consultPending.value = Number(res.pendingForMe ?? 0)
   } catch (e) {
     if (seq !== loadSeq) return
-    consultErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      consultErr.value = ''
+    } else {
+      consultErr.value = errorText(e)
+    }
   } finally {
     if (seq === loadSeq) consultLoading.value = false
   }
@@ -1027,7 +1037,12 @@ async function loadCase(seq = loadSeq) {
     }
   } catch (e) {
     if (seq !== loadSeq) return
-    caseErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      caseErr.value = ''
+    } else {
+      caseErr.value = errorText(e)
+    }
   } finally {
     if (seq === loadSeq) caseLoading.value = false
   }
@@ -1037,6 +1052,7 @@ async function reloadAll() {
   const seq = ++loadSeq
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   try {
     if (isMine.value) {
       const mine = await aiMyPendingConfirm()
@@ -1063,7 +1079,12 @@ async function reloadAll() {
     }
   } catch (e) {
     if (seq !== loadSeq) return
-    loadErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      loadErr.value = ''
+    } else {
+      loadErr.value = errorText(e)
+    }
   } finally {
     if (seq === loadSeq) loading.value = false
   }

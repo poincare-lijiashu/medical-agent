@@ -15,306 +15,309 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiTeams.kpi.total')" :value="teams.length" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.totalMeta')" />
-      <KpiCard :label="t('aiTeams.kpi.active')" :value="countStatus('ACTIVE')" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.activeMeta')" />
-      <KpiCard :label="t('aiTeams.kpi.disabled')" :value="countStatus('DISABLED')" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.disabledMeta')" />
-      <KpiCard :label="t('aiTeams.kpi.pending')" :value="pendingCount" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.pendingMeta')" />
-      <KpiCard :label="t('aiTeams.kpi.bots')" :value="coveredBots" :unit="t('aiTeams.unit.bot')" :meta="t('aiTeams.kpi.botsMeta')" />
-    </div>
-
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiTeams.list.title') }}</span>
-        <span class="hint">{{ t('aiTeams.list.hint') }}</span>
-        <span class="spacer" />
-        <select v-model="statusFilter" class="select filter" :aria-label="t('aiTeams.filter.status')">
-          <option value="">{{ t('aiTeams.filter.status') }}</option>
-          <option value="ACTIVE">{{ t('aiTeams.status.ACTIVE') }}</option>
-          <option value="DISABLED">{{ t('aiTeams.status.DISABLED') }}</option>
-        </select>
-        <input
-          v-model="query"
-          class="input search"
-          type="search"
-          :placeholder="t('aiTeams.filter.search')"
-          :aria-label="t('aiTeams.filter.search')"
-        />
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiTeams.kpi.total')" :value="teams.length" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.totalMeta')" />
+        <KpiCard :label="t('aiTeams.kpi.active')" :value="countStatus('ACTIVE')" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.activeMeta')" />
+        <KpiCard :label="t('aiTeams.kpi.disabled')" :value="countStatus('DISABLED')" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.disabledMeta')" />
+        <KpiCard :label="t('aiTeams.kpi.pending')" :value="pendingCount" :unit="t('aiTeams.unit.team')" :meta="t('aiTeams.kpi.pendingMeta')" />
+        <KpiCard :label="t('aiTeams.kpi.bots')" :value="coveredBots" :unit="t('aiTeams.unit.bot')" :meta="t('aiTeams.kpi.botsMeta')" />
       </div>
 
-      <TableSkeleton v-if="loading && !teams.length" :rows="4" />
-      <div v-else-if="visibleTeams.length" class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiTeams.col.team') }}</th>
-              <th>{{ t('aiTeams.col.members') }}</th>
-              <th>{{ t('aiTeams.col.status') }}</th>
-              <th>{{ t('aiTeams.col.pending') }}</th>
-              <th>{{ t('aiTeams.col.updated') }}</th>
-              <th>{{ t('aiTeams.col.action') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="tm in visibleTeams" :key="tm.code">
-              <td data-primary>
-                <span class="is-strong">{{ tm.name || tm.code }}</span>
-                <span class="sub mono">{{ tm.code }}</span>
-                <span v-if="tm.description" class="sub">{{ tm.description }}</span>
-              </td>
-              <td data-label="members">
-                <span class="row row-wrap">
-                  <span v-for="code in tm.botCodes || []" :key="code" class="chip">
-                    {{ botName(code) }}
-                    <span class="mono muted">{{ code }}</span>
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiTeams.list.title') }}</span>
+          <span class="hint">{{ t('aiTeams.list.hint') }}</span>
+          <span class="spacer" />
+          <select v-model="statusFilter" class="select filter" :aria-label="t('aiTeams.filter.status')">
+            <option value="">{{ t('aiTeams.filter.status') }}</option>
+            <option value="ACTIVE">{{ t('aiTeams.status.ACTIVE') }}</option>
+            <option value="DISABLED">{{ t('aiTeams.status.DISABLED') }}</option>
+          </select>
+          <input
+            v-model="query"
+            class="input search"
+            type="search"
+            :placeholder="t('aiTeams.filter.search')"
+            :aria-label="t('aiTeams.filter.search')"
+          />
+        </div>
+
+        <TableSkeleton v-if="loading && !teams.length" :rows="4" />
+        <div v-else-if="visibleTeams.length" class="table-wrap">
+          <table class="table table--stack">
+            <thead>
+              <tr>
+                <th>{{ t('aiTeams.col.team') }}</th>
+                <th>{{ t('aiTeams.col.members') }}</th>
+                <th>{{ t('aiTeams.col.status') }}</th>
+                <th>{{ t('aiTeams.col.pending') }}</th>
+                <th>{{ t('aiTeams.col.updated') }}</th>
+                <th>{{ t('aiTeams.col.action') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="tm in visibleTeams" :key="tm.code">
+                <td data-primary>
+                  <span class="is-strong">{{ tm.name || tm.code }}</span>
+                  <span class="sub mono">{{ tm.code }}</span>
+                  <span v-if="tm.description" class="sub">{{ tm.description }}</span>
+                </td>
+                <td data-label="members">
+                  <span class="row row-wrap">
+                    <span v-for="code in tm.botCodes || []" :key="code" class="chip">
+                      {{ botName(code) }}
+                      <span class="mono muted">{{ code }}</span>
+                    </span>
                   </span>
-                </span>
-              </td>
-              <td data-label="status">
-                <span class="badge" :class="tm.status === 'ACTIVE' ? 'badge--ok' : 'badge--neutral'">
-                  {{ statusText(tm.status) }}
-                </span>
-              </td>
-              <td data-label="pending">
-                <span v-if="tm.pendingChanges" class="badge badge--warn">{{ t('aiTeams.pending.badge') }}</span>
-                <span v-else class="hint">{{ t('aiTeams.pending.none') }}</span>
-                <span v-if="tm.pendingChanges" class="sub">{{ t('aiTeams.pending.by', { user: tm.submittedBy || '—' }) }}</span>
-              </td>
-              <td data-label="updated"><span class="mono muted">{{ shortTime(tm.updatedAt) }}</span></td>
-              <td data-label="action" class="ops-col">
-                <div class="row-actions">
-                  <button v-if="canEdit(tm)" class="btn btn--sm" type="button" @click="openEdit(tm)">
-                    {{ t('aiTeams.action.edit') }}
-                  </button>
-                  <button v-if="canReview(tm)" class="btn btn--sm btn--primary" type="button" @click="openReview(tm)">
-                    {{ t('aiTeams.action.review') }}
-                  </button>
-                  <button v-if="tm.status === 'ACTIVE'" class="btn btn--sm" type="button" @click="openCollaborate(tm)">
-                    {{ t('aiTeams.action.collaborate') }}
-                  </button>
-                  <button v-if="canDisable(tm)" class="btn btn--sm" type="button" @click="askConfirm(tm, 'disable')">
-                    {{ t('aiTeams.action.disable') }}
-                  </button>
-                  <button v-if="canEnable(tm)" class="btn btn--sm" type="button" @click="askConfirm(tm, 'enable')">
-                    {{ t('aiTeams.action.enable') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="sheet-body">
-        <EmptyState :title="t('aiTeams.filter.empty')" :desc="t('aiTeams.filter.emptyDesc')">
-          <button v-if="isAdmin" class="btn btn--sm" type="button" @click="openCreate">
-            {{ t('aiTeams.create') }}
-          </button>
-        </EmptyState>
-      </div>
-    </section>
+                </td>
+                <td data-label="status">
+                  <span class="badge" :class="tm.status === 'ACTIVE' ? 'badge--ok' : 'badge--neutral'">
+                    {{ statusText(tm.status) }}
+                  </span>
+                </td>
+                <td data-label="pending">
+                  <span v-if="tm.pendingChanges" class="badge badge--warn">{{ t('aiTeams.pending.badge') }}</span>
+                  <span v-else class="hint">{{ t('aiTeams.pending.none') }}</span>
+                  <span v-if="tm.pendingChanges" class="sub">{{ t('aiTeams.pending.by', { user: tm.submittedBy || '—' }) }}</span>
+                </td>
+                <td data-label="updated"><span class="mono muted">{{ shortTime(tm.updatedAt) }}</span></td>
+                <td data-label="action" class="ops-col">
+                  <div class="row-actions">
+                    <button v-if="canEdit(tm)" class="btn btn--sm" type="button" @click="openEdit(tm)">
+                      {{ t('aiTeams.action.edit') }}
+                    </button>
+                    <button v-if="canReview(tm)" class="btn btn--sm btn--primary" type="button" @click="openReview(tm)">
+                      {{ t('aiTeams.action.review') }}
+                    </button>
+                    <button v-if="tm.status === 'ACTIVE'" class="btn btn--sm" type="button" @click="openCollaborate(tm)">
+                      {{ t('aiTeams.action.collaborate') }}
+                    </button>
+                    <button v-if="canDisable(tm)" class="btn btn--sm" type="button" @click="askConfirm(tm, 'disable')">
+                      {{ t('aiTeams.action.disable') }}
+                    </button>
+                    <button v-if="canEnable(tm)" class="btn btn--sm" type="button" @click="askConfirm(tm, 'enable')">
+                      {{ t('aiTeams.action.enable') }}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="sheet-body">
+          <EmptyState :title="t('aiTeams.filter.empty')" :desc="t('aiTeams.filter.emptyDesc')">
+            <button v-if="isAdmin" class="btn btn--sm" type="button" @click="openCreate">
+              {{ t('aiTeams.create') }}
+            </button>
+          </EmptyState>
+        </div>
+      </section>
 
-    <!-- 新建 / 编辑 -->
-    <AppModal
-      v-model="editorOpen"
-      :title="editing ? t('aiTeams.edit.title', { code: editing.code }) : t('aiTeams.create.title')"
-      width="760px"
-      :dismissible="!saving"
-    >
-      <div class="stack">
-        <div class="form-grid">
-          <label class="field">
-            <span class="label">{{ t('aiTeams.form.code') }} <span class="req">*</span></span>
-            <input v-model="form.code" class="input mono" type="text" spellcheck="false" :disabled="!!editing" :placeholder="t('aiTeams.form.codeHint')" />
-            <span class="hint">{{ t('aiTeams.form.codeHint') }}</span>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiTeams.form.name') }} <span class="req">*</span></span>
-            <input v-model="form.name" class="input" type="text" maxlength="80" />
-          </label>
-          <label class="field span-2">
-            <span class="label">{{ t('aiTeams.form.description') }}</span>
-            <textarea v-model="form.description" class="textarea" rows="2" maxlength="300" />
-            <span class="hint">{{ t('aiTeams.form.descriptionHint') }}</span>
-          </label>
-          <div class="field span-2">
-            <span class="label">{{ t('aiTeams.form.members') }} <span class="req">*</span></span>
-            <div v-if="publishedBots.length" class="picks">
-              <label v-for="b in publishedBots" :key="b.code" class="check">
-                <input
-                  type="checkbox"
-                  :checked="form.botCodes.includes(b.code)"
-                  :disabled="!form.botCodes.includes(b.code) && form.botCodes.length >= MAX_BOTS"
-                  @change="toggleBot(b.code, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ b.name || b.code }}</span>
-                <span class="mono muted">{{ b.code }}</span>
-              </label>
+      <!-- 新建 / 编辑 -->
+      <AppModal
+        v-model="editorOpen"
+        :title="editing ? t('aiTeams.edit.title', { code: editing.code }) : t('aiTeams.create.title')"
+        width="760px"
+        :dismissible="!saving"
+      >
+        <div class="stack">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">{{ t('aiTeams.form.code') }} <span class="req">*</span></span>
+              <input v-model="form.code" class="input mono" type="text" spellcheck="false" :disabled="!!editing" :placeholder="t('aiTeams.form.codeHint')" />
+              <span class="hint">{{ t('aiTeams.form.codeHint') }}</span>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiTeams.form.name') }} <span class="req">*</span></span>
+              <input v-model="form.name" class="input" type="text" maxlength="80" />
+            </label>
+            <label class="field span-2">
+              <span class="label">{{ t('aiTeams.form.description') }}</span>
+              <textarea v-model="form.description" class="textarea" rows="2" maxlength="300" />
+              <span class="hint">{{ t('aiTeams.form.descriptionHint') }}</span>
+            </label>
+            <div class="field span-2">
+              <span class="label">{{ t('aiTeams.form.members') }} <span class="req">*</span></span>
+              <div v-if="publishedBots.length" class="picks">
+                <label v-for="b in publishedBots" :key="b.code" class="check">
+                  <input
+                    type="checkbox"
+                    :checked="form.botCodes.includes(b.code)"
+                    :disabled="!form.botCodes.includes(b.code) && form.botCodes.length >= MAX_BOTS"
+                    @change="toggleBot(b.code, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ b.name || b.code }}</span>
+                  <span class="mono muted">{{ b.code }}</span>
+                </label>
+              </div>
+              <p v-else class="hint">{{ t('aiTeams.form.membersNone') }}</p>
+              <span class="hint">{{ t('aiTeams.form.membersHint', { min: MIN_BOTS, max: MAX_BOTS }) }}</span>
             </div>
-            <p v-else class="hint">{{ t('aiTeams.form.membersNone') }}</p>
-            <span class="hint">{{ t('aiTeams.form.membersHint', { min: MIN_BOTS, max: MAX_BOTS }) }}</span>
           </div>
-        </div>
 
-        <div v-if="editing" class="notice notice--warn">
-          <AppIcon name="info" :size="15" />
-          <span>{{ t('aiTeams.form.pendingNote') }}</span>
-        </div>
-        <div v-if="formErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ formErr }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="saving" @click="editorOpen = false">
-          {{ t('aiTeams.action.cancel') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="saving" @click="saveTeam">
-          {{ saving ? t('aiTeams.form.saving') : (editing ? t('aiTeams.form.submitChange') : t('aiTeams.form.save')) }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 审核编制变更 -->
-    <AppModal v-model="reviewOpen" :title="t('aiTeams.review.title', { code: reviewTarget?.code || '' })" width="720px" :dismissible="!reviewBusy">
-      <div v-if="reviewTarget" class="stack">
-        <p class="hint">{{ t('aiTeams.review.hint') }}</p>
-        <div class="diff">
-          <div class="diff-head">
-            <span>{{ t('aiTeams.review.field') }}</span>
-            <span>{{ t('aiTeams.review.current') }}</span>
-            <span />
-            <span>{{ t('aiTeams.review.pending') }}</span>
+          <div v-if="editing" class="notice notice--warn">
+            <AppIcon name="info" :size="15" />
+            <span>{{ t('aiTeams.form.pendingNote') }}</span>
           </div>
-          <div class="diff-row">
-            <span class="diff-k">{{ t('aiTeams.form.name') }}</span>
-            <span class="diff-v">{{ reviewTarget.name || '—' }}</span>
-            <span class="diff-arrow">→</span>
-            <span class="diff-v">{{ reviewTarget.pendingChanges?.name || '—' }}</span>
-          </div>
-          <div class="diff-row">
-            <span class="diff-k">{{ t('aiTeams.form.description') }}</span>
-            <span class="diff-v">{{ reviewTarget.description || '—' }}</span>
-            <span class="diff-arrow">→</span>
-            <span class="diff-v">{{ reviewTarget.pendingChanges?.description || '—' }}</span>
-          </div>
-          <div class="diff-row">
-            <span class="diff-k">{{ t('aiTeams.form.members') }}</span>
-            <span class="diff-v">{{ memberNames(reviewTarget.botCodes) }}</span>
-            <span class="diff-arrow">→</span>
-            <span class="diff-v">{{ memberNames(reviewTarget.pendingChanges?.botCodes) }}</span>
+          <div v-if="formErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ formErr }}</span>
           </div>
         </div>
-        <label class="field">
-          <span class="label">{{ t('aiTeams.review.note') }}</span>
-          <textarea v-model="reviewNote" class="textarea" rows="3" maxlength="1000" />
-        </label>
-        <div v-if="reviewErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ reviewErr }}</span>
-        </div>
-      </div>
-      <template #footer>
-        <button class="btn" type="button" :disabled="reviewBusy" @click="reviewOpen = false">
-          {{ t('aiTeams.action.cancel') }}
-        </button>
-        <button class="btn btn--danger" type="button" :disabled="reviewBusy" @click="confirmReview(false)">
-          {{ reviewBusy ? t('aiTeams.confirm.busy') : t('aiTeams.review.reject') }}
-        </button>
-        <button class="btn btn--primary" type="button" :disabled="reviewBusy" @click="confirmReview(true)">
-          {{ reviewBusy ? t('aiTeams.confirm.busy') : t('aiTeams.review.approve') }}
-        </button>
-      </template>
-    </AppModal>
-
-    <!-- 协作试跑 -->
-    <AppModal v-model="collabOpen" :title="t('aiTeams.collab.title', { code: collabTarget?.code || '' })" width="900px" :dismissible="!collabBusy">
-      <div class="stack">
-        <p class="hint">{{ t('aiTeams.collab.hint') }}</p>
-        <textarea
-          v-model="collabQuestion"
-          class="textarea"
-          rows="3"
-          maxlength="2000"
-          :placeholder="t('aiTeams.collab.placeholder')"
-        />
-        <div class="row row-wrap">
-          <button class="btn btn--primary" type="button" :disabled="collabBusy" @click="runCollaborate">
-            <AppIcon name="users" :size="14" />
-            {{ collabBusy ? t('aiTeams.collab.running') : t('aiTeams.collab.run') }}
+        <template #footer>
+          <button class="btn" type="button" :disabled="saving" @click="editorOpen = false">
+            {{ t('aiTeams.action.cancel') }}
           </button>
-          <span class="hint">{{ t('aiTeams.collab.note') }}</span>
-        </div>
+          <button class="btn btn--primary" type="button" :disabled="saving" @click="saveTeam">
+            {{ saving ? t('aiTeams.form.saving') : (editing ? t('aiTeams.form.submitChange') : t('aiTeams.form.save')) }}
+          </button>
+        </template>
+      </AppModal>
 
-        <div v-if="collabErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ collabErr }}</span>
+      <!-- 审核编制变更 -->
+      <AppModal v-model="reviewOpen" :title="t('aiTeams.review.title', { code: reviewTarget?.code || '' })" width="720px" :dismissible="!reviewBusy">
+        <div v-if="reviewTarget" class="stack">
+          <p class="hint">{{ t('aiTeams.review.hint') }}</p>
+          <div class="diff">
+            <div class="diff-head">
+              <span>{{ t('aiTeams.review.field') }}</span>
+              <span>{{ t('aiTeams.review.current') }}</span>
+              <span />
+              <span>{{ t('aiTeams.review.pending') }}</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">{{ t('aiTeams.form.name') }}</span>
+              <span class="diff-v">{{ reviewTarget.name || '—' }}</span>
+              <span class="diff-arrow">→</span>
+              <span class="diff-v">{{ reviewTarget.pendingChanges?.name || '—' }}</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">{{ t('aiTeams.form.description') }}</span>
+              <span class="diff-v">{{ reviewTarget.description || '—' }}</span>
+              <span class="diff-arrow">→</span>
+              <span class="diff-v">{{ reviewTarget.pendingChanges?.description || '—' }}</span>
+            </div>
+            <div class="diff-row">
+              <span class="diff-k">{{ t('aiTeams.form.members') }}</span>
+              <span class="diff-v">{{ memberNames(reviewTarget.botCodes) }}</span>
+              <span class="diff-arrow">→</span>
+              <span class="diff-v">{{ memberNames(reviewTarget.pendingChanges?.botCodes) }}</span>
+            </div>
+          </div>
+          <label class="field">
+            <span class="label">{{ t('aiTeams.review.note') }}</span>
+            <textarea v-model="reviewNote" class="textarea" rows="3" maxlength="1000" />
+          </label>
+          <div v-if="reviewErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ reviewErr }}</span>
+          </div>
         </div>
+        <template #footer>
+          <button class="btn" type="button" :disabled="reviewBusy" @click="reviewOpen = false">
+            {{ t('aiTeams.action.cancel') }}
+          </button>
+          <button class="btn btn--danger" type="button" :disabled="reviewBusy" @click="confirmReview(false)">
+            {{ reviewBusy ? t('aiTeams.confirm.busy') : t('aiTeams.review.reject') }}
+          </button>
+          <button class="btn btn--primary" type="button" :disabled="reviewBusy" @click="confirmReview(true)">
+            {{ reviewBusy ? t('aiTeams.confirm.busy') : t('aiTeams.review.approve') }}
+          </button>
+        </template>
+      </AppModal>
 
-        <div v-if="collab" class="stack">
+      <!-- 协作试跑 -->
+      <AppModal v-model="collabOpen" :title="t('aiTeams.collab.title', { code: collabTarget?.code || '' })" width="900px" :dismissible="!collabBusy">
+        <div class="stack">
+          <p class="hint">{{ t('aiTeams.collab.hint') }}</p>
+          <textarea
+            v-model="collabQuestion"
+            class="textarea"
+            rows="3"
+            maxlength="2000"
+            :placeholder="t('aiTeams.collab.placeholder')"
+          />
           <div class="row row-wrap">
-            <span class="badge badge--neutral">{{ t('aiTeams.collab.members', { n: (collab.opinions || []).length }) }}</span>
-            <span v-if="collab.failed" class="badge badge--danger">{{ t('aiTeams.collab.failed', { n: collab.failed }) }}</span>
-            <span v-if="(collab.modelDiversity || []).length" class="badge badge--accent">
-              {{ t('aiTeams.collab.models', { list: (collab.modelDiversity || []).join(' / ') }) }}
-            </span>
+            <button class="btn btn--primary" type="button" :disabled="collabBusy" @click="runCollaborate">
+              <AppIcon name="users" :size="14" />
+              {{ collabBusy ? t('aiTeams.collab.running') : t('aiTeams.collab.run') }}
+            </button>
+            <span class="hint">{{ t('aiTeams.collab.note') }}</span>
           </div>
-          <div class="opinions">
-            <article v-for="o in collab.opinions || []" :key="o.botCode" class="opinion">
-              <div class="opinion-head">
-                <b>{{ o.name || o.botCode }}</b>
-                <span class="mono muted">{{ o.botCode }}</span>
-                <span class="spacer" />
-                <span class="badge" :class="o.status === 'OK' ? 'badge--ok' : 'badge--danger'">
-                  {{ o.status === 'OK' ? t('aiTeams.collab.ok') : t('aiTeams.collab.error') }}
-                </span>
-              </div>
-              <div class="hint">
-                {{ o.modelProvider || 'default' }}
-                <template v-if="o.modelId"> · {{ o.modelId }}</template>
-                · {{ t('aiTeams.collab.meta', { skills: o.skillCount ?? 0, memories: o.memoryCount ?? 0 }) }}
-                <template v-if="typeof o.elapsedMs === 'number'"> · {{ o.elapsedMs }}ms</template>
-              </div>
-              <p v-if="o.status === 'OK'" class="answer-body">{{ o.answer || t('aiTeams.collab.noAnswer') }}</p>
-              <p v-else class="hint is-warn">{{ t('aiTeams.collab.failedCode', { code: o.error || '—' }) }}</p>
-            </article>
-          </div>
-          <p class="notice notice--warn">
-            <AppIcon name="shield" :size="15" />
-            <span>{{ collab.note || t('aiTeams.collab.review') }}</span>
-          </p>
-        </div>
-      </div>
-    </AppModal>
 
-    <!-- 停用 / 重新启用 -->
-    <AppModal
-      v-model="confirmOpen"
-      :title="confirmAction === 'disable'
-        ? t('aiTeams.confirm.disableTitle', { code: confirmTarget?.code || '' })
-        : t('aiTeams.confirm.enableTitle', { code: confirmTarget?.code || '' })"
-      width="480px"
-      :dismissible="!busy"
-    >
-      <p class="modal-note">
-        {{ confirmAction === 'disable' ? t('aiTeams.confirm.disableBody') : t('aiTeams.confirm.enableBody') }}
-      </p>
-      <template #footer>
-        <button class="btn" type="button" :disabled="!!busy" @click="confirmTarget = null">
-          {{ t('aiTeams.action.cancel') }}
-        </button>
-        <button
-          class="btn"
-          :class="confirmAction === 'disable' ? 'btn--danger' : 'btn--primary'"
-          type="button"
-          :disabled="!!busy"
-          @click="confirmToggle"
-        >
-          {{ busy ? t('aiTeams.confirm.busy') : t('aiTeams.confirm.ok') }}
-        </button>
-      </template>
-    </AppModal>
+          <div v-if="collabErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ collabErr }}</span>
+          </div>
+
+          <div v-if="collab" class="stack">
+            <div class="row row-wrap">
+              <span class="badge badge--neutral">{{ t('aiTeams.collab.members', { n: (collab.opinions || []).length }) }}</span>
+              <span v-if="collab.failed" class="badge badge--danger">{{ t('aiTeams.collab.failed', { n: collab.failed }) }}</span>
+              <span v-if="(collab.modelDiversity || []).length" class="badge badge--accent">
+                {{ t('aiTeams.collab.models', { list: (collab.modelDiversity || []).join(' / ') }) }}
+              </span>
+            </div>
+            <div class="opinions">
+              <article v-for="o in collab.opinions || []" :key="o.botCode" class="opinion">
+                <div class="opinion-head">
+                  <b>{{ o.name || o.botCode }}</b>
+                  <span class="mono muted">{{ o.botCode }}</span>
+                  <span class="spacer" />
+                  <span class="badge" :class="o.status === 'OK' ? 'badge--ok' : 'badge--danger'">
+                    {{ o.status === 'OK' ? t('aiTeams.collab.ok') : t('aiTeams.collab.error') }}
+                  </span>
+                </div>
+                <div class="hint">
+                  {{ o.modelProvider || 'default' }}
+                  <template v-if="o.modelId"> · {{ o.modelId }}</template>
+                  · {{ t('aiTeams.collab.meta', { skills: o.skillCount ?? 0, memories: o.memoryCount ?? 0 }) }}
+                  <template v-if="typeof o.elapsedMs === 'number'"> · {{ o.elapsedMs }}ms</template>
+                </div>
+                <p v-if="o.status === 'OK'" class="answer-body">{{ o.answer || t('aiTeams.collab.noAnswer') }}</p>
+                <p v-else class="hint is-warn">{{ t('aiTeams.collab.failedCode', { code: o.error || '—' }) }}</p>
+              </article>
+            </div>
+            <p class="notice notice--warn">
+              <AppIcon name="shield" :size="15" />
+              <span>{{ collab.note || t('aiTeams.collab.review') }}</span>
+            </p>
+          </div>
+        </div>
+      </AppModal>
+
+      <!-- 停用 / 重新启用 -->
+      <AppModal
+        v-model="confirmOpen"
+        :title="confirmAction === 'disable'
+          ? t('aiTeams.confirm.disableTitle', { code: confirmTarget?.code || '' })
+          : t('aiTeams.confirm.enableTitle', { code: confirmTarget?.code || '' })"
+        width="480px"
+        :dismissible="!busy"
+      >
+        <p class="modal-note">
+          {{ confirmAction === 'disable' ? t('aiTeams.confirm.disableBody') : t('aiTeams.confirm.enableBody') }}
+        </p>
+        <template #footer>
+          <button class="btn" type="button" :disabled="!!busy" @click="confirmTarget = null">
+            {{ t('aiTeams.action.cancel') }}
+          </button>
+          <button
+            class="btn"
+            :class="confirmAction === 'disable' ? 'btn--danger' : 'btn--primary'"
+            type="button"
+            :disabled="!!busy"
+            @click="confirmToggle"
+          >
+            {{ busy ? t('aiTeams.confirm.busy') : t('aiTeams.confirm.ok') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -326,6 +329,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiAgentBots,
@@ -341,7 +345,7 @@ import {
   type AiTeamCollaborate,
   type AiTeamInput,
 } from '@/api/ai'
-import { AiRequestError, errorText } from '@/api/http'
+import { AiRequestError, errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { hasRole, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -359,6 +363,7 @@ const teams = ref<AiTeam[]>([])
 const bots = ref<AiBot[]>([])
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 
 const statusFilter = ref('')
 const query = ref('')
@@ -449,6 +454,7 @@ function canEnable(tm: AiTeam): boolean {
 async function loadAll() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   const results = await Promise.allSettled([
     aiAgentTeams(statusFilter.value || undefined),
     aiAgentBots(),
@@ -456,8 +462,14 @@ async function loadAll() {
   const [teamRes, botRes] = results
   if (teamRes.status === 'fulfilled') teams.value = teamRes.value.teams ?? []
   if (botRes.status === 'fulfilled') bots.value = botRes.value.bots ?? []
+  const denied = results.some((r) => r.status === 'rejected' && isForbidden(r.reason))
   const failed = results.find((r) => r.status === 'rejected')
-  if (failed && failed.status === 'rejected') loadErr.value = errorText(failed.reason)
+  if (denied) {
+    forbidden.value = true
+    loadErr.value = ''
+  } else if (failed && failed.status === 'rejected') {
+    loadErr.value = errorText(failed.reason)
+  }
   loading.value = false
 }
 

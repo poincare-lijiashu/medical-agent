@@ -12,531 +12,534 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="loadAll" />
 
-    <div class="kpi-strip">
-      <KpiCard
-        :label="t('aiAgent.kpi.flags')"
-        :value="`${flagsOn}/${flags.length}`"
-        :unit="t('aiAgent.unit.flag')"
-        :meta="t('aiAgent.kpi.flagsMeta', { on: flagsOn, total: flags.length })"
-      />
-      <KpiCard
-        :label="t('aiAgent.kpi.agents')"
-        :value="agents.length"
-        :unit="t('aiAgent.unit.agent')"
-        :meta="t('aiAgent.kpi.agentsMeta')"
-      />
-      <KpiCard
-        :label="t('aiAgent.kpi.tools')"
-        :value="tools.length"
-        :unit="t('aiAgent.unit.tool')"
-        :meta="t('aiAgent.kpi.toolsMeta', { n: egressCount })"
-      />
-      <KpiCard
-        :label="t('aiAgent.kpi.models')"
-        :value="`${allowedProviders.length}/${policy?.providers?.length ?? 0}`"
-        :unit="t('aiAgent.unit.provider')"
-        :meta="t('aiAgent.kpi.modelsMeta', {
-          allowed: allowedProviders.length,
-          total: policy?.providers?.length ?? 0,
-        })"
-      />
-      <KpiCard
-        :label="t('aiAgent.kpi.web')"
-        :value="webPolicy?.allowedDomains?.length ?? 0"
-        :unit="t('aiAgent.unit.domain')"
-        :meta="t('aiAgent.kpi.webMeta', { state: webPolicy?.enabled ? t('aiAgent.state.on') : t('aiAgent.state.off') })"
-      />
-    </div>
-
-    <div class="grid-2">
-      <!-- 能力开关 -->
-      <section class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiAgent.flags.title') }}</span>
-          <span class="spacer" />
-          <span class="hint">{{ t('aiAgent.flag.note') }}</span>
-        </div>
-        <TableSkeleton v-if="loading && !flags.length" :rows="3" height="52px" />
-        <div v-else-if="flags.length" class="flag-list">
-          <div v-for="f in flags" :key="f.key" class="flag-row">
-            <div class="flag-main">
-              <div class="flag-title">
-                <b>{{ f.title }}</b>
-                <span class="badge" :class="riskClass(f.risk)">{{ riskText(f.risk) }}</span>
-                <span class="flag-key">{{ f.key }}</span>
-              </div>
-              <p class="hint">{{ f.description }}</p>
-            </div>
-            <div class="flag-switch">
-              <span class="hint">{{ f.enabled ? t('aiAgent.state.on') : t('aiAgent.state.off') }}</span>
-              <button
-                class="sw"
-                :class="{ on: f.enabled }"
-                type="button"
-                role="switch"
-                :aria-checked="f.enabled ? 'true' : 'false'"
-                :aria-label="t('aiAgent.flag.toggle', { title: f.title })"
-                :disabled="busyFlag === f.key"
-                @click="toggleFlag(f)"
-              />
-            </div>
-          </div>
-        </div>
-        <div v-else class="sheet-body">
-          <p class="muted small">{{ t('aiAgent.flags.empty') }}</p>
-        </div>
-      </section>
-
-      <!-- 路由预览 -->
-      <section class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiAgent.route.title') }}</span>
-          <span class="spacer" />
-          <span class="hint">{{ t('aiAgent.route.hint') }}</span>
-        </div>
-        <div class="sheet-body stack">
-          <textarea
-            v-model="routeQuestion"
-            class="textarea"
-            rows="2"
-            maxlength="2000"
-            :placeholder="t('aiAgent.route.placeholder')"
-          />
-          <div class="row row-wrap">
-            <label class="check">
-              <input v-model="routeMulti" type="checkbox" />
-              <span>{{ t('aiAgent.route.multi') }}</span>
-            </label>
-            <span class="hint">{{ t('aiAgent.route.multiHint') }}</span>
-            <span class="spacer" />
-            <button class="btn btn--primary btn--sm" type="button" :disabled="routing" @click="previewRoute">
-              <AppIcon name="branch" :size="14" />
-              {{ routing ? t('aiAgent.route.running') : t('aiAgent.route.run') }}
-            </button>
-          </div>
-
-          <div v-if="routeErr" class="notice notice--danger" role="alert">
-            <AppIcon name="alert" :size="15" />
-            <span>{{ routeErr }}</span>
-          </div>
-
-          <div v-if="routeResult" class="result">
-            <div class="result-head">
-              <b>{{ routeResult.name || routeResult.agent }}</b>
-              <span class="mono muted">{{ routeResult.agent }}</span>
-              <span class="badge" :class="routeResult.hitl ? 'badge--warn' : 'badge--neutral'">
-                {{ routeResult.hitl ? t('aiAgent.route.hitl') : t('aiAgent.route.noHitl') }}
-              </span>
-              <span class="spacer" />
-              <span class="badge badge--neutral">{{ strategyText(routeResult.strategy) }}</span>
-            </div>
-            <dl class="facts">
-              <div class="fact">
-                <dt>{{ t('aiAgent.route.confidence') }}</dt>
-                <dd class="num">{{ formatConfidence(routeResult.confidence) }}</dd>
-              </div>
-              <div class="fact">
-                <dt>{{ t('aiAgent.route.hops') }}</dt>
-                <dd class="num">{{ routeResult.maxHops ?? '—' }}</dd>
-              </div>
-              <div class="fact">
-                <dt>{{ t('aiAgent.route.fallback') }}</dt>
-                <dd class="mono">{{ routeResult.fallbackAgent || '—' }}</dd>
-              </div>
-            </dl>
-            <p class="hint">{{ t('aiAgent.route.reason') }}：{{ routeResult.reason || '—' }}</p>
-            <div v-if="routeResult.candidates && routeResult.candidates.length > 1" class="row row-wrap">
-              <span class="hint">{{ t('aiAgent.route.candidates') }}：</span>
-              <span v-for="c in routeResult.candidates" :key="c.agent" class="badge badge--neutral mono">
-                {{ c.agent }} · {{ c.score ?? '—' }}
-              </span>
-            </div>
-            <p v-if="routeResult.prefilterReply" class="notice notice--warn">
-              <AppIcon name="info" :size="15" />
-              <span>{{ routeResult.prefilterReply }}</span>
-            </p>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <!-- 智能体目录 + 详情 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiAgent.catalog.title') }}</span>
-        <span class="hint">{{ t('aiAgent.catalog.hint') }}</span>
+      <div class="kpi-strip">
+        <KpiCard
+          :label="t('aiAgent.kpi.flags')"
+          :value="`${flagsOn}/${flags.length}`"
+          :unit="t('aiAgent.unit.flag')"
+          :meta="t('aiAgent.kpi.flagsMeta', { on: flagsOn, total: flags.length })"
+        />
+        <KpiCard
+          :label="t('aiAgent.kpi.agents')"
+          :value="agents.length"
+          :unit="t('aiAgent.unit.agent')"
+          :meta="t('aiAgent.kpi.agentsMeta')"
+        />
+        <KpiCard
+          :label="t('aiAgent.kpi.tools')"
+          :value="tools.length"
+          :unit="t('aiAgent.unit.tool')"
+          :meta="t('aiAgent.kpi.toolsMeta', { n: egressCount })"
+        />
+        <KpiCard
+          :label="t('aiAgent.kpi.models')"
+          :value="`${allowedProviders.length}/${policy?.providers?.length ?? 0}`"
+          :unit="t('aiAgent.unit.provider')"
+          :meta="t('aiAgent.kpi.modelsMeta', {
+            allowed: allowedProviders.length,
+            total: policy?.providers?.length ?? 0,
+          })"
+        />
+        <KpiCard
+          :label="t('aiAgent.kpi.web')"
+          :value="webPolicy?.allowedDomains?.length ?? 0"
+          :unit="t('aiAgent.unit.domain')"
+          :meta="t('aiAgent.kpi.webMeta', { state: webPolicy?.enabled ? t('aiAgent.state.on') : t('aiAgent.state.off') })"
+        />
       </div>
-      <div class="sheet-grid">
+
+      <div class="grid-2">
+        <!-- 能力开关 -->
+        <section class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiAgent.flags.title') }}</span>
+            <span class="spacer" />
+            <span class="hint">{{ t('aiAgent.flag.note') }}</span>
+          </div>
+          <TableSkeleton v-if="loading && !flags.length" :rows="3" height="52px" />
+          <div v-else-if="flags.length" class="flag-list">
+            <div v-for="f in flags" :key="f.key" class="flag-row">
+              <div class="flag-main">
+                <div class="flag-title">
+                  <b>{{ f.title }}</b>
+                  <span class="badge" :class="riskClass(f.risk)">{{ riskText(f.risk) }}</span>
+                  <span class="flag-key">{{ f.key }}</span>
+                </div>
+                <p class="hint">{{ f.description }}</p>
+              </div>
+              <div class="flag-switch">
+                <span class="hint">{{ f.enabled ? t('aiAgent.state.on') : t('aiAgent.state.off') }}</span>
+                <button
+                  class="sw"
+                  :class="{ on: f.enabled }"
+                  type="button"
+                  role="switch"
+                  :aria-checked="f.enabled ? 'true' : 'false'"
+                  :aria-label="t('aiAgent.flag.toggle', { title: f.title })"
+                  :disabled="busyFlag === f.key"
+                  @click="toggleFlag(f)"
+                />
+              </div>
+            </div>
+          </div>
+          <div v-else class="sheet-body">
+            <p class="muted small">{{ t('aiAgent.flags.empty') }}</p>
+          </div>
+        </section>
+
+        <!-- 路由预览 -->
+        <section class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiAgent.route.title') }}</span>
+            <span class="spacer" />
+            <span class="hint">{{ t('aiAgent.route.hint') }}</span>
+          </div>
+          <div class="sheet-body stack">
+            <textarea
+              v-model="routeQuestion"
+              class="textarea"
+              rows="2"
+              maxlength="2000"
+              :placeholder="t('aiAgent.route.placeholder')"
+            />
+            <div class="row row-wrap">
+              <label class="check">
+                <input v-model="routeMulti" type="checkbox" />
+                <span>{{ t('aiAgent.route.multi') }}</span>
+              </label>
+              <span class="hint">{{ t('aiAgent.route.multiHint') }}</span>
+              <span class="spacer" />
+              <button class="btn btn--primary btn--sm" type="button" :disabled="routing" @click="previewRoute">
+                <AppIcon name="branch" :size="14" />
+                {{ routing ? t('aiAgent.route.running') : t('aiAgent.route.run') }}
+              </button>
+            </div>
+
+            <div v-if="routeErr" class="notice notice--danger" role="alert">
+              <AppIcon name="alert" :size="15" />
+              <span>{{ routeErr }}</span>
+            </div>
+
+            <div v-if="routeResult" class="result">
+              <div class="result-head">
+                <b>{{ routeResult.name || routeResult.agent }}</b>
+                <span class="mono muted">{{ routeResult.agent }}</span>
+                <span class="badge" :class="routeResult.hitl ? 'badge--warn' : 'badge--neutral'">
+                  {{ routeResult.hitl ? t('aiAgent.route.hitl') : t('aiAgent.route.noHitl') }}
+                </span>
+                <span class="spacer" />
+                <span class="badge badge--neutral">{{ strategyText(routeResult.strategy) }}</span>
+              </div>
+              <dl class="facts">
+                <div class="fact">
+                  <dt>{{ t('aiAgent.route.confidence') }}</dt>
+                  <dd class="num">{{ formatConfidence(routeResult.confidence) }}</dd>
+                </div>
+                <div class="fact">
+                  <dt>{{ t('aiAgent.route.hops') }}</dt>
+                  <dd class="num">{{ routeResult.maxHops ?? '—' }}</dd>
+                </div>
+                <div class="fact">
+                  <dt>{{ t('aiAgent.route.fallback') }}</dt>
+                  <dd class="mono">{{ routeResult.fallbackAgent || '—' }}</dd>
+                </div>
+              </dl>
+              <p class="hint">{{ t('aiAgent.route.reason') }}：{{ routeResult.reason || '—' }}</p>
+              <div v-if="routeResult.candidates && routeResult.candidates.length > 1" class="row row-wrap">
+                <span class="hint">{{ t('aiAgent.route.candidates') }}：</span>
+                <span v-for="c in routeResult.candidates" :key="c.agent" class="badge badge--neutral mono">
+                  {{ c.agent }} · {{ c.score ?? '—' }}
+                </span>
+              </div>
+              <p v-if="routeResult.prefilterReply" class="notice notice--warn">
+                <AppIcon name="info" :size="15" />
+                <span>{{ routeResult.prefilterReply }}</span>
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 智能体目录 + 详情 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiAgent.catalog.title') }}</span>
+          <span class="hint">{{ t('aiAgent.catalog.hint') }}</span>
+        </div>
+        <div class="sheet-grid">
+          <div class="table-wrap">
+            <table class="table table--stack">
+              <thead>
+                <tr>
+                  <th>{{ t('aiAgent.catalog.col.agent') }}</th>
+                  <th>{{ t('aiAgent.catalog.col.model') }}</th>
+                  <th>{{ t('aiAgent.catalog.col.hitl') }}</th>
+                  <th>{{ t('aiAgent.catalog.col.auto') }}</th>
+                  <th class="is-num">{{ t('aiAgent.catalog.col.tools') }}</th>
+                  <th class="is-num">{{ t('aiAgent.catalog.col.skills') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="a in agents"
+                  :key="a.id"
+                  class="clickable"
+                  :class="{ 'is-selected': a.id === selectedAgentId }"
+                  :aria-selected="a.id === selectedAgentId ? 'true' : 'false'"
+                  @click="selectAgent(a.id)"
+                >
+                  <td data-primary>
+                    <span class="is-strong">{{ a.name || a.id }}</span>
+                    <span class="sub mono">{{ a.id }}</span>
+                  </td>
+                  <td data-label="model">
+                    <span class="badge" :class="a.model === 'vision' ? 'badge--accent' : 'badge--neutral'">
+                      {{ a.model === 'vision' ? t('aiAgent.model.vision') : t('aiAgent.model.chat') }}
+                    </span>
+                  </td>
+                  <td data-label="hitl">
+                    <span class="badge" :class="a.hitl ? 'badge--warn' : 'badge--neutral'">
+                      {{ a.hitl ? t('aiAgent.yes') : t('aiAgent.no') }}
+                    </span>
+                  </td>
+                  <td data-label="auto">
+                    <span class="badge" :class="a.autoRoutable ? 'badge--ok' : 'badge--neutral'">
+                      {{ a.autoRoutable ? t('aiAgent.yes') : t('aiAgent.no') }}
+                    </span>
+                  </td>
+                  <td class="is-num" data-label="tools">{{ a.tools?.length ?? 0 }}</td>
+                  <td class="is-num" data-label="skills">{{ a.skills?.length ?? 0 }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <EmptyState v-if="!loading && !agents.length" :title="t('aiAgent.catalog.empty')" :desc="t('aiAgent.catalog.emptyDesc')" />
+          </div>
+
+          <aside class="sheet-inspector">
+            <div class="sheet-inspector-head">
+              {{ selectedAgent ? selectedAgent.name || selectedAgent.id : t('aiAgent.catalog.inspect') }}
+            </div>
+            <div v-if="selectedAgent" class="sheet-inspector-body">
+              <p class="hint">{{ selectedAgent.description || '—' }}</p>
+
+              <div>
+                <div class="insp-label">{{ t('aiAgent.catalog.roles') }}</div>
+                <div class="row row-wrap">
+                  <span v-for="r in selectedAgent.roles || []" :key="r" class="badge badge--neutral mono">{{ r }}</span>
+                  <span v-if="!(selectedAgent.roles || []).length" class="hint">—</span>
+                </div>
+              </div>
+
+              <div>
+                <div class="insp-label">{{ t('aiAgent.catalog.tools') }}</div>
+                <div class="row row-wrap">
+                  <span v-for="name in selectedAgent.tools || []" :key="name" class="badge badge--neutral mono">{{ name }}</span>
+                  <span v-if="!(selectedAgent.tools || []).length" class="hint">{{ t('aiAgent.catalog.noTools') }}</span>
+                </div>
+              </div>
+
+              <div>
+                <div class="insp-label">{{ t('aiAgent.catalog.skills') }}</div>
+                <ul v-if="(selectedAgent.skills || []).length" class="skill-list">
+                  <li v-for="s in selectedAgent.skills" :key="s.id" class="skill-item">
+                    <div class="skill-head">
+                      <b>{{ s.name || s.id }}</b>
+                      <span class="mono muted">{{ s.id }}</span>
+                    </div>
+                    <p class="hint">{{ s.description || '—' }}</p>
+                    <div v-if="(s.tags || []).length" class="row row-wrap">
+                      <span v-for="tag in s.tags" :key="tag" class="tag mono">{{ tag }}</span>
+                    </div>
+                    <p v-if="(s.examples || []).length" class="hint">
+                      {{ t('aiAgent.catalog.examples') }}：{{ (s.examples || []).join(' / ') }}
+                    </p>
+                  </li>
+                </ul>
+                <p v-else class="hint">—</p>
+              </div>
+            </div>
+            <div v-else class="sheet-inspector-body">
+              <p class="hint">{{ t('aiAgent.catalog.inspectHint') }}</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 工具注册表 -->
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiAgent.tools.title') }}</span>
+          <span class="hint">{{ t('aiAgent.tools.hint') }}</span>
+          <span class="spacer" />
+          <input
+            v-model="toolQuery"
+            class="input tool-search"
+            type="search"
+            :placeholder="t('aiAgent.tools.search')"
+            :aria-label="t('aiAgent.tools.search')"
+          />
+        </div>
         <div class="table-wrap">
           <table class="table table--stack">
             <thead>
               <tr>
-                <th>{{ t('aiAgent.catalog.col.agent') }}</th>
-                <th>{{ t('aiAgent.catalog.col.model') }}</th>
-                <th>{{ t('aiAgent.catalog.col.hitl') }}</th>
-                <th>{{ t('aiAgent.catalog.col.auto') }}</th>
-                <th class="is-num">{{ t('aiAgent.catalog.col.tools') }}</th>
-                <th class="is-num">{{ t('aiAgent.catalog.col.skills') }}</th>
+                <th>{{ t('aiAgent.tools.col.name') }}</th>
+                <th>{{ t('aiAgent.tools.col.phi') }}</th>
+                <th>{{ t('aiAgent.tools.col.egress') }}</th>
+                <th>{{ t('aiAgent.tools.col.state') }}</th>
+                <th>{{ t('aiAgent.tools.col.roles') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="a in agents"
-                :key="a.id"
-                class="clickable"
-                :class="{ 'is-selected': a.id === selectedAgentId }"
-                :aria-selected="a.id === selectedAgentId ? 'true' : 'false'"
-                @click="selectAgent(a.id)"
-              >
+              <tr v-for="tool in filteredTools" :key="tool.name">
                 <td data-primary>
-                  <span class="is-strong">{{ a.name || a.id }}</span>
-                  <span class="sub mono">{{ a.id }}</span>
+                  <span class="is-strong">{{ tool.title || tool.name }}</span>
+                  <span class="sub mono">{{ tool.name }}</span>
+                  <span class="sub">{{ tool.description || '—' }}</span>
                 </td>
-                <td data-label="model">
-                  <span class="badge" :class="a.model === 'vision' ? 'badge--accent' : 'badge--neutral'">
-                    {{ a.model === 'vision' ? t('aiAgent.model.vision') : t('aiAgent.model.chat') }}
+                <td data-label="phi">
+                  <span class="badge" :class="tool.phi === 'patient' ? 'badge--warn' : 'badge--neutral'">
+                    {{ tool.phi === 'patient' ? t('aiAgent.tools.phi.patient') : t('aiAgent.tools.phi.none') }}
                   </span>
                 </td>
-                <td data-label="hitl">
-                  <span class="badge" :class="a.hitl ? 'badge--warn' : 'badge--neutral'">
-                    {{ a.hitl ? t('aiAgent.yes') : t('aiAgent.no') }}
+                <td data-label="egress">
+                  <span class="badge" :class="tool.externalEgress ? 'badge--danger' : 'badge--ok'">
+                    {{ tool.externalEgress ? t('aiAgent.tools.egress.yes') : t('aiAgent.tools.egress.no') }}
                   </span>
                 </td>
-                <td data-label="auto">
-                  <span class="badge" :class="a.autoRoutable ? 'badge--ok' : 'badge--neutral'">
-                    {{ a.autoRoutable ? t('aiAgent.yes') : t('aiAgent.no') }}
+                <td data-label="state">
+                  <span class="badge" :class="tool.enabled ? 'badge--ok' : 'badge--neutral'">
+                    {{ tool.enabled ? t('aiAgent.tools.enabled') : t('aiAgent.tools.disabled') }}
+                  </span>
+                  <span v-if="tool.featureFlag" class="sub mono">{{ t('aiAgent.tools.flag', { flag: tool.featureFlag }) }}</span>
+                  <span v-else-if="tool.reason" class="sub">{{ tool.reason }}</span>
+                </td>
+                <td data-label="roles">
+                  <span class="row row-wrap">
+                    <span v-for="r in tool.roles || []" :key="r" class="badge badge--neutral mono">{{ r }}</span>
                   </span>
                 </td>
-                <td class="is-num" data-label="tools">{{ a.tools?.length ?? 0 }}</td>
-                <td class="is-num" data-label="skills">{{ a.skills?.length ?? 0 }}</td>
               </tr>
             </tbody>
           </table>
-          <EmptyState v-if="!loading && !agents.length" :title="t('aiAgent.catalog.empty')" :desc="t('aiAgent.catalog.emptyDesc')" />
+          <EmptyState v-if="!filteredTools.length" :title="t('aiAgent.tools.empty')" :desc="t('aiAgent.tools.emptyDesc')" />
         </div>
+      </section>
 
-        <aside class="sheet-inspector">
-          <div class="sheet-inspector-head">
-            {{ selectedAgent ? selectedAgent.name || selectedAgent.id : t('aiAgent.catalog.inspect') }}
+      <div class="grid-2">
+        <!-- 模型合规 -->
+        <section class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiAgent.policy.title') }}</span>
+            <span class="spacer" />
+            <span class="hint">{{ t('aiAgent.policy.hint') }}</span>
           </div>
-          <div v-if="selectedAgent" class="sheet-inspector-body">
-            <p class="hint">{{ selectedAgent.description || '—' }}</p>
+          <div class="sheet-body stack">
+            <div class="row row-wrap">
+              <span class="hint">{{ t('aiAgent.policy.allowedClasses') }}：</span>
+              <span v-for="c in policy?.allowedClasses || []" :key="c" class="badge badge--ok mono">{{ c }}</span>
+              <span v-if="!(policy?.allowedClasses || []).length" class="hint">—</span>
+            </div>
 
+            <div v-if="(policy?.providers || []).length" class="table-wrap">
+              <table class="table table--compact table--stack">
+                <thead>
+                  <tr>
+                    <th>{{ t('aiAgent.policy.col.provider') }}</th>
+                    <th>{{ t('aiAgent.policy.col.model') }}</th>
+                    <th>{{ t('aiAgent.policy.col.host') }}</th>
+                    <th>{{ t('aiAgent.policy.col.class') }}</th>
+                    <th>{{ t('aiAgent.policy.col.allowed') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="p in policy?.providers || []" :key="p.id">
+                    <td data-primary>{{ p.displayName || p.id }}</td>
+                    <td data-label="model"><span class="mono">{{ p.modelId || '—' }}</span></td>
+                    <td data-label="host"><span class="mono">{{ p.host || '—' }}</span></td>
+                    <td data-label="class"><span class="badge badge--neutral">{{ classText(p.class) }}</span></td>
+                    <td data-label="allowed">
+                      <span class="badge" :class="p.allowed ? 'badge--ok' : 'badge--danger'">
+                        {{ p.allowed ? t('aiAgent.policy.allowed') : t('aiAgent.policy.blocked') }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <EmptyState v-else :title="t('aiAgent.policy.empty')" :desc="t('aiAgent.policy.emptyDesc')" />
+
+            <p class="hint">{{ policy?.note || '—' }}</p>
+          </div>
+        </section>
+
+        <!-- 联网白名单 -->
+        <section class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">{{ t('aiAgent.web.title') }}</span>
+            <span class="badge" :class="webPolicy?.enabled ? 'badge--ok' : 'badge--neutral'">
+              {{ webPolicy?.enabled ? t('aiAgent.state.on') : t('aiAgent.state.off') }}
+            </span>
+            <span class="spacer" />
+            <span class="hint">{{ t('aiAgent.web.hint') }}</span>
+          </div>
+          <div class="sheet-body stack">
             <div>
-              <div class="insp-label">{{ t('aiAgent.catalog.roles') }}</div>
+              <div class="insp-label">{{ t('aiAgent.web.domestic') }}</div>
               <div class="row row-wrap">
-                <span v-for="r in selectedAgent.roles || []" :key="r" class="badge badge--neutral mono">{{ r }}</span>
-                <span v-if="!(selectedAgent.roles || []).length" class="hint">—</span>
+                <span v-for="d in webPolicy?.domestic || []" :key="d" class="chip mono">{{ d }}</span>
+                <span v-if="!(webPolicy?.domestic || []).length" class="hint">—</span>
               </div>
             </div>
-
             <div>
-              <div class="insp-label">{{ t('aiAgent.catalog.tools') }}</div>
+              <div class="insp-label">{{ t('aiAgent.web.academic') }}</div>
               <div class="row row-wrap">
-                <span v-for="name in selectedAgent.tools || []" :key="name" class="badge badge--neutral mono">{{ name }}</span>
-                <span v-if="!(selectedAgent.tools || []).length" class="hint">{{ t('aiAgent.catalog.noTools') }}</span>
+                <span v-for="d in webPolicy?.academic || []" :key="d" class="chip mono">{{ d }}</span>
+                <span v-if="!(webPolicy?.academic || []).length" class="hint">—</span>
               </div>
             </div>
-
             <div>
-              <div class="insp-label">{{ t('aiAgent.catalog.skills') }}</div>
-              <ul v-if="(selectedAgent.skills || []).length" class="skill-list">
-                <li v-for="s in selectedAgent.skills" :key="s.id" class="skill-item">
-                  <div class="skill-head">
-                    <b>{{ s.name || s.id }}</b>
-                    <span class="mono muted">{{ s.id }}</span>
-                  </div>
-                  <p class="hint">{{ s.description || '—' }}</p>
-                  <div v-if="(s.tags || []).length" class="row row-wrap">
-                    <span v-for="tag in s.tags" :key="tag" class="tag mono">{{ tag }}</span>
-                  </div>
-                  <p v-if="(s.examples || []).length" class="hint">
-                    {{ t('aiAgent.catalog.examples') }}：{{ (s.examples || []).join(' / ') }}
-                  </p>
-                </li>
-              </ul>
-              <p v-else class="hint">—</p>
+              <div class="insp-label">{{ t('aiAgent.web.extra') }}</div>
+              <div class="row row-wrap">
+                <span v-for="d in webPolicy?.extra || []" :key="d" class="chip mono">{{ d }}</span>
+                <span v-if="!(webPolicy?.extra || []).length" class="hint">{{ t('aiAgent.web.emptyExtra') }}</span>
+              </div>
             </div>
+            <p class="hint">{{ webPolicy?.note || '—' }}</p>
           </div>
-          <div v-else class="sheet-inspector-body">
-            <p class="hint">{{ t('aiAgent.catalog.inspectHint') }}</p>
-          </div>
-        </aside>
+        </section>
       </div>
-    </section>
 
-    <!-- 工具注册表 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiAgent.tools.title') }}</span>
-        <span class="hint">{{ t('aiAgent.tools.hint') }}</span>
-        <span class="spacer" />
-        <input
-          v-model="toolQuery"
-          class="input tool-search"
-          type="search"
-          :placeholder="t('aiAgent.tools.search')"
-          :aria-label="t('aiAgent.tools.search')"
-        />
-      </div>
-      <div class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiAgent.tools.col.name') }}</th>
-              <th>{{ t('aiAgent.tools.col.phi') }}</th>
-              <th>{{ t('aiAgent.tools.col.egress') }}</th>
-              <th>{{ t('aiAgent.tools.col.state') }}</th>
-              <th>{{ t('aiAgent.tools.col.roles') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="tool in filteredTools" :key="tool.name">
-              <td data-primary>
-                <span class="is-strong">{{ tool.title || tool.name }}</span>
-                <span class="sub mono">{{ tool.name }}</span>
-                <span class="sub">{{ tool.description || '—' }}</span>
-              </td>
-              <td data-label="phi">
-                <span class="badge" :class="tool.phi === 'patient' ? 'badge--warn' : 'badge--neutral'">
-                  {{ tool.phi === 'patient' ? t('aiAgent.tools.phi.patient') : t('aiAgent.tools.phi.none') }}
-                </span>
-              </td>
-              <td data-label="egress">
-                <span class="badge" :class="tool.externalEgress ? 'badge--danger' : 'badge--ok'">
-                  {{ tool.externalEgress ? t('aiAgent.tools.egress.yes') : t('aiAgent.tools.egress.no') }}
-                </span>
-              </td>
-              <td data-label="state">
-                <span class="badge" :class="tool.enabled ? 'badge--ok' : 'badge--neutral'">
-                  {{ tool.enabled ? t('aiAgent.tools.enabled') : t('aiAgent.tools.disabled') }}
-                </span>
-                <span v-if="tool.featureFlag" class="sub mono">{{ t('aiAgent.tools.flag', { flag: tool.featureFlag }) }}</span>
-                <span v-else-if="tool.reason" class="sub">{{ tool.reason }}</span>
-              </td>
-              <td data-label="roles">
-                <span class="row row-wrap">
-                  <span v-for="r in tool.roles || []" :key="r" class="badge badge--neutral mono">{{ r }}</span>
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <EmptyState v-if="!filteredTools.length" :title="t('aiAgent.tools.empty')" :desc="t('aiAgent.tools.emptyDesc')" />
-      </div>
-    </section>
-
-    <div class="grid-2">
-      <!-- 模型合规 -->
+      <!-- 双模型第二意见 -->
       <section class="sheet">
         <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiAgent.policy.title') }}</span>
+          <span class="sheet-title">{{ t('aiAgent.second.title') }}</span>
           <span class="spacer" />
-          <span class="hint">{{ t('aiAgent.policy.hint') }}</span>
+          <span class="hint">{{ t('aiAgent.second.hint') }}</span>
         </div>
         <div class="sheet-body stack">
+          <div class="grid-2">
+            <label class="field">
+              <span class="label">{{ t('aiAgent.second.providerA') }}</span>
+              <select v-model="providerA" class="select" :disabled="!canSecondOpinion">
+                <option value="">{{ t('aiAgent.second.auto') }}</option>
+                <option v-for="p in allowedProviders" :key="p.id" :value="p.id">
+                  {{ p.displayName || p.id }} · {{ p.modelId || '—' }}
+                </option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label">{{ t('aiAgent.second.providerB') }}</span>
+              <select v-model="providerB" class="select" :disabled="!canSecondOpinion">
+                <option value="">{{ t('aiAgent.second.auto') }}</option>
+                <option v-for="p in allowedProviders" :key="p.id" :value="p.id">
+                  {{ p.displayName || p.id }} · {{ p.modelId || '—' }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <textarea
+            v-model="opinionQuestion"
+            class="textarea"
+            rows="3"
+            maxlength="2000"
+            :placeholder="t('aiAgent.second.placeholder')"
+            :disabled="!canSecondOpinion"
+          />
+
           <div class="row row-wrap">
-            <span class="hint">{{ t('aiAgent.policy.allowedClasses') }}：</span>
-            <span v-for="c in policy?.allowedClasses || []" :key="c" class="badge badge--ok mono">{{ c }}</span>
-            <span v-if="!(policy?.allowedClasses || []).length" class="hint">—</span>
+            <button
+              class="btn btn--primary"
+              type="button"
+              :disabled="!canSecondOpinion || opinionBusy"
+              @click="runSecondOpinion"
+            >
+              <AppIcon name="users" :size="14" />
+              {{ opinionBusy ? t('aiAgent.second.running') : t('aiAgent.second.run') }}
+            </button>
+            <span v-if="!canSecondOpinion" class="hint is-warn">{{ t('aiAgent.second.needTwo') }}</span>
+            <span v-else class="hint">{{ t('aiAgent.second.review') }}</span>
           </div>
 
-          <div v-if="(policy?.providers || []).length" class="table-wrap">
-            <table class="table table--compact table--stack">
-              <thead>
-                <tr>
-                  <th>{{ t('aiAgent.policy.col.provider') }}</th>
-                  <th>{{ t('aiAgent.policy.col.model') }}</th>
-                  <th>{{ t('aiAgent.policy.col.host') }}</th>
-                  <th>{{ t('aiAgent.policy.col.class') }}</th>
-                  <th>{{ t('aiAgent.policy.col.allowed') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="p in policy?.providers || []" :key="p.id">
-                  <td data-primary>{{ p.displayName || p.id }}</td>
-                  <td data-label="model"><span class="mono">{{ p.modelId || '—' }}</span></td>
-                  <td data-label="host"><span class="mono">{{ p.host || '—' }}</span></td>
-                  <td data-label="class"><span class="badge badge--neutral">{{ classText(p.class) }}</span></td>
-                  <td data-label="allowed">
-                    <span class="badge" :class="p.allowed ? 'badge--ok' : 'badge--danger'">
-                      {{ p.allowed ? t('aiAgent.policy.allowed') : t('aiAgent.policy.blocked') }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <EmptyState v-else :title="t('aiAgent.policy.empty')" :desc="t('aiAgent.policy.emptyDesc')" />
-
-          <p class="hint">{{ policy?.note || '—' }}</p>
-        </div>
-      </section>
-
-      <!-- 联网白名单 -->
-      <section class="sheet">
-        <div class="sheet-head">
-          <span class="sheet-title">{{ t('aiAgent.web.title') }}</span>
-          <span class="badge" :class="webPolicy?.enabled ? 'badge--ok' : 'badge--neutral'">
-            {{ webPolicy?.enabled ? t('aiAgent.state.on') : t('aiAgent.state.off') }}
-          </span>
-          <span class="spacer" />
-          <span class="hint">{{ t('aiAgent.web.hint') }}</span>
-        </div>
-        <div class="sheet-body stack">
-          <div>
-            <div class="insp-label">{{ t('aiAgent.web.domestic') }}</div>
-            <div class="row row-wrap">
-              <span v-for="d in webPolicy?.domestic || []" :key="d" class="chip mono">{{ d }}</span>
-              <span v-if="!(webPolicy?.domestic || []).length" class="hint">—</span>
-            </div>
-          </div>
-          <div>
-            <div class="insp-label">{{ t('aiAgent.web.academic') }}</div>
-            <div class="row row-wrap">
-              <span v-for="d in webPolicy?.academic || []" :key="d" class="chip mono">{{ d }}</span>
-              <span v-if="!(webPolicy?.academic || []).length" class="hint">—</span>
-            </div>
-          </div>
-          <div>
-            <div class="insp-label">{{ t('aiAgent.web.extra') }}</div>
-            <div class="row row-wrap">
-              <span v-for="d in webPolicy?.extra || []" :key="d" class="chip mono">{{ d }}</span>
-              <span v-if="!(webPolicy?.extra || []).length" class="hint">{{ t('aiAgent.web.emptyExtra') }}</span>
-            </div>
-          </div>
-          <p class="hint">{{ webPolicy?.note || '—' }}</p>
-        </div>
-      </section>
-    </div>
-
-    <!-- 双模型第二意见 -->
-    <section class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiAgent.second.title') }}</span>
-        <span class="spacer" />
-        <span class="hint">{{ t('aiAgent.second.hint') }}</span>
-      </div>
-      <div class="sheet-body stack">
-        <div class="grid-2">
-          <label class="field">
-            <span class="label">{{ t('aiAgent.second.providerA') }}</span>
-            <select v-model="providerA" class="select" :disabled="!canSecondOpinion">
-              <option value="">{{ t('aiAgent.second.auto') }}</option>
-              <option v-for="p in allowedProviders" :key="p.id" :value="p.id">
-                {{ p.displayName || p.id }} · {{ p.modelId || '—' }}
-              </option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="label">{{ t('aiAgent.second.providerB') }}</span>
-            <select v-model="providerB" class="select" :disabled="!canSecondOpinion">
-              <option value="">{{ t('aiAgent.second.auto') }}</option>
-              <option v-for="p in allowedProviders" :key="p.id" :value="p.id">
-                {{ p.displayName || p.id }} · {{ p.modelId || '—' }}
-              </option>
-            </select>
-          </label>
-        </div>
-
-        <textarea
-          v-model="opinionQuestion"
-          class="textarea"
-          rows="3"
-          maxlength="2000"
-          :placeholder="t('aiAgent.second.placeholder')"
-          :disabled="!canSecondOpinion"
-        />
-
-        <div class="row row-wrap">
-          <button
-            class="btn btn--primary"
-            type="button"
-            :disabled="!canSecondOpinion || opinionBusy"
-            @click="runSecondOpinion"
-          >
-            <AppIcon name="users" :size="14" />
-            {{ opinionBusy ? t('aiAgent.second.running') : t('aiAgent.second.run') }}
-          </button>
-          <span v-if="!canSecondOpinion" class="hint is-warn">{{ t('aiAgent.second.needTwo') }}</span>
-          <span v-else class="hint">{{ t('aiAgent.second.review') }}</span>
-        </div>
-
-        <div v-if="opinionErr" class="notice notice--danger" role="alert">
-          <AppIcon name="alert" :size="15" />
-          <span>{{ opinionErr }}</span>
-        </div>
-
-        <div v-if="opinionResult" class="stack">
-          <div class="opinions">
-            <article v-for="o in opinionResult.opinions || []" :key="o.id" class="opinion">
-              <div class="opinion-head">
-                <b>{{ o.displayName || o.id }}</b>
-                <span class="mono muted">{{ o.modelId || o.id }}</span>
-                <span class="spacer" />
-                <span class="badge" :class="o.status === 'OK' ? 'badge--ok' : 'badge--danger'">
-                  {{ o.status === 'OK' ? t('aiAgent.second.ok') : t('aiAgent.second.failed') }}
-                </span>
-              </div>
-              <p v-if="o.status === 'OK'" class="answer-body">{{ o.answer || t('aiAgent.second.noAnswer') }}</p>
-              <p v-else class="hint is-warn">{{ t('aiAgent.second.failedCode', { code: o.error || '—' }) }}</p>
-            </article>
+          <div v-if="opinionErr" class="notice notice--danger" role="alert">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ opinionErr }}</span>
           </div>
 
-          <div v-if="opinionResult.divergence" class="divergence">
-            <div class="result-head">
-              <span class="sheet-title">{{ t('aiAgent.second.divergence') }}</span>
-              <span class="badge" :class="divergenceClass(opinionResult.divergence.level)">
-                {{ divergenceText(opinionResult.divergence.level) }}
-              </span>
-              <span class="spacer" />
-              <span class="hint">{{ t('aiAgent.second.elapsed', { ms: opinionResult.elapsedMs ?? 0 }) }}</span>
-            </div>
-            <dl class="facts">
-              <div class="fact">
-                <dt>{{ t('aiAgent.second.overlap') }}</dt>
-                <dd class="num">{{ formatOverlap(opinionResult.divergence.lexicalOverlap) }}</dd>
-              </div>
-              <div class="fact">
-                <dt>{{ t('aiAgent.second.numeric') }}</dt>
-                <dd class="row row-wrap">
-                  <span
-                    v-for="n in opinionResult.divergence.numericConflicts || []"
-                    :key="n"
-                    class="badge badge--warn mono"
-                  >{{ n }}</span>
-                  <span v-if="!(opinionResult.divergence.numericConflicts || []).length" class="hint">
-                    {{ t('aiAgent.second.noNumeric') }}
+          <div v-if="opinionResult" class="stack">
+            <div class="opinions">
+              <article v-for="o in opinionResult.opinions || []" :key="o.id" class="opinion">
+                <div class="opinion-head">
+                  <b>{{ o.displayName || o.id }}</b>
+                  <span class="mono muted">{{ o.modelId || o.id }}</span>
+                  <span class="spacer" />
+                  <span class="badge" :class="o.status === 'OK' ? 'badge--ok' : 'badge--danger'">
+                    {{ o.status === 'OK' ? t('aiAgent.second.ok') : t('aiAgent.second.failed') }}
                   </span>
-                </dd>
+                </div>
+                <p v-if="o.status === 'OK'" class="answer-body">{{ o.answer || t('aiAgent.second.noAnswer') }}</p>
+                <p v-else class="hint is-warn">{{ t('aiAgent.second.failedCode', { code: o.error || '—' }) }}</p>
+              </article>
+            </div>
+
+            <div v-if="opinionResult.divergence" class="divergence">
+              <div class="result-head">
+                <span class="sheet-title">{{ t('aiAgent.second.divergence') }}</span>
+                <span class="badge" :class="divergenceClass(opinionResult.divergence.level)">
+                  {{ divergenceText(opinionResult.divergence.level) }}
+                </span>
+                <span class="spacer" />
+                <span class="hint">{{ t('aiAgent.second.elapsed', { ms: opinionResult.elapsedMs ?? 0 }) }}</span>
               </div>
-            </dl>
-            <p class="hint">{{ opinionResult.divergence.note || opinionResult.note || '—' }}</p>
+              <dl class="facts">
+                <div class="fact">
+                  <dt>{{ t('aiAgent.second.overlap') }}</dt>
+                  <dd class="num">{{ formatOverlap(opinionResult.divergence.lexicalOverlap) }}</dd>
+                </div>
+                <div class="fact">
+                  <dt>{{ t('aiAgent.second.numeric') }}</dt>
+                  <dd class="row row-wrap">
+                    <span
+                      v-for="n in opinionResult.divergence.numericConflicts || []"
+                      :key="n"
+                      class="badge badge--warn mono"
+                    >{{ n }}</span>
+                    <span v-if="!(opinionResult.divergence.numericConflicts || []).length" class="hint">
+                      {{ t('aiAgent.second.noNumeric') }}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+              <p class="hint">{{ opinionResult.divergence.note || opinionResult.note || '—' }}</p>
+            </div>
+
+            <p v-if="opinionResult.needsHumanReview" class="notice notice--warn">
+              <AppIcon name="shield" :size="15" />
+              <span>{{ t('aiAgent.second.review') }}</span>
+            </p>
           </div>
-
-          <p v-if="opinionResult.needsHumanReview" class="notice notice--warn">
-            <AppIcon name="shield" :size="15" />
-            <span>{{ t('aiAgent.second.review') }}</span>
-          </p>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <AppModal
-      v-model="pendingFlagOpen"
-      :title="t('aiAgent.flag.confirmTitle', { title: pendingFlag?.title || '' })"
-      width="480px"
-    >
-      <p class="modal-note">{{ t('aiAgent.flag.confirmBody') }}</p>
-      <template #footer>
-        <button class="btn" type="button" @click="pendingFlag = null">{{ t('aiAgent.flag.cancel') }}</button>
-        <button class="btn btn--danger" type="button" :disabled="!!busyFlag" @click="confirmFlag">
-          {{ t('aiAgent.flag.confirmOk') }}
-        </button>
-      </template>
-    </AppModal>
+      <AppModal
+        v-model="pendingFlagOpen"
+        :title="t('aiAgent.flag.confirmTitle', { title: pendingFlag?.title || '' })"
+        width="480px"
+      >
+        <p class="modal-note">{{ t('aiAgent.flag.confirmBody') }}</p>
+        <template #footer>
+          <button class="btn" type="button" @click="pendingFlag = null">{{ t('aiAgent.flag.cancel') }}</button>
+          <button class="btn btn--danger" type="button" :disabled="!!busyFlag" @click="confirmFlag">
+            {{ t('aiAgent.flag.confirmOk') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -548,6 +551,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiAgentCatalog,
@@ -565,7 +569,7 @@ import {
   type AiAgentTool,
   type AiAgentWebPolicy,
 } from '@/api/ai'
-import { AiRequestError, errorText } from '@/api/http'
+import { AiRequestError, errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 
@@ -579,6 +583,7 @@ const webPolicy = ref<AiAgentWebPolicy | null>(null)
 
 const loading = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 const busyFlag = ref('')
 const pendingFlag = ref<AiAgentFlag | null>(null)
 
@@ -677,6 +682,7 @@ async function loadFlags() {
 async function loadAll() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   const results = await Promise.allSettled([
     aiAgentFlags(),
     aiAgentCatalog(),
@@ -693,8 +699,14 @@ async function loadAll() {
   if (policyRes.status === 'fulfilled') policy.value = policyRes.value
   if (webRes.status === 'fulfilled') webPolicy.value = webRes.value
 
+  const denied = results.some((r) => r.status === 'rejected' && isForbidden(r.reason))
   const failed = results.find((r) => r.status === 'rejected')
-  if (failed && failed.status === 'rejected') loadErr.value = errorText(failed.reason)
+  if (denied) {
+    forbidden.value = true
+    loadErr.value = ''
+  } else if (failed && failed.status === 'rejected') {
+    loadErr.value = errorText(failed.reason)
+  }
 
   if (!selectedAgentId.value && agents.value.length) {
     const auto = agents.value.find((a) => a.autoRoutable && a.id !== 'router')

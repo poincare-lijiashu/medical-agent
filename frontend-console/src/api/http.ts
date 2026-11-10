@@ -296,6 +296,11 @@ export function errorText(e: unknown): string {
   return '操作失败，请稍后重试'
 }
 
+/** 已登录但无权（403）：与“服务不可用/网络失败”区分，页面应显示受限说明而不是“重试”。 */
+export function isForbidden(e: unknown): boolean {
+  return (e as { status?: number } | null)?.status === 403
+}
+
 /* ------------------------------------------------------------------ *
  * AI 中台直连（第 132 批：内联审方/内联质控/会诊建议）
  *

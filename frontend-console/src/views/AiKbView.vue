@@ -8,192 +8,195 @@
       </template>
     </PageHeader>
 
-    <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="load" />
+    <PermissionDenied v-if="forbidden" />
+    <template v-else>
+      <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="load" />
 
-    <div class="kpi-strip">
-      <KpiCard :label="t('aiKb.kpi.vectors')" :value="list.total ?? 0" :unit="t('aiKb.unit.chunk')" :meta="t('aiKb.kpi.vectorsMeta')" />
-      <KpiCard :label="t('aiKb.kpi.uploaded')" :value="list.uploaded ?? 0" :unit="t('aiKb.unit.doc')" :meta="t('aiKb.kpi.uploadedMeta')" />
-      <KpiCard :label="t('aiKb.kpi.builtin')" :value="builtinCount" :unit="t('aiKb.unit.doc')" :meta="t('aiKb.kpi.builtinMeta')" />
-      <KpiCard :label="t('aiKb.kpi.docs')" :value="docs.length" :unit="t('aiKb.unit.doc')" :meta="t('aiKb.kpi.docsMeta')" />
-    </div>
-
-    <!-- 上传 -->
-    <div class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiKb.upload.title') }}</span>
-        <span class="spacer" />
-        <span class="hint">{{ t('aiKb.upload.hint') }}</span>
+      <div class="kpi-strip">
+        <KpiCard :label="t('aiKb.kpi.vectors')" :value="list.total ?? 0" :unit="t('aiKb.unit.chunk')" :meta="t('aiKb.kpi.vectorsMeta')" />
+        <KpiCard :label="t('aiKb.kpi.uploaded')" :value="list.uploaded ?? 0" :unit="t('aiKb.unit.doc')" :meta="t('aiKb.kpi.uploadedMeta')" />
+        <KpiCard :label="t('aiKb.kpi.builtin')" :value="builtinCount" :unit="t('aiKb.unit.doc')" :meta="t('aiKb.kpi.builtinMeta')" />
+        <KpiCard :label="t('aiKb.kpi.docs')" :value="docs.length" :unit="t('aiKb.unit.doc')" :meta="t('aiKb.kpi.docsMeta')" />
       </div>
-      <div class="sheet-body stack">
-        <div class="upload-row">
-          <input
-            ref="fileInput"
-            class="file"
-            type="file"
-            multiple
-            accept=".md,.txt,.pdf,.png,.jpg,.jpeg"
-            :aria-label="t('aiKb.upload.choose')"
-            @change="onFilesPicked"
-          />
-          <button class="btn btn--primary" type="button" :disabled="uploading || picked.length === 0" @click="uploadAll">
-            <AppIcon name="upload" :size="14" /> {{ t('aiKb.upload.start') }}
-          </button>
-          <button v-if="uploading" class="btn btn--sm" type="button" @click="cancelUpload">
-            {{ t('aiKb.upload.cancel') }}
-          </button>
-          <span class="muted small">{{ picked.length ? t('aiKb.upload.picked', { n: picked.length }) : t('aiKb.upload.none') }}</span>
+
+      <!-- 上传 -->
+      <div class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiKb.upload.title') }}</span>
+          <span class="spacer" />
+          <span class="hint">{{ t('aiKb.upload.hint') }}</span>
+        </div>
+        <div class="sheet-body stack">
+          <div class="upload-row">
+            <input
+              ref="fileInput"
+              class="file"
+              type="file"
+              multiple
+              accept=".md,.txt,.pdf,.png,.jpg,.jpeg"
+              :aria-label="t('aiKb.upload.choose')"
+              @change="onFilesPicked"
+            />
+            <button class="btn btn--primary" type="button" :disabled="uploading || picked.length === 0" @click="uploadAll">
+              <AppIcon name="upload" :size="14" /> {{ t('aiKb.upload.start') }}
+            </button>
+            <button v-if="uploading" class="btn btn--sm" type="button" @click="cancelUpload">
+              {{ t('aiKb.upload.cancel') }}
+            </button>
+            <span class="muted small">{{ picked.length ? t('aiKb.upload.picked', { n: picked.length }) : t('aiKb.upload.none') }}</span>
+          </div>
+
+          <div v-if="progressPct > 0" class="progress" role="progressbar" :aria-valuenow="progressPct" aria-valuemin="0" aria-valuemax="100">
+            <span :style="{ width: progressPct + '%' }" />
+          </div>
+
+          <ul v-if="messages.length" class="msg-list">
+            <li v-for="(m, i) in messages" :key="i" :class="`msg msg--${m.kind}`">
+              {{ m.text }}
+            </li>
+          </ul>
+
+          <p class="muted small">{{ t('aiKb.upload.rules') }}</p>
+        </div>
+      </div>
+
+      <!-- 文档列表 -->
+      <div class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiKb.docs.title') }}</span>
+          <span class="badge badge--neutral">{{ filteredDocs.length }}</span>
+          <span class="spacer" />
+          <label class="field">
+            <span class="label">{{ t('aiKb.docs.search') }}</span>
+            <input v-model="keyword" class="input" type="search" spellcheck="false" :placeholder="t('aiKb.docs.searchHint')" />
+          </label>
         </div>
 
-        <div v-if="progressPct > 0" class="progress" role="progressbar" :aria-valuenow="progressPct" aria-valuemin="0" aria-valuemax="100">
-          <span :style="{ width: progressPct + '%' }" />
-        </div>
-
-        <ul v-if="messages.length" class="msg-list">
-          <li v-for="(m, i) in messages" :key="i" :class="`msg msg--${m.kind}`">
-            {{ m.text }}
-          </li>
-        </ul>
-
-        <p class="muted small">{{ t('aiKb.upload.rules') }}</p>
-      </div>
-    </div>
-
-    <!-- 文档列表 -->
-    <div class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiKb.docs.title') }}</span>
-        <span class="badge badge--neutral">{{ filteredDocs.length }}</span>
-        <span class="spacer" />
-        <label class="field">
-          <span class="label">{{ t('aiKb.docs.search') }}</span>
-          <input v-model="keyword" class="input" type="search" spellcheck="false" :placeholder="t('aiKb.docs.searchHint')" />
-        </label>
-      </div>
-
-      <TableSkeleton v-if="loading && !loaded" :rows="6" />
-      <EmptyState
-        v-else-if="filteredDocs.length === 0"
-        :title="keyword.trim() ? t('aiKb.docs.emptySearch') : t('aiKb.docs.empty')"
-        :desc="keyword.trim() ? t('aiKb.docs.emptySearchDesc') : t('aiKb.docs.emptyDesc')"
-      />
-      <div v-else class="table-wrap">
-        <table class="table table--stack">
-          <thead>
-            <tr>
-              <th>{{ t('aiKb.col.name') }}</th>
-              <th>{{ t('aiKb.col.kind') }}</th>
-              <th class="is-num">{{ t('aiKb.col.chunks') }}</th>
-              <th>{{ t('aiKb.col.time') }}</th>
-              <th class="col-action">{{ t('aiKb.col.actions') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="d in pageDocs" :key="d.doc_tag || d.name">
-              <td class="is-strong" data-primary>{{ d.name || '—' }}</td>
-              <td data-label="kind">
-                <span class="badge" :class="d.kind === 'builtin' ? 'badge--accent' : 'badge--neutral'">
-                  {{ d.kind === 'builtin' ? t('aiKb.kind.builtin') : t('aiKb.kind.uploaded') }}
-                </span>
-              </td>
-              <td class="is-num" data-label="chunks">{{ d.chunks ?? 0 }}</td>
-              <td data-label="time">{{ dateTime(d.ts) }}</td>
-              <td class="col-action">
-                <div class="row-actions">
-                  <button class="btn btn--sm" type="button" @click="openPreview(d)">
-                    {{ t('aiKb.action.preview') }}
-                  </button>
-                  <button class="btn btn--sm btn--danger" type="button" @click="askDelete(d)">
-                    {{ t('aiKb.action.delete') }}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-if="pages > 1" class="pager">
-        <span class="pager-info">{{ t('aiKb.pager', { page: page + 1, pages, total: filteredDocs.length }) }}</span>
-        <button class="btn btn--sm" type="button" :disabled="page === 0" @click="page -= 1">{{ t('aiKb.action.prev') }}</button>
-        <button class="btn btn--sm" type="button" :disabled="page >= pages - 1" @click="page += 1">{{ t('aiKb.action.next') }}</button>
-      </div>
-    </div>
-
-    <!-- 完整性检查（只读，不修复） -->
-    <div class="sheet">
-      <div class="sheet-head">
-        <span class="sheet-title">{{ t('aiKb.integrity.title') }}</span>
-        <span class="spacer" />
-        <span class="hint">{{ t('aiKb.integrity.hint') }}</span>
-        <button class="btn btn--sm" type="button" :disabled="integrityLoading" @click="runIntegrity">
-          <AppIcon name="shield" :size="13" />
-          {{ integrityLoading ? t('aiKb.integrity.running') : t('aiKb.integrity.run') }}
-        </button>
-      </div>
-      <div v-if="integrity" class="sheet-body stack">
-        <p class="muted small">
-          {{ t('aiKb.integrity.summary', { scanned: integrity.summary?.scanned ?? 0, issues: integrity.issues?.length ?? 0 }) }}
-          <template v-if="!integrity.vectorCheck"> {{ t('aiKb.integrity.noVectorCheck') }}</template>
-        </p>
-        <div v-if="(integrity.issues || []).length" class="table-wrap">
-          <table class="table">
+        <TableSkeleton v-if="loading && !loaded" :rows="6" />
+        <EmptyState
+          v-else-if="filteredDocs.length === 0"
+          :title="keyword.trim() ? t('aiKb.docs.emptySearch') : t('aiKb.docs.empty')"
+          :desc="keyword.trim() ? t('aiKb.docs.emptySearchDesc') : t('aiKb.docs.emptyDesc')"
+        />
+        <div v-else class="table-wrap">
+          <table class="table table--stack">
             <thead>
               <tr>
-                <th>doc_tag</th>
                 <th>{{ t('aiKb.col.name') }}</th>
+                <th>{{ t('aiKb.col.kind') }}</th>
                 <th class="is-num">{{ t('aiKb.col.chunks') }}</th>
-                <th>{{ t('aiKb.col.issues') }}</th>
+                <th>{{ t('aiKb.col.time') }}</th>
+                <th class="col-action">{{ t('aiKb.col.actions') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="it in integrity.issues || []" :key="it.doc_tag">
-                <td class="mono">{{ it.doc_tag || '—' }}</td>
-                <td>{{ it.name || '—' }}</td>
-                <td class="is-num">{{ it.chunks ?? 0 }}</td>
-                <td>
-                  <span v-for="x in it.issues || []" :key="x" class="badge badge--warn issue">{{ x }}</span>
+              <tr v-for="d in pageDocs" :key="d.doc_tag || d.name">
+                <td class="is-strong" data-primary>{{ d.name || '—' }}</td>
+                <td data-label="kind">
+                  <span class="badge" :class="d.kind === 'builtin' ? 'badge--accent' : 'badge--neutral'">
+                    {{ d.kind === 'builtin' ? t('aiKb.kind.builtin') : t('aiKb.kind.uploaded') }}
+                  </span>
+                </td>
+                <td class="is-num" data-label="chunks">{{ d.chunks ?? 0 }}</td>
+                <td data-label="time">{{ dateTime(d.ts) }}</td>
+                <td class="col-action">
+                  <div class="row-actions">
+                    <button class="btn btn--sm" type="button" @click="openPreview(d)">
+                      {{ t('aiKb.action.preview') }}
+                    </button>
+                    <button class="btn btn--sm btn--danger" type="button" @click="askDelete(d)">
+                      {{ t('aiKb.action.delete') }}
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        <p v-else class="muted small">{{ t('aiKb.integrity.clean') }}</p>
+        <div v-if="pages > 1" class="pager">
+          <span class="pager-info">{{ t('aiKb.pager', { page: page + 1, pages, total: filteredDocs.length }) }}</span>
+          <button class="btn btn--sm" type="button" :disabled="page === 0" @click="page -= 1">{{ t('aiKb.action.prev') }}</button>
+          <button class="btn btn--sm" type="button" :disabled="page >= pages - 1" @click="page += 1">{{ t('aiKb.action.next') }}</button>
+        </div>
       </div>
-      <div v-else class="sheet-body">
-        <p class="muted small">{{ t('aiKb.integrity.idle') }}</p>
-      </div>
-    </div>
 
-    <!-- 切片预览 -->
-    <AppModal v-model="previewOpen" :title="t('aiKb.preview.title', { name: previewName })" width="720px">
-      <TableSkeleton v-if="previewLoading" :rows="4" />
-      <EmptyState
-        v-else-if="previewChunks.length === 0"
-        :title="t('aiKb.preview.empty')"
-        :desc="t('aiKb.preview.emptyDesc')"
-      />
-      <ol v-else class="chunk-list">
-        <li v-for="(c, i) in previewChunks" :key="i">
-          <div class="muted small">
-            {{ t('aiKb.preview.chunkNo', { n: i + 1 }) }}<template v-if="c.source"> · {{ c.source }}</template>
+      <!-- 完整性检查（只读，不修复） -->
+      <div class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiKb.integrity.title') }}</span>
+          <span class="spacer" />
+          <span class="hint">{{ t('aiKb.integrity.hint') }}</span>
+          <button class="btn btn--sm" type="button" :disabled="integrityLoading" @click="runIntegrity">
+            <AppIcon name="shield" :size="13" />
+            {{ integrityLoading ? t('aiKb.integrity.running') : t('aiKb.integrity.run') }}
+          </button>
+        </div>
+        <div v-if="integrity" class="sheet-body stack">
+          <p class="muted small">
+            {{ t('aiKb.integrity.summary', { scanned: integrity.summary?.scanned ?? 0, issues: integrity.issues?.length ?? 0 }) }}
+            <template v-if="!integrity.vectorCheck"> {{ t('aiKb.integrity.noVectorCheck') }}</template>
+          </p>
+          <div v-if="(integrity.issues || []).length" class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>doc_tag</th>
+                  <th>{{ t('aiKb.col.name') }}</th>
+                  <th class="is-num">{{ t('aiKb.col.chunks') }}</th>
+                  <th>{{ t('aiKb.col.issues') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="it in integrity.issues || []" :key="it.doc_tag">
+                  <td class="mono">{{ it.doc_tag || '—' }}</td>
+                  <td>{{ it.name || '—' }}</td>
+                  <td class="is-num">{{ it.chunks ?? 0 }}</td>
+                  <td>
+                    <span v-for="x in it.issues || []" :key="x" class="badge badge--warn issue">{{ x }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <p>{{ c.content || '' }}</p>
-        </li>
-      </ol>
-      <template #footer>
-        <button class="btn" type="button" @click="previewOpen = false">{{ t('aiKb.action.close') }}</button>
-      </template>
-    </AppModal>
+          <p v-else class="muted small">{{ t('aiKb.integrity.clean') }}</p>
+        </div>
+        <div v-else class="sheet-body">
+          <p class="muted small">{{ t('aiKb.integrity.idle') }}</p>
+        </div>
+      </div>
 
-    <!-- 删除确认 -->
-    <AppModal v-model="deleteOpen" :title="t('aiKb.delete.title', { name: deleteName })" width="460px">
-      <p class="modal-note">{{ isBuiltinTarget ? t('aiKb.delete.builtinBody') : t('aiKb.delete.body') }}</p>
-      <template #footer>
-        <button class="btn" type="button" :disabled="deleting" @click="deleteOpen = false">{{ t('aiKb.action.cancel') }}</button>
-        <button class="btn btn--danger" type="button" :disabled="deleting" @click="confirmDelete">
-          {{ t('aiKb.action.confirmDelete') }}
-        </button>
-      </template>
-    </AppModal>
+      <!-- 切片预览 -->
+      <AppModal v-model="previewOpen" :title="t('aiKb.preview.title', { name: previewName })" width="720px">
+        <TableSkeleton v-if="previewLoading" :rows="4" />
+        <EmptyState
+          v-else-if="previewChunks.length === 0"
+          :title="t('aiKb.preview.empty')"
+          :desc="t('aiKb.preview.emptyDesc')"
+        />
+        <ol v-else class="chunk-list">
+          <li v-for="(c, i) in previewChunks" :key="i">
+            <div class="muted small">
+              {{ t('aiKb.preview.chunkNo', { n: i + 1 }) }}<template v-if="c.source"> · {{ c.source }}</template>
+            </div>
+            <p>{{ c.content || '' }}</p>
+          </li>
+        </ol>
+        <template #footer>
+          <button class="btn" type="button" @click="previewOpen = false">{{ t('aiKb.action.close') }}</button>
+        </template>
+      </AppModal>
+
+      <!-- 删除确认 -->
+      <AppModal v-model="deleteOpen" :title="t('aiKb.delete.title', { name: deleteName })" width="460px">
+        <p class="modal-note">{{ isBuiltinTarget ? t('aiKb.delete.builtinBody') : t('aiKb.delete.body') }}</p>
+        <template #footer>
+          <button class="btn" type="button" :disabled="deleting" @click="deleteOpen = false">{{ t('aiKb.action.cancel') }}</button>
+          <button class="btn btn--danger" type="button" :disabled="deleting" @click="confirmDelete">
+            {{ t('aiKb.action.confirmDelete') }}
+          </button>
+        </template>
+      </AppModal>
+    </template>
   </div>
 </template>
 
@@ -205,6 +208,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
+import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
   aiKbDelete,
@@ -218,7 +222,7 @@ import {
   type AiKbList,
   type AiKbTask,
 } from '@/api/ai'
-import { errorText } from '@/api/http'
+import { errorText, isForbidden } from '@/api/http'
 import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -231,6 +235,7 @@ const list = ref<AiKbList>({})
 const loading = ref(false)
 const loaded = ref(false)
 const loadErr = ref('')
+const forbidden = ref(false)
 const keyword = ref('')
 const page = ref(0)
 
@@ -251,12 +256,18 @@ const pageDocs = computed(() => {
 async function load() {
   loading.value = true
   loadErr.value = ''
+  forbidden.value = false
   try {
     list.value = await aiKbList()
     loaded.value = true
     if (page.value > pages.value - 1) page.value = Math.max(0, pages.value - 1)
   } catch (e) {
-    loadErr.value = errorText(e)
+    if (isForbidden(e)) {
+      forbidden.value = true
+      loadErr.value = ''
+    } else {
+      loadErr.value = errorText(e)
+    }
   } finally {
     loading.value = false
   }
