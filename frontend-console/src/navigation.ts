@@ -530,6 +530,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'QC'],
   },
   {
+    // 第 208 批：AI 运营看板（只读聚合；唯一写操作是记录快照）
+    name: 'ai-ops',
+    path: '/ai/agent/ops',
+    title: 'AI 运营看板',
+    hint: '问答质量与耗时 · 技能使用集中度 · 阈值告警 · 按日快照趋势 · 持久化指标',
+    icon: 'activity',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',

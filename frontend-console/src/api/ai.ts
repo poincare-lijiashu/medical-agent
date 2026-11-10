@@ -1334,6 +1334,165 @@ export function aiTeamCollaborate(code: string, question: string): Promise<AiTea
   )
 }
 
+/* ------------------------------------------------------------------ *
+ * AI 运营看板（第 208 批，仅 ADMIN / QC）
+ *
+ * 全部只读聚合，除「记录今日快照」外不写任何业务数据：
+ *   - metrics：经验/候选/技能卡/Bot 的持久化指标；
+ *   - usage：**进程内**计量（重启归零），dataAvailable=false 时不能显示 0%；
+ *   - trends：按日快照，少于 2 天显式 insufficient，不插值；
+ *   - alerts：阈值告警，只提示不处置。
+ * ------------------------------------------------------------------ */
+
+export interface AiOpsMetrics {
+  experiences?: {
+    total?: number
+    byAgent?: Record<string, number>
+    coveredByProposal?: number
+    coverageRate?: number
+  }
+  proposals?: {
+    total?: number
+    byStatus?: Record<string, number>
+    proposed?: number
+    adopted?: number
+    rejected?: number
+    adoptionRate?: number
+    replayChecked?: number
+    replayPassed?: number
+    replayPassRate?: number
+  }
+  skillCards?: {
+    total?: number
+    byStatus?: Record<string, number>
+    byAgent?: Record<string, number>
+    publishedByAgent?: Record<string, number>
+    reviewPassRate?: number
+    published?: number
+    referencedByBots?: number
+    unusedPublished?: string[]
+  }
+  bots?: { total?: number; published?: number; withSkills?: number; teams?: number }
+  note?: string
+}
+
+export interface AiOpsUsageItem {
+  code?: string
+  name?: string
+  agentId?: string
+  version?: number
+  published?: boolean
+  usage?: number
+  perRequestAvg?: number
+  lastUsedAt?: string | null
+}
+
+export interface AiOpsUsage {
+  window?: string
+  generatedAt?: string
+  dataAvailable?: boolean
+  dataNote?: string | null
+  requests?: {
+    total?: number
+    ok?: number
+    error?: number
+    aborted?: number
+    successRate?: number
+    errorRate?: number
+    abortedRate?: number
+    channels?: Record<string, { total?: number; ok?: number; error?: number; aborted?: number }>
+    agents?: Record<string, { total?: number; ok?: number; error?: number; aborted?: number }>
+    errorRateNote?: string
+  }
+  thresholds?: { errorRate?: number; abortedRate?: number; qualityRate?: number }
+  quality?: {
+    signals?: Record<string, number>
+    flagged?: number
+    signalsPerOk?: number
+    note?: string
+  }
+  duration?: {
+    avgMs?: number
+    byChannel?: Record<string, { avgMs?: number; count?: number }>
+  }
+  tokens?: {
+    input?: number
+    output?: number
+    total?: number
+    tokenizedRequests?: number
+    coverageRatio?: number
+  }
+  skills?: {
+    published?: number
+    used?: number
+    usageRatio?: number
+    usageRatioNote?: string
+    skillReferences?: number
+    dominantShare?: number
+    concentration?: number
+    unusedInProcess?: string[]
+    usedNotPublishedInProcess?: string[]
+    items?: AiOpsUsageItem[]
+  }
+  note?: string
+}
+
+export interface AiOpsSnapshot {
+  id?: string
+  date?: string
+  generatedAt?: string
+  generatedBy?: string
+  overwritten?: boolean
+  overwriteCount?: number
+  firstGeneratedAt?: string
+  firstGeneratedBy?: string
+  metrics?: AiOpsMetrics
+}
+
+export interface AiOpsTrends {
+  sufficient?: boolean
+  snapshots?: AiOpsSnapshot[]
+  deltas?: Record<string, number | null> | null
+  note?: string
+}
+
+export interface AiOpsAlert {
+  level?: string
+  code?: string
+  message?: string
+  metric?: string
+  value?: number | string | null
+  threshold?: number | string | null
+}
+
+export interface AiOpsAlerts {
+  generatedAt?: string
+  alerts?: AiOpsAlert[]
+  levelCounts?: Record<string, number>
+  note?: string
+}
+
+export function aiOpsMetrics(): Promise<AiOpsMetrics> {
+  return aiGet<AiOpsMetrics>('/agent/skill-library/metrics')
+}
+
+export function aiOpsUsage(): Promise<AiOpsUsage> {
+  return aiGet<AiOpsUsage>('/agent/skill-library/usage')
+}
+
+export function aiOpsTrends(days = 30): Promise<AiOpsTrends> {
+  return aiGet<AiOpsTrends>('/agent/skill-library/trends', { days })
+}
+
+export function aiOpsAlerts(): Promise<AiOpsAlerts> {
+  return aiGet<AiOpsAlerts>('/agent/skill-library/alerts')
+}
+
+/** 记录今日指标快照（同一天幂等覆盖，覆盖留痕）。 */
+export function aiOpsSnapshot(date?: string): Promise<AiOpsSnapshot> {
+  return aiPost<AiOpsSnapshot>('/agent/skill-library/snapshot', { date })
+}
+
 export function aiAgentConsult(
   body: {
     question: string
