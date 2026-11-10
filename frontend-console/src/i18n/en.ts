@@ -24,6 +24,12 @@ const messages: Record<MessageKey, string> = {
   'shell.language': '中文',
   'shell.console': 'Console',
 
+  /* ---------- Global error boundary ---------- */
+  'boundary.title': 'This page failed to render',
+  'boundary.desc': 'A rendering error occurred on this page; the rest of the system is unaffected. Retry, or return to the dashboard.',
+  'boundary.retry': 'Retry this page',
+  'boundary.home': 'Back to dashboard',
+
   /* ---------- Command palette ---------- */
   'palette.dialog': 'Command palette',
   'palette.search': 'Command search',

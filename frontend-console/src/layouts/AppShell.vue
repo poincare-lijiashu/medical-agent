@@ -105,7 +105,9 @@
       </header>
 
       <main id="main" class="canvas" tabindex="-1">
-        <RouterView />
+        <AppErrorBoundary>
+          <RouterView />
+        </AppErrorBoundary>
       </main>
     </div>
 
@@ -123,6 +125,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
+import AppErrorBoundary from '@/components/ui/AppErrorBoundary.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
 import { NAV_GROUPS, NAV_ITEMS, canSeeNav, findNav } from '@/navigation'
 import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'

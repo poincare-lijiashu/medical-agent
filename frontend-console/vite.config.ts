@@ -51,5 +51,11 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // 第 214 批：框架运行时单独成块，升级业务代码时 vendor 哈希不变，长缓存可命中
+        manualChunks: { 'vendor-vue': ['vue', 'vue-router'] },
+      },
+    },
   },
 })

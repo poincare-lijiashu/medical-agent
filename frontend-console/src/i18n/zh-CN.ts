@@ -27,6 +27,12 @@ const messages = {
   'shell.language': 'English',
   'shell.console': '控制台',
 
+  /* ---------- 全局错误边界 ---------- */
+  'boundary.title': '当前页面出错',
+  'boundary.desc': '页面渲染时遇到异常，其他功能不受影响。可重试，或返回运营驾驶舱。',
+  'boundary.retry': '重试当前页',
+  'boundary.home': '返回驾驶舱',
+
   /* ---------- 命令面板 ---------- */
   'palette.dialog': '命令面板',
   'palette.search': '命令搜索',
