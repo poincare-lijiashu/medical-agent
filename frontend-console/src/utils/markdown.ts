@@ -7,22 +7,7 @@
  * 不含任何可注入标签（与旧前端同一净化策略，切换前后渲染结果一致）。
  */
 
-export function escapeHtml(input: unknown): string {
-  return String(input ?? '').replace(/[<>&"']/g, (c) => {
-    switch (c) {
-      case '<':
-        return '&lt;'
-      case '>':
-        return '&gt;'
-      case '&':
-        return '&amp;'
-      case '"':
-        return '&quot;'
-      default:
-        return '&#39;'
-    }
-  })
-}
+import { escapeHtml } from './html'
 
 /** 安全 Markdown：先转义，再渲染粗体/标题/列表/换行 + 轻量 LaTeX 清理。 */
 export function md(text: string | null | undefined): string {

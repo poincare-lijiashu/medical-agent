@@ -372,6 +372,8 @@ import type {
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
+import { escapeHtml } from '@/utils/html'
+import { printHtml } from '@/utils/print'
 
 const role = session.roleLabel
 const canWrite = computed(() => hasPermission('emr:consent:write'))
@@ -578,22 +580,8 @@ async function verify(c: ConsentRecord) {
 }
 
 function printConsent(c: ConsentRecord) {
-  const w = window.open('', '_blank', 'width=840,height=920')
-  if (!w) {
-    toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
-    return
-  }
   const esc = (v: string | null | undefined) => escapeHtml(v ?? '—')
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
-    <title>${esc(c.templateName)} ${esc(c.consentNo)}</title>
-    <style>
-      body{font-family:"Songti SC","SimSun",serif;color:#111;margin:36px;line-height:1.75}
-      h1{font-size:20px;text-align:center;margin:0 0 6px}
-      .meta{text-align:center;color:#555;font-size:12px;margin-bottom:22px}
-      .content{font-size:14px;white-space:pre-wrap}
-      .sign{margin-top:36px;display:grid;gap:10px;font-size:13px}
-      .foot{margin-top:28px;color:#777;font-size:11px;border-top:1px solid #ddd;padding-top:8px;word-break:break-all}
-    </style></head><body>
+  const body = `
     <h1>${esc(c.templateName)}</h1>
     <div class="meta">${esc(c.consentNo)} · ${esc(c.procedureName)} · 患者 ${esc(c.patientName)}（${esc(c.patientNo)}）</div>
     <div class="content">${escapeHtml(c.contentText)}</div>
@@ -604,12 +592,20 @@ function printConsent(c: ConsentRecord) {
       <div>签署时间：${c.signedAt ? esc(dateTime(c.signedAt)) : '—'}</div>
       <div>签署方式：${c.signMethod === 'CA' ? 'CA 电子签名' : c.signMethod === 'PAPER' ? '纸笔' : '—'}</div>
     </div>
-    <div class="foot">内容哈希 SHA-256：${esc(c.contentHash)}</div>
-    </body></html>`
-  w.document.write(html)
-  w.document.close()
-  w.focus()
-  w.print()
+    <div class="foot">内容哈希 SHA-256：${esc(c.contentHash)}</div>`
+  const ok = printHtml({
+    title: `${c.templateName} ${c.consentNo}`,
+    body,
+    css: `
+      body { font-family: "Songti SC", "SimSun", serif; line-height: 1.75; }
+      h1 { text-align: center; margin: 0 0 6px; }
+      .meta { text-align: center; color: #555; font-size: 12px; margin-bottom: 22px; }
+      .content { font-size: 14px; white-space: pre-wrap; }
+      .sign { margin-top: 36px; display: grid; gap: 10px; font-size: 13px; }
+      .foot { margin-top: 28px; font-size: 11px; border-top: 1px solid #ddd; padding-top: 8px; word-break: break-all; }
+    `,
+  })
+  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
 }
 
 /* ------------------------------ 模板 ------------------------------ */
@@ -711,15 +707,6 @@ function templateTone(status: string): string {
   if (status === 'PUBLISHED') return 'badge--ok'
   if (status === 'DISABLED') return 'badge--neutral'
   return 'badge--warn'
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
 }
 </script>
 

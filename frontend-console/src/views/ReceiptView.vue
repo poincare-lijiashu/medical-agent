@@ -337,6 +337,8 @@ import type {
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime, money, todayIso } from '@/utils/format'
+import { escapeHtml } from '@/utils/html'
+import { printHtml } from '@/utils/print'
 
 const role = session.roleLabel
 const canIssue = computed(() => hasPermission('clinical:receipt:issue'))
@@ -577,27 +579,13 @@ function pushTone(status: string): string {
   return 'badge--warn'
 }
 
-/** 打印：打开独立窗口渲染票据，不打印工作台本身。 */
+/** 打印：统一打印通道渲染票据，不打印工作台本身。 */
 function printReceipt(r: ChargeReceipt) {
-  const escape = (s: string) =>
-    s.replace(/[&<>"']/g, (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
-    )
+  const escape = escapeHtml
   const visitNo = selectedVisit.value?.visitNo ?? ''
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-    <title>收费票据 ${escape(r.receiptNo)}</title>
-    <style>
-      body{font-family:-apple-system,"Microsoft YaHei",sans-serif;padding:32px;color:#111}
-      h1{font-size:20px;margin:0 0 4px}
-      .sub{color:#666;font-size:12px;margin-bottom:20px}
-      table{width:100%;border-collapse:collapse;font-size:14px}
-      th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #ddd}
-      .amount{font-size:24px;font-weight:600;margin:18px 0}
-      .status{display:inline-block;padding:2px 8px;border:1px solid #999;border-radius:10px;font-size:12px}
-      .foot{margin-top:24px;color:#666;font-size:12px}
-    </style></head><body>
+  const body = `
     <h1>收费票据</h1>
-    <div class="sub">${escape(session.user.value?.displayName ?? '')} · ${escape(r.receiptNo)}</div>
+    <div class="muted">${escape(session.user.value?.displayName ?? '')} · ${escape(r.receiptNo)}</div>
     <div class="amount">${escape(money(r.amount))}
       <span class="status">${r.status === 'ISSUED' ? '有效' : '已作废'}</span>
     </div>
@@ -610,17 +598,16 @@ function printReceipt(r: ChargeReceipt) {
       <tr><th>重打次数</th><td>${r.reprintCount}</td></tr>
       ${r.voidReason ? `<tr><th>作废原因</th><td>${escape(r.voidReason)}</td></tr>` : ''}
     </table>
-    <div class="foot">本票据为系统打印件，请与收费记录核对；作废票据不可作为收款凭证。</div>
-    </body></html>`
-  const win = window.open('', '_blank', 'width=720,height=640')
-  if (!win) {
-    toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
-    return
-  }
-  win.document.write(html)
-  win.document.close()
-  win.focus()
-  win.print()
+    <div class="foot">本票据为系统打印件，请与收费记录核对；作废票据不可作为收款凭证。</div>`
+  const ok = printHtml({
+    title: `收费票据 ${r.receiptNo}`,
+    body,
+    css: `
+      .amount { font-size: 24px; font-weight: 600; margin: 18px 0; }
+      .status { display: inline-block; padding: 2px 8px; border: 1px solid #999; border-radius: 10px; font-size: 12px; }
+    `,
+  })
+  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
 }
 </script>
 

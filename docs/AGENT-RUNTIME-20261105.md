@@ -9513,6 +9513,49 @@ typecheck → 通过；build → 通过（入口 92.8KB gzip，预算内）
   若改用 `session.permissions.includes(...)` 等新写法需同步扩展解析；
 - 权限点撤销（删除迁移）无法检测：种子 SQL 只增不删，历史授权会一直在目录里。
 
+## 225. 2026-11-11 打印通道收口与 HTML 转义单一实现（第 225 批）
+
+**问题**
+
+- 收费票据、知情同意书各自 `window.open('', '_blank')` + 拼 HTML + `document.write`：
+  打印版式两套、`<title>` 未转义（打印机任务名会出现乱码/被截断）、弹窗拦截处理各写一遍；
+- 页内转义函数有三份（`ConsentsView` 局部、`ReceiptView` 内联、`utils/markdown.ts`），
+  新增单据时极容易复制到“少转义一个字符”的版本——患者姓名/诊断/药品名都是外部文本；
+- 打印后不关窗，收费窗口会堆积空白页，护士要手工逐个关闭。
+
+**本批做了什么**
+
+1. **`src/utils/html.ts`**：`escapeHtml` 唯一实现（覆盖 `& < > " '`），
+   `utils/markdown.ts` 改为复用它，`ConsentsView` 删除局部实现、`ReceiptView` 删除内联版本。
+2. **`src/utils/print.ts`**：统一打印通道 `printHtml({ title, body, css })`
+   - 统一 A4 版式（`@page` 16mm 边距、字体栈、表格线、页脚留白），科室差异只追加 `css`；
+   - `title` 一律转义；`body`/`css` 中的 `script`、提前闭合的 `</style>` 会被剥离；
+   - 弹窗被拦截返回 `false`，提示文案由页面决定（工具层不耦合 toast）；
+   - `onafterprint` 自动关窗（含取消打印）。
+3. **两个单据页改造**：`ReceiptView.printReceipt`、`ConsentsView.printConsent`
+   改为组装 `body` + 专属 `css` 调 `printHtml`，页面不再直接操作打印窗口。
+4. **回归锁 `tests/test_console_print.py`（5 条）**：`window.open('')`/`document.write`
+   只允许出现在 `utils/print.ts`；`escapeHtml` 全仓库仅一份实现且 `markdown.ts` 复用它；
+   通道必须具备 `@page`、标题转义、script 剥离、afterprint；两个单据页不得再调 `win.print()`。
+
+**验证**
+
+```
+定向：test_console_print.py → 5 passed
+前端：npm run typecheck → 通过；npm run build → 通过
+      入口 92.81 KB gzip / vendor 42.44 KB gzip / 首屏合计约 135 KB（预算 170 KB）
+全量：pytest --ignore=tests/e2e → 1874 passed / 1 skipped
+```
+
+**遗留**
+
+- 只有票据与知情同意书接了统一通道；处方笺、输液卡、腕带、住院清单等仍未做打印，
+  后续新增单据直接调 `printHtml`，不要自建窗口；
+- 打印是浏览器 A4 版式，未适配针式打印机（连续纸）与热敏小票（58/80mm）
+  的专用排版，需按院内设备补 `@page size` 档位；
+- 未做打印留痕：谁在什么时间打印了哪张单据目前只靠业务表的重打计数，
+  统一的打印审计（含失败/取消）需要后端新增上报端点。.
+
 
 
 
