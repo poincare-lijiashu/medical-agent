@@ -52,6 +52,29 @@
         />
       </div>
 
+      <!-- 编排就绪度（第 218 批）：首次使用时给出可执行的下一步，而不是一堆 0 -->
+      <section v-if="setupAvailable" class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">{{ t('aiAgent.setup.title') }}</span>
+          <span class="spacer" />
+          <span v-if="setupDone" class="badge badge--ok">{{ t('aiAgent.setup.ready', { skills: publishedSkillCount, bots: publishedBotCount, teams: activeTeamCount }) }}</span>
+          <span v-else class="hint">{{ t('aiAgent.setup.hint') }}</span>
+        </div>
+        <div v-if="!setupDone" class="setup-grid">
+          <RouterLink v-for="step in setupSteps" :key="step.key" :to="step.to" class="setup-step">
+            <span class="badge" :class="step.done ? 'badge--ok' : 'badge--warn'">
+              {{ step.done ? t('aiAgent.setup.done') : t('aiAgent.setup.todo') }}
+            </span>
+            <b class="setup-title">{{ step.title }}</b>
+            <span class="hint">{{ step.desc }}</span>
+            <span class="setup-link">{{ step.done ? t('aiAgent.setup.manage') : t('aiAgent.setup.go') }} →</span>
+          </RouterLink>
+        </div>
+        <div v-else class="sheet-body">
+          <p class="hint">{{ t('aiAgent.setup.readyHint') }}</p>
+        </div>
+      </section>
+
       <div class="grid-2">
         <!-- 能力开关 -->
         <section class="sheet">
@@ -545,6 +568,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -554,12 +578,15 @@ import PageHeader from '@/components/ui/PageHeader.vue'
 import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import {
+  aiAgentBots,
   aiAgentCatalog,
   aiAgentFlags,
   aiAgentModelPolicy,
   aiAgentRoute,
   aiAgentSecondOpinion,
   aiAgentSetFlag,
+  aiAgentSkills,
+  aiAgentTeams,
   aiAgentWebPolicy,
   type AiAgent,
   type AiAgentFlag,
@@ -580,6 +607,11 @@ const agents = ref<AiAgent[]>([])
 const tools = ref<AiAgentTool[]>([])
 const policy = ref<AiAgentModelPolicy | null>(null)
 const webPolicy = ref<AiAgentWebPolicy | null>(null)
+/** 首次使用引导的计数（技能卡/Bot/团队）；任一取数失败就隐藏该区块，避免误导为 0 */
+const publishedSkillCount = ref(0)
+const publishedBotCount = ref(0)
+const activeTeamCount = ref(0)
+const setupAvailable = ref(true)
 
 const loading = ref(false)
 const loadErr = ref('')
@@ -607,6 +639,31 @@ const opinionResult = ref<AiAgentSecondOpinion | null>(null)
 const opinionErr = ref('')
 
 const flagsOn = computed(() => flags.value.filter((f) => f.enabled).length)
+/** 三步首次使用路径：技能卡 → Bot → 团队（能力开关按风险另管，不纳入“就绪”） */
+const setupSteps = computed(() => [
+  {
+    key: 'skills',
+    done: publishedSkillCount.value > 0,
+    title: t('aiAgent.setup.skills'),
+    desc: t('aiAgent.setup.skillsDesc'),
+    to: '/ai/agent/skills',
+  },
+  {
+    key: 'bots',
+    done: publishedBotCount.value > 0,
+    title: t('aiAgent.setup.bots'),
+    desc: t('aiAgent.setup.botsDesc'),
+    to: '/ai/agent/bots',
+  },
+  {
+    key: 'teams',
+    done: activeTeamCount.value > 0,
+    title: t('aiAgent.setup.teams'),
+    desc: t('aiAgent.setup.teamsDesc'),
+    to: '/ai/agent/teams',
+  },
+])
+const setupDone = computed(() => setupSteps.value.every((s) => s.done))
 const egressCount = computed(() => tools.value.filter((x) => x.externalEgress).length)
 const allowedProviders = computed(() => policy.value?.allowed ?? [])
 const canSecondOpinion = computed(() => allowedProviders.value.length >= 2)
@@ -688,8 +745,11 @@ async function loadAll() {
     aiAgentCatalog(),
     aiAgentModelPolicy(),
     aiAgentWebPolicy(),
+    aiAgentSkills(),
+    aiAgentBots(),
+    aiAgentTeams(),
   ])
-  const [flagRes, catalogRes, policyRes, webRes] = results
+  const [flagRes, catalogRes, policyRes, webRes, skillRes, botRes, teamRes] = results
 
   if (flagRes.status === 'fulfilled') flags.value = flagRes.value.flags ?? []
   if (catalogRes.status === 'fulfilled') {
@@ -699,10 +759,25 @@ async function loadAll() {
   if (policyRes.status === 'fulfilled') policy.value = policyRes.value
   if (webRes.status === 'fulfilled') webPolicy.value = webRes.value
 
-  const denied = results.some((r) => r.status === 'rejected' && isForbidden(r.reason))
-  const failed = results.find((r) => r.status === 'rejected')
+  const setupResults = [skillRes, botRes, teamRes]
+  setupAvailable.value = setupResults.every((r) => r.status === 'fulfilled')
+  if (skillRes.status === 'fulfilled') {
+    publishedSkillCount.value = (skillRes.value.skills ?? []).filter((s) => s.status === 'PUBLISHED').length
+  }
+  if (botRes.status === 'fulfilled') {
+    publishedBotCount.value = (botRes.value.bots ?? []).filter((b) => b.status === 'PUBLISHED').length
+  }
+  if (teamRes.status === 'fulfilled') {
+    activeTeamCount.value = (teamRes.value.teams ?? []).filter((tm) => tm.status === 'ACTIVE').length
+  }
+
+  // 引导计数是增强信息：它们失败不应把整页判为“加载失败”
+  const coreResults = results.slice(0, 4)
+  const denied = coreResults.some((r) => r.status === 'rejected' && isForbidden(r.reason))
+  const failed = coreResults.find((r) => r.status === 'rejected')
   if (denied) {
     forbidden.value = true
+    setupAvailable.value = false
     loadErr.value = ''
   } else if (failed && failed.status === 'rejected') {
     loadErr.value = errorText(failed.reason)
@@ -816,6 +891,50 @@ onBeforeUnmount(() => window.clearTimeout(toolTimer))
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--gap);
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--gap);
+  padding: var(--card-pad);
+}
+
+.setup-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--dur) ease, background-color var(--dur) ease;
+}
+
+.setup-step:hover {
+  border-color: var(--control-strong);
+  background: var(--raised);
+  text-decoration: none;
+}
+
+.setup-title {
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+
+.setup-link {
+  margin-top: auto;
+  font-size: var(--fs-small);
+  color: var(--accent);
+}
+
+@media (max-width: 1100px) {
+  .grid-2,
+  .setup-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .flag-list {
