@@ -540,6 +540,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'QC'],
   },
   {
+    // 第 209 批：技能库闭环（待办 / 经验 / 候选回放）
+    name: 'ai-library',
+    path: '/ai/agent/library',
+    title: 'AI 技能运营',
+    hint: '运营待办生成与处理 · 脱敏经验录入 · 候选提炼与路由回放 · 生成草稿技能卡',
+    icon: 'file-text',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',

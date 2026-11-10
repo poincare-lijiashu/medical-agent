@@ -1493,6 +1493,167 @@ export function aiOpsSnapshot(date?: string): Promise<AiOpsSnapshot> {
   return aiPost<AiOpsSnapshot>('/agent/skill-library/snapshot', { date })
 }
 
+/* ------------------------------------------------------------------ *
+ * 运营待办与技能库（第 209 批，仅 ADMIN / QC）
+ *
+ * 闭环：告警 → 待办建议（忽略/完成）→ 经验录入 → 提炼候选 → 回放准入 →
+ * 生成 DRAFT 技能卡（仍需 §205 的四眼审核）。任何一步都不自动发布。
+ * ------------------------------------------------------------------ */
+
+export interface AiAdvice {
+  id: string
+  code?: string
+  severity?: string
+  title?: string
+  detail?: string
+  suggestedAction?: string
+  targetType?: string
+  targetId?: string | null
+  period?: string | null
+  dedupeKey?: string
+  /** OPEN / DONE / DISMISSED */
+  status?: string
+  createdBy?: string
+  createdAt?: string
+  decidedBy?: string | null
+  decidedAt?: string | null
+  note?: string | null
+}
+
+export interface AiAdviceGenerateResult {
+  created?: AiAdvice[]
+  createdCount?: number
+  advices?: AiAdvice[]
+  candidateCount?: number
+  skippedExisting?: number
+  truncated?: boolean
+  remaining?: number
+  maxPerRun?: number
+}
+
+export interface AiExperience {
+  id: string
+  agentId?: string
+  title?: string
+  /** 问题模式（用于路由回放） */
+  pattern?: string
+  summary?: string
+  sourceRef?: string
+  deidentified?: boolean
+  toolAllowlist?: string[]
+  evidenceRefs?: string[]
+  contraindications?: string[]
+  status?: string
+  approvedBy?: string
+  approvedAt?: string
+  createdBy?: string
+  createdAt?: string
+}
+
+export interface AiExperienceInput {
+  agentId: string
+  title: string
+  pattern: string
+  summary: string
+  sourceRef: string
+  deidentified: boolean
+  toolAllowlist: string[]
+  evidenceRefs: string[]
+  contraindications: string[]
+}
+
+export interface AiReplayCase {
+  experienceId?: string
+  input?: string
+  expectedAgent?: string
+  actualAgent?: string
+  passed?: boolean
+}
+
+export interface AiProposalReplay {
+  passed?: boolean
+  cases?: AiReplayCase[]
+  checkedAt?: string
+}
+
+export interface AiProposal {
+  id: string
+  code?: string
+  agentId?: string
+  pattern?: string
+  name?: string
+  description?: string
+  promptTemplate?: string
+  toolAllowlist?: string[]
+  evidenceRefs?: string[]
+  experienceIds?: string[]
+  experienceAuthors?: string[]
+  /** PROPOSED / ADOPTED / REJECTED */
+  status?: string
+  createdBy?: string
+  createdAt?: string
+  replay?: AiProposalReplay | null
+  skillCode?: string | null
+  decidedBy?: string | null
+  decidedAt?: string | null
+  decisionNote?: string | null
+}
+
+export interface AiDistillResult {
+  created?: number
+  proposals?: AiProposal[]
+}
+
+export interface AiAdoptResult {
+  proposal?: AiProposal
+  skill?: AiSkillCard | null
+}
+
+export function aiAdvices(status?: string): Promise<{ advices?: AiAdvice[] }> {
+  return aiGet<{ advices?: AiAdvice[] }>('/agent/skill-advices', { status })
+}
+
+/** 由当前告警生成待办；同 dedupeKey 已存在时跳过（含已忽略/已完成）。 */
+export function aiAdviceGenerate(): Promise<AiAdviceGenerateResult> {
+  return aiPost<AiAdviceGenerateResult>('/agent/skill-advices/generate')
+}
+
+/** 忽略建议必须填写原因。 */
+export function aiAdviceDismiss(id: string, note: string): Promise<AiAdvice> {
+  return aiPost<AiAdvice>(`/agent/skill-advices/${encodeURIComponent(id)}/dismiss`, { note })
+}
+
+export function aiAdviceComplete(id: string, note?: string): Promise<AiAdvice> {
+  return aiPost<AiAdvice>(`/agent/skill-advices/${encodeURIComponent(id)}/complete`, { note })
+}
+
+export function aiExperiences(agentId?: string): Promise<{ experiences?: AiExperience[] }> {
+  return aiGet<{ experiences?: AiExperience[] }>('/agent/skill-experiences', { agentId })
+}
+
+/** 录入经验：录入即由当前 admin/qc 背书；必须确认已脱敏。 */
+export function aiExperienceCreate(input: AiExperienceInput): Promise<AiExperience> {
+  return aiPost<AiExperience>('/agent/skill-experiences', input)
+}
+
+export function aiProposals(status?: string): Promise<{ proposals?: AiProposal[] }> {
+  return aiGet<{ proposals?: AiProposal[] }>('/agent/skill-proposals', { status })
+}
+
+/** 同能力域 + 同问题模式的 ≥2 条经验 → 候选（确定性组合，不调用模型）。 */
+export function aiProposalDistill(): Promise<AiDistillResult> {
+  return aiPost<AiDistillResult>('/agent/skill-proposals/distill')
+}
+
+/** 采纳：先跑路由回放，通过才生成 DRAFT 技能卡；失败则候选落 REJECTED。 */
+export function aiProposalAdopt(id: string): Promise<AiAdoptResult> {
+  return aiPost<AiAdoptResult>(`/agent/skill-proposals/${encodeURIComponent(id)}/adopt`)
+}
+
+export function aiProposalReject(id: string, note: string): Promise<AiProposal> {
+  return aiPost<AiProposal>(`/agent/skill-proposals/${encodeURIComponent(id)}/reject`, { note })
+}
+
 export function aiAgentConsult(
   body: {
     question: string

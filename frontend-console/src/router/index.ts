@@ -242,6 +242,12 @@ const router = createRouter({
           component: () => import('@/views/AiOpsView.vue'),
         },
         {
+          // 第 209 批：运营待办 + 经验库 + 候选提炼（回放准入）
+          path: 'ai/agent/library',
+          name: 'ai-library',
+          component: () => import('@/views/AiLibraryView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',
