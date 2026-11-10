@@ -787,15 +787,19 @@ const tabs = computed<{ key: TabKey; label: string; count?: number }[]>(() => {
 
 /* ---------- 通用状态 ---------- */
 const route = useRoute()
-/** 支持从「深度会诊」结果卡直达发起者视角（?tab=mine-consults）。 */
+/** 支持从「深度会诊」结果卡与「AI 病历质控」直达对应 tab。 */
 function initialTab(): TabKey {
-  return route.query.tab === 'mine-consults' ? 'mine-consults' : 'pending'
+  const value = String(route.query.tab || '')
+  if (value === 'mine-consults') return 'mine-consults'
+  if (value === 'cases' && !isMine.value) return 'cases'
+  return 'pending'
 }
 const tab = ref<TabKey>(initialTab())
 watch(
   () => route.query.tab,
   (value) => {
     if (value === 'mine-consults') tab.value = 'mine-consults'
+    if (value === 'cases' && !isMine.value) tab.value = 'cases'
   },
 )
 const loading = ref(false)

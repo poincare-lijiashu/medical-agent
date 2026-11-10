@@ -274,6 +274,82 @@ export function aiConsultCreate(
   )
 }
 
+/* ------------------------------------------------------------------ *
+ * 病历质控（第 201 批）
+ *
+ * 质控是「表单 + 报告」而不是对话：解析、运行、驳回重提、我的归档四条链路。
+ * 科室与医师签名由服务端按登录账号权威绑定，前端展示值仅作提示。
+ * ------------------------------------------------------------------ */
+
+/** AI 中台的登录用户（含本科室）；与 Java `/api/v2/auth/me` 不是同一端点。 */
+export interface AiMe {
+  username?: string
+  dept?: string
+  role?: string
+}
+
+export function aiMe(): Promise<AiMe> {
+  return aiGet<AiMe>('/auth/me')
+}
+
+/** 七字段病历（键为后端约定的中文字段名）。 */
+export type AiQcFields = Record<string, string>
+
+export function aiQcParse(text: string): Promise<{ fields?: AiQcFields }> {
+  return aiPost<{ fields?: AiQcFields }>('/medical/qc/parse', { text })
+}
+
+export interface AiQcDefect {
+  category?: string
+  /** 高 / 中 / 低 */
+  level?: string
+  issue?: string
+  field?: string
+  /** 完整性 / 内涵质量 / ICD / 危急值 */
+  track?: string
+}
+
+/** 质控结果：在通用 AskResp 上追加结构化缺陷。 */
+export interface AiQcResult extends AiAskResponse {
+  qc_defects?: AiQcDefect[]
+}
+
+export function aiQcRecord(
+  record: AiQcFields,
+  labs: Record<string, string>,
+  resubmitOf?: string,
+): Promise<AiQcResult> {
+  return aiPost<AiQcResult>('/medical/qc/record', {
+    record,
+    labs,
+    ...(resubmitOf ? { resubmit_of: resubmitOf } : {}),
+  })
+}
+
+/** 我的质控驳回（仅本人；qc/admin 走全局档案，不调用）。 */
+export interface AiQcRejection {
+  id: string
+  agent?: string
+  status?: string
+  attempt?: number
+  question?: string
+  review_note?: string
+  reviewed_by?: string
+  ts?: string
+  resolved_at?: string
+  /** 重提预填：原病历与检验值（旧条目可能没有） */
+  meta?: { record?: AiQcFields; labs?: Record<string, string> }
+}
+
+export function aiQcMyRejections(): Promise<{ items?: AiQcRejection[]; me?: string }> {
+  return aiGet<{ items?: AiQcRejection[]; me?: string }>('/medical/qc/my-rejections')
+}
+
+/** 医生「我的归档」：本人质控通过在库记录（qc/admin 走 `/case-archive`）。 */
+export function aiCaseArchiveMine(): Promise<{ items?: AiCaseArchive[]; me?: string }> {
+  return aiGet<{ items?: AiCaseArchive[]; me?: string }>('/medical/case-archive/mine')
+}
+
 /** 病例库（质控通过自动归档；移除为软删除留痕）。 */
 export interface AiCaseArchive {
   id: string

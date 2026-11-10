@@ -51,6 +51,16 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'AI 智能',
   },
   {
+    // 第 201 批：病历质控（七栏校验 + 三档分流 + 驳回重提）
+    name: 'ai-qc',
+    path: '/ai/qc',
+    title: 'AI 病历质控',
+    hint: '整段病历拆分 · 七栏校验 · 三档分流 · 驳回重提与我的归档',
+    icon: 'qc',
+    group: 'AI 智能',
+    roles: ['DOCTOR', 'QC', 'ADMIN'],
+  },
+  {
     // 第 190 批：统一系统迁入的第一个 AI 视图（AI 中台 /api/v1，与控制台共用同一会话令牌）
     name: 'ai-overview',
     path: '/ai-overview',

@@ -41,6 +41,12 @@ const router = createRouter({
           component: () => import('@/views/AiCaseView.vue'),
         },
         {
+          // 第 201 批：病历质控（医生 / 质控 / 管理员）
+          path: 'ai/qc',
+          name: 'ai-qc',
+          component: () => import('@/views/AiQcView.vue'),
+        },
+        {
           path: 'ai-overview',
           name: 'ai-overview',
           component: () => import('@/views/AiOverviewView.vue'),
