@@ -68,7 +68,7 @@ def test_print_util_has_a4_and_hardening():
 
 
 def test_views_print_through_channel():
-    for name in ("ReceiptView.vue", "ConsentsView.vue"):
+    for name in ("ReceiptView.vue", "ConsentsView.vue", "PharmacyView.vue"):
         text = (SRC / "views" / name).read_text(encoding="utf-8")
         assert "printHtml(" in text, f"{name} 应通过 printHtml 打印"
         assert not re.search(r"\.print\(\)", text), f"{name} 不应再直接调用 window.print()"

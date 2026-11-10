@@ -449,6 +449,7 @@
         >
           发药
         </button>
+        <button class="btn" type="button" @click="printPrescription">打印处方笺</button>
         <button class="btn" type="button" @click="detailOpen = false">关闭</button>
       </template>
     </AppModal>
@@ -672,6 +673,8 @@ import type {
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { date, dateTime, money, todayIso } from '@/utils/format'
+import { escapeHtml } from '@/utils/html'
+import { printHtml } from '@/utils/print'
 
 const STATUS_TABS = [
   { value: 'PENDING_REVIEW', label: '待审核' },
@@ -1099,6 +1102,65 @@ function billingLabel(status: string): string {
 
 function shortId(value: string | null): string {
   return value ? `${value.slice(0, 8)}…` : '—'
+}
+
+/** 打印处方笺：药房留档与患者带走的是同一张单，字段直接取当前明细（不二次请求）。 */
+function printPrescription() {
+  if (!detail.value) return
+  const p = detail.value.prescription
+  const esc = escapeHtml
+  const rows = detail.value.items
+    .map(
+      (i) => `<tr>
+        <td>${esc(i.drugName)}<div class="muted mono">${esc(i.drugCode)}</div></td>
+        <td>${esc(i.spec ?? '—')}</td>
+        <td>${esc(i.dosage ?? '—')}<div class="muted">${esc(i.frequency ?? '')}</div></td>
+        <td class="num">${i.days ?? '—'}</td>
+        <td class="num">${i.quantity} ${esc(i.unit)}</td>
+        <td class="num">${esc(money(i.unitPrice))}</td>
+        <td class="num">${esc(money(i.amount))}</td>
+      </tr>`,
+    )
+    .join('')
+  const body = `
+    <h1>处方笺</h1>
+    <div class="muted meta">${esc(p.prescriptionNo)} · ${esc(rxStatusLabel(p.status))}</div>
+    <table class="head">
+      <tr><th>病案号</th><td>${esc(p.patientNo)}</td><th>就诊号</th><td>${esc(p.visitNo || '—')}</td></tr>
+      <tr><th>开方医师</th><td>${esc(p.prescriber)}</td><th>开方时间</th><td>${esc(dateTime(p.createdAt))}</td></tr>
+      <tr><th>审核人</th><td>${esc(p.reviewer || '—')}</td><th>审核时间</th><td>${p.reviewedAt ? esc(dateTime(p.reviewedAt)) : '—'}</td></tr>
+      <tr><th>发药日</th><td>${esc(p.supplyDate || '—')}</td><th>计费方式</th><td>${p.billingMode === 'DISPENSE' ? '发药时计费' : '医嘱已计费'}</td></tr>
+    </table>
+    <table class="items">
+      <thead>
+        <tr><th>药品</th><th>规格</th><th>用法用量</th><th class="num">天数</th><th class="num">数量</th><th class="num">单价</th><th class="num">金额</th></tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="7" class="muted">无明细</td></tr>'}</tbody>
+    </table>
+    <div class="total">合计：<strong>${esc(money(p.totalAmount))}</strong></div>
+    ${p.rejectReason ? `<div class="muted">驳回原因：${esc(p.rejectReason)}</div>` : ''}
+    <div class="sign">
+      <span>医师签名：____________</span>
+      <span>审核药师：____________</span>
+      <span>发药人：____________</span>
+      <span>患者/家属：____________</span>
+    </div>
+    <div class="foot">本处方为系统打印件，须与电子处方一致；麻精药品按院内规定另行登记。</div>`
+  const ok = printHtml({
+    title: `处方笺 ${p.prescriptionNo}`,
+    body,
+    css: `
+      .meta { margin-bottom: 14px; }
+      .head th { width: 18%; }
+      .head td { width: 32%; }
+      .items { margin-top: 14px; font-size: 13px; }
+      .num { text-align: right; }
+      .total { margin-top: 12px; text-align: right; font-size: 15px; }
+      .sign { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; font-size: 13px; }
+      .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+    `,
+  })
+  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
 }
 
 onMounted(() => {
