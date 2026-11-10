@@ -84,6 +84,10 @@ ingress:
         - {path: /api/v1, pathType: Prefix, service: gateway}
         # 第 173 批：内部接口经网关统一 404，不落到 "/" 兜底的 ai-core
         - {path: /internal, pathType: Prefix, service: gateway}
+        # 第 175 批：API 文档在预发布/生产入口一律 404（网关 deny-paths 第二道门）
+        - {path: /docs, pathType: Prefix, service: gateway}
+        - {path: /redoc, pathType: Prefix, service: gateway}
+        - {path: /openapi.json, pathType: Prefix, service: gateway}
         - {path: /, pathType: Prefix, service: aiCore}
   tls:
     - secretName: medassist-staging-tls

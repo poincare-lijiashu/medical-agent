@@ -106,3 +106,24 @@ def test_empi_network_policy_allows_ai_core():
     empi_block = netpol.split('{{- if eq $component "empi" }}', 1)[1] \
                       .split('{{- if eq $component "clinical" }}', 1)[0]
     assert '"component" "ai-core"' in empi_block
+
+
+# ---------- 第 175 批：API 文档入口收敛 ----------
+
+DOC_PATHS = ["/docs", "/redoc", "/openapi.json"]
+
+
+def test_api_docs_routed_to_gateway_in_staging_and_prod():
+    """预发布/生产入口把文档端点显式交给网关（404），不能落到 "/" 兜底的 ai-core。"""
+    for fn in ("values-staging.yaml", "values-prod.yaml"):
+        paths = {p["path"]: p["service"]
+                 for p in _ingress_paths(_load(os.path.join(CHART, fn)))}
+        for p in DOC_PATHS:
+            assert paths.get(p) == "gateway", f"{fn}：{p} 未指向网关（会落到 ai-core）"
+
+
+def test_gateway_denies_api_docs():
+    """/docs、/redoc、/openapi.json 必须在网关 denylist（与 APP_ENV 无关的第二道门）。"""
+    deny = _load(GATEWAY_YML)["medassist"]["gateway"]["auth"]["deny-paths"]
+    for p in ("/docs/**", "/redoc/**", "/openapi.json"):
+        assert p in deny, f"网关 denylist 缺少 {p}"

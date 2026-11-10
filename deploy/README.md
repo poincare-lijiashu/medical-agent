@@ -67,6 +67,13 @@ helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间
 回归锁：`platform/gateway` 的 `GatewayRouteConfigTest` +
 `tests/test_ingress_internal_paths.py`（三环境 values 与网关 yml 的实际取值）。
 
+**联调自检（staging，第 175 批）**：部署后用真实入口跑一遍四段链路——
+`python scripts/staging_integration_smoke.py --base-url https://medassist-staging.hospital.local
+--username doctor01 --password '***' --patient-id <EMPI UUID>`。
+断言：文档/内部接口 404、HIS 工作台通道未带令牌 401、集成状态可读、患者摘要可读、
+医嘱按 HIS 是否对接分别 200 / 501。`--self-check` 不连网络，供 CI 校验检查目录
+（`tests/test_staging_smoke.py`）。
+
 ---
 
 ## 2. 版本基线（2026-10-30 核实，非凭记忆）

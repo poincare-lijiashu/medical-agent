@@ -7256,3 +7256,48 @@ mvn -pl gateway,clinical -am -Dtest=GatewayRouteConfigTest,AiAssistControllerMap
 - EMPI 侧仍只读：建档/合并/去重仍在 Java 平台，AI 不参与写；
 - 下一步：④ staging 双系统联调脚本 + 契约测试进 CI；入口面 `/docs`、`/openapi.json`、
   `/actuator` 白名单收敛（§176 遗留）。
+
+## 178. 2026-11-10 HIS 深度集成收尾：入口文档收敛 + staging 联调自检（第 175 批）
+
+**问题**
+
+- `/docs`、`/openapi.json` 此前只靠 `APP_ENV` 关闭（第 S6 批）：一旦环境变量误配成
+  `development`，全部接口结构会从入口裸奔；而 Ingress `"/"` 兜底直连 ai-core，
+  网关根本没有机会拦截；
+- 第 168–174 批五项能力都只有单测/MockTransport：跨系统联调仍靠人工 curl，
+  没有固定检查项，也没有任何 CI 约束"脚本本身不能把错误设计判成 PASS"。
+
+**已做**
+
+1. **网关 denylist 补文档端点**：`/docs/**`、`/redoc/**`、`/openapi.json`（与
+   `GatewayAuthProperties` 默认值同步）；deny 在鉴权开关判断之前执行，与 `APP_ENV` 无关。
+2. **Ingress 收敛**：staging/prod 把三个文档前缀显式指向网关（统一 404）；
+   dev 不加，本地仍可经 ai-core 查看文档（调试便利）。
+3. **`scripts/staging_integration_smoke.py`（仅标准库，只读）**：一条命令跑完四段链路——
+   - 入口收敛：`/docs`、`/openapi.json`、`/internal/**`、`/api/v2/*/internal/**` 必须 404；
+   - 网关鉴权：`/api/v2/clinical/ai-assist/*` 未带令牌必须 401；
+   - 集成状态 + 患者摘要（EMPI 优先）；医嘱按 HIS 是否配置分别断言 200 / **501**；
+   - 支持 `--username/--password` 登录取令牌或直接 `--token`；`--self-check` 不连网络
+     （供 CI）；退出码 0 全通过 / 1 有 FAIL / 2 参数或网络失败。
+4. **契约测试进 CI**：新增 `tests/test_staging_smoke.py` 4 条（检查目录边界、
+   HIS 工作台必须走外部 ai-assist 而非 `/internal`、患者检查可选、self-check 可跑）；
+   `test_ingress_internal_paths` +2（staging/prod 文档路由、网关 denylist）。
+   `GatewayRouteConfigTest` +1（文档端点被拒，共 14 条）。
+5. **文档**：`deploy/README.md` §1.1 增加联调自检命令、断言口径与 `--self-check` 用途。
+
+**验证**
+
+```
+python scripts/staging_integration_smoke.py --self-check → 8 检查项（不连网络）
+定向：test_staging_smoke + test_ingress_internal_paths → 12 passed
+Java：GatewayRouteConfigTest → 14 passed
+全量（不含 e2e）→ 1700 passed / 1 skipped
+```
+
+**遗留**
+
+- 脚本尚未在真实 staging 执行（当前无环境）；目标环境需提供医护端测试账号与
+  测试患者主索引（EMPI UUID 或 HIS 患者号）；
+- `/actuator` 刻意不纳入 Ingress（网关探针白名单需要，探针直连 Pod，不经入口）；
+- 下一步：评测 06 P1-5（指标命名 / SLO）、04 P1-5（静态加密方案）、
+  03 前端 i18n 与长列表虚拟滚动。

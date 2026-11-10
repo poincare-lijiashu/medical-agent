@@ -198,6 +198,15 @@ class GatewayRouteConfigTest {
     }
 
     @Test
+    @DisplayName("API 文档端点必须在网关被拒（防 APP_ENV 误配成 development 后裸奔）")
+    void apiDocsAreDenied() {
+        Map<String, Object> auth = (Map<String, Object>) medassistGateway(loadConfig()).get("auth");
+
+        assertThat((List<String>) auth.get("deny-paths"))
+                .contains("/docs/**", "/redoc/**", "/openapi.json");
+    }
+
+    @Test
     @DisplayName("HIS 工作台 AI 通道有独立限流，且排在 clinical 兜底规则之前")
     void aiAssistRulePrecedesClinicalCatchAll() {
         Map<String, Object> sentinel = (Map<String, Object>) medassistGateway(loadConfig()).get("sentinel");

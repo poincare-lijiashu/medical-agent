@@ -218,6 +218,12 @@ medassist:
         # 但一旦有人新增 catch-all 路由，旧规则不会拦截，这条是"最后一道门"。
         - /internal/**
         - /api/v2/*/internal/**
+        # 第 175 批：入口面收敛——API 文档不进生产入口（网关直接 404）。
+        # 生产类 APP_ENV 下 FastAPI 本就不开 /docs；这里补第二道门，防"环境变量误配成
+        # development"时接口结构从公网裸奔（入口 404 与 env 无关）。
+        - /docs/**
+        - /redoc/**
+        - /openapi.json
     # 入口限流（Sentinel 核心 API，路径前缀维度）。登录失败的账号维度限速在 auth 服务内实现。
     # 必须用列表：Map 键中的 "/" 会被 Spring 宽松绑定吞掉（实测 /api/v2/auth → apiv2auth）
     sentinel:
