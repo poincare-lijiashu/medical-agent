@@ -219,6 +219,10 @@
           </table>
         </div>
       </template>
+      <template v-if="detail" #footer>
+        <button class="btn" type="button" @click="printPivasCard">打印输液卡</button>
+        <button class="btn" type="button" @click="detailOpen = false">关闭</button>
+      </template>
     </AppModal>
 
     <AppModal v-model="createOpen" title="新建静配单" subtitle="仅已审核处方可进入静配；同一处方只能建一张静配单" width="720px">
@@ -326,6 +330,8 @@ import type { PivasOrder, PivasStatus, PivasSummary, PivasView, Prescription } f
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { date, dateTime } from '@/utils/format'
+import { escapeHtml } from '@/utils/html'
+import { printHtml } from '@/utils/print'
 
 const role = session.roleLabel
 const canPrepare = computed(() => hasPermission('pharmacy:pivas:prepare'))
@@ -360,6 +366,65 @@ const checkNote = ref('')
 const rejectOpen = ref(false)
 const rejectTarget = ref<PivasOrder | null>(null)
 const rejectReason = ref('')
+
+/** 打印输液卡：病区执行与配置追溯用同一张卡，字段取当前明细（不二次请求）。 */
+function printPivasCard() {
+  if (!detail.value) return
+  const o = detail.value.order
+  const esc = escapeHtml
+  const rows = detail.value.items
+    .map(
+      (i) => `<tr>
+        <td class="num">${i.seq}</td>
+        <td>${esc(i.drugName)}<div class="muted mono">${esc(i.drugCode)}</div></td>
+        <td>${esc(i.spec ?? '—')}</td>
+        <td>${esc(i.dosage ?? '—')}<div class="muted">${esc(i.frequency ?? '')}</div></td>
+        <td class="num">${i.quantity} ${esc(i.unit ?? '')}</td>
+      </tr>`,
+    )
+    .join('')
+  const body = `
+    <h1>静脉用药配置单（成品输液）</h1>
+    <div class="muted meta">${esc(o.orderNo)} · ${esc(o.prescriptionNo)} · ${esc(statusLabel(o.status))}</div>
+    <table class="head">
+      <tr><th>病案号</th><td>${esc(o.patientNo || '—')}</td><th>就诊号</th><td>${esc(o.visitNo || '—')}</td></tr>
+      <tr><th>批次</th><td>${esc(o.planBatch || '—')}</td><th>优先级</th><td>${o.priority === 'URGENT' ? '加急' : '普通'}</td></tr>
+      <tr><th>溶媒</th><td colspan="3">${esc(o.solvent || '—')}${o.solventVolumeMl ? ` ${o.solventVolumeMl}ml` : ''}</td></tr>
+      <tr><th>计划执行</th><td>${o.plannedAt ? esc(dateTime(o.plannedAt)) : '—'}</td><th>标签号</th><td class="mono">${esc(o.bagNo || '—')}</td></tr>
+    </table>
+    <table class="items">
+      <thead>
+        <tr><th class="num">#</th><th>药品</th><th>规格</th><th>单次用量 / 频次</th><th class="num">数量</th></tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="5" class="muted">无明细</td></tr>'}</tbody>
+    </table>
+    <table class="head trail">
+      <tr><th>配置人</th><td>${esc(o.preparedBy || '—')}${o.preparedAt ? ` · ${esc(dateTime(o.preparedAt))}` : ''}</td><th>复核人</th><td>${esc(o.checkedBy || '—')}${o.checkedAt ? ` · ${esc(dateTime(o.checkedAt))}` : ''}</td></tr>
+    </table>
+    ${o.rejectReason ? `<div class="muted">驳回原因：${esc(o.rejectReason)}</div>` : ''}
+    <div class="sign">
+      <span>配置人签名：____________</span>
+      <span>复核人签名：____________</span>
+      <span>执行护士：____________</span>
+      <span>执行时间：____:____</span>
+    </div>
+    <div class="foot">本卡随成品输液流转；标签号用于批次追溯，执行后按护理记录归档。</div>`
+  const ok = printHtml({
+    title: `输液卡 ${o.orderNo}`,
+    body,
+    css: `
+      .meta { margin-bottom: 14px; }
+      .head th { width: 16%; }
+      .head td { width: 34%; }
+      .items { margin-top: 14px; font-size: 13px; }
+      .trail { margin-top: 14px; }
+      .num { text-align: right; }
+      .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+      .sign { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; font-size: 13px; }
+    `,
+  })
+  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+}
 
 onMounted(loadAll)
 
