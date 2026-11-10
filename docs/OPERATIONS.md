@@ -55,6 +55,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - 管理员可随时校验：`GET /api/v1/medical/admin/audit/verify`（可选 `max_records` 分批），
   返回 `ok` / `checked` / `legacy` / `firstBroken`（文件、行号、seq、原因）；
   校验本身作为合规敏感操作写入审计（`event=admin, action=audit_verify`）。
+  前端入口：**数据面板 → 审计流 → 「校验审计链」**，结果条直接给出"完整 N 条"或异常定位。
 - 被改一行报 `hash_mismatch`；删中间一行报 `prev_mismatch`；
   升级前的无哈希历史记录计入 `legacy`，从该处重新起链（无需回溯改写旧日志）。
 - 校验只读：不修改任何审计文件；大库建议用 `max_records` 分批巡检。

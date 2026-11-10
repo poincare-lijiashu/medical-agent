@@ -71,6 +71,11 @@
               <div class="user-menu-name">{{ session.user.value?.displayName }}</div>
               <div class="user-menu-sub">{{ session.roleLabel.value }} · {{ scopeLabel }}</div>
             </div>
+            <!-- 第 185 批：同域跨端入口（新开页签，不打断当前医嘱/收费上下文） -->
+            <a class="user-menu-item" href="/" target="_blank" rel="noopener" role="menuitem">
+              <AppIcon name="spark" :size="16" />
+              {{ t('shell.aiWorkbench') }}
+            </a>
             <button class="user-menu-item" type="button" role="menuitem" @click="switchLocale">
               <AppIcon name="globe" :size="16" />
               {{ t('shell.language') }}
@@ -553,6 +558,13 @@ function onViewportChange(e: MediaQueryListEvent) {
 .user-menu-item:hover {
   background: var(--raised);
   color: var(--text);
+}
+
+/* 跨端入口是 <a>：去掉下划线，保持与按钮项同一手感 */
+a.user-menu-item {
+  text-decoration: none;
+  cursor: pointer;
+  box-sizing: border-box;
 }
 
 .user-menu-item.is-danger:hover {

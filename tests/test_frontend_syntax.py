@@ -89,8 +89,21 @@ def test_vue_dist_build_output_in_sync():
         "dist/index.html 应引用 /assets/* 产物且含 Vue 挂载点 #app（vite base=/）"
 
 
-# ---------- 任务5/6 前端标记锁（应用日志卡 / 质控重提链） ----------
+def test_audit_chain_verify_ui_wired():
+    """第 185 批：数据面板必须提供「校验审计链」入口（合规巡检闭环）。
 
+    只做后端接口不做入口，运维只能靠 curl，等于半个功能；本锁保证：
+    调用函数、后端端点、按钮与结果区 data-testid、异常定位字段（firstBroken）都在。
+    """
+    view = (VUE_SRC / "views" / "DataView.vue").read_text(encoding="utf-8")
+    assert "verifyAuditChain" in view, "缺少校验审计链的交互函数"
+    assert "/medical/admin/audit/verify" in view, "必须调用后端校验端点"
+    assert 'data-testid="audit-verify"' in view, "缺少校验按钮"
+    assert 'data-testid="audit-verify-result"' in view, "缺少校验结果展示区"
+    assert "firstBroken" in view, "异常结果必须展示定位信息（文件/行/seq）"
+
+
+# ---------- 任务5/6 前端标记锁（应用日志卡 / 质控重提链） ----------
 def test_task5_task6_frontend_markers_present():
     """任务5/6 关键标记锁（Vue 语义版）：
     - 任务5：应用日志健康卡（DataView log-panel）——loadAppLogs 拉取 /medical/admin/logs

@@ -26,6 +26,7 @@ const messages = {
   // 语言项显示的是"点了会切成什么"，所以中文界面下写 English
   'shell.language': 'English',
   'shell.console': '控制台',
+  'shell.aiWorkbench': 'AI 深度工作台',
 
   /* ---------- 命令面板 ---------- */
   'palette.dialog': '命令面板',

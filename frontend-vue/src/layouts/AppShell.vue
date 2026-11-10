@@ -14,6 +14,9 @@
       <div class="userchip">
         <span>{{ auth.username }}</span>
         <el-tag size="small" effect="plain">{{ roleLabel }}</el-tag>
+        <!-- 第 185 批：同域跨端入口（新开页签，保留当前 AI 会话） -->
+        <el-link href="/console/" target="_blank" :underline="false" style="font-size: 12px"
+                 data-testid="topbar-console-entry">临床控制台 ↗</el-link>
         <!-- 第 129 批：Java 独有账号在 AI 中台没有本地口令，改密只会失败；
              guest/nurse 直接隐藏，避免"点了报错"的坏体验 -->
         <el-button

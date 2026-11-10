@@ -90,3 +90,14 @@ def test_ai_workbench_still_served_at_root():
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
     # 旧前端资源仍在根路径（/assets/*），控制台资源在 /console/assets/*，两者不冲突
     assert "/console/assets/" not in r.text
+
+
+def test_cross_entry_links_between_two_uis():
+    """第 185 批：两套 UI 同域后必须能互相跳转（否则用户要靠记 URL，仍像两套系统）。"""
+    console_shell = _read(os.path.join(CONSOLE, "src", "layouts", "AppShell.vue"))
+    assert 'href="/"' in console_shell and "shell.aiWorkbench" in console_shell, \
+        "临床控制台必须提供进入 AI 工作台的入口"
+    vue_shell = _read(os.path.join(REPO, "frontend-vue", "src", "layouts", "AppShell.vue"))
+    assert 'href="/console/"' in vue_shell, "AI 工作台必须提供进入临床控制台的入口"
+    i18n_zh = _read(os.path.join(CONSOLE, "src", "i18n", "zh-CN.ts"))
+    assert "'shell.aiWorkbench'" in i18n_zh, "跨端入口文案必须走 i18n 字典"

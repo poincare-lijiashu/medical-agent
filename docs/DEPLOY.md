@@ -70,6 +70,8 @@ npm run build   # 产物：frontend-console/dist/（vite base=/console/，router
 - 两套产物的资源前缀不同：AI 工作台用 `/assets/*`，控制台用 `/console/assets/*`
   （vite base 决定），因此可以安全地放在同一域名下，不会互相覆盖；
   `backend/main.py` 的 StaticFiles（根）与 `/console/**` 路由分别托管，深链全部回落各自 index.html。
+- **入口互跳（第 185 批）**：AI 工作台顶栏「临床控制台 ↗」→ `/console/`；控制台用户菜单
+  「AI 深度工作台」→ `/`。均新开页签，不打断当前业务上下文；两套 UI 各自维护登录态。
 
 ### 部署形态
 

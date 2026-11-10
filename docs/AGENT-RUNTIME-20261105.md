@@ -7684,3 +7684,41 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 - 前端暂无「一键校验」按钮（接口与文案已就绪，AI 工作台数据面板可下一批接入）；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 188. 2026-11-10 可用性收口：审计链前端校验入口 + 双端互跳（第 185 批）
+
+**问题**
+
+- §187 的审计校验只有后端接口：运维得自己 curl，界面上一片空白——合规能力没有可操作
+  入口，等于半个功能；
+- 两套 UI 虽然已经同域托管，但彼此没有入口：用户仍要靠记 URL，体验上还是"两套系统"。
+
+**已做**
+
+1. **数据面板「校验审计链」**（`frontend-vue` DataView）：
+   - 审计流工具条新增按钮（`loading` 防重复点击），调用 `GET /medical/admin/audit/verify`；
+   - 结果条常驻：完整时「已校验 N 条（另 M 条历史无哈希）」，异常时给
+     `原因 @ 文件:行（seq）`（`firstBroken`），不随翻页/过滤丢失；
+   - 成功/失败同时给 toast，与导出等既有交互保持一致。
+2. **双端互跳**：AI 工作台顶栏「临床控制台 ↗」→ `/console/`；控制台用户菜单
+   「AI 深度工作台」→ `/`；均新开页签，不打断当前医嘱/收费或 AI 会话上下文。
+   控制台文案进 i18n 字典（`shell.aiWorkbench`，中英齐备），`<a>` 样式对齐按钮手感。
+3. **回归锁**：
+   - `tests/test_frontend_syntax.py` +1：按钮 / 结果区 / 端点 / 定位字段必须在；
+   - `tests/test_frontend_hosting.py` +1：双向入口链接与 i18n key 必须在（防改名后静默 404）。
+4. **文档**：`docs/OPERATIONS.md` 审计完整性补前端入口；`docs/DEPLOY.md` 补「入口互跳」。
+
+**验证**
+
+```
+前端：console typecheck + build 通过；frontend-vue build 通过（两套 dist 均已入库）
+定向：test_frontend_syntax + test_frontend_hosting + test_frontend_i18n → 55 passed
+全量（不含 e2e）→ 1767 passed / 1 skipped
+```
+
+**遗留**
+
+- 两套 UI 仍是各自登录态（控制台 Java `/api/v2/auth`，AI 工作台 Python `/api/v1/auth`），
+  互跳 ≠ 单点登录；统一身份（SSO）是下一个大项；
+- 审计校验结果未持久化"最近一次"，刷新页面即清空；
+- 下一步：身份统一（SSO 桥）或长列表虚拟滚动。
+

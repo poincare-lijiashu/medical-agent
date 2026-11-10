@@ -23,6 +23,7 @@ const messages: Record<MessageKey, string> = {
   'shell.logout': 'Sign out',
   'shell.language': '中文',
   'shell.console': 'Console',
+  'shell.aiWorkbench': 'AI Workbench',
 
   /* ---------- Command palette ---------- */
   'palette.dialog': 'Command palette',

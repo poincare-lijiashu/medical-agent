@@ -52,6 +52,9 @@
             <el-button size="small" data-testid="audit-csv" @click="exportAuditCsv">导出本页 CSV</el-button>
             <el-button size="small" type="primary" plain data-testid="audit-export-all"
                        :loading="auditExporting" @click="exportAuditAll">按过滤导出全量（≤10000）</el-button>
+            <!-- 第 185 批：审计链校验（合规巡检入口；只读，校验动作本身会写审计） -->
+            <el-button size="small" data-testid="audit-verify"
+                       :loading="auditVerifying" @click="verifyAuditChain">校验审计链</el-button>
           </div>
           <!-- 第 108/109 批：服务端精确过滤（先过滤再分页；输入防抖 300ms，过滤变化回第 1 页） -->
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-top: 1px dashed var(--line)">
@@ -73,6 +76,18 @@
             <el-button size="small" data-testid="audit-filter-reset" :disabled="!auditFiltered" @click="resetAuditFilters">清空过滤</el-button>
             <span class="src">{{ auditFiltered ? '服务端过滤已生效（精确匹配，先过滤再分页）' : '服务端过滤：操作者 / 事件 / 动作 / 日期区间（精确匹配；候选来自全量前 100）' }}</span>
           </div>
+          <el-alert v-if="auditVerifyResult" :type="auditVerifyResult.ok ? 'success' : 'error'"
+                    :closable="false" show-icon style="margin: 6px 0"
+                    data-testid="audit-verify-result">
+            <template #title>
+              {{ auditVerifyResult.ok
+                ? `审计链完整：已校验 ${auditVerifyResult.checked ?? 0} 条`
+                  + (auditVerifyResult.legacy ? `（另有 ${auditVerifyResult.legacy} 条历史记录无哈希）` : '')
+                : `审计链异常：${auditVerifyResult.firstBroken?.reason || '未知'}`
+                  + (auditVerifyResult.firstBroken?.file ? ` @ ${auditVerifyResult.firstBroken.file}:${auditVerifyResult.firstBroken.line ?? '?'}` : '')
+                  + (auditVerifyResult.firstBroken?.seq != null ? `（seq ${auditVerifyResult.firstBroken.seq}）` : '') }}
+            </template>
+          </el-alert>
           <ul class="feed" style="max-height: 420px; overflow: auto" data-testid="audit-list">
             <template v-if="auditView.length">
               <li v-for="(e, i) in auditView" :key="i" style="display: block; padding: 8px 0; border-bottom: 1px dashed var(--line)">
@@ -359,6 +374,9 @@ const auditAction = ref('')
 const auditFrom = ref('') // 第 109 批：YYYY-MM-DD（含首尾日，后端按业务时区换算半开窗）
 const auditTo = ref('')
 const auditExporting = ref(false)
+// 第 185 批：审计链校验状态（结果常驻，直到下一次校验；不随翻页/过滤清空）
+const auditVerifying = ref(false)
+const auditVerifyResult = ref(null)
 const auditFacetsRemote = ref(null) // 第 110 批：全量候选值（一次拉取，跨页稳定）
 const auditTz = ref('')             // 业务时区名（后端回显，缺省=服务端本地）
 let auditFilterTimer = 0
@@ -556,6 +574,30 @@ async function exportAuditAll() {
     ElMessage.error('导出失败：' + detailText(e))
   } finally {
     auditExporting.value = false
+  }
+}
+
+// 第 185 批：审计哈希链校验（合规巡检）。后端顺序重算每条记录的 prev/hash，
+// 返回第一条被改/被删的位置；校验本身也会写一条审计（audit_verify）。
+async function verifyAuditChain() {
+  if (auditVerifying.value) return
+  auditVerifying.value = true
+  try {
+    const data = await http.get('/medical/admin/audit/verify')
+    auditVerifyResult.value = data || {}
+    if (data && data.ok) {
+      ElMessage.success('审计链完整：已校验 ' + (data.checked ?? 0) + ' 条'
+        + (data.legacy ? '（另有 ' + data.legacy + ' 条历史记录无哈希）' : ''))
+    } else {
+      const b = (data && data.firstBroken) || {}
+      ElMessage.error('审计链异常：' + (b.reason || '未知原因')
+        + (b.file ? ' @ ' + b.file + ':' + (b.line ?? '?') : '')
+        + (b.seq != null ? '（seq ' + b.seq + '）' : ''))
+    }
+  } catch (e) {
+    ElMessage.error('校验失败：' + detailText(e))
+  } finally {
+    auditVerifying.value = false
   }
 }
 
