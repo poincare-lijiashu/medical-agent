@@ -7475,3 +7475,45 @@ Java：GatewayRouteConfigTest → 14 passed
 - K8s 卷加密（StorageClass + KMS）属基础设施交付；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 183. 2026-11-10 评测 04 P1-5 收官：Java 服务 JDBC TLS（第 180 批）
+
+**问题**
+
+- 9 个 Java 服务的 `spring.datasource.url` 是裸 `jdbc:postgresql://…`：库间抓包可直读
+  `audit_log` / `review_queue` / 患者主索引；§180 只覆盖了 Python（asyncpg）侧；
+- 这条防线只存在于 YAML 与 Helm 模板里：新服务复制旧 URL、或某环境忘开 verify-full，
+  单测全绿也发现不了。
+
+**已做**
+
+1. 9 个 Java 服务（auth / clinical / empi / emr / insurance / kb / material / pharmacy / tech）
+   的 datasource URL 统一改为
+   `…?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}`（clinical 保留原有
+   `socketTimeout / connectTimeout / tcpKeepAlive`）。默认 `prefer` 与 pgjdbc 原默认一致，
+   PG 未开 TLS 时自动回落，不阻断本地联调；Flyway 迁移共用同一 URL，同样走 TLS。
+2. Helm `medassist.commonEnv`（所有 Java 服务共用）注入 `PG_SSLMODE`
+   （取 `external.postgres.sslmode`，缺省 `prefer`）与可选的 `PG_SSLROOTCERT`
+   （取 `external.postgres.sslrootcert`，非空才注入）。
+3. AI 中台 ConfigMap 同步 `PG_SSLROOTCERT`（此前文档提到该变量，但 Helm 未接线）。
+4. `values.yaml` 新增 `sslrootcert` 键；dev=prefer、staging/prod=verify-full 保持不变。
+5. `docs/OPERATIONS.md`「静态加密」补 Java JDBC TLS 小节；「尚未覆盖」只剩 K8s 卷加密。
+6. **回归锁 `tests/test_java_jdbc_tls.py`（5 条）**：9 个服务 URL 必带两个 TLS 占位符、
+   全仓不得再有裸 JDBC URL、commonEnv 必须注入（含缺省 prefer）、三套 values 的 sslmode
+   必须符合预期、AI ConfigMap 必须暴露 CA 路径。
+
+**验证**
+
+```
+定向：tests/test_java_jdbc_tls.py + tests/test_deploy_observability.py → 14 passed
+YAML：9 份 application.yml 均可被 yaml.safe_load 解析
+全量（不含 e2e）→ 1738 passed / 1 skipped
+```
+
+**遗留**
+
+- verify-full 依赖 CA 已挂进 Java 容器：本批只提供 `sslrootcert` 注入位，
+  未内置 CA 的 ConfigMap/Volume 挂载模板（各院 CA 不同，需按环境配置）；
+- pgjdbc 的 `sslmode=prefer` 在服务端不支持 TLS 时静默回落明文——只有生产用 verify-full 才强制；
+- K8s 卷加密（StorageClass + KMS）仍属基础设施交付；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+

@@ -46,6 +46,9 @@ external:
     # 过渡期可用 "prefer"（有 TLS 就走、没有回落明文）。
     # 用 verify-full 时需把 CA 挂进容器并设 PG_SSLROOTCERT（见 docs/OPERATIONS.md「静态加密」）。
     sslmode: ""
+    # 评测 04 遗留：CA 在容器内的路径（先挂载 CA，再填这里）。留空 = 用驱动默认根证书位置；
+    # 值同时注入 Java 服务（JDBC sslrootcert）与 AI 中台（PG_SSLROOTCERT）。
+    sslrootcert: ""
 
   nacos:
     enabled: true

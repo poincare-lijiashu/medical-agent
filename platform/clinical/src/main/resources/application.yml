@@ -13,7 +13,9 @@ spring:
     # socketTimeout=30s / statementTimeout=25s：让数据库先超时并释放连接，
     # 而不是让请求在网关 30s 的 response-timeout 上变成 504。
     # statementTimeout 略小于 socketTimeout，保证服务端先中断慢查询。
-    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?socketTimeout=30&connectTimeout=5&tcpKeepAlive=true"
+    # 评测 04 遗留：JDBC 连接 TLS。默认 prefer（有 TLS 就用、没有回落明文，本地联调不受影响）；
+    # staging/prod 由 Helm 注入 PG_SSLMODE=verify-full，并按需注入 PG_SSLROOTCERT（CA 路径）。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?socketTimeout=30&connectTimeout=5&tcpKeepAlive=true&sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
     username: ${PG_USER:medagent}
     password: ${PG_PASSWORD:medagent123}
     hikari:

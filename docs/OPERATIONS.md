@@ -74,8 +74,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
     读取直接失败（绝不把密文当 key 调模型），日志与异常均提示密钥问题；
   - 本地开发可不配（保持旧行为，仅告警一次）；
   - 轮换：新密钥写入 Secret 后，旧数据用旧密钥版本解密、下次保存自动转新密钥。
-- **尚未覆盖**（基础设施/后续批次）：K8s 卷加密（StorageClass + KMS）、
-  Java 服务 JDBC 连接的 sslmode。
+- **Java 服务 JDBC TLS（第 180 批，已实现）**：9 个 Java 服务的
+  `spring.datasource.url` 统一带 `sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}`，
+  Helm `medassist.commonEnv` 把 `external.postgres.sslmode` / `sslrootcert` 注入为
+  `PG_SSLMODE` / `PG_SSLROOTCERT`（dev=prefer，staging/prod=verify-full，与 Python 侧同口径）。
+  - `verify-full` 需要 CA：先把 CA 挂进容器，再把 `external.postgres.sslrootcert`
+    设为容器内路径（如 `/etc/ssl/certs/medassist-pg-ca.crt`）；
+  - Flyway 迁移与业务连接共用同一 URL，因此迁移同样走 TLS；
+  - 本地开发默认 `prefer`：PG 未开 TLS 时自动回落明文，不阻断联调。
+- **尚未覆盖**（基础设施交付）：K8s 卷加密（StorageClass + KMS）。
 
 ## 模型与供应商
 - 全局 chat/vision 模型由管理端「LLM 供应商」激活的 provider 决定（PG `llm_providers`）；

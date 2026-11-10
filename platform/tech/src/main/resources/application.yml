@@ -9,7 +9,9 @@ spring:
     name: platform-tech
 
   datasource:
-    url: jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}
+    # 评测 04 遗留：JDBC 连接 TLS。默认 prefer（有 TLS 就用、没有回落明文，本地联调不受影响）；
+    # staging/prod 由 Helm 注入 PG_SSLMODE=verify-full，并按需注入 PG_SSLROOTCERT（CA 路径）。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
     username: ${PG_USER:medagent}
     password: ${PG_PASSWORD:medagent123}
     hikari:

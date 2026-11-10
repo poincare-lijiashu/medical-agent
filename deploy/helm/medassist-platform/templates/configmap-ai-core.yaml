@@ -27,6 +27,10 @@ data:
   {{- end }}
   # 评测 04 P1-5：PG 连接 TLS 模式（空 = 不追加，保持本地无 TLS 的行为）
   PG_SSLMODE: {{ .Values.external.postgres.sslmode | default "" | quote }}
+  {{- if .Values.external.postgres.sslrootcert }}
+  # verify-full 的 CA 路径（容器内路径，需先把 CA 挂进容器）
+  PG_SSLROOTCERT: {{ .Values.external.postgres.sslrootcert | quote }}
+  {{- end }}
   {{- if .Values.external.nacos.enabled }}
   NACOS_ENABLED: "true"
   NACOS_SERVER_ADDRESSES: {{ .Values.external.nacos.serverAddr | quote }}

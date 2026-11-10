@@ -139,6 +139,15 @@ Java 服务公共环境变量。
     secretKeyRef:
       name: {{ include "medassist.secretName" (dict "root" .root "external" .root.Values.external.postgres "suffix" "postgres") }}
       key: {{ .root.Values.external.postgres.secretKeys.password }}
+# 评测 04 遗留：Java 侧 JDBC 连接 TLS（application.yml 里以 sslmode/sslrootcert 占位符消费）。
+# 默认 prefer：dev 的 PG 多数没开 TLS，prefer 会回落明文，不阻断本地联调；
+# staging/prod 的 values 已设 verify-full（与 Python 侧同口径）。
+- name: PG_SSLMODE
+  value: {{ .root.Values.external.postgres.sslmode | default "prefer" | quote }}
+{{- if .root.Values.external.postgres.sslrootcert }}
+- name: PG_SSLROOTCERT
+  value: {{ .root.Values.external.postgres.sslrootcert | quote }}
+{{- end }}
 {{- if .root.Values.external.nacos.enabled }}
 - name: NACOS_DISCOVERY_ENABLED
   value: "true"
