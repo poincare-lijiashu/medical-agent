@@ -51,6 +51,12 @@ const messages: Record<MessageKey, string> = {
   'todo.consults': 'Consults awaiting my opinion',
   'todo.rxRejected': 'Rejected prescriptions',
 
+  /* ---------- Idle timeout ---------- */
+  'idle.title': 'Session ending soon',
+  'idle.desc': 'No activity detected. You will be signed out in {seconds} seconds; unsaved work will be lost.',
+  'idle.stay': 'Stay signed in',
+  'idle.logout': 'Sign out now',
+
   /* ---------- Command palette ---------- */
   'palette.dialog': 'Command palette',
   'palette.search': 'Command search',

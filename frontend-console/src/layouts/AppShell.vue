@@ -155,6 +155,25 @@
           <RouterView />
         </AppErrorBoundary>
       </main>
+
+      <!-- 第 221 批：空闲超时告警（共用工作站防“人走屏留”） -->
+      <div
+        v-if="idleWarn"
+        class="idle-mask"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="idle-title"
+        aria-describedby="idle-desc"
+      >
+        <div class="idle-card">
+          <h2 id="idle-title" class="idle-title">{{ t('idle.title') }}</h2>
+          <p id="idle-desc" class="idle-desc">{{ t('idle.desc', { seconds: idleSecondsLeft }) }}</p>
+          <div class="idle-actions">
+            <button class="btn btn--primary" type="button" @click="stayActive">{{ t('idle.stay') }}</button>
+            <button class="btn" type="button" @click="logoutNow">{{ t('idle.logout') }}</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <CommandPalette
@@ -178,6 +197,7 @@ import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
 import { broadcastLogout, onRemoteLogout } from '@/utils/sessionBus'
 import { clearSession, session } from '@/stores/session'
 import { loadTodoItems, type TodoItem } from '@/todos'
+import { IDLE_EVENTS, idleSeconds, idleTimeoutMin, shouldWarnIdle } from '@/idle'
 
 const route = useRoute()
 const router = useRouter()
@@ -195,6 +215,52 @@ const todoTotal = computed(() =>
   todos.value.reduce((sum, item) => sum + (item.count ?? 0), 0),
 )
 let todoTimer = 0
+
+/* ---- 空闲超时（第 221 批）：时间戳判定 + 60s 倒计时告警 ---- */
+const idleWarn = ref(false)
+const idleRemain = ref(0)
+const idleLimitMs = idleTimeoutMin(import.meta.env.VITE_IDLE_TIMEOUT_MIN) * 60_000
+const idleSecondsLeft = computed(() => idleSeconds(idleRemain.value))
+let idleLast = Date.now()
+let idleTimer = 0
+let idleFired = false
+
+function touchIdle() {
+  idleLast = Date.now()
+  if (idleWarn.value) {
+    idleWarn.value = false
+    idleRemain.value = 0
+  }
+}
+
+function tickIdle() {
+  if (!session.isLoggedIn.value || idleFired) return
+  const remaining = idleLimitMs - (Date.now() - idleLast)
+  if (remaining <= 0) {
+    idleFired = true
+    void idleLogout()
+    return
+  }
+  idleRemain.value = remaining
+  idleWarn.value = shouldWarnIdle(remaining)
+}
+
+async function idleLogout() {
+  userMenuOpen.value = false
+  todoOpen.value = false
+  await session.logout()
+  broadcastLogout()
+  await router.replace({ path: '/login', query: { reason: 'idle' } })
+}
+
+function stayActive() {
+  touchIdle()
+}
+
+function logoutNow() {
+  idleFired = true
+  void idleLogout()
+}
 const paletteOpen = ref(false)
 const mobileOpen = ref(false)
 const isMobile = ref(false)
@@ -393,11 +459,16 @@ onMounted(async () => {
   todoTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') void refreshTodos()
   }, 60_000)
+  for (const name of IDLE_EVENTS) window.addEventListener(name, touchIdle, { passive: true })
+  idleLast = Date.now()
+  idleTimer = window.setInterval(tickIdle, 1_000)
 })
 
 onBeforeUnmount(() => {
   document.body.style.overflow = ''
   window.clearInterval(todoTimer)
+  window.clearInterval(idleTimer)
+  for (const name of IDLE_EVENTS) window.removeEventListener(name, touchIdle)
   offRemoteLogout?.()
   mq?.removeEventListener('change', onViewportChange)
   document.removeEventListener('click', onDocClick)
@@ -695,6 +766,43 @@ function onViewportChange(e: MediaQueryListEvent) {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.idle-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.idle-card {
+  width: min(420px, calc(100vw - 32px));
+  padding: var(--s5, 20px);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.idle-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.idle-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.idle-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 
 .user {

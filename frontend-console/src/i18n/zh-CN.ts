@@ -54,6 +54,12 @@ const messages = {
   'todo.consults': '会诊待我填',
   'todo.rxRejected': '处方被驳回',
 
+  /* ---------- 空闲超时 ---------- */
+  'idle.title': '会话即将结束',
+  'idle.desc': '因长时间未操作，将在 {seconds} 秒后自动退出登录；未保存的内容会丢失。',
+  'idle.stay': '继续使用',
+  'idle.logout': '立即退出',
+
   /* ---------- 命令面板 ---------- */
   'palette.dialog': '命令面板',
   'palette.search': '命令搜索',

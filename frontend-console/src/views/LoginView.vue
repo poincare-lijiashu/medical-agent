@@ -10,6 +10,9 @@
       <section class="login-card">
         <h1 class="login-title">登录</h1>
         <p class="login-sub">使用院内账号进入临床控制台。所有关键操作都会写入审计链。</p>
+        <p v-if="idleNotice" class="login-notice" role="status">
+          因长时间未操作，已自动退出登录。请重新验证身份后继续。
+        </p>
 
         <form class="form" novalidate @submit.prevent="submit">
           <div class="field">
@@ -111,6 +114,8 @@ import { session } from '@/stores/session'
 
 const router = useRouter()
 const route = useRoute()
+/** 第 221 批：空闲超时自动退出后给出明确原因，避免用户以为“系统崩了”。 */
+const idleNotice = route.query.reason === 'idle'
 
 const REMEMBER_KEY = 'medassist.console.lastUser'
 const username = ref(localStorage.getItem(REMEMBER_KEY) ?? '')
@@ -242,6 +247,17 @@ onMounted(async () => {
   color: var(--muted);
   font-size: 14px;
   line-height: 20px;
+}
+
+.login-notice {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .form {
