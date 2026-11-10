@@ -774,6 +774,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import InlineConsult from '@/components/ai/InlineConsult.vue'
 import InlineRxAudit from '@/components/ai/InlineRxAudit.vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
@@ -826,6 +827,7 @@ let searchTimer: number | undefined
 
 const canReveal = computed(() => hasPermission('empi:patient:read_phi'))
 const role = computed(() => session.roleLabel.value)
+const route = useRoute()
 
 const patientTotalLabel = computed(() =>
   patientTotal.value ? `共 ${patientTotal.value} 条` : patients.value.length ? '' : '',
@@ -1528,6 +1530,18 @@ async function refreshAll() {
 onMounted(async () => {
   searchInput.value?.focus()
   await refreshAll()
+  // 第 219 批：命令面板全局检索患者后深链到本页，直接打开该患者上下文
+  const patientId = typeof route.query.patientId === 'string' ? route.query.patientId : ''
+  if (!patientId) return
+  try {
+    const patient = await empiApi.patient(patientId)
+    await pickPatient(patient)
+    const visitId = typeof route.query.visitId === 'string' ? route.query.visitId : ''
+    const wanted = visitId ? visits.value.find((v) => v.id === visitId) : null
+    if (wanted) await pickVisit(wanted)
+  } catch (e) {
+    toast.error('无法打开患者上下文', errorText(e))
+  }
 })
 
 onBeforeUnmount(() => {

@@ -22,6 +22,7 @@
           </div>
 
           <div class="palette-body">
+            <div v-if="patientStatus" class="palette-status">{{ patientStatus }}</div>
             <template v-for="group in filtered" :key="group.name">
               <div class="palette-group">{{ group.name }}</div>
               <button
@@ -40,7 +41,7 @@
                 <span v-if="item.kbd" class="palette-key">{{ item.kbd }}</span>
               </button>
             </template>
-            <div v-if="flat.length === 0" class="palette-empty">{{ t('palette.empty') }}</div>
+            <div v-if="flat.length === 0 && !patientStatus" class="palette-empty">{{ t('palette.empty') }}</div>
           </div>
 
           <div class="palette-foot">
@@ -59,8 +60,12 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import { empiApi } from '@/api'
+import type { Patient } from '@/api/types'
 import { NAV_ITEMS, canSeeNav } from '@/navigation'
 import { navHint, navTitle, t } from '@/i18n'
+import { hasPermission } from '@/stores/session'
+import { ageOf, genderLabel } from '@/utils/format'
 
 interface Command {
   id: string
@@ -84,6 +89,44 @@ const router = useRouter()
 const query = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 const activeId = ref('')
+
+/* ---- 全局患者检索（第 219 批）：仅对可读就诊的角色开放，2 字起、300ms 防抖 ---- */
+const patients = ref<Patient[]>([])
+const patientSearching = ref(false)
+const patientError = ref('')
+let patientTimer = 0
+const canSearchPatients = computed(() => hasPermission('clinical:visit:read'))
+const patientStatus = computed(() => {
+  if (!canSearchPatients.value || query.value.trim().length < 2) return ''
+  if (patientSearching.value) return t('palette.patients.searching')
+  return patientError.value
+})
+
+async function searchPatients(keyword: string) {
+  if (!canSearchPatients.value || keyword.length < 2) {
+    patients.value = []
+    patientError.value = ''
+    return
+  }
+  patientSearching.value = true
+  patientError.value = ''
+  try {
+    const res = /^\d+$/.test(keyword)
+      ? await empiApi.searchByNo(keyword, 1, 8)
+      : await empiApi.searchByName(keyword, 1, 8)
+    patients.value = res.items ?? []
+  } catch {
+    patients.value = []
+    patientError.value = t('palette.patients.error')
+  } finally {
+    patientSearching.value = false
+  }
+}
+
+watch(query, (value) => {
+  window.clearTimeout(patientTimer)
+  patientTimer = window.setTimeout(() => void searchPatients(value.trim()), 300)
+})
 
 const commands = computed<Command[]>(() => {
   const nav: Command[] = NAV_ITEMS.filter((n) => canSeeNav(n)).map((n) => ({
@@ -147,8 +190,10 @@ const filtered = computed(() => {
           c.group.toLowerCase().includes(q),
       )
     : commands.value
+  // 患者结果由服务端按姓名/病案号匹配，不再做本地二次过滤
+  const merged = [...patientCommands.value, ...list]
   const groups: { name: string; items: Command[] }[] = []
-  for (const c of list) {
+  for (const c of merged) {
     let g = groups.find((x) => x.name === c.group)
     if (!g) {
       g = { name: c.group, items: [] }
@@ -159,6 +204,21 @@ const filtered = computed(() => {
   return groups
 })
 
+const patientCommands = computed<Command[]>(() => {
+  if (!canSearchPatients.value || query.value.trim().length < 2) return []
+  return patients.value.map((p) => ({
+    id: `patient:${p.id}`,
+    title: p.name,
+    hint: [p.patientNo, genderLabel(p.gender), ageOf(p.birthDate)].filter(Boolean).join(' · '),
+    icon: 'user',
+    group: t('palette.groupPatient'),
+    run: () => {
+      void router.push({ path: '/orders', query: { patientId: p.id } })
+      close()
+    },
+  }))
+})
+
 const flat = computed(() => filtered.value.flatMap((g) => g.items))
 
 watch(
@@ -167,6 +227,9 @@ watch(
     if (!open) return
     query.value = ''
     activeId.value = ''
+    patients.value = []
+    patientError.value = ''
+    window.clearTimeout(patientTimer)
     await nextTick()
     inputEl.value?.focus()
   },
@@ -319,6 +382,12 @@ function close() {
   text-align: center;
   color: var(--ink-3);
   font-size: var(--fs-12);
+}
+
+.palette-status {
+  padding: 8px 10px 2px;
+  color: var(--ink-3);
+  font-size: var(--fs-11);
 }
 
 .palette-foot {
