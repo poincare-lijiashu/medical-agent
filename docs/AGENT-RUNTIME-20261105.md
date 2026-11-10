@@ -9382,6 +9382,42 @@ typecheck → 通过；build → 通过（入口 92.8KB gzip，预算内）
 - 服务端会话/令牌 TTL 仍由 Java 侧决定，本批只保证前端“人走屏灭”，
   两侧阈值应对齐（前端 ≤ 服务端）。
 
+## 222. 2026-11-11 AI 中台接口契约回归（第 222 批）
+
+**范围**：`frontend-console/src/api/ai.ts` ↔ FastAPI 路由表。接口改名后前端不会
+编译报错，只会在运行时 404/405；这类问题不该靠人工走查发现。
+
+**本批做了什么**
+
+1. **路径存在性**：解析 `aiGet/aiPost/aiPut/aiDelete/aiStream/aiDownload` 的字面路径，
+   与 `backend.main.app` 的路由表逐段比对；动态段（前端 `${id}` / 后端 `{id}`）
+   视为任意一段，不比较变量名。
+2. **方法一致性**：按 helper 推断方法（Get→GET、Post→POST、Put→PUT、Delete→DELETE、
+   Stream→POST、Download→GET），匹配到同一路径的全部路由方法必须包含该方法，
+   否则就是运行时 405。
+3. **调用纪律**：`ai.ts` 不得裸 `fetch`、不得直接读写 `session/localStorage`；
+   Agent 路径必须全部位于 `/agent/` 命名空间；不得自带 `/api/v1|/api/v2|/console|/app`
+   前缀（前缀由客户端基址统一加）。
+4. **新回归锁** `tests/test_console_ai_api_contract.py`（5 条）。
+
+**审计结果**
+
+- 全部 AI 调用路径在 FastAPI 中存在；方法全部匹配；无裸 fetch；Agent 路径无越界。
+  本批为**纯质量门**，不改业务代码。
+
+**验证**
+
+```
+定向：AI 契约 → 5 passed
+全量：pytest --ignore=tests/e2e → 1859 passed / 1 skipped
+```
+
+**遗留**
+
+- Java（`/api/v2`）侧控制器未纳入本契约锁：Java 路由无法在 Python 测试进程内自省，
+  需在 Java 侧加 ArchUnit/集成测试，或由 CI 导出 OpenAPI 后再比对；
+- 契约只校验“路径 + 方法”，不校验请求体字段；字段级契约需 OpenAPI/JSON Schema 对齐。
+
 
 
 
