@@ -56,7 +56,15 @@
           <span class="cmd-key">{{ metaKey }}K</span>
         </button>
 
-        <button class="user" type="button" :aria-expanded="userMenuOpen" @click="userMenuOpen = !userMenuOpen">
+        <button
+          ref="userBtn"
+          class="user"
+          type="button"
+          aria-haspopup="menu"
+          :aria-expanded="userMenuOpen ? 'true' : 'false'"
+          @click="toggleUserMenu"
+          @keydown.down.prevent="openUserMenu"
+        >
           <span class="avatar" aria-hidden="true">{{ initial }}</span>
           <span class="user-meta">
             <span class="user-name truncate">{{ session.user.value?.displayName || t('shell.notLoggedIn') }}</span>
@@ -66,7 +74,7 @@
         </button>
 
         <Transition name="fade">
-          <div v-if="userMenuOpen" class="user-menu" role="menu">
+          <div ref="userMenuEl" v-if="userMenuOpen" class="user-menu" role="menu" @keydown="onUserMenuKeydown">
             <div class="user-menu-head">
               <div class="user-menu-name">{{ session.user.value?.displayName }}</div>
               <div class="user-menu-sub">{{ session.roleLabel.value }} · {{ scopeLabel }}</div>
@@ -139,6 +147,8 @@ const theme = ref<'light' | 'dark'>(
   (localStorage.getItem('medassist.console.theme') as 'light' | 'dark') || 'light',
 )
 const userMenuOpen = ref(false)
+const userBtn = ref<HTMLElement | null>(null)
+const userMenuEl = ref<HTMLElement | null>(null)
 const paletteOpen = ref(false)
 const mobileOpen = ref(false)
 const isMobile = ref(false)
@@ -169,6 +179,63 @@ const initial = computed(() => (session.user.value?.displayName || t('app.name')
 
 function applyTheme() {
   document.documentElement.dataset.theme = theme.value
+}
+
+/* ---- 用户菜单键盘可达（第 215 批）：Down 打开、上下循环、Esc 关闭并归还焦点 ---- */
+function menuItems(): HTMLElement[] {
+  return [...(userMenuEl.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+}
+
+async function focusMenuItem(index: number) {
+  await nextTick()
+  const items = menuItems()
+  if (items.length) items[(index + items.length) % items.length].focus()
+}
+
+async function openUserMenu() {
+  if (userMenuOpen.value) return
+  userMenuOpen.value = true
+  await focusMenuItem(0)
+}
+
+async function toggleUserMenu() {
+  if (userMenuOpen.value) {
+    closeUserMenu()
+    return
+  }
+  userMenuOpen.value = true
+  await focusMenuItem(0)
+}
+
+function closeUserMenu(restoreFocus = true) {
+  if (!userMenuOpen.value) return
+  userMenuOpen.value = false
+  if (restoreFocus) void nextTick(() => userBtn.value?.focus())
+}
+
+function onUserMenuKeydown(e: KeyboardEvent) {
+  const items = menuItems()
+  if (!items.length) return
+  const current = items.indexOf(document.activeElement as HTMLElement)
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    void focusMenuItem(current + 1)
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    void focusMenuItem(current - 1)
+  } else if (e.key === 'Home') {
+    e.preventDefault()
+    void focusMenuItem(0)
+  } else if (e.key === 'End') {
+    e.preventDefault()
+    void focusMenuItem(items.length - 1)
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    closeUserMenu()
+  } else if (e.key === 'Tab') {
+    // Tab 不拦截：让焦点自然离开菜单，但菜单应收起，避免遮挡下一处内容
+    closeUserMenu(false)
+  }
 }
 
 /** 语言切换只影响本机显示偏好，不写服务端；标题栏 aria 文案随之更新。 */
@@ -226,12 +293,15 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     paletteOpen.value = !paletteOpen.value
   }
-  if (e.key === 'Escape' && mobileOpen.value) closeNav(true)
+  if (e.key === 'Escape') {
+    if (userMenuOpen.value) closeUserMenu()
+    if (mobileOpen.value) closeNav(true)
+  }
 }
 
 function onDocClick(e: MouseEvent) {
   const el = e.target as HTMLElement
-  if (!el.closest('.user') && !el.closest('.user-menu')) userMenuOpen.value = false
+  if (!el.closest('.user') && !el.closest('.user-menu')) closeUserMenu(false)
 }
 
 onMounted(async () => {

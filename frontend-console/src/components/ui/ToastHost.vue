@@ -1,14 +1,20 @@
 <template>
-  <div class="toast-host" role="region" aria-label="操作反馈" aria-live="polite">
+  <div class="toast-host" role="region" :aria-label="t('toast.region')" aria-live="polite">
     <TransitionGroup name="toast">
-      <div v-for="t in toast.list" :key="t.id" class="toast" :class="`toast--${t.kind}`">
-        <AppIcon :name="iconOf(t.kind)" :size="16" />
+      <div
+        v-for="item in toast.list"
+        :key="item.id"
+        class="toast"
+        :class="`toast--${item.kind}`"
+        :role="item.kind === 'error' || item.kind === 'warn' ? 'alert' : 'status'"
+      >
+        <AppIcon :name="iconOf(item.kind)" :size="16" aria-hidden="true" />
         <div class="toast-body">
-          <div class="toast-title">{{ t.title }}</div>
-          <div v-if="t.desc" class="toast-desc">{{ t.desc }}</div>
+          <div class="toast-title">{{ item.title }}</div>
+          <div v-if="item.desc" class="toast-desc">{{ item.desc }}</div>
         </div>
-        <button class="toast-close" type="button" aria-label="关闭提示" @click="toast.dismiss(t.id)">
-          <AppIcon name="x" :size="14" />
+        <button class="toast-close" type="button" :aria-label="t('toast.close')" @click="toast.dismiss(item.id)">
+          <AppIcon name="x" :size="14" aria-hidden="true" />
         </button>
       </div>
     </TransitionGroup>
@@ -17,6 +23,7 @@
 
 <script setup lang="ts">
 import AppIcon from './AppIcon.vue'
+import { t } from '@/i18n'
 import { toast, type ToastKind } from '@/stores/toast'
 
 function iconOf(kind: ToastKind) {

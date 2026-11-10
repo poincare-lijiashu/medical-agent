@@ -33,6 +33,10 @@ const messages = {
   'boundary.retry': '重试当前页',
   'boundary.home': '返回驾驶舱',
 
+  /* ---------- 操作反馈 ---------- */
+  'toast.region': '操作反馈',
+  'toast.close': '关闭提示',
+
   /* ---------- 命令面板 ---------- */
   'palette.dialog': '命令面板',
   'palette.search': '命令搜索',

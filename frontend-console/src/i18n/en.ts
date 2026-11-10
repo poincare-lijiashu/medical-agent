@@ -30,6 +30,10 @@ const messages: Record<MessageKey, string> = {
   'boundary.retry': 'Retry this page',
   'boundary.home': 'Back to dashboard',
 
+  /* ---------- Action feedback ---------- */
+  'toast.region': 'Action feedback',
+  'toast.close': 'Dismiss notification',
+
   /* ---------- Command palette ---------- */
   'palette.dialog': 'Command palette',
   'palette.search': 'Command search',
