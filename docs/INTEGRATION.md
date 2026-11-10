@@ -153,3 +153,48 @@ payload 只记**患者标识哈希**（sha256 前 12 位）与适配器名，不
 2. **Java 平台侧 AI 客户端**：HIS 界面内触发质控/审方（双向集成），避免医生开两个系统；
 3. **患者主索引（EMPI）唯一真源**：AI 侧只存 `empi_id` 引用 + 哈希，不复制患者主数据；
 4. **契约测试进 CI**：用 FHIR 官方示例资源 + MockTransport 已覆盖；再加 staging 双系统联调。
+
+## 九、Java 侧 AI 客户端（HIS → AI 反向调用，`clinical.ai.base-url`）
+
+> 前面第八节解决的是"AI 读 HIS"；本节解决"医生在 HIS 界面里直接用 AI"——双向集成的另一半。
+
+### 9.1 组成
+
+| 文件 | 作用 |
+|---|---|
+| `clinical/client/AiAssistClient.java` | 接口：`qcCheck` / `rxCheck` |
+| `clinical/client/HttpAiAssistClient.java` | HTTP 实现：`RestClient` + 3s 超时；**令牌透传**（医护端 JWT → AI 中台，不新增服务账号） |
+| `clinical/web/AiAssistController.java` | `POST /internal/ai/qc-check`、`POST /internal/ai/rx-check`（网关内网白名单） |
+| `application.yml` | `clinical.ai.base-url: ${CLINICAL_AI_BASE_URL:}`、`timeout: ${CLINICAL_AI_TIMEOUT:PT3S}` |
+
+### 9.2 错误语义（不静默降级）
+
+| 场景 | 返回 |
+|---|---|
+| 未配置 `CLINICAL_AI_BASE_URL` | `503 UPSTREAM_UNAVAILABLE`（"AI 中台未配置…"） |
+| 请求缺 Authorization | `401 UNAUTHORIZED` |
+| AI 侧 4xx（如内联参数不合法） | `422 VALIDATION_FAILED` |
+| AI 侧 5xx | `503 UPSTREAM_UNAVAILABLE` |
+| 连不上/超时 | `504 GATEWAY_TIMEOUT` |
+
+日志只记路径与状态码，不记病历正文/令牌（PHI 最小化）。
+
+### 9.3 配置示例
+
+```yaml
+clinical:
+  ai:
+    base-url: ${CLINICAL_AI_BASE_URL:http://medassist-ai-core:8001}
+    timeout: ${CLINICAL_AI_TIMEOUT:PT3S}
+```
+
+### 9.4 测试
+
+`clinical/src/test/java/com/medassist/clinical/client/AiAssistClientTest.java`（8 条，JDK 内置
+`HttpServer` 起临时端口，真实 HTTP）：令牌透传与路径、4xx→422、5xx→503、无令牌→401、
+未配置→503、不可达→504、Controller Bearer 解析。
+
+```
+mvn -q -pl clinical -am "-Dtest=AiAssistClientTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+→ Tests run: 8, Failures: 0, Errors: 0
+```

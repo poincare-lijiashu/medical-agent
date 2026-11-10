@@ -6993,3 +6993,40 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 2. **Java 平台侧 AI 客户端**：HIS 界面内触发质控/审方（双向集成），当前 Java 侧仍未调用 AI；
 3. **EMPI 唯一真源**：AI 侧只存 `empi_id` 引用与哈希，不复制患者主数据；
 4. **staging 双系统联调 + 契约测试进 CI**：当前契约测试用 MockTransport，需真实网关样例。
+
+## 172. 2026-11-10 HIS 深度集成第二步：Java 侧 AI 客户端（HIS → AI 双向调用）（第 169 批）
+
+**问题（用户指令：向着深度集成发展）**
+
+- 第 168 批只解决"AI 读 HIS"；**Java 侧仍不调用 AI**——医生在 HIS 界面写病历/开医嘱时
+  无法触发 AI 质控/审方，必须另开 AI 前端。这是"两套系统"体感的核心缺口。
+
+**已做（`platform/clinical`）**
+
+1. `client/AiAssistClient.java`：`qcCheck` / `rxCheck` 两个端口。
+2. `client/HttpAiAssistClient.java`（`@Component`）：
+   - `RestClient` + 默认 3s 连接/读取超时；`clinical.ai.base-url` 留空 = 未对接（调用 503 明确提示）；
+   - **令牌透传**：医护端 JWT 原样转给 AI 中台（两端共享 HS256 身份源），不新增服务账号、
+     不做权限放大；AI 侧仍按同一身份执行 `model_quota` / `rate_limit`；
+   - 错误映射：AI 4xx→422 `VALIDATION_FAILED`；5xx→503 `UPSTREAM_UNAVAILABLE`；
+     连不上/超时→504 `GATEWAY_TIMEOUT`；缺令牌→401；日志只记路径/状态码（不记病历与令牌）。
+3. `web/AiAssistController.java`：`POST /internal/ai/qc-check`、`POST /internal/ai/rx-check`
+   （网关内网白名单；Bearer 解析抽成公开静态方法便于单测）。
+4. `ClinicalProperties` 增加 `Ai(baseUrl, timeout)` 记录；`application.yml` 增
+   `clinical.ai.base-url: ${CLINICAL_AI_BASE_URL:}`、`timeout: ${CLINICAL_AI_TIMEOUT:PT3S}`。
+5. `docs/INTEGRATION.md` 新增第九节（组成、错误语义、配置、测试命令）。
+
+**验证**
+
+```
+mvn -q -pl clinical -am "-Dtest=AiAssistClientTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+→ Tests run: 8, Failures: 0, Errors: 0（JDK HttpServer 真 HTTP：令牌透传/路径/
+  422/503/401/未配置 503/不可达 504/Bearer 解析）
+Python 全量（不含 e2e）→ 1656 passed / 1 skipped（跨栈无回归）
+```
+
+**遗留**
+
+- 前端 HIS 工作台尚未接入这两个内部端点（Java 侧能力已就绪，需前端按钮 + 结果面板）；
+- `internal/**` 的网关白名单需在 Helm ingress 配置中显式放行（当前网关默认屏蔽）；
+- HL7 v2 MLLP 适配器（老院区通道）仍待做；EMPI 唯一真源与 staging 双系统联调仍待做。

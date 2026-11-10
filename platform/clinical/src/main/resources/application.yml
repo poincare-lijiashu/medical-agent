@@ -62,6 +62,12 @@ clinical:
     base-url: ${TECH_INTERNAL_URI:http://127.0.0.1:8085}
     internal-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
     timeout: ${TECH_TIMEOUT:PT3S}
+  # Python AI 中台（评测「HIS 深度集成」）：医生在 HIS 界面内直接触发质控/审方。
+  # 令牌由医护端 JWT 透传（两端共享同一 HS256 身份源），不在此配置服务账号。
+  # 留空 = 未对接：调用返回 503 明确提示，不静默降级成空结果。
+  ai:
+    base-url: ${CLINICAL_AI_BASE_URL:}
+    timeout: ${CLINICAL_AI_TIMEOUT:PT3S}
   # 入站内部接口令牌（病历域读取入院时间、医保域拉取收费明细）；与出站共用同一令牌
   internal-api-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
 
