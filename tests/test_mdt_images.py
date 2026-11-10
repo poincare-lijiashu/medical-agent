@@ -311,27 +311,31 @@ def test_consult_images_cap_eleven_rejected(monkeypatch, tmp_path):
 # ==================== 前端标记锁（防回退） ====================
 
 def test_mdt_images_frontend_markers_present():
-    """轮 B1 前端标记锁（Vue 语义版）：会诊发起框图片上传（复用 compressImage + ≤10 计数）、
-    发起请求随单带图并在成功后清空、「我的会诊」详情缩略图渲染（data:image 白名单）。
-    轮4 起断言源 = frontend-vue/src（ConsultView.vue + utils/image.js）；缩略图经 Vue 模板
-    el-image 组件渲染（模板插值 + preview-src-list 点击放大接管 legacy esc/showImg 语义）。"""
-    from tests.test_frontend_syntax import _vue_source
-    html = _vue_source()
+    """轮 B1 前端标记锁（控制台语义版）：会诊发起框图片上传（复用 appendImages/compressImage
+    与 ≤10 计数）、发起请求随单带图并在成功后清空、「我的会诊」详情缩略图渲染（data:image
+    白名单 + 点击放大）。断言源 = frontend-console/src/views/AiChatView.vue +
+    AiReviewView.vue + utils/image.ts（旧前端已下线）。"""
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    chat = (repo / "frontend-console" / "src" / "views" / "AiChatView.vue").read_text(
+        encoding="utf-8")
+    review = (repo / "frontend-console" / "src" / "views" / "AiReviewView.vue").read_text(
+        encoding="utf-8")
     for marker in (
-        # 发起框上传组件（独立 ref 上传，appendImages 压缩入列）
-        "const consultImages = ref([])", "async function onFiles(",
-        "function clearConsultImgs(", "appendImages(consultImages.value",
-        "(await Promise.all(add.map((f) => compressImage(f))))",  # 复用 imaging 压缩函数
-        "最多 ${MAX_IMG} 张，已忽略超出部分",        # ≤10 张计数提示
+        # 发起框上传：独立 ref + 压缩入列（复用 image.ts）
+        "const consultImages = ref<string[]>([])",
+        "async function addConsultFiles(",
+        "appendImages(consultImages.value, files)",
+        "MAX_IMG",
+        "if (added.overflow)",
         # 发起请求随单带图 + 成功清空
-        "images: consultImages.value.length ? consultImages.value : undefined",
-        "consultImages.value = [] // 图已随单发出，清空待附影像",
-        # 「我的会诊」详情缩略图（data:image 白名单过滤）
-        "function consultThumbs(",
+        "aiConsultCreate(question, consultImages.value)",
+        "consultImages.value = []",
     ):
-        assert marker in html, f"缺少前端标记：{marker}"
-    # 「我的会诊」详情缩略图条（v-if + v-for + preview-src-list 三处消费 consultThumbs(c)）
-    assert html.count("consultThumbs(c)") >= 2, "「我的会诊」详情应渲染缩略图条（含点击放大预览列表）"
-    thumbs = html[html.index("function consultThumbs("):]
+        assert marker in chat, f"缺少前端标记：{marker}"
+    # 详情缩略图：data:image/ 前缀白名单过滤 + 点击放大
+    thumbs = review[review.index("function consultThumbs("):]
     thumbs = thumbs[:thumbs.index("\n}", 10)]
     assert "startsWith('data:image/')" in thumbs, "缩略图缺少 data:image/ 前缀白名单过滤"
+    assert "function showImage(" in review and "startsWith('data:image/')" in review, \
+        "放大查看必须同样走 data:image/ 白名单"

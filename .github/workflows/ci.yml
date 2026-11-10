@@ -131,10 +131,6 @@ jobs:
       - name: pip-audit（requirements.txt）
         continue-on-error: true
         run: python -m pip_audit -r requirements.txt --format json --output pip-audit.json
-      - name: npm audit（frontend-vue）
-        continue-on-error: true
-        working-directory: frontend-vue
-        run: npm audit --audit-level=high --json > ../npm-audit-vue.json
       - name: npm audit（frontend-console）
         continue-on-error: true
         working-directory: frontend-console
@@ -146,7 +142,6 @@ jobs:
           name: vuln-reports
           path: |
             pip-audit.json
-            npm-audit-vue.json
             npm-audit-console.json
           if-no-files-found: ignore
           retention-days: 14
@@ -213,34 +208,6 @@ jobs:
         run: npm ci
       - name: Typecheck (vue-tsc)
         run: npm run typecheck
-      - name: Production build
-        run: npm run build
-
-  frontend-ai:
-    # 生产托管的前端是 frontend-vue/dist（FastAPI 直接直出），此前后端门禁只构建
-    # frontend-console，导致"源码坏了但旧 dist 还能跑"的回归无法被发现（第 130 批实测：
-    # main.js 丢失 Element Plus 注册，登录页组件全部退化为未解析标签，CI 全程绿灯）。
-    # 本 job 保证：每次提交都从源码真实构建一次，构建失败即红。
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: frontend-vue
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend-vue/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      # 评测 P0-5：此前 frontend-vue 只有"关键字符串必须存在"的标记锁，
-      # 逻辑改坏但字符串不变时 CI 全绿。lint（正确性规则）与纯函数单测是行为级门禁。
-      - name: Lint (eslint + vue essential)
-        run: npm run lint
-      - name: Unit tests (vitest)
-        run: npm run test:unit
       - name: Production build
         run: npm run build
 

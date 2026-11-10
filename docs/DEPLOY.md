@@ -31,55 +31,40 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 ```
 
-## 前端构建与部署（Vue3，轮4 起）
+## 前端构建与部署（Vue3 控制台，唯一前端）
 
-> 前端有两套，同一镜像、同一域名、同一登录态：
-> - **AI 中台工作台**（`frontend-vue/`，Vue3 + Element Plus，`/api/v1`）：挂 `/` 与 `/app`；
-> - **临床控制台**（`frontend-console/`，Vue3 + 自建设计系统，`/api/v2` + `/api/v1`）：挂 `/console`。
->
-> legacy vanilla 前端已删除（git tag `v-legacy-frontend` 永久保存，回退见
-> **[docs/plans/vue3_migration.md](plans/vue3_migration.md)**）。
+> 第 211 批起控制台是**唯一前端**（`frontend-console/`：Vue3 + 自建设计系统 + TS），
+> 由 AI 中台在**根路径**托管（同镜像、同域、同登录态）；`/console` 与 `/app` 仅作
+> 历史书签的 307 重定向。旧 `frontend-vue/` 已物理删除，历史迁移见
+> **[docs/plans/vue3_migration.md](plans/vue3_migration.md)**。
 
 ### 环境要求
 
 | 项 | 要求 | 说明 |
 | --- | --- | --- |
 | Node.js | ≥ 18（含 npm） | 仅构建期需要；服务运行/回退均不需要 node |
-| npm 镜像 | `frontend-vue/.npmrc` 已锁 `registry=https://registry.npmmirror.com` | 网络受限环境保安装成功，无需手工配置 |
 
 ### 构建步骤（CI 外手动执行）
 
 ```bash
-# AI 中台工作台（/、/app）
-cd frontend-vue
-npm ci          # 按 package-lock.json 精确安装（首次/依赖变更后）
-npm run build   # 产物：frontend-vue/dist/（vite base=/）
-
-# 临床控制台（/console）
 cd frontend-console
-npm ci
-npm run build   # 产物：frontend-console/dist/（vite base=/console/，router 用 BASE_URL）
+npm ci          # 按 package-lock.json 精确安装（首次/依赖变更后）
+npm run build   # 产物：frontend-console/dist/（vite base=/，资源引用 /assets/*）
 ```
 
 ### dist 已入库策略
 
-- `frontend-vue/dist/` 与 `frontend-console/dist/` 构建产物**随源码入库**（.gitignore 反向豁免）：
+- `frontend-console/dist/` 构建产物**随源码入库**（.gitignore 反向豁免）：
   **任何前端改动必须重新构建并把 dist 一并提交**——部署机 checkout 即可用，
-  全程无需 node 环境（`tests/test_frontend_syntax.py::test_vue_dist_build_output_in_sync`
-  与 `tests/test_frontend_hosting.py` 锁定 dist 与 src 同步存在）。
-- 两套产物的资源前缀不同：AI 工作台用 `/assets/*`，控制台用 `/console/assets/*`
-  （vite base 决定），因此可以安全地放在同一域名下，不会互相覆盖；
-  `backend/main.py` 的 StaticFiles（根）与 `/console/**` 路由分别托管，深链全部回落各自 index.html。
-- **入口互跳与单点登录（第 185/186 批）**：AI 工作台顶栏「临床控制台 ↗」→ `/console/`；
-  控制台用户菜单「AI 深度工作台」→ `/`。控制台方向走 **同域 SSO 交接**：点击时写一张
-  一次性票据（localStorage，60 秒有效、读即删除），AI 工作台启动时取走并经 `/auth/me`
-  服务端验签确认——**令牌不进 URL/历史记录**。反方向仍是普通链接（Python 自签令牌不含
-  Java 侧 `roles` 声明，不能反向复用），需各自登录。
+  全程无需 node 环境（`tests/test_frontend_hosting.py` 锁定根路径直出、深链回落与 307）。
+- 资源前缀为 `/assets/*`（vite base=`/`）；`backend/main.py` 的 StaticFiles 在根路径托管，
+  深链（`/orders`、`/pharmacy`…）全部回落 index.html；`/console/**` 与 `/app/**` 仅 307。
+- **单点登录**：控制台与 AI 中台同域同登录态（控制台走 `/api/v2` + `/api/v1`）。
 
 ### 部署形态
 
-- **单机直跑**：后端 uvicorn 起来即同时服务 API 与两套前端（无独立前端服务器/CDN 依赖）；
-- **Docker**：镜像内已含两个 dist（`COPY frontend-vue/dist` + `COPY frontend-console/dist`），无需在容器内跑 npm；
+- **单机直跑**：后端 uvicorn 起来即同时服务 API 与前端（无独立前端服务器/CDN 依赖）；
+- **Docker**：镜像内已含控制台产物（`COPY frontend-console/dist`），无需在容器内跑 npm；
 - 静态资源与 API 同源，CSP 已按产物形态收敛（`script-src 'self'`，无内联脚本）。
 
 ## 模型配置（医院自选供应商）
@@ -251,13 +236,13 @@ python scripts\agent_go_live_check.py --dry-run
 **完整恢复的边界（bundle 只覆盖入库内容）**：
 | 资产 | 是否在 bundle | 恢复方式 |
 |---|---|---|
-| 代码 / Helm / 文档 / `frontend-vue/dist` | 是 | `git clone` bundle |
+| 代码 / Helm / 文档 / `frontend-console/dist` | 是 | `git clone` bundle |
 | `data/` 内已入库的字典、指南、示例 | 是 | 随克隆恢复 |
 | `data/auth/users.json`、`data/llm_providers.json` | **否**（含账户/密钥，已 gitignore） | 由 `scripts/restore.py --backup ... --yes` 从 `backup_*.tar.gz` 恢复 |
 | PG 业务数据 | **否** | 同上（psql 导回 dump） |
 | `.env.local` / K8s Secret | **否** | 从密管/运维台账注入 |
 | 嵌入模型 `backend/models/embedding/bge-m3` | **否** | 按部署文档单独下发（或允许下载的受控环境） |
-| `frontend-vue/node_modules` | **否** | 不需要（`dist` 已入库）；要改前端再 `npm ci` |
+| `frontend-console/node_modules` | **否** | 不需要（`dist` 已入库）；要改前端再 `npm ci` |
 
 结论：bundle 能独立证明"代码与已入库资产可恢复"，但**业务数据与密钥必须走
 `restore.py` + Secret 注入**；只恢复 bundle 会得到"能跑测试、但无账号/无模型"的空壳。

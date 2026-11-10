@@ -19,32 +19,34 @@ Browser(SPA) ──Bearer──▶ FastAPI
 
 ## 分层
 
-- **入口/前端** `backend/main.py` + `frontend-vue/`（Vue 3 单页应用）。FastAPI 挂 `/api/v1/*` + 观测中间件（请求计数/时延/X-Request-Id）；前端独立构建（`npm run build` → `frontend-vue/dist/`，随库提交 dist 保持「改前端必须重新构建」纪律）。
+- **入口/前端** `backend/main.py` + `frontend-console/`（Vue 3 单页应用，唯一前端）。FastAPI 挂 `/api/v1/*` + 观测中间件（请求计数/时延/X-Request-Id）；控制台在**根路径**托管（`/console`、`/app` 仅 307），前端独立构建（`npm run build` → `frontend-console/dist/`，随库提交 dist 保持「改前端必须重新构建」纪律）。
 
-### 前端：Vue 3 工程（frontend-vue/，当前实现）
+### 前端：Vue 3 工程（frontend-console/，唯一前端）
 
-技术栈：Vue 3.5（`<script setup>` 组合式）+ Vue Router 4 + Pinia + Element Plus + axios + Vite 6。
-构建产物 `dist/` 由 Vite 指纹输出（`assets/index-*.js/css`），CSP 兼容（无内联脚本）。
+技术栈：Vue 3.5（`<script setup>`）+ Vue Router 4 + TypeScript（strict）+ Vite 6，零 UI 框架（自建设计系统）。
+构建产物 `dist/` 由 Vite 指纹输出（`assets/index-*.js/css`，base=`/`），CSP 兼容（无内联脚本）。
 
 ```
-frontend-vue/src/
-├── main.js            # 应用入口：createApp + Pinia + Router + ElementPlus + styles.css
+frontend-console/src/
+├── main.ts            # 应用入口：createApp + Router + 会话恢复 + i18n + 样式
 ├── App.vue            # 根组件（仅挂 RouterView）
-├── styles.css         # 全局设计令牌（冷灰+钴蓝、状态语义色，与 DESIGN.md 对齐）
-├── api/index.js       # axios 实例：baseURL=/api/v1、Bearer 注入、401 清令牌跳登录、errText
-├── router/index.js    # 路由表 + 登录守卫（未登录重定向 /login）
-├── stores/            # Pinia：auth（令牌/角色）、badges（角标轮询）、dirty（未保存脏标记）
-├── layouts/AppShell.vue   # 壳：侧边导航（按角色过滤）+ 顶栏 + beforeunload 守卫
-├── views/             # 12 视图：Login/Overview/Literature/Imaging/Case/Rx/Consult/
-│                      #   ReviewCenter/Qc/Data/Arch/Kb（与路由一一对应）
-├── components/        # DrugDictEditor / DrugRulesEditor（数据面板字典与规则管理卡）
-├── utils/             # assist（esc/md/fmtTs 共享净化）、audit（humanizeAudit）、image（compressImage）
-└── constants/         # nav（角色导航）/ copy（文案）
+├── navigation.ts      # 侧栏导航（按角色过滤，路由一一对应）
+├── styles/            # tokens.css 设计令牌 / base.css 基础层 / orders-view.css
+├── api/http.ts        # Java 网关通道（/api/v2，ApiResponse 信封 + 401 刷新重试）
+├── api/ai.ts          # AI 中台通道（/api/v1，裸 JSON，同一枚 Bearer）
+├── router/index.ts    # 路由表 + 登录/角色守卫 + 未保存拦截（createWebHistory(BASE_URL)）
+├── stores/            # session（令牌/角色）、toast、aiChat
+├── layouts/AppShell.vue   # 壳：分组侧栏 + beforeunload/跨标签页登出守卫
+├── views/             # 业务页（医嘱/药事/会诊/审核/质控/AI 智能…）
+├── components/        # ui（AppModal/EmptyState/KpiCard…）/ domain（业务块）/ ai（AI 面板）
+├── i18n/              # zh-CN.ts / en.ts（双语文案 key）
+└── utils/             # audit（humanizeAudit）、image（compressImage/appendImages）、
+                       # sessionBus（跨标签页登出）、markdown、format、surgery
 ```
 
-护栏：前端标记锁测试（`tests/test_frontend_syntax.py` 等）以 `frontend-vue/src/**` 全文为断言源——
-v-html 消费方（如 KbView kbMsg）拼接必须经 `utils/assist.js` 的 `esc()` 转义（终评 F2 XSS 收口）。
-历史 legacy（单文件 index.html + js/*.js 非模块拆分）已随轮4 删除，存档见 git tag v-legacy-frontend。
+护栏：控制台迁移测试（`tests/test_console_*.py`）以 `frontend-console/src/**` 为断言源——
+接口通道必须走对应客户端（Java 信封 vs AI 裸 JSON），审计新增事件必须补 `utils/audit.ts`
+人话映射（`tests/test_audit_humanize_coverage.py` 反向校验）。
 - **API 层** `backend/api/v1/`：
   - `auth/` 登录/刷新/`/me`；`deps.py` Bearer 校验 + 角色 + 滑动窗口限流。
   - `medical/`（W4.3 域拆分）：`medical_router.py` 聚合入口 + `literature.py`（4 agent 之文献/SSE）+ `drug.py`（两药/字典规则）+ `prescriptions.py`（智能开药/处方流转）+ `imaging.py`（阅片/病例总结）+ `consults.py`（MDT/跨科室会诊）+ `review.py`（审核中心）+ `qc.py`（病历质控/病例库）+ `kb.py`（知识库）+ `admin.py`（用户/科室/运维/LLM 配置）；共享层 `schemas.py`（AskReq/AskResp）+ `shared.py`（审计接入口/PHI 脱敏/`_enqueue_if_risk`/VL 流程）；AskResp 携 `confidence / needs_human_review / sources / review_id / evidence`。

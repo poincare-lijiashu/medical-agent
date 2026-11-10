@@ -55,7 +55,7 @@ python scripts\run_eval.py   # 需后端在运行，期望 hit_rate 9/9
 
 ## 架构
 
-- **入口/前端** `backend/main.py` + `frontend-vue/dist`（Vue3 构建产物已入库）：FastAPI 根路径提供单页应用；`/docs` 为 OpenAPI。
+- **入口/前端** `backend/main.py` + `frontend-console/dist`（控制台是唯一前端，Vue3 构建产物已入库，根路径托管；`/console`、`/app` 仅 307 重定向）：FastAPI 根路径提供单页应用；`/docs` 为 OpenAPI。
 - **M1 核心** `backend/core/`：`auth`(JWT/pbkdf2/用户表) · `medical_audit`(PHI+追加审计) · `medical_drug`(相互作用规则库) · `medical_imaging`(Qwen-VL 图像→所见) · `medical_kb`(稠密+稀疏 RRF 混合检索→BGE 精排，复用 `embedder`→本地权重) · `embedder`(bge-m3 单例) · `llm_factory`(多厂商工厂：OpenAI 兼容/Anthropic 双格式 + VL 通道) · `logger`(结构化)。
 - **M2 文献 agent** `backend/agents/medical/literature/`：LangGraph 单节点，PubMed + 本地 KB 融合，JSON 答案 + 引用(PMID/KB)。
 - **鉴权 API** `backend/api/v1/auth/` · **医疗 API** `backend/api/v1/medical/`（W4.3 按业务域拆分：`medical_router.py` 聚合 + `literature/drug/prescriptions/imaging/consults/review/qc/kb/admin` 九域模块 + `schemas/shared` 共享层——4 agent 问答 + SSE 流式 + MDT 会诊 + 会诊收件箱 + 审核中心 + 病历质控 + KB 管理 + admin 运维端点，均受 Bearer 保护）。

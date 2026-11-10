@@ -1,7 +1,7 @@
 {
   "name": "medassist-console",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "MedAssist 临床控制台（自建设计系统，对接 /api/v2）",
   "scripts": {

@@ -597,18 +597,19 @@ def test_consult_create_stores_dept_reason(monkeypatch, tmp_path):
 
 
 def test_consult_reason_frontend_markers_present():
-    """T1 前端标记锁：「我的会诊」卡「受邀科室」旁渲染「AI 分科依据：<reason>」
-    （灰色小字 .src；旧会诊单无 team.reason 字段 → v-if 不渲染，读取容错）。"""
-    from tests.test_frontend_syntax import _vue_source
-    html = _vue_source()
+    """T1 前端标记锁（控制台版）：「我的会诊」卡「受邀科室」旁渲染「AI 分科依据：<reason>」
+    （灰色小字 .hint；旧会诊单无 team.reason 字段 → v-if 不渲染，读取容错）。
+    断言源 = frontend-console/src/components/domain/ai/ConsultInitiatedPanel.vue。"""
+    from pathlib import Path
+    panel = (Path(__file__).resolve().parents[1] / "frontend-console" / "src" / "components"
+             / "domain" / "ai" / "ConsultInitiatedPanel.vue").read_text(encoding="utf-8")
     for marker in (
         "function deptReason(",
-        'v-if="deptReason(c)"',
-        "AI 分科依据：{{ deptReason(c) }}",
-        'data-testid="consult-dept-reason"',
+        'v-if="deptReason(item)"',
+        "aiReview.mineConsults.reason",
     ):
-        assert marker in html, f"缺少前端标记：{marker}"
-    fn = html[html.index("function deptReason("):]
+        assert marker in panel, f"缺少前端标记：{marker}"
+    fn = panel[panel.index("function deptReason("):]
     fn = fn[:fn.index("\n}", 10)]
-    # 读取容错：必须走 c.team?.reason 式的安全取值（旧单无字段返回空串而非抛错）
-    assert "c.team" in fn and "reason" in fn, "deptReason 必须从容错读取 team.reason"
+    # 读取容错：必须走 item.team?.reason 式的安全取值（旧单无字段返回空串而非抛错）
+    assert "item.team?.reason" in fn, "deptReason 必须从容错读取 team.reason"

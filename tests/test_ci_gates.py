@@ -93,10 +93,11 @@ def test_lint_gate_is_real_and_blocking():
 
 
 def test_dependency_vulnerability_scan_is_wired():
-    """评测 C5：供应链扫描必须覆盖 Python 与两个前端，并把报告留档。"""
+    """评测 C5：供应链扫描必须覆盖 Python 与唯一前端，并把报告留档。"""
     ci = _read(CI)
     assert "pip_audit -r requirements.txt" in ci
-    assert ci.count("npm audit --audit-level=high") == 2, "两个前端目录都要扫"
+    assert ci.count("npm audit --audit-level=high") == 1, "唯一前端（frontend-console）必须扫"
+    assert "working-directory: frontend-console" in ci, "扫描目录应为控制台"
     assert "vuln-reports" in ci, "扫描报告必须作为 artifact 留档（否则等于没扫）"
     dev = _read(REQUIREMENTS_DEV)
     assert re.search(r"(?m)^pip-audit==", dev), "requirements-dev.txt 必须固定 pip-audit 版本"
@@ -120,52 +121,6 @@ def test_review_governance_files_exist():
                 os.path.join("ISSUE_TEMPLATE", "bug_report.md")):
         assert os.path.isfile(os.path.join(GITHUB_DIR, rel)), f"缺少 .github/{rel}"
     assert "@medassist-maintainers" in _read(os.path.join(GITHUB_DIR, "CODEOWNERS"))
-
-
-def test_frontend_vue_has_lint_and_unit_test_gates():
-    """评测 P0-5：frontend-vue 必须有 lint 与行为级单测（此前只有字符串标记锁）。
-
-    - package.json 暴露 lint / test:unit；
-    - eslint 配置存在且只选正确性规则（不含格式噪音）；
-    - 纯函数单测文件存在且用例数 >= 10；
-    - CI 的 frontend-ai job 串行执行 lint → test:unit → build。
-    """
-    import json
-    pkg_path = os.path.join(REPO, "frontend-vue", "package.json")
-    with open(pkg_path, encoding="utf-8") as f:
-        pkg = json.load(f)
-    assert "lint" in pkg["scripts"] and "test:unit" in pkg["scripts"]
-    assert any(k == "eslint" for k in pkg["devDependencies"]), "必须声明 eslint"
-    assert any(k == "vitest" for k in pkg["devDependencies"]), "必须声明 vitest"
-    assert os.path.isfile(os.path.join(REPO, "frontend-vue", "eslint.config.js"))
-    test_file = os.path.join(REPO, "frontend-vue", "tests", "unit", "utils.test.js")
-    assert os.path.isfile(test_file), "纯函数单测文件缺失"
-    with open(test_file, encoding="utf-8") as f:
-        body = f.read()
-    assert body.count("it(") >= 10, "单测用例太少，门禁形同虚设"
-    ci = _read(CI)
-    job = ci[ci.index("frontend-ai:"):ci.index("image-build:")]
-    assert "npm run lint" in job and "npm run test:unit" in job
-    assert job.index("npm run lint") < job.index("npm run test:unit") < job.index("npm run build")
-
-
-def test_frontend_vue_enforces_accessibility_rules():
-    """评测 P0-5/P1-5：可访问性规则必须进 lint 门禁（不能只靠人工走查）。
-
-    锁定"真影响键盘/读屏"的规则：点击元素可聚焦 + 键盘触发、输入框有标签、aria 合法；
-    label-has-for 对 Element Plus 自定义组件误报，明确关闭（配置里写明原因）。
-    """
-    import json
-    cfg_path = os.path.join(REPO, "frontend-vue", "eslint.config.js")
-    with open(cfg_path, encoding="utf-8") as f:
-        cfg = f.read()
-    for rule in ("click-events-have-key-events", "no-static-element-interactions",
-                 "form-control-has-label", "aria-props", "aria-role"):
-        assert rule in cfg, f"a11y 规则缺失：{rule}"
-    assert "label-has-for': 'off'" in cfg.replace('"', "'")
-    with open(os.path.join(REPO, "frontend-vue", "package.json"), encoding="utf-8") as f:
-        pkg = json.load(f)
-    assert any(k == "eslint-plugin-vuejs-accessibility" for k in pkg["devDependencies"])
 
 
 def test_ci_runs_e2e_in_layered_job():

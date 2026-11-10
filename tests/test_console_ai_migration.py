@@ -6,8 +6,9 @@
    同一套 401 刷新/登出），不能用 `get()`（那是 Java `{code,data}` 信封通道）；
 2. AI 概览必须真正进侧栏「AI 智能」分组并可深链访问——只加路由不加分组，
    整组不会渲染（第 126/178 批踩过两次）；
-3. 审计人话表在迁移期存在两份拷贝，**键集必须完全一致**：同一事件在两套 UI 里
-   显示不同，切换当日就是文案回归。
+3. 审计人话表只剩控制台一份（`frontend-console/src/utils/audit.ts`）：迁移期靠
+   「两份拷贝键集一致」兜底，旧前端下线后改为锁控制台表的覆盖规模与关键事件，
+   防迁移收尾时被顺手删减。
 """
 from __future__ import annotations
 
@@ -21,7 +22,6 @@ VIEW = CONSOLE / "src/views/AiOverviewView.vue"
 NAV = CONSOLE / "src/navigation.ts"
 ROUTER = CONSOLE / "src/router/index.ts"
 AUDIT_CONSOLE = CONSOLE / "src/utils/audit.ts"
-AUDIT_VUE = REPO / "frontend-vue/src/utils/audit.js"
 
 
 def test_ai_api_reuses_session_channel():
@@ -49,12 +49,11 @@ def _map_keys(path: Path) -> set[str]:
     return set(re.findall(r"^    ([a-z_]+): \(\) =>", text, re.MULTILINE))
 
 
-def test_audit_humanize_copies_in_sync():
-    console_keys = _map_keys(AUDIT_CONSOLE)
-    vue_keys = _map_keys(AUDIT_VUE)
-    assert len(console_keys) > 100, f"解析失败：仅提取到 {len(console_keys)} 条映射"
-    assert console_keys == vue_keys, (
-        "迁移期两份人话表必须一致；差异："
-        f"仅控制台={sorted(console_keys - vue_keys)} "
-        f"仅旧前端={sorted(vue_keys - console_keys)}"
-    )
+def test_audit_humanize_map_is_complete():
+    """控制台是唯一人话表：规模不回退，关键事件族不得被删。"""
+    keys = _map_keys(AUDIT_CONSOLE)
+    assert len(keys) > 100, f"解析失败：仅提取到 {len(keys)} 条映射"
+    for must in ("answered", "answer", "resolved_approved", "resolved_rejected",
+                 "submitted", "reviewed", "config_toggle", "consult_created",
+                 "drug_dict_changed", "audit_verify"):
+        assert must in keys, f"人话表缺关键事件映射：{must}"

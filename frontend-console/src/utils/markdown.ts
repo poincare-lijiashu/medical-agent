@@ -1,5 +1,5 @@
 /**
- * 受限 Markdown 渲染（第 191 批从 `frontend-vue/src/utils/assist.js` 的 `md()` 迁移）。
+ * 受限 Markdown 渲染（第 191 批从旧前端 `utils/assist.js` 的 `md()` 迁移）。
  *
  * 为什么不是通用 markdown 库：AI 回答里混有 LaTeX 片段与自由文本，只需要
  * 「粗体 / 标题 / 列表 / 换行」这几种排版；更要紧的是安全边界——

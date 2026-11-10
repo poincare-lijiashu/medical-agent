@@ -2,7 +2,7 @@
 
 锁定：
 1. 四处落点一致：`VERSION` / backend `settings.app_version` / `Chart.yaml appVersion` /
-   `frontend-vue/package.json version`；
+   `frontend-console/package.json version`；
 2. `settings.app_version` 默认值确实来自 VERSION 文件（不是硬编码另一份）；
 3. `scripts/release_check.py --json` 输出可归档的清单（版本/commit/镜像 tag/problems 为空）；
 4. 漂移会被判为失败（防止"改了 VERSION 忘了改 Chart/前端"）；

@@ -27,6 +27,6 @@ python -m pytest -q --ignore=tests/e2e
 ## 检查清单
 
 - [ ] 未提交任何密钥 / 真实患者数据（PHI）
-- [ ] 新增审计动作已在 `frontend-vue/src/utils/audit.js` 有中文人话映射（如适用）
+- [ ] 新增审计动作已在 `frontend-console/src/utils/audit.ts` 有中文人话映射（如适用）
 - [ ] 触及 `docs/AGENT-RUNTIME-20261105.md` 台账（本仓库按批记录改动与验证）
-- [ ] CI 全绿（pytest / lint / frontend-ai / helm）
+- [ ] CI 全绿（pytest / lint / frontend / helm）

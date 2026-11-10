@@ -5,12 +5,11 @@
 add/update/delete 往返（HTTP 可见 + JSON 落盘写透 + save 后进程内缓存即时生效）、
 422 校验（name/drug_a/drug_b 必填、severity 枚举 高危|中危、未知 action、目标不存在）、
 审计 admin.drug_dict_changed（dict 带 name、rules 带规范药对）、
-阶段1.4 前端免责声明文案与后端 DISCLAIMER 同源锁定。
+阶段1.4 免责声明文案与后端 DISCLAIMER 同源（控制台直接渲染接口下发文案）。
 
 用户表/字典/规则 JSON 与审计均隔离到 tmp_path，不污染真实数据（不连真实 PG，走 JSON 兜底）。
 """
 import json
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -213,23 +212,17 @@ def test_drug_dict_manage_audit(env):
     assert ev[2]["payload"] == {"target": "rules", "action": "add", "drug_a": a, "drug_b": b}
 
 
-# ---- 阶段1.4：前端免责声明文案与后端同源锁定 + admin 卡/部署文档就位 ----
+# ---- 阶段1.4：免责声明同源（控制台直接渲染后端下发文案）+ 部署文档就位 ----
 
 def test_frontend_disclaimer_matches_backend_and_docs():
-    from tests.test_frontend_syntax import _vue_source
+    """唯一前端（控制台药事配置）直接渲染后端下发的 disclaimer——前端不另抄文案，
+    两处永不漂移；部署文档保留药品数据免责声明说明。"""
     from backend.core.drug_dict import DISCLAIMER
-    html = _vue_source()  # 轮4 起：DRUG_DISCLAIMER 位于 frontend-vue/src/constants/copy.js（Vue 源为权威全文）
-    m = re.search(r"DRUG_DISCLAIMER =\n  '([^']+)'", html)
-    assert m, "前端应定义 DRUG_DISCLAIMER 常量"
-    assert m.group(1) == DISCLAIMER, "前端文案须与后端 drug_dict.DISCLAIMER 逐字一致"
-    # 阶段3 更新注明：开药工作台（rx 视图）取代 drug 视图，免责声明条随之移至
-    # rx 视图（data-testid="rx-disclaimer"），仍复用 DRUG_DISCLAIMER 常量（上方逐字一致性锁定不变）
-    assert 'data-testid="rx-disclaimer"' in html, "开药工作台（rx 视图）应有免责声明条"
-    assert 'drugDisclaimer' not in html, "drug 视图已删除，旧 chat 免责条锚点不应残留"
-    # 阶段4 任务1 语义变更（注明）：admin 数据面板药品字典卡已移除（药品字典管理 UI
-    # 只在药剂科审核中心 tab；admin 编辑权限后端不变兜底），原「admin 面板应有药品字典卡」
-    # 正向锁改为反向锁（防回退）。
-    assert 'drugDictPanel' not in html, "admin 数据面板字典卡应已移除（阶段4 任务1）"
+    view = (BASE / "frontend-console" / "src" / "views" / "PharmacyConfigView.vue").read_text(
+        encoding="utf-8")
+    assert "data.value?.disclaimer" in view, "药事配置必须读接口下发的 disclaimer"
+    assert "{{ disclaimer }}" in view, "免责声明必须在界面渲染"
+    assert DISCLAIMER[:12] not in view, "前端不得另抄一份后端文案（避免两处漂移）"
     md = (BASE / "docs" / "DEPLOY.md").read_text(encoding="utf-8")
     assert "药品数据免责声明" in md
 

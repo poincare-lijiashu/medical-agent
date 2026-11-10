@@ -3,7 +3,7 @@
 单一真源：仓库根 `VERSION`。必须一致的四类落点：
 1. `backend/config.py` 的 `settings.app_version` 默认值（已改为读 VERSION，此处校验运行时值）；
 2. `deploy/helm/medassist-platform/Chart.yaml` 的 `appVersion`（Helm 渲染进 Pod 标签/镜像默认 tag）；
-3. `frontend-vue/package.json` 的 `version`（前端产物版本）；
+3. `frontend-console/package.json` 的 `version`（唯一前端产物版本）；
 4. `VERSION` 本身必须是合法 SemVer（允许 `-rc.1` 之类预发布后缀）。
 
 用法（CI 与本地同一命令）：
@@ -23,7 +23,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION_FILE = os.path.join(ROOT, "VERSION")
 CHART = os.path.join(ROOT, "deploy", "helm", "medassist-platform", "Chart.yaml")
-PKG = os.path.join(ROOT, "frontend-vue", "package.json")
+PKG = os.path.join(ROOT, "frontend-console", "package.json")
 
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
@@ -88,7 +88,7 @@ def problems(info: dict | None = None) -> list[str]:
         out.append(f"VERSION 不是合法 SemVer：{info['version']!r}")
     for key, label in (("backend", "backend/config.py settings.app_version"),
                        ("chartAppVersion", "Chart.yaml appVersion"),
-                       ("frontend", "frontend-vue/package.json version")):
+                       ("frontend", "frontend-console/package.json version")):
         if info[key] != info["version"]:
             out.append(f"{label} 为 {info[key]!r}，应为 VERSION={info['version']!r}")
     return out
@@ -104,7 +104,7 @@ def manifest(info: dict | None = None) -> dict:
         "images": {
             "aiCore": f"ai-core:{info['version']}",
             "platform": f"medassist-platform:{info['version']}",
-            "frontend": f"frontend-vue:{info['version']}",
+            "frontend": f"frontend-console:{info['version']}",
         },
     }
 

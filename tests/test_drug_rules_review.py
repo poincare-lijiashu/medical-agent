@@ -14,8 +14,8 @@ drug_rules.json 318 条规则（高危 135）为 AI 初稿，需执业药师人�
 - GET /drug/dict 响应 stats 并入 review 统计（既有 stats 键不丢）。
 - JSON 兜底文件 diff 语义：仅被标记条目被改写，其余条目（含字段顺序）逐字不变——
   不批量改写现有 JSON。
-- 前端标记锁（相互作用规则 tab）：审校徽章（已审校绿/未审校灰）/筛选下拉（全部/未审校/
-  已审校/未审校高危）/高危默认排前/行勾选框/「标记已审校」批量按钮/统计头覆盖率文案；
+- 前端标记锁（控制台药事配置）：审校徽章（已审校/未审校）/筛选下拉（全部/未审校/
+  已审校/未审校高危）/高危默认排前/行勾选框/批量标记按钮/覆盖率统计；
   humanizeAudit 补 reviewed 映射（覆盖回归锁配套）。
 
 用户表/字典/规则 JSON 与审计均隔离到 tmp_path，不污染真实数据（不连真实 PG，走 JSON 兜底）。
@@ -258,45 +258,28 @@ def test_json_fallback_minimal_diff(env):
     assert others_after == others_before
 
 
-# ---- 前端标记锁：徽章/筛选/批量按钮/覆盖率/humanizeAudit reviewed 映射 ----
+# ---- 前端标记锁（唯一前端 = 控制台药事配置）：覆盖率/筛选/批量标记/审校徽章 ----
 
 def test_frontend_review_markers_present():
-    """前端标记锁（防回退）：相互作用规则 tab 审校工具链四件套 + 人话映射配套。
-    轮4 起断言源 = frontend-vue/src（Vue 源为权威全文；DrugRulesEditor.vue + utils/audit.js）。"""
-    from tests.test_frontend_syntax import _all_frontend_js, _vue_source, _extract_fn
-    html = _vue_source()
+    """前端标记锁（防回退）：控制台「药事配置 → 相互作用规则」审校工具链四件套 + 人话映射配套。
+    断言源 = frontend-console/src/views/PharmacyConfigView.vue + utils/audit.ts。"""
+    view = (BASE / "frontend-console" / "src" / "views" / "PharmacyConfigView.vue").read_text(
+        encoding="utf-8")
     for marker in (
-        # 统计头覆盖率 chip（如「审校 42/318 · 高危 12/135」）
-        'data-testid="drug-coverage"',
-        "审校 {{ st.reviewed ?? 0 }}/{{ st.total ?? rules.length }} · 高危 {{ st.high_risk_reviewed ?? 0 }}/{{ st.high_risk_total ?? st.high ?? '—' }}",
-        # 筛选下拉（全部/未审校/已审校/未审校高危，el-option）
-        '<el-option label="未审校" value="unreviewed" />', '<el-option label="已审校" value="approved" />',
-        '<el-option label="未审校高危" value="unreviewed_high" />',
-        # 行勾选框 + 批量「标记已审校」按钮
-        'data-testid="drug-rule-review"', "function markReviewed(", "标记已审校",
-        "'/medical/admin/drug/rules/review'",
-        # 审校徽章（已审校/未审校）
-        "'已审校' : '未审校'",
+        # 覆盖率 KPI（已审校/总数 + 高危子集）
+        "stats.reviewed ?? 0", "stats.total ?? 0",
+        "stats.high_risk_reviewed", "stats.high_risk_total",
+        # 筛选下拉（全部/未审校/已审校/未审校高危）
+        '<option value="unreviewed">', '<option value="approved">',
+        '<option value="unreviewed_high">',
+        # 行勾选框键（规范药对编码）+ 批量标记两种 decision
+        "`${r.drug_a}||${r.drug_b}`",
+        "markRules('approved')", "markRules('unreviewed')",
+        # 审校徽章（已审校/未审校）+ 默认高危排前
+        "isReviewed(row.r)", "pharmCfg.rules.reviewed", "pharmCfg.rules.unreviewed",
+        "Number(y.r.severity === '高危') - Number(x.r.severity === '高危')",
     ):
-        assert marker in html, f"缺少前端标记：{marker}"
-    # 徽章/筛选/排序逻辑：revOf 缺省视为未审校 + 列表高危默认排前（稳定排序）+ unreviewed_high 分支
-    rev = _extract_fn(html, "revOf")
-    assert "review_status === 'approved'" in rev, "徽章必须按 review_status 计算（缺省视为未审校）"
-    assert "reviewFilter.value === 'unreviewed_high'" in html, "筛选必须含「未审校高危」分支"
-    assert "(y.r.severity === '高危') - (x.r.severity === '高危')" in html, \
-        "规则列表默认高危排前（稳定排序）"
-    # 批量标记：从勾选框取编码键，decision=approved，成功后重载
-    mk = _extract_fn(html, "markReviewed")
-    assert "keys: checked.value" in mk, "批量标记必须收集勾选框的规范药对编码键"
-    assert "decision: 'approved'" in mk, "批量标记提交 decision=approved（reviewed_by 由后端取登录名）"
-    assert "await load()" in mk, "标记成功后必须重载规则编辑器"
-    # humanizeAudit 补 reviewed 映射（审计覆盖回归锁配套）
-    hum = _extract_fn(_all_frontend_js(), "humanizeAudit")
-    assert "reviewed:" in hum, "humanizeAudit MAP 必须补 reviewed（drug_rules.reviewed 人话）"
-
-
-def _extract_fn(src: str, name: str) -> str:
-    """从内联脚本源码截取完整 JS 函数定义（与 tests/test_frontend_syntax 同口径）。"""
-    start = src.index("function " + name + "(")
-    end = src.index("\n}", start)
-    return src[start:end + 2]
+        assert marker in view, f"缺少前端标记：{marker}"
+    audit = (BASE / "frontend-console" / "src" / "utils" / "audit.ts").read_text(
+        encoding="utf-8")
+    assert "reviewed:" in audit, "humanizeAudit MAP 必须补 reviewed（drug_rules.reviewed 人话）"

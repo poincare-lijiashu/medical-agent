@@ -5,9 +5,10 @@
   ② f-string 动态 action/事件名（如 resolved_{body.decision}、{agent}.answer）按可取值展开；
   ③ pg_store.mirror_audit 点分事件名（如 "qc.qc_escalated"）取首个「.」后缀——
     admin 数据面板审计流优先取 PG 真源，前端 humanizeAudit 对点分事件按后缀匹配映射表。
-- 从 frontend-vue/src/utils/audit.js 提取 humanizeAudit 内 MAP 映射表键集（轮4 起 Vue 源为权威全文）；
+- 从 frontend-console/src/utils/audit.ts（唯一前端）提取 humanizeAudit 内 MAP 映射表键集；
 - 断言后端事件全集 ⊆ 前端映射键集：未来新增审计事件若不补人话映射，本测试即红。
-- 另用 node 对代表性事件跑 humanizeAudit 输出断言（人话文案质量锁；node 不可用跳过）。
+- 另用 node 对代表性事件跑 humanizeAudit 输出断言（运行前剥离少量 TS 标注；
+  node 不可用跳过）。
 """
 import json
 import re
@@ -20,7 +21,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
-FRONTEND = ROOT / "frontend" / "index.html"
+AUDIT_TS = ROOT / "frontend-console" / "src" / "utils" / "audit.ts"
 
 # f-string 动态审计事件名的可取值展开（源码中仅此三族动态事件名；
 # decision 取值约束见 ResolveReq/review.resolve：approved|rejected）
@@ -29,6 +30,28 @@ DYNAMIC = {
     "{agent}.answer": {"answer"},
     "review.{body.decision}": {"approved", "rejected"},
 }
+
+
+def _audit_src() -> str:
+    return AUDIT_TS.read_text(encoding="utf-8")
+
+
+def _extract_fn(src: str, name: str) -> str:
+    """截取「export function name(」起点到列 0 收口「}」的完整函数体（TS 单文件顶层函数）。"""
+    start = src.index("export function " + name + "(")
+    end = src.index("\n}", start)
+    return src[start:end + 2]
+
+
+def _runnable_js(fn: str) -> str:
+    """剥离 humanizeAudit 的 TS 类型标注，使其可直接由 node 执行（仅限本函数内的 4 处）。"""
+    js = fn.replace("export function humanizeAudit(e: any): string {",
+                    "function humanizeAudit(e) {")
+    js = js.replace("const p: Record<string, any> =", "const p =")
+    js = js.replace("const MAP: Record<string, () => string> =", "const MAP =")
+    js = js.replace("const has = (s: string) =>", "const has = (s) =>")
+    assert "Record<" not in js and "(e: any)" not in js, "仍有 TS 类型标注未剥离"
+    return js
 
 
 def _backend_actions() -> set:
@@ -48,11 +71,9 @@ def _backend_actions() -> set:
 
 
 def _humanize_map_keys() -> set:
-    """前端 humanizeAudit 内 MAP 映射表键集（复用 test_frontend_syntax 的函数提取器；
-    轮4 起 humanizeAudit 位于 frontend-vue/src/utils/audit.js，从拼接 JS 全文提取）。"""
-    from tests.test_frontend_syntax import _all_frontend_js, _extract_fn
-    fn = _extract_fn(_all_frontend_js(), "humanizeAudit")
-    start = fn.index("const MAP = {")
+    """控制台 humanizeAudit 内 MAP 映射表键集（唯一前端 = frontend-console/src/utils/audit.ts）。"""
+    fn = _extract_fn(_audit_src(), "humanizeAudit")
+    start = fn.index("{", fn.index("const MAP"))  # TS 标注：const MAP: Record<...> = {
     block = fn[start:fn.index("\n  }\n", start)]  # MAP 对象收口（两空格缩进，无分号）
     keys = set(re.findall(r"(?m)^\s{4}([a-z_][a-z_0-9]*):", block))
     assert keys, "未从前端提取到 humanizeAudit MAP 键（映射表结构被改动？）"
@@ -86,8 +107,7 @@ def test_representative_mappings_node():
     node = shutil.which("node")
     if not node:
         pytest.skip("node 不可用，跳过 humanizeAudit 单测")
-    from tests.test_frontend_syntax import _all_frontend_js, _extract_fn
-    fn = _extract_fn(_all_frontend_js(), "humanizeAudit")
+    fn = _runnable_js(_extract_fn(_audit_src(), "humanizeAudit"))
     cases = [
         # [输入事件, 期望人话化输出]
         [{"event": "drug", "action": "answered", "payload": {"conf": 0.86, "review": True}},

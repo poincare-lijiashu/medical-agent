@@ -184,8 +184,8 @@ def check_alert_rules_alignment(metrics_text: str) -> list[tuple[str, bool, str]
 
 def check_repo() -> list[tuple[str, bool, str]]:
     out = []
-    dist = os.path.join(REPO_ROOT, "frontend-vue", "dist", "index.html")
-    out.append(("repo.vue_dist", os.path.isfile(dist), dist))
+    dist = os.path.join(REPO_ROOT, "frontend-console", "dist", "index.html")
+    out.append(("repo.console_dist", os.path.isfile(dist), dist))
     rules = os.path.join(REPO_ROOT, "deploy", "prometheus",
                          "medassist-agent-ops.rules.yml")
     out.append(("repo.prometheus_rules", os.path.isfile(rules), rules))

@@ -8944,6 +8944,56 @@ typecheck → 通过；build → 通过（dist 资源改为 /assets/*）
 - `frontend-vue/` 目录仍在仓库中（已不被托管、不被打包、CI 不构建）；
   下一批删除目录并清理仅剩的旧前端测试/脚本/文档引用（§212）。
 
+## 212. 2026-11-10 删除旧前端 `frontend-vue` 并收口引用（第 212 批）
+
+**范围**：仓库清理。旧前端已不被托管/打包/CI 构建，本批把它从仓库物理移除，
+并把仍以它为断言源的测试、脚本、CI 与文档收口到唯一前端 `frontend-console`。
+
+**本批做了什么**
+
+1. **物理删除** `frontend-vue/`（85 个受控文件，含 dist；node_modules 一并清除）。
+2. **纯旧前端测试删除**：`test_frontend_syntax.py`、`test_frontend_agent_markers.py`
+   （内容全部是旧前端字符串标记锁，已由控制台迁移测试覆盖）。
+3. **CI 收口**：删除只针对旧前端的 npm audit 与 `frontend-ai` job；供应链扫描收敛到
+   唯一前端 `frontend-console`，控制台 typecheck/build 门禁保留。
+4. **测试改源（不弱化）**：
+   - 审计人话表：由“两副本键集一致”改为锁控制台 `audit.ts` 规模 + 10 个关键事件；
+   - 登出总线：只保留控制台 bus/shell 断言；
+   - 药品免责声明：改为“控制台直接渲染接口下发文案、前端不得另抄”的更强约束；
+   - 药品规则：改锁药事配置的覆盖率/筛选/批量审校/徽章；
+   - MDT 图片：改锁 `AiChatView` 上传压缩与 `AiReviewView` 缩略图白名单；
+   - 会诊理由文案：改读控制台 `ConsultInitiatedPanel.vue`。
+5. **脚本/配置**：`release_check.py` 版本源改为控制台 package.json；
+   `agent_go_live_check.py` dist 检查改控制台；`ruff.toml` 删除旧前端排除；
+   `.gitignore` 删除旧前端 dist 豁免；PR 模板审计映射路径改控制台。
+6. **版本对齐**：控制台 `package.json`/lock 版本由 0.1.0 提升为 **1.0.0**，
+   与仓库 `VERSION` 一致，发布门禁真实生效（此前唯一前端版本不参与校验）。
+7. **文档**：README、DEPLOY、ARCHITECTURE、HANDOFF 改为“控制台唯一前端、根路径托管、
+   `/console` 仅 307”；历史评审/评测文档按存档保留。
+
+**本批设计决策（可回退）**
+
+- **不保留旧前端目录快照**：git 历史与备份 bundle 已可回溯；继续留在工作树只会让
+  “到底哪套在跑”反复被误读。
+- **能迁移的断言迁移，纯旧标记锁删除**：不把测试改成恒真；免责声明反而收紧为
+  “前端不另抄后端文案”。
+- **版本号随唯一前端对齐到 1.0.0**：发布检查原来校验旧前端版本，删除后必须由
+  控制台承担；两者不一致会让 `release_check` 直接失败。
+
+**验证**
+
+```
+typecheck → 通过（medassist-console@1.0.0）
+build → 通过（dist 与已入库产物无 diff）
+全量：pytest --ignore=tests/e2e → 1809 passed / 1 skipped
+```
+
+**遗留**
+
+- `docs/DESIGN-SYSTEM.md`、`docs/FRONTEND-SKILL-GUIDE.md`、`docs/qa/vue_parity_matrix.md`
+  仍把旧前端列为在范围内（历史参考文档，未在本批强制改写）；如需彻底清理可另批。
+
+
 
 
 
