@@ -163,16 +163,24 @@ export interface AiConsultOpinion {
   doctor?: string
   dept?: string
   content?: string
+  /** 历史字段：部分旧记录用 ts，新记录用 created_at */
+  ts?: string
   created_at?: string
 }
 
 export interface AiConsult {
   id: string
+  /** open = 进行中；closed = 已结束并汇总 */
+  status?: string
   initiator?: string
   initiator_dept?: string
   target_depts?: string[]
   question?: string
   ai_analysis?: string
+  /** 结束会诊时生成：AI 意见 + 各科医生意见并排署名 */
+  summary?: string
+  /** Agent 动态组队结果（departments / reason / reasoning） */
+  team?: { departments?: string[]; reason?: string; reasoning?: string }
   images?: string[]
   opinions?: AiConsultOpinion[]
   created_at?: string
@@ -192,6 +200,78 @@ export function aiConsultInbox(query: { q?: string } = {}): Promise<AiConsultInb
 
 export function aiConsultOpinion(id: string, content: string) {
   return aiPost<AiConsult>(`/medical/consults/${encodeURIComponent(id)}/opinion`, { content })
+}
+
+/**
+ * 我发起的 / 我参与过的会诊（发起者视角，含已结束）。
+ *
+ * `limit/offset` 两侧共用同一页，各自返回 total；`q` 在服务端对
+ * 病例 / AI 意见 / 受邀科室 / 已填意见做子串过滤。
+ */
+export interface AiMyConsults {
+  initiated?: AiConsult[]
+  participated?: AiConsult[]
+  initiatedTotal?: number
+  participatedTotal?: number
+  offset?: number
+  limit?: number
+  me?: string
+}
+
+export function aiMyConsults(
+  query: { limit?: number; offset?: number; q?: string } = {},
+): Promise<AiMyConsults> {
+  return aiGet<AiMyConsults>('/medical/consults/mine', { ...query })
+}
+
+/** 结束会诊并汇总（仅发起者；各科医生不再能填意见）。 */
+export function aiConsultClose(id: string): Promise<AiConsult> {
+  return aiPost<AiConsult>(`/medical/consults/${encodeURIComponent(id)}/close`)
+}
+
+/**
+ * AI 多智能体模拟会诊（MDT）。
+ *
+ * 只接受病例文本（`MdtReq {case}`）；影像只随「发起真实跨科室会诊」
+ * 的 `POST /medical/consults` 发出，两者不要混用。
+ */
+export interface AiMdtOpinion {
+  specialty?: string
+  confidence?: number
+  opinion?: string
+  sources?: string[]
+}
+
+export interface AiMdtResult {
+  /** 会诊小结全文（Markdown） */
+  report?: string
+  confidence?: number
+  opinions?: AiMdtOpinion[]
+  disagreements?: string[]
+  needs_human_review?: boolean
+  sources?: string[]
+  review_id?: string | null
+  headline?: string
+  /** 高 / 中 / 低（后端中文枚举） */
+  urgency?: string
+  key_actions?: string[]
+}
+
+export function aiMdtConsult(caseText: string, signal?: AbortSignal): Promise<AiMdtResult> {
+  return aiPost<AiMdtResult>('/medical/mdt/consult', { case: caseText }, signal)
+}
+
+/** 发起真实跨科室会诊：Agent 读病例与实时科室清单组队，并把定向意见分发给目标科室医生。 */
+export function aiConsultCreate(
+  question: string,
+  images: string[],
+  signal?: AbortSignal,
+): Promise<AiConsult> {
+  return aiPost<AiConsult>(
+    '/medical/consults',
+    { question, ...(images.length ? { images } : {}) },
+    signal,
+  )
 }
 
 /** 病例库（质控通过自动归档；移除为软删除留痕）。 */

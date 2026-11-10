@@ -53,3 +53,26 @@ export function splitConsultQuestion(question: string | null | undefined): {
     ? { caseText: text.slice(0, at).trim(), draft: text.slice(at + marker.length).trim() }
     : { caseText: text.trim(), draft: '' }
 }
+
+/**
+ * 各专科 AI 意见拆分：`ai_analysis` 由后端以「【科室】意见」空行连接。
+ *
+ * 旧记录可能没有【科室】前缀 —— 回退为单块（不隐藏任何内容）。
+ */
+export function splitConsultAiByDept(
+  analysis: string | null | undefined,
+): { dept: string; text: string }[] {
+  const text = String(analysis ?? '')
+  const out: { dept: string; text: string }[] = []
+  const pattern = /【([^】]{1,30})】/g
+  let matched: RegExpExecArray | null
+  let dept: string | null = null
+  let lastIndex = 0
+  while ((matched = pattern.exec(text))) {
+    if (dept !== null) out.push({ dept, text: text.slice(lastIndex, matched.index).trim() })
+    dept = matched[1]
+    lastIndex = matched.index + matched[0].length
+  }
+  if (dept !== null) out.push({ dept, text: text.slice(lastIndex).trim() })
+  return out.length ? out : text.trim() ? [{ dept: '', text: text.trim() }] : []
+}

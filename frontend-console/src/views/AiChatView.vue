@@ -105,6 +105,55 @@
           <p v-else class="hint">{{ t('aiChat.ask.catalogHint') }}</p>
         </div>
 
+        <!-- 深度会诊：影像只随「发起真实跨科室会诊」发出 -->
+        <div v-if="mode === 'consult'" class="config">
+          <div class="config-row">
+            <span class="config-label">{{ t('aiChat.consult.images') }}</span>
+            <button class="btn btn--sm" type="button" @click="consultFileInput?.click()">
+              <AppIcon name="upload" :size="13" /> {{ t('aiChat.consult.addImages') }}
+            </button>
+            <span class="hint">{{ t('aiChat.consult.picked', { n: consultImages.length, max: MAX_IMG }) }}</span>
+            <button
+              v-if="consultImages.length"
+              class="btn btn--sm btn--ghost"
+              type="button"
+              @click="consultImages = []"
+            >
+              {{ t('aiChat.consult.clearImages') }}
+            </button>
+          </div>
+          <div v-if="consultImages.length" class="consult-thumbs">
+            <div v-for="(src, i) in consultImages" :key="`${i}-${src.slice(-24)}`" class="consult-thumb">
+              <button
+                class="consult-thumb-img"
+                type="button"
+                :aria-label="t('aiChat.consult.previewImage', { n: i + 1 })"
+                @click="previewSrc = src"
+              >
+                <img :src="src" alt="" />
+              </button>
+              <button
+                class="consult-thumb-del"
+                type="button"
+                :aria-label="t('aiChat.consult.removeImage')"
+                @click="consultImages.splice(i, 1)"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <input
+            ref="consultFileInput"
+            class="sr-only"
+            type="file"
+            accept="image/*"
+            multiple
+            :aria-label="t('aiChat.consult.addImages')"
+            @change="onConsultFiles"
+          />
+          <p class="hint">{{ t('aiChat.consult.imageNote') }}</p>
+        </div>
+
         <p class="compliance">
           <AppIcon name="info" :size="14" />
           <span>{{ t(`aiChat.compliance.${mode}`) }}</span>
@@ -125,6 +174,14 @@
             <LiteratureAnswer
               v-else-if="mode === 'literature'"
               :turn="turn"
+              @retry="retryTurn(turn)"
+            />
+            <MdtAnswer
+              v-else-if="mode === 'consult'"
+              :turn="turn"
+              :initiating="initiating"
+              :image-count="consultImages.length"
+              @initiate="askInitiate(turn)"
               @retry="retryTurn(turn)"
             />
             <AskAnswer v-else :turn="turn" @retry="retryTurn(turn)" />
@@ -195,6 +252,35 @@
         </button>
       </template>
     </AppModal>
+
+    <AppModal v-model="previewOpen" :title="t('aiChat.consult.preview')" width="900px">
+      <img v-if="previewSrc" :src="previewSrc" class="preview-img" alt="" />
+      <template #footer>
+        <button class="btn" type="button" @click="previewSrc = ''">{{ t('aiChat.consult.close') }}</button>
+      </template>
+    </AppModal>
+
+    <AppModal v-model="initiateOpen" :title="t('aiChat.consult.initiateTitle')" width="560px">
+      <div class="stack">
+        <p class="modal-note">{{ t('aiChat.consult.initiateBody') }}</p>
+        <ul class="initiate-points">
+          <li>{{ t('aiChat.consult.initiatePoint1') }}</li>
+          <li>{{ t('aiChat.consult.initiatePoint2') }}</li>
+          <li>{{ t('aiChat.consult.initiatePoint3') }}</li>
+        </ul>
+        <p v-if="consultImages.length" class="hint">
+          {{ t('aiChat.consult.initiateImages', { n: consultImages.length }) }}
+        </p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" :disabled="initiating" @click="initiateTarget = null">
+          {{ t('aiChat.consult.cancel') }}
+        </button>
+        <button class="btn btn--primary" type="button" :disabled="initiating" @click="confirmInitiate">
+          {{ initiating ? t('aiChat.consult.initiating') : t('aiChat.consult.initiateConfirm') }}
+        </button>
+      </template>
+    </AppModal>
   </div>
 </template>
 
@@ -207,14 +293,18 @@ import PageHeader from '@/components/ui/PageHeader.vue'
 import AskAnswer from '@/components/domain/ai/AskAnswer.vue'
 import ChatSessions from '@/components/domain/ai/ChatSessions.vue'
 import LiteratureAnswer from '@/components/domain/ai/LiteratureAnswer.vue'
+import MdtAnswer from '@/components/domain/ai/MdtAnswer.vue'
 import {
   aiAgentCatalog,
   aiAgentConsult,
   aiAgentSkills,
+  aiConsultCreate,
   aiLiteratureAsk,
+  aiMdtConsult,
   type AiAgent,
   type AiConsultResult,
   type AiLiteratureResult,
+  type AiMdtResult,
   type AiRefineStep,
   type AiSkillCard,
 } from '@/api/ai'
@@ -241,13 +331,16 @@ import {
 } from '@/stores/aiChat'
 import { toast } from '@/stores/toast'
 import { buildHistory, refineSentence, sessionTitle } from '@/utils/aiChat'
+import { appendImages, MAX_IMG } from '@/utils/image'
 
 defineOptions({ name: 'AiChatView' })
 
-const MODES: ChatMode[] = ['literature', 'ask']
+const MODES: ChatMode[] = ['literature', 'ask', 'consult']
 const SKILL_LIMIT = 8
 const LIT_LIMIT = 20000
 const ASK_LIMIT = 2000
+/** 与后端发起真实会诊的预检同口径（<8 字视为占位输入）。 */
+const CONSULT_MIN_CHARS = 8
 
 const input = ref('')
 const streaming = ref(false)
@@ -261,6 +354,13 @@ const catalogLoading = ref(false)
 const catalogErr = ref('')
 
 const deleteTarget = ref<ChatSession | null>(null)
+
+/** 深度会诊待附影像：只随「发起真实跨科室会诊」发出，MDT 本身只读病例文本。 */
+const consultImages = ref<string[]>([])
+const consultFileInput = ref<HTMLInputElement | null>(null)
+const previewSrc = ref('')
+const initiateTarget = ref<ChatTurn | null>(null)
+const initiating = ref(false)
 
 const mode = computed<ChatMode>(() => activeSession.value?.mode ?? 'literature')
 const turns = computed<ChatTurn[]>(() => activeSession.value?.turns ?? [])
@@ -284,6 +384,9 @@ const skillLimitReached = computed(() => pickedSkills.value.length >= SKILL_LIMI
 const examples = computed<string[]>(() => {
   if (mode.value === 'literature') {
     return [1, 2, 3, 4].map((n) => t(`aiChat.examples.lit.${n}`))
+  }
+  if (mode.value === 'consult') {
+    return [1, 2, 3].map((n) => t(`aiChat.examples.consult.${n}`))
   }
   const chosen = pickedAgent.value
     ? agents.value.filter((a) => a.id === pickedAgent.value)
@@ -309,6 +412,20 @@ const deleteOpen = computed({
 const deleteTitle = computed(
   () => deleteTarget.value?.title?.trim() || t('aiChat.session.untitled'),
 )
+
+const previewOpen = computed({
+  get: () => Boolean(previewSrc.value),
+  set: (open: boolean) => {
+    if (!open) previewSrc.value = ''
+  },
+})
+
+const initiateOpen = computed({
+  get: () => initiateTarget.value !== null,
+  set: (open: boolean) => {
+    if (!open) initiateTarget.value = null
+  },
+})
 
 function uid(): string {
   try {
@@ -348,6 +465,9 @@ function onSelectSession(id: string) {
     toast.warn(t('aiChat.session.switchBusy'))
     return
   }
+  // 待附影像不属于任何会话：切换会话时清空，避免"旧问题配新图"
+  consultImages.value = []
+  initiateTarget.value = null
   selectSession(id)
   scrollBottom(true)
 }
@@ -358,6 +478,8 @@ function onSwitchMode(next: ChatMode) {
     toast.warn(t('aiChat.session.switchBusy'))
     return
   }
+  consultImages.value = []
+  initiateTarget.value = null
   switchMode(next)
   scrollBottom(true)
 }
@@ -367,6 +489,8 @@ function newChat() {
     toast.warn(t('aiChat.session.switchBusy'))
     return
   }
+  consultImages.value = []
+  initiateTarget.value = null
   ensureSession(mode.value)
   input.value = ''
   scrollBottom(true)
@@ -472,7 +596,9 @@ async function send() {
     id: uid(),
     role: 'assistant',
     streaming: true,
-    progress: t('aiChat.lit.progress.thinking'),
+    progress: session.mode === 'consult'
+      ? t('aiChat.consult.progress')
+      : t('aiChat.lit.progress.thinking'),
     ts: Date.now(),
   }
   appendTurn(session.id, userTurn, true)
@@ -484,6 +610,8 @@ async function send() {
   try {
     if (session.mode === 'literature') {
       await runLiterature(session, question, botTurn)
+    } else if (session.mode === 'consult') {
+      await runConsult(session, question, botTurn)
     } else {
       await runAsk(session, question, botTurn)
     }
@@ -588,6 +716,103 @@ async function runLiterature(session: ChatSession, question: string, turn: ChatT
       return
     }
     failTurn(session.id, turn.id, t('aiChat.lit.askFail', { msg: errorText(e) }))
+  }
+}
+
+/* ---------------------------------------------------------------- 深度会诊 */
+
+async function runConsult(session: ChatSession, question: string, turn: ChatTurn) {
+  const ac = new AbortController()
+  controller.value = ac
+  try {
+    const data = await aiMdtConsult(question, ac.signal)
+    patchTurn(session.id, turn.id, {
+      streaming: false,
+      failed: false,
+      failNote: '',
+      progress: '',
+      answer: '',
+      meta: data as unknown as Record<string, unknown>,
+    })
+  } catch (e) {
+    if (isAbort(e)) {
+      failTurn(session.id, turn.id, t('aiChat.consult.stopped'))
+      return
+    }
+    failTurn(
+      session.id,
+      turn.id,
+      e instanceof AiRequestError
+        ? errorText(e)
+        : t('aiChat.consult.failedDetail', { msg: errorText(e) }),
+    )
+  }
+}
+
+async function addConsultFiles(files: File[]) {
+  if (!files.length) return
+  const added = await appendImages(consultImages.value, files)
+  consultImages.value = added.images
+  if (added.rejected) toast.warn(t('aiChat.consult.notImage'))
+  if (added.overflow) toast.warn(t('aiChat.consult.limit', { max: MAX_IMG }))
+  if (added.added) toast.ok(t('aiChat.consult.added', { n: added.added }))
+  else if (!added.overflow) toast.warn(t('aiChat.consult.addFail'))
+}
+
+async function onConsultFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  await addConsultFiles(Array.from(input.files ?? []))
+  input.value = ''
+}
+
+function caseTextOf(turn: ChatTurn): string {
+  const session = activeSession.value
+  const index = session?.turns.findIndex((x) => x.id === turn.id) ?? -1
+  return index > 0 ? String(session?.turns[index - 1]?.text ?? '') : ''
+}
+
+function askInitiate(turn: ChatTurn) {
+  const text = caseTextOf(turn).trim()
+  if (text.length < CONSULT_MIN_CHARS) {
+    toast.warn(t('aiChat.consult.needCase'))
+    return
+  }
+  initiateTarget.value = turn
+}
+
+async function confirmInitiate() {
+  const turn = initiateTarget.value
+  const session = activeSession.value
+  if (!turn || !session || initiating.value) return
+  const caseText = caseTextOf(turn).trim()
+  if (caseText.length < CONSULT_MIN_CHARS) {
+    initiateTarget.value = null
+    toast.warn(t('aiChat.consult.needCase'))
+    return
+  }
+  const meta = (turn.meta ?? {}) as AiMdtResult
+  const report = String(meta.report ?? '')
+  const question = report
+    ? `${caseText}\n\n【AI 多智能体会诊底稿】\n${report}`
+    : caseText
+
+  initiating.value = true
+  try {
+    const item = await aiConsultCreate(question, consultImages.value)
+    const depts = item.target_depts ?? []
+    patchTurn(session.id, turn.id, {
+      meta: {
+        ...meta,
+        initiated: { id: item.id, target_depts: depts, at: Date.now() },
+      } as Record<string, unknown>,
+    })
+    consultImages.value = []
+    initiateTarget.value = null
+    toast.ok(t('aiChat.consult.initiateOk', { depts: depts.join('、') || '—' }))
+  } catch (e) {
+    toast.error(t('aiChat.consult.initiateFail', { msg: errorText(e) }))
+  } finally {
+    initiating.value = false
   }
 }
 
@@ -821,6 +1046,82 @@ onBeforeUnmount(() => {
 .chip.is-limit {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* 深度会诊的待附影像 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.consult-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.consult-thumb {
+  position: relative;
+  width: 54px;
+}
+
+.consult-thumb-img {
+  display: block;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--surface);
+  cursor: zoom-in;
+}
+
+.consult-thumb-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.consult-thumb-del {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--negative);
+  font-size: 13px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.preview-img {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto;
+  border-radius: var(--r-sm);
+}
+
+.initiate-points {
+  padding-left: 18px;
+  list-style: disc;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-small);
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 .compliance {

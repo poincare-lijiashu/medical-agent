@@ -436,6 +436,9 @@
       </div>
     </div>
 
+    <!-- ============ 我发起的会诊（发起者视角：跟踪 / 结束汇总） ============ -->
+    <ConsultInitiatedPanel v-if="tab === 'mine-consults'" />
+
     <!-- ============ 病例库（qc / admin，质控通过自动归档） ============ -->
     <div v-if="tab === 'cases'" class="sheet">
       <div class="sheet-head">
@@ -691,6 +694,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -699,6 +703,7 @@ import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
+import ConsultInitiatedPanel from '@/components/domain/ai/ConsultInitiatedPanel.vue'
 import {
   aiCaseArchive,
   aiCaseArchiveRemove,
@@ -734,7 +739,7 @@ const PER = 12
 /** 清空待核对的确认词由后端硬校验，界面只做双保险（不随界面语言变化）。 */
 const PURGE_WORD = '清空'
 
-type TabKey = 'pending' | 'history' | 'consults' | 'cases'
+type TabKey = 'pending' | 'history' | 'consults' | 'cases' | 'mine-consults'
 type Decision = 'approved' | 'rejected'
 
 /* ---------- 角色（控制台角色为大写常量，AI 中台用小写；统一转小写比较） ---------- */
@@ -775,11 +780,24 @@ const tabs = computed<{ key: TabKey; label: string; count?: number }[]>(() => {
   ]
   if (isMine.value) list.push({ key: 'consults', label: t('aiReview.tab.consults'), count: consultPending.value })
   else list.push({ key: 'cases', label: t('aiReview.tab.cases') })
+  // 第 200 批：发起者视角（所有角色都可能发起跨科室会诊），与「会诊协助」形成闭环
+  list.push({ key: 'mine-consults', label: t('aiReview.tab.mineConsults') })
   return list
 })
 
 /* ---------- 通用状态 ---------- */
-const tab = ref<TabKey>('pending')
+const route = useRoute()
+/** 支持从「深度会诊」结果卡直达发起者视角（?tab=mine-consults）。 */
+function initialTab(): TabKey {
+  return route.query.tab === 'mine-consults' ? 'mine-consults' : 'pending'
+}
+const tab = ref<TabKey>(initialTab())
+watch(
+  () => route.query.tab,
+  (value) => {
+    if (value === 'mine-consults') tab.value = 'mine-consults'
+  },
+)
 const loading = ref(false)
 const busy = ref(false)
 const loadErr = ref('')

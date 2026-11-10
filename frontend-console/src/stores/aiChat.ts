@@ -12,7 +12,7 @@
  */
 import { computed, ref, watch } from 'vue'
 
-export type ChatMode = 'literature' | 'ask'
+export type ChatMode = 'literature' | 'ask' | 'consult'
 
 export interface ChatTurn {
   id: string
@@ -93,7 +93,7 @@ function sanitizeTurn(raw: unknown): ChatTurn | null {
 function sanitizeSession(raw: unknown): ChatSession | null {
   if (!raw || typeof raw !== 'object') return null
   const item = raw as Partial<ChatSession>
-  if (item.mode !== 'literature' && item.mode !== 'ask') return null
+  if (item.mode !== 'literature' && item.mode !== 'ask' && item.mode !== 'consult') return null
   const turns = Array.isArray(item.turns)
     ? item.turns.map(sanitizeTurn).filter((t): t is ChatTurn => t !== null).slice(-MAX_TURNS)
     : []
