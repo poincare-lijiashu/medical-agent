@@ -188,6 +188,30 @@ class GatewayRouteConfigTest {
     }
 
     @Test
+    @DisplayName("根级 /internal/** 也必须被拒（防新增 catch-all 路由后内部接口裸奔）")
+    void rootInternalPathsAreDenied() {
+        Map<String, Object> auth = (Map<String, Object>) medassistGateway(loadConfig()).get("auth");
+
+        assertThat((List<String>) auth.get("deny-paths"))
+                .as("HIS 工作台外部通道不得复用 /internal/**；内部接口必须 fail-closed")
+                .contains("/internal/**");
+    }
+
+    @Test
+    @DisplayName("HIS 工作台 AI 通道有独立限流，且排在 clinical 兜底规则之前")
+    void aiAssistRulePrecedesClinicalCatchAll() {
+        Map<String, Object> sentinel = (Map<String, Object>) medassistGateway(loadConfig()).get("sentinel");
+        List<Map<String, Object>> rules = (List<Map<String, Object>>) sentinel.get("flow-rules");
+
+        List<String> paths = rules.stream().map(r -> (String) r.get("path")).toList();
+        int aiAssist = paths.indexOf("/api/v2/clinical/ai-assist");
+        int clinicalCatchAll = paths.indexOf("/api/v2/clinical");
+        assertThat(aiAssist).as("缺少 HIS → AI 通道的独立限流规则").isGreaterThanOrEqualTo(0);
+        assertThat(aiAssist).as("前缀匹配按列表顺序命中，专属规则必须在兜底之前")
+                .isLessThan(clinicalCatchAll);
+    }
+
+    @Test
     @DisplayName("重型查询（欠费预警）限流规则必须排在 /api/v2/clinical 之前")
     void heavyQueryRulesPrecedeCatchAll() {
         Map<String, Object> sentinel = (Map<String, Object>) medassistGateway(loadConfig()).get("sentinel");

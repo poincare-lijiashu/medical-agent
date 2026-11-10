@@ -31,6 +31,7 @@ deploy/
   医护浏览器 ──TLS──▶ │ Ingress (nginx)                                  │
                      │   /            → ai-core:8001（Vue 静态 + SSE）  │
                      │   /api/v1,/api/v2 → gateway:8080                 │
+                     │   /internal     → gateway（denylist 统一 404）    │
                      │                      │                           │
                      │        ┌─────────────┼─────────────┐             │
                      │        ▼             ▼             ▼             │
@@ -47,6 +48,24 @@ deploy/
 
 信任链：Ingress → 网关 → 业务服务。网关在 P0-4 已统一校验 JWT 并剥离伪造身份头；
 helm chart 的 NetworkPolicy 进一步限制业务服务只接受同命名空间网关 Pod 的入站。
+
+### 1.1 `/internal/**` 的对外暴露策略（第 173 批）
+
+`/internal/**` 是**服务间通道**，三层同时收敛，任一层失效都不会静默放开：
+
+| 层 | 事实 | 失效表现 |
+|----|------|----------|
+| Ingress | 显式 `path: /internal` → `gateway`（排在 `/` 兜底之前） | 请求落进 ai-core 的 404，链路看似正常但绕过网关 |
+| 网关 denylist | `/internal/**` 与 `/api/v2/*/internal/**`，在鉴权开关判断**之前**执行 | 内部接口直接可达（鉴权关闭时尤其危险） |
+| NetworkPolicy | 业务服务只接受同命名空间网关 Pod（及调用图上的服务）入站 | 直连 Pod IP 可读内部接口 |
+
+**HIS 工作台 → AI** 不走 `/internal`：走 `POST /api/v2/clinical/ai-assist/{qc-check|rx-check}`
+（网关 JWT 鉴权 → clinical 转发 → AI 中台按同一令牌做角色与配额），网关为其配置独立
+限流桶 `SENTINEL_QPS_AI_ASSIST`（默认 20 QPS），不占用临床高频桶。
+新增外部消费者时照此模式加专用路径 + 限流，**不要**把 `/internal` 前缀解锁。
+
+回归锁：`platform/gateway` 的 `GatewayRouteConfigTest` +
+`tests/test_ingress_internal_paths.py`（三环境 values 与网关 yml 的实际取值）。
 
 ---
 

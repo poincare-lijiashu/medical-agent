@@ -213,6 +213,10 @@ medassist:
         # 显式设置 GATEWAY_V1_PROTECTED=（空串）把它从受保护前缀中移除。
         - ${GATEWAY_V1_PROTECTED:/api/v1/**}
       deny-paths:
+        # 服务间内部接口：网关任何情况下都不转发（P0-4 起为 /api/v2/*/internal/**）。
+        # 第 173 批补全：/internal/** 也显式拒绝——当前网关没有该前缀的路由，
+        # 但一旦有人新增 catch-all 路由，旧规则不会拦截，这条是"最后一道门"。
+        - /internal/**
         - /api/v2/*/internal/**
     # 入口限流（Sentinel 核心 API，路径前缀维度）。登录失败的账号维度限速在 auth 服务内实现。
     # 必须用列表：Map 键中的 "/" 会被 Spring 宽松绑定吞掉（实测 /api/v2/auth → apiv2auth）
@@ -225,6 +229,10 @@ medassist:
           qps: ${SENTINEL_QPS_AUTH:200}
         - path: /api/v2/empi
           qps: ${SENTINEL_QPS_EMPI:200}
+        # HIS 工作台 → AI 的反向调用通道（第 173 批）：经网关 JWT 鉴权后由 clinical 转发，
+        # 不占用临床高频桶；必须排在 /api/v2/clinical 之前（前缀匹配按列表顺序命中）。
+        - path: /api/v2/clinical/ai-assist
+          qps: ${SENTINEL_QPS_AI_ASSIST:20}
         # 重型查询单独限流：费用看板/欠费预警按在院患者逐条聚合（N+1），
         # 护理站轮询会吃满 /api/v2/clinical 的共享桶，殃及挂号收费。
         # 匹配是"列表顺序 + startsWith"，因此必须放在 /api/v2/clinical 之前。

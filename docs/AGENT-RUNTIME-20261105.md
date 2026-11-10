@@ -7162,3 +7162,48 @@ python scripts/release_check.py
   仍待排期；
 - 下一步：② 网关/Helm 对 `/internal/**` 的放行策略（仅内网或网关鉴权路由）；
   ③ EMPI 唯一真源（AI 侧只存 `empi_id` + 哈希）。
+
+## 176. 2026-11-10 HIS 深度集成：`/internal/**` 暴露策略（第 173 批）
+
+**问题**
+
+- 第 169 批把 HIS → AI 的反向调用挂在 `platform/clinical` 的 `/internal/ai/*`，但网关
+  denylist 会永久 404 `/api/v2/*/internal/**`——**HIS 工作台经网关调用必然失败**；
+- 反过来"解锁 /internal"会把 10 个服务的内部接口一起暴露到公网（更危险）；
+- Ingress 只有 `"/" → ai-core` 兜底，`/internal/**` 实际会被转发给 AI 中台而不是
+  fail-closed，看起来"能访问"，但没有经过网关鉴权链。
+
+**已做**
+
+1. **网关 denylist 补全**：`/internal/**` 与 `/api/v2/*/internal/**` 同时拒绝（deny 在
+   鉴权开关判断之前执行，排障关掉 auth 也照拒）；`GatewayAuthProperties` 默认值同步。
+2. **外部通道与内部通道分离**：`AiAssistController` 改为双映射
+   `/clinical/ai-assist`（HIS 工作台经 `/api/v2/clinical/**` 剥两段后可达，医护端 JWT
+   透传，AI 侧按同一身份做角色与 model_quota）与 `/internal/ai`（仅服务间，网关不可达）。
+3. **独立限流桶**：Sentinel 新增 `/api/v2/clinical/ai-assist`（`SENTINEL_QPS_AI_ASSIST`
+   默认 20），排在 `/api/v2/clinical` 兜底之前，避免 AI 调用挤占临床高频桶。
+4. **Ingress fail-closed**：`values.yaml` 与 dev/staging/prod 三环境显式
+   `path: /internal → gateway`（排在 `"/"` 之前），内部前缀永不落到任何业务进程。
+5. **回归锁**：`GatewayRouteConfigTest` +2（deny 根级 internal、ai-assist 限流顺序，共 13 条）；
+   新增 `AiAssistControllerMappingTest` 4 条（双映射、互不包含、bearer 解析）；
+   新增 `tests/test_ingress_internal_paths.py` 4 条（三环境 values 的 /internal→gateway、
+   顺序在 "/" 前、网关 yml denylist、ai-assist 限流位置）。
+6. **文档**：`deploy/README.md` §1.1 给出三层收敛表与"HIS 工作台走 ai-assist，
+   不要解锁 /internal"的接入约定，拓扑图同步标注。
+
+**验证**
+
+```
+mvn -pl gateway,clinical -am -Dtest=GatewayRouteConfigTest,AiAssistControllerMappingTest,AiAssistClientTest test
+→ gateway 13 passed；clinical AiAssistClientTest 8 + AiAssistControllerMappingTest 4 passed
+定向：tests/test_ingress_internal_paths.py → 4 passed
+全量（不含 e2e）→ 1682 passed / 1 skipped
+```
+
+**遗留**
+
+- 真实 ingress-nginx 未联调（配置级验证）；上线前需在 staging 用 `curl` 验证
+  `/internal/**` 返回 404、`/api/v2/clinical/ai-assist/*` 带 JWT 可用；
+- `"/"` 仍指向 ai-core：FastAPI 的 `/docs`、`/openapi.json` 等文档端点未纳入收敛
+  （若公网可达会暴露内部接口结构），建议下一批与 `/actuator` 一起做入口白名单；
+- 下一步：③ EMPI 唯一真源（AI 侧只存 `empi_id` + 哈希）。

@@ -27,7 +27,7 @@ public record GatewayAuthProperties(
         @DefaultValue({"/api/v2/auth/login", "/api/v2/auth/refresh",
                 "/actuator/health/**", "/actuator/prometheus"}) List<String> whitelist,
         @DefaultValue("/api/v2/**") List<String> protectedPaths,
-        @DefaultValue("/api/v2/*/internal/**") List<String> denyPaths,
+        @DefaultValue({"/internal/**", "/api/v2/*/internal/**"}) List<String> denyPaths,
         @DefaultValue("http://127.0.0.1:8081") String authUri,
         String internalToken,
         @DefaultValue RevocationSync revocationSync,

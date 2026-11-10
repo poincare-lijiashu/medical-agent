@@ -783,6 +783,11 @@ ingress:
         - path: /api/v1
           pathType: Prefix
           service: gateway
+        # 第 173 批：/internal/** 显式指向网关（网关 denylist 统一 404），
+        # 避免被下面的 "/" 兜底路由转发到 ai-core——内部接口永远不落到任何业务进程。
+        - path: /internal
+          pathType: Prefix
+          service: gateway
         - path: /
           pathType: Prefix
           service: aiCore

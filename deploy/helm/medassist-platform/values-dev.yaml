@@ -155,6 +155,8 @@ ingress:
       paths:
         - {path: /api/v2, pathType: Prefix, service: gateway}
         - {path: /api/v1, pathType: Prefix, service: gateway}
+        # 第 173 批：内部接口经网关统一 404，不落到 "/" 兜底的 ai-core
+        - {path: /internal, pathType: Prefix, service: gateway}
         - {path: /, pathType: Prefix, service: aiCore}
 
 networkPolicy:

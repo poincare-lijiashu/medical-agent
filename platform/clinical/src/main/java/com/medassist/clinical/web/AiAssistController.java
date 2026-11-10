@@ -13,15 +13,21 @@ import java.util.Map;
 /**
  * HIS → AI 中台反向调用入口（评测「HIS 深度集成」：医生在 HIS 界面内直接用 AI）。
  *
- * <p>网关把 {@code /internal/**} 屏蔽在公网之外，仅服务间/内网可访问；
- * 这里的"内部"指**前端 HIS 工作台经网关白名单调用**，令牌仍是医护端 JWT 透传——
- * 不引入服务账号，AI 侧按同一身份做权限与配额（model_quota / rate_limit）。
+ * <p><b>两个映射，用途不同（第 173 批）</b>：
+ * <ul>
+ *   <li>{@code /clinical/ai-assist/**}：**HIS 工作台经网关调用**的外部通道。
+ *       网关路由 {@code /api/v2/clinical/**} 剥两段后到达这里；必须携带医护端 JWT
+ *       （网关统一鉴权 + Sentinel 独立限流 {@code SENTINEL_QPS_AI_ASSIST}），
+ *       令牌原样透传给 AI 中台，由 AI 侧按同一身份做角色校验与 model_quota 配额。</li>
+ *   <li>{@code /internal/ai/**}：服务间内部通道，网关 denylist 永久 404
+ *       （{@code /api/v2/* /internal/**} 与 {@code /internal/**}），仅同命名空间 Pod 可达。</li>
+ * </ul>
  *
  * <p>响应语义：AI 未配置 503、无令牌 401、AI 拒绝 422、AI 故障 503/504，
  * 由各服务的 {@code GlobalExceptionHandler} 统一映射为稳定错误码。
  */
 @RestController
-@RequestMapping("/internal/ai")
+@RequestMapping({"/clinical/ai-assist", "/internal/ai"})
 public class AiAssistController {
 
     private final AiAssistClient client;
