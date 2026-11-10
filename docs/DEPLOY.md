@@ -33,8 +33,11 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 
 ## 前端构建与部署（Vue3，轮4 起）
 
-> Vue3 + Vite + Element Plus 单页应用（`frontend-vue/`）为唯一前端；legacy vanilla 前端
-> 已删除（git tag `v-legacy-frontend` 永久保存，回退见
+> 前端有两套，同一镜像、同一域名、同一登录态：
+> - **AI 中台工作台**（`frontend-vue/`，Vue3 + Element Plus，`/api/v1`）：挂 `/` 与 `/app`；
+> - **临床控制台**（`frontend-console/`，Vue3 + 自建设计系统，`/api/v2` + `/api/v1`）：挂 `/console`。
+>
+> legacy vanilla 前端已删除（git tag `v-legacy-frontend` 永久保存，回退见
 > **[docs/plans/vue3_migration.md](plans/vue3_migration.md)**）。
 
 ### 环境要求
@@ -47,24 +50,31 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 ### 构建步骤（CI 外手动执行）
 
 ```bash
+# AI 中台工作台（/、/app）
 cd frontend-vue
 npm ci          # 按 package-lock.json 精确安装（首次/依赖变更后）
-npm run build   # 产物输出到 frontend-vue/dist/（index.html + assets/*.js|css）
+npm run build   # 产物：frontend-vue/dist/（vite base=/）
+
+# 临床控制台（/console）
+cd frontend-console
+npm ci
+npm run build   # 产物：frontend-console/dist/（vite base=/console/，router 用 BASE_URL）
 ```
 
 ### dist 已入库策略
 
-- `frontend-vue/dist/` 构建产物**随源码入库**（.gitignore 反向豁免）：
+- `frontend-vue/dist/` 与 `frontend-console/dist/` 构建产物**随源码入库**（.gitignore 反向豁免）：
   **任何前端改动必须重新构建并把 dist 一并提交**——部署机 checkout 即可用，
-  全程无需 node 环境（测试 `tests/test_frontend_syntax.py::test_vue_dist_build_output_in_sync`
-  锁定 dist 与 src 同步存在）。
-- 产物引用以 `/assets/*` 为前缀（vite base=/），由后端 `backend/main.py` 的
-  StaticFiles(html=True) 同源托管；`/` 与 `/app` 双入口均直出同一份 `dist/index.html`。
+  全程无需 node 环境（`tests/test_frontend_syntax.py::test_vue_dist_build_output_in_sync`
+  与 `tests/test_frontend_hosting.py` 锁定 dist 与 src 同步存在）。
+- 两套产物的资源前缀不同：AI 工作台用 `/assets/*`，控制台用 `/console/assets/*`
+  （vite base 决定），因此可以安全地放在同一域名下，不会互相覆盖；
+  `backend/main.py` 的 StaticFiles（根）与 `/console/**` 路由分别托管，深链全部回落各自 index.html。
 
 ### 部署形态
 
-- **单机直跑**：后端 uvicorn 起来即同时服务 API 与前端（无独立前端服务器/CDN 依赖）；
-- **Docker**：镜像内已含 dist（frontend-vue 随上下文构建），无需在容器内跑 npm；
+- **单机直跑**：后端 uvicorn 起来即同时服务 API 与两套前端（无独立前端服务器/CDN 依赖）；
+- **Docker**：镜像内已含两个 dist（`COPY frontend-vue/dist` + `COPY frontend-console/dist`），无需在容器内跑 npm；
 - 静态资源与 API 同源，CSP 已按产物形态收敛（`script-src 'self'`，无内联脚本）。
 
 ## 模型配置（医院自选供应商）

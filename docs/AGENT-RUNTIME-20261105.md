@@ -7592,3 +7592,53 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
   旧密文要到下一次保存才升级，长期未编辑的 provider 会停留在旧 keyId（盘点里可见）；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 186. 2026-11-10 前端双入口收敛：临床控制台接入生产（第 183 批）
+
+**问题**
+
+- 仓库里并存两套前端，且**新控制台根本没有生产入口**：
+
+  | | `frontend-vue`（14 视图） | `frontend-console`（46 视图） |
+  |---|---|---|
+  | 定位 | AI 中台工作台（质控/审方/文献/会诊） | HIS 临床控制台（挂号/住院/药房/医保…） |
+  | 后端 | `/api/v1` | `/api/v2`（Java 网关）+ `/api/v1` |
+  | 生产入口 | `/`、`/app`，镜像 COPY 了 dist | **无**：dist 未入库、Dockerfile 未打包，只能 `npm run dev` |
+
+  即"写了 46 个视图却交付不出去"，属商业交付级缺口。
+
+**已做**
+
+1. **同镜像同域双入口**：`backend/main.py` 新增 `CONSOLE_DIST_DIR` 与
+   `/console`、`/console/{path}` 路由（静态资源直出 + SPA 深链回落 `index.html`），
+   `/` 与 `/app` 保持 AI 工作台不变；根路径 catch-all 排除 `console`，两套 UI 互不吞路由。
+2. **构建基线对齐子路径**：`vite.config.ts` 在 `command === 'build'` 时 `base=/console/`
+   （dev/preview 仍为 `/`），`router` 改用 `createWebHistory(import.meta.env.BASE_URL)`，
+   资源前缀变成 `/console/assets/*`，与根路径 `/assets/*` 不冲突。
+3. **交付链路补齐**：`Dockerfile` 增加 `COPY frontend-console/dist`；`.gitignore` 反向豁免
+   `frontend-console/dist/`（与 frontend-vue 同一"dist 随轮入库、部署免 node"策略）；
+   重新构建并入库产物。
+4. **文档**：`docs/DEPLOY.md` 前端章节重写为"两套前端 / 两条路径 / 构建与提交纪律"；
+   `deploy/README.md` 生产拓扑图标注 `/console`；`docs/OPERATIONS.md` 快速启动给两个 URL。
+5. **回归锁 `tests/test_frontend_hosting.py`（6 条，含真实 HTTP 断言）**：控制台目录常量与
+   排除项、Dockerfile 双 COPY、dist 入库豁免、vite/router 子路径一致性、index.html 引用
+   `/console/assets/*`、`/console/` 与深链（/console/orders、/console/pharmacy）回落 HTML、
+   静态资源按文件直出、`/api/**` 未匹配仍 404 JSON、根路径仍由 AI 工作台托管。
+
+**验证**
+
+```
+前端：npm run typecheck → 通过；npm run build → 通过（index 68.5 KB gzip）
+定向：tests/test_frontend_hosting.py → 6 passed（TestClient 实测 /console/ 与深链）
+全量（不含 e2e）→ 1757 passed / 1 skipped
+```
+
+**遗留**
+
+- 两套 UI 仍是两个 SPA（技术栈不同：Element Plus vs 自建设计系统），只是统一了镜像/域名/登录态；
+  真要"合成一套代码"需要把 `frontend-vue` 的 AgentView/DataView/ReviewCenter 深度能力迁进控制台，
+  属中期工程，本批只解决"交付不出去"；
+- 控制台的 `/console` 子路径依赖 ingress 的 `/` Prefix 兜底到 ai-core（现状已满足）；
+  若未来把控制台拆到独立静态站点，需要改 ingress 与 CSP；
+- 登录页在控制台内是独立路由（`/console/login`），与 AI 工作台（`/login`）尚未做单点互跳；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+

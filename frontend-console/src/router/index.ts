@@ -3,7 +3,9 @@ import { findNav } from '@/navigation'
 import { hasPermission, session } from '@/stores/session'
 
 const router = createRouter({
-  history: createWebHistory('/'),
+  // 生产托管在 /console/ 子路径（vite base 同步为 /console/）：必须用 BASE_URL，
+  // 否则深链与刷新会把 /console/orders 当成根路径 /orders 再 404。
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
     {

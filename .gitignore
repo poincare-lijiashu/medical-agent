@@ -79,6 +79,10 @@ platform/**/target/
 # node_modules 仍由上方规则排除。注意：上方 `dist/` 是目录通配，需显式反向豁免。
 !frontend-vue/dist/
 !frontend-vue/dist/**
+# 第 183 批：临床控制台（/console 子路径托管）产物同策略入库——部署镜像免 node 环境，
+# 回退时可直接用已构建产物。注意必须写成两条：目录豁免 + 目录内文件豁免。
+!frontend-console/dist/
+!frontend-console/dist/**
 *.log
 # G51：运行期日志目录整目录排除。
 # 仅 `*.log` 挡不住滚动归档（svc_emr.log.2026-11-04.0.gz）与 *_try.out.log，

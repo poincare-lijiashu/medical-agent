@@ -29,7 +29,7 @@ deploy/
 ```
                      ┌──────────────────── 医院内网 ────────────────────┐
   医护浏览器 ──TLS──▶ │ Ingress (nginx)                                  │
-                     │   /            → ai-core:8001（Vue 静态 + SSE）  │
+                     │   /            → ai-core:8001（AI 工作台 + /console 控制台）│
                      │   /api/v1,/api/v2 → gateway:8080                 │
                      │   /internal     → gateway（denylist 统一 404）    │
                      │                      │                           │

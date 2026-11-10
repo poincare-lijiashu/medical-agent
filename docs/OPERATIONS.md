@@ -8,7 +8,7 @@ docker compose up -d
 # 知识库注入
 python scripts\seed_kb_local.py         # 本地多专科指南要点（秒级、离线）
 python scripts\seed_kb_pubmed.py        # 在线 PubMed 大规模（见下"网络/API key"）
-# 启动（含前端）：http://127.0.0.1:8001
+# 启动（含前端）：http://127.0.0.1:8001（AI 工作台）/ http://127.0.0.1:8001/console/（临床控制台）
 python -m backend.main
 # 质量
 python -m pytest tests\ -v

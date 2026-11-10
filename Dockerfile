@@ -25,6 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 # Vue3 构建产物（已入库，免 node 环境；legacy frontend/ 已删除，main.py 只读这里）
 COPY frontend-vue/dist ./frontend-vue/dist
+# 临床控制台（第 183 批）：/console 子路径托管，与 AI 工作台同镜像同域
+COPY frontend-console/dist ./frontend-console/dist
 COPY scripts ./scripts
 # P0-5：容器入口脚本（按 SW_AGENT_COLLECTOR_BACKEND_SERVICES 决定是否挂 SkyWalking Python agent）
 COPY deploy/docker/entrypoint.sh /app/deploy/docker/entrypoint.sh

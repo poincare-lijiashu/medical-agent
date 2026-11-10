@@ -33,6 +33,11 @@ logger = get_logger(__name__)
 # git tag v-legacy-frontend 永久保存，回退步骤见 docs/plans/vue3_migration.md）。
 VUE_DIST_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vue", "dist")
+# 临床控制台（第 183 批）：46 个视图的 HIS 侧控制台，对接 /api/v2（Java 网关）与 /api/v1。
+# 与 AI 工作台同镜像、同域，挂在 /console/ 子路径（vite base=/console/）；
+# dist 随轮入库（与 frontend-vue 同一策略：回退免 node 环境），Dockerfile 同步 COPY。
+CONSOLE_DIST_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-console", "dist")
 
 # /metrics 的短 TTL 缓存（评审 M-45）：抓取间隔远大于 5s，短缓存不会影响判读，
 # 但能把"一次抓取 11 次域加载"摊薄；进程重启自然失效。
@@ -470,6 +475,33 @@ async def index():
     return _vue_index_response()
 
 
+# ---- 临床控制台（第 183 批）：/console/** ----
+# 为什么要同镜像同域：控制台调 /api/v2（Java 网关）与 /api/v1（本服务），
+# 只有同源部署才能复用同一个登录态与 Cookie；子路径 /console 由 ingress 的 "/" 兜底
+# 路由自然落到本服务，网关无需新增规则。
+# 资源引用由 vite base=/console/ 生成（/console/assets/*），深链刷新由本路由回落 index.html。
+def _console_index_response():
+    idx = os.path.join(CONSOLE_DIST_DIR, "index.html")
+    if os.path.isfile(idx):
+        return FileResponse(idx, media_type="text/html")
+    return JSONResponse(
+        {"hint": "frontend-console/dist 未构建；在 frontend-console/ 下执行 "
+                 "npm ci && npm run build 后可用"},
+        status_code=503)
+
+
+@app.get("/console", include_in_schema=False)
+@app.get("/console/{full_path:path}", include_in_schema=False)
+async def console_spa(full_path: str = ""):
+    """静态资源直出 + SPA 深链回落（控制台全部路由的刷新/直链必须可用）。"""
+    candidate = (os.path.normpath(os.path.join(CONSOLE_DIST_DIR, full_path))
+                 if full_path else CONSOLE_DIST_DIR)
+    in_dist = candidate == CONSOLE_DIST_DIR or candidate.startswith(CONSOLE_DIST_DIR + os.sep)
+    if in_dist and os.path.isfile(candidate):
+        return FileResponse(candidate)
+    return _console_index_response()
+
+
 # ---- SPA fallback（F5）：vue-router createWebHistory 深链刷新 404 修复 ----
 # 现象：StaticFiles(html=True) 对 /review、/rx 等前端路由子路径查不到同名文件 → 404，
 # 刷新/直链全挂。修复：catch-all 路由回落 dist/index.html（前端路由接管）。
@@ -479,7 +511,7 @@ async def index():
 # /js（历史残留不存在）、/app（已有显式路由与 mount，深链 /app/xxx 非法路径 404 JSON）。
 # 注册顺序：具体路由（/api/...、/healthz、/、/app…）均已在此前注册，优先匹配不受影响。
 _SPA_FALLBACK_EXCLUDED = ("api", "assets", "healthz", "readyz", "metrics",
-                          "docs", "redoc", "openapi.json", "js", "app")
+                          "docs", "redoc", "openapi.json", "js", "app", "console")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
