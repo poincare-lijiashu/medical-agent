@@ -8993,6 +8993,53 @@ build → 通过（dist 与已入库产物无 diff）
 - `docs/DESIGN-SYSTEM.md`、`docs/FRONTEND-SKILL-GUIDE.md`、`docs/qa/vue_parity_matrix.md`
   仍把旧前端列为在范围内（历史参考文档，未在本批强制改写）；如需彻底清理可另批。
 
+## 213. 2026-11-11 上线口径一致性：部署/文档/自检（第 213 批）
+
+**范围**：部署清单、运维文档、上线自检脚本。URL 结构从 `/console/` 改为根路径后，
+单测不会红、但上线会踩的“残留路径”必须一起收口。
+
+**本批做了什么**
+
+1. **运行时清单审计**：Dockerfile、compose、Helm ingress/values、ai-core Deployment、
+   CI 全部检查，确认没有把 `/console` 当应用路径（Nacos 的
+   `/nacos/v1/console/...` 属第三方接口，白名单排除）。
+2. **注释口径**：`router/index.ts` 与 `vite.config.ts` 的托管说明改为“唯一前端、根路径”；
+   删除“生产托管在 /console/”的历史描述。
+3. **部署拓扑图**：`deploy/README.md` 的 `/ → ai-core:8001` 改为“唯一前端：临床控制台”，
+   不再出现“AI 工作台 + /console 控制台”。
+4. **历史文档标记**：DESIGN-SYSTEM、FRONTEND-SKILL-GUIDE、qa/vue_parity_matrix 顶部
+   明确“现行唯一前端为 frontend-console；frontend-vue 已于第 212 批删除”，
+   避免读者把迁移期记录当现行规范。
+5. **上线自检增强**（`scripts/agent_go_live_check.py`）：
+   - `repo.console_root_assets`：产物 index.html 必须引用 `/assets/*`（根路径构建，
+     否则上线白屏）；
+   - `repo.legacy_frontend_removed`：旧前端目录必须已删除。
+6. **新回归锁** `tests/test_deploy_path_consistency.py`（5 条）：
+   运行时清单无 `/console` 前缀、构建根路径、部署文档写“唯一前端”、
+   历史文档已标注存档、旧前端目录与 Dockerfile 引用均不存在。
+
+**本批设计决策（可回退）**
+
+- **不只改代码，锁“文档与清单”**：这次事故面在部署侧；把清单/拓扑图/自检也纳入
+  回归，才能防止下次改路径时再漏。
+- **历史文档标注而不是重写**：评审/迁移记录有其审计价值；在顶部标注“历史存档”
+  比抹掉更诚实。
+- **自检偏向“上线前可发现”**：根路径资源与旧目录两项失败都会直接导致白屏或误托管，
+  放进 go-live 检查比只放单测更贴近运维动作。
+
+**验证**
+
+```
+全量：pytest --ignore=tests/e2e → 1814 passed / 1 skipped
+定向：上线口径 + 宿主 + 发布 + CI 门禁 → 28 passed
+```
+
+**遗留**
+
+- 8001 线上进程仍为改动前代码；需重启一次才会按“根路径唯一前端”托管。
+- 旧前端的历史评审文档（docs/EVAL-*、docs/reviews/*）按存档保留，不再逐篇改写。
+
+
 
 
 

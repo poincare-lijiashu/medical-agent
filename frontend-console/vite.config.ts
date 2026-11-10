@@ -19,7 +19,7 @@ export default defineConfig({
     port: 5174,
     proxy: {
       // 第 198 批：AI 中台（/api/v1）直连 8001，与生产一致（构建产物由 AI 中台
-      // 在 /console/ 同源托管，/api/v1 本就不经过 Java 网关）。
+      // 在根路径同源托管，/api/v1 本就不经过 Java 网关）。
       // 走网关时 SSE 会受 `response-timeout: 30s`（application.yml）约束，
       // 长文生成/首 token 超过 30 秒即被截断——对话页不能接受这种假超时。
       '/api/v1': {

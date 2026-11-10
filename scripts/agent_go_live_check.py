@@ -186,6 +186,15 @@ def check_repo() -> list[tuple[str, bool, str]]:
     out = []
     dist = os.path.join(REPO_ROOT, "frontend-console", "dist", "index.html")
     out.append(("repo.console_dist", os.path.isfile(dist), dist))
+    # 第 213 批：产物必须是根路径构建（/assets/*），否则上线后页面白屏
+    if os.path.isfile(dist):
+        with open(dist, encoding="utf-8") as f:
+            html = f.read()
+        out.append(("repo.console_root_assets", 'src="/assets/' in html,
+                    "index.html 必须引用 /assets/*（vite base='/'）"))
+    out.append(("repo.legacy_frontend_removed",
+                not os.path.isdir(os.path.join(REPO_ROOT, "frontend-vue")),
+                "frontend-vue 必须已删除（唯一前端）"))
     rules = os.path.join(REPO_ROOT, "deploy", "prometheus",
                          "medassist-agent-ops.rules.yml")
     out.append(("repo.prometheus_rules", os.path.isfile(rules), rules))

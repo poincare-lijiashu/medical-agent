@@ -3,8 +3,8 @@ import { canSeeNav, findNav } from '@/navigation'
 import { session } from '@/stores/session'
 
 const router = createRouter({
-  // 生产托管在 /console/ 子路径（vite base 同步为 /console/）：必须用 BASE_URL，
-  // 否则深链与刷新会把 /console/orders 当成根路径 /orders 再 404。
+  // 第 211 批起控制台是唯一前端，由 AI 中台在根路径托管（vite base='/'）：
+  // 必须用 BASE_URL，否则子路径部署或反代前缀变化时深链刷新会 404。
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },

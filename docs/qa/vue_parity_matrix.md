@@ -1,5 +1,8 @@
 # Vue3 迁移功能对照矩阵（整改轮 A 验收依据）
 
+> **历史存档（第 212 批）**：`frontend-vue` 已删除，现行唯一前端为 `frontend-console/`
+> （根路径托管，AI 能力内联 `/ai/*`）。本表保留为迁移期逐函数比对记录，不再作为验收依据。
+
 > 口径：legacy 以 git tag `v-legacy-frontend` 为准（`frontend/index.html` + `frontend/js/{state,views_core,views_assist,views_admin,app}.js`，已随轮4 删除）；Vue 以 `frontend-vue/src/**` 为准。
 > 状态列：✅=已实现（组件名）；❌=缺失；N/A=后端无对应/由框架机制等价接管。
 > 本矩阵由整改轮 A 逐函数比对产出，作为后续轮补漏的验收依据：**❌ 项全部补齐后本表应全绿（新增功能同样先入表）**。
