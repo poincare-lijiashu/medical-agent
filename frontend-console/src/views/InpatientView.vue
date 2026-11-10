@@ -417,6 +417,9 @@
         </p>
       </div>
       <template #footer>
+        <button class="btn" type="button" :disabled="printingFinance" @click="printFinanceSummary">
+          {{ printingFinance ? '正在汇总…' : '打印费用汇总单' }}
+        </button>
         <button class="btn" type="button" @click="financeOpen = false">关闭</button>
       </template>
     </AppModal>
@@ -490,6 +493,8 @@ import type {
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { ageOf, dateTime, genderLabel, money } from '@/utils/format'
+import { escapeHtml } from '@/utils/html'
+import { printHtml } from '@/utils/print'
 
 const role = computed(() => session.roleLabel.value)
 const loading = ref(false)
@@ -770,8 +775,78 @@ async function openFinance(a: AdmissionView) {
   }
 }
 
-/* ------------------------------ 出院 ------------------------------ */
+/** 费用汇总单：看板只有金额汇总，明细按需拉一次收费单（不影响看板首屏）。 */
+const printingFinance = ref(false)
 
+function financeStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    ADMITTED: '待入科',
+    IN_HOSPITAL: '在院',
+    DISCHARGED: '已出院',
+  }
+  return map[status] ?? status
+}
+
+async function printFinanceSummary() {
+  const f = finance.value
+  if (!f || printingFinance.value) return
+  printingFinance.value = true
+  try {
+    const charge = await clinicalApi.charge(f.visitId)
+    const esc = escapeHtml
+    const rows = charge.items
+      .map(
+        (i) => `<tr>
+          <td>${esc(i.itemName)}<div class="muted mono">${esc(i.itemCode)}</div></td>
+          <td>${esc(i.category || '—')}</td>
+          <td class="num">${esc(money(i.amount))}</td>
+        </tr>`,
+      )
+      .join('')
+    const body = `
+      <h1>住院费用汇总单</h1>
+      <div class="muted meta">${esc(f.admissionNo)} · ${esc(f.wardName)} ${esc(f.bedNo ?? '未分床')} · ${esc(financeStatusLabel(f.status))}</div>
+      <table class="head">
+        <tr><th>病案号</th><td>${esc(f.patientNo)}</td><th>就诊号</th><td>${esc(f.visitNo)}</td></tr>
+        <tr><th>病区</th><td>${esc(f.wardName)}</td><th>床位</th><td>${esc(f.bedNo ?? '未分床')}</td></tr>
+        <tr><th>入院时间</th><td colspan="3">${f.admittedAt ? esc(dateTime(f.admittedAt)) : '—'}</td></tr>
+      </table>
+      <table class="sum">
+        <tr><th>累计计费</th><td class="num">${esc(money(f.billedTotal))}</td><th>已结算</th><td class="num">${esc(money(f.settledTotal))}</td></tr>
+        <tr><th>未结算</th><td class="num">${esc(money(f.unpaidTotal))}</td><th>待计（${f.pendingOrderCount} 单）</th><td class="num">${esc(money(f.pendingAmount))}</td></tr>
+        <tr><th>今日未计长嘱（${f.dailyLongOrderCount} 条）</th><td class="num">${esc(money(f.dailyLongAmount))}</td><th>预交金余额</th><td class="num">${esc(money(f.depositBalance))}</td></tr>
+        <tr><th>今日已计</th><td class="num">${esc(money(f.todayBilledAmount))}</td><th>欠费缺口</th><td class="num">${esc(money(f.shortfall))}</td></tr>
+      </table>
+      <h2>收费明细${charge.chargeNo ? `（${esc(charge.chargeNo)}）` : ''}</h2>
+      <table class="items">
+        <thead><tr><th>项目</th><th>类别</th><th class="num">金额</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="3" class="muted">暂无已计价明细</td></tr>'}</tbody>
+      </table>
+      <div class="total">明细合计：<strong>${esc(money(charge.totalAmount))}</strong></div>
+      <div class="foot">本单为系统汇总件，最终金额以出院结算为准；预交金余额为打印时点数值。</div>`
+    const ok = printHtml({
+      title: `住院费用汇总单 ${f.admissionNo}`,
+      body,
+      css: `
+        .meta { margin-bottom: 14px; }
+        .head th, .sum th { width: 18%; }
+        .sum { margin-top: 14px; }
+        h2 { margin: 20px 0 8px; font-size: 15px; }
+        .items { font-size: 13px; }
+        .num { text-align: right; }
+        .total { margin-top: 12px; text-align: right; font-size: 15px; }
+        .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+      `,
+    })
+    if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+  } catch (e) {
+    toast.error('费用明细读取失败', errorText(e))
+  } finally {
+    printingFinance.value = false
+  }
+}
+
+/* ------------------------------ 出院 ------------------------------ */
 const dischargeOpen = ref(false)
 const dischargeTarget = ref<AdmissionView | null>(null)
 
