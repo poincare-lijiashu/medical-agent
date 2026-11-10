@@ -93,6 +93,9 @@ ROUTE_SNAPSHOT: list[tuple[str, str]] = [
     # 否则 catch-all 顺序变化会改变路由解析结果。
     ("POST", "/inline/rx-check"),
     ("POST", "/inline/qc-check"),
+    # 第 168 批：HIS 深度集成读端点（患者摘要 / 医嘱清单）
+    ("GET", "/integration/patient/{patient_id}"),
+    ("GET", "/integration/orders/{patient_id}"),
     ("GET", "/health"),
 ]
 

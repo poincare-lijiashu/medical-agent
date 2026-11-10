@@ -6935,3 +6935,61 @@ helm template --set auditArchive.enabled=true（无 pvc）→ exit=1，
 - `kb_parse_isolation=false` 可回退到线程内（应急开关，通过 aiCore.env 注入）；
 - 子进程内 OCR 依赖镜像中有 PyMuPDF/rapidocr（与主进程同镜像，天然一致）；
 - 未来可把 embedding 也搬进子进程池做 CPU 配额（cgroups）——属部署侧资源治理。
+
+## 171. 2026-11-10 HIS 深度集成第一步：FHIR R4 标准适配器 + 患者/医嘱读端点（第 168 批）
+
+**问题（用户指令：找开源/公开厂商适配器，向深度集成发展）**
+
+- 此前 `integration/` 只有抽象 + demo，生产 `HIS_ADAPTER=none`；`fetch_patient/fetch_orders`
+  **零生产调用点**，AI 中台从未真正读取院内数据，也没有标准协议实现。
+
+**调研（公开资料/开源）**
+
+- HL7 FHIR R4 规范（Patient/ServiceRequest/MedicationRequest/DocumentReference）：
+  <https://hl7.org/fhir/R4/patient.html>、<https://fhir.hl7.org>
+- 开源集成引擎 Mirth Connect（HL7 v2 + FHIR R4 + X12，社区与人才面最大）：
+  <https://mirth.support/best-hl7-integration-engines-2026>
+- HL7 官方开源实现清单（HAPI FHIR 等）：
+  <https://confluence.hl7.org/pages/viewpage.action?pageId=453906989>
+- 国内标准：卫健委《医院信息互联互通标准化成熟度测评方案（2020 年版）》（数据集/共享文档/
+  交互服务三类测试）、WS/T 846.1—2024《医院信息平台交互标准 第 1 部分：总则》、WS/T 500 系列
+- Python HL7 v2 备选：`hl7apy` <https://pypi.org/project/hl7apy/1.3.4/>；医疗 AI SDK：`healthchain`
+
+**已做**
+
+1. **`backend/integration/fhir_adapter.py`（FHIR R4 适配器）**
+   - `fetch_patient` ← `GET /Patient/{id}`（404→None；4xx/5xx→RuntimeError）；
+   - `fetch_orders` ← `GET /ServiceRequest?subject=Patient/{id}&_count=50&_sort=-authored`；
+   - `push_qc_result` ← `POST /DocumentReference`（identifier=质控单号，JSON 附件=结论；
+     2xx=True / 4xx=False 明确拒收 / 5xx 抛异常可重试）；
+   - 纯函数映射 `map_patient` / `map_order` / `age_from_birth_date` / `build_qc_document_reference`；
+   - 配置：`FHIR_BASE_URL`（缺失即 ValueError，响亮失败）、`FHIR_TOKEN`、`FHIR_TIMEOUT_S`、
+     `FHIR_VERIFY_TLS`；`transport` 仅用于测试注入（生产为 None）。
+2. **registry**：`register_adapter("fhir", FhirHisAdapter)`——`HIS_ADAPTER=fhir` 即启用，核心零改动。
+3. **读端点（AI 中台第一次真正读院内数据）**：`backend/api/v1/medical/integration.py`
+   - `GET /medical/integration/patient/{patient_id}`、`GET /medical/integration/orders/{patient_id}`；
+   - 未对接 501（不伪装空数据）/ 未找到 404 / 适配器故障 502 + 审计；
+   - 审计 `his.patient_read|orders_read|patient_not_found|read_failed`，payload 只记
+     **患者标识 sha256 前 12 位**与适配器名，不落明文患者 ID/姓名。
+4. **路由与快照**：medical_router 在 `/health` 之前 include（catch-all 顺序不变）；
+   `ROUTE_SNAPSHOT` 增至 66 条。
+5. **文档**：`docs/INTEGRATION.md` 新增「八、标准协议适配器：FHIR R4」——激活方式、资源映射、
+   失败语义、读端点、公开资料链接、下一步（HL7 v2 MLLP / Java AI 客户端 / EMPI 唯一真源 / staging 联调）。
+6. **契约测试**（`tests/test_fhir_adapter.py` 12 条，`httpx.MockTransport` 无真实网关）：
+   Patient 映射与鉴权头、404→None、5xx→异常、ServiceRequest 查询参数与映射、回写三态、
+   DocumentReference 结构、缺配置响亮失败、registry 注册；端点 501/404/502/200 与
+   审计哈希（断言审计 payload 不含明文 ID）。
+
+**验证**
+
+```
+定向：test_fhir_adapter + test_router_split_guard → 24 passed
+全量（不含 e2e）→ 1656 passed / 1 skipped
+```
+
+**遗留（深度集成后续批次）**
+
+1. **HL7 v2 MLLP 适配器**：老院区以 v2.5 ADT/ORM/ORU + MLLP + ACK 为主，需另一条通道；
+2. **Java 平台侧 AI 客户端**：HIS 界面内触发质控/审方（双向集成），当前 Java 侧仍未调用 AI；
+3. **EMPI 唯一真源**：AI 侧只存 `empi_id` 引用与哈希，不复制患者主数据；
+4. **staging 双系统联调 + 契约测试进 CI**：当前契约测试用 MockTransport，需真实网关样例。

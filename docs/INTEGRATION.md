@@ -98,3 +98,58 @@ python -m pytest tests\test_his_integration.py -v
 ```
 
 覆盖：registry（none/demo/自定义注册/未知标识响亮失败）、demo 适配器数据往返、qc 接入点三态（none 零审计跳过 / demo 成功推送 `his.pushed` / 异常兜底 `his.push_failed` 且主流程不受影响）。
+
+## 八、标准协议适配器：FHIR R4（`HIS_ADAPTER=fhir`）
+
+> 目标：不再只依赖"院方私有接口 + 手工映射"。FHIR R4 是 HL7 正式标准，
+> `Patient` / `ServiceRequest` / `MedicationRequest` / `DocumentReference` 均有规范定义，
+> 院内集成平台（常见落地：Mirth Connect、HAPI FHIR，或厂商平台暴露的 `/fhir` 根）
+> 可把厂商差异收敛到网关侧，AI 中台只对接标准资源。
+
+### 8.1 激活方式
+
+```bash
+HIS_ADAPTER=fhir
+FHIR_BASE_URL=https://his-gateway.hospital.local/fhir
+FHIR_TOKEN=<由 Secret 注入，最小只读 + 回写权限>
+FHIR_TIMEOUT_S=8
+FHIR_VERIFY_TLS=true          # 生产禁止关闭；仅本机自签联调可临时 false
+```
+
+### 8.2 资源映射（`backend/integration/fhir_adapter.py`）
+
+| 业务动作 | FHIR 交互 | 失败语义 |
+|---|---|---|
+| 患者摘要 | `GET /Patient/{id}` | 404 → `None`（调用方转 404）；4xx/5xx → 抛异常（调用方 502 + 审计） |
+| 医嘱清单 | `GET /ServiceRequest?subject=Patient/{id}&_count=50&_sort=-authored` | 4xx/5xx 抛异常 |
+| 质控回写 | `POST /DocumentReference`（`identifier` = 质控单号，JSON 附件 = 结论） | 2xx 成功；4xx 明确拒收（返回 False，不重试）；5xx/网络异常抛出（可重试） |
+
+### 8.3 读端点（AI 中台第一次真正读取院内业务数据）
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/v1/medical/integration/patient/{patient_id}` | 患者摘要（姓名/性别/年龄）；未对接 501，未找到 404，HIS 故障 502 |
+| `GET /api/v1/medical/integration/orders/{patient_id}` | 医嘱清单（供用药核查/质控关联） |
+
+审计：`his.patient_read` / `his.orders_read` / `his.patient_not_found` / `his.read_failed`，
+payload 只记**患者标识哈希**（sha256 前 12 位）与适配器名，不落明文患者 ID/姓名。
+
+### 8.4 公开资料与开源参考
+
+- HL7 FHIR R4 规范：<https://hl7.org/fhir/R4/patient.html>
+- FHIR 官方站点：<https://fhir.hl7.org>
+- 开源集成引擎 Mirth Connect（HL7 v2 / FHIR R4 / X12，社区与招聘面最大）：
+  <https://mirth.support/best-hl7-integration-engines-2026>
+- HL7 官方开源实现清单（HAPI FHIR 等）：<https://confluence.hl7.org/pages/viewpage.action?pageId=453906989>
+- 国内标准：国家卫健委《医院信息互联互通标准化成熟度测评方案（2020 年版）》（数据集 / 共享文档 / 交互服务三类测试）；
+  WS/T 846.1—2024《医院信息平台交互标准 第 1 部分：总则》；WS/T 500 系列电子病历共享文档规范
+- Python 侧 HL7 v2 备选：`hl7apy`（<https://pypi.org/project/hl7apy/1.3.4/>）；
+  医疗 AI SDK 参考：`healthchain`（<https://pypi.org/project/healthchain/>）
+
+### 8.5 下一步（按收益排序）
+
+1. **HL7 v2 MLLP 适配器**（`backend/integration/hl7v2_adapter.py`）：老院区仍以 HL7 v2.5
+   ADT/ORM/ORU 为主，MLLP 长连接 + ACK 语义是另一条必备通道；
+2. **Java 平台侧 AI 客户端**：HIS 界面内触发质控/审方（双向集成），避免医生开两个系统；
+3. **患者主索引（EMPI）唯一真源**：AI 侧只存 `empi_id` 引用 + 哈希，不复制患者主数据；
+4. **契约测试进 CI**：用 FHIR 官方示例资源 + MockTransport 已覆盖；再加 staging 双系统联调。

@@ -216,6 +216,14 @@ class Settings(BaseSettings):
 
     # 影像/病例高危征象词表：留空用内置默认；逗号分隔覆盖，供院方对齐放射科危急值清单
     imaging_risk_words: str = ""
+    # ---- HIS 深度集成：FHIR R4 适配器（评测「深度集成」第一步）----
+    # HIS_ADAPTER=fhir 时启用；base_url 指向院内集成平台/EMPI 的 FHIR R4 网关
+    # （常见落地：Mirth Connect / HAPI FHIR / 厂商集成平台暴露的 /fhir 根）。
+    # 令牌经 Secret 注入（FHIR_TOKEN），不写入版本库；TLS 校验默认开启。
+    fhir_base_url: str = ""
+    fhir_token: str = ""
+    fhir_timeout_s: float = 8.0
+    fhir_verify_tls: bool = True
 
     # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN / QC_AUTO_SIGN_FULL 均可被同名环境变量覆盖）
     qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审
