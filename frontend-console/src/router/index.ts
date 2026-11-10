@@ -218,6 +218,12 @@ const router = createRouter({
           component: () => import('@/views/AiAgentView.vue'),
         },
         {
+          // 第 205 批：AI 技能卡治理（管理员 / 质控，四眼审核）
+          path: 'ai/agent/skills',
+          name: 'ai-skills',
+          component: () => import('@/views/AiSkillsView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',

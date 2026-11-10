@@ -932,6 +932,60 @@ export interface AiSkillCard {
   status?: string
   examples?: string[]
   description?: string
+  /** 以下字段仅 admin/qc 列表与详情返回（普通角色列表不带执行口径） */
+  promptTemplate?: string
+  toolAllowlist?: string[]
+  evidenceRefs?: string[]
+  guardrails?: AiSkillGuardrails
+  createdBy?: string
+  createdAt?: string
+  updatedBy?: string
+  updatedAt?: string
+  submittedBy?: string | null
+  submittedAt?: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
+  reviewNote?: string | null
+  /** 写操作 CAS 版本；PUT/submit/review 必须回传 */
+  rowVersion?: number
+}
+
+/** 技能卡护栏：与后端 `skills._validate` 同一口径。 */
+export interface AiSkillGuardrails {
+  hitl?: boolean
+  requireEvidence?: boolean
+  maxInputChars?: number
+}
+
+export interface AiSkillInput {
+  code: string
+  name: string
+  description: string
+  agentId: string
+  promptTemplate: string
+  toolAllowlist: string[]
+  evidenceRefs: string[]
+  guardrails: AiSkillGuardrails
+}
+
+export interface AiSkillUpdateInput extends AiSkillInput {
+  rowVersion: number
+}
+
+/** 技能卡下线影响面：引用它的 Bot、这些 Bot 所在团队、库内候选。 */
+export interface AiSkillImpactRef {
+  code?: string
+  name?: string
+  status?: string
+}
+
+export interface AiSkillImpact {
+  skillCode?: string
+  status?: string
+  bots?: AiSkillImpactRef[]
+  teams?: AiSkillImpactRef[]
+  proposals?: { id?: string; status?: string }[]
+  warning?: string | null
 }
 
 export interface AiAgentSkillRef {
@@ -969,8 +1023,54 @@ export function aiAgentCatalog(signal?: AbortSignal): Promise<AiAgentCatalog> {
   return aiGet<AiAgentCatalog>('/agent/catalog', undefined, signal)
 }
 
-export function aiAgentSkills(signal?: AbortSignal): Promise<{ skills?: AiSkillCard[] }> {
-  return aiGet<{ skills?: AiSkillCard[] }>('/agent/skills', undefined, signal)
+export function aiAgentSkills(
+  status?: string,
+  agentId?: string,
+  signal?: AbortSignal,
+): Promise<{ skills?: AiSkillCard[] }> {
+  return aiGet<{ skills?: AiSkillCard[] }>('/agent/skills', { status, agentId }, signal)
+}
+
+/** 新建技能卡（仅 admin，落为 DRAFT，须另一人审核）。 */
+export function aiSkillCreate(input: AiSkillInput): Promise<AiSkillCard> {
+  return aiPost<AiSkillCard>('/agent/skills', input)
+}
+
+/** 修改技能卡（仅 DRAFT/REJECTED 可改；带 rowVersion 做 CAS）。 */
+export function aiSkillUpdate(code: string, input: AiSkillUpdateInput): Promise<AiSkillCard> {
+  return aiPut<AiSkillCard>(`/agent/skills/${encodeURIComponent(code)}`, input)
+}
+
+/** 送审（仅 admin）：DRAFT/REJECTED → IN_REVIEW。 */
+export function aiSkillSubmit(code: string, rowVersion: number): Promise<AiSkillCard> {
+  return aiPost<AiSkillCard>(`/agent/skills/${encodeURIComponent(code)}/submit`, { rowVersion })
+}
+
+/** 四眼审核：通过 → PUBLISHED；驳回必须写原因。 */
+export function aiSkillReview(
+  code: string,
+  approve: boolean,
+  note: string,
+  rowVersion: number,
+): Promise<AiSkillCard> {
+  return aiPost<AiSkillCard>(`/agent/skills/${encodeURIComponent(code)}/review`, {
+    approve,
+    note,
+    rowVersion,
+  })
+}
+
+export function aiSkillDisable(code: string, rowVersion: number): Promise<AiSkillCard> {
+  return aiPost<AiSkillCard>(`/agent/skills/${encodeURIComponent(code)}/disable`, { rowVersion })
+}
+
+/** 重新启用：DISABLED → IN_REVIEW，仍需另一人审核后才生效。 */
+export function aiSkillEnable(code: string, rowVersion: number): Promise<AiSkillCard> {
+  return aiPost<AiSkillCard>(`/agent/skills/${encodeURIComponent(code)}/enable`, { rowVersion })
+}
+
+export function aiSkillImpact(code: string): Promise<AiSkillImpact> {
+  return aiGet<AiSkillImpact>(`/agent/skills/${encodeURIComponent(code)}/impact`)
 }
 
 export function aiAgentConsult(

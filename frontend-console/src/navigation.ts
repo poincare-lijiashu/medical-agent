@@ -500,6 +500,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN'],
   },
   {
+    // 第 205 批：技能卡治理（管理员创建、质控审核；四眼由服务端强制）
+    name: 'ai-skills',
+    path: '/ai/agent/skills',
+    title: 'AI 技能卡',
+    hint: '受控执行口径 · 提示模板与工具白名单 · 证据引用与护栏 · 四眼审核 · 影响面',
+    icon: 'bookmark',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
     name: 'ai-llm',
     path: '/ai/llm',
