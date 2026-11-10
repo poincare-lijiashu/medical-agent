@@ -439,6 +439,15 @@ async def llm_providers(user: dict = Depends(require_role("admin"))):
     return _masked_providers()
 
 
+@router.get("/admin/llm/key-inventory")
+async def llm_key_inventory(user: dict = Depends(require_role("admin"))):
+    """静态加密版本盘点（只读）：回答「旧密钥什么时候可以摘」。
+
+    只返回计数与 keyId，不含任何密钥材料；密钥缺失时也可用（不解密）。
+    """
+    return await asyncio.to_thread(llm_config.key_inventory)
+
+
 @router.post("/admin/llm/providers")
 async def llm_add_provider(req: LlmProviderReq, user: dict = Depends(require_role("admin"))):
     try:

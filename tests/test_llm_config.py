@@ -4,6 +4,7 @@
 monkeypatch httpx.Client（FIND-06：实现走 Client(trust_env=False)，不再用模块级 httpx.post）
 假 200/超时/非 JSON，绝不触网。
 """
+import base64
 import json
 
 import httpx
@@ -306,6 +307,25 @@ def test_get_providers_masks_api_key_and_requires_admin(monkeypatch, tmp_path):
     entry = d["chat"]["providers"][0]
     assert entry["id"] == pid and entry["api_key"] != _KEY and "***" in entry["api_key"]
     assert _KEY not in json.dumps(d), "全响应任何位置不得出现完整 api_key"
+
+
+def test_key_inventory_endpoint_reports_versions_and_requires_admin(monkeypatch, tmp_path):
+    """第 182 批：版本盘点只给计数，不含密钥材料；仅 admin 可读。"""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", base64.b64encode(b"K" * 32).decode())
+    lc.add_provider("chat", "openai", _URL, "gpt-test", "测试模型", _KEY)
+
+    c = TestClient(app)
+    doc = _login(c, "doctor01", "Med@2026")
+    assert c.get("/api/v1/medical/admin/llm/key-inventory", headers=_h(doc)).status_code == 403
+
+    adm = _login(c, "admin01", "Med@2026")
+    r = c.get("/api/v1/medical/admin/llm/key-inventory", headers=_h(adm))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["mode"] == "single" and d["total"] == 1
+    assert d["legacyV1"] == 1 and d["rotationReady"] is False
+    assert _KEY not in json.dumps(d), "盘点响应不得包含任何密钥材料"
 
 
 def test_provider_routes_add_activate_delete(monkeypatch, tmp_path):

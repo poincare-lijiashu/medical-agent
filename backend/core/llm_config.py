@@ -286,6 +286,55 @@ def mask_key(key: str) -> str:
     return k[:6] + "***" + k[-4:]
 
 
+def key_inventory() -> dict:
+    """只读盘点存储里的 api_key 加密版本（**不解密、不需要密钥**）。
+
+    运维用它回答"旧密钥什么时候可以摘"：只有全部 provider 都是当前 active 密钥的
+    `enc:v2:<keyId>`（或空值）时 `rotationReady` 才为 True。
+    存储读取沿用与 `_load_raw` 相同的真源选择（PG → JSON 兜底），但故意不经过
+    `open_providers`——密钥缺失/错误时读配置本身会失败，盘点仍应可用。
+    返回内容只有计数与 keyId，不含任何密钥材料。
+    """
+    raw_cfg = pg_store.load_llm_providers(LLM_CONFIG_FILE, _load_raw_json)
+    versions: dict[str, int] = {}
+    for kind in _KINDS:
+        channel = (raw_cfg or {}).get(kind) or {}
+        for provider in channel.get("providers") or []:
+            if not isinstance(provider, dict):
+                continue
+            version = field_crypto.sealed_version(provider.get("api_key"))
+            versions[version] = versions.get(version, 0) + 1
+
+    ring = field_crypto.load_ring()
+    active = ring.active if ring else None
+    current = f"{field_crypto.PREFIX_V2}{active}" if active else None
+    legacy_v1 = field_crypto.PREFIX.rstrip(":")
+    out_of_ring = sorted({
+        v for v in versions
+        if v.startswith(field_crypto.PREFIX_V2)
+        and (ring is None or v[len(field_crypto.PREFIX_V2):] not in ring.keys)
+    })
+    total = sum(versions.values())
+    rotation_ready = bool(
+        ring is not None and total > 0
+        and versions.get("plaintext", 0) == 0
+        and versions.get(legacy_v1, 0) == 0
+        and not out_of_ring
+        and all(v in ("empty", current) for v in versions)
+    )
+    return {
+        "mode": field_crypto.encryption_mode(),
+        "activeKey": active,
+        "total": total,
+        "versions": dict(sorted(versions.items())),
+        "plaintext": versions.get("plaintext", 0),
+        "legacyV1": versions.get(legacy_v1, 0),
+        "currentKey": versions.get(current, 0) if current else 0,
+        "keysOutOfRing": out_of_ring,
+        "rotationReady": rotation_ready,
+    }
+
+
 def _error_hint(resp, api_key: str = "") -> str:
     """错误响应只回显状态码/厂商错误码，**绝不回显响应体原文**（评测 04 P1-1）。
 

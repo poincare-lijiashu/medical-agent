@@ -264,3 +264,69 @@ def test_llm_config_uses_keyring_when_configured(monkeypatch):
     assert at_rest.startswith(f"{fc.PREFIX_V2}k1:")
     assert lc.find_provider("chat", pid)["api_key"] == PLAIN
 
+
+# ---- 版本盘点：判断旧密钥何时可摘（第 182 批） ----
+
+def test_inventory_flags_plaintext_as_not_ready(monkeypatch):
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k2", k2=KEY_B))
+    store = _fake_store(monkeypatch)
+    store["chat"]["providers"] = [{"id": "p1", "api_key": PLAIN}]
+    inv = lc.key_inventory()
+    assert inv["mode"] == "keyring"
+    assert inv["versions"] == {"plaintext": 1}
+    assert inv["plaintext"] == 1
+    assert inv["rotationReady"] is False, "还有明文存量时不能摘旧密钥"
+
+
+def test_inventory_reports_single_key_ciphertext(monkeypatch):
+    monkeypatch.setenv(fc.KEY_ENV, KEY_A)
+    store = _fake_store(monkeypatch)
+    store["chat"]["providers"] = [
+        {"id": "p1", "api_key": fc.seal_secret(PLAIN, key=fc.load_key(KEY_A))}]
+    inv = lc.key_inventory()
+    assert inv["mode"] == "single"
+    assert inv["legacyV1"] == 1 and inv["rotationReady"] is False
+
+
+def test_inventory_ready_only_when_all_on_active_key(monkeypatch):
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k2", k1=KEY_A, k2=KEY_B))
+    store = _fake_store(monkeypatch)
+    store["chat"]["providers"] = [
+        {"id": "a", "api_key": fc.seal_secret(PLAIN, ring=fc.load_ring())},
+        {"id": "b", "api_key": ""},
+    ]
+    inv = lc.key_inventory()
+    assert inv["activeKey"] == "k2" and inv["currentKey"] == 1
+    assert inv["rotationReady"] is True, "全部落在 active 密钥（含空值）才算轮换完成"
+
+    old_ring = fc.load_ring(_ring("k1", k1=KEY_A, k2=KEY_B))
+    store["chat"]["providers"].append(
+        {"id": "c", "api_key": fc.seal_secret(PLAIN, ring=old_ring)})
+    inv2 = lc.key_inventory()
+    assert inv2["currentKey"] == 1 and inv2["keysOutOfRing"] == []
+    assert inv2["rotationReady"] is False, "仍有旧密钥密文时不能摘旧密钥"
+
+
+def test_inventory_flags_key_id_out_of_ring(monkeypatch):
+    monkeypatch.setenv(fc.KEYS_ENV, _ring("k2", k2=KEY_B))
+    store = _fake_store(monkeypatch)
+    store["chat"]["providers"] = [
+        {"id": "a", "api_key": fc.PREFIX_V2 + "k1:" + base64.b64encode(b"x" * 40).decode()}]
+    inv = lc.key_inventory()
+    assert inv["keysOutOfRing"] == ["enc:v2:k1"]
+    assert inv["rotationReady"] is False
+
+
+def test_inventory_works_without_key(monkeypatch):
+    """盘点不解密：密钥缺失时读配置会失败，但巡检仍要能跑。"""
+    sealed = fc.seal_secret(PLAIN, key=fc.load_key(KEY_A))
+    store = _fake_store(monkeypatch)
+    store["chat"]["providers"] = [{"id": "a", "api_key": sealed}]
+    monkeypatch.delenv(fc.KEY_ENV, raising=False)
+    monkeypatch.delenv(fc.KEYS_ENV, raising=False)
+
+    inv = lc.key_inventory()
+    assert inv["mode"] == "none" and inv["legacyV1"] == 1
+    with pytest.raises(fc.FieldCryptoError):
+        lc.load_config()
+

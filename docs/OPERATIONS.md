@@ -79,6 +79,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
     第 179 批的 `enc:v1:` 密文不带 keyId，密钥环模式下会依次尝试环内密钥——
     因此**轮换期必须保留旧密钥**，等 v1 存量清零再摘。
     `field_crypto.encryption_mode()` 可查当前形态（keyring / single / none）。
+  - **盘点存量（判断能否摘旧密钥）**：`GET /api/v1/medical/admin/llm/key-inventory`（admin）
+    返回 `versions` / `plaintext` / `legacyV1` / `currentKey` / `keysOutOfRing` / `rotationReady`。
+    只有 `rotationReady=true`（全部落在 active 密钥，且无明文、无 v1、无环外 keyId）才可摘旧密钥。
+    该接口**不解密**，密钥缺失或错误时依然可用（此时读配置本身会失败，巡检不受影响）。
 - **Java 服务 JDBC TLS（第 180 批，已实现）**：9 个 Java 服务的
   `spring.datasource.url` 统一带 `sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}`，
   Helm `medassist.commonEnv` 把 `external.postgres.sslmode` / `sslrootcert` 注入为

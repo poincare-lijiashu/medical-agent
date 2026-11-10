@@ -7555,3 +7555,40 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 - 密钥环只在 AI 中台（Python）生效；EMPI 的 Java 侧 `field-key` 仍是单密钥（另有其轮换流程）；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 185. 2026-11-10 密钥盘点：字段加密版本巡检端点（第 182 批）
+
+**问题**
+
+- §184 的密钥环解决了「怎么轮换」，但没解决「何时能摘旧密钥」：运维看不到存量里还有多少
+  `enc:v1` / 旧 keyId / 明文，只能靠猜；
+- 读配置本身在密钥缺失时会直接失败，巡检若复用 `load_config` 就等于「出事时正好不可用」。
+
+**已做**
+
+1. **`field_crypto.sealed_version()`**：只读判定单个字段的版本
+   （`empty` / `plaintext` / `enc:v1` / `enc:v2:<keyId>`），**不解密、不需要密钥**。
+2. **`llm_config.key_inventory()`**：走与读配置相同的真源（PG → JSON 兜底）但绕开解密，
+   返回 `mode / activeKey / total / versions / plaintext / legacyV1 / currentKey /
+   keysOutOfRing / rotationReady`；只有全部 provider 落在 active 密钥（含空值），
+   且无明文、无 v1、无环外 keyId 时 `rotationReady=true`。
+3. **只读端点** `GET /api/v1/medical/admin/llm/key-inventory`（admin），
+   响应只含计数与 keyId，不含任何密钥材料。
+4. **文档**：`docs/OPERATIONS.md` 轮换小节补「盘点存量」步骤（何时可以摘旧密钥）。
+5. **回归锁**：`tests/test_field_crypto.py` +5（明文 / 单密钥 / 全 active / 旧 keyId /
+   无密钥时仍可巡检）、`tests/test_llm_config.py` +1（端点 403 门禁 + 计数 + 响应不含密钥）；
+   路由快照锁同步为 68 端点。
+
+**验证**
+
+```
+定向：test_field_crypto + test_llm_config + test_router_split_guard → 55 passed
+全量（不含 e2e）→ 1751 passed / 1 skipped
+```
+
+**遗留**
+
+- 盘点只覆盖 `llm_providers`；Java EMPI 的 `field-key` 密文未纳入（另一套密钥与存储）；
+- `rotationReady` 只说明「可以摘旧密钥」，不保证存量都已转新密钥：
+  旧密文要到下一次保存才升级，长期未编辑的 provider 会停留在旧 keyId（盘点里可见）；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+

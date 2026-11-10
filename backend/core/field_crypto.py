@@ -130,6 +130,22 @@ def is_sealed(value: object) -> bool:
     return isinstance(value, str) and (value.startswith(PREFIX) or value.startswith(PREFIX_V2))
 
 
+def sealed_version(value: object) -> str:
+    """只读地判断一个字段值的加密版本，用于盘点存量（不解密、不需要密钥）。
+
+    返回值：`empty`（空值）/ `plaintext`（历史明文，待迁移）/ `enc:v1`（单密钥密文）/
+    `enc:v2:<keyId>`（密钥环密文，带具体密钥 ID）。
+    """
+    if not isinstance(value, str) or not value:
+        return "empty"
+    if value.startswith(PREFIX_V2):
+        key_id = value[len(PREFIX_V2):].partition(":")[0]
+        return f"{PREFIX_V2}{key_id}" if key_id else PREFIX_V2.rstrip(":")
+    if value.startswith(PREFIX):
+        return PREFIX.rstrip(":")
+    return "plaintext"
+
+
 def _warn_plaintext_once() -> None:
     global _warned_plaintext
     if _warned_plaintext:
