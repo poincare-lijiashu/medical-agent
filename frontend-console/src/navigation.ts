@@ -29,6 +29,15 @@ export const NAV_ITEMS: NavItem[] = [
     group: '总览',
   },
   {
+    // 第 190 批：统一系统迁入的第一个 AI 视图（AI 中台 /api/v1，与控制台共用同一会话令牌）
+    name: 'ai-overview',
+    path: '/ai-overview',
+    title: 'AI 概览',
+    hint: 'AI 运行状态：待双人核对 · 知识库文档 · 最近 AI 活动',
+    icon: 'spark',
+    group: 'AI 智能',
+  },
+  {
     name: 'ops-insights',
     path: '/ops-insights',
     title: '运营洞察',
@@ -404,6 +413,7 @@ export const NAV_GROUPS = [
   // 第 126 批：`总览` 此前缺失，导致运营驾驶舱/运营洞察/AI 助手整组不渲染。
   // 第 178 批：`门诊管理` 同样缺失，挂号收费/收费票据只能在命令面板里搜到，侧栏整组不显示。
   '总览',
+  'AI 智能',
   '门诊管理',
   '临床诊疗',
   '住院管理',

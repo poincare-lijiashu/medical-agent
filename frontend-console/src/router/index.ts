@@ -29,6 +29,11 @@ const router = createRouter({
           component: () => import('@/views/DashboardView.vue'),
         },
         {
+          path: 'ai-overview',
+          name: 'ai-overview',
+          component: () => import('@/views/AiOverviewView.vue'),
+        },
+        {
           path: 'ops-insights',
           name: 'ops-insights',
           component: () => import('@/views/OpsInsightView.vue'),

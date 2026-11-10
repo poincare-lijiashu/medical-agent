@@ -7890,3 +7890,52 @@ AI 工作台概览 + 审核中心 **12 个请求全 200**；两侧浏览器控�
 - Java 侧未跑 `mvn test`（本轮仅 `-DskipTests package`，编译通过）；
 - 演示数据为种子数据（如"今日门诊 0"属正常，不是故障）。
 
+## 193. 2026-11-10 统一系统启动：迁移范式落地 + AI 概览迁入控制台（第 190 批）
+
+**用户决策（已确认，作为后续所有批次的方向约束）**
+
+1. 唯一主壳：**临床控制台**（自建设计系统，46 视图）；
+2. 迁移节奏：**一次性切换**（内部可分批，但用户侧只在功能对齐后切换一次）；
+3. 身份：**单一登录入口 + 全域同一会话**（同一 JWT 访问 HIS 与 AI）；
+4. 关键设计决策需及时向用户确认。
+
+**本批做了什么（打地基，不是堆页面）**
+
+1. **验证"全域同一会话"的前提**：用 Java 网关签发的 doctor01 令牌直连 AI 中台
+   `GET /api/v1/medical/overview` → **200**（pending=76 / resolved=1093 / kb=2997 / recent=8）。
+   说明两端共用 `AUTH_JWT_SECRET` 且 Python 的 `roles` 映射生效——不需要为 AI 再造一套登录。
+2. **迁移范式（供后续 13 个视图复制）**：
+   - `frontend-console/src/api/ai.ts`：AI 中台接口层，统一走 `aiGet`（同一 Bearer、
+     同一 401 刷新/登出）；明确区分"裸 JSON（Python）"与"`{code,data}` 信封（Java）"；
+   - `frontend-console/src/utils/audit.ts`：迁入审计人话表（`humanizeAudit`），
+     与旧前端保持同一份文案；
+   - `frontend-console/src/views/AiOverviewView.vue`：用控制台设计系统重写 AI 概览
+     （指标卡 / 最近活动 / 错误态 / `kb_docs=-1` 未知态 / 刷新），文案全部走 i18n（中英）。
+3. **入口与分组**：`/ai-overview` 路由 + 侧栏新分组「AI 智能」（含 NAV_GROUPS 登记，
+   避免第 126/178 批"分组漏登记整组不渲染"的复现）。
+4. **回归锁 `tests/test_console_ai_migration.py`（3 条）**：
+   - AI 概览必须走 `aiGet`，不得用 Java 信封通道 `get()`；
+   - 路由 + 分组 + 错误态 + sentinel 必须在；
+   - **迁移期两份 `humanizeAudit` 键集必须完全一致**（防止切换当日文案回归）。
+
+**验证**
+
+```
+typecheck → 通过；build → 通过（index 69.35 KB gzip）
+定向：test_console_ai_migration + test_frontend_i18n + test_frontend_syntax → 51 passed
+Java 令牌直通 AI 中台 → 200（真实数据，见上）
+```
+
+**迁移路线（后续批次顺序）**
+
+1. 审核中心（`/ai/review`）→ 2. 数据面板+审计流（`/ai/data`）→ 3. 知识库 / 文献 →
+4. 病例总结 / 影像 / 多智能体会诊 → 5. 开药工作台 / 病历质控 → 6. Agent 编排 →
+7. **单一登录收口**：控制台登录页成为唯一 `/login`，删除 SSO 交接票与双入口 →
+8. **切换**：`/` 指向控制台、删除 `frontend-vue`、ingress 收敛（`/api/v1` 保留）。
+
+**遗留**
+
+- 迁移期两套前端并存，`humanizeAudit` 有两份拷贝（已加一致性测试）；
+- AI 概览里的"快速进入"暂未提供（目标视图尚未迁入，避免死链）；
+- 控制台 i18n 尚未覆盖旧视图的按钮/表头（新代码已按规范走 `t()`）。
+
