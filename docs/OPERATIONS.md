@@ -49,6 +49,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   → 只读 `nurse`，挂号/医保 → `guest`），并同步 Java 侧的吊销/停用名单。
   控制台「AI 深度工作台」入口使用**同域一次性票据**（localStorage，60s、读即删）交接令牌，
   目标页启动时经 `/auth/me` 服务端验签——令牌不进 URL。反方向不自动登录（自签令牌缺 Java 声明）。
+- **全局登出（第 187 批）**：任一端退出都会向同源其他标签页广播
+  `medassist.session.logout.v1`（localStorage + `storage` 事件）；收到信号的一端立即清本地会话，
+  AI 工作台还会调 `/auth/logout` 撤销服务端 jti。共用工作站交接班时点一次退出即全退，
+  不会把患者数据留在另一个标签页上。
 - 临床数据接口统一 `Cache-Control: no-store` + `Pragma: no-cache`（共用工作站退出后
   "返回"不还原上一位患者数据）；**豁免** `/medical/drug/dict`（保留 ETag/304 省 116KB）
   与 `/medical/config`（非 PHI 高频配置）。`/healthz`、静态资源不强制。

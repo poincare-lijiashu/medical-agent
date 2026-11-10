@@ -92,6 +92,7 @@ import { NAV_ITEMS, NAV_GROUPS, ROLE_NAV, ROLE_LABEL } from '../constants/nav'
 import { useAuthStore } from '../stores/auth'
 import { useBadgeStore } from '../stores/badges'
 import { useDirtyStore } from '../stores/dirty'
+import { broadcastLogout, onRemoteLogout } from '../utils/sessionBus'
 import http, { errText } from '../api'
 
 const auth = useAuthStore()
@@ -164,6 +165,8 @@ watch(() => route.name, (nv, ov) => {
 // 现改为：① 页面隐藏即停表；② 回到前台补一次并重建；③ 周期放宽到 90s（待办数分钟级延迟无感）。
 let timer = null
 const POLL_MS = 90_000
+/** 第 187 批：跨标签页登出监听的取消函数 */
+let offRemoteLogout = null
 
 function startPolling() {
   if (timer) clearInterval(timer)
@@ -188,6 +191,15 @@ onMounted(() => {
   // 弹浏览器原生确认，防误关/误刷新丢失未保存内容
   window.addEventListener('beforeunload', onBeforeUnload)
   document.addEventListener('visibilitychange', onVisibilityChange)
+  // 第 187 批：共用工作站全局登出——控制台退出后本页立即失效并撤销服务端会话
+  offRemoteLogout = onRemoteLogout(async () => {
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+    await auth.logout()
+    router.replace('/login')
+  })
   if (!auth.isLoggedIn) return
   // 第 129 批：guest/nurse 不轮询审核角标（这些端点按角色收口，轮询只会刷 403）
   if (!badgeRoles.includes(auth.role)) return
@@ -200,6 +212,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  offRemoteLogout?.()
   window.removeEventListener('beforeunload', onBeforeUnload)
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
@@ -255,6 +268,8 @@ async function submitChangePwd() {
 async function onLogout() {
   if (timer) clearInterval(timer)
   await auth.logout() // W3.1：await 清完本地态再跳转
+  // 第 187 批：广播给控制台等其他标签页（共用工作站必须一键全退）
+  broadcastLogout()
   router.push('/login')
 }
 </script>

@@ -131,7 +131,8 @@ import CommandPalette from '@/components/ui/CommandPalette.vue'
 import { NAV_GROUPS, NAV_ITEMS, findNav } from '@/navigation'
 import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
 import { issueHandoff } from '@/utils/sso'
-import { hasPermission, session } from '@/stores/session'
+import { broadcastLogout, onRemoteLogout } from '@/utils/sessionBus'
+import { clearSession, hasPermission, session } from '@/stores/session'
 
 const route = useRoute()
 const router = useRouter()
@@ -146,6 +147,8 @@ const isMobile = ref(false)
 const sidebarEl = ref<HTMLElement | null>(null)
 const menuBtn = ref<HTMLElement | null>(null)
 let mq: MediaQueryList | null = null
+/** 第 187 批：跨标签页登出监听的取消函数 */
+let offRemoteLogout: (() => void) | null = null
 
 const metaKey = computed(() => (navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl'))
 
@@ -195,6 +198,8 @@ function toggleTheme() {
 async function logout() {
   userMenuOpen.value = false
   await session.logout()
+  // 第 187 批：共用工作站的全局登出——通知同源其他标签页（AI 工作台）立即失效
+  broadcastLogout()
   router.replace('/login')
 }
 
@@ -249,11 +254,17 @@ onMounted(async () => {
   mq.addEventListener('change', onViewportChange)
   document.addEventListener('click', onDocClick)
   document.addEventListener('keydown', onKeydown)
+  // 第 187 批：另一标签页（AI 工作台）登出 → 本页立即清会话回登录页
+  offRemoteLogout = onRemoteLogout(() => {
+    clearSession()
+    void router.replace('/login')
+  })
   await session.validate()
 })
 
 onBeforeUnmount(() => {
   document.body.style.overflow = ''
+  offRemoteLogout?.()
   mq?.removeEventListener('change', onViewportChange)
   document.removeEventListener('click', onDocClick)
   document.removeEventListener('keydown', onKeydown)

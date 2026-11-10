@@ -7764,3 +7764,43 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 - 反方向自动登录需要 Java 接受 Python 令牌，或统一到同一签发方（身份收敛时一并做）；
 - 审计校验结果不持久化；长列表虚拟滚动仍未做。
 
+## 190. 2026-11-10 共用工作站安全：跨标签页全局登出（第 187 批）
+
+**问题**
+
+- sessionStorage 按标签页隔离：医生在控制台点退出只清自己那一页，先前打开的 AI 工作台
+  标签页仍持有会话——**人离开后患者数据还留在屏幕上**，这是共用工作站最现实的泄漏路径；
+- 交接班场景不可能要求医护逐个标签页点退出。
+
+**已做**
+
+1. **统一广播通道**（两端同一 key `medassist.session.logout.v1`）：
+   `frontend-console/src/utils/sessionBus.ts` 与 `frontend-vue/src/utils/sessionBus.js`，
+   提供 `broadcastLogout()` 与 `onRemoteLogout(handler)`（监听 `storage`，
+   只响应「key 命中且 newValue 非空」，返回取消函数）。
+2. **两端接入**：
+   - 控制台 AppShell：`logout()` 在服务端登出后广播；`onMounted` 监听远端登出并
+     `clearSession()` + 回登录页；`onBeforeUnmount` 取消监听（不泄漏）。
+   - AI 工作台 AppShell：`onLogout()` 广播；监听远端登出后停轮询、`auth.logout()`
+     （撤销服务端 jti）、回登录页；卸载时取消监听。
+   - 场景闭环：控制台退出 → AI 工作台标签页秒级失效；反之亦然。
+3. **文档**：`docs/OPERATIONS.md`「统一身份与跨端 SSO」补「全局登出」语义与共用工作站建议。
+4. **回归锁 `tests/test_session_logout_bus.py`（4 条）**：同一 key、两端都广播且监听、
+   TS/JS 守卫表达式同构、**node 直接执行模块**验证
+   「命中才回调 / 删除 key 不触发 / 取消订阅生效 / 广播带时间戳」。
+
+**验证**
+
+```
+定向：tests/test_session_logout_bus.py → 4 passed（含 node 行为测试）
+前端：console typecheck + build 通过；frontend-vue build 通过（两套 dist 已入库）
+全量（不含 e2e）→ 1774 passed / 1 skipped
+```
+
+**遗留**
+
+- 广播是"同源标签页"级别：不同浏览器/不同机器仍各自持有会话，真正的全局登出需要
+  服务端会话中心（Redis 撤销表已具备，缺的是统一的"全会话下线"入口）；
+- 移动端/多院区共用账号场景，建议再加"闲置超时自动登出"（当前只有 TTL 到期）；
+- 审计校验结果不持久化；长列表虚拟滚动仍未做。
+
